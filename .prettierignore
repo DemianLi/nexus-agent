@@ -8,3 +8,8 @@ pnpm-lock.yaml
 # 這個 repo 的文件以中文為主且含大量表格，Prettier 依字元數而非顯示寬度對齊，
 # 會把中文表格排成在編輯器裡看起來歪掉的樣子，也會改動中文段落的換行位置。
 *.md
+
+# ruleset JSON 是從 GitHub UI 匯出的快照（見 .github/rulesets/README.md），
+# 格式由 GitHub 決定，不是我們的產出。交給 Prettier 管的話，
+# 下次貼上新匯出的內容就會讓某個毫不相干的 PR 卡在格式檢查。
+.github/rulesets/*.json
