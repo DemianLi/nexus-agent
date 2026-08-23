@@ -62,20 +62,15 @@ jobs:
           fi
           echo "PR 來源為 develop，通過。"
 
-      # PR 標題是外部輸入，一律經環境變數，不要直接 ${{ }} 插進 shell。
-      # develop 用 squash merge，這個標題就是 develop 上的 commit message。
-      - name: 檢查 PR 標題格式
+      # 標題與內文是外部輸入，一律經環境變數傳給腳本，不經 shell 展開。
+      # 規則與可用 type 見 AGENTS.md，實作見 .github/scripts/check_pr.py。
+      - name: 檢查 PR 標題與內文
         if: github.event_name == 'pull_request'
         env:
           TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          if ! printf '%s' "$TITLE" \
-            | grep -qE '^(feat|fix|refactor|perf|test|docs|ci|chore|release): .+'; then
-            echo "::error::PR 標題不符格式：$TITLE"
-            echo "格式為 <type>: <中文描述>，可用的 type 見 AGENTS.md。"
-            exit 1
-          fi
-          echo "標題格式通過。"
+          BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.base_ref }}
+        run: python3 .github/scripts/check_pr.py
 
       - name: 攔截大檔案
         run: |
