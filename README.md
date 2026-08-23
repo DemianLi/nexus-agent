@@ -64,6 +64,12 @@ feature/*  --squash-->  develop  --merge commit-->  main  --workflow_dispatch-->
 workflow 會自行打 tag 並建立 GitHub Release。因為 `workflow_dispatch` 限定在 `main` 執行，
 「從 develop 發版」在機制上不可能發生。
 
+版號規則在 1.0 之前從簡：**完成一個 Phase 跳 minor，其餘一律 patch**。
+1.0 之前 semver 本來就不承諾相容性，此刻套用完整規則只是徒增判斷成本。
+
+不維護手寫的 CHANGELOG。release notes 由 `--generate-notes` 依 PR 標題自動生成，
+而 PR 標題規範已經強制每個變更都有一句可讀的中文描述 — 那就是 changelog 的原料。
+
 ## CI
 
 `gate` 是唯一的 required status check，名稱永久固定。
