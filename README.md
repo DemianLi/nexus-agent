@@ -43,6 +43,7 @@ feature/*  --squash-->  develop  --merge commit-->  main  --workflow_dispatch-->
 
 - **兩條分支都禁止直接 push**，一律走 Pull Request。
 - **`gate` CI 必須綠燈**才能合併，且分支必須與 base 同步（strict）。
+- **PR 標題必須符合 `<type>: <描述>` 格式**，由 `gate` 強制；格式見 [AGENTS.md](AGENTS.md)。
 - **`main` 只接受來自 `develop` 的 PR**，由 `gate` 檢查 head branch 強制執行。緊急修補同樣先進 `develop`。
 - **禁止 force push 與刪除分支**，無人可繞過規則（含 repo owner）。
 - **`develop` 要求分支與 base 同步（strict）**；`main` 刻意不開 strict — 因為 `develop → main` 的 merge commit 只存在於 `main`，開了 strict 會讓第二次發版的 PR 永遠處於 out-of-date 而無法合併。
