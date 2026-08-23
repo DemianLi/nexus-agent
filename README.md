@@ -2,6 +2,32 @@
 
 TypeScript + React (shadcn/ui) 專案，架構分為 harness 與 web UI 兩部分。
 
+## 專案結構
+
+```
+apps/harness   step 執行器（Node / TypeScript）
+apps/web       Vite + React 19 + Tailwind v4 + shadcn/ui
+```
+
+pnpm workspace，Node >= 22。
+
+## 開發
+
+```bash
+pnpm install
+pnpm dev          # 啟動 web（http://localhost:5173）
+pnpm lint         # eslint（遞迴全部套件）
+pnpm typecheck    # tsc --noEmit
+pnpm test         # vitest run
+pnpm build        # vite build
+```
+
+新增 shadcn/ui 元件：
+
+```bash
+pnpm --filter @nexus/web dlx shadcn@latest add <component>
+```
+
 ## 分支策略
 
 ```
