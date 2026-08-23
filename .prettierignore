@@ -1,0 +1,10 @@
+node_modules/
+dist/
+build/
+coverage/
+pnpm-lock.yaml
+
+# markdown 不交給 Prettier 排版。
+# 這個 repo 的文件以中文為主且含大量表格，Prettier 依字元數而非顯示寬度對齊，
+# 會把中文表格排成在編輯器裡看起來歪掉的樣子，也會改動中文段落的換行位置。
+*.md
