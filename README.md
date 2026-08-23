@@ -22,6 +22,15 @@ pnpm test         # vitest run
 pnpm build        # vite build
 ```
 
+clone 之後各自設定一次，讓 `git fetch` / `git pull` 自動清掉遠端已刪除的分支：
+
+```bash
+git config fetch.prune true
+```
+
+PR 合併後 GitHub 會自動刪掉 head branch（repo 開了 `delete_branch_on_merge`），
+沒設 prune 的話本地會累積一堆早已不存在的 `origin/*`。這條寫在 `.git/config`，不進版控。
+
 新增 shadcn/ui 元件：
 
 ```bash
