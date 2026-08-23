@@ -10,9 +10,7 @@ export function App() {
     <main className="mx-auto flex min-h-svh max-w-2xl flex-col justify-center gap-6 px-6">
       <div className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight">nexus-agent</h1>
-        <p className="text-muted-foreground text-sm">
-          harness 與 web UI 的骨架已就緒。
-        </p>
+        <p className="text-muted-foreground text-sm">harness 與 web UI 的骨架已就緒。</p>
       </div>
 
       <div className="flex items-center gap-3">

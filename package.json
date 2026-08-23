@@ -10,12 +10,16 @@
     "lint": "pnpm -r run lint",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "dev": "pnpm --filter @nexus/web run dev",
     "build": "pnpm -r run build"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
     "eslint": "^9.39.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.6",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.0"
   },

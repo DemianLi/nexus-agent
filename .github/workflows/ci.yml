@@ -117,6 +117,12 @@ jobs:
         if: steps.ts.outputs.found == 'true'
         run: pnpm install --frozen-lockfile
 
+      # Prettier 裝在 root 一次掃全 repo，所以用 root script 而非 pnpm -r。
+      # markdown 由 .prettierignore 排除，見該檔案內的說明。
+      - name: Format
+        if: steps.ts.outputs.found == 'true'
+        run: pnpm run format:check
+
       # 用 pnpm -r（遞迴進 workspace 套件），不要用 --if-present：
       # --if-present 在 script 不存在時會回綠燈，gate 會變成什麼都沒掃的橡皮圖章。
       # 若所有套件都沒有該 script，pnpm -r 會直接失敗，逼你補上。
