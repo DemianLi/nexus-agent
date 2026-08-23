@@ -1,3 +1,5 @@
+# 注意：GitHub 只在「推送到 default branch 且此檔有異動」時登錄 workflow_dispatch。
+# 若 Actions 頁面看不到這個 workflow，對本檔做一次異動並合併進 develop 即可重新登錄。
 name: Release
 
 on:
