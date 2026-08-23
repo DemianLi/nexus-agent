@@ -45,6 +45,10 @@ gate 會擋下不符格式的 PR 標題。改標題即可，不需要重開 PR�
 
 「驗證方式」寫實際跑過的指令與結果。沒跑過就寫沒跑過 — 這一段的價值來自它是真的。
 
+## 程式碼規範
+
+程式碼怎麼寫（測試要求、秘密與環境變數處理）見 [`docs/standards.md`](docs/standards.md)。本檔只管協作流程。
+
 ## Agent skills
 
 ### Issue tracker
