@@ -70,6 +70,7 @@ jobs:
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}
           BASE: ${{ github.base_ref }}
+          ACTOR: ${{ github.event.pull_request.user.login }}
         run: python3 .github/scripts/check_pr.py
 
       - name: 攔截大檔案
@@ -137,6 +138,12 @@ jobs:
       - name: Test
         if: steps.ts.outputs.found == 'true'
         run: pnpm -r run test
+
+      # typecheck 過不代表 build 過：vite plugin、路徑 alias、verbatimModuleSyntax
+      # 下的 import 寫法都可能 tsc 綠燈但打包失敗。main 上的東西照定義要能發版。
+      - name: Build
+        if: steps.ts.outputs.found == 'true'
+        run: pnpm -r run build
 
       - name: 摘要
         if: always()
