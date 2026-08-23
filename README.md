@@ -19,6 +19,7 @@ feature/*  --squash-->  develop  --merge commit-->  main  --workflow_dispatch-->
 - **`gate` CI 必須綠燈**才能合併，且分支必須與 base 同步（strict）。
 - **`main` 只接受來自 `develop` 的 PR**，由 `gate` 檢查 head branch 強制執行。緊急修補同樣先進 `develop`。
 - **禁止 force push 與刪除分支**，無人可繞過規則（含 repo owner）。
+- **`develop` 要求分支與 base 同步（strict）**；`main` 刻意不開 strict — 因為 `develop → main` 的 merge commit 只存在於 `main`，開了 strict 會讓第二次發版的 PR 永遠處於 out-of-date 而無法合併。
 - 合併方式：`feature → develop` 只能 squash；`develop → main` 只能 merge commit（保留可追溯性，因此 `main` 不啟用 linear history）。
 
 ### 發佈
