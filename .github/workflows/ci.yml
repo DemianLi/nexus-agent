@@ -70,6 +70,7 @@ jobs:
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}
           BASE: ${{ github.base_ref }}
+          ACTOR: ${{ github.event.pull_request.user.login }}
         run: python3 .github/scripts/check_pr.py
 
       - name: 攔截大檔案
@@ -117,6 +118,12 @@ jobs:
         if: steps.ts.outputs.found == 'true'
         run: pnpm install --frozen-lockfile
 
+      # Prettier 裝在 root 一次掃全 repo，所以用 root script 而非 pnpm -r。
+      # markdown 由 .prettierignore 排除，見該檔案內的說明。
+      - name: Format
+        if: steps.ts.outputs.found == 'true'
+        run: pnpm run format:check
+
       # 用 pnpm -r（遞迴進 workspace 套件），不要用 --if-present：
       # --if-present 在 script 不存在時會回綠燈，gate 會變成什麼都沒掃的橡皮圖章。
       # 若所有套件都沒有該 script，pnpm -r 會直接失敗，逼你補上。
@@ -131,6 +138,12 @@ jobs:
       - name: Test
         if: steps.ts.outputs.found == 'true'
         run: pnpm -r run test
+
+      # typecheck 過不代表 build 過：vite plugin、路徑 alias、verbatimModuleSyntax
+      # 下的 import 寫法都可能 tsc 綠燈但打包失敗。main 上的東西照定義要能發版。
+      - name: Build
+        if: steps.ts.outputs.found == 'true'
+        run: pnpm -r run build
 
       - name: 摘要
         if: always()

@@ -22,6 +22,15 @@ pnpm test         # vitest run
 pnpm build        # vite build
 ```
 
+clone 之後各自設定一次，讓 `git fetch` / `git pull` 自動清掉遠端已刪除的分支：
+
+```bash
+git config fetch.prune true
+```
+
+PR 合併後 GitHub 會自動刪掉 head branch（repo 開了 `delete_branch_on_merge`），
+沒設 prune 的話本地會累積一堆早已不存在的 `origin/*`。這條寫在 `.git/config`，不進版控。
+
 新增 shadcn/ui 元件：
 
 ```bash
@@ -54,6 +63,12 @@ feature/*  --squash-->  develop  --merge commit-->  main  --workflow_dispatch-->
 到 Actions 頁面執行 **Release** workflow，branch 選 `main` 並輸入版號（`vX.Y.Z`）。
 workflow 會自行打 tag 並建立 GitHub Release。因為 `workflow_dispatch` 限定在 `main` 執行，
 「從 develop 發版」在機制上不可能發生。
+
+版號規則在 1.0 之前從簡：**完成一個 Phase 跳 minor，其餘一律 patch**。
+1.0 之前 semver 本來就不承諾相容性，此刻套用完整規則只是徒增判斷成本。
+
+不維護手寫的 CHANGELOG。release notes 由 `--generate-notes` 依 PR 標題自動生成，
+而 PR 標題規範已經強制每個變更都有一句可讀的中文描述 — 那就是 changelog 的原料。
 
 ## CI
 

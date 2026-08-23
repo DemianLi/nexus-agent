@@ -9,6 +9,11 @@ import sys
 
 TYPES = ('feat', 'fix', 'refactor', 'perf', 'test', 'docs', 'ci', 'chore', 'release')
 
+# Dependabot 的 PR 標題由 GitHub 產生（例如 Bump vite from 7.1.12 to 7.1.13），
+# 不可能符合中文描述規範，而 ruleset 的 bypass_actors 為空，無人能繞過 gate。
+# 不豁免的話 security 更新會全部卡死在紅燈。
+BOT_ACTORS = ('dependabot[bot]',)
+
 TITLE_RE = re.compile(r'^(?:%s): (.+)$' % '|'.join(TYPES))
 CJK_RE = re.compile(r'[一-鿿]')
 
@@ -61,7 +66,11 @@ def check_body(body: str) -> None:
 
 
 def main() -> int:
-    check_title(os.environ.get('TITLE', ''))
+    actor = os.environ.get('ACTOR', '')
+    if actor in BOT_ACTORS:
+        print(f'PR 由 {actor} 開啟，略過標題格式檢查。')
+    else:
+        check_title(os.environ.get('TITLE', ''))
 
     if os.environ.get('BASE') == 'main':
         check_body(os.environ.get('BODY') or '')
