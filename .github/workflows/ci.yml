@@ -3,8 +3,11 @@ name: CI
 on:
   pull_request:
     branches: [develop, main]
+  # push 只留 main：develop 的 push 會與 develop → main 的 PR 落在同一個 sha 上，
+  # 產生兩個 gate，合併時要等兩輪。develop 合併後的狀態已由 PR 事件驗證過
+  # （develop 開了 strict，PR 必須與 base 同步），所以這個訊號是多餘的。
   push:
-    branches: [develop, main]
+    branches: [main]
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
