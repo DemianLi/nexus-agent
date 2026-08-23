@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # 這個 job 的名稱就是 ruleset 綁定的 required status check，永遠不要改。
+  # 新增檢查請往這個 job 裡面加 step，不要拆出新的 required job。
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 計算異動檔案
+        id: changes
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+            # three-dot：只看本分支相對於分歧點的異動，不含 base 上的新 commit
+            git diff --name-only "origin/$BASE_REF...HEAD" > changed.txt
+          elif [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ] \
+               && git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null; then
+            git diff --name-only "$BEFORE_SHA" "${{ github.sha }}" > changed.txt
+          else
+            git show --pretty="" --name-only "${{ github.sha }}" > changed.txt
+          fi
+          echo "--- 異動檔案 ---"
+          cat changed.txt
+          echo "count=$(wc -l < changed.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+      - name: 檢查 main 的 PR 來源
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [ "$HEAD_REF" != "develop" ]; then
+            echo "::error::main 只接受來自 develop 的 PR，目前來源為 '$HEAD_REF'。"
+            echo "請先把變更合併進 develop，再開 develop → main 的 PR。"
+            exit 1
+          fi
+          echo "PR 來源為 develop，通過。"
+
+      - name: 攔截大檔案
+        run: |
+          set -euo pipefail
+          limit=$((5 * 1024 * 1024))
+          failed=0
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            size=$(wc -c < "$f" | tr -d ' ')
+            if [ "$size" -gt "$limit" ]; then
+              echo "::error file=$f::檔案 $size bytes 超過 5MB 上限。"
+              failed=1
+            fi
+          done < changed.txt
+          exit $failed
+
+      - name: 偵測需要掃描的 TypeScript 異動
+        id: ts
+        run: |
+          set -euo pipefail
+          if [ ! -f package.json ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "尚無 package.json，略過 TypeScript 檢查。"
+            exit 0
+          fi
+          if grep -qE '\.(ts|tsx|mts|cts)$|^package\.json$|^pnpm-lock\.yaml$|^tsconfig.*\.json$' changed.txt; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "本次異動未觸及 TypeScript 相關檔案，略過。"
+          fi
+
+      # 需要 package.json 內含 packageManager 欄位（例如 "pnpm@10.x"）
+      - uses: pnpm/action-setup@v4
+        if: steps.ts.outputs.found == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.ts.outputs.found == 'true'
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: 安裝相依套件
+        if: steps.ts.outputs.found == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        if: steps.ts.outputs.found == 'true'
+        run: pnpm run --if-present lint
+
+      - name: Typecheck
+        if: steps.ts.outputs.found == 'true'
+        run: pnpm run --if-present typecheck
+
+      - name: Test
+        if: steps.ts.outputs.found == 'true'
+        run: pnpm run --if-present test
+
+      - name: 摘要
+        if: always()
+        run: |
+          {
+            echo "### gate 結果"
+            echo ""
+            echo "- 異動檔案數：${{ steps.changes.outputs.count }}"
+            echo "- TypeScript 掃描：${{ steps.ts.outputs.found }}"
+          } >> "$GITHUB_STEP_SUMMARY"
