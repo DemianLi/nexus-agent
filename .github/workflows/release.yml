@@ -1,3 +1,5 @@
+# 注意：GitHub 只在「推送到 default branch 且此檔有異動」時登錄 workflow_dispatch。
+# 若 Actions 頁面看不到這個 workflow，對本檔做一次異動並合併進 develop 即可重新登錄。
 name: Release
 
 on:
@@ -48,14 +50,14 @@ jobs:
             exit 1
           fi
 
+      # 不自己 git tag：runner 沒有 committer 身分，git tag -a 會 exit 128。
+      # gh release create 會依 --target 自行建立 tag，少一段 git 操作也少一個失敗點。
       - name: 建立 tag 與 GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          git tag -a "$VERSION" -m "Release $VERSION"
-          git push origin "$VERSION"
           gh release create "$VERSION" \
             --target "${{ github.sha }}" \
             --title "$VERSION" \
