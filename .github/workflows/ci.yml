@@ -102,17 +102,20 @@ jobs:
         if: steps.ts.outputs.found == 'true'
         run: pnpm install --frozen-lockfile
 
+      # 用 pnpm -r（遞迴進 workspace 套件），不要用 --if-present：
+      # --if-present 在 script 不存在時會回綠燈，gate 會變成什麼都沒掃的橡皮圖章。
+      # 若所有套件都沒有該 script，pnpm -r 會直接失敗，逼你補上。
       - name: Lint
         if: steps.ts.outputs.found == 'true'
-        run: pnpm run --if-present lint
+        run: pnpm -r run lint
 
       - name: Typecheck
         if: steps.ts.outputs.found == 'true'
-        run: pnpm run --if-present typecheck
+        run: pnpm -r run typecheck
 
       - name: Test
         if: steps.ts.outputs.found == 'true'
-        run: pnpm run --if-present test
+        run: pnpm -r run test
 
       - name: 摘要
         if: always()
