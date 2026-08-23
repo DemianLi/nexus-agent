@@ -44,3 +44,17 @@ gate 會擋下不符格式的 PR 標題。改標題即可，不需要重開 PR�
 `develop → main` 的 PR 內文會成為 main 上的 commit message，所以 gate 對這種 PR 強制要求 `## 變更內容` 與 `## 驗證方式` 兩個段落。feature PR 的內文不強制。
 
 「驗證方式」寫實際跑過的指令與結果。沒跑過就寫沒跑過 — 這一段的價值來自它是真的。
+
+## Agent skills
+
+### Issue tracker
+
+Issue 與 spec 都放在 GitHub Issues（`DemianLi/nexus-agent`），一律用 `gh` CLI 操作。見 [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md)。
+
+### Triage labels
+
+沿用五個 canonical 角色名稱，標籤字串未改寫：`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`。見 [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md)。
+
+### Domain docs
+
+多 context 佈局：root 的 `CONTEXT-MAP.md` 指向 `apps/*` 各自的 `CONTEXT.md`。見 [`docs/agents/domain.md`](docs/agents/domain.md)。
