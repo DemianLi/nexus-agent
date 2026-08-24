@@ -49,6 +49,22 @@ gate 會擋下不符格式的 PR 標題。改標題即可，不需要重開 PR�
 
 程式碼怎麼寫（測試要求、秘密與環境變數處理）見 [`docs/standards.md`](docs/standards.md)。本檔只管協作流程。
 
+## 技術實現標準
+
+凡技術實現方法的問題，一律以 **DeepSeek Harness**（[`deepseek-ai/deepseek-harness`](https://github.com/deepseek-ai/deepseek-harness)，Cordis 插件框架、TypeScript、MIT）的實際做法為標準。
+
+**先讀原始碼，不要靠搜尋或記憶回答。** 那份 clone 不進版控（`.gitignore` 與 `.prettierignore` 都排除 `references/`），所以要自己拉一份：
+
+```bash
+git clone --depth 1 https://github.com/deepseek-ai/deepseek-harness.git references/deepseek-harness
+```
+
+唯讀，不要改它。`docs/` 每份都有 `.zh.md` 中文版，入口是 `docs/architecture.zh.md`、`docs/cordis-primer.zh.md`、`docs/subsystems/*.zh.md`；房規在根目錄的 `AGENTS.md` 與 `packages/AGENTS.md`。
+
+**偏離規則**：一律照 dsh 的實際做法，**只有當現有基礎建設（deepagents / LangChain JS / LangGraph JS）表達不出來時**，才退到最接近的實作 —— 而且要在決議或 PR 內文裡明確標註是哪一條、為什麼表達不出來、退到什麼。不得因為「我們的形狀不同」就自由發揮。
+
+這條規則撐起了 [`.docs/development-plan.md`](.docs/development-plan.md) 裡大半的設計決定；來龍去脈見已關閉的地圖 [#26](https://github.com/DemianLi/nexus-agent/issues/26)。
+
 ## Agent skills
 
 ### Issue tracker
