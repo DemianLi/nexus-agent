@@ -2,6 +2,7 @@ import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { BaseChatModelParams } from '@langchain/core/language_models/chat_models';
 import { AIMessage, AIMessageChunk } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
+import type { CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
 import type { ChatGenerationChunk, ChatResult } from '@langchain/core/outputs';
 
 /** bindTools 會產生新實例，游標與綁定記錄要留在本體與副本共用的物件上。 */
@@ -100,11 +101,16 @@ export class ScriptedChatModel extends BaseChatModel {
    */
   override async *_streamResponseChunks(
     _messages: BaseMessage[],
+    _options: this['ParsedCallOptions'],
+    runManager?: CallbackManagerForLLMRun,
   ): AsyncGenerator<ChatGenerationChunk> {
     const turn = this.nextTurn();
     const message = this.toMessage(turn);
 
-    for (const token of turn.content.split(/(?<=\s)/u)) {
+    for (const token of [...turn.content]) {
+      // handleLLMNewToken 要自己呼叫，基座才收得到 token 事件；
+      // 少了這行，streamMode: 'messages' 只會拿到聚合後的整段訊息。
+      await runManager?.handleLLMNewToken(token);
       yield {
         text: token,
         message: new AIMessageChunk({ content: token }),

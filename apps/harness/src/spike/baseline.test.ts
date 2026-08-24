@@ -22,18 +22,22 @@ describe('deepagents 1.13.x 基座形狀', () => {
 
     await agent.invoke({ messages: [new HumanMessage('嗨。')] });
 
-    expect(model.boundToolNames).toEqual([
-      'ls',
-      'read_file',
-      'write_file',
-      'edit_file',
-      'delete',
-      'glob',
-      'grep',
-      // execute 在 FILESYSTEM_TOOL_NAMES 裡，但 StateBackend 沒有 shell，所以不註冊。
-      // task 來自 subagent middleware，不是檔案工具。
-      'task',
-    ]);
+    // 比集合不比順序：這裡要抓的是「工具集合變了」，不是註冊順序變了。
+    // 順序另有自己的問題（#28 已定案要自建顯式呈現順序），不該讓它在這裡造成 flake。
+    expect([...model.boundToolNames].sort()).toEqual(
+      [
+        'ls',
+        'read_file',
+        'write_file',
+        'edit_file',
+        'delete',
+        'glob',
+        'grep',
+        // execute 在 FILESYSTEM_TOOL_NAMES 裡，但 StateBackend 沒有 shell，所以不註冊。
+        // task 來自 subagent middleware，不是檔案工具。
+        'task',
+      ].sort(),
+    );
   });
 
   it('permissions 無命中則 allow（寬鬆預設）', async () => {

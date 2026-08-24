@@ -1,4 +1,5 @@
 import { HumanMessage } from '@langchain/core/messages';
+import type { AIMessageChunk } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
 import { createSpikeAgent } from './spike-agent.js';
 
@@ -35,5 +36,23 @@ describe('Phase 0 spike：最小 deep agent', () => {
 
     expect(nodes.length).toBeGreaterThan(1);
     expect(nodes).toContain('tools');
+  });
+
+  it("streamMode: 'messages' 收得到逐 token 的 chunk", async () => {
+    const { agent } = createSpikeAgent();
+
+    const aiChunks: string[] = [];
+    for await (const [message] of (await agent.stream(
+      { messages: [new HumanMessage('跑一次。')] },
+      { streamMode: 'messages' },
+    )) as AsyncIterable<[AIMessageChunk, unknown]>) {
+      if (message.getType() === 'ai') {
+        aiChunks.push(message.text);
+      }
+    }
+
+    // 三輪回覆共 38 個字元；聚合成整段訊息的話只會有 3 個 chunk。
+    expect(aiChunks.length).toBeGreaterThan(10);
+    expect(aiChunks.join('')).toContain('已記錄並寫入 /findings.md。');
   });
 });
