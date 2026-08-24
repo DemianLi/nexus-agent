@@ -107,7 +107,7 @@ packages/             （Phase 2 起拆出）nexus-core、nexus-plugin-* 系列
 ### Phase 1 — 核心迴圈 + Plugin 契約（約 3–4 個 PR）
 
 - `feat/nexus-plugin-contract`：`NexusPlugin` 型別 + zod manifest 驗證 + `PluginRegistry`（載入、衝突偵測、折疊成 `createDeepAgent` 參數）。
-- `feat/agent-factory`：agent 工廠 + 訊息標準化入口；淘汰舊 step runner。
+- `feat/agent-factory`：agent 工廠 + 訊息標準化入口；淘汰舊 step runner，並一併移除 [`docs/standards.md`](../docs/standards.md) 的「harness 迴圈的狀態轉換」條文（[#32](https://github.com/DemianLi/nexus-agent/issues/32)：條文與它描述的程式碼同生共死，step runner 走了它才變成死條文）。
 - `feat/harness-cli`：基本 REPL/CLI，作為後續 phase 的手動驗證工具。
 - 驗收：兩個假 plugin（各提供一個 tool）能用一份 plugin 清單組出可跑的 agent；registry 邏輯有單測覆蓋。
 
@@ -120,8 +120,8 @@ packages/             （Phase 2 起拆出）nexus-core、nexus-plugin-* 系列
 
 ### Phase 3 — 記憶層（約 3 個 PR）
 
-- `feat/memory-plugin`：AGENTS.md memory + backend 選型落地（狀態儲存決策在此收斂）。
-- `feat/skills-plugin`：SKILL.md 載入與 progressive disclosure。
+- `feat/memory-plugin`：AGENTS.md memory + backend 選型落地（狀態儲存決策在此收斂）；一併補上「多來源併入 prompt」的形狀斷言（[#32](https://github.com/DemianLi/nexus-agent/issues/32)）。
+- `feat/skills-plugin`：SKILL.md 載入與 progressive disclosure；一併補上 skills last-wins 的形狀斷言（[#32](https://github.com/DemianLi/nexus-agent/issues/32)——這裡才是第一個真的靠 last-wins 決定誰勝出的地方）。
 - `feat/summarization-tuning`：SummarizationMiddleware 參數化（長任務 token 控制）。
 - 驗收：跨 thread 記憶保留；長對話在 token 上限內完成多步任務。
 
@@ -152,7 +152,11 @@ packages/             （Phase 2 起拆出）nexus-core、nexus-plugin-* 系列
 
 ## 7. 風險與決策點
 
-1. **deepagentsjs 演進速度快，且 minor 會動相依契約**：`deepagents` 從 2025-08-03 的 1.0.0 到 2026-08-21 的 1.13.1，12 個月出了 14 個 minor、53 個穩定版。1.x 的 minor 在 semver 上宣稱相容，但實測**相依契約會在 minor 裡變動** — 1.11.0 一次新增五個 required peer（此前只有 `langsmith` 一項），1.13.0 把 `@langchain/core`、`langchain`、`@langchain/langgraph` 的下限整組抬高。對策：`deepagents` 鎖 `~1.13.1` 只跟 patch、peer 顯式宣告並照抄基座範圍、`strictPeerDependencies: true` 讓範圍不符在 install 就失敗、一組薄 smoke test 斷言擴充點的形狀事實（範圍見 [#32](https://github.com/DemianLi/nexus-agent/issues/32)）、接觸面集中在 agent 工廠一處。
+1. **deepagentsjs 演進速度快，且 minor 會動相依契約**：`deepagents` 從 2025-08-03 的 1.0.0 到 2026-08-21 的 1.13.1，12 個月出了 14 個 minor、53 個穩定版。1.x 的 minor 在 semver 上宣稱相容，但實測**相依契約會在 minor 裡變動** — 1.11.0 一次新增五個 required peer（此前只有 `langsmith` 一項），1.13.0 把 `@langchain/core`、`langchain`、`@langchain/langgraph` 的下限整組抬高。對策：`deepagents` 鎖 `~1.13.1` 只跟 patch、peer 顯式宣告並照抄基座範圍、`strictPeerDependencies: true` 讓範圍不符在 install 就失敗、一組薄 smoke test 斷言擴充點的形狀事實、接觸面集中在 agent 工廠一處。
+
+   smoke test 的邊界（[#32](https://github.com/DemianLi/nexus-agent/issues/32)）：**只斷言「契約明文依賴、而且基座改掉時型別檢查攔不到」的執行期行為**，落點跟著 agent 組裝點走。`createDeepAgent` 的參數名不另外斷言（呼叫本身就是斷言，改名會 compile 失敗）；同名 subagent 行為不斷言（[#28](https://github.com/DemianLi/nexus-agent/issues/28) 已把它擋在載入期，基座怎麼做不再是我們的依賴）。
+
+   **升版檢查清單**：`deepagents` 升 minor 或 major 的 PR 上，重跑一次 [#31](https://github.com/DemianLi/nexus-agent/issues/31) 那四項人工真實模型驗證——tool call 參數以合法 JSON 回傳／`streamMode: ['updates','values']` 的事件形狀與假模型一致／Node 22 相容／key 只從環境變數讀且缺少即失敗。這是擋「`ScriptedChatModel` 與基座真實行為悄悄分歧」的唯一機制：CI 不放模型 secret（#31），所以那個分歧在結構上斷言不出來——寫得出來的斷言只能斷言假模型與我們對基座的想像一致，那正是分歧發生時仍然全綠的東西。
 2. **模型供應商決策（Phase 0）**：Anthropic 功能最全但成本高；DeepSeek 便宜但需驗證工具呼叫品質與 middleware 相容性。Phase 0 兩者都跑基本驗證再定。
 3. **shell sandbox 安全**：`execute` 工具本質是跑任意指令，且權限規則對 sandbox backend 不生效。先只用 QuickJS interpreter，shell sandbox 延後到有明確隔離方案（容器）再做。
 4. **結果校驗範圍（Phase 4 前）**：需定義「校驗什麼」——schema、不變量、還是業務規則。屆時拍板。
