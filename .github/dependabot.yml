@@ -1,7 +1,11 @@
 # 版本更新（排程式）。安全性更新是 repo 設定，不由本檔控制，且早已啟用。
-# 只開 github-actions：全 repo 只有 4 行 uses，major 一年動幾次，噪音低。
-# npm 暫不開 —— apps/harness 還在 spike 階段（issue #33 未解），
-# 這時候讓機器人動 LangChain 全家桶的版本，噪音會蓋過訊號。
+#
+# 只開 github-actions。npm 不開的理由不是「還沒想好」：issue #33 已決定
+# deepagents 鎖 ~1.13.1，六個 LangChain peer 的範圍照抄基座當版
+# peerDependencies 的原文 —— 那些範圍是推導出來的，不是獨立選的。dependabot
+# 無法表達「跟著另一個套件的 peer 表走」，讓它獨立抬版只會產出一批
+# strictPeerDependencies 紅燈的 PR。#33 也明文把排程留到「spike 跑完看實際
+# 維護節奏再談」。
 version: 2
 
 updates:
@@ -11,8 +15,15 @@ updates:
     # dependabot 會靜默改指向，接著每張機器人 PR 都會撞上 ci.yml 的
     # 「main 只接受來自 develop 的 PR」硬失敗。一行換掉一個靜默故障模式。
     target-branch: develop
+    # 照 deepseek-harness 的做法：每天看，但只提 30 天前就發布的版本。
+    # 「多久看一次」與「版本要多成熟」是兩個獨立旋鈕，monthly 會把兩者綁死 ——
+    # 一年只看 12 次，卻仍可能收到當天剛發、隔天就被 yank 的版本。
     schedule:
-      interval: monthly
+      interval: cron
+      cronjob: '0 4 * * *'
+      timezone: Asia/Taipei
+    cooldown:
+      default-days: 30
     # develop 只允許 squash，PR 標題會原封不動成為 develop 上的 commit 標題。
     # dependabot 的標題是英文，靠 check_pr.py 的 bot 豁免通過 gate；prefix 讓
     # type 先對上 AGENTS.md 的格式，中文描述在合併前手改（ci.yml 有 edited
@@ -20,6 +31,7 @@ updates:
     commit-message:
       prefix: chore
     # 併成一張：develop 開了 strict，每合一張其餘都要重 rebase 再跑一輪 gate。
+    # dsh 沒有這一段，因為它沒有這條約束。
     groups:
       github-actions:
         patterns:
