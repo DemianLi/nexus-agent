@@ -30,6 +30,7 @@ interface NexusPlugin {
 }
 
 // apply 內部
+registry.capabilities.provide(name); // 能力宣告；重複提供冪等、不報錯
 registry.tools.register(tool); // 同層同名報錯、跨層遮蔽
 registry.subagents.register(sub); // 同層同名報錯、跨層遮蔽
 registry.backend.mount('/memories/', backend); // 同 routePrefix 報錯
@@ -41,6 +42,7 @@ registry.memory.addSource(path); // 純累加，基座自理
 ```
 
 - 一個 plugin = 一個 npm package 或 workspace 模組。zod manifest 仍在，但只驗 `name` / `version` / `requires`，不驗擴充內容。
+- `requires` 比對的是各 plugin 用 `registry.capabilities.provide(name)` 宣告的能力集合（[#28](https://github.com/DemianLi/nexus-agent/issues/28) 決議 10 要求的「能力 → 提供者」對照表，其輸入端由 [#29](https://github.com/DemianLi/nexus-agent/issues/29) 補上）。**能力是集合不是註冊表**：重複 `provide` 冪等、不報錯，獨佔性由各擴充點自己的規則守（同名 tool、同 `routePrefix`）。
 - `PluginRegistry` 是活的具名註冊表：插入順序、同名報錯、每次註冊回一個撤銷函式（**射程限定為載入期回滾**，不承諾執行期熱插拔——deepagents 建構後不可變）。最終仍折疊成一次 `createDeepAgent(...)` 呼叫。
 - 共同軸線：**同層報錯、跨層遮蔽、fail-closed、載入期失敗**。「層」指全域（root agent）↔ 各 subagent。
 - **組裝點所有、plugin 不得提供**：default backend、工具呈現順序、model、checkpointer / store、核准政策的 session 開關。
@@ -104,19 +106,26 @@ packages/             （Phase 2 起拆出）nexus-core、nexus-plugin-* 系列
 - `feat/harness-deepagents-spike`：安裝 deepagentsjs，最小 agent（in-memory backend + 一個 custom tool）跑通；驗證模型供應商接線與 streaming；確認 Node 22 相容性。
 - 驗收：CLI 下一個指令 → agent 呼叫工具 → 寫虛擬檔案 → 回覆；技術驗證記錄寫進 PR 內文「驗證方式」。
 
-### Phase 1 — 核心迴圈 + Plugin 契約（約 3–4 個 PR）
+### Phase 1 — 核心迴圈 + Plugin 契約（約 4–5 個 PR）
 
-- `feat/nexus-plugin-contract`：`NexusPlugin` 型別 + zod manifest 驗證 + `PluginRegistry`（載入、衝突偵測、折疊成 `createDeepAgent` 參數）。
+- `feat/nexus-plugin-contract`：`NexusPlugin` 型別 + zod manifest 驗證 + 具名註冊表原語（插入順序、同層同名報錯、跨層遮蔽、每次註冊回一個撤銷函式）+ 三個具名註冊點（`tools` / `subagents` / `capabilities`）。
+- `feat/plugin-registry-fold`：其餘六個註冊點（`backend` / `middleware` / `permissions` / `interrupts` / `skills` / `memory`）+ 每個 subagent 的有效集合計算 + 工具呈現順序 + 載入期前置條件檢查 + 折疊成 `createDeepAgent` 參數。**九個註冊點在 Phase 1 一次到齊**（[#29](https://github.com/DemianLi/nexus-agent/issues/29)）：registry 是純轉換層，不依賴下游擴充點是否已落地。
 - `feat/agent-factory`：agent 工廠 + 訊息標準化入口；淘汰舊 step runner，並一併移除 [`docs/standards.md`](../docs/standards.md) 的「harness 迴圈的狀態轉換」條文（[#32](https://github.com/DemianLi/nexus-agent/issues/32)：條文與它描述的程式碼同生共死，step runner 走了它才變成死條文）。
 - `feat/harness-cli`：基本 REPL/CLI，作為後續 phase 的手動驗證工具。
-- 驗收：兩個假 plugin（各提供一個 tool）能用一份 plugin 清單組出可跑的 agent；registry 邏輯有單測覆蓋。
+- 驗收（[#29](https://github.com/DemianLi/nexus-agent/issues/29)。判準是**能不能只靠 fold 的輸入輸出斷言**——registry 是純 fold，衝突規則全部是 fold 的性質；「規則真的產生效果」屬各擴充點落地的 phase）：
+  - **註冊表原語**（`feat/nexus-plugin-contract`，單測）：同名 tool（同層）→ 載入期報錯且訊息指名兩個 plugin 與 tool 名；同名 subagent（同層）→ 報錯；全域與 subagent 層同名 tool → **不報錯**，該層查找到最近的那個；`requires` 缺件 → 報錯，同一能力被兩個 plugin `provide` → **不報錯**。
+  - **載入期回滾**（`feat/nexus-plugin-contract`）：plugin 註冊了一個 tool 與一個 middleware 後在 `apply` 中途 throw → 兩者都不在結果裡，先前成功載入的 plugin 不受影響；撤銷後同名 tool 可由後續 plugin 重新註冊而不撞名（證明撤銷是真的移除，不是留墓碑佔名）。
+  - **fold 規則**（`feat/plugin-registry-fold`，單測）：同 `routePrefix` 的 backend 掛載點 → 報錯；三個 plugin 各一個 middleware → 順序等於清單順序且 `prepend: true` 插到最前；兩個 plugin 各一條 deny → 取聯集，且全域 deny 出現在每個 subagent 的 `permissions` 裡；兩個 plugin 對同一 tool 給不同 `interruptOn` → 逐欄位 OR、**不報錯**；宣告了 `interrupts.require(...)` 但組裝點沒給 checkpointer → 報錯，給了則正常 fold；全域 tool 出現在每個 subagent 的有效集合裡，該 subagent 自己註冊的同名 tool 遮蔽掉它。
+  - **工具呈現順序**（`feat/plugin-registry-fold`）：未列出的工具依字典序落在 `'<unlisted-tools>'`；rest entry 缺席或超過一個 → 載入期報錯。
+  - **正面路徑**（`feat/agent-factory`）：兩個假 plugin 各自在 `apply(registry)` 裡註冊一個 tool，一份清單 fold 出的 agent 用 `ScriptedChatModel` 跑得起來，兩邊的 tool 都呼叫得到。
+  - **端到端，只此一條**（`feat/harness-cli`）：兩個假 plugin 同名 tool → CLI **非零退出**，stderr 指名撞的是哪兩個 plugin 與哪個 tool 名。驗的是錯誤傳播路徑不被吞掉，不是衝突規則本身（那是單測的事，而傳播路徑只有一條）。
 
 ### Phase 2 — 工具層 + 權限（約 3 個 PR）
 
 - `feat/mcp-plugin`：第一個正式 plugin——MCP server 工具接入。
 - `feat/fs-backends`：filesystem backends（State → Disk → composite routing）+ `permissions` 擴充點（deny-only glob 規則；registry 主動把全域 deny 併進每個 subagent——基座是整組替換而非合併）。
 - `feat/sandbox-plugin`：sandbox `execute` 工具（或先只做 QuickJS interpreter，shell 沙箱隔離方案明朗前不開）。
-- 驗收：agent 能經 MCP 讀外部資料並寫入受權限控管的虛擬 FS；deny 規則擋得住 `.env` 類路徑。
+- 驗收：agent 能經 MCP 讀外部資料並寫入受權限控管的虛擬 FS；deny 規則擋得住 `.env` 類路徑，**且 subagent 內執行的操作同樣被擋住**（[#28](https://github.com/DemianLi/nexus-agent/issues/28) 決議 4「全域 deny 主動併進每個 subagent」的行為證據——Phase 1 只驗到物件形狀，形狀對而行為錯正是這個擴充點最容易出的錯，因為基座無規則命中即 allow）。
 
 ### Phase 3 — 記憶層（約 3 個 PR）
 
