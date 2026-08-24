@@ -11,7 +11,7 @@ TYPES = ('feat', 'fix', 'refactor', 'perf', 'test', 'docs', 'ci', 'chore', 'rele
 
 # Dependabot 的 PR 標題由 GitHub 產生（例如 Bump vite from 7.1.12 to 7.1.13），
 # 不可能符合中文描述規範，而 ruleset 的 bypass_actors 為空，無人能繞過 gate。
-# 不豁免的話 security 更新會全部卡死在紅燈。
+# 不豁免的話 security 更新與 .github/dependabot.yml 的版本更新會全部卡死在紅燈。
 BOT_ACTORS = ('dependabot[bot]',)
 
 TITLE_RE = re.compile(r'^(?:%s): (.+)$' % '|'.join(TYPES))
