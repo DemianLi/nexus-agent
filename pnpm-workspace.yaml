@@ -1,2 +1,6 @@
 packages:
   - 'apps/*'
+
+# peer 範圍不符時直接讓 pnpm install 失敗，而不是印 warning 後照樣裝起來。
+# deepagents 1.x 的 minor 會抬高 peer 下限（見 issue #33），這個開關讓那件事在 CI 當場爆。
+strictPeerDependencies: true
