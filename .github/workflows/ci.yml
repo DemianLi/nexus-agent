@@ -25,7 +25,10 @@ jobs:
     name: gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # action 一律 pin 浮動 major tag，跟著修補版走，只有跨 major 才需要人看。
+      # 版本下限由 runtime 決定：node20 已棄用，runner 現在強制墊到 node24 並發警告，
+      # 所以這幾顆都必須是 node24 的 major（checkout ≥ v5、setup-node ≥ v5、pnpm ≥ v5）。
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -105,10 +108,10 @@ jobs:
           fi
 
       # 需要 package.json 內含 packageManager 欄位（例如 "pnpm@10.x"）
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         if: steps.ts.outputs.found == 'true'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: steps.ts.outputs.found == 'true'
         with:
           node-version: 22
