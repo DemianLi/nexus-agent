@@ -32,7 +32,7 @@ export default [
 ```
 
 模型看到的是 `mcp__github__create_issue`、`mcp__web__search`——與 Claude Code、Codex 同一種
-server-qualified 形狀。
+server-qualified 形狀。（**只有乾淨的名字對得上**，被正規化過的那些不會，見明文限制。）
 
 ## 設定
 
@@ -96,6 +96,9 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   真的收圖片才落地」在這裡沒有對應物。
 - **子行程的 stderr 直接接到父行程。** 這是 MCP 的慣例（server 的診斷要看得到），代價是
   一台吵的 server 會把 CLI 的輸出洗掉。
+- **正規化過的名字只在 nexus 內部一致。** 指紋是我們自己算的（`sha256("<serverName> <rawName>")` 取前 12 位），dsh 的 preimage 沒有公開，Claude Code 與 Codex 也各有各的算法。所以同一支
+  工具在不同 harness 下的正規化名字**不會相同**——乾淨的名字才是跨工具一致的那一種。
+  這不影響任何東西：public name 只是註冊表的 key 與模型看到的字串，上線的永遠是 raw name。
 
 ## 與 dsh 的偏離
 

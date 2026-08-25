@@ -61,6 +61,20 @@ describe('publicToolName', () => {
   it('兩個原本會壓成同一個名字的工具不會併成一個', () => {
     expect(publicToolName('fixture', 'a.b')).not.toBe(publicToolName('fixture', 'a-b'));
   });
+
+  // 最長的 serverName 加最長的 raw name 是預算最緊的那一格：`mcp__` ＋ 32 ＋ `__` 已經
+  // 佔掉 39 字元，指紋再拿走 13，raw name 只剩 12 字元的位置。指紋雜的是完整的
+  // `(serverName, rawName)`，所以看得見的那 12 字元一樣不代表兩個工具會併起來。
+  it('serverName 用到上限也還在契約內，且兩個長名字仍然分得開', () => {
+    const server = 'a'.repeat(32);
+    const first = publicToolName(server, `${'b'.repeat(80)}-one`);
+    const second = publicToolName(server, `${'b'.repeat(80)}-two`);
+
+    expect(first).toHaveLength(64);
+    expect(first).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+    expect(first).toContain(`mcp__${server}__`);
+    expect(first).not.toBe(second);
+  });
 });
 
 describe('createMcpPlugin 的設定檢查', () => {
