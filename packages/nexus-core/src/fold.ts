@@ -256,7 +256,13 @@ function sortedByName<T extends { name: string }>(items: T[]): T[] {
  *
  * 基座的規則是**宣告順序、先命中者決定、無人命中即 allow**，所以一條 deny 自己的
  * `except` 只能寫成排在它前面的 allow。逐條 deny 緊接著自己的例外放，跨 plugin 的
- * 相對順序因此不變——靠前的 plugin 擋掉的東西，靠後的 plugin 的例外挖不開。
+ * 相對順序因此不變。
+ *
+ * **聯集只在一個方向上成立**：靠前的 plugin 擋掉的東西，靠後的 plugin 的例外挖不開；
+ * 反過來，靠前的 plugin 的 `except` 會贏過靠後的 plugin 對同一條路徑的 deny——那個
+ * allow 排在前面，先命中者決定。glob 的差集算不出來，所以這裡不修，只把它講明白：
+ * `except` 的射程是整份規則表往後全部，不是只有自己那一條 deny。真的要一條擋死的
+ * 規則，就不要有人替它開例外。
  */
 function foldPermissions(registry: PluginRegistry): FilesystemPermission[] {
   const rules: FilesystemPermission[] = [];
@@ -392,6 +398,12 @@ function foldSubAgents(
 
     // 全域打底 → subagent 自帶的 tools → 該層註冊的，越後面越近。自帶的那些不會被
     // 抹掉：它們是這個 subagent 自己的東西，只是沒走 registry 那條路進來。
+    //
+    // 明著寫 `tools` 蓋掉基座的 `agentParams.tools ?? defaultTools` 是安全的：基座的
+    // `defaultTools` 就是 root 的 `tools` 參數本身（`effectiveTools`，只多了 harness
+    // profile 的描述覆寫），內建的檔案系統工具不從那裡來，而是 subagent 那份
+    // middleware stack 裡的 `createFilesystemMiddleware` 帶的。蓋掉它不會讓 subagent
+    // 掉工具——這一層算出來的集合本來就以全域那份為底。
     const merged = new Map(registry.tools.effective());
     for (const tool of spec.tools ?? [])
       merged.set(tool.name, { value: tool, origin: entry.origin });

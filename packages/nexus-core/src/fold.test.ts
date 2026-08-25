@@ -151,6 +151,20 @@ describe('permissions 註冊點', () => {
     ]);
   });
 
+  it('反過來不成立：靠前的 plugin 的 except 贏過靠後的 plugin 的 deny', async () => {
+    const params = await fold([
+      fakePlugin('loose', (r) => void r.permissions.deny(['/tmp/**'], { except: ['/tmp/ok'] })),
+      fakePlugin('strict', (r) => void r.permissions.deny(['/tmp/ok'])),
+    ]);
+    // 先命中者決定，而排第一的是 loose 那條 allow——`except` 的射程是整份表往後全部。
+    // glob 的差集算不出來，這裡釘住的是實際行為，不是我們希望的行為。
+    expect((params.permissions ?? []).map((rule) => [rule.mode, rule.paths[0]])).toEqual([
+      ['allow', '/tmp/ok'],
+      ['deny', '/tmp/**'],
+      ['deny', '/tmp/ok'],
+    ]);
+  });
+
   it('全域 deny 主動併進每個 subagent——基座對 subagent 的 permissions 是整組替換', async () => {
     const params = await fold([
       fakePlugin('secrets', (r) => void r.permissions.deny(['/.env*'])),
