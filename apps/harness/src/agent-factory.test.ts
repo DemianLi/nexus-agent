@@ -14,15 +14,24 @@ import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 
-/** 兩個 plugin 各呼叫一次自己的工具，最後回一句話。 */
+/**
+ * 兩個 plugin 的工具在**同一輪**一起被呼叫，那一輪沒有文字內容，最後回一句話。
+ *
+ * 形狀是照真模型寫的，不是隨手挑的（[#51](https://github.com/DemianLi/nexus-agent/issues/51)）：
+ * [PR #50](https://github.com/DemianLi/nexus-agent/pull/50) 第一次用真實供應商跑起來時，
+ * 兩個工具就是在同一輪一起回來的。這條是 [#29](https://github.com/DemianLi/nexus-agent/issues/29)
+ * 的正面路徑驗收，而它的證明力直接取決於假模型有多像真的——寫成「多輪、每輪一個工具」
+ * 一樣會綠，但驗到的是一個真模型不會走的形狀。
+ *
+ * 多輪各一個工具的覆蓋沒有因此消失：同一個檔案裡的呈現順序與 default backend 兩條都是多輪。
+ */
 const BOTH_TOOLS: readonly ScriptedTurn[] = [
   {
-    content: '先回聲。',
-    toolCalls: [{ name: ECHO_TOOL_NAME, args: { message: '嗨' } }],
-  },
-  {
-    content: '再記下來。',
-    toolCalls: [{ name: NOTE_TOOL_NAME, args: { text: '兩個 plugin 都接上了' } }],
+    content: '',
+    toolCalls: [
+      { name: ECHO_TOOL_NAME, args: { message: '嗨' } },
+      { name: NOTE_TOOL_NAME, args: { text: '兩個 plugin 都接上了' } },
+    ],
   },
   { content: '兩邊都跑過了。' },
 ];

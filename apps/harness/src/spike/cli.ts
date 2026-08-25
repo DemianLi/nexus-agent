@@ -32,7 +32,7 @@ async function main(): Promise<void> {
   let files: Record<string, unknown> = {};
 
   // 一次 run 收兩種事件：updates 給人看過程，values 拿最終狀態。
-  // 假模型的腳本只有三輪，跑第二次就會用完，所以不能 stream 完再 invoke 一次。
+  // 假模型的腳本只有兩輪，跑第二次就會用完，所以不能 stream 完再 invoke 一次。
   for await (const [mode, payload] of await agent.stream(
     { messages: [new HumanMessage(prompt)] },
     { streamMode: ['updates', 'values'] },
