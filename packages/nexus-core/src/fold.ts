@@ -176,8 +176,15 @@ export function foldRegistry(
  * 有工具註冊到某個 subagent 層，卻沒有任何 plugin 註冊過那個名字的 subagent。
  *
  * 這條只能在 fold 驗：層是按名字延遲建立的，註冊當下不知道那個 subagent 之後會不會
- * 出現。基座自帶的 `general-purpose` subagent 也不算——它由 `createDeepAgent` 自己
- * 補上，不在我們的 registry 裡，所以往它加工具目前一樣會被擋下。
+ * 出現。
+ *
+ * **基座自帶的 `general-purpose` 也不算，而且這是對的答案不是暫行做法。** 讀過
+ * `deepagents` 的 `src/agent.ts` 之後有兩條事實：(1) 它只在 `subagents` 裡**沒有**叫
+ * `general-purpose` 的東西時才自己補一個，所以我們真的註冊一個同名的會把它整個換掉；
+ * (2) 它補的那個拿 `tools: effectiveTools`，也就是 root 的工具參數本身——全域工具本來
+ * 就已經在裡面了。所以往 `'general-purpose'` 這個層加工具**永遠不是**把工具送進它的
+ * 正確方式：要嘛註冊全域（自動流進去），要嘛自己註冊一個同名 subagent（那就是明著換掉
+ * 基座的版本）。擋下來還附帶擋住打錯字的層名，兩邊都划算。
  */
 function assertScopesHaveSubAgents(registry: PluginRegistry): void {
   const orphans = registry.tools

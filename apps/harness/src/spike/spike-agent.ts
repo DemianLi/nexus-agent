@@ -3,8 +3,8 @@ import { tool } from '@langchain/core/tools';
 import { createDeepAgent, StateBackend } from 'deepagents';
 import { z } from 'zod';
 import { createLiveModel } from './live-model.js';
-import { ScriptedChatModel } from './scripted-model.js';
-import type { ScriptedTurn } from './scripted-model.js';
+import { ScriptedChatModel } from '../scripted-model.js';
+import type { ScriptedTurn } from '../scripted-model.js';
 
 /** spike 的自訂工具：只把輸入回聲成一句話，用來證明工具真的被基座呼叫到。 */
 export const recordFinding = tool(({ topic, detail }) => `已記錄「${topic}」：${detail}`, {
