@@ -49,7 +49,10 @@ export async function loadPlugins(
       await plugin.apply(tracked);
     } catch (error) {
       for (const undo of undos.reverse()) undo();
-      throw new Error(`${formatOrigin(origin)} 的 apply 失敗，它註冊的東西已全數撤銷`, {
+      // 把原因接進訊息本身，不只掛在 cause 上：重名錯誤的價值是指名撞的是哪兩個
+      // plugin 與哪個名字，而只印 `error.message` 是錯誤處理最常見的形狀。
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`${formatOrigin(origin)} 的 apply 失敗，它註冊的東西已全數撤銷 — ${reason}`, {
         cause: error,
       });
     } finally {

@@ -50,14 +50,11 @@ describe('loadPlugins', () => {
       fakePlugin('alpha', (registry) => void registry.tools.register(fakeTool('search'))),
       fakePlugin('mcp', (registry) => void registry.tools.register(fakeTool('search'))),
     ];
-    await expect(loadPlugins(plugins)).rejects.toThrow(/plugins\[1\] \(mcp\)/);
+    // 指名兩個 plugin 與那個工具名，全部在頂層訊息裡 —— 錯誤處理只印 error.message 就夠。
     await expect(loadPlugins(plugins)).rejects.toThrow(
-      expect.objectContaining({
-        cause: expect.objectContaining({
-          message: expect.stringMatching(/plugins\[0\] \(alpha\)[\s\S]*plugins\[1\] \(mcp\)/),
-        }),
-      }),
+      /plugins\[0\] \(alpha\)[\s\S]*plugins\[1\] \(mcp\)/,
     );
+    await expect(loadPlugins(plugins)).rejects.toThrow('"search"');
   });
 
   it('manifest 不合法時載入失敗，訊息指得出是清單裡哪一個', async () => {
