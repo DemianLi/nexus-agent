@@ -2,16 +2,16 @@
  * 載入一份 plugin 清單：命令式註冊、載入期回滾、`requires` 的存在性檢查。
  *
  * 對應 [#29](https://github.com/DemianLi/nexus-agent/issues/29) 的「載入期回滾」驗收。
- * 回滾那條的計劃原文是「一個 tool 與一個 middleware」，這裡改用 **tool 與 subagent**：
- * `middleware` 註冊點屬 `feat/plugin-registry-fold`，驗收的意思是「回滾撤得掉跨不同表
- * 的異質註冊」，換成同一個 PR 裡已存在的兩張表一樣成立。middleware 是匿名的順序追加，
- * 撤銷路徑與具名插入不同，那一條隨 `AnonymousEntries` 一起留給下一個 PR。
+ * `feat/nexus-plugin-contract` 當時只有三個註冊點，回滾那條用 tool ＋ subagent（兩次
+ * 具名插入）；middleware 是 symbol-keyed 的匿名追加，撤銷路徑與具名插入不同，那一條
+ * 隨 `AnonymousEntries` 落在本 PR 的「九個註冊點的回滾」。那組測試同時是 `load.ts`
+ * 的 `trackUndo` 漏包某個註冊點時唯一會紅的地方。
  */
 
 import { describe, expect, it } from 'vitest';
 import { loadPlugins } from './load.js';
 import { createRegistry } from './registry.js';
-import { fakePlugin, fakeSubAgent, fakeTool } from './fixtures.js';
+import { fakeBackend, fakeMiddleware, fakePlugin, fakeSubAgent, fakeTool } from './fixtures.js';
 import type { NexusPlugin } from './plugin.js';
 
 describe('loadPlugins', () => {
@@ -184,5 +184,74 @@ describe('requires', () => {
   it('缺多個能力時一次列全，不是報第一個就停', async () => {
     const plugins = [fakePlugin('consumer', () => {}, ['filesystem', 'network'])];
     await expect(loadPlugins(plugins)).rejects.toThrow(/"filesystem"[\s\S]*"network"/);
+  });
+});
+
+describe('九個註冊點的回滾', () => {
+  /** 九個點各放一樣東西，然後 throw。少包一個 undo 追蹤，這裡就會留下孤兒。 */
+  const greedy = fakePlugin('greedy', (registry) => {
+    registry.tools.register(fakeTool('search'));
+    registry.subagents.register(fakeSubAgent('researcher'));
+    registry.capabilities.provide('filesystem');
+    registry.backend.mount('/memories/', fakeBackend('store'));
+    registry.middleware.use(fakeMiddleware('audit'));
+    registry.permissions.deny(['/.env*']);
+    registry.interrupts.require('rm', { reason: '刪檔' });
+    registry.skills.addSource('/skills/user/');
+    registry.memory.addSource('./AGENTS.md');
+    registry.tools.register(fakeTool('grep'), { scope: 'researcher' });
+    throw new Error('半路壞掉');
+  });
+
+  it('apply 中途 throw → 九個註冊點一個都不剩', async () => {
+    const registry = createRegistry();
+    await expect(loadPlugins([greedy], registry)).rejects.toThrow('半路壞掉');
+
+    expect(registry.tools.resolve('search')).toBeUndefined();
+    expect(registry.tools.scopes()).toEqual([]);
+    expect(registry.subagents.get('researcher')).toBeUndefined();
+    expect(registry.capabilities.has('filesystem')).toBe(false);
+    expect(registry.backend.mounts()).toEqual([]);
+    expect(registry.middleware.list()).toEqual([]);
+    expect(registry.permissions.rules()).toEqual([]);
+    expect(registry.interrupts.requirements()).toEqual([]);
+    expect(registry.skills.sources()).toEqual([]);
+    expect(registry.memory.sources()).toEqual([]);
+  });
+
+  it('先前成功載入的 plugin 不受影響', async () => {
+    const registry = createRegistry();
+    const good = fakePlugin('good', (r) => {
+      r.middleware.use(fakeMiddleware('keep'));
+      r.memory.addSource('./KEEP.md');
+    });
+    await expect(loadPlugins([good, greedy], registry)).rejects.toThrow('半路壞掉');
+    expect(registry.middleware.list()).toHaveLength(1);
+    expect(registry.memory.sources()).toEqual(['./KEEP.md']);
+  });
+
+  it('匿名撤銷是逐筆的：同一個 plugin 的兩個 middleware 一起撤，別人的留著', async () => {
+    const registry = createRegistry();
+    const keeper = fakePlugin('keeper', (r) => void r.middleware.use(fakeMiddleware('keep')));
+    const doomed = fakePlugin('doomed', (r) => {
+      r.middleware.use(fakeMiddleware('first'));
+      r.middleware.use(fakeMiddleware('second'));
+      throw new Error('中途壞掉');
+    });
+    await expect(loadPlugins([keeper, doomed], registry)).rejects.toThrow('中途壞掉');
+    expect(registry.middleware.list().map((entry) => entry.origin.name)).toEqual(['keeper']);
+  });
+
+  it('撤銷過的掛載點與 skill 來源可以被後續 plugin 重新註冊', async () => {
+    const registry = createRegistry();
+    await expect(loadPlugins([greedy], registry)).rejects.toThrow('半路壞掉');
+
+    const late = fakePlugin('late', (r) => {
+      r.backend.mount('/memories/', fakeBackend('late'));
+      r.skills.addSource('/skills/user/');
+    });
+    await expect(loadPlugins([late], registry)).resolves.toBeDefined();
+    expect(registry.backend.mounts().map(([prefix]) => prefix)).toEqual(['/memories/']);
+    expect(registry.skills.sources()).toEqual(['/skills/user/']);
   });
 });

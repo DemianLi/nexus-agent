@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CapabilitySet, NamedEntries } from './entries.js';
+import { AnonymousEntries, CapabilitySet, NamedEntries } from './entries.js';
 import type { PluginOrigin } from './plugin.js';
 
 const a: PluginOrigin = { index: 0, name: 'a' };
@@ -95,5 +95,46 @@ describe('CapabilitySet', () => {
     expect(set.has('fs')).toBe(true);
     second();
     expect(set.has('fs')).toBe(false);
+  });
+});
+
+describe('AnonymousEntries', () => {
+  it('保留追加順序', () => {
+    const table = new AnonymousEntries<string>();
+    table.append('z', a);
+    table.append('m', a);
+    table.append('c', b);
+    expect([...table.entries()].map((entry) => entry.value)).toEqual(['z', 'm', 'c']);
+  });
+
+  it('值相等的兩次追加是兩筆獨立註冊', () => {
+    const table = new AnonymousEntries<string>();
+    table.append('same', a);
+    table.append('same', b);
+    expect(table.size).toBe(2);
+    expect([...table.entries()].map((entry) => entry.origin)).toEqual([a, b]);
+  });
+
+  it('撤銷只移除自己那一筆，而不是所有相等的值', () => {
+    const table = new AnonymousEntries<string>();
+    const undoFirst = table.append('same', a);
+    table.append('same', b);
+    undoFirst();
+    expect([...table.entries()].map((entry) => entry.origin)).toEqual([b]);
+  });
+
+  it('撤銷是冪等的', () => {
+    const table = new AnonymousEntries<string>();
+    const undo = table.append('v', a);
+    table.append('w', b);
+    undo();
+    undo();
+    expect([...table.entries()].map((entry) => entry.value)).toEqual(['w']);
+  });
+
+  it('每一筆記得是誰追加的', () => {
+    const table = new AnonymousEntries<string>();
+    table.append('v', b);
+    expect([...table.entries()][0]?.origin).toEqual(b);
   });
 });
