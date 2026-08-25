@@ -199,6 +199,7 @@ describe('九個註冊點的回滾', () => {
     registry.interrupts.require('rm', { reason: '刪檔' });
     registry.skills.addSource('/skills/user/');
     registry.memory.addSource('./AGENTS.md');
+    registry.lifecycle.onDispose(() => {});
     registry.tools.register(fakeTool('grep'), { scope: 'researcher' });
     throw new Error('半路壞掉');
   });
@@ -217,6 +218,7 @@ describe('九個註冊點的回滾', () => {
     expect(registry.interrupts.requirements()).toEqual([]);
     expect(registry.skills.sources()).toEqual([]);
     expect(registry.memory.sources()).toEqual([]);
+    expect(registry.lifecycle.disposers()).toEqual([]);
   });
 
   it('先前成功載入的 plugin 不受影響', async () => {
@@ -253,5 +255,87 @@ describe('九個註冊點的回滾', () => {
     await expect(loadPlugins([late], registry)).resolves.toBeDefined();
     expect(registry.backend.mounts().map(([prefix]) => prefix)).toEqual(['/memories/']);
     expect(registry.skills.sources()).toEqual(['/skills/user/']);
+  });
+});
+
+describe('關機清理', () => {
+  it('逆序跑：後開的先收', async () => {
+    const closed: string[] = [];
+    const opener = (id: string): NexusPlugin =>
+      fakePlugin(id, (registry) => {
+        registry.lifecycle.onDispose(() => void closed.push(id));
+      });
+    const { dispose } = await loadPlugins([opener('a'), opener('b')]);
+    await dispose();
+    expect(closed).toEqual(['b', 'a']);
+  });
+
+  it('async 的清理會被等到', async () => {
+    let done = false;
+    const plugin = fakePlugin('slow', (registry) => {
+      registry.lifecycle.onDispose(async () => {
+        await Promise.resolve();
+        done = true;
+      });
+    });
+    const { dispose } = await loadPlugins([plugin]);
+    await dispose();
+    expect(done).toBe(true);
+  });
+
+  it('呼叫第二次是 no-op', async () => {
+    let count = 0;
+    const plugin = fakePlugin('once', (registry) => {
+      registry.lifecycle.onDispose(() => void (count += 1));
+    });
+    const { dispose } = await loadPlugins([plugin]);
+    await dispose();
+    await dispose();
+    expect(count).toBe(1);
+  });
+
+  // 註冊內容留著（診斷要有東西可看），活資源不留——載入失敗的呼叫端拿到的是一個
+  // exception，不是 handle，沒有第二個人知道那些東西還開著。
+  it('靠後的 plugin 拋錯時，靠前的 plugin 開的資源也收掉', async () => {
+    const closed: string[] = [];
+    const opener = fakePlugin('opener', (r) => {
+      r.middleware.use(fakeMiddleware('keep'));
+      r.lifecycle.onDispose(() => void closed.push('opener'));
+    });
+    const doomed = fakePlugin('doomed', () => {
+      throw new Error('半路壞掉');
+    });
+    const registry = createRegistry();
+    await expect(loadPlugins([opener, doomed], registry)).rejects.toThrow('半路壞掉');
+    expect(closed).toEqual(['opener']);
+    expect(registry.middleware.list()).toHaveLength(1);
+  });
+
+  it('requires 缺件同樣算載入失敗，資源一樣收掉', async () => {
+    const closed: string[] = [];
+    const opener = fakePlugin('opener', (r) => {
+      r.lifecycle.onDispose(() => void closed.push('opener'));
+    });
+    const consumer = fakePlugin('consumer', () => {}, ['nobody-provides-this']);
+    await expect(loadPlugins([opener, consumer])).rejects.toThrow('nobody-provides-this');
+    expect(closed).toEqual(['opener']);
+  });
+
+  // 關機途中有人拋錯不是停下來的理由——剩下的資源更需要被收掉。
+  it('有清理拋錯，其餘照樣跑完，訊息指名是誰', async () => {
+    const closed: string[] = [];
+    const plugins = [
+      fakePlugin('good', (r) => void r.lifecycle.onDispose(() => void closed.push('good'))),
+      fakePlugin(
+        'bad',
+        (r) =>
+          void r.lifecycle.onDispose(() => {
+            throw new Error('關不掉');
+          }),
+      ),
+    ];
+    const { dispose } = await loadPlugins(plugins);
+    await expect(dispose()).rejects.toThrow(/plugins\[1\] \(bad\)[\s\S]*關不掉/);
+    expect(closed).toEqual(['good']);
   });
 });

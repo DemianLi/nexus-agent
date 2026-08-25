@@ -76,32 +76,56 @@ export interface CreateNexusAgentOptions {
 }
 
 /**
+ * 組裝好的 agent，加上收掉它的方法。
+ *
+ * **刻意是推導出來的別名，不是自己打一份 interface**：`createDeepAgent` 的回傳型別帶著
+ * 一整串由參數推導的型別參數，寫成 `ReturnType<typeof createDeepAgent>` 會退回預設值，
+ * 呼叫端的 `result.messages` 當場變成 `any`。
+ *
+ * `dispose` 收的是清單裡的 plugin 經 `registry.lifecycle.onDispose()` 登記的活資源
+ * （MCP 的 stdio 子行程是第一個），逆序、冪等。**不收 agent 本身**——deepagents 建構後
+ * 不可變，也沒有東西要關。不呼叫的下場是行程不退出：子行程的 stdio pipe 是活的 handle。
+ */
+export type NexusAgentHandle = Awaited<ReturnType<typeof createNexusAgent>>;
+
+/**
  * 依一份 plugin 清單建一個 agent。
  *
+ * **組裝失敗時這裡自己收拾**：`loadPlugins` 過了才發現 fold 的前置條件不成立、或基座
+ * 擋下這份組裝時，已經開好的資源沒有第二個人知道——呼叫端拿到的是一個 exception，
+ * 不是 handle。所以先 `dispose()` 再把原本的錯誤往外拋。
+ *
  * @param options - 清單，加上組裝點自有的那些。
- * @returns 建好的 deep agent。
+ * @returns 建好的 agent 與收掉它的方法。
  * @throws 清單載入失敗（重名、`requires` 缺件、`apply` 拋錯）、fold 的前置條件不成立，
  *   或基座自己在建構時擋下這份組裝——三種都在載入期發生，不會拖到跑起來才炸。
  */
 export async function createNexusAgent(options: CreateNexusAgentOptions) {
-  const { registry } = await loadPlugins(options.plugins);
+  const { registry, dispose } = await loadPlugins(options.plugins);
 
-  assertNoBaseToolNameCollision(registry);
+  try {
+    assertNoBaseToolNameCollision(registry);
 
-  const params = foldRegistry(registry, {
-    defaultBackend: options.backend ?? new StateBackend(),
-    toolOrder: options.toolOrder,
-    baseToolNames: options.baseToolNames ?? BASE_TOOL_NAMES,
-    model: options.model,
-    checkpointer: options.checkpointer,
-    store: options.store,
-    approvals: options.approvals,
-  });
+    const params = foldRegistry(registry, {
+      defaultBackend: options.backend ?? new StateBackend(),
+      toolOrder: options.toolOrder,
+      baseToolNames: options.baseToolNames ?? BASE_TOOL_NAMES,
+      model: options.model,
+      checkpointer: options.checkpointer,
+      store: options.store,
+      approvals: options.approvals,
+    });
 
-  return createDeepAgent({
-    ...params,
-    ...(options.systemPrompt !== undefined && { systemPrompt: options.systemPrompt }),
-  });
+    const agent = createDeepAgent({
+      ...params,
+      ...(options.systemPrompt !== undefined && { systemPrompt: options.systemPrompt }),
+    });
+    return { agent, dispose };
+  } catch (error) {
+    // 清理自己失敗的話不能蓋掉原本的錯誤——那個才是使用者要修的東西。
+    await dispose().catch(() => {});
+    throw error;
+  }
 }
 
 /**

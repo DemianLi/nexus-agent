@@ -150,10 +150,11 @@ describe('REPL', () => {
   ];
 
   async function replAgent() {
-    return createNexusAgent({
+    const { agent } = await createNexusAgent({
       model: new ScriptedChatModel({ turns: ONE_TURN }),
       plugins: DEFAULT_PLUGINS,
     });
+    return agent;
   }
 
   it('一行一輪，/exit 收工', async () => {

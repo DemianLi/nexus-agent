@@ -169,6 +169,21 @@ export class AnonymousEntries<V> {
     return this.data.values();
   }
 
+  /**
+   * 取走全部：回傳目前的每一筆，並把表清空。
+   *
+   * 先複製再清空，所以取走之後這些筆再也不會被第二個呼叫端看到——這是關機清理
+   * 「跑一次就好」的來源。已經發出去的 undo 仍然是安全的 no-op（`delete` 一把不存在的
+   * key）。
+   *
+   * @returns 依追加順序的每一筆。
+   */
+  drain(): NamedEntry<V>[] {
+    const taken = [...this.data.values()];
+    this.data.clear();
+    return taken;
+  }
+
   /** 表裡有幾筆。 */
   get size(): number {
     return this.data.size;

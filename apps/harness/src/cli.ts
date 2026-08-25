@@ -24,6 +24,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import type { NexusPlugin } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { createNexusAgent } from './agent-factory.js';
+import type { NexusAgentHandle } from './agent-factory.js';
 import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MODEL_ID } from './live-model.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -178,7 +179,7 @@ function createCliModel(live: boolean): BaseChatModel {
   return createLiveModel();
 }
 
-type NexusAgent = Awaited<ReturnType<typeof createNexusAgent>>;
+type NexusAgent = NexusAgentHandle['agent'];
 
 /**
  * 組出這次呼叫要用的 agent。
@@ -190,23 +191,26 @@ type NexusAgent = Awaited<ReturnType<typeof createNexusAgent>>;
  *
  * 回傳 model 是為了讓測試看得到送進去的 prompt——照 `spike/spike-agent.ts` 的先例。
  *
+ * `dispose` 一路傳到 {@link runCli} 的 `finally`——清單裡的 plugin 可能開了活資源
+ * （MCP 的 stdio 子行程是第一個），沒人收的話這支程式印完答案不會退出。
+ *
  * @param invocation - 這次呼叫解析出來的東西。
  * @param plugins - 已經載好的 plugin 清單。
- * @returns 組好的 agent 與它用的 model。
+ * @returns 組好的 agent、收掉它的方法，與它用的 model。
  * @throws 清單載入失敗、fold 前置條件不成立，或基座擋下這份組裝。
  */
 export async function createCliAgent(
   invocation: Pick<CliInvocation, 'live'>,
   plugins: readonly NexusPlugin[],
-): Promise<{ agent: NexusAgent; model: BaseChatModel }> {
+): Promise<{ agent: NexusAgent; dispose: () => Promise<void>; model: BaseChatModel }> {
   const model = createCliModel(invocation.live);
-  const agent = await createNexusAgent({
+  const { agent, dispose } = await createNexusAgent({
     model,
     plugins,
     systemPrompt: SYSTEM_PROMPT,
     checkpointer: new MemorySaver(),
   });
-  return { agent, model };
+  return { agent, dispose, model };
 }
 
 /** 把一輪 stream 出來的東西印給人看。 */
@@ -331,18 +335,23 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       : await loadPluginModule(invocation.pluginModule, options.cwd);
 
   // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
-  const { agent } = await createCliAgent(invocation, plugins);
+  const { agent, dispose } = await createCliAgent(invocation, plugins);
 
-  printer.log(`模型：${invocation.live ? LIVE_MODEL_ID : '假模型（ScriptedChatModel）'}`);
+  // 一輪跑壞了也要收——資源的所有權跟這一次呼叫綁在一起，不跟它成不成功綁在一起。
+  try {
+    printer.log(`模型：${invocation.live ? LIVE_MODEL_ID : '假模型（ScriptedChatModel）'}`);
 
-  if (invocation.prompt !== undefined) {
-    printer.log(`> ${invocation.prompt}\n`);
-    await runTurn(agent, invocation.prompt, printer);
-    return;
+    if (invocation.prompt !== undefined) {
+      printer.log(`> ${invocation.prompt}\n`);
+      await runTurn(agent, invocation.prompt, printer);
+      return;
+    }
+
+    printer.log('輸入 /exit 或按 Ctrl-D 結束。\n');
+    await runRepl(agent, { input: options.input, output: options.output }, printer);
+  } finally {
+    await dispose();
   }
-
-  printer.log('輸入 /exit 或按 Ctrl-D 結束。\n');
-  await runRepl(agent, { input: options.input, output: options.output }, printer);
 }
 
 /**
