@@ -5,8 +5,9 @@ TypeScript + React (shadcn/ui) 專案，架構分為 harness 與 web UI 兩部�
 ## 專案結構
 
 ```
-apps/harness   step 執行器（Node / TypeScript）
-apps/web       Vite + React 19 + Tailwind v4 + shadcn/ui
+packages/nexus-core   NexusPlugin 契約：型別、manifest、PluginRegistry
+apps/harness          step 執行器（Node / TypeScript）
+apps/web              Vite + React 19 + Tailwind v4 + shadcn/ui
 ```
 
 pnpm workspace，Node >= 22。
