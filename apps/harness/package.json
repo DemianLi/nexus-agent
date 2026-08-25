@@ -6,6 +6,8 @@
   "main": "src/index.ts",
   "scripts": {
     "build": "tsc --noEmit",
+    "cli": "tsx src/cli.ts",
+    "cli:live": "tsx src/cli.ts --live",
     "lint": "eslint .",
     "spike": "tsx src/spike/cli.ts",
     "spike:live": "tsx src/spike/cli.ts --live",

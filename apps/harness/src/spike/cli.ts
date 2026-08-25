@@ -1,7 +1,6 @@
-import { resolve } from 'node:path';
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { LIVE_API_KEY_ENV, LIVE_MODEL_ID } from './live-model.js';
+import { loadLiveEnvIfNeeded, LIVE_MODEL_ID } from '../live-model.js';
 import { createLiveSpikeAgent, createSpikeAgent } from './spike-agent.js';
 
 /**
@@ -17,29 +16,13 @@ import { createLiveSpikeAgent, createSpikeAgent } from './spike-agent.js';
  * **不進 CI** —— CI 不放模型 secret。
  */
 
-/** 專案根目錄的 `.env`（已被 .gitignore 排除）。`--live` 才需要。 */
-const ENV_FILE = resolve(import.meta.dirname, '../../../../.env');
-
-/**
- * key 只從環境變數讀。`.env` 只是填充環境變數的一種方式，不是 fallback：
- * 讀不到檔案就繼續走，`createLiveModel` 會因為缺變數而失敗並說明缺哪一個。
- */
-function loadEnvFileIfNeeded(): void {
-  if (process.env[LIVE_API_KEY_ENV]) return;
-  try {
-    process.loadEnvFile(ENV_FILE);
-  } catch {
-    // 沒有 .env 就靠 shell 裡既有的環境變數。
-  }
-}
-
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const live = args.includes('--live');
   const prompt =
     args.filter((arg) => arg !== '--live').join(' ') || '記錄 Phase 0 的結論並寫成檔案。';
 
-  if (live) loadEnvFileIfNeeded();
+  if (live) loadLiveEnvIfNeeded();
 
   const { agent } = live ? await createLiveSpikeAgent() : await createSpikeAgent();
 
