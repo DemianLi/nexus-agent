@@ -1,6 +1,8 @@
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { tool } from '@langchain/core/tools';
 import { createDeepAgent, StateBackend } from 'deepagents';
 import { z } from 'zod';
+import { createLiveModel } from './live-model.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 
@@ -47,20 +49,39 @@ export interface SpikeAgentOptions {
   readonly script?: readonly ScriptedTurn[];
 }
 
-/**
- * 最小可跑的 deep agent：in-memory backend（StateBackend）＋ 一個自訂工具。
- *
- * 模型是寫死腳本的假模型 —— 這裡驗的是基座的組裝與接線，不是模型品質。
- */
-export function createSpikeAgent(options: SpikeAgentOptions = {}) {
-  const model = new ScriptedChatModel({ turns: options.script ?? SPIKE_SCRIPT });
+const SYSTEM_PROMPT = [
+  '你是 nexus-agent 的 Phase 0 驗證用 agent。',
+  '收到請求時，先用 record_finding 記下結論，再用 write_file 把結論寫進 /findings.md，最後回覆使用者。',
+  '工具要真的呼叫，不要只在文字裡描述你打算做什麼。',
+].join('\n');
 
-  const agent = createDeepAgent({
+/** 兩條路徑共用的組裝：in-memory backend（StateBackend）＋ 一個自訂工具。 */
+function buildAgent(model: BaseChatModel) {
+  return createDeepAgent({
     model,
     tools: [recordFinding],
     backend: new StateBackend(),
-    systemPrompt: '你是 nexus-agent 的 Phase 0 驗證用 agent。',
+    systemPrompt: SYSTEM_PROMPT,
   });
+}
 
-  return { agent, model };
+/**
+ * 最小可跑的 deep agent，用寫死腳本的假模型。
+ *
+ * 驗的是基座的組裝與接線，不是模型品質。假模型不是鷹架而是**長期測試基座**
+ * （issue #31）—— CI 不放模型 secret，所以這是唯一能在 CI 上跑完整 agent 迴圈的路徑。
+ */
+export function createSpikeAgent(options: SpikeAgentOptions = {}) {
+  const model = new ScriptedChatModel({ turns: options.script ?? SPIKE_SCRIPT });
+  return { agent: buildAgent(model), model };
+}
+
+/**
+ * 同一個 agent，換成真實供應商的 model（issue #31 的一次性人工驗證用）。
+ *
+ * **不進 CI** —— 它需要 API key 而且會花錢。缺少 key 時 `createLiveModel` 直接失敗。
+ */
+export function createLiveSpikeAgent() {
+  const model = createLiveModel();
+  return { agent: buildAgent(model), model };
 }

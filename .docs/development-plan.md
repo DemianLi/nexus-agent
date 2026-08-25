@@ -96,7 +96,7 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
 | 執行 | `@langchain/langgraph`、`@langchain/langgraph-checkpoint`、`@langchain/langgraph-sdk` | **`^1.4.10` / `^1.1.5` / `^1.9.23`**；interrupts、checkpointer、store |
 | 工具 | 內建 MCP 支援 + `@langchain/core` tools + `zod` | **`zod` 用 `^4.3.6`** — 與基座的直接相依同範圍，確保只解析出一份 |
 | 觀測 | `langsmith`（tracing + evaluators） | **`>=0.7.1 <0.10.0`**。套件名是 `langsmith`，不是 `@langchain/langsmith`（後者不存在）。補強項 4 |
-| 模型 | 預設 **Anthropic**（prompt caching 自動）；唯一備選 **DeepSeek**（`@langchain/deepseek`）。OpenAI 未排入評估，需要時另開決策 | Phase 0 只驗接線不比較；DeepSeek 相容性 Phase 2、品質與成本 Phase 5（[#31](https://github.com/DemianLi/nexus-agent/issues/31)） |
+| 模型 | 預設 **Anthropic**（prompt caching 自動）；唯一備選 **DeepSeek**（`@langchain/deepseek`）。OpenAI 未排入評估，需要時另開決策 | Phase 0 只驗接線不比較（接線對象是 NVIDIA 閘道，不是預設供應商 —— 見第 5 節 Phase 0）；DeepSeek 相容性 Phase 2、品質與成本 Phase 5（[#31](https://github.com/DemianLi/nexus-agent/issues/31)） |
 | 狀態儲存 | **決策點**：Phase 0 用 `MemorySaver`，Phase 3 評估 `@langchain/langgraph-checkpoint-postgres` | 補強項 5 |
 | Sandbox | deepagentsjs sandbox providers（`SandboxBackendProtocolV2`）+ QuickJS interpreter | Phase 2 之後，安全優先 |
 
@@ -113,7 +113,7 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
 ### Phase 0 — 技術驗證（spike，2 個 PR）
 
 - `feat/harness-deepagents-spike`（[#37](https://github.com/DemianLi/nexus-agent/pull/37)，已完成）：安裝 deepagentsjs，最小 agent（`StateBackend` + 一個 custom tool）以腳本假模型跑通。驗的是基座組裝，不是模型。
-- `feat/harness-live-provider`：接上真實供應商（Anthropic），並依 [`docs/standards.md`](../docs/standards.md) 建立 `.env.example`（Phase 0 的必要 key 只有 Anthropic 一把）。
+- `feat/harness-live-provider`：接上真實供應商，並依 [`docs/standards.md`](../docs/standards.md) 建立 `.env.example`（Phase 0 的必要 key 只有一把）。**接線對象是 NVIDIA 的 OpenAI 相容端點**（`https://integrate.api.nvidia.com/v1`）上的 `deepseek-ai/deepseek-v4-flash-0731`，用 `@langchain/openai` 指過去 —— JS 這邊沒有 NVIDIA 專用的 LangChain 整合（`@langchain/nvidia-ai-endpoints` 只有 Python 版）。**預設供應商的決策不動**：第 0 節決策表、第 4 節選型表與第 7 節決策點 2 仍然是 Anthropic —— Phase 0 只驗接線不比較，接線對象因此不必是預設。接線用的模型雖然是 DeepSeek，但**這證明不了 Phase 2 的「DeepSeek 相容性」**：那條驗的是同一份 plugin 清單在 middleware stack 下跑得通，而 Phase 0 還沒有任何 middleware。
 - 驗收分兩段（[#31](https://github.com/DemianLi/nexus-agent/issues/31)）。**假模型那段進 CI**：CLI 下一個指令 → agent 呼叫工具 → 寫虛擬檔案 → 回覆，不需任何 API key，可重複跑。**真模型那段是一次性人工驗證**，記錄寫進 PR 內文「驗證方式」，四項：(1) 真實供應商完成一輪 tool call，工具參數以合法 JSON 回到 harness；(2) `streamMode: ['updates','values']` 的事件形狀與假模型一致；(3) Node 22 下無 warning、無相依問題；(4) key 只從環境變數讀，缺少時直接失敗、不 fallback。**prompt caching 不列** —— 那是成本優化不是接線。
 - **CI 不放模型 secret** —— 打真實 API 會讓每次 push 都花錢且會 flake。假模型（`ScriptedChatModel`）因此不是鷹架而是長期測試基座，後續 phase 的端到端驗證都靠它；它與基座真實行為的分歧由 [#32](https://github.com/DemianLi/nexus-agent/issues/32) 的升版檢查清單擋（見第 7.1 節），長期落點留在 `apps/harness`，與 `createDeepAgent` 的呼叫點同處（[#30](https://github.com/DemianLi/nexus-agent/issues/30)）。
 

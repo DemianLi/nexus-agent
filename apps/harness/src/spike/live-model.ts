@@ -1,0 +1,43 @@
+import { ChatOpenAI } from '@langchain/openai';
+
+/**
+ * Phase 0 的真實供應商接線（issue #31）。
+ *
+ * 走 NVIDIA 的 OpenAI 相容端點：JS 這邊沒有 NVIDIA 專用的 LangChain 整合
+ * （`@langchain/nvidia-ai-endpoints` 只有 Python 版），所以用 `@langchain/openai`
+ * 指過去。這裡驗的是接線 —— tool call 的參數回得來、streaming 的事件形狀對得上 ——
+ * 不是模型品質；供應商比較在 Phase 2 與 Phase 5（見開發計劃第 7 節決策點 2）。
+ */
+export const LIVE_BASE_URL = 'https://integrate.api.nvidia.com/v1';
+
+/** NVIDIA 閘道上的模型 id。接線用，與 Phase 2 的 DeepSeek 相容性驗收無關。 */
+export const LIVE_MODEL_ID = 'deepseek-ai/deepseek-v4-flash-0731';
+
+/** 環境變數名。刻意不叫 `OPENAI_API_KEY`（`@langchain/openai` 的預設），免得這把 key 是誰的變模糊。 */
+export const LIVE_API_KEY_ENV = 'NVIDIA_API_KEY';
+
+/**
+ * 真實供應商的 model。
+ *
+ * key **只從環境變數讀**，缺少時直接失敗，沒有預設值也不 fallback
+ * （[docs/standards.md](../../../../docs/standards.md) 的秘密處理規則）。
+ */
+export function createLiveModel(): ChatOpenAI {
+  const apiKey = process.env[LIVE_API_KEY_ENV];
+  if (!apiKey) {
+    throw new Error(
+      `缺少環境變數 ${LIVE_API_KEY_ENV}。真實供應商的 key 只從環境變數讀，` +
+        '沒有預設值也不 fallback。把它放進專案根目錄的 .env（該檔已被 .gitignore 排除），' +
+        '或在 shell 裡設好；欄位名見 .env.example。',
+    );
+  }
+
+  return new ChatOpenAI({
+    apiKey,
+    model: LIVE_MODEL_ID,
+    configuration: { baseURL: LIVE_BASE_URL },
+    temperature: 1,
+    topP: 0.95,
+    maxTokens: 16384,
+  });
+}
