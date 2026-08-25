@@ -46,11 +46,17 @@ export interface ApprovalPolicy {
    * 關著卻有 plugin 宣告了 `interrupts.require(...)`，fold 直接報錯，而不是把那些
    * 標記丟掉——沒人回答的中斷會把 agent 掛在那裡，靜默放行則是把核准政策解除武裝。
    * 兩邊都是缺席即拒絕。
+   *
+   * **代價要知道**：任何 bundle 了 approval-gated 工具的 plugin，在關掉核准的模式下
+   * 會變成**載不起來**，唯一的補救是去動 plugin 清單。dsh 的對應旋鈕（`ApprovalPolicy`
+   * 的 `'never'`）走的是另一條路——每次 ask 確定性地回 `rejected`，agent 照樣跑得起來，
+   * 只是碰到要核准的操作就被拒。那個讀法在 `interruptOn` 上表達不出來（`false` 是
+   * auto-approve，`allowedDecisions: ['reject']` 仍然會去問人），要換掉這個機制才做得到。
    */
   enabled?: boolean;
 }
 
-/** 組裝點在 fold 時交出來的那五樣。 */
+/** 組裝點在 fold 時交出來的那五樣，加一份基座工具名單。 */
 export interface FoldOptions {
   /**
    * default backend。plugin 不得提供——`backend.mount()` 掛的是路由分支，
@@ -63,6 +69,20 @@ export interface FoldOptions {
    * 的已註冊工具。
    */
   toolOrder?: readonly string[];
+  /**
+   * 基座自己帶進來、不經過我們 registry 的工具名（`write_file` / `delete` / `execute` /
+   * `task` 那些）。
+   *
+   * 形狀照 dsh 的 `ToolProviderResult.knownNames`（`packages/core/system-prompt/src/index.ts`）：
+   * 「這一次組裝**可見**的工具」與「設定驗證用的**名字宇宙**」是兩件事，宇宙由提供者
+   * 貢獻，省略即等於可見那些。fold 只拿它驗名字，不會把它變成工具——那些工具是基座的
+   * middleware stack 自己註冊的。
+   *
+   * 沒有它的話，`interrupts.require('delete', ...)` 與 `toolOrder: ['write_file', ...]`
+   * 都會被誤判成「沒人註冊」，而那幾個恰好是最該被核准、也最該排在前面的。
+   * 所有權留在 harness——它是唯一呼叫 `createDeepAgent` 的地方，知道自己開了哪些工具。
+   */
+  baseToolNames?: readonly string[];
   /** 模型。 */
   model?: AgentModel;
   /** checkpointer。`false` 與缺席同義。 */
@@ -108,7 +128,7 @@ export interface FoldedAgentParams {
  * 把 registry 折成 `createDeepAgent(...)` 的參數。
  *
  * @param registry - 已經跑完 `loadPlugins()` 的 registry。
- * @param options - 組裝點自有的那五樣。
+ * @param options - 組裝點自有的那些。
  * @returns 可以直接展進 `createDeepAgent(...)` 的參數。
  */
 export function foldRegistry(
@@ -120,10 +140,13 @@ export function foldRegistry(
   const toolOrder = options.toolOrder;
   const globalTools = registry.tools.effective();
   assertNoReservedToolName(registry);
-  if (toolOrder !== undefined) validateToolOrder(toolOrder, knownToolNames(registry));
+  // 一份名字宇宙餵給兩條檢查：以工具名為 key 的設定只有這兩處，兩邊的嚴格程度必須一致
+  // ——排版列錯了只是難看，核准標在錯的名字上是把閘門解除武裝。
+  const known = knownToolNames(registry, options.baseToolNames);
+  if (toolOrder !== undefined) validateToolOrder(toolOrder, known);
 
   const permissions = foldPermissions(registry);
-  const interruptOn = foldInterrupts(registry, options);
+  const interruptOn = foldInterrupts(registry, options, known);
 
   const params: FoldedAgentParams = {
     tools: orderTools(globalTools, toolOrder),
@@ -176,13 +199,19 @@ function assertScopesHaveSubAgents(registry: PluginRegistry): void {
 }
 
 /**
- * 註冊表裡出現過的所有工具名，含只在某個 subagent 層存在的那些。
+ * 以工具名為 key 的設定驗證所用的**名字宇宙**——比任何一層看得見的集合都寬。
  *
- * **subagent 定義自帶的 `tools` 也算**：它們沒走 `tools.register()` 那條路進來，但一樣是
- * 真工具，會出現在那個 subagent 的有效集合裡。漏掉它們的話，清單列了其中一個就會被
- * {@link validateToolOrder} 誤判成「沒人註冊」。
+ * 四個來源：全域層、各 subagent 層、**subagent 定義自帶的 `tools`**（它們沒走
+ * `tools.register()` 那條路進來，但一樣是真工具），以及組裝點宣告的
+ * {@link FoldOptions.baseToolNames}（基座 middleware stack 自己註冊的那些）。
+ *
+ * 分成「宇宙」與「可見集合」兩件事是照 dsh 的 `ToolProviderResult.knownNames`：
+ * 設定裡列到一個此處不可見、但別處確實存在的名字，是合法的，不是打錯字。
  */
-function knownToolNames(registry: PluginRegistry): Set<string> {
+function knownToolNames(
+  registry: PluginRegistry,
+  baseToolNames: readonly string[] | undefined,
+): Set<string> {
   const names = new Set(registry.tools.effective().keys());
   for (const scope of registry.tools.scopes()) {
     for (const name of registry.tools.own(scope).keys()) names.add(name);
@@ -190,6 +219,7 @@ function knownToolNames(registry: PluginRegistry): Set<string> {
   for (const [, entry] of registry.subagents.entries()) {
     for (const tool of entry.value.tools ?? []) names.add(tool.name);
   }
+  for (const name of baseToolNames ?? []) names.add(name);
   return names;
 }
 
@@ -292,6 +322,12 @@ function sortedByName<T extends { name: string }>(items: T[]): T[] {
  * allow 排在前面，先命中者決定。glob 的差集算不出來，所以這裡不修，只把它講明白：
  * `except` 的射程是整份規則表往後全部，不是只有自己那一條 deny。真的要一條擋死的
  * 規則，就不要有人替它開例外。
+ *
+ * **`delete` 是例外，而且方向相反。** 它不走 `decidePathAccess()` 那條先命中者決定的路，
+ * 而是 `findDeleteDenyPatterns()`：目標可能是目錄時（遞迴刪除會掃掉整棵子樹）它**完全
+ * 忽略 allow 規則**，只要有任何一條 deny 可能命中目標或其後代就擋。所以 `except` 在那條
+ * 路徑上挖不開任何東西——射程「整份規則表往後全部」在 `delete` 上不成立。方向是
+ * fail-closed，不是破口，但別以為 `except` 開的洞刪得掉東西。
  */
 function foldPermissions(registry: PluginRegistry): FilesystemPermission[] {
   const rules: FilesystemPermission[] = [];
@@ -310,13 +346,23 @@ function foldPermissions(registry: PluginRegistry): FilesystemPermission[] {
  *
  * 詞彙是封閉的——`allowedDecisions` 固定 `["approve", "reject"]`，`argsSchema`
  * 不使用（dsh 明文「Input rewrite is deliberately not offered」）。
+ *
+ * **標在不存在的工具名上要報錯。** 基座那端不會救：`humanInTheLoopMiddleware` 拿
+ * `toolCall.name` 查 `interruptOn`，查不到就走 auto-approve，所以一個打錯字的核准閘門
+ * 會靜靜地什麼都不擋——比沒宣告更糟，因為它看起來有守。fold 是「全部載完了」唯一
+ * 的時刻，這條後置檢查只有這裡做得了。
  */
 function foldInterrupts(
   registry: PluginRegistry,
   options: FoldOptions,
+  known: ReadonlySet<string>,
 ): Record<string, InterruptOnConfig> {
   const requirements = registry.interrupts.requirements();
   if (requirements.length === 0) return {};
+
+  // 名字先驗：那是 plugin 自己的缺陷，跟這個 session 怎麼設定無關，先報它才不會讓人
+  // 修完 session 設定再撞一次。
+  assertInterruptToolsExist(requirements, known);
 
   const cited = [...new Set(requirements.map((entry) => formatOrigin(entry.origin)))].join('、');
   if (options.approvals?.enabled === false) {
@@ -341,6 +387,25 @@ function foldInterrupts(
   }
   return Object.fromEntries(
     [...byTool].map(([toolName, reqs]) => [toolName, mergeInterrupt(reqs)]),
+  );
+}
+
+/** 每個核准標記都要指向一個真的存在的工具，訊息指名是誰標的。 */
+function assertInterruptToolsExist(
+  requirements: readonly NamedEntry<InterruptRequirement>[],
+  known: ReadonlySet<string>,
+): void {
+  const unknown = requirements.filter((entry) => !known.has(entry.value.toolName));
+  if (unknown.length === 0) return;
+  const detail = unknown
+    .map((entry) => `${formatOrigin(entry.origin)} 標了 "${entry.value.toolName}"`)
+    .join('；');
+  const knownList = [...known].sort().join('、') || '（沒有任何工具）';
+  throw new Error(
+    `核准標記指向不存在的工具：${detail}。名字打錯的話那個閘門什麼都不會擋——` +
+      `基座查不到就直接放行。目前認得的工具：${knownList}。` +
+      `如果標的是基座自己帶的工具（write_file / delete / execute / task 那些），` +
+      `要把它加進組裝點的 baseToolNames。`,
   );
 }
 
@@ -412,6 +477,12 @@ function foldBackend(
  * 明文 full replacement，`tools` 缺席才 fallback 到 defaultTools），`interruptOn`
  * 則是 `agentParams.interruptOn ?? defaultInterruptOn`——一個自帶設定的 subagent
  * 會把全域那些整組蓋掉。所以同名項一律**全域勝**：subagent 可以多要求，不能少要求。
+ *
+ * **寫 subagent 的人要知道這件事**：基座對 `SubAgentBase.permissions` 的說明是
+ * 「these rules **replace** the parent agent's permissions」，它自己的範例就是
+ * 「parent 擋 `/restricted/**`，這個 subagent 讀得到」。**那個逃生口在我們這裡打不開。**
+ * 全域規則排在你的規則前面，先命中者決定，所以你的 `permissions` 只加得了限制、
+ * 鬆不了綁。要放寬只有一條路：讓那條全域 deny 自己帶 `except`。
  */
 function foldSubAgents(
   registry: PluginRegistry,

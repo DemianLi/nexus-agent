@@ -22,8 +22,14 @@ async function fold(plugins: NexusPlugin[], options: FoldOptions = {}) {
   return foldRegistry(registry, options);
 }
 
+/**
+ * 這一組測試守的閘門都掛在基座自己帶進來、不經過 registry 的工具上（`interrupts` 最
+ * 常見的用法），所以名字由組裝點宣告——這正是 `baseToolNames` 存在的理由。
+ */
+const gatedTools = ['write_file', 'rm', 'deploy'] as const;
+
 /** 有 checkpointer 的組裝點。`interrupts` 的測試多數需要它。 */
-const withCheckpointer: FoldOptions = { checkpointer: true };
+const withCheckpointer: FoldOptions = { checkpointer: true, baseToolNames: gatedTools };
 
 /** `when` 拿到的那個請求，測試裡只當作不透明的參數傳遞。 */
 const anyRequest = {} as Parameters<WhenPredicate>[0];
@@ -317,14 +323,18 @@ describe('interrupts 註冊點', () => {
     const plugins = [
       fakePlugin('danger', (r) => void r.interrupts.require('rm', { reason: '刪檔' })),
     ];
-    await expect(fold(plugins)).rejects.toThrow(/plugins\[0\] \(danger\)[\s\S]*checkpointer/);
+    await expect(fold(plugins, { baseToolNames: gatedTools })).rejects.toThrow(
+      /plugins\[0\] \(danger\)[\s\S]*checkpointer/,
+    );
   });
 
   it('checkpointer: false 與缺席同義', async () => {
     const plugins = [
       fakePlugin('danger', (r) => void r.interrupts.require('rm', { reason: '刪檔' })),
     ];
-    await expect(fold(plugins, { checkpointer: false })).rejects.toThrow('checkpointer');
+    await expect(fold(plugins, { checkpointer: false, baseToolNames: gatedTools })).rejects.toThrow(
+      'checkpointer',
+    );
   });
 
   it('給了 checkpointer 就正常 fold', async () => {
@@ -341,8 +351,12 @@ describe('interrupts 註冊點', () => {
       fakePlugin('danger', (r) => void r.interrupts.require('rm', { reason: '刪檔' })),
     ];
     await expect(
-      fold(plugins, { checkpointer: true, approvals: { enabled: false } }),
-    ).rejects.toThrow(/plugins\[0\] \(danger\)/);
+      fold(plugins, {
+        checkpointer: true,
+        approvals: { enabled: false },
+        baseToolNames: gatedTools,
+      }),
+    ).rejects.toThrow(/關掉了人工核准[\s\S]*plugins\[0\] \(danger\)/);
   });
 
   it('沒人宣告要核准時，關掉核准不影響 fold', async () => {
@@ -372,6 +386,46 @@ describe('interrupts 註冊點', () => {
       fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('researcher'))),
     ]);
     expect(params.subagents[0]?.interruptOn).toBeUndefined();
+  });
+
+  it('標在不存在的工具名上 → 報錯，訊息指名是誰標的與目前認得哪些', async () => {
+    const plugins = [
+      fakePlugin('typo', (r) => {
+        r.tools.register(fakeTool('execute_shell'));
+        r.interrupts.require('exec_shell', { reason: '少一個 ute' });
+      }),
+    ];
+    // 基座那端不會救：查不到就 auto-approve，所以打錯字的閘門什麼都不擋。
+    await expect(fold(plugins, withCheckpointer)).rejects.toThrow(
+      /plugins\[0\] \(typo\)[\s\S]*"exec_shell"[\s\S]*execute_shell/,
+    );
+  });
+
+  it('標在 registry 註冊的工具上 → 正常 fold', async () => {
+    const params = await fold(
+      [
+        fakePlugin('ops', (r) => {
+          r.tools.register(fakeTool('deploy_prod'));
+          r.interrupts.require('deploy_prod', { reason: '會動到線上' });
+        }),
+      ],
+      { checkpointer: true },
+    );
+    expect(params.interruptOn?.['deploy_prod']?.description).toBe('會動到線上');
+  });
+
+  it('標在只存在於某個 subagent 層的工具上也算數——名字宇宙比任何一層都寬', async () => {
+    const params = await fold(
+      [
+        fakePlugin('team', (r) => {
+          r.subagents.register(fakeSubAgent('releaser'));
+          r.tools.register(fakeTool('deploy_prod'), { scope: 'releaser' });
+          r.interrupts.require('deploy_prod', { reason: '會動到線上' });
+        }),
+      ],
+      { checkpointer: true },
+    );
+    expect(params.interruptOn?.['deploy_prod']).toBeDefined();
   });
 });
 
@@ -540,6 +594,25 @@ describe('工具呈現順序', () => {
     // 沒給 toolOrder 也要擋：不擋的話它會以保留名活著，等組裝點哪天補上清單才
     // 無聲地從那個 subagent 的集合裡消失。
     await expect(fold(plugins)).rejects.toThrow(/plugins\[0\] \(team\)[\s\S]*researcher/);
+  });
+
+  it('組裝點宣告的基座工具算「有註冊」，排得進呈現順序', async () => {
+    // 沒有 baseToolNames 的話 write_file 會被誤判成「沒人註冊」——基座內建的工具
+    // 因此根本排不進清單。
+    const params = await fold([fakePlugin('p', (r) => void r.tools.register(fakeTool('search')))], {
+      toolOrder: ['write_file', TOOL_ORDER_REST],
+      baseToolNames: ['write_file'],
+    });
+    // 基座的工具不由我們產出，所以它只是「排得進清單」，不會憑空出現在 tools 裡。
+    expect(toolNames(params.tools)).toEqual(['search']);
+  });
+
+  it('沒宣告 baseToolNames 時列基座工具 → 報錯', async () => {
+    await expect(
+      fold([fakePlugin('p', (r) => void r.tools.register(fakeTool('search')))], {
+        toolOrder: ['write_file', TOOL_ORDER_REST],
+      }),
+    ).rejects.toThrow('"write_file"');
   });
 
   it('subagent 定義自帶的工具算「有註冊」，列得進清單', async () => {
