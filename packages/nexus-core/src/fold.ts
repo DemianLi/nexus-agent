@@ -24,6 +24,7 @@ import type {
 } from './base-types.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
+import type { PluginOrigin } from './plugin.js';
 import type { InterruptRequirement, PluginRegistry } from './registry.js';
 
 /**
@@ -174,29 +175,57 @@ function assertScopesHaveSubAgents(registry: PluginRegistry): void {
   );
 }
 
-/** 註冊表裡出現過的所有工具名，含只在某個 subagent 層存在的那些。 */
+/**
+ * 註冊表裡出現過的所有工具名，含只在某個 subagent 層存在的那些。
+ *
+ * **subagent 定義自帶的 `tools` 也算**：它們沒走 `tools.register()` 那條路進來，但一樣是
+ * 真工具，會出現在那個 subagent 的有效集合裡。漏掉它們的話，清單列了其中一個就會被
+ * {@link validateToolOrder} 誤判成「沒人註冊」。
+ */
 function knownToolNames(registry: PluginRegistry): Set<string> {
   const names = new Set(registry.tools.effective().keys());
   for (const scope of registry.tools.scopes()) {
     for (const name of registry.tools.own(scope).keys()) names.add(name);
   }
+  for (const [, entry] of registry.subagents.entries()) {
+    for (const tool of entry.value.tools ?? []) names.add(tool.name);
+  }
   return names;
 }
 
-/** 保留名不能是真工具的名字，否則 rest 那一格會變成有歧義。 */
+/**
+ * 保留名不能是真工具的名字，否則 rest 那一格會變成有歧義。
+ *
+ * 三個來源都要掃：全域層、各 subagent 層，以及 **subagent 定義自帶的 `tools`**。最後那個
+ * 不經過 registry，漏掉它的下場是無聲的——沒給 `toolOrder` 時那個工具就以保留名活著，
+ * 組裝點哪天補上清單，它會從該 subagent 的集合裡憑空消失（rest 那一格把清單列到的名字
+ * 濾掉，而字面分支又永遠對不上保留名）。
+ */
 function assertNoReservedToolName(registry: PluginRegistry): void {
   for (const scope of [undefined, ...registry.tools.scopes()]) {
     const found =
       scope === undefined
         ? registry.tools.effective().get(TOOL_ORDER_REST)
         : registry.tools.own(scope).get(TOOL_ORDER_REST);
-    if (found !== undefined) {
-      throw new Error(
-        `${formatOrigin(found.origin)} 註冊的工具叫 "${TOOL_ORDER_REST}"，` +
-          `那是工具呈現順序清單保留給「其餘未列出者」的那一格，不能拿來當工具名。`,
-      );
+    if (found !== undefined) throw reservedToolNameError(found.origin);
+  }
+  for (const [name, entry] of registry.subagents.entries()) {
+    if ((entry.value.tools ?? []).some((tool) => tool.name === TOOL_ORDER_REST)) {
+      throw reservedToolNameError(entry.origin, name);
     }
   }
+}
+
+/** 保留名撞名的診斷。`subagentName` 給的是「自帶在 subagent 定義裡」那個來源。 */
+function reservedToolNameError(origin: PluginOrigin, subagentName?: string): Error {
+  const where =
+    subagentName === undefined
+      ? '註冊的工具'
+      : `註冊的 subagent "${subagentName}" 自帶的工具裡有一個`;
+  return new Error(
+    `${formatOrigin(origin)} ${where}叫 "${TOOL_ORDER_REST}"，` +
+      `那是工具呈現順序清單保留給「其餘未列出者」的那一格，不能拿來當工具名。`,
+  );
 }
 
 /** 清單本身的形狀，以及列到的名字有沒有對應的工具。 */

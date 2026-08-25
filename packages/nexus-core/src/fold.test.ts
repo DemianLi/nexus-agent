@@ -527,6 +527,33 @@ describe('工具呈現順序', () => {
     ];
     await expect(fold(plugins)).rejects.toThrow(TOOL_ORDER_REST);
   });
+
+  it('保留名藏在 subagent 定義自帶的 tools 裡也一樣報錯——那條路不經過 registry', async () => {
+    const plugins = [
+      fakePlugin('team', (r) => {
+        r.subagents.register({
+          ...fakeSubAgent('researcher'),
+          tools: [fakeTool(TOOL_ORDER_REST)],
+        });
+      }),
+    ];
+    // 沒給 toolOrder 也要擋：不擋的話它會以保留名活著，等組裝點哪天補上清單才
+    // 無聲地從那個 subagent 的集合裡消失。
+    await expect(fold(plugins)).rejects.toThrow(/plugins\[0\] \(team\)[\s\S]*researcher/);
+  });
+
+  it('subagent 定義自帶的工具算「有註冊」，列得進清單', async () => {
+    const params = await fold(
+      [
+        fakePlugin('team', (r) => {
+          r.subagents.register({ ...fakeSubAgent('researcher'), tools: [fakeTool('grep')] });
+        }),
+      ],
+      { toolOrder: ['grep', TOOL_ORDER_REST] },
+    );
+    expect(params.tools).toEqual([]);
+    expect(toolNames(params.subagents[0]?.tools ?? [])).toEqual(['grep']);
+  });
 });
 
 describe('skills 與 memory 註冊點', () => {
