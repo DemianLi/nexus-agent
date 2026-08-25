@@ -32,15 +32,29 @@ const FILESYSTEM_TOOL_NAMES = [
 ] as const;
 
 /**
- * 基座工具的完整名字宇宙。
+ * async subagent 橋接工具，出處是基座的 `ASYNC_TASK_TOOL_NAMES`
+ * （`src/middleware/async_subagents.ts`）。
+ */
+const ASYNC_TASK_TOOL_NAMES = [
+  'start_async_task',
+  'check_async_task',
+  'update_async_task',
+  'cancel_async_task',
+  'list_async_tasks',
+] as const;
+
+/**
+ * 基座工具的名字宇宙——「這個名字有可能指到一個真的工具」。
  *
- * **`ASYNC_TASK_TOOL_NAMES` 那五個刻意不收**（`start_async_task` / `check_async_task` /
- * `update_async_task` / `cancel_async_task` / `list_async_tasks`）。基座只在
- * `subagents` 裡出現 `AsyncSubAgent`（帶 `graphId` 的那種）時才掛上那組工具，而
+ * **`ASYNC_TASK_TOOL_NAMES` 那五個刻意不收。** 基座只在 `subagents` 裡出現
+ * `AsyncSubAgent`（帶 `graphId` 的那種）時才掛上那組工具，而
  * `registry.subagents.register()` 收的是 `SubAgent`，型別上就進不來——所以在目前的組裝
- * 裡那五個名字**永遠不會存在**。把它們放進宇宙的下場是
+ * 裡那五個名字**永遠不會有對應的工具**。把它們放進宇宙的下場是
  * `interrupts.require('start_async_task', ...)` 通過檢查然後什麼都不擋，正是那條檢查
  * 存在的理由。哪天真的支援 async subagent，這裡跟著補。
+ *
+ * `execute` 反過來要收：它現在也看不見（`StateBackend` 沒有 shell），但只要換一個支援
+ * 命令執行的 backend 它就在，而換 backend 是組裝點的一個參數而已。
  */
 export const BASE_TOOL_NAMES: readonly string[] = [
   ...FILESYSTEM_TOOL_NAMES,
@@ -49,12 +63,18 @@ export const BASE_TOOL_NAMES: readonly string[] = [
 ];
 
 /**
- * 基座**拒絕**被自訂工具佔用的名字。
+ * 基座**拒絕**被自訂工具佔用的名字——「不准叫這個名字」。
  *
  * 出處是 `createDeepAgent()` 開頭那段 `BUILTIN_TOOL_NAMES` 檢查：`tools` 裡有任何一個
- * 名字落在這個集合，它直接丟 `ConfigurationError('TOOL_NAME_COLLISION')`。這裡與
- * {@link BASE_TOOL_NAMES} 剛好同一份名單，但**是兩個不同的概念**——一個是「驗證用的
- * 名字宇宙」（刻意寬），一個是「不准叫這些名字」（基座說了算）。基座那份還多了 async
- * 那五個；我們不重抄，因為我們產不出會觸發它們的組裝，而且真撞了基座自己會擋。
+ * 名字落在這個集合，它直接丟 `ConfigurationError('TOOL_NAME_COLLISION')`。
+ *
+ * **它比 {@link BASE_TOOL_NAMES} 多了 async 那五個，而且那不是疏漏。** 基座那段檢查是
+ * **無條件**跑的——不管這次組裝有沒有 async subagent，名字一律保留。這正是這兩個常數
+ * 必須分開的地方：「這個名字會不會指到一個真的工具」是條件式的（async 五個現在不會，
+ * 所以不進宇宙，否則核准標記會標在空氣上），「這個名字准不准用」是無條件的（少收了就
+ * 會有 plugin 順利通過我們的檢查、再撞上基座那個沒有 plugin 姓名的錯誤訊息）。
  */
-export const RESERVED_BASE_TOOL_NAMES: ReadonlySet<string> = new Set(BASE_TOOL_NAMES);
+export const RESERVED_BASE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...BASE_TOOL_NAMES,
+  ...ASYNC_TASK_TOOL_NAMES,
+]);

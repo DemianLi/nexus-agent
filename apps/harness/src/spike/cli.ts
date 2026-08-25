@@ -41,7 +41,7 @@ async function main(): Promise<void> {
 
   if (live) loadEnvFileIfNeeded();
 
-  const { agent } = live ? createLiveSpikeAgent() : createSpikeAgent();
+  const { agent } = live ? await createLiveSpikeAgent() : await createSpikeAgent();
 
   console.log(`模型：${live ? LIVE_MODEL_ID : '假模型（ScriptedChatModel）'}`);
   console.log(`> ${prompt}\n`);

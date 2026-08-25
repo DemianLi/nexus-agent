@@ -1,5 +1,9 @@
 /**
- * agent 工廠——**唯一呼叫 `createDeepAgent` 的地方**。
+ * agent 工廠——**plugin 清單組出來的 agent 只有這一個組裝點**。
+ *
+ * 整個 repo 只有一處例外：[`baseline.test.ts`](./baseline.test.ts) 直接呼叫
+ * `createDeepAgent`，而那是刻意的——它斷言的是「基座還是不是我們以為的那個形狀」，
+ * 中間隔著我們自己的 fold 就驗不到那件事了。
  *
  * 三步：`loadPlugins()` 把清單跑進 registry、`foldRegistry()` 折成參數、
  * `createDeepAgent()` 收下。前兩步住在 `@nexus/core`（純轉換層，不碰基座的建構），
@@ -113,9 +117,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
  *   內建檔案工具擠在同一個名字上，誰贏由基座內部的合併順序決定，而且是無聲的。
  *
  * 用的是 {@link RESERVED_BASE_TOOL_NAMES} 而不是 `foldRegistry` 收的 `baseToolNames`：
- * 那兩者現在恰好同一份名單，但**不是同一個概念**——`baseToolNames` 是刻意寬的驗證宇宙
- * （寬了只是多認得幾個名字），這裡是「不准叫這些名字」（寬了會擋掉合法的組裝）。
- * 把它們接成同一個旋鈕，改動其中一邊的理由就會拖著另一邊走。
+ * 那是兩個不同的集合，前者多了 async 那五個。理由見
+ * [`base-tools.ts`](./base-tools.ts)——基座的保留是無條件的，而名字宇宙是條件式的。
  */
 function assertNoBaseToolNameCollision(registry: PluginRegistry): void {
   const collisions: string[] = [];
@@ -140,9 +143,9 @@ function assertNoBaseToolNameCollision(registry: PluginRegistry): void {
 
   if (collisions.length === 0) return;
   throw new Error(
-    `工具名撞到基座內建的工具：${collisions.join('；')}。` +
-      `這些名字由基座的 middleware stack 自己註冊（檔案系統工具與 task），佔用它們` +
-      `不會取代基座的版本，只會讓兩個同名工具擠在一起。換個名字。` +
-      `目前被基座佔住的：${[...RESERVED_BASE_TOOL_NAMES].sort().join('、')}`,
+    `工具名撞到基座保留的名字：${collisions.join('；')}。` +
+      `這些名字歸基座的 middleware stack 所有（檔案系統工具、task、async 任務那組），` +
+      `佔用它們不會取代基座的版本，只會讓兩個同名工具擠在一起。換個名字。` +
+      `目前被保留的：${[...RESERVED_BASE_TOOL_NAMES].sort().join('、')}`,
   );
 }

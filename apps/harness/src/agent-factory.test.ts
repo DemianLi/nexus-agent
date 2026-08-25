@@ -258,6 +258,17 @@ describe('createNexusAgent', () => {
       ).rejects.toThrow(/subagent "researcher".*"grep"/s);
     });
 
+    it('async 任務工具的名字也擋 —— 基座那道保留是無條件的', async () => {
+      // 這五個名字在目前的組裝裡不會有對應的工具（`BASE_TOOL_NAMES` 因此不收它們），
+      // 但基座的 BUILTIN_TOOL_NAMES 檢查不看有沒有 async subagent，一律拒絕。
+      await expect(
+        createNexusAgent({
+          model: new ScriptedChatModel({ turns: [] }),
+          plugins: [createToolPlugin('start_async_task')],
+        }),
+      ).rejects.toThrow(/plugins\[0\] \(provides-start_async_task\).*"start_async_task"/s);
+    });
+
     it('subagent 定義自帶的工具撞到基座內建的也擋 —— 那些工具不經過 registry', async () => {
       await expect(
         createNexusAgent({
