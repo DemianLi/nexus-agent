@@ -7,9 +7,9 @@
 
 import { tool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
-import type { SubAgent } from 'deepagents';
+import type { AnyBackendProtocol, SubAgent } from 'deepagents';
 import { z } from 'zod';
-import type { NexusPlugin, PluginRegistry } from './index.js';
+import type { AgentMiddleware, NexusPlugin, PluginRegistry } from './index.js';
 
 /**
  * 一個什麼都不做、只有名字有意義的工具。
@@ -46,4 +46,25 @@ export function fakePlugin(
   requires?: string[],
 ): NexusPlugin {
   return requires === undefined ? { name, apply } : { name, requires, apply };
+}
+
+/**
+ * 一個只有身分、沒有行為的 backend。
+ *
+ * fold 只把 backend 當值搬運，基座的 `CompositeBackend` 也只在真的做檔案操作時才
+ * 碰它的方法，所以測試不需要一個會動的 backend——需要的是一個認得出來的東西。
+ * @param id - 認得出是哪一個用的標記。
+ * @returns 可以掛上去的假 backend。
+ */
+export function fakeBackend(id: string): AnyBackendProtocol {
+  return { nexusFakeBackend: id } as unknown as AnyBackendProtocol;
+}
+
+/**
+ * 一個只有名字的 middleware。
+ * @param name - middleware 名。
+ * @returns 可以註冊的假 middleware。
+ */
+export function fakeMiddleware(name: string): AgentMiddleware {
+  return { name } as unknown as AgentMiddleware;
 }

@@ -1,13 +1,16 @@
 /**
  * `PluginRegistry`——plugin 的 `apply` 拿到的那個東西。
  *
- * 本檔只有九個註冊點裡的前三個（`tools` / `subagents` / `capabilities`）。其餘六個
- * 與折疊成 `createDeepAgent` 參數的部分屬 `feat/plugin-registry-fold`。
+ * 九個註冊點：`tools` / `subagents` / `capabilities` 是具名的，`backend` / `skills`
+ * 也靠名字（`routePrefix` 與來源路徑）擋重複，其餘三個（`middleware` /
+ * `permissions` / `interrupts`）沒有名字可撞，走匿名追加。折疊成
+ * `createDeepAgent` 參數的部分在 {@link ./fold.ts}。
  */
 
 import type { StructuredTool } from '@langchain/core/tools';
-import type { SubAgent } from 'deepagents';
-import { NamedEntries, CapabilitySet } from './entries.js';
+import type { AnyBackendProtocol, SubAgent } from 'deepagents';
+import type { AgentMiddleware, WhenPredicate } from './base-types.js';
+import { AnonymousEntries, CapabilitySet, NamedEntries } from './entries.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
@@ -53,10 +56,18 @@ export interface ToolRegistrationPoint {
    */
   effective(scope?: ScopeKey): Map<string, NamedEntry<StructuredTool>>;
   /**
+   * 某一層**自己**註冊的那些工具，不含全域打底。刻意與 {@link effective} 分開：
+   * 問「這一層自己貢獻了什麼」的呼叫端不該默默收到全域的東西（dsh 的
+   * `ScopedLayers.peek()` 同樣理由，明文 chain-blind）。
+   * @param scope - 那一層。
+   * @returns 該層自己的插入順序表，沒有那一層時是空表。
+   */
+  own(scope: ScopeKey): Map<string, NamedEntry<StructuredTool>>;
+  /**
    * 目前有東西註冊進去的 subagent 層。層是按名字延遲建立的，而且**不驗那個名字
    * 真有對應的 subagent**——`requires` 不排序，清單裡靠前的 plugin 本來就可以往
    * 靠後的 plugin 才註冊的 subagent 上加工具。「有層沒 subagent」是 fold 的後置
-   * 檢查，不是這裡的即時錯誤。
+   * 檢查（見 {@link ./fold.ts}），不是這裡的即時錯誤。
    * @returns 依首次註冊順序的層名。
    */
   scopes(): string[];
@@ -110,10 +121,142 @@ export interface CapabilityRegistrationPoint {
   names(): string[];
 }
 
+/** `backend` 註冊點：同 `routePrefix` 報錯。 */
+export interface BackendRegistrationPoint {
+  /**
+   * 把一個 backend 掛到某個路徑前綴上。
+   * @param routePrefix - 掛載點，必須以 `/` 開頭**且以 `/` 結尾**——基座的
+   *   `CompositeBackend.getBackendAndKey()` 直接對前綴做 `startsWith` 與
+   *   `slice(0, -1)`，少了尾斜線它會切錯路徑。同時也讓「同一個掛載點」只有一種
+   *   寫法，重複偵測才是可靠的。
+   * @param backend - backend 實例。
+   * @returns 只撤銷這一次掛載的冪等 undo。
+   */
+  mount(routePrefix: string, backend: AnyBackendProtocol): () => void;
+  /**
+   * 目前的掛載點。
+   * @returns 依掛載順序的前綴與該筆。
+   */
+  mounts(): [string, NamedEntry<AnyBackendProtocol>][];
+}
+
+/** 一次 middleware 註冊。 */
+export interface MiddlewareRegistration {
+  readonly middleware: AgentMiddleware;
+  /** 是否插到其他 plugin 的 middleware 之前。 */
+  readonly prepend: boolean;
+}
+
+/** `middleware` 註冊點：清單順序，`prepend` 為唯一例外閥。 */
+export interface MiddlewareRegistrationPoint {
+  /**
+   * 追加一個 middleware。
+   * @param middleware - middleware 實例。
+   * @param options - `prepend: true` 把它排到其他 plugin 的 middleware 之前。
+   *   注意射程只到 plugin 之間——基座的標準 middleware stack 永遠在前面，
+   *   `createDeepAgent` 的 `middleware` 參數整組接在它後面。
+   * @returns 只撤銷這一次註冊的冪等 undo。
+   */
+  use(middleware: AgentMiddleware, options?: { prepend?: boolean }): () => void;
+  /**
+   * 目前註冊的 middleware。
+   * @returns 依註冊順序的每一筆，`prepend` 的分區留給 fold 處理。
+   */
+  list(): NamedEntry<MiddlewareRegistration>[];
+}
+
+/** 一條 deny 規則。 */
+export interface DenyRule {
+  /** 被擋住的 glob 路徑。 */
+  readonly paths: readonly string[];
+  /** 這條 deny 自己挖的洞。 */
+  readonly except: readonly string[];
+}
+
+/** `permissions` 註冊點：deny-only。 */
+export interface PermissionRegistrationPoint {
+  /**
+   * 擋掉一組路徑的讀寫。
+   * @param paths - 絕對 glob 路徑。合法性由基座的
+   *   `createFilesystemMiddleware()` 驗，這裡不驗第二次。
+   * @param options - `except` 是這條 deny 自己挖的洞。
+   * @returns 只撤銷這一條規則的冪等 undo。
+   */
+  deny(paths: readonly string[], options?: { except?: readonly string[] }): () => void;
+  /**
+   * 目前的 deny 規則。
+   * @returns 依註冊順序的每一條。
+   */
+  rules(): NamedEntry<DenyRule>[];
+}
+
+/** 一次「這個工具要人核准」的標記。 */
+export interface InterruptRequirement {
+  /** 要核准的工具名。 */
+  readonly toolName: string;
+  /** 給人看的理由。 */
+  readonly reason: string;
+  /** 只在這個述詞為真時才中斷；省略即無條件中斷。 */
+  readonly when?: WhenPredicate;
+}
+
+/** `interrupts` 註冊點：同工具多方標記不報錯，`when` 取 OR。 */
+export interface InterruptRegistrationPoint {
+  /**
+   * 標記一個工具需要人核准。
+   * @param toolName - 工具名。同一個工具被多方標記是正常的，不報錯。
+   * @param options - `reason` 給人看，`when` 省略即無條件中斷。
+   * @returns 只撤銷這一次標記的冪等 undo。
+   */
+  require(toolName: string, options: { reason: string; when?: WhenPredicate }): () => void;
+  /**
+   * 目前的核准標記。
+   * @returns 依註冊順序的每一筆。
+   */
+  requirements(): NamedEntry<InterruptRequirement>[];
+}
+
+/** `skills` 註冊點：同一來源路徑重複註冊報錯。 */
+export interface SkillSourceRegistrationPoint {
+  /**
+   * 加一個 skill 來源路徑。
+   * @param path - 來源目錄路徑。
+   * @returns 只撤銷這一次註冊的冪等 undo。
+   */
+  addSource(path: string): () => void;
+  /**
+   * 目前的來源路徑。
+   * @returns 依註冊順序的路徑。
+   */
+  sources(): string[];
+}
+
+/** `memory` 註冊點：純累加，基座自理。 */
+export interface MemorySourceRegistrationPoint {
+  /**
+   * 加一個 memory 來源路徑（AGENTS.md）。重複路徑不報錯——併入 prompt 的規則是
+   * 基座的事，這裡只負責把清單交出去。
+   * @param path - 來源檔路徑。
+   * @returns 只撤銷這一次註冊的冪等 undo。
+   */
+  addSource(path: string): () => void;
+  /**
+   * 目前的來源路徑。
+   * @returns 依註冊順序的路徑。
+   */
+  sources(): string[];
+}
+
 export interface PluginRegistry {
   readonly tools: ToolRegistrationPoint;
   readonly subagents: SubAgentRegistrationPoint;
   readonly capabilities: CapabilityRegistrationPoint;
+  readonly backend: BackendRegistrationPoint;
+  readonly middleware: MiddlewareRegistrationPoint;
+  readonly permissions: PermissionRegistrationPoint;
+  readonly interrupts: InterruptRegistrationPoint;
+  readonly skills: SkillSourceRegistrationPoint;
+  readonly memory: MemorySourceRegistrationPoint;
 }
 
 /**
@@ -157,6 +300,24 @@ export function createRegistry(): InternalPluginRegistry {
       ),
   );
   const capabilities = new CapabilitySet();
+  const backends = new NamedEntries<AnyBackendProtocol>(
+    (routePrefix, existing, incoming) =>
+      new Error(
+        `掛載點 "${routePrefix}" 已經有 backend 了：${formatOrigin(existing)} 掛過，` +
+          `${formatOrigin(incoming)} 又掛一次。一個路徑前綴只能路由到一個 backend。`,
+      ),
+  );
+  const skillSources = new NamedEntries<string>(
+    (path, existing, incoming) =>
+      new Error(
+        `skill 來源 "${path}" 已經註冊過了：${formatOrigin(existing)} 加過，` +
+          `${formatOrigin(incoming)} 又加一次。同一個目錄載兩次只會讓同名 skill 自己覆蓋自己。`,
+      ),
+  );
+  const middlewares = new AnonymousEntries<MiddlewareRegistration>();
+  const denyRules = new AnonymousEntries<DenyRule>();
+  const interruptRequirements = new AnonymousEntries<InterruptRequirement>();
+  const memorySources = new AnonymousEntries<string>();
 
   let current: PluginOrigin | undefined;
   function requireOrigin(what: string): PluginOrigin {
@@ -207,6 +368,10 @@ export function createRegistry(): InternalPluginRegistry {
       }
       return merged;
     },
+    own(scope) {
+      const layer = scopedLayers.get(scope);
+      return layer === undefined ? new Map() : new Map(layer.tools.entries());
+    },
     scopes() {
       return [...scopedLayers.keys()];
     },
@@ -231,10 +396,75 @@ export function createRegistry(): InternalPluginRegistry {
     names: () => capabilities.names(),
   };
 
+  const backendPoint: BackendRegistrationPoint = {
+    mount(routePrefix, backend) {
+      const origin = requireOrigin('backend.mount()');
+      if (!routePrefix.startsWith('/') || !routePrefix.endsWith('/')) {
+        throw new Error(
+          `${formatOrigin(origin)} 掛的 routePrefix "${routePrefix}" 不合法：` +
+            `必須以 "/" 開頭且以 "/" 結尾（例如 "/memories/"）。` +
+            `基座的 CompositeBackend 直接對前綴做字串切割，少了尾斜線會切錯路徑。`,
+        );
+      }
+      return backends.insert(routePrefix, backend, origin);
+    },
+    mounts: () => [...backends.entries()],
+  };
+
+  const middlewarePoint: MiddlewareRegistrationPoint = {
+    use(middleware, options) {
+      const origin = requireOrigin('middleware.use()');
+      return middlewares.append({ middleware, prepend: options?.prepend === true }, origin);
+    },
+    list: () => [...middlewares.entries()],
+  };
+
+  const permissionPoint: PermissionRegistrationPoint = {
+    deny(paths, options) {
+      const origin = requireOrigin('permissions.deny()');
+      return denyRules.append({ paths: [...paths], except: [...(options?.except ?? [])] }, origin);
+    },
+    rules: () => [...denyRules.entries()],
+  };
+
+  const interruptPoint: InterruptRegistrationPoint = {
+    require(toolName, options) {
+      const origin = requireOrigin('interrupts.require()');
+      const requirement: InterruptRequirement =
+        options.when === undefined
+          ? { toolName, reason: options.reason }
+          : { toolName, reason: options.reason, when: options.when };
+      return interruptRequirements.append(requirement, origin);
+    },
+    requirements: () => [...interruptRequirements.entries()],
+  };
+
+  const skillPoint: SkillSourceRegistrationPoint = {
+    addSource(path) {
+      const origin = requireOrigin('skills.addSource()');
+      return skillSources.insert(path, path, origin);
+    },
+    sources: () => [...skillSources.entries()].map(([path]) => path),
+  };
+
+  const memoryPoint: MemorySourceRegistrationPoint = {
+    addSource(path) {
+      const origin = requireOrigin('memory.addSource()');
+      return memorySources.append(path, origin);
+    },
+    sources: () => [...memorySources.entries()].map((entry) => entry.value),
+  };
+
   return {
     tools,
     subagents: subagentPoint,
     capabilities: capabilityPoint,
+    backend: backendPoint,
+    middleware: middlewarePoint,
+    permissions: permissionPoint,
+    interrupts: interruptPoint,
+    skills: skillPoint,
+    memory: memoryPoint,
     enter(origin) {
       if (current !== undefined) {
         throw new Error(

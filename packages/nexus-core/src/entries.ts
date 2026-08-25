@@ -133,3 +133,44 @@ export class CapabilitySet {
     return [...this.data.keys()];
   }
 }
+
+/**
+ * 插入順序的匿名表，每次追加都是獨立的一筆。
+ *
+ * 形狀照 dsh 的 `AnonymousEntries`：symbol 作 key，所以值相等的兩次追加仍是兩筆
+ * 註冊，撤銷靠的是那把 key 而不是值的相等性。給的是沒有名字可撞的擴充點——
+ * middleware、deny 規則、interrupt 標記、memory 來源。
+ */
+export class AnonymousEntries<V> {
+  private readonly data = new Map<symbol, NamedEntry<V>>();
+
+  /**
+   * 追加一筆。不比對、不去重——匿名表沒有「同名」這回事。
+   * @param value - 借用的值。
+   * @param origin - 註冊者。
+   * @returns 只撤銷這一次追加的冪等 undo。
+   */
+  append(value: V, origin: PluginOrigin): () => void {
+    const key = Symbol();
+    this.data.set(key, { value, origin });
+    // 冪等不必額外的旗標：key 是這次追加獨有的 symbol，沒有第二個人能佔用它，
+    // 所以重複 delete 一定是 no-op。（dsh 的版本有旗標，是因為它的 undo 還會在表
+    // 清空時換掉整個 Map；我們沒有那一步。）
+    return () => {
+      this.data.delete(key);
+    };
+  }
+
+  /**
+   * 依追加順序走訪。
+   * @returns 每一筆的值與註冊者。
+   */
+  entries(): IterableIterator<NamedEntry<V>> {
+    return this.data.values();
+  }
+
+  /** 表裡有幾筆。 */
+  get size(): number {
+    return this.data.size;
+  }
+}

@@ -1,5 +1,5 @@
 /**
- * 三個註冊點的規則：同層報錯、跨層遮蔽、錯誤訊息指得出是誰。
+ * 九個註冊點的規則：同層報錯、跨層遮蔽、錯誤訊息指得出是誰。
  *
  * 對應 [#29](https://github.com/DemianLi/nexus-agent/issues/29) 的「註冊表原語」驗收。
  * 判準是能不能只靠 registry 的輸入輸出斷言——規則真的產生效果（權限真的擋住、
@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { createRegistry } from './registry.js';
-import { fakeSubAgent, fakeTool } from './fixtures.js';
+import { fakeBackend, fakeMiddleware, fakeSubAgent, fakeTool } from './fixtures.js';
 import type { PluginOrigin } from './plugin.js';
 
 const first: PluginOrigin = { index: 0, name: 'alpha' };
@@ -143,5 +143,107 @@ describe('註冊者身分', () => {
     expect(() => registry.enter(second)).toThrow('plugins[0] (alpha)');
     leave();
     expect(() => registry.enter(second)).not.toThrow();
+  });
+});
+
+describe('其餘六個註冊點', () => {
+  it('backend 同 routePrefix 報錯，跨前綴不報錯', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    registry.backend.mount('/memories/', fakeBackend('store'));
+    expect(() => registry.backend.mount('/workspace/', fakeBackend('disk'))).not.toThrow();
+    leaveFirst();
+
+    const leaveSecond = registry.enter(second);
+    expect(() => registry.backend.mount('/memories/', fakeBackend('other'))).toThrow(
+      '"/memories/"',
+    );
+    leaveSecond();
+    expect(registry.backend.mounts().map(([prefix]) => prefix)).toEqual([
+      '/memories/',
+      '/workspace/',
+    ]);
+  });
+
+  it('middleware 記得註冊順序與 prepend 旗標', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.middleware.use(fakeMiddleware('a'));
+    registry.middleware.use(fakeMiddleware('b'), { prepend: true });
+    leave();
+    expect(registry.middleware.list().map((entry) => entry.value.prepend)).toEqual([false, true]);
+  });
+
+  it('permissions 是純累加的 deny 清單，同樣的規則兩次也是兩筆', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.permissions.deny(['/.env*']);
+    registry.permissions.deny(['/.env*']);
+    leave();
+    expect(registry.permissions.rules()).toHaveLength(2);
+  });
+
+  it('permissions 收下的路徑是複本，呼叫端事後改陣列動不到註冊表', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    const paths = ['/.env*'];
+    registry.permissions.deny(paths);
+    paths.push('/injected');
+    leave();
+    expect(registry.permissions.rules()[0]?.value.paths).toEqual(['/.env*']);
+  });
+
+  it('interrupts 同一個工具被多方標記不報錯', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    registry.interrupts.require('rm', { reason: '刪檔' });
+    leaveFirst();
+
+    const leaveSecond = registry.enter(second);
+    expect(() => registry.interrupts.require('rm', { reason: '再一次' })).not.toThrow();
+    leaveSecond();
+    expect(registry.interrupts.requirements()).toHaveLength(2);
+  });
+
+  it('skills 同一來源路徑重複註冊報錯', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.skills.addSource('/skills/user/');
+    expect(() => registry.skills.addSource('/skills/user/')).toThrow('"/skills/user/"');
+    expect(() => registry.skills.addSource('/skills/project/')).not.toThrow();
+    leave();
+    expect(registry.skills.sources()).toEqual(['/skills/user/', '/skills/project/']);
+  });
+
+  it('memory 純累加，同一路徑兩次不報錯', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.memory.addSource('./AGENTS.md');
+    expect(() => registry.memory.addSource('./AGENTS.md')).not.toThrow();
+    leave();
+    expect(registry.memory.sources()).toEqual(['./AGENTS.md', './AGENTS.md']);
+  });
+
+  it('六個註冊點在 apply 之外呼叫都當場報錯', () => {
+    const registry = createRegistry();
+    expect(() => registry.backend.mount('/m/', fakeBackend('b'))).toThrow('apply');
+    expect(() => registry.middleware.use(fakeMiddleware('m'))).toThrow('apply');
+    expect(() => registry.permissions.deny(['/x'])).toThrow('apply');
+    expect(() => registry.interrupts.require('rm', { reason: 'r' })).toThrow('apply');
+    expect(() => registry.skills.addSource('/skills/')).toThrow('apply');
+    expect(() => registry.memory.addSource('./AGENTS.md')).toThrow('apply');
+  });
+});
+
+describe('tools.own', () => {
+  it('只回那一層自己註冊的，不含全域打底', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.tools.register(fakeTool('search'));
+    registry.tools.register(fakeTool('grep'), { scope: 'researcher' });
+    leave();
+    expect([...registry.tools.own('researcher').keys()]).toEqual(['grep']);
+    expect([...registry.tools.effective('researcher').keys()]).toEqual(['search', 'grep']);
+    expect(registry.tools.own('writer').size).toBe(0);
   });
 });

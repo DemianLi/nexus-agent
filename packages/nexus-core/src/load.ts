@@ -68,7 +68,9 @@ export async function loadPlugins(
  * 包一層 registry，把這一輪 `apply` 拿到的每個 undo 都記進堆疊。
  *
  * 只包會產生 undo 的方法——讀取路徑原封轉發，plugin 在自己的 `apply` 裡讀得到
- * 先前 plugin 註冊的東西。
+ * 先前 plugin 註冊的東西。**九個註冊點一個都不能漏**：漏掉的那個不會有任何現有測試
+ * 發現，只會在回滾時默默留下一筆孤兒。`load.test.ts` 有一條九個點各註冊一樣東西後
+ * throw 的測試守著這件事。
  */
 function trackUndo(
   registry: InternalPluginRegistry,
@@ -91,6 +93,30 @@ function trackUndo(
     capabilities: {
       ...registry.capabilities,
       provide: (name) => remember(registry.capabilities.provide(name)),
+    },
+    backend: {
+      ...registry.backend,
+      mount: (routePrefix, backend) => remember(registry.backend.mount(routePrefix, backend)),
+    },
+    middleware: {
+      ...registry.middleware,
+      use: (middleware, options) => remember(registry.middleware.use(middleware, options)),
+    },
+    permissions: {
+      ...registry.permissions,
+      deny: (paths, options) => remember(registry.permissions.deny(paths, options)),
+    },
+    interrupts: {
+      ...registry.interrupts,
+      require: (toolName, options) => remember(registry.interrupts.require(toolName, options)),
+    },
+    skills: {
+      ...registry.skills,
+      addSource: (path) => remember(registry.skills.addSource(path)),
+    },
+    memory: {
+      ...registry.memory,
+      addSource: (path) => remember(registry.memory.addSource(path)),
     },
   };
 }
