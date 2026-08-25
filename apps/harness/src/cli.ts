@@ -144,8 +144,9 @@ export async function loadPluginModule(
  *
  * **它是對著 {@link DEFAULT_PLUGINS} 寫的。** 換了 `--plugins` 就該一起換 `--live`——
  * 腳本裡的工具名在別份清單裡多半不存在，那時假模型只會製造一個看不懂的失敗。
- * 腳本只有兩輪，所以假模型下的 REPL 問第二句就會用完（`ScriptedChatModel` 選擇當場
- * 失敗而不是靜默重播）；REPL 的正經用法是 `--live`。
+ * 腳本三輪，而第一句話就用掉兩輪（呼叫工具、拿到結果再回覆），所以假模型下的 REPL
+ * 問到第三句就會用完（`ScriptedChatModel` 選擇當場失敗而不是靜默重播）；REPL 的正經
+ * 用法是 `--live`。
  */
 const CLI_SCRIPT: readonly ScriptedTurn[] = [
   {
