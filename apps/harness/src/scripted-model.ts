@@ -9,6 +9,7 @@ import type { ChatGenerationChunk, ChatResult } from '@langchain/core/outputs';
 interface ScriptedModelState {
   turn: number;
   boundToolNames: readonly string[];
+  lastPrompt: readonly BaseMessage[];
 }
 
 /** 腳本裡的一次工具呼叫。 */
@@ -45,12 +46,22 @@ export class ScriptedChatModel extends BaseChatModel {
     const { turns, shared, ...rest } = options;
     super(rest);
     this.turns = turns;
-    this.shared = shared ?? { turn: 0, boundToolNames: [] };
+    this.shared = shared ?? { turn: 0, boundToolNames: [], lastPrompt: [] };
   }
 
   /** bindTools 收到什麼，spike 用它斷言基座真的把工具交給了模型。 */
   get boundToolNames(): readonly string[] {
     return this.shared.boundToolNames;
+  }
+
+  /**
+   * 最近一輪送進模型的完整訊息串，含基座組出來的 system prompt。
+   *
+   * 組裝點傳給 `createDeepAgent` 的 `systemPrompt` 是否真的到得了模型，只有從這裡看得到
+   * ——型別檢查擋不住「參數收下了但沒往下傳」。
+   */
+  get lastPrompt(): readonly BaseMessage[] {
+    return this.shared.lastPrompt;
   }
 
   _llmType(): string {
@@ -89,7 +100,8 @@ export class ScriptedChatModel extends BaseChatModel {
     });
   }
 
-  async _generate(_messages: BaseMessage[]): Promise<ChatResult> {
+  async _generate(messages: BaseMessage[]): Promise<ChatResult> {
+    this.shared.lastPrompt = messages;
     const turn = this.nextTurn();
     const message = this.toMessage(turn);
     return { generations: [{ text: turn.content, message }], llmOutput: {} };
@@ -100,10 +112,11 @@ export class ScriptedChatModel extends BaseChatModel {
    * 而不是退回 _generate 產生的單一 chunk。
    */
   override async *_streamResponseChunks(
-    _messages: BaseMessage[],
+    messages: BaseMessage[],
     _options: this['ParsedCallOptions'],
     runManager?: CallbackManagerForLLMRun,
   ): AsyncGenerator<ChatGenerationChunk> {
+    this.shared.lastPrompt = messages;
     const turn = this.nextTurn();
     const message = this.toMessage(turn);
 

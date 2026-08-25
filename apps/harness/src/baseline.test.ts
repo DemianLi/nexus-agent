@@ -2,8 +2,8 @@ import { HumanMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { createDeepAgent, StateBackend } from 'deepagents';
 import { describe, expect, it } from 'vitest';
+import { fakeTool } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
-import { recordFinding } from './spike-agent.js';
 
 /**
  * 升版防護：斷言 deepagents 擴充點的「形狀事實」（issue #27 查到的那幾條）。
@@ -73,22 +73,22 @@ describe('deepagents 1.13.x 基座形狀', () => {
       turns: [
         {
           content: '記一筆。',
-          toolCalls: [{ name: 'record_finding', args: { topic: 't', detail: 'd' } }],
+          toolCalls: [{ name: 'probe', args: {} }],
         },
       ],
     });
 
     const agent = createDeepAgent({
       model,
-      tools: [recordFinding],
+      tools: [fakeTool('probe')],
       backend: new StateBackend(),
-      interruptOn: { record_finding: true },
+      interruptOn: { probe: true },
       checkpointer: new MemorySaver(),
     });
 
     const result = await agent.invoke(
       { messages: [new HumanMessage('記一筆。')] },
-      { configurable: { thread_id: 'spike-interrupt' } },
+      { configurable: { thread_id: 'baseline-interrupt' } },
     );
 
     expect(result.__interrupt__).toBeDefined();

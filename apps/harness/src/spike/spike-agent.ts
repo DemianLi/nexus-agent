@@ -1,10 +1,11 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { tool } from '@langchain/core/tools';
-import { createDeepAgent, StateBackend } from 'deepagents';
+import type { NexusPlugin } from '@nexus/core';
 import { z } from 'zod';
+import { createNexusAgent } from '../agent-factory.js';
+import { ScriptedChatModel } from '../scripted-model.js';
+import type { ScriptedTurn } from '../scripted-model.js';
 import { createLiveModel } from './live-model.js';
-import { ScriptedChatModel } from './scripted-model.js';
-import type { ScriptedTurn } from './scripted-model.js';
 
 /** spike 的自訂工具：只把輸入回聲成一句話，用來證明工具真的被基座呼叫到。 */
 export const recordFinding = tool(({ topic, detail }) => `已記錄「${topic}」：${detail}`, {
@@ -55,14 +56,21 @@ const SYSTEM_PROMPT = [
   '工具要真的呼叫，不要只在文字裡描述你打算做什麼。',
 ].join('\n');
 
-/** 兩條路徑共用的組裝：in-memory backend（StateBackend）＋ 一個自訂工具。 */
+/** 把 spike 的自訂工具包成一個 plugin —— 組裝點只收 plugin 清單。 */
+const spikePlugin: NexusPlugin = {
+  name: 'spike',
+  apply: (registry) => void registry.tools.register(recordFinding),
+};
+
+/**
+ * 兩條路徑共用的組裝。
+ *
+ * **走 `createNexusAgent`，不自己呼叫 `createDeepAgent`**：Phase 0 當時它是自己組的，
+ * Phase 1 有了組裝點之後留著第二條組裝路徑只會讓 `--live` 驗的東西跟真的會出貨的東西
+ * 分岔。default backend 由組裝點補（`StateBackend`），與原本的組裝一致。
+ */
 function buildAgent(model: BaseChatModel) {
-  return createDeepAgent({
-    model,
-    tools: [recordFinding],
-    backend: new StateBackend(),
-    systemPrompt: SYSTEM_PROMPT,
-  });
+  return createNexusAgent({ model, systemPrompt: SYSTEM_PROMPT, plugins: [spikePlugin] });
 }
 
 /**
@@ -71,9 +79,9 @@ function buildAgent(model: BaseChatModel) {
  * 驗的是基座的組裝與接線，不是模型品質。假模型不是鷹架而是**長期測試基座**
  * （issue #31）—— CI 不放模型 secret，所以這是唯一能在 CI 上跑完整 agent 迴圈的路徑。
  */
-export function createSpikeAgent(options: SpikeAgentOptions = {}) {
+export async function createSpikeAgent(options: SpikeAgentOptions = {}) {
   const model = new ScriptedChatModel({ turns: options.script ?? SPIKE_SCRIPT });
-  return { agent: buildAgent(model), model };
+  return { agent: await buildAgent(model), model };
 }
 
 /**
@@ -81,7 +89,7 @@ export function createSpikeAgent(options: SpikeAgentOptions = {}) {
  *
  * **不進 CI** —— 它需要 API key 而且會花錢。缺少 key 時 `createLiveModel` 直接失敗。
  */
-export function createLiveSpikeAgent() {
+export async function createLiveSpikeAgent() {
   const model = createLiveModel();
-  return { agent: buildAgent(model), model };
+  return { agent: await buildAgent(model), model };
 }
