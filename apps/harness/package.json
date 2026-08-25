@@ -8,6 +8,7 @@
     "build": "tsc --noEmit",
     "lint": "eslint .",
     "spike": "tsx src/spike/cli.ts",
+    "spike:live": "tsx src/spike/cli.ts --live",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
@@ -24,6 +25,7 @@
     "@langchain/langgraph": "^1.4.10",
     "@langchain/langgraph-checkpoint": "^1.1.5",
     "@langchain/langgraph-sdk": "^1.9.23",
+    "@langchain/openai": "^1.5.10",
     "deepagents": "~1.13.1",
     "langchain": "^1.5.10",
     "langsmith": ">=0.7.1 <0.10.0",
