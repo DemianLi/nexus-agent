@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { ChatOpenAI } from '@langchain/openai';
 
 /**
@@ -20,7 +21,7 @@ export const LIVE_API_KEY_ENV = 'NVIDIA_API_KEY';
  * 真實供應商的 model。
  *
  * key **只從環境變數讀**，缺少時直接失敗，沒有預設值也不 fallback
- * （[docs/standards.md](../../../../docs/standards.md) 的秘密處理規則）。
+ * （[docs/standards.md](../../../docs/standards.md) 的秘密處理規則）。
  */
 export function createLiveModel(): ChatOpenAI {
   const apiKey = process.env[LIVE_API_KEY_ENV];
@@ -40,4 +41,23 @@ export function createLiveModel(): ChatOpenAI {
     topP: 0.95,
     maxTokens: 16384,
   });
+}
+
+/** 專案根目錄的 `.env`（已被 .gitignore 排除）。 */
+const ENV_FILE = resolve(import.meta.dirname, '../../../.env');
+
+/**
+ * 需要時把根目錄的 `.env` 填進環境變數。
+ *
+ * **這不是 fallback。** key 一律從環境變數讀（[docs/standards.md](../../../docs/standards.md)），
+ * `.env` 只是填充環境變數的其中一種方式：檔案不存在就安靜跳過，缺的變數留給
+ * {@link createLiveModel} 當場失敗並指名缺哪一個。已經設好的環境變數不會被檔案蓋掉。
+ */
+export function loadLiveEnvIfNeeded(): void {
+  if (process.env[LIVE_API_KEY_ENV]) return;
+  try {
+    process.loadEnvFile(ENV_FILE);
+  } catch {
+    // 沒有 .env 就靠 shell 裡既有的環境變數。
+  }
 }

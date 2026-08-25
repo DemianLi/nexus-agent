@@ -7,7 +7,7 @@ TypeScript + React (shadcn/ui) 專案，架構分為 harness 與 web UI 兩部�
 ```
 packages/nexus-core          NexusPlugin 契約：型別、manifest、PluginRegistry、fold
 packages/nexus-plugin-echo   最小 plugin 範例，只相依 @nexus/core
-apps/harness                 組裝點：agent 工廠、訊息標準化（Node / TypeScript）
+apps/harness                 組裝點：agent 工廠、訊息標準化、CLI（Node / TypeScript）
 apps/web                     Vite + React 19 + Tailwind v4 + shadcn/ui
 ```
 
@@ -23,6 +23,18 @@ pnpm typecheck    # tsc --noEmit
 pnpm test         # vitest run
 pnpm build        # vite build
 ```
+
+跟 agent 說話（`apps/harness` 的 CLI）：
+
+```bash
+pnpm --filter @nexus/harness run cli "把這句話回聲一次。"   # 一次性，跑完就退出
+pnpm --filter @nexus/harness run cli                        # REPL，/exit 或 Ctrl-D 結束
+pnpm --filter @nexus/harness run cli:live "..."             # 換成真實供應商，需要 API key
+```
+
+預設走寫死腳本的假模型，不需要任何 key —— 那條路徑驗的是接線，不是模型。
+真正要試 agent 行為時用 `cli:live`。`--plugins <module>` 可以換掉預設的 plugin 清單
+（模組 `export default` 一個陣列）。
 
 clone 之後各自設定一次，讓 `git fetch` / `git pull` 自動清掉遠端已刪除的分支：
 
