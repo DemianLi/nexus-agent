@@ -57,7 +57,9 @@ describe('Phase 0 spike：最小 deep agent', () => {
       }
     }
 
-    // 三輪回覆共 38 個字元；聚合成整段訊息的話只會有 3 個 chunk。
+    // 逐 token 實測 21 個 chunk：第二輪那句話的 20 個字元，加一個帶 tool_calls 的空
+    // chunk（第一輪整輪沒有文字）。聚合成整段訊息的話只會有 2 個，所以門檻要落在
+    // 兩者之間才驗得到「真的是逐 token」。
     expect(aiChunks.length).toBeGreaterThan(10);
     expect(aiChunks.join('')).toContain('已記錄並寫入 /findings.md。');
   });

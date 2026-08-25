@@ -17,10 +17,36 @@ export const recordFinding = tool(({ topic, detail }) => `已記錄「${topic}�
   }),
 });
 
-/** Phase 0 要跑通的那一條路：呼叫自訂工具 → 寫虛擬檔案 → 回覆。 */
+/**
+ * Phase 0 要跑通的那一條路：呼叫自訂工具 → 寫虛擬檔案 → 回覆。
+ *
+ * **兩個工具在同一輪，而且那一輪沒有文字內容**——這是照真模型的實際行為寫的，不是
+ * 假模型的表達限制（[#51](https://github.com/DemianLi/nexus-agent/issues/51)）。
+ * [PR #50](https://github.com/DemianLi/nexus-agent/pull/50) 第一次用真實供應商跑這條路
+ * 時的輸出是：
+ *
+ * ```
+ * [model_request/model] (呼叫工具)
+ * [tools/record_finding] 已記錄「Phase 0 驗證結論」：……
+ * [tools/write_file] Successfully wrote to '/findings.md'
+ * [model_request/model] 已完成 Phase 0 的驗證，流程如下：……
+ * ```
+ *
+ * 原本的腳本寫成三輪、每輪一個工具，於是 `streamMode: 'updates'` 的**輪數與每輪的
+ * 工具數都跟真模型對不上**。假模型是 repo 裡唯一能在 CI 跑完整 agent 迴圈的東西
+ * （[#31](https://github.com/DemianLi/nexus-agent/issues/31)：CI 不放模型 secret），
+ * 靠它建立的每一條端到端驗收，證明力都取決於它有多忠實。
+ *
+ * **這份腳本對齊的是一個模型的一次記錄。** 那次執行沒辦法重跑複驗——接線用的模型
+ * 目前在端點上不回應（[#57](https://github.com/DemianLi/nexus-agent/issues/57)）。
+ * 下一次分歧由 [#32](https://github.com/DemianLi/nexus-agent/issues/32) 的升版檢查
+ * 清單接住，不是由這份腳本本身。
+ */
 export const SPIKE_SCRIPT: readonly ScriptedTurn[] = [
   {
-    content: '先把結論記下來。',
+    // 真模型那一輪只有 tool_calls、沒有文字。空內容照樣要走得通：CLI 印的是
+    // `message.text.trim() || '(呼叫工具)'`，而那個 fallback 只有在這裡才被驗到。
+    content: '',
     toolCalls: [
       {
         name: 'record_finding',
@@ -29,11 +55,6 @@ export const SPIKE_SCRIPT: readonly ScriptedTurn[] = [
           detail: 'createDeepAgent 收 backend 單數、interruptOn 是 Record。',
         },
       },
-    ],
-  },
-  {
-    content: '再寫進虛擬檔案。',
-    toolCalls: [
       {
         name: 'write_file',
         args: {
