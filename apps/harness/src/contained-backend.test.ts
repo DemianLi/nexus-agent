@@ -158,7 +158,9 @@ describe('三個 mode', () => {
     }
   });
 
-  it('danger-full-access 是真的不設防——連 symlink 出去都放行', async () => {
+  // 標題刻意不寫「真的不設防」：基座的 lexical `..` 檢查仍在（`virtualMode` 不給關），
+  // 所以這個 mode 放行的是 symlink 逃逸，不是 dsh 那種全開。
+  it('danger-full-access 放行 symlink 逃逸', async () => {
     const backend = contained(terrain.root, 'danger-full-access');
 
     expect((await backend.write(terrain.escapePath, '逃生口')).error).toBeUndefined();
@@ -167,5 +169,62 @@ describe('三個 mode', () => {
 
   it('省略即設防的那一個', () => {
     expect(contained(terrain.root).mode).toBe('workspace-write');
+  });
+});
+
+/**
+ * fence 的協議與覆蓋面——三條都是 [PR #62](https://github.com/DemianLi/nexus-agent/pull/62)
+ * 的 review 實測出來的，不是想像的邊界。
+ *
+ * 前兩條講的是**同一件事的兩面**：fence 只有在「每一條進得來的路都經過它」而且「它報錯的
+ * 方式模型看得懂」時才算數。第三條講的是覆蓋面——`write`/`edit`/`delete` 不是 backend 上
+ * 僅有的變更方法。
+ */
+describe('fence 的協議與覆蓋面', () => {
+  // `canonicalize()` 只把 ENOENT/ENOTDIR 當「還不存在」，其餘 rethrow。但變更方法**約定用
+  // 回傳值報錯**，拋出去模型就看不到拒絕訊息了，agent loop 收到的是 exception。
+  it('canonicalize 撞上 ELOOP 時回錯誤結果，不是拋錯', async () => {
+    const backend = contained(terrain.root);
+    await symlink(join(terrain.root, 'loop'), join(terrain.root, 'loop'));
+
+    // 三個變更方法共用 `checkedPath`，所以三個都要守。
+    expect((await backend.write('/loop/a.txt', 'x')).error).toContain('[containment]');
+    expect((await backend.edit('/loop/a.txt', 'x', 'y')).error).toContain('[containment]');
+    expect((await backend.delete('/loop/a.txt')).error).toContain('[containment]');
+  });
+
+  // 這一條不是圍堵漏洞（`~/../x` 仍會撞上 ".." 那條，`/~/x` 落在根內），是**死掉的防線**：
+  // 補前置斜線那一步跑在檢查之前，`startsWith('~')` 因此永遠是 false。
+  it('"~" 開頭的路徑被擋——補前置斜線不能把這條檢查吃掉', async () => {
+    const backend = contained(terrain.root);
+    expect((await backend.write('~/a.txt', 'x')).error).toContain('"~"');
+  });
+
+  // `uploadFiles` 是 `BackendProtocolV2` 上第四個會改檔案的方法。基座自己的
+  // summarization middleware 就是走它做 history offload（用的是設定路徑，模型碰不到），
+  // 但 fence 的覆蓋面不該取決於「目前剛好沒有工具把模型的路徑餵進來」。
+  it('uploadFiles 一樣過 fence——經 symlink 出去被拒', async () => {
+    const backend = contained(terrain.root);
+
+    const [result] = await backend.uploadFiles([
+      [terrain.escapePath, new TextEncoder().encode('繞過 fence')],
+    ]);
+
+    // 這裡斷言的是**錯誤碼**而不是那句拒絕訊息：`uploadFiles` 的協議只收四個
+    // `FileOperationError`，`denial()` 那句話塞不進去。fence 唯一一處措辭不統一的地方，
+    // 是被協議逼的，不是漏寫。
+    expect(result?.error).toBe('permission_denied');
+    expect(await readFile(terrain.secretFile, 'utf8')).toBe(SECRET);
+  });
+
+  it('根裡面的 uploadFiles 照樣寫得進去', async () => {
+    const backend = contained(terrain.root);
+
+    const [result] = await backend.uploadFiles([
+      ['/上傳.md', new TextEncoder().encode('上傳的內容')],
+    ]);
+
+    expect(result?.error).toBeFalsy();
+    expect(await readFile(join(terrain.root, '上傳.md'), 'utf8')).toBe('上傳的內容');
   });
 });

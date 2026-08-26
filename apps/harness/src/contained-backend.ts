@@ -24,6 +24,9 @@
  * 另一句，同一條政策在模型眼裡就有兩套詞彙，測試也得斷言兩個字串。dsh 讓所有拒絕共用一個
  * `FS_SANDBOX_DENIED` 正是這個理由。
  *
+ * 第四個是 **`uploadFiles`**——`BackendProtocolV2` 上另一個會改檔案的方法，覆蓋面漏掉它
+ * 就有一條繞得過 fence 的路（PR #62 的 review 實測，經 symlink 寫穿到根外）。
+ *
  * ## 形狀照 dsh 的 `fs-sandbox`
  *
  * [#34](https://github.com/DemianLi/nexus-agent/issues/34) 的定案，逐條對應
@@ -50,7 +53,7 @@
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { FilesystemBackend } from 'deepagents';
-import type { DeleteResult, EditResult, WriteResult } from 'deepagents';
+import type { DeleteResult, EditResult, FileUploadResponse, WriteResult } from 'deepagents';
 
 /**
  * 圍堵的強度。名字照抄 dsh 的三個 mode（`references/deepseek-harness/packages/fs/fs-sandbox/README.md`）。
@@ -58,6 +61,10 @@ import type { DeleteResult, EditResult, WriteResult } from 'deepagents';
  * `read-only` 只擋得住**變更**——讀不經過這裡（`read` / `grep` / `glob` 沒被覆寫）。dsh 也是
  * 這樣：它的 fence 同樣只掛在兩個 mutation 上，「read-only」講的是這個 backend 不改東西，
  * 不是「這個 agent 看不到東西」。看不看得到歸 `permissions`。
+ *
+ * **`danger-full-access` 比 dsh 的同名 mode 弱，這是一條偏離。** 它放行 symlink 逃逸，但
+ * 基座那道 lexical 的 `..` 檢查仍在——這個 class 不給關 `virtualMode`（見下面的 class 註解），
+ * 所以它結構上就不可能是 dsh 那種真正的不設防。想要完全不設防，用原生的 `FilesystemBackend`。
  */
 export type ContainmentMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 
@@ -132,6 +139,50 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   }
 
   /**
+   * 批次上傳，每個檔案各自過 fence。
+   *
+   * **`BackendProtocolV2` 上第四個會改檔案的方法**，漏掉它整道 fence 就有一條繞得過去的路。
+   * 基座自己的 summarization middleware 就在走它做 history offload（`offloadToBackend()`，
+   * 用的是 `historyPathPrefix/<sessionId>.md` 這種設定路徑，模型控制不到），所以目前沒有
+   * 「模型給任意路徑」的入口——但覆蓋面不該押在「剛好沒有工具把模型的路徑餵進來」上。
+   *
+   * 拒絕的措辭在這裡是唯一的例外：`FileUploadResponse.error` 的型別是四個錯誤碼的 union
+   * （`FileOperationError`），塞不進 `denial()` 那句話，所以被擋下的檔案回 `permission_denied`。
+   *
+   * @param files - `[虛擬路徑, 內容]` 的批次。
+   * @returns 逐檔對應的結果，順序與輸入相同；被 fence 擋下的那些回 `permission_denied`。
+   */
+  override async uploadFiles(files: Array<[string, Uint8Array]>): Promise<FileUploadResponse[]> {
+    const results = new Array<FileUploadResponse | undefined>(files.length);
+    const allowed: Array<[string, Uint8Array]> = [];
+    const allowedSlots: number[] = [];
+
+    for (const [index, [filePath, content]] of files.entries()) {
+      const checked = await this.checkedPath(filePath, 'uploadFiles');
+      if (typeof checked === 'string') {
+        allowed.push([checked, content]);
+        allowedSlots.push(index);
+      } else {
+        results[index] = { path: filePath, error: 'permission_denied' };
+      }
+    }
+
+    // 通過的那些一次委派出去，再按原本的位次放回——回傳順序要與輸入逐項對得上。
+    if (allowed.length > 0) {
+      const uploaded = await super.uploadFiles(allowed);
+      for (const [slot, response] of uploaded.entries()) {
+        const index = allowedSlots[slot];
+        if (index !== undefined) results[index] = response;
+      }
+    }
+
+    return results.map(
+      (result, index) =>
+        result ?? { path: files[index]?.[0] ?? '', error: 'permission_denied' as const },
+    );
+  }
+
+  /**
    * fence 本體：過了回傳要交給基座的虛擬路徑，沒過回傳錯誤結果。
    *
    * 回傳「路徑或錯誤」而不是拋錯，是因為 `BackendProtocolV2` 的變更方法**約定用回傳值報錯**
@@ -144,18 +195,25 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    */
   private async checkedPath(
     filePath: string,
-    operation: 'write' | 'edit' | 'delete',
+    operation: 'write' | 'edit' | 'delete' | 'uploadFiles',
   ): Promise<string | { error: string }> {
     if (this.mode === 'danger-full-access') return filePath;
     if (this.mode === 'read-only') {
       return { error: this.denial(operation, filePath, '這個 backend 是唯讀的') };
     }
 
+    // `~` 要對**原始路徑**檢查。底下補前置斜線那一步一跑，`~` 就永遠不在開頭了——這條
+    // 檢查曾經寫在補斜線之後，於是從來沒有觸發過（PR #62 的 review 實測）。它擋的不是
+    // 逃逸（`~/../x` 會撞上 `..`，`/~/x` 落在根內），是「模型以為自己在用家目錄」。
+    if (filePath.startsWith('~')) {
+      return { error: this.denial(operation, filePath, '路徑裡有 "~"') };
+    }
+
     const virtualPath = filePath.startsWith('/') ? filePath : `/${filePath}`;
     // 先擋字面上的穿越再碰檔案系統：這一段與基座的 `resolvePath()` 同一條規則，但我們要
     // 自己的措辭，而且擋在這裡就不必為了 `..` 去多跑幾次 realpath。
-    if (virtualPath.includes('..') || virtualPath.startsWith('~')) {
-      return { error: this.denial(operation, filePath, '路徑裡有 ".." 或 "~"') };
+    if (virtualPath.includes('..')) {
+      return { error: this.denial(operation, filePath, '路徑裡有 ".."') };
     }
 
     let realRoot: string;
@@ -165,7 +223,17 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       return { error: this.denial(operation, filePath, `可寫根 ${this.cwd} 不存在`) };
     }
 
-    const realTarget = await canonicalize(resolve(this.cwd, virtualPath.slice(1)));
+    // `canonicalize()` 只把 ENOENT/ENOTDIR 當「還不存在」，其餘（ELOOP、EACCES…）會 rethrow。
+    // 那些在這裡要收成回傳值：變更方法**約定用回傳值報錯**，讓它拋出去的話模型看到的不是
+    // 拒絕訊息，而是 agent loop 撞上的一個 exception。
+    let realTarget: string;
+    try {
+      realTarget = await canonicalize(resolve(this.cwd, virtualPath.slice(1)));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? '未知';
+      return { error: this.denial(operation, filePath, `路徑解析失敗（${code}）`) };
+    }
+
     if (realTarget !== realRoot && !realTarget.startsWith(realRoot + sep)) {
       return {
         error: this.denial(
