@@ -25,6 +25,7 @@ import type { NexusPlugin } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { createNexusAgent } from './agent-factory.js';
 import type { NexusAgentHandle } from './agent-factory.js';
+import { ContainedFilesystemBackend } from './contained-backend.js';
 import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MODEL_ID } from './live-model.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -38,6 +39,11 @@ export interface CliInvocation {
   readonly live: boolean;
   /** plugin 清單的來源模組。省略即 {@link DEFAULT_PLUGINS}。 */
   readonly pluginModule?: string;
+  /**
+   * 真實磁碟上的可寫根。給了就換成有路徑圍堵的 Disk backend，省略即跑在 state 裡的
+   * 虛擬 FS（`StateBackend`，不碰磁碟）。
+   */
+  readonly workspace?: string;
   /** 只印用法就退出。 */
   readonly help: boolean;
 }
@@ -49,6 +55,8 @@ export const USAGE = `用法：cli [選項] [要說的話...]
 選項：
   --live               換成真實供應商（${LIVE_MODEL_ID}），需要 API key
   --plugins <module>   從指定模組載 plugin 清單（預設匯出一個陣列）
+  --workspace <dir>    在真實磁碟的這個目錄上跑，變更被圍堵在它之下
+                       （省略即虛擬檔案系統，完全不碰磁碟）
   --help               印這段話
 
   REPL 裡輸入 /exit 或按 Ctrl-D 結束。`;
@@ -71,6 +79,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
       options: {
         live: { type: 'boolean', default: false },
         plugins: { type: 'string' },
+        workspace: { type: 'string' },
         help: { type: 'boolean', default: false },
       },
       allowPositionals: true,
@@ -84,12 +93,16 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   if (values.plugins !== undefined && values.plugins.trim() === '') {
     throw new Error(`--plugins 要給一個模組路徑。\n\n${USAGE}`);
   }
+  if (values.workspace !== undefined && values.workspace.trim() === '') {
+    throw new Error(`--workspace 要給一個目錄路徑。\n\n${USAGE}`);
+  }
 
   const prompt = positionals.join(' ').trim();
   return {
     ...(prompt.length > 0 && { prompt }),
     live: values.live === true,
     ...(values.plugins !== undefined && { pluginModule: values.plugins }),
+    ...(values.workspace !== undefined && { workspace: values.workspace }),
     help: values.help === true,
   };
 }
@@ -149,10 +162,20 @@ export async function loadPluginModule(
  * 問到第三句就會用完（`ScriptedChatModel` 選擇當場失敗而不是靜默重播）；REPL 的正經
  * 用法是 `--live`。
  */
+/** 假模型腳本寫出去的那個檔。測試靠它確認檔案真的落在 `--workspace` 指的目錄底下。 */
+export const CLI_PROBE_FILE = '/cli.md';
+
 const CLI_SCRIPT: readonly ScriptedTurn[] = [
   {
     content: '先回聲一次，確認工具接得上。',
     toolCalls: [{ name: ECHO_TOOL_NAME, args: { message: 'CLI 接線測試' } }],
+  },
+  {
+    // 再寫一個檔。**這一輪是給 `--workspace` 用的**：預設的虛擬 FS 底下它只是讓
+    // 「虛擬檔案系統：…」那行有東西可印，換成真實磁碟時它就是「檔案真的落在那個
+    // 目錄底下」的證據。少了它，`--workspace` 給了跟沒給在畫面上分不出來。
+    content: '再寫一個檔，確認檔案系統接得上。',
+    toolCalls: [{ name: 'write_file', args: { file_path: CLI_PROBE_FILE, content: 'CLI 寫的' } }],
   },
   { content: '工具回來了，這條線是通的。' },
   { content: '假模型只會照腳本說話——要真的對話請用 --live。' },
@@ -191,22 +214,32 @@ type NexusAgent = NexusAgentHandle['agent'];
  *
  * 回傳 model 是為了讓測試看得到送進去的 prompt——照 `spike/spike-agent.ts` 的先例。
  *
- * `dispose` 一路傳到 {@link runCli} 的 `finally`——清單裡的 plugin 可能開了活資源
- * （MCP 的 stdio 子行程是第一個），沒人收的話這支程式印完答案不會退出。
+ * `dispose` 一路傳到 {@link runCli}——清單裡的 plugin 可能開了活資源（MCP 的 stdio 子行程是
+ * 第一個），沒人收的話這支程式印完答案不會退出。
+ *
+ * **default backend 是組裝點的事，不是 plugin 的事**（[#28](https://github.com/DemianLi/nexus-agent/issues/28)
+ * 決議 3）。`--workspace` 換掉的就是它：給了就跑在真實磁碟上、變更被圍堵在那個目錄之下；
+ * 省略即 `StateBackend`——虛擬 FS 跑在 state 裡，完全不碰磁碟。**預設不碰磁碟是刻意的**：
+ * 一個手動驗證工具不該因為忘了加旗標就動到誰的檔案。
  *
  * @param invocation - 這次呼叫解析出來的東西。
  * @param plugins - 已經載好的 plugin 清單。
+ * @param cwd - `--workspace` 的解析基準，省略即行程的工作目錄。
  * @returns 組好的 agent、收掉它的方法，與它用的 model。
  * @throws 清單載入失敗、fold 前置條件不成立，或基座擋下這份組裝。
  */
 export async function createCliAgent(
-  invocation: Pick<CliInvocation, 'live'>,
+  invocation: Pick<CliInvocation, 'live' | 'workspace'>,
   plugins: readonly NexusPlugin[],
+  cwd: string = process.cwd(),
 ): Promise<{ agent: NexusAgent; dispose: () => Promise<void>; model: BaseChatModel }> {
   const model = createCliModel(invocation.live);
   const { agent, dispose } = await createNexusAgent({
     model,
     plugins,
+    ...(invocation.workspace !== undefined && {
+      backend: new ContainedFilesystemBackend({ rootDir: resolve(cwd, invocation.workspace) }),
+    }),
     systemPrompt: SYSTEM_PROMPT,
     checkpointer: new MemorySaver(),
   });
@@ -335,7 +368,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       : await loadPluginModule(invocation.pluginModule, options.cwd);
 
   // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
-  const { agent, dispose } = await createCliAgent(invocation, plugins);
+  const { agent, dispose } = await createCliAgent(invocation, plugins, options.cwd);
 
   // 一輪跑壞了也要收——資源的所有權跟這一次呼叫綁在一起，不跟它成不成功綁在一起。
   //
@@ -345,6 +378,11 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // 清理失敗就要讓人知道——沒收乾淨代表可能有子行程還活著。
   try {
     printer.log(`模型：${invocation.live ? LIVE_MODEL_ID : '假模型（ScriptedChatModel）'}`);
+    printer.log(
+      invocation.workspace === undefined
+        ? '檔案系統：虛擬（不碰磁碟）'
+        : `檔案系統：${resolve(options.cwd ?? process.cwd(), invocation.workspace)}（變更圍堵在它之下）`,
+    );
 
     if (invocation.prompt !== undefined) {
       printer.log(`> ${invocation.prompt}\n`);

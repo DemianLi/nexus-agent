@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { mkdtemp, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
@@ -10,6 +13,7 @@ import {
   SECOND_PLUGIN_NAME,
 } from './cli-collision.fixture.js';
 import {
+  CLI_PROBE_FILE,
   createCliAgent,
   DEFAULT_PLUGINS,
   loadPluginModule,
@@ -45,6 +49,12 @@ describe('parseCliArgs', () => {
   it('沒有位置參數就是 REPL', () => {
     expect(parseCliArgs([]).prompt).toBeUndefined();
     expect(parseCliArgs(['--live']).prompt).toBeUndefined();
+  });
+
+  it('--workspace 收得到，空字串當場報錯', () => {
+    expect(parseCliArgs(['--workspace', './ws']).workspace).toBe('./ws');
+    expect(parseCliArgs([]).workspace).toBeUndefined();
+    expect(() => parseCliArgs(['--workspace', '  '])).toThrow('--workspace');
   });
 
   it('旗標與那句話同時收得下，順序不拘', () => {
@@ -120,6 +130,46 @@ describe('一次性模式', () => {
 
   it('預設清單裡的 echo 工具真的接上了', async () => {
     expect(DEFAULT_PLUGINS.map((plugin) => plugin.name)).toEqual(['echo']);
+  });
+});
+
+/**
+ * `--workspace` 換掉的是 **default backend**——組裝點自己的東西，plugin 不得提供
+ * （[#28](https://github.com/DemianLi/nexus-agent/issues/28) 決議 3）。
+ *
+ * 這裡只驗接線：旗標真的把 backend 換成了真實磁碟的那一個。圍堵本身的行為在
+ * [`contained-backend.test.ts`](./contained-backend.test.ts)，從 CLI 再測一次只是把同一件事
+ * 測兩遍。
+ */
+describe('--workspace 換成真實磁碟', () => {
+  it('給了就寫進那個目錄', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-cli-ws-'));
+    const { printer, stdout } = recorder();
+
+    await runCli({
+      argv: ['--workspace', root, '說點什麼'],
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer,
+    });
+
+    expect(stdout()).toContain(root);
+    expect(await readFile(join(root, 'cli.md'), 'utf8')).toBe('CLI 寫的');
+  });
+
+  it('省略就完全不碰磁碟', async () => {
+    const { printer, stdout } = recorder();
+
+    await runCli({
+      argv: ['說點什麼'],
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer,
+    });
+
+    // 檔案還是寫得出來，只是寫進 state 裡的虛擬 FS——`runTurn` 把它印在最後一行。
+    expect(stdout()).toContain('虛擬（不碰磁碟）');
+    expect(stdout()).toContain(CLI_PROBE_FILE);
   });
 });
 
