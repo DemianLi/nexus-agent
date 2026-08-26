@@ -338,20 +338,27 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   const { agent, dispose } = await createCliAgent(invocation, plugins);
 
   // 一輪跑壞了也要收——資源的所有權跟這一次呼叫綁在一起，不跟它成不成功綁在一起。
+  //
+  // **刻意不是 `finally`。** `finally` 裡的 `await dispose()` 一旦自己拋錯，會把 try 裡
+  // 原本那個錯誤整個蓋掉，使用者看到的變成「關機清理失敗」而不是真正壞掉的那件事。
+  // 所以分兩條：跑壞了就先保住原本的錯誤（與 `agent-factory.ts` 同一條規則），跑成功了
+  // 清理失敗就要讓人知道——沒收乾淨代表可能有子行程還活著。
   try {
     printer.log(`模型：${invocation.live ? LIVE_MODEL_ID : '假模型（ScriptedChatModel）'}`);
 
     if (invocation.prompt !== undefined) {
       printer.log(`> ${invocation.prompt}\n`);
       await runTurn(agent, invocation.prompt, printer);
-      return;
+    } else {
+      printer.log('輸入 /exit 或按 Ctrl-D 結束。\n');
+      await runRepl(agent, { input: options.input, output: options.output }, printer);
     }
-
-    printer.log('輸入 /exit 或按 Ctrl-D 結束。\n');
-    await runRepl(agent, { input: options.input, output: options.output }, printer);
-  } finally {
-    await dispose();
+  } catch (error) {
+    await dispose().catch(() => {});
+    throw error;
   }
+
+  await dispose();
 }
 
 /**
