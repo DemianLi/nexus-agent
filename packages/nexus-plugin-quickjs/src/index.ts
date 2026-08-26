@@ -36,6 +36,10 @@
  *   擋的。兩個都有預設值，但**改小改大都由呼叫端決定**。
  * - **逾時期間主執行緒是塞住的**。`evalCode` 是同步呼叫，中斷靠 QuickJS 執行中回呼的
  *   interrupt handler。所以 `timeoutMs` 是「最多塞住多久」，不是「多久之後在背景被砍掉」。
+ * - **`timeoutMs` 的精度等於「最長的那一個操作」**。handler 只在兩次操作之間被回呼，單一
+ *   次巨量配置跑多久不歸它管。所以擋「瘋狂配置記憶體」的是
+ *   {@link QuickJsPluginOptions.memoryLimitBytes} 而不是逾時——**兩個上限不能互相代替**，
+ *   各有一條測試釘住（`index.test.ts` 的「資源邊界」）。
  */
 
 import { tool } from '@langchain/core/tools';
@@ -69,7 +73,9 @@ export interface QuickJsPluginOptions {
   /**
    * 一次求值最多跑多久，毫秒。省略即 {@link DEFAULT_TIMEOUT_MS}。
    *
-   * 這是**主執行緒被塞住的上限**，不是背景逾時——見本檔頂端的邊界說明。
+   * 這是**主執行緒被塞住的上限**，不是背景逾時，而且精度等於「最長的那一個操作」——
+   * 見本檔頂端的邊界說明。瘋狂配置記憶體的程式擋不住，那是
+   * {@link QuickJsPluginOptions.memoryLimitBytes} 的工作。
    */
   readonly timeoutMs?: number;
   /**

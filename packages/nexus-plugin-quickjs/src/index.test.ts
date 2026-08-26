@@ -102,6 +102,9 @@ describe('非同步', () => {
 });
 
 describe('資源邊界——只有設定的那麼強', () => {
+  // **`timeoutMs` 的精度等於「最長的那一個操作」。** interrupt handler 是 QuickJS 在執行
+  // 中回呼的，兩次回呼之間跑多久不歸我們管。這條測的是便宜的迴圈（每圈幾乎不花時間），
+  // 所以攔得準；配置大塊記憶體那種昂貴操作攔不準，見 README 的邊界說明與底下那條。
   it('無限迴圈被中斷，不是讓測試逾時', async () => {
     const started = Date.now();
     const result = await runTool({ timeoutMs: 200 }, 'while (true) {}');
@@ -115,16 +118,58 @@ describe('資源邊界——只有設定的那麼強', () => {
   it('吃記憶體被擋', async () => {
     // 時間上限刻意放寬，否則擋下它的可能是逾時而不是記憶體上限，這條就測不到想測的東西。
     // 斷言的是 `out of memory` 而不是泛泛的「錯誤」，理由同上：訊息不對就代表擋它的是別的東西。
+    //
+    // **指數成長，不是一次一小塊。** 原本寫的是 `push(new Array(10000))` 慢慢磨到上限，
+    // 本地 2.1 秒、CI runner 上 5.03 秒——撞爆 vitest 預設的 5000ms testTimeout，gate 紅了
+    // （CI #88）。倍增只要幾十步就到，本地量到 18ms。慢測試不是「調高 timeout」的理由，
+    // 是測試寫法的問題。
     const result = await runTool(
       { memoryLimitBytes: 1024 * 1024, timeoutMs: 10_000 },
-      'const held = []; for (;;) held.push(new Array(10000).fill(0));',
+      'let 越長越大 = [0]; for (;;) 越長越大 = 越長越大.concat(越長越大);',
     );
 
     expect(result).toContain('out of memory');
   });
 
+  // 上限真的是我們設的那個在起作用，而不是撞到 QuickJS 自己的什麼天花板：同一段程式，
+  // 上限放大 64 倍就要跑久得多（實測 18ms → 563ms）。少了這一條，一個「這段程式無論如何
+  // 都會 out of memory」的世界也會讓上面那條通過。
+  it('上限放大，撐得比較久', async () => {
+    const code = 'let 越長越大 = [0]; for (;;) 越長越大 = 越長越大.concat(越長越大);';
+    const 小的 = Date.now();
+    await runTool({ memoryLimitBytes: 1024 * 1024, timeoutMs: 10_000 }, code);
+    const 小的耗時 = Date.now() - 小的;
+
+    const 大的 = Date.now();
+    await runTool({ memoryLimitBytes: 32 * 1024 * 1024, timeoutMs: 10_000 }, code);
+    const 大的耗時 = Date.now() - 大的;
+
+    expect(大的耗時).toBeGreaterThan(小的耗時);
+  });
+
   // 堆疊與記憶體是兩條軸：無窮遞迴吃的是前者，只設記憶體上限擋不住它。這一條要是紅了，
   // 八成是有人把 `maxStackSizeBytes` 拿掉了，覺得記憶體上限已經涵蓋。
+  // 刻意斷言一個**限制**而不是一個保證：一段瘋狂配置記憶體的程式跑得遠遠超過
+  // `timeoutMs`，因為 interrupt handler 只在兩個操作之間被回呼，而單一次巨量配置本身
+  // 就很久。所以擋這一類的是 `memoryLimitBytes`，不是逾時——README 那句「最多塞住多久」
+  // 有這個但書。
+  //
+  // 記憶體上限刻意給得大（32 MiB）但**有界**：真的設 `-1` 的話收場的是 host 的 WASM heap
+  // 耗盡，本地量到 6.7 秒而且時間取決於機器有多少記憶體，那種測試進不了 gate。
+  it('逾時攔不住瘋狂配置記憶體的程式——那是記憶體上限的工作', async () => {
+    const started = Date.now();
+    const result = await runTool(
+      { memoryLimitBytes: 32 * 1024 * 1024, timeoutMs: 50 },
+      'let 越長越大 = [0]; for (;;) 越長越大 = 越長越大.concat(越長越大);',
+    );
+    const 實際耗時 = Date.now() - started;
+
+    // 收場的是記憶體上限，不是逾時——訊息本身就是證據。
+    expect(result).toContain('out of memory');
+    // 而且它跑得比逾時久得多。攔得住的話這條會紅，那代表 README 該改的是另一邊。
+    expect(實際耗時).toBeGreaterThan(50);
+  });
+
   it('無窮遞迴撞的是堆疊上限，不是記憶體上限', async () => {
     const result = await runTool(
       { maxStackSizeBytes: 64 * 1024, timeoutMs: 10_000 },

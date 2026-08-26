@@ -47,6 +47,13 @@ host function 的介面，要加就得改它的原始碼。
 **逾時期間主執行緒是塞住的。** `evalCode` 是同步呼叫，中斷靠 QuickJS 執行中回呼的
 interrupt handler。所以 `timeoutMs` 是「最多塞住多久」，不是「多久之後在背景被砍掉」。
 
+**而且 `timeoutMs` 的精度等於「最長的那一個操作」。** interrupt handler 只在兩次操作之間
+被回呼，單一次巨量配置本身跑多久不歸它管。實測：一段不斷倍增陣列的程式，配上 50 毫秒的
+逾時，**跑了幾百毫秒才停**，而且收場的是記憶體上限不是逾時；把記憶體上限拿掉的話，300
+毫秒的逾時能拖到 6.7 秒才由 host 的 WASM heap 耗盡收場。所以擋「瘋狂配置記憶體」這一類的
+是 `memoryLimitBytes`，不是 `timeoutMs`——**兩個上限不能互相代替**。`timeoutMs` 擋得準的是
+便宜的迴圈（`while (true) {}` 這種）。
+
 **非同步的程式碼跑得完，但等不到外界。** 求值之後會把微任務佇列跑完
 （`executePendingJobs()`），所以 `async` 函式與 promise 鏈拿得到值。跑完還是 pending 的
 promise 代表它在等一個 VM 裡不存在的東西，那是永遠不會變的狀態，工具會照實說。
