@@ -18,6 +18,7 @@ import {
   runRepl,
   runTurn,
 } from './cli.js';
+import { DISPOSE_FAILURE } from './cli-dispose-failure.fixture.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 
@@ -122,6 +123,53 @@ describe('一次性模式', () => {
   });
 });
 
+/**
+ * 收拾與原本的錯誤，誰優先。
+ *
+ * 這一段守的是一個真的踩過的坑：`runCli` 原本把 `await dispose()` 放在 `finally` 裡，
+ * 而 `finally` 裡的 `await` 一拋錯就會把 `try` 裡那個錯誤整個蓋掉——使用者看到「關機
+ * 清理失敗」，真正壞掉的那件事無聲消失。
+ *
+ * 讓那一輪拋錯的方法是給一個會拋的 printer。這不是在模擬某個真實故障，而是**這一段唯一
+ * 要問的事就是兩個錯誤誰浮上來**，所以用什麼把第一個錯誤生出來不重要，重要的是它確實
+ * 發生在 `dispose()` 之前。
+ */
+describe('關機清理與原本的錯誤', () => {
+  const fixture = fileURLToPath(new URL('./cli-dispose-failure.fixture.ts', import.meta.url));
+
+  it('那一輪跑壞時，浮上來的是原本那個錯誤，不是清理失敗', async () => {
+    const failure = new Error('那一輪就壞在這裡');
+    const printer = {
+      log: (line: string) => {
+        if (line.startsWith('> ')) throw failure;
+      },
+      error: () => {},
+    };
+
+    await expect(
+      runCli({
+        argv: ['--plugins', fixture, '說點什麼'],
+        input: new PassThrough(),
+        output: new PassThrough(),
+        printer,
+      }),
+    ).rejects.toThrow(failure.message);
+  });
+
+  it('那一輪跑成功時，清理失敗要浮上來——沒收乾淨代表可能還有子行程活著', async () => {
+    const { printer } = recorder();
+
+    await expect(
+      runCli({
+        argv: ['--plugins', fixture, '說點什麼'],
+        input: new PassThrough(),
+        output: new PassThrough(),
+        printer,
+      }),
+    ).rejects.toThrow(DISPOSE_FAILURE);
+  });
+});
+
 describe('對話的連續性', () => {
   it('第二輪看得到第一輪說過的話——REPL 是一條對話，不是一串互不相干的呼叫', async () => {
     const { printer } = recorder();
@@ -150,10 +198,11 @@ describe('REPL', () => {
   ];
 
   async function replAgent() {
-    return createNexusAgent({
+    const { agent } = await createNexusAgent({
       model: new ScriptedChatModel({ turns: ONE_TURN }),
       plugins: DEFAULT_PLUGINS,
     });
+    return agent;
   }
 
   it('一行一輪，/exit 收工', async () => {

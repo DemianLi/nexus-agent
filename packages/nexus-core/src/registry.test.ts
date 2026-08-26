@@ -232,6 +232,33 @@ describe('其餘六個註冊點', () => {
     expect(() => registry.interrupts.require('rm', { reason: 'r' })).toThrow('apply');
     expect(() => registry.skills.addSource('/skills/')).toThrow('apply');
     expect(() => registry.memory.addSource('./AGENTS.md')).toThrow('apply');
+    expect(() => registry.lifecycle.onDispose(() => {})).toThrow('apply');
+  });
+});
+
+describe('lifecycle 通道', () => {
+  it('依登記順序留著，undo 撤掉的是登記本身、不是跑那個清理', () => {
+    const registry = createRegistry();
+    const ran: string[] = [];
+    const leave = registry.enter(first);
+    registry.lifecycle.onDispose(() => void ran.push('first'));
+    const undoSecond = registry.lifecycle.onDispose(() => void ran.push('second'));
+    leave();
+
+    undoSecond();
+    expect(ran).toEqual([]);
+    expect(registry.lifecycle.disposers().map((entry) => entry.origin.name)).toEqual(['alpha']);
+  });
+
+  it('takeDisposers 取走就清空，第二次拿到空的', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.lifecycle.onDispose(() => {});
+    leave();
+
+    expect(registry.lifecycle.takeDisposers()).toHaveLength(1);
+    expect(registry.lifecycle.takeDisposers()).toEqual([]);
+    expect(registry.lifecycle.disposers()).toEqual([]);
   });
 });
 

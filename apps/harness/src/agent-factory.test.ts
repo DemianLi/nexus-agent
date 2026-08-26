@@ -45,7 +45,7 @@ describe('createNexusAgent', () => {
   it('一份清單 fold 出的 agent 兩個 plugin 的工具都呼叫得到', async () => {
     const model = new ScriptedChatModel({ turns: BOTH_TOOLS });
 
-    const agent = await createNexusAgent({
+    const { agent } = await createNexusAgent({
       model,
       plugins: [createEchoPlugin(), createNotePlugin()],
     });
@@ -66,7 +66,7 @@ describe('createNexusAgent', () => {
   it('plugin 註冊的工具依呈現順序交給模型，未列出的落在 rest 那一格', async () => {
     const order = async (toolOrder?: readonly string[]): Promise<readonly string[]> => {
       const model = new ScriptedChatModel({ turns: [{ content: '不做事。' }] });
-      const agent = await createNexusAgent({
+      const { agent } = await createNexusAgent({
         model,
         plugins: [createEchoPlugin(), createNotePlugin({ deny: false })],
         ...(toolOrder !== undefined && { toolOrder }),
@@ -102,7 +102,7 @@ describe('createNexusAgent', () => {
     // fixture 的 deny 是 `/secrets/**` 且 except `/secrets/public/**`。基座只要看到
     // 規則就會跑 validatePermissionPaths()（非絕對路徑、含 ".." 或 "~" 一律拋錯），
     // 那道檢查 fold 看不到，所以這條同時是「fold 的輸出真的過得了基座那關」的證據。
-    const agent = await createNexusAgent({ model, plugins: [createNotePlugin()] });
+    const { agent } = await createNexusAgent({ model, plugins: [createNotePlugin()] });
 
     const result = await agent.invoke(toAgentInvocation('寫檔。'));
     const files = Object.keys(result.files ?? {});
@@ -121,7 +121,7 @@ describe('createNexusAgent', () => {
       ],
     });
 
-    const agent = await createNexusAgent({
+    const { agent } = await createNexusAgent({
       model,
       checkpointer: new MemorySaver(),
       plugins: [
@@ -156,7 +156,7 @@ describe('createNexusAgent', () => {
 
     // 沒給 `backend`。fold 對「有人掛了路由卻沒有兜底的那個」是報錯的，所以這一條
     // 組得起來就等於證明了組裝點自己補上了 default backend。
-    const agent = await createNexusAgent({
+    const { agent } = await createNexusAgent({
       model,
       plugins: [createMountPlugin('/memories/'), createEchoPlugin()],
     });
@@ -169,7 +169,7 @@ describe('createNexusAgent', () => {
   it('組裝點給的 system prompt 到得了模型', async () => {
     const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
 
-    const agent = await createNexusAgent({
+    const { agent } = await createNexusAgent({
       model,
       systemPrompt: '你是 nexus 的測試 agent。',
       plugins: [createEchoPlugin()],

@@ -5,6 +5,10 @@
  * 也靠名字（`routePrefix` 與來源路徑）擋重複，其餘三個（`middleware` /
  * `permissions` / `interrupts`）沒有名字可撞，走匿名追加。折疊成
  * `createDeepAgent` 參數的部分在 {@link ./fold.ts}。
+ *
+ * 外加一條 {@link LifecycleRegistrationPoint}——它**不是第十個註冊點**，因為它不折進
+ * `createDeepAgent` 的任何參數。九個註冊點回答「這個 agent 由什麼組成」，lifecycle
+ * 回答「這些東西怎麼收掉」，兩者正交。
  */
 
 import type { StructuredTool } from '@langchain/core/tools';
@@ -247,6 +251,46 @@ export interface MemorySourceRegistrationPoint {
   sources(): string[];
 }
 
+/** 一次關機清理。回 promise 就會被等到。 */
+export type Disposer = () => void | Promise<void>;
+
+/**
+ * `lifecycle` 通道：登記關機時要收掉的東西。
+ *
+ * **它與九個註冊點不同軸。** 九個註冊點的東西會折進 `createDeepAgent` 的參數，這條
+ * 不會——它的產物是 `loadPlugins()` 回傳的 `dispose()`，由組裝點在不用這個 agent 之後
+ * 呼叫。第一個需要它的是 `@nexus/plugin-mcp`：MCP server 是外部程序，stdio 子行程的
+ * pipe 是活的 handle，沒人關的話 CLI 印完答案不會退出。
+ *
+ * **與 dsh 的偏離**（AGENTS.md 的偏離規則）：dsh 的 `ctx.effect` 一個函式同時是「回滾」
+ * 與「卸載」，因為 Cordis 的 context 一收掉兩件事本來就同時發生。我們沒有 context 樹，
+ * `apply` 拋錯時的回滾走的是 {@link ./load.ts} 的 undo 堆疊，而堆疊是同步的、
+ * 關機清理不是。所以退到最接近的實作：**兩條路分開**——回滾期的資源釋放由 plugin 自己
+ * 的 `try` / `catch` 負責（它才知道自己開了什麼、開到哪一步），這條通道只管關機。
+ */
+export interface LifecycleRegistrationPoint {
+  /**
+   * 登記一個關機時要跑的清理。
+   * @param dispose - 清理函式。async 的會被等到。
+   * @returns 只撤銷這一次登記的冪等 undo（撤掉之後關機不會跑它）。
+   */
+  onDispose(dispose: Disposer): () => void;
+  /**
+   * 目前登記的清理，不取走。診斷與測試用。
+   * @returns 依登記順序的每一筆。
+   */
+  disposers(): NamedEntry<Disposer>[];
+  /**
+   * 取走目前登記的清理——回傳它們，並把登記清空。
+   *
+   * 關機走的是這條而不是 {@link disposers}：取走就是冪等的來源，`dispose()` 呼叫第二次
+   * 自然是 no-op，不必另外記一個旗標，也不會有「跑到一半又被人呼叫一次」的重複清理。
+   *
+   * @returns 依登記順序的每一筆。
+   */
+  takeDisposers(): NamedEntry<Disposer>[];
+}
+
 export interface PluginRegistry {
   readonly tools: ToolRegistrationPoint;
   readonly subagents: SubAgentRegistrationPoint;
@@ -257,6 +301,7 @@ export interface PluginRegistry {
   readonly interrupts: InterruptRegistrationPoint;
   readonly skills: SkillSourceRegistrationPoint;
   readonly memory: MemorySourceRegistrationPoint;
+  readonly lifecycle: LifecycleRegistrationPoint;
 }
 
 /**
@@ -318,6 +363,7 @@ export function createRegistry(): InternalPluginRegistry {
   const denyRules = new AnonymousEntries<DenyRule>();
   const interruptRequirements = new AnonymousEntries<InterruptRequirement>();
   const memorySources = new AnonymousEntries<string>();
+  const disposers = new AnonymousEntries<Disposer>();
 
   let current: PluginOrigin | undefined;
   function requireOrigin(what: string): PluginOrigin {
@@ -455,6 +501,15 @@ export function createRegistry(): InternalPluginRegistry {
     sources: () => [...memorySources.entries()].map((entry) => entry.value),
   };
 
+  const lifecyclePoint: LifecycleRegistrationPoint = {
+    onDispose(dispose) {
+      const origin = requireOrigin('lifecycle.onDispose()');
+      return disposers.append(dispose, origin);
+    },
+    disposers: () => [...disposers.entries()],
+    takeDisposers: () => disposers.drain(),
+  };
+
   return {
     tools,
     subagents: subagentPoint,
@@ -465,6 +520,7 @@ export function createRegistry(): InternalPluginRegistry {
     interrupts: interruptPoint,
     skills: skillPoint,
     memory: memoryPoint,
+    lifecycle: lifecyclePoint,
     enter(origin) {
       if (current !== undefined) {
         throw new Error(

@@ -18,6 +18,13 @@ export interface LoadResult {
   registry: InternalPluginRegistry;
   /** 依清單順序的來源，錯誤訊息與診斷用。 */
   origins: PluginOrigin[];
+  /**
+   * 收掉 plugin 經 `lifecycle.onDispose()` 登記的東西，逆序、冪等。
+   *
+   * **不碰 registry 上的註冊內容**——agent 建構完之後那些是基座的了，撤掉也追不回去。
+   * 這裡收的是 plugin 自己開的活資源（MCP 的 stdio 子行程是第一個）。
+   */
+  dispose: () => Promise<void>;
 }
 
 /**
@@ -49,6 +56,11 @@ export async function loadPlugins(
       await plugin.apply(tracked);
     } catch (error) {
       for (const undo of undos.reverse()) undo();
+      // **註冊內容留著、活資源不留。** 先前成功的 plugin 的註冊留在 registry 上是刻意的
+      // （錯誤處理與診斷要有東西可看），但它們開的連線與子行程沒有這個理由——載入失敗
+      // 的呼叫端拿到的是一個 exception，不是 handle，沒有第二個人知道那些東西還開著。
+      // 清理自己失敗的話不能蓋掉原本的錯誤：那個才是使用者要修的。
+      await disposeAll(registry).catch(() => {});
       // 把原因接進訊息本身，不只掛在 cause 上：重名錯誤的價值是指名撞的是哪兩個
       // plugin 與哪個名字，而只印 `error.message` 是錯誤處理最常見的形狀。
       const reason = error instanceof Error ? error.message : String(error);
@@ -60,8 +72,45 @@ export async function loadPlugins(
     }
   }
 
-  assertRequires(plugins, origins, registry);
-  return { registry, origins };
+  try {
+    assertRequires(plugins, origins, registry);
+  } catch (error) {
+    // `requires` 缺件跟 `apply` 拋錯同一個道理：載入沒成功，呼叫端拿不到 `dispose`。
+    await disposeAll(registry).catch(() => {});
+    throw error;
+  }
+  return { registry, origins, dispose: () => disposeAll(registry) };
+}
+
+/**
+ * 逆序跑完所有登記的清理。
+ *
+ * 三件事刻意這樣：**逆序**（後開的先收，與回滾同一個方向）、**跑完才報錯**（關機途中
+ * 有人拋錯不是停下來的理由——剩下的資源更需要被收掉），以及**跑過就撤掉登記**，
+ * 所以呼叫第二次是 no-op，不必另外記一個旗標。
+ *
+ * @param registry - 載入完成的 registry。
+ * @throws 有清理拋錯時，訊息指名是哪幾個 plugin 的，並把第一個原因掛在 `cause` 上。
+ */
+async function disposeAll(registry: InternalPluginRegistry): Promise<void> {
+  const failures: { origin: PluginOrigin; error: unknown }[] = [];
+  for (const entry of registry.lifecycle.takeDisposers().reverse()) {
+    try {
+      await entry.value();
+    } catch (error) {
+      failures.push({ origin: entry.origin, error });
+    }
+  }
+  if (failures.length === 0) return;
+  const detail = failures
+    .map(({ origin, error }) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      return `${formatOrigin(origin)} — ${reason}`;
+    })
+    .join('；');
+  throw new Error(`關機清理有失敗的：${detail}。其餘的清理都已經跑過了。`, {
+    cause: failures[0]?.error,
+  });
 }
 
 /**
@@ -71,6 +120,10 @@ export async function loadPlugins(
  * 先前 plugin 註冊的東西。**九個註冊點一個都不能漏**：漏掉的那個不會有任何現有測試
  * 發現，只會在回滾時默默留下一筆孤兒。`load.test.ts` 有一條九個點各註冊一樣東西後
  * throw 的測試守著這件事。
+ *
+ * `lifecycle` 也在追蹤範圍，但它撤銷的意思不同：撤掉的是**登記**，不是跑那個清理。
+ * 回滾期的資源釋放由 plugin 自己的 `try` / `catch` 負責——理由見
+ * {@link ../registry.ts} 的 `LifecycleRegistrationPoint`。
  */
 function trackUndo(
   registry: InternalPluginRegistry,
@@ -117,6 +170,10 @@ function trackUndo(
     memory: {
       ...registry.memory,
       addSource: (path) => remember(registry.memory.addSource(path)),
+    },
+    lifecycle: {
+      ...registry.lifecycle,
+      onDispose: (dispose) => remember(registry.lifecycle.onDispose(dispose)),
     },
   };
 }

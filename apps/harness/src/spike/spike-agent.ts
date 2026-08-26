@@ -90,8 +90,15 @@ const spikePlugin: NexusPlugin = {
  * Phase 1 有了組裝點之後留著第二條組裝路徑只會讓 `--live` 驗的東西跟真的會出貨的東西
  * 分岔。default backend 由組裝點補（`StateBackend`），與原本的組裝一致。
  */
-function buildAgent(model: BaseChatModel) {
-  return createNexusAgent({ model, systemPrompt: SYSTEM_PROMPT, plugins: [spikePlugin] });
+async function buildAgent(model: BaseChatModel) {
+  // 只取 `agent`、丟掉 `dispose`：這份清單只有 `spikePlugin`，它不開任何活資源。要收
+  // 東西的清單走的是 `cli.ts` 那條——那支收的才是任意清單。
+  const { agent } = await createNexusAgent({
+    model,
+    systemPrompt: SYSTEM_PROMPT,
+    plugins: [spikePlugin],
+  });
+  return agent;
 }
 
 /**

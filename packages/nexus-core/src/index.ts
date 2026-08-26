@@ -35,6 +35,8 @@ export type {
   InterruptRequirement,
   SkillSourceRegistrationPoint,
   MemorySourceRegistrationPoint,
+  LifecycleRegistrationPoint,
+  Disposer,
   RegisterOptions,
   ScopeKey,
 } from './registry.js';
