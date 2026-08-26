@@ -10,7 +10,7 @@
 | 1 | 技術棧全 TypeScript | LangChain JS + LangGraph JS + deepagentsjs（官方 TS 版），零 Python 基座 |
 | 2 | 插件化程度 | agent 推理迴圈為固定基座（deepagentsjs），迴圈周圍的擴充點全部走 NexusPlugin 契約；不 fork、不做「連迴圈都可替換」的徹底插件化 |
 | 3 | 兩層薄覆蓋 | 反思與反饋層、意圖與理解層先採薄覆蓋，後續強化追蹤於 [issue #16](https://github.com/DemianLi/nexus-agent/issues/16)，Phase 0–5 全部完成後啟動 |
-| 4 | 選型決策點 | 模型供應商、狀態儲存後端保留為決策點。模型供應商拆三段收斂：Phase 0 定預設（Anthropic）、Phase 2 驗 DeepSeek 相容性、Phase 5 比品質與成本；狀態儲存 Phase 3 收斂（見第 7 節） |
+| 4 | 選型決策點 | 模型供應商、狀態儲存保留為決策點。模型供應商拆三段收斂：Phase 0 定預設（Anthropic）、Phase 2 驗 DeepSeek 相容性、Phase 5 比品質與成本；狀態儲存**不是一個後端而是三個正交的軸**（checkpointer／store／backend），Phase 3 分別收斂（見第 7 節決策 4） |
 
 核心路線：**不從零重造**。deepagentsjs 已內建虛擬檔案系統（可插拔 backends）、宣告式檔案權限、subagents、TodoListMiddleware（opt-in）、SummarizationMiddleware、skills（SKILL.md 標準）、memory（AGENTS.md）、human-in-the-loop（`interruptOn`）、typed streaming。需求約七成由基座覆蓋；自建部分為 plugin 統一註冊、結果校驗、可觀測性接線、web UI。
 
@@ -64,12 +64,12 @@ registry.memory.addSource(path); // 純累加，基座自理
 | 感知輸入層 | 訊息標準化（LangChain messages）+ CLI / web 入口 | 自建（薄） | 足夠 |
 | 意圖與理解層 | 可插拔 model provider + system prompt 組裝 | LangChain model layer | **薄覆蓋**，強化見 issue #16 |
 | 規劃與編排層 | deepagents 迴圈 + TodoListMiddleware + subagents | deepagentsjs 內建 | 完整 |
-| 記憶層 | memory（AGENTS.md）+ skills + summarization/offloading | deepagentsjs 內建 | 完整 |
+| 記憶層 | memory（AGENTS.md）+ skills + summarization/offloading | deepagentsjs 內建 | **三個都在，但都是「注入」不是「保存」**——見第 5 節 Phase 3 |
 | 執行與工具層 | tools + 虛擬 FS + 權限 + sandbox 協定與 provider（內建）＋ QuickJS 直譯器（`@nexus/plugin-quickjs`）＋ MCP（`@langchain/mcp-adapters`） | deepagentsjs 內建，QuickJS 與 MCP 除外 | 完整 |
 | 反思與反饋層 | 結果校驗 middleware + LangSmith 回饋 | **自建** | **薄覆蓋**，強化見 issue #16 |
 | 輸出層 | typed streaming → apps/web UI | deepagentsjs stream + 自建 UI | 完整 |
 
-harness 五大範圍對應：解析標準化（PluginRegistry + zod）、編排迴圈（deepagents）、記憶層（內建）、工具層（內建）、結果校驗（自建 plugin——deepagents 無現成方案，為驗證插件架構價值的第一個實戰 plugin）。
+harness 五大範圍對應：解析標準化（PluginRegistry + zod）、編排迴圈（deepagents）、記憶層（內建，但只注入不保存——見第 5 節 Phase 3）、工具層（內建）、結果校驗（自建 plugin——deepagents 無現成方案，為驗證插件架構價值的第一個實戰 plugin）。
 
 ## 3. 套件結構（pnpm workspace）
 
@@ -104,14 +104,14 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
 | 工具 | `@langchain/core` tools + `zod` + **`@langchain/mcp-adapters`**（MCP 不在基座裡） | **`zod` 用 `^4.3.6`** — 與基座的直接相依同範圍，確保只解析出一份。`@langchain/mcp-adapters` 用 **`^1.1.4`**：它不是 `deepagents` 的 peer，走下面第 3 層（[#60](https://github.com/DemianLi/nexus-agent/issues/60)）。實測：`pnpm install` 在 `strictPeerDependencies: true` 下通過、不必補宣告它的 peer `@langchain/langgraph`，`pnpm why zod -r` 仍是 Found 1 version |
 | 觀測 | `langsmith`（tracing + evaluators） | **`>=0.7.1 <0.10.0`**。套件名是 `langsmith`，不是 `@langchain/langsmith`（後者不存在）。補強項 4 |
 | 模型 | 預設 **Anthropic**（prompt caching 自動）；唯一備選 **DeepSeek**（`@langchain/deepseek`）。OpenAI 未排入評估，需要時另開決策 | Phase 0 只驗接線不比較（接線對象是 NVIDIA 閘道，不是預設供應商 —— 見第 5 節 Phase 0）；DeepSeek 相容性 Phase 2、品質與成本 Phase 5（[#31](https://github.com/DemianLi/nexus-agent/issues/31)） |
-| 狀態儲存 | **決策點**：Phase 0 用 `MemorySaver`，Phase 3 評估 `@langchain/langgraph-checkpoint-postgres` | 補強項 5 |
+| 狀態儲存 | **決策點，而且是三個正交的軸，不是一個**：`checkpointer`（thread 內的對話狀態）／`store`（跨 thread 的 `BaseStore`，`StoreBackend` 用它）／`backend`（檔案落在哪——AGENTS.md、skills、`/conversation_history` 都住這裡）。Phase 0 的 `MemorySaver` 只覆蓋第一軸。`@langchain/langgraph-checkpoint-postgres@1.0.5` 同一個套件收前兩軸（`.` 出 checkpointer、`./store` 出 `PostgresStore`（實測 1.0.5 的 tarball，不是照子路徑名推的），peer 是 `@langchain/core ^1.1.44` ＋ `@langchain/langgraph-checkpoint ^1.1.4`，與我們現有範圍相容）；第三軸是 backend plugin 的事 | 補強項 5 |
 | Sandbox | deepagentsjs sandbox providers（`SandboxBackendProtocolV2`）**只有協定與 provider，沒有直譯器**；QuickJS 走自建的 `@nexus/plugin-quickjs`（`quickjs-emscripten`） | Phase 2 之後，安全優先 |
 
 **版本範圍規則**（[#33](https://github.com/DemianLi/nexus-agent/issues/33) 定基座那一層，[#60](https://github.com/DemianLi/nexus-agent/issues/60) 補其餘）。判準是**壞掉時 semver 管不管得到**，不是「這個套件危不危險」：
 
 | 層 | 範圍 | 什麼落在這裡 | 為什麼 |
 | --- | --- | --- | --- |
-| 1 | **鎖死**（無前綴） | 版本號追的是 npm 以外的契約：原生二進位／ABI、遠端服務 API、外部行程或 agent 二進位、線上協議的對端 | semver 對這些沒有約束力——契約的另一端不在 npm 上。**本 repo 目前沒有這一類** |
+| 1 | **鎖死**（無前綴） | 版本號追的是 npm 以外的契約：原生二進位／ABI、遠端服務 API、外部行程或 agent 二進位、線上協議的對端 | semver 對這些沒有約束力——契約的另一端不在 npm 上。**本 repo 目前沒有這一類**；Phase 3 的 `@langchain/langgraph-checkpoint-postgres` 是第一個候選——它在資料庫裡建表與跑 migration，那份 schema 的另一端在 Postgres 不在 npm。層級在真的收下這個相依的那張 PR 上拍板 |
 | 2 | **`~`** | 基座 `deepagents` 與它的六個 peer（照抄原文） | 基座的 minor 會動 peer 契約，[#33](https://github.com/DemianLi/nexus-agent/issues/33) 有實測表 |
 | 3 | **`^`**（預設） | 其餘全部——純 JS／WASM 套件、生態內套件、工具鏈、devDependency | 壞了在載入期或 typecheck 就看得到，CI 當場紅 |
 
@@ -168,10 +168,33 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
 
 ### Phase 3 — 記憶層（約 3 個 PR）
 
-- `feat/memory-plugin`：AGENTS.md memory + backend 選型落地（狀態儲存決策在此收斂）；一併補上「多來源併入 prompt」的形狀斷言（[#32](https://github.com/DemianLi/nexus-agent/issues/32)）。
-- `feat/skills-plugin`：SKILL.md 載入與 progressive disclosure；一併補上 skills last-wins 的形狀斷言（[#32](https://github.com/DemianLi/nexus-agent/issues/32)——這裡才是第一個真的靠 last-wins 決定誰勝出的地方）。
-- `feat/summarization-tuning`：SummarizationMiddleware 參數化（長任務 token 控制）。
-- 驗收：跨 thread 記憶保留；長對話在 token 上限內完成多步任務。
+**動工前查過一輪基座（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js`）。這次「基座已內建」是真的**——`createMemoryMiddleware`、`createSkillsMiddleware`、`createSummarizationMiddleware` 三個都在，`createDeepAgent` 上還有一等公民的 `memory?: string[]` 與 `skills?: string[]` 參數，而且 `@nexus/core` 的 `skills` / `memory` 註冊點與 fold 在 Phase 1 就接好了。**錯的是「完整」**：三個都只做「注入」，沒有一個做「保存」。以下每條都標了實測依據。
+
+- `feat/memory-plugin`：AGENTS.md memory 來源 plugin ＋ 狀態儲存決策收斂。三件實測事實決定它的形狀：
+
+  1. **memory middleware 是唯讀的。** 只有 `beforeAgent`（讀）與 `wrapModelCall`（注入 system prompt），**不註冊任何工具**。記憶要寫回去，唯一的路是模型自己呼叫 `write_file`。所以「記憶留不留得住」是 **backend** 的問題，跟 checkpointer 無關。
+  2. **來源路徑不展開 `~`。** `loadMemoryFromBackend` 把路徑原樣交給 backend 的 `downloadFiles` / `read`。基座 JSDoc 裡那個 `"~/.deepagents/AGENTS.md"` 是**已 deprecated 的 `createAgentMemoryMiddleware`** 留下的——`os.homedir()` 只出現在 node-only 的 `createSettings`，backend-agnostic 這條路上一次都沒有。照抄那個例子的下場：`ContainedFilesystemBackend` 讀時放行、找不到字面上的 `~` 目錄 → 靜默沒有記憶；而寫回去會撞上我們自己那條 `"~"` 檢查。**來源一律用 backend 命名空間下的絕對路徑。**
+  3. **載入失敗是靜默的。** 每個來源包在 `try / console.debug` 裡，`memoryContents` 又快取在 state（`if ("memoryContents" in state ...) return`），配上 checkpointer 就是**一個 thread 只載一次**，thread 中途改 AGENTS.md 不生效。一條蓋到記憶檔的 deny 規則 = agent 安靜地沒有記憶。這條要用測試釘住，不能只寫在註解裡。
+
+  「多來源併入 prompt」的形狀斷言照舊補（[#32](https://github.com/DemianLi/nexus-agent/issues/32)）——這一條查過是真的：`formatMemoryContents(contents, sources)` 依 `sources` 順序串。
+
+- `feat/skills-plugin`：SKILL.md 來源 plugin。**progressive disclosure 是純 prompt，不是機制**——middleware 只把 name／description／path 注入 system prompt，然後用文字叫模型自己 `read_file`。三個推論：
+
+  1. skills 的讀取**走 `permissions` 與我們的 fence**。deny 規則蓋到 skills 路徑時，清單照樣列出來、讀取失敗——「看得到、讀不到」是這個擴充點的預設失敗模式，要有測試。
+  2. `allowedTools` frontmatter **解析了、印進 prompt、零強制**（整包 9 個出現點全是解析與格式化）。不能當權限用。
+  3. `module` frontmatter 只印一行 `await import("@/skills/<name>")`，**沒有東西實作那個 import**——[#64](https://github.com/DemianLi/nexus-agent/pull/64) 已記錄過同一件事。
+  4. 快取比 memory 更硬：`loadedSkills` 是**閉包變數**，per-agent-instance，跨 thread 都不重載。agent 建好之後新增的 skill 一律看不見。
+
+  skills last-wins 的形狀斷言照舊補（[#32](https://github.com/DemianLi/nexus-agent/issues/32)）——這一條也查過是真的：`allSkills.set(skill.name, skill)` 依 `sources` 順序覆蓋。
+
+- `feat/summarization-tuning`：**基座上沒有「參數化」這個參數。** `createSummarizationMiddleware({ backend })` 被無條件寫死進 root 與每一個 subagent 的 stack，`CreateDeepAgentParams` 上沒有任何 summarization 欄位。唯一的縫是 `mergeMiddlewareStack` **按 `.name` 原地取代**：自己建一個同名（字串 `"SummarizationMiddleware"`）的 middleware 從 `middleware` 參數傳進去，就換掉內建那個。fold 這一側是通的（`foldMiddleware` 只做 `prepend` 排序，不包不改）。兩件事要寫進 PR：
+
+  1. **這條縫掛在一個字串上**，要有絆索測試——基座改名或改合併語意時它該紅。
+  2. **root 換掉不影響 subagent。** `createSubagentDefaultMiddleware` 每個 subagent 各建一份新的，`buildSubagentMiddleware` 只併 `input.middleware`。而長任務的 token 大戶正是 subagent，所以「長任務 token 控制」靠換掉 root 那個是**結構上就不完整的**——要嘛每個 subagent 定義自己帶，要嘛承認這個邊界並寫下來。
+
+- **跨 Phase 的坑（Phase 2 埋的）**：summarization 的 offload 寫到 `/conversation_history`，走 backend 的 `uploadFiles`。我們的 `ContainedFilesystemBackend` 在 `read-only` mode 下會擋掉它——而基座對 offload 失敗是 **fail-open**：`console.warn` 之後照樣把訊息換成摘要（`Proceeding with summary generation.`）。也就是**完整歷史靜默消失，只留一行 warn**。同理，一條蓋到 `/conversation_history*` 的 deny 規則有一樣的效果。這要在 Phase 3 有測試，不能等它在長對話裡自己發生。
+
+- 驗收：**跨 thread 記憶保留**——注意這一條**不是 checkpointer 能滿足的**（它是 thread 內的狀態），要靠 `store`（`StoreBackend`：「persist across all threads」）或落磁碟的 backend；長對話在 token 上限內完成多步任務，且 `/conversation_history` 真的寫得出來。
 
 ### Phase 4 — HITL + 可觀測性 + 反思（約 3 個 PR）
 
@@ -195,7 +218,7 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
 | 權限控制 | Phase 2 filesystem permissions +（延後）sandbox 隔離 |
 | 可靠性 | Phase 4 validation middleware + Phase 5 eval suite |
 | 可觀測性 | Phase 4 LangSmith + streaming |
-| 狀態儲存選型 | Phase 0 暫定 MemorySaver → Phase 3 收斂 |
+| 狀態儲存選型 | Phase 0 暫定 MemorySaver（只覆蓋 checkpointer 一軸）→ Phase 3 收斂 checkpointer／store／backend 三軸 |
 | 業務邏輯解耦 | NexusPlugin 契約本身（全程貫徹） |
 
 ## 7. 風險與決策點
@@ -213,4 +236,8 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
    **這直接決定了 `feat/sandbox-plugin` 的形狀**：QuickJS 做成 sandbox backend 會讓 `permissions` 擴充點與它互斥，現有的權限行為驗收會在組裝期炸掉。所以走 custom tool（基座明文「custom tools from the agent or other middleware are left untouched」），完全不經過那條路。絆索測試在 `apps/harness/src/sandbox-backend-conflict.test.ts`，形狀照 `contained-backend.test.ts` 那組升版絆索——它紅了代表基座改了主意，那正是該回頭看這個決定的時刻。
 
    `isSandboxBackend()` 是純 duck-type（`execute` 是函式 ＋ 非空的 `id` 字串），所以「這個 backend 算不算會執行指令」不看繼承關係，看形狀。
-4. **結果校驗範圍（Phase 4 前）**：需定義「校驗什麼」——schema、不變量、還是業務規則。屆時拍板。
+4. **狀態儲存決策點是三個軸，不是一個**（Phase 3 收斂）：原文把它寫成「`MemorySaver` → 評估 `checkpoint-postgres`」，那只覆蓋 `checkpointer`（thread 內的對話狀態）。實測基座之後拆開：`store`（`BaseStore`，`StoreBackend` 明文「persist across all threads」）才是跨 thread 記憶的載體；`backend` 才是 AGENTS.md、skills 與 `/conversation_history` 實際落在哪。**三軸各自可選、失敗方式不同**——checkpointer 缺席是接不回 interrupt（fold 已經在擋，見 `foldRegistry` 對核准政策的前置檢查），store 缺席是換個 thread 就失憶，backend 選錯是記憶根本寫不回去（memory middleware 唯讀，寫回去只有模型的 `write_file` 一條路）。Phase 3 的三個 PR 要分別對上，不能用一個「狀態儲存選好了」收掉。
+
+   `@langchain/langgraph-checkpoint-postgres@1.0.5` 前兩軸同一個套件收（`.` 出 checkpointer、`./store` 出 `PostgresStore`），peer 是 `@langchain/core ^1.1.44` ＋ `@langchain/langgraph-checkpoint ^1.1.4`，與我們現有範圍相容——但那是**兩個決定**，只是剛好同一個相依。
+
+5. **結果校驗範圍（Phase 4 前）**：需定義「校驗什麼」——schema、不變量、還是業務規則。屆時拍板。
