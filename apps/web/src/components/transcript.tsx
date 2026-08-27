@@ -1,7 +1,11 @@
 /**
  * 對話的呈現。
  *
- * 三種東西：使用者說的、模型說的、工具跑的。模型與工具都可能來自 subagent，
+ * 四種東西：使用者說的、模型說的、工具跑的、人在核准點上按的。**最後那一種只有
+ * 本地記得**——下行不回聲決定，被拒絕掉的那一批在線上連一顆 frame 都沒有，所以
+ * 這一則就是它存在過的唯一證據（見 `@nexus/wire` 的 `appendDecision`）。
+ *
+ * 模型與工具都可能來自 subagent，
  * 而**歸屬是折疊器 join 出來的**——線上沒有 subagent 的名字，只有 namespace 樹
  * （見 `@nexus/wire` 的 `conversation.ts`）。join 不起來的時候它說「未歸屬」，
  * 這裡就照樣顯示未歸屬：**寧可說不知道，不要說錯**。
@@ -33,6 +37,17 @@ function Entry({ entry }: { entry: ConversationEntry }) {
         <p className="bg-primary text-primary-foreground max-w-[80%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap">
           {entry.text}
         </p>
+      </li>
+    );
+  }
+
+  if (entry.kind === 'decision') {
+    const approved = entry.decision === 'approve';
+    return (
+      <li className="text-muted-foreground text-xs" data-testid="decision-entry">
+        {approved ? '已核准' : entry.decision === 'reject' ? '已拒絕' : entry.decision}：
+        {entry.actions.join('、')}
+        {!approved && '（沒有執行）'}
       </li>
     );
   }

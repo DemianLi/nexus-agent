@@ -15,6 +15,14 @@
  *    （那個「暫停時 `await run.output` 會炸」的陷阱屬於核准 UI 那一端）。
  * 4. **失敗會先上線再拋**：最後一顆 frame 是 `lifecycle { event:'failed', … , error }`，
  *    然後 iteration 才 throw。所以這裡的 try/catch 是用來收尾的，不是用來補錯誤 frame 的。
+ *
+ * 第五件是 `feat/web-hitl` 動工前才量到的，理由不同（它不是接線問題，是**靜默**問題）：
+ *
+ * 5. **停在核准點時再送一句話，中斷會被靜靜丟掉。** 實測基座照跑新的一輪
+ *    （`patchToolCallsMiddleware.before_agent` 補掉懸空的工具呼叫），那個等著核准的工具
+ *    **既沒執行也沒被拒絕**，而且**不會再發第二顆 `input.requested`**——核准請求就這樣
+ *    蒸發了，下行上一顆 frame 都看不出來。所以 pump 記著目前掛著的那顆中斷
+ *    （{@link ThreadPump.pending}），讓上行那一側擋得下來。
  */
 
 import { HumanMessage } from '@langchain/core/messages';
@@ -55,6 +63,13 @@ interface Subscriber {
   done: boolean;
 }
 
+/** 目前掛在這條 thread 上、還沒被回答的那顆中斷。 */
+export interface PendingInterrupt {
+  readonly interruptId: string;
+  /** 這一批要回答幾筆決定——基座逐 index 配對，長度不符當場拋。 */
+  readonly actionCount: number;
+}
+
 /** 基座把中斷發在 `updates` 上的那一顆的 data 形狀。 */
 interface InterruptEntry {
   readonly id: string;
@@ -75,11 +90,18 @@ function asInterruptEntries(data: unknown): readonly InterruptEntry[] {
   );
 }
 
+/** 這顆中斷在問幾件事。問不出來就當 0——上行那側只在數得出來時才校驗。 */
+function actionCountOf(value: unknown): number {
+  const requests = (value as { actionRequests?: unknown } | null)?.actionRequests;
+  return Array.isArray(requests) ? requests.length : 0;
+}
+
 export class ThreadPump {
   readonly #agent: PumpAgent;
   readonly #threadId: string;
   readonly #subscribers = new Set<Subscriber>();
   #seq = 0;
+  #pending: PendingInterrupt | undefined;
   /** 一個 thread 一次只跑一個 run；後到的 submit 排隊，不平行跑。 */
   #tail: Promise<void> = Promise.resolve();
   #closed = false;
@@ -91,6 +113,11 @@ export class ThreadPump {
 
   get threadId(): string {
     return this.#threadId;
+  }
+
+  /** 掛著等人回答的那顆中斷，沒有就是 `undefined`。 */
+  get pending(): PendingInterrupt | undefined {
+    return this.#pending;
   }
 
   /**
@@ -155,6 +182,9 @@ export class ThreadPump {
     if (this.#closed) {
       return Promise.reject(new Error('這條 thread 已經收掉了'));
     }
+    // **收下的那一刻就不再掛著了，不是等它排到才清。** 排隊期間還掛著的話，連按兩次
+    // 核准的第二次會通過上行的校驗、送出第二次 resume，而那時已經沒有中斷可以回答。
+    this.#pending = undefined;
     const next = this.#tail.then(() => this.#runOnce(input));
     // 排隊用的鏈不能因為某一輪炸掉就整條斷掉。
     this.#tail = next.catch(() => undefined);
@@ -205,6 +235,7 @@ export class ThreadPump {
       // `input.requested`。這裡補上那一顆——順帶讓 `updates` 整條留在白名單外，
       // 它每一顆都夾著完整序列化的訊息。
       for (const entry of asInterruptEntries(raw.params.data)) {
+        this.#pending = { interruptId: entry.id, actionCount: actionCountOf(entry.value) };
         yield this.#seal({
           method: 'input.requested',
           params: {

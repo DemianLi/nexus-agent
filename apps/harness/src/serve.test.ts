@@ -1,5 +1,11 @@
 import { createWireClient } from '@nexus/wire';
-import { appendHumanTurn, emptyConversation, reduceConversation } from '@nexus/wire';
+import {
+  appendDecision,
+  appendHumanTurn,
+  emptyConversation,
+  reduceConversation,
+  uniformDecisions,
+} from '@nexus/wire';
 import type { ConversationState } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DEFAULT_PORT, parseServeArgs, runServe } from './serve.js';
@@ -85,5 +91,57 @@ describe('起起來之後', () => {
     expect(tools.map((entry) => (entry.kind === 'tool' ? entry.name : ''))).toContain('echo');
     expect(state.entries.some((entry) => entry.kind === 'ai' && entry.text.length > 0)).toBe(true);
     expect(state.status).toBe('idle');
+  });
+});
+
+describe('核准那份清單', () => {
+  it('README 寫的那道指令真的停得下來，也接得回去', async () => {
+    running = await runServe({
+      // README 與開發計劃 Phase 5 驗收句共用這一份 —— 預設清單不觸發任何中斷，
+      // 少了它「核准工具」那半句在瀏覽器裡跑不出來。
+      argv: ['--port', '0', '--plugins', 'src/approval.fixture.ts'],
+      log: () => undefined,
+      env: {},
+    });
+    const started = running as RunningServe;
+    const client = createWireClient({ baseUrl: started.url });
+    const events = await client.openEvents('gated');
+    await client.runStart('gated', '把這句話回聲一次。');
+
+    let state: ConversationState = appendHumanTurn(emptyConversation(), '把這句話回聲一次。');
+    const drainUntil = async (done: (current: ConversationState) => boolean) => {
+      while (!done(state)) {
+        const next = await events.next();
+        if (next.done === true) {
+          break;
+        }
+        state = reduceConversation(state, next.value);
+      }
+    };
+
+    await drainUntil((current) => current.status === 'awaiting-input');
+    const pending = state.pending;
+    if (pending === undefined) throw new Error('沒有掛著的核准請求');
+    expect(pending.actions.map((action) => action.name)).toEqual(['echo']);
+    expect(pending.allowedDecisions).toEqual(['approve', 'reject']);
+    // 停住的時候工具還沒跑——不然這條驗的只是「畫面上有張卡片」。
+    expect(state.entries.filter((entry) => entry.kind === 'tool')).toEqual([]);
+
+    state = appendDecision(state, 'approve');
+    await client.inputRespond('gated', {
+      namespace: [...pending.namespace],
+      interrupt_id: pending.interruptId,
+      response: uniformDecisions(pending, 'approve'),
+    });
+
+    // 核准之後 echo 真的跑了。**不能只等 idle**：中斷那一輪自己也發 completed。
+    await drainUntil((current) =>
+      current.entries.some((entry) => entry.kind === 'tool' && entry.status === 'done'),
+    );
+    expect(
+      state.entries
+        .filter((entry) => entry.kind === 'tool')
+        .map((entry) => (entry.kind === 'tool' ? [entry.name, entry.status] : [])),
+    ).toEqual([['echo', 'done']]);
   });
 });

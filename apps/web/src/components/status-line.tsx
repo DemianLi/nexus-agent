@@ -2,8 +2,7 @@
  * 這一輪跑到哪了。
  *
  * `awaiting-input` **不是結束**：基座在中斷時照樣發 `lifecycle completed / root`，
- * 折疊器因此不讓那顆把狀態翻回 idle。核准的按鈕是下一張 PR（`feat/web-hitl`）的事，
- * 這裡只負責讓「它在等人」看得出來，而不是看起來當掉了。
+ * 折疊器因此不讓那顆把狀態翻回 idle。按鈕在 `ApprovalCard`，這一行只說它在等人。
  */
 
 import type { ConversationState } from '@nexus/wire';
@@ -12,10 +11,12 @@ export function StatusLine({
   state,
   connected,
   connectionError,
+  commandError,
 }: {
   state: ConversationState;
   connected: boolean;
   connectionError?: string;
+  commandError?: string;
 }) {
   if (connectionError !== undefined) {
     return (
@@ -38,11 +39,19 @@ export function StatusLine({
       </p>
     );
   }
+  if (commandError !== undefined) {
+    // 上行拒絕是 200 ＋ error 封包。不說出來就等於把 server 端那幾道圍欄的理由吞掉。
+    return (
+      <p className="text-destructive text-sm" role="status">
+        這個動作沒送出去：{commandError}
+      </p>
+    );
+  }
   if (state.status === 'awaiting-input') {
     const names = state.pending?.actions.map((action) => action.name).join('、') ?? '';
     return (
       <p className="text-sm" role="status">
-        等待核准：{names}（核准介面還沒做，見 feat/web-hitl）
+        等待核准：{names}
       </p>
     );
   }

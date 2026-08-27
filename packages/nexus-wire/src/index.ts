@@ -43,15 +43,18 @@ export type {
   ConversationEntry,
   ConversationState,
   ConversationStatus,
+  DecisionEntry,
   HumanEntry,
   PendingInput,
   ToolEntry,
 } from './conversation.js';
 export {
+  appendDecision,
   appendHumanTurn,
   emptyConversation,
   reduceAll,
   reduceConversation,
+  uniformDecisions,
 } from './conversation.js';
 
 export type { CommandResult, OpenEventsOptions, WireClient, WireClientOptions } from './client.js';

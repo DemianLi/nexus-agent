@@ -54,6 +54,17 @@ pnpm dev                                    # web（http://localhost:5173）
 `serve` 也吃 `--live`（或直接 `run serve:live`）—— 假模型的腳本只有四輪，問到第三句
 就會用完，畫面上會紅字說是為什麼。
 
+要在瀏覽器裡跑到核准那一段，換一份把工具標成要核准的清單：
+
+```bash
+pnpm --filter @nexus/harness run serve --plugins src/approval.fixture.ts
+```
+
+預設清單不觸發任何中斷，所以核准的按鈕沒有東西可按。這一份把 `echo` 與 `write_file`
+標起來，假模型的腳本正好兩個都會呼叫 —— 一條對話會停兩次，核准或拒絕都繼續得下去。
+**一批要嘛全核准要嘛全拒絕**：基座只要有一筆被拒，被核准的那幾筆也不會執行，
+而且線上連一顆事件都不會有，所以介面刻意不提供逐筆按。
+
 clone 之後各自設定一次，讓 `git fetch` / `git pull` 自動清掉遠端已刪除的分支：
 
 ```bash
