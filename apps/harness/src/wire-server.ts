@@ -88,8 +88,14 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
     })();
   });
 
-  await new Promise<void>((resolve) => {
-    server.listen(options.port ?? 0, host, resolve);
+  await new Promise<void>((resolve, reject) => {
+    // listen 失敗（最常見的是 port 被佔住）會走 'error' 事件而不是 callback——
+    // 不接的話它變成一個沒人處理的 error 事件，呼叫端只看到行程莫名其妙地死掉。
+    server.once('error', reject);
+    server.listen(options.port ?? 0, host, () => {
+      server.removeListener('error', reject);
+      resolve();
+    });
   });
   const address = server.address() as AddressInfo;
 
