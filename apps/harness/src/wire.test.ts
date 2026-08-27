@@ -6,9 +6,11 @@ import { commandPath, createWireClient, streamPath } from '@nexus/wire';
 import { createDeepAgent, StateBackend } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { createNexusAgent } from './agent-factory.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
+import { ThreadPump } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
 /**
@@ -61,7 +63,9 @@ function buildAgent(turns: readonly ScriptedTurn[], options: { gated?: boolean }
 
 /** 把 handler 當成 fetch 用——瀏覽器端跑的是同一份 client。 */
 function connect(agent: PumpAgent) {
-  const handler = createWireHandler({ createAgent: async () => agent });
+  const handler = createWireHandler({
+    createAgent: async () => ({ agent, dispose: async () => undefined }),
+  });
   const fetchImpl: typeof globalThis.fetch = async (input, init) =>
     handler.handle(new Request(input as string, init));
   return {
@@ -228,9 +232,29 @@ describe('線的兩端對得起來', () => {
     for await (const raw of run) {
       rawMethods.add(raw.method);
     }
-    expect([...rawMethods].sort()).toContain('updates');
-    expect([...rawMethods].sort()).toContain('tasks');
-    expect([...rawMethods].sort()).toContain('values');
+    expect([...rawMethods]).toContain('updates');
+    expect([...rawMethods]).toContain('tasks');
+    expect([...rawMethods]).toContain('values');
+
+    // **升版絆索，而且只能架在原始 run 這一側。** 線上那側已經被白名單濾過，基座多
+    // 一個頻道也會被靜靜濾掉，架在那裡的斷言恆真。這裡列的是 `@langchain/protocol`
+    // 的 `Channel` union（`custom:*` 那個前綴形另計），基座加頻道或改名時這裡會紅。
+    const protocolChannels = [
+      'values',
+      'updates',
+      'messages',
+      'tools',
+      'lifecycle',
+      'input',
+      'checkpoints',
+      'tasks',
+      'custom',
+    ];
+    for (const method of rawMethods) {
+      expect(
+        protocolChannels.some((channel) => method === channel || method.startsWith(`${channel}:`)),
+      ).toBe(true);
+    }
   });
 });
 
@@ -392,22 +416,62 @@ describe('失敗與拒絕', () => {
   });
 });
 
-describe('線上的 channel 名', () => {
-  it('觀測到的 method 全都在協定的 Channel 詞彙裡', async () => {
-    const { agent } = buildAgent(ONE_CALL, { gated: true });
-    const { client } = connect(agent);
-    const events = await client.openEvents('t9');
-    await client.runStart('t9', '記一筆。');
-    const frames = await collectUntil(events, (collected) =>
-      collected.some((frame) => isMethod(frame, 'input.requested')),
-    );
-    // 這是一條升版絆索：基座加了頻道、或把某個頻道改名，這裡會紅。
-    const known: readonly string[] = ['messages', 'tools', 'lifecycle', 'input.requested'];
-    for (const frame of frames) {
-      expect(known).toContain(frame.method);
+describe('下行的訂閱本身', () => {
+  it('斷線就從名冊上除名，不會愈積愈多', async () => {
+    const { agent } = buildAgent(ONE_CALL);
+    const pump = new ThreadPump(agent, 'direct');
+    expect(pump.subscriberCount).toBe(0);
+
+    const first = new AbortController();
+    const events = pump.subscribe(['messages'], first.signal);
+    // **註冊是同步的**：還沒開始抽，名冊上就已經有它了——所以「線開好了」之後才發生的
+    // frame 一顆都不會掉在中間。
+    expect(pump.subscriberCount).toBe(1);
+
+    await pump.submit({ kind: 'message', text: '記一筆。' });
+    const drained = await events.next();
+    expect(drained.done).toBe(false);
+
+    first.abort();
+    await events.next();
+    await events.return(undefined);
+    expect(pump.subscriberCount).toBe(0);
+
+    // 收線之後掛上來的訂閱直接結束，不是卡在那裡等。
+    pump.close();
+    const late = pump.subscribe(['messages']);
+    expect((await late.next()).done).toBe(true);
+  });
+});
+
+describe('線的兩端與真實組裝點對得上', () => {
+  it('createNexusAgent 出來的 agent 直接就是 PumpAgent，不必 cast', async () => {
+    const { agent, dispose } = await createNexusAgent({
+      model: new ScriptedChatModel({ turns: [{ content: '好。' }] }),
+      plugins: [],
+    });
+    try {
+      // **這一行才是斷言。** 其餘測試用 `createDeepAgent` 加 cast 是為了拿到腳本化的
+      // 模型與中斷設定；cast 會把型別檢查整個關掉，所以「真實 agent 滿足 PumpAgent」
+      // 這件事只有這裡驗得到——編不過就是 `PumpAgent` 的形狀錯了。
+      const assignable: PumpAgent = agent;
+      const handler = createWireHandler({
+        createAgent: async () => ({ agent: assignable, dispose: async () => undefined }),
+      });
+      const client = createWireClient({
+        baseUrl: BASE_URL,
+        fetch: async (input, init) => handler.handle(new Request(input as string, init)),
+      });
+      const events = await client.openEvents('real', { channels: ['messages'] });
+      await client.runStart('real', '哈囉。');
+      const frames = await collectUntil(
+        events,
+        (collected) => textsFromWire(collected).length === 1,
+      );
+      expect(textsFromWire(frames)).toEqual(['好。']);
+      await handler.close();
+    } finally {
+      await dispose();
     }
-    expect(new Set(frames.map((frame) => frame.method))).toEqual(
-      new Set(['lifecycle', 'messages', 'input.requested']),
-    );
   });
 });

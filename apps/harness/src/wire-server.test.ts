@@ -60,7 +60,9 @@ describe('接上真的 socket', () => {
       backend: new StateBackend(),
     }) as unknown as PumpAgent;
 
-    const handler = createWireHandler({ createAgent: async () => agent });
+    const handler = createWireHandler({
+      createAgent: async () => ({ agent, dispose: async () => undefined }),
+    });
     running = await startWireServer({ handler });
     // 這裡刻意用全域的 fetch，不注入——走的是真的 HTTP。
     const client = createWireClient({ baseUrl: running.url });

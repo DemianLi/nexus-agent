@@ -26,15 +26,27 @@ import {
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
 
+/**
+ * 一個 thread 的 agent 與它的清理函式。
+ *
+ * **`dispose` 是必填的**，因為忘記它的代價看不見：`createNexusAgent` 回的正是這個
+ * 形狀，而 MCP plugin 底下是 stdio 子行程——只收 pump 不 dispose agent 的話，
+ * 每開一個 thread 就漏一組子行程，而且不會有任何錯誤訊息。
+ */
+export interface ThreadAgent {
+  readonly agent: PumpAgent;
+  dispose(): Promise<void>;
+}
+
 export interface WireHandlerOptions {
   /** 一個 thread 一個 agent。第一次碰到這個 thread 時呼叫。 */
-  createAgent(threadId: string): Promise<PumpAgent>;
+  createAgent(threadId: string): Promise<ThreadAgent>;
 }
 
 export interface WireHandler {
   handle(request: Request): Promise<Response>;
-  /** 收掉所有 thread 的下行。 */
-  close(): void;
+  /** 收掉所有 thread 的下行，並把每個 thread 的 agent 清乾淨。 */
+  close(): Promise<void>;
 }
 
 const JSON_MEDIA_TYPE = 'application/json';
@@ -76,15 +88,19 @@ function requestedChannels(body: EventStreamRequest): readonly WireChannel[] | u
 }
 
 export function createWireHandler(options: WireHandlerOptions): WireHandler {
-  const pumps = new Map<string, ThreadPump>();
+  const threads = new Map<
+    string,
+    { readonly pump: ThreadPump; readonly dispose: () => Promise<void> }
+  >();
 
   async function pumpFor(threadId: string): Promise<ThreadPump> {
-    const existing = pumps.get(threadId);
+    const existing = threads.get(threadId);
     if (existing !== undefined) {
-      return existing;
+      return existing.pump;
     }
-    const pump = new ThreadPump(await options.createAgent(threadId), threadId);
-    pumps.set(threadId, pump);
+    const { agent, dispose } = await options.createAgent(threadId);
+    const pump = new ThreadPump(agent, threadId);
+    threads.set(threadId, { pump, dispose: () => dispose() });
     return pump;
   }
 
@@ -240,11 +256,14 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         ? handleStream(route.threadId, body, request.signal)
         : handleCommand(route.threadId, route.method, body);
     },
-    close() {
-      for (const pump of pumps.values()) {
-        pump.close();
+    async close() {
+      const opened = [...threads.values()];
+      threads.clear();
+      for (const thread of opened) {
+        thread.pump.close();
       }
-      pumps.clear();
+      // 一個 thread 清不乾淨不該擋住其他的。
+      await Promise.all(opened.map((thread) => thread.dispose().catch(() => undefined)));
     },
   };
 }
