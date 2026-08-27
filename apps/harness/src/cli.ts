@@ -257,6 +257,42 @@ const consolePrinter: Printer = {
   error: (line) => void console.error(line),
 };
 
+/** `updates` 串流裡「這一輪停在核准點」的那一筆的形狀。 */
+interface InterruptUpdate {
+  readonly value?: {
+    readonly actionRequests?: readonly { readonly name?: string; readonly description?: string }[];
+  };
+}
+
+/**
+ * 把中斷印出來。
+ *
+ * **這一段在補一個真的缺陷，不是加裝飾。** 中斷在 `updates` 串流裡是
+ * `{ __interrupt__: [...] }`，值是一個陣列而不是 `{ messages }`，所以底下那個印訊息
+ * 的迴圈對它一個字都印不出來——這一輪就這樣結束，人看到的是模型講到一半忽然沒了，
+ * 而工具其實沒跑。停在核准點與正常收工在畫面上長得一模一樣，是最壞的那種相同。
+ *
+ * 這一版**只負責說**，不負責問。核准介面（收決定、`Command({ resume })` 送回去）是
+ * 開發計劃 Phase 5 `feat/web-hitl` 的事，所以這裡明說這個入口按不了核准——
+ * 講清楚做不到，比讓人對著空白畫面猜要好。
+ *
+ * @param update - `__interrupt__` 那一筆的內容。
+ * @param printer - 輸出去處。
+ */
+function printInterrupt(update: unknown, printer: Printer): void {
+  const requests = (Array.isArray(update) ? (update as InterruptUpdate[]) : []).flatMap(
+    (entry) => entry.value?.actionRequests ?? [],
+  );
+  const listed =
+    requests.map((request) => `${request.name ?? '(未具名)'}：${request.description ?? '未說明'}`) ;
+
+  printer.log('[核准] 這一輪停在核准點，下列工具還沒執行：');
+  for (const line of listed.length > 0 ? listed : ['(基座沒給明細)']) {
+    printer.log(`[核准]   ${line}`);
+  }
+  printer.log('[核准] 這個入口還不能收核准決定，所以這一輪到此為止。');
+}
+
 /**
  * 跑一輪，邊跑邊印。
  *
@@ -280,6 +316,10 @@ export async function runTurn(agent: NexusAgent, input: string, printer: Printer
     }
 
     for (const [node, update] of Object.entries(payload as Record<string, unknown>)) {
+      if (node === '__interrupt__') {
+        printInterrupt(update, printer);
+        continue;
+      }
       const messages = (update as { messages?: BaseMessage[] }).messages ?? [];
       for (const message of messages) {
         const label = message.name ? `${node}/${message.name}` : node;
