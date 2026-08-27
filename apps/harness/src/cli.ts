@@ -29,6 +29,7 @@ import { ContainedFilesystemBackend } from './contained-backend.js';
 import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MODEL_ID } from './live-model.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
 import type { ScriptedTurn } from './scripted-model.js';
 
 /** 一次呼叫解析出來的東西。`prompt` 缺席即 REPL。 */
@@ -385,6 +386,14 @@ export interface RunCliOptions {
   readonly output: NodeJS.WritableStream;
   readonly printer?: Printer;
   readonly cwd?: string;
+  /**
+   * 環境變數，只用來讀 tracing 的披露。省略即 `process.env`。
+   *
+   * 開這個口是為了讓披露測得起來：`process.env` 一改就會污染同檔案裡後面的每一條
+   * （`langsmith` 的 client 是 module 層的 singleton，第一次觸發時的設定就定生死，
+   * 見 `tracing.test.ts`）。
+   */
+  readonly env?: NodeJS.ProcessEnv;
 }
 
 /**
@@ -424,6 +433,12 @@ export async function runCli(options: RunCliOptions): Promise<void> {
         ? '檔案系統：虛擬（不碰磁碟）'
         : `檔案系統：${resolve(options.cwd ?? process.cwd(), invocation.workspace)}（變更圍堵在它之下）`,
     );
+    // 第三行是**披露**，不是設定。tracing 開沒開不由這支程式決定——基座讀到環境變數就
+    // 自己掛 tracer——所以這裡唯一能做的是把「現在是什麼狀態」講出來。不講的話，
+    // 「工具參數正在往第三方送」與「什麼都沒送」在畫面上一模一樣。
+    for (const line of formatTracingDisclosure(readTracingDisclosure(options.env ?? process.env))) {
+      printer.log(line);
+    }
 
     if (invocation.prompt !== undefined) {
       printer.log(`> ${invocation.prompt}\n`);

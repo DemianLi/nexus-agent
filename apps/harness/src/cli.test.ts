@@ -137,6 +137,53 @@ describe('一次性模式', () => {
 });
 
 /**
+ * banner 說得出這一輪會不會有東西離開這台機器。
+ *
+ * tracing 開沒開不由 CLI 決定——基座讀到環境變數就自己掛 tracer，我們一行都沒寫。
+ * 所以這裡唯一能做的是把狀態講出來；不講的話，「工具參數正在往第三方送」與「什麼都
+ * 沒送」在畫面上一模一樣。與 `CLI 遇到核准中斷` 同一型的毛病。
+ *
+ * 實際上送了什麼在 [`tracing.test.ts`](./tracing.test.ts) 驗；這裡只問「有沒有說」。
+ * `env` 從外面傳進來，不動 `process.env`——動了會污染同檔案後面的每一條。
+ */
+describe('banner 的 tracing 披露', () => {
+  it('關著的時候明說關著', async () => {
+    const { printer, stdout } = recorder();
+    await runCli({
+      argv: ['把這句話回聲一次。'],
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer,
+      env: {},
+    });
+    expect(stdout()).toContain('追蹤：關閉');
+  });
+
+  it('開著的時候說出是誰開的、送去哪、送的是原文', async () => {
+    const { printer, stdout } = recorder();
+    await runCli({
+      argv: ['把這句話回聲一次。'],
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer,
+      // 只是給披露看的假設定，不會讓這一輪真的送出任何東西——
+      // 真正的開關是 `process.env`，這裡沒碰。
+      env: {
+        LANGSMITH_TRACING: 'true',
+        LANGSMITH_ENDPOINT: 'https://example.invalid',
+        LANGSMITH_PROJECT: 'demo',
+        LANGSMITH_API_KEY: 'lsv2_pt_不該出現在畫面上',
+      },
+    });
+    const out = stdout();
+    expect(out).toContain('追蹤：開啟（LANGSMITH_TRACING）');
+    expect(out).toContain('https://example.invalid');
+    expect(out).toContain('原文');
+    expect(out).not.toContain('lsv2_pt_不該出現在畫面上');
+  });
+});
+
+/**
  * 停在核准點的那一輪，人看得出來它停了。
  *
  * 中斷在 `updates` 串流裡是 `{ __interrupt__: [...] }`——值是陣列，不是 `{ messages }`，
