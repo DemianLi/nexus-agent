@@ -67,7 +67,24 @@ export interface ToolEntry {
   readonly attribution: Attribution;
 }
 
-export type ConversationEntry = HumanEntry | AiEntry | ToolEntry;
+/**
+ * 人在核准點上按了什麼。
+ *
+ * **這一則只有本地記得。** 實測下行完全不回聲決定：中斷發生在 `afterModel`，
+ * tools node 從沒跑，而拒絕產生的那則 error ToolMessage 走 `updates`（白名單外）。
+ * 「全拒絕」與「一核准一拒絕」在下行上一模一樣——都只有模型再講一輪話。所以決定
+ * 要跟 {@link appendHumanTurn} 一樣在送出的那一刻自己寫進來，那不是裝飾，是唯一的紀錄。
+ */
+export interface DecisionEntry {
+  readonly kind: 'decision';
+  readonly id: string;
+  /** 詞彙由基座定（`approve` / `reject`），這一層不窄化它。 */
+  readonly decision: string;
+  /** 這個決定套到哪幾筆工具呼叫上——全有全無，所以是全部。 */
+  readonly actions: readonly string[];
+}
+
+export type ConversationEntry = HumanEntry | AiEntry | ToolEntry | DecisionEntry;
 
 /**
  * 這一輪的狀態。
@@ -79,11 +96,25 @@ export type ConversationStatus = 'idle' | 'running' | 'awaiting-input' | 'failed
 
 export interface PendingInput {
   readonly interruptId: string;
+  /**
+   * 這顆中斷掛在哪一層。回答時原樣送回去。
+   *
+   * 目前 handler 用不到它（`Command({ resume })` 直接接在 root 上），但協定的
+   * `input.respond` 要它，而下行只發這一次——這裡丟掉就再也接不回來了。
+   */
+  readonly namespace: readonly string[];
   readonly actions: readonly {
     readonly name: string;
     readonly args: unknown;
     readonly description?: string;
   }[];
+  /**
+   * 這一批**共同**允許的決定——逐筆 `allowedDecisions` 的交集。
+   *
+   * 交集而不是 `[0]`、也不是聯集：一個決定要套到整批上（全有全無，見
+   * {@link DecisionEntry}），而基座對不在那一筆清單裡的決定是當場拋
+   * （`langchain@1.5.10`，`hitl.js:407`）——多出來的那顆按鈕按下去是整場 run 死。
+   */
   readonly allowedDecisions: readonly string[];
 }
 
@@ -115,6 +146,42 @@ export function appendHumanTurn(state: ConversationState, text: string): Convers
   return { ...state, entries: [...state.entries, entry], status: 'running' };
 }
 
+/**
+ * 把人剛按下去的那個決定放進來，並把核准請求收掉。
+ *
+ * 跟 {@link appendHumanTurn} 同一個理由：**線上不回聲**。差別在這件事更嚴重——
+ * 使用者說的話至少還會以模型的回應間接留下痕跡，而一個被拒絕的工具呼叫在下行上
+ * 一顆 frame 都沒有（實測），這則 entry 是它存在過的唯一證據。
+ *
+ * 沒有掛著的核准請求時原樣回傳：重複按下去的第二次不該憑空長出一則紀錄。
+ */
+export function appendDecision(state: ConversationState, decision: string): ConversationState {
+  const pending = state.pending;
+  if (pending === undefined) {
+    return state;
+  }
+  const entry: DecisionEntry = {
+    kind: 'decision',
+    id: `decision-${pending.interruptId}`,
+    decision,
+    actions: pending.actions.map((action) => action.name),
+  };
+  const { pending: _cleared, ...rest } = state;
+  return { ...rest, entries: [...state.entries, entry], status: 'running' };
+}
+
+/**
+ * 一個決定攤成基座要的那份回覆。
+ *
+ * **`decisions` 是位置對應的，而且長度不符會殺掉整場 run**：基座逐 index 把決定配到
+ * 被中斷的工具呼叫上，`decisions.length !== interruptToolCalls.length` 當場拋，線上
+ * 就是一顆 `lifecycle failed / root`。全有全無的介面因此要送滿 `actions.length` 筆
+ * 同型決定——這個攤平放在這裡，是為了讓「基座這一版的回覆長什麼樣」只有一個地方知道。
+ */
+export function uniformDecisions(pending: PendingInput, decision: string): unknown {
+  return { decisions: pending.actions.map(() => ({ type: decision })) };
+}
+
 export function reduceConversation(state: ConversationState, event: Event): ConversationState {
   const seq = event.seq;
   if (seq !== undefined && seq <= state.lastSeq) {
@@ -132,7 +199,7 @@ export function reduceConversation(state: ConversationState, event: Event): Conv
     case 'lifecycle':
       return reduceLifecycle(advanced, namespace, event.params.data);
     case 'input.requested':
-      return reduceInputRequested(advanced, event.params.data);
+      return reduceInputRequested(advanced, namespace, event.params.data);
     default:
       return advanced;
   }
@@ -326,7 +393,15 @@ function reduceLifecycle(
     return state;
   }
   if (data.event === 'running') {
-    return { ...state, status: 'running', error: undefined };
+    // **順帶把掛著的核准請求收掉。** 按下去的那一端在 `appendDecision` 就清掉了，
+    // 這裡收的是**沒按的那一端**：同一條 thread 上的另一條下行也看得到這顆 running，
+    // 那張卡片因此不會留在畫面上等一個已經被別人回答掉的問題。
+    //
+    // **僅止於此。** 決定本身是本地的（見 {@link appendDecision}），所以旁觀的那一端
+    // 只知道「不必再問了」，不知道人按了什麼——它的 transcript 上沒有那一則。這條線
+    // 不回聲決定，這一層補不出來。
+    const { pending: _answered, ...rest } = state;
+    return { ...rest, status: 'running', error: undefined };
   }
   if (data.event === 'failed') {
     return { ...state, status: 'failed', error: data.error ?? '未指名的錯誤' };
@@ -346,13 +421,44 @@ interface InputRequestedData {
   };
 }
 
-function reduceInputRequested(state: ConversationState, raw: unknown): ConversationState {
+function reduceInputRequested(
+  state: ConversationState,
+  namespace: readonly string[],
+  raw: unknown,
+): ConversationState {
   const data = raw as InputRequestedData;
   const actions = data.payload?.actionRequests ?? [];
-  const allowed = data.payload?.reviewConfigs?.[0]?.allowedDecisions ?? [];
   return {
     ...state,
     status: 'awaiting-input',
-    pending: { interruptId: data.interrupt_id, actions, allowedDecisions: allowed },
+    pending: {
+      interruptId: data.interrupt_id,
+      namespace,
+      actions,
+      allowedDecisions: intersectDecisions(data.payload?.reviewConfigs ?? []),
+    },
   };
+}
+
+/**
+ * 逐筆 `allowedDecisions` 的交集。
+ *
+ * `reviewConfigs` 與 `actionRequests` 是平行陣列，**逐筆詞彙真的分得開**（實測同一顆
+ * 中斷上一筆是 `["approve","reject"]`、另一筆是 `["approve"]`）。這一批共用一個決定，
+ * 所以只有每一筆都允許的那些才按得下去。
+ *
+ * 經由我們的組裝這種分歧到不了 —— `packages/nexus-core` 的 fold 對每個 gated tool
+ * 固定發 `["approve","reject"]`。**那正是這裡要交集而不是讀 `[0]` 的理由**：那是一個
+ * 別處維持著的不變量，這一層不該把它當前提。
+ */
+function intersectDecisions(
+  configs: readonly { readonly allowedDecisions: readonly string[] }[],
+): readonly string[] {
+  const first = configs[0];
+  if (first === undefined) {
+    return [];
+  }
+  return first.allowedDecisions.filter((decision) =>
+    configs.every((config) => config.allowedDecisions.includes(decision)),
+  );
 }

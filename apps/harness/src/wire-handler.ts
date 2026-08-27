@@ -195,6 +195,18 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       if (typeof params?.assistant_id !== 'string') {
         return json(errorResponse(command.id, 'invalid_argument', 'run.start 缺 assistant_id'));
       }
+      if (pump.pending !== undefined) {
+        // **基座這時不會擋，它會靜靜地把中斷丟掉**：新的一輪照跑，那個等著核准的工具
+        // 既沒執行也沒被拒絕，而且不會再發第二顆 `input.requested`（實測）。靜靜照做
+        // 等於讓一道核准閘門無聲消失，所以這裡明著回錯——同 `since` 那條的理由。
+        return json(
+          errorResponse(
+            command.id,
+            'invalid_argument',
+            '這條 thread 停在核准點：先用 input.respond 回答它，再說下一句話',
+          ),
+        );
+      }
       const text = firstHumanText(params.input);
       if (text === undefined) {
         return json(
@@ -214,6 +226,40 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     }
     if (typeof params?.interrupt_id !== 'string') {
       return json(errorResponse(command.id, 'invalid_argument', 'input.respond 缺 interrupt_id'));
+    }
+    const pending = pump.pending;
+    if (pending === undefined) {
+      return json(
+        errorResponse(command.id, 'no_such_interrupt', '這條 thread 上沒有等著回答的中斷'),
+      );
+    }
+    if (pending.interruptId !== params.interrupt_id) {
+      // **對不上就是對不上，不要拿它去回答現在那顆。** 基座只認「有沒有中斷掛著」、
+      // 不比對 id：實測拿掉這道比對之後，一個**完全不存在**的 interrupt_id 照樣把
+      // 現在掛著的那顆核准掉，工具真的跑了。所以一個過期的分頁按下核准會落在另一顆
+      // 中斷上——那是替別人的問題按下核准。
+      return json(
+        errorResponse(
+          command.id,
+          'no_such_interrupt',
+          `interrupt_id "${params.interrupt_id}" 不是目前掛著的那顆`,
+        ),
+      );
+    }
+    const decisions = (params.response as { decisions?: unknown } | null)?.decisions;
+    if (
+      pending.actionCount > 0 &&
+      (!Array.isArray(decisions) || decisions.length !== pending.actionCount)
+    ) {
+      // 基座逐 index 把決定配到被中斷的工具呼叫上，長度不符當場拋——線上就是一顆
+      // `lifecycle failed / root`，整條 thread 死在一個客戶端的 bug 上。擋在這裡。
+      return json(
+        errorResponse(
+          command.id,
+          'invalid_argument',
+          `這顆中斷要 ${pending.actionCount} 筆決定，收到 ${Array.isArray(decisions) ? decisions.length : 0} 筆`,
+        ),
+      );
     }
     return json(
       successResponse(command.id, {

@@ -1,6 +1,7 @@
 import type { WireClient } from '@nexus/wire';
 import { useState } from 'react';
 
+import { ApprovalCard } from '@/components/approval-card';
 import { StatusLine } from '@/components/status-line';
 import { Transcript } from '@/components/transcript';
 import { Button } from '@/components/ui/button';
@@ -17,7 +18,15 @@ export function App({ client }: { client?: WireClient } = {}) {
   const conversation = useConversation(client === undefined ? {} : { client });
   const [draft, setDraft] = useState('');
 
-  const busy = conversation.state.status === 'running';
+  const pending = conversation.state.pending;
+  // **`awaiting-input` 也算忙**。少了它，等核准時送得出下一句話——而基座那時會把
+  // 中斷靜靜丟掉：那個工具既沒執行也沒被拒絕，也不會再問第二次（實測）。
+  // 一顆按鈕都長不出來的核准請求（交集是空的）**不算忙**：那時卡片沒有出路，
+  // 再把送出框鎖起來就是整條對話卡死。基座一定會發 `reviewConfigs`，但代價不對稱。
+  const stuck = pending !== undefined && pending.allowedDecisions.length === 0;
+  const busy =
+    conversation.state.status === 'running' ||
+    (conversation.state.status === 'awaiting-input' && !stuck);
   const canSend = conversation.connected && !busy && draft.trim() !== '';
 
   return (
@@ -30,11 +39,21 @@ export function App({ client }: { client?: WireClient } = {}) {
           {...(conversation.connectionError === undefined
             ? {}
             : { connectionError: conversation.connectionError })}
+          {...(conversation.commandError === undefined
+            ? {}
+            : { commandError: conversation.commandError })}
         />
       </header>
 
-      <section className="flex-1">
+      <section className="flex flex-1 flex-col gap-4">
         <Transcript state={conversation.state} />
+        {pending !== undefined && (
+          <ApprovalCard
+            pending={pending}
+            busy={!conversation.connected}
+            onDecide={(decision) => void conversation.respond(decision)}
+          />
+        )}
       </section>
 
       <form
@@ -56,7 +75,13 @@ export function App({ client }: { client?: WireClient } = {}) {
           id="prompt"
           className="border-input bg-background flex-1 rounded-md border px-3 py-2 text-sm"
           value={draft}
-          placeholder={conversation.connected ? '說點什麼…' : '連線中…'}
+          placeholder={
+            conversation.state.status === 'awaiting-input' && !stuck
+              ? '先回答上面那個核准請求…'
+              : conversation.connected
+                ? '說點什麼…'
+                : '連線中…'
+          }
           onChange={(event) => setDraft(event.target.value)}
         />
         <Button type="submit" disabled={!canSend}>

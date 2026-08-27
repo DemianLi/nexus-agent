@@ -45,6 +45,7 @@ function textFrames(id: string, namespace: readonly string[], body: string): Eve
 /** 一個可以隨時推 frame 進去的假 client。 */
 function fakeClient(events: readonly Event[]) {
   const sent: string[] = [];
+  const responded: unknown[] = [];
   const client: WireClient = {
     openEvents: async () =>
       (async function* stream() {
@@ -57,9 +58,26 @@ function fakeClient(events: readonly Event[]) {
       sent.push(text);
       return { type: 'success', id: 1, result: {} };
     },
-    inputRespond: async () => ({ type: 'success', id: 2, result: {} }),
+    inputRespond: async (_threadId, params) => {
+      responded.push(params);
+      return { type: 'success', id: 2, result: {} };
+    },
   };
-  return { client, sent };
+  return { client, sent, responded };
+}
+
+/** 一顆核准請求。逐筆詞彙照基座的形狀給——`reviewConfigs` 與 `actionRequests` 平行。 */
+function approvalFrame(actions: readonly { name: string; allowed: readonly string[] }[]): Event {
+  return frame('input.requested', ['tools:a'], {
+    interrupt_id: 'int-1',
+    payload: {
+      actionRequests: actions.map((action) => ({ name: action.name, args: { n: action.name } })),
+      reviewConfigs: actions.map((action) => ({
+        actionName: action.name,
+        allowedDecisions: [...action.allowed],
+      })),
+    },
+  });
 }
 
 describe('對話介面', () => {
@@ -119,5 +137,99 @@ describe('對話介面', () => {
     };
     render(<App client={client} />);
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('連不上 agent'));
+  });
+});
+
+describe('核准請求', () => {
+  it('畫出來、按下去，而且一個決定送滿整批', async () => {
+    seq = 0;
+    const { client, responded } = fakeClient([
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      approvalFrame([
+        { name: 'alpha', allowed: ['approve', 'reject'] },
+        { name: 'beta', allowed: ['approve', 'reject'] },
+      ]),
+      // 中斷那一輪照樣發 completed——它不能把卡片收掉。
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+    ]);
+    render(<App client={client} />);
+
+    await waitFor(() => expect(screen.getByTestId('approval-card')).toBeTruthy());
+    expect(screen.getByText('alpha')).toBeTruthy();
+    expect(screen.getByText('beta')).toBeTruthy();
+    // 等核准時送不出下一句話：基座那時會把中斷靜靜丟掉。
+    expect(screen.getByRole('button', { name: '送出' }).hasAttribute('disabled')).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: '全部核准' }));
+
+    await waitFor(() => expect(responded.length).toBe(1));
+    // **兩筆決定，不是一筆**：基座逐 index 配對，長度不符會殺掉整場 run。
+    expect(responded[0]).toEqual({
+      namespace: ['tools:a'],
+      interrupt_id: 'int-1',
+      response: { decisions: [{ type: 'approve' }, { type: 'approve' }] },
+    });
+    // 按完卡片就收掉，而且畫面上留下人按了什麼——線上不會回聲這件事。
+    await waitFor(() => expect(screen.queryByTestId('approval-card')).toBeNull());
+    expect(screen.getByTestId('decision-entry').textContent).toContain('已核准');
+  });
+
+  it('一顆按鈕都長不出來時不把對話鎖死', async () => {
+    seq = 0;
+    // 交集是空的（基座一定會發 reviewConfigs，所以這是防呆）——那時卡片沒有出路，
+    // 再把送出框鎖起來就是整條對話卡死。
+    const { client } = fakeClient([approvalFrame([{ name: 'alpha', allowed: [] }])]);
+    render(<App client={client} />);
+
+    await waitFor(() => expect(screen.getByTestId('approval-card')).toBeTruthy());
+    expect(screen.getByText(/這裡按不了/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '換條路' } });
+    expect(screen.getByRole('button', { name: '送出' }).hasAttribute('disabled')).toBe(false);
+  });
+
+  it('按鈕只長出交集裡的那些', async () => {
+    seq = 0;
+    const { client } = fakeClient([
+      approvalFrame([
+        { name: 'alpha', allowed: ['approve', 'reject'] },
+        { name: 'beta', allowed: ['approve'] },
+      ]),
+    ]);
+    render(<App client={client} />);
+
+    await waitFor(() => expect(screen.getByTestId('approval-card')).toBeTruthy());
+    expect(screen.getByRole('button', { name: '全部核准' })).toBeTruthy();
+    // 多出來的那顆「全部拒絕」按下去是整場 run 死——基座對 beta 不接受 reject。
+    expect(screen.queryByRole('button', { name: '全部拒絕' })).toBeNull();
+  });
+});
+
+describe('上行被拒絕的時候', () => {
+  it('說出來，而不是靜靜吞掉——那是 200 ＋ error 封包', async () => {
+    seq = 0;
+    const client: WireClient = {
+      openEvents: async () =>
+        (async function* stream() {
+          yield frame('lifecycle', [], { event: 'completed', graph_name: 'root' });
+          await new Promise(() => undefined);
+        })(),
+      runStart: async () => ({
+        type: 'error',
+        id: 1,
+        error: 'invalid_argument',
+        message: '這條 thread 停在核准點：先用 input.respond 回答它，再說下一句話',
+      }),
+      inputRespond: async () => ({ type: 'success', id: 2, result: {} }),
+    };
+    render(<App client={client} />);
+
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '一句話' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toContain('這個動作沒送出去'),
+    );
+    expect(screen.getByRole('status').textContent).toContain('停在核准點');
   });
 });

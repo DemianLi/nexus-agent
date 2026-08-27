@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { ConversationState, Event } from './index.js';
 import {
+  appendDecision,
   appendHumanTurn,
   emptyConversation,
   reduceAll,
   reduceConversation,
+  uniformDecisions,
 } from './conversation.js';
 
 /**
@@ -141,5 +143,89 @@ describe('折疊器', () => {
         attribution: { kind: 'unattributed', namespace: ['tools:a', 'model_request:x'] },
       },
     ]);
+  });
+});
+
+/** 一顆核准請求的 frame。`configs` 省略即每一筆都是完整詞彙。 */
+function inputRequested(
+  actions: readonly string[],
+  configs?: readonly (readonly string[])[],
+): Event {
+  return frame('input.requested', ['tools:a'], {
+    interrupt_id: 'int-1',
+    payload: {
+      actionRequests: actions.map((name) => ({ name, args: { n: name } })),
+      reviewConfigs: actions.map((name, index) => ({
+        actionName: name,
+        allowedDecisions: [...(configs?.[index] ?? ['approve', 'reject'])],
+      })),
+    },
+  });
+}
+
+describe('核准請求', () => {
+  it('允許的決定取逐筆交集——不是第一筆，也不是聯集', () => {
+    seq = 0;
+    const state = reduceAll(emptyConversation(), [
+      inputRequested(['alpha', 'beta'], [['approve', 'reject'], ['approve']]),
+    ]);
+    // 讀 `[0]` 會多出一顆「全部拒絕」，而基座對不在那一筆清單裡的決定是當場拋
+    // ——按下去是整場 run 死。實測基座真的會讓逐筆詞彙分歧。
+    expect(state.pending?.allowedDecisions).toEqual(['approve']);
+    expect(state.status).toBe('awaiting-input');
+  });
+
+  it('namespace 留著——下行只發這一次，丟了就接不回去', () => {
+    seq = 0;
+    const state = reduceAll(emptyConversation(), [inputRequested(['alpha'])]);
+    expect(state.pending?.namespace).toEqual(['tools:a']);
+    expect(state.pending?.interruptId).toBe('int-1');
+  });
+
+  it('一個決定攤成整批同型，因為長度不符會殺掉整場 run', () => {
+    seq = 0;
+    const state = reduceAll(emptyConversation(), [inputRequested(['alpha', 'beta'])]);
+    const pending = state.pending;
+    if (pending === undefined) throw new Error('沒有掛著的核准請求');
+    expect(uniformDecisions(pending, 'reject')).toEqual({
+      decisions: [{ type: 'reject' }, { type: 'reject' }],
+    });
+  });
+
+  it('按下去之後請求就收掉，而且那一則是它存在過的唯一紀錄', () => {
+    seq = 0;
+    const asked = reduceAll(emptyConversation(), [inputRequested(['alpha', 'beta'])]);
+    const decided = appendDecision(asked, 'reject');
+
+    expect(decided.pending).toBeUndefined();
+    expect(decided.status).toBe('running');
+    expect(decided.entries).toEqual([
+      { kind: 'decision', id: 'decision-int-1', decision: 'reject', actions: ['alpha', 'beta'] },
+    ]);
+    // 沒有掛著的請求時再按一次不該憑空長出第二則。
+    expect(appendDecision(decided, 'reject')).toEqual(decided);
+  });
+
+  it('別人按掉的時候，沒按的那一端靠 lifecycle running 收掉卡片', () => {
+    seq = 0;
+    const asked = reduceAll(emptyConversation(), [inputRequested(['alpha'])]);
+    expect(asked.pending).toBeDefined();
+
+    const resumed = reduceConversation(
+      asked,
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+    );
+    expect(resumed.pending).toBeUndefined();
+    expect(resumed.status).toBe('running');
+  });
+
+  it('中斷那一輪的 completed 不會把狀態翻回就緒', () => {
+    seq = 0;
+    const state = reduceAll(emptyConversation(), [
+      inputRequested(['alpha']),
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+    ]);
+    expect(state.status).toBe('awaiting-input');
+    expect(state.pending).toBeDefined();
   });
 });
