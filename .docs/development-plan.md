@@ -67,7 +67,7 @@ registry.memory.addSource(path); // 純累加；路徑格式在註冊期擋（�
 | 記憶層 | memory（AGENTS.md）+ skills + summarization/offloading | deepagentsjs 內建 | **三個都在，但都是「注入」不是「保存」**——見第 5 節 Phase 3 |
 | 執行與工具層 | tools + 虛擬 FS + 權限 + sandbox 協定與 provider（內建）＋ QuickJS 直譯器（`@nexus/plugin-quickjs`）＋ MCP（`@langchain/mcp-adapters`） | deepagentsjs 內建，QuickJS 與 MCP 除外 | 完整 |
 | 反思與反饋層 | 結果校驗 middleware + LangSmith 回饋 | **自建** | **薄覆蓋**，強化見 issue #16 |
-| 輸出層 | typed streaming（基座 v3 `streamEvents`）→ apps/web UI | deepagentsjs 內建；UI 與**傳輸**自建 | **串流的形狀完整，但基座自己標為 experimental；瀏覽器到 agent 之間的傳輸已定案（上行 HTTP、下行單向 SSE，第 7 節決策 6）但還沒有實作** —— 見第 5 節 Phase 5 |
+| 輸出層 | typed streaming（基座 v3 `streamEvents`）→ apps/web UI | deepagentsjs 內建；**協定用基座的 `@langchain/protocol`**，pump／handler／client 與 UI 自建 | **串流的形狀完整，但基座自己標為 experimental；瀏覽器到 agent 之間的線已接好（上行 HTTP、下行單向 SSE，第 7 節決策 6），UI 待做** —— 見第 5 節 Phase 5 |
 
 harness 五大範圍對應：解析標準化（PluginRegistry + zod）、編排迴圈（deepagents）、記憶層（內建，但只注入不保存——見第 5 節 Phase 3）、工具層（內建）、結果校驗（自建 plugin——deepagents 無現成方案，為驗證插件架構價值的第一個實戰 plugin）。
 
@@ -76,11 +76,14 @@ harness 五大範圍對應：解析標準化（PluginRegistry + zod）、編排�
 ```
 packages/nexus-core      契約：NexusPlugin 型別、zod manifest、PluginRegistry 九個註冊點 ＋ lifecycle 通道、fold
 packages/nexus-plugin-*  plugin 系列，只相依 @nexus/core
-apps/harness             組裝點：agent 工廠、訊息標準化、CLI；唯一呼叫 createDeepAgent 的地方
-apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現有骨架續用；**與 agent 之間的傳輸已定案未實作**，見第 7 節決策 6）
+packages/nexus-wire      web 與 agent 之間那條線的協定：封包型別、SSE codec、route 與 channel 白名單、瀏覽器端 client
+apps/harness             組裝點：agent 工廠、訊息標準化、CLI、下行 pump 與 fetch handler；唯一呼叫 createDeepAgent 的地方
+apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現有骨架續用；線已接好，UI 待做，見第 7 節決策 6）
 ```
 
 `pnpm-workspace.yaml` 的 glob 為 `apps/*` 與 `packages/*`。
+
+**`packages/nexus-wire` 存在的唯一理由是它有兩個消費者**：Node 那端的 pump 與 handler 在 `apps/harness`，瀏覽器那端在 `apps/web`，而 SSE 的編解碼、route 常數與 channel 白名單兩邊必須是同一份。這也照 dsh —— 它把 SSE 的 frame 解碼放在**共用**的 `AbstractApiClient` 而不是各載體各寫一份。它只 `import type` 基座的 `@langchain/protocol`，沒有任何執行期相依，所以 `apps/web` 不會因此把 Node 那半邊拖進瀏覽器（`deepagents` 的 `./browser` 進入點少掉 16 個 Node 專屬匯出，而我們的 `ContainedFilesystemBackend` 繼承的正是其中的 `FilesystemBackend`）。
 
 **`packages/nexus-core` 在 Phase 1 就拆出**（[#30](https://github.com/DemianLi/nexus-agent/issues/30)），不等 Phase 2。切線是**誰呼叫 `createDeepAgent`**：core 是純轉換層，只產出參數；harness 發出唯一那次呼叫。core 相依 deepagents 的型別是必然的（`subagents.register` 收 `SubAgent`、`backend.mount` 收 backend），「core 不碰 deepagents」不是可行的切線。
 
@@ -118,6 +121,8 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
 判準**鍵在失敗浮現的位置，不在套件的用途**。`feat/sandbox-plugin` 的 `quickjs-emscripten` 是第 3 層而不是第 1 層：它跑不受信任的程式碼，但它自己是純 WASM，沒有安裝腳本、沒有 node-gyp、沒有伺服器契約（實測：`npm view quickjs-emscripten` 無 `gypfile`、無 `install` script，相依全是它自己的 `@jitl/quickjs-wasmfile-*`）。把它歸進第 1 層是把用途當判準。
 
 這一分層照 dsh 的實際做法（`references/deepseek-harness`，實測其 package.json）：絕大多數 `^`；鎖死的那批是 `e2b`（遠端沙箱服務 client）、`node-pty`（`install: node scripts/prebuild.js || node-gyp rebuild`）、`@openai/codex` 與 `@anthropic-ai/claude-agent-sdk`（外部 agent 二進位）、`@agentclientprotocol/sdk`（跨行程協議對端）——全部都是「契約的另一端不在 npm 上」。
+
+**`@langchain/protocol` 是第 3 層，但 `^0.0.18` 讀起來會騙人。** npm 的 semver 對 `0.0.x` 不放行任何一位，所以 `^0.0.18` **在效果上等於鎖死 0.0.18** —— 寫成 `^` 只是遵守「其餘全部用 `^`」的規則，不代表它跟得到新版。判準沒變（它是純型別套件，解析不到或形狀變了 typecheck 當場紅，semver 管得到），但它同時被 `@langchain/langgraph` 與 `@langchain/langgraph-sdk` 拉進來，屬於上一段那條「跨 package 共享單一實例」的名單：`packages/nexus-wire`、`apps/harness`、`apps/web` 三處的範圍必須一字不差。它的 `exports` 把 `types` 與 `default` 都指向未編譯的 `protocol.ts`，**所以只能 `import type`** —— 一旦出現值層 import，plain node 那條路會當場爆。
 
 **跨 package 共享單一實例的套件，範圍在每個 package 都要一模一樣**（目前是 `zod` 四處、`deepagents` 兩處、`@langchain/core` 多處）。讓它們各自漂移會把 `pnpm why zod -r` 的單一實例保證變回運氣。
 
@@ -291,10 +296,10 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
   - **`ScriptedChatModel` 在 v3 這條路上是瞎的，而且是靜默的。** 同一份腳本：`invoke` 與 v2 `streamEvents` 都跑到工具；**v3 只跑一輪模型就結束，工具從沒被呼叫，`run.toolCalls` 是空的，而且沒有任何東西拋錯**。原因是兩段接不上 —— v3 掛的 callback handler 讓 `_generateUncached` 走 `_streamChatModelEvents` 那一支（`@langchain/core@1.2.9`，`chat_models.js:231`），而它的預設實作是 `convertChunksToEvents(this._streamResponseChunks(...))`，那個轉換器**只讀 `msg.tool_call_chunks`、從不讀 `msg.tool_calls`**（`compat.js:174`），我們的假模型偏偏把工具呼叫掛在後者。第二個坑緊接著：`tool_call_chunk` 的 `index` 與文字 content block 共用同一個編號空間，`index: 0` 會撞上那段文字的 block 並把它寫壞（實測 `index: i` 不通、`index: i + 1` 通）。
     → **已修**（[#75](https://github.com/DemianLi/nexus-agent/pull/75)）：`_streamResponseChunks` 改吐 `tool_call_chunks`、`index` 從 1 起跳，配一組雙路徑對照測試（`stream-parity.test.ts`）。反向驗過兩次：退回 `tool_calls` 六條全紅；`index` 退成 0 四條紅，而且單一呼叫時工具**完全沒跑**（比原本記的「文字被寫壞」更嚴重），兩個呼叫時只有 `index: 1` 的那筆活下來。在它修好之前，任何走 v3 的 Phase 5 測試都是綠的而且什麼都沒驗到。這也是 [#32](https://github.com/DemianLi/nexus-agent/issues/32) 那份「假模型與基座真實行為悄悄分歧」清單上第一個真的被抓到的分歧 —— 而它是被 CI 抓不到的那種：分歧發生時測試不會紅，會靜靜地少驗一半。
   - **`apps/web` 與 agent 之間沒有線，而計劃從沒記過要選哪一條。** 現有骨架是純 Vite + React：沒有 server、沒有相依 `@nexus/harness`、沒有任何 HTTP / SSE / WebSocket。agent 跑在 Node（backend、MCP 的 stdio 子行程、QuickJS 的組裝都在 Node 這側），所以中間一定要有一段傳輸 —— 那是一個決策點，「現有骨架續用」把它藏起來了。**`deepagents` 確實有 `./browser` 進入點，但那不是「整包搬進瀏覽器」的許可**：機械比對兩份 `.d.ts` 的匯出，browser 少掉的正好是 16 個 Node 專屬的名字（`FilesystemBackend`、`LocalShellBackend`、`Settings` / `findProjectRoot` / `listSkills` / `parseSkillMetadata`、`createAgentMemoryMiddleware`、`createSubAgent` 等），而我們的 `ContainedFilesystemBackend` 正是繼承 `FilesystemBackend` 的那一個。
-    → **已拍板，見第 7 節決策 6**：上行 HTTP POST、下行單向事件串流（先做 SSE）。這一項因此確定是**兩張 PR** —— `feat/web-transport`（server 端的 pump ＋ 兩個方向的線，不含 UI）與 `feat/web-chat-stream`（UI）。
+    → **已拍板並實作，見第 7 節決策 6**：上行 HTTP POST、下行單向事件串流（先做 SSE）。這一項因此是**兩張 PR** —— `feat/web-transport`（server 端的 pump ＋ 兩個方向的線，不含 UI）與 `feat/web-chat-stream`（UI）。**動工前一驗又推翻了依據的一半**：這條線不必自己發明，`@langchain/protocol`（`@langchain/langgraph` 的直接相依，早就在 `node_modules` 裡）已經把封包、channel 名、SSE 的 route 與 HITL 的兩個 method 都規格化了，而 v3 的 run 物件**本身就是 `AsyncIterable<ProtocolEvent>`**，吐出來的 frame 全部可 JSON 序列化。詳見決策 6。**已落地的與明著沒做的**：`packages/nexus-wire`（協定型別、SSE codec、route 與 channel 白名單、瀏覽器端 client）、`@nexus/harness` 的 `ThreadPump` ＋ 不綁 port 的 handler ＋ `node:http` 載體、`apps/web` 的連線接點；**沒有任何可執行的進入點**（沒有 `serve` script、CLI 也沒接），所以 `feat/web-chat-stream` 的第一件事就是補它——那需要決定跑哪份 plugin 清單、哪個模型、哪個 port，屬於 UI 那張的組裝決定。
 - `feat/web-hitl`：核准 UI（對應 interrupt）。**混合批次要當成全有全無**：基座在一批裡只要有一筆被拒，被核准的那幾筆會靜靜地不執行、還會從歷史裡消失（見 Phase 4 那條），所以逐筆按的介面會生出一種「按了核准卻等同從沒問過」的狀態，而那件事在畫面上看不出來。**另外三件動工前查到的事：**
   - **核准 UI 要顯示的東西，基座已經整理好了。** `run.interrupts` 吐 `{ interruptId, payload: { actionRequests: [{ name, args, description }], reviewConfigs: [{ actionName, allowedDecisions: ["approve", "reject"] }] } }` —— `allowedDecisions` 就是 harness 在第 1 節固定下來的那套封閉詞彙，從串流這一端看得到。所以「畫面上能按什麼」不必另外約定，讀 payload 就是。
-  - **暫停時 `await run.output` 會炸，而且炸得沒有意義**：`TypeError: Cannot read properties of undefined (reading "length")`。它不是「這一輪停住了」的訊號，是一個沒指名任何東西的錯。**要先問 `run.interrupted`**（實測回 `true`）。三組對照排除了「是不是我先讀了別的投影才害它壞掉」：什麼都不 drain 就 `await`、只 drain `messages`、drain 完 `messages` 與 `interrupts` —— 三種順序炸的訊息一模一樣；而**沒有中斷的那一組正常 resolve**（拿得到完整 4 則訊息）。所以炸的原因就是「這一輪停住了」本身。這是個陷阱 —— 最自然的寫法正好是壞的那個。
+  - **暫停時 `await run.output` 會炸，而且炸得沒有意義**：`TypeError: Cannot read properties of undefined (reading "length")`。它不是「這一輪停住了」的訊號，是一個沒指名任何東西的錯。**要先問 `run.interrupted`**（實測回 `true`）。**這個陷阱屬於這裡，不屬於下行 pump** —— pump 抽的是 run 的 raw iteration，中斷時它乾淨結束、不拋，所以 pump 從頭到尾不必碰 `run.output`（見決策 6）。三組對照排除了「是不是我先讀了別的投影才害它壞掉」：什麼都不 drain 就 `await`、只 drain `messages`、drain 完 `messages` 與 `interrupts` —— 三種順序炸的訊息一模一樣；而**沒有中斷的那一組正常 resolve**（拿得到完整 4 則訊息）。所以炸的原因就是「這一輪停住了」本身。這是個陷阱 —— 最自然的寫法正好是壞的那個。
   - **接得回去，而且不必換路。** `streamEvents(new Command({ resume: { decisions: [{ type: "approve" }] } }), { version: "v3" })` 實測跑得通：工具真的執行、ToolMessage 的 `status` 是 `success`。所以一場對話從頭到尾只有一條呼叫路徑，不會變成「串流用 `streamEvents`、核准用 `invoke`」。
 - `feat/eval-suite`：LangSmith evaluators 跑基準任務 —— 補強項 3。模型供應商的品質與成本比較掛在這裡（[#31](https://github.com/DemianLi/nexus-agent/issues/31)）：同一組基準任務跑 Anthropic 與 DeepSeek，比工具呼叫成功率、參數正確性、token 成本。**「CI 沒憑證所以驗不了」第二次是錯的**（第一次是 [#72](https://github.com/DemianLi/nexus-agent/pull/72) 的 tracing），但這次的界線比較細：
   - `langsmith/vitest` 的 `ls.describe` / `ls.test` 配上 `LANGSMITH_TEST_TRACKING=false` **完全不連外、也不要 key**（實測跑得過，評分函式的本體真的執行）。evaluator 的邏輯與資料集的形狀因此進得了 CI。
@@ -343,7 +348,7 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
    **checkpointer 與 store 兩軸維持在 `MemorySaver` 與「未選」，理由是收下 `@langchain/langgraph-checkpoint-postgres` 會把一個活的 Postgres 拖進測試路徑**，而 CI 上沒有任何服務憑證（[#31](https://github.com/DemianLi/nexus-agent/issues/31)），測試必須是自足的。版本層級也仍然懸在那張 PR 上（見第 3 節鎖死那一列）。這兩軸目前**沒有可執行證據**，只有寫下來的判斷——照實記著，別讓它看起來像已經驗過。
 
 5. **結果校驗範圍（Phase 4 前）**：需定義「校驗什麼」——schema、不變量、還是業務規則。屆時拍板。
-6. **`apps/web` 與 agent 之間的傳輸**（Phase 5 拍板）：原文從沒把它記成決策點，「現有骨架續用」那句把它藏起來了（見第 5 節 Phase 5）。**決定：上行 HTTP POST，下行單向事件串流；下行載體先做 SSE，WebSocket 覆寫留到需要時再加。**
+6. **`apps/web` 與 agent 之間的傳輸**（Phase 5 拍板）：原文從沒把它記成決策點，「現有骨架續用」那句把它藏起來了（見第 5 節 Phase 5）。**決定：上行 HTTP POST，下行單向事件串流；下行載體先做 SSE，WebSocket 覆寫留到需要時再加。形狀不變，但依據換了一半 —— 見下面「動工前一驗」。**
 
    **依據是 dsh 的實際做法**（AGENTS.md 的技術實現標準；以下都是讀 `references/deepseek-harness` 的原始碼，不是搜尋來的）：
 
@@ -351,11 +356,28 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
    - **同一組 frame 在 host 這側同時有 SSE 路由**：`packages/host/apiproxy/src/fetch/handler.ts` 的 `GET /api/events.mux` 與 `/api/events.host` 回 `text/event-stream`，而 SSE 的 frame 解碼就在共用的 `AbstractApiClient` 裡；`WebApiClient` 是**覆寫**掉那條預設改用 WS。所以 SSE 不是測試用的假縫，是同一份協定的另一個載體 —— 走 SSE 的 `InProcessApiClient` 定位為「同構接點……跑完整的協定序列化與校驗路徑而不經過網路」。**先做 SSE 等於做 dsh 兩層裡的基礎那層；但 dsh 出貨給瀏覽器的是 WS，停在 SSE 就是少了那一層覆寫，這裡明著記著。**（dsh 自己也註明 SSE 那條用的是 streaming fetch 而不是 `EventSource`，見 `packages/host/apiproxy/src/fetch/client.ts`。）
    - **事件不是「每個請求回一條串流」。** dsh 只有兩條長期下行：`mux`（跨全部 session 彙總）與 `host`（session 生命週期）。agent 的實際事件以 `session/event` 搭在 mux 上，核准請求也是（`approval/requested` 是一個可回答的 server-request），回覆走 HTTP 上行。**這一點與基座的 HITL 形狀正好對得上**：`run.interrupts` 在串流這一端、`Command({ resume })` 在下一次呼叫這一端。
    - 重連照 dsh：`since` 在它的 v1 沒實作，明文 `reconnection = reopen the stream + refetch history`。
+   - **handler 的形狀也照抄**（`fetch/handler.ts`）：`(Request) => Response`，不綁 port；**路徑指名 method、封包裡也帶 method，兩者不合就是錯誤**；載體層的錯用 HTTP status（415 非 JSON media type、400 body 不是 JSON、404 不認得的 method），協定層的錯用 200 ＋ error 封包。那個 415 是有理由的安全閘：瀏覽器對 `text/plain` 之類的「simple POST」不發 preflight，只收 `application/json` 等於逼出一個這個 server 從不回答的 preflight。
 
-   **基座這側量到的三件事決定了 server 端要做什麼**（`deepagents@1.13.1`，探針跑完即棄）：
+   **動工前一驗（第八次，形狀對、依據不完整）：`@langchain/protocol` 已經把這條線規格化了，而且更具體。** 它是 `@langchain/langgraph` 與 `@langchain/langgraph-sdk` 的直接相依，**早就在我們的 `node_modules` 裡**，只是計劃從沒提過。原文整段從 dsh 推出來，漏掉了「既有基礎建設自己出了規格書」這件事。AGENTS.md 的偏離規則是「**基礎建設表達不出來**才退到最接近的實作」——這裡基礎建設不但表達得出來，還把 route、封包、channel 名、HITL 的兩個 method 都指定死了。**自己發明 frame 才是需要標註的那一邊。** 實測到的內容：
+
+   - **v3 的 run 本身就是 `AsyncIterable<ProtocolEvent>`。** `GraphRunStream implements AsyncIterable<ProtocolEvent>`（`@langchain/langgraph@1.4.12`，`dist/stream/run-stream.d.ts`），`for await (const ev of run)` 直接吐 `{ type:'event', seq, method, params:{ namespace, timestamp, node?, data } }`。實測整場 56 顆 frame **全部 `JSON.parse(JSON.stringify(ev))` 過得去**，method 落在 `lifecycle` / `checkpoints` / `values` / `tasks` / `updates` / `messages` / `tools` 七個名字上，與 protocol 的 `Channel` union 一字不差。→ **pump 是一個 map，不是一層轉譯**；沒有 frame 要發明，也沒有序列化工作要做。`run.messages` / `run.toolCalls` 那些投影是給 in-process 消費者的，不是線上的東西。
+   - **protocol 明文規定 SSE 那條線**：`POST /threads/:thread_id/stream`，body 是 `EventStreamRequest`（`channels` / `namespaces` / `depth` / `since`），server 回 `text/event-stream`；`Event.event_id` 的註解寫「maps to SSE `id:`」。整份協定是 thread-centric 的。上行的 `Command` 封包（`{ id, method, params }`）在 WS 那條路上直接送，HTTP 那條路上協定沒指定 route —— 那一格由 dsh 的 `fetch/handler.ts` 補：**路徑指名 method**。
+   - **HITL 在協定裡有名字**：下行 `input.requested`、上行 `input.respond`。我們自己不必替核准這件事發明詞彙。
+   - **已考慮並排除 `@langchain/langgraph-sdk` 的 client**：它打的是 LangGraph Platform 的 API（`client.runs.stream(threadId, assistantId, …)`），前提是跑一台 LangGraph Server。我們的組裝點是 `createDeepAgent`，不跑那台 server，所以不走它。它與 protocol 共用同一份型別，這是它們形狀相似的原因，不是可以直接接上的理由。
+
+   **基座這側量到的六件事決定了 server 端要做什麼**（`deepagents@1.13.1` ＋ `@langchain/langgraph@1.4.12`，探針跑完即棄）：
 
    1. **run 不必被抽就會自己前進。** 開了 v3 串流之後什麼都不抽，300 ms 後工具已經跑完；`await run.output` 收完整場之後再抽 `run.messages`，兩輪都還在。**但這只證明了同一個 run 物件在同一個行程內可以重播** —— 跨連線、跨行程的重連沒有驗過，所以重連策略照 dsh 的 reopen ＋ refetch，不要拿這個 buffer 當重連機制。
    2. **一場對話不是一個 run 物件。** 停在核准點時 run 就收掉，`run.messages` 只有中斷前那一段（實測 `['我來記。']`）；`streamEvents(new Command({ resume }), …)` 回的是**另一個** run 物件（實測 `run2 !== run`），而且只帶 resume 之後的訊息（`['記好了。']`），舊的 run 再抽一次仍然只有前半段。→ **持久下行串流必須由 server 端把 N 個 run 物件接起來**，不能把某一個 run 直接交給瀏覽器。這正是 dsh 那條「一條長期下行、上行另走 HTTP」的形狀在我們這邊也成立的理由。
-   3. pump 不能無條件 `await run.output`：暫停時它會炸成一個沒指名任何東西的 `TypeError`（見第 5 節 Phase 5 的 `feat/web-hitl`），要先問 `run.interrupted`。
+   3. **`seq` 在每個 run 上從 0 重新開始。** 實測 resume 那個 run 的第一顆 frame 是 `seq: 0`。而 protocol 的 `Event.seq` 是「monotonic sequence number for ordering」、`event_id` 是重連用的 key —— 兩者都預設整條下行是單調的。→ **server 端接起 N 個 run 的時候必須重新編號**，照原樣轉出去會讓瀏覽器那側的排序與去重靜靜地壞掉：seq 不會變小到看得出來，它是一段一段重來。
+   4. **中斷時 raw iteration 乾淨結束，不拋。** 中斷本身以 `updates` frame 出現（`node: "__interrupt__"`，data 就是 `run.interrupts` 那份 `actionRequests` / `reviewConfigs`）。→ **pump 完全不必碰 `run.output`**，抽完 iteration 就是這一段的結束。第 5 節 Phase 5 記的「不能無條件 `await run.output`」仍然成立，但它是**核准 UI 那一端**的陷阱，不是 pump 的。
+   5. **`lifecycle` 的 `{ event: 'completed', graph_name: 'root' }` 在中斷時照樣會發。** → 它不是「對話結束、可以關線」的訊號。拿它當關線條件的話，每按一次核准就會斷線一次。
+   6. **失敗會先上線再拋。** 實測 run 失敗時最後一顆 frame 是 `lifecycle { event:'failed', graph_name:'root', error:'…' }`，**然後** iteration 才 throw。→ 瀏覽器從協定 frame 就知道為什麼死的，pump 的 try/catch 是用來收線的，不是用來補一顆錯誤 frame 的。（工具拋錯那一組另外還有一顆 `graph_name:'tools'` 的 failed，而且會多一個 `run.output.catch()` 攔不掉的 unhandled rejection —— 但那是第 5 節 Phase 4 那條「工具拋錯就整場死」的老問題，我們的組裝有 `@nexus/plugin-validation` 圍堵著，裸 `createDeepAgent` 才踩得到。模型拋錯那一組沒有這個副作用。）
 
-   **偏離標記**：無協定層偏離。唯一一處是載體層的**未完成**而非偏離 —— 先出 SSE、不出 WS 覆寫；deepagents／LangChain 這側沒有任何東西擋著 WS，所以補上去是工作量問題不是表達力問題。
+   **channel 白名單是安全邊界，不是效能調校。** 實測 `tasks` 的每一顆 frame 都夾著整份 input message list、`updates` 夾著完整序列化的 `{"lc":1,…}` 訊息、`values` 夾整個 state。全頻道往瀏覽器倒等於每個 task event 重送一次對話狀態，而且 state 裡有什麼就送什麼。protocol 的 `EventStreamRequest.channels` 存在正是為這件事。→ **白名單預設只放 `messages` / `tools` / `lifecycle` ＋ 中斷那條**，`tasks` / `checkpoints` / `values` 要放行得是一個明白的決定。
+
+   **瀏覽器斷線不得中止 run。** `run.abort()` 與 `run.signal` 就在手邊，把 HTTP response 的 abort signal 接上去是最自然的寫法，而它是錯的 —— 下行是**長期的**、與單一 run 無關，斷線之後靠 reopen 接回來。接反了不會有任何錯誤訊息，只會變成「使用者關掉分頁 agent 就停了」。
+
+   **這張 PR 的採納範圍，與明著不做的部分。** 收：封包（`Command` / `CommandResponse` / `ErrorResponse` / `Event`）、channel 名、SSE 的 route 形狀、HITL 的 `input.respond`。**不收，而且明著記著**：`subscription.*`（SSE 那條路上訂閱就是開線本身）、`state.get` / `state.fork` / `state.listCheckpoints`、`agent.getTree`、`input.inject`、`custom:*` 頻道、`namespaces` / `depth` 過濾。**`since` 收到就明確回 `not_supported`，不靜靜忽略** —— 靜靜忽略會生出看不見的斷檔。這麼切本身就是照 dsh：它自己也只有兩條長期下行、`since` 在 v1 沒實作。跨連線的 replay 要能做得先有 frame 的持久化，而狀態儲存目前只收斂了 backend 一軸（見決策 4）。
+
+   **偏離標記**：無協定層偏離，而且比原本記的更強 —— 這條線用的是**基座自己的協定詞彙**，dsh 提供的是它沒指定的那一格（HTTP 上行的 route 形狀與錯誤分層）。兩處未完成，都不是表達力問題：載體層先出 SSE 不出 WS 覆寫；協定層只實作上面那份採納範圍。
