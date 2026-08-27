@@ -130,6 +130,11 @@ export class ScriptedChatModel extends BaseChatModel {
   /**
    * 逐字吐 token，讓 `streamMode: 'messages'` 真的有多個 chunk 可收，
    * 而不是退回 _generate 產生的單一 chunk。
+   *
+   * **走 v3 typed stream 時，agent 迴圈整條都靠這個方法。** 基座裝上 stream 的 callback
+   * handler 之後，`invoke` 也會被導到這裡來（`_generateUncached` 改走
+   * `_streamChatModelEvents`），所以 `_generate` 的那條路上對的事情，在這裡不會自動成立。
+   * 兩條路徑的一致性由 `stream-parity.test.ts` 釘住。
    */
   override async *_streamResponseChunks(
     messages: BaseMessage[],
@@ -150,9 +155,32 @@ export class ScriptedChatModel extends BaseChatModel {
       } as ChatGenerationChunk;
     }
 
+    const toolCalls = message.tool_calls ?? [];
+    if (toolCalls.length === 0) {
+      return;
+    }
+
+    // **這裡只能給 tool_call_chunks，不能給 tool_calls。**
+    // 走 v3 typed stream 時基座會裝上 callback handler，`_generateUncached` 因而改走
+    // `_streamChatModelEvents` → `convertChunksToEvents`
+    // （`@langchain/core` `dist/language_models/compat.js`），而它**只讀
+    // `tool_call_chunks`**。給 `tool_calls` 的話 v3 那條路上工具呼叫會整個消失，
+    // 而且不拋錯——迴圈只跑一輪就乾淨地結束，測試照樣是綠的。
     yield {
       text: '',
-      message: new AIMessageChunk({ content: '', tool_calls: message.tool_calls }),
+      message: new AIMessageChunk({
+        content: '',
+        // id 一律取自 `toMessage()`，兩條路徑的 tool_call_id 才是同一份而不是碰巧相同。
+        tool_call_chunks: toolCalls.map((call, index) => ({
+          id: call.id,
+          name: call.name,
+          args: JSON.stringify(call.args),
+          // **index 從 1 起跳。** 它與上面那些文字 chunk 的 content block 共用同一個
+          // 編號空間，0 已經被那段文字佔走了；從 0 起跳會把文字那一塊寫壞。
+          index: index + 1,
+          type: 'tool_call_chunk' as const,
+        })),
+      }),
     } as ChatGenerationChunk;
   }
 }
