@@ -221,12 +221,27 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
 
   skills last-wins 的形狀斷言照舊補（[#32](https://github.com/DemianLi/nexus-agent/issues/32)）——這一條查過是真的：`allSkills.set(skill.name, skill)` 依 `sources` 順序覆蓋。**但只說對一半**：`Map` 的迭代順序是**第一次**插入的順序，所以覆蓋換的是內容與路徑，**不換它在清單裡的位置**。斷言要照這個形狀寫。
 
-- `feat/summarization-tuning`：**基座上沒有「參數化」這個參數。** `createSummarizationMiddleware({ backend })` 被無條件寫死進 root 與每一個 subagent 的 stack，`CreateDeepAgentParams` 上沒有任何 summarization 欄位。唯一的縫是 `mergeMiddlewareStack` **按 `.name` 原地取代**：自己建一個同名（字串 `"SummarizationMiddleware"`）的 middleware 從 `middleware` 參數傳進去，就換掉內建那個。fold 這一側是通的（`foldMiddleware` 只做 `prepend` 排序，不包不改）。兩件事要寫進 PR：
+- `feat/summarization-tuning`：**基座上沒有「參數化」這個參數。** `createSummarizationMiddleware({ backend })` 被無條件寫死進 root 與每一個 subagent 的 stack，`CreateDeepAgentParams` 上沒有任何 summarization 欄位。唯一的縫是 `mergeMiddlewareStack` **按 `.name` 原地取代**：自己建一個同名（字串 `"SummarizationMiddleware"`）的 middleware 從 `middleware` 參數傳進去，就換掉內建那個。fold 這一側是通的（`foldMiddleware` 只做 `prepend` 排序，不包不改）。動工前又查了一輪，原本的兩件變成**四件**：
 
-  1. **這條縫掛在一個字串上**，要有絆索測試——基座改名或改合併語意時它該紅。
-  2. **root 換掉不影響 subagent。** `createSubagentDefaultMiddleware` 每個 subagent 各建一份新的，`buildSubagentMiddleware` 只併 `input.middleware`。而長任務的 token 大戶正是 subagent，所以「長任務 token 控制」靠換掉 root 那個是**結構上就不完整的**——要嘛每個 subagent 定義自己帶，要嘛承認這個邊界並寫下來。
+  1. **這條縫掛在一個字串上**，要有絆索測試——基座改名或改合併語意時它該紅。**而且絆索要斷言「取代」而不是「有生效」**：兩者在行為上分不出來，差別只在內建那個還在不在（還在的話對話會被摘要兩次）。實測是原地取代——stack 仍是四個、位置沒動、`SummarizationMiddleware` 那一格換成我們的。
 
-- **跨 Phase 的坑（Phase 2 埋的）**：summarization 的 offload 寫到 `/conversation_history`，走 backend 的 `uploadFiles`。我們的 `ContainedFilesystemBackend` 在 `read-only` mode 下會擋掉它——而基座對 offload 失敗是 **fail-open**：`console.warn` 之後照樣把訊息換成摘要（`Proceeding with summary generation.`）。也就是**完整歷史靜默消失，只留一行 warn**。
+  2. **這條縫的價值不只是「換掉」，而是它是唯一的設定入口。**（原本沒寫）`historyPathPrefix` 是 `createSummarizationMiddleware` 的選項（預設 `/conversation_history`），`trigger` / `keep` / `summaryPrompt` / `trimTokensToSummarize` 也都是——而基座無條件建的那個**只吃 `{ backend }`**。所以同名取代不是「調校的手段之一」，是**唯一**能碰到這些參數的路。原文把 `/conversation_history` 當成寫死的常數，那是錯的。
+
+  3. **root 換掉不影響 subagent。** `createSubagentDefaultMiddleware` 每個 subagent 各建一份新的，`buildSubagentMiddleware` 只併 `input.middleware`。而長任務的 token 大戶正是 subagent，所以「長任務 token 控制」靠換掉 root 那個是**結構上就不完整的**——要嘛每個 subagent 定義自己帶，要嘛承認這個邊界並寫下來。已有絆索。
+
+     **`harnessProfile.excludedMiddleware` 是第二條縫，但它不是這個邊界的解法。**（原本沒寫）`REQUIRED_MIDDLEWARE_NAMES` 只有 `FilesystemMiddleware` 與 `SubAgentMiddleware`，所以排除 `SummarizationMiddleware` 是被允許的，而 `buildSubagentMiddleware` 結尾那個 filter 讓排除**對每個 subagent 都生效**——射程確實比同名取代大。但兩件事讓它出局：它只能**排除**不能替換（排掉等於 subagent 完全沒有摘要，長對話直接爆 context），而且它走的是**全域 profile registry**（`registerHarnessProfile` / `resolveHarnessProfile`）、靠 model spec 字串或 provider hint 查表，`CreateDeepAgentParams` 上沒有這個欄位。那是全域可變狀態加模型識別綁定，不是組裝點的參數，更不是 plugin 表達得出來的東西。
+
+  4. **offload fail-open 的測試收在這張 PR。**（原本沒指派給任何一張）機制全在這裡，不收進來就會夾在兩張 PR 中間掉下去。詳見下面「跨 Phase 的坑」。
+
+- **跨 Phase 的坑（Phase 2 埋的）**：summarization 的 offload 寫到 `/conversation_history`。我們的 `ContainedFilesystemBackend` 在 `read-only` mode 下會擋掉它——而基座對 offload 失敗是 **fail-open**：`console.warn` 之後照樣把訊息換成摘要（`Proceeding with summary generation.`）。也就是**完整歷史靜默消失，只留一行 warn**。已收進 `feat/summarization-tuning` 並有測試（實測 warn：`Failed to offload conversation history to /conversation_history/session_*.md: [containment] 拒絕 write ...`，而四次 invoke 全部正常回話）。
+
+  **原文寫「走 backend 的 `uploadFiles`」只對了三分之一。** `offloadToBackend` 有三條分支：沒有既有檔走 `write()`、有既有檔且 backend 有 `uploadFiles` 走 `uploadFiles()`、有既有檔但沒有 `uploadFiles` 走 `edit()`。三條我們的 fence 都覆寫了，所以三條都擋得住——結論不變，但理由要對。
+
+  **而 `/conversation_history` 有第二個寫入者，比這個更安靜。**（原本完全沒寫）`createFilesystemMiddleware` 的 `beforeAgent` 有一條**超大 human message 的 eviction**：最後一則 human message 超過 `4 * humanMessageTokenLimitBeforeEvict` 字元（預設 `5e4`，即 20 萬字元）時，把它寫進 `/conversation_history/<uuid>` 並在送進模型時換成一句佔位。兩個差別都往壞的方向：**路徑寫死**（不吃 `historyPathPrefix`，同名取代那條縫救不了它），**失敗完全靜默**（`if (writeResult.error) return;`，連 `console.warn` 都沒有）。
+
+  而它失敗的**方向跟直覺相反**：fence 擋住的時候不是「原話消失」，是原話**原封不動**送進模型——20 萬字元直接灌進 context，正是 eviction 本來要避免的事。已有兩條測試（可寫時落檔一個檔、模型只收到 `Message content too large`；`read-only` 時零落檔、原話完整進 prompt）。
+
+  兩個寫入者都要在 Phase 3 有測試，不能等它們在長對話裡自己發生——現在都有了。
 
   **而 `permissions` 對這條路完全沒有作用**——`checkPermission` 只在七個工具工廠裡被呼叫（`createWriteFileTool` / `createEditFileTool` / `createReadFileTool` / `createLsTool` / `createGlobTool` / `createGrepTool` 與 delete 那條），**不在 backend 方法上**。`uploadFiles` 是 backend 方法、不是工具，所以 offload 從來不經過規則表：一條蓋到 `/conversation_history*` 的 deny 規則**擋不住它**，歷史照樣寫進一個規則名義上禁止的路徑。這正好是 `contained-backend.test.ts` 那句「讀不經過 fence——讀的策略歸 permissions，兩層正交」的另一面：**寫不經過 permissions，寫的圍堵歸 fence**。
 
