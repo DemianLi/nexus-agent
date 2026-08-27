@@ -22,6 +22,10 @@
  *    是第二個寫入者**，這支程式看不到它，所以環境變數沒指名時只說「這裡看不到」，
  *    不說「預設端點」——後者會在有 profile 的機器上說謊。
  * 3. **不替使用者關掉它。** 開關是部署方的事；我們的職責到「說出來」為止。
+ *
+ * 還有一件不做的：**不宣稱「沒有東西離開這台機器」**。這個模組只看得到 tracing 這一道
+ * seam；`--live` 的模型閘道與 MCP plugin 是另外的出境路徑，它們開不開跟這裡無關。
+ * 披露的射程不能超過它自己看得到的範圍。
  */
 
 /**
@@ -89,7 +93,10 @@ export function readTracingDisclosure(env: NodeJS.ProcessEnv): TracingDisclosure
  */
 export function formatTracingDisclosure(disclosure: TracingDisclosure): readonly string[] {
   if (!disclosure.enabled) {
-    return ['追蹤：關閉——這一輪不會有東西離開這台機器。'];
+    // **只講 trace，不講「沒有東西離開這台機器」。** 後者是假的：`--live` 會把 prompt、
+    // 工具結果與讀到的檔案內容送去模型閘道，MCP plugin 是第二條同樣的路。披露的射程
+    // 就是它自己那道 seam——dsh 的共享披露也是這樣寫的，只陳述當前策略，不替別人擔保。
+    return ['追蹤：關閉——不會有 trace 送出去。'];
   }
 
   const destination =

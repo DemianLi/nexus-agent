@@ -50,6 +50,9 @@ const TRACING_ENV = [
   'LANGSMITH_API_KEY',
   'LANGSMITH_PROJECT',
   'LANGCHAIN_CALLBACKS_BACKGROUND',
+  // 這個是 apiUrl 之外**另一條**扇出路徑：本機若設了它，trace 會同時往那些端點送。
+  // CI 不會設，但開發機可能——所以每次都清掉，跟把端點釘死在 loopback 是同一個理由。
+  'LANGSMITH_RUNS_ENDPOINTS',
 ] as const;
 
 let server: Server;
@@ -91,6 +94,7 @@ afterEach(() => {
  * LangSmith——假 key 換來的 401 是在 body 送出**之後**才發生的事。
  */
 function armTracing(): void {
+  delete process.env.LANGSMITH_RUNS_ENDPOINTS;
   process.env.LANGSMITH_ENDPOINT = endpoint;
   process.env.LANGSMITH_API_KEY = 'ls-fake-for-test';
   process.env.LANGSMITH_PROJECT = 'nexus-tracing-test';
@@ -199,6 +203,10 @@ describe('披露讀得出當前設定', () => {
     const lines = formatTracingDisclosure(readTracingDisclosure({}));
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('關閉');
+    // 披露只管 tracing 這一道 seam。`--live` 的模型閘道與 MCP 是另外的出境路徑，
+    // 所以這一行不准把話講到「沒有東西離開這台機器」那麼大。
+    expect(lines[0]).toContain('trace');
+    expect(lines[0]).not.toContain('這台機器');
   });
 
   it('開著就說出是誰開的、送去哪、送的是不是原文', () => {

@@ -35,6 +35,9 @@ const TRACING_ENV = [
   'LANGSMITH_HIDE_INPUTS',
   'LANGSMITH_HIDE_OUTPUTS',
   'LANGCHAIN_CALLBACKS_BACKGROUND',
+  // 這個是 apiUrl 之外**另一條**扇出路徑：本機若設了它，trace 會同時往那些端點送。
+  // CI 不會設，但開發機可能——所以每次都清掉，跟把端點釘死在 loopback 是同一個理由。
+  'LANGSMITH_RUNS_ENDPOINTS',
 ] as const;
 
 let server: Server;
@@ -74,6 +77,7 @@ const plugin: NexusPlugin = {
 describe('HIDE_INPUTS / HIDE_OUTPUTS', () => {
   it('擋得住原文，但擋法是整組清空', async () => {
     const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    delete process.env.LANGSMITH_RUNS_ENDPOINTS;
     process.env.LANGSMITH_ENDPOINT = endpoint;
     process.env.LANGSMITH_API_KEY = 'ls-fake-for-test';
     process.env.LANGSMITH_PROJECT = 'nexus-tracing-test';
