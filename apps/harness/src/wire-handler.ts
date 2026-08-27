@@ -112,6 +112,16 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     const encoder = new TextEncoder();
     const events = pump.subscribe(channels, signal);
     const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        // **開線就先吐一行 SSE 註解。** 沒有這一行的話，中間任何一層代理都可能把
+        // header 壓著等第一顆 body byte——實測 Vite dev server 的 proxy 正是如此：
+        // 直連拿得到 `200 text/event-stream`，經過它就一個位元組都不來，而瀏覽器那端
+        // 看起來就是永遠「連線中」。dsh 也是這樣做的，理由寫在
+        // `packages/host/apiproxy/src/fetch/handler.ts` 的 `sseResponse()`：
+        // 「Send an SSE comment line on open so clients/proxies see a live channel」。
+        // 註解不是封包，解碼端本來就會跳過它。
+        controller.enqueue(encoder.encode(': connected\n\n'));
+      },
       async pull(controller) {
         const next = await events.next();
         if (next.done === true) {

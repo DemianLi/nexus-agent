@@ -41,6 +41,19 @@ pnpm --filter @nexus/harness run cli:live "..."             # 換成真實供應
 真正要試 agent 行為時用 `cli:live`。`--plugins <module>` 可以換掉預設的 plugin 清單
 （模組 `export default` 一個陣列）。
 
+在瀏覽器裡跟 agent 說話，要開兩個 terminal：
+
+```bash
+pnpm --filter @nexus/harness run serve      # agent 掛上 HTTP（http://127.0.0.1:8787）
+pnpm dev                                    # web（http://localhost:5173）
+```
+
+`serve` 的組裝與 CLI 完全一樣（同一份預設 plugin 清單、同一個 `--live`、同一個
+`--workspace`），只是把 agent 掛上 HTTP。dev server 會把 `/threads` 轉給它，所以
+瀏覽器那端是同源的、不需要 CORS；harness 換了 port 就設 `NEXUS_AGENT_URL`。
+`serve` 也吃 `--live`（或直接 `run serve:live`）—— 假模型的腳本只有四輪，問到第三句
+就會用完，畫面上會紅字說是為什麼。
+
 clone 之後各自設定一次，讓 `git fetch` / `git pull` 自動清掉遠端已刪除的分支：
 
 ```bash

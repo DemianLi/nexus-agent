@@ -27,6 +27,32 @@ afterEach(async () => {
 });
 
 describe('接上真的 socket', () => {
+  it('開線就先吐一行 SSE 註解，代理層才不會把 header 壓著', async () => {
+    const agent = createDeepAgent({
+      model: new ScriptedChatModel({ turns: [{ content: '好。' }] }),
+      tools: [],
+      backend: new StateBackend(),
+    }) as unknown as PumpAgent;
+    const handler = createWireHandler({
+      createAgent: async () => ({ agent, dispose: async () => undefined }),
+    });
+    running = await startWireServer({ handler });
+
+    // 用裸 fetch 讀原始位元組——**這一條驗的是「還沒有任何封包時線上就有東西」**。
+    // 少了它，直連看起來一切正常，而經過 dev server 的 proxy 就永遠停在「連線中」。
+    const response = await fetch(`${running.url}/threads/prelude/stream`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ channels: ['lifecycle'] }),
+    });
+    expect(response.headers.get('content-type')).toContain('text/event-stream');
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toBe(': connected\n\n');
+    await reader.cancel();
+    await handler.close();
+  });
+
   it('SSE 是邊跑邊推，不是收工才一次吐完', async () => {
     // 工具在這裡卡住，直到測試放行為止——**「串流」與「一次吐完」的差別因此是可判定的**，
     // 不必靠時間或運氣。

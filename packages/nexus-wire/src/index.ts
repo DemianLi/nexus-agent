@@ -37,5 +37,22 @@ export {
 
 export { decodeSseStream, encodeSseFrame } from './sse.js';
 
+export type {
+  AiEntry,
+  Attribution,
+  ConversationEntry,
+  ConversationState,
+  ConversationStatus,
+  HumanEntry,
+  PendingInput,
+  ToolEntry,
+} from './conversation.js';
+export {
+  appendHumanTurn,
+  emptyConversation,
+  reduceAll,
+  reduceConversation,
+} from './conversation.js';
+
 export type { CommandResult, OpenEventsOptions, WireClient, WireClientOptions } from './client.js';
 export { createWireClient } from './client.js';
