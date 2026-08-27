@@ -188,14 +188,38 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
 
   「多來源併入 prompt」的形狀斷言照舊補（[#32](https://github.com/DemianLi/nexus-agent/issues/32)）——這一條查過是真的：`formatMemoryContents(contents, sources)` 依 `sources` 順序串。
 
-- `feat/skills-plugin`：SKILL.md 來源 plugin。**progressive disclosure 是純 prompt，不是機制**——middleware 只把 name／description／path 注入 system prompt，然後用文字叫模型自己 `read_file`。三個推論：
+- `feat/skills-plugin`：SKILL.md 來源 plugin。**progressive disclosure 是純 prompt，不是機制**——middleware 只把 name／description／path 注入 system prompt，然後用文字叫模型自己 `read_file`。動工前又查了一輪，原本的四條有兩條要更正、另外三條是原本沒寫的：
 
-  1. skills 的讀取**走 `permissions` 與我們的 fence**。deny 規則蓋到 skills 路徑時，清單照樣列出來、讀取失敗——「看得到、讀不到」是這個擴充點的預設失敗模式，要有測試。
-  2. `allowedTools` frontmatter **解析了、印進 prompt、零強制**（整包 9 個出現點全是解析與格式化）。不能當權限用。
-  3. `module` frontmatter 只印一行 `await import("@/skills/<name>")`，**沒有東西實作那個 import**——[#64](https://github.com/DemianLi/nexus-agent/pull/64) 已記錄過同一件事。
-  4. 快取比 memory 更硬：`loadedSkills` 是**閉包變數**，per-agent-instance，跨 thread 都不重載。agent 建好之後新增的 skill 一律看不見。
+  1. **skills 的讀取走 `permissions`——但不走我們的 fence。原文寫「與我們的 fence」是錯的。** `ContainedFilesystemBackend` 只在寫入路徑加 fence，讀一律通過（那是 Phase 2 的定案：讀的策略歸 `permissions`，兩層正交）。所以擋人的自始至終只有 `permissions` 一層。
 
-  skills last-wins 的形狀斷言照舊補（[#32](https://github.com/DemianLi/nexus-agent/issues/32)）——這一條也查過是真的：`allSkills.set(skill.name, skill)` 依 `sources` 順序覆蓋。
+     「看得到、讀不到」本身成立，而且是這個擴充點的預設失敗模式：清單走 `listSkillsFromBackend` 的 `ls` / `downloadFiles`（**backend 方法，不經規則表**），正文走 `read_file` 工具（**經規則表**）。一條蓋到 skill 路徑的 deny 規則因此不會讓 skill 消失，只會讓它好端端列在 prompt 裡、模型每次去讀都被拒。已有測試（實測回傳 `Error: permission denied for read on /skills/<name>/SKILL.md`）。
+
+     這是 [#66](https://github.com/DemianLi/nexus-agent/issues/66) 那件事的第四次現身，但**後果比記憶那次輕**：記憶那邊 deny 擋不住整份內容進 context，這邊只有 name 與 description 進得去，正文真的擋住了。差別在於 skills 的兩條路一半經過規則表、一半不經過。
+
+  2. `allowedTools` frontmatter **解析了、印進 prompt、零強制**——原文寫「9 個出現點」，實測是 **7 個**（zod schema、解析、`formatSkillsList` 印一行），沒有一個是強制點。不能當權限用。
+  3. `module` frontmatter 只印一行 `await import("@/skills/<name>")`，**沒有東西實作那個 import**（全包 `@/skills` 只有那一個出現點）——[#64](https://github.com/DemianLi/nexus-agent/pull/64) 已記錄過同一件事。
+  4. **快取比 memory 更硬，但只在載到東西的時候。原文的「per-agent-instance，跨 thread 都不重載」兩個方向都不完整。**
+
+     - **空的不算。** 載入結果為空時 `loadedSkills.length > 0` 是 false，於是**每一次 `beforeAgent` 都重掃整個來源**。實測：有 skill 的來源兩次 `invoke` 只掃 1 次，空的來源掃 2 次。一個沒有 skill 的工作區是最貴的那種，這件事原文完全沒提到。
+     - **閉包與 state 是雙向的，不是單向快取。** 空閉包 + state 有 `skillsMetadata` → `loadedSkills = state.skillsMetadata`；非空閉包 + state 沒有 → 回寫 `{ skillsMetadata: loadedSkills }`。所以配上 checkpointer，一個**全新的 agent 實例**會從 thread 的 checkpoint 撿回舊 skills——「per-agent-instance」在有 checkpointer 時不成立。
+
+  5. **skills 與 memory 的 subagent 繼承規則正好相反。**（原本沒寫）`createSubagentDefaultMiddleware` 有 `input.skills` 分支，而內建的 general-purpose subagent 在 `normalizeSubagentSpec` 時被塞進了 root 的 `skills`——**它拿得到**；自訂 subagent 沒人幫它塞，要自帶 `skills` 才有。基座註解明說：「Custom subagents do NOT inherit skills from the main agent by default. Only the general-purpose subagent inherits the main agent's skills.」
+
+     對照上面 `feat/memory-plugin` 第 4 條：memory 只有 `mode: 'fork'` 的 subagent 拿得到，general-purpose **拿不到**。淨結果是同一組 subagent 上兩個擴充點互為反面——**fork 有 root memory 沒 root skills，general-purpose 有 root skills 沒 root memory**。已有兩條絆索釘著。
+
+  6. **基座驗證 skill 的名字，但驗完不擋。**（原本沒寫）`validateSkillName` 檢查 kebab-case、長度、以及「`name` 必須等於目錄名」，任一條不過都只是 `console.warn`，**metadata 照樣進清單**。三種失敗還是三種音量：讀不到（`ls` 失敗 / `SKILL.md` 讀不到）**完全無聲**、frontmatter 壞掉有 `console.warn`、名字不合規範有 warn 但照收。
+
+  7. **來源路徑的註冊期檢查比照 memory，但規則不同**（`assertLoadableSkillsPath`，`@nexus/core`）。**不能重用 `assertLoadableMemoryPath`**：那個明文拒絕結尾斜線（「記憶來源是檔不是目錄」），而 skill 來源**就是目錄**，基座還會自己補斜線。路徑寫錯的下場是 prompt 裡出現 `(No skills available yet...)`，字面上像「這個工作區還沒有 skill」，實際上是「那個目錄根本不存在」——比記憶那邊的 `(No memory loaded)` 更難察覺。順帶刻意收窄一格：基座支援 `\` 分隔，我們擋掉，理由是 backend 命名空間不是宿主檔案系統。
+
+     **接受結尾斜線就得讓重複檢查跟上。** `/skills/` 與 `/skills` 是同一個目錄，而 `skills` 註冊點的重複檢查原本拿原字串當 key——兩個 plugin 各寫一種就兩筆都進去，基座載兩次只會讓同名 skill 自己覆蓋自己，正好是那個檢查要擋的事。改成 **key 用正規化後的、value 留 plugin 寫下的原文**：交給基座的仍是原文，撞名看的是目錄。
+
+  **對 dsh 的偏離（標註）**：dsh **有**這個 seam，而且比 deepagents 完整得多——`packages/skill/` 下四個套件（`skill` 純註冊表、`skill-filesystem` 本地提供方、`tool-skill` 面向模型的 loader、`skill-badge`）。三格表達不出來：
+
+  - **progressive disclosure 在 dsh 是真機制**：`ctx.skills.get(name)` 由 loader 工具執行、每次載入重讀當前檔案，所以「正文編輯不需要 hash、修訂號、快取失效」。deepagents 這邊正文讀取是模型呼叫 `read_file`，那一格意外地同向；真正不同向的是**目錄**——dsh 有 Chokidar watcher 失效，deepagents 載到就凍住。退到：絆索釘住「目錄凍住」。
+  - **調用策略是 fail-closed**：dsh 的 `disable-model-invocation` / `user-invocable` 遇到駝峰拼寫或非布林值會**把整個 skill 從發現結果排除**，理由明文寫著「忽略無效資料可能在已停用的介面上暴露 skill」。deepagents 的 frontmatter 解析整個關在 `parseSkillMetadataFromContent` 裡，plugin 這側碰不到。退到：不動基座行為，用絆索釘住「不合規範的名字照樣進清單」。
+  - **rank 與預設根**：dsh 收的是 `customSkillDirs`（**額外**根），疊在五個 rank 過的預設根之上（project `.dsh/skills`=100、`.agents/skills`=200、custom=300、user `<dshHome>/skills`=400、`<agentsHome>/skills`=500），project root 由「最近含 `.git` 的祖先」走查決定。deepagents 的 `skills` 就是一組平等的 backend 路徑，沒有 rank、沒有走查、沒有 `$DSH_HOME`。退到：照 `sources` 的有序 last-wins，把 rank 語意能保留的唯一一格（順序即優先序）寫進 plugin 文件，並在註冊期擋掉 dsh 的 `RESERVED_PATH_SEGMENTS` 那一組路段。
+
+  skills last-wins 的形狀斷言照舊補（[#32](https://github.com/DemianLi/nexus-agent/issues/32)）——這一條查過是真的：`allSkills.set(skill.name, skill)` 依 `sources` 順序覆蓋。**但只說對一半**：`Map` 的迭代順序是**第一次**插入的順序，所以覆蓋換的是內容與路徑，**不換它在清單裡的位置**。斷言要照這個形狀寫。
 
 - `feat/summarization-tuning`：**基座上沒有「參數化」這個參數。** `createSummarizationMiddleware({ backend })` 被無條件寫死進 root 與每一個 subagent 的 stack，`CreateDeepAgentParams` 上沒有任何 summarization 欄位。唯一的縫是 `mergeMiddlewareStack` **按 `.name` 原地取代**：自己建一個同名（字串 `"SummarizationMiddleware"`）的 middleware 從 `middleware` 參數傳進去，就換掉內建那個。fold 這一側是通的（`foldMiddleware` 只做 `prepend` 排序，不包不改）。兩件事要寫進 PR：
 

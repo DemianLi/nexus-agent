@@ -220,12 +220,16 @@ export interface InterruptRegistrationPoint {
   requirements(): NamedEntry<InterruptRequirement>[];
 }
 
-/** `skills` 註冊點：同一來源路徑重複註冊報錯。 */
+/** `skills` 註冊點：同一來源路徑重複註冊報錯，路徑格式也這裡驗。 */
 export interface SkillSourceRegistrationPoint {
   /**
    * 加一個 skill 來源路徑。
-   * @param path - 來源目錄路徑。
+   *
+   * **路徑格式當場擋**——理由見 {@link assertLoadableSkillsPath}。與 memory 那條的
+   * 差別在結尾斜線：skill 來源**是目錄**，結尾斜線合法。
+   * @param path - backend 命名空間下的絕對目錄路徑。
    * @returns 只撤銷這一次註冊的冪等 undo。
+   * @throws 路徑以 `~` 開頭、不是絕對路徑、含 `.` / `..` / 空路段、或含 `\`。
    */
   addSource(path: string): () => void;
   /**
@@ -491,9 +495,12 @@ export function createRegistry(): InternalPluginRegistry {
   const skillPoint: SkillSourceRegistrationPoint = {
     addSource(path) {
       const origin = requireOrigin('skills.addSource()');
-      return skillSources.insert(path, path, origin);
+      // key 用正規化後的，value 留原文——`/skills/` 與 `/skills` 是同一個目錄，
+      // 但交給基座的要是 plugin 真正寫下的那一串。
+      const normalized = assertLoadableSkillsPath(path, origin);
+      return skillSources.insert(normalized, path, origin);
     },
-    sources: () => [...skillSources.entries()].map(([path]) => path),
+    sources: () => [...skillSources.entries()].map(([, entry]) => entry.value),
   };
 
   const memoryPoint: MemorySourceRegistrationPoint = {
@@ -588,4 +595,61 @@ function assertLoadableMemoryPath(path: string, origin: PluginOrigin): void {
   if (segments.includes('..')) reject('含 ".." 路段');
   if (segments.includes('.')) reject('含 "." 路段');
   if (segments.includes('')) reject('含空路段（連續斜線或結尾斜線）——記憶來源是檔不是目錄');
+}
+
+/**
+ * 擋下 backend 載不到的 skill 來源路徑。
+ *
+ * 與 {@link assertLoadableMemoryPath} 同一個理由、**不同一組規則**，所以是兩個函式而不是
+ * 一個帶旗標的：memory 來源**是檔**（那邊明文拒絕結尾斜線），skill 來源**是目錄**，
+ * 基座還會自己補上斜線（`listSkillsFromBackend` 的 `normalizedPath`）。把兩者併成一個
+ * 函式，遲早會有人把「是檔不是目錄」那句錯誤訊息噴到目錄路徑上。
+ *
+ * 靜默的形狀也不同，而且比 memory 那邊更難察覺。`listSkillsFromBackend` 對
+ * `ls` 失敗是 `return []`、對讀不到 `SKILL.md` 是 `continue`——**兩條都完全無聲**（連
+ * `console.debug` 都沒有，那個只包在最外層的 `catch`）。路徑寫錯的下場是 system prompt
+ * 裡出現 `(No skills available yet. You can create skills in ...)`，字面上像「這個工作區
+ * 還沒有 skill」，實際上是「那個目錄根本不存在」。這兩件事在模型眼裡一模一樣。
+ *
+ * **`\\` 是刻意收窄的一格。** 基座支援 Windows 分隔（`sourcePath.includes("\\\\")` 決定
+ * `pathSep`），這裡直接擋掉。理由是 backend 命名空間不是宿主檔案系統：路徑最後交給
+ * 哪個 backend、那個 backend 用什麼分隔，註冊時看不出來，混用只會讓
+ * `normalizedPath` 拼出兩種分隔並存的字串。要支援 Windows 宿主路徑是 backend 那一層的事。
+ *
+ * **對 dsh 的偏離（標註）**：dsh 的 `@deepseek-ai/dsh-skill-filesystem` 收的是
+ * `customSkillDirs`——**額外**的根，疊在五個 rank 過的預設根之上（project `.dsh/skills`
+ * =100、`.agents/skills`=200、custom=300、user `<dshHome>/skills`=400、
+ * `<agentsHome>/skills`=500），project root 由「最近含 `.git` 的祖先」走查決定。
+ * **這個形狀我們表達不出來**：`deepagents` 的 `skills` 參數就是一組平等的 backend 路徑，
+ * 沒有 rank、沒有走查、沒有 `$DSH_HOME`。退到最接近的：照 `sources` 的有序 last-wins，
+ * 把 rank 語意能保留的唯一一格（順序即優先序）寫進 plugin 文件，並在註冊期擋掉
+ * dsh 的 `RESERVED_PATH_SEGMENTS`（`''` / `'.'` / `'..'`）那一組路段。
+ *
+ * @param path - 註冊進來的來源路徑。
+ * @param origin - 註冊者，錯誤訊息要指名是誰寫的。
+ * @returns 去掉結尾斜線的路徑，給重複檢查當 key 用——`/skills/` 與 `/skills` 是同一個
+ *   目錄，載兩次只會讓同名 skill 自己覆蓋自己，那正是重複檢查要擋的事。
+ * @throws 路徑以 `~` 開頭、含 `\\`、不是絕對路徑、或含 `.` / `..` / 空的中間路段。
+ */
+function assertLoadableSkillsPath(path: string, origin: PluginOrigin): string {
+  const reject = (why: string): never => {
+    throw new Error(
+      `${formatOrigin(origin)} 註冊的 skill 來源 "${path}" ${why}。` +
+        `skill 來源要用 backend 命名空間下的絕對目錄路徑（例如 "/skills/"）——` +
+        `基座把路徑原樣交給 backend，列不到不會拋錯也不會警告，只會在 prompt 裡` +
+        `變成 "(No skills available yet...)"，看起來像這裡本來就沒有 skill。`,
+    );
+  };
+
+  if (path.startsWith('~')) reject('以 "~" 開頭——沒有任何一層會把它展開成家目錄');
+  if (path.includes('\\')) reject('含 "\\"——backend 命名空間一律用 "/"');
+  if (!path.startsWith('/')) reject('不是絕對路徑');
+  // 結尾斜線合法（來源是目錄，基座自己也會補），先剝掉再切；首段的空字串是前置斜線
+  // 切出來的，永遠存在，不算數。
+  const normalized = path.replace(/\/$/, '');
+  const segments = normalized.split('/').slice(1);
+  if (segments.includes('..')) reject('含 ".." 路段');
+  if (segments.includes('.')) reject('含 "." 路段');
+  if (segments.includes('')) reject('含空路段（連續斜線）');
+  return normalized;
 }

@@ -633,10 +633,11 @@ describe('skills 與 memory 註冊點', () => {
   it('skills 同一來源路徑重複註冊報錯', async () => {
     const plugins = [
       fakePlugin('user-skills', (r) => void r.skills.addSource('/skills/user/')),
-      fakePlugin('project-skills', (r) => void r.skills.addSource('/skills/user/')),
+      // 少一個結尾斜線，還是同一個目錄——key 是正規化過的。
+      fakePlugin('project-skills', (r) => void r.skills.addSource('/skills/user')),
     ];
     await expect(loadPlugins(plugins)).rejects.toThrow(
-      /"\/skills\/user\/"[\s\S]*plugins\[0\] \(user-skills\)[\s\S]*plugins\[1\] \(project-skills\)/,
+      /"\/skills\/user"[\s\S]*plugins\[0\] \(user-skills\)[\s\S]*plugins\[1\] \(project-skills\)/,
     );
   });
 
