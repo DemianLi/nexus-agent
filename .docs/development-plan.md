@@ -251,15 +251,21 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
 
 ### Phase 4 — HITL + 可觀測性 + 反思（約 3 個 PR）
 
-- `feat/interrupt-rules`：`interruptOn` 擴充點（哪些工具暫停核准）—— 補強項 1。
+- ~~`feat/interrupt-rules`：`interruptOn` 擴充點（哪些工具暫停核准）~~ —— 補強項 1。**擴充點 Phase 2 就落地了**（`registry.interrupts` ＋ `foldInterrupts` ＋ 缺 checkpointer 即拒絕 ＋ 工具名存在檢查 ＋ 多方標記 OR）。動工前一驗才發現這一項寫的是已經做完的事；真正缺的是**暫停之後**——過去唯一的行為斷言是 `expect(result.__interrupt__).toBeDefined()`，只證明「停下來了」。改成 `fix/interrupt-resume`：
+
+  - 拒絕 → 工具真的沒跑、模型收到 `status: "error"` 的 ToolMessage；核准 → 工具真的跑了。**兩邊都要**：只驗拒絕的話，「模型根本沒呼叫那個工具」也讓 `ran === []` 過關。
+  - **一批裡有人被拒，被核准的那些會靜靜地不執行**，而且從 AI 訊息的 `tool_calls` 裡被抹掉——沒有 ToolMessage、沒有痕跡（`langchain@1.5.10`，`dist/agents/middleware/hitl.js:483-496`）。這是驗收句的反面：核准了也可能不執行。fold 擋不掉，是基座的批次語義。
+  - **`context: { interruptOn: {} }` 在 invoke 時整組覆蓋**（`hitl.js:421` 取 `{ ...options, ...runtime.context }`）。fold 的保證全是建構期的，一個欄位就整組繞過，不警告。入口層不得把使用者可控的東西直接當 `context` 傳下去。
+  - `edit` 決定被基座當場拒收（`hitl.js:407`），所以 `mergeInterrupt` 那個封閉詞彙是真的約束；`when` 收到的 `request.tool` 恆為 `undefined`（`afterModel` 批次語境，`hitl.js:359-367`），伸手拿 `request.tool.name` 編得過、跑起來炸。
+  - **CLI 對中斷一個字都不印**：`__interrupt__` 在 `updates` 串流裡的值是陣列不是 `{ messages }`，印訊息的迴圈跳過它，於是停在核准點與正常收工在畫面上一模一樣。這一版只補「說出來」，收決定的介面留給 Phase 5。
 - `feat/observability`：LangSmith tracing 接線 + 執行事件流結構化輸出 —— 補強項 4。
 - `feat/validation-middleware`：結果校驗 middleware：工具輸出 schema 驗證、失敗自動回饋重試 —— 反思與反饋層的薄覆蓋實作（完整強化見 issue #16）。
-- 驗收：破壞性操作必須人工核准才執行；LangSmith 能看到完整 trace；校驗失敗的工具結果會帶錯誤回饋給 agent 重試。
+- 驗收：**破壞性操作必須人工核准才執行**（已有可執行證據，見上）；LangSmith 能看到完整 trace；校驗失敗的工具結果會帶錯誤回饋給 agent 重試。後兩句在各自那張 PR 動工前還沒驗過，照上面那條的前例，先驗再改。
 
 ### Phase 5 — Web UI + 評測（約 3–4 個 PR）
 
 - `feat/web-chat-stream`：apps/web 對話介面 + typed event stream 呈現（含 subagent 事件）。
-- `feat/web-hitl`：核准 UI（對應 interrupt）。
+- `feat/web-hitl`：核准 UI（對應 interrupt）。**混合批次要當成全有全無**：基座在一批裡只要有一筆被拒，被核准的那幾筆會靜靜地不執行、還會從歷史裡消失（見 Phase 4 那條），所以逐筆按的介面會生出一種「按了核准卻等同從沒問過」的狀態，而那件事在畫面上看不出來。
 - `feat/eval-suite`：LangSmith evaluators 跑基準任務 —— 補強項 3。模型供應商的品質與成本比較掛在這裡（[#31](https://github.com/DemianLi/nexus-agent/issues/31)）：同一組基準任務跑 Anthropic 與 DeepSeek，比工具呼叫成功率、參數正確性、token 成本。
 - 驗收：瀏覽器完成「提問 → 看事件流 → 核准工具 → 收結果」全迴圈；eval 有可比較的通過率數據，且該數據足以讓模型供應商定案。
 

@@ -4,8 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
+import { tool } from '@langchain/core/tools';
+import { MemorySaver } from '@langchain/langgraph';
 import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
 import {
   COLLIDING_TOOL_NAME,
@@ -130,6 +133,68 @@ describe('一次性模式', () => {
 
   it('預設清單裡的 echo 工具真的接上了', async () => {
     expect(DEFAULT_PLUGINS.map((plugin) => plugin.name)).toEqual(['echo']);
+  });
+});
+
+/**
+ * 停在核准點的那一輪，人看得出來它停了。
+ *
+ * 中斷在 `updates` 串流裡是 `{ __interrupt__: [...] }`——值是陣列，不是 `{ messages }`，
+ * 所以 `runTurn` 印訊息的那個迴圈碰到它一個字都印不出來。**這一輪於是與正常收工長得
+ * 一模一樣**，而工具其實沒跑。這一條守的就是那個相同不再回來。
+ *
+ * 核准層本身的行為驗收不在這裡，在 [`interrupt.test.ts`](./interrupt.test.ts)；這裡只問
+ * 「CLI 這個入口有沒有把它說出來」。
+ */
+describe('CLI 遇到核准中斷', () => {
+  it('印出停在哪、還沒跑的是什麼、以及這個入口按不了核准', async () => {
+    const model = new ScriptedChatModel({
+      turns: [
+        { content: '動手。', toolCalls: [{ name: 'danger', args: {} }] },
+        { content: '收工。' },
+      ],
+    });
+    const { agent } = await createNexusAgent({
+      model,
+      checkpointer: new MemorySaver(),
+      plugins: [
+        {
+          name: 'gated',
+          apply(registry) {
+            registry.tools.register(
+              tool(() => '跑過了', {
+                name: 'danger',
+                description: '會弄壞東西的工具。',
+                schema: z.object({}),
+              }),
+            );
+            registry.interrupts.require('danger', { reason: '這個會弄壞東西' });
+            // 同一個工具被兩方標記時 `mergeInterrupt` 把理由用「；」串起來，CLI 印的是
+            // 串好的那一份。只用單一閘門測的話，這一行的形狀就沒人驗過。
+            registry.interrupts.require('danger', { reason: '而且不可逆' });
+          },
+        },
+      ],
+    });
+
+    const { printer, stdout } = recorder();
+    await runTurn(agent, '動手', printer);
+
+    expect(stdout()).toContain('停在核准點');
+    expect(stdout()).toContain('danger');
+    expect(stdout()).toContain('這個會弄壞東西；而且不可逆');
+    expect(stdout()).toContain('還不能收核准決定');
+  });
+
+  it('沒有中斷的那一輪一個字都不多印（上一條的對照組）', async () => {
+    const model = new ScriptedChatModel({ turns: [{ content: '沒事發生。' }] });
+    const { agent } = await createNexusAgent({ model, plugins: [] });
+
+    const { printer, stdout } = recorder();
+    await runTurn(agent, '說點什麼', printer);
+
+    expect(stdout()).toContain('沒事發生。');
+    expect(stdout()).not.toContain('核准');
   });
 });
 

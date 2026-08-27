@@ -200,7 +200,15 @@ export interface InterruptRequirement {
   readonly toolName: string;
   /** 給人看的理由。 */
   readonly reason: string;
-  /** 只在這個述詞為真時才中斷；省略即無條件中斷。 */
+  /**
+   * 只在這個述詞為真時才中斷；省略即無條件中斷。
+   *
+   * **`request.tool` 一定是 `undefined`。** 基座在 `afterModel` 的批次語境求值這個
+   * 述詞（`langchain@1.5.10`，`dist/agents/middleware/hitl.js:359-367` 實測），
+   * request 是現搭的：`{ toolCall, tool: undefined, state, runtime }`，`runtime` 是
+   * node 層的那個、不是某一次工具執行的。型別上 `tool` 是可選的，所以
+   * `request.tool.name` 編得過、跑起來當場炸。要看工具名就讀 `request.toolCall.name`。
+   */
   readonly when?: WhenPredicate;
 }
 
@@ -208,8 +216,18 @@ export interface InterruptRequirement {
 export interface InterruptRegistrationPoint {
   /**
    * 標記一個工具需要人核准。
+   *
+   * **這道閘門的保證只到建構期。** 基座把 `interruptOn` 放在 HITL middleware 的
+   * `contextSchema` 裡，執行期取的是 `{ ...options, ...runtime.context }`
+   * （`hitl.js:421`）——所以呼叫端一句 `agent.invoke(input, { context: { interruptOn: {} } })`
+   * 就把所有閘門整組換掉，不警告、不留痕跡。fold 這一側做的每一件事（工具名要存在、
+   * 缺 checkpointer 即拒絕、核准政策開關）都擋不到那條路，因為它們都是建構期的。
+   * 入口層（CLI、web）不得把使用者可控的東西直接當成 `context` 傳下去。
+   * 絆索在 `apps/harness/src/interrupt.test.ts`。
+   *
    * @param toolName - 工具名。同一個工具被多方標記是正常的，不報錯。
-   * @param options - `reason` 給人看，`when` 省略即無條件中斷。
+   * @param options - `reason` 給人看，`when` 省略即無條件中斷（`request.tool` 是
+   *   `undefined`，見 {@link InterruptRequirement.when}）。
    * @returns 只撤銷這一次標記的冪等 undo。
    */
   require(toolName: string, options: { reason: string; when?: WhenPredicate }): () => void;

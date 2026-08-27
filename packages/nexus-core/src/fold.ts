@@ -352,7 +352,17 @@ function foldPermissions(registry: PluginRegistry): FilesystemPermission[] {
  * 核准標記折成基座的 `interruptOn`：同一個工具的多方標記逐欄位 OR，不報錯。
  *
  * 詞彙是封閉的——`allowedDecisions` 固定 `["approve", "reject"]`，`argsSchema`
- * 不使用（dsh 明文「Input rewrite is deliberately not offered」）。
+ * 不使用（dsh 明文「Input rewrite is deliberately not offered」）。**這是基座真的
+ * 執行的約束，不是註解**：`processDecision` 拿到不在清單裡的決定型別會拋
+ * （`langchain@1.5.10`，`dist/agents/middleware/hitl.js:407`），訊息裡連 `allowedDecisions`
+ * 一起附上——所以 resume 傳 `{ type: "edit" }` 是當場失敗，不是靜默降級成 approve。
+ *
+ * **一批裡有人被 reject，被 approve 的那些會靜靜地不執行。** 基座算出
+ * `hasRejectedToolCalls` 之後只留下被拒的那幾筆，直接改寫 AI 訊息的 `tool_calls`
+ * （`hitl.js:483-496`）：被核准的那一筆從歷史裡消失，沒有 ToolMessage、沒有痕跡，
+ * 模型看起來像它從來沒要求過。fold 這一側擋不掉，那是基座的批次語義。核准介面
+ * 因此要把混合批次當成全有全無，不能讓人逐筆按——逐筆按下去的「核准」與「從沒問過」
+ * 分不出來。絆索在 `apps/harness/src/interrupt.test.ts`。
  *
  * **標在不存在的工具名上要報錯。** 基座那端不會救：`humanInTheLoopMiddleware` 拿
  * `toolCall.name` 查 `interruptOn`，查不到就走 auto-approve，所以一個打錯字的核准閘門
