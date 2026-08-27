@@ -205,13 +205,18 @@ describe('其餘六個註冊點', () => {
     expect(registry.interrupts.requirements()).toHaveLength(2);
   });
 
-  it('skills 同一來源路徑重複註冊報錯', () => {
+  it('skills 同一來源路徑重複註冊報錯，結尾斜線不算另一個目錄', () => {
     const registry = createRegistry();
     const leave = registry.enter(first);
     registry.skills.addSource('/skills/user/');
-    expect(() => registry.skills.addSource('/skills/user/')).toThrow('"/skills/user/"');
+    // 訊息裡是正規化後的目錄（沒有結尾斜線）——重複檢查的 key 就是那一串。
+    expect(() => registry.skills.addSource('/skills/user/')).toThrow('"/skills/user"');
+    // 少了結尾斜線的同一個目錄照樣撞——這是 `assertLoadableSkillsPath` 同時接受兩種
+    // 寫法之後才有的路徑，不擋的話「同一個目錄載兩次」就從這個縫溜過去了。
+    expect(() => registry.skills.addSource('/skills/user')).toThrow('"/skills/user"');
     expect(() => registry.skills.addSource('/skills/project/')).not.toThrow();
     leave();
+    // 交出去的是 plugin 真正寫下的那一串，不是 key。
     expect(registry.skills.sources()).toEqual(['/skills/user/', '/skills/project/']);
   });
 
@@ -267,6 +272,62 @@ describe('其餘六個註冊點', () => {
       expect(() => register('/AGENTS.md')).not.toThrow();
       expect(() => register('/專案/記憶/AGENTS.md')).not.toThrow();
       expect(() => register('/notes/..hidden.md')).not.toThrow();
+    });
+  });
+
+  describe('skill 來源的路徑格式', () => {
+    const register = (path: string): void => {
+      const registry = createRegistry();
+      const leave = registry.enter(first);
+      try {
+        registry.skills.addSource(path);
+      } finally {
+        leave();
+      }
+    };
+
+    it('"~" 開頭被擋，而且訊息指名是誰註冊的', () => {
+      expect(() => register('~/.dsh/skills/')).toThrow('"~"');
+      expect(() => register('~/.dsh/skills/')).toThrow('plugins[0] (alpha)');
+    });
+
+    it('相對路徑被擋', () => {
+      expect(() => register('./skills/')).toThrow('絕對路徑');
+      expect(() => register('skills/')).toThrow('絕對路徑');
+    });
+
+    it('".." / "." / 連續斜線都被擋', () => {
+      expect(() => register('/專案/../etc/skills/')).toThrow('".."');
+      expect(() => register('/專案/./skills/')).toThrow('"."');
+      expect(() => register('/專案//skills/')).toThrow('空路段');
+    });
+
+    // 基座支援 Windows 分隔（`sourcePath.includes('\\')` 決定 pathSep），我們刻意收窄。
+    // 理由見 `assertLoadableSkillsPath`：backend 命名空間不是宿主檔案系統。
+    it('反斜線被擋，即使整條看起來是合法的 Windows 路徑', () => {
+      expect(() => register('/skills\\user\\')).toThrow('"\\"');
+    });
+
+    // 這一條是 skill 與 memory 唯一分岔的地方，錯了就會被上面那些「都擋掉」的斷言蓋過去。
+    it('結尾斜線是合法的——skill 來源是目錄，不是檔', () => {
+      expect(() => register('/skills/')).not.toThrow();
+      expect(() => register('/skills')).not.toThrow();
+    });
+
+    // 接受兩種寫法就得讓重複檢查知道它們是同一個目錄，否則上面那條剛好開了個縫：
+    // 兩個 plugin 各寫一種，兩筆都進去，而基座載兩次只會讓同名 skill 自己覆蓋自己。
+    it('兩種寫法是同一個目錄，第二個撞得到第一個', () => {
+      const registry = createRegistry();
+      const leave = registry.enter(first);
+      registry.skills.addSource('/skills/');
+      expect(() => registry.skills.addSource('/skills')).toThrow('已經註冊過了');
+      leave();
+    });
+
+    // 擋得住是一半。少了這一條，一個什麼都拒絕的檢查也會讓上面每一條通過。
+    it('絕對目錄路徑照樣進得去，含非 ASCII 與看起來像 ".." 的目錄名', () => {
+      expect(() => register('/專案/技能/')).not.toThrow();
+      expect(() => register('/skills/..hidden/')).not.toThrow();
     });
   });
 
