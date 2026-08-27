@@ -19,10 +19,41 @@ export interface ScriptedToolCall {
   readonly args: Record<string, unknown>;
 }
 
+/**
+ * 這一輪的 token 用量。
+ *
+ * **假模型不會自己編這個數字**：省略即這一輪不帶 `usage_metadata`，跟真模型沒回報用量
+ * 時一樣。給了才有，這樣「成本算得出來」與「成本是我們捏的」在測試裡分得開。
+ */
+export interface ScriptedUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+}
+
 /** agent 迴圈的一輪：模型講一段話，並可選擇呼叫工具。 */
 export interface ScriptedTurn {
   readonly content: string;
   readonly toolCalls?: readonly ScriptedToolCall[];
+  /** 這一輪的 token 用量。省略即不帶——見 {@link ScriptedUsage}。 */
+  readonly usage?: ScriptedUsage;
+}
+
+/**
+ * 腳本的用量翻成 LangChain 的 `usage_metadata`。
+ *
+ * `total_tokens` 由基座那邊的消費者拿來當單一數字用，所以這裡自己加總而不是留白——
+ * 真模型回的也是三個欄位都齊。
+ */
+function toUsageMetadata(usage: ScriptedUsage): {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+} {
+  return {
+    input_tokens: usage.inputTokens,
+    output_tokens: usage.outputTokens,
+    total_tokens: usage.inputTokens + usage.outputTokens,
+  };
 }
 
 interface ScriptedChatModelOptions extends BaseChatModelParams {
@@ -117,6 +148,7 @@ export class ScriptedChatModel extends BaseChatModel {
         args: call.args,
         type: 'tool_call' as const,
       })),
+      ...(turn.usage === undefined ? {} : { usage_metadata: toUsageMetadata(turn.usage) }),
     });
   }
 
@@ -157,6 +189,17 @@ export class ScriptedChatModel extends BaseChatModel {
 
     const toolCalls = message.tool_calls ?? [];
     if (toolCalls.length === 0) {
+      // 用量掛在**最後一顆** chunk 上：`AIMessageChunk` 相加時 `usage_metadata` 會累加，
+      // 每顆文字 chunk 都掛的話這一輪的數字會被乘上字數。
+      if (turn.usage !== undefined) {
+        yield {
+          text: '',
+          message: new AIMessageChunk({
+            content: '',
+            usage_metadata: toUsageMetadata(turn.usage),
+          }),
+        } as ChatGenerationChunk;
+      }
       return;
     }
 
@@ -170,6 +213,7 @@ export class ScriptedChatModel extends BaseChatModel {
       text: '',
       message: new AIMessageChunk({
         content: '',
+        ...(turn.usage === undefined ? {} : { usage_metadata: toUsageMetadata(turn.usage) }),
         // id 一律取自 `toMessage()`，兩條路徑的 tool_call_id 才是同一份而不是碰巧相同。
         tool_call_chunks: toolCalls.map((call, index) => ({
           id: call.id,

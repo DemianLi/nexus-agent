@@ -1,0 +1,257 @@
+/**
+ * 基準任務的 CI 那半 —— 零憑證、不連外。
+ *
+ * **這裡唯一是假的東西是模型。** 資料集、runner、評分器、plugin 清單、agent 組裝全部
+ * 是真的跑，`ScriptedChatModel` 只負責「模型決定要呼叫哪個工具」那一步。供應商比較那半
+ * 換掉的也只有這一個參數 —— 見 [`runner.ts`](./runner.ts) 與開發計劃 Phase 5。
+ *
+ * ## 這個檔案為什麼要自己把環境弄壞
+ *
+ * 計劃原本記著「`LANGSMITH_TEST_TRACKING=false` 讓它不連外」。實測是**反過來的**：
+ * 不設 `LANGSMITH_TRACING` 時本來就零連外（帶不帶那支旗標、帶不帶 reporter 都一樣）；
+ * 那支旗標是 `LANGSMITH_TRACING` 打開之後才開始承重的護欄。而 [#72](https://github.com/DemianLi/nexus-agent/pull/72)
+ * 的 tracing 披露正是在教開發者把 tracing 打開 —— 也就是說，這個檔案的最壞情況是
+ * 「開發機開著 tracing 跑 `pnpm test`」，那不是假想，是被文件鼓勵的用法。
+ *
+ * 所以這裡**主動 arm 那個最壞情況**（loopback 端點 ＋ `LANGSMITH_TRACING=true`），
+ * 讓護欄在每次 CI 都真的承一次重。護欄沒設時實測的症狀是：發出 `POST /sessions` 與
+ * `GET /datasets?...`，整個檔案失敗，而且**測試被 skip**。
+ *
+ * ## 判準因此是「跑了幾條」，不是「沒連外」
+ *
+ * 被 skip 的測試同樣不會發請求 —— 一條只看 loopback 請求數的斷言，在它要防的那個情境
+ * 下照樣全綠。這與 [#79](https://github.com/DemianLi/nexus-agent/pull/79) 那個
+ * `status === 'idle'` 停止條件是同一型的假綠。所以承重的是 `executed` 這個計數器。
+ *
+ * ## 而且「零連外」根本不成立——有兩個寄件人
+ *
+ * 寫這個檔案時量到的：arm 起來之後 loopback 照樣收到 `GET /info` 與 `POST /runs/multipart`。
+ * 那不是 `ls.test`，是**真的 agent run** 自己的 LangChainTracer（[#72](https://github.com/DemianLi/nexus-agent/pull/72)
+ * 記的「tracing 被動生效」）。兩個寄件人各有各的開關，`LANGSMITH_TEST_TRACKING` 只管得住
+ * 前一個。所以 `afterAll` 分開斷言：`ls.test` 那邊零請求，agent 那邊**確實有**請求。
+ */
+
+// **在 `ls.describe` 被呼叫之前先把護欄設上。** 旗標是延遲讀取的（實測放在 import 之後
+// 也生效），但順序寫成「先護欄、後危險」才看得出這裡在防什麼。
+process.env.LANGSMITH_TEST_TRACKING = 'false';
+
+import { createServer } from 'node:http';
+import type { Server } from 'node:http';
+import type { NexusPlugin } from '@nexus/core';
+import { createEchoPlugin } from '@nexus/plugin-echo';
+import * as ls from 'langsmith/vitest';
+import { afterAll, beforeAll, expect } from 'vitest';
+import { ScriptedChatModel, type ScriptedTurn } from '../scripted-model.js';
+import { BENCHMARK, BENCHMARK_FILE, type BenchmarkCase } from './dataset.js';
+import { runBenchmarkCase } from './runner.js';
+import { scoreCase } from './scorers.js';
+
+/** 兩邊共用的清單。CI 與供應商比較必須是同一份，否則比的不是模型是組裝。 */
+const PLUGINS: readonly NexusPlugin[] = [createEchoPlugin()];
+
+const SYSTEM_PROMPT = [
+  '你是 nexus-agent 的基準任務受測者。',
+  '需要動用工具時就真的呼叫，不要只在文字裡描述你打算做什麼。',
+].join('\n');
+
+/**
+ * 每條任務的假模型腳本。
+ *
+ * **這是這個檔案裡唯一「假」的東西**，所以刻意跟資料集分開放：資料集是供應商中立的，
+ * 這裡是 CI 專用的替身。`usage` 明著給，成本那個指標才有對照組可判
+ * （假模型不給時回報的是 `undefined`，不是零 —— 見 `runner.ts`）。
+ */
+const SCRIPTS: Readonly<Record<string, readonly ScriptedTurn[]>> = {
+  'echo-once': [
+    {
+      content: '我來回聲。',
+      toolCalls: [{ name: 'echo', args: { message: '接線測試' } }],
+      usage: { inputTokens: 120, outputTokens: 18 },
+    },
+    { content: '回聲：接線測試', usage: { inputTokens: 150, outputTokens: 9 } },
+  ],
+  'echo-then-write': [
+    {
+      content: '先回聲。',
+      toolCalls: [{ name: 'echo', args: { message: '接線測試' } }],
+      usage: { inputTokens: 130, outputTokens: 20 },
+    },
+    {
+      content: '再寫進檔案。',
+      toolCalls: [
+        { name: 'write_file', args: { file_path: BENCHMARK_FILE, content: '回聲：接線測試' } },
+      ],
+      usage: { inputTokens: 180, outputTokens: 26 },
+    },
+    { content: '寫好了。', usage: { inputTokens: 210, outputTokens: 7 } },
+  ],
+  'write-then-read': [
+    {
+      content: '先寫。',
+      toolCalls: [{ name: 'write_file', args: { file_path: BENCHMARK_FILE, content: '第二次' } }],
+      usage: { inputTokens: 140, outputTokens: 22 },
+    },
+    {
+      content: '再讀回來。',
+      toolCalls: [{ name: 'read_file', args: { file_path: BENCHMARK_FILE } }],
+      usage: { inputTokens: 190, outputTokens: 16 },
+    },
+    { content: '裡面是「第二次」。', usage: { inputTokens: 230, outputTokens: 12 } },
+  ],
+};
+
+/**
+ * 壞掉的那一份：工具少叫一個、參數也寫錯。
+ *
+ * 它讓「評分器真的會扣分」在**端到端**這條路上也有對照組 —— `scorers.test.ts` 驗的是
+ * 純函式，這條驗的是「真的跑一遍 agent、真的收集觀測值、真的算出低分」。
+ */
+const SABOTEUR: readonly ScriptedTurn[] = [
+  {
+    content: '我隨便回聲一下就好。',
+    toolCalls: [{ name: 'echo', args: { message: '完全不是那句話' } }],
+    usage: { inputTokens: 130, outputTokens: 20 },
+  },
+  { content: '做完了。', usage: { inputTokens: 160, outputTokens: 5 } },
+];
+
+/** 真的跑完的 `ls.test` 條數。**這是本檔的主判準**，理由見檔頭。 */
+let executed = 0;
+
+/** loopback 假端點收到的請求。附帶斷言。 */
+const hits: string[] = [];
+let server: Server;
+
+beforeAll(async () => {
+  server = createServer((request, response) => {
+    hits.push(`${request.method} ${(request.url ?? '').split('?')[0]}`);
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end('{}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as { port: number }).port;
+
+  // **順序照 `tracing.test.ts` 的規矩**：端點先釘死在 loopback 並當場驗過，
+  // `LANGSMITH_TRACING` 最後才設。反過來的話，中間任何一次提早 return 都會讓
+  // 一個已經開著的 tracer 指向真正的 LangSmith。
+  process.env.LANGSMITH_ENDPOINT = `http://127.0.0.1:${port}`;
+  process.env.LANGSMITH_API_KEY = 'ls-fake-for-test';
+  // 同步送，`afterAll` 才不必跟背景 flush 賽跑（`dist/singletons/tracer.js` 把它翻成
+  // `blockOnRootRunFinalization: true`）。理由與 `tracing.test.ts` 的 `armTracing` 同一條。
+  process.env.LANGCHAIN_CALLBACKS_BACKGROUND = 'false';
+  expect(process.env.LANGSMITH_ENDPOINT).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+  expect(process.env.LANGSMITH_TEST_TRACKING).toBe('false');
+  process.env.LANGSMITH_TRACING = 'true';
+});
+
+/** 等到 loopback 收到第一顆 trace 為止。**斷言請求內容之前一定要先過這一關。** */
+async function waitForTrace(): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!hits.some((hit) => hit.endsWith('/runs/multipart')) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+afterAll(async () => {
+  delete process.env.LANGSMITH_TRACING;
+  delete process.env.LANGSMITH_ENDPOINT;
+  delete process.env.LANGSMITH_API_KEY;
+  // 這支也要清：它在 `tracing.test.ts` 的 `TRACING_ENV` 裡，漏掉會跨檔留下。
+  delete process.env.LANGCHAIN_CALLBACKS_BACKGROUND;
+
+  try {
+    await assertTripwires();
+  } finally {
+    // **server 最後才關。** 關掉之後才到的請求進不了 `hits`，那會讓下面兩條斷言
+    // 一條假綠、一條假紅。
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+async function assertTripwires(): Promise<void> {
+  // 主判準：每一條都真的跑過。少一條就代表它被 skip 了，而 skip 是靜默的。
+  // **這條不必等 flush**，所以先斷言它——它紅的時候，下面兩條說什麼都不重要。
+  expect(executed).toBe(BENCHMARK.length + 1);
+
+  // 請求內容的斷言要等東西真的到齊，否則「零請求」在什麼都還沒送出去時同樣成立。
+  await waitForTrace();
+
+  // **`ls.test` 那個寄件人閉著嘴**——護欄沒設時它會發這兩個。
+  expect(hits.filter((hit) => hit.includes('/sessions') || hit.includes('/datasets'))).toEqual([]);
+
+  // **但底下那個 agent run 有自己的寄件人，而且是另一個開關。** `LANGSMITH_TRACING=true`
+  // 時 `CallbackManager.configure` 會替真的 agent run 掛上 LangChainTracer（[#72](https://github.com/DemianLi/nexus-agent/pull/72)
+  // 記的那條「tracing 是被動生效的」），它跟 `LANGSMITH_TEST_TRACKING` 一點關係都沒有。
+  // 實測：四條任務跑完，loopback 收到 `GET /info` 與（批次過的）`POST /runs/multipart`。
+  // → 這條斷言把「兩個寄件人、兩個開關」釘住。它紅了代表兩者被合併了，那時上面那條
+  //   零連外的期待要重新想過。**也是 CI 不得設 `LANGSMITH_TRACING` 的理由**：這個套件
+  //   跑的是真的 agent，基準任務的題目與工具參數會跟著 trace 一起出境。
+  expect(hits.some((hit) => hit.endsWith('/runs/multipart'))).toBe(true);
+}
+
+/** 跑一條，記分，順手把三個指標當回饋掛上去。 */
+async function evaluateCase(
+  testCase: BenchmarkCase,
+  turns: readonly ScriptedTurn[],
+): Promise<ReturnType<typeof scoreCase>> {
+  const run = await runBenchmarkCase(testCase, {
+    model: new ScriptedChatModel({ turns }),
+    plugins: PLUGINS,
+    systemPrompt: SYSTEM_PROMPT,
+  });
+  const score = scoreCase(testCase, run);
+
+  ls.logFeedback({ key: 'tool_call_success', score: score.toolCallSuccess });
+  ls.logFeedback({ key: 'argument_correctness', score: score.argumentCorrectness });
+  ls.logFeedback({ key: 'extra_tool_calls', score: score.extraToolCalls });
+  if (score.mentions !== undefined) ls.logFeedback({ key: 'mentions', score: score.mentions });
+  // 成本不是分數（見 `scorers.ts`），但它是供應商比較要的那一欄，所以照樣記下來。
+  if (score.cost !== undefined) {
+    ls.logFeedback({ key: 'total_tokens', score: score.cost.totalTokens });
+  }
+
+  executed += 1;
+  return score;
+}
+
+ls.describe('基準任務（假模型）', () => {
+  for (const testCase of BENCHMARK) {
+    ls.test(
+      testCase.id,
+      {
+        inputs: { prompt: testCase.prompt },
+        referenceOutputs: { toolCalls: testCase.expected.toolCalls.map((call) => call.name) },
+      },
+      async () => {
+        const turns = SCRIPTS[testCase.id];
+        expect(turns, `${testCase.id} 沒有腳本`).toBeDefined();
+        const score = await evaluateCase(testCase, turns ?? []);
+
+        expect(score.toolCallSuccess).toBe(1);
+        expect(score.argumentCorrectness).toBe(1);
+        expect(score.extraToolCalls).toBe(0);
+        if (testCase.expected.mentions !== undefined) expect(score.mentions).toBe(1);
+        // 成本一定量得到——假模型每一輪都給了 `usage`，基座把它原封帶到最終狀態。
+        expect(score.cost?.totalTokens).toBeGreaterThan(0);
+      },
+    );
+  }
+
+  ls.test(
+    'saboteur：真的跑一遍也扣得到分',
+    {
+      inputs: { prompt: BENCHMARK[1]?.prompt ?? '' },
+      referenceOutputs: { note: '這一條期望低分' },
+    },
+    async () => {
+      const testCase = BENCHMARK[1];
+      expect(testCase).toBeDefined();
+      const score = await evaluateCase(testCase as BenchmarkCase, SABOTEUR);
+
+      // 兩個工具只叫了一個，而且那一個的參數還是錯的。
+      expect(score.toolCallSuccess).toBe(0.5);
+      expect(score.argumentCorrectness).toBe(0);
+      expect(score.extraToolCalls).toBe(0);
+    },
+  );
+});
