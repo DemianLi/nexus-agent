@@ -67,7 +67,7 @@ registry.memory.addSource(path); // 純累加；路徑格式在註冊期擋（�
 | 記憶層 | memory（AGENTS.md）+ skills + summarization/offloading | deepagentsjs 內建 | **三個都在，但都是「注入」不是「保存」**——見第 5 節 Phase 3 |
 | 執行與工具層 | tools + 虛擬 FS + 權限 + sandbox 協定與 provider（內建）＋ QuickJS 直譯器（`@nexus/plugin-quickjs`）＋ MCP（`@langchain/mcp-adapters`） | deepagentsjs 內建，QuickJS 與 MCP 除外 | 完整 |
 | 反思與反饋層 | 結果校驗 middleware + LangSmith 回饋 | **自建** | **薄覆蓋**，強化見 issue #16 |
-| 輸出層 | typed streaming → apps/web UI | deepagentsjs stream + 自建 UI | 完整 |
+| 輸出層 | typed streaming（基座 v3 `streamEvents`）→ apps/web UI | deepagentsjs 內建；UI 與**傳輸**自建 | **串流的形狀完整，但基座自己標為 experimental；瀏覽器到 agent 之間的那段傳輸還不存在** —— 見第 5 節 Phase 5 |
 
 harness 五大範圍對應：解析標準化（PluginRegistry + zod）、編排迴圈（deepagents）、記憶層（內建，但只注入不保存——見第 5 節 Phase 3）、工具層（內建）、結果校驗（自建 plugin——deepagents 無現成方案，為驗證插件架構價值的第一個實戰 plugin）。
 
@@ -77,7 +77,7 @@ harness 五大範圍對應：解析標準化（PluginRegistry + zod）、編排�
 packages/nexus-core      契約：NexusPlugin 型別、zod manifest、PluginRegistry 九個註冊點 ＋ lifecycle 通道、fold
 packages/nexus-plugin-*  plugin 系列，只相依 @nexus/core
 apps/harness             組裝點：agent 工廠、訊息標準化、CLI；唯一呼叫 createDeepAgent 的地方
-apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現有骨架續用）
+apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現有骨架續用；**與 agent 之間的傳輸還沒有**，見第 5 節 Phase 5）
 ```
 
 `pnpm-workspace.yaml` 的 glob 為 `apps/*` 與 `packages/*`。
@@ -282,9 +282,24 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
 
 ### Phase 5 — Web UI + 評測（約 3–4 個 PR）
 
-- `feat/web-chat-stream`：apps/web 對話介面 + typed event stream 呈現（含 subagent 事件）。
-- `feat/web-hitl`：核准 UI（對應 interrupt）。**混合批次要當成全有全無**：基座在一批裡只要有一筆被拒，被核准的那幾筆會靜靜地不執行、還會從歷史裡消失（見 Phase 4 那條），所以逐筆按的介面會生出一種「按了核准卻等同從沒問過」的狀態，而那件事在畫面上看不出來。
-- `feat/eval-suite`：LangSmith evaluators 跑基準任務 —— 補強項 3。模型供應商的品質與成本比較掛在這裡（[#31](https://github.com/DemianLi/nexus-agent/issues/31)）：同一組基準任務跑 Anthropic 與 DeepSeek，比工具呼叫成功率、參數正確性、token 成本。
+**動工前先驗過一輪**（`deepagents@1.13.1`、`langchain@1.5.10`、`@langchain/core@1.2.9`、`langsmith@0.9.0`，以下每一條都是實測，探針跑完即棄）。
+
+- ~~`feat/web-chat-stream`：apps/web 對話介面 + typed event stream 呈現（含 subagent 事件）。~~ **這一句的三個部分壞的方向各不相同。**
+  - **「typed event stream」是基座內建的，而且入口是 v3 不是 v2。** `DeepAgent.streamEvents(state, { version: "v3" })` 回一個 `DeepAgentRunStream`。**實際跑過的投影**：`messages`（逐則訊息的 token 串流）、`toolCalls`（`.input` / `.output` / `.status`）、`subagents`、`values`、`output`、`interrupts`、`interrupted`、`subgraphs`（吐 agent 自己的內部節點，`path` 形如 `["model_request:<uuid>"]` / `["tools:<uuid>"]`）、`extensions`（沒註冊 transformer 時是 `{}`）。**JSDoc 列了 `middleware`，但 1.13.1 的 run 物件上沒有這個東西**（實測 `typeof run.middleware === "undefined"`）；反過來，實際有而 JSDoc 沒列的是 `lifecycle`（`{ namespace, timestamp, event, graph_name }`，一次跑吐 8 筆）與 `messagesFrom`。**要用哪個投影，以 run 物件上真的有的為準，不要照 JSDoc 抄。**基座自己的 JSDoc 寫著：預設那條 legacy stream「should not be used for new user-facing agent streaming」，而 v3「will become the default in a future major release」。Phase 4 記下的「v2 沒有被標成 deprecated」是真的，但它會誤導 —— 沒被標 deprecated 不等於該拿它做面向使用者的串流。**同一段 JSDoc 也寫著 v3「experimental and its API may change in future releases」**，那句話與第 4 節把 `deepagents` 釘在 `~1.13.1`（放行 patch）撞在一起，見第 7 節決策 1。
+  - **`streamTransformers` 是第十個擴充點。** `CreateDeepAgentParams.streamTransformers` 原樣轉交 `createAgent`，產物落在 `run.extensions`。第 1 節寫的是「九個註冊點在 Phase 1 一次到齊」，而 1.13.1 的參數表上是十個。**`streamTransformers` 是哪個版本加進來的沒查**，所以「Phase 1 當時漏了」或「是後來才有的」兩種都還開著 —— 缺口本身跟這個無關，反正現在少一個。**這次不補**，照 [#70](https://github.com/DemianLi/nexus-agent/pull/70)–[#73](https://github.com/DemianLi/nexus-agent/pull/73) 的先例：釘住邊界，不順手加擴充點。
+  - **「含 subagent 事件」不用自建。** root 呼叫 `task` 派給名為 `writer` 的 subagent，`run.subagents` 吐出 `{ name: "writer", cause: { type: "toolCall", tool_call_id: "call_0" }, messages }`，subagent 自己那幾輪的訊息串流是分開的一條。**對照組**（一個 subagent 都沒註冊）吐零筆而且 iterator 正常收掉 —— 少了這一組，「`run.subagents` 其實是把 root 自己的內部節點也吐出來」也會過。
+  - **`ScriptedChatModel` 在 v3 這條路上是瞎的，而且是靜默的。** 同一份腳本：`invoke` 與 v2 `streamEvents` 都跑到工具；**v3 只跑一輪模型就結束，工具從沒被呼叫，`run.toolCalls` 是空的，而且沒有任何東西拋錯**。原因是兩段接不上 —— v3 掛的 callback handler 讓 `_generateUncached` 走 `_streamChatModelEvents` 那一支（`@langchain/core@1.2.9`，`chat_models.js:231`），而它的預設實作是 `convertChunksToEvents(this._streamResponseChunks(...))`，那個轉換器**只讀 `msg.tool_call_chunks`、從不讀 `msg.tool_calls`**（`compat.js:174`），我們的假模型偏偏把工具呼叫掛在後者。第二個坑緊接著：`tool_call_chunk` 的 `index` 與文字 content block 共用同一個編號空間，`index: 0` 會撞上那段文字的 block 並把它寫壞（實測 `index: i` 不通、`index: i + 1` 通）。
+    → **修 `ScriptedChatModel` 是這張 PR 的第一件事，不是附帶。** 在它修好之前，任何走 v3 的 Phase 5 測試都是綠的而且什麼都沒驗到。這也是 [#32](https://github.com/DemianLi/nexus-agent/issues/32) 那份「假模型與基座真實行為悄悄分歧」清單上第一個真的被抓到的分歧 —— 而它是被 CI 抓不到的那種：分歧發生時測試不會紅，會靜靜地少驗一半。
+  - **`apps/web` 與 agent 之間沒有線，而計劃從沒記過要選哪一條。** 現有骨架是純 Vite + React：沒有 server、沒有相依 `@nexus/harness`、沒有任何 HTTP / SSE / WebSocket。agent 跑在 Node（backend、MCP 的 stdio 子行程、QuickJS 的組裝都在 Node 這側），所以中間一定要有一段傳輸 —— 那是一個決策點，「現有骨架續用」把它藏起來了。**`deepagents` 確實有 `./browser` 進入點，但那不是「整包搬進瀏覽器」的許可**：機械比對兩份 `.d.ts` 的匯出，browser 少掉的正好是 16 個 Node 專屬的名字（`FilesystemBackend`、`LocalShellBackend`、`Settings` / `findProjectRoot` / `listSkills` / `parseSkillMetadata`、`createAgentMemoryMiddleware`、`createSubAgent` 等），而我們的 `ContainedFilesystemBackend` 正是繼承 `FilesystemBackend` 的那一個。
+    → 這一項因此是**兩張 PR**（傳輸 ＋ UI），或者傳輸的決定要先進第 7 節。切法在動工那張 PR 上拍板。
+- `feat/web-hitl`：核准 UI（對應 interrupt）。**混合批次要當成全有全無**：基座在一批裡只要有一筆被拒，被核准的那幾筆會靜靜地不執行、還會從歷史裡消失（見 Phase 4 那條），所以逐筆按的介面會生出一種「按了核准卻等同從沒問過」的狀態，而那件事在畫面上看不出來。**另外三件動工前查到的事：**
+  - **核准 UI 要顯示的東西，基座已經整理好了。** `run.interrupts` 吐 `{ interruptId, payload: { actionRequests: [{ name, args, description }], reviewConfigs: [{ actionName, allowedDecisions: ["approve", "reject"] }] } }` —— `allowedDecisions` 就是 harness 在第 1 節固定下來的那套封閉詞彙，從串流這一端看得到。所以「畫面上能按什麼」不必另外約定，讀 payload 就是。
+  - **暫停時 `await run.output` 會炸，而且炸得沒有意義**：`TypeError: Cannot read properties of undefined (reading "length")`。它不是「這一輪停住了」的訊號，是一個沒指名任何東西的錯。**要先問 `run.interrupted`**（實測回 `true`）。三組對照排除了「是不是我先讀了別的投影才害它壞掉」：什麼都不 drain 就 `await`、只 drain `messages`、drain 完 `messages` 與 `interrupts` —— 三種順序炸的訊息一模一樣；而**沒有中斷的那一組正常 resolve**（拿得到完整 4 則訊息）。所以炸的原因就是「這一輪停住了」本身。這是個陷阱 —— 最自然的寫法正好是壞的那個。
+  - **接得回去，而且不必換路。** `streamEvents(new Command({ resume: { decisions: [{ type: "approve" }] } }), { version: "v3" })` 實測跑得通：工具真的執行、ToolMessage 的 `status` 是 `success`。所以一場對話從頭到尾只有一條呼叫路徑，不會變成「串流用 `streamEvents`、核准用 `invoke`」。
+- `feat/eval-suite`：LangSmith evaluators 跑基準任務 —— 補強項 3。模型供應商的品質與成本比較掛在這裡（[#31](https://github.com/DemianLi/nexus-agent/issues/31)）：同一組基準任務跑 Anthropic 與 DeepSeek，比工具呼叫成功率、參數正確性、token 成本。**「CI 沒憑證所以驗不了」第二次是錯的**（第一次是 [#72](https://github.com/DemianLi/nexus-agent/pull/72) 的 tracing），但這次的界線比較細：
+  - `langsmith/vitest` 的 `ls.describe` / `ls.test` 配上 `LANGSMITH_TEST_TRACKING=false` **完全不連外、也不要 key**（實測跑得過，評分函式的本體真的執行）。evaluator 的邏輯與資料集的形狀因此進得了 CI。
+  - `langsmith/evaluation` 的 `evaluate()` 則**一定連外**：對著 loopback 假端點實測，任何 evaluator 跑起來之前它就已經發了 `POST /sessions`、`GET /datasets/<id>`、`GET /sessions`。`data` 收得下記憶體裡的 `Example[]`（資料集不必是託管的），但那個 experiment 必須是。
+  - → 照 Phase 0 的切法分兩段：**evaluator 與資料集形狀進 CI，零憑證**；**`evaluate()` 的編排與 #31 的供應商數字是一次性人工驗證**，記進 PR 內文的「驗證方式」。
 - 驗收：瀏覽器完成「提問 → 看事件流 → 核准工具 → 收結果」全迴圈；eval 有可比較的通過率數據，且該數據足以讓模型供應商定案。
 
 ## 6. 六大補強項落點
@@ -304,7 +319,11 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
 
    smoke test 的邊界（[#32](https://github.com/DemianLi/nexus-agent/issues/32)）：**只斷言「契約明文依賴、而且基座改掉時型別檢查攔不到」的執行期行為**，落點跟著 agent 組裝點走。`createDeepAgent` 的參數名不另外斷言（呼叫本身就是斷言，改名會 compile 失敗）；同名 subagent 行為不斷言（[#28](https://github.com/DemianLi/nexus-agent/issues/28) 已把它擋在載入期，基座怎麼做不再是我們的依賴）。
 
-   **升版檢查清單**：`deepagents` 升 minor 或 major 的 PR 上，重跑一次 [#31](https://github.com/DemianLi/nexus-agent/issues/31) 那四項人工真實模型驗證——tool call 參數以合法 JSON 回傳／`streamMode: ['updates','values']` 的事件形狀與假模型一致／Node 22 相容／key 只從環境變數讀且缺少即失敗。這是擋「`ScriptedChatModel` 與基座真實行為悄悄分歧」的唯一機制：CI 不放模型 secret（#31），所以那個分歧在結構上斷言不出來——寫得出來的斷言只能斷言假模型與我們對基座的想像一致，那正是分歧發生時仍然全綠的東西。
+   **`~` 放行 patch，但基座有一個 experimental 的公開 API。** v3 `streamEvents`（第 5 節 Phase 5 要用的那個）的 JSDoc 明文「experimental and its API may change in future releases」。`~1.13.1` 擋得住 minor，擋不住 patch —— 而一個標成 experimental 的 API 是可以在 patch 裡動的。這不改分層（判準仍是「壞掉時 semver 管不管得到」，而這一條正是 semver 管不到的例子），但它讓升版檢查清單多一項：**碰過 v3 串流之後，`deepagents` 每次升版都要重跑一次事件流那組測試**，而不是只跑那四項人工驗證。
+
+   **升版檢查清單**：`deepagents` 升 minor 或 major 的 PR 上，重跑一次 [#31](https://github.com/DemianLi/nexus-agent/issues/31) 那四項人工真實模型驗證——tool call 參數以合法 JSON 回傳／`streamMode: ['updates','values']` 的事件形狀與假模型一致／Node 22 相容／key 只從環境變數讀且缺少即失敗。這是擋「`ScriptedChatModel` 與基座真實行為悄悄分歧」的機制之一。
+
+   **但「那個分歧在結構上斷言不出來」這句是錯的，Phase 5 動工前的驗證當場撞到反例。** 原文的推論是：CI 不放模型 secret（#31），所以寫得出來的斷言只能斷言假模型與我們對基座的想像一致，而那正是分歧發生時仍然全綠的東西。**漏掉的是第三種斷言：同一份腳本走兩條基座路徑，比對兩邊的結果。** `ScriptedChatModel` 在 v3 串流下對工具呼叫視而不見（見第 5 節 Phase 5），這件事完全不需要任何 key 就斷言得出來 —— 拿同一份腳本分別走 `invoke` 與 v3 `streamEvents`，斷言兩邊都跑到工具，分歧當場紅。**假模型與基座的分歧，只要基座自己有兩條路可以互為對照，就驗得出來**；驗不出來的是「真實供應商會不會這樣回」，那才是要 key 的那一半。
 2. **模型供應商決策**（[#31](https://github.com/DemianLi/nexus-agent/issues/31)）：Anthropic 功能最全但成本高；DeepSeek 便宜。原文要在 Phase 0「兩者都跑基本驗證再定」，但 Phase 0 的驗收判定不了品質，也碰不到 middleware —— 那時還沒有任何 middleware。拆成三段：**Phase 0 只定預設**（Anthropic）並驗真實接線；**Phase 2 驗 DeepSeek 相容性**，二元判定，不相容就出局；**Phase 5 才比品質與成本**，掛在 eval suite 的基準任務上。理由是相容性是二元的、早驗早止血；品質比較是統計性的，小樣本手工跑出來的數字噪音大過訊號。
 3. **shell sandbox 安全**：`execute` 工具本質是跑任意指令。先只用 QuickJS interpreter，shell sandbox 延後到有明確隔離方案（容器）再做。
 
