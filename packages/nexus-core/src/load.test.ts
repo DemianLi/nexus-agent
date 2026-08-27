@@ -198,7 +198,7 @@ describe('九個註冊點的回滾', () => {
     registry.permissions.deny(['/.env*']);
     registry.interrupts.require('rm', { reason: '刪檔' });
     registry.skills.addSource('/skills/user/');
-    registry.memory.addSource('./AGENTS.md');
+    registry.memory.addSource('/AGENTS.md');
     registry.lifecycle.onDispose(() => {});
     registry.tools.register(fakeTool('grep'), { scope: 'researcher' });
     throw new Error('半路壞掉');
@@ -225,11 +225,11 @@ describe('九個註冊點的回滾', () => {
     const registry = createRegistry();
     const good = fakePlugin('good', (r) => {
       r.middleware.use(fakeMiddleware('keep'));
-      r.memory.addSource('./KEEP.md');
+      r.memory.addSource('/KEEP.md');
     });
     await expect(loadPlugins([good, greedy], registry)).rejects.toThrow('半路壞掉');
     expect(registry.middleware.list()).toHaveLength(1);
-    expect(registry.memory.sources()).toEqual(['./KEEP.md']);
+    expect(registry.memory.sources()).toEqual(['/KEEP.md']);
   });
 
   it('匿名撤銷是逐筆的：同一個 plugin 的兩個 middleware 一起撤，別人的留著', async () => {

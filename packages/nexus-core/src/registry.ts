@@ -235,13 +235,16 @@ export interface SkillSourceRegistrationPoint {
   sources(): string[];
 }
 
-/** `memory` 註冊點：純累加，基座自理。 */
+/** `memory` 註冊點：純累加，但路徑格式這裡驗。 */
 export interface MemorySourceRegistrationPoint {
   /**
    * 加一個 memory 來源路徑（AGENTS.md）。重複路徑不報錯——併入 prompt 的規則是
    * 基座的事，這裡只負責把清單交出去。
-   * @param path - 來源檔路徑。
+   *
+   * **路徑格式是例外，這裡當場擋**——理由見 {@link assertLoadableMemoryPath}。
+   * @param path - backend 命名空間下的絕對路徑。
    * @returns 只撤銷這一次註冊的冪等 undo。
+   * @throws 路徑不是絕對路徑、含 `..`、或以 `~` 開頭。
    */
   addSource(path: string): () => void;
   /**
@@ -496,6 +499,7 @@ export function createRegistry(): InternalPluginRegistry {
   const memoryPoint: MemorySourceRegistrationPoint = {
     addSource(path) {
       const origin = requireOrigin('memory.addSource()');
+      assertLoadableMemoryPath(path, origin);
       return memorySources.append(path, origin);
     },
     sources: () => [...memorySources.entries()].map((entry) => entry.value),
@@ -533,4 +537,55 @@ export function createRegistry(): InternalPluginRegistry {
       };
     },
   };
+}
+
+/**
+ * memory 來源必須是 backend 命名空間下的絕對路徑。
+ *
+ * **這道檢查存在的理由是基座那一側完全沒有。** `createMemoryMiddleware` 的載入迴圈是
+ * `try { ... } catch { console.debug(...) }`，而且只在內容為真時才收進來
+ * （`if (content) contents[path] = content`）。所以「讀不到」「不存在」「是個空檔」
+ * 三者在 prompt 裡塌成同一個 `(No memory loaded)`——**沒有任何東西會紅**，agent 只是
+ * 安靜地沒有記憶。而 `memoryContents` 又快取在 state 裡，配上 checkpointer 就是一個
+ * thread 只載一次：連「下一輪會不會好」都沒有。
+ *
+ * 這跟 `permissions.deny()` 刻意**不**驗第二次是相反的情況，不是不一致：那邊基座自己
+ * 會拋（`validatePermissionPaths()`），我們再驗只會讓同一個錯誤有兩個出處；這邊基座
+ * 什麼都不做，我們不驗就沒有人驗。
+ *
+ * `~` 是最值得擋的那個：基座 JSDoc 裡那個 `"~/.deepagents/AGENTS.md"` 是**已 deprecated
+ * 的 `createAgentMemoryMiddleware`** 留下的，backend-agnostic 這條路上沒有任何一處展開
+ * `~`（`os.homedir()` 只出現在 node-only 的 `createSettings`）。照抄那個例子的下場正好
+ * 就是上面那種靜默。
+ *
+ * **偏離 dsh，標註如下。** dsh 的對應機制是 `@deepseek-ai/dsh-agent-instructions`，而它
+ * 的設定收的是**檔名候選**（`['AGENTS.md', 'CLAUDE.md']`），`resolveInstructionFileCandidates`
+ * 把任何含 `/` 或 `\` 的候選連同 `RESERVED_PATH_SEGMENTS`（`''` / `'.'` / `'..'`）一起
+ * **靜默濾掉**——因為路徑走查（往上找 project root）與 `~` / `$DSH_HOME` 的展開都由
+ * loader 自己擁有。**這個形狀我們表達不出來**：`deepagents` 的 `memory` 參數收的就是
+ * backend 路徑，它的 loader 不做走查也不展開任何東西。退到最接近的：**把 dsh 濾掉的那
+ * 三種路段照樣擋下，但改成拋錯而不是靜默濾掉**。靜默濾掉在 dsh 那邊無害（濾完還有其他
+ * 候選、還有走查），在這裡則等於把唯一的來源刪掉，正好製造出這道檢查要防的那種靜默。
+ *
+ * @param path - 註冊進來的來源路徑。
+ * @param origin - 註冊者，錯誤訊息要指名是誰寫的。
+ * @throws 路徑以 `~` 開頭、不是絕對路徑、或含 `.` / `..` / 空的路段。
+ */
+function assertLoadableMemoryPath(path: string, origin: PluginOrigin): void {
+  const reject = (why: string): never => {
+    throw new Error(
+      `${formatOrigin(origin)} 註冊的 memory 來源 "${path}" ${why}。` +
+        `memory 來源要用 backend 命名空間下的絕對路徑（例如 "/AGENTS.md"）——` +
+        `基座把路徑原樣交給 backend，讀不到不會拋錯也不會警告，只會在 prompt 裡` +
+        `變成 "(No memory loaded)"。這種路徑寫錯不擋在這裡就永遠不會被發現。`,
+    );
+  };
+
+  if (path.startsWith('~')) reject('以 "~" 開頭——沒有任何一層會把它展開成家目錄');
+  if (!path.startsWith('/')) reject('不是絕對路徑');
+  // 首段是前置斜線切出來的空字串，永遠存在，不算數。
+  const segments = path.split('/').slice(1);
+  if (segments.includes('..')) reject('含 ".." 路段');
+  if (segments.includes('.')) reject('含 "." 路段');
+  if (segments.includes('')) reject('含空路段（連續斜線或結尾斜線）——記憶來源是檔不是目錄');
 }
