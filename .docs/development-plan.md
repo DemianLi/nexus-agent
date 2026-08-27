@@ -67,7 +67,7 @@ registry.memory.addSource(path); // 純累加；路徑格式在註冊期擋（�
 | 記憶層 | memory（AGENTS.md）+ skills + summarization/offloading | deepagentsjs 內建 | **三個都在，但都是「注入」不是「保存」**——見第 5 節 Phase 3 |
 | 執行與工具層 | tools + 虛擬 FS + 權限 + sandbox 協定與 provider（內建）＋ QuickJS 直譯器（`@nexus/plugin-quickjs`）＋ MCP（`@langchain/mcp-adapters`） | deepagentsjs 內建，QuickJS 與 MCP 除外 | 完整 |
 | 反思與反饋層 | 結果校驗 middleware + LangSmith 回饋 | **自建** | **薄覆蓋**，強化見 issue #16 |
-| 輸出層 | typed streaming（基座 v3 `streamEvents`）→ apps/web UI | deepagentsjs 內建；UI 與**傳輸**自建 | **串流的形狀完整，但基座自己標為 experimental；瀏覽器到 agent 之間的那段傳輸還不存在** —— 見第 5 節 Phase 5 |
+| 輸出層 | typed streaming（基座 v3 `streamEvents`）→ apps/web UI | deepagentsjs 內建；UI 與**傳輸**自建 | **串流的形狀完整，但基座自己標為 experimental；瀏覽器到 agent 之間的傳輸已定案（上行 HTTP、下行單向 SSE，第 7 節決策 6）但還沒有實作** —— 見第 5 節 Phase 5 |
 
 harness 五大範圍對應：解析標準化（PluginRegistry + zod）、編排迴圈（deepagents）、記憶層（內建，但只注入不保存——見第 5 節 Phase 3）、工具層（內建）、結果校驗（自建 plugin——deepagents 無現成方案，為驗證插件架構價值的第一個實戰 plugin）。
 
@@ -77,7 +77,7 @@ harness 五大範圍對應：解析標準化（PluginRegistry + zod）、編排�
 packages/nexus-core      契約：NexusPlugin 型別、zod manifest、PluginRegistry 九個註冊點 ＋ lifecycle 通道、fold
 packages/nexus-plugin-*  plugin 系列，只相依 @nexus/core
 apps/harness             組裝點：agent 工廠、訊息標準化、CLI；唯一呼叫 createDeepAgent 的地方
-apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現有骨架續用；**與 agent 之間的傳輸還沒有**，見第 5 節 Phase 5）
+apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現有骨架續用；**與 agent 之間的傳輸已定案未實作**，見第 7 節決策 6）
 ```
 
 `pnpm-workspace.yaml` 的 glob 為 `apps/*` 與 `packages/*`。
@@ -289,9 +289,9 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
   - **`streamTransformers` 是第十個擴充點。** `CreateDeepAgentParams.streamTransformers` 原樣轉交 `createAgent`，產物落在 `run.extensions`。第 1 節寫的是「九個註冊點在 Phase 1 一次到齊」，而 1.13.1 的參數表上是十個。**`streamTransformers` 是哪個版本加進來的沒查**，所以「Phase 1 當時漏了」或「是後來才有的」兩種都還開著 —— 缺口本身跟這個無關，反正現在少一個。**這次不補**，照 [#70](https://github.com/DemianLi/nexus-agent/pull/70)–[#73](https://github.com/DemianLi/nexus-agent/pull/73) 的先例：釘住邊界，不順手加擴充點。
   - **「含 subagent 事件」不用自建。** root 呼叫 `task` 派給名為 `writer` 的 subagent，`run.subagents` 吐出 `{ name: "writer", cause: { type: "toolCall", tool_call_id: "call_0" }, messages }`，subagent 自己那幾輪的訊息串流是分開的一條。**對照組**（一個 subagent 都沒註冊）吐零筆而且 iterator 正常收掉 —— 少了這一組，「`run.subagents` 其實是把 root 自己的內部節點也吐出來」也會過。
   - **`ScriptedChatModel` 在 v3 這條路上是瞎的，而且是靜默的。** 同一份腳本：`invoke` 與 v2 `streamEvents` 都跑到工具；**v3 只跑一輪模型就結束，工具從沒被呼叫，`run.toolCalls` 是空的，而且沒有任何東西拋錯**。原因是兩段接不上 —— v3 掛的 callback handler 讓 `_generateUncached` 走 `_streamChatModelEvents` 那一支（`@langchain/core@1.2.9`，`chat_models.js:231`），而它的預設實作是 `convertChunksToEvents(this._streamResponseChunks(...))`，那個轉換器**只讀 `msg.tool_call_chunks`、從不讀 `msg.tool_calls`**（`compat.js:174`），我們的假模型偏偏把工具呼叫掛在後者。第二個坑緊接著：`tool_call_chunk` 的 `index` 與文字 content block 共用同一個編號空間，`index: 0` 會撞上那段文字的 block 並把它寫壞（實測 `index: i` 不通、`index: i + 1` 通）。
-    → **修 `ScriptedChatModel` 是這張 PR 的第一件事，不是附帶。** 在它修好之前，任何走 v3 的 Phase 5 測試都是綠的而且什麼都沒驗到。這也是 [#32](https://github.com/DemianLi/nexus-agent/issues/32) 那份「假模型與基座真實行為悄悄分歧」清單上第一個真的被抓到的分歧 —— 而它是被 CI 抓不到的那種：分歧發生時測試不會紅，會靜靜地少驗一半。
+    → **已修**（[#75](https://github.com/DemianLi/nexus-agent/pull/75)）：`_streamResponseChunks` 改吐 `tool_call_chunks`、`index` 從 1 起跳，配一組雙路徑對照測試（`stream-parity.test.ts`）。反向驗過兩次：退回 `tool_calls` 六條全紅；`index` 退成 0 四條紅，而且單一呼叫時工具**完全沒跑**（比原本記的「文字被寫壞」更嚴重），兩個呼叫時只有 `index: 1` 的那筆活下來。在它修好之前，任何走 v3 的 Phase 5 測試都是綠的而且什麼都沒驗到。這也是 [#32](https://github.com/DemianLi/nexus-agent/issues/32) 那份「假模型與基座真實行為悄悄分歧」清單上第一個真的被抓到的分歧 —— 而它是被 CI 抓不到的那種：分歧發生時測試不會紅，會靜靜地少驗一半。
   - **`apps/web` 與 agent 之間沒有線，而計劃從沒記過要選哪一條。** 現有骨架是純 Vite + React：沒有 server、沒有相依 `@nexus/harness`、沒有任何 HTTP / SSE / WebSocket。agent 跑在 Node（backend、MCP 的 stdio 子行程、QuickJS 的組裝都在 Node 這側），所以中間一定要有一段傳輸 —— 那是一個決策點，「現有骨架續用」把它藏起來了。**`deepagents` 確實有 `./browser` 進入點，但那不是「整包搬進瀏覽器」的許可**：機械比對兩份 `.d.ts` 的匯出，browser 少掉的正好是 16 個 Node 專屬的名字（`FilesystemBackend`、`LocalShellBackend`、`Settings` / `findProjectRoot` / `listSkills` / `parseSkillMetadata`、`createAgentMemoryMiddleware`、`createSubAgent` 等），而我們的 `ContainedFilesystemBackend` 正是繼承 `FilesystemBackend` 的那一個。
-    → 這一項因此是**兩張 PR**（傳輸 ＋ UI），或者傳輸的決定要先進第 7 節。切法在動工那張 PR 上拍板。
+    → **已拍板，見第 7 節決策 6**：上行 HTTP POST、下行單向事件串流（先做 SSE）。這一項因此確定是**兩張 PR** —— `feat/web-transport`（server 端的 pump ＋ 兩個方向的線，不含 UI）與 `feat/web-chat-stream`（UI）。
 - `feat/web-hitl`：核准 UI（對應 interrupt）。**混合批次要當成全有全無**：基座在一批裡只要有一筆被拒，被核准的那幾筆會靜靜地不執行、還會從歷史裡消失（見 Phase 4 那條），所以逐筆按的介面會生出一種「按了核准卻等同從沒問過」的狀態，而那件事在畫面上看不出來。**另外三件動工前查到的事：**
   - **核准 UI 要顯示的東西，基座已經整理好了。** `run.interrupts` 吐 `{ interruptId, payload: { actionRequests: [{ name, args, description }], reviewConfigs: [{ actionName, allowedDecisions: ["approve", "reject"] }] } }` —— `allowedDecisions` 就是 harness 在第 1 節固定下來的那套封閉詞彙，從串流這一端看得到。所以「畫面上能按什麼」不必另外約定，讀 payload 就是。
   - **暫停時 `await run.output` 會炸，而且炸得沒有意義**：`TypeError: Cannot read properties of undefined (reading "length")`。它不是「這一輪停住了」的訊號，是一個沒指名任何東西的錯。**要先問 `run.interrupted`**（實測回 `true`）。三組對照排除了「是不是我先讀了別的投影才害它壞掉」：什麼都不 drain 就 `await`、只 drain `messages`、drain 完 `messages` 與 `interrupts` —— 三種順序炸的訊息一模一樣；而**沒有中斷的那一組正常 resolve**（拿得到完整 4 則訊息）。所以炸的原因就是「這一輪停住了」本身。這是個陷阱 —— 最自然的寫法正好是壞的那個。
@@ -343,3 +343,19 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
    **checkpointer 與 store 兩軸維持在 `MemorySaver` 與「未選」，理由是收下 `@langchain/langgraph-checkpoint-postgres` 會把一個活的 Postgres 拖進測試路徑**，而 CI 上沒有任何服務憑證（[#31](https://github.com/DemianLi/nexus-agent/issues/31)），測試必須是自足的。版本層級也仍然懸在那張 PR 上（見第 3 節鎖死那一列）。這兩軸目前**沒有可執行證據**，只有寫下來的判斷——照實記著，別讓它看起來像已經驗過。
 
 5. **結果校驗範圍（Phase 4 前）**：需定義「校驗什麼」——schema、不變量、還是業務規則。屆時拍板。
+6. **`apps/web` 與 agent 之間的傳輸**（Phase 5 拍板）：原文從沒把它記成決策點，「現有骨架續用」那句把它藏起來了（見第 5 節 Phase 5）。**決定：上行 HTTP POST，下行單向事件串流；下行載體先做 SSE，WebSocket 覆寫留到需要時再加。**
+
+   **依據是 dsh 的實際做法**（AGENTS.md 的技術實現標準；以下都是讀 `references/deepseek-harness` 的原始碼，不是搜尋來的）：
+
+   - 瀏覽器載體的形狀寫在檔案第一行：`packages/client/connection/src/client/web-api-client.ts` —— 「Browser API carrier: HTTP upstream plus one WebSocket per downstream event stream.」下行單向是**明文的協定不變量**，不是實作細節：`websocket-downlink.ts` 的類別註解寫「Client messages are a protocol violation: upstream traffic remains on HTTP.」
+   - **同一組 frame 在 host 這側同時有 SSE 路由**：`packages/host/apiproxy/src/fetch/handler.ts` 的 `GET /api/events.mux` 與 `/api/events.host` 回 `text/event-stream`，而 SSE 的 frame 解碼就在共用的 `AbstractApiClient` 裡；`WebApiClient` 是**覆寫**掉那條預設改用 WS。所以 SSE 不是測試用的假縫，是同一份協定的另一個載體 —— 走 SSE 的 `InProcessApiClient` 定位為「同構接點……跑完整的協定序列化與校驗路徑而不經過網路」。**先做 SSE 等於做 dsh 兩層裡的基礎那層；但 dsh 出貨給瀏覽器的是 WS，停在 SSE 就是少了那一層覆寫，這裡明著記著。**（dsh 自己也註明 SSE 那條用的是 streaming fetch 而不是 `EventSource`，見 `packages/host/apiproxy/src/fetch/client.ts`。）
+   - **事件不是「每個請求回一條串流」。** dsh 只有兩條長期下行：`mux`（跨全部 session 彙總）與 `host`（session 生命週期）。agent 的實際事件以 `session/event` 搭在 mux 上，核准請求也是（`approval/requested` 是一個可回答的 server-request），回覆走 HTTP 上行。**這一點與基座的 HITL 形狀正好對得上**：`run.interrupts` 在串流這一端、`Command({ resume })` 在下一次呼叫這一端。
+   - 重連照 dsh：`since` 在它的 v1 沒實作，明文 `reconnection = reopen the stream + refetch history`。
+
+   **基座這側量到的三件事決定了 server 端要做什麼**（`deepagents@1.13.1`，探針跑完即棄）：
+
+   1. **run 不必被抽就會自己前進。** 開了 v3 串流之後什麼都不抽，300 ms 後工具已經跑完；`await run.output` 收完整場之後再抽 `run.messages`，兩輪都還在。**但這只證明了同一個 run 物件在同一個行程內可以重播** —— 跨連線、跨行程的重連沒有驗過，所以重連策略照 dsh 的 reopen ＋ refetch，不要拿這個 buffer 當重連機制。
+   2. **一場對話不是一個 run 物件。** 停在核准點時 run 就收掉，`run.messages` 只有中斷前那一段（實測 `['我來記。']`）；`streamEvents(new Command({ resume }), …)` 回的是**另一個** run 物件（實測 `run2 !== run`），而且只帶 resume 之後的訊息（`['記好了。']`），舊的 run 再抽一次仍然只有前半段。→ **持久下行串流必須由 server 端把 N 個 run 物件接起來**，不能把某一個 run 直接交給瀏覽器。這正是 dsh 那條「一條長期下行、上行另走 HTTP」的形狀在我們這邊也成立的理由。
+   3. pump 不能無條件 `await run.output`：暫停時它會炸成一個沒指名任何東西的 `TypeError`（見第 5 節 Phase 5 的 `feat/web-hitl`），要先問 `run.interrupted`。
+
+   **偏離標記**：無協定層偏離。唯一一處是載體層的**未完成**而非偏離 —— 先出 SSE、不出 WS 覆寫；deepagents／LangChain 這側沒有任何東西擋著 WS，所以補上去是工作量問題不是表達力問題。
