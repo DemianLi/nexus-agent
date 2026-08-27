@@ -19,6 +19,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@nexus/plugin-echo": "workspace:*",
     "@nexus/plugin-mcp": "workspace:*",
+    "@nexus/plugin-memory": "workspace:*",
     "@nexus/plugin-quickjs": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",

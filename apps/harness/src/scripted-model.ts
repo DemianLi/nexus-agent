@@ -10,6 +10,7 @@ interface ScriptedModelState {
   turn: number;
   boundToolNames: readonly string[];
   lastPrompt: readonly BaseMessage[];
+  prompts: (readonly BaseMessage[])[];
 }
 
 /** 腳本裡的一次工具呼叫。 */
@@ -46,7 +47,7 @@ export class ScriptedChatModel extends BaseChatModel {
     const { turns, shared, ...rest } = options;
     super(rest);
     this.turns = turns;
-    this.shared = shared ?? { turn: 0, boundToolNames: [], lastPrompt: [] };
+    this.shared = shared ?? { turn: 0, boundToolNames: [], lastPrompt: [], prompts: [] };
   }
 
   /** bindTools 收到什麼，spike 用它斷言基座真的把工具交給了模型。 */
@@ -62,6 +63,20 @@ export class ScriptedChatModel extends BaseChatModel {
    */
   get lastPrompt(): readonly BaseMessage[] {
     return this.shared.lastPrompt;
+  }
+
+  /**
+   * 依發生順序的每一輪 prompt。
+   *
+   * **`lastPrompt` 看不到 subagent 那幾輪**——subagent 跑完之後 root 還會再問一次模型，
+   * 所以最後一輪永遠是 root 的。「subagent 收到的 system prompt 長什麼樣」只有從這裡
+   * 看得到，而那正是 memory 與 skills 這類「注入 system prompt」的擴充點在 subagent
+   * 邊界上唯一的觀測點。
+   *
+   * 記在共用狀態上而不是實例上，理由跟 `turn` 一樣：`bindTools` 會產生新實例。
+   */
+  get prompts(): readonly (readonly BaseMessage[])[] {
+    return this.shared.prompts;
   }
 
   _llmType(): string {
@@ -88,6 +103,11 @@ export class ScriptedChatModel extends BaseChatModel {
     return turn;
   }
 
+  private record(messages: BaseMessage[]): void {
+    this.shared.lastPrompt = messages;
+    this.shared.prompts.push(messages);
+  }
+
   private toMessage(turn: ScriptedTurn): AIMessage {
     return new AIMessage({
       content: turn.content,
@@ -101,7 +121,7 @@ export class ScriptedChatModel extends BaseChatModel {
   }
 
   async _generate(messages: BaseMessage[]): Promise<ChatResult> {
-    this.shared.lastPrompt = messages;
+    this.record(messages);
     const turn = this.nextTurn();
     const message = this.toMessage(turn);
     return { generations: [{ text: turn.content, message }], llmOutput: {} };
@@ -116,7 +136,7 @@ export class ScriptedChatModel extends BaseChatModel {
     _options: this['ParsedCallOptions'],
     runManager?: CallbackManagerForLLMRun,
   ): AsyncGenerator<ChatGenerationChunk> {
-    this.shared.lastPrompt = messages;
+    this.record(messages);
     const turn = this.nextTurn();
     const message = this.toMessage(turn);
 

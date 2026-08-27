@@ -218,10 +218,56 @@ describe('其餘六個註冊點', () => {
   it('memory 純累加，同一路徑兩次不報錯', () => {
     const registry = createRegistry();
     const leave = registry.enter(first);
-    registry.memory.addSource('./AGENTS.md');
-    expect(() => registry.memory.addSource('./AGENTS.md')).not.toThrow();
+    registry.memory.addSource('/AGENTS.md');
+    expect(() => registry.memory.addSource('/AGENTS.md')).not.toThrow();
     leave();
-    expect(registry.memory.sources()).toEqual(['./AGENTS.md', './AGENTS.md']);
+    expect(registry.memory.sources()).toEqual(['/AGENTS.md', '/AGENTS.md']);
+  });
+
+  /**
+   * 路徑格式是 `memory` 註冊點唯一會擋的東西，而它擋的理由跟別處不同：**基座那一側
+   * 完全沒有檢查**。`createMemoryMiddleware` 讀不到就 `console.debug` 然後繼續，
+   * prompt 裡只會變成 `(No memory loaded)`——所以這三種寫法不擋在這裡，就永遠不會有
+   * 任何東西紅。細節見 `assertLoadableMemoryPath`。
+   */
+  describe('memory 來源的路徑格式', () => {
+    const register = (path: string): void => {
+      const registry = createRegistry();
+      const leave = registry.enter(first);
+      try {
+        registry.memory.addSource(path);
+      } finally {
+        leave();
+      }
+    };
+
+    // `~` 是最值得擋的那個：基座 JSDoc 的例子就長這樣，而那是已 deprecated 的
+    // `createAgentMemoryMiddleware` 留下的——現在這條路上沒有任何一處展開它。
+    it('"~" 開頭被擋，而且訊息指名是誰註冊的', () => {
+      expect(() => register('~/.deepagents/AGENTS.md')).toThrow('"~"');
+      expect(() => register('~/.deepagents/AGENTS.md')).toThrow('plugins[0] (alpha)');
+    });
+
+    it('相對路徑被擋', () => {
+      expect(() => register('./AGENTS.md')).toThrow('絕對路徑');
+      expect(() => register('AGENTS.md')).toThrow('絕對路徑');
+    });
+
+    // 這三種是照 dsh 的 `RESERVED_PATH_SEGMENTS`（`'' / '.' / '..'`）對齊的，差別只在
+    // 它靜默濾掉、我們拋錯——理由見 `assertLoadableMemoryPath` 的偏離標註。
+    it('".." / "." / 空路段都被擋', () => {
+      expect(() => register('/專案/../etc/AGENTS.md')).toThrow('".."');
+      expect(() => register('/專案/./AGENTS.md')).toThrow('"."');
+      expect(() => register('/專案//AGENTS.md')).toThrow('空路段');
+      expect(() => register('/專案/')).toThrow('空路段');
+    });
+
+    // 擋得住是一半。少了這一條，一個什麼都拒絕的檢查也會讓上面每一條通過。
+    it('絕對路徑照樣進得去，含非 ASCII 與看起來像 ".." 的檔名', () => {
+      expect(() => register('/AGENTS.md')).not.toThrow();
+      expect(() => register('/專案/記憶/AGENTS.md')).not.toThrow();
+      expect(() => register('/notes/..hidden.md')).not.toThrow();
+    });
   });
 
   it('六個註冊點在 apply 之外呼叫都當場報錯', () => {
@@ -231,7 +277,7 @@ describe('其餘六個註冊點', () => {
     expect(() => registry.permissions.deny(['/x'])).toThrow('apply');
     expect(() => registry.interrupts.require('rm', { reason: 'r' })).toThrow('apply');
     expect(() => registry.skills.addSource('/skills/')).toThrow('apply');
-    expect(() => registry.memory.addSource('./AGENTS.md')).toThrow('apply');
+    expect(() => registry.memory.addSource('/AGENTS.md')).toThrow('apply');
     expect(() => registry.lifecycle.onDispose(() => {})).toThrow('apply');
   });
 });

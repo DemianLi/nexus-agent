@@ -39,7 +39,7 @@ registry.middleware.use(mw, { prepend: false }); // 清單順序，prepend 為�
 registry.permissions.deny(paths, { except }); // deny-only
 registry.interrupts.require(toolName, { reason, when }); // 同工具多方標記不報錯，when 取 OR
 registry.skills.addSource(path); // 同一來源路徑重複註冊報錯
-registry.memory.addSource(path); // 純累加，基座自理
+registry.memory.addSource(path); // 純累加；路徑格式在註冊期擋（見第 5 節 Phase 3）
 ```
 
 - **一個 plugin = 一個 workspace 模組**，只相依 `@nexus/core`（[#30](https://github.com/DemianLi/nexus-agent/issues/30)）。契約住 `packages/nexus-core`，不住 `apps/harness` —— 封裝邊界靠 pnpm 的相依隔離機械保證：plugin 若 import `@nexus/harness`，`tsc` 會以 `TS2307` 擋下（實測），而契約留在 app 裡時這條保護不存在，因為 plugin 為了拿型別本來就得相依整個 app。zod manifest 仍在，但只驗 `name` / `requires`，不驗擴充內容。
@@ -174,7 +174,17 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
 
   1. **memory middleware 是唯讀的。** 只有 `beforeAgent`（讀）與 `wrapModelCall`（注入 system prompt），**不註冊任何工具**。記憶要寫回去，唯一的路是模型自己呼叫 `write_file`。所以「記憶留不留得住」是 **backend** 的問題，跟 checkpointer 無關。
   2. **來源路徑不展開 `~`。** `loadMemoryFromBackend` 把路徑原樣交給 backend 的 `downloadFiles` / `read`。基座 JSDoc 裡那個 `"~/.deepagents/AGENTS.md"` 是**已 deprecated 的 `createAgentMemoryMiddleware`** 留下的——`os.homedir()` 只出現在 node-only 的 `createSettings`，backend-agnostic 這條路上一次都沒有。照抄那個例子的下場：`ContainedFilesystemBackend` 讀時放行、找不到字面上的 `~` 目錄 → 靜默沒有記憶；而寫回去會撞上我們自己那條 `"~"` 檢查。**來源一律用 backend 命名空間下的絕對路徑。**
-  3. **載入失敗是靜默的。** 每個來源包在 `try / console.debug` 裡，`memoryContents` 又快取在 state（`if ("memoryContents" in state ...) return`），配上 checkpointer 就是**一個 thread 只載一次**，thread 中途改 AGENTS.md 不生效。一條蓋到記憶檔的 deny 規則 = agent 安靜地沒有記憶。這條要用測試釘住，不能只寫在註解裡。
+  3. **載入失敗是靜默的，而且靜默是構造出來的。** 每個來源包在 `try / console.debug` 裡，收進來的條件又是 `if (content)`——空字串是 falsy，所以**讀不到、不存在、讀到空檔三者同形**，都塌成 `(No memory loaded)`。`memoryContents` 再快取在 state（`if ("memoryContents" in state ...) return`），配上 checkpointer 就是**一個 thread 只載一次**，thread 中途改 AGENTS.md 不生效。
+
+     **原文這裡寫「一條蓋到記憶檔的 deny 規則 = agent 安靜地沒有記憶」，實測是反的。** `loadMemoryFromBackend` 呼叫的是 `backend.downloadFiles` / `backend.read`——**backend 方法，不是工具**，而 `checkPermission` 只活在七個工具工廠裡。所以 deny 規則**擋不住記憶載入**：檔案內容照樣被注入 system prompt，同時模型被指示「學到東西就用 `edit_file` 存起來」——存去一個規則明文禁止它寫的檔。**讀得到、寫不回去**，而不是沒有記憶。
+
+     這是 [#66](https://github.com/DemianLi/nexus-agent/issues/66) 那件事的第三次現身：**規則表管工具，管不到 backend 方法**。差別在方向——offload 那邊是「該寫的沒寫成」，這邊是「該擋的沒擋住」，後者把檔案內容送進了模型的 context，比前者嚴重。
+
+     真正會造成「安靜地沒有記憶」的是**路徑寫錯**（`~`、相對路徑、`..`）。這一條因此收在 `@nexus/core` 的 `assertLoadableMemoryPath`：**在註冊期擋，不在跑起來之後**。放在 registry 而不是 plugin，是因為一道只有某個 plugin 做的檢查補不住一個「不經過那個 plugin 就沒人擋」的洞——也因此 `registry.memory` 原本「純累加、基座自理」的契約要跟著改。這跟 `permissions.deny()` 刻意不驗第二次是相反情況而非不一致：那邊基座自己會拋，這邊基座什麼都不做。
+
+     **對 dsh 的偏離（標註）**：dsh 的對應機制 `@deepseek-ai/dsh-agent-instructions` 收的是**檔名候選**（`['AGENTS.md', 'CLAUDE.md']`），`resolveInstructionFileCandidates` 把任何含 `/` 的候選連同 `RESERVED_PATH_SEGMENTS`（`''` / `'.'` / `'..'`）**靜默濾掉**——因為往上找 project root 的走查與 `~` / `$DSH_HOME` 的展開都由 loader 自己擁有。**這個形狀在 deepagents 上表達不出來**：`memory` 參數收的就是 backend 路徑，它的 loader 不走查也不展開任何東西。退到最接近的：**擋下 dsh 濾掉的同一組路段，但改成拋錯**。靜默濾掉在 dsh 那邊無害（濾完還有其他候選與走查），在這裡等於把唯一的來源刪掉，正好製造出這道檢查要防的那種靜默。
+
+  4. **subagent 拿不到 root 的記憶，而且沒有任何公開介面給得了。** `buildSubagentMiddleware(input, isForkable)` 只在 `isForkable` 為真時併入 root 的 memory middleware，`SubAgent` 定義上**沒有 `memory` 欄位**可以自帶（`createSubagentDefaultMiddleware` 有 `input.skills` 分支，沒有 memory 的）。內建的 general-purpose subagent 也一樣：它走 `normalizeSubagentSpec`（`isForkable` 為 false），而它那次 `mergeMiddlewareStack` 帶 `{ appendNew: false }`，連從 `middleware` 參數塞一個同名的進去都會被丟掉。只有 `mode: 'fork'` 的 subagent 有。這跟下面 `feat/summarization-tuning` 記的「root 換掉不影響 subagent」是同一種邊界，要有絆索測試。
 
   「多來源併入 prompt」的形狀斷言照舊補（[#32](https://github.com/DemianLi/nexus-agent/issues/32)）——這一條查過是真的：`formatMemoryContents(contents, sources)` 依 `sources` 順序串。
 
@@ -198,7 +208,7 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
 
   兩件事都要在 Phase 3 有測試，不能等它們在長對話裡自己發生。
 
-- 驗收：**跨 thread 記憶保留**——注意這一條**不是 checkpointer 能滿足的**（它是 thread 內的狀態），要靠 `store`（`StoreBackend`：「persist across all threads」）或落磁碟的 backend；長對話在 token 上限內完成多步任務，且 `/conversation_history` 真的寫得出來。
+- 驗收：**跨 thread 記憶保留**——注意這一條**不是 checkpointer 能滿足的**（它是 thread 內的狀態），要靠落磁碟的 backend，或把 `store` 包成 `StoreBackend` 當 backend 用。**`store` 參數本身對記憶是惰性的**：memory middleware 不碰 `store`，`StoreBackend.getStore()` 才從 LangGraph 的執行 context 把它取出來——所以那不是「兩個選項」，是「backend 這一軸的兩種選法」。長對話在 token 上限內完成多步任務，且 `/conversation_history` 真的寫得出來。
 
 ### Phase 4 — HITL + 可觀測性 + 反思（約 3 個 PR）
 
@@ -243,5 +253,11 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
 4. **狀態儲存決策點是三個軸，不是一個**（Phase 3 收斂）：原文把它寫成「`MemorySaver` → 評估 `checkpoint-postgres`」，那只覆蓋 `checkpointer`（thread 內的對話狀態）。實測基座之後拆開：`store`（`BaseStore`，`StoreBackend` 明文「persist across all threads」）才是跨 thread 記憶的載體；`backend` 才是 AGENTS.md、skills 與 `/conversation_history` 實際落在哪。**三軸各自可選、失敗方式不同**——checkpointer 缺席是接不回 interrupt（fold 已經在擋，見 `foldRegistry` 對核准政策的前置檢查），store 缺席是換個 thread 就失憶，backend 選錯是記憶根本寫不回去（memory middleware 唯讀，寫回去只有模型的 `write_file` 一條路）。Phase 3 的三個 PR 要分別對上，不能用一個「狀態儲存選好了」收掉。
 
    `@langchain/langgraph-checkpoint-postgres@1.0.5` 前兩軸同一個套件收（`.` 出 checkpointer、`./store` 出 `PostgresStore`），peer 是 `@langchain/core ^1.1.44` ＋ `@langchain/langgraph-checkpoint ^1.1.4`，與我們現有範圍相容——但那是**兩個決定**，只是剛好同一個相依。
+
+   **`feat/memory-plugin` 收斂了 backend 這一軸，而且是可執行的證據**（`apps/harness/src/memory.test.ts` 的「記憶的保存軸」）：兩個全新建的 agent、不共用 checkpointer、不共用 state，差別只有 backend——落磁碟的那個讀得到前一個 agent 寫的 `/AGENTS.md`，`StateBackend` 那個拿到 `(No memory loaded)`。**「記憶留不留得住」因此是 backend 的問題，換 checkpointer 改變不了任何事。**
+
+   同一輪也釐清了 `store` 與 `backend` 不是兩條平行的路：memory middleware 完全不碰 `store`，只有 `StoreBackend` 會去 LangGraph 的執行 context 把它取出來。所以 `store` 這一軸對記憶而言是「backend 的一種選法」，不是獨立選項。
+
+   **checkpointer 與 store 兩軸維持在 `MemorySaver` 與「未選」，理由是收下 `@langchain/langgraph-checkpoint-postgres` 會把一個活的 Postgres 拖進測試路徑**，而 CI 上沒有任何服務憑證（[#31](https://github.com/DemianLi/nexus-agent/issues/31)），測試必須是自足的。版本層級也仍然懸在那張 PR 上（見第 3 節鎖死那一列）。這兩軸目前**沒有可執行證據**，只有寫下來的判斷——照實記著，別讓它看起來像已經驗過。
 
 5. **結果校驗範圍（Phase 4 前）**：需定義「校驗什麼」——schema、不變量、還是業務規則。屆時拍板。

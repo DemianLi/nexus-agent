@@ -7,6 +7,9 @@ TypeScript + React (shadcn/ui) 專案，架構分為 harness 與 web UI 兩部�
 ```
 packages/nexus-core          NexusPlugin 契約：型別、manifest、PluginRegistry、fold
 packages/nexus-plugin-echo   最小 plugin 範例，只相依 @nexus/core
+packages/nexus-plugin-mcp    把 MCP server 的工具接進 registry
+packages/nexus-plugin-quickjs  QuickJS 沙箱裡跑 JavaScript 的 custom tool
+packages/nexus-plugin-memory 把 AGENTS.md 這類長期記憶掛進 agent
 apps/harness                 組裝點：agent 工廠、訊息標準化、CLI（Node / TypeScript）
 apps/web                     Vite + React 19 + Tailwind v4 + shadcn/ui
 ```

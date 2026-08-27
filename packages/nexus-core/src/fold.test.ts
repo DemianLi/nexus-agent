@@ -648,15 +648,18 @@ describe('skills 與 memory 註冊點', () => {
     expect(params.skills).toEqual(['/skills/user/', '/skills/project/']);
   });
 
+  // 這條原本用的是 `~/.deepagents/AGENTS.md` 與 `./AGENTS.md`——照抄基座 JSDoc 的那個
+  // 例子。兩種現在都被 `assertLoadableMemoryPath` 當場擋下，理由見它的說明：backend-agnostic
+  // 這條路上沒有任何一處展開 `~`，相對路徑同理，寫錯了只會安靜地沒有記憶。
   it('memory 純累加，同一路徑兩次不報錯', async () => {
     const params = await fold([
-      fakePlugin('home', (r) => void r.memory.addSource('~/.deepagents/AGENTS.md')),
+      fakePlugin('user', (r) => void r.memory.addSource('/設定/AGENTS.md')),
       fakePlugin('repo', (r) => {
-        r.memory.addSource('./AGENTS.md');
-        r.memory.addSource('./AGENTS.md');
+        r.memory.addSource('/AGENTS.md');
+        r.memory.addSource('/AGENTS.md');
       }),
     ]);
-    expect(params.memory).toEqual(['~/.deepagents/AGENTS.md', './AGENTS.md', './AGENTS.md']);
+    expect(params.memory).toEqual(['/設定/AGENTS.md', '/AGENTS.md', '/AGENTS.md']);
   });
 
   it('沒人註冊時兩個欄位都不出現', async () => {
@@ -695,7 +698,7 @@ describe('組裝點自有的那五樣', () => {
         r.middleware.use(fakeMiddleware('m'));
         r.permissions.deny(['/.env*']);
         r.skills.addSource('/skills/');
-        r.memory.addSource('./AGENTS.md');
+        r.memory.addSource('/AGENTS.md');
       }),
     ]);
     // 型別斷言本身就是驗收：基座改了形狀，typecheck 當場紅。
