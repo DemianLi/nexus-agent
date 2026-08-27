@@ -11,6 +11,7 @@ packages/nexus-plugin-mcp    把 MCP server 的工具接進 registry
 packages/nexus-plugin-quickjs  QuickJS 沙箱裡跑 JavaScript 的 custom tool
 packages/nexus-plugin-memory 把 AGENTS.md 這類長期記憶掛進 agent
 packages/nexus-plugin-skills 把 SKILL.md 這類隨選工作流掛進 agent
+packages/nexus-plugin-validation  工具失敗回饋與輸出 schema 校驗
 apps/harness                 組裝點：agent 工廠、訊息標準化、CLI（Node / TypeScript）
 apps/web                     Vite + React 19 + Tailwind v4 + shadcn/ui
 ```

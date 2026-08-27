@@ -267,8 +267,18 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
   - **這一版做披露，照 dsh 的共享披露**（`docs/subsystems/session-telemetry.zh.md`）：後端必須說出當前的共享策略、且**只陳述策略不承諾投遞**，沒掛任何東西時才渲染「未配置」。CLI 現在的 banner 說了模型與檔案系統，對「這一輪會不會有東西送出這台機器」一個字都沒有——與 #71 的「CLI 對中斷一個字都不印」同一型。
   - **事件流那一半的名字是有的**（更正動工前的初判）：`handleToolStart` 第 7 個參數 `runName` 就是工具本名，`streamEvents({version:'v2'})` 直接給 `on_tool_start:probe_tool`。之前看到的 `DynamicStructuredTool` 是我讀了 `serialized.id`（類別名），**基座給名字，是我沒去拿**。subagent 也分得出來：`metadata.lc_agent_name` 是 subagent 名，`langgraph_checkpoint_ns` 帶 `tools:<id>|` 前綴標出巢狀深度，而 `task` 工具本身留在 root——Phase 5「含 subagent 事件」那句因此有根據了。v2 在 `@langchain/langgraph@1.4.12` 未標 deprecated，但 v3 已存在且回傳 `Promise`，形狀不同（§7 第 1 點）。
   - **基座的 containment 不是 fail-closed**：handler 拋錯只換來一行 `console.error`，agent 照跑（`manager.js:407`，實測），那一筆事件無聲消失。dsh 的 waterfall 是**扣下那一條**；基座是丟掉那一條、其餘照送。要 fail-closed 得自己來。
-- `feat/validation-middleware`：結果校驗 middleware：工具輸出 schema 驗證、失敗自動回饋重試 —— 反思與反饋層的薄覆蓋實作（完整強化見 issue #16）。
-- 驗收：**破壞性操作必須人工核准才執行**（已有可執行證據，見上）；~~LangSmith 能看到完整 trace~~ **→ tracing 開沒開、送去哪、送出去的東西脫敏到什麼程度，這三件事說得出來**（已有可執行證據，見上——原句驗過之後發現它問錯方向了）；校驗失敗的工具結果會帶錯誤回饋給 agent 重試。最後一句在那張 PR 動工前還沒驗過，照前兩條的前例，先驗再改。
+- ~~`feat/validation-middleware`：結果校驗 middleware：工具輸出 schema 驗證、失敗自動回饋重試~~ —— 反思與反饋層的薄覆蓋實作（完整強化見 issue #16）。動工前一驗，這一句的兩個子句**壞的方向不一樣**：前半是真的缺口，後半不是「還沒做」，是**我們自己把基座的預設踩掉了**。改成 `feat/tool-failure-feedback`：
+
+  - **任何工具拋錯，整場 run 直接死。** `ToolNode.runTool` 只要 `this.wrapToolCall` 存在，就把工具自己拋的錯當成 middleware 的錯（`langchain@1.5.10`，`dist/agents/nodes/ToolNode.js:275-282`），而 `#handleError:150` 對 middleware 的錯是 `handleToolErrors !== true` 即重拋——`ReactAgent` 建 `ToolNode` 時只傳 `{ signal, wrapToolCall }`（`:174-179`），**`handleToolErrors: true` 經由 `createAgent` 根本到不了**。而 `createDeepAgent` 永遠掛 `FilesystemMiddleware`，它**永遠帶 `wrapToolCall`**（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:2507`）。實測對照組講得很清楚：沒有 middleware 時工具拋錯換來一則 `Error: ...` 的 ToolMessage；**只要加一個什麼都不做的 `wrapToolCall`，同一個工具就讓整場 invoke reject**。這不是「還沒做」，是一個功能把另一個功能的預設踩掉了，而 dsh 明文把它寫成不可違反的性質：「抛出异常的工具都会变为结构化错误……**调用失败但不终止当前轮次**」（`docs/subsystems/tools.zh.md`）。
+  - **唯一活下來的是輸入校驗。** `#handleError` 沿 `.cause` 走到根、是 `ToolInvocationError` 就 un-mark（`:138-145`），而工具參數不合 schema 正好走這條（`ToolInputParsingException` → `ToolInvocationError`）。所以「輸入 schema 驗證」不必做第二次，缺的是**輸出**那一半。
+  - **基座自己的錯誤回饋沒有 `status: "error"`。** `defaultHandleToolErrors` 兩條分支都不設 `status`（`:32-36`、`:40-44`），實測 `status === undefined`——錯誤散文以一則結構上**成功**的訊息送進模型。我們設 `status: 'error'` 是比基座嚴，要講明，不能寫成對齊。
+  - **借基座那條自我修正路的代價太高。** 從 middleware 拋 `ToolInvocationError` 確實會被翻成回饋（實測），但它的訊息把 `JSON.stringify(toolCall.args)` 與整段 `error.stack` 都塞進模型 context——#72 那個外洩形狀掉頭往內指。看得見，不走。
+  - **天真的圍堵會把 HITL 的中斷吃掉。** 實測工具內 `interrupt()` 撞上不分辨的 `try/catch`：`__interrupt__` 消失，變成一則假的 error ToolMessage。加 `isGraphBubbleUp(e) → throw` 之後中斷回來、`Command({ resume })` 續跑正常。這條直接撞上 #71 釘的那些行為，要有對照組。
+  - **校驗器自己炸掉同樣致命，而 `prepend` 剛好接得住。** `wrapToolCall` body 裡的 bug 一樣讓整場 reject。把圍堵用 `prepend: true` 註冊在最外、校驗器 append 在最內，實測順序 `containment-in → validator-in → containment-caught`，整場沒拋。dsh 對這件事的答案是 fail-closed：渲染器／投影器自己失敗也「转为 JSON 安全的 `isError`」，不是靜默放行。
+  - **`Command` 是一行字就能造出來的靜默旁路。** 工具回 `Command` 時 `wrapToolCall` 收到的就是 `Command`，`ToolMessage.isInstance` 為 false（實測），ToolMessage 在 `update.messages` 裡。`if (!ToolMessage.isInstance(r)) return r;` 會讓所有 Command 工具整個跳過校驗，而所有回字串的測試都照過。基座自己的 `FilesystemMiddleware.wrapToolCall` 兩個分支都處理，照抄它。
+  - **兩條偏離**（[AGENTS.md](../AGENTS.md) 要求標註）：①dsh 的 `defineTool` 要求每個工具**強制**宣告 `output`、註冊表在註冊時驗，但 LangChain 的 `StructuredTool` 沒有輸出 schema 這個欄位（`ToolParams` 只有 `responseFormat`），表達不出來 → 退到 plugin 這一層逐工具選加，沒宣告的明文放行。②dsh 在渲染成 content **之前**驗 canonical value，基座的 `ToolNode` 先 `JSON.stringify` 再交出來（`:244-248`），值救不回來 → 退到對 content 字串 `JSON.parse` 再驗，宣告了 schema 卻不是合法 JSON 本身即失敗。
+  - **排序缺口，記著不補。** `MiddlewareRegistrationPoint` 只有 `prepend` 一根槓桿，給的是「最外」；「最內」現在只是「沒 prepend 而且剛好註冊在最後」，沒有任何 plugin 有義務尊重它。這一版釘住現況，加槓桿留給真的有第二個 plugin 要搶位置的時候。
+- 驗收：**破壞性操作必須人工核准才執行**（已有可執行證據，見上）；~~LangSmith 能看到完整 trace~~ **→ tracing 開沒開、送去哪、送出去的東西脫敏到什麼程度，這三件事說得出來**（已有可執行證據，見上——原句驗過之後發現它問錯方向了）；~~校驗失敗的工具結果會帶錯誤回饋給 agent 重試~~ **→ 工具失敗（拋錯或輸出不合宣告的 schema）都變成帶更正回饋的 error ToolMessage，而且那一輪不會因此中止**（已有可執行證據，見上——原句預設了「回饋」是要加的東西，實測它本來就在，被我們自己踩掉了）。
 
 ### Phase 5 — Web UI + 評測（約 3–4 個 PR）
 
@@ -283,7 +293,7 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（現�
 |---|---|
 | Human-in-the-loop | Phase 4 `interruptOn` 擴充點 + Phase 5 web 核准 UI |
 | 權限控制 | Phase 2 filesystem permissions +（延後）sandbox 隔離 |
-| 可靠性 | Phase 4 validation middleware + Phase 5 eval suite |
+| 可靠性 | Phase 4 工具失敗回饋＋輸出校驗（先修好「工具拋錯就整場死」）+ Phase 5 eval suite |
 | 可觀測性 | Phase 4 tracing 披露（LangSmith 自己會開，我們要說出來）+ streaming |
 | 狀態儲存選型 | Phase 0 暫定 MemorySaver（只覆蓋 checkpointer 一軸）→ Phase 3 收斂 checkpointer／store／backend 三軸 |
 | 業務邏輯解耦 | NexusPlugin 契約本身（全程貫徹） |
