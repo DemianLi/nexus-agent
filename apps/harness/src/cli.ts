@@ -283,8 +283,9 @@ function printInterrupt(update: unknown, printer: Printer): void {
   const requests = (Array.isArray(update) ? (update as InterruptUpdate[]) : []).flatMap(
     (entry) => entry.value?.actionRequests ?? [],
   );
-  const listed =
-    requests.map((request) => `${request.name ?? '(未具名)'}：${request.description ?? '未說明'}`) ;
+  const listed = requests.map(
+    (request) => `${request.name ?? '(未具名)'}：${request.description ?? '未說明'}`,
+  );
 
   printer.log('[核准] 這一輪停在核准點，下列工具還沒執行：');
   for (const line of listed.length > 0 ? listed : ['(基座沒給明細)']) {

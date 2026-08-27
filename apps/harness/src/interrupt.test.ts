@@ -295,7 +295,10 @@ describe('subagent 裡的閘門', () => {
     expect(paused.__interrupt__).toBeDefined();
     expect(ran).toEqual([]);
 
-    await agent.invoke(new Command({ resume: { decisions: [{ type: 'reject' }] } }) as never, config);
+    await agent.invoke(
+      new Command({ resume: { decisions: [{ type: 'reject' }] } }) as never,
+      config,
+    );
 
     expect(ran).toEqual([]);
   });
