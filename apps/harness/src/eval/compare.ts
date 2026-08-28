@@ -28,6 +28,7 @@
 
 import type { AgentModel } from '@nexus/core';
 import { BENCHMARK_SYSTEM_PROMPT, benchmarkPlugins } from './assembly.js';
+import { isRetryableRateLimit } from '../live-model.js';
 import { BENCHMARK, type BenchmarkCase } from './dataset.js';
 import { runBenchmarkCase } from './runner.js';
 import { scoreCase, type CaseScore } from './scorers.js';
@@ -35,8 +36,24 @@ import type { ModelTier } from './tiers.js';
 
 /** 一次執行失敗的分類。**分開列，因為要做的事不同。** */
 export type FailureReason =
-  /** 端點回了 HTTP 錯誤碼 —— 叫不動、不支援工具、被限流。 */
+  /** 端點回了 HTTP 錯誤碼 —— 叫不動、不支援工具、參數形狀不合。 */
   | 'rejected'
+  /**
+   * **被端點限流，而且重試耗盡了。**
+   *
+   * 跟 `rejected` 分開，因為那兩件事要做的完全不同：`400` 是**模型行為**撞上供應商限制
+   * （重跑一模一樣，要換 id 或改題目），限流是**我們打太快**（重跑不一定一樣，跟模型
+   * 好壞無關）。混在一起讀，會把「我們超速」讀成「這個模型不行」——2026-08-28 就發生過
+   * 一次，`gpt-oss-120b` 因此被記成「跑不完基準任務」，而它其實是六個裡最快的那個。
+   *
+   * 這一類**跟 `budget` 一樣是資料損失，不是低分**，但要做的事是「跑慢一點」或
+   * 「把重試次數調高」，不是「這個模型不適合」。
+   *
+   * dsh 的 [`error.ts`](../../../../references/deepseek-harness/packages/llm/llm/src/error.ts)
+   * 把 `RATE_LIMIT` 與 `QUOTA` 分成兩個碼，理由一樣：前者等一下就過，後者重試無效。
+   * 配額耗盡的 429 因此**不算這一類**，它落在 `rejected`。
+   */
+  | 'throttled'
   /** 逾時，也就是 [#57](https://github.com/DemianLi/nexus-agent/issues/57) 那個永遠不回來。 */
   | 'timeout'
   /**
@@ -223,6 +240,11 @@ function elapsed(started: number): number {
  */
 function classify(error: unknown): { reason: FailureReason; status?: number } {
   const chain = [...causeChain(error)];
+
+  // 限流要先於一般的 status 掃描 —— 它自己也帶 429，晚一步就會被記成 `rejected`，
+  // 而那正是把「我們打太快」讀成「這個模型不行」的那條路。配額耗盡的 429 不在這裡面
+  // （`isRetryableRateLimit` 排掉了），它該落到下面的 `rejected`。
+  if (isRetryableRateLimit(error)) return { reason: 'throttled', status: 429 };
 
   for (const link of chain) {
     const status = (link as { status?: unknown }).status;

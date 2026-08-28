@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   LIVE_API_KEY_ENV,
   LIVE_BASE_URL,
+  LIVE_MAX_RETRIES,
   LIVE_MODEL_ID,
   LIVE_TIMEOUT_MS,
   createLiveModel,
+  retryDecision,
 } from './live-model.js';
 import { ALL_MODELS_UNDER_TEST } from './eval/tiers.js';
 
@@ -73,5 +75,90 @@ describe('真實供應商的 key 處理', () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
     expect(createLiveModel().timeout).toBe(LIVE_TIMEOUT_MS);
     expect(createLiveModel(ALL_MODELS_UNDER_TEST[0]?.modelId).timeout).toBe(LIVE_TIMEOUT_MS);
+  });
+
+  /**
+   * **這條驗的是設定真的到得了重試層，不是我們有沒有寫那一行。**
+   *
+   * `maxRetries` 與 `onFailedAttempt` 都不是 `ChatOpenAI` 的公開屬性 —— 它們被拿去建
+   * `AsyncCaller`。傳錯名字、或哪天基座換了收法，`createLiveModel` 一樣建得起來、
+   * 型別一樣是綠的，而重試會**靜默地沒有生效**。所以這裡直接問那個 caller。
+   */
+  it('重試設定到得了 AsyncCaller —— 不是只寫在建構參數裡', () => {
+    process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
+    const { caller } = createLiveModel() as unknown as {
+      caller: { maxRetries: number; onFailedAttempt: (error: unknown) => void };
+    };
+
+    expect(caller.maxRetries).toBe(LIVE_MAX_RETRIES);
+    expect(LIVE_MAX_RETRIES).toBeGreaterThan(0);
+
+    // 裝上去的必須是**我們的**那個：對限流不拋（＝重試），對 4xx 拋（＝放棄）。
+    // 只斷言 `typeof === 'function'` 的話，裝到基座的預設也會是綠的。
+    expect(() =>
+      caller.onFailedAttempt(Object.assign(new Error('429'), { status: 429 })),
+    ).not.toThrow();
+    expect(() =>
+      caller.onFailedAttempt(Object.assign(new Error('400'), { status: 400 })),
+    ).toThrow();
+  });
+});
+
+/**
+ * 重試決策。
+ *
+ * **這一組是行為表，不是實作細節。** 它釘住的是 `onFailedAttempt` 取代掉基座預設之後，
+ * 我們有沒有把預設的形狀維持住 —— 只改「沒有 `retry-after` 的 429」那一支，其餘照舊。
+ * 不打真實 API，錯誤都是手工組出來的形狀。
+ */
+describe('限流的重試決策', () => {
+  const withProps = (message: string, props: Record<string, unknown>): Error =>
+    Object.assign(new Error(message), props);
+
+  it('沒有 retry-after 的 429 要重試 —— 基座對這個形狀是一次都不重試的', () => {
+    expect(retryDecision(withProps('429', { status: 429 }))).toBe('retry');
+    // `@langchain/core` 正規化之後掛上的名字。協定上的 status 有時被包掉，名字還在。
+    expect(retryDecision(withProps('rate limited', { name: 'RateLimitCapacityError' }))).toBe(
+      'retry',
+    );
+  });
+
+  it('配額耗盡的 429 不重試 —— 它跟限流共用狀態碼，但重試幾次都一樣', () => {
+    expect(retryDecision(withProps('quota', { status: 429, code: 'insufficient_quota' }))).toBe(
+      'give-up',
+    );
+    expect(retryDecision(withProps('quota', { name: 'RateLimitQuotaExhaustedError' }))).toBe(
+      'give-up',
+    );
+  });
+
+  it('4xx 不重試 —— 判準對照那個「只支援單筆工具呼叫」重試幾次都一樣', () => {
+    for (const status of [400, 401, 402, 403, 404, 405, 406, 407, 409, 413]) {
+      expect(retryDecision(withProps(String(status), { status }))).toBe('give-up');
+    }
+  });
+
+  it('5xx 與連線問題仍然重試 —— 這條擋的是「非限流一律放棄」那種退化', () => {
+    // 自訂 onFailedAttempt 會**整個**取代基座的預設，所以很容易在只想改限流時，
+    // 順手把本來會重試的那些也關掉。把它改成 give-up，這條當場紅。
+    expect(retryDecision(withProps('500', { status: 500 }))).toBe('retry');
+    expect(retryDecision(withProps('502', { status: 502 }))).toBe('retry');
+    expect(retryDecision(new Error('socket hang up'))).toBe('retry');
+  });
+
+  it('中止不重試 —— 那是我們自己要的，重試等於違抗', () => {
+    expect(retryDecision(withProps('x', { name: 'AbortError' }))).toBe('give-up');
+    expect(retryDecision(new Error('Cancel: 使用者中止'))).toBe('give-up');
+    expect(retryDecision(withProps('x', { code: 'ECONNABORTED' }))).toBe('give-up');
+  });
+
+  it('包在 cause 鏈深處也認得出來 —— 包裝層數是別人家的實作細節', () => {
+    const inner = withProps('429', { status: 429 });
+    const outer = new Error('外層', { cause: new Error('中層', { cause: inner }) });
+    expect(retryDecision(outer)).toBe('retry');
+
+    const innerBad = withProps('400', { status: 400 });
+    const outerBad = new Error('外層', { cause: new Error('中層', { cause: innerBad }) });
+    expect(retryDecision(outerBad)).toBe('give-up');
   });
 });
