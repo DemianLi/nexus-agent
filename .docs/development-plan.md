@@ -10,7 +10,7 @@
 | 1 | 技術棧全 TypeScript | LangChain JS + LangGraph JS + deepagentsjs（官方 TS 版），零 Python 基座 |
 | 2 | 插件化程度 | agent 推理迴圈為固定基座（deepagentsjs），迴圈周圍的擴充點全部走 NexusPlugin 契約；不 fork、不做「連迴圈都可替換」的徹底插件化 |
 | 3 | 兩層薄覆蓋 | 反思與反饋層、意圖與理解層先採薄覆蓋，後續強化追蹤於 [issue #16](https://github.com/DemianLi/nexus-agent/issues/16)，Phase 0–5 全部完成後啟動 |
-| 4 | 選型決策點 | 模型供應商、狀態儲存保留為決策點。模型供應商拆三段收斂：Phase 0 定預設（Anthropic）、Phase 2 驗 DeepSeek 相容性、Phase 5 比品質與成本；狀態儲存**不是一個後端而是三個正交的軸**（checkpointer／store／backend），Phase 3 分別收斂（見第 7 節決策 4） |
+| 4 | 選型決策點 | 模型供應商**已收斂**（2026-08-28）：**`openai/gpt-oss-120b`**，走 NVIDIA 的 OpenAI 相容端點。原本的三段收斂（Phase 0 定預設 Anthropic、Phase 2 驗 DeepSeek 相容性、Phase 5 比品質與成本）只走完第一段與第三段，**中間那段從沒跑過**，而第三段的結果讓它失去了對象 —— 詳見第 7 節決策 2。狀態儲存**不是一個後端而是三個正交的軸**（checkpointer／store／backend），Phase 3 分別收斂（見第 7 節決策 4） |
 
 核心路線：**不從零重造**。deepagentsjs 已內建虛擬檔案系統（可插拔 backends）、宣告式檔案權限、subagents、TodoListMiddleware（opt-in）、SummarizationMiddleware、skills（SKILL.md 標準）、memory（AGENTS.md）、human-in-the-loop（`interruptOn`）、typed streaming。需求約七成由基座覆蓋；自建部分為 plugin 統一註冊、結果校驗、可觀測性接線、web UI。
 
@@ -106,7 +106,7 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（線�
 | 執行 | `@langchain/langgraph`、`@langchain/langgraph-checkpoint`、`@langchain/langgraph-sdk` | **`^1.4.10` / `^1.1.5` / `^1.9.23`**；interrupts、checkpointer、store |
 | 工具 | `@langchain/core` tools + `zod` + **`@langchain/mcp-adapters`**（MCP 不在基座裡） | **`zod` 用 `^4.3.6`** — 與基座的直接相依同範圍，確保只解析出一份。`@langchain/mcp-adapters` 用 **`^1.1.4`**：它不是 `deepagents` 的 peer，走下面第 3 層（[#60](https://github.com/DemianLi/nexus-agent/issues/60)）。實測：`pnpm install` 在 `strictPeerDependencies: true` 下通過、不必補宣告它的 peer `@langchain/langgraph`，`pnpm why zod -r` 仍是 Found 1 version |
 | 觀測 | `langsmith`（tracing + evaluators） | **`>=0.7.1 <0.10.0`**。套件名是 `langsmith`，不是 `@langchain/langsmith`（後者不存在）。**tracing 不需要我們接線**——`@langchain/core` 的 `CallbackManager.configure` 讀到環境變數就自己掛 tracer，所以這個相依對 tracing 而言是**被動生效**的：它在不在依賴表裡與它會不會送東西出去無關（見第 5 節 Phase 4）。補強項 4 |
-| 模型 | 預設 **Anthropic**（prompt caching 自動）；唯一備選 **DeepSeek**（`@langchain/deepseek`）。OpenAI 未排入評估，需要時另開決策 | Phase 0 只驗接線不比較（接線對象是 NVIDIA 閘道，不是預設供應商 —— 見第 5 節 Phase 0）；DeepSeek 相容性 Phase 2、品質與成本 Phase 5（[#31](https://github.com/DemianLi/nexus-agent/issues/31)） |
+| 模型 | **`openai/gpt-oss-120b`**，經 `@langchain/openai` 指向 NVIDIA 的 OpenAI 相容端點（2026-08-28 定案）。**原本寫的是預設 Anthropic、唯一備選 DeepSeek，兩者都沒有留下來** | 12 次取樣 × 5 個橫階量出來的：品質五階打平（參數正確性 `0.88`–`0.98`，沒有尺寸效應），所以選型落回成本 —— 這一個 token 最省（少四到五成）、多叫最低、品質並列第二。**Anthropic 那條路從頭到尾沒有被建起來**（`@langchain/anthropic` 不在任何 `package.json` 裡），所以它不是被比下去的，是**從來沒有進過場**；要重新排入評估得先補那段接線。見第 5 節 Phase 5 與 [#31](https://github.com/DemianLi/nexus-agent/issues/31) |
 | 狀態儲存 | **決策點，而且是三個正交的軸，不是一個**：`checkpointer`（thread 內的對話狀態）／`store`（跨 thread 的 `BaseStore`，`StoreBackend` 用它）／`backend`（檔案落在哪——AGENTS.md、skills、`/conversation_history` 都住這裡）。Phase 0 的 `MemorySaver` 只覆蓋第一軸。`@langchain/langgraph-checkpoint-postgres@1.0.5` 同一個套件收前兩軸（`.` 出 checkpointer、`./store` 出 `PostgresStore`（實測 1.0.5 的 tarball，不是照子路徑名推的），peer 是 `@langchain/core ^1.1.44` ＋ `@langchain/langgraph-checkpoint ^1.1.4`，與我們現有範圍相容）；第三軸是 backend plugin 的事 | 補強項 5 |
 | Sandbox | deepagentsjs sandbox providers（`SandboxBackendProtocolV2`）**只有協定與 provider，沒有直譯器**；QuickJS 走自建的 `@nexus/plugin-quickjs`（`quickjs-emscripten`） | Phase 2 之後，安全優先 |
 
@@ -139,7 +139,7 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（線�
 ### Phase 0 — 技術驗證（spike，2 個 PR）
 
 - `feat/harness-deepagents-spike`（[#37](https://github.com/DemianLi/nexus-agent/pull/37)，已完成）：安裝 deepagentsjs，最小 agent（`StateBackend` + 一個 custom tool）以腳本假模型跑通。驗的是基座組裝，不是模型。
-- `feat/harness-live-provider`：接上真實供應商，並依 [`docs/standards.md`](../docs/standards.md) 建立 `.env.example`（Phase 0 的必要 key 只有一把）。**接線對象是 NVIDIA 的 OpenAI 相容端點**（`https://integrate.api.nvidia.com/v1`）上的 `deepseek-ai/deepseek-v4-pro-0813`（**原本是 `deepseek-v4-flash-0731`，它不回應，2026-08-28 換成同系列的 pro —— 見 [#57](https://github.com/DemianLi/nexus-agent/issues/57)；端點沒修好，是我們換了 id**），用 `@langchain/openai` 指過去 —— JS 這邊沒有 NVIDIA 專用的 LangChain 整合（`@langchain/nvidia-ai-endpoints` 只有 Python 版）。**預設供應商的決策不動**：第 0 節決策表、第 4 節選型表與第 7 節決策點 2 仍然是 Anthropic —— Phase 0 只驗接線不比較，接線對象因此不必是預設。接線用的模型雖然是 DeepSeek，但**這證明不了 Phase 2 的「DeepSeek 相容性」**：那條驗的是同一份 plugin 清單在 middleware stack 下跑得通，而 Phase 0 還沒有任何 middleware。
+- `feat/harness-live-provider`：接上真實供應商，並依 [`docs/standards.md`](../docs/standards.md) 建立 `.env.example`（Phase 0 的必要 key 只有一把）。**接線對象是 NVIDIA 的 OpenAI 相容端點**（`https://integrate.api.nvidia.com/v1`）上的 `deepseek-ai/deepseek-v4-pro-0813`（**原本是 `deepseek-v4-flash-0731`，它不回應，2026-08-28 換成同系列的 pro —— 見 [#57](https://github.com/DemianLi/nexus-agent/issues/57)；端點沒修好，是我們換了 id**），用 `@langchain/openai` 指過去 —— JS 這邊沒有 NVIDIA 專用的 LangChain 整合（`@langchain/nvidia-ai-endpoints` 只有 Python 版）。**預設供應商的決策不動**：第 0 節決策表、第 4 節選型表與第 7 節決策點 2 仍然是 Anthropic —— Phase 0 只驗接線不比較，接線對象因此不必是預設。（**這句是 Phase 0 當時的狀態，2026-08-28 已經不成立**：那三處現在都是 `openai/gpt-oss-120b`，見第 7 節決策 2。留著不改是因為它記的是當時為什麼可以不動，而那個理由本身沒有錯。）接線用的模型雖然是 DeepSeek，但**這證明不了 Phase 2 的「DeepSeek 相容性」**：那條驗的是同一份 plugin 清單在 middleware stack 下跑得通，而 Phase 0 還沒有任何 middleware。
 - 驗收分兩段（[#31](https://github.com/DemianLi/nexus-agent/issues/31)）。**假模型那段進 CI**：CLI 下一個指令 → agent 呼叫工具 → 寫虛擬檔案 → 回覆，不需任何 API key，可重複跑。**真模型那段是一次性人工驗證**，記錄寫進 PR 內文「驗證方式」，四項：(1) 真實供應商完成一輪 tool call，工具參數以合法 JSON 回到 harness；(2) `streamMode: ['updates','values']` 的事件形狀與假模型一致；(3) Node 22 下無 warning、無相依問題；(4) key 只從環境變數讀，缺少時直接失敗、不 fallback。**prompt caching 不列** —— 那是成本優化不是接線。
 - **CI 不放模型 secret** —— 打真實 API 會讓每次 push 都花錢且會 flake。假模型（`ScriptedChatModel`）因此不是鷹架而是長期測試基座，後續 phase 的端到端驗證都靠它；它與基座真實行為的分歧由 [#32](https://github.com/DemianLi/nexus-agent/issues/32) 的升版檢查清單擋（見第 7.1 節），長期落點留在 `apps/harness`，與 `createDeepAgent` 的呼叫點同處（[#30](https://github.com/DemianLi/nexus-agent/issues/30)）。
 
@@ -369,7 +369,7 @@ eval 跑的是真的 agent，基準任務的題目與工具參數會跟著 trace
 | 判準對照 | `llama-11b` | 11B ／ 不詳 | **8 次裡只跑完 3 次，整輪被中止** —— 見下面第三條 | | | | | |
 
     → **「沒有可判的」現在真的不被平均了，而且報表看得到。** `no-tool-needed` 期望零筆工具呼叫，所以它在工具與參數兩欄是 `undefined` 而不是 `1` —— 上表每一階的那兩欄實際上都只判了 **6/8** 次（CLI 會印「判了 6/8 次」）。填成 `1` 的話，加了這條題目之後這兩欄的**鑑別力反而下降**，而它下降的方式看起來完全像是模型變好了。這與 `runner.ts` 區分 `usage` 的 `undefined` 與零、`compare.ts` 區分「失敗」與「零分」是同一條規矩，反向驗過：把它改回 `1`，四條測試當場紅。**順帶補回一整欄**：`mentions` 從 #80 就在算，但 `summarize()` 從來沒收，所以尺寸比較的報表上少了一欄品質指標；它問的是「有沒有把結果講出來」，跟前兩欄的「有沒有做」不同，而 `super` 與 `oss-120b` 各有一次工具全對卻答非所問（`0.00`）。
-    → **`LIVE_TIMEOUT_MS` 管不到整輪，第二次證實 —— 而且這次發生在階梯上的一階，不是對照組。** `ultra` 跑 `edit-after-read` 兩次分別花了 **420.9 秒**與 **247.3 秒**，那道 90 秒的上限**一次都沒觸發**，因為每一個單一請求都在 90 秒以內。判準對照更誇張：`llama-11b` 在 `reverse-round-trip` 上一次跑了 **792.8 秒**、多叫 **25** 次工具、燒掉 **110,936 token**（#84 那次是 208.7 秒 / 151,524 token）。**判準對照那一列沒有彙總**：8 次執行只跑完 3 次。**中止的原因不是模型 —— 是我自己的跑法**：那個行程是用 `(… ) &` 丟到背景的，父層的 shell 一收工它就被連同 process group 一起收掉了（`ps` 零筆、log 裡既沒有 `EXIT=` 也沒有結尾標記，也沒有任何錯誤訊息，符合被外部殺掉而不是自己崩掉）。**那次 792.8 秒的執行是跑完的，分數也記下來了**，所以上面那些數字不要讀成「模型把整輪掛死了」。→ **這一輪不補跑那個對照**，理由有兩層：一是它的職責（「判準量不量得出 1.00 以下」）這次由階梯自己回答了 —— 五階裡有四階量出了 1.00 以下，而 #84 一個都沒有；二是補跑它正好是那個沒有上限的行為最會重演的地方。**整輪的成本上限仍然沒補**，但它現在有兩次獨立的實測撐著，而且是 [#85](https://github.com/DemianLi/nexus-agent/issues/85)（十個模型的橫向評測）動工前必須先有的東西。
+    → **`LIVE_TIMEOUT_MS` 管不到整輪，第二次證實 —— 而且這次發生在階梯上的一階，不是對照組。** `ultra` 跑 `edit-after-read` 兩次分別花了 **420.9 秒**與 **247.3 秒**，那道 90 秒的上限**一次都沒觸發**，因為每一個單一請求都在 90 秒以內。判準對照更誇張：`llama-11b` 在 `reverse-round-trip` 上一次跑了 **792.8 秒**、多叫 **25** 次工具、燒掉 **110,936 token**（#84 那次是 208.7 秒 / 151,524 token）。**判準對照那一列沒有彙總**：8 次執行只跑完 3 次。**這裡原本記著「中止的原因不是模型，是我自己的跑法（背景 process group 被收掉）」——那句話是錯的，2026-08-28 稍晚查證後更正。** 那個行程從來沒有被收掉：它在 `llama-11b` 的 `reverse-round-trip` 第二次取樣上**活了大約兩個小時、零輸出**，是準備跑下一輪時列進程才發現並手動殺掉的。**會判斷成「被收掉」是因為當時跑的 `ps aux | grep -c` 沒有走 `rtk proxy`**，過濾層回了 `0`；用 `rtk proxy ps -eo pid,etime,command` 重跑，四個 PID 全在、`etime` 是 `02:25:51`。→ 更正之後結論更硬不更軟：那不是跑法出問題，是**一次真正的失控** —— 單一次執行超過兩小時，而當時沒有任何上限攔得住它。→ **這一輪不補跑那個對照**，理由有兩層：一是它的職責（「判準量不量得出 1.00 以下」）這次由階梯自己回答了 —— 五階裡有四階量出了 1.00 以下，而 #84 一個都沒有；二是補跑它正好是那個沒有上限的行為最會重演的地方。**整輪的成本上限仍然沒補**，但它現在有兩次獨立的實測撐著，而且是 [#85](https://github.com/DemianLi/nexus-agent/issues/85)（十個模型的橫向評測）動工前必須先有的東西。
     → **順帶兩件小的。** ①`oss-120b` 有一次失敗被歸成 `transport`，訊息是 `Cannot read properties of undefined (reading 'message')` —— 那是個 `TypeError`，不是線路問題。我們這側所有讀 `.message` 的地方都有 `instanceof Error` 護著（grep 過），所以它來自基座或 SDK 內部；`classify()` 認不出來就歸 `transport` 而不猜，這次的行為是對的，但 `transport` 這一類現在裝著兩種很不一樣的東西。②`eval:compare` 多了 `--cases`，因為成本是題數 × 階數 × 取樣數的乘積，而題目從 3 條變成 7 條 —— 打錯的 id 一律當場拋，不默默略過（默默略過就會跑了個比預期小的子集而報表上看不出來）。
     → **[#61](https://github.com/DemianLi/nexus-agent/issues/61) 的裁示（2026-08-28，demian）：留著當紀錄，不關。** 它已經不是任何東西的前置，但它問的兩件事沒有消失（Phase 2 那道二元閘門從沒跑過；§0／§4 的預設 Anthropic 沒有證據路徑），所以留著當那兩件事的錨點。**下一個看到它的人不要重新問「要不要關」。**
     → **整輪的上限補了，而且槓桿早就在基座手上 —— 是它自己轉到底的。** 動工前先 grep 了基座，
@@ -398,7 +398,21 @@ eval 跑的是真的 agent，基準任務的題目與工具參數會跟著 trace
     → **token 預算刻意不做。** 實測跑掉的兩次（`llama-11b` 792.8 秒 / 25 次多叫、`ultra` 420.9 秒）
 這兩道上限都攔得住，一個數 token 的 middleware 一次都用不上，而它會動到 plugin 契約那個面。
 **等到有一次跑掉是這兩道都沒攔住的，再做。**
-- 驗收：瀏覽器完成「提問 → 看事件流 → 核准工具 → 收結果」全迴圈（[#79](https://github.com/DemianLi/nexus-agent/pull/79) 已閉合）；eval 有可比較的通過率數據，且該數據足以讓模型定案 —— **前半有了，後半接近了但還沒到，而擋住的東西又換了一次**。[#83](https://github.com/DemianLi/nexus-agent/pull/83) 記的是「階梯的底板太高」，[#84](https://github.com/DemianLi/nexus-agent/pull/84) 把受控底板降到 20B（總量）卻五階全部滿分，落點因此變成「判準在 20B 以上飽和」。這一張把題目加難之後，**判準在階梯上終於量得出 1.00 以下**（五階裡四階做到，#84 是零階），但**方向還定不了**：`gpt-oss` 那道是 `0.94` → `1.00`，`nemotron-3` 那道是 `0.92` / `0.97` / `0.89` 不單調。所以現在擋著的是**兩道階梯給的答案不一致，而每一道的 n 都只有 6** —— 要定案得先把取樣數與題數撐起來，而那件事在沒有整輪成本上限之前跑不動（`ultra` 單題 420.9 秒、`llama-11b` 單題 792.8 秒 / 110,936 token，90 秒的請求級上限一次都沒觸發）。**Phase 5 因此仍不宣告完成**，README 那條「完成一個 Phase 跳 minor」不適用。
+    → **上限第一次在真實比較裡承重，而且是迴圈那道先攔到。** 2026-08-28 的 n=12 那一輪，`llama-11b` 在 `reverse-round-trip` 上觸發了一次 `budget`：`Recursion limit of 40 reached`，**101.8 秒**。那正是兩小時那次的同一題同一個模型 —— 沒有上限時它跑了兩小時，有上限時它在第 102 秒被切掉。同一輪裡最慢的正常執行是 `ultra` 的 93.8 秒，**300 秒那道時鐘一次都沒觸發**：該攔的攔到了，不該攔的沒有誤傷。
+    → **把取樣撐到 n=12 之後，[#86](https://github.com/DemianLi/nexus-agent/pull/86) 那個 `gpt-oss` 的尺寸效應消失了。** 這正是 #86 內文預先打過折的那一條（「那個差異踩在兩次觀測上」）。數字（2026-08-28，`eval:compare --cases edit-after-read,reverse-round-trip --samples 6`，72 次執行）：
+
+| 階梯 | 短名 | 總量／活化 | 評到分 | 工具成功率 | 參數正確性 | 多叫次數 | 回覆提到 | 總 token 平均（全距） |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| gpt-oss | `oss-20b` | 20B ／ 不詳 | 12 | 0.94（0.33–1.00） | **0.91**（0.33–1.00） | 0.75（0–2） | 0.92 | 9488（7681–12526） |
+| gpt-oss | `oss-120b` | 120B ／ 不詳 | 12 | 0.94（0.67–1.00） | **0.92**（0.50–1.00） | 0.33（0–1） | 0.92 | 8519（7657–10019） |
+| nemotron-3 | `nano` | 30B ／ 3B | 12 | 0.94（0.67–1.00） | 0.92（0.50–1.00） | 0.67（0–1） | 1.00 | 17414（13428–21283） |
+| nemotron-3 | `super` | 120B ／ 12B | 12 | 1.00 | **0.98**（0.80–1.00） | 0.75（0–1） | 0.83 | 15413（12949–16318） |
+| nemotron-3 | `ultra` | 550B ／ 55B | 12 | 1.00 | **0.88**（0.67–1.00） | 0.50（0–1） | 0.83 | 14049（12333–15814） |
+| 判準對照 | `llama-11b` | 11B ／ 不詳 | 4（失敗 `rejected`×7、`budget`×1） | 0.58（0–1.00） | 0.53（0–0.83） | 1.25（0–3） | **0.00** | 14734（3070–27072） |
+
+    → **這是一個「沒有效應」的結論，而它是有效力的，因為判準沒有飽和。** 五階的參數正確性落在 `0.88`–`0.98`，全距下探到 `0.33`／`0.50` —— 判準在每一階上都還有量程，只是**尺寸沒有在那個量程上動**。`gpt-oss` 從 `0.94 → 1.00`（n=6）縮回 `0.91 → 0.92`（n=12）；`nemotron-3` 三階仍然不單調，而且 550B 那階在兩輪裡都是最低。所以 #83 → #84 → #86 這條「一直往下找崩塌點」的線到這裡收掉了：**崩塌點在 20B 底下，20B 以上這五階的品質分不出高下，而那不是題目太淺造成的**（題目已經加難過一輪，判準也證明沒飽和）。
+    → **因此 [#31](https://github.com/DemianLi/nexus-agent/issues/31) 的選型有答案了，而答案來自成本那一欄。** 品質打平時能用的軸只剩成本、延遲、失敗模式，而這三個都指向同一個：**`openai/gpt-oss-120b`** —— 參數正確性 `0.92`（與 `nano` 並列第二，離最高的 `super` 差 0.06）、**token 最省**（8519，比 Nemotron 那一家的 14049–17414 少四到五成）、**多叫次數最低**（0.33）。跨階梯讀這條線對**選型**是合法的（選型本來就不是在問尺寸），對尺寸效應則不是。**這個結論要不要拿去改第 0 節與第 4 節那兩張還寫著「預設 Anthropic」的表，是 demian 的判斷**，這裡只把證據放好。
+- 驗收：瀏覽器完成「提問 → 看事件流 → 核准工具 → 收結果」全迴圈（[#79](https://github.com/DemianLi/nexus-agent/pull/79) 已閉合）；eval 有可比較的通過率數據，且該數據足以讓模型定案 —— **前半有了，後半接近了但還沒到，而擋住的東西又換了一次**。[#83](https://github.com/DemianLi/nexus-agent/pull/83) 記的是「階梯的底板太高」，[#84](https://github.com/DemianLi/nexus-agent/pull/84) 把受控底板降到 20B（總量）卻五階全部滿分，落點因此變成「判準在 20B 以上飽和」。[#86](https://github.com/DemianLi/nexus-agent/pull/86) 把題目加難，判準在階梯上終於量得出 `1.00` 以下；[#87](https://github.com/DemianLi/nexus-agent/pull/87) 補上整輪的上限，n 才撐得起來。撐到 **n=12** 之後**答案是「沒有尺寸效應」**：五階的參數正確性 `0.88`–`0.98`、全距下探到 `0.33`，判準沒有飽和，但尺寸沒有在那個量程上動。**這是一個有效力的否定結論，不是「量不出來」** —— 而它讓選型落回成本那一欄，答案是 `openai/gpt-oss-120b`（品質並列第二、token 最省四到五成、多叫最低）。→ **驗收兩半都到齊，Phase 5 宣告完成（2026-08-28，demian 拍板）。** 第 0 節決策表第 4 列、第 4 節選型表的「模型」列、第 7 節決策點 2 同時改成 `openai/gpt-oss-120b`，決策點 2 關閉。**沒有一併關掉的**：Phase 2 那道「不相容則 DeepSeek 出局」的二元閘門仍然沒跑過，而 Anthropic 那條路從頭到尾沒有被建起來 —— 兩者都錨在 [#61](https://github.com/DemianLi/nexus-agent/issues/61)，那張留著當紀錄。**下一個發版依 README 的規則跳 minor**（發版是 `develop → main` 加 workflow_dispatch，人工步驟）。
 
 ## 6. 六大補強項落點
 
@@ -422,7 +436,17 @@ eval 跑的是真的 agent，基準任務的題目與工具參數會跟著 trace
    **升版檢查清單**：`deepagents` 升 minor 或 major 的 PR 上，重跑一次 [#31](https://github.com/DemianLi/nexus-agent/issues/31) 那四項人工真實模型驗證——tool call 參數以合法 JSON 回傳／`streamMode: ['updates','values']` 的事件形狀與假模型一致／Node 22 相容／key 只從環境變數讀且缺少即失敗。這是擋「`ScriptedChatModel` 與基座真實行為悄悄分歧」的機制之一。
 
    **但「那個分歧在結構上斷言不出來」這句是錯的，Phase 5 動工前的驗證當場撞到反例。** 原文的推論是：CI 不放模型 secret（#31），所以寫得出來的斷言只能斷言假模型與我們對基座的想像一致，而那正是分歧發生時仍然全綠的東西。**漏掉的是第三種斷言：同一份腳本走兩條基座路徑，比對兩邊的結果。** `ScriptedChatModel` 在 v3 串流下對工具呼叫視而不見（見第 5 節 Phase 5），這件事完全不需要任何 key 就斷言得出來 —— 拿同一份腳本分別走 `invoke` 與 v3 `streamEvents`，斷言兩邊都跑到工具，分歧當場紅。**假模型與基座的分歧，只要基座自己有兩條路可以互為對照，就驗得出來**；驗不出來的是「真實供應商會不會這樣回」，那才是要 key 的那一半。
-2. **模型供應商決策**（[#31](https://github.com/DemianLi/nexus-agent/issues/31)）：Anthropic 功能最全但成本高；DeepSeek 便宜。原文要在 Phase 0「兩者都跑基本驗證再定」，但 Phase 0 的驗收判定不了品質，也碰不到 middleware —— 那時還沒有任何 middleware。拆成三段：**Phase 0 只定預設**（Anthropic）並驗真實接線；**Phase 2 驗 DeepSeek 相容性**，二元判定，不相容就出局；**Phase 5 才比品質與成本**，掛在 eval suite 的基準任務上。理由是相容性是二元的、早驗早止血；品質比較是統計性的，小樣本手工跑出來的數字噪音大過訊號。
+2. **模型供應商決策**（[#31](https://github.com/DemianLi/nexus-agent/issues/31)）—— **已關閉（2026-08-28）：`openai/gpt-oss-120b`。**
+
+   原文：Anthropic 功能最全但成本高；DeepSeek 便宜。原本要在 Phase 0「兩者都跑基本驗證再定」，但 Phase 0 的驗收判定不了品質，也碰不到 middleware —— 那時還沒有任何 middleware。所以拆成三段：**Phase 0 只定預設**（Anthropic）並驗真實接線；**Phase 2 驗 DeepSeek 相容性**，二元判定，不相容就出局；**Phase 5 才比品質與成本**。理由是相容性是二元的、早驗早止血；品質比較是統計性的，小樣本手工跑出來的數字噪音大過訊號。
+
+   **三段裡只有第一段與第三段真的發生，而第三段換掉了問題本身。** Phase 5 沒有比「Anthropic 對 DeepSeek」——那兩條路一條沒建起來（`@langchain/anthropic` 從來不在任何 `package.json` 裡）、一條卡在人工開帳號（[#61](https://github.com/DemianLi/nexus-agent/issues/61)）。實際跑的是**同一個 NVIDIA 端點上五個模型的橫向比較**，12 次取樣。結果：**品質五階打平**（參數正確性 `0.88`–`0.98`，而判準沒有飽和 —— 全距下探到 `0.33`），所以選型落回成本、延遲、失敗模式，三個軸都指向 `openai/gpt-oss-120b`。
+
+   **這個決定要看清楚它的邊界，否則會被讀得太寬：**
+
+   - **它是「這把 key 叫得動的模型裡最划算的那個」，不是「這是最好的模型」。** 候選集合綁在帳號上（`GET /models` 列 84 個，這把 key 只叫得動 29 個、真的支援工具的 14 個），換一把 key 要重新盤點。
+   - **Anthropic 不是被比下去的，是從來沒進過場。** 要重新排入評估，缺的是一段從沒被記過的接線工作，不是一次比較。
+   - **Phase 2 那道「不相容則 DeepSeek 出局」的二元閘門到今天仍然沒跑過。** 「我們這套 stack 換一個供應商跑不跑得通」這個問題沒有被回答，只是沒有人在問了 —— 因為五個候選走的是同一個套件、同一個端點。它錨在 [#61](https://github.com/DemianLi/nexus-agent/issues/61) 上，那張刻意留著當紀錄。
 3. **shell sandbox 安全**：`execute` 工具本質是跑任意指令。先只用 QuickJS interpreter，shell sandbox 延後到有明確隔離方案（容器）再做。
 
    **原本的預測錯了，`feat/sandbox-plugin` 當場驗出來的是更強的一件事。** 原文寫「權限規則對 `execute` 不生效，原因是它的參數是命令字串、沒有路徑可比對」。實際上基座不是讓規則靜靜失效，而是**不讓這兩件事共存**：`createFilesystemMiddleware` 在 `permissions` 非空、`execute` 工具開著、而 backend 又通過 `isSandboxBackend()` 時**直接拋錯**（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:2368`），除非所有規則路徑都收斂在 `CompositeBackend` 的 route 前綴下；`createExecuteTool` 在執行期還有第二道同樣判準的關卡。「不生效」與「構造期硬失敗」是兩件事，而基座選的是後者——理由它自己寫在訊息裡：shell 指令碰得到任何路徑，路徑規則因此形同虛設。
