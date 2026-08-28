@@ -218,6 +218,53 @@ describe('summarize：失敗不會被平均成零分', () => {
     expect(summary.costed).toBe(0);
   });
 
+  it('沒有可判的那一格不會被平均進去 —— 克制題不送滿分', async () => {
+    // **本檔的第二條主張。** `no-tool-needed` 這種期望零筆呼叫的題目，若它的
+    // 工具成功率被填成 1 再平均進去，這一欄每個模型都被無條件加一分滿分，而
+    // 那一欄的鑑別力下降的方式看起來完全像是「模型變好了」。
+    const restraint: BenchmarkCase = {
+      id: 'restraint',
+      prompt: '不要用工具',
+      expected: { toolCalls: [], mentions: ['甲'] },
+    };
+    // 一題照做（滿分）、一題只講話（零分）、一題是克制題（沒有可判的）。
+    const report = await runTier(TIER, {
+      createModel: () => new ScriptedChatModel({ turns: PERFECT }) as AgentModel,
+      cases: [ECHO_CASE],
+    });
+    const talky = await runTier(TIER, {
+      createModel: scripted(ALL_TALK),
+      cases: [ECHO_CASE],
+    });
+    const restrained = await runTier(TIER, {
+      createModel: scripted(ALL_TALK),
+      cases: [restraint],
+    });
+
+    const merged = {
+      tier: TIER,
+      outcomes: [...report.outcomes, ...talky.outcomes, ...restrained.outcomes],
+    };
+    const summary = summarize(merged);
+
+    // 三次執行都評到分，但工具那一欄只判得動兩次 —— 平均是 0.5 而不是 (1+0+1)/3。
+    expect(summary.scored).toBe(3);
+    expect(summary.toolCallSuccess).toMatchObject({ mean: 0.5, count: 2 });
+    expect(summary.argumentCorrectness).toMatchObject({ count: 2 });
+    // 而多叫那一欄三次全部判得動 —— 克制題的訊號就在這裡。
+    expect(summary.extraToolCalls?.count).toBe(3);
+  });
+
+  it('回覆提到那一欄印得出來 —— 以前算完就丟掉了', async () => {
+    // `scoreCase` 從第一天就算了 `mentions`，但 `summarize` 沒收，所以尺寸比較的報表上
+    // 少了一整欄品質指標。它問的是「有沒有把結果講出來」，跟前兩欄的「有沒有做」不同。
+    const report = await runTier(TIER, { createModel: scripted(PERFECT), cases: [ECHO_CASE] });
+    const summary = summarize(report);
+
+    expect(ECHO_CASE.expected.mentions).toBeDefined();
+    expect(summary.mentions).toMatchObject({ mean: 1, count: 1 });
+  });
+
   it('全距報得出來 —— 單次取樣的一個數字不該讀成定論', async () => {
     let call = 0;
     const report = await runTier(TIER, {

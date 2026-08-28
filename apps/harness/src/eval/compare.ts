@@ -200,10 +200,25 @@ export interface TierSummary {
   readonly scored: number;
   /** 各類失敗的次數。沒有的類別不會出現。 */
   readonly failures: Readonly<Partial<Record<FailureReason, number>>>;
-  /** 工具呼叫成功率的平均與全距；一次都沒評到分時是 `undefined`。 */
+  /**
+   * 工具呼叫成功率的平均與全距。
+   *
+   * **只算真的有分數的那些執行。** 期望零筆工具呼叫的題目（`no-tool-needed`）在
+   * `scoreCase` 裡是 `undefined` 而不是 1，這裡照樣把它濾掉 —— 讓它以 1 混進平均，
+   * 這一欄的鑑別力會被無條件的滿分稀釋（見 `scorers.ts` 的
+   * {@link scoreToolCallSuccess}）。`Spread.count` 因此**不一定等於** {@link scored}。
+   */
   readonly toolCallSuccess?: Spread;
   readonly argumentCorrectness?: Spread;
   readonly extraToolCalls?: Spread;
+  /**
+   * 最終回覆有沒有提到該提的。
+   *
+   * `scoreCase` 從第一天就算了它，但這裡以前沒印 —— 一欄算完就丟掉的品質指標。
+   * 它跟前兩欄問的不是同一件事：那兩欄問「有沒有做」，這一欄問「有沒有把結果講出來」，
+   * 而工具全叫對了卻答非所問是真的會發生。只算資料集有列 `mentions` 的題目。
+   */
+  readonly mentions?: Spread;
   /**
    * 總 token 的平均與全距。
    *
@@ -240,29 +255,27 @@ export function summarize(report: TierReport): TierSummary {
     failures[outcome.reason] = (failures[outcome.reason] ?? 0) + 1;
   }
 
-  const costs = scored
-    .map((outcome) => outcome.score.cost?.totalTokens)
-    .filter((total): total is number => total !== undefined);
+  const costs = present(scored.map((outcome) => outcome.score.cost?.totalTokens));
 
   return {
     tier: report.tier,
     scored: scored.length,
     failures,
-    ...spreadOf(
-      'toolCallSuccess',
-      scored.map((o) => o.score.toolCallSuccess),
-    ),
-    ...spreadOf(
-      'argumentCorrectness',
-      scored.map((o) => o.score.argumentCorrectness),
-    ),
+    ...spreadOf('toolCallSuccess', present(scored.map((o) => o.score.toolCallSuccess))),
+    ...spreadOf('argumentCorrectness', present(scored.map((o) => o.score.argumentCorrectness))),
     ...spreadOf(
       'extraToolCalls',
       scored.map((o) => o.score.extraToolCalls),
     ),
+    ...spreadOf('mentions', present(scored.map((o) => o.score.mentions))),
     ...spreadOf('totalTokens', costs),
     costed: costs.length,
   };
+}
+
+/** 丟掉 `undefined`。**它們是「沒有可判的」，不是零**，所以不能進平均。 */
+function present(values: readonly (number | undefined)[]): readonly number[] {
+  return values.filter((value): value is number => value !== undefined);
 }
 
 function spreadOf<K extends string>(key: K, values: readonly number[]): Partial<Record<K, Spread>> {
