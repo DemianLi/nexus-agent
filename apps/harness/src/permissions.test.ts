@@ -20,6 +20,25 @@
  * 自帶規則的 subagent；用一個什麼都沒帶的去測，等於什麼都沒測到。
  *
  * 每一條都**看磁碟**：擋沒擋住的答案在檔案內容上，不在回傳值的措辭上。
+ *
+ * ## 比「無規則命中即 allow」更大的那個洞：規則只蓋到工具
+ *
+ * `checkPermission` **只在七個工具工廠裡被呼叫**（`createLsTool` / `createReadFileTool` /
+ * `createWriteFileTool` / `createEditFileTool` / `createGlobTool` / `createGrepTool`，加上
+ * delete 那條走 `findDeleteDenyPatterns` 的分支）。它**不在 backend 方法上**。
+ *
+ * 所以任何不經過工具的寫入都不經過規則表 —— summarization 的歷史 offload 就是一個，它走
+ * backend 方法。實測的四格對照在 [`summarization.test.ts`](./summarization.test.ts)：同一條
+ * `deny(['/conversation_history*', ...])`，經 `write_file` 換來 `permission denied`、磁碟零檔案；
+ * 經 offload 則照樣落檔。
+ *
+ * 這是 [`contained-backend.test.ts`](./contained-backend.test.ts) 那句「讀不經過 fence——讀的
+ * 策略歸 permissions，兩層正交」的另一面：**寫不經過 permissions，寫的圍堵歸 fence**。兩層
+ * 各守一半，而 offload 落在 permissions 守不到的那半。
+ *
+ * 對使用者的意思很直接：**想把某個路徑擋在寫入之外，deny 規則只擋得住模型主動去寫的那條路**。
+ * 基座自己在背景寫的東西要用 fence（`ContainedFilesystemBackend` 的 mode），或把那個寫入者的
+ * backend 指到別處。
  */
 
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
