@@ -37,22 +37,13 @@ process.env.LANGSMITH_TEST_TRACKING = 'false';
 
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
-import type { NexusPlugin } from '@nexus/core';
-import { createEchoPlugin } from '@nexus/plugin-echo';
 import * as ls from 'langsmith/vitest';
 import { afterAll, beforeAll, expect } from 'vitest';
 import { ScriptedChatModel, type ScriptedTurn } from '../scripted-model.js';
+import { BENCHMARK_SYSTEM_PROMPT, benchmarkPlugins } from './assembly.js';
 import { BENCHMARK, BENCHMARK_FILE, type BenchmarkCase } from './dataset.js';
 import { runBenchmarkCase } from './runner.js';
 import { scoreCase } from './scorers.js';
-
-/** 兩邊共用的清單。CI 與供應商比較必須是同一份，否則比的不是模型是組裝。 */
-const PLUGINS: readonly NexusPlugin[] = [createEchoPlugin()];
-
-const SYSTEM_PROMPT = [
-  '你是 nexus-agent 的基準任務受測者。',
-  '需要動用工具時就真的呼叫，不要只在文字裡描述你打算做什麼。',
-].join('\n');
 
 /**
  * 每條任務的假模型腳本。
@@ -196,8 +187,8 @@ async function evaluateCase(
 ): Promise<ReturnType<typeof scoreCase>> {
   const run = await runBenchmarkCase(testCase, {
     model: new ScriptedChatModel({ turns }),
-    plugins: PLUGINS,
-    systemPrompt: SYSTEM_PROMPT,
+    plugins: benchmarkPlugins(),
+    systemPrompt: BENCHMARK_SYSTEM_PROMPT,
   });
   const score = scoreCase(testCase, run);
 

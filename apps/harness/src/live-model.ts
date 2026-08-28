@@ -25,8 +25,8 @@ export const LIVE_BASE_URL = 'https://integrate.api.nvidia.com/v1';
  * **它慢**：一次簡單的呼叫約 37 秒。`cli:live` / `spike:live` 跑起來體感像卡住，
  * 但那是慢不是掛住（#57 的現象是**永遠**不回來）。
  *
- * eval 的模型比較會需要同時指到三個 id（開發計劃第 5 節 Phase 5），那時這裡要參數化；
- * 現在刻意還是一個常數 —— 這張只把壞掉的那條路修好。
+ * 這是**預設**的 id。eval 的尺寸比較會把三個橫階的 id 傳進 {@link createLiveModel}
+ * （開發計劃第 5 節 Phase 5），`cli:live` / `serve:live` / `spike:live` 三條路仍然走這個常數。
  */
 export const LIVE_MODEL_ID = 'deepseek-ai/deepseek-v4-pro-0813';
 
@@ -34,12 +34,26 @@ export const LIVE_MODEL_ID = 'deepseek-ai/deepseek-v4-pro-0813';
 export const LIVE_API_KEY_ENV = 'NVIDIA_API_KEY';
 
 /**
+ * 單一請求的逾時上限。
+ *
+ * **這不是調校，是止血。** 這個端點的失敗模式是**永遠不回來**（[#57](https://github.com/DemianLi/nexus-agent/issues/57)），
+ * 而尺寸比較是一連串請求 —— 沒有上限的話，中間掛住一次換來的是整輪比較沒有結果，
+ * 而不是「那一格失敗」。90 秒是量出來的：實測最慢的成功回應是 43 秒
+ * （`meta/muse-glimmer-30b`），掛住的那兩個在 90 秒仍是零位元組。
+ */
+export const LIVE_TIMEOUT_MS = 90_000;
+
+/**
  * 真實供應商的 model。
  *
  * key **只從環境變數讀**，缺少時直接失敗，沒有預設值也不 fallback
  * （[docs/standards.md](../../../docs/standards.md) 的秘密處理規則）。
+ *
+ * @param modelId - 要指到哪個模型。省略即 {@link LIVE_MODEL_ID}；尺寸比較把三個橫階的
+ *   id 逐一傳進來（見 [`eval/tiers.ts`](./eval/tiers.ts)）。**除了這個參數，兩邊的取樣
+ *   設定、逾時、金鑰來源完全相同** —— 否則比的不是模型是設定。
  */
-export function createLiveModel(): ChatOpenAI {
+export function createLiveModel(modelId: string = LIVE_MODEL_ID): ChatOpenAI {
   const apiKey = process.env[LIVE_API_KEY_ENV];
   if (!apiKey) {
     throw new Error(
@@ -51,11 +65,12 @@ export function createLiveModel(): ChatOpenAI {
 
   return new ChatOpenAI({
     apiKey,
-    model: LIVE_MODEL_ID,
+    model: modelId,
     configuration: { baseURL: LIVE_BASE_URL },
     temperature: 1,
     topP: 0.95,
     maxTokens: 16384,
+    timeout: LIVE_TIMEOUT_MS,
   });
 }
 
