@@ -2,7 +2,9 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
-import { createNexusAgent } from './agent-factory.js';
+import { createNexusAgent, DEFAULT_RECURSION_LIMIT } from './agent-factory.js';
+import type { NexusAgentHandle } from './agent-factory.js';
+import { LoopingChatModel } from './looping-model.js';
 import {
   createMountPlugin,
   createNotePlugin,
@@ -298,3 +300,84 @@ describe('createNexusAgent', () => {
     });
   });
 });
+
+/**
+ * 迴圈上限 —— **基座設了一個等於沒設的值，所以組裝點必須自己設一個。**
+ *
+ * `createDeepAgent` 最後一步是 `.withConfig({ recursionLimit: 1e4 })`，換算約 5,000 輪
+ * 模型呼叫。這一組釘的是「我們真的蓋掉了它」：拿掉 `withConfig` 那一行的話，下面第一條
+ * 會跑到 4,999 輪才停，數字對不上而且會慢上兩個數量級。
+ *
+ * 為什麼不直接斷言「基座的預設是 10000」：那個值**讀不到**（`createDeepAgent` 回的是
+ * `ReactAgent`，只有一個 `options` 鍵，`config` / `kwargs` / `lc_kwargs` 全是 undefined），
+ * 唯一的驗法是真的跑到上限，而那要 20 到 35 秒。所以那個數字記在
+ * `agent-factory.ts` 的檔頭當量測結果，這裡釘的是我們自己的行為。
+ */
+describe('迴圈上限', () => {
+  it('沒傳就套預設，而且真的會擋下來', async () => {
+    const model = new LoopingChatModel();
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [createEchoPlugin()],
+    });
+
+    try {
+      await expect(agent.invoke(toAgentInvocation('一直跑'))).rejects.toThrow(/Recursion limit/);
+    } finally {
+      await dispose();
+    }
+
+    // `recursionLimit = 2 × 模型輪數 + 2`，所以 100 換算是 49 輪。
+    // **這條斷言才是承重的那個**：少了 `withConfig` 的話它是 4999。
+    expect(model.calls).toBe((DEFAULT_RECURSION_LIMIT - 2) / 2);
+  });
+
+  it('傳進來的值蓋得掉預設', async () => {
+    const model = new LoopingChatModel();
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [createEchoPlugin()],
+      recursionLimit: 8,
+    });
+
+    try {
+      await expect(agent.invoke(toAgentInvocation('一直跑'))).rejects.toThrow(
+        /Recursion limit of 8/,
+      );
+    } finally {
+      await dispose();
+    }
+    expect(model.calls).toBe(3);
+  });
+
+  it('正常收工的對話不受影響 —— 上限擋的是跑掉，不是複雜', async () => {
+    const model = new ScriptedChatModel({ turns: BOTH_TOOLS });
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [createEchoPlugin(), createNotePlugin()],
+    });
+
+    try {
+      const result = await agent.invoke(toAgentInvocation('兩個工具都用一次'));
+      const messages: BaseMessage[] = result.messages;
+      expect(messages.length).toBeGreaterThan(0);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('包上 withConfig 之後型別沒有塌成 any', () => {
+    // **這一條是型別檢查在跑，不是 vitest。** `agent-factory.ts` 檔頭已經記過同一型的坑：
+    // `ReturnType<typeof createDeepAgent>` 會讓 `result.messages` 變成 `any`。`withConfig`
+    // 回的是另一個型別，所以要重驗 —— 而 `any` 是**不會讓 typecheck 紅**的那種壞掉，
+    // 上面那條 `const messages: BaseMessage[] = result.messages` 在 `any` 底下照樣過。
+    // 塌掉的話下面這個 `= true` 會變成把 `true` 指派給 `false`，typecheck 當場紅。
+    const notAny: MessagesAreTyped = true;
+    expect(notAny).toBe(true);
+  });
+});
+
+/** `T` 是不是 `any` —— `any` 會讓 `1 & T` 也是 `any`，於是 `0 extends` 成立。 */
+type IsAny<T> = 0 extends 1 & T ? true : false;
+type AgentInvokeResult = Awaited<ReturnType<NexusAgentHandle['agent']['invoke']>>;
+type MessagesAreTyped = IsAny<AgentInvokeResult['messages']> extends true ? false : true;

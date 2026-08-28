@@ -5,10 +5,9 @@
  * × 七題，跑滿是半小時級）。CI 那半是 [`eval.test.ts`](./eval.test.ts)：同一份資料、
  * 同一組評分器、零憑證。
  *
- * **成本是題數 × 階數 × 取樣數的乘積，而且沒有整輪的上限**：`LIVE_TIMEOUT_MS` 管的是
- * 單一請求，管不到一個模型在一題上叫了三十幾次工具（#84 實測過一次 151,524 token ／
- * 208.7 秒，那道 90 秒的上限一次都沒觸發）。所以 `--cases` 存在 —— 只想看新題目時
- * 不必把整份重跑一遍。
+ * **成本是題數 × 階數 × 取樣數的乘積**，所以 `--cases` 存在 —— 只想看某幾題時不必把
+ * 整份重跑一遍。單次執行另外有兩道上限（迴圈輪數與時鐘，見 `compare.ts`），
+ * 觸發時那一次記成 `budget` 而不是分數。
  *
  * **這裡不設 `LANGSMITH_TRACING`，也不要在跑它的 shell 裡設。** 這支跑的是真的 agent，
  * 基準任務的題目與工具參數會跟著 trace 一起出境（見 `eval.test.ts` 檔頭量到的第二個寄件人）。
@@ -18,7 +17,14 @@
  */
 
 import { createLiveModel, loadLiveEnvIfNeeded } from '../live-model.js';
-import { compareTiers, summarize, type TierOutcome, type TierSummary } from './compare.js';
+import {
+  compareTiers,
+  summarize,
+  EVAL_DEADLINE_MS,
+  EVAL_RECURSION_LIMIT,
+  type TierOutcome,
+  type TierSummary,
+} from './compare.js';
 import { BENCHMARK, type BenchmarkCase } from './dataset.js';
 import { MODEL_LADDERS, SCORER_CONTROL, type ModelLadder, type ModelTier } from './tiers.js';
 
@@ -114,6 +120,9 @@ function printSummary(summary: TierSummary): void {
   );
 }
 
+/** 被上限切掉的執行數。**它是資料損失，不是分數**，所以跑完要單獨提一句。 */
+let budgetHits = 0;
+
 /** 這一欄實際判了幾次。等於評到分的次數時不印 —— 每行都拖一段沒有資訊的括號很吵。 */
 function judged(summary: TierSummary, spread: { count: number } | undefined): string {
   if (spread === undefined || spread.count === summary.scored) return '';
@@ -136,6 +145,7 @@ function printOutcome(tier: ModelTier, outcome: TierOutcome): void {
     );
     return;
   }
+  if (outcome.reason === 'budget') budgetHits += 1;
   const status = outcome.status === undefined ? '' : ` ${outcome.status}`;
   console.log(
     `  · ${tier.label} ${outcome.caseId} ${outcome.seconds}s` +
@@ -178,6 +188,10 @@ async function main(argv: readonly string[]): Promise<void> {
       `${cases.length}/${BENCHMARK.length} 題${scope}，每題 ${samples} 次取樣，循序跑。` +
       `共 ${(rungs + 1) * cases.length * samples} 次執行。`,
   );
+  console.log(
+    `單次執行的上限：迴圈 ${EVAL_RECURSION_LIMIT} 個 super-step（約 ${(EVAL_RECURSION_LIMIT - 2) / 2} 輪模型呼叫）、` +
+      `時鐘 ${EVAL_DEADLINE_MS / 1000} 秒。超過就記成 budget，不是分數。`,
+  );
 
   for (const ladder of MODEL_LADDERS) {
     await runLadder(ladder, samples, cases);
@@ -193,6 +207,12 @@ async function main(argv: readonly string[]): Promise<void> {
 
   if (samples === 1) {
     console.log('\n注意：每題只取樣一次，取樣是隨機的 —— 這組數字是指示性的，不是定論。');
+  }
+  if (budgetHits > 0) {
+    console.log(
+      `\n注意：有 ${budgetHits} 次執行被上限切掉（budget）。**那是資料損失，不是低分** ——` +
+        `模型有沒有做完這題我們不知道。要嘛調高上限重跑，要嘛就把它讀成「這個模型在這題上跑不完」。`,
+    );
   }
   console.log('\n注意：跨階梯的差異混著訓練配方，只有同一道階梯內部才是「只有尺寸在變」。');
 }
