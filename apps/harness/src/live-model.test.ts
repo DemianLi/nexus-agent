@@ -6,7 +6,7 @@ import {
   LIVE_TIMEOUT_MS,
   createLiveModel,
 } from './live-model.js';
-import { MODEL_TIERS } from './eval/tiers.js';
+import { ALL_MODELS_UNDER_TEST } from './eval/tiers.js';
 
 /**
  * 這組測試不打真實 API，也不需要任何 key —— CI 不放模型 secret（issue #31）。
@@ -51,7 +51,7 @@ describe('真實供應商的 key 處理', () => {
 
   it('modelId 傳得進去，尺寸比較才換得動模型', () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
-    for (const tier of MODEL_TIERS) {
+    for (const tier of ALL_MODELS_UNDER_TEST) {
       const model = createLiveModel(tier.modelId);
       expect(model.model).toBe(tier.modelId);
       // **換掉的只有 model。** 端點與取樣設定跟著變的話，比出來的差異就不只是尺寸。
@@ -64,6 +64,6 @@ describe('真實供應商的 key 處理', () => {
   it('逾時有上限 —— #57 的失敗模式是永遠不回來，沒有上限就是整輪比較沒有結果', () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
     expect(createLiveModel().timeout).toBe(LIVE_TIMEOUT_MS);
-    expect(createLiveModel(MODEL_TIERS[0]?.modelId).timeout).toBe(LIVE_TIMEOUT_MS);
+    expect(createLiveModel(ALL_MODELS_UNDER_TEST[0]?.modelId).timeout).toBe(LIVE_TIMEOUT_MS);
   });
 });

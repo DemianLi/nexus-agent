@@ -117,6 +117,62 @@ describe('runTier：失敗的分類', () => {
     }
   });
 
+  it('包在 cause 底下第三層的 400 仍然是 rejected —— 實測就長這樣', async () => {
+    // 這個形狀是量出來的，不是想出來的：`llama-3.2-11b` 對 `write-then-read` 回
+    // `400 "This model only supports single tool-calls at once!"`，丟出來的是
+    // `MiddlewareError`（`status` 是 undefined），帶 `status: 400` 的 `BadRequestError`
+    // 包在 cause 底下第三層。只看最外層的話，一個真的 4xx 會被記成 transport。
+    const inner = Object.assign(
+      new Error('400 This model only supports single tool-calls at once!'),
+      {
+        status: 400,
+      },
+    );
+    const wrapped = new Error('400 This model only supports single tool-calls at once!', {
+      cause: new Error('wrap', { cause: new Error('wrap', { cause: inner }) }),
+    });
+    const report = await runTier(TIER, { createModel: throwing(wrapped), cases: [ECHO_CASE] });
+
+    const [outcome] = report.outcomes;
+    expect(outcome?.kind).toBe('failed');
+    if (outcome?.kind !== 'failed') return;
+    expect(outcome.reason).toBe('rejected');
+    expect(outcome.status).toBe(400);
+  });
+
+  it('內層一顆明確的 status 壓得過外層訊息裡的 aborted', async () => {
+    // 兩趟掃的理由：包裝層的訊息常常帶著 `aborted` 這種字眼，讓字串壓過協定的話，
+    // 一個要換 id 的 4xx 會被記成「掛住了」。
+    const inner = Object.assign(new Error('Not found for account'), { status: 404 });
+    const wrapped = new Error('Run aborted', { cause: inner });
+    const report = await runTier(TIER, { createModel: throwing(wrapped), cases: [ECHO_CASE] });
+
+    const [outcome] = report.outcomes;
+    expect(outcome?.kind === 'failed' && outcome.reason).toBe('rejected');
+    expect(outcome?.kind === 'failed' && outcome.status).toBe(404);
+  });
+
+  it('逾時也認得出包了幾層的', async () => {
+    const inner = Object.assign(new Error('whatever'), { name: 'APIConnectionTimeoutError' });
+    const report = await runTier(TIER, {
+      createModel: throwing(new Error('model call failed', { cause: inner })),
+      cases: [ECHO_CASE],
+    });
+
+    expect(report.outcomes[0]?.kind === 'failed' && report.outcomes[0].reason).toBe('timeout');
+  });
+
+  it('cause 繞成一個環也不會轉不出來', async () => {
+    // 包裝層數是別人家的實作細節，環是不是真的會發生我們管不到 —— 但轉不出來的話
+    // 一格失敗會變成整輪比較沒有結果，跟 #57 的失敗模式一模一樣。
+    const a = new Error('a');
+    const b = new Error('b', { cause: a });
+    (a as { cause?: unknown }).cause = b;
+    const report = await runTier(TIER, { createModel: throwing(b), cases: [ECHO_CASE] });
+
+    expect(report.outcomes[0]?.kind === 'failed' && report.outcomes[0].reason).toBe('transport');
+  });
+
   it('認不出來的歸 transport，不猜', async () => {
     const report = await runTier(TIER, {
       createModel: throwing(new Error('socket hang up')),
