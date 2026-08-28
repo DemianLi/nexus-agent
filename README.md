@@ -79,9 +79,9 @@ runner 在 `runner.ts`。**model 是 runner 的參數**，所以 CI 這條（假
 題目與工具參數會跟著 trace 送出去 —— 那條路徑跟 `langsmith/vitest` 自己的上傳是**兩個
 獨立的開關**，關掉一個不影響另一個（`src/eval/eval.test.ts` 的檔頭記著實測）。
 
-供應商的品質與成本比較目前**跑不了**：`@langchain/anthropic` 還沒接、DeepSeek 官方端點的
-帳號與 key 是人工前置（[#61](https://github.com/DemianLi/nexus-agent/issues/61)）、現有的
-NVIDIA 接線模型不回應（[#57](https://github.com/DemianLi/nexus-agent/issues/57)）。
+模型的品質與成本比較**還沒跑**（不是跑不了）：形狀已定 —— 同一個 NVIDIA 端點上的三個
+尺寸級距（9B 以下、26–35B、100B 以上），同一把 `NVIDIA_API_KEY`。要做的是把
+`createLiveModel()` 參數化成收得下三個 id，然後 `runBenchmarkCase` 跑三遍。
 
 clone 之後各自設定一次，讓 `git fetch` / `git pull` 自動清掉遠端已刪除的分支：
 
