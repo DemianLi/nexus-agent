@@ -41,6 +41,11 @@ pnpm --filter @nexus/harness run cli:live "..."             # 換成真實供應
 真正要試 agent 行為時用 `cli:live`。`--plugins <module>` 可以換掉預設的 plugin 清單
 （模組 `export default` 一個陣列）。
 
+**agent 迴圈有上限，而那個上限是組裝點設的不是基座設的。** `createDeepAgent` 自己把
+`recursionLimit` 設成 `1e4`（約 5,000 輪模型呼叫，等於沒有上限），所以
+`createNexusAgent` 蓋成 100（約 49 輪）。CLI、`serve`、eval 都吃這個值；真的需要更長的
+呼叫端自己傳 `recursionLimit`。這條擋的是「跑掉了」，不是「複雜任務」。
+
 在瀏覽器裡跟 agent 說話，要開兩個 terminal：
 
 ```bash
@@ -119,9 +124,14 @@ pnpm --filter @nexus/harness run eval:compare --cases edit-after-read --samples 
 **成本跟尺寸無關，跟配方有關** —— 最便宜的一階是 120B 的 `oss-120b`，而最小的 `nano`
 比最大的 `ultra` 還貴。
 
-**單一請求的逾時管不到整輪。** `ultra` 有兩次在同一題上跑了 420.9 秒與 247.3 秒，
-判準對照有一次跑了 792.8 秒、多叫 25 次工具、燒掉 110,936 token —— 而每一個單一請求都在
-90 秒的上限以內，那道上限一次都沒觸發。要跑大批比較之前先看這件事。
+**一次執行有兩道上限，超過就記成 `budget`。** 迴圈 40 個 super-step（約 19 輪模型呼叫）、
+時鐘 300 秒。兩道各管一半：`llama-3.2-11b` 曾經在一題上多叫 25 次工具、跑了 792.8 秒，
+`ultra` 則是沒多叫幾次卻跑了 420.9 秒 —— 前者靠迴圈上限，後者只有時鐘擋得住。
+而 `LIVE_TIMEOUT_MS`（90 秒）那道**一次都沒觸發過**，因為它管的是單一請求。
+
+**`budget` 是資料損失，不是低分。** 模型有沒有做完那題我們不知道，所以它跟端點的 4xx
+一樣不進平均，但要做的事不同：那是「調高上限重跑」或「這個模型在這題上跑不完」，
+不是換 id 也不是查網路。
 
 驅動器把**失敗與零分分開**：模型叫不出工具是 0 分（有資料），端點回 4xx 或掛住是
 「沒有資料」，後者不會被平均進通過率。判準對照曾經出現的 `400 "This model only supports
