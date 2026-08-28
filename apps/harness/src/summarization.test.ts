@@ -61,6 +61,38 @@ function middlewareNames(agent: unknown): string[] {
   return names;
 }
 
+/**
+ * 自己建一個低門檻的摘要器換掉內建那個。
+ *
+ * 這同時是「同名取代」的實際用途：`trigger` / `keep` / `historyPathPrefix` 都只有走這條路
+ * 才設得到——基座無條件建的那個只吃 `{ backend }`。
+ *
+ * `backend` 收成參數而不是寫死，是因為它**是獨立的一格**：摘要器寫歷史用的 backend 不必是
+ * agent 那個。最後一組測試就靠這一點。
+ */
+function tunedSummarization(backend: ContainedFilesystemBackend): NexusPlugin {
+  return {
+    name: 'tuned-summarization',
+    apply: (registry) =>
+      void registry.middleware.use(
+        createSummarizationMiddleware({
+          backend,
+          trigger: { type: 'messages', value: 3 },
+          keep: { type: 'messages', value: 1 },
+        }) as never,
+      ),
+  };
+}
+
+/** 某個根底下 `conversation_history` 裡的檔案；目錄不存在就是空的。 */
+async function historyFiles(root: string): Promise<string[]> {
+  try {
+    return await readdir(join(root, 'conversation_history'));
+  } catch {
+    return [];
+  }
+}
+
 const MARKER = '<這是我們自己的摘要器>';
 
 /** 一個只在 system prompt 留記號的假摘要器，名字剛好撞上內建那個。 */
@@ -181,26 +213,6 @@ describe('同名取代是唯一的縫', () => {
  * 一個根本沒觸發 summarization 的組裝也會讓它通過。
  */
 describe('offload 失敗是 fail-open', () => {
-  /**
-   * 自己建一個低門檻的摘要器換掉內建那個。
-   *
-   * 這同時是「同名取代」的實際用途：`trigger` 與 `historyPathPrefix` 都只有走這條路
-   * 才設得到——基座無條件建的那個只吃 `{ backend }`。
-   */
-  function lowTriggerSummarization(backend: ContainedFilesystemBackend): NexusPlugin {
-    return {
-      name: 'low-trigger-summarization',
-      apply: (registry) =>
-        void registry.middleware.use(
-          createSummarizationMiddleware({
-            backend,
-            trigger: { type: 'messages', value: 3 },
-            keep: { type: 'messages', value: 1 },
-          }) as never,
-        ),
-    };
-  }
-
   async function runUntilSummarized(mode: 'workspace-write' | 'read-only'): Promise<{
     readonly root: string;
     readonly replies: number;
@@ -218,7 +230,7 @@ describe('offload 失敗是 fail-open', () => {
       model,
       backend,
       checkpointer: new MemorySaver(),
-      plugins: [lowTriggerSummarization(backend)],
+      plugins: [tunedSummarization(backend)],
     });
 
     let replies = 0;
@@ -233,14 +245,6 @@ describe('offload 失敗是 fail-open', () => {
       await dispose();
     }
     return { root, replies };
-  }
-
-  async function historyFiles(root: string): Promise<string[]> {
-    try {
-      return await readdir(join(root, 'conversation_history'));
-    } catch {
-      return [];
-    }
   }
 
   it('可寫的時候歷史真的落檔', async () => {
@@ -330,5 +334,148 @@ describe('/conversation_history 的另一個寫入者', () => {
     expect(files).toEqual([]);
     // 方向跟直覺相反：不是原話消失，是該搬走的沒搬走。
     expect(sentToModel).toContain(HUGE);
+  });
+});
+
+/**
+ * **`permissions` 對 offload 完全沒有作用 —— 而規則本身是對的。**
+ *
+ * `checkPermission` 只在七個工具工廠裡被呼叫（`createWriteFileTool` / `createEditFileTool` /
+ * `createReadFileTool` / `createLsTool` / `createGlobTool` / `createGrepTool`，加上 delete 那條），
+ * **不在 backend 方法上**。offload 走的是 backend 方法，所以它從來不經過規則表。
+ *
+ * 這一組是那句話的行為證據，而且刻意做成**四格對照**：同一條規則、同一個路徑前綴，
+ * 一邊經工具、一邊經 backend 方法。少了對照組的話，「規則沒擋住」與「規則根本沒生效」
+ * 分不出來 —— 而那兩件事要修的東西完全不同。
+ *
+ * 這是 [`permissions.test.ts`](./permissions.test.ts) 那句「無規則命中即 allow」的更大一半：
+ * 一條寫對的規則看起來在保護一個它**碰不到**的東西。使用者的實際結論是
+ * **想把對話歷史擋在某個路徑之外，deny 規則做不到** —— 要用 fence，或把摘要器的 backend
+ * 指到別處（見下一組）。
+ */
+describe('deny 規則擋得住工具，擋不住 offload', () => {
+  const denyHistory: NexusPlugin = {
+    name: 'deny-history',
+    apply: (registry) =>
+      void registry.permissions.deny(['/conversation_history*', '/conversation_history/**']),
+  };
+
+  it('經工具寫同一個路徑：擋住了，磁碟上零檔案', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-deny-'));
+    const model = new ScriptedChatModel({
+      turns: [
+        {
+          content: '',
+          toolCalls: [
+            {
+              name: 'write_file',
+              args: { file_path: '/conversation_history/x.md', content: '工具寫的' },
+            },
+          ],
+        },
+        { content: '寫不進去。' },
+      ],
+    });
+
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      backend: new ContainedFilesystemBackend({ rootDir: root }),
+      plugins: [denyHistory],
+    });
+
+    try {
+      const result = await agent.invoke(toAgentInvocation('寫一個。'));
+      const toolText = result.messages
+        .filter((message: BaseMessage) => message.getType() === 'tool')
+        .map((message: BaseMessage) => message.text)
+        .join('');
+      expect(toolText).toContain('permission denied');
+    } finally {
+      await dispose();
+    }
+
+    expect(await historyFiles(root)).toEqual([]);
+  });
+
+  it('經 offload 寫同一個路徑：規則形同不存在，歷史照樣落檔', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-deny-'));
+    const backend = new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' });
+    const model = new ScriptedChatModel({
+      turns: Array.from({ length: 12 }, (_, index) => ({ content: `第 ${index + 1} 次回話。` })),
+    });
+
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      backend,
+      checkpointer: new MemorySaver(),
+      plugins: [denyHistory, tunedSummarization(backend)],
+    });
+
+    try {
+      for (const line of ['第一句。', '第二句。', '第三句。', '第四句。']) {
+        await agent.invoke(toAgentInvocation(line), { configurable: { thread_id: 'deny' } });
+      }
+    } finally {
+      await dispose();
+    }
+
+    // 上一條擋住的那個前綴，這條寫進去了。**這就是那個洞。**
+    expect((await historyFiles(root)).length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * **`read-only` ✕ 長對話：預設不留歷史，但有一條逃生口。**
+ *
+ * 決定（見開發計劃 Phase 3）：預設接受「`read-only` 就是不留歷史」。「組裝期擋下這個組合」
+ * 這個選項**在結構上不可行** —— summarization 是被無條件加進 stack 的，所以那個組合就是
+ * **每一個** `read-only` 組裝，擋掉它等於禁用這個 mode 本身，連根本不會觸發摘要的短對話
+ * 也一起禁掉。
+ *
+ * 逃生口是這一條：**`createSummarizationMiddleware` 的 `backend` 是獨立的一格**，不必是
+ * agent 的那個。指到另一個可寫的 backend，唯讀那個就一個檔案都不會多。
+ *
+ * **代價**：走這條就得自己建摘要器，也就等於接管 `trigger` / `keep` 的預設值 —— 同名取代
+ * 是唯一的設定入口，而它是全有全無的。
+ */
+describe('read-only 的逃生口：摘要器的 backend 是獨立的一格', () => {
+  it('唯讀根一個檔案都沒多，歷史落在另一個根裡，對話照樣走完', async () => {
+    const readOnlyRoot = await mkdtemp(join(tmpdir(), 'nexus-ro-'));
+    const historyRoot = await mkdtemp(join(tmpdir(), 'nexus-hist-'));
+    const historyBackend = new ContainedFilesystemBackend({
+      rootDir: historyRoot,
+      mode: 'workspace-write',
+    });
+
+    const model = new ScriptedChatModel({
+      turns: Array.from({ length: 12 }, (_, index) => ({ content: `第 ${index + 1} 次回話。` })),
+    });
+
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      backend: new ContainedFilesystemBackend({ rootDir: readOnlyRoot, mode: 'read-only' }),
+      checkpointer: new MemorySaver(),
+      plugins: [tunedSummarization(historyBackend)],
+    });
+
+    let replies = 0;
+    try {
+      for (const line of ['第一句。', '第二句。', '第三句。', '第四句。']) {
+        const result = await agent.invoke(toAgentInvocation(line), {
+          configurable: { thread_id: 'escape' },
+        });
+        if (result.messages.some((message: BaseMessage) => message.getType() === 'ai')) {
+          replies += 1;
+        }
+      }
+    } finally {
+      await dispose();
+    }
+
+    expect(replies).toBe(4);
+    // 唯讀那邊沒被碰——逃生口不是把 fence 鑿開。
+    expect(await historyFiles(readOnlyRoot)).toEqual([]);
+    // 而歷史真的留下來了，不是靜靜消失。
+    expect((await historyFiles(historyRoot)).length).toBeGreaterThan(0);
   });
 });

@@ -62,6 +62,28 @@ import type { DeleteResult, EditResult, FileUploadResponse, WriteResult } from '
  * 這樣：它的 fence 同樣只掛在兩個 mutation 上，「read-only」講的是這個 backend 不改東西，
  * 不是「這個 agent 看不到東西」。看不看得到歸 `permissions`。
  *
+ * **`read-only` 就是不留對話歷史，這是明著接受的。** 長對話會觸發基座的 summarization，
+ * 它把舊訊息 offload 到 `/conversation_history`；`read-only` 擋掉那次寫入，而基座對 offload
+ * 失敗是 **fail-open** —— 摘要照生、舊訊息照換掉、完整歷史沒留下副本，只有一行 `console.warn`
+ * （[#66](https://github.com/DemianLi/nexus-agent/issues/66)）。
+ *
+ * 「組裝期擋下 `read-only` ＋ 長對話」這個選項**在結構上不可行**：summarization 是被無條件
+ * 加進 stack 的，那個組合就是**每一個** `read-only` 組裝，擋掉它等於禁用這個 mode 本身。
+ *
+ * **要在唯讀的根上留住歷史，把摘要器的 backend 指到別處** —— `createSummarizationMiddleware`
+ * 的 `backend` 是獨立的一格，不必是 agent 的那個：
+ *
+ * ```ts
+ * registry.middleware.use(
+ *   createSummarizationMiddleware({
+ *     backend: new ContainedFilesystemBackend({ rootDir: historyDir, mode: 'workspace-write' }),
+ *   }),
+ * );
+ * ```
+ *
+ * 代價是走這條就得自己建摘要器，等於接管 `trigger` / `keep` 的預設值 —— 同名取代是唯一的
+ * 設定入口，而它是全有全無的。行為驗收見 [`summarization.test.ts`](./summarization.test.ts)。
+ *
  * **`danger-full-access` 比 dsh 的同名 mode 弱，這是一條偏離。** 它放行 symlink 逃逸，但
  * 基座那道 lexical 的 `..` 檢查仍在——這個 class 不給關 `virtualMode`（見下面的 class 註解），
  * 所以它結構上就不可能是 dsh 那種真正的不設防。想要完全不設防，用原生的 `FilesystemBackend`。

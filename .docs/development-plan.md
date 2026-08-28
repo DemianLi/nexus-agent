@@ -252,6 +252,14 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（線�
 
   兩件事都要在 Phase 3 有測試，不能等它們在長對話裡自己發生。
 
+- **`feat/summarization-tuning` 的動工前一驗（第十二次）：上面那四點與「跨 Phase 的坑」**已經**在 [#70](https://github.com/DemianLi/nexus-agent/pull/70) 落地了**（`test: 釘住摘要層的設定入口與兩個歷史寫入者的靜默失敗`）—— 同名取代的絆索、subagent 邊界、offload fail-open 的兩條、eviction 那個第二寫入者的兩條，全在 `summarization.test.ts` 裡。**這張因此不是一張 feat，是三件收尾**：
+
+  1. **`permissions` 那個洞只有散文，沒有行為證據** —— 而它是最該有證據的那一種：一條寫對的規則看起來在保護一個它碰不到的東西。實測的四格對照：同一條 `deny(['/conversation_history*', '/conversation_history/**'])`，**經工具**（`write_file` 寫 `/conversation_history/x.md`）換來 `Error: permission denied for write`、磁碟零檔案；**經 backend 方法**（summarization 的 offload）`session_*.md` **照樣寫進去**。同一條規則、同一個路徑、兩個呼叫者、相反的結果。→ 這條測試補進去，並把 `permissions.test.ts` 檔頭那句「無規則命中即 allow」補上更大的那一半：**backend 方法根本不經過規則表**。
+
+  2. **`read-only` ✕ 長對話的三選一，決定是「(c) 為預設 ＋ (b) 為逃生口」。** (a)「組裝期擋下這個組合」**在結構上不可行**：summarization 是被無條件加進 stack 的，所以「read-only ＋ summarization」就是**每一個** read-only 組裝，擋掉它等於禁用 read-only 這個 mode 本身 —— 連根本不會觸發摘要的短對話也一起禁掉。所以預設是 (c)：**`read-only` 就是不留歷史**，寫進 `ContainedFilesystemBackend` 的文件。
+
+  3. **而 (b) 這條逃生口是真的存在的，實測過**：`createSummarizationMiddleware` 的 `backend` **是獨立的一格**，不必是 agent 的那個。預設 backend 用 `read-only`、摘要器指向另一個 `workspace-write` 的 backend，實測唯讀根一個檔案都沒多、歷史落在另一個根裡、四輪對話全部正常回話。→ 這是 `historyPathPrefix` 那條路之外更直接的一條，而且它連 `backend.mount()` 都不需要。**代價要寫清楚**：走這條就得自己建摘要器，也就等於接管 `trigger` / `keep` 的預設值。
+
 - 驗收：**跨 thread 記憶保留**——注意這一條**不是 checkpointer 能滿足的**（它是 thread 內的狀態），要靠落磁碟的 backend，或把 `store` 包成 `StoreBackend` 當 backend 用。**`store` 參數本身對記憶是惰性的**：memory middleware 不碰 `store`，`StoreBackend.getStore()` 才從 LangGraph 的執行 context 把它取出來——所以那不是「兩個選項」，是「backend 這一軸的兩種選法」。長對話在 token 上限內完成多步任務，且 `/conversation_history` 真的寫得出來。
 
 ### Phase 4 — HITL + 可觀測性 + 反思（約 3 個 PR）
