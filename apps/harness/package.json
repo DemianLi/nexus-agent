@@ -5,16 +5,44 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
+    "build": "tsc --noEmit",
+    "cli": "tsx src/cli.ts",
+    "cli:live": "tsx src/cli.ts --live",
+    "eval:compare": "tsx src/eval/compare-cli.ts",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
+    "serve": "tsx src/serve.ts",
+    "serve:live": "tsx src/serve.ts --live",
+    "spike": "tsx src/spike/cli.ts",
+    "spike:live": "tsx src/spike/cli.ts --live",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build": "tsc --noEmit"
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@nexus/plugin-echo": "workspace:*",
+    "@nexus/plugin-mcp": "workspace:*",
+    "@nexus/plugin-memory": "workspace:*",
+    "@nexus/plugin-quickjs": "workspace:*",
+    "@nexus/plugin-skills": "workspace:*",
+    "@nexus/plugin-validation": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
+    "tsx": "^4.22.4",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@langchain/core": "^1.2.9",
+    "@langchain/langgraph": "^1.4.10",
+    "@langchain/langgraph-checkpoint": "^1.1.5",
+    "@langchain/langgraph-sdk": "^1.9.23",
+    "@langchain/openai": "^1.5.10",
+    "@nexus/core": "workspace:*",
+    "@nexus/wire": "workspace:*",
+    "deepagents": "~1.13.1",
+    "langchain": "^1.5.10",
+    "langsmith": ">=0.7.1 <0.10.0",
+    "zod": "^4.3.6"
   }
 }
