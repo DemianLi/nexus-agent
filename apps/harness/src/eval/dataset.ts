@@ -166,3 +166,18 @@ export const BENCHMARK: readonly BenchmarkCase[] = [
     },
   },
 ];
+
+/**
+ * 前幾條是「已經分不出高下」的那一批。分界在第三條之後 —— 見檔頭「兩批」那一段。
+ *
+ * 這個常數存在是因為**易題會稀釋平均**：三條簡單題在每一階上都是 `1.00`，混進七題的
+ * 平均之後階間差異被壓縮，看起來像判準又飽和了。報表要能把兩批分開印，那個分界就不能
+ * 只活在檔頭的散文裡。
+ */
+export const EASY_CASE_COUNT = 3;
+
+/** 有解析度的那四條。報表的第二組數字算在這上面。 */
+export const HARD_CASES: readonly BenchmarkCase[] = BENCHMARK.slice(EASY_CASE_COUNT);
+
+/** 已經飽和的那三條。留著跑是因為「連這個都做不到」仍然是資訊。 */
+export const EASY_CASES: readonly BenchmarkCase[] = BENCHMARK.slice(0, EASY_CASE_COUNT);

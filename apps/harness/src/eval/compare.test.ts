@@ -10,8 +10,15 @@ import type { AgentModel } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { LoopingChatModel } from '../looping-model.js';
 import { ScriptedChatModel, type ScriptedTurn } from '../scripted-model.js';
-import { compareTiers, runTier, summarize } from './compare.js';
-import { BENCHMARK, BENCHMARK_FILE, type BenchmarkCase } from './dataset.js';
+import { compareTiers, restrictTo, runTier, summarize } from './compare.js';
+import {
+  BENCHMARK,
+  BENCHMARK_FILE,
+  EASY_CASES,
+  EASY_CASE_COUNT,
+  HARD_CASES,
+  type BenchmarkCase,
+} from './dataset.js';
 import type { ModelTier } from './tiers.js';
 
 const TIER: ModelTier = {
@@ -434,5 +441,57 @@ describe('compareTiers', () => {
     expect(outcome?.kind === 'scored' && outcome.score.caseId).toBe(ECHO_CASE.id);
     // 題目本身真的用了共用的檔名常數 —— 資料集若被改成別的路徑，這條會紅。
     expect(BENCHMARK_FILE).toBe('/benchmark.md');
+  });
+});
+
+describe('restrictTo', () => {
+  const REPORT = {
+    tier: TIER,
+    outcomes: [
+      { kind: 'scored', score: { caseId: 'a', extraToolCalls: 0 }, seconds: 1 },
+      { kind: 'failed', caseId: 'b', reason: 'throttled', message: '429', seconds: 2 },
+      { kind: 'scored', score: { caseId: 'c', extraToolCalls: 0 }, seconds: 3 },
+    ],
+  } as unknown as Parameters<typeof restrictTo>[0];
+
+  it('留下指定的題目', () => {
+    const kept = restrictTo(REPORT, new Set(['a', 'c']));
+    expect(kept.outcomes).toHaveLength(2);
+  });
+
+  it('失敗的執行也照 caseId 篩 —— 否則「它是在難題上掛的」讀不出來', () => {
+    // 失敗那筆的 caseId 不在 score 裡而在 outcome 本身；只看 score 的話它會整批漏掉，
+    // 而漏掉的方向剛好是「難題那一組看起來零失敗」。
+    const kept = restrictTo(REPORT, new Set(['b']));
+    expect(kept.outcomes).toHaveLength(1);
+    expect(kept.outcomes[0]).toMatchObject({ kind: 'failed', caseId: 'b' });
+  });
+
+  it('一題都沒中時是空的，不是整份', () => {
+    expect(restrictTo(REPORT, new Set(['nope'])).outcomes).toHaveLength(0);
+  });
+
+  it('帶著原來那一階 —— 收窄的是題目不是模型', () => {
+    expect(restrictTo(REPORT, new Set(['a'])).tier).toBe(TIER);
+  });
+
+  it('summarize 吃得下收窄後的報告，失敗照樣不進平均', () => {
+    const summary = summarize(restrictTo(REPORT, new Set(['a', 'b'])));
+    expect(summary.scored).toBe(1);
+    expect(summary.failures).toEqual({ throttled: 1 });
+  });
+});
+
+describe('易題與難題的分界', () => {
+  it('兩批加起來剛好是整份資料集，而且不重疊', () => {
+    expect([...EASY_CASES, ...HARD_CASES]).toEqual(BENCHMARK);
+  });
+
+  it('難題那批不是空的 —— 空了的話報表的第二組數字整欄無意義', () => {
+    expect(HARD_CASES.length).toBeGreaterThan(0);
+  });
+
+  it('分界就是 EASY_CASE_COUNT，沒有第二個真相', () => {
+    expect(EASY_CASES).toHaveLength(EASY_CASE_COUNT);
   });
 });

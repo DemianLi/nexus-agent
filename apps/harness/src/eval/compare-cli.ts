@@ -25,6 +25,7 @@ import {
   type TierOutcome,
   type TierSummary,
 } from './compare.js';
+import { parseCases, parseSamples } from './cli-args.js';
 import { BENCHMARK, type BenchmarkCase } from './dataset.js';
 import { MODEL_LADDERS, SCORER_CONTROL, type ModelLadder, type ModelTier } from './tiers.js';
 
@@ -36,41 +37,6 @@ const USAGE = `用法：eval:compare [--samples <n>] [--cases <id,id,...>]
                        ${BENCHMARK.map((entry) => entry.id).join(' / ')}
 
 需要環境變數 NVIDIA_API_KEY（見 .env.example）。`;
-
-/**
- * `--cases` 解析。
- *
- * **認不得的 id 一律當場拋，不默默略過。** 打錯一個字就跑了個比預期少的子集，
- * 而報表上完全看不出來少了哪一題 —— 那與 #79 那個 `status === 'idle'` 是同一型的假綠。
- */
-function parseCases(argv: readonly string[]): readonly BenchmarkCase[] {
-  const at = argv.indexOf('--cases');
-  if (at < 0) return BENCHMARK;
-  const raw = argv[at + 1];
-  if (raw === undefined || raw.startsWith('--')) throw new Error('--cases 要一串以逗號分隔的 id');
-
-  const wanted = raw.split(',').map((id) => id.trim());
-  const known = new Set(BENCHMARK.map((entry) => entry.id));
-  const unknown = wanted.filter((id) => !known.has(id));
-  if (unknown.length > 0) {
-    throw new Error(
-      `--cases 認不得這些 id：${unknown.join('、')}。可用的是 ${[...known].join('、')}`,
-    );
-  }
-  // 依資料集的順序跑，不依命令列打字的順序 —— 報表的列順序才不會隨手打的參數而變。
-  return BENCHMARK.filter((entry) => wanted.includes(entry.id));
-}
-
-function parseSamples(argv: readonly string[]): number {
-  const at = argv.indexOf('--samples');
-  if (at < 0) return 1;
-  const raw = argv[at + 1];
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 1) {
-    throw new Error(`--samples 要一個正整數，收到 ${raw ?? '（空的）'}`);
-  }
-  return value;
-}
 
 function formatSpread(spread: { mean: number; min: number; max: number } | undefined): string {
   if (spread === undefined) return '—';
@@ -92,7 +58,7 @@ function formatSize(tier: ModelTier): string {
   return `總量 ${tier.totalBillions}B ／ 活化 ${active}`;
 }
 
-function printSummary(summary: TierSummary): void {
+function printSummary(summary: TierSummary<ModelTier>): void {
   const { tier } = summary;
   const failed = Object.entries(summary.failures)
     .map(([reason, count]) => `${reason}×${count}`)
@@ -132,7 +98,7 @@ let budgetHits = 0;
 let throttledHits = 0;
 
 /** 這一欄實際判了幾次。等於評到分的次數時不印 —— 每行都拖一段沒有資訊的括號很吵。 */
-function judged(summary: TierSummary, spread: { count: number } | undefined): string {
+function judged(summary: TierSummary<ModelTier>, spread: { count: number } | undefined): string {
   if (spread === undefined || spread.count === summary.scored) return '';
   return `（判了 ${spread.count}/${summary.scored} 次）`;
 }

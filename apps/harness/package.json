@@ -9,6 +9,7 @@
     "cli": "tsx src/cli.ts",
     "cli:live": "tsx src/cli.ts --live",
     "eval:compare": "tsx src/eval/compare-cli.ts",
+    "eval:survey": "tsx src/eval/survey-cli.ts",
     "lint": "eslint .",
     "serve": "tsx src/serve.ts",
     "serve:live": "tsx src/serve.ts --live",
