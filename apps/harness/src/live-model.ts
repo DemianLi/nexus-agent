@@ -11,8 +11,24 @@ import { ChatOpenAI } from '@langchain/openai';
  */
 export const LIVE_BASE_URL = 'https://integrate.api.nvidia.com/v1';
 
-/** NVIDIA 閘道上的模型 id。接線用，與 Phase 2 的 DeepSeek 相容性驗收無關。 */
-export const LIVE_MODEL_ID = 'deepseek-ai/deepseek-v4-flash-0731';
+/**
+ * NVIDIA 閘道上的模型 id。接線用，與 Phase 2 的 DeepSeek 相容性驗收無關。
+ *
+ * **原本是 `deepseek-ai/deepseek-v4-flash-0731`，換掉是因為它不回應**
+ * （[#57](https://github.com/DemianLi/nexus-agent/issues/57)：`/models` 列得到它，
+ * 推論請求 60 秒零回應）。換的是同系列的 pro —— #57 當時清單上沒有同系列的替代品，
+ * 2026-08-27 複驗時它出現了。**端點沒修好，是我們換了 id。**
+ *
+ * 換之前驗的不只是「回 200」：帶著 `tools` 定義問一句話，實測 `finish_reason` 是
+ * `tool_calls`、參數是合法 JSON。光看 200 不算 —— 這條路整條的用途就是工具呼叫。
+ *
+ * **它慢**：一次簡單的呼叫約 37 秒。`cli:live` / `spike:live` 跑起來體感像卡住，
+ * 但那是慢不是掛住（#57 的現象是**永遠**不回來）。
+ *
+ * eval 的模型比較會需要同時指到三個 id（開發計劃第 5 節 Phase 5），那時這裡要參數化；
+ * 現在刻意還是一個常數 —— 這張只把壞掉的那條路修好。
+ */
+export const LIVE_MODEL_ID = 'deepseek-ai/deepseek-v4-pro-0813';
 
 /** 環境變數名。刻意不叫 `OPENAI_API_KEY`（`@langchain/openai` 的預設），免得這把 key 是誰的變模糊。 */
 export const LIVE_API_KEY_ENV = 'NVIDIA_API_KEY';
