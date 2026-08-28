@@ -152,18 +152,45 @@ function elapsed(started: number): number {
  *
  * 讀的是 OpenAI SDK 掛在錯誤上的 `status`，不是訊息字串 —— 訊息會隨版本改，`status`
  * 是協定的一部分。認不出來的一律歸 `transport` 而不是猜，寧可少說。
+ *
+ * **`status` 不在最外層那顆錯誤上，所以要往 `cause` 裡找。** 實測（`llama-3.2-11b`
+ * 對 `write-then-read` 回 `400 "This model only supports single tool-calls at once!"`）：
+ * 丟出來的是 `MiddlewareError`，`status` 是 `undefined`，真正帶 `status: 400` 的
+ * `BadRequestError` 包在 **`cause` 底下第三層**。只看最外層的話，一個貨真價實的 4xx 會被
+ * 記成 `transport` —— 而那兩件事要做的完全不同：一個要換 id 或改題目，一個是線路問題。
+ *
+ * 兩趟掃：`status` 先掃完整條鏈，才輪到逾時。順序有意義 —— 外層訊息裡出現 `aborted`
+ * 之類的字眼很常見，讓它壓過內層一顆明確的 400 就是拿字串壓過協定。
  */
 function classify(error: unknown): { reason: FailureReason; status?: number } {
-  const status = (error as { status?: unknown } | null)?.status;
-  if (typeof status === 'number') return { reason: 'rejected', status };
+  const chain = [...causeChain(error)];
 
-  const name = (error as { name?: unknown } | null)?.name;
-  if (typeof name === 'string' && /timeout/i.test(name)) return { reason: 'timeout' };
+  for (const link of chain) {
+    const status = (link as { status?: unknown }).status;
+    if (typeof status === 'number') return { reason: 'rejected', status };
+  }
 
-  const message = error instanceof Error ? error.message : '';
-  if (/timed out|timeout|aborted/i.test(message)) return { reason: 'timeout' };
+  for (const link of chain) {
+    const name = (link as { name?: unknown }).name;
+    if (typeof name === 'string' && /timeout/i.test(name)) return { reason: 'timeout' };
+
+    const message = link instanceof Error ? link.message : '';
+    if (/timed out|timeout|aborted/i.test(message)) return { reason: 'timeout' };
+  }
 
   return { reason: 'transport' };
+}
+
+/** 展開 `cause` 鏈。有深度上限也認得出環，因為包裝層數是別人家的實作細節。 */
+function* causeChain(error: unknown): Generator<object> {
+  const seen = new Set<unknown>();
+  let current = error;
+  for (let depth = 0; depth < 10; depth += 1) {
+    if (typeof current !== 'object' || current === null || seen.has(current)) return;
+    seen.add(current);
+    yield current;
+    current = (current as { cause?: unknown }).cause;
+  }
 }
 
 /** 一個橫階的彙總。**只對 `scored` 那些算。** */

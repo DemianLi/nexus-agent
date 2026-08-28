@@ -25,7 +25,7 @@ export const LIVE_BASE_URL = 'https://integrate.api.nvidia.com/v1';
  * **它慢**：一次簡單的呼叫約 37 秒。`cli:live` / `spike:live` 跑起來體感像卡住，
  * 但那是慢不是掛住（#57 的現象是**永遠**不回來）。
  *
- * 這是**預設**的 id。eval 的尺寸比較會把三個橫階的 id 傳進 {@link createLiveModel}
+ * 這是**預設**的 id。eval 的尺寸比較會把各道階梯的 id 逐一傳進 {@link createLiveModel}
  * （開發計劃第 5 節 Phase 5），`cli:live` / `serve:live` / `spike:live` 三條路仍然走這個常數。
  */
 export const LIVE_MODEL_ID = 'deepseek-ai/deepseek-v4-pro-0813';
@@ -49,9 +49,9 @@ export const LIVE_TIMEOUT_MS = 90_000;
  * key **只從環境變數讀**，缺少時直接失敗，沒有預設值也不 fallback
  * （[docs/standards.md](../../../docs/standards.md) 的秘密處理規則）。
  *
- * @param modelId - 要指到哪個模型。省略即 {@link LIVE_MODEL_ID}；尺寸比較把三個橫階的
- *   id 逐一傳進來（見 [`eval/tiers.ts`](./eval/tiers.ts)）。**除了這個參數，兩邊的取樣
- *   設定、逾時、金鑰來源完全相同** —— 否則比的不是模型是設定。
+ * @param modelId - 要指到哪個模型。省略即 {@link LIVE_MODEL_ID}；尺寸比較把各道階梯的
+ *   id 逐一傳進來（見 [`eval/tiers.ts`](./eval/tiers.ts)）。**除了這個參數，取樣設定、
+ *   逾時、金鑰來源完全相同** —— 否則比的不是模型是設定。
  */
 export function createLiveModel(modelId: string = LIVE_MODEL_ID): ChatOpenAI {
   const apiKey = process.env[LIVE_API_KEY_ENV];
