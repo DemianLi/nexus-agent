@@ -9,6 +9,13 @@
  *
  * 三個指標對應計劃裡的三項：工具呼叫成功率、參數正確性、token 成本。**成本不是分數**，
  * 見 {@link readCost}。
+ *
+ * ## 「沒有可判的」一律是 `undefined`，不是 1 也不是 0
+ *
+ * 這條規矩在這個檔案裡出現三次（{@link scoreToolCallSuccess}、
+ * {@link scoreArgumentCorrectness}、{@link scoreMentions}），理由都一樣：一個被填成
+ * `1` 的空格會被平均進去，而它稀釋掉的正是這一欄的鑑別力。這與 `runner.ts` 區分
+ * `usage` 的 `undefined` 與零、`compare.ts` 區分「失敗」與「零分」是同一條。
  */
 
 import type { BenchmarkCase, ExpectedToolCall } from './dataset.js';
@@ -40,11 +47,20 @@ function align(
 /**
  * 工具呼叫成功率：該叫的都叫了嗎，順序對嗎。
  *
- * @returns `0` 到 `1`。期望零筆呼叫時回 `1`（沒有可判的東西，不是滿分的證據）。
+ * @returns `0` 到 `1`；**期望零筆呼叫時回 `undefined`——不是 1**。
+ *
+ * 這裡跟 {@link scoreMentions} 是同一條規矩：「這條沒有可判的」與「這條全對」在彙總時
+ * 是兩件事。`no-tool-needed` 那種克制題期望零筆呼叫，回 `1` 的話等於替每一個模型的
+ * 平均無條件送一分滿分進去 —— 加了那條題目之後，這一欄的**鑑別力反而下降**，
+ * 而它下降的方式看起來完全像是模型變好了。克制題真正的訊號在
+ * {@link countExtraToolCalls}。
  */
-export function scoreToolCallSuccess(testCase: BenchmarkCase, run: BenchmarkRun): number {
+export function scoreToolCallSuccess(
+  testCase: BenchmarkCase,
+  run: BenchmarkRun,
+): number | undefined {
   const expected = testCase.expected.toolCalls;
-  if (expected.length === 0) return 1;
+  if (expected.length === 0) return undefined;
   const matched = align(expected, run.toolCalls).filter((index) => index >= 0).length;
   return matched / expected.length;
 }
@@ -65,9 +81,13 @@ export function countExtraToolCalls(testCase: BenchmarkCase, run: BenchmarkRun):
  * **只比資料集列出來的鍵**（見 {@link ExpectedToolCall.args}）。沒對上的呼叫，它期望的
  * 那幾個鍵全部計為錯 —— 工具根本沒叫，參數當然不可能對。
  *
- * @returns `0` 到 `1`。資料集一個鍵都沒列時回 `1`（同樣是「沒有可判的」）。
+ * @returns `0` 到 `1`；資料集一個鍵都沒列時回 `undefined`，理由同
+ *   {@link scoreToolCallSuccess}。
  */
-export function scoreArgumentCorrectness(testCase: BenchmarkCase, run: BenchmarkRun): number {
+export function scoreArgumentCorrectness(
+  testCase: BenchmarkCase,
+  run: BenchmarkRun,
+): number | undefined {
   const expected = testCase.expected.toolCalls;
   const alignment = align(expected, run.toolCalls);
 
@@ -84,7 +104,7 @@ export function scoreArgumentCorrectness(testCase: BenchmarkCase, run: Benchmark
     }
   });
 
-  if (total === 0) return 1;
+  if (total === 0) return undefined;
   return correct / total;
 }
 
@@ -113,11 +133,16 @@ export function readCost(run: BenchmarkRun): TokenUsage | undefined {
   return run.usage;
 }
 
-/** 一條任務的完整成績單。 */
+/**
+ * 一條任務的完整成績單。
+ *
+ * 三個指標是選擇性的，而且各自的缺席理由不同：前兩個是「這條題目沒有可判的」，
+ * `mentions` 是「這條題目沒要求」，`cost` 是「模型沒回報」。**四種缺席都不是零。**
+ */
 export interface CaseScore {
   readonly caseId: string;
-  readonly toolCallSuccess: number;
-  readonly argumentCorrectness: number;
+  readonly toolCallSuccess?: number;
+  readonly argumentCorrectness?: number;
   readonly extraToolCalls: number;
   readonly mentions?: number;
   readonly cost?: TokenUsage;
@@ -131,12 +156,14 @@ export interface CaseScore {
  * @returns 成績單。
  */
 export function scoreCase(testCase: BenchmarkCase, run: BenchmarkRun): CaseScore {
+  const toolCallSuccess = scoreToolCallSuccess(testCase, run);
+  const argumentCorrectness = scoreArgumentCorrectness(testCase, run);
   const mentions = scoreMentions(testCase, run);
   const cost = readCost(run);
   return {
     caseId: testCase.id,
-    toolCallSuccess: scoreToolCallSuccess(testCase, run),
-    argumentCorrectness: scoreArgumentCorrectness(testCase, run),
+    ...(toolCallSuccess === undefined ? {} : { toolCallSuccess }),
+    ...(argumentCorrectness === undefined ? {} : { argumentCorrectness }),
     extraToolCalls: countExtraToolCalls(testCase, run),
     ...(mentions === undefined ? {} : { mentions }),
     ...(cost === undefined ? {} : { cost }),

@@ -89,6 +89,74 @@ const SCRIPTS: Readonly<Record<string, readonly ScriptedTurn[]>> = {
     },
     { content: '裡面是「第二次」。', usage: { inputTokens: 230, outputTokens: 12 } },
   ],
+  // 底下四條是後加的難題。腳本裡的 `old_string` 與寫進去的內容**真的對得上**，
+  // 所以 `edit_file` 這一步是真的改成功，不是靠腳本硬撐過去 —— 這條路上工具是真的跑的。
+  'edit-after-read': [
+    {
+      content: '先寫第一版。',
+      toolCalls: [
+        { name: 'write_file', args: { file_path: BENCHMARK_FILE, content: '第一版：接線測試' } },
+      ],
+      usage: { inputTokens: 150, outputTokens: 24 },
+    },
+    {
+      content: '讀回來確認。',
+      toolCalls: [{ name: 'read_file', args: { file_path: BENCHMARK_FILE } }],
+      usage: { inputTokens: 200, outputTokens: 15 },
+    },
+    {
+      content: '只換那三個字。',
+      toolCalls: [
+        {
+          name: 'edit_file',
+          args: { file_path: BENCHMARK_FILE, old_string: '第一版', new_string: '第二版' },
+        },
+      ],
+      usage: { inputTokens: 260, outputTokens: 30 },
+    },
+    { content: '現在是「第二版：接線測試」。', usage: { inputTokens: 300, outputTokens: 14 } },
+  ],
+  'reverse-round-trip': [
+    {
+      content: '先寫原字串。',
+      toolCalls: [{ name: 'write_file', args: { file_path: '/word.md', content: 'nexus-agent' } }],
+      usage: { inputTokens: 150, outputTokens: 23 },
+    },
+    {
+      content: '讀回來。',
+      toolCalls: [{ name: 'read_file', args: { file_path: '/word.md' } }],
+      usage: { inputTokens: 195, outputTokens: 14 },
+    },
+    {
+      content: '倒過來再寫一份。',
+      toolCalls: [
+        { name: 'write_file', args: { file_path: '/reversed.md', content: 'tnega-suxen' } },
+      ],
+      usage: { inputTokens: 250, outputTokens: 26 },
+    },
+    { content: '倒過來是 tnega-suxen。', usage: { inputTokens: 290, outputTokens: 13 } },
+  ],
+  'grep-across-files': [
+    {
+      content: '先建 a。',
+      toolCalls: [{ name: 'write_file', args: { file_path: '/a.md', content: '甲' } }],
+      usage: { inputTokens: 150, outputTokens: 20 },
+    },
+    {
+      content: '再建 b。',
+      toolCalls: [{ name: 'write_file', args: { file_path: '/b.md', content: '乙' } }],
+      usage: { inputTokens: 190, outputTokens: 20 },
+    },
+    {
+      content: '用 grep 找。',
+      toolCalls: [{ name: 'grep', args: { pattern: '乙' } }],
+      usage: { inputTokens: 240, outputTokens: 18 },
+    },
+    { content: '在 /b.md 裡面。', usage: { inputTokens: 280, outputTokens: 11 } },
+  ],
+  // **一輪就結束，而且沒有工具呼叫。** 這是整份腳本裡唯一一條不碰工具的，
+  // 它驗的是「該克制的時候評分器怎麼記分」——見下面那條專門的斷言。
+  'no-tool-needed': [{ content: '3 加 4 等於 7。', usage: { inputTokens: 120, outputTokens: 9 } }],
 };
 
 /**
@@ -105,6 +173,9 @@ const SABOTEUR: readonly ScriptedTurn[] = [
   },
   { content: '做完了。', usage: { inputTokens: 160, outputTokens: 5 } },
 ];
+
+/** saboteur 那條要跑的題目。兩個工具、參數明確，所以「少叫一個又寫錯」扣得乾淨。 */
+const SABOTAGED_CASE = BENCHMARK.find((entry) => entry.id === 'echo-then-write');
 
 /** 真的跑完的 `ls.test` 條數。**這是本檔的主判準**，理由見檔頭。 */
 let executed = 0;
@@ -192,8 +263,13 @@ async function evaluateCase(
   });
   const score = scoreCase(testCase, run);
 
-  ls.logFeedback({ key: 'tool_call_success', score: score.toolCallSuccess });
-  ls.logFeedback({ key: 'argument_correctness', score: score.argumentCorrectness });
+  // `undefined` 的那幾格**不記**：記成 0 會在 LangSmith 那邊被讀成「這題全錯」。
+  if (score.toolCallSuccess !== undefined) {
+    ls.logFeedback({ key: 'tool_call_success', score: score.toolCallSuccess });
+  }
+  if (score.argumentCorrectness !== undefined) {
+    ls.logFeedback({ key: 'argument_correctness', score: score.argumentCorrectness });
+  }
   ls.logFeedback({ key: 'extra_tool_calls', score: score.extraToolCalls });
   if (score.mentions !== undefined) ls.logFeedback({ key: 'mentions', score: score.mentions });
   // 成本不是分數（見 `scorers.ts`），但它是供應商比較要的那一欄，所以照樣記下來。
@@ -218,8 +294,16 @@ ls.describe('基準任務（假模型）', () => {
         expect(turns, `${testCase.id} 沒有腳本`).toBeDefined();
         const score = await evaluateCase(testCase, turns ?? []);
 
-        expect(score.toolCallSuccess).toBe(1);
-        expect(score.argumentCorrectness).toBe(1);
+        // **兩支要分開斷言，不能只寫 `toBe(1)`。** 期望零筆呼叫的題目在這兩欄是
+        // 「沒有可判的」而不是滿分（見 `scorers.ts`）；把它們寫成 1 的話，
+        // 那個把空格填成滿分的舊行為會靜靜地全綠回來。
+        if (testCase.expected.toolCalls.length === 0) {
+          expect(score.toolCallSuccess).toBeUndefined();
+          expect(score.argumentCorrectness).toBeUndefined();
+        } else {
+          expect(score.toolCallSuccess).toBe(1);
+          expect(score.argumentCorrectness).toBe(1);
+        }
         expect(score.extraToolCalls).toBe(0);
         if (testCase.expected.mentions !== undefined) expect(score.mentions).toBe(1);
         // 成本一定量得到——假模型每一輪都給了 `usage`，基座把它原封帶到最終狀態。
@@ -231,13 +315,14 @@ ls.describe('基準任務（假模型）', () => {
   ls.test(
     'saboteur：真的跑一遍也扣得到分',
     {
-      inputs: { prompt: BENCHMARK[1]?.prompt ?? '' },
+      inputs: { prompt: SABOTAGED_CASE?.prompt ?? '' },
       referenceOutputs: { note: '這一條期望低分' },
     },
     async () => {
-      const testCase = BENCHMARK[1];
-      expect(testCase).toBeDefined();
-      const score = await evaluateCase(testCase as BenchmarkCase, SABOTEUR);
+      // **用 id 查，不用位置。** 這條寫死 `BENCHMARK[1]` 的話，往資料集中間插一條題目
+      // 就會讓底下三個數字換一個意思繼續全綠 —— 那比紅掉難查得多。
+      expect(SABOTAGED_CASE, 'saboteur 的題目不見了').toBeDefined();
+      const score = await evaluateCase(SABOTAGED_CASE as BenchmarkCase, SABOTEUR);
 
       // 兩個工具只叫了一個，而且那一個的參數還是錯的。
       expect(score.toolCallSuccess).toBe(0.5);

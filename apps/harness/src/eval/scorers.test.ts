@@ -62,6 +62,22 @@ describe('工具呼叫成功率', () => {
     expect(scoreToolCallSuccess(CASE, reversed)).toBe(0.5);
   });
 
+  it('期望零筆呼叫時是 undefined 而不是 1——克制題不該送滿分進平均', () => {
+    const restraint: BenchmarkCase = {
+      id: 'restraint',
+      prompt: '不要用工具',
+      expected: { toolCalls: [], mentions: ['7'] },
+    };
+    // **這是加了 `no-tool-needed` 之後最容易靜靜壞掉的地方。** 回 1 的話，這一欄
+    // 每個模型都被無條件加一分滿分，而彙總看起來只會像是「大家都變好了」。
+    expect(scoreToolCallSuccess(restraint, run([], '7'))).toBeUndefined();
+    // 就算模型忍不住叫了工具，這一欄照樣沒有可判的——訊號在「多叫」那一欄。
+    const noisy = run([{ name: 'ls', args: {} }], '7');
+    expect(scoreToolCallSuccess(restraint, noisy)).toBeUndefined();
+    expect(countExtraToolCalls(restraint, noisy)).toBe(1);
+    expect(countExtraToolCalls(restraint, run([], '7'))).toBe(0);
+  });
+
   it('中間插一次無關的呼叫不影響——比的是子序列不是逐位相等', () => {
     const noisy = run([
       { name: 'echo', args: { message: '甲' } },
@@ -102,6 +118,17 @@ describe('參數正確性', () => {
       { name: 'write_file', args: { file_path: '/a.md', content: '甲' } },
     ]);
     expect(scoreArgumentCorrectness(CASE, extraKey)).toBe(1);
+  });
+
+  it('資料集一個鍵都沒列時是 undefined 而不是 1', () => {
+    const keyless: BenchmarkCase = {
+      id: 'keyless',
+      prompt: 'x',
+      expected: { toolCalls: [{ name: 'ls', args: {} }] },
+    };
+    // 工具那一欄仍然判得動（有一筆該叫的），只有參數那一欄沒有可判的——兩欄各自認定。
+    expect(scoreToolCallSuccess(keyless, run([{ name: 'ls', args: {} }]))).toBe(1);
+    expect(scoreArgumentCorrectness(keyless, run([{ name: 'ls', args: {} }]))).toBeUndefined();
   });
 
   it('物件參數比的是結構不是同一個參照', () => {
@@ -152,14 +179,19 @@ describe('成績單', () => {
       { id: 'bare', prompt: 'x', expected: { toolCalls: [] } },
       run([], '什麼都沒說'),
     );
-    expect(score).toEqual({
-      caseId: 'bare',
-      toolCallSuccess: 1,
-      argumentCorrectness: 1,
-      extraToolCalls: 0,
-    });
-    expect('mentions' in score).toBe(false);
-    expect('cost' in score).toBe(false);
+    // **四個欄位一個都不該在。** 缺席的理由各不相同（沒有可判的／沒要求／沒回報），
+    // 但填進去的後果一樣：一個看起來像測量值的數字。
+    expect(score).toEqual({ caseId: 'bare', extraToolCalls: 0 });
+    for (const key of ['toolCallSuccess', 'argumentCorrectness', 'mentions', 'cost']) {
+      expect(key in score).toBe(false);
+    }
+  });
+
+  it('判得動的那幾欄照樣填', () => {
+    const score = scoreCase(CASE, run(PERFECT.toolCalls, '甲與乙'));
+    expect(score.toolCallSuccess).toBe(1);
+    expect(score.argumentCorrectness).toBe(1);
+    expect(score.mentions).toBe(1);
   });
 });
 
@@ -169,10 +201,27 @@ describe('資料集本身', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it('每一條都真的有東西可判', () => {
+  it('每一條都真的有東西可判——工具或回覆，至少要有一樣', () => {
+    // 期望零筆呼叫的克制題是**刻意**允許的，但它必須靠 `mentions` 判得動；
+    // 兩樣都沒有的題目跑起來永遠滿分，那是一條進了資料集卻不判任何事的題目。
     for (const entry of BENCHMARK) {
-      expect(entry.expected.toolCalls.length).toBeGreaterThan(0);
+      const judgeable =
+        entry.expected.toolCalls.length > 0 || (entry.expected.mentions?.length ?? 0) > 0;
+      expect(judgeable, `${entry.id} 沒有任何可判的東西`).toBe(true);
       expect(entry.prompt.trim()).not.toBe('');
     }
+  });
+
+  it('難題那半真的存在——參數那一欄要有東西可扣', () => {
+    // #84 量到工具名字那一欄五階全平、參數那一欄在 11B 掉到 0.19，所以這一批新題目
+    // 的重點是**參數**。這條釘住「資料集裡至少有一條題目的參數鍵多到夠扣分」——
+    // 全部退回成一兩個鍵的淺題時它會紅。
+    const keyCounts = BENCHMARK.map((entry) =>
+      entry.expected.toolCalls.reduce((sum, call) => sum + Object.keys(call.args).length, 0),
+    );
+    expect(Math.max(...keyCounts)).toBeGreaterThanOrEqual(5);
+    // 至少有一條題目期望零筆工具呼叫（克制），也至少有一條期望三個以上（多步驟）。
+    expect(BENCHMARK.some((entry) => entry.expected.toolCalls.length === 0)).toBe(true);
+    expect(BENCHMARK.some((entry) => entry.expected.toolCalls.length >= 3)).toBe(true);
   });
 });
