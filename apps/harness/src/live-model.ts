@@ -12,23 +12,31 @@ import { ChatOpenAI } from '@langchain/openai';
 export const LIVE_BASE_URL = 'https://integrate.api.nvidia.com/v1';
 
 /**
- * NVIDIA 閘道上的模型 id。接線用，與 Phase 2 的 DeepSeek 相容性驗收無關。
+ * NVIDIA 閘道上的預設模型 id。
  *
- * **原本是 `deepseek-ai/deepseek-v4-flash-0731`，換掉是因為它不回應**
- * （[#57](https://github.com/DemianLi/nexus-agent/issues/57)：`/models` 列得到它，
- * 推論請求 60 秒零回應）。換的是同系列的 pro —— #57 當時清單上沒有同系列的替代品，
- * 2026-08-27 複驗時它出現了。**端點沒修好，是我們換了 id。**
+ * ## 這是量出來的，不是挑出來的
  *
- * 換之前驗的不只是「回 200」：帶著 `tools` 定義問一句話，實測 `finish_reason` 是
- * `tool_calls`、參數是合法 JSON。光看 200 不算 —— 這條路整條的用途就是工具呼叫。
+ * 2026-08-28 定案（開發計劃第 7 節決策點 2）。同一個端點上五個橫階、每階 12 次取樣：
+ * **品質打平**（參數正確性 `0.88`–`0.98`，而判準沒有飽和 —— 全距下探到 `0.33`），
+ * 所以選型落回成本、延遲、失敗模式，而三個軸都指向這一個：token 最省（平均 8519，
+ * 比 Nemotron 那一家的 14049–17414 少四到五成）、多叫次數最低（0.33）、
+ * 品質並列第二（離最高的 `super` 差 0.06）。
  *
- * **它慢**：一次簡單的呼叫約 37 秒。`cli:live` / `spike:live` 跑起來體感像卡住，
- * 但那是慢不是掛住（#57 的現象是**永遠**不回來）。
+ * **邊界**：它是「這把 key 叫得動的模型裡最划算的那個」，不是「這是最好的模型」。
+ * 候選集合綁在帳號上（`GET /models` 列 84 個，這把 key 只叫得動 29 個、真的支援工具的
+ * 14 個），換一把 key 要重新盤點 —— 盤點方法在 [`eval/tiers.ts`](./eval/tiers.ts) 的檔頭。
  *
- * 這是**預設**的 id。eval 的尺寸比較會把各道階梯的 id 逐一傳進 {@link createLiveModel}
- * （開發計劃第 5 節 Phase 5），`cli:live` / `serve:live` / `spike:live` 三條路仍然走這個常數。
+ * ## 上一個是什麼、為什麼不是它
+ *
+ * 原本是 `deepseek-ai/deepseek-v4-pro-0813`，而它從來不是被選出來的 —— 它是
+ * [#57](https://github.com/DemianLi/nexus-agent/issues/57) 那個「`deepseek-v4-flash-0731`
+ * 永遠不回來」的替代品，唯一的判準是「同系列、而且回得出 `finish_reason: tool_calls`」。
+ * **它慢**：一次簡單的呼叫約 37 秒。現在有量過的數字了，所以換掉它。
+ *
+ * 這是**預設**的 id：`cli:live` / `serve:live` / `spike:live` 三條路走這個常數，
+ * eval 的尺寸比較則把各道階梯的 id 逐一傳進 {@link createLiveModel}。
  */
-export const LIVE_MODEL_ID = 'deepseek-ai/deepseek-v4-pro-0813';
+export const LIVE_MODEL_ID = 'openai/gpt-oss-120b';
 
 /** 環境變數名。刻意不叫 `OPENAI_API_KEY`（`@langchain/openai` 的預設），免得這把 key 是誰的變模糊。 */
 export const LIVE_API_KEY_ENV = 'NVIDIA_API_KEY';
