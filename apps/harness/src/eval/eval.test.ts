@@ -174,6 +174,25 @@ const SABOTEUR: readonly ScriptedTurn[] = [
   { content: '做完了。', usage: { inputTokens: 160, outputTokens: 5 } },
 ];
 
+/**
+ * 克制題的壞掉版：明明不用工具卻叫了一個。
+ *
+ * **沒有這一份的話，`no-tool-needed` 那條在 CI 裡是自動通過的** —— 它的腳本只有一輪
+ * 而且沒有工具呼叫，所以「多叫次數是 0」這件事是假模型做不到別的，不是它克制。
+ * 而多叫次數正是那條題目**唯一**承重的指標（另外兩欄在它上面是 `undefined`）。
+ */
+const RESTLESS: readonly ScriptedTurn[] = [
+  {
+    content: '我先看一下有哪些檔案。',
+    toolCalls: [{ name: 'ls', args: {} }],
+    usage: { inputTokens: 130, outputTokens: 14 },
+  },
+  { content: '3 加 4 等於 7。', usage: { inputTokens: 170, outputTokens: 9 } },
+];
+
+/** 克制題本身。跟 saboteur 一樣用 id 查，不用位置。 */
+const RESTRAINT_CASE = BENCHMARK.find((entry) => entry.id === 'no-tool-needed');
+
 /** saboteur 那條要跑的題目。兩個工具、參數明確，所以「少叫一個又寫錯」扣得乾淨。 */
 const SABOTAGED_CASE = BENCHMARK.find((entry) => entry.id === 'echo-then-write');
 
@@ -233,7 +252,7 @@ afterAll(async () => {
 async function assertTripwires(): Promise<void> {
   // 主判準：每一條都真的跑過。少一條就代表它被 skip 了，而 skip 是靜默的。
   // **這條不必等 flush**，所以先斷言它——它紅的時候，下面兩條說什麼都不重要。
-  expect(executed).toBe(BENCHMARK.length + 1);
+  expect(executed).toBe(BENCHMARK.length + 2);
 
   // 請求內容的斷言要等東西真的到齊，否則「零請求」在什麼都還沒送出去時同樣成立。
   await waitForTrace();
@@ -328,6 +347,27 @@ ls.describe('基準任務（假模型）', () => {
       expect(score.toolCallSuccess).toBe(0.5);
       expect(score.argumentCorrectness).toBe(0);
       expect(score.extraToolCalls).toBe(0);
+    },
+  );
+
+  ls.test(
+    '該克制卻叫了工具：多叫那一欄真的會動',
+    {
+      inputs: { prompt: RESTRAINT_CASE?.prompt ?? '' },
+      referenceOutputs: { note: '這一條期望多叫次數不是零' },
+    },
+    async () => {
+      expect(RESTRAINT_CASE, '克制題不見了').toBeDefined();
+      const score = await evaluateCase(RESTRAINT_CASE as BenchmarkCase, RESTLESS);
+
+      // **這一條才是克制題在 CI 裡的對照組。** 上面那條照做的版本，多叫是 0 只是因為
+      // 假模型的腳本裡沒有工具呼叫可叫；這一條證明真的叫了的時候那個數字會動。
+      expect(score.extraToolCalls).toBe(1);
+      // 而且叫了工具**不會**讓那兩欄冒出分數來 —— 期望零筆就是沒有可判的，跟做了什麼無關。
+      expect(score.toolCallSuccess).toBeUndefined();
+      expect(score.argumentCorrectness).toBeUndefined();
+      // 答案還是講對了，所以品質那一欄照樣滿分 —— 克制與答對是兩件事。
+      expect(score.mentions).toBe(1);
     },
   );
 });
