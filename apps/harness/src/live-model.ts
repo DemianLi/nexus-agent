@@ -52,6 +52,129 @@ export const LIVE_API_KEY_ENV = 'NVIDIA_API_KEY';
 export const LIVE_TIMEOUT_MS = 90_000;
 
 /**
+ * 被端點限流時，最多重試幾次。
+ *
+ * **這道要存在，是因為基座那道的作用面比看起來窄。** `AsyncCaller` 的 `maxRetries` 預設是
+ * 6，看起來限流本來就會被接住；但 `@langchain/core` 的 `defaultFailedAttemptHandler` 把
+ * **沒有 `retry-after` header 的 429** 分類成 `headerless_429` → `action: 'capacity'`，
+ * 然後**直接拋**（`async_caller.js`）。NVIDIA 回的正是
+ * `{"status":429,"title":"Too Many Requests"}` —— 沒有那個 header，所以一次都不會重試。
+ * 底層那道也關著：`@langchain/openai` 建 `OpenAI` client 時寫死 `maxRetries: 0`。
+ *
+ * **退避多久是量出來的，不是猜的。** 2026-08-28 實測這個端點：`openai/gpt-oss-120b` 在
+ * 49.5 秒內燒掉 119,363 token 後觸發 429（約 120k 的每分鐘 token 配額），而 **16 秒後
+ * 就完全恢復** —— 輕請求與一次真的 eval 執行都立刻通過。`AsyncCaller` 交給 `p-retry` 的
+ * 退避是 1／2／4／8／16／32 秒（帶隨機），所以第四次重試累計就蓋過那個窗口。
+ *
+ * **偏離標註**：dsh 的 [`retry-policy.ts`](../../../references/deepseek-harness/packages/llm/llm/src/retry-policy.ts)
+ * 把 `RATE_LIMIT` 放在預設可重試碼裡（與這裡同向），但它的退避是**有界**的
+ * （`initialDelayMs: 500`、`maxDelayMs: 10_000`、`jitterRatio: 0.1`）。`AsyncCaller`
+ * **沒有把退避參數暴露出來** —— 只收 `maxRetries` 與 `onFailedAttempt`，退避寫死在
+ * `callWithRetries` 裡。所以這裡只釘得住次數，釘不住每次等多久；要對齊 dsh 的有界退避
+ * 得自己包一層 caller，那是更大的一張工。
+ */
+export const LIVE_MAX_RETRIES = 6;
+
+/**
+ * 端點限流（HTTP 429）的判定。
+ *
+ * **照 dsh 的規矩認碼，不解析訊息** —— dsh 的 `HarnessError.code` 註解寫得很直白：
+ * 「route on this, never by parsing `message`」。這裡的碼有兩個來源：協定上的
+ * `status === 429`，以及 `@langchain/core` 正規化後掛上的 `name`。兩個都認，因為
+ * 包裝層數是別人家的實作細節。
+ *
+ * **`insufficient_quota` 不算。** dsh 把 `QUOTA`（配額耗盡）與 `RATE_LIMIT`（限流）
+ * 分成兩個碼，而且只有後者在預設可重試集裡 —— 理由一樣：配額耗盡重試幾次都一樣，
+ * 限流等一下就過。`@langchain/core` 也同樣把它歸成 `action: 'stop'`。
+ */
+export function isRetryableRateLimit(error: unknown): boolean {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  for (let depth = 0; depth < 10; depth += 1) {
+    if (typeof current !== 'object' || current === null || seen.has(current)) return false;
+    seen.add(current);
+
+    // 配額耗盡：重試無效，而且它跟限流共用 429。先看它，否則會被下面認成可重試。
+    const code = (current as { code?: unknown }).code;
+    if (code === 'insufficient_quota') return false;
+    const name = (current as { name?: unknown }).name;
+    if (name === 'RateLimitQuotaExhaustedError' || name === 'InsufficientQuotaError') return false;
+
+    if ((current as { status?: unknown }).status === 429) return true;
+    if (name === 'RateLimitCapacityError') return true;
+
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * HTTP 狀態碼裡「重試幾次都一樣」的那些。
+ *
+ * **這是 `@langchain/core@1.2.9` `async_caller.js` 的 `STATUS_NO_RETRY` 的複本。**
+ * 抄一份是因為它沒有被匯出，而我們需要在自訂的 `onFailedAttempt` 裡維持它的行為 ——
+ * 見 {@link retryDecision} 的說明。**它會隨基座版本漂移**，升級 `@langchain/core`
+ * 時要回頭核一次；`live-model.test.ts` 有一條測試釘住 400 不重試，但釘不住整份清單。
+ */
+const STATUS_NO_RETRY: ReadonlySet<number> = new Set([
+  400, 401, 402, 403, 404, 405, 406, 407, 409, 413,
+]);
+
+/**
+ * 一次失敗要不要重試。
+ *
+ * **這是基座 `defaultFailedAttemptHandler` 的複本，只改了一支。** 基座沒有把它匯出，
+ * 而 `onFailedAttempt` 是全有全無的 —— 傳了就整個取代掉預設，沒有「只改一條規則」的接縫。
+ * 所以這裡把預設的判斷抄回來，唯一的差別是**沒有 `retry-after` header 的 429**：
+ * 基座把它歸成 `action: 'capacity'` 然後放棄，這裡讓它重試。
+ *
+ * **為什麼不是「非限流一律放棄」**：那會把 `500`、連線斷掉這些**本來會重試**的也一起關掉，
+ * 是一次行為退化。預設的形狀是「除了明確無望的以外都重試」，不是反過來。
+ */
+export function retryDecision(error: unknown): 'retry' | 'give-up' {
+  // 中止是我們自己要的，不重試。
+  if (error instanceof Error) {
+    if (error.name === 'AbortError') return 'give-up';
+    if (error.message.startsWith('Cancel') || error.message.startsWith('AbortError')) {
+      return 'give-up';
+    }
+  }
+  if (typeof error === 'object' && error !== null) {
+    if ((error as { code?: unknown }).code === 'ECONNABORTED') return 'give-up';
+  }
+
+  // 配額耗盡與 4xx：重試幾次都一樣。
+  for (const link of causeLinks(error)) {
+    const code = (link as { code?: unknown }).code;
+    if (code === 'insufficient_quota') return 'give-up';
+    const name = (link as { name?: unknown }).name;
+    if (name === 'RateLimitQuotaExhaustedError' || name === 'InsufficientQuotaError') {
+      return 'give-up';
+    }
+    const status = (link as { status?: unknown }).status;
+    if (typeof status === 'number' && status !== 429 && STATUS_NO_RETRY.has(status)) {
+      return 'give-up';
+    }
+  }
+
+  // 到這裡還是 429 的話就是限流 —— 這一支才是我們跟基座不同的地方。
+  // 其餘（5xx、連線問題、解不開的回應）沿用基座「重試」的預設。
+  return 'retry';
+}
+
+/** 展開 `cause` 鏈。有深度上限也認得出環，因為包裝層數是別人家的實作細節。 */
+function* causeLinks(error: unknown): Generator<object> {
+  const seen = new Set<unknown>();
+  let current = error;
+  for (let depth = 0; depth < 10; depth += 1) {
+    if (typeof current !== 'object' || current === null || seen.has(current)) return;
+    seen.add(current);
+    yield current;
+    current = (current as { cause?: unknown }).cause;
+  }
+}
+
+/**
  * 真實供應商的 model。
  *
  * key **只從環境變數讀**，缺少時直接失敗，沒有預設值也不 fallback
@@ -79,6 +202,11 @@ export function createLiveModel(modelId: string = LIVE_MODEL_ID): ChatOpenAI {
     topP: 0.95,
     maxTokens: 16384,
     timeout: LIVE_TIMEOUT_MS,
+    maxRetries: LIVE_MAX_RETRIES,
+    onFailedAttempt: (error) => {
+      if (retryDecision(error) === 'retry') return;
+      throw error;
+    },
   });
 }
 

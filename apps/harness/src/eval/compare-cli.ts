@@ -16,7 +16,7 @@
  * 混著訓練配方（見 [`tiers.ts`](./tiers.ts) 檔頭）。判準對照另外印在最後，它不是一階。
  */
 
-import { createLiveModel, loadLiveEnvIfNeeded } from '../live-model.js';
+import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MAX_RETRIES } from '../live-model.js';
 import {
   compareTiers,
   summarize,
@@ -123,6 +123,14 @@ function printSummary(summary: TierSummary): void {
 /** 被上限切掉的執行數。**它是資料損失，不是分數**，所以跑完要單獨提一句。 */
 let budgetHits = 0;
 
+/**
+ * 重試耗盡後仍被限流的執行數。**同樣是資料損失，但要做的事跟 `budget` 不同。**
+ *
+ * 看到它就表示這一輪跑得比端點的配額快 —— 那不是模型的問題，讀成模型的問題會出事
+ * （2026-08-28 出過一次）。
+ */
+let throttledHits = 0;
+
 /** 這一欄實際判了幾次。等於評到分的次數時不印 —— 每行都拖一段沒有資訊的括號很吵。 */
 function judged(summary: TierSummary, spread: { count: number } | undefined): string {
   if (spread === undefined || spread.count === summary.scored) return '';
@@ -146,6 +154,7 @@ function printOutcome(tier: ModelTier, outcome: TierOutcome): void {
     return;
   }
   if (outcome.reason === 'budget') budgetHits += 1;
+  if (outcome.reason === 'throttled') throttledHits += 1;
   const status = outcome.status === undefined ? '' : ` ${outcome.status}`;
   console.log(
     `  · ${tier.label} ${outcome.caseId} ${outcome.seconds}s` +
@@ -212,6 +221,14 @@ async function main(argv: readonly string[]): Promise<void> {
     console.log(
       `\n注意：有 ${budgetHits} 次執行被上限切掉（budget）。**那是資料損失，不是低分** ——` +
         `模型有沒有做完這題我們不知道。要嘛調高上限重跑，要嘛就把它讀成「這個模型在這題上跑不完」。`,
+    );
+  }
+  if (throttledHits > 0) {
+    console.log(
+      `\n注意：有 ${throttledHits} 次執行在重試 ${LIVE_MAX_RETRIES} 次之後仍然被限流（throttled）。` +
+        `**那是我們打太快，不是模型的問題** —— 它跟端點的 4xx 一樣不進平均，但要做的事是` +
+        `跑慢一點或調高重試次數，不是換 id。實測這個端點約 120k 的每分鐘 token 配額，` +
+        `觸發後十幾秒就恢復。`,
     );
   }
   console.log('\n注意：跨階梯的差異混著訓練配方，只有同一道階梯內部才是「只有尺寸在變」。');

@@ -104,6 +104,39 @@ describe('runTier：失敗的分類', () => {
     expect(outcome.caseId).toBe(ECHO_CASE.id);
   });
 
+  it('限流不歸 rejected —— 混在一起會把「我們打太快」讀成「這個模型不行」', async () => {
+    // 這個形狀是量出來的：NVIDIA 回 `{"status":429,"title":"Too Many Requests"}`，
+    // 沒有 retry-after header。2026-08-28 因為它跟 400 混在同一類，`gpt-oss-120b` 被
+    // 記成「跑不完基準任務」——它其實是六個受測模型裡最快的那個，只是我們燒 token 燒太快。
+    const error = Object.assign(new Error('429 {"status":429,"title":"Too Many Requests"}'), {
+      status: 429,
+    });
+    const report = await runTier(TIER, { createModel: throwing(error), cases: [ECHO_CASE] });
+
+    const [outcome] = report.outcomes;
+    expect(outcome?.kind).toBe('failed');
+    if (outcome?.kind !== 'failed') return;
+    expect(outcome.reason).toBe('throttled');
+    expect(outcome.status).toBe(429);
+  });
+
+  it('配額耗盡的 429 仍然是 rejected —— 它跟限流共用狀態碼，但重試無效', async () => {
+    // dsh 把 RATE_LIMIT 與 QUOTA 分成兩個碼，只有前者在預設可重試集裡。
+    // 這一條擋的是「看到 429 就一律當限流」——那會讓一個要人去處理的帳務問題，
+    // 被讀成「跑慢一點就好」。
+    const error = Object.assign(new Error('429 insufficient quota'), {
+      status: 429,
+      code: 'insufficient_quota',
+    });
+    const report = await runTier(TIER, { createModel: throwing(error), cases: [ECHO_CASE] });
+
+    const [outcome] = report.outcomes;
+    expect(outcome?.kind).toBe('failed');
+    if (outcome?.kind !== 'failed') return;
+    expect(outcome.reason).toBe('rejected');
+    expect(outcome.status).toBe(429);
+  });
+
   it('逾時認得出來 —— 名字與訊息兩條路都算', async () => {
     const byName = Object.assign(new Error('whatever'), { name: 'APIConnectionTimeoutError' });
     const byMessage = new Error('Request timed out.');
