@@ -79,9 +79,25 @@ runner 在 `runner.ts`。**model 是 runner 的參數**，所以 CI 這條（假
 題目與工具參數會跟著 trace 送出去 —— 那條路徑跟 `langsmith/vitest` 自己的上傳是**兩個
 獨立的開關**，關掉一個不影響另一個（`src/eval/eval.test.ts` 的檔頭記著實測）。
 
-模型的品質與成本比較**還沒跑**（不是跑不了）：形狀已定 —— 同一個 NVIDIA 端點上的三個
-尺寸級距（9B 以下、26–35B、100B 以上），同一把 `NVIDIA_API_KEY`。要做的是把
-`createLiveModel()` 參數化成收得下三個 id，然後 `runBenchmarkCase` 跑三遍。
+尺寸比較（**要 key、會花錢、不進 CI**）：
+
+```bash
+pnpm --filter @nexus/harness run eval:compare --samples 3
+```
+
+同一份基準任務跑 Nemotron-3 家族的三個橫階（`nano-30b-a3b` / `super-120b-a12b` /
+`ultra-550b-a55b`），只有 model 這一個參數不同。橫階怎麼挑出來的、以及**那份清單為什麼
+是綁在帳號上的**（`GET /models` 列 84 個，一把 key 通常只叫得動其中 29 個），寫在
+`src/eval/tiers.ts` 的檔頭；換一把 key 要重新盤點。
+
+**跑出來的結果是「這三階分不出高下」**：工具呼叫成功率與參數正確性都是 1.00，
+總 token 差 5% 而總參數量差 18 倍。那不是三個模型一樣好，也不是題目太淺 —— 盤點時
+`meta/llama-3.2-11b-vision-instruct` 在**同一句** `echo-once` 上把參數寫成亂碼，判準在
+11B 上分得出來。分不出來的原因是**這道階梯的底板是 30B，而崩塌點在它底下**；11B 與 30B
+之間沒有量過。
+
+驅動器把**失敗與零分分開**：模型叫不出工具是 0 分（有資料），端點回 4xx 或掛住是
+「沒有資料」，後者不會被平均進通過率。
 
 clone 之後各自設定一次，讓 `git fetch` / `git pull` 自動清掉遠端已刪除的分支：
 

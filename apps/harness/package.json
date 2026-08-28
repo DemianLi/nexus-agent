@@ -8,6 +8,7 @@
     "build": "tsc --noEmit",
     "cli": "tsx src/cli.ts",
     "cli:live": "tsx src/cli.ts --live",
+    "eval:compare": "tsx src/eval/compare-cli.ts",
     "lint": "eslint .",
     "serve": "tsx src/serve.ts",
     "serve:live": "tsx src/serve.ts --live",
