@@ -25,6 +25,9 @@
  *    後者，是錯的；1.13.1 的 `ConfigurationError` 只有 `TOOL_NAME_COLLISION` 一個 code）。
  *    現在觸發不到——`StateBackend` 的 `isSandboxBackend` 是 false——所以這裡不寫測試，
  *    留給 Phase 2 的 `feat/sandbox-plugin` 當場驗。
+ *
+ * 組裝點還負責一件基座**設了但等於沒設**的事：agent 迴圈的上限。見
+ * {@link DEFAULT_RECURSION_LIMIT}。
  */
 
 import {
@@ -73,7 +76,39 @@ export interface CreateNexusAgentOptions {
   readonly approvals?: ApprovalPolicy;
   /** 附加在基座 base prompt 前面的 system prompt。 */
   readonly systemPrompt?: string;
+  /**
+   * agent 迴圈的上限，單位是 LangGraph 的 super-step。省略即 {@link DEFAULT_RECURSION_LIMIT}。
+   *
+   * **一定要設，因為基座的預設等於沒有上限**——見 {@link DEFAULT_RECURSION_LIMIT}。
+   * 換算是 `recursionLimit = 2 × 模型輪數 + 2`（模型一輪、工具一輪各算一個 super-step）。
+   */
+  readonly recursionLimit?: number;
 }
+
+/**
+ * 迴圈上限的預設值。
+ *
+ * ## 為什麼要自己設一個
+ *
+ * **基座把它調到一個保證不會觸發的值。** `createDeepAgent` 最後一步是
+ * `createAgent(...).withConfig({ recursionLimit: 1e4 })` —— 一萬個 super-step，換算成
+ * **約 5,000 輪模型呼叫**。2026-08-28 用 [`LoopingChatModel`](./looping-model.ts) 實測過：裸基座與我們的
+ * 組裝點都跑到 `GraphRecursionError: Recursion limit of 10000 reached`，模型分別被叫了
+ * 5000 與 4999 次。**那不是護欄，是一個關掉的護欄。**
+ *
+ * 這是 [`baseline.test.ts`](./baseline.test.ts) 那條「基座還是不是我們以為的那個形狀」
+ * 的另一型：上次是我們掛的 middleware 關掉了基座的預設，這次是**基座自己**把預設轉到底，
+ * 而且它藏在 dist 的一行 `withConfig` 裡 —— 型別、文件、README 全都看不到。
+ *
+ * ## 為什麼是 100
+ *
+ * 換算後約 49 輪模型呼叫。實測跑掉的那一次（[#86](https://github.com/DemianLi/nexus-agent/pull/86)，
+ * `llama-3.2-11b` 在一題基準任務上多叫了 25 次工具、792.8 秒、110,936 token）大約要
+ * 57 個 super-step，所以這個值攔得住它，而正常的基準任務（最長 3 次工具呼叫 ≈ 8 個
+ * super-step）離它還很遠。**它是「跑掉了」的界線，不是「複雜任務」的界線** —— 真的需要
+ * 更長的呼叫端自己傳一個大的，那時那個數字會出現在呼叫端的程式碼裡而不是沒有人設過。
+ */
+export const DEFAULT_RECURSION_LIMIT = 100;
 
 /**
  * 組裝好的 agent，加上收掉它的方法。
@@ -116,10 +151,14 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       approvals: options.approvals,
     });
 
+    // `withConfig` 疊在基座自己那一層 `withConfig` 上面，後者贏（實測 `8` → 模型只被叫
+    // 3 輪）。**推導出來的型別沒有塌**：包完之後 `invoke()` 的 `messages` 仍然是
+    // `BaseMessage[]` 而不是 `any`，所以 {@link NexusAgentHandle} 那個別名照樣成立
+    // ——這件事驗過，因為 `any` 是不會讓 typecheck 紅的那種壞掉。
     const agent = createDeepAgent({
       ...params,
       ...(options.systemPrompt !== undefined && { systemPrompt: options.systemPrompt }),
-    });
+    }).withConfig({ recursionLimit: options.recursionLimit ?? DEFAULT_RECURSION_LIMIT });
     return { agent, dispose };
   } catch (error) {
     // 清理自己失敗的話不能蓋掉原本的錯誤——那個才是使用者要修的東西。

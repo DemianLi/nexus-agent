@@ -33,14 +33,43 @@ import { runBenchmarkCase } from './runner.js';
 import { scoreCase, type CaseScore } from './scorers.js';
 import type { ModelTier } from './tiers.js';
 
-/** 一次執行失敗的分類。**四類分開，因為要做的事不同。** */
+/** 一次執行失敗的分類。**分開列，因為要做的事不同。** */
 export type FailureReason =
   /** 端點回了 HTTP 錯誤碼 —— 叫不動、不支援工具、被限流。 */
   | 'rejected'
   /** 逾時，也就是 [#57](https://github.com/DemianLi/nexus-agent/issues/57) 那個永遠不回來。 */
   | 'timeout'
+  /**
+   * **我們自己把它切掉的** —— 迴圈跑太多輪，或整輪超過時間預算。
+   *
+   * 跟另外三類的差別在**是誰的問題**：`rejected` 與 `transport` 是端點那側，`timeout` 是
+   * 端點不回話，而這一類是**模型的行為**（它一直叫工具、或一直叫不完）撞上我們設的上限。
+   * 所以它既不是分數（模型沒把題目做完，我們不知道它做不做得完），也不該混進端點的失敗
+   * 裡 —— 讀到它要做的事是「調高上限重跑」或「這個模型不適合」，不是「換 id」也不是
+   * 「查網路」。報表因此把它單獨列一類。
+   */
+  | 'budget'
   /** 其餘（連線斷掉、回應解不開）。 */
   | 'transport';
+
+/**
+ * 基準任務的迴圈上限，比組裝點的預設緊。
+ *
+ * 換算是 `2 × 模型輪數 + 2`，所以 40 約等於 19 輪模型呼叫。取這個值的理由是實測：
+ * 正常的執行裡最多的一次是 `oss-20b` 在 `edit-after-read` 上多叫 8 次（共 11 次工具呼叫
+ * ≈ 24 個 super-step），而跑掉的那次是 25 次多叫（共 28 次 ≈ 58 個）——40 落在兩者中間。
+ */
+export const EVAL_RECURSION_LIMIT = 40;
+
+/**
+ * 一次執行的時間預算。
+ *
+ * **迴圈上限管不到的那一半**：`ultra` 在 `edit-after-read` 上跑過 420.9 秒與 247.3 秒，
+ * 而它並沒有多叫幾次工具。5 分鐘這條線是刻意畫在兩者中間 —— 247.3 秒那次活得下來，
+ * 420.9 秒那次會被切掉。**切掉是資料損失**，所以這個值調高比調低安全，
+ * 而它會不會太緊要看報表上 `budget` 那一類出現得多不多。
+ */
+export const EVAL_DEADLINE_MS = 300_000;
 
 /** 一次執行的結果。 */
 export type TierOutcome =
@@ -70,6 +99,10 @@ export interface CompareOptions {
   readonly onOutcome?: (tier: ModelTier, outcome: TierOutcome) => void;
   /** 要跑的題目。預設整份 {@link BENCHMARK}。 */
   readonly cases?: readonly BenchmarkCase[];
+  /** 迴圈上限。預設 {@link EVAL_RECURSION_LIMIT}。 */
+  readonly recursionLimit?: number;
+  /** 一次執行的時間預算，毫秒。預設 {@link EVAL_DEADLINE_MS}；給 `0` 表示不設。 */
+  readonly deadlineMs?: number;
 }
 
 /**
@@ -123,14 +156,31 @@ async function runOnce(
   options: CompareOptions,
 ): Promise<TierOutcome> {
   const started = Date.now();
+  const deadlineMs = options.deadlineMs ?? EVAL_DEADLINE_MS;
+  // 留著這個訊號的參照，才能在 catch 裡**直接問它有沒有觸發**，而不是去猜錯誤長什麼樣。
+  // 中止丟出來的是 `DOMException` 且 `name` 是 `TimeoutError` —— 那個名字會被下面的逾時
+  // 掃描認成「端點不回話」，跟我們自己切掉的完全混在一起。問訊號是確定的，猜名字不是。
+  const deadline = deadlineMs > 0 ? AbortSignal.timeout(deadlineMs) : undefined;
+
   try {
     const run = await runBenchmarkCase(testCase, {
       model: options.createModel(tier.modelId),
       plugins: benchmarkPlugins(),
       systemPrompt: BENCHMARK_SYSTEM_PROMPT,
+      recursionLimit: options.recursionLimit ?? EVAL_RECURSION_LIMIT,
+      ...(deadline === undefined ? {} : { signal: deadline }),
     });
     return { kind: 'scored', score: scoreCase(testCase, run), seconds: elapsed(started) };
   } catch (error) {
+    if (deadline?.aborted === true) {
+      return {
+        kind: 'failed',
+        caseId: testCase.id,
+        reason: 'budget',
+        message: `超過單次執行的時間預算 ${deadlineMs / 1000} 秒`,
+        seconds: elapsed(started),
+      };
+    }
     const { reason, status } = classify(error);
     return {
       kind: 'failed',
@@ -159,8 +209,17 @@ function elapsed(started: number): number {
  * `BadRequestError` 包在 **`cause` 底下第三層**。只看最外層的話，一個貨真價實的 4xx 會被
  * 記成 `transport` —— 而那兩件事要做的完全不同：一個要換 id 或改題目，一個是線路問題。
  *
- * 兩趟掃：`status` 先掃完整條鏈，才輪到逾時。順序有意義 —— 外層訊息裡出現 `aborted`
- * 之類的字眼很常見，讓它壓過內層一顆明確的 400 就是拿字串壓過協定。
+ * 三趟掃，順序有意義：
+ *
+ * 1. **`status`**：外層訊息裡出現 `aborted` 之類的字眼很常見，讓它壓過內層一顆明確的
+ *    400 就是拿字串壓過協定。
+ * 2. **迴圈上限**：`GraphRecursionError` 的訊息是 `Recursion limit of N reached without
+ *    hitting a stop condition`，裡面沒有任何逾時字眼，所以放在第三趟後面的話它會掉進
+ *    `transport` —— 一個「模型一直叫工具」的結果會被記成線路問題。
+ * 3. **逾時**：其餘認得出來的。
+ *
+ * 時間預算那一半**不在這裡認**：它由 {@link runOnce} 直接問中止訊號，因為那個
+ * `DOMException` 的 `name` 就是 `TimeoutError`，靠字串分不開「我們切的」與「端點不回話」。
  */
 function classify(error: unknown): { reason: FailureReason; status?: number } {
   const chain = [...causeChain(error)];
@@ -168,6 +227,13 @@ function classify(error: unknown): { reason: FailureReason; status?: number } {
   for (const link of chain) {
     const status = (link as { status?: unknown }).status;
     if (typeof status === 'number') return { reason: 'rejected', status };
+  }
+
+  for (const link of chain) {
+    const name = (link as { name?: unknown }).name;
+    if (name === 'GraphRecursionError') return { reason: 'budget' };
+    const message = link instanceof Error ? link.message : '';
+    if (/Recursion limit of \d+ reached/i.test(message)) return { reason: 'budget' };
   }
 
   for (const link of chain) {

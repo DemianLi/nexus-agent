@@ -8,6 +8,7 @@
 
 import type { AgentModel } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
+import { LoopingChatModel } from '../looping-model.js';
 import { ScriptedChatModel, type ScriptedTurn } from '../scripted-model.js';
 import { compareTiers, runTier, summarize } from './compare.js';
 import { BENCHMARK, BENCHMARK_FILE, type BenchmarkCase } from './dataset.js';
@@ -171,6 +172,85 @@ describe('runTier：失敗的分類', () => {
     const report = await runTier(TIER, { createModel: throwing(b), cases: [ECHO_CASE] });
 
     expect(report.outcomes[0]?.kind === 'failed' && report.outcomes[0].reason).toBe('transport');
+  });
+
+  it('迴圈上限歸 budget，不是 transport —— 一直叫工具不是線路問題', async () => {
+    // 形狀是量出來的：`GraphRecursionError`，訊息是
+    // `Recursion limit of N reached without hitting a stop condition`。
+    // 裡面沒有任何逾時字眼，也沒有 `status`，所以在加這一類之前它會掉進 `transport`。
+    const error = Object.assign(
+      new Error('Recursion limit of 40 reached without hitting a stop condition.'),
+      { name: 'GraphRecursionError' },
+    );
+    const report = await runTier(TIER, { createModel: throwing(error), cases: [ECHO_CASE] });
+
+    const [outcome] = report.outcomes;
+    expect(outcome?.kind === 'failed' && outcome.reason).toBe('budget');
+    expect(outcome?.kind === 'failed' && outcome.status).toBeUndefined();
+  });
+
+  it('迴圈上限那一趟要掃在逾時前面', async () => {
+    // **這條釘的是順序。** 包裝層的訊息帶著 `aborted` 之類的字眼很常見，逾時那一趟先跑的話
+    // 一個「模型一直叫工具」會被記成「端點不回話」——兩者要做的事完全相反：一個是調上限
+    // 或換模型，一個是查網路。
+    const error = Object.assign(new Error('Run aborted: Recursion limit of 40 reached'), {
+      name: 'GraphRecursionError',
+    });
+    const report = await runTier(TIER, { createModel: throwing(error), cases: [ECHO_CASE] });
+
+    expect(report.outcomes[0]?.kind === 'failed' && report.outcomes[0].reason).toBe('budget');
+  });
+
+  it('真的跑到迴圈上限也是 budget —— 這條走的是完整的 agent', async () => {
+    // 上面兩條餵的是重建出來的錯誤。這一條讓真的 agent 迴圈真的跑到上限，
+    // 所以基座哪天換了錯誤的形狀，它會紅而上面兩條不會。
+    const report = await runTier(TIER, {
+      createModel: () => new LoopingChatModel() as unknown as AgentModel,
+      cases: [ECHO_CASE],
+      recursionLimit: 6,
+    });
+
+    const [outcome] = report.outcomes;
+    expect(outcome?.kind).toBe('failed');
+    expect(outcome?.kind === 'failed' && outcome.reason).toBe('budget');
+    // 失敗不進平均 —— budget 跟另外三類在這件事上一樣。
+    const summary = summarize(report);
+    expect(summary.scored).toBe(0);
+    expect(summary.failures).toEqual({ budget: 1 });
+    expect(summary.toolCallSuccess).toBeUndefined();
+  });
+
+  it('超過時間預算也是 budget，而且不靠猜錯誤的名字', async () => {
+    // 中止丟出來的是 `DOMException`，`name` 是 `TimeoutError` —— 那個名字會被逾時那一趟
+    // 認成「端點不回話」。所以 `runOnce` 是**直接問中止訊號**有沒有觸發，不是讀錯誤。
+    //
+    // 假模型每一輪 await 5ms 是必要的：純 microtask 的迴圈會把計時器餓死，
+    // `AbortSignal.timeout` 永遠不會觸發（實測過，見 `looping-model.ts`）。
+    const report = await runTier(TIER, {
+      createModel: () => new LoopingChatModel({ delayMs: 5 }) as unknown as AgentModel,
+      cases: [ECHO_CASE],
+      deadlineMs: 20,
+    });
+
+    const [outcome] = report.outcomes;
+    expect(outcome?.kind === 'failed' && outcome.reason).toBe('budget');
+    expect(outcome?.kind === 'failed' && outcome.message).toMatch(/時間預算/);
+  });
+
+  it('deadlineMs 給 0 就是不設上限', async () => {
+    // 沒有這條的話，「預設有上限」與「永遠有上限」分不開，而長題目要跑得完得關得掉它。
+    const report = await runTier(TIER, {
+      createModel: () => new LoopingChatModel({ delayMs: 1 }) as unknown as AgentModel,
+      cases: [ECHO_CASE],
+      recursionLimit: 6,
+      deadlineMs: 0,
+    });
+
+    // 時鐘沒在管，所以停下來的是迴圈上限。
+    expect(report.outcomes[0]?.kind === 'failed' && report.outcomes[0].reason).toBe('budget');
+    expect(report.outcomes[0]?.kind === 'failed' && report.outcomes[0].message).not.toMatch(
+      /時間預算/,
+    );
   });
 
   it('認不出來的歸 transport，不猜', async () => {

@@ -53,6 +53,26 @@ export interface RunBenchmarkOptions {
   readonly plugins: readonly NexusPlugin[];
   /** 附加的 system prompt。省略即不加。 */
   readonly systemPrompt?: string;
+  /**
+   * agent 迴圈的上限。省略即組裝點的預設（`DEFAULT_RECURSION_LIMIT`）。
+   *
+   * 這一層收得下它，是因為**基準任務要的上限比互動用的緊**：最長的一題期望 3 次工具
+   * 呼叫（約 8 個 super-step），而互動 session 可能真的需要一長串。
+   */
+  readonly recursionLimit?: number;
+  /**
+   * 整輪的中止訊號。省略即不設上限。
+   *
+   * **這是迴圈上限管不到的那一半。** 一次跑掉可以是「叫了太多次」，也可以是「叫的次數
+   * 不多但每一次都很久」——[#86](https://github.com/DemianLi/nexus-agent/pull/86) 兩種都
+   * 量到了（`llama-11b` 25 次多叫 / 792.8 秒；`ultra` 沒幾次卻 420.9 秒）。前者靠
+   * {@link recursionLimit}，後者只有時鐘擋得住。
+   *
+   * **驗這條路的假模型每一輪一定要 await 真的東西**：純 microtask 的迴圈會把計時器餓死，
+   * 實測過一次 `AbortSignal.timeout(1000)` 完全沒觸發、跑滿 35.6 秒到迴圈上限才停 ——
+   * 那是探針的產物，不是基座的行為（見 [`looping-model.ts`](../looping-model.ts)）。
+   */
+  readonly signal?: AbortSignal;
 }
 
 /** 基座回的最終狀態，只取我們讀的那一格。 */
@@ -78,13 +98,17 @@ export async function runBenchmarkCase(
     model: options.model,
     plugins: options.plugins,
     ...(options.systemPrompt === undefined ? {} : { systemPrompt: options.systemPrompt }),
+    ...(options.recursionLimit === undefined ? {} : { recursionLimit: options.recursionLimit }),
   });
 
   try {
     const invoke = (
-      agent as unknown as { invoke(input: unknown): Promise<AgentResult> }
+      agent as unknown as { invoke(input: unknown, config?: unknown): Promise<AgentResult> }
     ).invoke.bind(agent);
-    const result = await invoke(toAgentInvocation(testCase.prompt));
+    const result = await invoke(
+      toAgentInvocation(testCase.prompt),
+      options.signal === undefined ? undefined : { signal: options.signal },
+    );
     return summarize(testCase.id, result.messages);
   } finally {
     await dispose();
