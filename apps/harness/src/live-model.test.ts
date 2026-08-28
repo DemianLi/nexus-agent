@@ -61,6 +61,14 @@ describe('真實供應商的 key 處理', () => {
     }
   });
 
+  it('預設的那個 id 必須是我們真的量過的模型', () => {
+    // **這條擋的是「憑感覺換預設」。** 上一個預設（`deepseek-v4-pro-0813`）從來不是被選出來的，
+    // 它是 #57 那個不回應的模型的替代品，唯一判準是「回得出 tool_calls」——一次都沒有被
+    // 基準任務量過。現在的這個是 12 次取樣 × 5 階比出來的，這條斷言讓那件事在程式碼裡也成立：
+    // 換成一個沒進過 `ALL_MODELS_UNDER_TEST` 的 id，這裡當場紅。
+    expect(ALL_MODELS_UNDER_TEST.map((tier) => tier.modelId)).toContain(LIVE_MODEL_ID);
+  });
+
   it('逾時有上限 —— #57 的失敗模式是永遠不回來，沒有上限就是整輪比較沒有結果', () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
     expect(createLiveModel().timeout).toBe(LIVE_TIMEOUT_MS);
