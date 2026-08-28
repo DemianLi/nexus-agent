@@ -200,3 +200,65 @@ describe('假模型吐出來的 chunk 本身', () => {
     expect(chunks.map((chunk) => chunk.text)).toEqual(['好', '。']);
   });
 });
+
+/**
+ * `usage_metadata` 的雙路徑對照。
+ *
+ * 假模型是在 `feat/eval-suite` 才開始回報用量的——成本那個指標在 CI 需要一個對照組
+ * （見 [`eval/scorers.ts`](./eval/scorers.ts) 的 `readCost`）。兩條路徑掛法不同：
+ * `_generate` 掛在 `AIMessage` 上，串流掛在**最後一顆** chunk 上（`AIMessageChunk` 相加
+ * 時 `usage_metadata` 會累加，每顆文字 chunk 都掛的話數字會被乘上字數）。所以它跟工具
+ * 呼叫一樣需要對照，而且理由一樣：分歧發生時沒有東西會拋錯。
+ */
+const WITH_USAGE: readonly ScriptedTurn[] = [
+  {
+    content: '我來記。',
+    toolCalls: [{ name: 'take_note', args: { text: '第一筆' } }],
+    usage: { inputTokens: 11, outputTokens: 5 },
+  },
+  { content: '記好了。', usage: { inputTokens: 20, outputTokens: 3 } },
+];
+
+/** 最終狀態裡每一則 AI 訊息的用量，依順序。 */
+type Usages = (Record<string, number> | undefined)[];
+
+async function usageByInvoke(turns: readonly ScriptedTurn[]): Promise<Usages> {
+  const result = await buildAgent(turns, []).invoke({ messages: [new HumanMessage('記一筆。')] });
+  return (result.messages ?? [])
+    .filter((message) => AIMessage.isInstance(message))
+    .map((message) => message.usage_metadata as Record<string, number> | undefined);
+}
+
+async function usageByV3(turns: readonly ScriptedTurn[]): Promise<Usages> {
+  const run = await buildAgent(turns, []).streamEvents(
+    { messages: [new HumanMessage('記一筆。')] },
+    { version: 'v3' },
+  );
+  for await (const _ of run) void _;
+  const output = (await run.output) as { messages?: unknown[] };
+  return (output.messages ?? [])
+    .filter((message) => AIMessage.isInstance(message))
+    .map((message) => message.usage_metadata as Record<string, number> | undefined);
+}
+
+describe('usage_metadata 的雙路徑一致性', () => {
+  it('腳本給了用量，兩條路徑帶出來的數字一樣，而且基座沒有動它', async () => {
+    const [byInvoke, byStream] = await Promise.all([
+      usageByInvoke(WITH_USAGE),
+      usageByV3(WITH_USAGE),
+    ]);
+    const expected = [
+      { input_tokens: 11, output_tokens: 5, total_tokens: 16 },
+      { input_tokens: 20, output_tokens: 3, total_tokens: 23 },
+    ];
+    expect(byInvoke).toEqual(expected);
+    expect(byStream).toEqual(expected);
+  });
+
+  it('腳本沒給用量就是 undefined——假模型不編數字', async () => {
+    const [byInvoke, byStream] = await Promise.all([usageByInvoke(ONE_CALL), usageByV3(ONE_CALL)]);
+    // 「這條路免費」與「我們不知道」在成本比較上是完全不同的結論。
+    expect(byInvoke).toEqual([undefined, undefined]);
+    expect(byStream).toEqual([undefined, undefined]);
+  });
+});

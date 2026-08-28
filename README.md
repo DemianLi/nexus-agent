@@ -65,6 +65,24 @@ pnpm --filter @nexus/harness run serve --plugins src/approval.fixture.ts
 **一批要嘛全核准要嘛全拒絕**：基座只要有一筆被拒，被核准的那幾筆也不會執行，
 而且線上連一顆事件都不會有，所以介面刻意不提供逐筆按。
 
+跑基準任務（eval）：
+
+```bash
+pnpm --filter @nexus/harness exec vitest run src/eval
+```
+
+資料集在 `apps/harness/src/eval/dataset.ts`，評分器在 `scorers.ts`，跑一條任務的
+runner 在 `runner.ts`。**model 是 runner 的參數**，所以 CI 這條（假模型、零憑證、
+不需要任何 key）與換上真實供應商的那條跑的是同一份資料、同一組評分器。
+
+**不要在 CI 設 `LANGSMITH_TRACING`。** eval 跑的是真的 agent，tracing 開著時基準任務的
+題目與工具參數會跟著 trace 送出去 —— 那條路徑跟 `langsmith/vitest` 自己的上傳是**兩個
+獨立的開關**，關掉一個不影響另一個（`src/eval/eval.test.ts` 的檔頭記著實測）。
+
+供應商的品質與成本比較目前**跑不了**：`@langchain/anthropic` 還沒接、DeepSeek 官方端點的
+帳號與 key 是人工前置（[#61](https://github.com/DemianLi/nexus-agent/issues/61)）、現有的
+NVIDIA 接線模型不回應（[#57](https://github.com/DemianLi/nexus-agent/issues/57)）。
+
 clone 之後各自設定一次，讓 `git fetch` / `git pull` 自動清掉遠端已刪除的分支：
 
 ```bash

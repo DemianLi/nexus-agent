@@ -308,10 +308,24 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（線�
   - **等核准時再送一句話，中斷被靜靜丟掉。** 實測對停在核准點的 thread 送 `run.start`：新的一輪照跑（`patchToolCallsMiddleware.before_agent` 補掉懸空的工具呼叫），那個工具**既沒執行也沒被拒絕**，而且**不會再發第二顆 `input.requested`** —— 核准請求就這樣蒸發了。而 [#78](https://github.com/DemianLi/nexus-agent/pull/78) 的 UI 正好到得了這個狀態（`busy` 只看 `running`）。→ UI 那側禁用送出，上行這側明著回錯而不是靜靜照做（同 `since` 那條的理由：靜靜忽略會生出看不見的斷檔）。
   - **驗收句有一個沒寫出來的交付項。** Phase 5 的驗收是「瀏覽器完成提問 → 看事件流 → **核准工具** → 收結果」，而預設 plugin 清單不觸發任何中斷 —— 沒有一份帶 `interruptOn` 的清單，那半句在瀏覽器裡跑不出來。所以這張 PR 要交一份進版控的 fixture 清單模組，README 把那道 `--plugins` 指令寫死。
 - `feat/eval-suite`：LangSmith evaluators 跑基準任務 —— 補強項 3。模型供應商的品質與成本比較掛在這裡（[#31](https://github.com/DemianLi/nexus-agent/issues/31)）：同一組基準任務跑 Anthropic 與 DeepSeek，比工具呼叫成功率、參數正確性、token 成本。**「CI 沒憑證所以驗不了」第二次是錯的**（第一次是 [#72](https://github.com/DemianLi/nexus-agent/pull/72) 的 tracing），但這次的界線比較細：
-  - `langsmith/vitest` 的 `ls.describe` / `ls.test` 配上 `LANGSMITH_TEST_TRACKING=false` **完全不連外、也不要 key**（實測跑得過，評分函式的本體真的執行）。evaluator 的邏輯與資料集的形狀因此進得了 CI。
+  - `langsmith/vitest` 的 `ls.describe` / `ls.test` **完全不連外、也不要 key**（實測跑得過，評分函式的本體真的執行）。evaluator 的邏輯與資料集的形狀因此進得了 CI。**原文把不連外的原因記在 `LANGSMITH_TEST_TRACKING=false` 上，那是記錯了對象** —— 見下面第十一次。
   - `langsmith/evaluation` 的 `evaluate()` 則**一定連外**：對著 loopback 假端點實測，任何 evaluator 跑起來之前它就已經發了 `POST /sessions`、`GET /datasets/<id>`、`GET /sessions`。`data` 收得下記憶體裡的 `Example[]`（資料集不必是託管的），但那個 experiment 必須是。
   - → 照 Phase 0 的切法分兩段：**evaluator 與資料集形狀進 CI，零憑證**；**`evaluate()` 的編排與 #31 的供應商數字是一次性人工驗證**，記進 PR 內文的「驗證方式」。
-- 驗收：瀏覽器完成「提問 → 看事件流 → 核准工具 → 收結果」全迴圈；eval 有可比較的通過率數據，且該數據足以讓模型供應商定案。
+  - **動工前一驗（第十一次）：CI 那半的護欄記錯了對象，live 那半的前提整個不存在。**
+    → **不連外的原因不是 `LANGSMITH_TEST_TRACKING=false`，是 `LANGSMITH_TRACING` 沒設。** 對 loopback 假端點四組對照（`langsmith@0.9.0`、`vitest@3.2.7`）：不設 `LANGSMITH_TRACING` 時**零連外**，帶不帶那支旗標、帶不帶 `langsmith/vitest/reporter` 都一樣；`LANGSMITH_TRACING=true` 而**不**設旗標則發出 `POST /sessions` 與 `GET /datasets?limit=1&name=<suite>`，而且**整個測試檔失敗、測試被 skip**（`Must provide either datasetName or datasetId` —— 開了 tracking 的 `ls.test` 要一份託管資料集）；`LANGSMITH_TRACING=true` ＋ 旗標則零連外且通過。所以今天 CI 乾淨是因為 **CI 不設 `LANGSMITH_TRACING`**，那支旗標是 tracing 打開之後才開始承重的護欄 —— 而 [#72](https://github.com/DemianLi/nexus-agent/pull/72) 的披露正是在教開發者把 tracing 打開。→ 旗標由套件**自己在模組頂層設**（實測是延遲讀取的，不必搶在 import 之前），不靠環境。
+    → **絆索要斷言「跑了幾條」，不是「沒連外」。** 上面那個壞掉的情境，症狀是 **skip** —— 被 skip 的測試同樣不發請求，所以一條只看 loopback 請求數的測試，在它要防的那個情境下照樣全綠。這與 [#79](https://github.com/DemianLi/nexus-agent/pull/79) 那個 `status === 'idle'` 停止條件是同一型的假綠。判準因此是**執行計數**，並在環境裡把 `LANGSMITH_TRACING=true` arm 起來跑最壞情況；零請求只當附帶斷言。
+    → **供應商比較的前提沒有一條成立，這一半封鎖。** ①**沒有 Anthropic 這條路**：`@langchain/anthropic` 不在任何 `package.json` 裡，`.env.example` 只有 `NVIDIA_API_KEY`，`live-model.ts` 只有一個寫死的供應商 —— 「跑兩家」缺的那一家是一段從沒被記過的工作。②[#61](https://github.com/DemianLi/nexus-agent/issues/61) 開著且標 `ready-for-human`：DeepSeek 官方端點的帳號與 key 是人工步驟，agent 做不了，`@langchain/deepseek` 也還沒裝。③**更前面的那一條**：#31 定的是三段收斂，而 Phase 2 那道「不相容則 DeepSeek 當場出局」的二元閘門**從沒跑過** —— Phase 5 的比較預設它過了關，那個前提不是延後，是不存在。
+    → **[#57](https://github.com/DemianLi/nexus-agent/issues/57) 今天複驗仍然重現，但它的選項表已經過期。** 2026-08-27 對同一個端點實測：`deepseek-ai/deepseek-v4-flash-0731` 60 秒零回應（同 #57）；#57 記的替代品 `meta/llama-3.1-8b-instruct` **已經從端點上消失**（`410 Gone`，0.2 秒，`/models` 清單也沒有它了，模型總數 95 → 84），所以選項 2 照原文寫的做不了；但清單上**多出一個同系列的 `deepseek-ai/deepseek-v4-pro-0813`**（#57 當時明寫「沒有可以原地替換的同系列選項」），實測 `200`、37 秒回得出東西。→ 這是 #57 的決定，不在本張 PR 裡順手改；本張只把複驗結果記下來。
+    → **所以這張 PR 不寫 `evaluate()` 的編排。** 它一定連外、而且沒有可跑的供應商，寫了就是一段從沒被執行過的程式碼；而 `evaluate()` 連外那條實測來自 [#72](https://github.com/DemianLi/nexus-agent/pull/72) 那次，這張沒有複驗，省掉這段就不必複驗。CI 那半的載體因此是 `ls.test` 而不是 `evaluate()`：資料集、評分器、runner 都真的跑，只有模型是 `ScriptedChatModel`。**評分器寫成對「跑完的結果」的純函式**，不寫成 LangSmith 的 evaluator 簽章 —— 反過來寫的話 CI 這半要呼叫它就得先偽造 `Run` / `Example`，而那正是資料集形狀會靜靜漂走的地方。
+    → **實作時又量到一件：連外的寄件人有兩個，開關也是兩個。** 把最壞情況 arm 起來
+（loopback 端點 ＋ `LANGSMITH_TRACING=true`）跑這套 eval，`ls.test` 那個寄件人閉著嘴，
+但 loopback 照樣收到 `GET /info` 與（批次過的）`POST /runs/multipart` —— 那是**真的 agent run**
+自己的 `LangChainTracer`（[#72](https://github.com/DemianLi/nexus-agent/pull/72) 記的「tracing 被動生效」），
+與 `LANGSMITH_TEST_TRACKING` 毫無關係。→ 這也是 **CI 不得設 `LANGSMITH_TRACING`** 的實質理由：
+eval 跑的是真的 agent，基準任務的題目與工具參數會跟著 trace 一起出境。斷言因此分成兩條，
+一條要求零、一條要求非零。
+    → **token 成本這一項在 CI 原本沒有路。** `ScriptedChatModel` 完全不吐 `usage_metadata`（grep 零筆），所以成本評分器會是三個指標裡唯一沒有對照組的那個。→ 假模型補上逐輪的 `usage_metadata`，並把「基座把它原封帶到最終狀態」釘成絆索。
+- 驗收：瀏覽器完成「提問 → 看事件流 → 核准工具 → 收結果」全迴圈（[#79](https://github.com/DemianLi/nexus-agent/pull/79) 已閉合）；eval 有可比較的通過率數據，且該數據足以讓模型供應商定案 —— **後半封鎖中**，見上一條的三個前提。**Phase 5 因此不宣告完成**，README 那條「完成一個 Phase 跳 minor」不適用。
 
 ## 6. 六大補強項落點
 
