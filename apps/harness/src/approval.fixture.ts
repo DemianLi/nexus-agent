@@ -11,8 +11,8 @@
  * 再 write_file），所以一條假對話會停兩次 —— 第二次順帶證明核准之後那條下行還活著，
  * 沒有因為換了一個 run 物件而斷掉。
  *
- * `write_file` 是基座自己帶的工具，標它是合法的：它在 `BASE_TOOL_NAMES` 的名字宇宙裡，
- * 所以 fold 的存在性檢查過得去。
+ * `write_file` 是基座自己帶的工具，擋它是合法的 —— **而且現在不必再向誰證明它存在**：
+ * 閘門拿到的是執行當下的那一次呼叫，沒有名字宇宙要對齊（[#111](https://github.com/DemianLi/nexus-agent/issues/111)）。
  */
 
 import type { NexusPlugin } from '@nexus/core';
@@ -24,9 +24,13 @@ export const GATED_TOOL_NAMES: readonly string[] = [ECHO_TOOL_NAME, 'write_file'
 const gatePlugin: NexusPlugin = {
   name: 'approval-demo',
   apply(registry) {
-    for (const name of GATED_TOOL_NAMES) {
-      registry.interrupts.require(name, { reason: `${name} 會動到外面，先給人看過` });
-    }
+    // 一位 listener 判所有工具，而不是逐個工具註冊一筆 —— 這正是換掉宣告式清單之後
+    // 該有的寫法：名字在 `exec` 上，不在我們手上的一份表裡。
+    registry.approvals.gate((exec, next) =>
+      GATED_TOOL_NAMES.includes(exec.name)
+        ? { kind: 'ask', reason: `${exec.name} 會動到外面，先給人看過` }
+        : next(),
+    );
   },
 };
 

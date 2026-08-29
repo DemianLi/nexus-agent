@@ -275,7 +275,7 @@ describe('每個註冊點的回滾', () => {
     registry.backend.mount('/memories/', fakeBackend('store'));
     registry.middleware.use(fakeMiddleware('audit'));
     registry.permissions.deny(['/.env*']);
-    registry.interrupts.require('rm', { reason: '刪檔' });
+    registry.approvals.gate(() => ({ kind: 'allow' }));
     registry.skills.addSource('/skills/user/');
     registry.memory.addSource('/AGENTS.md');
     registry.lifecycle.onDispose(() => {});
@@ -296,7 +296,7 @@ describe('每個註冊點的回滾', () => {
     expect(registry.backend.mounts()).toEqual([]);
     expect(registry.middleware.list()).toEqual([]);
     expect(registry.permissions.rules()).toEqual([]);
-    expect(registry.interrupts.requirements()).toEqual([]);
+    expect(registry.approvals.listeners()).toEqual([]);
     expect(registry.skills.sources()).toEqual([]);
     expect(registry.memory.sources()).toEqual([]);
     expect(registry.lifecycle.disposers()).toEqual([]);

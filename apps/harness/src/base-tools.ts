@@ -49,9 +49,11 @@ const ASYNC_TASK_TOOL_NAMES = [
  * **`ASYNC_TASK_TOOL_NAMES` 那五個刻意不收。** 基座只在 `subagents` 裡出現
  * `AsyncSubAgent`（帶 `graphId` 的那種）時才掛上那組工具，而
  * `registry.subagents.register()` 收的是 `SubAgent`，型別上就進不來——所以在目前的組裝
- * 裡那五個名字**永遠不會有對應的工具**。把它們放進宇宙的下場是
- * `interrupts.require('start_async_task', ...)` 通過檢查然後什麼都不擋，正是那條檢查
- * 存在的理由。哪天真的支援 async subagent，這裡跟著補。
+ * 裡那五個名字**永遠不會有對應的工具**。把它們放進宇宙的下場是 `toolOrder` 列了一個
+ * 排不到任何東西的名字而不報錯。哪天真的支援 async subagent，這裡跟著補。
+ *
+ * （這份宇宙過去還餵給核准的名字檢查，那條隨機制一起走了——見
+ * [#111](https://github.com/DemianLi/nexus-agent/issues/111)。）
  *
  * `execute` 反過來要收：它現在也看不見（`StateBackend` 沒有 shell），但只要換一個支援
  * 命令執行的 backend 它就在，而換 backend 是組裝點的一個參數而已。

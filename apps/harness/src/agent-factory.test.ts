@@ -134,7 +134,9 @@ describe('createNexusAgent', () => {
           name: 'gatekeeper',
           requires: ['note'],
           apply(registry) {
-            registry.interrupts.require(NOTE_TOOL_NAME, { reason: '記筆記要人看過' });
+            registry.approvals.gate((exec, next) =>
+              exec.name === NOTE_TOOL_NAME ? { kind: 'ask', reason: '記筆記要人看過' } : next(),
+            );
           },
         },
       ],
@@ -197,7 +199,9 @@ describe('createNexusAgent', () => {
           {
             name: 'gatekeeper',
             apply: (registry) =>
-              void registry.interrupts.require('task', { reason: '委派出去要人看過' }),
+              void registry.approvals.gate((exec, next) =>
+                exec.name === 'task' ? { kind: 'ask', reason: '委派出去要人看過' } : next(),
+              ),
           },
         ],
       }),
@@ -256,7 +260,10 @@ describe('createNexusAgent', () => {
       ).rejects.toThrow(/需要能力 "mcp"/);
     });
 
-    it('宣告了要核准的工具但沒給 checkpointer → 報錯', async () => {
+    it('**掛了核准閘門但沒給 checkpointer → 照樣組得起來**（舊版在這裡是拋）', async () => {
+      // [#111](https://github.com/DemianLi/nexus-agent/issues/111) 的 (c)：缺 checkpointer
+      // 從建構期的錯誤變成執行期的確定性拒絕。這一條與下面那條「工具真的沒跑」是一對
+      // ——只驗組得起來的話，「閘門被靜靜地丟掉了」也會讓它綠。
       await expect(
         createNexusAgent({
           model: new ScriptedChatModel({ turns: [] }),
@@ -265,11 +272,13 @@ describe('createNexusAgent', () => {
             {
               name: 'gatekeeper',
               apply: (registry) =>
-                void registry.interrupts.require(NOTE_TOOL_NAME, { reason: '要人看過' }),
+                void registry.approvals.gate((exec, next) =>
+                  exec.name === NOTE_TOOL_NAME ? { kind: 'ask', reason: '要人看過' } : next(),
+                ),
             },
           ],
         }),
-      ).rejects.toThrow(/沒給 checkpointer/);
+      ).resolves.toBeDefined();
     });
 
     it('工具名撞到基座內建的 → 報錯且指名是誰註冊的', async () => {

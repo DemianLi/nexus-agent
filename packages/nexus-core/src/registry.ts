@@ -3,7 +3,7 @@
  *
  * 九個註冊點：`tools` / `subagents` / `capabilities` 是具名的，`backend` / `skills`
  * 也靠名字（`routePrefix` 與來源路徑）擋重複，其餘三個（`middleware` /
- * `permissions` / `interrupts`）沒有名字可撞，走匿名追加。折疊成
+ * `permissions` / `approvals`）沒有名字可撞，走匿名追加。折疊成
  * `createDeepAgent` 參數的部分在 {@link ./fold.ts}。
  *
  * 外加三條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
@@ -15,7 +15,8 @@
 
 import type { StructuredTool } from '@langchain/core/tools';
 import type { AnyBackendProtocol, SubAgent } from 'deepagents';
-import type { AgentMiddleware, WhenPredicate } from './base-types.js';
+import type { AgentMiddleware } from './base-types.js';
+import type { PreToolListener } from './approval.js';
 import { AnonymousEntries, CapabilitySet, NamedEntries } from './entries.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
@@ -199,48 +200,40 @@ export interface PermissionRegistrationPoint {
   rules(): NamedEntry<DenyRule>[];
 }
 
-/** 一次「這個工具要人核准」的標記。 */
-export interface InterruptRequirement {
-  /** 要核准的工具名。 */
-  readonly toolName: string;
-  /** 給人看的理由。 */
-  readonly reason: string;
+/**
+ * `approvals` 註冊點：一條 pre-execute waterfall。
+ *
+ * **這取代了 `interrupts.require(toolName, ...)`。** 舊的是宣告式的——註冊一份工具名
+ * 清單，執行時由基座拿 `toolCall.name` 查表，查不到就 auto-approve，所以一個打錯字的
+ * 閘門會靜靜地什麼都不擋。新的是 listener 拿活的那一次呼叫自己判斷，**名字不是宣告
+ * 出來的，那個 bug class 不存在**。形狀與決議見 {@link ./approval.ts} 與
+ * [#111](https://github.com/DemianLi/nexus-agent/issues/111)。
+ *
+ * 順帶不見的兩件（都是機制換掉的直接後果，不是這裡另外修的）：
+ *
+ * - **`context: { interruptOn: {} }` 那條繞道**。基座把 `interruptOn` 放在 HITL
+ *   middleware 的 `contextSchema` 裡、執行期取 `{ ...options, ...runtime.context }`
+ *   （`hitl.js:421`），呼叫端一句 context 就把所有閘門整組換掉。我們不再用
+ *   `interruptOn`，那個蓋法沒有東西可蓋。
+ * - **一批裡有人被拒、被核准的那些靜靜消失**（`hitl.js:483-496`）。閘門改成逐次呼叫
+ *   各自判斷，沒有「一批」這個單位了。
+ */
+export interface ApprovalRegistrationPoint {
   /**
-   * 只在這個述詞為真時才中斷；省略即無條件中斷。
+   * 掛一位 pre-execute listener。
    *
-   * **`request.tool` 一定是 `undefined`。** 基座在 `afterModel` 的批次語境求值這個
-   * 述詞（`langchain@1.5.10`，`dist/agents/middleware/hitl.js:359-367` 實測），
-   * request 是現搭的：`{ toolCall, tool: undefined, state, runtime }`，`runtime` 是
-   * node 層的那個、不是某一次工具執行的。型別上 `tool` 是可選的，所以
-   * `request.tool.name` 編得過、跑起來當場炸。要看工具名就讀 `request.toolCall.name`。
+   * 依註冊順序跑，`next()` 委派給下一位，鏈底是 allow。**不呼叫 `next()` 就是把後面的
+   * 人短路掉**，那是 waterfall 刻意提供的能力。
+   *
+   * @param listener - 拿到活的那一次呼叫，回 allow / deny / ask。
+   * @returns 只撤銷這一次掛載的冪等 undo。
    */
-  readonly when?: WhenPredicate;
-}
-
-/** `interrupts` 註冊點：同工具多方標記不報錯，`when` 取 OR。 */
-export interface InterruptRegistrationPoint {
+  gate(listener: PreToolListener): () => void;
   /**
-   * 標記一個工具需要人核准。
-   *
-   * **這道閘門的保證只到建構期。** 基座把 `interruptOn` 放在 HITL middleware 的
-   * `contextSchema` 裡，執行期取的是 `{ ...options, ...runtime.context }`
-   * （`hitl.js:421`）——所以呼叫端一句 `agent.invoke(input, { context: { interruptOn: {} } })`
-   * 就把所有閘門整組換掉，不警告、不留痕跡。fold 這一側做的每一件事（工具名要存在、
-   * 缺 checkpointer 即拒絕、核准政策開關）都擋不到那條路，因為它們都是建構期的。
-   * 入口層（CLI、web）不得把使用者可控的東西直接當成 `context` 傳下去。
-   * 絆索在 `apps/harness/src/interrupt.test.ts`。
-   *
-   * @param toolName - 工具名。同一個工具被多方標記是正常的，不報錯。
-   * @param options - `reason` 給人看，`when` 省略即無條件中斷（`request.tool` 是
-   *   `undefined`，見 {@link InterruptRequirement.when}）。
-   * @returns 只撤銷這一次標記的冪等 undo。
+   * 目前掛著的 listener。
+   * @returns 依註冊順序的每一位。
    */
-  require(toolName: string, options: { reason: string; when?: WhenPredicate }): () => void;
-  /**
-   * 目前的核准標記。
-   * @returns 依註冊順序的每一筆。
-   */
-  requirements(): NamedEntry<InterruptRequirement>[];
+  listeners(): NamedEntry<PreToolListener>[];
 }
 
 /** `skills` 註冊點：同一來源路徑重複註冊報錯，路徑格式也這裡驗。 */
@@ -414,7 +407,7 @@ export interface PluginRegistry {
   readonly backend: BackendRegistrationPoint;
   readonly middleware: MiddlewareRegistrationPoint;
   readonly permissions: PermissionRegistrationPoint;
-  readonly interrupts: InterruptRegistrationPoint;
+  readonly approvals: ApprovalRegistrationPoint;
   readonly skills: SkillSourceRegistrationPoint;
   readonly memory: MemorySourceRegistrationPoint;
   readonly lifecycle: LifecycleRegistrationPoint;
@@ -479,7 +472,7 @@ export function createRegistry(): InternalPluginRegistry {
   );
   const middlewares = new AnonymousEntries<MiddlewareRegistration>();
   const denyRules = new AnonymousEntries<DenyRule>();
-  const interruptRequirements = new AnonymousEntries<InterruptRequirement>();
+  const approvalListeners = new AnonymousEntries<PreToolListener>();
   const memorySources = new AnonymousEntries<string>();
   const disposers = new AnonymousEntries<Disposer>();
   const redactRules = new AnonymousEntries<SessionTelemetryRedactRule>();
@@ -603,16 +596,12 @@ export function createRegistry(): InternalPluginRegistry {
     rules: () => [...denyRules.entries()],
   };
 
-  const interruptPoint: InterruptRegistrationPoint = {
-    require(toolName, options) {
-      const origin = requireOrigin('interrupts.require()');
-      const requirement: InterruptRequirement =
-        options.when === undefined
-          ? { toolName, reason: options.reason }
-          : { toolName, reason: options.reason, when: options.when };
-      return interruptRequirements.append(requirement, origin);
+  const approvalPoint: ApprovalRegistrationPoint = {
+    gate(listener) {
+      const origin = requireOrigin('approvals.gate()');
+      return approvalListeners.append(listener, origin);
     },
-    requirements: () => [...interruptRequirements.entries()],
+    listeners: () => [...approvalListeners.entries()],
   };
 
   const skillPoint: SkillSourceRegistrationPoint = {
@@ -680,7 +669,7 @@ export function createRegistry(): InternalPluginRegistry {
     backend: backendPoint,
     middleware: middlewarePoint,
     permissions: permissionPoint,
-    interrupts: interruptPoint,
+    approvals: approvalPoint,
     skills: skillPoint,
     memory: memoryPoint,
     lifecycle: lifecyclePoint,

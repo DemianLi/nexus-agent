@@ -175,9 +175,9 @@ function trackUndo(
       ...registry.permissions,
       deny: (paths, options) => remember(registry.permissions.deny(paths, options)),
     },
-    interrupts: {
-      ...registry.interrupts,
-      require: (toolName, options) => remember(registry.interrupts.require(toolName, options)),
+    approvals: {
+      ...registry.approvals,
+      gate: (listener) => remember(registry.approvals.gate(listener)),
     },
     skills: {
       ...registry.skills,
