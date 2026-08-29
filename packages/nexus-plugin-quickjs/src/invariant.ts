@@ -1,7 +1,7 @@
 /**
  * `@nexus/plugin-quickjs` 的不變量配套入口。
  *
- * **No runtime invariant：這個 package 在 subject 裡沒有任何屬於自己的東西可以檢，
+ * **No runtime invariant: 這個 package 在 subject 裡沒有任何屬於自己的東西可以檢，
  * 而那是射程決定的，不是逐條審過的結果。** nexus 的 `InvariantSubject` 裡只有一份
  * `SessionLog`（見 `@nexus/core` 的 `invariants.ts`），而那份日誌歸 `@nexus/core`；
  * dsh 的 `install(ctx, fail)` 收的則是整個 Cordis 匯流排，每個 package 自己發的事件都在

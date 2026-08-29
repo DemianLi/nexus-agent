@@ -9,6 +9,7 @@
   "scripts": {
     "lint": "pnpm -r run lint",
     "typecheck": "pnpm -r run typecheck",
+    "verify-package-invariants": "pnpm --filter @nexus/harness run verify-package-invariants",
     "test": "pnpm -r run test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

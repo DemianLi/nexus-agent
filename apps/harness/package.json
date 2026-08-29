@@ -17,7 +17,8 @@
     "spike:live": "tsx src/spike/cli.ts --live",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify-package-invariants": "tsx src/verify-package-invariants.ts"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

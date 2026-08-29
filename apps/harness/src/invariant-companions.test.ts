@@ -14,6 +14,12 @@
  *
  * 八個空 installer 為什麼是正確結果（subject 裡只有 `@nexus/core` 的日誌，別的包在裡面
  * 找不到屬於自己的關係），見任何一個 `packages/<name>/src/invariant.ts` 的檔頭。
+ *
+ * **底下那份九列表格不再是「有沒有漏掉一個 package」的守門人**——那件事歸
+ * [`package-invariants.test.ts`](./package-invariants.test.ts)，它自己去掃 `packages/*`，
+ * 加第十個 package 而沒補配套入口會當場紅。這個檔案守的是那份表格**列出來的那九個**，
+ * 而且守的是結構規則看不到的兩件事：specifier 是不是真的解析得到（AST 讀不出 `exports`
+ * 有沒有接對），以及 installer 跑起來的行為（誰真的掛了觀察者）。兩邊不是重複。
  */
 
 import { describe, expect, it } from 'vitest';
