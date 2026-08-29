@@ -71,16 +71,19 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
 /**
  * 把會話日誌的配套入口掛上去。
  *
- * **不在 `DEFAULT_PLUGINS` 裡，而這一點與 dsh 不同，要講清楚。** dsh 的標準組合
- * （`agent-spine-demo`）確實掛了服務加四個核心配套入口；dsh 的規矩只說「單獨掛註冊表
- * 不會裝上任何檢查」，沒說預設組合該掛什麼。我們不掛的理由是**我們這側自己的約束**：
- * `DEFAULT_PLUGINS` 刻意只有 echo 一個，那份清單的 JSDoc 明說它「不替誰決定該裝什麼」。
+ * **它在 `@nexus/harness` 的 `DEFAULT_PLUGINS` 裡**，連同另外八個配套入口——
+ * [#107](https://github.com/DemianLi/nexus-agent/issues/107) 拍板。這與 dsh 對得上：
+ * dsh 的標準組合（`agent-spine-demo`）也掛了服務加核心配套入口；它的規矩只說「單獨掛
+ * 註冊表不會裝上任何檢查」，沒說預設組合該掛什麼。
  *
- * [#104](https://github.com/DemianLi/nexus-agent/issues/104) 補上了關掉它的辦法
- * （條目層的 `disabled`，加上組裝點的 `invariants` 選擇），所以「加進去就沒得關」這個
- * 顧慮沒有了。**但這裡刻意還是不加**：改 `DEFAULT_PLUGINS` 會改變每一次 CLI 執行的行為，
- * 那是預設清單的決定，不是「定 `disabled` 的語意」這張的範圍。要加就要連著決定另外
- * 八個空 installer 加不加、以及違規往哪裡印，那要單獨一張。
+ * **進得來的前提是關得掉**：[#104](https://github.com/DemianLi/nexus-agent/issues/104)
+ * 給了條目層的 `disabled` 與組裝點的 `invariants` 選擇，所以這不是單向門。理由與代價
+ * （九個全進、每次執行多九個條目）寫在 `DEFAULT_PLUGINS` 自己的 JSDoc 上——那份清單
+ * 明說它「不替誰決定該裝什麼」，例外要在例外那邊講。
+ *
+ * **但掛上它不等於違規看得見。** 違規的去處是進入點的事：CLI 走
+ * `CreateNexusAgentOptions.onInvariantViolation` 印到 stderr，`serve.ts` 維持
+ * `createInvariantRunner` 的預設。這個檔案只負責註冊，不負責回報去處。
  *
  * @returns 註冊 `@nexus/core` 配套入口的 plugin。
  */

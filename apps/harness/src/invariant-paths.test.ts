@@ -16,7 +16,7 @@
 import type { Event } from '@nexus/wire';
 import { createWireClient } from '@nexus/wire';
 import type { NexusPlugin } from '@nexus/core';
-import { createCoreInvariantPlugin } from '@nexus/core/invariant';
+import { createEchoPlugin } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
 
 import { createCliAgent, DEFAULT_PLUGINS, runTurn } from './cli.js';
@@ -59,13 +59,14 @@ function noisyInvariantPlugin(): NexusPlugin {
 
 describe('不變量接線：CLI 那條路', () => {
   it('真的跑一輪，配套入口一條違規都不報', async () => {
-    const { agent, dispose, sessionLog, attachInvariants } = await createCliAgent({ live: false }, [
-      ...DEFAULT_PLUGINS,
-      createCoreInvariantPlugin(),
-    ]);
-    // **攔 `console.error` 而不是自己開一個陣列**：`attachInvariants` 沒有讓呼叫端換掉
-    // `onViolation` 的口，違規就是印到那裡去。一個自己宣告卻永遠不會被寫進去的陣列，
-    // 斷言它是空的等於什麼都沒驗。
+    // **不再自己補 `createCoreInvariantPlugin()`**：它已經在 `DEFAULT_PLUGINS` 裡
+    // （#107），補第二份會撞包名歸屬當場拋。
+    const { agent, dispose, sessionLog, attachInvariants } = await createCliAgent(
+      { live: false },
+      DEFAULT_PLUGINS,
+    );
+    // 這一條刻意**不**傳 `onInvariantViolation`，走 runner 的預設，因為它問的是
+    // 「有沒有誤報」而不是「印去哪裡」——預設那條路徑也得是安靜的。
     const violations: string[] = [];
     const original = console.error;
     console.error = (message: unknown) => void violations.push(String(message));
@@ -110,10 +111,11 @@ describe('不變量接線：CLI 那條路', () => {
   });
 
   it('沒有 plugin 註冊配套入口時不接線——沒有檢查就不多掛一個訂閱', async () => {
-    const { dispose, sessionLog, attachInvariants } = await createCliAgent(
-      { live: false },
-      DEFAULT_PLUGINS,
-    );
+    // **清單自己寫，不能用 `DEFAULT_PLUGINS`**：它現在掛著九個配套入口（#107），
+    // 拿它問「沒有人註冊時會怎樣」問的是另一個問題。
+    const { dispose, sessionLog, attachInvariants } = await createCliAgent({ live: false }, [
+      createEchoPlugin(),
+    ]);
     try {
       expect(attachInvariants(sessionLog)).toBeUndefined();
     } finally {
@@ -122,12 +124,26 @@ describe('不變量接線：CLI 那條路', () => {
   });
 });
 
+describe('預設清單', () => {
+  it('九個配套入口都在，而且各自認領自己的包名', async () => {
+    // #107 拍的是「九個全進」。少掛的那幾個會讓「這個 package 沒有可檢的關係」與
+    // 「這個 package 的檢查沒掛上」在診斷裡長得一模一樣，所以這裡數的是**九**。
+    const { dispose, sessionLog, attachInvariants } = await createCliAgent(
+      { live: false },
+      DEFAULT_PLUGINS,
+    );
+    try {
+      expect(attachInvariants(sessionLog)).toBeDefined();
+    } finally {
+      await dispose();
+    }
+    expect(DEFAULT_PLUGINS.filter((plugin) => plugin.name.endsWith('-invariant'))).toHaveLength(9);
+  });
+});
+
 describe('不變量接線：web 那條路', () => {
   it('接的是 pump 自己那份日誌，真的跑一輪也不誤報', async () => {
-    const built = await createCliAgent({ live: false }, [
-      ...DEFAULT_PLUGINS,
-      createCoreInvariantPlugin(),
-    ]);
+    const built = await createCliAgent({ live: false }, DEFAULT_PLUGINS);
     const violations: string[] = [];
     const original = console.error;
     console.error = (message: unknown) => void violations.push(String(message));
