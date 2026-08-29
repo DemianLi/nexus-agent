@@ -5,8 +5,13 @@
  * `apps/harness`，而且只有那一個地方。
  */
 
-export type { NexusPlugin, PluginManifest, PluginOrigin } from './plugin.js';
-export { pluginManifestSchema, parsePluginManifest, formatOrigin } from './plugin.js';
+export type { NexusPlugin, PluginEntry, PluginManifest, PluginOrigin } from './plugin.js';
+export {
+  pluginManifestSchema,
+  parsePluginManifest,
+  resolveEntries,
+  formatOrigin,
+} from './plugin.js';
 
 export type {
   AgentCheckpointer,

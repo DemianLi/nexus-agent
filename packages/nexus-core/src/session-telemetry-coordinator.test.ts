@@ -18,10 +18,9 @@ import type { NamedEntry } from './entries.js';
 /** 包一條規則成註冊表那筆的形狀，讓錯誤訊息指得出是誰掛的。 */
 function rule(
   name: string,
-  index: number,
   fn: SessionTelemetryRedactRule,
 ): NamedEntry<SessionTelemetryRedactRule> {
-  const origin: PluginOrigin = { index, name };
+  const origin: PluginOrigin = { id: `${name}#0`, name };
   return { value: fn, origin };
 }
 
@@ -121,11 +120,11 @@ describe('脫敏折疊', () => {
       log,
       sink,
       rules: () => [
-        rule('scrub', 0, (record) => ({
+        rule('scrub', (record) => ({
           ...record,
           body: { ...(record.body as object), step: 1 },
         })),
-        rule('stamp', 1, (record) => ({
+        rule('stamp', (record) => ({
           ...record,
           body: { ...(record.body as object), step: 2 },
         })),
@@ -148,7 +147,7 @@ describe('脫敏折疊', () => {
     });
 
     log.append('turn/start', { kind: 'message', text: 'sk-abc123' });
-    mounted = [rule('scrub', 0, (record) => ({ ...record, body: { redacted: true } }))];
+    mounted = [rule('scrub', (record) => ({ ...record, body: { redacted: true } }))];
     coordinator.captureNow();
 
     expect(sink.records[0]!.body).toEqual({ redacted: true });
@@ -163,7 +162,7 @@ describe('脫敏折疊', () => {
       sink,
       warn: (message) => void warnings.push(message),
       rules: () => [
-        rule('leaky-rule', 2, () => {
+        rule('leaky-rule', () => {
           throw new Error('規則自己壞了');
         }),
       ],
@@ -177,7 +176,7 @@ describe('脫敏折疊', () => {
     // fail-closed：沒有半筆送出去，連沒脫敏的原始版本都沒有。
     expect(sink.records).toHaveLength(0);
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain('plugins[2] (leaky-rule)');
+    expect(warnings[0]).toContain('leaky-rule#0 (leaky-rule)');
     expect(warnings[0]).toContain('規則自己壞了');
   });
 
@@ -190,7 +189,7 @@ describe('脫敏折疊', () => {
       sink,
       warn: () => {},
       rules: () => [
-        rule('flaky', 0, (record) => {
+        rule('flaky', (record) => {
           if (broken) throw new Error('這次不行');
           return record;
         }),
@@ -321,7 +320,7 @@ describe('交出去的是拷貝', () => {
       log,
       sink,
       rules: () => [
-        rule('mutating', 0, (record) => {
+        rule('mutating', (record) => {
           (record.body as { text: string }).text = '[改過了]';
           return record;
         }),

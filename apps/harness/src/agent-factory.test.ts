@@ -211,9 +211,26 @@ describe('createNexusAgent', () => {
 
       // 錯誤傳播路徑只有一條，訊息本身要指得出撞的是哪兩個 plugin 與哪個工具名 ——
       // `feat/harness-cli` 的端到端驗收靠的就是這幾個字串沒有在半路被吞掉。
-      expect(failure).toContain('plugins[0] (echo)');
-      expect(failure).toContain('plugins[1] (echo)');
+      expect(failure).toContain('echo#0 (echo)');
+      expect(failure).toContain('echo#1 (echo)');
       expect(failure).toContain(`"${ECHO_TOOL_NAME}"`);
+    });
+
+    it('手寫 id 那個寫法在真的工廠上成立，不只在 fixture 上', async () => {
+      // `NexusPlugin.id` 的 JSDoc 教使用者展開工廠的產物再補一個 id。**展開只對純
+      // 物件字面值成立**——哪天某個工廠改成回 class 實例、frozen 物件或 getter，
+      // `apply` 或 `name` 就會在展開時掉掉，而那份文件會變成錯的。這條測試用真的
+      // `createEchoPlugin()` 守著它；`@nexus/harness` 是唯一相依全部 plugin 的地方。
+      const failure = await createNexusAgent({
+        model: new ScriptedChatModel({ turns: [] }),
+        plugins: [
+          { ...createEchoPlugin(), id: 'echo-main' },
+          { ...createEchoPlugin({ prefix: '第二份' }), id: 'echo-second' },
+        ],
+      }).catch((error: unknown) => (error as Error).message);
+
+      expect(failure).toContain('echo-main (echo)');
+      expect(failure).toContain('echo-second (echo)');
     });
 
     it('requires 缺件 → 報錯', async () => {
@@ -247,7 +264,7 @@ describe('createNexusAgent', () => {
           model: new ScriptedChatModel({ turns: [] }),
           plugins: [createEchoPlugin(), createToolPlugin('write_file')],
         }),
-      ).rejects.toThrow(/plugins\[1\] \(provides-write_file\).*"write_file"/s);
+      ).rejects.toThrow(/provides-write_file#0 \(provides-write_file\).*"write_file"/s);
     });
 
     it('註冊到 subagent 層的工具撞到基座內建的也擋 —— 基座自己不查那一層', async () => {
@@ -277,7 +294,9 @@ describe('createNexusAgent', () => {
           model: new ScriptedChatModel({ turns: [] }),
           plugins: [createToolPlugin('start_async_task')],
         }),
-      ).rejects.toThrow(/plugins\[0\] \(provides-start_async_task\).*"start_async_task"/s);
+      ).rejects.toThrow(
+        /provides-start_async_task#0 \(provides-start_async_task\).*"start_async_task"/s,
+      );
     });
 
     it('subagent 定義自帶的工具撞到基座內建的也擋 —— 那些工具不經過 registry', async () => {

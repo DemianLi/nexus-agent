@@ -10,8 +10,8 @@
 
 import { createRegistry } from './registry.js';
 import type { InternalPluginRegistry } from './registry.js';
-import { formatOrigin, parsePluginManifest } from './plugin.js';
-import type { NexusPlugin, PluginOrigin } from './plugin.js';
+import { formatOrigin, resolveEntries } from './plugin.js';
+import type { NexusPlugin, PluginEntry, PluginOrigin } from './plugin.js';
 
 export interface LoadResult {
   /** 載入完成的 registry，接著交給 fold。 */
@@ -42,13 +42,13 @@ export async function loadPlugins(
   plugins: readonly NexusPlugin[],
   registry: InternalPluginRegistry = createRegistry(),
 ): Promise<LoadResult> {
-  const origins: PluginOrigin[] = [];
+  // **整份清單先解析完才開始跑。** 補 id 與抓重複 id 都是整份清單的性質，而且這兩種
+  // 失敗要發生在任何 `apply` 之前——已經有 plugin 掛上去之後才發現身分是壞的，那些
+  // 註冊留在 registry 上就沒有名字可以指。
+  const entries = resolveEntries(plugins);
+  const origins = entries.map((entry) => entry.origin);
 
-  for (const [index, plugin] of plugins.entries()) {
-    const manifest = parsePluginManifest(plugin, index);
-    const origin: PluginOrigin = { index, name: manifest.name };
-    origins.push(origin);
-
+  for (const { plugin, origin } of entries) {
     const undos: (() => void)[] = [];
     const tracked = trackUndo(registry, undos);
     const leave = registry.enter(origin);
@@ -73,7 +73,7 @@ export async function loadPlugins(
   }
 
   try {
-    assertRequires(plugins, origins, registry);
+    assertRequires(entries, registry);
   } catch (error) {
     // `requires` 缺件跟 `apply` 拋錯同一個道理：載入沒成功，呼叫端拿不到 `dispose`。
     await disposeAll(registry).catch(() => {});
@@ -193,15 +193,9 @@ function trackUndo(
  * 只能是之後：`requires` 明文不排序，清單裡靠前的 plugin 需要的能力可以由靠後的
  * plugin 提供。
  */
-function assertRequires(
-  plugins: readonly NexusPlugin[],
-  origins: readonly PluginOrigin[],
-  registry: InternalPluginRegistry,
-): void {
+function assertRequires(entries: readonly PluginEntry[], registry: InternalPluginRegistry): void {
   const missing: string[] = [];
-  for (const [index, plugin] of plugins.entries()) {
-    const origin = origins[index];
-    if (origin === undefined) continue;
+  for (const { plugin, origin } of entries) {
     for (const capability of plugin.requires ?? []) {
       if (!registry.capabilities.has(capability)) {
         missing.push(`${formatOrigin(origin)} 需要能力 "${capability}"`);
