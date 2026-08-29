@@ -102,23 +102,55 @@ function deepFreeze<T>(value: T): T {
   return Object.freeze(value);
 }
 
+/** 日誌的觀察者。**同步呼叫，在事件已經進到日誌之後**。 */
+export type SessionLogListener = (event: SessionEvent) => void;
+
+/** 建一份日誌時可以換掉的東西。 */
+export interface SessionLogOptions {
+  /**
+   * 某個 listener 拋錯或 reject 時往哪裡講。省略即 `console.warn`。
+   *
+   * 這是一個縫而不是寫死 `console`，因為「listener 拋了但日誌沒事」這件事**只能靠它
+   * 驗**——圍堵成功的外顯就是這一行 warn，沒有它測試只能斷言「沒拋」，斷言不到
+   * 「有被記下來」。
+   */
+  readonly onListenerError?: (message: string) => void;
+}
+
 /**
  * 一個 session 一份。
  *
- * **這個 class 沒有觀察者，是刻意的。** dsh 的 `append` 在推進日誌時同步叫
- * `session/event` 的 callbacks，所以它需要一道重入防護
- * （`session append cannot reenter while another append is being published`）。
- * 這一版沒有任何東西會回呼，重入不可能發生，加一道測不到的防護不如把話寫在這裡：
- * **[#89](https://github.com/DemianLi/nexus-agent/issues/89) 接遙測協調器、
- * 讓 append 開始同步回呼的那一刻，重入防護要跟著那次改動一起進來**，而且順序是
- * 「先算好 callbacks → 推進日誌 → 才回呼」，讓觀察者看到的日誌裡已經有這一筆。
+ * **`append` 會同步回呼觀察者，所以它帶著一道重入防護。** 順序照 dsh 的
+ * `Session.append`（`references/deepseek-harness/packages/core/session/src/index.ts:614-654`）：
+ * **先驗 → 先算好 listener 清單 → 推進日誌 → 才回呼**。觀察者被叫到的時候，日誌裡
+ * 已經有這一筆了——遙測協調器讀 `event.seq` 當去重鍵，看到的必須是已定案的日誌。
+ *
+ * 三道防護，三個不同的東西：
+ *
+ * 1. **重入**——回呼裡再 `append` 直接拋。listener 清單是在推進前就凍住的，回呼中途
+ *    插進來的那一筆會拿到一份算舊了的清單、而且會讓「誰看到什麼」變成呼叫順序的
+ *    函數。dsh 拋的是 `session append cannot reenter while another append is being
+ *    published`，同一件事。
+ * 2. **圍堵**——每個 listener 各自 try / catch，拋錯只換來一行 warn。遙測是盡力而為的
+ *    旁路，**不能有能力扳倒 agent loop**。
+ * 3. **不中斷**——前一個 listener 拋錯不影響後面的。照 dsh 的
+ *    `invokeContainedSessionObservers`：一個訂閱者壞掉不該餓死其他訂閱者。
  */
 export class SessionLog {
   readonly #sessionId: string;
   readonly #events: SessionEvent[] = [];
+  readonly #listeners = new Set<SessionLogListener>();
+  readonly #onListenerError: (message: string) => void;
+  /** 正在回呼中。重入防護唯一的狀態。 */
+  #publishing = false;
 
-  constructor(sessionId: string) {
+  constructor(sessionId: string, options: SessionLogOptions = {}) {
     this.#sessionId = sessionId;
+    this.#onListenerError =
+      options.onListenerError ??
+      ((message) => {
+        console.warn(message);
+      });
   }
 
   /** 這份日誌屬於誰。遙測的 `session.id` 就是它。 */
@@ -137,21 +169,72 @@ export class SessionLog {
   }
 
   /**
+   * 訂閱後續的事件。**不補發歷史**——訂閱之前的那些要自己讀 {@link events}，
+   * 協調器就是這樣接上一份已經有內容的日誌的。
+   *
+   * @param listener - 每筆事件進到日誌之後被同步呼叫；拋錯會被圍堵成一行 warn。
+   * @returns 只退訂這一次的冪等函式。
+   */
+  subscribe(listener: SessionLogListener): () => void {
+    this.#listeners.add(listener);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      this.#listeners.delete(listener);
+    };
+  }
+
+  /**
    * 記一筆，回傳記進去的那一筆。
    *
    * @throws `data` 帶了 JSON 表達不出來的東西（class 實例、函式、`undefined`、
    *   `NaN`、循環參考）——**當場拋，日誌不變**。
+   * @throws 在某個 listener 的回呼裡被呼叫——重入防護，見 class 註解。
    */
   append<T extends SessionEventType>(type: T, data: SessionEventMap[T]): SessionEvent<T> {
     // 先驗再推進：拷不動的話這一筆整個不算，日誌不會留下半筆。
     const snapshot = snapshotJsonValue(data, `${type} 的 data`, new Set()) as SessionEventMap[T];
+    if (this.#publishing) {
+      throw new Error(
+        `會話 "${this.#sessionId}" 的 append 不能在另一次 append 的回呼裡重入` +
+          `（想記的是 "${type}"）。要在觀察到事件之後再記一筆，把它排到下一個 tick。`,
+      );
+    }
     const event = deepFreeze<SessionEvent<T>>({
       type,
       seq: this.#events.length,
       time: Date.now(),
       data: snapshot,
     });
+    // 清單先凍住：回呼期間的訂閱／退訂不影響這一輪看得到誰。
+    const listeners = [...this.#listeners];
     this.#events.push(event);
+    if (listeners.length === 0) return event;
+    this.#publishing = true;
+    try {
+      for (const listener of listeners) this.#publish(listener, event);
+    } finally {
+      this.#publishing = false;
+    }
     return event;
+  }
+
+  /** 叫一個 listener，把它的同步例外與非同步 reject 都收成一行 warn。 */
+  #publish(listener: SessionLogListener, event: SessionEvent): void {
+    try {
+      const returned: unknown = listener(event);
+      // 型別上 listener 回 void，但 JS 那側塞得進 async 函式——不接住的話它的 reject
+      // 會變成 unhandled rejection，在 Node 預設設定下是直接殺掉整個行程。
+      void Promise.resolve(returned).catch((error: unknown) => {
+        this.#onListenerError(
+          `會話 "${this.#sessionId}" 的 ${event.type} 觀察者 reject 了：${String(error)}`,
+        );
+      });
+    } catch (error: unknown) {
+      this.#onListenerError(
+        `會話 "${this.#sessionId}" 的 ${event.type} 觀察者拋了：${String(error)}`,
+      );
+    }
   }
 }

@@ -1,5 +1,5 @@
 /**
- * 九個註冊點的規則：同層報錯、跨層遮蔽、錯誤訊息指得出是誰。
+ * 每個註冊點的規則：同層報錯、跨層遮蔽、錯誤訊息指得出是誰。
  *
  * 對應 [#29](https://github.com/DemianLi/nexus-agent/issues/29) 的「註冊表原語」驗收。
  * 判準是能不能只靠 registry 的輸入輸出斷言——規則真的產生效果（權限真的擋住、
@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { createRegistry } from './registry.js';
-import { fakeBackend, fakeMiddleware, fakeSubAgent, fakeTool } from './fixtures.js';
+import { fakeBackend, fakeMiddleware, fakeSink, fakeSubAgent, fakeTool } from './fixtures.js';
 import type { PluginOrigin } from './plugin.js';
 
 const first: PluginOrigin = { index: 0, name: 'alpha' };
@@ -379,5 +379,74 @@ describe('tools.own', () => {
     expect([...registry.tools.own('researcher').keys()]).toEqual(['grep']);
     expect([...registry.tools.effective('researcher').keys()]).toEqual(['search', 'grep']);
     expect(registry.tools.own('writer').size).toBe(0);
+  });
+});
+
+describe('telemetry 註冊點', () => {
+  it('脫敏規則依註冊順序排，每一條記得是誰掛的', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    registry.telemetry.redact((record) => record);
+    leaveFirst();
+
+    const leaveSecond = registry.enter(second);
+    registry.telemetry.redact((record) => record);
+    leaveSecond();
+
+    expect(registry.telemetry.rules().map((entry) => entry.origin.name)).toEqual(['alpha', 'mcp']);
+  });
+
+  it('撤銷是逐條的，撤掉一條不影響另一條', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    const undo = registry.telemetry.redact((record) => record);
+    registry.telemetry.redact((record) => record);
+    leave();
+
+    undo();
+    undo();
+    expect(registry.telemetry.rules()).toHaveLength(1);
+  });
+
+  it('第二個後端掛不上去，訊息同時指名兩個 plugin', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    registry.telemetry.useSink(fakeSink());
+    leaveFirst();
+
+    const leaveSecond = registry.enter(second);
+    expect(() => registry.telemetry.useSink(fakeSink())).toThrow(
+      /plugins\[0\] \(alpha\)[\s\S]*plugins\[1\] \(mcp\)/,
+    );
+    leaveSecond();
+  });
+
+  it('撤掉後端之後那個位子是真的空的，別人掛得上', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    const undo = registry.telemetry.useSink(fakeSink());
+    leaveFirst();
+
+    undo();
+    expect(registry.telemetry.sink()).toBeUndefined();
+
+    const leaveSecond = registry.enter(second);
+    registry.telemetry.useSink(fakeSink());
+    leaveSecond();
+    expect(registry.telemetry.sink()?.origin.name).toBe('mcp');
+  });
+
+  it('沒掛後端時 sink() 是 undefined——披露那一層要靠它回答', () => {
+    expect(createRegistry().telemetry.sink()).toBeUndefined();
+  });
+
+  it('兩個方法都只能在 apply 裡呼叫', () => {
+    const registry = createRegistry();
+    expect(() => registry.telemetry.redact((record) => record)).toThrow(
+      'telemetry.redact()只能在 plugin 的 apply 裡呼叫',
+    );
+    expect(() => registry.telemetry.useSink(fakeSink())).toThrow(
+      'telemetry.useSink()只能在 plugin 的 apply 裡呼叫',
+    );
   });
 });

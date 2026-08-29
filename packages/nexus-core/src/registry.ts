@@ -6,9 +6,10 @@
  * `permissions` / `interrupts`）沒有名字可撞，走匿名追加。折疊成
  * `createDeepAgent` 參數的部分在 {@link ./fold.ts}。
  *
- * 外加一條 {@link LifecycleRegistrationPoint}——它**不是第十個註冊點**，因為它不折進
- * `createDeepAgent` 的任何參數。九個註冊點回答「這個 agent 由什麼組成」，lifecycle
- * 回答「這些東西怎麼收掉」，兩者正交。
+ * 外加兩條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
+ * {@link LifecycleRegistrationPoint} 回答「這些東西怎麼收掉」，
+ * {@link TelemetryRegistrationPoint} 回答「這個會話發生的事往哪裡送、送之前怎麼洗」。
+ * 九個註冊點回答的是「這個 agent 由什麼組成」，三者正交。
  */
 
 import type { StructuredTool } from '@langchain/core/tools';
@@ -18,6 +19,7 @@ import { AnonymousEntries, CapabilitySet, NamedEntries } from './entries.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
+import type { SessionTelemetryRedactRule, SessionTelemetrySink } from './session-telemetry.js';
 
 /**
  * 註冊層的定址。`undefined` 是全域（root agent），字串是那個名字的 subagent。
@@ -316,6 +318,49 @@ export interface LifecycleRegistrationPoint {
   takeDisposers(): NamedEntry<Disposer>[];
 }
 
+/**
+ * `telemetry` 通道：掛遙測後端，以及**送出去之前**的脫敏規則。
+ *
+ * **它與九個註冊點不同軸**，理由跟 lifecycle 一樣：產物不進 `createDeepAgent` 的參數。
+ * 遙測是會話事件的第二個出口，走的不是 agent 那條線。
+ *
+ * **`WIRE_CHANNELS` 那份下行白名單擋不到這條路。** 那是 web 傳輸的邊界，遙測是另一個
+ * 出口——脫敏規則要自己長一份，不能靠 wire 那份代勞。
+ *
+ * **與 dsh 的偏離**（AGENTS.md 的偏離規則）：dsh 的後端是 Cordis `Service`
+ * （`ctx.sessionTelemetry`，重複註冊由 Cordis 拋），脫敏是 waterfall 事件
+ * `session-telemetry/record`。**我們沒有 service 註冊也沒有事件匯流排**，`deepagents` /
+ * LangChain JS / LangGraph JS 三者都不提供可掛任意具名事件的 waterfall。退到最接近的：
+ * 一個註冊點，`useSink` 用具名表擋重複（等價於 Service 的重複拋），`redact` 用依序折疊
+ * 取代 waterfall。折疊丟掉的是「不呼叫 `next()` 就截斷底下所有規則」那個能力，**刻意
+ * 丟的**——理由見 {@link ./session-telemetry.ts | SessionTelemetryRedactRule}。
+ */
+export interface TelemetryRegistrationPoint {
+  /**
+   * 掛一條脫敏規則。多條依**註冊順序**折疊：前一條的回傳是後一條的輸入。
+   * @param rule - 同步的轉換，拋錯會讓那一筆記錄被扣住（fail-closed）。
+   * @returns 只撤銷這一條的冪等 undo。
+   */
+  redact(rule: SessionTelemetryRedactRule): () => void;
+  /**
+   * 目前掛著的脫敏規則。協調器每次捕獲都現讀這個。
+   * @returns 依註冊順序的每一條，帶著是誰掛的。
+   */
+  rules(): NamedEntry<SessionTelemetryRedactRule>[];
+  /**
+   * 掛遙測後端。**一個 registry 只收一個**——兩個後端就是兩份出境資料，而披露那一層
+   * 只講得出一種策略。
+   * @param sink - 後端實例。
+   * @returns 只撤銷這一次掛載的冪等 undo。
+   */
+  useSink(sink: SessionTelemetrySink): () => void;
+  /**
+   * 目前掛著的後端。**披露那一層要靠它回答「有沒有東西在送」**。
+   * @returns 掛著的那個，或沒掛時的 `undefined`。
+   */
+  sink(): NamedEntry<SessionTelemetrySink> | undefined;
+}
+
 export interface PluginRegistry {
   readonly tools: ToolRegistrationPoint;
   readonly subagents: SubAgentRegistrationPoint;
@@ -327,6 +372,7 @@ export interface PluginRegistry {
   readonly skills: SkillSourceRegistrationPoint;
   readonly memory: MemorySourceRegistrationPoint;
   readonly lifecycle: LifecycleRegistrationPoint;
+  readonly telemetry: TelemetryRegistrationPoint;
 }
 
 /**
@@ -389,6 +435,16 @@ export function createRegistry(): InternalPluginRegistry {
   const interruptRequirements = new AnonymousEntries<InterruptRequirement>();
   const memorySources = new AnonymousEntries<string>();
   const disposers = new AnonymousEntries<Disposer>();
+  const redactRules = new AnonymousEntries<SessionTelemetryRedactRule>();
+  // 具名表配一個固定的 key：唯一性與 undo 都不必另外寫，重複掛載直接撞在這裡。
+  const SINK_KEY = 'sink';
+  const sinks = new NamedEntries<SessionTelemetrySink>(
+    (_key, existing, incoming) =>
+      new Error(
+        `已經有遙測後端了：${formatOrigin(existing)} 掛過，${formatOrigin(incoming)} 又掛一次。` +
+          `一個 agent 只能有一個後端——兩個就是兩份出境資料，而披露只講得出一種策略。`,
+      ),
+  );
 
   let current: PluginOrigin | undefined;
   function requireOrigin(what: string): PluginOrigin {
@@ -530,6 +586,19 @@ export function createRegistry(): InternalPluginRegistry {
     sources: () => [...memorySources.entries()].map((entry) => entry.value),
   };
 
+  const telemetryPoint: TelemetryRegistrationPoint = {
+    redact(rule) {
+      const origin = requireOrigin('telemetry.redact()');
+      return redactRules.append(rule, origin);
+    },
+    rules: () => [...redactRules.entries()],
+    useSink(sink) {
+      const origin = requireOrigin('telemetry.useSink()');
+      return sinks.insert(SINK_KEY, sink, origin);
+    },
+    sink: () => sinks.get(SINK_KEY),
+  };
+
   const lifecyclePoint: LifecycleRegistrationPoint = {
     onDispose(dispose) {
       const origin = requireOrigin('lifecycle.onDispose()');
@@ -550,6 +619,7 @@ export function createRegistry(): InternalPluginRegistry {
     skills: skillPoint,
     memory: memoryPoint,
     lifecycle: lifecyclePoint,
+    telemetry: telemetryPoint,
     enter(origin) {
       if (current !== undefined) {
         throw new Error(

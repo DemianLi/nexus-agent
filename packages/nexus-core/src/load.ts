@@ -124,6 +124,10 @@ async function disposeAll(registry: InternalPluginRegistry): Promise<void> {
  * `lifecycle` 也在追蹤範圍，但它撤銷的意思不同：撤掉的是**登記**，不是跑那個清理。
  * 回滾期的資源釋放由 plugin 自己的 `try` / `catch` 負責——理由見
  * {@link ../registry.ts} 的 `LifecycleRegistrationPoint`。
+ *
+ * `telemetry` 兩個方法都要追：`useSink` 漏了會讓回滾過的 plugin 佔著那個唯一的後端
+ * 位子，後面的 plugin 掛不上去卻看不出為什麼；`redact` 漏了會留下一條沒有主人的
+ * 脫敏規則，而它是在熱路徑上同步跑的。
  */
 function trackUndo(
   registry: InternalPluginRegistry,
@@ -174,6 +178,11 @@ function trackUndo(
     lifecycle: {
       ...registry.lifecycle,
       onDispose: (dispose) => remember(registry.lifecycle.onDispose(dispose)),
+    },
+    telemetry: {
+      ...registry.telemetry,
+      redact: (rule) => remember(registry.telemetry.redact(rule)),
+      useSink: (sink) => remember(registry.telemetry.useSink(sink)),
     },
   };
 }
