@@ -84,8 +84,5 @@ export type {
 export type { InvariantFailure } from './invariants.js';
 export { createInvariantRunner, InvariantError } from './invariants.js';
 
-export {
-  createSessionInvariantPlugin,
-  SESSION_INVARIANT_PACKAGE,
-  sessionInvariant,
-} from './session-invariant.js';
+// 配套入口（`./invariant`）刻意**不從主入口再匯出**，形狀照 dsh：那邊每個 package 的
+// 配套入口都只掛在 `<pkg>/invariant` 這個子路徑上，import 主入口不會把它拖進來。

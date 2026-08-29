@@ -13,7 +13,7 @@
  */
 
 import type { NexusPlugin } from '@nexus/core';
-import { createSessionInvariantPlugin } from '@nexus/core';
+import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import { createEchoPlugin } from '@nexus/plugin-echo';
 
-export default [createEchoPlugin(), createSessionInvariantPlugin()] satisfies NexusPlugin[];
+export default [createEchoPlugin(), createCoreInvariantPlugin()] satisfies NexusPlugin[];
