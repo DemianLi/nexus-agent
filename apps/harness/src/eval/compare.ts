@@ -32,7 +32,7 @@ import { isRetryableRateLimit } from '../live-model.js';
 import { BENCHMARK, type BenchmarkCase } from './dataset.js';
 import { runBenchmarkCase } from './runner.js';
 import { scoreCase, type CaseScore } from './scorers.js';
-import type { ModelTier } from './tiers.js';
+import type { ModelUnderTest } from './model-under-test.js';
 
 /** 一次執行失敗的分類。**分開列，因為要做的事不同。** */
 export type FailureReason =
@@ -101,19 +101,25 @@ export type TierOutcome =
       readonly seconds: number;
     };
 
-/** 一個橫階跑完之後留下的東西。 */
-export interface TierReport {
-  readonly tier: ModelTier;
+/**
+ * 一個橫階跑完之後留下的東西。
+ *
+ * **泛型是為了讓尺寸留在呼叫端。** 這一層只需要 {@link ModelUnderTest}（名字加 id），
+ * 但尺寸比較的報表要印參數量、選型調查刻意沒有參數量 —— 參數化之後兩邊各自拿回
+ * 自己那個型別，runner 一格都不必知道。
+ */
+export interface TierReport<T extends ModelUnderTest = ModelUnderTest> {
+  readonly tier: T;
   readonly outcomes: readonly TierOutcome[];
 }
 
-export interface CompareOptions {
+export interface CompareOptions<T extends ModelUnderTest = ModelUnderTest> {
   /** 拿 model id 換一個 model。真的比較時是 `createLiveModel`，測試時是假模型。 */
   readonly createModel: (modelId: string) => AgentModel;
   /** 每題重複幾次。預設 1。 */
   readonly samples?: number;
   /** 每跑完一次就回報一次，讓呼叫端邊跑邊印 —— 一輪比較是分鐘級的。 */
-  readonly onOutcome?: (tier: ModelTier, outcome: TierOutcome) => void;
+  readonly onOutcome?: (tier: T, outcome: TierOutcome) => void;
   /** 要跑的題目。預設整份 {@link BENCHMARK}。 */
   readonly cases?: readonly BenchmarkCase[];
   /** 迴圈上限。預設 {@link EVAL_RECURSION_LIMIT}。 */
@@ -129,7 +135,10 @@ export interface CompareOptions {
  * @param options - 模型工廠與重複次數。
  * @returns 這一階每次執行的結果，依「題目 × 取樣」的順序。
  */
-export async function runTier(tier: ModelTier, options: CompareOptions): Promise<TierReport> {
+export async function runTier<T extends ModelUnderTest>(
+  tier: T,
+  options: CompareOptions<T>,
+): Promise<TierReport<T>> {
   const cases = options.cases ?? BENCHMARK;
   const samples = options.samples ?? 1;
   const outcomes: TierOutcome[] = [];
@@ -156,21 +165,29 @@ export async function runTier(tier: ModelTier, options: CompareOptions): Promise
  * @param options - 模型工廠與重複次數。
  * @returns 每一階的報告，順序與 `tiers` 相同。
  */
-export async function compareTiers(
-  tiers: readonly ModelTier[],
-  options: CompareOptions,
-): Promise<readonly TierReport[]> {
-  const reports: TierReport[] = [];
+export async function compareTiers<T extends ModelUnderTest>(
+  tiers: readonly T[],
+  options: CompareOptions<T>,
+): Promise<readonly TierReport<T>[]> {
+  const reports: TierReport<T>[] = [];
   for (const tier of tiers) {
     reports.push(await runTier(tier, options));
   }
   return reports;
 }
 
+/**
+ * 一次執行真正需要的設定。
+ *
+ * **刻意把 `onOutcome` 排除在外**：只有那一格帶著呼叫端的模型型別，而函式參數是逆變的
+ * —— 留著它，`CompareOptions<T>` 就傳不進這個吃 `ModelUnderTest` 的函式。
+ */
+type RunOnceOptions = Omit<CompareOptions, 'onOutcome'>;
+
 async function runOnce(
-  tier: ModelTier,
+  tier: ModelUnderTest,
   testCase: BenchmarkCase,
-  options: CompareOptions,
+  options: RunOnceOptions,
 ): Promise<TierOutcome> {
   const started = Date.now();
   const deadlineMs = options.deadlineMs ?? EVAL_DEADLINE_MS;
@@ -282,8 +299,8 @@ function* causeChain(error: unknown): Generator<object> {
 }
 
 /** 一個橫階的彙總。**只對 `scored` 那些算。** */
-export interface TierSummary {
-  readonly tier: ModelTier;
+export interface TierSummary<T extends ModelUnderTest = ModelUnderTest> {
+  readonly tier: T;
   /** 真的評到分的次數。 */
   readonly scored: number;
   /** 各類失敗的次數。沒有的類別不會出現。 */
@@ -314,6 +331,16 @@ export interface TierSummary {
    * 那是「這條路免費」與「我們不知道」的差別（見 {@link BenchmarkRun.usage}）。
    */
   readonly totalTokens?: Spread;
+  /**
+   * 單次執行的秒數，平均與全距。**只算評到分的那些。**
+   *
+   * 失敗的執行不進來是刻意的：逾時那一筆恆等於上限、限流那一筆量的是我們自己的退避，
+   * 兩個都不是「這個模型跑一題要多久」。
+   *
+   * 這一欄同時是**限流的風險指標** —— 快的那幾個每秒燒掉的 token 最多，最先撞上端點的
+   * 每分鐘配額（#85 第 4 條）。看到某一階又快又滿是 `throttled`，先懷疑跑法。
+   */
+  readonly seconds?: Spread;
   /** 有回報 `usage` 的執行次數。跟 {@link scored} 不一定相等。 */
   readonly costed: number;
 }
@@ -327,12 +354,35 @@ export interface Spread {
 }
 
 /**
+ * 把一份報告收窄到某幾題。
+ *
+ * **報表要能同時印「全部」與「只有難題」兩組數字**，而那兩組必須來自同一次執行 ——
+ * 分兩輪跑的話取樣不同，差異就分不出是題目造成的還是抽樣造成的。所以是跑一次、切兩次。
+ *
+ * 失敗的執行一起帶過來（它們也有 `caseId`），這樣「這個模型是在難題上掛的」讀得出來。
+ *
+ * @param report - {@link runTier} 的產物。
+ * @param caseIds - 要留下的題目 id。
+ */
+export function restrictTo<T extends ModelUnderTest>(
+  report: TierReport<T>,
+  caseIds: ReadonlySet<string>,
+): TierReport<T> {
+  return {
+    tier: report.tier,
+    outcomes: report.outcomes.filter((outcome) =>
+      caseIds.has(outcome.kind === 'scored' ? outcome.score.caseId : outcome.caseId),
+    ),
+  };
+}
+
+/**
  * 把一階的執行結果收成一行報表。
  *
  * @param report - {@link runTier} 的產物。
  * @returns 彙總。失敗的執行**不會**被當成零分平均進去。
  */
-export function summarize(report: TierReport): TierSummary {
+export function summarize<T extends ModelUnderTest>(report: TierReport<T>): TierSummary<T> {
   const scored = report.outcomes.filter(
     (outcome): outcome is Extract<TierOutcome, { kind: 'scored' }> => outcome.kind === 'scored',
   );
@@ -357,6 +407,10 @@ export function summarize(report: TierReport): TierSummary {
     ),
     ...spreadOf('mentions', present(scored.map((o) => o.score.mentions))),
     ...spreadOf('totalTokens', costs),
+    ...spreadOf(
+      'seconds',
+      scored.map((o) => o.seconds),
+    ),
     costed: costs.length,
   };
 }
