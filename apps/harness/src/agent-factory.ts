@@ -31,6 +31,7 @@
  */
 
 import {
+  assertInvariantSelection,
   createInvariantRunner,
   foldRegistry,
   formatOrigin,
@@ -40,6 +41,7 @@ import {
   type AgentModel,
   type AgentStore,
   type ApprovalPolicy,
+  type InvariantSelection,
   type NexusPlugin,
   type PluginRegistry,
   type SessionLog,
@@ -87,6 +89,18 @@ export interface CreateNexusAgentOptions {
    * 換算是 `recursionLimit = 2 × 模型輪數 + 2`（模型一輪、工具一輪各算一個 super-step）。
    */
   readonly recursionLimit?: number;
+  /**
+   * 哪些 package 的不變量檢查要真的裝上去。省略即全裝。
+   *
+   * **這是次要的那個開關。** 條目層的 {@link NexusPlugin.disabled} 才是主要答案：一個配套
+   * 入口 plugin 對一個 package 名，關掉那個條目就等於關掉那個 package 的檢查，而且
+   * 錯誤訊息裡指得出是誰。這裡收的 selection 補的是條目層表達不了的兩件事——`enabled:
+   * false` 這個總開關，以及跨多個 package 的 regex 樣式。
+   *
+   * **原樣轉給 `createInvariantRunner`，這裡不加任何語意**：驗證與過濾規則只有
+   * {@link InvariantSelection} 那一份。
+   */
+  readonly invariants?: InvariantSelection;
 }
 
 /**
@@ -144,14 +158,18 @@ export type NexusAgentHandle = Awaited<ReturnType<typeof createNexusAgent>>;
  *
  * @param options - 清單，加上組裝點自有的那些。
  * @returns 建好的 agent 與收掉它的方法。
- * @throws 清單載入失敗（重名、`requires` 缺件、`apply` 拋錯）、fold 的前置條件不成立，
- *   或基座自己在建構時擋下這份組裝——三種都在載入期發生，不會拖到跑起來才炸。
+ * @throws 清單載入失敗（重名、`requires` 缺件、`apply` 拋錯）、`invariants` 的 pattern 不合法、
+ *   fold 的前置條件不成立，或基座自己在建構時擋下這份組裝——四種都在載入期發生，
+ *   不會拖到跑起來才炸。
  */
 export async function createNexusAgent(options: CreateNexusAgentOptions) {
   const { registry, dispose } = await loadPlugins(options.plugins);
 
   try {
     assertNoBaseToolNameCollision(registry);
+    // 選擇的合法性在**這裡**驗，不是等接線時才驗：runner 是每一份會話日誌各建一個的，
+    // 壞掉的 regex 預設會拖到第一輪對話才炸，那不是組裝失敗該出現的地方。
+    if (options.invariants !== undefined) assertInvariantSelection(options.invariants);
 
     const params = foldRegistry(registry, {
       defaultBackend: options.backend ?? new StateBackend(),
@@ -212,10 +230,12 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * 把一份會話日誌接上註冊著的不變量配套入口。**沒有人註冊時回 `undefined`**——
        * 同 `attachTelemetry` 的理由：沒有檢查就不要在熱路徑上多掛一個訂閱。
        *
-       * **過濾器（`enabled` / allowlist / blocklist）目前只在 runner 那一層存在，
-       * 這裡沒有把它們接出來。** 現在選擇的粒度就是「清單裡加不加那個配套入口
-       * plugin」，那已經夠用；真的需要在不改清單的前提下開關，再把它接到組裝點的
-       * options 上。
+       * 過濾器（`enabled` / allowlist / blocklist）從 {@link CreateNexusAgentOptions.invariants}
+       * 來，**原樣轉下去**。沒給就是全裝。
+       *
+       * **`companions.length === 0` 這一條擋在過濾之前，不是之後**：這裡問的是「有沒有
+       * 人註冊」，而不是「過濾完還剩幾個」。過濾成空集合是一個有效的選擇結果，runner
+       * 照樣要接（它擁有訂閱與失敗語意），只是一個檢查都不裝。
        *
        * @param log - 要觀察的日誌。
        * @returns 收掉這一次接線的函式，或沒有配套入口時的 `undefined`。
@@ -223,7 +243,11 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       attachInvariants(log: SessionLog): (() => void) | undefined {
         const companions = registry.invariants.companions();
         if (companions.length === 0) return undefined;
-        return createInvariantRunner({ log, companions });
+        return createInvariantRunner({
+          log,
+          companions,
+          ...(options.invariants !== undefined && { selection: options.invariants }),
+        });
       },
       async dispose() {
         // 遙測先收：後端很可能是某個 plugin 開的，plugin 的 disposer 一跑它就沒了，

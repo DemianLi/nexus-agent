@@ -5,6 +5,9 @@
  * 測試的重點**，不只是「有沒有 id」：補出來的 id 對「清單裡多一個別的 plugin」是穩的，
  * 對「多一個同名的 plugin」不是——兩邊都寫成測試，因為只寫穩的那半會讓人以為它是
  * 一個可以存下來的識別，而它不是（見 `PluginOrigin` 的 JSDoc）。
+ *
+ * `disabled` 在這一層只有一件事要驗，而它是整組裡最容易寫壞的那件：**編號在停用之前
+ * 就發完了**。要不要跑是載入那一層的事。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -15,6 +18,11 @@ import type { NexusPlugin } from './plugin.js';
 /** 清單裡一次帶著手寫 id 的掛載。**這就是文件裡給使用者的寫法**，不是測試專用的捷徑。 */
 function withId(plugin: NexusPlugin, id: string): NexusPlugin {
   return { ...plugin, id };
+}
+
+/** 關掉的一次掛載，寫法同上。 */
+function off(plugin: NexusPlugin): NexusPlugin {
+  return { ...plugin, disabled: true };
 }
 
 const noop = (): void => {};
@@ -95,6 +103,43 @@ describe('射程', () => {
     const pinned = withId(echo, 'echo-main');
     expect(ids([pinned])).toEqual(['echo-main']);
     expect(ids([fakePlugin('echo', noop), pinned])).toEqual(['echo#0', 'echo-main']);
+  });
+});
+
+describe('停用', () => {
+  it('解析成 entry.disabled，沒寫就是 false', () => {
+    const entries = resolveEntries([off(fakePlugin('mcp', noop)), fakePlugin('echo', noop)]);
+    expect(entries.map((entry) => entry.disabled)).toEqual([true, false]);
+  });
+
+  it('關掉的條目照樣在回傳裡，照樣有 id——那是它與「把這行刪掉」的差別', () => {
+    const entries = resolveEntries([off(fakePlugin('mcp', noop))]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.origin).toEqual({ id: 'mcp#0', name: 'mcp' });
+  });
+
+  it('**關掉一個不會讓別人的序號位移**——編號在停用之前就發完了', () => {
+    // 這一條是這組裡唯一擋得住「先過濾再編號」那個寫法的：底下每一條它都會通過，
+    // 只有這裡會紅。位移的後果是 `disabled` 一開一關，錯誤訊息裡的指名整批換人。
+    const plugins = [fakePlugin('mcp', noop), fakePlugin('mcp', noop), fakePlugin('mcp', noop)];
+    expect(ids(plugins)).toEqual(['mcp#0', 'mcp#1', 'mcp#2']);
+
+    const middleOff = [plugins[0]!, off(plugins[1]!), plugins[2]!];
+    expect(ids(middleOff)).toEqual(['mcp#0', 'mcp#1', 'mcp#2']);
+  });
+
+  it('關掉的條目照樣佔住手寫 id，重複還是報錯', () => {
+    const plugins = [
+      off(withId(fakePlugin('mcp', noop), 'mcp-github')),
+      withId(fakePlugin('mcp', noop), 'mcp-github'),
+    ];
+    expect(() => resolveEntries(plugins)).toThrow('"mcp-github"');
+  });
+
+  it('只收字面布林——`disabled: string` 在 manifest 那一層就被擋下', () => {
+    // 不驗的話這個寫法是真值，plugin 靜靜地不跑而且沒有任何訊息。
+    const sneaky = { ...fakePlugin('mcp', noop), disabled: 'false' } as unknown as NexusPlugin;
+    expect(() => resolveEntries([sneaky])).toThrow(/plugins\[0\][\s\S]*disabled/);
   });
 });
 

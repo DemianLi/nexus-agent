@@ -46,10 +46,10 @@ describe('loadPlugins', () => {
       fakePlugin('mcp', (registry) => {
         registry.tools.register(fakeTool(`${server}_search`));
       });
-    const { registry, origins } = await loadPlugins([mcp('github'), mcp('linear')]);
-    expect(origins.map((o) => o.name)).toEqual(['mcp', 'mcp']);
+    const { registry, entries } = await loadPlugins([mcp('github'), mcp('linear')]);
+    expect(entries.map((entry) => entry.origin.name)).toEqual(['mcp', 'mcp']);
     // **id 才是「哪一次掛載」的答案**，name 兩個都一樣。
-    expect(origins.map((o) => o.id)).toEqual(['mcp#0', 'mcp#1']);
+    expect(entries.map((entry) => entry.origin.id)).toEqual(['mcp#0', 'mcp#1']);
     expect(registry.tools.resolve('github_search')).toBeDefined();
     expect(registry.tools.resolve('linear_search')).toBeDefined();
   });
@@ -179,6 +179,50 @@ describe('載入期回滾', () => {
     const late = fakeTool('search');
     await loadPlugins([fakePlugin('late', (r) => void r.tools.register(late))], registry);
     expect(registry.tools.resolve('search')?.value).toBe(late);
+  });
+});
+
+describe('停用', () => {
+  const off = (plugin: NexusPlugin): NexusPlugin => ({ ...plugin, disabled: true });
+
+  it('apply 一次都不跑——不是跑了再撤', async () => {
+    const applied: string[] = [];
+    const plugins = [
+      fakePlugin('a', () => void applied.push('a')),
+      off(fakePlugin('b', () => void applied.push('b'))),
+      fakePlugin('c', () => void applied.push('c')),
+    ];
+    await loadPlugins(plugins);
+    expect(applied).toEqual(['a', 'c']);
+  });
+
+  it('它註冊的東西一樣都沒進 registry', async () => {
+    const plugins = [off(fakePlugin('mcp', (r) => void r.tools.register(fakeTool('search'))))];
+    const { registry } = await loadPlugins(plugins);
+    expect(registry.tools.resolve('search')).toBeUndefined();
+  });
+
+  it('關著的條目仍然出現在 entries 裡，帶著自己的 id', async () => {
+    const { entries } = await loadPlugins([off(fakePlugin('mcp', () => {}))]);
+    expect(entries).toEqual([
+      expect.objectContaining({ origin: { id: 'mcp#0', name: 'mcp' }, disabled: true }),
+    ]);
+  });
+
+  it('它的 requires 不檢查——沒跑的東西不需要任何能力', async () => {
+    const plugins = [off(fakePlugin('consumer', () => {}, ['filesystem']))];
+    await expect(loadPlugins(plugins)).resolves.toBeDefined();
+  });
+
+  it('它本來會提供的能力真的沒被提供，而缺件訊息指得出它關著', async () => {
+    // 「我關錯了東西」會是 `disabled` 上線之後這條錯誤最常見的原因，而那件事從
+    // 「有能力沒人提供」本身看不出來。
+    const plugins = [
+      off(fakePlugin('disk-fs', (r) => void r.capabilities.provide('filesystem'))),
+      fakePlugin('consumer', () => {}, ['filesystem']),
+    ];
+    await expect(loadPlugins(plugins)).rejects.toThrow(/consumer#0 \(consumer\)/);
+    await expect(loadPlugins(plugins)).rejects.toThrow(/停用的條目[\s\S]*disk-fs#0 \(disk-fs\)/);
   });
 });
 

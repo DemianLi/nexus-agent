@@ -6,8 +6,10 @@
  *
  * **組裝完全沿用 CLI 的那一份**（`createCliAgent`）：同一份預設 plugin 清單、同一個
  * `--live` 開關、同一個 `--workspace`。理由是這裡沒有新的組裝決定要做——「web 要跑
- * 哪些 plugin」與「CLI 要跑哪些 plugin」是同一個問題，而它的答案等外部設定機制
- * （[#46](https://github.com/DemianLi/nexus-agent/issues/46)）才有地方講。
+ * 哪些 plugin」與「CLI 要跑哪些 plugin」是同一個問題，而它的答案等**外部**設定機制
+ * 才有地方講（[#46](https://github.com/DemianLi/nexus-agent/issues/46)；
+ * [#104](https://github.com/DemianLi/nexus-agent/issues/104) 給的 `id` 與 `disabled`
+ * 都寫在清單的程式碼裡，換不了「跑哪一份清單」這件事）。
  *
  * **一個 thread 一個 agent，關掉 server 時一起清。** `createNexusAgent` 回的
  * `dispose` 在這裡才真的有意義——MCP plugin 底下是 stdio 子行程，而這是一個長命的

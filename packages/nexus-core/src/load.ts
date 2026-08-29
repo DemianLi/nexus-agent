@@ -16,8 +16,13 @@ import type { NexusPlugin, PluginEntry, PluginOrigin } from './plugin.js';
 export interface LoadResult {
   /** 載入完成的 registry，接著交給 fold。 */
   registry: InternalPluginRegistry;
-  /** 依清單順序的來源，錯誤訊息與診斷用。 */
-  origins: PluginOrigin[];
+  /**
+   * 依清單順序的每一次掛載，錯誤訊息與診斷用。
+   *
+   * **停用的也在裡面**（`entry.disabled` 是 `true`）。那是 `disabled: true` 與「把這一行
+   * 刪掉」的差別所在：關著的條目仍然指得出名字，診斷才講得出「它在清單裡，只是關著」。
+   */
+  entries: readonly PluginEntry[];
   /**
    * 收掉 plugin 經 `lifecycle.onDispose()` 登記的東西，逆序、冪等。
    *
@@ -34,6 +39,9 @@ export interface LoadResult {
  * 載入失敗——fail-closed，不接受「載了一半的 agent」。先前成功的 plugin 註冊的
  * 東西留在 registry 上不動，錯誤處理與診斷才有東西可看。
  *
+ * 帶 `disabled: true` 的條目**整個跳過**——`apply` 不跑、`requires` 不驗。它仍然佔著
+ * 自己的 id 與回傳的 `entries` 裡的位置，理由見 {@link ../plugin.ts | NexusPlugin.disabled}。
+ *
  * @param plugins - 待載入的清單，順序有意義。
  * @param registry - 要載入進去的 registry，省略即開一個新的。
  * @returns 載入結果。
@@ -46,9 +54,13 @@ export async function loadPlugins(
   // 失敗要發生在任何 `apply` 之前——已經有 plugin 掛上去之後才發現身分是壞的，那些
   // 註冊留在 registry 上就沒有名字可以指。
   const entries = resolveEntries(plugins);
-  const origins = entries.map((entry) => entry.origin);
 
-  for (const { plugin, origin } of entries) {
+  for (const { plugin, origin, disabled } of entries) {
+    // **停用＝`apply` 一次都不跑**，不是「跑了再撤」。照 dsh 的載入路徑：`refresh()`
+    // 開頭就是 `if (this.disabled) return`（`vendor/loader/src/config/entry.ts` 的
+    // `Entry.refresh`），從來不 `init()`。dsh 那條「跑了再撤」只存在於 `update()`
+    // ——即時重載的路徑，而我們**沒有** `update()`，設定只在組裝時讀一次。
+    if (disabled) continue;
     const undos: (() => void)[] = [];
     const tracked = trackUndo(registry, undos);
     const leave = registry.enter(origin);
@@ -79,7 +91,7 @@ export async function loadPlugins(
     await disposeAll(registry).catch(() => {});
     throw error;
   }
-  return { registry, origins, dispose: () => disposeAll(registry) };
+  return { registry, entries, dispose: () => disposeAll(registry) };
 }
 
 /**
@@ -192,10 +204,15 @@ function trackUndo(
  *
  * 只能是之後：`requires` 明文不排序，清單裡靠前的 plugin 需要的能力可以由靠後的
  * plugin 提供。
+ *
+ * **停用的條目兩邊都不算**：它的 `requires` 不檢查（沒跑的東西不需要任何能力），而它
+ * 本來會提供的能力也真的沒被提供。所以缺件訊息把它們列出來——`disabled` 一加進來，
+ * 「我關錯了東西」就會是這條錯誤最常見的原因，而那件事從「有能力沒人提供」看不出來。
  */
 function assertRequires(entries: readonly PluginEntry[], registry: InternalPluginRegistry): void {
   const missing: string[] = [];
-  for (const { plugin, origin } of entries) {
+  for (const { plugin, origin, disabled } of entries) {
+    if (disabled) continue;
     for (const capability of plugin.requires ?? []) {
       if (!registry.capabilities.has(capability)) {
         missing.push(`${formatOrigin(origin)} 需要能力 "${capability}"`);
@@ -205,5 +222,10 @@ function assertRequires(entries: readonly PluginEntry[], registry: InternalPlugi
   if (missing.length === 0) return;
   const available = registry.capabilities.names();
   const known = available.length === 0 ? '（沒有任何 plugin 宣告能力）' : available.join('、');
-  throw new Error(`載入失敗，有能力沒人提供：${missing.join('；')}。目前被提供的能力：${known}`);
+  const off = entries.filter((entry) => entry.disabled).map((entry) => formatOrigin(entry.origin));
+  const hint =
+    off.length === 0 ? '' : `。清單裡有停用的條目，它們一個能力都沒提供：${off.join('、')}`;
+  throw new Error(
+    `載入失敗，有能力沒人提供：${missing.join('；')}。目前被提供的能力：${known}${hint}`,
+  );
 }

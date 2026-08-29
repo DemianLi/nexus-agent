@@ -74,10 +74,13 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
  * **不在 `DEFAULT_PLUGINS` 裡，而這一點與 dsh 不同，要講清楚。** dsh 的標準組合
  * （`agent-spine-demo`）確實掛了服務加四個核心配套入口；dsh 的規矩只說「單獨掛註冊表
  * 不會裝上任何檢查」，沒說預設組合該掛什麼。我們不掛的理由是**我們這側自己的約束**：
- * `DEFAULT_PLUGINS` 刻意只有 echo 一個，那份清單的 JSDoc 明說它「不替誰決定該裝什麼」，
- * 哪些 plugin 該進預設要等外部設定機制
- * （[#46](https://github.com/DemianLi/nexus-agent/issues/46)）啟動才有地方講。
- * **#46 落地時要回來重新問一次這件事**——它是預設清單的問題，不是這個配套入口的問題。
+ * `DEFAULT_PLUGINS` 刻意只有 echo 一個，那份清單的 JSDoc 明說它「不替誰決定該裝什麼」。
+ *
+ * [#104](https://github.com/DemianLi/nexus-agent/issues/104) 補上了關掉它的辦法
+ * （條目層的 `disabled`，加上組裝點的 `invariants` 選擇），所以「加進去就沒得關」這個
+ * 顧慮沒有了。**但這裡刻意還是不加**：改 `DEFAULT_PLUGINS` 會改變每一次 CLI 執行的行為，
+ * 那是預設清單的決定，不是「定 `disabled` 的語意」這張的範圍。要加就要連著決定另外
+ * 八個空 installer 加不加、以及違規往哪裡印，那要單獨一張。
  *
  * @returns 註冊 `@nexus/core` 配套入口的 plugin。
  */
