@@ -21,9 +21,18 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import type { NexusPlugin, SessionTelemetrySharingStatus } from '@nexus/core';
+import type { InvariantError, NexusPlugin, SessionTelemetrySharingStatus } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { SessionLog } from '@nexus/core';
+import { createCoreInvariantPlugin } from '@nexus/core/invariant';
+import { createEchoInvariantPlugin } from '@nexus/plugin-echo/invariant';
+import { createMcpInvariantPlugin } from '@nexus/plugin-mcp/invariant';
+import { createMemoryInvariantPlugin } from '@nexus/plugin-memory/invariant';
+import { createQuickJsInvariantPlugin } from '@nexus/plugin-quickjs/invariant';
+import { createSkillsInvariantPlugin } from '@nexus/plugin-skills/invariant';
+import { createTelemetryOtelInvariantPlugin } from '@nexus/plugin-telemetry-otel/invariant';
+import { createValidationInvariantPlugin } from '@nexus/plugin-validation/invariant';
+import { createWireInvariantPlugin } from '@nexus/wire/invariant';
 
 import { createNexusAgent } from './agent-factory.js';
 import type { NexusAgentHandle } from './agent-factory.js';
@@ -114,14 +123,36 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
 /**
  * 沒指定 `--plugins` 時載的清單。
  *
- * 只有 echo 一個——CLI 的預設組裝要能證明「工具真的接上了」，而不是替誰決定該裝什麼。
- * 哪些 plugin 該進預設清單是設定的事，那要等**外部**設定機制才有地方講。
- * [#104](https://github.com/DemianLi/nexus-agent/issues/104) 給的是條目層的 `id` 與
- * `disabled`——那兩個都要寫在這份清單的程式碼裡，答不了「不改程式碼就換一份清單」，
- * 而後者才是這句話等的東西（見 #104 的「這張不包含」與
- * [#46](https://github.com/DemianLi/nexus-agent/issues/46)）。
+ * 工具只有 echo 一個——CLI 的預設組裝要能證明「工具真的接上了」，而不是替誰決定該裝什麼。
+ * 哪些**工具** plugin 該進預設清單是設定的事，那要等**外部**設定機制才有地方講
+ * （[#46](https://github.com/DemianLi/nexus-agent/issues/46)）。
+ *
+ * **九個不變量配套入口是那句話的例外，而例外要說得出理由**
+ * （[#107](https://github.com/DemianLi/nexus-agent/issues/107) 拍板）：
+ *
+ * - **它們不裝功能，只裝觀察。** 一個配套入口不註冊工具、不改 prompt、不碰 backend，
+ *   所以「替誰決定該裝什麼」這個顧慮對它們不成立——沒有人的 agent 因為它們而不一樣。
+ * - **關得掉。** [#104](https://github.com/DemianLi/nexus-agent/issues/104) 之後條目層有
+ *   `disabled`、組裝點有 `invariants` 選擇，所以進來不是單向門。這是它進得來的前提。
+ * - **九個全進，不是只有 `@nexus/core`。** 八個是空 installer，掛上去一個檢查都不裝，
+ *   買到的只有包名歸屬。**代價是每一次執行多九個條目、九次 `apply`**，而換到的是這份
+ *   清單與 `registry.invariants.companions()` 對得起來——少掛的那幾個會讓「這個 package
+ *   沒有可檢的關係」與「這個 package 的檢查沒掛上」在診斷裡長得一模一樣。
+ *
+ * 違規往哪裡印見 {@link runCli} 接線的那一行。
  */
-export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [createEchoPlugin()];
+export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
+  createEchoPlugin(),
+  createCoreInvariantPlugin(),
+  createEchoInvariantPlugin(),
+  createMcpInvariantPlugin(),
+  createMemoryInvariantPlugin(),
+  createQuickJsInvariantPlugin(),
+  createSkillsInvariantPlugin(),
+  createTelemetryOtelInvariantPlugin(),
+  createValidationInvariantPlugin(),
+  createWireInvariantPlugin(),
+];
 
 /**
  * 從一個模組載 plugin 清單。
@@ -234,6 +265,9 @@ type NexusAgent = NexusAgentHandle['agent'];
  * @param invocation - 這次呼叫解析出來的東西。
  * @param plugins - 已經載好的 plugin 清單。
  * @param cwd - `--workspace` 的解析基準，省略即行程的工作目錄。
+ * @param onInvariantViolation - 不變量違規往哪裡講。**省略是有意義的**：這個工廠兩條路
+ *   都在用，而 [`serve.ts`](./serve.ts) 刻意不傳——伺服器那條路徑的違規進的是伺服器
+ *   日誌，維持 runner 的預設（[#107](https://github.com/DemianLi/nexus-agent/issues/107)）。
  * @returns 組好的 agent、收掉它的方法，與它用的 model。
  * @throws 清單載入失敗、fold 前置條件不成立，或基座擋下這份組裝。
  */
@@ -241,6 +275,7 @@ export async function createCliAgent(
   invocation: Pick<CliInvocation, 'live' | 'workspace'>,
   plugins: readonly NexusPlugin[],
   cwd: string = process.cwd(),
+  onInvariantViolation?: (error: InvariantError) => void,
 ): Promise<{
   agent: NexusAgent;
   dispose: () => Promise<void>;
@@ -260,6 +295,7 @@ export async function createCliAgent(
       }),
       systemPrompt: SYSTEM_PROMPT,
       checkpointer: new MemorySaver(),
+      ...(onInvariantViolation !== undefined && { onInvariantViolation }),
     });
   // 日誌跟 agent 同壽命：REPL 是一條連續對話，`seq` 要跨輪連續才有意義。
   const sessionLog = new SessionLog(THREAD_ID);
@@ -481,7 +517,12 @@ export async function runCli(options: RunCliOptions): Promise<void> {
 
   // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
   const { agent, dispose, sessionLog, attachTelemetry, attachInvariants, telemetrySharing } =
-    await createCliAgent(invocation, plugins, options.cwd);
+    await createCliAgent(invocation, plugins, options.cwd, (error) =>
+      // **不繞過 `Printer`。** 違規跟 agent 的輸出落在同一個終端機上，前綴是唯一分得出
+      // 誰在講話的東西——同 `printInterrupt` 的 `[核准]`。訊息本身已經帶著
+      // `invariant violated by "<pkg>"`，所以擁有它的 package 不必在這裡再講一次。
+      printer.error(`[不變量] ${error.message}`),
+    );
   // REPL 是一條連續對話，一份日誌就是整個 session，所以接線點在這裡而不是每輪。
   // 回傳的 detach 不留：`dispose()` 會把還接著的協調器一起收掉。
   attachTelemetry(sessionLog);

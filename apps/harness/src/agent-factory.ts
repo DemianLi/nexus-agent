@@ -41,6 +41,7 @@ import {
   type AgentModel,
   type AgentStore,
   type ApprovalPolicy,
+  type InvariantError,
   type InvariantSelection,
   type NexusPlugin,
   type PluginRegistry,
@@ -101,6 +102,20 @@ export interface CreateNexusAgentOptions {
    * {@link InvariantSelection} 那一份。
    */
   readonly invariants?: InvariantSelection;
+  /**
+   * 違規往哪裡講。省略即 `createInvariantRunner` 的預設，也就是 `console.error`。
+   *
+   * **這道縫存在的理由不是「換一個 fd」**——預設的 `console.error` 本來就是 stderr。它買到
+   * 的是三件事，缺一件違規就會變成一個沒有人管得到的輸出：呼叫端**指得出格式**（CLI 有
+   * 自己的 `Printer`，違規不繞過它）、**測得到**（在這道縫之前，唯一驗違規的辦法是去攔
+   * `console.error`），以及**歸得了因**（違規跟 agent 的輸出落在同一個終端機上，沒有前綴
+   * 就分不出誰是誰）。
+   *
+   * 定案見 [#107](https://github.com/DemianLi/nexus-agent/issues/107)。**`serve.ts` 那條
+   * 路徑刻意不傳**，維持預設：那裡的 `console.error` 進的是伺服器日誌，撞不到任何人的
+   * 終端機。兩條進入點答案不同是選的，不是漏的。
+   */
+  readonly onInvariantViolation?: (error: InvariantError) => void;
 }
 
 /**
@@ -231,7 +246,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * 同 `attachTelemetry` 的理由：沒有檢查就不要在熱路徑上多掛一個訂閱。
        *
        * 過濾器（`enabled` / allowlist / blocklist）從 {@link CreateNexusAgentOptions.invariants}
-       * 來，**原樣轉下去**。沒給就是全裝。
+       * 來，**原樣轉下去**。沒給就是全裝。違規的去處同理，從
+       * {@link CreateNexusAgentOptions.onInvariantViolation} 來，沒給就是 runner 的預設。
        *
        * **`companions.length === 0` 這一條擋在過濾之前，不是之後**：這裡問的是「有沒有
        * 人註冊」，而不是「過濾完還剩幾個」。過濾成空集合是一個有效的選擇結果，runner
@@ -247,6 +263,9 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
           log,
           companions,
           ...(options.invariants !== undefined && { selection: options.invariants }),
+          ...(options.onInvariantViolation !== undefined && {
+            onViolation: options.onInvariantViolation,
+          }),
         });
       },
       async dispose() {

@@ -129,6 +129,10 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   const handler = createWireHandler({
     // 一個 thread 一個 agent——各自的 checkpointer、各自的虛擬檔案系統。
     createAgent: async () => {
+      // **第四個引數刻意不傳**：不變量違規在這條路徑上維持 `createInvariantRunner` 的
+      // 預設（`console.error`），進的是伺服器日誌。CLI 那條要繞過 `Printer` 才印得出
+      // 前綴，這裡沒有那個問題——伺服器日誌本來就沒有跟誰搶終端機
+      // （[#107](https://github.com/DemianLi/nexus-agent/issues/107)）。
       const { agent, dispose, attachTelemetry, attachInvariants, telemetrySharing } =
         await createCliAgent(invocation, plugins, options.cwd);
       // **遙測披露印在這裡而不是啟動時，因為啟動的那一刻答案不存在**：`createAgent` 是

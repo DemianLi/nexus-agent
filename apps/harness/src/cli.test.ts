@@ -133,8 +133,34 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單裡的 echo 工具真的接上了', async () => {
-    expect(DEFAULT_PLUGINS.map((plugin) => plugin.name)).toEqual(['echo']);
+  it('預設清單是一個工具 ＋ 九個配套入口', async () => {
+    // **工具只有 echo 一個，這一半沒變**：預設組裝要能證明工具真的接上了，不替誰決定
+    // 該裝什麼。九個配套入口是那句話的例外，理由寫在 `DEFAULT_PLUGINS` 的 JSDoc 上
+    // （[#107](https://github.com/DemianLi/nexus-agent/issues/107)）。
+    const names = DEFAULT_PLUGINS.map((plugin) => plugin.name);
+    expect(names.filter((name) => !name.endsWith('-invariant'))).toEqual(['echo']);
+    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(9);
+  });
+
+  it('**違規印到 stderr 而且帶前綴**——不是靠 runner 預設的 `console.error`', async () => {
+    // 這一條是 #107 的 (c) 的端到端驗收，而它必須走 `runCli`：`createCliAgent` 那一層
+    // 只證明第四個引數轉得下去，證不了 `runCli` 真的把 `printer.error` 接上去。
+    //
+    // **前綴是這條的重點**。違規跟 agent 的輸出落在同一個終端機上，沒有前綴就分不出
+    // 誰在講話；而它走 `printer.error` 也就順帶證明了它沒有繞過 `Printer`——繞過的話
+    // 這裡的 `stderr()` 會是空的，`console.error` 才有東西。
+    const { printer, stdout, stderr } = recorder();
+    await runCli({
+      argv: ['--plugins', 'src/cli-invariant-violation.fixture.ts', '說點什麼'],
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer,
+    });
+
+    expect(stderr()).toContain('[不變量] invariant violated by "@nexus/noisy": 看到 turn/start');
+    expect(stderr()).toContain('[不變量] invariant violated by "@nexus/noisy": 看到 turn/end');
+    // 沒有漏到 stdout——那裡是 agent 講話的地方。
+    expect(stdout()).not.toContain('[不變量]');
   });
 });
 
