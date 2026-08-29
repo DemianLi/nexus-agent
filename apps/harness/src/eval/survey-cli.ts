@@ -24,6 +24,7 @@ import {
   summarize,
   EVAL_DEADLINE_MS,
   EVAL_RECURSION_LIMIT,
+  type Spread,
   type TierOutcome,
   type TierReport,
   type TierSummary,
@@ -49,11 +50,21 @@ let budgetHits = 0;
 /** 重試耗盡後仍被限流的執行數。**是我們打太快，不是模型的問題。** */
 let throttledHits = 0;
 
-function formatSpread(spread: { mean: number; min: number; max: number } | undefined): string {
+/**
+ * 一欄數字。**樣本數永遠跟著印。**
+ *
+ * 這不是排版偏好。`1.00` 出自 21 次與出自 1 次是兩個不同的東西，而排在同一欄裡它們
+ * 長得一模一樣 —— 2026-08-28 就是這樣把 `gpt-oss-120b` 讀成滿分的（它 21 次失敗、
+ * 活下來的都是簡單題）。**分數最高而樣本最少的那一列是紅旗**，所以 `n` 不給省。
+ */
+function formatSpread(spread: Spread | undefined): string {
   if (spread === undefined) return '—';
   const mean = spread.mean.toFixed(2);
-  if (spread.min === spread.max) return mean;
-  return `${mean} (${spread.min.toFixed(2)}–${spread.max.toFixed(2)})`;
+  const body =
+    spread.min === spread.max
+      ? mean
+      : `${mean} (${spread.min.toFixed(2)}–${spread.max.toFixed(2)})`;
+  return `${body} n=${spread.count}`;
 }
 
 function formatScore(value: number | undefined): string {
@@ -171,8 +182,13 @@ async function main(argv: readonly string[]): Promise<void> {
   if (throttledHits > 0) {
     console.log(
       `\n注意：有 ${throttledHits} 次執行在重試 ${LIVE_MAX_RETRIES} 次之後仍然被限流（throttled）。` +
-        `**那是我們打太快，不是模型的問題** —— 對照「單次秒數」那一欄看，快的那幾個最先撞牆。` +
-        `實測這個端點約 120k 的每分鐘 token 配額，觸發後十幾秒就恢復。`,
+        `**那不是分數，是沒有資料** —— 先看每一列的 n，被限流多的那幾列 n 會很小，` +
+        `而小 n 的 1.00 跟大 n 的 1.00 不是同一個東西。\n` +
+        `  2026-08-29 那一輪量到的是：47 次 throttled 全部集中在 3 個候選（其餘 11 個零），` +
+        `而**最快的那個候選一次都沒中**。所以不要照「快的先撞牆」讀 —— ` +
+        `在這批資料上限流跟單次秒數、跟 token 量都不相關。單獨跑其中一個、前面什麼都不跑，` +
+        `第一次執行照樣 throttled，所以也不是前面的執行累積出來的。**機制不指名**：` +
+        `這道牆撐過了 6 次重試（約 63 秒退避），跟 eval:compare 記的那道「十幾秒就恢復」的不是同一道。`,
     );
   }
   console.log(

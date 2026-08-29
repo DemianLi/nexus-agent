@@ -178,3 +178,22 @@
 
 清單落在 [`apps/harness/src/eval/survey.ts`](../apps/harness/src/eval/survey.ts)，
 跑法是 `pnpm --filter @nexus/harness eval:survey`。
+
+## 完整題目跑下來之後（2026-08-29，294 次執行）
+
+**入場判準預測不了跑得完。** 16 個過關的候選，實際跑七題各三次之後：
+
+| 層 | 幾個 | 誰 |
+| --- | --- | --- |
+| 資料近乎完整（19–21/21 評到分） | **8** | `oss-120b` `oss-20b` `nano` `super` `ultra` `gemma-4-31b` `laguna-xs` `muse-30b` |
+| 資料部分缺（11–14/21） | 3 | `llama-90b` `llama-11b` `ds-pro` |
+| 沒有可用資料（0–2/21） | 3 | `minimax-m3`(1) `kimi-k3`(2) `diffgemma-26b`(0) |
+| 冒煙就排除（撞滿 300 秒上限） | 2 | `ds-flash` `nano-omni` |
+
+所以「16 個可用」是**盤點**的數字，「8 個有完整資料」才是**報告**的數字。兩個都不是錯的，
+它們量的不是同一件事 —— 一句話一個工具跟完整 plugin 組裝下的多輪對話，中間隔著單次執行的
+迴圈與時鐘上限、端點拒收平行呼叫、限流、以及端點自己的 `500`。
+
+**結論**：`openai/gpt-oss-120b` 是唯一一個三軸同時最好的（21/21、難題 `1.00`、token 最低、最快、
+零 `throttled`）。完整數據表、失敗分類、兩組對不起來的限流數字，見
+[#85 的報告](https://github.com/DemianLi/nexus-agent/issues/85#issuecomment-5459133975)。
