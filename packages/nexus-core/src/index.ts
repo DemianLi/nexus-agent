@@ -36,6 +36,7 @@ export type {
   SkillSourceRegistrationPoint,
   MemorySourceRegistrationPoint,
   LifecycleRegistrationPoint,
+  TelemetryRegistrationPoint,
   Disposer,
   RegisterOptions,
   ScopeKey,
@@ -48,5 +49,24 @@ export { loadPlugins } from './load.js';
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, TOOL_ORDER_REST } from './fold.js';
 
-export type { SessionEvent, SessionEventMap, SessionEventType } from './session-log.js';
+export type {
+  SessionEvent,
+  SessionEventMap,
+  SessionEventType,
+  SessionLogListener,
+  SessionLogOptions,
+} from './session-log.js';
 export { SessionLog } from './session-log.js';
+
+export type {
+  SessionTelemetryRecord,
+  SessionTelemetryRedactRule,
+  SessionTelemetrySeverity,
+  SessionTelemetrySink,
+} from './session-telemetry.js';
+
+export type {
+  SessionTelemetryCapture,
+  SessionTelemetryCoordinatorOptions,
+} from './session-telemetry-coordinator.js';
+export { SessionTelemetryCoordinator } from './session-telemetry-coordinator.js';

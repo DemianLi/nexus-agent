@@ -23,6 +23,7 @@ import {
   isWireChannel,
   successResponse,
 } from '@nexus/wire';
+import type { SessionLog } from '@nexus/core';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
 
@@ -36,6 +37,17 @@ import { ThreadPump } from './thread-pump.js';
 export interface ThreadAgent {
   readonly agent: PumpAgent;
   dispose(): Promise<void>;
+  /**
+   * 把這個 thread 的會話日誌接上遙測，選配。
+   *
+   * **接線點必須在這裡**，因為日誌是 pump 建的（一個 thread 一份），而知道有沒有掛
+   * 後端的是組裝點。兩邊只在這一行碰得到面。沒掛後端時 `createNexusAgent` 回
+   * `undefined`，這裡什麼都不會發生。
+   *
+   * @param log - 這個 thread 的日誌。
+   * @returns 收掉這次接線的函式，或沒掛後端時的 `undefined`。
+   */
+  attachTelemetry?(log: SessionLog): (() => Promise<void>) | undefined;
 }
 
 export interface WireHandlerOptions {
@@ -98,9 +110,17 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     if (existing !== undefined) {
       return existing.pump;
     }
-    const { agent, dispose } = await options.createAgent(threadId);
-    const pump = new ThreadPump(agent, threadId);
-    threads.set(threadId, { pump, dispose: () => dispose() });
+    const threadAgent = await options.createAgent(threadId);
+    const pump = new ThreadPump(threadAgent.agent, threadId);
+    const detachTelemetry = threadAgent.attachTelemetry?.(pump.sessionLog);
+    threads.set(threadId, {
+      pump,
+      dispose: async () => {
+        // 遙測先收，理由同 `agent-factory.ts`：後端可能是某個 plugin 開的。
+        await detachTelemetry?.();
+        await threadAgent.dispose();
+      },
+    });
     return pump;
   }
 

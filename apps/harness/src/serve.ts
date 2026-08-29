@@ -125,8 +125,12 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   const handler = createWireHandler({
     // 一個 thread 一個 agent——各自的 checkpointer、各自的虛擬檔案系統。
     createAgent: async () => {
-      const { agent, dispose } = await createCliAgent(invocation, plugins, options.cwd);
-      return { agent: agent as unknown as PumpAgent, dispose };
+      const { agent, dispose, attachTelemetry } = await createCliAgent(
+        invocation,
+        plugins,
+        options.cwd,
+      );
+      return { agent: agent as unknown as PumpAgent, dispose, attachTelemetry };
     },
   });
 

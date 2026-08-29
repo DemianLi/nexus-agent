@@ -34,12 +34,14 @@ import {
   foldRegistry,
   formatOrigin,
   loadPlugins,
+  SessionTelemetryCoordinator,
   type AgentCheckpointer,
   type AgentModel,
   type AgentStore,
   type ApprovalPolicy,
   type NexusPlugin,
   type PluginRegistry,
+  type SessionLog,
 } from '@nexus/core';
 import { createDeepAgent, StateBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
@@ -118,8 +120,13 @@ export const DEFAULT_RECURSION_LIMIT = 100;
  * 呼叫端的 `result.messages` 當場變成 `any`。
  *
  * `dispose` 收的是清單裡的 plugin 經 `registry.lifecycle.onDispose()` 登記的活資源
- * （MCP 的 stdio 子行程是第一個），逆序、冪等。**不收 agent 本身**——deepagents 建構後
- * 不可變，也沒有東西要關。不呼叫的下場是行程不退出：子行程的 stdio pipe 是活的 handle。
+ * （MCP 的 stdio 子行程是第一個），逆序、冪等，**外加還接著的遙測協調器**。
+ * **不收 agent 本身**——deepagents 建構後不可變，也沒有東西要關。不呼叫的下場是行程
+ * 不退出：子行程的 stdio pipe 是活的 handle。
+ *
+ * `attachTelemetry` 是遙測的接線口。它在這裡而不在 `@nexus/core`，因為接線需要同時
+ * 拿到 registry（誰掛了後端、誰掛了脫敏規則）與一份 {@link SessionLog}，而**只有組裝點
+ * 同時看得到這兩個**——core 那側不知道日誌是誰建的，兩條進入點那側不知道 registry。
  */
 export type NexusAgentHandle = Awaited<ReturnType<typeof createNexusAgent>>;
 
@@ -159,7 +166,45 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       ...params,
       ...(options.systemPrompt !== undefined && { systemPrompt: options.systemPrompt }),
     }).withConfig({ recursionLimit: options.recursionLimit ?? DEFAULT_RECURSION_LIMIT });
-    return { agent, dispose };
+
+    // 接上去但還沒收掉的協調器。**組裝點自己記著**，因為呼叫端可能只叫 `dispose()`
+    // 就走人——那時 `shutdown` 標記與後端的排空都還沒發生，遙測會少掉最後一段。
+    const attached = new Set<SessionTelemetryCoordinator>();
+    return {
+      agent,
+      /**
+       * 把一份會話日誌接上遙測。**沒掛後端時回 `undefined`**——沒有後端就沒有出口，
+       * 建一個把記錄丟進虛空的協調器只會讓熱路徑白付投影與脫敏的成本。
+       *
+       * @param log - 要鏡像的日誌。
+       * @returns 收掉這一次接線的函式，或沒掛後端時的 `undefined`。
+       */
+      attachTelemetry(log: SessionLog): (() => Promise<void>) | undefined {
+        const mounted = registry.telemetry.sink();
+        if (mounted === undefined) return undefined;
+        const coordinator = new SessionTelemetryCoordinator({
+          log,
+          sink: mounted.value,
+          // 現讀而不是快照：`rules()` 每次捕獲都重新問一遍，補送歷史時套的是**現在**
+          // 掛著的策略。這是 dsh waterfall 的語意，折疊要接得住。
+          rules: () => registry.telemetry.rules(),
+        });
+        attached.add(coordinator);
+        return async () => {
+          attached.delete(coordinator);
+          await coordinator.dispose();
+        };
+      },
+      async dispose() {
+        // 遙測先收：後端很可能是某個 plugin 開的，plugin 的 disposer 一跑它就沒了，
+        // 那時再送 `shutdown` 標記等於送進一個已經關掉的東西。
+        for (const coordinator of [...attached]) {
+          attached.delete(coordinator);
+          await coordinator.dispose();
+        }
+        await dispose();
+      },
+    };
   } catch (error) {
     // 清理自己失敗的話不能蓋掉原本的錯誤——那個才是使用者要修的東西。
     await dispose().catch(() => {});
