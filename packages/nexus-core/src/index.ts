@@ -47,3 +47,6 @@ export { loadPlugins } from './load.js';
 
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, TOOL_ORDER_REST } from './fold.js';
+
+export type { SessionEvent, SessionEventMap, SessionEventType } from './session-log.js';
+export { SessionLog } from './session-log.js';

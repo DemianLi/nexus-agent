@@ -27,6 +27,7 @@
 
 import { HumanMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
+import { SessionLog } from '@nexus/core';
 import type { Event, WireChannel } from '@nexus/wire';
 import { channelOfMethod, eventId } from '@nexus/wire';
 
@@ -100,6 +101,15 @@ export class ThreadPump {
   readonly #agent: PumpAgent;
   readonly #threadId: string;
   readonly #subscribers = new Set<Subscriber>();
+  readonly #sessionLog: SessionLog;
+  /**
+   * 傳輸層的號，給瀏覽器排序去重用的。
+   *
+   * **跟 {@link ThreadPump.sessionLog} 的 `seq` 是兩個號、兩個工作**，而且刻意不互相
+   * 讀取——[#89](https://github.com/DemianLi/nexus-agent/issues/89) 否掉方案 (A) 的理由
+   * 就是「拿傳輸序號去冒充耐久序號」。這個號在伺服器重啟時歸零（pump 是 per-instance 的），
+   * 那對瀏覽器無所謂，對遙測會要命。
+   */
   #seq = 0;
   #pending: PendingInterrupt | undefined;
   /** 一個 thread 一次只跑一個 run；後到的 submit 排隊，不平行跑。 */
@@ -109,10 +119,16 @@ export class ThreadPump {
   constructor(agent: PumpAgent, threadId: string) {
     this.#agent = agent;
     this.#threadId = threadId;
+    this.#sessionLog = new SessionLog(threadId);
   }
 
   get threadId(): string {
     return this.#threadId;
+  }
+
+  /** 這條 thread 的會話事件日誌。**耐久序號的擁有者**，見 `@nexus/core` 的 `SessionLog`。 */
+  get sessionLog(): SessionLog {
+    return this.#sessionLog;
   }
 
   /** 掛著等人回答的那顆中斷，沒有就是 `undefined`。 */
@@ -206,25 +222,38 @@ export class ThreadPump {
   }
 
   async #runOnce(input: PumpInput): Promise<void> {
+    // **記在這裡而不是 submit 裡**：submit 只是排隊，真正開跑才是這一輪的起點。
+    // 記在排隊時的話，兩件事排在一起時日誌會出現「兩個 start 之後才有第一個 end」。
+    this.#sessionLog.append(
+      'turn/start',
+      input.kind === 'message' ? { kind: 'message', text: input.text } : { kind: 'resume' },
+    );
     const payload =
       input.kind === 'message'
         ? { messages: [new HumanMessage(input.text)] }
         : new Command({ resume: input.response });
-    const run = await this.#agent.streamEvents(payload as never, {
-      version: 'v3',
-      configurable: { thread_id: this.#threadId },
-    });
 
     try {
+      // **取串流這一步也在 try 裡面。** 它自己就會拋（模型建不起來、憑證不對），
+      // 而擺在外面的話那種失敗會留下一顆沒有結尾的 `turn/start` ——
+      // 日誌上看起來像跑到一半消失，跟真的跑到一半消失分不出來。
+      const run = await this.#agent.streamEvents(payload as never, {
+        version: 'v3',
+        configurable: { thread_id: this.#threadId },
+      });
       for await (const raw of run) {
         for (const event of this.#translate(raw)) {
           this.#broadcast(event);
         }
       }
+      // 跑完與停在核准點都算收工——停在核准點時前面會有一顆 `interrupt/raised`。
+      this.#sessionLog.append('turn/end', {});
     } catch (error) {
       // 失敗的原因已經以 `lifecycle failed` 上了線（實測：失敗 frame 先發、然後才拋），
       // 所以這裡不再合成一顆。下行**不關**——這條線是長期的，下一次 submit 還要用。
-      throw error instanceof Error ? error : new Error(String(error));
+      const failure = error instanceof Error ? error : new Error(String(error));
+      this.#sessionLog.append('turn/failed', { message: failure.message });
+      throw failure;
     }
   }
 
@@ -236,6 +265,7 @@ export class ThreadPump {
       // 它每一顆都夾著完整序列化的訊息。
       for (const entry of asInterruptEntries(raw.params.data)) {
         this.#pending = { interruptId: entry.id, actionCount: actionCountOf(entry.value) };
+        this.#sessionLog.append('interrupt/raised', { interruptId: entry.id });
         yield this.#seal({
           method: 'input.requested',
           params: {
