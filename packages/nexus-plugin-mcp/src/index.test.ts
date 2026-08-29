@@ -123,7 +123,7 @@ describe('接上一台真的 MCP server', () => {
   it('同一台 server 掛兩次撞在工具那一層，訊息指名兩個 plugin', async () => {
     // `name` 不唯一是刻意的，所以撞不在 plugin 清單那一層——撞在它們註冊的東西上。
     await expect(loadPlugins([fixturePlugin(), fixturePlugin()])).rejects.toThrow(
-      /plugins\[0\] \(mcp\)[\s\S]*plugins\[1\] \(mcp\)/,
+      /mcp#0 \(mcp\)[\s\S]*mcp#1 \(mcp\)/,
     );
   });
 
@@ -147,7 +147,7 @@ describe('接上一台真的 MCP server', () => {
       serverName: 'missing',
       connection: { transport: 'stdio', command: process.execPath, args: ['-e', ''] },
     });
-    await expect(loadPlugins([plugin])).rejects.toThrow('plugins[0] (mcp)');
+    await expect(loadPlugins([plugin])).rejects.toThrow('mcp#0 (mcp)');
   });
 
   it('dispose 之後子行程收掉了，而且呼叫第二次是 no-op', async () => {

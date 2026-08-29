@@ -17,9 +17,9 @@ import { SessionLog } from './session-log.js';
 function companion(
   packageName: string,
   installer: InvariantInstaller,
-  index = 0,
+  ordinal = 0,
 ): InvariantCompanion {
-  return { packageName, installer, origin: { index, name: 'test' } };
+  return { packageName, installer, origin: { id: `test#${ordinal}`, name: 'test' } };
 }
 
 /** 一律報違規的 installer，用來看違規往哪裡去。 */
@@ -43,20 +43,20 @@ describe('InvariantError', () => {
 describe('註冊點', () => {
   it('同一個包名註冊兩次當場拋，訊息指得出兩次掛載', () => {
     const registry = createRegistry();
-    const first = registry.enter({ index: 0, name: 'a' });
+    const first = registry.enter({ id: 'a#0', name: 'a' });
     registry.invariants.register('@nexus/core', () => {});
     first();
-    const second = registry.enter({ index: 1, name: 'b' });
+    const second = registry.enter({ id: 'b#0', name: 'b' });
 
     expect(() => registry.invariants.register('@nexus/core', () => {})).toThrow(
-      /plugins\[0\] \(a\).*plugins\[1\] \(b\)/s,
+      /a#0 \(a\).*b#0 \(b\)/s,
     );
     second();
   });
 
   it('撤銷之後那個名字是真的空出來', () => {
     const registry = createRegistry();
-    const exit = registry.enter({ index: 0, name: 'a' });
+    const exit = registry.enter({ id: 'a#0', name: 'a' });
     const undo = registry.invariants.register('@nexus/core', () => {});
     expect(registry.invariants.companions()).toHaveLength(1);
     undo();
@@ -74,7 +74,7 @@ describe('註冊點', () => {
 
   it('包名不能是空的或帶前後空白', () => {
     const registry = createRegistry();
-    const exit = registry.enter({ index: 0, name: 'a' });
+    const exit = registry.enter({ id: 'a#0', name: 'a' });
 
     expect(() => registry.invariants.register('', () => {})).toThrow(/不能是空的/);
     expect(() => registry.invariants.register(' @nexus/core', () => {})).toThrow(/前後空白/);

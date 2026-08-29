@@ -48,8 +48,33 @@ describe('loadPlugins', () => {
       });
     const { registry, origins } = await loadPlugins([mcp('github'), mcp('linear')]);
     expect(origins.map((o) => o.name)).toEqual(['mcp', 'mcp']);
+    // **id 才是「哪一次掛載」的答案**，name 兩個都一樣。
+    expect(origins.map((o) => o.id)).toEqual(['mcp#0', 'mcp#1']);
     expect(registry.tools.resolve('github_search')).toBeDefined();
     expect(registry.tools.resolve('linear_search')).toBeDefined();
+  });
+
+  it('手寫的 id 就是錯誤訊息裡的那個名字', async () => {
+    const plugins = [
+      {
+        ...fakePlugin('mcp', () => {
+          throw new Error('連不上');
+        }),
+        id: 'mcp-github',
+      },
+    ];
+    await expect(loadPlugins(plugins)).rejects.toThrow('mcp-github (mcp)');
+  });
+
+  it('id 撞了在任何 apply 跑起來之前就報——沒有半個 plugin 掛上去', async () => {
+    const applied: string[] = [];
+    const plugins = [
+      { ...fakePlugin('a', () => void applied.push('a')), id: 'same' },
+      { ...fakePlugin('b', () => void applied.push('b')), id: 'same' },
+    ];
+    await expect(loadPlugins(plugins)).rejects.toThrow('"same"');
+    // 這一條是「先解析完整份清單」的證據：id 是壞的就沒有任何東西該被跑起來。
+    expect(applied).toEqual([]);
   });
 
   it('兩個 plugin 註冊同名工具，載入期報錯且指名雙方', async () => {
@@ -58,9 +83,7 @@ describe('loadPlugins', () => {
       fakePlugin('mcp', (registry) => void registry.tools.register(fakeTool('search'))),
     ];
     // 指名兩個 plugin 與那個工具名，全部在頂層訊息裡 —— 錯誤處理只印 error.message 就夠。
-    await expect(loadPlugins(plugins)).rejects.toThrow(
-      /plugins\[0\] \(alpha\)[\s\S]*plugins\[1\] \(mcp\)/,
-    );
+    await expect(loadPlugins(plugins)).rejects.toThrow(/alpha#0 \(alpha\)[\s\S]*mcp#0 \(mcp\)/);
     await expect(loadPlugins(plugins)).rejects.toThrow('"search"');
   });
 
@@ -87,7 +110,7 @@ describe('載入期回滾', () => {
       }),
     ];
 
-    await expect(loadPlugins(plugins, registry)).rejects.toThrow('plugins[1] (bad)');
+    await expect(loadPlugins(plugins, registry)).rejects.toThrow('bad#0 (bad)');
 
     expect(registry.tools.resolve('doomed_tool')).toBeUndefined();
     expect(registry.subagents.get('doomed_agent')).toBeUndefined();
@@ -116,7 +139,7 @@ describe('載入期回滾', () => {
       }),
       fakePlugin('consumer', () => {}, ['filesystem']),
     ];
-    await expect(loadPlugins(plugins)).rejects.toThrow('plugins[0] (provider)');
+    await expect(loadPlugins(plugins)).rejects.toThrow('provider#0 (provider)');
   });
 
   it('一個 plugin 回滾掉的能力，不影響另一個 plugin 對同一能力的宣告', async () => {
@@ -163,7 +186,7 @@ describe('requires', () => {
   it('缺件時報錯，訊息指名是誰缺哪個能力', async () => {
     const plugins = [fakePlugin('consumer', () => {}, ['filesystem'])];
     await expect(loadPlugins(plugins)).rejects.toThrow(
-      /plugins\[0\] \(consumer\)[\s\S]*"filesystem"/,
+      /consumer#0 \(consumer\)[\s\S]*"filesystem"/,
     );
   });
 
@@ -362,7 +385,7 @@ describe('關機清理', () => {
       ),
     ];
     const { dispose } = await loadPlugins(plugins);
-    await expect(dispose()).rejects.toThrow(/plugins\[1\] \(bad\)[\s\S]*關不掉/);
+    await expect(dispose()).rejects.toThrow(/bad#0 \(bad\)[\s\S]*關不掉/);
     expect(closed).toEqual(['good']);
   });
 });

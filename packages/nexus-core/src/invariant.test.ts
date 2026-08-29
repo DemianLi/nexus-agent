@@ -23,7 +23,7 @@ function watch(log: SessionLog): InvariantError[] {
   const companion: InvariantCompanion = {
     packageName: CORE_INVARIANT_PACKAGE,
     installer: sessionInvariant,
-    origin: { index: 0, name: 'core-invariant' },
+    origin: { id: 'core-invariant#0', name: 'core-invariant' },
   };
   createInvariantRunner({
     log,
@@ -157,7 +157,7 @@ describe('三條關係', () => {
 describe('plugin', () => {
   it('掛上去就認領 @nexus/core 這個名字', () => {
     const registry = createRegistry();
-    const exit = registry.enter({ index: 0, name: 'core-invariant' });
+    const exit = registry.enter({ id: 'core-invariant#0', name: 'core-invariant' });
     createCoreInvariantPlugin().apply(registry);
     exit();
 

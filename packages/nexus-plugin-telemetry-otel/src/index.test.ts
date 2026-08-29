@@ -281,7 +281,7 @@ describe('走 SDK 真正的流水線送到假 collector', () => {
       rules: () => [
         {
           value: (record) => ({ ...record, body: { kind: 'message', text: '[已脫敏]' } }),
-          origin: { index: 0, name: 'scrub' },
+          origin: { id: 'scrub#0', name: 'scrub' },
         },
       ],
     });

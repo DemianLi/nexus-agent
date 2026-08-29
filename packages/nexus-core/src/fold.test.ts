@@ -45,7 +45,7 @@ describe('backend 註冊點', () => {
       fakePlugin('disk', (r) => void r.backend.mount('/memories/', fakeBackend('disk'))),
     ];
     await expect(loadPlugins(plugins)).rejects.toThrow(
-      /"\/memories\/"[\s\S]*plugins\[0\] \(store\)[\s\S]*plugins\[1\] \(disk\)/,
+      /"\/memories\/"[\s\S]*store#0 \(store\)[\s\S]*disk#0 \(disk\)/,
     );
   });
 
@@ -77,7 +77,7 @@ describe('backend 註冊點', () => {
     const plugins = [
       fakePlugin('store', (r) => void r.backend.mount('/memories/', fakeBackend('store'))),
     ];
-    await expect(fold(plugins)).rejects.toThrow(/plugins\[0\] \(store\)[\s\S]*default backend/);
+    await expect(fold(plugins)).rejects.toThrow(/store#0 \(store\)[\s\S]*default backend/);
   });
 });
 
@@ -324,7 +324,7 @@ describe('interrupts 註冊點', () => {
       fakePlugin('danger', (r) => void r.interrupts.require('rm', { reason: '刪檔' })),
     ];
     await expect(fold(plugins, { baseToolNames: gatedTools })).rejects.toThrow(
-      /plugins\[0\] \(danger\)[\s\S]*checkpointer/,
+      /danger#0 \(danger\)[\s\S]*checkpointer/,
     );
   });
 
@@ -356,7 +356,7 @@ describe('interrupts 註冊點', () => {
         approvals: { enabled: false },
         baseToolNames: gatedTools,
       }),
-    ).rejects.toThrow(/關掉了人工核准[\s\S]*plugins\[0\] \(danger\)/);
+    ).rejects.toThrow(/關掉了人工核准[\s\S]*danger#0 \(danger\)/);
   });
 
   it('沒人宣告要核准時，關掉核准不影響 fold', async () => {
@@ -397,7 +397,7 @@ describe('interrupts 註冊點', () => {
     ];
     // 基座那端不會救：查不到就 auto-approve，所以打錯字的閘門什麼都不擋。
     await expect(fold(plugins, withCheckpointer)).rejects.toThrow(
-      /plugins\[0\] \(typo\)[\s\S]*"exec_shell"[\s\S]*execute_shell/,
+      /typo#0 \(typo\)[\s\S]*"exec_shell"[\s\S]*execute_shell/,
     );
   });
 
@@ -481,7 +481,7 @@ describe('每個 subagent 的有效工具集合', () => {
         (r) => void r.tools.register(fakeTool('search'), { scope: 'reasearcher' }),
       ),
     ];
-    await expect(fold(plugins)).rejects.toThrow(/"reasearcher"[\s\S]*plugins\[1\] \(typo\)/);
+    await expect(fold(plugins)).rejects.toThrow(/"reasearcher"[\s\S]*typo#0 \(typo\)/);
   });
 });
 
@@ -569,7 +569,7 @@ describe('工具呈現順序', () => {
 
   it('工具名叫 <unlisted-tools> → 報錯，那一格不能有歧義', async () => {
     const plugins = [fakePlugin('sneaky', (r) => void r.tools.register(fakeTool(TOOL_ORDER_REST)))];
-    await expect(fold(plugins)).rejects.toThrow(/plugins\[0\] \(sneaky\)/);
+    await expect(fold(plugins)).rejects.toThrow(/sneaky#0 \(sneaky\)/);
   });
 
   it('保留名藏在 subagent 層也一樣報錯', async () => {
@@ -593,7 +593,7 @@ describe('工具呈現順序', () => {
     ];
     // 沒給 toolOrder 也要擋：不擋的話它會以保留名活著，等組裝點哪天補上清單才
     // 無聲地從那個 subagent 的集合裡消失。
-    await expect(fold(plugins)).rejects.toThrow(/plugins\[0\] \(team\)[\s\S]*researcher/);
+    await expect(fold(plugins)).rejects.toThrow(/team#0 \(team\)[\s\S]*researcher/);
   });
 
   it('組裝點宣告的基座工具算「有註冊」，排得進呈現順序', async () => {
@@ -637,7 +637,7 @@ describe('skills 與 memory 註冊點', () => {
       fakePlugin('project-skills', (r) => void r.skills.addSource('/skills/user')),
     ];
     await expect(loadPlugins(plugins)).rejects.toThrow(
-      /"\/skills\/user"[\s\S]*plugins\[0\] \(user-skills\)[\s\S]*plugins\[1\] \(project-skills\)/,
+      /"\/skills\/user"[\s\S]*user-skills#0 \(user-skills\)[\s\S]*project-skills#0 \(project-skills\)/,
     );
   });
 

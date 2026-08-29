@@ -86,9 +86,10 @@ describe('子路徑解析', () => {
 describe('包名歸屬', () => {
   it('九個一起掛上去，各自認領自己那個名字，一個都不撞', () => {
     const registry = createRegistry();
-    for (const [index, [factory]] of COMPANIONS.entries()) {
+    for (const [factory] of COMPANIONS) {
       const plugin = factory();
-      const exit = registry.enter({ index, name: plugin.name });
+      // 九個的 name 各不相同，所以 `resolveEntries` 補出來的就是 `<name>#0`。
+      const exit = registry.enter({ id: `${plugin.name}#0`, name: plugin.name });
       plugin.apply(registry);
       exit();
     }
@@ -100,9 +101,10 @@ describe('包名歸屬', () => {
 
   it('八個空 installer 一個檢查都不裝——掛滿九個只有 core 觀察得到東西', () => {
     const registry = createRegistry();
-    for (const [index, [factory]] of COMPANIONS.entries()) {
+    for (const [factory] of COMPANIONS) {
       const plugin = factory();
-      const exit = registry.enter({ index, name: plugin.name });
+      // 九個的 name 各不相同，所以 `resolveEntries` 補出來的就是 `<name>#0`。
+      const exit = registry.enter({ id: `${plugin.name}#0`, name: plugin.name });
       plugin.apply(registry);
       exit();
     }

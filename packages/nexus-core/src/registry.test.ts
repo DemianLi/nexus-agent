@@ -11,8 +11,8 @@ import { createRegistry } from './registry.js';
 import { fakeBackend, fakeMiddleware, fakeSink, fakeSubAgent, fakeTool } from './fixtures.js';
 import type { PluginOrigin } from './plugin.js';
 
-const first: PluginOrigin = { index: 0, name: 'alpha' };
-const second: PluginOrigin = { index: 1, name: 'mcp' };
+const first: PluginOrigin = { id: 'alpha#0', name: 'alpha' };
+const second: PluginOrigin = { id: 'mcp#0', name: 'mcp' };
 
 describe('tools 註冊點', () => {
   it('同層同名報錯，訊息同時指名兩個 plugin 與那個工具名', () => {
@@ -23,7 +23,7 @@ describe('tools 註冊點', () => {
 
     const leaveSecond = registry.enter(second);
     expect(() => registry.tools.register(fakeTool('search'))).toThrow(
-      /plugins\[0\] \(alpha\)[\s\S]*plugins\[1\] \(mcp\)/,
+      /alpha#0 \(alpha\)[\s\S]*mcp#0 \(mcp\)/,
     );
     leaveSecond();
   });
@@ -96,7 +96,7 @@ describe('subagents 註冊點', () => {
 
     const leaveSecond = registry.enter(second);
     expect(() => registry.subagents.register(fakeSubAgent('researcher'))).toThrow(
-      /plugins\[0\] \(alpha\)[\s\S]*plugins\[1\] \(mcp\)/,
+      /alpha#0 \(alpha\)[\s\S]*mcp#0 \(mcp\)/,
     );
     leaveSecond();
   });
@@ -140,7 +140,7 @@ describe('註冊者身分', () => {
   it('apply 不巢狀執行', () => {
     const registry = createRegistry();
     const leave = registry.enter(first);
-    expect(() => registry.enter(second)).toThrow('plugins[0] (alpha)');
+    expect(() => registry.enter(second)).toThrow('alpha#0 (alpha)');
     leave();
     expect(() => registry.enter(second)).not.toThrow();
   });
@@ -250,7 +250,7 @@ describe('其餘六個註冊點', () => {
     // `createAgentMemoryMiddleware` 留下的——現在這條路上沒有任何一處展開它。
     it('"~" 開頭被擋，而且訊息指名是誰註冊的', () => {
       expect(() => register('~/.deepagents/AGENTS.md')).toThrow('"~"');
-      expect(() => register('~/.deepagents/AGENTS.md')).toThrow('plugins[0] (alpha)');
+      expect(() => register('~/.deepagents/AGENTS.md')).toThrow('alpha#0 (alpha)');
     });
 
     it('相對路徑被擋', () => {
@@ -288,7 +288,7 @@ describe('其餘六個註冊點', () => {
 
     it('"~" 開頭被擋，而且訊息指名是誰註冊的', () => {
       expect(() => register('~/.dsh/skills/')).toThrow('"~"');
-      expect(() => register('~/.dsh/skills/')).toThrow('plugins[0] (alpha)');
+      expect(() => register('~/.dsh/skills/')).toThrow('alpha#0 (alpha)');
     });
 
     it('相對路徑被擋', () => {
@@ -416,7 +416,7 @@ describe('telemetry 註冊點', () => {
 
     const leaveSecond = registry.enter(second);
     expect(() => registry.telemetry.use(fakeSink())).toThrow(
-      /plugins\[0\] \(alpha\)[\s\S]*plugins\[1\] \(mcp\)/,
+      /alpha#0 \(alpha\)[\s\S]*mcp#0 \(mcp\)/,
     );
     leaveSecond();
   });
