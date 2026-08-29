@@ -242,24 +242,34 @@ export async function createCliAgent(
   model: BaseChatModel;
   sessionLog: SessionLog;
   attachTelemetry: (log: SessionLog) => (() => Promise<void>) | undefined;
+  attachInvariants: (log: SessionLog) => (() => void) | undefined;
   telemetrySharing: SessionTelemetrySharingStatus | undefined;
 }> {
   const model = createCliModel(invocation.live);
-  const { agent, dispose, attachTelemetry, telemetrySharing } = await createNexusAgent({
-    model,
-    plugins,
-    ...(invocation.workspace !== undefined && {
-      backend: new ContainedFilesystemBackend({ rootDir: resolve(cwd, invocation.workspace) }),
-    }),
-    systemPrompt: SYSTEM_PROMPT,
-    checkpointer: new MemorySaver(),
-  });
+  const { agent, dispose, attachTelemetry, attachInvariants, telemetrySharing } =
+    await createNexusAgent({
+      model,
+      plugins,
+      ...(invocation.workspace !== undefined && {
+        backend: new ContainedFilesystemBackend({ rootDir: resolve(cwd, invocation.workspace) }),
+      }),
+      systemPrompt: SYSTEM_PROMPT,
+      checkpointer: new MemorySaver(),
+    });
   // 日誌跟 agent 同壽命：REPL 是一條連續對話，`seq` 要跨輪連續才有意義。
   const sessionLog = new SessionLog(THREAD_ID);
   // **這裡不接線。** 這個工廠兩條路都在用，而 serve 那條不用這份 `sessionLog`——它一個
   // thread 一份，接線點在 {@link ./wire-handler.ts} 建 pump 的那一刻。在這裡接等於幫
   // serve 接上一份永遠不會有事件的日誌，只送得出一筆 `shutdown`。接線交給呼叫端。
-  return { agent, dispose, model, sessionLog, attachTelemetry, telemetrySharing };
+  return {
+    agent,
+    dispose,
+    model,
+    sessionLog,
+    attachTelemetry,
+    attachInvariants,
+    telemetrySharing,
+  };
 }
 
 /** 把一輪 stream 出來的東西印給人看。 */
@@ -465,14 +475,13 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       : await loadPluginModule(invocation.pluginModule, options.cwd);
 
   // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
-  const { agent, dispose, sessionLog, attachTelemetry, telemetrySharing } = await createCliAgent(
-    invocation,
-    plugins,
-    options.cwd,
-  );
+  const { agent, dispose, sessionLog, attachTelemetry, attachInvariants, telemetrySharing } =
+    await createCliAgent(invocation, plugins, options.cwd);
   // REPL 是一條連續對話，一份日誌就是整個 session，所以接線點在這裡而不是每輪。
   // 回傳的 detach 不留：`dispose()` 會把還接著的協調器一起收掉。
   attachTelemetry(sessionLog);
+  // 不變量的 runner 只是一個訂閱，沒有要排空的東西，所以 detach 也不留——行程走了它就沒了。
+  attachInvariants(sessionLog);
 
   // 一輪跑壞了也要收——資源的所有權跟這一次呼叫綁在一起，不跟它成不成功綁在一起。
   //
