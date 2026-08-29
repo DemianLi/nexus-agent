@@ -42,6 +42,7 @@ import {
   type NexusPlugin,
   type PluginRegistry,
   type SessionLog,
+  type SessionTelemetrySharingStatus,
 } from '@nexus/core';
 import { createDeepAgent, StateBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
@@ -173,6 +174,14 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     return {
       agent,
       /**
+       * 掛著的遙測服務說的共享策略，**沒掛任何東西時是 `undefined`**。
+       *
+       * 披露那一層只有在拿到 `undefined` 的時候才渲染「未配置」——這是 dsh 的規矩，
+       * 也是為什麼這裡回的是「有沒有掛」而不是一個保險的預設值。
+       */
+      telemetrySharing: registry.telemetry.service()?.value.sharing as
+        SessionTelemetrySharingStatus | undefined,
+      /**
        * 把一份會話日誌接上遙測。**沒掛後端時回 `undefined`**——沒有後端就沒有出口，
        * 建一個把記錄丟進虛空的協調器只會讓熱路徑白付投影與脫敏的成本。
        *
@@ -180,7 +189,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * @returns 收掉這一次接線的函式，或沒掛後端時的 `undefined`。
        */
       attachTelemetry(log: SessionLog): (() => Promise<void>) | undefined {
-        const mounted = registry.telemetry.sink();
+        const mounted = registry.telemetry.service();
         if (mounted === undefined) return undefined;
         const coordinator = new SessionTelemetryCoordinator({
           log,

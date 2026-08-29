@@ -61,7 +61,9 @@ export { SessionLog } from './session-log.js';
 export type {
   SessionTelemetryRecord,
   SessionTelemetryRedactRule,
+  SessionTelemetryService,
   SessionTelemetrySeverity,
+  SessionTelemetrySharingStatus,
   SessionTelemetrySink,
 } from './session-telemetry.js';
 

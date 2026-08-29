@@ -26,6 +26,7 @@
     "@nexus/plugin-memory": "workspace:*",
     "@nexus/plugin-quickjs": "workspace:*",
     "@nexus/plugin-skills": "workspace:*",
+    "@nexus/plugin-telemetry-otel": "workspace:*",
     "@nexus/plugin-validation": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",

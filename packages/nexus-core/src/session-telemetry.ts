@@ -79,8 +79,10 @@ export type SessionTelemetryRedactRule = (record: SessionTelemetryRecord) => Ses
 /**
  * 協調器對後端的最低要求。
  *
- * dsh 這一格是 Cordis 的 `Service`（`ctx.sessionTelemetry`）；我們沒有 service 註冊，
- * 掛載走 registry 的 `telemetry.useSink()`，一個 registry 只收一個。
+ * **這裡沒有 `sharing`，是刻意的**——協調器從頭到尾不讀它。共享策略是**掛載**這件事的
+ * 要求，不是捕獲的要求，所以它落在 {@link SessionTelemetryService} 上。dsh 同一個切法：
+ * `sharing` 在可載入的 `SessionTelemetryBackend` 上，`SessionTelemetrySink` 上沒有。
+ * 把它塞進這裡只會讓每個測試替身實作一個沒人看的欄位。
  */
 export interface SessionTelemetrySink {
   /**
@@ -108,4 +110,32 @@ export interface SessionTelemetrySink {
    * @returns 後端流水線靜止時 resolve。
    */
   shutdown(): Promise<void>;
+}
+
+/**
+ * 部署選定的會話共享策略，由**掛載中的後端**說出來。
+ *
+ * 詞彙歸 seam 所有而不是歸某個後端，這樣披露就不必知道掛的是誰。三個值照抄 dsh 的
+ * `SessionTelemetrySharingStatus`。
+ *
+ * **`'feedback-only'` 目前沒有任何 mode 產得出來。** dsh 那個模式靠 `feedback/record`
+ * 這個 session 事件驅動（`dsh-command-feedback` 的 `/feedback` 指令），nexus 沒有
+ * feedback 子系統，{@link ./session-log.ts | SessionEventMap} 裡也沒有那個事件種類。
+ * 字彙留著是因為它是 seam 的字彙——**來源不存在，不是省略**。
+ */
+export type SessionTelemetrySharingStatus = 'full' | 'feedback-only' | 'disabled';
+
+/**
+ * 可掛載的後端形：{@link SessionTelemetrySink} 的能力，**加上必須表態的共享策略**。
+ *
+ * `registry.telemetry.use()` 收的是這個。dsh 的對應物是 `SessionTelemetryBackend`
+ * ——Cordis `Service` 的可載入形，`abstract readonly sharing` 就在它上面。
+ *
+ * **每個掛上來的後端都必須表態。** 消費端只有在「一個都沒掛」的時候才渲染未配置，
+ * 這是 dsh 的規矩，也是為什麼 `sharing` 不能是選配的：選配就等於「掛了但沒說」，
+ * 而那在畫面上跟「沒掛」長得一模一樣。
+ */
+export interface SessionTelemetryService extends SessionTelemetrySink {
+  /** 這個後端當前的共享策略。**只陳述策略，不承諾投遞。** */
+  readonly sharing: SessionTelemetrySharingStatus;
 }

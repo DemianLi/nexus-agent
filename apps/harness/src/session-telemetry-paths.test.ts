@@ -17,8 +17,8 @@ import { createWireClient } from '@nexus/wire';
 import type {
   NexusPlugin,
   SessionTelemetryRecord,
-  SessionTelemetrySink,
   SessionTelemetryRedactRule,
+  SessionTelemetryService,
 } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
@@ -29,7 +29,7 @@ import { createWireHandler } from './wire-handler.js';
 const BASE_URL = 'http://telemetry.test';
 const silent = { log: () => undefined, error: () => undefined };
 
-interface Collected extends SessionTelemetrySink {
+interface Collected extends SessionTelemetryService {
   readonly records: SessionTelemetryRecord[];
   readonly shutdowns: { count: number };
 }
@@ -40,6 +40,7 @@ function collectingSink(): Collected {
   return {
     records,
     shutdowns,
+    sharing: 'full',
     emit: (record) => void records.push(record),
     shutdown: () => {
       shutdowns.count += 1;
@@ -49,11 +50,11 @@ function collectingSink(): Collected {
 }
 
 /** 一個只掛遙測的 plugin——真的走 `apply(registry)`，不是繞過契約直接組協調器。 */
-function telemetryPlugin(sink: SessionTelemetrySink, redact?: SessionTelemetryRedactRule) {
+function telemetryPlugin(sink: SessionTelemetryService, redact?: SessionTelemetryRedactRule) {
   const plugin: NexusPlugin = {
     name: 'telemetry',
     apply(registry) {
-      registry.telemetry.useSink(sink);
+      registry.telemetry.use(sink);
       if (redact !== undefined) registry.telemetry.redact(redact);
     },
   };
@@ -123,12 +124,26 @@ describe('遙測接線：CLI 那條路', () => {
   });
 
   it('沒有 plugin 掛後端時不接線——沒有出口就不付投影的成本', async () => {
-    const { dispose, sessionLog, attachTelemetry } = await createCliAgent(
+    const { dispose, sessionLog, attachTelemetry, telemetrySharing } = await createCliAgent(
       { live: false },
       DEFAULT_PLUGINS,
     );
     try {
       expect(attachTelemetry(sessionLog)).toBeUndefined();
+      // 披露那一層讀的就是這個：`undefined` 才是「未配置」。
+      expect(telemetrySharing).toBeUndefined();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('掛了後端時，披露讀得到那個後端說的策略', async () => {
+    const { dispose, telemetrySharing } = await createCliAgent({ live: false }, [
+      ...DEFAULT_PLUGINS,
+      telemetryPlugin(collectingSink()),
+    ]);
+    try {
+      expect(telemetrySharing).toBe('full');
     } finally {
       await dispose();
     }

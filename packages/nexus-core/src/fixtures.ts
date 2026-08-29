@@ -14,7 +14,8 @@ import type {
   NexusPlugin,
   PluginRegistry,
   SessionTelemetryRecord,
-  SessionTelemetrySink,
+  SessionTelemetryService,
+  SessionTelemetrySharingStatus,
 } from './index.js';
 
 /**
@@ -76,7 +77,7 @@ export function fakeMiddleware(name: string): AgentMiddleware {
 }
 
 /** 記下收到什麼的假後端，加上一支看得到關機次數的計數。 */
-export interface FakeSink extends SessionTelemetrySink {
+export interface FakeSink extends SessionTelemetryService {
   readonly records: SessionTelemetryRecord[];
   readonly flushes: { count: number };
   readonly shutdowns: { count: number };
@@ -96,6 +97,7 @@ export function fakeSink(
     readonly onEmit?: () => void;
     readonly onFlush?: () => void;
     readonly onShutdown?: () => void;
+    readonly sharing?: SessionTelemetrySharingStatus;
   } = {},
 ): FakeSink {
   const records: SessionTelemetryRecord[] = [];
@@ -105,6 +107,7 @@ export function fakeSink(
     records,
     flushes,
     shutdowns,
+    sharing: options.sharing ?? 'full',
     emit(record) {
       options.onEmit?.();
       records.push(record);
