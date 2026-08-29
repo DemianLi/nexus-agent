@@ -16,7 +16,7 @@
 import type { Event } from '@nexus/wire';
 import { createWireClient } from '@nexus/wire';
 import type { NexusPlugin } from '@nexus/core';
-import { createSessionInvariantPlugin } from '@nexus/core';
+import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import { describe, expect, it } from 'vitest';
 
 import { createCliAgent, DEFAULT_PLUGINS, runTurn } from './cli.js';
@@ -61,7 +61,7 @@ describe('不變量接線：CLI 那條路', () => {
   it('真的跑一輪，配套入口一條違規都不報', async () => {
     const { agent, dispose, sessionLog, attachInvariants } = await createCliAgent({ live: false }, [
       ...DEFAULT_PLUGINS,
-      createSessionInvariantPlugin(),
+      createCoreInvariantPlugin(),
     ]);
     // **攔 `console.error` 而不是自己開一個陣列**：`attachInvariants` 沒有讓呼叫端換掉
     // `onViolation` 的口，違規就是印到那裡去。一個自己宣告卻永遠不會被寫進去的陣列，
@@ -126,7 +126,7 @@ describe('不變量接線：web 那條路', () => {
   it('接的是 pump 自己那份日誌，真的跑一輪也不誤報', async () => {
     const built = await createCliAgent({ live: false }, [
       ...DEFAULT_PLUGINS,
-      createSessionInvariantPlugin(),
+      createCoreInvariantPlugin(),
     ]);
     const violations: string[] = [];
     const original = console.error;

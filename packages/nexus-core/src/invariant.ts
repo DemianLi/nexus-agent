@@ -1,5 +1,8 @@
 /**
- * `@nexus/core` 自己的不變量配套入口：**會話日誌的 turn 配對**。
+ * `@nexus/core` 的不變量配套入口：**會話日誌的 turn 配對**。
+ *
+ * 檔名與子路徑（`@nexus/core/invariant`）照 dsh 的慣例——每個 package 的配套入口都是
+ * `src/invariant.ts`，只掛在 `./invariant` 上，不從主入口再匯出。
  *
  * 形狀照 dsh 的 `@deepseek-ai/dsh-session/invariant`
  * （`references/deepseek-harness/packages/core/session/src/invariant.ts`），但**檢的東西
@@ -26,7 +29,7 @@ import type { InvariantInstaller } from './invariants.js';
 import type { NexusPlugin } from './plugin.js';
 
 /** 這個配套入口認領的 package 名。 */
-export const SESSION_INVARIANT_PACKAGE = '@nexus/core';
+export const CORE_INVARIANT_PACKAGE = '@nexus/core';
 
 /**
  * turn 配對的三條關係。
@@ -78,11 +81,11 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
  *
  * @returns 註冊 `@nexus/core` 配套入口的 plugin。
  */
-export function createSessionInvariantPlugin(): NexusPlugin {
+export function createCoreInvariantPlugin(): NexusPlugin {
   return {
-    name: 'session-invariant',
+    name: 'core-invariant',
     apply(registry) {
-      registry.invariants.register(SESSION_INVARIANT_PACKAGE, sessionInvariant);
+      registry.invariants.register(CORE_INVARIANT_PACKAGE, sessionInvariant);
     },
   };
 }

@@ -14,16 +14,16 @@ import { createInvariantRunner } from './invariants.js';
 import type { InvariantCompanion, InvariantError } from './invariants.js';
 import { createRegistry } from './registry.js';
 import { SessionLog } from './session-log.js';
-import { createSessionInvariantPlugin, SESSION_INVARIANT_PACKAGE } from './session-invariant.js';
-import { sessionInvariant } from './session-invariant.js';
+import { createCoreInvariantPlugin, CORE_INVARIANT_PACKAGE } from './invariant.js';
+import { sessionInvariant } from './invariant.js';
 
 /** 接上配套入口，回傳收到的違規。 */
 function watch(log: SessionLog): InvariantError[] {
   const violations: InvariantError[] = [];
   const companion: InvariantCompanion = {
-    packageName: SESSION_INVARIANT_PACKAGE,
+    packageName: CORE_INVARIANT_PACKAGE,
     installer: sessionInvariant,
-    origin: { index: 0, name: 'session-invariant' },
+    origin: { index: 0, name: 'core-invariant' },
   };
   createInvariantRunner({
     log,
@@ -157,8 +157,8 @@ describe('三條關係', () => {
 describe('plugin', () => {
   it('掛上去就認領 @nexus/core 這個名字', () => {
     const registry = createRegistry();
-    const exit = registry.enter({ index: 0, name: 'session-invariant' });
-    createSessionInvariantPlugin().apply(registry);
+    const exit = registry.enter({ index: 0, name: 'core-invariant' });
+    createCoreInvariantPlugin().apply(registry);
     exit();
 
     const companions = registry.invariants.companions();
