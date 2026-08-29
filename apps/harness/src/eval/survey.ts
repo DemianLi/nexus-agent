@@ -63,6 +63,7 @@ export const SURVEY_INVENTORY_DATE = '2026-08-29';
 export const SURVEY_MODELS: readonly SurveyModel[] = [
   { label: 'ds-flash', modelId: 'deepseek-ai/deepseek-v4-flash-0731' }, // 21397ms
   { label: 'ds-pro', modelId: 'deepseek-ai/deepseek-v4-pro-0813' }, //     6405ms
+  // 盤點 620ms 過關，完整 agent 迴圈下兩輪各 21 次、0/42 評到分（`500`）。見 .docs/model-inventory.md
   { label: 'diffgemma-26b', modelId: 'google/diffusiongemma-26b-a4b-it' }, // 620ms
   { label: 'gemma-4-31b', modelId: 'google/gemma-4-31b-it' }, //          1404ms
   { label: 'llama-11b', modelId: 'meta/llama-3.2-11b-vision-instruct' }, // 916ms
