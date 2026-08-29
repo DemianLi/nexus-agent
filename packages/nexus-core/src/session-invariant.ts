@@ -68,8 +68,13 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
 /**
  * 把會話日誌的配套入口掛上去。
  *
- * **不在預設清單裡**，這是 dsh 的規矩：單獨掛註冊表不會裝上任何檢查，組裝要自己
- * 加配套入口。
+ * **不在 `DEFAULT_PLUGINS` 裡，而這一點與 dsh 不同，要講清楚。** dsh 的標準組合
+ * （`agent-spine-demo`）確實掛了服務加四個核心配套入口；dsh 的規矩只說「單獨掛註冊表
+ * 不會裝上任何檢查」，沒說預設組合該掛什麼。我們不掛的理由是**我們這側自己的約束**：
+ * `DEFAULT_PLUGINS` 刻意只有 echo 一個，那份清單的 JSDoc 明說它「不替誰決定該裝什麼」，
+ * 哪些 plugin 該進預設要等外部設定機制
+ * （[#46](https://github.com/DemianLi/nexus-agent/issues/46)）啟動才有地方講。
+ * **#46 落地時要回來重新問一次這件事**——它是預設清單的問題，不是這個配套入口的問題。
  *
  * @returns 註冊 `@nexus/core` 配套入口的 plugin。
  */
