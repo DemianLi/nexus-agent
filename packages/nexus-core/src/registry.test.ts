@@ -408,36 +408,36 @@ describe('telemetry 註冊點', () => {
     expect(registry.telemetry.rules()).toHaveLength(1);
   });
 
-  it('第二個後端掛不上去，訊息同時指名兩個 plugin', () => {
+  it('第二個服務掛不上去，訊息同時指名兩個 plugin', () => {
     const registry = createRegistry();
     const leaveFirst = registry.enter(first);
-    registry.telemetry.useSink(fakeSink());
+    registry.telemetry.use(fakeSink());
     leaveFirst();
 
     const leaveSecond = registry.enter(second);
-    expect(() => registry.telemetry.useSink(fakeSink())).toThrow(
+    expect(() => registry.telemetry.use(fakeSink())).toThrow(
       /plugins\[0\] \(alpha\)[\s\S]*plugins\[1\] \(mcp\)/,
     );
     leaveSecond();
   });
 
-  it('撤掉後端之後那個位子是真的空的，別人掛得上', () => {
+  it('撤掉服務之後那個位子是真的空的，別人掛得上', () => {
     const registry = createRegistry();
     const leaveFirst = registry.enter(first);
-    const undo = registry.telemetry.useSink(fakeSink());
+    const undo = registry.telemetry.use(fakeSink());
     leaveFirst();
 
     undo();
-    expect(registry.telemetry.sink()).toBeUndefined();
+    expect(registry.telemetry.service()).toBeUndefined();
 
     const leaveSecond = registry.enter(second);
-    registry.telemetry.useSink(fakeSink());
+    registry.telemetry.use(fakeSink());
     leaveSecond();
-    expect(registry.telemetry.sink()?.origin.name).toBe('mcp');
+    expect(registry.telemetry.service()?.origin.name).toBe('mcp');
   });
 
-  it('沒掛後端時 sink() 是 undefined——披露那一層要靠它回答', () => {
-    expect(createRegistry().telemetry.sink()).toBeUndefined();
+  it('沒掛服務時 service() 是 undefined——披露那一層要靠它回答', () => {
+    expect(createRegistry().telemetry.service()).toBeUndefined();
   });
 
   it('兩個方法都只能在 apply 裡呼叫', () => {
@@ -445,8 +445,8 @@ describe('telemetry 註冊點', () => {
     expect(() => registry.telemetry.redact((record) => record)).toThrow(
       'telemetry.redact()只能在 plugin 的 apply 裡呼叫',
     );
-    expect(() => registry.telemetry.useSink(fakeSink())).toThrow(
-      'telemetry.useSink()只能在 plugin 的 apply 裡呼叫',
+    expect(() => registry.telemetry.use(fakeSink())).toThrow(
+      'telemetry.use()只能在 plugin 的 apply 裡呼叫',
     );
   });
 });

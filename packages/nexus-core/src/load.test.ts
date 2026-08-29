@@ -198,7 +198,7 @@ describe('每個註冊點的回滾', () => {
   /**
    * 每個點各放一樣東西，然後 throw。少包一個 undo 追蹤，這裡就會留下孤兒。
    *
-   * **`telemetry` 兩個方法都在裡面。** `useSink` 漏追的下場最陰：回滾過的 plugin 會佔著
+   * **`telemetry` 兩個方法都在裡面。** `use` 漏追的下場最陰：回滾過的 plugin 會佔著
    * 那個唯一的後端位子，後面的 plugin 掛不上去，而錯誤訊息指的是一個已經不存在的註冊者。
    */
   const greedy = fakePlugin('greedy', (registry) => {
@@ -213,7 +213,7 @@ describe('每個註冊點的回滾', () => {
     registry.memory.addSource('/AGENTS.md');
     registry.lifecycle.onDispose(() => {});
     registry.telemetry.redact((record) => record);
-    registry.telemetry.useSink(fakeSink());
+    registry.telemetry.use(fakeSink());
     registry.tools.register(fakeTool('grep'), { scope: 'researcher' });
     throw new Error('半路壞掉');
   });
@@ -234,18 +234,18 @@ describe('每個註冊點的回滾', () => {
     expect(registry.memory.sources()).toEqual([]);
     expect(registry.lifecycle.disposers()).toEqual([]);
     expect(registry.telemetry.rules()).toEqual([]);
-    expect(registry.telemetry.sink()).toBeUndefined();
+    expect(registry.telemetry.service()).toBeUndefined();
   });
 
-  it('後端位子回滾之後是真的空出來，別的 plugin 掛得上去', async () => {
+  it('服務位子回滾之後是真的空出來，別的 plugin 掛得上去', async () => {
     const registry = createRegistry();
     await expect(loadPlugins([greedy], registry)).rejects.toThrow('半路壞掉');
 
     const later = fakePlugin('later', (r) => {
-      r.telemetry.useSink(fakeSink());
+      r.telemetry.use(fakeSink());
     });
     await loadPlugins([later], registry);
-    expect(registry.telemetry.sink()?.origin.name).toBe('later');
+    expect(registry.telemetry.service()?.origin.name).toBe('later');
   });
 
   it('先前成功載入的 plugin 不受影響', async () => {

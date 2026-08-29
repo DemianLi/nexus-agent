@@ -19,7 +19,7 @@ import { AnonymousEntries, CapabilitySet, NamedEntries } from './entries.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
-import type { SessionTelemetryRedactRule, SessionTelemetrySink } from './session-telemetry.js';
+import type { SessionTelemetryRedactRule, SessionTelemetryService } from './session-telemetry.js';
 
 /**
  * 註冊層的定址。`undefined` 是全域（root agent），字串是那個名字的 subagent。
@@ -331,7 +331,7 @@ export interface LifecycleRegistrationPoint {
  * （`ctx.sessionTelemetry`，重複註冊由 Cordis 拋），脫敏是 waterfall 事件
  * `session-telemetry/record`。**我們沒有 service 註冊也沒有事件匯流排**，`deepagents` /
  * LangChain JS / LangGraph JS 三者都不提供可掛任意具名事件的 waterfall。退到最接近的：
- * 一個註冊點，`useSink` 用具名表擋重複（等價於 Service 的重複拋），`redact` 用依序折疊
+ * 一個註冊點，`use` 用具名表擋重複（等價於 Service 的重複拋），`redact` 用依序折疊
  * 取代 waterfall。折疊丟掉的是「不呼叫 `next()` 就截斷底下所有規則」那個能力，**刻意
  * 丟的**——理由見 {@link ./session-telemetry.ts | SessionTelemetryRedactRule}。
  */
@@ -348,17 +348,18 @@ export interface TelemetryRegistrationPoint {
    */
   rules(): NamedEntry<SessionTelemetryRedactRule>[];
   /**
-   * 掛遙測後端。**一個 registry 只收一個**——兩個後端就是兩份出境資料，而披露那一層
+   * 掛遙測服務。**一個 registry 只收一個**——兩個後端就是兩份出境資料，而披露那一層
    * 只講得出一種策略。
-   * @param sink - 後端實例。
+   * @param service - 後端實例，必須表態 `sharing`。
    * @returns 只撤銷這一次掛載的冪等 undo。
    */
-  useSink(sink: SessionTelemetrySink): () => void;
+  use(service: SessionTelemetryService): () => void;
   /**
-   * 目前掛著的後端。**披露那一層要靠它回答「有沒有東西在送」**。
+   * 目前掛著的服務。**披露那一層要靠它回答「有沒有東西在送、策略是什麼」**——
+   * `undefined` 才是「未配置」，這是 dsh 的規矩。
    * @returns 掛著的那個，或沒掛時的 `undefined`。
    */
-  sink(): NamedEntry<SessionTelemetrySink> | undefined;
+  service(): NamedEntry<SessionTelemetryService> | undefined;
 }
 
 export interface PluginRegistry {
@@ -437,11 +438,11 @@ export function createRegistry(): InternalPluginRegistry {
   const disposers = new AnonymousEntries<Disposer>();
   const redactRules = new AnonymousEntries<SessionTelemetryRedactRule>();
   // 具名表配一個固定的 key：唯一性與 undo 都不必另外寫，重複掛載直接撞在這裡。
-  const SINK_KEY = 'sink';
-  const sinks = new NamedEntries<SessionTelemetrySink>(
+  const SERVICE_KEY = 'service';
+  const services = new NamedEntries<SessionTelemetryService>(
     (_key, existing, incoming) =>
       new Error(
-        `已經有遙測後端了：${formatOrigin(existing)} 掛過，${formatOrigin(incoming)} 又掛一次。` +
+        `已經有遙測服務了：${formatOrigin(existing)} 掛過，${formatOrigin(incoming)} 又掛一次。` +
           `一個 agent 只能有一個後端——兩個就是兩份出境資料，而披露只講得出一種策略。`,
       ),
   );
@@ -592,11 +593,11 @@ export function createRegistry(): InternalPluginRegistry {
       return redactRules.append(rule, origin);
     },
     rules: () => [...redactRules.entries()],
-    useSink(sink) {
-      const origin = requireOrigin('telemetry.useSink()');
-      return sinks.insert(SINK_KEY, sink, origin);
+    use(service) {
+      const origin = requireOrigin('telemetry.use()');
+      return services.insert(SERVICE_KEY, service, origin);
     },
-    sink: () => sinks.get(SINK_KEY),
+    service: () => services.get(SERVICE_KEY),
   };
 
   const lifecyclePoint: LifecycleRegistrationPoint = {

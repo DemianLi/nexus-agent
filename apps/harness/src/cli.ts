@@ -21,7 +21,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import type { NexusPlugin } from '@nexus/core';
+import type { NexusPlugin, SessionTelemetrySharingStatus } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { SessionLog } from '@nexus/core';
 
@@ -31,6 +31,7 @@ import { ContainedFilesystemBackend } from './contained-backend.js';
 import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MODEL_ID } from './live-model.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
 import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
 import type { ScriptedTurn } from './scripted-model.js';
 
@@ -241,9 +242,10 @@ export async function createCliAgent(
   model: BaseChatModel;
   sessionLog: SessionLog;
   attachTelemetry: (log: SessionLog) => (() => Promise<void>) | undefined;
+  telemetrySharing: SessionTelemetrySharingStatus | undefined;
 }> {
   const model = createCliModel(invocation.live);
-  const { agent, dispose, attachTelemetry } = await createNexusAgent({
+  const { agent, dispose, attachTelemetry, telemetrySharing } = await createNexusAgent({
     model,
     plugins,
     ...(invocation.workspace !== undefined && {
@@ -257,7 +259,7 @@ export async function createCliAgent(
   // **這裡不接線。** 這個工廠兩條路都在用，而 serve 那條不用這份 `sessionLog`——它一個
   // thread 一份，接線點在 {@link ./wire-handler.ts} 建 pump 的那一刻。在這裡接等於幫
   // serve 接上一份永遠不會有事件的日誌，只送得出一筆 `shutdown`。接線交給呼叫端。
-  return { agent, dispose, model, sessionLog, attachTelemetry };
+  return { agent, dispose, model, sessionLog, attachTelemetry, telemetrySharing };
 }
 
 /** 把一輪 stream 出來的東西印給人看。 */
@@ -463,7 +465,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       : await loadPluginModule(invocation.pluginModule, options.cwd);
 
   // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
-  const { agent, dispose, sessionLog, attachTelemetry } = await createCliAgent(
+  const { agent, dispose, sessionLog, attachTelemetry, telemetrySharing } = await createCliAgent(
     invocation,
     plugins,
     options.cwd,
@@ -489,6 +491,12 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     // 自己掛 tracer——所以這裡唯一能做的是把「現在是什麼狀態」講出來。不講的話，
     // 「工具參數正在往第三方送」與「什麼都沒送」在畫面上一模一樣。
     for (const line of formatTracingDisclosure(readTracingDisclosure(options.env ?? process.env))) {
+      printer.log(line);
+    }
+    // 第四行是**另一道 seam** 的披露。遙測後端是我們自己掛的，跟上面那道讀環境變數的
+    // tracing 沒有關係——併成一行講會讓兩個不同的出境目標看起來像同一個開關。
+    // 印在這裡是因為**答案到這一刻才存在**：plugin 跑過 `apply` 之前沒有人知道掛了什麼。
+    for (const line of formatTelemetryDisclosure(telemetrySharing)) {
       printer.log(line);
     }
 
