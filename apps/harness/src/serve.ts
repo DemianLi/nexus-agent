@@ -127,11 +127,8 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   const handler = createWireHandler({
     // 一個 thread 一個 agent——各自的 checkpointer、各自的虛擬檔案系統。
     createAgent: async () => {
-      const { agent, dispose, attachTelemetry, telemetrySharing } = await createCliAgent(
-        invocation,
-        plugins,
-        options.cwd,
-      );
+      const { agent, dispose, attachTelemetry, attachInvariants, telemetrySharing } =
+        await createCliAgent(invocation, plugins, options.cwd);
       // **遙測披露印在這裡而不是啟動時，因為啟動的那一刻答案不存在**：`createAgent` 是
       // lazy 的（`wire-handler.ts` 的 `pumpFor` 第一次收到請求才呼叫），plugin 沒跑過
       // `apply` 就沒有人知道有沒有掛後端。在啟動時印「未配置」會是假的。一個 process
@@ -140,7 +137,12 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         telemetryDisclosed = true;
         for (const line of formatTelemetryDisclosure(telemetrySharing)) log(line);
       }
-      return { agent: agent as unknown as PumpAgent, dispose, attachTelemetry };
+      return {
+        agent: agent as unknown as PumpAgent,
+        dispose,
+        attachTelemetry,
+        attachInvariants,
+      };
     },
   });
 

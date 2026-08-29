@@ -31,6 +31,7 @@
  */
 
 import {
+  createInvariantRunner,
   foldRegistry,
   formatOrigin,
   loadPlugins,
@@ -128,6 +129,9 @@ export const DEFAULT_RECURSION_LIMIT = 100;
  * `attachTelemetry` 是遙測的接線口。它在這裡而不在 `@nexus/core`，因為接線需要同時
  * 拿到 registry（誰掛了後端、誰掛了脫敏規則）與一份 {@link SessionLog}，而**只有組裝點
  * 同時看得到這兩個**——core 那側不知道日誌是誰建的，兩條進入點那側不知道 registry。
+ *
+ * `attachInvariants` 同一個理由，接的是不變量配套入口。兩者**不合併**：遙測是把事件
+ * 送出去，不變量是檢查事件之間的關係，一個有出境資料一個沒有，開關與失敗語意都不一樣。
  */
 export type NexusAgentHandle = Awaited<ReturnType<typeof createNexusAgent>>;
 
@@ -203,6 +207,23 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
           attached.delete(coordinator);
           await coordinator.dispose();
         };
+      },
+      /**
+       * 把一份會話日誌接上註冊著的不變量配套入口。**沒有人註冊時回 `undefined`**——
+       * 同 `attachTelemetry` 的理由：沒有檢查就不要在熱路徑上多掛一個訂閱。
+       *
+       * **過濾器（`enabled` / allowlist / blocklist）目前只在 runner 那一層存在，
+       * 這裡沒有把它們接出來。** 現在選擇的粒度就是「清單裡加不加那個配套入口
+       * plugin」，那已經夠用；真的需要在不改清單的前提下開關，再把它接到組裝點的
+       * options 上。
+       *
+       * @param log - 要觀察的日誌。
+       * @returns 收掉這一次接線的函式，或沒有配套入口時的 `undefined`。
+       */
+      attachInvariants(log: SessionLog): (() => void) | undefined {
+        const companions = registry.invariants.companions();
+        if (companions.length === 0) return undefined;
+        return createInvariantRunner({ log, companions });
       },
       async dispose() {
         // 遙測先收：後端很可能是某個 plugin 開的，plugin 的 disposer 一跑它就沒了，

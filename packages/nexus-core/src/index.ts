@@ -36,6 +36,7 @@ export type {
   SkillSourceRegistrationPoint,
   MemorySourceRegistrationPoint,
   LifecycleRegistrationPoint,
+  InvariantRegistrationPoint,
   TelemetryRegistrationPoint,
   Disposer,
   RegisterOptions,
@@ -72,3 +73,19 @@ export type {
   SessionTelemetryCoordinatorOptions,
 } from './session-telemetry-coordinator.js';
 export { SessionTelemetryCoordinator } from './session-telemetry-coordinator.js';
+
+export type {
+  InvariantCompanion,
+  InvariantInstaller,
+  InvariantRunnerOptions,
+  InvariantSelection,
+  InvariantSubject,
+} from './invariants.js';
+export type { InvariantFailure } from './invariants.js';
+export { createInvariantRunner, InvariantError } from './invariants.js';
+
+export {
+  createSessionInvariantPlugin,
+  SESSION_INVARIANT_PACKAGE,
+  sessionInvariant,
+} from './session-invariant.js';

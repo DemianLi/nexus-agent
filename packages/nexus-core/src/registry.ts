@@ -6,10 +6,11 @@
  * `permissions` / `interrupts`）沒有名字可撞，走匿名追加。折疊成
  * `createDeepAgent` 參數的部分在 {@link ./fold.ts}。
  *
- * 外加兩條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
+ * 外加三條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
  * {@link LifecycleRegistrationPoint} 回答「這些東西怎麼收掉」，
- * {@link TelemetryRegistrationPoint} 回答「這個會話發生的事往哪裡送、送之前怎麼洗」。
- * 九個註冊點回答的是「這個 agent 由什麼組成」，三者正交。
+ * {@link TelemetryRegistrationPoint} 回答「這個會話發生的事往哪裡送、送之前怎麼洗」，
+ * {@link InvariantRegistrationPoint} 回答「這個會話發生的事有沒有破壞誰的約定」。
+ * 九個註冊點回答的是「這個 agent 由什麼組成」，四者正交。
  */
 
 import type { StructuredTool } from '@langchain/core/tools';
@@ -19,6 +20,8 @@ import { AnonymousEntries, CapabilitySet, NamedEntries } from './entries.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
+import { duplicateCompanionError } from './invariants.js';
+import type { InvariantCompanion, InvariantInstaller } from './invariants.js';
 import type { SessionTelemetryRedactRule, SessionTelemetryService } from './session-telemetry.js';
 
 /**
@@ -362,6 +365,48 @@ export interface TelemetryRegistrationPoint {
   service(): NamedEntry<SessionTelemetryService> | undefined;
 }
 
+/**
+ * `invariants` 通道：各 package 註冊**自己擁有的跨筆關係**的檢查。
+ *
+ * 註冊表自己一條產品檢查都沒有——這是 dsh 的核心設計，檢查放在擁有者旁邊。
+ * 只註冊而沒有人接線時什麼都不會跑；接線在
+ * {@link ./invariants.ts | createInvariantRunner}。
+ *
+ * **與 dsh 的偏離**（AGENTS.md 的偏離規則），四條：
+ *
+ * 1. **Cordis `ctx.effect` ＋子 fiber** —— dsh 的 `register()` 開一個子
+ *    `ctx.plugin(installer)`、await 它的 setup、失敗原子 dispose 並收回保留。
+ *    `deepagents` / LangChain JS / LangGraph JS 都沒有 fiber 這個東西，我們每個註冊點
+ *    回的是裸 `() => void`。退到：註冊只保留名字，安裝與失敗回滾歸 runner 那一格。
+ * 2. **`installer.inject`** —— dsh 用它宣告子 fiber 拿得到哪些服務。我們沒有 service
+ *    locator，`PluginRegistry` 是固定的一組註冊點。退到：installer 收一個明確的
+ *    {@link InvariantSubject}。
+ * 3. **一次註冊看所有 session** —— dsh 有 `ctx.sessions.list()` ＋ `session/created`。
+ *    我們沒有 session 服務，日誌是各進入點自己 `new` 的。退到：installer **每一份日誌
+ *    各跑一次**。
+ * 4. **違規的去處** —— dsh 的 `fail()` 從報告它的 context 拋出去；我們這側日誌會把
+ *    listener 的拋錯吞成 warn（#99 刻意的）。退到：runner 擁有訂閱、接住
+ *    `InvariantError` 轉給 `onViolation`。**看得見，但否決不了**（[#101](https://github.com/DemianLi/nexus-agent/issues/101) 的決定 b）。
+ *
+ * schemastery ＋ cordis-loader 的 config 驗證退到工廠函式裡的值檢查，同
+ * [#100](https://github.com/DemianLi/nexus-agent/pull/100) 已標註過的那一條。
+ */
+export interface InvariantRegistrationPoint {
+  /**
+   * 註冊一個 package 的配套入口。**包名在這裡被保留**，即使之後過濾器讓它不裝——
+   * 保留是為了兩個 plugin 不會靜默認領同一個名字。
+   * @param packageName - 完整 package 名，表內唯一。
+   * @param installer - 裝這個 package 檢查的函式。
+   * @returns 只撤銷這一次註冊的冪等 undo。
+   */
+  register(packageName: string, installer: InvariantInstaller): () => void;
+  /**
+   * 目前註冊著的配套入口。接線那一層讀它。
+   * @returns 依註冊順序的每一筆，帶著包名與是誰註冊的。
+   */
+  companions(): InvariantCompanion[];
+}
+
 export interface PluginRegistry {
   readonly tools: ToolRegistrationPoint;
   readonly subagents: SubAgentRegistrationPoint;
@@ -374,6 +419,7 @@ export interface PluginRegistry {
   readonly memory: MemorySourceRegistrationPoint;
   readonly lifecycle: LifecycleRegistrationPoint;
   readonly telemetry: TelemetryRegistrationPoint;
+  readonly invariants: InvariantRegistrationPoint;
 }
 
 /**
@@ -446,6 +492,8 @@ export function createRegistry(): InternalPluginRegistry {
           `一個 agent 只能有一個後端——兩個就是兩份出境資料，而披露只講得出一種策略。`,
       ),
   );
+
+  const companions = new NamedEntries<InvariantInstaller>(duplicateCompanionError);
 
   let current: PluginOrigin | undefined;
   function requireOrigin(what: string): PluginOrigin {
@@ -600,6 +648,22 @@ export function createRegistry(): InternalPluginRegistry {
     service: () => services.get(SERVICE_KEY),
   };
 
+  const invariantPoint: InvariantRegistrationPoint = {
+    register(packageName, installer) {
+      const origin = requireOrigin('invariants.register()');
+      if (packageName.length === 0 || packageName.trim() !== packageName) {
+        throw new Error(`${formatOrigin(origin)} 註冊的不變量包名不能是空的、也不能帶前後空白。`);
+      }
+      return companions.insert(packageName, installer, origin);
+    },
+    companions: () =>
+      [...companions.entries()].map(([packageName, entry]) => ({
+        packageName,
+        installer: entry.value,
+        origin: entry.origin,
+      })),
+  };
+
   const lifecyclePoint: LifecycleRegistrationPoint = {
     onDispose(dispose) {
       const origin = requireOrigin('lifecycle.onDispose()');
@@ -621,6 +685,7 @@ export function createRegistry(): InternalPluginRegistry {
     memory: memoryPoint,
     lifecycle: lifecyclePoint,
     telemetry: telemetryPoint,
+    invariants: invariantPoint,
     enter(origin) {
       if (current !== undefined) {
         throw new Error(
