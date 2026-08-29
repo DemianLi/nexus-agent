@@ -23,6 +23,8 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import type { NexusPlugin } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { SessionLog } from '@nexus/core';
+
 import { createNexusAgent } from './agent-factory.js';
 import type { NexusAgentHandle } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -233,7 +235,12 @@ export async function createCliAgent(
   invocation: Pick<CliInvocation, 'live' | 'workspace'>,
   plugins: readonly NexusPlugin[],
   cwd: string = process.cwd(),
-): Promise<{ agent: NexusAgent; dispose: () => Promise<void>; model: BaseChatModel }> {
+): Promise<{
+  agent: NexusAgent;
+  dispose: () => Promise<void>;
+  model: BaseChatModel;
+  sessionLog: SessionLog;
+}> {
   const model = createCliModel(invocation.live);
   const { agent, dispose } = await createNexusAgent({
     model,
@@ -244,7 +251,8 @@ export async function createCliAgent(
     systemPrompt: SYSTEM_PROMPT,
     checkpointer: new MemorySaver(),
   });
-  return { agent, dispose, model };
+  // 日誌跟 agent 同壽命：REPL 是一條連續對話，`seq` 要跨輪連續才有意義。
+  return { agent, dispose, model, sessionLog: new SessionLog(THREAD_ID) };
 }
 
 /** 把一輪 stream 出來的東西印給人看。 */
@@ -263,6 +271,20 @@ interface InterruptUpdate {
   readonly value?: {
     readonly actionRequests?: readonly { readonly name?: string; readonly description?: string }[];
   };
+}
+
+/**
+ * `__interrupt__` 那一筆裡的中斷 id。
+ *
+ * **跟 `thread-pump.ts` 的 `asInterruptEntries` 讀的是同一個形狀**（基座把中斷發成
+ * 一個帶 `id` 的陣列），只是這一側經 `stream(['updates'])` 拿到、那一側經
+ * `streamEvents` 拿到。認不出來就回空陣列——**寧可少記一筆，也不要編一個 id 出來**。
+ */
+function interruptIdsOf(update: unknown): readonly string[] {
+  if (!Array.isArray(update)) return [];
+  return update
+    .map((entry: unknown) => (entry as { id?: unknown } | null)?.id)
+    .filter((id): id is string => typeof id === 'string');
 }
 
 /**
@@ -305,30 +327,47 @@ function printInterrupt(update: unknown, printer: Printer): void {
  * @param input - 使用者說的那句話。
  * @param printer - 輸出去處。
  */
-export async function runTurn(agent: NexusAgent, input: string, printer: Printer): Promise<void> {
+export async function runTurn(
+  agent: NexusAgent,
+  input: string,
+  printer: Printer,
+  sessionLog: SessionLog,
+): Promise<void> {
   let files: Record<string, unknown> = {};
 
-  for await (const [mode, payload] of await agent.stream(toAgentInvocation(input), {
-    streamMode: ['updates', 'values'],
-    configurable: { thread_id: THREAD_ID },
-  })) {
-    if (mode === 'values') {
-      files = (payload as { files?: Record<string, unknown> }).files ?? {};
-      continue;
-    }
-
-    for (const [node, update] of Object.entries(payload as Record<string, unknown>)) {
-      if (node === '__interrupt__') {
-        printInterrupt(update, printer);
+  sessionLog.append('turn/start', { kind: 'message', text: input });
+  try {
+    for await (const [mode, payload] of await agent.stream(toAgentInvocation(input), {
+      streamMode: ['updates', 'values'],
+      configurable: { thread_id: THREAD_ID },
+    })) {
+      if (mode === 'values') {
+        files = (payload as { files?: Record<string, unknown> }).files ?? {};
         continue;
       }
-      const messages = (update as { messages?: BaseMessage[] }).messages ?? [];
-      for (const message of messages) {
-        const label = message.name ? `${node}/${message.name}` : node;
-        printer.log(`[${label}] ${message.text.trim() || '(呼叫工具)'}`);
+
+      for (const [node, update] of Object.entries(payload as Record<string, unknown>)) {
+        if (node === '__interrupt__') {
+          for (const interruptId of interruptIdsOf(update)) {
+            sessionLog.append('interrupt/raised', { interruptId });
+          }
+          printInterrupt(update, printer);
+          continue;
+        }
+        const messages = (update as { messages?: BaseMessage[] }).messages ?? [];
+        for (const message of messages) {
+          const label = message.name ? `${node}/${message.name}` : node;
+          printer.log(`[${label}] ${message.text.trim() || '(呼叫工具)'}`);
+        }
       }
     }
+  } catch (error) {
+    sessionLog.append('turn/failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   }
+  sessionLog.append('turn/end', {});
 
   const paths = Object.keys(files);
   if (paths.length > 0) {
@@ -350,6 +389,7 @@ export async function runRepl(
   agent: NexusAgent,
   io: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream },
   printer: Printer,
+  sessionLog: SessionLog,
 ): Promise<void> {
   const rl = createInterface({ input: io.input, output: io.output, prompt: '> ' });
   // `Interface` 的型別沒有 `closed`（執行期有），所以自己記一份。
@@ -362,7 +402,7 @@ export async function runRepl(
     if (text === '/exit') break;
     if (text.length > 0) {
       try {
-        await runTurn(agent, text, printer);
+        await runTurn(agent, text, printer, sessionLog);
       } catch (error) {
         printer.error(errorMessage(error));
       }
@@ -418,7 +458,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       : await loadPluginModule(invocation.pluginModule, options.cwd);
 
   // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
-  const { agent, dispose } = await createCliAgent(invocation, plugins, options.cwd);
+  const { agent, dispose, sessionLog } = await createCliAgent(invocation, plugins, options.cwd);
 
   // 一輪跑壞了也要收——資源的所有權跟這一次呼叫綁在一起，不跟它成不成功綁在一起。
   //
@@ -442,10 +482,10 @@ export async function runCli(options: RunCliOptions): Promise<void> {
 
     if (invocation.prompt !== undefined) {
       printer.log(`> ${invocation.prompt}\n`);
-      await runTurn(agent, invocation.prompt, printer);
+      await runTurn(agent, invocation.prompt, printer, sessionLog);
     } else {
       printer.log('輸入 /exit 或按 Ctrl-D 結束。\n');
-      await runRepl(agent, { input: options.input, output: options.output }, printer);
+      await runRepl(agent, { input: options.input, output: options.output }, printer, sessionLog);
     }
   } catch (error) {
     await dispose().catch(() => {});

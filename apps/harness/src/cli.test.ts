@@ -8,6 +8,8 @@ import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
+
+import { SessionLog } from '@nexus/core';
 import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
 import {
@@ -225,7 +227,7 @@ describe('CLI 遇到核准中斷', () => {
     });
 
     const { printer, stdout } = recorder();
-    await runTurn(agent, '動手', printer);
+    await runTurn(agent, '動手', printer, new SessionLog('t'));
 
     expect(stdout()).toContain('停在核准點');
     expect(stdout()).toContain('danger');
@@ -238,7 +240,7 @@ describe('CLI 遇到核准中斷', () => {
     const { agent } = await createNexusAgent({ model, plugins: [] });
 
     const { printer, stdout } = recorder();
-    await runTurn(agent, '說點什麼', printer);
+    await runTurn(agent, '說點什麼', printer, new SessionLog('t'));
 
     expect(stdout()).toContain('沒事發生。');
     expect(stdout()).not.toContain('核准');
@@ -335,10 +337,10 @@ describe('關機清理與原本的錯誤', () => {
 describe('對話的連續性', () => {
   it('第二輪看得到第一輪說過的話——REPL 是一條對話，不是一串互不相干的呼叫', async () => {
     const { printer } = recorder();
-    const { agent, model } = await createCliAgent({ live: false }, DEFAULT_PLUGINS);
+    const { agent, model, sessionLog } = await createCliAgent({ live: false }, DEFAULT_PLUGINS);
 
-    await runTurn(agent, '第一句：記住「胡桃」這兩個字。', printer);
-    await runTurn(agent, '第二句：剛剛那兩個字是什麼？', printer);
+    await runTurn(agent, '第一句：記住「胡桃」這兩個字。', printer, sessionLog);
+    await runTurn(agent, '第二句：剛剛那兩個字是什麼？', printer, sessionLog);
 
     // 送進模型的第二輪 prompt 裡還帶著第一句——狀態在 checkpointer 裡，靠 thread_id 認領。
     const prompt = (model as ScriptedChatModel).lastPrompt
@@ -372,7 +374,12 @@ describe('REPL', () => {
     const input = new PassThrough();
     input.end('說點什麼\n/exit\n');
 
-    await runRepl(await replAgent(), { input, output: new PassThrough() }, printer);
+    await runRepl(
+      await replAgent(),
+      { input, output: new PassThrough() },
+      printer,
+      new SessionLog('t'),
+    );
 
     expect(stdout()).toContain('回聲：嗨');
   });
@@ -382,7 +389,12 @@ describe('REPL', () => {
     input.end('說點什麼\n');
 
     await expect(
-      runRepl(await replAgent(), { input, output: new PassThrough() }, recorder().printer),
+      runRepl(
+        await replAgent(),
+        { input, output: new PassThrough() },
+        recorder().printer,
+        new SessionLog('t'),
+      ),
     ).resolves.toBeUndefined();
   });
 
@@ -392,7 +404,12 @@ describe('REPL', () => {
     // 第二句話時腳本已經用完，那一輪會拋。
     input.end('第一句\n第二句\n第三句\n');
 
-    await runRepl(await replAgent(), { input, output: new PassThrough() }, printer);
+    await runRepl(
+      await replAgent(),
+      { input, output: new PassThrough() },
+      printer,
+      new SessionLog('t'),
+    );
 
     expect(stdout()).toContain('回聲：嗨');
     expect(stderr()).toMatch(/腳本只有 2 輪/);
