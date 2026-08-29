@@ -143,6 +143,35 @@ function compilePatterns(field: string, values: readonly string[]): RegExp[] {
 }
 
 /**
+ * 編一份選擇的兩張清單。**規則只有這一份**——組裝點與 runner 走的是同一段程式碼。
+ */
+function compileSelection(selection: InvariantSelection): {
+  enabled: boolean;
+  allowlist: RegExp[];
+  blocklist: RegExp[];
+} {
+  return {
+    enabled: selection.enabled ?? true,
+    allowlist: compilePatterns('packageAllowlist', selection.packageAllowlist ?? []),
+    blocklist: compilePatterns('packageBlocklist', selection.packageBlocklist ?? []),
+  };
+}
+
+/**
+ * 驗一份 {@link InvariantSelection}，壞的當場拋。
+ *
+ * 存在的理由是**時機**：runner 是每一份會話日誌接線時才建的，所以無效的 regex 預設會
+ * 拖到第一輪對話才炸。組裝點在建 agent 的時候先叫這個，壞掉的選擇就跟其他組裝失敗
+ * 一樣落在載入期。
+ *
+ * @param selection - 待驗的選擇。
+ * @throws 有空白、帶前後空白、重複或無效的 pattern——訊息與 runner 那邊是同一句。
+ */
+export function assertInvariantSelection(selection: InvariantSelection): void {
+  compileSelection(selection);
+}
+
+/**
  * 把註冊著的配套入口接到一份日誌上。
  *
  * **runner 擁有那唯一一次 `log.subscribe()`，這是 [#101](https://github.com/DemianLi/nexus-agent/issues/101)
@@ -164,11 +193,8 @@ function compilePatterns(field: string, values: readonly string[]): RegExp[] {
  * @returns 冪等的退訂。過濾之後沒有任何檢查要裝時回傳的 disposer 是 no-op。
  */
 export function createInvariantRunner(options: InvariantRunnerOptions): () => void {
-  const selection = options.selection ?? {};
-  const enabled = selection.enabled ?? true;
   // 過濾器**先編再說**：無效的 regex 要在這裡當場拋，不是等到某一筆事件才發現。
-  const allowlist = compilePatterns('packageAllowlist', selection.packageAllowlist ?? []);
-  const blocklist = compilePatterns('packageBlocklist', selection.packageBlocklist ?? []);
+  const { enabled, allowlist, blocklist } = compileSelection(options.selection ?? {});
   const onViolation =
     options.onViolation ??
     ((error: InvariantError) => {

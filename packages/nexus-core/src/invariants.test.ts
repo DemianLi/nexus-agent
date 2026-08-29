@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { createInvariantRunner, InvariantError } from './invariants.js';
+import { assertInvariantSelection, createInvariantRunner, InvariantError } from './invariants.js';
 import type { InvariantCompanion, InvariantInstaller } from './invariants.js';
 import { createRegistry } from './registry.js';
 import { SessionLog } from './session-log.js';
@@ -319,6 +319,18 @@ describe('過濾器', () => {
 
   it('pattern 不錨定，除非自己寫 ^ 與 $', () => {
     expect(installed({ packageAllowlist: ['mcp'] })).toEqual(['@nexus/plugin-mcp']);
+  });
+
+  it('assertInvariantSelection 走的是同一份規則，只是不接線', () => {
+    // 組裝點靠它把「選擇寫壞了」拉回載入期——runner 是每一份日誌才建的，不先驗
+    // 就會拖到第一輪對話才炸。**規則不能有第二份**，所以這裡對著同樣的輸入斷言同樣的話。
+    expect(() => assertInvariantSelection({})).not.toThrow();
+    expect(() => assertInvariantSelection({ enabled: false })).not.toThrow();
+    expect(() => assertInvariantSelection({ packageAllowlist: ['^@nexus/'] })).not.toThrow();
+    expect(() => assertInvariantSelection({ packageAllowlist: ['('] })).toThrow(/無效的 regex/);
+    expect(() => assertInvariantSelection({ packageBlocklist: [' a'] })).toThrow(
+      /packageBlocklist[\s\S]*前後空白/,
+    );
   });
 
   it('無效、空白與重複的 pattern 讓 runner 當場拋，而不是被跳過', () => {

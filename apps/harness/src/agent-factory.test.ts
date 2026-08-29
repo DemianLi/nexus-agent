@@ -1,5 +1,7 @@
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
+import { loadPlugins, SessionLog } from '@nexus/core';
+import type { NexusPlugin } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent, DEFAULT_RECURSION_LIMIT } from './agent-factory.js';
@@ -231,6 +233,18 @@ describe('createNexusAgent', () => {
 
       expect(failure).toContain('echo-main (echo)');
       expect(failure).toContain('echo-second (echo)');
+
+      // `disabled` 走同一個展開寫法，所以綁在同一條測試上。關掉第二份，撞名就不成立了
+      // ——**那同時證明它的 `apply` 真的沒跑**：跑了就會註冊同名工具，這裡就會炸。
+      const { registry, dispose } = await loadPlugins([
+        createEchoPlugin(),
+        { ...createEchoPlugin({ prefix: '第二份' }), disabled: true },
+      ]);
+      try {
+        expect(registry.tools.resolve(ECHO_TOOL_NAME)).toBeDefined();
+      } finally {
+        await dispose();
+      }
     });
 
     it('requires 缺件 → 報錯', async () => {
@@ -393,6 +407,115 @@ describe('迴圈上限', () => {
     // 塌掉的話下面這個 `= true` 會變成把 `true` 指派給 `false`，typecheck 當場紅。
     const notAny: MessagesAreTyped = true;
     expect(notAny).toBe(true);
+  });
+});
+
+/**
+ * 一個一律報違規的配套入口。**選擇有沒有生效只有靠它看得出來**：安靜的配套入口在
+ * 「裝了但沒違規」與「根本沒裝」之間長得一模一樣。
+ */
+function noisyInvariantPlugin(packageName: string, name = 'noisy-invariant'): NexusPlugin {
+  return {
+    name,
+    apply(registry) {
+      registry.invariants.register(packageName, (subject, fail) => {
+        subject.observe((event) => fail(`看到 ${event.type}`));
+      });
+    },
+  };
+}
+
+/**
+ * 接上不變量、發一筆事件，回收到的違規。
+ *
+ * 攔 `console.error` 是因為 `attachInvariants` 沒有讓呼叫端換掉 `onViolation` 的口
+ * ——違規就是印到那裡去（同 `invariant-paths.test.ts` 的理由）。
+ */
+async function violationsUnder(
+  plugins: readonly NexusPlugin[],
+  invariants?: Parameters<typeof createNexusAgent>[0]['invariants'],
+): Promise<string[] | undefined> {
+  const { attachInvariants, dispose } = await createNexusAgent({
+    model: new ScriptedChatModel({ turns: [] }),
+    plugins,
+    ...(invariants !== undefined && { invariants }),
+  });
+  const log = new SessionLog('selection');
+  const seen: string[] = [];
+  const original = console.error;
+  console.error = (message: unknown) => void seen.push(String(message));
+  try {
+    const detach = attachInvariants(log);
+    if (detach === undefined) return undefined;
+    log.append('turn/start', { kind: 'resume' });
+    detach();
+    return seen;
+  } finally {
+    console.error = original;
+    await dispose();
+  }
+}
+
+describe('不變量的選擇面', () => {
+  it('不給就全裝——這是預設，也是下面每一條的對照組', async () => {
+    expect(
+      await violationsUnder([createEchoPlugin(), noisyInvariantPlugin('@nexus/noisy')]),
+    ).toEqual(['invariant violated by "@nexus/noisy": 看到 turn/start']);
+  });
+
+  it('blocklist 從組裝點傳得進去，那個 package 的檢查就真的沒裝', async () => {
+    // **這條是 #104 那個落差的回歸測試**：`InvariantSelection` 早就存在，但組裝點沒有
+    // 把它接出來，所以九個配套入口一個都選不動。它要走 `createNexusAgent`，core 那側
+    // 的單元測試驗不到「接沒接出來」。
+    expect(
+      await violationsUnder([createEchoPlugin(), noisyInvariantPlugin('@nexus/noisy')], {
+        packageBlocklist: ['^@nexus/noisy$'],
+      }),
+    ).toEqual([]);
+  });
+
+  it('enabled: false 是總開關，一個都不裝', async () => {
+    expect(
+      await violationsUnder(
+        [
+          createEchoPlugin(),
+          noisyInvariantPlugin('@nexus/noisy'),
+          noisyInvariantPlugin('@nexus/other', 'noisy-other'),
+        ],
+        { enabled: false },
+      ),
+    ).toEqual([]);
+  });
+
+  it('過濾成空集合照樣接線——那與「沒有人註冊」是兩件事', async () => {
+    // `attachInvariants` 的 `undefined` 意思是「沒有人註冊配套入口」。過濾掉全部是一個
+    // 有效的選擇結果，runner 照樣要接（它擁有訂閱與失敗語意），只是一個檢查都不裝。
+    expect(
+      await violationsUnder([createEchoPlugin(), noisyInvariantPlugin('@nexus/noisy')], {
+        enabled: false,
+      }),
+    ).not.toBeUndefined();
+  });
+
+  it('條目層的 disabled 才是主要那個開關——關掉配套入口 plugin 就沒有人註冊了', async () => {
+    expect(
+      await violationsUnder([
+        createEchoPlugin(),
+        { ...noisyInvariantPlugin('@nexus/noisy'), disabled: true },
+      ]),
+    ).toBeUndefined();
+  });
+
+  it('壞掉的 pattern 在組裝時就炸，不是拖到第一輪對話', async () => {
+    // runner 是每一份會話日誌各建一個的，所以不先驗的話這個錯誤會落在第一次
+    // `attachInvariants` ——也就是使用者已經送出第一句話之後。
+    await expect(
+      createNexusAgent({
+        model: new ScriptedChatModel({ turns: [] }),
+        plugins: [createEchoPlugin()],
+        invariants: { packageAllowlist: ['('] },
+      }),
+    ).rejects.toThrow(/無效的 regex/);
   });
 });
 
