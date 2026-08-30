@@ -23,13 +23,16 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import type {
   ApprovalPolicy,
+  CommandRegistrationPoint,
   InvariantError,
   NexusPlugin,
   SessionTelemetrySharingStatus,
 } from '@nexus/core';
+import { createCommandExecutor } from '@nexus/plugin-commands';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { SessionLog } from '@nexus/core';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
+import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant';
 import { createEchoInvariantPlugin } from '@nexus/plugin-echo/invariant';
 import { createMcpInvariantPlugin } from '@nexus/plugin-mcp/invariant';
 import { createMemoryInvariantPlugin } from '@nexus/plugin-memory/invariant';
@@ -133,15 +136,18 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
  * 哪些**工具** plugin 該進預設清單是設定的事，那要等**外部**設定機制才有地方講
  * （[#46](https://github.com/DemianLi/nexus-agent/issues/46)）。
  *
- * **十個不變量配套入口是那句話的例外，而例外要說得出理由**
+ * **十一個不變量配套入口是那句話的例外，而例外要說得出理由**
  * （[#107](https://github.com/DemianLi/nexus-agent/issues/107) 拍板）：
  *
  * - **它們不裝功能，只裝觀察。** 一個配套入口不註冊工具、不改 prompt、不碰 backend，
  *   所以「替誰決定該裝什麼」這個顧慮對它們不成立——沒有人的 agent 因為它們而不一樣。
  * - **關得掉。** [#104](https://github.com/DemianLi/nexus-agent/issues/104) 之後條目層有
  *   `disabled`、組裝點有 `invariants` 選擇，所以進來不是單向門。這是它進得來的前提。
- * - **十個全進，不是只有 `@nexus/core`。** 九個是空 installer，掛上去一個檢查都不裝，
- *   買到的只有包名歸屬。**代價是每一次執行多十個條目、十次 `apply`**，而換到的是這份
+ * - **十一個全進，不是只有 `@nexus/core`。** 九個是空 installer，掛上去一個檢查都不裝，
+ *   買到的只有包名歸屬；真的在檢查的是兩個——`@nexus/core`（turn 配對）與
+ *   `@nexus/plugin-commands`（命令生命週期配對，
+ *   [#118](https://github.com/DemianLi/nexus-agent/issues/118)）。
+ *   **代價是每一次執行多十一個條目、十一次 `apply`**，而換到的是這份
  *   清單與 `registry.invariants.companions()` 對得起來——少掛的那幾個會讓「這個 package
  *   沒有可檢的關係」與「這個 package 的檢查沒掛上」在診斷裡長得一模一樣。
  *
@@ -150,6 +156,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
 export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
   createEchoPlugin(),
   createCoreInvariantPlugin(),
+  createCommandsInvariantPlugin(),
   createEchoInvariantPlugin(),
   createMcpInvariantPlugin(),
   createMemoryInvariantPlugin(),
@@ -311,12 +318,13 @@ export async function createCliAgent(
   dispose: () => Promise<void>;
   model: BaseChatModel;
   sessionLog: SessionLog;
+  commands: CommandRegistrationPoint;
   attachTelemetry: (log: SessionLog) => (() => Promise<void>) | undefined;
   attachInvariants: (log: SessionLog) => (() => void) | undefined;
   telemetrySharing: SessionTelemetrySharingStatus | undefined;
 }> {
   const model = createCliModel(invocation.live);
-  const { agent, dispose, attachTelemetry, attachInvariants, telemetrySharing } =
+  const { agent, commands, dispose, attachTelemetry, attachInvariants, telemetrySharing } =
     await createNexusAgent({
       model,
       plugins,
@@ -338,6 +346,7 @@ export async function createCliAgent(
     dispose,
     model,
     sessionLog,
+    commands,
     attachTelemetry,
     attachInvariants,
     telemetrySharing,
@@ -476,16 +485,25 @@ export async function runTurn(
  * **這一層吞執行期的錯誤**，印完接著問下一句——一輪答壞了不是關掉工具的理由，而手動
  * 驗證正是要一句接一句試。組裝期的錯誤不在這裡：那些在 REPL 開起來之前就拋了。
  *
+ * **`/exit` 刻意留在這裡，不註冊成命令。** 它控制的是這個 REPL 不是 agent，而
+ * `CommandResult` 沒有「結束發派面」這一格（dsh 那邊也沒有）。**代價要先講**：日後拿
+ * `commands.list()` 做 `/help` 的時候，`/exit` 不會出現在那份清單裡，補的人要自己知道。
+ *
  * @param agent - 組裝好的 agent。
  * @param io - readline 收發的兩端。
  * @param printer - 輸出去處。
+ * @param sessionLog - 這條 REPL 的事件日誌。
+ * @param commands - plugin 註冊的命令。**執行器在這裡建，一個 REPL 一個**——
+ *   `@nexus/plugin-commands` 的配套入口就是靠「一次一個」這件事在檢查配對的。
  */
 export async function runRepl(
   agent: NexusAgent,
   io: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream },
   printer: Printer,
   sessionLog: SessionLog,
+  commands: Pick<CommandRegistrationPoint, 'find'>,
 ): Promise<void> {
+  const executor = createCommandExecutor({ commands, sessionLog });
   const rl = createInterface({ input: io.input, output: io.output, prompt: '> ' });
   // `Interface` 的型別沒有 `closed`（執行期有），所以自己記一份。
   let closed = false;
@@ -497,7 +515,16 @@ export async function runRepl(
     if (text === '/exit') break;
     if (text.length > 0) {
       try {
-        await runTurn(agent, text, printer, sessionLog);
+        // **沒有取消訊號可給**：這條 REPL 沒有「按 Ctrl-C 中止這一次」的路，所以給一個
+        // 從來不會 abort 的。有那條路的時候換掉這一行就行，執行器那側已經接得住。
+        const execution = await executor.execute(text, new AbortController().signal);
+        if (execution === undefined) {
+          // 語法不符或名字不認得——**照原樣送給模型**，跟這行改動之前一模一樣。
+          await runTurn(agent, text, printer, sessionLog);
+        } else if (execution.result.text !== undefined) {
+          const write = execution.result.kind === 'error' ? printer.error : printer.log;
+          write(execution.result.text);
+        }
       } catch (error) {
         printer.error(errorMessage(error));
       }
@@ -553,21 +580,28 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       : await loadPluginModule(invocation.pluginModule, options.cwd);
 
   // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
-  const { agent, dispose, sessionLog, attachTelemetry, attachInvariants, telemetrySharing } =
-    await createCliAgent(
-      invocation,
-      plugins,
-      options.cwd,
-      (error) =>
-        // **不繞過 `Printer`。** 違規跟 agent 的輸出落在同一個終端機上，前綴是唯一分得出
-        // 誰在講話的東西——同 `printInterrupt` 的 `[核准]`。訊息本身已經帶著
-        // `invariant violated by "<pkg>"`，所以擁有它的 package 不必在這裡再講一次。
-        printer.error(`[不變量] ${error.message}`),
-      // **這個入口沒有人在。** 收核准決定的介面在 web（`serve.ts` 那條刻意不傳這個），
-      // 這裡按不下去，所以停在核准點只有一個結局：整輪作廢。關掉之後被擋的那個工具
-      // 拿到一則模型讀得懂的拒絕，其餘照跑完（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
-      HEADLESS_APPROVALS,
-    );
+  const {
+    agent,
+    commands,
+    dispose,
+    sessionLog,
+    attachTelemetry,
+    attachInvariants,
+    telemetrySharing,
+  } = await createCliAgent(
+    invocation,
+    plugins,
+    options.cwd,
+    (error) =>
+      // **不繞過 `Printer`。** 違規跟 agent 的輸出落在同一個終端機上，前綴是唯一分得出
+      // 誰在講話的東西——同 `printInterrupt` 的 `[核准]`。訊息本身已經帶著
+      // `invariant violated by "<pkg>"`，所以擁有它的 package 不必在這裡再講一次。
+      printer.error(`[不變量] ${error.message}`),
+    // **這個入口沒有人在。** 收核准決定的介面在 web（`serve.ts` 那條刻意不傳這個），
+    // 這裡按不下去，所以停在核准點只有一個結局：整輪作廢。關掉之後被擋的那個工具
+    // 拿到一則模型讀得懂的拒絕，其餘照跑完（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
+    HEADLESS_APPROVALS,
+  );
   // REPL 是一條連續對話，一份日誌就是整個 session，所以接線點在這裡而不是每輪。
   // 回傳的 detach 不留：`dispose()` 會把還接著的協調器一起收掉。
   attachTelemetry(sessionLog);
@@ -606,7 +640,13 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       await runTurn(agent, invocation.prompt, printer, sessionLog);
     } else {
       printer.log('輸入 /exit 或按 Ctrl-D 結束。\n');
-      await runRepl(agent, { input: options.input, output: options.output }, printer, sessionLog);
+      await runRepl(
+        agent,
+        { input: options.input, output: options.output },
+        printer,
+        sessionLog,
+        commands,
+      );
     }
   } catch (error) {
     await dispose().catch(() => {});

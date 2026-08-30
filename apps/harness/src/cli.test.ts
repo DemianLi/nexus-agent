@@ -135,13 +135,13 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是一個工具 ＋ 十個配套入口', async () => {
+  it('預設清單是一個工具 ＋ 十一個配套入口', async () => {
     // **工具只有 echo 一個，這一半沒變**：預設組裝要能證明工具真的接上了，不替誰決定
-    // 該裝什麼。十個配套入口是那句話的例外，理由寫在 `DEFAULT_PLUGINS` 的 JSDoc 上
+    // 該裝什麼。十一個配套入口是那句話的例外，理由寫在 `DEFAULT_PLUGINS` 的 JSDoc 上
     // （[#107](https://github.com/DemianLi/nexus-agent/issues/107)）。
     const names = DEFAULT_PLUGINS.map((plugin) => plugin.name);
     expect(names.filter((name) => !name.endsWith('-invariant'))).toEqual(['echo']);
-    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(10);
+    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(11);
   });
 
   it('**違規印到 stderr 而且帶前綴**——不是靠 runner 預設的 `console.error`', async () => {
@@ -486,11 +486,11 @@ describe('REPL', () => {
   ];
 
   async function replAgent() {
-    const { agent } = await createNexusAgent({
+    const { agent, commands } = await createNexusAgent({
       model: new ScriptedChatModel({ turns: ONE_TURN }),
       plugins: DEFAULT_PLUGINS,
     });
-    return agent;
+    return { agent, commands };
   }
 
   it('一行一輪，/exit 收工', async () => {
@@ -498,11 +498,13 @@ describe('REPL', () => {
     const input = new PassThrough();
     input.end('說點什麼\n/exit\n');
 
+    const repl = await replAgent();
     await runRepl(
-      await replAgent(),
+      repl.agent,
       { input, output: new PassThrough() },
       printer,
       new SessionLog('t'),
+      repl.commands,
     );
 
     expect(stdout()).toContain('回聲：嗨');
@@ -512,12 +514,14 @@ describe('REPL', () => {
     const input = new PassThrough();
     input.end('說點什麼\n');
 
+    const repl = await replAgent();
     await expect(
       runRepl(
-        await replAgent(),
+        repl.agent,
         { input, output: new PassThrough() },
         recorder().printer,
         new SessionLog('t'),
+        repl.commands,
       ),
     ).resolves.toBeUndefined();
   });
@@ -528,11 +532,13 @@ describe('REPL', () => {
     // 第二句話時腳本已經用完，那一輪會拋。
     input.end('第一句\n第二句\n第三句\n');
 
+    const repl = await replAgent();
     await runRepl(
-      await replAgent(),
+      repl.agent,
       { input, output: new PassThrough() },
       printer,
       new SessionLog('t'),
+      repl.commands,
     );
 
     expect(stdout()).toContain('回聲：嗨');

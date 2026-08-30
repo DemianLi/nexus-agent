@@ -35,6 +35,7 @@
     "@langchain/langgraph-sdk": "^1.9.23",
     "@langchain/openai": "^1.5.10",
     "@nexus/core": "workspace:*",
+    "@nexus/plugin-commands": "workspace:*",
     "@nexus/plugin-echo": "workspace:*",
     "@nexus/plugin-mcp": "workspace:*",
     "@nexus/plugin-memory": "workspace:*",

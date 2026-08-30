@@ -42,7 +42,16 @@ export interface OpenEventsOptions {
   readonly signal?: AbortSignal;
 }
 
-export type CommandResult = CommandResponse | ErrorResponse;
+/**
+ * 上行 RPC 的回應。**收件回條，不是命令的執行結果。**
+ *
+ * 名字從 `CommandResult` 改成這個，是因為
+ * [#118](https://github.com/DemianLi/nexus-agent/issues/118) 引進了**人打的斜線命令**，
+ * 而 dsh 那一側的結果型別就叫 `CommandResult`。`Command` 在這個檔案裡是
+ * **agent-protocol 自己的字**（見 `commandPath` 的說明），那個不動；但這個別名是我們
+ * 自己取的，讓路給同名而語意不同的那一個。
+ */
+export type UplinkResult = CommandResponse | ErrorResponse;
 
 export interface WireClient {
   /**
@@ -56,12 +65,12 @@ export interface WireClient {
     options?: OpenEventsOptions,
   ): Promise<AsyncGenerator<Event, void, undefined>>;
   /** 送一句話進去。回應只是收件回條，不等這一輪跑完。 */
-  runStart(threadId: string, text: string): Promise<CommandResult>;
+  runStart(threadId: string, text: string): Promise<UplinkResult>;
   /** 回答一個核准請求。同一個中斷的多筆決定要一次送，見開發計劃 Phase 5 的全有全無那條。 */
   inputRespond(
     threadId: string,
     params: Pick<InputRespondOne, 'namespace' | 'interrupt_id' | 'response'>,
-  ): Promise<CommandResult>;
+  ): Promise<UplinkResult>;
 }
 
 export function createWireClient(options: WireClientOptions): WireClient {
@@ -84,13 +93,13 @@ export function createWireClient(options: WireClientOptions): WireClient {
     threadId: string,
     method: UplinkMethod,
     command: Command,
-  ): Promise<CommandResult> {
+  ): Promise<UplinkResult> {
     // 路徑與封包各講一次 method，server 端不合就拒——照 dsh 的 `fetch/handler.ts`。
     const response = await postJson(commandPath(threadId, method), command);
     if (!response.ok) {
       throw new Error(`上行被載體層擋下：${response.status} ${await response.text()}`);
     }
-    return (await response.json()) as CommandResult;
+    return (await response.json()) as UplinkResult;
   }
 
   return {

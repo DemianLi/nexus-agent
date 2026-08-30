@@ -57,5 +57,5 @@ export {
   uniformDecisions,
 } from './conversation.js';
 
-export type { CommandResult, OpenEventsOptions, WireClient, WireClientOptions } from './client.js';
+export type { OpenEventsOptions, UplinkResult, WireClient, WireClientOptions } from './client.js';
 export { createWireClient } from './client.js';

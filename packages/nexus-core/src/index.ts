@@ -27,6 +27,15 @@ export {
   runApprovalGate,
 } from './approval.js';
 
+export type {
+  CommandDefinition,
+  CommandDescriptor,
+  CommandInputDescriptor,
+  CommandInvocation,
+  CommandResult,
+} from './commands.js';
+export { COMMAND_NAME_PATTERN, normalizeCommandDefinition } from './commands.js';
+
 export type { NamedEntry, DuplicateErrorFactory } from './entries.js';
 export { AnonymousEntries, NamedEntries, CapabilitySet } from './entries.js';
 
@@ -47,6 +56,7 @@ export type {
   LifecycleRegistrationPoint,
   InvariantRegistrationPoint,
   TelemetryRegistrationPoint,
+  CommandRegistrationPoint,
   Disposer,
   RegisterOptions,
   ScopeKey,

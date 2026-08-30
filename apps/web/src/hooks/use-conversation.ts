@@ -6,7 +6,7 @@
  * 這個 hook 只負責 React 那一半：連線的生命週期與送出的時機。
  */
 
-import type { CommandResult, ConversationState, WireClient } from '@nexus/wire';
+import type { ConversationState, UplinkResult, WireClient } from '@nexus/wire';
 import {
   appendDecision,
   appendHumanTurn,
@@ -95,7 +95,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   }, [client, threadId]);
 
   /** 收下上行的回條：被拒就說出來，成功就把上一次的抱怨收掉。 */
-  const note = useCallback((result: CommandResult) => {
+  const note = useCallback((result: UplinkResult) => {
     setCommandError(result.type === 'error' ? result.message : undefined);
   }, []);
 

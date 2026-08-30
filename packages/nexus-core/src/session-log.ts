@@ -25,8 +25,16 @@
  * 補訊息是後面的事，補的時候要先講清楚顆粒度怎麼對齊。
  */
 
-/** 這一版收得下的事件種類。**加種類要同時回答「兩條路都產得出來嗎」。** */
-export type SessionEventType = 'turn/start' | 'turn/end' | 'turn/failed' | 'interrupt/raised';
+/**
+ * 這一版收得下的事件種類。**加種類要同時回答「兩條路都產得出來嗎」。**
+ *
+ * `command/*` 這一對答得乾淨，理由值得留著：**它們根本不是模型串流事件**。產它們的是
+ * 進入點（`runRepl` 手上就有這份日誌），不是 `streamEvents` 或 `stream(['updates'])`
+ * ——上面那段排除訊息內容的「顆粒度對不齊」在這裡沒有指涉對象，同一段程式碼在兩條路
+ * 上產出一模一樣的東西。見 [#118](https://github.com/DemianLi/nexus-agent/issues/118)。
+ */
+export type SessionEventType =
+  'turn/start' | 'turn/end' | 'turn/failed' | 'interrupt/raised' | 'command/run' | 'command/done';
 
 /** 每一種事件帶什麼。 */
 export interface SessionEventMap {
@@ -38,17 +46,59 @@ export interface SessionEventMap {
   'turn/failed': { readonly message: string };
   /** 掛上了一顆等人回答的中斷。 */
   'interrupt/raised': { readonly interruptId: string };
+  /**
+   * 一個解析得出來的斜線命令進了它的 handler。**只記日誌，永遠不進模型**。
+   *
+   * 與 `command/done` 靠 `commandId` 配對，形狀照 dsh 的 `tool/call`↔`tool/result`。
+   * `name` 與 `args` 是 `parseCommand` 自己的切分（命令名，以及**含分隔空白的原文**），
+   * 所以讀日誌的人不必再解析一次。
+   *
+   * **收不下的行不記**：語法不符或名字不認得的，從來沒進過 handler，日誌裡不留痕跡。
+   * 這一條照 dsh 的 `execute`：「Admission misses log nothing」。
+   *
+   * **`args` 是使用者原話，而它會原樣進遙測**——協調器一律鏡像每一顆事件（見
+   * `session-telemetry-coordinator.ts`）。要把使用者輸入擋在遙測外，得補 dsh 那個
+   * `recordInput` 開關；這一版沒有它，理由見 [#118](https://github.com/DemianLi/nexus-agent/issues/118)。
+   */
+  'command/run': {
+    readonly commandId: string;
+    readonly name: string;
+    readonly args: string;
+    readonly source: { readonly kind: 'user' };
+  };
+  /**
+   * 配對的那次執行落定了。handler 拋錯或被中止都落成 `kind: 'error'`。
+   *
+   * **`text` 沒話說的時候要整個不放這個 key，不能放 `undefined`**——`snapshotJsonValue`
+   * 對 `undefined` 是當場拋的，而它拋的時候整筆不算，等於這次執行在日誌裡沒有落定。
+   */
+  'command/done': {
+    readonly commandId: string;
+    readonly kind: 'success' | 'error';
+    readonly text?: string;
+  };
 }
 
 /** 日誌裡的一筆。凍過的，拿到之後改不動。 */
-export interface SessionEvent<T extends SessionEventType = SessionEventType> {
-  readonly type: T;
-  /** 這一筆在這份日誌裡的位置。**append 當下由長度決定**，一個 session 內單調遞增。 */
-  readonly seq: number;
-  /** Unix epoch 毫秒。 */
-  readonly time: number;
-  readonly data: SessionEventMap[T];
-}
+/**
+ * 日誌裡的一筆。
+ *
+ * **刻意是分配式的條件型別，不是 interface。** 寫成 `interface { type: T; data:
+ * SessionEventMap[T] }` 的話，`SessionEvent`（T 是整個 union）的 `data` 是所有酬載的
+ * 聯集，而 `event.type === 'command/run'` **narrow 不動它**——不變量檢查與遙測投影都
+ * 只拿得到聯集，只能靠轉型硬讀。分配之後 `SessionEvent` 是六個具體形狀的 union，
+ * `type` 就是它的判別欄位。
+ */
+export type SessionEvent<T extends SessionEventType = SessionEventType> = T extends SessionEventType
+  ? {
+      readonly type: T;
+      /** 這一筆在這份日誌裡的位置。**append 當下由長度決定**，一個 session 內單調遞增。 */
+      readonly seq: number;
+      /** Unix epoch 毫秒。 */
+      readonly time: number;
+      readonly data: SessionEventMap[T];
+    }
+  : never;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null) return false;
@@ -201,12 +251,15 @@ export class SessionLog {
           `（想記的是 "${type}"）。要在觀察到事件之後再記一筆，把它排到下一個 tick。`,
       );
     }
-    const event = deepFreeze<SessionEvent<T>>({
+    // **這層轉型是型別推導的縫，不是行為的縫。** `SessionEvent` 是分配式的條件型別
+    // （見它自己的說明），而 `T` 在這裡還是個泛型參數——TypeScript 不會把條件型別對
+    // 未解析的 `T` 展開，所以字面量對不上 `SessionEvent<T>`。欄位本身完全吻合。
+    const event = deepFreeze({
       type,
       seq: this.#events.length,
       time: Date.now(),
       data: snapshot,
-    });
+    }) as SessionEvent<T>;
     // 清單先凍住：回呼期間的訂閱／退訂不影響這一輪看得到誰。
     const listeners = [...this.#listeners];
     this.#events.push(event);

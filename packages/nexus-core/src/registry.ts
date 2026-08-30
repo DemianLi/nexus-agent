@@ -6,17 +6,20 @@
  * `permissions` / `approvals`）沒有名字可撞，走匿名追加。折疊成
  * `createDeepAgent` 參數的部分在 {@link ./fold.ts}。
  *
- * 外加三條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
+ * 外加四條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
  * {@link LifecycleRegistrationPoint} 回答「這些東西怎麼收掉」，
  * {@link TelemetryRegistrationPoint} 回答「這個會話發生的事往哪裡送、送之前怎麼洗」，
- * {@link InvariantRegistrationPoint} 回答「這個會話發生的事有沒有破壞誰的約定」。
- * 九個註冊點回答的是「這個 agent 由什麼組成」，四者正交。
+ * {@link InvariantRegistrationPoint} 回答「這個會話發生的事有沒有破壞誰的約定」，
+ * {@link CommandRegistrationPoint} 回答「人打得出哪些斜線命令」。
+ * 九個註冊點回答的是「這個 agent 由什麼組成」，五者正交。
  */
 
 import type { StructuredTool } from '@langchain/core/tools';
 import type { AnyBackendProtocol, SubAgent } from 'deepagents';
 import type { AgentMiddleware } from './base-types.js';
 import type { PreToolListener } from './approval.js';
+import { normalizeCommandDefinition } from './commands.js';
+import type { CommandDefinition, CommandDescriptor } from './commands.js';
 import { AnonymousEntries, CapabilitySet, NamedEntries } from './entries.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
@@ -400,6 +403,43 @@ export interface InvariantRegistrationPoint {
   companions(): InvariantCompanion[];
 }
 
+/**
+ * `commands` 通道：**人打的斜線命令**。
+ *
+ * **它與九個註冊點不同軸**，理由同 lifecycle 與 telemetry：產物不進 `createDeepAgent`
+ * 的參數。命令由進入點發派，不經過模型——`@nexus/plugin-commands` 的執行器讀這裡。
+ *
+ * **形狀差異，不是偏離**（AGENTS.md 的偏離規則只蓋「基座表達不出來」，這兩條不是）：
+ *
+ * 1. dsh 的命令面是 Cordis 的**可選服務**——`packages/plan/plan-mode/src/index.ts` 用
+ *    `ctx.inject(['commands'], …)` 掛子節點，「命令註冊表被組進來時才啟用」。我們的
+ *    `PluginRegistry` 是固定介面，每個註冊點永遠都在。**代價是零**：不存在「命令面
+ *    缺席」的組裝。
+ * 2. dsh 有 `ScopedLayers` / `view(agent)`，全域註冊被 per-agent 註冊遮蔽。我們一次
+ *    `createNexusAgent` 一個 registry，**遮蔽沒有指涉對象**。寫在這裡是為了後面的人
+ *    不要「還原」它。
+ */
+export interface CommandRegistrationPoint {
+  /**
+   * 註冊一個命令。中繼資料在這裡就驗（見 {@link normalizeCommandDefinition}）。
+   * @param definition - 命令名、描述、可選的輸入提示與 handler。
+   * @returns 只撤銷這一次註冊的冪等 undo。
+   * @throws 名字重複，或中繼資料不合格。
+   */
+  register(definition: CommandDefinition): () => void;
+  /**
+   * 探索清單，**依名字排序**、不帶 handler。
+   * @returns 凍過的 descriptor。
+   */
+  list(): readonly CommandDescriptor[];
+  /**
+   * 解析一個命令名。
+   * @param name - 不帶斜線的命令名。
+   * @returns 那一筆定義，沒有時是 `undefined`。
+   */
+  find(name: string): CommandDefinition | undefined;
+}
+
 export interface PluginRegistry {
   readonly tools: ToolRegistrationPoint;
   readonly subagents: SubAgentRegistrationPoint;
@@ -413,6 +453,7 @@ export interface PluginRegistry {
   readonly lifecycle: LifecycleRegistrationPoint;
   readonly telemetry: TelemetryRegistrationPoint;
   readonly invariants: InvariantRegistrationPoint;
+  readonly commands: CommandRegistrationPoint;
 }
 
 /**
@@ -487,6 +528,17 @@ export function createRegistry(): InternalPluginRegistry {
   );
 
   const companions = new NamedEntries<InvariantInstaller>(duplicateCompanionError);
+  const commandEntries = new NamedEntries<{
+    definition: CommandDefinition;
+    descriptor: CommandDescriptor;
+  }>(
+    (name, existing, incoming) =>
+      new Error(
+        `命令 "/${name}" 已經註冊過了：${formatOrigin(existing)} 註冊過，` +
+          `${formatOrigin(incoming)} 又註冊一次。一個名字只能有一個 handler——` +
+          `讓後來的靜靜蓋掉前面的，等於使用者打的那一行意思會隨載入順序改變。`,
+      ),
+  );
 
   let current: PluginOrigin | undefined;
   function requireOrigin(what: string): PluginOrigin {
@@ -653,6 +705,22 @@ export function createRegistry(): InternalPluginRegistry {
       })),
   };
 
+  const commandPoint: CommandRegistrationPoint = {
+    register(definition) {
+      const origin = requireOrigin('commands.register()');
+      const normalized = normalizeCommandDefinition(definition);
+      return commandEntries.insert(normalized.definition.name, normalized, origin);
+    },
+    list: () =>
+      Object.freeze(
+        [...commandEntries.entries()]
+          .map(([, entry]) => entry.value.descriptor)
+          // 名字在表裡唯一，所以不會有相等的一對。
+          .sort((left, right) => (left.name < right.name ? -1 : 1)),
+      ),
+    find: (name) => commandEntries.get(name)?.value.definition,
+  };
+
   const lifecyclePoint: LifecycleRegistrationPoint = {
     onDispose(dispose) {
       const origin = requireOrigin('lifecycle.onDispose()');
@@ -675,6 +743,7 @@ export function createRegistry(): InternalPluginRegistry {
     lifecycle: lifecyclePoint,
     telemetry: telemetryPoint,
     invariants: invariantPoint,
+    commands: commandPoint,
     enter(origin) {
       if (current !== undefined) {
         throw new Error(
