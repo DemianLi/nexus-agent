@@ -89,6 +89,21 @@ registry.memory.addSource(path); // 純累加；路徑格式在註冊期擋（�
 （誠實的一句：`.agents/notes/rejected/` 底下**沒有**明文拒絕過自我批判的 note，
 所以能主張的是「它不存在、它做了別的」，不是「dsh 拒絕過」。）
 
+**2026-08-30 續：#116 留下的「誰關得掉計劃模式」，答案也在 dsh 原始碼裡。**
+`packages/plan/plan-mode/src/index.ts:5` 的檔頭明寫 `/plan off` 讓使用者直接離開，同檔
+`:294` 用 `ctx.inject(['commands'], …)` 把命令掛成可選子節點。命令註冊面因此補在
+[#118](https://github.com/DemianLi/nexus-agent/issues/118)（`packages/nexus-plugin-commands`
+＋ `registry.commands`，第十三個註冊點）。
+
+**#118 沒有偏離要標，而這件事本身值得記著。** #116 退到 `stateSchema` 的原因是
+**plugin** 拿不到 `SessionLog`；命令的產生者是**進入點**（`runRepl` 手上就有那份日誌），
+所以 `command/run` / `command/done` 走的就是 dsh 的形狀。`SessionEventType` 的門檻
+（「兩條路都產得出來嗎」）在這裡答得乾淨：命令事件根本不是模型串流事件，當初排除訊息
+內容的顆粒度問題沒有指涉對象。
+
+順帶正名一件 #116 的事：dsh 離開計劃模式的兩條路（`/plan off`、`exit_plan_mode` 的人工
+評審）**都需要人**。所以「headless 下模式鎖死」是規格不是缺陷。
+
 harness 五大範圍對應：解析標準化（PluginRegistry + zod）、編排迴圈（deepagents）、記憶層（內建，但只注入不保存——見第 5 節 Phase 3）、工具層（內建）、結果校驗（自建 plugin——deepagents 無現成方案，為驗證插件架構價值的第一個實戰 plugin）。
 
 ## 3. 套件結構（pnpm workspace）

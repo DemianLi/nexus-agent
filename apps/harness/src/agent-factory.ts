@@ -233,6 +233,14 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     return {
       agent,
       /**
+       * plugin 註冊的**人的命令**。進入點靠它把一行 `/name` 發派出去。
+       *
+       * 交出去的是整個註冊點而不是只有 `find`，理由是 `register()` 自己就擋得住誤用：
+       * 它要 `requireOrigin()`，而組裝之後沒有任何 plugin 的 `apply` 在跑，呼叫它會
+       * 當場拋。所以這裡沒有「組裝後偷偷加命令」這條路。
+       */
+      commands: registry.commands,
+      /**
        * 掛著的遙測服務說的共享策略，**沒掛任何東西時是 `undefined`**。
        *
        * 披露那一層只有在拿到 `undefined` 的時候才渲染「未配置」——這是 dsh 的規矩，

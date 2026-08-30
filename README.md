@@ -6,6 +6,7 @@ TypeScript + React (shadcn/ui) 專案，架構分為 harness 與 web UI 兩部�
 
 ```
 packages/nexus-core          NexusPlugin 契約：型別、manifest、PluginRegistry、fold
+packages/nexus-plugin-commands  人打的斜線命令：解析、執行、生命週期記日誌
 packages/nexus-plugin-echo   最小 plugin 範例，只相依 @nexus/core
 packages/nexus-plugin-mcp    把 MCP server 的工具接進 registry
 packages/nexus-plugin-quickjs  QuickJS 沙箱裡跑 JavaScript 的 custom tool
@@ -81,8 +82,8 @@ banner 上。web 這端真的按得下去，所以它維持開著。
 形狀照 dsh 的 `plan-mode`：一段模式生效時才夾進 system prompt 的**部署持有的指引**、
 一個 `exit_plan_mode` 工具，加上一份**跟著 checkpointer 走的模式狀態**。
 
-**它預設是關的，而且今天沒有開啟的命令**（`/plan` 那種要先有 CLI 的 command 註冊機制）。
-唯一的開關是工廠的 `startActive`：
+**它預設是關的，而且今天沒有開啟的命令。** 命令註冊面已經有了（見下一節），但
+`/plan` 本身還沒接上去。唯一的開關是工廠的 `startActive`：
 
 ```ts
 createPlanModePlugin({ startActive: true, guidance: '（部署自己寫的那一段）' })
@@ -101,6 +102,35 @@ CLI 與 eval 走 `HEADLESS_APPROVALS`：在那裡打開，計劃被確定性拒�
 
 模式沒啟用時，`exit_plan_mode` 仍留在工具目錄裡（照 dsh：狀態轉換不該順帶改變工具目錄），
 但它的執行路徑會拒絕 —— 回的是「不在計劃模式」，不是核准的措辭。
+
+### 人的命令
+
+`@nexus/plugin-commands` 是**人打的斜線命令**那條路：`registry.commands.register()` 註冊，
+進入點解析並發派，**不經過模型**。形狀照 dsh 的 `dsh-commands`。
+
+```ts
+registry.commands.register({
+  name: 'ping',
+  description: '回一句話，不驚動模型',
+  input: { hint: '[任何字]' },
+  handler: ({ rawInput }) => ({ kind: 'success', text: `pong${rawInput}` }),
+});
+```
+
+一行 `/name` 有三條路，**第三條跟接上命令之前一模一樣**：
+
+| 這一行 | 去哪裡 |
+| --- | --- |
+| 註冊過的命令 | 跑 handler，結果印給人看（`error` 進 stderr） |
+| `/exit` | 收工。**它刻意不是命令**——控制的是 REPL 不是 agent，所以也不會出現在 `list()` 裡 |
+| 其餘（語法不符、名字不認得） | 照原樣送給模型 |
+
+認得的命令會在會話日誌留下一對 `command/run` / `command/done`；**收不下的行不留痕跡**。
+`@nexus/plugin-commands` 的不變量配套入口檢查這一對的三條關係（id 不重複、一次一個、
+done 配得到 run）——**這是全樹第一個非空的 package 配套入口**。
+
+`command/run` 的 `args` 是使用者原話，而會話事件會**原樣鏡像進遙測**。要把使用者輸入
+擋在遙測外，得補 dsh 那個 `recordInput` 開關；這一版沒有它。
 
 跑基準任務（eval）：
 
