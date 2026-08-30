@@ -244,6 +244,10 @@ const THREAD_ID = 'cli';
  * 這一行不是設定，是狀態。
  *
  * 不講的話，「這個工具被政策拒絕了」與「模型自己決定不叫它」在畫面上分不出來。
+ *
+ * **它與 {@link HEADLESS_APPROVALS} 是同一個決定的兩半**：這一行寫死「關閉」，因為
+ * `runCli` 只傳那一個政策。哪天這裡真的多了一個旗標，這個常數要跟著變成一個函式——
+ * 不然畫面會開始說謊，而說謊的披露比沒有披露更糟。
  */
 export const APPROVAL_DISCLOSURE =
   '核准：關閉（這個入口收不了核准決定，需要核准的工具會被拒絕，不會停下來等）';
@@ -383,9 +387,10 @@ function interruptIdsOf(update: unknown): readonly string[] {
  *
  * **[#113](https://github.com/DemianLi/nexus-agent/issues/113) 之後，核准閘門不會再走到
  * 這裡**——`runCli` 傳 {@link HEADLESS_APPROVALS}，需要核准的工具在閘門那一層就被拒絕，
- * 根本不發中斷。那**不是**刪掉這一段的理由：閘門不是唯一會 `interrupt()` 的東西，plugin
- * 自己掛的 middleware 也做得到，而那時這一段是「這一輪停了」與「這一輪好好收工了」之間
- * 唯一的差別。刪掉它等於把當初那個缺陷重新打開，只是換一個來源。
+ * 根本不發中斷。那**不是**刪掉這一段的理由：閘門不是唯一會 `interrupt()` 的東西——
+ * **閘門自己就是一個 middleware 裡的 `interrupt()`**，所以同一條路徑對任何一個 plugin
+ * 掛上來的 middleware 都是開著的。真的有人走上來的時候，這一段是「這一輪停了」與
+ * 「這一輪好好收工了」之間唯一的差別。刪掉它等於把當初那個缺陷重新打開，只是換一個來源。
  *
  * @param update - `__interrupt__` 那一筆的內容。
  * @param printer - 輸出去處。
@@ -581,13 +586,13 @@ export async function runCli(options: RunCliOptions): Promise<void> {
         : `檔案系統：${resolve(options.cwd ?? process.cwd(), invocation.workspace)}（變更圍堵在它之下）`,
     );
     printer.log(APPROVAL_DISCLOSURE);
-    // 第三行是**披露**，不是設定。tracing 開沒開不由這支程式決定——基座讀到環境變數就
+    // 第四行是**披露**，不是設定。tracing 開沒開不由這支程式決定——基座讀到環境變數就
     // 自己掛 tracer——所以這裡唯一能做的是把「現在是什麼狀態」講出來。不講的話，
     // 「工具參數正在往第三方送」與「什麼都沒送」在畫面上一模一樣。
     for (const line of formatTracingDisclosure(readTracingDisclosure(options.env ?? process.env))) {
       printer.log(line);
     }
-    // 第四行是**另一道 seam** 的披露。遙測後端是我們自己掛的，跟上面那道讀環境變數的
+    // 第五行是**另一道 seam** 的披露。遙測後端是我們自己掛的，跟上面那道讀環境變數的
     // tracing 沒有關係——併成一行講會讓兩個不同的出境目標看起來像同一個開關。
     // 印在這裡是因為**答案到這一刻才存在**：plugin 跑過 `apply` 之前沒有人知道掛了什麼。
     for (const line of formatTelemetryDisclosure(telemetrySharing)) {
