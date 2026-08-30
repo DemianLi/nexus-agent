@@ -10,6 +10,7 @@ packages/nexus-plugin-echo   最小 plugin 範例，只相依 @nexus/core
 packages/nexus-plugin-mcp    把 MCP server 的工具接進 registry
 packages/nexus-plugin-quickjs  QuickJS 沙箱裡跑 JavaScript 的 custom tool
 packages/nexus-plugin-memory 把 AGENTS.md 這類長期記憶掛進 agent
+packages/nexus-plugin-plan-mode  計劃模式：先探索再執行，計劃交出去等人批准
 packages/nexus-plugin-skills 把 SKILL.md 這類隨選工作流掛進 agent
 packages/nexus-plugin-validation  工具失敗回饋與輸出 schema 校驗
 apps/harness                 組裝點：agent 工廠、訊息標準化、CLI（Node / TypeScript）
@@ -73,6 +74,33 @@ pnpm --filter @nexus/harness run serve --plugins src/approval.fixture.ts
 把核准關掉（`HEADLESS_APPROVALS`）—— 需要核准的工具拿到一則說明是「沒有人被問到」的
 拒絕，其餘照跑完，而不是整輪停在那裡等一個不會來的答案。CLI 每次啟動都會把這件事印在
 banner 上。web 這端真的按得下去，所以它維持開著。
+
+### 計劃模式
+
+`@nexus/plugin-plan-mode` 讓 agent 先探索與設計、把完整的計劃交出去等人批准，再開始動手。
+形狀照 dsh 的 `plan-mode`：一段模式生效時才夾進 system prompt 的**部署持有的指引**、
+一個 `exit_plan_mode` 工具，加上一份**跟著 checkpointer 走的模式狀態**。
+
+**它預設是關的，而且今天沒有開啟的命令**（`/plan` 那種要先有 CLI 的 command 註冊機制）。
+唯一的開關是工廠的 `startActive`：
+
+```ts
+createPlanModePlugin({ startActive: true, guidance: '（部署自己寫的那一段）' })
+```
+
+一份打開它的清單在 `src/plan-mode.fixture.ts`：
+
+```bash
+pnpm --filter @nexus/harness run serve:live --plugins src/plan-mode.fixture.ts
+```
+
+**`serve` 是唯一該用它的入口，而且要 `--live`。** `exit_plan_mode` 是需要核准的工具，
+CLI 與 eval 走 `HEADLESS_APPROVALS`：在那裡打開，計劃被確定性拒絕、模式沒關、
+而沒有第二條路出去。假模型的腳本則寫死在 `cli.ts`，它不會呼叫 `exit_plan_mode`——
+換清單改不了模型的腳本，所以走完整條路要真模型。
+
+模式沒啟用時，`exit_plan_mode` 仍留在工具目錄裡（照 dsh：狀態轉換不該順帶改變工具目錄），
+但它的執行路徑會拒絕 —— 回的是「不在計劃模式」，不是核准的措辭。
 
 跑基準任務（eval）：
 

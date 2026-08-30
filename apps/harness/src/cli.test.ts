@@ -135,13 +135,13 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是一個工具 ＋ 九個配套入口', async () => {
+  it('預設清單是一個工具 ＋ 十個配套入口', async () => {
     // **工具只有 echo 一個，這一半沒變**：預設組裝要能證明工具真的接上了，不替誰決定
-    // 該裝什麼。九個配套入口是那句話的例外，理由寫在 `DEFAULT_PLUGINS` 的 JSDoc 上
+    // 該裝什麼。十個配套入口是那句話的例外，理由寫在 `DEFAULT_PLUGINS` 的 JSDoc 上
     // （[#107](https://github.com/DemianLi/nexus-agent/issues/107)）。
     const names = DEFAULT_PLUGINS.map((plugin) => plugin.name);
     expect(names.filter((name) => !name.endsWith('-invariant'))).toEqual(['echo']);
-    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(9);
+    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(10);
   });
 
   it('**違規印到 stderr 而且帶前綴**——不是靠 runner 預設的 `console.error`', async () => {
