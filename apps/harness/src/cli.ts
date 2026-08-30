@@ -21,7 +21,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import type { InvariantError, NexusPlugin, SessionTelemetrySharingStatus } from '@nexus/core';
+import type {
+  ApprovalPolicy,
+  InvariantError,
+  NexusPlugin,
+  SessionTelemetrySharingStatus,
+} from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { SessionLog } from '@nexus/core';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
@@ -34,7 +39,7 @@ import { createTelemetryOtelInvariantPlugin } from '@nexus/plugin-telemetry-otel
 import { createValidationInvariantPlugin } from '@nexus/plugin-validation/invariant';
 import { createWireInvariantPlugin } from '@nexus/wire/invariant';
 
-import { createNexusAgent } from './agent-factory.js';
+import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
 import type { NexusAgentHandle } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MODEL_ID } from './live-model.js';
@@ -230,6 +235,20 @@ const SYSTEM_PROMPT = [
 const THREAD_ID = 'cli';
 
 /**
+ * banner 上關於核准的那一行。
+ *
+ * **它是 (a) 那個決定唯一的代價的解藥。** [#113](https://github.com/DemianLi/nexus-agent/issues/113)
+ * 選了「預設關掉、不加旗標」，而它的缺點被記在卡上：「CLI 不做核准」變成一件要讀文件
+ * 才知道的事。旗標不是補這個缺口的辦法——旗標讓人**選**，而這裡沒有第二個值得選的
+ * 行為——**披露才是**：把已經定下來的事講出來。同 tracing 與遙測那兩行的規矩，
+ * 這一行不是設定，是狀態。
+ *
+ * 不講的話，「這個工具被政策拒絕了」與「模型自己決定不叫它」在畫面上分不出來。
+ */
+export const APPROVAL_DISCLOSURE =
+  '核准：關閉（這個入口收不了核准決定，需要核准的工具會被拒絕，不會停下來等）';
+
+/**
  * 依這次呼叫建 model。
  *
  * @param live - 是否用真實供應商。
@@ -268,6 +287,10 @@ type NexusAgent = NexusAgentHandle['agent'];
  * @param onInvariantViolation - 不變量違規往哪裡講。**省略是有意義的**：這個工廠兩條路
  *   都在用，而 [`serve.ts`](./serve.ts) 刻意不傳——伺服器那條路徑的違規進的是伺服器
  *   日誌，維持 runner 的預設（[#107](https://github.com/DemianLi/nexus-agent/issues/107)）。
+ * @param approvals - 核准政策的 session 開關。**省略是有意義的**，同上一個參數：
+ *   [`serve.ts`](./serve.ts) 刻意不傳，維持預設的「有人在」——瀏覽器那端真的按得下去。
+ *   CLI 這條傳 {@link HEADLESS_APPROVALS}，因為它收不了核准決定
+ *   （[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
  * @returns 組好的 agent、收掉它的方法，與它用的 model。
  * @throws 清單載入失敗、fold 前置條件不成立，或基座擋下這份組裝。
  */
@@ -276,6 +299,7 @@ export async function createCliAgent(
   plugins: readonly NexusPlugin[],
   cwd: string = process.cwd(),
   onInvariantViolation?: (error: InvariantError) => void,
+  approvals?: ApprovalPolicy,
 ): Promise<{
   agent: NexusAgent;
   dispose: () => Promise<void>;
@@ -296,6 +320,7 @@ export async function createCliAgent(
       systemPrompt: SYSTEM_PROMPT,
       checkpointer: new MemorySaver(),
       ...(onInvariantViolation !== undefined && { onInvariantViolation }),
+      ...(approvals !== undefined && { approvals }),
     });
   // 日誌跟 agent 同壽命：REPL 是一條連續對話，`seq` 要跨輪連續才有意義。
   const sessionLog = new SessionLog(THREAD_ID);
@@ -353,9 +378,14 @@ function interruptIdsOf(update: unknown): readonly string[] {
  * 的迴圈對它一個字都印不出來——這一輪就這樣結束，人看到的是模型講到一半忽然沒了，
  * 而工具其實沒跑。停在核准點與正常收工在畫面上長得一模一樣，是最壞的那種相同。
  *
- * 這一版**只負責說**，不負責問。核准介面（收決定、`Command({ resume })` 送回去）是
- * 開發計劃 Phase 5 `feat/web-hitl` 的事，所以這裡明說這個入口按不了核准——
- * 講清楚做不到，比讓人對著空白畫面猜要好。
+ * 這一版**只負責說**，不負責問。收決定、`Command({ resume })` 送回去的那個介面在 web
+ * （[#79](https://github.com/DemianLi/nexus-agent/pull/79)），不在這裡。
+ *
+ * **[#113](https://github.com/DemianLi/nexus-agent/issues/113) 之後，核准閘門不會再走到
+ * 這裡**——`runCli` 傳 {@link HEADLESS_APPROVALS}，需要核准的工具在閘門那一層就被拒絕，
+ * 根本不發中斷。那**不是**刪掉這一段的理由：閘門不是唯一會 `interrupt()` 的東西，plugin
+ * 自己掛的 middleware 也做得到，而那時這一段是「這一輪停了」與「這一輪好好收工了」之間
+ * 唯一的差別。刪掉它等於把當初那個缺陷重新打開，只是換一個來源。
  *
  * @param update - `__interrupt__` 那一筆的內容。
  * @param printer - 輸出去處。
@@ -517,11 +547,19 @@ export async function runCli(options: RunCliOptions): Promise<void> {
 
   // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
   const { agent, dispose, sessionLog, attachTelemetry, attachInvariants, telemetrySharing } =
-    await createCliAgent(invocation, plugins, options.cwd, (error) =>
-      // **不繞過 `Printer`。** 違規跟 agent 的輸出落在同一個終端機上，前綴是唯一分得出
-      // 誰在講話的東西——同 `printInterrupt` 的 `[核准]`。訊息本身已經帶著
-      // `invariant violated by "<pkg>"`，所以擁有它的 package 不必在這裡再講一次。
-      printer.error(`[不變量] ${error.message}`),
+    await createCliAgent(
+      invocation,
+      plugins,
+      options.cwd,
+      (error) =>
+        // **不繞過 `Printer`。** 違規跟 agent 的輸出落在同一個終端機上，前綴是唯一分得出
+        // 誰在講話的東西——同 `printInterrupt` 的 `[核准]`。訊息本身已經帶著
+        // `invariant violated by "<pkg>"`，所以擁有它的 package 不必在這裡再講一次。
+        printer.error(`[不變量] ${error.message}`),
+      // **這個入口沒有人在。** 收核准決定的介面在 web（`serve.ts` 那條刻意不傳這個），
+      // 這裡按不下去，所以停在核准點只有一個結局：整輪作廢。關掉之後被擋的那個工具
+      // 拿到一則模型讀得懂的拒絕，其餘照跑完（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
+      HEADLESS_APPROVALS,
     );
   // REPL 是一條連續對話，一份日誌就是整個 session，所以接線點在這裡而不是每輪。
   // 回傳的 detach 不留：`dispose()` 會把還接著的協調器一起收掉。
@@ -542,6 +580,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
         ? '檔案系統：虛擬（不碰磁碟）'
         : `檔案系統：${resolve(options.cwd ?? process.cwd(), invocation.workspace)}（變更圍堵在它之下）`,
     );
+    printer.log(APPROVAL_DISCLOSURE);
     // 第三行是**披露**，不是設定。tracing 開沒開不由這支程式決定——基座讀到環境變數就
     // 自己掛 tracer——所以這裡唯一能做的是把「現在是什麼狀態」講出來。不講的話，
     // 「工具參數正在往第三方送」與「什麼都沒送」在畫面上一模一樣。

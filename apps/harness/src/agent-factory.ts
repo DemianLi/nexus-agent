@@ -144,6 +144,28 @@ export interface CreateNexusAgentOptions {
 export const DEFAULT_RECURSION_LIMIT = 100;
 
 /**
+ * 沒有人在的那些入口用的核准政策。
+ *
+ * **這是入口層的一個事實，不是一個偏好。** 一個收不了核准決定的入口把 `enabled` 留在
+ * 預設的 `true`，等於保證每次碰到核准點都停在那裡等一個不會來的答案 —— CLI 是整輪
+ * 作廢，eval 是一條基準任務作廢。關掉之後 agent 照樣跑得完：不需要核准的照跑，需要
+ * 核准的回一則說明是「沒有人被問到」的拒絕（[#113](https://github.com/DemianLi/nexus-agent/issues/113)
+ * 拍板 (a)：不加旗標，因為旗標是為了讓人選，而這裡沒有第二個值得選的行為）。
+ *
+ * 對到 dsh 的 `ApprovalPolicy: 'never'`，它的文件寫的正是這個用途 ——
+ * "The strict headless stance (CI, unattended runs)"（`docs/subsystems/approval.md:43`）。
+ *
+ * **與 dsh 的偏離，只有這一句**：dsh 還分得出第三種 —— policy 留在 `'ask'` 但一個
+ * answerer 都沒 compose，結果是 `'unavailable'` 而不是 `'rejected'`。我們的
+ * `ApprovalChannel` 是從 checkpointer 在不在推出 `no-channel` 的，不是從一份 answerer
+ * 名冊，所以「有 resume 管道但沒有介面」在我們這裡沒有表示法，退到 `never`。
+ *
+ * **不是每個入口都該用它。** `serve.ts` 那條刻意維持預設的 `true`：瀏覽器那端真的按得
+ * 下去，關掉它會把一個做得出來的功能關掉。三個入口三個答案，這是選的不是漏的。
+ */
+export const HEADLESS_APPROVALS: ApprovalPolicy = { enabled: false };
+
+/**
  * 組裝好的 agent，加上收掉它的方法。
  *
  * **刻意是推導出來的別名，不是自己打一份 interface**：`createDeepAgent` 的回傳型別帶著

@@ -129,10 +129,17 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   const handler = createWireHandler({
     // 一個 thread 一個 agent——各自的 checkpointer、各自的虛擬檔案系統。
     createAgent: async () => {
-      // **第四個引數刻意不傳**：不變量違規在這條路徑上維持 `createInvariantRunner` 的
-      // 預設（`console.error`），進的是伺服器日誌。CLI 那條要繞過 `Printer` 才印得出
-      // 前綴，這裡沒有那個問題——伺服器日誌本來就沒有跟誰搶終端機
+      // **第四與第五個引數都刻意不傳，而且理由不同。**
+      //
+      // 第四個（不變量違規往哪裡講）：這條路徑維持 `createInvariantRunner` 的預設
+      // （`console.error`），進的是伺服器日誌。CLI 那條要繞過 `Printer` 才印得出前綴，
+      // 這裡沒有那個問題——伺服器日誌本來就沒有跟誰搶終端機
       // （[#107](https://github.com/DemianLi/nexus-agent/issues/107)）。
+      //
+      // 第五個（核准政策）：**這裡維持預設的「有人在」**。CLI 與 eval 關掉它是因為那兩個
+      // 入口收不了核准決定，而 web 這端真的按得下去（[#79](https://github.com/DemianLi/nexus-agent/pull/79)
+      // 的核准迴圈，`serve.test.ts` 的「核准那份清單」整條走過一遍）。關掉它會把一個
+      // 做得出來的功能關掉（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
       const { agent, dispose, attachTelemetry, attachInvariants, telemetrySharing } =
         await createCliAgent(invocation, plugins, options.cwd);
       // **遙測披露印在這裡而不是啟動時，因為啟動的那一刻答案不存在**：`createAgent` 是
