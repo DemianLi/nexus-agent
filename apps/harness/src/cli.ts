@@ -33,6 +33,7 @@ import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import { createEchoInvariantPlugin } from '@nexus/plugin-echo/invariant';
 import { createMcpInvariantPlugin } from '@nexus/plugin-mcp/invariant';
 import { createMemoryInvariantPlugin } from '@nexus/plugin-memory/invariant';
+import { createPlanModeInvariantPlugin } from '@nexus/plugin-plan-mode/invariant';
 import { createQuickJsInvariantPlugin } from '@nexus/plugin-quickjs/invariant';
 import { createSkillsInvariantPlugin } from '@nexus/plugin-skills/invariant';
 import { createTelemetryOtelInvariantPlugin } from '@nexus/plugin-telemetry-otel/invariant';
@@ -132,15 +133,15 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
  * 哪些**工具** plugin 該進預設清單是設定的事，那要等**外部**設定機制才有地方講
  * （[#46](https://github.com/DemianLi/nexus-agent/issues/46)）。
  *
- * **九個不變量配套入口是那句話的例外，而例外要說得出理由**
+ * **十個不變量配套入口是那句話的例外，而例外要說得出理由**
  * （[#107](https://github.com/DemianLi/nexus-agent/issues/107) 拍板）：
  *
  * - **它們不裝功能，只裝觀察。** 一個配套入口不註冊工具、不改 prompt、不碰 backend，
  *   所以「替誰決定該裝什麼」這個顧慮對它們不成立——沒有人的 agent 因為它們而不一樣。
  * - **關得掉。** [#104](https://github.com/DemianLi/nexus-agent/issues/104) 之後條目層有
  *   `disabled`、組裝點有 `invariants` 選擇，所以進來不是單向門。這是它進得來的前提。
- * - **九個全進，不是只有 `@nexus/core`。** 八個是空 installer，掛上去一個檢查都不裝，
- *   買到的只有包名歸屬。**代價是每一次執行多九個條目、九次 `apply`**，而換到的是這份
+ * - **十個全進，不是只有 `@nexus/core`。** 九個是空 installer，掛上去一個檢查都不裝，
+ *   買到的只有包名歸屬。**代價是每一次執行多十個條目、十次 `apply`**，而換到的是這份
  *   清單與 `registry.invariants.companions()` 對得起來——少掛的那幾個會讓「這個 package
  *   沒有可檢的關係」與「這個 package 的檢查沒掛上」在診斷裡長得一模一樣。
  *
@@ -152,6 +153,7 @@ export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
   createEchoInvariantPlugin(),
   createMcpInvariantPlugin(),
   createMemoryInvariantPlugin(),
+  createPlanModeInvariantPlugin(),
   createQuickJsInvariantPlugin(),
   createSkillsInvariantPlugin(),
   createTelemetryOtelInvariantPlugin(),

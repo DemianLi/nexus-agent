@@ -38,6 +38,7 @@
     "@nexus/plugin-echo": "workspace:*",
     "@nexus/plugin-mcp": "workspace:*",
     "@nexus/plugin-memory": "workspace:*",
+    "@nexus/plugin-plan-mode": "workspace:*",
     "@nexus/plugin-quickjs": "workspace:*",
     "@nexus/plugin-skills": "workspace:*",
     "@nexus/plugin-telemetry-otel": "workspace:*",
