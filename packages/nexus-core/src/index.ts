@@ -13,14 +13,19 @@ export {
   formatOrigin,
 } from './plugin.js';
 
+export type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
+
 export type {
-  AgentCheckpointer,
-  AgentMiddleware,
-  AgentModel,
-  AgentStore,
-  InterruptOnConfig,
-  WhenPredicate,
-} from './base-types.js';
+  ToolExecution,
+  PreToolDecision,
+  PreToolListener,
+  ApprovalChannel,
+} from './approval.js';
+export {
+  APPROVAL_GATE_MIDDLEWARE_NAME,
+  createApprovalGateMiddleware,
+  runApprovalGate,
+} from './approval.js';
 
 export type { NamedEntry, DuplicateErrorFactory } from './entries.js';
 export { AnonymousEntries, NamedEntries, CapabilitySet } from './entries.js';
@@ -36,8 +41,7 @@ export type {
   MiddlewareRegistration,
   PermissionRegistrationPoint,
   DenyRule,
-  InterruptRegistrationPoint,
-  InterruptRequirement,
+  ApprovalRegistrationPoint,
   SkillSourceRegistrationPoint,
   MemorySourceRegistrationPoint,
   LifecycleRegistrationPoint,

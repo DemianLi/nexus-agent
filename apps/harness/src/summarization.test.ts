@@ -131,12 +131,15 @@ describe('同名取代是唯一的縫', () => {
     try {
       const names = middlewareNames(agent);
       expect(names.filter((name) => name === 'SummarizationMiddleware')).toHaveLength(1);
-      // 位置也沒動——原地取代，不是刪掉再追加到尾巴。
+      // 位置也沒動——原地取代，不是刪掉再追加到尾巴。尾巴上那個核准閘門是 fold 每次
+      // 都掛的（[#111](https://github.com/DemianLi/nexus-agent/issues/111)），它排在
+      // 基座那幾個之後、其餘 plugin middleware 之前。
       expect(names).toEqual([
         'FilesystemMiddleware',
         'subAgentMiddleware',
         'SummarizationMiddleware',
         'patchToolCallsMiddleware',
+        'nexusApprovalGate',
       ]);
 
       await agent.invoke(toAgentInvocation('嗨。'));

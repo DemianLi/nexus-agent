@@ -193,16 +193,21 @@ describe('其餘六個註冊點', () => {
     expect(registry.permissions.rules()[0]?.value.paths).toEqual(['/.env*']);
   });
 
-  it('interrupts 同一個工具被多方標記不報錯', () => {
+  it('approvals 多方掛 listener 不報錯，依註冊順序留著', () => {
+    // 匿名表沒有「同名」這回事，兩位都留著——waterfall 的順序就是註冊順序。
     const registry = createRegistry();
+    const first_ = (): { kind: 'allow' } => ({ kind: 'allow' });
+    const second_ = (): { kind: 'allow' } => ({ kind: 'allow' });
+
     const leaveFirst = registry.enter(first);
-    registry.interrupts.require('rm', { reason: '刪檔' });
+    registry.approvals.gate(first_);
     leaveFirst();
 
     const leaveSecond = registry.enter(second);
-    expect(() => registry.interrupts.require('rm', { reason: '再一次' })).not.toThrow();
+    expect(() => registry.approvals.gate(second_)).not.toThrow();
     leaveSecond();
-    expect(registry.interrupts.requirements()).toHaveLength(2);
+
+    expect(registry.approvals.listeners().map((entry) => entry.value)).toEqual([first_, second_]);
   });
 
   it('skills 同一來源路徑重複註冊報錯，結尾斜線不算另一個目錄', () => {
@@ -336,7 +341,7 @@ describe('其餘六個註冊點', () => {
     expect(() => registry.backend.mount('/m/', fakeBackend('b'))).toThrow('apply');
     expect(() => registry.middleware.use(fakeMiddleware('m'))).toThrow('apply');
     expect(() => registry.permissions.deny(['/x'])).toThrow('apply');
-    expect(() => registry.interrupts.require('rm', { reason: 'r' })).toThrow('apply');
+    expect(() => registry.approvals.gate(() => ({ kind: 'allow' }))).toThrow('apply');
     expect(() => registry.skills.addSource('/skills/')).toThrow('apply');
     expect(() => registry.memory.addSource('/AGENTS.md')).toThrow('apply');
     expect(() => registry.lifecycle.onDispose(() => {})).toThrow('apply');

@@ -243,10 +243,13 @@ describe('CLI 遇到核准中斷', () => {
                 schema: z.object({}),
               }),
             );
-            registry.interrupts.require('danger', { reason: '這個會弄壞東西' });
-            // 同一個工具被兩方標記時 `mergeInterrupt` 把理由用「；」串起來，CLI 印的是
-            // 串好的那一份。只用單一閘門測的話，這一行的形狀就沒人驗過。
-            registry.interrupts.require('danger', { reason: '而且不可逆' });
+            // 理由由 listener 自己給，CLI 印的就是它。**兩位 listener 不再把理由串起來**
+            // ——waterfall 是第一個回非 allow 的人說了算，後面那位根本沒被問到。
+            registry.approvals.gate((exec, next) =>
+              exec.name === 'danger'
+                ? { kind: 'ask', reason: '這個會弄壞東西，而且不可逆' }
+                : next(),
+            );
           },
         },
       ],
@@ -257,7 +260,7 @@ describe('CLI 遇到核准中斷', () => {
 
     expect(stdout()).toContain('停在核准點');
     expect(stdout()).toContain('danger');
-    expect(stdout()).toContain('這個會弄壞東西；而且不可逆');
+    expect(stdout()).toContain('這個會弄壞東西，而且不可逆');
     expect(stdout()).toContain('還不能收核准決定');
   });
 
