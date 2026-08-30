@@ -11,7 +11,14 @@
 import { describe, expect, it } from 'vitest';
 import { loadPlugins } from './load.js';
 import { createRegistry } from './registry.js';
-import { fakeBackend, fakeMiddleware, fakePlugin, fakeSubAgent, fakeTool } from './fixtures.js';
+import {
+  fakeBackend,
+  fakeMiddleware,
+  fakePlugin,
+  fakeSink,
+  fakeSubAgent,
+  fakeTool,
+} from './fixtures.js';
 import type { NexusPlugin } from './plugin.js';
 
 describe('loadPlugins', () => {
@@ -39,10 +46,35 @@ describe('loadPlugins', () => {
       fakePlugin('mcp', (registry) => {
         registry.tools.register(fakeTool(`${server}_search`));
       });
-    const { registry, origins } = await loadPlugins([mcp('github'), mcp('linear')]);
-    expect(origins.map((o) => o.name)).toEqual(['mcp', 'mcp']);
+    const { registry, entries } = await loadPlugins([mcp('github'), mcp('linear')]);
+    expect(entries.map((entry) => entry.origin.name)).toEqual(['mcp', 'mcp']);
+    // **id 才是「哪一次掛載」的答案**，name 兩個都一樣。
+    expect(entries.map((entry) => entry.origin.id)).toEqual(['mcp#0', 'mcp#1']);
     expect(registry.tools.resolve('github_search')).toBeDefined();
     expect(registry.tools.resolve('linear_search')).toBeDefined();
+  });
+
+  it('手寫的 id 就是錯誤訊息裡的那個名字', async () => {
+    const plugins = [
+      {
+        ...fakePlugin('mcp', () => {
+          throw new Error('連不上');
+        }),
+        id: 'mcp-github',
+      },
+    ];
+    await expect(loadPlugins(plugins)).rejects.toThrow('mcp-github (mcp)');
+  });
+
+  it('id 撞了在任何 apply 跑起來之前就報——沒有半個 plugin 掛上去', async () => {
+    const applied: string[] = [];
+    const plugins = [
+      { ...fakePlugin('a', () => void applied.push('a')), id: 'same' },
+      { ...fakePlugin('b', () => void applied.push('b')), id: 'same' },
+    ];
+    await expect(loadPlugins(plugins)).rejects.toThrow('"same"');
+    // 這一條是「先解析完整份清單」的證據：id 是壞的就沒有任何東西該被跑起來。
+    expect(applied).toEqual([]);
   });
 
   it('兩個 plugin 註冊同名工具，載入期報錯且指名雙方', async () => {
@@ -51,9 +83,7 @@ describe('loadPlugins', () => {
       fakePlugin('mcp', (registry) => void registry.tools.register(fakeTool('search'))),
     ];
     // 指名兩個 plugin 與那個工具名，全部在頂層訊息裡 —— 錯誤處理只印 error.message 就夠。
-    await expect(loadPlugins(plugins)).rejects.toThrow(
-      /plugins\[0\] \(alpha\)[\s\S]*plugins\[1\] \(mcp\)/,
-    );
+    await expect(loadPlugins(plugins)).rejects.toThrow(/alpha#0 \(alpha\)[\s\S]*mcp#0 \(mcp\)/);
     await expect(loadPlugins(plugins)).rejects.toThrow('"search"');
   });
 
@@ -80,7 +110,7 @@ describe('載入期回滾', () => {
       }),
     ];
 
-    await expect(loadPlugins(plugins, registry)).rejects.toThrow('plugins[1] (bad)');
+    await expect(loadPlugins(plugins, registry)).rejects.toThrow('bad#0 (bad)');
 
     expect(registry.tools.resolve('doomed_tool')).toBeUndefined();
     expect(registry.subagents.get('doomed_agent')).toBeUndefined();
@@ -109,7 +139,7 @@ describe('載入期回滾', () => {
       }),
       fakePlugin('consumer', () => {}, ['filesystem']),
     ];
-    await expect(loadPlugins(plugins)).rejects.toThrow('plugins[0] (provider)');
+    await expect(loadPlugins(plugins)).rejects.toThrow('provider#0 (provider)');
   });
 
   it('一個 plugin 回滾掉的能力，不影響另一個 plugin 對同一能力的宣告', async () => {
@@ -152,11 +182,55 @@ describe('載入期回滾', () => {
   });
 });
 
+describe('停用', () => {
+  const off = (plugin: NexusPlugin): NexusPlugin => ({ ...plugin, disabled: true });
+
+  it('apply 一次都不跑——不是跑了再撤', async () => {
+    const applied: string[] = [];
+    const plugins = [
+      fakePlugin('a', () => void applied.push('a')),
+      off(fakePlugin('b', () => void applied.push('b'))),
+      fakePlugin('c', () => void applied.push('c')),
+    ];
+    await loadPlugins(plugins);
+    expect(applied).toEqual(['a', 'c']);
+  });
+
+  it('它註冊的東西一樣都沒進 registry', async () => {
+    const plugins = [off(fakePlugin('mcp', (r) => void r.tools.register(fakeTool('search'))))];
+    const { registry } = await loadPlugins(plugins);
+    expect(registry.tools.resolve('search')).toBeUndefined();
+  });
+
+  it('關著的條目仍然出現在 entries 裡，帶著自己的 id', async () => {
+    const { entries } = await loadPlugins([off(fakePlugin('mcp', () => {}))]);
+    expect(entries).toEqual([
+      expect.objectContaining({ origin: { id: 'mcp#0', name: 'mcp' }, disabled: true }),
+    ]);
+  });
+
+  it('它的 requires 不檢查——沒跑的東西不需要任何能力', async () => {
+    const plugins = [off(fakePlugin('consumer', () => {}, ['filesystem']))];
+    await expect(loadPlugins(plugins)).resolves.toBeDefined();
+  });
+
+  it('它本來會提供的能力真的沒被提供，而缺件訊息指得出它關著', async () => {
+    // 「我關錯了東西」會是 `disabled` 上線之後這條錯誤最常見的原因，而那件事從
+    // 「有能力沒人提供」本身看不出來。
+    const plugins = [
+      off(fakePlugin('disk-fs', (r) => void r.capabilities.provide('filesystem'))),
+      fakePlugin('consumer', () => {}, ['filesystem']),
+    ];
+    await expect(loadPlugins(plugins)).rejects.toThrow(/consumer#0 \(consumer\)/);
+    await expect(loadPlugins(plugins)).rejects.toThrow(/停用的條目[\s\S]*disk-fs#0 \(disk-fs\)/);
+  });
+});
+
 describe('requires', () => {
   it('缺件時報錯，訊息指名是誰缺哪個能力', async () => {
     const plugins = [fakePlugin('consumer', () => {}, ['filesystem'])];
     await expect(loadPlugins(plugins)).rejects.toThrow(
-      /plugins\[0\] \(consumer\)[\s\S]*"filesystem"/,
+      /consumer#0 \(consumer\)[\s\S]*"filesystem"/,
     );
   });
 
@@ -187,8 +261,13 @@ describe('requires', () => {
   });
 });
 
-describe('九個註冊點的回滾', () => {
-  /** 九個點各放一樣東西，然後 throw。少包一個 undo 追蹤，這裡就會留下孤兒。 */
+describe('每個註冊點的回滾', () => {
+  /**
+   * 每個點各放一樣東西，然後 throw。少包一個 undo 追蹤，這裡就會留下孤兒。
+   *
+   * **`telemetry` 兩個方法都在裡面。** `use` 漏追的下場最陰：回滾過的 plugin 會佔著
+   * 那個唯一的後端位子，後面的 plugin 掛不上去，而錯誤訊息指的是一個已經不存在的註冊者。
+   */
   const greedy = fakePlugin('greedy', (registry) => {
     registry.tools.register(fakeTool('search'));
     registry.subagents.register(fakeSubAgent('researcher'));
@@ -196,15 +275,17 @@ describe('九個註冊點的回滾', () => {
     registry.backend.mount('/memories/', fakeBackend('store'));
     registry.middleware.use(fakeMiddleware('audit'));
     registry.permissions.deny(['/.env*']);
-    registry.interrupts.require('rm', { reason: '刪檔' });
+    registry.approvals.gate(() => ({ kind: 'allow' }));
     registry.skills.addSource('/skills/user/');
     registry.memory.addSource('/AGENTS.md');
     registry.lifecycle.onDispose(() => {});
+    registry.telemetry.redact((record) => record);
+    registry.telemetry.use(fakeSink());
     registry.tools.register(fakeTool('grep'), { scope: 'researcher' });
     throw new Error('半路壞掉');
   });
 
-  it('apply 中途 throw → 九個註冊點一個都不剩', async () => {
+  it('apply 中途 throw → 每個註冊點一個都不剩', async () => {
     const registry = createRegistry();
     await expect(loadPlugins([greedy], registry)).rejects.toThrow('半路壞掉');
 
@@ -215,10 +296,23 @@ describe('九個註冊點的回滾', () => {
     expect(registry.backend.mounts()).toEqual([]);
     expect(registry.middleware.list()).toEqual([]);
     expect(registry.permissions.rules()).toEqual([]);
-    expect(registry.interrupts.requirements()).toEqual([]);
+    expect(registry.approvals.listeners()).toEqual([]);
     expect(registry.skills.sources()).toEqual([]);
     expect(registry.memory.sources()).toEqual([]);
     expect(registry.lifecycle.disposers()).toEqual([]);
+    expect(registry.telemetry.rules()).toEqual([]);
+    expect(registry.telemetry.service()).toBeUndefined();
+  });
+
+  it('服務位子回滾之後是真的空出來，別的 plugin 掛得上去', async () => {
+    const registry = createRegistry();
+    await expect(loadPlugins([greedy], registry)).rejects.toThrow('半路壞掉');
+
+    const later = fakePlugin('later', (r) => {
+      r.telemetry.use(fakeSink());
+    });
+    await loadPlugins([later], registry);
+    expect(registry.telemetry.service()?.origin.name).toBe('later');
   });
 
   it('先前成功載入的 plugin 不受影響', async () => {
@@ -335,7 +429,7 @@ describe('關機清理', () => {
       ),
     ];
     const { dispose } = await loadPlugins(plugins);
-    await expect(dispose()).rejects.toThrow(/plugins\[1\] \(bad\)[\s\S]*關不掉/);
+    await expect(dispose()).rejects.toThrow(/bad#0 \(bad\)[\s\S]*關不掉/);
     expect(closed).toEqual(['good']);
   });
 });

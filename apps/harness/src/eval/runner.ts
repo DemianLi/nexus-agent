@@ -13,7 +13,7 @@
 import { AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { AgentModel, NexusPlugin } from '@nexus/core';
-import { createNexusAgent } from '../agent-factory.js';
+import { createNexusAgent, HEADLESS_APPROVALS } from '../agent-factory.js';
 import { toAgentInvocation } from '../messages.js';
 import type { BenchmarkCase } from './dataset.js';
 
@@ -97,6 +97,15 @@ export async function runBenchmarkCase(
   const { agent, dispose } = await createNexusAgent({
     model: options.model,
     plugins: options.plugins,
+    // **基準任務是三個入口裡最 headless 的那個**：CI 跑、零憑證、沒有人看著
+    // （[#31](https://github.com/DemianLi/nexus-agent/issues/31)）。
+    //
+    // 今天不設它**看起來**也一樣：這裡沒給 checkpointer，所以核准閘門本來就走
+    // `no-channel` 那條確定性拒絕。但那是**推出來的**，不是說出來的——理由會變成
+    // 「接不回來」，而真正的理由是「沒有人被問到」。而且哪天有人替多輪基準任務補上
+    // checkpointer，那個巧合就沒了：政策一路退回預設的 `true`，一條標了核准的任務會
+    // 停在核准點等一個 CI 裡永遠不會來的答案（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
+    approvals: HEADLESS_APPROVALS,
     ...(options.systemPrompt === undefined ? {} : { systemPrompt: options.systemPrompt }),
     ...(options.recursionLimit === undefined ? {} : { recursionLimit: options.recursionLimit }),
   });

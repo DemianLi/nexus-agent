@@ -13,15 +13,6 @@ import type { CreateDeepAgentParams } from 'deepagents';
 /** 一個 middleware。基座把 `middleware` 收成陣列，這是它的元素型別。 */
 export type AgentMiddleware = NonNullable<CreateDeepAgentParams['middleware']>[number];
 
-/** 一個工具的核准設定。基座的 `boolean` 簡寫我們不產出——詞彙是封閉的。 */
-export type InterruptOnConfig = Exclude<
-  NonNullable<CreateDeepAgentParams['interruptOn']>[string],
-  boolean
->;
-
-/** 決定某一次工具呼叫要不要中斷的述詞。可以回 promise。 */
-export type WhenPredicate = NonNullable<InterruptOnConfig['when']>;
-
 /** 組裝點給的模型。 */
 export type AgentModel = CreateDeepAgentParams['model'];
 

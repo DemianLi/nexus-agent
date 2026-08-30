@@ -94,6 +94,13 @@ describe('起起來之後', () => {
   });
 });
 
+/**
+ * **這一條同時是 [#113](https://github.com/DemianLi/nexus-agent/issues/113) 的對照組。**
+ * CLI 與 eval 那兩個入口把核准關掉了（收不了決定，停下來只會作廢一整輪），而
+ * `serve` 這條刻意維持開著——瀏覽器那端真的按得下去。兩邊的差別是選的不是漏的，
+ * 而這條是「serve 沒有跟著關掉」的證據：它整條走過提問 → 停住 → 按核准 → 收結果。
+ * 它紅了而 `cli.test.ts` 的「CLI 的核准政策」還綠著，代表關錯了入口。
+ */
 describe('核准那份清單', () => {
   it('README 寫的那道指令真的停得下來，也接得回去', async () => {
     running = await runServe({

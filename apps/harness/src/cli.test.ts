@@ -6,16 +6,20 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
+
+import { SessionLog } from '@nexus/core';
+import type { NexusPlugin } from '@nexus/core';
 import { z } from 'zod';
-import { createNexusAgent } from './agent-factory.js';
+import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
 import {
   COLLIDING_TOOL_NAME,
   FIRST_PLUGIN_NAME,
   SECOND_PLUGIN_NAME,
 } from './cli-collision.fixture.js';
 import {
+  APPROVAL_DISCLOSURE,
   CLI_PROBE_FILE,
   createCliAgent,
   DEFAULT_PLUGINS,
@@ -131,8 +135,34 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單裡的 echo 工具真的接上了', async () => {
-    expect(DEFAULT_PLUGINS.map((plugin) => plugin.name)).toEqual(['echo']);
+  it('預設清單是一個工具 ＋ 九個配套入口', async () => {
+    // **工具只有 echo 一個，這一半沒變**：預設組裝要能證明工具真的接上了，不替誰決定
+    // 該裝什麼。九個配套入口是那句話的例外，理由寫在 `DEFAULT_PLUGINS` 的 JSDoc 上
+    // （[#107](https://github.com/DemianLi/nexus-agent/issues/107)）。
+    const names = DEFAULT_PLUGINS.map((plugin) => plugin.name);
+    expect(names.filter((name) => !name.endsWith('-invariant'))).toEqual(['echo']);
+    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(9);
+  });
+
+  it('**違規印到 stderr 而且帶前綴**——不是靠 runner 預設的 `console.error`', async () => {
+    // 這一條是 #107 的 (c) 的端到端驗收，而它必須走 `runCli`：`createCliAgent` 那一層
+    // 只證明第四個引數轉得下去，證不了 `runCli` 真的把 `printer.error` 接上去。
+    //
+    // **前綴是這條的重點**。違規跟 agent 的輸出落在同一個終端機上，沒有前綴就分不出
+    // 誰在講話；而它走 `printer.error` 也就順帶證明了它沒有繞過 `Printer`——繞過的話
+    // 這裡的 `stderr()` 會是空的，`console.error` 才有東西。
+    const { printer, stdout, stderr } = recorder();
+    await runCli({
+      argv: ['--plugins', 'src/cli-invariant-violation.fixture.ts', '說點什麼'],
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer,
+    });
+
+    expect(stderr()).toContain('[不變量] invariant violated by "@nexus/noisy": 看到 turn/start');
+    expect(stderr()).toContain('[不變量] invariant violated by "@nexus/noisy": 看到 turn/end');
+    // 沒有漏到 stdout——那裡是 agent 講話的地方。
+    expect(stdout()).not.toContain('[不變量]');
   });
 });
 
@@ -184,16 +214,22 @@ describe('banner 的 tracing 披露', () => {
 });
 
 /**
- * 停在核准點的那一輪，人看得出來它停了。
+ * 一輪真的停下來的時候，畫面上說得出來。
  *
  * 中斷在 `updates` 串流裡是 `{ __interrupt__: [...] }`——值是陣列，不是 `{ messages }`，
  * 所以 `runTurn` 印訊息的那個迴圈碰到它一個字都印不出來。**這一輪於是與正常收工長得
  * 一模一樣**，而工具其實沒跑。這一條守的就是那個相同不再回來。
  *
- * 核准層本身的行為驗收不在這裡，在 [`interrupt.test.ts`](./interrupt.test.ts)；這裡只問
- * 「CLI 這個入口有沒有把它說出來」。
+ * **底下這條刻意自己 `createNexusAgent`，繞過 `createCliAgent`——而那正是它現在不能被
+ * 讀成「CLI 還是會停」的原因。** [#113](https://github.com/DemianLi/nexus-agent/issues/113)
+ * 之後 CLI 這個入口關掉了核准（見底下的 `CLI 的核准政策`），核准閘門不會再發中斷。
+ * 這條測的是 `printInterrupt` 這段程式碼本身還活著：閘門不是唯一 `interrupt()` 得了的
+ * 東西，plugin 自己掛的 middleware 也做得到，而那時這一段是唯一分得出「停了」與「收工」
+ * 的東西。**綠的意思是那段話還印得出來，不是「CLI 這個入口還會停」。**
+ *
+ * 核准層本身的行為驗收不在這裡，在 [`interrupt.test.ts`](./interrupt.test.ts)。
  */
-describe('CLI 遇到核准中斷', () => {
+describe('停在核准點的那一輪', () => {
   it('印出停在哪、還沒跑的是什麼、以及這個入口按不了核准', async () => {
     const model = new ScriptedChatModel({
       turns: [
@@ -215,21 +251,24 @@ describe('CLI 遇到核准中斷', () => {
                 schema: z.object({}),
               }),
             );
-            registry.interrupts.require('danger', { reason: '這個會弄壞東西' });
-            // 同一個工具被兩方標記時 `mergeInterrupt` 把理由用「；」串起來，CLI 印的是
-            // 串好的那一份。只用單一閘門測的話，這一行的形狀就沒人驗過。
-            registry.interrupts.require('danger', { reason: '而且不可逆' });
+            // 理由由 listener 自己給，CLI 印的就是它。**兩位 listener 不再把理由串起來**
+            // ——waterfall 是第一個回非 allow 的人說了算，後面那位根本沒被問到。
+            registry.approvals.gate((exec, next) =>
+              exec.name === 'danger'
+                ? { kind: 'ask', reason: '這個會弄壞東西，而且不可逆' }
+                : next(),
+            );
           },
         },
       ],
     });
 
     const { printer, stdout } = recorder();
-    await runTurn(agent, '動手', printer);
+    await runTurn(agent, '動手', printer, new SessionLog('t'));
 
     expect(stdout()).toContain('停在核准點');
     expect(stdout()).toContain('danger');
-    expect(stdout()).toContain('這個會弄壞東西；而且不可逆');
+    expect(stdout()).toContain('這個會弄壞東西，而且不可逆');
     expect(stdout()).toContain('還不能收核准決定');
   });
 
@@ -238,10 +277,97 @@ describe('CLI 遇到核准中斷', () => {
     const { agent } = await createNexusAgent({ model, plugins: [] });
 
     const { printer, stdout } = recorder();
-    await runTurn(agent, '說點什麼', printer);
+    await runTurn(agent, '說點什麼', printer, new SessionLog('t'));
 
     expect(stdout()).toContain('沒事發生。');
     expect(stdout()).not.toContain('核准');
+  });
+});
+
+/**
+ * CLI 這個入口沒有人在，所以它不停。
+ *
+ * [#113](https://github.com/DemianLi/nexus-agent/issues/113) 拍板 (a)：預設關掉、不加旗標。
+ * **這一組要證的是「接上了」，不是「閘門會拒絕」**——閘門本身的行為在
+ * [`interrupt.test.ts`](./interrupt.test.ts) 與 `@nexus/core` 的 `approval.test.ts` 驗過，
+ * 這裡問的是 `runCli` 這條路真的把政策傳了下去。
+ *
+ * **`serve.ts` 那條刻意不一樣**，而那半邊的證據在 [`serve.test.ts`](./serve.test.ts) 的
+ * 「核准那份清單」：同一份 fixture、同一個閘門，走 web 那條會停下來、按得下去、接得回來。
+ * 兩邊一起看才看得出「入口不同答案不同」是選的不是漏的——只看一邊的話，另一邊悄悄
+ * 跟著改了也沒有東西會紅。
+ */
+describe('CLI 的核准政策', () => {
+  it('標了核准的清單也跑得完一整輪——被擋的沒跑，理由是「沒有人被問到」', async () => {
+    const { printer, stdout } = recorder();
+    await runCli({
+      // 跟 README 與 `serve.test.ts` 同一份 fixture：`echo` 與 `write_file` 都標了要核准，
+      // 而假模型的腳本兩個都會叫。
+      argv: ['--plugins', 'src/approval.fixture.ts', '動手'],
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer,
+      env: {},
+    });
+
+    const out = stdout();
+    // 跑得完：腳本第三輪（沒有工具呼叫的那一輪）真的講到了。這一句是「整輪作廢」的反面。
+    expect(out).toContain('工具回來了，這條線是通的。');
+    // 而且不是停下來——`printInterrupt` 一個字都沒印。
+    expect(out).not.toContain('停在核准點');
+    // 理由分得出「沒有人被問到」與「有人看過並拒絕」——那一格塌掉的話，模型會以為
+    // 是人否決了它，然後改用別的辦法去做同一件事。
+    expect(out).toContain('是沒有人被問到');
+    expect(out).not.toContain('有人看過並拒絕');
+    // **工具是真的沒跑**，不是只有措辭變了：沒有回聲，也沒有檔案落下來
+    //（跑了的話最後一行會是「虛擬檔案系統：/cli.md」）。
+    expect(out).not.toContain('回聲：');
+    expect(out).not.toContain(CLI_PROBE_FILE);
+  });
+
+  it('沒被擋的工具照跑——關掉核准不是關掉整條工具路徑', async () => {
+    // 只擋 `write_file`，`echo` 放行。上一條的 fixture 兩個都擋，所以它證不了這件事：
+    // 「閘門把每個工具都拒絕掉」在那條測試底下長得一模一樣。
+    const gateWriteFile: NexusPlugin = {
+      name: 'gate-write-file',
+      apply(registry) {
+        registry.approvals.gate((exec, next) =>
+          exec.name === 'write_file' ? { kind: 'ask', reason: '寫檔要人看過' } : next(),
+        );
+      },
+    };
+
+    const { agent, dispose, sessionLog } = await createCliAgent(
+      { live: false },
+      [createEchoPlugin(), gateWriteFile],
+      undefined,
+      undefined,
+      HEADLESS_APPROVALS,
+    );
+    const { printer, stdout } = recorder();
+    try {
+      await runTurn(agent, '動手', printer, sessionLog);
+    } finally {
+      await dispose();
+    }
+
+    const out = stdout();
+    expect(out).toContain('回聲：CLI 接線測試');
+    expect(out).toContain('是沒有人被問到');
+    expect(out).not.toContain(CLI_PROBE_FILE);
+  });
+
+  it('banner 說得出核准是關的——(a) 不加旗標，換成把它講出來', async () => {
+    const { printer, stdout } = recorder();
+    await runCli({
+      argv: ['把這句話回聲一次。'],
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer,
+      env: {},
+    });
+    // 不講的話，「這個工具被政策擋掉了」與「模型自己決定不叫它」在畫面上分不出來。
+    expect(stdout()).toContain(APPROVAL_DISCLOSURE);
   });
 });
 
@@ -335,10 +461,10 @@ describe('關機清理與原本的錯誤', () => {
 describe('對話的連續性', () => {
   it('第二輪看得到第一輪說過的話——REPL 是一條對話，不是一串互不相干的呼叫', async () => {
     const { printer } = recorder();
-    const { agent, model } = await createCliAgent({ live: false }, DEFAULT_PLUGINS);
+    const { agent, model, sessionLog } = await createCliAgent({ live: false }, DEFAULT_PLUGINS);
 
-    await runTurn(agent, '第一句：記住「胡桃」這兩個字。', printer);
-    await runTurn(agent, '第二句：剛剛那兩個字是什麼？', printer);
+    await runTurn(agent, '第一句：記住「胡桃」這兩個字。', printer, sessionLog);
+    await runTurn(agent, '第二句：剛剛那兩個字是什麼？', printer, sessionLog);
 
     // 送進模型的第二輪 prompt 裡還帶著第一句——狀態在 checkpointer 裡，靠 thread_id 認領。
     const prompt = (model as ScriptedChatModel).lastPrompt
@@ -372,7 +498,12 @@ describe('REPL', () => {
     const input = new PassThrough();
     input.end('說點什麼\n/exit\n');
 
-    await runRepl(await replAgent(), { input, output: new PassThrough() }, printer);
+    await runRepl(
+      await replAgent(),
+      { input, output: new PassThrough() },
+      printer,
+      new SessionLog('t'),
+    );
 
     expect(stdout()).toContain('回聲：嗨');
   });
@@ -382,7 +513,12 @@ describe('REPL', () => {
     input.end('說點什麼\n');
 
     await expect(
-      runRepl(await replAgent(), { input, output: new PassThrough() }, recorder().printer),
+      runRepl(
+        await replAgent(),
+        { input, output: new PassThrough() },
+        recorder().printer,
+        new SessionLog('t'),
+      ),
     ).resolves.toBeUndefined();
   });
 
@@ -392,7 +528,12 @@ describe('REPL', () => {
     // 第二句話時腳本已經用完，那一輪會拋。
     input.end('第一句\n第二句\n第三句\n');
 
-    await runRepl(await replAgent(), { input, output: new PassThrough() }, printer);
+    await runRepl(
+      await replAgent(),
+      { input, output: new PassThrough() },
+      printer,
+      new SessionLog('t'),
+    );
 
     expect(stdout()).toContain('回聲：嗨');
     expect(stderr()).toMatch(/腳本只有 2 輪/);

@@ -33,8 +33,14 @@
  * {@link SCORER_CONTROL} 回答的是另一個問題：**這組評分器在真實執行下量不量得出 1.00
  * 以下的數字。** #83 的證據是盤點時用 curl 拿到的旁證（同一句提示，11B 把參數寫成亂碼），
  * 那不是走 `runBenchmarkCase` 與 `scoreCase` 量出來的。它**沒有同家族對照**
- * （`meta/llama-3.2-90b-vision-instruct` 三次探測全部 90 秒逾時，就是 [#57](https://github.com/DemianLi/nexus-agent/issues/57)
- * 那個永遠不回來），所以**它的數字不准讀成尺寸效應** —— 它只證明判準鈍不鈍。
+ * （`meta/llama-3.2-90b-vision-instruct` 在 2026-08-28 的三次探測全部 90 秒逾時，就是
+ * [#57](https://github.com/DemianLi/nexus-agent/issues/57) 那個永遠不回來），所以**它的數字
+ * 不准讀成尺寸效應** —— 它只證明判準鈍不鈍。
+ *
+ * **2026-08-29 的盤點裡那個 90B 回得出 `tool_calls`，11.1 秒。** 一次成功不會讓 #57 退休
+ * （那個失敗模式本來就是斷續的），但「沒有同家族對照」這個理由現在**至少有一次是不成立的**。
+ * 要把它變成真的對照，得先量到它在完整基準任務下也跑得完 —— 探測是一句話一個工具，
+ * 那證明不了什麼。見 `survey.ts`。
  *
  * ## 盤點（2026-08-28，逐一送一個帶 `tools` 的請求，配 90 秒逾時）
  *
@@ -48,19 +54,28 @@
  * `ibm/granite-3.0-8b-instruct`、`zyphra/zamba2-7b-instruct`、`mistralai/mistral-7b-instruct-v0.3`
  * —— 全部 404。**光看 `/models` 或看名字都會踩空。**
  *
- * ## 這份清單是綁在帳號上的
+ * ## 這份清單是綁在帳號上的，而且**同一把 key 上也會變**
  *
  * 換一把 key，叫得動的集合就不一樣，這兩道階梯可能整個不存在。要重新盤點就照上面那套做：
  * 拿 `GET /models` 的**全部** id，逐一送一個帶 `tools` 的請求，把結果分成
  * 「叫不動 / 不支援工具 / 逾時 / 可用」四類。
+ *
+ * **2026-08-29 用同一把 key 重跑一次，數字就變了**：型錄 84 → **83**，可用 14 → **16**，
+ * 而且成員換過（`google/gemma-4-31b-it`、`meta/muse-glimmer-30b`、`minimaxai/minimax-m3`、
+ * `moonshotai/kimi-k3` 等是新出現的；`google/gemma-3-12b-it` 之類則從型錄上消失）。
+ * 完整結果見 [`.docs/model-inventory.md`](../../../../.docs/model-inventory.md)。
+ * 所以「綁在帳號上」還不夠準 —— **它也綁在時間上**，報告裡的每個數字都要帶盤點日期。
  */
 
-/** 一道階梯上的一階。 */
-export interface ModelTier {
-  /** 報表上的短名。全域唯一，報表靠它指名。 */
-  readonly label: string;
-  /** 端點上的 model id。 */
-  readonly modelId: string;
+import type { ModelUnderTest } from './model-under-test.js';
+
+/**
+ * 一道階梯上的一階。
+ *
+ * 比 {@link ModelUnderTest} 多的就是尺寸那兩欄 —— 而那兩欄**只在階梯內部有意義**。
+ * 選型調查（`survey.ts`）用的是沒有它們的那個上位型別。
+ */
+export interface ModelTier extends ModelUnderTest {
   /** 總參數量（十億）。抄自 id。 */
   readonly totalBillions: number;
   /**
@@ -149,8 +164,24 @@ export const MODEL_LADDERS: readonly ModelLadder[] = [GPT_OSS_LADDER, NEMOTRON_3
  *
  * 它回答「這組評分器在真實執行下量不量得出 1.00 以下的數字」，不回答尺寸。兩次探測就
  * 自相矛盾（同一句提示，一次叫對了工具、一次 `finish_reason: stop` 根本沒叫），而它的
- * 同家族對照 `meta/llama-3.2-90b-vision-instruct` 三次探測全部 90 秒逾時，所以**沒有任何
- * 東西能把它的分數歸因到尺寸**。它是這把 key 上總量最小、叫得動、又支援工具的模型。
+ * 同家族對照 `meta/llama-3.2-90b-vision-instruct` 在 2026-08-28 的三次探測全部 90 秒逾時，
+ * 所以**沒有任何東西能把它的分數歸因到尺寸**。它是這把 key 上總量最小、叫得動、又支援工具的模型。
+ *
+ * **這個理由在 2026-08-29 被資料解決了。** 那一輪選型調查（294 次執行）裡兩個都跑了七題
+ * 各三次，同家族、只有尺寸在變：
+ *
+ * | | 參數正確性（七題） | 參數正確性（難題） | 評到分 |
+ * | --- | --- | --- | --- |
+ * | `llama-11b` | 0.33 | 0.53 | 14/21 |
+ * | `llama-90b` | **0.53** | **0.67** | 14/21 |
+ *
+ * **90B 明顯比 11B 好，而且兩個都離 1.00 很遠。** 所以這一階現在有同家族對照了，而它
+ * 證明的東西比原本更強：判準不只量得出 `1.00` 以下，它在**同一個家族的兩個尺寸之間也
+ * 分得出高下**。
+ *
+ * 這裡仍然刻意不把 90B 加成一道階梯 —— 兩階都有三分之一的執行沒評到分（`budget` 與
+ * 端點拒收平行呼叫），拿一道半數資料缺席的階梯去談尺寸效應，是把 `SCORER_CONTROL`
+ * 的角色跟 `MODEL_LADDERS` 的角色混起來。它證明判準夠利，就停在這裡。
  */
 export const SCORER_CONTROL: ModelTier = {
   label: 'llama-11b',

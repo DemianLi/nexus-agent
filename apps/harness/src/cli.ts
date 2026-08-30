@@ -21,14 +21,31 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import type { NexusPlugin } from '@nexus/core';
+import type {
+  ApprovalPolicy,
+  InvariantError,
+  NexusPlugin,
+  SessionTelemetrySharingStatus,
+} from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
-import { createNexusAgent } from './agent-factory.js';
+import { SessionLog } from '@nexus/core';
+import { createCoreInvariantPlugin } from '@nexus/core/invariant';
+import { createEchoInvariantPlugin } from '@nexus/plugin-echo/invariant';
+import { createMcpInvariantPlugin } from '@nexus/plugin-mcp/invariant';
+import { createMemoryInvariantPlugin } from '@nexus/plugin-memory/invariant';
+import { createQuickJsInvariantPlugin } from '@nexus/plugin-quickjs/invariant';
+import { createSkillsInvariantPlugin } from '@nexus/plugin-skills/invariant';
+import { createTelemetryOtelInvariantPlugin } from '@nexus/plugin-telemetry-otel/invariant';
+import { createValidationInvariantPlugin } from '@nexus/plugin-validation/invariant';
+import { createWireInvariantPlugin } from '@nexus/wire/invariant';
+
+import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
 import type { NexusAgentHandle } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MODEL_ID } from './live-model.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
 import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
 import type { ScriptedTurn } from './scripted-model.js';
 
@@ -111,18 +128,45 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
 /**
  * 沒指定 `--plugins` 時載的清單。
  *
- * 只有 echo 一個——CLI 的預設組裝要能證明「工具真的接上了」，而不是替誰決定該裝什麼。
- * 哪些 plugin 該進預設清單是設定的事，那要等外部設定機制
- * （[#46](https://github.com/DemianLi/nexus-agent/issues/46)）啟動才有地方講。
+ * 工具只有 echo 一個——CLI 的預設組裝要能證明「工具真的接上了」，而不是替誰決定該裝什麼。
+ * 哪些**工具** plugin 該進預設清單是設定的事，那要等**外部**設定機制才有地方講
+ * （[#46](https://github.com/DemianLi/nexus-agent/issues/46)）。
+ *
+ * **九個不變量配套入口是那句話的例外，而例外要說得出理由**
+ * （[#107](https://github.com/DemianLi/nexus-agent/issues/107) 拍板）：
+ *
+ * - **它們不裝功能，只裝觀察。** 一個配套入口不註冊工具、不改 prompt、不碰 backend，
+ *   所以「替誰決定該裝什麼」這個顧慮對它們不成立——沒有人的 agent 因為它們而不一樣。
+ * - **關得掉。** [#104](https://github.com/DemianLi/nexus-agent/issues/104) 之後條目層有
+ *   `disabled`、組裝點有 `invariants` 選擇，所以進來不是單向門。這是它進得來的前提。
+ * - **九個全進，不是只有 `@nexus/core`。** 八個是空 installer，掛上去一個檢查都不裝，
+ *   買到的只有包名歸屬。**代價是每一次執行多九個條目、九次 `apply`**，而換到的是這份
+ *   清單與 `registry.invariants.companions()` 對得起來——少掛的那幾個會讓「這個 package
+ *   沒有可檢的關係」與「這個 package 的檢查沒掛上」在診斷裡長得一模一樣。
+ *
+ * 違規往哪裡印見 {@link runCli} 接線的那一行。
  */
-export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [createEchoPlugin()];
+export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
+  createEchoPlugin(),
+  createCoreInvariantPlugin(),
+  createEchoInvariantPlugin(),
+  createMcpInvariantPlugin(),
+  createMemoryInvariantPlugin(),
+  createQuickJsInvariantPlugin(),
+  createSkillsInvariantPlugin(),
+  createTelemetryOtelInvariantPlugin(),
+  createValidationInvariantPlugin(),
+  createWireInvariantPlugin(),
+];
 
 /**
  * 從一個模組載 plugin 清單。
  *
  * **這不是 [#46](https://github.com/DemianLi/nexus-agent/issues/46) 的外部設定機制**：
- * 那條講的是 plugin 條目的唯一 id 與逐項覆寫，這裡只回答「清單從哪個模組來」——
- * 組裝點本來就擁有的那個問題。約定薄到只有一句：模組的預設匯出是一個 plugin 陣列。
+ * 條目的唯一 id 與停用已經在 [#104](https://github.com/DemianLi/nexus-agent/issues/104)
+ * 落地了，**沒落地的是逐項覆寫個別 plugin 的設定**——我們這側設定收在工廠閉包裡，
+ * 從外面 patch 不了。這裡則只回答「清單從哪個模組來」——組裝點本來就擁有的那個問題。
+ * 約定薄到只有一句：模組的預設匯出是一個 plugin 陣列。
  *
  * @param specifier - 模組路徑，相對於 `cwd` 解析。
  * @param cwd - 解析的基準目錄，省略即行程的工作目錄。
@@ -191,6 +235,24 @@ const SYSTEM_PROMPT = [
 const THREAD_ID = 'cli';
 
 /**
+ * banner 上關於核准的那一行。
+ *
+ * **它是 (a) 那個決定唯一的代價的解藥。** [#113](https://github.com/DemianLi/nexus-agent/issues/113)
+ * 選了「預設關掉、不加旗標」，而它的缺點被記在卡上：「CLI 不做核准」變成一件要讀文件
+ * 才知道的事。旗標不是補這個缺口的辦法——旗標讓人**選**，而這裡沒有第二個值得選的
+ * 行為——**披露才是**：把已經定下來的事講出來。同 tracing 與遙測那兩行的規矩，
+ * 這一行不是設定，是狀態。
+ *
+ * 不講的話，「這個工具被政策拒絕了」與「模型自己決定不叫它」在畫面上分不出來。
+ *
+ * **它與 {@link HEADLESS_APPROVALS} 是同一個決定的兩半**：這一行寫死「關閉」，因為
+ * `runCli` 只傳那一個政策。哪天這裡真的多了一個旗標，這個常數要跟著變成一個函式——
+ * 不然畫面會開始說謊，而說謊的披露比沒有披露更糟。
+ */
+export const APPROVAL_DISCLOSURE =
+  '核准：關閉（這個入口收不了核准決定，需要核准的工具會被拒絕，不會停下來等）';
+
+/**
  * 依這次呼叫建 model。
  *
  * @param live - 是否用真實供應商。
@@ -226,6 +288,13 @@ type NexusAgent = NexusAgentHandle['agent'];
  * @param invocation - 這次呼叫解析出來的東西。
  * @param plugins - 已經載好的 plugin 清單。
  * @param cwd - `--workspace` 的解析基準，省略即行程的工作目錄。
+ * @param onInvariantViolation - 不變量違規往哪裡講。**省略是有意義的**：這個工廠兩條路
+ *   都在用，而 [`serve.ts`](./serve.ts) 刻意不傳——伺服器那條路徑的違規進的是伺服器
+ *   日誌，維持 runner 的預設（[#107](https://github.com/DemianLi/nexus-agent/issues/107)）。
+ * @param approvals - 核准政策的 session 開關。**省略是有意義的**，同上一個參數：
+ *   [`serve.ts`](./serve.ts) 刻意不傳，維持預設的「有人在」——瀏覽器那端真的按得下去。
+ *   CLI 這條傳 {@link HEADLESS_APPROVALS}，因為它收不了核准決定
+ *   （[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
  * @returns 組好的 agent、收掉它的方法，與它用的 model。
  * @throws 清單載入失敗、fold 前置條件不成立，或基座擋下這份組裝。
  */
@@ -233,18 +302,44 @@ export async function createCliAgent(
   invocation: Pick<CliInvocation, 'live' | 'workspace'>,
   plugins: readonly NexusPlugin[],
   cwd: string = process.cwd(),
-): Promise<{ agent: NexusAgent; dispose: () => Promise<void>; model: BaseChatModel }> {
+  onInvariantViolation?: (error: InvariantError) => void,
+  approvals?: ApprovalPolicy,
+): Promise<{
+  agent: NexusAgent;
+  dispose: () => Promise<void>;
+  model: BaseChatModel;
+  sessionLog: SessionLog;
+  attachTelemetry: (log: SessionLog) => (() => Promise<void>) | undefined;
+  attachInvariants: (log: SessionLog) => (() => void) | undefined;
+  telemetrySharing: SessionTelemetrySharingStatus | undefined;
+}> {
   const model = createCliModel(invocation.live);
-  const { agent, dispose } = await createNexusAgent({
+  const { agent, dispose, attachTelemetry, attachInvariants, telemetrySharing } =
+    await createNexusAgent({
+      model,
+      plugins,
+      ...(invocation.workspace !== undefined && {
+        backend: new ContainedFilesystemBackend({ rootDir: resolve(cwd, invocation.workspace) }),
+      }),
+      systemPrompt: SYSTEM_PROMPT,
+      checkpointer: new MemorySaver(),
+      ...(onInvariantViolation !== undefined && { onInvariantViolation }),
+      ...(approvals !== undefined && { approvals }),
+    });
+  // 日誌跟 agent 同壽命：REPL 是一條連續對話，`seq` 要跨輪連續才有意義。
+  const sessionLog = new SessionLog(THREAD_ID);
+  // **這裡不接線。** 這個工廠兩條路都在用，而 serve 那條不用這份 `sessionLog`——它一個
+  // thread 一份，接線點在 {@link ./wire-handler.ts} 建 pump 的那一刻。在這裡接等於幫
+  // serve 接上一份永遠不會有事件的日誌，只送得出一筆 `shutdown`。接線交給呼叫端。
+  return {
+    agent,
+    dispose,
     model,
-    plugins,
-    ...(invocation.workspace !== undefined && {
-      backend: new ContainedFilesystemBackend({ rootDir: resolve(cwd, invocation.workspace) }),
-    }),
-    systemPrompt: SYSTEM_PROMPT,
-    checkpointer: new MemorySaver(),
-  });
-  return { agent, dispose, model };
+    sessionLog,
+    attachTelemetry,
+    attachInvariants,
+    telemetrySharing,
+  };
 }
 
 /** 把一輪 stream 出來的東西印給人看。 */
@@ -266,6 +361,20 @@ interface InterruptUpdate {
 }
 
 /**
+ * `__interrupt__` 那一筆裡的中斷 id。
+ *
+ * **跟 `thread-pump.ts` 的 `asInterruptEntries` 讀的是同一個形狀**（基座把中斷發成
+ * 一個帶 `id` 的陣列），只是這一側經 `stream(['updates'])` 拿到、那一側經
+ * `streamEvents` 拿到。認不出來就回空陣列——**寧可少記一筆，也不要編一個 id 出來**。
+ */
+function interruptIdsOf(update: unknown): readonly string[] {
+  if (!Array.isArray(update)) return [];
+  return update
+    .map((entry: unknown) => (entry as { id?: unknown } | null)?.id)
+    .filter((id): id is string => typeof id === 'string');
+}
+
+/**
  * 把中斷印出來。
  *
  * **這一段在補一個真的缺陷，不是加裝飾。** 中斷在 `updates` 串流裡是
@@ -273,9 +382,15 @@ interface InterruptUpdate {
  * 的迴圈對它一個字都印不出來——這一輪就這樣結束，人看到的是模型講到一半忽然沒了，
  * 而工具其實沒跑。停在核准點與正常收工在畫面上長得一模一樣，是最壞的那種相同。
  *
- * 這一版**只負責說**，不負責問。核准介面（收決定、`Command({ resume })` 送回去）是
- * 開發計劃 Phase 5 `feat/web-hitl` 的事，所以這裡明說這個入口按不了核准——
- * 講清楚做不到，比讓人對著空白畫面猜要好。
+ * 這一版**只負責說**，不負責問。收決定、`Command({ resume })` 送回去的那個介面在 web
+ * （[#79](https://github.com/DemianLi/nexus-agent/pull/79)），不在這裡。
+ *
+ * **[#113](https://github.com/DemianLi/nexus-agent/issues/113) 之後，核准閘門不會再走到
+ * 這裡**——`runCli` 傳 {@link HEADLESS_APPROVALS}，需要核准的工具在閘門那一層就被拒絕，
+ * 根本不發中斷。那**不是**刪掉這一段的理由：閘門不是唯一會 `interrupt()` 的東西——
+ * **閘門自己就是一個 middleware 裡的 `interrupt()`**，所以同一條路徑對任何一個 plugin
+ * 掛上來的 middleware 都是開著的。真的有人走上來的時候，這一段是「這一輪停了」與
+ * 「這一輪好好收工了」之間唯一的差別。刪掉它等於把當初那個缺陷重新打開，只是換一個來源。
  *
  * @param update - `__interrupt__` 那一筆的內容。
  * @param printer - 輸出去處。
@@ -305,30 +420,47 @@ function printInterrupt(update: unknown, printer: Printer): void {
  * @param input - 使用者說的那句話。
  * @param printer - 輸出去處。
  */
-export async function runTurn(agent: NexusAgent, input: string, printer: Printer): Promise<void> {
+export async function runTurn(
+  agent: NexusAgent,
+  input: string,
+  printer: Printer,
+  sessionLog: SessionLog,
+): Promise<void> {
   let files: Record<string, unknown> = {};
 
-  for await (const [mode, payload] of await agent.stream(toAgentInvocation(input), {
-    streamMode: ['updates', 'values'],
-    configurable: { thread_id: THREAD_ID },
-  })) {
-    if (mode === 'values') {
-      files = (payload as { files?: Record<string, unknown> }).files ?? {};
-      continue;
-    }
-
-    for (const [node, update] of Object.entries(payload as Record<string, unknown>)) {
-      if (node === '__interrupt__') {
-        printInterrupt(update, printer);
+  sessionLog.append('turn/start', { kind: 'message', text: input });
+  try {
+    for await (const [mode, payload] of await agent.stream(toAgentInvocation(input), {
+      streamMode: ['updates', 'values'],
+      configurable: { thread_id: THREAD_ID },
+    })) {
+      if (mode === 'values') {
+        files = (payload as { files?: Record<string, unknown> }).files ?? {};
         continue;
       }
-      const messages = (update as { messages?: BaseMessage[] }).messages ?? [];
-      for (const message of messages) {
-        const label = message.name ? `${node}/${message.name}` : node;
-        printer.log(`[${label}] ${message.text.trim() || '(呼叫工具)'}`);
+
+      for (const [node, update] of Object.entries(payload as Record<string, unknown>)) {
+        if (node === '__interrupt__') {
+          for (const interruptId of interruptIdsOf(update)) {
+            sessionLog.append('interrupt/raised', { interruptId });
+          }
+          printInterrupt(update, printer);
+          continue;
+        }
+        const messages = (update as { messages?: BaseMessage[] }).messages ?? [];
+        for (const message of messages) {
+          const label = message.name ? `${node}/${message.name}` : node;
+          printer.log(`[${label}] ${message.text.trim() || '(呼叫工具)'}`);
+        }
       }
     }
+  } catch (error) {
+    sessionLog.append('turn/failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   }
+  sessionLog.append('turn/end', {});
 
   const paths = Object.keys(files);
   if (paths.length > 0) {
@@ -350,6 +482,7 @@ export async function runRepl(
   agent: NexusAgent,
   io: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream },
   printer: Printer,
+  sessionLog: SessionLog,
 ): Promise<void> {
   const rl = createInterface({ input: io.input, output: io.output, prompt: '> ' });
   // `Interface` 的型別沒有 `closed`（執行期有），所以自己記一份。
@@ -362,7 +495,7 @@ export async function runRepl(
     if (text === '/exit') break;
     if (text.length > 0) {
       try {
-        await runTurn(agent, text, printer);
+        await runTurn(agent, text, printer, sessionLog);
       } catch (error) {
         printer.error(errorMessage(error));
       }
@@ -418,7 +551,26 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       : await loadPluginModule(invocation.pluginModule, options.cwd);
 
   // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
-  const { agent, dispose } = await createCliAgent(invocation, plugins, options.cwd);
+  const { agent, dispose, sessionLog, attachTelemetry, attachInvariants, telemetrySharing } =
+    await createCliAgent(
+      invocation,
+      plugins,
+      options.cwd,
+      (error) =>
+        // **不繞過 `Printer`。** 違規跟 agent 的輸出落在同一個終端機上，前綴是唯一分得出
+        // 誰在講話的東西——同 `printInterrupt` 的 `[核准]`。訊息本身已經帶著
+        // `invariant violated by "<pkg>"`，所以擁有它的 package 不必在這裡再講一次。
+        printer.error(`[不變量] ${error.message}`),
+      // **這個入口沒有人在。** 收核准決定的介面在 web（`serve.ts` 那條刻意不傳這個），
+      // 這裡按不下去，所以停在核准點只有一個結局：整輪作廢。關掉之後被擋的那個工具
+      // 拿到一則模型讀得懂的拒絕，其餘照跑完（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
+      HEADLESS_APPROVALS,
+    );
+  // REPL 是一條連續對話，一份日誌就是整個 session，所以接線點在這裡而不是每輪。
+  // 回傳的 detach 不留：`dispose()` 會把還接著的協調器一起收掉。
+  attachTelemetry(sessionLog);
+  // 不變量的 runner 只是一個訂閱，沒有要排空的東西，所以 detach 也不留——行程走了它就沒了。
+  attachInvariants(sessionLog);
 
   // 一輪跑壞了也要收——資源的所有權跟這一次呼叫綁在一起，不跟它成不成功綁在一起。
   //
@@ -433,19 +585,26 @@ export async function runCli(options: RunCliOptions): Promise<void> {
         ? '檔案系統：虛擬（不碰磁碟）'
         : `檔案系統：${resolve(options.cwd ?? process.cwd(), invocation.workspace)}（變更圍堵在它之下）`,
     );
-    // 第三行是**披露**，不是設定。tracing 開沒開不由這支程式決定——基座讀到環境變數就
+    printer.log(APPROVAL_DISCLOSURE);
+    // 第四行是**披露**，不是設定。tracing 開沒開不由這支程式決定——基座讀到環境變數就
     // 自己掛 tracer——所以這裡唯一能做的是把「現在是什麼狀態」講出來。不講的話，
     // 「工具參數正在往第三方送」與「什麼都沒送」在畫面上一模一樣。
     for (const line of formatTracingDisclosure(readTracingDisclosure(options.env ?? process.env))) {
       printer.log(line);
     }
+    // 第五行是**另一道 seam** 的披露。遙測後端是我們自己掛的，跟上面那道讀環境變數的
+    // tracing 沒有關係——併成一行講會讓兩個不同的出境目標看起來像同一個開關。
+    // 印在這裡是因為**答案到這一刻才存在**：plugin 跑過 `apply` 之前沒有人知道掛了什麼。
+    for (const line of formatTelemetryDisclosure(telemetrySharing)) {
+      printer.log(line);
+    }
 
     if (invocation.prompt !== undefined) {
       printer.log(`> ${invocation.prompt}\n`);
-      await runTurn(agent, invocation.prompt, printer);
+      await runTurn(agent, invocation.prompt, printer, sessionLog);
     } else {
       printer.log('輸入 /exit 或按 Ctrl-D 結束。\n');
-      await runRepl(agent, { input: options.input, output: options.output }, printer);
+      await runRepl(agent, { input: options.input, output: options.output }, printer, sessionLog);
     }
   } catch (error) {
     await dispose().catch(() => {});

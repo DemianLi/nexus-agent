@@ -14,18 +14,13 @@
 import type { StructuredTool } from '@langchain/core/tools';
 import { CompositeBackend } from 'deepagents';
 import type { AnyBackendProtocol, FilesystemPermission, SubAgent } from 'deepagents';
-import type {
-  AgentCheckpointer,
-  AgentMiddleware,
-  AgentModel,
-  AgentStore,
-  InterruptOnConfig,
-  WhenPredicate,
-} from './base-types.js';
+import type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
+import { createApprovalGateMiddleware } from './approval.js';
+import type { ApprovalChannel } from './approval.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
-import type { InterruptRequirement, PluginRegistry } from './registry.js';
+import type { PluginRegistry } from './registry.js';
 
 /**
  * 工具呈現順序清單裡代表「其餘未列出者」的保留項。
@@ -42,16 +37,20 @@ export interface ApprovalPolicy {
   /**
    * 這個 session 是否接受人工核准。預設 `true`。
    *
-   * 關掉的意思是**這個 session 沒有人在**（例如批次跑的 CLI），不是「把核准靜音」：
-   * 關著卻有 plugin 宣告了 `interrupts.require(...)`，fold 直接報錯，而不是把那些
-   * 標記丟掉——沒人回答的中斷會把 agent 掛在那裡，靜默放行則是把核准政策解除武裝。
-   * 兩邊都是缺席即拒絕。
+   * 關掉的意思是**這個 session 沒有人在**（例如批次跑的 CLI）。**關掉之後 agent 照樣
+   * 組得起來也跑得完**：不需要核准的工具照跑，需要核准的回一則 `status: 'error'` 的
+   * ToolMessage，理由說明是「沒有人被問到」而不是「有人拒絕」。
    *
-   * **代價要知道**：任何 bundle 了 approval-gated 工具的 plugin，在關掉核准的模式下
-   * 會變成**載不起來**，唯一的補救是去動 plugin 清單。dsh 的對應旋鈕（`ApprovalPolicy`
-   * 的 `'never'`）走的是另一條路——每次 ask 確定性地回 `rejected`，agent 照樣跑得起來，
-   * 只是碰到要核准的操作就被拒。那個讀法在 `interruptOn` 上表達不出來（`false` 是
-   * auto-approve，`allowedDecisions: ['reject']` 仍然會去問人），要換掉這個機制才做得到。
+   * 這對到 dsh 的 `ApprovalPolicy: 'never'`（`docs/subsystems/approval.md:42`）——
+   * “never prompt anyone: every ask resolves `'rejected'` deterministically”。
+   *
+   * **這一格問的是政策，不是能力。** 「根本沒有核准管道」是另一個問題，由缺席的
+   * checkpointer 表達，兩者的拒絕理由刻意不同（見 {@link ApprovalChannel}）。
+   *
+   * 舊版在這裡是**建構期直接拋**：關著卻有 plugin 宣告了核准需求，fold 報錯，於是任何
+   * bundle 了 approval-gated 工具的 plugin 在批次／CI 模式下變成載不起來。
+   * [#111](https://github.com/DemianLi/nexus-agent/issues/111) 的 (c) 拍板拿掉它——
+   * 那道拋比 dsh 嚴，而且嚴在錯的地方：dsh 的 agent 在 headless 下跑得起來。
    */
   enabled?: boolean;
 }
@@ -78,9 +77,13 @@ export interface FoldOptions {
    * 貢獻，省略即等於可見那些。fold 只拿它驗名字，不會把它變成工具——那些工具是基座的
    * middleware stack 自己註冊的。
    *
-   * 沒有它的話，`interrupts.require('delete', ...)` 與 `toolOrder: ['write_file', ...]`
-   * 都會被誤判成「沒人註冊」，而那幾個恰好是最該被核准、也最該排在前面的。
-   * 所有權留在 harness——它是唯一呼叫 `createDeepAgent` 的地方，知道自己開了哪些工具。
+   * 沒有它的話，`toolOrder: ['write_file', ...]` 會被誤判成「沒人註冊」，而那幾個恰好是
+   * 最該排在前面的。所有權留在 harness——它是唯一呼叫 `createDeepAgent` 的地方，知道
+   * 自己開了哪些工具。
+   *
+   * **消費者從兩個減成一個了。** 核准過去也吃這份宇宙（`interrupts.require('delete', ...)`
+   * 要驗名字存在），現在閘門拿的是執行當下的那一次呼叫，沒有名字要對齊
+   * （[#111](https://github.com/DemianLi/nexus-agent/issues/111)）。
    */
   baseToolNames?: readonly string[];
   /** 模型。 */
@@ -108,8 +111,6 @@ export interface FoldedAgentParams {
   middleware: AgentMiddleware[];
   /** deny 規則，含每條 deny 自己挖的洞。空的時候不出現。 */
   permissions?: FilesystemPermission[];
-  /** 需要人核准的工具。空的時候不出現。 */
-  interruptOn?: Record<string, InterruptOnConfig>;
   /** 有 plugin 掛過路由時是 `CompositeBackend`，否則就是組裝點給的那個。 */
   backend?: AnyBackendProtocol;
   /** skill 來源路徑。空的時候不出現。 */
@@ -140,22 +141,22 @@ export function foldRegistry(
   const toolOrder = options.toolOrder;
   const globalTools = registry.tools.effective();
   assertNoReservedToolName(registry);
-  // 一份名字宇宙餵給兩條檢查：以工具名為 key 的設定只有這兩處，兩邊的嚴格程度必須一致
-  // ——排版列錯了只是難看，核准標在錯的名字上是把閘門解除武裝。
+  // 名字宇宙只剩一個消費者了：`toolOrder`。**核准那一條跟著機制一起走了** —— 閘門
+  // 不再以工具名為 key，沒有「標在不存在的工具上」這回事，所以 `assertInterruptToolsExist`
+  // 沒有主體可檢，跟著刪（#111 的 (a)①）。
   const known = knownToolNames(registry, options.baseToolNames);
   if (toolOrder !== undefined) validateToolOrder(toolOrder, known);
 
   const permissions = foldPermissions(registry);
-  const interruptOn = foldInterrupts(registry, options, known);
+  const approvalGate = foldApprovalGate(registry, options);
 
   const params: FoldedAgentParams = {
     tools: orderTools(globalTools, toolOrder),
-    subagents: foldSubAgents(registry, { toolOrder, permissions, interruptOn }),
-    middleware: foldMiddleware(registry),
+    subagents: foldSubAgents(registry, { toolOrder, permissions, approvalGate }),
+    middleware: foldMiddleware(registry, approvalGate),
   };
 
   if (permissions.length > 0) params.permissions = permissions;
-  if (Object.keys(interruptOn).length > 0) params.interruptOn = interruptOn;
 
   const backend = foldBackend(registry, options.defaultBackend);
   if (backend !== undefined) params.backend = backend;
@@ -349,121 +350,59 @@ function foldPermissions(registry: PluginRegistry): FilesystemPermission[] {
 }
 
 /**
- * 核准標記折成基座的 `interruptOn`：同一個工具的多方標記逐欄位 OR，不報錯。
+ * 核准閘門折成一個 `wrapToolCall` middleware。
  *
- * 詞彙是封閉的——`allowedDecisions` 固定 `["approve", "reject"]`，`argsSchema`
- * 不使用（dsh 明文「Input rewrite is deliberately not offered」）。**這是基座真的
- * 執行的約束，不是註解**：`processDecision` 拿到不在清單裡的決定型別會拋
- * （`langchain@1.5.10`，`dist/agents/middleware/hitl.js:407`），訊息裡連 `allowedDecisions`
- * 一起附上——所以 resume 傳 `{ type: "edit" }` 是當場失敗，不是靜默降級成 approve。
+ * **這一格取代了整個 `foldInterrupts`。** 舊版在這裡做四件事：工具名存在檢查、
+ * 核准政策開關、缺 checkpointer 即拋、以及同工具多方標記逐欄位 OR。四件全部消失，
+ * 而消失的原因各不相同，值得逐條說清楚（決議見
+ * [#111](https://github.com/DemianLi/nexus-agent/issues/111)）：
  *
- * **一批裡有人被 reject，被 approve 的那些會靜靜地不執行。** 基座算出
- * `hasRejectedToolCalls` 之後只留下被拒的那幾筆，直接改寫 AI 訊息的 `tool_calls`
- * （`hitl.js:483-496`）：被核准的那一筆從歷史裡消失，沒有 ToolMessage、沒有痕跡，
- * 模型看起來像它從來沒要求過。fold 這一側擋不掉，那是基座的批次語義。核准介面
- * 因此要把混合批次當成全有全無，不能讓人逐筆按——逐筆按下去的「核准」與「從沒問過」
- * 分不出來。絆索在 `apps/harness/src/interrupt.test.ts`。
+ * - **工具名存在檢查**：沒有主體了。閘門不再以工具名為 key，名字是執行當下拿到的。
+ *   那條檢查當初的定位就寫著「止血不是根治」，根治的方式正是讓名字不再是宣告出來的。
+ * - **核准政策開關**：從「建構期拋」變成「執行期確定性拒絕」——(c) 的拍板。
+ * - **缺 checkpointer 即拋**：同上，變成另一個理由的確定性拒絕。**這一條不能只是刪掉**：
+ *   實測沒有 checkpointer 時 `interrupt()` 是執行期拋 `No checkpointer set`，所以要在
+ *   問人之前就攔下來，不是讓它炸。
+ * - **多方標記 OR**：waterfall 本來就是這個語義的一般化——第一個回非 allow 的人決定，
+ *   而且它回的是**自己的理由**，不是把幾個人的理由用「；」黏起來。
  *
- * **標在不存在的工具名上要報錯。** 基座那端不會救：`humanInTheLoopMiddleware` 拿
- * `toolCall.name` 查 `interruptOn`，查不到就走 auto-approve，所以一個打錯字的核准閘門
- * 會靜靜地什麼都不擋——比沒宣告更糟，因為它看起來有守。fold 是「全部載完了」唯一
- * 的時刻，這條後置檢查只有這裡做得了。
+ * `enabled` 與 checkpointer 這兩格答的是不同的問題，映射見 {@link ApprovalChannel}。
  */
-function foldInterrupts(
-  registry: PluginRegistry,
-  options: FoldOptions,
-  known: ReadonlySet<string>,
-): Record<string, InterruptOnConfig> {
-  const requirements = registry.interrupts.requirements();
-  if (requirements.length === 0) return {};
-
-  // 名字先驗：那是 plugin 自己的缺陷，跟這個 session 怎麼設定無關，先報它才不會讓人
-  // 修完 session 設定再撞一次。
-  assertInterruptToolsExist(requirements, known);
-
-  const cited = [...new Set(requirements.map((entry) => formatOrigin(entry.origin)))].join('、');
-  if (options.approvals?.enabled === false) {
-    throw new Error(
-      `這個 session 關掉了人工核准，但 ${cited} 宣告了需要核准的工具。` +
-        `沒有人可以按核准的話，中斷只會把 agent 掛在那裡——` +
-        `要嘛打開核准，要嘛把那個 plugin 從清單裡拿掉。`,
-    );
-  }
-  if (options.checkpointer === undefined || options.checkpointer === false) {
-    throw new Error(
-      `${cited} 宣告了需要核准的工具，但組裝點沒給 checkpointer。` +
-        `基座的 interrupt 靠 checkpointer 才能在核准後接回去——缺席即拒絕，不是放行。`,
-    );
-  }
-
-  const byTool = new Map<string, InterruptRequirement[]>();
-  for (const entry of requirements) {
-    const bucket = byTool.get(entry.value.toolName) ?? [];
-    if (bucket.length === 0) byTool.set(entry.value.toolName, bucket);
-    bucket.push(entry.value);
-  }
-  return Object.fromEntries(
-    [...byTool].map(([toolName, reqs]) => [toolName, mergeInterrupt(reqs)]),
-  );
-}
-
-/** 每個核准標記都要指向一個真的存在的工具，訊息指名是誰標的。 */
-function assertInterruptToolsExist(
-  requirements: readonly NamedEntry<InterruptRequirement>[],
-  known: ReadonlySet<string>,
-): void {
-  const unknown = requirements.filter((entry) => !known.has(entry.value.toolName));
-  if (unknown.length === 0) return;
-  const detail = unknown
-    .map((entry) => `${formatOrigin(entry.origin)} 標了 "${entry.value.toolName}"`)
-    .join('；');
-  const knownList = [...known].sort().join('、') || '（沒有任何工具）';
-  throw new Error(
-    `核准標記指向不存在的工具：${detail}。名字打錯的話那個閘門什麼都不會擋——` +
-      `基座查不到就直接放行。目前認得的工具：${knownList}。` +
-      `如果標的是基座自己帶的工具（write_file / delete / execute / task 那些），` +
-      `要把它加進組裝點的 baseToolNames。`,
-  );
+function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): AgentMiddleware {
+  const channel: ApprovalChannel =
+    options.approvals?.enabled === false
+      ? { kind: 'policy-never' }
+      : options.checkpointer === undefined || options.checkpointer === false
+        ? { kind: 'no-channel' }
+        : { kind: 'human' };
+  return createApprovalGateMiddleware(registry.approvals.listeners(), channel);
 }
 
 /**
- * 同一個工具的多筆標記合成一份設定。
- *
- * `when` 缺席的語義是**無條件中斷**，所以只要有一方沒給 `when`，OR 的結果就是無條件
- * ——合出來的設定不帶 `when`，而不是包一個永遠回 true 的述詞。全都給了才 OR：依序
- * 求值、任一為真就短路，`when` 本來就可以回 promise。
- */
-function mergeInterrupt(requirements: readonly InterruptRequirement[]): InterruptOnConfig {
-  const reasons = [...new Set(requirements.map((requirement) => requirement.reason))];
-  const config: InterruptOnConfig = {
-    allowedDecisions: ['approve', 'reject'],
-    description: reasons.join('；'),
-  };
-  const predicates: WhenPredicate[] = [];
-  for (const requirement of requirements) {
-    if (requirement.when === undefined) return config;
-    predicates.push(requirement.when);
-  }
-  const when: WhenPredicate = async (request) => {
-    for (const predicate of predicates) {
-      if (await predicate(request)) return true;
-    }
-    return false;
-  };
-  return { ...config, when };
-}
-
-/**
- * middleware 折成一份清單：`prepend` 的在前，其餘依註冊順序。
+ * middleware 折成一份清單：`prepend` 的在前，核准閘門接著，其餘依註冊順序。
  *
  * **與 dsh 的偏離**：dsh 的匿名表只有 `append`，沒有 prepend 這個概念。deepagents
  * 的 middleware 是一份順序有意義的陣列，「插到最前」表達不出來，所以退到最接近的
  * 實作：一張表加一次穩定分割，兩個分區各自維持註冊順序。
+ *
+ * **核准閘門排在 `prepend` 之後、其餘之前，而那個位置有唯一正確答案。**
+ * `wrapToolCall` 是層層相包的，陣列越前面越外層：
+ *
+ * - **不能排在最前**。最外層是圍堵（`@nexus/plugin-validation` 以 `prepend` 掛上去），
+ *   它的射程要涵蓋內層每一個 plugin middleware，閘門自己的 bug 也在裡面。把閘門推到
+ *   它外面，閘門一拋就整場 run 死掉。實測中斷穿得過圍堵的 `isGraphBubbleUp` 分支，
+ *   所以待在裡面不會讓核准點消失。
+ * - **不能排在其餘之後**。閘門越內層，能繞過它的 middleware 越多——排最後等於任何一個
+ *   plugin middleware 都可以在它之前把工具跑掉。
  */
-function foldMiddleware(registry: PluginRegistry): AgentMiddleware[] {
+function foldMiddleware(
+  registry: PluginRegistry,
+  approvalGate: AgentMiddleware,
+): AgentMiddleware[] {
   const entries = registry.middleware.list();
   return [
     ...entries.filter((entry) => entry.value.prepend).map((entry) => entry.value.middleware),
+    approvalGate,
     ...entries.filter((entry) => !entry.value.prepend).map((entry) => entry.value.middleware),
   ];
 }
@@ -491,9 +430,19 @@ function foldBackend(
  *
  * 三件事在這裡合起來，共同的軸線是**全域的東西主動併進每個 subagent**：基座對
  * `permissions` 與 `tools` 都是整組替換而非合併（`SubAgentBase` 的 `permissions`
- * 明文 full replacement，`tools` 缺席才 fallback 到 defaultTools），`interruptOn`
- * 則是 `agentParams.interruptOn ?? defaultInterruptOn`——一個自帶設定的 subagent
- * 會把全域那些整組蓋掉。所以同名項一律**全域勝**：subagent 可以多要求，不能少要求。
+ * 明文 full replacement，`tools` 缺席才 fallback 到 defaultTools）。所以同名項一律
+ * **全域勝**：subagent 可以多要求，不能少要求。
+ *
+ * **核准閘門必須逐個 subagent 注進去，不能靠繼承。** deepagents 對
+ * `SubAgentBase.middleware` 的說明是 “Additional middleware to append after
+ * default_middleware”（`deepagents@1.13.1`，`dist/agent-D50BBbJT.d.ts:1527`）——
+ * subagent 拿的是基座那份預設 stack 加自己宣告的那些，**root 的 plugin middleware
+ * 一個都不繼承**。舊機制靠的是 `interruptOn` 這個欄位可以逐個 subagent 傳，換成
+ * middleware 之後那條路沒了，不注就是默默地讓 subagent 失去核准。
+ *
+ * **順帶暴露一件既有事實**：圍堵（以及其餘所有 plugin middleware）今天同樣射不進
+ * subagent。這張沒有修它——只有核准這一格是這次換機制**造成**的落差，其餘是本來就在
+ * 的。要修是另一張。
  *
  * **寫 subagent 的人要知道這件事**：基座對 `SubAgentBase.permissions` 的說明是
  * 「these rules **replace** the parent agent's permissions」，它自己的範例就是
@@ -506,7 +455,7 @@ function foldSubAgents(
   context: {
     toolOrder: readonly string[] | undefined;
     permissions: readonly FilesystemPermission[];
-    interruptOn: Record<string, InterruptOnConfig>;
+    approvalGate: AgentMiddleware;
   },
 ): SubAgent[] {
   const folded: SubAgent[] = [];
@@ -527,14 +476,17 @@ function foldSubAgents(
     for (const [toolName, scoped] of registry.tools.own(name)) merged.set(toolName, scoped);
 
     const permissions = [...context.permissions, ...(spec.permissions ?? [])];
-    const interruptOn = { ...spec.interruptOn, ...context.interruptOn };
 
-    const next: SubAgent = { ...spec, tools: orderTools(merged, context.toolOrder) };
+    const next: SubAgent = {
+      ...spec,
+      tools: orderTools(merged, context.toolOrder),
+      // 閘門排在 subagent 自帶的那些之前——同「全域勝」那條軸線：subagent 自己掛的
+      // middleware 繞不過它。
+      middleware: [context.approvalGate, ...(spec.middleware ?? [])],
+    };
     // 空的就不要放：基座對 `permissions` 的空陣列與缺席不同義（前者是「整組替換成
-    // 沒有規則」），而 `if (spec.interruptOn)` 對 `{}` 為真，會多掛一層什麼都不做的
-    // HITL middleware。
+    // 沒有規則」）。
     if (permissions.length > 0) next.permissions = permissions;
-    if (Object.keys(interruptOn).length > 0) next.interruptOn = interruptOn;
     folded.push(next);
   }
   return folded;

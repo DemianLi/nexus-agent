@@ -31,15 +31,22 @@
  */
 
 import {
+  assertInvariantSelection,
+  createInvariantRunner,
   foldRegistry,
   formatOrigin,
   loadPlugins,
+  SessionTelemetryCoordinator,
   type AgentCheckpointer,
   type AgentModel,
   type AgentStore,
   type ApprovalPolicy,
+  type InvariantError,
+  type InvariantSelection,
   type NexusPlugin,
   type PluginRegistry,
+  type SessionLog,
+  type SessionTelemetrySharingStatus,
 } from '@nexus/core';
 import { createDeepAgent, StateBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
@@ -83,6 +90,32 @@ export interface CreateNexusAgentOptions {
    * 換算是 `recursionLimit = 2 × 模型輪數 + 2`（模型一輪、工具一輪各算一個 super-step）。
    */
   readonly recursionLimit?: number;
+  /**
+   * 哪些 package 的不變量檢查要真的裝上去。省略即全裝。
+   *
+   * **這是次要的那個開關。** 條目層的 {@link NexusPlugin.disabled} 才是主要答案：一個配套
+   * 入口 plugin 對一個 package 名，關掉那個條目就等於關掉那個 package 的檢查，而且
+   * 錯誤訊息裡指得出是誰。這裡收的 selection 補的是條目層表達不了的兩件事——`enabled:
+   * false` 這個總開關，以及跨多個 package 的 regex 樣式。
+   *
+   * **原樣轉給 `createInvariantRunner`，這裡不加任何語意**：驗證與過濾規則只有
+   * {@link InvariantSelection} 那一份。
+   */
+  readonly invariants?: InvariantSelection;
+  /**
+   * 違規往哪裡講。省略即 `createInvariantRunner` 的預設，也就是 `console.error`。
+   *
+   * **這道縫存在的理由不是「換一個 fd」**——預設的 `console.error` 本來就是 stderr。它買到
+   * 的是三件事，缺一件違規就會變成一個沒有人管得到的輸出：呼叫端**指得出格式**（CLI 有
+   * 自己的 `Printer`，違規不繞過它）、**測得到**（在這道縫之前，唯一驗違規的辦法是去攔
+   * `console.error`），以及**歸得了因**（違規跟 agent 的輸出落在同一個終端機上，沒有前綴
+   * 就分不出誰是誰）。
+   *
+   * 定案見 [#107](https://github.com/DemianLi/nexus-agent/issues/107)。**`serve.ts` 那條
+   * 路徑刻意不傳**，維持預設：那裡的 `console.error` 進的是伺服器日誌，撞不到任何人的
+   * 終端機。兩條進入點答案不同是選的，不是漏的。
+   */
+  readonly onInvariantViolation?: (error: InvariantError) => void;
 }
 
 /**
@@ -111,6 +144,28 @@ export interface CreateNexusAgentOptions {
 export const DEFAULT_RECURSION_LIMIT = 100;
 
 /**
+ * 沒有人在的那些入口用的核准政策。
+ *
+ * **這是入口層的一個事實，不是一個偏好。** 一個收不了核准決定的入口把 `enabled` 留在
+ * 預設的 `true`，等於保證每次碰到核准點都停在那裡等一個不會來的答案 —— CLI 是整輪
+ * 作廢，eval 是一條基準任務作廢。關掉之後 agent 照樣跑得完：不需要核准的照跑，需要
+ * 核准的回一則說明是「沒有人被問到」的拒絕（[#113](https://github.com/DemianLi/nexus-agent/issues/113)
+ * 拍板 (a)：不加旗標，因為旗標是為了讓人選，而這裡沒有第二個值得選的行為）。
+ *
+ * 對到 dsh 的 `ApprovalPolicy: 'never'`，它的文件寫的正是這個用途 ——
+ * "The strict headless stance (CI, unattended runs)"（`docs/subsystems/approval.md:43`）。
+ *
+ * **與 dsh 的偏離，只有這一句**：dsh 還分得出第三種 —— policy 留在 `'ask'` 但一個
+ * answerer 都沒 compose，結果是 `'unavailable'` 而不是 `'rejected'`。我們的
+ * `ApprovalChannel` 是從 checkpointer 在不在推出 `no-channel` 的，不是從一份 answerer
+ * 名冊，所以「有 resume 管道但沒有介面」在我們這裡沒有表示法，退到 `never`。
+ *
+ * **不是每個入口都該用它。** `serve.ts` 那條刻意維持預設的 `true`：瀏覽器那端真的按得
+ * 下去，關掉它會把一個做得出來的功能關掉。三個入口三個答案，這是選的不是漏的。
+ */
+export const HEADLESS_APPROVALS: ApprovalPolicy = { enabled: false };
+
+/**
  * 組裝好的 agent，加上收掉它的方法。
  *
  * **刻意是推導出來的別名，不是自己打一份 interface**：`createDeepAgent` 的回傳型別帶著
@@ -118,8 +173,16 @@ export const DEFAULT_RECURSION_LIMIT = 100;
  * 呼叫端的 `result.messages` 當場變成 `any`。
  *
  * `dispose` 收的是清單裡的 plugin 經 `registry.lifecycle.onDispose()` 登記的活資源
- * （MCP 的 stdio 子行程是第一個），逆序、冪等。**不收 agent 本身**——deepagents 建構後
- * 不可變，也沒有東西要關。不呼叫的下場是行程不退出：子行程的 stdio pipe 是活的 handle。
+ * （MCP 的 stdio 子行程是第一個），逆序、冪等，**外加還接著的遙測協調器**。
+ * **不收 agent 本身**——deepagents 建構後不可變，也沒有東西要關。不呼叫的下場是行程
+ * 不退出：子行程的 stdio pipe 是活的 handle。
+ *
+ * `attachTelemetry` 是遙測的接線口。它在這裡而不在 `@nexus/core`，因為接線需要同時
+ * 拿到 registry（誰掛了後端、誰掛了脫敏規則）與一份 {@link SessionLog}，而**只有組裝點
+ * 同時看得到這兩個**——core 那側不知道日誌是誰建的，兩條進入點那側不知道 registry。
+ *
+ * `attachInvariants` 同一個理由，接的是不變量配套入口。兩者**不合併**：遙測是把事件
+ * 送出去，不變量是檢查事件之間的關係，一個有出境資料一個沒有，開關與失敗語意都不一樣。
  */
 export type NexusAgentHandle = Awaited<ReturnType<typeof createNexusAgent>>;
 
@@ -132,14 +195,18 @@ export type NexusAgentHandle = Awaited<ReturnType<typeof createNexusAgent>>;
  *
  * @param options - 清單，加上組裝點自有的那些。
  * @returns 建好的 agent 與收掉它的方法。
- * @throws 清單載入失敗（重名、`requires` 缺件、`apply` 拋錯）、fold 的前置條件不成立，
- *   或基座自己在建構時擋下這份組裝——三種都在載入期發生，不會拖到跑起來才炸。
+ * @throws 清單載入失敗（重名、`requires` 缺件、`apply` 拋錯）、`invariants` 的 pattern 不合法、
+ *   fold 的前置條件不成立，或基座自己在建構時擋下這份組裝——四種都在載入期發生，
+ *   不會拖到跑起來才炸。
  */
 export async function createNexusAgent(options: CreateNexusAgentOptions) {
   const { registry, dispose } = await loadPlugins(options.plugins);
 
   try {
     assertNoBaseToolNameCollision(registry);
+    // 選擇的合法性在**這裡**驗，不是等接線時才驗：runner 是每一份會話日誌各建一個的，
+    // 壞掉的 regex 預設會拖到第一輪對話才炸，那不是組裝失敗該出現的地方。
+    if (options.invariants !== undefined) assertInvariantSelection(options.invariants);
 
     const params = foldRegistry(registry, {
       defaultBackend: options.backend ?? new StateBackend(),
@@ -159,7 +226,80 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       ...params,
       ...(options.systemPrompt !== undefined && { systemPrompt: options.systemPrompt }),
     }).withConfig({ recursionLimit: options.recursionLimit ?? DEFAULT_RECURSION_LIMIT });
-    return { agent, dispose };
+
+    // 接上去但還沒收掉的協調器。**組裝點自己記著**，因為呼叫端可能只叫 `dispose()`
+    // 就走人——那時 `shutdown` 標記與後端的排空都還沒發生，遙測會少掉最後一段。
+    const attached = new Set<SessionTelemetryCoordinator>();
+    return {
+      agent,
+      /**
+       * 掛著的遙測服務說的共享策略，**沒掛任何東西時是 `undefined`**。
+       *
+       * 披露那一層只有在拿到 `undefined` 的時候才渲染「未配置」——這是 dsh 的規矩，
+       * 也是為什麼這裡回的是「有沒有掛」而不是一個保險的預設值。
+       */
+      telemetrySharing: registry.telemetry.service()?.value.sharing as
+        SessionTelemetrySharingStatus | undefined,
+      /**
+       * 把一份會話日誌接上遙測。**沒掛後端時回 `undefined`**——沒有後端就沒有出口，
+       * 建一個把記錄丟進虛空的協調器只會讓熱路徑白付投影與脫敏的成本。
+       *
+       * @param log - 要鏡像的日誌。
+       * @returns 收掉這一次接線的函式，或沒掛後端時的 `undefined`。
+       */
+      attachTelemetry(log: SessionLog): (() => Promise<void>) | undefined {
+        const mounted = registry.telemetry.service();
+        if (mounted === undefined) return undefined;
+        const coordinator = new SessionTelemetryCoordinator({
+          log,
+          sink: mounted.value,
+          // 現讀而不是快照：`rules()` 每次捕獲都重新問一遍，補送歷史時套的是**現在**
+          // 掛著的策略。這是 dsh waterfall 的語意，折疊要接得住。
+          rules: () => registry.telemetry.rules(),
+        });
+        attached.add(coordinator);
+        return async () => {
+          attached.delete(coordinator);
+          await coordinator.dispose();
+        };
+      },
+      /**
+       * 把一份會話日誌接上註冊著的不變量配套入口。**沒有人註冊時回 `undefined`**——
+       * 同 `attachTelemetry` 的理由：沒有檢查就不要在熱路徑上多掛一個訂閱。
+       *
+       * 過濾器（`enabled` / allowlist / blocklist）從 {@link CreateNexusAgentOptions.invariants}
+       * 來，**原樣轉下去**。沒給就是全裝。違規的去處同理，從
+       * {@link CreateNexusAgentOptions.onInvariantViolation} 來，沒給就是 runner 的預設。
+       *
+       * **`companions.length === 0` 這一條擋在過濾之前，不是之後**：這裡問的是「有沒有
+       * 人註冊」，而不是「過濾完還剩幾個」。過濾成空集合是一個有效的選擇結果，runner
+       * 照樣要接（它擁有訂閱與失敗語意），只是一個檢查都不裝。
+       *
+       * @param log - 要觀察的日誌。
+       * @returns 收掉這一次接線的函式，或沒有配套入口時的 `undefined`。
+       */
+      attachInvariants(log: SessionLog): (() => void) | undefined {
+        const companions = registry.invariants.companions();
+        if (companions.length === 0) return undefined;
+        return createInvariantRunner({
+          log,
+          companions,
+          ...(options.invariants !== undefined && { selection: options.invariants }),
+          ...(options.onInvariantViolation !== undefined && {
+            onViolation: options.onInvariantViolation,
+          }),
+        });
+      },
+      async dispose() {
+        // 遙測先收：後端很可能是某個 plugin 開的，plugin 的 disposer 一跑它就沒了，
+        // 那時再送 `shutdown` 標記等於送進一個已經關掉的東西。
+        for (const coordinator of [...attached]) {
+          attached.delete(coordinator);
+          await coordinator.dispose();
+        }
+        await dispose();
+      },
+    };
   } catch (error) {
     // 清理自己失敗的話不能蓋掉原本的錯誤——那個才是使用者要修的東西。
     await dispose().catch(() => {});

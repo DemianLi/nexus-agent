@@ -6,8 +6,10 @@
  *
  * **組裝完全沿用 CLI 的那一份**（`createCliAgent`）：同一份預設 plugin 清單、同一個
  * `--live` 開關、同一個 `--workspace`。理由是這裡沒有新的組裝決定要做——「web 要跑
- * 哪些 plugin」與「CLI 要跑哪些 plugin」是同一個問題，而它的答案等外部設定機制
- * （[#46](https://github.com/DemianLi/nexus-agent/issues/46)）才有地方講。
+ * 哪些 plugin」與「CLI 要跑哪些 plugin」是同一個問題，而它的答案等**外部**設定機制
+ * 才有地方講（[#46](https://github.com/DemianLi/nexus-agent/issues/46)；
+ * [#104](https://github.com/DemianLi/nexus-agent/issues/104) 給的 `id` 與 `disabled`
+ * 都寫在清單的程式碼裡，換不了「跑哪一份清單」這件事）。
  *
  * **一個 thread 一個 agent，關掉 server 時一起清。** `createNexusAgent` 回的
  * `dispose` 在這裡才真的有意義——MCP plugin 底下是 stdio 子行程，而這是一個長命的
@@ -28,6 +30,7 @@ import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import { startWireServer } from './wire-server.js';
 import type { WireServer } from './wire-server.js';
+import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
 import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
 
 /** 預設 port。挑一個不常撞的，`--port` 蓋得掉。 */
@@ -122,11 +125,37 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
       ? DEFAULT_PLUGINS
       : await loadPluginModule(invocation.pluginModule, options.cwd);
 
+  let telemetryDisclosed = false;
   const handler = createWireHandler({
     // 一個 thread 一個 agent——各自的 checkpointer、各自的虛擬檔案系統。
     createAgent: async () => {
-      const { agent, dispose } = await createCliAgent(invocation, plugins, options.cwd);
-      return { agent: agent as unknown as PumpAgent, dispose };
+      // **第四與第五個引數都刻意不傳，而且理由不同。**
+      //
+      // 第四個（不變量違規往哪裡講）：這條路徑維持 `createInvariantRunner` 的預設
+      // （`console.error`），進的是伺服器日誌。CLI 那條要繞過 `Printer` 才印得出前綴，
+      // 這裡沒有那個問題——伺服器日誌本來就沒有跟誰搶終端機
+      // （[#107](https://github.com/DemianLi/nexus-agent/issues/107)）。
+      //
+      // 第五個（核准政策）：**這裡維持預設的「有人在」**。CLI 與 eval 關掉它是因為那兩個
+      // 入口收不了核准決定，而 web 這端真的按得下去（[#79](https://github.com/DemianLi/nexus-agent/pull/79)
+      // 的核准迴圈，`serve.test.ts` 的「核准那份清單」整條走過一遍）。關掉它會把一個
+      // 做得出來的功能關掉（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
+      const { agent, dispose, attachTelemetry, attachInvariants, telemetrySharing } =
+        await createCliAgent(invocation, plugins, options.cwd);
+      // **遙測披露印在這裡而不是啟動時，因為啟動的那一刻答案不存在**：`createAgent` 是
+      // lazy 的（`wire-handler.ts` 的 `pumpFor` 第一次收到請求才呼叫），plugin 沒跑過
+      // `apply` 就沒有人知道有沒有掛後端。在啟動時印「未配置」會是假的。一個 process
+      // 只印一次——每個 thread 一個 agent，但掛的是同一份 plugin 清單。
+      if (!telemetryDisclosed) {
+        telemetryDisclosed = true;
+        for (const line of formatTelemetryDisclosure(telemetrySharing)) log(line);
+      }
+      return {
+        agent: agent as unknown as PumpAgent,
+        dispose,
+        attachTelemetry,
+        attachInvariants,
+      };
     },
   });
 

@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { AnonymousEntries, CapabilitySet, NamedEntries } from './entries.js';
 import type { PluginOrigin } from './plugin.js';
 
-const a: PluginOrigin = { index: 0, name: 'a' };
-const b: PluginOrigin = { index: 1, name: 'b' };
+const a: PluginOrigin = { id: 'a#0', name: 'a' };
+const b: PluginOrigin = { id: 'b#0', name: 'b' };
 
 function entries(): NamedEntries<string> {
   return new NamedEntries<string>(

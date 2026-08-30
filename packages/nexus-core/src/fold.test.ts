@@ -6,15 +6,15 @@
  * 效果（deny 真的擋住檔案、中斷真的停下來）屬各擴充點落地的 phase。
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { CreateDeepAgentParams, SubAgent } from 'deepagents';
 import { CompositeBackend } from 'deepagents';
+import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
 import { foldRegistry, TOOL_ORDER_REST } from './fold.js';
 import type { FoldOptions } from './fold.js';
 import { loadPlugins } from './load.js';
 import { fakeBackend, fakeMiddleware, fakePlugin, fakeSubAgent, fakeTool } from './fixtures.js';
 import type { NexusPlugin } from './plugin.js';
-import type { WhenPredicate } from './base-types.js';
 
 /** 跑一份清單再折，測試裡唯一的入口——fold 的輸入永遠是載入完的 registry。 */
 async function fold(plugins: NexusPlugin[], options: FoldOptions = {}) {
@@ -22,17 +22,16 @@ async function fold(plugins: NexusPlugin[], options: FoldOptions = {}) {
   return foldRegistry(registry, options);
 }
 
-/**
- * 這一組測試守的閘門都掛在基座自己帶進來、不經過 registry 的工具上（`interrupts` 最
- * 常見的用法），所以名字由組裝點宣告——這正是 `baseToolNames` 存在的理由。
- */
+/** 基座自己帶進來、不經過 registry 的工具名。`toolOrder` 的檢查需要它們。 */
 const gatedTools = ['write_file', 'rm', 'deploy'] as const;
 
-/** 有 checkpointer 的組裝點。`interrupts` 的測試多數需要它。 */
+/** 有 checkpointer 的組裝點——核准閘門要問得了人就得有它。 */
 const withCheckpointer: FoldOptions = { checkpointer: true, baseToolNames: gatedTools };
 
-/** `when` 拿到的那個請求，測試裡只當作不透明的參數傳遞。 */
-const anyRequest = {} as Parameters<WhenPredicate>[0];
+/** 折出來那份 middleware 的名字，依順序。 */
+function middlewareNames(params: { middleware: unknown[] }): string[] {
+  return params.middleware.map((mw) => (mw as { name: string }).name);
+}
 
 function toolNames(tools: { name: string }[]): string[] {
   return tools.map((tool) => tool.name);
@@ -45,7 +44,7 @@ describe('backend 註冊點', () => {
       fakePlugin('disk', (r) => void r.backend.mount('/memories/', fakeBackend('disk'))),
     ];
     await expect(loadPlugins(plugins)).rejects.toThrow(
-      /"\/memories\/"[\s\S]*plugins\[0\] \(store\)[\s\S]*plugins\[1\] \(disk\)/,
+      /"\/memories\/"[\s\S]*store#0 \(store\)[\s\S]*disk#0 \(disk\)/,
     );
   });
 
@@ -77,7 +76,7 @@ describe('backend 註冊點', () => {
     const plugins = [
       fakePlugin('store', (r) => void r.backend.mount('/memories/', fakeBackend('store'))),
     ];
-    await expect(fold(plugins)).rejects.toThrow(/plugins\[0\] \(store\)[\s\S]*default backend/);
+    await expect(fold(plugins)).rejects.toThrow(/store#0 \(store\)[\s\S]*default backend/);
   });
 });
 
@@ -88,7 +87,7 @@ describe('middleware 註冊點', () => {
       fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'))),
       fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'))),
     ]);
-    expect(toolNames(params.middleware as unknown as { name: string }[])).toEqual(['a', 'b', 'c']);
+    expect(middlewareNames(params)).toEqual([APPROVAL_GATE_MIDDLEWARE_NAME, 'a', 'b', 'c']);
   });
 
   it('prepend: true 插到最前，其餘維持清單順序', async () => {
@@ -97,7 +96,7 @@ describe('middleware 註冊點', () => {
       fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
       fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'))),
     ]);
-    expect(toolNames(params.middleware as unknown as { name: string }[])).toEqual(['b', 'a', 'c']);
+    expect(middlewareNames(params)).toEqual(['b', APPROVAL_GATE_MIDDLEWARE_NAME, 'a', 'c']);
   });
 
   it('多個 prepend 之間仍是註冊順序', async () => {
@@ -106,7 +105,7 @@ describe('middleware 註冊點', () => {
       fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
       fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'), { prepend: true })),
     ]);
-    expect(toolNames(params.middleware as unknown as { name: string }[])).toEqual(['b', 'c', 'a']);
+    expect(middlewareNames(params)).toEqual(['b', 'c', APPROVAL_GATE_MIDDLEWARE_NAME, 'a']);
   });
 });
 
@@ -210,222 +209,72 @@ describe('permissions 註冊點', () => {
   });
 });
 
-describe('interrupts 註冊點', () => {
-  it('兩個 plugin 對同一 tool 給不同 when → 逐欄位 OR，不報錯', async () => {
-    const first = vi.fn(() => false);
-    const second = vi.fn(() => true);
-    const params = await fold(
-      [
-        fakePlugin(
-          'a',
-          (r) =>
-            void r.interrupts.require('write_file', {
-              reason: '會動到檔案',
-              when: first,
-            }),
-        ),
-        fakePlugin(
-          'b',
-          (r) =>
-            void r.interrupts.require('write_file', {
-              reason: '外部同步',
-              when: second,
-            }),
-        ),
-      ],
-      withCheckpointer,
-    );
-    const config = params.interruptOn?.['write_file'];
-    expect(config?.allowedDecisions).toEqual(['approve', 'reject']);
-    expect(config?.description).toBe('會動到檔案；外部同步');
-    await expect(config?.when?.(anyRequest)).resolves.toBe(true);
-    expect(first).toHaveBeenCalled();
-    expect(second).toHaveBeenCalled();
+describe('approvals 註冊點', () => {
+  it('沒有人掛 listener 也照樣折出一個閘門——它只是每次都放行', async () => {
+    // **這一條擋的是「沒人用就不掛」那個省法**。閘門不在的話，`approvals.gate()` 從
+    // 「一定跑得到」變成「有人先註冊過才跑得到」，而 plugin 的載入順序不是誰能保證的。
+    const params = await fold([fakePlugin('noop', () => {})]);
+    expect(middlewareNames(params)).toContain(APPROVAL_GATE_MIDDLEWARE_NAME);
   });
 
-  it('OR 依序求值且任一為真就短路', async () => {
-    const later = vi.fn(() => true);
-    const params = await fold(
-      [
-        fakePlugin(
-          'a',
-          (r) =>
-            void r.interrupts.require('rm', {
-              reason: '第一條',
-              when: () => true,
-            }),
-        ),
-        fakePlugin('b', (r) => void r.interrupts.require('rm', { reason: '第二條', when: later })),
-      ],
-      withCheckpointer,
-    );
-    await expect(params.interruptOn?.['rm']?.when?.(anyRequest)).resolves.toBe(true);
-    expect(later).not.toHaveBeenCalled();
+  it('閘門排在 prepend 之後、其餘之前', async () => {
+    const params = await fold([
+      fakePlugin('a', (r) => void r.middleware.use(fakeMiddleware('a'))),
+      fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
+    ]);
+    expect(middlewareNames(params)).toEqual(['b', APPROVAL_GATE_MIDDLEWARE_NAME, 'a']);
   });
 
-  it('when 可以回 promise', async () => {
-    const params = await fold(
-      [
-        fakePlugin(
-          'a',
-          (r) =>
-            void r.interrupts.require('rm', {
-              reason: '慢的',
-              when: async () => false,
-            }),
-        ),
-        fakePlugin(
-          'b',
-          (r) =>
-            void r.interrupts.require('rm', {
-              reason: '也慢的',
-              when: async () => true,
-            }),
-        ),
-      ],
-      withCheckpointer,
-    );
-    await expect(params.interruptOn?.['rm']?.when?.(anyRequest)).resolves.toBe(true);
-  });
-
-  it('有一方沒給 when 就是無條件中斷——合出來的設定不帶 when', async () => {
-    const narrow = vi.fn(() => false);
-    const params = await fold(
-      [
-        fakePlugin('a', (r) => void r.interrupts.require('rm', { reason: '一律要核准' })),
-        fakePlugin(
-          'b',
-          (r) => void r.interrupts.require('rm', { reason: '只有根目錄', when: narrow }),
-        ),
-      ],
-      withCheckpointer,
-    );
-    const config = params.interruptOn?.['rm'];
-    expect(config).toBeDefined();
-    expect('when' in (config ?? {})).toBe(false);
-    expect(narrow).not.toHaveBeenCalled();
-  });
-
-  it('不同工具各自成一筆', async () => {
-    const params = await fold(
-      [
-        fakePlugin('a', (r) => {
-          r.interrupts.require('rm', { reason: '刪檔' });
-          r.interrupts.require('deploy', { reason: '上線' });
-        }),
-      ],
-      withCheckpointer,
-    );
-    expect(Object.keys(params.interruptOn ?? {})).toEqual(['rm', 'deploy']);
-  });
-
-  it('宣告了 interrupt 但沒 checkpointer → 報錯，訊息指名是誰宣告的', async () => {
-    const plugins = [
-      fakePlugin('danger', (r) => void r.interrupts.require('rm', { reason: '刪檔' })),
-    ];
-    await expect(fold(plugins, { baseToolNames: gatedTools })).rejects.toThrow(
-      /plugins\[0\] \(danger\)[\s\S]*checkpointer/,
-    );
-  });
-
-  it('checkpointer: false 與缺席同義', async () => {
-    const plugins = [
-      fakePlugin('danger', (r) => void r.interrupts.require('rm', { reason: '刪檔' })),
-    ];
-    await expect(fold(plugins, { checkpointer: false, baseToolNames: gatedTools })).rejects.toThrow(
-      'checkpointer',
-    );
-  });
-
-  it('給了 checkpointer 就正常 fold', async () => {
-    const params = await fold(
-      [fakePlugin('danger', (r) => void r.interrupts.require('rm', { reason: '刪檔' }))],
-      withCheckpointer,
-    );
-    expect(params.interruptOn?.['rm']?.description).toBe('刪檔');
-    expect(params.checkpointer).toBe(true);
-  });
-
-  it('session 關掉核准卻有人宣告要核准 → 報錯，不是靜默丟掉那些標記', async () => {
-    const plugins = [
-      fakePlugin('danger', (r) => void r.interrupts.require('rm', { reason: '刪檔' })),
-    ];
-    await expect(
-      fold(plugins, {
-        checkpointer: true,
-        approvals: { enabled: false },
-        baseToolNames: gatedTools,
+  it('每個 subagent 也拿到閘門，而且排在它自帶的 middleware 之前', async () => {
+    // subagent 不繼承 root 的 plugin middleware（`SubAgentBase.middleware` 是
+    // 「append after default_middleware」），不注就是默默地失去核准。
+    const own = fakeMiddleware('subagent-own');
+    const params = await fold([
+      fakePlugin('team', (r) => {
+        r.subagents.register({ ...fakeSubAgent('releaser'), middleware: [own] } as SubAgent);
       }),
-    ).rejects.toThrow(/關掉了人工核准[\s\S]*plugins\[0\] \(danger\)/);
-  });
-
-  it('沒人宣告要核准時，關掉核准不影響 fold', async () => {
-    const params = await fold([fakePlugin('noop', () => {})], { approvals: { enabled: false } });
-    expect(params.interruptOn).toBeUndefined();
-  });
-
-  it('全域核准標記主動併進每個 subagent，且蓋過 subagent 自帶的同名項', async () => {
-    const own: SubAgent = {
-      ...fakeSubAgent('researcher'),
-      interruptOn: { rm: false, ls: true },
-    };
-    const params = await fold(
-      [
-        fakePlugin('danger', (r) => void r.interrupts.require('rm', { reason: '刪檔' })),
-        fakePlugin('team', (r) => void r.subagents.register(own)),
-      ],
-      withCheckpointer,
+    ]);
+    const names = (params.subagents[0]?.middleware ?? []).map(
+      (mw) => (mw as unknown as { name: string }).name,
     );
-    // subagent 自己把 rm 設成不中斷，全域要求核准的那筆仍然勝出。
-    expect(params.subagents[0]?.interruptOn?.['rm']).toEqual(params.interruptOn?.['rm']);
-    expect(params.subagents[0]?.interruptOn?.['ls']).toBe(true);
+    expect(names).toEqual([APPROVAL_GATE_MIDDLEWARE_NAME, 'subagent-own']);
   });
 
-  it('沒有核准標記時 subagent 不帶空的 interruptOn——{} 會多掛一層 HITL middleware', async () => {
+  it('沒自帶 middleware 的 subagent 也拿得到', async () => {
     const params = await fold([
       fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('researcher'))),
     ]);
-    expect(params.subagents[0]?.interruptOn).toBeUndefined();
-  });
-
-  it('標在不存在的工具名上 → 報錯，訊息指名是誰標的與目前認得哪些', async () => {
-    const plugins = [
-      fakePlugin('typo', (r) => {
-        r.tools.register(fakeTool('execute_shell'));
-        r.interrupts.require('exec_shell', { reason: '少一個 ute' });
-      }),
-    ];
-    // 基座那端不會救：查不到就 auto-approve，所以打錯字的閘門什麼都不擋。
-    await expect(fold(plugins, withCheckpointer)).rejects.toThrow(
-      /plugins\[0\] \(typo\)[\s\S]*"exec_shell"[\s\S]*execute_shell/,
+    const names = (params.subagents[0]?.middleware ?? []).map(
+      (mw) => (mw as unknown as { name: string }).name,
     );
+    expect(names).toEqual([APPROVAL_GATE_MIDDLEWARE_NAME]);
   });
 
-  it('標在 registry 註冊的工具上 → 正常 fold', async () => {
+  it('**`interruptOn` 不再出現在折出來的參數上**——機制換了，欄位跟著走', async () => {
+    // 只留型別層的斷言會漏掉「執行期還是塞了一個進去」。這一條是值的。
     const params = await fold(
-      [
-        fakePlugin('ops', (r) => {
-          r.tools.register(fakeTool('deploy_prod'));
-          r.interrupts.require('deploy_prod', { reason: '會動到線上' });
-        }),
-      ],
-      { checkpointer: true },
+      [fakePlugin('ops', (r) => void r.approvals.gate(() => ({ kind: 'ask' })))],
+      withCheckpointer,
     );
-    expect(params.interruptOn?.['deploy_prod']?.description).toBe('會動到線上');
+    expect(params).not.toHaveProperty('interruptOn');
+    expect(params.subagents.every((sub) => !('interruptOn' in sub))).toBe(true);
   });
 
-  it('標在只存在於某個 subagent 層的工具上也算數——名字宇宙比任何一層都寬', async () => {
+  it('關掉核准也**折得出來**——舊版在這裡是直接拋', async () => {
+    // #111 的 (c)：任何 bundle 了 approval-gated 工具的 plugin，過去在批次／CI 模式下
+    // 會變成載不起來。這一條就是那個回歸的絆索。
     const params = await fold(
-      [
-        fakePlugin('team', (r) => {
-          r.subagents.register(fakeSubAgent('releaser'));
-          r.tools.register(fakeTool('deploy_prod'), { scope: 'releaser' });
-          r.interrupts.require('deploy_prod', { reason: '會動到線上' });
-        }),
-      ],
-      { checkpointer: true },
+      [fakePlugin('ops', (r) => void r.approvals.gate(() => ({ kind: 'ask' })))],
+      { approvals: { enabled: false } },
     );
-    expect(params.interruptOn?.['deploy_prod']).toBeDefined();
+    expect(middlewareNames(params)).toContain(APPROVAL_GATE_MIDDLEWARE_NAME);
+  });
+
+  it('沒有 checkpointer 也折得出來——同樣不再是建構期的錯誤', async () => {
+    const params = await fold([
+      fakePlugin('ops', (r) => void r.approvals.gate(() => ({ kind: 'ask' }))),
+    ]);
+    expect(middlewareNames(params)).toContain(APPROVAL_GATE_MIDDLEWARE_NAME);
   });
 });
 
@@ -481,7 +330,7 @@ describe('每個 subagent 的有效工具集合', () => {
         (r) => void r.tools.register(fakeTool('search'), { scope: 'reasearcher' }),
       ),
     ];
-    await expect(fold(plugins)).rejects.toThrow(/"reasearcher"[\s\S]*plugins\[1\] \(typo\)/);
+    await expect(fold(plugins)).rejects.toThrow(/"reasearcher"[\s\S]*typo#0 \(typo\)/);
   });
 });
 
@@ -569,7 +418,7 @@ describe('工具呈現順序', () => {
 
   it('工具名叫 <unlisted-tools> → 報錯，那一格不能有歧義', async () => {
     const plugins = [fakePlugin('sneaky', (r) => void r.tools.register(fakeTool(TOOL_ORDER_REST)))];
-    await expect(fold(plugins)).rejects.toThrow(/plugins\[0\] \(sneaky\)/);
+    await expect(fold(plugins)).rejects.toThrow(/sneaky#0 \(sneaky\)/);
   });
 
   it('保留名藏在 subagent 層也一樣報錯', async () => {
@@ -593,7 +442,7 @@ describe('工具呈現順序', () => {
     ];
     // 沒給 toolOrder 也要擋：不擋的話它會以保留名活著，等組裝點哪天補上清單才
     // 無聲地從那個 subagent 的集合裡消失。
-    await expect(fold(plugins)).rejects.toThrow(/plugins\[0\] \(team\)[\s\S]*researcher/);
+    await expect(fold(plugins)).rejects.toThrow(/team#0 \(team\)[\s\S]*researcher/);
   });
 
   it('組裝點宣告的基座工具算「有註冊」，排得進呈現順序', async () => {
@@ -637,7 +486,7 @@ describe('skills 與 memory 註冊點', () => {
       fakePlugin('project-skills', (r) => void r.skills.addSource('/skills/user')),
     ];
     await expect(loadPlugins(plugins)).rejects.toThrow(
-      /"\/skills\/user"[\s\S]*plugins\[0\] \(user-skills\)[\s\S]*plugins\[1\] \(project-skills\)/,
+      /"\/skills\/user"[\s\S]*user-skills#0 \(user-skills\)[\s\S]*project-skills#0 \(project-skills\)/,
     );
   });
 

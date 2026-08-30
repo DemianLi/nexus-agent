@@ -3,21 +3,27 @@
  *
  * 九個註冊點：`tools` / `subagents` / `capabilities` 是具名的，`backend` / `skills`
  * 也靠名字（`routePrefix` 與來源路徑）擋重複，其餘三個（`middleware` /
- * `permissions` / `interrupts`）沒有名字可撞，走匿名追加。折疊成
+ * `permissions` / `approvals`）沒有名字可撞，走匿名追加。折疊成
  * `createDeepAgent` 參數的部分在 {@link ./fold.ts}。
  *
- * 外加一條 {@link LifecycleRegistrationPoint}——它**不是第十個註冊點**，因為它不折進
- * `createDeepAgent` 的任何參數。九個註冊點回答「這個 agent 由什麼組成」，lifecycle
- * 回答「這些東西怎麼收掉」，兩者正交。
+ * 外加三條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
+ * {@link LifecycleRegistrationPoint} 回答「這些東西怎麼收掉」，
+ * {@link TelemetryRegistrationPoint} 回答「這個會話發生的事往哪裡送、送之前怎麼洗」，
+ * {@link InvariantRegistrationPoint} 回答「這個會話發生的事有沒有破壞誰的約定」。
+ * 九個註冊點回答的是「這個 agent 由什麼組成」，四者正交。
  */
 
 import type { StructuredTool } from '@langchain/core/tools';
 import type { AnyBackendProtocol, SubAgent } from 'deepagents';
-import type { AgentMiddleware, WhenPredicate } from './base-types.js';
+import type { AgentMiddleware } from './base-types.js';
+import type { PreToolListener } from './approval.js';
 import { AnonymousEntries, CapabilitySet, NamedEntries } from './entries.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
+import { duplicateCompanionError } from './invariants.js';
+import type { InvariantCompanion, InvariantInstaller } from './invariants.js';
+import type { SessionTelemetryRedactRule, SessionTelemetryService } from './session-telemetry.js';
 
 /**
  * 註冊層的定址。`undefined` 是全域（root agent），字串是那個名字的 subagent。
@@ -194,48 +200,40 @@ export interface PermissionRegistrationPoint {
   rules(): NamedEntry<DenyRule>[];
 }
 
-/** 一次「這個工具要人核准」的標記。 */
-export interface InterruptRequirement {
-  /** 要核准的工具名。 */
-  readonly toolName: string;
-  /** 給人看的理由。 */
-  readonly reason: string;
+/**
+ * `approvals` 註冊點：一條 pre-execute waterfall。
+ *
+ * **這取代了 `interrupts.require(toolName, ...)`。** 舊的是宣告式的——註冊一份工具名
+ * 清單，執行時由基座拿 `toolCall.name` 查表，查不到就 auto-approve，所以一個打錯字的
+ * 閘門會靜靜地什麼都不擋。新的是 listener 拿活的那一次呼叫自己判斷，**名字不是宣告
+ * 出來的，那個 bug class 不存在**。形狀與決議見 {@link ./approval.ts} 與
+ * [#111](https://github.com/DemianLi/nexus-agent/issues/111)。
+ *
+ * 順帶不見的兩件（都是機制換掉的直接後果，不是這裡另外修的）：
+ *
+ * - **`context: { interruptOn: {} }` 那條繞道**。基座把 `interruptOn` 放在 HITL
+ *   middleware 的 `contextSchema` 裡、執行期取 `{ ...options, ...runtime.context }`
+ *   （`hitl.js:421`），呼叫端一句 context 就把所有閘門整組換掉。我們不再用
+ *   `interruptOn`，那個蓋法沒有東西可蓋。
+ * - **一批裡有人被拒、被核准的那些靜靜消失**（`hitl.js:483-496`）。閘門改成逐次呼叫
+ *   各自判斷，沒有「一批」這個單位了。
+ */
+export interface ApprovalRegistrationPoint {
   /**
-   * 只在這個述詞為真時才中斷；省略即無條件中斷。
+   * 掛一位 pre-execute listener。
    *
-   * **`request.tool` 一定是 `undefined`。** 基座在 `afterModel` 的批次語境求值這個
-   * 述詞（`langchain@1.5.10`，`dist/agents/middleware/hitl.js:359-367` 實測），
-   * request 是現搭的：`{ toolCall, tool: undefined, state, runtime }`，`runtime` 是
-   * node 層的那個、不是某一次工具執行的。型別上 `tool` 是可選的，所以
-   * `request.tool.name` 編得過、跑起來當場炸。要看工具名就讀 `request.toolCall.name`。
+   * 依註冊順序跑，`next()` 委派給下一位，鏈底是 allow。**不呼叫 `next()` 就是把後面的
+   * 人短路掉**，那是 waterfall 刻意提供的能力。
+   *
+   * @param listener - 拿到活的那一次呼叫，回 allow / deny / ask。
+   * @returns 只撤銷這一次掛載的冪等 undo。
    */
-  readonly when?: WhenPredicate;
-}
-
-/** `interrupts` 註冊點：同工具多方標記不報錯，`when` 取 OR。 */
-export interface InterruptRegistrationPoint {
+  gate(listener: PreToolListener): () => void;
   /**
-   * 標記一個工具需要人核准。
-   *
-   * **這道閘門的保證只到建構期。** 基座把 `interruptOn` 放在 HITL middleware 的
-   * `contextSchema` 裡，執行期取的是 `{ ...options, ...runtime.context }`
-   * （`hitl.js:421`）——所以呼叫端一句 `agent.invoke(input, { context: { interruptOn: {} } })`
-   * 就把所有閘門整組換掉，不警告、不留痕跡。fold 這一側做的每一件事（工具名要存在、
-   * 缺 checkpointer 即拒絕、核准政策開關）都擋不到那條路，因為它們都是建構期的。
-   * 入口層（CLI、web）不得把使用者可控的東西直接當成 `context` 傳下去。
-   * 絆索在 `apps/harness/src/interrupt.test.ts`。
-   *
-   * @param toolName - 工具名。同一個工具被多方標記是正常的，不報錯。
-   * @param options - `reason` 給人看，`when` 省略即無條件中斷（`request.tool` 是
-   *   `undefined`，見 {@link InterruptRequirement.when}）。
-   * @returns 只撤銷這一次標記的冪等 undo。
+   * 目前掛著的 listener。
+   * @returns 依註冊順序的每一位。
    */
-  require(toolName: string, options: { reason: string; when?: WhenPredicate }): () => void;
-  /**
-   * 目前的核准標記。
-   * @returns 依註冊順序的每一筆。
-   */
-  requirements(): NamedEntry<InterruptRequirement>[];
+  listeners(): NamedEntry<PreToolListener>[];
 }
 
 /** `skills` 註冊點：同一來源路徑重複註冊報錯，路徑格式也這裡驗。 */
@@ -316,6 +314,92 @@ export interface LifecycleRegistrationPoint {
   takeDisposers(): NamedEntry<Disposer>[];
 }
 
+/**
+ * `telemetry` 通道：掛遙測後端，以及**送出去之前**的脫敏規則。
+ *
+ * **它與九個註冊點不同軸**，理由跟 lifecycle 一樣：產物不進 `createDeepAgent` 的參數。
+ * 遙測是會話事件的第二個出口，走的不是 agent 那條線。
+ *
+ * **`WIRE_CHANNELS` 那份下行白名單擋不到這條路。** 那是 web 傳輸的邊界，遙測是另一個
+ * 出口——脫敏規則要自己長一份，不能靠 wire 那份代勞。
+ *
+ * **與 dsh 的偏離**（AGENTS.md 的偏離規則）：dsh 的後端是 Cordis `Service`
+ * （`ctx.sessionTelemetry`，重複註冊由 Cordis 拋），脫敏是 waterfall 事件
+ * `session-telemetry/record`。**我們沒有 service 註冊也沒有事件匯流排**，`deepagents` /
+ * LangChain JS / LangGraph JS 三者都不提供可掛任意具名事件的 waterfall。退到最接近的：
+ * 一個註冊點，`use` 用具名表擋重複（等價於 Service 的重複拋），`redact` 用依序折疊
+ * 取代 waterfall。折疊丟掉的是「不呼叫 `next()` 就截斷底下所有規則」那個能力，**刻意
+ * 丟的**——理由見 {@link ./session-telemetry.ts | SessionTelemetryRedactRule}。
+ */
+export interface TelemetryRegistrationPoint {
+  /**
+   * 掛一條脫敏規則。多條依**註冊順序**折疊：前一條的回傳是後一條的輸入。
+   * @param rule - 同步的轉換，拋錯會讓那一筆記錄被扣住（fail-closed）。
+   * @returns 只撤銷這一條的冪等 undo。
+   */
+  redact(rule: SessionTelemetryRedactRule): () => void;
+  /**
+   * 目前掛著的脫敏規則。協調器每次捕獲都現讀這個。
+   * @returns 依註冊順序的每一條，帶著是誰掛的。
+   */
+  rules(): NamedEntry<SessionTelemetryRedactRule>[];
+  /**
+   * 掛遙測服務。**一個 registry 只收一個**——兩個後端就是兩份出境資料，而披露那一層
+   * 只講得出一種策略。
+   * @param service - 後端實例，必須表態 `sharing`。
+   * @returns 只撤銷這一次掛載的冪等 undo。
+   */
+  use(service: SessionTelemetryService): () => void;
+  /**
+   * 目前掛著的服務。**披露那一層要靠它回答「有沒有東西在送、策略是什麼」**——
+   * `undefined` 才是「未配置」，這是 dsh 的規矩。
+   * @returns 掛著的那個，或沒掛時的 `undefined`。
+   */
+  service(): NamedEntry<SessionTelemetryService> | undefined;
+}
+
+/**
+ * `invariants` 通道：各 package 註冊**自己擁有的跨筆關係**的檢查。
+ *
+ * 註冊表自己一條產品檢查都沒有——這是 dsh 的核心設計，檢查放在擁有者旁邊。
+ * 只註冊而沒有人接線時什麼都不會跑；接線在
+ * {@link ./invariants.ts | createInvariantRunner}。
+ *
+ * **與 dsh 的偏離**（AGENTS.md 的偏離規則），四條：
+ *
+ * 1. **Cordis `ctx.effect` ＋子 fiber** —— dsh 的 `register()` 開一個子
+ *    `ctx.plugin(installer)`、await 它的 setup、失敗原子 dispose 並收回保留。
+ *    `deepagents` / LangChain JS / LangGraph JS 都沒有 fiber 這個東西，我們每個註冊點
+ *    回的是裸 `() => void`。退到：註冊只保留名字，安裝與失敗回滾歸 runner 那一格。
+ * 2. **`installer.inject`** —— dsh 用它宣告子 fiber 拿得到哪些服務。我們沒有 service
+ *    locator，`PluginRegistry` 是固定的一組註冊點。退到：installer 收一個明確的
+ *    {@link InvariantSubject}。
+ * 3. **一次註冊看所有 session** —— dsh 有 `ctx.sessions.list()` ＋ `session/created`。
+ *    我們沒有 session 服務，日誌是各進入點自己 `new` 的。退到：installer **每一份日誌
+ *    各跑一次**。
+ * 4. **違規的去處** —— dsh 的 `fail()` 從報告它的 context 拋出去；我們這側日誌會把
+ *    listener 的拋錯吞成 warn（#99 刻意的）。退到：runner 擁有訂閱、接住
+ *    `InvariantError` 轉給 `onViolation`。**看得見，但否決不了**（[#101](https://github.com/DemianLi/nexus-agent/issues/101) 的決定 b）。
+ *
+ * schemastery ＋ cordis-loader 的 config 驗證退到工廠函式裡的值檢查，同
+ * [#100](https://github.com/DemianLi/nexus-agent/pull/100) 已標註過的那一條。
+ */
+export interface InvariantRegistrationPoint {
+  /**
+   * 註冊一個 package 的配套入口。**包名在這裡被保留**，即使之後過濾器讓它不裝——
+   * 保留是為了兩個 plugin 不會靜默認領同一個名字。
+   * @param packageName - 完整 package 名，表內唯一。
+   * @param installer - 裝這個 package 檢查的函式。
+   * @returns 只撤銷這一次註冊的冪等 undo。
+   */
+  register(packageName: string, installer: InvariantInstaller): () => void;
+  /**
+   * 目前註冊著的配套入口。接線那一層讀它。
+   * @returns 依註冊順序的每一筆，帶著包名與是誰註冊的。
+   */
+  companions(): InvariantCompanion[];
+}
+
 export interface PluginRegistry {
   readonly tools: ToolRegistrationPoint;
   readonly subagents: SubAgentRegistrationPoint;
@@ -323,10 +407,12 @@ export interface PluginRegistry {
   readonly backend: BackendRegistrationPoint;
   readonly middleware: MiddlewareRegistrationPoint;
   readonly permissions: PermissionRegistrationPoint;
-  readonly interrupts: InterruptRegistrationPoint;
+  readonly approvals: ApprovalRegistrationPoint;
   readonly skills: SkillSourceRegistrationPoint;
   readonly memory: MemorySourceRegistrationPoint;
   readonly lifecycle: LifecycleRegistrationPoint;
+  readonly telemetry: TelemetryRegistrationPoint;
+  readonly invariants: InvariantRegistrationPoint;
 }
 
 /**
@@ -386,9 +472,21 @@ export function createRegistry(): InternalPluginRegistry {
   );
   const middlewares = new AnonymousEntries<MiddlewareRegistration>();
   const denyRules = new AnonymousEntries<DenyRule>();
-  const interruptRequirements = new AnonymousEntries<InterruptRequirement>();
+  const approvalListeners = new AnonymousEntries<PreToolListener>();
   const memorySources = new AnonymousEntries<string>();
   const disposers = new AnonymousEntries<Disposer>();
+  const redactRules = new AnonymousEntries<SessionTelemetryRedactRule>();
+  // 具名表配一個固定的 key：唯一性與 undo 都不必另外寫，重複掛載直接撞在這裡。
+  const SERVICE_KEY = 'service';
+  const services = new NamedEntries<SessionTelemetryService>(
+    (_key, existing, incoming) =>
+      new Error(
+        `已經有遙測服務了：${formatOrigin(existing)} 掛過，${formatOrigin(incoming)} 又掛一次。` +
+          `一個 agent 只能有一個後端——兩個就是兩份出境資料，而披露只講得出一種策略。`,
+      ),
+  );
+
+  const companions = new NamedEntries<InvariantInstaller>(duplicateCompanionError);
 
   let current: PluginOrigin | undefined;
   function requireOrigin(what: string): PluginOrigin {
@@ -498,16 +596,12 @@ export function createRegistry(): InternalPluginRegistry {
     rules: () => [...denyRules.entries()],
   };
 
-  const interruptPoint: InterruptRegistrationPoint = {
-    require(toolName, options) {
-      const origin = requireOrigin('interrupts.require()');
-      const requirement: InterruptRequirement =
-        options.when === undefined
-          ? { toolName, reason: options.reason }
-          : { toolName, reason: options.reason, when: options.when };
-      return interruptRequirements.append(requirement, origin);
+  const approvalPoint: ApprovalRegistrationPoint = {
+    gate(listener) {
+      const origin = requireOrigin('approvals.gate()');
+      return approvalListeners.append(listener, origin);
     },
-    requirements: () => [...interruptRequirements.entries()],
+    listeners: () => [...approvalListeners.entries()],
   };
 
   const skillPoint: SkillSourceRegistrationPoint = {
@@ -530,6 +624,35 @@ export function createRegistry(): InternalPluginRegistry {
     sources: () => [...memorySources.entries()].map((entry) => entry.value),
   };
 
+  const telemetryPoint: TelemetryRegistrationPoint = {
+    redact(rule) {
+      const origin = requireOrigin('telemetry.redact()');
+      return redactRules.append(rule, origin);
+    },
+    rules: () => [...redactRules.entries()],
+    use(service) {
+      const origin = requireOrigin('telemetry.use()');
+      return services.insert(SERVICE_KEY, service, origin);
+    },
+    service: () => services.get(SERVICE_KEY),
+  };
+
+  const invariantPoint: InvariantRegistrationPoint = {
+    register(packageName, installer) {
+      const origin = requireOrigin('invariants.register()');
+      if (packageName.length === 0 || packageName.trim() !== packageName) {
+        throw new Error(`${formatOrigin(origin)} 註冊的不變量包名不能是空的、也不能帶前後空白。`);
+      }
+      return companions.insert(packageName, installer, origin);
+    },
+    companions: () =>
+      [...companions.entries()].map(([packageName, entry]) => ({
+        packageName,
+        installer: entry.value,
+        origin: entry.origin,
+      })),
+  };
+
   const lifecyclePoint: LifecycleRegistrationPoint = {
     onDispose(dispose) {
       const origin = requireOrigin('lifecycle.onDispose()');
@@ -546,10 +669,12 @@ export function createRegistry(): InternalPluginRegistry {
     backend: backendPoint,
     middleware: middlewarePoint,
     permissions: permissionPoint,
-    interrupts: interruptPoint,
+    approvals: approvalPoint,
     skills: skillPoint,
     memory: memoryPoint,
     lifecycle: lifecyclePoint,
+    telemetry: telemetryPoint,
+    invariants: invariantPoint,
     enter(origin) {
       if (current !== undefined) {
         throw new Error(
