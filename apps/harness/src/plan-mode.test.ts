@@ -32,6 +32,7 @@ import {
 import { createSummarizationMiddleware } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
+import { loadPluginModule } from './cli.js';
 import { HEADLESS_APPROVALS } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
@@ -213,7 +214,44 @@ describe('計劃指引進不進 system prompt', () => {
   });
 });
 
+/** 一顆核准中斷在問的那幾件事。 */
+function actionRequests(interrupts: unknown): { name?: string; args?: { plan?: string } }[] {
+  const first = (interrupts as { value?: { actionRequests?: unknown } }[] | undefined)?.[0];
+  const requests = first?.value?.actionRequests;
+  return Array.isArray(requests) ? (requests as { name?: string; args?: { plan?: string } }[]) : [];
+}
+
 describe('exit_plan_mode 的三條路', () => {
+  /**
+   * **這一條撐著整個設計的那句話**：「人批准計劃」與「人批准這次工具呼叫」是同一件事，
+   * 所以不另建評審通道。少了它那句話是空的——一個把 `plan` 丟掉的實作，
+   * 「獲准之後模式關掉」照樣會綠，而按下批准的人根本沒看到要批准什麼。
+   *
+   * 計劃全文走的是核准請求的 `args`，`@nexus/wire` 的 `pending.actions` 原樣帶著它
+   * （`conversation.ts` 的 `actions: { name, args, description }`），所以瀏覽器那端
+   * 讀得到。閘門給的理由落在 `description`。
+   */
+  it('要批准的人看得到計劃全文', async () => {
+    const model = planScript();
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      checkpointer: new MemorySaver(),
+      plugins: [createPlanModePlugin({ startActive: true })],
+    });
+
+    try {
+      const paused = await agent.invoke(toAgentInvocation('幫我改一下。'), {
+        configurable: { thread_id: 'sees-plan' },
+      });
+      const requests = actionRequests(paused.__interrupt__);
+
+      expect(requests.map((request) => request.name)).toEqual([EXIT_PLAN_MODE_TOOL_NAME]);
+      expect(requests[0]?.args?.plan).toBe('# 計劃\n\n先看再改。');
+    } finally {
+      await dispose();
+    }
+  });
+
   /**
    * **有人在的時候：計劃交出去 → 停下來等 → 獲准 → 模式關掉。**
    *
@@ -415,5 +453,28 @@ describe('工具目錄不隨模式變動', () => {
     }
 
     expect(model.boundToolNames.slice(0, 2)).toEqual([EXIT_PLAN_MODE_TOOL_NAME, ECHO_TOOL_NAME]);
+  });
+});
+
+describe('plan-mode.fixture.ts', () => {
+  /**
+   * **一份沒有人載過的 fixture 是一個會靜靜壞掉的檔案。** README 指著它，所以它得
+   * 真的載得起來、而且真的把計劃模式打開——改名、掉一個 export、`startActive` 被人
+   * 改回預設，這一條都會紅。走 `loadPluginModule` 而不是直接 import，是因為
+   * `--plugins` 走的就是那條路徑解析。
+   */
+  it('載得起來，而且真的是打開的', async () => {
+    const plugins = await loadPluginModule('src/plan-mode.fixture.ts');
+    const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
+    const { agent, dispose } = await createNexusAgent({ model, plugins });
+
+    try {
+      await agent.invoke(toAgentInvocation('嗨。'));
+    } finally {
+      await dispose();
+    }
+
+    expect(model.boundToolNames).toContain(EXIT_PLAN_MODE_TOOL_NAME);
+    expect(systemPrompt(model.lastPrompt)).toContain(DEFAULT_PLAN_GUIDANCE);
   });
 });

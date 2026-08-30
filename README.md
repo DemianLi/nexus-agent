@@ -88,9 +88,16 @@ banner 上。web 這端真的按得下去，所以它維持開著。
 createPlanModePlugin({ startActive: true, guidance: '（部署自己寫的那一段）' })
 ```
 
-**在 CLI 或 eval 上把它打開等於把那一輪鎖死。** `exit_plan_mode` 是需要核准的工具，
-而那兩個入口走 `HEADLESS_APPROVALS`：計劃被確定性拒絕、模式沒關、而沒有第二條路出去。
-會按得下去的入口是 `serve`。
+一份打開它的清單在 `src/plan-mode.fixture.ts`：
+
+```bash
+pnpm --filter @nexus/harness run serve:live --plugins src/plan-mode.fixture.ts
+```
+
+**`serve` 是唯一該用它的入口，而且要 `--live`。** `exit_plan_mode` 是需要核准的工具，
+CLI 與 eval 走 `HEADLESS_APPROVALS`：在那裡打開，計劃被確定性拒絕、模式沒關、
+而沒有第二條路出去。假模型的腳本則寫死在 `cli.ts`，它不會呼叫 `exit_plan_mode`——
+換清單改不了模型的腳本，所以走完整條路要真模型。
 
 模式沒啟用時，`exit_plan_mode` 仍留在工具目錄裡（照 dsh：狀態轉換不該順帶改變工具目錄），
 但它的執行路徑會拒絕 —— 回的是「不在計劃模式」，不是核准的措辭。
