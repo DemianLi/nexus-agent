@@ -82,23 +82,40 @@ banner 上。web 這端真的按得下去，所以它維持開著。
 形狀照 dsh 的 `plan-mode`：一段模式生效時才夾進 system prompt 的**部署持有的指引**、
 一個 `exit_plan_mode` 工具，加上一份**跟著 checkpointer 走的模式狀態**。
 
-**它預設是關的，而且今天沒有開啟的命令。** 命令註冊面已經有了（見下一節），但
-`/plan` 本身還沒接上去。唯一的開關是工廠的 `startActive`：
+**它預設是關的，開關是 `/plan`。** 這個 plugin 在 CLI 的預設清單裡，所以 REPL 裡直接打：
+
+| 這一行 | 做什麼 |
+| --- | --- |
+| `/plan` | 進計劃模式。**從下一輪起**指引才夾進 system prompt |
+| `/plan off` | 離開 |
+| 其餘參數 | 回一則錯誤。**不會被當成「進入」** —— `/plan of` 安靜地做相反的事是最貴的那種缺陷 |
+
+dsh 的 `/plan` 還收一段自由訊息（`[off|message]`），用 `agent.steer()` 插進對話；
+我們沒有那條路，所以提示是 `[off]`，收不下的東西不寫進提示。命令改的是 graph state，
+而 state 只有 invoke 期間寫得動 —— 選擇先存在 plugin 裡，由 middleware 的 `beforeAgent`
+在下一輪開頭交出去。細節與這兩條偏離的代價寫在 `packages/nexus-plugin-plan-mode/src/index.ts`
+的檔頭。
+
+要讓一份組裝一開始就在計劃模式裡，用工廠的 `startActive`：
 
 ```ts
 createPlanModePlugin({ startActive: true, guidance: '（部署自己寫的那一段）' })
 ```
 
-一份打開它的清單在 `src/plan-mode.fixture.ts`：
+一份這樣的清單在 `src/plan-mode.fixture.ts`：
 
 ```bash
 pnpm --filter @nexus/harness run serve:live --plugins src/plan-mode.fixture.ts
 ```
 
-**`serve` 是唯一該用它的入口，而且要 `--live`。** `exit_plan_mode` 是需要核准的工具，
-CLI 與 eval 走 `HEADLESS_APPROVALS`：在那裡打開，計劃被確定性拒絕、模式沒關、
-而沒有第二條路出去。假模型的腳本則寫死在 `cli.ts`，它不會呼叫 `exit_plan_mode`——
-換清單改不了模型的腳本，所以走完整條路要真模型。
+**那一份仍然是給 `serve` 用的，而且要 `--live`。** `exit_plan_mode` 是需要核准的工具，
+CLI 與 eval 走 `HEADLESS_APPROVALS`：在那裡提出的計劃會被確定性拒絕 —— CLI 上還打得出
+`/plan off` 自己爬出來，web 上按得下批准，所以 `serve` 才是走完整條路的地方。
+假模型的腳本另外寫死在 `cli.ts`，它不會呼叫 `exit_plan_mode` —— 換清單改不了模型的腳本，
+所以「規劃 → 交計劃 → 有人按批准 → 開始動手」要真模型。
+
+**`serve` 那條線上還沒有命令介面**，所以 web 那端拿到的是「工具在清單裡、`/plan` 打不到」；
+在那裡打開計劃模式仍然靠上面那份清單。
 
 模式沒啟用時，`exit_plan_mode` 仍留在工具目錄裡（照 dsh：狀態轉換不該順帶改變工具目錄），
 但它的執行路徑會拒絕 —— 回的是「不在計劃模式」，不是核准的措辭。
@@ -128,6 +145,10 @@ registry.commands.register({
 認得的命令會在會話日誌留下一對 `command/run` / `command/done`；**收不下的行不留痕跡**。
 `@nexus/plugin-commands` 的不變量配套入口檢查這一對的三條關係（id 不重複、一次一個、
 done 配得到 run）——**這是全樹第一個非空的 package 配套入口**。
+
+命令的**文法**則歸擁有它的 package：`@nexus/plugin-plan-mode` 的配套入口檢的是
+「`/plan` 的參數收不下時，配對的 `command/done` 必須是 `error`」。生命週期那份不知道
+`plan` 的文法長什麼樣，所以那一條只有這裡檢得到。
 
 `command/run` 的 `args` 是使用者原話，而會話事件會**原樣鏡像進遙測**。要把使用者輸入
 擋在遙測外，得補 dsh 那個 `recordInput` 開關；這一版沒有它。

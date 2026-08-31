@@ -36,6 +36,7 @@ import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant'
 import { createEchoInvariantPlugin } from '@nexus/plugin-echo/invariant';
 import { createMcpInvariantPlugin } from '@nexus/plugin-mcp/invariant';
 import { createMemoryInvariantPlugin } from '@nexus/plugin-memory/invariant';
+import { createPlanModePlugin } from '@nexus/plugin-plan-mode';
 import { createPlanModeInvariantPlugin } from '@nexus/plugin-plan-mode/invariant';
 import { createQuickJsInvariantPlugin } from '@nexus/plugin-quickjs/invariant';
 import { createSkillsInvariantPlugin } from '@nexus/plugin-skills/invariant';
@@ -136,6 +137,23 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
  * 哪些**工具** plugin 該進預設清單是設定的事，那要等**外部**設定機制才有地方講
  * （[#46](https://github.com/DemianLi/nexus-agent/issues/46)）。
  *
+ * **計劃模式是第二個例外，理由與那十一個不同**
+ * （[#120](https://github.com/DemianLi/nexus-agent/issues/120)）：它註冊的是一個
+ * **人打得到的命令**，而命令沒進預設清單就等於不存在——`/plan` 會被 `parseCommand`
+ * 判成「名字不認得」，照原樣掉回模型，變成一行沒人懂的純文字。所以「不替誰決定該裝
+ * 什麼」在這裡撞上「那就誰也用不到」，而後者比較貴。
+ *
+ * 它進來的代價要講清楚，三筆：
+ *
+ * - **`startActive` 是關的**，所以預設行為與這行改動之前一模一樣：不打 `/plan` 的話，
+ *   指引一個 token 都不夾。
+ * - **`exit_plan_mode` 一律出現在面向模型的工具清單裡**（照 dsh：模式轉換不該額外造成
+ *   工具目錄變動）。CLI 上它是活的 schema、死的執行路徑——模式外撞 middleware、模式內
+ *   撞 {@link HEADLESS_APPROVALS} 的確定性拒絕。
+ * - **[`serve.ts`](./serve.ts) 也吃這份清單**，而那條路上還沒有命令介面。所以 web 那端
+ *   拿到的是「工具在清單裡、模式打不開」——`--plugins src/plan-mode.fixture.ts` 仍然是
+ *   那條線上打開計劃模式的辦法。
+ *
  * **十一個不變量配套入口是那句話的例外，而例外要說得出理由**
  * （[#107](https://github.com/DemianLi/nexus-agent/issues/107) 拍板）：
  *
@@ -143,10 +161,12 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
  *   所以「替誰決定該裝什麼」這個顧慮對它們不成立——沒有人的 agent 因為它們而不一樣。
  * - **關得掉。** [#104](https://github.com/DemianLi/nexus-agent/issues/104) 之後條目層有
  *   `disabled`、組裝點有 `invariants` 選擇，所以進來不是單向門。這是它進得來的前提。
- * - **十一個全進，不是只有 `@nexus/core`。** 九個是空 installer，掛上去一個檢查都不裝，
- *   買到的只有包名歸屬；真的在檢查的是兩個——`@nexus/core`（turn 配對）與
+ * - **十一個全進，不是只有 `@nexus/core`。** 八個是空 installer，掛上去一個檢查都不裝，
+ *   買到的只有包名歸屬；真的在檢查的是三個——`@nexus/core`（turn 配對）、
  *   `@nexus/plugin-commands`（命令生命週期配對，
- *   [#118](https://github.com/DemianLi/nexus-agent/issues/118)）。
+ *   [#118](https://github.com/DemianLi/nexus-agent/issues/118)）與
+ *   `@nexus/plugin-plan-mode`（`/plan` 的參數契約，
+ *   [#120](https://github.com/DemianLi/nexus-agent/issues/120)）。
  *   **代價是每一次執行多十一個條目、十一次 `apply`**，而換到的是這份
  *   清單與 `registry.invariants.companions()` 對得起來——少掛的那幾個會讓「這個 package
  *   沒有可檢的關係」與「這個 package 的檢查沒掛上」在診斷裡長得一模一樣。
@@ -155,6 +175,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
  */
 export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
   createEchoPlugin(),
+  createPlanModePlugin(),
   createCoreInvariantPlugin(),
   createCommandsInvariantPlugin(),
   createEchoInvariantPlugin(),
@@ -460,6 +481,15 @@ export async function runTurn(
         }
         const messages = (update as { messages?: BaseMessage[] }).messages ?? [];
         for (const message of messages) {
+          // **人自己說的那句不再印一次。** 基座把這一輪的輸入訊息掛在**第一個真的
+          // 寫了東西的節點**的 update 上（實測：三個 `before_agent` 裡只有回傳非空
+          // 更新的那一個帶著它）。照原樣印的話，畫面上會出現
+          // `[nexusPlanMode.before_agent] 嗨`——看起來像那個 plugin 在說話，而那句
+          // 是使用者三秒前自己打的。
+          //
+          // **代價**：哪天真的有東西從圖裡插一則 human message 進來（dsh 的
+          // `agent.steer()` narration 就是那個形狀），它也會跟著不見。今天沒有那條路。
+          if (message.getType() === 'human') continue;
           const label = message.name ? `${node}/${message.name}` : node;
           printer.log(`[${label}] ${message.text.trim() || '(呼叫工具)'}`);
         }

@@ -9,13 +9,15 @@
  * 1. **子路徑解析**：底下一律從 specifier（`@nexus/plugin-echo/invariant`）import，
  *    **不是相對路徑**。用相對路徑寫，`exports` 那格接錯了測試照樣綠——那就變成
  *    一條不驗它宣稱在驗的東西的測試。
- * 2. **包名歸屬**：九個檔案長得幾乎一樣，最可能的缺陷就是 `PACKAGE_NAME` 抄錯一個。
+ * 2. **包名歸屬**：八個檔案長得幾乎一樣，最可能的缺陷就是 `PACKAGE_NAME` 抄錯一個。
  *    十一個一起掛上去，撞名會當場拋，名字錯了則會在下面的逐一比對裡露出來。
  *
- * 九個空 installer 為什麼是正確結果（subject 裡只有 `@nexus/core` 的日誌，別的包在裡面
+ * 八個空 installer 為什麼是正確結果（subject 裡只有 `@nexus/core` 的日誌，別的包在裡面
  * 找不到屬於自己的關係），見任何一個 `packages/<name>/src/invariant.ts` 的檔頭。
- * **真的裝上觀察者的有兩個**：`@nexus/core`（turn 配對）與 `@nexus/plugin-commands`
- * （命令生命週期配對，[#118](https://github.com/DemianLi/nexus-agent/issues/118)）。
+ * **真的裝上觀察者的有三個**：`@nexus/core`（turn 配對）、`@nexus/plugin-commands`
+ * （命令生命週期配對，[#118](https://github.com/DemianLi/nexus-agent/issues/118)）與
+ * `@nexus/plugin-plan-mode`（`/plan` 的參數契約，
+ * [#120](https://github.com/DemianLi/nexus-agent/issues/120)）。
  *
  * **底下那份十列表格不再是「有沒有漏掉一個 package」的守門人**——那件事歸
  * [`package-invariants.test.ts`](./package-invariants.test.ts)，它自己去掃 `packages/*`，
@@ -117,7 +119,7 @@ describe('包名歸屬', () => {
     expect(new Set(claimed).size).toBe(COMPANIONS.length);
   });
 
-  it('九個空 installer 一個檢查都不裝——掛滿十一個只有 core 與 commands 觀察得到東西', () => {
+  it('八個空 installer 一個檢查都不裝——掛滿十一個只有三個觀察得到東西', () => {
     const registry = createRegistry();
     for (const [factory] of COMPANIONS) {
       const plugin = factory();
@@ -127,7 +129,7 @@ describe('包名歸屬', () => {
       exit();
     }
 
-    // 每個 installer 都跑一次，數它掛了幾個觀察者。只有兩個該掛出東西。
+    // 每個 installer 都跑一次，數它掛了幾個觀察者。只有三個該掛出東西。
     const observerCount = new Map<string, number>();
     for (const companion of registry.invariants.companions()) {
       let count = 0;
@@ -147,9 +149,10 @@ describe('包名歸屬', () => {
       observerCount.set(companion.packageName, count);
     }
 
-    const observing = new Set(['@nexus/core', '@nexus/plugin-commands']);
+    const observing = new Set(['@nexus/core', '@nexus/plugin-commands', '@nexus/plugin-plan-mode']);
     expect(observerCount.get('@nexus/core')).toBe(1);
     expect(observerCount.get('@nexus/plugin-commands')).toBe(1);
+    expect(observerCount.get('@nexus/plugin-plan-mode')).toBe(1);
     for (const [, , name] of COMPANIONS) {
       if (observing.has(name)) continue;
       expect(observerCount.get(name)).toBe(0);
