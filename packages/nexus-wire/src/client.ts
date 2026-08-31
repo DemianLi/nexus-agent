@@ -172,7 +172,8 @@ export function createWireClient(options: WireClientOptions): WireClient {
     method: RpcMethod,
     command: Command | SlashCommand,
   ): Promise<UplinkResult> {
-    // 路徑與封包各講一次 method，server 端不合就拒——照 dsh 的 `fetch/handler.ts`。
+    // 路徑與封包各講一次 method，server 端不合就拒——照 dsh 的端點慣例
+    // （`packages/api/gateway/src/index.ts:134`，`<namespace>/<method>`）。
     const response = await postJson(commandPath(threadId, method), command);
     if (!response.ok) {
       throw new Error(`上行被載體層擋下：${response.status} ${await response.text()}`);

@@ -273,6 +273,17 @@ describe('序列', () => {
       message: expect.stringContaining('正在跑一個斜線命令'),
     });
 
+    // **`input.respond` 這條路不必再擋一次，而這是那句話的絆索。** 斜線命令在飛的
+    // 時候，這條 thread 一定不是停在核准點的（發派時就檢查了），而 `run.start` 已經
+    // 被擋住、沒有第二個 run 起得來去掛新的中斷——所以這裡永遠沒有中斷可以回答。
+    // 那道保證哪天鬆掉，這一條會先紅。
+    const noInterrupt = await wired.client.inputRespond('t', {
+      namespace: [],
+      interrupt_id: 'int-1',
+      response: { decisions: [{ type: 'approve' }] },
+    });
+    expect(noInterrupt).toMatchObject({ type: 'error', error: 'no_such_interrupt' });
+
     release?.();
     expect(await first).toEqual({
       kind: 'success',

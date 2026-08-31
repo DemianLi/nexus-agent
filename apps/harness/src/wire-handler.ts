@@ -1,8 +1,14 @@
 /**
  * 線的 server 端：一個 `(Request) => Response` 的 handler。
  *
- * **不綁 port 是刻意的**，而且照的是 dsh 的 `packages/host/apiproxy/src/fetch/handler.ts`。
- * 好處是這一整條線在測試裡跑得完：零 port、零網路、零憑證——CI 上沒有任何服務憑證
+ * **不綁 port 是刻意的。** 這個形狀當初照的是 dsh 的
+ * `packages/host/apiproxy/src/fetch/handler.ts`（對讀版本 `cd5ef814`）——
+ * **那個套件在 HEAD `0a53fb55` 已經整個不見了**：dsh 的載體換成了
+ * `packages/host/webserver` 的 `node:http` route 註冊 ＋ WebSocket upgrade，
+ * 沒有 fetch 形狀的 handler 了。所以底下每一條標著「照 dsh」的，指的都是那個版本。
+ *
+ * **不綁 port 這件事今天站的是自己的理由**，不是那份引用：這一整條線在測試裡跑得完
+ * ——零 port、零網路、零憑證，而 CI 上沒有任何服務憑證
  * （[#31](https://github.com/DemianLi/nexus-agent/issues/31)），測試必須自足。
  *
  * 錯誤分兩層，也照 dsh：
@@ -225,10 +231,10 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         // **開線就先吐一行 SSE 註解。** 沒有這一行的話，中間任何一層代理都可能把
         // header 壓著等第一顆 body byte——實測 Vite dev server 的 proxy 正是如此：
         // 直連拿得到 `200 text/event-stream`，經過它就一個位元組都不來，而瀏覽器那端
-        // 看起來就是永遠「連線中」。dsh 也是這樣做的，理由寫在
-        // `packages/host/apiproxy/src/fetch/handler.ts` 的 `sseResponse()`：
-        // 「Send an SSE comment line on open so clients/proxies see a live channel」。
-        // 註解不是封包，解碼端本來就會跳過它。
+        // 看起來就是永遠「連線中」。**這一行今天的依據就是那次實測**——dsh 當初的
+        // `sseResponse()` 也這樣做（「Send an SSE comment line on open so
+        // clients/proxies see a live channel」），但那個套件在 HEAD `0a53fb55` 已經
+        // 不在了，見檔頭。註解不是封包，解碼端本來就會跳過它。
         controller.enqueue(encoder.encode(': connected\n\n'));
       },
       async pull(controller) {
