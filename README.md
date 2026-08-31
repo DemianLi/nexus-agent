@@ -35,7 +35,7 @@ pnpm build        # vite build
 
 ```bash
 pnpm --filter @nexus/harness run cli "把這句話回聲一次。"   # 一次性，跑完就退出
-pnpm --filter @nexus/harness run cli                        # REPL，/exit 或 Ctrl-D 結束
+pnpm --filter @nexus/harness run cli                        # REPL，/help 看命令，/exit 結束
 pnpm --filter @nexus/harness run cli:live "..."             # 換成真實供應商，需要 API key
 ```
 
@@ -134,13 +134,23 @@ registry.commands.register({
 });
 ```
 
-一行 `/name` 有三條路，**第三條跟接上命令之前一模一樣**：
+一行 `/name` 有四條路，**最後一條跟接上命令之前一模一樣**：
 
 | 這一行 | 去哪裡 |
 | --- | --- |
 | 註冊過的命令 | 跑 handler，結果印給人看（`error` 進 stderr） |
-| `/exit` | 收工。**它刻意不是命令**——控制的是 REPL 不是 agent，所以也不會出現在 `list()` 裡 |
+| `/help`（後面的字忽略） | 印出命令清單。**不留日誌，也不驚動模型** |
+| `/exit` | 收工 |
 | 其餘（語法不符、名字不認得） | 照原樣送給模型 |
+
+**`/exit` 與 `/help` 刻意不是命令**：它們控制／描述的是這條 REPL，不是 agent，所以
+`commands.list()` 裡沒有它們，`/help` 自己把這兩行補進清單。dsh 也是這樣切的——它
+**根本沒有 `/help`**，探索面是 web composer 打 `/` 跳出來的候選選單，資料來源同樣是
+`commands.list()`；dsh 自己的 CLI 則一個命令發派面都沒有。我們照抄的是真相來源，換掉
+的是呈現形式（一行一行的 `readline`，不是 composer）。
+
+因為 REPL 在執行器之前攔這兩個名字，**plugin 註冊了 `help` 或 `exit` 會在 REPL 開起來
+時當場拋**——那份註冊本來永遠不會被叫到，而且沒有徵兆。
 
 認得的命令會在會話日誌留下一對 `command/run` / `command/done`；**收不下的行不留痕跡**。
 `@nexus/plugin-commands` 的不變量配套入口檢查這一對的三條關係（id 不重複、一次一個、
