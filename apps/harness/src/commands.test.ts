@@ -16,7 +16,7 @@ import type { NexusPlugin, SessionEvent } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 
 import { createNexusAgent } from './agent-factory.js';
-import { createCliAgent, DEFAULT_PLUGINS, formatCommandHelp, runRepl } from './cli.js';
+import { createCliAgent, DEFAULT_PLUGINS, runRepl } from './cli.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 
@@ -164,22 +164,26 @@ describe('/help', () => {
       '/help\n/exit\n',
     );
 
-    expect(stdout).toContain('/ping [任何字]');
-    expect(stdout).toContain('回一句話，不驚動模型');
-    // 這兩個永遠不在 `commands.list()` 裡——它們是 REPL 自己的。
-    expect(stdout).toContain('/exit');
-    expect(stdout).toContain('/help');
+    // **逐字比對整段**：這一條同時釘住三件事——清單內容（`/exit` 與 `/help` 補進來了）、
+    // 併成一張表的排序、以及左欄對齊。分開斷言的話，把 `padEnd` 拿掉照樣會綠。
+    expect(stdout).toBe(
+      [
+        '命令：',
+        '  /exit        結束這條 REPL',
+        '  /help        印出這份命令清單',
+        '  /ping [任何字]  回一句話，不驚動模型',
+      ].join('\n'),
+    );
     // handler 沒被叫到（`/help` 不走執行器），模型也沒被叫到。
     expect(seen).toEqual([]);
-    expect(stdout).not.toContain('回聲：');
   });
 
   it('一個命令都沒註冊時，還是印得出 REPL 自己那兩行', async () => {
     // `createEchoPlugin()` 只註冊工具，不註冊命令。
     const { stdout } = await feed([createEchoPlugin()], '/help\n/exit\n');
-    expect(stdout).toContain('/exit');
-    expect(stdout).toContain('/help');
-    expect(stdout).not.toContain('回聲：');
+    expect(stdout).toBe(
+      ['命令：', '  /exit  結束這條 REPL', '  /help  印出這份命令清單'].join('\n'),
+    );
   });
 
   it('**日誌裡沒有 `command/*`**——`/help` 不是一次命令執行', async () => {
@@ -210,24 +214,6 @@ describe('/help', () => {
       '/helper\n/exit\n',
     );
     expect(stdout).toContain('回聲：嗨');
-  });
-
-  it('排版：一張表排序，左欄對齊', () => {
-    const lines = formatCommandHelp([
-      { name: 'plan', description: '進入或離開計劃模式', input: { hint: '[off]' } },
-      { name: 'zebra', description: '最後一個' },
-    ]);
-    expect(lines[0]).toBe('命令：');
-    // `exit` / `help` 併進同一張表一起排序，不是另起一段。
-    expect(lines.slice(1).map((line) => line.trim().split(/\s+/u)[0])).toEqual([
-      '/exit',
-      '/help',
-      '/plan',
-      '/zebra',
-    ]);
-    // 描述欄起點對齊在最長的那一行上（`/plan [off]`）。
-    const starts = lines.slice(1).map((line) => line.indexOf(line.trim().split(/\s\s+/u).at(-1)!));
-    expect(new Set(starts).size).toBe(1);
   });
 });
 

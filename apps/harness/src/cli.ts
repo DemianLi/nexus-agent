@@ -560,7 +560,7 @@ const HELP_LINE_PATTERN = /^\/help(?:\s.*)?$/u;
  * @param registered - `commands.list()` 交出來的 descriptor，已經按名字排好。
  * @returns 要印的每一行，含開頭那句抬頭。
  */
-export function formatCommandHelp(registered: readonly CommandDescriptor[]): readonly string[] {
+function formatCommandHelp(registered: readonly CommandDescriptor[]): readonly string[] {
   const rows = [...registered, ...REPL_OWNED_COMMANDS]
     .map((entry) => ({
       name: entry.name,
