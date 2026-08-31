@@ -3,10 +3,17 @@
  *
  *   pnpm --filter @nexus/harness run serve:live --plugins src/plan-mode.fixture.ts
  *
- * **`serve` 是唯一該用這一份的入口。** `exit_plan_mode` 是需要核准的工具，而 CLI 與
+ * **`serve` 是該用這一份的入口。** `exit_plan_mode` 是需要核准的工具，而 CLI 與
  * eval 走 `HEADLESS_APPROVALS`（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）
- * ——在那裡打開計劃模式，模型提了計劃就被確定性拒絕，模式沒關，而今天沒有第二條路
- * 出去。整輪只剩指引。這不是缺陷，是 `startActive` 的 JSDoc 已經寫明的後果。
+ * ——在那裡打開計劃模式，模型提了計劃就被確定性拒絕。
+ *
+ * **[#120](https://github.com/DemianLi/nexus-agent/issues/120) 之後 CLI 上多了一條出路
+ * （`/plan off`），但那不改變這一份的用途**：CLI 走 `HEADLESS_APPROVALS` 這件事沒變，
+ * 所以那裡走完的是「規劃 → 交計劃 → 被拒 → 自己爬出來」，不是那條正路。而且 CLI 的
+ * 預設清單裡計劃模式本來就在了（關著的），要在 CLI 上試 `/plan` 不需要換清單。
+ *
+ * **`serve` 那條線上還沒有命令介面**，所以 web 那端打不到 `/plan`——這一份就是那裡
+ * 打開計劃模式的辦法。
  *
  * **而且要 `--live` 才看得到全程。** 假模型的腳本寫死在 `cli.ts` 的 `CLI_SCRIPT`
  * （先 echo、再 write_file），它不會呼叫 `exit_plan_mode`——換一份 plugin 清單改不了

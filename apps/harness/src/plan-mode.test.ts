@@ -11,14 +11,18 @@
  * 2. **`exit_plan_mode` 的三條路**：有人核准、沒人可問、不在模式裡——三種結局要分得開。
  * 3. **模式狀態活得過什麼**：同一條 thread 的下一輪、以及一次真的壓縮。
  * 4. **`prepend` 的證據**：模式外的呼叫拿到的是「不在計劃模式」，不是核准的措辭。
+ * 5. **`/plan` 這條路**：人打的那一行到底有沒有讓下一輪的 prompt 變得不一樣
+ *    （[#120](https://github.com/DemianLi/nexus-agent/issues/120)）。
  */
 
+import { PassThrough } from 'node:stream';
 import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Command, MemorySaver } from '@langchain/langgraph';
-import type { NexusPlugin } from '@nexus/core';
+import { SessionLog } from '@nexus/core';
+import type { NexusPlugin, SessionEvent } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { createMemoryPlugin } from '@nexus/plugin-memory';
 import {
@@ -27,12 +31,15 @@ import {
   EXIT_PLAN_MODE_TOOL_NAME,
   NOT_IN_PLAN_MODE_MESSAGE,
   PLAN_APPROVED_MESSAGE,
+  PLAN_ARGS_ERROR_MESSAGE,
+  PLAN_ENTERED_MESSAGE,
+  PLAN_LEFT_MESSAGE,
   PLAN_MODE_STATE_KEY,
 } from '@nexus/plugin-plan-mode';
 import { createSummarizationMiddleware } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
-import { loadPluginModule } from './cli.js';
+import { loadPluginModule, runRepl } from './cli.js';
 import { HEADLESS_APPROVALS } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
@@ -476,5 +483,144 @@ describe('plan-mode.fixture.ts', () => {
 
     expect(model.boundToolNames).toContain(EXIT_PLAN_MODE_TOOL_NAME);
     expect(systemPrompt(model.lastPrompt)).toContain(DEFAULT_PLAN_GUIDANCE);
+  });
+});
+
+/**
+ * `/plan` 走完整條線：**真的執行器 → 真的 REPL → 真的 agent 迴圈**。
+ *
+ * 為什麼要走 `runRepl` 而不是直接呼叫 handler：這一條要證明的不是 handler 回了什麼
+ * 字串（那歸 `packages/nexus-plugin-plan-mode` 的單元測試），而是**人打的那一行真的
+ * 讓下一輪的 prompt 變得不一樣**。中間隔著 `parseCommand` 的 lookahead、執行器的
+ * 配對日誌、`beforeAgent` 的邊界提交與 checkpointer——少了任何一段，指引都到不了模型，
+ * 而每一段都只有在真的接起來的時候才驗得到。
+ *
+ * **checkpointer 不是佈景。** 沒有它，state 在兩次 invoke 之間不留，第二輪一開始
+ * `beforeAgent` 讀到的是 `stateSchema` 的初值——那一格會把 `committed` 同步成 `false`，
+ * 計劃模式在第二輪就自己掉了。CLI 有它（`MemorySaver`），所以這裡也有。
+ */
+describe('/plan 這條路', () => {
+  /** 餵幾行進 REPL，把印出來的東西與日誌一起收回來。 */
+  async function repl(
+    plugins: readonly NexusPlugin[],
+    lines: string,
+    turns: number,
+  ): Promise<{
+    model: ScriptedChatModel;
+    stdout: string;
+    stderr: string;
+    events: readonly SessionEvent[];
+  }> {
+    const model = new ScriptedChatModel({
+      turns: Array.from({ length: turns }, () => ({ content: '好。' })),
+    });
+    const { agent, commands, dispose } = await createNexusAgent({
+      model,
+      plugins,
+      checkpointer: new MemorySaver(),
+    });
+    const sessionLog = new SessionLog('plan-repl');
+    const events: SessionEvent[] = [];
+    sessionLog.subscribe((event) => events.push(event));
+
+    const out: string[] = [];
+    const err: string[] = [];
+    const input = new PassThrough();
+    input.end(lines);
+
+    try {
+      await runRepl(
+        agent,
+        { input, output: new PassThrough() },
+        { log: (line) => void out.push(line), error: (line) => void err.push(line) },
+        sessionLog,
+        commands,
+      );
+    } finally {
+      await dispose();
+    }
+    return { model, stdout: out.join('\n'), stderr: err.join('\n'), events };
+  }
+
+  /**
+   * **一進一出，兩輪的 prompt 要不一樣。**
+   *
+   * 只斷言「開了之後有」的話，一個永遠都夾指引的實作照樣綠；只斷言「關了之後沒有」
+   * 的話，一個從來不夾的實作也綠。兩輪一起比才擋得住。
+   */
+  it('/plan 之後那一輪夾指引，/plan off 之後那一輪不夾', async () => {
+    const { model, stdout } = await repl(
+      [createEchoPlugin(), createPlanModePlugin()],
+      '/plan\n先想想\n/plan off\n動手吧\n/exit\n',
+      2,
+    );
+
+    expect(model.prompts).toHaveLength(2);
+    expect(systemPrompt(model.prompts[0] ?? [])).toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(systemPrompt(model.prompts[1] ?? [])).not.toContain(DEFAULT_PLAN_GUIDANCE);
+    // 兩句話都印給人看了——命令的結果不進模型，只進終端機。
+    expect(stdout).toContain(PLAN_ENTERED_MESSAGE);
+    expect(stdout).toContain(PLAN_LEFT_MESSAGE);
+  });
+
+  /**
+   * **命令那兩行不能變成模型的一輪。** 這是 `@nexus/plugin-commands` 那條「認得的就
+   * 不掉回模型」在計劃模式上的驗收：模型只該看到兩句人話，日誌裡則是兩對命令事件。
+   */
+  it('命令走命令的路，模型只收到那兩句人話', async () => {
+    const { events } = await repl(
+      [createEchoPlugin(), createPlanModePlugin()],
+      '/plan\n先想想\n/plan off\n動手吧\n/exit\n',
+      2,
+    );
+
+    expect(events.filter((event) => event.type === 'command/run')).toHaveLength(2);
+    expect(events.filter((event) => event.type === 'command/done')).toHaveLength(2);
+    expect(
+      events
+        .filter((event) => event.type === 'turn/start')
+        .map((event) => (event.data as { text?: string }).text),
+    ).toEqual(['先想想', '動手吧']);
+  });
+
+  /**
+   * **人自己打的那一句不會被某個節點再印一次。**
+   *
+   * 基座把這一輪的輸入訊息掛在**第一個真的寫了東西的節點**的 update 上，而在
+   * [#120](https://github.com/DemianLi/nexus-agent/issues/120) 之前沒有任何 plugin 的
+   * `beforeAgent` 回傳非空更新——所以這個形狀是這張卡第一次讓它現形的：畫面上會出現
+   * `[nexusPlanMode.before_agent] 先想想`，看起來像那個 plugin 在說話。`runTurn` 因此
+   * 濾掉 human message，這一條釘著它。
+   */
+  it('進了計劃模式之後，使用者那句話不會在畫面上出現兩次', async () => {
+    const { stdout } = await repl(
+      [createEchoPlugin(), createPlanModePlugin()],
+      '/plan\n先想想\n/exit\n',
+      1,
+    );
+
+    expect(stdout).toContain(PLAN_ENTERED_MESSAGE);
+    expect(stdout).not.toContain('先想想');
+    expect(stdout).not.toContain('before_agent');
+  });
+
+  /**
+   * **收不下的參數走 `printer.error`，而且不驚動模型。**
+   *
+   * `/plan of` 是打錯的 `/plan off`，而它在語法上是一個合法的命令行——`parseCommand`
+   * 收得下、註冊表也找得到，所以它**會**進 handler。分辨對錯的是 handler 自己的文法，
+   * 而它回 `error`。掉回模型的話，模型會收到一行沒頭沒尾的 `/plan of`。
+   */
+  it('/plan of 回報錯誤，模式沒動，模型沒被驚動', async () => {
+    const { model, stderr, stdout } = await repl(
+      [createEchoPlugin(), createPlanModePlugin()],
+      '/plan of\n說點什麼\n/exit\n',
+      1,
+    );
+
+    expect(stderr).toContain(PLAN_ARGS_ERROR_MESSAGE);
+    expect(model.prompts).toHaveLength(1);
+    expect(systemPrompt(model.prompts[0] ?? [])).not.toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(stdout).not.toContain(PLAN_ENTERED_MESSAGE);
   });
 });
