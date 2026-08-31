@@ -114,6 +114,13 @@ export class ThreadPump {
   #pending: PendingInterrupt | undefined;
   /** 一個 thread 一次只跑一個 run；後到的 submit 排隊，不平行跑。 */
   #tail: Promise<void> = Promise.resolve();
+  /**
+   * 還沒抽完的 run 有幾段——**排隊的也算**。
+   *
+   * 這個計數存在的理由在 {@link ThreadPump.running}：上行的回應是收件回條，
+   * 「已經收下但還沒開跑」與「正在跑」對發派斜線命令的那一側是同一件事。
+   */
+  #inFlight = 0;
   #closed = false;
 
   constructor(agent: PumpAgent, threadId: string) {
@@ -134,6 +141,17 @@ export class ThreadPump {
   /** 掛著等人回答的那顆中斷，沒有就是 `undefined`。 */
   get pending(): PendingInterrupt | undefined {
     return this.#pending;
+  }
+
+  /**
+   * 這條 thread 上有沒有 run 還沒跑完——**排隊中的也算**。
+   *
+   * 給上行那一側擋斜線命令用（[#123](https://github.com/DemianLi/nexus-agent/issues/123)）。
+   * 與 {@link ThreadPump.pending} 各擋一種：那個是「停在核准點」，這個是「還在飛」。
+   * 兩個都不擋的話，`/plan` 的 pending intent 會跟飛行中那一輪的 `beforeAgent` 賽跑。
+   */
+  get running(): boolean {
+    return this.#inFlight > 0;
   }
 
   /**
@@ -201,9 +219,12 @@ export class ThreadPump {
     // **收下的那一刻就不再掛著了，不是等它排到才清。** 排隊期間還掛著的話，連按兩次
     // 核准的第二次會通過上行的校驗、送出第二次 resume，而那時已經沒有中斷可以回答。
     this.#pending = undefined;
+    // **同步就加一**：上行回的是收件回條，緊接著到的 `slash.run` 必須看得到「在飛」。
+    this.#inFlight += 1;
     const next = this.#tail.then(() => this.#runOnce(input));
-    // 排隊用的鏈不能因為某一輪炸掉就整條斷掉。
-    this.#tail = next.catch(() => undefined);
+    // 排隊用的鏈不能因為某一輪炸掉就整條斷掉；減一兩條路都要走到。
+    const settled = () => void (this.#inFlight -= 1);
+    this.#tail = next.then(settled, settled);
     return next;
   }
 

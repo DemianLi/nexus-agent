@@ -11,6 +11,7 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
+import { emptyCommandPoint } from './fixtures.js';
 import { createWireHandler } from './wire-handler.js';
 
 /**
@@ -64,7 +65,11 @@ function buildAgent(turns: readonly ScriptedTurn[], options: { gated?: boolean }
 /** 把 handler 當成 fetch 用——瀏覽器端跑的是同一份 client。 */
 function connect(agent: PumpAgent) {
   const handler = createWireHandler({
-    createAgent: async () => ({ agent, dispose: async () => undefined }),
+    createAgent: async () => ({
+      agent,
+      commands: emptyCommandPoint(),
+      dispose: async () => undefined,
+    }),
   });
   const fetchImpl: typeof globalThis.fetch = async (input, init) =>
     handler.handle(new Request(input as string, init));
@@ -404,6 +409,21 @@ describe('失敗與拒絕', () => {
       id: 7,
       error: 'invalid_argument',
     });
+
+    // **斜線命令那兩支受同一條規則管。** 它們不是協定的 `Command`，但路徑／封包的比對
+    // 是這條 RPC family 的不變量，不是某個 method 的（[#123](https://github.com/DemianLi/nexus-agent/issues/123)）。
+    const slashMismatch = await post(commandPath('t7', 'slash.run'), {
+      id: 8,
+      method: 'slash.list',
+    });
+    expect(await slashMismatch.json()).toMatchObject({
+      type: 'error',
+      id: 8,
+      error: 'invalid_argument',
+    });
+    expect((await post('/threads/t7/commands/slash.nope', { id: 9 })).status).toBe(404);
+    const noLine = await post(commandPath('t7', 'slash.run'), { id: 10, method: 'slash.run' });
+    expect(await noLine.json()).toMatchObject({ type: 'error', id: 10, error: 'invalid_argument' });
   });
 
   it('上行的回應是收件回條，不是跑完了', async () => {
@@ -413,6 +433,47 @@ describe('失敗與拒絕', () => {
     const ack = await client.runStart('t8', '記一筆。');
     expect(ack).toMatchObject({ type: 'success', id: 1 });
     expect(calls).toEqual([]);
+  });
+});
+
+describe('一條 thread 一個 agent', () => {
+  it('同一條 thread 的兩個並行請求只建一個 agent', async () => {
+    // **後寫的覆蓋先寫的，先建的那一個沒有人 dispose**——而 MCP plugin 底下是 stdio
+    // 子行程，漏了不會有任何錯誤訊息。兩個分頁同時打開就到得了。順帶一提，兩個不同的
+    // agent 也意味著兩個不同的命令執行器，那道序列閘就等於不存在
+    // （[#123](https://github.com/DemianLi/nexus-agent/issues/123)）。
+    const { agent } = buildAgent(ONE_CALL);
+    let built = 0;
+    let disposed = 0;
+    const handler = createWireHandler({
+      createAgent: async () => {
+        built += 1;
+        // 讓兩個請求真的疊在一起：不 await 的話，第一個會在第二個進來之前就寫回去。
+        await Promise.resolve();
+        return {
+          agent,
+          commands: emptyCommandPoint(),
+          dispose: async () => void (disposed += 1),
+        };
+      },
+    });
+    const post = (path: string, body: unknown) =>
+      handler.handle(
+        new Request(`${BASE_URL}${path}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        }),
+      );
+
+    await Promise.all([
+      post(commandPath('t9', 'slash.list'), { id: 1, method: 'slash.list' }),
+      post(commandPath('t9', 'slash.list'), { id: 2, method: 'slash.list' }),
+    ]);
+    expect(built).toBe(1);
+
+    await handler.close();
+    expect(disposed).toBe(1);
   });
 });
 
@@ -456,7 +517,11 @@ describe('線的兩端與真實組裝點對得上', () => {
       // 這件事只有這裡驗得到——編不過就是 `PumpAgent` 的形狀錯了。
       const assignable: PumpAgent = agent;
       const handler = createWireHandler({
-        createAgent: async () => ({ agent: assignable, dispose: async () => undefined }),
+        createAgent: async () => ({
+          agent: assignable,
+          commands: emptyCommandPoint(),
+          dispose: async () => undefined,
+        }),
       });
       const client = createWireClient({
         baseUrl: BASE_URL,

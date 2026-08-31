@@ -67,9 +67,17 @@
  * `agent/pre-step` 邊界提交的對應物，形狀是同一個。
  *
  * **這個退法丟掉了什麼**：dsh 的 `committed` 是「已經持久化了」，我們的 `committed`
- * 是「從下一輪起生效」。序列的 REPL 裡兩者分不出來——命令一定跑在兩輪之間，沒有任何
- * 觀察窗看得見模式還沒翻。**除非下一輪永遠不來**：那時人看到的「計劃模式開了」真的
- * 沒有落地過。這是這個退法誠實的殘餘。
+ * 是「從下一輪起生效」。命令一定跑在兩輪之間的話，兩者分不出來——沒有任何觀察窗看得見
+ * 模式還沒翻。**除非下一輪永遠不來**：那時人看到的「計劃模式開了」真的沒有落地過。
+ * 這是這個退法誠實的殘餘。
+ *
+ * **「命令一定跑在兩輪之間」以前是白送的，現在不是。** REPL 那條線上它出自 readline
+ * （一行一輪）；`serve.ts` 那條線上沒有那個東西——命令可以在 run 飛在半空時到、可以在
+ * thread 停在核准點時到、可以兩個分頁同時到。所以那條線的發派面**明著**保證它：三種
+ * 情形一律拒收，不排隊（`apps/harness/src/wire-handler.ts` 的 `handleSlash`，
+ * [#123](https://github.com/DemianLi/nexus-agent/issues/123)）。排隊會讓這一格 pending
+ * intent 跟飛行中那一輪的 `beforeAgent` 賽跑，等於把這個退法再擴大一次。
+ * 絆索在 `apps/harness/src/slash-wire.test.ts`。
  *
  * 順著同一個理由，那一格 **`pending` 是交出去之後才清的，不是送出的當下**——照 dsh
  * 的原話「Delete only after append succeeds so a failed durable write leaves the
@@ -184,13 +192,14 @@ export interface PlanModePluginOptions {
    * 而它**沒有第二條路出去**——今天沒有任何開啟／關閉的命令。整輪只剩指引。
    *
    * **[#120](https://github.com/DemianLi/nexus-agent/issues/120) 之後這個風險換了形狀，
-   * 沒有消失。** `/plan off` 是那條路了——但它只在**打得到命令的入口**存在，也就是
-   * CLI 的 REPL；`serve.ts` 那條線上還沒有命令介面（見檔頭的非目標）。所以在 CLI 把
-   * `startActive` 打開仍然是拿不到核准、只能靠 `/plan off` 自己爬出來，而在 web 上
-   * 打開則仍然是「提了計劃、有人按批准」那條正路。
+   * 沒有消失。** `/plan off` 是那條路了，而
+   * [#123](https://github.com/DemianLi/nexus-agent/issues/123) 之後兩個入口都打得到它。
+   * 但在 CLI 把 `startActive` 打開仍然是拿不到核准、只能靠 `/plan off` 自己爬出來
+   * （`HEADLESS_APPROVALS` 會確定性拒絕），在 web 上打開則是「提了計劃、有人按批准」
+   * 那條正路。
    *
-   * 這個選項今天的用途因此還是那兩個：**測試**要走真的那條路而不是直接戳 state，
-   * 以及 **`serve.ts` 那種真的按得下去的入口**。
+   * **這個選項今天剩下的用途是測試**：要走真的那條路而不是直接戳 state。`serve.ts`
+   * 那條線不再需要它——瀏覽器自己打 `/plan` 就進得去。
    */
   readonly startActive?: boolean;
 }

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
+import { emptyCommandPoint } from './fixtures.js';
 import { createWireHandler } from './wire-handler.js';
 import { startWireServer } from './wire-server.js';
 import type { WireServer } from './wire-server.js';
@@ -34,7 +35,11 @@ describe('接上真的 socket', () => {
       backend: new StateBackend(),
     }) as unknown as PumpAgent;
     const handler = createWireHandler({
-      createAgent: async () => ({ agent, dispose: async () => undefined }),
+      createAgent: async () => ({
+        agent,
+        commands: emptyCommandPoint(),
+        dispose: async () => undefined,
+      }),
     });
     running = await startWireServer({ handler });
 
@@ -87,7 +92,11 @@ describe('接上真的 socket', () => {
     }) as unknown as PumpAgent;
 
     const handler = createWireHandler({
-      createAgent: async () => ({ agent, dispose: async () => undefined }),
+      createAgent: async () => ({
+        agent,
+        commands: emptyCommandPoint(),
+        dispose: async () => undefined,
+      }),
     });
     running = await startWireServer({ handler });
     // 這裡刻意用全域的 fetch，不注入——走的是真的 HTTP。

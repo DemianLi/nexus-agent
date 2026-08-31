@@ -17,7 +17,10 @@ import type {
   ErrorResponse,
   Event,
   InputRespondOne,
-  UplinkMethod,
+  RpcMethod,
+  SlashCommand,
+  SlashDescriptor,
+  SlashRunResult,
   WireChannel,
 } from './protocol.js';
 import { WIRE_CHANNELS, commandPath, streamPath } from './protocol.js';
@@ -53,6 +56,22 @@ export interface OpenEventsOptions {
  */
 export type UplinkResult = CommandResponse | ErrorResponse;
 
+/**
+ * `slash.list` 的結果。
+ *
+ * **`rejected` 與命令自己的失敗是兩件事**，所以它們在型別上分得開：`rejected` 是
+ * 這條線拒絕發派（`message`），命令自己失敗是 {@link SlashRunOutcome} 的
+ * `kind: 'error'`（`text`）。鍵名不同不是巧合——混起來的那一刻，「這條 thread 正在跑」
+ * 就會被顯示成「這個命令壞了」。
+ */
+export type SlashListOutcome =
+  | { readonly kind: 'ok'; readonly commands: readonly SlashDescriptor[] }
+  | { readonly kind: 'rejected'; readonly message: string };
+
+/** `slash.run` 的結果：三個命令自己的值，加上這條線拒絕發派的那一個。 */
+export type SlashRunOutcome =
+  SlashRunResult | { readonly kind: 'rejected'; readonly message: string };
+
 export interface WireClient {
   /**
    * 開一條長期下行。它跨 run 存活：核准前後是同一條線。
@@ -71,6 +90,65 @@ export interface WireClient {
     threadId: string,
     params: Pick<InputRespondOne, 'namespace' | 'interrupt_id' | 'response'>,
   ): Promise<UplinkResult>;
+  /**
+   * 這條 thread 上打得出哪些斜線命令。**拿來顯示，不做選單**——
+   * dsh 那一套 `CommandDirectory`（epoch guard、single-flight、`ensureReady`）是另一張卡。
+   */
+  slashList(threadId: string): Promise<SlashListOutcome>;
+  /**
+   * 打一行斜線命令。**回的是命令的執行結果，不是收件回條**——命令不進模型，
+   * 所以它沒有「之後走下行」的那一半。
+   *
+   * @param line - 完整的候選行，**原文原樣**。
+   */
+  slashRun(threadId: string, line: string): Promise<SlashRunOutcome>;
+}
+
+/** 線上回來的清單得先驗過。**這是別人的位元組**，不是我們剛剛建的物件。 */
+function readDescriptors(result: unknown): readonly SlashDescriptor[] {
+  const { commands } = result as { commands?: unknown };
+  if (!Array.isArray(commands)) {
+    throw new Error('slash.list 的結果裡沒有 commands 陣列');
+  }
+  return commands.map((entry: unknown) => {
+    const descriptor = entry as { name?: unknown; description?: unknown; input?: unknown };
+    if (typeof descriptor?.name !== 'string' || typeof descriptor.description !== 'string') {
+      throw new Error('slash.list 回了不認得的 descriptor');
+    }
+    const hint = (descriptor.input as { hint?: unknown } | undefined)?.hint;
+    return Object.freeze({
+      name: descriptor.name,
+      description: descriptor.description,
+      ...(typeof hint === 'string' ? { input: Object.freeze({ hint }) } : {}),
+    });
+  });
+}
+
+/** 同上。`unknown` 是三值之一，不是「驗不出來」。 */
+function readRunResult(result: unknown): SlashRunResult {
+  const { kind, command_id: commandId, text } = result as Record<string, unknown>;
+  if (kind === 'unknown') {
+    return { kind: 'unknown' };
+  }
+  if (kind === 'success') {
+    if (typeof commandId !== 'string') {
+      throw new Error('slash.run 成功時要帶 command_id');
+    }
+    return {
+      kind: 'success',
+      command_id: commandId,
+      ...(typeof text === 'string' ? { text } : {}),
+    };
+  }
+  if (kind === 'error' && typeof text === 'string') {
+    // `command_id` 在拋錯路徑上是缺的，見 `SlashRunResult`。
+    return {
+      kind: 'error',
+      text,
+      ...(typeof commandId === 'string' ? { command_id: commandId } : {}),
+    };
+  }
+  throw new Error(`slash.run 回了不認得的 kind "${String(kind)}"`);
 }
 
 export function createWireClient(options: WireClientOptions): WireClient {
@@ -91,8 +169,8 @@ export function createWireClient(options: WireClientOptions): WireClient {
 
   async function sendCommand(
     threadId: string,
-    method: UplinkMethod,
-    command: Command,
+    method: RpcMethod,
+    command: Command | SlashCommand,
   ): Promise<UplinkResult> {
     // 路徑與封包各講一次 method，server 端不合就拒——照 dsh 的 `fetch/handler.ts`。
     const response = await postJson(commandPath(threadId, method), command);
@@ -142,6 +220,27 @@ export function createWireClient(options: WireClientOptions): WireClient {
         method: 'input.respond',
         params,
       });
+    },
+
+    async slashList(threadId) {
+      const response = await sendCommand(threadId, 'slash.list', {
+        id: nextCommandId++,
+        method: 'slash.list',
+      });
+      return response.type === 'error'
+        ? { kind: 'rejected', message: response.message }
+        : { kind: 'ok', commands: readDescriptors(response.result) };
+    },
+
+    async slashRun(threadId, line) {
+      const response = await sendCommand(threadId, 'slash.run', {
+        id: nextCommandId++,
+        method: 'slash.run',
+        params: { line },
+      });
+      return response.type === 'error'
+        ? { kind: 'rejected', message: response.message }
+        : readRunResult(response.result);
     },
   };
 }

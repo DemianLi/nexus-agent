@@ -151,9 +151,10 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
  * - **`exit_plan_mode` 一律出現在面向模型的工具清單裡**（照 dsh：模式轉換不該額外造成
  *   工具目錄變動）。CLI 上它是活的 schema、死的執行路徑——模式外撞 middleware、模式內
  *   撞 {@link HEADLESS_APPROVALS} 的確定性拒絕。
- * - **[`serve.ts`](./serve.ts) 也吃這份清單**，而那條路上還沒有命令介面。所以 web 那端
- *   拿到的是「工具在清單裡、模式打不開」——`--plugins src/plan-mode.fixture.ts` 仍然是
- *   那條線上打開計劃模式的辦法。
+ * - **[`serve.ts`](./serve.ts) 也吃這份清單**，而那條路上現在有命令介面了
+ *   （[#123](https://github.com/DemianLi/nexus-agent/issues/123)）：web 那端自己打
+ *   `/plan` 就進得去，而且核准是開著的，所以「規劃 → 交計劃 → 有人按批准 → 開始動手」
+ *   整條走得完——那是 CLI 這條路走不完的（`HEADLESS_APPROVALS` 會確定性拒絕）。
  *
  * **十一個不變量配套入口是那句話的例外，而例外要說得出理由**
  * （[#107](https://github.com/DemianLi/nexus-agent/issues/107) 拍板）：

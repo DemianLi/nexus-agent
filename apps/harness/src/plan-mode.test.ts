@@ -39,7 +39,7 @@ import {
 import { createSummarizationMiddleware } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
-import { loadPluginModule, runRepl } from './cli.js';
+import { runRepl } from './cli.js';
 import { HEADLESS_APPROVALS } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
@@ -460,29 +460,6 @@ describe('工具目錄不隨模式變動', () => {
     }
 
     expect(model.boundToolNames.slice(0, 2)).toEqual([EXIT_PLAN_MODE_TOOL_NAME, ECHO_TOOL_NAME]);
-  });
-});
-
-describe('plan-mode.fixture.ts', () => {
-  /**
-   * **一份沒有人載過的 fixture 是一個會靜靜壞掉的檔案。** README 指著它，所以它得
-   * 真的載得起來、而且真的把計劃模式打開——改名、掉一個 export、`startActive` 被人
-   * 改回預設，這一條都會紅。走 `loadPluginModule` 而不是直接 import，是因為
-   * `--plugins` 走的就是那條路徑解析。
-   */
-  it('載得起來，而且真的是打開的', async () => {
-    const plugins = await loadPluginModule('src/plan-mode.fixture.ts');
-    const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
-    const { agent, dispose } = await createNexusAgent({ model, plugins });
-
-    try {
-      await agent.invoke(toAgentInvocation('嗨。'));
-    } finally {
-      await dispose();
-    }
-
-    expect(model.boundToolNames).toContain(EXIT_PLAN_MODE_TOOL_NAME);
-    expect(systemPrompt(model.lastPrompt)).toContain(DEFAULT_PLAN_GUIDANCE);
   });
 });
 

@@ -150,6 +150,7 @@ describe('不變量接線：web 那條路', () => {
     const handler = createWireHandler({
       createAgent: async () => ({
         agent: built.agent as unknown as PumpAgent,
+        commands: built.commands,
         dispose: built.dispose,
         attachInvariants: built.attachInvariants,
       }),

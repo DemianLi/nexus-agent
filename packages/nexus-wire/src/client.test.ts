@@ -93,4 +93,69 @@ describe('瀏覽器端的 client', () => {
     const commands = stub(() => new Response('not found', { status: 404 }));
     await expect(commands.client.runStart('t4', '哈囉')).rejects.toThrow('404');
   });
+
+  it('斜線命令走同一條 RPC family，路徑與封包各講一次 method', async () => {
+    const { calls, client } = stub((seen) =>
+      Response.json(
+        String(seen.url).endsWith('slash.list')
+          ? successResponse(1, { commands: [{ name: 'plan', description: '進出計劃模式' }] })
+          : successResponse(2, { kind: 'success', command_id: 'cmd-1', text: '開了。' }),
+      ),
+    );
+
+    expect(await client.slashList('t5')).toEqual({
+      kind: 'ok',
+      commands: [{ name: 'plan', description: '進出計劃模式' }],
+    });
+    expect(await client.slashRun('t5', '/plan')).toEqual({
+      kind: 'success',
+      command_id: 'cmd-1',
+      text: '開了。',
+    });
+
+    expect(calls[0]?.url).toBe('http://agent.test/threads/t5/commands/slash.list');
+    expect(calls[0]?.body).toEqual({ id: 1, method: 'slash.list' });
+    expect(calls[1]?.url).toBe('http://agent.test/threads/t5/commands/slash.run');
+    // **原文原樣送過去**：要不要 trim 是命令自己的文法決定的。
+    expect(calls[1]?.body).toEqual({ id: 2, method: 'slash.run', params: { line: '/plan' } });
+  });
+
+  it('這條線拒絕發派與命令自己失敗，回來的是兩種形狀', async () => {
+    const refused = stub(() =>
+      Response.json(errorResponse(1, 'invalid_argument', '這條 thread 正在跑')),
+    );
+    expect(await refused.client.slashRun('t6', '/plan')).toEqual({
+      kind: 'rejected',
+      message: '這條 thread 正在跑',
+    });
+
+    // 命令自己失敗是**成功的發派**，所以它走 200 ＋ success 封包。
+    const failed = stub(() =>
+      Response.json(successResponse(1, { kind: 'error', command_id: 'cmd-2', text: '參數不對。' })),
+    );
+    expect(await failed.client.slashRun('t6', '/plan of')).toEqual({
+      kind: 'error',
+      command_id: 'cmd-2',
+      text: '參數不對。',
+    });
+
+    // 拋錯路徑上沒有 command_id（執行器往外拋的是 handler 原本那顆錯誤）——**那不是
+    // 壞掉的結果**，所以 client 收得下。
+    const thrown = stub(() => Response.json(successResponse(1, { kind: 'error', text: '炸了。' })));
+    expect(await thrown.client.slashRun('t6', '/boom')).toEqual({ kind: 'error', text: '炸了。' });
+  });
+
+  it('認不得的一行不是錯誤，是三值裡的 unknown', async () => {
+    const { client } = stub(() => Response.json(successResponse(1, { kind: 'unknown' })));
+    expect(await client.slashRun('t7', '/nope')).toEqual({ kind: 'unknown' });
+  });
+
+  it('線上回了認不得的形狀就當場說，不是靜靜當成別的東西', async () => {
+    const badKind = stub(() => Response.json(successResponse(1, { kind: 'ok' })));
+    await expect(badKind.client.slashRun('t8', '/plan')).rejects.toThrow('不認得的 kind');
+    const noList = stub(() => Response.json(successResponse(1, {})));
+    await expect(noList.client.slashList('t8')).rejects.toThrow('沒有 commands 陣列');
+    const badDescriptor = stub(() => Response.json(successResponse(1, { commands: [{}] })));
+    await expect(badDescriptor.client.slashList('t8')).rejects.toThrow('不認得的 descriptor');
+  });
 });
