@@ -34,6 +34,7 @@ function attach(options: GoalPluginOptions = {}): {
   exit();
   const log = new SessionLog('goal');
   const detach = createSessionRunner({
+    address: { kind: 'root' },
     log,
     installers: registry.sessions.installers(),
     warn: (message) => {
@@ -87,7 +88,11 @@ describe('掛載', () => {
     expect(plugin.serviceFor(log)).toBeUndefined();
     expect(plugin.attached()).toEqual([]);
 
-    const detach = createSessionRunner({ log, installers: registry.sessions.installers() });
+    const detach = createSessionRunner({
+      address: { kind: 'root' },
+      log,
+      installers: registry.sessions.installers(),
+    });
     expect(plugin.serviceFor(log)).toBeDefined();
     expect(plugin.attached()).toHaveLength(1);
 
@@ -104,8 +109,16 @@ describe('掛載', () => {
     exit();
     const first = new SessionLog('a');
     const second = new SessionLog('b');
-    createSessionRunner({ log: first, installers: registry.sessions.installers() });
-    createSessionRunner({ log: second, installers: registry.sessions.installers() });
+    createSessionRunner({
+      address: { kind: 'root' },
+      log: first,
+      installers: registry.sessions.installers(),
+    });
+    createSessionRunner({
+      address: { kind: 'root' },
+      log: second,
+      installers: registry.sessions.installers(),
+    });
 
     plugin.serviceFor(first)?.create({ objective: '第一份的目標' });
     expect(plugin.serviceFor(first)?.get()?.objective).toBe('第一份的目標');
@@ -374,7 +387,11 @@ describe('接上一份已經有內容的日誌', () => {
     const exit = registry.enter({ id: 'goal#1', name: 'goal' });
     later.apply(registry);
     exit();
-    createSessionRunner({ log: first.log, installers: registry.sessions.installers() });
+    createSessionRunner({
+      address: { kind: 'root' },
+      log: first.log,
+      installers: registry.sessions.installers(),
+    });
 
     const view = later.serviceFor(first.log)?.get();
     expect(view?.phase).toBe('paused');

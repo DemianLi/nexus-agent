@@ -71,6 +71,7 @@ export type {
   TelemetryRegistrationPoint,
   CommandRegistrationPoint,
   SessionRegistrationPoint,
+  SessionLookup,
   Disposer,
   RegisterOptions,
   ScopeKey,
@@ -120,6 +121,10 @@ export { assertInvariantSelection, createInvariantRunner, InvariantError } from 
 
 export type { SessionInstaller, SessionRunnerOptions, SessionSubject } from './sessions.js';
 export { createSessionRunner } from './sessions.js';
+export type { SessionAddress } from './session-address.js';
+export { sessionAddressKey, toolCallSessionAddress } from './session-address.js';
+export type { SessionEntry, SessionObserver, SessionRegistryOptions } from './session-registry.js';
+export { SessionRegistry } from './session-registry.js';
 
 // 配套入口（`./invariant`）刻意**不從主入口再匯出**，形狀照 dsh：那邊每個 package 的
 // 配套入口都只掛在 `<pkg>/invariant` 這個子路徑上，import 主入口不會把它拖進來。

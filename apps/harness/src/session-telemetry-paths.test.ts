@@ -87,11 +87,11 @@ async function drainUntilRootCompleted(
 describe('遙測接線：CLI 那條路', () => {
   it('一輪跑完，日誌寫下的每一筆都鏡像成一筆 ledger 記錄', async () => {
     const sink = collectingSink();
-    const { agent, dispose, sessionLog, attachTelemetry } = await createCliAgent({ live: false }, [
-      ...DEFAULT_PLUGINS,
-      telemetryPlugin(sink),
-    ]);
-    const detach = attachTelemetry(sessionLog);
+    const { agent, dispose, sessions, sessionLog, attachTelemetry } = await createCliAgent(
+      { live: false },
+      [...DEFAULT_PLUGINS, telemetryPlugin(sink)],
+    );
+    const detach = attachTelemetry(sessions);
     expect(detach).toBeDefined();
 
     try {
@@ -110,11 +110,11 @@ describe('遙測接線：CLI 那條路', () => {
 
   it('dispose 會把協調器一起收掉：ops 的 shutdown 送出、後端也被關', async () => {
     const sink = collectingSink();
-    const { dispose, sessionLog, attachTelemetry } = await createCliAgent({ live: false }, [
+    const { dispose, sessions, attachTelemetry } = await createCliAgent({ live: false }, [
       ...DEFAULT_PLUGINS,
       telemetryPlugin(sink),
     ]);
-    attachTelemetry(sessionLog);
+    attachTelemetry(sessions);
 
     await dispose();
 
@@ -124,12 +124,12 @@ describe('遙測接線：CLI 那條路', () => {
   });
 
   it('沒有 plugin 掛後端時不接線——沒有出口就不付投影的成本', async () => {
-    const { dispose, sessionLog, attachTelemetry, telemetrySharing } = await createCliAgent(
+    const { dispose, sessions, attachTelemetry, telemetrySharing } = await createCliAgent(
       { live: false },
       DEFAULT_PLUGINS,
     );
     try {
-      expect(attachTelemetry(sessionLog)).toBeUndefined();
+      expect(attachTelemetry(sessions)).toBeUndefined();
       // 披露那一層讀的就是這個：`undefined` 才是「未配置」。
       expect(telemetrySharing).toBeUndefined();
     } finally {
@@ -155,11 +155,11 @@ describe('遙測接線：CLI 那條路', () => {
       ...record,
       body: { kind: 'message', text: '[已脫敏]' },
     });
-    const { dispose, sessionLog, attachTelemetry } = await createCliAgent({ live: false }, [
-      ...DEFAULT_PLUGINS,
-      telemetryPlugin(sink, scrub),
-    ]);
-    attachTelemetry(sessionLog);
+    const { dispose, sessions, sessionLog, attachTelemetry } = await createCliAgent(
+      { live: false },
+      [...DEFAULT_PLUGINS, telemetryPlugin(sink, scrub)],
+    );
+    attachTelemetry(sessions);
 
     try {
       sessionLog.append('turn/start', { kind: 'message', text: 'sk-notasecret-fixture' });
@@ -177,13 +177,16 @@ describe('遙測接線：CLI 那條路', () => {
 
   it('會拋的脫敏規則扣住記錄，但那一輪照樣跑完', async () => {
     const sink = collectingSink();
-    const { agent, dispose, sessionLog, attachTelemetry } = await createCliAgent({ live: false }, [
-      ...DEFAULT_PLUGINS,
-      telemetryPlugin(sink, () => {
-        throw new Error('規則壞了');
-      }),
-    ]);
-    attachTelemetry(sessionLog);
+    const { agent, dispose, sessions, sessionLog, attachTelemetry } = await createCliAgent(
+      { live: false },
+      [
+        ...DEFAULT_PLUGINS,
+        telemetryPlugin(sink, () => {
+          throw new Error('規則壞了');
+        }),
+      ],
+    );
+    attachTelemetry(sessions);
 
     try {
       await expect(runTurn(agent, '嗨', silent, sessionLog)).resolves.toBeUndefined();

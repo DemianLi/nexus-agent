@@ -59,6 +59,7 @@ function mount(
     opened.push(log);
     detachers.push(
       createSessionRunner({
+        address: { kind: 'root' },
         log,
         installers: registry.sessions.installers(),
         warn: (message) => {
@@ -201,8 +202,16 @@ describe('找得到要動的那一份', () => {
     const installers = registry.sessions.installers();
     const first = new SessionLog('a');
     const second = new SessionLog('b');
-    const detachFirst = createSessionRunner({ log: first, installers });
-    const detachSecond = createSessionRunner({ log: second, installers });
+    const detachFirst = createSessionRunner({
+      address: { kind: 'root' },
+      log: first,
+      installers,
+    });
+    const detachSecond = createSessionRunner({
+      address: { kind: 'root' },
+      log: second,
+      installers,
+    });
     const command = registry.commands.find(GOAL_COMMAND_NAME);
     if (command === undefined) throw new Error('應該註冊得到 /goal');
     const run = (rawInput: string): CommandResult =>
@@ -232,7 +241,11 @@ describe('找得到要動的那一份', () => {
       plugin.apply(registry);
       exit();
       const log = new SessionLog(name);
-      createSessionRunner({ log, installers: registry.sessions.installers() });
+      createSessionRunner({
+        address: { kind: 'root' },
+        log,
+        installers: registry.sessions.installers(),
+      });
       const command = registry.commands.find(GOAL_COMMAND_NAME);
       if (command === undefined) throw new Error('應該註冊得到 /goal');
       return {

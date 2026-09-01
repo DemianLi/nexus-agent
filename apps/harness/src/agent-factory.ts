@@ -46,7 +46,7 @@ import {
   type InvariantSelection,
   type NexusPlugin,
   type PluginRegistry,
-  type SessionLog,
+  type SessionRegistry,
   type SessionTelemetrySharingStatus,
 } from '@nexus/core';
 import { createDeepAgent, StateBackend } from 'deepagents';
@@ -255,26 +255,39 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       telemetrySharing: registry.telemetry.service()?.value.sharing as
         SessionTelemetrySharingStatus | undefined,
       /**
-       * 把一份會話日誌接上遙測。**沒掛後端時回 `undefined`**——沒有後端就沒有出口，
-       * 建一個把記錄丟進虛空的協調器只會讓熱路徑白付投影與脫敏的成本。
+       * 把一次組裝的**每一份**會話日誌接上遙測。**沒掛後端時回 `undefined`**——沒有後端
+       * 就沒有出口，建一個把記錄丟進虛空的協調器只會讓熱路徑白付投影與脫敏的成本。
        *
-       * @param log - 要鏡像的日誌。
+       * **一份會話一個協調器，而且新開的那些自動有。** 這是 dsh 的形狀——它的 live
+       * capture「subscribes to the session firehose」並且「sweeps already-live sessions」
+       * （`packages/session/session-telemetry/src/coordinator.ts` 檔頭），per-session 的
+       * 狀態掛在以 session 為鍵的 `WeakMap` 上。subagent 的日誌因此不必有人記得重接。
+       *
+       * @param sessions - 這次組裝的會話註冊表。
        * @returns 收掉這一次接線的函式，或沒掛後端時的 `undefined`。
        */
-      attachTelemetry(log: SessionLog): (() => Promise<void>) | undefined {
+      attachTelemetry(sessions: SessionRegistry): (() => Promise<void>) | undefined {
         const mounted = registry.telemetry.service();
         if (mounted === undefined) return undefined;
-        const coordinator = new SessionTelemetryCoordinator({
-          log,
-          sink: mounted.value,
-          // 現讀而不是快照：`rules()` 每次捕獲都重新問一遍，補送歷史時套的是**現在**
-          // 掛著的策略。這是 dsh waterfall 的語意，折疊要接得住。
-          rules: () => registry.telemetry.rules(),
+        const mine = new Set<SessionTelemetryCoordinator>();
+        const unobserve = sessions.observe(({ log }) => {
+          const coordinator = new SessionTelemetryCoordinator({
+            log,
+            sink: mounted.value,
+            // 現讀而不是快照：`rules()` 每次捕獲都重新問一遍，補送歷史時套的是**現在**
+            // 掛著的策略。這是 dsh waterfall 的語意，折疊要接得住。
+            rules: () => registry.telemetry.rules(),
+          });
+          attached.add(coordinator);
+          mine.add(coordinator);
         });
-        attached.add(coordinator);
         return async () => {
-          attached.delete(coordinator);
-          await coordinator.dispose();
+          unobserve();
+          for (const coordinator of [...mine]) {
+            mine.delete(coordinator);
+            attached.delete(coordinator);
+            await coordinator.dispose();
+          }
         };
       },
       /**
@@ -289,37 +302,67 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * 人註冊」，而不是「過濾完還剩幾個」。過濾成空集合是一個有效的選擇結果，runner
        * 照樣要接（它擁有訂閱與失敗語意），只是一個檢查都不裝。
        *
-       * @param log - 要觀察的日誌。
+       * **每一份會話各一個 runner**，同 dsh 的配套入口（`for (const session of
+       * ctx.sessions.list()) seedSession(session)` 加 `ctx.on('session/created', …)`，
+       * `packages/core/session/src/invariant.ts:218-220`）。subagent 的日誌因此不會變成
+       * 一個沒有檢查的角落。
+       *
+       * @param sessions - 這次組裝的會話註冊表。
        * @returns 收掉這一次接線的函式，或沒有配套入口時的 `undefined`。
        */
-      attachInvariants(log: SessionLog): (() => void) | undefined {
+      attachInvariants(sessions: SessionRegistry): (() => void) | undefined {
         const companions = registry.invariants.companions();
         if (companions.length === 0) return undefined;
-        return createInvariantRunner({
-          log,
-          companions,
-          ...(options.invariants !== undefined && { selection: options.invariants }),
-          ...(options.onInvariantViolation !== undefined && {
-            onViolation: options.onInvariantViolation,
-          }),
+        const runners: (() => void)[] = [];
+        const unobserve = sessions.observe(({ log }) => {
+          runners.push(
+            createInvariantRunner({
+              log,
+              companions,
+              ...(options.invariants !== undefined && { selection: options.invariants }),
+              ...(options.onInvariantViolation !== undefined && {
+                onViolation: options.onInvariantViolation,
+              }),
+            }),
+          );
         });
+        return () => {
+          unobserve();
+          // 倒著收，同 `load.ts` 收 lifecycle disposer 的順序。
+          for (const stop of [...runners].reverse()) stop();
+          runners.length = 0;
+        };
       },
       /**
-       * 把一份會話日誌接上註冊著的 `sessions` 參與者。**沒有人註冊時回 `undefined`**——
-       * 同另外兩個 attach 的理由：沒有參與者就不要在熱路徑上多掛一個訂閱。
+       * 把會話註冊表接上來：**綁給模型工具，並把每一份會話裝上 `sessions` 參與者**。
+       *
+       * **它做兩件事，而且不再有「沒有人註冊就回 `undefined`」那條短路。** 短路以前成立
+       * 是因為這個口只餵參與者；現在它同時是模型工具問「我該寫進哪一份日誌」的那條線
+       * （`registry.sessions.forCall`）。一個只註冊工具、沒有 `join` 任何參與者的 plugin
+       * 在短路底下會永遠拿到「沒接上」，而那是一個**看起來像設定問題的假象**。
        *
        * **這裡沒有 selection 也沒有 `onViolation`。** 那兩樣是不變量的東西：一個回答
        * 「這個 package 的檢查要不要裝」，一個回答「違規往哪裡印」。參與者不產生違規，
        * 它產生的是事件；要不要裝它由清單那一層答（條目層的 `disabled`），而它自己壞掉
        * 只換來一行 warn。
        *
-       * @param log - 要交出去的日誌。
-       * @returns 收掉這一次接線的函式，或沒有參與者時的 `undefined`。
+       * @param sessions - 這次組裝的會話註冊表。
+       * @returns 收掉這一次接線的函式：退訂、解綁，再倒著收每一份會話的 runner。
        */
-      attachSession(log: SessionLog): (() => void) | undefined {
+      attachSession(sessions: SessionRegistry): () => void {
         const installers = registry.sessions.installers();
-        if (installers.length === 0) return undefined;
-        return createSessionRunner({ log, installers });
+        const unbind = registry.sessions.bind(sessions);
+        const runners: (() => void)[] = [];
+        const unobserve = sessions.observe(({ address, log }) => {
+          if (installers.length > 0)
+            runners.push(createSessionRunner({ address, log, installers }));
+        });
+        return () => {
+          unobserve();
+          unbind();
+          for (const stop of [...runners].reverse()) stop();
+          runners.length = 0;
+        };
       },
       async dispose() {
         // 遙測先收：後端很可能是某個 plugin 開的，plugin 的 disposer 一跑它就沒了，

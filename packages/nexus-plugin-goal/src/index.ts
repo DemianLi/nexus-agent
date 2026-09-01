@@ -163,6 +163,19 @@ export function createGoalPlugin(options: GoalPluginOptions = {}): GoalPlugin {
       // 見 `command.ts` 的 `goalAmbiguousMessage`。
       const attachedHere: GoalService[] = [];
       registry.sessions.join((subject) => {
+        // **只管 root，subagent 那些一份都不接。**
+        //
+        // [#137](https://github.com/DemianLi/nexus-agent/issues/137) 之後 subagent 有自己
+        // 的會話日誌，而參與者是**每一份會話各裝一次**的。不看這一格的話，每一次 spawn
+        // 都會多長出一個 `GoalService`，`/goal` 於是從第二次委派開始一律回
+        // `goalAmbiguousMessage`——一個沒有人動過 `/goal` 卻壞掉的命令。
+        //
+        // 而「只管 root」不是為了繞過那件事，**它就是 dsh 對 goal 的政策**：`tool-goal`
+        // 的 `hasDirectHumanInput` 第一道是 `ctx.agents.roots().includes(execution.agent)`
+        // （`packages/goal/tool-goal/src/authority.ts`）。目標是**人**交代的，subagent
+        // 沒有人可以交代。同一條政策的另一半是
+        // [#136](https://github.com/DemianLi/nexus-agent/pull/136) 的 `rootOnly`。
+        if (subject.address.kind !== 'root') return;
         const service = new GoalService(subject, options);
         services.set(subject.log, service);
         attachedHere.push(service);
