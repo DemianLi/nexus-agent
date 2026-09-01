@@ -40,7 +40,11 @@
  *   [#118](https://github.com/DemianLi/nexus-agent/issues/118) 之後才加的），而且
  *   `invariants` 那條路交出的 `InvariantSubject.log` 從第一天起就是一份**完整、可寫**的
  *   `SessionLog`——上面有 `append()`。所以「拿不到」從來不是真的；真的那件事是**沒有一個
- *   通道的名字承認它**（收窄那一格是 [#127](https://github.com/DemianLi/nexus-agent/issues/127)）。
+ *   通道的名字承認它**。
+ *
+ *   **那一格後來收掉了**：[#127](https://github.com/DemianLi/nexus-agent/issues/127) 把
+ *   `InvariantSubject.log` 收窄成唯讀視圖。所以今天「plugin 拿不到可寫的 `SessionLog`」
+ *   在**不變量那條路上**已經是真的了——但整句仍然是錯的，因為 `sessions` 那條路上它是假的。
  *
  *   修好在哪：[#126](https://github.com/DemianLi/nexus-agent/issues/126) 加了第十四個註冊點
  *   `sessions`，名字就說它交出可寫的日誌，goal 域走的正是它。

@@ -89,6 +89,7 @@ export type {
   SessionEventType,
   SessionLogListener,
   SessionLogOptions,
+  SessionLogView,
 } from './session-log.js';
 export { SessionLog } from './session-log.js';
 

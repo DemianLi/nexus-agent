@@ -9,7 +9,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { assertInvariantSelection, createInvariantRunner, InvariantError } from './invariants.js';
-import type { InvariantCompanion, InvariantInstaller } from './invariants.js';
+import type { InvariantCompanion, InvariantInstaller, InvariantSubject } from './invariants.js';
 import { createRegistry } from './registry.js';
 import { SessionLog } from './session-log.js';
 
@@ -343,5 +343,65 @@ describe('過濾器', () => {
     expect(run({ packageAllowlist: [' @nexus/core'] })).toThrow(/前後空白/);
     expect(run({ packageAllowlist: ['a', 'a'] })).toThrow(/重複的 regex/);
     expect(run({ packageBlocklist: ['('] })).toThrow(/packageBlocklist/);
+  });
+});
+
+describe('配套入口拿到的日誌是唯讀視圖', () => {
+  it('`append` 與 `subscribe` 不在型別上——**把 `log` 加寬回去的人會被這一條擋下來**', () => {
+    // **這一條釘的是欄位，不是視圖。** 對 `SessionLogView` 斷言「上面沒有 append」擋不
+    // 到任何人真的會犯的錯——沒有人會跑去那個介面上加一個 append。會發生的是有人把
+    // `InvariantSubject.log` 的型別改回 `SessionLog`（例如照抄 `SessionSubject` 的形狀，
+    // 那一份的 `log` 本來就該是可寫的），而那一改，下面兩行在 `typecheck` 當場紅。
+    //
+    // **它只能是型別層的。** 收窄只發生在型別上：接線那一層傳的仍然是同一個 `SessionLog`
+    // 實例，所以 runtime 上 `subject.log.append` 真的還在。斷言
+    // `typeof subject.log.append === 'undefined'` 會失敗，而那個失敗會被讀成「收窄沒生
+    // 效」——它不是，它是「收窄本來就不在 runtime 上」。
+    type SubjectLog = InvariantSubject['log'];
+    type NoAppend = 'append' extends keyof SubjectLog ? never : true;
+    type NoSubscribe = 'subscribe' extends keyof SubjectLog ? never : true;
+    const noAppend: NoAppend = true;
+    const noSubscribe: NoSubscribe = true;
+
+    expect([noAppend, noSubscribe]).toEqual([true, true]);
+  });
+
+  it('該看得到的三樣還看得到，而且讀到的是活的日誌不是安裝當下的快照', () => {
+    // 上面那條是否定的斷言，它只證明得了「拿不到什麼」。**收窄過頭的話它照樣綠**——
+    // 視圖砍成空介面，`typecheck` 一樣過。這一條是正面的那一半，而且它真的跑：三樣都
+    // 讀得到，而且 `length` 在事件進來之後會動。
+    //
+    // 「會動」這件事現在是白送的（傳的就是日誌本身），釘它是為了以後：哪天有人決定包
+    // 一層真的物件，`length` 與 `events` 得是 getter。照抄成快照的話這一條會紅。
+    const log = new SessionLog('s-view');
+    log.append('turn/start', { kind: 'resume' });
+
+    let sessionId = '';
+    let lengthAtInstall = -1;
+    let typesAtInstall: string[] = [];
+    const lengthsWhileObserving: number[] = [];
+
+    const detach = createInvariantRunner({
+      log,
+      companions: [
+        companion('@nexus/probe', (subject) => {
+          sessionId = subject.log.sessionId;
+          lengthAtInstall = subject.log.length;
+          typesAtInstall = subject.log.events.map((event) => event.type);
+          subject.observe(() => {
+            lengthsWhileObserving.push(subject.log.length);
+          });
+        }),
+      ],
+    });
+
+    log.append('turn/end', {});
+    detach();
+
+    expect(sessionId).toBe('s-view');
+    expect(lengthAtInstall).toBe(1);
+    expect(typesAtInstall).toEqual(['turn/start']);
+    // 重播那一筆看到 1，後來進來的那一筆看到 2——讀的是當下的日誌。
+    expect(lengthsWhileObserving).toEqual([1, 2]);
   });
 });

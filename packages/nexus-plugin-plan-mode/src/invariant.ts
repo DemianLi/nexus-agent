@@ -6,8 +6,8 @@
  * ## 檢不到的那一條：模式狀態的每一次轉換
  *
  * 這個 package 最想檢的關係是「批准之後模式必定關閉」「模式外不會有批准」——而那份
- * 狀態活在 agent 的 graph state 裡（見 `index.ts` 的偏離說明），**不在
- * `InvariantSubject` 的那份 `SessionLog` 裡**。subject 只有日誌，日誌歸 `@nexus/core`，
+ * 狀態活在 agent 的 graph state 裡（見 `index.ts` 的偏離說明），**不在 `InvariantSubject`
+ * 交出的那份日誌裡**。subject 只有日誌（而且只看得到，見 `SessionLogView`），日誌歸 `@nexus/core`，
  * 而 [#101](https://github.com/DemianLi/nexus-agent/issues/101) 已經明文把「加會話事件
  * 種類」排除在包自有不變量之外。**這正是那個偏離的第二筆代價**：走 dsh 的事件形狀時，
  * 那兩條本來是配套入口檢得到的。

@@ -194,6 +194,41 @@ export interface SessionLogOptions {
 }
 
 /**
+ * 一份日誌**看得到的那一面**：身分、長度、事件。沒有 `append`，也沒有 `subscribe`。
+ *
+ * 它是為了 {@link ./invariants.ts | InvariantSubject} 而存在的。那條路的語義是「觀察，
+ * 違規時 `fail`」——`fail` 的型別甚至是 `never`。在這之前它交出的是完整的
+ * {@link SessionLog}，於是**任何註冊了配套入口的 package 都寫得動會話日誌**：通道的
+ * 名字說它只是來看的，型別說它可以寫。
+ *
+ * **這是照 dsh，不是我們自己加嚴。** dsh 的不變量註冊表交給配套入口的是一個乾淨的子
+ * Cordis context——`InvariantInstaller` 的簽章是 `(ctx, fail)`
+ * （`references/deepseek-harness/packages/runtime-diagnostics/invariants/src/index.ts:32`），
+ * `register()` 裡是 `ctx.plugin(installInvariant)`（同檔 `:160-168`），**註冊表一份
+ * session 都不交**。要看得到 session 的配套入口自己 `inject: ['sessions']`
+ * （`packages/goal/goal/src/invariant.ts:71`），而那樣拿到的 `Session` 是寫得動的
+ * （`append` 在 `packages/core/session/src/index.ts:602`）。
+ *
+ * 所以 dsh 的答案不是「配套入口不准寫」，是「**寫入要另外去要**」。收窄之後我們一樣：
+ * 要寫日誌走 {@link ./sessions.ts | registry.sessions}，那個通道的名字認這件事。
+ *
+ * **收窄只發生在型別上。** 接線那一層傳的仍然是同一個 `SessionLog` 實例
+ * （`invariants.ts` 的 `log: options.log`），runtime 上 `append` 還在，一個 cast 就穿得
+ * 過去。這裡要擋的是順手寫一筆，不是惡意。包一層真物件換不到多少，卻要記得 `length`
+ * 與 `events` 都得是 getter——照抄成快照的話，重播之後讀到的是凍住的那一份。
+ *
+ * @see [#127](https://github.com/DemianLi/nexus-agent/issues/127)
+ */
+export interface SessionLogView {
+  /** 這份日誌屬於誰。遙測的 `session.id` 就是它。 */
+  readonly sessionId: string;
+  /** 目前為止的全部事件，照 `seq` 排。 */
+  readonly events: readonly SessionEvent[];
+  /** 目前的長度，也就是下一筆會拿到的 `seq`。 */
+  readonly length: number;
+}
+
+/**
  * 一個 session 一份。
  *
  * **`append` 會同步回呼觀察者，所以它帶著一道重入防護。** 順序照 dsh 的
@@ -212,7 +247,7 @@ export interface SessionLogOptions {
  * 3. **不中斷**——前一個 listener 拋錯不影響後面的。照 dsh 的
  *    `invokeContainedSessionObservers`：一個訂閱者壞掉不該餓死其他訂閱者。
  */
-export class SessionLog {
+export class SessionLog implements SessionLogView {
   readonly #sessionId: string;
   readonly #events: SessionEvent[] = [];
   readonly #listeners = new Set<SessionLogListener>();
