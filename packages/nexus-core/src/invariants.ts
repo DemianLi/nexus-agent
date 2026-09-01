@@ -19,7 +19,7 @@
 
 import type { PluginOrigin } from './plugin.js';
 import { formatOrigin } from './plugin.js';
-import type { SessionEvent, SessionLog } from './session-log.js';
+import type { SessionEvent, SessionLog, SessionLogView } from './session-log.js';
 
 /** 違規時拋的東西。**帶得出是哪個 package 擁有被違反的關係。** */
 export class InvariantError extends Error {
@@ -58,8 +58,19 @@ export type InvariantFailure = (message: string) => never;
  * dsh 那個 `WeakMap<Session, SessionTrace>`。
  */
 export interface InvariantSubject {
-  /** 這一次要看的日誌。 */
-  readonly log: SessionLog;
+  /**
+   * 這一次要看的日誌，**只看得到的那一面**：`sessionId` / `events` / `length`，沒有
+   * `append`，也沒有 `subscribe`。
+   *
+   * 交出完整的 {@link ./session-log.ts | SessionLog} 是這個介面第一版的樣子，而那讓
+   * 「誰寫得動會話日誌」的答案變成「任何註冊了配套入口的 package」——與這條路的語義
+   * 相反。要寫日誌的 plugin 走 {@link ./sessions.ts | registry.sessions}，那個通道的
+   * 名字認這件事；理由與 dsh 那側的對應見 {@link ./session-log.ts | SessionLogView}。
+   *
+   * `subscribe` 一併不在上面，因為下面那句「配套入口不要自己 `log.subscribe()`」本來
+   * 就只是一句勸告——現在它是型別。
+   */
+  readonly log: SessionLogView;
   /**
    * 觀察後續事件。**訂閱歸 runner 擁有**，配套入口不要自己 `log.subscribe()`——
    * 那樣拋出來的違規會掉進日誌自己的圍堵，變成一行看不出是不變量的 warn。

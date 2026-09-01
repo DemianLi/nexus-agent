@@ -6,9 +6,10 @@
  *
  * ## 為什麼不沿用 `invariants`
  *
- * **技術上沿用得了**——{@link ./invariants.ts | InvariantSubject} 交出的就是一份完整
- * 的、可寫的 {@link ./session-log.ts | SessionLog}，上面有 `append()`。所以「plugin 拿
- * 不到日誌」從來不是真的；真的那件事是**沒有一個通道的名字承認它**。沿用有兩個代價：
+ * **寫這個通道的時候，技術上沿用得了**——{@link ./invariants.ts | InvariantSubject} 交出的
+ * 就是一份完整的、可寫的 {@link ./session-log.ts | SessionLog}，上面有 `append()`。所以
+ * 「plugin 拿不到日誌」從來不是真的；真的那件事是**沒有一個通道的名字承認它**。沿用有
+ * 兩個代價：
  *
  * 1. **名不副實。** 「誰能寫會話日誌」會永遠藏在一個叫不變量的通道裡，而那個通道的
  *    文件從頭到尾在講「只觀察、否決不了」。
@@ -16,8 +17,10 @@
  *    goal 這種域有大量**可預期的拒絕**（`GOAL_STALE_REVISION` 是正常的併發結果，不是
  *    誰的 bug），那些要回給呼叫的人，不是回給違規回報器。
  *
- * 收窄 `InvariantSubject.log` 成唯讀視圖是另一張卡
- * （[#127](https://github.com/DemianLi/nexus-agent/issues/127)），刻意不混進來。
+ * **現在連技術上都沿用不了了。** [#127](https://github.com/DemianLi/nexus-agent/issues/127)
+ * 把 `InvariantSubject.log` 收窄成 {@link ./session-log.ts | SessionLogView}，那條路上沒有
+ * `append()`。那不是後來多長出來的限制，是同一個判斷的另一半：上面第 1 點說那個通道名不
+ * 副實，收窄就是把型別改成跟名字一致。**要寫會話日誌的路今天只有這一條。**
  *
  * ## 與 dsh 的偏離
  *
@@ -40,8 +43,8 @@ import type { SessionEvent, SessionLog } from './session-log.js';
  * 一個參與者拿到的東西。
  *
  * **`log` 是可寫的，而那正是這個通道存在的理由。** 拿到它的人記得下 `goal/change` 這種
- * 權威 domain 事件——`invariants` 那條路交出同樣一份日誌卻宣稱自己只是來看的，這裡不
- * 演那齣。
+ * 權威 domain 事件——`invariants` 那條路交出的是同一份日誌的
+ * {@link ./session-log.ts | SessionLogView}，只看得到；能力歸能力，兩條路一人一半。
  */
 export interface SessionSubject {
   /** 這一次要參與的日誌。**寫得動**。 */

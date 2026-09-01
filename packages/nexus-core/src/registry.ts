@@ -379,6 +379,14 @@ export interface TelemetryRegistrationPoint {
  * 2. **`installer.inject`** —— dsh 用它宣告子 fiber 拿得到哪些服務。我們沒有 service
  *    locator，`PluginRegistry` 是固定的一組註冊點。退到：installer 收一個明確的
  *    {@link InvariantSubject}。
+ *
+ *    **那個 subject 交出什麼，這一格就是全部的答案**，所以它交出什麼要照 dsh 的答案來。
+ *    dsh 的註冊表交給配套入口的是一個乾淨的子 context，一份 session 都不帶；要看得到
+ *    session 的配套入口自己 `inject: ['sessions']`，而那樣拿到的 `Session` 寫得動。
+ *    也就是說**寫入不是被禁止，是要另外去要**。[#127](https://github.com/DemianLi/nexus-agent/issues/127)
+ *    之後我們一樣：subject 上的日誌收窄成
+ *    {@link ./session-log.ts | SessionLogView}，要寫的走
+ *    {@link ./sessions.ts | registry.sessions}。
  * 3. **一次註冊看所有 session** —— dsh 有 `ctx.sessions.list()` ＋ `session/created`。
  *    我們沒有 session 服務，日誌是各進入點自己 `new` 的。退到：installer **每一份日誌
  *    各跑一次**。
