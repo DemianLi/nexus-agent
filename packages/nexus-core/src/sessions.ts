@@ -31,6 +31,22 @@
  * 各跑一次**，投影自己持在 closure 裡。同 {@link ./invariants.ts | InvariantSubject}
  * 標過的那一條，代價也一樣。
  *
+ * ## 模型工具也走得到這裡
+ *
+ * **plugin 註冊的工具跟這個通道的參與者活在同一個 `apply` 裡**，所以工具寫得進這份
+ * 日誌：`join()` 的閉包扣住 `subject.log`，工具的 handler 直接用它。`load.ts` 一次組裝
+ * 呼叫一次 `apply`，而一份 registry 只接一份日誌，所以那一格就是答案（同
+ * `@nexus/plugin-goal` 的 `/goal` 用的那一格）。驗收在
+ * `apps/harness/src/tool-session-log.test.ts`。
+ *
+ * **這是 dsh 那條路的一半。** dsh 的模型工具走 `exec.agent.session.append(...)`，而
+ * 那個 `agent` 是 agent loop 派發工具時塞進去的
+ * （`packages/core/agent-loop/src/tool-calls.ts:78`）—— **那個派發點是 dsh 自己的**，
+ * 我們的工具是 LangGraph 的 ToolNode 在跑，插不進去。拿得到的另一半（**這次呼叫是
+ * root 還是哪一個 subagent**）今天沒有答案，而且缺的不只是判斷依據：**subagent 跑在
+ * 同一次組裝裡，所以就算分得出來也沒有第二份日誌可以寫**。
+ * [#134](https://github.com/DemianLi/nexus-agent/issues/134) 追這一件。
+ *
  * @see [#126](https://github.com/DemianLi/nexus-agent/issues/126)
  * @module
  */
