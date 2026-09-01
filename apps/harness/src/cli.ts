@@ -35,6 +35,7 @@ import { SessionLog } from '@nexus/core';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant';
 import { createEchoInvariantPlugin } from '@nexus/plugin-echo/invariant';
+import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
 import { createMcpInvariantPlugin } from '@nexus/plugin-mcp/invariant';
 import { createMemoryInvariantPlugin } from '@nexus/plugin-memory/invariant';
 import { createPlanModePlugin } from '@nexus/plugin-plan-mode';
@@ -138,7 +139,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
  * 哪些**工具** plugin 該進預設清單是設定的事，那要等**外部**設定機制才有地方講
  * （[#46](https://github.com/DemianLi/nexus-agent/issues/46)）。
  *
- * **計劃模式是第二個例外，理由與那十一個不同**
+ * **計劃模式是第二個例外，理由與那十二個不同**
  * （[#120](https://github.com/DemianLi/nexus-agent/issues/120)）：它註冊的是一個
  * **人打得到的命令**，而命令沒進預設清單就等於不存在——`/plan` 會被 `parseCommand`
  * 判成「名字不認得」，照原樣掉回模型，變成一行沒人懂的純文字。所以「不替誰決定該裝
@@ -156,20 +157,21 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
  *   `/plan` 就進得去，而且核准是開著的，所以「規劃 → 交計劃 → 有人按批准 → 開始動手」
  *   整條走得完——那是 CLI 這條路走不完的（`HEADLESS_APPROVALS` 會確定性拒絕）。
  *
- * **十一個不變量配套入口是那句話的例外，而例外要說得出理由**
+ * **十二個不變量配套入口是那句話的例外，而例外要說得出理由**
  * （[#107](https://github.com/DemianLi/nexus-agent/issues/107) 拍板）：
  *
  * - **它們不裝功能，只裝觀察。** 一個配套入口不註冊工具、不改 prompt、不碰 backend，
  *   所以「替誰決定該裝什麼」這個顧慮對它們不成立——沒有人的 agent 因為它們而不一樣。
  * - **關得掉。** [#104](https://github.com/DemianLi/nexus-agent/issues/104) 之後條目層有
  *   `disabled`、組裝點有 `invariants` 選擇，所以進來不是單向門。這是它進得來的前提。
- * - **十一個全進，不是只有 `@nexus/core`。** 八個是空 installer，掛上去一個檢查都不裝，
- *   買到的只有包名歸屬；真的在檢查的是三個——`@nexus/core`（turn 配對）、
+ * - **十二個全進，不是只有 `@nexus/core`。** 八個是空 installer，掛上去一個檢查都不裝，
+ *   買到的只有包名歸屬；真的在檢查的是四個——`@nexus/core`（turn 配對）、
  *   `@nexus/plugin-commands`（命令生命週期配對，
  *   [#118](https://github.com/DemianLi/nexus-agent/issues/118)）與
  *   `@nexus/plugin-plan-mode`（`/plan` 的參數契約，
- *   [#120](https://github.com/DemianLi/nexus-agent/issues/120)）。
- *   **代價是每一次執行多十一個條目、十一次 `apply`**，而換到的是這份
+ *   [#120](https://github.com/DemianLi/nexus-agent/issues/120)）與 `@nexus/plugin-goal`
+ *   （耐久 goal 串，[#126](https://github.com/DemianLi/nexus-agent/issues/126)）。
+ *   **代價是每一次執行多十二個條目、十二次 `apply`**，而換到的是這份
  *   清單與 `registry.invariants.companions()` 對得起來——少掛的那幾個會讓「這個 package
  *   沒有可檢的關係」與「這個 package 的檢查沒掛上」在診斷裡長得一模一樣。
  *
@@ -181,6 +183,7 @@ export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
   createCoreInvariantPlugin(),
   createCommandsInvariantPlugin(),
   createEchoInvariantPlugin(),
+  createGoalInvariantPlugin(),
   createMcpInvariantPlugin(),
   createMemoryInvariantPlugin(),
   createPlanModeInvariantPlugin(),
@@ -344,21 +347,29 @@ export async function createCliAgent(
   commands: CommandRegistrationPoint;
   attachTelemetry: (log: SessionLog) => (() => Promise<void>) | undefined;
   attachInvariants: (log: SessionLog) => (() => void) | undefined;
+  attachSession: (log: SessionLog) => (() => void) | undefined;
   telemetrySharing: SessionTelemetrySharingStatus | undefined;
 }> {
   const model = createCliModel(invocation.live);
-  const { agent, commands, dispose, attachTelemetry, attachInvariants, telemetrySharing } =
-    await createNexusAgent({
-      model,
-      plugins,
-      ...(invocation.workspace !== undefined && {
-        backend: new ContainedFilesystemBackend({ rootDir: resolve(cwd, invocation.workspace) }),
-      }),
-      systemPrompt: SYSTEM_PROMPT,
-      checkpointer: new MemorySaver(),
-      ...(onInvariantViolation !== undefined && { onInvariantViolation }),
-      ...(approvals !== undefined && { approvals }),
-    });
+  const {
+    agent,
+    commands,
+    dispose,
+    attachTelemetry,
+    attachInvariants,
+    attachSession,
+    telemetrySharing,
+  } = await createNexusAgent({
+    model,
+    plugins,
+    ...(invocation.workspace !== undefined && {
+      backend: new ContainedFilesystemBackend({ rootDir: resolve(cwd, invocation.workspace) }),
+    }),
+    systemPrompt: SYSTEM_PROMPT,
+    checkpointer: new MemorySaver(),
+    ...(onInvariantViolation !== undefined && { onInvariantViolation }),
+    ...(approvals !== undefined && { approvals }),
+  });
   // 日誌跟 agent 同壽命：REPL 是一條連續對話，`seq` 要跨輪連續才有意義。
   const sessionLog = new SessionLog(THREAD_ID);
   // **這裡不接線。** 這個工廠兩條路都在用，而 serve 那條不用這份 `sessionLog`——它一個
@@ -372,6 +383,7 @@ export async function createCliAgent(
     commands,
     attachTelemetry,
     attachInvariants,
+    attachSession,
     telemetrySharing,
   };
 }
@@ -713,6 +725,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     sessionLog,
     attachTelemetry,
     attachInvariants,
+    attachSession,
     telemetrySharing,
   } = await createCliAgent(
     invocation,
@@ -733,6 +746,9 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   attachTelemetry(sessionLog);
   // 不變量的 runner 只是一個訂閱，沒有要排空的東西，所以 detach 也不留——行程走了它就沒了。
   attachInvariants(sessionLog);
+  // **接在不變量之後**：參與者拿得到的是可寫的日誌，所以它一裝上去就可能記東西，
+  // 而那些東西該被已經在看的檢查看到。順序反過來的話，安裝期寫的第一批事件會漏檢。
+  attachSession(sessionLog);
 
   // 一輪跑壞了也要收——資源的所有權跟這一次呼叫綁在一起，不跟它成不成功綁在一起。
   //

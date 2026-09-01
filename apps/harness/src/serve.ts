@@ -140,8 +140,15 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
       // 入口收不了核准決定，而 web 這端真的按得下去（[#79](https://github.com/DemianLi/nexus-agent/pull/79)
       // 的核准迴圈，`serve.test.ts` 的「核准那份清單」整條走過一遍）。關掉它會把一個
       // 做得出來的功能關掉（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
-      const { agent, commands, dispose, attachTelemetry, attachInvariants, telemetrySharing } =
-        await createCliAgent(invocation, plugins, options.cwd);
+      const {
+        agent,
+        commands,
+        dispose,
+        attachTelemetry,
+        attachInvariants,
+        attachSession,
+        telemetrySharing,
+      } = await createCliAgent(invocation, plugins, options.cwd);
       // **遙測披露印在這裡而不是啟動時，因為啟動的那一刻答案不存在**：`createAgent` 是
       // lazy 的（`wire-handler.ts` 的 `pumpFor` 第一次收到請求才呼叫），plugin 沒跑過
       // `apply` 就沒有人知道有沒有掛後端。在啟動時印「未配置」會是假的。一個 process
@@ -160,6 +167,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         dispose,
         attachTelemetry,
         attachInvariants,
+        attachSession,
       };
     },
   });
