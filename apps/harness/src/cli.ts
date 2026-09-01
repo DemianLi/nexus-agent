@@ -44,6 +44,8 @@ import { createPlanModeInvariantPlugin } from '@nexus/plugin-plan-mode/invariant
 import { createQuickJsInvariantPlugin } from '@nexus/plugin-quickjs/invariant';
 import { createSkillsInvariantPlugin } from '@nexus/plugin-skills/invariant';
 import { createTelemetryOtelInvariantPlugin } from '@nexus/plugin-telemetry-otel/invariant';
+import { createTodoPlugin } from '@nexus/plugin-todo';
+import { createTodoInvariantPlugin } from '@nexus/plugin-todo/invariant';
 import { createValidationInvariantPlugin } from '@nexus/plugin-validation/invariant';
 import { createWireInvariantPlugin } from '@nexus/wire/invariant';
 
@@ -168,21 +170,35 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
  * **域與命令是同一個 plugin**，不像 dsh 拆成兩個套件——理由寫在
  * `@nexus/plugin-goal` 的檔頭上。
  *
- * **十二個不變量配套入口是那句話的例外，而例外要說得出理由**
+ * **`@nexus/plugin-todo` 是第三筆，而它的代價是三者裡最重的**
+ * （[#132](https://github.com/DemianLi/nexus-agent/issues/132)）：它**真的多一顆面向模型的
+ * 工具**（`todo_write`），所以每一次請求都多一份 schema 與描述的 token，不打任何命令也一樣。
+ *
+ * 它進得來的理由不是「順便」，是**它沒有別的入口**：todo 是模型自己的規劃工具，人不打
+ * 它、命令也叫不動它，所以「沒進清單就等於不存在」對它比對前兩個更絕對。dsh 對「先想再
+ * 做」的答案是計劃模式 ＋ todo ＋ goal 三件一組，這是第三件。
+ *
+ * **`allowParallelInProgress: true`**：這棵樹的 subagent 是真的併發跑的
+ * （`tool-session-log.test.ts` 那條同一個 subagent 併發兩次的驗收），而 dsh 對這種部署
+ * 開的就是 `true`。這個開關沒有預設值，理由見 `TodoPluginOptions`。
+ *
+ * **十三個不變量配套入口是那句話的例外，而例外要說得出理由**
  * （[#107](https://github.com/DemianLi/nexus-agent/issues/107) 拍板）：
  *
  * - **它們不裝功能，只裝觀察。** 一個配套入口不註冊工具、不改 prompt、不碰 backend，
  *   所以「替誰決定該裝什麼」這個顧慮對它們不成立——沒有人的 agent 因為它們而不一樣。
  * - **關得掉。** [#104](https://github.com/DemianLi/nexus-agent/issues/104) 之後條目層有
  *   `disabled`、組裝點有 `invariants` 選擇，所以進來不是單向門。這是它進得來的前提。
- * - **十二個全進，不是只有 `@nexus/core`。** 八個是空 installer，掛上去一個檢查都不裝，
- *   買到的只有包名歸屬；真的在檢查的是四個——`@nexus/core`（turn 配對）、
+ * - **十三個全進，不是只有 `@nexus/core`。** 八個是空 installer，掛上去一個檢查都不裝，
+ *   買到的只有包名歸屬；真的在檢查的是五個——`@nexus/core`（turn 配對）、
  *   `@nexus/plugin-commands`（命令生命週期配對，
  *   [#118](https://github.com/DemianLi/nexus-agent/issues/118)）與
  *   `@nexus/plugin-plan-mode`（`/plan` 的參數契約，
  *   [#120](https://github.com/DemianLi/nexus-agent/issues/120)）與 `@nexus/plugin-goal`
- *   （耐久 goal 串，[#126](https://github.com/DemianLi/nexus-agent/issues/126)）。
- *   **代價是每一次執行多十二個條目、十二次 `apply`**，而換到的是這份
+ *   （耐久 goal 串，[#126](https://github.com/DemianLi/nexus-agent/issues/126)）與
+ *   `@nexus/plugin-todo`（耐久待辦快照的形狀與歸屬，
+ *   [#132](https://github.com/DemianLi/nexus-agent/issues/132)）。
+ *   **代價是每一次執行多十三個條目、十三次 `apply`**，而換到的是這份
  *   清單與 `registry.invariants.companions()` 對得起來——少掛的那幾個會讓「這個 package
  *   沒有可檢的關係」與「這個 package 的檢查沒掛上」在診斷裡長得一模一樣。
  *
@@ -192,6 +208,7 @@ export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
   createEchoPlugin(),
   createPlanModePlugin(),
   createGoalPlugin(),
+  createTodoPlugin({ allowParallelInProgress: true }),
   createCoreInvariantPlugin(),
   createCommandsInvariantPlugin(),
   createEchoInvariantPlugin(),
@@ -202,6 +219,7 @@ export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
   createQuickJsInvariantPlugin(),
   createSkillsInvariantPlugin(),
   createTelemetryOtelInvariantPlugin(),
+  createTodoInvariantPlugin(),
   createValidationInvariantPlugin(),
   createWireInvariantPlugin(),
 ];

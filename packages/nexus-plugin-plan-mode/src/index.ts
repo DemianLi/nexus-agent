@@ -6,9 +6,16 @@
  * （每步多一次 LLM 呼叫的自我批判、顯式意圖分類）在 dsh 全樹**都不存在**——
  * `reflection` 的命中全是 TypeScript 型別反射，`intent classif` 零命中。它對「先想
  * 再做」的答案是**計劃模式**（`packages/plan/plan-mode/`），配上 todo 與 goal：
- * 讓模型自己承擔規劃、把狀態外顯，人可以介入。`TodoListMiddleware` 已經蓋掉 todo
- * 那塊，計劃模式這塊我們一片空白，所以補的是這一塊。細節見
- * [#116](https://github.com/DemianLi/nexus-agent/issues/116)。
+ * 讓模型自己承擔規劃、把狀態外顯，人可以介入。三件裡我們一件都沒有，所以先補的是這
+ * 一件。細節見 [#116](https://github.com/DemianLi/nexus-agent/issues/116)。
+ *
+ * **這裡原本寫的是「`TodoListMiddleware` 已經蓋掉 todo 那塊」，那句話是假的。**
+ * 基座的預設 middleware stack 不帶 todo（`apps/harness/src/baseline.test.ts` 第一條的
+ * 全集斷言裡沒有 `write_todos`），`todoListMiddleware` 得自己掛。那句話是承重的——它在
+ * 論證「所以補的是計劃模式這塊」——但前提錯了不影響結論：三件當時都缺。goal 由
+ * [#126](https://github.com/DemianLi/nexus-agent/issues/126) 補上，todo 由
+ * [#132](https://github.com/DemianLi/nexus-agent/issues/132) 補上（`@nexus/plugin-todo`，
+ * 照 dsh 走會話事件而不是掛基座的 middleware）。
  *
  * 對讀日期 2026-08-31，dsh `0a53fb55bea101816fa226bb964ae2bed71c343b`。
  *

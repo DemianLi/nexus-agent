@@ -26,6 +26,7 @@
  */
 
 import type { GoalChangeMeta } from './goal.js';
+import type { TodoItem } from './todo.js';
 
 /**
  * 這一版收得下的事件種類。**加種類要同時回答「兩條路都產得出來嗎」。**
@@ -41,6 +42,17 @@ import type { GoalChangeMeta } from './goal.js';
  * pump 時接一次。它是**第一顆權威 domain 事件**：前面五種記的是「發生過什麼」，這一種
  * 記的是「現在的狀態是什麼」，所以它帶的是整份快照而不是差異。
  * 見 [#126](https://github.com/DemianLi/nexus-agent/issues/126)。
+ *
+ * `todo/write` 是**第三種生產者**：模型工具。前面六種由進入點寫，`goal/change` 由經
+ * `registry.sessions` 接線的 plugin 寫，而這一種由模型呼叫工具當場寫——工具問
+ * `registry.sessions.forCall(config)` 拿到自己這次該寫的那一份日誌
+ * （{@link ./session-address.ts | toolCallSessionAddress}）。「兩條路都產得出來嗎」對它
+ * 同樣成立，而且理由更硬：工具清單兩條路共用同一份組裝。
+ *
+ * **它也是第一種寫得進 subagent 那份日誌的事件。** 前七種全都只出現在 root 那一份上
+ * ——進入點只包 root 的輪，goal 的參與者只接 root。`todo/write` 反過來，照 dsh 的單一
+ * 所有者規則：每一次 spawn 各自維護自己的清單。
+ * 見 [#132](https://github.com/DemianLi/nexus-agent/issues/132)。
  */
 export type SessionEventType =
   | 'turn/start'
@@ -49,7 +61,8 @@ export type SessionEventType =
   | 'interrupt/raised'
   | 'command/run'
   | 'command/done'
-  | 'goal/change';
+  | 'goal/change'
+  | 'todo/write';
 
 /** 每一種事件帶什麼。 */
 export interface SessionEventMap {
@@ -103,6 +116,15 @@ export interface SessionEventMap {
    * **`goal.blockedReason` 沒有時要整個不放 key**，同 `command/done` 的 `text`。
    */
   'goal/change': GoalChangeMeta;
+  /**
+   * 這個會話的待辦清單被整份換掉了一次。**每一筆帶完整的替換清單**，重放時後寫覆蓋
+   * 先寫。
+   *
+   * 帶整份的理由與 `goal/change` 一樣（讀它的是嚴格重放），但它是**模型**寫的而不是人
+   * ——所以沒有 CAS、沒有修訂號：整表替換的語義本身就沒有「基於哪一版改的」這個問題。
+   * 條目的形狀見 {@link ./todo.ts | TodoItem}，域住在 `@nexus/plugin-todo`。
+   */
+  'todo/write': { readonly todos: readonly TodoItem[] };
 }
 
 /** 日誌裡的一筆。凍過的，拿到之後改不動。 */
