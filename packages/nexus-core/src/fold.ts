@@ -11,6 +11,7 @@
  * 「全部載完了」這個時刻只有 fold 有。
  */
 
+import { tool as makeTool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
 import { CompositeBackend } from 'deepagents';
 import type { AnyBackendProtocol, FilesystemPermission, SubAgent } from 'deepagents';
@@ -31,6 +32,57 @@ import type { PluginRegistry } from './registry.js';
  * CI flake。
  */
 export const TOOL_ORDER_REST = '<unlisted-tools>';
+
+/**
+ * 接在 root-only 工具描述後面的那句話。**這句話是機制的一部分，不是註解。**
+ *
+ * dsh 把同一件事寫進工具描述裡——`tool-goal` 的描述末尾是 “Execution rejects non-human
+ * and subagent authority.”（`references/deepseek-harness/packages/goal/tool-goal/src/index.ts:48`，
+ * SHA `0a53fb55bea101816fa226bb964ae2bed71c343b`）。理由是模型看得到的只有描述：不寫在
+ * 那裡，subagent 每一輪都會再叫一次，然後每一次都被拒絕。
+ *
+ * dsh 靠工具作者自己寫，我們由 fold 補上去。**這是刻意的**：`rootOnly` 是宣告式的一個
+ * 布林值，把「要記得在描述裡講」留給註冊者就等於留一個沒有人會紅的漏。
+ */
+export const ROOT_ONLY_NOTICE = '這個工具只在 root agent 上執行；在 subagent 裡呼叫一定會被拒絕。';
+
+/**
+ * subagent 叫到 root-only 工具時，那顆樁回的話。
+ *
+ * **回字串而不是拋。** dsh 那側是拋（`tool-todo/src/index.ts:205-210` 的
+ * `throw new Error('todo_write requires an owning agent session')`），理由是「拒絕，
+ * 不要靜默 no-op」——那個理由我們照收，但**拋在我們這裡達不到它**：
+ * `ToolNode.runTool` 只要 `wrapToolCall` 存在就把工具自己拋的錯當成 middleware 的錯並
+ * 重拋，而 `createDeepAgent` 永遠掛著帶 `wrapToolCall` 的 `FilesystemMiddleware`，
+ * 所以工具一拋就是**整場 run 死掉**，除非 `@nexus/plugin-validation` 的圍堵剛好也在清單
+ * 裡（見 `packages/nexus-plugin-validation/src/containment.ts` 的檔頭）。fold 是 core，
+ * 它產出的東西不能假設某個 plugin 在場。回字串在兩種組裝下都是同一則模型看得到的回饋。
+ *
+ * @param name - 被叫到的工具名。
+ * @param scope - 叫它的那個 subagent。
+ * @returns 給模型看的那一句。
+ */
+export function rootOnlyRefusal(name: string, scope: string): string {
+  return `${name} 只在 root agent 上執行，而這裡是 subagent "${scope}"。這次呼叫沒有生效。`;
+}
+
+/**
+ * 把一顆 root-only 工具換成同名同參數、只會拒絕的樁。
+ *
+ * 名字與參數 schema 照抄：換掉的是行為，不是模型看到的介面——名字變了模型會以為工具
+ * 不見了，schema 變了它連參數都填不出來。
+ *
+ * @param original - 全域註冊的那一顆。
+ * @param scope - 這顆樁要放進哪個 subagent。
+ * @returns 只回 {@link rootOnlyRefusal} 的同名工具。
+ */
+function rootOnlyStub(original: StructuredTool, scope: string): StructuredTool {
+  return makeTool(() => rootOnlyRefusal(original.name, scope), {
+    name: original.name,
+    description: `${original.description} ${ROOT_ONLY_NOTICE}`,
+    schema: original.schema,
+  }) as unknown as StructuredTool;
+}
 
 /** 核准政策：這個 session 有沒有人可以按核准。 */
 export interface ApprovalPolicy {
@@ -470,7 +522,18 @@ function foldSubAgents(
     // profile 的描述覆寫），內建的檔案系統工具不從那裡來，而是 subagent 那份
     // middleware stack 裡的 `createFilesystemMiddleware` 帶的。蓋掉它不會讓 subagent
     // 掉工具——這一層算出來的集合本來就以全域那份為底。
-    const merged = new Map(registry.tools.effective());
+    // **root-only 的替換發生在這裡，在 scope 覆蓋之前。** 順序有意義：明著往這個
+    // subagent 註冊同名工具的人贏得過樁——那是「這個 subagent 有它自己的版本」，
+    // 跟「這個工具不給 subagent」不是同一件事。
+    const merged = new Map<string, NamedEntry<StructuredTool>>();
+    for (const [toolName, globalEntry] of registry.tools.effective()) {
+      merged.set(
+        toolName,
+        registry.tools.isRootOnly(toolName)
+          ? { ...globalEntry, value: rootOnlyStub(globalEntry.value, name) }
+          : globalEntry,
+      );
+    }
     for (const tool of spec.tools ?? [])
       merged.set(tool.name, { value: tool, origin: entry.origin });
     for (const [toolName, scoped] of registry.tools.own(name)) merged.set(toolName, scoped);

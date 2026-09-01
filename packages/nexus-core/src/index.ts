@@ -81,7 +81,7 @@ export type { LoadResult } from './load.js';
 export { loadPlugins } from './load.js';
 
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
-export { foldRegistry, TOOL_ORDER_REST } from './fold.js';
+export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 
 export type {
   SessionEvent,
