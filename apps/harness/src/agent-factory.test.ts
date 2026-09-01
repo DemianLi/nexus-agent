@@ -1,6 +1,6 @@
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import { loadPlugins, SessionLog } from '@nexus/core';
+import { loadPlugins, SessionRegistry } from '@nexus/core';
 import type { NexusPlugin } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
@@ -449,12 +449,13 @@ async function violationsUnder(
     plugins,
     ...(invariants !== undefined && { invariants }),
   });
-  const log = new SessionLog('selection');
+  const sessions = new SessionRegistry('selection');
+  const log = sessions.root;
   const seen: string[] = [];
   const original = console.error;
   console.error = (message: unknown) => void seen.push(String(message));
   try {
-    const detach = attachInvariants(log);
+    const detach = attachInvariants(sessions);
     if (detach === undefined) return undefined;
     log.append('turn/start', { kind: 'resume' });
     detach();

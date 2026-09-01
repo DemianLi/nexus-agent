@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createRegistry } from './registry.js';
 import { SessionLog } from './session-log.js';
+import { SessionRegistry } from './session-registry.js';
 import { createSessionRunner } from './sessions.js';
 import type { SessionEvent } from './session-log.js';
 import type { SessionInstaller } from './sessions.js';
@@ -22,6 +23,9 @@ function registryWith(...installers: SessionInstaller[]): ReturnType<typeof crea
   exit();
   return registry;
 }
+
+/** 這一份測試檔驗的是 runner 本身，身分固定用 root。 */
+const ROOT_ADDRESS = { kind: 'root' } as const;
 
 describe('註冊', () => {
   it('apply 之外呼叫 join 會拋——沒有 origin 就指不出是誰', () => {
@@ -65,7 +69,11 @@ describe('接線', () => {
       subject.observe((event) => seen.push(event));
       subject.log.append('turn/start', { kind: 'resume' });
     });
-    createSessionRunner({ log, installers: registry.sessions.installers() });
+    createSessionRunner({
+      address: ROOT_ADDRESS,
+      log,
+      installers: registry.sessions.installers(),
+    });
     expect(log.length).toBe(1);
     // 安裝當下寫的那一筆走的是重播那條路：observe 是先暫存、裝完才重播的。
     expect(seen.map((event) => event.type)).toEqual(['turn/start']);
@@ -84,7 +92,11 @@ describe('接線', () => {
       subject.log.append('turn/start', { kind: 'resume' });
       expect(seenDuringInstall).toBe(1);
     });
-    createSessionRunner({ log, installers: registry.sessions.installers() });
+    createSessionRunner({
+      address: ROOT_ADDRESS,
+      log,
+      installers: registry.sessions.installers(),
+    });
     expect(seenDuringInstall).toBe(1);
   });
 
@@ -99,7 +111,11 @@ describe('接線', () => {
         subject.observe((event) => seen.push(event.type));
       },
     );
-    createSessionRunner({ log, installers: registry.sessions.installers() });
+    createSessionRunner({
+      address: ROOT_ADDRESS,
+      log,
+      installers: registry.sessions.installers(),
+    });
     expect(seen).toEqual(['turn/start']);
   });
 
@@ -110,7 +126,11 @@ describe('接線', () => {
     const registry = registryWith((subject) => {
       subject.observe((event) => seen.push(event.type));
     });
-    createSessionRunner({ log, installers: registry.sessions.installers() });
+    createSessionRunner({
+      address: ROOT_ADDRESS,
+      log,
+      installers: registry.sessions.installers(),
+    });
     expect(seen).toEqual(['turn/start']);
     log.append('turn/end', {});
     expect(seen).toEqual(['turn/start', 'turn/end']);
@@ -129,7 +149,12 @@ describe('接線', () => {
         subject.observe(() => seen.push('好的'));
       },
     );
-    createSessionRunner({ log, installers: registry.sessions.installers(), warn });
+    createSessionRunner({
+      address: ROOT_ADDRESS,
+      log,
+      installers: registry.sessions.installers(),
+      warn,
+    });
     log.append('turn/end', {});
     expect(seen).toEqual(['好的']);
     expect(warn).toHaveBeenCalledTimes(1);
@@ -145,7 +170,12 @@ describe('接線', () => {
       subject.observe((event) => seen.push(event.type));
       throw new Error('重播完才發現裝不起來');
     });
-    createSessionRunner({ log, installers: registry.sessions.installers(), warn });
+    createSessionRunner({
+      address: ROOT_ADDRESS,
+      log,
+      installers: registry.sessions.installers(),
+      warn,
+    });
     // 重播那一筆它收到了——那是沒辦法收回的事實，所以斷言的是**之後**不再收。
     expect(seen).toEqual(['turn/start']);
     log.append('turn/end', {});
@@ -167,7 +197,12 @@ describe('接線', () => {
         subject.observe(() => seen.push('好的'));
       },
     );
-    createSessionRunner({ log, installers: registry.sessions.installers(), warn });
+    createSessionRunner({
+      address: ROOT_ADDRESS,
+      log,
+      installers: registry.sessions.installers(),
+      warn,
+    });
     log.append('turn/end', {});
     expect(seen).toEqual(['好的']);
     expect(warn.mock.calls[0]?.[0]).toMatch(/參與者拋了/u);
@@ -184,7 +219,11 @@ describe('接線', () => {
       },
       () => () => order.push('後'),
     );
-    const detach = createSessionRunner({ log, installers: registry.sessions.installers() });
+    const detach = createSessionRunner({
+      address: ROOT_ADDRESS,
+      log,
+      installers: registry.sessions.installers(),
+    });
     detach();
     detach();
     expect(order).toEqual(['後', '先']);
@@ -194,8 +233,80 @@ describe('接線', () => {
 
   it('一位參與者都沒有時不訂閱，detach 也是安全的', () => {
     const log = new SessionLog('s');
-    const detach = createSessionRunner({ log, installers: [] });
+    const detach = createSessionRunner({
+      address: ROOT_ADDRESS,
+      log,
+      installers: [],
+    });
     expect(() => detach()).not.toThrow();
     expect(() => log.append('turn/end', {})).not.toThrow();
+  });
+});
+
+/**
+ * **`forCall` 是模型工具那條線**——dsh 的 `exec.agent.session` 在我們這裡的對應物。
+ *
+ * 四格各驗一次，包含三格「找不到」。三格刻意不合成一個 `undefined`：三種要修的東西不
+ * 一樣，併起來之後後兩種永遠會被讀成第一種。
+ */
+describe('forCall', () => {
+  const inSubagent = { configurable: { checkpoint_ns: 'tools:parent|tools:self' } };
+  const atRoot = { configurable: { checkpoint_ns: 'tools:self' } };
+
+  it('沒綁註冊表就是 not-attached', () => {
+    expect(createRegistry().sessions.forCall(atRoot)).toEqual({ kind: 'not-attached' });
+  });
+
+  it('綁了就挑得出 root 那一份', () => {
+    const registry = createRegistry();
+    const sessions = new SessionRegistry('t');
+    registry.sessions.bind(sessions);
+    expect(registry.sessions.forCall(atRoot)).toEqual({
+      kind: 'ok',
+      address: { kind: 'root' },
+      log: sessions.root,
+    });
+  });
+
+  it('subagent 的那一份是**開出來的**——第一次問的時候才出生', () => {
+    const registry = createRegistry();
+    const sessions = new SessionRegistry('t');
+    registry.sessions.bind(sessions);
+    expect(sessions.list()).toHaveLength(1);
+    const found = registry.sessions.forCall(inSubagent);
+    expect(found.kind).toBe('ok');
+    expect(sessions.list()).toHaveLength(2);
+    expect(found.kind === 'ok' && found.log).toBe(
+      sessions.get({ kind: 'subagent', runId: 'tools:parent' }),
+    );
+  });
+
+  it('認不出呼叫者時是 unknown-caller，**不猜成 root**', () => {
+    const registry = createRegistry();
+    registry.sessions.bind(new SessionRegistry('t'));
+    expect(registry.sessions.forCall({})).toEqual({ kind: 'unknown-caller' });
+  });
+
+  /**
+   * 一次組裝配多條 thread（`serve.ts` 那種共用組裝的用法）會走到這裡。
+   * **綁的時候不拋**——照 `@nexus/plugin-goal` 對同一件事的做法，多了少了都由呼叫當場
+   * 說出來，因為接線的時候真正的問題（挑不出來）還沒發生。
+   */
+  it('綁了兩張就是 ambiguous，而且綁的當下不拋', () => {
+    const registry = createRegistry();
+    const undoFirst = registry.sessions.bind(new SessionRegistry('t1'));
+    registry.sessions.bind(new SessionRegistry('t2'));
+    expect(registry.sessions.forCall(atRoot)).toEqual({ kind: 'ambiguous', count: 2 });
+    // 解掉一張就又挑得出來了。
+    undoFirst();
+    expect(registry.sessions.forCall(atRoot).kind).toBe('ok');
+  });
+
+  it('解綁之後回到 not-attached，而且解綁是冪等的', () => {
+    const registry = createRegistry();
+    const undo = registry.sessions.bind(new SessionRegistry('t'));
+    undo();
+    undo();
+    expect(registry.sessions.forCall(atRoot)).toEqual({ kind: 'not-attached' });
   });
 });

@@ -26,26 +26,33 @@
  *
  * dsh 那側對應的是 `ctx.sessions` 服務加 `sessionProjections` 投影註冊表：一次註冊看得到
  * **所有** session（`ctx.sessions.list()` ＋ `session/created`），投影帶 `stateVersion`
- * 與 `wire.view`，由註冊表負責重放與 checkpoint。我們兩樣都沒有——日誌是
- * `ThreadPump` 與 CLI 各自 `new SessionLog(...)` 出來的。退到：installer **每一份日誌
- * 各跑一次**，投影自己持在 closure 裡。同 {@link ./invariants.ts | InvariantSubject}
+ * 與 `wire.view`，由註冊表負責重放與 checkpoint。
+ *
+ * **前半補上了**（#137）：{@link ./session-registry.ts | SessionRegistry} 就是那個服務，
+ * 一次組裝一張，`observe()` 就是那兩行。installer 仍然**每一份會話各跑一次**，而那不是
+ * 退讓——dsh 的配套入口也是每一份 session 各 seed 一次
+ * （`packages/core/session/src/invariant.ts:218-220`）。
+ *
+ * **後半還沒有**：投影仍然自己持在 closure 裡，沒有 `stateVersion`、沒有 `wire.view`、
+ * 沒有註冊表負責的重放與 checkpoint。同 {@link ./invariants.ts | InvariantSubject}
  * 標過的那一條，代價也一樣。
  *
- * ## 模型工具也走得到這裡
+ * ## 模型工具走的是隔壁那條，不是這一條
  *
- * **plugin 註冊的工具跟這個通道的參與者活在同一個 `apply` 裡**，所以工具寫得進這份
- * 日誌：`join()` 的閉包扣住 `subject.log`，工具的 handler 直接用它。`load.ts` 一次組裝
- * 呼叫一次 `apply`，而一份 registry 只接一份日誌，所以那一格就是答案（同
- * `@nexus/plugin-goal` 的 `/goal` 用的那一格）。驗收在
- * `apps/harness/src/tool-session-log.test.ts`。
+ * **工具不要扣 `join()` 的閉包。** 那個寫法在只有一份日誌的時候剛好對，現在會錯：參與者
+ * 是**每一份會話各裝一次**的（[#137](https://github.com/DemianLi/nexus-agent/issues/137)
+ * 之後 subagent 有自己的一份），所以一個 `let log` 的閉包會被後開的那一份蓋掉，工具於是
+ * 把 root 的東西寫到 subagent 的日誌裡——而那是靜默的。
  *
- * **這是 dsh 那條路的一半。** dsh 的模型工具走 `exec.agent.session.append(...)`，而
- * 那個 `agent` 是 agent loop 派發工具時塞進去的
- * （`packages/core/agent-loop/src/tool-calls.ts:78`）—— **那個派發點是 dsh 自己的**，
- * 我們的工具是 LangGraph 的 ToolNode 在跑，插不進去。拿得到的另一半（**這次呼叫是
- * root 還是哪一個 subagent**）今天沒有答案，而且缺的不只是判斷依據：**subagent 跑在
- * 同一次組裝裡，所以就算分得出來也沒有第二份日誌可以寫**。
- * [#134](https://github.com/DemianLi/nexus-agent/issues/134) 追這一件。
+ * 工具要問的是 {@link ./registry.ts | registry.sessions.forCall(config)}：它拿這次呼叫的
+ * `ToolRunnableConfig` 認出身分（{@link ./session-address.ts | toolCallSessionAddress}），
+ * 再從會話註冊表取那一份。驗收在 `apps/harness/src/tool-session-log.test.ts`。
+ *
+ * **兩條路對到 dsh 的同一件事，只是我們拆成兩半。** dsh 的模型工具走
+ * `exec.agent.session.append(...)`，那個 `agent` 是 agent loop 派發工具時塞進去的
+ * （`packages/core/agent-loop/src/tool-calls.ts:78`）——**那個派發點是 dsh 自己的**，
+ * 我們的工具是 LangGraph 的 ToolNode 在跑，插不進去，所以身分改從執行期的 config 推。
+ * 這個通道剩下的職責是**參與者**：一份會話上有誰在摺狀態。
  *
  * @see [#126](https://github.com/DemianLi/nexus-agent/issues/126)
  * @module
@@ -53,6 +60,7 @@
 
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
+import type { SessionAddress } from './session-address.js';
 import type { SessionEvent, SessionLog } from './session-log.js';
 
 /**
@@ -63,6 +71,16 @@ import type { SessionEvent, SessionLog } from './session-log.js';
  * {@link ./session-log.ts | SessionLogView}，只看得到；能力歸能力，兩條路一人一半。
  */
 export interface SessionSubject {
+  /**
+   * 這一份日誌屬於誰——root，還是某一次 subagent 的執行。
+   *
+   * **參與者要自己決定它管不管這一份。** 註冊表現在每開一份會話就把每一位參與者裝一次
+   * （見 {@link ./session-registry.ts | SessionRegistry}），所以一位只想管 root 的參與者
+   * ——`@nexus/plugin-goal` 就是，dsh 對 `tool-goal` 那一類的政策是拒絕 subagent——
+   * 要在這裡看一眼然後直接回。**沒看的下場不是報錯，是它在每一次 spawn 上多長出一份
+   * 自己**，而那是靜默的。
+   */
+  readonly address: SessionAddress;
   /** 這一次要參與的日誌。**寫得動**。 */
   readonly log: SessionLog;
   /**
@@ -92,6 +110,8 @@ export type SessionInstaller = (subject: SessionSubject) => (() => void) | void;
 
 /** 接線要的東西。 */
 export interface SessionRunnerOptions {
+  /** 這一份日誌屬於誰。原樣交給每一位參與者，見 {@link SessionSubject.address}。 */
+  readonly address: SessionAddress;
   /** 要參與的日誌。 */
   readonly log: SessionLog;
   /** 目前註冊著的參與者，**安裝當下讀一次**。 */
@@ -161,6 +181,7 @@ export function createSessionRunner(options: SessionRunnerOptions): () => void {
   for (const installer of options.installers) {
     const own: Observer[] = [];
     const subject: SessionSubject = {
+      address: options.address,
       log: options.log,
       observe(listener) {
         const observer: Observer = { origin: installer.origin, listener };

@@ -39,7 +39,7 @@ import {
   isWireChannel,
   successResponse,
 } from '@nexus/wire';
-import type { CommandDescriptor, CommandRegistrationPoint, SessionLog } from '@nexus/core';
+import type { CommandDescriptor, CommandRegistrationPoint, SessionRegistry } from '@nexus/core';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import type { PumpAgent } from './thread-pump.js';
@@ -77,24 +77,24 @@ export interface ThreadAgent {
   readonly commands: Pick<CommandRegistrationPoint, 'find' | 'list'>;
   dispose(): Promise<void>;
   /**
-   * 把這個 thread 的會話日誌接上遙測，選配。
+   * 把這個 thread 的**每一份**會話日誌接上遙測，選配。
    *
-   * **接線點必須在這裡**，因為日誌是 pump 建的（一個 thread 一份），而知道有沒有掛
+   * **接線點必須在這裡**，因為註冊表是 pump 建的（一個 thread 一張），而知道有沒有掛
    * 後端的是組裝點。兩邊只在這一行碰得到面。沒掛後端時 `createNexusAgent` 回
    * `undefined`，這裡什麼都不會發生。
    *
-   * @param log - 這個 thread 的日誌。
+   * @param sessions - 這個 thread 的會話註冊表。
    * @returns 收掉這次接線的函式，或沒掛後端時的 `undefined`。
    */
-  attachTelemetry?(log: SessionLog): (() => Promise<void>) | undefined;
+  attachTelemetry?(sessions: SessionRegistry): (() => Promise<void>) | undefined;
   /**
    * 把這個 thread 的日誌接上不變量配套入口。同 `attachTelemetry` 的理由住在組裝點：
    * 只有那裡同時看得到 registry 與日誌。沒有人註冊配套入口時回 `undefined`。
    *
-   * @param log - 這個 thread 的日誌。
+   * @param sessions - 這個 thread 的會話註冊表。
    * @returns 收掉這次接線的函式，或沒有配套入口時的 `undefined`。
    */
-  attachInvariants?(log: SessionLog): (() => void) | undefined;
+  attachInvariants?(sessions: SessionRegistry): (() => void) | undefined;
   /**
    * 把這個 thread 的日誌接上 `sessions` 通道的參與者，選配。
    *
@@ -104,10 +104,14 @@ export interface ThreadAgent {
    * **這條路不能漏。** 漏了的話 `@nexus/core` 的測試照樣全綠，而 web 那端每一個 thread
    * 的域狀態都不存在——那是一種只在瀏覽器上看得到的缺席。
    *
-   * @param log - 這個 thread 的日誌。
-   * @returns 收掉這次接線的函式，或沒有參與者時的 `undefined`。
+   * **它同時是模型工具那條線。** 綁上註冊表之後，plugin 註冊的工具才問得出「我這次呼叫
+   * 該寫進哪一份日誌」（`registry.sessions.forCall`）。所以它現在**一定**回一個 detach，
+   * 沒有「沒人 join 就 `undefined`」那條短路了。
+   *
+   * @param sessions - 這個 thread 的會話註冊表。
+   * @returns 收掉這次接線的函式。
    */
-  attachSession?(log: SessionLog): (() => void) | undefined;
+  attachSession?(sessions: SessionRegistry): () => void;
 }
 
 export interface WireHandlerOptions {
@@ -201,11 +205,12 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     const created = (async (): Promise<ThreadState> => {
       const threadAgent = await options.createAgent(threadId);
       const pump = new ThreadPump(threadAgent.agent, threadId);
-      const detachTelemetry = threadAgent.attachTelemetry?.(pump.sessionLog);
-      const detachInvariants = threadAgent.attachInvariants?.(pump.sessionLog);
+      const detachTelemetry = threadAgent.attachTelemetry?.(pump.sessions);
+      const detachInvariants = threadAgent.attachInvariants?.(pump.sessions);
       // **接在不變量之後**，同 `cli.ts` 那條的理由：參與者一裝上去就可能記東西，
-      // 那些東西該被已經在看的檢查看到。
-      const detachSession = threadAgent.attachSession?.(pump.sessionLog);
+      // 那些東西該被已經在看的檢查看到。註冊表通知訂閱者的順序就是這三行的順序，
+      // 所以 subagent 後來出生的那些日誌也照這個順序被接上。
+      const detachSession = threadAgent.attachSession?.(pump.sessions);
       return {
         pump,
         commands: threadAgent.commands,

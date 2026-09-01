@@ -13,7 +13,7 @@ import { PassThrough } from 'node:stream';
 
 import { createEchoPlugin } from '@nexus/plugin-echo';
 import { createGoalPlugin, GOAL_CLEARED_MESSAGE, GOAL_COMMAND_NAME } from '@nexus/plugin-goal';
-import { SessionLog } from '@nexus/core';
+import { SessionRegistry } from '@nexus/core';
 import { createWireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -49,13 +49,28 @@ function recorder(): {
 }
 
 describe('組裝點', () => {
-  it('沒有人 join 就回 undefined——沒有參與者不在熱路徑上多掛訂閱', async () => {
+  /**
+   * **這一條是翻過面的。**
+   *
+   * 舊的斷言是「沒有人 join 就回 `undefined`」，理由是「沒有參與者就不要在熱路徑上多掛
+   * 訂閱」。[#137](https://github.com/DemianLi/nexus-agent/issues/137) 之後那個理由不成立
+   * 了：`attachSession` 現在同時把會話註冊表綁給**模型工具**（`registry.sessions.forCall`），
+   * 而一個只註冊工具、沒有 `join` 任何參與者的 plugin 在舊的短路底下會永遠拿到「這次組裝
+   * 沒接上會話」——一個看起來像設定問題的假象。
+   *
+   * 所以短路拿掉，這一條反過來釘住新的約定。**刪掉它才是錯的**：那樣的話哪天有人為了
+   * 「省一個訂閱」把短路加回來，沒有東西會紅。
+   */
+  it('沒有人 join 也照樣接得起來——它同時是模型工具那條線', async () => {
     const { attachSession, dispose } = await createNexusAgent({
       model: MODEL(),
       plugins: [createEchoPlugin()],
     });
+    const sessions = new SessionRegistry('none');
     try {
-      expect(attachSession(new SessionLog('none'))).toBeUndefined();
+      const detach = attachSession(sessions);
+      expect(detach).toBeTypeOf('function');
+      detach();
     } finally {
       await dispose();
     }
@@ -68,13 +83,14 @@ describe('組裝點', () => {
       plugins: [createEchoPlugin(), plugin],
     });
     try {
-      const log = new SessionLog('one');
-      const detach = attachSession(log);
+      const sessions = new SessionRegistry('one');
+      const log = sessions.root;
+      const detach = attachSession(sessions);
       expect(detach).toBeDefined();
       expect(plugin.attached()).toHaveLength(1);
       plugin.serviceFor(log)?.create({ objective: '接上了' });
       expect(log.events.map((event) => event.type)).toEqual(['goal/change']);
-      detach?.();
+      detach();
       expect(plugin.attached()).toEqual([]);
     } finally {
       await dispose();

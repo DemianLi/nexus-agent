@@ -28,6 +28,10 @@ import type { PluginOrigin } from './plugin.js';
 import { duplicateCompanionError } from './invariants.js';
 import type { InvariantCompanion, InvariantInstaller } from './invariants.js';
 import type { SessionInstaller } from './sessions.js';
+import { toolCallSessionAddress } from './session-address.js';
+import type { SessionAddress } from './session-address.js';
+import type { SessionRegistry } from './session-registry.js';
+import type { SessionLog } from './session-log.js';
 import type { SessionTelemetryRedactRule, SessionTelemetryService } from './session-telemetry.js';
 
 /**
@@ -405,8 +409,11 @@ export interface TelemetryRegistrationPoint {
  *    {@link ./session-log.ts | SessionLogView}，要寫的走
  *    {@link ./sessions.ts | registry.sessions}。
  * 3. **一次註冊看所有 session** —— dsh 有 `ctx.sessions.list()` ＋ `session/created`。
- *    我們沒有 session 服務，日誌是各進入點自己 `new` 的。退到：installer **每一份日誌
- *    各跑一次**。
+ *    **這一條補上了**（[#137](https://github.com/DemianLi/nexus-agent/issues/137)）：
+ *    {@link ./session-registry.ts | SessionRegistry} 就是那個服務，`observe()` 就是那兩行。
+ *    installer 仍然**每一份會話各跑一次**——那不是退讓，dsh 的配套入口也是每一份 session
+ *    各 seed 一次（`packages/core/session/src/invariant.ts:218-220`）。差別只在誰負責掃：
+ *    以前是組裝點手接，現在是註冊表。
  * 4. **違規的去處** —— dsh 的 `fail()` 從報告它的 context 拋出去；我們這側日誌會把
  *    listener 的拋錯吞成 warn（#99 刻意的）。退到：runner 擁有訂閱、接住
  *    `InvariantError` 轉給 `onViolation`。**看得見，但否決不了**（[#101](https://github.com/DemianLi/nexus-agent/issues/101) 的決定 b）。
@@ -484,7 +491,7 @@ export interface CommandRegistrationPoint {
  */
 export interface SessionRegistrationPoint {
   /**
-   * 掛一位參與者。**只註冊，不安裝**——安裝是接線那一層的事，而且一份日誌一次。
+   * 掛一位參與者。**只註冊，不安裝**——安裝是接線那一層的事，而且一份會話一次。
    *
    * @param installer - 拿到日誌與觀察面，回一個收拾函式或什麼都不回。
    * @returns 只撤銷這一次掛載的冪等 undo。
@@ -495,7 +502,58 @@ export interface SessionRegistrationPoint {
    * @returns 依註冊順序的每一位。
    */
   installers(): NamedEntry<SessionInstaller>[];
+  /**
+   * **模型工具問「我這次呼叫該寫進哪一份日誌」的地方。**
+   *
+   * 這是 dsh 的 `exec.agent.session` 在我們這裡的對應物。它那側由 agent loop 派發工具時
+   * 塞進來（`packages/core/agent-loop/src/tool-calls.ts:78`），我們的派發點是 LangGraph 的
+   * ToolNode，插不進去，所以身分從 config 推出來——見
+   * {@link ./session-address.ts | toolCallSessionAddress}。
+   *
+   * **找不到的時候分三種，而且刻意不合成一種。** 三種都要工具說得出口，但說的不是同一
+   * 句話：「這次組裝沒接上會話」是組裝點漏了一步，「認不出這次呼叫」是這顆工具不在圖裡
+   * 跑，「不只一張註冊表」是同一次組裝被兩條 thread 共用。併成一個 `undefined` 的話，
+   * 後兩種都會被讀成第一種，然後沒有人去看真正的原因。
+   *
+   * @param config - 工具 handler 的第二個參數。
+   * @returns 判別得出來的四種結果之一。
+   */
+  forCall(config: unknown): SessionLookup;
+  /**
+   * 把一張會話註冊表綁上來。**組裝點的一步，不是 plugin 的**。
+   *
+   * **綁第二張不拋。** 「剛好一份」是一個假設而不是一條保證——`attachSession` 是組裝點
+   * 自己呼叫的一步，沒有東西攔得住它被呼叫兩次，而 `serve.ts` 那種一次組裝配多條 thread
+   * 的用法會真的走到。照 `@nexus/plugin-goal` 對同一件事的做法（`goalAmbiguousMessage`）：
+   * **多了或少了都由呼叫當場說出來**，不在接線的時候拋。這裡拋的話，倒下的是一個
+   * HTTP 請求，而真正的問題（`forCall` 挑不出來）根本還沒發生。
+   *
+   * @param sessions - 要綁的註冊表。
+   * @returns 只解綁這一次的冪等函式。
+   */
+  bind(sessions: SessionRegistry): () => void;
 }
+
+/**
+ * {@link SessionRegistrationPoint.forCall} 的三種結果。
+ *
+ * **判別式有目的地**：三格各自對到工具要回給模型的一句話，不是「認出來就好」。
+ */
+export type SessionLookup =
+  /** 找到了。 */
+  | { readonly kind: 'ok'; readonly address: SessionAddress; readonly log: SessionLog }
+  /** 這次組裝沒有接上會話註冊表——組裝點漏了 `attachSession`。 */
+  | { readonly kind: 'not-attached' }
+  /** 認不出這次呼叫屬於誰（沒有 `checkpoint_ns`）。**不猜成 root**，理由見 session-address。 */
+  | { readonly kind: 'unknown-caller' }
+  /**
+   * 這次組裝綁著不只一張註冊表，挑不出來。
+   *
+   * 一次組裝配多條 thread 時會走到（每條 thread 一張）。`checkpoint_ns` 分得出 root 與
+   * 每一次 spawn，**但分不出 thread**——`thread_id` 才分得出，而那要另一條路。挑一張猜
+   * 的話，一條 thread 的工具會寫進另一條 thread 的日誌，那是這條路上最貴的那種靜默錯。
+   */
+  | { readonly kind: 'ambiguous'; readonly count: number };
 
 export interface PluginRegistry {
   readonly tools: ToolRegistrationPoint;
@@ -798,12 +856,33 @@ export function createRegistry(): InternalPluginRegistry {
     find: (name) => commandEntries.get(name)?.value.definition,
   };
 
+  // 插入序，而且**允許多於一張**——理由見 `SessionRegistrationPoint.bind`。
+  const boundSessions = new Set<SessionRegistry>();
   const sessionPoint: SessionRegistrationPoint = {
     join(installer) {
       const origin = requireOrigin('sessions.join()');
       return sessionInstallers.append(installer, origin);
     },
     installers: () => [...sessionInstallers.entries()],
+    forCall(config) {
+      if (boundSessions.size === 0) return { kind: 'not-attached' };
+      if (boundSessions.size > 1) return { kind: 'ambiguous', count: boundSessions.size };
+      const address = toolCallSessionAddress(config);
+      if (address === undefined) return { kind: 'unknown-caller' };
+      const [sessions] = boundSessions;
+      // `open` 而不是 `get`：subagent 的日誌在第一次有人要寫的時候才出生，理由見
+      // `SessionRegistry` 的偏離第 1 條。訂閱者在這一行之內就裝好了。
+      return { kind: 'ok', address, log: sessions!.open(address) };
+    },
+    bind(sessions) {
+      boundSessions.add(sessions);
+      let active = true;
+      return () => {
+        if (!active) return;
+        active = false;
+        boundSessions.delete(sessions);
+      };
+    },
   };
 
   const lifecyclePoint: LifecycleRegistrationPoint = {

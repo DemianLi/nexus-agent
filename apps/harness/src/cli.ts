@@ -31,7 +31,7 @@ import type {
 } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
-import { SessionLog } from '@nexus/core';
+import { SessionRegistry, type SessionLog } from '@nexus/core';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant';
 import { createEchoInvariantPlugin } from '@nexus/plugin-echo/invariant';
@@ -355,11 +355,13 @@ export async function createCliAgent(
   agent: NexusAgent;
   dispose: () => Promise<void>;
   model: BaseChatModel;
+  /** 這條 REPL 的會話註冊表。root 那一份就是 {@link sessionLog}。 */
+  sessions: SessionRegistry;
   sessionLog: SessionLog;
   commands: CommandRegistrationPoint;
-  attachTelemetry: (log: SessionLog) => (() => Promise<void>) | undefined;
-  attachInvariants: (log: SessionLog) => (() => void) | undefined;
-  attachSession: (log: SessionLog) => (() => void) | undefined;
+  attachTelemetry: (sessions: SessionRegistry) => (() => Promise<void>) | undefined;
+  attachInvariants: (sessions: SessionRegistry) => (() => void) | undefined;
+  attachSession: (sessions: SessionRegistry) => () => void;
   telemetrySharing: SessionTelemetrySharingStatus | undefined;
 }> {
   const model = createCliModel(invocation.live);
@@ -382,8 +384,10 @@ export async function createCliAgent(
     ...(onInvariantViolation !== undefined && { onInvariantViolation }),
     ...(approvals !== undefined && { approvals }),
   });
-  // 日誌跟 agent 同壽命：REPL 是一條連續對話，`seq` 要跨輪連續才有意義。
-  const sessionLog = new SessionLog(THREAD_ID);
+  // 註冊表跟 agent 同壽命：REPL 是一條連續對話，`seq` 要跨輪連續才有意義。**subagent 的
+  // 那些日誌也掛在它上面**，第一次有人要寫的時候才出生（見 `SessionRegistry` 的偏離）。
+  const sessions = new SessionRegistry(THREAD_ID);
+  const sessionLog = sessions.root;
   // **這裡不接線。** 這個工廠兩條路都在用，而 serve 那條不用這份 `sessionLog`——它一個
   // thread 一份，接線點在 {@link ./wire-handler.ts} 建 pump 的那一刻。在這裡接等於幫
   // serve 接上一份永遠不會有事件的日誌，只送得出一筆 `shutdown`。接線交給呼叫端。
@@ -391,6 +395,7 @@ export async function createCliAgent(
     agent,
     dispose,
     model,
+    sessions,
     sessionLog,
     commands,
     attachTelemetry,
@@ -734,6 +739,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     agent,
     commands,
     dispose,
+    sessions,
     sessionLog,
     attachTelemetry,
     attachInvariants,
@@ -755,12 +761,14 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   );
   // REPL 是一條連續對話，一份日誌就是整個 session，所以接線點在這裡而不是每輪。
   // 回傳的 detach 不留：`dispose()` 會把還接著的協調器一起收掉。
-  attachTelemetry(sessionLog);
+  attachTelemetry(sessions);
   // 不變量的 runner 只是一個訂閱，沒有要排空的東西，所以 detach 也不留——行程走了它就沒了。
-  attachInvariants(sessionLog);
+  attachInvariants(sessions);
   // **接在不變量之後**：參與者拿得到的是可寫的日誌，所以它一裝上去就可能記東西，
   // 而那些東西該被已經在看的檢查看到。順序反過來的話，安裝期寫的第一批事件會漏檢。
-  attachSession(sessionLog);
+  // 同一條順序對 subagent 那些後來才出生的日誌也成立——註冊表通知訂閱者的順序就是
+  // 這三行接上去的順序。
+  attachSession(sessions);
 
   // 一輪跑壞了也要收——資源的所有權跟這一次呼叫綁在一起，不跟它成不成功綁在一起。
   //
