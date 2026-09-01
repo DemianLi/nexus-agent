@@ -1,4 +1,8 @@
-import { GOAL_COMMAND_NAME, GOAL_NONE_MESSAGE } from '@nexus/plugin-goal';
+import {
+  GOAL_COMMAND_NAME,
+  GOAL_NONE_MESSAGE,
+  GOAL_NOT_ATTACHED_MESSAGE,
+} from '@nexus/plugin-goal';
 import { PLAN_COMMAND_NAME, PLAN_ENTERED_MESSAGE } from '@nexus/plugin-plan-mode';
 import { createWireClient } from '@nexus/wire';
 import {
@@ -148,6 +152,23 @@ describe('serve 的命令面', () => {
     const again = await client.slashRun('alpha', `/${GOAL_COMMAND_NAME}`);
     if (again.kind !== 'success') throw new Error(JSON.stringify(again));
     expect(again.text).toContain('目標：把測試修綠');
+  });
+
+  it('**沒先訂事件流就打 `/goal` 也接得上**——接線在共用的那條懶載入路徑上', async () => {
+    // `/goal` 是第一個正確性**依賴 `attachSession` 跑過**的命令：`/plan` 的狀態活在
+    // `apply` 閉包裡，沒有接線這一步。而這整套測試（含 `slash-wire.test.ts`）一直都是
+    // 先 `openEvents` 再發派，所以「先發派」這個順序從來沒有人走過。
+    //
+    // 接線要是掛在事件流那個 endpoint 上，這裡收到的會是 `GOAL_NOT_ATTACHED_MESSAGE`
+    // ——一句為了排除這種情況而寫的錯誤，出現在一條合法的路徑上。
+    running = await runServe({ argv: ['--port', '0'], log: () => undefined, env: {} });
+    const started = running as RunningServe;
+    const client = createWireClient({ baseUrl: started.url });
+
+    const created = await client.slashRun('gamma', `/${GOAL_COMMAND_NAME} 把測試修綠`);
+    if (created.kind !== 'success') throw new Error(JSON.stringify(created));
+    expect(created.text).toContain('目標建好了');
+    expect(created.text).not.toContain(GOAL_NOT_ATTACHED_MESSAGE);
   });
 });
 
