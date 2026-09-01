@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import type { CreateDeepAgentParams, SubAgent } from 'deepagents';
 import { CompositeBackend } from 'deepagents';
 import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
-import { foldRegistry, TOOL_ORDER_REST } from './fold.js';
+import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 import type { FoldOptions } from './fold.js';
 import { loadPlugins } from './load.js';
 import { fakeBackend, fakeMiddleware, fakePlugin, fakeSubAgent, fakeTool } from './fixtures.js';
@@ -331,6 +331,70 @@ describe('每個 subagent 的有效工具集合', () => {
       ),
     ];
     await expect(fold(plugins)).rejects.toThrow(/"reasearcher"[\s\S]*typo#0 \(typo\)/);
+  });
+});
+
+describe('root-only 的工具', () => {
+  it('subagent 拿到的是同名的拒絕樁，root 拿到的還是原件', async () => {
+    const goal = fakeTool('goal');
+    const params = await fold([
+      fakePlugin('goal', (r) => void r.tools.register(goal, { rootOnly: true })),
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('researcher'))),
+    ]);
+    const stub = params.subagents[0]?.tools?.[0];
+
+    // 名字不變——變了模型會以為工具不見了，那是另一種失敗。
+    expect(stub?.name).toBe('goal');
+    expect(stub).not.toBe(goal);
+    // 描述帶著那句話：模型看得到的只有描述，不寫在那裡它每一輪都會再叫一次。
+    expect(stub?.description).toContain(ROOT_ONLY_NOTICE);
+    expect(await stub?.invoke({})).toBe(rootOnlyRefusal('goal', 'researcher'));
+    // root 那一份沒有被動到。
+    expect(params.tools).toEqual([goal]);
+  });
+
+  it('明著往那個 subagent 註冊的同名工具贏過樁', async () => {
+    const globalGoal = fakeTool('goal');
+    const scopedGoal = fakeTool('goal');
+    const params = await fold([
+      fakePlugin('goal', (r) => void r.tools.register(globalGoal, { rootOnly: true })),
+      fakePlugin('team', (r) => {
+        r.subagents.register(fakeSubAgent('researcher'));
+        r.tools.register(scopedGoal, { scope: 'researcher' });
+      }),
+    ]);
+    // 「這個 subagent 有它自己的版本」跟「這個工具不給 subagent」不是同一件事。
+    expect(params.subagents[0]?.tools).toEqual([scopedGoal]);
+  });
+
+  /**
+   * **這一條是這組裡唯一會紅的那條。**
+   *
+   * `load.ts` 照清單順序跑 `apply`，而且沒有 post-apply 的鉤子——宣告 rootOnly 的
+   * plugin 排在註冊 subagent 的 plugin 前面時，它 apply 當下**根本看不到**那個
+   * subagent。替換之所以還成立，是因為它做在 fold 而不是做在 `apply`。哪天有人把
+   * 它挪回註冊期，只有這一條會紅。
+   */
+  it('宣告 rootOnly 的 plugin 排在註冊 subagent 的 plugin 之前也照樣替換', async () => {
+    const goal = fakeTool('goal');
+    const params = await fold([
+      fakePlugin('goal', (r) => void r.tools.register(goal, { rootOnly: true })),
+      fakePlugin('team-a', (r) => void r.subagents.register(fakeSubAgent('researcher'))),
+      fakePlugin('team-b', (r) => void r.subagents.register(fakeSubAgent('writer'))),
+    ]);
+    for (const subagent of params.subagents) {
+      expect(subagent.tools?.[0]).not.toBe(goal);
+      expect(await subagent.tools?.[0]?.invoke({})).toBe(rootOnlyRefusal('goal', subagent.name));
+    }
+  });
+
+  it('沒宣告 rootOnly 的工具照舊原件進每一個 subagent', async () => {
+    const search = fakeTool('search');
+    const params = await fold([
+      fakePlugin('search', (r) => void r.tools.register(search)),
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('researcher'))),
+    ]);
+    expect(params.subagents[0]?.tools).toEqual([search]);
   });
 });
 

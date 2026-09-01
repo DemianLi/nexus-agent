@@ -41,6 +41,14 @@ export type ScopeKey = string;
 export interface RegisterOptions {
   /** 註冊到哪一層。省略即全域。 */
   scope?: ScopeKey;
+  /**
+   * 這個工具**只在 root agent 上執行**。fold 會把每個 subagent 那一份裡的同名項換成
+   * 一顆說得出原因的拒絕樁，見 {@link ./fold.ts}。
+   *
+   * **只能配全域註冊。** 帶著 `scope` 一起給是矛盾的——那是在往 subagent 身上掛一個
+   * 「不給 subagent」的工具——所以當場拋，不靜默忽略。
+   */
+  rootOnly?: boolean;
 }
 
 /** 一層的具名表們。 */
@@ -78,6 +86,15 @@ export interface ToolRegistrationPoint {
    * @returns 該層自己的插入順序表，沒有那一層時是空表。
    */
   own(scope: ScopeKey): Map<string, NamedEntry<StructuredTool>>;
+  /**
+   * 全域那一份裡，這個名字是不是宣告成 root agent 專用的。
+   *
+   * **比對的是工具實例而不是名字**，同 {@link ./entries.ts | NamedEntries} 的 undo：
+   * 撤銷過的註冊不能把旗標留給後來占用同名的別人。
+   * @param name - 工具名。
+   * @returns 全域解析得到、而且那一筆就是宣告 `rootOnly` 的那一個實例時為真。
+   */
+  isRootOnly(name: string): boolean;
   /**
    * 目前有東西註冊進去的 subagent 層。層是按名字延遲建立的，而且**不驗那個名字
    * 真有對應的 subagent**——`requires` 不排序，清單裡靠前的 plugin 本來就可以往
@@ -599,14 +616,28 @@ export function createRegistry(): InternalPluginRegistry {
     return created;
   }
 
+  // 身分為鍵而不是名字：`NamedEntries` 的 undo 就是靠身分比對才不會誤刪後來占用同名
+  // 的別人，這一格若以名字為鍵就會漏掉那個保護——撤銷過的 root-only 註冊會把旗標留在
+  // 名字上，蓋到下一個同名工具身上。
+  const rootOnlyTools = new Set<StructuredTool>();
+
   const tools: ToolRegistrationPoint = {
     register(tool, options) {
       const origin = requireOrigin('tools.register()');
       const scope = options?.scope;
+      if (options?.rootOnly === true && scope !== undefined) {
+        throw new Error(
+          `${formatOrigin(origin)} 把 "${tool.name}" 註冊到 subagent "${scope}" 的同時要求 rootOnly。` +
+            `這兩個是矛盾的：rootOnly 的意思就是 subagent 不給用，往 subagent 層掛它沒有意義。` +
+            `要嘛拿掉 scope，要嘛拿掉 rootOnly。`,
+        );
+      }
       const layer = layerFor(scope);
       const undo = layer.tools.insert(tool.name, tool, origin);
+      if (options?.rootOnly === true) rootOnlyTools.add(tool);
       return () => {
         undo();
+        rootOnlyTools.delete(tool);
         // 空層不留下來：層是註冊行為的產物，`scopes()` 是 fold 的輸入，回滾過的
         // plugin 不該讓 fold 看到一個它其實沒碰過的 subagent 名。
         if (scope !== undefined && layer.tools.size === 0 && scopedLayers.get(scope) === layer) {
@@ -637,6 +668,10 @@ export function createRegistry(): InternalPluginRegistry {
     },
     scopes() {
       return [...scopedLayers.keys()];
+    },
+    isRootOnly(name) {
+      const entry = globalLayer.tools.get(name);
+      return entry !== undefined && rootOnlyTools.has(entry.value);
     },
   };
 

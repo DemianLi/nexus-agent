@@ -9,13 +9,19 @@
  * | --- | --- |
  * | `goal`（域） | 這個套件 |
  * | `command-goal`（`/goal`） | 這個套件的 `command.ts`，走 `registry.commands` |
- * | `tool-goal`（模型工具） | **被擋住的**，不是取捨——見下面 |
+ * | `tool-goal`（模型工具） | **還沒做**——擋住它的兩件事已經只剩一件，見下面 |
  * | `goal-round-driver`（自動續行） | 可選消費方，dsh 的 README 自己這樣說 |
  *
- * **`tool-goal` 走不了的原因是水管。** 它的權限規則要求「執行時根 agent 的當前輪次中有
- * 一則已接受的 `{ kind: 'user' }` 訊息」，而且要分得出 root 與 subagent 的血緣。我們全樹
- * **零處**讀 `RunnableConfig` / `configurable`——工具執行期不知道是誰在叫它。要做得先補
- * 那條管線，那是另一張卡。
+ * **`tool-goal` 缺的兩件裡，血緣那一件補好了。** 它的權限規則要求「執行時根 agent 的
+ * 當前輪次中有一則已接受的 `{ kind: 'user' }` 訊息」，而且要分得出 root 與 subagent 的
+ * 血緣。後面那件現在有路：工具用 `rootOnly` 註冊，fold 會把每個 subagent 那一份裡的
+ * 同名項換成拒絕樁（`@nexus/core` 的 `fold.ts`）——而**「拒絕 subagent」正是 dsh 對
+ * `tool-goal` 的政策本身**，不是我們的收窄（`packages/goal/tool-goal/src/authority.ts`
+ * 的 `ctx.agents.roots().includes(execution.agent)`，描述寫著 “rejects non-human and
+ * subagent authority”）。
+ *
+ * 剩下的是前面那件：「當前輪次有一則已接受的使用者訊息」。那在會話日誌裡讀得到
+ * （`turn/start` 的 `kind: 'message'`），是這個套件自己的工作，不是水管的。
  *
  * **`goal-round-driver` 是 dsh 自己標成可選的**：「goal 是狀態而非調度器——自動續行是
  * 需要你刻意掛載的可選消費方」（`packages/goal/README.zh.md`）。它另外還需要 goal 來源的
