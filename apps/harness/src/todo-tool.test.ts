@@ -18,7 +18,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import { describe, expect, it } from 'vitest';
 import { SessionRegistry } from '@nexus/core';
 import type { InvariantError, SessionEvent, TodoItem } from '@nexus/core';
-import { TODO_TOOL_NAME } from '@nexus/plugin-todo';
+import { TODO_ERROR_PREFIX, TODO_TOOL_NAME, todoDuplicateMessage } from '@nexus/plugin-todo';
 import { createNexusAgent } from './agent-factory.js';
 import { DEFAULT_PLUGINS } from './cli.js';
 import { toAgentInvocation } from './messages.js';
@@ -160,6 +160,60 @@ describe('todo_write 在真的圖上', () => {
     expect(violations).toEqual([
       'invariant violated by "@nexus/plugin-todo": todo/write（seq 2）落在任何開著的輪之外',
     ]);
+  });
+
+  /**
+   * **模型送壞清單時，那句話要回得到模型手上。**
+   *
+   * dsh 的 README 把那幾句列成**穩定的失敗文本**——它們是給模型看的、看完再送一次的。
+   * 我們的 `toTodoList` 是**拋**的，所以這一條真正在問的是：LangGraph 的 ToolNode 把拋
+   * 出來的錯收成一則 `ToolMessage` 交回去，還是讓它往上炸掉整輪？
+   *
+   * 兩者的差別是「模型打錯字之後改一次」與「模型打錯字之後這一輪死掉」。
+   */
+  it('清單壞掉時，錯誤回到模型手上，而且這一輪跑得完', async () => {
+    const model = new ScriptedChatModel({
+      turns: [
+        {
+          content: '規劃。',
+          toolCalls: [
+            {
+              name: TODO_TOOL_NAME,
+              args: {
+                todos: [
+                  { content: '同一句', status: 'pending' },
+                  { content: '同一句', status: 'completed' },
+                ],
+              },
+            },
+          ],
+        },
+        { content: '收工。' },
+      ],
+    });
+    const { agent, attachSession, dispose } = await createNexusAgent({
+      model,
+      checkpointer: new MemorySaver(),
+      plugins: [...DEFAULT_PLUGINS],
+    });
+    const sessions = new SessionRegistry('bad-input');
+    const detach = attachSession(sessions);
+
+    try {
+      const result = await agent.invoke(toAgentInvocation('跑。'), {
+        configurable: { thread_id: 'bad-input' },
+      });
+      const messages = result.messages as { getType(): string; text: string }[];
+      const toolMessage = messages.filter((message) => message.getType() === 'tool').at(-1);
+
+      expect(toolMessage?.text).toBe(TODO_ERROR_PREFIX + todoDuplicateMessage('同一句'));
+    } finally {
+      detach();
+      await dispose();
+    }
+
+    // **壞掉的那一次一顆事件都沒留下**：驗證在找日誌之前。
+    expect(sessions.root.events).toEqual([]);
   });
 
   it('工具進得了預設清單面向模型的那一面', async () => {

@@ -38,7 +38,7 @@
  * 工具靠 `registry.sessions.forCall(config)` 拿自己這次該寫的那一份——**關鍵是它宣告了
  * handler 的第二個參數**，身分只在 `ToolRunnableConfig` 裡。
  *
- * ## 與 dsh 的偏離，兩條
+ * ## 與 dsh 的偏離，三條
  *
  * 1. **沒有 `todos` 投影。** dsh 註冊一個 `ctx.sessionProjections` 單元（`turn/start` 清空、
  *    `todo/write` 換成最新、`turn/end` 保留），UI 從那裡讀。**我們沒有投影註冊表**——那是
@@ -47,6 +47,11 @@
  * 2. **沒有 `output.schema` 與 `presentCall` 的卡片。** dsh 的工具回結構化結果並自己渲染；
  *    我們的工具回一句字串（LangChain 的 `tool()` 形狀）。模型看到的那句話逐字照抄 dsh 的
  *    `Updated todo list: … pending, … in progress, … completed.`
+ * 3. **驗證失敗是回字串，不是拋。** dsh 的 `execute` 直接 `throw`，它的 harness 把錯渲染
+ *    成一則工具結果交回模型。**LangGraph 的 ToolNode 不接**——實測（驗收在
+ *    `apps/harness/src/todo-tool.test.ts`）一顆重複的 content 會讓 `agent.invoke` 整個炸掉，
+ *    也就是模型打錯一次字就死一輪。所以工具自己接住，回的那句話帶著 dsh 那個 `Error: `
+ *    前綴，讓模型手上拿到的字與 dsh 一致。見 {@link TODO_ERROR_PREFIX}。
  *
  * @see [#132](https://github.com/DemianLi/nexus-agent/issues/132)
  * @module
@@ -80,6 +85,17 @@ export const TODO_UNKNOWN_CALLER_MESSAGE =
 export function todoAmbiguousMessage(count: number): string {
   return `這次組裝接了 ${count} 份會話，挑不出該寫哪一份，所以沒有寫。`;
 }
+
+/**
+ * 驗證失敗回給模型的那一句的前綴。
+ *
+ * **`Error: ` 這四個字是模型體驗的一部分，不是裝飾。** dsh 的工具是**拋**的，它的 harness
+ * 把拋出來的東西渲染成 `Error: <message>` 交回模型（README 把那幾句列成「稳定失败文本」）。
+ * 我們這側拋不得——實測 LangGraph 的 ToolNode **不接**，一顆重複的 content 會把整輪炸掉
+ * （驗收在 `apps/harness/src/todo-tool.test.ts`）。所以工具自己接住並回字串，而字串要與
+ * dsh 交到模型手上的那一句一致。
+ */
+export const TODO_ERROR_PREFIX = 'Error: ';
 
 /** content 空掉時的錯誤，逐字照 dsh。 */
 export const TODO_EMPTY_CONTENT_MESSAGE = 'invalid todo: `content` must be a non-empty string';
@@ -226,7 +242,16 @@ export function createTodoPlugin(options: TodoPluginOptions): NexusPlugin {
           ({ todos: raw }: { todos: RawTodo[] }, config?: unknown) => {
             // **先驗再找日誌**：驗不過的那一次連日誌都不必問，而且錯誤訊息與「寫不進去」
             // 是兩回事——前者是模型送錯東西，後者是接線的問題。
-            const todos = toTodoList(raw, allowParallel);
+            //
+            // **接住而不是往外拋。** dsh 那側拋得起，因為它的 harness 會把錯渲染成一則
+            // 工具結果交回模型；LangGraph 的 ToolNode **不接**，往外拋等於一顆打錯的
+            // todo 把整輪弄死。見 {@link TODO_ERROR_PREFIX}。
+            let todos: readonly TodoItem[];
+            try {
+              todos = toTodoList(raw, allowParallel);
+            } catch (error: unknown) {
+              return TODO_ERROR_PREFIX + (error instanceof Error ? error.message : String(error));
+            }
             const found = registry.sessions.forCall(config);
             if (found.kind === 'not-attached') return TODO_NOT_ATTACHED_MESSAGE;
             if (found.kind === 'unknown-caller') return TODO_UNKNOWN_CALLER_MESSAGE;

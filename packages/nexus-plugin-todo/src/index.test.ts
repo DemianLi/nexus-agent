@@ -15,6 +15,7 @@ import type { TodoItem } from '@nexus/core';
 import {
   createTodoPlugin,
   TODO_EMPTY_CONTENT_MESSAGE,
+  TODO_ERROR_PREFIX,
   TODO_NOT_ATTACHED_MESSAGE,
   TODO_TOOL_NAME,
   TODO_UNKNOWN_CALLER_MESSAGE,
@@ -242,12 +243,16 @@ describe('寫進哪一份', () => {
   /**
    * **驗證發生在找日誌之前。** 反過來的話，一份壞掉的清單在「沒接線」的組裝上會回
    * 「沒接線」——把模型送錯東西誤報成接線問題，而那兩件事要修的地方完全不同。
+   *
+   * **而且它回字串不是拋**：LangGraph 的 ToolNode 不接拋出來的東西，端到端的驗收在
+   * `apps/harness/src/todo-tool.test.ts`。
    */
-  it('清單壞掉時拋的是驗證錯誤，不是接線錯誤', async () => {
-    const { tool } = mount(true);
-    await expect(call(tool, [{ content: '  ', status: 'pending' }], ROOT_CONFIG)).rejects.toThrow(
-      TODO_EMPTY_CONTENT_MESSAGE,
+  it('清單壞掉時回的是驗證錯誤，不是接線錯誤——而且沒接線也一樣', async () => {
+    const { tool, sessions } = mount(true);
+    expect(await call(tool, [{ content: '  ', status: 'pending' }], ROOT_CONFIG)).toBe(
+      TODO_ERROR_PREFIX + TODO_EMPTY_CONTENT_MESSAGE,
     );
+    expect(sessions.root.events).toEqual([]);
   });
 });
 
