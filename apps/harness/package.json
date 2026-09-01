@@ -44,6 +44,7 @@
     "@nexus/plugin-quickjs": "workspace:*",
     "@nexus/plugin-skills": "workspace:*",
     "@nexus/plugin-telemetry-otel": "workspace:*",
+    "@nexus/plugin-todo": "workspace:*",
     "@nexus/plugin-validation": "workspace:*",
     "@nexus/wire": "workspace:*",
     "deepagents": "~1.13.1",

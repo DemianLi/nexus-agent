@@ -49,6 +49,9 @@ export type {
 } from './goal.js';
 export { GOAL_CHANGE_VERSION, goalId } from './goal.js';
 
+export type { TodoItem, TodoStatus } from './todo.js';
+export { TODO_STATUSES } from './todo.js';
+
 export type { NamedEntry, DuplicateErrorFactory } from './entries.js';
 export { AnonymousEntries, NamedEntries, CapabilitySet } from './entries.js';
 

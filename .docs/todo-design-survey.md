@@ -188,3 +188,15 @@ const probe: NexusPlugin = {
 // createNexusAgent({ model, checkpointer: new MemorySaver(), plugins: [probe] })
 // 之後 agent.invoke(toAgentInvocation('跑。'), { configurable: { thread_id: 'lineage-thread' } })
 ```
+
+## 後記：(a) 落地了，以及唯一改掉的那一條
+
+**日期 2026-09-01，同一天。** 建議的 (a) 走完了：水管由 [#135](https://github.com/DemianLi/nexus-agent/pull/135)（哪一份日誌）、[#136](https://github.com/DemianLi/nexus-agent/pull/136)（拒絕 subagent）與 [#138](https://github.com/DemianLi/nexus-agent/pull/138)（subagent 各自一份）三張補齊，`@nexus/plugin-todo` 照 dsh 抄下來。
+
+**上面第四節的鍵那一段要更正一句**：那時寫的是「鍵要用 `checkpoint_ns` 那一類分得出巢狀的東西」，而 #138 的調研把它量準了——鍵是 **`checkpoint_ns` 去掉最後一段**（最後一段是這次工具呼叫自己的 task），解析包在 `@nexus/core` 的 `session-address.ts` 一個檔案裡並配了絆索。
+
+**唯一沒有照抄的是不變量的歸屬那一條。** dsh 寫的是「`todo/write` 不在開著的輪裡就報」，無條件；照抄過來的話**每一次 subagent 的 `todo_write` 都會變成違規**——subagent 的日誌上永遠不會有 `turn/start`，因為發 turn 事件的是進入點而 subagent 不經過進入點（#137 釘下來的約定）。
+
+規則因此改寫成看**這份日誌自己有沒有輪**：見過 `turn/start` 的守配對，沒見過的就是沒有輪這個概念。另一條路（讓配套入口拿得到 `SessionAddress`，`kind === 'subagent'` 就跳過）被否掉的理由有兩條，寫在 `packages/nexus-plugin-todo/src/invariant.ts` 的檔頭上，第一條是「這個寫法哪天 subagent 真的長出輪會自己跟上，看身分的那個會繼續靜默跳過」。
+
+**這裡沒有做的事仍然沒有做**：dsh 的三個 Agent Note 與 `docs/subsystems/todo.zh.md` 這次讀了後者，前三個仍然沒讀；`todos` 投影仍然沒有（我們沒有投影註冊表，那是 `@nexus/core` 的 `sessions.ts` 早就標過的同一條偏離）。
