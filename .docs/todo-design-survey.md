@@ -100,7 +100,7 @@ exec.agent.session.append('todo/write', { todos })
 
 這就是 `@nexus/plugin-goal` 檔頭標過的那條水管：「我們全樹**零處**讀 `RunnableConfig` / `configurable` —— 工具執行期不知道是誰在叫它。」主代理重驗了，那句話今天仍然成立：`configurable` 全樹只出現在**呼叫端**（`thread-pump.ts:263`、`cli.ts:493`，以及測試），沒有任何工具 handler 讀它。
 
-**但 todo 的需求比 goal 低，而且低得有意義。** `tool-goal` 走不了是因為它的權限規則要求「當前輪次有一則已接受的 `{ kind: 'user' }` 訊息」，而且**要分得出 root 與 subagent 的血緣**。todo 只要回答一個是非題：**有沒有一個 owning session**。血緣那半不需要。
+**但 todo 的需求比 goal 低。** `tool-goal` 走不了有兩個理由：它的權限規則要求「當前輪次有一則已接受的 `{ kind: 'user' }` 訊息」，而且要分得出 root 與 subagent 的血緣。**todo 只欠第二個** —— 它要知道「有沒有一個 owning session」以及「是誰的」（dsh 的單一所有者規則要求 subagent 各自一份清單），但不需要去讀輪次裡有沒有使用者訊息。
 
 而水管的兩端其實都已經在，**兩個進入點都查過**：
 
@@ -108,6 +108,22 @@ exec.agent.session.append('todo/write', { todos })
 - **收得到的那端**：我們的工具走 LangChain 的 `tool()` helper（例如 `packages/nexus-plugin-echo/src/index.ts:47`）。它的 callback 第二個參數確實收得到 config —— `@langchain/core/dist/tools/index.d.ts:112` 與 `:144` 的簽章是 `(TArg, configArg?: TConfig)`，`TConfig` 是 `ToolRunnableConfig`。**我們現有的工具只是沒有一個宣告第二個參數。**
 
 **缺的是中間那張 `thread_id` → `SessionLog` 的表。** 兩個進入點都是一 thread 一份日誌，所以那張表有地方住。
+
+### 實測：真的到得了，而且帶的東西比預期多
+
+型別說得通不代表 LangGraph 中途不會把它吃掉，所以跑了一次探針：註冊一個工具，它的第二個參數原樣印出來，用 `ScriptedChatModel` 讓 root 叫它一次、再委派給 subagent 叫一次。探針程式碼附在最後一節，可以重跑。
+
+| | root 呼叫 | subagent 呼叫 |
+| --- | --- | --- |
+| `configurable.thread_id` | `lineage-thread` | **`lineage-thread`（同一個）** |
+| `configurable.ls_agent_type` | `root` | `subagent` |
+| `configurable.checkpoint_ns` | `tools:<id>` | `tools:<id>\|tools:<id>`（巢狀） |
+
+三件事，每一件都改了上面的結論：
+
+1. **`thread_id` 到得了工具 handler。** 水管的中段確認可行 —— 缺的真的只是那張表。
+2. **血緣分得出來。** `ls_agent_type` 直接給 `root` / `subagent`。上一版這份筆記說「`tool-goal` 不會跟著解鎖，因為血緣那半還缺」—— **那句話錯了**，血緣那半也有依據。但要標一個風險：`ls_agent_type` 是 **LangSmith tracing 的元資料**（`ls_` 前綴），不是給業務邏輯用的公開契約，升版沒有保證。`checkpoint_ns` 是 LangGraph 自己的東西，穩定性較高但要自己解析巢狀。
+3. **`thread_id` 在 subagent 裡是同一個 —— 這件事對 todo 有直接後果。** dsh 的「單一所有者」規則是「subagent 與其他 agent 各自維護自己的列表」。如果我們只拿 `thread_id` 查表，root 與 subagent 會共用同一份日誌、也就是同一份 todo 清單，**跟 dsh 的規則相反**。要照 dsh 做，查表的鍵得是 `checkpoint_ns` 那一類分得出巢狀的東西，不是 `thread_id`。
 
 ## 五、三個決定，以及它們其實是什麼
 
@@ -117,11 +133,11 @@ exec.agent.session.append('todo/write', { todos })
 
 **決定 1 才是真正要拍板的，而它現在長這樣**：
 
-- **(a) 先補水管，再照 dsh 做。** 補的東西是一張 `thread_id` → `SessionLog` 的表加上工具讀 config 那一步 —— 比 goal 需要的少一半（不必判血緣）。補完之後 `tool-todo` 照 dsh 抄得動；`tool-goal` **不會跟著解鎖**，但它會從缺兩件變成只缺血緣判斷那一件（那是 `@nexus/plugin-goal` 明文標為「被擋住的，不是取捨」的那一件）。代價兩筆：多一張前置卡；`SessionEventType` 多一種 `todo/write`，而那會讓 `packages/nexus-plugin-goal/src/fold.test.ts:382` 的絆索當場紅 —— **那是設計好的關卡不是意外**，#128 埋它就是為了逼加事件種類的人回答一句「這一種推得動輪次嗎」（`todo/write` 的答案是不推）。
+- **(a) 先補水管，再照 dsh 做。** 補的東西是一張「誰在叫」→ `SessionLog` 的表，加上工具讀 config 那一步。**查表的鍵不能是 `thread_id`** —— 實測顯示 subagent 跟 root 共用它，而 dsh 的單一所有者規則要求各自一份清單，所以鍵要用 `checkpoint_ns` 那一類分得出巢狀的東西。補完之後 `tool-todo` 照 dsh 抄得動，而且**實測顯示 `tool-goal` 的兩個障礙也都有依據了**（血緣走 `ls_agent_type`，但那是 LangSmith 的元資料，要自己包一層並釘住升版）。代價兩筆：多一張前置卡；`SessionEventType` 多一種 `todo/write`，而那會讓 `packages/nexus-plugin-goal/src/fold.test.ts:382` 的絆索當場紅 —— **那是設計好的關卡不是意外**，#128 埋它就是為了逼加事件種類的人回答一句「這一種推得動輪次嗎」（`todo/write` 的答案是不推）。
 - **(b) 掛 langchain 的 `todoListMiddleware`。** 便宜，一行掛上去。代價要標成偏離：狀態在 graph state、不進日誌、不變量與遙測都看不到、turn-open 那條規則檢不了。而按 AGENTS.md 的偏離規則，這條**標註不了** —— 偏離條款要求「現有基礎建設表達不出來」，但事件路我們表達得出來（goal 就是走這條），走不了的是水管而不是表達力。**這一條要當成明知的取捨寫下來，不是當成偏離。**
 - **(c) 不做。** todo 不是任何東西的相依，goal 與 plan mode 都不依賴它。
 
-**建議 (a)**，但它的價值有一半在水管本身而不在 todo：「工具執行期認得出 session」這件事，任何一個要寫日誌的模型工具都會再撞一次，而 `tool-goal` 已經在那面牆前面站了一張卡的時間。
+**建議 (a)**，而實測之後它的價值比原本估的高：「工具執行期認得出 session」這件事，任何一個要寫日誌的模型工具都會再撞一次，而 `tool-goal` 已經在那面牆前面站了一張卡的時間 —— 現在看起來那面牆比它當初標的矮。
 
 ## 六、順帶：一條今天不成立、但會自己回來的風險
 
@@ -140,4 +156,35 @@ deepagents 對 **Codex 模型**（`openai:gpt-5.1-codex` / `5.2` / `5.3`）的 h
 - **dsh 的三個 Agent Note**（`todo-write-tool`、`todo-parallel-in-progress`、`todo-plan-clears-on-next-turn`）：README 引用了它們，沒讀。要動手實作前應該讀，砍掉的欄位與備選方案都在那裡。
 - **dsh 的 `docs/subsystems/todo.zh.md`**：沒讀。
 - **`exec.agent` 在 dsh 那側是怎麼被填上的**：只看到工具端怎麼用它，沒追它從哪來。要走 (a) 的話，那條路徑是最該先讀的東西。
-- **`configurable.thread_id` 實際上到不到得了工具 handler**：型別上收得到、兩個呼叫端都有傳，但**沒有實際跑一次**驗證它中途沒被 LangGraph 吃掉。要走 (a) 的話，那是第一個該寫的測試。
+- **`ls_agent_type` 的穩定性**：實測拿得到，但它是 LangSmith tracing 的元資料，沒有查過它算不算公開契約、也沒有查升版紀錄。要靠它判血緣的話，這是第一個該補的功課。
+- **`checkpoint_ns` 的格式保證**：實測是 `tools:<id>` 與巢狀的 `a|b`，但沒查 LangGraph 對這個格式有沒有承諾。
+
+## 附：探針程式碼
+
+上面第四節那張表是跑這個跑出來的。它**沒有進版控**（一次性的探針，沒有歸屬的測試檔），要重跑就把它放回 `apps/harness/src/config-probe.test.ts`：
+
+```ts
+const probe: NexusPlugin = {
+  name: 'probe',
+  apply(registry) {
+    registry.tools.register(
+      tool(
+        (_input: unknown, config?: { configurable?: Record<string, unknown> }) => {
+          seen.push({
+            ls_agent_type: config?.configurable?.ls_agent_type,
+            thread_id: config?.configurable?.thread_id,
+            checkpoint_ns: config?.configurable?.checkpoint_ns,
+          });
+          return '好';
+        },
+        { name: 'probe_tool', description: '探針。', schema: z.object({}) },
+      ),
+    );
+    registry.subagents.register({ name: 'worker', description: '幹活的。' });
+  },
+};
+// ScriptedChatModel 的腳本：root 叫一次 probe_tool → 叫 task 委派 worker →
+// subagent 叫一次 probe_tool → 各自收工（共六輪）。
+// createNexusAgent({ model, checkpointer: new MemorySaver(), plugins: [probe] })
+// 之後 agent.invoke(toAgentInvocation('跑。'), { configurable: { thread_id: 'lineage-thread' } })
+```
