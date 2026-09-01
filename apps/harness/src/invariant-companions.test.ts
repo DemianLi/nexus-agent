@@ -1,8 +1,8 @@
 /**
- * 九個 package 的配套入口：**子路徑解析**與**包名歸屬**。
+ * 十一個 package 的配套入口：**子路徑解析**與**包名歸屬**。
  *
- * 這個檔案住在 `@nexus/harness` 不是為了方便——**它是唯一同時相依九個套件的地方**，
- * 而這兩條都需要九個一起在場才驗得到。
+ * 這個檔案住在 `@nexus/harness` 不是為了方便——**它是唯一同時相依十一個套件的地方**，
+ * 而這兩條都需要十一個一起在場才驗得到。
  *
  * 兩條各擋一種缺陷，而且都不是形式：
  *
@@ -10,14 +10,18 @@
  *    **不是相對路徑**。用相對路徑寫，`exports` 那格接錯了測試照樣綠——那就變成
  *    一條不驗它宣稱在驗的東西的測試。
  * 2. **包名歸屬**：八個檔案長得幾乎一樣，最可能的缺陷就是 `PACKAGE_NAME` 抄錯一個。
- *    九個一起掛上去，撞名會當場拋，名字錯了則會在下面的逐一比對裡露出來。
+ *    十一個一起掛上去，撞名會當場拋，名字錯了則會在下面的逐一比對裡露出來。
  *
  * 八個空 installer 為什麼是正確結果（subject 裡只有 `@nexus/core` 的日誌，別的包在裡面
  * 找不到屬於自己的關係），見任何一個 `packages/<name>/src/invariant.ts` 的檔頭。
+ * **真的裝上觀察者的有三個**：`@nexus/core`（turn 配對）、`@nexus/plugin-commands`
+ * （命令生命週期配對，[#118](https://github.com/DemianLi/nexus-agent/issues/118)）與
+ * `@nexus/plugin-plan-mode`（`/plan` 的參數契約，
+ * [#120](https://github.com/DemianLi/nexus-agent/issues/120)）。
  *
- * **底下那份九列表格不再是「有沒有漏掉一個 package」的守門人**——那件事歸
+ * **底下那份十列表格不再是「有沒有漏掉一個 package」的守門人**——那件事歸
  * [`package-invariants.test.ts`](./package-invariants.test.ts)，它自己去掃 `packages/*`，
- * 加第十個 package 而沒補配套入口會當場紅。這個檔案守的是那份表格**列出來的那九個**，
+ * 加第十二個 package 而沒補配套入口會當場紅。這個檔案守的是那份表格**列出來的那十一個**，
  * 而且守的是結構規則看不到的兩件事：specifier 是不是真的解析得到（AST 讀不出 `exports`
  * 有沒有接對），以及 installer 跑起來的行為（誰真的掛了觀察者）。兩邊不是重複。
  */
@@ -33,6 +37,10 @@ import {
   createMemoryInvariantPlugin,
   MEMORY_INVARIANT_PACKAGE,
 } from '@nexus/plugin-memory/invariant';
+import {
+  createPlanModeInvariantPlugin,
+  PLAN_MODE_INVARIANT_PACKAGE,
+} from '@nexus/plugin-plan-mode/invariant';
 import {
   createQuickJsInvariantPlugin,
   QUICKJS_INVARIANT_PACKAGE,
@@ -50,18 +58,24 @@ import {
   VALIDATION_INVARIANT_PACKAGE,
 } from '@nexus/plugin-validation/invariant';
 import { createWireInvariantPlugin, WIRE_INVARIANT_PACKAGE } from '@nexus/wire/invariant';
+import {
+  createCommandsInvariantPlugin,
+  COMMANDS_INVARIANT_PACKAGE,
+} from '@nexus/plugin-commands/invariant';
 
 /**
- * 九個配套入口，配上各自**應該**認領的包名。
+ * 十一個配套入口，配上各自**應該**認領的包名。
  *
  * 右邊那一欄刻意寫死字串而不是引用左邊那個常數——常數抄錯了，拿常數自己比自己
  * 是驗不出來的。
  */
 const COMPANIONS: readonly (readonly [() => NexusPlugin, string, string])[] = [
   [createCoreInvariantPlugin, CORE_INVARIANT_PACKAGE, '@nexus/core'],
+  [createCommandsInvariantPlugin, COMMANDS_INVARIANT_PACKAGE, '@nexus/plugin-commands'],
   [createEchoInvariantPlugin, ECHO_INVARIANT_PACKAGE, '@nexus/plugin-echo'],
   [createMcpInvariantPlugin, MCP_INVARIANT_PACKAGE, '@nexus/plugin-mcp'],
   [createMemoryInvariantPlugin, MEMORY_INVARIANT_PACKAGE, '@nexus/plugin-memory'],
+  [createPlanModeInvariantPlugin, PLAN_MODE_INVARIANT_PACKAGE, '@nexus/plugin-plan-mode'],
   [createQuickJsInvariantPlugin, QUICKJS_INVARIANT_PACKAGE, '@nexus/plugin-quickjs'],
   [createSkillsInvariantPlugin, SKILLS_INVARIANT_PACKAGE, '@nexus/plugin-skills'],
   [
@@ -74,7 +88,7 @@ const COMPANIONS: readonly (readonly [() => NexusPlugin, string, string])[] = [
 ];
 
 describe('子路徑解析', () => {
-  it('九個 `<pkg>/invariant` 都 import 得到，而且各自吐出一個 plugin', () => {
+  it('十一個 `<pkg>/invariant` 都 import 得到，而且各自吐出一個 plugin', () => {
     for (const [factory] of COMPANIONS) {
       const plugin = factory();
       expect(typeof plugin.apply).toBe('function');
@@ -90,11 +104,11 @@ describe('子路徑解析', () => {
 });
 
 describe('包名歸屬', () => {
-  it('九個一起掛上去，各自認領自己那個名字，一個都不撞', () => {
+  it('十一個一起掛上去，各自認領自己那個名字，一個都不撞', () => {
     const registry = createRegistry();
     for (const [factory] of COMPANIONS) {
       const plugin = factory();
-      // 九個的 name 各不相同，所以 `resolveEntries` 補出來的就是 `<name>#0`。
+      // 十一個的 name 各不相同，所以 `resolveEntries` 補出來的就是 `<name>#0`。
       const exit = registry.enter({ id: `${plugin.name}#0`, name: plugin.name });
       plugin.apply(registry);
       exit();
@@ -105,17 +119,17 @@ describe('包名歸屬', () => {
     expect(new Set(claimed).size).toBe(COMPANIONS.length);
   });
 
-  it('八個空 installer 一個檢查都不裝——掛滿九個只有 core 觀察得到東西', () => {
+  it('八個空 installer 一個檢查都不裝——掛滿十一個只有三個觀察得到東西', () => {
     const registry = createRegistry();
     for (const [factory] of COMPANIONS) {
       const plugin = factory();
-      // 九個的 name 各不相同，所以 `resolveEntries` 補出來的就是 `<name>#0`。
+      // 十一個的 name 各不相同，所以 `resolveEntries` 補出來的就是 `<name>#0`。
       const exit = registry.enter({ id: `${plugin.name}#0`, name: plugin.name });
       plugin.apply(registry);
       exit();
     }
 
-    // 每個 installer 都跑一次，數它掛了幾個觀察者。只有 `@nexus/core` 該掛出東西。
+    // 每個 installer 都跑一次，數它掛了幾個觀察者。只有三個該掛出東西。
     const observerCount = new Map<string, number>();
     for (const companion of registry.invariants.companions()) {
       let count = 0;
@@ -135,9 +149,12 @@ describe('包名歸屬', () => {
       observerCount.set(companion.packageName, count);
     }
 
+    const observing = new Set(['@nexus/core', '@nexus/plugin-commands', '@nexus/plugin-plan-mode']);
     expect(observerCount.get('@nexus/core')).toBe(1);
+    expect(observerCount.get('@nexus/plugin-commands')).toBe(1);
+    expect(observerCount.get('@nexus/plugin-plan-mode')).toBe(1);
     for (const [, , name] of COMPANIONS) {
-      if (name === '@nexus/core') continue;
+      if (observing.has(name)) continue;
       expect(observerCount.get(name)).toBe(0);
     }
   });

@@ -6,10 +6,12 @@ TypeScript + React (shadcn/ui) 專案，架構分為 harness 與 web UI 兩部�
 
 ```
 packages/nexus-core          NexusPlugin 契約：型別、manifest、PluginRegistry、fold
+packages/nexus-plugin-commands  人打的斜線命令：解析、執行、生命週期記日誌
 packages/nexus-plugin-echo   最小 plugin 範例，只相依 @nexus/core
 packages/nexus-plugin-mcp    把 MCP server 的工具接進 registry
 packages/nexus-plugin-quickjs  QuickJS 沙箱裡跑 JavaScript 的 custom tool
 packages/nexus-plugin-memory 把 AGENTS.md 這類長期記憶掛進 agent
+packages/nexus-plugin-plan-mode  計劃模式：先探索再執行，計劃交出去等人批准
 packages/nexus-plugin-skills 把 SKILL.md 這類隨選工作流掛進 agent
 packages/nexus-plugin-validation  工具失敗回饋與輸出 schema 校驗
 apps/harness                 組裝點：agent 工廠、訊息標準化、CLI（Node / TypeScript）
@@ -33,7 +35,7 @@ pnpm build        # vite build
 
 ```bash
 pnpm --filter @nexus/harness run cli "把這句話回聲一次。"   # 一次性，跑完就退出
-pnpm --filter @nexus/harness run cli                        # REPL，/exit 或 Ctrl-D 結束
+pnpm --filter @nexus/harness run cli                        # REPL，/help 看命令，/exit 結束
 pnpm --filter @nexus/harness run cli:live "..."             # 換成真實供應商，需要 API key
 ```
 
@@ -73,6 +75,91 @@ pnpm --filter @nexus/harness run serve --plugins src/approval.fixture.ts
 把核准關掉（`HEADLESS_APPROVALS`）—— 需要核准的工具拿到一則說明是「沒有人被問到」的
 拒絕，其餘照跑完，而不是整輪停在那裡等一個不會來的答案。CLI 每次啟動都會把這件事印在
 banner 上。web 這端真的按得下去，所以它維持開著。
+
+### 計劃模式
+
+`@nexus/plugin-plan-mode` 讓 agent 先探索與設計、把完整的計劃交出去等人批准，再開始動手。
+形狀照 dsh 的 `plan-mode`：一段模式生效時才夾進 system prompt 的**部署持有的指引**、
+一個 `exit_plan_mode` 工具，加上一份**跟著 checkpointer 走的模式狀態**。
+
+**它預設是關的，開關是 `/plan`。** 這個 plugin 在 CLI 的預設清單裡，所以 REPL 裡直接打：
+
+| 這一行 | 做什麼 |
+| --- | --- |
+| `/plan` | 進計劃模式。**從下一輪起**指引才夾進 system prompt |
+| `/plan off` | 離開 |
+| 其餘參數 | 回一則錯誤。**不會被當成「進入」** —— `/plan of` 安靜地做相反的事是最貴的那種缺陷 |
+
+dsh 的 `/plan` 還收一段自由訊息（`[off|message]`），用 `agent.steer()` 插進對話；
+我們沒有那條路，所以提示是 `[off]`，收不下的東西不寫進提示。命令改的是 graph state，
+而 state 只有 invoke 期間寫得動 —— 選擇先存在 plugin 裡，由 middleware 的 `beforeAgent`
+在下一輪開頭交出去。細節與這兩條偏離的代價寫在 `packages/nexus-plugin-plan-mode/src/index.ts`
+的檔頭。
+
+要讓一份組裝一開始就在計劃模式裡，用工廠的 `startActive`：
+
+```ts
+createPlanModePlugin({ startActive: true, guidance: '（部署自己寫的那一段）' })
+```
+
+**但預設清單不必換。** `serve` 那條線上有命令介面了（[#123](https://github.com/DemianLi/nexus-agent/issues/123)），
+web 那端自己打 `/plan` 就進得去：
+
+```bash
+pnpm --filter @nexus/harness run serve:live
+```
+
+**`serve` 才是走得完整條路的地方，而且要 `--live`。** `exit_plan_mode` 是需要核准的工具，
+CLI 與 eval 走 `HEADLESS_APPROVALS`：在那裡提出的計劃會被確定性拒絕 —— CLI 上還打得出
+`/plan off` 自己爬出來，web 上按得下批准。假模型的腳本另外寫死在 `cli.ts`，它不會呼叫
+`exit_plan_mode` —— 換清單改不了模型的腳本，所以「規劃 → 交計劃 → 有人按批准 → 開始動手」
+要真模型。
+
+模式沒啟用時，`exit_plan_mode` 仍留在工具目錄裡（照 dsh：狀態轉換不該順帶改變工具目錄），
+但它的執行路徑會拒絕 —— 回的是「不在計劃模式」，不是核准的措辭。
+
+### 人的命令
+
+`@nexus/plugin-commands` 是**人打的斜線命令**那條路：`registry.commands.register()` 註冊，
+進入點解析並發派，**不經過模型**。形狀照 dsh 的 `dsh-commands`。
+
+```ts
+registry.commands.register({
+  name: 'ping',
+  description: '回一句話，不驚動模型',
+  input: { hint: '[任何字]' },
+  handler: ({ rawInput }) => ({ kind: 'success', text: `pong${rawInput}` }),
+});
+```
+
+一行 `/name` 有四條路，**最後一條跟接上命令之前一模一樣**：
+
+| 這一行 | 去哪裡 |
+| --- | --- |
+| 註冊過的命令 | 跑 handler，結果印給人看（`error` 進 stderr） |
+| `/help`（後面的字忽略） | 印出命令清單。**不留日誌，也不驚動模型** |
+| `/exit` | 收工 |
+| 其餘（語法不符、名字不認得） | 照原樣送給模型 |
+
+**`/exit` 與 `/help` 刻意不是命令**：它們控制／描述的是這條 REPL，不是 agent，所以
+`commands.list()` 裡沒有它們，`/help` 自己把這兩行補進清單。dsh 也是這樣切的——它
+**根本沒有 `/help`**，探索面是 web composer 打 `/` 跳出來的候選選單，資料來源同樣是
+`commands.list()`；dsh 自己的 CLI 則一個命令發派面都沒有。我們照抄的是真相來源，換掉
+的是呈現形式（一行一行的 `readline`，不是 composer）。
+
+因為 REPL 在執行器之前攔這兩個名字，**plugin 註冊了 `help` 或 `exit` 會在 REPL 開起來
+時當場拋**——那份註冊本來永遠不會被叫到，而且沒有徵兆。
+
+認得的命令會在會話日誌留下一對 `command/run` / `command/done`；**收不下的行不留痕跡**。
+`@nexus/plugin-commands` 的不變量配套入口檢查這一對的三條關係（id 不重複、一次一個、
+done 配得到 run）——**這是全樹第一個非空的 package 配套入口**。
+
+命令的**文法**則歸擁有它的 package：`@nexus/plugin-plan-mode` 的配套入口檢的是
+「`/plan` 的參數收不下時，配對的 `command/done` 必須是 `error`」。生命週期那份不知道
+`plan` 的文法長什麼樣，所以那一條只有這裡檢得到。
+
+`command/run` 的 `args` 是使用者原話，而會話事件會**原樣鏡像進遙測**。要把使用者輸入
+擋在遙測外，得補 dsh 那個 `recordInput` 開關；這一版沒有它。
 
 跑基準任務（eval）：
 

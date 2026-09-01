@@ -135,13 +135,19 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是一個工具 ＋ 九個配套入口', async () => {
-    // **工具只有 echo 一個，這一半沒變**：預設組裝要能證明工具真的接上了，不替誰決定
-    // 該裝什麼。九個配套入口是那句話的例外，理由寫在 `DEFAULT_PLUGINS` 的 JSDoc 上
-    // （[#107](https://github.com/DemianLi/nexus-agent/issues/107)）。
+  it('預設清單是 echo ＋ 計劃模式 ＋ 十一個配套入口', async () => {
+    // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
+    // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
+    // 讓計劃模式進來，理由寫在 `DEFAULT_PLUGINS` 的 JSDoc 上（命令沒進預設清單就等於
+    // 不存在）。**改成 `toHaveLength` 會把這條線整個放掉**，所以名字仍然逐個寫死：
+    // 下一個想塞東西進來的人還是得先改這一行，並且說得出理由。
+    //
+    // 十一個配套入口那一半沒有變——`plan-mode-invariant` 本來就在裡面
+    // （[#107](https://github.com/DemianLi/nexus-agent/issues/107)），這次變的是它的
+    // installer 從空的變成有一條規則，那件事歸 `invariant-companions.test.ts` 守。
     const names = DEFAULT_PLUGINS.map((plugin) => plugin.name);
-    expect(names.filter((name) => !name.endsWith('-invariant'))).toEqual(['echo']);
-    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(9);
+    expect(names.filter((name) => !name.endsWith('-invariant'))).toEqual(['echo', 'plan-mode']);
+    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(11);
   });
 
   it('**違規印到 stderr 而且帶前綴**——不是靠 runner 預設的 `console.error`', async () => {
@@ -486,11 +492,11 @@ describe('REPL', () => {
   ];
 
   async function replAgent() {
-    const { agent } = await createNexusAgent({
+    const { agent, commands } = await createNexusAgent({
       model: new ScriptedChatModel({ turns: ONE_TURN }),
       plugins: DEFAULT_PLUGINS,
     });
-    return agent;
+    return { agent, commands };
   }
 
   it('一行一輪，/exit 收工', async () => {
@@ -498,11 +504,13 @@ describe('REPL', () => {
     const input = new PassThrough();
     input.end('說點什麼\n/exit\n');
 
+    const repl = await replAgent();
     await runRepl(
-      await replAgent(),
+      repl.agent,
       { input, output: new PassThrough() },
       printer,
       new SessionLog('t'),
+      repl.commands,
     );
 
     expect(stdout()).toContain('回聲：嗨');
@@ -512,12 +520,14 @@ describe('REPL', () => {
     const input = new PassThrough();
     input.end('說點什麼\n');
 
+    const repl = await replAgent();
     await expect(
       runRepl(
-        await replAgent(),
+        repl.agent,
         { input, output: new PassThrough() },
         recorder().printer,
         new SessionLog('t'),
+        repl.commands,
       ),
     ).resolves.toBeUndefined();
   });
@@ -528,11 +538,13 @@ describe('REPL', () => {
     // 第二句話時腳本已經用完，那一輪會拋。
     input.end('第一句\n第二句\n第三句\n');
 
+    const repl = await replAgent();
     await runRepl(
-      await replAgent(),
+      repl.agent,
       { input, output: new PassThrough() },
       printer,
       new SessionLog('t'),
+      repl.commands,
     );
 
     expect(stdout()).toContain('回聲：嗨');

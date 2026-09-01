@@ -1,4 +1,4 @@
-import type { Event, WireClient } from '@nexus/wire';
+import type { Event, SlashDescriptor, SlashRunOutcome, WireClient } from '@nexus/wire';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -43,10 +43,22 @@ function textFrames(id: string, namespace: readonly string[], body: string): Eve
 }
 
 /** 一個可以隨時推 frame 進去的假 client。 */
-function fakeClient(events: readonly Event[]) {
+function fakeClient(
+  events: readonly Event[],
+  slash: {
+    readonly commands?: readonly SlashDescriptor[];
+    readonly run?: (line: string) => SlashRunOutcome;
+  } = {},
+) {
   const sent: string[] = [];
   const responded: unknown[] = [];
+  const slashed: string[] = [];
   const client: WireClient = {
+    slashList: async () => ({ kind: 'ok', commands: slash.commands ?? [] }),
+    slashRun: async (_threadId, line) => {
+      slashed.push(line);
+      return slash.run?.(line) ?? { kind: 'unknown' };
+    },
     openEvents: async () =>
       (async function* stream() {
         for (const event of events) {
@@ -63,7 +75,7 @@ function fakeClient(events: readonly Event[]) {
       return { type: 'success', id: 2, result: {} };
     },
   };
-  return { client, sent, responded };
+  return { client, sent, responded, slashed };
 }
 
 /** 一顆核准請求。逐筆詞彙照基座的形狀給——`reviewConfigs` 與 `actionRequests` 平行。 */
@@ -134,6 +146,8 @@ describe('對話介面', () => {
       },
       runStart: async () => ({ type: 'success', id: 1, result: {} }),
       inputRespond: async () => ({ type: 'success', id: 1, result: {} }),
+      slashList: async () => ({ kind: 'ok', commands: [] }),
+      slashRun: async () => ({ kind: 'unknown' }),
     };
     render(<App client={client} />);
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('連不上 agent'));
@@ -204,6 +218,84 @@ describe('核准請求', () => {
   });
 });
 
+describe('斜線命令', () => {
+  const planCommand: SlashDescriptor = {
+    name: 'plan',
+    description: '進出計劃模式。',
+    input: { hint: '[off]' },
+  };
+
+  it('清單畫出來，但打 `/` 不跳選單——這一版只有扁平清單', async () => {
+    seq = 0;
+    const { client } = fakeClient([], { commands: [planCommand] });
+    render(<App client={client} />);
+
+    await waitFor(() => expect(screen.getByText('/plan [off]')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '/' } });
+    // 沒有候選清單、沒有補全——那一套（dsh 的 `CommandDirectory`）是另一張卡。
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('第一個字是 `/` 就走 slash.run，而且不進 transcript', async () => {
+    seq = 0;
+    const { client, sent, slashed } = fakeClient([], {
+      commands: [planCommand],
+      run: () => ({ kind: 'success', command_id: 'cmd-1', text: '計劃模式打開了。' }),
+    });
+    render(<App client={client} />);
+
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '/plan' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('計劃模式打開了'));
+    // **一句都沒送給模型**，而且畫面上沒有「使用者說了 /plan」這一筆——
+    // 命令是人對工具說的話，不是對模型說的話。
+    expect(sent).toEqual([]);
+    expect(slashed).toEqual(['/plan']);
+    expect(screen.queryAllByRole('listitem')).toEqual([]);
+  });
+
+  it('認不得的一行說「不認得」，不是靜靜送給模型', async () => {
+    seq = 0;
+    const { client, sent } = fakeClient([], { run: () => ({ kind: 'unknown' }) });
+    render(<App client={client} />);
+
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '/nope' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('不認得這個命令'));
+    expect(sent).toEqual([]);
+  });
+
+  it('命令自己失敗與這條線拒絕發派，說出來的話不一樣', async () => {
+    seq = 0;
+    const { client } = fakeClient([], {
+      run: (line) =>
+        line === '/plan off'
+          ? { kind: 'error', command_id: 'cmd-2', text: '本來就不在計劃模式。' }
+          : { kind: 'rejected', message: '這條 thread 正在跑：等這一輪跑完再打斜線命令' },
+    });
+    render(<App client={client} />);
+
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '/plan off' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toContain('本來就不在計劃模式'),
+    );
+
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '/plan' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    // 「沒送出去」與「送出去了但命令說不行」是兩件事，混起來的那一刻人就不知道要等
+    // 還是要改。
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toContain('這個動作沒送出去'),
+    );
+  });
+});
+
 describe('上行被拒絕的時候', () => {
   it('說出來，而不是靜靜吞掉——那是 200 ＋ error 封包', async () => {
     seq = 0;
@@ -220,6 +312,8 @@ describe('上行被拒絕的時候', () => {
         message: '這條 thread 停在核准點：先用 input.respond 回答它，再說下一句話',
       }),
       inputRespond: async () => ({ type: 'success', id: 2, result: {} }),
+      slashList: async () => ({ kind: 'ok', commands: [] }),
+      slashRun: async () => ({ kind: 'unknown' }),
     };
     render(<App client={client} />);
 

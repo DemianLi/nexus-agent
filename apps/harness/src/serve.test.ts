@@ -1,3 +1,4 @@
+import { PLAN_COMMAND_NAME, PLAN_ENTERED_MESSAGE } from '@nexus/plugin-plan-mode';
 import { createWireClient } from '@nexus/wire';
 import {
   appendDecision,
@@ -91,6 +92,35 @@ describe('起起來之後', () => {
     expect(tools.map((entry) => (entry.kind === 'tool' ? entry.name : ''))).toContain('echo');
     expect(state.entries.some((entry) => entry.kind === 'ai' && entry.text.length > 0)).toBe(true);
     expect(state.status).toBe('idle');
+  });
+});
+
+/**
+ * **這一條守的是 `serve.ts` 那一行組裝**，不是發派面本身——那一整套在
+ * [`slash-wire.test.ts`](./slash-wire.test.ts) 裡對著自己建的 handler 走完。
+ * 這裡只問一件事：`createCliAgent` 回的那個註冊點有沒有真的一路傳到線上
+ * （[#123](https://github.com/DemianLi/nexus-agent/issues/123) 之前它在這一行被丟掉）。
+ *
+ * 紅了而 `slash-wire.test.ts` 還綠著，代表發派面是好的、`serve.ts` 沒接上。
+ */
+describe('serve 的命令面', () => {
+  it('預設清單起的 server 上，瀏覽器打得到 /plan', async () => {
+    running = await runServe({ argv: ['--port', '0'], log: () => undefined, env: {} });
+    const started = running as RunningServe;
+    const client = createWireClient({ baseUrl: started.url });
+    await client.openEvents('planning');
+
+    const listed = await client.slashList('planning');
+    if (listed.kind !== 'ok') throw new Error(listed.message);
+    expect(listed.commands.map((command) => command.name)).toContain(PLAN_COMMAND_NAME);
+
+    // **這就是那份 `startActive: true` 的 fixture 清單不再是必要的那一刻**：不用
+    // `--plugins`，瀏覽器自己打得開計劃模式。
+    expect(await client.slashRun('planning', `/${PLAN_COMMAND_NAME}`)).toEqual({
+      kind: 'success',
+      command_id: expect.any(String),
+      text: PLAN_ENTERED_MESSAGE,
+    });
   });
 });
 

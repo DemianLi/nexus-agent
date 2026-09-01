@@ -9,9 +9,23 @@
 
 import { tool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
-import type { NexusPlugin } from '@nexus/core';
+import type { CommandRegistrationPoint, NexusPlugin } from '@nexus/core';
+import { createRegistry } from '@nexus/core';
 import { StateBackend } from 'deepagents';
 import { z } from 'zod';
+
+/**
+ * 一個真的、但沒有人註冊過任何命令的命令註冊點。
+ *
+ * `ThreadAgent.commands` 是必填的（理由見它自己的說明），所以只驗線的測試也得給一個。
+ * **給真的註冊點而不是 `undefined as never`**：後者型別上騙得過去，但那樣 `slash.list`
+ * 走到的就不是真的程式碼了——同 `invariant-companions.test.ts` 給真日誌的理由。
+ *
+ * @returns 一個空的註冊點，只露出這條線用得到的兩支。
+ */
+export function emptyCommandPoint(): Pick<CommandRegistrationPoint, 'find' | 'list'> {
+  return createRegistry().commands;
+}
 
 /** fixture plugin 註冊的工具名。 */
 export const NOTE_TOOL_NAME = 'take_note';

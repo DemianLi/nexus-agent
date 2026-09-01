@@ -68,8 +68,41 @@ registry.memory.addSource(path); // 純累加；路徑格式在註冊期擋（�
 | 規劃與編排層 | deepagents 迴圈 + TodoListMiddleware + subagents | deepagentsjs 內建 | 完整 |
 | 記憶層 | memory（AGENTS.md）+ skills + summarization/offloading | deepagentsjs 內建 | **三個都在，但都是「注入」不是「保存」**——見第 5 節 Phase 3 |
 | 執行與工具層 | tools + 虛擬 FS + 權限 + sandbox 協定與 provider（內建）＋ QuickJS 直譯器（`@nexus/plugin-quickjs`）＋ MCP（`@langchain/mcp-adapters`） | deepagentsjs 內建，QuickJS 與 MCP 除外 | 完整 |
-| 反思與反饋層 | 結果校驗 middleware + LangSmith 回饋 | **自建** | **薄覆蓋**，強化見 issue #16 |
+| 反思與反饋層 | 結果校驗 middleware + LangSmith 回饋 | **自建** | **薄覆蓋**，強化見 issue #16 —— **但 #16 原本列的兩個方向已經作廢**，見下面那段 |
 | 輸出層 | typed streaming（基座 v3 `streamEvents`）→ apps/web UI | deepagentsjs 內建；**協定用基座的 `@langchain/protocol`**，pump／handler／client 與 UI 自建 | **串流的形狀完整，但基座自己標為 experimental；瀏覽器到 agent 之間的線已接好（上行 HTTP、下行單向 SSE，第 7 節決策 6），UI 待做** —— 見第 5 節 Phase 5 |
+
+**2026-08-30，#16 的兩個強化方向被 dsh 否掉了。** 動工前照 AGENTS.md 讀了原始碼
+（`cd5ef8148158c3a752a658978873241fdf8e2bbc`）：「Reflection plugin（每步多一次 LLM 呼叫做
+自我批判）」與「Intent plugin（顯式意圖分類）」在 dsh **全樹都不存在** —— `reflection` 的
+命中全是 TypeScript 型別反射，`intent classif` 零命中。它對「先想再做」的答案是
+**計劃模式 ＋ todo ＋ goal**：讓模型自己承擔規劃、把狀態外顯、人可以介入。
+
+這一條不能靠「標註偏離」繞過去：AGENTS.md 的偏離條款只涵蓋「基礎建設表達不出來」，
+而 per-step 自我批判用一個 middleware 就寫得出來 —— 那是**設計上的分歧**，不是表達力落差。
+
+`TodoListMiddleware` 已經蓋掉 todo 那塊。計劃模式那塊補在
+[#116](https://github.com/DemianLi/nexus-agent/issues/116)（`packages/nexus-plugin-plan-mode`），
+**它自己帶著一筆標註過的偏離**：模式狀態走 middleware 的 `stateSchema` ＋ checkpointer，
+不走 dsh 的 `plan/mode` 會話事件 ＋ 純折疊 —— plugin 拿不到 `SessionLog`，而
+`SessionEventType` 是封閉 union（#101 已明文把「加會話事件種類」排除在包自有不變量之外）。
+
+（誠實的一句：`.agents/notes/rejected/` 底下**沒有**明文拒絕過自我批判的 note，
+所以能主張的是「它不存在、它做了別的」，不是「dsh 拒絕過」。）
+
+**2026-08-30 續：#116 留下的「誰關得掉計劃模式」，答案也在 dsh 原始碼裡。**
+`packages/plan/plan-mode/src/index.ts:5` 的檔頭明寫 `/plan off` 讓使用者直接離開，同檔
+`:294` 用 `ctx.inject(['commands'], …)` 把命令掛成可選子節點。命令註冊面因此補在
+[#118](https://github.com/DemianLi/nexus-agent/issues/118)（`packages/nexus-plugin-commands`
+＋ `registry.commands`，第十三個註冊點）。
+
+**#118 沒有偏離要標，而這件事本身值得記著。** #116 退到 `stateSchema` 的原因是
+**plugin** 拿不到 `SessionLog`；命令的產生者是**進入點**（`runRepl` 手上就有那份日誌），
+所以 `command/run` / `command/done` 走的就是 dsh 的形狀。`SessionEventType` 的門檻
+（「兩條路都產得出來嗎」）在這裡答得乾淨：命令事件根本不是模型串流事件，當初排除訊息
+內容的顆粒度問題沒有指涉對象。
+
+順帶正名一件 #116 的事：dsh 離開計劃模式的兩條路（`/plan off`、`exit_plan_mode` 的人工
+評審）**都需要人**。所以「headless 下模式鎖死」是規格不是缺陷。
 
 harness 五大範圍對應：解析標準化（PluginRegistry + zod）、編排迴圈（deepagents）、記憶層（內建，但只注入不保存——見第 5 節 Phase 3）、工具層（內建）、結果校驗（自建 plugin——deepagents 無現成方案，為驗證插件架構價值的第一個實戰 plugin）。
 

@@ -1,10 +1,11 @@
 /**
  * 把 `(Request) => Response` 的 handler 接上一個真的 socket。
  *
- * **handler 與 listener 是分開的兩件事，這是刻意的**（照 dsh 的 `fetch/handler.ts`
- * 與它的載體分層）：協定的行為在 handler 上驗得完，不必綁 port；這一層只負責
- * 把 `node:http` 的 stream 翻成 fetch 的那組型別，它自己的正確性靠一次真的
- * loopback 往返來釘。
+ * **handler 與 listener 是分開的兩件事，這是刻意的**（當初照的是 dsh 的
+ * `fetch/handler.ts` 與它的載體分層——那個套件在 HEAD `0a53fb55` 已經不在了，
+ * 見 [`wire-handler.ts`](./wire-handler.ts) 的檔頭）：協定的行為在 handler 上驗得完，
+ * 不必綁 port；這一層只負責把 `node:http` 的 stream 翻成 fetch 的那組型別，
+ * 它自己的正確性靠一次真的 loopback 往返來釘。
  */
 
 import { createServer } from 'node:http';
