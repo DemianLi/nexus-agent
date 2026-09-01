@@ -61,14 +61,18 @@ function refOf(service: GoalService): GoalRef {
 }
 
 describe('掛載', () => {
-  it('只往 sessions 通道掛一位參與者，別的通道一格都不碰', () => {
+  it('只碰 sessions 與 commands 兩個通道，別的一格都不動', () => {
+    // **`commands` 這一格翻面了。** 上一張 PR 這裡是 `toEqual([])`，守的是「域不裝任何
+    // 人打得到的東西」。`/goal` 落地之後那條線換了主詞：要守的變成「它只多掛一個命令」
+    // ——工具、middleware 與配套入口仍然一格都不碰，因為命令不進模型，掛了 `/goal` 的
+    // agent 與沒掛的在模型眼裡一模一樣。這一條是那句話的守衛。
     const registry = createRegistry();
     const exit = registry.enter({ id: 'goal#0', name: 'goal' });
     createGoalPlugin().apply(registry);
     exit();
     expect(registry.sessions.installers()).toHaveLength(1);
+    expect(registry.commands.list().map((entry) => entry.name)).toEqual(['goal']);
     expect(registry.tools.effective(undefined).size).toBe(0);
-    expect(registry.commands.list()).toEqual([]);
     expect(registry.middleware.list()).toEqual([]);
     expect(registry.invariants.companions()).toEqual([]);
   });

@@ -1,3 +1,4 @@
+import { GOAL_COMMAND_NAME, GOAL_NONE_MESSAGE } from '@nexus/plugin-goal';
 import { PLAN_COMMAND_NAME, PLAN_ENTERED_MESSAGE } from '@nexus/plugin-plan-mode';
 import { createWireClient } from '@nexus/wire';
 import {
@@ -121,6 +122,32 @@ describe('serve 的命令面', () => {
       command_id: expect.any(String),
       text: PLAN_ENTERED_MESSAGE,
     });
+  });
+
+  it('**每條 thread 各有各的目標**——`/goal` 在真的 serve 上找得到自己那一份', async () => {
+    // 這一條同時是 `/goal` 那個「一份 registry 只接一份日誌」假設的實地驗收：
+    // `serve.ts` 每個 thread 呼叫一次 `createCliAgent`，所以各自一份 registry 一份日誌。
+    // 假設破掉的話這裡不會靜靜串台，會直接收到 `goalAmbiguousMessage` 那句錯誤。
+    running = await runServe({ argv: ['--port', '0'], log: () => undefined, env: {} });
+    const started = running as RunningServe;
+    const client = createWireClient({ baseUrl: started.url });
+    await client.openEvents('alpha');
+    await client.openEvents('beta');
+
+    const created = await client.slashRun('alpha', `/${GOAL_COMMAND_NAME} 把測試修綠`);
+    if (created.kind !== 'success') throw new Error(JSON.stringify(created));
+    expect(created.text).toContain('目標建好了');
+    expect(created.text).toContain('目標：把測試修綠');
+
+    // beta 看不到 alpha 的目標。
+    const other = await client.slashRun('beta', `/${GOAL_COMMAND_NAME}`);
+    if (other.kind !== 'success') throw new Error(JSON.stringify(other));
+    expect(other.text).toBe(GOAL_NONE_MESSAGE);
+
+    // 而 alpha 自己再問一次還在。
+    const again = await client.slashRun('alpha', `/${GOAL_COMMAND_NAME}`);
+    if (again.kind !== 'success') throw new Error(JSON.stringify(again));
+    expect(again.text).toContain('目標：把測試修綠');
   });
 });
 

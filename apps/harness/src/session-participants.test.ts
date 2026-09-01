@@ -12,7 +12,7 @@
 import { PassThrough } from 'node:stream';
 
 import { createEchoPlugin } from '@nexus/plugin-echo';
-import { createGoalPlugin } from '@nexus/plugin-goal';
+import { createGoalPlugin, GOAL_CLEARED_MESSAGE, GOAL_COMMAND_NAME } from '@nexus/plugin-goal';
 import { SessionLog } from '@nexus/core';
 import { createWireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -99,6 +99,29 @@ describe('CLI 那條', () => {
     expect(stderr()).toContain(
       '[不變量] invariant violated by "@nexus/goal-probe": 看到 goal/change',
     );
+  });
+
+  it('**REPL 裡打 `/goal` 真的動得了那一份日誌**——預設清單，不帶 `--plugins`', async () => {
+    // 這是 [#126](https://github.com/DemianLi/nexus-agent/issues/126) 在 CLI 這條路上的
+    // 端到端驗收，而它必須走 `runCli`：上面那條證的是「參與者裝上了」，證不了「人打的
+    // 那一行找得到它」。中間那一段是 `apply` 閉包裡的那一格，只有真的發派一次才走得到。
+    const { printer, stdout } = recorder();
+    const input = new PassThrough();
+    input.end(`/${GOAL_COMMAND_NAME} 把測試修綠
+/${GOAL_COMMAND_NAME}
+/${GOAL_COMMAND_NAME} clear
+/exit
+`);
+    await runCli({ argv: [], input, output: new PassThrough(), printer });
+
+    const text = stdout();
+    expect(text).toContain('目標建好了');
+    expect(text).toContain('目標：把測試修綠');
+    // 第二行是查看：狀態還在，代表它讀的是同一份折疊而不是每次重來。
+    expect(text).toContain('狀態：進行中');
+    expect(text).toContain(GOAL_CLEARED_MESSAGE);
+    // **模型一次都沒被叫到**——命令不進模型。假模型的第一輪是回聲，它沒出現。
+    expect(text).not.toContain('回聲：');
   });
 });
 

@@ -8,7 +8,7 @@ TypeScript + React (shadcn/ui) 專案，架構分為 harness 與 web UI 兩部�
 packages/nexus-core          NexusPlugin 契約：型別、manifest、PluginRegistry、fold
 packages/nexus-plugin-commands  人打的斜線命令：解析、執行、生命週期記日誌
 packages/nexus-plugin-echo   最小 plugin 範例，只相依 @nexus/core
-packages/nexus-plugin-goal   一個會話的長期目標：狀態、CAS 變更、續行授權
+packages/nexus-plugin-goal   一個會話的長期目標：狀態、CAS 變更、續行授權，加上 /goal
 packages/nexus-plugin-mcp    把 MCP server 的工具接進 registry
 packages/nexus-plugin-quickjs  QuickJS 沙箱裡跑 JavaScript 的 custom tool
 packages/nexus-plugin-memory 把 AGENTS.md 這類長期記憶掛進 agent
@@ -118,6 +118,36 @@ CLI 與 eval 走 `HEADLESS_APPROVALS`：在那裡提出的計劃會被確定性�
 
 模式沒啟用時，`exit_plan_mode` 仍留在工具目錄裡（照 dsh：狀態轉換不該順帶改變工具目錄），
 但它的執行路徑會拒絕 —— 回的是「不在計劃模式」，不是核准的措辭。
+
+### 長期目標
+
+`@nexus/plugin-goal` 讓一個會話記得住一個跨很多輪的目標：**事件溯源的耐久狀態**
+（`goal/change` 帶著整份快照）、**CAS 變更**（改之前要拿對修訂號），與 process 內
+的續行授權。形狀照 dsh 的 `packages/goal/`。
+
+**它在 CLI 的預設清單裡，開關是 `/goal`。** 六種輸入：
+
+| 這一行 | 做什麼 |
+| --- | --- |
+| `/goal` | 印出目前的目標、相位、輪次與上限、續行授權，與**現在打得動的命令** |
+| `/goal <目標>` | 建一個目標並授權續行；完成掉的目標可以直接被換掉 |
+| `/goal edit <目標>` | 改敘述，**不動相位也不動授權** |
+| `/goal pause` | 暫停進行中的目標並收回授權 |
+| `/goal resume` | 把停住的接回來，或替續上的 session 重新授權 |
+| `/goal clear` | 清掉目前的目標，**歷史留著** |
+
+**控制詞只有填滿整串輸入時才算控制詞**：`/goal pause after verification` 建的是
+「pause after verification」這個字面目標。照抄 dsh 的文法，理由是這個命令主要用來打
+一句話，而一句話很可能以控制詞開頭。
+
+dsh 那邊 `/goal` 還收圖片附件，我們沒有——`CommandInvocation` 沒有 `attachments`，
+整條水管不存在，所以提示字串裡也不寫圖片。dsh 另外有面向模型的 `tool-goal` 與自動
+續行的 `goal-round-driver`，兩個都不在這一版：前者被工具執行期讀不到呼叫者血緣擋住，
+後者是 dsh 自己標成可選的消費方。細節與每一條偏離的代價寫在
+`packages/nexus-plugin-goal/src/index.ts` 的檔頭。
+
+web 那條也打得到，而且**每條 thread 各有各的目標**——`serve.ts` 一個 thread 一個
+agent，所以一份 registry 一份會話日誌。
 
 ### 人的命令
 
