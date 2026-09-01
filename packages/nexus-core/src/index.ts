@@ -36,6 +36,19 @@ export type {
 } from './commands.js';
 export { COMMAND_NAME_PATTERN, normalizeCommandDefinition } from './commands.js';
 
+export type {
+  GoalBlockReason,
+  GoalChangeMeta,
+  GoalClearChangeMeta,
+  GoalId,
+  GoalOperation,
+  GoalPhase,
+  GoalRef,
+  GoalSnapshot,
+  GoalSnapshotChangeMeta,
+} from './goal.js';
+export { GOAL_CHANGE_VERSION, goalId } from './goal.js';
+
 export type { NamedEntry, DuplicateErrorFactory } from './entries.js';
 export { AnonymousEntries, NamedEntries, CapabilitySet } from './entries.js';
 
@@ -57,6 +70,7 @@ export type {
   InvariantRegistrationPoint,
   TelemetryRegistrationPoint,
   CommandRegistrationPoint,
+  SessionRegistrationPoint,
   Disposer,
   RegisterOptions,
   ScopeKey,
@@ -102,6 +116,9 @@ export type {
 } from './invariants.js';
 export type { InvariantFailure } from './invariants.js';
 export { assertInvariantSelection, createInvariantRunner, InvariantError } from './invariants.js';
+
+export type { SessionInstaller, SessionRunnerOptions, SessionSubject } from './sessions.js';
+export { createSessionRunner } from './sessions.js';
 
 // 配套入口（`./invariant`）刻意**不從主入口再匯出**，形狀照 dsh：那邊每個 package 的
 // 配套入口都只掛在 `<pkg>/invariant` 這個子路徑上，import 主入口不會把它拖進來。

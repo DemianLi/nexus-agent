@@ -33,6 +33,7 @@
 import {
   assertInvariantSelection,
   createInvariantRunner,
+  createSessionRunner,
   foldRegistry,
   formatOrigin,
   loadPlugins,
@@ -183,6 +184,11 @@ export const HEADLESS_APPROVALS: ApprovalPolicy = { enabled: false };
  *
  * `attachInvariants` 同一個理由，接的是不變量配套入口。兩者**不合併**：遙測是把事件
  * 送出去，不變量是檢查事件之間的關係，一個有出境資料一個沒有，開關與失敗語意都不一樣。
+ *
+ * `attachSession` 是第三個，接的是 `sessions` 通道的參與者。它與另外兩個的差別是**方向**：
+ * 那兩個只讀，這一個交出去的日誌**寫得動**——`goal/change` 這種權威 domain 事件就是從
+ * 這裡進日誌的。理由與否掉沿用 `invariants` 的兩條見
+ * {@link @nexus/core!SessionSubject}。
  */
 export type NexusAgentHandle = Awaited<ReturnType<typeof createNexusAgent>>;
 
@@ -297,6 +303,23 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
             onViolation: options.onInvariantViolation,
           }),
         });
+      },
+      /**
+       * 把一份會話日誌接上註冊著的 `sessions` 參與者。**沒有人註冊時回 `undefined`**——
+       * 同另外兩個 attach 的理由：沒有參與者就不要在熱路徑上多掛一個訂閱。
+       *
+       * **這裡沒有 selection 也沒有 `onViolation`。** 那兩樣是不變量的東西：一個回答
+       * 「這個 package 的檢查要不要裝」，一個回答「違規往哪裡印」。參與者不產生違規，
+       * 它產生的是事件；要不要裝它由清單那一層答（條目層的 `disabled`），而它自己壞掉
+       * 只換來一行 warn。
+       *
+       * @param log - 要交出去的日誌。
+       * @returns 收掉這一次接線的函式，或沒有參與者時的 `undefined`。
+       */
+      attachSession(log: SessionLog): (() => void) | undefined {
+        const installers = registry.sessions.installers();
+        if (installers.length === 0) return undefined;
+        return createSessionRunner({ log, installers });
       },
       async dispose() {
         // 遙測先收：後端很可能是某個 plugin 開的，plugin 的 disposer 一跑它就沒了，

@@ -125,9 +125,9 @@ describe('不變量接線：CLI 那條路', () => {
 });
 
 describe('預設清單', () => {
-  it('十一個配套入口都在，而且各自認領自己的包名', async () => {
+  it('十二個配套入口都在，而且各自認領自己的包名', async () => {
     // #107 拍的是「全進」。少掛的那幾個會讓「這個 package 沒有可檢的關係」與
-    // 「這個 package 的檢查沒掛上」在診斷裡長得一模一樣，所以這裡數的是**十一**。
+    // 「這個 package 的檢查沒掛上」在診斷裡長得一模一樣，所以這裡數的是**十二**。
     const { dispose, sessionLog, attachInvariants } = await createCliAgent(
       { live: false },
       DEFAULT_PLUGINS,
@@ -137,7 +137,7 @@ describe('預設清單', () => {
     } finally {
       await dispose();
     }
-    expect(DEFAULT_PLUGINS.filter((plugin) => plugin.name.endsWith('-invariant'))).toHaveLength(11);
+    expect(DEFAULT_PLUGINS.filter((plugin) => plugin.name.endsWith('-invariant'))).toHaveLength(12);
   });
 });
 

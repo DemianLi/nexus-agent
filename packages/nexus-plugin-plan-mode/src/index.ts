@@ -34,9 +34,21 @@
  * 就做這件事：`AgentMiddleware.stateSchema` 的文件明寫 “Middleware state is persisted
  * between multiple invocations”。走不了 dsh 那條的原因是水管：
  *
- * - **plugin 拿不到 `SessionLog`。** 它活在入口層（`apps/harness` 的 `cli.ts`、
- *   `wire-handler.ts`、`thread-pump.ts`），十二個註冊點沒有一個通到它——`lifecycle`
- *   只管關機，`telemetry` 是出口不是入口。
+ * - **plugin 拿不到 `SessionLog`。** ——**這一條當時就是錯的，現在也修好了，但結論沒變。**
+ *
+ *   錯在哪：寫下它的時候註冊點是十三個不是十二個（`commands` 是
+ *   [#118](https://github.com/DemianLi/nexus-agent/issues/118) 之後才加的），而且
+ *   `invariants` 那條路交出的 `InvariantSubject.log` 從第一天起就是一份**完整、可寫**的
+ *   `SessionLog`——上面有 `append()`。所以「拿不到」從來不是真的；真的那件事是**沒有一個
+ *   通道的名字承認它**（收窄那一格是 [#127](https://github.com/DemianLi/nexus-agent/issues/127)）。
+ *
+ *   修好在哪：[#126](https://github.com/DemianLi/nexus-agent/issues/126) 加了第十四個註冊點
+ *   `sessions`，名字就說它交出可寫的日誌，goal 域走的正是它。
+ *
+ *   **但計劃模式沒有跟著搬，而理由不是慣性**：`SessionLog` 全樹仍然零個 hydrate／persist
+ *   路徑，搬過去只是把一個不耐久的存放處換成另一個不耐久的存放處，換不到下面那句話裡
+ *   丟掉的任何一樣東西；而且它還要 `SessionEventType` 再長一種 `plan/mode`，那是另一個
+ *   要自己說得出理由的決定。**日誌真的耐久化那天，這一段要重寫。**
  * - **`SessionEventType` 是 `@nexus/core` 的封閉 union**，沒有 dsh 那種宣告合併，而
  *   [#101](https://github.com/DemianLi/nexus-agent/issues/101) 已經明文把「加會話事件
  *   種類」排除在包自有不變量之外。

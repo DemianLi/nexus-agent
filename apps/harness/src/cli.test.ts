@@ -135,19 +135,21 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是 echo ＋ 計劃模式 ＋ 十一個配套入口', async () => {
+  it('預設清單是 echo ＋ 計劃模式 ＋ 十二個配套入口', async () => {
     // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
     // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
     // 讓計劃模式進來，理由寫在 `DEFAULT_PLUGINS` 的 JSDoc 上（命令沒進預設清單就等於
     // 不存在）。**改成 `toHaveLength` 會把這條線整個放掉**，所以名字仍然逐個寫死：
     // 下一個想塞東西進來的人還是得先改這一行，並且說得出理由。
     //
-    // 十一個配套入口那一半沒有變——`plan-mode-invariant` 本來就在裡面
-    // （[#107](https://github.com/DemianLi/nexus-agent/issues/107)），這次變的是它的
-    // installer 從空的變成有一條規則，那件事歸 `invariant-companions.test.ts` 守。
+    // 配套入口那一半從十一個變成十二個：`goal-invariant` 進來了
+    // （[#126](https://github.com/DemianLi/nexus-agent/issues/126)）。**goal 的域本身
+    // 沒有進**——它在 `/goal` 落地之前沒有任何人打得到的入口，掛上去只是讓每一次執行
+    // 多接一個觀察者。下一張 PR 補上命令時它才跟著進來，理由與計劃模式那一條同型。
     const names = DEFAULT_PLUGINS.map((plugin) => plugin.name);
     expect(names.filter((name) => !name.endsWith('-invariant'))).toEqual(['echo', 'plan-mode']);
-    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(11);
+    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(12);
+    expect(names).not.toContain('goal');
   });
 
   it('**違規印到 stderr 而且帶前綴**——不是靠 runner 預設的 `console.error`', async () => {

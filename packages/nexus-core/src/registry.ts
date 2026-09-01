@@ -10,7 +10,8 @@
  * {@link LifecycleRegistrationPoint} 回答「這些東西怎麼收掉」，
  * {@link TelemetryRegistrationPoint} 回答「這個會話發生的事往哪裡送、送之前怎麼洗」，
  * {@link InvariantRegistrationPoint} 回答「這個會話發生的事有沒有破壞誰的約定」，
- * {@link CommandRegistrationPoint} 回答「人打得出哪些斜線命令」。
+ * {@link CommandRegistrationPoint} 回答「人打得出哪些斜線命令」，
+ * {@link SessionRegistrationPoint} 回答「誰拿得到這個會話的日誌」。
  * 九個註冊點回答的是「這個 agent 由什麼組成」，五者正交。
  */
 
@@ -26,6 +27,7 @@ import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
 import { duplicateCompanionError } from './invariants.js';
 import type { InvariantCompanion, InvariantInstaller } from './invariants.js';
+import type { SessionInstaller } from './sessions.js';
 import type { SessionTelemetryRedactRule, SessionTelemetryService } from './session-telemetry.js';
 
 /**
@@ -440,6 +442,36 @@ export interface CommandRegistrationPoint {
   find(name: string): CommandDefinition | undefined;
 }
 
+/**
+ * `sessions` 通道：**誰拿得到這個會話的日誌**。
+ *
+ * 與另外十三個不同軸的理由同 lifecycle 與 telemetry：產物不進 `createDeepAgent` 的參數。
+ * 接線在組裝點（`apps/harness/src/agent-factory.ts` 的 `attachSession`），而且**每一份
+ * 日誌各接一次**——CLI 一份、web 那條每個 thread 一份。
+ *
+ * **交出去的日誌是可寫的**，理由與否掉沿用 `invariants` 的兩條見
+ * {@link ./sessions.ts | SessionSubject}。
+ *
+ * **不具名，同 `approvals` 與 `middleware`。** `invariants` 那條路保留包名是因為包名會
+ * 出現在每一則違規訊息裡；這裡沒有那種訊息，強加一條「一個包名一位」的唯一性規則會擋
+ * 掉一個合法的組裝（同一個 plugin 掛兩次，各自參與），而換不到任何診斷。註冊者的身分
+ * 照樣記著——`origin` 在，安裝失敗指得出是誰。
+ */
+export interface SessionRegistrationPoint {
+  /**
+   * 掛一位參與者。**只註冊，不安裝**——安裝是接線那一層的事，而且一份日誌一次。
+   *
+   * @param installer - 拿到日誌與觀察面，回一個收拾函式或什麼都不回。
+   * @returns 只撤銷這一次掛載的冪等 undo。
+   */
+  join(installer: SessionInstaller): () => void;
+  /**
+   * 目前掛著的參與者。接線那一層讀它。
+   * @returns 依註冊順序的每一位。
+   */
+  installers(): NamedEntry<SessionInstaller>[];
+}
+
 export interface PluginRegistry {
   readonly tools: ToolRegistrationPoint;
   readonly subagents: SubAgentRegistrationPoint;
@@ -454,6 +486,7 @@ export interface PluginRegistry {
   readonly telemetry: TelemetryRegistrationPoint;
   readonly invariants: InvariantRegistrationPoint;
   readonly commands: CommandRegistrationPoint;
+  readonly sessions: SessionRegistrationPoint;
 }
 
 /**
@@ -515,6 +548,7 @@ export function createRegistry(): InternalPluginRegistry {
   const denyRules = new AnonymousEntries<DenyRule>();
   const approvalListeners = new AnonymousEntries<PreToolListener>();
   const memorySources = new AnonymousEntries<string>();
+  const sessionInstallers = new AnonymousEntries<SessionInstaller>();
   const disposers = new AnonymousEntries<Disposer>();
   const redactRules = new AnonymousEntries<SessionTelemetryRedactRule>();
   // 具名表配一個固定的 key：唯一性與 undo 都不必另外寫，重複掛載直接撞在這裡。
@@ -721,6 +755,14 @@ export function createRegistry(): InternalPluginRegistry {
     find: (name) => commandEntries.get(name)?.value.definition,
   };
 
+  const sessionPoint: SessionRegistrationPoint = {
+    join(installer) {
+      const origin = requireOrigin('sessions.join()');
+      return sessionInstallers.append(installer, origin);
+    },
+    installers: () => [...sessionInstallers.entries()],
+  };
+
   const lifecyclePoint: LifecycleRegistrationPoint = {
     onDispose(dispose) {
       const origin = requireOrigin('lifecycle.onDispose()');
@@ -744,6 +786,7 @@ export function createRegistry(): InternalPluginRegistry {
     telemetry: telemetryPoint,
     invariants: invariantPoint,
     commands: commandPoint,
+    sessions: sessionPoint,
     enter(origin) {
       if (current !== undefined) {
         throw new Error(

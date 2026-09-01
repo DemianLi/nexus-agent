@@ -34,7 +34,18 @@ export interface CommandInputDescriptor {
  * 報錯而不說為什麼，等於沒報。
  *
  * dsh 的 `success` 還有一格 `sourceEventSeq`（指向某顆更早的權威事件，讓客戶端自己
- * 算出更豐富的呈現）。**我們沒有那種「權威 domain 事件」**，所以那一格沒有指涉對象。
+ * 算出更豐富的呈現）。
+ *
+ * **「我們沒有那種『權威 domain 事件』」這句話從
+ * [#126](https://github.com/DemianLi/nexus-agent/issues/126) 起不成立了**——`goal/change`
+ * 就是第一顆：它記的不是「發生過什麼」而是「現在的狀態是什麼」，帶著整份快照。
+ *
+ * **那一格仍然留白，換成另一個理由：沒有消費者。** dsh 的 `/goal` 靠它讓客戶端自己去讀
+ * 那顆事件、算出更豐富的呈現；我們的命令面照 dsh 是 handler 自己把完整狀態渲染成
+ * `text` 的，客戶端不必回頭讀日誌。補上這一格要一路穿過 wire 協定到瀏覽器，而另一端
+ * 沒有人要它。
+ *
+ * **這一段是絆索：哪天有客戶端真的需要從命令結果回頭找那顆事件，就是補它的時候。**
  */
 export type CommandResult =
   | { readonly kind: 'success'; readonly text?: string }

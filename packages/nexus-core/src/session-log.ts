@@ -25,6 +25,8 @@
  * 補訊息是後面的事，補的時候要先講清楚顆粒度怎麼對齊。
  */
 
+import type { GoalChangeMeta } from './goal.js';
+
 /**
  * 這一版收得下的事件種類。**加種類要同時回答「兩條路都產得出來嗎」。**
  *
@@ -32,9 +34,22 @@
  * 進入點（`runRepl` 手上就有這份日誌），不是 `streamEvents` 或 `stream(['updates'])`
  * ——上面那段排除訊息內容的「顆粒度對不齊」在這裡沒有指涉對象，同一段程式碼在兩條路
  * 上產出一模一樣的東西。見 [#118](https://github.com/DemianLi/nexus-agent/issues/118)。
+ *
+ * `goal/change` 同一條理由，但生產者換了一個：不是進入點，是**經 `registry.sessions`
+ * 拿到這份日誌的 plugin**（{@link ./sessions.ts | SessionRegistrationPoint}）。兩條路都
+ * 產得出來，因為兩條路都會接線——CLI 在 `runRepl` 之前接一次，web 那條每個 thread 建
+ * pump 時接一次。它是**第一顆權威 domain 事件**：前面五種記的是「發生過什麼」，這一種
+ * 記的是「現在的狀態是什麼」，所以它帶的是整份快照而不是差異。
+ * 見 [#126](https://github.com/DemianLi/nexus-agent/issues/126)。
  */
 export type SessionEventType =
-  'turn/start' | 'turn/end' | 'turn/failed' | 'interrupt/raised' | 'command/run' | 'command/done';
+  | 'turn/start'
+  | 'turn/end'
+  | 'turn/failed'
+  | 'interrupt/raised'
+  | 'command/run'
+  | 'command/done'
+  | 'goal/change';
 
 /** 每一種事件帶什麼。 */
 export interface SessionEventMap {
@@ -77,6 +92,17 @@ export interface SessionEventMap {
     readonly kind: 'success' | 'error';
     readonly text?: string;
   };
+  /**
+   * 這個會話的長期目標動了一次。**每一筆帶整份耐久狀態**（六個 operation），或是一顆
+   * clear 墓碑。
+   *
+   * 帶整份而不是帶差異，是因為讀它的是一個**嚴格重放**的折疊：差異要求讀的人先有正確
+   * 的前一份狀態才解得開，而整份快照讓「這一筆自己合不合法」與「它接不接得上前一筆」
+   * 分成兩道各自報得出理由的檢查。折疊在 `@nexus/plugin-goal`。
+   *
+   * **`goal.blockedReason` 沒有時要整個不放 key**，同 `command/done` 的 `text`。
+   */
+  'goal/change': GoalChangeMeta;
 }
 
 /** 日誌裡的一筆。凍過的，拿到之後改不動。 */

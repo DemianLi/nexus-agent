@@ -95,6 +95,19 @@ export interface ThreadAgent {
    * @returns 收掉這次接線的函式，或沒有配套入口時的 `undefined`。
    */
   attachInvariants?(log: SessionLog): (() => void) | undefined;
+  /**
+   * 把這個 thread 的日誌接上 `sessions` 通道的參與者，選配。
+   *
+   * 同上面兩條的理由住在組裝點，但**方向相反**：交出去的日誌寫得動，參與者記得下
+   * `goal/change` 這種權威 domain 事件。沒有人註冊參與者時回 `undefined`。
+   *
+   * **這條路不能漏。** 漏了的話 `@nexus/core` 的測試照樣全綠，而 web 那端每一個 thread
+   * 的域狀態都不存在——那是一種只在瀏覽器上看得到的缺席。
+   *
+   * @param log - 這個 thread 的日誌。
+   * @returns 收掉這次接線的函式，或沒有參與者時的 `undefined`。
+   */
+  attachSession?(log: SessionLog): (() => void) | undefined;
 }
 
 export interface WireHandlerOptions {
@@ -190,6 +203,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       const pump = new ThreadPump(threadAgent.agent, threadId);
       const detachTelemetry = threadAgent.attachTelemetry?.(pump.sessionLog);
       const detachInvariants = threadAgent.attachInvariants?.(pump.sessionLog);
+      // **接在不變量之後**，同 `cli.ts` 那條的理由：參與者一裝上去就可能記東西，
+      // 那些東西該被已經在看的檢查看到。
+      const detachSession = threadAgent.attachSession?.(pump.sessionLog);
       return {
         pump,
         commands: threadAgent.commands,
@@ -201,7 +217,10 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         }),
         slashInFlight: false,
         dispose: async () => {
-          // 不變量先退訂：它只是一個訂閱，退掉不會有東西要排空，而留著它跑在關機途中的
+          // **參與者先收，比不變量還早**：它是唯一寫得動日誌的那一個，先讓它停手，
+          // 檢查才還在看著它最後那幾筆。反過來收的話，關機途中寫進去的東西沒人檢。
+          detachSession?.();
+          // 不變量再退訂：它只是一個訂閱，退掉不會有東西要排空，而留著它跑在關機途中的
           // 事件上只會多噪音。
           detachInvariants?.();
           // 遙測先收，理由同 `agent-factory.ts`：後端可能是某個 plugin 開的。

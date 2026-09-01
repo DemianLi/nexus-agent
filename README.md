@@ -8,6 +8,7 @@ TypeScript + React (shadcn/ui) 專案，架構分為 harness 與 web UI 兩部�
 packages/nexus-core          NexusPlugin 契約：型別、manifest、PluginRegistry、fold
 packages/nexus-plugin-commands  人打的斜線命令：解析、執行、生命週期記日誌
 packages/nexus-plugin-echo   最小 plugin 範例，只相依 @nexus/core
+packages/nexus-plugin-goal   一個會話的長期目標：狀態、CAS 變更、續行授權
 packages/nexus-plugin-mcp    把 MCP server 的工具接進 registry
 packages/nexus-plugin-quickjs  QuickJS 沙箱裡跑 JavaScript 的 custom tool
 packages/nexus-plugin-memory 把 AGENTS.md 這類長期記憶掛進 agent
