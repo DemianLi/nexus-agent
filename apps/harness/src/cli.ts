@@ -35,6 +35,7 @@ import { SessionLog } from '@nexus/core';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant';
 import { createEchoInvariantPlugin } from '@nexus/plugin-echo/invariant';
+import { createGoalPlugin } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
 import { createMcpInvariantPlugin } from '@nexus/plugin-mcp/invariant';
 import { createMemoryInvariantPlugin } from '@nexus/plugin-memory/invariant';
@@ -139,7 +140,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
  * 哪些**工具** plugin 該進預設清單是設定的事，那要等**外部**設定機制才有地方講
  * （[#46](https://github.com/DemianLi/nexus-agent/issues/46)）。
  *
- * **計劃模式是第二個例外，理由與那十二個不同**
+ * **計劃模式與 goal 是第二與第三個例外，理由與那十二個不同**
  * （[#120](https://github.com/DemianLi/nexus-agent/issues/120)）：它註冊的是一個
  * **人打得到的命令**，而命令沒進預設清單就等於不存在——`/plan` 會被 `parseCommand`
  * 判成「名字不認得」，照原樣掉回模型，變成一行沒人懂的純文字。所以「不替誰決定該裝
@@ -156,6 +157,16 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
  *   （[#123](https://github.com/DemianLi/nexus-agent/issues/123)）：web 那端自己打
  *   `/plan` 就進得去，而且核准是開著的，所以「規劃 → 交計劃 → 有人按批准 → 開始動手」
  *   整條走得完——那是 CLI 這條路走不完的（`HEADLESS_APPROVALS` 會確定性拒絕）。
+ *
+ * **`@nexus/plugin-goal` 走同一條例外，代價不一樣**
+ * （[#126](https://github.com/DemianLi/nexus-agent/issues/126)）：它註冊 `/goal`，而
+ * 上一句話對它同樣成立——命令沒進清單，`/goal 把測試修綠` 會掉回模型變成一句閒聊。
+ * 它的代價只有一筆，而且比計劃模式輕：**每一次執行多接一位會話參與者**。它不註冊工具、
+ * 不改 prompt、不碰 backend，所以不打 `/goal` 的話 token 與工具清單都跟這行改動之前
+ * 一模一樣；沒有目標時它連一顆事件都不寫。
+ *
+ * **域與命令是同一個 plugin**，不像 dsh 拆成兩個套件——理由寫在
+ * `@nexus/plugin-goal` 的檔頭上。
  *
  * **十二個不變量配套入口是那句話的例外，而例外要說得出理由**
  * （[#107](https://github.com/DemianLi/nexus-agent/issues/107) 拍板）：
@@ -180,6 +191,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
 export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
   createEchoPlugin(),
   createPlanModePlugin(),
+  createGoalPlugin(),
   createCoreInvariantPlugin(),
   createCommandsInvariantPlugin(),
   createEchoInvariantPlugin(),
