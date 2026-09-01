@@ -42,6 +42,12 @@ export function App({ client }: { client?: WireClient } = {}) {
           {...(conversation.commandError === undefined
             ? {}
             : { commandError: conversation.commandError })}
+          {...(conversation.slashError === undefined
+            ? {}
+            : { slashError: conversation.slashError })}
+          {...(conversation.slashNotice === undefined
+            ? {}
+            : { slashNotice: conversation.slashNotice })}
         />
       </header>
 
@@ -88,6 +94,24 @@ export function App({ client }: { client?: WireClient } = {}) {
           送出
         </Button>
       </form>
+
+      {conversation.slashCommands.length > 0 && (
+        // **扁平清單，不是選單。** 打 `/` 不會跳候選、不補全——那一套（dsh 的
+        // `CommandDirectory`）是另一張卡。這裡只讓人知道打得出什麼
+        // （[#123](https://github.com/DemianLi/nexus-agent/issues/123)）。
+        <p className="text-muted-foreground text-xs">
+          命令：
+          {conversation.slashCommands.map((command, index) => (
+            <span key={command.name}>
+              {index === 0 ? '' : '、'}
+              <code title={command.description}>
+                /{command.name}
+                {command.input === undefined ? '' : ` ${command.input.hint}`}
+              </code>
+            </span>
+          ))}
+        </p>
+      )}
     </main>
   );
 }

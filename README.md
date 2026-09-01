@@ -102,20 +102,18 @@ dsh 的 `/plan` 還收一段自由訊息（`[off|message]`），用 `agent.steer
 createPlanModePlugin({ startActive: true, guidance: '（部署自己寫的那一段）' })
 ```
 
-一份這樣的清單在 `src/plan-mode.fixture.ts`：
+**但預設清單不必換。** `serve` 那條線上有命令介面了（[#123](https://github.com/DemianLi/nexus-agent/issues/123)），
+web 那端自己打 `/plan` 就進得去：
 
 ```bash
-pnpm --filter @nexus/harness run serve:live --plugins src/plan-mode.fixture.ts
+pnpm --filter @nexus/harness run serve:live
 ```
 
-**那一份仍然是給 `serve` 用的，而且要 `--live`。** `exit_plan_mode` 是需要核准的工具，
+**`serve` 才是走得完整條路的地方，而且要 `--live`。** `exit_plan_mode` 是需要核准的工具，
 CLI 與 eval 走 `HEADLESS_APPROVALS`：在那裡提出的計劃會被確定性拒絕 —— CLI 上還打得出
-`/plan off` 自己爬出來，web 上按得下批准，所以 `serve` 才是走完整條路的地方。
-假模型的腳本另外寫死在 `cli.ts`，它不會呼叫 `exit_plan_mode` —— 換清單改不了模型的腳本，
-所以「規劃 → 交計劃 → 有人按批准 → 開始動手」要真模型。
-
-**`serve` 那條線上還沒有命令介面**，所以 web 那端拿到的是「工具在清單裡、`/plan` 打不到」；
-在那裡打開計劃模式仍然靠上面那份清單。
+`/plan off` 自己爬出來，web 上按得下批准。假模型的腳本另外寫死在 `cli.ts`，它不會呼叫
+`exit_plan_mode` —— 換清單改不了模型的腳本，所以「規劃 → 交計劃 → 有人按批准 → 開始動手」
+要真模型。
 
 模式沒啟用時，`exit_plan_mode` 仍留在工具目錄裡（照 dsh：狀態轉換不該順帶改變工具目錄），
 但它的執行路徑會拒絕 —— 回的是「不在計劃模式」，不是核准的措辭。

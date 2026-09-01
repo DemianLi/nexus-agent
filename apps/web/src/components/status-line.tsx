@@ -12,11 +12,15 @@ export function StatusLine({
   connected,
   connectionError,
   commandError,
+  slashError,
+  slashNotice,
 }: {
   state: ConversationState;
   connected: boolean;
   connectionError?: string;
   commandError?: string;
+  slashError?: string;
+  slashNotice?: string;
 }) {
   if (connectionError !== undefined) {
     return (
@@ -44,6 +48,24 @@ export function StatusLine({
     return (
       <p className="text-destructive text-sm" role="status">
         這個動作沒送出去：{commandError}
+      </p>
+    );
+  }
+  if (slashError !== undefined) {
+    // 命令自己失敗，或那一行不是認得的命令。**跟上面那條是兩件事**：那個是這條線
+    // 拒絕發派，這個是發派成功之後命令講的話。
+    return (
+      <p className="text-destructive text-sm" role="status">
+        {slashError}
+      </p>
+    );
+  }
+  if (slashNotice !== undefined && state.status !== 'running') {
+    // 命令的結果**由發派它的這一側直接呈現**，不進 transcript（命令不進模型）。
+    // 下一輪一開跑就讓位——那時人要看的是那一輪。
+    return (
+      <p className="text-sm" role="status">
+        {slashNotice}
       </p>
     );
   }

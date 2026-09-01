@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
+import { emptyCommandPoint } from './fixtures.js';
 import { createWireHandler } from './wire-handler.js';
 
 /**
@@ -69,7 +70,11 @@ function build(
 
 function connect(agent: PumpAgent) {
   const handler = createWireHandler({
-    createAgent: async () => ({ agent, dispose: async () => undefined }),
+    createAgent: async () => ({
+      agent,
+      commands: emptyCommandPoint(),
+      dispose: async () => undefined,
+    }),
   });
   return {
     handler,

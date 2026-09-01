@@ -207,6 +207,7 @@ describe('遙測接線：web 那條路', () => {
     const handler = createWireHandler({
       createAgent: async () => ({
         agent: built.agent as unknown as PumpAgent,
+        commands: built.commands,
         dispose: built.dispose,
         attachTelemetry: built.attachTelemetry,
       }),
@@ -243,6 +244,7 @@ describe('遙測接線：web 那條路', () => {
     const handler = createWireHandler({
       createAgent: async () => ({
         agent: built.agent as unknown as PumpAgent,
+        commands: built.commands,
         dispose: built.dispose,
       }),
     });

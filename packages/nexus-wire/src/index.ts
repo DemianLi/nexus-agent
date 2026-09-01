@@ -18,17 +18,29 @@ export type {
   Event,
   EventStreamRequest,
   InputRespondOne,
+  RpcMethod,
   RunStartParams,
+  SlashCommand,
+  SlashDescriptor,
+  SlashInputDescriptor,
+  SlashListCommand,
+  SlashListResult,
+  SlashMethod,
+  SlashRunCommand,
+  SlashRunResult,
   UplinkMethod,
   WireChannel,
 } from './protocol.js';
 export {
+  SLASH_METHODS,
   UPLINK_METHODS,
   WIRE_CHANNELS,
   channelOfMethod,
   commandPath,
   errorResponse,
   eventId,
+  isRpcMethod,
+  isSlashMethod,
   isUplinkMethod,
   isWireChannel,
   streamPath,
@@ -57,5 +69,12 @@ export {
   uniformDecisions,
 } from './conversation.js';
 
-export type { OpenEventsOptions, UplinkResult, WireClient, WireClientOptions } from './client.js';
+export type {
+  OpenEventsOptions,
+  SlashListOutcome,
+  SlashRunOutcome,
+  UplinkResult,
+  WireClient,
+  WireClientOptions,
+} from './client.js';
 export { createWireClient } from './client.js';
