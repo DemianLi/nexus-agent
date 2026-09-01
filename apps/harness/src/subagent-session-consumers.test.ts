@@ -21,8 +21,15 @@ import { MemorySaver } from '@langchain/langgraph';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { SessionRegistry } from '@nexus/core';
-import type { NexusPlugin, SessionTelemetryRecord, SessionTelemetryService } from '@nexus/core';
+import type {
+  InvariantError,
+  NexusPlugin,
+  SessionTelemetryRecord,
+  SessionTelemetryService,
+} from '@nexus/core';
+import { createGoalPlugin, GOAL_COMMAND_NAME, goalAmbiguousMessage } from '@nexus/plugin-goal';
 import { createNexusAgent } from './agent-factory.js';
+import { DEFAULT_PLUGINS } from './cli.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 
@@ -59,6 +66,8 @@ function observingPlugin(seen: Seen): NexusPlugin {
           ({ note }: { note: string }, config?: unknown) => {
             const found = registry.sessions.forCall(config);
             if (found.kind !== 'ok') return `寫不進去：${found.kind}`;
+            // **`turn/failed` 在這裡只是「一個帶字串的事件」**，不是真工具該寫的東西：
+            // turn 的擁有者是進入點。下面「輪的擁有者」那一組把這件事講清楚並釘住。
             found.log.append('turn/failed', { message: note });
             return '記了一筆。';
           },
@@ -144,5 +153,153 @@ describe('subagent 的日誌與三個消費者', () => {
     // 三個都同時看得到 root 那份——新結構不是把 root 換成 subagent，是兩份都有。
     expect(seen.invariants).toContain(`${ROOT_ID}/turn/failed`);
     expect(seen.participants).toContain(`${ROOT_ID}/turn/failed`);
+  });
+});
+
+/** 委派一次、子代理不寫任何東西，只把自己那份日誌**開出來**。 */
+const OPEN_ONLY = 'open_only';
+
+/** 委派一次、子代理往自己那份日誌寫一顆 turn 事件。 */
+const WRITE_TURN = 'write_turn';
+
+function boundaryPlugin(write: boolean): NexusPlugin {
+  return {
+    name: 'boundary',
+    apply(registry) {
+      registry.tools.register(
+        tool(
+          (_input: Record<string, never>, config?: unknown) => {
+            const found = registry.sessions.forCall(config);
+            if (found.kind !== 'ok') return `寫不進去：${found.kind}`;
+            if (write) found.log.append('turn/failed', { message: '子代理寫的' });
+            return '好了。';
+          },
+          {
+            name: write ? WRITE_TURN : OPEN_ONLY,
+            description: '碰一下自己那份會話日誌。',
+            schema: z.object({}),
+          },
+        ),
+      );
+      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    },
+  };
+}
+
+/** 委派一次、子代理呼叫那顆工具、收工；root 全程不寫日誌。 */
+function delegatingModel(toolName: string): ScriptedChatModel {
+  return new ScriptedChatModel({
+    turns: [
+      {
+        content: '委派。',
+        toolCalls: [{ name: 'task', args: { description: '幹活', subagent_type: 'worker' } }],
+      },
+      { content: '子代理動手。', toolCalls: [{ name: toolName, args: {} }] },
+      { content: '子代理收工。' },
+      { content: '根收工。' },
+      { content: '再收一次。' },
+    ],
+  });
+}
+
+/**
+ * 跑一輪，回報**真的十二個配套入口**報了什麼。
+ *
+ * **重點在「真的」。** 上面那一組掛的是自己寫的 `@nexus/observing`，它從來不 `fail`，
+ * 所以它證得了「消費者接上了」，證不了「接上去之後不會誤報」。而誤報的去處是使用者的
+ * 終端機（`cli.ts` 的 `printer.error('[不變量] …')`），一條會在正常流量上誤報的檢查比
+ * 沒有檢查更糟——同 `invariant-paths.test.ts` 檔頭那一條。
+ */
+async function violationsFrom(plugin: NexusPlugin, toolName: string): Promise<string[]> {
+  const violations: string[] = [];
+  const { agent, attachInvariants, attachSession, dispose } = await createNexusAgent({
+    model: delegatingModel(toolName),
+    checkpointer: new MemorySaver(),
+    plugins: [...DEFAULT_PLUGINS, plugin],
+    onInvariantViolation: (error: InvariantError) => void violations.push(error.message),
+  });
+  const sessions = new SessionRegistry('boundary');
+  const detachInvariants = attachInvariants(sessions);
+  const detachSession = attachSession(sessions);
+  try {
+    // 照兩條進入點實際發的順序，把 root 那一輪包起來。
+    sessions.root.append('turn/start', { kind: 'message', text: '跑。' });
+    await agent.invoke(toAgentInvocation('跑。'), { configurable: { thread_id: 'boundary' } });
+    sessions.root.append('turn/end', {});
+  } finally {
+    detachSession();
+    detachInvariants?.();
+    await dispose();
+  }
+  return violations;
+}
+
+describe('輪的擁有者是進入點，不是工具', () => {
+  it('多出一份 subagent 日誌本身不會讓任何配套入口吭聲', async () => {
+    expect(await violationsFrom(boundaryPlugin(false), OPEN_ONLY)).toEqual([]);
+  });
+
+  /**
+   * **這一條釘的是一個約定，而它讀起來像壞掉。**
+   *
+   * subagent 的日誌上**永遠不會有 `turn/start`**：發 turn 事件的是進入點
+   * （`thread-pump.ts` 的 `#runOnce`、`cli.ts` 的 `runTurn`），而 subagent 不經過進入點
+   * ——它是基座的 `task` middleware 跑的，我們看不到它開始也看不到它結束。所以一顆
+   * `turn/failed` 落在那份日誌上，就是「關了一個沒有開著的輪」，核心的 turn 配對當場報。
+   *
+   * **報得對，不要去鬆綁它。** 鬆綁的代價是 root 那側真正的配對錯誤跟著看不見。要往
+   * subagent 的日誌寫東西的工具，該用**自己域的事件種類**（[#132](https://github.com/DemianLi/nexus-agent/issues/132)
+   * 的 `todo/write` 會是第一顆），而配套入口對不認得的種類是放行的（`invariant.ts` 的
+   * `default` 分支）。
+   *
+   * 也不要靠「開會話的時候補一顆 `turn/start`」來擺平——那是合成一顆沒有人發過的事件，
+   * 而日誌的價值來自它記的是量到的東西。
+   */
+  it('工具往 subagent 的日誌寫 turn 事件，核心配套入口會報——而那是對的', async () => {
+    expect(await violationsFrom(boundaryPlugin(true), WRITE_TURN)).toEqual([
+      'invariant violated by "@nexus/core": turn/failed（seq 0）關了一個沒有開著的輪',
+    ]);
+  });
+});
+
+/**
+ * **`@nexus/plugin-goal` 只接 root 那一份，而這一條就是那行 `if` 的絆索。**
+ *
+ * 拿掉 `index.ts` 裡的 `if (subject.address.kind !== 'root') return;`，這裡會紅：參與者
+ * 是每一份會話各裝一次的，所以每次委派都多長出一個 `GoalService`，`/goal` 從第二次
+ * 委派開始一律回 {@link goalAmbiguousMessage}——一個沒有人動過它卻壞掉的命令。
+ *
+ * 而「只管 root」不是為了繞過那件事：**它就是 dsh 對 goal 的政策**（`tool-goal` 的
+ * `hasDirectHumanInput` 第一道是 `ctx.agents.roots().includes(execution.agent)`）。目標是
+ * 人交代的，subagent 沒有人可以交代。
+ */
+describe('goal 的參與者只掛在 root 上', () => {
+  it('委派過之後 `/goal` 照樣答得出來，不是「接了不只一份」', async () => {
+    const goal = createGoalPlugin();
+    const { agent, commands, attachSession, dispose } = await createNexusAgent({
+      model: delegatingModel(OPEN_ONLY),
+      checkpointer: new MemorySaver(),
+      plugins: [goal, boundaryPlugin(false)],
+    });
+    const sessions = new SessionRegistry('goal-root');
+    const detach = attachSession(sessions);
+    try {
+      await agent.invoke(toAgentInvocation('跑。'), { configurable: { thread_id: 'goal-root' } });
+      // 子代理那一份真的開出來了，這一條才問得出東西。
+      expect(sessions.list()).toHaveLength(2);
+      // 掛著的服務仍然只有一個——root 那個。
+      expect(goal.attached()).toHaveLength(1);
+
+      const definition = commands.find(GOAL_COMMAND_NAME);
+      const answer = await definition?.handler({
+        commandId: 'cmd-1',
+        rawInput: '',
+        signal: new AbortController().signal,
+      });
+      expect(answer?.text).not.toBe(goalAmbiguousMessage(2));
+    } finally {
+      detach();
+      await dispose();
+    }
   });
 });
