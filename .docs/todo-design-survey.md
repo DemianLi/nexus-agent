@@ -149,6 +149,8 @@ deepagents 對 **Codex 模型**（`openai:gpt-5.1-codex` / `5.2` / `5.3`）的 h
 
 這是記憶裡「基座預設會被自己踩掉」的反面：預設不只會被我們踩掉，**它本身還會隨模型而變**。
 
+**這一段後來被查全並收掉了。** 調研在 [#140](https://github.com/DemianLi/nexus-agent/issues/140)：`write_todos` 只是那份 profile 五根槓桿裡的一根（另外四根是拿掉檔案工具、改寫**我們自己註冊的工具**的 description、按名字移除 middleware、換掉系統提示詞），而「不會替我們紅」的原因有三個各自獨立的洞。上面那句「哪天真的切到 Codex 模型」也說輕了 —— `AgentModel` 收字串，`model: 'anthropic:claude-sonnet-4-6'` 今天就寫得出來，而那條也解得出一份帶後綴的 profile。落地在 `apps/harness/src/harness-profile.ts`：組裝點要**宣告**這個模型會對組裝做什麼，解出來的與宣告的不一致就當場失敗。
+
 ## 沒做的事
 
 - **deepagents 的原始碼**：只讀 `dist/`，沒進 `src/`。
