@@ -482,3 +482,212 @@ describe('read-only 的逃生口：摘要器的 backend 是獨立的一格', () 
     expect((await historyFiles(historyRoot)).length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * **`fraction` 型別的門檻在解不出 `maxInputTokens` 的模型上會靜默壞掉，而且兩個方向相反。**
+ *
+ * 調研見 [#142](https://github.com/DemianLi/nexus-agent/issues/142)。基座只有兩組預設
+ * （`computeSummarizationDefaults`）：模型的 `profile.maxInputTokens` 是數字就用比例，
+ * 否則退到固定值。**我們的模型退到固定值** —— `LIVE_MODEL_ID` 是 `openai/gpt-oss-120b`，
+ * 而這個字串在整個 `node_modules/.pnpm/` 裡零命中，沒有任何 profile 表認得它。
+ *
+ * 缺了那個數字之後，兩個讀它的地方各自決定怎麼退，而且退向相反：
+ *
+ * - `shouldSummarize`：`if (t.type === "fraction" && maxInputTokens)` —— 整個分支跳過，
+ *   回 `false`。**fail-closed，門檻一輩子不觸發。**
+ * - `determineCutoffIndex`：`keep.type === "fraction" && maxInputTokens ? floor(max * value)
+ *   : keep.value` —— 把 `0.1` 當成「保留 0.1 個 token」。**fail-open，一則逐字訊息都不留。**
+ *
+ * 兩個都不警告、不拋。**這是這幾條要存在的理由**：dsh 那側的預設答案（`thresholdRatio`
+ * 0.8 / `retainRatio` 0.16）正是比例形式，照抄過來會踩中其中一個，而踩中的當下沒有徵兆。
+ *
+ * 絆索的方向：**基座哪天讓這個模型解得出 `maxInputTokens`，這三條會紅** —— 那正是比例形式
+ * 開始可用、而我們寫死的絕對值開始說謊的那一刻。
+ */
+describe('fraction 型別的門檻在我們的模型上是壞的', () => {
+  /** 每一輪真正送進模型的非 system 訊息數。摘要生效的話這個數字會被壓下來。 */
+  async function promptSizes(options: Record<string, unknown>): Promise<number[]> {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-frac-'));
+    const backend = new ContainedFilesystemBackend({ rootDir: root });
+    const model = new ScriptedChatModel({
+      turns: Array.from({ length: 20 }, (_, index) => ({ content: `第 ${index + 1} 次回話。` })),
+    });
+    const plugin: NexusPlugin = {
+      name: 'fraction-probe',
+      apply: (registry) =>
+        void registry.middleware.use(
+          createSummarizationMiddleware({ backend, ...options }) as never,
+        ),
+    };
+
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      backend,
+      checkpointer: new MemorySaver(),
+      plugins: [plugin],
+    });
+    try {
+      for (const line of ['一。', '二。', '三。', '四。', '五。', '六。']) {
+        await agent.invoke(toAgentInvocation(line), { configurable: { thread_id: 'fraction' } });
+      }
+    } finally {
+      await dispose();
+    }
+
+    return model.prompts.map(
+      (prompt) => prompt.filter((message) => message.getType() !== 'system').length,
+    );
+  }
+
+  it('fraction trigger 連 0.01% 都碰不到——一次都沒觸發', async () => {
+    const sizes = await promptSizes({ trigger: { type: 'fraction', value: 0.0001 } });
+
+    // 六輪、每輪多兩則（human ＋ ai），一路長上去。**摘要器一次都沒有自己叫過模型**，
+    // 所以陣列長度就是輪數——跟根本沒掛摘要器分不出來。
+    expect(sizes).toEqual([1, 3, 5, 7, 9, 11]);
+  });
+
+  it('fraction keep 一則逐字訊息都不留，而且每輪重新摘要一次', async () => {
+    const sizes = await promptSizes({
+      // trigger 用 messages 才觸發得了——上一條就是它的理由。
+      trigger: { type: 'messages', value: 3 },
+      keep: { type: 'fraction', value: 0.1 },
+    });
+
+    // 十一次呼叫（六輪 ＋ 五次摘要），**每一次都只帶一則**。奇數是摘要器自己那次，
+    // 偶數是 agent 那一輪——而它唯一帶的那則就是摘要載體本身。
+    expect(sizes).toEqual([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+  });
+
+  it('對照：兩邊都用 messages 就正常', async () => {
+    const sizes = await promptSizes({
+      trigger: { type: 'messages', value: 3 },
+      keep: { type: 'messages', value: 1 },
+    });
+
+    // 同樣十一次呼叫，但 agent 那幾輪帶得到兩則（摘要 ＋ 這一輪的新訊息）。
+    // **`2` 就是上一條缺的那一則。**
+    expect(sizes).toEqual([1, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2]);
+  });
+});
+
+/**
+ * **subagent 那側的射程：spec 上的 `middleware` 到得了，而且走的是同一套同名取代。**
+ *
+ * 這是上面「取代只蓋到 root」那條的鏡像，兩條合起來才把射程講完整：**root 的註冊點只到
+ * root，subagent 的 spec 只到那個 subagent。**
+ *
+ * 我們的 `foldSubAgents` 已經把它原樣傳出去了（`middleware: [approvalGate,
+ * ...(spec.middleware ?? [])]`），基座的 `buildSubagentMiddleware` 則把它交給**同一個**
+ * `mergeMiddlewareStack` —— 也就是 root 那條路上已經被 `stack 裡只有一個
+ * SummarizationMiddleware` 釘住的那個函式。
+ *
+ * **這一條證的是「到得了、有生效」，不是「取代而不是多加一個」** —— 兩者在行為上分不出來
+ * （見上面 `middlewareNames` 的註解）。取代那半靠的是 `mergeMiddlewareStack` 的結構：
+ * 名字在 default 裡的走以 name 為鍵的 `Map`，名字不在的才進 `novelMiddleware`，所以
+ * `SummarizationMiddleware` **進不了 append 那條路**。
+ */
+describe('subagent 自帶的 middleware 到得了那個 subagent', () => {
+  it('記號只出現在 subagent 那一輪，root 的兩輪都沒有', async () => {
+    const crew: NexusPlugin = {
+      name: 'crew',
+      apply: (registry) =>
+        void registry.subagents.register({
+          name: 'writer',
+          description: '負責寫東西。',
+          // 名字撞上內建那個，但塞的是 subagent 的 spec 而不是 root 的註冊點。
+          middleware: [
+            {
+              name: 'SummarizationMiddleware',
+              wrapModelCall: (
+                request: { systemMessage: { concat: (text: string) => unknown } },
+                handler: (next: unknown) => unknown,
+              ) =>
+                handler({ ...request, systemMessage: request.systemMessage.concat(`\n${MARKER}`) }),
+            },
+          ],
+        } as never),
+    };
+    // 三輪：root 叫 subagent → subagent 回話 → root 收尾。
+    const model = new ScriptedChatModel({
+      turns: [
+        {
+          content: '',
+          toolCalls: [{ name: 'task', args: { description: '去寫', subagent_type: 'writer' } }],
+        },
+        { content: 'subagent 做完了。' },
+        { content: '收工。' },
+      ],
+    });
+
+    const { agent, dispose } = await createNexusAgent({ model, plugins: [crew] });
+    try {
+      await agent.invoke(toAgentInvocation('叫 writer 去做事。'));
+    } finally {
+      await dispose();
+    }
+
+    const prompts = model.prompts.map(systemPrompt);
+    expect(prompts).toHaveLength(3);
+    // 正好是「取代只蓋到 root」那條量到的 `[true, false, true]` 的鏡像。
+    expect(prompts.map((prompt) => prompt.includes(MARKER))).toEqual([false, true, false]);
+  });
+});
+
+/**
+ * **摘要發生過這件事讀得到，但不在 `invoke()` 的回傳值裡。**
+ *
+ * 基座把 `_summarizationEvent`（`cutoffIndex` / `summaryMessage` / `filePath`）寫進 graph
+ * state，而 **`filePath === null` 正是 [#66](https://github.com/DemianLi/nexus-agent/issues/66)
+ * 那個 fail-open 的訊號** —— 基座只印一行 `console.warn`，但同一件事在 state 裡有值。
+ *
+ * 這一條釘的是**取得它的路徑**，因為 [#143](https://github.com/DemianLi/nexus-agent/issues/143)
+ * 的成本估算掛在上面：`invoke()` 拿不到，`getState()` 拿得到，所以要 checkpointer 而且是
+ * 主動讀、不是推播。基座哪天把它放進回傳值，這條會紅——那時 #143 會變便宜。
+ */
+describe('_summarizationEvent 的取得路徑', () => {
+  it('invoke 的回傳值裡沒有，checkpointer 的快照裡有', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-evt-'));
+    const backend = new ContainedFilesystemBackend({ rootDir: root });
+    const model = new ScriptedChatModel({
+      turns: Array.from({ length: 12 }, (_, index) => ({ content: `第 ${index + 1} 次回話。` })),
+    });
+
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      backend,
+      checkpointer: new MemorySaver(),
+      plugins: [tunedSummarization(backend)],
+    });
+
+    let returned: Record<string, unknown> = {};
+    try {
+      for (const line of ['第一句。', '第二句。', '第三句。', '第四句。']) {
+        returned = (await agent.invoke(toAgentInvocation(line), {
+          configurable: { thread_id: 'event' },
+        })) as unknown as Record<string, unknown>;
+      }
+    } finally {
+      await dispose();
+    }
+
+    // 前提：這一輪真的觸發過。少了它，下面兩條斷言在一個沒摘要過的組裝上也會通過。
+    expect((await historyFiles(root)).length).toBeGreaterThan(0);
+
+    // 回傳值只有這兩格——摘要那組是 middleware 的私有 state，不在輸出通道上。
+    expect(Object.keys(returned).sort()).toEqual(['files', 'messages']);
+
+    const snapshot = await (
+      agent as unknown as {
+        getState: (config: unknown) => Promise<{ values: Record<string, unknown> }>;
+      }
+    ).getState({ configurable: { thread_id: 'event' } });
+    const event = snapshot.values._summarizationEvent as
+      { cutoffIndex: number; filePath: string | null } | undefined;
+
+    expect(event).toBeDefined();
+    expect(event?.cutoffIndex).toBeGreaterThan(0);
+    // 落點讀得到——`null` 的那一天就是 #66 那個 fail-open 真的發生的那一天。
+    expect(event?.filePath).toContain('/conversation_history/');
+  });
+});
