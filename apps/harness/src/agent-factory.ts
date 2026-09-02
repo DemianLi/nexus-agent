@@ -13,7 +13,8 @@
  * checkpointer / store、核准政策的 session 開關，加一份基座工具名單）從
  * {@link CreateNexusAgentOptions} 進來，原樣交給 fold：**所有權在這裡，檢查跑在 core**。
  *
- * 這也是 fold 的產物第一次真的碰到基座。基座在建構時還有三道自己的檢查是 fold 看不到的：
+ * 這也是 fold 的產物第一次真的碰到基座。基座在建構時還有三道自己的檢查是 fold 看不到的，
+ * 外加**一件不是檢查而是改寫**的事（第 4 條）：
  *
  * 1. **工具名撞到內建**——`createDeepAgent()` 開頭丟 `ConfigurationError('TOOL_NAME_COLLISION')`。
  *    我們在 fold 之前先擋一次，理由見 {@link assertNoBaseToolNameCollision}。
@@ -25,6 +26,12 @@
  *    後者，是錯的；1.13.1 的 `ConfigurationError` 只有 `TOOL_NAME_COLLISION` 一個 code）。
  *    現在觸發不到——`StateBackend` 的 `isSandboxBackend` 是 false——所以這裡不寫測試，
  *    留給 Phase 2 的 `feat/sandbox-plugin` 當場驗。
+ * 4. **按模型改寫組裝**——`createDeepAgent()` 從 `model` 解出一份 harness profile，然後才
+ *    開始組 middleware。它拿得掉工具、改得動我們自己註冊的工具的 description、加得了
+ *    middleware（連同它帶的工具）、換得掉系統提示詞。**前三條是檢查，這一條是改寫**：
+ *    它不會拒絕任何東西，只會安靜地讓組出來的 agent 不是我們宣告的那個。所以這裡在
+ *    fold 之前先要求宣告，見 {@link CreateNexusAgentOptions.expectedHarnessProfile} 與
+ *    [`harness-profile.ts`](./harness-profile.ts)。
  *
  * 組裝點還負責一件基座**設了但等於沒設**的事：agent 迴圈的上限。見
  * {@link DEFAULT_RECURSION_LIMIT}。
@@ -52,6 +59,8 @@ import {
 import { createDeepAgent, StateBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
+import { assertHarnessProfileDeclared } from './harness-profile.js';
+import type { HarnessProfileEffects } from './harness-profile.js';
 
 export interface CreateNexusAgentOptions {
   /** plugin 清單。順序有意義：middleware 的順序、以及 `except` 的射程都跟著它。 */
@@ -63,6 +72,16 @@ export interface CreateNexusAgentOptions {
    * 不是這裡該替人填的預設值。
    */
   readonly model: AgentModel;
+  /**
+   * 宣告「這個模型會讓基座對組裝做哪些事」。**省略即宣告「什麼都不做」**——那是今天所有
+   * 呼叫端的實情，也是唯一一種不必寫的宣告。
+   *
+   * 基座解出來的 profile 與這份宣告不一致，組裝當場失敗（兩個方向都擋：沒宣告卻有東西、
+   * 宣告了卻沒有那些東西）。**這不是把某些模型封死**——確認過改動可以接受，就照錯誤訊息
+   * 把實際那份貼進來。理由、形狀與 dsh 那側的對照見
+   * [`harness-profile.ts`](./harness-profile.ts) 的檔頭。
+   */
+  readonly expectedHarnessProfile?: HarnessProfileEffects;
   /**
    * default backend。plugin 掛的是路由分支（`backend.mount()`），兜底的這個是組裝點的事。
    * 省略即 `StateBackend`（跑在 state 裡的虛擬 FS，不碰真實磁碟）。**含路徑圍堵的
@@ -201,11 +220,15 @@ export type NexusAgentHandle = Awaited<ReturnType<typeof createNexusAgent>>;
  *
  * @param options - 清單，加上組裝點自有的那些。
  * @returns 建好的 agent 與收掉它的方法。
- * @throws 清單載入失敗（重名、`requires` 缺件、`apply` 拋錯）、`invariants` 的 pattern 不合法、
- *   fold 的前置條件不成立，或基座自己在建構時擋下這份組裝——四種都在載入期發生，
- *   不會拖到跑起來才炸。
+ * @throws 模型解出來的 harness profile 與宣告不符、清單載入失敗（重名、`requires` 缺件、
+ *   `apply` 拋錯）、`invariants` 的 pattern 不合法、fold 的前置條件不成立，或基座自己在
+ *   建構時擋下這份組裝——五種都在載入期發生，不會拖到跑起來才炸。
  */
 export async function createNexusAgent(options: CreateNexusAgentOptions) {
+  // **跑在 `loadPlugins` 之前**：它只看 `options.model`，這時候還沒有任何 plugin 開好資源，
+  // 所以失敗了不必先 `dispose()`。其餘四種都在下面那個 try 裡，因為它們要等 registry。
+  assertHarnessProfileDeclared(options.model, options.expectedHarnessProfile);
+
   const { registry, dispose } = await loadPlugins(options.plugins);
 
   try {

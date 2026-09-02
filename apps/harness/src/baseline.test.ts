@@ -1,6 +1,6 @@
 import { HumanMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import { createDeepAgent, StateBackend } from 'deepagents';
+import { createDeepAgent, getHarnessProfile, StateBackend } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import { fakeTool } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -92,5 +92,52 @@ describe('deepagents 1.13.x 基座形狀', () => {
     );
 
     expect(result.__interrupt__).toBeDefined();
+  });
+});
+
+/**
+ * 升版防護：**基座按模型改寫組裝**這件事的內容面。
+ *
+ * 組裝點那道檢查（[`harness-profile.ts`](./harness-profile.ts)）比的是「這次解出來的
+ * 槓桿組合，跟組裝點宣告的一不一致」——它抓得到「我的 agent 變了」，抓不到「基座那側
+ * 的內建 profile 換人了」。後者是這裡的事，而且**只該在 CI 紅**：一次 patch 升版不該
+ * 變成生產上的組裝失敗。
+ *
+ * 詳見 [#140](https://github.com/DemianLi/nexus-agent/issues/140)。
+ */
+describe('deepagents 1.13.x 內建 harness profile', () => {
+  it('裸供應商鍵沒有人認領', () => {
+    // **這一條是這裡最要緊的那個。** Codex 那段 register() 的註解明說用 per-model key 就是
+    // 為了「keep the default behavior of non-Codex OpenAI models unchanged」；哪天有人註冊了
+    // 裸 `openai`，我們今天在跑的 `openai/gpt-oss-120b` 會**跟著**被改寫，而那條路上沒有
+    // 任何一個字串 spec 可以讓人事先看到。
+    expect(getHarnessProfile('openai')).toBeUndefined();
+    expect(getHarnessProfile('anthropic')).toBeUndefined();
+    expect(getHarnessProfile('google')).toBeUndefined();
+  });
+
+  it('Codex 那份仍然帶著會多掛工具的 extraMiddleware', () => {
+    const profile = getHarnessProfile('openai:gpt-5.2-codex');
+
+    expect(profile).toBeDefined();
+    // 工廠函式而不是靜態陣列——所以「它會掛上哪些工具」要建出來才知道，這也是
+    // HarnessProfileEffects 在那一欄放哨兵而不放名字的理由。
+    expect(typeof profile?.extraMiddleware).toBe('function');
+    expect(profile?.systemPromptSuffix).toBeDefined();
+  });
+
+  it('Anthropic 三份只動提示詞，不動組成', () => {
+    for (const spec of [
+      'anthropic:claude-opus-4-7',
+      'anthropic:claude-sonnet-4-6',
+      'anthropic:claude-haiku-4-5',
+    ]) {
+      const profile = getHarnessProfile(spec);
+
+      expect(profile?.systemPromptSuffix, spec).toBeDefined();
+      expect(profile?.excludedTools.size, spec).toBe(0);
+      expect(Object.keys(profile?.toolDescriptionOverrides ?? {}), spec).toEqual([]);
+      expect(profile?.extraMiddleware, spec).toEqual([]);
+    }
   });
 });

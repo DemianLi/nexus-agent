@@ -11,6 +11,12 @@
  * 都沒有出現在它的 public export 裡（1.13.1 實測）。所以是手抄的，而
  * [`baseline.test.ts`](./baseline.test.ts) 的第一條測試就是它的守衛：那條斷言
  * `StateBackend` 下基座實際註冊了哪些工具，名單漂掉時會當場紅。
+ *
+ * **這兩個常數與模型無關，而基座那側不是。** `createDeepAgent()` 會依 `model` 解出一份
+ * harness profile，那份 profile 加得了工具也拿得掉工具——「基座這次帶哪些名字」因此是
+ * 模型的函式，是這裡的常數形狀表達不出來的東西。那件事在
+ * [`harness-profile.ts`](./harness-profile.ts) 處理，見
+ * [#140](https://github.com/DemianLi/nexus-agent/issues/140)。
  */
 
 /**

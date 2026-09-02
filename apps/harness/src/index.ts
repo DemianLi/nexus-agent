@@ -20,6 +20,14 @@ export { toAgentInvocation } from './messages.js';
 
 export { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
 
+export type { HarnessProfileEffects } from './harness-profile.js';
+export {
+  describeHarnessProfileEffects,
+  EXTRA_MIDDLEWARE_FACTORY,
+  formatHarnessProfileEffects,
+  NO_HARNESS_PROFILE_EFFECTS,
+} from './harness-profile.js';
+
 export type { PumpAgent, PumpInput } from './thread-pump.js';
 export { ThreadPump } from './thread-pump.js';
 
