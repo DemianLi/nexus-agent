@@ -1,6 +1,6 @@
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { createDeepAgent, StateBackend } from 'deepagents';
+import { createDeepAgent, registerHarnessProfile, StateBackend } from 'deepagents';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import {
@@ -117,6 +117,41 @@ describe('基座按模型改寫組裝', () => {
     expect(describeHarnessProfileEffects('openai:openai/gpt-oss-120b')).toEqual(
       NO_HARNESS_PROFILE_EFFECTS,
     );
+  });
+});
+
+/**
+ * 五根槓桿全部拉滿的一份 profile，註冊在一個沒有別人用的 spec 底下。
+ *
+ * **內建的四份只拉了兩根**（後綴與 extraMiddleware），所以
+ * `describeHarnessProfileEffects` 裡讀 `toolDescriptionOverrides` / `excludedTools` /
+ * `excludedMiddleware` 的那三行**從來沒有跑過非空值**。那三行是在組裝點跑的，寫錯的
+ * 下場是「檢查自己拋」而不是「檢查報告出問題」——比它要防的缺陷更糟。
+ *
+ * registry 是全域而且 `registerHarnessProfile` 是累加的，所以鍵取一個只有這裡用的。
+ */
+const PROBE_SPEC = 'nexus-probe:all-levers';
+
+describe('五根槓桿都描述得出來', () => {
+  it('全部拉滿時七個欄位一個都不漏', () => {
+    registerHarnessProfile(PROBE_SPEC, {
+      baseSystemPrompt: '整份換掉。',
+      systemPromptSuffix: '追加一段。',
+      toolDescriptionOverrides: { echo: '被改寫的說明。', ls: '也被改寫。' },
+      excludedTools: ['grep', 'delete'],
+      excludedMiddleware: ['SomeOptionalMiddleware'],
+      generalPurposeSubagent: { enabled: false },
+    });
+
+    expect(describeHarnessProfileEffects(PROBE_SPEC)).toEqual({
+      baseSystemPrompt: true,
+      systemPromptSuffix: true,
+      toolDescriptionOverrides: ['echo', 'ls'],
+      excludedTools: ['delete', 'grep'],
+      excludedMiddleware: ['SomeOptionalMiddleware'],
+      extraMiddleware: [],
+      generalPurposeSubagent: true,
+    });
   });
 });
 
