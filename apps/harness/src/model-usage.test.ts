@@ -80,28 +80,30 @@ async function run(
 }
 
 describe('模型報了用量', () => {
-  it('三輪就是三筆，數字一一對得上', async () => {
-    const { root } = await run([
-      { content: '一。', usage: { inputTokens: 11, outputTokens: 22 } },
-      { content: '二。', usage: { inputTokens: 33, outputTokens: 44 } },
-      { content: '三。', usage: { inputTokens: 55, outputTokens: 66 } },
-    ]);
-    // 一次 `invoke` 只跑到模型不再叫工具為止，所以這裡只會用掉第一輪腳本。
-    expect(root).toEqual([{ inputTokens: 11, outputTokens: 22, totalTokens: 33 }]);
-  });
-
-  it('一輪裡叫幾次模型就有幾筆——用量是 per-step 的，不是 per-turn', async () => {
+  /**
+   * **卡上的驗收句 1。** 三格模型呼叫（前兩格各叫一次工具，第三格收工）＝ 三筆。
+   *
+   * 三組數字**兩兩不同**是刻意的：一個只記第一次呼叫、或把三次記成同一個數字的實作，
+   * 在這裡是紅的。用量是 per-step 的，一輪裡叫幾次模型就有幾筆。
+   */
+  it('跑三格模型呼叫就是三筆，數字一一對得上', async () => {
     const { root } = await run([
       {
-        content: '先問一下。',
+        content: '先寫個清單。',
         usage: { inputTokens: 11, outputTokens: 22 },
         toolCalls: [{ name: 'write_todos', args: { todos: [] } }],
       },
-      { content: '好了。', usage: { inputTokens: 33, outputTokens: 44 } },
+      {
+        content: '再寫一次。',
+        usage: { inputTokens: 33, outputTokens: 44 },
+        toolCalls: [{ name: 'write_todos', args: { todos: [] } }],
+      },
+      { content: '好了。', usage: { inputTokens: 55, outputTokens: 66 } },
     ]);
     expect(root).toEqual([
       { inputTokens: 11, outputTokens: 22, totalTokens: 33 },
       { inputTokens: 33, outputTokens: 44, totalTokens: 77 },
+      { inputTokens: 55, outputTokens: 66, totalTokens: 121 },
     ]);
   });
 

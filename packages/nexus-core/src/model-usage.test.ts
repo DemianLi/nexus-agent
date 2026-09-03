@@ -86,7 +86,7 @@ describe('readModelUsage', () => {
     expect(readModelUsage(reply(usage as Record<string, unknown>))).toBeUndefined();
   });
 
-  it('總量比 input + output 大是可以的——供應商有沒被細分出來的桶', () => {
+  it('總量比 input + output 大是可以的——我們不替供應商決定它怎麼加總', () => {
     expect(
       readModelUsage(reply({ input_tokens: 10, output_tokens: 20, total_tokens: 45 })),
     ).toEqual({ inputTokens: 10, outputTokens: 20, totalTokens: 45 });

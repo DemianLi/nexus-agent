@@ -49,7 +49,9 @@
  * {@link ./session-log.ts} 對遙測那句「盡力而為的旁路，**不能有能力扳倒 agent loop**」
  * ——而這裡更嚴，因為遙測掛在事件之後，這顆掛在模型呼叫本身上。
  *
- * **`not-attached` 是常態不是異常**：絕大多數組裝點根本沒有 `attachSession`。
+ * **`not-attached` 是常態不是異常。** 兩條產品進入點都接（`cli.ts` 的 `runRepl`、
+ * web 那條的 `wire-handler.ts`），但 `eval/runner.ts`、`spike/spike-agent.ts` 與絕大多數
+ * 測試的組裝都沒有 `attachSession`——它們不需要日誌，不該為此拿到一個例外。
  *
  * @module
  */
@@ -98,8 +100,14 @@ function isCount(value: unknown): value is number {
  *
  * 1. 每一欄各自要是一個數量。
  * 2. **總量不得與它的組成矛盾**——`totalTokens - outputTokens` 要是一個數量、而且不小於
- *    已知的 prompt（`inputTokens`）。dsh 那側用 `>=` 而不是 `===`，因為供應商可能有沒被
- *    細分出來的桶；小於就是真的對不起來，那種數字寧可沒有。
+ *    已知的 prompt（`inputTokens`）。小於就是報回來的數字自己對不起來，那種寧可沒有。
+ *
+ *    **不強制相等，因為我們不替供應商決定它怎麼加總。** 照 LangChain 自己的契約
+ *    `total_tokens === input_tokens + output_tokens` 會成立（它的 `input_tokens` 是含快取的
+ *    完整 prompt），所以實務上兩邊會剛好相等；夾成 `===` 只會讓一個多報了某個桶的供應商
+ *    整筆消失。**注意 dsh 那側用 `>=` 的理由與這裡不同**：它的 `inputTokens` 是**未快取**
+ *    的那部分，比真正的 prompt 小，所以鬆弛在它那邊有具體的對應物，在我們這邊沒有。
+ *    規則同形，理由不同——不要照抄它的理由。
  *
  * **部分披露不做。** 任一欄壞掉就整筆不記，不記一半——同 dsh：任何矛盾讓整個 attempt
  * 不可用。
