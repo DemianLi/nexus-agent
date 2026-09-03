@@ -758,8 +758,9 @@ describe('提醒器打底', () => {
       ],
       { summarization: {}, repeatReminder: {}, defaultBackend: fakeBackend('default') },
     );
-    // **排在摘要器之後是有意義的**：兩個都會動訊息串，而它們在圖裡是照這個順序串起來的
-    // 節點。摘要器先剪、提醒器後附 ＝ 提醒一定活到模型那一格。
+    // 位置只決定同名誰贏——**提醒器與摘要器之間連那個都沒有**：兩個名字互不相撞，而且
+    // 摘要器是 `wrapModelCall`（模型節點內部）、提醒器是 `beforeModel`（模型節點之前），
+    // 誰先跑由圖決定。這條釘的是「我們打底的三根都排在 registry middleware 之前」。
     expect(middlewareNames(params)).toEqual([
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,

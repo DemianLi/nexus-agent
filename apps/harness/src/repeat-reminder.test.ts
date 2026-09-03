@@ -184,6 +184,57 @@ describe('提醒在正式路徑上進得了模型的 prompt', () => {
 });
 
 /**
+ * **摘要一起跑的時候，鏈沒有斷。**
+ *
+ * 上面每一條都傳 `summarization: false` 隔離變數，所以「兩個打底的 middleware 一起跑」
+ * 這件事在那組裡一次都沒發生過——而 `repeat-reminder.ts` 的檔頭偏偏對它們的互動下了一個
+ * 結論。**那個結論要有一條測試撐著，不然它只是一段推理。**
+ *
+ * 結論本身是查原始碼查出來的：基座的摘要器不改寫 `state.messages`，它只記一顆
+ * `_summarizationEvent`，每次模型呼叫由 `getEffectiveMessages` 現組
+ * `[summary, ...messages.slice(cutoffIndex)]`（`deepagents@1.13.1`，
+ * `dist/langsmith-zm0ILQsV.js:2697`）。我們讀完整的 `state.messages`，所以剪裁看不到。
+ *
+ * 判準選「第 8 次那條詳細提醒出現過」而不是「有提醒」：鏈若在摘要那一輪被打斷，計數會
+ * 從 1 重來，第三道門檻**永遠到不了**，而前面兩條照樣出現。
+ */
+describe('摘要與提醒一起跑', () => {
+  it('摘要觸發之後鏈沒有歸零，第 8 次那道門檻照樣命中', async () => {
+    const model = new LoopingChatModel({ toolName: ECHO_TOOL_NAME });
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [createEchoPlugin()],
+      recursionLimit: 30,
+      // 打底的預設是 `messages: 60`，這場迴圈跑不到。壓低到跑得到的位置——量的是
+      // 「摘要發生過之後鏈還在不在」，不是預設門檻的數值。
+      summarization: {
+        trigger: [{ type: 'messages', value: 10 }],
+        keep: { type: 'messages', value: 4 },
+      },
+    });
+    try {
+      await expect(agent.invoke(toAgentInvocation('一直跑'))).rejects.toThrow(/Recursion limit/);
+    } finally {
+      await dispose();
+    }
+
+    // 摘要真的發生了：基座把摘要塞成一則 `lc_source: 'summarization'` 的 human 訊息。
+    const summarized = model.seen.some((prompt) =>
+      prompt.some(
+        (message) =>
+          HumanMessage.isInstance(message) &&
+          message.additional_kwargs['lc_source'] === 'summarization',
+      ),
+    );
+    expect(summarized).toBe(true);
+
+    // 而鏈一路數到了 8。
+    const all = model.seen.flatMap(reminderTexts);
+    expect(all.some((text) => text.includes('- consecutive_calls: 8'))).toBe(true);
+  });
+});
+
+/**
  * **打底到 subagent，而且是在真的 subagent 那幾輪上量的。**
  *
  * root 的 `registry.middleware` 到不了 subagent（`summarization.test.ts` 那條釘著它），
@@ -193,9 +244,14 @@ describe('提醒在正式路徑上進得了模型的 prompt', () => {
  *
  * `ScriptedChatModel.prompts` 是唯一看得到 subagent 那幾輪的地方——`lastPrompt` 永遠是
  * root 的，因為 subagent 跑完 root 還會再問一次。
+ *
+ * **腳本讓 root 先叫兩次同一個呼叫，才派工出去，而那是這條測試的判準。** 只讓 subagent
+ * 重複的話，「兩邊的鏈是分開的」這句話驗不到——root 的 `state.messages` 結構上就不含
+ * subagent 的訊息，斷言 root 沒有提醒不管實作對錯都會通過。先墊兩次之後，計數若是合在
+ * 一起的，subagent 第三次就是總第 5 次、拿到的會是**詳細版**；分開的才是溫和版。
  */
-describe('subagent 那一輪也有', () => {
-  it('subagent 自己重複三次，第四輪的 prompt 裡有提醒', async () => {
+describe('subagent 那一輪也有，而且跟 root 的計數分開', () => {
+  it('root 先重複兩次再派工，subagent 自己數到三次拿到的是溫和版', async () => {
     const crew: NexusPlugin = {
       name: 'crew',
       apply: (registry) =>
@@ -207,18 +263,21 @@ describe('subagent 那一輪也有', () => {
     };
     const model = new ScriptedChatModel({
       turns: [
-        // 0：root 派工。
+        // 0–1：root 先叫兩次同參數的 echo，把自己的鏈墊到 2。
+        repeat,
+        repeat,
+        // 2：root 派工。
         {
           content: '',
           toolCalls: [{ name: 'task', args: { description: '去寫', subagent_type: 'writer' } }],
         },
-        // 1–3：subagent 連叫三次同參數的 echo。
+        // 3–5：subagent 叫三次**同一個**呼叫。
         repeat,
         repeat,
         repeat,
-        // 4：subagent 收工——這一輪的 prompt 裡該有提醒。
+        // 6：subagent 收工——這一輪的 prompt 裡該有提醒。
         { content: '寫完了。' },
-        // 5：root 收工。
+        // 7：root 收工。
         { content: '收工。' },
       ],
     });
@@ -235,13 +294,26 @@ describe('subagent 那一輪也有', () => {
     }
 
     const prompts = model.prompts;
-    expect(prompts).toHaveLength(6);
-    // subagent 的前三輪還沒到門檻，第四輪（index 4）才有。
-    expect(prompts.slice(0, 4).map(hasReminder)).toEqual([false, false, false, false]);
-    expect(reminderTexts(prompts[4] ?? [])[0]).toContain(GENTLE_HEAD);
-    // **root 那一輪沒有。** 鏈是各自的 `state.messages`，subagent 的重複不會漏到 root
-    // 頭上——共用一份實例但不共用狀態，這一格就是那件事的驗收。
-    expect(hasReminder(prompts[5] ?? [])).toBe(false);
+    expect(prompts).toHaveLength(8);
+    // root 墊的那兩次還沒到門檻，subagent 的前兩次也是。
+    expect(prompts.slice(0, 6).map(hasReminder)).toEqual([
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+
+    // **溫和版 ＝ 計數是 3 ＝ 兩邊的鏈沒有加在一起。** 合在一起的話這裡是第 5 次，
+    // 拿到的會是詳細版。
+    const subagentReminders = reminderTexts(prompts[6] ?? []);
+    expect(subagentReminders).toHaveLength(1);
+    expect(subagentReminders[0]).toContain(GENTLE_HEAD);
+    expect(subagentReminders[0]).not.toContain(DETAILED_HEAD);
+
+    // root 收工那一輪也沒有：它的鏈被中間那次 `task` 打斷了。
+    expect(hasReminder(prompts[7] ?? [])).toBe(false);
   });
 });
 

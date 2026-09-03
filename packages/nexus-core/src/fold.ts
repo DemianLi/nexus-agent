@@ -513,10 +513,14 @@ function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): Agent
  * 放在閘門**之後**而不是陣列最前面，純粹是為了不讓下一個讀這段註解的人以為上面那個
  * 「閘門不能排在最前」的結論改了。
  *
- * **提醒器排在摘要器之後，那個順序是有意義的。** 兩個都會動訊息串，而它們在圖裡是照
- * 陣列順序串起來的節點。摘要器先剪、提醒器後附 ＝ 提醒一定活到模型那一格；反過來的話
- * 提醒可能在同一輪就被剪掉。代價是鏈從剪過的訊息串推導，所以摘要之後鏈會歸零——那一格
- * 登記在 {@link createRepeatReminder} 的檔頭。
+ * **提醒器排在摘要器之後，而那個位置一樣不決定包裹層次。** 理由跟上一段不同：它的名字
+ * 不撞任何內建的，所以它是 novel entry、順序就是包裹順序——但**它跟摘要器之間沒有層次
+ * 可言**。摘要器只定義 `wrapModelCall`（`deepagents@1.13.1`，
+ * `dist/langsmith-zm0ILQsV.js:3193-3195`），那是模型節點**內部**的一層；提醒器是
+ * `beforeModel`，那是模型節點**之前**的一個獨立節點。誰先跑由圖決定，不由這個陣列決定。
+ *
+ * 所以放在摘要器後面純粹是讓這一段讀起來跟它上面那兩根一致：我們自己打底的都排在
+ * registry middleware 之前，同名的誰都蓋得過。
  */
 function foldMiddleware(
   registry: PluginRegistry,

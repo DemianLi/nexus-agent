@@ -27,8 +27,13 @@
  *
  * - **恢復會話之後鏈還在**。dsh 明列「仅驻留内存，从持久化恢复的会话以全新链开始」；
  *   我們的鏈長在訊息裡，checkpointer 存什麼就恢復什麼。這一格我們比較好。
- * - **摘要之後鏈歸零**。dsh 明列「压缩不会重置链」；我們的鏈是從剪過的 `state.messages`
- *   推的，被剪掉的那段就不算了。這一格我們比較差，方向是提醒變少不是變吵。
+ * - **摘要之後鏈也還在**，跟 dsh 的「压缩不会重置链」同一個結果，但成因不同而且是查過的：
+ *   基座的摘要器**不改寫 `state.messages`**，它只記一顆 `_summarizationEvent`，每次模型
+ *   呼叫時由 `getEffectiveMessages` 現組出 `[summary, ...messages.slice(cutoffIndex)]`
+ *   （`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:2697`，原文註解就寫著
+ *   “This avoids full state rewrites”）。我們讀的是完整的 `state.messages`，所以剪裁
+ *   看不到。**代價在另一邊**：落在 cutoff 之前的提醒模型那一輪就看不到了，它跟其他被
+ *   摘掉的訊息一起進了摘要。
  *
  * **二、投遞掛在 `beforeModel`，不是 post-execute。**
  *
@@ -40,6 +45,10 @@
  * 掛在 `wrapToolCall` 上反而不忠實：同一輪有多個工具呼叫時，逐次附訊息會排出
  * `AI(t1,t2) → Tool(t1) → Human(提醒) → Tool(t2)` 這種序列，而多數供應商要求同一批
  * tool result 必須連在一起。dsh 緩衝到步驟結束正是為了避開這件事。
+ *
+ * **順帶一件查過的事**：整份 `deepagents@1.13.1` 的 dist 裡 `beforeModel` 出現 0 次
+ * （鉤子只用 `beforeAgent` 7、`wrapModelCall` 14、`wrapToolCall` 1、`afterAgent` 1），
+ * 所以我們是那張圖裡唯一的 `beforeModel` 節點——每輪多一格的代價全歸這裡。
  *
  * **這個選擇有一個量得出來的代價，見 {@link createRepeatReminder}。**
  *
