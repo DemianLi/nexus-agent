@@ -2,9 +2,12 @@
  * fold：把載入完的 registry 折成一次 `createDeepAgent(...)` 要的參數。
  *
  * core 是純轉換層——**不呼叫** `createDeepAgent`，只產出參數；那一次呼叫住在
- * `apps/harness`，而且只有那一個地方。組裝點自有的五樣（default backend、工具
- * 呈現順序清單、model、checkpointer / store、核准政策的 session 開關）從
- * {@link FoldOptions} 傳進來：所有權留在 harness，檢查跑在這裡。
+ * `apps/harness`，而且只有那一個地方。組裝點自有的六樣（default backend、工具
+ * 呈現順序清單、model、checkpointer / store、核准政策的 session 開關、摘要的門檻與
+ * 去向）從 {@link FoldOptions} 傳進來：所有權留在 harness，檢查跑在這裡。
+ *
+ * 「純轉換層」不代表這裡不建東西：核准閘門與摘要器都是在這裡建的 middleware。分界是
+ * **不碰基座的建構**（`createDeepAgent`），不是「不 new 任何東西」。
  *
  * 這裡也是幾條後置條件的落點——它們**不能**在註冊當下驗，因為 `requires` 不排序，
  * 清單裡靠前的 plugin 本來就可以往靠後的 plugin 才註冊的 subagent 上加工具。
@@ -22,6 +25,8 @@ import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
 import type { PluginRegistry } from './registry.js';
+import { createSummarizer, resolveSummarizationSettings } from './summarization.js';
+import type { SummarizationSettings } from './summarization.js';
 
 /**
  * 工具呈現順序清單裡代表「其餘未列出者」的保留項。
@@ -107,7 +112,7 @@ export interface ApprovalPolicy {
   enabled?: boolean;
 }
 
-/** 組裝點在 fold 時交出來的那五樣，加一份基座工具名單。 */
+/** 組裝點在 fold 時交出來的那六樣，加一份基座工具名單。 */
 export interface FoldOptions {
   /**
    * default backend。plugin 不得提供——`backend.mount()` 掛的是路由分支，
@@ -146,6 +151,19 @@ export interface FoldOptions {
   store?: AgentStore;
   /** 核准政策的 session 開關。 */
   approvals?: ApprovalPolicy;
+  /**
+   * 摘要的門檻與去向。省略即 {@link DEFAULT_SUMMARIZATION}，給物件就逐格淺合併上去。
+   *
+   * **`false` 是明著放棄。** 它讓 fold 一份摘要器都不建，於是 root 與每個 subagent 拿
+   * 回基座無條件建的那個——也就是一組沒有人在檢查的門檻，加上預設的
+   * `/conversation_history`。那是這張卡要消滅的狀態，所以它只能是**明著寫出來**的選擇，
+   * 沒有靜默退回這條路。用得到它的是「我就是要看裸基座」的測試。
+   *
+   * 建摘要器需要一個 backend。**用的是這裡的 {@link FoldOptions.defaultBackend}，不是
+   * {@link foldBackend} 折出來的那個**，理由見 {@link foldRegistry}。所以沒給
+   * default backend 又沒關掉摘要時，fold 當場拋。
+   */
+  summarization?: Partial<SummarizationSettings> | false;
 }
 
 /**
@@ -180,6 +198,17 @@ export interface FoldedAgentParams {
 /**
  * 把 registry 折成 `createDeepAgent(...)` 的參數。
  *
+ * ## 摘要器為什麼吃 `defaultBackend` 而不是折出來的那個
+ *
+ * `foldBackend` 回的可能是 `CompositeBackend(defaultBackend, routes)`。餵它給摘要器
+ * 等於**讓 plugin 掛的路由決定會話歷史落在哪**——一個掛在 `/conversation_history` 上
+ * 的路由會安靜地接管一條 agent 自己不知道的寫入路徑，而那條路徑本來就已經繞過
+ * permissions（[#66](https://github.com/DemianLi/nexus-agent/issues/66)）。
+ *
+ * 歷史是基礎建設，不是 agent 的工作區；`backend.mount()` 掛的是後者。所以摘要器拿的是
+ * 兜底那個，跟 agent 走不走路由無關。這同時延續
+ * `summarization.test.ts` 已經釘住的一件事：**摘要器的 backend 是獨立的一格**。
+ *
  * @param registry - 已經跑完 `loadPlugins()` 的 registry。
  * @param options - 組裝點自有的那些。
  * @returns 可以直接展進 `createDeepAgent(...)` 的參數。
@@ -201,11 +230,12 @@ export function foldRegistry(
 
   const permissions = foldPermissions(registry);
   const approvalGate = foldApprovalGate(registry, options);
+  const summarizer = foldSummarizer(options);
 
   const params: FoldedAgentParams = {
     tools: orderTools(globalTools, toolOrder),
-    subagents: foldSubAgents(registry, { toolOrder, permissions, approvalGate }),
-    middleware: foldMiddleware(registry, approvalGate),
+    subagents: foldSubAgents(registry, { toolOrder, permissions, approvalGate, summarizer }),
+    middleware: foldMiddleware(registry, approvalGate, summarizer?.()),
   };
 
   if (permissions.length > 0) params.permissions = permissions;
@@ -446,17 +476,63 @@ function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): Agent
  *   所以待在裡面不會讓核准點消失。
  * - **不能排在其餘之後**。閘門越內層，能繞過它的 middleware 越多——排最後等於任何一個
  *   plugin middleware 都可以在它之前把工具跑掉。
+ *
+ * **摘要器排在閘門之後、其餘之前，而它的位置不決定包裹層次。** 上面那整段論證只管
+ * `nexusApprovalGate` 這種**名字不撞**的 middleware——它們是 novel entry，被基座插在
+ * default 段與 tail 段之間，陣列順序就是包裹順序。摘要器不一樣：它的名字撞上內建那個，
+ * 會被**原地取代回 default 段**，所以它在這個陣列裡排第幾根本影響不到它最後跑在哪一層。
+ * 它的位置只決定一件事——**同名的兩個誰贏**（`mergeMiddleware$1` 是一個以 `name` 為鍵的
+ * `Map`，後設的覆蓋前設的）。排在所有 registry middleware 之前 ＝ 任何 plugin 註冊一個
+ * 同名的都蓋得過我們這份，那就是「打底」的意思，跟 {@link foldSubAgents} 同一條規則。
+ *
+ * 放在閘門**之後**而不是陣列最前面，純粹是為了不讓下一個讀這段註解的人以為上面那個
+ * 「閘門不能排在最前」的結論改了。
  */
 function foldMiddleware(
   registry: PluginRegistry,
   approvalGate: AgentMiddleware,
+  summarizer: AgentMiddleware | undefined,
 ): AgentMiddleware[] {
   const entries = registry.middleware.list();
   return [
     ...entries.filter((entry) => entry.value.prepend).map((entry) => entry.value.middleware),
     approvalGate,
+    ...(summarizer === undefined ? [] : [summarizer]),
     ...entries.filter((entry) => !entry.value.prepend).map((entry) => entry.value.middleware),
   ];
+}
+
+/**
+ * 摘要器的**工廠**，或在明著關掉時回 `undefined`。
+ *
+ * **回工廠而不是一份實例，是量出來的。** `createSummarizationMiddleware` 把
+ * `sessionId` 與 `tokenEstimationMultiplier` 放在 closure 裡（`let sessionId = null`），
+ * 歷史檔名是 `${historyPathPrefix}/${sessionId}.md`。一份實例同時掛在 root 與每個
+ * subagent 上的話，**它們共用那個 closure**——實測到的下場是 root 與 subagent 的歷史
+ * 一起 append 進同一個檔，一份摘要裡混著兩個 agent 的對話。
+ *
+ * 這也是基座的形狀：`createSubagentDefaultMiddleware` 每個 subagent 各呼叫一次
+ * `createSummarizationMiddleware({ backend })`，不共用。基座另外還在 `task` 工具裡替
+ * subagent 的 state 塞一個新的 `_summarizationSessionId`，但那條路徑在共用實例底下
+ * 沒有把兩邊分開——所以答案是別共用，不是靠那個欄位。
+ *
+ * **沒有 default backend 又沒關掉是拋，不是靜默跳過。** 這一格的失敗方向有主人：
+ * 靜默跳過等於退回基座那組沒有人檢查的門檻，而那正是
+ * [#142](https://github.com/DemianLi/nexus-agent/issues/142) 要消滅的狀態——它會長得
+ * 跟「一切正常」一模一樣。同型的前例是 {@link foldBackend} 對「掛了路由卻沒給兜底」
+ * 那條。**檢查跑在這裡一次**，工廠被呼叫幾次都不重驗。
+ */
+function foldSummarizer(options: FoldOptions): (() => AgentMiddleware) | undefined {
+  if (options.summarization === false) return undefined;
+  const settings = resolveSummarizationSettings(options.summarization);
+  const backend = options.defaultBackend;
+  if (backend === undefined)
+    throw new Error(
+      '要配摘要器，但組裝點沒給 default backend——摘要器把歷史寫進 backend，沒有它就沒有' +
+        '地方放。給一個 default backend，或明著傳 `summarization: false` 退回基座那個' +
+        '（那等於接受一組沒有人在檢查的門檻，見 #142）。',
+    );
+  return () => createSummarizer(backend, settings);
 }
 
 /** 有人掛過路由就包成 `CompositeBackend`，否則原樣交出組裝點給的那個。 */
@@ -508,6 +584,7 @@ function foldSubAgents(
     toolOrder: readonly string[] | undefined;
     permissions: readonly FilesystemPermission[];
     approvalGate: AgentMiddleware;
+    summarizer: (() => AgentMiddleware) | undefined;
   },
 ): SubAgent[] {
   const folded: SubAgent[] = [];
@@ -545,7 +622,29 @@ function foldSubAgents(
       tools: orderTools(merged, context.toolOrder),
       // 閘門排在 subagent 自帶的那些之前——同「全域勝」那條軸線：subagent 自己掛的
       // middleware 繞不過它。
-      middleware: [context.approvalGate, ...(spec.middleware ?? [])],
+      //
+      // **摘要器也排在前面，但那是相反的意思。** 閘門的名字不撞任何東西，位置決定的是
+      // 包裹層次（越前越外層）；摘要器的名字撞上基座內建那個，位置決定的是**同名誰贏**
+      // ——`mergeMiddleware$1` 是一個以 `name` 為鍵的 `Map`，後設的覆蓋前設的。排在
+      // `spec.middleware` 之前 ＝ subagent 自己帶的版本贏得過我們這份。
+      //
+      // 這是「打底」不是「強制」，而那是選的：跟同一個函式裡 `tools` 那條軸線一致
+      // （全域打底 → 自帶的 → 該層註冊的，越後面越近）。摘要門檻是效能與正確性的預設值，
+      // 不是安全邊界；明著在 spec 裡寫了一個同名 middleware 的人是想要它，靜靜被蓋掉
+      // 才是壞的。安全邊界那幾格（`permissions`、閘門）維持全域勝，沒有動。
+      //
+      // 打底本身不可省：`buildSubagentMiddleware` 每個 subagent 各建一份新的
+      // `createSummarizationMiddleware({ backend })`，root 的註冊點到不了它們。留給
+      // plugin 作者自己記得的下場是那個 subagent 靜靜用回基座那組沒人檢查的門檻，
+      // 而長任務的 token 大戶正是 subagent（[#142](https://github.com/DemianLi/nexus-agent/issues/142) 的決定 2）。
+      //
+      // **各建一份，不共用**：摘要器的 `sessionId` 在 closure 裡，共用會讓 root 與這個
+      // subagent 的歷史 append 進同一個檔。理由見 {@link foldSummarizer}。
+      middleware: [
+        context.approvalGate,
+        ...(context.summarizer === undefined ? [] : [context.summarizer()]),
+        ...(spec.middleware ?? []),
+      ],
     };
     // 空的就不要放：基座對 `permissions` 的空陣列與缺席不同義（前者是「整組替換成
     // 沒有規則」）。

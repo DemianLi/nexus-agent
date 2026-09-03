@@ -361,6 +361,12 @@ describe('迴圈上限', () => {
     const { agent, dispose } = await createNexusAgent({
       model,
       plugins: [createEchoPlugin()],
+      // **摘要關掉是為了隔離變數，不是為了讓數字好看。** 跑滿的迴圈會累積約 98 則訊息，
+      // 越過我們打底的 `messages: 60` 那道門檻，於是摘要器自己也叫一次模型——`model.calls`
+      // 變成 50，而那一次跟迴圈上限無關。這條量的是護欄擋在哪裡，不該被另一個機制的
+      // 呼叫次數污染。**「不傳的時候恰好多那一次」由
+      // [`summarization.test.ts`](./summarization.test.ts) 正面量**，那才是它該待的地方。
+      summarization: false,
     });
 
     try {
