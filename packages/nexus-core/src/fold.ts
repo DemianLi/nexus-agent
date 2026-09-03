@@ -7,8 +7,8 @@
  * 去向、重複呼叫提醒的門檻與射程）從 {@link FoldOptions} 傳進來：所有權留在 harness，
  * 檢查跑在這裡。
  *
- * 「純轉換層」不代表這裡不建東西：核准閘門、摘要器與提醒器都是在這裡建的 middleware。
- * 分界是**不碰基座的建構**（`createDeepAgent`），不是「不 new 任何東西」。
+ * 「純轉換層」不代表這裡不建東西：核准閘門、摘要器、提醒器與用量記錄器都是在這裡建的
+ * middleware。分界是**不碰基座的建構**（`createDeepAgent`），不是「不 new 任何東西」。
  *
  * 這裡也是幾條後置條件的落點——它們**不能**在註冊當下驗，因為 `requires` 不排序，
  * 清單裡靠前的 plugin 本來就可以往靠後的 plugin 才註冊的 subagent 上加工具。
@@ -26,6 +26,7 @@ import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
 import type { PluginRegistry } from './registry.js';
+import { createModelUsageRecorder } from './model-usage.js';
 import { createRepeatReminder, resolveRepeatReminderSettings } from './repeat-reminder.js';
 import type { RepeatReminderSettings } from './repeat-reminder.js';
 import { createSummarizer, resolveSummarizationSettings } from './summarization.js';
@@ -250,6 +251,8 @@ export function foldRegistry(
   const approvalGate = foldApprovalGate(registry, options);
   const summarizer = foldSummarizer(options);
   const repeatReminder = foldRepeatReminder(options);
+  // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./model-usage.ts}。
+  const modelUsage = createModelUsageRecorder(registry.sessions);
 
   const params: FoldedAgentParams = {
     tools: orderTools(globalTools, toolOrder),
@@ -259,8 +262,9 @@ export function foldRegistry(
       approvalGate,
       summarizer,
       repeatReminder,
+      modelUsage,
     }),
-    middleware: foldMiddleware(registry, approvalGate, summarizer?.(), repeatReminder),
+    middleware: foldMiddleware(registry, approvalGate, summarizer?.(), repeatReminder, modelUsage),
   };
 
   if (permissions.length > 0) params.permissions = permissions;
@@ -521,12 +525,21 @@ function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): Agent
  *
  * 所以放在摘要器後面純粹是讓這一段讀起來跟它上面那兩根一致：我們自己打底的都排在
  * registry middleware 之前，同名的誰都蓋得過。
+ *
+ * **用量記錄器排在其餘 plugin middleware 之前，而那個位置有代價。** 它的名字不撞任何
+ * 東西，所以位置決定的是包裹層次：排在 plugin middleware 外層 ＝ 一個自己重試模型的
+ * plugin middleware，重試幾次都只會被記一筆。dsh 那側是**每一次 attempt 各算一筆再加
+ * 總**（`packages/llm/token-meter/src/turn-usage.ts` 的 `llm/retry-started` 會重開一個
+ * attempt）。今天樹裡沒有那種 plugin，所以先照全樹一致的順序放；哪天有了，把它移到
+ * 最內層就對——**但那會反轉 {@link foldSubAgents} 那條「同名時 subagent 自己帶的贏」
+ * 的政策**，兩件事要一起想。
  */
 function foldMiddleware(
   registry: PluginRegistry,
   approvalGate: AgentMiddleware,
   summarizer: AgentMiddleware | undefined,
   repeatReminder: AgentMiddleware | undefined,
+  modelUsage: AgentMiddleware,
 ): AgentMiddleware[] {
   const entries = registry.middleware.list();
   return [
@@ -534,6 +547,7 @@ function foldMiddleware(
     approvalGate,
     ...(summarizer === undefined ? [] : [summarizer]),
     ...(repeatReminder === undefined ? [] : [repeatReminder]),
+    modelUsage,
     ...entries.filter((entry) => !entry.value.prepend).map((entry) => entry.value.middleware),
   ];
 }
@@ -637,6 +651,7 @@ function foldSubAgents(
     approvalGate: AgentMiddleware;
     summarizer: (() => AgentMiddleware) | undefined;
     repeatReminder: AgentMiddleware | undefined;
+    modelUsage: AgentMiddleware;
   },
 ): SubAgent[] {
   const folded: SubAgent[] = [];
@@ -697,10 +712,16 @@ function foldSubAgents(
       // 分開計數，而我們的鏈是從那個 agent 自己的 `state.messages` 現算的，所以「分開」
       // 是結構上的，不必逐個建。root 的註冊點一樣到不了 subagent，而長任務裡真的會
       // 打轉的正是 subagent（[#147](https://github.com/DemianLi/nexus-agent/issues/147)）。
+      //
+      // **用量記錄器同樣打底、同樣共用一份**，理由與提醒器同型：不注的話 subagent 那幾輪
+      // 的 token 完全不進日誌——沒有人會紅，只是那份日誌裡永遠沒有數字；而它無狀態，
+      // 身分每次從執行期的 `configurable` 現算，共用一份不會讓兩個 agent 混在一起。
+      // 理由見 {@link ./model-usage.ts}。
       middleware: [
         context.approvalGate,
         ...(context.summarizer === undefined ? [] : [context.summarizer()]),
         ...(context.repeatReminder === undefined ? [] : [context.repeatReminder]),
+        context.modelUsage,
         ...(spec.middleware ?? []),
       ],
     };

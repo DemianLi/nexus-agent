@@ -86,6 +86,12 @@ export { loadPlugins } from './load.js';
 
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
+export type { ModelUsage } from './model-usage.js';
+export {
+  createModelUsageRecorder,
+  MODEL_USAGE_MIDDLEWARE_NAME,
+  readModelUsage,
+} from './model-usage.js';
 export type { RepeatReminderMark, RepeatReminderSettings } from './repeat-reminder.js';
 export {
   createRepeatReminder,

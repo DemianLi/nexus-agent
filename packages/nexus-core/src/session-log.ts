@@ -53,6 +53,13 @@ import type { TodoItem } from './todo.js';
  * ——進入點只包 root 的輪，goal 的參與者只接 root。`todo/write` 反過來，照 dsh 的單一
  * 所有者規則：每一次 spawn 各自維護自己的清單。
  * 見 [#132](https://github.com/DemianLi/nexus-agent/issues/132)。
+ *
+ * `model/usage` 是**第四種生產者：fold 自己建的 middleware**
+ * （{@link ./model-usage.ts | createModelUsageRecorder}）。「兩條路都產得出來嗎」對它
+ * 答得比前面每一種都硬——前三種要靠兩條路各自接線、或共用同一份工具清單，而這一種
+ * **就是那一份組裝本身**：同一個 middleware 實例掛在同一張圖上，兩條進入點看到的是
+ * 同一次模型呼叫。它跟 `todo/write` 一樣寫得進 subagent 那份。
+ * 見 [#153](https://github.com/DemianLi/nexus-agent/issues/153)。
  */
 export type SessionEventType =
   | 'turn/start'
@@ -62,7 +69,8 @@ export type SessionEventType =
   | 'command/run'
   | 'command/done'
   | 'goal/change'
-  | 'todo/write';
+  | 'todo/write'
+  | 'model/usage';
 
 /** 每一種事件帶什麼。 */
 export interface SessionEventMap {
@@ -125,6 +133,24 @@ export interface SessionEventMap {
    * 條目的形狀見 {@link ./todo.ts | TodoItem}，域住在 `@nexus/plugin-todo`。
    */
   'todo/write': { readonly todos: readonly TodoItem[] };
+  /**
+   * 一次模型呼叫的 token 帳目，**供應商報什麼記什麼**。
+   *
+   * 一輪有幾格就有幾筆（工具呼叫每一輪都要再叫一次模型）；一輪花了多少要自己加，
+   * 日誌不寫彙總——照 dsh 的 `deriveTurnTokenUsage`，輪級的數字是一道讀日誌的純折疊。
+   *
+   * **沒報就整筆沒有這顆事件**，不是三個 0、也不是 `undefined`。同樣地，報得自相矛盾
+   * （總量小於它的組成、有欄位不是非負安全整數）也整筆不記。理由與規則見
+   * {@link ./model-usage.ts | readModelUsage}。
+   *
+   * **這一筆只有數字。** `command/run` 那條「使用者原話會原樣進遙測」的警告在這裡沒有
+   * 指涉對象：三個欄位都是計數，不含 prompt、不含檔案路徑、不含模型 id。
+   */
+  'model/usage': {
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+    readonly totalTokens: number;
+  };
 }
 
 /** 日誌裡的一筆。凍過的，拿到之後改不動。 */

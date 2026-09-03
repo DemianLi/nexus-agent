@@ -368,7 +368,7 @@ describe('roundsStarted 恆為 0', () => {
     // **詞彙**不是值——`SessionEventType` 多一種，下面的 `satisfies` 就在 `typecheck`
     // 當場紅，逼寫的人回到這個檔案回答一句話：「這一種推得動輪次嗎？」
     //
-    // 今天八種的答案都是不推：五種是進入點寫的人類活動，`goal/change` 是狀態本身，
+    // 今天九種的答案都是不推：五種是進入點寫的人類活動，`goal/change` 是狀態本身，
     // 而推得動輪次的那種（dsh 的 `user/message` 帶 `source.kind === 'goal'`）不在裡面。
     //
     // **`todo/write` 是這條絆索第一次真的擋下人**（[#132](https://github.com/DemianLi/nexus-agent/issues/132)）。
@@ -376,6 +376,11 @@ describe('roundsStarted 恆為 0', () => {
     // 使用者輪次**，而 todo 是模型在**同一輪之內**改自己的規劃草稿——一輪裡寫五次
     // 清單仍然是一輪。把它算進去的話，`maxGoalRounds` 會變成「模型改了幾次計畫」的
     // 上限，那不是任何人設定它時想限制的東西。
+    //
+    // **`model/usage` 是第二次**（[#153](https://github.com/DemianLi/nexus-agent/issues/153)）。
+    // 答案同樣是不推，理由跟 `todo/write` 同型但更遠：它一輪有幾格模型呼叫就有幾筆，
+    // 而「叫了幾次模型」正是 `recursionLimit` 在管的東西，不是 `maxGoalRounds`。兩個
+    // 預算數的是兩件事，讓其中一個去數另一個那件事，兩個都會失準。
     const KNOWN = [
       'turn/start',
       'turn/end',
@@ -385,6 +390,7 @@ describe('roundsStarted 恆為 0', () => {
       'command/done',
       'goal/change',
       'todo/write',
+      'model/usage',
     ] as const;
     KNOWN satisfies readonly SessionEventType[];
     // 反過來這一條才是絆索：多一種而沒有列進來，`Exhaustive` 就變成 `never`。
