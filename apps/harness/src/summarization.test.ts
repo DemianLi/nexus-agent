@@ -135,15 +135,19 @@ describe('同名取代是唯一的縫', () => {
     try {
       const names = middlewareNames(agent);
       expect(names.filter((name) => name === 'SummarizationMiddleware')).toHaveLength(1);
-      // 位置也沒動——原地取代，不是刪掉再追加到尾巴。尾巴上那個核准閘門是 fold 每次
-      // 都掛的（[#111](https://github.com/DemianLi/nexus-agent/issues/111)），它排在
-      // 基座那幾個之後、其餘 plugin middleware 之前。
+      // 位置也沒動——原地取代，不是刪掉再追加到尾巴。尾巴上那兩個是 fold 每次都掛的：
+      // 核准閘門（[#111](https://github.com/DemianLi/nexus-agent/issues/111)）與重複
+      // 呼叫的提醒器（[#147](https://github.com/DemianLi/nexus-agent/issues/147)）。
+      // **它們跟摘要器的下場不同，而這條同時釘住那個差別**：名字不撞內建任何一個，
+      // 所以是 novel entry 被追加在基座那幾個之後、其餘 plugin middleware 之前；摘要器
+      // 的名字撞了，所以是原地取代回第三格。
       expect(names).toEqual([
         'FilesystemMiddleware',
         'subAgentMiddleware',
         'SummarizationMiddleware',
         'patchToolCallsMiddleware',
         'nexusApprovalGate',
+        'nexusRepeatToolReminder',
       ]);
 
       await agent.invoke(toAgentInvocation('嗨。'));
@@ -974,6 +978,10 @@ describe('我們配的那份打底到每個 subagent', () => {
  *
  * 對照組在 [`agent-factory.test.ts`](./agent-factory.test.ts) 的「迴圈上限」：那條明著傳
  * `summarization: false`，模型剛好少被叫一次。
+ *
+ * **輪數的換算在 [#147](https://github.com/DemianLi/nexus-agent/issues/147) 之後變了**：
+ * 打底的提醒器掛在 `beforeModel` 上，那在圖裡是一個節點，所以每一輪是三格而不是兩格，
+ * 100 換算成 33 輪。這條照樣不傳任何參數——量的就是**真正的預設組裝**，換算跟著它走。
  */
 describe('預設門檻在跑滿的迴圈裡摘要一次', () => {
   it('模型被叫的次數比迴圈上限換算多一次，多的那次是摘要器', async () => {
@@ -986,7 +994,8 @@ describe('預設門檻在跑滿的迴圈裡摘要一次', () => {
       await dispose();
     }
 
-    const agentTurns = (DEFAULT_RECURSION_LIMIT - 2) / 2;
+    // 預設組裝每輪三格：`模型輪數 = floor((上限 - 1) / 3)`。
+    const agentTurns = Math.floor((DEFAULT_RECURSION_LIMIT - 1) / 3);
     expect(model.calls).toBe(agentTurns + 1);
   });
 });

@@ -86,6 +86,14 @@ export { loadPlugins } from './load.js';
 
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
+export type { RepeatReminderMark, RepeatReminderSettings } from './repeat-reminder.js';
+export {
+  createRepeatReminder,
+  DEFAULT_REPEAT_REMINDER,
+  REPEAT_REMINDER_MARKER,
+  REPEAT_REMINDER_MIDDLEWARE_NAME,
+  resolveRepeatReminderSettings,
+} from './repeat-reminder.js';
 export type {
   SummarizationArgTruncation,
   SummarizationSettings,

@@ -31,7 +31,12 @@ import type {
 } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
-import { SessionRegistry, type SessionLog } from '@nexus/core';
+import {
+  REPEAT_REMINDER_MARKER,
+  REPEAT_REMINDER_MIDDLEWARE_NAME,
+  SessionRegistry,
+  type SessionLog,
+} from '@nexus/core';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant';
 import { createEchoInvariantPlugin } from '@nexus/plugin-echo/invariant';
@@ -318,6 +323,35 @@ export const APPROVAL_DISCLOSURE =
   '核准：關閉（這個入口收不了核准決定，需要核准的工具會被拒絕，不會停下來等）';
 
 /**
+ * 一則訊息在畫面上該印成什麼，或 `undefined` 代表不印。
+ *
+ * **人自己說的那句不再印一次。** 基座把這一輪的輸入訊息掛在**第一個真的寫了東西的
+ * 節點**的 update 上（實測：三個 `before_agent` 裡只有回傳非空更新的那一個帶著它）。
+ * 照原樣印的話，畫面上會出現 `[nexusPlanMode.before_agent] 嗨`——看起來像那個 plugin
+ * 在說話，而那句是使用者三秒前自己打的。
+ *
+ * **例外是圖自己插進來的 human 訊息，而那條路現在真的有了。** 這段註解過去寫著「哪天
+ * 真的有東西從圖裡插一則 human message 進來，它也會跟著不見；今天沒有那條路」——
+ * [#147](https://github.com/DemianLi/nexus-agent/issues/147) 開了那條路：重複呼叫的
+ * 提醒就是一則合成的 human 訊息。一律跳過的話，那道護欄唯一的產出在畫面上一個字都不會
+ * 出現，操作的人看不出它有沒有動過。所以帶記號的照印，**沒有**記號的才是使用者自己打的。
+ *
+ * 抽成純函式是為了測得到：CLI 的假腳本不重複呼叫任何工具，那條分支在整條 REPL 上跑不到。
+ *
+ * @param node - 這則訊息來自哪個節點。
+ * @param message - 那則訊息。
+ * @returns 要印的那一行，或 `undefined`。
+ */
+export function transcriptLine(node: string, message: BaseMessage): string | undefined {
+  if (message.getType() === 'human') {
+    if (message.additional_kwargs[REPEAT_REMINDER_MARKER] == null) return undefined;
+    return `[${REPEAT_REMINDER_MIDDLEWARE_NAME}] ${message.text.trim()}`;
+  }
+  const label = message.name ? `${node}/${message.name}` : node;
+  return `[${label}] ${message.text.trim() || '(呼叫工具)'}`;
+}
+
+/**
  * 依這次呼叫建 model。
  *
  * @param live - 是否用真實供應商。
@@ -530,17 +564,8 @@ export async function runTurn(
         }
         const messages = (update as { messages?: BaseMessage[] }).messages ?? [];
         for (const message of messages) {
-          // **人自己說的那句不再印一次。** 基座把這一輪的輸入訊息掛在**第一個真的
-          // 寫了東西的節點**的 update 上（實測：三個 `before_agent` 裡只有回傳非空
-          // 更新的那一個帶著它）。照原樣印的話，畫面上會出現
-          // `[nexusPlanMode.before_agent] 嗨`——看起來像那個 plugin 在說話，而那句
-          // 是使用者三秒前自己打的。
-          //
-          // **代價**：哪天真的有東西從圖裡插一則 human message 進來（dsh 的
-          // `agent.steer()` narration 就是那個形狀），它也會跟著不見。今天沒有那條路。
-          if (message.getType() === 'human') continue;
-          const label = message.name ? `${node}/${message.name}` : node;
-          printer.log(`[${label}] ${message.text.trim() || '(呼叫工具)'}`);
+          const line = transcriptLine(node, message);
+          if (line !== undefined) printer.log(line);
         }
       }
     }

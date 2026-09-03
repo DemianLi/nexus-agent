@@ -2,12 +2,13 @@
  * fold：把載入完的 registry 折成一次 `createDeepAgent(...)` 要的參數。
  *
  * core 是純轉換層——**不呼叫** `createDeepAgent`，只產出參數；那一次呼叫住在
- * `apps/harness`，而且只有那一個地方。組裝點自有的六樣（default backend、工具
+ * `apps/harness`，而且只有那一個地方。組裝點自有的七樣（default backend、工具
  * 呈現順序清單、model、checkpointer / store、核准政策的 session 開關、摘要的門檻與
- * 去向）從 {@link FoldOptions} 傳進來：所有權留在 harness，檢查跑在這裡。
+ * 去向、重複呼叫提醒的門檻與射程）從 {@link FoldOptions} 傳進來：所有權留在 harness，
+ * 檢查跑在這裡。
  *
- * 「純轉換層」不代表這裡不建東西：核准閘門與摘要器都是在這裡建的 middleware。分界是
- * **不碰基座的建構**（`createDeepAgent`），不是「不 new 任何東西」。
+ * 「純轉換層」不代表這裡不建東西：核准閘門、摘要器與提醒器都是在這裡建的 middleware。
+ * 分界是**不碰基座的建構**（`createDeepAgent`），不是「不 new 任何東西」。
  *
  * 這裡也是幾條後置條件的落點——它們**不能**在註冊當下驗，因為 `requires` 不排序，
  * 清單裡靠前的 plugin 本來就可以往靠後的 plugin 才註冊的 subagent 上加工具。
@@ -25,6 +26,8 @@ import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
 import type { PluginRegistry } from './registry.js';
+import { createRepeatReminder, resolveRepeatReminderSettings } from './repeat-reminder.js';
+import type { RepeatReminderSettings } from './repeat-reminder.js';
 import { createSummarizer, resolveSummarizationSettings } from './summarization.js';
 import type { SummarizationSettings } from './summarization.js';
 
@@ -112,7 +115,7 @@ export interface ApprovalPolicy {
   enabled?: boolean;
 }
 
-/** 組裝點在 fold 時交出來的那六樣，加一份基座工具名單。 */
+/** 組裝點在 fold 時交出來的那七樣，加一份基座工具名單。 */
 export interface FoldOptions {
   /**
    * default backend。plugin 不得提供——`backend.mount()` 掛的是路由分支，
@@ -164,6 +167,21 @@ export interface FoldOptions {
    * default backend 又沒關掉摘要時，fold 當場拋。
    */
   summarization?: Partial<SummarizationSettings> | false;
+  /**
+   * 重複工具呼叫的提醒門檻與射程。省略即 {@link DEFAULT_REPEAT_REMINDER}，給物件就
+   * 逐格淺合併上去，`false` 是明著不要。
+   *
+   * **這一格跟 {@link FoldOptions.summarization} 不同型**：那一格的 `false` 是退回基座
+   * 無條件建的那個，這一格的 `false` 是**真的沒有**——基座沒有這種 middleware，
+   * `recursionLimit` 是唯一會讓打轉停下來的東西，而它不分辨在進展還是在打轉。
+   *
+   * 它建的 middleware 是無狀態的（鏈從 `state.messages` 現算），所以 root 與每個
+   * subagent 共用同一份實例，不像摘要器要逐個建。
+   *
+   * **關掉它會拿回一點迴圈預算**：它掛在 `beforeModel` 上，那是圖裡的一個節點，
+   * 每一輪多一個 super-step。見 {@link createRepeatReminder}。
+   */
+  repeatReminder?: Partial<RepeatReminderSettings> | false;
 }
 
 /**
@@ -231,11 +249,18 @@ export function foldRegistry(
   const permissions = foldPermissions(registry);
   const approvalGate = foldApprovalGate(registry, options);
   const summarizer = foldSummarizer(options);
+  const repeatReminder = foldRepeatReminder(options);
 
   const params: FoldedAgentParams = {
     tools: orderTools(globalTools, toolOrder),
-    subagents: foldSubAgents(registry, { toolOrder, permissions, approvalGate, summarizer }),
-    middleware: foldMiddleware(registry, approvalGate, summarizer?.()),
+    subagents: foldSubAgents(registry, {
+      toolOrder,
+      permissions,
+      approvalGate,
+      summarizer,
+      repeatReminder,
+    }),
+    middleware: foldMiddleware(registry, approvalGate, summarizer?.(), repeatReminder),
   };
 
   if (permissions.length > 0) params.permissions = permissions;
@@ -487,19 +512,45 @@ function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): Agent
  *
  * 放在閘門**之後**而不是陣列最前面，純粹是為了不讓下一個讀這段註解的人以為上面那個
  * 「閘門不能排在最前」的結論改了。
+ *
+ * **提醒器排在摘要器之後，而那個位置一樣不決定包裹層次。** 理由跟上一段不同：它的名字
+ * 不撞任何內建的，所以它是 novel entry、順序就是包裹順序——但**它跟摘要器之間沒有層次
+ * 可言**。摘要器只定義 `wrapModelCall`（`deepagents@1.13.1`，
+ * `dist/langsmith-zm0ILQsV.js:3193-3195`），那是模型節點**內部**的一層；提醒器是
+ * `beforeModel`，那是模型節點**之前**的一個獨立節點。誰先跑由圖決定，不由這個陣列決定。
+ *
+ * 所以放在摘要器後面純粹是讓這一段讀起來跟它上面那兩根一致：我們自己打底的都排在
+ * registry middleware 之前，同名的誰都蓋得過。
  */
 function foldMiddleware(
   registry: PluginRegistry,
   approvalGate: AgentMiddleware,
   summarizer: AgentMiddleware | undefined,
+  repeatReminder: AgentMiddleware | undefined,
 ): AgentMiddleware[] {
   const entries = registry.middleware.list();
   return [
     ...entries.filter((entry) => entry.value.prepend).map((entry) => entry.value.middleware),
     approvalGate,
     ...(summarizer === undefined ? [] : [summarizer]),
+    ...(repeatReminder === undefined ? [] : [repeatReminder]),
     ...entries.filter((entry) => !entry.value.prepend).map((entry) => entry.value.middleware),
   ];
+}
+
+/**
+ * 提醒器，或在明著關掉時回 `undefined`。
+ *
+ * **回一份實例而不是工廠，跟 {@link foldSummarizer} 相反，而且是量過的差別**：摘要器的
+ * `sessionId` 在 closure 裡，共用會讓兩個 agent 的歷史混進同一個檔；提醒器的 closure 裡
+ * 只有設定，鏈每次從 `state.messages` 現算，而 `state` 本來就逐 thread、逐 agent 各一份。
+ *
+ * @param options - 組裝點自有的那些。
+ * @returns 一份可以掛在任意多個 agent 上的 middleware，或 `undefined`。
+ */
+function foldRepeatReminder(options: FoldOptions): AgentMiddleware | undefined {
+  if (options.repeatReminder === false) return undefined;
+  return createRepeatReminder(resolveRepeatReminderSettings(options.repeatReminder));
 }
 
 /**
@@ -585,6 +636,7 @@ function foldSubAgents(
     permissions: readonly FilesystemPermission[];
     approvalGate: AgentMiddleware;
     summarizer: (() => AgentMiddleware) | undefined;
+    repeatReminder: AgentMiddleware | undefined;
   },
 ): SubAgent[] {
   const folded: SubAgent[] = [];
@@ -640,9 +692,15 @@ function foldSubAgents(
       //
       // **各建一份，不共用**：摘要器的 `sessionId` 在 closure 裡，共用會讓 root 與這個
       // subagent 的歷史 append 進同一個檔。理由見 {@link foldSummarizer}。
+      //
+      // **提醒器也打底，理由跟摘要器同一條，但它是共用同一份實例的**：dsh 每個 agent
+      // 分開計數，而我們的鏈是從那個 agent 自己的 `state.messages` 現算的，所以「分開」
+      // 是結構上的，不必逐個建。root 的註冊點一樣到不了 subagent，而長任務裡真的會
+      // 打轉的正是 subagent（[#147](https://github.com/DemianLi/nexus-agent/issues/147)）。
       middleware: [
         context.approvalGate,
         ...(context.summarizer === undefined ? [] : [context.summarizer()]),
+        ...(context.repeatReminder === undefined ? [] : [context.repeatReminder]),
         ...(spec.middleware ?? []),
       ],
     };
