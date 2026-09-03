@@ -11,6 +11,7 @@ import type { CreateDeepAgentParams, SubAgent } from 'deepagents';
 import { CompositeBackend } from 'deepagents';
 import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
 import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
+import { REPEAT_REMINDER_MIDDLEWARE_NAME } from './repeat-reminder.js';
 import { SUMMARIZATION_MIDDLEWARE_NAME } from './summarization.js';
 import type { FoldOptions } from './fold.js';
 import { loadPlugins } from './load.js';
@@ -24,10 +25,15 @@ import type { NexusPlugin } from './plugin.js';
  * （[#142](https://github.com/DemianLi/nexus-agent/issues/142)），而它需要一個
  * default backend。這個檔裡絕大多數測試量的是別的規則、不給 backend，所以在入口統一
  * 宣告「這些測試不關心摘要」比逐條塞一個假 backend 誠實。摘要那一組自己明著打開。
+ *
+ * **提醒器也一併關掉，理由不同。** 它不需要任何東西就建得起來
+ * （[#147](https://github.com/DemianLi/nexus-agent/issues/147)），所以關它不是為了讓
+ * 測試跑得起來，而是為了讓**順序斷言只列它真的在量的那幾根**——不然這個檔裡每一條
+ * middleware 順序測試都要多背一個跟它無關的名字。提醒那一組自己明著打開。
  */
 async function fold(plugins: NexusPlugin[], options: FoldOptions = {}) {
   const { registry } = await loadPlugins(plugins);
-  return foldRegistry(registry, { summarization: false, ...options });
+  return foldRegistry(registry, { summarization: false, repeatReminder: false, ...options });
 }
 
 /** 基座自己帶進來、不經過 registry 的工具名。`toolOrder` 的檢查需要它們。 */
@@ -730,5 +736,104 @@ describe('摘要器打底', () => {
         defaultBackend: fakeBackend('default'),
       }),
     ).rejects.toThrow(`summarization.${where}`);
+  });
+});
+
+/**
+ * 提醒器打底——**跟摘要器同一條軸線，但有兩格刻意相反**。
+ *
+ * 一、**共用同一份實例**。摘要器的 `sessionId` 在 closure 裡，共用會讓兩個 agent 的歷史
+ * 混進同一個檔，所以那邊逐個建；提醒器的鏈是從 `state.messages` 現算的，closure 裡只有
+ * 設定，而 `state` 本來就逐 thread、逐 agent 各一份。
+ *
+ * 二、**`false` 的意思相反**。摘要那格的 `false` 是退回基座無條件建的那個；這格的
+ * `false` 是**真的沒有**——基座沒有這種 middleware。
+ */
+describe('提醒器打底', () => {
+  it('排在摘要器之後、其餘 registry middleware 之前', async () => {
+    const params = await fold(
+      [
+        fakePlugin('a', (r) => void r.middleware.use(fakeMiddleware('a'))),
+        fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
+      ],
+      { summarization: {}, repeatReminder: {}, defaultBackend: fakeBackend('default') },
+    );
+    // **排在摘要器之後是有意義的**：兩個都會動訊息串，而它們在圖裡是照這個順序串起來的
+    // 節點。摘要器先剪、提醒器後附 ＝ 提醒一定活到模型那一格。
+    expect(middlewareNames(params)).toEqual([
+      'b',
+      APPROVAL_GATE_MIDDLEWARE_NAME,
+      SUMMARIZATION_MIDDLEWARE_NAME,
+      REPEAT_REMINDER_MIDDLEWARE_NAME,
+      'a',
+    ]);
+  });
+
+  it('每個 subagent 也拿到，而且排在它自帶的 middleware 之前', async () => {
+    const own = fakeMiddleware('subagent-own');
+    const params = await fold(
+      [
+        fakePlugin('team', (r) => {
+          r.subagents.register({ ...fakeSubAgent('releaser'), middleware: [own] } as SubAgent);
+        }),
+      ],
+      { repeatReminder: {} },
+    );
+    const names = (params.subagents[0]?.middleware ?? []).map(
+      (mw) => (mw as unknown as { name: string }).name,
+    );
+    // 自帶的排在後面 ＝ 自帶的贏，同 `tools` 那條軸線。root 的 `registry.middleware`
+    // 到不了 subagent，所以不打底的話那個 subagent 就完全沒有這道提醒。
+    expect(names).toEqual([
+      APPROVAL_GATE_MIDDLEWARE_NAME,
+      REPEAT_REMINDER_MIDDLEWARE_NAME,
+      'subagent-own',
+    ]);
+  });
+
+  it('root 與每個 subagent 拿到的是同一份實例 —— 它無狀態，跟摘要器相反', async () => {
+    const params = await fold(
+      [
+        fakePlugin('team', (r) => {
+          r.subagents.register(fakeSubAgent('one'));
+          r.subagents.register(fakeSubAgent('two'));
+        }),
+      ],
+      { repeatReminder: {} },
+    );
+    const pick = (list: readonly unknown[]): unknown =>
+      list.find((mw) => (mw as { name: string }).name === REPEAT_REMINDER_MIDDLEWARE_NAME);
+    const instances = [
+      pick(params.middleware),
+      pick(params.subagents[0]?.middleware ?? []),
+      pick(params.subagents[1]?.middleware ?? []),
+    ];
+    expect(instances.every((instance) => instance !== undefined)).toBe(true);
+    // **三個位置一個物件。** 這不是「共用也還好」：鏈每次從那個 agent 自己的
+    // `state.messages` 現算，隔離是結構上的，不是靠各建一份。
+    expect(new Set(instances).size).toBe(1);
+  });
+
+  it('明著關掉就一份都不建，root 與 subagent 都沒有', async () => {
+    const params = await fold(
+      [fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('one')))],
+      { repeatReminder: false },
+    );
+    expect(middlewareNames(params)).not.toContain(REPEAT_REMINDER_MIDDLEWARE_NAME);
+    const names = (params.subagents[0]?.middleware ?? []).map(
+      (mw) => (mw as unknown as { name: string }).name,
+    );
+    expect(names).not.toContain(REPEAT_REMINDER_MIDDLEWARE_NAME);
+  });
+
+  it('壞掉的門檻在 fold 當場拋，不是等到跑起來', async () => {
+    await expect(
+      fold([fakePlugin('noop', () => {})], { repeatReminder: { thresholds: [1] } }),
+    ).rejects.toThrow(/repeatReminder\.thresholds/);
+  });
+
+  it('不需要 default backend —— 它不寫任何東西', async () => {
+    const params = await fold([fakePlugin('noop', () => {})], { repeatReminder: {} });
+    expect(middlewareNames(params)).toContain(REPEAT_REMINDER_MIDDLEWARE_NAME);
   });
 });

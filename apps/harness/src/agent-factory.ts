@@ -10,7 +10,8 @@
  * 第三步只有這裡有。換模型、換儲存、換工具組合＝換 plugin 清單，core 不動。
  *
  * 「組裝點自有、plugin 不得提供」的那些（default backend、工具呈現順序、model、
- * checkpointer / store、核准政策的 session 開關、摘要的門檻與去向，加一份基座工具名單）
+ * checkpointer / store、核准政策的 session 開關、摘要的門檻與去向、重複呼叫提醒的門檻與
+ * 射程，加一份基座工具名單）
  * 從 {@link CreateNexusAgentOptions} 進來，原樣交給 fold：**所有權在這裡，檢查跑在 core**。
  *
  * 這也是 fold 的產物第一次真的碰到基座。基座在建構時還有三道自己的檢查是 fold 看不到的，
@@ -55,6 +56,7 @@ import {
   type PluginRegistry,
   type SessionRegistry,
   type SessionTelemetrySharingStatus,
+  type RepeatReminderSettings,
   type SummarizationSettings,
 } from '@nexus/core';
 import { createDeepAgent, StateBackend } from 'deepagents';
@@ -118,6 +120,21 @@ export interface CreateNexusAgentOptions {
    * 數值的理由見 [`summarization.ts`](../../../packages/nexus-core/src/summarization.ts)。
    */
   readonly summarization?: Partial<SummarizationSettings> | false;
+  /**
+   * 重複工具呼叫的提醒門檻與射程。省略即 `DEFAULT_REPEAT_REMINDER`（門檻 3／5／8），
+   * 給物件就逐格淺合併上去，`false` 是明著不要。
+   *
+   * **這一格存在是因為基座沒有這種 middleware。** 模型以同參數重複呼叫同一個工具時，
+   * 今天唯一會讓它停下來的是 {@link DEFAULT_RECURSION_LIMIT}，而那個上限不分辨「在
+   * 進展」與「在打轉」——它只會在跑了夠久之後把整輪掐掉。提醒器是**建議不是阻止**：
+   * 合理的重複一秒都不會被延遲。形狀與門檻照 dsh 的 `repeat-tool-reminder`，
+   * 偏離登記見 [`repeat-reminder.ts`](../../../packages/nexus-core/src/repeat-reminder.ts)。
+   *
+   * **開著會吃掉迴圈預算**：它掛在 `beforeModel` 上，那在圖裡是一個節點，每一輪多一個
+   * super-step，於是 `recursionLimit` 的換算從 `2 × 輪數 + 2` 變成 `3 × 輪數 + 2`。
+   * 見 {@link DEFAULT_RECURSION_LIMIT}。
+   */
+  readonly repeatReminder?: Partial<RepeatReminderSettings> | false;
   /** 附加在基座 base prompt 前面的 system prompt。 */
   readonly systemPrompt?: string;
   /**
@@ -177,6 +194,19 @@ export interface CreateNexusAgentOptions {
  * 57 個 super-step，所以這個值攔得住它，而正常的基準任務（最長 3 次工具呼叫 ≈ 8 個
  * super-step）離它還很遠。**它是「跑掉了」的界線，不是「複雜任務」的界線** —— 真的需要
  * 更長的呼叫端自己傳一個大的，那時那個數字會出現在呼叫端的程式碼裡而不是沒有人設過。
+ *
+ * ## 上面那個換算是裸組裝的，預設組裝比它短
+ *
+ * `2 × 輪數 + 2` 只在「圖裡沒有 `beforeModel` 節點」時成立，而
+ * [#147](https://github.com/DemianLi/nexus-agent/issues/147) 打底的
+ * {@link CreateNexusAgentOptions.repeatReminder} 就是一個。通式是
+ * `模型輪數 = floor((recursionLimit - 1) / 每輪格數)`，所以**預設組裝每一輪是三格，
+ * 100 換算成 33 輪而不是 49**。2026-09-03 實測，逐格對照見
+ * [`looping-model.ts`](./looping-model.ts) 的檔頭。
+ *
+ * **這個常數沒有跟著動。** 方向是護欄變嚴不是變鬆，而上面那條校準的另一半（正常任務
+ * ≈ 8 個 super-step，換算後 ≈ 12）離 100 還很遠。要拿回原本的預算就自己傳一個大的
+ * `recursionLimit`，或明著關掉提醒器。
  */
 export const DEFAULT_RECURSION_LIMIT = 100;
 
@@ -263,6 +293,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       store: options.store,
       approvals: options.approvals,
       ...(options.summarization !== undefined && { summarization: options.summarization }),
+      ...(options.repeatReminder !== undefined && { repeatReminder: options.repeatReminder }),
     });
 
     // `withConfig` 疊在基座自己那一層 `withConfig` 上面，後者贏（實測 `8` → 模型只被叫
