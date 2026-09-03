@@ -744,7 +744,7 @@ describe('正式路徑上的門檻是我們選的', () => {
    * fail-open（一則逐字訊息都不留），**兩種壞法都不會自己出聲**。
    */
   it.each([
-    ['trigger', { trigger: [{ type: 'fraction', value: 0.85 }] }],
+    ['trigger[0]', { trigger: [{ type: 'fraction', value: 0.85 }] }],
     ['keep', { keep: { type: 'fraction', value: 0.1 } }],
     [
       'truncateArgs.trigger',
@@ -755,8 +755,10 @@ describe('正式路徑上的門檻是我們選的', () => {
         },
       },
     ],
-  ])('%s 用 fraction 當場拋，訊息說得出為什麼', (_where, override) => {
-    expect(() => resolveSummarizationSettings(override as never)).toThrow(/fraction/);
+  ])('%s 用 fraction 當場拋，訊息指名是哪一格也說得出為什麼', (where, override) => {
+    // **逐格斷言而不是只看 /fraction/**：四格共用同一個檢查函式，只驗共同字串的話，
+    // 一個只檢查 `settings.trigger` 的 bug 會讓三條同時通過。
+    expect(() => resolveSummarizationSettings(override as never)).toThrow(`summarization.${where}`);
     expect(() => resolveSummarizationSettings(override as never)).toThrow(/maxInputTokens/);
   });
 

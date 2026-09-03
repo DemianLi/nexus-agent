@@ -11,6 +11,7 @@ import type { CreateDeepAgentParams, SubAgent } from 'deepagents';
 import { CompositeBackend } from 'deepagents';
 import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
 import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
+import { SUMMARIZATION_MIDDLEWARE_NAME } from './summarization.js';
 import type { FoldOptions } from './fold.js';
 import { loadPlugins } from './load.js';
 import { fakeBackend, fakeMiddleware, fakePlugin, fakeSubAgent, fakeTool } from './fixtures.js';
@@ -625,5 +626,109 @@ describe('組裝點自有的那五樣', () => {
     // 型別斷言本身就是驗收：基座改了形狀，typecheck 當場紅。
     const forBase: CreateDeepAgentParams = params;
     expect(forBase.tools).toBe(params.tools);
+  });
+});
+
+/**
+ * **摘要器打底**——[#142](https://github.com/DemianLi/nexus-agent/issues/142) 的決定 1 與
+ * 決定 2 在 core 這一側的驗收。行為（門檻真的觸發、歷史真的落在我們指定的前綴）由
+ * `apps/harness/src/summarization.test.ts` 量，這裡量的是折出來的形狀。
+ *
+ * 這個檔的入口 helper 預設 `summarization: false`（其餘測試都不關心摘要，而打底需要一個
+ * default backend），所以**這一組要自己明著打開**——不然 fold 產出的摘要器在 core 這側
+ * 一條測試都沒有。
+ */
+describe('摘要器打底', () => {
+  it('排在閘門之後、其餘 registry middleware 之前', async () => {
+    const params = await fold(
+      [
+        fakePlugin('a', (r) => void r.middleware.use(fakeMiddleware('a'))),
+        fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
+      ],
+      { summarization: {}, defaultBackend: fakeBackend('default') },
+    );
+    // 位置只決定同名誰贏（`mergeMiddleware$1` 是以 name 為鍵的 Map，後設的覆蓋前設的）：
+    // 排在所有 registry middleware 之前 ＝ 任何 plugin 掛一個同名的都蓋得過我們這份。
+    expect(middlewareNames(params)).toEqual([
+      'b',
+      APPROVAL_GATE_MIDDLEWARE_NAME,
+      SUMMARIZATION_MIDDLEWARE_NAME,
+      'a',
+    ]);
+  });
+
+  it('每個 subagent 也拿到，而且排在它自帶的 middleware 之前', async () => {
+    const own = fakeMiddleware('subagent-own');
+    const params = await fold(
+      [
+        fakePlugin('team', (r) => {
+          r.subagents.register({ ...fakeSubAgent('releaser'), middleware: [own] } as SubAgent);
+        }),
+      ],
+      { summarization: {}, defaultBackend: fakeBackend('default') },
+    );
+    const names = (params.subagents[0]?.middleware ?? []).map(
+      (mw) => (mw as unknown as { name: string }).name,
+    );
+    // **自帶的排在後面 ＝ 自帶的贏。** 這是「打底」不是「強制」，跟同一個函式裡 `tools`
+    // 那條軸線一致；摘要門檻是效能與正確性的預設值，不是安全邊界。閘門那一格沒動。
+    expect(names).toEqual([
+      APPROVAL_GATE_MIDDLEWARE_NAME,
+      SUMMARIZATION_MIDDLEWARE_NAME,
+      'subagent-own',
+    ]);
+  });
+
+  it('root 與每個 subagent 各拿一份實例，不共用', async () => {
+    const params = await fold(
+      [
+        fakePlugin('team', (r) => {
+          r.subagents.register(fakeSubAgent('one'));
+          r.subagents.register(fakeSubAgent('two'));
+        }),
+      ],
+      { summarization: {}, defaultBackend: fakeBackend('default') },
+    );
+    const pick = (list: readonly unknown[]): unknown =>
+      list.find((mw) => (mw as { name: string }).name === SUMMARIZATION_MIDDLEWARE_NAME);
+    const instances = [
+      pick(params.middleware),
+      pick(params.subagents[0]?.middleware ?? []),
+      pick(params.subagents[1]?.middleware ?? []),
+    ];
+    expect(instances.every((instance) => instance !== undefined)).toBe(true);
+    // **共用會讓歷史寫進同一個檔**：`sessionId` 在 middleware 的 closure 裡，
+    // 檔名是 `${historyPathPrefix}/${sessionId}.md`。實測過共用時 root 與 subagent 的
+    // 對話 append 進同一份摘要——所以這條要求的是三個不同的物件。
+    expect(new Set(instances).size).toBe(3);
+  });
+
+  it('沒關掉又沒給 default backend，訊息指得出逃生口', async () => {
+    await expect(fold([fakePlugin('noop', () => {})], { summarization: {} })).rejects.toThrow(
+      /summarization: false/,
+    );
+  });
+
+  it.each([
+    ['trigger[0]', { trigger: [{ type: 'fraction', value: 0.85 }] }],
+    ['keep', { keep: { type: 'fraction', value: 0.1 } }],
+    [
+      'truncateArgs.trigger',
+      {
+        truncateArgs: {
+          trigger: { type: 'fraction', value: 0.8 },
+          keep: { type: 'messages', value: 20 },
+        },
+      },
+    ],
+  ])('%s 用 fraction 當場拋，而且訊息指名是哪一格', async (where, override) => {
+    // **逐格斷言而不是只看 /fraction/**：三格共用一個檢查函式，只驗共同字串的話，
+    // 一個只檢查 `settings.trigger` 的 bug 會讓三條同時通過。
+    await expect(
+      fold([fakePlugin('noop', () => {})], {
+        summarization: override as never,
+        defaultBackend: fakeBackend('default'),
+      }),
+    ).rejects.toThrow(`summarization.${where}`);
   });
 });
