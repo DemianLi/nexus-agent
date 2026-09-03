@@ -19,11 +19,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
+import { DEFAULT_SUMMARIZATION, resolveSummarizationSettings } from '@nexus/core';
 import type { NexusPlugin } from '@nexus/core';
-import { createSummarizationMiddleware } from 'deepagents';
+import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { computeSummarizationDefaults, createSummarizationMiddleware } from 'deepagents';
 import { describe, expect, it } from 'vitest';
-import { createNexusAgent } from './agent-factory.js';
+import { createNexusAgent, DEFAULT_RECURSION_LIMIT } from './agent-factory.js';
+import { LoopingChatModel } from './looping-model.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
+import { createLiveModel, LIVE_API_KEY_ENV } from './live-model.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 
@@ -151,21 +155,24 @@ describe('同名取代是唯一的縫', () => {
   });
 
   /**
-   * **root 換掉不影響 subagent**——升版絆索，也是這條縫的射程邊界。
+   * **`middleware` 註冊點只蓋得到 root**——升版絆索，也是這條縫的射程邊界。
    *
    * `createSubagentDefaultMiddleware` 每個 subagent 各建一份新的
    * `createSummarizationMiddleware({ backend })`，而 `buildSubagentMiddleware` 只併
    * `input.middleware`——root 從 `middleware` 參數傳進去的那個到不了 subagent。
    *
-   * 這件事的實際後果：**長任務的 token 大戶正是 subagent**，所以「靠換掉 root 那個來控
-   * token」在結構上就不完整。要嘛每個 subagent 定義自己帶，要嘛承認這個邊界。
+   * **這條的意思在 [#142](https://github.com/DemianLi/nexus-agent/issues/142) 之後變了一半。**
+   * 註冊點的射程沒變（仍然只到 root），但 subagent 那一輪拿的**不再是基座那個**：
+   * `foldSubAgents` 會逐個 subagent 注一份我們配的進去。所以這條現在釘的是「plugin 從
+   * `middleware.use()` 掛的東西不會外溢到 subagent」，而 subagent 拿到什麼由
+   * 〈我們配的那份打底到每個 subagent〉那一組量。兩件事分開釘，因為它們會為不同的理由壞掉。
    *
    * （`harnessProfile.excludedMiddleware` 是另一條縫，而且它對每個 subagent 都生效——
    * 但它只能**排除**不能替換，排掉等於 subagent 完全沒有摘要，長對話直接爆 context。
    * 而且它走的是全域 profile registry、綁在模型識別字串上，不是組裝點的參數。所以那不是
    * 這個邊界的解法，詳見 PR 內文。）
    */
-  it('取代只蓋到 root，subagent 那輪拿的還是內建的', async () => {
+  it('註冊點只蓋到 root，記號不會外溢到 subagent 那輪', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-sum-'));
     const crew: NexusPlugin = {
       name: 'crew',
@@ -689,5 +696,363 @@ describe('_summarizationEvent 的取得路徑', () => {
     expect(event?.cutoffIndex).toBeGreaterThan(0);
     // 落點讀得到——`null` 的那一天就是 #66 那個 fail-open 真的發生的那一天。
     expect(event?.filePath).toContain('/conversation_history/');
+  });
+});
+
+/**
+ * **正式路徑上跑的那組門檻是我們選的**——[#142](https://github.com/DemianLi/nexus-agent/issues/142)
+ * 的決定 1 與決定 2。
+ *
+ * 上面每一組都是在 plugin 的 `middleware` 註冊點自己建一個摘要器；那是**測試才走的路**。
+ * 這一組量的是另一件事：`createNexusAgent` 什麼都不傳的時候，root 與每個 subagent 拿到的
+ * 是誰配的門檻。在這張 PR 之前答案是「基座在執行期二選一挑的」，而挑法是
+ * `computeSummarizationDefaults`：模型的 `profile.maxInputTokens` 是數字就用比例，否則
+ * 退到一組與模型無關的常數——**而沒有任何一側在檢查那個常數跟真實窗口的關係**。
+ */
+describe('正式路徑上的門檻是我們選的', () => {
+  /**
+   * **四格永遠一起給，而那是基座逼出來的。**
+   *
+   * `defaultsComputed = trigger != null` 讓 `applyModelDefaults` 收到 `trigger` 的當下就
+   * return，於是只給 trigger 會同時做兩件沒有徵兆的事：arg 截斷停用，`keep` 從 fallback
+   * 的 6 悄悄變成建構初值 20。設定型別把四格都設成必填就沒有「只給一格」這種寫法。
+   */
+  it('預設那組四格都在，而且一個 fraction 都沒有', () => {
+    const settings = resolveSummarizationSettings();
+    expect(settings).toEqual(DEFAULT_SUMMARIZATION);
+
+    const types = [
+      ...settings.trigger.map((threshold) => threshold.type),
+      settings.keep.type,
+      settings.truncateArgs.trigger.type,
+      settings.truncateArgs.keep.type,
+    ];
+    expect(types).not.toContain('fraction');
+    // 兩道並聯：token 估算靠不住時還有訊息數那道兜著。
+    expect(settings.trigger.map((threshold) => threshold.type).sort()).toEqual([
+      'messages',
+      'tokens',
+    ]);
+    expect(settings.historyPathPrefix).toBe('/conversation_history');
+  });
+
+  /**
+   * **型別擋不住的呼叫端由這道擋。**
+   *
+   * `'fraction'` 不在 {@link SummarizationThreshold} 的聯集裡，但 JS 呼叫端與 `as never`
+   * 繞得過型別。兩個方向都要有一條：`trigger` 是 fail-closed（一輩子不觸發），`keep` 是
+   * fail-open（一則逐字訊息都不留），**兩種壞法都不會自己出聲**。
+   */
+  it.each([
+    ['trigger', { trigger: [{ type: 'fraction', value: 0.85 }] }],
+    ['keep', { keep: { type: 'fraction', value: 0.1 } }],
+    [
+      'truncateArgs.trigger',
+      {
+        truncateArgs: {
+          trigger: { type: 'fraction', value: 0.8 },
+          keep: { type: 'messages', value: 20 },
+        },
+      },
+    ],
+  ])('%s 用 fraction 當場拋，訊息說得出為什麼', (_where, override) => {
+    expect(() => resolveSummarizationSettings(override as never)).toThrow(/fraction/);
+    expect(() => resolveSummarizationSettings(override as never)).toThrow(/maxInputTokens/);
+  });
+
+  it('空的 trigger 陣列也擋——基座對它一律回 false，那等於沒有摘要器', () => {
+    expect(() => resolveSummarizationSettings({ trigger: [] })).toThrow(/summarization: false/);
+  });
+
+  it('門檻的值要是正的有限數', () => {
+    expect(() => resolveSummarizationSettings({ keep: { type: 'messages', value: 0 } })).toThrow(
+      /正的有限數/,
+    );
+  });
+
+  /**
+   * **絆索：我們的模型解得出 `maxInputTokens` 的那天，這條要紅。**
+   *
+   * 那一天有兩個後果同時發生：比例形式開始可用（`fraction` 的兩個靜默失敗消失），而我們
+   * 寫死的 `tokens: 100_000` 開始說謊（它建立在「窗口至少 128k」這個**未經實測**的假設上）。
+   * 所以那不是一個該靜靜通過的變化。
+   *
+   * 手法照 [`harness-profile.test.ts`](./harness-profile.test.ts) 那條「真實 live model
+   * 過得了這道檢查」：塞一把假 key 進環境變數、只建模型不發任何請求。**刻意不是
+   * `it.skipIf(缺 key)`**——缺 key 就跳過的絆索永遠不紅。
+   */
+  it('live model 今天仍然解不出 maxInputTokens，所以走的是固定值那條', () => {
+    const savedKey = process.env[LIVE_API_KEY_ENV];
+    process.env[LIVE_API_KEY_ENV] = 'test-key-not-used';
+    try {
+      const defaults = computeSummarizationDefaults(createLiveModel());
+      // 比例形式的話這裡是 'fraction'。
+      expect(defaults.trigger.type).toBe('tokens');
+      expect(defaults.keep.type).toBe('messages');
+    } finally {
+      if (savedKey === undefined) delete process.env[LIVE_API_KEY_ENV];
+      else process.env[LIVE_API_KEY_ENV] = savedKey;
+    }
+  });
+});
+
+/**
+ * **打底射得到每一個 subagent**——[#142](https://github.com/DemianLi/nexus-agent/issues/142)
+ * 的決定 2。
+ *
+ * 上面那條「取代只蓋到 root」量的是 `middleware` **註冊點**的射程，而它今天仍然只到 root。
+ * 這一組量的是另一條路：`foldSubAgents` 逐個 subagent 把我們配的那份注進 `spec.middleware`，
+ * 走的是同一套同名取代（`buildSubagentMiddleware` 呼叫的是**同一個** `mergeMiddlewareStack`）。
+ *
+ * 判準是 `historyPathPrefix`：基座那份寫死用 `/conversation_history`，我們配的用別的。
+ * **落在自訂前綴底下的檔案有兩份**（root 一份、subagent 一份——`EXCLUDED_STATE_KEYS` 雙向
+ * 排除 `_summarizationSessionId`，所以 subagent 自己生一個新的 session id），而
+ * `/conversation_history` 底下一份都沒有。少了打底的話，subagent 那份會落在後者。
+ */
+describe('我們配的那份打底到每個 subagent', () => {
+  async function filesUnder(root: string, dir: string): Promise<string[]> {
+    try {
+      return await readdir(join(root, dir));
+    } catch {
+      return [];
+    }
+  }
+
+  /** root 叫 subagent、subagent 自己再叫一次工具——兩邊都累積得到門檻。 */
+  function crewModel(): ScriptedChatModel {
+    return new ScriptedChatModel({
+      turns: [
+        {
+          content: '',
+          toolCalls: [{ name: 'task', args: { description: '去寫', subagent_type: 'writer' } }],
+        },
+        { content: '', toolCalls: [{ name: ECHO_TOOL_NAME, args: { message: '一' } }] },
+        { content: '（subagent 那側的摘要）' },
+        { content: 'subagent 做完了。' },
+        { content: '（root 那側的摘要）' },
+        { content: '收工。' },
+        { content: '多的一輪，腳本用不到就不會被消費。' },
+      ],
+    });
+  }
+
+  const crew: NexusPlugin = {
+    name: 'crew',
+    apply: (registry) =>
+      void registry.subagents.register({ name: 'writer', description: '負責寫東西。' }),
+  };
+
+  it('自訂前綴底下有 root 與 subagent 各一份，基座那個前綴是空的', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-sum-'));
+    const model = crewModel();
+
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      backend: new ContainedFilesystemBackend({ rootDir: root }),
+      plugins: [crew, createEchoPlugin()],
+      summarization: {
+        historyPathPrefix: '/ours',
+        trigger: [{ type: 'messages', value: 3 }],
+        keep: { type: 'messages', value: 1 },
+      },
+    });
+
+    try {
+      await agent.invoke(toAgentInvocation('叫 writer 去做事。'));
+    } finally {
+      await dispose();
+    }
+
+    expect(await filesUnder(root, 'ours')).toHaveLength(2);
+    expect(await filesUnder(root, 'conversation_history')).toHaveLength(0);
+  });
+
+  /**
+   * **subagent 自己帶的同名 middleware 贏得過打底那份，而那是選的。**
+   *
+   * 陣列順序決定同名誰贏（`mergeMiddleware$1` 是以 `name` 為鍵的 `Map`，後設的覆蓋前設的），
+   * 而 `foldSubAgents` 把我們那份排在 `spec.middleware` **之前**。這是「打底」不是「強制」：
+   * 跟同一個函式裡 `tools` 那條軸線一致（全域打底 → 自帶的 → 該層註冊的），因為摘要門檻是
+   * 效能與正確性的預設值，不是安全邊界。安全邊界那幾格（`permissions`、核准閘門）維持
+   * 全域勝，沒有動。
+   *
+   * **這條分得出兩個答案**：排到 `spec.middleware` 之後的話記號不會出現。
+   */
+  it('subagent 自帶一個同名的，贏的是它', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-sum-'));
+    const withOwn: NexusPlugin = {
+      name: 'crew-with-own',
+      apply: (registry) =>
+        void registry.subagents.register({
+          name: 'writer',
+          description: '負責寫東西。',
+          middleware: [
+            {
+              name: 'SummarizationMiddleware',
+              wrapModelCall: (
+                request: { systemMessage: { concat: (text: string) => unknown } },
+                handler: (next: unknown) => unknown,
+              ) =>
+                handler({ ...request, systemMessage: request.systemMessage.concat(`\n${MARKER}`) }),
+            },
+          ] as never,
+        }),
+    };
+    // 三輪：root 叫 subagent → subagent 回話 → root 收尾。
+    const model = new ScriptedChatModel({
+      turns: [
+        {
+          content: '',
+          toolCalls: [{ name: 'task', args: { description: '去寫', subagent_type: 'writer' } }],
+        },
+        { content: 'subagent 做完了。' },
+        { content: '收工。' },
+      ],
+    });
+
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      backend: new ContainedFilesystemBackend({ rootDir: root }),
+      plugins: [withOwn],
+    });
+
+    try {
+      await agent.invoke(toAgentInvocation('叫 writer 去做事。'));
+    } finally {
+      await dispose();
+    }
+
+    // 記號只在 subagent 那一輪——root 兩輪拿的是我們打底的那份，它不碰 system prompt。
+    expect(model.prompts.map((prompt) => systemPrompt(prompt).includes(MARKER))).toEqual([
+      false,
+      true,
+      false,
+    ]);
+  });
+
+  /**
+   * **`summarization: false` 真的把整件事還回去。**
+   *
+   * 沒有這條的話，「打底生效」與「打底根本沒建」在別的測試裡分不出來——它們都會讓歷史
+   * 落在某個地方。這條釘的是逃生口本身：關掉之後前綴回到基座寫死的那個。
+   */
+  it('關掉之後歷史回到基座寫死的前綴', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-sum-'));
+    const backend = new ContainedFilesystemBackend({ rootDir: root });
+    const model = crewModel();
+
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      backend,
+      plugins: [crew, createEchoPlugin(), tunedSummarization(backend)],
+      summarization: false,
+    });
+
+    try {
+      await agent.invoke(toAgentInvocation('叫 writer 去做事。'));
+    } finally {
+      await dispose();
+    }
+
+    expect(await filesUnder(root, 'ours')).toHaveLength(0);
+    expect((await filesUnder(root, 'conversation_history')).length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * **什麼都不傳的時候，門檻真的碰得到，而且只碰一次。**
+ *
+ * 這條同時證三件事，而且用的是**預設值本身**——不是測試自己塞的低門檻：
+ *
+ * 1. 打底在正式路徑上生效（`createNexusAgent` 沒有任何 summarization 參數）
+ * 2. `messages: 60` 那道在一場跑滿 {@link DEFAULT_RECURSION_LIMIT} 的迴圈裡碰得到
+ * 3. **沒有重摘迴圈**——摘要器只多叫了一次模型。`keep` 用訊息數而 `trigger` 有一道用
+ *    token，兩邊不同尺，最壞情況是留下的那些又立刻越過門檻、每一輪都重摘一次
+ *    （`keep: fraction` 那組量到的正是這個病徵）。多一次就是多一次。
+ *
+ * 對照組在 [`agent-factory.test.ts`](./agent-factory.test.ts) 的「迴圈上限」：那條明著傳
+ * `summarization: false`，模型剛好少被叫一次。
+ */
+describe('預設門檻在跑滿的迴圈裡摘要一次', () => {
+  it('模型被叫的次數比迴圈上限換算多一次，多的那次是摘要器', async () => {
+    const model = new LoopingChatModel();
+    const { agent, dispose } = await createNexusAgent({ model, plugins: [createEchoPlugin()] });
+
+    try {
+      await expect(agent.invoke(toAgentInvocation('一直跑'))).rejects.toThrow(/Recursion limit/);
+    } finally {
+      await dispose();
+    }
+
+    const agentTurns = (DEFAULT_RECURSION_LIMIT - 2) / 2;
+    expect(model.calls).toBe(agentTurns + 1);
+  });
+});
+
+/**
+ * **`trigger` 用 token、`keep` 用訊息數，兩邊不同尺——這條量的是那個縫平常不會裂開。**
+ *
+ * 病徵長這樣：摘要留下 K 則，那 K 則的 token 總量又立刻越過門檻，於是**每一輪都重摘一次**，
+ * 每輪的 prompt 訊息數塌成一條平線。`keep: fraction` 那組量到的 `[1,1,1,…]` 就是它，
+ * 只是成因不同。
+ *
+ * 那為什麼 `keep` 不乾脆也用 token？因為 `determineCutoffIndex` 的 token 分支是從最新那則
+ * 往前累加、超過就切：
+ *
+ * ```js
+ * if (tokensKept + msgTokens > targetTokenCount) { rawCutoff = i + 1; break; }
+ * ```
+ *
+ * 最新那一則自己就超過門檻時（一個剛回來的超大工具結果），第一圈就
+ * `rawCutoff = messages.length`——**一則都不留**。那是 fail-open，跟我們拒絕 `fraction`
+ * 的理由同型。`messages` 分支是 `messages.length - keep.value`，恆定留得下東西。所以這裡
+ * 選的是「保證留得下」。
+ *
+ * **代價是誠實的：退化條件真的存在，只是這條測不到它。** 退化要 `keep 則數 × 每則 token
+ * ≥ trigger`——用預設值換算是留下的 20 則平均每則超過 5,000 token。單一則就辦得到（讀一個
+ * 大檔的工具結果），而那時真正的解法是**壓縮前先剪掉過大的工具結果**
+ * （[#149](https://github.com/DemianLi/nexus-agent/issues/149)，dsh 的 `ctx.toolResultPruner`
+ * 做的正是這件事），不是把 `keep` 換成一把會 fail-open 的尺。這條盯的是「一般長對話不該
+ * 退化」，那條退路留給 #149。
+ *
+ * 設定是等比縮小的：`tokens: 3_000` 配預設的 `keep: 20 則`，訊息長度普通——結構上等同
+ * 預設的 `tokens: 100_000` 配一般大小的訊息。
+ */
+describe('一般長對話不會退化成逐輪重摘', () => {
+  it('prompt 的訊息數是鋸齒不是平線', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-sum-'));
+    // 每則約 100 token（`countTokensApproximately` 約當 4 字元 1 token）。
+    const body = '這是一段普通長度的回話。'.repeat(32);
+    const model = new ScriptedChatModel({
+      turns: Array.from({ length: 40 }, () => ({ content: body })),
+    });
+
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      backend: new ContainedFilesystemBackend({ rootDir: root }),
+      checkpointer: new MemorySaver(),
+      plugins: [],
+      summarization: { trigger: [{ type: 'tokens', value: 3_000 }] },
+    });
+
+    try {
+      for (let index = 0; index < 15; index += 1) {
+        await agent.invoke(toAgentInvocation(`第 ${index + 1} 句。`), {
+          configurable: { thread_id: 'saw' },
+        });
+      }
+    } finally {
+      await dispose();
+    }
+
+    const sizes = model.prompts.map(
+      (prompt) => prompt.filter((message) => message.getType() !== 'system').length,
+    );
+    // 前提：真的摘要過。少了它，一個門檻根本沒碰到的組裝也會讓下面通過。
+    expect((await historyFiles(root)).length).toBeGreaterThan(0);
+    // 平線的話最大值會是 1（只剩摘要載體）。`keep: 20 則`留得下東西，所以看得到爬升。
+    expect(Math.max(...sizes)).toBeGreaterThan(20);
+    // 摘要器自己那幾輪的 prompt 也算在裡面，所以不要求「一則 1 都沒有」，要求的是它不是常態。
+    expect(sizes.filter((size) => size <= 1).length).toBeLessThan(sizes.length / 2);
   });
 });

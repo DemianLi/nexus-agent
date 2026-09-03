@@ -86,6 +86,17 @@ export { loadPlugins } from './load.js';
 
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
+export type {
+  SummarizationArgTruncation,
+  SummarizationSettings,
+  SummarizationThreshold,
+} from './summarization.js';
+export {
+  createSummarizer,
+  DEFAULT_SUMMARIZATION,
+  resolveSummarizationSettings,
+  SUMMARIZATION_MIDDLEWARE_NAME,
+} from './summarization.js';
 
 export type {
   SessionEvent,

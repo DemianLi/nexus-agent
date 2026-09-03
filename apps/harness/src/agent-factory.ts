@@ -10,8 +10,8 @@
  * 第三步只有這裡有。換模型、換儲存、換工具組合＝換 plugin 清單，core 不動。
  *
  * 「組裝點自有、plugin 不得提供」的那些（default backend、工具呈現順序、model、
- * checkpointer / store、核准政策的 session 開關，加一份基座工具名單）從
- * {@link CreateNexusAgentOptions} 進來，原樣交給 fold：**所有權在這裡，檢查跑在 core**。
+ * checkpointer / store、核准政策的 session 開關、摘要的門檻與去向，加一份基座工具名單）
+ * 從 {@link CreateNexusAgentOptions} 進來，原樣交給 fold：**所有權在這裡，檢查跑在 core**。
  *
  * 這也是 fold 的產物第一次真的碰到基座。基座在建構時還有三道自己的檢查是 fold 看不到的，
  * 外加**一件不是檢查而是改寫**的事（第 4 條）：
@@ -55,6 +55,7 @@ import {
   type PluginRegistry,
   type SessionRegistry,
   type SessionTelemetrySharingStatus,
+  type SummarizationSettings,
 } from '@nexus/core';
 import { createDeepAgent, StateBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
@@ -101,6 +102,22 @@ export interface CreateNexusAgentOptions {
   readonly store?: AgentStore;
   /** 核准政策的 session 開關。省略即「這個 session 有人在」。 */
   readonly approvals?: ApprovalPolicy;
+  /**
+   * 摘要的門檻與去向。省略即 `DEFAULT_SUMMARIZATION`，給物件就逐格淺合併上去，
+   * `false` 是明著退回基座那個。
+   *
+   * **這一格存在是因為基座沒有這個參數。** `createSummarizationMiddleware({ backend })`
+   * 被無條件寫死進 root 與每個 subagent 的 stack，`CreateDeepAgentParams` 上一個
+   * summarization 欄位都沒有；門檻由基座在執行期從模型 profile 二選一挑，而我們的模型
+   * 解不出 profile，於是拿到一組與模型無關的常數，**沒有任何一側在檢查它跟真實窗口的
+   * 關係**。唯一的縫是同名取代，fold 走的就是那條。
+   *
+   * `fraction` 型別的門檻在型別層與執行期都被擋掉——它需要 `profile.maxInputTokens`，
+   * 缺值時 `trigger` 一輩子不觸發、`keep` 一則逐字訊息都不留，兩個方向都不警告。
+   * 實測與決議見 [#142](https://github.com/DemianLi/nexus-agent/issues/142)，形狀與
+   * 數值的理由見 [`summarization.ts`](../../../packages/nexus-core/src/summarization.ts)。
+   */
+  readonly summarization?: Partial<SummarizationSettings> | false;
   /** 附加在基座 base prompt 前面的 system prompt。 */
   readonly systemPrompt?: string;
   /**
@@ -245,6 +262,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       checkpointer: options.checkpointer,
       store: options.store,
       approvals: options.approvals,
+      ...(options.summarization !== undefined && { summarization: options.summarization }),
     });
 
     // `withConfig` 疊在基座自己那一層 `withConfig` 上面，後者贏（實測 `8` → 模型只被叫

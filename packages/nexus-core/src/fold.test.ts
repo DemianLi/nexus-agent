@@ -16,10 +16,17 @@ import { loadPlugins } from './load.js';
 import { fakeBackend, fakeMiddleware, fakePlugin, fakeSubAgent, fakeTool } from './fixtures.js';
 import type { NexusPlugin } from './plugin.js';
 
-/** 跑一份清單再折，測試裡唯一的入口——fold 的輸入永遠是載入完的 registry。 */
+/**
+ * 跑一份清單再折，測試裡唯一的入口——fold 的輸入永遠是載入完的 registry。
+ *
+ * **預設把摘要器關掉。** fold 現在會替 root 與每個 subagent 打底一份我們配的摘要器
+ * （[#142](https://github.com/DemianLi/nexus-agent/issues/142)），而它需要一個
+ * default backend。這個檔裡絕大多數測試量的是別的規則、不給 backend，所以在入口統一
+ * 宣告「這些測試不關心摘要」比逐條塞一個假 backend 誠實。摘要那一組自己明著打開。
+ */
 async function fold(plugins: NexusPlugin[], options: FoldOptions = {}) {
   const { registry } = await loadPlugins(plugins);
-  return foldRegistry(registry, options);
+  return foldRegistry(registry, { summarization: false, ...options });
 }
 
 /** 基座自己帶進來、不經過 registry 的工具名。`toolOrder` 的檢查需要它們。 */
