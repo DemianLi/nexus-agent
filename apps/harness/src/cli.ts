@@ -16,7 +16,7 @@
 
 import { parseArgs } from 'node:util';
 import { createInterface } from 'node:readline/promises';
-import { resolve } from 'node:path';
+import { resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { BaseMessage } from '@langchain/core/messages';
@@ -32,11 +32,13 @@ import type {
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import {
+  attachSessionPersistence,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   SessionRegistry,
   type SessionLog,
 } from '@nexus/core';
+import { createJsonlSessionStore } from './jsonl-session-store.js';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant';
 import { createEchoInvariantPlugin } from '@nexus/plugin-echo/invariant';
@@ -77,6 +79,14 @@ export interface CliInvocation {
    * 虛擬 FS（`StateBackend`，不碰磁碟）。
    */
   readonly workspace?: string;
+  /**
+   * 會話日誌落盤的根目錄。給了就把這一次的每一份日誌寫進它底下的一個 run 目錄，
+   * 省略即**不落盤**（同 `fold.ts` 的 checkpointer：「缺席」就是關掉）。
+   *
+   * **沒有預設值是刻意的。** 日誌裡有使用者打的每一句話，預設往家目錄寫是一個
+   * 應該由人做的決定，不是一個順手的預設（[#172](https://github.com/DemianLi/nexus-agent/issues/172)）。
+   */
+  readonly sessionLog?: string;
   /** 只印用法就退出。 */
   readonly help: boolean;
 }
@@ -90,6 +100,8 @@ export const USAGE = `用法：cli [選項] [要說的話...]
   --plugins <module>   從指定模組載 plugin 清單（預設匯出一個陣列）
   --workspace <dir>    在真實磁碟的這個目錄上跑，變更被圍堵在它之下
                        （省略即虛擬檔案系統，完全不碰磁碟）
+  --session-log <dir>  把會話日誌寫進這個目錄底下（省略即不落盤）
+                       它不能在 --workspace 底下：日誌是基礎建設，不是 agent 的工作區
   --help               印這段話
 
   REPL 裡輸入 /help 看有哪些命令，/exit 或按 Ctrl-D 結束。`;
@@ -113,6 +125,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
         live: { type: 'boolean', default: false },
         plugins: { type: 'string' },
         workspace: { type: 'string' },
+        'session-log': { type: 'string' },
         help: { type: 'boolean', default: false },
       },
       allowPositionals: true,
@@ -129,6 +142,10 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   if (values.workspace !== undefined && values.workspace.trim() === '') {
     throw new Error(`--workspace 要給一個目錄路徑。\n\n${USAGE}`);
   }
+  const sessionLog = values['session-log'];
+  if (sessionLog !== undefined && sessionLog.trim() === '') {
+    throw new Error(`--session-log 要給一個目錄路徑。\n\n${USAGE}`);
+  }
 
   const prompt = positionals.join(' ').trim();
   return {
@@ -136,8 +153,41 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     live: values.live === true,
     ...(values.plugins !== undefined && { pluginModule: values.plugins }),
     ...(values.workspace !== undefined && { workspace: values.workspace }),
+    ...(sessionLog !== undefined && { sessionLog }),
     help: values.help === true,
   };
+}
+
+/**
+ * 把 `--session-log` 解析成絕對路徑，順便擋掉它落在 `--workspace` 底下的情形。
+ *
+ * **這道檢查就是 [#170](https://github.com/DemianLi/nexus-agent/issues/170) 那條線的第二次應用**：
+ * `fold.ts:252` 寫著「歷史是基礎建設，不是 agent 的工作區」。日誌寫進可寫根底下的話，
+ * 模型自己一個 `read_file` 就讀得到整份對話史，而且會把自己的日誌當成工作檔改掉。
+ *
+ * **純字串前綴比對，不 canonicalize**——同 `ContainedFilesystemBackend` 的取捨與同一個
+ * 已知缺口（symlink 繞得過）。這裡擋的是順手指到工作區裡，不是惡意。
+ *
+ * @param invocation - 解析出來的呼叫。
+ * @param cwd - 相對路徑的解析基準。
+ * @returns 絕對路徑，或沒給 `--session-log` 時的 `undefined`。
+ * @throws 它落在 `--workspace` 底下。
+ */
+export function resolveSessionLogDir(
+  invocation: Pick<CliInvocation, 'sessionLog' | 'workspace'>,
+  cwd: string,
+): string | undefined {
+  if (invocation.sessionLog === undefined) return undefined;
+  const directory = resolve(cwd, invocation.sessionLog);
+  if (invocation.workspace === undefined) return directory;
+  const workspace = resolve(cwd, invocation.workspace);
+  if (directory === workspace || directory.startsWith(`${workspace}${sep}`)) {
+    throw new Error(
+      `--session-log 不能在 --workspace 底下（${directory} 在 ${workspace} 之內）。` +
+        `會話日誌是基礎建設，不是 agent 的工作區——寫在可寫根裡，模型讀得到也改得動整份對話史。`,
+    );
+  }
+  return directory;
 }
 
 /**
@@ -772,6 +822,10 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     return;
   }
 
+  // **在載 plugin、建 agent 之前解析**：一個指錯地方的 `--session-log` 該在什麼都還沒
+  // 起來的時候就講，而不是等到第一筆事件寫不進去。
+  const sessionLogDir = resolveSessionLogDir(invocation, options.cwd ?? process.cwd());
+
   const plugins =
     invocation.pluginModule === undefined
       ? DEFAULT_PLUGINS
@@ -812,6 +866,23 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // 同一條順序對 subagent 那些後來才出生的日誌也成立——註冊表通知訂閱者的順序就是
   // 這三行接上去的順序。
   attachSession(sessions);
+  // **接在最後，而且是四個裡唯一一個出口。** 前三個是觀察者，落盤不改變任何人看得到
+  // 什麼，所以順序在功能上沒有差別；排在最後是為了讓讀的人看到的因果跟實際一致——
+  // 先被檢查、被參與者看過，才寫下去。
+  const sessionStore =
+    sessionLogDir === undefined ? undefined : createJsonlSessionStore({ rootDir: sessionLogDir });
+  const persistence =
+    sessionStore === undefined
+      ? undefined
+      : attachSessionPersistence(sessions, sessionStore, {
+          cwd: options.cwd ?? process.cwd(),
+          // **背景寫入被拒只有這一行看得見**（協調器自己吞掉，響亮的那次歸 `flush`）。
+          // 走 `printer.error` 而不是 `console.warn`，理由同不變量那條：前綴是唯一分得出
+          // 誰在講話的東西。
+          warn: (message) => {
+            printer.error(`[會話日誌] ${message}`);
+          },
+        });
 
   // 一輪跑壞了也要收——資源的所有權跟這一次呼叫綁在一起，不跟它成不成功綁在一起。
   //
@@ -839,6 +910,14 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     for (const line of formatTelemetryDisclosure(telemetrySharing)) {
       printer.log(line);
     }
+    // 第六行是**第三個出境目標**的披露：tracing 送去第三方、遙測送去後端，這一個留在
+    // 本機磁碟上。三個分開講，因為三個各自開關——而且日誌裡有使用者打的每一句話，
+    // 「有沒有在寫、寫去哪」不該要讀文件才知道。
+    printer.log(
+      sessionStore === undefined
+        ? '會話日誌：只在記憶體裡（行程結束就沒了；--session-log <dir> 可以落盤）'
+        : `會話日誌：${sessionStore.directory}`,
+    );
 
     if (invocation.prompt !== undefined) {
       printer.log(`> ${invocation.prompt}\n`);
@@ -854,10 +933,17 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       );
     }
   } catch (error) {
+    // 跑壞了也要盡量把已經記下來的事件寫下去——**但不能讓它蓋掉原本的錯誤**，
+    // 同下面那條「先保住原本的錯誤」的規則。
+    await persistence?.dispose().catch(() => {});
     await dispose().catch(() => {});
     throw error;
   }
 
+  // **持久化先收，而且它的失敗要往外走。** 排在 `dispose()` 之前是因為 plugin 的
+  // disposer 一跑，還在寫的東西就沒有人擁有了；不接住它是因為「日誌沒寫完」正是這條
+  // 路上使用者最需要知道的事（協調器的 `dispose` 會做最後一次 flush，響亮地拒絕）。
+  await persistence?.dispose();
   await dispose();
 }
 
