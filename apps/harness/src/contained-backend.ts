@@ -84,6 +84,13 @@ import type { DeleteResult, EditResult, FileUploadResponse, WriteResult } from '
  * 代價是走這條就得自己建摘要器，等於接管 `trigger` / `keep` 的預設值 —— 同名取代是唯一的
  * 設定入口，而它是全有全無的。行為驗收見 [`summarization.test.ts`](./summarization.test.ts)。
  *
+ * **同型的第二件事沒有被接受，它被修掉了（[#170](https://github.com/DemianLi/nexus-agent/issues/170)）。**
+ * 基座還會把超過 80,000 字元的工具結果 `write` 到 `/large_tool_results/`，而**那一條的
+ * fail-open 是丟資料**：寫不進去時它把訊息換成一句「存不進去」，模型剛要到手的東西整個沒了
+ * （不像歷史那件事，至少摘要還在）。修法是在組裝點把那個前綴路由到獨立的 `StateBackend`
+ * （`agent-factory.ts` 的 `withToolResultStash`），所以那次 write 不再經過這道 fence。
+ * **上面那句「明著接受」只涵蓋對話歷史，不要擴大解釋。**
+ *
  * **`danger-full-access` 比 dsh 的同名 mode 弱，這是一條偏離。** 它放行 symlink 逃逸，但
  * 基座那道 lexical 的 `..` 檢查仍在——這個 class 不給關 `virtualMode`（見下面的 class 註解），
  * 所以它結構上就不可能是 dsh 那種真正的不設防。想要完全不設防，用原生的 `FilesystemBackend`。
