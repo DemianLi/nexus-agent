@@ -30,10 +30,11 @@
 
 import { ToolMessage } from '@langchain/core/messages';
 import { Command, isCommand } from '@langchain/langgraph';
+import { resolveToolName } from '@nexus/core';
 import type { AgentMiddleware } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import type { ZodType } from 'zod';
-import { formatSchemaViolation, formatValidatorFailure, resolveToolName } from './feedback.js';
+import { formatSchemaViolation, formatValidatorFailure } from './feedback.js';
 
 /** 校驗 middleware 的名字。 */
 export const OUTPUT_SCHEMA_MIDDLEWARE_NAME = 'nexusToolOutputSchema';

@@ -1,7 +1,15 @@
 # @nexus/plugin-validation
 
-兩件事，射程刻意不同：**工具失敗變成一則回饋而不是整場 run 死掉**，以及（選加）
-**工具成功的輸出合不合它宣告的 schema**。
+**工具成功的輸出合不合它宣告的 schema。**
+
+> **圍堵搬走了。** 「工具拋錯不要殺掉整場 run」以前是這個 plugin 的另一半，現在住在
+> `@nexus/core`（`packages/nexus-core/src/containment.ts`），由 `foldRegistry` 打底進
+> root 與每個 subagent。理由與過程見
+> [#159](https://github.com/DemianLi/nexus-agent/issues/159)：dsh 那側它是註冊表執行管線
+> 自己的 `catch`、是性質不是功能，而它住在這裡的那段期間，這個 plugin **不在任何一份
+> 正式清單裡**——等於產品路徑上根本沒有圍堵。`createContainmentMiddleware` 與
+> `CONTAINMENT_MIDDLEWARE_NAME` 仍然從這裡 re-export 得出來（相容），但**這個 plugin
+> 不再掛它**，也不需要掛它才有圍堵。
 
 ## 用法
 
@@ -18,55 +26,29 @@ export default [
 ];
 ```
 
-`schemas` 可以整個省略。省略時這個 plugin 只剩圍堵那一半——**而那一半本身就值得掛**，
-理由見下一節。
+`schemas` 可以整個省略——但省略之後這個 plugin **一個 middleware 都不掛**，只認領
+`validation` 這個能力名。省略它不會讓工具失去圍堵：那件事不歸這裡了。
 
-## 為什麼圍堵是必要的
-
-**nexus-agent 裡任何一個工具拋錯，整場 `invoke()` 都會 reject。** 沒有 ToolMessage、
-沒有回饋、模型不知道發生過什麼。這不是「還沒做的功能」，是兩件事湊出來的迴歸：
-
-1. `ToolNode.runTool` 只要 `this.wrapToolCall` 存在，就把**工具自己**拋的錯當成
-   middleware 的錯（`langchain@1.5.10`，`dist/agents/nodes/ToolNode.js:275-282`），
-   而 `#handleError:150` 對 middleware 的錯是 `handleToolErrors !== true` 即重拋。
-   `ReactAgent` 建 `ToolNode` 時只傳 `{ signal, wrapToolCall }`（`:174-179`），
-   **`handleToolErrors: true` 經由 `createAgent` 根本設不進去**。
-2. `createDeepAgent` 永遠掛 `FilesystemMiddleware`，而它永遠帶 `wrapToolCall`
-   （`deepagents@1.13.1`）。
-
-實測的對照組講得最清楚：同一個會拋的工具，**沒有 middleware** 時換來一則
-`Error: ...` 的 ToolMessage；**加一個什麼都不做的 `wrapToolCall`** 之後，整場 reject。
-
-dsh 把相反的行為寫成不可違反的性質——「未知工具和抛出异常的工具都会变为结构化错误……
-**调用失败但不终止当前轮次**」（`docs/subsystems/tools.zh.md`）。這個 plugin 就是把
-那句話搬回來。
-
-`apps/harness/src/validation.test.ts` 的第一條測試是**基座現況的絆索**：它斷言沒掛
-plugin 時整場會死。哪天基座改了主意，那一條會紅——那時該做的是刪掉圍堵，不是修測試。
-
-## 兩個 middleware，兩個位置
+## 一個 middleware，最內層
 
 | middleware | 位置 | 管什麼 |
 | --- | --- | --- |
-| `nexusToolFailureContainment` | `prepend`，最外 | 內層任何一處拋錯 → `status: 'error'` 的 ToolMessage |
 | `nexusToolOutputSchema` | 最內 | 成功的輸出合不合宣告的 schema |
 
-外圍內驗不是美學。校驗器自己的 bug 一樣會讓整場 run 死掉（`wrapToolCall` body 裡的
-例外走的是同一條路），而圍堵在最外剛好接得住它——包含**別的 plugin** 的 middleware
-出的錯。基座自己那幾個 middleware 永遠排在所有 plugin 之前，接不到，那是
-`createDeepAgent` 的組裝順序，不是這裡能決定的事。
+**外圍內驗那個排法沒有消失，而且被放大了。** 校驗器自己的 bug 一樣會讓整場 run 死掉
+（`wrapToolCall` body 裡的例外走的是同一條路），而圍堵現在是整份 middleware 陣列的
+**第 0 格**，接得住它——不論這個 plugin 有沒有被掛上。基座自己那幾個 middleware 永遠
+排在所有這些之前，接不到，那是 `createDeepAgent` 的組裝順序，不是我們能決定的事。
 
 ## 這裡擋得住什麼、擋不住什麼
 
-**擋得住**：工具實作拋的例外、內層 plugin middleware 拋的例外、成功輸出不合宣告的
-schema（含「根本不是合法 JSON」）、校驗器自己壞掉（fail-closed，變成一則錯誤而不是靜默放行）。
+**擋得住**：成功輸出不合宣告的 schema（含「根本不是合法 JSON」）、校驗器自己壞掉
+（fail-closed，變成一則錯誤而不是靜默放行）。
 
-**刻意放行**：LangGraph 的控制流。`interrupt()` 是用拋例外實作的，圍堵靠
-`isGraphBubbleUp` 認出它並原樣往外拋——不分辨的話 HITL 的核准點會**無聲消失**，
-變成一則假的錯誤訊息。
+**擋不住**：沒有列進 `schemas` 的工具的輸出——**明文放行**，別把掛了這個 plugin 當成
+「所有工具都驗過了」。
 
-**擋不住**：基座自己那層 middleware 拋的錯（位置在我們外面）、以及沒有列進 `schemas`
-的工具的輸出（**明文放行**，別把掛了這個 plugin 當成「所有工具都驗過了」）。
+工具實作與 middleware 拋的例外歸圍堵（見上面那則說明）。
 
 ## 兩條對 dsh 的偏離
 

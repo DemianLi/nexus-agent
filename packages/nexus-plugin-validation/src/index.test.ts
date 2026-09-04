@@ -1,19 +1,22 @@
 /**
  * `@nexus/plugin-validation` 的單元驗收。
  *
- * 這一層只驗兩個 middleware 自己的邏輯——直接餵它一個假的 `handler`，看它把什麼交回來。
- * 「掛進真的 agent 之後行為對不對」在 `apps/harness/src/validation.test.ts`，
- * 那一層才碰得到基座那條「工具拋錯就整場死」的路。
+ * 這一層只驗 schema 校驗 middleware 自己的邏輯——直接餵它一個假的 `handler`，看它把什麼
+ * 交回來。「掛進真的 agent 之後行為對不對」在 `apps/harness/src/validation.test.ts`。
+ *
+ * **圍堵不在這裡了。** 它連同它的單元測試搬進 `@nexus/core`
+ * （[#159](https://github.com/DemianLi/nexus-agent/issues/159)，測試在
+ * `packages/nexus-core/src/containment.test.ts`）——它是每次組裝都該有的性質，不是這個
+ * plugin 的選配功能。下面「plugin 掛上去的形狀」那組因此**翻了面**：它們現在釘的是
+ * 這個 plugin **不再**掛圍堵。
  */
 
 import { ToolMessage } from '@langchain/core/messages';
-import { Command, GraphInterrupt } from '@langchain/langgraph';
-import { loadPlugins } from '@nexus/core';
+import { Command } from '@langchain/langgraph';
+import { CONTAINMENT_MIDDLEWARE_NAME, loadPlugins } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
-  CONTAINMENT_MIDDLEWARE_NAME,
-  createContainmentMiddleware,
   createOutputSchemaMiddleware,
   createValidationPlugin,
   OUTPUT_SCHEMA_MIDDLEWARE_NAME,
@@ -47,48 +50,6 @@ function requestFor(toolName: string): unknown {
 function ok(content: string): ToolMessage {
   return new ToolMessage({ content, tool_call_id: 'call-1', name: 'probe' });
 }
-
-describe('圍堵', () => {
-  const wrap = wrapperOf(createContainmentMiddleware());
-
-  it('工具拋錯 → 一則 status error 的 ToolMessage，不再往外拋', async () => {
-    const result = (await wrap(requestFor('probe'), () => {
-      throw new Error('磁碟滿了');
-    })) as ToolMessage;
-    expect(ToolMessage.isInstance(result)).toBe(true);
-    expect(result.status).toBe('error');
-    expect(String(result.content)).toContain('probe');
-    expect(String(result.content)).toContain('磁碟滿了');
-    expect(result.tool_call_id).toBe('call-1');
-  });
-
-  it('訊息裡不帶堆疊、也不帶原始參數', async () => {
-    const boom = new Error('炸了');
-    boom.stack = 'Error: 炸了\n    at /Users/someone/secret/path.ts:1:1';
-    const result = (await wrap(
-      { toolCall: { name: 'probe', args: { key: 'sk-機密值' }, id: 'c' } },
-      () => {
-        throw boom;
-      },
-    )) as ToolMessage;
-    expect(String(result.content)).not.toContain('/Users/someone/secret/path.ts');
-    expect(String(result.content)).not.toContain('sk-機密值');
-  });
-
-  it('**中斷放行**——GraphBubbleUp 原樣往外拋', async () => {
-    const interrupt = new GraphInterrupt([{ value: '要核准嗎', id: 'i1' }]);
-    await expect(
-      wrap(requestFor('probe'), () => {
-        throw interrupt;
-      }),
-    ).rejects.toBe(interrupt);
-  });
-
-  it('沒出錯就原樣交回去', async () => {
-    const message = ok('好了');
-    expect(await wrap(requestFor('probe'), async () => message)).toBe(message);
-  });
-});
 
 describe('輸出 schema 校驗', () => {
   const schema = z.object({ count: z.number() });
@@ -163,18 +124,18 @@ describe('輸出 schema 校驗', () => {
 });
 
 describe('plugin 掛上去的形狀', () => {
-  it('圍堵永遠掛、而且 prepend；沒 schema 就不掛校驗那一半', async () => {
+  /**
+   * **這一條是翻過面的絆索。** 它以前釘的是「圍堵永遠掛、而且 prepend」；圍堵搬進 fold
+   * 打底之後（#159），這個 plugin 再掛一份就是**兩個擁有者**——比任一個單獨擁有更糟。
+   * 這裡紅了代表有人把它掛回來了。
+   */
+  it('**沒 schema 就一個 middleware 都不掛**——圍堵不再歸這個 plugin', async () => {
     const { registry } = await loadPlugins([createValidationPlugin()]);
-    const entries = registry.middleware.list();
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.value.prepend).toBe(true);
-    expect((entries[0]?.value.middleware as { name: string }).name).toBe(
-      CONTAINMENT_MIDDLEWARE_NAME,
-    );
+    expect(registry.middleware.list()).toEqual([]);
     expect(registry.capabilities.has(VALIDATION_CAPABILITY)).toBe(true);
   });
 
-  it('有 schema 就兩個都掛，圍堵 prepend、校驗不 prepend', async () => {
+  it('有 schema 就只掛校驗那一個，而且不 prepend', async () => {
     const { registry } = await loadPlugins([
       createValidationPlugin({ schemas: { probe: z.object({ count: z.number() }) } }),
     ]);
@@ -184,9 +145,13 @@ describe('plugin 掛上去的形狀', () => {
         (entry.value.middleware as { name: string }).name,
         entry.value.prepend,
       ]),
-    ).toEqual([
-      [CONTAINMENT_MIDDLEWARE_NAME, true],
-      [OUTPUT_SCHEMA_MIDDLEWARE_NAME, false],
-    ]);
+    ).toEqual([[OUTPUT_SCHEMA_MIDDLEWARE_NAME, false]]);
+    // 名字還從這裡 re-export 得出來（相容），但那跟「有沒有掛」是兩件事。
+    expect(
+      entries.some(
+        (entry) =>
+          (entry.value.middleware as { name: string }).name === CONTAINMENT_MIDDLEWARE_NAME,
+      ),
+    ).toBe(false);
   });
 });

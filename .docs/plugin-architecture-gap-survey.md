@@ -53,7 +53,7 @@
 | 規劃與編排 | 完整 | ✅ | deepagents 迴圈 ＋ `@nexus/plugin-plan-mode`（#117）＋ `@nexus/plugin-todo`（#139）＋ `@nexus/plugin-goal`（#128／#129）。#16 原列的自我批判／意圖分類兩方向已被 dsh 否掉（計劃 §2 記了理由） |
 | 記憶 | 三個都在但只注入不保存 | ⚠️ 同 | `@nexus/plugin-memory`（#68）、`@nexus/plugin-skills`（#69）都刻意薄，靠基座 middleware；摘要層 #70 釘住了縫，**但生產路徑沒用那條縫**——這是 #142 |
 | 執行與工具 | 完整 | ✅ 有界 | MCP（#59）、fs 圍堵（#62）、QuickJS（#64）；shell／sandbox 決策 3 延後，且基座三條件互斥（`sandbox-backend-conflict.test.ts`） |
-| 反思與反饋 | 薄 | ⚠️ 有實作 | `@nexus/plugin-validation`（#73）：輸出 schema 校驗 ＋ 把「工具拋錯整場死」修回回饋；`ContainmentMiddleware` 在 `packages/nexus-plugin-validation/src/containment.ts` |
+| 反思與反饋 | 薄 | ⚠️ 有實作 | `@nexus/plugin-validation`（#73）：輸出 schema 校驗。把「工具拋錯整場死」修回回饋的那一半 **#159 之後歸 `@nexus/core`**（`packages/nexus-core/src/containment.ts`，由 `foldRegistry` 打底進 root 與每個 subagent），不再是掛不掛隨人的 plugin |
 | 輸出 | 串流完整、UI 待做 | ✅ 兩半都有了 | `@nexus/wire` ＋ `thread-pump.ts`／`wire-handler.ts`／`wire-server.ts`（#76 定形、#77 pump）；`apps/web/src/App.tsx` 對話介面 ＋ `approval-card.tsx`／`transcript.tsx`／`status-line.tsx` |
 
 ### 2.3 Phase 0–5

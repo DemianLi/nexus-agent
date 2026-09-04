@@ -1,7 +1,9 @@
 import { HumanMessage } from '@langchain/core/messages';
+import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { createDeepAgent, getHarnessProfile, StateBackend } from 'deepagents';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { fakeTool } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 
@@ -66,6 +68,51 @@ describe('deepagents 1.13.x 基座形狀', () => {
     // /secrets/** 有 deny 規則 → 擋下；/notes.md 沒有任何規則命中 → 放行。
     expect(files).not.toContain('/secrets/token');
     expect(files).toContain('/notes.md');
+  });
+
+  /**
+   * **這是「工具拋錯就整場 run 死掉」那條的基座半邊。**
+   *
+   * 它以前住在 `validation.test.ts` 的第一條，當那個檔案裡「沒掛 plugin」還等於「沒有
+   * 圍堵」的時候。[#159](https://github.com/DemianLi/nexus-agent/issues/159) 把圍堵搬進
+   * fold 打底之後，我們自己的組裝**再也造不出那個對照組**——所以基座那一半搬到這裡，
+   * 這個檔案本來就是唯一直接叫 `createDeepAgent` 的地方。
+   *
+   * **刪掉它等於把唯一一條指著這個缺口的線拿走**：哪天基座自己改回把工具的錯翻成回饋，
+   * 這一條會紅，而那正是「我們還需不需要圍堵」該重問的時刻。
+   *
+   * 成因：`ToolNode.runTool` 只要 `wrapToolCall` 存在就把工具自己拋的錯當成 middleware
+   * 的錯（`langchain@1.5.10`，`ToolNode.js:275-282`），`#handleError:150` 對那種錯是
+   * `handleToolErrors !== true` 即重拋，而 `ReactAgent` 建 `ToolNode` 時根本不傳那個參數
+   * （`:174-179`）。`createDeepAgent` 又永遠掛帶 `wrapToolCall` 的 `FilesystemMiddleware`。
+   */
+  it('**工具拋錯 → 整場 run 死掉**（我們掛圍堵的理由，不是我們的行為）', async () => {
+    const ran: string[] = [];
+    const model = new ScriptedChatModel({
+      turns: [
+        { content: '動手。', toolCalls: [{ name: 'boom', args: {} }] },
+        { content: '收工。' },
+      ],
+    });
+    const agent = createDeepAgent({
+      model,
+      backend: new StateBackend(),
+      tools: [
+        tool(
+          () => {
+            ran.push('boom');
+            throw new Error('磁碟滿了');
+          },
+          { name: 'boom', description: '會炸的工具', schema: z.object({}) },
+        ),
+      ],
+    });
+
+    await expect(agent.invoke({ messages: [new HumanMessage('動手。')] })).rejects.toThrow(
+      '磁碟滿了',
+    );
+    // 工具真的跑到了才拋——不然這條會被「模型根本沒呼叫它」滿足。
+    expect(ran).toEqual(['boom']);
   });
 
   it('interruptOn 是 Record 不是陣列，且需要 checkpointer', async () => {
