@@ -135,9 +135,10 @@ describe('同名取代是唯一的縫', () => {
     try {
       const names = middlewareNames(agent);
       expect(names.filter((name) => name === 'SummarizationMiddleware')).toHaveLength(1);
-      // 位置也沒動——原地取代，不是刪掉再追加到尾巴。尾巴上那四個是 fold 每次都掛的：
+      // 位置也沒動——原地取代，不是刪掉再追加到尾巴。尾巴上那五個是 fold 每次都掛的：
       // 圍堵（[#159](https://github.com/DemianLi/nexus-agent/issues/159)）、核准閘門
-      // （[#111](https://github.com/DemianLi/nexus-agent/issues/111)）、重複呼叫的提醒器
+      // （[#111](https://github.com/DemianLi/nexus-agent/issues/111)）、「先讀後改」策略
+      // （[#154](https://github.com/DemianLi/nexus-agent/issues/154)）、重複呼叫的提醒器
       // （[#147](https://github.com/DemianLi/nexus-agent/issues/147)）與用量記錄器
       // （[#153](https://github.com/DemianLi/nexus-agent/issues/153)）。
       // **它們跟摘要器的下場不同，而這條同時釘住那個差別**：名字不撞內建任何一個，
@@ -153,6 +154,7 @@ describe('同名取代是唯一的縫', () => {
         'patchToolCallsMiddleware',
         'nexusToolFailureContainment',
         'nexusApprovalGate',
+        'nexusFileObservationPolicy',
         'nexusRepeatToolReminder',
         'nexusModelUsage',
       ]);

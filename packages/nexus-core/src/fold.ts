@@ -23,6 +23,7 @@ import type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from 
 import { createApprovalGateMiddleware } from './approval.js';
 import type { ApprovalChannel } from './approval.js';
 import { createContainmentMiddleware } from './containment.js';
+import { createObservationPolicy } from './observation.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
@@ -188,6 +189,25 @@ export interface FoldOptions {
    * 每一輪多一個 super-step。見 {@link createRepeatReminder}。
    */
   repeatReminder?: Partial<RepeatReminderSettings> | false;
+  /**
+   * 「先讀後改」策略：沒讀過的檔不准改。省略即開著，`false` 是明著關掉。
+   *
+   * **預設開著是照 dsh**：它那側這是預設載入的插件，連工具描述都寫著「the **default**
+   * fs-observation-policy requires it」。關掉的意思是「這個組裝接受盲改」——例如一個
+   * 只寫新檔、從不編輯的批次流程。
+   *
+   * **它需要一個 backend，而且是折出來的那個**（{@link foldBackend} 的產物，可能是
+   * `CompositeBackend`），不是 {@link FoldOptions.defaultBackend}——版本 token 必須從
+   * 工具實際讀寫的那一個取，掛了路由的路徑才不會量到別人的版本。**這一格因此跟摘要器
+   * 相反**：摘要器刻意拿兜底那個，理由見 {@link foldRegistry}。
+   *
+   * 沒有任何 backend（組裝點沒給、也沒人掛路由）又沒關掉時，fold 當場拋——同
+   * {@link foldSummarizer} 那條軸線：靜默跳過會長得跟「一切正常」一模一樣。
+   *
+   * 它建的 middleware **有狀態**（觀測紀錄在 closure 裡），所以 root 與每個 subagent
+   * **各建一份**，不共用。見 {@link createObservationPolicy}。
+   */
+  observationPolicy?: boolean;
 }
 
 /**
@@ -260,6 +280,10 @@ export function foldRegistry(
   const repeatReminder = foldRepeatReminder(options);
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./model-usage.ts}。
   const modelUsage = createModelUsageRecorder(registry.sessions);
+  // **backend 提前折**：策略要的版本 token 得從工具實際讀寫的那一個取，所以它不能等到
+  // 下面才算。摘要器刻意拿的是兜底那個，兩者的差別見各自的文件。
+  const backend = foldBackend(registry, options.defaultBackend);
+  const observationPolicy = foldObservationPolicy(options, backend);
 
   const params: FoldedAgentParams = {
     tools: orderTools(globalTools, toolOrder),
@@ -268,6 +292,7 @@ export function foldRegistry(
       permissions,
       containment,
       approvalGate,
+      observationPolicy,
       summarizer,
       repeatReminder,
       modelUsage,
@@ -276,6 +301,7 @@ export function foldRegistry(
       registry,
       containment,
       approvalGate,
+      observationPolicy?.(),
       summarizer?.(),
       repeatReminder,
       modelUsage,
@@ -283,8 +309,6 @@ export function foldRegistry(
   };
 
   if (permissions.length > 0) params.permissions = permissions;
-
-  const backend = foldBackend(registry, options.defaultBackend);
   if (backend !== undefined) params.backend = backend;
 
   const skills = registry.skills.sources();
@@ -558,6 +582,7 @@ function foldMiddleware(
   registry: PluginRegistry,
   containment: AgentMiddleware,
   approvalGate: AgentMiddleware,
+  observationPolicy: AgentMiddleware | undefined,
   summarizer: AgentMiddleware | undefined,
   repeatReminder: AgentMiddleware | undefined,
   modelUsage: AgentMiddleware,
@@ -567,6 +592,7 @@ function foldMiddleware(
     containment,
     ...entries.filter((entry) => entry.value.prepend).map((entry) => entry.value.middleware),
     approvalGate,
+    ...(observationPolicy === undefined ? [] : [observationPolicy]),
     ...(summarizer === undefined ? [] : [summarizer]),
     ...(repeatReminder === undefined ? [] : [repeatReminder]),
     modelUsage,
@@ -620,6 +646,35 @@ function foldSummarizer(options: FoldOptions): (() => AgentMiddleware) | undefin
         '（那等於接受一組沒有人在檢查的門檻，見 #142）。',
     );
   return () => createSummarizer(backend, settings);
+}
+
+/**
+ * 「先讀後改」策略的**工廠**，或在明著關掉時回 `undefined`。
+ *
+ * **回工廠而不是一份實例**，同 {@link foldSummarizer}：觀測紀錄在 closure 裡，共用會讓
+ * root 讀過的檔變成 subagent 也可以直接改——那正好把這件事要擋的東西放掉。dsh 那側的
+ * owner 是 `agent.session`，而那邊 agent id ≡ session id、child agent 各自一份，所以
+ * 「逐個 agent 一份」不是我們的發明，是照抄。
+ *
+ * **沒有 backend 又沒關掉是拋，不是靜默跳過。** 拿不到版本 token 的策略沒有東西可以比，
+ * 而它會長得跟「一切正常」一模一樣。同型的前例是 {@link foldSummarizer}。
+ *
+ * @param options - 組裝點自有的那些。
+ * @param backend - {@link foldBackend} 折出來的那個。
+ * @returns 每呼叫一次就給一份新的策略 middleware，或 `undefined`。
+ */
+function foldObservationPolicy(
+  options: FoldOptions,
+  backend: AnyBackendProtocol | undefined,
+): (() => AgentMiddleware) | undefined {
+  if (options.observationPolicy === false) return undefined;
+  if (backend === undefined)
+    throw new Error(
+      '要配「先讀後改」策略，但這次組裝一個 backend 都沒有——策略要從 backend 取版本' +
+        'token，沒有它就沒有東西可以比。給一個 default backend，或明著傳' +
+        '`observationPolicy: false`（那等於接受盲改）。',
+    );
+  return () => createObservationPolicy(backend);
 }
 
 /** 有人掛過路由就包成 `CompositeBackend`，否則原樣交出組裝點給的那個。 */
@@ -680,6 +735,7 @@ function foldSubAgents(
     permissions: readonly FilesystemPermission[];
     containment: AgentMiddleware;
     approvalGate: AgentMiddleware;
+    observationPolicy: (() => AgentMiddleware) | undefined;
     summarizer: (() => AgentMiddleware) | undefined;
     repeatReminder: AgentMiddleware | undefined;
     modelUsage: AgentMiddleware;
@@ -752,6 +808,9 @@ function foldSubAgents(
         // 圍堵在第 0 格：它要包住下面每一個，包含 `spec.middleware` 自己帶的那些。
         context.containment,
         context.approvalGate,
+        // **各建一份，不共用**：觀測紀錄在 closure 裡，共用等於讓 root 讀過的檔
+        // 變成這個 subagent 也可以直接改。理由見 {@link foldObservationPolicy}。
+        ...(context.observationPolicy === undefined ? [] : [context.observationPolicy()]),
         ...(context.summarizer === undefined ? [] : [context.summarizer()]),
         ...(context.repeatReminder === undefined ? [] : [context.repeatReminder]),
         context.modelUsage,
