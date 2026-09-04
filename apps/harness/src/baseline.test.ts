@@ -156,7 +156,8 @@ describe('deepagents 1.13.x 內建 harness profile', () => {
   it('裸供應商鍵沒有人認領', () => {
     // **這一條是這裡最要緊的那個。** Codex 那段 register() 的註解明說用 per-model key 就是
     // 為了「keep the default behavior of non-Codex OpenAI models unchanged」；哪天有人註冊了
-    // 裸 `openai`，我們今天在跑的 `openai/gpt-oss-120b` 會**跟著**被改寫，而那條路上沒有
+    // 裸 `openai`，我們今天在跑的 `nvidia/nemotron-3-super-120b-a12b` 會**跟著**被改寫（它也走
+    // `ChatOpenAI`，供應商鍵一樣是 `openai`），而那條路上沒有
     // 任何一個字串 spec 可以讓人事先看到。
     expect(getHarnessProfile('openai')).toBeUndefined();
     expect(getHarnessProfile('anthropic')).toBeUndefined();

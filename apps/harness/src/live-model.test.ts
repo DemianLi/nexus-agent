@@ -13,6 +13,7 @@ import {
   classifyFailedAttempt,
   createLiveModel,
   isDerivedContextOverflow,
+  modelGoneMessage,
   retryDecision,
 } from './live-model.js';
 import { ALL_MODELS_UNDER_TEST } from './eval/tiers.js';
@@ -349,4 +350,158 @@ describe('假端點回那個 400，到我們手上是 ContextOverflowError', () 
     expect(caught).not.toBeNull();
     expect(ContextOverflowError.isInstance(caught)).toBe(false);
   });
+});
+
+/**
+ * 真打抓下來的 410（2026-09-04，`openai/gpt-oss-120b`）。**逐字，不改寫**——這條測試的
+ * 全部價值就在於它是端點真的說過的話。
+ */
+const CAPTURED_GONE_BODY = {
+  type: 'about:blank',
+  title: 'Gone',
+  status: 410,
+  detail:
+    "The model 'openai/gpt-oss-120b' has reached its end of life on 2026-09-03T08:00:00Z and is no longer available.",
+} as const;
+
+/** 那顆 410 穿過 `@langchain/openai` 之後的形狀（同一次真打量的：`APIError`，body 掛在 `error`）。 */
+function goneError(body: Record<string, unknown> = { ...CAPTURED_GONE_BODY }): Error {
+  return Object.assign(new Error(`410 ${JSON.stringify(body)}`), { status: 410, error: body });
+}
+
+describe('模型下架（410）', () => {
+  it('端點那句話原封不動搬進失敗訊息', () => {
+    const message = modelGoneMessage(goneError());
+
+    expect(message).toContain('2026-09-03T08:00:00Z');
+    expect(message).toContain('openai/gpt-oss-120b');
+    expect(message).toContain('LIVE_MODEL_ID');
+  });
+
+  /**
+   * **承重條：判準是碼，不是那句話。**
+   *
+   * 這條紅的話，代表有人把判準改成比對 `detail` 的措辭——那正是
+   * `isRetryableRateLimit` 檔頭在禁的事，而供應商改一次文案就會靜靜失效。
+   */
+  it('410 但沒有 detail，照樣認得出是下架', () => {
+    const message = modelGoneMessage(
+      goneError({ type: 'about:blank', title: 'Gone', status: 410 }),
+    );
+
+    expect(message).toContain('410');
+    expect(message).toContain('LIVE_MODEL_ID');
+  });
+
+  it('不是 410 的一律不認', () => {
+    expect(modelGoneMessage(providerError({ ...CAPTURED_OVERFLOW_BODY }))).toBeUndefined();
+    expect(modelGoneMessage(Object.assign(new Error('404'), { status: 404 }))).toBeUndefined();
+    expect(modelGoneMessage(new Error('沒有 status'))).toBeUndefined();
+  });
+
+  it('埋在 cause 底下照樣認得', () => {
+    expect(modelGoneMessage(new Error('包了一層', { cause: goneError() }))).toContain(
+      '2026-09-03T08:00:00Z',
+    );
+  });
+
+  /**
+   * **這條釘的是「今天為什麼會等 106.7 秒」的成因。**
+   *
+   * `410` 不在 {@link STATUS_NO_RETRY} 的複本裡，所以 `retryDecision` 會說「重試」。
+   * 這不是 bug 而是基座那份清單的實際成員——它哪天把 410 加進去，這條會紅，那時
+   * `modelGoneMessage` 就從「必要」降級成「只是把話講清楚」，值得回頭讀一次。
+   */
+  it('retryDecision 自己是攔不住 410 的', () => {
+    expect(retryDecision(goneError())).toBe('retry');
+  });
+
+  it('classifyFailedAttempt 直接放棄，而且原錯誤留在 cause 上', () => {
+    let caught: unknown = null;
+    try {
+      classifyFailedAttempt(goneError());
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain('2026-09-03T08:00:00Z');
+    expect((caught as Error).cause).toBeDefined();
+  });
+});
+
+/**
+ * **整條鏈走一遍：下架的模型只打一次，不是重試到底。**
+ *
+ * 量的是**送出去幾次請求**，不是錯誤長什麼樣——「快」才是這一段的產出，而它只有在
+ * 請求數上看得見。真打量到的成本是 **106.7 秒**（2026-09-04，`LIVE_MAX_RETRIES` 6 次，
+ * 退避 1／2／4／8／16／32 秒）。
+ *
+ * **這裡用 `maxRetries: 2` 而不是 {@link LIVE_MAX_RETRIES}**：對照組要真的等完退避才數得到
+ * 重試次數，6 次是 63 秒，那個代價不該由每次 `pnpm test` 付。2 次是 3 秒，而它證的是同一件
+ * 事（有沒有重試），不是同一個數字。
+ *
+ * **零憑證、零外部連線**：loopback 上的假伺服器，回的是真打抓下來的那個 body。
+ */
+describe('假端點回那個 410，我們只打一次就放棄', () => {
+  const RETRIES = 2;
+  let server: Server;
+  let baseURL: string;
+  let hits = 0;
+
+  beforeEach(async () => {
+    hits = 0;
+    server = createServer((_request, response) => {
+      hits += 1;
+      response.writeHead(410, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(CAPTURED_GONE_BODY));
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('拿不到 loopback 埠');
+    baseURL = `http://127.0.0.1:${address.port}/v1`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((done) => server.close(() => done()));
+  });
+
+  function modelAgainstGone(onFailedAttempt?: (error: unknown) => void): ChatOpenAI {
+    return new ChatOpenAI({
+      apiKey: 'fake-key-for-loopback',
+      model: 'openai/gpt-oss-120b',
+      configuration: { baseURL },
+      maxTokens: LIVE_MAX_OUTPUT_TOKENS,
+      maxRetries: RETRIES,
+      ...(onFailedAttempt !== undefined && { onFailedAttempt }),
+    });
+  }
+
+  it('掛上我們的 handler → 只送一次，訊息帶著端點原話', async () => {
+    const caught = await modelAgainstGone(classifyFailedAttempt)
+      .invoke('嗨')
+      .then(() => null)
+      .catch((error: unknown) => error);
+
+    expect(hits).toBe(1);
+    expect((caught as Error).message).toContain('2026-09-03T08:00:00Z');
+  });
+
+  /**
+   * **對照組：不掛我們那支就會重試到底。**
+   *
+   * 它同時是絆索的另一面——上游哪天自己把 410 歸成不重試，**這條**會紅。
+   *
+   * **逾時放寬到 30 秒是必要的，不是保險。** 這一條要真的等完退避才數得到重試次數，
+   * 而 `p-retry` 的 1／2 秒帶隨機抖動，實測會擦過 vitest 預設的 5 秒——那樣紅的是時鐘
+   * 不是斷言，而且是斷續的。
+   */
+  it('不掛我們的 handler → 重試滿次數才放棄', async () => {
+    await modelAgainstGone()
+      .invoke('嗨')
+      .then(() => null)
+      .catch(() => null);
+
+    expect(hits).toBe(RETRIES + 1);
+  }, 30_000);
 });
