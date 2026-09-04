@@ -48,9 +48,13 @@ pnpm --filter @nexus/harness run cli:live "..."             # 換成真實供應
 （banner 上第六行會說現在是哪一種）。沒有預設路徑是刻意的：日誌裡有你打的每一句話，
 預設往家目錄寫是一個該由人做的決定。它不能指到 `--workspace` 底下 —— 寫在可寫根裡，
 模型自己 `read_file` 就讀得到、也改得動整份對話史。每一次啟動各自一個 run 目錄，
-一份會話一個 `.jsonl` 加一個 `.header.json`。**這個旗標目前只有 CLI 有** —— `serve`
-那條路一個 thread 一份會話註冊表，接線點與 CLI 不同，還沒接（見
-[#172](https://github.com/DemianLi/nexus-agent/issues/172)）。
+一份會話一個 `.jsonl` 加一個 `.header.json`。
+
+**`serve` 也有同一個旗標**（[#174](https://github.com/DemianLi/nexus-agent/issues/174)）：
+一個行程一個 run 目錄，底下一條 thread 一個檔，檔名由 thread id 百分號編碼而來 ——
+thread id 是呼叫端給的，所以編碼必須是單射的，不然兩條 thread 會共用一個檔而其中一條
+安靜地寫不進去。**eval 那條路沒有會話日誌，而那是一個登記過的決定**（理由與絆索見
+`apps/harness/src/eval/runner.ts` 的檔頭）。
 
 **agent 迴圈有上限，而那個上限是組裝點設的不是基座設的。** `createDeepAgent` 自己把
 `recursionLimit` 設成 `1e4`（約 5,000 輪模型呼叫，等於沒有上限），所以

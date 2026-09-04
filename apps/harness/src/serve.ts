@@ -23,8 +23,10 @@
 import { parseArgs } from 'node:util';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { NexusPlugin } from '@nexus/core';
-import { DEFAULT_PLUGINS, createCliAgent, loadPluginModule } from './cli.js';
+import type { NexusPlugin, SessionRegistry } from '@nexus/core';
+import { DEFAULT_PLUGINS, createCliAgent, loadPluginModule, resolveSessionLogDir } from './cli.js';
+import { createJsonlSessionStore } from './jsonl-session-store.js';
+import { attachSessionPersistence } from '@nexus/core';
 import { LIVE_MODEL_ID } from './live-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -41,6 +43,7 @@ export interface ServeInvocation {
   readonly port: number;
   readonly workspace?: string;
   readonly pluginModule?: string;
+  readonly sessionLog?: string;
   readonly help: boolean;
 }
 
@@ -51,6 +54,7 @@ const USAGE = `用法：
   --live               換成真實供應商（${LIVE_MODEL_ID}），需要 API key
   --plugins <module>   從指定模組載 plugin 清單（預設匯出一個陣列）
   --workspace <dir>    把檔案落在這個目錄底下（省略即虛擬檔案系統）
+  --session-log <dir>  把會話日誌寫進這個目錄（省略即只在記憶體裡）
   --port <n>           監聽的 port，預設 ${DEFAULT_PORT}
   --help               印這段話
 
@@ -65,6 +69,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
         live: { type: 'boolean', default: false },
         plugins: { type: 'string' },
         workspace: { type: 'string' },
+        'session-log': { type: 'string' },
         port: { type: 'string' },
         help: { type: 'boolean', default: false },
       },
@@ -80,6 +85,9 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
   if (values.workspace !== undefined && values.workspace.trim() === '') {
     throw new Error(`--workspace 要給一個目錄路徑。\n\n${USAGE}`);
   }
+  if (values['session-log'] !== undefined && values['session-log'].trim() === '') {
+    throw new Error(`--session-log 要給一個目錄路徑。\n\n${USAGE}`);
+  }
 
   const port = values.port === undefined ? DEFAULT_PORT : Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
@@ -91,6 +99,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     port,
     ...(values.plugins !== undefined && { plugins: values.plugins, pluginModule: values.plugins }),
     ...(values.workspace !== undefined && { workspace: values.workspace }),
+    ...(values['session-log'] !== undefined && { sessionLog: values['session-log'] }),
     help: values.help === true,
   };
 }
@@ -120,10 +129,22 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     return undefined;
   }
 
+  // **在載 plugin、開 server 之前解析**，同 `cli.ts` 那條的理由：一個指錯地方的
+  // `--session-log` 該在什麼都還沒起來的時候就講。同一個函式，所以「日誌不能落在
+  // `--workspace` 底下」那條檢查兩個入口共用一份。
+  const cwd = options.cwd ?? process.cwd();
+  const sessionLogDir = resolveSessionLogDir(invocation, cwd);
+
   const plugins: readonly NexusPlugin[] =
     invocation.pluginModule === undefined
       ? DEFAULT_PLUGINS
       : await loadPluginModule(invocation.pluginModule, options.cwd);
+
+  // **一個行程一個 store，不是一條 thread 一個。** store 開的是一個 run 目錄，thread
+  // 的日誌各自一個檔落在裡面；一條 thread 一個 store 會變成一條 thread 一個目錄，
+  // 而目錄名是時間戳加亂數，讀的人無從對回 thread。
+  const sessionStore =
+    sessionLogDir === undefined ? undefined : createJsonlSessionStore({ rootDir: sessionLogDir });
 
   let telemetryDisclosed = false;
   const handler = createWireHandler({
@@ -168,6 +189,21 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         attachTelemetry,
         attachInvariants,
         attachSession,
+        // **落盤的答案不在 `createCliAgent` 的回傳值裡**，它來自呼叫方式而不是 plugin
+        // 清單，所以在這個閉包裡接（見 `wire-handler.ts` 的 `attachPersistence`）。
+        ...(sessionStore === undefined
+          ? {}
+          : {
+              attachPersistence: (sessions: SessionRegistry) =>
+                attachSessionPersistence(sessions, sessionStore, {
+                  cwd,
+                  // CLI 那條走 `Printer` 是為了前綴分得出誰在講話；這裡沒有那個問題，
+                  // 伺服器日誌本來就沒有跟誰搶終端機（同不變量那條的理由）。
+                  warn: (message) => {
+                    log(`[會話日誌] ${message}`);
+                  },
+                }),
+            }),
       };
     },
   });
@@ -183,6 +219,13 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   log(`nexus-agent 在 ${server.url}`);
   log(`模型：${invocation.live ? LIVE_MODEL_ID : '假模型（ScriptedChatModel）'}`);
   log(`plugin：${plugins.map((plugin) => plugin.name).join('、') || '（空）'}`);
+  // **披露，不是設定。** 不講的話，「這台 server 正在把每一條 thread 的對話寫上磁碟」
+  // 與「行程結束就沒了」在畫面上一模一樣。
+  log(
+    sessionStore === undefined
+      ? '會話日誌：只在記憶體裡（行程結束就沒了；--session-log <dir> 可以落盤）'
+      : `會話日誌：${sessionStore.directory}`,
+  );
   for (const line of formatTracingDisclosure(readTracingDisclosure(options.env ?? process.env))) {
     log(line);
   }
