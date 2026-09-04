@@ -49,7 +49,7 @@
 | 層 | 計劃自評 | 今天 | 證據 |
 | --- | --- | --- | --- |
 | 感知輸入 | 足夠 | ✅ | `apps/harness/src/messages.ts`；`cli.ts`、`serve.ts` 兩個入口 |
-| 意圖與理解 | 薄 | ⚠️ 仍薄 | 單一供應商單一模型（`live-model.ts` 的 `openai/gpt-oss-120b`，量出來的）；模型層完全外包 LangChain；#141 把基座按模型改組裝這件事守住了，但沒有 dsh 那種提供方無關的 `ctx.llm` seam |
+| 意圖與理解 | 薄 | ⚠️ 仍薄 | 單一供應商單一模型（`live-model.ts` 的 `nvidia/nemotron-3-super-120b-a12b`，量出來的；前一個 `openai/gpt-oss-120b` 2026-09-03 下架，見 #165）；模型層完全外包 LangChain；#141 把基座按模型改組裝這件事守住了，但沒有 dsh 那種提供方無關的 `ctx.llm` seam |
 | 規劃與編排 | 完整 | ✅ | deepagents 迴圈 ＋ `@nexus/plugin-plan-mode`（#117）＋ `@nexus/plugin-todo`（#139）＋ `@nexus/plugin-goal`（#128／#129）。#16 原列的自我批判／意圖分類兩方向已被 dsh 否掉（計劃 §2 記了理由） |
 | 記憶 | 三個都在但只注入不保存 | ⚠️ 同 | `@nexus/plugin-memory`（#68）、`@nexus/plugin-skills`（#69）都刻意薄，靠基座 middleware；摘要層 #70 釘住了縫，**但生產路徑沒用那條縫**——這是 #142 |
 | 執行與工具 | 完整 | ✅ 有界 | MCP（#59）、fs 圍堵（#62）、QuickJS（#64）、「先讀後改」策略（#154，`packages/nexus-core/src/observation.ts`，照 dsh 的 `fs-observation-policy`，同樣由 `foldRegistry` 打底進 root 與每個 subagent）；shell／sandbox 決策 3 延後，且基座三條件互斥（`sandbox-backend-conflict.test.ts`） |
