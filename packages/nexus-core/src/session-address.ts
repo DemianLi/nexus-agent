@@ -1,5 +1,10 @@
 /**
- * 一次工具呼叫的**會話身分**：這次呼叫發生在 root agent 上，還是某一次 subagent 的執行裡。
+ * 一次**圖裡的呼叫**的會話身分：它發生在 root agent 上，還是某一次 subagent 的執行裡。
+ *
+ * **名字比契約窄，那是歷史。** 這個模組出生時只有一種呼叫端（模型工具），
+ * [#153](https://github.com/DemianLi/nexus-agent/issues/153) 之後多了第二種
+ * （記 token 用量的 `wrapModelCall` middleware）。函式名沒有跟著改，所以契約寫在下面
+ * 那張表裡，不寫在名字裡：**認得的是命名空間的形狀，不是誰在叫**。
  *
  * ## 為什麼要有這一層
  *
@@ -21,12 +26,19 @@
  *
  * | 情境 | `checkpoint_ns` |
  * | --- | --- |
- * | root 呼叫 | `tools:<自己的 task id>` |
- * | subagent 呼叫 | `tools:<父圖那次 task 呼叫的 id>｜tools:<自己的 task id>` |
+ * | root 的工具呼叫 | `tools:<自己的 task id>` |
+ * | subagent 的工具呼叫 | `tools:<父圖那次 task 呼叫的 id>｜tools:<自己的 task id>` |
+ * | root 的模型呼叫 | `model_request:<自己的 task id>` |
+ * | subagent 的模型呼叫 | `tools:<父圖那次 task 呼叫的 id>｜model_request:<自己的 task id>` |
  *
- * **最後一段是「這次工具呼叫」，前面的是「誰在跑」。** 去掉最後一段之後：
+ * 後兩列是 2026-09-03 為 [#153](https://github.com/DemianLi/nexus-agent/issues/153) 量的
+ * （`langchain@1.5.10` ＋ `deepagents@1.13.1`）。**它們沒有讓規則變複雜，是同一條規則的
+ * 第二個證人**：最後一段換成 `model_request:` 之後，去尾算出來的 `runId` 與同一次 spawn
+ * 裡的工具呼叫算出來的**是同一個值**。
  *
- * - root 剩下空的 —— 分得出 root。
+ * **最後一段是「這次呼叫自己」，前面的是「誰在跑」。** 去掉最後一段之後：
+ *
+ * - root 剩下空的 —— 分得出 root（工具與模型兩種呼叫都是）。
  * - 每一次 spawn 各一個，**循序與併發都各一個** —— 這就是 dsh 的粒度（per-session、
  *   每次 spawn 一份）。
  * - **同一次 spawn 裡叫幾次工具都是同一個** —— 前綴不變，變的是最後一段。
@@ -36,7 +48,9 @@
  * 1. **格式沒有公開承諾。** `|` 這個分隔符查不到 LangGraph 的契約，只查得到它的行為。
  *    所以解析只准發生在這裡一次，而且 `session-address.test.ts` 逐條釘住上面那張表——
  *    升版把格式改掉時，紅的是那幾條解析測試，**不是「root 與 subagent 的狀態靜默合成
- *    一份」**。那個靜默失敗是這整條路上最貴的東西。
+ *    一份」**。那個靜默失敗是這整條路上最貴的東西。**四列都要釘**：只釘 `tools:` 的話，
+ *    基座哪天把模型節點改名或多包一層 ns，subagent 的用量會安靜地算到 root 頭上，
+ *    而測試全綠。
  * 2. **`ls_agent_type` 不是這裡的答案。** 它分得出 root／subagent，但它是 LangSmith
  *    tracing 的元資料（`ls_` 前綴），而且**它只有兩個值**——分不出「哪一次 spawn」。
  * 3. **認不出來時回 `undefined`，不要猜。** 沒有 `checkpoint_ns` 的呼叫（例如工具被直接
@@ -79,10 +93,12 @@ function checkpointNamespace(config: unknown): string | undefined {
 }
 
 /**
- * 認出一次工具呼叫的會話身分。
+ * 認出一次呼叫的會話身分。**名字說工具，契約說「圖裡的呼叫」**——見檔頭。
  *
- * @param config - 工具 handler 的**第二個參數**（LangChain 的 `ToolRunnableConfig`）。
- *   宣告不出第二個參數的工具永遠拿不到身分——那不是這裡的 bug，是那顆工具沒有要。
+ * @param config - 一份帶得出 `configurable.checkpoint_ns` 的東西。工具那條路傳的是
+ *   handler 的**第二個參數**（LangChain 的 `ToolRunnableConfig`）——宣告不出第二個參數的
+ *   工具永遠拿不到身分，那不是這裡的 bug，是那顆工具沒有要。middleware 那條路傳的是
+ *   `{ configurable: request.runtime.configurable }`。
  * @returns 認得出來的身分，或 `undefined`（沒有 `checkpoint_ns`＝這次呼叫不在圖裡）。
  */
 export function toolCallSessionAddress(config: unknown): SessionAddress | undefined {

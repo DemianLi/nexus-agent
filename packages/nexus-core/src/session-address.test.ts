@@ -6,8 +6,13 @@
  * 解析會安靜地退化成「整串都是最後一段」＝每一次呼叫都被當成 root，而那表示 root 與
  * subagent 的狀態合成一份，看起來像正常運作。
  *
- * 所以下面每一條都直接寫死那張表的一格。表本身量自 2026-09-01 的探針，見
- * `.docs/subagent-session-log-survey.md`。
+ * 所以下面每一條都直接寫死那張表的一格。工具那兩列量自 2026-09-01 的探針，見
+ * `.docs/subagent-session-log-survey.md`；模型那兩列量自 2026-09-03
+ * （[#153](https://github.com/DemianLi/nexus-agent/issues/153)）。
+ *
+ * **四列都要在這裡。** 只釘 `tools:` 開頭的話，基座哪天把模型節點從 `model_request`
+ * 改名、或在它外面多包一層命名空間，subagent 那幾輪的 token 會安靜地算到 root 頭上，
+ * 而這一檔全綠——那正是這個模組存在的理由所要防的東西。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -62,6 +67,37 @@ describe('toolCallSessionAddress', () => {
     });
     // 同樣兩段但用別的字元分：認不出巢狀，整串被當成一段。
     expect(toolCallSessionAddress(configWith('tools:a/tools:b'))).toEqual({ kind: 'root' });
+  });
+
+  /**
+   * **模型呼叫那兩列。** 節點名不一樣（`model_request` 而不是 `tools`），但規則一模一樣
+   * ——去掉最後一段。這兩條同時釘住節點名：基座改名就紅在這裡。
+   */
+  describe('模型呼叫走的是同一條規則', () => {
+    it('root 的模型呼叫也是單段，所以是 root', () => {
+      expect(toolCallSessionAddress(configWith('model_request:211979d1'))).toEqual({
+        kind: 'root',
+      });
+    });
+
+    it('subagent 的模型呼叫是兩段，前面那段是 task 呼叫', () => {
+      expect(toolCallSessionAddress(configWith('tools:2e2716a3|model_request:8470c3b6'))).toEqual({
+        kind: 'subagent',
+        runId: 'tools:2e2716a3',
+      });
+    });
+
+    /**
+     * **這一條是 #153 能成立的全部理由。** 同一次 spawn 裡，模型呼叫與工具呼叫算出來的
+     * 身分必須是**同一個值**——不然 token 用量與那個 subagent 寫的其他事件會落進兩份
+     * 不同的日誌，而兩份都看起來正常。
+     */
+    it('同一次 spawn 裡，模型呼叫與工具呼叫算出來的是同一個身分', () => {
+      const fromModel = toolCallSessionAddress(configWith('tools:25c89826|model_request:2b729d72'));
+      const fromTool = toolCallSessionAddress(configWith('tools:25c89826|tools:558088f6'));
+      expect(fromModel).toEqual(fromTool);
+      expect(fromModel).toEqual({ kind: 'subagent', runId: 'tools:25c89826' });
+    });
   });
 
   it.each([

@@ -11,6 +11,7 @@ import type { CreateDeepAgentParams, SubAgent } from 'deepagents';
 import { CompositeBackend } from 'deepagents';
 import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
 import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
+import { MODEL_USAGE_MIDDLEWARE_NAME } from './model-usage.js';
 import { REPEAT_REMINDER_MIDDLEWARE_NAME } from './repeat-reminder.js';
 import { SUMMARIZATION_MIDDLEWARE_NAME } from './summarization.js';
 import type { FoldOptions } from './fold.js';
@@ -101,7 +102,13 @@ describe('middleware 註冊點', () => {
       fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'))),
       fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'))),
     ]);
-    expect(middlewareNames(params)).toEqual([APPROVAL_GATE_MIDDLEWARE_NAME, 'a', 'b', 'c']);
+    expect(middlewareNames(params)).toEqual([
+      APPROVAL_GATE_MIDDLEWARE_NAME,
+      MODEL_USAGE_MIDDLEWARE_NAME,
+      'a',
+      'b',
+      'c',
+    ]);
   });
 
   it('prepend: true 插到最前，其餘維持清單順序', async () => {
@@ -110,7 +117,13 @@ describe('middleware 註冊點', () => {
       fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
       fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'))),
     ]);
-    expect(middlewareNames(params)).toEqual(['b', APPROVAL_GATE_MIDDLEWARE_NAME, 'a', 'c']);
+    expect(middlewareNames(params)).toEqual([
+      'b',
+      APPROVAL_GATE_MIDDLEWARE_NAME,
+      MODEL_USAGE_MIDDLEWARE_NAME,
+      'a',
+      'c',
+    ]);
   });
 
   it('多個 prepend 之間仍是註冊順序', async () => {
@@ -119,7 +132,13 @@ describe('middleware 註冊點', () => {
       fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
       fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'), { prepend: true })),
     ]);
-    expect(middlewareNames(params)).toEqual(['b', 'c', APPROVAL_GATE_MIDDLEWARE_NAME, 'a']);
+    expect(middlewareNames(params)).toEqual([
+      'b',
+      'c',
+      APPROVAL_GATE_MIDDLEWARE_NAME,
+      MODEL_USAGE_MIDDLEWARE_NAME,
+      'a',
+    ]);
   });
 });
 
@@ -236,7 +255,12 @@ describe('approvals 註冊點', () => {
       fakePlugin('a', (r) => void r.middleware.use(fakeMiddleware('a'))),
       fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
     ]);
-    expect(middlewareNames(params)).toEqual(['b', APPROVAL_GATE_MIDDLEWARE_NAME, 'a']);
+    expect(middlewareNames(params)).toEqual([
+      'b',
+      APPROVAL_GATE_MIDDLEWARE_NAME,
+      MODEL_USAGE_MIDDLEWARE_NAME,
+      'a',
+    ]);
   });
 
   it('每個 subagent 也拿到閘門，而且排在它自帶的 middleware 之前', async () => {
@@ -251,7 +275,11 @@ describe('approvals 註冊點', () => {
     const names = (params.subagents[0]?.middleware ?? []).map(
       (mw) => (mw as unknown as { name: string }).name,
     );
-    expect(names).toEqual([APPROVAL_GATE_MIDDLEWARE_NAME, 'subagent-own']);
+    expect(names).toEqual([
+      APPROVAL_GATE_MIDDLEWARE_NAME,
+      MODEL_USAGE_MIDDLEWARE_NAME,
+      'subagent-own',
+    ]);
   });
 
   it('沒自帶 middleware 的 subagent 也拿得到', async () => {
@@ -261,7 +289,7 @@ describe('approvals 註冊點', () => {
     const names = (params.subagents[0]?.middleware ?? []).map(
       (mw) => (mw as unknown as { name: string }).name,
     );
-    expect(names).toEqual([APPROVAL_GATE_MIDDLEWARE_NAME]);
+    expect(names).toEqual([APPROVAL_GATE_MIDDLEWARE_NAME, MODEL_USAGE_MIDDLEWARE_NAME]);
   });
 
   it('**`interruptOn` 不再出現在折出來的參數上**——機制換了，欄位跟著走', async () => {
@@ -659,6 +687,7 @@ describe('摘要器打底', () => {
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
+      MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
     ]);
   });
@@ -681,6 +710,7 @@ describe('摘要器打底', () => {
     expect(names).toEqual([
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
+      MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
     ]);
   });
@@ -766,6 +796,7 @@ describe('提醒器打底', () => {
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       REPEAT_REMINDER_MIDDLEWARE_NAME,
+      MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
     ]);
   });
@@ -788,6 +819,7 @@ describe('提醒器打底', () => {
     expect(names).toEqual([
       APPROVAL_GATE_MIDDLEWARE_NAME,
       REPEAT_REMINDER_MIDDLEWARE_NAME,
+      MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
     ]);
   });
