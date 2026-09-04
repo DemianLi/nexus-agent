@@ -98,6 +98,13 @@ export interface CreateNexusAgentOptions {
    * 會想覆寫它的只有測試，以及哪天真的開了 async subagent 的組裝。
    */
   readonly baseToolNames?: readonly string[];
+  /**
+   * 「先讀後改」策略的開關。省略即開著（照 dsh，那邊是預設載入的插件）。
+   *
+   * `false` 是明著接受盲改——一個只寫新檔、從不編輯既有檔的批次流程用得到它。
+   * 形狀與理由見 `@nexus/core` 的 `observation.ts`。
+   */
+  readonly observationPolicy?: boolean;
   /** checkpointer。有 plugin 宣告要核准的工具卻沒給，fold 會報錯。 */
   readonly checkpointer?: AgentCheckpointer;
   /** 長期記憶用的 store。 */
@@ -296,6 +303,9 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       approvals: options.approvals,
       ...(options.summarization !== undefined && { summarization: options.summarization }),
       ...(options.repeatReminder !== undefined && { repeatReminder: options.repeatReminder }),
+      ...(options.observationPolicy !== undefined && {
+        observationPolicy: options.observationPolicy,
+      }),
     });
 
     // `withConfig` 疊在基座自己那一層 `withConfig` 上面，後者贏（實測 `8` → 模型只被叫

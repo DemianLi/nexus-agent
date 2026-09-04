@@ -91,6 +91,15 @@ export {
   resolveToolName,
 } from './containment.js';
 
+export {
+  createObservationPolicy,
+  OBSERVATION_POLICY_MIDDLEWARE_NAME,
+  OBSERVATION_POLICY_NOTICE,
+  OBSERVED_EDIT_TOOL,
+  OBSERVED_READ_TOOL,
+  OBSERVED_WRITE_TOOL,
+} from './observation.js';
+
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 export type { ModelUsage } from './model-usage.js';
