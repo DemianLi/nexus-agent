@@ -135,18 +135,23 @@ describe('同名取代是唯一的縫', () => {
     try {
       const names = middlewareNames(agent);
       expect(names.filter((name) => name === 'SummarizationMiddleware')).toHaveLength(1);
-      // 位置也沒動——原地取代，不是刪掉再追加到尾巴。尾巴上那三個是 fold 每次都掛的：
-      // 核准閘門（[#111](https://github.com/DemianLi/nexus-agent/issues/111)）、重複呼叫
-      // 的提醒器（[#147](https://github.com/DemianLi/nexus-agent/issues/147)）與用量記錄器
+      // 位置也沒動——原地取代，不是刪掉再追加到尾巴。尾巴上那四個是 fold 每次都掛的：
+      // 圍堵（[#159](https://github.com/DemianLi/nexus-agent/issues/159)）、核准閘門
+      // （[#111](https://github.com/DemianLi/nexus-agent/issues/111)）、重複呼叫的提醒器
+      // （[#147](https://github.com/DemianLi/nexus-agent/issues/147)）與用量記錄器
       // （[#153](https://github.com/DemianLi/nexus-agent/issues/153)）。
       // **它們跟摘要器的下場不同，而這條同時釘住那個差別**：名字不撞內建任何一個，
       // 所以是 novel entry 被追加在基座那幾個之後、其餘 plugin middleware 之前；摘要器
       // 的名字撞了，所以是原地取代回第三格。
+      //
+      // **這條順帶釘住圍堵射程的上限**：基座那四個排在它外面，所以它們自己拋的錯圍堵
+      // 接不到。那是 `createDeepAgent` 的組裝順序，不是 fold 決定得了的。
       expect(names).toEqual([
         'FilesystemMiddleware',
         'subAgentMiddleware',
         'SummarizationMiddleware',
         'patchToolCallsMiddleware',
+        'nexusToolFailureContainment',
         'nexusApprovalGate',
         'nexusRepeatToolReminder',
         'nexusModelUsage',

@@ -22,6 +22,7 @@ import type { AnyBackendProtocol, FilesystemPermission, SubAgent } from 'deepage
 import type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
 import { createApprovalGateMiddleware } from './approval.js';
 import type { ApprovalChannel } from './approval.js';
+import { createContainmentMiddleware } from './containment.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
@@ -58,14 +59,18 @@ export const ROOT_ONLY_NOTICE = '這個工具只在 root agent 上執行；在 s
 /**
  * subagent 叫到 root-only 工具時，那顆樁回的話。
  *
- * **回字串而不是拋。** dsh 那側是拋（`tool-todo/src/index.ts:205-210` 的
+ * **回字串而不是拋，而理由已經換過一次了。** dsh 那側是拋
+ * （`tool-todo/src/index.ts:205-210` 的
  * `throw new Error('todo_write requires an owning agent session')`），理由是「拒絕，
- * 不要靜默 no-op」——那個理由我們照收，但**拋在我們這裡達不到它**：
- * `ToolNode.runTool` 只要 `wrapToolCall` 存在就把工具自己拋的錯當成 middleware 的錯並
- * 重拋，而 `createDeepAgent` 永遠掛著帶 `wrapToolCall` 的 `FilesystemMiddleware`，
- * 所以工具一拋就是**整場 run 死掉**，除非 `@nexus/plugin-validation` 的圍堵剛好也在清單
- * 裡（見 `packages/nexus-plugin-validation/src/containment.ts` 的檔頭）。fold 是 core，
- * 它產出的東西不能假設某個 plugin 在場。回字串在兩種組裝下都是同一則模型看得到的回饋。
+ * 不要靜默 no-op」——那個理由我們照收。舊的擋路石是**拋在我們這裡達不到它**：工具一拋
+ * 就是整場 run 死掉，而圍堵當時住在一個掛不掛隨人的 plugin 裡，fold 是 core，不能假設
+ * 它在場。
+ *
+ * **那個前提已經不成立**：圍堵現在由 fold 自己打底在第 0 格（見
+ * {@link ./containment.ts}），所以拋得出去也接得回來。**沒有跟著改是刻意的**——
+ * 改樁的行為是另一張卡，[#159](https://github.com/DemianLi/nexus-agent/issues/159)
+ * 的 Out of scope 明著把它留在外面。回字串在兩種組裝下都是同一則模型看得到的回饋，
+ * 今天沒有壞掉的地方。
  *
  * @param name - 被叫到的工具名。
  * @param scope - 叫它的那個 subagent。
@@ -248,6 +253,8 @@ export function foldRegistry(
   if (toolOrder !== undefined) validateToolOrder(toolOrder, known);
 
   const permissions = foldPermissions(registry);
+  // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./containment.ts}。
+  const containment = createContainmentMiddleware();
   const approvalGate = foldApprovalGate(registry, options);
   const summarizer = foldSummarizer(options);
   const repeatReminder = foldRepeatReminder(options);
@@ -259,12 +266,20 @@ export function foldRegistry(
     subagents: foldSubAgents(registry, {
       toolOrder,
       permissions,
+      containment,
       approvalGate,
       summarizer,
       repeatReminder,
       modelUsage,
     }),
-    middleware: foldMiddleware(registry, approvalGate, summarizer?.(), repeatReminder, modelUsage),
+    middleware: foldMiddleware(
+      registry,
+      containment,
+      approvalGate,
+      summarizer?.(),
+      repeatReminder,
+      modelUsage,
+    ),
   };
 
   if (permissions.length > 0) params.permissions = permissions;
@@ -490,19 +505,24 @@ function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): Agent
 }
 
 /**
- * middleware 折成一份清單：`prepend` 的在前，核准閘門接著，其餘依註冊順序。
+ * middleware 折成一份清單：圍堵在最前，`prepend` 的接著，核准閘門再接著，其餘依註冊順序。
  *
  * **與 dsh 的偏離**：dsh 的匿名表只有 `append`，沒有 prepend 這個概念。deepagents
  * 的 middleware 是一份順序有意義的陣列，「插到最前」表達不出來，所以退到最接近的
  * 實作：一張表加一次穩定分割，兩個分區各自維持註冊順序。
  *
- * **核准閘門排在 `prepend` 之後、其餘之前，而那個位置有唯一正確答案。**
- * `wrapToolCall` 是層層相包的，陣列越前面越外層：
+ * **圍堵是第 0 格，而那是約束不是偏好。** `wrapToolCall` 是層層相包的，陣列越前面越外層，
+ * 而圍堵的射程要涵蓋內層**每一個** middleware——包含以 `prepend` 掛進來的那些，也包含
+ * 核准閘門自己。漏在它外面的任何一層一拋，就是整場 run 死掉，而那正是這整件事要修的
+ * 東西（[#159](https://github.com/DemianLi/nexus-agent/issues/159)）。它由 fold 自己建，
+ * 不經過 registry，所以沒有「這次清單裡有沒有」這回事。
  *
- * - **不能排在最前**。最外層是圍堵（`@nexus/plugin-validation` 以 `prepend` 掛上去），
- *   它的射程要涵蓋內層每一個 plugin middleware，閘門自己的 bug 也在裡面。把閘門推到
- *   它外面，閘門一拋就整場 run 死掉。實測中斷穿得過圍堵的 `isGraphBubbleUp` 分支，
- *   所以待在裡面不會讓核准點消失。
+ * **核准閘門排在 `prepend` 之後、其餘之前，而那個位置有唯一正確答案。** 這條論證沒有變，
+ * 只是外面那一層從「某個 plugin 掛的圍堵」變成 fold 自己打底的那份，因此**更強**：
+ *
+ * - **不能排在最前**。最外層是圍堵，閘門自己的 bug 也要在它裡面。把閘門推到它外面，
+ *   閘門一拋就整場 run 死掉。實測中斷穿得過圍堵的 `isGraphBubbleUp` 分支，所以待在
+ *   裡面不會讓核准點消失。
  * - **不能排在其餘之後**。閘門越內層，能繞過它的 middleware 越多——排最後等於任何一個
  *   plugin middleware 都可以在它之前把工具跑掉。
  *
@@ -536,6 +556,7 @@ function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): Agent
  */
 function foldMiddleware(
   registry: PluginRegistry,
+  containment: AgentMiddleware,
   approvalGate: AgentMiddleware,
   summarizer: AgentMiddleware | undefined,
   repeatReminder: AgentMiddleware | undefined,
@@ -543,6 +564,7 @@ function foldMiddleware(
 ): AgentMiddleware[] {
   const entries = registry.middleware.list();
   return [
+    containment,
     ...entries.filter((entry) => entry.value.prepend).map((entry) => entry.value.middleware),
     approvalGate,
     ...(summarizer === undefined ? [] : [summarizer]),
@@ -633,9 +655,17 @@ function foldBackend(
  * 一個都不繼承**。舊機制靠的是 `interruptOn` 這個欄位可以逐個 subagent 傳，換成
  * middleware 之後那條路沒了，不注就是默默地讓 subagent 失去核准。
  *
- * **順帶暴露一件既有事實**：圍堵（以及其餘所有 plugin middleware）今天同樣射不進
- * subagent。這張沒有修它——只有核准這一格是這次換機制**造成**的落差，其餘是本來就在
- * 的。要修是另一張。
+ * **圍堵同樣逐個注進去，理由同上一條。** 它以前是 plugin middleware，所以跟其餘 plugin
+ * middleware 一起射不進 subagent——也就是說 subagent 裡任何一個工具拋錯，整場 run 照樣
+ * 死。[#159](https://github.com/DemianLi/nexus-agent/issues/159) 把它搬進 fold 打底，
+ * 兩個掛點缺一個就是漏掉半棵樹。**排在第 0 格**，理由與 {@link foldMiddleware} 那份同一條：
+ * 它要包住這個 subagent 的閘門、摘要器、以及 spec 自己帶的每一個 middleware。
+ *
+ * **root 與所有 subagent 共用同一份實例**，跟提醒器與用量記錄器同一格：圍堵沒有 closure
+ * 狀態，`try/catch` 裡讀到的一切都來自那一次呼叫的 `request`。
+ *
+ * 其餘 plugin middleware 射不進 subagent 這件事**還在**——那是本來就在的，不是這次換
+ * 機制造成的。
  *
  * **寫 subagent 的人要知道這件事**：基座對 `SubAgentBase.permissions` 的說明是
  * 「these rules **replace** the parent agent's permissions」，它自己的範例就是
@@ -648,6 +678,7 @@ function foldSubAgents(
   context: {
     toolOrder: readonly string[] | undefined;
     permissions: readonly FilesystemPermission[];
+    containment: AgentMiddleware;
     approvalGate: AgentMiddleware;
     summarizer: (() => AgentMiddleware) | undefined;
     repeatReminder: AgentMiddleware | undefined;
@@ -718,6 +749,8 @@ function foldSubAgents(
       // 身分每次從執行期的 `configurable` 現算，共用一份不會讓兩個 agent 混在一起。
       // 理由見 {@link ./model-usage.ts}。
       middleware: [
+        // 圍堵在第 0 格：它要包住下面每一個，包含 `spec.middleware` 自己帶的那些。
+        context.containment,
         context.approvalGate,
         ...(context.summarizer === undefined ? [] : [context.summarizer()]),
         ...(context.repeatReminder === undefined ? [] : [context.repeatReminder]),

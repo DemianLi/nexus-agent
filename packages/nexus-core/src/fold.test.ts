@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import type { CreateDeepAgentParams, SubAgent } from 'deepagents';
 import { CompositeBackend } from 'deepagents';
 import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
+import { CONTAINMENT_MIDDLEWARE_NAME } from './containment.js';
 import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 import { MODEL_USAGE_MIDDLEWARE_NAME } from './model-usage.js';
 import { REPEAT_REMINDER_MIDDLEWARE_NAME } from './repeat-reminder.js';
@@ -103,6 +104,7 @@ describe('middleware 註冊點', () => {
       fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'))),
     ]);
     expect(middlewareNames(params)).toEqual([
+      CONTAINMENT_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
@@ -111,13 +113,14 @@ describe('middleware 註冊點', () => {
     ]);
   });
 
-  it('prepend: true 插到最前，其餘維持清單順序', async () => {
+  it('prepend: true 插到 registry middleware 的最前，但**圍堵仍在它外面**', async () => {
     const params = await fold([
       fakePlugin('a', (r) => void r.middleware.use(fakeMiddleware('a'))),
       fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
       fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'))),
     ]);
     expect(middlewareNames(params)).toEqual([
+      CONTAINMENT_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
@@ -133,12 +136,61 @@ describe('middleware 註冊點', () => {
       fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'), { prepend: true })),
     ]);
     expect(middlewareNames(params)).toEqual([
+      CONTAINMENT_MIDDLEWARE_NAME,
       'b',
       'c',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
     ]);
+  });
+});
+
+describe('圍堵打底', () => {
+  /**
+   * **這一組是 [#159](https://github.com/DemianLi/nexus-agent/issues/159) 的核心。**
+   *
+   * 承重的那格是「**清單裡一個 plugin 都沒有**」——圍堵由 fold 自己建，不經過 registry，
+   * 所以「有沒有它」不再是清單怎麼寫的事。任何一條「掛了 `createValidationPlugin()`
+   * 然後觀察到圍堵」的測試都證不到這件事：那在搬家之前的樹上就會過。
+   */
+  it('**清單全空也有圍堵，而且在第 0 格**', async () => {
+    const params = await fold([]);
+    expect(middlewareNames(params)[0]).toBe(CONTAINMENT_MIDDLEWARE_NAME);
+  });
+
+  it('**連 prepend 的 registry middleware 都在它裡面**——射程要蓋過每一個', async () => {
+    const params = await fold([
+      fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
+    ]);
+    expect(middlewareNames(params).indexOf(CONTAINMENT_MIDDLEWARE_NAME)).toBe(0);
+    expect(middlewareNames(params).indexOf('b')).toBe(1);
+  });
+
+  it('**每個 subagent 也有，而且同樣在第 0 格**——不注就是漏掉半棵樹', async () => {
+    const own = fakeMiddleware('subagent-own');
+    const params = await fold([
+      fakePlugin('team', (r) => {
+        r.subagents.register({ ...fakeSubAgent('releaser'), middleware: [own] } as SubAgent);
+        r.subagents.register(fakeSubAgent('researcher'));
+      }),
+    ]);
+    for (const subagent of params.subagents) {
+      const names = (subagent.middleware ?? []).map(
+        (mw) => (mw as unknown as { name: string }).name,
+      );
+      expect(names[0]).toBe(CONTAINMENT_MIDDLEWARE_NAME);
+    }
+    expect(params.subagents).toHaveLength(2);
+  });
+
+  it('root 與每個 subagent 共用同一份實例——它無狀態，逐個建只是多做工', async () => {
+    const params = await fold([
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('releaser'))),
+    ]);
+    const rootOne = params.middleware[0];
+    const subOne = (params.subagents[0]?.middleware ?? [])[0];
+    expect(subOne).toBe(rootOne);
   });
 });
 
@@ -256,6 +308,7 @@ describe('approvals 註冊點', () => {
       fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
     ]);
     expect(middlewareNames(params)).toEqual([
+      CONTAINMENT_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
@@ -276,6 +329,7 @@ describe('approvals 註冊點', () => {
       (mw) => (mw as unknown as { name: string }).name,
     );
     expect(names).toEqual([
+      CONTAINMENT_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
@@ -289,7 +343,11 @@ describe('approvals 註冊點', () => {
     const names = (params.subagents[0]?.middleware ?? []).map(
       (mw) => (mw as unknown as { name: string }).name,
     );
-    expect(names).toEqual([APPROVAL_GATE_MIDDLEWARE_NAME, MODEL_USAGE_MIDDLEWARE_NAME]);
+    expect(names).toEqual([
+      CONTAINMENT_MIDDLEWARE_NAME,
+      APPROVAL_GATE_MIDDLEWARE_NAME,
+      MODEL_USAGE_MIDDLEWARE_NAME,
+    ]);
   });
 
   it('**`interruptOn` 不再出現在折出來的參數上**——機制換了，欄位跟著走', async () => {
@@ -684,6 +742,7 @@ describe('摘要器打底', () => {
     // 位置只決定同名誰贏（`mergeMiddleware$1` 是以 name 為鍵的 Map，後設的覆蓋前設的）：
     // 排在所有 registry middleware 之前 ＝ 任何 plugin 掛一個同名的都蓋得過我們這份。
     expect(middlewareNames(params)).toEqual([
+      CONTAINMENT_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
@@ -708,6 +767,7 @@ describe('摘要器打底', () => {
     // **自帶的排在後面 ＝ 自帶的贏。** 這是「打底」不是「強制」，跟同一個函式裡 `tools`
     // 那條軸線一致；摘要門檻是效能與正確性的預設值，不是安全邊界。閘門那一格沒動。
     expect(names).toEqual([
+      CONTAINMENT_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
@@ -792,6 +852,7 @@ describe('提醒器打底', () => {
     // 摘要器是 `wrapModelCall`（模型節點內部）、提醒器是 `beforeModel`（模型節點之前），
     // 誰先跑由圖決定。這條釘的是「我們打底的三根都排在 registry middleware 之前」。
     expect(middlewareNames(params)).toEqual([
+      CONTAINMENT_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
@@ -817,6 +878,7 @@ describe('提醒器打底', () => {
     // 自帶的排在後面 ＝ 自帶的贏，同 `tools` 那條軸線。root 的 `registry.middleware`
     // 到不了 subagent，所以不打底的話那個 subagent 就完全沒有這道提醒。
     expect(names).toEqual([
+      CONTAINMENT_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       REPEAT_REMINDER_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,

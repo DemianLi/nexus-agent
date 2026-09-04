@@ -84,6 +84,13 @@ export { createRegistry } from './registry.js';
 export type { LoadResult } from './load.js';
 export { loadPlugins } from './load.js';
 
+export {
+  CONTAINMENT_MIDDLEWARE_NAME,
+  createContainmentMiddleware,
+  formatToolFailure,
+  resolveToolName,
+} from './containment.js';
+
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 export type { ModelUsage } from './model-usage.js';
