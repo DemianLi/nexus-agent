@@ -60,6 +60,13 @@ import type { TodoItem } from './todo.js';
  * **就是那一份組裝本身**：同一個 middleware 實例掛在同一張圖上，兩條進入點看到的是
  * 同一次模型呼叫。它跟 `todo/write` 一樣寫得進 subagent 那份。
  * 見 [#153](https://github.com/DemianLi/nexus-agent/issues/153)。
+ *
+ * `compaction/summary` 生產者同第四種，但**掛的位置不一樣**：它不是一顆新名字的
+ * middleware，是{@link ./summarization.ts | 我們那個同名取代的摘要器}多包的一層。理由是
+ * 基座**只在回傳值裡**交出摘要事件（`new Command({ update: { _summarizationEvent } })`），
+ * 一顆排在它後面的新 middleware 看不到那個回傳值。「兩條路都產得出來嗎」跟 `model/usage`
+ * 同一條理由：它就是那一份組裝本身。
+ * 見 [#143](https://github.com/DemianLi/nexus-agent/issues/143)。
  */
 export type SessionEventType =
   | 'turn/start'
@@ -70,7 +77,8 @@ export type SessionEventType =
   | 'command/done'
   | 'goal/change'
   | 'todo/write'
-  | 'model/usage';
+  | 'model/usage'
+  | 'compaction/summary';
 
 /** 每一種事件帶什麼。 */
 export interface SessionEventMap {
@@ -150,6 +158,47 @@ export interface SessionEventMap {
     readonly inputTokens: number;
     readonly outputTokens: number;
     readonly totalTokens: number;
+  };
+  /**
+   * 壓縮真的發生了一次：舊訊息被換成一份摘要。**一次摘要一筆**。
+   *
+   * ## 這是 dsh 三顆事件的哪一顆，以及另外兩顆為什麼不在
+   *
+   * dsh 是 `compaction/start` → `compaction/summary` → `compaction/end`，三顆由**一把括住
+   * 整個操作的鎖**串起來：中途崩潰的形態是可偵測的遺留鎖（有 `start` 沒有配對的 `end`），
+   * 而不是一個謊稱完成的 `end`。
+   *
+   * **我們湊不出那把鎖，所以只留中間那顆。** 基座沒有把「開始壓縮」與「壓縮結束」暴露成
+   * 任何東西——它只在**成功走完**之後回一個帶 `_summarizationEvent` 的 `Command`。硬記
+   * 一顆 `start` 只能記在「我們猜它要壓了」的時間點，而那個猜測正是 dsh 的鎖要消滅的
+   * 那種東西。一顆誠實的事件勝過三顆撐不起語義的。**代價明寫**：壓縮失敗在日誌裡是
+   * 沉默的，不是一顆帶 `error` 的 `end`。
+   *
+   * ## 欄位
+   *
+   * **`filePath` 是 [#66](https://github.com/DemianLi/nexus-agent/issues/66) 那個 fail-open
+   * 的訊號**：`null` 代表歷史沒寫成功，被換掉的原文就此消失，而基座對這件事只印一行
+   * `console.warn`。這一顆事件是它在耐久紀錄裡唯一的痕跡。
+   *
+   * ⚠️ **`filePath` 是一條檔案路徑，而它會原樣進遙測**——協調器一律鏡像每一顆事件（見
+   * `session-telemetry-coordinator.ts`）。同 `command/run` 的 `args`：那條路徑含
+   * `historyPathPrefix` 與一個隨機 session id，不含使用者輸入，但它仍然是路徑不是計數。
+   *
+   * **`cutoffIndex` 與 `messagesBefore` 是同一組座標**：原始訊息串（不是摘要器眼中的
+   * 有效串）的索引與長度。基座存進 state 的就是原始座標——`getEffectiveMessages` 拿它去
+   * `messages.slice(cutoffIndex)`。所以 `cutoffIndex / messagesBefore` 讀得出「這次換掉了
+   * 多前面的多少」。
+   *
+   * **摘要本文刻意不記。** 檔頭那條「這一版不記訊息內容」在這裡是硬約束不是偏好：
+   * `summaryMessage` 就是模型產的訊息，記了它等於從側門把訊息內容放進日誌與遙測。
+   */
+  'compaction/summary': {
+    /** 切在原始訊息串的哪裡；`[0, cutoffIndex)` 被換成了那份摘要。 */
+    readonly cutoffIndex: number;
+    /** 切之前原始訊息串有多長。與 `cutoffIndex` 同一組座標。 */
+    readonly messagesBefore: number;
+    /** 被換掉的原文落在 backend 的哪個檔。**`null` ＝ 沒寫成功，原文消失了**。 */
+    readonly filePath: string | null;
   };
 }
 
