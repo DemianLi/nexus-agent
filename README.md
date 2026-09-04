@@ -229,7 +229,8 @@ pnpm --filter @nexus/harness run eval:compare --cases edit-after-read --samples 
 可以挑子集。收的理由是端點把裝置拆了（`openai/gpt-oss-120b` 下架、`nemotron-3-nano-30b-a3b`
 從型錄消失，而這把 key 上湊不出第三道同家族的階梯），而**那條線本來就已經結案** ——
 下面那個「沒有尺寸效應」的結論是三輪量出來的，不受影響。要重建階梯的話，驗收條件寫在
-`src/eval/tiers.ts` 的檔頭。**以下這段記的是收掉之前的樣子。**
+`src/eval/tiers.ts` 的檔頭 —— 那份檔頭現在裝的是**盤點方法**與**重建的四條驗收條件**，
+不再是「階梯怎麼挑出來的」（下一段那句指路因此要讀成歷史）。**以下這段記的是收掉之前的樣子。**
 
 同一份基準任務跑**兩道階梯**，只有 model 這一個參數不同：`openai/gpt-oss-20b` → `-120b`，
 以及 Nemotron-3 的 `nano-30b-a3b` / `super-120b-a12b` / `ultra-550b-a55b`。
