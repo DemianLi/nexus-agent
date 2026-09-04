@@ -19,9 +19,9 @@
 
 **契約層落地了，而且被用過。** `PluginRegistry` 有 14 個欄位（9 個折進 `createDeepAgent` 的註冊點 ＋ 5 條不折的通道），`packages/` 底下 11 個生產 plugin 全走這條契約，`@nexus/plugin-echo` 靠 pnpm 相依隔離證明契約沒有偷偷要求伸手進組裝點。計劃書 §1 寫的形狀（命令式註冊、同層報錯、跨層遮蔽、fail-closed、載入期失敗）每一條都有對應的程式碼與測試。
 
-**廣度比 dsh 窄很多，但窄的地方分兩種。** dsh `packages/` 的 51 個頂層套件裡，我們有等價物的 8 個、部分的 12 個、沒有的 29 個、不適用的 2 個。29 個「沒有」裡超過一半是企業級與分散式的東西（`api`／`host`／`client`／`typert`／`sdk`／`acp`／`identity`／`settings`／`credentials`／`webhook`／`attachment`／`lsp`／`web`／`e2b`）——那是定位差異，不是缺口。**真正算缺口的是 agent 迴圈本身會用到、而 dsh 的 base 組合預設就開著的那幾個**：compaction 由誰選門檻（#142／#143 已收）、迴圈衛生的兩個 guard（重複呼叫提醒、單次工具逾時）、生命週期鉤子面（會話開始／提示詞提交／停止三個時刻）、以及所有東西都只在記憶體裡（會話日誌不落盤、checkpointer 是 `MemorySaver`、沒有 storage——決策 4 的三軸還沒收斂）。shell／sandbox／subprocess／terminal 是決策 3 明文延後的，不算意外。
+**廣度比 dsh 窄很多，但窄的地方分兩種。** dsh `packages/` 的 51 個頂層套件裡，我們有等價物的 8 個、部分的 12 個、沒有的 29 個、不適用的 2 個。29 個「沒有」裡超過一半是企業級與分散式的東西（`api`／`host`／`client`／`typert`／`sdk`／`acp`／`identity`／`settings`／`credentials`／`webhook`／`attachment`／`lsp`／`web`／`e2b`）——那是定位差異，不是缺口。**真正算缺口的是 agent 迴圈本身會用到、而 dsh 的 base 組合預設就開著的那幾個**：compaction 由誰選門檻（#142／#143 已收）、迴圈衛生的兩個 guard（重複呼叫提醒、單次工具逾時）、生命週期鉤子面（會話開始／提示詞提交／停止三個時刻）、以及狀態幾乎都只在記憶體裡（**會話日誌已於 2026-09-05 落盤**——[#172](https://github.com/DemianLi/nexus-agent/issues/172)、[#174](https://github.com/DemianLi/nexus-agent/issues/174)，CLI 與 `serve` 的 `--session-log <dir>`；checkpointer 仍是 `MemorySaver`、仍沒有 storage，但那兩軸今天零消費者，見決策 4 的補記——**原文寫的「決策 4 的三軸」是錯的**：那三軸問的都是「LangGraph 的狀態存在哪」，會話日誌不在其中任何一軸上）。shell／sandbox／subprocess／terminal 是決策 3 明文延後的，不算意外。
 
-**Proteus 不是另一個 harness，是量 harness 的儀器。** 它用 Docker 把 dsh、Pi、Aki 這些 harness 包起來，讓它們跨多個 episode 改寫自己的原始碼，然後量「harness 本身變了什麼」（結構距離、結晶測試、帶排列檢定的行為距離）。它對我們的意義不是抄設計——它是 Python、從外面包、是 research preview——而是它定義了一個 harness **可以被量**要具備什麼：無頭入口（有）、可讀的執行軌跡（會話日誌有但不落盤）、具名的可編輯 surface（memory／skills 目錄有，plugin 清單是程式碼）。**這三件裡缺的那一件，正好跟持久化是同一個缺口。**
+**Proteus 不是另一個 harness，是量 harness 的儀器。** 它用 Docker 把 dsh、Pi、Aki 這些 harness 包起來，讓它們跨多個 episode 改寫自己的原始碼，然後量「harness 本身變了什麼」（結構距離、結晶測試、帶排列檢定的行為距離）。它對我們的意義不是抄設計——它是 Python、從外面包、是 research preview——而是它定義了一個 harness **可以被量**要具備什麼：無頭入口（有）、可讀的執行軌跡（**2026-09-05 起有了**，見 §4.5）、具名的可編輯 surface（memory／skills 目錄有，plugin 清單是程式碼）。**原文寫「這三件裡缺的那一件正好跟持久化是同一個缺口」，那句話 2026-09-05 起不成立**——落盤做完之後，缺的變成第三件（可編輯 surface），而它跟持久化無關。
 
 ## 二、原計劃 vs 現況
 
@@ -69,7 +69,7 @@
 | 3 | 記憶來源 | ✅ | #68 |
 | 3 | skill 來源 | ✅ | #69 |
 | 3 | 摘要層調校 | ⚠️ | #70 釘住設定入口與兩個靜默失敗；#144 釘住 `fraction` 門檻的兩個相反失敗；**生產未配置** → #142（三個決定已做）、#143（留痕，等 #142） |
-| 3 | checkpointer／store／backend 三軸收斂 | ❌ | 決策 4 未收斂；checkpointer 仍是 `MemorySaver`，會話日誌不落盤（`session-log.ts` 對 `node:fs` 零命中） |
+| 3 | checkpointer／store／backend 三軸收斂 | ⚠️ | **這一列的題目本身被 [#155](https://github.com/DemianLi/nexus-agent/issues/155) 改寫了**：那三軸問的都是「LangGraph 的狀態存在哪」，而先落地的是不在其中任何一軸上的**會話日誌**（[#172](https://github.com/DemianLi/nexus-agent/issues/172)／[#174](https://github.com/DemianLi/nexus-agent/issues/174)，`--session-log <dir>`）。checkpointer 仍是 `MemorySaver`、仍沒有 storage，兩軸今天零消費者 |
 | 4 | HITL 核准 | ✅ | 擴充點 Phase 2 就落地；#111／#112 改逐次判；web 端 `approval-card.tsx` |
 | 4 | 可觀測性 | ✅ | #100 OTLP 後端 ＋ 遙測披露（`telemetry-disclosure.ts`）；tracing 那半是基座自己開的，我們補的是「說出來」與脫敏 |
 | 4 | 工具失敗回饋 ＋ 輸出校驗 | ✅ | #73 |
@@ -129,7 +129,7 @@
 | 32 | `schedule` | 會話本地的持久提醒（`schedule_create`／`list`／`delete`） | 沒有 | 沒有 |
 | 33 | `sdk` | JSON-RPC 協定 ＋ 行程外 SDK 的 client／server | 沒有 | 沒有 |
 | 34 | `session-query` | 搜尋、追蹤、讀取實時與持久會話歷史；日誌匯出 | 沒有 | 沒有 |
-| 35 | `session` | 持久會話資料平面：persistence seam（jsonl／sqlite）、checkpoint 策略、投影、標題、統計、對外遙測 | `session-log.ts`（行程內 append-only，**不落盤**）、`session-telemetry.ts`＋coordinator＋`@nexus/plugin-telemetry-otel`（#100）、`sessions.ts`／`session-registry.ts`（#138 subagent 各一份）。persistence／checkpoint-policy／projection／title 沒有 | 部分 |
+| 35 | `session` | 持久會話資料平面：persistence seam（jsonl／sqlite）、checkpoint 策略、投影、標題、統計、對外遙測 | `session-log.ts`（append-only）、**`session-store.ts`＋`session-persistence.ts`＋`jsonl-session-store.ts`（persistence seam，#172／#174：CLI 與 `serve` 的 `--session-log <dir>`，選擇性、無預設路徑）**、`session-telemetry.ts`＋coordinator＋`@nexus/plugin-telemetry-otel`（#100）、`sessions.ts`／`session-registry.ts`（#138 subagent 各一份）。sqlite provider／checkpoint-policy／projection／title 沒有 | 部分 |
 | 36 | `settings` | 使用者設定 seam ＋ YAML／JSON 檔提供方 | 沒有（#46） | 沒有 |
 | 37 | `shell` | bash／pwsh 本地與沙箱執行器、持久與一次性工具 | 沒有。決策 3 延後 | 沒有 |
 | 38 | `skill` | 由提供方發現、經會話目錄與 skill 工具載入的可複用指令 | `@nexus/plugin-skills`（#69）靠基座 `createSkillsMiddleware`。沒有 `tool-skill`、`skill-badge` | 有（薄） |
@@ -195,10 +195,22 @@ Proteus 定義了「一個 harness 可以被量」的三個前提，對著我們
 | 前提 | 我們 |
 | --- | --- |
 | 無頭入口（一個 episode 跑得起來、跑得完） | ✅ `apps/harness/src/cli.ts`、`serve.ts` |
-| 可讀的執行軌跡（`read_trace` 從 harness 自己的日誌解析） | ⚠️ 會話日誌有（`session-log.ts`，八種事件），**但不落盤**；dsh 的 adapter 讀的是它落盤的 jsonl |
+| 可讀的執行軌跡（`read_trace` 從 harness 自己的日誌解析） | ⚠️ 落盤有了（[#172](https://github.com/DemianLi/nexus-agent/issues/172)、[#174](https://github.com/DemianLi/nexus-agent/issues/174)：`session-log.ts` 十種事件，CLI 與 `serve` 的 `--session-log <dir>` 寫成 jsonl）。**剩下的落差在 adapter 那側，不在我們這側**——見下 |
 | 具名的可編輯 surface | ⚠️ memory／skills 目錄是；plugin 清單是程式碼；`goal`／`todo` 在會話日誌裡 |
 
-**兩個 ⚠️ 指向同一件事：持久化。** 這是 §五把它排到第 4 而不是更後面的理由。
+**2026-09-05 更新：這兩個 ⚠️ 曾經指向同一件事（持久化），現在不是了。**
+
+第二列的落差原本是「不落盤」，[#172](https://github.com/DemianLi/nexus-agent/issues/172) 之後不成立。**去讀了 adapter 才知道剩下的落差是什麼**（`references/Proteus/proteus/adapters/dsh.py`，SHA `962304b3`）：
+
+- **它跑的是一次無頭 CLI 呼叫**——`sandbox.run(run_root, ["--profile", "headless", <prompt>], env={"DEEPSEEK_API_KEY", "DSH_PERMISSION_MODE"}, mounts=… (state, "/state") …)`（`:408`）。所以要被它量的入口是 **CLI**，不是我們自己的基準跑者（eval 那條連會話註冊表都沒有，那是一個登記過的決定，見 `eval/runner.ts` 檔頭與 `eval/session-absence.test.ts`）。
+- **日誌刻意落在 harness 樹外面**：檔頭第 20 行 `.dsh-state/ DSH_HOME (sessions land here; not part of the harness)`，理由是那棵樹會被快照、被當成自我演化量進去。**我們的 `resolveSessionLogDir` 拒絕 `--workspace` 之內或之下的目錄**——同一條約束，兩邊各自到達（我們那條的出處是 [#170](https://github.com/DemianLi/nexus-agent/issues/170) 的「歷史是基礎建設，不是 agent 的工作區」）。
+- **它靠「不給旗標，日誌也會出現在一個已知目錄」**：adapter 傳的 env 只有那兩個，`DSH_HOME` 在 image 裡設好，然後 `root.rglob("session.jsonl.zstd")` 差集出這一 phase 新增的 session 目錄（`:302-304`、`:395`、`:421`）。**我們是每次呼叫的旗標、沒有預設路徑**，那是 [#172](https://github.com/DemianLi/nexus-agent/issues/172) 明文的設計選擇，[#174](https://github.com/DemianLi/nexus-agent/issues/174) 決定維持。
+- **它 mid-run 就在讀**（`:397-402` 的 `stop_check` 輪詢決定要不要停容器），所以「行程結束才 flush」不夠。我們的寫入是固定窗口到期就寫（`session-persistence.ts` 的 `#schedule()`），這條對得上。
+- `docs/ADAPTERS.md:112-115`：`read_trace` 是**唯一**的行為通道，而且明文「解析 harness 自己的日誌，不要為了測量往 harness 裡加儀器」。
+
+**所以這一列是 ⚠️ 而不是 ✅，代價落在寫 adapter 的人身上，不是落在這棵樹上**：他要明著傳 `--session-log`，而且 run 目錄的命名（`<ISO 時間戳>-<uuid8>/<檔名基底>.jsonl`，基底是 session id 的百分號編碼）要餵得進他的 glob。**這不是缺口，是一份給未來那張卡的規格。**
+
+第三列（具名的可編輯 surface）沒有變，而它現在是三個前提裡唯一還缺東西的那個——這也是 §五第 4 條的排序理由不再成立的原因，見該節。
 
 （子代理第一版寫「dsh 的 measurement 只有任務通過率」。那是 Proteus README 對「其他系統」的泛稱，不是對 dsh 的核對，已刪。）
 
@@ -238,11 +250,13 @@ Proteus 定義了「一個 harness 可以被量」的三個前提，對著我們
 
 ### 4. 持久化 —— 地圖，決策 4 的續集
 
-**缺什麼**：會話日誌在行程內（`session-log.ts` 對 `node:fs` 零命中）、checkpointer 是 `MemorySaver`、沒有 storage。行程一結束，會話、todo、goal、摘要事件全部消失。
+**2026-09-05：會話日誌那一軸已經做完**（[#172](https://github.com/DemianLi/nexus-agent/issues/172)、[#174](https://github.com/DemianLi/nexus-agent/issues/174)），下面留的是原文與逐條的現況。
 
-**為什麼需要**：三個獨立的理由指向它。(a) dsh `session/` 那組的 persistence seam（jsonl／sqlite）是它整個資料平面的地基；(b) #143 要留痕、#138 給了 subagent 各自的日誌——寫進一個不落盤的日誌，價值只到行程結束；(c) §4.5：被 Proteus 量的前提之二就是軌跡可讀。
+**缺什麼**：~~會話日誌在行程內~~（已落盤：CLI 與 `serve` 的 `--session-log <dir>`，JSONL，`jsonl-session-store.ts`）、checkpointer 仍是 `MemorySaver`、仍沒有 storage。行程一結束，todo、goal 與摘要事件仍然消失——**它們住在 graph state 裡，不在會話日誌裡**，所以那兩軸的缺席還是真的。
 
-**表達得出來嗎**：checkpointer 那軸 LangGraph 有現成的（`SqliteSaver`／`PostgresSaver`）；會話日誌那軸是我們自己的東西，落盤格式可以直接照 dsh 的 jsonl。決策 4 說三軸要一起收斂——這是它還沒收斂的原因，不是表達力問題。
+**為什麼需要**：三個獨立的理由指向它，**而 2026-09-05 三個都已經消耗掉了**。(a) dsh `session/` 那組的 persistence seam（jsonl／sqlite）是它整個資料平面的地基——照著做了；(b) #143 要留痕、#138 給了 subagent 各自的日誌——subagent 各自一個檔，懶建的沒寫過就沒有檔；(c) §4.5 的前提之二——已滿足，剩下的在 adapter 那側。**剩下兩軸（checkpointer／storage）今天零消費者**，[#155](https://github.com/DemianLi/nexus-agent/issues/155) 判過，理由記在 [#146](https://github.com/DemianLi/nexus-agent/issues/146) 的 Decisions 與 `.docs/development-plan.md` 決策 4 的補記。
+
+**表達得出來嗎**：checkpointer 那軸 LangGraph 有現成的（`SqliteSaver`／`PostgresSaver`，但它拉原生的 `better-sqlite3`，而 `onlyBuiltDependencies` 只放了 `esbuild`）；會話日誌那軸是我們自己的東西，落盤格式照了 dsh 的 jsonl。**「決策 4 說三軸要一起收斂」那句話本身是錯的**——[#155](https://github.com/DemianLi/nexus-agent/issues/155) 查出來那三軸（checkpointer／store／backend）問的都是「LangGraph 的狀態存在哪」，會話日誌不在其中任何一軸上；真正的三軸是**會話日誌／checkpointer／storage**，而三者的「何時寫／寫什麼／誰讀回」沒有一格重疊，所以不必也收不到一起去（`.docs/development-plan.md` 決策 4 的補記）。
 
 ### 5. Context 注入插件 —— 一張小卡，等第 3 條
 
@@ -256,7 +270,7 @@ dsh 有 in-process／fork／spawn／acp／claude-code／codex 六種委派後端
 
 - `shell`／`sandbox`／`subprocess`／`terminal`：決策 3 明文延後直到容器方案明朗；基座三條件互斥（`sandbox-backend-conflict.test.ts`）讓 QuickJS 走了 custom tool。
 - `jobs`／`schedule`／`workflow`／`extensions`／`session-query`／`workspace`：dsh 有、我們沒有、需求沒出現。
-- **Proteus 的測量軸**：不是我們的缺口，是「能不能被它量」——三個前提裡缺的那個就是第 4 條。持久化落地之後再開地圖，內容是：定義 surface、匯出軌跡、寫 adapter。
+- **Proteus 的測量軸**：不是我們的缺口，是「能不能被它量」。~~三個前提裡缺的那個就是第 4 條~~——**2026-09-05 起不是了**：持久化那一格已經落地（#172／#174），三個前提裡剩下的是**具名的可編輯 surface**（§4.5 第三列）。開地圖的條件因此已經滿足，內容仍是：定義 surface、匯出軌跡、寫 adapter，而「匯出軌跡」那一項現在是**寫 adapter 的人明著傳 `--session-log` 並認得 run 目錄的命名**，不是我們這側再補東西。
 
 ## 六、沒查清楚的
 

@@ -112,6 +112,25 @@ export interface ThreadAgent {
    * @returns 收掉這次接線的函式。
    */
   attachSession?(sessions: SessionRegistry): () => void;
+  /**
+   * 把這個 thread 的**每一份**會話日誌接上落盤，選配。
+   *
+   * **這一條與上面三條不同層**：那三個的答案來自 `createCliAgent`（掛了什麼 plugin
+   * 決定有沒有遙測後端、有沒有配套入口、有沒有參與者），而落盤與 plugin 清單無關
+   * ——它的答案來自**呼叫方式**（`serve.ts` 有沒有收到 `--session-log`）。所以組裝點
+   * 是 `runServe` 自己的閉包，不是 `createCliAgent` 的回傳值。
+   *
+   * **一個行程一個 store，一條 thread 一次接線。** store 開的 run 目錄是整個行程共用
+   * 的，每條 thread 的 root session id 就是它的 `threadId`，所以同一個目錄底下一條
+   * thread 一個檔（檔名的單射性見 `jsonl-session-store.ts` 的 `safeBaseName`——
+   * `threadId` 是呼叫端給的字串）。
+   *
+   * 前三個是觀察者，這一個是出口，所以排在最後——同 `cli.ts` 的接線順序。
+   *
+   * @param sessions - 這個 thread 的會話註冊表。
+   * @returns 收掉這次接線的方法（`dispose` 會排空並關檔），或沒開落盤時的 `undefined`。
+   */
+  attachPersistence?(sessions: SessionRegistry): { dispose(): Promise<void> } | undefined;
 }
 
 export interface WireHandlerOptions {
@@ -211,6 +230,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       // 那些東西該被已經在看的檢查看到。註冊表通知訂閱者的順序就是這三行的順序，
       // 所以 subagent 後來出生的那些日誌也照這個順序被接上。
       const detachSession = threadAgent.attachSession?.(pump.sessions);
+      // **接在最後，理由同 `cli.ts`**：前三個是觀察者，落盤不改變任何人看得到什麼，
+      // 所以順序在功能上沒有差別；排最後是為了讓讀的人看到的因果跟實際一致。
+      const persistence = threadAgent.attachPersistence?.(pump.sessions);
       return {
         pump,
         commands: threadAgent.commands,
@@ -230,6 +252,11 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           detachInvariants?.();
           // 遙測先收，理由同 `agent-factory.ts`：後端可能是某個 plugin 開的。
           await detachTelemetry?.();
+          // **落盤收在 agent 之前，但這一行的依據跟上面三條不一樣，別讀成驗過的因果。**
+          // 「有這一行」是量出來的（拿掉它，`serve` 那組落盤斷言會紅）；「排在
+          // `threadAgent.dispose()` 之前」是預防，今天的組裝分不出兩種順序——同
+          // `cli.ts` 關機那兩行的處境與措辭。
+          await persistence?.dispose();
           await threadAgent.dispose();
         },
       };

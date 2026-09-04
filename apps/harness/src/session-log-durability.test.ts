@@ -167,6 +167,59 @@ describe('日誌不落在 agent 的工作區裡', () => {
   });
 });
 
+/**
+ * 檔名基底的單射性——[#174](https://github.com/DemianLi/nexus-agent/issues/174)。
+ *
+ * CLI 的 session id 是我們自己造的（`cli`、`cli/<runId>`），怎麼壓平都不會撞；
+ * **`serve` 的是呼叫端給的**，所以壓平不再夠用。端到端那半在
+ * [`serve-session-log.test.ts`](./serve-session-log.test.ts)，這裡守的是後端本身：
+ * 兩條不同的 id 一定落成兩個檔，**長 id 也是**（那條路走的是截短加摘要，跟編碼那條
+ * 不是同一段程式碼）。
+ */
+describe('檔名基底是單射的', () => {
+  async function fileNames(ids: readonly string[]): Promise<readonly string[]> {
+    const root = await tmp('nexus-log-');
+    const store = createJsonlSessionStore({ rootDir: root });
+    for (const [index, id] of ids.entries()) {
+      const stored = store.create({ version: SESSION_LOG_FORMAT_VERSION, id, createdAt: index });
+      await stored.append([{ type: 'turn/start', seq: 0, time: index, data: { kind: 'resume' } }]);
+      await stored.close();
+    }
+    return (await readdir(store.directory)).filter((name) => name.endsWith('.jsonl')).sort();
+  }
+
+  it('壓平後同名的 id 各自一個檔', async () => {
+    // 舊規則把三個都變成 `a_b`。`~` 與 `!` 在 URL 路徑段裡都是合法字元。
+    expect(await fileNames(['a~b', 'a!b', 'a_b'])).toHaveLength(3);
+  });
+
+  it('subagent 的斜線還是不會變成子目錄，而且還讀得懂', async () => {
+    const names = await fileNames(['cli/run-1']);
+    expect(names).toEqual(['cli%2frun-1.jsonl']);
+  });
+
+  it('自己就帶百分號的 id 不會撞上被編碼出來的那個', async () => {
+    // **這是編碼那條規則的對抗案例**：`a~b` 編出來就是 `a%7eb`，所以一個字面上
+    // 帶著 `a%7eb` 的呼叫端必須落到別的地方去——`%` 自己也被編碼（`%25`）就是為了
+    // 這個。編碼錯了的話，剛修好的撞名會從這條路原封不動地回來。
+    expect(await fileNames(['a~b', 'a%7eb'])).toHaveLength(2);
+  });
+
+  it('只差大小寫的 id 也各自一個檔', async () => {
+    // macOS 與 Windows 的檔案系統預設不分大小寫，所以這一條在 Linux 上是恆真的，
+    // 在開發機上才擋得到東西——而開發機正是 `serve` 會被跑起來的地方。
+    expect(await fileNames(['Alpha', 'alpha'])).toHaveLength(2);
+  });
+
+  it('超長的 id 截短之後仍然分得開', async () => {
+    const prefix = 'z'.repeat(200);
+    const names = await fileNames([`${prefix}-one`, `${prefix}-two`]);
+    expect(names).toHaveLength(2);
+    // 截短是真的發生了，不是「剛好沒超過所以原樣寫下去」。
+    for (const name of names) expect(name.length).toBeLessThan(prefix.length);
+  });
+});
+
 describe('後端的兩條拒絕', () => {
   it('撞名時拒絕：不覆寫、也不續寫', async () => {
     const root = await tmp('nexus-log-');

@@ -34,7 +34,7 @@
 import { mkdir, open, writeFile } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { SessionEvent, SessionStore, StoredSession, StoredSessionHeader } from '@nexus/core';
 
 /**
@@ -47,14 +47,68 @@ const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 
 /**
- * 把 session id 變成一個安全的檔名基底。
+ * 檔名基底的長度上限。超過就截短並綴上摘要（見 {@link safeBaseName}）。
+ *
+ * 多數檔案系統的單段上限是 255 **位元組**，而中文一個字三個位元組，所以用字元數當
+ * 上限得留餘裕：120 個字元最壞情況是 360 位元組，加上 `.header.json` 還是進得去
+ * 255 的只有截短後那條路——所以截短的門檻設在遠低於上限的地方，不是貼著它。
+ */
+const MAX_BASE_LENGTH = 120;
+/** 截短後保留的前綴長度；其餘讓位給摘要。 */
+const TRUNCATED_PREFIX_LENGTH = 96;
+/** 摘要取幾個十六進位字元。48 bit，撞得到要靠刻意構造。 */
+const DIGEST_LENGTH = 12;
+
+/**
+ * 把 session id 變成一個安全的檔名基底，**而且是單射的**。
  *
  * subagent 的 id 是 `<root>/<runId>`，帶斜線，直接拿去當檔名會變成子目錄。
- * **會不會撞名不靠這個函式保證**——撞到的時候 `wx` 會拒絕（見模組說明）。
+ *
+ * ## 為什麼要單射：`serve` 的 session id 是呼叫端給的
+ *
+ * CLI 的 root 固定叫 `cli`，subagent 是 `cli/<runId>`——那組 id 是我們自己造的，怎麼
+ * 壓平都不會撞。**`serve` 不是**：`ThreadPump` 用 `new SessionRegistry(threadId)`
+ * 開 root（`thread-pump.ts:129`），而 `threadId` 直接來自 `/threads/:id/...` 的路徑。
+ * 把不合法字元一律換成 `_` 的話，`a~b`、`a!b`、`a_b` 三條不同的 thread 會壓成同一個
+ * 檔名——第二條的第一次寫入撞上 `wx` 而失敗，協調器按設計吞掉它（暫停自動路徑、
+ * 一行 warn），於是**那條 thread 的日誌就這麼沒了**。`wx` 那條拒絕是留給「未來的
+ * resume 誤開了已存的會話」的絆索，不是拿來擋這個的。
+ *
+ * ## 三條規則，各擋一種撞法
+ *
+ * 1. **百分號編碼，不壓平。** 不在 `[A-Za-z0-9._-]` 裡的位元組寫成 `%<小寫 hex>`，
+ *    而 `%` 自己也被編碼（`%25`），所以解得回去，也就撞不到。`cli`、`cli%2frun-1`
+ *    這種常見形狀仍然一眼看得懂。
+ * 2. **大寫字母另外收。** macOS 與 Windows 的檔案系統預設**不分大小寫**，所以
+ *    `Alpha` 與 `alpha` 在編碼之後仍然是同一個檔。把大寫字母也編碼會讓每一個
+ *    駝峰 id 變得不能讀，所以改成：**含大寫就綴上摘要**。編碼用的 hex 刻意是小寫的，
+ *    這樣這條規則只會被 id 自己的大寫觸發，不會被編碼觸發。
+ * 3. **超過 {@link MAX_BASE_LENGTH} 就截短並綴上摘要。** 截短之後的單射性靠那段
+ *    摘要，不靠前綴。
+ *
+ * 摘要是**完整 `sessionId`** 的 SHA-256 前 {@link DIGEST_LENGTH} 個十六進位字元。
+ * **那個輸入不能改成 `encoded`**：規則 3 先判、走的是提早回傳，所以又長又含大寫的 id
+ * 只拿得到截短那一顆摘要——它之所以同時擋得住大小寫，正是因為摘要算在原始 id 上。
+ * 換成算在 `encoded` 上的話，大小寫的撞名會只在長 id 上回來，而那條路沒有測試蓋到。
+ *
+ * @param sessionId - 會話 id。
+ * @returns 檔名基底；不同的 id 給出不同的基底，**而且在不分大小寫的檔案系統上也是**。
  */
 function safeBaseName(sessionId: string): string {
-  const cleaned = sessionId.replace(/[^A-Za-z0-9._-]/g, '_');
-  return cleaned.length === 0 ? 'session' : cleaned;
+  if (sessionId.length === 0) return 'session';
+  const digest = (): string =>
+    createHash('sha256').update(sessionId).digest('hex').slice(0, DIGEST_LENGTH);
+  const encoded = [...Buffer.from(sessionId, 'utf8')]
+    .map((byte) => {
+      const char = String.fromCharCode(byte);
+      return /[A-Za-z0-9._-]/.test(char) ? char : `%${byte.toString(16).padStart(2, '0')}`;
+    })
+    .join('');
+  if (encoded.length > MAX_BASE_LENGTH) {
+    return `${encoded.slice(0, TRUNCATED_PREFIX_LENGTH)}-${digest()}`;
+  }
+  // 編碼產生的 hex 是小寫的，所以這裡認出來的大寫一定來自 id 本身。
+  return encoded === encoded.toLowerCase() ? encoded : `${encoded}-${digest()}`;
 }
 
 /** 一份已存會話。IO 延後到第一次 {@link append} 或 {@link flush}。 */
