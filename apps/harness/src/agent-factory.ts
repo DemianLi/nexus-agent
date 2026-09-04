@@ -59,7 +59,7 @@ import {
   type RepeatReminderSettings,
   type SummarizationSettings,
 } from '@nexus/core';
-import { createDeepAgent, StateBackend } from 'deepagents';
+import { CompositeBackend, createDeepAgent, StateBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
 import { assertHarnessProfileDeclared } from './harness-profile.js';
@@ -280,6 +280,66 @@ export type NexusAgentHandle = Awaited<ReturnType<typeof createNexusAgent>>;
  *   `apply` 拋錯）、`invariants` 的 pattern 不合法、fold 的前置條件不成立，或基座自己在
  *   建構時擋下這份組裝——五種都在載入期發生，不會拖到跑起來才炸。
  */
+/**
+ * 基座把過大的工具結果搬去的那個路徑前綴。**抄自基座，不是我們選的。**
+ *
+ * `createFilesystemMiddleware` 的 `wrapToolCall` 在文字超過
+ * `4 * toolTokenLimitBeforeEvict`（預設 `2e4` → 80,000 字元）時寫
+ * `/large_tool_results/<sanitized tool_call_id>.txt`，然後把訊息換成頭尾預覽加一句
+ * 「用 `read_file` 自己去讀」（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:2416`
+ * 的 `processToolMessage`）。那個路徑是**寫死在基座裡的**，這裡只是把同一個字串說出來。
+ */
+export const TOOL_RESULT_STASH_PREFIX = '/large_tool_results';
+
+/**
+ * 把工具結果暫存那一格路由到獨立的 {@link StateBackend}，不讓它落在 agent 的工作區上。
+ *
+ * ## 它修的是一個會丟資料的缺陷（[#170](https://github.com/DemianLi/nexus-agent/issues/170)）
+ *
+ * 基座那次 `backend.write()` **失敗時不會保留原文**——它把訊息換成
+ * `Tool result too large, but the result could not be saved to the filesystem: <error>`
+ * （`:2437`），於是模型剛要到手的東西整個沒了，只剩一句「存不進去」。
+ *
+ * **而那不是稀有路徑。** `ContainedFilesystemBackend` 的 `read-only` mode 對**每一次**
+ * write 回 `{ error }`，所以那個組裝底下**每一則**超過 80,000 字元的工具結果都會這樣：
+ * 實測 80,014 個字元換成 166 個，模型接著 `read_file` 拿到 `ENOENT`。
+ *
+ * dsh 明文保證相反：`dsh-spill-policy` 的三個不變式之一是「spill 失敗保留原始內聯結果，
+ * 絕不把成功的呼叫變成錯誤」（`packages/spill/spill-policy/README.zh.md`，SHA `4e84901`）。
+ *
+ * ## 為什麼修在 backend 這一層，而不是包一層 middleware
+ *
+ * **因為原文在基座那一層裡面。** 我們自己的 `wrapToolCall` 包在外面時，拿到的已經是
+ * 基座換過的訊息；要握住原文得再有一層跑在裡面，兩層之間對 `tool_call_id`，而且
+ * 「認出基座失敗了」只能去比對那句英文——基座沒有給碼。路由讓那次 write **不會失敗**，
+ * 於是這些都不必發生。
+ *
+ * ## 為什麼是無條件的，不是「唯讀時才路由」
+ *
+ * `fold.ts` 已經畫過這條線：**歷史是基礎建設，不是 agent 的工作區**（摘要器因此拿的是
+ * default backend，不是折出來的那個）。工具結果暫存落在同一側 —— 它是 harness 的暫存，
+ * 不是模型在做的事。所以它不該取決於工作區的寫入政策：
+ *
+ * - **`read-only`**：那次 write 不再被 fence 擋掉，缺陷消失。
+ * - **`workspace-write`**：暫存不再落在使用者的專案目錄裡。今天它會留下永遠沒人清的
+ *   `<root>/large_tool_results/*.txt`；dsh 的 spill 同樣**不寫工作區**，它有自己的私有根。
+ * - **預設（`StateBackend`）**：路由到另一個 `StateBackend`，行為等價（實測）。
+ * - 而且它不必知道那次 write **為什麼**會失敗——`ENOSPC`、`EACCES`、掛載唯讀，一起蓋掉。
+ *
+ * **代價講明白：暫存改放在 graph state 裡，所以它進 checkpoint。** 預設組裝本來就是這樣，
+ * 但磁碟型的 backend 今天是把那段文字移出 state 的，這一改等於移回來。跑完之後它也不再
+ * 留在磁碟上供事後翻查。**與 dsh 的差別也在這裡**：它的 spill 存在宿主上一個私有目錄
+ * （0700／`open(…, 'wx', 0o600)`）並有保留期清理，我們換成 state —— 理由是 `read-only`
+ * 不該因為這件事開始碰磁碟，而且 state 不需要清理政策。要改成落盤的話，換的就是這裡
+ * 這一個路由目標。
+ *
+ * @param backend - 組裝點的 default backend。
+ * @returns 同一個 backend，外面包一層只有這一條路由的 `CompositeBackend`。
+ */
+function withToolResultStash(backend: AnyBackendProtocol): AnyBackendProtocol {
+  return new CompositeBackend(backend, { [TOOL_RESULT_STASH_PREFIX]: new StateBackend() });
+}
+
 export async function createNexusAgent(options: CreateNexusAgentOptions) {
   // **跑在 `loadPlugins` 之前**：它只看 `options.model`，這時候還沒有任何 plugin 開好資源，
   // 所以失敗了不必先 `dispose()`。其餘四種都在下面那個 try 裡，因為它們要等 registry。
@@ -294,7 +354,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     if (options.invariants !== undefined) assertInvariantSelection(options.invariants);
 
     const params = foldRegistry(registry, {
-      defaultBackend: options.backend ?? new StateBackend(),
+      defaultBackend: withToolResultStash(options.backend ?? new StateBackend()),
       toolOrder: options.toolOrder,
       baseToolNames: options.baseToolNames ?? BASE_TOOL_NAMES,
       model: options.model,
