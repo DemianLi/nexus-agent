@@ -16,7 +16,7 @@ import {
   modelGoneMessage,
   retryDecision,
 } from './live-model.js';
-import { ALL_MODELS_UNDER_TEST } from './eval/tiers.js';
+import { MEASURED_MODELS } from './eval/tiers.js';
 
 /**
  * 這組測試不打真實 API，也不需要任何 key —— CI 不放模型 secret（issue #31）。
@@ -59,12 +59,12 @@ describe('真實供應商的 key 處理', () => {
     expect(createLiveModel().model).toBe(LIVE_MODEL_ID);
   });
 
-  it('modelId 傳得進去，尺寸比較才換得動模型', () => {
+  it('modelId 傳得進去，eval:compare 才換得動模型', () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
-    for (const tier of ALL_MODELS_UNDER_TEST) {
+    for (const tier of MEASURED_MODELS) {
       const model = createLiveModel(tier.modelId);
       expect(model.model).toBe(tier.modelId);
-      // **換掉的只有 model。** 端點與取樣設定跟著變的話，比出來的差異就不只是尺寸。
+      // **換掉的只有 model。** 端點與取樣設定跟著變的話，比出來的差異就不只是模型。
       expect(model.clientConfig.baseURL).toBe(LIVE_BASE_URL);
       expect(model.temperature).toBe(1);
       expect(model.topP).toBe(0.95);
@@ -74,15 +74,19 @@ describe('真實供應商的 key 處理', () => {
   it('預設的那個 id 必須是我們真的量過的模型', () => {
     // **這條擋的是「憑感覺換預設」。** 上一個預設（`deepseek-v4-pro-0813`）從來不是被選出來的，
     // 它是 #57 那個不回應的模型的替代品，唯一判準是「回得出 tool_calls」——一次都沒有被
-    // 基準任務量過。現在的這個是 12 次取樣 × 5 階比出來的，這條斷言讓那件事在程式碼裡也成立：
-    // 換成一個沒進過 `ALL_MODELS_UNDER_TEST` 的 id，這裡當場紅。
-    expect(ALL_MODELS_UNDER_TEST.map((tier) => tier.modelId)).toContain(LIVE_MODEL_ID);
+    // 基準任務量過。現在的這個是 84 次執行的決選比出來的，這條斷言讓那件事在程式碼裡也成立：
+    // 換成一個沒進過 `MEASURED_MODELS` 的 id，這裡當場紅。
+    //
+    // **2026-09-05 換過載體。** 原本比的是 `ALL_MODELS_UNDER_TEST`（兩道尺寸階梯加判準對照），
+    // 而階梯在 #167 收掉了。階梯一直只是這條斷言順手的載體 —— 它要的是「量過的模型」，
+    // 那正是 `MEASURED_MODELS`。載體換了，擋的東西一個字都沒變。
+    expect(MEASURED_MODELS.map((model) => model.modelId)).toContain(LIVE_MODEL_ID);
   });
 
   it('逾時有上限 —— #57 的失敗模式是永遠不回來，沒有上限就是整輪比較沒有結果', () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
     expect(createLiveModel().timeout).toBe(LIVE_TIMEOUT_MS);
-    expect(createLiveModel(ALL_MODELS_UNDER_TEST[0]?.modelId).timeout).toBe(LIVE_TIMEOUT_MS);
+    expect(createLiveModel(MEASURED_MODELS[0]?.modelId).timeout).toBe(LIVE_TIMEOUT_MS);
   });
 
   /**

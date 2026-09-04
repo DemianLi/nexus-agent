@@ -224,6 +224,13 @@ pnpm --filter @nexus/harness run eval:compare --samples 2
 pnpm --filter @nexus/harness run eval:compare --cases edit-after-read --samples 3
 ```
 
+**2026-09-05 起這支不再是「尺寸比較」，兩道階梯收掉了（[#167](https://github.com/DemianLi/nexus-agent/issues/167)）。**
+它現在跑 `MEASURED_MODELS` —— 走完整基準任務量過的五個模型 —— 一段印完，多一個 `--models`
+可以挑子集。收的理由是端點把裝置拆了（`openai/gpt-oss-120b` 下架、`nemotron-3-nano-30b-a3b`
+從型錄消失，而這把 key 上湊不出第三道同家族的階梯），而**那條線本來就已經結案** ——
+下面那個「沒有尺寸效應」的結論是三輪量出來的，不受影響。要重建階梯的話，驗收條件寫在
+`src/eval/tiers.ts` 的檔頭。**以下這段記的是收掉之前的樣子。**
+
 同一份基準任務跑**兩道階梯**，只有 model 這一個參數不同：`openai/gpt-oss-20b` → `-120b`，
 以及 Nemotron-3 的 `nano-30b-a3b` / `super-120b-a12b` / `ultra-550b-a55b`。
 **一道階梯 = 一個家族**，所以「只有尺寸在變」只在階梯**內部**成立；報表因此按階梯分段印，

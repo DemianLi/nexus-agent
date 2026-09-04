@@ -19,13 +19,13 @@ import {
   HARD_CASES,
   type BenchmarkCase,
 } from './dataset.js';
-import type { ModelTier } from './tiers.js';
+import type { MeasuredModel } from './tiers.js';
 
-const TIER: ModelTier = {
+const TIER: MeasuredModel = {
   label: 'test',
   modelId: 'fake/model-1b-a1b',
-  totalBillions: 1,
-  activeBillions: 1,
+  measuredOn: '2026-01-01',
+  note: '假的 —— 這個檔案不連外。',
 };
 
 const ECHO_CASE = BENCHMARK[0] as BenchmarkCase;
@@ -402,7 +402,7 @@ describe('summarize：失敗不會被平均成零分', () => {
 
 describe('compareTiers', () => {
   it('依序跑完每一階，順序與傳進去的相同', async () => {
-    const tiers: readonly ModelTier[] = [
+    const tiers: readonly MeasuredModel[] = [
       { ...TIER, label: 'small', modelId: 'fake/small' },
       { ...TIER, label: 'large', modelId: 'fake/large' },
     ];
