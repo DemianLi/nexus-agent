@@ -143,7 +143,7 @@ exec.agent.session.append('todo/write', { todos })
 
 deepagents 對 **Codex 模型**（`openai:gpt-5.1-codex` / `5.2` / `5.3`）的 harness profile 會自動掛上 `todoListMiddleware`，也就是自動多一個 `write_todos` 工具。
 
-今天不影響我們：live model 是 `nvidia/nemotron-3-super-120b-a12b`（`apps/harness/src/live-model.ts:72`；2026-09-04 換掉已下架的 `openai/gpt-oss-120b`，見 #165），eval 的階梯也都不是 Codex。
+今天不影響我們：live model 是 `nvidia/nemotron-3-super-120b-a12b`（`apps/harness/src/live-model.ts:72`；2026-09-04 換掉已下架的 `openai/gpt-oss-120b`，見 #165），eval 量過的那五個模型也都不是 Codex。
 
 但 `apps/harness/src/base-tools.ts` 的 `BASE_TOOL_NAMES` 是**手抄的**基座工具名字宇宙，裡面沒有 `write_todos`。哪天真的切到 Codex 模型，基座會自己多掛一個不在我們宇宙裡的工具 —— 而 `baseline.test.ts` 那條全集斷言跑的是 `StateBackend` ＋ `ScriptedChatModel`，**它不會替我們紅**。
 
