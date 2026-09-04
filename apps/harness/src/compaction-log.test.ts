@@ -253,8 +253,12 @@ describe('subagent 那側', () => {
       },
     );
 
+    // 這一條是承重的：漏了 `foldSubAgents` 那一注 → 空的；身分算錯（一律解成 root）
+    //  → 也是空的。兩個突變都實測過，紅的都是這一條。
     expect(subagents.some((records) => records.length > 0)).toBe(true);
-    // root 這一場自己碰不到門檻——所以「有紀錄」只可能是從 subagent 那側合流過來的。
+    // **這一條不是第二道判準，是在釘 fixture 本身**：root 這一場自己碰不到門檻。
+    // 它紅的話代表壓力跑到 root 身上去了，上面那條就算綠也不再證明射程——所以它擋的是
+    // 「fixture 悄悄失效」，不是「實作寫錯」。
     expect(root).toEqual([]);
   });
 });
@@ -269,6 +273,9 @@ describe('subagent 那側', () => {
  */
 describe('日誌寫不進去的時候', () => {
   it('append 拋了，那一輪照樣跑完、歷史照樣寫出來', async () => {
+    // ⚠️ **這個 spy 打在 prototype 上，所以每一個寫日誌的人都在拋**——`model/usage` 那顆
+    // 也在裡面，而它同樣吃掉自己的錯。所以這條綠**不足以**單獨證明 `withCompactionLog`
+    // 有 try/catch；能證明的是「拿掉它會紅」，那個突變跑過了。
     const append = vi.spyOn(SessionLog.prototype, 'append').mockImplementation(() => {
       throw new Error('日誌壞了');
     });
