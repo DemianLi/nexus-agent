@@ -300,12 +300,47 @@ function withToolResultPruning(
     ...base,
     wrapModelCall: async (request, handler) => {
       const messages = request.messages ?? [];
-      if (!aboutToCompact(messages, trigger)) return inner(request, handler);
+      if (!isUnderCompactionPressure(effectiveMessages(messages, request.state), trigger))
+        return inner(request, handler);
       const { prunedCount, messages: pruned } = pruneToolResults(messages);
       if (prunedCount === 0) return inner(request, handler);
       return inner({ ...request, messages: [...pruned] }, handler);
     },
   } as AgentMiddleware;
+}
+
+/**
+ * **摘要器眼中的那一串訊息**，也就是量壓力該量的東西。
+ *
+ * 基座的每一步計量走的都是 `getEffectiveMessages(request.messages, request.state)`：
+ * 摘要發生過之後那是 `[摘要, ...messages.slice(cutoffIndex)]`——**一串短得多的東西**。
+ *
+ * 照 `request.messages` 原串去量會出一個很難看見的錯：**圖的狀態只會長不會縮**（原文都
+ * 還在，那正是這個做法「原文沒有消失」的另一面），所以門檻**從第一次摘要起就永遠成立**，
+ * 閘門卡在開，剪刀退化成「每次超預算就剪」——正是 [#149](https://github.com/DemianLi/nexus-agent/issues/149)
+ * 明著否掉的那筆偏離，也正是 dsh 那句「低于压力的对话绝不被碰」禁止的事。而它不會拋、
+ * 不會少剪，只會多剪，所以行為上幾乎看不出來。
+ *
+ * 這是**抄一份**基座那個函式，不是叫它——它沒有匯出。基座改了這個形狀時這裡不會紅，
+ * 紅的是 `summarization.test.ts` 那條「摘要之後照樣剪得到」加這個檔的單元測試。
+ *
+ * @param messages - 這次請求的訊息串。
+ * @param state - 這次請求的 graph state；摘要事件在裡面。
+ * @returns 摘要器會拿去計量的那一串。沒有摘要事件時就是原串。
+ */
+export function effectiveMessages(
+  messages: readonly BaseMessage[],
+  state: unknown,
+): readonly BaseMessage[] {
+  const event = (state as { readonly _summarizationEvent?: unknown } | null | undefined)
+    ?._summarizationEvent;
+  if (event === null || typeof event !== 'object') return messages;
+  const { summaryMessage, cutoffIndex } = event as {
+    readonly summaryMessage?: unknown;
+    readonly cutoffIndex?: unknown;
+  };
+  if (typeof cutoffIndex !== 'number' || summaryMessage === undefined) return messages;
+  return [summaryMessage as BaseMessage, ...messages.slice(cutoffIndex)];
 }
 
 /**
@@ -319,14 +354,16 @@ function withToolResultPruning(
  * 由它決定要不要摘要」，權威永遠是基座那次重算。所以這裡不必去補 `systemMessage` 與
  * `tools` 的額外開銷，寧可略估得小一點（少剪一次，不會剪錯）。
  *
+ * 但**允許不準不等於允許量錯東西**：要量的是 {@link effectiveMessages}，不是原串。
+ *
  * `countTokensApproximately` 是 `langchain` 的公開匯出，**基座的 `countTotalTokens` 底下
  * 叫的就是它**，不是我們另外估一套。
  *
- * @param messages - 這次請求的訊息串。
+ * @param messages - 摘要器眼中的那一串（{@link effectiveMessages} 的輸出）。
  * @param trigger - 我們配的那組門檻。
  * @returns 任何一道門檻成立就 `true`。
  */
-function aboutToCompact(
+export function isUnderCompactionPressure(
   messages: readonly BaseMessage[],
   trigger: readonly SummarizationThreshold[],
 ): boolean {

@@ -124,6 +124,8 @@ export type {
 export {
   createSummarizer,
   DEFAULT_SUMMARIZATION,
+  effectiveMessages,
+  isUnderCompactionPressure,
   resolveSummarizationSettings,
   SUMMARIZATION_MIDDLEWARE_NAME,
 } from './summarization.js';
