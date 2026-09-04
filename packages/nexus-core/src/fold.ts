@@ -276,7 +276,7 @@ export function foldRegistry(
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./containment.ts}。
   const containment = createContainmentMiddleware();
   const approvalGate = foldApprovalGate(registry, options);
-  const summarizer = foldSummarizer(options);
+  const summarizer = foldSummarizer(registry, options);
   const repeatReminder = foldRepeatReminder(options);
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./model-usage.ts}。
   const modelUsage = createModelUsageRecorder(registry.sessions);
@@ -634,8 +634,19 @@ function foldRepeatReminder(options: FoldOptions): AgentMiddleware | undefined {
  * [#142](https://github.com/DemianLi/nexus-agent/issues/142) 要消滅的狀態——它會長得
  * 跟「一切正常」一模一樣。同型的前例是 {@link foldBackend} 對「掛了路由卻沒給兜底」
  * 那條。**檢查跑在這裡一次**，工廠被呼叫幾次都不重驗。
+ *
+ * `registry.sessions` 一路傳下去是為了 `compaction/summary` 那顆事件
+ * （[#143](https://github.com/DemianLi/nexus-agent/issues/143)）。**它跟工廠不衝突**：
+ * 那個通道無狀態，逐個 agent 建的是摘要器不是它，每次呼叫現問「這次屬於哪一份日誌」。
+ *
+ * @param registry - 折的那張註冊表，這裡只用它的 `sessions`。
+ * @param options - 組裝點自有的那些。
+ * @returns 每呼叫一次就給一份新的摘要器，或 `undefined`。
  */
-function foldSummarizer(options: FoldOptions): (() => AgentMiddleware) | undefined {
+function foldSummarizer(
+  registry: PluginRegistry,
+  options: FoldOptions,
+): (() => AgentMiddleware) | undefined {
   if (options.summarization === false) return undefined;
   const settings = resolveSummarizationSettings(options.summarization);
   const backend = options.defaultBackend;
@@ -645,7 +656,7 @@ function foldSummarizer(options: FoldOptions): (() => AgentMiddleware) | undefin
         '地方放。給一個 default backend，或明著傳 `summarization: false` 退回基座那個' +
         '（那等於接受一組沒有人在檢查的門檻，見 #142）。',
     );
-  return () => createSummarizer(backend, settings);
+  return () => createSummarizer(backend, settings, registry.sessions);
 }
 
 /**
