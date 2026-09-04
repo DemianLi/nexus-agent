@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { ContextOverflowError } from '@langchain/core/errors';
 import { ChatOpenAI } from '@langchain/openai';
 
 /**
@@ -109,6 +110,98 @@ export function isRetryableRateLimit(error: unknown): boolean {
 }
 
 /**
+ * 我們送出去的輸出上限。
+ *
+ * **它是正數，而那是 {@link isDerivedContextOverflow} 唯一的前提。** 抽成常數不是為了
+ * 好改，是為了讓那個前提在型別旁邊看得見：改成會產生負值或零的東西，那個判別式當場失效。
+ */
+export const LIVE_MAX_OUTPUT_TOKENS = 16_384;
+
+/** `(parameter=max_tokens, value=-46771)`／`got -46771` 裡那個數字。 */
+const DERIVED_VALUE = /\(parameter=max_tokens,\s*value=(-?\d+)\)|got\s+(-?\d+)/;
+
+/**
+ * 這個 400 其實是**上下文溢出**嗎。
+ *
+ * ## 為什麼需要它：那條鏈在我們身上是斷的
+ *
+ * 基座的緊急摘要恢復認的是型別化的 `ContextOverflowError`，而那顆是
+ * `@langchain/openai` 的 `wrapOpenAIClientError` 在 adapter 層建出來的——條件是訊息命中
+ * 四個字串之一（`context_length_exceeded`／`Input tokens exceed the configured limit`／
+ * `exceeds the context window`／`maximum context length`）。
+ *
+ * **這個端點一個都不中，實測過**（2026-09-04，三種輸入尺寸，`openai/gpt-oss-20b`）：
+ *
+ * ```json
+ * {"error":{"message":"max_tokens must be at least 1, got -46771. (parameter=max_tokens, value=-46771)",
+ *           "type":"BadRequestError","param":"max_tokens","code":400}}
+ * ```
+ *
+ * 它**根本不是一句「上下文太長」**，是一句「導出來的參數不合法」——伺服器自己用
+ * `上限 − 輸入` 去導 `max_tokens`，導成負的就報這個。送不送 `max_tokens` 都一樣。
+ * 所以恢復路徑今天一次都不會觸發，而且是靜默的。
+ *
+ * ## 偏離登記一：分類該歸 adapter，我們退到最靠近它的地方
+ *
+ * dsh 寫得很清楚：「溢出分类由适配器维护——提供方措辞可能改变」
+ * （`compaction-basic/README.zh.md:241`），消費端只認規範碼；LangChain 與 LiteLLM 同形。
+ * **我們動不了 `@langchain/openai` 那支**，所以退到手上最靠近 adapter 的一格：建 client
+ * 的這個工廠。**不碰恢復那一層**——那一層基座已經有而且是對的（`context-overflow.test.ts`
+ * 量過：branded 的錯誤到得了 `isContextOverflow`，埋在 `cause` 底下也認得）。
+ *
+ * ## 偏離登記二：這裡**解析了訊息**，而這個檔的規矩是不解析
+ *
+ * {@link isRetryableRateLimit} 的檔頭寫著「照 dsh 的規矩認碼，不解析訊息」。這裡破了例，
+ * 理由是**結構化欄位不夠分**：body 只給得出 `param: "max_tokens"`，那個導出來的數字**只
+ * 存在於訊息裡**。而少了它，一顆「輸出上限比我們送的 16384 小」的模型會被誤判成上下文
+ * 溢出——那是一次壓縮救不回來的東西，壓幾次都一樣。
+ *
+ * 所以規則是：**結構化欄位當主判準（`param`），訊息只用來取那一個數字**，而且要求它
+ * 為負。正的數字代表伺服器在抱怨我們送的值，那不是溢出。
+ *
+ * ## 為什麼「負數」就足以斷定
+ *
+ * 實測：短提示詞 ＋ `max_tokens: -46771`（一個真正的 client bug）回的 body 與真的溢出
+ * **逐位元組相同**——單看 body 是**不可分辨**的。分得開的是請求那一側：
+ * {@link createLiveModel} 建的 client **恆定送 {@link LIVE_MAX_OUTPUT_TOKENS}（正數）**，
+ * 所以從這個 client 收到的負值只可能是伺服器自己算出來的。
+ *
+ * **前提由工廠保證，判別式就掛在工廠上**——這也是它不放進 `@nexus/core` 的理由：那裡沒有
+ * 那個前提。
+ *
+ * @param error - 供應商拋出來的東西，可能已經被包過好幾層。
+ * @returns 是不是一個「伺服器導出負 `max_tokens`」的溢出。
+ */
+export function isDerivedContextOverflow(error: unknown): boolean {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  for (let depth = 0; depth < 10; depth += 1) {
+    if (typeof current !== 'object' || current === null || seen.has(current)) return false;
+    seen.add(current);
+
+    // `param` 有兩個落點：OpenAI SDK 的 APIError 把它攤在頂層，原始 body 則包在 `error` 裡。
+    const body = (current as { error?: unknown }).error;
+    const param =
+      (current as { param?: unknown }).param ??
+      (typeof body === 'object' && body !== null ? (body as { param?: unknown }).param : undefined);
+    if (param === 'max_tokens') {
+      const message =
+        (current as { message?: unknown }).message ??
+        (typeof body === 'object' && body !== null
+          ? (body as { message?: unknown }).message
+          : undefined);
+      const matched = typeof message === 'string' ? DERIVED_VALUE.exec(message) : null;
+      const raw = matched?.[1] ?? matched?.[2];
+      // 取不到數字時**不猜**：寧可漏判（維持今天的行為），不要把別的 400 誤判成溢出。
+      if (raw !== undefined && Number(raw) < 0) return true;
+    }
+
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
  * HTTP 狀態碼裡「重試幾次都一樣」的那些。
  *
  * **這是 `@langchain/core@1.2.9` `async_caller.js` 的 `STATUS_NO_RETRY` 的複本。**
@@ -200,14 +293,32 @@ export function createLiveModel(modelId: string = LIVE_MODEL_ID): ChatOpenAI {
     configuration: { baseURL: LIVE_BASE_URL },
     temperature: 1,
     topP: 0.95,
-    maxTokens: 16384,
+    maxTokens: LIVE_MAX_OUTPUT_TOKENS,
     timeout: LIVE_TIMEOUT_MS,
     maxRetries: LIVE_MAX_RETRIES,
-    onFailedAttempt: (error) => {
-      if (retryDecision(error) === 'retry') return;
-      throw error;
-    },
+    onFailedAttempt: classifyFailedAttempt,
   });
+}
+
+/**
+ * 一次失敗要怎麼處置：先分類，再決定重試。
+ *
+ * **抽成具名的匯出，是為了它測得到。** 它是 `AsyncCaller` 的 `onFailedAttempt`，而
+ * 「`AsyncCaller` 到底會不會為一個不可重試的 400 叫它」是這條鏈上唯一還沒量過的一環
+ * ——寫成 closure 的話，不打真端點就驗不到。`live-model.test.ts` 拿一個 loopback
+ * 假端點把整條走一遍（零憑證、零外部連線）。
+ *
+ * **溢出的分類排在重試決策之前**，因為它換掉的是錯誤的**型別**而不是重試與否：
+ * `ContextOverflowError` 建構當下就標成不可重試（`stampRetryable(this, false)`），
+ * 而它本來就是個 400，兩條路的重試結論一致。
+ *
+ * @param error - 這次失敗的錯誤。
+ * @throws 要放棄時拋——溢出拋 branded 的那顆，其餘原樣拋。要重試就正常返回。
+ */
+export function classifyFailedAttempt(error: unknown): void {
+  if (isDerivedContextOverflow(error)) throw ContextOverflowError.fromError(error as Error);
+  if (retryDecision(error) === 'retry') return;
+  throw error;
 }
 
 /** 專案根目錄的 `.env`（已被 .gitignore 排除）。 */
