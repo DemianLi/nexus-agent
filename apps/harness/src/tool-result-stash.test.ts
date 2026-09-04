@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage, ToolMessage } from '@langchain/core/messages';
 import type { NexusPlugin } from '@nexus/core';
+import { MemorySaver } from '@langchain/langgraph';
 import type { AnyBackendProtocol } from 'deepagents';
 import { tool } from 'langchain';
 import { z } from 'zod';
@@ -165,6 +166,58 @@ describe('過大的工具結果搬走之後還取得回來', () => {
     const { first } = await fetchThenRead(SMALL, backend);
     expect(first).toContain(SMALL);
     expect(first).not.toContain('Tool result too large');
+  });
+});
+
+describe('暫存放在 graph state 裡，而且是逐 thread 的', () => {
+  /**
+   * **這條驗的是路由目標沒有自己的記憶體，所以也沒有跨對話的洩漏。**
+   *
+   * `new StateBackend()`（零參數）不是 legacy 模式：它從 LangGraph 的執行脈絡讀
+   * `files`、用 `__pregel_send` 送更新（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:737`
+   * 的 `isLegacy` / `get files`）。**那個物件本身不存東西**，所以「組裝點建了一個實例、
+   * 兩場對話共用它」不會發生 —— 但那是讀碼推的，這一條把它量出來：暫存進得了 state
+   * 快照（所以它也進 checkpoint，那是這個修法的代價），而另一個 thread 看不到它。
+   */
+  it('進得了 state 快照，而且另一個 thread 看不到', async () => {
+    const { backend } = await containedRoot('read-only');
+    const model = new ScriptedChatModel({
+      turns: [{ content: '', toolCalls: [{ name: 'bulk', args: {} }] }, { content: '好。' }],
+    });
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [bulkPlugin(OVERSIZED)],
+      backend,
+      checkpointer: new MemorySaver(),
+    });
+    const readState = (thread: string): Promise<{ values: Record<string, unknown> }> =>
+      (
+        agent as unknown as {
+          getState: (config: unknown) => Promise<{ values: Record<string, unknown> }>;
+        }
+      ).getState({ configurable: { thread_id: thread } });
+    try {
+      await agent.invoke(toAgentInvocation('去拿一坨超大的。'), {
+        configurable: { thread_id: 'stash' },
+      });
+
+      // **state 上的鍵不是模型看到的那個路徑。** 實測是 `//call_1_0.txt` —— composite 把
+      // 路由前綴剝掉之後交給 `StateBackend`，剝完的那一份就是鍵。取回沒問題（模型的
+      // `read_file` 走同一條路、剝同一段），所以這裡只斷言「它在 state 裡」，不把那個
+      // 剝法釘死；把前綴改成帶結尾斜線會讓鍵變成乾淨的 `/call_1_0.txt`，而那**更容易**
+      // 跟預設組裝裡模型自己的檔案撞在同一格 state 上，所以刻意不那樣寫。
+      const mine = Object.keys(
+        ((await readState('stash')).values.files ?? {}) as Record<string, unknown>,
+      );
+      expect(mine.filter((key) => key.endsWith('call_1_0.txt'))).toHaveLength(1);
+
+      const other = Object.keys(
+        ((await readState('別人')).values.files ?? {}) as Record<string, unknown>,
+      );
+      expect(other.filter((key) => key.endsWith('call_1_0.txt'))).toHaveLength(0);
+    } finally {
+      await dispose();
+    }
   });
 });
 
