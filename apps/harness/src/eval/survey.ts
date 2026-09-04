@@ -41,6 +41,34 @@
  * `--models` 排除，理由寫在報告裡而不是從清單裡刪掉。
  *
  * 完整結果見 [#85 的報告](https://github.com/DemianLi/nexus-agent/issues/85#issuecomment-5459133975)。
+ *
+ * ## 2026-09-04 複驗：這份清單有五個已經打不到了，**而它刻意沒改**
+ *
+ * [#165](https://github.com/DemianLi/nexus-agent/issues/165) 重跑了一次完整盤點
+ * （型錄 81、叫得動 26、**可用只剩 9**）。這份清單十六個裡有五個沒撐過去：
+ *
+ * | id | 2026-09-04 複驗 |
+ * | --- | --- |
+ * | `openai/gpt-oss-120b` | **下架**（410，EOL 2026-09-03），型錄上沒有了 |
+ * | `deepseek-ai/deepseek-v4-flash-0731` | **三次探測全 90 秒逾時** |
+ * | `deepseek-ai/deepseek-v4-pro-0813` | **三次全逾時** |
+ * | `meta/llama-3.2-90b-vision-instruct` | **三次全逾時** |
+ * | `moonshotai/kimi-k3` | **三次全逾時** |
+ *
+ * **不改是因為改它就是在替 demian 做 #85 的那個決定**：可用 9 < 10，而 #85 寫的退路是
+ * 「停下來、回報數字、提醒 demian」，他的決定是加 OpenRouter 的免費模型補齊。刪掉五個
+ * 會讓數字掉到 11 再往下，那不是我們這一側能決定的。
+ *
+ * **但不改不等於不說，所以這一段寫在這裡而不是只寫在報告裡。** 直接跑
+ * `eval:survey`（不帶 `--models`）今天的代價是：那四個逾時的每一次執行都會被重試滿
+ * `LIVE_MAX_RETRIES` 次、每次撐到 `LIVE_TIMEOUT_MS`（見 `live-model.ts`），**四個候選 × 七題 × 取樣次數，
+ * 全部是純等待**。**逾時不在 `retryDecision` 的放棄清單裡** —— 那跟 #165 剛修掉的 410
+ * 是同一類缺陷（永久性的失敗被當成瞬時的重試），只是還沒有人動它。要跑就先用
+ * `--models` 排掉這五個。
+ *
+ * {@link SURVEY_INVENTORY_DATE} 仍然是 `2026-08-29`，因為那才是這份**清單**成立的日期。
+ * 上面這五筆是複驗，不是新的盤點結果 —— 新的盤點在
+ * [`.docs/model-inventory.md`](../../../../.docs/model-inventory.md) 的「第三輪盤點」。
  */
 
 import type { ModelUnderTest } from './model-under-test.js';
