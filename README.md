@@ -44,6 +44,12 @@ pnpm --filter @nexus/harness run cli:live "..."             # 換成真實供應
 真正要試 agent 行為時用 `cli:live`。`--plugins <module>` 可以換掉預設的 plugin 清單
 （模組 `export default` 一個陣列）。
 
+**會話日誌預設不落盤。** `--session-log <dir>` 給了才寫，缺席就是只在記憶體裡活著
+（banner 上第六行會說現在是哪一種）。沒有預設路徑是刻意的：日誌裡有你打的每一句話，
+預設往家目錄寫是一個該由人做的決定。它不能指到 `--workspace` 底下 —— 寫在可寫根裡，
+模型自己 `read_file` 就讀得到、也改得動整份對話史。每一次啟動各自一個 run 目錄，
+一份會話一個 `.jsonl` 加一個 `.header.json`。
+
 **agent 迴圈有上限，而那個上限是組裝點設的不是基座設的。** `createDeepAgent` 自己把
 `recursionLimit` 設成 `1e4`（約 5,000 輪模型呼叫，等於沒有上限），所以
 `createNexusAgent` 蓋成 100（約 49 輪）。CLI、`serve`、eval 都吃這個值；真的需要更長的
