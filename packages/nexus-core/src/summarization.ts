@@ -41,8 +41,12 @@
  *
  * - **表達得出來的**：按模型選門檻（就是這個檔）、每個 subagent 都吃到同一份
  *   （`foldSubAgents` 打底）、歷史去處是獨立的一格（`backend` 參數）。
- * - **表達不出來的**：手動與指定範圍的動詞、鎖與事件三連、供應商回上下文溢出之後的
- *   壓縮重試。這幾項各自登記在 [#143](https://github.com/DemianLi/nexus-agent/issues/143)、
+ * - **部分表達得出來的**：事件三連退成**一顆**（`compaction/summary`，見
+ *   {@link withCompactionLog}）。鎖與 `start`／`end` 表達不出來——基座只在成功走完之後回一個
+ *   帶 `_summarizationEvent` 的 `Command`，沒有「開始壓縮」這個可觀測的時刻，硬記一顆
+ *   `start` 只能記在我們的猜測上。登記在
+ *   [#143](https://github.com/DemianLi/nexus-agent/issues/143)。
+ * - **表達不出來的**：手動與指定範圍的動詞、供應商回上下文溢出之後的壓縮重試。各自登記在
  *   [#149](https://github.com/DemianLi/nexus-agent/issues/149)、
  *   [#150](https://github.com/DemianLi/nexus-agent/issues/150)。
  *
@@ -64,6 +68,7 @@ import { createSummarizationMiddleware } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { countTokensApproximately } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import type { SessionLookup } from './registry.js';
 import { pruneToolResults } from './tool-result-pruner.js';
 
 /**
@@ -251,13 +256,24 @@ function assertThreshold(threshold: SummarizationThreshold, where: string): void
  * 那一段——所以一顆新名字的 middleware 一定排在它後面，也就是更**內層**，看到的已經是
  * 摘要器決定過的請求。詳見 {@link ./tool-result-pruner.ts} 檔頭的偏離登記二。
  *
+ * ## 它也負責把「壓縮發生過」記進日誌
+ *
+ * 同一層縫再包一次，方向相反：剪刀看的是**請求**，日誌看的是**回傳值**。基座只在成功
+ * 走完之後回一個 `new Command({ update: { _summarizationEvent } })`，而那個回傳值只有包住
+ * 它的人拿得到——一顆排在它後面的新名字 middleware 看到的是更內層，看不到它的回傳。
+ * 見 {@link withCompactionLog}。
+ *
  * @param backend - 歷史寫去哪。
  * @param settings - 補滿的設定，來自 {@link resolveSummarizationSettings}。
+ * @param sessions - 註冊表的 `sessions` 通道，用來問「這次壓縮該記進哪一份日誌」。
+ *   **省略即不記**，而那是常態不是異常：`eval/runner.ts` 與絕大多數測試的組裝都沒有
+ *   會話註冊表，它們不該為此拿到一個例外。同 {@link ./model-usage.ts} 的 `not-attached`。
  * @returns 可以直接放進 `middleware` 的 middleware。
  */
 export function createSummarizer(
   backend: AnyBackendProtocol,
   settings: SummarizationSettings,
+  sessions?: { forCall(config: unknown): SessionLookup },
 ): AgentMiddleware {
   const base = createSummarizationMiddleware({
     backend,
@@ -272,7 +288,10 @@ export function createSummarizer(
       }),
     },
   }) as unknown as AgentMiddleware;
-  return withToolResultPruning(base, settings.trigger);
+  // 兩層各管一個方向，刻意不合成一層：剪刀改請求、日誌讀回傳，合起來寫會讓兩個獨立的
+  // 失敗模式共用一個 try。順序無所謂——它們碰的不是同一樣東西。
+  const logged = sessions === undefined ? base : withCompactionLog(base, sessions);
+  return withToolResultPruning(logged, settings.trigger);
 }
 
 /**
@@ -307,6 +326,101 @@ function withToolResultPruning(
       return inner({ ...request, messages: [...pruned] }, handler);
     },
   } as AgentMiddleware;
+}
+
+/**
+ * 把「壓縮發生過」記進這次呼叫所屬的那一份會話日誌。
+ *
+ * ## 為什麼是包住它，而不是一顆新 middleware
+ *
+ * 基座交出摘要事件的方式**只有一個**：`performSummarization` 成功走完之後
+ * `return new Command({ update: { _summarizationEvent: {...}, _summarizationSessionId } })`
+ * （`dist/langsmith-zm0ILQsV.js:3181`）。那是一個**回傳值**，不是鉤子、不是廣播。所以：
+ *
+ * - 一顆新名字的 middleware 一定排在 `SummarizationMiddleware` 後面（更內層，見
+ *   {@link SUMMARIZATION_MIDDLEWARE_NAME}），它連那次呼叫都看不到，更別說回傳值。
+ * - 從 `request.state._summarizationEvent` 讀是**上一輪**留下的殘值，而 `filePath` 這一格
+ *   只在剛生出來的那一份上有意義（要的是「這次寫成功了沒」）。
+ * - 事後讀 `agent.getState(config)` 要求呼叫端有 checkpointer，而 `eval/runner.ts` 沒有。
+ *
+ * 包住它三個問題一起沒有：拿到的是當下、是完整的、而且不要求 checkpointer。
+ *
+ * ## subagent 那側**寫得進去**，而這是 #143 卡上決定 3 的反面
+ *
+ * 卡上原本判斷 subagent 的壓縮紀錄結構上取不到，依據是 `EXCLUDED_STATE_KEYS`（`:3263`）
+ * 把 `_summarizationEvent` 擋在「傳進／傳出 subagent」兩個方向之外。**那條擋的是 root 的
+ * 快照讀得到什麼，不是這裡。** 我們不經過 root 的 state：`foldSummarizer` 逐個 agent 建
+ * 一份摘要器，subagent 那份的 `wrapModelCall` 就在 subagent 自己的圖裡跑，回傳值當場拿到，
+ * 再用 `checkpoint_ns` 問這次呼叫屬於哪一份日誌——跟 `model/usage` 同一把鑰匙。
+ *
+ * ## 它不准拋
+ *
+ * `model/usage` 那顆坐在 request path 上就已經不准拋了；**這裡更嚴，因為這一層是同名
+ * 取代**：從這裡漏出去的錯不只是掉一行日誌，是把摘要器本身連根拔掉。所以 `forCall` 的
+ * 三種非 `ok` 與 `append` 自己拋（`snapshotJsonValue` 對非純 JSON 是當場拋的）全部吃掉。
+ *
+ * @param base - 基座那顆摘要器。
+ * @param sessions - 註冊表的 `sessions` 通道。
+ * @returns 同名、同狀態、多一層事後紀錄的 middleware。
+ */
+function withCompactionLog(
+  base: AgentMiddleware,
+  sessions: { forCall(config: unknown): SessionLookup },
+): AgentMiddleware {
+  const inner = base.wrapModelCall?.bind(base);
+  /* v8 ignore next -- 基座那顆一定有 wrapModelCall；沒有的話包了也沒意義，原樣回去。 */
+  if (inner === undefined) return base;
+  return {
+    ...base,
+    wrapModelCall: async (request, handler) => {
+      const response = await inner(request, handler);
+      const event = readSummarizationEvent(response);
+      if (event === undefined) return response;
+      try {
+        // `runtime.configurable` 就是 `forCall` 要的那份——包回一層 `configurable` 是因為
+        // 它收的是 handler 的 config 形狀，不是 configurable 本身。同 model-usage.ts。
+        const found = sessions.forCall({
+          configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
+        });
+        if (found.kind !== 'ok') return response;
+        found.log.append('compaction/summary', {
+          cutoffIndex: event.cutoffIndex,
+          messagesBefore: (request.messages ?? []).length,
+          filePath: event.filePath,
+        });
+      } catch {
+        // 記不進去不能反過來把摘要器殺掉。見上面最後一段。
+      }
+      return response;
+    },
+  } as AgentMiddleware;
+}
+
+/**
+ * 從摘要器的回傳值裡認出「這一次真的壓縮了」。
+ *
+ * **鴨子型別，不是 `instanceof Command`。** `Command` 是 `@langchain/langgraph` 的 class，
+ * 而 pnpm 的樹底下同一個套件可能有多份實例（基座相依的那份與我們相依的那份），
+ * `instanceof` 跨實例是 `false`——那種錯不會拋，只會讓事件永遠記不到。
+ *
+ * 沒壓縮的那些輪回的是模型的回應，`update` 這個 key 根本不存在，所以判別是乾淨的。
+ *
+ * @param response - 摘要器 `wrapModelCall` 的回傳值。
+ * @returns 這次壓縮的切點與落點，或 `undefined`（這一輪沒壓縮）。
+ */
+export function readSummarizationEvent(
+  response: unknown,
+): { cutoffIndex: number; filePath: string | null } | undefined {
+  if (typeof response !== 'object' || response === null) return undefined;
+  const update = (response as { update?: unknown }).update;
+  if (typeof update !== 'object' || update === null) return undefined;
+  const event = (update as { _summarizationEvent?: unknown })._summarizationEvent;
+  if (typeof event !== 'object' || event === null) return undefined;
+  const { cutoffIndex, filePath } = event as { cutoffIndex?: unknown; filePath?: unknown };
+  if (typeof cutoffIndex !== 'number') return undefined;
+  // `filePath` 是 `string | null`，而 `null` 是**有意義的那個值**（#66 的 fail-open），
+  // 所以它不能被當成「沒有」而讓整筆消失。其餘型別當成沒寫成功。
+  return { cutoffIndex, filePath: typeof filePath === 'string' ? filePath : null };
 }
 
 /**

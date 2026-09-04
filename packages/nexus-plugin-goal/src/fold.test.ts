@@ -381,6 +381,11 @@ describe('roundsStarted 恆為 0', () => {
     // 答案同樣是不推，理由跟 `todo/write` 同型但更遠：它一輪有幾格模型呼叫就有幾筆，
     // 而「叫了幾次模型」正是 `recursionLimit` 在管的東西，不是 `maxGoalRounds`。兩個
     // 預算數的是兩件事，讓其中一個去數另一個那件事，兩個都會失準。
+    //
+    // **`compaction/summary` 是第三次**（[#143](https://github.com/DemianLi/nexus-agent/issues/143)）。
+    // 不推，而這一次的理由最乾脆：它記的是**上下文被壓過一次**，跟目標推進到哪裡完全無關。
+    // 真要說有關係也是反向的——一場長任務壓縮得越多，代表它走得越久，讓它去推一個
+    // 「還能再問幾輪」的預算等於因為對話變長而扣使用者的額度。
     const KNOWN = [
       'turn/start',
       'turn/end',
@@ -391,6 +396,7 @@ describe('roundsStarted 恆為 0', () => {
       'goal/change',
       'todo/write',
       'model/usage',
+      'compaction/summary',
     ] as const;
     KNOWN satisfies readonly SessionEventType[];
     // 反過來這一條才是絆索：多一種而沒有列進來，`Exhaustive` 就變成 `never`。

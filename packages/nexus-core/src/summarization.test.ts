@@ -16,6 +16,7 @@ import {
   DEFAULT_SUMMARIZATION,
   effectiveMessages,
   isUnderCompactionPressure,
+  readSummarizationEvent,
 } from './summarization.js';
 import type { SummarizationThreshold } from './summarization.js';
 import { TOOL_RESULT_PRUNE_MARKER } from './tool-result-pruner.js';
@@ -166,5 +167,65 @@ describe('壓力閘門接在有效串上（接線）', () => {
     const seen = await messagesSeenByModel([{ type: 'messages', value: 6 }], withHugeTool(), {});
 
     expect(String(seen.at(-1)?.content)).toContain(TOOL_RESULT_PRUNE_MARKER);
+  });
+});
+
+/**
+ * **從摘要器的回傳值認出「這一輪真的壓縮了」。**
+ *
+ * 這是 `compaction/summary`（[#143](https://github.com/DemianLi/nexus-agent/issues/143)）
+ * 的判別式。它是鴨子型別而不是 `instanceof Command`，理由見 `summarization.ts`：pnpm 樹
+ * 底下同一個套件可能有多份實例，跨實例的 `instanceof` 是 `false`，而那種錯不會拋，只會讓
+ * 事件永遠記不到。
+ *
+ * 走 agent 迴圈驗得到「有記到」，但驗不到這些邊界——真的跑起來時 `filePath` 永遠是字串。
+ */
+describe('認出壓縮發生過', () => {
+  it('帶 `_summarizationEvent` 的 Command 形狀就是壓縮了', () => {
+    expect(
+      readSummarizationEvent({
+        update: { _summarizationEvent: { cutoffIndex: 12, filePath: '/h/s.md' } },
+      }),
+    ).toEqual({ cutoffIndex: 12, filePath: '/h/s.md' });
+  });
+
+  /**
+   * **`filePath: null` 是有意義的那個值，不是「沒有」。**
+   *
+   * 它正是 [#66](https://github.com/DemianLi/nexus-agent/issues/66) 那個 fail-open 的訊號
+   * ——歷史沒寫成功、原文就此消失，而基座對這件事只印一行 `console.warn`。把它當成缺值
+   * 而讓整筆事件消失的話，唯一一個耐久痕跡就沒了。
+   */
+  it('`filePath` 是 null 照樣記，那是 #66 的訊號', () => {
+    expect(
+      readSummarizationEvent({
+        update: { _summarizationEvent: { cutoffIndex: 3, filePath: null } },
+      }),
+    ).toEqual({ cutoffIndex: 3, filePath: null });
+  });
+
+  it('沒壓縮的那些輪回的是模型的回應，認不出東西來', () => {
+    expect(readSummarizationEvent(new AIMessage('好。'))).toBeUndefined();
+    expect(readSummarizationEvent(undefined)).toBeUndefined();
+    expect(readSummarizationEvent(null)).toBeUndefined();
+    expect(readSummarizationEvent({ update: null })).toBeUndefined();
+    expect(readSummarizationEvent({ update: {} })).toBeUndefined();
+  });
+
+  /** 形狀不對就整筆不要——`cutoffIndex` 不是數字的話，記下去也讀不出意義。 */
+  it('切點不是數字就整筆不記', () => {
+    expect(
+      readSummarizationEvent({ update: { _summarizationEvent: { filePath: '/h/s.md' } } }),
+    ).toBeUndefined();
+    expect(
+      readSummarizationEvent({ update: { _summarizationEvent: { cutoffIndex: '3' } } }),
+    ).toBeUndefined();
+  });
+
+  /** `filePath` 是別的型別時當成沒寫成功，不是讓整筆消失——同上一條的理由，方向相反。 */
+  it('`filePath` 型別不對就當成沒寫成功', () => {
+    expect(
+      readSummarizationEvent({ update: { _summarizationEvent: { cutoffIndex: 5, filePath: 7 } } }),
+    ).toEqual({ cutoffIndex: 5, filePath: null });
   });
 });

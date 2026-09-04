@@ -126,6 +126,7 @@ export {
   DEFAULT_SUMMARIZATION,
   effectiveMessages,
   isUnderCompactionPressure,
+  readSummarizationEvent,
   resolveSummarizationSettings,
   SUMMARIZATION_MIDDLEWARE_NAME,
 } from './summarization.js';
