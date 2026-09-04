@@ -129,10 +129,7 @@ export {
   resolveSummarizationSettings,
   SUMMARIZATION_MIDDLEWARE_NAME,
 } from './summarization.js';
-export type {
-  ToolResultPruneConfig,
-  ToolResultPruneResult,
-} from './tool-result-pruner.js';
+export type { ToolResultPruneConfig, ToolResultPruneResult } from './tool-result-pruner.js';
 export {
   assertToolResultPruneConfig,
   codePointLength,

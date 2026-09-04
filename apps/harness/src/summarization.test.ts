@@ -1270,9 +1270,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
     }
 
     expect(model.prompts).toHaveLength(2);
-    expect(String(toolResults(model.prompts[1]!)[0]!.content)).toContain(
-      TOOL_RESULT_PRUNE_MARKER,
-    );
+    expect(String(toolResults(model.prompts[1]!)[0]!.content)).toContain(TOOL_RESULT_PRUNE_MARKER);
   });
 
   /**
@@ -1382,9 +1380,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
 
     // 第三次呼叫是 subagent 收到工具結果之後那一輪。
     expect(model.prompts.length).toBeGreaterThanOrEqual(3);
-    expect(String(toolResults(model.prompts[2]!)[0]!.content)).toContain(
-      TOOL_RESULT_PRUNE_MARKER,
-    );
+    expect(String(toolResults(model.prompts[2]!)[0]!.content)).toContain(TOOL_RESULT_PRUNE_MARKER);
   });
 
   /**

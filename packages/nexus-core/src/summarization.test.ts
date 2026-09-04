@@ -53,9 +53,9 @@ describe('摘要器眼中的訊息串', () => {
     const messages = longHistory(10);
     expect(effectiveMessages(messages, { _summarizationEvent: null })).toBe(messages);
     expect(effectiveMessages(messages, { _summarizationEvent: { cutoffIndex: 8 } })).toBe(messages);
-    expect(
-      effectiveMessages(messages, { _summarizationEvent: { summaryMessage: SUMMARY } }),
-    ).toBe(messages);
+    expect(effectiveMessages(messages, { _summarizationEvent: { summaryMessage: SUMMARY } })).toBe(
+      messages,
+    );
   });
 });
 

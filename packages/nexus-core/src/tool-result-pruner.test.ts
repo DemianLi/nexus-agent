@@ -140,12 +140,7 @@ describe('剪一整串訊息', () => {
 
     expect(prunedCount).toBe(1);
     expect(next).toHaveLength(messages.length);
-    expect(next.map((message) => message.getType())).toEqual([
-      'human',
-      'ai',
-      'tool',
-      'ai',
-    ]);
+    expect(next.map((message) => message.getType())).toEqual(['human', 'ai', 'tool', 'ai']);
   });
 
   it('只換 content，其餘欄位原樣帶過', () => {
