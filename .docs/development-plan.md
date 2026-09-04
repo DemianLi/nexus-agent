@@ -508,6 +508,10 @@ eval 跑的是真的 agent，基準任務的題目與工具參數會跟著 trace
 
    **checkpointer 與 store 兩軸維持在 `MemorySaver` 與「未選」，理由是收下 `@langchain/langgraph-checkpoint-postgres` 會把一個活的 Postgres 拖進測試路徑**，而 CI 上沒有任何服務憑證（[#31](https://github.com/DemianLi/nexus-agent/issues/31)），測試必須是自足的。版本層級也仍然懸在那張 PR 上（見第 3 節鎖死那一列）。這兩軸目前**沒有可執行證據**，只有寫下來的判斷——照實記著，別讓它看起來像已經驗過。
 
+   **補（2026-09-05，[#155](https://github.com/DemianLi/nexus-agent/issues/155)）：這裡少了一軸，而少掉的那一軸才是先落地的那個。** 上面三軸（checkpointer／store／backend）問的都是「LangGraph 的狀態存在哪」；**會話事件日誌不在其中任何一軸上**——它不是 thread 內的對話狀態、不是跨 thread 的 KV、也不是模型看得到的檔案系統。照 dsh 的分法（`session-persistence` 與 `storage` 是兩個獨立 seam，而 LangGraph 那種狀態快照在 dsh **根本沒有對應物**，因為它的日誌就是真相、投影只是帶版本的快取），我們這側真正的三軸是**會話日誌／checkpointer／storage**，而且三者的「何時寫／寫什麼／誰讀回」沒有一格重疊，所以不必也收不到一起去。
+
+   **只有會話日誌那一軸做了**（[#172](https://github.com/DemianLi/nexus-agent/issues/172)，`--session-log <dir>`，JSONL）。另外兩軸今天**零消費者**：三個入口都沒有跨重啟的續接（`wire-handler.ts` 那個 `resume` 是行程內的 HITL），而 eval 的「沒有 checkpointer」是承重的（`eval/runner.ts` 那段註解）。落盤的 checkpointer 裝得起來已驗（`@langchain/langgraph-checkpoint-sqlite@1.0.4` 的 peer 全過，`@langchain/langgraph-checkpoint` 已經是 `apps/harness` 的直接相依），**但它拉原生的 `better-sqlite3`，而我們的 `onlyBuiltDependencies` 只放了 `esbuild`**——JSONL 那條零原生相依，這個不對稱本身就是先做日誌軸的理由。要做 checkpointer 那一軸時，第一件事是 [#170](https://github.com/DemianLi/nexus-agent/issues/170) 的工具結果暫存：它進 graph state、逐 thread，**會進 checkpoint**，落盤之後就變成需要保留策略的磁碟成本。
+
 5. **結果校驗範圍（Phase 4 前）**：需定義「校驗什麼」——schema、不變量、還是業務規則。屆時拍板。
 6. **`apps/web` 與 agent 之間的傳輸**（Phase 5 拍板）：原文從沒把它記成決策點，「現有骨架續用」那句把它藏起來了（見第 5 節 Phase 5）。**決定：上行 HTTP POST，下行單向事件串流；下行載體先做 SSE，WebSocket 覆寫留到需要時再加。形狀不變，但依據換了一半 —— 見下面「動工前一驗」。**
 
