@@ -42,18 +42,29 @@
  * - **表達得出來的**：按模型選門檻（就是這個檔）、每個 subagent 都吃到同一份
  *   （`foldSubAgents` 打底）、歷史去處是獨立的一格（`backend` 參數）。
  * - **表達不出來的**：手動與指定範圍的動詞、鎖與事件三連、供應商回上下文溢出之後的
- *   壓縮重試（`overflow` / `context_length` / `contextWindow` 三個字串在整份 dist 裡
- *   零命中）。這幾項各自登記在 [#143](https://github.com/DemianLi/nexus-agent/issues/143)、
+ *   壓縮重試。這幾項各自登記在 [#143](https://github.com/DemianLi/nexus-agent/issues/143)、
  *   [#149](https://github.com/DemianLi/nexus-agent/issues/149)、
  *   [#150](https://github.com/DemianLi/nexus-agent/issues/150)。
+ *
+ *   ⚠️ **最後一項的理由要修正。** 這裡原本寫的是「`overflow` / `context_length` /
+ *   `contextWindow` 三個字串在整份 dist 裡零命中」——那句話字面上還是真的（三個都是 0），
+ *   但**由它推出的「沒有任何恢復路徑」是錯的**。2026-09-04 重新查證：`ContextOverflowError`
+ *   （`@langchain/core/errors`）在 dist 裡有 5 處，`isContextOverflow` 沿著 `cause` 鏈認它，
+ *   而摘要器有一條**緊急摘要**的恢復路徑掛在上面（`dist/langsmith-zm0ILQsV.js:3126`、
+ *   `:3151`、`:3168`、`:3225`）。分類靠的是**型別化的錯誤**，不是字串嗅探。
+ *   還沒查的是「我們的 `ChatOpenAI` 會不會真的拋出那個型別」——那正是 #150 的題目，
+ *   它不該從一個錯的前提開始。
  * - **退到最接近的實作**：dsh 的門檻是比例（吃得到窗口大小），我們退到它提供的另一個
  *   形式——絕對值（`retainTokens` 那條路）。代價是那個數字**手維護**，所以配了一條絆索：
  *   模型解得出 `maxInputTokens` 的那天要紅。
  */
 
+import type { BaseMessage } from '@langchain/core/messages';
 import { createSummarizationMiddleware } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
+import { countTokensApproximately } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import { pruneToolResults } from './tool-result-pruner.js';
 
 /**
  * 基座那個 middleware 的名字。
@@ -229,6 +240,17 @@ function assertThreshold(threshold: SummarizationThreshold, where: string): void
  * backend 不必是 agent 的。fold 餵進來的是組裝點的 default backend 而不是折出來的
  * `CompositeBackend`，理由見 `foldRegistry`。
  *
+ * ## 它外面還包了一把剪刀
+ *
+ * 回傳的不是基座那顆本人，是**它加一層前處理**：壓力達標時先剪掉過大的工具結果，再把
+ * 剪過的訊息串交給基座那顆去決定要不要摘要。剪完壓力若已消失，基座自己會判 `false`，
+ * **那一輪摘要用的模型呼叫就不會發生**。
+ *
+ * **包住它是唯一的做法，不是偏好。** 基座的 `mergeMiddlewareStack` 回的是
+ * `[...預設（同名就地取代）, ...新名字的, ...tail]`，而 `SummarizationMiddleware` 在預設
+ * 那一段——所以一顆新名字的 middleware 一定排在它後面，也就是更**內層**，看到的已經是
+ * 摘要器決定過的請求。詳見 {@link ./tool-result-pruner.ts} 檔頭的偏離登記二。
+ *
  * @param backend - 歷史寫去哪。
  * @param settings - 補滿的設定，來自 {@link resolveSummarizationSettings}。
  * @returns 可以直接放進 `middleware` 的 middleware。
@@ -237,7 +259,7 @@ export function createSummarizer(
   backend: AnyBackendProtocol,
   settings: SummarizationSettings,
 ): AgentMiddleware {
-  return createSummarizationMiddleware({
+  const base = createSummarizationMiddleware({
     backend,
     trigger: settings.trigger.map((threshold) => ({ ...threshold })),
     keep: { ...settings.keep },
@@ -250,4 +272,105 @@ export function createSummarizer(
       }),
     },
   }) as unknown as AgentMiddleware;
+  return withToolResultPruning(base, settings.trigger);
+}
+
+/**
+ * 把一把剪刀包在摘要器外面。
+ *
+ * 基座那顆是一個普通物件（`name` / `stateSchema` / `wrapModelCall` ／其餘鉤子皆為
+ * `undefined`，全部可列舉），所以展開它就能原封不動保住 `name` 與 `stateSchema`——
+ * **這兩樣少一樣，同名取代就不成立、狀態就對不上**，實測過才這樣寫。
+ *
+ * 這一層**沒有 closure 狀態**，所以 `foldSummarizer` 逐個 agent 建一份的理由沒有變多也
+ * 沒有變少，還是原本那一條（基座那顆的 `sessionId` 在它自己的 closure 裡）。
+ *
+ * @param base - 基座那顆摘要器。
+ * @param trigger - 我們配的那組門檻，同時當成「壓縮即將運行」的判準。
+ * @returns 同名、同狀態、外面多一層前處理的 middleware。
+ */
+function withToolResultPruning(
+  base: AgentMiddleware,
+  trigger: readonly SummarizationThreshold[],
+): AgentMiddleware {
+  const inner = base.wrapModelCall?.bind(base);
+  /* v8 ignore next -- 基座那顆一定有 wrapModelCall；沒有的話包了也沒意義，原樣回去。 */
+  if (inner === undefined) return base;
+  return {
+    ...base,
+    wrapModelCall: async (request, handler) => {
+      const messages = request.messages ?? [];
+      if (!isUnderCompactionPressure(effectiveMessages(messages, request.state), trigger))
+        return inner(request, handler);
+      const { prunedCount, messages: pruned } = pruneToolResults(messages);
+      if (prunedCount === 0) return inner(request, handler);
+      return inner({ ...request, messages: [...pruned] }, handler);
+    },
+  } as AgentMiddleware;
+}
+
+/**
+ * **摘要器眼中的那一串訊息**，也就是量壓力該量的東西。
+ *
+ * 基座的每一步計量走的都是 `getEffectiveMessages(request.messages, request.state)`：
+ * 摘要發生過之後那是 `[摘要, ...messages.slice(cutoffIndex)]`——**一串短得多的東西**。
+ *
+ * 照 `request.messages` 原串去量會出一個很難看見的錯：**圖的狀態只會長不會縮**（原文都
+ * 還在，那正是這個做法「原文沒有消失」的另一面），所以門檻**從第一次摘要起就永遠成立**，
+ * 閘門卡在開，剪刀退化成「每次超預算就剪」——正是 [#149](https://github.com/DemianLi/nexus-agent/issues/149)
+ * 明著否掉的那筆偏離，也正是 dsh 那句「低于压力的对话绝不被碰」禁止的事。而它不會拋、
+ * 不會少剪，只會多剪，所以行為上幾乎看不出來。
+ *
+ * 這是**抄一份**基座那個函式，不是叫它——它沒有匯出。基座改了這個形狀時這裡不會紅，
+ * 紅的是 `summarization.test.ts` 那條「摘要之後照樣剪得到」加這個檔的單元測試。
+ *
+ * @param messages - 這次請求的訊息串。
+ * @param state - 這次請求的 graph state；摘要事件在裡面。
+ * @returns 摘要器會拿去計量的那一串。沒有摘要事件時就是原串。
+ */
+export function effectiveMessages(
+  messages: readonly BaseMessage[],
+  state: unknown,
+): readonly BaseMessage[] {
+  const event = (state as { readonly _summarizationEvent?: unknown } | null | undefined)
+    ?._summarizationEvent;
+  if (event === null || typeof event !== 'object') return messages;
+  const { summaryMessage, cutoffIndex } = event as {
+    readonly summaryMessage?: unknown;
+    readonly cutoffIndex?: unknown;
+  };
+  if (typeof cutoffIndex !== 'number' || summaryMessage === undefined) return messages;
+  return [summaryMessage as BaseMessage, ...messages.slice(cutoffIndex)];
+}
+
+/**
+ * 壓力到了沒。
+ *
+ * dsh 那側「低于压力的对话绝不被碰」是**呼叫端**的性質——`compaction-basic` 壓力達標才
+ * `pruneSession()`。我們的對應就是「基座摘要器這一輪會不會觸發」，所以這裡照抄它
+ * `shouldSummarize` 的判準：門檻陣列並聯，任何一道成立就算壓力到了。
+ *
+ * **這個量測允許不準。** 因果鏈是「我們決定要不要試著剪 → 剪 → **基座自己重新計量**、
+ * 由它決定要不要摘要」，權威永遠是基座那次重算。所以這裡不必去補 `systemMessage` 與
+ * `tools` 的額外開銷，寧可略估得小一點（少剪一次，不會剪錯）。
+ *
+ * 但**允許不準不等於允許量錯東西**：要量的是 {@link effectiveMessages}，不是原串。
+ *
+ * `countTokensApproximately` 是 `langchain` 的公開匯出，**基座的 `countTotalTokens` 底下
+ * 叫的就是它**，不是我們另外估一套。
+ *
+ * @param messages - 摘要器眼中的那一串（{@link effectiveMessages} 的輸出）。
+ * @param trigger - 我們配的那組門檻。
+ * @returns 任何一道門檻成立就 `true`。
+ */
+export function isUnderCompactionPressure(
+  messages: readonly BaseMessage[],
+  trigger: readonly SummarizationThreshold[],
+): boolean {
+  for (const threshold of trigger) {
+    if (threshold.type === 'messages' && messages.length >= threshold.value) return true;
+    if (threshold.type === 'tokens' && countTokensApproximately([...messages]) >= threshold.value)
+      return true;
+  }
+  return false;
 }

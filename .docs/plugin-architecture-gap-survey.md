@@ -102,7 +102,7 @@
 | 5 | `bundle` | 現成的 profile bundle：base／headless／web-app／acp-app／sdk-app／sdk-minimal | 沒有。組裝由 `createNexusAgent` 的呼叫端逐一寫 | 沒有 |
 | 6 | `client` | web GUI 瀏覽器側：外殼、Remote 通訊、40 多個 `ui-*` 功能插件 | `apps/web/src/`：`App.tsx`＋`transcript`／`approval-card`／`status-line` 三個元件。功能對得上三格；不是插件化 UI | 部分 |
 | 7 | `code-runtime` | 程式碼執行 seam：python、worker-thread 兩個提供方 | `@nexus/plugin-quickjs`：一個 JS 直譯器、走 custom tool。不是 seam | 部分 |
-| 8 | `compaction` | 自動壓縮、按需 `/compact`、工具輸出修剪 | 基座無條件掛 `SummarizationMiddleware`；門檻是基座選的（對我們的模型退到 fallback 常數）、subagent 射程、留痕、`/compact`、pruner、溢出恢復全缺。#142 三個決定已做、#143 等它 | 部分 |
+| 8 | `compaction` | 自動壓縮、按需 `/compact`、工具輸出修剪 | 基座無條件掛 `SummarizationMiddleware`。門檻與 subagent 射程已由 #142 收回（`createSummarizer` 同名取代 ＋ `foldSubAgents` 打底）；**工具結果修剪已由 #149 補上**，包在同名摘要器外面、壓力達標才剪、剪完可讓摘要那次模型呼叫整個不發生（射程 8,192–80,000 字元，上界是基座自己的 `toolTokenLimitBeforeEvict`）。仍缺：留痕（#143）、`/compact`、溢出恢復（#150）、修剪原文落日誌（等 #155） | 部分 |
 | 9 | `context` | 不定義工具、每次請求加模型可見上下文：`agent-instructions`（AGENTS.md）、`time-context`、`file-reference`、`session-reference`、`tmux-context` | `@nexus/plugin-memory` ≈ `agent-instructions`（靠基座 `createMemoryMiddleware`）。其餘四個沒有 | 部分 |
 | 10 | `core` | 會話日誌、系統提示詞組裝、工具註冊表、agent 詞彙與預設迴圈、scope | `session-log.ts`（會話日誌）、`registry.tools`＋`fold.ts`＋`base-tools.ts`（工具註冊與呈現順序）、迴圈外包 deepagents、系統提示詞由基座組而 `harness-profile.ts`（#141）守著它。沒有 `ctx` 服務樹——那是 Cordis 的 | 有 |
 | 11 | `credentials` | 憑證引用 seam：設定裡只放引用不放值、按操作解析、環境與檔案提供方 | 沒有 seam。`docs/standards.md:19-25` 是規範（一律環境變數、不得有 fallback），不是機制 | 沒有 |
