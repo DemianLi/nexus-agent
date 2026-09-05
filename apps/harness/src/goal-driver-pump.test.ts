@@ -345,6 +345,33 @@ describe('掛了旗標', () => {
     await stop();
   });
 
+  /**
+   * **收線之後日誌上不會再多一顆事件。** dsh 的 teardown 也是這樣：關掉準入、取消進行
+   * 中的、等停穩。
+   *
+   * 擋住那一輪的是 `submit()` 自己的拒絕（收線之後它一律 reject），不是
+   * `#driveGoalRound` 裡那兩處 `#closed`——那兩處只是提早退出，量過拿掉行為不變。
+   * 這一條釘的是**結果**：thread 收掉之後沒有人再寫得進去。
+   */
+  it('close 之後一輪都不再排', async () => {
+    const { pump, stop } = await build({
+      turns: [...CREATE_TURNS, QUIET],
+      threadId: 'driver-closed',
+      withDriver: true,
+      portOverrides: {
+        // 在檢查點裡收線：排程器算完那一輪之後才會發現 thread 已經沒了。
+        flush: () => {
+          pump.close();
+          return Promise.resolve();
+        },
+      },
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['message']);
+    await stop();
+  });
+
   /** 沒有 goal 域（`--plugins` 換掉了預設清單）時安靜地什麼都不做。 */
   it('查不到域就不排，也不吭聲', async () => {
     const { pump, port, stop } = await build({
