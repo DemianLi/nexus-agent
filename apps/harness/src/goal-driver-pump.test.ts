@@ -70,13 +70,15 @@ async function build(options: {
     checkpointer: new MemorySaver(),
     onInvariantViolation: (error) => void violations.push(error.message),
   });
-  let pump!: ThreadPump;
-  const port = portFor(plugin, () => pump.sessionLog, options.portOverrides ?? {});
-  pump = new ThreadPump(
+  // 同 `wire-handler.ts`：port 要日誌，而日誌由 pump 建，而 pump 的建構參數是 port。
+  const late: { log?: SessionLog } = {};
+  const port = portFor(plugin, () => late.log as SessionLog, options.portOverrides ?? {});
+  const pump = new ThreadPump(
     agent as unknown as PumpAgent,
     options.threadId,
     options.withDriver ? port : undefined,
   );
+  late.log = pump.sessionLog;
   // **伴生接在參與者之前**，同 `wire-handler.ts` 那條線的順序：參與者一裝上去就可能記
   // 東西，而那些東西該被已經在看的檢查看到。
   const detachInvariants = attachInvariants(pump.sessions);
@@ -233,7 +235,7 @@ describe('掛了旗標', () => {
    * 在有排程器參與時照樣成立：人送進來的那一句不會被續行擠掉、也不會排到它後面去。
    */
   it('flush 期間人插話，那一筆排在續行前面', async () => {
-    let pumpRef: ThreadPump | undefined;
+    const ref: { pump?: ThreadPump } = {};
     let injected = false;
     const { pump, stop } = await build({
       turns: [...CREATE_TURNS, { content: '收到。' }],
@@ -241,15 +243,15 @@ describe('掛了旗標', () => {
       withDriver: true,
       portOverrides: {
         flush: () => {
-          if (!injected && pumpRef !== undefined) {
+          if (!injected && ref.pump !== undefined) {
             injected = true;
-            void pumpRef.submit({ kind: 'message', text: '等等，先看這個' }).catch(() => {});
+            void ref.pump.submit({ kind: 'message', text: '等等，先看這個' }).catch(() => {});
           }
           return Promise.resolve();
         },
       },
     });
-    pumpRef = pump;
+    ref.pump = pump;
     await pump.submit({ kind: 'message', text: '把 CI 修綠' });
     await settle(pump);
     // 人那一筆排在續行前面，續行照樣拿得到它那一輪（上限是 1，剛好一輪）。

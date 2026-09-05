@@ -245,14 +245,22 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     const created = (async (): Promise<ThreadState> => {
       const threadAgent = await options.createAgent(threadId);
       // **三個東西互相要對方，所以綁定是延後的**：port 要日誌（pump 才有）與 flush
-      // （協調器才有），而 pump 的建構參數就是 port。兩個 getter 把環打開。
-      let pump!: ThreadPump;
-      let persistence: { flush(): Promise<void>; dispose(): Promise<void> } | undefined;
+      // （協調器才有），而 pump 的建構參數就是 port。這個格子把環打開——兩個 getter
+      // 讀它，而它在 pump 與協調器各自建好之後才被填上。
+      //
+      // **排程器第一次問這兩格是在第一輪落定的時候**，那時兩個都填好了。
+      const late: { log?: SessionLog; flush?: () => Promise<void> } = {};
       const driver = threadAgent.goalDriver?.(
-        () => pump.sessionLog,
-        async () => void (await persistence?.flush()),
+        () => {
+          const log = late.log;
+          /* v8 ignore next -- pump 在下一行就建好，而排程器最早在第一輪落定時才問 */
+          if (log === undefined) throw new Error('這條 thread 的日誌還沒建好');
+          return log;
+        },
+        async () => void (await late.flush?.()),
       );
-      pump = new ThreadPump(threadAgent.agent, threadId, driver);
+      const pump = new ThreadPump(threadAgent.agent, threadId, driver);
+      late.log = pump.sessionLog;
       const detachTelemetry = threadAgent.attachTelemetry?.(pump.sessions);
       const detachInvariants = threadAgent.attachInvariants?.(pump.sessions);
       // **接在不變量之後**，同 `cli.ts` 那條的理由：參與者一裝上去就可能記東西，
@@ -261,7 +269,10 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       const detachSession = threadAgent.attachSession?.(pump.sessions);
       // **接在最後，理由同 `cli.ts`**：前三個是觀察者，落盤不改變任何人看得到什麼，
       // 所以順序在功能上沒有差別；排最後是為了讓讀的人看到的因果跟實際一致。
-      persistence = threadAgent.attachPersistence?.(pump.sessions);
+      const persistence = threadAgent.attachPersistence?.(pump.sessions);
+      // **沒開落盤時 `flush` 就整個缺席**，而不是一個假裝成功的 no-op：`late.flush?.()`
+      // 的缺席語意就是「這條路上沒有耐久檢查點」，同 `attachPersistence` 自己的規矩。
+      late.flush = persistence === undefined ? undefined : () => persistence.flush();
       return {
         pump,
         commands: threadAgent.commands,
