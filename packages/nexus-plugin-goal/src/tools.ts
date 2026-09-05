@@ -67,7 +67,8 @@
  *
  * - `max_goal_rounds`（`create_goal` 的參數、`edit` 的替換值、輸出的一格）——**現在真的
  *   會到**：排程器每排一輪就燒掉一格，用完記一顆 `round-limit` 的 blocker。當初那句
- *   「it is never reached」是這張卡要改回來的三處之一。
+ *   「it is never reached」是這張卡要改回來的三處之一。**改回來時多帶了一句勸模型去填
+ *   的話，2026-09-05 量掉了**——見 {@link GOAL_CREATE_MAX_ROUNDS_DESCRIPTION}。
  * - `roundsStarted`——**現在是活的**：被準入的每一輪推進它。當初那句「stays 0」同上。
  * - `activation`——即時觀察值，`GoalService` 從 `disarmed` 開始，而**重放不會重新授權**。
  *   這一格**沒有變**：今天仍然沒有回讀路徑（見上面那句照樣不抄的理由），所以「相位
@@ -350,6 +351,36 @@ const CREATE_DESCRIPTION =
   'single-turn work. Requires a direct human turn on the top-level agent.';
 
 /**
+ * `create_goal` 的 `max_goal_rounds` 那格說明——**與 dsh 逐字相同**
+ * （`packages/goal/tool-goal/src/index.ts` 的 `create_goal` 參數表）。
+ *
+ * ## 為什麼是一句白描，而不是一句勸
+ *
+ * 這裡曾經寫「Reaching it blocks the goal, so size it to the work rather than leaving it to
+ * the default.」。前半句是 [#181](https://github.com/DemianLi/nexus-agent/pull/181) **必須**
+ * 改的——驅動器落地之前那裡寫的是 "it is never reached"，落地之後那句變成假的。**後半句
+ * 不在那個義務裡，dsh 也沒有**：它是隨那次必要修正一起進來的一句勸說。
+ *
+ * 而它被量掉了。三次 live 跑（`nvidia/nemotron-3-super-120b-a12b`，2026-09-05，
+ * [#188](https://github.com/DemianLi/nexus-agent/issues/188)）：沒人特別交代時模型**兩次都
+ * 留白**吃預設 {@link ./service.ts | DEFAULT_MAX_GOAL_ROUNDS}，人那一輪寫「必填、不要留
+ * 空」時才填。**勸說對模型沒有作用，誤導的是讀 schema 的人**——留著會讓人以為這條路實務
+ * 上會被走，而它不會。
+ *
+ * 「到頂會擋住目標」這件事沒有跟著消失：{@link GET_DESCRIPTION} 講了
+ * （"until it is completed, blocked, or reaches maxGoalRounds"），而模型被要求在 update
+ * 之前先叫 `get_goal`。dsh 的分工也是這樣。
+ *
+ * **順帶修掉一處不準**：舊文字寫 "positive integer"，但 `service.ts` 的
+ * `resolveMaxGoalRounds` 要的是正的**安全**整數。dsh 的 "positive safe-integer" 才對得上。
+ *
+ * 形狀刻意不動（維持 optional、不改必填、不換預設）——三個候選各自為什麼不成立見
+ * [#188 的拍板](https://github.com/DemianLi/nexus-agent/issues/188#issuecomment-5552526122)。
+ */
+export const GOAL_CREATE_MAX_ROUNDS_DESCRIPTION =
+  'Optional positive safe-integer limit on automatic continuation rounds.';
+
+/**
  * `update_goal` 的說明**是算出來的**，因為 block 門檻是設定值。
  *
  * @param blockedAfter - 政策要求的連續輪數。
@@ -529,13 +560,7 @@ export function createGoalTools(
         objective: z
           .string()
           .describe('The concrete completion objective inferred from the human request.'),
-        max_goal_rounds: z
-          .number()
-          .optional()
-          .describe(
-            'Optional positive integer cap on continuation rounds. Reaching it blocks the ' +
-              'goal, so size it to the work rather than leaving it to the default.',
-          ),
+        max_goal_rounds: z.number().optional().describe(GOAL_CREATE_MAX_ROUNDS_DESCRIPTION),
       }),
     },
   );
