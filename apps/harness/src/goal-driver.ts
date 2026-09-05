@@ -91,7 +91,14 @@ export type GoalDriverDecision =
   | { readonly kind: 'block'; readonly ref: GoalRef; readonly reason: GoalBlockReason }
   | { readonly kind: 'idle'; readonly reason: GoalDriverIdleReason };
 
-/** 當前這一段物理輪次收工了沒——**拋錯結束與還在跑是兩件事**。 */
+/**
+ * 當前這一段物理輪次收工了沒——**拋錯結束與還在跑是兩件事**。
+ *
+ * **整個就緒判準都靠一件事成立：`turn/start` 在 `try` 之前 append。**
+ * 兩個入口點都是這樣寫的（`thread-pump.ts` 的 `#runOnce`、`cli.ts` 的 `runTurn`，兩處都
+ * 有註解說為什麼），所以「一輪跑過但日誌上沒有頭」這個狀態不存在，`no-turn` 只可能是
+ * 「一輪都還沒開始」。哪天有人把 append 挪進 `try` 裡，這裡讀到的就會是一個假的 idle。
+ */
 function turnClosed(events: readonly SessionEvent[]): GoalDriverIdleReason | undefined {
   const start = currentTurnStart(events);
   if (start < 0) return 'no-turn';
