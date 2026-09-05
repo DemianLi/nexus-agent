@@ -214,9 +214,9 @@ describe('相位轉換', () => {
     );
   });
 
-  it('resume 的輪次預算——**服務那側走不到，折疊這側驗得到**', () => {
-    // 這一條是 `roundsStarted` 恆為 0 的另一面：手寫一份帶輪次的狀態，那道檢查就活了。
-    // 續行驅動器落地時，服務那側才會有第一個走到它的呼叫。
+  it('resume 的輪次預算——**手寫一份帶輪次的狀態就驗得到**', () => {
+    // 這一條走的是「不經過 goal 輪次事件、直接把計數設進去」那條路，所以它釘的是折疊
+    // 自己的規則。服務那側的同一條在 `index.test.ts`（燒完預算之後 resume 不了）。
     const state = fold(active, next('pause', snapshot({ revision: 2, phase: 'paused' })));
     state.roundsStarted = 8;
     expect(() =>

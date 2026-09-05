@@ -98,9 +98,10 @@ export interface GoalSnapshotChangeMeta {
   /**
    * 這個 goal 已經開始的續行輪次。
    *
-   * **這一版恆為 0，因為沒有生產者**——推進它的是 goal 來源的使用者輪次，而我們的
-   * `turn/start` 沒有 `source` 判別欄，兩個產生點都是人打的。決議與翻面的條件見
-   * [#126](https://github.com/DemianLi/nexus-agent/issues/126) 的決定 3。
+   * **變更帶的是這一格當下的值，不是它自己說了算**——推進它的是
+   * `turn/start{kind:'goal'}`（[#180](https://github.com/DemianLi/nexus-agent/issues/180)），
+   * 而折疊那側有一道檢查擋著「有人寫了一顆自己改動輪次的變更」。理由見
+   * `@nexus/plugin-goal` 的 `fold.ts` 檔頭：預算檢查讀的正是這個數。
    */
   readonly roundsStarted: number;
   /** 建立那一次變更的 epoch 毫秒。 */

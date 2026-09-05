@@ -297,8 +297,9 @@ describe('相位與授權', () => {
   });
 
   it('別人寫的 goal/change 會把授權打回 disarmed', () => {
-    // 「別人」在這一版還不存在（沒有工具、沒有驅動器），但這條邊是 dsh 的語意，
-    // 而它一旦被拿掉，未來多一個生產者的那天沒有人會發現授權跟著別人的變更飄了。
+    // 「別人」今天是模型工具與 `/goal`（兩個都改得動同一份域狀態），而這條邊是 dsh 的
+    // 語意：任何一顆不是自己掛的變更都把授權打回 disarmed。**被準入的續行輪次不走這條**
+    // ——它推計數不動授權，理由與那條驗收句見 `service.ts` 的 `#observe`。
     const { service, log } = attach();
     const view = service.create({ objective: 'a' });
     expect(service.get()?.activation).toBe('armed');
@@ -465,7 +466,7 @@ describe('roundsStarted', () => {
   });
 
   /**
-   * **這條在驅動器落地之前走不到**（輪次恆為 0，而 `maxGoalRounds` 至少是 1）。
+   * **這條在續行排程器落地之前走不到**（輪次恆為 0，而 `maxGoalRounds` 至少是 1）。
    * 現在走得到：燒完預算的目標要先調高上限才 resume 得了。
    */
   it('燒完預算之後 resume 不了——服務這側現在走得到那條檢查', () => {

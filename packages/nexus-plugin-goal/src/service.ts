@@ -103,7 +103,7 @@ export class GoalError extends Error {
 
 /** 目前的目標加上重放算出來的東西。 */
 export interface GoalView extends GoalSnapshot {
-  /** 已經開始的續行輪次。**這一版恆為 0**，見 `fold.ts` 檔頭。 */
+  /** 已經開始的續行輪次。只有被準入的 `turn/start{kind:'goal'}` 推得動它，見 `fold.ts`。 */
   readonly roundsStarted: number;
   readonly createdAt: number;
   readonly updatedAt: number;
@@ -127,9 +127,9 @@ export interface EditGoalRequest {
 /**
  * `maxGoalRounds` 沒指定時的預設，**照抄 dsh 的 256**。
  *
- * **它現在只被記錄，不被消費。** 消費它的是續行驅動器，而這一版沒有——輪次恆為 0，
- * 所以每一個目標的預算都花不掉。記著它是因為它進了耐久快照：日後補上驅動器時，
- * 早先建立的目標要帶著它自己那時的預算，不是套用當時的預設。
+ * **它進耐久快照，所以是建立當下的那個值**，不是讀取當下的預設：改了這個常數不會追溯
+ * 到既有的目標身上。消費它的是續行排程器（`apps/harness` 的 `goal-driver.ts`）——
+ * 用完就記一顆 `round-limit` 的 blocker，而那是開著 `--goal-driver` 時**唯一的硬上限**。
  */
 export const DEFAULT_MAX_GOAL_ROUNDS = 256;
 
@@ -344,9 +344,9 @@ export class GoalService {
         'GOAL_INVALID_TRANSITION',
       );
     }
-    // 輪次預算這一條**這一版走不到**（沒有驅動器，`roundsStarted` 恆為 0，而
-    // `maxGoalRounds` 至少是 1）。留著是因為它是複製過來的契約的一部分，而且折疊那側
-    // 驗得到（`fold.test.ts`）；驅動器那張卡落地時，這裡才會有第一個走到它的呼叫。
+    // 輪次預算這一條在續行排程器落地之後**兩側都走得到**：一個燒完預算的目標要先被
+    // 調高上限才 resume 得了。折疊那側是同一條（`fold.ts` 的 `validateSnapshotTransition`）
+    // ——折疊擋的是手寫進日誌的，這裡擋的是呼叫進來的，兩份都要在。
     if (this.#state.roundsStarted >= current.maxGoalRounds) {
       throw new GoalError(
         `目標 "${current.id}" 已經用完 ${current.maxGoalRounds} 個輪次；要續行先調高 maxGoalRounds`,
