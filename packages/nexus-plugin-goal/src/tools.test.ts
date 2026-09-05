@@ -10,12 +10,23 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { ToolMessage } from '@langchain/core/messages';
+import type { BaseMessage } from '@langchain/core/messages';
 import type { StructuredTool } from '@langchain/core/tools';
-import { createRegistry, createSessionRunner, goalId, SessionRegistry } from '@nexus/core';
+import { Command } from '@langchain/langgraph';
+import {
+  createRegistry,
+  createSessionRunner,
+  GOAL_WRAPUP_MARKER,
+  goalId,
+  SessionRegistry,
+} from '@nexus/core';
 import type { NamedEntry, SessionLog } from '@nexus/core';
 
 import { createGoalPlugin } from './index.js';
 import type { GoalPluginOptions } from './index.js';
+import { hasDirectHumanTurn } from './authority.js';
+import { renderWrapupContext } from './wrapup.js';
 import {
   GOAL_CREATE_TOOL_NAME,
   GOAL_GET_TOOL_NAME,
@@ -48,6 +59,7 @@ function bench(options: GoalPluginOptions = {}): {
   sessions: SessionRegistry;
   registry: ReturnType<typeof createRegistry>;
   call: (name: string, args?: Record<string, unknown>, config?: unknown) => Promise<string>;
+  raw: (name: string, args?: Record<string, unknown>, config?: unknown) => Promise<unknown>;
   tools: Map<string, NamedEntry<StructuredTool>>;
 } {
   let serial = 0;
@@ -63,17 +75,66 @@ function bench(options: GoalPluginOptions = {}): {
   const sessions = new SessionRegistry('goal');
   attach(registry, sessions);
   const tools = registry.tools.effective(undefined);
+  let callSerial = 0;
+  const raw = async (
+    name: string,
+    args: Record<string, unknown> = {},
+    config: unknown = ROOT_CALL,
+  ): Promise<unknown> => {
+    const found = tools.get(name);
+    if (found === undefined) throw new Error(`沒有這顆工具：${name}`);
+    // **以 `ToolCall` 形式呼叫，不是素參數。** 產品路徑上的 tool node 一律走這一條，
+    // 而 `update_goal` 的自主收尾要從 config 上拿 `tool_call_id` 才造得出工具結果——
+    // 素參數那條路拿不到它，測到的會是一個產品裡不存在的形狀。
+    const call = {
+      name,
+      args,
+      id: `call-${(callSerial += 1)}`,
+      type: 'tool_call' as const,
+    };
+    return found.value.invoke(call as never, config as never);
+  };
   return {
     log: sessions.root,
     sessions,
     registry,
     tools,
-    call: async (name, args = {}, config = ROOT_CALL) => {
-      const found = tools.get(name);
-      if (found === undefined) throw new Error(`沒有這顆工具：${name}`);
-      return String(await found.value.invoke(args as never, config as never));
-    },
+    raw,
+    call: async (name, args = {}, config = ROOT_CALL) => textOf(await raw(name, args, config)),
   };
+}
+
+/**
+ * 一次呼叫回來的東西裡，模型看得到的那一段工具結果。
+ *
+ * 三種形狀：帶 id 呼叫時基座包成一則 `ToolMessage`；自主收尾回的是一顆 `Command`，
+ * 工具結果在它的 `update.messages` 裡；其餘退回字串。
+ *
+ * @param result - `invoke` 回來的東西。
+ * @returns 工具結果的原文。
+ */
+function textOf(result: unknown): string {
+  if (ToolMessage.isInstance(result)) return String(result.content);
+  const messages = commandMessages(result);
+  if (messages !== undefined) {
+    const found = messages.find((message) => ToolMessage.isInstance(message));
+    if (found !== undefined) return String(found.content);
+  }
+  return String(result);
+}
+
+/** 一顆 `Command` 帶的訊息串，不是 `Command` 就當場失敗。 */
+function messagesOf(result: unknown): BaseMessage[] {
+  const messages = commandMessages(result);
+  if (messages === undefined) throw new Error('這一次回的不是一顆帶訊息的 Command');
+  return messages;
+}
+
+/** 一顆 `Command` 帶的訊息串；不是 `Command` 就是 `undefined`。 */
+function commandMessages(result: unknown): BaseMessage[] | undefined {
+  if (!(result instanceof Command)) return undefined;
+  const update = result.update as { messages?: unknown } | undefined;
+  return Array.isArray(update?.messages) ? (update.messages as BaseMessage[]) : undefined;
 }
 
 /** 照 `agent-factory.ts` 的 `attachSession`：綁註冊表，每一份會話各裝一次參與者。 */
@@ -370,6 +431,92 @@ describe('在續行輪次裡', () => {
     const ref = await upto(b, 1);
     const value = parse(await b.call(GOAL_UPDATE_TOOL_NAME, { ...ref, action: 'complete' }));
     expect(value.goal).toMatchObject({ phase: 'complete' });
+  });
+
+  /**
+   * **收尾指示的驗收句：模型收到的那一則，逐字就是 `renderWrapupContext` 算出來的。**
+   *
+   * 「有一則訊息」不夠——一個把工具結果重複貼一次的實作也過得了。所以逐字比對，並且
+   * 一併釘住 `tool_call_id`：漏掉它的話模型會看到一顆沒有結果的工具呼叫，有些 provider
+   * 直接拒，而那是單元測試綠著、真跑就死的形狀。
+   */
+  it('complete 之後注入收尾指示，工具結果與指示各一則', async () => {
+    const b = bench();
+    const ref = await upto(b, 1);
+    const result = await b.raw(GOAL_UPDATE_TOOL_NAME, { ...ref, action: 'complete' });
+    const messages = messagesOf(result);
+    expect(messages).toHaveLength(2);
+    const [toolResult, wrapup] = messages;
+    expect(ToolMessage.isInstance(toolResult)).toBe(true);
+    // `call-3` 是這一次 `update_goal` 的序號（前面 create 與 get 各用掉一個）——
+    // 寫死的 id 或別一次呼叫的 id 都對不上這一格。
+    expect((toolResult as ToolMessage).tool_call_id).toBe('call-3');
+    expect(parse(String(toolResult?.content)).goal).toMatchObject({ phase: 'complete' });
+    expect(String(wrapup?.content)).toBe(renderWrapupContext('把 CI 修綠'));
+    expect(wrapup?.additional_kwargs[GOAL_WRAPUP_MARKER]).toEqual({ action: 'complete' });
+  });
+
+  it('blocked 的收尾指示帶著模型自己報的那句話', async () => {
+    const b = bench();
+    const ref = await upto(b, 3);
+    const result = await b.raw(GOAL_UPDATE_TOOL_NAME, {
+      ...ref,
+      action: 'blocked',
+      blocked_reason: '缺憑證',
+    });
+    const messages = messagesOf(result);
+    expect(String(messages[1]?.content)).toBe(renderWrapupContext('把 CI 修綠', '缺憑證'));
+    expect(messages[1]?.additional_kwargs[GOAL_WRAPUP_MARKER]).toEqual({ action: 'blocked' });
+  });
+
+  /**
+   * **人打的 `complete` 不注入。** 人自己知道自己剛做了什麼，而且那一輪本來就該由人
+   * 決定下一步（dsh 的 `index.ts:312` 同此）。
+   *
+   * 把注入條件寫成「action 是 complete／blocked」而不看授權的話，這一條會紅。
+   */
+  it('人打的 complete 不注入收尾指示', async () => {
+    const b = bench();
+    human(b.log);
+    await b.call(GOAL_CREATE_TOOL_NAME, { objective: '人自己收' });
+    const ref = await refOf(b.call);
+    const result = await b.raw(GOAL_UPDATE_TOOL_NAME, { ...ref, action: 'complete' });
+    expect(result).not.toBeInstanceOf(Command);
+    expect(ToolMessage.isInstance(result)).toBe(true);
+  });
+
+  /** 被擋下來的那一次**什麼都沒收掉**，所以也沒有收尾可言。 */
+  it('太早報 blocked 被擋時不注入收尾指示', async () => {
+    const b = bench();
+    const ref = await upto(b, 1);
+    const result = await b.raw(GOAL_UPDATE_TOOL_NAME, {
+      ...ref,
+      action: 'blocked',
+      blocked_reason: '卡住',
+    });
+    expect(result).not.toBeInstanceOf(Command);
+  });
+
+  /**
+   * **收尾指示不進會話日誌，所以它借不到人類授權。**
+   *
+   * 這是 [#180](https://github.com/DemianLi/nexus-agent/issues/180) 關掉的那個洞的反面：
+   * 那張卡在防「機器自己排的一輪在日誌上跟人打的一模一樣」。收尾指示是一則長得像人講
+   * 的話的 `HumanMessage`，而三個授權判準（`hasDirectHumanTurn`、`isMatchingGoalRound`、
+   * `hasUnansweredInterrupt`）**全部讀會話日誌，一個都不讀圖上的訊息**——今天成立是因為
+   * 這兩個載體剛好分開，而沒有任何東西釘住它。這一條就是那顆釘子。
+   *
+   * 把收尾指示也 append 成一顆 `turn/start` 的實作會讓這裡紅。
+   */
+  it('收尾指示只進圖裡，會話日誌上一顆新輪次都沒有', async () => {
+    const b = bench();
+    const ref = await upto(b, 1);
+    const before = b.log.events.length;
+    const result = await b.raw(GOAL_UPDATE_TOOL_NAME, { ...ref, action: 'complete' });
+    // 先確認這一次真的注入了，不然下面兩句對一個什麼都沒做的呼叫也成立。
+    expect(messagesOf(result)).toHaveLength(2);
+    expect(b.log.events.slice(before).map((event) => event.type)).toEqual(['goal/change']);
+    expect(hasDirectHumanTurn(b.log.events)).toBe(false);
   });
 
   it('第 1 輪報 blocked 太早——門檻預設 3', async () => {

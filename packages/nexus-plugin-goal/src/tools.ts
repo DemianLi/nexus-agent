@@ -6,7 +6,7 @@
  * `d347e703908d0406b7a7ef80e3a0e594d86b2215`，2026-09-04）。`/goal` 是人的那一半，
  * 這裡是模型的那一半，**兩邊改的是同一份域狀態**。
  *
- * ## 那四件登記為缺的東西，現在三件回來了
+ * ## 那四件登記為缺的東西，現在一件都不缺了
  *
  * dsh 在 README 的「已知限制」裡寫著：「**Goal Round 權限需要驅動器**——除非續行驅動器
  * 準入 goal 來源的用戶輪次，否則自主 `complete`／`blocked` 路徑不會啟用；只掛載這個包
@@ -18,14 +18,19 @@
  * | --- | --- |
  * | `completionAuthority` 的 `goal-round` 分支 | **在了**，見 `authority.ts` |
  * | `blockedAfterConsecutiveRounds`（預設 3） | **在了**，見 {@link GoalToolPolicy} |
- * | `wrapup.ts` 的 `<goal_complete>`／`<goal_blocked>` | **還缺**，見下 |
+ * | `wrapup.ts` 的 `<goal_complete>`／`<goal_blocked>` | **在了**（[#182](https://github.com/DemianLi/nexus-agent/issues/182)），見下 |
  * | `GOAL_TOOL_DRIVER_REQUIRED` 的「開放輪次」檢查 | **仍然結構上恆真**——工具只跑得到已經 append 過 `turn/start` 的那一次 `invoke` 裡。這一列不是「做好了」，是「不需要」 |
  *
- * **`wrapup.ts` 是這張卡刻意沒做的那一件。** 它是一層在 goal 狀態轉換之後、下一次模型
- * 呼叫之前注入 `<goal_complete>`／`<goal_blocked>` 的東西，讓模型知道自己剛剛把目標收
- * 掉了。它與驅動器存不存在無關——缺的是「怎麼把狀態轉換講給模型聽」這條管線，而那是
- * 另一件事。**不是忘了，是拆出去了**；沒有它的後果是：模型在同一輪裡 `complete` 之後，
- * 那一輪剩下的部分不知道目標已經結束。
+ * **收尾指示那一列從 #180 合進去的那一刻才變成真的缺口。** 模型在自己排的輪次裡報
+ * `complete`／`blocked` 之後，那一輪還在圖的迴圈裡、手上還有全套工具，而它不知道自己
+ * 剛剛把目標收掉了。#180 之前沒有自排輪次，這件事不存在。
+ *
+ * 載體是一顆 `Command`：工具結果與 {@link ./wrapup.ts | 收尾指示}各一則。**這條路讓
+ * `update_goal` 的回傳型別從 `string` 變成 `string | Command`**——只有「自主收尾成功」
+ * 那一格走 `Command`，拒絕與人打的那些照舊回一句話。dsh 那側走的是
+ * `ToolRunContext.deferContext()`，語意是「掛在這一顆工具自己的 result 上、那顆
+ * `tool/result` 之後 append」（`packages/core/tools/src/index.ts` 的介面註解），
+ * `Command({ update: { messages } })` 對得上同一個時刻，**所以這一格沒有偏離要登記**。
  *
  * `blockedAfterConsecutiveRounds` 為什麼跟著 `completionAuthority` 一起回來、不能等：
  * 它的門檻**只在 `goal-round` 授權下生效**（dsh 的 `index.ts:299`），所以在這張卡之前
@@ -80,16 +85,19 @@
  * @module
  */
 
+import { HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
+import { Command } from '@langchain/langgraph';
 import { z } from 'zod';
 
-import { goalId } from '@nexus/core';
+import { GOAL_WRAPUP_MARKER, goalId } from '@nexus/core';
 import type { GoalRef, SessionLog } from '@nexus/core';
 
 import { completionAuthority, hasDirectHumanTurn } from './authority.js';
 import type { GoalToolAuthority } from './authority.js';
 import { GoalError } from './service.js';
 import type { GoalService, GoalView } from './service.js';
+import { renderWrapupContext } from './wrapup.js';
 
 /** 讀當前目標。名字照 dsh，**模型面的名字不是我們可以本地化的東西**。 */
 export const GOAL_GET_TOOL_NAME = 'get_goal';
@@ -118,6 +126,15 @@ export const GOAL_TOOL_UNKNOWN_CALLER_MESSAGE =
  * 換成拒絕樁了。
  */
 export const GOAL_TOOL_NO_SERVICE_MESSAGE = '這一份會話上沒有接 goal 域，所以沒有動。';
+
+/**
+ * 自主收尾要注入指示、卻取不到 `tool_call_id` 時拋的話。
+ *
+ * **這一條不是給模型看的**（它走 `containment.ts` 那條路，不是 {@link refuse}），見
+ * {@link wrapupCommand} 檔內那段「取不到 id 是壞掉，不是降級」。
+ */
+export const GOAL_TOOL_MISSING_CALL_ID_MESSAGE =
+  'update_goal 要注入收尾指示，但這一次呼叫沒有帶 tool_call_id——工具被以一個接不上的方式叫了。';
 
 /**
  * 一次組裝綁著多份會話時回的話。
@@ -393,6 +410,69 @@ function authorityFor(
   return completionAuthority(events, service.get());
 }
 
+/**
+ * 一次工具呼叫的 `tool_call_id`，沒有就 `undefined`。
+ *
+ * 基座把它放在 config 上（`@langchain/core` 的 `tools/index.js:128`），而**只有以
+ * `ToolCall` 形式呼叫時才有**——產品路徑上的 tool node 一律走那一條。
+ *
+ * @param config - 這一次呼叫的 config，形狀不保證。
+ * @returns 那個 id，取不到時是 `undefined`。
+ */
+function toolCallId(config: unknown): string | undefined {
+  if (typeof config !== 'object' || config === null) return undefined;
+  const call = (config as { toolCall?: unknown }).toolCall;
+  if (typeof call !== 'object' || call === null) return undefined;
+  const id = (call as { id?: unknown }).id;
+  return typeof id === 'string' ? id : undefined;
+}
+
+/**
+ * 把一次成功的自主收尾包成「工具結果 ＋ 一則收尾指示」。
+ *
+ * ## 為什麼要自己造那顆 `ToolMessage`
+ *
+ * 回傳值是 `Command` 時基座**整段跳過自動包裝**（`isDirectToolOutput` 那一格，
+ * `@langchain/core` 的 `tools/index.js:335`），tool node 也只是把 `Command` 當成狀態
+ * 更新收下。所以工具結果本身要放進 `update.messages` 裡，**而且要帶對 `tool_call_id`**
+ * ——漏掉的話模型會看到一顆沒有結果的工具呼叫，有些 provider 直接拒。
+ *
+ * ## 取不到 id 是壞掉，不是降級
+ *
+ * 產品路徑上的 tool node 一律以 `ToolCall` 形式呼叫，所以取不到 id 代表這顆工具被以
+ * 一個接不上的方式叫了。**安靜地退回回一句話**會讓模型在自主輪次收尾時默默收不到指示
+ * ——那正是這條路存在的理由。所以拋，讓 `containment.ts` 分類。
+ *
+ * @param text - 這一次工具結果的原文（一行緊湊 JSON）。
+ * @param objective - 被收掉那個目標的內容。
+ * @param args - 這一次的參數，決定注入哪一段。
+ * @param config - 這一次呼叫的 config，`tool_call_id` 從裡面來。
+ * @returns 帶著兩則訊息的 `Command`。
+ */
+function wrapupCommand(
+  text: string,
+  objective: string,
+  args: UpdateArgs,
+  config: unknown,
+): Command {
+  const id = toolCallId(config);
+  if (id === undefined) throw new Error(GOAL_TOOL_MISSING_CALL_ID_MESSAGE);
+  return new Command({
+    update: {
+      messages: [
+        new ToolMessage({ content: text, tool_call_id: id, name: GOAL_UPDATE_TOOL_NAME }),
+        new HumanMessage({
+          content:
+            args.action === 'complete'
+              ? renderWrapupContext(objective)
+              : renderWrapupContext(objective, args.blocked_reason as string),
+          additional_kwargs: { [GOAL_WRAPUP_MARKER]: { action: args.action } },
+        }),
+      ],
+    },
+  });
+}
+
 /** 一次 `update_goal` 的參數配得對不對；不對就回那一句話。 */
 function misplaced(args: UpdateArgs): string | undefined {
   const hasReplacement = hasText(args.objective) || hasRoundCap(args.max_goal_rounds);
@@ -492,34 +572,39 @@ export function createGoalTools(
           goalToolBlockTooSoonMessage(blockedAfterConsecutiveRounds, authority.goal.roundsStarted),
         );
       }
-      return render(
-        runDomain(() => {
-          switch (args.action) {
-            case 'edit':
-              return goalToolValue(
-                service.edit(ref, {
-                  ...(hasText(args.objective) ? { objective: args.objective } : {}),
-                  ...(hasRoundCap(args.max_goal_rounds)
-                    ? { maxGoalRounds: args.max_goal_rounds }
-                    : {}),
-                }),
-              );
-            case 'pause':
-              return goalToolValue(service.pause(ref));
-            case 'resume':
-              return goalToolValue(service.resume(ref));
-            case 'complete':
-              return goalToolValue(service.complete(ref));
-            case 'blocked':
-              return goalToolValue(
-                service.block(ref, {
-                  code: GOAL_MODEL_REPORTED_CODE,
-                  message: args.blocked_reason as string,
-                }),
-              );
-          }
-        }),
-      );
+      const outcome = runDomain(() => {
+        switch (args.action) {
+          case 'edit':
+            return goalToolValue(
+              service.edit(ref, {
+                ...(hasText(args.objective) ? { objective: args.objective } : {}),
+                ...(hasRoundCap(args.max_goal_rounds)
+                  ? { maxGoalRounds: args.max_goal_rounds }
+                  : {}),
+              }),
+            );
+          case 'pause':
+            return goalToolValue(service.pause(ref));
+          case 'resume':
+            return goalToolValue(service.resume(ref));
+          case 'complete':
+            return goalToolValue(service.complete(ref));
+          case 'blocked':
+            return goalToolValue(
+              service.block(ref, {
+                code: GOAL_MODEL_REPORTED_CODE,
+                message: args.blocked_reason as string,
+              }),
+            );
+        }
+      });
+      const text = render(outcome);
+      // **收尾指示只跟著自主收尾走。** 人打的 `complete` 不注入：人自己知道自己剛做了
+      // 什麼，而且那一輪本來就該由人決定下一步（dsh 的 `index.ts:312` 同此）。
+      // 拒絕（`outcome` 是一句話）與「沒有目標」都不是一次收尾，照樣只回文字。
+      if (authority.kind !== 'goal-round' || typeof outcome === 'string') return text;
+      if (outcome.goal === null) return text;
+      return wrapupCommand(text, outcome.goal.objective, args, config);
     },
     {
       name: GOAL_UPDATE_TOOL_NAME,

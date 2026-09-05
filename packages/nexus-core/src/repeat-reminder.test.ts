@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createRepeatReminder,
   DEFAULT_REPEAT_REMINDER,
+  GOAL_WRAPUP_MARKER,
   REPEAT_REMINDER_MARKER,
   resolveRepeatReminderSettings,
 } from './repeat-reminder.js';
@@ -214,6 +215,55 @@ describe('偵測：連續同工具同參數', () => {
       tool: 'grep',
       count: 3,
     });
+  });
+});
+
+describe('goal 收尾指示這則合成訊息', () => {
+  /** 一則帶記號的收尾指示，形狀同 `@nexus/plugin-goal` 造的那顆。 */
+  function wrapup(): HumanMessage {
+    return new HumanMessage({
+      content: '<goal_complete>\n…\n</goal_complete>',
+      additional_kwargs: { [GOAL_WRAPUP_MARKER]: { action: 'complete' } },
+    });
+  }
+
+  /**
+   * **收尾指示不是人插的話，所以鏈跨過它繼續數。**
+   *
+   * 它出現的時機正好是模型剛被告知不要再叫工具；清零的話，模型無視它繼續打轉時，
+   * 門檻 3 的提醒要晚兩次才到——那跟收尾指示本身的目的相反。
+   */
+  it('鏈跨過收尾指示繼續累積，不像人插話那樣清零', () => {
+    const hook = hookOf();
+    const messages: BaseMessage[] = [new HumanMessage('開始')];
+    for (const [index, call] of same(2).entries())
+      messages.push(...turn(call.name, call.args, `w${index}`));
+    messages.push(wrapup());
+    messages.push(...turn('grep', { pattern: 'x' }, 'w2'));
+    const update = hook({ messages });
+    // 總第 3 次，門檻命中。清零的話這裡是第 1 次，一則提醒都沒有。
+    expect((update?.messages ?? []).map((message) => message.text)).toHaveLength(1);
+    expect(update?.messages[0]?.text).toContain(GENTLE_HEAD);
+  });
+
+  /**
+   * **重入護欄問的是相反的問題，所以述詞不能只有一個。**
+   *
+   * 上面那條要求「鏈走訪把收尾指示當成不是人講的」。若把
+   * {@link isReminder} 直接加寬成也認收尾指示的記號，這一條就會紅：收尾指示注入之後
+   * 正好落在最後一則 AI 訊息之後，而那道護欄看到「這一輪貼過提醒了」就整輪不發。
+   *
+   * 兩條一起才釘得住「窄的留給護欄、寬的留給鏈走訪」。
+   */
+  it('收尾指示落在最後一則 AI 之後時，這一輪的提醒照樣發', () => {
+    const hook = hookOf();
+    const messages: BaseMessage[] = [new HumanMessage('開始')];
+    for (const [index, call] of same(3).entries())
+      messages.push(...turn(call.name, call.args, `g${index}`));
+    messages.push(wrapup());
+    const update = hook({ messages });
+    expect((update?.messages ?? []).map((message) => message.text)).toHaveLength(1);
+    expect(update?.messages[0]?.text).toContain(GENTLE_HEAD);
   });
 });
 

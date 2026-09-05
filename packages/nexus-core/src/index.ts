@@ -115,6 +115,7 @@ export type { RepeatReminderMark, RepeatReminderSettings } from './repeat-remind
 export {
   createRepeatReminder,
   DEFAULT_REPEAT_REMINDER,
+  GOAL_WRAPUP_MARKER,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   resolveRepeatReminderSettings,

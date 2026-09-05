@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@langchain/core": "^1.2.9",
+    "@langchain/langgraph": "^1.4.10",
     "@nexus/core": "workspace:*",
     "zod": "^4.3.6"
   }
