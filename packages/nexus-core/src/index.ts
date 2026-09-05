@@ -87,7 +87,10 @@ export { loadPlugins } from './load.js';
 export {
   CONTAINMENT_MIDDLEWARE_NAME,
   createContainmentMiddleware,
+  declaredToolTimeoutMs,
   formatToolFailure,
+  formatToolTimeout,
+  isToolTimeout,
   resolveToolName,
 } from './containment.js';
 
