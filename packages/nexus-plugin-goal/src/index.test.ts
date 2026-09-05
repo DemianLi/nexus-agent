@@ -62,18 +62,24 @@ function refOf(service: GoalService): GoalRef {
 }
 
 describe('掛載', () => {
-  it('只碰 sessions 與 commands 兩個通道，別的一格都不動', () => {
-    // **`commands` 這一格翻面了。** 上一張 PR 這裡是 `toEqual([])`，守的是「域不裝任何
-    // 人打得到的東西」。`/goal` 落地之後那條線換了主詞：要守的變成「它只多掛一個命令」
-    // ——工具、middleware 與配套入口仍然一格都不碰，因為命令不進模型，掛了 `/goal` 的
-    // agent 與沒掛的在模型眼裡一模一樣。這一條是那句話的守衛。
+  it('只碰 sessions、commands 與 tools 三個通道，別的一格都不動', () => {
+    // **`tools` 這一格翻面了，而且是第二次翻。** 第一版是 `toEqual([])`，守的是「域不裝
+    // 任何人打得到的東西」；`/goal` 落地時翻成「只多掛一個命令」，守的是「掛了 `/goal`
+    // 的 agent 與沒掛的在模型眼裡一模一樣」——因為命令不進模型。
+    //
+    // [#177](https://github.com/DemianLi/nexus-agent/issues/177) 之後那句話**不再成立而且
+    // 不該成立**：模型側的三顆工具就是這張卡要交的東西。所以這一條換成釘住**剛好那三顆、
+    // 而且三顆都是 `rootOnly`**——多一顆、少一顆、或哪天有人把 `rootOnly` 拿掉，這裡紅。
+    // middleware 與配套入口仍然一格都不碰。
     const registry = createRegistry();
     const exit = registry.enter({ id: 'goal#0', name: 'goal' });
     createGoalPlugin().apply(registry);
     exit();
     expect(registry.sessions.installers()).toHaveLength(1);
     expect(registry.commands.list().map((entry) => entry.name)).toEqual(['goal']);
-    expect(registry.tools.effective(undefined).size).toBe(0);
+    const toolNames = [...registry.tools.effective(undefined).keys()].sort();
+    expect(toolNames).toEqual(['create_goal', 'get_goal', 'update_goal']);
+    expect(toolNames.filter((name) => registry.tools.isRootOnly(name))).toEqual(toolNames);
     expect(registry.middleware.list()).toEqual([]);
     expect(registry.invariants.companions()).toEqual([]);
   });

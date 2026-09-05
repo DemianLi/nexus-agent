@@ -53,6 +53,7 @@ import {
 } from './command.js';
 import { assertGoalServiceOptions, GoalService } from './service.js';
 import type { GoalServiceOptions } from './service.js';
+import { createGoalTools } from './tools.js';
 
 export type { GoalCommand } from './command.js';
 export {
@@ -75,6 +76,28 @@ export {
   phaseLabel,
   renderGoal,
 } from './command.js';
+
+export type { GoalToolLookup, GoalToolValue, GoalToolWiring, GoalUpdateAction } from './tools.js';
+export {
+  createGoalTools,
+  GOAL_CREATE_TOOL_NAME,
+  GOAL_GET_TOOL_NAME,
+  GOAL_MODEL_REPORTED_CODE,
+  GOAL_TOOL_AUTHORITY_MESSAGE,
+  GOAL_TOOL_ERROR_PREFIX,
+  GOAL_TOOL_INVALID_REF_MESSAGE,
+  GOAL_TOOL_NO_SERVICE_MESSAGE,
+  GOAL_TOOL_NOT_ATTACHED_MESSAGE,
+  GOAL_TOOL_REASON_MISPLACED_MESSAGE,
+  GOAL_TOOL_REASON_REQUIRED_MESSAGE,
+  GOAL_TOOL_REPLACEMENT_MISPLACED_MESSAGE,
+  GOAL_TOOL_UNKNOWN_CALLER_MESSAGE,
+  GOAL_UPDATE_TOOL_NAME,
+  goalToolAmbiguousMessage,
+  goalToolValue,
+} from './tools.js';
+
+export { hasDirectHumanTurn } from './authority.js';
 
 export type { FoldedGoal, GoalFoldState } from './fold.js';
 export {
@@ -162,6 +185,9 @@ export function createGoalPlugin(options: GoalPluginOptions = {}): GoalPlugin {
       // 自己呼叫的一步，沒有東西攔得住它被呼叫兩次。多了或少了都由命令當場說出來，
       // 見 `command.ts` 的 `goalAmbiguousMessage`。
       const attachedHere: GoalService[] = [];
+      // **工具問的是「這次呼叫的那份日誌」，命令問的是「這次組裝的那一份」**，所以除了
+      // 上面那個陣列還要一張依日誌查的表。兩者同生同滅，在同一個 `join` 裡進出。
+      const servicesHere = new Map<SessionLog, GoalService>();
       registry.sessions.join((subject) => {
         // **只管 root，subagent 那些一份都不接。**
         //
@@ -178,13 +204,25 @@ export function createGoalPlugin(options: GoalPluginOptions = {}): GoalPlugin {
         if (subject.address.kind !== 'root') return;
         const service = new GoalService(subject, options);
         services.set(subject.log, service);
+        servicesHere.set(subject.log, service);
         attachedHere.push(service);
         return () => {
           services.delete(subject.log);
+          servicesHere.delete(subject.log);
           const at = attachedHere.indexOf(service);
           if (at >= 0) attachedHere.splice(at, 1);
         };
       });
+      // **三顆工具一律 `rootOnly`。** `fold.ts` 會把每個 subagent 那一份裡的同名項換成
+      // 拒絕樁，而**那正是 dsh 對 `tool-goal` 的政策本身**（`authority.ts` 的
+      // `ctx.agents.roots().includes(execution.agent)`），不是我們的收窄。目標是人交代
+      // 的，subagent 沒有人可以交代。
+      for (const goalTool of createGoalTools({
+        forCall: (config) => registry.sessions.forCall(config),
+        serviceFor: (log) => servicesHere.get(log),
+      })) {
+        registry.tools.register(goalTool, { rootOnly: true });
+      }
       registry.commands.register({
         name: GOAL_COMMAND_NAME,
         description: GOAL_COMMAND_DESCRIPTION,
