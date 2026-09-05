@@ -79,6 +79,28 @@ export const REPEAT_REMINDER_MIDDLEWARE_NAME = 'nexusRepeatToolReminder';
  */
 export const REPEAT_REMINDER_MARKER = 'nexus_repeat_reminder';
 
+/**
+ * goal 收尾指示在 `additional_kwargs` 上的記號。
+ *
+ * ## 為什麼一個 goal 的記號住在這個檔案裡
+ *
+ * **這個記號的全部作用是讓底下那條鏈走訪跳過它。** 造它的人在
+ * `@nexus/plugin-goal`，讀它的人只有這裡——記號跟著讀的人住，同一條紀律讓
+ * {@link REPEAT_REMINDER_MARKER} 也住在這裡。`@nexus/core` 反向依賴插件是不可能的，
+ * 所以詞彙落在這一側是唯一走得通的擺法。
+ *
+ * ## 它擋的是什麼
+ *
+ * 收尾指示是一則 `HumanMessage`，而「真的使用者訊息清零計數」會把它當成人插了話。
+ * 那正好發生在**模型剛被告知不要再叫工具**的時候：它若無視收尾指示繼續打轉，門檻 3
+ * 的提醒會晚兩次才到——方向跟收尾指示本身相反。
+ *
+ * **一輪的頭不標記。** 續行輪次的 `turn/start` 也是一則素的 `HumanMessage`
+ * （`apps/harness` 的 `thread-pump.ts`），它清零是**對的**：新的物理輪次是真的新脈絡。
+ * 差別在「一輪的頭」與「一輪內部的注入」，不在哪個套件造的。
+ */
+export const GOAL_WRAPUP_MARKER = 'nexus_goal_wrapup';
+
 /** 一則提醒訊息在記號底下帶的東西，對應 dsh 的 `source.summary`（`<tool> × <count>`）。 */
 export interface RepeatReminderMark {
   /** 重複的那個工具名。 */
@@ -242,6 +264,29 @@ function isReminder(message: BaseMessage | undefined): boolean {
   );
 }
 
+/**
+ * 一則 `HumanMessage` 是不是**插進去的**，而不是人講的話。
+ *
+ * ## 為什麼這不是 {@link isReminder} 加寬一格
+ *
+ * 這兩個述詞問的是相反的問題，而下面有兩個呼叫點各要一個答案：
+ *
+ * - **重入護欄**問「這一輪的提醒貼過了嗎」，只有我們自己那則提醒算數。收尾指示注入
+ *   之後正好落在最後一則 AI 訊息之後，把護欄的述詞加寬，那一輪的提醒就整個不發了。
+ * - **鏈走訪**問「這是人插了話嗎」，兩種合成訊息都不算。
+ *
+ * 合成來源加進來時要加在這裡，不是加在 {@link isReminder}。
+ *
+ * @param message - 要判的那一則。
+ * @returns 是我們插的就 `true`；不是 `HumanMessage` 也算 `false`。
+ */
+function isSynthetic(message: BaseMessage | undefined): boolean {
+  if (isReminder(message)) return true;
+  return (
+    HumanMessage.isInstance(message) && message.additional_kwargs[GOAL_WRAPUP_MARKER] != null
+  );
+}
+
 /** 一條鏈：上一次受追蹤呼叫的身分鍵，與它已經連續了幾次。 */
 interface Chain {
   readonly key: string;
@@ -288,9 +333,9 @@ function pendingReminders(
 
   for (let i = 0; i <= lastAi; i += 1) {
     const message = messages[i];
-    // 真的使用者訊息會清零：人插了話就換了脈絡，跨過它的重複不是打轉。**我們自己那則
-    // 提醒不算**，見 {@link REPEAT_REMINDER_MARKER}。
-    if (HumanMessage.isInstance(message) && !isReminder(message)) {
+    // 真的使用者訊息會清零：人插了話就換了脈絡，跨過它的重複不是打轉。**插進去的那些
+    // 不算**——我們自己那則提醒，以及 goal 的收尾指示，見 {@link isSynthetic}。
+    if (HumanMessage.isInstance(message) && !isSynthetic(message)) {
       chain = undefined;
       continue;
     }
