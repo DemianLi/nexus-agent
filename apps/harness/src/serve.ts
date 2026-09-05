@@ -23,8 +23,15 @@
 import { parseArgs } from 'node:util';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { NexusPlugin, SessionRegistry } from '@nexus/core';
-import { DEFAULT_PLUGINS, createCliAgent, loadPluginModule, resolveSessionLogDir } from './cli.js';
+import type { NexusPlugin, SessionLog, SessionRegistry } from '@nexus/core';
+import {
+  DEFAULT_PLUGINS,
+  createCliAgent,
+  formatGoalDriverDisclosure,
+  goalDriverPort,
+  loadPluginModule,
+  resolveSessionLogDir,
+} from './cli.js';
 import { createJsonlSessionStore } from './jsonl-session-store.js';
 import { attachSessionPersistence } from '@nexus/core';
 import { LIVE_MODEL_ID } from './live-model.js';
@@ -44,6 +51,8 @@ export interface ServeInvocation {
   readonly workspace?: string;
   readonly pluginModule?: string;
   readonly sessionLog?: string;
+  /** 見 `cli.ts` 的 `CliInvocation.goalDriver`。**兩個入口共用同一個旗標名與同一個預設**。 */
+  readonly goalDriver: boolean;
   readonly help: boolean;
 }
 
@@ -56,6 +65,8 @@ const USAGE = `用法：
   --workspace <dir>    把檔案落在這個目錄底下（省略即虛擬檔案系統）
   --session-log <dir>  把會話日誌寫進這個目錄（省略即只在記憶體裡）
   --port <n>           監聽的 port，預設 ${DEFAULT_PORT}
+  --goal-driver        一個 active 的目標沒達成時自己再開一輪（預設關）
+                       上限是那個目標自己的 max_goal_rounds
   --help               印這段話
 
 按 Ctrl-C 結束——收線時會把每個 thread 的 agent 一起清掉。`;
@@ -71,6 +82,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
         workspace: { type: 'string' },
         'session-log': { type: 'string' },
         port: { type: 'string' },
+        'goal-driver': { type: 'boolean', default: false },
         help: { type: 'boolean', default: false },
       },
     });
@@ -100,6 +112,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     ...(values.plugins !== undefined && { plugins: values.plugins, pluginModule: values.plugins }),
     ...(values.workspace !== undefined && { workspace: values.workspace }),
     ...(values['session-log'] !== undefined && { sessionLog: values['session-log'] }),
+    goalDriver: values['goal-driver'] === true,
     help: values.help === true,
   };
 }
@@ -123,6 +136,9 @@ export interface RunningServe {
  */
 export async function runServe(options: RunServeOptions): Promise<RunningServe | undefined> {
   const log = options.log ?? ((line: string) => console.log(line));
+  // `goalDriver` 那個閉包的參數也叫 `log`（它是讀日誌的 getter），所以伺服器日誌在這裡
+  // 另取一個名字——同一個函式，只是不讓兩個 `log` 在同一段裡打架。
+  const serverLog = log;
   const invocation = parseServeArgs(options.argv);
   if (invocation.help) {
     log(USAGE);
@@ -191,6 +207,16 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         attachSession,
         // **落盤的答案不在 `createCliAgent` 的回傳值裡**，它來自呼叫方式而不是 plugin
         // 清單，所以在這個閉包裡接（見 `wire-handler.ts` 的 `attachPersistence`）。
+        // **旗標決定給不給，不是給一個關著的**：`goalDriver` 缺席就是「這條 thread 不
+        // 自己排輪次」，同 `attachPersistence` 用缺席表達「沒開落盤」的規矩。
+        ...(invocation.goalDriver
+          ? {
+              goalDriver: (log: () => SessionLog, flush: () => Promise<void>) =>
+                goalDriverPort(log, flush, (message) => {
+                  serverLog(message);
+                }),
+            }
+          : {}),
         ...(sessionStore === undefined
           ? {}
           : {
@@ -226,6 +252,9 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
       ? '會話日誌：只在記憶體裡（行程結束就沒了；--session-log <dir> 可以落盤）'
       : `會話日誌：${sessionStore.directory}`,
   );
+  // 同一條規矩底下的另一行：**這一輪結束之後還會不會有下一輪**。這台 server 上它是
+  // per-thread 的行為，但旗標是整個 process 的，所以講在這裡。
+  log(formatGoalDriverDisclosure(invocation.goalDriver));
   for (const line of formatTracingDisclosure(readTracingDisclosure(options.env ?? process.env))) {
     log(line);
   }

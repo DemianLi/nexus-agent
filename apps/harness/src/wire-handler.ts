@@ -39,9 +39,15 @@ import {
   isWireChannel,
   successResponse,
 } from '@nexus/wire';
-import type { CommandDescriptor, CommandRegistrationPoint, SessionRegistry } from '@nexus/core';
+import type {
+  CommandDescriptor,
+  CommandRegistrationPoint,
+  SessionLog,
+  SessionRegistry,
+} from '@nexus/core';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import { createCommandExecutor } from '@nexus/plugin-commands';
+import type { GoalDriverPort } from './goal-driver.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
 
@@ -130,7 +136,22 @@ export interface ThreadAgent {
    * @param sessions - 這個 thread 的會話註冊表。
    * @returns 收掉這次接線的方法（`dispose` 會排空並關檔），或沒開落盤時的 `undefined`。
    */
-  attachPersistence?(sessions: SessionRegistry): { dispose(): Promise<void> } | undefined;
+  attachPersistence?(
+    sessions: SessionRegistry,
+  ): { flush(): Promise<void>; dispose(): Promise<void> } | undefined;
+  /**
+   * 組出續行排程器要問域的四件事。**沒開 `--goal-driver` 就整個不給**，那時這條 thread
+   * 一輪都不會自己排。
+   *
+   * `log` 是 getter 而不是一份日誌，因為日誌由 {@link ThreadPump} 建，而 port 要在 pump
+   * 之前組好——它是 pump 的建構參數。同一個理由讓 `flush` 也是延後綁的：耐久協調器接在
+   * pump 之後。
+   *
+   * @param log - 讀這條 thread 的 root 日誌。
+   * @param flush - 排隊前的耐久檢查點。
+   * @returns 排程器那一側。
+   */
+  goalDriver?(log: () => SessionLog, flush: () => Promise<void>): GoalDriverPort;
 }
 
 export interface WireHandlerOptions {
@@ -223,7 +244,15 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     }
     const created = (async (): Promise<ThreadState> => {
       const threadAgent = await options.createAgent(threadId);
-      const pump = new ThreadPump(threadAgent.agent, threadId);
+      // **三個東西互相要對方，所以綁定是延後的**：port 要日誌（pump 才有）與 flush
+      // （協調器才有），而 pump 的建構參數就是 port。兩個 getter 把環打開。
+      let pump!: ThreadPump;
+      let persistence: { flush(): Promise<void>; dispose(): Promise<void> } | undefined;
+      const driver = threadAgent.goalDriver?.(
+        () => pump.sessionLog,
+        async () => void (await persistence?.flush()),
+      );
+      pump = new ThreadPump(threadAgent.agent, threadId, driver);
       const detachTelemetry = threadAgent.attachTelemetry?.(pump.sessions);
       const detachInvariants = threadAgent.attachInvariants?.(pump.sessions);
       // **接在不變量之後**，同 `cli.ts` 那條的理由：參與者一裝上去就可能記東西，
@@ -232,7 +261,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       const detachSession = threadAgent.attachSession?.(pump.sessions);
       // **接在最後，理由同 `cli.ts`**：前三個是觀察者，落盤不改變任何人看得到什麼，
       // 所以順序在功能上沒有差別；排最後是為了讓讀的人看到的因果跟實際一致。
-      const persistence = threadAgent.attachPersistence?.(pump.sessions);
+      persistence = threadAgent.attachPersistence?.(pump.sessions);
       return {
         pump,
         commands: threadAgent.commands,

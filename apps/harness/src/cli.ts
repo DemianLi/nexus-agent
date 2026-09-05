@@ -42,7 +42,7 @@ import { createJsonlSessionStore } from './jsonl-session-store.js';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant';
 import { createEchoInvariantPlugin } from '@nexus/plugin-echo/invariant';
-import { createGoalPlugin } from '@nexus/plugin-goal';
+import { createGoalPlugin, DEFAULT_MAX_GOAL_ROUNDS } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
 import { createMcpInvariantPlugin } from '@nexus/plugin-mcp/invariant';
 import { createMemoryInvariantPlugin } from '@nexus/plugin-memory/invariant';
@@ -57,6 +57,8 @@ import { createValidationInvariantPlugin } from '@nexus/plugin-validation/invari
 import { createWireInvariantPlugin } from '@nexus/wire/invariant';
 
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
+import { driveGoalRound } from './goal-driver.js';
+import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
 import type { NexusAgentHandle } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MODEL_ID } from './live-model.js';
@@ -87,6 +89,17 @@ export interface CliInvocation {
    * 應該由人做的決定，不是一個順手的預設（[#172](https://github.com/DemianLi/nexus-agent/issues/172)）。
    */
   readonly sessionLog?: string;
+  /**
+   * 一個 active 的目標沒達成時自己再開一輪（[#180](https://github.com/DemianLi/nexus-agent/issues/180)）。
+   *
+   * **預設關，而且那是一個決定不是保守。** dsh 的續行驅動器是「需要你刻意掛載的可選消費
+   * 方」（`packages/goal/README.zh.md`），而我們的入口點擁有輪迴圈——**掛載的等價物就是
+   * 這個旗標**。
+   *
+   * 開著的時候，唯一的硬上限是那個目標自己的 `max_goal_rounds`；額外那條停損刻意沒做，
+   * 理由在 `goal-driver.ts` 檔頭。
+   */
+  readonly goalDriver: boolean;
   /** 只印用法就退出。 */
   readonly help: boolean;
 }
@@ -102,6 +115,8 @@ export const USAGE = `用法：cli [選項] [要說的話...]
                        （省略即虛擬檔案系統，完全不碰磁碟）
   --session-log <dir>  把會話日誌寫進這個目錄底下（省略即不落盤）
                        它不能在 --workspace 底下：日誌是基礎建設，不是 agent 的工作區
+  --goal-driver        一個 active 的目標沒達成時自己再開一輪（預設關）
+                       上限是那個目標自己的 max_goal_rounds
   --help               印這段話
 
   REPL 裡輸入 /help 看有哪些命令，/exit 或按 Ctrl-D 結束。`;
@@ -126,6 +141,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
         plugins: { type: 'string' },
         workspace: { type: 'string' },
         'session-log': { type: 'string' },
+        'goal-driver': { type: 'boolean', default: false },
         help: { type: 'boolean', default: false },
       },
       allowPositionals: true,
@@ -154,6 +170,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     ...(values.plugins !== undefined && { pluginModule: values.plugins }),
     ...(values.workspace !== undefined && { workspace: values.workspace }),
     ...(sessionLog !== undefined && { sessionLog }),
+    goalDriver: values['goal-driver'] === true,
     help: values.help === true,
   };
 }
@@ -259,10 +276,23 @@ export function resolveSessionLogDir(
  *
  * 違規往哪裡印見 {@link runCli} 接線的那一行。
  */
+/**
+ * 預設清單裡的 goal 域，**單獨留一個 handle**。
+ *
+ * 續行排程器要靠它的 `serviceFor(log)` 拿到某一份日誌上的服務——那是唯一問得到
+ * `activation` 的地方，而 `activation` 是 process 內的、**折疊算不出來**（重放不會重新
+ * 授權，那正是「掛載之後絕不自行復活」那條政策）。`GoalPlugin` 檔頭說這兩個方法「沒有
+ * production 消費者」，這一行就是第一個。
+ *
+ * **它與清單裡那一項是同一個物件**，不是第二次 `createGoalPlugin()`——服務綁的是日誌，
+ * 而查表在 plugin 物件上。
+ */
+const GOAL_PLUGIN = createGoalPlugin();
+
 export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
   createEchoPlugin(),
   createPlanModePlugin(),
-  createGoalPlugin(),
+  GOAL_PLUGIN,
   createTodoPlugin({ allowParallelInProgress: true }),
   createCoreInvariantPlugin(),
   createCommandsInvariantPlugin(),
@@ -371,6 +401,27 @@ const THREAD_ID = 'cli';
  */
 export const APPROVAL_DISCLOSURE =
   '核准：關閉（這個入口收不了核准決定，需要核准的工具會被拒絕，不會停下來等）';
+
+/**
+ * 續行那一行披露。**它是算出來的，不是常數**——因為它背後真的有一個旗標。
+ *
+ * {@link APPROVAL_DISCLOSURE} 的檔頭寫著「哪天這裡真的多了一個旗標，這個常數要跟著變成
+ * 一個函式——不然畫面會開始說謊」。`--goal-driver` 就是那樣的旗標，只是它**不動核准政策**
+ * （`runCli` 照樣只傳 {@link HEADLESS_APPROVALS}），所以那一行沒有變成謊話；這一行是同一
+ * 條規矩底下的第二行，而它從第一天就是函式。
+ *
+ * **開著的時候要把上限講出來**，因為那是唯一的硬停損：額外那條停損刻意沒做，理由在
+ * `goal-driver.ts` 檔頭。不講的話，「模型自己又跑了三十輪」與「人問了三十次」在帳單上
+ * 一模一樣而在畫面上沒有差別。
+ *
+ * @param on - 旗標開著沒有。
+ * @returns 那一行。
+ */
+export function formatGoalDriverDisclosure(on: boolean): string {
+  return on
+    ? `續行：開啟（目標沒達成時自己再開一輪；上限是那個目標自己的 max_goal_rounds，預設 ${DEFAULT_MAX_GOAL_ROUNDS}）`
+    : '續行：關閉（一輪結束就結束，要人再推；--goal-driver 可以打開）';
+}
 
 /**
  * 一則訊息在畫面上該印成什麼，或 `undefined` 代表不印。
@@ -582,20 +633,35 @@ function printInterrupt(update: unknown, printer: Printer): void {
  * 兩種一起收是因為假模型的腳本用完就會失敗——stream 完再 invoke 一次會多跑一輪。
  *
  * @param agent - 組裝好的 agent。
- * @param input - 使用者說的那句話。
+ * @param input - 使用者說的那句話，或**排程器排的一輪續行**。
  * @param printer - 輸出去處。
+ * @param sessionLog - 這條 REPL 的事件日誌。
  */
 export async function runTurn(
   agent: NexusAgent,
-  input: string,
+  input: string | GoalRoundRequest,
   printer: Printer,
   sessionLog: SessionLog,
 ): Promise<void> {
   let files: Record<string, unknown> = {};
 
-  sessionLog.append('turn/start', { kind: 'message', text: input });
+  // **一個 `text`，兩個消費者。** 分開算的話，一顆日誌上逐字正確的 `turn/start` 可以配
+  // 上餵給模型的任意字串，而不變量伴生只看得到日誌那一份——它結構上驗不到那種偏差。
+  const text = typeof input === 'string' ? input : input.text;
+  sessionLog.append(
+    'turn/start',
+    typeof input === 'string'
+      ? { kind: 'message', text }
+      : {
+          kind: 'goal',
+          text,
+          goalId: input.goalId,
+          revision: input.revision,
+          round: input.round,
+        },
+  );
   try {
-    for await (const [mode, payload] of await agent.stream(toAgentInvocation(input), {
+    for await (const [mode, payload] of await agent.stream(toAgentInvocation(text), {
       streamMode: ['updates', 'values'],
       configurable: { thread_id: THREAD_ID },
     })) {
@@ -630,6 +696,58 @@ export async function runTurn(
   const paths = Object.keys(files);
   if (paths.length > 0) {
     printer.log(`虛擬檔案系統：${paths.join('、')}`);
+  }
+}
+
+/**
+ * 組出排程器要問域的那四件事。**兩條進入點共用這一個**。
+ *
+ * `log` 是 getter 不是值，因為 serve 那條路上日誌由 `ThreadPump` 建，而 port 要在 pump
+ * 之前組好（pump 的建構參數就是它）。
+ *
+ * @param log - 讀那一份日誌；服務綁在它上面。
+ * @param flush - 耐久檢查點。沒落盤時給一個 no-op。
+ * @param warn - 排程器出事時說話的去處。
+ * @returns 排程器要問域的四件事。
+ */
+export function goalDriverPort(
+  log: () => SessionLog,
+  flush: () => Promise<void>,
+  warn: (message: string) => void,
+): GoalDriverPort {
+  return {
+    // **查不到就是 `undefined`**：`--plugins` 換掉預設清單時這條路就沒有 goal 域，
+    // 那時排程器安靜地什麼都不做。
+    goal: () => GOAL_PLUGIN.serviceFor(log())?.get(),
+    block: (ref, reason) => void GOAL_PLUGIN.serviceFor(log())?.block(ref, reason),
+    disarm: () => void GOAL_PLUGIN.serviceFor(log())?.disarm(),
+    flush,
+    warn: (message) => warn(`[續行] ${message}`),
+  };
+}
+
+/**
+ * 排到排不動為止。**一輪跑壞就整串停**——決策函式看到日誌上那顆 `turn/failed` 會回
+ * `turn-failed`，而異常自動重試明著在範圍外。
+ *
+ * @param agent - 組裝好的 agent。
+ * @param printer - 輸出去處。
+ * @param sessionLog - 這條 REPL 的事件日誌。
+ * @param driver - 排程器那一側。
+ */
+export async function driveGoalRounds(
+  agent: NexusAgent,
+  printer: Printer,
+  sessionLog: SessionLog,
+  driver: GoalDriverPort,
+): Promise<void> {
+  for (;;) {
+    const round = await driveGoalRound(() => sessionLog.events, driver);
+    if (round === undefined) return;
+    // **這一行是披露不是裝飾**：不印的話，「模型自己又開了一輪」與「人打了一句話」在
+    // 畫面上一模一樣，而畫面是這條路上唯一看得到續行在燒預算的地方。
+    printer.log(`\n[續行] 第 ${round.round} 輪（目標還沒達成）`);
+    await runTurn(agent, round, printer, sessionLog);
   }
 }
 
@@ -744,6 +862,7 @@ export async function runRepl(
   printer: Printer,
   sessionLog: SessionLog,
   commands: Pick<CommandRegistrationPoint, 'find' | 'list'>,
+  driver?: GoalDriverPort,
 ): Promise<void> {
   assertNoReplNameCollision(commands);
   const executor = createCommandExecutor({ commands, sessionLog });
@@ -773,6 +892,8 @@ export async function runRepl(
           const write = execution.result.kind === 'error' ? printer.error : printer.log;
           write(execution.result.text);
         }
+        // **命令也算一次機會**：`/goal resume` 就是重新授權，而重新授權之後該接著跑。
+        if (driver !== undefined) await driveGoalRounds(agent, printer, sessionLog, driver);
       } catch (error) {
         printer.error(errorMessage(error));
       }
@@ -918,10 +1039,22 @@ export async function runCli(options: RunCliOptions): Promise<void> {
         ? '會話日誌：只在記憶體裡（行程結束就沒了；--session-log <dir> 可以落盤）'
         : `會話日誌：${sessionStore.directory}`,
     );
+    // 第七行：**這一輪結束之後還會不會有下一輪**。前六行講的是東西往哪裡去，這一行講
+    // 的是誰在推——而那是 `--goal-driver` 落地之後畫面上唯一看得出來的差別。
+    printer.log(formatGoalDriverDisclosure(invocation.goalDriver));
+
+    const driver = invocation.goalDriver
+      ? goalDriverPort(
+          () => sessionLog,
+          async () => void (await persistence?.flush()),
+          (message) => printer.error(message),
+        )
+      : undefined;
 
     if (invocation.prompt !== undefined) {
       printer.log(`> ${invocation.prompt}\n`);
       await runTurn(agent, invocation.prompt, printer, sessionLog);
+      if (driver !== undefined) await driveGoalRounds(agent, printer, sessionLog, driver);
     } else {
       printer.log('輸入 /help 看有哪些命令，/exit 或按 Ctrl-D 結束。\n');
       await runRepl(
@@ -930,6 +1063,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
         printer,
         sessionLog,
         commands,
+        driver,
       );
     }
   } catch (error) {
