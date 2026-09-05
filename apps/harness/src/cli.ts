@@ -100,6 +100,18 @@ export interface CliInvocation {
    * 理由在 `goal-driver.ts` 檔頭。
    */
   readonly goalDriver: boolean;
+  /**
+   * 這一次呼叫最多讓續行排幾輪。省略即不設，只剩目標自己那一條。
+   *
+   * **它存在的理由是目標自己那條上限不歸操作的人管**：`service.ts:269` 是
+   * `request.maxGoalRounds ?? this.#defaultMaxGoalRounds`——`??` 不是 `Math.min`，所以
+   * 模型在 `create_goal` 裡填的數字贏過組裝點給的預設。這一格是**模型改不動的那一個**，
+   * 完整理由在 `goal-driver.ts` 檔頭。
+   *
+   * **沒開 `--goal-driver` 就給它是錯誤，不是無害的多餘**：它唯一的消費者是那支迴圈，
+   * 收下來會變成一個看起來設過、實際上一輪都限制不到的上限。
+   */
+  readonly maxGoalRounds?: number;
   /** 只印用法就退出。 */
   readonly help: boolean;
 }
@@ -116,7 +128,9 @@ export const USAGE = `用法：cli [選項] [要說的話...]
   --session-log <dir>  把會話日誌寫進這個目錄底下（省略即不落盤）
                        它不能在 --workspace 底下：日誌是基礎建設，不是 agent 的工作區
   --goal-driver        一個 active 的目標沒達成時自己再開一輪（預設關）
-                       上限是那個目標自己的 max_goal_rounds
+  --max-goal-rounds <n>
+                       這一次呼叫最多讓它排幾輪（要配 --goal-driver）
+                       目標自己的 max_goal_rounds 是模型填的，這一條它改不動
   --help               印這段話
 
   REPL 裡輸入 /help 看有哪些命令，/exit 或按 Ctrl-D 結束。`;
@@ -142,6 +156,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
         workspace: { type: 'string' },
         'session-log': { type: 'string' },
         'goal-driver': { type: 'boolean', default: false },
+        'max-goal-rounds': { type: 'string' },
         help: { type: 'boolean', default: false },
       },
       allowPositionals: true,
@@ -163,6 +178,9 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     throw new Error(`--session-log 要給一個目錄路徑。\n\n${USAGE}`);
   }
 
+  const goalDriver = values['goal-driver'] === true;
+  const maxGoalRounds = parseMaxGoalRounds(values['max-goal-rounds'], goalDriver);
+
   const prompt = positionals.join(' ').trim();
   return {
     ...(prompt.length > 0 && { prompt }),
@@ -170,9 +188,38 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     ...(values.plugins !== undefined && { pluginModule: values.plugins }),
     ...(values.workspace !== undefined && { workspace: values.workspace }),
     ...(sessionLog !== undefined && { sessionLog }),
-    goalDriver: values['goal-driver'] === true,
+    goalDriver,
+    ...(maxGoalRounds !== undefined && { maxGoalRounds }),
     help: values.help === true,
   };
+}
+
+/**
+ * `--max-goal-rounds` 那一格。
+ *
+ * **沒開旗標就拋，不是靜靜收下。** 一個收下來卻沒有消費者的上限，跟沒設一模一樣——而
+ * 差別在於畫面上看起來設過了。這條路上唯一會發生的事就是有人以為自己壓住了輪數。
+ *
+ * @param raw - 命令列上那串字，沒給就是 `undefined`。
+ * @param goalDriver - `--goal-driver` 開著沒有。
+ * @returns 那個數字，或沒給時的 `undefined`。
+ * @throws 沒配 `--goal-driver`，或不是正整數——訊息接上用法。
+ */
+function parseMaxGoalRounds(raw: string | undefined, goalDriver: boolean): number | undefined {
+  if (raw === undefined) return undefined;
+  if (!goalDriver) {
+    throw new Error(
+      `--max-goal-rounds 要配 --goal-driver：沒有排程器的話它一輪都限制不到。\n\n${USAGE}`,
+    );
+  }
+  const trimmed = raw.trim();
+  const value = Number(trimmed);
+  if (trimmed === '' || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error(
+      `--max-goal-rounds 要給一個正整數（拿到 ${JSON.stringify(raw)}）。\n\n${USAGE}`,
+    );
+  }
+  return value;
 }
 
 /**
@@ -410,17 +457,25 @@ export const APPROVAL_DISCLOSURE =
  * （`runCli` 照樣只傳 {@link HEADLESS_APPROVALS}），所以那一行沒有變成謊話；這一行是同一
  * 條規矩底下的第二行，而它從第一天就是函式。
  *
- * **開著的時候要把上限講出來**，因為那是唯一的硬停損：額外那條停損刻意沒做，理由在
- * `goal-driver.ts` 檔頭。不講的話，「模型自己又跑了三十輪」與「人問了三十次」在帳單上
- * 一模一樣而在畫面上沒有差別。
+ * **開著的時候要把上限講出來**，因為那是唯一擋得住這支迴圈的東西。不講的話，「模型自己
+ * 又跑了三十輪」與「人問了三十次」在帳單上一模一樣而在畫面上沒有差別。
+ *
+ * **而上限有兩條，所以兩條都要講。** 目標自己那個 `max_goal_rounds` 是**模型填的**
+ * （`service.ts:269` 的 `??`），`--max-goal-rounds` 才是操作的人設得動的那一條。只印其中
+ * 一條的話，這一行就會變成上面那句自己警告過的謊話——只印目標那條會讓人以為有一個他控制
+ * 得了的數字，只印命令列那條會讓人看不見模型可以在它底下自己挑一個更小的。沒給命令列那
+ * 條時要**明著說沒給**，理由同上。
  *
  * @param on - 旗標開著沒有。
+ * @param roundCap - `--max-goal-rounds` 那個數字；省略即這一次呼叫沒給。
  * @returns 那一行。
  */
-export function formatGoalDriverDisclosure(on: boolean): string {
-  return on
-    ? `續行：開啟（目標沒達成時自己再開一輪；上限是那個目標自己的 max_goal_rounds，預設 ${DEFAULT_MAX_GOAL_ROUNDS}）`
-    : '續行：關閉（一輪結束就結束，要人再推；--goal-driver 可以打開）';
+export function formatGoalDriverDisclosure(on: boolean, roundCap?: number): string {
+  if (!on) return '續行：關閉（一輪結束就結束，要人再推；--goal-driver 可以打開）';
+  const own = `目標自己的 max_goal_rounds（模型在 create_goal 填的，沒填就是 ${DEFAULT_MAX_GOAL_ROUNDS}）`;
+  return roundCap === undefined
+    ? `續行：開啟（目標沒達成時自己再開一輪；上限只有一條——${own}；這一次呼叫沒有給 --max-goal-rounds）`
+    : `續行：開啟（目標沒達成時自己再開一輪；上限兩條，先到的那一條管——--max-goal-rounds ${roundCap}，與${own}）`;
 }
 
 /**
@@ -734,15 +789,19 @@ export function goalDriverPort(
  * @param printer - 輸出去處。
  * @param sessionLog - 這條 REPL 的事件日誌。
  * @param driver - 排程器那一側。
+ * @param roundCap - `--max-goal-rounds`；省略即只有目標自己那一條上限。**它到頭時走的
+ *   是跟目標那條同一條路**（記一顆 blocker 然後停），不是在這裡 `break`——安靜停下來的
+ *   迴圈會留下一個還 active 的目標，而那在日誌上跟「模型收工了」分不開。
  */
 export async function driveGoalRounds(
   agent: NexusAgent,
   printer: Printer,
   sessionLog: SessionLog,
   driver: GoalDriverPort,
+  roundCap?: number,
 ): Promise<void> {
   for (;;) {
-    const round = await driveGoalRound(() => sessionLog.events, driver);
+    const round = await driveGoalRound(() => sessionLog.events, driver, roundCap);
     if (round === undefined) return;
     // **這一行是披露不是裝飾**：不印的話，「模型自己又開了一輪」與「人打了一句話」在
     // 畫面上一模一樣，而畫面是這條路上唯一看得到續行在燒預算的地方。
@@ -863,6 +922,7 @@ export async function runRepl(
   sessionLog: SessionLog,
   commands: Pick<CommandRegistrationPoint, 'find' | 'list'>,
   driver?: GoalDriverPort,
+  roundCap?: number,
 ): Promise<void> {
   assertNoReplNameCollision(commands);
   const executor = createCommandExecutor({ commands, sessionLog });
@@ -893,7 +953,8 @@ export async function runRepl(
           write(execution.result.text);
         }
         // **命令也算一次機會**：`/goal resume` 就是重新授權，而重新授權之後該接著跑。
-        if (driver !== undefined) await driveGoalRounds(agent, printer, sessionLog, driver);
+        if (driver !== undefined)
+          await driveGoalRounds(agent, printer, sessionLog, driver, roundCap);
       } catch (error) {
         printer.error(errorMessage(error));
       }
@@ -1041,7 +1102,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     );
     // 第七行：**這一輪結束之後還會不會有下一輪**。前六行講的是東西往哪裡去，這一行講
     // 的是誰在推——而那是 `--goal-driver` 落地之後畫面上唯一看得出來的差別。
-    printer.log(formatGoalDriverDisclosure(invocation.goalDriver));
+    printer.log(formatGoalDriverDisclosure(invocation.goalDriver, invocation.maxGoalRounds));
 
     const driver = invocation.goalDriver
       ? goalDriverPort(
@@ -1054,7 +1115,8 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     if (invocation.prompt !== undefined) {
       printer.log(`> ${invocation.prompt}\n`);
       await runTurn(agent, invocation.prompt, printer, sessionLog);
-      if (driver !== undefined) await driveGoalRounds(agent, printer, sessionLog, driver);
+      if (driver !== undefined)
+        await driveGoalRounds(agent, printer, sessionLog, driver, invocation.maxGoalRounds);
     } else {
       printer.log('輸入 /help 看有哪些命令，/exit 或按 Ctrl-D 結束。\n');
       await runRepl(
@@ -1064,6 +1126,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
         sessionLog,
         commands,
         driver,
+        invocation.maxGoalRounds,
       );
     }
   } catch (error) {

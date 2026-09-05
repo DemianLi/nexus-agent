@@ -12,7 +12,13 @@ import type { SessionEventMap } from '@nexus/core';
 import { renderGoalRoundPrompt } from '@nexus/plugin-goal';
 import type { GoalView } from '@nexus/plugin-goal';
 
-import { decideGoalRound, ROUND_LIMIT_BLOCK_CODE } from './goal-driver.js';
+import {
+  decideGoalRound,
+  driveGoalRound,
+  ROUND_CAP_BLOCK_CODE,
+  ROUND_LIMIT_BLOCK_CODE,
+} from './goal-driver.js';
+import type { GoalDriverPort } from './goal-driver.js';
 
 const ID = goalId('goal-1');
 
@@ -91,6 +97,97 @@ describe('上限耗盡', () => {
       view({ maxGoalRounds: 2, roundsStarted: 1 }),
     );
     expect(decision.kind === 'run' && decision.round.round).toBe(2);
+  });
+});
+
+/**
+ * 操作的人那一條上限。**它跟目標自己那一條是兩件事**：目標那個數字是模型在
+ * `create_goal` 裡填的（`service.ts:269` 的 `??` 不是 `Math.min`），所以「上限」在沒有這
+ * 一格之前完全由模型自己挑。
+ */
+describe('命令列給的那條上限', () => {
+  it('目標自己那條還很寬，人設的那條照樣夾得住', () => {
+    const decision = decideGoalRound(
+      logOf(SETTLED).events,
+      view({ maxGoalRounds: 99, roundsStarted: 3 }),
+      3,
+    );
+    expect(decision).toEqual({
+      kind: 'block',
+      ref: { id: ID, revision: 1 },
+      reason: {
+        code: ROUND_CAP_BLOCK_CODE,
+        message: '這一次呼叫用完了 --max-goal-rounds 給的 3 個續行輪次。',
+      },
+    });
+  });
+
+  it('還沒到就照排——邊界同樣是 >=，不是 >', () => {
+    const decision = decideGoalRound(
+      logOf(SETTLED).events,
+      view({ maxGoalRounds: 99, roundsStarted: 2 }),
+      3,
+    );
+    expect(decision.kind === 'run' && decision.round.round).toBe(3);
+  });
+
+  /**
+   * **兩條同時到頂時，說出來的名字是目標自己那一條。** 那一刻人設的閘沒有夾到任何東西，
+   * 算成 `round-cap` 會把功勞記錯——而「模型自己收斂到上限」與「人先夾住它」分不分得開，
+   * 正是開著旗標跑真模型時要看的那件事。
+   */
+  it('兩條同時到頂，記的是 round-limit 不是 round-cap', () => {
+    const decision = decideGoalRound(
+      logOf(SETTLED).events,
+      view({ maxGoalRounds: 2, roundsStarted: 2 }),
+      2,
+    );
+    expect(decision.kind === 'block' && decision.reason.code).toBe(ROUND_LIMIT_BLOCK_CODE);
+  });
+
+  it('沒給就只剩目標自己那一條，寬到哪裡都排得出來', () => {
+    const decision = decideGoalRound(
+      logOf(SETTLED).events,
+      view({ maxGoalRounds: 256, roundsStarted: 99 }),
+    );
+    expect(decision.kind === 'run' && decision.round.round).toBe(100);
+  });
+});
+
+/**
+ * 到頂那一刻**真的記得下 blocker**——`decideGoalRound` 只回一個意圖，執行是
+ * `driveGoalRound` 的事，而那兩件事之間是這條路上唯一有 side effect 的一步。
+ */
+describe('到頂之後記的那顆 blocker', () => {
+  function portOf(goal: GoalView): GoalDriverPort & { readonly blocked: string[] } {
+    const blocked: string[] = [];
+    return {
+      blocked,
+      goal: () => goal,
+      block: (_ref, reason) => void blocked.push(reason.code),
+      disarm: () => {},
+      flush: () => Promise.resolve(),
+      warn: () => {},
+    };
+  }
+
+  it('人設的那條到頂，記 round-cap 而且不排', async () => {
+    const port = portOf(view({ maxGoalRounds: 99, roundsStarted: 3 }));
+    const round = await driveGoalRound(() => logOf(SETTLED).events, port, 3);
+    expect(round).toBeUndefined();
+    expect(port.blocked).toEqual([ROUND_CAP_BLOCK_CODE]);
+  });
+
+  /**
+   * **同一份目標、同一份日誌，只拿掉 `roundCap` 這一個變數。** 少了這一格對照，上面那條
+   * 綠只證得了「這個狀態會 block」，證不了 block 是那條上限造成的——`roundsStarted: 3`
+   * 在別的判準底下也可能自己停下來。
+   */
+  it('同一個狀態沒給上限就照排——對照組', async () => {
+    const port = portOf(view({ maxGoalRounds: 99, roundsStarted: 3 }));
+    const round = await driveGoalRound(() => logOf(SETTLED).events, port);
+    expect(round?.round).toBe(4);
+    expect(port.blocked).toEqual([]);
   });
 });
 
