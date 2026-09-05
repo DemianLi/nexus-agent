@@ -22,7 +22,9 @@ import {
   runCli,
   runTurn,
 } from './cli.js';
+import { parseCliArgs } from './cli.js';
 import type { GoalDriverPort } from './goal-driver.js';
+import { ROUND_CAP_BLOCK_CODE } from './goal-driver.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedModelState, ScriptedTurn } from './scripted-model.js';
 import type { NexusAgentHandle } from './agent-factory.js';
@@ -269,11 +271,112 @@ describe('伴生在預設組裝上是武裝的，旗標關著也一樣', () => {
   });
 });
 
+/**
+ * 命令列那條上限。**它存在的理由是目標自己那條不歸操作的人管**：`service.ts:269` 是
+ * `request.maxGoalRounds ?? this.#defaultMaxGoalRounds`，`??` 不是 `Math.min`，所以模型在
+ * `create_goal` 裡填的數字贏過組裝點給的預設。這一份釘的是「模型填了一個大數字，人設的
+ * 那條照樣夾得住」。
+ */
+describe('--max-goal-rounds', () => {
+  it('模型自己填 5，人給 1，就只跑得到 1 輪', async () => {
+    const { agent, log, plugin, port, stop } = await build([
+      {
+        content: '',
+        toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 5 } }],
+      },
+      { content: '建好了。' },
+      { content: '再看看。' },
+      { content: '不該跑到這一輪。' },
+    ]);
+    const { printer } = recorder();
+
+    await runTurn(agent, '把 CI 修綠', printer, log);
+    await driveGoalRounds(agent, printer, log, port, 1);
+
+    expect(startKinds(log)).toEqual(['message', 'goal']);
+    const goal = plugin.serviceFor(log)?.get();
+    expect(goal?.maxGoalRounds).toBe(5);
+    expect(goal?.phase).toBe('blocked');
+    expect(goal?.blockedReason?.code).toBe(ROUND_CAP_BLOCK_CODE);
+    await stop();
+  });
+
+  /**
+   * **同一份腳本、同一個目標，只拿掉 `--max-goal-rounds` 這一個變數。** 沒有這一格對照，
+   * 上面那條綠證不了「只跑一輪」是那條上限造成的——腳本自己跑完也會停。
+   */
+  it('同一份腳本不給上限就跑滿模型自己填的 5——對照組', async () => {
+    const { agent, log, plugin, port, stop } = await build([
+      {
+        content: '',
+        toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 5 } }],
+      },
+      { content: '建好了。' },
+      { content: '第 1 輪。' },
+      { content: '第 2 輪。' },
+      { content: '第 3 輪。' },
+      { content: '第 4 輪。' },
+      { content: '第 5 輪。' },
+    ]);
+    const { printer } = recorder();
+
+    await runTurn(agent, '把 CI 修綠', printer, log);
+    await driveGoalRounds(agent, printer, log, port);
+
+    expect(startKinds(log)).toEqual(['message', 'goal', 'goal', 'goal', 'goal', 'goal']);
+    expect(plugin.serviceFor(log)?.get()?.blockedReason?.code).toBe('round-limit');
+    await stop();
+  });
+
+  it('沒配 --goal-driver 就拋——一個限制不到任何東西的上限比沒設更糟', () => {
+    expect(() => parseCliArgs(['--max-goal-rounds', '3', '動手'])).toThrow('要配 --goal-driver');
+  });
+
+  it.each([['0'], ['-1'], ['2.5'], ['abc'], ['']])('%s 不是正整數，當場拋', (raw) => {
+    expect(() => parseCliArgs(['--goal-driver', '--max-goal-rounds', raw, '動手'])).toThrow(
+      '--max-goal-rounds',
+    );
+  });
+
+  it('給對了就解析成數字，不是字串', () => {
+    expect(parseCliArgs(['--goal-driver', '--max-goal-rounds', '3', '動手']).maxGoalRounds).toBe(3);
+  });
+
+  it('沒給就是缺席，不是一個假的預設', () => {
+    expect(parseCliArgs(['--goal-driver', '動手']).maxGoalRounds).toBeUndefined();
+  });
+});
+
 describe('披露', () => {
   it('關著的時候說得出怎麼打開，開著的時候說得出上限', () => {
     expect(formatGoalDriverDisclosure(false)).toContain('--goal-driver');
     expect(formatGoalDriverDisclosure(true)).toContain('max_goal_rounds');
     expect(formatGoalDriverDisclosure(true)).toContain('256');
+  });
+
+  /**
+   * **兩條上限都要出現在畫面上，而且沒給的時候要明著說沒給。**
+   *
+   * 這一行自己的檔頭寫著「說謊的披露比沒有披露更糟」。只印目標那條會讓人以為有一個他控制
+   * 得了的數字（那個數字是模型填的）；只印命令列那條會讓人看不見模型可以在它底下自己挑
+   * 一個更小的。
+   */
+  it('給了上限就印出來，沒給就明著說沒給', () => {
+    expect(formatGoalDriverDisclosure(true, 3)).toContain('--max-goal-rounds 3');
+    expect(formatGoalDriverDisclosure(true, 3)).toContain('max_goal_rounds');
+    expect(formatGoalDriverDisclosure(true)).toContain('沒有給 --max-goal-rounds');
+  });
+
+  it('runCli 印的那一行帶著真的生效值', async () => {
+    const { printer, out } = recorder();
+    await runCli({
+      argv: ['--goal-driver', '--max-goal-rounds', '2', '把這句話回聲一次。'],
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer,
+      env: {},
+    });
+    expect(out.join('\n')).toContain(formatGoalDriverDisclosure(true, 2));
   });
 
   /**
