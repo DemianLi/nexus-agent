@@ -109,7 +109,7 @@ harness 五大範圍對應：解析標準化（PluginRegistry + zod）、編排�
 ## 3. 套件結構（pnpm workspace）
 
 ```
-packages/nexus-core      契約：NexusPlugin 型別、zod manifest、PluginRegistry 九個註冊點 ＋ lifecycle 通道、fold
+packages/nexus-core      契約：NexusPlugin 型別、zod manifest、PluginRegistry 九個註冊點 ＋ 五條通道、fold
 packages/nexus-plugin-*  plugin 系列，只相依 @nexus/core
 packages/nexus-wire      web 與 agent 之間那條線的協定：封包型別、SSE codec、route 與 channel 白名單、瀏覽器端 client
 apps/harness             組裝點：agent 工廠、訊息標準化、CLI、下行 pump 與 fetch handler；唯一呼叫 createDeepAgent 的地方
