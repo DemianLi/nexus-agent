@@ -13,9 +13,11 @@ import {
   createGoalPlugin,
   GOAL_TOOL_AUTHORITY_MESSAGE,
   renderGoalRoundPrompt,
+  renderWrapupContext,
 } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
 import type { GoalPlugin } from '@nexus/plugin-goal';
+import { GOAL_WRAPUP_MARKER } from '@nexus/core';
 import type { SessionLog } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -216,6 +218,48 @@ describe('掛了旗標', () => {
     expect(lastPrompt.at(-1)?.content).toBe(data.text);
     // **不變量伴生跑在同一份組裝上，而且一聲都不吭。** 少了這一句，排程器與 renderer
     // 算出不同的字時，這一份測試照樣綠——它自己拿的是同一個 renderer。
+    expect(violations).toEqual([]);
+    await stop();
+  });
+
+  /**
+   * **收尾指示那條路的驗收句：工具回的 `Command` 真的變成模型下一則讀到的訊息。**
+   *
+   * 工具那層的逐字比對在 `@nexus/plugin-goal` 的 `tools.test.ts`，那一份證得了「回傳值
+   * 裡有這串字」。它證不到的是**這串字到得了模型**——`Command` 要穿過 tool node 與
+   * 那一層 `wrapToolCall` middleware 才進得了 `state.messages`，中間任何一段吃掉它，
+   * 單元測試都照樣綠。
+   */
+  it('自己排的那一輪 complete 之後，模型下一則讀到的就是收尾指示', async () => {
+    const turns: readonly ScriptedTurn[] = [
+      {
+        content: '',
+        toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 2 } }],
+      },
+      { content: '建好了。' },
+      {
+        content: '',
+        toolCalls: [
+          { name: 'update_goal', args: { goal_id: 'goal-1', revision: 1, action: 'complete' } },
+        ],
+      },
+      { content: '做完了，這是結果。' },
+    ];
+    const { pump, state, violations, stop } = await build({
+      turns,
+      threadId: 'driver-wrapup',
+      withDriver: true,
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+
+    // 上限是 2，但目標在第 1 輪就收掉了，所以第 2 輪不該排。
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal']);
+    const wrapup = (state.prompts.at(-1) ?? []).at(-1);
+    expect(wrapup?.content).toBe(renderWrapupContext('把 CI 修綠'));
+    // **記號要跟著到模型那一側**：`@nexus/core` 的重複工具提醒靠它分辨「這不是人插的
+    // 話」，而那個判斷讀的就是 `state.messages` 裡的這一則。
+    expect(wrapup?.additional_kwargs[GOAL_WRAPUP_MARKER]).toEqual({ action: 'complete' });
     expect(violations).toEqual([]);
     await stop();
   });

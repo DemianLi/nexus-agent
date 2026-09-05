@@ -127,6 +127,7 @@ export type { GoalToolAuthority } from './authority.js';
 export { completionAuthority, hasDirectHumanTurn, isMatchingGoalRound } from './authority.js';
 
 export { renderGoalRoundPrompt } from './prompt.js';
+export { renderWrapupContext } from './wrapup.js';
 
 export type { FoldedGoal, GoalFoldState } from './fold.js';
 export {
