@@ -112,7 +112,7 @@
 | 15 | `extensions` | 模型側工具定義、運行與移除**動態** Cordis 套件 | 沒有。計劃 §1 明文「射程限定為載入期回滾，不承諾執行期熱插拔」 | 沒有 |
 | 16 | `feedback` | 使用者對會話與 assistant 訊息的反饋 | 沒有 | 沒有 |
 | 17 | `fs` | `ctx.fs` 提供方約定、本地與沙箱後端、編輯前讀取策略、面向模型的檔案與搜尋工具 | `registry.backend`＋`ContainedFilesystemBackend`（#62）＋基座 filesystem 工具＋`registry.permissions`。`fs-sandbox` 那格沒有 | 有 |
-| 18 | `goal` | 每會話一個持久目標：域、模型工具、使用者命令、自動續行 | `@nexus/plugin-goal`（#128、#129）。檔頭自述四個子套件只做兩個——沒有 `tool-goal`、`goal-round-driver` | 部分 |
+| 18 | `goal` | 每會話一個持久目標：域、模型工具、使用者命令、自動續行 | `@nexus/plugin-goal`（#128、#129、#177）。四個子套件做了三個——`goal`、`command-goal`、`tool-goal`；**沒有 `goal-round-driver`**，那是 #152 決議登記的空缺，前置條件是 `turn/start` 的 `source` 判別欄 | 部分 |
 | 19 | `guard` | 迴圈衛生：`repeat-tool-reminder`（同參數重複呼叫 3／5／8 次時建議性提醒）、`timeout-policy`（單次工具呼叫協作式逾時→清楚的模型錯誤）。**dsh base 兩個預設開著** | 沒有。近似物是 `recursionLimit`（硬上限；`looping-model.ts` 量過換算）與供應商層的 `LIVE_TIMEOUT_MS`——前者不看重複、後者不是每次工具呼叫 | 沒有 |
 | 20 | `hooks` | 在 agent 運行期執行使用者**既有的** Claude Code／Codex `hooks.json` shell 鉤子：會話開始、提示詞提交、工具前後、停止時觸發；可帶模型可見訊息阻塞、附加上下文、強制繼續 | 沒有。近似物：`wrapToolCall`／`wrapModelCall`（工具、模型前後）、`registry.approvals`（阻塞工具）、`lifecycle.onDispose`（關機）。缺會話開始、提示詞提交、停止三個時刻；也沒有跑外部 shell 鉤子的引擎 | 沒有 |
 | 21 | `host` | Web GUI Host 側：HTTP 與 SPA 伺服器、工作區目錄選擇、插件清單投影 | `wire-server.ts`（不綁 port 的 handler ＋ 一個 socket）；沒有目錄選擇、插件清單投影 | 部分 |

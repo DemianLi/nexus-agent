@@ -153,10 +153,15 @@ CLI 與 eval 走 `HEADLESS_APPROVALS`：在那裡提出的計劃會被確定性�
 一句話，而一句話很可能以控制詞開頭。
 
 dsh 那邊 `/goal` 還收圖片附件，我們沒有——`CommandInvocation` 沒有 `attachments`，
-整條水管不存在，所以提示字串裡也不寫圖片。dsh 另外有面向模型的 `tool-goal` 與自動
-續行的 `goal-round-driver`，兩個都不在這一版：前者被工具執行期讀不到呼叫者血緣擋住，
-後者是 dsh 自己標成可選的消費方。細節與每一條偏離的代價寫在
-`packages/nexus-plugin-goal/src/index.ts` 的檔頭。
+整條水管不存在，所以提示字串裡也不寫圖片。
+
+**模型側的三顆工具在了**（`get_goal`、`create_goal`、`update_goal`，#177）：模型從一則
+人類直接訊息推得出長期目標就建得起來，也改得動、停得掉、標得完。權限在執行時擋——
+變更要求「這條輪次鏈往回追得到一則人類訊息」，而且三顆都是 `rootOnly`，subagent 那一份
+拿到的是拒絕樁。**自動續行的 `goal-round-driver` 不在這一版**：它是 dsh 自己標成可選的
+消費方，而且要先給 `turn/start` 一個 `source` 判別欄——沒有那一格，一輪由驅動器排出來的
+輪次跟人打的在日誌上一模一樣，權限就被它自己拿走了（#152 的決議）。細節與每一條偏離的
+代價寫在 `packages/nexus-plugin-goal/src/index.ts` 與 `tools.ts` 的檔頭。
 
 web 那條也打得到，而且**每條 thread 各有各的目標**——`serve.ts` 一個 thread 一個
 agent，所以一份 registry 一份會話日誌。

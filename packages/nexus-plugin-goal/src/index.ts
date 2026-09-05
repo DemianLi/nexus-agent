@@ -9,23 +9,27 @@
  * | --- | --- |
  * | `goal`（域） | 這個套件 |
  * | `command-goal`（`/goal`） | 這個套件的 `command.ts`，走 `registry.commands` |
- * | `tool-goal`（模型工具） | **還沒做**——擋住它的兩件事已經只剩一件，見下面 |
- * | `goal-round-driver`（自動續行） | 可選消費方，dsh 的 README 自己這樣說 |
+ * | `tool-goal`（模型工具） | `tools.ts` ＋ `authority.ts`（[#177](https://github.com/DemianLi/nexus-agent/issues/177)） |
+ * | `goal-round-driver`（自動續行） | **登記過的空缺**，見下面 |
  *
- * **`tool-goal` 缺的兩件裡，血緣那一件補好了。** 它的權限規則要求「執行時根 agent 的
- * 當前輪次中有一則已接受的 `{ kind: 'user' }` 訊息」，而且要分得出 root 與 subagent 的
- * 血緣。後面那件現在有路：工具用 `rootOnly` 註冊，fold 會把每個 subagent 那一份裡的
- * 同名項換成拒絕樁（`@nexus/core` 的 `fold.ts`）——而**「拒絕 subagent」正是 dsh 對
- * `tool-goal` 的政策本身**，不是我們的收窄（`packages/goal/tool-goal/src/authority.ts`
- * 的 `ctx.agents.roots().includes(execution.agent)`，描述寫著 “rejects non-human and
- * subagent authority”）。
+ * **`tool-goal` 當初擋著的兩件都通了。** 它的權限規則要求「執行時根 agent 的當前輪次中
+ * 有一則已接受的 `{ kind: 'user' }` 訊息」，而且要分得出 root 與 subagent 的血緣。
  *
- * 剩下的是前面那件：「當前輪次有一則已接受的使用者訊息」。那在會話日誌裡讀得到
- * （`turn/start` 的 `kind: 'message'`），是這個套件自己的工作，不是水管的。
+ * - 血緣：三顆工具用 `rootOnly` 註冊，fold 把每個 subagent 那一份裡的同名項換成拒絕樁
+ *   （`@nexus/core` 的 `fold.ts`）——而**「拒絕 subagent」正是 dsh 對 `tool-goal` 的政策
+ *   本身**，不是我們的收窄（`packages/goal/tool-goal/src/authority.ts` 的
+ *   `ctx.agents.roots().includes(execution.agent)`，描述寫著 “rejects non-human and
+ *   subagent authority”）。
+ * - 人類輪次：讀會話日誌的 `turn/start`，判準與它為什麼不能寫成「看最後一顆」在
+ *   `authority.ts` 檔頭。
  *
  * **`goal-round-driver` 是 dsh 自己標成可選的**：「goal 是狀態而非調度器——自動續行是
- * 需要你刻意掛載的可選消費方」（`packages/goal/README.zh.md`）。它另外還需要 goal 來源的
- * 使用者輪次，而我們的 `turn/start` 沒有 `source` 判別欄，見 `fold.ts` 檔頭。
+ * 需要你刻意掛載的可選消費方」（`packages/goal/README.zh.md`）。它還需要 goal 來源的
+ * 使用者輪次，而我們的 `turn/start` 沒有 `source` 判別欄——**所以順序是被強制的不是偏好**：
+ * 先掛驅動器，它自己排的那一輪在日誌上跟人打的一模一樣，於是模型自己就過了上面那道
+ * 人類授權檢查。[#152](https://github.com/DemianLi/nexus-agent/issues/152) 的決議把
+ * `source` ＋ 不變量伴生寫成驅動器那張卡的前置條件；`authority.ts` 那條「認不得的 `kind`
+ * 一律停住」是它今天的絆索。
  *
  * ## 這個套件進了預設清單
  *
