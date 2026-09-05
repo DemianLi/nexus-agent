@@ -147,3 +147,81 @@ export function decideGoalRound(
     },
   };
 }
+
+/**
+ * 排程器要問域的四件事。**窄到剛好夠用**，所以兩條進入點各自組得出來，而這個模組不必
+ * 知道 `GoalService` 長什麼樣。
+ */
+export interface GoalDriverPort {
+  /**
+   * 目前那份視圖。
+   *
+   * **查不到域時回 `undefined`**——`--plugins` 換掉預設清單的話就沒有 goal 這個 plugin，
+   * 那時排程器要安靜地什麼都不做，不是拋。
+   */
+  goal(): GoalView | undefined;
+  /** 記一顆 blocker。 */
+  block(ref: GoalRef, reason: GoalBlockReason): void;
+  /** 收回續行授權，**不動耐久的相位**。耐久檢查點失敗時用。 */
+  disarm(): void;
+  /** 排隊前的耐久檢查點。沒有落盤時是 no-op。 */
+  flush(): Promise<void>;
+  /** 排程器自己出事時說一聲。 */
+  warn(message: string): void;
+}
+
+/**
+ * 跑完一次排程：決定 → 耐久檢查點 → **再決定一次** → 交出那一輪。
+ *
+ * ## 為什麼是兩次決定
+ *
+ * `flush()` 是 await，而 await 期間人可以插話、目標可以被 `/goal pause` 改掉。第二次決定
+ * 就是那道閘：它是**最容易省略而且省略了不會有任何徵兆**的一步——省略的後果是一輪排在
+ * 一個已經被暫停的目標上，或搶在一個人剛送進來的訊息前面。
+ *
+ * 兩次的結果要**是同一輪**：號碼變了代表期間有別的東西推進過計數，那一輪要重新來過。
+ *
+ * ## `flush()` 失敗是停用，不是重試
+ *
+ * 照 dsh：耐久檢查點過不去就 `disarm()`，之後要續行得走一次有人授權的 `resume`。
+ * 重試的話，一份寫不下去的日誌會配上一個照樣往前跑的模型——而日誌正是之後要用來重建
+ * 「它到底做了什麼」的那份東西。
+ *
+ * @param readEvents - 讀當下的事件；**每次呼叫都要重讀**，不是一份快照。
+ * @param port - 域那一側的四件事。
+ * @returns 排得出來的那一輪，或這一刻不排時的 `undefined`。
+ */
+export async function driveGoalRound(
+  readEvents: () => readonly SessionEvent[],
+  port: GoalDriverPort,
+): Promise<GoalRoundRequest | undefined> {
+  const first = decideGoalRound(readEvents(), port.goal());
+  if (first.kind === 'idle') return undefined;
+  if (first.kind === 'block') {
+    try {
+      port.block(first.ref, first.reason);
+    } catch (error: unknown) {
+      port.warn(`記不下輪次上限的 blocker：${errorText(error)}`);
+    }
+    return undefined;
+  }
+  try {
+    await port.flush();
+  } catch (error: unknown) {
+    port.warn(`耐久檢查點失敗，停用續行：${errorText(error)}`);
+    try {
+      port.disarm();
+    } catch (disarmError: unknown) {
+      port.warn(`連停用續行都失敗了：${errorText(disarmError)}`);
+    }
+    return undefined;
+  }
+  const second = decideGoalRound(readEvents(), port.goal());
+  if (second.kind !== 'run' || second.round.round !== first.round.round) return undefined;
+  return second.round;
+}
+
+/** 拿得到就拿訊息，拿不到就整個轉字串。 */
+function errorText(value: unknown): string {
+  return value instanceof Error ? value.message : String(value);
+}
