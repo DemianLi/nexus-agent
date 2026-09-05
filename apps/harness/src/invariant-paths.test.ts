@@ -61,7 +61,7 @@ describe('不變量接線：CLI 那條路', () => {
   it('真的跑一輪，配套入口一條違規都不報', async () => {
     // **不再自己補 `createCoreInvariantPlugin()`**：它已經在 `DEFAULT_PLUGINS` 裡
     // （#107），補第二份會撞包名歸屬當場拋。
-    const { agent, dispose, sessionLog, attachInvariants } = await createCliAgent(
+    const { agent, dispose, sessions, sessionLog, attachInvariants } = await createCliAgent(
       { live: false },
       DEFAULT_PLUGINS,
     );
@@ -70,7 +70,7 @@ describe('不變量接線：CLI 那條路', () => {
     const violations: string[] = [];
     const original = console.error;
     console.error = (message: unknown) => void violations.push(String(message));
-    const detach = attachInvariants(sessionLog);
+    const detach = attachInvariants(sessions);
     expect(detach).toBeDefined();
 
     try {
@@ -86,15 +86,15 @@ describe('不變量接線：CLI 那條路', () => {
   });
 
   it('接線真的通了——換一個一律報違規的配套入口就看得到違規', async () => {
-    const { agent, dispose, sessionLog, attachInvariants } = await createCliAgent({ live: false }, [
-      ...DEFAULT_PLUGINS,
-      noisyInvariantPlugin(),
-    ]);
+    const { agent, dispose, sessions, sessionLog, attachInvariants } = await createCliAgent(
+      { live: false },
+      [...DEFAULT_PLUGINS, noisyInvariantPlugin()],
+    );
     // 預設的 `onViolation` 是 `console.error`，這裡只需要知道它有沒有跑到，所以攔下來。
     const violations: string[] = [];
     const original = console.error;
     console.error = (message: unknown) => void violations.push(String(message));
-    const detach = attachInvariants(sessionLog);
+    const detach = attachInvariants(sessions);
 
     try {
       await runTurn(agent, '嗨', silent, sessionLog);
@@ -113,11 +113,11 @@ describe('不變量接線：CLI 那條路', () => {
   it('沒有 plugin 註冊配套入口時不接線——沒有檢查就不多掛一個訂閱', async () => {
     // **清單自己寫，不能用 `DEFAULT_PLUGINS`**：它現在掛著十一個配套入口（#107），
     // 拿它問「沒有人註冊時會怎樣」問的是另一個問題。
-    const { dispose, sessionLog, attachInvariants } = await createCliAgent({ live: false }, [
+    const { dispose, sessions, attachInvariants } = await createCliAgent({ live: false }, [
       createEchoPlugin(),
     ]);
     try {
-      expect(attachInvariants(sessionLog)).toBeUndefined();
+      expect(attachInvariants(sessions)).toBeUndefined();
     } finally {
       await dispose();
     }
@@ -125,19 +125,19 @@ describe('不變量接線：CLI 那條路', () => {
 });
 
 describe('預設清單', () => {
-  it('十一個配套入口都在，而且各自認領自己的包名', async () => {
+  it('十三個配套入口都在，而且各自認領自己的包名', async () => {
     // #107 拍的是「全進」。少掛的那幾個會讓「這個 package 沒有可檢的關係」與
-    // 「這個 package 的檢查沒掛上」在診斷裡長得一模一樣，所以這裡數的是**十一**。
-    const { dispose, sessionLog, attachInvariants } = await createCliAgent(
+    // 「這個 package 的檢查沒掛上」在診斷裡長得一模一樣，所以這裡數的是**十三**。
+    const { dispose, sessions, attachInvariants } = await createCliAgent(
       { live: false },
       DEFAULT_PLUGINS,
     );
     try {
-      expect(attachInvariants(sessionLog)).toBeDefined();
+      expect(attachInvariants(sessions)).toBeDefined();
     } finally {
       await dispose();
     }
-    expect(DEFAULT_PLUGINS.filter((plugin) => plugin.name.endsWith('-invariant'))).toHaveLength(11);
+    expect(DEFAULT_PLUGINS.filter((plugin) => plugin.name.endsWith('-invariant'))).toHaveLength(13);
   });
 });
 

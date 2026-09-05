@@ -16,7 +16,7 @@
 
 import { parseArgs } from 'node:util';
 import { createInterface } from 'node:readline/promises';
-import { resolve } from 'node:path';
+import { resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { BaseMessage } from '@langchain/core/messages';
@@ -31,10 +31,19 @@ import type {
 } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
-import { SessionLog } from '@nexus/core';
+import {
+  attachSessionPersistence,
+  REPEAT_REMINDER_MARKER,
+  REPEAT_REMINDER_MIDDLEWARE_NAME,
+  SessionRegistry,
+  type SessionLog,
+} from '@nexus/core';
+import { createJsonlSessionStore } from './jsonl-session-store.js';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant';
 import { createEchoInvariantPlugin } from '@nexus/plugin-echo/invariant';
+import { createGoalPlugin, DEFAULT_MAX_GOAL_ROUNDS } from '@nexus/plugin-goal';
+import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
 import { createMcpInvariantPlugin } from '@nexus/plugin-mcp/invariant';
 import { createMemoryInvariantPlugin } from '@nexus/plugin-memory/invariant';
 import { createPlanModePlugin } from '@nexus/plugin-plan-mode';
@@ -42,10 +51,14 @@ import { createPlanModeInvariantPlugin } from '@nexus/plugin-plan-mode/invariant
 import { createQuickJsInvariantPlugin } from '@nexus/plugin-quickjs/invariant';
 import { createSkillsInvariantPlugin } from '@nexus/plugin-skills/invariant';
 import { createTelemetryOtelInvariantPlugin } from '@nexus/plugin-telemetry-otel/invariant';
+import { createTodoPlugin } from '@nexus/plugin-todo';
+import { createTodoInvariantPlugin } from '@nexus/plugin-todo/invariant';
 import { createValidationInvariantPlugin } from '@nexus/plugin-validation/invariant';
 import { createWireInvariantPlugin } from '@nexus/wire/invariant';
 
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
+import { driveGoalRound } from './goal-driver.js';
+import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
 import type { NexusAgentHandle } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MODEL_ID } from './live-model.js';
@@ -68,6 +81,37 @@ export interface CliInvocation {
    * 虛擬 FS（`StateBackend`，不碰磁碟）。
    */
   readonly workspace?: string;
+  /**
+   * 會話日誌落盤的根目錄。給了就把這一次的每一份日誌寫進它底下的一個 run 目錄，
+   * 省略即**不落盤**（同 `fold.ts` 的 checkpointer：「缺席」就是關掉）。
+   *
+   * **沒有預設值是刻意的。** 日誌裡有使用者打的每一句話，預設往家目錄寫是一個
+   * 應該由人做的決定，不是一個順手的預設（[#172](https://github.com/DemianLi/nexus-agent/issues/172)）。
+   */
+  readonly sessionLog?: string;
+  /**
+   * 一個 active 的目標沒達成時自己再開一輪（[#180](https://github.com/DemianLi/nexus-agent/issues/180)）。
+   *
+   * **預設關，而且那是一個決定不是保守。** dsh 的續行驅動器是「需要你刻意掛載的可選消費
+   * 方」（`packages/goal/README.zh.md`），而我們的入口點擁有輪迴圈——**掛載的等價物就是
+   * 這個旗標**。
+   *
+   * 開著的時候，唯一的硬上限是那個目標自己的 `max_goal_rounds`；額外那條停損刻意沒做，
+   * 理由在 `goal-driver.ts` 檔頭。
+   */
+  readonly goalDriver: boolean;
+  /**
+   * 這一次呼叫最多讓續行排幾輪。省略即不設，只剩目標自己那一條。
+   *
+   * **它存在的理由是目標自己那條上限不歸操作的人管**：`service.ts:269` 是
+   * `request.maxGoalRounds ?? this.#defaultMaxGoalRounds`——`??` 不是 `Math.min`，所以
+   * 模型在 `create_goal` 裡填的數字贏過組裝點給的預設。這一格是**模型改不動的那一個**，
+   * 完整理由在 `goal-driver.ts` 檔頭。
+   *
+   * **沒開 `--goal-driver` 就給它是錯誤，不是無害的多餘**：它唯一的消費者是那支迴圈，
+   * 收下來會變成一個看起來設過、實際上一輪都限制不到的上限。
+   */
+  readonly maxGoalRounds?: number;
   /** 只印用法就退出。 */
   readonly help: boolean;
 }
@@ -81,6 +125,12 @@ export const USAGE = `用法：cli [選項] [要說的話...]
   --plugins <module>   從指定模組載 plugin 清單（預設匯出一個陣列）
   --workspace <dir>    在真實磁碟的這個目錄上跑，變更被圍堵在它之下
                        （省略即虛擬檔案系統，完全不碰磁碟）
+  --session-log <dir>  把會話日誌寫進這個目錄底下（省略即不落盤）
+                       它不能在 --workspace 底下：日誌是基礎建設，不是 agent 的工作區
+  --goal-driver        一個 active 的目標沒達成時自己再開一輪（預設關）
+  --max-goal-rounds <n>
+                       這一次呼叫最多讓它排幾輪（要配 --goal-driver）
+                       目標自己的 max_goal_rounds 是模型填的，這一條它改不動
   --help               印這段話
 
   REPL 裡輸入 /help 看有哪些命令，/exit 或按 Ctrl-D 結束。`;
@@ -104,6 +154,9 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
         live: { type: 'boolean', default: false },
         plugins: { type: 'string' },
         workspace: { type: 'string' },
+        'session-log': { type: 'string' },
+        'goal-driver': { type: 'boolean', default: false },
+        'max-goal-rounds': { type: 'string' },
         help: { type: 'boolean', default: false },
       },
       allowPositionals: true,
@@ -120,6 +173,13 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   if (values.workspace !== undefined && values.workspace.trim() === '') {
     throw new Error(`--workspace 要給一個目錄路徑。\n\n${USAGE}`);
   }
+  const sessionLog = values['session-log'];
+  if (sessionLog !== undefined && sessionLog.trim() === '') {
+    throw new Error(`--session-log 要給一個目錄路徑。\n\n${USAGE}`);
+  }
+
+  const goalDriver = values['goal-driver'] === true;
+  const maxGoalRounds = parseMaxGoalRounds(values['max-goal-rounds'], goalDriver);
 
   const prompt = positionals.join(' ').trim();
   return {
@@ -127,8 +187,71 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     live: values.live === true,
     ...(values.plugins !== undefined && { pluginModule: values.plugins }),
     ...(values.workspace !== undefined && { workspace: values.workspace }),
+    ...(sessionLog !== undefined && { sessionLog }),
+    goalDriver,
+    ...(maxGoalRounds !== undefined && { maxGoalRounds }),
     help: values.help === true,
   };
+}
+
+/**
+ * `--max-goal-rounds` 那一格。
+ *
+ * **沒開旗標就拋，不是靜靜收下。** 一個收下來卻沒有消費者的上限，跟沒設一模一樣——而
+ * 差別在於畫面上看起來設過了。這條路上唯一會發生的事就是有人以為自己壓住了輪數。
+ *
+ * @param raw - 命令列上那串字，沒給就是 `undefined`。
+ * @param goalDriver - `--goal-driver` 開著沒有。
+ * @returns 那個數字，或沒給時的 `undefined`。
+ * @throws 沒配 `--goal-driver`，或不是正整數——訊息接上用法。
+ */
+function parseMaxGoalRounds(raw: string | undefined, goalDriver: boolean): number | undefined {
+  if (raw === undefined) return undefined;
+  if (!goalDriver) {
+    throw new Error(
+      `--max-goal-rounds 要配 --goal-driver：沒有排程器的話它一輪都限制不到。\n\n${USAGE}`,
+    );
+  }
+  const trimmed = raw.trim();
+  const value = Number(trimmed);
+  if (trimmed === '' || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error(
+      `--max-goal-rounds 要給一個正整數（拿到 ${JSON.stringify(raw)}）。\n\n${USAGE}`,
+    );
+  }
+  return value;
+}
+
+/**
+ * 把 `--session-log` 解析成絕對路徑，順便擋掉它落在 `--workspace` 底下的情形。
+ *
+ * **這道檢查就是 [#170](https://github.com/DemianLi/nexus-agent/issues/170) 那條線的第二次應用**：
+ * `fold.ts:252` 寫著「歷史是基礎建設，不是 agent 的工作區」。日誌寫進可寫根底下的話，
+ * 模型自己一個 `read_file` 就讀得到整份對話史，而且會把自己的日誌當成工作檔改掉。
+ *
+ * **純字串前綴比對，不 canonicalize**——同 `ContainedFilesystemBackend` 的取捨與同一個
+ * 已知缺口（symlink 繞得過）。這裡擋的是順手指到工作區裡，不是惡意。
+ *
+ * @param invocation - 解析出來的呼叫。
+ * @param cwd - 相對路徑的解析基準。
+ * @returns 絕對路徑，或沒給 `--session-log` 時的 `undefined`。
+ * @throws 它落在 `--workspace` 底下。
+ */
+export function resolveSessionLogDir(
+  invocation: Pick<CliInvocation, 'sessionLog' | 'workspace'>,
+  cwd: string,
+): string | undefined {
+  if (invocation.sessionLog === undefined) return undefined;
+  const directory = resolve(cwd, invocation.sessionLog);
+  if (invocation.workspace === undefined) return directory;
+  const workspace = resolve(cwd, invocation.workspace);
+  if (directory === workspace || directory.startsWith(`${workspace}${sep}`)) {
+    throw new Error(
+      `--session-log 不能在 --workspace 底下（${directory} 在 ${workspace} 之內）。` +
+        `會話日誌是基礎建設，不是 agent 的工作區——寫在可寫根裡，模型讀得到也改得動整份對話史。`,
+    );
+  }
+  return directory;
 }
 
 /**
@@ -138,7 +261,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
  * 哪些**工具** plugin 該進預設清單是設定的事，那要等**外部**設定機制才有地方講
  * （[#46](https://github.com/DemianLi/nexus-agent/issues/46)）。
  *
- * **計劃模式是第二個例外，理由與那十一個不同**
+ * **計劃模式與 goal 是第二與第三個例外，理由與那十二個不同**
  * （[#120](https://github.com/DemianLi/nexus-agent/issues/120)）：它註冊的是一個
  * **人打得到的命令**，而命令沒進預設清單就等於不存在——`/plan` 會被 `parseCommand`
  * 判成「名字不認得」，照原樣掉回模型，變成一行沒人懂的純文字。所以「不替誰決定該裝
@@ -156,37 +279,81 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
  *   `/plan` 就進得去，而且核准是開著的，所以「規劃 → 交計劃 → 有人按批准 → 開始動手」
  *   整條走得完——那是 CLI 這條路走不完的（`HEADLESS_APPROVALS` 會確定性拒絕）。
  *
- * **十一個不變量配套入口是那句話的例外，而例外要說得出理由**
+ * **`@nexus/plugin-goal` 走同一條例外，代價不一樣**
+ * （[#126](https://github.com/DemianLi/nexus-agent/issues/126)）：它註冊 `/goal`，而
+ * 上一句話對它同樣成立——命令沒進清單，`/goal 把測試修綠` 會掉回模型變成一句閒聊。
+ * 它的代價有兩筆：**每一次執行多接一位會話參與者**，與**模型側多三顆工具**——
+ * `create_goal`／`get_goal`／`update_goal`，[#177](https://github.com/DemianLi/nexus-agent/issues/177)
+ * 之後才有的東西，一律 `rootOnly`，所以 subagent 那幾份看到的是拒絕樁。它不改 prompt、
+ * 不碰 backend，沒有目標時也連一顆事件都不寫；但**工具清單與那幾顆的 token 不再跟這行
+ * 改動之前一模一樣**——這句話原本寫著「一模一樣」，那在 #177 之前是真的。
+ *
+ * **域與命令是同一個 plugin**，不像 dsh 拆成兩個套件——理由寫在
+ * `@nexus/plugin-goal` 的檔頭上。
+ *
+ * **`@nexus/plugin-todo` 是第三筆，而它的代價是三者裡最重的**
+ * （[#132](https://github.com/DemianLi/nexus-agent/issues/132)）：它**真的多一顆面向模型的
+ * 工具**（`todo_write`），所以每一次請求都多一份 schema 與描述的 token，不打任何命令也一樣。
+ *
+ * 它進得來的理由不是「順便」，是**它沒有別的入口**：todo 是模型自己的規劃工具，人不打
+ * 它、命令也叫不動它，所以「沒進清單就等於不存在」對它比對前兩個更絕對。dsh 對「先想再
+ * 做」的答案是計劃模式 ＋ todo ＋ goal 三件一組，這是第三件。
+ *
+ * **`allowParallelInProgress: true`**：這棵樹的 subagent 是真的併發跑的
+ * （`tool-session-log.test.ts` 那條同一個 subagent 併發兩次的驗收），而 dsh 對這種部署
+ * 開的就是 `true`。這個開關沒有預設值，理由見 `TodoPluginOptions`。
+ *
+ * **十三個不變量配套入口是那句話的例外，而例外要說得出理由**
  * （[#107](https://github.com/DemianLi/nexus-agent/issues/107) 拍板）：
  *
  * - **它們不裝功能，只裝觀察。** 一個配套入口不註冊工具、不改 prompt、不碰 backend，
  *   所以「替誰決定該裝什麼」這個顧慮對它們不成立——沒有人的 agent 因為它們而不一樣。
  * - **關得掉。** [#104](https://github.com/DemianLi/nexus-agent/issues/104) 之後條目層有
  *   `disabled`、組裝點有 `invariants` 選擇，所以進來不是單向門。這是它進得來的前提。
- * - **十一個全進，不是只有 `@nexus/core`。** 八個是空 installer，掛上去一個檢查都不裝，
- *   買到的只有包名歸屬；真的在檢查的是三個——`@nexus/core`（turn 配對）、
+ * - **十三個全進，不是只有 `@nexus/core`。** 八個是空 installer，掛上去一個檢查都不裝，
+ *   買到的只有包名歸屬；真的在檢查的是五個——`@nexus/core`（turn 配對）、
  *   `@nexus/plugin-commands`（命令生命週期配對，
  *   [#118](https://github.com/DemianLi/nexus-agent/issues/118)）與
  *   `@nexus/plugin-plan-mode`（`/plan` 的參數契約，
- *   [#120](https://github.com/DemianLi/nexus-agent/issues/120)）。
- *   **代價是每一次執行多十一個條目、十一次 `apply`**，而換到的是這份
+ *   [#120](https://github.com/DemianLi/nexus-agent/issues/120)）與 `@nexus/plugin-goal`
+ *   （耐久 goal 串，[#126](https://github.com/DemianLi/nexus-agent/issues/126)）與
+ *   `@nexus/plugin-todo`（耐久待辦快照的形狀與歸屬，
+ *   [#132](https://github.com/DemianLi/nexus-agent/issues/132)）。
+ *   **代價是每一次執行多十三個條目、十三次 `apply`**，而換到的是這份
  *   清單與 `registry.invariants.companions()` 對得起來——少掛的那幾個會讓「這個 package
  *   沒有可檢的關係」與「這個 package 的檢查沒掛上」在診斷裡長得一模一樣。
  *
  * 違規往哪裡印見 {@link runCli} 接線的那一行。
  */
+/**
+ * 預設清單裡的 goal 域，**單獨留一個 handle**。
+ *
+ * 續行排程器要靠它的 `serviceFor(log)` 拿到某一份日誌上的服務——那是唯一問得到
+ * `activation` 的地方，而 `activation` 是 process 內的、**折疊算不出來**（重放不會重新
+ * 授權，那正是「掛載之後絕不自行復活」那條政策）。`GoalPlugin` 檔頭說這兩個方法「沒有
+ * production 消費者」，這一行就是第一個。
+ *
+ * **它與清單裡那一項是同一個物件**，不是第二次 `createGoalPlugin()`——服務綁的是日誌，
+ * 而查表在 plugin 物件上。
+ */
+const GOAL_PLUGIN = createGoalPlugin();
+
 export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
   createEchoPlugin(),
   createPlanModePlugin(),
+  GOAL_PLUGIN,
+  createTodoPlugin({ allowParallelInProgress: true }),
   createCoreInvariantPlugin(),
   createCommandsInvariantPlugin(),
   createEchoInvariantPlugin(),
+  createGoalInvariantPlugin(),
   createMcpInvariantPlugin(),
   createMemoryInvariantPlugin(),
   createPlanModeInvariantPlugin(),
   createQuickJsInvariantPlugin(),
   createSkillsInvariantPlugin(),
   createTelemetryOtelInvariantPlugin(),
+  createTodoInvariantPlugin(),
   createValidationInvariantPlugin(),
   createWireInvariantPlugin(),
 ];
@@ -285,6 +452,64 @@ export const APPROVAL_DISCLOSURE =
   '核准：關閉（這個入口收不了核准決定，需要核准的工具會被拒絕，不會停下來等）';
 
 /**
+ * 續行那一行披露。**它是算出來的，不是常數**——因為它背後真的有一個旗標。
+ *
+ * {@link APPROVAL_DISCLOSURE} 的檔頭寫著「哪天這裡真的多了一個旗標，這個常數要跟著變成
+ * 一個函式——不然畫面會開始說謊」。`--goal-driver` 就是那樣的旗標，只是它**不動核准政策**
+ * （`runCli` 照樣只傳 {@link HEADLESS_APPROVALS}），所以那一行沒有變成謊話；這一行是同一
+ * 條規矩底下的第二行，而它從第一天就是函式。
+ *
+ * **開著的時候要把上限講出來**，因為那是唯一擋得住這支迴圈的東西。不講的話，「模型自己
+ * 又跑了三十輪」與「人問了三十次」在帳單上一模一樣而在畫面上沒有差別。
+ *
+ * **而上限有兩條，所以兩條都要講。** 目標自己那個 `max_goal_rounds` 是**模型填的**
+ * （`service.ts:269` 的 `??`），`--max-goal-rounds` 才是操作的人設得動的那一條。只印其中
+ * 一條的話，這一行就會變成上面那句自己警告過的謊話——只印目標那條會讓人以為有一個他控制
+ * 得了的數字，只印命令列那條會讓人看不見模型可以在它底下自己挑一個更小的。沒給命令列那
+ * 條時要**明著說沒給**，理由同上。
+ *
+ * @param on - 旗標開著沒有。
+ * @param roundCap - `--max-goal-rounds` 那個數字；省略即這一次呼叫沒給。
+ * @returns 那一行。
+ */
+export function formatGoalDriverDisclosure(on: boolean, roundCap?: number): string {
+  if (!on) return '續行：關閉（一輪結束就結束，要人再推；--goal-driver 可以打開）';
+  const own = `目標自己的 max_goal_rounds（模型在 create_goal 填的，沒填就是 ${DEFAULT_MAX_GOAL_ROUNDS}）`;
+  return roundCap === undefined
+    ? `續行：開啟（目標沒達成時自己再開一輪；上限只有一條——${own}；這一次呼叫沒有給 --max-goal-rounds）`
+    : `續行：開啟（目標沒達成時自己再開一輪；上限兩條，先到的那一條管——--max-goal-rounds ${roundCap}，與${own}）`;
+}
+
+/**
+ * 一則訊息在畫面上該印成什麼，或 `undefined` 代表不印。
+ *
+ * **人自己說的那句不再印一次。** 基座把這一輪的輸入訊息掛在**第一個真的寫了東西的
+ * 節點**的 update 上（實測：三個 `before_agent` 裡只有回傳非空更新的那一個帶著它）。
+ * 照原樣印的話，畫面上會出現 `[nexusPlanMode.before_agent] 嗨`——看起來像那個 plugin
+ * 在說話，而那句是使用者三秒前自己打的。
+ *
+ * **例外是圖自己插進來的 human 訊息，而那條路現在真的有了。** 這段註解過去寫著「哪天
+ * 真的有東西從圖裡插一則 human message 進來，它也會跟著不見；今天沒有那條路」——
+ * [#147](https://github.com/DemianLi/nexus-agent/issues/147) 開了那條路：重複呼叫的
+ * 提醒就是一則合成的 human 訊息。一律跳過的話，那道護欄唯一的產出在畫面上一個字都不會
+ * 出現，操作的人看不出它有沒有動過。所以帶記號的照印，**沒有**記號的才是使用者自己打的。
+ *
+ * 抽成純函式是為了測得到：CLI 的假腳本不重複呼叫任何工具，那條分支在整條 REPL 上跑不到。
+ *
+ * @param node - 這則訊息來自哪個節點。
+ * @param message - 那則訊息。
+ * @returns 要印的那一行，或 `undefined`。
+ */
+export function transcriptLine(node: string, message: BaseMessage): string | undefined {
+  if (message.getType() === 'human') {
+    if (message.additional_kwargs[REPEAT_REMINDER_MARKER] == null) return undefined;
+    return `[${REPEAT_REMINDER_MIDDLEWARE_NAME}] ${message.text.trim()}`;
+  }
+  const label = message.name ? `${node}/${message.name}` : node;
+  return `[${label}] ${message.text.trim() || '(呼叫工具)'}`;
+}
+
+/**
  * 依這次呼叫建 model。
  *
  * @param live - 是否用真實供應商。
@@ -340,27 +565,39 @@ export async function createCliAgent(
   agent: NexusAgent;
   dispose: () => Promise<void>;
   model: BaseChatModel;
+  /** 這條 REPL 的會話註冊表。root 那一份就是 {@link sessionLog}。 */
+  sessions: SessionRegistry;
   sessionLog: SessionLog;
   commands: CommandRegistrationPoint;
-  attachTelemetry: (log: SessionLog) => (() => Promise<void>) | undefined;
-  attachInvariants: (log: SessionLog) => (() => void) | undefined;
+  attachTelemetry: (sessions: SessionRegistry) => (() => Promise<void>) | undefined;
+  attachInvariants: (sessions: SessionRegistry) => (() => void) | undefined;
+  attachSession: (sessions: SessionRegistry) => () => void;
   telemetrySharing: SessionTelemetrySharingStatus | undefined;
 }> {
   const model = createCliModel(invocation.live);
-  const { agent, commands, dispose, attachTelemetry, attachInvariants, telemetrySharing } =
-    await createNexusAgent({
-      model,
-      plugins,
-      ...(invocation.workspace !== undefined && {
-        backend: new ContainedFilesystemBackend({ rootDir: resolve(cwd, invocation.workspace) }),
-      }),
-      systemPrompt: SYSTEM_PROMPT,
-      checkpointer: new MemorySaver(),
-      ...(onInvariantViolation !== undefined && { onInvariantViolation }),
-      ...(approvals !== undefined && { approvals }),
-    });
-  // 日誌跟 agent 同壽命：REPL 是一條連續對話，`seq` 要跨輪連續才有意義。
-  const sessionLog = new SessionLog(THREAD_ID);
+  const {
+    agent,
+    commands,
+    dispose,
+    attachTelemetry,
+    attachInvariants,
+    attachSession,
+    telemetrySharing,
+  } = await createNexusAgent({
+    model,
+    plugins,
+    ...(invocation.workspace !== undefined && {
+      backend: new ContainedFilesystemBackend({ rootDir: resolve(cwd, invocation.workspace) }),
+    }),
+    systemPrompt: SYSTEM_PROMPT,
+    checkpointer: new MemorySaver(),
+    ...(onInvariantViolation !== undefined && { onInvariantViolation }),
+    ...(approvals !== undefined && { approvals }),
+  });
+  // 註冊表跟 agent 同壽命：REPL 是一條連續對話，`seq` 要跨輪連續才有意義。**subagent 的
+  // 那些日誌也掛在它上面**，第一次有人要寫的時候才出生（見 `SessionRegistry` 的偏離）。
+  const sessions = new SessionRegistry(THREAD_ID);
+  const sessionLog = sessions.root;
   // **這裡不接線。** 這個工廠兩條路都在用，而 serve 那條不用這份 `sessionLog`——它一個
   // thread 一份，接線點在 {@link ./wire-handler.ts} 建 pump 的那一刻。在這裡接等於幫
   // serve 接上一份永遠不會有事件的日誌，只送得出一筆 `shutdown`。接線交給呼叫端。
@@ -368,10 +605,12 @@ export async function createCliAgent(
     agent,
     dispose,
     model,
+    sessions,
     sessionLog,
     commands,
     attachTelemetry,
     attachInvariants,
+    attachSession,
     telemetrySharing,
   };
 }
@@ -451,20 +690,35 @@ function printInterrupt(update: unknown, printer: Printer): void {
  * 兩種一起收是因為假模型的腳本用完就會失敗——stream 完再 invoke 一次會多跑一輪。
  *
  * @param agent - 組裝好的 agent。
- * @param input - 使用者說的那句話。
+ * @param input - 使用者說的那句話，或**排程器排的一輪續行**。
  * @param printer - 輸出去處。
+ * @param sessionLog - 這條 REPL 的事件日誌。
  */
 export async function runTurn(
   agent: NexusAgent,
-  input: string,
+  input: string | GoalRoundRequest,
   printer: Printer,
   sessionLog: SessionLog,
 ): Promise<void> {
   let files: Record<string, unknown> = {};
 
-  sessionLog.append('turn/start', { kind: 'message', text: input });
+  // **一個 `text`，兩個消費者。** 分開算的話，一顆日誌上逐字正確的 `turn/start` 可以配
+  // 上餵給模型的任意字串，而不變量伴生只看得到日誌那一份——它結構上驗不到那種偏差。
+  const text = typeof input === 'string' ? input : input.text;
+  sessionLog.append(
+    'turn/start',
+    typeof input === 'string'
+      ? { kind: 'message', text }
+      : {
+          kind: 'goal',
+          text,
+          goalId: input.goalId,
+          revision: input.revision,
+          round: input.round,
+        },
+  );
   try {
-    for await (const [mode, payload] of await agent.stream(toAgentInvocation(input), {
+    for await (const [mode, payload] of await agent.stream(toAgentInvocation(text), {
       streamMode: ['updates', 'values'],
       configurable: { thread_id: THREAD_ID },
     })) {
@@ -483,17 +737,8 @@ export async function runTurn(
         }
         const messages = (update as { messages?: BaseMessage[] }).messages ?? [];
         for (const message of messages) {
-          // **人自己說的那句不再印一次。** 基座把這一輪的輸入訊息掛在**第一個真的
-          // 寫了東西的節點**的 update 上（實測：三個 `before_agent` 裡只有回傳非空
-          // 更新的那一個帶著它）。照原樣印的話，畫面上會出現
-          // `[nexusPlanMode.before_agent] 嗨`——看起來像那個 plugin 在說話，而那句
-          // 是使用者三秒前自己打的。
-          //
-          // **代價**：哪天真的有東西從圖裡插一則 human message 進來（dsh 的
-          // `agent.steer()` narration 就是那個形狀），它也會跟著不見。今天沒有那條路。
-          if (message.getType() === 'human') continue;
-          const label = message.name ? `${node}/${message.name}` : node;
-          printer.log(`[${label}] ${message.text.trim() || '(呼叫工具)'}`);
+          const line = transcriptLine(node, message);
+          if (line !== undefined) printer.log(line);
         }
       }
     }
@@ -508,6 +753,62 @@ export async function runTurn(
   const paths = Object.keys(files);
   if (paths.length > 0) {
     printer.log(`虛擬檔案系統：${paths.join('、')}`);
+  }
+}
+
+/**
+ * 組出排程器要問域的那四件事。**兩條進入點共用這一個**。
+ *
+ * `log` 是 getter 不是值，因為 serve 那條路上日誌由 `ThreadPump` 建，而 port 要在 pump
+ * 之前組好（pump 的建構參數就是它）。
+ *
+ * @param log - 讀那一份日誌；服務綁在它上面。
+ * @param flush - 耐久檢查點。沒落盤時給一個 no-op。
+ * @param warn - 排程器出事時說話的去處。
+ * @returns 排程器要問域的四件事。
+ */
+export function goalDriverPort(
+  log: () => SessionLog,
+  flush: () => Promise<void>,
+  warn: (message: string) => void,
+): GoalDriverPort {
+  return {
+    // **查不到就是 `undefined`**：`--plugins` 換掉預設清單時這條路就沒有 goal 域，
+    // 那時排程器安靜地什麼都不做。
+    goal: () => GOAL_PLUGIN.serviceFor(log())?.get(),
+    block: (ref, reason) => void GOAL_PLUGIN.serviceFor(log())?.block(ref, reason),
+    disarm: () => void GOAL_PLUGIN.serviceFor(log())?.disarm(),
+    flush,
+    warn: (message) => warn(`[續行] ${message}`),
+  };
+}
+
+/**
+ * 排到排不動為止。**一輪跑壞就整串停**——決策函式看到日誌上那顆 `turn/failed` 會回
+ * `turn-failed`，而異常自動重試明著在範圍外。
+ *
+ * @param agent - 組裝好的 agent。
+ * @param printer - 輸出去處。
+ * @param sessionLog - 這條 REPL 的事件日誌。
+ * @param driver - 排程器那一側。
+ * @param roundCap - `--max-goal-rounds`；省略即只有目標自己那一條上限。**它到頭時走的
+ *   是跟目標那條同一條路**（記一顆 blocker 然後停），不是在這裡 `break`——安靜停下來的
+ *   迴圈會留下一個還 active 的目標，而那在日誌上跟「模型收工了」分不開。
+ */
+export async function driveGoalRounds(
+  agent: NexusAgent,
+  printer: Printer,
+  sessionLog: SessionLog,
+  driver: GoalDriverPort,
+  roundCap?: number,
+): Promise<void> {
+  for (;;) {
+    const round = await driveGoalRound(() => sessionLog.events, driver, roundCap);
+    if (round === undefined) return;
+    // **這一行是披露不是裝飾**：不印的話，「模型自己又開了一輪」與「人打了一句話」在
+    // 畫面上一模一樣，而畫面是這條路上唯一看得到續行在燒預算的地方。
+    printer.log(`\n[續行] 第 ${round.round} 輪（目標還沒達成）`);
+    await runTurn(agent, round, printer, sessionLog);
   }
 }
 
@@ -622,6 +923,8 @@ export async function runRepl(
   printer: Printer,
   sessionLog: SessionLog,
   commands: Pick<CommandRegistrationPoint, 'find' | 'list'>,
+  driver?: GoalDriverPort,
+  roundCap?: number,
 ): Promise<void> {
   assertNoReplNameCollision(commands);
   const executor = createCommandExecutor({ commands, sessionLog });
@@ -651,6 +954,9 @@ export async function runRepl(
           const write = execution.result.kind === 'error' ? printer.error : printer.log;
           write(execution.result.text);
         }
+        // **命令也算一次機會**：`/goal resume` 就是重新授權，而重新授權之後該接著跑。
+        if (driver !== undefined)
+          await driveGoalRounds(agent, printer, sessionLog, driver, roundCap);
       } catch (error) {
         printer.error(errorMessage(error));
       }
@@ -700,6 +1006,10 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     return;
   }
 
+  // **在載 plugin、建 agent 之前解析**：一個指錯地方的 `--session-log` 該在什麼都還沒
+  // 起來的時候就講，而不是等到第一筆事件寫不進去。
+  const sessionLogDir = resolveSessionLogDir(invocation, options.cwd ?? process.cwd());
+
   const plugins =
     invocation.pluginModule === undefined
       ? DEFAULT_PLUGINS
@@ -710,9 +1020,11 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     agent,
     commands,
     dispose,
+    sessions,
     sessionLog,
     attachTelemetry,
     attachInvariants,
+    attachSession,
     telemetrySharing,
   } = await createCliAgent(
     invocation,
@@ -730,9 +1042,31 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   );
   // REPL 是一條連續對話，一份日誌就是整個 session，所以接線點在這裡而不是每輪。
   // 回傳的 detach 不留：`dispose()` 會把還接著的協調器一起收掉。
-  attachTelemetry(sessionLog);
+  attachTelemetry(sessions);
   // 不變量的 runner 只是一個訂閱，沒有要排空的東西，所以 detach 也不留——行程走了它就沒了。
-  attachInvariants(sessionLog);
+  attachInvariants(sessions);
+  // **接在不變量之後**：參與者拿得到的是可寫的日誌，所以它一裝上去就可能記東西，
+  // 而那些東西該被已經在看的檢查看到。順序反過來的話，安裝期寫的第一批事件會漏檢。
+  // 同一條順序對 subagent 那些後來才出生的日誌也成立——註冊表通知訂閱者的順序就是
+  // 這三行接上去的順序。
+  attachSession(sessions);
+  // **接在最後，而且是四個裡唯一一個出口。** 前三個是觀察者，落盤不改變任何人看得到
+  // 什麼，所以順序在功能上沒有差別；排在最後是為了讓讀的人看到的因果跟實際一致——
+  // 先被檢查、被參與者看過，才寫下去。
+  const sessionStore =
+    sessionLogDir === undefined ? undefined : createJsonlSessionStore({ rootDir: sessionLogDir });
+  const persistence =
+    sessionStore === undefined
+      ? undefined
+      : attachSessionPersistence(sessions, sessionStore, {
+          cwd: options.cwd ?? process.cwd(),
+          // **背景寫入被拒只有這一行看得見**（協調器自己吞掉，響亮的那次歸 `flush`）。
+          // 走 `printer.error` 而不是 `console.warn`，理由同不變量那條：前綴是唯一分得出
+          // 誰在講話的東西。
+          warn: (message) => {
+            printer.error(`[會話日誌] ${message}`);
+          },
+        });
 
   // 一輪跑壞了也要收——資源的所有權跟這一次呼叫綁在一起，不跟它成不成功綁在一起。
   //
@@ -760,10 +1094,31 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     for (const line of formatTelemetryDisclosure(telemetrySharing)) {
       printer.log(line);
     }
+    // 第六行是**第三個出境目標**的披露：tracing 送去第三方、遙測送去後端，這一個留在
+    // 本機磁碟上。三個分開講，因為三個各自開關——而且日誌裡有使用者打的每一句話，
+    // 「有沒有在寫、寫去哪」不該要讀文件才知道。
+    printer.log(
+      sessionStore === undefined
+        ? '會話日誌：只在記憶體裡（行程結束就沒了；--session-log <dir> 可以落盤）'
+        : `會話日誌：${sessionStore.directory}`,
+    );
+    // 第七行：**這一輪結束之後還會不會有下一輪**。前六行講的是東西往哪裡去，這一行講
+    // 的是誰在推——而那是 `--goal-driver` 落地之後畫面上唯一看得出來的差別。
+    printer.log(formatGoalDriverDisclosure(invocation.goalDriver, invocation.maxGoalRounds));
+
+    const driver = invocation.goalDriver
+      ? goalDriverPort(
+          () => sessionLog,
+          async () => void (await persistence?.flush()),
+          (message) => printer.error(message),
+        )
+      : undefined;
 
     if (invocation.prompt !== undefined) {
       printer.log(`> ${invocation.prompt}\n`);
       await runTurn(agent, invocation.prompt, printer, sessionLog);
+      if (driver !== undefined)
+        await driveGoalRounds(agent, printer, sessionLog, driver, invocation.maxGoalRounds);
     } else {
       printer.log('輸入 /help 看有哪些命令，/exit 或按 Ctrl-D 結束。\n');
       await runRepl(
@@ -772,13 +1127,27 @@ export async function runCli(options: RunCliOptions): Promise<void> {
         printer,
         sessionLog,
         commands,
+        driver,
+        invocation.maxGoalRounds,
       );
     }
   } catch (error) {
+    // 跑壞了也要盡量把已經記下來的事件寫下去——**但不能讓它蓋掉原本的錯誤**，
+    // 同下面那條「先保住原本的錯誤」的規則。
+    await persistence?.dispose().catch(() => {});
     await dispose().catch(() => {});
     throw error;
   }
 
+  // **這一行不能省，而且它的失敗要往外走。** 協調器的 `dispose` 做最後一次 flush，
+  // 窗口還沒到期的那些就靠它落地——拿掉這一行，四條端到端斷言當場紅（實測）。不接住
+  // 它是因為「日誌沒寫完」正是這條路上使用者最需要知道的事。
+  //
+  // **排在 `dispose()` 之前是預防，不是今天量得出來的差別**：兩行對調，那四條照樣綠
+  // （也實測過）。留著這個順序的理由是 plugin 的 disposer 一跑，後端就可能被它的擁有者
+  // 收掉，而那時還在飛的寫入就沒有人接了——今天的後端是我們自己 `new` 的，所以碰不到；
+  // 哪天後端由 plugin 提供，順序就會開始有意義。**別把它讀成一條驗過的因果。**
+  await persistence?.dispose();
   await dispose();
 }
 

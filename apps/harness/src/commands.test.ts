@@ -299,14 +299,14 @@ describe('日誌', () => {
 describe('預設組裝', () => {
   it('配套入口真的接上了，而且一段正常的命令流不誤報', async () => {
     const violations: string[] = [];
-    const { dispose, sessionLog, attachInvariants } = await createCliAgent(
+    const { dispose, sessions, sessionLog, attachInvariants } = await createCliAgent(
       { live: false },
       DEFAULT_PLUGINS,
       undefined,
       (error) => violations.push(error.message),
     );
     try {
-      const detach = attachInvariants(sessionLog);
+      const detach = attachInvariants(sessions);
       expect(detach).toBeDefined();
 
       sessionLog.append('command/run', {

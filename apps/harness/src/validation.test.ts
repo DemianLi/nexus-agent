@@ -1,23 +1,22 @@
 /**
  * 工具失敗回饋的**行為**驗收——掛進真的 agent 之後。
  *
- * 這一份存在的理由是一件動工前才驗出來的事：**nexus-agent 裡任何一個工具拋錯，
- * 整場 run 直接死。** 不是「錯誤訊息不好看」，是 `invoke()` reject、沒有 ToolMessage、
- * 模型不知道發生過什麼。原因是兩件事湊在一起——
+ * 這一份存在的理由是一件動工前才驗出來的事：**基座那側任何一個工具拋錯，整場 run
+ * 直接死。** 不是「錯誤訊息不好看」，是 `invoke()` reject、沒有 ToolMessage、模型不知道
+ * 發生過什麼。成因、以及那條基座行為自己的絆索，在
+ * [`baseline.test.ts`](./baseline.test.ts)——**這裡不再有那個對照組，因為我們的組裝已經
+ * 造不出它了**：圍堵由 `foldRegistry` 打底進 root 與每個 subagent
+ * （[#159](https://github.com/DemianLi/nexus-agent/issues/159)），沒有一份清單關得掉它。
  *
- * - `ToolNode.runTool` 只要 `this.wrapToolCall` 存在，就把工具自己拋的錯當成
- *   middleware 的錯（`langchain@1.5.10`，`dist/agents/nodes/ToolNode.js:275-282`），
- *   而 `#handleError:150` 對 middleware 的錯是 `handleToolErrors !== true` 即重拋；
- *   `ReactAgent` 建 `ToolNode` 時從不傳 `handleToolErrors`（`:174-179`），那條路設不回去。
- * - `createDeepAgent` 永遠掛 `FilesystemMiddleware`，而它永遠帶 `wrapToolCall`
- *   （`deepagents@1.13.1`）。
- *
- * 所以第一組的**對照組不是裝飾**：沒掛 plugin 那一條紅了（變成不拋），代表基座改了
- * 主意、這個 plugin 的存在理由就沒了；主張那一條紅了才是我們寫壞了。
+ * **所以這個檔案裡的組裝刻意不掛 `createValidationPlugin()`**（除了輸出 schema 那一組，
+ * 那才是它今天的全部內容）。這一點是承重的：一條「掛了 plugin 然後觀察到圍堵」的測試
+ * 在搬家**之前**的樹上就會過，證不到任何東西。
  *
  * 第二組是與 [#71](https://github.com/DemianLi/nexus-agent/pull/71) 的交界：圍堵是
  * `try/catch`，而 LangGraph 的中斷也是拋例外走的。不分辨的話核准點會**無聲消失**，
- * 那正好是 #71 花一整張 PR 釘住的東西。
+ * 那正好是 #71 花一整張 PR 釘住的東西。搬家之後圍堵第一次包住 root 與**每個 subagent**
+ * 的核准路徑，所以那條命脈在新位置重量一次（另見
+ * [`interrupt.test.ts`](./interrupt.test.ts)，那份本來就不掛這個 plugin）。
  */
 
 import { tool } from '@langchain/core/tools';
@@ -31,6 +30,7 @@ import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import type { ScriptedTurn } from './scripted-model.js';
 
 /** 這一輪真的被呼叫到的工具名。 */
 let ran: string[] = [];
@@ -39,8 +39,13 @@ beforeEach(() => {
   ran = [];
 });
 
-/** 一個會拋錯的工具。 */
-function boomPlugin(): NexusPlugin {
+/**
+ * 一個會拋錯的工具，外加（選加地）一個 subagent。
+ *
+ * @param withSubagent - 要不要順便註冊一個 `worker`，讓錯發生在 subagent 裡。
+ * @returns 可以放進組裝清單的 plugin。
+ */
+function boomPlugin(withSubagent = false): NexusPlugin {
   return {
     name: 'boom',
     apply(registry) {
@@ -53,6 +58,7 @@ function boomPlugin(): NexusPlugin {
           { name: 'boom', description: '會炸的工具', schema: z.object({}) },
         ),
       );
+      if (withSubagent) registry.subagents.register({ name: 'worker', description: '幹活的。' });
     },
   };
 }
@@ -129,22 +135,22 @@ function toolMessages(messages: readonly BaseMessage[]) {
 }
 
 describe('工具拋錯', () => {
-  it('**沒掛 plugin：整場 run 死掉**（這是基座現況的絆索，不是我們的行為）', async () => {
+  /**
+   * **這一條是整張卡的驗收句，而且它是一條翻過面的絆索。**
+   *
+   * 同一格以前釘的是「沒掛 plugin ＝ 整場 run 死掉」。圍堵搬進 fold 打底之後
+   * （[#159](https://github.com/DemianLi/nexus-agent/issues/159)），同一個組裝要跑得完。
+   *
+   * **零 plugin 是重點不是省事**：這是唯一一格「掛 plugin 修不好」的——它在搬家之前
+   * 的樹上一定紅。基座那半邊的絆索在 [`baseline.test.ts`](./baseline.test.ts)。
+   */
+  it('**零 plugin 的裸組裝：拋錯變成一則 error ToolMessage，那一輪繼續走完**', async () => {
     const { agent } = await createNexusAgent({
       model: scripted('boom'),
       plugins: [boomPlugin()],
     });
-    await expect(agent.invoke(toAgentInvocation('動手'))).rejects.toThrow('磁碟滿了');
-    // 工具真的跑到了才拋——不然這條會被「模型根本沒呼叫它」滿足。
-    expect(ran).toEqual(['boom']);
-  });
-
-  it('掛上 plugin：變成一則 error ToolMessage，那一輪繼續走完', async () => {
-    const { agent } = await createNexusAgent({
-      model: scripted('boom'),
-      plugins: [createValidationPlugin(), boomPlugin()],
-    });
     const result = await agent.invoke(toAgentInvocation('動手'));
+    // 工具真的跑到了才有東西可接——不然這條會被「模型根本沒呼叫它」滿足。
     expect(ran).toEqual(['boom']);
 
     const failures = toolMessages(result.messages as BaseMessage[]);
@@ -157,12 +163,50 @@ describe('工具拋錯', () => {
     expect(last?.text).toBe('收工。');
   });
 
-  it('內層 plugin middleware 自己的 bug 也接得住，**而且不靠載入順序**', async () => {
+  /**
+   * **第二個掛點的驗收句。** 圍堵以前是 plugin middleware，而那些**一個都射不進
+   * subagent**（`SubAgentBase.middleware` 是「append after default_middleware」），
+   * 所以只補 `foldMiddleware` 那一注就是漏掉半棵樹。
+   *
+   * 判準刻意不是「run 沒 reject」——那在 subagent 沒拿到圍堵時也可能只是別的原因。
+   * 這裡讀 `task` 交回來的那則 ToolMessage：裡面有 subagent **拿到回饋之後**講的那句話，
+   * 代表它那一輪真的繼續走完了。
+   */
+  it('**錯發生在 subagent 裡也一樣**——第二個掛點', async () => {
+    const turns: ScriptedTurn[] = [
+      {
+        content: '委派。',
+        toolCalls: [{ name: 'task', args: { description: '幹活', subagent_type: 'worker' } }],
+      },
+      { content: '子代理動手。', toolCalls: [{ name: 'boom', args: {} }] },
+      { content: '子代理收工。' },
+      { content: '根收工。' },
+      { content: '根再收一次。' },
+    ];
+    const { agent, dispose } = await createNexusAgent({
+      model: new ScriptedChatModel({ turns }),
+      checkpointer: new MemorySaver(),
+      plugins: [boomPlugin(true)],
+    });
+
+    try {
+      const result = await agent.invoke(toAgentInvocation('動手'), {
+        configurable: { thread_id: 'boom-in-subagent' },
+      });
+      expect(ran).toEqual(['boom']);
+      const fromTask = toolMessages(result.messages as BaseMessage[]).at(-1);
+      expect(fromTask?.text).toContain('子代理收工。');
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('內層 middleware 自己的 bug 也接得住，**而且不靠載入順序**', async () => {
     const { agent } = await createNexusAgent({
       model: scripted('report'),
-      // **壞掉的那個刻意排在前面。** 只靠「註冊得早」的話這條會過得莫名其妙——
-      // 真正把圍堵推到最外的是 `prepend`，拿掉它這條就紅。
-      plugins: [brokenMiddlewarePlugin(), reportPlugin('好了'), createValidationPlugin()],
+      // **壞掉的那個刻意排在最前。** 只靠「註冊得晚」的話這條會過得莫名其妙——真正把
+      // 圍堵推到最外的是 fold 把它放在整份陣列的第 0 格，連 `prepend` 的都在它裡面。
+      plugins: [brokenMiddlewarePlugin(), reportPlugin('好了')],
     });
     const result = await agent.invoke(toAgentInvocation('動手'));
     const failures = toolMessages(result.messages as BaseMessage[]);
@@ -176,7 +220,9 @@ describe('圍堵與核准的交界', () => {
     const { agent } = await createNexusAgent({
       model: scripted('ask'),
       checkpointer: new MemorySaver(),
-      plugins: [createValidationPlugin(), askPlugin()],
+      // **不掛 plugin。** 這一條以前是掛著測的，那驗的是舊排法；圍堵現在在 fold 的
+      // 第 0 格，這裡要驗的就是那一格上的 `isGraphBubbleUp` 還讓中斷穿得過去。
+      plugins: [askPlugin()],
     });
     const config = { configurable: { thread_id: 'ask-1' } };
 

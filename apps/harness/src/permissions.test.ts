@@ -39,6 +39,27 @@
  * 對使用者的意思很直接：**想把某個路徑擋在寫入之外，deny 規則只擋得住模型主動去寫的那條路**。
  * 基座自己在背景寫的東西要用 fence（`ContainedFilesystemBackend` 的 mode），或把那個寫入者的
  * backend 指到別處。
+ *
+ * ## 「先讀後改」策略排在 permissions 前面，而那有代價
+ *
+ * [#154](https://github.com/DemianLi/nexus-agent/issues/154) 之後，覆蓋一個既有檔要先讀過它。
+ * `checkPermission` 住在**工具本體裡**，而策略是 `wrapToolCall`——所以**策略先講話**。
+ * 對一條 deny 掉的路徑，模型第一次拿到的是「先讀一次再重試」，而 `registry.permissions.deny`
+ * 產生的規則同時擋讀與寫（`fold.ts` 的 `foldPermissions`），所以那句話它**做不到**。
+ *
+ * **安全結果沒有變**：兩層都不放行，磁碟一個字都沒動。變的是第一則訊息的措辭，代價是
+ * 一輪往返加一句幫不上忙的話。dsh 那側是同一個分層（策略在 fs seam，「分层权限、审计或
+ * 沙箱拦截属于 `tools/execute` waterfall」），它也不讓策略去認得權限。
+ *
+ * **還有一件要說出來的**：策略取版本 token 是**直接叫 backend 的 `readRaw`**，所以它讀
+ * 得到 deny 規則不讓模型讀的路徑。那是上一節「規則只蓋到工具」的同一件事換一面——
+ * summarization 的 offload 是**寫**不經過規則表，這是**讀**。內容不會到模型手上（token
+ * 是雜湊出來的，從不渲染），但拒絕那句話會透露那個檔存在。要把一個路徑徹底藏起來，
+ * 一樣只有 fence 那條路。
+ *
+ * **所以下面刻意有兩條**：一條釘住「策略先講話、檔案照樣沒動」，一條釘住**permissions
+ * 這一層還講得出話**——走一個不存在的路徑，策略放行新建，deny 接手。少了後面那條，
+ * 「permissions 還在不在」就沒有人在看了。
  */
 
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
@@ -109,12 +130,52 @@ describe('deny 規則在 Disk backend 上', () => {
     try {
       const result = await agent.invoke(toAgentInvocation('把 .env 改掉。'));
       const denial = result.messages.find((message) => message.getType() === 'tool');
-      expect(denial?.text).toContain('permission denied');
+      // **第一則是策略的，不是 permissions 的**——理由與代價見檔頭最後一節。
+      // 承重的是下面那句：**磁碟上一個字都沒動**。
+      expect(denial?.text).toContain('FS_NOT_OBSERVED');
     } finally {
       await dispose();
     }
 
     expect(await readFile(join(root, '.env'), 'utf8')).toBe(SECRET);
+  });
+
+  /**
+   * **permissions 這一層還講得出話。**
+   *
+   * 上面那條之後，「deny 有沒有效」就沒有任何一條測試在直接看它的措辭了——策略永遠先
+   * 講話。這一條把它接回來：`.env.new` **不存在**，所以策略照 `createIfAbsent` 放行，
+   * deny 接手並自己回話。它紅了代表 permissions 真的不見了，而不是被策略遮住。
+   */
+  it('**deny 對不存在的路徑照樣自己回話**——策略放行新建，permissions 接手', async () => {
+    const root = await workspace();
+    const model = new ScriptedChatModel({
+      turns: [
+        {
+          content: '',
+          toolCalls: [
+            { name: 'write_file', args: { file_path: '/.env.new', content: '新建也不行' } },
+          ],
+        },
+        { content: '寫不進去。' },
+      ],
+    });
+
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      backend: new ContainedFilesystemBackend({ rootDir: root }),
+      plugins: [guard],
+    });
+
+    try {
+      const result = await agent.invoke(toAgentInvocation('新建一個 .env.new。'));
+      const denial = result.messages.find((message) => message.getType() === 'tool');
+      expect(denial?.text).toContain('permission denied');
+    } finally {
+      await dispose();
+    }
+
+    await expect(readFile(join(root, '.env.new'), 'utf8')).rejects.toThrow();
   });
 
   // 沒有這一條的話，一個「什麼都寫不進去」的組裝也會讓上面那條通過。

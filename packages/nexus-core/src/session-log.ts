@@ -25,6 +25,9 @@
  * 補訊息是後面的事，補的時候要先講清楚顆粒度怎麼對齊。
  */
 
+import type { GoalChangeMeta, GoalId } from './goal.js';
+import type { TodoItem } from './todo.js';
+
 /**
  * 這一版收得下的事件種類。**加種類要同時回答「兩條路都產得出來嗎」。**
  *
@@ -32,14 +35,84 @@
  * 進入點（`runRepl` 手上就有這份日誌），不是 `streamEvents` 或 `stream(['updates'])`
  * ——上面那段排除訊息內容的「顆粒度對不齊」在這裡沒有指涉對象，同一段程式碼在兩條路
  * 上產出一模一樣的東西。見 [#118](https://github.com/DemianLi/nexus-agent/issues/118)。
+ *
+ * `goal/change` 同一條理由，但生產者換了一個：不是進入點，是**經 `registry.sessions`
+ * 拿到這份日誌的 plugin**（{@link ./sessions.ts | SessionRegistrationPoint}）。兩條路都
+ * 產得出來，因為兩條路都會接線——CLI 在 `runRepl` 之前接一次，web 那條每個 thread 建
+ * pump 時接一次。它是**第一顆權威 domain 事件**：前面五種記的是「發生過什麼」，這一種
+ * 記的是「現在的狀態是什麼」，所以它帶的是整份快照而不是差異。
+ * 見 [#126](https://github.com/DemianLi/nexus-agent/issues/126)。
+ *
+ * `todo/write` 是**第三種生產者**：模型工具。前面六種由進入點寫，`goal/change` 由經
+ * `registry.sessions` 接線的 plugin 寫，而這一種由模型呼叫工具當場寫——工具問
+ * `registry.sessions.forCall(config)` 拿到自己這次該寫的那一份日誌
+ * （{@link ./session-address.ts | toolCallSessionAddress}）。「兩條路都產得出來嗎」對它
+ * 同樣成立，而且理由更硬：工具清單兩條路共用同一份組裝。
+ *
+ * **它也是第一種寫得進 subagent 那份日誌的事件。** 前七種全都只出現在 root 那一份上
+ * ——進入點只包 root 的輪，goal 的參與者只接 root。`todo/write` 反過來，照 dsh 的單一
+ * 所有者規則：每一次 spawn 各自維護自己的清單。
+ * 見 [#132](https://github.com/DemianLi/nexus-agent/issues/132)。
+ *
+ * `model/usage` 是**第四種生產者：fold 自己建的 middleware**
+ * （{@link ./model-usage.ts | createModelUsageRecorder}）。「兩條路都產得出來嗎」對它
+ * 答得比前面每一種都硬——前三種要靠兩條路各自接線、或共用同一份工具清單，而這一種
+ * **就是那一份組裝本身**：同一個 middleware 實例掛在同一張圖上，兩條進入點看到的是
+ * 同一次模型呼叫。它跟 `todo/write` 一樣寫得進 subagent 那份。
+ * 見 [#153](https://github.com/DemianLi/nexus-agent/issues/153)。
+ *
+ * `compaction/summary` 生產者同第四種，但**掛的位置不一樣**：它不是一顆新名字的
+ * middleware，是{@link ./summarization.ts | 我們那個同名取代的摘要器}多包的一層。理由是
+ * 基座**只在回傳值裡**交出摘要事件（`new Command({ update: { _summarizationEvent } })`），
+ * 一顆排在它後面的新 middleware 看不到那個回傳值。「兩條路都產得出來嗎」跟 `model/usage`
+ * 同一條理由：它就是那一份組裝本身。
+ * 見 [#143](https://github.com/DemianLi/nexus-agent/issues/143)。
  */
 export type SessionEventType =
-  'turn/start' | 'turn/end' | 'turn/failed' | 'interrupt/raised' | 'command/run' | 'command/done';
+  | 'turn/start'
+  | 'turn/end'
+  | 'turn/failed'
+  | 'interrupt/raised'
+  | 'command/run'
+  | 'command/done'
+  | 'goal/change'
+  | 'todo/write'
+  | 'model/usage'
+  | 'compaction/summary';
 
 /** 每一種事件帶什麼。 */
 export interface SessionEventMap {
-  /** 一輪開始。`resume` 是回覆核准，它沒有使用者說的話。 */
-  'turn/start': { readonly kind: 'message'; readonly text: string } | { readonly kind: 'resume' };
+  /**
+   * 一輪開始。`resume` 是回覆核准，它沒有使用者說的話。
+   *
+   * ## `kind` 是**授權的判別欄**，不是一個給人看的標籤
+   *
+   * 這個聯集的成員決定「這一輪背後有沒有一個人」，而
+   * `@nexus/plugin-goal` 的 `authority.ts` 拿它當執行時的權限判準。所以**加一個成員就是
+   * 開一條新的授權路徑**：`goal` 這一種是機器自己排的，它不帶人類授權。
+   *
+   * dsh 的對應物是 `user/message` 上的 `source` 欄（`packages/core/session/`，對讀版本
+   * `d347e703908d0406b7a7ef80e3a0e594d86b2215`）。**我們不另外加一個平行的 `source`
+   * 欄**：這個酬載已經是 `kind` 判別的聯集，多一個判別式就有兩個真相，而讀錯哪一個都
+   * 不會紅。
+   *
+   * `goal` 那幾格**全部必填**。選填的話，一個忘記填的生產者會讓「缺席」被當成人類，
+   * 而那正是這個判別欄要擋的東西。
+   */
+  'turn/start':
+    | { readonly kind: 'message'; readonly text: string }
+    | { readonly kind: 'resume' }
+    | {
+        readonly kind: 'goal';
+        /** 送進模型的那一串字。**這一份與圖那一份是同一個值**，見 `thread-pump.ts`。 */
+        readonly text: string;
+        /** 這一輪是為哪一個目標排的。 */
+        readonly goalId: GoalId;
+        /** 排它的時候那個目標的修訂號。對不上就不是同一份目標了。 */
+        readonly revision: number;
+        /** 第幾輪，從 1 起算。折疊拿它推進 `roundsStarted`。 */
+        readonly round: number;
+      };
   /** 一輪正常結束——**跑完與停在核准點都算**，停在核准點時前面會有一顆 `interrupt/raised`。 */
   'turn/end': Record<string, never>;
   /** 一輪拋錯結束。只留訊息，堆疊不進日誌。 */
@@ -76,6 +149,85 @@ export interface SessionEventMap {
     readonly commandId: string;
     readonly kind: 'success' | 'error';
     readonly text?: string;
+  };
+  /**
+   * 這個會話的長期目標動了一次。**每一筆帶整份耐久狀態**（六個 operation），或是一顆
+   * clear 墓碑。
+   *
+   * 帶整份而不是帶差異，是因為讀它的是一個**嚴格重放**的折疊：差異要求讀的人先有正確
+   * 的前一份狀態才解得開，而整份快照讓「這一筆自己合不合法」與「它接不接得上前一筆」
+   * 分成兩道各自報得出理由的檢查。折疊在 `@nexus/plugin-goal`。
+   *
+   * **`goal.blockedReason` 沒有時要整個不放 key**，同 `command/done` 的 `text`。
+   */
+  'goal/change': GoalChangeMeta;
+  /**
+   * 這個會話的待辦清單被整份換掉了一次。**每一筆帶完整的替換清單**，重放時後寫覆蓋
+   * 先寫。
+   *
+   * 帶整份的理由與 `goal/change` 一樣（讀它的是嚴格重放），但它是**模型**寫的而不是人
+   * ——所以沒有 CAS、沒有修訂號：整表替換的語義本身就沒有「基於哪一版改的」這個問題。
+   * 條目的形狀見 {@link ./todo.ts | TodoItem}，域住在 `@nexus/plugin-todo`。
+   */
+  'todo/write': { readonly todos: readonly TodoItem[] };
+  /**
+   * 一次模型呼叫的 token 帳目，**供應商報什麼記什麼**。
+   *
+   * 一輪有幾格就有幾筆（工具呼叫每一輪都要再叫一次模型）；一輪花了多少要自己加，
+   * 日誌不寫彙總——照 dsh 的 `deriveTurnTokenUsage`，輪級的數字是一道讀日誌的純折疊。
+   *
+   * **沒報就整筆沒有這顆事件**，不是三個 0、也不是 `undefined`。同樣地，報得自相矛盾
+   * （總量小於它的組成、有欄位不是非負安全整數）也整筆不記。理由與規則見
+   * {@link ./model-usage.ts | readModelUsage}。
+   *
+   * **這一筆只有數字。** `command/run` 那條「使用者原話會原樣進遙測」的警告在這裡沒有
+   * 指涉對象：三個欄位都是計數，不含 prompt、不含檔案路徑、不含模型 id。
+   */
+  'model/usage': {
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+    readonly totalTokens: number;
+  };
+  /**
+   * 壓縮真的發生了一次：舊訊息被換成一份摘要。**一次摘要一筆**。
+   *
+   * ## 這是 dsh 三顆事件的哪一顆，以及另外兩顆為什麼不在
+   *
+   * dsh 是 `compaction/start` → `compaction/summary` → `compaction/end`，三顆由**一把括住
+   * 整個操作的鎖**串起來：中途崩潰的形態是可偵測的遺留鎖（有 `start` 沒有配對的 `end`），
+   * 而不是一個謊稱完成的 `end`。
+   *
+   * **我們湊不出那把鎖，所以只留中間那顆。** 基座沒有把「開始壓縮」與「壓縮結束」暴露成
+   * 任何東西——它只在**成功走完**之後回一個帶 `_summarizationEvent` 的 `Command`。硬記
+   * 一顆 `start` 只能記在「我們猜它要壓了」的時間點，而那個猜測正是 dsh 的鎖要消滅的
+   * 那種東西。一顆誠實的事件勝過三顆撐不起語義的。**代價明寫**：壓縮失敗在日誌裡是
+   * 沉默的，不是一顆帶 `error` 的 `end`。
+   *
+   * ## 欄位
+   *
+   * **`filePath` 是 [#66](https://github.com/DemianLi/nexus-agent/issues/66) 那個 fail-open
+   * 的訊號**：`null` 代表歷史沒寫成功，被換掉的原文就此消失，而基座對這件事只印一行
+   * `console.warn`。這一顆事件是它在耐久紀錄裡唯一的痕跡。
+   *
+   * ⚠️ **`filePath` 是一條檔案路徑，而它會原樣進遙測**——協調器一律鏡像每一顆事件（見
+   * `session-telemetry-coordinator.ts`）。同 `command/run` 的 `args`：那條路徑含
+   * `historyPathPrefix` 與一個隨機 session id，不含使用者輸入，但它仍然是路徑不是計數。
+   *
+   * **`cutoffIndex` 與 `messagesBefore` 是同一組座標**：原始訊息串（不是摘要器眼中的
+   * 有效串）的索引與長度。基座存進 state 的就是原始座標——`getEffectiveMessages` 拿它去
+   * `messages.slice(cutoffIndex)`。所以 `cutoffIndex / messagesBefore` 讀得出「這次換掉了
+   * 多前面的多少」。
+   *
+   * **摘要本文刻意不記。** 檔頭那條「這一版不記訊息內容」在這裡是硬約束不是偏好：
+   * `summaryMessage` 就是模型產的訊息，記了它等於從側門把訊息內容放進日誌與遙測。
+   */
+  'compaction/summary': {
+    /** 切在原始訊息串的哪裡；`[0, cutoffIndex)` 被換成了那份摘要。 */
+    readonly cutoffIndex: number;
+    /** 切之前原始訊息串有多長。與 `cutoffIndex` 同一組座標。 */
+    readonly messagesBefore: number;
+    /** 被換掉的原文落在 backend 的哪個檔。**`null` ＝ 沒寫成功，原文消失了**。 */
+    readonly filePath: string | null;
   };
 }
 
@@ -168,6 +320,41 @@ export interface SessionLogOptions {
 }
 
 /**
+ * 一份日誌**看得到的那一面**：身分、長度、事件。沒有 `append`，也沒有 `subscribe`。
+ *
+ * 它是為了 {@link ./invariants.ts | InvariantSubject} 而存在的。那條路的語義是「觀察，
+ * 違規時 `fail`」——`fail` 的型別甚至是 `never`。在這之前它交出的是完整的
+ * {@link SessionLog}，於是**任何註冊了配套入口的 package 都寫得動會話日誌**：通道的
+ * 名字說它只是來看的，型別說它可以寫。
+ *
+ * **這是照 dsh，不是我們自己加嚴。** dsh 的不變量註冊表交給配套入口的是一個乾淨的子
+ * Cordis context——`InvariantInstaller` 的簽章是 `(ctx, fail)`
+ * （`references/deepseek-harness/packages/runtime-diagnostics/invariants/src/index.ts:32`），
+ * `register()` 裡是 `ctx.plugin(installInvariant)`（同檔 `:160-168`），**註冊表一份
+ * session 都不交**。要看得到 session 的配套入口自己 `inject: ['sessions']`
+ * （`packages/goal/goal/src/invariant.ts:71`），而那樣拿到的 `Session` 是寫得動的
+ * （`append` 在 `packages/core/session/src/index.ts:602`）。
+ *
+ * 所以 dsh 的答案不是「配套入口不准寫」，是「**寫入要另外去要**」。收窄之後我們一樣：
+ * 要寫日誌走 {@link ./sessions.ts | registry.sessions}，那個通道的名字認這件事。
+ *
+ * **收窄只發生在型別上。** 接線那一層傳的仍然是同一個 `SessionLog` 實例
+ * （`invariants.ts` 的 `log: options.log`），runtime 上 `append` 還在，一個 cast 就穿得
+ * 過去。這裡要擋的是順手寫一筆，不是惡意。包一層真物件換不到多少，卻要記得 `length`
+ * 與 `events` 都得是 getter——照抄成快照的話，重播之後讀到的是凍住的那一份。
+ *
+ * @see [#127](https://github.com/DemianLi/nexus-agent/issues/127)
+ */
+export interface SessionLogView {
+  /** 這份日誌屬於誰。遙測的 `session.id` 就是它。 */
+  readonly sessionId: string;
+  /** 目前為止的全部事件，照 `seq` 排。 */
+  readonly events: readonly SessionEvent[];
+  /** 目前的長度，也就是下一筆會拿到的 `seq`。 */
+  readonly length: number;
+}
+
+/**
  * 一個 session 一份。
  *
  * **`append` 會同步回呼觀察者，所以它帶著一道重入防護。** 順序照 dsh 的
@@ -186,7 +373,7 @@ export interface SessionLogOptions {
  * 3. **不中斷**——前一個 listener 拋錯不影響後面的。照 dsh 的
  *    `invokeContainedSessionObservers`：一個訂閱者壞掉不該餓死其他訂閱者。
  */
-export class SessionLog {
+export class SessionLog implements SessionLogView {
   readonly #sessionId: string;
   readonly #events: SessionEvent[] = [];
   readonly #listeners = new Set<SessionLogListener>();
@@ -290,4 +477,48 @@ export class SessionLog {
       );
     }
   }
+}
+
+/**
+ * 最後一顆 `turn/start` 的位置——也就是**當前這一段物理輪次的頭**。
+ *
+ * ## 為什麼這個走法要有一個擁有者
+ *
+ * 讀日誌有兩種走法，而它們的答案不一樣：**往回追鏈**（`resume` 一路穿過去找根）回答
+ * 「這條鏈的根是不是人」，**只讀當前這一段**回答「我現在人在哪一輪裡」。第二種今天有
+ * 三個消費者——goal 工具的續行輪次授權、續行排程器的就緒判準，以及底下那個中斷檢查。
+ * 三份各寫一次的話，某一份哪天多穿一格，而**多穿的那一格不會讓任何測試變紅**：它只是
+ * 讓一個更早的輪次替現在這一輪背書。
+ *
+ * 所以走法住在**詞彙的擁有者**旁邊，兩種走法各自有一個名字，見
+ * `@nexus/plugin-goal` 的 `authority.ts` 檔頭那張對照。
+ *
+ * @param events - 一份會話日誌到目前為止的全部事件，照 `seq` 排。
+ * @returns 那一顆的索引；一顆 `turn/start` 都沒有時是 `-1`。
+ */
+export function currentTurnStart(events: readonly SessionEvent[]): number {
+  for (let at = events.length - 1; at >= 0; at -= 1) {
+    if (events[at]?.type === 'turn/start') return at;
+  }
+  return -1;
+}
+
+/**
+ * 當前這一段物理輪次裡掛著一顆沒人回答的中斷。
+ *
+ * **「回答」在日誌上的樣子是下一顆 `turn/start`**（`kind` 為 `resume`），所以「還沒被
+ * 回答」等同於「這一顆中斷之後沒有新的一輪開始」——也就是它落在當前這一段裡。停在核准
+ * 點的那一輪照樣有 `turn/end`（見 `SessionEventMap` 的說明），所以拿 `turn/end` 判收工
+ * 的人**一定要再問這一句**，不然它會把一個等著人按批准的會話當成閒下來了。
+ *
+ * @param events - 一份會話日誌到目前為止的全部事件，照 `seq` 排。
+ * @returns 當前這一段裡有 `interrupt/raised` 時為真。
+ */
+export function hasUnansweredInterrupt(events: readonly SessionEvent[]): boolean {
+  const start = currentTurnStart(events);
+  if (start < 0) return false;
+  for (let at = start + 1; at < events.length; at += 1) {
+    if (events[at]?.type === 'interrupt/raised') return true;
+  }
+  return false;
 }

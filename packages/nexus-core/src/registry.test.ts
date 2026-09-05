@@ -85,6 +85,41 @@ describe('tools 註冊點', () => {
     leave();
     expect(registry.tools.scopes()).toEqual([]);
   });
+
+  it('rootOnly 記在那一顆工具身上，isRootOnly 問得出來', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.tools.register(fakeTool('goal'), { rootOnly: true });
+    registry.tools.register(fakeTool('search'));
+    leave();
+    expect(registry.tools.isRootOnly('goal')).toBe(true);
+    expect(registry.tools.isRootOnly('search')).toBe(false);
+    expect(registry.tools.isRootOnly('沒註冊過的')).toBe(false);
+  });
+
+  it('rootOnly 配 scope 當場報錯，訊息指名那個 subagent 與工具', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    // 往 subagent 身上掛一個「不給 subagent」的工具是矛盾的，不靜默忽略。
+    expect(() =>
+      registry.tools.register(fakeTool('goal'), { scope: 'researcher', rootOnly: true }),
+    ).toThrow(/"goal"[\s\S]*"researcher"/);
+    leave();
+  });
+
+  /**
+   * 旗標以工具實例為鍵，不是以名字為鍵。以名字為鍵的話這一條會紅：撤銷過的
+   * root-only 註冊會把旗標留在名字上，蓋到後來占用同名的那一顆身上。
+   */
+  it('撤銷過的 rootOnly 註冊不會把旗標留給後來的同名工具', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    const undo = registry.tools.register(fakeTool('goal'), { rootOnly: true });
+    undo();
+    registry.tools.register(fakeTool('goal'));
+    leave();
+    expect(registry.tools.isRootOnly('goal')).toBe(false);
+  });
 });
 
 describe('subagents 註冊點', () => {

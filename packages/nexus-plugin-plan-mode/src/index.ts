@@ -6,9 +6,16 @@
  * （每步多一次 LLM 呼叫的自我批判、顯式意圖分類）在 dsh 全樹**都不存在**——
  * `reflection` 的命中全是 TypeScript 型別反射，`intent classif` 零命中。它對「先想
  * 再做」的答案是**計劃模式**（`packages/plan/plan-mode/`），配上 todo 與 goal：
- * 讓模型自己承擔規劃、把狀態外顯，人可以介入。`TodoListMiddleware` 已經蓋掉 todo
- * 那塊，計劃模式這塊我們一片空白，所以補的是這一塊。細節見
- * [#116](https://github.com/DemianLi/nexus-agent/issues/116)。
+ * 讓模型自己承擔規劃、把狀態外顯，人可以介入。三件裡我們一件都沒有，所以先補的是這
+ * 一件。細節見 [#116](https://github.com/DemianLi/nexus-agent/issues/116)。
+ *
+ * **這裡原本寫的是「`TodoListMiddleware` 已經蓋掉 todo 那塊」，那句話是假的。**
+ * 基座的預設 middleware stack 不帶 todo（`apps/harness/src/baseline.test.ts` 第一條的
+ * 全集斷言裡沒有 `write_todos`），`todoListMiddleware` 得自己掛。那句話是承重的——它在
+ * 論證「所以補的是計劃模式這塊」——但前提錯了不影響結論：三件當時都缺。goal 由
+ * [#126](https://github.com/DemianLi/nexus-agent/issues/126) 補上，todo 由
+ * [#132](https://github.com/DemianLi/nexus-agent/issues/132) 補上（`@nexus/plugin-todo`，
+ * 照 dsh 走會話事件而不是掛基座的 middleware）。
  *
  * 對讀日期 2026-08-31，dsh `0a53fb55bea101816fa226bb964ae2bed71c343b`。
  *
@@ -34,9 +41,25 @@
  * 就做這件事：`AgentMiddleware.stateSchema` 的文件明寫 “Middleware state is persisted
  * between multiple invocations”。走不了 dsh 那條的原因是水管：
  *
- * - **plugin 拿不到 `SessionLog`。** 它活在入口層（`apps/harness` 的 `cli.ts`、
- *   `wire-handler.ts`、`thread-pump.ts`），十二個註冊點沒有一個通到它——`lifecycle`
- *   只管關機，`telemetry` 是出口不是入口。
+ * - **plugin 拿不到 `SessionLog`。** ——**這一條當時就是錯的，現在也修好了，但結論沒變。**
+ *
+ *   錯在哪：寫下它的時候註冊點是十三個不是十二個（`commands` 是
+ *   [#118](https://github.com/DemianLi/nexus-agent/issues/118) 之後才加的），而且
+ *   `invariants` 那條路交出的 `InvariantSubject.log` 從第一天起就是一份**完整、可寫**的
+ *   `SessionLog`——上面有 `append()`。所以「拿不到」從來不是真的；真的那件事是**沒有一個
+ *   通道的名字承認它**。
+ *
+ *   **那一格後來收掉了**：[#127](https://github.com/DemianLi/nexus-agent/issues/127) 把
+ *   `InvariantSubject.log` 收窄成唯讀視圖。所以今天「plugin 拿不到可寫的 `SessionLog`」
+ *   在**不變量那條路上**已經是真的了——但整句仍然是錯的，因為 `sessions` 那條路上它是假的。
+ *
+ *   修好在哪：[#126](https://github.com/DemianLi/nexus-agent/issues/126) 加了第十四個註冊點
+ *   `sessions`，名字就說它交出可寫的日誌，goal 域走的正是它。
+ *
+ *   **但計劃模式沒有跟著搬，而理由不是慣性**：`SessionLog` 全樹仍然零個 hydrate／persist
+ *   路徑，搬過去只是把一個不耐久的存放處換成另一個不耐久的存放處，換不到下面那句話裡
+ *   丟掉的任何一樣東西；而且它還要 `SessionEventType` 再長一種 `plan/mode`，那是另一個
+ *   要自己說得出理由的決定。**日誌真的耐久化那天，這一段要重寫。**
  * - **`SessionEventType` 是 `@nexus/core` 的封閉 union**，沒有 dsh 那種宣告合併，而
  *   [#101](https://github.com/DemianLi/nexus-agent/issues/101) 已經明文把「加會話事件
  *   種類」排除在包自有不變量之外。

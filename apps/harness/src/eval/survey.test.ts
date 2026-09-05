@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { SURVEY_INVENTORY_DATE, SURVEY_MODELS } from './survey.js';
-import { ALL_MODELS_UNDER_TEST } from './tiers.js';
+import { MEASURED_MODELS } from './tiers.js';
 
 describe('SURVEY_MODELS', () => {
   it('至少十個 —— 那是 #85 的門檻，掉到十個以下要停下來回報而不是照跑', () => {
@@ -40,10 +40,10 @@ describe('SURVEY_MODELS', () => {
     }
   });
 
-  it('也出現在階梯或判準對照裡的 id，label 一字不差', () => {
+  it('也出現在量過的清單裡的 id，label 一字不差', () => {
     // 同一個模型在兩張報表上叫不同名字的話，跨報表對照就得靠人腦記憶。
     // 這條擋的是「survey 這邊順手取了個新名字」。
-    const byId = new Map(ALL_MODELS_UNDER_TEST.map((tier) => [tier.modelId, tier.label]));
+    const byId = new Map(MEASURED_MODELS.map((measured) => [measured.modelId, measured.label]));
     for (const model of SURVEY_MODELS) {
       const existing = byId.get(model.modelId);
       if (existing === undefined) continue;

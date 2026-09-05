@@ -1,6 +1,6 @@
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import { loadPlugins, SessionLog } from '@nexus/core';
+import { loadPlugins, SessionRegistry } from '@nexus/core';
 import type { NexusPlugin } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
@@ -361,6 +361,17 @@ describe('迴圈上限', () => {
     const { agent, dispose } = await createNexusAgent({
       model,
       plugins: [createEchoPlugin()],
+      // **摘要關掉是為了隔離變數，不是為了讓數字好看。** 跑滿的迴圈會累積約 98 則訊息，
+      // 越過我們打底的 `messages: 60` 那道門檻，於是摘要器自己也叫一次模型——`model.calls`
+      // 變成 50，而那一次跟迴圈上限無關。這條量的是護欄擋在哪裡，不該被另一個機制的
+      // 呼叫次數污染。**「不傳的時候恰好多那一次」由
+      // [`summarization.test.ts`](./summarization.test.ts) 正面量**，那才是它該待的地方。
+      summarization: false,
+      // **提醒器也關掉，理由同上但機制不同。** 它掛在 `beforeModel` 上，那在圖裡是一個
+      // 節點，每一輪多一個 super-step——開著的話同一個上限只跑得到 33 輪而不是 49
+      // （[#147](https://github.com/DemianLi/nexus-agent/issues/147)）。那個換算本身
+      // 由下面「提醒器把每輪的格數從兩格變三格」那條正面量，這裡要的是裸組裝的數字。
+      repeatReminder: false,
     });
 
     try {
@@ -369,9 +380,9 @@ describe('迴圈上限', () => {
       await dispose();
     }
 
-    // `recursionLimit = 2 × 模型輪數 + 2`，所以 100 換算是 49 輪。
+    // 裸組裝每輪兩格，`模型輪數 = floor((上限 - 1) / 2)`，所以 100 換算是 49 輪。
     // **這條斷言才是承重的那個**：少了 `withConfig` 的話它是 4999。
-    expect(model.calls).toBe((DEFAULT_RECURSION_LIMIT - 2) / 2);
+    expect(model.calls).toBe(Math.floor((DEFAULT_RECURSION_LIMIT - 1) / 2));
   });
 
   it('傳進來的值蓋得掉預設', async () => {
@@ -380,6 +391,7 @@ describe('迴圈上限', () => {
       model,
       plugins: [createEchoPlugin()],
       recursionLimit: 8,
+      repeatReminder: false,
     });
 
     try {
@@ -390,6 +402,40 @@ describe('迴圈上限', () => {
       await dispose();
     }
     expect(model.calls).toBe(3);
+  });
+
+  /**
+   * **提醒器把每一輪的格數從兩格變三格，而那件事只有這裡量。**
+   *
+   * `beforeModel` 在 LangGraph 裡會被展開成迴圈裡的一個節點（`langchain@1.5.10`，
+   * `dist/agents/ReactAgent.js:126-134`），所以同一個 `recursionLimit` 底下，掛著提醒器
+   * 的組裝跑得到的模型輪數比裸組裝少三分之一。這不是提醒器的功能，是它的**代價**——
+   * 上面兩條刻意關掉它來隔離變數，關掉的東西要有一個地方正面量，不然「關掉」會慢慢
+   * 變成一句沒有人驗過的話。
+   *
+   * 兩條一起看才是完整的：同一個上限、同一個模型，差別只有這一格。
+   */
+  it('提醒器把每輪的格數從兩格變三格，同一個上限少跑三分之一', async () => {
+    const rounds = async (repeatReminder: false | undefined): Promise<number> => {
+      const model = new LoopingChatModel();
+      const { agent, dispose } = await createNexusAgent({
+        model,
+        plugins: [createEchoPlugin()],
+        recursionLimit: 8,
+        summarization: false,
+        ...(repeatReminder === false && { repeatReminder }),
+      });
+      try {
+        await expect(agent.invoke(toAgentInvocation('一直跑'))).rejects.toThrow(/Recursion limit/);
+      } finally {
+        await dispose();
+      }
+      return model.calls;
+    };
+
+    // `模型輪數 = floor((上限 - 1) / 每輪格數)`：8 底下是 3 對 2。
+    expect(await rounds(false)).toBe(3);
+    expect(await rounds(undefined)).toBe(2);
   });
 
   it('正常收工的對話不受影響 —— 上限擋的是跑掉，不是複雜', async () => {
@@ -449,12 +495,13 @@ async function violationsUnder(
     plugins,
     ...(invariants !== undefined && { invariants }),
   });
-  const log = new SessionLog('selection');
+  const sessions = new SessionRegistry('selection');
+  const log = sessions.root;
   const seen: string[] = [];
   const original = console.error;
   console.error = (message: unknown) => void seen.push(String(message));
   try {
-    const detach = attachInvariants(log);
+    const detach = attachInvariants(sessions);
     if (detach === undefined) return undefined;
     log.append('turn/start', { kind: 'resume' });
     detach();

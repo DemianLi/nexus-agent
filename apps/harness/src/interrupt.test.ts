@@ -19,6 +19,12 @@
  *
  * **換來的新語義也要釘住**：同一批裡排在被擋工具**前面**的那些，在人被問到時已經跑完了。
  * 基座是問之前一個都沒跑。兩種都不是全有全無，差別在副作用落在問之前還是問之後。
+ *
+ * **[#159](https://github.com/DemianLi/nexus-agent/issues/159) 之後，這整份檔案跑在圍堵
+ * 裡面。** 圍堵是 fold 打底的第 0 格，也就是說它包住這裡每一條核准路徑——而它是個
+ * `try/catch`，擋在「把中斷整個吃掉」與我們之間的只有 `isGraphBubbleUp` 一條。這份檔案
+ * 因此是那次搬家最有力的護欄：這裡任何一條紅了，先看的是那個判準而不是核准層。
+ * 一條跟著翻了面（`resume` 傳看不懂的決定），理由寫在那條上面。
  */
 
 import { tool } from '@langchain/core/tools';
@@ -256,23 +262,36 @@ describe('閘門本身的邊界', () => {
     expect(ran).toEqual([]);
   });
 
-  it('resume 傳看不懂的決定 → 當場拋，不是靜默降級成核准', async () => {
+  /**
+   * **這一條翻過一次面。** 它以前釘的是「當場拋」——閘門對看不懂的決定 `throw`，而那時
+   * 整場 run 跟著死。[#159](https://github.com/DemianLi/nexus-agent/issues/159) 把圍堵
+   * 打底進 fold 的第 0 格之後，閘門就在它裡面，所以那個 `throw` 變成一則 error
+   * ToolMessage：**run 走得完，工具還是一次都沒跑。**
+   *
+   * **翻面之後仍然是同一句驗收**：詞彙是封閉的、`edit` 不被靜默降級成核准。變的只是
+   * 拒絕的載體。這也正是 dsh 那側的形狀——「缺失、不负责该请求、抛异常或**不合规**的
+   * 应答者会产生 `unavailable`，**而非放行**」，而呼叫端對 `unavailable` 執行拒絕
+   * （`docs/subsystems/approval.zh.md:21`，SHA `4e84901`）：那是「這次呼叫被拒」，
+   * 不是「這一輪結束」。
+   */
+  it('resume 傳看不懂的決定 → **一則錯誤，不是靜默降級成核准，也不再殺掉整場 run**', async () => {
     const { agent } = await gatedAgent({ tools: ['danger'], gated: ['danger'] });
     const config = { configurable: { thread_id: 'edit' } };
 
     await agent.invoke(toAgentInvocation('動手'), config);
-    const failure = await agent
-      .invoke(
-        new Command({
-          resume: { decisions: [{ type: 'edit', editedAction: { name: 'danger', args: {} } }] },
-        }) as never,
-        config,
-      )
-      .catch((error: unknown) => (error as Error).message);
+    const after = await agent.invoke(
+      new Command({
+        resume: { decisions: [{ type: 'edit', editedAction: { name: 'danger', args: {} } }] },
+      }) as never,
+      config,
+    );
 
-    // 詞彙一樣是封閉的，只是現在由我們自己守——`edit` 曾經是基座拒收的
-    // （`hitl.js:407`），現在是閘門拒收，兩者都不是降級。
-    expect(failure).toContain('核准回覆看不懂');
+    const failure = (after.messages as BaseMessage[])
+      .filter((message) => message.getType() === 'tool')
+      .at(-1) as (BaseMessage & { status?: string }) | undefined;
+    expect(failure?.status).toBe('error');
+    expect(failure?.text).toContain('核准回覆看不懂');
+    // **承重的還是這一條**：載體變了，「沒跑」沒變。
     expect(ran).toEqual([]);
   });
 

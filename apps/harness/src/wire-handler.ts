@@ -39,9 +39,15 @@ import {
   isWireChannel,
   successResponse,
 } from '@nexus/wire';
-import type { CommandDescriptor, CommandRegistrationPoint, SessionLog } from '@nexus/core';
+import type {
+  CommandDescriptor,
+  CommandRegistrationPoint,
+  SessionLog,
+  SessionRegistry,
+} from '@nexus/core';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import { createCommandExecutor } from '@nexus/plugin-commands';
+import type { GoalDriverPort } from './goal-driver.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
 
@@ -77,24 +83,75 @@ export interface ThreadAgent {
   readonly commands: Pick<CommandRegistrationPoint, 'find' | 'list'>;
   dispose(): Promise<void>;
   /**
-   * 把這個 thread 的會話日誌接上遙測，選配。
+   * 把這個 thread 的**每一份**會話日誌接上遙測，選配。
    *
-   * **接線點必須在這裡**，因為日誌是 pump 建的（一個 thread 一份），而知道有沒有掛
+   * **接線點必須在這裡**，因為註冊表是 pump 建的（一個 thread 一張），而知道有沒有掛
    * 後端的是組裝點。兩邊只在這一行碰得到面。沒掛後端時 `createNexusAgent` 回
    * `undefined`，這裡什麼都不會發生。
    *
-   * @param log - 這個 thread 的日誌。
+   * @param sessions - 這個 thread 的會話註冊表。
    * @returns 收掉這次接線的函式，或沒掛後端時的 `undefined`。
    */
-  attachTelemetry?(log: SessionLog): (() => Promise<void>) | undefined;
+  attachTelemetry?(sessions: SessionRegistry): (() => Promise<void>) | undefined;
   /**
    * 把這個 thread 的日誌接上不變量配套入口。同 `attachTelemetry` 的理由住在組裝點：
    * 只有那裡同時看得到 registry 與日誌。沒有人註冊配套入口時回 `undefined`。
    *
-   * @param log - 這個 thread 的日誌。
+   * @param sessions - 這個 thread 的會話註冊表。
    * @returns 收掉這次接線的函式，或沒有配套入口時的 `undefined`。
    */
-  attachInvariants?(log: SessionLog): (() => void) | undefined;
+  attachInvariants?(sessions: SessionRegistry): (() => void) | undefined;
+  /**
+   * 把這個 thread 的日誌接上 `sessions` 通道的參與者，選配。
+   *
+   * 同上面兩條的理由住在組裝點，但**方向相反**：交出去的日誌寫得動，參與者記得下
+   * `goal/change` 這種權威 domain 事件。沒有人註冊參與者時回 `undefined`。
+   *
+   * **這條路不能漏。** 漏了的話 `@nexus/core` 的測試照樣全綠，而 web 那端每一個 thread
+   * 的域狀態都不存在——那是一種只在瀏覽器上看得到的缺席。
+   *
+   * **它同時是模型工具那條線。** 綁上註冊表之後，plugin 註冊的工具才問得出「我這次呼叫
+   * 該寫進哪一份日誌」（`registry.sessions.forCall`）。所以它現在**一定**回一個 detach，
+   * 沒有「沒人 join 就 `undefined`」那條短路了。
+   *
+   * @param sessions - 這個 thread 的會話註冊表。
+   * @returns 收掉這次接線的函式。
+   */
+  attachSession?(sessions: SessionRegistry): () => void;
+  /**
+   * 把這個 thread 的**每一份**會話日誌接上落盤，選配。
+   *
+   * **這一條與上面三條不同層**：那三個的答案來自 `createCliAgent`（掛了什麼 plugin
+   * 決定有沒有遙測後端、有沒有配套入口、有沒有參與者），而落盤與 plugin 清單無關
+   * ——它的答案來自**呼叫方式**（`serve.ts` 有沒有收到 `--session-log`）。所以組裝點
+   * 是 `runServe` 自己的閉包，不是 `createCliAgent` 的回傳值。
+   *
+   * **一個行程一個 store，一條 thread 一次接線。** store 開的 run 目錄是整個行程共用
+   * 的，每條 thread 的 root session id 就是它的 `threadId`，所以同一個目錄底下一條
+   * thread 一個檔（檔名的單射性見 `jsonl-session-store.ts` 的 `safeBaseName`——
+   * `threadId` 是呼叫端給的字串）。
+   *
+   * 前三個是觀察者，這一個是出口，所以排在最後——同 `cli.ts` 的接線順序。
+   *
+   * @param sessions - 這個 thread 的會話註冊表。
+   * @returns 收掉這次接線的方法（`dispose` 會排空並關檔），或沒開落盤時的 `undefined`。
+   */
+  attachPersistence?(
+    sessions: SessionRegistry,
+  ): { flush(): Promise<void>; dispose(): Promise<void> } | undefined;
+  /**
+   * 組出續行排程器要問域的四件事。**沒開 `--goal-driver` 就整個不給**，那時這條 thread
+   * 一輪都不會自己排。
+   *
+   * `log` 是 getter 而不是一份日誌，因為日誌由 {@link ThreadPump} 建，而 port 要在 pump
+   * 之前組好——它是 pump 的建構參數。同一個理由讓 `flush` 也是延後綁的：耐久協調器接在
+   * pump 之後。
+   *
+   * @param log - 讀這條 thread 的 root 日誌。
+   * @param flush - 排隊前的耐久檢查點。
+   * @returns 排程器那一側。
+   */
+  goalDriver?(log: () => SessionLog, flush: () => Promise<void>): GoalDriverPort;
 }
 
 export interface WireHandlerOptions {
@@ -187,9 +244,35 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     }
     const created = (async (): Promise<ThreadState> => {
       const threadAgent = await options.createAgent(threadId);
-      const pump = new ThreadPump(threadAgent.agent, threadId);
-      const detachTelemetry = threadAgent.attachTelemetry?.(pump.sessionLog);
-      const detachInvariants = threadAgent.attachInvariants?.(pump.sessionLog);
+      // **三個東西互相要對方，所以綁定是延後的**：port 要日誌（pump 才有）與 flush
+      // （協調器才有），而 pump 的建構參數就是 port。這個格子把環打開——兩個 getter
+      // 讀它，而它在 pump 與協調器各自建好之後才被填上。
+      //
+      // **排程器第一次問這兩格是在第一輪落定的時候**，那時兩個都填好了。
+      const late: { log?: SessionLog; flush?: () => Promise<void> } = {};
+      const driver = threadAgent.goalDriver?.(
+        () => {
+          const log = late.log;
+          /* v8 ignore next -- pump 在下一行就建好，而排程器最早在第一輪落定時才問 */
+          if (log === undefined) throw new Error('這條 thread 的日誌還沒建好');
+          return log;
+        },
+        async () => void (await late.flush?.()),
+      );
+      const pump = new ThreadPump(threadAgent.agent, threadId, driver);
+      late.log = pump.sessionLog;
+      const detachTelemetry = threadAgent.attachTelemetry?.(pump.sessions);
+      const detachInvariants = threadAgent.attachInvariants?.(pump.sessions);
+      // **接在不變量之後**，同 `cli.ts` 那條的理由：參與者一裝上去就可能記東西，
+      // 那些東西該被已經在看的檢查看到。註冊表通知訂閱者的順序就是這三行的順序，
+      // 所以 subagent 後來出生的那些日誌也照這個順序被接上。
+      const detachSession = threadAgent.attachSession?.(pump.sessions);
+      // **接在最後，理由同 `cli.ts`**：前三個是觀察者，落盤不改變任何人看得到什麼，
+      // 所以順序在功能上沒有差別；排最後是為了讓讀的人看到的因果跟實際一致。
+      const persistence = threadAgent.attachPersistence?.(pump.sessions);
+      // **沒開落盤時 `flush` 就整個缺席**，而不是一個假裝成功的 no-op：`late.flush?.()`
+      // 的缺席語意就是「這條路上沒有耐久檢查點」，同 `attachPersistence` 自己的規矩。
+      late.flush = persistence === undefined ? undefined : () => persistence.flush();
       return {
         pump,
         commands: threadAgent.commands,
@@ -201,11 +284,19 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         }),
         slashInFlight: false,
         dispose: async () => {
-          // 不變量先退訂：它只是一個訂閱，退掉不會有東西要排空，而留著它跑在關機途中的
+          // **參與者先收，比不變量還早**：它是唯一寫得動日誌的那一個，先讓它停手，
+          // 檢查才還在看著它最後那幾筆。反過來收的話，關機途中寫進去的東西沒人檢。
+          detachSession?.();
+          // 不變量再退訂：它只是一個訂閱，退掉不會有東西要排空，而留著它跑在關機途中的
           // 事件上只會多噪音。
           detachInvariants?.();
           // 遙測先收，理由同 `agent-factory.ts`：後端可能是某個 plugin 開的。
           await detachTelemetry?.();
+          // **落盤收在 agent 之前，但這一行的依據跟上面三條不一樣，別讀成驗過的因果。**
+          // 「有這一行」是量出來的（拿掉它，`serve` 那組落盤斷言會紅）；「排在
+          // `threadAgent.dispose()` 之前」是預防，今天的組裝分不出兩種順序——同
+          // `cli.ts` 關機那兩行的處境與措辭。
+          await persistence?.dispose();
           await threadAgent.dispose();
         },
       };

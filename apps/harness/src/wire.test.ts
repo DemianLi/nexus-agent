@@ -148,10 +148,13 @@ function toolCallsFromWire(frames: readonly Event[]): { id: string; name: string
 /**
  * 會炸的模型。
  *
- * 讓**模型**炸而不是讓工具炸，是刻意的：工具拋錯那條路除了失敗 frame 之外還會多一個
- * `run.output.catch()` 攔不掉的 unhandled rejection——那是開發計劃 Phase 4 記著的
- * 「工具拋錯就整場死」，我們的組裝有 `@nexus/plugin-validation` 圍堵著。這裡要驗的是
- * 「run 失敗時線上看得到原因」，不該順便把那個老問題拖進來。
+ * 讓**模型**炸而不是讓工具炸，是刻意的：**工具那條路現在根本炸不起來**——圍堵由 fold
+ * 打底進 root 與每個 subagent（[#159](https://github.com/DemianLi/nexus-agent/issues/159)），
+ * 工具拋錯只會換來一則 error ToolMessage，run 照樣走完。這裡要驗的是「run 失敗時線上
+ * 看得到原因」，需要一個真的會讓 run 死掉的東西，而模型那一側是。
+ *
+ * （這條路以前另外還會多一個 `run.output.catch()` 攔不掉的 unhandled rejection，那是
+ * 開發計劃 Phase 4 記著的「工具拋錯就整場死」。現在那個前提沒了。）
  */
 class ThrowingModel extends ScriptedChatModel {
   /** 基座的 `bindTools` 會回一個 `ScriptedChatModel`，覆寫掉才輪得到這個子類。 */

@@ -8,6 +8,31 @@
  * 走 `invoke` 而不是 v3 `streamEvents`：這一層要的是「跑完之後做到了什麼」，不是事件
  * 序列。兩條路徑會不會分歧是另一件事，由 [`stream-parity.test.ts`](../stream-parity.test.ts)
  * 釘住（#75 抓到過一次真的分歧，而且是靜默的）。
+ *
+ * ## 這條路上沒有會話日誌，而那是一個決定
+ *
+ * 另外兩個入口都有一張會話註冊表——CLI 在 `runCli` 裡建、`serve` 一條 thread 一張
+ * （`thread-pump.ts`）——而 eval **一張都沒有**：它直接叫 `createNexusAgent`，繞過了
+ * `createCliAgent`，所以連行程內的日誌都不存在，更談不上落盤
+ * （[#174](https://github.com/DemianLi/nexus-agent/issues/174)）。
+ *
+ * **今天不接，理由是這條路沒有消費者，不是接不上：**
+ *
+ * - 這一層要的兩樣東西都不經過日誌。工具呼叫從 `result.messages` 讀，token 用量從
+ *   `usage_metadata` 加總（見 {@link BenchmarkRun.usage}）——會話日誌的 `model/usage`
+ *   是給人與遙測看的第二本帳，不是這裡的來源。
+ * - 日誌是為了跨行程活下去（#172）。基準任務是一次性的：跑完、評分、印出來，沒有人
+ *   會回頭讀第 37 次執行的事件序列。
+ * - 未來 Proteus 那條要量的是 **CLI**（`proteus/adapters/dsh.py` 跑的是一次無頭 CLI
+ *   呼叫），不是我們自己的基準跑者。
+ *
+ * **而「決定不接」與「忘了接」在檔案上長得一樣**，所以配一條絆索：
+ * [`session-absence.test.ts`](./session-absence.test.ts) 盯著這個檔的 import 行，
+ * 出現 `SessionRegistry`／`attachSession`／`attachSessionPersistence` 就紅。那不是禁止
+ * ——是要求接的人回來把這一段改掉，順便回答「那落盤呢」。
+ *
+ * 同一個形狀在這個檔裡已經有先例：`approvals` 明著傳 {@link HEADLESS_APPROVALS} 而不
+ * 靠「反正沒有 checkpointer」的巧合（見 {@link runBenchmarkCase} 裡那段註解）。
  */
 
 import { AIMessage } from '@langchain/core/messages';

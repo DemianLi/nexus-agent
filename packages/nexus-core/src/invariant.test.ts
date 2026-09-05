@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import { createInvariantRunner } from './invariants.js';
 import type { InvariantCompanion, InvariantError } from './invariants.js';
 import { createRegistry } from './registry.js';
+import { goalId } from './goal.js';
 import { SessionLog } from './session-log.js';
 import { createCoreInvariantPlugin, CORE_INVARIANT_PACKAGE } from './invariant.js';
 import { sessionInvariant } from './invariant.js';
@@ -37,6 +38,39 @@ function watch(log: SessionLog): InvariantError[] {
 }
 
 describe('合法序列不吵', () => {
+  it('goal/change 不參與 turn 配對——輪內輪外都不吵', () => {
+    // 這一條釘的是 `sessionInvariant` 的 `default` 分支：**後來加的事件種類歸它們自己的
+    // 擁有者**。goal 的耐久串由 `@nexus/plugin-goal` 的配套入口檢，這裡多管一句就會在
+    // 真流量上誤報。
+    const log = new SessionLog('goal-不干擾');
+    const violations = watch(log);
+    const change = {
+      kind: 'goal/change',
+      version: 1,
+      operation: 'create',
+      goal: {
+        id: goalId('goal-1'),
+        revision: 1,
+        objective: '把它做完',
+        phase: 'active',
+        maxGoalRounds: 8,
+      },
+      roundsStarted: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    } as const;
+    log.append('goal/change', change);
+    log.append('turn/start', { kind: 'message', text: '走吧' });
+    log.append('goal/change', {
+      ...change,
+      operation: 'pause',
+      goal: { ...change.goal, revision: 2, phase: 'paused' },
+      updatedAt: 2,
+    });
+    log.append('turn/end', {});
+    expect(violations).toEqual([]);
+  });
+
   it('CLI 那條：turn/start → turn/end', () => {
     const log = new SessionLog('cli');
     const violations = watch(log);

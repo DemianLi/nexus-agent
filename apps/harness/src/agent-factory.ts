@@ -10,10 +10,12 @@
  * 第三步只有這裡有。換模型、換儲存、換工具組合＝換 plugin 清單，core 不動。
  *
  * 「組裝點自有、plugin 不得提供」的那些（default backend、工具呈現順序、model、
- * checkpointer / store、核准政策的 session 開關，加一份基座工具名單）從
- * {@link CreateNexusAgentOptions} 進來，原樣交給 fold：**所有權在這裡，檢查跑在 core**。
+ * checkpointer / store、核准政策的 session 開關、摘要的門檻與去向、重複呼叫提醒的門檻與
+ * 射程，加一份基座工具名單）
+ * 從 {@link CreateNexusAgentOptions} 進來，原樣交給 fold：**所有權在這裡，檢查跑在 core**。
  *
- * 這也是 fold 的產物第一次真的碰到基座。基座在建構時還有三道自己的檢查是 fold 看不到的：
+ * 這也是 fold 的產物第一次真的碰到基座。基座在建構時還有三道自己的檢查是 fold 看不到的，
+ * 外加**一件不是檢查而是改寫**的事（第 4 條）：
  *
  * 1. **工具名撞到內建**——`createDeepAgent()` 開頭丟 `ConfigurationError('TOOL_NAME_COLLISION')`。
  *    我們在 fold 之前先擋一次，理由見 {@link assertNoBaseToolNameCollision}。
@@ -25,6 +27,12 @@
  *    後者，是錯的；1.13.1 的 `ConfigurationError` 只有 `TOOL_NAME_COLLISION` 一個 code）。
  *    現在觸發不到——`StateBackend` 的 `isSandboxBackend` 是 false——所以這裡不寫測試，
  *    留給 Phase 2 的 `feat/sandbox-plugin` 當場驗。
+ * 4. **按模型改寫組裝**——`createDeepAgent()` 從 `model` 解出一份 harness profile，然後才
+ *    開始組 middleware。它拿得掉工具、改得動我們自己註冊的工具的 description、加得了
+ *    middleware（連同它帶的工具）、換得掉系統提示詞。**前三條是檢查，這一條是改寫**：
+ *    它不會拒絕任何東西，只會安靜地讓組出來的 agent 不是我們宣告的那個。所以這裡在
+ *    fold 之前先要求宣告，見 {@link CreateNexusAgentOptions.expectedHarnessProfile} 與
+ *    [`harness-profile.ts`](./harness-profile.ts)。
  *
  * 組裝點還負責一件基座**設了但等於沒設**的事：agent 迴圈的上限。見
  * {@link DEFAULT_RECURSION_LIMIT}。
@@ -33,6 +41,7 @@
 import {
   assertInvariantSelection,
   createInvariantRunner,
+  createSessionRunner,
   foldRegistry,
   formatOrigin,
   loadPlugins,
@@ -45,12 +54,16 @@ import {
   type InvariantSelection,
   type NexusPlugin,
   type PluginRegistry,
-  type SessionLog,
+  type SessionRegistry,
   type SessionTelemetrySharingStatus,
+  type RepeatReminderSettings,
+  type SummarizationSettings,
 } from '@nexus/core';
-import { createDeepAgent, StateBackend } from 'deepagents';
+import { CompositeBackend, createDeepAgent, StateBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
+import { assertHarnessProfileDeclared } from './harness-profile.js';
+import type { HarnessProfileEffects } from './harness-profile.js';
 
 export interface CreateNexusAgentOptions {
   /** plugin 清單。順序有意義：middleware 的順序、以及 `except` 的射程都跟著它。 */
@@ -62,6 +75,16 @@ export interface CreateNexusAgentOptions {
    * 不是這裡該替人填的預設值。
    */
   readonly model: AgentModel;
+  /**
+   * 宣告「這個模型會讓基座對組裝做哪些事」。**省略即宣告「什麼都不做」**——那是今天所有
+   * 呼叫端的實情，也是唯一一種不必寫的宣告。
+   *
+   * 基座解出來的 profile 與這份宣告不一致，組裝當場失敗（兩個方向都擋：沒宣告卻有東西、
+   * 宣告了卻沒有那些東西）。**這不是把某些模型封死**——確認過改動可以接受，就照錯誤訊息
+   * 把實際那份貼進來。理由、形狀與 dsh 那側的對照見
+   * [`harness-profile.ts`](./harness-profile.ts) 的檔頭。
+   */
+  readonly expectedHarnessProfile?: HarnessProfileEffects;
   /**
    * default backend。plugin 掛的是路由分支（`backend.mount()`），兜底的這個是組裝點的事。
    * 省略即 `StateBackend`（跑在 state 裡的虛擬 FS，不碰真實磁碟）。**含路徑圍堵的
@@ -75,12 +98,50 @@ export interface CreateNexusAgentOptions {
    * 會想覆寫它的只有測試，以及哪天真的開了 async subagent 的組裝。
    */
   readonly baseToolNames?: readonly string[];
+  /**
+   * 「先讀後改」策略的開關。省略即開著（照 dsh，那邊是預設載入的插件）。
+   *
+   * `false` 是明著接受盲改——一個只寫新檔、從不編輯既有檔的批次流程用得到它。
+   * 形狀與理由見 `@nexus/core` 的 `observation.ts`。
+   */
+  readonly observationPolicy?: boolean;
   /** checkpointer。有 plugin 宣告要核准的工具卻沒給，fold 會報錯。 */
   readonly checkpointer?: AgentCheckpointer;
   /** 長期記憶用的 store。 */
   readonly store?: AgentStore;
   /** 核准政策的 session 開關。省略即「這個 session 有人在」。 */
   readonly approvals?: ApprovalPolicy;
+  /**
+   * 摘要的門檻與去向。省略即 `DEFAULT_SUMMARIZATION`，給物件就逐格淺合併上去，
+   * `false` 是明著退回基座那個。
+   *
+   * **這一格存在是因為基座沒有這個參數。** `createSummarizationMiddleware({ backend })`
+   * 被無條件寫死進 root 與每個 subagent 的 stack，`CreateDeepAgentParams` 上一個
+   * summarization 欄位都沒有；門檻由基座在執行期從模型 profile 二選一挑，而我們的模型
+   * 解不出 profile，於是拿到一組與模型無關的常數，**沒有任何一側在檢查它跟真實窗口的
+   * 關係**。唯一的縫是同名取代，fold 走的就是那條。
+   *
+   * `fraction` 型別的門檻在型別層與執行期都被擋掉——它需要 `profile.maxInputTokens`，
+   * 缺值時 `trigger` 一輩子不觸發、`keep` 一則逐字訊息都不留，兩個方向都不警告。
+   * 實測與決議見 [#142](https://github.com/DemianLi/nexus-agent/issues/142)，形狀與
+   * 數值的理由見 [`summarization.ts`](../../../packages/nexus-core/src/summarization.ts)。
+   */
+  readonly summarization?: Partial<SummarizationSettings> | false;
+  /**
+   * 重複工具呼叫的提醒門檻與射程。省略即 `DEFAULT_REPEAT_REMINDER`（門檻 3／5／8），
+   * 給物件就逐格淺合併上去，`false` 是明著不要。
+   *
+   * **這一格存在是因為基座沒有這種 middleware。** 模型以同參數重複呼叫同一個工具時，
+   * 今天唯一會讓它停下來的是 {@link DEFAULT_RECURSION_LIMIT}，而那個上限不分辨「在
+   * 進展」與「在打轉」——它只會在跑了夠久之後把整輪掐掉。提醒器是**建議不是阻止**：
+   * 合理的重複一秒都不會被延遲。形狀與門檻照 dsh 的 `repeat-tool-reminder`，
+   * 偏離登記見 [`repeat-reminder.ts`](../../../packages/nexus-core/src/repeat-reminder.ts)。
+   *
+   * **開著會吃掉迴圈預算**：它掛在 `beforeModel` 上，那在圖裡是一個節點，每一輪多一個
+   * super-step，於是 `recursionLimit` 的換算從 `2 × 輪數 + 2` 變成 `3 × 輪數 + 2`。
+   * 見 {@link DEFAULT_RECURSION_LIMIT}。
+   */
+  readonly repeatReminder?: Partial<RepeatReminderSettings> | false;
   /** 附加在基座 base prompt 前面的 system prompt。 */
   readonly systemPrompt?: string;
   /**
@@ -140,6 +201,21 @@ export interface CreateNexusAgentOptions {
  * 57 個 super-step，所以這個值攔得住它，而正常的基準任務（最長 3 次工具呼叫 ≈ 8 個
  * super-step）離它還很遠。**它是「跑掉了」的界線，不是「複雜任務」的界線** —— 真的需要
  * 更長的呼叫端自己傳一個大的，那時那個數字會出現在呼叫端的程式碼裡而不是沒有人設過。
+ *
+ * **上面那兩個 super-step 數字都是每輪兩格算的**（57 與 8），跟下一段的新換算不同尺，
+ * 不要拿它們互比。換成每輪三格是 ≈ 85 與 ≈ 12：跑掉的那次照樣攔得住，正常任務照樣很遠。
+ *
+ * ## 上面那個換算是裸組裝的，預設組裝比它短
+ *
+ * `2 × 輪數 + 2` 只在「圖裡沒有 `beforeModel` 節點」時成立，而
+ * [#147](https://github.com/DemianLi/nexus-agent/issues/147) 打底的
+ * {@link CreateNexusAgentOptions.repeatReminder} 就是一個。通式是
+ * `模型輪數 = floor((recursionLimit - 1) / 每輪格數)`，所以**預設組裝每一輪是三格，
+ * 100 換算成 33 輪而不是 49**。2026-09-03 實測，逐格對照見
+ * [`looping-model.ts`](./looping-model.ts) 的檔頭。
+ *
+ * **這個常數沒有跟著動。** 方向是護欄變嚴不是變鬆，而校準的兩端換算過去都還成立（見
+ * 上一段）。要拿回原本的預算就自己傳一個大的 `recursionLimit`，或明著關掉提醒器。
  */
 export const DEFAULT_RECURSION_LIMIT = 100;
 
@@ -183,6 +259,11 @@ export const HEADLESS_APPROVALS: ApprovalPolicy = { enabled: false };
  *
  * `attachInvariants` 同一個理由，接的是不變量配套入口。兩者**不合併**：遙測是把事件
  * 送出去，不變量是檢查事件之間的關係，一個有出境資料一個沒有，開關與失敗語意都不一樣。
+ *
+ * `attachSession` 是第三個，接的是 `sessions` 通道的參與者。它與另外兩個的差別是**方向**：
+ * 那兩個只讀，這一個交出去的日誌**寫得動**——`goal/change` 這種權威 domain 事件就是從
+ * 這裡進日誌的。理由與否掉沿用 `invariants` 的兩條見
+ * {@link @nexus/core!SessionSubject}。
  */
 export type NexusAgentHandle = Awaited<ReturnType<typeof createNexusAgent>>;
 
@@ -195,11 +276,78 @@ export type NexusAgentHandle = Awaited<ReturnType<typeof createNexusAgent>>;
  *
  * @param options - 清單，加上組裝點自有的那些。
  * @returns 建好的 agent 與收掉它的方法。
- * @throws 清單載入失敗（重名、`requires` 缺件、`apply` 拋錯）、`invariants` 的 pattern 不合法、
- *   fold 的前置條件不成立，或基座自己在建構時擋下這份組裝——四種都在載入期發生，
- *   不會拖到跑起來才炸。
+ * @throws 模型解出來的 harness profile 與宣告不符、清單載入失敗（重名、`requires` 缺件、
+ *   `apply` 拋錯）、`invariants` 的 pattern 不合法、fold 的前置條件不成立，或基座自己在
+ *   建構時擋下這份組裝——五種都在載入期發生，不會拖到跑起來才炸。
  */
+/**
+ * 基座把過大的工具結果搬去的那個路徑前綴。**抄自基座，不是我們選的。**
+ *
+ * `createFilesystemMiddleware` 的 `wrapToolCall` 在文字超過
+ * `4 * toolTokenLimitBeforeEvict`（預設 `2e4` → 80,000 字元）時寫
+ * `/large_tool_results/<sanitized tool_call_id>.txt`，然後把訊息換成頭尾預覽加一句
+ * 「用 `read_file` 自己去讀」（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:2416`
+ * 的 `processToolMessage`）。那個路徑是**寫死在基座裡的**，這裡只是把同一個字串說出來。
+ *
+ * **匯出是刻意的**：`tool-result-stash.test.ts` 那條絆索拿它跟基座實際指路的路徑對，
+ * 基座改了字串就當場紅。把它藏起來、測試裡再抄一次字面值，那條絆索就會兩邊一起錯。
+ */
+export const TOOL_RESULT_STASH_PREFIX = '/large_tool_results';
+
+/**
+ * 把工具結果暫存那一格路由到獨立的 {@link StateBackend}，不讓它落在 agent 的工作區上。
+ *
+ * ## 它修的是一個會丟資料的缺陷（[#170](https://github.com/DemianLi/nexus-agent/issues/170)）
+ *
+ * 基座那次 `backend.write()` **失敗時不會保留原文**——它把訊息換成
+ * `Tool result too large, but the result could not be saved to the filesystem: <error>`
+ * （`:2437`），於是模型剛要到手的東西整個沒了，只剩一句「存不進去」。
+ *
+ * **而那不是稀有路徑。** `ContainedFilesystemBackend` 的 `read-only` mode 對**每一次**
+ * write 回 `{ error }`，所以那個組裝底下**每一則**超過 80,000 字元的工具結果都會這樣：
+ * 實測 80,014 個字元換成 166 個，模型接著 `read_file` 拿到 `ENOENT`。
+ *
+ * dsh 明文保證相反：`dsh-spill-policy` 的三個不變式之一是「spill 失敗保留原始內聯結果，
+ * 絕不把成功的呼叫變成錯誤」（`packages/spill/spill-policy/README.zh.md`，SHA `4e84901`）。
+ *
+ * ## 為什麼修在 backend 這一層，而不是包一層 middleware
+ *
+ * **因為原文在基座那一層裡面。** 我們自己的 `wrapToolCall` 包在外面時，拿到的已經是
+ * 基座換過的訊息；要握住原文得再有一層跑在裡面，兩層之間對 `tool_call_id`，而且
+ * 「認出基座失敗了」只能去比對那句英文——基座沒有給碼。路由讓那次 write **不會失敗**，
+ * 於是這些都不必發生。
+ *
+ * ## 為什麼是無條件的，不是「唯讀時才路由」
+ *
+ * `fold.ts` 已經畫過這條線：**歷史是基礎建設，不是 agent 的工作區**（摘要器因此拿的是
+ * default backend，不是折出來的那個）。工具結果暫存落在同一側 —— 它是 harness 的暫存，
+ * 不是模型在做的事。所以它不該取決於工作區的寫入政策：
+ *
+ * - **`read-only`**：那次 write 不再被 fence 擋掉，缺陷消失。
+ * - **`workspace-write`**：暫存不再落在使用者的專案目錄裡。今天它會留下永遠沒人清的
+ *   `<root>/large_tool_results/*.txt`；dsh 的 spill 同樣**不寫工作區**，它有自己的私有根。
+ * - **預設（`StateBackend`）**：路由到另一個 `StateBackend`，行為等價（實測）。
+ * - 而且它不必知道那次 write **為什麼**會失敗——`ENOSPC`、`EACCES`、掛載唯讀，一起蓋掉。
+ *
+ * **代價講明白：暫存改放在 graph state 裡，所以它進 checkpoint。** 預設組裝本來就是這樣，
+ * 但磁碟型的 backend 今天是把那段文字移出 state 的，這一改等於移回來。跑完之後它也不再
+ * 留在磁碟上供事後翻查。**與 dsh 的差別也在這裡**：它的 spill 存在宿主上一個私有目錄
+ * （0700／`open(…, 'wx', 0o600)`）並有保留期清理，我們換成 state —— 理由是 `read-only`
+ * 不該因為這件事開始碰磁碟，而且 state 不需要清理政策。要改成落盤的話，換的就是這裡
+ * 這一個路由目標。
+ *
+ * @param backend - 組裝點的 default backend。
+ * @returns 同一個 backend，外面包一層只有這一條路由的 `CompositeBackend`。
+ */
+function withToolResultStash(backend: AnyBackendProtocol): AnyBackendProtocol {
+  return new CompositeBackend(backend, { [TOOL_RESULT_STASH_PREFIX]: new StateBackend() });
+}
+
 export async function createNexusAgent(options: CreateNexusAgentOptions) {
+  // **跑在 `loadPlugins` 之前**：它只看 `options.model`，這時候還沒有任何 plugin 開好資源，
+  // 所以失敗了不必先 `dispose()`。其餘四種都在下面那個 try 裡，因為它們要等 registry。
+  assertHarnessProfileDeclared(options.model, options.expectedHarnessProfile);
+
   const { registry, dispose } = await loadPlugins(options.plugins);
 
   try {
@@ -209,13 +357,18 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     if (options.invariants !== undefined) assertInvariantSelection(options.invariants);
 
     const params = foldRegistry(registry, {
-      defaultBackend: options.backend ?? new StateBackend(),
+      defaultBackend: withToolResultStash(options.backend ?? new StateBackend()),
       toolOrder: options.toolOrder,
       baseToolNames: options.baseToolNames ?? BASE_TOOL_NAMES,
       model: options.model,
       checkpointer: options.checkpointer,
       store: options.store,
       approvals: options.approvals,
+      ...(options.summarization !== undefined && { summarization: options.summarization }),
+      ...(options.repeatReminder !== undefined && { repeatReminder: options.repeatReminder }),
+      ...(options.observationPolicy !== undefined && {
+        observationPolicy: options.observationPolicy,
+      }),
     });
 
     // `withConfig` 疊在基座自己那一層 `withConfig` 上面，後者贏（實測 `8` → 模型只被叫
@@ -249,26 +402,39 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       telemetrySharing: registry.telemetry.service()?.value.sharing as
         SessionTelemetrySharingStatus | undefined,
       /**
-       * 把一份會話日誌接上遙測。**沒掛後端時回 `undefined`**——沒有後端就沒有出口，
-       * 建一個把記錄丟進虛空的協調器只會讓熱路徑白付投影與脫敏的成本。
+       * 把一次組裝的**每一份**會話日誌接上遙測。**沒掛後端時回 `undefined`**——沒有後端
+       * 就沒有出口，建一個把記錄丟進虛空的協調器只會讓熱路徑白付投影與脫敏的成本。
        *
-       * @param log - 要鏡像的日誌。
+       * **一份會話一個協調器，而且新開的那些自動有。** 這是 dsh 的形狀——它的 live
+       * capture「subscribes to the session firehose」並且「sweeps already-live sessions」
+       * （`packages/session/session-telemetry/src/coordinator.ts` 檔頭），per-session 的
+       * 狀態掛在以 session 為鍵的 `WeakMap` 上。subagent 的日誌因此不必有人記得重接。
+       *
+       * @param sessions - 這次組裝的會話註冊表。
        * @returns 收掉這一次接線的函式，或沒掛後端時的 `undefined`。
        */
-      attachTelemetry(log: SessionLog): (() => Promise<void>) | undefined {
+      attachTelemetry(sessions: SessionRegistry): (() => Promise<void>) | undefined {
         const mounted = registry.telemetry.service();
         if (mounted === undefined) return undefined;
-        const coordinator = new SessionTelemetryCoordinator({
-          log,
-          sink: mounted.value,
-          // 現讀而不是快照：`rules()` 每次捕獲都重新問一遍，補送歷史時套的是**現在**
-          // 掛著的策略。這是 dsh waterfall 的語意，折疊要接得住。
-          rules: () => registry.telemetry.rules(),
+        const mine = new Set<SessionTelemetryCoordinator>();
+        const unobserve = sessions.observe(({ log }) => {
+          const coordinator = new SessionTelemetryCoordinator({
+            log,
+            sink: mounted.value,
+            // 現讀而不是快照：`rules()` 每次捕獲都重新問一遍，補送歷史時套的是**現在**
+            // 掛著的策略。這是 dsh waterfall 的語意，折疊要接得住。
+            rules: () => registry.telemetry.rules(),
+          });
+          attached.add(coordinator);
+          mine.add(coordinator);
         });
-        attached.add(coordinator);
         return async () => {
-          attached.delete(coordinator);
-          await coordinator.dispose();
+          unobserve();
+          for (const coordinator of [...mine]) {
+            mine.delete(coordinator);
+            attached.delete(coordinator);
+            await coordinator.dispose();
+          }
         };
       },
       /**
@@ -283,20 +449,67 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * 人註冊」，而不是「過濾完還剩幾個」。過濾成空集合是一個有效的選擇結果，runner
        * 照樣要接（它擁有訂閱與失敗語意），只是一個檢查都不裝。
        *
-       * @param log - 要觀察的日誌。
+       * **每一份會話各一個 runner**，同 dsh 的配套入口（`for (const session of
+       * ctx.sessions.list()) seedSession(session)` 加 `ctx.on('session/created', …)`，
+       * `packages/core/session/src/invariant.ts:218-220`）。subagent 的日誌因此不會變成
+       * 一個沒有檢查的角落。
+       *
+       * @param sessions - 這次組裝的會話註冊表。
        * @returns 收掉這一次接線的函式，或沒有配套入口時的 `undefined`。
        */
-      attachInvariants(log: SessionLog): (() => void) | undefined {
+      attachInvariants(sessions: SessionRegistry): (() => void) | undefined {
         const companions = registry.invariants.companions();
         if (companions.length === 0) return undefined;
-        return createInvariantRunner({
-          log,
-          companions,
-          ...(options.invariants !== undefined && { selection: options.invariants }),
-          ...(options.onInvariantViolation !== undefined && {
-            onViolation: options.onInvariantViolation,
-          }),
+        const runners: (() => void)[] = [];
+        const unobserve = sessions.observe(({ log }) => {
+          runners.push(
+            createInvariantRunner({
+              log,
+              companions,
+              ...(options.invariants !== undefined && { selection: options.invariants }),
+              ...(options.onInvariantViolation !== undefined && {
+                onViolation: options.onInvariantViolation,
+              }),
+            }),
+          );
         });
+        return () => {
+          unobserve();
+          // 倒著收，同 `load.ts` 收 lifecycle disposer 的順序。
+          for (const stop of [...runners].reverse()) stop();
+          runners.length = 0;
+        };
+      },
+      /**
+       * 把會話註冊表接上來：**綁給模型工具，並把每一份會話裝上 `sessions` 參與者**。
+       *
+       * **它做兩件事，而且不再有「沒有人註冊就回 `undefined`」那條短路。** 短路以前成立
+       * 是因為這個口只餵參與者；現在它同時是模型工具問「我該寫進哪一份日誌」的那條線
+       * （`registry.sessions.forCall`）。一個只註冊工具、沒有 `join` 任何參與者的 plugin
+       * 在短路底下會永遠拿到「沒接上」，而那是一個**看起來像設定問題的假象**。
+       *
+       * **這裡沒有 selection 也沒有 `onViolation`。** 那兩樣是不變量的東西：一個回答
+       * 「這個 package 的檢查要不要裝」，一個回答「違規往哪裡印」。參與者不產生違規，
+       * 它產生的是事件；要不要裝它由清單那一層答（條目層的 `disabled`），而它自己壞掉
+       * 只換來一行 warn。
+       *
+       * @param sessions - 這次組裝的會話註冊表。
+       * @returns 收掉這一次接線的函式：退訂、解綁，再倒著收每一份會話的 runner。
+       */
+      attachSession(sessions: SessionRegistry): () => void {
+        const installers = registry.sessions.installers();
+        const unbind = registry.sessions.bind(sessions);
+        const runners: (() => void)[] = [];
+        const unobserve = sessions.observe(({ address, log }) => {
+          if (installers.length > 0)
+            runners.push(createSessionRunner({ address, log, installers }));
+        });
+        return () => {
+          unobserve();
+          unbind();
+          for (const stop of [...runners].reverse()) stop();
+          runners.length = 0;
+        };
       },
       async dispose() {
         // 遙測先收：後端很可能是某個 plugin 開的，plugin 的 disposer 一跑它就沒了，

@@ -56,7 +56,7 @@ afterEach(async () => {
 /**
  * 起一條完整的線：真的組裝、真的 handler、真的 client，零 port 零憑證。
  *
- * 日誌是從 `attachTelemetry` 那條縫拿的——**那是組裝點唯一看得到 pump 那份日誌的地方**
+ * 日誌是從 `attachTelemetry` 那條縫拿的——**那是組裝點唯一看得到 pump 那張註冊表的地方**
  * （`ThreadAgent` 的說明），拿它當觀測點不需要在 handler 上開新的洞。
  */
 async function wire(plugins: readonly NexusPlugin[] = DEFAULT_PLUGINS): Promise<Wired> {
@@ -70,8 +70,9 @@ async function wire(plugins: readonly NexusPlugin[] = DEFAULT_PLUGINS): Promise<
       agent: built.agent as unknown as PumpAgent,
       commands: built.commands,
       dispose: built.dispose,
-      attachTelemetry: (log) => {
-        captured = log;
+      attachTelemetry: (sessions) => {
+        // 觀測 root 那一份就夠：這條線問的是「命令有沒有進日誌」，而命令是進入點寫的。
+        captured = sessions.root;
         return undefined;
       },
       attachInvariants: built.attachInvariants,

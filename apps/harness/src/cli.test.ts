@@ -58,6 +58,12 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['--live']).prompt).toBeUndefined();
   });
 
+  /** **兩個入口同一個旗標名、同一個預設**，理由見 `CliInvocation.goalDriver`。 */
+  it('--goal-driver 預設關，打得開', () => {
+    expect(parseCliArgs([]).goalDriver).toBe(false);
+    expect(parseCliArgs(['--goal-driver']).goalDriver).toBe(true);
+  });
+
   it('--workspace 收得到，空字串當場報錯', () => {
     expect(parseCliArgs(['--workspace', './ws']).workspace).toBe('./ws');
     expect(parseCliArgs([]).workspace).toBeUndefined();
@@ -135,19 +141,30 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是 echo ＋ 計劃模式 ＋ 十一個配套入口', async () => {
+  it('預設清單是 echo ＋ 計劃模式 ＋ goal ＋ todo ＋ 十三個配套入口', async () => {
     // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
     // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
     // 讓計劃模式進來，理由寫在 `DEFAULT_PLUGINS` 的 JSDoc 上（命令沒進預設清單就等於
     // 不存在）。**改成 `toHaveLength` 會把這條線整個放掉**，所以名字仍然逐個寫死：
     // 下一個想塞東西進來的人還是得先改這一行，並且說得出理由。
     //
-    // 十一個配套入口那一半沒有變——`plan-mode-invariant` 本來就在裡面
-    // （[#107](https://github.com/DemianLi/nexus-agent/issues/107)），這次變的是它的
-    // installer 從空的變成有一條規則，那件事歸 `invariant-companions.test.ts` 守。
+    // **`goal` 這一條翻面了。** 上一張 PR 這裡寫的是 `not.toContain('goal')`，理由是
+    // 「域在 `/goal` 落地之前沒有任何人打得到的入口」。`/goal` 落地了，理由就沒了——
+    // 而翻面之後這一行守的是同一件事的另一半：域進來的**位置**。它排在計劃模式之後、
+    // 所有配套入口之前，因為啟動時印的 `plugin：` 那一行按清單順序走。
+    //
+    // **`todo` 這一條進來的理由與前兩個不同，所以它值得在這裡多一句**：它是三者裡唯一
+    // 真的多一顆面向模型的工具的（每次請求多一份 schema 與描述），而它進得來是因為
+    // **它沒有別的入口**——人打不到它，命令也叫不動它。見
+    // [#132](https://github.com/DemianLi/nexus-agent/issues/132)。
     const names = DEFAULT_PLUGINS.map((plugin) => plugin.name);
-    expect(names.filter((name) => !name.endsWith('-invariant'))).toEqual(['echo', 'plan-mode']);
-    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(11);
+    expect(names.filter((name) => !name.endsWith('-invariant'))).toEqual([
+      'echo',
+      'plan-mode',
+      'goal',
+      'todo',
+    ]);
+    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(13);
   });
 
   it('**違規印到 stderr 而且帶前綴**——不是靠 runner 預設的 `console.error`', async () => {

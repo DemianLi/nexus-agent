@@ -1,127 +1,64 @@
 /**
- * 階梯與判準對照的資料本身。
+ * 量過的模型這份清單本身。
  *
- * 這裡不連外 —— 端點上叫不叫得動是**盤點**的事（見 `tiers.ts` 檔頭記的那兩次），
+ * 這裡不連外 —— 端點上叫不叫得動是**盤點**的事（方法見 `tiers.ts` 檔頭），
  * 綁進 CI 就變成一條需要憑證、而且會因為對方改權限而紅掉的測試。
- * 這個檔案守的是另一件事：**這些階梯還是不是階梯。**
+ *
+ * **2026-09-05：這個檔案原本有六條守著兩道尺寸階梯的斷言，跟著階梯一起刪了（#167）。**
+ * 沒有留空陣列繼續跑那六個 `for` 迴圈 —— 那會是六條永遠綠的測試。其中三條是承重的
+ * （至少兩階／同家族前綴／至少一階在 30B 以下），已經翻面寫成重建的驗收條件，
+ * 放在 `tiers.ts` 的檔頭。下面第一條就是在擋這個坑的下一次。
  */
 
 import { describe, expect, it } from 'vitest';
-import { ALL_MODELS_UNDER_TEST, MODEL_LADDERS, SCORER_CONTROL, type ModelTier } from './tiers.js';
+import { MEASURED_MODELS, SCORER_CONTROL, type MeasuredModel } from './tiers.js';
 
-/** id 後綴裡的活化參數量，例如 `-30b-a3b` 的 `3`。沒有後綴時是 `undefined`。 */
-function activeFromId(modelId: string): number | undefined {
-  const match = /-\d+b-a(\d+(?:\.\d+)?)b$/.exec(modelId);
-  return match === null ? undefined : Number(match[1]);
-}
+describe('MEASURED_MODELS', () => {
+  it('不是空的 —— 空清單會讓底下每一條斷言都變成永遠綠', () => {
+    // 收掉階梯的時候差一點就踩到：資料刪光、`for (const x of [])` 全部通過。
+    // 這條在資料被清空的那一刻紅，而預設模型那條絆索（live-model.test.ts）也才有東西可比。
+    expect(MEASURED_MODELS.length).toBeGreaterThan(0);
+  });
 
-describe('MODEL_LADDERS', () => {
-  it('每道階梯至少兩階 —— 只有一階的話沒有同家族對照，那不是階梯', () => {
-    // 少了對照，量到的衰減分不出是尺寸還是這一家的訓練配方。真的只有一個 id 可跑時
-    // 該走 SCORER_CONTROL 那條路，而不是宣告成一道階梯。
-    for (const ladder of MODEL_LADDERS) {
-      expect(ladder.tiers.length).toBeGreaterThanOrEqual(2);
+  it('每個項目只有四個鍵 —— 尺寸欄位在這裡是型別錯誤', () => {
+    // 這條是絆索，接的是階梯收掉之前那條「同一道階梯上是同一個家族」。這份清單跨四個家族，
+    // 有人加上 `totalBillions` 的那一刻，報表就多出一條讀不成尺寸效應的線。
+    // 同樣的規矩在 `survey.test.ts` 也有一條（#85 第 3 條）。
+    for (const model of MEASURED_MODELS) {
+      expect(Object.keys(model).sort()).toEqual(['label', 'measuredOn', 'modelId', 'note']);
     }
   });
 
-  it('同一道階梯上是同一個家族 —— 換掉其中一階就不再是「只有尺寸在變」', () => {
-    // 這條紅了代表有人往某道階梯裡塞了別家的模型，那時該階梯上的差異不再只是尺寸造成的。
-    for (const ladder of MODEL_LADDERS) {
-      for (const tier of ladder.tiers) {
-        expect(tier.modelId.startsWith(ladder.idPrefix)).toBe(true);
-      }
+  it('依 model id 的字典序 —— 沒有階梯之後，任何其他順序都會被讀成排名', () => {
+    const ids = MEASURED_MODELS.map((model) => model.modelId);
+    expect(ids).toEqual([...ids].sort());
+  });
+
+  it('label 與 model id 都兩兩不同 —— 報表靠 label 指名', () => {
+    const labels = MEASURED_MODELS.map((model) => model.label);
+    const ids = MEASURED_MODELS.map((model) => model.modelId);
+    expect(new Set(labels).size).toBe(labels.length);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('量測日期是 YYYY-MM-DD —— 報表要印它，因為這份集合會變', () => {
+    // 三輪盤點掉了 5 個可用的模型（14 → 16 → 9）。沒有日期的數字讀不出還算不算數。
+    for (const model of MEASURED_MODELS) {
+      expect(model.measuredOn).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     }
   });
 
-  it('總量在每道階梯內嚴格遞增', () => {
-    for (const ladder of MODEL_LADDERS) {
-      const totals = ladder.tiers.map((tier) => tier.totalBillions);
-      expect(totals).toEqual([...totals].sort((a, b) => a - b));
-      expect(new Set(totals).size).toBe(totals.length);
-    }
-  });
-
-  it('活化全部有值時也嚴格遞增 —— 兩種讀法下都要是階梯', () => {
-    // 稀疏模型的計算量更接近活化參數量。只有總量單調的話，「隨尺寸衰減」這句話
-    // 在按計算量讀的時候可能是反過來的。
-    for (const ladder of MODEL_LADDERS) {
-      const actives = ladder.tiers.map((tier) => tier.activeBillions);
-      if (actives.some((active) => active === undefined)) continue;
-      const known = actives as number[];
-      expect(known).toEqual([...known].sort((a, b) => a - b));
-      expect(new Set(known).size).toBe(known.length);
-    }
-  });
-
-  it('階梯的 name 與 idPrefix 兩兩不同', () => {
-    const names = MODEL_LADDERS.map((ladder) => ladder.name);
-    const prefixes = MODEL_LADDERS.map((ladder) => ladder.idPrefix);
-    expect(new Set(names).size).toBe(names.length);
-    expect(new Set(prefixes).size).toBe(prefixes.length);
-  });
-
-  it('至少有一階在 30B 以下 —— 底板太高正是 #83 定不了案的原因', () => {
-    // 這條是這張 PR 的存在理由。把 30B 以下那一階刪掉，報表照樣全綠、數字照樣漂亮，
-    // 而結論會安靜地退回「三個指標都滿分，不知道為什麼」。判的是總量那一欄：
-    // 活化那一欄在新的階梯上沒有值（見 tiers.ts 檔頭）。
-    const lowest = Math.min(
-      ...MODEL_LADDERS.flatMap((ladder) => ladder.tiers).map((tier) => tier.totalBillions),
-    );
-    expect(lowest).toBeLessThan(30);
-  });
-});
-
-describe('活化那一欄與 id 綁死', () => {
-  const everyModel: readonly ModelTier[] = ALL_MODELS_UNDER_TEST;
-
-  it('id 有 `-aNb` 後綴就必須填且相符，沒有就必須是 undefined', () => {
-    // 後綴是這一欄唯一的資料來源。抄錯的話報表的 x 軸就是錯的，而那不會有任何其他東西紅；
-    // 反過來，憑記憶補一個端點給不出來的數字，等於把一個沒人守得住的座標寫進報表。
-    for (const tier of everyModel) {
-      expect(tier.activeBillions).toBe(activeFromId(tier.modelId));
-    }
-  });
-
-  it('總量也抄自 id', () => {
-    for (const tier of everyModel) {
-      expect(tier.modelId).toContain(`-${tier.totalBillions}b`);
-    }
-  });
-
-  it('活化不會大於總量', () => {
-    for (const tier of everyModel) {
-      if (tier.activeBillions === undefined) continue;
-      expect(tier.activeBillions).toBeLessThanOrEqual(tier.totalBillions);
+  it('每個項目都說得出那一次量到什麼', () => {
+    for (const model of MEASURED_MODELS) {
+      expect(model.note.trim()).not.toBe('');
     }
   });
 });
 
 describe('SCORER_CONTROL', () => {
-  it('不屬於任何一道階梯 —— 它的分數不准讀成尺寸效應', () => {
-    // 它沒有同家族對照（90b 三次探測全部逾時），所以一旦被當成一階排進去，
-    // 報表上就會出現一條「11B 比 20B 差」的線，而那條線歸因不到尺寸。
-    const ladderIds = MODEL_LADDERS.flatMap((ladder) => ladder.tiers).map((tier) => tier.modelId);
-    expect(ladderIds).not.toContain(SCORER_CONTROL.modelId);
-  });
-
-  it('比每一道階梯的底板都小 —— 它探的是判準的下界', () => {
-    const lowest = Math.min(
-      ...MODEL_LADDERS.flatMap((ladder) => ladder.tiers).map((tier) => tier.totalBillions),
-    );
-    expect(SCORER_CONTROL.totalBillions).toBeLessThan(lowest);
-  });
-});
-
-describe('ALL_MODELS_UNDER_TEST', () => {
-  it('涵蓋所有階梯加上判準對照，沒有重複的 model id', () => {
-    const expected = MODEL_LADDERS.flatMap((ladder) => ladder.tiers).length + 1;
-    expect(ALL_MODELS_UNDER_TEST).toHaveLength(expected);
-    const ids = ALL_MODELS_UNDER_TEST.map((tier) => tier.modelId);
-    expect(new Set(ids).size).toBe(ids.length);
-  });
-
-  it('label 兩兩不同 —— 報表靠它指名', () => {
-    const labels = ALL_MODELS_UNDER_TEST.map((tier) => tier.label);
-    expect(new Set(labels).size).toBe(labels.length);
+  it('是這份清單裡的一員，而且是同一個物件', () => {
+    // 分開宣告是為了它有自己的角色說明（判準的下界，不是選型候選）。同一個物件
+    // 而不是同名的複本 —— 兩份會各自漂移，而漂移不會有任何東西紅。
+    expect(MEASURED_MODELS).toContain<MeasuredModel>(SCORER_CONTROL);
   });
 });

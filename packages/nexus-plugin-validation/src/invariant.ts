@@ -13,9 +13,11 @@
  *
  * 下面這段講的因此不是「為什麼這個 package 沒有不變量」，是**它的契約實際證在哪裡**：
  *
- * 兩個 middleware 的射程關係（圍堵在 `prepend` 最外、schema 校驗在最內）
- * 是**組裝期**就定死的順序，不是運行時會漂的東西，由 `index.test.ts` 釘住；schema 校驗
- * 本身是純函式結果。外圍內驗這個排法為什麼不是美學，見 `index.ts` 檔頭。
+ * 這個 plugin 現在只剩 schema 校驗一個 middleware，掛在最內層，由 `index.test.ts` 釘住；
+ * 校驗本身是純函式結果。**圍堵搬去 `@nexus/core` 了**
+ * （[#159](https://github.com/DemianLi/nexus-agent/issues/159)），所以「外圍內驗」那個
+ * 射程關係不再是這個 package 的東西——它是 fold 的組裝期順序，證在
+ * `packages/nexus-core/src/fold.test.ts`。哪一側證都一樣是組裝期定死的，不是運行時會漂的。
  *
  * @module
  */

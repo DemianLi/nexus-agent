@@ -1,8 +1,8 @@
 /**
- * 十一個 package 的配套入口：**子路徑解析**與**包名歸屬**。
+ * 十三個 package 的配套入口：**子路徑解析**與**包名歸屬**。
  *
- * 這個檔案住在 `@nexus/harness` 不是為了方便——**它是唯一同時相依十一個套件的地方**，
- * 而這兩條都需要十一個一起在場才驗得到。
+ * 這個檔案住在 `@nexus/harness` 不是為了方便——**它是唯一同時相依十三個套件的地方**，
+ * 而這兩條都需要十三個一起在場才驗得到。
  *
  * 兩條各擋一種缺陷，而且都不是形式：
  *
@@ -10,18 +10,20 @@
  *    **不是相對路徑**。用相對路徑寫，`exports` 那格接錯了測試照樣綠——那就變成
  *    一條不驗它宣稱在驗的東西的測試。
  * 2. **包名歸屬**：八個檔案長得幾乎一樣，最可能的缺陷就是 `PACKAGE_NAME` 抄錯一個。
- *    十一個一起掛上去，撞名會當場拋，名字錯了則會在下面的逐一比對裡露出來。
+ *    十三個一起掛上去，撞名會當場拋，名字錯了則會在下面的逐一比對裡露出來。
  *
  * 八個空 installer 為什麼是正確結果（subject 裡只有 `@nexus/core` 的日誌，別的包在裡面
  * 找不到屬於自己的關係），見任何一個 `packages/<name>/src/invariant.ts` 的檔頭。
- * **真的裝上觀察者的有三個**：`@nexus/core`（turn 配對）、`@nexus/plugin-commands`
+ * **真的裝上觀察者的有五個**：`@nexus/core`（turn 配對）、`@nexus/plugin-commands`
  * （命令生命週期配對，[#118](https://github.com/DemianLi/nexus-agent/issues/118)）與
  * `@nexus/plugin-plan-mode`（`/plan` 的參數契約，
- * [#120](https://github.com/DemianLi/nexus-agent/issues/120)）。
+ * [#120](https://github.com/DemianLi/nexus-agent/issues/120)）與 `@nexus/plugin-goal`
+ * （耐久 goal 串，[#126](https://github.com/DemianLi/nexus-agent/issues/126)）與
+ * `@nexus/plugin-todo`（耐久待辦快照，[#132](https://github.com/DemianLi/nexus-agent/issues/132)）。
  *
  * **底下那份十列表格不再是「有沒有漏掉一個 package」的守門人**——那件事歸
  * [`package-invariants.test.ts`](./package-invariants.test.ts)，它自己去掃 `packages/*`，
- * 加第十二個 package 而沒補配套入口會當場紅。這個檔案守的是那份表格**列出來的那十一個**，
+ * 加第十四個 package 而沒補配套入口會當場紅。這個檔案守的是那份表格**列出來的那十三個**，
  * 而且守的是結構規則看不到的兩件事：specifier 是不是真的解析得到（AST 讀不出 `exports`
  * 有沒有接對），以及 installer 跑起來的行為（誰真的掛了觀察者）。兩邊不是重複。
  */
@@ -62,9 +64,11 @@ import {
   createCommandsInvariantPlugin,
   COMMANDS_INVARIANT_PACKAGE,
 } from '@nexus/plugin-commands/invariant';
+import { createGoalInvariantPlugin, GOAL_INVARIANT_PACKAGE } from '@nexus/plugin-goal/invariant';
+import { createTodoInvariantPlugin, TODO_INVARIANT_PACKAGE } from '@nexus/plugin-todo/invariant';
 
 /**
- * 十一個配套入口，配上各自**應該**認領的包名。
+ * 十三個配套入口，配上各自**應該**認領的包名。
  *
  * 右邊那一欄刻意寫死字串而不是引用左邊那個常數——常數抄錯了，拿常數自己比自己
  * 是驗不出來的。
@@ -73,6 +77,7 @@ const COMPANIONS: readonly (readonly [() => NexusPlugin, string, string])[] = [
   [createCoreInvariantPlugin, CORE_INVARIANT_PACKAGE, '@nexus/core'],
   [createCommandsInvariantPlugin, COMMANDS_INVARIANT_PACKAGE, '@nexus/plugin-commands'],
   [createEchoInvariantPlugin, ECHO_INVARIANT_PACKAGE, '@nexus/plugin-echo'],
+  [createGoalInvariantPlugin, GOAL_INVARIANT_PACKAGE, '@nexus/plugin-goal'],
   [createMcpInvariantPlugin, MCP_INVARIANT_PACKAGE, '@nexus/plugin-mcp'],
   [createMemoryInvariantPlugin, MEMORY_INVARIANT_PACKAGE, '@nexus/plugin-memory'],
   [createPlanModeInvariantPlugin, PLAN_MODE_INVARIANT_PACKAGE, '@nexus/plugin-plan-mode'],
@@ -83,12 +88,13 @@ const COMPANIONS: readonly (readonly [() => NexusPlugin, string, string])[] = [
     TELEMETRY_OTEL_INVARIANT_PACKAGE,
     '@nexus/plugin-telemetry-otel',
   ],
+  [createTodoInvariantPlugin, TODO_INVARIANT_PACKAGE, '@nexus/plugin-todo'],
   [createValidationInvariantPlugin, VALIDATION_INVARIANT_PACKAGE, '@nexus/plugin-validation'],
   [createWireInvariantPlugin, WIRE_INVARIANT_PACKAGE, '@nexus/wire'],
 ];
 
 describe('子路徑解析', () => {
-  it('十一個 `<pkg>/invariant` 都 import 得到，而且各自吐出一個 plugin', () => {
+  it('十三個 `<pkg>/invariant` 都 import 得到，而且各自吐出一個 plugin', () => {
     for (const [factory] of COMPANIONS) {
       const plugin = factory();
       expect(typeof plugin.apply).toBe('function');
@@ -104,11 +110,11 @@ describe('子路徑解析', () => {
 });
 
 describe('包名歸屬', () => {
-  it('十一個一起掛上去，各自認領自己那個名字，一個都不撞', () => {
+  it('十三個一起掛上去，各自認領自己那個名字，一個都不撞', () => {
     const registry = createRegistry();
     for (const [factory] of COMPANIONS) {
       const plugin = factory();
-      // 十一個的 name 各不相同，所以 `resolveEntries` 補出來的就是 `<name>#0`。
+      // 十三個的 name 各不相同，所以 `resolveEntries` 補出來的就是 `<name>#0`。
       const exit = registry.enter({ id: `${plugin.name}#0`, name: plugin.name });
       plugin.apply(registry);
       exit();
@@ -119,17 +125,17 @@ describe('包名歸屬', () => {
     expect(new Set(claimed).size).toBe(COMPANIONS.length);
   });
 
-  it('八個空 installer 一個檢查都不裝——掛滿十一個只有三個觀察得到東西', () => {
+  it('八個空 installer 一個檢查都不裝——掛滿十三個只有五個觀察得到東西', () => {
     const registry = createRegistry();
     for (const [factory] of COMPANIONS) {
       const plugin = factory();
-      // 十一個的 name 各不相同，所以 `resolveEntries` 補出來的就是 `<name>#0`。
+      // 十三個的 name 各不相同，所以 `resolveEntries` 補出來的就是 `<name>#0`。
       const exit = registry.enter({ id: `${plugin.name}#0`, name: plugin.name });
       plugin.apply(registry);
       exit();
     }
 
-    // 每個 installer 都跑一次，數它掛了幾個觀察者。只有三個該掛出東西。
+    // 每個 installer 都跑一次，數它掛了幾個觀察者。只有四個該掛出東西。
     const observerCount = new Map<string, number>();
     for (const companion of registry.invariants.companions()) {
       let count = 0;
@@ -149,10 +155,18 @@ describe('包名歸屬', () => {
       observerCount.set(companion.packageName, count);
     }
 
-    const observing = new Set(['@nexus/core', '@nexus/plugin-commands', '@nexus/plugin-plan-mode']);
+    const observing = new Set([
+      '@nexus/core',
+      '@nexus/plugin-commands',
+      '@nexus/plugin-goal',
+      '@nexus/plugin-plan-mode',
+      '@nexus/plugin-todo',
+    ]);
     expect(observerCount.get('@nexus/core')).toBe(1);
     expect(observerCount.get('@nexus/plugin-commands')).toBe(1);
+    expect(observerCount.get('@nexus/plugin-goal')).toBe(1);
     expect(observerCount.get('@nexus/plugin-plan-mode')).toBe(1);
+    expect(observerCount.get('@nexus/plugin-todo')).toBe(1);
     for (const [, , name] of COMPANIONS) {
       if (observing.has(name)) continue;
       expect(observerCount.get(name)).toBe(0);

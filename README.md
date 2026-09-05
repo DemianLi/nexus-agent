@@ -8,12 +8,13 @@ TypeScript + React (shadcn/ui) 專案，架構分為 harness 與 web UI 兩部�
 packages/nexus-core          NexusPlugin 契約：型別、manifest、PluginRegistry、fold
 packages/nexus-plugin-commands  人打的斜線命令：解析、執行、生命週期記日誌
 packages/nexus-plugin-echo   最小 plugin 範例，只相依 @nexus/core
+packages/nexus-plugin-goal   一個會話的長期目標：狀態、CAS 變更、續行授權，加上 /goal
 packages/nexus-plugin-mcp    把 MCP server 的工具接進 registry
 packages/nexus-plugin-quickjs  QuickJS 沙箱裡跑 JavaScript 的 custom tool
 packages/nexus-plugin-memory 把 AGENTS.md 這類長期記憶掛進 agent
 packages/nexus-plugin-plan-mode  計劃模式：先探索再執行，計劃交出去等人批准
 packages/nexus-plugin-skills 把 SKILL.md 這類隨選工作流掛進 agent
-packages/nexus-plugin-validation  工具失敗回饋與輸出 schema 校驗
+packages/nexus-plugin-validation  工具輸出 schema 校驗
 apps/harness                 組裝點：agent 工廠、訊息標準化、CLI（Node / TypeScript）
 apps/web                     Vite + React 19 + Tailwind v4 + shadcn/ui
 ```
@@ -42,6 +43,35 @@ pnpm --filter @nexus/harness run cli:live "..."             # 換成真實供應
 預設走寫死腳本的假模型，不需要任何 key —— 那條路徑驗的是接線，不是模型。
 真正要試 agent 行為時用 `cli:live`。`--plugins <module>` 可以換掉預設的 plugin 清單
 （模組 `export default` 一個陣列）。
+
+**會話日誌預設不落盤。** `--session-log <dir>` 給了才寫，缺席就是只在記憶體裡活著
+（banner 上第六行會說現在是哪一種）。沒有預設路徑是刻意的：日誌裡有你打的每一句話，
+預設往家目錄寫是一個該由人做的決定。它不能指到 `--workspace` 底下 —— 寫在可寫根裡，
+模型自己 `read_file` 就讀得到、也改得動整份對話史。每一次啟動各自一個 run 目錄，
+一份會話一個 `.jsonl` 加一個 `.header.json`。
+
+**`serve` 也有同一個旗標**（[#174](https://github.com/DemianLi/nexus-agent/issues/174)）：
+一個行程一個 run 目錄，底下一條 thread 一個檔，檔名由 thread id 百分號編碼而來 ——
+thread id 是呼叫端給的，所以編碼必須是單射的，不然兩條 thread 會共用一個檔而其中一條
+安靜地寫不進去。**eval 那條路沒有會話日誌，而那是一個登記過的決定**（理由與絆索見
+`apps/harness/src/eval/runner.ts` 的檔頭）。
+
+**目標不會自己往下走，除非你說可以。** `--goal-driver` 打開之後，一個 active 的目標在
+每一輪落定時會自己再開一輪，直到它被完成、被擋住，或用完自己的 `max_goal_rounds`
+（banner 上會說現在是哪一種）。預設關 —— 這是 dsh 那條「goal 是狀態而非調度器，自動續行
+是需要你刻意掛載的可選消費方」，而我們的入口點擁有輪迴圈，掛載的等價物就是這個旗標。
+`serve` 吃同一個旗標。
+
+開著的時候**唯一的硬上限是那個目標自己的 `max_goal_rounds`**（預設 256）。模型從第
+`blockedAfterConsecutiveRounds` 輪（預設 3）起可以把自己標成 blocked 而退出迴圈，但那是
+准許不是保證 —— 沒有東西逼它用。額外那條「連續 N 輪沒進展就停」刻意沒做，理由在
+`apps/harness/src/goal-driver.ts` 檔頭：每一個量得到的判準都是 proxy，而一條會誤殺健康
+長任務的停損比沒有停損更糟。
+
+**模型在自己排的輪次裡收掉目標之後，會馬上收到一段收尾指示**（`<goal_complete>` 或
+`<goal_blocked>`）：不要再叫工具了，把結果交代給人——講清楚做完了什麼、怎麼驗的、東西在
+哪裡，或者卡在哪一格、需要人做什麼。沒有它的話那一輪剩下的部分不知道目標已經結束，會照
+著上一則續行指示繼續做事。人自己打的 `complete` 不注入：人知道自己剛做了什麼。
 
 **agent 迴圈有上限，而那個上限是組裝點設的不是基座設的。** `createDeepAgent` 自己把
 `recursionLimit` 設成 `1e4`（約 5,000 輪模型呼叫，等於沒有上限），所以
@@ -118,6 +148,41 @@ CLI 與 eval 走 `HEADLESS_APPROVALS`：在那裡提出的計劃會被確定性�
 模式沒啟用時，`exit_plan_mode` 仍留在工具目錄裡（照 dsh：狀態轉換不該順帶改變工具目錄），
 但它的執行路徑會拒絕 —— 回的是「不在計劃模式」，不是核准的措辭。
 
+### 長期目標
+
+`@nexus/plugin-goal` 讓一個會話記得住一個跨很多輪的目標：**事件溯源的耐久狀態**
+（`goal/change` 帶著整份快照）、**CAS 變更**（改之前要拿對修訂號），與 process 內
+的續行授權。形狀照 dsh 的 `packages/goal/`。
+
+**它在 CLI 的預設清單裡，開關是 `/goal`。** 六種輸入：
+
+| 這一行 | 做什麼 |
+| --- | --- |
+| `/goal` | 印出目前的目標、相位、輪次與上限、續行授權，與**現在打得動的命令** |
+| `/goal <目標>` | 建一個目標並授權續行；完成掉的目標可以直接被換掉 |
+| `/goal edit <目標>` | 改敘述，**不動相位也不動授權** |
+| `/goal pause` | 暫停進行中的目標並收回授權 |
+| `/goal resume` | 把停住的接回來，或替續上的 session 重新授權 |
+| `/goal clear` | 清掉目前的目標，**歷史留著** |
+
+**控制詞只有填滿整串輸入時才算控制詞**：`/goal pause after verification` 建的是
+「pause after verification」這個字面目標。照抄 dsh 的文法，理由是這個命令主要用來打
+一句話，而一句話很可能以控制詞開頭。
+
+dsh 那邊 `/goal` 還收圖片附件，我們沒有——`CommandInvocation` 沒有 `attachments`，
+整條水管不存在，所以提示字串裡也不寫圖片。
+
+**模型側的三顆工具在了**（`get_goal`、`create_goal`、`update_goal`，#177）：模型從一則
+人類直接訊息推得出長期目標就建得起來，也改得動、停得掉、標得完。權限在執行時擋——
+變更要求「這條輪次鏈往回追得到一則人類訊息」，而且三顆都是 `rootOnly`，subagent 那一份
+拿到的是拒絕樁。**自動續行的 `goal-round-driver` 不在這一版**：它是 dsh 自己標成可選的
+消費方，而且要先給 `turn/start` 一個 `source` 判別欄——沒有那一格，一輪由驅動器排出來的
+輪次跟人打的在日誌上一模一樣，權限就被它自己拿走了（#152 的決議）。細節與每一條偏離的
+代價寫在 `packages/nexus-plugin-goal/src/index.ts` 與 `tools.ts` 的檔頭。
+
+web 那條也打得到，而且**每條 thread 各有各的目標**——`serve.ts` 一個 thread 一個
+agent，所以一份 registry 一份會話日誌。
+
 ### 人的命令
 
 `@nexus/plugin-commands` 是**人打的斜線命令**那條路：`registry.commands.register()` 註冊，
@@ -193,6 +258,14 @@ pnpm --filter @nexus/harness run eval:compare --samples 2
 pnpm --filter @nexus/harness run eval:compare --cases edit-after-read --samples 3
 ```
 
+**2026-09-05 起這支不再是「尺寸比較」，兩道階梯收掉了（[#167](https://github.com/DemianLi/nexus-agent/issues/167)）。**
+它現在跑 `MEASURED_MODELS` —— 走完整基準任務量過的五個模型 —— 一段印完，多一個 `--models`
+可以挑子集。收的理由是端點把裝置拆了（`openai/gpt-oss-120b` 下架、`nemotron-3-nano-30b-a3b`
+從型錄消失，而這把 key 上湊不出第三道同家族的階梯），而**那條線本來就已經結案** ——
+下面那個「沒有尺寸效應」的結論是三輪量出來的，不受影響。要重建階梯的話，驗收條件寫在
+`src/eval/tiers.ts` 的檔頭 —— 那份檔頭現在裝的是**盤點方法**與**重建的四條驗收條件**，
+不再是「階梯怎麼挑出來的」（下一段那句指路因此要讀成歷史）。**以下這段記的是收掉之前的樣子。**
+
 同一份基準任務跑**兩道階梯**，只有 model 這一個參數不同：`openai/gpt-oss-20b` → `-120b`，
 以及 Nemotron-3 的 `nano-30b-a3b` / `super-120b-a12b` / `ultra-550b-a55b`。
 **一道階梯 = 一個家族**，所以「只有尺寸在變」只在階梯**內部**成立；報表因此按階梯分段印，
@@ -250,6 +323,15 @@ token 更多（11k–17k），但每次要 14–60 秒；`oss-120b` 每次只要
 token 率最高，所以只有它超速。**「跑得快」本身是撞限流的風險因子，而它長得跟「這個模型
 不行」一模一樣。** **把限流接住之後重跑同一階，42 次零失敗**，七題與四條難題
 都是 `1.00` / `1.00`（各 36、18 個判分）—— 它不但跑得完，還是五階裡唯一在難題上不掉分的。
+
+**上面整段是 2026-08-28 的結論，原文照留 —— 但那個選擇已經被端點取消了。**
+`openai/gpt-oss-120b` 於 **2026-09-03 下架**（410，EOL 帶日期），型錄上也沒有它了。
+2026-09-04 重盤重選，答案是 **`nvidia/nemotron-3-super-120b-a12b`**，而這次的形狀不一樣：
+**品質沒有打平**（難題 0.98 對其他三個候選的 0.92–0.93），它同時拿下延遲與多叫次數，
+只輸 token。見 [#165](https://github.com/DemianLi/nexus-agent/issues/165) 與
+[`.docs/model-inventory.md`](.docs/model-inventory.md)。順帶量到兩件以前拿不到的事：
+**上下文窗口是逐顆的**（同端點兩顆差五倍以上），以及**可用的候選只剩 9 個**，
+沒過 [#85](https://github.com/DemianLi/nexus-agent/issues/85) 的十個門檻。
 
 **選型維持 `openai/gpt-oss-120b`（2026-08-28）。** 那 21 次 429 一度被讀成失敗模式那一軸的
 反面證據，更正之後**它不是** —— 限流是我們的跑法，不是模型的性質。品質並列第二、

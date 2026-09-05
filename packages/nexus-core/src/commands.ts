@@ -12,8 +12,17 @@
  *
  * **`agent` 與 `attachments` 這兩格我們沒有。** dsh 的 `CommandInvocation` 帶
  * `agent`（它的註冊表跨 agent，要靠它決定作用在誰身上）與 `attachments`（圖片附件經
- * attachment store 收下之後交給 handler）。我們一次 `createNexusAgent` 一個 registry，
- * 「作用在誰身上」沒有指涉對象；attachment store 也還不存在。**是缺，不是省略。**
+ * attachment store 收下之後交給 handler）。attachment store 還不存在，**那一格是缺，
+ * 不是省略**。
+ *
+ * **`agent` 這一格的理由在 [#126](https://github.com/DemianLi/nexus-agent/issues/126)
+ * 之後換過一次，結論沒換。** 原本寫的是「我們一次 `createNexusAgent` 一個 registry，
+ * 『作用在誰身上』沒有指涉對象」——`/goal` 是第一個真的需要一個作用對象的命令
+ * （它變更的是會話日誌上的耐久狀態），所以那個指涉對象現在存在了，只是它不是 agent
+ * **而是會話日誌**。而 handler 找得到它，靠的不是這裡多一格：`load.ts` 一次組裝呼叫
+ * 一次 `apply`，接線那一層一份 registry 接一份日誌，所以逐次 `apply` 的閉包就把兩者
+ * 對上了。**「一份 registry 只接一份日誌」是這條推論的前提**，而它是可證偽的——
+ * `@nexus/plugin-goal` 的命令在接了不只一份時當場回一句錯誤，那條線有測試釘著。
  *
  * @see [#118](https://github.com/DemianLi/nexus-agent/issues/118)
  */
@@ -34,7 +43,18 @@ export interface CommandInputDescriptor {
  * 報錯而不說為什麼，等於沒報。
  *
  * dsh 的 `success` 還有一格 `sourceEventSeq`（指向某顆更早的權威事件，讓客戶端自己
- * 算出更豐富的呈現）。**我們沒有那種「權威 domain 事件」**，所以那一格沒有指涉對象。
+ * 算出更豐富的呈現）。
+ *
+ * **「我們沒有那種『權威 domain 事件』」這句話從
+ * [#126](https://github.com/DemianLi/nexus-agent/issues/126) 起不成立了**——`goal/change`
+ * 就是第一顆：它記的不是「發生過什麼」而是「現在的狀態是什麼」，帶著整份快照。
+ *
+ * **那一格仍然留白，換成另一個理由：沒有消費者。** dsh 的 `/goal` 靠它讓客戶端自己去讀
+ * 那顆事件、算出更豐富的呈現；我們的命令面照 dsh 是 handler 自己把完整狀態渲染成
+ * `text` 的，客戶端不必回頭讀日誌。補上這一格要一路穿過 wire 協定到瀏覽器，而另一端
+ * 沒有人要它。
+ *
+ * **這一段是絆索：哪天有客戶端真的需要從命令結果回頭找那顆事件，就是補它的時候。**
  */
 export type CommandResult =
   | { readonly kind: 'success'; readonly text?: string }

@@ -5,8 +5,13 @@ import type { BaseMessage } from '@langchain/core/messages';
 import type { CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
 import type { ChatGenerationChunk, ChatResult } from '@langchain/core/outputs';
 
-/** bindTools 會產生新實例，游標與綁定記錄要留在本體與副本共用的物件上。 */
-interface ScriptedModelState {
+/**
+ * bindTools 會產生新實例，游標與綁定記錄要留在本體與副本共用的物件上。
+ *
+ * **匯出是為了讓測試自己建一份**：`prompts` 是「模型真的讀到了什麼」唯一的證據，而有些
+ * 驗收（`goal-driver-pump.test.ts`）要拿它跟日誌上寫的字逐字比對。
+ */
+export interface ScriptedModelState {
   turn: number;
   boundToolNames: readonly string[];
   lastPrompt: readonly BaseMessage[];

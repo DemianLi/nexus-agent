@@ -258,3 +258,145 @@
 
 **對清單的意思**：`diffgemma-26b` 過了入場判準，但在完整 agent 迴圈下**兩輪各 21 次、
 0/42 評到分**。它列在「盤點時叫得動」裡是對的，但任何「可用模型」的計數都不該把它算進去。
+
+## 第三輪盤點（2026-09-04）—— 可用掉到 9 個，門檻沒過
+
+[#165](https://github.com/DemianLi/nexus-agent/issues/165) 撞到預設模型下架，照本檔
+「這一輪怎麼跑的」那一節的同一套方法重跑：`GET /models` 拿全部 id，逐一送一個帶
+`write_file` 工具定義的請求，`max_tokens: 512`、`temperature: 1`、90 秒逾時、循序、間隔 300ms。
+
+| | 2026-08-28 | 2026-08-29 | **2026-09-04** |
+| --- | --- | --- | --- |
+| `GET /models` 列出 | 84 | 83 | **81** |
+| 叫得動（非 404） | 29 | 28 | **26** |
+| 可用（回得出 `tool_calls`） | 14 | 16 | **9** |
+
+分類：可用 9、叫不動 55、不支援工具 8、逾時 4、端點自己壞了 3、叫得動但沒叫工具 2。
+
+### 可用（9 個）
+
+行內是探測往返時間；括號裡是 `max_tokens: 16384` 那道門檻的結果（見下一節）。
+
+| id | 探測 | 16384 門檻 |
+| --- | --- | --- |
+| `google/diffusiongemma-26b-a4b-it` | 440ms | 過 |
+| `google/gemma-4-31b-it` | 1299ms | 過 |
+| `meta/llama-3.2-11b-vision-instruct` | 1256ms | 過（首次 500，補探 3/3） |
+| `meta/muse-glimmer-30b` | 68688ms | 過 |
+| `minimaxai/minimax-m3` | 23695ms | 過 |
+| `nvidia/nemotron-3-super-120b-a12b` | 1683ms | 過 |
+| `nvidia/nemotron-3.5-lightning-30b-a3b` | 5502ms | 過（首次逾時，補探 3/3） |
+| `openai/gpt-oss-20b` | 2258ms | 過 |
+| `poolside/laguna-xs-2.1` | 13295ms | **不穩**：1/3，其餘 503 容量不足 |
+
+### 這一輪多加了一道門檻：`max_tokens: 16384`
+
+[#166](https://github.com/DemianLi/nexus-agent/pull/166) 之後 `createLiveModel` **恆定送出**
+`LIVE_MAX_OUTPUT_TOKENS = 16384`。所以「輸出上限比 16384 小」的模型**每一次呼叫都會失敗**，
+而入場探測用的 512 看不出這件事。這道門檻是免費的（同一個請求換個數字），加進盤點裡。
+
+### 一次探測會誤判，這一輪量到了
+
+首輪的失敗態裡有兩個是瞬時的：`meta/llama-3.2-11b-vision-instruct`（500）與
+`nvidia/nemotron-3.5-lightning-30b-a3b`（90 秒逾時）補探三次全過。反過來，
+以下的失敗**重探之後仍然成立**，不是端點那一刻打嗝：
+
+- **三次全逾時**：`deepseek-ai/deepseek-v4-flash-0731`、`deepseek-ai/deepseek-v4-pro-0813`、
+  `meta/llama-3.2-90b-vision-instruct`、`moonshotai/kimi-k3` —— 四個都是 2026-08-29 的可用清單成員。
+- **三次全 500**：`nvidia/nemotron-3-ultra-550b-a55b`、`nvidia/ai-synthetic-video-detector`。
+- **三次都不叫工具**：`nvidia/ising-calibration-1.5-31b`。
+- **1/3**：`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`（其餘 503 `Worker local total request limit`）。
+
+**所以「可用」這一格本身要帶重複次數。** 前兩輪各只探一次，那兩份數字裡混著這一類瞬時失敗。
+
+### 型錄上消失的兩個，各自打掉一道階梯
+
+- **`openai/gpt-oss-120b`**：不在型錄裡了，而且**打它不是 404 是 410** ——
+  `The model 'openai/gpt-oss-120b' has reached its end of life on 2026-09-03T08:00:00Z`。
+  端點把「下架」跟「這把 key 叫不動」分成兩個碼。
+- **`nvidia/nemotron-3-nano-30b-a3b`**：也不在型錄裡了（型錄上有個 `nvidia/nemotron-nano-3-30b-a3b`，
+  名字順序不同，而且 404）。
+
+兩個都是 `tiers.ts` 的階梯成員，所以 `GPT_OSS_LADDER` 只剩一階、`NEMOTRON_3_LADDER` 的底板沒了
+（剩下的 `ultra` 還三次全 500）。**兩道階梯現在都不成立**，見
+[#167](https://github.com/DemianLi/nexus-agent/issues/167)。
+
+### 補：唯一一組合法的家族對也是死的（2026-09-05）
+
+處理 #167 時把「湊不湊得出第三道階梯」查完了。可用的九個裡**沒有任何兩個同家族**
+（`google/diffusiongemma-` 與 `google/gemma-4-` 是兩家、`nvidia/nemotron-3-` 與
+`nvidia/nemotron-3.5-` 也是）。唯一接得住全部三條斷言的是 `meta/llama-3.2-` 的
+`11b` + `90b` —— 同前綴、總量 11 → 90 遞增、兩個 id 都沒有 `-aNb` 後綴（活化那條斷言跳過）、
+`11 < 30` 也補得上底板那條。
+
+**90b 打不到。** 兩輪各三次（2026-09-04 的盤點與 2026-09-05 的複驗，UTC `2026-09-04T16:57Z`），
+**六次全部 90 秒逾時**；同一輪的 `11b` 三次全過（0.9–3.3 秒）。它還在型錄的 81 個裡面，
+只是叫不動 —— 就是 [#57](https://github.com/DemianLi/nexus-agent/issues/57) 那個失敗模式。
+
+**結果：階梯收掉，不是重建。** 尺寸效應那條線在 2026-08-28 已經結案（「沒有效應」，三輪確認），
+所以收的是一個已結案問題留下來的裝置。三條承重的斷言翻面寫成重建的驗收條件，
+放在 [`tiers.ts`](../apps/harness/src/eval/tiers.ts) 的檔頭。
+
+### 對 #85 的意思：**9 < 10，門檻沒過**
+
+#85 寫的退路是「停下來，回報盤點的數字，然後提醒 demian」，他的決定是加上 OpenRouter
+平台的免費模型把數字補齊。**這一輪沒有自己去接** —— 數字回報在這裡，決定權在 demian。
+
+而且 9 這個數字還是寬鬆的算法：扣掉 `poolside/laguna-xs-2.1`（16384 門檻 1/3）就只剩 8，
+再扣掉 2026-08-29 那一輪量到 0–2/21 的 `diffgemma-26b` 與 `minimax-m3` 就剩 6。
+
+[`survey.ts`](../apps/harness/src/eval/survey.ts) 的 `SURVEY_MODELS` **刻意沒有在 #165 裡改** ——
+改它就是在替 demian 做那個決定。它今天記的是 2026-08-29 的集合，其中四個已經三次全逾時。
+
+## 決選（2026-09-04，84 次執行）
+
+盤點之後照 #165 挑出四個候選跑完整基準任務：七題 × 3 次取樣，循序，走
+`compareTiers` 與 `summarize`（跟 `eval:survey` 同一套，只是候選清單是臨時的 ——
+`SURVEY_MODELS` 刻意沒動，理由見上一節）。
+
+**沒有進決選的五個，理由逐一記著**：`meta/muse-glimmer-30b` 探測 13–68 秒（延遲那一軸出局）、
+`minimaxai/minimax-m3` 與 `google/diffusiongemma-26b-a4b-it` 在 2026-08-29 那一輪是 1/21 與 0/21、
+`meta/llama-3.2-11b-vision-instruct` 是判準對照（刻意的弱者）、`poolside/laguna-xs-2.1`
+16384 門檻 1/3。
+
+| | 難題 arg | 七題 arg | 多叫 | token | 秒 | 評到分 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `google/gemma-4-31b-it` | 0.93 n=9 | 0.97 n=18 | 0.57 | 7639 | 17.5 | 21/21 |
+| `nvidia/nemotron-3.5-lightning-30b-a3b` | 0.93 n=9 | 0.97 n=18 | 1.33 | 13530 | 38.4 | 21/21 |
+| **`nvidia/nemotron-3-super-120b-a12b`** | **0.98** n=9 | **0.99** n=18 | **0.29** | 10661 | **8.0** | 21/21 |
+| `openai/gpt-oss-20b` | 0.92 n=8 | 0.96 n=17 | 0.45 | **7076** | 17.1 | 20/21（1 budget）|
+
+**84 次執行裡零 `throttled`、零 `rejected`**，所以這批數字沒有 #85 第 4 條那道牆的干擾。
+
+**跟 2026-08-28 那次的差別：品質這次沒有打平。** 上一次五階擠在 0.88–0.98，選型因此落回
+成本、延遲、失敗模式；這一次難題上是 0.98 對 0.92–0.93，而同一個候選順帶拿下延遲與多叫次數。
+四軸拿三軸、而且贏的三軸裡有品質，所以不必在軸之間權衡 —— 唯一輸的 token 多五成。
+
+`LIVE_MODEL_ID` 因此換成 `nvidia/nemotron-3-super-120b-a12b`。
+
+## 上下文窗口：逐顆量，差五倍以上（2026-09-04）
+
+**這是第一次真的量到窗口。** 兩種做法，因為兩顆模型的失敗形態不同：
+
+| 模型 | 窗口 | 怎麼量的 |
+| --- | --- | --- |
+| `openai/gpt-oss-20b` | **131,007** | 反解導出來的負 `max_tokens`：20 萬字 → `got -68993`，`131007 = 200000 − 68993` |
+| `nvidia/nemotron-3-super-120b-a12b` | **≥ 700,045** | 逼不出 400。改用暗號：把一個唯一字串放在提示詞最前面、塞 140 萬個字、要求唸回來 —— 唸對了，`usage.prompt_tokens` 線性到 700,045 |
+
+**暗號那一步是必要的，不是講究。** 只看「有沒有回錯」分不出「窗口夠大」與「靜默截斷」——
+兩者都回 `200`。唸得回最前面那個暗號才排除得掉截斷。
+
+**直接後果兩條**：
+
+1. `DEFAULT_SUMMARIZATION` 的 `tokens: 100_000` 檔頭裡那句「未經實測」可以改了，但值不動 ——
+   量過最小的那一顆是 131,007，扣掉恆定送出的 `LIVE_MAX_OUTPUT_TOKENS = 16384`，輸入上限
+   114,623，`100_000` 離它只剩 14,623 的餘裕。**那是量過的最緊一格，不是通則。**
+2. 新的預設模型身上**逼不出上下文溢出**，所以 [#166](https://github.com/DemianLi/nexus-agent/pull/166)
+   的 `isDerivedContextOverflow` 對預設路徑是備而不用的。它仍然要留著 —— eval 會把
+   `gpt-oss-20b` 逐一傳進 `createLiveModel`，而那一顆 131,007 就滿了。
+
+## 下架這件事本身會說話了（2026-09-04）
+
+`openai/gpt-oss-120b` 的 410 實測**花了 106.7 秒才浮出來** —— `410` 不在
+`@langchain/core` 那份 `STATUS_NO_RETRY` 裡，所以它被重試滿 6 次。#165 讓它第一次就放棄，
+並把端點那句帶日期的 `detail` 原封不動搬進失敗訊息。**判準是狀態碼，不是那句話的措辭。**
