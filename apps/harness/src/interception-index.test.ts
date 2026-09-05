@@ -95,7 +95,14 @@ const INDEX: readonly InterceptionRow[] = [
       "注入與攔截兩半都在，但**攔截那半在產品程式碼零使用**：`jumpTo: 'end'` 真的做得到" +
       '（#192 實測，裸基座與我們的組裝一致，模型呼叫次數 0、無模型可見訊息），' +
       "而鉤子要寫成 `{ hook, canJumpTo: ['end'] }` 才裝得上 router——光函式形執行期拋。" +
-      '**這半格沒有佔用者可指，只存在於這一列。**',
+      '**這半格沒有佔用者可指，只存在於這一列。**' +
+      '注入那半只引一個佔用者，是量過的：`beforeAgent:` 在我們樹上**只有這一個實作**。' +
+      '#190 那格另外點名的 memory 與 skills **不是我們的佔用者**——它們只註冊來源' +
+      '（`registry.memory.addSource` / `registry.skills.addSource`），middleware 由基座建' +
+      '（兩個 plugin 的檔頭都寫著「基座連 middleware 都不會建」）。`wrapModelCall` 另有四處' +
+      '（`model-usage.ts`、`summarization.ts` ×2、`observation.ts`），但它們做的是計量、' +
+      '摘要與觀測，**不是 pre-step 注入**，掛這個名字會是過度宣稱；plan-mode 自己登記的也是' +
+      '「`beforeAgent` 是 `agent/pre-step` 邊界提交的對應物」。',
     recordDelta:
       '終止原因記不下來。`turn/*` 由入口點在圖外附加，跳掉的輪次與正常跑完的在日誌上' +
       '長得一模一樣，沒宣告拋出去則記成 `turn/failed`——沒有一個是 dsh 的 blocked。',
