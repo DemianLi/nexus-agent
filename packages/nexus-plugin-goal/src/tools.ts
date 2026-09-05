@@ -6,7 +6,7 @@
  * `d347e703908d0406b7a7ef80e3a0e594d86b2215`，2026-09-04）。`/goal` 是人的那一半，
  * 這裡是模型的那一半，**兩邊改的是同一份域狀態**。
  *
- * ## 那四件登記為缺的東西，現在三件回來了
+ * ## 那四件登記為缺的東西，現在一件都不缺了
  *
  * dsh 在 README 的「已知限制」裡寫著：「**Goal Round 權限需要驅動器**——除非續行驅動器
  * 準入 goal 來源的用戶輪次，否則自主 `complete`／`blocked` 路徑不會啟用；只掛載這個包
@@ -18,14 +18,19 @@
  * | --- | --- |
  * | `completionAuthority` 的 `goal-round` 分支 | **在了**，見 `authority.ts` |
  * | `blockedAfterConsecutiveRounds`（預設 3） | **在了**，見 {@link GoalToolPolicy} |
- * | `wrapup.ts` 的 `<goal_complete>`／`<goal_blocked>` | **還缺**，見下 |
+ * | `wrapup.ts` 的 `<goal_complete>`／`<goal_blocked>` | **在了**（[#182](https://github.com/DemianLi/nexus-agent/issues/182)），見下 |
  * | `GOAL_TOOL_DRIVER_REQUIRED` 的「開放輪次」檢查 | **仍然結構上恆真**——工具只跑得到已經 append 過 `turn/start` 的那一次 `invoke` 裡。這一列不是「做好了」，是「不需要」 |
  *
- * **`wrapup.ts` 是這張卡刻意沒做的那一件。** 它是一層在 goal 狀態轉換之後、下一次模型
- * 呼叫之前注入 `<goal_complete>`／`<goal_blocked>` 的東西，讓模型知道自己剛剛把目標收
- * 掉了。它與驅動器存不存在無關——缺的是「怎麼把狀態轉換講給模型聽」這條管線，而那是
- * 另一件事。**不是忘了，是拆出去了**；沒有它的後果是：模型在同一輪裡 `complete` 之後，
- * 那一輪剩下的部分不知道目標已經結束。
+ * **收尾指示那一列從 #180 合進去的那一刻才變成真的缺口。** 模型在自己排的輪次裡報
+ * `complete`／`blocked` 之後，那一輪還在圖的迴圈裡、手上還有全套工具，而它不知道自己
+ * 剛剛把目標收掉了。#180 之前沒有自排輪次，這件事不存在。
+ *
+ * 載體是一顆 `Command`：工具結果與 {@link ./wrapup.ts | 收尾指示}各一則。**這條路讓
+ * `update_goal` 的回傳型別從 `string` 變成 `string | Command`**——只有「自主收尾成功」
+ * 那一格走 `Command`，拒絕與人打的那些照舊回一句話。dsh 那側走的是
+ * `ToolRunContext.deferContext()`，語意是「掛在這一顆工具自己的 result 上、那顆
+ * `tool/result` 之後 append」（`packages/core/tools/src/index.ts` 的介面註解），
+ * `Command({ update: { messages } })` 對得上同一個時刻，**所以這一格沒有偏離要登記**。
  *
  * `blockedAfterConsecutiveRounds` 為什麼跟著 `completionAuthority` 一起回來、不能等：
  * 它的門檻**只在 `goal-round` 授權下生效**（dsh 的 `index.ts:299`），所以在這張卡之前

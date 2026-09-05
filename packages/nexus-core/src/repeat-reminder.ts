@@ -282,9 +282,7 @@ function isReminder(message: BaseMessage | undefined): boolean {
  */
 function isSynthetic(message: BaseMessage | undefined): boolean {
   if (isReminder(message)) return true;
-  return (
-    HumanMessage.isInstance(message) && message.additional_kwargs[GOAL_WRAPUP_MARKER] != null
-  );
+  return HumanMessage.isInstance(message) && message.additional_kwargs[GOAL_WRAPUP_MARKER] != null;
 }
 
 /** 一條鏈：上一次受追蹤呼叫的身分鍵，與它已經連續了幾次。 */

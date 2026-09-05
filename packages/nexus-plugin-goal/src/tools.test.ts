@@ -25,6 +25,7 @@ import type { NamedEntry, SessionLog } from '@nexus/core';
 
 import { createGoalPlugin } from './index.js';
 import type { GoalPluginOptions } from './index.js';
+import { hasDirectHumanTurn } from './authority.js';
 import { renderWrapupContext } from './wrapup.js';
 import {
   GOAL_CREATE_TOOL_NAME,
@@ -494,6 +495,28 @@ describe('在續行輪次裡', () => {
       blocked_reason: '卡住',
     });
     expect(result).not.toBeInstanceOf(Command);
+  });
+
+  /**
+   * **收尾指示不進會話日誌，所以它借不到人類授權。**
+   *
+   * 這是 [#180](https://github.com/DemianLi/nexus-agent/issues/180) 關掉的那個洞的反面：
+   * 那張卡在防「機器自己排的一輪在日誌上跟人打的一模一樣」。收尾指示是一則長得像人講
+   * 的話的 `HumanMessage`，而三個授權判準（`hasDirectHumanTurn`、`isMatchingGoalRound`、
+   * `hasUnansweredInterrupt`）**全部讀會話日誌，一個都不讀圖上的訊息**——今天成立是因為
+   * 這兩個載體剛好分開，而沒有任何東西釘住它。這一條就是那顆釘子。
+   *
+   * 把收尾指示也 append 成一顆 `turn/start` 的實作會讓這裡紅。
+   */
+  it('收尾指示只進圖裡，會話日誌上一顆新輪次都沒有', async () => {
+    const b = bench();
+    const ref = await upto(b, 1);
+    const before = b.log.events.length;
+    const result = await b.raw(GOAL_UPDATE_TOOL_NAME, { ...ref, action: 'complete' });
+    // 先確認這一次真的注入了，不然下面兩句對一個什麼都沒做的呼叫也成立。
+    expect(messagesOf(result)).toHaveLength(2);
+    expect(b.log.events.slice(before).map((event) => event.type)).toEqual(['goal/change']);
+    expect(hasDirectHumanTurn(b.log.events)).toBe(false);
   });
 
   it('第 1 輪報 blocked 太早——門檻預設 3', async () => {
