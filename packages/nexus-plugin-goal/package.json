@@ -24,6 +24,8 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
-    "@nexus/core": "workspace:*"
+    "@langchain/core": "^1.2.9",
+    "@nexus/core": "workspace:*",
+    "zod": "^4.3.6"
   }
 }
