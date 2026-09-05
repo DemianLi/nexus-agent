@@ -44,6 +44,24 @@
  *
  * 這是模型看得到的文字，**一句寫錯的代價比一個沒實作的分支大**。
  *
+ * ## 同一條規則也管 schema，不是只管那段政策文字
+ *
+ * 「輪次」這個詞在**參數與輸出**上也出現，而它們描述的是同一個沒有生產者的機制：
+ *
+ * - `max_goal_rounds`（`create_goal` 的參數、`edit` 的替換值、輸出的一格）——**域真的
+ *   存它**，`/goal` 讀得到，驅動器那張卡也要它，所以欄位留著；但它今天**永遠到不了**，
+ *   因為沒有東西會去增加輪次。說明文字要講出這件事，不能只寫「上限」。
+ * - `roundsStarted`——**恆為 0**（`fold.ts` 檔頭）。留在輸出裡是為了跟 dsh 的緊湊 JSON
+ *   同形，但一個讀到 `{roundsStarted: 0, maxGoalRounds: 256}` 的模型會推出一套不存在的
+ *   續行機制。
+ * - `activation`——即時觀察值，`GoalService` 從 `disarmed` 開始，而**重放不會重新授權**。
+ *   dsh 用被丟掉的那句話教模型「session resume／fork 之後拿 `resume` 重新武裝」；我們
+ *   丟了那句話，所以要在這裡把它交代掉：**今天沒有回讀路徑**（[#172](https://github.com/DemianLi/nexus-agent/issues/172)
+ *   的 seeded／rehydrate 明著沒做），所以「相位 active 但 activation 是 disarmed」這個
+ *   狀態走不到；欄位留著是給 `/goal` 與驅動器那張卡的接口。
+ *
+ * 三格都在說明裡明講「這個 harness 沒有自動續行」，而不是留給模型自己猜。
+ *
  * ## 拒絕走「回一句話」，不走拋
  *
  * 同 `todo_write` 的先例（`@nexus/plugin-todo` 的 `TODO_ERROR_PREFIX` 那段）：預期得到的
@@ -244,9 +262,11 @@ function toRef(rawId: string, revision: number): GoalRef | undefined {
 }
 
 const GET_DESCRIPTION =
-  'Read the current session goal: its exact id and revision, objective, phase, round limit, ' +
-  'blocker reason when present, and whether continuation is armed. Returns {"goal":null} when ' +
-  'there is none. Call this before update_goal and copy its exact goal_id and revision.';
+  'Read the current session goal: its exact id and revision, objective, phase, stored round ' +
+  'cap, and blocker reason when present. Returns {"goal":null} when there is none. Call this ' +
+  'before update_goal and copy its exact goal_id and revision. This harness has no automatic ' +
+  'continuation: roundsStarted stays 0, maxGoalRounds is never reached, and activation is ' +
+  'recorded state you do not need to act on. A goal advances only during turns you are given.';
 
 const CREATE_DESCRIPTION =
   'Create the one long-running completion objective for this session, when the current direct ' +
@@ -330,7 +350,10 @@ export function createGoalTools(wiring: GoalToolWiring): readonly ReturnType<typ
         max_goal_rounds: z
           .number()
           .optional()
-          .describe('Optional positive integer cap on continuation rounds.'),
+          .describe(
+            'Optional positive integer cap on continuation rounds. Recorded with the goal; ' +
+              'this harness has no automatic continuation, so it is never reached.',
+          ),
       }),
     },
   );
@@ -388,7 +411,9 @@ export function createGoalTools(wiring: GoalToolWiring): readonly ReturnType<typ
         max_goal_rounds: z
           .number()
           .optional()
-          .describe('Replacement round cap; valid only with action edit.'),
+          .describe(
+            'Replacement round cap; valid only with action edit. Recorded only — see get_goal.',
+          ),
         blocked_reason: z
           .string()
           .optional()
