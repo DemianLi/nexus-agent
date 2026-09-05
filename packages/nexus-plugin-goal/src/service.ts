@@ -414,9 +414,17 @@ export class GoalService {
     return { ...tombstone };
   }
 
-  /** 觀察一筆事件：先推折疊，再決定授權。 */
+  /**
+   * 觀察一筆事件：先推折疊，再決定授權。
+   *
+   * **兩種事件推得動折疊，但只有一種動得了授權。** `turn/start{kind:'goal'}` 推進
+   * `roundsStarted`（見 `fold.ts`），而底下那行重算授權的規則是「每一顆 goal 變更都把
+   * 授權打回 disarmed」——讓一顆被準入的輪次走到它，等於**排程器排第一輪的那一刻就把自己
+   * 的授權收掉了**，第二輪永遠不會來，而且第一輪跑得好好的，看起來像成功。
+   * 所以下面在重算之前先讓非 `goal/change` 的事件離開。
+   */
   #observe(event: SessionEvent): void {
-    if (event.type !== 'goal/change') return;
+    if (event.type !== 'goal/change' && event.type !== 'turn/start') return;
     if (this.#failure !== undefined) return;
     try {
       applyGoalEvent(this.#state, event);
@@ -427,6 +435,8 @@ export class GoalService {
       }`;
       return;
     }
+    // 一顆準入的輪次只推計數，**不碰授權**——見這個方法的說明。
+    if (event.type !== 'goal/change') return;
     // **每一顆 goal 變更都把授權打回 disarmed**，除非那一顆正是這次變更自己掛的邊。
     // 別人（未來的工具、另一個分頁）改動了目標，這個 process 先前拿到的續行授權就不再
     // 對得上他們改成的東西。

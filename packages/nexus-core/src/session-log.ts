@@ -25,7 +25,7 @@
  * 補訊息是後面的事，補的時候要先講清楚顆粒度怎麼對齊。
  */
 
-import type { GoalChangeMeta } from './goal.js';
+import type { GoalChangeMeta, GoalId } from './goal.js';
 import type { TodoItem } from './todo.js';
 
 /**
@@ -82,8 +82,37 @@ export type SessionEventType =
 
 /** 每一種事件帶什麼。 */
 export interface SessionEventMap {
-  /** 一輪開始。`resume` 是回覆核准，它沒有使用者說的話。 */
-  'turn/start': { readonly kind: 'message'; readonly text: string } | { readonly kind: 'resume' };
+  /**
+   * 一輪開始。`resume` 是回覆核准，它沒有使用者說的話。
+   *
+   * ## `kind` 是**授權的判別欄**，不是一個給人看的標籤
+   *
+   * 這個聯集的成員決定「這一輪背後有沒有一個人」，而
+   * `@nexus/plugin-goal` 的 `authority.ts` 拿它當執行時的權限判準。所以**加一個成員就是
+   * 開一條新的授權路徑**：`goal` 這一種是機器自己排的，它不帶人類授權。
+   *
+   * dsh 的對應物是 `user/message` 上的 `source` 欄（`packages/core/session/`，對讀版本
+   * `d347e703908d0406b7a7ef80e3a0e594d86b2215`）。**我們不另外加一個平行的 `source`
+   * 欄**：這個酬載已經是 `kind` 判別的聯集，多一個判別式就有兩個真相，而讀錯哪一個都
+   * 不會紅。
+   *
+   * `goal` 那幾格**全部必填**。選填的話，一個忘記填的生產者會讓「缺席」被當成人類，
+   * 而那正是這個判別欄要擋的東西。
+   */
+  'turn/start':
+    | { readonly kind: 'message'; readonly text: string }
+    | { readonly kind: 'resume' }
+    | {
+        readonly kind: 'goal';
+        /** 送進模型的那一串字。**這一份與圖那一份是同一個值**，見 `thread-pump.ts`。 */
+        readonly text: string;
+        /** 這一輪是為哪一個目標排的。 */
+        readonly goalId: GoalId;
+        /** 排它的時候那個目標的修訂號。對不上就不是同一份目標了。 */
+        readonly revision: number;
+        /** 第幾輪，從 1 起算。折疊拿它推進 `roundsStarted`。 */
+        readonly round: number;
+      };
   /** 一輪正常結束——**跑完與停在核准點都算**，停在核准點時前面會有一顆 `interrupt/raised`。 */
   'turn/end': Record<string, never>;
   /** 一輪拋錯結束。只留訊息，堆疊不進日誌。 */

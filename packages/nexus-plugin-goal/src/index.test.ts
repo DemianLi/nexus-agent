@@ -408,13 +408,91 @@ describe('接上一份已經有內容的日誌', () => {
 });
 
 describe('roundsStarted', () => {
-  it('走完整個生命週期都是 0——絆索在 fold.test.ts，這裡釘的是視圖那一面', () => {
+  /** 排程器排的那一輪長這樣。真的 append 進日誌，服務靠觀察者收到它。 */
+  function admitRound(log: SessionLog, ref: GoalRef, round: number): void {
+    log.append('turn/start', {
+      kind: 'goal',
+      text: `<goal_round>第 ${round} 輪`,
+      goalId: ref.id,
+      revision: ref.revision,
+      round,
+    });
+  }
+
+  it('一整串 goal/change 推不動它——絆索在 fold.test.ts，這裡釘的是視圖那一面', () => {
     const { service, tick } = attach();
-    service.create({ objective: 'a', maxGoalRounds: 1 });
+    service.create({ objective: 'a', maxGoalRounds: 2 });
     tick(101);
     service.pause(refOf(service));
     tick(102);
-    // maxGoalRounds 是 1，而輪次是 0——所以「預算用完」這條在服務這側走不到。
     expect(service.resume(refOf(service)).roundsStarted).toBe(0);
+  });
+
+  it('一顆準入的輪次推得動視圖上的計數', () => {
+    const { service, log } = attach();
+    service.create({ objective: 'a' });
+    admitRound(log, refOf(service), 1);
+    expect(service.get()?.roundsStarted).toBe(1);
+    admitRound(log, refOf(service), 2);
+    expect(service.get()?.roundsStarted).toBe(2);
+  });
+
+  /**
+   * **這一條是整張卡最便宜的真假判準。**
+   *
+   * 服務對每一顆 goal 變更都把授權打回 `disarmed`（見 `service.ts` 的 `#observe`）。
+   * 讓一顆被準入的輪次也走到那一行的話，**排程器排第一輪的那一刻就把自己的授權收掉了**：
+   * 第二輪永遠不會來，而第一輪跑得好好的——一個只跑一輪的驅動器，看起來完全像成功。
+   * 只驗第 1 輪的測試會全綠，所以這一條必須驗到第 2 輪還排得出來。
+   */
+  it('準入一輪**不收回授權**——不然驅動器只跑得動第一輪', () => {
+    const { service, log } = attach();
+    service.create({ objective: 'a' });
+    expect(service.get()?.activation).toBe('armed');
+    admitRound(log, refOf(service), 1);
+    expect(service.get()?.activation).toBe('armed');
+    admitRound(log, refOf(service), 2);
+    expect(service.get()?.activation).toBe('armed');
+  });
+
+  it('人打的輪次與核准恢復都不推它，也不動授權', () => {
+    const { service, log } = attach();
+    service.create({ objective: 'a' });
+    log.append('turn/start', { kind: 'message', text: '動手' });
+    log.append('turn/start', { kind: 'resume' });
+    expect(service.get()?.roundsStarted).toBe(0);
+    expect(service.get()?.activation).toBe('armed');
+  });
+
+  /**
+   * **這條在驅動器落地之前走不到**（輪次恆為 0，而 `maxGoalRounds` 至少是 1）。
+   * 現在走得到：燒完預算的目標要先調高上限才 resume 得了。
+   */
+  it('燒完預算之後 resume 不了——服務這側現在走得到那條檢查', () => {
+    const { service, log, tick } = attach();
+    service.create({ objective: 'a', maxGoalRounds: 1 });
+    admitRound(log, refOf(service), 1);
+    tick(101);
+    service.pause(refOf(service));
+    tick(102);
+    expect(() => service.resume(refOf(service))).toThrow(/已經用完 1 個輪次/u);
+    // 調高上限之後就過得去——**這一半證明拒絕的是預算不是相位**。
+    tick(103);
+    service.edit(refOf(service), { maxGoalRounds: 4 });
+    tick(104);
+    expect(service.resume(refOf(service)).roundsStarted).toBe(1);
+  });
+
+  it('一顆接不上的輪次把服務扣住——同一顆壞掉的 goal/change', () => {
+    const { service, log } = attach();
+    service.create({ objective: 'a' });
+    log.append('turn/start', {
+      kind: 'goal',
+      text: '假的',
+      goalId: goalId('goal-nope'),
+      revision: 1,
+      round: 1,
+    });
+    expect(() => service.get()).toThrow(/goal 重放在會話事件 1 失敗/u);
   });
 });

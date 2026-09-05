@@ -103,6 +103,8 @@ export {
 
 export { hasDirectHumanTurn } from './authority.js';
 
+export { renderGoalRoundPrompt } from './prompt.js';
+
 export type { FoldedGoal, GoalFoldState } from './fold.js';
 export {
   applyGoalChange,

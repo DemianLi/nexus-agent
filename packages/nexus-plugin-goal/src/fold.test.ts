@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import { goalId, SessionLog } from '@nexus/core';
 import type {
+  SessionEventMap,
   SessionEventType,
   GoalChangeMeta,
   GoalSnapshot,
@@ -361,15 +362,91 @@ describe('從會話日誌重放', () => {
   });
 });
 
-describe('roundsStarted 恆為 0', () => {
-  it('沒有任何一種會話事件推得動輪次——**加事件種類的人會被這一條擋下來**', () => {
-    // 上面那條走一次生命週期的斷言**自己不會紅**：驅動器補上 `user/message` 那條分支
-    // 之後，它餵的仍然只有 `goal/change`，所以照樣綠。真正的絆索是這一條，而它釘的是
-    // **詞彙**不是值——`SessionEventType` 多一種，下面的 `satisfies` 就在 `typecheck`
-    // 當場紅，逼寫的人回到這個檔案回答一句話：「這一種推得動輪次嗎？」
+describe('goal 來源的輪次', () => {
+  /** 一份真的日誌：create 之後接一串 `turn/start`。 */
+  function logWith(
+    ...starts: readonly SessionEventMap['turn/start'][]
+  ): ReturnType<typeof foldGoal> {
+    const log = new SessionLog('rounds');
+    log.append('goal/change', created());
+    for (const start of starts) log.append('turn/start', start);
+    return foldGoal(log.events);
+  }
+
+  /** 對得上的第 `round` 輪。 */
+  function round(round: number, overrides: Record<string, unknown> = {}) {
+    return {
+      kind: 'goal',
+      text: `<goal_round>第 ${round} 輪`,
+      goalId: ID,
+      revision: 1,
+      round,
+      ...overrides,
+    } as SessionEventMap['turn/start'];
+  }
+
+  it('一顆準入的輪次把計數推到它自己的 round', () => {
+    expect(logWith(round(1)).roundsStarted).toBe(1);
+    expect(logWith(round(1), round(2), round(3)).roundsStarted).toBe(3);
+  });
+
+  it('人打的與核准恢復都不推它', () => {
+    const folded = logWith({ kind: 'message', text: '動手' }, { kind: 'resume' }, round(1), {
+      kind: 'message',
+      text: '再來',
+    });
+    expect(folded.roundsStarted).toBe(1);
+  });
+
+  /**
+   * 四格逐個試。**每一格都是拋不是跳過**——見 `fold.ts` 檔頭：靜靜跳過一顆對不上的輪次，
+   * 換來的是一個看起來正常、實際上少算了一輪的預算。
+   */
+  it('四格任何一格不符就拋', () => {
+    const bad = /不是目前 active 目標的下一個準入輪次/u;
+    expect(() => logWith(round(1, { goalId: goalId('goal-2') }))).toThrow(bad);
+    expect(() => logWith(round(1, { revision: 2 }))).toThrow(bad);
+    // 跳號：第 1 輪還沒排就排第 2 輪。
+    expect(() => logWith(round(2))).toThrow(bad);
+    // 重播同一輪：`round === roundsStarted + 1` 同時擋住跳號與重複。
+    expect(() => logWith(round(1), round(1))).toThrow(bad);
+  });
+
+  it('超過 maxGoalRounds 的那一輪拋——**上限是折疊的規則不只是排程器的禮貌**', () => {
+    const log = new SessionLog('cap');
+    log.append('goal/change', created({ maxGoalRounds: 2 }));
+    log.append('turn/start', round(1));
+    log.append('turn/start', round(2));
+    log.append('turn/start', round(3));
+    expect(() => foldGoal(log.events)).toThrow(/不是目前 active 目標的下一個準入輪次/u);
+  });
+
+  it('目標不是 active 的時候一輪都排不進來', () => {
+    const log = new SessionLog('paused');
+    log.append('goal/change', created());
+    log.append('goal/change', next('pause', snapshot({ revision: 2, phase: 'paused' })));
+    log.append('turn/start', round(1, { revision: 2 }));
+    expect(() => foldGoal(log.events)).toThrow(/不是目前 active 目標的下一個準入輪次/u);
+  });
+
+  it('沒有目標的時候也一樣', () => {
+    const log = new SessionLog('none');
+    log.append('turn/start', round(1));
+    expect(() => foldGoal(log.events)).toThrow(/不是目前 active 目標的下一個準入輪次/u);
+  });
+});
+
+describe('什麼推得動 roundsStarted', () => {
+  it('十種事件裡只有一種推得動——**加事件種類的人會被這一條擋下來**', () => {
+    // 下面那條走一次生命週期的斷言**自己不會紅**：它餵的只有 `goal/change`，而推輪次的
+    // 是別種事件。真正的絆索是這一條，而它釘的是**詞彙**不是值——`SessionEventType` 多
+    // 一種，下面的 `satisfies` 就在 `typecheck` 當場紅，逼寫的人回到這個檔案回答一句話：
+    // 「這一種推得動輪次嗎？」
     //
-    // 今天九種的答案都是不推：五種是進入點寫的人類活動，`goal/change` 是狀態本身，
-    // 而推得動輪次的那種（dsh 的 `user/message` 帶 `source.kind === 'goal'`）不在裡面。
+    // **十種裡面只有 `turn/start` 的答案是「推」，而且只有它的 `kind: 'goal'` 那一支**
+    // （[#180](https://github.com/DemianLi/nexus-agent/issues/180)）：那一支是排程器排的
+    // 續行輪次，`kind` 為 `message`／`resume` 的兩支照樣不推——它們是人打的，不花目標的
+    // 輪次預算。其餘九種：四種是進入點寫的人類活動，`goal/change` 是狀態本身，剩下的見下。
     //
     // **`todo/write` 是這條絆索第一次真的擋下人**（[#132](https://github.com/DemianLi/nexus-agent/issues/132)）。
     // 它的答案也是不推，而理由不是「它不重要」：goal 的輪次預算數的是**目標驅動的
@@ -406,14 +483,10 @@ describe('roundsStarted 恆為 0', () => {
     expect(foldGoal([]).roundsStarted).toBe(0);
   });
 
-  it('走完一次完整的生命週期，它還是 0', () => {
-    // **這一條是絆索，不是覆蓋率。** 推進它的是 goal 來源的使用者輪次，而我們沒有那種
-    // 事件——`turn/start` 的兩個產生點都是人打的（決定 3）。所以 `maxGoalRounds` 在這一版
-    // 只被記錄不被消費。
-    //
-    // **續行驅動器那張卡落地時，這一條要翻面**：那時 `applyGoalEvent` 會長出第二條分支，
-    // 這裡要改成斷言輪次真的被推進。沒有這一條的話，那天「輪次一直是裝飾」這件事會無聲
-    // 消失，而沒有人會發現預算從來沒被驗過。
+  it('一整串 goal/change 推不動它——**沒有輪次事件就沒有輪次**', () => {
+    // **這一條是絆索，不是覆蓋率。** 它釘的是「狀態變更不等於一輪」：pause／resume／
+    // complete 走完一整圈，輪次照樣是 0。少了它，一個把 `roundsStarted` 綁到變更次數上
+    // 的實作會全綠——而那會讓 `maxGoalRounds` 變成「這個目標被改過幾次」的上限。
     const state = fold(
       created(),
       next('pause', snapshot({ revision: 2, phase: 'paused' })),
