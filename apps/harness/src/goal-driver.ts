@@ -13,7 +13,7 @@
  * ## 為什麼它落在 `apps/harness` 而不是一個 plugin——一筆登記過的載體偏離
  *
  * dsh 的 driver 是一個 Cordis plugin，靠 `agent/pre-step` 與 `ctx.agents` 的 idle 判斷把
- * 一輪排進 agent 的 inbox。我們的 `PluginRegistry` 十五條通道（`registry.ts:559-572`）
+ * 一輪排進 agent 的 inbox。我們的 `PluginRegistry` 十四條通道（`registry.ts:559-572`）
  * **沒有一條排得出一輪**——輪迴圈歸入口點所有（`thread-pump.ts` 的 `#runOnce`、
  * `cli.ts` 的 `runTurn`）。所以載體丟掉、紀律照抄，同 `containment.ts` 對
  * `guard/timeout-policy` 那一筆。
