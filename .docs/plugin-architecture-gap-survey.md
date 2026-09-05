@@ -234,9 +234,16 @@ Proteus 定義了「一個 harness 可以被量」的三個前提，對著我們
 
 **我們有什麼**：`recursionLimit` 是硬上限，不分辨「在進展」與「在打轉」（`looping-model.ts` 量過換算是 `2 × 模型輪數 + 2`）；`LIVE_TIMEOUT_MS` 是供應商 HTTP 層的逾時，不是每次工具呼叫的。**沒有任何東西看「同一工具同參數重複」。**
 
-**表達得出來嗎**：重複提醒——一個 `wrapToolCall` middleware：比對 `(name, args)`、每 agent 計數、命中時在 `ToolMessage` 後附一則提醒或改寫 `systemMessage`。deepagents 自己的 `createPatchToolCallsMiddleware` 就是這種形狀。逾時——需要 `AbortSignal` 能傳進工具執行；LangChain 工具的 `config.signal` 有沒有一路傳到 `wrapToolCall` 的 handler，**沒查**（§六）。
+**表達得出來嗎**：重複提醒——一個 `wrapToolCall` middleware：比對 `(name, args)`、每 agent 計數、命中時在 `ToolMessage` 後附一則提醒或改寫 `systemMessage`。deepagents 自己的 `createPatchToolCallsMiddleware` 就是這種形狀。~~逾時——需要 `AbortSignal` 能傳進工具執行；……**沒查**（§六）。~~ **2026-09-04 [#148](https://github.com/DemianLi/nexus-agent/issues/148) 實測完畢：通。**（§六第 3 題已結案，見該節。）
 
 **大小**：一張卡（兩個 middleware 各一個 plugin，或一個 `@nexus/plugin-guard`）。**不動 #142 要動的三個檔。**
+
+**狀態（2026-09-05，兩個都做完了，而且都不是原本設想的形狀）**：
+
+- **重複提醒**由 [#157](https://github.com/DemianLi/nexus-agent/issues/157) 落地（`packages/nexus-core/src/repeat-reminder.ts`），投遞掛在 `beforeModel` 不是 post-execute。
+- **逾時那張的分量被 [#159](https://github.com/DemianLi/nexus-agent/issues/159) 吃掉了大半**：「超時殺掉整場 run」是圍堵的缺口，不是逾時的，而圍堵已經搬進 `fold` 打底。剩下的由 [#162](https://github.com/DemianLi/nexus-agent/issues/162) 收：**認出超時、說出等了多久**，做在 `containment.ts` 裡。
+- **`@nexus/plugin-guard` 這個載體最後沒有出現，而那是一筆偏離登記**：dsh 的 `guard/timeout-policy` 同時武裝截止時間、分類、措辭；我們的基座**自己就武裝**（工具上的 `defaultConfig: { timeout }` 經 `ensureConfig` 變成 `AbortSignal.timeout`，實測），樹上唯一有預算的 MCP 工具走的正是這條。一個只剩措辭的 plugin 沒有東西可武裝，而且照 #159 的結論，圍堵旁邊的行為藏在選配 plugin 裡等於沒有。**載體丟掉、紀律照抄**，理由與量到的東西寫在 `containment.ts` 檔頭。
+- **`TOOL_TIMEOUT` 分類碼刻意不發**：dsh 給 retry／sandbox／replay 路由用，我們三個消費者一個都不在。
 
 ### 3. 生命週期鉤子面 —— 地圖卡
 
@@ -275,8 +282,8 @@ dsh 有 in-process／fork／spawn／acp／claude-code／codex 六種委派後端
 ## 六、沒查清楚的
 
 1. **Phase 5 的驗收句沒有逐條核。** `apps/web` 只確認了檔案存在與 `App.tsx` 檔頭；「完成度」是「存在」不是「驗過」。
-2. **langchain 1.x middleware 有沒有 `beforeAgent`／`afterAgent` 或會話級鉤子**——決定第 3 條是一張卡還是一筆偏離。
-3. **LangChain 工具執行的 `AbortSignal` 有沒有一路傳到 `wrapToolCall` 的 handler**——決定 `timeout-policy` 表達得出來嗎。
+2. ~~**langchain 1.x middleware 有沒有 `beforeAgent`／`afterAgent` 或會話級鉤子**——決定第 3 條是一張卡還是一筆偏離。~~ **半題結案（2026-09-05）**：`langchain@1.5.10` 的 `agents/middleware/types.d.ts` 六個鉤子齊全（`beforeAgent`／`beforeModel`／`wrapModelCall`／`afterModel`／`afterAgent`／`wrapToolCall`），而且我們早就靠著它——`repeat-reminder.ts` 數過基座自己用 `beforeAgent` 7 次、`afterAgent` 1 次，`thread-pump.ts` 與 `wire-handler.ts` 都在跟 `beforeAgent` 的時序賽跑。所以「一張卡還是一筆偏離」這半：**卡**。**另一半仍未答**：dsh `hooks/` 的三個時刻是**會話級**的（會話開始／提示詞提交／停止），而 `beforeAgent` 是每次 agent 呼叫跑一次——不是同一個縫。第 3 條的開圖條件因此是**部分滿足**。
+3. ~~**LangChain 工具執行的 `AbortSignal` 有沒有一路傳到 `wrapToolCall` 的 handler**——決定 `timeout-policy` 表達得出來嗎。~~ **結案（2026-09-04，[#148](https://github.com/DemianLi/nexus-agent/issues/148) 實測三條路都通）**。載體是工具上的 `defaultConfig: { timeout }`；dsh 原地換 `exec.signal` 那招在這個基座上不成立（`baseHandler` 用的是閉包裡的 `config.signal`）。[#162](https://github.com/DemianLi/nexus-agent/issues/162) 已據此落地，見 §五第 2 條的狀態。
 4. **`foldSubAgents` 對 `ForkedSubAgent`／`AsyncSubAgent` 的處理**——決定第 6 條是缺口還是已有。
 5. **Proteus `environments/` 底下的 `openhands/`、`swe-agent/`** 是 adapter 還是 bench 環境——`proteus/adapters/` 裡沒有對應檔，`ROADMAP.md` T1 把它們列為待做 harness，所以傾向是環境骨架，沒有進一步讀。
 6. **dsh `docs/subsystems/README.zh.md` 列的 53 個子系統頁與 51 個套件目錄的對應**——我以套件目錄為對照單位，沒有以子系統頁再對一次（例如 `agent-team` 在 `experimental/`、`token-meter` 在 `llm/`、`scope` 在 `core/`）。
