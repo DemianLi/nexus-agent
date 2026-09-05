@@ -6,12 +6,19 @@
  * 分得開的唯一地方。不變量伴生**結構上驗不到**這件事：它只看得到日誌那一份。
  */
 
+import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import { createGoalPlugin, renderGoalRoundPrompt } from '@nexus/plugin-goal';
+import type { NexusPlugin } from '@nexus/core';
+import {
+  createGoalPlugin,
+  GOAL_TOOL_AUTHORITY_MESSAGE,
+  renderGoalRoundPrompt,
+} from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
 import type { GoalPlugin } from '@nexus/plugin-goal';
 import type { SessionLog } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
 import type { GoalDriverPort } from './goal-driver.js';
@@ -48,10 +55,31 @@ function portFor(
  *
  * **`driver` 給 `undefined` 就是沒掛旗標**——那條路一輪都不該自己排。
  */
+/** 一顆要人核准的工具，用來把一輪停在核准點。 */
+function noteTool() {
+  return tool(({ text }: { text: string }) => `已記下：${text}`, {
+    name: 'take_note',
+    description: '把一段文字記下來。',
+    schema: z.object({ text: z.string().describe('要記下的內容') }),
+  });
+}
+
+/** 掛那顆工具與一道會問人的閘門。 */
+const GATED_FIXTURE: NexusPlugin = {
+  name: 'goal-driver-fixture',
+  apply(registration) {
+    registration.tools.register(noteTool());
+    registration.approvals.gate((execution, next) =>
+      execution.name === 'take_note' ? { kind: 'ask', reason: '看一下' } : next(),
+    );
+  },
+};
+
 async function build(options: {
   readonly turns: readonly ScriptedTurn[];
   readonly threadId: string;
   readonly withDriver: boolean;
+  readonly gated?: boolean;
   readonly portOverrides?: Partial<GoalDriverPort>;
 }): Promise<{
   pump: ThreadPump;
@@ -66,7 +94,11 @@ async function build(options: {
   const violations: string[] = [];
   const { agent, dispose, attachSession, attachInvariants } = await createNexusAgent({
     model: new ScriptedChatModel({ turns: options.turns, shared: state }) as never,
-    plugins: [plugin, createGoalInvariantPlugin()],
+    plugins: [
+      plugin,
+      createGoalInvariantPlugin(),
+      ...(options.gated === true ? [GATED_FIXTURE] : []),
+    ],
     checkpointer: new MemorySaver(),
     onInvariantViolation: (error) => void violations.push(error.message),
   });
@@ -257,6 +289,59 @@ describe('掛了旗標', () => {
     // 人那一筆排在續行前面，續行照樣拿得到它那一輪（上限是 1，剛好一輪）。
     expect(startKinds(pump.sessionLog)).toEqual(['message', 'message', 'goal']);
     expect(injected).toBe(true);
+    await stop();
+  });
+
+  /**
+   * **這一條是這張卡最深的那個驗收句**，而它只有走一次真的核准恢復才證得出來。
+   *
+   * 續行輪次停在核准點 → 人按批准 → 模型在恢復後那一段呼叫 `create_goal`。
+   * `hasDirectHumanTurn` 往回追鏈時**穿過 `resume`**、然後撞上 `kind: 'goal'` 停住 ——
+   * 人批准的是一顆工具，不是這一輪。這一格若破了，模型就能靠「叫一顆要核准的工具、
+   * 等人按批准」把人類授權借到自己的續行輪次上。
+   *
+   * 單元那一半在 `@nexus/plugin-goal` 的 `authority.test.ts`；**手寫的事件序列證不到
+   * 「真的跑一次會長這樣」**，所以這一條在這裡。
+   */
+  it('續行輪次停在核准點、人按批准之後，模型照樣建不了目標', async () => {
+    const turns: readonly ScriptedTurn[] = [
+      {
+        content: '',
+        toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 1 } }],
+      },
+      { content: '建好了。' },
+      // 續行第 1 輪：叫一顆要核准的工具，停在核准點。
+      { content: '', toolCalls: [{ name: 'take_note', args: { text: '一筆' } }] },
+      // 人按了批准之後這一段：試著再建一個目標。
+      { content: '', toolCalls: [{ name: 'create_goal', args: { objective: '換一個' } }] },
+      { content: '好吧。' },
+    ];
+    const { pump, state, stop } = await build({
+      turns,
+      threadId: 'driver-resume',
+      withDriver: true,
+      gated: true,
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+    // 續行那一輪停在核准點了。
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal']);
+    const pending = pump.pending;
+    expect(pending).toBeDefined();
+
+    await pump.submit({
+      kind: 'resume',
+      response: [{ type: 'approve', args: { text: '一筆' } }],
+    });
+    await settle(pump);
+
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal', 'resume']);
+    // **模型讀到的是一句拒絕**：往回追鏈穿過 resume 之後撞上 goal 那一輪就停住了。
+    const said = state.prompts
+      .flat()
+      .map((message) => String(message.content))
+      .join('\n');
+    expect(said).toContain(GOAL_TOOL_AUTHORITY_MESSAGE);
     await stop();
   });
 
