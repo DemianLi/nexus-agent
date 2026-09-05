@@ -47,6 +47,7 @@
  * @module
  */
 
+import { currentTurnStart } from '@nexus/core';
 import type { SessionEvent, SessionEventMap } from '@nexus/core';
 
 import type { GoalView } from './service.js';
@@ -88,18 +89,18 @@ export function hasDirectHumanTurn(events: readonly SessionEvent[]): boolean {
  * @returns 當前輪次就是這個目標的第 `roundsStarted` 輪時為真。
  */
 export function isMatchingGoalRound(events: readonly SessionEvent[], goal: GoalView): boolean {
-  for (let at = events.length - 1; at >= 0; at -= 1) {
-    const event = events[at];
-    if (event === undefined || event.type !== 'turn/start') continue;
-    const data = event.data as TurnStart;
-    return (
-      data.kind === 'goal' &&
-      data.goalId === goal.id &&
-      data.revision === goal.revision &&
-      data.round === goal.roundsStarted
-    );
-  }
-  return false;
+  // **走法借自 `@nexus/core`，不是在這裡重寫一遍。** 同一個走法今天有三個消費者，而
+  // 「某一份多穿了一格」這種錯不會讓任何測試變紅——它只是讓一個更早的輪次替現在這一輪
+  // 背書。理由與另外兩個消費者見 {@link currentTurnStart} 的說明。
+  const at = currentTurnStart(events);
+  if (at < 0) return false;
+  const data = events[at]?.data as TurnStart | undefined;
+  return (
+    data?.kind === 'goal' &&
+    data.goalId === goal.id &&
+    data.revision === goal.revision &&
+    data.round === goal.roundsStarted
+  );
 }
 
 /** 一次變更呼叫拿到的授權。照 dsh 的 `GoalToolAuthority`。 */

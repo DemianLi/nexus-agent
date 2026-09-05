@@ -152,7 +152,7 @@ export type {
   SessionLogOptions,
   SessionLogView,
 } from './session-log.js';
-export { SessionLog } from './session-log.js';
+export { currentTurnStart, hasUnansweredInterrupt, SessionLog } from './session-log.js';
 
 export type {
   SessionTelemetryRecord,

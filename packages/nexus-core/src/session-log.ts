@@ -478,3 +478,47 @@ export class SessionLog implements SessionLogView {
     }
   }
 }
+
+/**
+ * 最後一顆 `turn/start` 的位置——也就是**當前這一段物理輪次的頭**。
+ *
+ * ## 為什麼這個走法要有一個擁有者
+ *
+ * 讀日誌有兩種走法，而它們的答案不一樣：**往回追鏈**（`resume` 一路穿過去找根）回答
+ * 「這條鏈的根是不是人」，**只讀當前這一段**回答「我現在人在哪一輪裡」。第二種今天有
+ * 三個消費者——goal 工具的續行輪次授權、續行排程器的就緒判準，以及底下那個中斷檢查。
+ * 三份各寫一次的話，某一份哪天多穿一格，而**多穿的那一格不會讓任何測試變紅**：它只是
+ * 讓一個更早的輪次替現在這一輪背書。
+ *
+ * 所以走法住在**詞彙的擁有者**旁邊，兩種走法各自有一個名字，見
+ * `@nexus/plugin-goal` 的 `authority.ts` 檔頭那張對照。
+ *
+ * @param events - 一份會話日誌到目前為止的全部事件，照 `seq` 排。
+ * @returns 那一顆的索引；一顆 `turn/start` 都沒有時是 `-1`。
+ */
+export function currentTurnStart(events: readonly SessionEvent[]): number {
+  for (let at = events.length - 1; at >= 0; at -= 1) {
+    if (events[at]?.type === 'turn/start') return at;
+  }
+  return -1;
+}
+
+/**
+ * 當前這一段物理輪次裡掛著一顆沒人回答的中斷。
+ *
+ * **「回答」在日誌上的樣子是下一顆 `turn/start`**（`kind` 為 `resume`），所以「還沒被
+ * 回答」等同於「這一顆中斷之後沒有新的一輪開始」——也就是它落在當前這一段裡。停在核准
+ * 點的那一輪照樣有 `turn/end`（見 `SessionEventMap` 的說明），所以拿 `turn/end` 判收工
+ * 的人**一定要再問這一句**，不然它會把一個等著人按批准的會話當成閒下來了。
+ *
+ * @param events - 一份會話日誌到目前為止的全部事件，照 `seq` 排。
+ * @returns 當前這一段裡有 `interrupt/raised` 時為真。
+ */
+export function hasUnansweredInterrupt(events: readonly SessionEvent[]): boolean {
+  const start = currentTurnStart(events);
+  if (start < 0) return false;
+  for (let at = start + 1; at < events.length; at += 1) {
+    if (events[at]?.type === 'interrupt/raised') return true;
+  }
+  return false;
+}
