@@ -41,8 +41,18 @@ import type { SessionEvent } from './session-log.js';
  * （`v0-to-v1`、`v1-to-v2`）。我們的事件詞彙從 [#89](https://github.com/DemianLi/nexus-agent/issues/89)
  * 的六種長到今天的十種、還會再長；不蓋版本的話，第一次改詞彙就是一次**沒有版本可以
  * 分支的遷移**——讀方只能靠猜。
+ *
+ * ## 2：`turn/start` 多了 `kind: 'goal'`
+ *
+ * 續行驅動器（[#180](https://github.com/DemianLi/nexus-agent/issues/180)）加了第三種輪次
+ * 來源，那是一次詞彙變更，所以版本跟著走。
+ *
+ * **沒有跟著來的遷移包**，理由不是「先欠著」：`SessionStore` 只有 `create`／`append`／
+ * `flush`／`close`，**整條讀取路徑不存在**——沒有任何程式碼把存下來的 header 或事件讀
+ * 回來，所以沒有讀方需要分支。dsh 為此養兩個遷移包，是因為它真的讀舊檔。這個號今天
+ * 只有寫入端，它記的是「這一份存檔是照哪一版詞彙寫的」，給日後的讀方用。
  */
-export const SESSION_LOG_FORMAT_VERSION = 1;
+export const SESSION_LOG_FORMAT_VERSION = 2;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。

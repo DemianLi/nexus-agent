@@ -6,24 +6,31 @@
  * `d347e703908d0406b7a7ef80e3a0e594d86b2215`，2026-09-04）。`/goal` 是人的那一半，
  * 這裡是模型的那一半，**兩邊改的是同一份域狀態**。
  *
- * ## 四件登記為缺，不是移植成惰性程式碼
+ * ## 那四件登記為缺的東西，現在三件回來了
  *
- * dsh 自己在 README 的「已知限制」裡寫著：「**Goal Round 權限需要驅動器**——除非續行
- * 驅動器準入 goal 來源的用戶輪次，否則自主 `complete`／`blocked` 路徑不會啟用；只掛載
- * 這個包不會創建這些輪次。」[#152](https://github.com/DemianLi/nexus-agent/issues/152)
- * 決議先不做驅動器，所以下面四件在我們的範圍內**一個生產者都沒有**。措辭照 `service.ts`
- * 檔頭寫 `GOAL_AGENT_NOT_LIVE` 那一段的先例：**是缺，不是省略**——驅動器那張卡落地時，
- * 四件跟著它一起回來。
+ * dsh 在 README 的「已知限制」裡寫著：「**Goal Round 權限需要驅動器**——除非續行驅動器
+ * 準入 goal 來源的用戶輪次，否則自主 `complete`／`blocked` 路徑不會啟用；只掛載這個包
+ * 不會創建這些輪次。」[#177](https://github.com/DemianLi/nexus-agent/issues/177) 落地時
+ * 那個生產者不存在，所以四件全登記為缺。[#180](https://github.com/DemianLi/nexus-agent/issues/180)
+ * 把生產者做出來了，這張表因此要重讀一遍——**逐列問「現在有生產者了嗎」**：
  *
- * | dsh 的東西 | 為什麼沒有生產者 |
+ * | dsh 的東西 | 今天 |
  * | --- | --- |
- * | `completionAuthority` 的 `goal-round` 分支 | 沒有 goal 來源的輪次可以比對 |
- * | `blockedAfterConsecutiveRounds`（預設 3） | 沒有連續自主輪次可以數 → **不收這個配置欄** |
- * | `wrapup.ts` 的 `<goal_complete>`／`<goal_blocked>` | 只在**自主**變更後延後注入 |
- * | `GOAL_TOOL_DRIVER_REQUIRED` 的「開放輪次」檢查 | 結構上恆真——工具只跑得到已經 append 過 `turn/start` 的那一次 `invoke` 裡 |
+ * | `completionAuthority` 的 `goal-round` 分支 | **在了**，見 `authority.ts` |
+ * | `blockedAfterConsecutiveRounds`（預設 3） | **在了**，見 {@link GoalToolPolicy} |
+ * | `wrapup.ts` 的 `<goal_complete>`／`<goal_blocked>` | **還缺**，見下 |
+ * | `GOAL_TOOL_DRIVER_REQUIRED` 的「開放輪次」檢查 | **仍然結構上恆真**——工具只跑得到已經 append 過 `turn/start` 的那一次 `invoke` 裡。這一列不是「做好了」，是「不需要」 |
  *
- * `complete` 與 `blocked` 本身**留著**：dsh 明說「人類直接請求可以立即停止 goal」，那條
- * 路只要直接人類授權就走得通。
+ * **`wrapup.ts` 是這張卡刻意沒做的那一件。** 它是一層在 goal 狀態轉換之後、下一次模型
+ * 呼叫之前注入 `<goal_complete>`／`<goal_blocked>` 的東西，讓模型知道自己剛剛把目標收
+ * 掉了。它與驅動器存不存在無關——缺的是「怎麼把狀態轉換講給模型聽」這條管線，而那是
+ * 另一件事。**不是忘了，是拆出去了**；沒有它的後果是：模型在同一輪裡 `complete` 之後，
+ * 那一輪剩下的部分不知道目標已經結束。
+ *
+ * `blockedAfterConsecutiveRounds` 為什麼跟著 `completionAuthority` 一起回來、不能等：
+ * 它的門檻**只在 `goal-round` 授權下生效**（dsh 的 `index.ts:299`），所以在這張卡之前
+ * 它確實沒有作用面；而這張卡一開那條路，少了它就是**模型第一輪碰壁就可以把自己 block
+ * 出迴圈**。它不是一個獨立功能，是那條授權路徑的配套。
  *
  * ## 政策文字住在工具說明裡，不是一個 prompt 章節——這是一筆載體偏離
  *
@@ -36,11 +43,16 @@
  * 開放問題**——「某個範圍可能隱藏工具，卻保留指引」在這個載體下不可能發生，指引跟著
  * 工具一起出現、一起消失。
  *
- * **兩句沒有照抄，因為它們描述我們沒有的機制**：
+ * **當初兩句沒有照抄，現在一句回來一句照樣不抄**：
  *
- * - 「at least 3 consecutive goal rounds」——沒有輪次可數（見上表第 2 列）。
- * - 「After session resume or fork, an active goal is disarmed…」——我們的 disarm 邊界
- *   不是 dsh 的那一個，照抄會叫模型去做一件對不上的事。
+ * - 「at least N consecutive goal rounds」——**回來了**。機制回來，句子就得回來，不然
+ *   模型會撞上一道沒有人告訴過它的門檻。N 由 {@link GoalToolPolicy} 決定，所以這句是
+ *   算出來的不是寫死的。
+ * - 「After session resume or fork, an active goal is disarmed…」——**照樣不抄**，而且
+ *   理由跟驅動器從來無關：那句話要求模型在恢復之後主動 `resume` 重新授權，而我們
+ *   **沒有回讀路徑**（[#172](https://github.com/DemianLi/nexus-agent/issues/172) 的
+ *   seeded／rehydrate 明著沒做），所以「相位 active 但 activation 是 disarmed」這個狀態
+ *   走不到。有回讀那天它才該回來。
  *
  * 這是模型看得到的文字，**一句寫錯的代價比一個沒實作的分支大**。
  *
@@ -48,19 +60,16 @@
  *
  * 「輪次」這個詞在**參數與輸出**上也出現，而它們描述的是同一個沒有生產者的機制：
  *
- * - `max_goal_rounds`（`create_goal` 的參數、`edit` 的替換值、輸出的一格）——**域真的
- *   存它**，`/goal` 讀得到，驅動器那張卡也要它，所以欄位留著；但它今天**永遠到不了**，
- *   因為沒有東西會去增加輪次。說明文字要講出這件事，不能只寫「上限」。
- * - `roundsStarted`——**恆為 0**（`fold.ts` 檔頭）。留在輸出裡是為了跟 dsh 的緊湊 JSON
- *   同形，但一個讀到 `{roundsStarted: 0, maxGoalRounds: 256}` 的模型會推出一套不存在的
- *   續行機制。
+ * - `max_goal_rounds`（`create_goal` 的參數、`edit` 的替換值、輸出的一格）——**現在真的
+ *   會到**：排程器每排一輪就燒掉一格，用完記一顆 `round-limit` 的 blocker。當初那句
+ *   「it is never reached」是這張卡要改回來的三處之一。
+ * - `roundsStarted`——**現在是活的**：被準入的每一輪推進它。當初那句「stays 0」同上。
  * - `activation`——即時觀察值，`GoalService` 從 `disarmed` 開始，而**重放不會重新授權**。
- *   dsh 用被丟掉的那句話教模型「session resume／fork 之後拿 `resume` 重新武裝」；我們
- *   丟了那句話，所以要在這裡把它交代掉：**今天沒有回讀路徑**（[#172](https://github.com/DemianLi/nexus-agent/issues/172)
- *   的 seeded／rehydrate 明著沒做），所以「相位 active 但 activation 是 disarmed」這個
- *   狀態走不到；欄位留著是給 `/goal` 與驅動器那張卡的接口。
+ *   這一格**沒有變**：今天仍然沒有回讀路徑（見上面那句照樣不抄的理由），所以「相位
+ *   active 但 activation 是 disarmed」這個狀態仍然走不到。
  *
- * 三格都在說明裡明講「這個 harness 沒有自動續行」，而不是留給模型自己猜。
+ * **這三格是 `model-facing-surface-is-more-than-prose` 那條規則的作用面**：丟掉或改寫
+ * 一句政策文字時，schema 的 `describe` 與輸出欄位要一起掃過，它們同樣是模型讀得到的。
  *
  * ## 拒絕走「回一句話」，不走拋
  *
@@ -77,7 +86,8 @@ import { z } from 'zod';
 import { goalId } from '@nexus/core';
 import type { GoalRef, SessionLog } from '@nexus/core';
 
-import { hasDirectHumanTurn } from './authority.js';
+import { completionAuthority, hasDirectHumanTurn } from './authority.js';
+import type { GoalToolAuthority } from './authority.js';
 import { GoalError } from './service.js';
 import type { GoalService, GoalView } from './service.js';
 
@@ -139,6 +149,54 @@ export const GOAL_TOOL_REASON_REQUIRED_MESSAGE = 'action blocked 一定要帶 bl
 
 /** 模型自己報的 block 用這個 code 落庫。逐字照 dsh。 */
 export const GOAL_MODEL_REPORTED_CODE = 'model-reported';
+
+/**
+ * 模型在**自己排的輪次裡**至少要撞同一堵牆幾輪才准報阻塞。照抄 dsh 的 3。
+ *
+ * **它只管 `goal-round` 授權那條路。** 人直接叫停一律立刻生效——dsh 明說「人類直接請求
+ * 可以立即停止 goal」，而一個人不需要向自己證明卡了三輪。
+ */
+export const DEFAULT_BLOCKED_AFTER_CONSECUTIVE_ROUNDS = 3;
+
+/** 這三顆工具自己的政策，與域的設定分開。 */
+export interface GoalToolPolicy {
+  /** 見 {@link DEFAULT_BLOCKED_AFTER_CONSECUTIVE_ROUNDS}。省略即那個值。 */
+  readonly blockedAfterConsecutiveRounds?: number;
+}
+
+/**
+ * 政策**在建 plugin 的時候就驗**，同 `service.ts` 的 `assertGoalServiceOptions`：設定
+ * 錯誤要炸在設定的地方，不是拖到某一次工具呼叫。
+ *
+ * @param policy - 未經檢查的政策。
+ * @returns 補完預設的政策。
+ * @throws `blockedAfterConsecutiveRounds` 不是正的安全整數。
+ */
+export function resolveGoalToolPolicy(policy: GoalToolPolicy = {}): Required<GoalToolPolicy> {
+  const blockedAfter =
+    policy.blockedAfterConsecutiveRounds ?? DEFAULT_BLOCKED_AFTER_CONSECUTIVE_ROUNDS;
+  if (!Number.isSafeInteger(blockedAfter) || blockedAfter < 1) {
+    // **`TypeError` 而不是 `GoalError`**，照 dsh 的 `resolveConfig`：`GoalErrorCode` 是
+    // **域**對讀與變更的分類，而這是一個組裝設定錯誤，不是誰對一個目標做錯了什麼。
+    throw new TypeError('blockedAfterConsecutiveRounds 必須是正的安全整數');
+  }
+  return { blockedAfterConsecutiveRounds: blockedAfter };
+}
+
+/**
+ * 模型在自己的輪次裡太早報阻塞時回的話。
+ *
+ * @param threshold - 政策要求的連續輪數。
+ * @param round - 現在是第幾輪。
+ * @returns 那一句話。
+ */
+export function goalToolBlockTooSoonMessage(threshold: number, round: number): string {
+  return `在自己排的輪次裡報 blocked 至少要連續 ${threshold} 輪撞到同一件事，現在是第 ${round} 輪，所以沒有動。`;
+}
+
+/** `complete`／`blocked` 兩條授權都不成立時回的話。語意照 dsh 的 `completionAuthority`。 */
+export const GOAL_TOOL_COMPLETION_AUTHORITY_MESSAGE =
+  '這個操作要一則人類直接發出的訊息、或是這個目標當前的續行輪次，兩者這一輪都追不到，所以沒有動。';
 
 /** 三顆工具共用的緊湊輸出。`activation` 是即時觀察值，**永遠不是回放的權限依據**。 */
 export type GoalToolValue =
@@ -262,11 +320,11 @@ function toRef(rawId: string, revision: number): GoalRef | undefined {
 }
 
 const GET_DESCRIPTION =
-  'Read the current session goal: its exact id and revision, objective, phase, stored round ' +
-  'cap, and blocker reason when present. Returns {"goal":null} when there is none. Call this ' +
-  'before update_goal and copy its exact goal_id and revision. This harness has no automatic ' +
-  'continuation: roundsStarted stays 0, maxGoalRounds is never reached, and activation is ' +
-  'recorded state you do not need to act on. A goal advances only during turns you are given.';
+  'Read the current session goal: its exact id and revision, objective, phase, round cap, ' +
+  'rounds started so far, and blocker reason when present. Returns {"goal":null} when there ' +
+  'is none. Call this before update_goal and copy its exact goal_id and revision. When ' +
+  'automatic continuation is enabled, an active goal is given further rounds in this same ' +
+  'session until it is completed, blocked, or reaches maxGoalRounds.';
 
 const CREATE_DESCRIPTION =
   'Create the one long-running completion objective for this session, when the current direct ' +
@@ -274,12 +332,24 @@ const CREATE_DESCRIPTION =
   'language; the user does not have to say "create a goal". Do not create a goal for routine ' +
   'single-turn work. Requires a direct human turn on the top-level agent.';
 
-const UPDATE_DESCRIPTION =
-  'Update the exact current goal revision. Call get_goal first and copy its goal_id and ' +
-  'revision. Mark complete only when the objective is actually achieved. Mark blocked only for ' +
-  'a concrete blocking condition you report in blocked_reason; difficulty, uncertainty, or ' +
-  'useful remaining work is not blocked. Every action requires a direct human turn on the ' +
-  'top-level agent.';
+/**
+ * `update_goal` 的說明**是算出來的**，因為 block 門檻是設定值。
+ *
+ * @param blockedAfter - 政策要求的連續輪數。
+ * @returns 那一段說明。
+ */
+function updateDescription(blockedAfter: number): string {
+  return (
+    'Update the exact current goal revision. Call get_goal first and copy its goal_id and ' +
+    'revision. Mark complete only when the objective is actually achieved. Mark blocked only ' +
+    'for a concrete blocking condition you report in blocked_reason; difficulty, uncertainty, ' +
+    'or useful remaining work is not blocked. Inside a continuation round, mark blocked only ' +
+    `after the same blocking condition has persisted for at least ${blockedAfter} consecutive ` +
+    'rounds. Actions complete and blocked accept either a direct human turn or the current ' +
+    'continuation round; edit, pause, and resume always require a direct human turn on the ' +
+    'top-level agent.'
+  );
+}
 
 const UPDATE_ACTIONS = ['edit', 'pause', 'resume', 'complete', 'blocked'] as const;
 
@@ -293,6 +363,34 @@ interface UpdateArgs {
   readonly objective?: string;
   readonly max_goal_rounds?: number;
   readonly blocked_reason?: string;
+}
+
+/** 這兩個 action 收得下當前續行輪次；其餘四個只收直接人類。 */
+function isCompletionAction(action: GoalUpdateAction): boolean {
+  return action === 'complete' || action === 'blocked';
+}
+
+/**
+ * 這一次 `update_goal` 拿得到什麼授權。
+ *
+ * **讀目前那份視圖是為了比對輪次身分**，所以它得在授權判斷之前拿到。折疊壞掉時
+ * `get()` 會拋，那條路照舊往外走給 `runDomain`／`containment` 分類——一個讀不出目標的
+ * 會話沒有辦法回答「這一輪是不是它的續行輪次」。
+ *
+ * @param action - 這一次要做的事。
+ * @param service - 這一份日誌上的域。
+ * @param events - 這一份日誌到目前為止的事件。
+ * @returns 拿到的授權，兩條都不成立時是 `undefined`。
+ */
+function authorityFor(
+  action: GoalUpdateAction,
+  service: GoalService,
+  events: SessionLog['events'],
+): GoalToolAuthority | undefined {
+  if (!isCompletionAction(action)) {
+    return hasDirectHumanTurn(events) ? { kind: 'direct-human' } : undefined;
+  }
+  return completionAuthority(events, service.get());
 }
 
 /** 一次 `update_goal` 的參數配得對不對；不對就回那一句話。 */
@@ -314,7 +412,11 @@ function misplaced(args: UpdateArgs): string | undefined {
  * @param wiring - 找日誌與找服務的兩條路，由組裝點的 `apply` 綁上去。
  * @returns 依 `get`／`create`／`update` 順序的三顆工具。
  */
-export function createGoalTools(wiring: GoalToolWiring): readonly ReturnType<typeof tool>[] {
+export function createGoalTools(
+  wiring: GoalToolWiring,
+  policy: GoalToolPolicy = {},
+): readonly ReturnType<typeof tool>[] {
+  const { blockedAfterConsecutiveRounds } = resolveGoalToolPolicy(policy);
   const get = tool(
     (_args: Record<string, never>, config?: unknown) => {
       const found = resolve(wiring, config);
@@ -351,8 +453,8 @@ export function createGoalTools(wiring: GoalToolWiring): readonly ReturnType<typ
           .number()
           .optional()
           .describe(
-            'Optional positive integer cap on continuation rounds. Recorded with the goal; ' +
-              'this harness has no automatic continuation, so it is never reached.',
+            'Optional positive integer cap on continuation rounds. Reaching it blocks the ' +
+              'goal, so size it to the work rather than leaving it to the default.',
           ),
       }),
     },
@@ -362,12 +464,34 @@ export function createGoalTools(wiring: GoalToolWiring): readonly ReturnType<typ
     (args: UpdateArgs, config?: unknown) => {
       const found = resolve(wiring, config);
       if (found.kind === 'refused') return refuse(found.message);
-      if (!hasDirectHumanTurn(found.log.events)) return refuse(GOAL_TOOL_AUTHORITY_MESSAGE);
+      const service = found.service;
+      // **授權按 action 分兩條**（見 `authority.ts` 的 `completionAuthority`）：只有
+      // `complete`／`blocked` 收得下當前續行輪次，其餘四個一律要人。
+      //
+      // **它排在參數檢查之前**，照 dsh 的順序：一個沒有授權的呼叫不該從錯誤訊息裡讀出
+      // 「你的參數哪裡配錯了」——那是在教一個不該動的呼叫方怎麼把呼叫修對。
+      const authority = authorityFor(args.action, service, found.log.events);
+      if (authority === undefined) {
+        return refuse(
+          isCompletionAction(args.action)
+            ? GOAL_TOOL_COMPLETION_AUTHORITY_MESSAGE
+            : GOAL_TOOL_AUTHORITY_MESSAGE,
+        );
+      }
       const ref = toRef(args.goal_id, args.revision);
       if (ref === undefined) return refuse(GOAL_TOOL_INVALID_REF_MESSAGE);
       const wrong = misplaced(args);
       if (wrong !== undefined) return refuse(wrong);
-      const service = found.service;
+      // 太早報阻塞。**只在自己排的輪次裡擋**——人叫停一律立刻生效。
+      if (
+        args.action === 'blocked' &&
+        authority.kind === 'goal-round' &&
+        authority.goal.roundsStarted < blockedAfterConsecutiveRounds
+      ) {
+        return refuse(
+          goalToolBlockTooSoonMessage(blockedAfterConsecutiveRounds, authority.goal.roundsStarted),
+        );
+      }
       return render(
         runDomain(() => {
           switch (args.action) {
@@ -399,7 +523,7 @@ export function createGoalTools(wiring: GoalToolWiring): readonly ReturnType<typ
     },
     {
       name: GOAL_UPDATE_TOOL_NAME,
-      description: UPDATE_DESCRIPTION,
+      description: updateDescription(blockedAfterConsecutiveRounds),
       schema: z.object({
         goal_id: z.string().describe('Exact id returned by get_goal.'),
         revision: z.number().describe('Exact positive revision returned by get_goal.'),
@@ -412,7 +536,8 @@ export function createGoalTools(wiring: GoalToolWiring): readonly ReturnType<typ
           .number()
           .optional()
           .describe(
-            'Replacement round cap; valid only with action edit. Recorded only — see get_goal.',
+            'Replacement round cap; valid only with action edit. Raise it to give a goal that ' +
+              'ran out of rounds more; see get_goal for roundsStarted.',
           ),
         blocked_reason: z
           .string()

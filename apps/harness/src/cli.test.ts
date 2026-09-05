@@ -58,6 +58,12 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['--live']).prompt).toBeUndefined();
   });
 
+  /** **兩個入口同一個旗標名、同一個預設**，理由見 `CliInvocation.goalDriver`。 */
+  it('--goal-driver 預設關，打得開', () => {
+    expect(parseCliArgs([]).goalDriver).toBe(false);
+    expect(parseCliArgs(['--goal-driver']).goalDriver).toBe(true);
+  });
+
   it('--workspace 收得到，空字串當場報錯', () => {
     expect(parseCliArgs(['--workspace', './ws']).workspace).toBe('./ws');
     expect(parseCliArgs([]).workspace).toBeUndefined();

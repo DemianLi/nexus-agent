@@ -35,7 +35,18 @@ afterEach(async () => {
 
 describe('serve 的旗標', () => {
   it('預設值就是文件上寫的那些', () => {
-    expect(parseServeArgs([])).toEqual({ live: false, port: DEFAULT_PORT, help: false });
+    expect(parseServeArgs([])).toEqual({
+      live: false,
+      port: DEFAULT_PORT,
+      // **續行預設關**，兩個入口同一個決定：dsh 的續行驅動器是「需要你刻意掛載的可選
+      // 消費方」，而我們的入口點擁有輪迴圈，掛載的等價物就是這個旗標。
+      goalDriver: false,
+      help: false,
+    });
+  });
+
+  it('--goal-driver 打得開', () => {
+    expect(parseServeArgs(['--goal-driver']).goalDriver).toBe(true);
   });
 
   it('port 不是合法整數就當場說清楚', () => {

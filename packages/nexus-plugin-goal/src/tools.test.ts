@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { StructuredTool } from '@langchain/core/tools';
-import { createRegistry, createSessionRunner, SessionRegistry } from '@nexus/core';
+import { createRegistry, createSessionRunner, goalId, SessionRegistry } from '@nexus/core';
 import type { NamedEntry, SessionLog } from '@nexus/core';
 
 import { createGoalPlugin } from './index.js';
@@ -21,6 +21,7 @@ import {
   GOAL_GET_TOOL_NAME,
   GOAL_MODEL_REPORTED_CODE,
   GOAL_TOOL_AUTHORITY_MESSAGE,
+  GOAL_TOOL_COMPLETION_AUTHORITY_MESSAGE,
   GOAL_TOOL_ERROR_PREFIX,
   GOAL_TOOL_INVALID_REF_MESSAGE,
   GOAL_TOOL_NO_SERVICE_MESSAGE,
@@ -30,6 +31,7 @@ import {
   GOAL_TOOL_REPLACEMENT_MISPLACED_MESSAGE,
   GOAL_TOOL_UNKNOWN_CALLER_MESSAGE,
   GOAL_UPDATE_TOOL_NAME,
+  goalToolBlockTooSoonMessage,
 } from './tools.js';
 
 /** root 的工具呼叫長這樣（`session-address.ts` 那張表的第一列）。 */
@@ -294,13 +296,135 @@ describe('update_goal', () => {
     );
   });
 
-  it('沒有人類輪次時，每一個 action 都被擋', async () => {
+  it('沒有任何授權時，每一個 action 都被擋——而拒絕的話說得出缺的是哪一種', async () => {
     const { call } = bench();
-    for (const action of ['edit', 'pause', 'resume', 'complete', 'blocked']) {
+    // 四個一律要人。
+    for (const action of ['edit', 'pause', 'resume']) {
       expect(await call(GOAL_UPDATE_TOOL_NAME, { goal_id: 'goal-1', revision: 1, action })).toBe(
         GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_AUTHORITY_MESSAGE,
       );
     }
+    // 這兩個另外收得下當前續行輪次，所以拒絕時要把那條路也講出來。
+    for (const action of ['complete', 'blocked']) {
+      expect(await call(GOAL_UPDATE_TOOL_NAME, { goal_id: 'goal-1', revision: 1, action })).toBe(
+        GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_COMPLETION_AUTHORITY_MESSAGE,
+      );
+    }
+  });
+});
+
+/**
+ * **這一組是這張卡開的那條新授權路徑的驗收句。**
+ *
+ * 每一條都從「人建了一個目標」開始，然後手動排一顆續行輪次進日誌——沒有排程器在場，
+ * 因為授權讀的是日誌不是排程器。
+ */
+describe('在續行輪次裡', () => {
+  /** 排一輪：`turn/end` 收掉人那一輪，然後 append 一顆 goal 來源的頭。 */
+  function admit(log: SessionLog, ref: { goal_id: string; revision: number }, round: number): void {
+    log.append('turn/end', {});
+    log.append('turn/start', {
+      kind: 'goal',
+      text: `<goal_round>第 ${round} 輪`,
+      goalId: goalId(ref.goal_id),
+      revision: ref.revision,
+      round,
+    });
+  }
+
+  /** 人建一個目標，然後排到第 `upto` 輪。 */
+  async function upto(
+    bench_: ReturnType<typeof bench>,
+    upto_: number,
+  ): Promise<{ goal_id: string; revision: number }> {
+    human(bench_.log);
+    await bench_.call(GOAL_CREATE_TOOL_NAME, { objective: '把 CI 修綠' });
+    const ref = await refOf(bench_.call);
+    for (let round = 1; round <= upto_; round += 1) admit(bench_.log, ref, round);
+    return ref;
+  }
+
+  /**
+   * **這一條是整張卡在防的那件事。** 一個自己排得出輪次的模型若也能 `create`／`edit`，
+   * 它就能改寫自己要達成的東西——而 `complete` 只是承認一件已經發生的事。
+   */
+  it('create 與 edit 照樣要人——模型改不動自己的目標', async () => {
+    const b = bench();
+    const ref = await upto(b, 1);
+    expect(await b.call(GOAL_CREATE_TOOL_NAME, { objective: '換一個' })).toBe(
+      GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_AUTHORITY_MESSAGE,
+    );
+    for (const action of ['edit', 'pause', 'resume']) {
+      expect(
+        await b.call(GOAL_UPDATE_TOOL_NAME, {
+          ...ref,
+          action,
+          ...(action === 'edit' ? { objective: '換一個' } : {}),
+        }),
+      ).toBe(GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_AUTHORITY_MESSAGE);
+    }
+  });
+
+  it('complete 過得去——這是 goal-round 授權存在的理由', async () => {
+    const b = bench();
+    const ref = await upto(b, 1);
+    const value = parse(await b.call(GOAL_UPDATE_TOOL_NAME, { ...ref, action: 'complete' }));
+    expect(value.goal).toMatchObject({ phase: 'complete' });
+  });
+
+  it('第 1 輪報 blocked 太早——門檻預設 3', async () => {
+    const b = bench();
+    const ref = await upto(b, 1);
+    expect(
+      await b.call(GOAL_UPDATE_TOOL_NAME, { ...ref, action: 'blocked', blocked_reason: '卡住' }),
+    ).toBe(GOAL_TOOL_ERROR_PREFIX + goalToolBlockTooSoonMessage(3, 1));
+  });
+
+  it('撐到第 3 輪就過得去', async () => {
+    const b = bench();
+    const ref = await upto(b, 3);
+    const value = parse(
+      await b.call(GOAL_UPDATE_TOOL_NAME, { ...ref, action: 'blocked', blocked_reason: '缺憑證' }),
+    );
+    expect(value.goal).toMatchObject({ phase: 'blocked' });
+  });
+
+  it('門檻換得掉', async () => {
+    const b = bench({ blockedAfterConsecutiveRounds: 1 });
+    const ref = await upto(b, 1);
+    const value = parse(
+      await b.call(GOAL_UPDATE_TOOL_NAME, { ...ref, action: 'blocked', blocked_reason: '缺憑證' }),
+    );
+    expect(value.goal).toMatchObject({ phase: 'blocked' });
+  });
+
+  /**
+   * **門檻只管 `goal-round` 那條路。** 人不需要向自己證明卡了三輪——dsh 明說「人類直接
+   * 請求可以立即停止 goal」。把門檻套到 direct-human 上的話這一條會紅。
+   */
+  it('人一句話就 blocked 得了，門檻不管人', async () => {
+    const b = bench();
+    human(b.log);
+    await b.call(GOAL_CREATE_TOOL_NAME, { objective: '把 CI 修綠' });
+    const ref = await refOf(b.call);
+    const value = parse(
+      await b.call(GOAL_UPDATE_TOOL_NAME, { ...ref, action: 'blocked', blocked_reason: '缺憑證' }),
+    );
+    expect(value.goal).toMatchObject({ phase: 'blocked' });
+  });
+
+  it('門檻不是正整數的話，建 plugin 當場拋', () => {
+    expect(() => createGoalPlugin({ blockedAfterConsecutiveRounds: 0 })).toThrow(
+      /blockedAfterConsecutiveRounds 必須是正的安全整數/u,
+    );
+    expect(() => createGoalPlugin({ blockedAfterConsecutiveRounds: 1.5 })).toThrow(TypeError);
+  });
+
+  /** 說明文字**是算出來的**：門檻換掉，模型讀到的數字要跟著換。 */
+  it('update_goal 的說明帶得出這一次的門檻', () => {
+    const { tools } = bench({ blockedAfterConsecutiveRounds: 7 });
+    const description = tools.get(GOAL_UPDATE_TOOL_NAME)?.value.description ?? '';
+    expect(description).toContain('at least 7 consecutive rounds');
   });
 });
 

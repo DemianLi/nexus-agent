@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { SessionLog } from './session-log.js';
+import { currentTurnStart, hasUnansweredInterrupt, SessionLog } from './session-log.js';
 
 describe('SessionLog', () => {
   it('seq 從 0 開始、逐筆遞增，出自日誌長度', () => {
@@ -249,5 +249,59 @@ describe('SessionLog 的觀察者', () => {
 
     expect(calls).toBe(0);
     expect(log.length).toBe(0);
+  });
+});
+
+/**
+ * **這兩個是「當前這一段物理輪次」那個走法的擁有者**，見它們的說明。
+ * 另一種走法（往回追鏈）住在 `@nexus/plugin-goal` 的 `authority.ts`，兩邊各有一組測試
+ * 釘住它們**走的不是同一條路**。
+ */
+describe('當前這一段物理輪次', () => {
+  function logOf(script: readonly (readonly [string, unknown])[]): SessionLog {
+    const log = new SessionLog('walk');
+    for (const [type, data] of script) {
+      log.append(type as 'turn/end', data as Record<string, never>);
+    }
+    return log;
+  }
+
+  const START: readonly [string, unknown] = ['turn/start', { kind: 'message', text: '動手' }];
+  const RAISED: readonly [string, unknown] = ['interrupt/raised', { interruptId: 'i-1' }];
+  const END: readonly [string, unknown] = ['turn/end', {}];
+  const RESUME: readonly [string, unknown] = ['turn/start', { kind: 'resume' }];
+
+  it('找的是最後一顆，不是第一顆', () => {
+    expect(currentTurnStart(logOf([START, END, RESUME]).events)).toBe(2);
+    expect(currentTurnStart(logOf([START]).events)).toBe(0);
+  });
+
+  it('一顆 turn/start 都沒有時是 -1', () => {
+    expect(currentTurnStart([])).toBe(-1);
+    expect(currentTurnStart(logOf([['todo/write', { todos: [] }]]).events)).toBe(-1);
+  });
+
+  /**
+   * **停在核准點的那一輪照樣有 `turn/end`。** 所以拿 `turn/end` 判「收工了」的人一定要
+   * 再問這一句，不然一個等著人按批准的會話會被當成閒下來了——而對續行排程器來說，那是
+   * 在一顆掛著的中斷上面再排一輪。
+   */
+  it('停在核准點之後，中斷還掛著', () => {
+    expect(hasUnansweredInterrupt(logOf([START, RAISED, END]).events)).toBe(true);
+  });
+
+  it('人回答了（新的一輪開始了）就不掛了', () => {
+    expect(hasUnansweredInterrupt(logOf([START, RAISED, END, RESUME]).events)).toBe(false);
+  });
+
+  it('沒中斷的一輪不掛，空日誌也不掛', () => {
+    expect(hasUnansweredInterrupt(logOf([START, END]).events)).toBe(false);
+    expect(hasUnansweredInterrupt([])).toBe(false);
+  });
+
+  /** 更早那一輪的中斷不算——**回答會開新的一輪，所以它一定在當前這一段之外**。 */
+  it('只看當前這一段，不往上穿', () => {
+    const events = logOf([START, RAISED, END, RESUME, END]).events;
+    expect(hasUnansweredInterrupt(events)).toBe(false);
   });
 });

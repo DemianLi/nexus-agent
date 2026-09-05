@@ -56,6 +56,18 @@ thread id 是呼叫端給的，所以編碼必須是單射的，不然兩條 thr
 安靜地寫不進去。**eval 那條路沒有會話日誌，而那是一個登記過的決定**（理由與絆索見
 `apps/harness/src/eval/runner.ts` 的檔頭）。
 
+**目標不會自己往下走，除非你說可以。** `--goal-driver` 打開之後，一個 active 的目標在
+每一輪落定時會自己再開一輪，直到它被完成、被擋住，或用完自己的 `max_goal_rounds`
+（banner 上會說現在是哪一種）。預設關 —— 這是 dsh 那條「goal 是狀態而非調度器，自動續行
+是需要你刻意掛載的可選消費方」，而我們的入口點擁有輪迴圈，掛載的等價物就是這個旗標。
+`serve` 吃同一個旗標。
+
+開著的時候**唯一的硬上限是那個目標自己的 `max_goal_rounds`**（預設 256）。模型從第
+`blockedAfterConsecutiveRounds` 輪（預設 3）起可以把自己標成 blocked 而退出迴圈，但那是
+准許不是保證 —— 沒有東西逼它用。額外那條「連續 N 輪沒進展就停」刻意沒做，理由在
+`apps/harness/src/goal-driver.ts` 檔頭：每一個量得到的判準都是 proxy，而一條會誤殺健康
+長任務的停損比沒有停損更糟。
+
 **agent 迴圈有上限，而那個上限是組裝點設的不是基座設的。** `createDeepAgent` 自己把
 `recursionLimit` 設成 `1e4`（約 5,000 輪模型呼叫，等於沒有上限），所以
 `createNexusAgent` 蓋成 100（約 49 輪）。CLI、`serve`、eval 都吃這個值；真的需要更長的

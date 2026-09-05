@@ -1,10 +1,21 @@
 /**
- * `@nexus/plugin-goal` 的不變量配套入口：**耐久 goal 串的合法性**。
+ * `@nexus/plugin-goal` 的不變量配套入口：**耐久 goal 串的合法性**，以及**每一顆續行輪次
+ * 的文字**。
  *
- * 形狀照 dsh 的 `@deepseek-ai/dsh-goal/invariant`
+ * 形狀照 dsh 的兩個伴生合起來：`@deepseek-ai/dsh-goal/invariant`
  * （`references/deepseek-harness/packages/goal/goal/src/invariant.ts`，對讀日期
- * 2026-09-01，版本 `0a53fb55bea101816fa226bb964ae2bed71c343b`）：**跑一份與服務互相
- * 獨立的折疊**，任何一筆接不上就報違規。
+ * 2026-09-01，版本 `0a53fb55bea101816fa226bb964ae2bed71c343b`）跑一份與服務互相獨立的
+ * 折疊；`@deepseek-ai/dsh-goal-round-driver/invariant`（版本 `d347e703`，2026-09-04）驗
+ * 每一顆 goal 來源訊息的內容逐字等於套件自有 renderer 算出來的東西。
+ *
+ * ## 兩個伴生為什麼在我們這裡合成一個
+ *
+ * dsh 那份住在驅動器套件裡，因為那裡才是 renderer 的家。**我們的排程器不是一個
+ * plugin**——輪迴圈歸入口點所有，所以它落在 `apps/harness`（登記過的載體偏離，見
+ * [#180](https://github.com/DemianLi/nexus-agent/issues/180)）。但**檢查不跟著搬**：
+ * renderer 與折疊都在這裡，而且判準是**只要 `kind: 'goal'` 這個詞彙存在，這條檢查就
+ * 武裝**，與有沒有掛排程器無關。只在掛了排程器時才擋的檢查，對一顆手寫或寫壞的
+ * goal 來源輪次是零防守。
  *
  * ## 為什麼這不是重複
  *
@@ -31,6 +42,7 @@ import type { InvariantInstaller, NexusPlugin } from '@nexus/core';
 
 import { applyGoalEvent, emptyGoalFoldState } from './fold.js';
 import type { GoalFoldState } from './fold.js';
+import { renderGoalRoundPrompt } from './prompt.js';
 
 /** 這個配套入口認領的 package 名。 */
 export const GOAL_INVARIANT_PACKAGE = '@nexus/plugin-goal';
@@ -57,7 +69,13 @@ export const goalStreamInvariant: InvariantInstaller = (subject, fail) => {
   let state = emptyGoalFoldState();
 
   subject.observe((event) => {
-    if (event.type !== 'goal/change') return;
+    // **`turn/start` 不能整種略過。** goal 來源的那一支推進 `roundsStarted`，而下一輪的
+    // 準入檢查讀的正是它——這份累積器跟不上的話，第二輪必然報一個假違規。
+    if (event.type !== 'goal/change' && event.type !== 'turn/start') return;
+    if (event.type === 'turn/start' && event.data.kind !== 'goal') return;
+    // **重建的前綴是「這一顆之前」的狀態**，也就是還沒套這一顆的 `state`。dsh 的伴生為此
+    // 重掃一次 `snapshotEvents()`；我們是增量的，前綴就在手上。
+    const prior = state.goal;
     const candidate = cloneState(state);
     try {
       applyGoalEvent(candidate, event);
@@ -67,6 +85,17 @@ export const goalStreamInvariant: InvariantInstaller = (subject, fail) => {
           error instanceof Error ? error.message : String(error)
         }`,
       );
+    }
+    if (event.type === 'turn/start' && event.data.kind === 'goal') {
+      // 套過了，所以四格都對上了——`prior` 一定在。剩下的是這一顆的**文字**。
+      // 寫成 `if/else` 而不是提前 `fail()`：`fail` 的 `never` 是型別上的，
+      // 控制流分析對一個參數形式的它不收斂。
+      /* v8 ignore next 3 -- 準入檢查已經要求前綴有一個 active 目標 */
+      if (prior === undefined) {
+        fail(`會話事件 ${event.seq} 的 goal 輪次沒有可以重建的目標`);
+      } else if (event.data.text !== renderGoalRoundPrompt(prior, event.data.round)) {
+        fail(`會話事件 ${event.seq} 的第 ${event.data.round} 輪內容不是這個套件算出來的續行文字`);
+      }
     }
     state = candidate;
   });

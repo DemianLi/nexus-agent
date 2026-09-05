@@ -25,7 +25,7 @@
  * 補訊息是後面的事，補的時候要先講清楚顆粒度怎麼對齊。
  */
 
-import type { GoalChangeMeta } from './goal.js';
+import type { GoalChangeMeta, GoalId } from './goal.js';
 import type { TodoItem } from './todo.js';
 
 /**
@@ -82,8 +82,37 @@ export type SessionEventType =
 
 /** 每一種事件帶什麼。 */
 export interface SessionEventMap {
-  /** 一輪開始。`resume` 是回覆核准，它沒有使用者說的話。 */
-  'turn/start': { readonly kind: 'message'; readonly text: string } | { readonly kind: 'resume' };
+  /**
+   * 一輪開始。`resume` 是回覆核准，它沒有使用者說的話。
+   *
+   * ## `kind` 是**授權的判別欄**，不是一個給人看的標籤
+   *
+   * 這個聯集的成員決定「這一輪背後有沒有一個人」，而
+   * `@nexus/plugin-goal` 的 `authority.ts` 拿它當執行時的權限判準。所以**加一個成員就是
+   * 開一條新的授權路徑**：`goal` 這一種是機器自己排的，它不帶人類授權。
+   *
+   * dsh 的對應物是 `user/message` 上的 `source` 欄（`packages/core/session/`，對讀版本
+   * `d347e703908d0406b7a7ef80e3a0e594d86b2215`）。**我們不另外加一個平行的 `source`
+   * 欄**：這個酬載已經是 `kind` 判別的聯集，多一個判別式就有兩個真相，而讀錯哪一個都
+   * 不會紅。
+   *
+   * `goal` 那幾格**全部必填**。選填的話，一個忘記填的生產者會讓「缺席」被當成人類，
+   * 而那正是這個判別欄要擋的東西。
+   */
+  'turn/start':
+    | { readonly kind: 'message'; readonly text: string }
+    | { readonly kind: 'resume' }
+    | {
+        readonly kind: 'goal';
+        /** 送進模型的那一串字。**這一份與圖那一份是同一個值**，見 `thread-pump.ts`。 */
+        readonly text: string;
+        /** 這一輪是為哪一個目標排的。 */
+        readonly goalId: GoalId;
+        /** 排它的時候那個目標的修訂號。對不上就不是同一份目標了。 */
+        readonly revision: number;
+        /** 第幾輪，從 1 起算。折疊拿它推進 `roundsStarted`。 */
+        readonly round: number;
+      };
   /** 一輪正常結束——**跑完與停在核准點都算**，停在核准點時前面會有一顆 `interrupt/raised`。 */
   'turn/end': Record<string, never>;
   /** 一輪拋錯結束。只留訊息，堆疊不進日誌。 */
@@ -448,4 +477,48 @@ export class SessionLog implements SessionLogView {
       );
     }
   }
+}
+
+/**
+ * 最後一顆 `turn/start` 的位置——也就是**當前這一段物理輪次的頭**。
+ *
+ * ## 為什麼這個走法要有一個擁有者
+ *
+ * 讀日誌有兩種走法，而它們的答案不一樣：**往回追鏈**（`resume` 一路穿過去找根）回答
+ * 「這條鏈的根是不是人」，**只讀當前這一段**回答「我現在人在哪一輪裡」。第二種今天有
+ * 三個消費者——goal 工具的續行輪次授權、續行排程器的就緒判準，以及底下那個中斷檢查。
+ * 三份各寫一次的話，某一份哪天多穿一格，而**多穿的那一格不會讓任何測試變紅**：它只是
+ * 讓一個更早的輪次替現在這一輪背書。
+ *
+ * 所以走法住在**詞彙的擁有者**旁邊，兩種走法各自有一個名字，見
+ * `@nexus/plugin-goal` 的 `authority.ts` 檔頭那張對照。
+ *
+ * @param events - 一份會話日誌到目前為止的全部事件，照 `seq` 排。
+ * @returns 那一顆的索引；一顆 `turn/start` 都沒有時是 `-1`。
+ */
+export function currentTurnStart(events: readonly SessionEvent[]): number {
+  for (let at = events.length - 1; at >= 0; at -= 1) {
+    if (events[at]?.type === 'turn/start') return at;
+  }
+  return -1;
+}
+
+/**
+ * 當前這一段物理輪次裡掛著一顆沒人回答的中斷。
+ *
+ * **「回答」在日誌上的樣子是下一顆 `turn/start`**（`kind` 為 `resume`），所以「還沒被
+ * 回答」等同於「這一顆中斷之後沒有新的一輪開始」——也就是它落在當前這一段裡。停在核准
+ * 點的那一輪照樣有 `turn/end`（見 `SessionEventMap` 的說明），所以拿 `turn/end` 判收工
+ * 的人**一定要再問這一句**，不然它會把一個等著人按批准的會話當成閒下來了。
+ *
+ * @param events - 一份會話日誌到目前為止的全部事件，照 `seq` 排。
+ * @returns 當前這一段裡有 `interrupt/raised` 時為真。
+ */
+export function hasUnansweredInterrupt(events: readonly SessionEvent[]): boolean {
+  const start = currentTurnStart(events);
+  if (start < 0) return false;
+  for (let at = start + 1; at < events.length; at += 1) {
+    if (events[at]?.type === 'interrupt/raised') return true;
+  }
+  return false;
 }

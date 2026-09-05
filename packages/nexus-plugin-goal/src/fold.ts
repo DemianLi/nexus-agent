@@ -9,19 +9,19 @@
  * 跳過它換來的是一個看起來正常、實際上少了一次變更的狀態。所以每一個欄位都逐一驗，
  * 連 key 的集合都比對——多一格少一格都是不同的東西。
  *
- * ## 沒有抄的那一段：`user/message` 的續行輪次
+ * ## `roundsStarted` 是折疊出來的，不是誰寫進 `goal/change` 的
  *
  * dsh 的 `applyGoalEvent` 有第二條分支，從 `user/message` 裡 `source.kind === 'goal'`
- * 的輪次推進 `roundsStarted`。**我們沒有那種事件，也沒有那種來源**——`turn/start` 的
- * 兩個產生點都是人打的，所以那條分支在這裡是一條測試永遠走不到的死路。決定 3 的原話：
- * 加一個永遠只有單一值的判別欄，等於在折疊裡種一條沒有人走得到的分支。
+ * 的輪次推進 `roundsStarted`；我們的對應物是 `turn/start` 的 `kind: 'goal'`
+ * （[#180](https://github.com/DemianLi/nexus-agent/issues/180)）。**只有被準入的那一顆
+ * 會推進計數**——四格全部對上（同一個目標、同一個修訂號、剛好是下一輪、沒超過上限）才
+ * 算，任何一格不符是拋不是跳過。
  *
- * **後果要看得見**：`roundsStarted` 因此恆為 0，`fold.test.ts` 有一條測試釘著它，
- * 而續行驅動器那張卡落地時，**那條測試要翻面**——那時 `user/message` 這條分支才有
- * 生產者，才補得進來。
- *
- * `change.roundsStarted !== state.roundsStarted` 這道檢查照留：它擋的是「有人寫了一顆
- * 自己改動輪次的變更」，而那件事跟有沒有驅動器無關。
+ * 這一格為什麼不能讓寫的人自己說：`goal/change` 是**服務**寫的，而輪次是**排程器**排
+ * 的。讓變更帶著自己的輪次，等於讓任何一個寫得出 `goal/change` 的人宣稱自己已經跑過幾
+ * 輪，而預算檢查（`resume` 那條）讀的正是這個數。所以下面那道
+ * `change.roundsStarted !== state.roundsStarted` **照留**：它擋的是「有人寫了一顆自己
+ * 改動輪次的變更」，而那條路今天與之後都不該通。
  *
  * @module
  */
@@ -57,7 +57,7 @@ const BLOCK_CODE_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 export interface GoalFoldState {
   /** 目前的 goal；create 之前與 clear 之後沒有。 */
   goal: GoalSnapshot | undefined;
-  /** 目前這個 goal 已經開始的續行輪次。**這一版恆為 0**，見檔頭。 */
+  /** 目前這個 goal 已經開始的續行輪次。只有被準入的 `turn/start{kind:'goal'}` 推得動它。 */
   roundsStarted: number;
   createdAt: number | undefined;
   updatedAt: number | undefined;
@@ -291,9 +291,9 @@ function validateSnapshotTransition(
     case 'resume': {
       requireSameDefinition(current, next, change.operation);
       const resumable: ReadonlySet<GoalPhase> = new Set<GoalPhase>(['active', 'paused', 'blocked']);
-      // `state.roundsStarted >= next.maxGoalRounds` 這一半**服務那側走不到**（沒有驅動器，
-      // 輪次恆為 0，而 maxGoalRounds 至少是 1）。留著是因為它是折疊的規則不是服務的規則：
-      // 手寫一份帶輪次的狀態就驗得到，`fold.test.ts` 正是那樣驗的。
+      // `state.roundsStarted >= next.maxGoalRounds` 這一半在驅動器落地之後**兩側都走得到**：
+      // 一個燒完預算的目標要先被調高上限才 resume 得了。服務那側的同一條在 `service.ts`
+      // 的 `resume`，兩份都要在——折疊擋的是手寫進日誌的，服務擋的是呼叫進來的。
       if (
         !resumable.has(current.phase) ||
         next.phase !== 'active' ||
@@ -372,13 +372,48 @@ export function applyGoalChange(state: GoalFoldState, change: GoalChangeMeta): v
 }
 
 /**
- * 把一筆會話事件套到嚴格折疊上。**不是 `goal/change` 的原樣略過**。
+ * 把一顆 goal 來源的輪次套到折疊上，**準入才算**。
+ *
+ * 照 dsh 的 `applyGoalEvent`（`goal/goal/src/fold.ts`）那半條：四格全部對上才推進計數。
+ * 對不上時**拋而不是略過**——一顆對不上的 goal 輪次代表有人在這份日誌裡排了一輪不屬於
+ * 目前目標的續行，靜靜跳過它換來的是一個看起來正常、實際上少算了一輪的預算。
+ *
+ * @param state - 可變的累積器。
+ * @param event - 一顆 `kind: 'goal'` 的 `turn/start`。
+ * @throws 這一輪不是目前這個 active 目標的下一個準入輪次。
+ */
+function applyGoalRound(state: GoalFoldState, event: SessionEvent<'turn/start'>): void {
+  const data = event.data;
+  if (data.kind !== 'goal') return;
+  const current = state.goal;
+  if (
+    current === undefined ||
+    current.phase !== 'active' ||
+    data.goalId !== current.id ||
+    data.revision !== current.revision ||
+    data.round !== state.roundsStarted + 1 ||
+    data.round > current.maxGoalRounds
+  ) {
+    throw new Error(`會話事件 ${event.seq} 的 goal 輪次不是目前 active 目標的下一個準入輪次`);
+  }
+  state.roundsStarted = data.round;
+}
+
+/**
+ * 把一筆會話事件套到嚴格折疊上。**其他種類原樣略過**。
+ *
+ * 兩種事件推得動這份狀態，而且推的是不同的格子：`goal/change` 換整份快照，
+ * `turn/start{kind:'goal'}` 推進 `roundsStarted`。
  *
  * @param state - 可變的累積器。
  * @param event - 依序來的下一筆事件。
- * @throws 這一筆是 goal 變更但解不開或接不上。
+ * @throws 這一筆是 goal 變更但解不開或接不上，或是一顆接不上的 goal 輪次。
  */
 export function applyGoalEvent(state: GoalFoldState, event: SessionEvent): void {
+  if (event.type === 'turn/start') {
+    applyGoalRound(state, event);
+    return;
+  }
   if (event.type !== 'goal/change') return;
   const change = decodeGoalChange(event.data);
   if (change === undefined) {
