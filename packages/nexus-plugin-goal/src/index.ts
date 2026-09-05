@@ -193,8 +193,17 @@ export interface GoalPlugin extends NexusPlugin {
 /**
  * 建一個 goal 域的 plugin。
  *
- * 它掛兩樣東西：`sessions` 通道的一位參與者，與 `commands` 通道的 `/goal`。**不註冊
- * 工具、不改 prompt、不碰 backend**——命令不進模型，它是人對工具說的話。
+ * 它掛三樣東西：`sessions` 通道的一位參與者、`tools` 通道的三顆工具，與 `commands`
+ * 通道的 `/goal`。**不改 prompt、不碰 backend。**
+ *
+ * **那三顆與 `/goal` 面對的不是同一個人**：命令不進模型，它是人對工具說的話；工具才是
+ * 模型那一側，而且一律 `rootOnly`——目標是人交代的，subagent 沒有人可以交代（見下面
+ * `apply` 裡那段，與 dsh 的 `tool-goal` 同一條政策）。
+ *
+ * **「不註冊工具」那句話在 [#177](https://github.com/DemianLi/nexus-agent/issues/177)
+ * 之前是真的**，模型側的三顆正是那張卡交的東西。`index.test.ts` 第一條把它釘成「剛好
+ * `create_goal`／`get_goal`／`update_goal` 三顆，而且三顆都是 `rootOnly`」——多一顆、
+ * 少一顆、或哪天有人把 `rootOnly` 拿掉，那裡紅。
  *
  * 接線是組裝點的事，一份日誌接一次；接上的那一刻參與者就開始觀察，而觀察會先重播日誌
  * 裡已經有的事件。**命令在接線之前就註冊好了**，所以「還沒接線就打 `/goal`」是走得到

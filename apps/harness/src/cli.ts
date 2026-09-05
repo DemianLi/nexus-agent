@@ -282,9 +282,11 @@ export function resolveSessionLogDir(
  * **`@nexus/plugin-goal` 走同一條例外，代價不一樣**
  * （[#126](https://github.com/DemianLi/nexus-agent/issues/126)）：它註冊 `/goal`，而
  * 上一句話對它同樣成立——命令沒進清單，`/goal 把測試修綠` 會掉回模型變成一句閒聊。
- * 它的代價只有一筆，而且比計劃模式輕：**每一次執行多接一位會話參與者**。它不註冊工具、
- * 不改 prompt、不碰 backend，所以不打 `/goal` 的話 token 與工具清單都跟這行改動之前
- * 一模一樣；沒有目標時它連一顆事件都不寫。
+ * 它的代價有兩筆：**每一次執行多接一位會話參與者**，與**模型側多三顆工具**——
+ * `create_goal`／`get_goal`／`update_goal`，[#177](https://github.com/DemianLi/nexus-agent/issues/177)
+ * 之後才有的東西，一律 `rootOnly`，所以 subagent 那幾份看到的是拒絕樁。它不改 prompt、
+ * 不碰 backend，沒有目標時也連一顆事件都不寫；但**工具清單與那幾顆的 token 不再跟這行
+ * 改動之前一模一樣**——這句話原本寫著「一模一樣」，那在 #177 之前是真的。
  *
  * **域與命令是同一個 plugin**，不像 dsh 拆成兩個套件——理由寫在
  * `@nexus/plugin-goal` 的檔頭上。
