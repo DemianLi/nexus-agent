@@ -10,7 +10,7 @@
  * | `goal`（域） | 這個套件 |
  * | `command-goal`（`/goal`） | 這個套件的 `command.ts`，走 `registry.commands` |
  * | `tool-goal`（模型工具） | `tools.ts` ＋ `authority.ts`（[#177](https://github.com/DemianLi/nexus-agent/issues/177)） |
- * | `goal-round-driver`（自動續行） | **登記過的空缺**，見下面 |
+ * | `goal-round-driver`（自動續行） | **拆成兩處**，見下面 |
  *
  * **`tool-goal` 當初擋著的兩件都通了。** 它的權限規則要求「執行時根 agent 的當前輪次中
  * 有一則已接受的 `{ kind: 'user' }` 訊息」，而且要分得出 root 與 subagent 的血緣。
@@ -23,13 +23,24 @@
  * - 人類輪次：讀會話日誌的 `turn/start`，判準與它為什麼不能寫成「看最後一顆」在
  *   `authority.ts` 檔頭。
  *
- * **`goal-round-driver` 是 dsh 自己標成可選的**：「goal 是狀態而非調度器——自動續行是
- * 需要你刻意掛載的可選消費方」（`packages/goal/README.zh.md`）。它還需要 goal 來源的
- * 使用者輪次，而我們的 `turn/start` 沒有 `source` 判別欄——**所以順序是被強制的不是偏好**：
- * 先掛驅動器，它自己排的那一輪在日誌上跟人打的一模一樣，於是模型自己就過了上面那道
- * 人類授權檢查。[#152](https://github.com/DemianLi/nexus-agent/issues/152) 的決議把
- * `source` ＋ 不變量伴生寫成驅動器那張卡的前置條件；`authority.ts` 那條「認不得的 `kind`
- * 一律停住」是它今天的絆索。
+ * ## `goal-round-driver` 拆成兩處，而拆點是一筆登記過的載體偏離
+ *
+ * dsh 把它做成一個獨立套件；[#180](https://github.com/DemianLi/nexus-agent/issues/180)
+ * 落地時發現**排程器不可能是一個 plugin**——`PluginRegistry` 十五條通道沒有一條排得出
+ * 一輪，輪迴圈歸入口點所有（`thread-pump.ts` 的 `#runOnce`、`cli.ts` 的 `runTurn`）。
+ * 所以：
+ *
+ * - **排程器落在 `apps/harness`**，由 `--goal-driver` 旗標決定掛不掛。載體丟掉、紀律
+ *   照抄，同 `containment.ts` 對 `guard/timeout-policy` 那一筆。
+ * - **檢查與 renderer 留在這裡**：`prompt.ts` 是續行文字的唯一來源，`invariant.ts` 驗
+ *   每一顆 goal 輪次逐字等於它。判準是**只要 `kind: 'goal'` 這個詞彙存在，伴生就武裝**
+ *   ——與有沒有掛排程器無關。只在掛了排程器時才擋的檢查，對一顆手寫或寫壞的輪次是零
+ *   防守。
+ *
+ * 順序當初是被強制的：先掛排程器、後補判別欄的話，它自己排的那一輪在日誌上跟人打的一
+ * 模一樣，於是模型自己就過了上面那道人類授權檢查
+ * （[#152](https://github.com/DemianLi/nexus-agent/issues/152) 的決議）。所以那張卡的
+ * 內部順序是詞彙 → 折疊 → 伴生 → 排程器，排程器最後。
  *
  * ## 這個套件進了預設清單
  *
@@ -57,7 +68,8 @@ import {
 } from './command.js';
 import { assertGoalServiceOptions, GoalService } from './service.js';
 import type { GoalServiceOptions } from './service.js';
-import { createGoalTools } from './tools.js';
+import { createGoalTools, resolveGoalToolPolicy } from './tools.js';
+import type { GoalToolPolicy } from './tools.js';
 
 export type { GoalCommand } from './command.js';
 export {
@@ -81,9 +93,19 @@ export {
   renderGoal,
 } from './command.js';
 
-export type { GoalToolLookup, GoalToolValue, GoalToolWiring, GoalUpdateAction } from './tools.js';
+export type {
+  GoalToolLookup,
+  GoalToolPolicy,
+  GoalToolValue,
+  GoalToolWiring,
+  GoalUpdateAction,
+} from './tools.js';
 export {
   createGoalTools,
+  DEFAULT_BLOCKED_AFTER_CONSECUTIVE_ROUNDS,
+  GOAL_TOOL_COMPLETION_AUTHORITY_MESSAGE,
+  goalToolBlockTooSoonMessage,
+  resolveGoalToolPolicy,
   GOAL_CREATE_TOOL_NAME,
   GOAL_GET_TOOL_NAME,
   GOAL_MODEL_REPORTED_CODE,
@@ -101,7 +123,8 @@ export {
   goalToolValue,
 } from './tools.js';
 
-export { hasDirectHumanTurn } from './authority.js';
+export type { GoalToolAuthority } from './authority.js';
+export { completionAuthority, hasDirectHumanTurn, isMatchingGoalRound } from './authority.js';
 
 export { renderGoalRoundPrompt } from './prompt.js';
 
@@ -130,8 +153,14 @@ export {
   GoalService,
 } from './service.js';
 
-/** 掛 goal 域時換得掉的東西。原樣轉給每一份日誌上的 {@link GoalService}。 */
-export type GoalPluginOptions = GoalServiceOptions;
+/**
+ * 掛 goal 域時換得掉的東西。
+ *
+ * **兩半各給各的**：域那幾格（時鐘、id 工廠、預設輪次上限）原樣轉給每一份日誌上的
+ * {@link GoalService}；`blockedAfterConsecutiveRounds` 是**工具的政策**，只到
+ * {@link createGoalTools}。dsh 也是這樣分的——它是兩個套件各自的 config。
+ */
+export interface GoalPluginOptions extends GoalServiceOptions, GoalToolPolicy {}
 
 /**
  * 這一次掛載，加上**找得到每一份日誌的服務**的兩個方法。
@@ -170,13 +199,17 @@ export interface GoalPlugin extends NexusPlugin {
  * 裡已經有的事件。**命令在接線之前就註冊好了**，所以「還沒接線就打 `/goal`」是走得到
  * 的——那條路回一句說得出原因的錯誤，見 `command.ts` 的 `GOAL_NOT_ATTACHED_MESSAGE`。
  *
- * @param options - 預設輪次上限、時鐘與 id 工廠；省略即真的時鐘與 `randomUUID`。
+ * @param options - 預設輪次上限、時鐘、id 工廠與 block 門檻；省略即真的時鐘與
+ *   `randomUUID`。
  * @returns 這一次掛載。
  * @throws {@link GoalError} `defaultMaxGoalRounds` 不是正的安全整數——**在這裡就拋**，
  *   不拖到接線期，見 {@link assertGoalServiceOptions}。
+ * @throws `blockedAfterConsecutiveRounds` 不是正的安全整數（`TypeError`）。
  */
 export function createGoalPlugin(options: GoalPluginOptions = {}): GoalPlugin {
   assertGoalServiceOptions(options);
+  // 同一條理由（設定錯誤要炸在設定的地方），只是這一格歸工具不歸域。
+  resolveGoalToolPolicy(options);
   // 插入序的 Map：`attached()` 要回得出「先接的在前」，而 Set／物件都給不了那個保證。
   const services = new Map<SessionLog, GoalService>();
   return {
@@ -223,10 +256,13 @@ export function createGoalPlugin(options: GoalPluginOptions = {}): GoalPlugin {
       // 拒絕樁，而**那正是 dsh 對 `tool-goal` 的政策本身**（`authority.ts` 的
       // `ctx.agents.roots().includes(execution.agent)`），不是我們的收窄。目標是人交代
       // 的，subagent 沒有人可以交代。
-      for (const goalTool of createGoalTools({
-        forCall: (config) => registry.sessions.forCall(config),
-        serviceFor: (log) => servicesHere.get(log),
-      })) {
+      for (const goalTool of createGoalTools(
+        {
+          forCall: (config) => registry.sessions.forCall(config),
+          serviceFor: (log) => servicesHere.get(log),
+        },
+        options,
+      )) {
         registry.tools.register(goalTool, { rootOnly: true });
       }
       registry.commands.register({

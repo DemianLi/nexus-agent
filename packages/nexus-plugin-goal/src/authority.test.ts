@@ -13,7 +13,8 @@ import { SessionLog } from '@nexus/core';
 import { goalId } from '@nexus/core';
 import type { GoalId, SessionEvent, SessionEventMap } from '@nexus/core';
 
-import { hasDirectHumanTurn } from './authority.js';
+import { completionAuthority, hasDirectHumanTurn, isMatchingGoalRound } from './authority.js';
+import type { GoalView } from './service.js';
 
 /**
  * **釘住 `turn/start` 的酬載聯集剛好是那三個成員。**
@@ -137,6 +138,110 @@ describe('認不得的第四種 kind', () => {
 
   it('它擋在前面時，更早的人類輪次也撿不到', () => {
     expect(hasDirectHumanTurn(logOf([HUMAN, END, UNKNOWN]).events)).toBe(false);
+  });
+});
+
+describe('當前的續行輪次', () => {
+  /** 一份長得像視圖的東西；只有四格進得了判準。 */
+  function view(overrides: Partial<GoalView> = {}): GoalView {
+    return {
+      id: goalId('g-1'),
+      revision: 1,
+      objective: '把它做完',
+      phase: 'active',
+      maxGoalRounds: 8,
+      roundsStarted: 1,
+      createdAt: 10,
+      updatedAt: 10,
+      activation: 'armed',
+      ...overrides,
+    };
+  }
+
+  const ROUND_1: readonly [keyof SessionEventMap, unknown] = [
+    'turn/start',
+    { kind: 'goal', text: '<goal_round>…', goalId: goalId('g-1'), revision: 1, round: 1 },
+  ];
+
+  /**
+   * **比對的是 `roundsStarted` 本身，不是 `roundsStarted + 1`。**
+   *
+   * 這一輪的 `turn/start` 早在工具跑起來之前就 append 過了，所以折疊已經把計數推到它。
+   * 寫成 `+1` 的話每一次都拒絕，而那在畫面上看起來像權限壞了不像差一格——這是這個檔裡
+   * 最容易寫錯而且最難看出來的一格。
+   */
+  it('對得上的是第 roundsStarted 輪，不是下一輪', () => {
+    const events = logOf([ROUND_1]).events;
+    expect(isMatchingGoalRound(events, view({ roundsStarted: 1 }))).toBe(true);
+    expect(isMatchingGoalRound(events, view({ roundsStarted: 2 }))).toBe(false);
+    expect(isMatchingGoalRound(events, view({ roundsStarted: 0 }))).toBe(false);
+  });
+
+  it('身分對不上就不算', () => {
+    const events = logOf([ROUND_1]).events;
+    expect(isMatchingGoalRound(events, view({ id: goalId('g-2') }))).toBe(false);
+    expect(isMatchingGoalRound(events, view({ revision: 2 }))).toBe(false);
+  });
+
+  it('人打的那一輪不是任何目標的續行輪次', () => {
+    expect(isMatchingGoalRound(logOf([HUMAN]).events, view())).toBe(false);
+    expect(isMatchingGoalRound([], view())).toBe(false);
+  });
+
+  /**
+   * **這一條釘的是兩個判準走的不是同一條走法。**
+   *
+   * `hasDirectHumanTurn` 往回追鏈，`isMatchingGoalRound` 只讀當前這一段的頭。兩個住在
+   * 同一個檔裡，實作時最容易發生的事就是共用錯的那一個 helper——而拿追鏈那一個去做後
+   * 者的話，**一顆更早的 goal round 會讓一個人類輪次拿到 `goal-round` 授權**。
+   */
+  it('人接著打字之後，追鏈為真而當前輪次為假', () => {
+    const events = logOf([ROUND_1, END, HUMAN]).events;
+    expect(hasDirectHumanTurn(events)).toBe(true);
+    expect(isMatchingGoalRound(events, view({ roundsStarted: 1 }))).toBe(false);
+  });
+
+  /** 反過來的那一半：在續行輪次裡，追鏈為假而當前輪次為真。 */
+  it('在續行輪次裡，追鏈為假而當前輪次為真', () => {
+    const events = logOf([HUMAN, END, ROUND_1]).events;
+    expect(hasDirectHumanTurn(events)).toBe(false);
+    expect(isMatchingGoalRound(events, view({ roundsStarted: 1 }))).toBe(true);
+  });
+});
+
+describe('completionAuthority', () => {
+  function view(): GoalView {
+    return {
+      id: goalId('g-1'),
+      revision: 1,
+      objective: '把它做完',
+      phase: 'active',
+      maxGoalRounds: 8,
+      roundsStarted: 1,
+      createdAt: 10,
+      updatedAt: 10,
+      activation: 'armed',
+    };
+  }
+
+  const ROUND_1: readonly [keyof SessionEventMap, unknown] = [
+    'turn/start',
+    { kind: 'goal', text: '<goal_round>…', goalId: goalId('g-1'), revision: 1, round: 1 },
+  ];
+
+  it('人在的時候是 direct-human，而且不必有目標', () => {
+    expect(completionAuthority(logOf([HUMAN]).events, undefined)).toEqual({ kind: 'direct-human' });
+  });
+
+  it('續行輪次裡是 goal-round，而且帶得出那份視圖', () => {
+    const granted = completionAuthority(logOf([HUMAN, END, ROUND_1]).events, view());
+    expect(granted?.kind).toBe('goal-round');
+    expect(granted?.kind === 'goal-round' && granted.goal.roundsStarted).toBe(1);
+  });
+
+  it('兩條都不成立時是 undefined', () => {
+    expect(completionAuthority(logOf([RESUME]).events, view())).toBeUndefined();
+    expect(completionAuthority(logOf([HUMAN, END, ROUND_1]).events, undefined)).toBeUndefined();
   });
 });
 

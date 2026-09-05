@@ -2,9 +2,9 @@
  * 執行時的權限判準：**這一顆變更呼叫背後有沒有一個人**。
  *
  * 形狀照 dsh 的 `packages/goal/tool-goal/src/authority.ts`（對讀版本
- * `d347e703908d0406b7a7ef80e3a0e594d86b2215`，2026-09-04）。那邊有兩種授權——直接人類
- * 與**當前 Goal Round**；**這裡只有前一種**，理由與其他三件一起寫在 `tools.ts` 檔頭：
- * 沒有續行驅動器就沒有 goal 來源的輪次，那個分支在我們的範圍內沒有生產者。
+ * `d347e703908d0406b7a7ef80e3a0e594d86b2215`，2026-09-04）。**兩種授權都在**：直接人類，
+ * 與**當前 Goal Round**（[#180](https://github.com/DemianLi/nexus-agent/issues/180) 補上
+ * 了生產者）。哪一種夠用是按操作分的，見 {@link completionAuthority}。
  *
  * ## 判準是「往回追」，不是「看最後一顆」
  *
@@ -29,14 +29,27 @@
  * 所以遇到不認得的 `kind` 時**不往回穿**：一個未知的生產者既不該自己拿到人類授權，也
  * 不該讓我們越過它去撿一則更早的人類輪次。fail-closed。
  *
- * **這條在今天是絆索，在補上 `source` 判別欄的那天會變成驗收句**（[#152](https://github.com/DemianLi/nexus-agent/issues/152)
- * 的決議把 `source` 與驅動器綁在同一張卡）：那時 `message` 這一支再多讀一格 source，
- * `kind: 'goal'` 的走到這裡就是同一個結論。改的是一行，不是一個機制。
+ * **這條在 [#180](https://github.com/DemianLi/nexus-agent/issues/180) 從絆索變成了驗收
+ * 句**：`kind: 'goal'` 是真的第三個成員了，而它直接落到那個 `return false`——
+ * **這個函式一行都沒有改**。今天它擋的是下一個生產者。
+ *
+ * ## 兩個判準走的不是同一條走法
+ *
+ * {@link hasDirectHumanTurn} 往回**追鏈**（`resume` 一路穿過去找根），
+ * {@link isMatchingGoalRound} **只讀當前這一段物理輪次的頭**（遇到第一顆 `turn/start`
+ * 就停，不穿）。dsh 兩邊都掃「開放輪次」，因為它有 `turnBoundary` 投影告訴它這一輪從
+ * 哪顆事件開始；**我們沒有那個投影**，所以兩個判準各自從日誌推導，而它們要的東西不同：
+ * 一個問「這條鏈的根是不是人」，另一個問「我現在人在哪一輪裡」。
+ *
+ * 拿追鏈那一個去做後者的話，**一顆更早的 goal round 會讓一個人類輪次拿到 `goal-round`
+ * 授權**。`authority.test.ts` 有一條測試專門釘住這個分歧。
  *
  * @module
  */
 
 import type { SessionEvent, SessionEventMap } from '@nexus/core';
+
+import type { GoalView } from './service.js';
 
 /** `turn/start` 的酬載。**單獨取出來是為了讓下面那個 `default` 分支有話可說**。 */
 type TurnStart = SessionEventMap['turn/start'];
@@ -58,4 +71,57 @@ export function hasDirectHumanTurn(events: readonly SessionEvent[]): boolean {
     return false;
   }
   return false;
+}
+
+/**
+ * 現在這一輪**正是**這個目標這個修訂號的當前準入輪次。
+ *
+ * **比對的是 `roundsStarted` 本身，不是 `roundsStarted + 1`**：這一輪的
+ * `turn/start` 早在工具跑起來之前就 append 過了，折疊已經把計數推到它。寫成 `+1` 的話
+ * 每一次都拒絕，而那看起來像權限壞了不像差一格。
+ *
+ * **只讀當前物理輪次的頭**——往回遇到的第一顆 `turn/start` 就是答案，不往上穿。理由見
+ * 檔頭那一節。
+ *
+ * @param events - 一份會話日誌到目前為止的全部事件，照 `seq` 排。
+ * @param goal - 目前那份視圖，帶著它折疊出來的 `roundsStarted`。
+ * @returns 當前輪次就是這個目標的第 `roundsStarted` 輪時為真。
+ */
+export function isMatchingGoalRound(events: readonly SessionEvent[], goal: GoalView): boolean {
+  for (let at = events.length - 1; at >= 0; at -= 1) {
+    const event = events[at];
+    if (event === undefined || event.type !== 'turn/start') continue;
+    const data = event.data as TurnStart;
+    return (
+      data.kind === 'goal' &&
+      data.goalId === goal.id &&
+      data.revision === goal.revision &&
+      data.round === goal.roundsStarted
+    );
+  }
+  return false;
+}
+
+/** 一次變更呼叫拿到的授權。照 dsh 的 `GoalToolAuthority`。 */
+export type GoalToolAuthority =
+  { readonly kind: 'direct-human' } | { readonly kind: 'goal-round'; readonly goal: GoalView };
+
+/**
+ * `complete` 與 `blocked` 的授權：**直接人類，或當前這一輪**。
+ *
+ * 其餘四個動作（`create`／`edit`／`pause`／`resume`）**仍然只收直接人類**。那不是保守，
+ * 是這條路的整個重點：一個自己排得出輪次的模型若也能 `create`／`edit`，它就能改寫自己
+ * 要達成的東西，而 `complete` 只是承認一件已經發生的事。
+ *
+ * @param events - 一份會話日誌到目前為止的全部事件。
+ * @param goal - 目前那份視圖；沒有目前目標時給 `undefined`。
+ * @returns 拿到的授權，兩條都不成立時是 `undefined`。
+ */
+export function completionAuthority(
+  events: readonly SessionEvent[],
+  goal: GoalView | undefined,
+): GoalToolAuthority | undefined {
+  if (hasDirectHumanTurn(events)) return { kind: 'direct-human' };
+  if (goal !== undefined && isMatchingGoalRound(events, goal)) return { kind: 'goal-round', goal };
+  return undefined;
 }
