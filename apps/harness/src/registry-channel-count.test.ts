@@ -110,6 +110,20 @@ interface ProseSite {
   readonly path: string;
   /** 這個檔案裡必須出現的字串。 */
   readonly phrases: readonly string[];
+  /**
+   * 這個檔案裡**不准**出現的字串：同一句話寫成差一的樣子。
+   *
+   * **這一欄擋的是掃了一半。** 光有 `phrases`，一個檔案裡同一個數字出現五次而只改了
+   * 第一次，斷言照樣綠——`registry.ts` 的「九個註冊點」正是五行（`:4` / `:15` / `:309` /
+   * `:346` / `:443`，其中 `:309` 一行兩次）。改了頭沒改身體時，舊的那個字還在，這一欄
+   * 當場紅。只涵蓋差一，那是通道增刪唯一實際會發生的幅度。
+   */
+  readonly forbidden: readonly string[];
+}
+
+/** 把一個數字寫成差一的兩種樣子，用來擋「掃了一半」。 */
+function offByOne(value: number, suffix: string): readonly string[] {
+  return [`${cn(value - 1)}${suffix}`, `${cn(value + 1)}${suffix}`];
 }
 
 const PROSE_SITES: readonly ProseSite[] = [
@@ -117,21 +131,29 @@ const PROSE_SITES: readonly ProseSite[] = [
     // 定義處。九與五的拆法本身也寫在這裡，所以兩個數字都釘。
     path: 'packages/nexus-core/src/registry.ts',
     phrases: [`${cn(FOLDED_CHANNELS)}個註冊點`, `外加${cn(ORTHOGONAL_CHANNELS)}條`],
+    forbidden: [
+      ...offByOne(FOLDED_CHANNELS, '個註冊點'),
+      `外加${cn(ORTHOGONAL_CHANNELS - 1)}條`,
+      `外加${cn(ORTHOGONAL_CHANNELS + 1)}條`,
+    ],
   },
   {
     // #181 的載體偏離：「沒有一條排得出一輪」。十五是在這裡被寫下去的。
     path: 'apps/harness/src/goal-driver.ts',
     phrases: [`${cn(TOTAL_CHANNELS)}條通道`],
+    forbidden: offByOne(TOTAL_CHANNELS, '條通道'),
   },
   {
     // 同一筆偏離的另一半，同一顆 commit。
     path: 'packages/nexus-plugin-goal/src/index.ts',
     phrases: [`${cn(TOTAL_CHANNELS)}條通道`],
+    forbidden: offByOne(TOTAL_CHANNELS, '條通道'),
   },
   {
     // #193 的索引：「最直覺的家是 `PluginRegistry` 的十四個欄位，那是錯的軸」。
     path: 'apps/harness/src/interception-index.test.ts',
     phrases: [`${cn(TOTAL_CHANNELS)}個欄位`],
+    forbidden: offByOne(TOTAL_CHANNELS, '個欄位'),
   },
 ];
 
@@ -140,6 +162,7 @@ const ALSO_SWEEP = [
   '.docs/plugin-architecture-gap-survey.md（「14 個欄位（9 ＋ 5）」，阿拉伯數字）',
   '.docs/development-plan.md（「九個註冊點 ＋ 五條通道」）',
   'packages/nexus-core/src/load.ts 與 load.test.ts（「九個註冊點一個都不能漏」）',
+  'registry.ts 的「九個註冊點」在五行上（:4 / :15 / :309 / :346 / :443），下面只見證其中一行——差一的那兩種寫法有 forbidden 擋著，改幅超過一就要自己數',
 ].join('\n  - ');
 
 describe('PluginRegistry 的通道數', () => {
@@ -148,8 +171,15 @@ describe('PluginRegistry 的通道數', () => {
     expect(FOLDED_CHANNELS + ORTHOGONAL_CHANNELS).toBe(TOTAL_CHANNELS);
   });
 
-  it.each(PROSE_SITES)('$path 講的通道數跟型別對得上', ({ path, phrases }) => {
+  it.each(PROSE_SITES)('$path 講的通道數跟型別對得上', ({ path, phrases, forbidden }) => {
     const source = readFileSync(join(REPO_ROOT, path), 'utf8');
+    for (const stale of forbidden) {
+      expect(
+        source,
+        `${path} 還留著「${stale}」。\n` +
+          `通道數是 ${TOTAL_CHANNELS}，這個檔案掃了一半——同一個數字在一個檔案裡可能寫了不只一次。`,
+      ).not.toContain(stale);
+    }
     for (const phrase of phrases) {
       expect(
         source,
