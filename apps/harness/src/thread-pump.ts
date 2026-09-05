@@ -286,7 +286,17 @@ export class ThreadPump {
     await this.#tail;
   }
 
-  /** 收線。掛著的下行會正常結束，不是拋錯。 */
+  /**
+   * 收線。掛著的下行會正常結束，不是拋錯。
+   *
+   * **它同時關掉續行的準入**，而真正擋住那一輪的是 {@link ThreadPump.submit} 自己的拒絕
+   * ——收線之後它一律 reject，所以一個正在 `await flush()` 的排程器塞不進東西。
+   * `#driveGoalRound` 那兩處 `#closed` 是提早退出（省掉一次白算與一次 `flush()`），
+   * **不是那道閘**；量過，拿掉它們行為不變。
+   *
+   * 「停用續行授權」那一半由 `wire-handler.ts` 的 `dispose` 走 detachSession 完成——
+   * 服務跟著日誌一起從註冊表下線，而 `activation` 本來就不持久。
+   */
   close(): void {
     this.#closed = true;
     for (const subscriber of this.#subscribers) {
