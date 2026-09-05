@@ -353,6 +353,8 @@ function planCommandResult(cell: PlanModeCell, rawInput: string): CommandResult 
  *    system prompt 上加東西，取代會把它們吃掉（`dynamicSystemPromptMiddleware`
  *    正是取代，所以刻意不用它）。模式沒生效時原樣穿過，**一個 token 都不多**。
  * 4. **`wrapToolCall`** 擋掉模式外的 `exit_plan_mode`。
+ *    **這是 dsh `tools/execute` 位置的一個佔用者**（`beforeAgent` 那一項則對應
+ *    `agent/pre-step`，見上）；索引見 `apps/harness/src/interception-index.test.ts`。
  * 5. **`afterAgent`** 把一輪跑完之後的 state 吃回那一格。少了它，`exit_plan_mode`
  *    在輪中途把模式關掉之後，下一次 `/plan off` 會回「關了」而不是「本來就沒開」。
  *

@@ -37,6 +37,11 @@
  *
  * **二、投遞掛在 `beforeModel`，不是 post-execute。**
  *
+ * **這個檔案提到 `tools/post-execute` 是為了說「不是這裡」。** 真正佔住那個時刻的是
+ * `@nexus/plugin-validation` 的 `output-schema.ts`（`wrapToolCall` 的 `await handler()`
+ * 之後那一段）；索引見 `apps/harness/src/interception-index.test.ts`。grep 這個名字
+ * 會先落到這裡，所以這一行是給那個人看的。
+ *
  * dsh 在 `tools/post-execute` 上計數，然後把提醒交給迴圈——由**迴圈**緩衝它，在該步驟
  * 的所有工具結果之後才附上去（README「提醒传递」段）。我們沒有那個迴圈的鉤子，但
  * LangGraph 裡「這一步的工具結果都回來了、模型還沒被叫」的那個縫**就是 `beforeModel`**，

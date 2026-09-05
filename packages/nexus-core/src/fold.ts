@@ -502,6 +502,11 @@ function foldPermissions(registry: PluginRegistry): FilesystemPermission[] {
 /**
  * 核准閘門折成一個 `wrapToolCall` middleware。
  *
+ * **這裡有兩個 dsh 時刻疊在一起，值得說破。** 閘門答的是 `tools/pre-execute`
+ * （決策詞彙見 {@link ./approval.ts}），但**承載它的是一個 `tools/execute` 位置的
+ * `wrapToolCall`**——dsh 那兩個時刻是兩層權限不同的東西，我們這側是同一種機制的兩個
+ * 陣列位置，而位置由這個檔案決定、不由註冊順序決定。索引見 `apps/harness/src/interception-index.test.ts`。
+ *
  * **這一格取代了整個 `foldInterrupts`。** 舊版在這裡做四件事：工具名存在檢查、
  * 核准政策開關、缺 checkpointer 即拋、以及同工具多方標記逐欄位 OR。四件全部消失，
  * 而消失的原因各不相同，值得逐條說清楚（決議見
