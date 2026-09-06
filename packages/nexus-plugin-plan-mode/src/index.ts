@@ -56,10 +56,21 @@
  *   修好在哪：[#126](https://github.com/DemianLi/nexus-agent/issues/126) 加了第十四個註冊點
  *   `sessions`，名字就說它交出可寫的日誌，goal 域走的正是它。
  *
- *   **但計劃模式沒有跟著搬，而理由不是慣性**：`SessionLog` 全樹仍然零個 hydrate／persist
- *   路徑，搬過去只是把一個不耐久的存放處換成另一個不耐久的存放處，換不到下面那句話裡
- *   丟掉的任何一樣東西；而且它還要 `SessionEventType` 再長一種 `plan/mode`，那是另一個
- *   要自己說得出理由的決定。**日誌真的耐久化那天，這一段要重寫。**
+ *   **但計劃模式沒有跟著搬，而理由不是慣性**——只是那個理由今天換了一個。
+ *
+ *   上一版寫的是「`SessionLog` 全樹仍然零個 hydrate／persist 路徑，搬過去只是把一個不
+ *   耐久的存放處換成另一個不耐久的存放處」，並留了一句觸發條件：「日誌真的耐久化那天，
+ *   這一段要重寫。」**那一天已經到了**——[#173](https://github.com/DemianLi/nexus-agent/pull/173)
+ *   （2026-09-04）讓會話日誌活得過行程結束，而**沒有任何東西響**。過期的是理由不是結論，
+ *   所以任何驗結論的測試都不會紅；補這個洞的絆索見
+ *   [#203](https://github.com/DemianLi/nexus-agent/issues/203)。
+ *
+ *   **今天真正的理由是：耐久了，但沒有讀方。** `jsonl-session-store.ts` 檔頭逐字「我們
+ *   今天沒有讀方」——三個入口都沒有跨重啟的續接
+ *   （[#155](https://github.com/DemianLi/nexus-agent/issues/155)）。搬過去只是把模式狀態
+ *   寫進一份沒有人回讀的檔案，仍然換不到下面那句話裡丟掉的任何一樣東西；而且它還要
+ *   `SessionEventType` 再長一種 `plan/mode`，那是另一個要自己說得出理由的決定。
+ *   **日誌長出回讀路徑那天，這一段要重寫。**
  * - **`SessionEventType` 是 `@nexus/core` 的封閉 union**，沒有 dsh 那種宣告合併，而
  *   [#101](https://github.com/DemianLi/nexus-agent/issues/101) 已經明文把「加會話事件
  *   種類」排除在包自有不變量之外。
