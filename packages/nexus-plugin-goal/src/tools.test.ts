@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
@@ -221,6 +222,28 @@ describe('create_goal', () => {
       await call(GOAL_CREATE_TOOL_NAME, { objective: '長跑', max_goal_rounds: 12 }),
     );
     expect(value.goal).toMatchObject({ maxGoalRounds: 12 });
+  });
+
+  /**
+   * **這是 [#188](https://github.com/DemianLi/nexus-agent/issues/188) 拍板的絆索，
+   * 釘的是「形狀」與「不勸」兩件事。**
+   *
+   * 形狀：維持 `optional`。改必填的話，`round-limit` 會在每個目標上綁定，而目標自己那個
+   * 數字是**模型填的**（`service.ts` 的 `??` 不是 `Math.min`），等於把停損交回給模型——
+   * `goal-driver.ts` 檔頭反對的正是這件事。
+   *
+   * 不勸：說明**逐字**照 dsh。字串刻意在這裡再打一次而不是 import 常數——要動它的人
+   * 得兩邊一起動，那一刻才會撞到上面那個理由。三跑實測見拍板留言。
+   */
+  it('max_goal_rounds 維持選填，說明與標準逐字相同', () => {
+    const { tools } = bench();
+    const schema = tools.get(GOAL_CREATE_TOOL_NAME)?.value.schema as z.ZodObject<z.ZodRawShape>;
+    const shape = schema.shape as Record<string, z.ZodType>;
+    expect(shape['max_goal_rounds']?.description).toBe(
+      'Optional positive safe-integer limit on automatic continuation rounds.',
+    );
+    expect(shape['max_goal_rounds']?.isOptional()).toBe(true);
+    expect(shape['objective']?.isOptional()).toBe(false);
   });
 
   it('域的拒絕（已經有一個沒完成的目標）變成一句話，不是拋', async () => {

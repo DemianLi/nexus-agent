@@ -26,7 +26,7 @@
  * ## `goal-round-driver` 拆成兩處，而拆點是一筆登記過的載體偏離
  *
  * dsh 把它做成一個獨立套件；[#180](https://github.com/DemianLi/nexus-agent/issues/180)
- * 落地時發現**排程器不可能是一個 plugin**——`PluginRegistry` 十五條通道沒有一條排得出
+ * 落地時發現**排程器不可能是一個 plugin**——`PluginRegistry` 十四條通道沒有一條排得出
  * 一輪，輪迴圈歸入口點所有（`thread-pump.ts` 的 `#runOnce`、`cli.ts` 的 `runTurn`）。
  * 所以：
  *

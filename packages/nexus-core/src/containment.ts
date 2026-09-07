@@ -189,6 +189,10 @@ export function resolveToolName(request: {
 /**
  * 造一個把工具失敗翻成 error ToolMessage 的 middleware。
  *
+ * **時刻：dsh 的 `tools/execute`**（環繞 waterfall：超時／重試／指標）。這一層是那個
+ * 時刻在我們樹上的**第 0 格**佔用者。同一個時刻我們還有三個佔用者，而它們是同一種
+ * 機制的不同陣列位置，不是三種權限——索引見 `apps/harness/src/interception-index.test.ts`。
+ *
  * 它**必須排在整份 middleware 陣列的第 0 格**（root 與每個 subagent 都是）：`wrapToolCall`
  * 是層層相包的，越前面越外層，而圍堵的射程要涵蓋內層每一個 middleware——連核准閘門
  * 與校驗器自己的 bug 都在裡面。基座自己那幾個 middleware 永遠排在所有這些之前，接不到，

@@ -1,6 +1,15 @@
 /**
  * 輸出 schema 校驗：工具**成功**回來的那個值，合不合它宣告的形狀。
  *
+ * **時刻：dsh 的 `tools/post-execute`**（檢查／變換 waterfall）。這一層掛在
+ * `tools/execute` 位置的一個 `wrapToolCall` 上，真正做事的是 `await handler()`
+ * **之後**那一段——那才是 `tools/post-execute`。兩個時刻在我們這側共用一個載體，
+ * 索引見 `apps/harness/src/interception-index.test.ts`。
+ *
+ * **這一格的位置點不到。** `MiddlewareRegistrationPoint` 只有 `prepend` 一根槓桿，
+ * 給的是最外，而這一層要的是最內；佔住它的人只能拜託自己是最後一個註冊的。缺口
+ * 記在下面「它要掛在最內層」那一段與計劃 Phase 4。
+ *
  * 基座缺的是這一半。輸入那一半一直是好的——參數不合工具自己的 zod schema 會拋
  * `ToolInputParsingException`，被包成 `ToolInvocationError`，而 `ToolNode.#handleError`
  * 沿 `.cause` 走到根、認出它就 un-mark，於是照樣變成一則回饋（實測）。成功的回傳值
