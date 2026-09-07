@@ -19,7 +19,7 @@
 
 **契約層落地了，而且被用過。** `PluginRegistry` 有 14 個欄位（9 個折進 `createDeepAgent` 的註冊點 ＋ 5 條不折的通道），`packages/` 底下 11 個生產 plugin 全走這條契約，`@nexus/plugin-echo` 靠 pnpm 相依隔離證明契約沒有偷偷要求伸手進組裝點。計劃書 §1 寫的形狀（命令式註冊、同層報錯、跨層遮蔽、fail-closed、載入期失敗）每一條都有對應的程式碼與測試。
 
-**廣度比 dsh 窄很多，但窄的地方分兩種。** dsh `packages/` 的 51 個頂層套件裡，我們有等價物的 8 個、部分的 14 個、沒有的 27 個、不適用的 2 個（**2026-09-05 更新過**：`guard` 與 `spill` 從「沒有」改成「部分」，理由見 §三小計）。27 個「沒有」裡 16 個是企業級與分散式的東西（`acp`／`sdk`／`typert`／`identity`／`settings`／`credentials`／`webhook`／`attachment`／`lsp`／`web`／`e2b`／`feedback`／`experimental`／`extensions`／`bundle`／`preset`）——那是定位差異，不是缺口。**真正算缺口的是 agent 迴圈本身會用到、而 dsh 的 base 組合預設就開著的那幾個**：compaction 由誰選門檻、迴圈衛生的兩個 guard（重複呼叫提醒、單次工具逾時）、生命週期鉤子面（會話開始／提示詞提交／停止三個時刻——**2026-09-07 更正**：那是三個**格號**不是三個空缺，見 §五第 3 條）、以及狀態幾乎都只在記憶體裡。**這份清單 2026-09-05 被 [#146](https://github.com/DemianLi/nexus-agent/issues/146) 消耗掉大半**（十七張卡，逐張的產出與偏離索引在那張圖的結案留言）：前兩項收完（§五第 1、2 條）；狀態那項做掉**會話日誌**這一軸（[#172](https://github.com/DemianLi/nexus-agent/issues/172)、[#174](https://github.com/DemianLi/nexus-agent/issues/174)，CLI 與 `serve` 的 `--session-log <dir>`），checkpointer 仍是 `MemorySaver`、仍沒有 storage，但那兩軸今天零消費者，判過不做（[#155](https://github.com/DemianLi/nexus-agent/issues/155)，見決策 4 的補記——**原文寫的「決策 4 的三軸」是錯的**：那三軸問的都是「LangGraph 的狀態存在哪」，會話日誌不在其中任何一軸上）。~~**留下來的是生命週期鉤子面**（§五第 3 條，開圖條件部分滿足——面要不要做已經答了，掛在哪個縫上還沒有）**與等著它的 context 注入**（第 5 條）。~~ **2026-09-07 這兩項都不再開著**（[#212](https://github.com/DemianLi/nexus-agent/issues/212)）：那個「面」不是第十個東西，它就是 [#190](https://github.com/DemianLi/nexus-agent/issues/190) 的九格——dsh 自己的橋接把五個鉤子逐個訂在其中五格上——而五格逐格有結局；縫因此也定了（第 2 格），第 5 條剩下的是開卡時選射程。**留下來的是第 6 條那半沒查的問題**（`ForkedSubAgent`）。shell／sandbox／subprocess／terminal 是決策 3 明文延後的，不算意外。
+**廣度比 dsh 窄很多，但窄的地方分兩種。** dsh `packages/` 的 51 個頂層套件裡，我們有等價物的 8 個、部分的 14 個、沒有的 27 個、不適用的 2 個（**2026-09-05 更新過**：`guard` 與 `spill` 從「沒有」改成「部分」，理由見 §三小計）。27 個「沒有」裡 16 個是企業級與分散式的東西（`acp`／`sdk`／`typert`／`identity`／`settings`／`credentials`／`webhook`／`attachment`／`lsp`／`web`／`e2b`／`feedback`／`experimental`／`extensions`／`bundle`／`preset`）——那是定位差異，不是缺口。**真正算缺口的是 agent 迴圈本身會用到、而 dsh 的 base 組合預設就開著的那幾個**：compaction 由誰選門檻、迴圈衛生的兩個 guard（重複呼叫提醒、單次工具逾時）、生命週期鉤子面（會話開始／提示詞提交／停止三個時刻——**2026-09-07 更正**：那是三個**格號**不是三個空缺，見 §五第 3 條）、以及狀態幾乎都只在記憶體裡。**這份清單 2026-09-05 被 [#146](https://github.com/DemianLi/nexus-agent/issues/146) 消耗掉大半**（十七張卡，逐張的產出與偏離索引在那張圖的結案留言）：前兩項收完（§五第 1、2 條）；狀態那項做掉**會話日誌**這一軸（[#172](https://github.com/DemianLi/nexus-agent/issues/172)、[#174](https://github.com/DemianLi/nexus-agent/issues/174)，CLI 與 `serve` 的 `--session-log <dir>`），checkpointer 仍是 `MemorySaver`、仍沒有 storage，但那兩軸今天零消費者，判過不做（[#155](https://github.com/DemianLi/nexus-agent/issues/155)，見決策 4 的補記——**原文寫的「決策 4 的三軸」是錯的**：那三軸問的都是「LangGraph 的狀態存在哪」，會話日誌不在其中任何一軸上）。~~**留下來的是生命週期鉤子面**（§五第 3 條，開圖條件部分滿足——面要不要做已經答了，掛在哪個縫上還沒有）**與等著它的 context 注入**（第 5 條）。~~ **2026-09-07 這兩項都不再開著**（[#212](https://github.com/DemianLi/nexus-agent/issues/212)）：那個「面」不是第十個東西，它就是 [#190](https://github.com/DemianLi/nexus-agent/issues/190) 的九格——dsh 自己的橋接把五個鉤子逐個訂在其中五格上——而五格逐格有結局；縫因此也定了（第 2 格），第 5 條剩下的是開卡時選射程。~~**留下來的是第 6 條那半沒查的問題**（`ForkedSubAgent`）。~~ **2026-09-07 那半也查完了**：`ForkedSubAgent` 與 fork-mode 的 `CompiledSubAgent` 在型別上都進不到我們的註冊點，第 6 條判為認帳不做，那條窄由 `registry.test.ts` 的欄位絆索釘著。**這張表因此沒有「待驗」的項目了**——上面點名的四項全部有結局，還沒動的只剩第 5 條那張沒開的小卡（context 注入，射程要選）。shell／sandbox／subprocess／terminal 是決策 3 明文延後的，不算意外。
 
 **Proteus 不是另一個 harness，是量 harness 的儀器。** 它用 Docker 把 dsh、Pi、Aki 這些 harness 包起來，讓它們跨多個 episode 改寫自己的原始碼，然後量「harness 本身變了什麼」（結構距離、結晶測試、帶排列檢定的行為距離）。它對我們的意義不是抄設計——它是 Python、從外面包、是 research preview——而是它定義了一個 harness **可以被量**要具備什麼：無頭入口（有）、可讀的執行軌跡（**2026-09-05 起有了**，見 §4.5）、具名的可編輯 surface（memory／skills 目錄有，plugin 清單是程式碼）。**原文寫「這三件裡缺的那一件正好跟持久化是同一個缺口」，那句話 2026-09-05 起不成立**——落盤做完之後，缺的變成第三件（可編輯 surface），而它跟持久化無關。
 
@@ -218,7 +218,7 @@ Proteus 定義了「一個 harness 可以被量」的三個前提，對著我們
 
 排序準則：**agent 迴圈自己會碰到**（不是部署面、不是分散式）× **dsh base 預設就開著**（表示它認為每個 harness 都該有）× **我們的基座表達得出來**（表達不出來的要標偏離）× **大小**。企業級那 14 個不排；決策 3 延後的 4 個登記不排。
 
-**這張表的消耗狀況（2026-09-07 更新）**：第 1、2 條收完，第 4 條做掉會話日誌那一軸、另兩軸判為零消費者不做——十七張卡掛在 [#146](https://github.com/DemianLi/nexus-agent/issues/146) 底下走完，逐張的產出與**偏離登記的索引**在那張圖的結案留言。~~**還開著的是第 3 條**（生命週期鉤子面，開圖條件部分滿足）**與等它的第 5 條**~~——**2026-09-07 起不是了**（[#212](https://github.com/DemianLi/nexus-agent/issues/212)）：第 3 條收完（那個「面」就是 #190 的九格，五格逐格有結局），第 5 條的縫因此定了、不再等，剩下的是它開卡時要選的射程。**這張表今天還開著的只有第 6 條**，而它其中一問也順帶答了（§六第 4 條）。
+**這張表的消耗狀況（2026-09-07 更新）**：第 1、2 條收完，第 4 條做掉會話日誌那一軸、另兩軸判為零消費者不做——十七張卡掛在 [#146](https://github.com/DemianLi/nexus-agent/issues/146) 底下走完，逐張的產出與**偏離登記的索引**在那張圖的結案留言。~~**還開著的是第 3 條**（生命週期鉤子面，開圖條件部分滿足）**與等它的第 5 條**~~——**2026-09-07 起不是了**（[#212](https://github.com/DemianLi/nexus-agent/issues/212)）：第 3 條收完（那個「面」就是 #190 的九格，五格逐格有結局），第 5 條的縫因此定了、不再等，剩下的是它開卡時要選的射程。~~**這張表今天還開著的只有第 6 條**，而它其中一問也順帶答了（§六第 4 條）。~~ **2026-09-07 第 6 條也收完了**（另一半的 `ForkedSubAgent` 查完，判為認帳不做，§六第 4 條整條結案）——**這張表從此沒有待驗的項目**，唯一還沒動的是第 5 條那張沒開的小卡（開卡前要選射程），第 7 條是登記不排的。
 
 ### 1. Compaction 的門檻與去向由我們選 —— 收完
 
@@ -330,11 +330,30 @@ Proteus 定義了「一個 harness 可以被量」的三個前提，對著我們
 
 **別默默選 root only 就當作做完了**——那正是這張表要防的那種過期。射程寫進卡片標題或 destination 裡。
 
-### 6. subagent 的其他後端 —— 待驗，其中一問 2026-09-07 順帶答了
+### 6. subagent 的其他後端 —— 查完了（2026-09-07），判為認帳不做，而那條窄現在有絆索釘著
 
-dsh 有 in-process／fork／spawn／acp／claude-code／codex 六種委派後端；我們只有 deepagents 的 in-process `SubAgent`。deepagents 的 `.d.ts` 裡有 `ForkedSubAgent`、`AsyncSubAgent`，我們的 `foldSubAgents` 有沒有處理它們，原本整條都**沒查**（§六）。
+dsh 有 in-process／fork／spawn／acp／claude-code／codex 六種委派後端；我們只有 deepagents 的 in-process `SubAgent`。deepagents 的 `.d.ts` 裡有 `ForkedSubAgent`、`AsyncSubAgent`，我們的 `foldSubAgents` 有沒有處理它們，原本整條都**沒查**（§六）。**兩半都查完了，答案一樣是「進不來」，但兩半的理由不同**——這個差別重要，因為它決定了絆索該釘在哪。
 
-**`AsyncSubAgent` 那半答了**（[#212](https://github.com/DemianLi/nexus-agent/issues/212) 順帶量到）：`apps/harness/src/base-tools.ts:52-62` 的檔頭已經寫著——基座只在 `subagents` 裡出現 `AsyncSubAgent`（帶 `graphId` 的那種）時才掛上那組 async 工具，而 `registry.subagents.register()` 收的是 `SubAgent`，**型別上就進不來**，所以那五個 async 工具名在目前的組裝裡永遠掛不上。**`ForkedSubAgent` 仍未查。**
+**基座這一側有三種 in-process 形狀，`createDeepAgent` 的 `subagents` 三種都收**（`subagents?: (SubAgent | CompiledSubAgent | ForkedSubAgent)[]`）：
+
+| 形狀 | 判別 | 我們這側 |
+| --- | --- | --- |
+| `SubAgent` | `mode?: 'handoff'` | **唯一收的那種**（`registry.subagents.register(subagent: SubAgent)`） |
+| `ForkedSubAgent` | **`mode: 'fork'` 必填** | 型別上進不來：`SubAgent.mode` 被窄成 `'handoff'` 這個**字面量**，寫 `'fork'` 是型別錯誤。**但 cast 得進來**，見下 |
+| `CompiledSubAgent` | 帶 `runnable`，`mode?: 'handoff' \| 'fork'` | 進不來：形狀對不上 `SubAgent` |
+| `AsyncSubAgent` | **`graphId` 必填** | 進不來：缺欄位（`apps/harness/src/base-tools.ts:52-62` 檔頭） |
+
+**`AsyncSubAgent` 是「缺必填欄位」，`ForkedSubAgent` 是「欄位被窄成別的字面量」。** 前者不可能誤入——沒有人會憑空長出 `graphId`；後者是 `SubAgent` 自己就有的欄位被限制了取值，**而那種擋法會隨升版無聲消失**：`SubAgent.mode` 哪天被加寬回 `'handoff' | 'fork'`，這條窄就沒了，而不會有任何東西紅。所以這一格加了一條**釘欄位**的絆索（`packages/nexus-core/src/registry.test.ts` 的「fork 與 compiled 兩種形狀在型別上進不來，handoff 進得來」），配一條正面斷言擋相反方向的漂移。
+
+**擋的是 `tsc`，而且只有 `tsc`——組裝期不補第二道。** `foldSubAgents` 是 `{ ...spec }` 展開，**它不剝也不擋 `mode`**：實測把一個 `mode: 'fork'` 的 spec 用 `as` cast 註冊進去，`foldRegistry` 交出來的 `subagents[0].mode` 原樣是 `'fork'`（`fold.test.ts` 的「被 cast 進來的 fork 標記，fold 原樣帶到基座」釘住這件事）。所以正確的說法不是「基座看不到 fork」，是**「型別是這條路上唯一的守衛，一個 cast 就繞得過去」**——守衛與真正在擋的東西不是同一個。
+
+**基座的判別式認的是存在的標記，不是欄位的缺席。** `isForkedSubAgent()` 的三行是 `'mode' in value && value.mode === 'fork'`（`langsmith-*.js:3287`），不是「沒有 `systemPrompt`」——所以一個沒寫 `systemPrompt` 的普通 `SubAgent` **不會**被誤判成 fork。這件事查之前不知道，而它是兩種很不一樣的世界：如果判別式認的是缺席，fork 語意就是**任何人少寫一個欄位就踩得到**的東西；認的是存在的標記，就得有人明著寫 `mode: 'fork'` 才碰得到。
+
+**生產路徑上只有一個生產者，而它是原樣傳遞的那種**：`foldRegistry`（`fold.ts:290` → `agent-factory.ts:359` → `createDeepAgent`）。我們自己的程式碼裡那條路上沒有 cast、沒有 `@ts-expect-error`——但那擋的是**我們**，不是未來寫 plugin 的人。**而今天這條路上零佔用者**：扣掉測試與 fixture 之後，沒有任何生產 plugin 呼叫過 `subagents.register()`。
+
+**判定：認帳不做，這是這一條唯一值得推翻的判斷。** 理由三條——(1) 今天零消費者，也零註冊者，沒有任何 plugin 要求「繼承父代理的對話」；(2) 這條窄是**我們自己選的**，不是基座缺，放寬的成本是一行型別加上想清楚 fork 的權限與 middleware 怎麼折（`foldSubAgents` 的 `{ ...spec }` 展開對 `ForkedSubAgent` 不會直接成立，它沒有 `systemPrompt`）；(3) 其餘四種後端（spawn／acp／claude-code／codex）基座根本沒有，那是決策 3 延後的那一類與定位差異，不在這一格。**需求出現時再開卡，而兩條絆索保證那天不會是「咦，什麼時候變得進得來了」。**
+
+**沒做、而且是刻意沒做的：組裝期不加執行期的剝除或拒絕。** 那要先決定「有人明著 `as` cast 進來」算不算威脅模型裡的事——今天零註冊者，這個問題沒有人在等答案。**但它現在是一個被釘住的現況，不是一個沒人知道的洞**：`fold.test.ts` 那條測試會在有人加了剝除的那天紅。
 
 **生命週期時刻那一軸不在這條裡。** `subagent/start`／`subagent/end` 兩個時刻的處置在第 3 條末——那問的是「時刻」，這條問的是「後端種類」，兩條接得上但不合併。
 
@@ -349,7 +368,7 @@ dsh 有 in-process／fork／spawn／acp／claude-code／codex 六種委派後端
 1. **Phase 5 的驗收句沒有逐條核。** `apps/web` 只確認了檔案存在與 `App.tsx` 檔頭；「完成度」是「存在」不是「驗過」。
 2. ~~**langchain 1.x middleware 有沒有 `beforeAgent`／`afterAgent` 或會話級鉤子**——決定第 3 條是一張卡還是一筆偏離。~~ **半題結案（2026-09-05）**：`langchain@1.5.10` 的 `agents/middleware/types.d.ts` 六個鉤子齊全（`beforeAgent`／`beforeModel`／`wrapModelCall`／`afterModel`／`afterAgent`／`wrapToolCall`），而且我們早就靠著它——`repeat-reminder.ts` 數過基座自己用 `beforeAgent` 7 次、`afterAgent` 1 次，`thread-pump.ts` 與 `wire-handler.ts` 都在跟 `beforeAgent` 的時序賽跑。所以「一張卡還是一筆偏離」這半：**卡**。~~**另一半仍未答**⋯第 3 條的開圖條件因此是**部分滿足**。~~ **另一半 2026-09-07 結案（[#212](https://github.com/DemianLi/nexus-agent/issues/212)，只讀原始碼）**：「會話級與每次 agent 呼叫不是同一個縫」這個**區分是對的**——dsh 確實有 `agent/session-start` 與 `agent/pre-step` 兩個不同的事件名，橋接分別訂它們——**但它不是未答的題**。那三個會話級時刻逐個對得到 #190 的第 1／2／3 格，三格都已經有結局，其中第 1 格由 [#201](https://github.com/DemianLi/nexus-agent/issues/201) 判為不是缺口。第 3 條因此收完，不是部分滿足。
 3. ~~**LangChain 工具執行的 `AbortSignal` 有沒有一路傳到 `wrapToolCall` 的 handler**——決定 `timeout-policy` 表達得出來嗎。~~ **結案（2026-09-04，[#148](https://github.com/DemianLi/nexus-agent/issues/148) 實測三條路都通）**。載體是工具上的 `defaultConfig: { timeout }`；dsh 原地換 `exec.signal` 那招在這個基座上不成立（`baseHandler` 用的是閉包裡的 `config.signal`）。[#162](https://github.com/DemianLi/nexus-agent/issues/162) 已據此落地，見 §五第 2 條的狀態。
-4. **`foldSubAgents` 對 `ForkedSubAgent` 的處理**——決定第 6 條是缺口還是已有。~~`AsyncSubAgent`~~ 那半 **2026-09-07 答了**（[#212](https://github.com/DemianLi/nexus-agent/issues/212) 順帶量到）：`registry.subagents.register()` 收 `SubAgent`，`AsyncSubAgent` **型別上就進不來**，所以那組 async 工具在目前的組裝裡永遠掛不上（`apps/harness/src/base-tools.ts:52-62` 檔頭）。
+4. ~~**`foldSubAgents` 對 `ForkedSubAgent` 的處理**——決定第 6 條是缺口還是已有。~~ **兩半都結案了（2026-09-07）**，答案同樣是「進不來」但理由不同：`AsyncSubAgent` 缺必填的 `graphId`（`apps/harness/src/base-tools.ts:52-62` 檔頭），`ForkedSubAgent` 是 `SubAgent.mode` 被窄成 `'handoff'` 字面量。**後者那種擋法會隨升版無聲消失**，所以釘了一條欄位絆索（`registry.test.ts`）；而**擋的只有 `tsc`**——`foldSubAgents` 不剝也不擋 `mode`，一個 `as` cast 就能把 `mode: 'fork'` 原樣送到基座，那個現況由第二條測試釘住（`fold.test.ts`）。逐條見 §五第 6 條。
 5. **Proteus `environments/` 底下的 `openhands/`、`swe-agent/`** 是 adapter 還是 bench 環境——`proteus/adapters/` 裡沒有對應檔，`ROADMAP.md` T1 把它們列為待做 harness，所以傾向是環境骨架，沒有進一步讀。
 6. **dsh `docs/subsystems/README.zh.md` 列的 53 個子系統頁與 51 個套件目錄的對應**——我以套件目錄為對照單位，沒有以子系統頁再對一次（例如 `agent-team` 在 `experimental/`、`token-meter` 在 `llm/`、`scope` 在 `core/`）。
 7. **`interaction/user-approval` 與我們 `registry.approvals` 的語意差**——只對了「一次性核准」這個標籤，沒有對 `ApprovalOutcome`、策略、審計事件的形狀。

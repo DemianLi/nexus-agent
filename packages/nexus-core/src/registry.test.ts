@@ -147,6 +147,42 @@ describe('subagents 註冊點', () => {
       'writer',
     ]);
   });
+
+  /**
+   * **fork 語意有兩道門，兩道都只由型別擋。**
+   *
+   * 基座的 `createDeepAgent({ subagents })` 收三種形狀：`SubAgent`（`mode?: 'handoff'`）、
+   * `ForkedSubAgent`（`mode: 'fork'`，繼承父代理的完整訊息歷史與系統提示詞）、以及帶
+   * `runnable` 的 `CompiledSubAgent`（`mode?: 'handoff' | 'fork'`）。我們的註冊點收的是
+   * `SubAgent`，而 `SubAgent.mode` 被窄成 `'handoff'` 這個字面量——所以後兩種在型別上
+   * 就進不來，`foldSubAgents` 交出去的永遠是 `SubAgent[]`。
+   *
+   * **擋的是 `tsc`，不是執行期。** 基座的 `isForkedSubAgent()` 認的是**存在的標記**
+   * （`mode === 'fork'`，不是「沒有 `systemPrompt`」），而我們這側沒有任何執行期檢查在看
+   * 那個欄位——把下面兩個 `@ts-expect-error` 拿掉，`register()` 照樣會成功。所以這條絆索的
+   * 全部載重在型別上。
+   *
+   * **它釘的是欄位，不是介面名**：`ForkedSubAgent` 這個名字今天進不來，明天也不會有人
+   * 硬寫它；真正會發生的是 `SubAgent.mode` 在某次升版後被加寬回 `'handoff' | 'fork'`，
+   * 那時這兩行會因為「沒有錯誤可期待」而紅。第三個斷言是配對的正面測試，擋的是相反的
+   * 那種漂移（欄位整個消失、或窄過頭到連 `handoff` 都寫不了）。
+   */
+  it('fork 與 compiled 兩種形狀在型別上進不來，handoff 進得來', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+
+    // @ts-expect-error `mode: 'fork'` 不是 `SubAgent`：那是 `ForkedSubAgent` 的必填標記。
+    registry.subagents.register({ name: 'forked', description: '繼承父代理的對話', mode: 'fork' });
+
+    // @ts-expect-error 帶 `runnable` 的是 `CompiledSubAgent`，它自己的 `mode` 收得下 'fork'。
+    registry.subagents.register({ name: 'compiled', description: '已編譯', runnable: {} });
+
+    expect(() =>
+      registry.subagents.register({ name: 'handoff', description: '隔離的', mode: 'handoff' }),
+    ).not.toThrow();
+
+    leave();
+  });
 });
 
 describe('capabilities 註冊點', () => {
