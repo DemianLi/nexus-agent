@@ -19,7 +19,7 @@
 
 **契約層落地了，而且被用過。** `PluginRegistry` 有 14 個欄位（9 個折進 `createDeepAgent` 的註冊點 ＋ 5 條不折的通道），`packages/` 底下 11 個生產 plugin 全走這條契約，`@nexus/plugin-echo` 靠 pnpm 相依隔離證明契約沒有偷偷要求伸手進組裝點。計劃書 §1 寫的形狀（命令式註冊、同層報錯、跨層遮蔽、fail-closed、載入期失敗）每一條都有對應的程式碼與測試。
 
-**廣度比 dsh 窄很多，但窄的地方分兩種。** dsh `packages/` 的 51 個頂層套件裡，我們有等價物的 8 個、部分的 14 個、沒有的 27 個、不適用的 2 個（**2026-09-05 更新過**：`guard` 與 `spill` 從「沒有」改成「部分」，理由見 §三小計）。27 個「沒有」裡 16 個是企業級與分散式的東西（`acp`／`sdk`／`typert`／`identity`／`settings`／`credentials`／`webhook`／`attachment`／`lsp`／`web`／`e2b`／`feedback`／`experimental`／`extensions`／`bundle`／`preset`）——那是定位差異，不是缺口。**真正算缺口的是 agent 迴圈本身會用到、而 dsh 的 base 組合預設就開著的那幾個**：compaction 由誰選門檻、迴圈衛生的兩個 guard（重複呼叫提醒、單次工具逾時）、生命週期鉤子面（會話開始／提示詞提交／停止三個時刻）、以及狀態幾乎都只在記憶體裡。**這份清單 2026-09-05 被 [#146](https://github.com/DemianLi/nexus-agent/issues/146) 消耗掉大半**（十七張卡，逐張的產出與偏離索引在那張圖的結案留言）：前兩項收完（§五第 1、2 條）；狀態那項做掉**會話日誌**這一軸（[#172](https://github.com/DemianLi/nexus-agent/issues/172)、[#174](https://github.com/DemianLi/nexus-agent/issues/174)，CLI 與 `serve` 的 `--session-log <dir>`），checkpointer 仍是 `MemorySaver`、仍沒有 storage，但那兩軸今天零消費者，判過不做（[#155](https://github.com/DemianLi/nexus-agent/issues/155)，見決策 4 的補記——**原文寫的「決策 4 的三軸」是錯的**：那三軸問的都是「LangGraph 的狀態存在哪」，會話日誌不在其中任何一軸上）。**留下來的是生命週期鉤子面**（§五第 3 條，開圖條件部分滿足——面要不要做已經答了，掛在哪個縫上還沒有）**與等著它的 context 注入**（第 5 條）。shell／sandbox／subprocess／terminal 是決策 3 明文延後的，不算意外。
+**廣度比 dsh 窄很多，但窄的地方分兩種。** dsh `packages/` 的 51 個頂層套件裡，我們有等價物的 8 個、部分的 14 個、沒有的 27 個、不適用的 2 個（**2026-09-05 更新過**：`guard` 與 `spill` 從「沒有」改成「部分」，理由見 §三小計）。27 個「沒有」裡 16 個是企業級與分散式的東西（`acp`／`sdk`／`typert`／`identity`／`settings`／`credentials`／`webhook`／`attachment`／`lsp`／`web`／`e2b`／`feedback`／`experimental`／`extensions`／`bundle`／`preset`）——那是定位差異，不是缺口。**真正算缺口的是 agent 迴圈本身會用到、而 dsh 的 base 組合預設就開著的那幾個**：compaction 由誰選門檻、迴圈衛生的兩個 guard（重複呼叫提醒、單次工具逾時）、生命週期鉤子面（會話開始／提示詞提交／停止三個時刻——**2026-09-07 更正**：那是三個**格號**不是三個空缺，見 §五第 3 條）、以及狀態幾乎都只在記憶體裡。**這份清單 2026-09-05 被 [#146](https://github.com/DemianLi/nexus-agent/issues/146) 消耗掉大半**（十七張卡，逐張的產出與偏離索引在那張圖的結案留言）：前兩項收完（§五第 1、2 條）；狀態那項做掉**會話日誌**這一軸（[#172](https://github.com/DemianLi/nexus-agent/issues/172)、[#174](https://github.com/DemianLi/nexus-agent/issues/174)，CLI 與 `serve` 的 `--session-log <dir>`），checkpointer 仍是 `MemorySaver`、仍沒有 storage，但那兩軸今天零消費者，判過不做（[#155](https://github.com/DemianLi/nexus-agent/issues/155)，見決策 4 的補記——**原文寫的「決策 4 的三軸」是錯的**：那三軸問的都是「LangGraph 的狀態存在哪」，會話日誌不在其中任何一軸上）。~~**留下來的是生命週期鉤子面**（§五第 3 條，開圖條件部分滿足——面要不要做已經答了，掛在哪個縫上還沒有）**與等著它的 context 注入**（第 5 條）。~~ **2026-09-07 這兩項都不再開著**（[#212](https://github.com/DemianLi/nexus-agent/issues/212)）：那個「面」不是第十個東西，它就是 [#190](https://github.com/DemianLi/nexus-agent/issues/190) 的九格——dsh 自己的橋接把五個鉤子逐個訂在其中五格上——而五格逐格有結局；縫因此也定了（第 2 格），第 5 條剩下的是開卡時選射程。**留下來的是第 6 條那半沒查的問題**（`ForkedSubAgent`）。shell／sandbox／subprocess／terminal 是決策 3 明文延後的，不算意外。
 
 **Proteus 不是另一個 harness，是量 harness 的儀器。** 它用 Docker 把 dsh、Pi、Aki 這些 harness 包起來，讓它們跨多個 episode 改寫自己的原始碼，然後量「harness 本身變了什麼」（結構距離、結晶測試、帶排列檢定的行為距離）。它對我們的意義不是抄設計——它是 Python、從外面包、是 research preview——而是它定義了一個 harness **可以被量**要具備什麼：無頭入口（有）、可讀的執行軌跡（**2026-09-05 起有了**，見 §4.5）、具名的可編輯 surface（memory／skills 目錄有，plugin 清單是程式碼）。**原文寫「這三件裡缺的那一件正好跟持久化是同一個缺口」，那句話 2026-09-05 起不成立**——落盤做完之後，缺的變成第三件（可編輯 surface），而它跟持久化無關。
 
@@ -218,7 +218,7 @@ Proteus 定義了「一個 harness 可以被量」的三個前提，對著我們
 
 排序準則：**agent 迴圈自己會碰到**（不是部署面、不是分散式）× **dsh base 預設就開著**（表示它認為每個 harness 都該有）× **我們的基座表達得出來**（表達不出來的要標偏離）× **大小**。企業級那 14 個不排；決策 3 延後的 4 個登記不排。
 
-**這張表的消耗狀況（2026-09-05）**：第 1、2 條收完，第 4 條做掉會話日誌那一軸、另兩軸判為零消費者不做——十七張卡掛在 [#146](https://github.com/DemianLi/nexus-agent/issues/146) 底下走完，逐張的產出與**偏離登記的索引**在那張圖的結案留言。**還開著的是第 3 條**（生命週期鉤子面，開圖條件部分滿足）**與等它的第 5 條**，加上第 6 條那個沒查的問題（§六第 4 條）。
+**這張表的消耗狀況（2026-09-07 更新）**：第 1、2 條收完，第 4 條做掉會話日誌那一軸、另兩軸判為零消費者不做——十七張卡掛在 [#146](https://github.com/DemianLi/nexus-agent/issues/146) 底下走完，逐張的產出與**偏離登記的索引**在那張圖的結案留言。~~**還開著的是第 3 條**（生命週期鉤子面，開圖條件部分滿足）**與等它的第 5 條**~~——**2026-09-07 起不是了**（[#212](https://github.com/DemianLi/nexus-agent/issues/212)）：第 3 條收完（那個「面」就是 #190 的九格，五格逐格有結局），第 5 條的縫因此定了、不再等，剩下的是它開卡時要選的射程。**這張表今天還開著的只有第 6 條**，而它其中一問也順帶答了（§六第 4 條）。
 
 ### 1. Compaction 的門檻與去向由我們選 —— 收完
 
@@ -254,15 +254,58 @@ Proteus 定義了「一個 harness 可以被量」的三個前提，對著我們
 - **`@nexus/plugin-guard` 這個載體最後沒有出現，而那是一筆偏離登記**：dsh 的 `guard/timeout-policy` 同時武裝截止時間、分類、措辭；我們的基座**自己就武裝**（工具上的 `defaultConfig: { timeout }` 經 `ensureConfig` 變成 `AbortSignal.timeout`，實測），樹上唯一有預算的 MCP 工具走的正是這條。一個只剩措辭的 plugin 沒有東西可武裝，而且照 #159 的結論，圍堵旁邊的行為藏在選配 plugin 裡等於沒有。**載體丟掉、紀律照抄**，理由與量到的東西寫在 `containment.ts` 檔頭。
 - **`TOOL_TIMEOUT` 分類碼刻意不發**：dsh 給 retry／sandbox／replay 路由用，我們三個消費者一個都不在。
 
-### 3. 生命週期鉤子面 —— 還開著，這份表剩下的主要一項
+### 3. 生命週期鉤子面 —— 收完（2026-09-07）：它不是第十個東西，是九格裡的五格
 
-**缺什麼**：dsh `hooks/` 給五個時刻：會話開始、提示詞提交、工具前、工具後、停止；鉤子可以帶模型可見訊息**阻塞**提示詞或工具呼叫、**附加**上下文、或**強制運行繼續**（`hooks/README.zh.md`）。我們有工具前後（`wrapToolCall`）、模型前後（`wrapModelCall`）、阻塞工具（`registry.approvals`）、關機（`lifecycle.onDispose`）；**沒有**會話開始（`turn/start` 事件只寫日誌，不能注入或阻塞）、提示詞提交攔截、停止攔截（「你還沒做完，繼續」這種）。
+**這一條原本寫著我們「沒有會話開始、提示詞提交攔截、停止攔截」。那是三個格號，而三格都已經有答案**（[#212](https://github.com/DemianLi/nexus-agent/issues/212)）。**過期的是理由，不是結論，所以沒有任何測試會紅**——這一條的散文從來沒有絆索守著，防過期靠的是它不再是第一手來源，見本條末。
 
-**為什麼需要**：這是 plugin 能介入 agent 生命週期的完整面。今天一個 plugin 想「每個會話開頭注入一段上下文」或「agent 說做完了之前先跑一次檢查」，沒有地方掛。dsh 的 `context/` 那整組（time-context 等）就是掛在這個面上。
+**缺什麼（原文，保留）**：dsh `hooks/` 給五個時刻：會話開始、提示詞提交、工具前、工具後、停止；鉤子可以帶模型可見訊息**阻塞**提示詞或工具呼叫、**附加**上下文、或**強制運行繼續**（`hooks/README.zh.md`）。
 
-**兩個要分開問的問題**：(a) 要不要這個**面**（我們自己的 plugin 用）；(b) 要不要**執行外部 `hooks.json`**（dsh 的兩個 bridge 做的事）。(a) 是架構題，(b) 是相容性題，先答 (a)。
+**那五個時刻逐個訂在 [#190](https://github.com/DemianLi/nexus-agent/issues/190) 的九格上。** dsh 自己的橋接就是證據（`packages/hooks/hooks-claude-code/src/index.ts`，對讀 SHA `d347e703908d0406b7a7ef80e3a0e594d86b2215`，已 `fetch` 對過與 upstream master 同顆）：
 
-**表達得出來嗎（2026-09-05 半題結案，見 §六第 2 條）**：`langchain@1.5.10` 的 `agents/middleware/types.d.ts` 六個鉤子齊全（`beforeAgent`／`beforeModel`／`wrapModelCall`／`afterModel`／`afterAgent`／`wrapToolCall`），而且我們早就靠著它——`repeat-reminder.ts` 數過基座自己用 `beforeAgent` 7 次、`afterAgent` 1 次，`thread-pump.ts` 與 `wire-handler.ts` 都在跟它的時序賽跑。所以「一張卡還是一筆偏離」這半的答案是**卡**，不必再退到入口層。**另一半仍未答，而它是這張圖的第一題**：dsh `hooks/` 的三個時刻是**會話級**的（一個會話一次），`beforeAgent` 是**每次 agent 呼叫**跑一次——不是同一個縫。所以開圖條件是**部分滿足**：要不要這個面已經不必先查基座，「掛在哪個縫上」還沒有答案。
+| Claude Code 鉤子 | 訂的攔截點 | 位置 | #190 格號 |
+| --- | --- | --- | --- |
+| `SessionStart` | `agent/session-start` | `:206` | 第 1 格 |
+| `UserPromptSubmit` | `agent/pre-step` | `:219` | 第 2 格 |
+| `PreToolUse` | `tools/pre-execute` | `:238` | 第 4 格 |
+| `PostToolUse` | `tools/post-execute` | `:247` | 第 7 格 |
+| `Stop` | `agent/turn-stopping` | `:270` | 第 3 格 |
+
+`hooks-codex` 訂**同樣五個**（`:188`／`:199`／`:225`／`:234`／`:260`）。dsh 明寫「『原生钩子』不是一个包——原生钩子只是一个普通的 Cordis 插件，订阅规范的生命周期事件」，`packages/hooks/` 三個套件是**橋接**，把使用者現成的 CC／Codex shell `hooks.json` 翻譯到那個介面。**所以「生命週期鉤子面」不是一個要另建的面，它就是那九格。**
+
+五格逐格的結局（`apps/harness/src/interception-index.test.ts` 是那份索引，#190 的結案留言是逐格的核對過程）：
+
+| 格 | 時刻 | 現況 |
+| --- | --- | --- |
+| 1 | `agent/session-start` | [#201](https://github.com/DemianLi/nexus-agent/issues/201) 判過**不是缺口**：dsh 那格是 `mode: 'emit'`、明著寫「a deliberate gap」；權限最弱＋消費者零＋時刻以 `SessionRegistry` 的建構存在（`session-registry.ts:170`），三條缺一不可 |
+| 2 | `agent/pre-step` | **佔住**：`beforeAgent`，唯一實作是 plan-mode（`packages/nexus-plugin-plan-mode/src/index.ts:390`）。`jumpTo: 'end'` 這條 reject 路徑實測做得到（[#192](https://github.com/DemianLi/nexus-agent/issues/192)）但我們零使用。權限差與**紀錄差**都登記在索引裡 |
+| 3 | `agent/turn-stopping` | **佔住，只佔一半**：`apps/harness/src/goal-driver.ts` 做的正是 dsh 那句「通过 continuation 实现的 `stop`」——目標沒達成時自己再開一輪（[#181](https://github.com/DemianLi/nexus-agent/issues/181)）。`agent.steer()` 沒有等價物，輪迴圈歸入口點所有，載體偏離已登記在該檔檔頭 |
+| 4 | `tools/pre-execute` | **佔住**，逐字對得上：`approvals.gate()`，`allow`／`deny`／`ask` 三欄與鏈底 allow 都對得上 |
+| 7 | `tools/post-execute` | **佔住**：`wrapToolCall` 的 `await handler(request)` 之後那一段。`additionalContexts` 的射程只到單一生產者，**第二個生產者出現就變偏離** |
+
+**「會話級 vs 每次 agent 呼叫不是同一個縫」這句話是對的，不要跟過期的結論一起丟掉。** dsh 確實有 `agent/session-start` **和** `agent/pre-step` 兩個不同的事件名，橋接把 `SessionStart` 訂到前者、`UserPromptSubmit` 訂到後者——它示範的是這兩個時刻**各有專屬的縫**。原文把這個區分當成「未答的第一題」，而它已經被答了：正因為第 1 格是專屬的會話級縫，我們這側對得上的不是 `beforeAgent`，是 `SessionRegistry` 的建構，而 #201 判過那不是缺口。
+
+**`afterAgent` 我們在用**：`packages/nexus-plugin-plan-mode/src/index.ts:394`，全樹**唯一**一處實作（`beforeAgent` 同樣唯一，`:390`）。所以缺的從來不是鉤子。
+
+**為什麼需要（原文那兩個例子要分開，其中一個舉錯了縫）**：
+
+- 「agent 說做完了之前先跑一次檢查」——**第 3 格，goal-driver 就在做**，差別在它走的是入口點自己的輪迴圈，不是一條可訂閱的通道。
+- 「每個會話開頭注入一段上下文」——原文接著寫「dsh 的 `context/` 那整組就是掛在這個面上」，而那句話指錯了格。逐個量過：`context/` **六個套件裡四個訂 `agent/pre-step`**（`agent-instructions:313`、`session-reference:113`、`time-context:180`、`tmux-context:236`），`file-reference-local` 訂的是 `agent/created:90`／`agent/disposed:91`／`session/event:96`，`file-reference` 是純語法 seam 不訂事件。**零個訂 `agent/session-start`。** 所以第 5 條要掛的縫是**第 2 格**，我們今天就有，還有一個現成的佔用者示範。
+
+**兩個要分開問的問題**：
+
+- **(a) 要不要這個面（我們自己的 plugin 用）——答完了，面不必另建。** 九格就是那個面，五格逐格有結局；#190 走完之後這一格剩下的是索引裡登記的那幾筆權限差與紀錄差，不是一個缺席的面。原本「開圖條件部分滿足」那句連同它的理由一起作廢。
+- **(b) 要不要執行外部 `hooks.json`（dsh 兩個 bridge 做的事）——前置沒了，現在可以問。** 開卡之前先把價錢寫在這裡，三條都是量到的，不是推測：
+  1. **dsh 在這一格自己有沒解的瑕疵。** `hooks-claude-code/src/index.ts:205` 帶著 `TODO(session-start-gating): add a startup gate before promising first-turn delivery`——注入是 detached、best-effort，**可能錯過第一個請求**，快照測試因此 10 次重放 10 次失敗、被移出快照矩陣（#201 量過）。
+  2. **那個瑕疵不只在 session-start。** `SubagentStart`（`:284`）走的是**同一個** `detached.track`，所以照抄會把它一起抄過來。
+  3. **兩個橋接的覆蓋不對稱。** `hooks-codex` 只訂五個，**沒有 subagent 那兩格**。
+
+**subagent 的兩個時刻，這張表跟 #190 都漏了**：`subagent/start`（`hooks-claude-code:281`）／`subagent/end`（`:291`）。**兩張圖都漏是因為來源本身沒列**——#190 的九格出自 dsh 的設計筆記 `2026-06-30-interception-extension-points.zh.md`，那份筆記 grep `subagent` **零命中**。逐個的處置見下：
+
+- **`subagent/end` 判為不是缺口**，理由是**消費者一個都不存在**，與第 9 格（`tools/result`）同型：dsh 那格是 `mode: 'emit'`、只觀測；我們的 `SessionEventType` 十種（`session-log.ts:71-81`）**一顆 subagent 事件也沒有**，而更近的那個缺席（工具事件）已經婉拒過一個指名道姓的消費者（#180 第五節，理由在 `goal-driver.ts` 檔頭）。
+- **`subagent/start` 認帳，持有人是第 5 條那張卡。** dsh 那格與第 1 格**逐字同型**：`api-catalog.ts:3333` 是 `mode: 'emit'`，描述與第 1 格（`:3037`）一樣寫「Use `agent.inject()` to seed model-facing context. This is a notification, not a veto」——橋接能 `child.inject(context)` 是因為窗口裡從 `ctx.agents` 拿得到活著的子 agent，那是**服務**給的，不是事件給的權限。但 #201 那三條在這一格**只成立兩條半**：權限最弱 ✓、我們這側零佔用者（`grep -rn "subagent/" packages apps --include='*.ts'` 零命中）✓、而「時刻以建構存在」**只覆蓋靜態注入**——`foldSubAgents`（`packages/nexus-core/src/fold.ts:747`）組裝期逐個 subagent 注的是 middleware／tools／permissions，dsh 的 `inject()` 種的是**模型可見上下文**，`time-context` 那型要的是每次新鮮的值，組裝期表達不出來。**所以它不是乾淨的「不是缺口」，它是第 5 條在 subagent 那一側的載體**，見第 5 條的射程那一段。
+- 順帶量到、不在這張卡射程內：`agent/created`／`agent/disposed`（`file-reference-local` 訂的）**也不在九格裡**，一併記給 #190 的索引，這裡不判。
+
+**改完之後靠什麼讓它下次過期時被發現**：**不加新絆索，改讓這段散文不再是第一手來源。** 兩條硬約束擋著加絆索——`interception-index.test.ts` 的軸是「誰佔住」（subagent 兩格零佔用者，沒有列可寫），而一個掃空的結構 gate 會永遠綠。所以上面每一條結論都明著 cite 到帶絆索或帶論證的地方：五格逐格 → `interception-index.test.ts` 與 #190、第 1 格 → #201、第 2 格的 reject 路徑 → #192、佔用者的行號 → 那幾個檔案自己的 JSDoc（索引那條斷言要求佔用者身上出現時刻名）。**這段散文只轉述，不承重**；它下次過期時，紅的會是那些地方。
 
 ### 4. 持久化 —— 會話日誌那一軸收完，另兩軸判過不做
 
@@ -274,13 +317,26 @@ Proteus 定義了「一個 harness 可以被量」的三個前提，對著我們
 
 **表達得出來嗎**：checkpointer 那軸 LangGraph 有現成的（`SqliteSaver`／`PostgresSaver`，但它拉原生的 `better-sqlite3`，而 `onlyBuiltDependencies` 只放了 `esbuild`）；會話日誌那軸是我們自己的東西，落盤格式照了 dsh 的 jsonl。**「決策 4 說三軸要一起收斂」那句話本身是錯的**——[#155](https://github.com/DemianLi/nexus-agent/issues/155) 查出來那三軸（checkpointer／store／backend）問的都是「LangGraph 的狀態存在哪」，會話日誌不在其中任何一軸上；真正的三軸是**會話日誌／checkpointer／storage**，而三者的「何時寫／寫什麼／誰讀回」沒有一格重疊，所以不必也收不到一起去（`.docs/development-plan.md` 決策 4 的補記）。
 
-### 5. Context 注入插件 —— 一張小卡，等第 3 條
+### 5. Context 注入插件 —— 一張小卡，**不再等第 3 條**，但開卡的第一個決定是射程
 
-`time-context`（現在時間、時區、經過時長）是 dsh `context/` 裡最小的一個；`agent-instructions` 我們有（`@nexus/plugin-memory`）。dsh 讓注入的上下文以 user 角色訊息進會話歷史，所以可回放、可壓縮。表達得出來（`wrapModelCall` 加訊息），但它自然掛在第 3 條那個面上——面定了再做。
+`time-context`（現在時間、時區、經過時長）是 dsh `context/` 裡最小的一個；`agent-instructions` 我們有（`@nexus/plugin-memory`）。dsh 讓注入的上下文以 user 角色訊息進會話歷史，所以可回放、可壓縮。
 
-### 6. subagent 的其他後端 —— 待驗
+**縫定了（2026-09-07，[#212](https://github.com/DemianLi/nexus-agent/issues/212)）**：原文寫「它自然掛在第 3 條那個面上——面定了再做」，而第 3 條收完之後那個等待對象不存在了。**縫是第 2 格（`agent/pre-step` ≒ `beforeAgent`）**，而且不是推論——dsh 自己的 `context/` 六個套件裡四個訂的就是 `agent/pre-step`，零個訂 `agent/session-start`（逐個量在第 3 條）。我們這側那一格佔住了，`plan-mode` 是現成的示範（`packages/nexus-plugin-plan-mode/src/index.ts:390`）。
 
-dsh 有 in-process／fork／spawn／acp／claude-code／codex 六種委派後端；我們只有 deepagents 的 in-process `SubAgent`。deepagents 的 `.d.ts` 裡有 `ForkedSubAgent`、`AsyncSubAgent`，我們的 `foldSubAgents` 有沒有處理它們，**沒查**（§六）。查完再決定是缺口還是已經有。
+**開卡的第一個決定是射程，因為那條線正好切在一個已知缺口上。** `foldSubAgents` 的檔頭寫著「**其餘 plugin middleware 射不進 subagent 這件事還在**」（`packages/nexus-core/src/fold.ts:714` 那段 JSDoc）——所以一個掛 `beforeAgent` 的 plugin middleware **射程只到 root**：
+
+- **選 root only**：卡是小卡，`wrapModelCall`／`beforeAgent` 加訊息就完了，而 `subagent/start` 那格維持認帳、不做。
+- **選涵蓋 subagent**：那半沒有現成的縫。`subagent/start` 在我們樹上零等價物，而組裝期的 `foldSubAgents` 只注得了靜態的東西（middleware／tools／permissions），`time-context` 那型要的每次新鮮的值它表達不出來。**那一半是一張獨立的卡，不是這張的一部分。**
+
+**別默默選 root only 就當作做完了**——那正是這張表要防的那種過期。射程寫進卡片標題或 destination 裡。
+
+### 6. subagent 的其他後端 —— 待驗，其中一問 2026-09-07 順帶答了
+
+dsh 有 in-process／fork／spawn／acp／claude-code／codex 六種委派後端；我們只有 deepagents 的 in-process `SubAgent`。deepagents 的 `.d.ts` 裡有 `ForkedSubAgent`、`AsyncSubAgent`，我們的 `foldSubAgents` 有沒有處理它們，原本整條都**沒查**（§六）。
+
+**`AsyncSubAgent` 那半答了**（[#212](https://github.com/DemianLi/nexus-agent/issues/212) 順帶量到）：`apps/harness/src/base-tools.ts:52-62` 的檔頭已經寫著——基座只在 `subagents` 裡出現 `AsyncSubAgent`（帶 `graphId` 的那種）時才掛上那組 async 工具，而 `registry.subagents.register()` 收的是 `SubAgent`，**型別上就進不來**，所以那五個 async 工具名在目前的組裝裡永遠掛不上。**`ForkedSubAgent` 仍未查。**
+
+**生命週期時刻那一軸不在這條裡。** `subagent/start`／`subagent/end` 兩個時刻的處置在第 3 條末——那問的是「時刻」，這條問的是「後端種類」，兩條接得上但不合併。
 
 ### 7. 登記不排
 
@@ -291,9 +347,9 @@ dsh 有 in-process／fork／spawn／acp／claude-code／codex 六種委派後端
 ## 六、沒查清楚的
 
 1. **Phase 5 的驗收句沒有逐條核。** `apps/web` 只確認了檔案存在與 `App.tsx` 檔頭；「完成度」是「存在」不是「驗過」。
-2. ~~**langchain 1.x middleware 有沒有 `beforeAgent`／`afterAgent` 或會話級鉤子**——決定第 3 條是一張卡還是一筆偏離。~~ **半題結案（2026-09-05）**：`langchain@1.5.10` 的 `agents/middleware/types.d.ts` 六個鉤子齊全（`beforeAgent`／`beforeModel`／`wrapModelCall`／`afterModel`／`afterAgent`／`wrapToolCall`），而且我們早就靠著它——`repeat-reminder.ts` 數過基座自己用 `beforeAgent` 7 次、`afterAgent` 1 次，`thread-pump.ts` 與 `wire-handler.ts` 都在跟 `beforeAgent` 的時序賽跑。所以「一張卡還是一筆偏離」這半：**卡**。**另一半仍未答**：dsh `hooks/` 的三個時刻是**會話級**的（會話開始／提示詞提交／停止），而 `beforeAgent` 是每次 agent 呼叫跑一次——不是同一個縫。第 3 條的開圖條件因此是**部分滿足**。
+2. ~~**langchain 1.x middleware 有沒有 `beforeAgent`／`afterAgent` 或會話級鉤子**——決定第 3 條是一張卡還是一筆偏離。~~ **半題結案（2026-09-05）**：`langchain@1.5.10` 的 `agents/middleware/types.d.ts` 六個鉤子齊全（`beforeAgent`／`beforeModel`／`wrapModelCall`／`afterModel`／`afterAgent`／`wrapToolCall`），而且我們早就靠著它——`repeat-reminder.ts` 數過基座自己用 `beforeAgent` 7 次、`afterAgent` 1 次，`thread-pump.ts` 與 `wire-handler.ts` 都在跟 `beforeAgent` 的時序賽跑。所以「一張卡還是一筆偏離」這半：**卡**。~~**另一半仍未答**⋯第 3 條的開圖條件因此是**部分滿足**。~~ **另一半 2026-09-07 結案（[#212](https://github.com/DemianLi/nexus-agent/issues/212)，只讀原始碼）**：「會話級與每次 agent 呼叫不是同一個縫」這個**區分是對的**——dsh 確實有 `agent/session-start` 與 `agent/pre-step` 兩個不同的事件名，橋接分別訂它們——**但它不是未答的題**。那三個會話級時刻逐個對得到 #190 的第 1／2／3 格，三格都已經有結局，其中第 1 格由 [#201](https://github.com/DemianLi/nexus-agent/issues/201) 判為不是缺口。第 3 條因此收完，不是部分滿足。
 3. ~~**LangChain 工具執行的 `AbortSignal` 有沒有一路傳到 `wrapToolCall` 的 handler**——決定 `timeout-policy` 表達得出來嗎。~~ **結案（2026-09-04，[#148](https://github.com/DemianLi/nexus-agent/issues/148) 實測三條路都通）**。載體是工具上的 `defaultConfig: { timeout }`；dsh 原地換 `exec.signal` 那招在這個基座上不成立（`baseHandler` 用的是閉包裡的 `config.signal`）。[#162](https://github.com/DemianLi/nexus-agent/issues/162) 已據此落地，見 §五第 2 條的狀態。
-4. **`foldSubAgents` 對 `ForkedSubAgent`／`AsyncSubAgent` 的處理**——決定第 6 條是缺口還是已有。
+4. **`foldSubAgents` 對 `ForkedSubAgent` 的處理**——決定第 6 條是缺口還是已有。~~`AsyncSubAgent`~~ 那半 **2026-09-07 答了**（[#212](https://github.com/DemianLi/nexus-agent/issues/212) 順帶量到）：`registry.subagents.register()` 收 `SubAgent`，`AsyncSubAgent` **型別上就進不來**，所以那組 async 工具在目前的組裝裡永遠掛不上（`apps/harness/src/base-tools.ts:52-62` 檔頭）。
 5. **Proteus `environments/` 底下的 `openhands/`、`swe-agent/`** 是 adapter 還是 bench 環境——`proteus/adapters/` 裡沒有對應檔，`ROADMAP.md` T1 把它們列為待做 harness，所以傾向是環境骨架，沒有進一步讀。
 6. **dsh `docs/subsystems/README.zh.md` 列的 53 個子系統頁與 51 個套件目錄的對應**——我以套件目錄為對照單位，沒有以子系統頁再對一次（例如 `agent-team` 在 `experimental/`、`token-meter` 在 `llm/`、`scope` 在 `core/`）。
 7. **`interaction/user-approval` 與我們 `registry.approvals` 的語意差**——只對了「一次性核准」這個標籤，沒有對 `ApprovalOutcome`、策略、審計事件的形狀。
