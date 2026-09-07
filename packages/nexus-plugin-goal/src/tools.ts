@@ -37,6 +37,50 @@
  * 它確實沒有作用面；而這張卡一開那條路，少了它就是**模型第一輪碰壁就可以把自己 block
  * 出迴圈**。它不是一個獨立功能，是那條授權路徑的配套。
  *
+ * ## 門檻只數輪數，「同一件事」那一半 dsh 明著交給模型——這是照抄進來的缺口
+ *
+ * 閘門本體（下面那一段，對讀 dsh 的 `index.ts:298-305`）比的是
+ * `authority.goal.roundsStarted < blockedAfterConsecutiveRounds`，**一個純粹的輪次
+ * 計數器**。它沒有、也沒打算比對兩輪的阻塞理由。dsh 把另外那一半寫在 `update_goal`
+ * 自己的說明裡（`index.ts:237-238`）：
+ *
+ * > blocked is rejected before the configured minimum round count; **the model remains
+ * > responsible for judging that the same condition persisted** across those rounds and
+ * > must explain it in `blocked_reason`.
+ *
+ * 整個 `packages/goal` 掃過，`same condition`／`persists` 這組字**只出現在那兩處模型面
+ * 的字串裡**（`guidance()` 與工具說明）。`goal-round-driver/src/invariant.ts` 管的是續行
+ * 提示詞重建得出來，跟這條政策無關。**dsh 在任何地方都沒有機械地檢查持續性。**
+ *
+ * 所以這個名字承諾了兩件沒有人在執行的事：
+ *
+ * - **連撞三件不同的事，第 3 輪照樣過關。** 擋的是輪數，不是同一件事。
+ * - **`roundsStarted` 是目標層級的累計數**，pause／resume 之後接著算，所以連「連續」
+ *   這個字面也不成立。
+ *
+ * **這不是 bug，是刻意的委派**，而我們是忠實的 port（同一個計數器閘、同一個
+ * `model-reported` 落庫、`blocked_reason` 必填，連 {@link updateDescription} 裡那句
+ * 「difficulty, uncertainty, or useful remaining work is not blocked」都逐字帶著）。
+ * **沒有偏離要登記，所以缺口也是照抄進來的。**
+ *
+ * 撐住被交出去那一半的東西有三件，全部是紀錄不是強制：`blocked_reason` 必填且非空、
+ * 落庫時打上 {@link GOAL_MODEL_REPORTED_CODE}、以及排除條款在模型面說得夠白。前兩件
+ * 讓模型的判斷**留得下痕跡**——harness 不驗它，但記得它。
+ *
+ * ## 賭注：我們賭模型撐得住那一半，而今天零 live 證據
+ *
+ * [#187](https://github.com/DemianLi/nexus-agent/issues/187) 量過的是**擋住**那一側：
+ * 2026-09-05 的一跑裡模型第 2 輪報 blocked 被擋、讀懂了、停手回頭找人，沒有重試迴圈。
+ * **放行那一側每一個機械環節都有離線覆蓋**（`tools.test.ts` 的「撐到第 3 輪就過得去」
+ * 與「blocked 的收尾指示帶著模型自己報的那句話」）。
+ *
+ * 沒有證據的是**模型那一半**：它報的 `blocked_reason` 指的是一個具體的外部條件，還是
+ * 「難」？第 3 輪的理由跟第 1 輪是不是同一件事？**專門設計一跑答不了這題**——要讓模型
+ * 撐到第 3 輪才報 blocked，題目就得是外部條件明確且持續不成立的，那理由當然具體，是我們
+ * 把具體性寫進題目裡的。判準與觸發條件寫在 #187 上。
+ *
+ * **看到第一則把「難」寫進 `blocked_reason` 的紀錄那天，這一段要重寫。**
+ *
  * ## 政策文字住在工具說明裡，不是一個 prompt 章節——這是一筆載體偏離
  *
  * dsh 註冊一個獨立的 `tool:goal` 系統提示詞章節（`ctx.systemPrompt.section`）。我們的
