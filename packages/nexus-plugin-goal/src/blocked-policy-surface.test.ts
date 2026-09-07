@@ -60,10 +60,12 @@ const CURRENT_ROUND = 2;
 /**
  * 自己組一次，不借 `tools.test.ts` 的 `bench()`。
  *
- * **讀的是註冊表交出來的那顆工具**，不是 `updateDescription()` 的回傳值：模型讀到的是
- * 前者。一個「算對了字串但沒接上工具」的實作要紅在這裡。
+ * **讀的是註冊表交出來的那顆工具**，不是 `tools.ts` 裡那個私有 `updateDescription()`
+ * 的回傳值：模型讀到的是前者。一個「算對了字串但沒接上工具」的實作要紅在這裡。
+ *
+ * 名字刻意跟那個私有函式**分開**——這一份的整個重點就是那兩者不是同一個東西。
  */
-function updateDescription(): string {
+function registeredDescription(): string {
   const registry = createRegistry();
   const exit = registry.enter({ id: 'goal#0', name: 'goal' });
   createGoalPlugin({ blockedAfterConsecutiveRounds: THRESHOLD }).apply(registry);
@@ -107,7 +109,7 @@ const DESTINATION =
 describe('blocked 政策的模型面', () => {
   it.each(CLAUSES)('事前那一面還說著：$what', ({ phrase }) => {
     expect(
-      updateDescription(),
+      registeredDescription(),
       `update_goal 的說明裡找不到「${phrase}」。\n${DESTINATION}`,
     ).toContain(phrase);
   });
@@ -117,7 +119,7 @@ describe('blocked 政策的模型面', () => {
    * 預設值 3 不准出現在一個門檻是 5 的組裝裡。
    */
   it('事前那一面帶的是這一次的門檻，不是預設值', () => {
-    const description = updateDescription();
+    const description = registeredDescription();
     expect(
       description,
       `門檻是 ${THRESHOLD}，說明裡卻還留著預設的 3。\n${DESTINATION}`,
