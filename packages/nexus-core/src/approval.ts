@@ -75,9 +75,24 @@ export type PreToolListener = (
  * **三格分開不是形式**——[#111](https://github.com/DemianLi/nexus-agent/issues/111) 的
  * (b) 拍板「兩個都要」，而 dsh 的兩個來源答的是不同的問題：`ApprovalPolicy: 'never'`
  * 問的是**政策**（管道在，答案恆定是不），`ctx.get('approval') === undefined` 問的是
- * **能力**（根本沒有管道）。dsh 的四個 deny reason 字串刻意各不相同，JSDoc 明說是為了
- * 讓模型分得出 “a human "no"” 與 “an absent approval channel”。收斂成同一句就等於把
- * 這一格的價值丟掉。
+ * **能力**（根本沒有管道）。**dsh 的三個非授權結果各自帶不同的 deny 理由**，`serviceAsk`
+ * 的 JSDoc 明說那是為了讓模型分得出 “a human "no"” 與 “an absent approval channel”，
+ * 逐字是 “the three non-grants deny with distinct reasons”
+ * （`references/deepseek-harness/packages/core/tools/src/index.ts`，SHA
+ * `d347e703908d0406b7a7ef80e3a0e594d86b2215`；**引句比行號耐得住**——dsh 那邊搬了程式碼，
+ * grep 那句話還找得到）。
+ *
+ * **三是結果詞彙，不是數字串。** 三 ＝ `ApprovalOutcome` 四值裡的非授權那三個。
+ * `serviceAsk` 今天實際會回**五**條不同的 deny 字串，多出來的兩條是 pre-dispatch 的降級
+ * （沒有 service、沒有 agent），落在 `ApprovalOutcome` 之外、也就落在那句引文的射程之外。
+ * 數字串數到五、引文說三，兩個讀法都成立——**別再把它改回一個兩邊都不是的數**
+ * （原本寫的「四」就是這麼來的，見
+ * [#223](https://github.com/DemianLi/nexus-agent/issues/223)）。
+ *
+ * **數量對上不等於成員對得上。** dsh 的三個是 `rejected`／`cancelled`／`unavailable`，
+ * 我們的三格是 `human`／`policy-never`／`no-channel`，`cancelled` 在我們這側沒有對應物。
+ * 抄過來的是「分得開才有價值」這條紀律，不是一張對照表。收斂成同一句就等於把這一格的
+ * 價值丟掉。
  */
 export type ApprovalChannel =
   /** 有人在，`ask` 真的會停下來問。 */
@@ -136,6 +151,22 @@ function denial(exec: ToolExecution, reason: string): ToolMessage {
  * 這裡是逐次呼叫各自判斷，所以 `actionRequests` 恆長度 1，那個抹除不存在。
  * **代價是同一批裡排在前面的工具在人被問到時已經跑完了**——基座是問之前一個都沒跑。
  * 兩種都不是全有全無，差別在副作用落在問之前還是問之後。實測見 #111 的 spike 留言。
+ *
+ * **核准這件事在日誌上一顆事件都沒有。** dsh 每次 request 追加一對 `approval/asked` ＋
+ * `approval/decided`（`references/deepseek-harness/packages/interaction/user-approval/src/types.ts:44-58`，
+ * log-only 的審計，帶 id／工具名／結果）。我們這側三件都量過（2026-09-08）：
+ *
+ * - `deny`／`policy-never`／`no-channel` 三條路**一顆都不記**——那三個出口只回一則
+ *   `denial()`，這個檔案裡沒有任何 `append`；
+ * - 人那條路只有一顆 `interrupt/raised`，**只帶 `interruptId`**（`session-log.ts` 的酬載型別
+ *   就只有那一個欄位），不帶工具名、call id、理由；
+ * - **結果從來沒進日誌**——`wire-handler.ts` 收到 `decisions` 之後零個 `append`（全檔零個），
+ *   日誌上只剩 `turn/start` 的 resume 那一格，而它分不出核准與拒絕。
+ *
+ * **這是認帳不做，不是待辦。** 結局與兩條重開條件見
+ * [#220](https://github.com/DemianLi/nexus-agent/issues/220)；閱讀面在
+ * `apps/harness/src/interception-index.test.ts` 第 4 列的紀錄差，**源碼散文（這裡）才是第一
+ * 產物**。
  *
  * @param listeners - 依註冊順序的 listener。
  * @param channel - 這次組裝有沒有人可以按核准。
