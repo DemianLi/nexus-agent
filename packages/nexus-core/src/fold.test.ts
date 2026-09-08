@@ -494,6 +494,33 @@ describe('approvals 註冊點', () => {
   });
 });
 
+describe('fork 標記的去向', () => {
+  /**
+   * **型別是這條路上唯一的守衛，`foldSubAgents` 不補第二道。**
+   *
+   * `registry.subagents.register()` 收 `SubAgent`，而 `SubAgent.mode` 被窄成 `'handoff'`
+   * 字面量，所以 `ForkedSubAgent` 寫不進來——那條**釘欄位**的絆索在 `registry.test.ts`。
+   * **但那全部是 `tsc` 的事**：`foldSubAgents` 是 `{ ...spec }` 展開，它不剝也不擋 `mode`，
+   * 所以一個 `as` cast（或一個被放寬的變數）就能讓 `mode: 'fork'` 一路走到
+   * `createDeepAgent`——而基座的 `isForkedSubAgent()` 認的正是這個**存在的標記**
+   * （`'mode' in value && value.mode === 'fork'`），那個 subagent 於是繼承父代理的整段對話。
+   *
+   * **這條釘的是現況本身，不是一個守衛**：帶著就帶著。它的用處有兩個——哪天有人在組裝期
+   * 加了剝除或拒絕，這裡會紅，而那是一個該被看見的行為改變；哪天型別那條窄失效了，這裡
+   * 說明失效之後會發生什麼。
+   *
+   * 今天這條路上**零佔用者**：扣掉測試與 fixture 之後沒有任何生產 plugin 註冊 subagent。
+   */
+  it('被 cast 進來的 fork 標記，fold 原樣帶到基座——擋的是型別，不是組裝', async () => {
+    const forked = { name: 'forked', description: '繼承父代理的對話', mode: 'fork' };
+    const params = await fold([
+      fakePlugin('team', (r) => void r.subagents.register(forked as unknown as SubAgent)),
+    ]);
+    expect(params.subagents).toHaveLength(1);
+    expect((params.subagents[0] as { mode?: string }).mode).toBe('fork');
+  });
+});
+
 describe('每個 subagent 的有效工具集合', () => {
   it('全域 tool 出現在每個 subagent 的集合裡', async () => {
     const params = await fold([
