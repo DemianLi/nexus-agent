@@ -54,6 +54,10 @@
  * 9（`tools/result`）格今天沒有佔用者，所以索引裡沒有它們的列——**這一份索引的軸是「誰佔住」，
  * 空格沒有東西可指**。第 5 與第 8 格是 #190 的候選 4，第 9 格見上面的缺口帳。
  *
+ * **九格之外的縫也沒有列。** dsh 的 `approval/request`（應答者 waterfall）不是那九個時刻名
+ * 之一，落不進這個軸；它記在第 4 列的權限差裡，因為第 4 格是我們這側唯一的提問者。規矩往
+ * 前推是一句話：**軸就是那九格，九格之外的東西只能掛在有關係的那一列上，不另開列。**
+ *
  * ## dsh 那側的字串
  *
  * 九個時刻名逐字對過 `references/deepseek-harness`，SHA
@@ -161,8 +165,30 @@ const INDEX: readonly InterceptionRow[] = [
     moment: 'tools/pre-execute',
     permission: 'waterfall，allow／deny／ask',
     occupants: ['packages/nexus-core/src/approval.ts'],
-    permissionDelta: undefined,
-    recordDelta: undefined,
+    permissionDelta:
+      '**三格決策詞彙對得上，`ask` 的去向對不上。** dsh 的 `ask` 送進一條**可組合的應答者' +
+      ' waterfall**（`approval/request`，' +
+      '`references/deepseek-harness/packages/interaction/user-approval/src/types.ts:85`）：回一個' +
+      '結果就是替那個 agent 作答，否則 `next()`，UI 通道與 ACP 橋接各是一位應答者。' +
+      '我們的 `registry.approvals` **只收提問者**（`gate()`），應答者是 `approval.ts` 裡寫死的' +
+      ' `interrupt(...)`，而 `ApprovalChannel` 是 `fold.ts` 折疊當下的一個判決、**不是掛點**，' +
+      '所以機器應答者在我們這側沒有位置可掛。結果詞彙也跟著窄一格：dsh 的 `ApprovalOutcome`' +
+      ' 四值（`types.ts:32`），我們只有 approve／reject，**`cancelled` 沒有表達式**。' +
+      '**`approval/request` 是第十條縫，不在 #190 那九個時刻名裡**，所以它沒有自己的列；' +
+      '記在這一列是因為第 4 格是我們這側**唯一的提問者**' +
+      '（`packages/nexus-plugin-plan-mode/src/index.ts:525`，`exit_plan_mode` 回 `ask`）。',
+    recordDelta:
+      '**核准這件事一顆事件都沒有。** dsh 每次 request 追加 `approval/asked` ＋ ' +
+      '`approval/decided`（`user-approval/src/types.ts:44-58`，log-only audit，帶 id／工具名／' +
+      'call id／理由／結果），另有一個 invariant 在同一個未結束的輪次內按 id 配對。我們這側：' +
+      '`deny`／`policy-never`／`no-channel` 三條路**一顆都不記**（`approval.ts` 的 `denial()` ' +
+      '只回一則 ToolMessage）；人那條路只有一顆 `interrupt/raised`，**只帶 `interruptId`**；' +
+      '**結果從來沒進日誌**（`apps/harness/src/wire-handler.ts` 收到 `decisions` 之後零個 ' +
+      '`append`），日誌上只剩 `turn/start` 的 resume 那一格，而它分不出核准與拒絕。' +
+      '兩個生產者都在圖外（`apps/harness/src/thread-pump.ts:384`、`apps/harness/src/cli.ts:733`）' +
+      '——**與第 2 列同一個結構成因，這是第二個實例**。' +
+      '**這不是缺口帳第 3 筆**：那一筆是工具事件（對 dsh 的 `tool/call`↔`tool/result`），' +
+      '這一筆是核准自己那兩顆，宣告在別的套件、別的事件名上。**兩筆分開，不要合。**',
     frequencyDelta: UNMEASURED,
   },
   {
@@ -214,6 +240,23 @@ const FREQUENCY_ANCHOR = {
   phrase: 'beforeAgent',
 } as const;
 
+/**
+ * 第 4 列紀錄差的**承重事實**：`SessionEventType` 那個聯集裡沒有任何 `approval/` 開頭的
+ * 事件名——核准在我們的日誌上完全不留痕跡。
+ *
+ * **這條是翻面寫的**：它今天綠，而那兩顆事件真的落地的那天它會紅，紅的地方正好是要改的
+ * 那一欄。掃的是聯集的寫法（`| 'approval/`）而不是整個檔案，所以散文裡提到 dsh 那兩顆
+ * 事件名不會誤觸。
+ *
+ * **它釘不住那一欄的其餘部分**：`interrupt/raised` 帶什麼、`wire-handler.ts` 記不記結果、
+ * 生產者在不在圖外，都要自己讀。這是這份索引每一條斷言共同的限制，見檔頭。
+ */
+const RECORD_ANCHOR = {
+  cell: 4,
+  path: 'packages/nexus-core/src/session-log.ts',
+  absent: "| 'approval/",
+} as const;
+
 describe('攔截時刻索引', () => {
   it(`剛好 ${EXPECTED_ROWS} 列，${EXPECTED_SITES} 個佔用位址`, () => {
     // 兩個數字都釘死，因為這條測試的失敗模式是**沒東西可掃**：只驗「每一列都對」的話，
@@ -245,5 +288,17 @@ describe('攔截時刻索引', () => {
     expect(source, `${FREQUENCY_ANCHOR.path} 不再是 ${FREQUENCY_ANCHOR.phrase} 形狀`).toContain(
       FREQUENCY_ANCHOR.phrase,
     );
+  });
+
+  it(`第 ${RECORD_ANCHOR.cell} 格的紀錄差靠「一顆核准事件都沒有」撐著`, () => {
+    const row = INDEX.find((candidate) => candidate.cell === RECORD_ANCHOR.cell);
+    // 這一列的紀錄差是量過的，不能退回 `undefined`（那等於宣稱沒有紀錄面的缺口）。
+    expect(row?.recordDelta).toBeTypeOf('string');
+    const source = readFileSync(join(REPO_ROOT, RECORD_ANCHOR.path), 'utf8');
+    expect(
+      source,
+      `${RECORD_ANCHOR.path} 的 SessionEventType 多了核准事件，` +
+        `第 ${RECORD_ANCHOR.cell} 列的紀錄差要跟著重寫`,
+    ).not.toContain(RECORD_ANCHOR.absent);
   });
 });
