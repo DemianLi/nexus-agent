@@ -70,10 +70,14 @@ export interface ToolEntry {
 /**
  * 人在核准點上按了什麼。
  *
- * **這一則只有本地記得。** 實測下行完全不回聲決定：中斷發生在 `afterModel`，
- * tools node 從沒跑，而拒絕產生的那則 error ToolMessage 走 `updates`（白名單外）。
- * 「全拒絕」與「一核准一拒絕」在下行上一模一樣——都只有模型再講一輪話。所以決定
- * 要跟 {@link appendHumanTurn} 一樣在送出的那一刻自己寫進來，那不是裝飾，是唯一的紀錄。
+ * **這一則只有本地記得：下行不回聲決定。** 當初的實測是在**基座機制**上做的——中斷
+ * 發生在 `afterModel`，tools node 從沒跑，而拒絕產生的那則 error ToolMessage 走
+ * `updates`（白名單外），「全拒絕」與「一核准一拒絕」在下行上一模一樣。**那個機制在
+ * [#112](https://github.com/DemianLi/nexus-agent/pull/112) 之後不是產品路徑了**（中斷改
+ * 在 `wrapToolCall` 裡，拒絕會產生一則 `status` 為 error 的 ToolMessage），**它在線上會
+ * 不會變成一顆 `tools` frame 沒有量過**。但結論不靠那個機制：下行從來沒有一個欄位說
+ * 「人按了什麼」。所以決定要跟 {@link appendHumanTurn} 一樣在送出的那一刻自己寫進來，
+ * 那不是裝飾，是唯一的紀錄。
  */
 export interface DecisionEntry {
   readonly kind: 'decision';

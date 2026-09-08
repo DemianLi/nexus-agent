@@ -223,8 +223,10 @@ describe('核准之後，經過線', () => {
     await until(session, settled(2));
 
     expect(calls).toEqual([]);
-    // 中斷發生在 `afterModel`，tools node 從沒跑；那則人造的 error ToolMessage 走
-    // `updates`（白名單外）。所以下行對「被拒絕」這件事一個字都沒說。
+    // **這是基座的機制**（本檔用 `interruptOn` 建 agent，見檔頭）：中斷發生在
+    // `afterModel`，tools node 從沒跑；那則人造的 error ToolMessage 走 `updates`
+    // （白名單外）。所以下行對「被拒絕」這件事一個字都沒說。#112 之後的產品路徑
+    // 中斷在 `wrapToolCall` 裡，下行長什麼樣沒有量過。
     expect(toolFrames(session)).toEqual([]);
     expect(session.state.entries.filter((entry) => entry.kind === 'tool')).toEqual([]);
     expect(decisions(session.state)).toEqual(['reject:alpha']);
@@ -252,7 +254,10 @@ describe('核准之後，經過線', () => {
     await until(mixedSession, (state) => state.status === 'awaiting-input');
     const pending = mixedSession.state.pending;
     if (pending === undefined) throw new Error('沒有掛著的核准請求');
-    // **繞過介面直接送**：畫面上做不出這個組合（全有全無），這裡驗的是「為什麼不能做」。
+    // **繞過介面直接送**：介面今天一批只送一個決定（`uniformDecisions`），所以畫面上做
+    // 不出這個組合——但那是「還沒做」不是「不能做」：#112 之後閘門逐次呼叫各自判，
+    // 一個被拒不再拖累另一個（`interrupt.test.ts` 那條測試的名字就是這句）。這裡驗的仍
+    // 是**基座**的批次語義（檔頭第 2 條），不是我們介面的理由。
     await mixedSession.client.inputRespond('h4', {
       namespace: [...pending.namespace],
       interrupt_id: pending.interruptId,
