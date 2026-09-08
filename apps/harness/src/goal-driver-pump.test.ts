@@ -391,6 +391,84 @@ describe('掛了旗標', () => {
   });
 
   /**
+   * **這一刀新開的相依，所以要有絆索**：續行的守衛是日誌上的
+   * `hasUnansweredInterrupt`（「目前這一輪裡有沒有 `interrupt/raised`」），不是
+   * `pump.awaitingInput`。同一輪多顆中斷之前，答一次就一顆不剩，這兩個判準永遠同進同出；
+   * [#232](https://github.com/DemianLi/nexus-agent/issues/232) 之後不是了——**只答一顆時
+   * 還有別的掛著**，而守衛看得到它，靠的是那顆沒被答到的中斷會在 resume 那一輪
+   * **再度發一顆 `interrupt/raised`**（實測）。
+   *
+   * 那個相依一旦鬆掉，排程器會在人還沒答完的時候排一輪 goal 進去，而 `submit()` 對
+   * `goal` 是 `clear()`——掛著的中斷被抹掉，那顆工具既沒跑也沒被拒，日誌上看不出來。
+   * 那正是本檔頭第 5 條記的那種靜默失敗換一個入口。
+   */
+  it('**同一輪兩顆中斷、只答一顆時，排程器不排下一輪**', async () => {
+    const turns: readonly ScriptedTurn[] = [
+      {
+        content: '',
+        toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 3 } }],
+      },
+      { content: '建好了。' },
+      // 續行第 1 輪：同一輪叫兩顆要核准的工具 → 兩顆中斷。
+      {
+        content: '',
+        toolCalls: [
+          { name: 'take_note', args: { text: '一' } },
+          { name: 'take_note', args: { text: '二' } },
+        ],
+      },
+      { content: '記完了。' },
+      { content: '再收一次工。' },
+      { content: '還是收工。' },
+    ];
+    const { pump, stop } = await build({
+      turns,
+      threadId: 'driver-two-gated',
+      withDriver: true,
+      gated: true,
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal']);
+    // 先證真的有兩顆——只有一顆的話下面那句「沒多排一輪」是白給的。
+    expect(pump.pendings).toHaveLength(2);
+    const [first, second] = pump.pendings;
+    if (first === undefined || second === undefined) throw new Error('沒有兩顆掛著的中斷');
+
+    await pump.submit({
+      kind: 'resume',
+      interruptId: first.interruptId,
+      response: { decisions: [{ type: 'approve' }] },
+    });
+    await settle(pump);
+
+    // **上限是 3、才排過 1 輪，所以擋住第二輪的只可能是那顆還掛著的中斷。**
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal', 'resume']);
+    expect(pump.pendings.map((p) => p.interruptId)).toEqual([second.interruptId]);
+
+    // **對照組**：把第二顆也答掉，排程器就排得出下一輪——證明上面那句不是因為上限用完。
+    await pump.submit({
+      kind: 'resume',
+      interruptId: second.interruptId,
+      response: { decisions: [{ type: 'approve' }] },
+    });
+    await settle(pump);
+
+    expect(pump.pendings).toEqual([]);
+    // 上限 3 剩兩輪，兩顆都答完之後它們就排出來了。
+    expect(startKinds(pump.sessionLog)).toEqual([
+      'message',
+      'goal',
+      'resume',
+      'resume',
+      'goal',
+      'goal',
+    ]);
+    await stop();
+  });
+
+  /**
    * **收線之後日誌上不會再多一顆事件。** dsh 的 teardown 也是這樣：關掉準入、取消進行
    * 中的、等停穩。
    *
