@@ -84,7 +84,12 @@ export interface DecisionEntry {
   readonly id: string;
   /** 詞彙由基座定（`approve` / `reject`），這一層不窄化它。 */
   readonly decision: string;
-  /** 這個決定套到哪幾筆工具呼叫上——全有全無，所以是全部。 */
+  /**
+   * 這個決定套到哪幾筆工具呼叫上——**這一顆中斷的**全部，全有全無。
+   *
+   * 界線就在中斷上：同一輪的其他中斷各答各的，不會被這個決定碰到
+   * （[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
+   */
   readonly actions: readonly string[];
 }
 
@@ -115,7 +120,7 @@ export interface PendingInput {
   /**
    * 這一批**共同**允許的決定——逐筆 `allowedDecisions` 的交集。
    *
-   * 交集而不是 `[0]`、也不是聯集：一個決定要套到整批上（全有全無，見
+   * 交集而不是 `[0]`、也不是聯集：一個決定要套到**這一顆中斷的**整批上（全有全無，見
    * {@link DecisionEntry}），而基座對不在那一筆清單裡的決定是當場拋
    * （`langchain@1.5.10`，`hitl.js:407`）——多出來的那顆按鈕按下去是整場 run 死。
    */
@@ -126,7 +131,18 @@ export interface ConversationState {
   readonly entries: readonly ConversationEntry[];
   readonly status: ConversationStatus;
   readonly error?: string;
-  readonly pending?: PendingInput;
+  /**
+   * 掛著等人回答的中斷，**逐顆並存**，發出的順序。
+   *
+   * 同一輪裡兩個工具都要核准時，閘門逐次呼叫各自 `interrupt()`，線上就是兩顆
+   * `input.requested`（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
+   * 這裡曾經是單一插槽，第二顆進來會把第一顆整個蓋掉——畫面少一張卡，而那顆看不見的
+   * 中斷照樣被同一個決定套到。
+   *
+   * **用 `interruptId` 認人，重複的覆寫而不是追加**：答掉其中一顆之後，沒被答到的
+   * 那些會**帶著原本那顆 id 再度中斷**（實測），所以同一顆會在線上出現不只一次。
+   */
+  readonly pendings: readonly PendingInput[];
   /** 收過的最大 seq。線上是單調的（server 端跨 run 重編過號），拿它擋重複與亂序。 */
   readonly lastSeq: number;
   /** `namespace[0]` → 那個 `task` 呼叫派出去的 subagent。 */
@@ -136,7 +152,7 @@ export interface ConversationState {
 const ROOT: Attribution = { kind: 'root' };
 
 export function emptyConversation(): ConversationState {
-  return { entries: [], status: 'idle', lastSeq: -1, subagents: {} };
+  return { entries: [], status: 'idle', pendings: [], lastSeq: -1, subagents: {} };
 }
 
 /**
@@ -157,10 +173,18 @@ export function appendHumanTurn(state: ConversationState, text: string): Convers
  * 使用者說的話至少還會以模型的回應間接留下痕跡，而一個被拒絕的工具呼叫在下行上
  * 一顆 frame 都沒有（實測），這則 entry 是它存在過的唯一證據。
  *
- * 沒有掛著的核准請求時原樣回傳：重複按下去的第二次不該憑空長出一則紀錄。
+ * 認不得那顆 `interruptId` 時原樣回傳：重複按下去的第二次不該憑空長出一則紀錄。
+ *
+ * **只收掉被答的那一顆。** 同一輪的其他中斷還掛著，所以 `status` 只有在一顆都不剩時
+ * 才回到 `running`——少了這一句，答完第一張卡的當下整條對話會看起來像跑起來了，
+ * 而第二張卡還在等人。
  */
-export function appendDecision(state: ConversationState, decision: string): ConversationState {
-  const pending = state.pending;
+export function appendDecision(
+  state: ConversationState,
+  interruptId: string,
+  decision: string,
+): ConversationState {
+  const pending = state.pendings.find((candidate) => candidate.interruptId === interruptId);
   if (pending === undefined) {
     return state;
   }
@@ -170,8 +194,13 @@ export function appendDecision(state: ConversationState, decision: string): Conv
     decision,
     actions: pending.actions.map((action) => action.name),
   };
-  const { pending: _cleared, ...rest } = state;
-  return { ...rest, entries: [...state.entries, entry], status: 'running' };
+  const rest = state.pendings.filter((candidate) => candidate.interruptId !== interruptId);
+  return {
+    ...state,
+    entries: [...state.entries, entry],
+    pendings: rest,
+    status: rest.length > 0 ? 'awaiting-input' : 'running',
+  };
 }
 
 /**
@@ -404,8 +433,11 @@ function reduceLifecycle(
     // **僅止於此。** 決定本身是本地的（見 {@link appendDecision}），所以旁觀的那一端
     // 只知道「不必再問了」，不知道人按了什麼——它的 transcript 上沒有那一則。這條線
     // 不回聲決定，這一層補不出來。
-    const { pending: _answered, ...rest } = state;
-    return { ...rest, status: 'running', error: undefined };
+    // **清空全部，靠再度中斷把沒答的那些接回來。** 同一輪多顆時這一顆 `running` 是答完
+    // 其中一顆之後那個新 run 發的，而沒被答到的中斷會在同一個 run 裡帶著原本那顆 id
+    // 再度發一次 `input.requested`（實測），上面的覆寫因此是冪等的。留著不清的話，
+    // 旁觀的那一端會抱著一張已經被別人答掉、永遠回答不了的卡片。
+    return { ...state, pendings: [], status: 'running', error: undefined };
   }
   if (data.event === 'failed') {
     return { ...state, status: 'failed', error: data.error ?? '未指名的錯誤' };
@@ -432,16 +464,18 @@ function reduceInputRequested(
 ): ConversationState {
   const data = raw as InputRequestedData;
   const actions = data.payload?.actionRequests ?? [];
-  return {
-    ...state,
-    status: 'awaiting-input',
-    pending: {
-      interruptId: data.interrupt_id,
-      namespace,
-      actions,
-      allowedDecisions: intersectDecisions(data.payload?.reviewConfigs ?? []),
-    },
+  const incoming: PendingInput = {
+    interruptId: data.interrupt_id,
+    namespace,
+    actions,
+    allowedDecisions: intersectDecisions(data.payload?.reviewConfigs ?? []),
   };
+  // **同 id 覆寫，不追加。** 答掉一顆之後沒被答到的那些會帶著原本那顆 id 再度中斷
+  // （實測），追加的話同一顆中斷會長出第二張卡片，而其中一張永遠回答不了。
+  const others = state.pendings.filter(
+    (candidate) => candidate.interruptId !== incoming.interruptId,
+  );
+  return { ...state, status: 'awaiting-input', pendings: [...others, incoming] };
 }
 
 /**

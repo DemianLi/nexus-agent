@@ -150,9 +150,10 @@ describe('折疊器', () => {
 function inputRequested(
   actions: readonly string[],
   configs?: readonly (readonly string[])[],
+  interruptId = 'int-1',
 ): Event {
   return frame('input.requested', ['tools:a'], {
-    interrupt_id: 'int-1',
+    interrupt_id: interruptId,
     payload: {
       actionRequests: actions.map((name) => ({ name, args: { n: name } })),
       reviewConfigs: actions.map((name, index) => ({
@@ -171,21 +172,21 @@ describe('核准請求', () => {
     ]);
     // 讀 `[0]` 會多出一顆「全部拒絕」，而基座對不在那一筆清單裡的決定是當場拋
     // ——按下去是整場 run 死。實測基座真的會讓逐筆詞彙分歧。
-    expect(state.pending?.allowedDecisions).toEqual(['approve']);
+    expect(state.pendings[0]?.allowedDecisions).toEqual(['approve']);
     expect(state.status).toBe('awaiting-input');
   });
 
   it('namespace 留著——下行只發這一次，丟了就接不回去', () => {
     seq = 0;
     const state = reduceAll(emptyConversation(), [inputRequested(['alpha'])]);
-    expect(state.pending?.namespace).toEqual(['tools:a']);
-    expect(state.pending?.interruptId).toBe('int-1');
+    expect(state.pendings[0]?.namespace).toEqual(['tools:a']);
+    expect(state.pendings[0]?.interruptId).toBe('int-1');
   });
 
   it('一個決定攤成整批同型，因為長度不符會殺掉整場 run', () => {
     seq = 0;
     const state = reduceAll(emptyConversation(), [inputRequested(['alpha', 'beta'])]);
-    const pending = state.pending;
+    const pending = state.pendings[0];
     if (pending === undefined) throw new Error('沒有掛著的核准請求');
     expect(uniformDecisions(pending, 'reject')).toEqual({
       decisions: [{ type: 'reject' }, { type: 'reject' }],
@@ -195,27 +196,74 @@ describe('核准請求', () => {
   it('按下去之後請求就收掉，而且那一則是它存在過的唯一紀錄', () => {
     seq = 0;
     const asked = reduceAll(emptyConversation(), [inputRequested(['alpha', 'beta'])]);
-    const decided = appendDecision(asked, 'reject');
+    const decided = appendDecision(asked, 'int-1', 'reject');
 
-    expect(decided.pending).toBeUndefined();
+    expect(decided.pendings).toEqual([]);
     expect(decided.status).toBe('running');
     expect(decided.entries).toEqual([
       { kind: 'decision', id: 'decision-int-1', decision: 'reject', actions: ['alpha', 'beta'] },
     ]);
     // 沒有掛著的請求時再按一次不該憑空長出第二則。
-    expect(appendDecision(decided, 'reject')).toEqual(decided);
+    expect(appendDecision(decided, 'int-1', 'reject')).toEqual(decided);
+  });
+
+  it('**同一輪兩顆中斷並存**——第二顆不再蓋掉第一顆', () => {
+    // 閘門是逐次呼叫各自 `interrupt()` 的，所以同一輪兩個 gated 工具 = 線上兩顆
+    // `input.requested`（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
+    // 這裡曾經是單一插槽，第二顆進來第一顆就不見了——畫面少一張卡。
+    seq = 0;
+    const state = reduceAll(emptyConversation(), [
+      inputRequested(['alpha'], undefined, 'int-1'),
+      inputRequested(['beta'], undefined, 'int-2'),
+    ]);
+    expect(state.pendings.map((pending) => pending.interruptId)).toEqual(['int-1', 'int-2']);
+    expect(
+      state.pendings.flatMap((pending) => pending.actions.map((action) => action.name)),
+    ).toEqual(['alpha', 'beta']);
+  });
+
+  it('**同一顆 id 再來一次是覆寫不是追加**——沒答到的那顆會帶著原本的 id 再度中斷', () => {
+    // 答掉其中一顆之後，剩下的那顆會在新的 run 裡**帶著原本那顆 id** 再度發一次
+    // `input.requested`（實測）。追加的話同一顆中斷會長出第二張卡，而其中一張
+    // 永遠回答不了。
+    seq = 0;
+    const state = reduceAll(emptyConversation(), [
+      inputRequested(['alpha'], undefined, 'int-1'),
+      inputRequested(['alpha'], undefined, 'int-1'),
+    ]);
+    expect(state.pendings).toHaveLength(1);
+  });
+
+  it('**答掉一顆只收掉那一顆**，剩下的還掛著，狀態不回 running', () => {
+    seq = 0;
+    const asked = reduceAll(emptyConversation(), [
+      inputRequested(['alpha'], undefined, 'int-1'),
+      inputRequested(['beta'], undefined, 'int-2'),
+    ]);
+    const decided = appendDecision(asked, 'int-1', 'approve');
+
+    expect(decided.pendings.map((pending) => pending.interruptId)).toEqual(['int-2']);
+    // **狀態不能回 running**：回了的話畫面看起來像跑起來了，而第二張卡還在等人。
+    expect(decided.status).toBe('awaiting-input');
+    expect(decided.entries).toEqual([
+      { kind: 'decision', id: 'decision-int-1', decision: 'approve', actions: ['alpha'] },
+    ]);
+
+    const both = appendDecision(decided, 'int-2', 'approve');
+    expect(both.pendings).toEqual([]);
+    expect(both.status).toBe('running');
   });
 
   it('別人按掉的時候，沒按的那一端靠 lifecycle running 收掉卡片', () => {
     seq = 0;
     const asked = reduceAll(emptyConversation(), [inputRequested(['alpha'])]);
-    expect(asked.pending).toBeDefined();
+    expect(asked.pendings).toHaveLength(1);
 
     const resumed = reduceConversation(
       asked,
       frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
     );
-    expect(resumed.pending).toBeUndefined();
+    expect(resumed.pendings).toEqual([]);
     expect(resumed.status).toBe('running');
   });
 
@@ -226,6 +274,6 @@ describe('核准請求', () => {
       frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
     ]);
     expect(state.status).toBe('awaiting-input');
-    expect(state.pending).toBeDefined();
+    expect(state.pendings).toHaveLength(1);
   });
 });

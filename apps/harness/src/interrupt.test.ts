@@ -225,6 +225,12 @@ describe('一批裡混著核准與拒絕', () => {
   });
 
   it('兩個都要核准 → 一次暫停帶兩顆中斷，一個決定套到兩顆上', async () => {
+    // **這是裸 resume 值的行為，產品路徑走的線已經不是這樣了**：上行逐
+    // `interrupt_id` 送 `Command({ resume: { [id]: 決定 } })`，基座據鍵逐 task 派送，
+    // 所以經過線只答一顆就只有一顆跑（`fanout-wire.test.ts`，
+    // [#232](https://github.com/DemianLi/nexus-agent/issues/232)）。這一條測的是**基座**
+    // 在裸值底下怎麼做，那正是我們不再送裸值的理由。
+    //
     // **一個決定蓋住兩顆，不是因為介面「全有全無」**：閘門是逐次呼叫的，每顆中斷的
     // `actionRequests` 恆長度 1，`packages/nexus-wire` 的 `uniformDecisions` 從來沒送滿過
     // 兩筆；兩顆都被套到，是因為每次呼叫**各自**去讀同一個 resume 物件的 `decisions[0]`

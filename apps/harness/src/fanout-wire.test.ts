@@ -7,18 +7,23 @@
  * `approvals.gate` 折成 `wrapToolCall` 上的 pre-execute waterfall，**逐次呼叫各自
  * `interrupt()`**，所以同一輪兩個 gated 工具＝兩顆中斷。這一份用產品路徑建 agent。
  *
- * `interrupt.test.ts:227,251` 已經釘住基座那一層（一個決定套到兩顆上，核准與拒絕
- * 兩個方向都是）。**缺的是折疊器那一層**——而
- * [#232](https://github.com/DemianLi/nexus-agent/issues/232) 的病灶就在那裡：
- * 兩顆中斷各發一顆 `input.requested`，`reduceInputRequested` 整個換掉 `pending`，
- * 第二顆蓋掉第一顆，所以畫面上只有一張卡片。
+ * `interrupt.test.ts:227,251` 釘的是基座那一層（裸 resume 值＝一個決定套到兩顆上，
+ * 核准與拒絕兩個方向都是）。**這一份釘的是折疊器與上行那一層**，也就是
+ * [#232](https://github.com/DemianLi/nexus-agent/issues/232) 的病灶所在。
  *
- * **這一條釘的是今天壞掉的行為，不是想要的行為。** (丙)「一顆中斷一張卡」落地時它會
- * 紅，而紅掉之後把斷言反過來寫就是那張卡的驗收句：`pending` 要持有兩顆、上行要逐
- * `interrupt_id` 送、只答一顆時另一顆還掛著。
+ * **這兩條原本釘的是壞掉的行為，現在是反過來的驗收句**（[#233](https://github.com/DemianLi/nexus-agent/pull/233)
+ * 先立、這張卡落地時翻面）。原本：`reduceInputRequested` 整個換掉 `pending`，第二顆蓋掉
+ * 第一顆，畫面只有一張卡；按一次核准，沒出現在卡片上的那顆也跑了。現在：`pendings`
+ * 逐 `interruptId` 並存，上行逐 id 認領，**只答第一顆就只有第一顆跑**。
+ *
+ * **承重的是 resume 的鍵長什麼樣。** `Command({ resume })` 在基座有兩條路——鍵全是
+ * 32 個小寫 hex（`isXXH3`）走逐 task 派送，否則整個值廣播給每一顆待決 task
+ * （`@langchain/langgraph@1.4.12` 的 `pregel/io.js:48`）。送裸值就是廣播，那正是舊
+ * 缺陷的機制本身。所以第二條那句「只有 alpha 跑了」是唯一分得出真修好與假修好的斷言：
+ * 「兩顆都答完之後兩個都跑了」在廣播底下**照樣綠**。
  *
  * **最容易假綠的地方是「什麼都沒發生」**：模型沒呼叫工具、閘門沒觸發、線沒接上，
- * 都會讓「卡片只有一張」成立。所以每一條都配著計數：中斷真的有兩顆、工具真的跑得起來。
+ * 都會讓「只跑了一個」成立。所以每一條都配著計數：中斷真的有兩顆、工具真的跑得起來。
  */
 
 import { tool } from '@langchain/core/tools';
@@ -162,7 +167,7 @@ function interruptFrames(session: Session): Event[] {
 }
 
 describe('同一輪兩顆核准中斷，走真的線', () => {
-  it('**線上兩顆 `input.requested`，折疊器只剩最後一顆**——今天的行為，(丙) 落地時這條會紅', async () => {
+  it('**線上兩顆 `input.requested`，折疊器兩顆都留著**', async () => {
     const session = await open('f1', ['alpha', 'beta']);
     await until(session, (s) => interruptFrames(s).length >= 2);
 
@@ -177,37 +182,62 @@ describe('同一輪兩顆核准中斷，走真的線', () => {
       ),
     ).toEqual([1, 1]);
 
-    // **這就是缺陷**：`reduceInputRequested` 整個換掉 `pending`，第二顆蓋掉第一顆。
-    const pending = session.state.pending;
-    expect(pending?.actions.map((action) => action.name)).toEqual(['beta']);
-    // 而畫面就是照著 `pending` 渲染的——`alpha` 從頭到尾不會出現在任何一張卡片上。
-    expect(pending?.actions).toHaveLength(1);
+    // **這裡曾經只剩 `['beta']`**：`reduceInputRequested` 整個換掉 `pending`，第二顆
+    // 蓋掉第一顆，`alpha` 從頭到尾不會出現在任何一張卡片上。
+    expect(session.state.pendings.flatMap((p) => p.actions.map((action) => action.name))).toEqual([
+      'alpha',
+      'beta',
+    ]);
+    // 兩顆各自帶各自的 `interruptId`——那是逐 task 派送的鑰匙，混在一起就沒得派。
+    expect(new Set(session.state.pendings.map((p) => p.interruptId)).size).toBe(2);
     // 兩顆都還沒被答，所以兩個都還沒跑。
     expect(ran).toEqual([]);
 
     await session.close();
   });
 
-  it('**按一次「全部核准」，沒出現在卡片上的那個也跑了**——一個決定廣播到兩顆上', async () => {
+  it('**只答第一顆，就只有第一顆跑**——另一顆帶著原本那顆 id 再度掛上來', async () => {
     const session = await open('f2', ['alpha', 'beta']);
     await until(session, (s) => interruptFrames(s).length >= 2);
 
-    const pending = session.state.pending;
-    if (pending === undefined) throw new Error('沒有掛著的核准請求');
-    // 跟畫面上那顆按鈕做的事完全一樣：`uniformDecisions` 按 `pending.actions.length`
-    // （＝1）組一筆決定，`wire-handler` 的長度校驗因此也是對 1 檢查，通得過。
+    const first = session.state.pendings[0];
+    const second = session.state.pendings[1];
+    if (first === undefined || second === undefined) throw new Error('沒有兩顆掛著的核准請求');
+    expect(first.actions.map((action) => action.name)).toEqual(['alpha']);
+
+    // **答第一顆，不是最後一顆。** 答最後一顆的話，廣播底下也會看到 `beta` 跑掉，
+    // 這一條就分不出真修好與假修好——舊行為正是「答哪一顆都兩顆一起跑」。
     await session.client.inputRespond('f2', {
-      namespace: [...pending.namespace],
-      interrupt_id: pending.interruptId,
-      response: uniformDecisions(pending, 'approve'),
+      namespace: [...first.namespace],
+      interrupt_id: first.interruptId,
+      response: uniformDecisions(first, 'approve'),
+    });
+    // 抽到 `beta` 那顆重新掛上來為止：答完第一顆會開一個新 run，那顆 `lifecycle
+    // running` 會先把 `pendings` 清空，`beta` 再度中斷才補回來（`conversation.ts`）。
+    //
+    // **`|| settled` 那半邊是為了讓錯的機制當場說話。** resume 送裸值時基座廣播給每一顆
+    // 待決 task，`beta` 不會再中斷、這一輪直接收工——只等第三顆 frame 的話，這條會卡到
+    // vitest 逾時才紅，而逾時說不出「兩個工具都跑了」。
+    await until(session, (s) => interruptFrames(s).length >= 3 || settled(2)(s));
+
+    // **這就是整刀的驗收句**：`beta` 沒有被同一個決定套到。
+    expect(ran).toEqual(['alpha']);
+    // 而且它**帶著原本那顆 id** 回來——所以折疊器那邊的覆寫是冪等的，不會長出第二張卡。
+    expect(session.state.pendings.map((p) => p.interruptId)).toEqual([second.interruptId]);
+    expect(session.state.pendings.flatMap((p) => p.actions.map((a) => a.name))).toEqual(['beta']);
+
+    // 再答第二顆，兩個都跑完、run 收得掉——少了這一段，「第二顆永遠回答不了」也會綠。
+    const left = session.state.pendings[0];
+    if (left === undefined) throw new Error('第二顆不見了');
+    await session.client.inputRespond('f2', {
+      namespace: [...left.namespace],
+      interrupt_id: left.interruptId,
+      response: uniformDecisions(left, 'approve'),
     });
     await until(session, settled(2));
 
-    // 人只看過也只答過 `beta`，`alpha` 照樣跑了。**成因在基座**：resume 的鍵不是
-    // 32-hex，`mapCommand()` 走 `NULL_TASK_ID` 廣播給每一個待決 task
-    // （見 `.docs/approval-fanout-survey.md` §2.2）。
-    expect(ran.slice().sort()).toEqual(['alpha', 'beta']);
-    // **畫面上看得見的落差**：卡片只列了 `beta`，transcript 卻冒出兩個工具都跑完了。
+    expect(ran).toEqual(['alpha', 'beta']);
+    expect(session.state.pendings).toEqual([]);
     expect(
       session.state.entries
         .filter((entry) => entry.kind === 'tool')

@@ -429,7 +429,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           ),
         );
       }
-      if (pump.pending !== undefined) {
+      if (pump.awaitingInput) {
         // **基座這時不會擋，它會靜靜地把中斷丟掉**：新的一輪照跑，那個等著核准的工具
         // 既沒執行也沒被拒絕，而且不會再發第二顆 `input.requested`（實測）。靜靜照做
         // 等於讓一道核准閘門無聲消失，所以這裡明著回錯——同 `since` 那條的理由。
@@ -452,8 +452,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
 
     const params = command.params;
     if (params !== null && typeof params === 'object' && 'responses' in params) {
-      // 協定的批次形（一次回答同一個 checkpoint 上的多個中斷）。基座這側一個中斷本身
-      // 就帶一整組 `decisions`，還沒有需要多中斷批次的形狀，所以明著不收。
+      // 協定的批次形（一次回答同一個 checkpoint 上的多個中斷）。同一輪確實會有多顆
+      // 中斷，但**一顆一個 resume**（基座逐 task 派送，見 `thread-pump.ts` 的
+      // `PumpInput.interruptId`），逐顆送就夠了，所以這個形狀明著不收。
       return json(
         errorResponse(command.id, 'not_supported', '這一版只收單一 interrupt 的 input.respond'),
       );
@@ -461,22 +462,19 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     if (typeof params?.interrupt_id !== 'string') {
       return json(errorResponse(command.id, 'invalid_argument', 'input.respond 缺 interrupt_id'));
     }
-    const pending = pump.pending;
+    // **逐 id 認領，認不得就退回。** 這一道曾經是「跟目前掛著的那顆比對」，理由沒變：
+    // 基座只認「有沒有中斷掛著」、不比對 id，實測拿掉之後一個**完全不存在**的
+    // interrupt_id 照樣把掛著的那顆核准掉，工具真的跑了。差別在同一輪多顆之後，
+    // 「不是最後那顆」不再等於「不存在」——第一顆是認得的，回答它是對的。
+    const pending = pump.pendingFor(params.interrupt_id);
     if (pending === undefined) {
-      return json(
-        errorResponse(command.id, 'no_such_interrupt', '這條 thread 上沒有等著回答的中斷'),
-      );
-    }
-    if (pending.interruptId !== params.interrupt_id) {
-      // **對不上就是對不上，不要拿它去回答現在那顆。** 基座只認「有沒有中斷掛著」、
-      // 不比對 id：實測拿掉這道比對之後，一個**完全不存在**的 interrupt_id 照樣把
-      // 現在掛著的那顆核准掉，工具真的跑了。所以一個過期的分頁按下核准會落在另一顆
-      // 中斷上——那是替別人的問題按下核准。
       return json(
         errorResponse(
           command.id,
           'no_such_interrupt',
-          `interrupt_id "${params.interrupt_id}" 不是目前掛著的那顆`,
+          pump.awaitingInput
+            ? `interrupt_id "${params.interrupt_id}" 不在這條 thread 掛著的那些中斷裡`
+            : '這條 thread 上沒有等著回答的中斷',
         ),
       );
     }
@@ -497,7 +495,11 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     }
     return json(
       successResponse(command.id, {
-        run_id: start(pump, { kind: 'resume', response: params.response }),
+        run_id: start(pump, {
+          kind: 'resume',
+          interruptId: params.interrupt_id,
+          response: params.response,
+        }),
       }),
     );
   }
@@ -530,7 +532,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     if (typeof params?.line !== 'string') {
       return json(errorResponse(id, 'invalid_argument', 'slash.run 缺 line'));
     }
-    if (thread.pump.pending !== undefined) {
+    if (thread.pump.awaitingInput) {
       return json(
         errorResponse(
           id,

@@ -79,14 +79,18 @@ describe('會話事件日誌：web 那條路', () => {
     expect(types).toEqual(['turn/start', 'interrupt/raised', 'turn/end']);
     expect(seqsOf(pump.sessionLog)).toEqual([0, 1, 2]);
     const raised = pump.sessionLog.events[1]?.data as { interruptId: string };
-    expect(raised.interruptId).toBe(pump.pending?.interruptId ?? '(沒有掛著的中斷)');
+    expect(raised.interruptId).toBe(pump.pendings[0]?.interruptId ?? '(沒有掛著的中斷)');
   });
 
   it('核准之後那一輪記成 resume，號接在前一輪後面', async () => {
     const pump = new ThreadPump(buildPumpAgent(GATED_TURNS, true), 'web-3');
 
     await pump.submit({ kind: 'message', text: '記一筆' });
-    await pump.submit({ kind: 'resume', response: { decisions: [{ type: 'approve' }] } });
+    await pump.submit({
+      kind: 'resume',
+      interruptId: pump.pendings[0]?.interruptId ?? '',
+      response: { decisions: [{ type: 'approve' }] },
+    });
 
     expect(pump.sessionLog.events.map((event) => event.type)).toEqual([
       'turn/start',

@@ -370,11 +370,12 @@ describe('掛了旗標', () => {
     await settle(pump);
     // 續行那一輪停在核准點了。
     expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal']);
-    const pending = pump.pending;
+    const pending = pump.pendings[0];
     expect(pending).toBeDefined();
 
     await pump.submit({
       kind: 'resume',
+      interruptId: pending?.interruptId ?? '',
       response: [{ type: 'approve', args: { text: '一筆' } }],
     });
     await settle(pump);

@@ -18,7 +18,10 @@ export function App({ client }: { client?: WireClient } = {}) {
   const conversation = useConversation(client === undefined ? {} : { client });
   const [draft, setDraft] = useState('');
 
-  const pending = conversation.state.pending;
+  // **只渲染第一張。** 折疊器現在逐 `interruptId` 並存（同一輪可以有兩顆），而多張卡
+  // 同時看得見是 [#232](https://github.com/DemianLi/nexus-agent/issues/232) 的第 2 項、
+  // 還沒做。一次一張不是缺陷：答掉這一顆之後，剩下的那顆會再度中斷、補上下一張卡。
+  const pending = conversation.state.pendings[0];
   // **`awaiting-input` 也算忙**。少了它，等核准時送得出下一句話——而基座那時會把
   // 中斷靜靜丟掉：那個工具既沒執行也沒被拒絕，也不會再問第二次（實測）。
   // 一顆按鈕都長不出來的核准請求（交集是空的）**不算忙**：那時卡片沒有出路，
@@ -57,7 +60,7 @@ export function App({ client }: { client?: WireClient } = {}) {
           <ApprovalCard
             pending={pending}
             busy={!conversation.connected}
-            onDecide={(decision) => void conversation.respond(decision)}
+            onDecide={(decision) => void conversation.respond(pending.interruptId, decision)}
           />
         )}
       </section>
