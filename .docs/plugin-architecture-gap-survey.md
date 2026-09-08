@@ -117,7 +117,7 @@
 | 20 | `hooks` | 在 agent 運行期執行使用者**既有的** Claude Code／Codex `hooks.json` shell 鉤子：會話開始、提示詞提交、工具前後、停止時觸發；可帶模型可見訊息阻塞、附加上下文、強制繼續 | 沒有。近似物：`wrapToolCall`／`wrapModelCall`（工具、模型前後）、`registry.approvals`（阻塞工具）、`lifecycle.onDispose`（關機）。**2026-09-07 更正**（[#212](https://github.com/DemianLi/nexus-agent/issues/212)）：原文寫「缺會話開始、提示詞提交、停止三個時刻」——那三個是**格號**不是空缺，兩格佔住、一格判過不是缺口（見 §五第 3 條）。這一列判「沒有」**照舊成立**，但理由只剩一條：**沒有跑外部 shell 鉤子的引擎**，而要不要做那個引擎就是 §五第 3 條的 (b) | 沒有 |
 | 21 | `host` | Web GUI Host 側：HTTP 與 SPA 伺服器、工作區目錄選擇、插件清單投影 | `wire-server.ts`（不綁 port 的 handler ＋ 一個 socket）；沒有目錄選擇、插件清單投影 | 部分 |
 | 22 | `identity` | 匿名的 per-harness-home 關聯 id | 沒有 | 沒有 |
-| 23 | `interaction` | 人機協作：`commands`、`permission-presets`、`tool-ask-user`、`user-approval`、`user-questions` | `commands` ✅（`@nexus/plugin-commands`，形狀照 `dsh-commands`）；`user-approval` ≈ `registry.approvals`＋`approval.ts`＋`approval-card.tsx`。`permission-presets`、`tool-ask-user`、`user-questions` 沒有 | 部分 |
+| 23 | `interaction` | 人機協作：`commands`、`permission-presets`、`tool-ask-user`、`user-approval`、`user-questions` | `commands` ✅（`@nexus/plugin-commands`，形狀照 `dsh-commands`）；`user-approval` ≈ `registry.approvals`＋`approval.ts`＋`approval-card.tsx`（**2026-09-08 量過語意差**，[#220](https://github.com/DemianLi/nexus-agent/issues/220)：提問側對得上，**應答側不是掛點、結果詞彙窄一格、審計事件零顆**，逐條見 §六第 7 條，結局在 §五第 7 條）。`permission-presets`、`tool-ask-user`、`user-questions` 沒有 | 部分 |
 | 24 | `jobs` | 背景任務：註冊表約定、行程本地儲存、模型側任務工具 | 沒有。執行模型是一次 `invoke` | 沒有 |
 | 25 | `llm` | 提供方無關的模型呼叫服務、DeepSeek 與 pi-ai adapter、重試執行器、回放感知的 token 計量 | `live-model.ts`（`ChatOpenAI` 指 NVIDIA 端點；retry 在檔頭有偏離登記）；模型呼叫外包 LangChain。**每一輪的 token 用量已由 [#153](https://github.com/DemianLi/nexus-agent/issues/153)→[#158](https://github.com/DemianLi/nexus-agent/pull/158) 進會話日誌**；沒有 dsh 那種可注入、回放感知的 `token-meter`——pruner 至今拿不到一個可注入的計量器 | 部分 |
 | 26 | `lsp` | LSP 程式碼導航 | 沒有 | 沒有 |
@@ -377,6 +377,11 @@ dsh 有 in-process／fork／spawn／acp／claude-code／codex 六種委派後端
 - `shell`／`sandbox`／`subprocess`／`terminal`：決策 3 明文延後直到容器方案明朗；基座三條件互斥（`sandbox-backend-conflict.test.ts`）讓 QuickJS 走了 custom tool。
 - `jobs`／`schedule`／`workflow`／`extensions`／`session-query`／`workspace`：dsh 有、我們沒有、需求沒出現。
 - **`context/` 那五個非預設的套件**（`time-context`／`file-reference`／`file-reference-local`／`session-reference`／`tmux-context`）：**2026-09-07 從第 5 條降下來的**（[#215](https://github.com/DemianLi/nexus-agent/issues/215)），理由三條見第 5 條。第六個 `agent-instructions` 是 base 唯一掛的，我們有等價物。**這一列照第 7 條的慣例不掛絆索**——一個掃空的結構 gate 會永遠綠（紀律見第 3 條末），**改為明著寫重開條件，任一成立就重開**：(1) **wire 上出現 client 時區**（`apps/web` 送上來、`@nexus/wire` 的 protocol 收得下），那時「按用戶時區解釋未限定的時間」才有來源；(2) **有 plugin 指名要每步新鮮的讀數**（不只是時鐘），那時第 5 條第 2 題的鉤子選擇才值得付那一格 `beforeModel` 節點。
+- **核准的應答者掛點與審計事件**：**2026-09-08 從 §六第 7 條降下來的**（[#220](https://github.com/DemianLi/nexus-agent/issues/220)）。**兩半的理由完全不同，所以分開寫。**
+  - **應答者掛點——不做，而理由是 dsh 自己寫的。** 那條 waterfall 是**兩個提問者**逼出來的：`tools/pre-execute` 的 `ask` 決策，以及沙箱拒絕後的一次性升級重試。被否掉的替代方案講得更死——內聯進 ACP 橋不行，因為「无法服务第二个发起方（沙箱升级发生在执行开始之后，没有 pre-execute 时刻）」（`.agents/notes/implemented/feature/2026-07-06-approval-seam.zh.md:97`）。**我們今天只有一個提問者**（`nexus-plugin-plan-mode/src/index.ts:525`，`exit_plan_mode` 回 `ask`），沒有沙箱升級也沒有鉤子橋，**逼出可組合 seam 的那件事在我們樹上還沒發生**。順帶：dsh 也否掉過 `registerProvider()`（同檔 `:96`），所以「單一提供方」不是它沒想到，是它想過不要。
+  - **審計那半——也不做，但這是射程的選擇，不是可行性的選擇。** **原本寫的理由（「與 #190 第 2 格的紀錄差是同一個結構成因，紀錄由入口點在圖外附加」）是錯的**：`model/usage` 就是 **fold 自建的 middleware 在圖裡 append**（`fold.ts:282` → `model-usage.ts:160`），`compaction/summary` 同形（`fold.ts:664`），而 `foldApprovalGate`（`fold.ts:527`）手上本來就有整張 `registry`。`session-log.ts` 檔頭那條加事件種類的門檻（「加種類要同時回答『兩條路都產得出來嗎』」）核准也過得了，理由與 `model/usage` 一字不差——**它就是那一份組裝本身**。**不做的理由只剩一條：今天沒有人要從日誌回答核准的事**（判法照第 6 條：零消費者、零註冊者，需求出現時再開卡）。另外量到一件會抬價的：**閘門在恢復時整條 waterfall 會重跑一次**（實測，`apps/harness/src/interrupt.test.ts` 加探針：暫停時 listener 跑 1 次，恢復後累計 2 次），所以 `asked` 那顆要配一個冪等守衛，不能照抄 `model/usage`。
+  - **照第 7 條的慣例不掛絆索**——`interception-index.test.ts` 第 4 列已經有一條翻得了面的（`SessionEventType` 不含 `| 'approval/`，那兩顆事件落地那天它會紅）。這裡寫**重開條件，任一成立就重開**：(1) **出現第二個提問者**——樹上有第二處產生 `{ kind: 'ask' }`，而它拿不到 `tools/pre-execute` 那個時刻（例如執行開始之後才決定要升級），那時共享的應答者 seam 才在解決一個真的問題；(2) **有人要從日誌回答「某次工具為什麼沒跑」而答不出來**——今天 `interrupt/raised` 只帶 `interruptId`，而 `deny`／`policy-never`／`no-channel` 三條路連那一顆都沒有。
+
 - **Proteus 的測量軸**：不是我們的缺口，是「能不能被它量」。~~三個前提裡缺的那個就是第 4 條~~——**2026-09-05 起不是了**：持久化那一格已經落地（#172／#174），三個前提裡剩下的是**具名的可編輯 surface**（§4.5 第三列）。開地圖的條件因此已經滿足，內容仍是：定義 surface、匯出軌跡、寫 adapter，而「匯出軌跡」那一項現在是**寫 adapter 的人明著傳 `--session-log` 並認得 run 目錄的命名**，不是我們這側再補東西。
 
 ## 六、沒查清楚的
@@ -387,5 +392,19 @@ dsh 有 in-process／fork／spawn／acp／claude-code／codex 六種委派後端
 4. ~~**`foldSubAgents` 對 `ForkedSubAgent` 的處理**——決定第 6 條是缺口還是已有。~~ **兩半都結案了（2026-09-07）**，答案同樣是「進不來」但理由不同：`AsyncSubAgent` 缺必填的 `graphId`（`apps/harness/src/base-tools.ts:52-62` 檔頭），`ForkedSubAgent` 是 `SubAgent.mode` 被窄成 `'handoff'` 字面量。**後者那種擋法會隨升版無聲消失**，所以釘了一條欄位絆索（`registry.test.ts`）；而**擋的只有 `tsc`**——`foldSubAgents` 不剝也不擋 `mode`，一個 `as` cast 就能把 `mode: 'fork'` 原樣送到基座，那個現況由第二條測試釘住（`fold.test.ts`）。逐條見 §五第 6 條。
 5. **Proteus `environments/` 底下的 `openhands/`、`swe-agent/`** 是 adapter 還是 bench 環境——`proteus/adapters/` 裡沒有對應檔，`ROADMAP.md` T1 把它們列為待做 harness，所以傾向是環境骨架，沒有進一步讀。
 6. **dsh `docs/subsystems/README.zh.md` 列的 53 個子系統頁與 51 個套件目錄的對應**——我以套件目錄為對照單位，沒有以子系統頁再對一次（例如 `agent-team` 在 `experimental/`、`token-meter` 在 `llm/`、`scope` 在 `core/`）。
-7. **`interaction/user-approval` 與我們 `registry.approvals` 的語意差**——只對了「一次性核准」這個標籤，沒有對 `ApprovalOutcome`、策略、審計事件的形狀。
+7. ~~**`interaction/user-approval` 與我們 `registry.approvals` 的語意差**——只對了「一次性核准」這個標籤，沒有對 `ApprovalOutcome`、策略、審計事件的形狀。~~ **查完了（2026-09-08，[#220](https://github.com/DemianLi/nexus-agent/issues/220)，只讀原始碼）。**
+
+   **先窄化：「只對了標籤」是低估的。** 樹上已經有三處引著 dsh 的核准原始碼——`packages/nexus-core/src/approval.ts` 檔頭引 `core/tools/src/index.ts:152`（形狀）與 `:589`（`PreToolDecision` 三格封閉）；同檔 `ApprovalChannel` 的 JSDoc 對過 dsh 那幾條刻意各不相同的 deny reason，連理由（讓模型分得出「有人說不」與「根本沒有核准管道」）都引了過來；`fold.ts:111` 把 `approvals.enabled === false` 對到 dsh 的 `ApprovalPolicy: 'never'`。**這一條原本的問句因此不是它自己寫的那一句。**
+
+   **真正沒對過的是五樣**：
+
+   1. **應答者在 dsh 是掛點，在我們這側是寫死的一格。** `approval/request`（`interaction/user-approval/src/types.ts:85`）是一條 Cordis waterfall：回一個結果就是替那個 agent 作答，否則 `next()`；UI 通道與 ACP 橋接**各是一位應答者**，提問者也不只一個（`core/tools`、`sandbox/escalation.ts`、`shell/tool-bash`）。我們的 `registry.approvals` **只收提問者**（`gate()`），應答者是 `approval.ts` 裡寫死的 `interrupt(...)`，`ApprovalChannel` 是 fold 當下的一個判決、不是掛點。
+   2. **結果詞彙四值 vs 兩值。** `ApprovalOutcome`（`types.ts:32`）＝ `'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'`，`serviceAsk` 一對一映回 deny，並把 `cancelled` 抬成一個 `approvalCancelled` 旗標餵給呼叫端的中止判斷。我們只有 approve／reject，**`cancelled` 沒有表達式**。
+   3. **審計事件我們一顆都沒有。** dsh 每次 request 追加 `approval/asked` ＋ `approval/decided`（`types.ts:44-58`，log-only audit，**是自己的事件種類、不是 `tool/*`**），另有 `invariant.ts` 在同一個未結束的輪次內按 id 配對。我們這側：`deny`／`policy-never`／`no-channel` 三條路一顆都不記；人那條只有一顆**只帶 `interruptId`** 的 `interrupt/raised`；**結果從來沒進日誌**（`wire-handler.ts` 收到 `decisions` 之後零個 `append`），日誌上只剩 `turn/start` 的 resume 那一格，而它分不出核准與拒絕。兩個生產者都在圖外（`thread-pump.ts:384`、`cli.ts:733`）——**與 #190 第 2 格的紀錄差同一個結構成因**。
+   4. **政策只對了 `never` 那一半。** dsh 的 `ask` 是預設，而且**當前政策會貢獻進模型看得到的執行期上下文快照**（`user-approval/src/index.ts:156` 的 `'approval:policy'`），`setPolicy()` 還活著切換得了、並為下一步注一則帶來源的 user message。我們的 `approvals.enabled` 是 fold 當下定死的，模型看不到政策。
+   5. **輪次邊界。** dsh 的 `request()` 要求身處未結束的輪次，空閒或輪次之間呼叫**在審計之前就拋**——理由是輪次是持久日誌的提交／回放邊界。我們沒有這個要求，也沒有審計可以保護。
+
+   **落地處**：`apps/harness/src/interception-index.test.ts` **第 4 列**（[#221](https://github.com/DemianLi/nexus-agent/pull/221)）。那一列原本 `permissionDelta` 與 `recordDelta` 都是 `undefined`，而在那份索引裡 `undefined` 是有意義的斷言（「三欄逐欄對得上」／「沒有紀錄面的缺口」）——**兩句都比量過的多**，與這一條並存時互相矛盾。這是 [#218](https://github.com/DemianLi/nexus-agent/issues/218) 剛在第 2 列改掉的同一型病。
+
+   **判為認帳不做，降到 §五第 7 條**，重開條件寫在那一列。dsh SHA `c389f96bf3a9b6807cb71ed6bdad5849be0df6d8`（`interaction/user-approval/` 相對 `d347e70` 一行沒動）。
 8. ~~**兩處過時的數字**：`packages/nexus-core/src/registry.ts` 檔頭「四條」、`development-plan.md` §1「一條 `lifecycle` 通道」，實際都是五條。~~ **已改正**：兩處今天都寫「五條」（`registry.ts:9`、`development-plan.md` §1）。2026-09-05 順手補了第三處——`development-plan.md` §3 的套件表也只寫「lifecycle 通道」。
