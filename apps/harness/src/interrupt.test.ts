@@ -225,8 +225,12 @@ describe('一批裡混著核准與拒絕', () => {
   });
 
   it('兩個都要核准 → 一次暫停帶兩顆中斷，一個決定套到兩顆上', async () => {
-    // 全有全無的介面因此仍然成立：`packages/nexus-wire` 的 `uniformDecisions` 送滿
-    // 同型決定，這一條釘住的是「顆數」與「一次 resume 收兩顆」。
+    // **一個決定蓋住兩顆，不是因為介面「全有全無」**：閘門是逐次呼叫的，每顆中斷的
+    // `actionRequests` 恆長度 1，`packages/nexus-wire` 的 `uniformDecisions` 從來沒送滿過
+    // 兩筆；兩顆都被套到，是因為每次呼叫**各自**去讀同一個 resume 物件的 `decisions[0]`
+    // （`approval.ts` 的 `answer?.decisions?.[0]`）。這一條釘住的是「顆數」與「一次
+    // resume 收兩顆」，拒絕側的反面在
+    // [#227](https://github.com/DemianLi/nexus-agent/pull/227)。
     const { agent } = await gatedAgent({
       tools: ['ok_tool', 'bad_tool'],
       gated: ['ok_tool', 'bad_tool'],
