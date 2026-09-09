@@ -55,6 +55,8 @@ import { realpath } from 'node:fs/promises';
 import { FilesystemBackend } from 'deepagents';
 import type { DeleteResult, EditResult, FileUploadResponse, WriteResult } from 'deepagents';
 
+import type { SandboxMode } from '@nexus/core';
+
 /**
  * 圍堵的強度。名字照抄 dsh 的三個 mode（`references/deepseek-harness/packages/fs/fs-sandbox/README.md`）。
  *
@@ -95,17 +97,16 @@ import type { DeleteResult, EditResult, FileUploadResponse, WriteResult } from '
  * 基座那道 lexical 的 `..` 檢查仍在——這個 class 不給關 `virtualMode`（見下面的 class 註解），
  * 所以它結構上就不可能是 dsh 那種真正的不設防。想要完全不設防，用原生的 `FilesystemBackend`。
  */
-export type ContainmentMode = 'read-only' | 'workspace-write' | 'danger-full-access';
+export type { SandboxMode } from '@nexus/core';
 
 /**
- * 三個模式的完整清單，宣告順序由**寬鬆到嚴格**沒有意義——它只用來驗證外面來的字串
- * （旗標、設定檔）。照 dsh 的 `SANDBOX_MODES` 存在的理由：型別擋不住執行期字串。
+ * 三個模式的完整清單與它的守衛，**詞彙住在 `@nexus/core`**（`sandbox.ts`）。
+ *
+ * 搬過去的理由不是分層潔癖：`sandbox/mode` 這顆會話事件的酬載型別宣告在 core 的
+ * `SessionEventMap` 上，而酬載帶的就是模式本身。留在這裡的話，「哪三個字串合法」寫入端
+ * 與讀取端各有一份。從這個檔案 re-export 是為了讓 fence 的使用者仍然只需要認得一個門。
  */
-export const CONTAINMENT_MODES: readonly ContainmentMode[] = [
-  'read-only',
-  'workspace-write',
-  'danger-full-access',
-];
+export { isSandboxMode, SANDBOX_MODES } from '@nexus/core';
 
 /**
  * 圍堵強度的來源——**每一次變更呼叫問一次**，不是建構期釘死的一個值。
@@ -130,7 +131,7 @@ export const CONTAINMENT_MODES: readonly ContainmentMode[] = [
  * 因此 `checkedPath()` **在最上面解析一次**，整個判斷與拒絕訊息都用那一顆——這正是 dsh
  * 「一次呼叫一份政策」那條規矩在我們這個形狀底下的寫法。
  */
-export type ContainmentModeSource = () => ContainmentMode;
+export type SandboxModeSource = () => SandboxMode;
 
 export interface ContainedFilesystemBackendOptions {
   /** 可寫根。所有虛擬路徑都以它為基準，變更不得 canonicalize 到它之外。 */
@@ -138,10 +139,10 @@ export interface ContainedFilesystemBackendOptions {
   /**
    * 圍堵強度。省略即 `workspace-write`——預設要是設防的那一個。
    *
-   * 給**函式**就是逐次呼叫解析（見 {@link ContainmentModeSource}）；給字面值等於給一個
+   * 給**函式**就是逐次呼叫解析（見 {@link SandboxModeSource}）；給字面值等於給一個
    * 恆定的函式，兩者在 fence 眼裡沒有差別。
    */
-  readonly mode?: ContainmentMode | ContainmentModeSource;
+  readonly mode?: SandboxMode | SandboxModeSource;
   /** 單檔大小上限，原樣轉給基座。 */
   readonly maxFileSizeMb?: number;
 }
@@ -155,15 +156,15 @@ export interface ContainedFilesystemBackendOptions {
  */
 export class ContainedFilesystemBackend extends FilesystemBackend {
   /** 圍堵強度的來源。建構期給的字面值在這裡已經被包成一個恆定的函式。 */
-  private readonly resolveMode: ContainmentModeSource;
+  private readonly resolveMode: SandboxModeSource;
 
   /**
    * 這一刻的圍堵強度，錯誤訊息會指名它。
    *
    * **每次讀都重新解析**——它不是一個快照。要在一次呼叫裡反覆用的話先存進區域變數
-   * （`checkedPath()` 就是這麼做的），理由見 {@link ContainmentModeSource}。
+   * （`checkedPath()` 就是這麼做的），理由見 {@link SandboxModeSource}。
    */
-  get mode(): ContainmentMode {
+  get mode(): SandboxMode {
     return this.resolveMode();
   }
 
@@ -174,7 +175,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       ...(options.maxFileSizeMb !== undefined && { maxFileSizeMb: options.maxFileSizeMb }),
     });
     const mode = options.mode ?? 'workspace-write';
-    this.resolveMode = typeof mode === 'function' ? mode : (): ContainmentMode => mode;
+    this.resolveMode = typeof mode === 'function' ? mode : (): SandboxMode => mode;
   }
 
   /**
@@ -340,12 +341,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * **模式是傳進來的，不是在這裡讀的**：呼叫端已經解析過一次，這裡再讀一次就可能印出
    * 跟實際擋下它的那一格不同的名字。
    */
-  private denial(
-    mode: ContainmentMode,
-    operation: string,
-    filePath: string,
-    reason: string,
-  ): string {
+  private denial(mode: SandboxMode, operation: string, filePath: string, reason: string): string {
     return `[containment] 拒絕 ${operation} "${filePath}"：${reason}（mode: ${mode}）`;
   }
 }

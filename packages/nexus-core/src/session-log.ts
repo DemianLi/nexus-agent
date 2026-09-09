@@ -27,6 +27,7 @@
 
 import type { GoalChangeMeta, GoalId } from './goal.js';
 import type { TodoItem } from './todo.js';
+import type { SandboxMode } from './sandbox.js';
 
 /**
  * 這一版收得下的事件種類。**加種類要同時回答「兩條路都產得出來嗎」。**
@@ -78,7 +79,8 @@ export type SessionEventType =
   | 'goal/change'
   | 'todo/write'
   | 'model/usage'
-  | 'compaction/summary';
+  | 'compaction/summary'
+  | 'sandbox/mode';
 
 /** 每一種事件帶什麼。 */
 export interface SessionEventMap {
@@ -229,6 +231,32 @@ export interface SessionEventMap {
     /** 被換掉的原文落在 backend 的哪個檔。**`null` ＝ 沒寫成功，原文消失了**。 */
     readonly filePath: string | null;
   };
+  /**
+   * 這個會話的**檔案效果政策**現在是哪一格。**每一筆帶整個值**，不是差異。
+   *
+   * ## 誰寫它
+   *
+   * `apps/harness/src/sandbox-mode.ts` 的 `SandboxModeController`：接上一份日誌的當下寫
+   * 一顆**起始值**，之後每一次**真的變了**的切換各寫一顆。切到已經生效的那一格不寫
+   * ——照 dsh 的「净变化为零的选择不追加任何内容」
+   * （`packages/interaction/permission-presets/README.zh.md`）。
+   *
+   * **沒掛 fence 的組裝一顆都不寫。** 沒有 `--workspace` 就沒有
+   * `ContainedFilesystemBackend`，沒有東西在擋——那種組裝底下記一顆「政策是
+   * workspace-write」是**在日誌裡說謊**，與 `sandbox-policy.ts` 那句提示不貢獻是同一條理由。
+   *
+   * ## 今天誰讀它，以及誰還讀不到
+   *
+   * **讀的人是讀日誌的人**：有了它，一份日誌才答得出「這一輪跑的時候檔案政策是哪一格」
+   * ——`command/run` 只記得住使用者打了什麼字，記不住生效的值，而 `--sandbox` 給的起始
+   * 值在它之前就決定了，命令那條路上根本沒出現過。
+   *
+   * **它今天回不到執行期。** 重開一個 session 不會讀回最後一顆——`SessionStore` 只有
+   * `create` 沒有讀介面（`session-store.ts`），會話 resume 的兩扇門都還關著
+   * （[#203](https://github.com/DemianLi/nexus-agent/issues/203) 的絆索）。所以這一顆事件
+   * 今天是**單向的審計紀錄**，不是狀態的來源。那扇門開的那天，這裡是它要接回去的地方。
+   */
+  'sandbox/mode': { readonly mode: SandboxMode };
 }
 
 /** 日誌裡的一筆。凍過的，拿到之後改不動。 */

@@ -1,5 +1,10 @@
 /**
- * 把「現在是哪一格圍堵」講給模型聽——dsh `sandbox:policy` 那條系統提示貢獻的對應物。
+ * 圍堵模式的 plugin：**講給模型聽、記進日誌、讓人切得動**。
+ *
+ * 提示句那一半是 dsh `sandbox:policy` 那條系統提示貢獻的對應物；另外兩半（`/sandbox`
+ * 與 `sandbox/mode` 事件）的對應物是 dsh 的 `PermissionPresetService`。**那顆被切的格子
+ * 本身住在 {@link ./sandbox-mode.ts | sandbox-mode.ts}**，連同「為什麼不做具名 preset」
+ * 與「跨重啟為什麼交不出來」兩條登記。
  *
  * ## 為什麼這一句是承重的，不是裝飾
  *
@@ -36,7 +41,14 @@
 
 import type { NexusPlugin } from '@nexus/core';
 import { createMiddleware } from 'langchain';
-import type { ContainmentMode, ContainmentModeSource } from './contained-backend.js';
+import type { SandboxMode } from './contained-backend.js';
+import {
+  executeSandboxCommand,
+  SANDBOX_COMMAND_DESCRIPTION,
+  SANDBOX_COMMAND_HINT,
+  SANDBOX_COMMAND_NAME,
+} from './sandbox-mode.js';
+import type { SandboxModeController } from './sandbox-mode.js';
 
 /** 這個 middleware 的名字。排序斷言與錯誤訊息用得到。 */
 export const SANDBOX_POLICY_MIDDLEWARE_NAME = 'nexusSandboxPolicy';
@@ -48,7 +60,7 @@ export const SANDBOX_POLICY_MIDDLEWARE_NAME = 'nexusSandboxPolicy';
  * @param rootDir - 可寫根的絕對路徑；`workspace-write` 那一句要指名它。
  * @returns 接到 system prompt 後面的那段話。
  */
-export function sandboxPolicySentence(mode: ContainmentMode, rootDir: string): string {
+export function sandboxPolicySentence(mode: SandboxMode, rootDir: string): string {
   switch (mode) {
     case 'read-only':
       return (
@@ -66,22 +78,39 @@ export function sandboxPolicySentence(mode: ContainmentMode, rootDir: string): s
 }
 
 /**
- * 造那個把政策講給模型聽的 plugin。
+ * 造那個掌管圍堵模式的 plugin：**把政策講給模型聽、把它記進日誌、讓人切得動它**。
  *
- * **只在掛了 `ContainedFilesystemBackend` 的組裝上掛它**，理由見模組註解。
+ * **只在掛了 `ContainedFilesystemBackend` 的組裝上掛它**，理由見模組註解——而那條理由
+ * 現在管到三樣東西而不只提示句。**`/sandbox` 也一樣不能在沒有 fence 的組裝上出現**：
+ * 一個報告「目前的檔案政策：workspace-write」的命令，在整道 fence 不在路徑上的時候，
+ * 說的謊跟那句提示一模一樣，而且它還讓人以為自己切了什麼東西。
  *
- * @param resolveMode - 這一刻的圍堵強度。**傳來源不傳值**：跟 backend 讀的是同一顆，
+ * @param controller - 這次組裝那一格。**傳控制器不傳值**：fence 跟它讀同一顆，
  *   兩邊各存一份快照的話，切換那天畫面上講的與實際擋的會是兩格。
  * @param rootDir - 可寫根的絕對路徑。
  * @returns 可以放進組裝點清單的 plugin。
  */
 export function createSandboxPolicyPlugin(
-  resolveMode: ContainmentModeSource,
+  controller: SandboxModeController,
   rootDir: string,
 ): NexusPlugin {
+  const resolveMode = controller.source;
   return {
     name: 'sandbox-policy',
     apply(registry) {
+      // **只接 root。** subagent 有自己的會話日誌（#137），不看這一格的話每一次 spawn 都會
+      // 多釘一顆起始值進那份日誌；而 fence 只有一道，審計面該只有一個家。政策本身照樣管
+      // 到 subagent——擋人的是 fence，不是這顆事件。
+      registry.sessions.join((subject) => {
+        if (subject.address.kind !== 'root') return;
+        return controller.attach(subject.log);
+      });
+      registry.commands.register({
+        name: SANDBOX_COMMAND_NAME,
+        description: SANDBOX_COMMAND_DESCRIPTION,
+        input: { hint: SANDBOX_COMMAND_HINT },
+        handler: ({ rawInput }) => executeSandboxCommand(controller, rootDir, rawInput),
+      });
       registry.middleware.use(
         createMiddleware({
           name: SANDBOX_POLICY_MIDDLEWARE_NAME,

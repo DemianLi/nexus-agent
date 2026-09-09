@@ -463,6 +463,11 @@ describe('什麼推得動 roundsStarted', () => {
     // 不推，而這一次的理由最乾脆：它記的是**上下文被壓過一次**，跟目標推進到哪裡完全無關。
     // 真要說有關係也是反向的——一場長任務壓縮得越多，代表它走得越久，讓它去推一個
     // 「還能再問幾輪」的預算等於因為對話變長而扣使用者的額度。
+    //
+    // **`sandbox/mode` 是第四次**（[#238](https://github.com/DemianLi/nexus-agent/issues/238)
+    // 第 1 項）。不推，理由是它根本不在這條軸上：它記的是**檔案效果政策換了一格**，而且
+    // 寫它的是人打的 `/sandbox`（加上接線當下釘的那顆起始值）。讓一個「人動了一下設定」
+    // 去扣「還能再問幾輪」的預算，等於因為使用者收緊了沙箱而懲罰他。
     const KNOWN = [
       'turn/start',
       'turn/end',
@@ -474,6 +479,7 @@ describe('什麼推得動 roundsStarted', () => {
       'todo/write',
       'model/usage',
       'compaction/summary',
+      'sandbox/mode',
     ] as const;
     KNOWN satisfies readonly SessionEventType[];
     // 反過來這一條才是絆索：多一種而沒有列進來，`Exhaustive` 就變成 `never`。

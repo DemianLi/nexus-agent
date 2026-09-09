@@ -65,9 +65,10 @@ import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
 import { driveGoalRound } from './goal-driver.js';
 import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
 import type { NexusAgentHandle } from './agent-factory.js';
-import { CONTAINMENT_MODES, ContainedFilesystemBackend } from './contained-backend.js';
+import { isSandboxMode, SANDBOX_MODES, ContainedFilesystemBackend } from './contained-backend.js';
 import { createSandboxPolicyPlugin } from './sandbox-policy.js';
-import type { ContainmentMode } from './contained-backend.js';
+import { SANDBOX_COMMAND_NAME, SandboxModeController } from './sandbox-mode.js';
+import type { SandboxMode } from './contained-backend.js';
 import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MODEL_ID } from './live-model.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -100,7 +101,7 @@ export interface CliInvocation {
    * 照 dsh 的出廠 preset（`workspace-write`），而**可寫根之內的寫入在這一格底下是放行的**。
    * 要它不放行就切到 `read-only`。
    */
-  readonly sandbox?: ContainmentMode;
+  readonly sandbox?: SandboxMode;
   /**
    * 會話日誌落盤的根目錄。給了就把這一次的每一份日誌寫進它底下的一個 run 目錄，
    * 省略即**不落盤**（同 `fold.ts` 的 checkpointer：「缺席」就是關掉）。
@@ -243,7 +244,7 @@ export function parseSandboxMode(
   raw: string | undefined,
   workspace: string | undefined,
   usage: string,
-): ContainmentMode | undefined {
+): SandboxMode | undefined {
   if (raw === undefined) return undefined;
   if (workspace === undefined) {
     throw new Error(
@@ -252,12 +253,12 @@ export function parseSandboxMode(
     );
   }
   const mode = raw.trim();
-  if (!CONTAINMENT_MODES.includes(mode as ContainmentMode)) {
+  if (!isSandboxMode(mode)) {
     throw new Error(
-      `--sandbox 認不得 "${raw}"。認得的是 ${CONTAINMENT_MODES.join('、')}。\n\n${usage}`,
+      `--sandbox 認不得 "${raw}"。認得的是 ${SANDBOX_MODES.join('、')}。\n\n${usage}`,
     );
   }
-  return mode as ContainmentMode;
+  return mode;
 }
 
 /**
@@ -666,16 +667,20 @@ export async function createCliAgent(
   // `undefined` 是「沒給 `--workspace`」，兩個消費者都會退到基座那個 `StateBackend` 預設
   // （plugin 那側的預設字面照抄基座，見 `@nexus/plugin-submit-record` 的模組註解）。
   //
-  // **模式是傳一個函式進去，不是一個字面值**——今天這條路上它恆定（`--sandbox` 決定，一次
-  // 呼叫內不變），但 fence 從此是**逐次呼叫問一次**的，執行期切換那一刀落地時不必再回來
-  // 動這裡（理由見 `ContainmentModeSource`）。
+  // **模式是傳一個來源進去，不是一個字面值**：fence 逐次呼叫問一次，所以 `/sandbox` 換掉
+  // 控制器那一格之後，下一次檔案變更就照新那格判（理由見 `SandboxModeSource`）。
+  //
+  // **控制器建在這裡而不是模組層**，這決定了它的壽命：`serve.ts` 一條 thread 呼叫一次
+  // `createCliAgent`，所以一條 thread 一格。建在模組層或工廠閉包裡的話兩條 thread 會共用
+  // 同一格——一條 thread 的 `/sandbox read-only` 收緊到另一條 thread 的檔案工具上，
+  // 而那是靜默的（見 `sandbox-mode.ts` 的模組註解）。
   const workspaceRoot =
     invocation.workspace === undefined ? undefined : resolve(cwd, invocation.workspace);
-  const resolveSandboxMode = (): ContainmentMode => invocation.sandbox ?? 'workspace-write';
+  const sandboxMode = new SandboxModeController(invocation.sandbox ?? 'workspace-write');
   const backend =
     workspaceRoot === undefined
       ? undefined
-      : new ContainedFilesystemBackend({ rootDir: workspaceRoot, mode: resolveSandboxMode });
+      : new ContainedFilesystemBackend({ rootDir: workspaceRoot, mode: sandboxMode.source });
   const {
     agent,
     commands,
@@ -695,7 +700,7 @@ export async function createCliAgent(
       // 路徑上。理由與 dsh 的 `ctx.fs.sandboxMode === undefined` 就不貢獻同一條。
       ...(workspaceRoot === undefined
         ? []
-        : [createSandboxPolicyPlugin(resolveSandboxMode, workspaceRoot)]),
+        : [createSandboxPolicyPlugin(sandboxMode, workspaceRoot)]),
     ],
     ...(backend !== undefined && { backend }),
     systemPrompt: SYSTEM_PROMPT,
@@ -1189,7 +1194,8 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       invocation.workspace === undefined
         ? '檔案系統：虛擬（不碰磁碟）'
         : `檔案系統：${resolve(options.cwd ?? process.cwd(), invocation.workspace)}` +
-            `（變更圍堵在它之下，mode: ${invocation.sandbox ?? 'workspace-write'}）`,
+            `（變更圍堵在它之下，起始 mode: ${invocation.sandbox ?? 'workspace-write'}，` +
+            `/${SANDBOX_COMMAND_NAME} 切得動）`,
     );
     printer.log(APPROVAL_DISCLOSURE);
     // 第四行是**披露**，不是設定。tracing 開沒開不由這支程式決定——基座讀到環境變數就

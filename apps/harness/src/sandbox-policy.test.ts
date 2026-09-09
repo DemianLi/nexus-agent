@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { DEFAULT_PLUGINS, createCliAgent, parseCliArgs, runTurn } from './cli.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
-import type { ContainmentMode } from './contained-backend.js';
+import type { SandboxMode } from './contained-backend.js';
 import { parseServeArgs } from './serve.js';
 import { sandboxPolicySentence } from './sandbox-policy.js';
 
@@ -53,7 +53,7 @@ function flatten(content: unknown): string {
 
 /** 跑一輪，回傳模型這一輪收到的 system prompt。 */
 async function promptOf(
-  invocation: { readonly workspace?: string; readonly sandbox?: ContainmentMode },
+  invocation: { readonly workspace?: string; readonly sandbox?: SandboxMode },
   cwd: string,
 ): Promise<string> {
   const { agent, dispose, model, sessionLog } = await createCliAgent(
@@ -117,7 +117,7 @@ describe('fence 讀的是來源不是快照', () => {
   });
 
   it('同一顆 backend，來源換一格，下一次呼叫就照新的那一格判', async () => {
-    let mode: ContainmentMode = 'workspace-write';
+    let mode: SandboxMode = 'workspace-write';
     const backend = new ContainedFilesystemBackend({ rootDir: root, mode: () => mode });
 
     const allowed = await backend.write('/a.txt', '一');
