@@ -181,6 +181,8 @@ registry.approvals.gate((exec, next) =>
 
 `exit_plan_mode` 是一個純記憶體的模式切換。**`write_file`（含真的寫磁碟那一個）今天裸奔。**
 
+> **2026-09-09 更新**：上面那句「唯一的註冊者」是這份調研當下的量測，**現在是兩個**——[#231](https://github.com/DemianLi/nexus-agent/issues/231) 第二刀加了 `@nexus/plugin-submit-record`，只認 `submit_record`。**鏈底仍然是 `allow`，`write_file` 仍然裸奔**（給所有 `write_file` 加閘門是 #231 明著排除的另一張卡），所以這一段的結論沒有變，變的只有那個數字。
+
 ---
 
 ## 三、dsh 的形狀

@@ -31,6 +31,7 @@ import type {
 } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { createAskUserPlugin } from '@nexus/plugin-ask-user';
+import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import {
   attachSessionPersistence,
@@ -44,6 +45,7 @@ import { createJsonlSessionStore } from './jsonl-session-store.js';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant';
 import { createAskUserInvariantPlugin } from '@nexus/plugin-ask-user/invariant';
+import { createSubmitRecordInvariantPlugin } from '@nexus/plugin-submit-record/invariant';
 import { createEchoInvariantPlugin } from '@nexus/plugin-echo/invariant';
 import { createGoalPlugin, DEFAULT_MAX_GOAL_ROUNDS } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
@@ -356,6 +358,7 @@ export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
   createPlanModeInvariantPlugin(),
   createQuickJsInvariantPlugin(),
   createSkillsInvariantPlugin(),
+  createSubmitRecordInvariantPlugin(),
   createTelemetryOtelInvariantPlugin(),
   createTodoInvariantPlugin(),
   createValidationInvariantPlugin(),
@@ -594,6 +597,17 @@ export async function createCliAgent(
     ...(approvals?.enabled !== undefined && { approvalsEnabled: approvals.enabled }),
     hasCheckpointer: checkpointer !== undefined,
   });
+  // **backend 也是建一次、兩個消費者共用**，理由與上面的 channel 同一條：`submit_record`
+  // 拿的是這一份，`write_file` 拿的是同一份經 `foldRegistry` 之後的那一個。這裡寫成
+  // 內聯的 `new ContainedFilesystemBackend(...)` 再給 plugin 建第二個的話，兩個工具會
+  // 寫到兩個地方——**而且兩邊都會寫成功**，一條測試都不會紅。
+  //
+  // `undefined` 是「沒給 `--workspace`」，兩個消費者都會退到基座那個 `StateBackend` 預設
+  // （plugin 那側的預設字面照抄基座，見 `@nexus/plugin-submit-record` 的模組註解）。
+  const backend =
+    invocation.workspace === undefined
+      ? undefined
+      : new ContainedFilesystemBackend({ rootDir: resolve(cwd, invocation.workspace) });
   const {
     agent,
     commands,
@@ -604,10 +618,12 @@ export async function createCliAgent(
     telemetrySharing,
   } = await createNexusAgent({
     model,
-    plugins: [...plugins, createAskUserPlugin({ channel })],
-    ...(invocation.workspace !== undefined && {
-      backend: new ContainedFilesystemBackend({ rootDir: resolve(cwd, invocation.workspace) }),
-    }),
+    plugins: [
+      ...plugins,
+      createAskUserPlugin({ channel }),
+      createSubmitRecordPlugin({ ...(backend !== undefined && { backend }) }),
+    ],
+    ...(backend !== undefined && { backend }),
     systemPrompt: SYSTEM_PROMPT,
     checkpointer,
     ...(onInvariantViolation !== undefined && { onInvariantViolation }),
