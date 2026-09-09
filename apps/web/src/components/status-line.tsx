@@ -70,7 +70,9 @@ export function StatusLine({
     );
   }
   if (state.status === 'awaiting-input') {
-    const names = state.pending?.actions.map((action) => action.name).join('、') ?? '';
+    const names = state.pendings
+      .flatMap((pending) => pending.actions.map((action) => action.name))
+      .join('、');
     return (
       <p className="text-sm" role="status">
         等待核准：{names}

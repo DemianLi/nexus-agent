@@ -72,12 +72,14 @@ export interface Conversation {
    */
   send(text: string): Promise<void>;
   /**
-   * 回答掛著的那個核准請求。
+   * 回答**指名的那一顆**核准請求。
    *
-   * 一個決定套到整批上——逐筆按在基座那側分不出來（見 `ApprovalCard`）。
-   * 沒有掛著的請求時什麼都不做。
+   * 一個決定套到那顆中斷的整批 `actionRequests` 上——逐筆按在基座那側分不出來
+   * （見 `ApprovalCard`）。**但不會套到同一輪的其他中斷上**：`interruptId` 就是
+   * 那道分界，基座據它逐 task 派送（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
+   * 認不得那顆 id 時什麼都不做。
    */
-  respond(decision: string): Promise<void>;
+  respond(interruptId: string, decision: string): Promise<void>;
 }
 
 export function useConversation(options: UseConversationOptions = {}): Conversation {
@@ -197,14 +199,16 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   );
 
   const respond = useCallback(
-    async (decision: string) => {
-      const pending = stateRef.current.pending;
+    async (interruptId: string, decision: string) => {
+      const pending = stateRef.current.pendings.find(
+        (candidate) => candidate.interruptId === interruptId,
+      );
       if (pending === undefined) {
         return;
       }
       // **決定在線上沒有回聲**——拒絕掉的那一批連一顆 frame 都不會有（實測），
       // 所以跟使用者那句話一樣，在送出的那一刻自己寫進去。
-      setState((previous) => appendDecision(previous, decision));
+      setState((previous) => appendDecision(previous, interruptId, decision));
       note(
         await clientRef.current.inputRespond(threadId, {
           namespace: [...pending.namespace],

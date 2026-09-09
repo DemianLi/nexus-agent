@@ -79,9 +79,12 @@ function fakeClient(
 }
 
 /** 一顆核准請求。逐筆詞彙照基座的形狀給——`reviewConfigs` 與 `actionRequests` 平行。 */
-function approvalFrame(actions: readonly { name: string; allowed: readonly string[] }[]): Event {
+function approvalFrame(
+  actions: readonly { name: string; allowed: readonly string[] }[],
+  interruptId = 'int-1',
+): Event {
   return frame('input.requested', ['tools:a'], {
-    interrupt_id: 'int-1',
+    interrupt_id: interruptId,
     payload: {
       actionRequests: actions.map((action) => ({ name: action.name, args: { n: action.name } })),
       reviewConfigs: actions.map((action) => ({
@@ -215,6 +218,40 @@ describe('核准請求', () => {
     expect(screen.getByRole('button', { name: '全部核准' })).toBeTruthy();
     // 多出來的那顆「全部拒絕」按下去是整場 run 死——基座對 beta 不接受 reject。
     expect(screen.queryByRole('button', { name: '全部拒絕' })).toBeNull();
+  });
+
+  it('**同一輪兩顆中斷：狀態列兩個都講，卡片一次一張，決定送給第一顆**', async () => {
+    // 逐次呼叫的閘門會發**兩顆**中斷（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
+    // 折疊器兩顆都留著，而畫面這一層今天只渲染第一張卡——多張卡是那張卡的第 2 項、
+    // 還沒做。**狀態列是唯一一個同時看得見兩顆的表面**，所以它要講出兩個名字：
+    // 少了這一句，第二顆在畫面上會一點痕跡都沒有。
+    seq = 0;
+    const { client, responded } = fakeClient([
+      approvalFrame([{ name: 'alpha', allowed: ['approve', 'reject'] }], 'int-1'),
+      approvalFrame([{ name: 'beta', allowed: ['approve', 'reject'] }], 'int-2'),
+    ]);
+    render(<App client={client} />);
+
+    await waitFor(() => expect(screen.getByTestId('approval-card')).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toContain('等待核准：alpha、beta'),
+    );
+    // 卡片是第一顆那張，不是最後一顆——後者正是原本那個缺陷的樣子。
+    expect(screen.getAllByTestId('approval-card')).toHaveLength(1);
+    expect(screen.getByText('alpha')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '全部核准' }));
+
+    await waitFor(() => expect(responded.length).toBe(1));
+    // **送給 `int-1`**：送成 `int-2` 的話，人看的是 alpha、答的是 beta。
+    expect(responded[0]).toEqual({
+      namespace: ['tools:a'],
+      interrupt_id: 'int-1',
+      response: { decisions: [{ type: 'approve' }] },
+    });
+    // 第一顆收掉之後第二顆補上來，狀態列跟著只剩它。
+    await waitFor(() => expect(screen.getByText('beta')).toBeTruthy());
+    expect(screen.getByRole('status').textContent).toContain('等待核准：beta');
   });
 });
 

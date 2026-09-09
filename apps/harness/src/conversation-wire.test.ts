@@ -231,8 +231,8 @@ describe('折疊器的狀態', () => {
         current.entries.length > 0,
     );
     expect(state.status).toBe('awaiting-input');
-    expect(state.pending?.actions.map((action) => action.name)).toEqual(['take_note']);
-    expect(state.pending?.allowedDecisions).toEqual(['approve', 'reject']);
+    expect(state.pendings[0]?.actions.map((action) => action.name)).toEqual(['take_note']);
+    expect(state.pendings[0]?.allowedDecisions).toEqual(['approve', 'reject']);
     expect(calls).toEqual([]);
     void frames;
   });

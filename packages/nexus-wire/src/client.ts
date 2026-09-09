@@ -85,7 +85,13 @@ export interface WireClient {
   ): Promise<AsyncGenerator<Event, void, undefined>>;
   /** 送一句話進去。回應只是收件回條，不等這一輪跑完。 */
   runStart(threadId: string, text: string): Promise<UplinkResult>;
-  /** 回答一個核准請求。同一個中斷的多筆決定要一次送，見開發計劃 Phase 5 的全有全無那條。 */
+  /**
+   * 回答**一顆**核准請求。
+   *
+   * 同一顆中斷的多筆決定要一次送（見開發計劃 Phase 5 的全有全無那條），但**界線就在
+   * 中斷上**：同一輪的其他中斷各答各的，`interrupt_id` 是那道界線，伺服器據它逐 task
+   * 派送（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
+   */
   inputRespond(
     threadId: string,
     params: Pick<InputRespondOne, 'namespace' | 'interrupt_id' | 'response'>,
