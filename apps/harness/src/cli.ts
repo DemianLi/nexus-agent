@@ -65,7 +65,9 @@ import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
 import { driveGoalRound } from './goal-driver.js';
 import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
 import type { NexusAgentHandle } from './agent-factory.js';
-import { ContainedFilesystemBackend } from './contained-backend.js';
+import { CONTAINMENT_MODES, ContainedFilesystemBackend } from './contained-backend.js';
+import { createSandboxPolicyPlugin } from './sandbox-policy.js';
+import type { ContainmentMode } from './contained-backend.js';
 import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MODEL_ID } from './live-model.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -86,6 +88,19 @@ export interface CliInvocation {
    * 虛擬 FS（`StateBackend`，不碰磁碟）。
    */
   readonly workspace?: string;
+  /**
+   * 這一次呼叫的圍堵強度。省略即 `workspace-write`——**設防的那一個是預設**。
+   *
+   * **只有給了 `--workspace` 才有意義**：沒給的時候根本沒有 `ContainedFilesystemBackend`，
+   * 檔案落在基座的 `StateBackend` 裡，這一格一個位元組都影響不到。所以兩者不成對是
+   * **錯誤**，不是無害的多餘（同 `--max-goal-rounds` 那條規矩）——收下來會變成一個
+   * 看起來設過、實際上什麼都沒圍到的模式。
+   *
+   * 預設值本身是 [#238](https://github.com/DemianLi/nexus-agent/issues/238) 第 0 項的定案：
+   * 照 dsh 的出廠 preset（`workspace-write`），而**可寫根之內的寫入在這一格底下是放行的**。
+   * 要它不放行就切到 `read-only`。
+   */
+  readonly sandbox?: ContainmentMode;
   /**
    * 會話日誌落盤的根目錄。給了就把這一次的每一份日誌寫進它底下的一個 run 目錄，
    * 省略即**不落盤**（同 `fold.ts` 的 checkpointer：「缺席」就是關掉）。
@@ -130,6 +145,8 @@ export const USAGE = `用法：cli [選項] [要說的話...]
   --plugins <module>   從指定模組載 plugin 清單（預設匯出一個陣列）
   --workspace <dir>    在真實磁碟的這個目錄上跑，變更被圍堵在它之下
                        （省略即虛擬檔案系統，完全不碰磁碟）
+  --sandbox <mode>     圍堵強度：read-only｜workspace-write｜danger-full-access
+                       預設 workspace-write（可寫根之內放行）；要配 --workspace
   --session-log <dir>  把會話日誌寫進這個目錄底下（省略即不落盤）
                        它不能在 --workspace 底下：日誌是基礎建設，不是 agent 的工作區
   --goal-driver        一個 active 的目標沒達成時自己再開一輪（預設關）
@@ -159,6 +176,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
         live: { type: 'boolean', default: false },
         plugins: { type: 'string' },
         workspace: { type: 'string' },
+        sandbox: { type: 'string' },
         'session-log': { type: 'string' },
         'goal-driver': { type: 'boolean', default: false },
         'max-goal-rounds': { type: 'string' },
@@ -178,6 +196,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   if (values.workspace !== undefined && values.workspace.trim() === '') {
     throw new Error(`--workspace 要給一個目錄路徑。\n\n${USAGE}`);
   }
+  const sandbox = parseSandboxMode(values.sandbox, values.workspace, USAGE);
   const sessionLog = values['session-log'];
   if (sessionLog !== undefined && sessionLog.trim() === '') {
     throw new Error(`--session-log 要給一個目錄路徑。\n\n${USAGE}`);
@@ -192,11 +211,53 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     live: values.live === true,
     ...(values.plugins !== undefined && { pluginModule: values.plugins }),
     ...(values.workspace !== undefined && { workspace: values.workspace }),
+    ...(sandbox !== undefined && { sandbox }),
     ...(sessionLog !== undefined && { sessionLog }),
     goalDriver,
     ...(maxGoalRounds !== undefined && { maxGoalRounds }),
     help: values.help === true,
   };
+}
+
+/**
+ * `--sandbox` 那一格。
+ *
+ * **沒給 `--workspace` 就拋。** 那個組合底下沒有 `ContainedFilesystemBackend`——檔案落在
+ * 基座的 `StateBackend` 裡，這道 fence 整個不在路徑上。靜靜收下的話，畫面上是「我設了
+ * read-only」，實際上模型照樣想寫什麼寫什麼，而**一條測試都不會紅**（同 `--max-goal-rounds`
+ * 那條規矩）。
+ *
+ * **認不得的模式名也拋。** 型別擋不住命令列上來的字串，落到 backend 那邊會變成「不是
+ * `danger-full-access` 也不是 `read-only`」——於是靜靜地當成 `workspace-write`，那是誤放行。
+ *
+ * **兩個入口共用這一份**（`cli` 與 `serve`），所以用法那段話是傳進來的——同
+ * `--session-log 不能在 --workspace 底下」那條檢查。兩份各寫一次的下場是有一天只有一邊擋。
+ *
+ * @param raw - 命令列上那串字，沒給就是 `undefined`。
+ * @param workspace - `--workspace` 那一格，用來檢查兩者成對。
+ * @param usage - 接在錯誤訊息後面的用法那段話（呼叫的入口各有一份）。
+ * @returns 那個模式，或沒給時的 `undefined`（＝由 backend 用它的預設）。
+ * @throws 沒配 `--workspace`，或模式名認不得——訊息接上用法。
+ */
+export function parseSandboxMode(
+  raw: string | undefined,
+  workspace: string | undefined,
+  usage: string,
+): ContainmentMode | undefined {
+  if (raw === undefined) return undefined;
+  if (workspace === undefined) {
+    throw new Error(
+      `--sandbox 要配 --workspace：沒有 --workspace 的時候檔案跑在虛擬檔案系統裡，` +
+        `圍堵那道 fence 根本不在路徑上，這個模式一個位元組都影響不到。\n\n${usage}`,
+    );
+  }
+  const mode = raw.trim();
+  if (!CONTAINMENT_MODES.includes(mode as ContainmentMode)) {
+    throw new Error(
+      `--sandbox 認不得 "${raw}"。認得的是 ${CONTAINMENT_MODES.join('、')}。\n\n${usage}`,
+    );
+  }
+  return mode as ContainmentMode;
 }
 
 /**
@@ -563,7 +624,7 @@ type NexusAgent = NexusAgentHandle['agent'];
  * @throws 清單載入失敗、fold 前置條件不成立，或基座擋下這份組裝。
  */
 export async function createCliAgent(
-  invocation: Pick<CliInvocation, 'live' | 'workspace'>,
+  invocation: Pick<CliInvocation, 'live' | 'workspace' | 'sandbox'>,
   plugins: readonly NexusPlugin[],
   cwd: string = process.cwd(),
   onInvariantViolation?: (error: InvariantError) => void,
@@ -604,10 +665,17 @@ export async function createCliAgent(
   //
   // `undefined` 是「沒給 `--workspace`」，兩個消費者都會退到基座那個 `StateBackend` 預設
   // （plugin 那側的預設字面照抄基座，見 `@nexus/plugin-submit-record` 的模組註解）。
+  //
+  // **模式是傳一個函式進去，不是一個字面值**——今天這條路上它恆定（`--sandbox` 決定，一次
+  // 呼叫內不變），但 fence 從此是**逐次呼叫問一次**的，執行期切換那一刀落地時不必再回來
+  // 動這裡（理由見 `ContainmentModeSource`）。
+  const workspaceRoot =
+    invocation.workspace === undefined ? undefined : resolve(cwd, invocation.workspace);
+  const resolveSandboxMode = (): ContainmentMode => invocation.sandbox ?? 'workspace-write';
   const backend =
-    invocation.workspace === undefined
+    workspaceRoot === undefined
       ? undefined
-      : new ContainedFilesystemBackend({ rootDir: resolve(cwd, invocation.workspace) });
+      : new ContainedFilesystemBackend({ rootDir: workspaceRoot, mode: resolveSandboxMode });
   const {
     agent,
     commands,
@@ -622,6 +690,12 @@ export async function createCliAgent(
       ...plugins,
       createAskUserPlugin({ channel }),
       createSubmitRecordPlugin({ ...(backend !== undefined && { backend }) }),
+      // **有圍堵才講**。沒有 `--workspace` 的組裝一格圍堵都沒有，那時候講「目前的檔案
+      // 政策是 workspace-write」是對模型說謊——它會以為根外被擋著，而整道 fence 不在
+      // 路徑上。理由與 dsh 的 `ctx.fs.sandboxMode === undefined` 就不貢獻同一條。
+      ...(workspaceRoot === undefined
+        ? []
+        : [createSandboxPolicyPlugin(resolveSandboxMode, workspaceRoot)]),
     ],
     ...(backend !== undefined && { backend }),
     systemPrompt: SYSTEM_PROMPT,
@@ -1114,7 +1188,8 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     printer.log(
       invocation.workspace === undefined
         ? '檔案系統：虛擬（不碰磁碟）'
-        : `檔案系統：${resolve(options.cwd ?? process.cwd(), invocation.workspace)}（變更圍堵在它之下）`,
+        : `檔案系統：${resolve(options.cwd ?? process.cwd(), invocation.workspace)}` +
+            `（變更圍堵在它之下，mode: ${invocation.sandbox ?? 'workspace-write'}）`,
     );
     printer.log(APPROVAL_DISCLOSURE);
     // 第四行是**披露**，不是設定。tracing 開沒開不由這支程式決定——基座讀到環境變數就
