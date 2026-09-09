@@ -170,6 +170,18 @@ describe('切換寫進會話日誌', () => {
     expect(log.events[0]?.data).toEqual({ mode: 'read-only' });
   });
 
+  it('接的是一份已經有東西的日誌時，起始值照樣釘得進去', () => {
+    const controller = new SandboxModeController('workspace-write');
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: '嗨' });
+
+    controller.attach(log);
+
+    // 釘的位置是**接線當下**，不是日誌開頭。讀日誌的人因此讀得出「這一輪之後政策才被
+    // 宣告」與「這一輪之前就是這一格」的差別。
+    expect(log.events.map((event) => event.type)).toEqual(['turn/start', 'sandbox/mode']);
+  });
+
   it('每一次真的變了都多一顆，帶的是整個值不是差異', () => {
     const controller = new SandboxModeController('workspace-write');
     const log = new SessionLog('t');
@@ -252,16 +264,16 @@ describe('組裝起來之後', () => {
     const first = await createCliAgent({ live: false, workspace: root }, DEFAULT_PLUGINS, root);
     const second = await createCliAgent({ live: false, workspace: root }, DEFAULT_PLUGINS, root);
     try {
+      // **活的 signal**，不是一個已經 abort 的。發派面在中止時根本不呼叫 handler
+      // （`@nexus/plugin-commands` 的 `execute` 在進 handler 之前就 `throw abortError`），
+      // 所以餵一個 abort 過的進來會讓這條測試記下一件產品路徑上不成立的事。
+      const signal = new AbortController().signal;
       const command = first.commands.find(SANDBOX_COMMAND_NAME);
-      await command?.handler({
-        commandId: 'c1',
-        rawInput: ' read-only',
-        signal: AbortSignal.abort(),
-      });
+      await command?.handler({ commandId: 'c1', rawInput: ' read-only', signal });
 
       const still = await second.commands
         .find(SANDBOX_COMMAND_NAME)
-        ?.handler({ commandId: 'c2', rawInput: '', signal: AbortSignal.abort() });
+        ?.handler({ commandId: 'c2', rawInput: '', signal });
 
       expect(still?.text).toContain('目前的檔案政策：workspace-write');
     } finally {
