@@ -146,6 +146,89 @@ describe('折疊器', () => {
     ]);
   });
 
+  it('`tool-suspended` 是「等人」那一格，而且不留錯誤字', () => {
+    seq = 0;
+    const state = reduceAll(emptyConversation(), [
+      frame('tools', ['tools:a'], {
+        event: 'tool-started',
+        tool_call_id: 'call_1_0',
+        tool_name: 'ask_user_question',
+        input: '{}',
+      }),
+      frame('tools', ['tools:a'], { event: 'tool-suspended', tool_call_id: 'call_1_0' }),
+    ]);
+    const entry = state.entries[0];
+    if (entry?.kind !== 'tool') throw new Error('沒有工具條目');
+    expect(entry.status).toBe('suspended');
+    expect(entry.error).toBeUndefined();
+  });
+
+  it('**第二顆 `tool-started` 是同一次呼叫的續行**，不長第二個條目', () => {
+    seq = 0;
+    const started = {
+      event: 'tool-started',
+      tool_call_id: 'call_1_0',
+      tool_name: 'ask_user_question',
+      input: '{}',
+    };
+    const state = reduceAll(emptyConversation(), [
+      frame('tools', ['tools:a'], started),
+      frame('tools', ['tools:a'], { event: 'tool-suspended', tool_call_id: 'call_1_0' }),
+      // 人回答之後圖從 tools 節點重跑，基座再發一顆一模一樣的 `tool-started`（實測）。
+      frame('tools', ['tools:a'], started),
+    ]);
+    expect(state.entries).toHaveLength(1);
+    const entry = state.entries[0];
+    if (entry?.kind !== 'tool') throw new Error('沒有工具條目');
+    // 續行回到執行中，而且中斷那段留下的東西要清乾淨。
+    expect(entry.status).toBe('running');
+    expect(entry.error).toBeUndefined();
+  });
+
+  it('**收尾了不等於成功了**：帶 `failed` 的 `tool-finished` 是失敗不是完成', () => {
+    seq = 0;
+    const state = reduceAll(emptyConversation(), [
+      frame('tools', ['tools:a'], {
+        event: 'tool-started',
+        tool_call_id: 'call_1_0',
+        tool_name: 'ask_user_question',
+        input: '{}',
+      }),
+      frame('tools', ['tools:a'], {
+        event: 'tool-finished',
+        tool_call_id: 'call_1_0',
+        failed: true,
+        message: '人放棄了這一組問題',
+        output: { kwargs: { status: 'error' } },
+      }),
+    ]);
+    const entry = state.entries[0];
+    if (entry?.kind !== 'tool') throw new Error('沒有工具條目');
+    expect(entry.status).toBe('failed');
+    expect(entry.error).toBe('人放棄了這一組問題');
+  });
+
+  it('**沒有 `failed` 的照舊是完成**——不是把每一格都畫成失敗', () => {
+    seq = 0;
+    const state = reduceAll(emptyConversation(), [
+      frame('tools', ['tools:a'], {
+        event: 'tool-started',
+        tool_call_id: 'call_1_0',
+        tool_name: 'take_note',
+        input: '{}',
+      }),
+      frame('tools', ['tools:a'], {
+        event: 'tool-finished',
+        tool_call_id: 'call_1_0',
+        output: '寫好了',
+      }),
+    ]);
+    const entry = state.entries[0];
+    if (entry?.kind !== 'tool') throw new Error('沒有工具條目');
+    expect(entry.status).toBe('done');
+    expect(entry.error).toBeUndefined();
+  });
+
   it('task 的參數不是合法 JSON 時歸屬不出來，但不會炸', () => {
     seq = 0;
     const state = reduceAll(emptyConversation(), [

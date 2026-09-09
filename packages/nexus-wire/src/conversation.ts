@@ -61,7 +61,19 @@ export interface ToolEntry {
   readonly name: string;
   /** 參數照線上給的原樣留著（基座給的是 JSON 字串），不在這一層猜它的形狀。 */
   readonly input: string;
-  readonly status: 'running' | 'done' | 'failed';
+  /**
+   * 這次呼叫走到哪裡了。
+   *
+   * **`suspended` 是「停下來等人」，不是一種失敗。** 中斷是用拋例外實作的，所以在基座
+   * 眼裡它跟工具炸了走同一條路；分類做在 `thread-pump.ts` 的 `classifyToolData`，這一層
+   * 收到的是已經分好的 `tool-suspended`。少了這一格，一顆還沒被回答的問題在畫面上是紅字
+   * 「失敗」（[#239](https://github.com/DemianLi/nexus-agent/issues/239) 實測）。
+   *
+   * **而 `done` 不等於「成功了」的那一半也一起收了**：一則 `status: 'error'` 的
+   * ToolMessage 走的是 `tool-finished`，pump 會補一格 `failed`，這裡讀它。兩面不一起收的
+   * 話，「掛著的不顯示失敗」單獨綠得起來——把全部都畫成「執行中」也會綠。
+   */
+  readonly status: 'running' | 'suspended' | 'done' | 'failed';
   readonly output?: unknown;
   readonly error?: string;
   readonly attribution: Attribution;
@@ -485,6 +497,8 @@ interface ToolData {
   readonly input?: string;
   readonly output?: unknown;
   readonly message?: string;
+  /** `tool-finished` 專用：那則 ToolMessage 自己說它失敗了。由 pump 分類，見它的檔頭。 */
+  readonly failed?: boolean;
 }
 
 /** `task` 的參數裡才有 subagent 的名字，而它是一段 JSON 字串。 */
@@ -527,14 +541,47 @@ function reduceTool(
       status: 'running',
       attribution: attribute(state, namespace),
     };
+    // **同一個 `tool_call_id` 會來第二次**：人回答了中斷之後圖從 tools 節點重跑，基座
+    // 再發一顆 `tool-started`（實測）。無條件 append 的話，畫面上同一顆呼叫長出兩個條目
+    // ——而 `id` 是一樣的，所以連「哪一個是真的」都分不出來。第二次是**同一次呼叫的續行**，
+    // 更新那一格；`error` 要一起清掉，不然中斷那段留下的字會跟著新狀態一起顯示。
+    if (state.entries.some((existing) => existing.id === id)) {
+      return {
+        ...state,
+        subagents,
+        entries: replace(state.entries, id, (existing) =>
+          existing.kind === 'tool'
+            ? { ...existing, status: 'running', error: undefined, output: undefined }
+            : existing,
+        ),
+      };
+    }
     return { ...state, subagents, entries: [...state.entries, entry] };
   }
 
-  if (data.event === 'tool-finished') {
+  if (data.event === 'tool-suspended') {
     return {
       ...state,
       entries: replace(state.entries, id, (entry) =>
-        entry.kind === 'tool' ? { ...entry, status: 'done', output: data.output } : entry,
+        // **`error` 不放東西**：那顆中斷的酬載是給折疊器與卡片用的，不是給人看的錯誤字。
+        entry.kind === 'tool' ? { ...entry, status: 'suspended', error: undefined } : entry,
+      ),
+    };
+  }
+
+  if (data.event === 'tool-finished') {
+    const failed = data.failed === true;
+    return {
+      ...state,
+      entries: replace(state.entries, id, (entry) =>
+        entry.kind === 'tool'
+          ? {
+              ...entry,
+              status: failed ? 'failed' : 'done',
+              output: data.output,
+              ...(failed ? { error: data.message ?? '未指名的錯誤' } : {}),
+            }
+          : entry,
       ),
     };
   }
