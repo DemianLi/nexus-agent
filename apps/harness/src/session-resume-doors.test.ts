@@ -118,8 +118,15 @@ function saverConstructions(): string[] {
  * 今天全樹唯一那一處。**這是 characterization：它記的是現況，不是理想形狀。**
  *
  * `MemorySaver` 是 process 內的，重啟就沒——**門 B 關著**。
+ *
+ * **2026-09-09 這一行的字面改過一次，門沒有動。** 原本是 `checkpointer: new MemorySaver(),`
+ * 寫在 `createNexusAgent` 的參數上；[#231](https://github.com/DemianLi/nexus-agent/issues/231)
+ * 把它提成一個區域變數，因為 `ask_user_question` 的 fail-closed 要問「這次組裝有沒有
+ * checkpointer」，而寫死 `true` 就會在門真的開的那天靜靜地說謊。**建的仍是同一顆、
+ * 仍然只有這一處、仍然是不耐久的那一種**——所以這裡改的是 characterization 的字面，
+ * 不是上面那三個目的地的任何一個。
  */
-const THE_ONLY_SAVER = ['apps/harness/src/cli.ts: checkpointer: new MemorySaver(),'];
+const THE_ONLY_SAVER = ['apps/harness/src/cli.ts: const checkpointer = new MemorySaver();'];
 
 /**
  * 這條絆索響的時候，讀的人該往哪裡去。**三個目的地，不是「值不對」。**

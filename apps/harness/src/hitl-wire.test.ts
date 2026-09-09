@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
-import { emptyCommandPoint } from './fixtures.js';
+import { approvalAt, approvalToolNames, emptyCommandPoint } from './fixtures.js';
 import { createWireHandler } from './wire-handler.js';
 
 /**
@@ -132,10 +132,7 @@ async function until(
 async function decide(session: Session, threadId: string, decision: string) {
   // **`interruptOn` 那條路一輪只有一顆中斷**（一顆帶整批 `actionRequests`），
   // 所以這裡讀 `[0]` 是安全的。逐次呼叫那條路的多顆並存見 `fanout-wire.test.ts`。
-  const pending = session.state.pendings[0];
-  if (pending === undefined) {
-    throw new Error('沒有掛著的核准請求');
-  }
+  const pending = approvalAt(session.state.pendings);
   session.state = appendDecision(session.state, pending.interruptId, decision);
   return session.client.inputRespond(threadId, {
     namespace: [...pending.namespace],
@@ -199,7 +196,7 @@ describe('核准之後，經過線', () => {
     const session = await open(agent, 'h1', '動手');
 
     await until(session, (state) => state.status === 'awaiting-input');
-    expect(session.state.pendings[0]?.actions.map((action) => action.name)).toEqual(['alpha']);
+    expect(approvalToolNames(session.state.pendings)).toEqual(['alpha']);
     expect(calls).toEqual([]);
 
     await decide(session, 'h1', 'approve');
@@ -243,13 +240,10 @@ describe('核准之後，經過線', () => {
     const session = await open(agent, 'h3', '動手');
     await until(session, (state) => state.status === 'awaiting-input');
 
-    expect(session.state.pendings[0]?.actions.map((action) => action.name)).toEqual([
-      'alpha',
-      'beta',
-    ]);
+    expect(approvalToolNames(session.state.pendings)).toEqual(['alpha', 'beta']);
     // 讀 `[0]` 的話這裡是 `['approve','reject']`，畫面上就會多一顆按下去讓整場 run 死
     // 的「全部拒絕」——基座對不在那一筆清單裡的決定是當場拋。
-    expect(session.state.pendings[0]?.allowedDecisions).toEqual(['approve']);
+    expect(approvalAt(session.state.pendings).allowedDecisions).toEqual(['approve']);
     await session.close();
   });
 

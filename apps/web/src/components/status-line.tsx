@@ -6,6 +6,7 @@
  */
 
 import type { ConversationState } from '@nexus/wire';
+import { isApprovalPending, isQuestionPending } from '@nexus/wire';
 
 export function StatusLine({
   state,
@@ -70,12 +71,21 @@ export function StatusLine({
     );
   }
   if (state.status === 'awaiting-input') {
+    // 兩種中斷可以同時掛著，而它們等的不是同一件事——「核准」與「回答」擠成一句話，
+    // 人會以為畫面上那張問答卡是要他核准什麼。
     const names = state.pendings
-      .flatMap((pending) => pending.actions.map((action) => action.name))
+      .flatMap((pending) => (isApprovalPending(pending) ? pending.actions : []))
+      .map((action) => action.name)
       .join('、');
+    const questions = state.pendings.filter(isQuestionPending).length;
     return (
       <p className="text-sm" role="status">
-        等待核准：{names}
+        {[
+          names === '' ? undefined : `等待核准：${names}`,
+          questions === 0 ? undefined : `等你回答 ${questions} 組問題`,
+        ]
+          .filter((part) => part !== undefined)
+          .join('；')}
       </p>
     );
   }

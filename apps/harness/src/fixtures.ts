@@ -10,6 +10,8 @@
 import { tool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
 import type { CommandRegistrationPoint, NexusPlugin } from '@nexus/core';
+import type { PendingApproval, PendingInput } from '@nexus/wire';
+import { isApprovalPending } from '@nexus/wire';
 import { createRegistry } from '@nexus/core';
 import { StateBackend } from 'deepagents';
 import { z } from 'zod';
@@ -103,4 +105,27 @@ export function createToolPlugin(name: string, scope?: string): NexusPlugin {
       registry.tools.register(fakeTool(name), scope === undefined ? undefined : { scope });
     },
   };
+}
+
+/**
+ * 從 `pendings` 取第 n 顆，並斷言它是**核准**請求。
+ *
+ * `pendings` 現在裝得下兩種中斷（[#231](https://github.com/DemianLi/nexus-agent/issues/231)），
+ * 而以前那種 `pendings[0]?.actions` 的寫法在型別上已經不成立。**窄化寫成會拋的斷言而不是
+ * `?.`**：「拿到的是問答那一顆」與「一顆都沒有」在 `?.` 之下都是 `undefined`，
+ * 而那會讓一條測錯東西的測試綠著。
+ */
+export function approvalAt(pendings: readonly PendingInput[], index = 0): PendingApproval {
+  const pending = pendings[index];
+  if (pending === undefined || !isApprovalPending(pending)) {
+    throw new Error(`pendings[${index}] 不是核准請求：${JSON.stringify(pending)}`);
+  }
+  return pending;
+}
+
+/** `pendings` 裡每一顆核准請求的工具名，攤平。 */
+export function approvalToolNames(pendings: readonly PendingInput[]): string[] {
+  return pendings.flatMap((pending) =>
+    isApprovalPending(pending) ? pending.actions.map((action) => action.name) : [],
+  );
 }

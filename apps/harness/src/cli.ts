@@ -30,17 +30,20 @@ import type {
   SessionTelemetrySharingStatus,
 } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
+import { createAskUserPlugin } from '@nexus/plugin-ask-user';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import {
   attachSessionPersistence,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   SessionRegistry,
+  deriveApprovalChannel,
   type SessionLog,
 } from '@nexus/core';
 import { createJsonlSessionStore } from './jsonl-session-store.js';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant';
+import { createAskUserInvariantPlugin } from '@nexus/plugin-ask-user/invariant';
 import { createEchoInvariantPlugin } from '@nexus/plugin-echo/invariant';
 import { createGoalPlugin, DEFAULT_MAX_GOAL_ROUNDS } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
@@ -345,6 +348,7 @@ export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
   createTodoPlugin({ allowParallelInProgress: true }),
   createCoreInvariantPlugin(),
   createCommandsInvariantPlugin(),
+  createAskUserInvariantPlugin(),
   createEchoInvariantPlugin(),
   createGoalInvariantPlugin(),
   createMcpInvariantPlugin(),
@@ -575,6 +579,21 @@ export async function createCliAgent(
   telemetrySharing: SessionTelemetrySharingStatus | undefined;
 }> {
   const model = createCliModel(invocation.live);
+  // **channel 在這裡算一次，兩個消費者共用。** 核准閘門由 `foldRegistry` 自己算
+  // （同一個 `deriveApprovalChannel`），`ask_user_question` 拿的是這一份——兩邊分岔的
+  // 樣子是「核准擋得下來、問答還掛在那裡」，而那不會有任何測試紅。
+  //
+  // **它掛在這裡而不是 `DEFAULT_PLUGINS` 裡**：那份清單是模組層級的常數，看不到這一次
+  // 呼叫的 checkpointer 與 `approvals`。
+  // **綁在真的那個值上，不是寫死 `true`。** 今天這條路一律給 `MemorySaver`，但把它寫成
+  // 字面量的那一刻，這個推導就不再跟著組裝走了——有人讓 checkpointer 變成有條件的那天，
+  // 核准閘門會正確地回報 `no-channel`，而 `ask_user_question` 還宣稱有人在，然後撞上
+  // `interrupt()` 的 `No checkpointer set`。那正是抽出這個推導要防的分岔。
+  const checkpointer = new MemorySaver();
+  const channel = deriveApprovalChannel({
+    ...(approvals?.enabled !== undefined && { approvalsEnabled: approvals.enabled }),
+    hasCheckpointer: checkpointer !== undefined,
+  });
   const {
     agent,
     commands,
@@ -585,12 +604,12 @@ export async function createCliAgent(
     telemetrySharing,
   } = await createNexusAgent({
     model,
-    plugins,
+    plugins: [...plugins, createAskUserPlugin({ channel })],
     ...(invocation.workspace !== undefined && {
       backend: new ContainedFilesystemBackend({ rootDir: resolve(cwd, invocation.workspace) }),
     }),
     systemPrompt: SYSTEM_PROMPT,
-    checkpointer: new MemorySaver(),
+    checkpointer,
     ...(onInvariantViolation !== undefined && { onInvariantViolation }),
     ...(approvals !== undefined && { approvals }),
   });

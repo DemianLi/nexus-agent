@@ -22,6 +22,7 @@ import type { AnyBackendProtocol, FilesystemPermission, SubAgent } from 'deepage
 import type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
 import { createApprovalGateMiddleware } from './approval.js';
 import type { ApprovalChannel } from './approval.js';
+import { deriveApprovalChannel } from './approval.js';
 import { createContainmentMiddleware } from './containment.js';
 import { createObservationPolicy } from './observation.js';
 import type { NamedEntry } from './entries.js';
@@ -524,12 +525,12 @@ function foldPermissions(registry: PluginRegistry): FilesystemPermission[] {
  * `enabled` 與 checkpointer 這兩格答的是不同的問題，映射見 {@link ApprovalChannel}。
  */
 function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): AgentMiddleware {
-  const channel: ApprovalChannel =
-    options.approvals?.enabled === false
-      ? { kind: 'policy-never' }
-      : options.checkpointer === undefined || options.checkpointer === false
-        ? { kind: 'no-channel' }
-        : { kind: 'human' };
+  const channel: ApprovalChannel = deriveApprovalChannel({
+    ...(options.approvals?.enabled !== undefined && {
+      approvalsEnabled: options.approvals.enabled,
+    }),
+    hasCheckpointer: options.checkpointer !== undefined && options.checkpointer !== false,
+  });
   return createApprovalGateMiddleware(registry.approvals.listeners(), channel);
 }
 

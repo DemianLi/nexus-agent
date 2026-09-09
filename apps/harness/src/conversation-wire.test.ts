@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
-import { emptyCommandPoint } from './fixtures.js';
+import { approvalAt, approvalToolNames, emptyCommandPoint } from './fixtures.js';
 import { createWireHandler } from './wire-handler.js';
 
 /**
@@ -231,8 +231,8 @@ describe('折疊器的狀態', () => {
         current.entries.length > 0,
     );
     expect(state.status).toBe('awaiting-input');
-    expect(state.pendings[0]?.actions.map((action) => action.name)).toEqual(['take_note']);
-    expect(state.pendings[0]?.allowedDecisions).toEqual(['approve', 'reject']);
+    expect(approvalToolNames(state.pendings)).toEqual(['take_note']);
+    expect(approvalAt(state.pendings).allowedDecisions).toEqual(['approve', 'reject']);
     expect(calls).toEqual([]);
     void frames;
   });

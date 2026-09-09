@@ -23,7 +23,10 @@ export type {
 } from './approval.js';
 export {
   APPROVAL_GATE_MIDDLEWARE_NAME,
+  APPROVAL_INTERRUPT_KIND,
+  QUESTION_INTERRUPT_KIND,
   createApprovalGateMiddleware,
+  deriveApprovalChannel,
   runApprovalGate,
 } from './approval.js';
 

@@ -40,7 +40,7 @@ import {
 import { beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
-import { emptyCommandPoint } from './fixtures.js';
+import { approvalAt, approvalToolNames, emptyCommandPoint } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -184,10 +184,7 @@ describe('同一輪兩顆核准中斷，走真的線', () => {
 
     // **這裡曾經只剩 `['beta']`**：`reduceInputRequested` 整個換掉 `pending`，第二顆
     // 蓋掉第一顆，`alpha` 從頭到尾不會出現在任何一張卡片上。
-    expect(session.state.pendings.flatMap((p) => p.actions.map((action) => action.name))).toEqual([
-      'alpha',
-      'beta',
-    ]);
+    expect(approvalToolNames(session.state.pendings)).toEqual(['alpha', 'beta']);
     // 兩顆各自帶各自的 `interruptId`——那是逐 task 派送的鑰匙，混在一起就沒得派。
     expect(new Set(session.state.pendings.map((p) => p.interruptId)).size).toBe(2);
     // 兩顆都還沒被答，所以兩個都還沒跑。
@@ -200,9 +197,8 @@ describe('同一輪兩顆核准中斷，走真的線', () => {
     const session = await open('f2', ['alpha', 'beta']);
     await until(session, (s) => interruptFrames(s).length >= 2);
 
-    const first = session.state.pendings[0];
-    const second = session.state.pendings[1];
-    if (first === undefined || second === undefined) throw new Error('沒有兩顆掛著的核准請求');
+    const first = approvalAt(session.state.pendings, 0);
+    const second = approvalAt(session.state.pendings, 1);
     expect(first.actions.map((action) => action.name)).toEqual(['alpha']);
 
     // **答第一顆，不是最後一顆。** 答最後一顆的話，廣播底下也會看到 `beta` 跑掉，
@@ -224,11 +220,10 @@ describe('同一輪兩顆核准中斷，走真的線', () => {
     expect(ran).toEqual(['alpha']);
     // 而且它**帶著原本那顆 id** 回來——所以折疊器那邊的覆寫是冪等的，不會長出第二張卡。
     expect(session.state.pendings.map((p) => p.interruptId)).toEqual([second.interruptId]);
-    expect(session.state.pendings.flatMap((p) => p.actions.map((a) => a.name))).toEqual(['beta']);
+    expect(approvalToolNames(session.state.pendings)).toEqual(['beta']);
 
     // 再答第二顆，兩個都跑完、run 收得掉——少了這一段，「第二顆永遠回答不了」也會綠。
-    const left = session.state.pendings[0];
-    if (left === undefined) throw new Error('第二顆不見了');
+    const left = approvalAt(session.state.pendings, 0);
     await session.client.inputRespond('f2', {
       namespace: [...left.namespace],
       interrupt_id: left.interruptId,
