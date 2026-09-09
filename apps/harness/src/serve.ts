@@ -27,6 +27,7 @@ import type { NexusPlugin, SessionLog, SessionRegistry } from '@nexus/core';
 import {
   DEFAULT_PLUGINS,
   createCliAgent,
+  parseSandboxMode,
   formatGoalDriverDisclosure,
   goalDriverPort,
   loadPluginModule,
@@ -36,6 +37,7 @@ import { createJsonlSessionStore } from './jsonl-session-store.js';
 import { attachSessionPersistence } from '@nexus/core';
 import { LIVE_MODEL_ID } from './live-model.js';
 import type { PumpAgent } from './thread-pump.js';
+import type { SandboxMode } from './contained-backend.js';
 import { createWireHandler } from './wire-handler.js';
 import { startWireServer } from './wire-server.js';
 import type { WireServer } from './wire-server.js';
@@ -49,6 +51,8 @@ export interface ServeInvocation {
   readonly live: boolean;
   readonly port: number;
   readonly workspace?: string;
+  /** 見 `cli.ts` 的 `CliInvocation.sandbox`。**兩個入口共用同一個旗標名、同一份驗證、同一個預設**。 */
+  readonly sandbox?: SandboxMode;
   readonly pluginModule?: string;
   readonly sessionLog?: string;
   /** 見 `cli.ts` 的 `CliInvocation.goalDriver`。**兩個入口共用同一個旗標名與同一個預設**。 */
@@ -63,6 +67,8 @@ const USAGE = `用法：
   --live               換成真實供應商（${LIVE_MODEL_ID}），需要 API key
   --plugins <module>   從指定模組載 plugin 清單（預設匯出一個陣列）
   --workspace <dir>    把檔案落在這個目錄底下（省略即虛擬檔案系統）
+  --sandbox <mode>     圍堵強度：read-only｜workspace-write｜danger-full-access
+                       預設 workspace-write（可寫根之內放行）；要配 --workspace
   --session-log <dir>  把會話日誌寫進這個目錄（省略即只在記憶體裡）
   --port <n>           監聽的 port，預設 ${DEFAULT_PORT}
   --goal-driver        一個 active 的目標沒達成時自己再開一輪（預設關）
@@ -80,6 +86,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
         live: { type: 'boolean', default: false },
         plugins: { type: 'string' },
         workspace: { type: 'string' },
+        sandbox: { type: 'string' },
         'session-log': { type: 'string' },
         port: { type: 'string' },
         'goal-driver': { type: 'boolean', default: false },
@@ -101,6 +108,8 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     throw new Error(`--session-log 要給一個目錄路徑。\n\n${USAGE}`);
   }
 
+  const sandbox = parseSandboxMode(values.sandbox, values.workspace, USAGE);
+
   const port = values.port === undefined ? DEFAULT_PORT : Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`--port 要給 0 到 65535 之間的整數，收到 "${values.port}"。\n\n${USAGE}`);
@@ -111,6 +120,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     port,
     ...(values.plugins !== undefined && { plugins: values.plugins, pluginModule: values.plugins }),
     ...(values.workspace !== undefined && { workspace: values.workspace }),
+    ...(sandbox !== undefined && { sandbox }),
     ...(values['session-log'] !== undefined && { sessionLog: values['session-log'] }),
     goalDriver: values['goal-driver'] === true,
     help: values.help === true,

@@ -30,17 +30,22 @@ import type {
   SessionTelemetrySharingStatus,
 } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
+import { createAskUserPlugin } from '@nexus/plugin-ask-user';
+import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import {
   attachSessionPersistence,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   SessionRegistry,
+  deriveApprovalChannel,
   type SessionLog,
 } from '@nexus/core';
 import { createJsonlSessionStore } from './jsonl-session-store.js';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant';
+import { createAskUserInvariantPlugin } from '@nexus/plugin-ask-user/invariant';
+import { createSubmitRecordInvariantPlugin } from '@nexus/plugin-submit-record/invariant';
 import { createEchoInvariantPlugin } from '@nexus/plugin-echo/invariant';
 import { createGoalPlugin, DEFAULT_MAX_GOAL_ROUNDS } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
@@ -60,7 +65,10 @@ import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
 import { driveGoalRound } from './goal-driver.js';
 import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
 import type { NexusAgentHandle } from './agent-factory.js';
-import { ContainedFilesystemBackend } from './contained-backend.js';
+import { isSandboxMode, SANDBOX_MODES, ContainedFilesystemBackend } from './contained-backend.js';
+import { createSandboxPolicyPlugin } from './sandbox-policy.js';
+import { SANDBOX_COMMAND_NAME, SandboxModeController } from './sandbox-mode.js';
+import type { SandboxMode } from './contained-backend.js';
 import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MODEL_ID } from './live-model.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -81,6 +89,19 @@ export interface CliInvocation {
    * 虛擬 FS（`StateBackend`，不碰磁碟）。
    */
   readonly workspace?: string;
+  /**
+   * 這一次呼叫的圍堵強度。省略即 `workspace-write`——**設防的那一個是預設**。
+   *
+   * **只有給了 `--workspace` 才有意義**：沒給的時候根本沒有 `ContainedFilesystemBackend`，
+   * 檔案落在基座的 `StateBackend` 裡，這一格一個位元組都影響不到。所以兩者不成對是
+   * **錯誤**，不是無害的多餘（同 `--max-goal-rounds` 那條規矩）——收下來會變成一個
+   * 看起來設過、實際上什麼都沒圍到的模式。
+   *
+   * 預設值本身是 [#238](https://github.com/DemianLi/nexus-agent/issues/238) 第 0 項的定案：
+   * 照 dsh 的出廠 preset（`workspace-write`），而**可寫根之內的寫入在這一格底下是放行的**。
+   * 要它不放行就切到 `read-only`。
+   */
+  readonly sandbox?: SandboxMode;
   /**
    * 會話日誌落盤的根目錄。給了就把這一次的每一份日誌寫進它底下的一個 run 目錄，
    * 省略即**不落盤**（同 `fold.ts` 的 checkpointer：「缺席」就是關掉）。
@@ -125,6 +146,8 @@ export const USAGE = `用法：cli [選項] [要說的話...]
   --plugins <module>   從指定模組載 plugin 清單（預設匯出一個陣列）
   --workspace <dir>    在真實磁碟的這個目錄上跑，變更被圍堵在它之下
                        （省略即虛擬檔案系統，完全不碰磁碟）
+  --sandbox <mode>     圍堵強度：read-only｜workspace-write｜danger-full-access
+                       預設 workspace-write（可寫根之內放行）；要配 --workspace
   --session-log <dir>  把會話日誌寫進這個目錄底下（省略即不落盤）
                        它不能在 --workspace 底下：日誌是基礎建設，不是 agent 的工作區
   --goal-driver        一個 active 的目標沒達成時自己再開一輪（預設關）
@@ -154,6 +177,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
         live: { type: 'boolean', default: false },
         plugins: { type: 'string' },
         workspace: { type: 'string' },
+        sandbox: { type: 'string' },
         'session-log': { type: 'string' },
         'goal-driver': { type: 'boolean', default: false },
         'max-goal-rounds': { type: 'string' },
@@ -173,6 +197,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   if (values.workspace !== undefined && values.workspace.trim() === '') {
     throw new Error(`--workspace 要給一個目錄路徑。\n\n${USAGE}`);
   }
+  const sandbox = parseSandboxMode(values.sandbox, values.workspace, USAGE);
   const sessionLog = values['session-log'];
   if (sessionLog !== undefined && sessionLog.trim() === '') {
     throw new Error(`--session-log 要給一個目錄路徑。\n\n${USAGE}`);
@@ -187,11 +212,53 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     live: values.live === true,
     ...(values.plugins !== undefined && { pluginModule: values.plugins }),
     ...(values.workspace !== undefined && { workspace: values.workspace }),
+    ...(sandbox !== undefined && { sandbox }),
     ...(sessionLog !== undefined && { sessionLog }),
     goalDriver,
     ...(maxGoalRounds !== undefined && { maxGoalRounds }),
     help: values.help === true,
   };
+}
+
+/**
+ * `--sandbox` 那一格。
+ *
+ * **沒給 `--workspace` 就拋。** 那個組合底下沒有 `ContainedFilesystemBackend`——檔案落在
+ * 基座的 `StateBackend` 裡，這道 fence 整個不在路徑上。靜靜收下的話，畫面上是「我設了
+ * read-only」，實際上模型照樣想寫什麼寫什麼，而**一條測試都不會紅**（同 `--max-goal-rounds`
+ * 那條規矩）。
+ *
+ * **認不得的模式名也拋。** 型別擋不住命令列上來的字串，落到 backend 那邊會變成「不是
+ * `danger-full-access` 也不是 `read-only`」——於是靜靜地當成 `workspace-write`，那是誤放行。
+ *
+ * **兩個入口共用這一份**（`cli` 與 `serve`），所以用法那段話是傳進來的——同
+ * `--session-log 不能在 --workspace 底下」那條檢查。兩份各寫一次的下場是有一天只有一邊擋。
+ *
+ * @param raw - 命令列上那串字，沒給就是 `undefined`。
+ * @param workspace - `--workspace` 那一格，用來檢查兩者成對。
+ * @param usage - 接在錯誤訊息後面的用法那段話（呼叫的入口各有一份）。
+ * @returns 那個模式，或沒給時的 `undefined`（＝由 backend 用它的預設）。
+ * @throws 沒配 `--workspace`，或模式名認不得——訊息接上用法。
+ */
+export function parseSandboxMode(
+  raw: string | undefined,
+  workspace: string | undefined,
+  usage: string,
+): SandboxMode | undefined {
+  if (raw === undefined) return undefined;
+  if (workspace === undefined) {
+    throw new Error(
+      `--sandbox 要配 --workspace：沒有 --workspace 的時候檔案跑在虛擬檔案系統裡，` +
+        `圍堵那道 fence 根本不在路徑上，這個模式一個位元組都影響不到。\n\n${usage}`,
+    );
+  }
+  const mode = raw.trim();
+  if (!isSandboxMode(mode)) {
+    throw new Error(
+      `--sandbox 認不得 "${raw}"。認得的是 ${SANDBOX_MODES.join('、')}。\n\n${usage}`,
+    );
+  }
+  return mode;
 }
 
 /**
@@ -345,6 +412,7 @@ export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
   createTodoPlugin({ allowParallelInProgress: true }),
   createCoreInvariantPlugin(),
   createCommandsInvariantPlugin(),
+  createAskUserInvariantPlugin(),
   createEchoInvariantPlugin(),
   createGoalInvariantPlugin(),
   createMcpInvariantPlugin(),
@@ -352,6 +420,7 @@ export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
   createPlanModeInvariantPlugin(),
   createQuickJsInvariantPlugin(),
   createSkillsInvariantPlugin(),
+  createSubmitRecordInvariantPlugin(),
   createTelemetryOtelInvariantPlugin(),
   createTodoInvariantPlugin(),
   createValidationInvariantPlugin(),
@@ -556,7 +625,7 @@ type NexusAgent = NexusAgentHandle['agent'];
  * @throws 清單載入失敗、fold 前置條件不成立，或基座擋下這份組裝。
  */
 export async function createCliAgent(
-  invocation: Pick<CliInvocation, 'live' | 'workspace'>,
+  invocation: Pick<CliInvocation, 'live' | 'workspace' | 'sandbox'>,
   plugins: readonly NexusPlugin[],
   cwd: string = process.cwd(),
   onInvariantViolation?: (error: InvariantError) => void,
@@ -575,6 +644,43 @@ export async function createCliAgent(
   telemetrySharing: SessionTelemetrySharingStatus | undefined;
 }> {
   const model = createCliModel(invocation.live);
+  // **channel 在這裡算一次，兩個消費者共用。** 核准閘門由 `foldRegistry` 自己算
+  // （同一個 `deriveApprovalChannel`），`ask_user_question` 拿的是這一份——兩邊分岔的
+  // 樣子是「核准擋得下來、問答還掛在那裡」，而那不會有任何測試紅。
+  //
+  // **它掛在這裡而不是 `DEFAULT_PLUGINS` 裡**：那份清單是模組層級的常數，看不到這一次
+  // 呼叫的 checkpointer 與 `approvals`。
+  // **綁在真的那個值上，不是寫死 `true`。** 今天這條路一律給 `MemorySaver`，但把它寫成
+  // 字面量的那一刻，這個推導就不再跟著組裝走了——有人讓 checkpointer 變成有條件的那天，
+  // 核准閘門會正確地回報 `no-channel`，而 `ask_user_question` 還宣稱有人在，然後撞上
+  // `interrupt()` 的 `No checkpointer set`。那正是抽出這個推導要防的分岔。
+  const checkpointer = new MemorySaver();
+  const channel = deriveApprovalChannel({
+    ...(approvals?.enabled !== undefined && { approvalsEnabled: approvals.enabled }),
+    hasCheckpointer: checkpointer !== undefined,
+  });
+  // **backend 也是建一次、兩個消費者共用**，理由與上面的 channel 同一條：`submit_record`
+  // 拿的是這一份，`write_file` 拿的是同一份經 `foldRegistry` 之後的那一個。這裡寫成
+  // 內聯的 `new ContainedFilesystemBackend(...)` 再給 plugin 建第二個的話，兩個工具會
+  // 寫到兩個地方——**而且兩邊都會寫成功**，一條測試都不會紅。
+  //
+  // `undefined` 是「沒給 `--workspace`」，兩個消費者都會退到基座那個 `StateBackend` 預設
+  // （plugin 那側的預設字面照抄基座，見 `@nexus/plugin-submit-record` 的模組註解）。
+  //
+  // **模式是傳一個來源進去，不是一個字面值**：fence 逐次呼叫問一次，所以 `/sandbox` 換掉
+  // 控制器那一格之後，下一次檔案變更就照新那格判（理由見 `SandboxModeSource`）。
+  //
+  // **控制器建在這裡而不是模組層**，這決定了它的壽命：`serve.ts` 一條 thread 呼叫一次
+  // `createCliAgent`，所以一條 thread 一格。建在模組層或工廠閉包裡的話兩條 thread 會共用
+  // 同一格——一條 thread 的 `/sandbox read-only` 收緊到另一條 thread 的檔案工具上，
+  // 而那是靜默的（見 `sandbox-mode.ts` 的模組註解）。
+  const workspaceRoot =
+    invocation.workspace === undefined ? undefined : resolve(cwd, invocation.workspace);
+  const sandboxMode = new SandboxModeController(invocation.sandbox ?? 'workspace-write');
+  const backend =
+    workspaceRoot === undefined
+      ? undefined
+      : new ContainedFilesystemBackend({ rootDir: workspaceRoot, mode: sandboxMode.source });
   const {
     agent,
     commands,
@@ -585,12 +691,20 @@ export async function createCliAgent(
     telemetrySharing,
   } = await createNexusAgent({
     model,
-    plugins,
-    ...(invocation.workspace !== undefined && {
-      backend: new ContainedFilesystemBackend({ rootDir: resolve(cwd, invocation.workspace) }),
-    }),
+    plugins: [
+      ...plugins,
+      createAskUserPlugin({ channel }),
+      createSubmitRecordPlugin({ ...(backend !== undefined && { backend }) }),
+      // **有圍堵才講**。沒有 `--workspace` 的組裝一格圍堵都沒有，那時候講「目前的檔案
+      // 政策是 workspace-write」是對模型說謊——它會以為根外被擋著，而整道 fence 不在
+      // 路徑上。理由與 dsh 的 `ctx.fs.sandboxMode === undefined` 就不貢獻同一條。
+      ...(workspaceRoot === undefined
+        ? []
+        : [createSandboxPolicyPlugin(sandboxMode, workspaceRoot)]),
+    ],
+    ...(backend !== undefined && { backend }),
     systemPrompt: SYSTEM_PROMPT,
-    checkpointer: new MemorySaver(),
+    checkpointer,
     ...(onInvariantViolation !== undefined && { onInvariantViolation }),
     ...(approvals !== undefined && { approvals }),
   });
@@ -1079,7 +1193,9 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     printer.log(
       invocation.workspace === undefined
         ? '檔案系統：虛擬（不碰磁碟）'
-        : `檔案系統：${resolve(options.cwd ?? process.cwd(), invocation.workspace)}（變更圍堵在它之下）`,
+        : `檔案系統：${resolve(options.cwd ?? process.cwd(), invocation.workspace)}` +
+            `（變更圍堵在它之下，起始 mode: ${invocation.sandbox ?? 'workspace-write'}，` +
+            `/${SANDBOX_COMMAND_NAME} 切得動）`,
     );
     printer.log(APPROVAL_DISCLOSURE);
     // 第四行是**披露**，不是設定。tracing 開沒開不由這支程式決定——基座讀到環境變數就

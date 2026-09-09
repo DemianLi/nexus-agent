@@ -2,6 +2,7 @@ import type { WireClient } from '@nexus/wire';
 import { useState } from 'react';
 
 import { ApprovalCard } from '@/components/approval-card';
+import { QuestionCard } from '@/components/question-card';
 import { StatusLine } from '@/components/status-line';
 import { Transcript } from '@/components/transcript';
 import { Button } from '@/components/ui/button';
@@ -18,12 +19,25 @@ export function App({ client }: { client?: WireClient } = {}) {
   const conversation = useConversation(client === undefined ? {} : { client });
   const [draft, setDraft] = useState('');
 
-  const pending = conversation.state.pending;
+  // **一顆中斷一張卡**（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
+  // 同一輪兩個工具都要核准時閘門逐次呼叫各自 `interrupt()`，折疊器逐 `interruptId`
+  // 並存——每一顆各自帶著回答自己要用的那把鑰匙，所以每一張卡按下去落在自己那顆上。
+  const pendings = conversation.state.pendings;
   // **`awaiting-input` 也算忙**。少了它，等核准時送得出下一句話——而基座那時會把
   // 中斷靜靜丟掉：那個工具既沒執行也沒被拒絕，也不會再問第二次（實測）。
-  // 一顆按鈕都長不出來的核准請求（交集是空的）**不算忙**：那時卡片沒有出路，
-  // 再把送出框鎖起來就是整條對話卡死。基座一定會發 `reviewConfigs`，但代價不對稱。
-  const stuck = pending !== undefined && pending.allowedDecisions.length === 0;
+  //
+  // 一顆按鈕都長不出來的核准請求（交集是空的）**不算忙**：那張卡永遠清不掉，再把送出
+  // 框鎖起來就是整條對話卡死。基座一定會發 `reviewConfigs`，但代價不對稱。
+  //
+  // **多張卡之下用 `some` 不是 `every`**：照上面那個理由，只要有**一張**沒有出路，
+  // 這條 thread 就已經清不乾淨了，別的卡片按得動也救不回來。解鎖之後送出去仍會撞上
+  // 伺服器那句「停在核准點」——**出路是「講得出原因」，不是「真的能說話」**。
+  //
+  // **只有核准卡會卡死。** 問答卡永遠按得動——它的出路是「送出答案」或「放棄整組」，
+  // 兩條都不依賴伺服器發了什麼清單，所以它不進這個判準。
+  const stuck = pendings.some(
+    (pending) => pending.kind === 'approval' && pending.allowedDecisions.length === 0,
+  );
   const busy =
     conversation.state.status === 'running' ||
     (conversation.state.status === 'awaiting-input' && !stuck);
@@ -53,12 +67,28 @@ export function App({ client }: { client?: WireClient } = {}) {
 
       <section className="flex flex-1 flex-col gap-4">
         <Transcript state={conversation.state} />
-        {pending !== undefined && (
-          <ApprovalCard
-            pending={pending}
-            busy={!conversation.connected}
-            onDecide={(decision) => void conversation.respond(decision)}
-          />
+        {/*
+          **按 `kind` 分派到兩個元件，不是一個元件內部分支**（#231 第 4 項）：送出的形狀
+          完全不同（`{decisions:[…]}` 對 `{answers:[…]}`），而認不得的 `kind` 根本到不了
+          這裡——折疊器那一層就把它翻成 `failed` 了，理由見 `reduceInputRequested`。
+        */}
+        {pendings.map((pending) =>
+          pending.kind === 'question' ? (
+            <QuestionCard
+              key={pending.interruptId}
+              pending={pending}
+              busy={!conversation.connected}
+              onAnswer={(answers) => void conversation.answer(pending.interruptId, answers)}
+              onCancel={() => void conversation.cancelQuestions(pending.interruptId)}
+            />
+          ) : (
+            <ApprovalCard
+              key={pending.interruptId}
+              pending={pending}
+              busy={!conversation.connected}
+              onDecide={(decision) => void conversation.respond(pending.interruptId, decision)}
+            />
+          ),
         )}
       </section>
 

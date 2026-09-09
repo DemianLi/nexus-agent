@@ -55,6 +55,8 @@ import { realpath } from 'node:fs/promises';
 import { FilesystemBackend } from 'deepagents';
 import type { DeleteResult, EditResult, FileUploadResponse, WriteResult } from 'deepagents';
 
+import type { SandboxMode } from '@nexus/core';
+
 /**
  * 圍堵的強度。名字照抄 dsh 的三個 mode（`references/deepseek-harness/packages/fs/fs-sandbox/README.md`）。
  *
@@ -95,13 +97,52 @@ import type { DeleteResult, EditResult, FileUploadResponse, WriteResult } from '
  * 基座那道 lexical 的 `..` 檢查仍在——這個 class 不給關 `virtualMode`（見下面的 class 註解），
  * 所以它結構上就不可能是 dsh 那種真正的不設防。想要完全不設防，用原生的 `FilesystemBackend`。
  */
-export type ContainmentMode = 'read-only' | 'workspace-write' | 'danger-full-access';
+export type { SandboxMode } from '@nexus/core';
+
+/**
+ * 三個模式的完整清單與它的守衛，**詞彙住在 `@nexus/core`**（`sandbox.ts`）。
+ *
+ * 搬過去的理由不是分層潔癖：`sandbox/mode` 這顆會話事件的酬載型別宣告在 core 的
+ * `SessionEventMap` 上，而酬載帶的就是模式本身。留在這裡的話，「哪三個字串合法」寫入端
+ * 與讀取端各有一份。從這個檔案 re-export 是為了讓 fence 的使用者仍然只需要認得一個門。
+ */
+export { isSandboxMode, SANDBOX_MODES } from '@nexus/core';
+
+/**
+ * 圍堵強度的來源——**每一次變更呼叫問一次**，不是建構期釘死的一個值。
+ *
+ * ## 為什麼是函式而不是一個欄位
+ *
+ * 照 dsh：模式是**逐次呼叫從統一歸屬位置解析**的，不是提供方身上的一個固定值
+ * （`references/deepseek-harness/packages/sandbox/sandbox/src/index.ts` 的 `SandboxPolicy`
+ * 檔頭逐字寫著「carried PER CALL, not fixed on the provider」，理由是同一瞬間兩個消費者
+ * 可以在不同政策底下跑）。釘死在建構子上的話，「換一格」就只能重建整個 backend——而
+ * backend 是**兩個消費者共用的那一份**（`cli.ts` 那條註解：建兩個會讓 `submit_record` 與
+ * `write_file` 寫到兩個地方，而且兩邊都成功、一條測試都不會紅）。
+ *
+ * ## 偏離登記
+ *
+ * dsh 把解析出來的 `SandboxPolicy` **當參數傳進那一次變更**，所以「檢查的」與「執行的」
+ * 是同一顆值，連傳遞都不必經過共享狀態。我們傳不了：`BackendProtocolV2` 的
+ * `write`／`edit`／`delete`／`uploadFiles` 簽章是基座定的，多不出一格。**退到「backend 自己
+ * 去問一顆外面的來源」**——所以解析點在 fence 裡而不是在呼叫端。
+ *
+ * 代價是一次呼叫內部有 `await`（realpath、canonicalize），來源在那之間變了就會出現撕裂讀。
+ * 因此 `checkedPath()` **在最上面解析一次**，整個判斷與拒絕訊息都用那一顆——這正是 dsh
+ * 「一次呼叫一份政策」那條規矩在我們這個形狀底下的寫法。
+ */
+export type SandboxModeSource = () => SandboxMode;
 
 export interface ContainedFilesystemBackendOptions {
   /** 可寫根。所有虛擬路徑都以它為基準，變更不得 canonicalize 到它之外。 */
   readonly rootDir: string;
-  /** 圍堵強度。省略即 `workspace-write`——預設要是設防的那一個。 */
-  readonly mode?: ContainmentMode;
+  /**
+   * 圍堵強度。省略即 `workspace-write`——預設要是設防的那一個。
+   *
+   * 給**函式**就是逐次呼叫解析（見 {@link SandboxModeSource}）；給字面值等於給一個
+   * 恆定的函式，兩者在 fence 眼裡沒有差別。
+   */
+  readonly mode?: SandboxMode | SandboxModeSource;
   /** 單檔大小上限，原樣轉給基座。 */
   readonly maxFileSizeMb?: number;
 }
@@ -114,8 +155,18 @@ export interface ContainedFilesystemBackendOptions {
  * 「我以為它有防」變成可能。
  */
 export class ContainedFilesystemBackend extends FilesystemBackend {
-  /** 這個 backend 的圍堵強度，錯誤訊息會指名它。 */
-  readonly mode: ContainmentMode;
+  /** 圍堵強度的來源。建構期給的字面值在這裡已經被包成一個恆定的函式。 */
+  private readonly resolveMode: SandboxModeSource;
+
+  /**
+   * 這一刻的圍堵強度，錯誤訊息會指名它。
+   *
+   * **每次讀都重新解析**——它不是一個快照。要在一次呼叫裡反覆用的話先存進區域變數
+   * （`checkedPath()` 就是這麼做的），理由見 {@link SandboxModeSource}。
+   */
+  get mode(): SandboxMode {
+    return this.resolveMode();
+  }
 
   constructor(options: ContainedFilesystemBackendOptions) {
     super({
@@ -123,7 +174,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       virtualMode: true,
       ...(options.maxFileSizeMb !== undefined && { maxFileSizeMb: options.maxFileSizeMb }),
     });
-    this.mode = options.mode ?? 'workspace-write';
+    const mode = options.mode ?? 'workspace-write';
+    this.resolveMode = typeof mode === 'function' ? mode : (): SandboxMode => mode;
   }
 
   /**
@@ -226,30 +278,33 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     filePath: string,
     operation: 'write' | 'edit' | 'delete' | 'uploadFiles',
   ): Promise<string | { error: string }> {
-    if (this.mode === 'danger-full-access') return filePath;
-    if (this.mode === 'read-only') {
-      return { error: this.denial(operation, filePath, '這個 backend 是唯讀的') };
+    // **一次呼叫解析一次**：底下有 `await`，來源在那之間變了的話，判斷與拒絕訊息就會
+    // 指向兩個不同的模式。dsh 的「一次呼叫一份政策」在這個形狀底下就是這一行。
+    const mode = this.mode;
+    if (mode === 'danger-full-access') return filePath;
+    if (mode === 'read-only') {
+      return { error: this.denial(mode, operation, filePath, '這個 backend 是唯讀的') };
     }
 
     // `~` 要對**原始路徑**檢查。底下補前置斜線那一步一跑，`~` 就永遠不在開頭了——這條
     // 檢查曾經寫在補斜線之後，於是從來沒有觸發過（PR #62 的 review 實測）。它擋的不是
     // 逃逸（`~/../x` 會撞上 `..`，`/~/x` 落在根內），是「模型以為自己在用家目錄」。
     if (filePath.startsWith('~')) {
-      return { error: this.denial(operation, filePath, '路徑裡有 "~"') };
+      return { error: this.denial(mode, operation, filePath, '路徑裡有 "~"') };
     }
 
     const virtualPath = filePath.startsWith('/') ? filePath : `/${filePath}`;
     // 先擋字面上的穿越再碰檔案系統：這一段與基座的 `resolvePath()` 同一條規則，但我們要
     // 自己的措辭，而且擋在這裡就不必為了 `..` 去多跑幾次 realpath。
     if (virtualPath.includes('..')) {
-      return { error: this.denial(operation, filePath, '路徑裡有 ".."') };
+      return { error: this.denial(mode, operation, filePath, '路徑裡有 ".."') };
     }
 
     let realRoot: string;
     try {
       realRoot = await realpath(this.cwd);
     } catch {
-      return { error: this.denial(operation, filePath, `可寫根 ${this.cwd} 不存在`) };
+      return { error: this.denial(mode, operation, filePath, `可寫根 ${this.cwd} 不存在`) };
     }
 
     // `canonicalize()` 只把 ENOENT/ENOTDIR 當「還不存在」，其餘（ELOOP、EACCES…）會 rethrow。
@@ -260,12 +315,13 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       realTarget = await canonicalize(resolve(this.cwd, virtualPath.slice(1)));
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code ?? '未知';
-      return { error: this.denial(operation, filePath, `路徑解析失敗（${code}）`) };
+      return { error: this.denial(mode, operation, filePath, `路徑解析失敗（${code}）`) };
     }
 
     if (realTarget !== realRoot && !realTarget.startsWith(realRoot + sep)) {
       return {
         error: this.denial(
+          mode,
           operation,
           filePath,
           `canonicalize 之後是 ${realTarget}，落在可寫根之外`,
@@ -279,9 +335,14 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     return inside === '' ? '/' : `/${inside.split(sep).join('/')}`;
   }
 
-  /** 拒絕訊息只有一種形狀——同一條政策不該在模型眼裡有兩套詞彙。 */
-  private denial(operation: string, filePath: string, reason: string): string {
-    return `[containment] 拒絕 ${operation} "${filePath}"：${reason}（mode: ${this.mode}）`;
+  /**
+   * 拒絕訊息只有一種形狀——同一條政策不該在模型眼裡有兩套詞彙。
+   *
+   * **模式是傳進來的，不是在這裡讀的**：呼叫端已經解析過一次，這裡再讀一次就可能印出
+   * 跟實際擋下它的那一格不同的名字。
+   */
+  private denial(mode: SandboxMode, operation: string, filePath: string, reason: string): string {
+    return `[containment] 拒絕 ${operation} "${filePath}"：${reason}（mode: ${mode}）`;
   }
 }
 

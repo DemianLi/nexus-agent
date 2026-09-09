@@ -22,9 +22,10 @@ import {
   repositoryRoot,
 } from './package-invariants.js';
 
-/** 這個 repo 現在該有的十三個 owner。**寫死字串**：拿 glob 的結果自己比自己驗不出東西。 */
+/** 這個 repo 現在該有的十五個 owner。**寫死字串**：拿 glob 的結果自己比自己驗不出東西。 */
 const EXPECTED_OWNERS = [
   '@nexus/core',
+  '@nexus/plugin-ask-user',
   '@nexus/plugin-commands',
   '@nexus/plugin-echo',
   '@nexus/plugin-goal',
@@ -33,6 +34,7 @@ const EXPECTED_OWNERS = [
   '@nexus/plugin-plan-mode',
   '@nexus/plugin-quickjs',
   '@nexus/plugin-skills',
+  '@nexus/plugin-submit-record',
   '@nexus/plugin-telemetry-otel',
   '@nexus/plugin-todo',
   '@nexus/plugin-validation',
@@ -113,7 +115,7 @@ describe('對著真的 repo', () => {
     expect(packageInvariantOwners().map((owner) => owner.dir)).toContain('packages/nexus-core');
   });
 
-  it('**掃出來的 owner 正好是那十三個**——glob 壞掉時這一條紅，零違規那一條不會', () => {
+  it('**掃出來的 owner 正好是那十五個**——glob 壞掉時這一條紅，零違規那一條不會', () => {
     expect(
       packageInvariantOwners()
         .map((owner) => owner.packageName)
@@ -121,7 +123,7 @@ describe('對著真的 repo', () => {
     ).toEqual([...EXPECTED_OWNERS].sort());
   });
 
-  it('十一個現在全部合格', () => {
+  it('十五個現在全部合格', () => {
     expect(collectPackageInvariantViolations()).toEqual([]);
   });
 });

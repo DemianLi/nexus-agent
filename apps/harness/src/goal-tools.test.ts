@@ -121,7 +121,11 @@ describe('模型工具走真的 pump', () => {
         'turn/end',
       ]);
 
-      await pump.submit({ kind: 'resume', response: { decisions: [{ type: 'approve' }] } });
+      await pump.submit({
+        kind: 'resume',
+        interruptId: pump.pendings[0]?.interruptId ?? '',
+        response: { decisions: [{ type: 'approve' }] },
+      });
 
       // 恢復那一輪的起點真的是 `resume`，不是又一顆 `message`。
       expect(pump.sessionLog.events[3]?.data).toEqual({ kind: 'resume' });

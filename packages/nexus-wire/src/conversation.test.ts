@@ -1,13 +1,33 @@
 import { describe, expect, it } from 'vitest';
 import type { ConversationState, Event } from './index.js';
 import {
+  answerResponse,
+  appendAnswers,
   appendDecision,
   appendHumanTurn,
+  appendQuestionCancel,
+  cancelResponse,
   emptyConversation,
+  isApprovalPending,
   reduceAll,
   reduceConversation,
   uniformDecisions,
 } from './conversation.js';
+import type { PendingApproval } from './conversation.js';
+
+/**
+ * 取第 n 顆，並斷言它是核准請求。
+ *
+ * **窄化寫成會拋的斷言而不是 `?.`**：`pendings` 現在裝得下兩種中斷，而「拿到的是問答那
+ * 一顆」與「一顆都沒有」在 `?.` 之下都變成 `undefined`——那會讓一條測錯東西的測試綠著。
+ */
+function approvalAt(state: ConversationState, index: number): PendingApproval {
+  const pending = state.pendings[index];
+  if (pending === undefined || !isApprovalPending(pending)) {
+    throw new Error(`pendings[${index}] 不是核准請求：${JSON.stringify(pending)}`);
+  }
+  return pending;
+}
 
 /**
  * 折疊器自己那幾個口子。
@@ -150,9 +170,10 @@ describe('折疊器', () => {
 function inputRequested(
   actions: readonly string[],
   configs?: readonly (readonly string[])[],
+  interruptId = 'int-1',
 ): Event {
   return frame('input.requested', ['tools:a'], {
-    interrupt_id: 'int-1',
+    interrupt_id: interruptId,
     payload: {
       actionRequests: actions.map((name) => ({ name, args: { n: name } })),
       reviewConfigs: actions.map((name, index) => ({
@@ -163,6 +184,128 @@ function inputRequested(
   });
 }
 
+/** 一顆問答請求的 frame。 */
+function questionRequested(interruptId = 'q-1'): Event {
+  return frame('input.requested', ['tools:a'], {
+    interrupt_id: interruptId,
+    payload: {
+      kind: 'question',
+      questions: [
+        { id: 'name', question: '訪客姓名？', header: '姓名' },
+        {
+          id: 'day',
+          question: '哪一天？',
+          options: [{ label: '週一' }, { label: '週二' }],
+          multiSelect: true,
+        },
+      ],
+    },
+  });
+}
+
+describe('判別式', () => {
+  it('`kind` 缺席時當核准——五個既有測試檔用的 `interruptOn` payload 沒有這個欄位', () => {
+    seq = 0;
+    const state = reduceAll(emptyConversation(), [inputRequested(['alpha'])]);
+    expect(approvalAt(state, 0).actions.map((action) => action.name)).toEqual(['alpha']);
+  });
+
+  it('`kind: "question"` 折成問答，欄位一格不掉', () => {
+    seq = 0;
+    const state = reduceAll(emptyConversation(), [questionRequested()]);
+    const pending = state.pendings[0];
+    expect(pending).toEqual({
+      kind: 'question',
+      interruptId: 'q-1',
+      namespace: ['tools:a'],
+      questions: [
+        { id: 'name', question: '訪客姓名？', header: '姓名' },
+        {
+          id: 'day',
+          question: '哪一天？',
+          options: [{ label: '週一' }, { label: '週二' }],
+          multiSelect: true,
+        },
+      ],
+    });
+    expect(state.status).toBe('awaiting-input');
+  });
+
+  it('**認不得的 `kind` 明著壞掉，不會靜靜變成一張核准卡**', () => {
+    // 這是這一刀最容易寫錯的地方：寫成 `kind === 'question' ? 問答 : 核准` 的兩支三元式，
+    // 第三種中斷會長出 `approve`／`reject` 兩顆按鈕，而對面等的是別的東西。**誤放行不會
+    // 有人來報錯**——所以這條測的不是「有沒有擋」，是「壞掉的樣子看得見」。
+    seq = 0;
+    const state = reduceAll(emptyConversation(), [
+      frame('input.requested', ['tools:a'], {
+        interrupt_id: 'x-1',
+        payload: { kind: 'elicitation', schema: {} },
+      }),
+    ]);
+    expect(state.status).toBe('failed');
+    expect(state.error).toContain('"elicitation"');
+    // 而且**沒有**掛出一張卡——狀態壞了卻還畫得出按鈕才是最糟的組合。
+    expect(state.pendings).toEqual([]);
+  });
+});
+
+describe('問答的回答', () => {
+  it('答完就收掉，那一則是它存在過的唯一紀錄；空的 `selected` 原樣留著（跳過）', () => {
+    seq = 0;
+    const asked = reduceAll(emptyConversation(), [questionRequested()]);
+    const answered = appendAnswers(asked, 'q-1', [
+      { id: 'name', selected: [], custom: '阿明' },
+      { id: 'day', selected: [] },
+    ]);
+    expect(answered.pendings).toEqual([]);
+    expect(answered.status).toBe('running');
+    expect(answered.entries).toEqual([
+      {
+        kind: 'answer',
+        id: 'answer-q-1',
+        answers: [
+          { id: 'name', selected: [], custom: '阿明' },
+          { id: 'day', selected: [] },
+        ],
+      },
+    ]);
+    expect(
+      answerResponse(answered.entries[0]?.kind === 'answer' ? answered.entries[0].answers : []),
+    ).toEqual({
+      answers: [
+        { id: 'name', selected: [], custom: '阿明' },
+        { id: 'day', selected: [] },
+      ],
+    });
+  });
+
+  it('**放棄整組留下的紀錄跟「每題都跳過」不一樣**——模型那頭是錯誤，不是一份答案', () => {
+    seq = 0;
+    const asked = reduceAll(emptyConversation(), [questionRequested()]);
+    const cancelled = appendQuestionCancel(asked, 'q-1');
+    expect(cancelled.entries).toEqual([
+      { kind: 'answer', id: 'answer-q-1', answers: [], cancelled: true },
+    ]);
+    expect(cancelResponse()).toEqual({ cancelled: true });
+  });
+
+  it('兩條路都認人：核准那顆不收答案，問答那顆不收決定', () => {
+    seq = 0;
+    const both = reduceAll(emptyConversation(), [
+      inputRequested(['alpha'], undefined, 'int-1'),
+      questionRequested('q-1'),
+    ]);
+    // 送錯形狀時**原樣回傳**，不是「就近找一顆來套」——套上去的樣子是人按了核准、
+    // 答案卻寫進了問答那一顆。
+    expect(appendAnswers(both, 'int-1', [{ id: 'name', selected: ['x'] }])).toEqual(both);
+    expect(appendDecision(both, 'q-1', 'approve')).toEqual(both);
+    // 而且答對的那一顆只收掉自己，另一顆還掛著。
+    const afterAnswer = appendAnswers(both, 'q-1', [{ id: 'name', selected: ['x'] }]);
+    expect(afterAnswer.pendings.map((pending) => pending.interruptId)).toEqual(['int-1']);
+    expect(afterAnswer.status).toBe('awaiting-input');
+  });
+});
+
 describe('核准請求', () => {
   it('允許的決定取逐筆交集——不是第一筆，也不是聯集', () => {
     seq = 0;
@@ -171,23 +314,21 @@ describe('核准請求', () => {
     ]);
     // 讀 `[0]` 會多出一顆「全部拒絕」，而基座對不在那一筆清單裡的決定是當場拋
     // ——按下去是整場 run 死。實測基座真的會讓逐筆詞彙分歧。
-    expect(state.pending?.allowedDecisions).toEqual(['approve']);
+    expect(approvalAt(state, 0).allowedDecisions).toEqual(['approve']);
     expect(state.status).toBe('awaiting-input');
   });
 
   it('namespace 留著——下行只發這一次，丟了就接不回去', () => {
     seq = 0;
     const state = reduceAll(emptyConversation(), [inputRequested(['alpha'])]);
-    expect(state.pending?.namespace).toEqual(['tools:a']);
-    expect(state.pending?.interruptId).toBe('int-1');
+    expect(state.pendings[0]?.namespace).toEqual(['tools:a']);
+    expect(state.pendings[0]?.interruptId).toBe('int-1');
   });
 
   it('一個決定攤成整批同型，因為長度不符會殺掉整場 run', () => {
     seq = 0;
     const state = reduceAll(emptyConversation(), [inputRequested(['alpha', 'beta'])]);
-    const pending = state.pending;
-    if (pending === undefined) throw new Error('沒有掛著的核准請求');
-    expect(uniformDecisions(pending, 'reject')).toEqual({
+    expect(uniformDecisions(approvalAt(state, 0), 'reject')).toEqual({
       decisions: [{ type: 'reject' }, { type: 'reject' }],
     });
   });
@@ -195,27 +336,76 @@ describe('核准請求', () => {
   it('按下去之後請求就收掉，而且那一則是它存在過的唯一紀錄', () => {
     seq = 0;
     const asked = reduceAll(emptyConversation(), [inputRequested(['alpha', 'beta'])]);
-    const decided = appendDecision(asked, 'reject');
+    const decided = appendDecision(asked, 'int-1', 'reject');
 
-    expect(decided.pending).toBeUndefined();
+    expect(decided.pendings).toEqual([]);
     expect(decided.status).toBe('running');
     expect(decided.entries).toEqual([
       { kind: 'decision', id: 'decision-int-1', decision: 'reject', actions: ['alpha', 'beta'] },
     ]);
     // 沒有掛著的請求時再按一次不該憑空長出第二則。
-    expect(appendDecision(decided, 'reject')).toEqual(decided);
+    expect(appendDecision(decided, 'int-1', 'reject')).toEqual(decided);
+  });
+
+  it('**同一輪兩顆中斷並存**——第二顆不再蓋掉第一顆', () => {
+    // 閘門是逐次呼叫各自 `interrupt()` 的，所以同一輪兩個 gated 工具 = 線上兩顆
+    // `input.requested`（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
+    // 這裡曾經是單一插槽，第二顆進來第一顆就不見了——畫面少一張卡。
+    seq = 0;
+    const state = reduceAll(emptyConversation(), [
+      inputRequested(['alpha'], undefined, 'int-1'),
+      inputRequested(['beta'], undefined, 'int-2'),
+    ]);
+    expect(state.pendings.map((pending) => pending.interruptId)).toEqual(['int-1', 'int-2']);
+    expect(
+      state.pendings.flatMap((pending) =>
+        isApprovalPending(pending) ? pending.actions.map((action) => action.name) : [],
+      ),
+    ).toEqual(['alpha', 'beta']);
+  });
+
+  it('**同一顆 id 再來一次是覆寫不是追加**——沒答到的那顆會帶著原本的 id 再度中斷', () => {
+    // 答掉其中一顆之後，剩下的那顆會在新的 run 裡**帶著原本那顆 id** 再度發一次
+    // `input.requested`（實測）。追加的話同一顆中斷會長出第二張卡，而其中一張
+    // 永遠回答不了。
+    seq = 0;
+    const state = reduceAll(emptyConversation(), [
+      inputRequested(['alpha'], undefined, 'int-1'),
+      inputRequested(['alpha'], undefined, 'int-1'),
+    ]);
+    expect(state.pendings).toHaveLength(1);
+  });
+
+  it('**答掉一顆只收掉那一顆**，剩下的還掛著，狀態不回 running', () => {
+    seq = 0;
+    const asked = reduceAll(emptyConversation(), [
+      inputRequested(['alpha'], undefined, 'int-1'),
+      inputRequested(['beta'], undefined, 'int-2'),
+    ]);
+    const decided = appendDecision(asked, 'int-1', 'approve');
+
+    expect(decided.pendings.map((pending) => pending.interruptId)).toEqual(['int-2']);
+    // **狀態不能回 running**：回了的話畫面看起來像跑起來了，而第二張卡還在等人。
+    expect(decided.status).toBe('awaiting-input');
+    expect(decided.entries).toEqual([
+      { kind: 'decision', id: 'decision-int-1', decision: 'approve', actions: ['alpha'] },
+    ]);
+
+    const both = appendDecision(decided, 'int-2', 'approve');
+    expect(both.pendings).toEqual([]);
+    expect(both.status).toBe('running');
   });
 
   it('別人按掉的時候，沒按的那一端靠 lifecycle running 收掉卡片', () => {
     seq = 0;
     const asked = reduceAll(emptyConversation(), [inputRequested(['alpha'])]);
-    expect(asked.pending).toBeDefined();
+    expect(asked.pendings).toHaveLength(1);
 
     const resumed = reduceConversation(
       asked,
       frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
     );
-    expect(resumed.pending).toBeUndefined();
+    expect(resumed.pendings).toEqual([]);
     expect(resumed.status).toBe('running');
   });
 
@@ -226,6 +416,6 @@ describe('核准請求', () => {
       frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
     ]);
     expect(state.status).toBe('awaiting-input');
-    expect(state.pending).toBeDefined();
+    expect(state.pendings).toHaveLength(1);
   });
 });

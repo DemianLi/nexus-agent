@@ -7,6 +7,7 @@
  */
 
 import type {
+  AnswerEntry,
   ConversationState,
   SlashDescriptor,
   SlashRunOutcome,
@@ -14,8 +15,12 @@ import type {
   WireClient,
 } from '@nexus/wire';
 import {
+  answerResponse,
+  appendAnswers,
   appendDecision,
   appendHumanTurn,
+  appendQuestionCancel,
+  cancelResponse,
   emptyConversation,
   reduceConversation,
   uniformDecisions,
@@ -72,12 +77,27 @@ export interface Conversation {
    */
   send(text: string): Promise<void>;
   /**
-   * 回答掛著的那個核准請求。
+   * 回答**指名的那一顆**核准請求。
    *
-   * 一個決定套到整批上——逐筆按在基座那側分不出來（見 `ApprovalCard`）。
-   * 沒有掛著的請求時什麼都不做。
+   * 一個決定套到那顆中斷的整批 `actionRequests` 上——逐筆按在基座那側分不出來
+   * （見 `ApprovalCard`）。**但不會套到同一輪的其他中斷上**：`interruptId` 就是
+   * 那道分界，基座據它逐 task 派送（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
+   * 認不得那顆 id 時什麼都不做。
    */
-  respond(decision: string): Promise<void>;
+  respond(interruptId: string, decision: string): Promise<void>;
+  /**
+   * 回答**指名的那一顆**問答請求。
+   *
+   * 與 {@link Conversation.respond} 是兩個方法不是一個加寬的：送出的形狀不同
+   * （`{answers:[…]}` 對 `{decisions:[…]}`），而型別上分開才擋得住「把答案送給核准
+   * 那條路」。認不得那顆 id、或那顆不是問答時，什麼都不做。
+   */
+  answer(interruptId: string, answers: AnswerEntry['answers']): Promise<void>;
+  /**
+   * 放棄**指名的那一組**問題。工具會收到錯誤，模型因此知道人不打算走這條路
+   * （dsh 的 `ASK_CANCELLED`）——**與「每一題都跳過」不同**，後者仍是一份答案。
+   */
+  cancelQuestions(interruptId: string): Promise<void>;
 }
 
 export function useConversation(options: UseConversationOptions = {}): Conversation {
@@ -197,19 +217,64 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   );
 
   const respond = useCallback(
-    async (decision: string) => {
-      const pending = stateRef.current.pending;
-      if (pending === undefined) {
+    async (interruptId: string, decision: string) => {
+      const pending = stateRef.current.pendings.find(
+        (candidate) => candidate.interruptId === interruptId,
+      );
+      // 問答那一顆不收——它的送出形狀是 `{answers:[…]}`，送 `{decisions:[…]}` 過去
+      // 會讓工具當場拋，而人只會看到一張永遠不動的卡。
+      if (pending === undefined || pending.kind !== 'approval') {
         return;
       }
       // **決定在線上沒有回聲**——拒絕掉的那一批連一顆 frame 都不會有（實測），
       // 所以跟使用者那句話一樣，在送出的那一刻自己寫進去。
-      setState((previous) => appendDecision(previous, decision));
+      setState((previous) => appendDecision(previous, interruptId, decision));
       note(
         await clientRef.current.inputRespond(threadId, {
           namespace: [...pending.namespace],
           interrupt_id: pending.interruptId,
           response: uniformDecisions(pending, decision),
+        }),
+      );
+    },
+    [threadId, note],
+  );
+
+  const answer = useCallback(
+    async (interruptId: string, answers: AnswerEntry['answers']) => {
+      const pending = stateRef.current.pendings.find(
+        (candidate) => candidate.interruptId === interruptId,
+      );
+      if (pending === undefined || pending.kind !== 'question') {
+        return;
+      }
+      // 同 `respond`：線上不回聲，所以送出的那一刻自己寫進去。
+      setState((previous) => appendAnswers(previous, interruptId, answers));
+      note(
+        await clientRef.current.inputRespond(threadId, {
+          namespace: [...pending.namespace],
+          interrupt_id: pending.interruptId,
+          response: answerResponse(answers),
+        }),
+      );
+    },
+    [threadId, note],
+  );
+
+  const cancelQuestions = useCallback(
+    async (interruptId: string) => {
+      const pending = stateRef.current.pendings.find(
+        (candidate) => candidate.interruptId === interruptId,
+      );
+      if (pending === undefined || pending.kind !== 'question') {
+        return;
+      }
+      setState((previous) => appendQuestionCancel(previous, interruptId));
+      note(
+        await clientRef.current.inputRespond(threadId, {
+          namespace: [...pending.namespace],
+          interrupt_id: pending.interruptId,
+          response: cancelResponse(),
         }),
       );
     },
@@ -222,6 +287,8 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     slashCommands,
     send,
     respond,
+    answer,
+    cancelQuestions,
     ...(connectionError === undefined ? {} : { connectionError }),
     ...(commandError === undefined ? {} : { commandError }),
     ...(slashError === undefined ? {} : { slashError }),

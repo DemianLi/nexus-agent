@@ -225,8 +225,17 @@ describe('一批裡混著核准與拒絕', () => {
   });
 
   it('兩個都要核准 → 一次暫停帶兩顆中斷，一個決定套到兩顆上', async () => {
-    // 全有全無的介面因此仍然成立：`packages/nexus-wire` 的 `uniformDecisions` 送滿
-    // 同型決定，這一條釘住的是「顆數」與「一次 resume 收兩顆」。
+    // **這是裸 resume 值的行為，產品路徑走的線已經不是這樣了**：上行逐
+    // `interrupt_id` 送 `Command({ resume: { [id]: 決定 } })`，基座據鍵逐 task 派送，
+    // 所以經過線只答一顆就只有一顆跑（`fanout-wire.test.ts`，
+    // [#232](https://github.com/DemianLi/nexus-agent/issues/232)）。這一條測的是**基座**
+    // 在裸值底下怎麼做，那正是我們不再送裸值的理由。
+    //
+    // **一個決定蓋住兩顆，不是因為介面「全有全無」**：閘門是逐次呼叫的，每顆中斷的
+    // `actionRequests` 恆長度 1，`packages/nexus-wire` 的 `uniformDecisions` 從來沒送滿過
+    // 兩筆；兩顆都被套到，是因為每次呼叫**各自**去讀同一個 resume 物件的 `decisions[0]`
+    // （`approval.ts` 的 `answer?.decisions?.[0]`）。這一條釘住的是「顆數」與「一次
+    // resume 收兩顆」，拒絕側的反面是下面那條。
     const { agent } = await gatedAgent({
       tools: ['ok_tool', 'bad_tool'],
       gated: ['ok_tool', 'bad_tool'],
@@ -243,6 +252,43 @@ describe('一批裡混著核准與拒絕', () => {
     );
     expect(after.__interrupt__).toBeUndefined();
     expect(ran).toEqual(['ok_tool', 'bad_tool']);
+  });
+
+  it('**一顆拒絕蓋住同一輪的兩顆中斷**——兩個都沒跑，各拿各的拒絕（上一條的反面）', async () => {
+    // **上一條的反面**：同一個成因（每次呼叫各自去讀同一個 resume 物件的 `decisions[0]`，
+    // 機制寫在上一條）在拒絕側的樣子——人只按了一次拒絕，兩顆中斷都走到 `denial(...)`。
+    // 線上那一側同一輪兩顆中斷怎麼折疊是另一件事，這裡不下結論。
+    const { agent } = await gatedAgent({
+      tools: ['ok_tool', 'bad_tool'],
+      gated: ['ok_tool', 'bad_tool'],
+    });
+    const config = { configurable: { thread_id: 'two-gated-reject' } };
+
+    const paused = await agent.invoke(toAgentInvocation('動手'), config);
+    expect((paused.__interrupt__ as unknown[] | undefined)?.length).toBe(2);
+    expect(ran).toEqual([]);
+
+    const after = await agent.invoke(
+      new Command({ resume: { decisions: [{ type: 'reject' }] } }) as never,
+      config,
+    );
+
+    // **run 走得完**——少了這一句，「第二顆把整場 run 弄死」也會讓 `ran === []` 綠。
+    expect(after.__interrupt__).toBeUndefined();
+    expect(ran).toEqual([]);
+    // 兩則拒絕**各自帶各自的工具名**：只數則數的話，同一顆被記兩次也會過。
+    const toolMessages = (after.messages as BaseMessage[]).filter(
+      (message) => message.getType() === 'tool',
+    );
+    expect(toolMessages.map((message) => message.text)).toEqual([
+      expect.stringContaining('拒絕了 "ok_tool"'),
+      expect.stringContaining('拒絕了 "bad_tool"'),
+    ]);
+    // 措辭之外還要 `status`——模型分不分得出這兩則與成功的結果不同。
+    expect(toolMessages.map((message) => (message as { status?: string }).status)).toEqual([
+      'error',
+      'error',
+    ]);
   });
 });
 

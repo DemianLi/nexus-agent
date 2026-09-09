@@ -141,7 +141,7 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是 echo ＋ 計劃模式 ＋ goal ＋ todo ＋ 十三個配套入口', async () => {
+  it('預設清單是 echo ＋ 計劃模式 ＋ goal ＋ todo ＋ 十五個配套入口', async () => {
     // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
     // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
     // 讓計劃模式進來，理由寫在 `DEFAULT_PLUGINS` 的 JSDoc 上（命令沒進預設清單就等於
@@ -164,7 +164,7 @@ describe('一次性模式', () => {
       'goal',
       'todo',
     ]);
-    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(13);
+    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(15);
   });
 
   it('**違規印到 stderr 而且帶前綴**——不是靠 runner 預設的 `console.error`', async () => {

@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
-import { emptyCommandPoint } from './fixtures.js';
+import { approvalAt, approvalToolNames, emptyCommandPoint } from './fixtures.js';
 import { createWireHandler } from './wire-handler.js';
 
 /**
@@ -130,11 +130,10 @@ async function until(
 
 /** 按下一個決定：跟畫面上那顆按鈕做的事完全一樣。 */
 async function decide(session: Session, threadId: string, decision: string) {
-  const pending = session.state.pending;
-  if (pending === undefined) {
-    throw new Error('沒有掛著的核准請求');
-  }
-  session.state = appendDecision(session.state, decision);
+  // **`interruptOn` 那條路一輪只有一顆中斷**（一顆帶整批 `actionRequests`），
+  // 所以這裡讀 `[0]` 是安全的。逐次呼叫那條路的多顆並存見 `fanout-wire.test.ts`。
+  const pending = approvalAt(session.state.pendings);
+  session.state = appendDecision(session.state, pending.interruptId, decision);
   return session.client.inputRespond(threadId, {
     namespace: [...pending.namespace],
     interrupt_id: pending.interruptId,
@@ -197,7 +196,7 @@ describe('核准之後，經過線', () => {
     const session = await open(agent, 'h1', '動手');
 
     await until(session, (state) => state.status === 'awaiting-input');
-    expect(session.state.pending?.actions.map((action) => action.name)).toEqual(['alpha']);
+    expect(approvalToolNames(session.state.pendings)).toEqual(['alpha']);
     expect(calls).toEqual([]);
 
     await decide(session, 'h1', 'approve');
@@ -223,8 +222,10 @@ describe('核准之後，經過線', () => {
     await until(session, settled(2));
 
     expect(calls).toEqual([]);
-    // 中斷發生在 `afterModel`，tools node 從沒跑；那則人造的 error ToolMessage 走
-    // `updates`（白名單外）。所以下行對「被拒絕」這件事一個字都沒說。
+    // **這是基座的機制**（本檔用 `interruptOn` 建 agent，見檔頭）：中斷發生在
+    // `afterModel`，tools node 從沒跑；那則人造的 error ToolMessage 走 `updates`
+    // （白名單外）。所以下行對「被拒絕」這件事一個字都沒說。#112 之後的產品路徑
+    // 中斷在 `wrapToolCall` 裡，下行長什麼樣沒有量過。
     expect(toolFrames(session)).toEqual([]);
     expect(session.state.entries.filter((entry) => entry.kind === 'tool')).toEqual([]);
     expect(decisions(session.state)).toEqual(['reject:alpha']);
@@ -239,10 +240,10 @@ describe('核准之後，經過線', () => {
     const session = await open(agent, 'h3', '動手');
     await until(session, (state) => state.status === 'awaiting-input');
 
-    expect(session.state.pending?.actions.map((action) => action.name)).toEqual(['alpha', 'beta']);
+    expect(approvalToolNames(session.state.pendings)).toEqual(['alpha', 'beta']);
     // 讀 `[0]` 的話這裡是 `['approve','reject']`，畫面上就會多一顆按下去讓整場 run 死
     // 的「全部拒絕」——基座對不在那一筆清單裡的決定是當場拋。
-    expect(session.state.pending?.allowedDecisions).toEqual(['approve']);
+    expect(approvalAt(session.state.pendings).allowedDecisions).toEqual(['approve']);
     await session.close();
   });
 
@@ -250,15 +251,18 @@ describe('核准之後，經過線', () => {
     const mixed = build(TWO, BOTH_FULL);
     const mixedSession = await open(mixed.agent, 'h4', '動手');
     await until(mixedSession, (state) => state.status === 'awaiting-input');
-    const pending = mixedSession.state.pending;
+    const pending = mixedSession.state.pendings[0];
     if (pending === undefined) throw new Error('沒有掛著的核准請求');
-    // **繞過介面直接送**：畫面上做不出這個組合（全有全無），這裡驗的是「為什麼不能做」。
+    // **繞過介面直接送**：介面今天一批只送一個決定（`uniformDecisions`），所以畫面上做
+    // 不出這個組合——但那是「還沒做」不是「不能做」：#112 之後閘門逐次呼叫各自判，
+    // 一個被拒不再拖累另一個（`interrupt.test.ts` 那條測試的名字就是這句）。這裡驗的仍
+    // 是**基座**的批次語義（檔頭第 2 條），不是我們介面的理由。
     await mixedSession.client.inputRespond('h4', {
       namespace: [...pending.namespace],
       interrupt_id: pending.interruptId,
       response: { decisions: [{ type: 'approve' }, { type: 'reject' }] },
     });
-    mixedSession.state = appendDecision(mixedSession.state, 'mixed');
+    mixedSession.state = appendDecision(mixedSession.state, pending.interruptId, 'mixed');
     await until(mixedSession, settled(2));
 
     const rejected = build(TWO, BOTH_FULL);
@@ -300,7 +304,7 @@ describe('上行擋下三種會靜靜壞掉的送法', () => {
     const { agent, calls } = build(ONE, { alpha: BOTH_FULL.alpha });
     const session = await open(agent, 'h7', '動手');
     await until(session, (state) => state.status === 'awaiting-input');
-    const pending = session.state.pending;
+    const pending = session.state.pendings[0];
     if (pending === undefined) throw new Error('沒有掛著的核准請求');
 
     const response = await session.client.inputRespond('h7', {
@@ -323,7 +327,7 @@ describe('上行擋下三種會靜靜壞掉的送法', () => {
     const { agent, calls } = build(TWO, BOTH_FULL);
     const session = await open(agent, 'h8', '動手');
     await until(session, (state) => state.status === 'awaiting-input');
-    const pending = session.state.pending;
+    const pending = session.state.pendings[0];
     if (pending === undefined) throw new Error('沒有掛著的核准請求');
 
     // 基座逐 index 配對，長度不符當場拋——線上是一顆 `lifecycle failed / root`。

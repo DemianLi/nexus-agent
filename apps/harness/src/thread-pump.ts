@@ -21,8 +21,8 @@
  * 5. **停在核准點時再送一句話，中斷會被靜靜丟掉。** 實測基座照跑新的一輪
  *    （`patchToolCallsMiddleware.before_agent` 補掉懸空的工具呼叫），那個等著核准的工具
  *    **既沒執行也沒被拒絕**，而且**不會再發第二顆 `input.requested`**——核准請求就這樣
- *    蒸發了，下行上一顆 frame 都看不出來。所以 pump 記著目前掛著的那顆中斷
- *    （{@link ThreadPump.pending}），讓上行那一側擋得下來。
+ *    蒸發了，下行上一顆 frame 都看不出來。所以 pump 記著還掛著的那些中斷
+ *    （{@link ThreadPump.awaitingInput}），讓上行那一側擋得下來。
  */
 
 import { HumanMessage } from '@langchain/core/messages';
@@ -63,7 +63,20 @@ export interface PumpAgent {
  */
 export type PumpInput =
   | { readonly kind: 'message'; readonly text: string }
-  | { readonly kind: 'resume'; readonly response: unknown }
+  | {
+      readonly kind: 'resume';
+      /**
+       * 這個決定回答的是**哪一顆**中斷。
+       *
+       * 承重：`Command({ resume })` 在基座有兩條路——鍵全是 32 個小寫 hex（`isXXH3`，
+       * `@langchain/langgraph@1.4.12` 的 `hash.js`）走逐 task 派送，否則整個
+       * `resume` 值**廣播給每一顆待決的 task**（`pregel/io.js:48`）。裸值送出去走的
+       * 正是廣播那一支，那就是「一個決定套到同一輪兩顆中斷上」的機制本身
+       * （[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
+       */
+      readonly interruptId: string;
+      readonly response: unknown;
+    }
   | ({ readonly kind: 'goal' } & GoalRoundRequest);
 
 interface Subscriber {
@@ -73,7 +86,7 @@ interface Subscriber {
   done: boolean;
 }
 
-/** 目前掛在這條 thread 上、還沒被回答的那顆中斷。 */
+/** 掛在這條 thread 上、還沒被回答的其中一顆中斷。 */
 export interface PendingInterrupt {
   readonly interruptId: string;
   /** 這一批要回答幾筆決定——基座逐 index 配對，長度不符當場拋。 */
@@ -138,7 +151,14 @@ export class ThreadPump {
    * 那對瀏覽器無所謂，對遙測會要命。
    */
   #seq = 0;
-  #pending: PendingInterrupt | undefined;
+  /**
+   * 還沒被回答的中斷，**逐 `interruptId` 並存**。
+   *
+   * 同一輪兩個工具都要核准時閘門逐次呼叫各自 `interrupt()`，`#translate` 那個迴圈
+   * 會一次收到兩顆。這裡曾經是單一欄位，第二顆直接覆寫第一顆——上行那側因此會把
+   * 「回答第一顆」判成 `no_such_interrupt`。
+   */
+  readonly #pending = new Map<string, PendingInterrupt>();
   /** 一個 thread 一次只跑一個 run；後到的 submit 排隊，不平行跑。 */
   #tail: Promise<void> = Promise.resolve();
   /**
@@ -184,16 +204,26 @@ export class ThreadPump {
     return this.#sessions.root;
   }
 
-  /** 掛著等人回答的那顆中斷，沒有就是 `undefined`。 */
-  get pending(): PendingInterrupt | undefined {
-    return this.#pending;
+  /** 掛著等人回答的中斷，發出的順序。一顆都沒有就是空的。 */
+  get pendings(): readonly PendingInterrupt[] {
+    return [...this.#pending.values()];
+  }
+
+  /** 這條 thread 停在核准點沒有——**任何一顆**掛著就算。 */
+  get awaitingInput(): boolean {
+    return this.#pending.size > 0;
+  }
+
+  /** 認領某一顆。認不得就是 `undefined`，上行那側據此回 `no_such_interrupt`。 */
+  pendingFor(interruptId: string): PendingInterrupt | undefined {
+    return this.#pending.get(interruptId);
   }
 
   /**
    * 這條 thread 上有沒有 run 還沒跑完——**排隊中的也算**。
    *
    * 給上行那一側擋斜線命令用（[#123](https://github.com/DemianLi/nexus-agent/issues/123)）。
-   * 與 {@link ThreadPump.pending} 各擋一種：那個是「停在核准點」，這個是「還在飛」。
+   * 與 {@link ThreadPump.awaitingInput} 各擋一種：那個是「停在核准點」，這個是「還在飛」。
    * 兩個都不擋的話，`/plan` 的 pending intent 會跟飛行中那一輪的 `beforeAgent` 賽跑。
    */
   get running(): boolean {
@@ -264,7 +294,15 @@ export class ThreadPump {
     }
     // **收下的那一刻就不再掛著了，不是等它排到才清。** 排隊期間還掛著的話，連按兩次
     // 核准的第二次會通過上行的校驗、送出第二次 resume，而那時已經沒有中斷可以回答。
-    this.#pending = undefined;
+    //
+    // **只收掉被答的那一顆。** 同一輪的其他中斷還等著人，整個清掉的話回答它們會被
+    // 判成 `no_such_interrupt`。說話與續行那兩種本來就要求一顆都沒掛著（上行擋著），
+    // 走到這裡代表狀態已經不對，清空是止血。
+    if (input.kind === 'resume') {
+      this.#pending.delete(input.interruptId);
+    } else {
+      this.#pending.clear();
+    }
     // **同步就加一**：上行回的是收件回條，緊接著到的 `slash.run` 必須看得到「在飛」。
     this.#inFlight += 1;
     const next = this.#tail.then(() => this.#runOnce(input));
@@ -346,7 +384,9 @@ export class ThreadPump {
     // 一份——它結構上驗不到這種偏差。所以這兩行必須共用同一個來源。
     const payload =
       input.kind === 'resume'
-        ? new Command({ resume: input.response })
+        ? // **逐 id 派送，不是裸值。** 鍵是那顆 `XXH3(checkpoint_ns)`，基座只把值送給
+          // 那一顆 task；裸值會廣播給每一顆待決的 task（見 `PumpInput` 的 `interruptId`）。
+          new Command({ resume: { [input.interruptId]: input.response } })
         : { messages: [new HumanMessage(input.text)] };
 
     try {
@@ -380,7 +420,11 @@ export class ThreadPump {
       // `input.requested`。這裡補上那一顆——順帶讓 `updates` 整條留在白名單外，
       // 它每一顆都夾著完整序列化的訊息。
       for (const entry of asInterruptEntries(raw.params.data)) {
-        this.#pending = { interruptId: entry.id, actionCount: actionCountOf(entry.value) };
+        // 同 id 覆寫：沒被答到的那些會帶著原本那顆 id 再度中斷（實測）。
+        this.#pending.set(entry.id, {
+          interruptId: entry.id,
+          actionCount: actionCountOf(entry.value),
+        });
         this.#sessions.root.append('interrupt/raised', { interruptId: entry.id });
         yield this.#seal({
           method: 'input.requested',

@@ -52,6 +52,24 @@ function Entry({ entry }: { entry: ConversationEntry }) {
     );
   }
 
+  if (entry.kind === 'answer') {
+    return (
+      <li className="text-muted-foreground text-xs" data-testid="answer-entry">
+        已回答：
+        {entry.answers
+          .map((answer) => {
+            const picked = [
+              ...answer.selected,
+              ...(answer.custom === undefined ? [] : [answer.custom]),
+            ];
+            // 空的 `selected` 且沒有 `custom` ＝ 那一題被跳過（照抄 dsh 的編碼）。
+            return `${answer.id}＝${picked.length === 0 ? '（跳過）' : picked.join('、')}`;
+          })
+          .join('，')}
+      </li>
+    );
+  }
+
   if (entry.kind === 'tool') {
     return (
       <li className="flex flex-col gap-1" data-testid="tool-entry">

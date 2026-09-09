@@ -1,17 +1,29 @@
 /**
- * 核准請求：一批工具呼叫，一個決定。
+ * **一顆核准中斷一張卡**：這一顆的那批工具呼叫，一個決定。
  *
- * **逐筆按的介面在這裡是不能做的**，不是設計偏好。基座在一批裡只要有一筆被拒，
- * 被核准的那幾筆就靜靜地不執行、還會從 AI 訊息的 `tool_calls` 裡被抹掉；而**線上
- * 看不出來**——實測「全拒絕」與「一核准一拒絕」的下行一模一樣：`tools` frame 零顆，
- * 只有模型再講一輪話。逐筆按下去的「核准」與「從沒問過」因此在畫面上分不出來。
+ * 問答中斷有它自己的卡（`question-card.tsx`）。**兩個元件不是一個元件內部分支**——
+ * 送出的形狀完全不同（`{decisions:[…]}` 對 `{answers:[…]}`），而 dsh 那邊也是兩個 slot。
+ *
+ * 界線在中斷上，不在輪次上（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
+ * 同一輪的其他中斷各有各的卡、各答各的——`interrupt_id` 是那道界線，伺服器據它逐
+ * task 派送。
+ *
+ * **一張卡裡一批一個決定今天是「還沒做」，不是「不能做」。** 原本寫在這裡的理由是基座
+ * 的批次語義（一筆被拒、被核准的那幾筆靜靜地不執行還從 `tool_calls` 裡被抹掉），那個
+ * 理由在 [#112](https://github.com/DemianLi/nexus-agent/pull/112) 之後不成立了：閘門
+ * 改成逐次呼叫各自判，一個被拒不再抹掉其他筆。
+ *
+ * **那句 `actions.length > 1` 的 rendered 警告刪掉了**（#232 第 5 項）。它講的是基座
+ * 的批次抹除，而那件事 #112 之後不存在；至於它想提醒的「同一批還有別的工具」，現在
+ * 畫面上就看得見——每一顆中斷自己一張卡，不需要一句話代勞。`actionRequests` 經我們的
+ * fold 恆長度 1，所以那條分支本來也到不了。
  *
  * 按鈕只有 `pending.allowedDecisions` 裡的那些，而那份清單是**逐筆交集**（見
  * `@nexus/wire` 的 `intersectDecisions`）：基座對不在某一筆清單裡的決定是當場拋，
  * 一顆多出來的按鈕按下去是整場 run 死。
  */
 
-import type { PendingInput } from '@nexus/wire';
+import type { PendingApproval } from '@nexus/wire';
 
 import { Button } from '@/components/ui/button';
 
@@ -23,7 +35,7 @@ export function ApprovalCard({
   busy,
   onDecide,
 }: {
-  pending: PendingInput;
+  pending: PendingApproval;
   busy: boolean;
   onDecide: (decision: string) => void;
 }) {
@@ -44,11 +56,6 @@ export function ApprovalCard({
           </li>
         ))}
       </ul>
-      {pending.actions.length > 1 && (
-        <p className="text-muted-foreground text-xs">
-          這一批是全有全無：基座只要有一筆被拒，被核准的那幾筆也不會執行，而且不會留下任何痕跡。
-        </p>
-      )}
       {pending.allowedDecisions.length === 0 && (
         <p className="text-destructive text-xs">
           這顆中斷沒有共同可用的決定，這裡按不了 —— 只能重開一條對話。
