@@ -1,8 +1,16 @@
-import type { Event, SlashDescriptor, SlashRunOutcome, WireClient } from '@nexus/wire';
+import type {
+  Event,
+  PendingApproval,
+  PendingQuestion,
+  SlashDescriptor,
+  SlashRunOutcome,
+  WireClient,
+} from '@nexus/wire';
+import { APPROVAL_PENDING_KIND, QUESTION_PENDING_KIND } from '@nexus/wire';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { App } from '@/App';
+import { App, inputPlaceholder } from '@/App';
 
 afterEach(cleanup);
 
@@ -498,6 +506,12 @@ describe('問答卡', () => {
     const question = await screen.findByTestId('question-card');
     expect(screen.getByTestId('approval-card')).toBeTruthy();
 
+    // **「兩種都掛著時兩種都講」是這一刀自己判的那一格**，所以它要在真的 frame ＋ 真的
+    // 折疊器底下也成立一次——純函式那一組餵的是手工 pending，餵錯了會一起錯。
+    const bothPlaceholder = screen.getByLabelText('要說的話').getAttribute('placeholder');
+    expect(bothPlaceholder).toContain('核准');
+    expect(bothPlaceholder).toContain('問題');
+
     // 按下去之後那顆的字會變成「這題已跳過」，所以每次都重新抓剩下的第一顆——
     // 抓一次存起來按兩下，第二下會落在一個已經不是「跳過」的按鈕上。
     fireEvent.click(within(question).getAllByRole('button', { name: '跳過這題' })[0]!);
@@ -526,5 +540,171 @@ describe('問答卡', () => {
       interrupt_id: 'int-1',
       response: { decisions: [{ type: 'approve' }] },
     });
+  });
+});
+
+/**
+ * 送出框那句灰字講的跟掛著的東西對不對得上。
+ *
+ * **判準不是「有沒有出現『核准』兩個字」。** 卡上的驗收句寫成那樣，防的是把問答叫成核准；
+ * 但兩顆真的都掛著時只講其中一種，是往另一個方向說謊。所以這一組逐格比對「掛著什麼」
+ * 與「講了什麼」，兩個方向的誤放行各釘一條。
+ */
+describe('送出框說的話', () => {
+  // **不用 `as unknown as`，也不寫死字串。** `isApprovalPending` 的註解就寫著述詞存在
+  // 的理由是「比對錯了型別不會擋，因為那是一個字串」——替身自己繞過型別的話，這一組就
+  // 守不到欄位加寬或判別式改字。
+  const approval: PendingApproval = {
+    kind: APPROVAL_PENDING_KIND,
+    interruptId: 'i',
+    namespace: [],
+    actions: [],
+    allowedDecisions: ['approve'],
+  };
+  const question: PendingQuestion = {
+    kind: QUESTION_PENDING_KIND,
+    interruptId: 'q',
+    namespace: [],
+    questions: [],
+  };
+
+  it('**問答掛著時不講「核准」**——這是卡上那句驗收句', () => {
+    const text = inputPlaceholder({
+      status: 'awaiting-input',
+      connected: true,
+      pendings: [question],
+      stuck: false,
+    });
+    expect(text).not.toContain('核准');
+    // 光是「不含核准」的話，「說點什麼…」也會綠——那等於把問答整個藏起來。
+    expect(text).toContain('問題');
+  });
+
+  it('核准掛著時照舊講核准，也不順口提問題', () => {
+    const text = inputPlaceholder({
+      status: 'awaiting-input',
+      connected: true,
+      pendings: [approval],
+      stuck: false,
+    });
+    expect(text).toContain('核准');
+    expect(text).not.toContain('問題');
+  });
+
+  it('**兩種都掛著時兩種都講**——只講一種就是往另一個方向說謊', () => {
+    const text = inputPlaceholder({
+      status: 'awaiting-input',
+      connected: true,
+      pendings: [approval, question],
+      stuck: false,
+    });
+    expect(text).toContain('核准');
+    expect(text).toContain('問題');
+  });
+
+  it('**卡死的核准旁邊還掛著問答時，不把那組問題吞掉**', () => {
+    // `stuck` 是核准卡專屬的解鎖（送出框放開讓人講得出原因）。照舊的寫法整條分支會直接
+    // 掉到「說點什麼…」——而問答卡永遠按得動，那組問題還答得掉。
+    const text = inputPlaceholder({
+      status: 'awaiting-input',
+      connected: true,
+      pendings: [approval, question],
+      stuck: true,
+    });
+    expect(text).toContain('問題');
+    expect(text).toContain('說點什麼');
+  });
+
+  it('卡死的核准自己一張時照舊只邀請說話', () => {
+    expect(
+      inputPlaceholder({
+        status: 'awaiting-input',
+        connected: true,
+        pendings: [approval],
+        stuck: true,
+      }),
+    ).toBe('說點什麼…');
+  });
+
+  it('沒在等人的時候照舊分連上了沒有', () => {
+    expect(inputPlaceholder({ status: 'idle', connected: true, pendings: [], stuck: false })).toBe(
+      '說點什麼…',
+    );
+    expect(inputPlaceholder({ status: 'idle', connected: false, pendings: [], stuck: false })).toBe(
+      '連線中…',
+    );
+  });
+
+  it('**接到真的線上也是這樣**——上面那幾條是純函式，這一條證它真的接在 input 上', async () => {
+    seq = 0;
+    const { client } = fakeClient([questionFrame('q-only')]);
+    render(<App client={client} />);
+
+    await screen.findByTestId('question-card');
+    const input = screen.getByLabelText('要說的話');
+    await waitFor(() => {
+      expect(input.getAttribute('placeholder')).toContain('問題');
+    });
+    expect(input.getAttribute('placeholder')).not.toContain('核准');
+  });
+
+  it('**卡死的核准 ＋ 問答，走真的 frame**——那組問題沒有被解鎖那條路吞掉', async () => {
+    seq = 0;
+    // `allowed: []` ＝ 一顆按鈕都長不出來的核准請求，也就是 `stuck`。
+    const { client } = fakeClient([
+      approvalFrame([{ name: 'write_file', allowed: [] }], 'stuck-1'),
+      questionFrame('q-beside'),
+    ]);
+    render(<App client={client} />);
+
+    await screen.findByTestId('question-card');
+    const input = screen.getByLabelText('要說的話');
+    await waitFor(() => {
+      expect(input.getAttribute('placeholder')).toContain('問題');
+    });
+    // 解鎖本身照舊——這一格的重點是兩件事都講，不是把解鎖收回去。
+    expect(input.getAttribute('placeholder')).toContain('說點什麼');
+  });
+});
+
+/**
+ * 問答收尾之後 transcript 上留下的那一行。
+ *
+ * **兩條是一對。** 只釘放棄那條的話，一個把每一則都寫成「放棄了這組問題」的實作也會綠；
+ * 只釘答完那條的話，就回到 [#239](https://github.com/DemianLi/nexus-agent/issues/239) 量到的
+ * 原狀——「已回答：」後面一片空白。誤放行的兩個方向要各釘一條。
+ */
+describe('問答的收尾在 transcript 上長什麼樣', () => {
+  it('**放棄整組不是「已回答：」加空白**——它根本不是一種回答', async () => {
+    seq = 0;
+    const { client } = fakeClient([questionFrame('q-c')]);
+    render(<App client={client} />);
+    const card = await screen.findByTestId('question-card');
+
+    fireEvent.click(within(card).getByRole('button', { name: '放棄整組問題' }));
+
+    const entry = await screen.findByTestId('answer-entry');
+    expect(entry.textContent).toContain('放棄');
+    // **這一句才是驗收句。** 上面那句在「已回答：放棄」這種寫法底下也會綠。
+    expect(entry.textContent).not.toContain('已回答');
+  });
+
+  it('**答完的照舊逐題攤開**，而且「跳過」與「沒答」分得出來', async () => {
+    seq = 0;
+    const { client } = fakeClient([questionFrame('q-a')]);
+    render(<App client={client} />);
+    const card = await screen.findByTestId('question-card');
+
+    // 第一題跳過、第二題選一個——兩種編碼各出現一次。
+    fireEvent.click(within(card).getAllByRole('button', { name: '跳過這題' })[0]!);
+    // `multi_select` 沒給就是單選，所以是 radio 不是 checkbox。
+    fireEvent.click(within(card).getByRole('radio', { name: '週二' }));
+    fireEvent.click(within(card).getByRole('button', { name: '送出答案' }));
+
+    const entry = await screen.findByTestId('answer-entry');
+    expect(entry.textContent).toContain('已回答');
+    expect(entry.textContent).toContain('name＝（跳過）');
+    expect(entry.textContent).toContain('day＝週二');
+    expect(entry.textContent).not.toContain('放棄');
   });
 });
