@@ -239,9 +239,15 @@ function createSubmitRecordTool(backend: AnyBackendProtocol | undefined) {
  * 別的組裝點去掛的失敗方式是「工具在、閘門沒掛」——而那條路上模型會直接把檔案寫出去，
  * 一張卡都不會出現。
  *
- * **這是新增一個閘門，不是打開一個開關**（#231 第 6 項）：`approvals` 的 waterfall 鏈底是
- * `allow`，今天生產程式碼裡唯一的註冊者是 plan-mode（只管 `exit_plan_mode`）。所以掛上這個
- * plugin 之前，`submit_record` 這個名字沒有任何人會攔。
+ * **這是新增一個閘門，不是打開一個開關**（#231 第 6 項）：`approvals` 的 waterfall
+ * **鏈底是 `allow`**——沒人管的工具一律放行。這一刀之前生產程式碼裡只有一個註冊者
+ * （plan-mode，只管 `exit_plan_mode`），**這一刀之後是兩個**，而承重的那一半仍然是鏈底：
+ * 掛上這個 plugin 之前，`submit_record` 這個名字沒有任何人會攔。
+ *
+ * **兩個註冊者不會互相影響**：waterfall 依註冊順序跑，plan-mode 那位對非
+ * `exit_plan_mode` 一律 `next()`，這位對非 `submit_record` 一律 `next()`。「只認自己那個
+ * 名字」的否定面各自有測試（見 `index.test.ts` 最後一段）——少了它，一個把所有工具都攔
+ * 下來的閘門一條測試都不會紅。
  *
  * **閘門沒有開關**。做成可選的失敗方式是有人為了跑測試把它關掉，然後那個組裝就變成
  * 「模型自己把資料寫進真實磁碟」——而 `--workspace` 之下那就是真的檔案。
