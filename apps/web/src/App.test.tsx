@@ -1,4 +1,12 @@
-import type { Event, SlashDescriptor, SlashRunOutcome, WireClient } from '@nexus/wire';
+import type {
+  Event,
+  PendingApproval,
+  PendingQuestion,
+  SlashDescriptor,
+  SlashRunOutcome,
+  WireClient,
+} from '@nexus/wire';
+import { APPROVAL_PENDING_KIND, QUESTION_PENDING_KIND } from '@nexus/wire';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -498,6 +506,12 @@ describe('問答卡', () => {
     const question = await screen.findByTestId('question-card');
     expect(screen.getByTestId('approval-card')).toBeTruthy();
 
+    // **「兩種都掛著時兩種都講」是這一刀自己判的那一格**，所以它要在真的 frame ＋ 真的
+    // 折疊器底下也成立一次——純函式那一組餵的是手工 pending，餵錯了會一起錯。
+    const bothPlaceholder = screen.getByLabelText('要說的話').getAttribute('placeholder');
+    expect(bothPlaceholder).toContain('核准');
+    expect(bothPlaceholder).toContain('問題');
+
     // 按下去之後那顆的字會變成「這題已跳過」，所以每次都重新抓剩下的第一顆——
     // 抓一次存起來按兩下，第二下會落在一個已經不是「跳過」的按鈕上。
     fireEvent.click(within(question).getAllByRole('button', { name: '跳過這題' })[0]!);
@@ -537,19 +551,22 @@ describe('問答卡', () => {
  * 與「講了什麼」，兩個方向的誤放行各釘一條。
  */
 describe('送出框說的話', () => {
-  const approval = {
-    kind: 'approval',
+  // **不用 `as unknown as`，也不寫死字串。** `isApprovalPending` 的註解就寫著述詞存在
+  // 的理由是「比對錯了型別不會擋，因為那是一個字串」——替身自己繞過型別的話，這一組就
+  // 守不到欄位加寬或判別式改字。
+  const approval: PendingApproval = {
+    kind: APPROVAL_PENDING_KIND,
     interruptId: 'i',
     namespace: [],
     actions: [],
     allowedDecisions: ['approve'],
-  } as unknown as Parameters<typeof inputPlaceholder>[0]['pendings'][number];
-  const question = {
-    kind: 'question',
+  };
+  const question: PendingQuestion = {
+    kind: QUESTION_PENDING_KIND,
     interruptId: 'q',
     namespace: [],
     questions: [],
-  } as unknown as Parameters<typeof inputPlaceholder>[0]['pendings'][number];
+  };
 
   it('**問答掛著時不講「核准」**——這是卡上那句驗收句', () => {
     const text = inputPlaceholder({
@@ -629,6 +646,24 @@ describe('送出框說的話', () => {
       expect(input.getAttribute('placeholder')).toContain('問題');
     });
     expect(input.getAttribute('placeholder')).not.toContain('核准');
+  });
+
+  it('**卡死的核准 ＋ 問答，走真的 frame**——那組問題沒有被解鎖那條路吞掉', async () => {
+    seq = 0;
+    // `allowed: []` ＝ 一顆按鈕都長不出來的核准請求，也就是 `stuck`。
+    const { client } = fakeClient([
+      approvalFrame([{ name: 'write_file', allowed: [] }], 'stuck-1'),
+      questionFrame('q-beside'),
+    ]);
+    render(<App client={client} />);
+
+    await screen.findByTestId('question-card');
+    const input = screen.getByLabelText('要說的話');
+    await waitFor(() => {
+      expect(input.getAttribute('placeholder')).toContain('問題');
+    });
+    // 解鎖本身照舊——這一格的重點是兩件事都講，不是把解鎖收回去。
+    expect(input.getAttribute('placeholder')).toContain('說點什麼');
   });
 });
 
