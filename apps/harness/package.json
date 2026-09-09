@@ -44,6 +44,7 @@
     "@nexus/plugin-plan-mode": "workspace:*",
     "@nexus/plugin-quickjs": "workspace:*",
     "@nexus/plugin-skills": "workspace:*",
+    "@nexus/plugin-submit-record": "workspace:*",
     "@nexus/plugin-telemetry-otel": "workspace:*",
     "@nexus/plugin-todo": "workspace:*",
     "@nexus/plugin-validation": "workspace:*",
