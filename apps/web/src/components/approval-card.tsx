@@ -1,14 +1,19 @@
 /**
- * 核准請求：一批工具呼叫，一個決定。
+ * **一顆中斷一張卡**：這一顆的那批工具呼叫，一個決定。
  *
- * **一批一個決定今天是「還沒做」，不是「不能做」。** 原本寫在這裡的理由是基座的批次
- * 語義（一筆被拒、被核准的那幾筆靜靜地不執行還從 `tool_calls` 裡被抹掉），那個理由在
- * [#112](https://github.com/DemianLi/nexus-agent/pull/112) 之後不成立了：閘門改成逐次
- * 呼叫各自判，一個被拒不再抹掉其他筆。
+ * 界線在中斷上，不在輪次上（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
+ * 同一輪的其他中斷各有各的卡、各答各的——`interrupt_id` 是那道界線，伺服器據它逐
+ * task 派送。
  *
- * **下面那句 rendered 警告（`actions.length > 1` 那條分支）因此是過期的，這次沒有改。**
- * 它該寫什麼取決於折疊器把同一輪的多顆中斷怎麼處理，而那還沒定案——今天閘門每次呼叫
- * 各自發一顆單筆中斷，所以那條分支在產品路徑上到不了。
+ * **一張卡裡一批一個決定今天是「還沒做」，不是「不能做」。** 原本寫在這裡的理由是基座
+ * 的批次語義（一筆被拒、被核准的那幾筆靜靜地不執行還從 `tool_calls` 裡被抹掉），那個
+ * 理由在 [#112](https://github.com/DemianLi/nexus-agent/pull/112) 之後不成立了：閘門
+ * 改成逐次呼叫各自判，一個被拒不再抹掉其他筆。
+ *
+ * **那句 `actions.length > 1` 的 rendered 警告刪掉了**（#232 第 5 項）。它講的是基座
+ * 的批次抹除，而那件事 #112 之後不存在；至於它想提醒的「同一批還有別的工具」，現在
+ * 畫面上就看得見——每一顆中斷自己一張卡，不需要一句話代勞。`actionRequests` 經我們的
+ * fold 恆長度 1，所以那條分支本來也到不了。
  *
  * 按鈕只有 `pending.allowedDecisions` 裡的那些，而那份清單是**逐筆交集**（見
  * `@nexus/wire` 的 `intersectDecisions`）：基座對不在某一筆清單裡的決定是當場拋，
@@ -48,11 +53,6 @@ export function ApprovalCard({
           </li>
         ))}
       </ul>
-      {pending.actions.length > 1 && (
-        <p className="text-muted-foreground text-xs">
-          這一批是全有全無：基座只要有一筆被拒，被核准的那幾筆也不會執行，而且不會留下任何痕跡。
-        </p>
-      )}
       {pending.allowedDecisions.length === 0 && (
         <p className="text-destructive text-xs">
           這顆中斷沒有共同可用的決定，這裡按不了 —— 只能重開一條對話。

@@ -1,5 +1,5 @@
 import type { Event, SlashDescriptor, SlashRunOutcome, WireClient } from '@nexus/wire';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { App } from '@/App';
@@ -220,11 +220,13 @@ describe('核准請求', () => {
     expect(screen.queryByRole('button', { name: '全部拒絕' })).toBeNull();
   });
 
-  it('**同一輪兩顆中斷：狀態列兩個都講，卡片一次一張，決定送給第一顆**', async () => {
+  it('**同一輪兩顆中斷：兩張卡，各按各的，決定落在自己那顆上**', async () => {
     // 逐次呼叫的閘門會發**兩顆**中斷（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
-    // 折疊器兩顆都留著，而畫面這一層今天只渲染第一張卡——多張卡是那張卡的第 2 項、
-    // 還沒做。**狀態列是唯一一個同時看得見兩顆的表面**，所以它要講出兩個名字：
-    // 少了這一句，第二顆在畫面上會一點痕跡都沒有。
+    // 這條原本釘的是中間態（折疊器兩顆都留著、畫面只渲染第一張），現在翻成驗收句。
+    //
+    // **承重的是最後那兩句 `interrupt_id`。** 只驗「有兩張卡」的話，兩張卡都把決定送給
+    // `pendings[0]` 也會綠——而那正是這一刀最可能長出來的 bug：人按的是 beta 那張，
+    // 答掉的是 alpha。所以要按**第二張**，並看它送出去的鑰匙是不是 `int-2`。
     seq = 0;
     const { client, responded } = fakeClient([
       approvalFrame([{ name: 'alpha', allowed: ['approve', 'reject'] }], 'int-1'),
@@ -232,26 +234,55 @@ describe('核准請求', () => {
     ]);
     render(<App client={client} />);
 
-    await waitFor(() => expect(screen.getByTestId('approval-card')).toBeTruthy());
-    await waitFor(() =>
-      expect(screen.getByRole('status').textContent).toContain('等待核准：alpha、beta'),
-    );
-    // 卡片是第一顆那張，不是最後一顆——後者正是原本那個缺陷的樣子。
-    expect(screen.getAllByTestId('approval-card')).toHaveLength(1);
-    expect(screen.getByText('alpha')).toBeTruthy();
+    await waitFor(() => expect(screen.getAllByTestId('approval-card')).toHaveLength(2));
+    const [alphaCard, betaCard] = screen.getAllByTestId('approval-card');
+    if (alphaCard === undefined || betaCard === undefined) throw new Error('沒有兩張卡');
+    // 順序照中斷發出的順序——反過來的話下面按的就是另一顆。
+    expect(within(alphaCard).getByText('alpha')).toBeTruthy();
+    expect(within(betaCard).getByText('beta')).toBeTruthy();
+    // 狀態列是第二道證據，講得出兩個名字。
+    expect(screen.getByRole('status').textContent).toContain('等待核准：alpha、beta');
 
-    fireEvent.click(screen.getByRole('button', { name: '全部核准' }));
+    // **按第二張那顆按鈕**，不是第一張。
+    fireEvent.click(within(betaCard).getByRole('button', { name: '全部核准' }));
 
     await waitFor(() => expect(responded.length).toBe(1));
-    // **送給 `int-1`**：送成 `int-2` 的話，人看的是 alpha、答的是 beta。
     expect(responded[0]).toEqual({
       namespace: ['tools:a'],
-      interrupt_id: 'int-1',
+      interrupt_id: 'int-2',
       response: { decisions: [{ type: 'approve' }] },
     });
-    // 第一顆收掉之後第二顆補上來，狀態列跟著只剩它。
-    await waitFor(() => expect(screen.getByText('beta')).toBeTruthy());
-    expect(screen.getByRole('status').textContent).toContain('等待核准：beta');
+    // 答掉的那張收走，另一張留著等人——**只收一張**，兩張一起消失是另一種壞法。
+    await waitFor(() => expect(screen.getAllByTestId('approval-card')).toHaveLength(1));
+    expect(within(screen.getByTestId('approval-card')).getByText('alpha')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toContain('等待核准：alpha');
+
+    // 再按剩下那張，鑰匙是 `int-1`。
+    fireEvent.click(
+      within(screen.getByTestId('approval-card')).getByRole('button', { name: '全部核准' }),
+    );
+    await waitFor(() => expect(responded.length).toBe(2));
+    expect(responded[1]).toMatchObject({ interrupt_id: 'int-1' });
+  });
+
+  it('**兩張卡裡只要有一張沒有出路，送出框就解鎖**', async () => {
+    // 多張卡之後「卡死」沒有自然的翻譯，`some` 與 `every` 行為不同，所以明著釘一條。
+    // 取 `some` 的理由跟單張時同一句：那張沒有出路的卡**永遠清不掉**，這條 thread 就
+    // 已經清不乾淨了，旁邊那張按得動也救不回來。
+    //
+    // **解鎖不等於送得出去**：送出去仍會撞上伺服器那句「停在核准點」（下面那條在釘它）。
+    // 出路是「講得出原因」，不是「真的能說話」。
+    seq = 0;
+    const { client } = fakeClient([
+      approvalFrame([{ name: 'alpha', allowed: ['approve', 'reject'] }], 'int-1'),
+      approvalFrame([{ name: 'beta', allowed: [] }], 'int-2'),
+    ]);
+    render(<App client={client} />);
+
+    await waitFor(() => expect(screen.getAllByTestId('approval-card')).toHaveLength(2));
+    expect(screen.getByText(/這裡按不了/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '換條路' } });
+    expect(screen.getByRole('button', { name: '送出' }).hasAttribute('disabled')).toBe(false);
   });
 });
 
