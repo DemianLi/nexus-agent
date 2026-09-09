@@ -11,7 +11,13 @@
  * 這裡就照樣顯示未歸屬：**寧可說不知道，不要說錯**。
  */
 
-import type { Attribution, ConversationEntry, ConversationState, ToolEntry } from '@nexus/wire';
+import type {
+  AnswerEntry,
+  Attribution,
+  ConversationEntry,
+  ConversationState,
+  ToolEntry,
+} from '@nexus/wire';
 
 function AttributionBadge({ attribution }: { attribution: Attribution }) {
   if (attribution.kind === 'root') {
@@ -36,6 +42,37 @@ const TOOL_STATUS_LABEL = {
 
 function ToolBadge({ status }: { status: ToolEntry['status'] }) {
   return <span className="text-muted-foreground text-xs">{TOOL_STATUS_LABEL[status]}</span>;
+}
+
+/**
+ * 一則問答紀錄在畫面上的那一行。
+ *
+ * **三格，不是「已回答：」加一個 join。** 原本一律寫「已回答：」再把 `answers` 攤開接起來，
+ * 於是「放棄整組」——它的 `answers` 是空的——長出「已回答：」後面一片空白
+ * （[#239](https://github.com/DemianLi/nexus-agent/issues/239) 在真瀏覽器裡量到的三處說謊
+ * 之一）。而**放棄不是一種回答**：全跳過仍然是一份答案、工具正常回傳，放棄則讓工具收到
+ * 錯誤，模型知道人不打算走這條路（見 `@nexus/wire` 的 `AnswerEntry.cancelled`）。畫成同
+ * 一句話，就是把這兩件事在畫面上抹平。
+ *
+ * **第三格是防它從別的入口長回來。** 空的 `answers` 而且沒有 `cancelled` today 走不到
+ * UI（問答卡送得出去的只有「逐題有交代」與「放棄整組」兩種），但 `appendAnswers` 收任何
+ * 一份 `answers`、包含空陣列，型別上那條路開著。留一句說得出口的話，比留一片空白誠實。
+ */
+function answerSummary(entry: AnswerEntry): string {
+  if (entry.cancelled === true) {
+    return '放棄了這組問題——一題都沒有回答。';
+  }
+  if (entry.answers.length === 0) {
+    return '已回答：（這一則沒有帶任何一題）';
+  }
+  const body = entry.answers
+    .map((answer) => {
+      const picked = [...answer.selected, ...(answer.custom === undefined ? [] : [answer.custom])];
+      // 空的 `selected` 且沒有 `custom` ＝ 那一題被跳過（照抄 dsh 的編碼）。
+      return `${answer.id}＝${picked.length === 0 ? '（跳過）' : picked.join('、')}`;
+    })
+    .join('，');
+  return `已回答：${body}`;
 }
 
 function Entry({ entry }: { entry: ConversationEntry }) {
@@ -63,17 +100,7 @@ function Entry({ entry }: { entry: ConversationEntry }) {
   if (entry.kind === 'answer') {
     return (
       <li className="text-muted-foreground text-xs" data-testid="answer-entry">
-        已回答：
-        {entry.answers
-          .map((answer) => {
-            const picked = [
-              ...answer.selected,
-              ...(answer.custom === undefined ? [] : [answer.custom]),
-            ];
-            // 空的 `selected` 且沒有 `custom` ＝ 那一題被跳過（照抄 dsh 的編碼）。
-            return `${answer.id}＝${picked.length === 0 ? '（跳過）' : picked.join('、')}`;
-          })
-          .join('，')}
+        {answerSummary(entry)}
       </li>
     );
   }
