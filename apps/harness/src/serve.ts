@@ -37,7 +37,7 @@ import { createJsonlSessionStore } from './jsonl-session-store.js';
 import { attachSessionPersistence } from '@nexus/core';
 import { LIVE_MODEL_ID } from './live-model.js';
 import type { PumpAgent } from './thread-pump.js';
-import type { ContainmentMode } from './contained-backend.js';
+import type { SandboxMode } from './contained-backend.js';
 import { createWireHandler } from './wire-handler.js';
 import { startWireServer } from './wire-server.js';
 import type { WireServer } from './wire-server.js';
@@ -52,7 +52,7 @@ export interface ServeInvocation {
   readonly port: number;
   readonly workspace?: string;
   /** 見 `cli.ts` 的 `CliInvocation.sandbox`。**兩個入口共用同一個旗標名、同一份驗證、同一個預設**。 */
-  readonly sandbox?: ContainmentMode;
+  readonly sandbox?: SandboxMode;
   readonly pluginModule?: string;
   readonly sessionLog?: string;
   /** 見 `cli.ts` 的 `CliInvocation.goalDriver`。**兩個入口共用同一個旗標名與同一個預設**。 */

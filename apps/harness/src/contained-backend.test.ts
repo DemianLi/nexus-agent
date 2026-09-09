@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { FilesystemBackend } from 'deepagents';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ContainedFilesystemBackend } from './contained-backend.js';
-import type { ContainmentMode } from './contained-backend.js';
+import type { SandboxMode } from './contained-backend.js';
 
 /** 一次測試用的地形：一個可寫根、一個根外的目錄，加一條從根指出去的 symlink。 */
 interface Terrain {
@@ -42,7 +42,7 @@ async function buildTerrain(): Promise<Terrain> {
   return { root, outside, escapePath: '/escape/secret.txt', secretFile };
 }
 
-function contained(root: string, mode?: ContainmentMode): ContainedFilesystemBackend {
+function contained(root: string, mode?: SandboxMode): ContainedFilesystemBackend {
   return new ContainedFilesystemBackend({ rootDir: root, ...(mode !== undefined && { mode }) });
 }
 

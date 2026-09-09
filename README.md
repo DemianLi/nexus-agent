@@ -44,6 +44,16 @@ pnpm --filter @nexus/harness run cli:live "..."             # 換成真實供應
 真正要試 agent 行為時用 `cli:live`。`--plugins <module>` 可以換掉預設的 plugin 清單
 （模組 `export default` 一個陣列）。
 
+**檔案圍堵要 `--workspace` 才存在。** 沒給的話檔案跑在虛擬檔案系統裡，那道 fence 根本
+不在路徑上。給了之後 `--sandbox <mode>` 決定**起始**強度 —— `read-only`、`workspace-write`
+（預設）、`danger-full-access` —— 而**跑起來之後 `/sandbox` 切得動它**：不帶引數報告現在
+是哪一格，帶一個模式名就切過去。切換同時作用在兩個地方：檔案工具擋不擋得住，以及模型
+自己知不知道現在在哪一格（那句話每次模型呼叫重算）。每一次真的變了都會在會話日誌裡留一顆
+`sandbox/mode`，接線當下也會釘一顆起始值 —— 所以一份日誌答得出「這一輪跑的時候政策是哪一格」。
+**沒有 `--workspace` 的組裝不會有 `/sandbox`、也不會有那句話**：一格圍堵都沒有的時候
+講「目前是 workspace-write」是說謊。**模式不跨重啟**，重開一個行程就回到 `--sandbox` 那一格
+（會話 resume 的門還關著，見 [#203](https://github.com/DemianLi/nexus-agent/issues/203)）。
+
 **會話日誌預設不落盤。** `--session-log <dir>` 給了才寫，缺席就是只在記憶體裡活著
 （banner 上第六行會說現在是哪一種）。沒有預設路徑是刻意的：日誌裡有你打的每一句話，
 預設往家目錄寫是一個該由人做的決定。它不能指到 `--workspace` 底下 —— 寫在可寫根裡，
@@ -57,7 +67,7 @@ thread id 是呼叫端給的，所以編碼必須是單射的，不然兩條 thr
 `apps/harness/src/eval/runner.ts` 的檔頭）。
 
 **要留 live 跑的證據，兩個東西都要留，而且它們裝的不是同一半。** 這對 CLI 與 `serve` 都
-一樣。日誌記的是**十種事件**（見 `session-log.ts` 的聯集），裡頭**沒有工具呼叫、也沒有
+一樣。日誌記的是**十一種事件**（見 `session-log.ts` 的聯集），裡頭**沒有工具呼叫、也沒有
 工具結果**：
 
 - **JSONL 裝「落定的結果」。** 目標被封時 `goal/change` 那顆事件帶著 `blockedReason`，
