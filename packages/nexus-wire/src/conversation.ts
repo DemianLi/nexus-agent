@@ -93,7 +93,52 @@ export interface DecisionEntry {
   readonly actions: readonly string[];
 }
 
-export type ConversationEntry = HumanEntry | AiEntry | ToolEntry | DecisionEntry;
+/**
+ * 人回答了一顆**問答**中斷。
+ *
+ * 與 {@link DecisionEntry} **是兩個 kind 不是一個加寬的**：核准的紀錄是「一個決定套到
+ * 哪幾筆工具呼叫上」，問答的紀錄是「哪一題選了什麼」——欄位不同、畫面畫法不同，加寬
+ * 會讓兩邊的渲染與斷言都得先問「這一則到底是哪一種」。
+ *
+ * 理由與 {@link DecisionEntry} 同一條：**下行沒有一個欄位說「人答了什麼」**，所以送出的
+ * 那一刻自己寫進來，那是唯一的紀錄。
+ */
+export interface AnswerEntry {
+  readonly kind: 'answer';
+  readonly id: string;
+  /**
+   * 人按了「放棄整組問題」。
+   *
+   * **這不是「每一題都跳過」**，兩者在模型那頭是不同的事：全跳過仍然是一份答案，
+   * 工具正常回傳；放棄則讓工具**收到錯誤**，模型知道人不打算走這條路了
+   * （dsh 的 `ASK_CANCELLED`）。所以它是同一個 kind 裡的一格，不是一則假答案。
+   */
+  readonly cancelled?: true;
+  /** 逐題的答案，順序同問題。空的 `selected` 且沒有 `custom` ＝ 那一題被跳過。 */
+  readonly answers: readonly {
+    readonly id: string;
+    readonly selected: readonly string[];
+    readonly custom?: string;
+  }[];
+}
+
+export type ConversationEntry = HumanEntry | AiEntry | ToolEntry | DecisionEntry | AnswerEntry;
+
+/**
+ * 型別窄化：這一顆是核准請求嗎。
+ *
+ * 有這一對是因為**兩種中斷會同時掛在 `pendings` 裡**，而消費者幾乎都只關心其中一種
+ * （狀態列列工具名、送出框判卡死、測試取那一顆核准）。少了它，每個消費點各自寫
+ * `.kind === 'approval'` 的字串比對——比對錯了型別不會擋，因為那是一個字串。
+ */
+export function isApprovalPending(pending: PendingInput): pending is PendingApproval {
+  return pending.kind === APPROVAL_PENDING_KIND;
+}
+
+/** 型別窄化：這一顆是問答請求嗎。見 {@link isApprovalPending}。 */
+export function isQuestionPending(pending: PendingInput): pending is PendingQuestion {
+  return pending.kind === QUESTION_PENDING_KIND;
+}
 
 /**
  * 這一輪的狀態。
@@ -103,7 +148,20 @@ export type ConversationEntry = HumanEntry | AiEntry | ToolEntry | DecisionEntry
  */
 export type ConversationStatus = 'idle' | 'running' | 'awaiting-input' | 'failed';
 
-export interface PendingInput {
+/** 判別式的值。**與 `@nexus/core` 的兩個常數是同一組字串**，見 {@link reduceInputRequested}。 */
+export const APPROVAL_PENDING_KIND = 'approval';
+export const QUESTION_PENDING_KIND = 'question';
+
+/** 問人的一題。形狀照抄 dsh 的 `AskUserQuestionItem` 在**模型面**的那五格。 */
+export interface QuestionItem {
+  readonly id: string;
+  readonly question: string;
+  readonly header?: string;
+  readonly options?: readonly { readonly label: string; readonly description?: string }[];
+  readonly multiSelect?: boolean;
+}
+
+interface PendingCommon {
   readonly interruptId: string;
   /**
    * 這顆中斷掛在哪一層。回答時原樣送回去。
@@ -112,6 +170,11 @@ export interface PendingInput {
    * `input.respond` 要它，而下行只發這一次——這裡丟掉就再也接不回來了。
    */
   readonly namespace: readonly string[];
+}
+
+/** 停在核准點：這一顆中斷的那批工具呼叫，等一個決定。 */
+export interface PendingApproval extends PendingCommon {
+  readonly kind: typeof APPROVAL_PENDING_KIND;
   readonly actions: readonly {
     readonly name: string;
     readonly args: unknown;
@@ -126,6 +189,21 @@ export interface PendingInput {
    */
   readonly allowedDecisions: readonly string[];
 }
+
+/** 停在問答點：模型問了一組問題，等人填。 */
+export interface PendingQuestion extends PendingCommon {
+  readonly kind: typeof QUESTION_PENDING_KIND;
+  readonly questions: readonly QuestionItem[];
+}
+
+/**
+ * 掛著等人回答的一顆中斷。
+ *
+ * **判別聯集，不是一個型別加可選欄位。** 兩種的送出形狀完全不同
+ * （`{decisions:[…]}` 對 `{answers:[…]}`），可選欄位會讓每一個消費者自己去猜哪些欄位
+ * 這次有值——而猜錯的樣子是「把答案送給核准那條路」，沒有型別會擋。
+ */
+export type PendingInput = PendingApproval | PendingQuestion;
 
 export interface ConversationState {
   readonly entries: readonly ConversationEntry[];
@@ -174,6 +252,7 @@ export function appendHumanTurn(state: ConversationState, text: string): Convers
  * 一顆 frame 都沒有（實測），這則 entry 是它存在過的唯一證據。
  *
  * 認不得那顆 `interruptId` 時原樣回傳：重複按下去的第二次不該憑空長出一則紀錄。
+ * **問答那一顆也不收**——那條路的紀錄是 {@link appendAnswers}，形狀不同。
  *
  * **只收掉被答的那一顆。** 同一輪的其他中斷還掛著，所以 `status` 只有在一顆都不剩時
  * 才回到 `running`——少了這一句，答完第一張卡的當下整條對話會看起來像跑起來了，
@@ -185,7 +264,7 @@ export function appendDecision(
   decision: string,
 ): ConversationState {
   const pending = state.pendings.find((candidate) => candidate.interruptId === interruptId);
-  if (pending === undefined) {
+  if (pending === undefined || pending.kind !== APPROVAL_PENDING_KIND) {
     return state;
   }
   const entry: DecisionEntry = {
@@ -204,6 +283,71 @@ export function appendDecision(
 }
 
 /**
+ * 把人剛填完的那組答案放進來，並把問答請求收掉。
+ *
+ * 與 {@link appendDecision} 對稱：認不得的 `interruptId` 原樣回傳，只收掉被答的那一顆，
+ * 還有別的掛著時 `status` 留在 `awaiting-input`。
+ *
+ * **空的 `selected` 且沒有 `custom` ＝ 那一題被跳過**，不是「答了空字串」。這是照抄 dsh
+ * 的編碼（`QuestionComposer.tsx`：`skipped` 送出的就是 `{ id, selected: [] }`），
+ * 所以這一層不替它補預設值，原樣留著。
+ */
+export function appendAnswers(
+  state: ConversationState,
+  interruptId: string,
+  answers: AnswerEntry['answers'],
+): ConversationState {
+  const pending = state.pendings.find((candidate) => candidate.interruptId === interruptId);
+  if (pending === undefined || pending.kind !== QUESTION_PENDING_KIND) {
+    return state;
+  }
+  const entry: AnswerEntry = { kind: 'answer', id: `answer-${pending.interruptId}`, answers };
+  const rest = state.pendings.filter((candidate) => candidate.interruptId !== interruptId);
+  return {
+    ...state,
+    entries: [...state.entries, entry],
+    pendings: rest,
+    status: rest.length > 0 ? 'awaiting-input' : 'running',
+  };
+}
+
+/** 一組答案攤成 `ask_user_question` 要的那份回覆。 */
+export function answerResponse(answers: AnswerEntry['answers']): unknown {
+  return { answers: answers.map((a) => ({ ...a, selected: [...a.selected] })) };
+}
+
+/** 放棄整組問題時送回去的東西。工具據它拋錯，見 `@nexus/plugin-ask-user`。 */
+export function cancelResponse(): unknown {
+  return { cancelled: true };
+}
+
+/**
+ * 人放棄了整組問題。與 {@link appendAnswers} 同一條路，只是留下的紀錄不同。
+ */
+export function appendQuestionCancel(
+  state: ConversationState,
+  interruptId: string,
+): ConversationState {
+  const pending = state.pendings.find((candidate) => candidate.interruptId === interruptId);
+  if (pending === undefined || pending.kind !== QUESTION_PENDING_KIND) {
+    return state;
+  }
+  const entry: AnswerEntry = {
+    kind: 'answer',
+    id: `answer-${pending.interruptId}`,
+    answers: [],
+    cancelled: true,
+  };
+  const rest = state.pendings.filter((candidate) => candidate.interruptId !== interruptId);
+  return {
+    ...state,
+    entries: [...state.entries, entry],
+    pendings: rest,
+    status: rest.length > 0 ? 'awaiting-input' : 'running',
+  };
+}
+
+/**
  * 一個決定攤成基座要的那份回覆。
  *
  * **`decisions` 是位置對應的，而且長度不符會殺掉整場 run**：基座逐 index 把決定配到
@@ -211,7 +355,7 @@ export function appendDecision(
  * 就是一顆 `lifecycle failed / root`。全有全無的介面因此要送滿 `actions.length` 筆
  * 同型決定——這個攤平放在這裡，是為了讓「基座這一版的回覆長什麼樣」只有一個地方知道。
  */
-export function uniformDecisions(pending: PendingInput, decision: string): unknown {
+export function uniformDecisions(pending: PendingApproval, decision: string): unknown {
   return { decisions: pending.actions.map(() => ({ type: decision })) };
 }
 
@@ -452,24 +596,63 @@ function reduceLifecycle(
 interface InputRequestedData {
   readonly interrupt_id: string;
   readonly payload?: {
+    /** 判別式。**缺席與認不得是兩件事**，見 {@link reduceInputRequested}。 */
+    readonly kind?: string;
     readonly actionRequests?: readonly { name: string; args: unknown; description?: string }[];
     readonly reviewConfigs?: readonly { actionName: string; allowedDecisions: string[] }[];
+    readonly questions?: readonly QuestionItem[];
   };
 }
 
+/**
+ * 一顆中斷折成一張待答的卡。
+ *
+ * ## 三支，不是兩支
+ *
+ * - `kind` **缺席** → 當核准。這是向後相容：五個既有測試檔用基座的 `interruptOn` 造
+ *   payload，那條路發的中斷沒有這個欄位。
+ * - `kind` 是**認得的值** → 照它折。
+ * - `kind` **有值但認不得** → **明著壞掉**（`status: 'failed'`）。
+ *
+ * **第三支是這一刀最容易寫錯的地方。** 寫成 `kind === 'question' ? 問答 : 核准` 的兩支
+ * 三元式，第三種中斷會靜靜地變成一張核准卡——按鈕是 `approve`／`reject`，送出去的是
+ * `{decisions:[…]}`，而對面等的是別的東西。那是誤放行，不是漏放行，而**誤放行不會有人
+ * 來報錯**（[#231](https://github.com/DemianLi/nexus-agent/issues/231) 的驗收句之一）。
+ *
+ * ## 判別式的字串為什麼在這裡又寫了一次
+ *
+ * `@nexus/wire` 不相依 `@nexus/core`（它要在瀏覽器裡跑），所以 `APPROVAL_INTERRUPT_KIND`
+ * 與 `QUESTION_INTERRUPT_KIND` 這兩個常數在兩邊各有一份。**兩份對不上是這個設計唯一的
+ * 失效模式**，所以 `apps/harness`（唯一同時相依兩邊的地方）有一條測試逐字比對它們。
+ */
 function reduceInputRequested(
   state: ConversationState,
   namespace: readonly string[],
   raw: unknown,
 ): ConversationState {
   const data = raw as InputRequestedData;
-  const actions = data.payload?.actionRequests ?? [];
-  const incoming: PendingInput = {
-    interruptId: data.interrupt_id,
-    namespace,
-    actions,
-    allowedDecisions: intersectDecisions(data.payload?.reviewConfigs ?? []),
-  };
+  const kind = data.payload?.kind;
+  const common = { interruptId: data.interrupt_id, namespace };
+  let incoming: PendingInput;
+  if (kind === undefined || kind === APPROVAL_PENDING_KIND) {
+    incoming = {
+      ...common,
+      kind: APPROVAL_PENDING_KIND,
+      actions: data.payload?.actionRequests ?? [],
+      allowedDecisions: intersectDecisions(data.payload?.reviewConfigs ?? []),
+    };
+  } else if (kind === QUESTION_PENDING_KIND) {
+    incoming = { ...common, kind: QUESTION_PENDING_KIND, questions: data.payload?.questions ?? [] };
+  } else {
+    return {
+      ...state,
+      status: 'failed',
+      error:
+        `這顆中斷的 kind 是 ${JSON.stringify(kind)}，這一版認不得。` +
+        `認得的是 ${JSON.stringify(APPROVAL_PENDING_KIND)} 與 ${JSON.stringify(QUESTION_PENDING_KIND)}` +
+        `（缺席即前者）。把它當核准畫出來會讓人按到送錯形狀的按鈕，所以這裡停下來。`,
+    };
+  }
   // **同 id 覆寫，不追加。** 答掉一顆之後沒被答到的那些會帶著原本那顆 id 再度中斷
   // （實測），追加的話同一顆中斷會長出第二張卡片，而其中一張永遠回答不了。
   const others = state.pendings.filter(

@@ -14,6 +14,7 @@ import {
 } from '@nexus/wire';
 import type { ConversationState } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
+import { approvalAt } from './fixtures.js';
 import { DEFAULT_PORT, parseServeArgs, runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 
@@ -216,8 +217,7 @@ describe('核准那份清單', () => {
     };
 
     await drainUntil((current) => current.status === 'awaiting-input');
-    const pending = state.pendings[0];
-    if (pending === undefined) throw new Error('沒有掛著的核准請求');
+    const pending = approvalAt(state.pendings);
     expect(pending.actions.map((action) => action.name)).toEqual(['echo']);
     expect(pending.allowedDecisions).toEqual(['approve', 'reject']);
     // 停住的時候工具還沒跑——不然這條驗的只是「畫面上有張卡片」。

@@ -1,5 +1,8 @@
 /**
- * **一顆中斷一張卡**：這一顆的那批工具呼叫，一個決定。
+ * **一顆核准中斷一張卡**：這一顆的那批工具呼叫，一個決定。
+ *
+ * 問答中斷有它自己的卡（`question-card.tsx`）。**兩個元件不是一個元件內部分支**——
+ * 送出的形狀完全不同（`{decisions:[…]}` 對 `{answers:[…]}`），而 dsh 那邊也是兩個 slot。
  *
  * 界線在中斷上，不在輪次上（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
  * 同一輪的其他中斷各有各的卡、各答各的——`interrupt_id` 是那道界線，伺服器據它逐
@@ -20,7 +23,7 @@
  * 一顆多出來的按鈕按下去是整場 run 死。
  */
 
-import type { PendingInput } from '@nexus/wire';
+import type { PendingApproval } from '@nexus/wire';
 
 import { Button } from '@/components/ui/button';
 
@@ -32,7 +35,7 @@ export function ApprovalCard({
   busy,
   onDecide,
 }: {
-  pending: PendingInput;
+  pending: PendingApproval;
   busy: boolean;
   onDecide: (decision: string) => void;
 }) {

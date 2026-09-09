@@ -94,6 +94,25 @@ export type PreToolListener = (
  * 抄過來的是「分得開才有價值」這條紀律，不是一張對照表。收斂成同一句就等於把這一格的
  * 價值丟掉。
  */
+/**
+ * 中斷酬載上的判別式：**這一顆是核准請求**。
+ *
+ * 線上每一顆中斷都出自這個檔案的那一行 `interrupt()`（`interruptOn` 在生產程式碼裡已無
+ * 活的用法），所以加得了這個欄位。
+ *
+ * **缺席即核准**，那是給既有測試的向後相容（`@nexus/wire` 的 `reduceInputRequested`
+ * 那側寫著理由）；但**認不得的值不是核准**，那一支要明著壞掉。
+ */
+export const APPROVAL_INTERRUPT_KIND = 'approval';
+
+/**
+ * 中斷酬載上的判別式：**這一顆是問人一組問題**。
+ *
+ * 生產者是 `@nexus/plugin-ask-user`。常數放在 core 是因為判別式的兩端（發的人與折的人）
+ * 分屬三個 package，字串各寫一次就會有一天對不上。
+ */
+export const QUESTION_INTERRUPT_KIND = 'question';
+
 export type ApprovalChannel =
   /** 有人在，`ask` 真的會停下來問。 */
   | { readonly kind: 'human' }
@@ -101,6 +120,31 @@ export type ApprovalChannel =
   | { readonly kind: 'policy-never' }
   /** 能力：沒有 checkpointer，中斷接不回來，所以連問都不能問。 */
   | { readonly kind: 'no-channel' };
+
+/**
+ * 從組裝的兩格算出這次的核准管道。
+ *
+ * **抽出來是因為它有第二個消費者了**：`@nexus/plugin-ask-user` 的 `ask_user_question`
+ * 用同一個判準決定要不要 fail-closed（[#231](https://github.com/DemianLi/nexus-agent/issues/231)
+ * 第 7 項）。兩邊各算一次遲早會分岔，而分岔的樣子是「核准擋得下來、問答還在那裡掛著」
+ * ——沒有任何測試會紅。
+ *
+ * **`enabled === false` 為什麼也管到問答**：那個旗標的意思不是「這個 session 不做核准」，
+ * 是**「這個 session 沒有人在」**（見 `ApprovalPolicy.enabled` 的 JSDoc，例子是批次跑的
+ * CLI）。沒有人在的時候問人，是掛著等一個不會來的答案。**這一格與 dsh 不同**：dsh 的
+ * 核准與問答是兩條各自獨立的通道，各有各的政策；我們只有一個旗標，而它問的是人在不在。
+ *
+ * @param assembly - `approvals.enabled` 與「有沒有 checkpointer」。
+ * @returns 這次組裝的核准管道。
+ */
+export function deriveApprovalChannel(assembly: {
+  readonly approvalsEnabled?: boolean;
+  readonly hasCheckpointer: boolean;
+}): ApprovalChannel {
+  if (assembly.approvalsEnabled === false) return { kind: 'policy-never' };
+  if (!assembly.hasCheckpointer) return { kind: 'no-channel' };
+  return { kind: 'human' };
+}
 
 /**
  * 跑完整條 waterfall。
@@ -207,6 +251,7 @@ export function createApprovalGateMiddleware(
       // `interrupt` 是用拋例外傳播的，**不能包在 try/catch 裡**
       // （`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
       const answer = (await interrupt({
+        kind: APPROVAL_INTERRUPT_KIND,
         actionRequests: [{ name: exec.name, args: exec.args, description: because }],
         reviewConfigs: [{ actionName: exec.name, allowedDecisions: ['approve', 'reject'] }],
       })) as { decisions?: { type?: string; message?: string }[] } | undefined;

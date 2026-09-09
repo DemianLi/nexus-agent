@@ -395,3 +395,136 @@ describe('上行被拒絕的時候', () => {
     expect(screen.getByRole('status').textContent).toContain('停在核准點');
   });
 });
+
+/** 一顆問答請求的 frame。 */
+function questionFrame(interruptId = 'q-1'): Event {
+  return frame('input.requested', ['tools:a'], {
+    interrupt_id: interruptId,
+    payload: {
+      kind: 'question',
+      questions: [
+        { id: 'name', question: '訪客姓名？', header: '姓名' },
+        { id: 'day', question: '哪一天？', options: [{ label: '週一' }, { label: '週二' }] },
+      ],
+    },
+  });
+}
+
+describe('問答卡', () => {
+  it('問答中斷畫成問答卡，不是核准卡——按鈕與送出形狀都不一樣', async () => {
+    seq = 0;
+    const { client } = fakeClient([questionFrame()]);
+    render(<App client={client} />);
+
+    await screen.findByTestId('question-card');
+    // **同時斷言核准卡沒出現。** 少了這半句，「兩種卡都畫出來」也會綠，而那正是判別式
+    // 寫錯時最可能的樣子。
+    expect(screen.queryByTestId('approval-card')).toBeNull();
+    expect(screen.getByText('訪客姓名？')).toBeTruthy();
+    expect(screen.getByText('哪一天？')).toBeTruthy();
+  });
+
+  it('**送出去的是 `{answers}` 與那顆 id**——空的 `selected` 是跳過，不是空字串', async () => {
+    seq = 0;
+    const { client, responded } = fakeClient([questionFrame('q-7')]);
+    render(<App client={client} />);
+    const card = await screen.findByTestId('question-card');
+
+    // 第一題自由作答、第二題明著跳過。
+    fireEvent.change(within(card).getByLabelText('訪客姓名？ 的自由作答'), {
+      target: { value: '阿明' },
+    });
+    fireEvent.click(within(card).getAllByRole('button', { name: '跳過這題' })[1]!);
+    fireEvent.click(within(card).getByRole('button', { name: '送出答案' }));
+
+    await waitFor(() => {
+      expect(responded).toHaveLength(1);
+    });
+    expect(responded[0]).toEqual({
+      namespace: ['tools:a'],
+      interrupt_id: 'q-7',
+      response: {
+        answers: [
+          { id: 'name', selected: [], custom: '阿明' },
+          { id: 'day', selected: [] },
+        ],
+      },
+    });
+  });
+
+  it('每一題都要有交代才送得出去——「還沒填」與「就是不想答」要分得開', async () => {
+    seq = 0;
+    const { client } = fakeClient([questionFrame()]);
+    render(<App client={client} />);
+    const card = await screen.findByTestId('question-card');
+
+    const submit = within(card).getByRole('button', { name: '送出答案' });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(within(card).getByLabelText('訪客姓名？ 的自由作答'), {
+      target: { value: '阿明' },
+    });
+    // 只答了一題還不夠——另一題既沒答也沒跳過。
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(card).getAllByRole('button', { name: '跳過這題' })[1]!);
+    expect((submit as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('**放棄整組送的是 `{cancelled:true}`**，不是一份每題都空的答案', async () => {
+    seq = 0;
+    const { client, responded } = fakeClient([questionFrame('q-9')]);
+    render(<App client={client} />);
+    const card = await screen.findByTestId('question-card');
+
+    fireEvent.click(within(card).getByRole('button', { name: '放棄整組問題' }));
+    await waitFor(() => {
+      expect(responded).toHaveLength(1);
+    });
+    // 這兩者在模型那頭是不同的事：放棄讓工具回錯誤，全跳過仍是一份答案。
+    expect(responded[0]).toEqual({
+      namespace: ['tools:a'],
+      interrupt_id: 'q-9',
+      response: { cancelled: true },
+    });
+  });
+
+  it('兩種中斷同時掛著時各畫各的，答掉問答那顆不會動到核准那張', async () => {
+    seq = 0;
+    const { client, responded } = fakeClient([
+      approvalFrame([{ name: 'write_file', allowed: ['approve', 'reject'] }], 'int-1'),
+      questionFrame('q-1'),
+    ]);
+    render(<App client={client} />);
+
+    const question = await screen.findByTestId('question-card');
+    expect(screen.getByTestId('approval-card')).toBeTruthy();
+
+    // 按下去之後那顆的字會變成「這題已跳過」，所以每次都重新抓剩下的第一顆——
+    // 抓一次存起來按兩下，第二下會落在一個已經不是「跳過」的按鈕上。
+    fireEvent.click(within(question).getAllByRole('button', { name: '跳過這題' })[0]!);
+    fireEvent.click(within(question).getAllByRole('button', { name: '跳過這題' })[0]!);
+    fireEvent.click(within(question).getByRole('button', { name: '送出答案' }));
+
+    await waitFor(() => {
+      expect(responded).toHaveLength(1);
+    });
+    expect(responded[0]).toMatchObject({ interrupt_id: 'q-1' });
+    // 問答那張收掉了，核准那張還在——這是「逐顆認領」在畫面上的樣子。
+    await waitFor(() => {
+      expect(screen.queryByTestId('question-card')).toBeNull();
+    });
+    const approval = screen.getByTestId('approval-card');
+
+    // **另一個方向也要按一次。** 上面證的是「問答卡送問答形狀」，這一句證的是核准卡沒有
+    // 因為旁邊多了一種卡就送錯地方——誤放行的兩個方向要各釘一條，只釘一邊的話，把兩張卡
+    // 的送出接反了仍有一半會綠。
+    fireEvent.click(within(approval).getByRole('button', { name: '全部核准' }));
+    await waitFor(() => {
+      expect(responded).toHaveLength(2);
+    });
+    expect(responded[1]).toEqual({
+      namespace: ['tools:a'],
+      interrupt_id: 'int-1',
+      response: { decisions: [{ type: 'approve' }] },
+    });
+  });
+});
