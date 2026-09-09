@@ -18,15 +18,20 @@ export function App({ client }: { client?: WireClient } = {}) {
   const conversation = useConversation(client === undefined ? {} : { client });
   const [draft, setDraft] = useState('');
 
-  // **只渲染第一張。** 折疊器現在逐 `interruptId` 並存（同一輪可以有兩顆），而多張卡
-  // 同時看得見是 [#232](https://github.com/DemianLi/nexus-agent/issues/232) 的第 2 項、
-  // 還沒做。一次一張不是缺陷：答掉這一顆之後，剩下的那顆會再度中斷、補上下一張卡。
-  const pending = conversation.state.pendings[0];
+  // **一顆中斷一張卡**（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
+  // 同一輪兩個工具都要核准時閘門逐次呼叫各自 `interrupt()`，折疊器逐 `interruptId`
+  // 並存——每一顆各自帶著回答自己要用的那把鑰匙，所以每一張卡按下去落在自己那顆上。
+  const pendings = conversation.state.pendings;
   // **`awaiting-input` 也算忙**。少了它，等核准時送得出下一句話——而基座那時會把
   // 中斷靜靜丟掉：那個工具既沒執行也沒被拒絕，也不會再問第二次（實測）。
-  // 一顆按鈕都長不出來的核准請求（交集是空的）**不算忙**：那時卡片沒有出路，
-  // 再把送出框鎖起來就是整條對話卡死。基座一定會發 `reviewConfigs`，但代價不對稱。
-  const stuck = pending !== undefined && pending.allowedDecisions.length === 0;
+  //
+  // 一顆按鈕都長不出來的核准請求（交集是空的）**不算忙**：那張卡永遠清不掉，再把送出
+  // 框鎖起來就是整條對話卡死。基座一定會發 `reviewConfigs`，但代價不對稱。
+  //
+  // **多張卡之下用 `some` 不是 `every`**：照上面那個理由，只要有**一張**沒有出路，
+  // 這條 thread 就已經清不乾淨了，別的卡片按得動也救不回來。解鎖之後送出去仍會撞上
+  // 伺服器那句「停在核准點」——**出路是「講得出原因」，不是「真的能說話」**。
+  const stuck = pendings.some((pending) => pending.allowedDecisions.length === 0);
   const busy =
     conversation.state.status === 'running' ||
     (conversation.state.status === 'awaiting-input' && !stuck);
@@ -56,13 +61,14 @@ export function App({ client }: { client?: WireClient } = {}) {
 
       <section className="flex flex-1 flex-col gap-4">
         <Transcript state={conversation.state} />
-        {pending !== undefined && (
+        {pendings.map((pending) => (
           <ApprovalCard
+            key={pending.interruptId}
             pending={pending}
             busy={!conversation.connected}
             onDecide={(decision) => void conversation.respond(pending.interruptId, decision)}
           />
-        )}
+        ))}
       </section>
 
       <form
