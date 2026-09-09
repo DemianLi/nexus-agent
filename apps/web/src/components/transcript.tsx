@@ -11,7 +11,7 @@
  * 這裡就照樣顯示未歸屬：**寧可說不知道，不要說錯**。
  */
 
-import type { Attribution, ConversationEntry, ConversationState } from '@nexus/wire';
+import type { Attribution, ConversationEntry, ConversationState, ToolEntry } from '@nexus/wire';
 
 function AttributionBadge({ attribution }: { attribution: Attribution }) {
   if (attribution.kind === 'root') {
@@ -25,9 +25,17 @@ function AttributionBadge({ attribution }: { attribution: Attribution }) {
   );
 }
 
-function ToolBadge({ status }: { status: 'running' | 'done' | 'failed' }) {
-  const label = status === 'running' ? '執行中' : status === 'done' ? '完成' : '失敗';
-  return <span className="text-muted-foreground text-xs">{label}</span>;
+const TOOL_STATUS_LABEL = {
+  running: '執行中',
+  // **不是「執行中」也不是「失敗」**：這顆呼叫停在那裡等一個人。講「執行中」會讓人以為
+  // 只要等就好，講「失敗」是說謊（[#239](https://github.com/DemianLi/nexus-agent/issues/239)）。
+  suspended: '等你回答',
+  done: '完成',
+  failed: '失敗',
+} as const satisfies Record<ToolEntry['status'], string>;
+
+function ToolBadge({ status }: { status: ToolEntry['status'] }) {
+  return <span className="text-muted-foreground text-xs">{TOOL_STATUS_LABEL[status]}</span>;
 }
 
 function Entry({ entry }: { entry: ConversationEntry }) {
