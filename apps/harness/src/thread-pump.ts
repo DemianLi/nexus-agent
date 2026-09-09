@@ -99,9 +99,15 @@ interface InterruptEntry {
   readonly value: unknown;
 }
 
-function asInterruptEntries(data: unknown): readonly InterruptEntry[] {
-  // `updates` 的 data 是 `{ node, values }`，中斷那一顆的 values 才是中斷清單。
-  const values = (data as { values?: unknown } | null)?.values;
+/**
+ * 一串值裡認得出來的中斷條目。
+ *
+ * **抽出來是因為它有第二個消費者**：一顆掛著的中斷在 `tools` 通道上會先變成一顆
+ * `tool-error`，而它的 `message` 正是**這串東西序列化過的 JSON**（實測，見
+ * {@link ThreadPump.#translate}）。兩邊各寫一份「怎麼認」的話，基座哪天換掉這個形狀，
+ * 會變成中斷還折得出來、但工具條目又開始謊報失敗——而那不會有任何測試紅。
+ */
+function interruptEntriesOf(values: unknown): readonly InterruptEntry[] {
   if (!Array.isArray(values)) {
     return [];
   }
@@ -111,6 +117,105 @@ function asInterruptEntries(data: unknown): readonly InterruptEntry[] {
       entry !== null &&
       typeof (entry as InterruptEntry).id === 'string',
   );
+}
+
+function asInterruptEntries(data: unknown): readonly InterruptEntry[] {
+  // `updates` 的 data 是 `{ node, values }`，中斷那一顆的 values 才是中斷清單。
+  return interruptEntriesOf((data as { values?: unknown } | null)?.values);
+}
+
+/**
+ * 這顆 `tool-error` 其實是「停下來等人」嗎。
+ *
+ * ## 為什麼分類要做在這裡
+ *
+ * 中斷是用**拋例外**實作的（`interrupt()`），所以基座的 tools 節點把它當成工具炸了，
+ * 在線上發一顆 `tool-error`——`message` 裝的是那顆 `GraphInterrupt` 的酬載。下游沒有第二
+ * 個訊號分得出「等人」與「炸了」，於是畫面把一顆還沒回的問題畫成紅字「失敗」，
+ * 而且把整串原始酬載當錯誤訊息印出來（[#239](https://github.com/DemianLi/nexus-agent/issues/239)
+ * 實測）。
+ *
+ * **`tools` 那幾顆 frame 是基座產的，我們產不了**（`streamEvents(version: 'v3')` 直出），
+ * 所以最靠近來源的那一層就是這裡的 `#translate`。分類放到瀏覽器那側等於讓消費端去猜
+ * 一個它看不見的成因。
+ *
+ * ## 判準是結構不是字串
+ *
+ * 不比對措辭——比對**它 parse 出來是不是一串中斷條目**，而且用的是
+ * {@link interruptEntriesOf}，跟 `updates/__interrupt__` 那條路同一個讀法。一則真的工具
+ * 錯誤，`message` 是那個 Error 的訊息，parse 不成陣列。
+ *
+ * @param message - `tool-error` 帶的訊息。
+ * @returns 認得出中斷條目就是 `true`。
+ */
+function isSuspensionMessage(message: unknown): boolean {
+  if (typeof message !== 'string') return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(message);
+  } catch {
+    return false;
+  }
+  return Array.isArray(parsed) && interruptEntriesOf(parsed).length > 0;
+}
+
+/**
+ * 這則工具結果自己說它失敗了嗎。
+ *
+ * `tool-finished` 帶的 `output` 是一則序列化過的 `ToolMessage`，**失敗與否住在
+ * `kwargs.status` 裡**（核准閘門的拒絕、`ask_user_question` 的放棄都走這條）。折疊器
+ * 今天只看事件名，所以一則 `status: 'error'` 的結果在畫面上是「完成」——這是
+ * [#239](https://github.com/DemianLi/nexus-agent/issues/239) 第 1 項的另一面。
+ *
+ * **讀 `kwargs` 這個形狀的知識留在這一層**：`@nexus/wire` 跑在瀏覽器裡、不相依
+ * LangChain，讓它去拆序列化格式等於把基座的形狀搬進前端。
+ *
+ * @param output - `tool-finished` 的 `output`。
+ * @returns 那則 ToolMessage 的 `status` 是 `'error'` 時回它的內容，否則 `undefined`。
+ */
+/**
+ * 把 `tools` 那一顆的 `data` 換成**說得出成因**的樣子。
+ *
+ * 兩件事，兩個成因不同的謊：
+ *
+ * 1. 掛著等人的中斷來的是 `tool-error`（中斷用拋的），換成 `tool-suspended`，**而且不帶
+ *    `message`**——那串東西是中斷酬載，不是給人看的錯誤訊息。
+ * 2. 一則 `status: 'error'` 的 ToolMessage 來的是 `tool-finished`，補一格 `failed` 與它的
+ *    內容，否則折疊器只看事件名，會把它畫成「完成」。
+ *
+ * **其餘一律原樣穿過去。** 這一層只加分類，不改基座的欄位。
+ *
+ * @param data - 基座給的那顆 `tools` data。
+ * @returns 原樣，或補過分類的那一顆。
+ */
+export function classifyToolData(data: unknown): unknown {
+  const shaped = data as { event?: unknown; message?: unknown; output?: unknown } | null;
+  if (shaped === null || typeof shaped !== 'object') return data;
+  if (shaped.event === 'tool-error' && isSuspensionMessage(shaped.message)) {
+    const { message: _dropped, ...rest } = shaped as Record<string, unknown>;
+    return { ...rest, event: 'tool-suspended' };
+  }
+  if (shaped.event === 'tool-finished') {
+    const failure = failureTextOf(shaped.output);
+    if (failure !== undefined) return { ...shaped, failed: true, message: failure };
+  }
+  return data;
+}
+
+function failureTextOf(output: unknown): string | undefined {
+  // **這一層拿到的是 `ToolMessage` 實例，不是它序列化過的樣子。** 實測 pump 這裡的
+  // `output` 帶的是 `lc_serializable` / `lc_kwargs` 那組欄位，`status` 直接掛在實例上；
+  // 客戶端看到的 `{ lc, type, kwargs }` 是 SSE 那次 `JSON.stringify` 才長出來的。
+  // 兩個形狀都認，因為**這條線上有兩個位置讀得到同一個東西**，只認一個的話換位置就靜靜失效。
+  const shaped = output as {
+    status?: unknown;
+    content?: unknown;
+    kwargs?: { status?: unknown; content?: unknown };
+  } | null;
+  const status = shaped?.status ?? shaped?.kwargs?.status;
+  if (status !== 'error') return undefined;
+  const content = shaped?.content ?? shaped?.kwargs?.content;
+  return typeof content === 'string' ? content : '未指名的錯誤';
 }
 
 /** 這顆中斷在問幾件事。問不出來就當 0——上行那側只在數得出來時才校驗。 */
@@ -447,7 +552,7 @@ export class ThreadPump {
         namespace: raw.params.namespace,
         timestamp: raw.params.timestamp,
         ...(raw.params.node === undefined ? {} : { node: raw.params.node }),
-        data: raw.params.data,
+        data: raw.method === 'tools' ? classifyToolData(raw.params.data) : raw.params.data,
       },
     } as Event);
   }

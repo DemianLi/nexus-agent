@@ -1,4 +1,5 @@
-import type { WireClient } from '@nexus/wire';
+import type { ConversationStatus, PendingInput, WireClient } from '@nexus/wire';
+import { isApprovalPending, isQuestionPending } from '@nexus/wire';
 import { useState } from 'react';
 
 import { ApprovalCard } from '@/components/approval-card';
@@ -7,6 +8,58 @@ import { StatusLine } from '@/components/status-line';
 import { Transcript } from '@/components/transcript';
 import { Button } from '@/components/ui/button';
 import { useConversation } from '@/hooks/use-conversation';
+
+/**
+ * 送出框裡那句灰字。
+ *
+ * 它要說的是**「現在該先做什麼」**，所以掛著什麼就講什麼。原本一律寫「先回答上面那個核准
+ * 請求…」，連掛著的是問答時也照講——那是 [#239](https://github.com/DemianLi/nexus-agent/issues/239)
+ * 在真瀏覽器裡量到的三處說謊之一。分得出來的東西一直都在：`pendings` 每一顆都帶 `kind`，
+ * 只是沒去讀。
+ *
+ * **兩種混著掛的時候兩種都講**（這一格卡上留給落地時定，這是定的結果）。驗收句寫的是
+ * 「問答掛著時不出現『核准』兩個字」，那句話防的是**把問答叫成核准**；兩顆真的都掛著時
+ * 只講一種，就是往另一個方向說謊。所以判準不是「有沒有出現『核准』」，是**「講的跟掛著的
+ * 對不對得上」**。
+ *
+ * **`stuck` 是核准卡專屬的解鎖**（理由見 {@link App} 裡那段註解）：一顆按鈕都長不出來的
+ * 核准請求會讓對話永遠清不掉，所以把送出框放開，讓人至少講得出原因。**但問答卡永遠按得
+ * 動**——兩者同時掛著時只說「說點什麼…」會把還答得掉的那組問題吞掉，所以那一格兩件事
+ * 都講。核准卡自己卡死、旁邊沒有問答時，照舊只邀請說話。
+ */
+export function inputPlaceholder({
+  status,
+  connected,
+  pendings,
+  stuck,
+}: {
+  readonly status: ConversationStatus;
+  readonly connected: boolean;
+  readonly pendings: readonly PendingInput[];
+  readonly stuck: boolean;
+}): string {
+  const idle = (): string => (connected ? '說點什麼…' : '連線中…');
+  if (status !== 'awaiting-input') {
+    return idle();
+  }
+  const question = pendings.some(isQuestionPending);
+  const approval = pendings.some(isApprovalPending);
+  if (stuck) {
+    return question ? '先回答上面那組問題，或直接說點什麼…' : idle();
+  }
+  if (question && approval) {
+    return '上面的核准請求與那組問題都還等著…';
+  }
+  if (question) {
+    return '先回答上面那組問題…';
+  }
+  if (approval) {
+    return '先回答上面那個核准請求…';
+  }
+  // `awaiting-input` 而一顆都不剩：折疊器答完最後一顆就翻成 `running`，所以這是
+  // 到不了的一格。不拋——placeholder 說錯話不值得換來一個白畫面。
+  return idle();
+}
 
 /**
  * 對話介面。
@@ -36,7 +89,7 @@ export function App({ client }: { client?: WireClient } = {}) {
   // **只有核准卡會卡死。** 問答卡永遠按得動——它的出路是「送出答案」或「放棄整組」，
   // 兩條都不依賴伺服器發了什麼清單，所以它不進這個判準。
   const stuck = pendings.some(
-    (pending) => pending.kind === 'approval' && pending.allowedDecisions.length === 0,
+    (pending) => isApprovalPending(pending) && pending.allowedDecisions.length === 0,
   );
   const busy =
     conversation.state.status === 'running' ||
@@ -111,13 +164,12 @@ export function App({ client }: { client?: WireClient } = {}) {
           id="prompt"
           className="border-input bg-background flex-1 rounded-md border px-3 py-2 text-sm"
           value={draft}
-          placeholder={
-            conversation.state.status === 'awaiting-input' && !stuck
-              ? '先回答上面那個核准請求…'
-              : conversation.connected
-                ? '說點什麼…'
-                : '連線中…'
-          }
+          placeholder={inputPlaceholder({
+            status: conversation.state.status,
+            connected: conversation.connected,
+            pendings,
+            stuck,
+          })}
           onChange={(event) => setDraft(event.target.value)}
         />
         <Button type="submit" disabled={!canSend}>

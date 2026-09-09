@@ -61,7 +61,19 @@ export interface ToolEntry {
   readonly name: string;
   /** 參數照線上給的原樣留著（基座給的是 JSON 字串），不在這一層猜它的形狀。 */
   readonly input: string;
-  readonly status: 'running' | 'done' | 'failed';
+  /**
+   * 這次呼叫走到哪裡了。
+   *
+   * **`suspended` 是「停下來等人」，不是一種失敗。** 中斷是用拋例外實作的，所以在基座
+   * 眼裡它跟工具炸了走同一條路；分類做在 `thread-pump.ts` 的 `classifyToolData`，這一層
+   * 收到的是已經分好的 `tool-suspended`。少了這一格，一顆還沒被回答的問題在畫面上是紅字
+   * 「失敗」（[#239](https://github.com/DemianLi/nexus-agent/issues/239) 實測）。
+   *
+   * **而 `done` 不等於「成功了」的那一半也一起收了**：一則 `status: 'error'` 的
+   * ToolMessage 走的是 `tool-finished`，pump 會補一格 `failed`，這裡讀它。兩面不一起收的
+   * 話，「掛著的不顯示失敗」單獨綠得起來——把全部都畫成「執行中」也會綠。
+   */
+  readonly status: 'running' | 'suspended' | 'done' | 'failed';
   readonly output?: unknown;
   readonly error?: string;
   readonly attribution: Attribution;
@@ -74,9 +86,17 @@ export interface ToolEntry {
  * 發生在 `afterModel`，tools node 從沒跑，而拒絕產生的那則 error ToolMessage 走
  * `updates`（白名單外），「全拒絕」與「一核准一拒絕」在下行上一模一樣。**那個機制在
  * [#112](https://github.com/DemianLi/nexus-agent/pull/112) 之後不是產品路徑了**（中斷改
- * 在 `wrapToolCall` 裡，拒絕會產生一則 `status` 為 error 的 ToolMessage），**它在線上會
- * 不會變成一顆 `tools` frame 沒有量過**。但結論不靠那個機制：下行從來沒有一個欄位說
- * 「人按了什麼」。所以決定要跟 {@link appendHumanTurn} 一樣在送出的那一刻自己寫進來，
+ * 在 `wrapToolCall` 裡，拒絕會產生一則 `status` 為 error 的 ToolMessage）。
+ *
+ * **產品路徑 2026-09-09 量了，答案是它不會變成任何一顆 `tools` frame**
+ * （`apps/harness/src/rejection-wire.test.ts`）：閘門的 `interrupt()` 與 `denial()` 都在
+ * `handler(request)` **之前**，那一格從頭到尾沒進到基座發生命週期事件的那一段，所以連
+ * `tool-started` 都沒有；同一份檔案裡核准那條是對照組，證明線本身收得到 `tools` frame。
+ * **別把 `ask_user_question` 那條的測量套過來**——那顆的 `interrupt()` 在工具本體裡，
+ * `tool-started` 早就發過了，掛著那段看得到 `tool-error`（`tool-frame-classify.test.ts`）。
+ *
+ * 結論因此比原本寫的更強：不是「不靠那個機制」，是**兩個機制都量過，下行都沒有一個欄位
+ * 說「人按了什麼」**。所以決定要跟 {@link appendHumanTurn} 一樣在送出的那一刻自己寫進來，
  * 那不是裝飾，是唯一的紀錄。
  */
 export interface DecisionEntry {
@@ -485,6 +505,8 @@ interface ToolData {
   readonly input?: string;
   readonly output?: unknown;
   readonly message?: string;
+  /** `tool-finished` 專用：那則 ToolMessage 自己說它失敗了。由 pump 分類，見它的檔頭。 */
+  readonly failed?: boolean;
 }
 
 /** `task` 的參數裡才有 subagent 的名字，而它是一段 JSON 字串。 */
@@ -527,14 +549,47 @@ function reduceTool(
       status: 'running',
       attribution: attribute(state, namespace),
     };
+    // **同一個 `tool_call_id` 會來第二次**：人回答了中斷之後圖從 tools 節點重跑，基座
+    // 再發一顆 `tool-started`（實測）。無條件 append 的話，畫面上同一顆呼叫長出兩個條目
+    // ——而 `id` 是一樣的，所以連「哪一個是真的」都分不出來。第二次是**同一次呼叫的續行**，
+    // 更新那一格；`error` 要一起清掉，不然中斷那段留下的字會跟著新狀態一起顯示。
+    if (state.entries.some((existing) => existing.id === id)) {
+      return {
+        ...state,
+        subagents,
+        entries: replace(state.entries, id, (existing) =>
+          existing.kind === 'tool'
+            ? { ...existing, status: 'running', error: undefined, output: undefined }
+            : existing,
+        ),
+      };
+    }
     return { ...state, subagents, entries: [...state.entries, entry] };
   }
 
-  if (data.event === 'tool-finished') {
+  if (data.event === 'tool-suspended') {
     return {
       ...state,
       entries: replace(state.entries, id, (entry) =>
-        entry.kind === 'tool' ? { ...entry, status: 'done', output: data.output } : entry,
+        // **`error` 不放東西**：那顆中斷的酬載是給折疊器與卡片用的，不是給人看的錯誤字。
+        entry.kind === 'tool' ? { ...entry, status: 'suspended', error: undefined } : entry,
+      ),
+    };
+  }
+
+  if (data.event === 'tool-finished') {
+    const failed = data.failed === true;
+    return {
+      ...state,
+      entries: replace(state.entries, id, (entry) =>
+        entry.kind === 'tool'
+          ? {
+              ...entry,
+              status: failed ? 'failed' : 'done',
+              output: data.output,
+              ...(failed ? { error: data.message ?? '未指名的錯誤' } : {}),
+            }
+          : entry,
       ),
     };
   }

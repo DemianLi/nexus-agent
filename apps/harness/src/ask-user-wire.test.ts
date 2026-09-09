@@ -100,10 +100,13 @@ async function until(session: Session, done: (session: Session) => boolean): Pro
 /**
  * 這一輪真的收完了。
  *
- * **不能只看 `status === 'idle'`，也不能只看「有沒有 tool entry」**：中斷本身在線上就是
- * 一則 `status: 'failed'` 的 tool entry（實測，`error` 欄位裝的是那顆 `GraphInterrupt`），
- * 而中斷那一輪的 `lifecycle completed / root` 照樣會發。兩個判準都會在**還沒 resume**
- * 的時候就成立。所以數模型講完幾輪話。
+ * **不能只看 `status === 'idle'`，也不能只看「有沒有 tool entry」**：中斷在線上就會產生一則
+ * tool entry，而中斷那一輪的 `lifecycle completed / root` 照樣會發。兩個判準都會在**還沒
+ * resume** 的時候就成立。所以數模型講完幾輪話。
+ *
+ * **那則 entry 的 `status` 曾經是 `'failed'`**（`error` 裝著整顆 `GraphInterrupt` 的酬載），
+ * 那正是 [#239](https://github.com/DemianLi/nexus-agent/issues/239) 第 1 項修掉的東西；
+ * 現在是 `'suspended'`，驗收句在下面「掛著與收尾各自說對了什麼」。
  */
 function settled(session: Session): boolean {
   return (
@@ -115,10 +118,11 @@ function settled(session: Session): boolean {
 /**
  * 模型**實際收到的那則 ToolMessage**（`status` 與 `content`）。
  *
- * **不要拿 `ToolEntry.status` 當「這次工具成功了嗎」用**：實測它對一則
- * `status: 'error'` 的 ToolMessage 照樣是 `'done'`——那一格說的是「這次呼叫收尾了」，
- * 不是「它成功了」。核准閘門的 `denial()` 早就是同一個形狀，所以這是既有的形狀不是這一刀
- * 帶進來的；畫面上因此會把一則失敗畫成「完成」，那是另一張卡的事。
+ * **這裡讀的是模型那一側，`ToolEntry.status` 讀的是畫面那一側。** 兩邊今天說的是同一件事
+ * （[#239](https://github.com/DemianLi/nexus-agent/issues/239) 第 1 項之後 pump 會把
+ * `kwargs.status === 'error'` 分類成 `failed`），但**它們的來源不同**：這一份是序列化過的
+ * ToolMessage，那一格是折疊器的狀態機。所以兩邊各驗各的——只驗其中一邊，另一邊靜靜地
+ * 分岔不會有人知道。
  */
 function toolMessageOf(entry: { output?: unknown }): { status?: string; content?: string } {
   const output = entry.output as { kwargs?: { status?: string; content?: string } } | undefined;
@@ -128,7 +132,14 @@ function toolMessageOf(entry: { output?: unknown }): { status?: string; content?
   return kwargs;
 }
 
-/** 這一次呼叫**最後**的樣子。線上同一個 `callId` 會出現兩次（中斷一次、收工一次）。 */
+/**
+ * 這一次呼叫**最後**的樣子。
+ *
+ * **同一個 `callId` 只該有一個條目。** 線上會來兩顆 `tool-started`（中斷一次、resume 之後
+ * 重跑一次），折疊器把第二顆當成同一次呼叫的續行——那是
+ * [#239](https://github.com/DemianLi/nexus-agent/issues/239) 第 3 項的一半。這個 helper
+ * 保留「取最後一個」的寫法，因為它**不該**是承重的那條；真正釘住只有一個的是下面那條驗收。
+ */
 function lastToolEntry(
   session: Session,
 ): Extract<(typeof session.state.entries)[number], { kind: 'tool' }> {
@@ -196,6 +207,24 @@ describe('ask_user_question 走真的線', () => {
     await session.close();
   });
 
+  it('**掛著的時候不說失敗，也不把中斷酬載當錯誤字印出來**', async () => {
+    const session = await open('a4');
+    await until(session, (s) => s.state.status === 'awaiting-input');
+
+    const tools = session.state.entries.filter((entry) => entry.kind === 'tool');
+    const tool = tools[0];
+    if (tool === undefined || tool.kind !== 'tool') throw new Error('一則工具紀錄都沒有');
+    // 沒有任何東西失敗，它只是還沒回。
+    expect(tool.status).toBe('suspended');
+    // **這一句釘的是另一個病**：那顆 `tool-error` 的 `message` 是整串序列化的
+    // `GraphInterrupt`，接到 `error` 上的話畫面會把 `[{"id":...,"kind":"question"...}]`
+    // 當成錯誤訊息印給人看。
+    expect(tool.error).toBeUndefined();
+    // 而且這一刻只有一個條目——第二顆 `tool-started` 還沒來。
+    expect(tools).toHaveLength(1);
+    await session.close();
+  });
+
   it('**放棄整組讓工具收到錯誤**，而不是一份「每題都跳過」的答案', async () => {
     const session = await open('a3');
     await until(session, (s) => s.state.status === 'awaiting-input');
@@ -215,6 +244,60 @@ describe('ask_user_question 走真的線', () => {
     // 而模型分不分得出「這次失敗了」靠的正是這一格。
     expect(message.status).toBe('error');
     expect(String(message.content)).toContain('放棄');
+    await session.close();
+  });
+});
+
+describe('掛著與收尾各自說對了什麼', () => {
+  it('**放棄之後那一格是「失敗」不是「完成」，而且同一個 callId 只剩一個條目**', async () => {
+    const session = await open('a5');
+    await until(session, (s) => s.state.status === 'awaiting-input');
+    const pending = session.state.pendings[0];
+    if (pending === undefined) throw new Error('沒有掛著的問答');
+
+    session.state = appendQuestionCancel(session.state, pending.interruptId);
+    await session.client.inputRespond('a5', {
+      namespace: [...pending.namespace],
+      interrupt_id: pending.interruptId,
+      response: cancelResponse(),
+    });
+    await until(session, settled);
+
+    const tools = session.state.entries.filter((entry) => entry.kind === 'tool');
+    // **這一條與上面「掛著不說失敗」是一對。** 少了它，一個把所有工具都畫成
+    // 「執行中」或「等你回答」的實作也會綠——那才是這一項真正要擋的東西。
+    const tool = tools[0];
+    if (tool === undefined || tool.kind !== 'tool') throw new Error('一則工具紀錄都沒有');
+    expect(tool.status).toBe('failed');
+    expect(String(tool.error)).toContain('放棄');
+    // resume 之後基座會再發一顆 `tool-started`；那是同一次呼叫的續行，不是第二次呼叫。
+    expect(tools).toHaveLength(1);
+    expect(tools.map((entry) => (entry.kind === 'tool' ? entry.callId : ''))).toEqual(['call_1_0']);
+    await session.close();
+  });
+
+  it('**答完的那一格是「完成」**——不是把每一格都畫成失敗', async () => {
+    const session = await open('a6');
+    await until(session, (s) => s.state.status === 'awaiting-input');
+    const pending = session.state.pendings[0];
+    if (pending === undefined) throw new Error('沒有掛著的問答');
+
+    const answers = [
+      { id: 'name', selected: [], custom: '阿明' },
+      { id: 'day', selected: ['週二'] },
+    ];
+    session.state = appendAnswers(session.state, pending.interruptId, answers);
+    await session.client.inputRespond('a6', {
+      namespace: [...pending.namespace],
+      interrupt_id: pending.interruptId,
+      response: answerResponse(answers),
+    });
+    await until(session, settled);
+
+    const tool = session.state.entries.find((entry) => entry.kind === 'tool');
+    if (tool === undefined || tool.kind !== 'tool') throw new Error('一則工具紀錄都沒有');
+    expect(tool.status).toBe('done');
+    expect(tool.error).toBeUndefined();
     await session.close();
   });
 });
