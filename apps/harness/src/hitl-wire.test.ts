@@ -224,8 +224,10 @@ describe('核准之後，經過線', () => {
     expect(calls).toEqual([]);
     // **這是基座的機制**（本檔用 `interruptOn` 建 agent，見檔頭）：中斷發生在
     // `afterModel`，tools node 從沒跑；那則人造的 error ToolMessage 走 `updates`
-    // （白名單外）。所以下行對「被拒絕」這件事一個字都沒說。#112 之後的產品路徑
-    // 中斷在 `wrapToolCall` 裡，下行長什麼樣沒有量過。
+    // （白名單外）。所以下行對「被拒絕」這件事一個字都沒說。#112 之後的產品路徑中斷在
+    // `wrapToolCall` 裡，**2026-09-09 量了：結論一樣是零顆 frame，成因不同**——那條路的
+    // tools node 有跑，是閘門在 `handler(request)` 之前就短路了，所以連 `tool-started`
+    // 都沒有。見 `rejection-wire.test.ts`，那一份還配了核准的對照組。
     expect(toolFrames(session)).toEqual([]);
     expect(session.state.entries.filter((entry) => entry.kind === 'tool')).toEqual([]);
     expect(decisions(session.state)).toEqual(['reject:alpha']);

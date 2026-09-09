@@ -86,9 +86,17 @@ export interface ToolEntry {
  * 發生在 `afterModel`，tools node 從沒跑，而拒絕產生的那則 error ToolMessage 走
  * `updates`（白名單外），「全拒絕」與「一核准一拒絕」在下行上一模一樣。**那個機制在
  * [#112](https://github.com/DemianLi/nexus-agent/pull/112) 之後不是產品路徑了**（中斷改
- * 在 `wrapToolCall` 裡，拒絕會產生一則 `status` 為 error 的 ToolMessage），**它在線上會
- * 不會變成一顆 `tools` frame 沒有量過**。但結論不靠那個機制：下行從來沒有一個欄位說
- * 「人按了什麼」。所以決定要跟 {@link appendHumanTurn} 一樣在送出的那一刻自己寫進來，
+ * 在 `wrapToolCall` 裡，拒絕會產生一則 `status` 為 error 的 ToolMessage）。
+ *
+ * **產品路徑 2026-09-09 量了，答案是它不會變成任何一顆 `tools` frame**
+ * （`apps/harness/src/rejection-wire.test.ts`）：閘門的 `interrupt()` 與 `denial()` 都在
+ * `handler(request)` **之前**，那一格從頭到尾沒進到基座發生命週期事件的那一段，所以連
+ * `tool-started` 都沒有；同一份檔案裡核准那條是對照組，證明線本身收得到 `tools` frame。
+ * **別把 `ask_user_question` 那條的測量套過來**——那顆的 `interrupt()` 在工具本體裡，
+ * `tool-started` 早就發過了，掛著那段看得到 `tool-error`（`tool-frame-classify.test.ts`）。
+ *
+ * 結論因此比原本寫的更強：不是「不靠那個機制」，是**兩個機制都量過，下行都沒有一個欄位
+ * 說「人按了什麼」**。所以決定要跟 {@link appendHumanTurn} 一樣在送出的那一刻自己寫進來，
  * 那不是裝飾，是唯一的紀錄。
  */
 export interface DecisionEntry {
