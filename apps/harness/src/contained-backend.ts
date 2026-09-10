@@ -133,6 +133,53 @@ export { isSandboxMode, SANDBOX_MODES } from '@nexus/core';
  */
 export type SandboxModeSource = () => SandboxMode;
 
+/**
+ * 一顆核准過的升級：**只蓋一個目標、只蓋一次**。
+ *
+ * ## 為什麼一定要綁目標
+ *
+ * dsh 的升級欄位騎在**那一次寫入**身上，核准來的模式直接蓋到那一次呼叫
+ * （`references/deepseek-harness/packages/fs/tool-fs/src/sandbox.ts` 的 `resolvePolicy`），
+ * 所以「一次核准蓋這一次呼叫」由編排順便保證。我們的升級是另一顆工具
+ * （[#238](https://github.com/DemianLi/nexus-agent/issues/238) 的甲），請求與重試是**兩顆
+ * 呼叫**，中間隔著這顆 grant。
+ *
+ * 不綁目標的話，**第一個被擋下的變更就會吃掉它——而那可能根本不是模型**：基座的摘要器
+ * offload 對話歷史時第一次走 `write`、fallback 走 `edit`（`deepagents@1.13.1`，
+ * `dist/langsmith-Ck9t7AGW.cjs` 的 `offloadToBackend`），在 `read-only` 之下它一樣會被擋。
+ * 綁住 canonical 目標之後，那條路從結構上就碰不到這顆 grant；對不上的方向是**不認領**，
+ * 也就是照常被擋——fail-closed。
+ *
+ * 附帶的好處是核准卡上看得到是哪一個檔。dsh 的人本來就看得到（欄位騎在那次寫入上），
+ * 所以這一格不是新的偏離，是「兩顆呼叫」那條已登記的偏離把該付的價付清。
+ */
+export interface SandboxGrant {
+  /** 核准來的模式，**只套用在消費它的那一次變更上**。 */
+  readonly mode: SandboxMode;
+  /** 模型指名的虛擬路徑。比對時兩邊都 canonicalize：經 symlink 的別名對得上，`..` 與 `~` 一律對不上。 */
+  readonly target: string;
+}
+
+/**
+ * fence 向外面認領 grant 的介面。`SandboxModeController` 就是它的實作。
+ *
+ * **`escalationHint` 在場就等於「這個組裝有升級工具」**——那是掛上工具的那一步寫進去的
+ * 同一個事實，所以 fence 不會對一個沒有那顆工具的模型講「可以升級」（照 dsh：
+ * `escalationModes` 為空時不公告）。
+ */
+export interface SandboxGrantLedger {
+  /** 被擋下時接在拒絕後面的升級指引；這個組裝沒有升級工具時為 `undefined`。 */
+  readonly escalationHint: string | undefined;
+  /** 現在待消費的那一顆。**只看，不消費。** */
+  peekGrant(): SandboxGrant | undefined;
+  /**
+   * 消費**這一顆**。
+   * @param grant - 先前 {@link SandboxGrantLedger.peekGrant} 看到的那一顆。
+   * @returns 它還是待消費的那一顆時為真；已經被別人消費、或被新的一顆換掉時為假。
+   */
+  takeGrant(grant: SandboxGrant): boolean;
+}
+
 export interface ContainedFilesystemBackendOptions {
   /** 可寫根。所有虛擬路徑都以它為基準，變更不得 canonicalize 到它之外。 */
   readonly rootDir: string;
@@ -145,6 +192,12 @@ export interface ContainedFilesystemBackendOptions {
   readonly mode?: SandboxMode | SandboxModeSource;
   /** 單檔大小上限，原樣轉給基座。 */
   readonly maxFileSizeMb?: number;
+  /**
+   * 升級的 grant 從哪裡認領（見 {@link SandboxGrantLedger}）。
+   *
+   * **省略就是沒有升級**：被擋就是被擋，拒絕後面不接指引。
+   */
+  readonly grants?: SandboxGrantLedger;
 }
 
 /**
@@ -157,6 +210,9 @@ export interface ContainedFilesystemBackendOptions {
 export class ContainedFilesystemBackend extends FilesystemBackend {
   /** 圍堵強度的來源。建構期給的字面值在這裡已經被包成一個恆定的函式。 */
   private readonly resolveMode: SandboxModeSource;
+
+  /** 升級的 grant 從哪裡認領；`undefined` 就是這道 fence 沒有升級。 */
+  private readonly grants: SandboxGrantLedger | undefined;
 
   /**
    * 這一刻的圍堵強度，錯誤訊息會指名它。
@@ -176,6 +232,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     });
     const mode = options.mode ?? 'workspace-write';
     this.resolveMode = typeof mode === 'function' ? mode : (): SandboxMode => mode;
+    this.grants = options.grants;
   }
 
   /**
@@ -280,7 +337,38 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   ): Promise<string | { error: string }> {
     // **一次呼叫解析一次**：底下有 `await`，來源在那之間變了的話，判斷與拒絕訊息就會
     // 指向兩個不同的模式。dsh 的「一次呼叫一份政策」在這個形狀底下就是這一行。
-    const mode = this.mode;
+    const standing = this.mode;
+    const first = await this.verdict(standing, filePath, operation);
+    if (typeof first === 'string') return first;
+
+    // `uploadFiles` 不認領 grant、也不接指引：它今天唯一的生產者是基座自己（摘要器），
+    // 模型碰不到；而它的錯誤型別是四個錯誤碼的 union，指引也塞不進去。
+    if (operation === 'uploadFiles' || this.grants === undefined) return first;
+
+    const granted = await this.claimGrant(filePath);
+    if (granted === undefined) return this.withHint(first);
+    // 核准來的模式**只蓋這一次**，判斷與拒絕訊息都用它——照 dsh 把核准的模式蓋到那一次
+    // 呼叫上，拒絕標記印的也是那一格。還是被擋的話 grant 照樣用掉了，同 dsh：它屬於這一次。
+    const second = await this.verdict(granted, filePath, operation);
+    return typeof second === 'string' ? second : this.withHint(second);
+  }
+
+  /**
+   * 在某一格模式之下判一條路徑。
+   *
+   * **模式是傳進來的**：呼叫端決定這一次呼叫用哪一格（常駐那格，或核准來的那格），
+   * 這裡不自己讀。
+   *
+   * @param mode - 這一次呼叫用的模式。
+   * @param filePath - 模型給的虛擬路徑。
+   * @param operation - 出現在拒絕訊息裡的操作名。
+   * @returns 通過時是要交給基座的虛擬路徑；被擋時是帶 `error` 的結果。
+   */
+  private async verdict(
+    mode: SandboxMode,
+    filePath: string,
+    operation: 'write' | 'edit' | 'delete' | 'uploadFiles',
+  ): Promise<string | { error: string }> {
     if (mode === 'danger-full-access') return filePath;
     if (mode === 'read-only') {
       return { error: this.denial(mode, operation, filePath, '這個 backend 是唯讀的') };
@@ -333,6 +421,59 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     // 基座那一次 lexical resolve 走的是實際位置。合法路徑走到這裡通常原封不動。
     const inside = relative(realRoot, realTarget);
     return inside === '' ? '/' : `/${inside.split(sep).join('/')}`;
+  }
+
+  /**
+   * 認領一顆**目標對得上**的 grant。
+   *
+   * 比的是兩邊 canonicalize 之後的實際位置，不是字串：經 symlink 的別名要對得上，否則模型
+   * 換個寫法重試就認不到；反過來，字串比對會讓一顆 grant 蓋到另一個檔。
+   *
+   * **先 peek、await 完再 take**：兩顆平行的變更都對得上時，只有先 take 的那一顆拿得到。
+   *
+   * @param filePath - 這一次變更的虛擬路徑。
+   * @returns 認領到時是核准來的模式；沒有、對不上、或被別人先拿走時為 `undefined`。
+   */
+  private async claimGrant(filePath: string): Promise<SandboxMode | undefined> {
+    const pending = this.grants?.peekGrant();
+    if (pending === undefined) return undefined;
+    const [call, granted] = await Promise.all([
+      this.canonicalTarget(filePath),
+      this.canonicalTarget(pending.target),
+    ]);
+    if (call === undefined || call !== granted) return undefined;
+    return this.grants?.takeGrant(pending) === true ? pending.mode : undefined;
+  }
+
+  /**
+   * 一條虛擬路徑的實際位置，比對 grant 用。
+   *
+   * `~` 與 `..` **一律回 `undefined`**（對不上任何 grant）：它們在 fence 裡本來就是字面上
+   * 擋掉的，讓它們認領得到 grant 等於開一條繞過那兩條檢查的路。
+   *
+   * @param filePath - 虛擬路徑。
+   * @returns canonicalize 之後的絕對路徑；不適合比對或解析失敗時為 `undefined`。
+   */
+  private async canonicalTarget(filePath: string): Promise<string | undefined> {
+    if (filePath.startsWith('~')) return undefined;
+    const virtualPath = filePath.startsWith('/') ? filePath : `/${filePath}`;
+    if (virtualPath.includes('..')) return undefined;
+    try {
+      return await canonicalize(resolve(this.cwd, virtualPath.slice(1)));
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * 被擋下時接上升級指引——**只在這個組裝真的有升級工具時**（見 {@link SandboxGrantLedger}）。
+   *
+   * 指引騎在拒絕上，照 dsh 的 `escalationHintMarker`：推力放在決定點上，模型不必記得工具描述。
+   * **每次都重讀**，不在建構期快照：掛上工具的那一步發生在 fence 建好之後。
+   */
+  private withHint(denied: { error: string }): { error: string } {
+    const hint = this.grants?.escalationHint;
+    return hint === undefined ? denied : { error: `${denied.error}\n${hint}` };
   }
 
   /**
