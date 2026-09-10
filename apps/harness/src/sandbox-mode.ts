@@ -47,7 +47,12 @@
 
 import type { SessionLog } from '@nexus/core';
 import { isSandboxMode, SANDBOX_MODES } from '@nexus/core';
-import type { SandboxMode, SandboxModeSource } from './contained-backend.js';
+import type {
+  SandboxGrant,
+  SandboxGrantLedger,
+  SandboxMode,
+  SandboxModeSource,
+} from './contained-backend.js';
 
 /** `/sandbox` 的命令名，不帶斜線。 */
 export const SANDBOX_COMMAND_NAME = 'sandbox';
@@ -72,8 +77,20 @@ export type SandboxSwitchOutcome =
  * 各自透過 {@link SandboxModeController.source}。兩邊各存一份快照的話，切換那天畫面上講的
  * 與實際擋的會是兩格，而**沒有任何測試會紅**——那正是這個 class 只有一格狀態的原因。
  */
-export class SandboxModeController {
+export class SandboxModeController implements SandboxGrantLedger {
   #mode: SandboxMode;
+
+  /**
+   * 待消費的那一顆升級 grant（見 `SandboxGrant`）。
+   *
+   * **一次最多一顆**：新核准的蓋掉舊的，舊的就再也認領不到——少一顆是 fail-closed 的方向。
+   * **不進日誌**，理由同核准本身那條（[#220](https://github.com/DemianLi/nexus-agent/issues/220)：
+   * 核准在日誌上一顆事件都沒有，是認帳不做）。
+   */
+  #grant: SandboxGrant | undefined;
+
+  /** 見 {@link SandboxModeController.escalationHint}。 */
+  #escalationHint: string | undefined;
 
   /**
    * 接著的 root 日誌，**依接線順序**。
@@ -115,6 +132,47 @@ export class SandboxModeController {
    * 呼叫端變成 `this` 是 `undefined`，而那個錯要到第一次工具呼叫才炸。
    */
   readonly source: SandboxModeSource = () => this.#mode;
+
+  /**
+   * 被擋下時接在拒絕後面的升級指引。**只有真的掛了升級工具才有**——由掛它的那一步
+   * （{@link SandboxModeController.enableEscalation}）寫進來，所以 fence 與工具對「這個組裝
+   * 有沒有升級」讀的是同一個事實，不會一邊公告一邊沒有。
+   */
+  get escalationHint(): string | undefined {
+    return this.#escalationHint;
+  }
+
+  /**
+   * 掛上升級工具的那一步呼叫它。
+   * @param hint - 被擋下時要接在拒絕後面的那句話。
+   */
+  enableEscalation(hint: string): void {
+    this.#escalationHint = hint;
+  }
+
+  /**
+   * 發一顆 grant：**只蓋一個目標、只蓋一次**。
+   * @param grant - 核准來的模式與模型指名的那個檔。
+   */
+  grant(grant: SandboxGrant): void {
+    this.#grant = grant;
+  }
+
+  /** @returns 現在待消費的那一顆；只看，不消費。 */
+  peekGrant(): SandboxGrant | undefined {
+    return this.#grant;
+  }
+
+  /**
+   * 消費**這一顆**。
+   * @param grant - 先前 peek 到的那一顆。
+   * @returns 它還是待消費的那一顆時為真。
+   */
+  takeGrant(grant: SandboxGrant): boolean {
+    if (this.#grant !== grant) return false;
+    this.#grant = undefined;
+    return true;
+  }
 
   /**
    * 接一份 root 會話日誌，**並且當場把起始值釘進去**。

@@ -680,7 +680,13 @@ export async function createCliAgent(
   const backend =
     workspaceRoot === undefined
       ? undefined
-      : new ContainedFilesystemBackend({ rootDir: workspaceRoot, mode: sandboxMode.source });
+      : // **grant 也從同一顆控制器認領**：升級工具把 grant 發在它身上（`sandbox-escalation.ts`），
+        // fence 在被擋下時來這裡認領。給 fence 另一個 ledger 的話，核准了也認領不到。
+        new ContainedFilesystemBackend({
+          rootDir: workspaceRoot,
+          mode: sandboxMode.source,
+          grants: sandboxMode,
+        });
   const {
     agent,
     commands,

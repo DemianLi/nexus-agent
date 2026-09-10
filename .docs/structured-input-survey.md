@@ -182,6 +182,8 @@ registry.approvals.gate((exec, next) =>
 `exit_plan_mode` 是一個純記憶體的模式切換。**`write_file`（含真的寫磁碟那一個）今天裸奔。**
 
 > **2026-09-09 更新**：上面那句「唯一的註冊者」是這份調研當下的量測，**現在是兩個**——[#231](https://github.com/DemianLi/nexus-agent/issues/231) 第二刀加了 `@nexus/plugin-submit-record`，只認 `submit_record`。**鏈底仍然是 `allow`，`write_file` 仍然裸奔**（給所有 `write_file` 加閘門是 #231 明著排除的另一張卡），所以這一段的結論沒有變，變的只有那個數字。
+>
+> **2026-09-10 更新**：**現在是三個**——[#238](https://github.com/DemianLi/nexus-agent/issues/238) 第 2 項加了沙箱升級工具的閘門，只認 `request_sandbox_escalation`。`write_file` 在核准這一面**仍然沒有人攔**：升級是另一顆工具要人核准，不是給 `write_file` 掛閘門。結論照舊。
 
 ---
 

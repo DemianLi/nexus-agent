@@ -59,12 +59,15 @@ import type { NexusPlugin } from '@nexus/core';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
+import { SANDBOX_ESCALATION_TOOL_NAME } from './sandbox-escalation.js';
 import { SandboxModeController } from './sandbox-mode.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 
 /** 這一顆升級工具只是**形狀**——#238 還沒定要不要真的長出它。 */
-const ESCALATION_TOOL_NAME = 'request_sandbox_escalation';
+// **用正式的那個名字**：絆索量的是「加一顆沒見過的工具會被放行」，而正式的升級工具就是
+// 靠那一半活著的。兩邊各寫一次字串的話，改名那天絆索會繼續量一顆已經不存在的工具。
+const ESCALATION_TOOL_NAME = SANDBOX_ESCALATION_TOOL_NAME;
 
 /**
  * 記下每一次 `bindTools` 收到的清單。
