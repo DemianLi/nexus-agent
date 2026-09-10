@@ -29,6 +29,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { Command, MemorySaver } from '@langchain/langgraph';
 
 import { createNexusAgent } from './agent-factory.js';
+import { createCliAgent, DEFAULT_PLUGINS } from './cli.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import type { SandboxMode } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
@@ -459,6 +460,39 @@ describe('升級', () => {
       expect(texts[3]).toContain('沒有 checkpointer');
       expect(new Set(texts).size).toBe(4);
     });
+  });
+
+  /**
+   * **兩種廣告是兩件事**：「沒掛升級的 fence 不講指引」只蓋到拒絕那一行，蓋不到工具清單。
+   * 有人哪天把升級從政策 plugin 搬進預設清單，提示句那條負面測試照樣綠，而沒有 fence 的
+   * 組裝就會對模型公告一顆升級工具——那正是政策 plugin 註解要防的「對模型說謊」。所以
+   * 這裡走**產品路徑**（`createCliAgent`），量模型實際拿到的工具清單。
+   */
+  it('產品路徑：沒有 --workspace 的組裝，模型的工具清單裡沒有升級工具；有的話才有', async () => {
+    const bare = await createCliAgent({ live: false }, DEFAULT_PLUGINS, root);
+    try {
+      await bare.agent.invoke(toAgentInvocation('看一下。'), {
+        configurable: { thread_id: 'bare' },
+      });
+      const names = (bare.model as ScriptedChatModel).boundToolNames;
+      // 前提：真的綁過工具。空清單也「不含」升級工具。
+      expect(names).toContain('write_file');
+      expect(names).not.toContain(SANDBOX_ESCALATION_TOOL_NAME);
+    } finally {
+      await bare.dispose();
+    }
+
+    const fenced = await createCliAgent({ live: false, workspace: root }, DEFAULT_PLUGINS, root);
+    try {
+      await fenced.agent.invoke(toAgentInvocation('看一下。'), {
+        configurable: { thread_id: 'fenced' },
+      });
+      expect((fenced.model as ScriptedChatModel).boundToolNames).toContain(
+        SANDBOX_ESCALATION_TOOL_NAME,
+      );
+    } finally {
+      await fenced.dispose();
+    }
   });
 
   it('read-only 那句叫模型照升級指引做，但不在提示句裡講模式名', () => {
