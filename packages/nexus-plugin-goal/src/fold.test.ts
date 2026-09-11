@@ -473,6 +473,9 @@ describe('什麼推得動 roundsStarted', () => {
     // 不推：它不是任何人做的事，是建構子替一份續接回來的日誌畫的那條線。**也不在這裡歸零**
     // ——續接之後輪次照舊，理由是 #251 拍板的那一條：輪次上限是人給自主續行的預算，重開
     // 一個行程就把它洗掉的話，上限就只擋得住不肯重開的人。
+    //
+    // `plan/mode`（#251 的第二刀）：不推。它是人或 `exit_plan_mode` 選的模式，不是一輪；
+    // 模式開關幾次都不該吃掉自主續行的預算。
     const KNOWN = [
       'turn/start',
       'turn/end',
@@ -485,6 +488,7 @@ describe('什麼推得動 roundsStarted', () => {
       'model/usage',
       'compaction/summary',
       'sandbox/mode',
+      'plan/mode',
       'session/end-seed',
     ] as const;
     KNOWN satisfies readonly SessionEventType[];

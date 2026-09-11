@@ -1,5 +1,5 @@
 /**
- * 攔截時刻的索引：**dsh 的九個時刻裡，我們佔住的那五格分別是誰佔的、又比標準少了什麼。**
+ * 攔截時刻的索引：**dsh 的九個時刻裡，我們佔住的那四格分別是誰佔的、又比標準少了什麼。**
  *
  * 圖是 [#190](https://github.com/DemianLi/nexus-agent/issues/190)，這一份是它的候選 3
  * （[#193](https://github.com/DemianLi/nexus-agent/issues/193)）。九格逐格的核對過程在
@@ -31,7 +31,8 @@
  * [#215](https://github.com/DemianLi/nexus-agent/issues/215) 第 2 題量到的一件事：第 2 格的
  * **事件名對得上而節奏對不上**。它跟上面兩欄有一處**刻意的不對稱**——那兩欄的 `undefined`
  * ＝ 量過、對得上，頻率這一欄則是**必填**，沒量的寫 {@link UNMEASURED}。
- * **五格裡只有第 2 格量過**，另外四格是沒量，不是對得上。
+ * **量過的只有第 2 格，而那一格 2026-09-12 起沒有佔用者了**（見下面「沒有進索引的格」），
+ * 所以今天索引裡的四列全是沒量，不是對得上。
  *
  * ## 缺口帳：四筆，其中兩筆是同一個缺件
  *
@@ -53,11 +54,28 @@
  * **第 2 與第 3 筆是同一個缺件。** 第 4 筆與第 2 筆**只是同一個結構成因**（紀錄由入口點在
  * 圖外附加），**不是同一個缺件**——理由寫在第 4 列那一欄裡。
  *
- * ## 沒有進索引的四格
+ * ## 沒有進索引的五格
  *
- * 第 1（`agent/session-start`）、5（`ctx.tools.guard()`）、8（`ToolDefinition.finalizeContent`）、
- * 9（`tools/result`）格今天沒有佔用者，所以索引裡沒有它們的列——**這一份索引的軸是「誰佔住」，
- * 空格沒有東西可指**。第 5 與第 8 格是 #190 的候選 4，第 9 格見上面的缺口帳。
+ * 第 1（`agent/session-start`）、2（`agent/pre-step`）、5（`ctx.tools.guard()`）、
+ * 8（`ToolDefinition.finalizeContent`）、9（`tools/result`）格今天沒有佔用者，所以索引裡沒有
+ * 它們的列——**這一份索引的軸是「誰佔住」，空格沒有東西可指**。第 5 與第 8 格是 #190 的
+ * 候選 4，第 9 格見上面的缺口帳。
+ *
+ * **第 2 格是從索引裡搬出來的，不是一直不在。** 它原本的佔用者是 plan-mode 的
+ * `beforeAgent`——「`/plan` 選好的模式在下一次 agent 呼叫開頭交成 state update」，自己登記為
+ * dsh `agent/pre-step` **邊界提交**的對應物。[#251](https://github.com/DemianLi/nexus-agent/issues/251)
+ * 的第二刀把計劃模式搬進會話日誌、`/plan` 當場寫進去，那一格 pending intent 跟著收掉，
+ * `beforeAgent` 就沒了；全樹從此沒有 `beforeAgent:` 的實作（下面最後一條斷言釘著）。
+ * 那一列記過的三件事，去處各不同：
+ *
+ * - **攔截那半**（`jumpTo: 'end'`）：基座做得到（#192 實測，裸基座與我們的組裝一致，模型呼叫
+ *   次數 0、無模型可見訊息），鉤子要寫成 `{ hook, canJumpTo: ['end'] }` 才裝得上 router，
+ *   而產品程式碼零使用——**它從來就沒有佔用者**，只是以前寄住在那一列。
+ * - **紀錄差**（終止原因記不下來）：不看佔用者，照舊是上面缺口帳的第 2 筆。
+ * - **頻率差**（dsh 每步跑、我們每次 agent 呼叫一次，#215 第 2 題量到、#218 補進來）：
+ *   它量的是**那個佔用者的節奏**，佔用者不在了，這一筆沒有指涉對象。`beforeModel` 仍然是
+ *   圖裡每步一格的節點（`repeat-reminder.ts` 掛在上面），但它不是 pre-step 注入。**哪天有人
+ *   在第 2 格長出佔用者，這一筆要重量**，不是照抄回來。
  *
  * **九格之外的縫也沒有列。** dsh 的 `approval/request`（應答者 waterfall）不是那九個時刻名
  * 之一，落不進這個軸；它記在第 4 列的權限差裡，因為第 4 格是我們這側唯一的提問者。規矩往
@@ -71,7 +89,7 @@
  * 再對 SHA，clone 會凍在 clone 當下。
  */
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -82,7 +100,7 @@ const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 /**
  * 「這一格的頻率**沒有量過**」——見 {@link InterceptionRow.frequencyDelta}。
  *
- * **不是「量過、對得上」**：那是隔壁兩欄 `undefined` 的意思，而頻率這一軸五格裡只量過一格。
+ * **不是「量過、對得上」**：那是隔壁兩欄 `undefined` 的意思，而頻率這一軸今天一格都沒量過。
  */
 const UNMEASURED = '（未量）';
 
@@ -107,53 +125,19 @@ interface InterceptionRow {
    * 頻率那一軸比 dsh 少了什麼。**{@link UNMEASURED} ＝ 沒量過**，不是「對得上」。
    *
    * **這一欄刻意必填**，不跟上面兩欄一樣用缺席表達。那兩欄的 `undefined` ＝ 量過、沒有缺口；
-   * 頻率這一軸今天只有第 2 格量過。做成選填的話，新增一列時省略它是無聲的，而讀者會照隔壁
+   * 頻率這一軸量過的只有第 2 格，而它已經不在索引裡。做成選填的話，新增一列時省略它是無聲的，而讀者會照隔壁
    * 兩欄的規矩把缺席讀成「對得上」——**誤讀的方向剛好是錯的那一邊**。
    *
-   * **型別沒有在擋內容**：`string` 收任何字串，哨兵是約定不是護欄。承重的是必填，加上下面
-   * 那條斷言——而那條也只釘得住「`beforeAgent` 這個名字還在那個檔案裡」，釘不住散文有沒有
-   * 跟著改。這是這份索引每一條斷言共同的限制，判準本來就是 grep，見檔頭。
+   * **型別沒有在擋內容**：`string` 收任何字串，哨兵是約定不是護欄。承重的是必填。
    */
   readonly frequencyDelta: string;
 }
 
 /**
- * 五條。**#190 九格核完，(a) 就是這五格**；沒有佔用者的四格不在這裡，理由見檔頭。
+ * 四條。**#190 九格核完時 (a) 是五格**，第 2 格 2026-09-12 起沒有佔用者（見檔頭）；沒有
+ * 佔用者的五格不在這裡。
  */
 const INDEX: readonly InterceptionRow[] = [
-  {
-    cell: 2,
-    moment: 'agent/pre-step',
-    permission: 'waterfall，可 reject（關掉一個 blocked、無步驟的輪次）',
-    occupants: ['packages/nexus-plugin-plan-mode/src/index.ts'],
-    permissionDelta:
-      "注入與攔截兩半都在，但**攔截那半在產品程式碼零使用**：`jumpTo: 'end'` 真的做得到" +
-      '（#192 實測，裸基座與我們的組裝一致，模型呼叫次數 0、無模型可見訊息），' +
-      "而鉤子要寫成 `{ hook, canJumpTo: ['end'] }` 才裝得上 router——光函式形執行期拋。" +
-      '**這半格沒有佔用者可指，只存在於這一列。**' +
-      '注入那半只引一個佔用者，是量過的：`beforeAgent:` 在我們樹上**只有這一個實作**。' +
-      '#190 那格另外點名的 memory 與 skills **不是我們的佔用者**——它們只註冊來源' +
-      '（`registry.memory.addSource` / `registry.skills.addSource`），middleware 由基座建' +
-      '（兩個 plugin 的檔頭都寫著「基座連 middleware 都不會建」）。`wrapModelCall` 另有四處' +
-      '（`model-usage.ts`、`summarization.ts` ×2、`observation.ts`），但它們做的是計量、' +
-      '摘要與觀測，**不是 pre-step 注入**，掛這個名字會是過度宣稱；plan-mode 自己登記的也是' +
-      '「`beforeAgent` 是 `agent/pre-step` 邊界提交的對應物」。',
-    recordDelta:
-      '終止原因記不下來。`turn/*` 由入口點在圖外附加，跳掉的輪次與正常跑完的在日誌上' +
-      '長得一模一樣，沒宣告拋出去則記成 `turn/failed`——沒有一個是 dsh 的 blocked。',
-    frequencyDelta:
-      '**注入那半的節奏對不上。** dsh 的 `agent/pre-step` **每步**跑一次——handler 收得到 ' +
-      '`step`（`packages/context/time-context/src/index.ts:180-183`），`time-context` 的' +
-      ' README 連讀數的基準都分「第 1 步」與「後續步驟」兩種。我們登記的佔用者是 plan-mode 的 ' +
-      '`beforeAgent`，**每次 agent 呼叫一次**，而它自己登記的措辭就是「`beforeAgent` 是 ' +
-      '`agent/pre-step` **邊界提交**的對應物」（`nexus-plugin-plan-mode/src/index.ts:100-101` ' +
-      '與 `:360-361`）。**事件名對得上，節奏對不上。**' +
-      '**這不是「我們沒有每步的掛點」**——`beforeModel` 就是圖裡每步一格的節點' +
-      '（`nexus-core/src/repeat-reminder.ts` 掛在上面），而是**這個時刻上沒有人站在每步那一格**。' +
-      '射程只到注入那半：攔截那半（`jumpTo` 路徑）在產品程式碼零使用，沒有節奏可量。' +
-      '這一筆是 #215 第 2 題量到的，**與那一項做不做無關**（它判為不是缺口、降到' +
-      '`.docs/plugin-architecture-gap-survey.md` §五第 7 條），所以由 #218 單獨補進索引。',
-  },
   {
     cell: 3,
     moment: 'agent/turn-stopping',
@@ -181,7 +165,7 @@ const INDEX: readonly InterceptionRow[] = [
       ' 四值（`types.ts:32`），我們只有 approve／reject，**`cancelled` 沒有表達式**。' +
       '**`approval/request` 是第十條縫，不在 #190 那九個時刻名裡**，所以它沒有自己的列；' +
       '記在這一列是因為第 4 格是我們這側**唯一的提問者**' +
-      '（`packages/nexus-plugin-plan-mode/src/index.ts:525`，`exit_plan_mode` 回 `ask`）。',
+      '（`packages/nexus-plugin-plan-mode/src/index.ts` 的 `approvals.gate`，`exit_plan_mode` 回 `ask`）。',
     recordDelta:
       '**核准這件事一顆事件都沒有。** dsh 每次 request 追加 `approval/asked` ＋ ' +
       '`approval/decided`（`user-approval/src/types.ts:44-58`，log-only audit，帶 id／工具名／' +
@@ -227,23 +211,40 @@ const INDEX: readonly InterceptionRow[] = [
 ];
 
 /** 索引的列數。**釘死是刻意的**：只 grep 不數，刪掉一列這份測試照樣綠。 */
-const EXPECTED_ROWS = 5;
+const EXPECTED_ROWS = 4;
 
 /** 佔用位址的總數（列可能共用檔案，第 6 與第 7 格就共用 `output-schema.ts`）。 */
-const EXPECTED_SITES = 8;
+const EXPECTED_SITES = 7;
 
 /**
- * 第 2 列頻率差的**承重事實**：佔用者是 `beforeAgent` 形狀——每次 agent 呼叫一次，
- * 不是每步一次。這一行哪天改成 `beforeModel`，那一欄的措辭就假了，而**沒有別的東西會紅**。
+ * 第 2 格**沒有佔用者**的承重事實：全樹的產品程式碼裡沒有一個 `beforeAgent:` 實作。
  *
- * dsh 那側（`agent/pre-step` 每步跑、handler 收得到 `step`）釘不了：clone 不進版控，
- * 理由見檔頭最後一節。
+ * **這條是翻面寫的。** 它原本釘的是「第 2 列的佔用者是 `beforeAgent` 形狀」（頻率差靠它
+ * 撐著）；[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的第二刀拿掉了那個佔用者，
+ * 它就翻成「一個都沒有」。哪天有人長出一個，這裡紅——**那正是把第 2 列加回來、而且重量
+ * 頻率差的時候**（見檔頭「沒有進索引的五格」）。
+ *
+ * `beforeModel`、`wrapModelCall` 不算：它們是別的節點，第 2 格當年就判過它們不是 pre-step
+ * 注入。掃的範圍同門 B 那條（`session-resume-doors.test.ts`）：只掃產品原始碼，測試與 fixture 排除。
  */
-const FREQUENCY_ANCHOR = {
-  cell: 2,
-  path: 'packages/nexus-plugin-plan-mode/src/index.ts',
-  phrase: 'beforeAgent',
-} as const;
+const PRE_STEP_ROOTS = ['apps/harness/src', 'apps/web/src', 'packages'] as const;
+
+/** 遞迴列出產品原始碼的 `.ts`。 */
+function productSources(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === 'node_modules' || entry.name === 'dist') continue;
+      out.push(...productSources(full));
+      continue;
+    }
+    if (!entry.name.endsWith('.ts')) continue;
+    if (entry.name.endsWith('.test.ts') || entry.name.endsWith('.fixture.ts')) continue;
+    out.push(full);
+  }
+  return out;
+}
 
 /**
  * 第 4 列紀錄差的**承重事實**：`SessionEventType` 那個聯集裡沒有任何 `approval/` 開頭的
@@ -284,15 +285,19 @@ describe('攔截時刻索引', () => {
     },
   );
 
-  it(`第 ${FREQUENCY_ANCHOR.cell} 格的頻率差靠 ${FREQUENCY_ANCHOR.phrase} 這個形狀撐著`, () => {
-    const row = INDEX.find((candidate) => candidate.cell === FREQUENCY_ANCHOR.cell);
-    expect(row?.occupants).toContain(FREQUENCY_ANCHOR.path);
-    // **五格裡量過的就是這一格**，所以它不能是哨兵；別的格是不是哨兵這裡不管。
-    expect(row?.frequencyDelta).not.toBe(UNMEASURED);
-    const source = readFileSync(join(REPO_ROOT, FREQUENCY_ANCHOR.path), 'utf8');
-    expect(source, `${FREQUENCY_ANCHOR.path} 不再是 ${FREQUENCY_ANCHOR.phrase} 形狀`).toContain(
-      FREQUENCY_ANCHOR.phrase,
-    );
+  it('第 2 格今天沒有佔用者：產品程式碼裡一個 `beforeAgent:` 都沒有', () => {
+    expect(INDEX.map((row) => row.cell)).not.toContain(2);
+    const found: string[] = [];
+    for (const root of PRE_STEP_ROOTS) {
+      for (const file of productSources(join(REPO_ROOT, root))) {
+        if (/\bbeforeAgent\s*:/u.test(readFileSync(file, 'utf8'))) found.push(file);
+      }
+    }
+    expect(
+      found,
+      '第 2 格（agent/pre-step）長出了佔用者。把它加回索引，而且重量頻率差——' +
+        '以前那一筆量的是 plan-mode 那個 `beforeAgent` 的節奏，不是這一個的。',
+    ).toEqual([]);
   });
 
   it(`第 ${RECORD_ANCHOR.cell} 格的紀錄差靠「一顆核准事件都沒有」撐著`, () => {

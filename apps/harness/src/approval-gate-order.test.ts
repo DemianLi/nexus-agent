@@ -20,12 +20,13 @@
  *
  * 被吃掉的那位是 plan-mode 的 `exit_plan_mode` 閘門
  * （`packages/nexus-plugin-plan-mode/src/index.ts:514`）。它被短路之後，工具**真的跑完**，
- * 而 `createExitPlanModeTool()` 回的 `Command` 帶著 `{ [PLAN_MODE_STATE_KEY]: false }`——
+ * 而 `createExitPlanModeTool()` 往會話日誌寫一顆 `plan/mode { active: false }`——
  * 所以模式關掉、模型從下一步起可以動手，**而沒有任何人看過那份計劃**。
  *
  * plan-mode 檔頭那句「人批准計劃與人批准這次工具呼叫是同一件事，所以不另建評審通道」
  * 被整條拆掉，**而畫面上完全正常**：沒有例外、沒有拒絕訊息、沒有中斷。這就是為什麼第二層
- * 量的是 `planModeActive`，不是「閘門有沒有被呼叫」。
+ * 量的是模式最後是開是關（`planModeActive`，讀自日誌上最後一顆 `plan/mode`），不是「閘門有沒有
+ * 被呼叫」。
  *
  * ## 順序由 plugin 載入順序決定，plan-mode 自己管不著
  *
@@ -61,12 +62,12 @@
  */
 
 import { MemorySaver } from '@langchain/langgraph';
-import { formatOrigin, loadPlugins } from '@nexus/core';
+import { formatOrigin, loadPlugins, SessionRegistry } from '@nexus/core';
 import type { NexusPlugin } from '@nexus/core';
 import {
-  PLAN_MODE_STATE_KEY,
   EXIT_PLAN_MODE_TOOL_NAME,
   createPlanModePlugin,
+  recordedPlanMode,
 } from '@nexus/plugin-plan-mode';
 import { describe, expect, it } from 'vitest';
 
@@ -185,20 +186,27 @@ function planScript(): ScriptedChatModel {
  * 每一組**自己建一份 `ScriptedChatModel`**：三組吃掉的輪次不一樣（control 停在中斷，第二
  * 輪根本沒被用到；permissive-first 把工具跑完，第二輪被吃掉），共用一份會讓後跑的那組拿到
  * 一個已經被吃掉輪次的腳本。
+ *
+ * **模式讀自日誌，所以要接會話日誌。** 模式住在 `plan/mode` 上（#251 的第二刀），沒接的話
+ * `exit_plan_mode` 寫不下來——那會量成「模式還開著」，把寬鬆 gate 那一行的危險整個藏起來。
+ * 一顆 `plan/mode` 都沒有時，模式是三組共用的初值 `startActive: true`。
  */
 async function measure(plugins: readonly NexusPlugin[], threadId: string): Promise<string> {
-  const { agent, dispose } = await createNexusAgent({
+  const { agent, attachSession, dispose } = await createNexusAgent({
     model: planScript(),
     checkpointer: new MemorySaver(),
     plugins: [...plugins],
   });
+  const sessions = new SessionRegistry(threadId);
+  const detach = attachSession(sessions);
   try {
     const result = await agent.invoke(toAgentInvocation('幫我改一下。'), {
       configurable: { thread_id: threadId },
     });
-    const active = (result as Record<string, unknown>)[PLAN_MODE_STATE_KEY];
+    const active = recordedPlanMode(sessions.root.events) ?? true;
     return `interrupt=${result.__interrupt__ !== undefined} planModeActive=${String(active)}`;
   } finally {
+    detach();
     await dispose();
   }
 }

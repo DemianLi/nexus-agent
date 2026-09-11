@@ -59,15 +59,21 @@ import type { SessionEvent } from './session-log.js';
  * - **舊的號直接讀。** v1 是 v2 的子集——`turn/start` 的 `kind` 從
  *   [#98](https://github.com/DemianLi/nexus-agent/pull/98) 就在，格式版本到
  *   [#173](https://github.com/DemianLi/nexus-agent/pull/173) 才開始蓋，v2 只多了 `goal`
- *   這個變體；v2 之於 v3 同理，只多了一種事件。所以不需要遷移包——dsh 養兩個是因為它的
+ *   這個變體；v2 之於 v3、v3 之於 v4 同理，各只多了一種事件。所以不需要遷移包——dsh 養兩個是因為它的
  *   舊版真的長得不一樣。
  * - **比這個號新的拒絕**，而且跟壞檔分開報（{@link SessionFormatUnsupportedError} 與
  *   {@link SessionCorruptionError}，照 dsh 的 `SessionFormatUnsupportedError`／
  *   `SessionPersistenceCorruptionError`）：新版寫的檔不是壞的，是這一版讀不懂。
  * - **續寫進去的是這一版的詞彙**，所以續接的把手第一次寫入時把 header 的 `version` 蓋成
  *   這個號——dsh 同樣在讀的時候把歷史 header 翻成目前的版本。
+ *
+ * ## 4：`plan/mode`
+ *
+ * 計劃模式從 graph state 搬進日誌（[#251](https://github.com/DemianLi/nexus-agent/issues/251)
+ * 的第二刀）。v3 的檔直接讀：一顆 `plan/mode` 都沒有的日誌，計劃模式照組裝的初值起算——
+ * 跟 v3 那時候續接回來的結果一樣。
  */
-export const SESSION_LOG_FORMAT_VERSION = 3;
+export const SESSION_LOG_FORMAT_VERSION = 4;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。

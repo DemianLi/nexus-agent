@@ -22,6 +22,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { GOAL_COMMAND_NAME } from '@nexus/plugin-goal';
+import {
+  PLAN_ALREADY_ACTIVE_MESSAGE,
+  PLAN_COMMAND_NAME,
+  PLAN_ENTERED_MESSAGE,
+} from '@nexus/plugin-plan-mode';
 
 import { parseCliArgs, runCli } from './cli.js';
 import { SANDBOX_COMMAND_NAME } from './sandbox-mode.js';
@@ -98,7 +103,7 @@ describe('接回來的是日誌那一半', () => {
     expect(stdout).toContain('狀態：進行中');
     expect(stdout).toContain(`/${GOAL_COMMAND_NAME} resume`);
     // 披露照實講回來的是哪一半。
-    expect(stdout).toContain('對話與計劃模式從頭開始');
+    expect(stdout).toContain('對話從頭開始');
     expect(stderr).not.toContain('[不變量]');
   });
 
@@ -107,6 +112,44 @@ describe('接回來的是日誌那一半', () => {
     const { stdout } = await cli(['--workspace', workspace]);
     expect(stdout).toContain('起始 mode: workspace-write，');
     expect(stdout).not.toContain('從續接的日誌來');
+  });
+});
+
+describe('計劃模式跟著回來', () => {
+  /**
+   * `plan/mode` 是第一顆要**熬過** `session/end-seed` 的狀態——別的配套入口都在那顆標記上
+   * 重設，所以「在 end-seed 歸零」是這一帶最順手寫錯的那一種。驗收要接**兩次**：第二次
+   * 讀到的日誌上有兩顆標記，而模式得跨過兩顆。
+   */
+  it('上一次開了計劃模式，接回來還在；再接一次也還在', async () => {
+    await cli(['--workspace', workspace, '--session-log', logs], `/${PLAN_COMMAND_NAME}\n/exit\n`);
+    const entries = await readdir(logs);
+    const runDir = join(logs, entries[0]!);
+
+    const once = await cli(
+      ['--workspace', workspace, '--resume', runDir],
+      `/${PLAN_COMMAND_NAME}\n/exit\n`,
+    );
+    expect(once.stdout).toContain(PLAN_ALREADY_ACTIVE_MESSAGE);
+    const twice = await cli(
+      ['--workspace', workspace, '--resume', runDir],
+      `/${PLAN_COMMAND_NAME}\n/exit\n`,
+    );
+    expect(twice.stdout).toContain(PLAN_ALREADY_ACTIVE_MESSAGE);
+    expect(twice.stderr).not.toContain('[不變量]');
+
+    const events = await readLog(join(runDir, 'cli.jsonl'));
+    expect(events.filter((event) => event.type === 'session/end-seed')).toHaveLength(2);
+    // 開過一次，之後兩次都是「已經在裡面」——只有一顆。
+    expect(events.filter((event) => event.type === 'plan/mode')).toEqual([
+      expect.objectContaining({ data: { active: true } }),
+    ]);
+  });
+
+  it('對照：同一個工作區不給 `--resume`，計劃模式是關的', async () => {
+    await cli(['--workspace', workspace, '--session-log', logs], `/${PLAN_COMMAND_NAME}\n/exit\n`);
+    const { stdout } = await cli(['--workspace', workspace], `/${PLAN_COMMAND_NAME}\n/exit\n`);
+    expect(stdout).toContain(PLAN_ENTERED_MESSAGE);
   });
 });
 

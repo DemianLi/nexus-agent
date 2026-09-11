@@ -17,7 +17,7 @@
  * [#132](https://github.com/DemianLi/nexus-agent/issues/132) 補上（`@nexus/plugin-todo`，
  * 照 dsh 走會話事件而不是掛基座的 middleware）。
  *
- * 對讀日期 2026-08-31，dsh `0a53fb55bea101816fa226bb964ae2bed71c343b`。
+ * 對讀日期 2026-09-12，dsh `d347e703908d0406b7a7ef80e3a0e594d86b2215`。
  *
  * ## 三個零件，照 dsh 的分工
  *
@@ -25,62 +25,46 @@
  * | --- | --- | --- |
  * | 指引 | `plan:policy` 提示詞段落，順序 500，未激活不貢獻文本 | {@link PLAN_MODE_MIDDLEWARE_NAME} 的 `wrapModelCall`，未啟用時原樣穿過 |
  * | 退出工具 | `exit_plan_mode`，兩種狀態都在 schema 裡，模式外執行會失敗 | {@link EXIT_PLAN_MODE_TOOL_NAME}，同樣一律註冊、模式外拒絕 |
- * | 模式狀態 | `plan/mode` 會話事件 ＋ `planProjectionDefinition` 這個帶版本的會話投影 | middleware 的 `stateSchema` ＋ checkpointer——**見下面的偏離** |
+ * | 模式狀態 | `plan/mode` 會話事件 ＋ `planProjectionDefinition` 這個帶版本的會話投影 | `plan/mode` 會話事件 ＋ 這個 plugin 在 root 那份日誌上的折疊 |
  *
- * ## 偏離：模式狀態不走事件日誌
+ * ## 模式狀態走事件日誌——原本的偏離，收回了
  *
- * **上游在 2026-08-31 那次同步裡把這一塊換掉了，而換的方向讓這條偏離更遠不是更近。**
- * `foldPlanMode` 與 `planModeAtLastHeader` 兩個純函式已經刪掉，取代它們的是
- * `planProjectionDefinition`（`key: 'plan'`、`stateVersion: 3`、帶 `stateSchema` 與
- * `wire.view`）；`PlanModeController` 的 `static inject` 也從 `['tools','systemPrompt']`
- * 變成 `['tools','systemPrompt','sessionProjections']`——投影從可選子節點升成硬相依。
- * 也就是說 dsh 走的是「日誌是唯一真相、投影是它帶版本的快取」，我們的 checkpointer
- * 是**另一份真相**。下面那段結論不變，變的只是它對照的那個形狀。
+ * **這一格曾經是一條登記過的偏離**：模式狀態住在 middleware 的 `stateSchema` 裡，由
+ * checkpointer 持久化。登記的理由換過兩次，兩次都被後來的東西消耗掉：
  *
- * **表達不出來的是 dsh 那個特定形狀，不是「持久的模式狀態」本身。** LangGraph JS 原生
- * 就做這件事：`AgentMiddleware.stateSchema` 的文件明寫 “Middleware state is persisted
- * between multiple invocations”。走不了 dsh 那條的原因是水管：
+ * - 第一版是「plugin 拿不到 `SessionLog`」。錯的——`invariants` 那條路交出的一直是一份
+ *   可寫的日誌，[#127](https://github.com/DemianLi/nexus-agent/issues/127) 才把它收窄；
+ *   而 [#126](https://github.com/DemianLi/nexus-agent/issues/126) 加的 `sessions` 通道，
+ *   名字就說它交出可寫的日誌，goal 走的正是它。
+ * - 第二版是「日誌耐久了，但沒有讀方」——[#173](https://github.com/DemianLi/nexus-agent/pull/173)
+ *   讓日誌活過行程，[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的
+ *   `--resume` 讀得回它。
  *
- * - **plugin 拿不到 `SessionLog`。** ——**這一條當時就是錯的，現在也修好了，但結論沒變。**
+ * 最後那一件讓這條偏離有了看得見的代價：只開門 A 的話，重開之後沙箱模式回來、計劃模式
+ * 悄悄回到關著——人選的兩個「比較嚴」的模式，一個留得住一個留不住。所以 #251 的第二刀
+ * 把它搬回 dsh 的形狀：
  *
- *   錯在哪：寫下它的時候註冊點是十三個不是十二個（`commands` 是
- *   [#118](https://github.com/DemianLi/nexus-agent/issues/118) 之後才加的），而且
- *   `invariants` 那條路交出的 `InvariantSubject.log` 從第一天起就是一份**完整、可寫**的
- *   `SessionLog`——上面有 `append()`。所以「拿不到」從來不是真的；真的那件事是**沒有一個
- *   通道的名字承認它**。
+ * - **`plan/mode { active }`**，整份值不是切換，最後一顆就是答案。寫者兩個：`/plan`（人）
+ *   與 `exit_plan_mode`（模型，計劃獲准之後）。**都只寫 root 那一份。**
+ * - **折疊由這個 plugin 經 `registry.sessions` 接上 root 那份日誌**，同 `@nexus/plugin-goal`。
+ *   接上的時候觀察面會先重播既有事件，所以續接回來的日誌折得出上一次最後的模式。
+ * - **它不在 `session/end-seed` 歸零。** 那顆標記之前的開頭屬於上一個生命週期，讀「當前
+ *   這一段」的人要在那裡重設；模式相反——跨重啟留得住正是它搬進日誌的理由。
  *
- *   **那一格後來收掉了**：[#127](https://github.com/DemianLi/nexus-agent/issues/127) 把
- *   `InvariantSubject.log` 收窄成唯讀視圖。所以今天「plugin 拿不到可寫的 `SessionLog`」
- *   在**不變量那條路上**已經是真的了——但整句仍然是錯的，因為 `sessions` 那條路上它是假的。
+ * 退法丟掉過的東西也跟著回來了：`eval/runner.ts` 沒有 checkpointer、CLI 與 `serve.ts` 的
+ * `MemorySaver` 重啟就沒，這些以前都讓模式留不住；模式住在日誌上之後，它們都碰不到它。
+ * 壓縮那一條的測試照舊留著（`apps/harness/src/plan-mode.test.ts`）——它釘的是一句宣稱，
+ * 不是一個機制。
  *
- *   修好在哪：[#126](https://github.com/DemianLi/nexus-agent/issues/126) 加了第十四個註冊點
- *   `sessions`，名字就說它交出可寫的日誌，goal 域走的正是它。
+ * **與 dsh 仍然不一樣的地方**：dsh 的投影是 core 那一層帶版本的快取（`sessionProjections`），
+ * 我們沒有那一層，折疊就寫在這個 plugin 裡——形狀差異，不是偏離，同 goal。
  *
- *   **但計劃模式沒有跟著搬，而理由不是慣性**——只是那個理由今天換了一個。
+ * ## 沒有日誌的組裝
  *
- *   上一版寫的是「`SessionLog` 全樹仍然零個 hydrate／persist 路徑，搬過去只是把一個不
- *   耐久的存放處換成另一個不耐久的存放處」，並留了一句觸發條件：「日誌真的耐久化那天，
- *   這一段要重寫。」**那一天已經到了**——[#173](https://github.com/DemianLi/nexus-agent/pull/173)
- *   （2026-09-04）讓會話日誌活得過行程結束，而**沒有任何東西響**。過期的是理由不是結論，
- *   所以任何驗結論的測試都不會紅；補這個洞的絆索見
- *   [#203](https://github.com/DemianLi/nexus-agent/issues/203)。
- *
- *   **上一版的理由是「耐久了，但沒有讀方」，而讀方那一天也到了**：CLI 的 `--resume`
- *   （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）讀得回日誌，沙箱模式
- *   就是這樣跨過重啟的。**計劃模式因此是那張卡上唯一一個「只開門 A 會悄悄消失」的狀態**：
- *   重開之後沙箱模式回來、計劃模式回到關著。搬不搬進日誌（dsh 的 `plan/mode`）是 #251 的
- *   第二刀——它是一次偏離的收回，不只是 `SessionEventType` 多長一種事件，所以沒有跟第一刀
- *   一起做。在它落地之前**計劃模式不跨重啟**，README 與 `--resume` 的披露都照這個講。
- * - **`SessionEventType` 是 `@nexus/core` 的封閉 union**，沒有 dsh 那種宣告合併，而
- *   [#101](https://github.com/DemianLi/nexus-agent/issues/101) 已經明文把「加會話事件
- *   種類」排除在包自有不變量之外。
- *
- * 所以退到最接近的實作：`stateSchema` ＋ checkpointer。**這個退法丟掉了什麼**——
- * dsh 用純折疊換到的是「恢復、fork、壓縮都不必即時鏡像就還原得回來」，checkpointer
- * 換不到同一份保證：`eval/runner.ts` 根本沒有 checkpointer（state 在兩次 invoke 之間
- * 不留），CLI 與 `serve.ts` 是 `MemorySaver`（process 內，重啟就沒）。
- * 壓縮那一條有測試釘著（`apps/harness/src/plan-mode.test.ts`），另外兩條是入口層的
- * 事實，不是這個套件補得掉的。
+ * 模式住在日誌上，所以**沒接會話日誌的組裝寫不動它**：`/plan` 回
+ * {@link PLAN_NOT_ATTACHED_MESSAGE}，`exit_plan_mode` 回 {@link PLAN_NOT_ATTACHED_TOOL_MESSAGE}，
+ * 模式就停在 {@link PlanModePluginOptions.startActive} 那一格。CLI 與 `serve.ts` 都接線；
+ * eval 不掛這個 plugin。
  *
  * ## 開啟路徑：`/plan`
  *
@@ -89,51 +73,38 @@
  * `/plan` 進、`/plan off` 出，走 [#118](https://github.com/DemianLi/nexus-agent/issues/118)
  * 落地的 `registry.commands` 通道。
  *
- * ### 偏離：命令改的是 state，而 state 只有 invoke 期間寫得動
+ * **handler 當場就把選擇寫進日誌**（`log.append('plan/mode', { active })`），同 dsh。以前的
+ * 形狀是「plugin 持一格 pending intent，下一次 `beforeAgent` 把它交成 state update」——那是
+ * 模式住在 graph state 時的退法（LangGraph 沒有「在 invoke 之外寫 state」這件事），它誠實的
+ * 殘餘是「人看到開了，而下一輪永遠不來的話它沒落地過」。模式搬進日誌之後那一格沒有存在的
+ * 理由，跟著收掉了。
  *
- * dsh 的 handler 當場就把選擇寫死（`session.append('plan/mode', { active })`）——它的
- * 模式狀態是日誌事件，命令那一側寫得動。我們的模式狀態在 graph state 裡，而
- * **LangGraph JS 沒有「在 invoke 之外寫 state」這件事**：handler 跑在圖外面，`Command`
- * 只有工具與節點回得出來。
+ * **當場寫的前提是命令跑在兩輪之間。** dsh 在輪還開著時把選擇排著、到下一個
+ * `agent/pre-step` 才提交，免得模式在一輪中間翻面。我們不需要那一格：REPL 一行一輪；
+ * `serve.ts` 那條線的發派面在 run 飛在半空、停在核准點、或另一個命令在跑時一律拒收
+ * （`apps/harness/src/wire-handler.ts` 的 `handleSlash`，
+ * [#123](https://github.com/DemianLi/nexus-agent/issues/123)），絆索在
+ * `apps/harness/src/slash-wire.test.ts`。那道閘哪天放寬成排隊，這裡就要長回 dsh 那一格。
  *
- * 所以退到最接近的實作：**plugin 內持一格 pending intent，middleware 的 `beforeAgent`
- * 在下一次 invoke 開頭把它交成 state update**。`beforeAgent` 是 dsh 那個
- * `agent/pre-step` 邊界提交的對應物，形狀是同一個。
+ * ### 兩值，不是 dsh 的四值
  *
- * **這個退法丟掉了什麼**：dsh 的 `committed` 是「已經持久化了」，我們的 `committed`
- * 是「從下一輪起生效」。命令一定跑在兩輪之間的話，兩者分不出來——沒有任何觀察窗看得見
- * 模式還沒翻。**除非下一輪永遠不來**：那時人看到的「計劃模式開了」真的沒有落地過。
- * 這是這個退法誠實的殘餘。
+ * dsh 的 `set()` 回 `committed` / `queued` / `cancelled` / `noop`。`queued` 與 `cancelled`
+ * 都要「輪還開著、選擇排著還沒提交」才成立——`cancelled` 就是把排著的那一個收回來。命令
+ * 永遠跑在兩輪之間、選擇當場提交，兩個都沒有指涉物。（上一版留著 `cancelled`：它那時指的是
+ * 「pending intent 還沒被 `beforeAgent` 交出去」，那一格已經不在了。）所以 `/plan` 之後緊接著
+ * `/plan off` 是兩次 `committed`，日誌上兩顆 `plan/mode`。
  *
- * **「命令一定跑在兩輪之間」以前是白送的，現在不是。** REPL 那條線上它出自 readline
- * （一行一輪）；`serve.ts` 那條線上沒有那個東西——命令可以在 run 飛在半空時到、可以在
- * thread 停在核准點時到、可以兩個分頁同時到。所以那條線的發派面**明著**保證它：三種
- * 情形一律拒收，不排隊（`apps/harness/src/wire-handler.ts` 的 `handleSlash`，
- * [#123](https://github.com/DemianLi/nexus-agent/issues/123)）。排隊會讓這一格 pending
- * intent 跟飛行中那一輪的 `beforeAgent` 賽跑，等於把這個退法再擴大一次。
- * 絆索在 `apps/harness/src/slash-wire.test.ts`。
- *
- * 順著同一個理由，那一格 **`pending` 是交出去之後才清的，不是送出的當下**——照 dsh
- * 的原話「Delete only after append succeeds so a failed durable write leaves the
- * selection retryable, not dropped.」：下一次觀察到 state 真的等於它，才算落地。
- *
- * ### 三值，不是 dsh 的四值
- *
- * dsh 的 `set()` 回 `committed` / `queued` / `cancelled` / `noop`。**`queued` 沒有指涉
- * 物**：它是「輪還開著」時的結果，而我們的 REPL 一行一輪、執行器也是一次一個，命令
- * 永遠跑在兩輪之間。另外三個都到得了——`cancelled` 是 `/plan` 之後緊接著 `/plan off`
- * （中間沒有一輪），`noop` 是同一個方向按第二次。
- *
- * 順帶省掉的是 dsh 在 `noop` 分支裡那段 `loggedActive` 的再確認：它要那段，是因為
- * `queued` 存在時「已經是那個狀態」與「已經排隊要變成那個狀態」在措辭上必須分開。
- *
- * ### 兩件沒做的，也是偏離
+ * ### 沒做的，也是偏離
  *
  * - **`/plan <message>`**：dsh 收自由訊息，用 `agent.steer()` 把它插進對話。
  *   deepagents / LangChain JS / LangGraph JS 沒有「從圖外插一則訊息進下一輪」的表達；
  *   在 `CommandResult` 上加一格 steer 又會弄糊 `command/done` 的語意，以及
  *   `@nexus/plugin-commands` 配套入口那條序列性規則。所以 {@link PLAN_COMMAND_HINT}
  *   是 `[off]`——收不下的東西不寫進提示。
+ * - **切換的旁白**：dsh 在人切換模式、而上一份請求標頭描述的是另一個模式時，往對話裡插一句
+ *   「The user switched this session to plan mode.」（`loggedActiveAtLastHeader`）。我們沒有
+ *   `request/header` 這一顆，也沒有從圖外插訊息的路（同上一條）；模型從下一次請求的
+ *   system prompt 看得出來——指引在或不在。
  * - **`input.images`**：dsh 的命令收圖片附件，我們沒有 attachment store
  *   （`@nexus/core` 的 `commands.ts` 已經記著這一格是缺不是省）。
  */
@@ -141,7 +112,15 @@
 import { tool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
 import { Command } from '@langchain/langgraph';
-import type { AgentMiddleware, CommandResult, NexusPlugin, PluginRegistry } from '@nexus/core';
+import type {
+  AgentMiddleware,
+  CommandResult,
+  NexusPlugin,
+  PluginRegistry,
+  SessionEvent,
+  SessionLog,
+  SessionSubject,
+} from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import { z } from 'zod';
 
@@ -153,10 +132,10 @@ import {
   PLAN_COMMAND_DESCRIPTION,
   PLAN_COMMAND_HINT,
   PLAN_COMMAND_NAME,
-  PLAN_ENTER_CANCELLED_MESSAGE,
   PLAN_ENTERED_MESSAGE,
-  PLAN_LEAVE_CANCELLED_MESSAGE,
   PLAN_LEFT_MESSAGE,
+  PLAN_NOT_ATTACHED_MESSAGE,
+  planAmbiguousMessage,
 } from './command.js';
 
 // `/plan` 的詞彙是這個套件的公開介面的一部分（測試與組裝點都讀得到），所以整段轉出去。
@@ -170,14 +149,6 @@ export const EXIT_PLAN_MODE_TOOL_NAME = 'exit_plan_mode';
 
 /** middleware 的名字。**同名會取代基座 stack 裡的同名者**，所以帶著前綴。 */
 export const PLAN_MODE_MIDDLEWARE_NAME = 'nexusPlanMode';
-
-/**
- * 模式狀態在 agent state 裡的 key。
- *
- * **匯出它是為了測試與未來的開啟路徑**，不是給別人隨手改的：這個 key 由
- * {@link PLAN_MODE_MIDDLEWARE_NAME} 的 `stateSchema` 宣告，沒掛這個 plugin 時它不存在。
- */
-export const PLAN_MODE_STATE_KEY = 'planModeActive';
 
 /**
  * 沒給 `guidance` 時夾進 system prompt 的那一段。
@@ -206,6 +177,15 @@ export const EXIT_PLAN_MODE_DESCRIPTION =
 /** 模式外呼叫 `exit_plan_mode` 時回給模型的話。 */
 export const NOT_IN_PLAN_MODE_MESSAGE = `現在不在計劃模式，${EXIT_PLAN_MODE_TOOL_NAME} 沒有東西可以離開，所以沒有執行。`;
 
+/**
+ * 計劃獲准了，但這一份組裝沒接會話日誌，模式寫不下來。
+ *
+ * **不能回 {@link PLAN_APPROVED_MESSAGE}**：模式沒關，指引下一步還會在，回「關了」是在騙
+ * 模型。也不能回 {@link NOT_IN_PLAN_MODE_MESSAGE}——它明明在計劃模式裡。
+ */
+export const PLAN_NOT_ATTACHED_TOOL_MESSAGE =
+  '計劃獲准了，但計劃模式沒有接上會話日誌，模式關不掉。這是組裝的問題，不是計劃的問題。';
+
 /** 計劃被批准、離開計劃模式時回給模型的話。 */
 export const PLAN_APPROVED_MESSAGE = '計劃已獲准，計劃模式關閉了。從下一步起可以執行。';
 
@@ -217,107 +197,67 @@ export interface PlanModePluginOptions {
    */
   readonly guidance?: string;
   /**
-   * 這個組裝一開始就在計劃模式裡嗎。省略即**否**。
+   * **日誌上一顆 `plan/mode` 都沒有時**，這個組裝在不在計劃模式裡。省略即**否**。
+   *
+   * 模式的真相在日誌上，這一格只是折疊的初值：一份新的會話從它起算，一份續接回來、但上一次
+   * 從沒切過模式的會話（例如 v3 寫的檔）也從它起算；**一份日誌上有過 `plan/mode` 的會話，
+   * 最後那一顆說了算，這一格管不到**。沒接會話日誌的組裝，模式就一直是這一格。
    *
    * **在收不了核准決定的入口把它打開，等於把那一輪鎖死。** `exit_plan_mode` 是需要
    * 核准的工具，而 CLI 與 `eval/runner.ts` 傳的是 `HEADLESS_APPROVALS`
    * （[#113](https://github.com/DemianLi/nexus-agent/issues/113)），核准閘門在那裡
-   * 走 `policy-never`、確定性地拒絕。於是模型提了計劃、被拒、還在計劃模式，
-   * 而它**沒有第二條路出去**——今天沒有任何開啟／關閉的命令。整輪只剩指引。
+   * 走 `policy-never`、確定性地拒絕。於是模型提了計劃、被拒、還在計劃模式，唯一出去的路是
+   * 人打 `/plan off`（[#120](https://github.com/DemianLi/nexus-agent/issues/120)）。在 web 上
+   * 打開則是「提了計劃、有人按批准」那條正路。
    *
-   * **[#120](https://github.com/DemianLi/nexus-agent/issues/120) 之後這個風險換了形狀，
-   * 沒有消失。** `/plan off` 是那條路了，而
-   * [#123](https://github.com/DemianLi/nexus-agent/issues/123) 之後兩個入口都打得到它。
-   * 但在 CLI 把 `startActive` 打開仍然是拿不到核准、只能靠 `/plan off` 自己爬出來
-   * （`HEADLESS_APPROVALS` 會確定性拒絕），在 web 上打開則是「提了計劃、有人按批准」
-   * 那條正路。
-   *
-   * **這個選項今天剩下的用途是測試**：要走真的那條路而不是直接戳 state。`serve.ts`
-   * 那條線不再需要它——瀏覽器自己打 `/plan` 就進得去。
+   * **這個選項今天剩下的用途是測試**：要走真的那條路而不是直接往日誌裡寫。
    */
   readonly startActive?: boolean;
 }
 
-/** 這一次呼叫在 middleware 眼裡的形狀。基座的型別是泛的，這裡只取用得到的欄位。 */
-interface PlanModeState {
-  readonly [PLAN_MODE_STATE_KEY]?: boolean;
-}
-
-/** 一次 `/plan` 的結果。**三個值，沒有 `queued`**——理由見檔頭。 */
-export type PlanModeSelection = 'committed' | 'cancelled' | 'noop';
-
-/** `beforeAgent` 交出去的那筆 state update。 */
-type PlanModeUpdate = { readonly [PLAN_MODE_STATE_KEY]: boolean };
-
 /**
- * 命令與 middleware 之間的那一格。
+ * 一份 root 日誌上的模式。
  *
- * 它存在的唯一理由是**兩邊不在同一個世界**：`/plan` 的 handler 跑在圖外面、寫不動
- * state，middleware 跑在圖裡面、讀得到也寫得動。這一格是它們唯一的接觸面。
- *
- * 兩個欄位各自回答一個問題：`committed` 是「上次看到 state 的時候它是什麼」，
- * `pending` 是「人選了什麼但還沒交出去」。**`active()` 是 `pending ?? committed`**，
- * 所以指引在選擇的那一刻就生效，不必等 `beforeAgent` 的 update 落地——這讓提示詞
- * 不依賴「同一次 invoke 裡 update 看不看得到」這個我們沒有保證的東西。
+ * `log` 是寫的那一份，`active()` 是讀的那一份——**兩者是同一份日誌**，讀的那一半是觀察面
+ * 折出來的，所以 `append` 之後 `active()` 當場就是新的值（觀察面同步送，見
+ * `@nexus/core` 的 `SessionSubject.observe`）。
  */
-interface PlanModeCell {
-  /**
-   * 選一個方向。
-   * @param active - 要不要在計劃模式裡。
-   * @returns 這一次選擇的結果。
-   */
-  select(active: boolean): PlanModeSelection;
-  /**
-   * 把 state 的實況吃回來。**每一個看得到 state 的 hook 都要叫**——`exit_plan_mode`
-   * 在輪中途把模式關掉時，只有這件事讓那一格知道。
-   * @param state - 這一刻的 agent state。
-   */
-  observe(state: PlanModeState): void;
-  /** 這一刻該不該當作在計劃模式裡。 */
+interface PlanModeSession {
+  readonly log: SessionLog;
   active(): boolean;
-  /** 還沒交出去的選擇，沒有時是 `undefined`。 */
-  pendingUpdate(): PlanModeUpdate | undefined;
 }
 
 /**
- * 造那一格。
+ * 從一串事件讀出最後一次的模式。
  *
- * **`pending` 是觀察到 state 真的等於它才清的，不是送出的當下。** 照 dsh 的
- * 「Delete only after append succeeds」：送出去而沒落地時，下一次 `beforeAgent` 會
- * 再送一次，而不是把人的選擇靜靜丟掉。
+ * 給讀日誌的人用——CLI 的續接披露、測試。**不看 `session/end-seed`**：模式跨得過那顆
+ * 標記，理由見檔頭。
  *
- * @param startActive - `stateSchema` 的初值，也就是還沒看過 state 之前的 `committed`。
- * @returns 這一次組裝專屬的那一格。
+ * @param events - 一份日誌的事件。
+ * @returns 最後一顆 `plan/mode` 的值；一顆都沒有時是 `undefined`，由呼叫端決定初值。
  */
-function createPlanModeCell(startActive: boolean): PlanModeCell {
-  let committed = startActive;
-  let pending: boolean | undefined;
+export function recordedPlanMode(events: readonly SessionEvent[]): boolean | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.type === 'plan/mode') return event.data.active;
+  }
+  return undefined;
+}
 
-  return {
-    select(active) {
-      const target = pending ?? committed;
-      if (active === target) return 'noop';
-      if (active === committed) {
-        // 有一個反向的選擇還沒交出去，而人又選回來了——把它收回來就好。
-        pending = undefined;
-        return 'cancelled';
-      }
-      pending = active;
-      return 'committed';
-    },
-    observe(state) {
-      const observed = state[PLAN_MODE_STATE_KEY];
-      if (observed === undefined) return;
-      committed = observed;
-      if (pending === observed) pending = undefined;
-    },
-    active() {
-      return pending ?? committed;
-    },
-    pendingUpdate() {
-      return pending === undefined ? undefined : { [PLAN_MODE_STATE_KEY]: pending };
-    },
-  };
+/**
+ * 接上一份 root 日誌，開始折它的模式。
+ *
+ * @param subject - `registry.sessions` 交出來的那一份。
+ * @param startActive - 日誌上沒有 `plan/mode` 時的初值。
+ * @returns 這一份日誌上的模式。
+ */
+function trackPlanMode(subject: SessionSubject, startActive: boolean): PlanModeSession {
+  let active = startActive;
+  subject.observe((event) => {
+    // **刻意不看 `session/end-seed`。** 別的配套入口在那裡重設開關；這一格要熬過它。
+    if (event.type === 'plan/mode') active = event.data.active;
+  });
+  return { log: subject.log, active: () => active };
 }
 
 /**
@@ -325,79 +265,58 @@ function createPlanModeCell(startActive: boolean): PlanModeCell {
  *
  * **參數不合法回 `error`，不是「不認得就當成進入」**：安靜吞掉打錯的參數，會讓
  * `/plan of` 看起來成功了而其實做了相反的事。這條關係同時是這個套件配套入口檢的那一條
- * （見 `invariant.ts`）。
+ * （見 `invariant.ts`），所以參數先判——不管有沒有接上日誌，打錯的參數都落定成 `error`。
  *
- * @param cell - 這次組裝的那一格。
+ * @param sessions - 這次組裝接著的 root 日誌；剛好一份才動得了。
  * @param rawInput - 命令名之後的原文。
  * @returns 直接印給人看的結果。
  */
-function planCommandResult(cell: PlanModeCell, rawInput: string): CommandResult {
+function planCommandResult(sessions: readonly PlanModeSession[], rawInput: string): CommandResult {
   const request = parsePlanCommandArgs(rawInput);
   if (request === undefined) return { kind: 'error', text: PLAN_ARGS_ERROR_MESSAGE };
+  if (sessions.length === 0) return { kind: 'error', text: PLAN_NOT_ATTACHED_MESSAGE };
+  if (sessions.length > 1) return { kind: 'error', text: planAmbiguousMessage(sessions.length) };
+  const session = sessions[0] as PlanModeSession;
   const entering = request === 'enter';
-  switch (cell.select(entering)) {
-    case 'committed':
-      return { kind: 'success', text: entering ? PLAN_ENTERED_MESSAGE : PLAN_LEFT_MESSAGE };
-    case 'cancelled':
-      return {
-        kind: 'success',
-        text: entering ? PLAN_LEAVE_CANCELLED_MESSAGE : PLAN_ENTER_CANCELLED_MESSAGE,
-      };
-    case 'noop':
-      return {
-        kind: 'success',
-        text: entering ? PLAN_ALREADY_ACTIVE_MESSAGE : PLAN_ALREADY_INACTIVE_MESSAGE,
-      };
+  if (session.active() === entering) {
+    return {
+      kind: 'success',
+      text: entering ? PLAN_ALREADY_ACTIVE_MESSAGE : PLAN_ALREADY_INACTIVE_MESSAGE,
+    };
   }
+  session.log.append('plan/mode', { active: entering });
+  return { kind: 'success', text: entering ? PLAN_ENTERED_MESSAGE : PLAN_LEFT_MESSAGE };
 }
 
 /**
  * 造計劃模式的 middleware。
  *
- * 五件事在同一個 middleware 裡，因為它們共用同一個 state key：
+ * 兩件事在同一個 middleware 裡，因為它們讀同一格模式：
  *
- * 1. **`stateSchema`** 宣告 {@link PLAN_MODE_STATE_KEY}，由 checkpointer 持久化。
- * 2. **`beforeAgent`** 把 `/plan` 選好而還沒落地的那一個交成 state update。**這是
- *    dsh `agent/pre-step` 邊界提交的對應物**，見檔頭那條偏離。
- * 3. **`wrapModelCall`** 在模式生效時把指引接到 system prompt **後面**。
+ * 1. **`wrapModelCall`** 在模式生效時把指引接到 system prompt **後面**。
  *    用 `concat` 不用取代——`@nexus/plugin-memory` 與基座的摘要器都在同一份
  *    system prompt 上加東西，取代會把它們吃掉（`dynamicSystemPromptMiddleware`
  *    正是取代，所以刻意不用它）。模式沒生效時原樣穿過，**一個 token 都不多**。
- * 4. **`wrapToolCall`** 擋掉模式外的 `exit_plan_mode`。
- *    **這是 dsh `tools/execute` 位置的一個佔用者**（`beforeAgent` 那一項則對應
- *    `agent/pre-step`，見上）；索引見 `apps/harness/src/interception-index.test.ts`。
- * 5. **`afterAgent`** 把一輪跑完之後的 state 吃回那一格。少了它，`exit_plan_mode`
- *    在輪中途把模式關掉之後，下一次 `/plan off` 會回「關了」而不是「本來就沒開」。
+ * 2. **`wrapToolCall`** 擋掉模式外的 `exit_plan_mode`。
+ *    **這是 dsh `tools/execute` 位置的一個佔用者**；索引見
+ *    `apps/harness/src/interception-index.test.ts`。
  *
- * **每一個看得到 state 的 hook 都先 `observe`。** 那一格是圖外的人唯一的視角，而它
- * 只有在這些點上看得見真相。
+ * 以前還有 `stateSchema`、`beforeAgent` 與 `afterAgent` 三件：模式住在 graph state 時，
+ * 前者宣告那一格、後兩者在圖外的命令與圖內的 state 之間搬值。模式搬進日誌之後三件都沒有
+ * 東西可做——**`beforeAgent` 也因此不再佔住 dsh 的 `agent/pre-step`**，那一格空了（見索引）。
+ *
+ * **它只掛在 root 上**：`fold.ts` 不把 plugin 的 middleware 攤給 subagent，所以這兩件事
+ * 讀的永遠是 root 那一份的模式。
  *
  * @param guidance - 模式生效時夾的那一段。
- * @param startActive - state 的初值。
- * @param cell - 命令與這個 middleware 之間的那一格。
+ * @param active - 這一刻在不在計劃模式裡。
  * @returns 可以交給 `registry.middleware.use()` 的 middleware。
  */
-function createPlanModeMiddleware(
-  guidance: string,
-  startActive: boolean,
-  cell: PlanModeCell,
-): AgentMiddleware {
+function createPlanModeMiddleware(guidance: string, active: () => boolean): AgentMiddleware {
   return createMiddleware({
     name: PLAN_MODE_MIDDLEWARE_NAME,
-    stateSchema: z.object({
-      [PLAN_MODE_STATE_KEY]: z.boolean().default(startActive),
-    }),
-    beforeAgent: (state) => {
-      cell.observe(state as PlanModeState);
-      return cell.pendingUpdate();
-    },
-    afterAgent: (state) => {
-      cell.observe(state as PlanModeState);
-      return undefined;
-    },
     wrapModelCall: (request, handler) => {
-      cell.observe(request.state as PlanModeState);
-      if (!cell.active()) return handler(request);
+      if (!active()) return handler(request);
       // 兩條路是同一件事的兩個入口：`systemMessage` 在的時候接在它後面，不在的時候
       // 由 `systemPrompt` 這個字串欄位承接。基座兩個都讀，給錯那一個等於沒講。
       const { systemMessage } = request;
@@ -410,8 +329,7 @@ function createPlanModeMiddleware(
     wrapToolCall: (request, handler) => {
       const call = request.toolCall as { name?: string; id?: string };
       if (call.name !== EXIT_PLAN_MODE_TOOL_NAME) return handler(request);
-      cell.observe(request.state as PlanModeState);
-      if (cell.active()) return handler(request);
+      if (active()) return handler(request);
       return new Command({
         update: {
           messages: [
@@ -427,36 +345,37 @@ function createPlanModeMiddleware(
   }) as AgentMiddleware;
 }
 
+/** 這一次工具呼叫落在哪一份日誌上——認得出來而且是這個 plugin 接著的 root 那一份才有。 */
+type PlanModeLookup =
+  | { readonly kind: 'ok'; readonly session: PlanModeSession }
+  | { readonly kind: 'not-attached' }
+  | { readonly kind: 'not-root' };
+
 /**
  * 造 `exit_plan_mode` 工具。
  *
- * **它只會被呼叫到一次成功的路徑**：模式外的呼叫在 middleware 的 `wrapToolCall` 就
- * 被擋掉了，需要核准這件事則由核准閘門處理。所以這裡剩下的只有「關掉模式、回一句話」。
+ * **它只會被呼叫到一次成功的路徑**：root 上模式外的呼叫在 middleware 的 `wrapToolCall` 就
+ * 被擋掉了，需要核准這件事則由核准閘門處理。所以這裡剩下的是「往日誌寫一顆
+ * `plan/mode { active: false }`、回一句話」。
  *
- * 回的是 `Command` 而不是字串：這是 LangGraph 原生的「工具改狀態」，`update` 裡同時
- * 帶 state 的新值與這次呼叫的 `ToolMessage`。**`ToolMessage` 不能省**——少了它，
- * 那個 `tool_call` 永遠沒有回覆，下一輪的訊息序列是壞的。
+ * **日誌問的是這次呼叫的 config，不是組裝的閉包**（同 `@nexus/plugin-goal` 的工具，理由見
+ * `@nexus/core` 的 `sessions.ts`）。在 subagent 裡被呼叫時，`forCall` 認出來的是那個
+ * subagent 自己的日誌，而計劃模式不管那一份——那裡的 middleware 也不在（`fold.ts` 不攤），
+ * 所以擋的就是這裡：回 {@link NOT_IN_PLAN_MODE_MESSAGE}。**不標 `rootOnly`**：那會換掉
+ * subagent 看到的工具目錄，而 dsh 的「工具目錄不隨模式變動」講的正是這一件。
  *
+ * @param lookup - 認這次呼叫的日誌。
  * @returns 可以交給 `registry.tools.register()` 的工具。
  */
-function createExitPlanModeTool(): StructuredTool {
-  // `as unknown as StructuredTool`：回 `Command` 的工具，`tool()` 推出來的回傳型別參數
-  // 是那個 `Command` 的具體形狀，對不上 registry 收的泛型 `StructuredTool`。這是型別
-  // 推斷的縫，不是行為的縫——`Command` 是 LangGraph 明文支援的工具回傳值。
+function createExitPlanModeTool(lookup: (config: unknown) => PlanModeLookup): StructuredTool {
   return tool(
-    (_args: { plan: string }, config: { toolCall?: { id?: string } }) =>
-      new Command({
-        update: {
-          [PLAN_MODE_STATE_KEY]: false,
-          messages: [
-            {
-              type: 'tool',
-              content: PLAN_APPROVED_MESSAGE,
-              tool_call_id: config.toolCall?.id ?? '',
-            },
-          ],
-        },
-      }),
+    (_args: { plan: string }, config: unknown) => {
+      const found = lookup(config);
+      if (found.kind === 'not-attached') return PLAN_NOT_ATTACHED_TOOL_MESSAGE;
+      if (found.kind === 'not-root' || !found.session.active()) return NOT_IN_PLAN_MODE_MESSAGE;
+      found.session.log.append('plan/mode', { active: false });
+      return PLAN_APPROVED_MESSAGE;
+    },
     {
       name: EXIT_PLAN_MODE_TOOL_NAME,
       description: EXIT_PLAN_MODE_DESCRIPTION,
@@ -470,9 +389,11 @@ function createExitPlanModeTool(): StructuredTool {
 /**
  * 建一個計劃模式 plugin。
  *
- * 五個註冊點，各有各的理由：
+ * 六個註冊點，各有各的理由：
  *
  * - **`capabilities`**：讓別人 `requires` 得到。
+ * - **`sessions`**：接上 root 那份日誌、折它的 `plan/mode`。**只管 root**，同 goal：模式是
+ *   人對這個會話選的，subagent 沒有人可以選。
  * - **`middleware`（`prepend: true`）**：**排在核准閘門之前是必要的，不是偏好。**
  *   `fold.ts` 的順序是「`prepend` 的在前、核准閘門接著、其餘依註冊順序」，所以不
  *   `prepend` 的話，一次模式外的 `exit_plan_mode` 會先撞上核准閘門——headless 入口
@@ -491,9 +412,9 @@ function createExitPlanModeTool(): StructuredTool {
  *   [#113](https://github.com/DemianLi/nexus-agent/issues/113) 已經有的那個：web 按得
  *   下去，CLI 與 eval 走 `policy-never`。
  *
- * **工具一律註冊，不看 `startActive`。** 照 dsh：模式沒啟用時 `exit_plan_mode` 仍然
- * 留在面向模型的 schema 裡，「這樣狀態轉換不會在規劃策略變更之外額外造成工具目錄變動」。
- * 代價是 `startActive: false` 的組裝裡它是活的 schema、死的執行路徑。
+ * **工具一律註冊，不看模式。** 照 dsh：模式沒啟用時 `exit_plan_mode` 仍然留在面向模型的
+ * schema 裡，「這樣狀態轉換不會在規劃策略變更之外額外造成工具目錄變動」。代價是模式關著的
+ * 時候它是活的 schema、死的執行路徑。
  *
  * @param options - 見 {@link PlanModePluginOptions}。
  * @returns 可以放進組裝點清單的 plugin。
@@ -505,22 +426,49 @@ export function createPlanModePlugin(options: PlanModePluginOptions = {}): Nexus
   return {
     name: 'plan-mode',
     apply(registry: PluginRegistry): void {
-      // **這一格活在 `apply` 裡，不在 `createPlanModePlugin` 裡。** `load.ts` 一次組裝
-      // 呼叫一次 `plugin.apply(tracked)`，所以放這裡就是一組裝一格。放到工廠函式的
-      // 閉包裡的話，同一個 plugin 物件被兩次組裝共用時兩邊會串台——**而且串台不會拋**，
-      // 只會讓其中一邊的 `/plan` 莫名其妙回「已經在計劃模式裡了」。
-      const cell = createPlanModeCell(startActive);
+      // **這兩格活在 `apply` 裡，不在 `createPlanModePlugin` 裡。** `load.ts` 一次組裝
+      // 呼叫一次 `plugin.apply(tracked)`，所以放這裡就是一組裝一份。放到工廠函式的閉包裡
+      // 的話，同一個 plugin 物件被兩次組裝共用時兩邊會串台——`serve.ts` 每個 thread 組裝
+      // 一次，串台就是一個 thread 的 `/plan` 開到另一個 thread 的模式上，**而且不會拋**。
+      //
+      // 陣列不是單一格，理由同 goal：「剛好一份」是一個假設，`attachSession` 被呼叫兩次時
+      // 由命令當場說出來（`planAmbiguousMessage`）。表是給工具用的——工具問的是「這次呼叫
+      // 的那份日誌」，命令問的是「這次組裝的那一份」。兩者同生同滅。
+      const attachedHere: PlanModeSession[] = [];
+      const sessionsHere = new Map<SessionLog, PlanModeSession>();
+      registry.sessions.join((subject) => {
+        if (subject.address.kind !== 'root') return;
+        const session = trackPlanMode(subject, startActive);
+        attachedHere.push(session);
+        sessionsHere.set(subject.log, session);
+        return () => {
+          sessionsHere.delete(subject.log);
+          const at = attachedHere.indexOf(session);
+          if (at >= 0) attachedHere.splice(at, 1);
+        };
+      });
+
+      // middleware 只在 root 上跑，所以問組裝的那一份就對。接了不只一份時退回初值：命令那側
+      // 會把「挑不出來」講出來，這裡猜一份的話指引會照著別人的模式夾。
+      const active = (): boolean =>
+        attachedHere.length === 1 ? (attachedHere[0] as PlanModeSession).active() : startActive;
 
       registry.capabilities.provide(PLAN_MODE_CAPABILITY);
-      registry.middleware.use(createPlanModeMiddleware(guidance, startActive, cell), {
-        prepend: true,
-      });
-      registry.tools.register(createExitPlanModeTool());
+      registry.middleware.use(createPlanModeMiddleware(guidance, active), { prepend: true });
+      registry.tools.register(
+        createExitPlanModeTool((config) => {
+          const found = registry.sessions.forCall(config);
+          if (found.kind === 'not-attached') return { kind: 'not-attached' };
+          if (found.kind !== 'ok') return { kind: 'not-root' };
+          const session = sessionsHere.get(found.log);
+          return session === undefined ? { kind: 'not-root' } : { kind: 'ok', session };
+        }),
+      );
       registry.commands.register({
         name: PLAN_COMMAND_NAME,
         description: PLAN_COMMAND_DESCRIPTION,
         input: { hint: PLAN_COMMAND_HINT },
-        handler: ({ rawInput }) => planCommandResult(cell, rawInput),
+        handler: ({ rawInput }) => planCommandResult(attachedHere, rawInput),
       });
       registry.approvals.gate((exec, next) =>
         exec.name === EXIT_PLAN_MODE_TOOL_NAME

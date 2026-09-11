@@ -625,7 +625,9 @@ export function formatGoalDriverDisclosure(on: boolean, roundCap?: number): stri
  * **人自己說的那句不再印一次。** 基座把這一輪的輸入訊息掛在**第一個真的寫了東西的
  * 節點**的 update 上（實測：三個 `before_agent` 裡只有回傳非空更新的那一個帶著它）。
  * 照原樣印的話，畫面上會出現 `[nexusPlanMode.before_agent] 嗨`——看起來像那個 plugin
- * 在說話，而那句是使用者三秒前自己打的。
+ * 在說話，而那句是使用者三秒前自己打的。（那是當時唯一回非空更新的 `before_agent`；
+ * 計劃模式搬進日誌之後它沒有 `beforeAgent` 了，但這個形狀歸基座，下一個回非空更新的
+ * 節點照樣會帶著它，所以濾照舊。）
  *
  * **例外是圖自己插進來的 human 訊息，而那條路現在真的有了。** 這段註解過去寫著「哪天
  * 真的有東西從圖裡插一則 human message 進來，它也會跟著不見；今天沒有那條路」——
@@ -1327,8 +1329,8 @@ export async function runCli(options: RunCliOptions): Promise<void> {
         : resumed === undefined
           ? `會話日誌：${sessionStore.directory}`
           : // **照實講回來的是哪一半**：不講的話，使用者會以為對話也接上了（#251 的最後一段）。
-            `會話日誌：${sessionStore.directory}（續接：沙箱模式、目標與 todo 照日誌回來；` +
-            `對話與計劃模式從頭開始）`,
+            `會話日誌：${sessionStore.directory}（續接：沙箱模式、計劃模式、目標與 todo 照日誌回來；` +
+            `對話從頭開始）`,
     );
     // 第七行：**這一輪結束之後還會不會有下一輪**。前六行講的是東西往哪裡去，這一行講
     // 的是誰在推——而那是 `--goal-driver` 落地之後畫面上唯一看得出來的差別。

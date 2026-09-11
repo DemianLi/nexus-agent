@@ -1,22 +1,29 @@
-import { loadPlugins } from '@nexus/core';
-import type { CommandRegistrationPoint, CommandResult, ToolExecution } from '@nexus/core';
+import { createSessionRunner, loadPlugins, SessionLog } from '@nexus/core';
+import type {
+  CommandRegistrationPoint,
+  CommandResult,
+  PluginRegistry,
+  SessionEvent,
+  ToolExecution,
+} from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import {
   createPlanModePlugin,
   EXIT_PLAN_MODE_TOOL_NAME,
-  PLAN_MODE_STATE_KEY,
   PLAN_ALREADY_ACTIVE_MESSAGE,
   PLAN_ALREADY_INACTIVE_MESSAGE,
   PLAN_ARGS_ERROR_MESSAGE,
   PLAN_COMMAND_HINT,
   PLAN_COMMAND_NAME,
-  PLAN_ENTER_CANCELLED_MESSAGE,
   PLAN_ENTERED_MESSAGE,
-  PLAN_LEAVE_CANCELLED_MESSAGE,
   PLAN_LEFT_MESSAGE,
   PLAN_MODE_CAPABILITY,
   PLAN_MODE_MIDDLEWARE_NAME,
+  PLAN_NOT_ATTACHED_MESSAGE,
+  planAmbiguousMessage,
+  recordedPlanMode,
 } from './index.js';
+import type { PlanModePluginOptions } from './index.js';
 
 /** 直接跑 `/plan` 的 handler。REPL 那一層歸 `apps/harness` 的測試。 */
 async function runPlan(
@@ -32,62 +39,80 @@ async function runPlan(
   });
 }
 
-/** agent state 的一個快照，只有這個 middleware 認得的那一格。 */
-type StateShot = Record<string, unknown>;
-
 /**
- * 把 middleware 的兩個邊界 hook 拉出來。
+ * 把這次組裝接上一份 root 日誌，同組裝點的 `attachSession` 對參與者做的那一半。
  *
- * **型別上要轉一層**：`AgentMiddleware` 是泛的，而 `beforeAgent` / `afterAgent` 的
- * 參數型別由 `stateSchema` 靜態推出來，registry 那側看不到。我們的兩個 hook 都不看
- * 第二個參數（runtime），所以餵一個空物件就夠。
+ * **warn 一律當失敗**：參與者壞掉只換來一行 warn（日誌自己的圍堵），不當失敗的話，一個
+ * 折疊拋出來的實作在這裡會是綠的。
  */
-function boundaryHooks(middleware: unknown): {
-  beforeAgent: (state: StateShot) => unknown;
-  afterAgent: (state: StateShot) => unknown;
-} {
-  const hooks = middleware as {
-    beforeAgent?: (state: StateShot, runtime: unknown) => unknown;
-    afterAgent?: (state: StateShot, runtime: unknown) => unknown;
-  };
-  const { beforeAgent, afterAgent } = hooks;
-  if (beforeAgent === undefined || afterAgent === undefined) {
-    throw new Error('middleware 沒有掛上邊界 hook');
-  }
-  return {
-    beforeAgent: (state) => beforeAgent(state, {}),
-    afterAgent: (state) => afterAgent(state, {}),
-  };
+function attach(registry: PluginRegistry, log: SessionLog): () => void {
+  return createSessionRunner({
+    address: { kind: 'root' },
+    log,
+    installers: registry.sessions.installers(),
+    warn: (message) => {
+      throw new Error(`不該有 warn：${message}`);
+    },
+  });
 }
 
-/** 建一個掛好的計劃模式，並把命令面與邊界 hook 一起交出去。 */
-async function assemble(options?: { startActive: boolean }): Promise<{
-  commands: Pick<CommandRegistrationPoint, 'find'>;
-  beforeAgent: (state: StateShot) => unknown;
-  afterAgent: (state: StateShot) => unknown;
-}> {
+/** 建一個掛好、接上一份 root 日誌的計劃模式。`seed` 給了就是一份續接回來的日誌。 */
+async function assemble(
+  options?: PlanModePluginOptions,
+  seed?: readonly SessionEvent[],
+): Promise<{ registry: PluginRegistry; log: SessionLog }> {
   const { registry } = await loadPlugins([createPlanModePlugin(options)]);
-  const entry = registry.middleware.list()[0]?.value.middleware;
-  return { commands: registry.commands, ...boundaryHooks(entry) };
+  const log = new SessionLog('plan', seed === undefined ? {} : { seed });
+  attach(registry, log);
+  return { registry, log };
+}
+
+/** 日誌上每一顆 `plan/mode` 的值，依序。 */
+function modes(log: SessionLog): boolean[] {
+  return log.events.flatMap((event) => (event.type === 'plan/mode' ? [event.data.active] : []));
+}
+
+/** 上一個行程留下的日誌：開過一次計劃模式。 */
+function earlierEvents(active: boolean): readonly SessionEvent[] {
+  const earlier = new SessionLog('plan');
+  earlier.append('plan/mode', { active });
+  return earlier.events;
 }
 
 /**
- * 薄測試，只斷言「`apply` 真的往那四個註冊點放了東西」，加上兩條**順序**的斷言。
+ * 薄測試，只斷言「`apply` 真的往那幾個註冊點放了東西」，加上兩條**順序**的斷言。
  *
  * 計劃模式**真的有沒有作用**的驗收在組裝點（`apps/harness` 的 `plan-mode.test.ts`）
- * ——那裡看的是模型收到的 prompt 與跑完之後的 state，這裡看的是 registry 的內容。
+ * ——那裡看的是模型收到的 prompt 與跑完之後的日誌，這裡看的是 registry 的內容與 `/plan`。
  */
 describe('createPlanModePlugin', () => {
-  it('五個註冊點都放了東西', async () => {
+  it('六個註冊點都放了東西', async () => {
     const { registry } = await loadPlugins([createPlanModePlugin()]);
 
     expect(registry.capabilities.has(PLAN_MODE_CAPABILITY)).toBe(true);
+    expect(registry.sessions.installers()).toHaveLength(1);
     expect([...registry.tools.effective().keys()]).toContain(EXIT_PLAN_MODE_TOOL_NAME);
     expect(registry.middleware.list().map((entry) => entry.value.middleware.name)).toEqual([
       PLAN_MODE_MIDDLEWARE_NAME,
     ]);
     expect(registry.approvals.listeners()).toHaveLength(1);
     expect(registry.commands.list().map((entry) => entry.name)).toEqual([PLAN_COMMAND_NAME]);
+  });
+
+  /**
+   * **模式不再住在 graph state 裡。** middleware 上還有 `stateSchema` 的話，就有兩份真相——
+   * checkpointer 那一份與日誌那一份，而續接只帶得回其中一份。
+   */
+  it('middleware 沒有 stateSchema，也沒有邊界 hook', async () => {
+    const { registry } = await loadPlugins([createPlanModePlugin()]);
+    const middleware = registry.middleware.list()[0]?.value.middleware as unknown as Record<
+      string,
+      unknown
+    >;
+
+    expect(middleware.stateSchema).toBeUndefined();
+    expect(middleware.beforeAgent).toBeUndefined();
+    expect(middleware.afterAgent).toBeUndefined();
   });
 
   /**
@@ -132,104 +157,54 @@ describe('createPlanModePlugin', () => {
 });
 
 /**
- * `/plan` 的三個結果，**三個都要到得了**。
+ * `/plan` 的兩個結果，**兩個都要到得了**，而且 `committed` **當場就在日誌上**。
  *
- * `queued` 不在裡面是刻意的（見 `index.ts` 檔頭）：它要「輪還開著」才成立，而命令
- * 永遠跑在兩輪之間。這一組同時證明另外三個不是裝飾——`cancelled` 需要兩次相反的
- * 選擇之間**沒有一輪**，那正是我們唯一到得了它的路。
+ * `queued` 與 `cancelled` 不在裡面是刻意的（見 `index.ts` 檔頭）：兩個都要「輪還開著、
+ * 選擇排著還沒提交」才成立，而命令永遠跑在兩輪之間、選擇當場提交。
  */
 describe('/plan 的結果', () => {
-  /**
-   * **中間隔著一輪才有 `committed` 的第二次。** 沒有那一輪的話，`/plan` 之後的
-   * `/plan off` 是 `cancelled`——選擇還沒交出去，收回來就好。所以這一條在兩次命令
-   * 之間真的跑一次邊界：`beforeAgent` 交出 update，`afterAgent` 收下落地後的 state。
-   */
-  it('進、跑一輪、退、再退：committed → committed → noop', async () => {
-    const { commands, beforeAgent, afterAgent } = await assemble();
+  it('進、退、再退：committed → committed → noop，日誌上剛好兩顆', async () => {
+    const { registry, log } = await assemble();
 
-    expect(await runPlan(commands, '')).toEqual({
+    expect(await runPlan(registry.commands, '')).toEqual({
       kind: 'success',
       text: PLAN_ENTERED_MESSAGE,
     });
-    expect(beforeAgent({ [PLAN_MODE_STATE_KEY]: false })).toEqual({
-      [PLAN_MODE_STATE_KEY]: true,
-    });
-    afterAgent({ [PLAN_MODE_STATE_KEY]: true });
-
-    expect(await runPlan(commands, ' off')).toEqual({
+    expect(modes(log)).toEqual([true]);
+    expect(await runPlan(registry.commands, ' off')).toEqual({
       kind: 'success',
       text: PLAN_LEFT_MESSAGE,
     });
-    expect(await runPlan(commands, ' off')).toEqual({
+    expect(await runPlan(registry.commands, ' off')).toEqual({
       kind: 'success',
       text: PLAN_ALREADY_INACTIVE_MESSAGE,
     });
+    expect(modes(log)).toEqual([true, false]);
   });
 
   /**
-   * **選擇是落地之後才清的，不是送出的當下。** 照 dsh 的
-   * 「Delete only after append succeeds」：`beforeAgent` 交出去而那一輪沒把它寫進
-   * state 時，下一次邊界要再交一次，而不是把人的選擇靜靜丟掉。
+   * **上一版在這裡回 `cancelled`。** 那時選擇要等下一次 `beforeAgent` 才交出去，中間沒有
+   * 一輪的話第二次是「收回來」。現在選擇當場寫進日誌，沒有東西排著可以收——兩次都是真的。
    */
-  it('交出去而沒落地時，下一次邊界再交一次', async () => {
-    const { commands, beforeAgent } = await assemble();
+  it('/plan 之後緊接著 /plan off 是兩次 committed，不是 cancelled', async () => {
+    const { registry, log } = await assemble();
 
-    await runPlan(commands, '');
-    expect(beforeAgent({ [PLAN_MODE_STATE_KEY]: false })).toEqual({
-      [PLAN_MODE_STATE_KEY]: true,
-    });
-    // state 還是 false——那一輪沒把 update 寫進去。
-    expect(beforeAgent({ [PLAN_MODE_STATE_KEY]: false })).toEqual({
-      [PLAN_MODE_STATE_KEY]: true,
-    });
-    // 落地之後才不再重送。
-    expect(beforeAgent({ [PLAN_MODE_STATE_KEY]: true })).toBeUndefined();
-  });
-
-  /**
-   * **`exit_plan_mode` 在輪中途把模式關掉，那一格要知道。** 少了 `afterAgent` 的同步，
-   * 下一句 `/plan off` 會回「關了」——而它其實早就關了。措辭說謊比沒有措辭更糟。
-   */
-  it('輪中途被 exit_plan_mode 關掉之後，/plan off 是 noop', async () => {
-    const { commands, beforeAgent, afterAgent } = await assemble({ startActive: true });
-
-    beforeAgent({ [PLAN_MODE_STATE_KEY]: true });
-    // 這一輪裡 `exit_plan_mode` 用 `Command` 把它改成了 false。
-    afterAgent({ [PLAN_MODE_STATE_KEY]: false });
-
-    expect(await runPlan(commands, 'off')).toEqual({
+    await runPlan(registry.commands, '');
+    expect(await runPlan(registry.commands, 'off')).toEqual({
       kind: 'success',
-      text: PLAN_ALREADY_INACTIVE_MESSAGE,
+      text: PLAN_LEFT_MESSAGE,
     });
+    expect(modes(log)).toEqual([true, false]);
   });
 
-  it('同一個方向按第二次是 noop', async () => {
-    const { registry } = await loadPlugins([createPlanModePlugin({ startActive: true })]);
+  it('同一個方向按第二次是 noop，而且不寫日誌', async () => {
+    const { registry, log } = await assemble({ startActive: true });
 
     expect(await runPlan(registry.commands, '')).toEqual({
       kind: 'success',
       text: PLAN_ALREADY_ACTIVE_MESSAGE,
     });
-  });
-
-  /**
-   * **`cancelled` 的兩個方向。** 中間沒有一輪，所以上一次的選擇還在那一格裡沒交出去；
-   * 選回原本的狀態就是把它收回來，而不是「又改了一次」。
-   */
-  it('中間沒有一輪時，選回原狀態是 cancelled', async () => {
-    const off = await loadPlugins([createPlanModePlugin()]);
-    await runPlan(off.registry.commands, '');
-    expect(await runPlan(off.registry.commands, 'off')).toEqual({
-      kind: 'success',
-      text: PLAN_ENTER_CANCELLED_MESSAGE,
-    });
-
-    const on = await loadPlugins([createPlanModePlugin({ startActive: true })]);
-    await runPlan(on.registry.commands, 'off');
-    expect(await runPlan(on.registry.commands, '')).toEqual({
-      kind: 'success',
-      text: PLAN_LEAVE_CANCELLED_MESSAGE,
-    });
+    expect(modes(log)).toEqual([]);
   });
 
   /**
@@ -237,12 +212,13 @@ describe('/plan 的結果', () => {
    * 看起來成功了而其實做了相反的事。這條關係也是這個套件配套入口檢的那一條。
    */
   it('收不下的參數回 error，而且沒有改到模式', async () => {
-    const { registry } = await loadPlugins([createPlanModePlugin()]);
+    const { registry, log } = await assemble();
 
     expect(await runPlan(registry.commands, ' of')).toEqual({
       kind: 'error',
       text: PLAN_ARGS_ERROR_MESSAGE,
     });
+    expect(modes(log)).toEqual([]);
     // 沒改到模式：下一次 `/plan` 仍然是「開了」而不是「已經在裡面」。
     expect(await runPlan(registry.commands, '')).toEqual({
       kind: 'success',
@@ -252,26 +228,133 @@ describe('/plan 的結果', () => {
 });
 
 /**
- * **那一格必須是一組裝一格。**
- *
- * 它放在 `apply()` 裡而不是 `createPlanModePlugin()` 的閉包裡，因為 `load.ts` 一次組裝
- * 呼叫一次 `plugin.apply(tracked)`。放錯地方**不會拋任何東西**——兩次組裝共用一格，
- * 症狀只是第二個 agent 的 `/plan` 莫名其妙回「已經在計劃模式裡了」。所以要有人釘著。
+ * **沒有日誌的組裝寫不動模式，而它要說出來。** 命令在接線之前就註冊好了，所以這條路
+ * 走得到——回「開了」而什麼都沒發生，比回一句錯更糟。
  */
-describe('模式那一格的作用範圍', () => {
+describe('沒接、或接了不只一份', () => {
+  it('沒接會話日誌：/plan 說得出原因', async () => {
+    const { registry } = await loadPlugins([createPlanModePlugin()]);
+
+    expect(await runPlan(registry.commands, '')).toEqual({
+      kind: 'error',
+      text: PLAN_NOT_ATTACHED_MESSAGE,
+    });
+  });
+
+  /** 參數先判：打錯的參數不管有沒有接上，都落定成 `error`，配套入口那條才站得住。 */
+  it('沒接會話日誌時，打錯的參數仍然回參數的錯', async () => {
+    const { registry } = await loadPlugins([createPlanModePlugin()]);
+
+    expect(await runPlan(registry.commands, 'of')).toEqual({
+      kind: 'error',
+      text: PLAN_ARGS_ERROR_MESSAGE,
+    });
+  });
+
+  it('接了兩份：挑不出來，兩份都不動', async () => {
+    const { registry } = await loadPlugins([createPlanModePlugin()]);
+    const first = new SessionLog('plan-a');
+    const second = new SessionLog('plan-b');
+    attach(registry, first);
+    attach(registry, second);
+
+    expect(await runPlan(registry.commands, '')).toEqual({
+      kind: 'error',
+      text: planAmbiguousMessage(2),
+    });
+    expect(modes(first)).toEqual([]);
+    expect(modes(second)).toEqual([]);
+  });
+
+  it('收掉接線之後回到沒接的樣子', async () => {
+    const { registry } = await loadPlugins([createPlanModePlugin()]);
+    const detach = attach(registry, new SessionLog('plan'));
+    detach();
+
+    expect(await runPlan(registry.commands, '')).toEqual({
+      kind: 'error',
+      text: PLAN_NOT_ATTACHED_MESSAGE,
+    });
+  });
+});
+
+/**
+ * **續接回來的日誌折得出上一次的模式——而且要熬過 `session/end-seed`。**
+ *
+ * 別的配套入口都在那顆標記上重設開關，所以「在 end-seed 歸零」是這一帶最順手寫錯的那一種。
+ * seed 開出來的日誌結尾一定有一顆 end-seed，這一組的每一條都跨過它。
+ */
+describe('續接回來的日誌', () => {
+  it('上一次開著：接回來還開著，/plan 是 noop', async () => {
+    const { registry, log } = await assemble({}, earlierEvents(true));
+
+    expect(log.events.at(-1)?.type).toBe('session/end-seed');
+    expect(await runPlan(registry.commands, '')).toEqual({
+      kind: 'success',
+      text: PLAN_ALREADY_ACTIVE_MESSAGE,
+    });
+  });
+
+  /** `startActive` 只是初值：日誌上有過 `plan/mode`，就由最後那一顆說了算。 */
+  it('上一次關掉了：startActive 開著也管不到', async () => {
+    const { registry } = await assemble({ startActive: true }, earlierEvents(false));
+
+    expect(await runPlan(registry.commands, 'off')).toEqual({
+      kind: 'success',
+      text: PLAN_ALREADY_INACTIVE_MESSAGE,
+    });
+  });
+
+  it('一顆 plan/mode 都沒有的舊日誌：從 startActive 起算', async () => {
+    const earlier = new SessionLog('plan');
+    earlier.append('turn/start', { kind: 'message', text: '一' });
+    earlier.append('turn/end', {});
+    const { registry } = await assemble({ startActive: true }, earlier.events);
+
+    expect(await runPlan(registry.commands, '')).toEqual({
+      kind: 'success',
+      text: PLAN_ALREADY_ACTIVE_MESSAGE,
+    });
+  });
+});
+
+describe('recordedPlanMode', () => {
+  it('最後一顆說了算，跨得過 end-seed；一顆都沒有是 undefined', () => {
+    const log = new SessionLog('plan', { seed: earlierEvents(true) });
+    expect(recordedPlanMode(log.events)).toBe(true);
+    log.append('plan/mode', { active: false });
+    expect(recordedPlanMode(log.events)).toBe(false);
+    expect(recordedPlanMode([])).toBeUndefined();
+  });
+});
+
+/**
+ * **那兩格必須是一組裝一份。**
+ *
+ * 它們放在 `apply()` 裡而不是 `createPlanModePlugin()` 的閉包裡，因為 `load.ts` 一次組裝
+ * 呼叫一次 `plugin.apply(tracked)`。放錯地方**不會拋任何東西**——兩次組裝共用一份，
+ * 症狀是 `/plan` 回「接了兩份」，或一個 thread 的模式開到另一個 thread 上。所以要有人釘著。
+ */
+describe('模式的作用範圍', () => {
   it('同一個 plugin 物件組兩次，兩邊的模式互不相干', async () => {
     const plugin = createPlanModePlugin();
     const first = await loadPlugins([plugin]);
     const second = await loadPlugins([plugin]);
+    const firstLog = new SessionLog('plan-a');
+    const secondLog = new SessionLog('plan-b');
+    attach(first.registry, firstLog);
+    attach(second.registry, secondLog);
 
     expect(await runPlan(first.registry.commands, '')).toEqual({
       kind: 'success',
       text: PLAN_ENTERED_MESSAGE,
     });
-    // 串台的話這裡會是 `PLAN_ALREADY_ACTIVE_MESSAGE`。
+    // 串台的話這裡會是 `planAmbiguousMessage(2)` 或 `PLAN_ALREADY_ACTIVE_MESSAGE`。
     expect(await runPlan(second.registry.commands, '')).toEqual({
       kind: 'success',
       text: PLAN_ENTERED_MESSAGE,
     });
+    expect(modes(firstLog)).toEqual([true]);
+    expect(modes(secondLog)).toEqual([true]);
   });
 });

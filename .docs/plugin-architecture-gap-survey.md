@@ -277,14 +277,14 @@ Proteus 定義了「一個 harness 可以被量」的三個前提，對著我們
 | 格 | 時刻 | 現況 |
 | --- | --- | --- |
 | 1 | `agent/session-start` | [#201](https://github.com/DemianLi/nexus-agent/issues/201) 判過**不是缺口**：dsh 那格是 `mode: 'emit'`、明著寫「a deliberate gap」；權限最弱＋消費者零＋時刻以 `SessionRegistry` 的建構存在（`session-registry.ts:169` 的 `new SessionLog(...)`；#190 記的 `:170` 已漂一行），三條缺一不可 |
-| 2 | `agent/pre-step` | **佔住**：`beforeAgent`，唯一實作是 plan-mode（`packages/nexus-plugin-plan-mode/src/index.ts:390`）。`jumpTo: 'end'` 這條 reject 路徑實測做得到（[#192](https://github.com/DemianLi/nexus-agent/issues/192)）但我們零使用。權限差與**紀錄差**都登記在索引裡 |
+| 2 | `agent/pre-step` | ~~**佔住**：`beforeAgent`，唯一實作是 plan-mode（`packages/nexus-plugin-plan-mode/src/index.ts:390`）。~~ **2026-09-12 起沒有佔用者**：[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的第二刀把計劃模式搬進會話日誌，`/plan` 當場寫 `plan/mode`，那個 `beforeAgent` 跟著收掉，全樹不再有 `beforeAgent:` 實作；這一格已移出攔截索引（`apps/harness/src/interception-index.test.ts` 檔頭「沒有進索引的五格」，另有一條絆索等它長出佔用者）。`jumpTo: 'end'` 這條 reject 路徑實測做得到（[#192](https://github.com/DemianLi/nexus-agent/issues/192)）但我們零使用。**紀錄差**照舊是索引缺口帳第 2 筆 |
 | 3 | `agent/turn-stopping` | **佔住，只佔一半**：`apps/harness/src/goal-driver.ts` 做的正是 dsh 那句「通过 continuation 实现的 `stop`」——目標沒達成時自己再開一輪（[#181](https://github.com/DemianLi/nexus-agent/issues/181)）。`agent.steer()` 沒有等價物，輪迴圈歸入口點所有，載體偏離已登記在該檔檔頭 |
 | 4 | `tools/pre-execute` | **佔住**，逐字對得上：`approvals.gate()`，`allow`／`deny`／`ask` 三欄與鏈底 allow 都對得上 |
 | 7 | `tools/post-execute` | **佔住**：`wrapToolCall` 的 `await handler(request)` 之後那一段。`additionalContexts` 的射程只到單一生產者，**第二個生產者出現就變偏離** |
 
 **「會話級 vs 每次 agent 呼叫不是同一個縫」這句話是對的，不要跟過期的結論一起丟掉。** dsh 確實有 `agent/session-start` **和** `agent/pre-step` 兩個不同的事件名，橋接把 `SessionStart` 訂到前者、`UserPromptSubmit` 訂到後者——它示範的是這兩個時刻**各有專屬的縫**。原文把這個區分當成「未答的第一題」，而它已經被答了：正因為第 1 格是專屬的會話級縫，我們這側對得上的不是 `beforeAgent`，是 `SessionRegistry` 的建構，而 #201 判過那不是缺口。
 
-**`afterAgent` 我們在用**：`packages/nexus-plugin-plan-mode/src/index.ts:394`，全樹**唯一**一處實作（`beforeAgent` 同樣唯一，`:390`）。所以缺的從來不是鉤子。
+~~**`afterAgent` 我們在用**：`packages/nexus-plugin-plan-mode/src/index.ts:394`，全樹**唯一**一處實作（`beforeAgent` 同樣唯一，`:390`）。~~ **2026-09-12 起兩個都沒人用了**（#251 第二刀，理由同上一格）。結論不變：**缺的從來不是鉤子**——langchain 1.x 的 `beforeAgent`／`afterAgent` 都在，只是今天沒有佔用者。
 
 **為什麼需要（原文那兩個例子要分開，其中一個舉錯了縫）**：
 
