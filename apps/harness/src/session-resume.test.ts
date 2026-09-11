@@ -28,7 +28,7 @@ import {
   PLAN_ENTERED_MESSAGE,
 } from '@nexus/plugin-plan-mode';
 
-import { parseCliArgs, runCli } from './cli.js';
+import { parseCliArgs, RESUMED_PLAN_MODE_NOTICE, runCli } from './cli.js';
 import { SANDBOX_COMMAND_NAME } from './sandbox-mode.js';
 
 /** 分開收 stdout 與 stderr：不變量違規走的是後者。 */
@@ -131,6 +131,9 @@ describe('計劃模式跟著回來', () => {
       `/${PLAN_COMMAND_NAME}\n/exit\n`,
     );
     expect(once.stdout).toContain(PLAN_ALREADY_ACTIVE_MESSAGE);
+    // **接回來的是一個 CLI 收不了核准的狀態**：計劃交不出去，唯一的出路是人打 `/plan off`。
+    // 以前這個狀態跨不過重啟，現在跨得過，所以要在一開始就講，不是等模型被拒了才知道。
+    expect(once.stdout).toContain(RESUMED_PLAN_MODE_NOTICE);
     const twice = await cli(
       ['--workspace', workspace, '--resume', runDir],
       `/${PLAN_COMMAND_NAME}\n/exit\n`,
@@ -146,10 +149,21 @@ describe('計劃模式跟著回來', () => {
     ]);
   });
 
-  it('對照：同一個工作區不給 `--resume`，計劃模式是關的', async () => {
+  it('對照：同一個工作區不給 `--resume`，計劃模式是關的，也不講那一行', async () => {
     await cli(['--workspace', workspace, '--session-log', logs], `/${PLAN_COMMAND_NAME}\n/exit\n`);
     const { stdout } = await cli(['--workspace', workspace], `/${PLAN_COMMAND_NAME}\n/exit\n`);
     expect(stdout).toContain(PLAN_ENTERED_MESSAGE);
+    expect(stdout).not.toContain(RESUMED_PLAN_MODE_NOTICE);
+  });
+
+  it('接回來的計劃模式是關的：不講那一行', async () => {
+    await cli(
+      ['--workspace', workspace, '--session-log', logs],
+      `/${PLAN_COMMAND_NAME}\n/${PLAN_COMMAND_NAME} off\n/exit\n`,
+    );
+    const runDir = join(logs, (await readdir(logs))[0]!);
+    const { stdout } = await cli(['--workspace', workspace, '--resume', runDir]);
+    expect(stdout).not.toContain(RESUMED_PLAN_MODE_NOTICE);
   });
 });
 
