@@ -48,6 +48,14 @@ export const commandsInvariant: InvariantInstaller = (subject, fail) => {
   let open: string | undefined;
 
   subject.observe((event) => {
+    if (event.type === 'session/end-seed') {
+      // seed 結尾沒落定的那一個屬於上一個行程——它等不到自己的 `command/done` 了。不重設
+      // 的話，resume 之後的第一個命令必然報「上一個還沒落定」
+      // （[#251](https://github.com/DemianLi/nexus-agent/issues/251)）。`seen` 不動：
+      // `commandId` 帶每個執行器自己的亂數段，跨行程不會撞。
+      open = undefined;
+      return;
+    }
     if (event.type === 'command/run') {
       const { commandId } = event.data;
       if (seen.has(commandId)) {

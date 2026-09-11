@@ -55,8 +55,9 @@ pnpm --filter @nexus/harness run cli:live "..."             # 換成真實供應
 這三樣。核准之後**只有那一個檔的下一次變更**在升上去的那一格跑，用完就沒了，session 的
 模式不動。不比現在寬的請求不會去問人。
 **沒有 `--workspace` 的組裝不會有 `/sandbox`、那句話，也不會有升級工具**：一格圍堵都沒有的時候
-講「目前是 workspace-write」是說謊。**模式不跨重啟**，重開一個行程就回到 `--sandbox` 那一格
-（會話 resume 的門還關著，見 [#203](https://github.com/DemianLi/nexus-agent/issues/203)）。
+講「目前是 workspace-write」是說謊。**模式跨得過重啟，但只在 CLI**：`--resume <run 目錄>` 讀回
+上一次的日誌，模式照最後一顆 `sandbox/mode` 回來（見下面「接著上一次跑下去」）。serve 還沒有
+resume，重開一條 thread 仍然回到 `--sandbox` 那一格。
 
 **會話日誌預設不落盤。** `--session-log <dir>` 給了才寫，缺席就是只在記憶體裡活著
 （banner 上第六行會說現在是哪一種）。沒有預設路徑是刻意的：日誌裡有你打的每一句話，
@@ -83,9 +84,16 @@ thread id 是呼叫端給的，所以編碼必須是單射的，不然兩條 thr
   只有這一份讀得出來。
 
 留得住**不等於**往家目錄丟 —— 上面那條理由沒有變，日誌裡有你打的每一句話，路徑仍然
-是一個該由人做的決定。今天樹上**沒有任何回讀路徑**（`SessionStore` 只有 `create`），
-所以這兩份東西唯一的讀者是後來自己去 grep 的人，而人要 grep 得到，檔案得還在。
+是一個該由人做的決定。JSONL 今天有一個讀方——CLI 的 `--resume`（下一段）；除此之外，
+這兩份東西的讀者是後來自己去 grep 的人，而人要 grep 得到，檔案得還在。
 在意的是哪一筆、判別式怎麼寫，見 [#187](https://github.com/DemianLi/nexus-agent/issues/187)。
+
+**接著上一次跑下去（只有 CLI）。** `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
+往同一個檔續寫。**回來的是住在日誌上的那一半**：沙箱模式、目標（授權打回 disarmed，要
+`/goal resume` 才會再往下走）與 todo。**對話與計劃模式從頭開始**——訊息住在 checkpointer 裡，
+那扇門不開；計劃模式要搬進日誌是下一刀（[#251](https://github.com/DemianLi/nexus-agent/issues/251)）。
+它不能配 `--sandbox`（模式從日誌來，要換就接起來之後 `/sandbox`）或 `--session-log`（就寫回
+那個目錄）。**兩個行程同時接同一個目錄會撞號**——我們沒有 dsh 那道寫租約。
 
 **目標不會自己往下走，除非你說可以。** `--goal-driver` 打開之後，一個 active 的目標在
 每一輪落定時會自己再開一輪，直到它被完成、被擋住，或用完自己的 `max_goal_rounds`

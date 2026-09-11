@@ -102,6 +102,13 @@ export const todoSnapshotInvariant: InvariantInstaller = (subject, fail) => {
         open = false;
         break;
       }
+      case 'session/end-seed': {
+        // seed 之前沒收的那一輪屬於上一個行程（`@nexus/core` 那條 turn 配對同一個理由，
+        // [#251](https://github.com/DemianLi/nexus-agent/issues/251)）。`hasTurns` 不動：
+        // 這份日誌見過輪這件事，resume 之後仍然是真的。
+        open = false;
+        break;
+      }
       case 'todo/write': {
         validateTodos(event.data.todos, event.seq, fail);
         if (hasTurns && !open) fail(`todo/write（seq ${event.seq}）落在任何開著的輪之外`);

@@ -305,3 +305,53 @@ describe('當前這一段物理輪次', () => {
     expect(hasUnansweredInterrupt(events)).toBe(false);
   });
 });
+
+/**
+ * 續接回來的日誌：**「當前這一段」不往 `session/end-seed` 之前找**
+ * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
+ *
+ * 那顆之前的輪屬於上一個行程——開著沒收，是當掉還是被關掉，這裡分不出來也不必分。
+ */
+describe('當前這一段停在 `session/end-seed`', () => {
+  /** 上一個行程的樣子：`events` 裡的每一顆照順序 append。 */
+  function earlier(build: (log: SessionLog) => void): SessionLog {
+    const log = new SessionLog('seed');
+    build(log);
+    return new SessionLog('seed', { seed: log.events });
+  }
+
+  it('上一個行程當在輪中：續接之後這個行程裡一輪都還沒開始', () => {
+    const resumed = earlier((log) => {
+      log.append('turn/start', { kind: 'message', text: '跑到一半' });
+    });
+    expect(currentTurnStart(resumed.events)).toBe(-1);
+    // 反例：同一串事件不經 seed，頭就是那一顆。
+    expect(currentTurnStart(resumed.events.slice(0, -1))).toBe(0);
+  });
+
+  it('續接之後開的第一輪就是當前這一段的頭', () => {
+    const resumed = earlier((log) => {
+      log.append('turn/start', { kind: 'message', text: '跑到一半' });
+    });
+    resumed.append('turn/start', { kind: 'message', text: '新的一輪' });
+    expect(currentTurnStart(resumed.events)).toBe(2);
+  });
+
+  /**
+   * 停在核准點收工的日誌：那張卡住在 checkpointer 裡，這個行程沒有人答得了。
+   *
+   * **照實記下它的作用面有多窄**：不停在 end-seed 的話，續行判的是 `interrupt-pending`；
+   * 停了判的是 `no-turn`。兩個都是閒著，而人一開口就開了新的一輪、當前這一段跟著換掉——
+   * 所以這一格差的是「閒著的理由講不講得對」，不是續行排不排得出來。
+   */
+  it('上一個行程停在核准點：續接之後不說「有一顆中斷等著人答」', () => {
+    const resumed = earlier((log) => {
+      log.append('turn/start', { kind: 'message', text: '要寫檔' });
+      log.append('interrupt/raised', { interruptId: 'i-1' });
+      log.append('turn/end', {});
+    });
+    expect(hasUnansweredInterrupt(resumed.events)).toBe(false);
+    // 反例：不經 seed 的話，那一顆中斷就在當前這一段裡。
+    expect(hasUnansweredInterrupt(resumed.events.slice(0, -1))).toBe(true);
+  });
+});

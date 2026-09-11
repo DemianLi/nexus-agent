@@ -200,3 +200,38 @@ describe('plugin', () => {
     expect(companions[0]!.packageName).toBe('@nexus/core');
   });
 });
+
+/**
+ * 續接：**seed 結尾那一輪開著，是上一個行程跑到一半，不是這個行程的違規**
+ * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
+ */
+describe('在 `session/end-seed` 重設', () => {
+  it('上一個行程當在輪中，續接之後的第一顆 `turn/start` 不吵', () => {
+    const earlier = new SessionLog('cli');
+    earlier.append('turn/start', { kind: 'message', text: '跑到一半' });
+    const resumed = new SessionLog('cli', { seed: earlier.events });
+    const violations = watch(resumed);
+    resumed.append('turn/start', { kind: 'message', text: '接著來' });
+    resumed.append('turn/end', {});
+    expect(violations).toEqual([]);
+  });
+
+  /** 反例：拿掉 end-seed 那一格重設的話就是這個樣子——同一串事件不經 seed。 */
+  it('反例：同一串事件不經 seed，第二顆 `turn/start` 照樣報', () => {
+    const log = new SessionLog('cli');
+    const violations = watch(log);
+    log.append('turn/start', { kind: 'message', text: '跑到一半' });
+    log.append('turn/start', { kind: 'message', text: '接著來' });
+    expect(violations.map((error) => error.message)).toEqual([
+      expect.stringContaining('turn/start（seq 1）來的時候上一輪還開著'),
+    ]);
+  });
+
+  it('重設不放過這個行程自己的違規：end-seed 之後的輪照樣要配對', () => {
+    const resumed = new SessionLog('cli', { seed: [] });
+    const violations = watch(resumed);
+    resumed.append('turn/start', { kind: 'message', text: '一' });
+    resumed.append('turn/start', { kind: 'message', text: '二' });
+    expect(violations).toHaveLength(1);
+  });
+});
