@@ -92,16 +92,18 @@
  * 開放問題**——「某個範圍可能隱藏工具，卻保留指引」在這個載體下不可能發生，指引跟著
  * 工具一起出現、一起消失。
  *
- * **當初兩句沒有照抄，現在一句回來一句照樣不抄**：
+ * **當初兩句沒有照抄，現在兩句都回來了**：
  *
  * - 「at least N consecutive goal rounds」——**回來了**。機制回來，句子就得回來，不然
  *   模型會撞上一道沒有人告訴過它的門檻。N 由 {@link GoalToolPolicy} 決定，所以這句是
  *   算出來的不是寫死的。
- * - 「After session resume or fork, an active goal is disarmed…」——**照樣不抄**，而且
- *   理由跟驅動器從來無關：那句話要求模型在恢復之後主動 `resume` 重新授權，而我們
- *   **沒有回讀路徑**（[#172](https://github.com/DemianLi/nexus-agent/issues/172) 的
- *   seeded／rehydrate 明著沒做），所以「相位 active 但 activation 是 disarmed」這個狀態
- *   走不到。有回讀那天它才該回來。
+ * - 「After session resume or fork, an active goal is disarmed…」——**回來了，去掉 fork**。
+ *   當初不抄的理由是「沒有回讀路徑，所以『相位 active 但 activation 是 disarmed』這個狀態
+ *   走不到」，並且寫著「有回讀那天它才該回來」。那一天是
+ *   [#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A：CLI 的 `--resume`
+ *   回來的 active 目標**就是** disarmed。不講的話，模型看到 `disarmed` 不知道為什麼，也不
+ *   知道要等人開口才能 `resume`。**fork 那半句不抄**：我們沒有 fork。它接在 `get_goal` 的
+ *   說明裡，因為我們的政策文字本來就分在工具說明上，沒有 dsh 那段 `guidance()`。
  *
  * 這是模型看得到的文字，**一句寫錯的代價比一個沒實作的分支大**。
  *
@@ -115,8 +117,8 @@
  *   的話，2026-09-05 量掉了**——見 {@link GOAL_CREATE_MAX_ROUNDS_DESCRIPTION}。
  * - `roundsStarted`——**現在是活的**：被準入的每一輪推進它。當初那句「stays 0」同上。
  * - `activation`——即時觀察值，`GoalService` 從 `disarmed` 開始，而**重放不會重新授權**。
- *   這一格**沒有變**：今天仍然沒有回讀路徑（見上面那句照樣不抄的理由），所以「相位
- *   active 但 activation 是 disarmed」這個狀態仍然走不到。
+ *   **這一格現在走得到了**：`--resume` 回來的 active 目標就是 disarmed，上面那句回來的
+ *   理由同一條。
  *
  * **這三格是 `model-facing-surface-is-more-than-prose` 那條規則的作用面**：丟掉或改寫
  * 一句政策文字時，schema 的 `describe` 與輸出欄位要一起掃過，它們同樣是模型讀得到的。
@@ -384,7 +386,9 @@ function toRef(rawId: string, revision: number): GoalRef | undefined {
 const GET_DESCRIPTION =
   'Read the current session goal: its exact id and revision, objective, phase, round cap, ' +
   'rounds started so far, and blocker reason when present. Returns {"goal":null} when there ' +
-  'is none. Call this before update_goal and copy its exact goal_id and revision. When ' +
+  'is none. Call this before update_goal and copy its exact goal_id and revision. After ' +
+  'session resume, an active goal is disarmed: when a human asks to continue or resume in any ' +
+  'wording or language, use update_goal action resume to rearm it. When ' +
   'automatic continuation is enabled, an active goal is given further rounds in this same ' +
   'session until it is completed, blocked, or reaches maxGoalRounds.';
 

@@ -199,6 +199,9 @@ describe('接在註冊表上', () => {
         handles.push(stored);
         return stored;
       },
+      resume() {
+        return Promise.reject(new Error('這一條不續接'));
+      },
     };
     const persistence = attachSessionPersistence(sessions, store, { cwd: '/w' });
     // **後來才出生的那一份也自動有**——subagent 的日誌是懶建的。
@@ -217,5 +220,66 @@ describe('接在註冊表上', () => {
 
     await persistence.dispose();
     expect(handles.every((handle) => handle.closes === 1)).toBe(true);
+  });
+});
+
+describe('續接：只寫還沒存的後綴', () => {
+  /**
+   * [#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A。seed 那幾筆是從把手讀回來
+   * 的，再送一次會跟已存的撞號——所以協調器要從已存筆數之後開始送，而第一筆就是那顆
+   * `session/end-seed`。
+   */
+  it('seed 那幾筆不再送，第一筆是 `session/end-seed`，後面照常接', async () => {
+    const earlier = new SessionLog('root-r');
+    earlier.append('turn/start', { kind: 'message', text: '一' });
+    earlier.append('turn/end', {});
+    const sessions = new SessionRegistry('root-r', { rootSeed: earlier.events });
+    const resumed = fakeStored();
+    const created: string[] = [];
+    const store: SessionStore = {
+      create(header) {
+        created.push(header.id);
+        return fakeStored();
+      },
+      resume() {
+        return Promise.reject(new Error('協調器不該自己去續接'));
+      },
+    };
+    const persistence = attachSessionPersistence(sessions, store, {
+      resumedRoot: { stored: resumed, storedCount: earlier.length },
+    });
+    sessions.root.append('turn/start', { kind: 'message', text: '二' });
+    await persistence.flush();
+
+    expect(resumed.written.map((event) => [event.seq, event.type])).toEqual([
+      [2, 'session/end-seed'],
+      [3, 'turn/start'],
+    ]);
+    // root 走的是續寫的把手，**沒有**替它 `create` 一份新的。
+    expect(created).toEqual([]);
+    // subagent 是這個行程新出生的，照常 `create`。
+    sessions.open({ kind: 'subagent', runId: 'r1' }).append('todo/write', { todos: [] });
+    await persistence.dispose();
+    expect(created).toEqual(['root-r/r1']);
+  });
+
+  /** 反例：已存筆數不給的話，seed 那兩筆會被重送——撞號就是這個樣子。 */
+  it('反例：不給已存筆數就從 seq 0 重送一次', async () => {
+    const earlier = new SessionLog('root-r');
+    earlier.append('turn/start', { kind: 'message', text: '一' });
+    earlier.append('turn/end', {});
+    const log = new SessionLog('root-r', { seed: earlier.events });
+    const stored = fakeStored();
+    const coordinator = new SessionPersistenceCoordinator({ log, stored });
+    await coordinator.flush();
+    expect(stored.written.map((event) => event.seq)).toEqual([0, 1, 2]);
+    await coordinator.dispose();
+  });
+
+  it('已存筆數比日誌還長就拒絕——那不是續接，是接錯了檔', () => {
+    const log = new SessionLog('root-r');
+    expect(
+      () => new SessionPersistenceCoordinator({ log, stored: fakeStored(), storedCount: 1 }),
+    ).toThrow(/已存筆數 1 對不上日誌長度 0/);
   });
 });

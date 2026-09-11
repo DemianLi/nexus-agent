@@ -65,12 +65,12 @@
  *   所以任何驗結論的測試都不會紅；補這個洞的絆索見
  *   [#203](https://github.com/DemianLi/nexus-agent/issues/203)。
  *
- *   **今天真正的理由是：耐久了，但沒有讀方。** `jsonl-session-store.ts` 檔頭逐字「我們
- *   今天沒有讀方」——三個入口都沒有跨重啟的續接
- *   （[#155](https://github.com/DemianLi/nexus-agent/issues/155)）。搬過去只是把模式狀態
- *   寫進一份沒有人回讀的檔案，仍然換不到下面那句話裡丟掉的任何一樣東西；而且它還要
- *   `SessionEventType` 再長一種 `plan/mode`，那是另一個要自己說得出理由的決定。
- *   **日誌長出回讀路徑那天，這一段要重寫。**
+ *   **上一版的理由是「耐久了，但沒有讀方」，而讀方那一天也到了**：CLI 的 `--resume`
+ *   （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）讀得回日誌，沙箱模式
+ *   就是這樣跨過重啟的。**計劃模式因此是那張卡上唯一一個「只開門 A 會悄悄消失」的狀態**：
+ *   重開之後沙箱模式回來、計劃模式回到關著。搬不搬進日誌（dsh 的 `plan/mode`）是 #251 的
+ *   第二刀——它是一次偏離的收回，不只是 `SessionEventType` 多長一種事件，所以沒有跟第一刀
+ *   一起做。在它落地之前**計劃模式不跨重啟**，README 與 `--resume` 的披露都照這個講。
  * - **`SessionEventType` 是 `@nexus/core` 的封閉 union**，沒有 dsh 那種宣告合併，而
  *   [#101](https://github.com/DemianLi/nexus-agent/issues/101) 已經明文把「加會話事件
  *   種類」排除在包自有不變量之外。

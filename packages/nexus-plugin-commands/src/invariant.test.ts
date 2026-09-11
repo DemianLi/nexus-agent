@@ -153,3 +153,57 @@ describe('接線', () => {
     ]);
   });
 });
+
+/** 接上 commands 的配套入口，**日誌由呼叫的人給**——`watched` 開的是一份新的，接不了 seed。 */
+function watchedLog(log: SessionLog): string[] {
+  const registry = createRegistry();
+  const leave = registry.enter(origin);
+  createCommandsInvariantPlugin().apply(registry);
+  leave();
+  const violations: string[] = [];
+  createInvariantRunner({
+    log,
+    companions: registry.invariants.companions(),
+    onViolation: (error: InvariantError) => violations.push(error.message),
+    warn: (message) => {
+      throw new Error(`檢查自己壞了：${message}`);
+    },
+  });
+  return violations;
+}
+
+/**
+ * 續接：seed 結尾沒落定的那一個屬於上一個行程，它等不到自己的 `command/done` 了
+ * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
+ */
+describe('在 `session/end-seed` 重設', () => {
+  it('上一個行程的命令沒落定，續接之後的第一個命令不吵', () => {
+    const earlier = new SessionLog('t');
+    run(earlier, 'cmd-a-1');
+    const resumed = new SessionLog('t', { seed: earlier.events });
+    const violations = watchedLog(resumed);
+    run(resumed, 'cmd-b-1');
+    done(resumed, 'cmd-b-1');
+    expect(violations).toEqual([]);
+  });
+
+  /** 反例：拿掉重設的話就是這個樣子——同一串事件不經 seed。 */
+  it('反例：同一串事件不經 seed，第二個命令報上一個還沒落定', () => {
+    const log = new SessionLog('t');
+    const violations = watchedLog(log);
+    run(log, 'cmd-a-1');
+    run(log, 'cmd-b-1');
+    expect(violations).toEqual([expect.stringContaining('還沒落定')]);
+  });
+
+  /** `seen` 不跟著重設：`commandId` 帶執行器自己的亂數段，撞了就是真的撞了。 */
+  it('續接之後重用上一個行程的 `commandId` 照樣報', () => {
+    const earlier = new SessionLog('t');
+    run(earlier, 'cmd-a-1');
+    done(earlier, 'cmd-a-1');
+    const resumed = new SessionLog('t', { seed: earlier.events });
+    const violations = watchedLog(resumed);
+    run(resumed, 'cmd-a-1');
+    expect(violations).toEqual([expect.stringContaining('重複用了 commandId')]);
+  });
+});

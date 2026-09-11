@@ -49,6 +49,15 @@ export interface SessionPersistenceCoordinatorOptions {
   readonly warn?: (message: string) => void;
   /** 批次窗口，毫秒。省略即 {@link DEFAULT_PERSISTENCE_WINDOW_MS}。 */
   readonly windowMs?: number;
+  /**
+   * 日誌前面有幾筆**已經在把手那一側了**。省略即 0。
+   *
+   * 續接（[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）用它：一份帶
+   * seed 開出來的日誌，seed 那幾筆就是從把手讀回來的，再送一次會跟已存的撞號。照 dsh 的
+   * `storedCount` ＋ `appendUnstoredSuffix`——只寫還沒存的後綴，第一筆就是那顆
+   * `session/end-seed`。
+   */
+  readonly storedCount?: number;
 }
 
 /**
@@ -84,7 +93,14 @@ export class SessionPersistenceCoordinator {
         console.warn(message);
       });
     this.#windowMs = options.windowMs ?? DEFAULT_PERSISTENCE_WINDOW_MS;
-    this.#pending.push(...options.log.events);
+    const storedCount = options.storedCount ?? 0;
+    if (!Number.isSafeInteger(storedCount) || storedCount < 0 || storedCount > options.log.length) {
+      throw new Error(
+        `會話 "${options.log.sessionId}" 的已存筆數 ${String(storedCount)} 對不上日誌長度 ` +
+          `${String(options.log.length)}。`,
+      );
+    }
+    this.#pending.push(...options.log.events.slice(storedCount));
     this.#unsubscribe = options.log.subscribe((event) => {
       this.#pending.push(event);
       this.#schedule();
@@ -204,13 +220,20 @@ export class SessionPersistenceCoordinator {
  *
  * @param sessions - 這次組裝的會話註冊表。
  * @param store - 後端。
- * @param options - `cwd` 進 header；`warn` 轉給每個協調器。
+ * @param options - `cwd` 進 header；`warn` 轉給每個協調器；`resumedRoot` 是續接時 root 那一份
+ *   **接著寫**的把手與它已存的筆數——給了就不替 root `create`（見
+ *   {@link SessionPersistenceCoordinatorOptions.storedCount}）。subagent 那些照常 `create`：
+ *   它們是這個行程新開的。
  * @returns `flush()` 把每一份都排空（響亮）；`dispose()` 退訂並收掉每一份（響亮）。
  */
 export function attachSessionPersistence(
   sessions: SessionRegistry,
   store: SessionStore,
-  options: { readonly cwd?: string; readonly warn?: (message: string) => void } = {},
+  options: {
+    readonly cwd?: string;
+    readonly warn?: (message: string) => void;
+    readonly resumedRoot?: { readonly stored: StoredSession; readonly storedCount: number };
+  } = {},
 ): { flush(): Promise<void>; dispose(): Promise<void> } {
   const coordinators: SessionPersistenceCoordinator[] = [];
   const unobserve = sessions.observe(({ address, log }) => {
@@ -222,10 +245,12 @@ export function attachSessionPersistence(
       // 血緣：subagent 那些的 id 是 `<root>/<runId>`，root 就是它的父。
       ...(address.kind === 'subagent' && { parentSession: sessions.root.sessionId }),
     };
+    const resumed = address.kind === 'root' ? options.resumedRoot : undefined;
     coordinators.push(
       new SessionPersistenceCoordinator({
         log,
-        stored: store.create(header),
+        stored: resumed?.stored ?? store.create(header),
+        ...(resumed !== undefined && { storedCount: resumed.storedCount }),
         ...(options.warn !== undefined && { warn: options.warn }),
       }),
     );

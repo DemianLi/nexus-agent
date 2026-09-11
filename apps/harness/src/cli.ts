@@ -27,6 +27,7 @@ import type {
   CommandRegistrationPoint,
   InvariantError,
   NexusPlugin,
+  SessionEvent,
   SessionTelemetrySharingStatus,
 } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
@@ -41,7 +42,7 @@ import {
   deriveApprovalChannel,
   type SessionLog,
 } from '@nexus/core';
-import { createJsonlSessionStore } from './jsonl-session-store.js';
+import { createJsonlSessionStore, openJsonlSessionStore } from './jsonl-session-store.js';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant';
 import { createAskUserInvariantPlugin } from '@nexus/plugin-ask-user/invariant';
@@ -67,7 +68,11 @@ import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
 import type { NexusAgentHandle } from './agent-factory.js';
 import { isSandboxMode, SANDBOX_MODES, ContainedFilesystemBackend } from './contained-backend.js';
 import { createSandboxPolicyPlugin } from './sandbox-policy.js';
-import { SANDBOX_COMMAND_NAME, SandboxModeController } from './sandbox-mode.js';
+import {
+  recordedSandboxMode,
+  SANDBOX_COMMAND_NAME,
+  SandboxModeController,
+} from './sandbox-mode.js';
 import type { SandboxMode } from './contained-backend.js';
 import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MODEL_ID } from './live-model.js';
 import { toAgentInvocation } from './messages.js';
@@ -111,6 +116,20 @@ export interface CliInvocation {
    */
   readonly sessionLog?: string;
   /**
+   * 續接一個既有的 run 目錄——上一次 `--session-log` 寫出來的那一個
+   * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
+   *
+   * **回來的是住在日誌上的那一半**：沙箱模式、目標（授權打回 `disarmed`，要人 `/goal resume`）、
+   * todo。**對話從空的開始**——訊息住在 checkpointer 裡，而那扇門（門 B）這張卡決定不開。
+   * **計劃模式也從關著開始**：它今天住在 graph state，搬進日誌是 #251 的第二刀。
+   *
+   * **不配 `--sandbox`**：模式從日誌來，兩個來源不管誰贏，另一個都是靜靜被丟掉——一個打了
+   * `--sandbox read-only` 的人可能落在 `workspace-write` 裡。要換就接起來之後 `/sandbox`，
+   * 那一次會記進日誌。**不配 `--session-log`**：續接就寫回那個目錄，給兩個等於兩個寫入
+   * 目的地。
+   */
+  readonly resume?: string;
+  /**
    * 一個 active 的目標沒達成時自己再開一輪（[#180](https://github.com/DemianLi/nexus-agent/issues/180)）。
    *
    * **預設關，而且那是一個決定不是保守。** dsh 的續行驅動器是「需要你刻意掛載的可選消費
@@ -150,6 +169,9 @@ export const USAGE = `用法：cli [選項] [要說的話...]
                        預設 workspace-write（可寫根之內放行）；要配 --workspace
   --session-log <dir>  把會話日誌寫進這個目錄底下（省略即不落盤）
                        它不能在 --workspace 底下：日誌是基礎建設，不是 agent 的工作區
+  --resume <run 目錄>  接著上一次 --session-log 寫出來的那個 run 目錄跑下去：
+                       沙箱模式、目標與 todo 照日誌回來，對話從空的開始
+                       不能配 --sandbox（模式從日誌來）或 --session-log（就寫回那個目錄）
   --goal-driver        一個 active 的目標沒達成時自己再開一輪（預設關）
   --max-goal-rounds <n>
                        這一次呼叫最多讓它排幾輪（要配 --goal-driver）
@@ -179,6 +201,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
         workspace: { type: 'string' },
         sandbox: { type: 'string' },
         'session-log': { type: 'string' },
+        resume: { type: 'string' },
         'goal-driver': { type: 'boolean', default: false },
         'max-goal-rounds': { type: 'string' },
         help: { type: 'boolean', default: false },
@@ -197,6 +220,25 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   if (values.workspace !== undefined && values.workspace.trim() === '') {
     throw new Error(`--workspace 要給一個目錄路徑。\n\n${USAGE}`);
   }
+  // **續接的衝突先講**：`--resume --sandbox read-only` 沒配 `--workspace` 的話，下一行會先
+  // 報「--sandbox 要配 --workspace」，而那不是這個人真正做錯的事。
+  const resume = values.resume;
+  if (resume !== undefined) {
+    if (resume.trim() === '') throw new Error(`--resume 要給一個 run 目錄。\n\n${USAGE}`);
+    if (values.sandbox !== undefined) {
+      throw new Error(
+        `--resume 不能配 --sandbox：續接的模式從日誌來，兩個一起給的話不管誰贏，另一個都是` +
+          `靜靜被丟掉。要換模式，接起來之後用 /${SANDBOX_COMMAND_NAME} 切——那一次會記進日誌。` +
+          `\n\n${USAGE}`,
+      );
+    }
+    if (values['session-log'] !== undefined) {
+      throw new Error(
+        `--resume 不能配 --session-log：續接就寫回那個 run 目錄，給兩個等於兩個寫入目的地。` +
+          `\n\n${USAGE}`,
+      );
+    }
+  }
   const sandbox = parseSandboxMode(values.sandbox, values.workspace, USAGE);
   const sessionLog = values['session-log'];
   if (sessionLog !== undefined && sessionLog.trim() === '') {
@@ -214,6 +256,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     ...(values.workspace !== undefined && { workspace: values.workspace }),
     ...(sandbox !== undefined && { sandbox }),
     ...(sessionLog !== undefined && { sessionLog }),
+    ...(resume !== undefined && { resume }),
     goalDriver,
     ...(maxGoalRounds !== undefined && { maxGoalRounds }),
     help: values.help === true,
@@ -309,12 +352,39 @@ export function resolveSessionLogDir(
   cwd: string,
 ): string | undefined {
   if (invocation.sessionLog === undefined) return undefined;
-  const directory = resolve(cwd, invocation.sessionLog);
-  if (invocation.workspace === undefined) return directory;
-  const workspace = resolve(cwd, invocation.workspace);
+  return outsideWorkspace(invocation.sessionLog, invocation.workspace, cwd, '--session-log');
+}
+
+/**
+ * 把 `--resume` 解析成絕對路徑。擋掉的東西與 {@link resolveSessionLogDir} 同一條：續接之後
+ * 新事件寫回那個目錄，所以它落在可寫根底下的後果跟 `--session-log` 一模一樣。
+ *
+ * @param invocation - 解析出來的呼叫。
+ * @param cwd - 相對路徑的解析基準。
+ * @returns 絕對路徑，或沒給 `--resume` 時的 `undefined`。
+ * @throws 它落在 `--workspace` 底下。
+ */
+export function resolveResumeDir(
+  invocation: Pick<CliInvocation, 'resume' | 'workspace'>,
+  cwd: string,
+): string | undefined {
+  if (invocation.resume === undefined) return undefined;
+  return outsideWorkspace(invocation.resume, invocation.workspace, cwd, '--resume');
+}
+
+/** 兩個日誌目錄旗標共用的那道檢查。**一份**，理由同 {@link resolveSessionLogDir} 的呼叫端。 */
+function outsideWorkspace(
+  path: string,
+  workspacePath: string | undefined,
+  cwd: string,
+  flag: string,
+): string {
+  const directory = resolve(cwd, path);
+  if (workspacePath === undefined) return directory;
+  const workspace = resolve(cwd, workspacePath);
   if (directory === workspace || directory.startsWith(`${workspace}${sep}`)) {
     throw new Error(
-      `--session-log 不能在 --workspace 底下（${directory} 在 ${workspace} 之內）。` +
+      `${flag} 不能在 --workspace 底下（${directory} 在 ${workspace} 之內）。` +
         `會話日誌是基礎建設，不是 agent 的工作區——寫在可寫根裡，模型讀得到也改得動整份對話史。`,
     );
   }
@@ -621,6 +691,9 @@ type NexusAgent = NexusAgentHandle['agent'];
  *   [`serve.ts`](./serve.ts) 刻意不傳，維持預設的「有人在」——瀏覽器那端真的按得下去。
  *   CLI 這條傳 {@link HEADLESS_APPROVALS}，因為它收不了核准決定
  *   （[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
+ * @param rootSeed - root 日誌的 seed：續接時上一個行程留下的事件（`--resume`，
+ *   [#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。省略即一份新日誌。
+ *   serve 不傳——它還沒有 resume。
  * @returns 組好的 agent、收掉它的方法，與它用的 model。
  * @throws 清單載入失敗、fold 前置條件不成立，或基座擋下這份組裝。
  */
@@ -630,6 +703,7 @@ export async function createCliAgent(
   cwd: string = process.cwd(),
   onInvariantViolation?: (error: InvariantError) => void,
   approvals?: ApprovalPolicy,
+  rootSeed?: readonly SessionEvent[],
 ): Promise<{
   agent: NexusAgent;
   dispose: () => Promise<void>;
@@ -716,7 +790,7 @@ export async function createCliAgent(
   });
   // 註冊表跟 agent 同壽命：REPL 是一條連續對話，`seq` 要跨輪連續才有意義。**subagent 的
   // 那些日誌也掛在它上面**，第一次有人要寫的時候才出生（見 `SessionRegistry` 的偏離）。
-  const sessions = new SessionRegistry(THREAD_ID);
+  const sessions = new SessionRegistry(THREAD_ID, rootSeed === undefined ? {} : { rootSeed });
   const sessionLog = sessions.root;
   // **這裡不接線。** 這個工廠兩條路都在用，而 serve 那條不用這份 `sessionLog`——它一個
   // thread 一份，接線點在 {@link ./wire-handler.ts} 建 pump 的那一刻。在這裡接等於幫
@@ -1129,6 +1203,27 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // **在載 plugin、建 agent 之前解析**：一個指錯地方的 `--session-log` 該在什麼都還沒
   // 起來的時候就講，而不是等到第一筆事件寫不進去。
   const sessionLogDir = resolveSessionLogDir(invocation, options.cwd ?? process.cwd());
+  // **續接也在建 agent 之前讀**：沙箱模式的起始那一格與 root 日誌的 seed 都是組裝時就要給的
+  // 東西，而讀不到（沒有那個目錄、版本太新、壞檔）也該在什麼都還沒起來的時候就講。
+  const resumeDir = resolveResumeDir(invocation, options.cwd ?? process.cwd());
+  const resumeStore =
+    resumeDir === undefined ? undefined : openJsonlSessionStore({ directory: resumeDir });
+  const resumed = resumeStore === undefined ? undefined : await resumeStore.resume(THREAD_ID);
+  // 模式從日誌來；那一次跑沒有 fence（一顆 `sandbox/mode` 都沒有）就照常從預設起算。
+  // `--sandbox` 在這條路上已經被 `parseCliArgs` 擋掉，所以這裡不會蓋掉任何人給的值。
+  const resumedSandbox = resumed === undefined ? undefined : recordedSandboxMode(resumed.events);
+  // 日誌記著模式，就表示上一次有 fence（沒給 `--workspace` 一顆都不寫）。這一次不給的話
+  // 檔案跑在虛擬 FS、fence 不在路徑上，接回來的 `read-only` 會**靜靜蒸發**——與
+  // `--sandbox 要配 --workspace` 同一個理由，所以也同樣在什麼都還沒起來之前擋下。
+  if (resumedSandbox !== undefined && invocation.workspace === undefined) {
+    throw new Error(
+      `--resume 要配 --workspace：上一次跑在 --workspace 底下（日誌記著沙箱模式 ` +
+        `${resumedSandbox}），沒有 --workspace 的話那道 fence 不在路徑上，` +
+        `接回來的模式一個位元組都影響不到。\n\n${USAGE}`,
+    );
+  }
+  const effective =
+    resumedSandbox === undefined ? invocation : { ...invocation, sandbox: resumedSandbox };
 
   const plugins =
     invocation.pluginModule === undefined
@@ -1147,7 +1242,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     attachSession,
     telemetrySharing,
   } = await createCliAgent(
-    invocation,
+    effective,
     plugins,
     options.cwd,
     (error) =>
@@ -1159,6 +1254,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     // 這裡按不下去，所以停在核准點只有一個結局：整輪作廢。關掉之後被擋的那個工具
     // 拿到一則模型讀得懂的拒絕，其餘照跑完（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
     HEADLESS_APPROVALS,
+    resumed?.events,
   );
   // REPL 是一條連續對話，一份日誌就是整個 session，所以接線點在這裡而不是每輪。
   // 回傳的 detach 不留：`dispose()` 會把還接著的協調器一起收掉。
@@ -1174,12 +1270,17 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // 什麼，所以順序在功能上沒有差別；排在最後是為了讓讀的人看到的因果跟實際一致——
   // 先被檢查、被參與者看過，才寫下去。
   const sessionStore =
-    sessionLogDir === undefined ? undefined : createJsonlSessionStore({ rootDir: sessionLogDir });
+    resumeStore ??
+    (sessionLogDir === undefined ? undefined : createJsonlSessionStore({ rootDir: sessionLogDir }));
   const persistence =
     sessionStore === undefined
       ? undefined
       : attachSessionPersistence(sessions, sessionStore, {
           cwd: options.cwd ?? process.cwd(),
+          // 續接：root 那一份往原檔續寫，只寫還沒存的後綴（第一筆就是 `session/end-seed`）。
+          ...(resumed !== undefined && {
+            resumedRoot: { stored: resumed.stored, storedCount: resumed.events.length },
+          }),
           // **背景寫入被拒只有這一行看得見**（協調器自己吞掉，響亮的那次歸 `flush`）。
           // 走 `printer.error` 而不是 `console.warn`，理由同不變量那條：前綴是唯一分得出
           // 誰在講話的東西。
@@ -1200,7 +1301,8 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       invocation.workspace === undefined
         ? '檔案系統：虛擬（不碰磁碟）'
         : `檔案系統：${resolve(options.cwd ?? process.cwd(), invocation.workspace)}` +
-            `（變更圍堵在它之下，起始 mode: ${invocation.sandbox ?? 'workspace-write'}，` +
+            `（變更圍堵在它之下，起始 mode: ${effective.sandbox ?? 'workspace-write'}` +
+            `${resumedSandbox === undefined ? '' : '（從續接的日誌來）'}，` +
             `/${SANDBOX_COMMAND_NAME} 切得動）`,
     );
     printer.log(APPROVAL_DISCLOSURE);
@@ -1222,7 +1324,11 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     printer.log(
       sessionStore === undefined
         ? '會話日誌：只在記憶體裡（行程結束就沒了；--session-log <dir> 可以落盤）'
-        : `會話日誌：${sessionStore.directory}`,
+        : resumed === undefined
+          ? `會話日誌：${sessionStore.directory}`
+          : // **照實講回來的是哪一半**：不講的話，使用者會以為對話也接上了（#251 的最後一段）。
+            `會話日誌：${sessionStore.directory}（續接：沙箱模式、目標與 todo 照日誌回來；` +
+            `對話與計劃模式從頭開始）`,
     );
     // 第七行：**這一輪結束之後還會不會有下一輪**。前六行講的是東西往哪裡去，這一行講
     // 的是誰在推——而那是 `--goal-driver` 落地之後畫面上唯一看得出來的差別。

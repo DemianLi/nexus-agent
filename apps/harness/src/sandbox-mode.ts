@@ -33,19 +33,21 @@
  * 不會共用同一格。**放進模組層或工廠閉包就會串台**，同 `@nexus/plugin-goal` 那段註解記的
  * 事故形狀：一條 thread 的 `/sandbox read-only` 收緊到另一條 thread 的檔案工具上。
  *
- * ## 跨重啟：這一刀交不出來，而理由是結構性的
+ * ## 跨重啟：CLI 接得回去，serve 還沒有
  *
- * 切換寫得進日誌，但**讀不回來**。`SessionStore` 只有 `create`，沒有任何讀介面
- * （`packages/nexus-core/src/session-store.ts`），會話 resume 的兩扇門今天都關著
- * （`session-resume-doors.test.ts`，[#203](https://github.com/DemianLi/nexus-agent/issues/203)）。
- * 所以重開一個 process 之後模式一律回到 `--sandbox` 給的那一格。**絆索在
- * `sandbox-mode.test.ts` 最後一條**：`SessionStore` 長出讀介面的那天它會紅，而那正是該把
- * 這裡接回去的時候。
+ * 切換寫得進日誌，**CLI 的 `--resume <run 目錄>` 讀得回來**：最後一顆 `sandbox/mode` 就是
+ * 起始那一格（{@link recordedSandboxMode}，[#251](https://github.com/DemianLi/nexus-agent/issues/251)
+ * 的門 A）。續接不收 `--sandbox`——兩個來源不管誰贏，另一個都是靜靜被丟掉；接起來之後要換
+ * 就用 `/sandbox`，那一次會記進日誌。**驗收在 `sandbox-mode.test.ts` 最後一組**，由原本釘住
+ * 「`SessionStore` 只有 `create`」的那條絆索翻面而來。
+ *
+ * **serve 還沒有 resume**，那條路上重開一條 thread 仍然回到 `--sandbox` 那一格——所以
+ * [#238](https://github.com/DemianLi/nexus-agent/issues/238) 第 1 項的跨重啟還差 serve 那一半。
  *
  * @module
  */
 
-import type { SessionLog } from '@nexus/core';
+import type { SessionEvent, SessionLog } from '@nexus/core';
 import { isSandboxMode, SANDBOX_MODES } from '@nexus/core';
 import type {
   SandboxGrant,
@@ -62,6 +64,25 @@ export const SANDBOX_COMMAND_DESCRIPTION = '看或切換這個會話的檔案效
 
 /** `/sandbox` 的輸入提示。 */
 export const SANDBOX_COMMAND_HINT = `[${SANDBOX_MODES.join('｜')}]`;
+
+/**
+ * 一份日誌上**最後一顆** `sandbox/mode` 記的那一格，一顆都沒有時是 `undefined`。
+ *
+ * 續接（[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）拿它當起始那一格：
+ * `sandbox/mode` 每一筆帶整個值，所以最後一顆就是答案，不必折疊。`undefined` 是那一次跑
+ * 沒有 fence——沒給 `--workspace` 就一顆都不寫（見 `SessionEventMap['sandbox/mode']`），
+ * 續接那一次照常從預設起算。
+ *
+ * @param events - 讀回來的那一份日誌。
+ * @returns 最後一顆記的模式，或 `undefined`。
+ */
+export function recordedSandboxMode(events: readonly SessionEvent[]): SandboxMode | undefined {
+  for (let at = events.length - 1; at >= 0; at -= 1) {
+    const event = events[at];
+    if (event?.type === 'sandbox/mode') return event.data.mode;
+  }
+  return undefined;
+}
 
 /** 一次切換的結局。 */
 export type SandboxSwitchOutcome =

@@ -44,7 +44,7 @@
  * 2. **第 2 格終止原因記不下來**——`turn/*` 由入口點在**圖外**附加（`thread-pump.ts` 的
  *    `#runOnce`、`cli.ts` 的 `runTurn`），所以 `jumpTo: 'end'` 跳掉的輪次在日誌上與正常
  *    跑完的長得一模一樣，dsh 的「blocked 輪次」表達不出來。
- * 3. **第 9 格工具事件缺席**——`SessionEventType` 十種（`session-log.ts`）沒有一顆工具事件，
+ * 3. **第 9 格工具事件缺席**——`SessionEventType`（`session-log.ts`）沒有一顆工具事件，
  *    而這個缺席已經婉拒過 #180 第五節那條停損，理由逐字寫在 `goal-driver.ts` 檔頭。
  * 4. **第 4 格核准沒有審計事件**——dsh 每次 request 一對 `approval/asked` ＋
  *    `approval/decided`，我們一顆都沒有；逐條在第 4 列的紀錄差，結局（認帳不做、重開條件）

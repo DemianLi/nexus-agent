@@ -437,16 +437,16 @@ describe('goal 來源的輪次', () => {
 });
 
 describe('什麼推得動 roundsStarted', () => {
-  it('十種事件裡只有一種推得動——**加事件種類的人會被這一條擋下來**', () => {
+  it('所有事件種類裡只有一種推得動——**加事件種類的人會被這一條擋下來**', () => {
     // 下面那條走一次生命週期的斷言**自己不會紅**：它餵的只有 `goal/change`，而推輪次的
     // 是別種事件。真正的絆索是這一條，而它釘的是**詞彙**不是值——`SessionEventType` 多
     // 一種，下面的 `satisfies` 就在 `typecheck` 當場紅，逼寫的人回到這個檔案回答一句話：
     // 「這一種推得動輪次嗎？」
     //
-    // **十種裡面只有 `turn/start` 的答案是「推」，而且只有它的 `kind: 'goal'` 那一支**
+    // **所有種類裡只有 `turn/start` 的答案是「推」，而且只有它的 `kind: 'goal'` 那一支**
     // （[#180](https://github.com/DemianLi/nexus-agent/issues/180)）：那一支是排程器排的
     // 續行輪次，`kind` 為 `message`／`resume` 的兩支照樣不推——它們是人打的，不花目標的
-    // 輪次預算。其餘九種：四種是進入點寫的人類活動，`goal/change` 是狀態本身，剩下的見下。
+    // 輪次預算。其餘的：四種是進入點寫的人類活動，`goal/change` 是狀態本身，剩下的見下。
     //
     // **`todo/write` 是這條絆索第一次真的擋下人**（[#132](https://github.com/DemianLi/nexus-agent/issues/132)）。
     // 它的答案也是不推，而理由不是「它不重要」：goal 的輪次預算數的是**目標驅動的
@@ -468,6 +468,11 @@ describe('什麼推得動 roundsStarted', () => {
     // 第 1 項）。不推，理由是它根本不在這條軸上：它記的是**檔案效果政策換了一格**，而且
     // 寫它的是人打的 `/sandbox`（加上接線當下釘的那顆起始值）。讓一個「人動了一下設定」
     // 去扣「還能再問幾輪」的預算，等於因為使用者收緊了沙箱而懲罰他。
+    //
+    // **`session/end-seed` 是第五次**（[#251](https://github.com/DemianLi/nexus-agent/issues/251)）。
+    // 不推：它不是任何人做的事，是建構子替一份續接回來的日誌畫的那條線。**也不在這裡歸零**
+    // ——續接之後輪次照舊，理由是 #251 拍板的那一條：輪次上限是人給自主續行的預算，重開
+    // 一個行程就把它洗掉的話，上限就只擋得住不肯重開的人。
     const KNOWN = [
       'turn/start',
       'turn/end',
@@ -480,6 +485,7 @@ describe('什麼推得動 roundsStarted', () => {
       'model/usage',
       'compaction/summary',
       'sandbox/mode',
+      'session/end-seed',
     ] as const;
     KNOWN satisfies readonly SessionEventType[];
     // 反過來這一條才是絆索：多一種而沒有列進來，`Exhaustive` 就變成 `never`。

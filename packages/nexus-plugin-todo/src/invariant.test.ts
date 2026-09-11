@@ -197,3 +197,38 @@ describe('註冊', () => {
     ]);
   });
 });
+
+/**
+ * 續接：seed 結尾那一輪開著，屬於上一個行程
+ * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
+ */
+describe('在 `session/end-seed` 重設', () => {
+  it('上一個行程當在輪中，續接之後輪外的一份清單照樣被抓到', () => {
+    const earlier = new SessionLog('t');
+    earlier.append('turn/start', { kind: 'message', text: '跑到一半' });
+    const resumed = new SessionLog('t', { seed: earlier.events });
+    const violations = watch(resumed);
+    resumed.append('todo/write', { todos: [ONE] });
+    expect(violations.map((error) => error.message)).toEqual([
+      expect.stringContaining('落在任何開著的輪之外'),
+    ]);
+  });
+
+  /** 反例：拿掉重設的話，上一個行程那一輪會替這一份背書——同一串事件不經 seed 就不吵。 */
+  it('反例：同一串事件不經 seed，那一份清單被當成落在開著的輪裡', () => {
+    const log = new SessionLog('t');
+    const violations = watch(log);
+    log.append('turn/start', { kind: 'message', text: '跑到一半' });
+    log.append('todo/write', { todos: [ONE] });
+    expect(violations).toEqual([]);
+  });
+
+  it('續接之後自己開的輪裡寫清單不吵', () => {
+    const earlier = new SessionLog('t');
+    earlier.append('turn/start', { kind: 'message', text: '跑到一半' });
+    const resumed = new SessionLog('t', { seed: earlier.events });
+    const violations = watch(resumed);
+    inTurn(resumed, [ONE]);
+    expect(violations).toEqual([]);
+  });
+});

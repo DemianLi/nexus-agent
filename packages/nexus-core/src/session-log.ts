@@ -68,6 +68,12 @@ import type { SandboxMode } from './sandbox.js';
  * 一顆排在它後面的新 middleware 看不到那個回傳值。「兩條路都產得出來嗎」跟 `model/usage`
  * 同一條理由：它就是那一份組裝本身。
  * 見 [#143](https://github.com/DemianLi/nexus-agent/issues/143)。
+ *
+ * `session/end-seed` 是**第五種生產者：建構子自己**。它不是任何人「記」下來的事，是一份
+ * 帶 seed 開出來的日誌替自己畫的那條線（[#251](https://github.com/DemianLi/nexus-agent/issues/251)，
+ * 照 dsh：Session 建構子是唯一合法的寫者）。「兩條路都產得出來嗎」答得出來，因為產它的
+ * 是這個 class，不是哪一個進入點——**但今天只有 CLI 那條會帶 seed 開日誌**（`--resume`），
+ * serve 還沒有 resume。那是入口的工作量，不是這顆事件的形狀問題。
  */
 export type SessionEventType =
   | 'turn/start'
@@ -80,7 +86,8 @@ export type SessionEventType =
   | 'todo/write'
   | 'model/usage'
   | 'compaction/summary'
-  | 'sandbox/mode';
+  | 'sandbox/mode'
+  | 'session/end-seed';
 
 /** 每一種事件帶什麼。 */
 export interface SessionEventMap {
@@ -251,12 +258,24 @@ export interface SessionEventMap {
    * ——`command/run` 只記得住使用者打了什麼字，記不住生效的值，而 `--sandbox` 給的起始
    * 值在它之前就決定了，命令那條路上根本沒出現過。
    *
-   * **它今天回不到執行期。** 重開一個 session 不會讀回最後一顆——`SessionStore` 只有
-   * `create` 沒有讀介面（`session-store.ts`），會話 resume 的兩扇門都還關著
-   * （[#203](https://github.com/DemianLi/nexus-agent/issues/203) 的絆索）。所以這一顆事件
-   * 今天是**單向的審計紀錄**，不是狀態的來源。那扇門開的那天，這裡是它要接回去的地方。
+   * **它回得到執行期，但只在 CLI。** `--resume <run 目錄>` 讀回那一份日誌，最後一顆就是
+   * 起始那一格（`sandbox-mode.ts` 的 `recordedSandboxMode`）——
+   * [#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A。serve 還沒有 resume，
+   * 所以那條路上重開一條 thread 仍然回到 `--sandbox` 那一格。
    */
   'sandbox/mode': { readonly mode: SandboxMode };
+  /**
+   * 一段 seed 的結尾——這一顆之前的事件是上一個行程寫的，這個行程一顆都沒寫
+   * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
+   *
+   * 照 dsh 的 `session/end-seed`（`packages/core/session/src/types.ts:379-398`，`c291e79`）：
+   * **建構子是唯一合法的寫者**，seed 已經以一顆它結尾時不再補（重開一份沒動過的會話不
+   * 疊標記）。它存在的理由是 seed 的歷史與這個行程的活動**逐位元組長得一樣**：一顆在它
+   * 之前沒配到的開頭（`turn/start`、`command/run`、`interrupt/raised`）屬於一個已經結束
+   * 的生命週期，不管它是怎麼結束的。所以讀「當前這一段」的人與帶開關狀態的配套入口都
+   * 要在這裡重設——見 {@link currentTurnStart} 與 core、todo、commands 三份配套入口。
+   */
+  'session/end-seed': Record<string, never>;
 }
 
 /** 日誌裡的一筆。凍過的，拿到之後改不動。 */
@@ -345,6 +364,20 @@ export interface SessionLogOptions {
    * 「有被記下來」。
    */
   readonly onListenerError?: (message: string) => void;
+  /**
+   * 上一個行程留下的事件，**原樣接上**，`seq` 從它的長度續號
+   * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
+   *
+   * 照 dsh 的帶 seed 建構（`packages/core/session/src/index.ts:477-497,584-609`，`c291e79`）：
+   * seed **不發給任何觀察者**——建構當下本來就沒有人訂閱，而之後掛上來的消費者要看歷史
+   * 就自己讀 {@link SessionLog.events}（持久化協調器、參與者、不變量都是這樣接的）。
+   * seed 結尾自動補一顆 `session/end-seed`，已經以它結尾的不再補。
+   *
+   * 每一顆照 `append` 的規矩拷、凍：從磁碟讀回來的是純物件，不凍的話「改不動」只對這個
+   * 行程寫的那些成立。`seq` 必須等於它在陣列裡的位置——缺號或重號的 seed 開出來的日誌
+   * `length` 與 `seq` 對不上，下一筆 append 會跟已存的撞號。
+   */
+  readonly seed?: readonly SessionEvent[];
 }
 
 /**
@@ -416,6 +449,34 @@ export class SessionLog implements SessionLogView {
       ((message) => {
         console.warn(message);
       });
+    if (options.seed !== undefined) this.#adoptSeed(options.seed);
+  }
+
+  /**
+   * 接上 seed：逐顆驗連續、拷、凍，最後補一顆 `session/end-seed`。
+   * 見 {@link SessionLogOptions.seed}。
+   *
+   * @throws 某一顆的 `seq` 不等於它的位置，或帶了 JSON 表達不出來的東西。
+   */
+  #adoptSeed(seed: readonly SessionEvent[]): void {
+    for (const [index, event] of seed.entries()) {
+      if (event.seq !== index) {
+        throw new Error(
+          `會話 "${this.#sessionId}" 的 seed 不連續：第 ${index} 顆的 seq 是 ${event.seq}。`,
+        );
+      }
+      const snapshot = snapshotJsonValue(event, `seed 第 ${index} 顆`, new Set());
+      this.#events.push(deepFreeze(snapshot) as SessionEvent);
+    }
+    if (this.#events.at(-1)?.type === 'session/end-seed') return;
+    this.#events.push(
+      deepFreeze({
+        type: 'session/end-seed',
+        seq: this.#events.length,
+        time: Date.now(),
+        data: {},
+      }) as SessionEvent,
+    );
   }
 
   /** 這份日誌屬於誰。遙測的 `session.id` 就是它。 */
@@ -521,12 +582,20 @@ export class SessionLog implements SessionLogView {
  * 所以走法住在**詞彙的擁有者**旁邊，兩種走法各自有一個名字，見
  * `@nexus/plugin-goal` 的 `authority.ts` 檔頭那張對照。
  *
+ * **往回找只找到最後一顆 `session/end-seed` 為止。** 那顆之前的輪屬於上一個行程——它
+ * 開著沒收，是當掉還是被關掉，這裡分不出來也不必分。越過去的話，resume 之後的每一個
+ * 消費者都會以為自己人在上一個行程那一輪裡：續行判成 `turn-open`、一顆沒人答得了的
+ * 中斷判成 `interrupt-pending`（[#251](https://github.com/DemianLi/nexus-agent/issues/251)）。
+ *
  * @param events - 一份會話日誌到目前為止的全部事件，照 `seq` 排。
- * @returns 那一顆的索引；一顆 `turn/start` 都沒有時是 `-1`。
+ * @returns 那一顆的索引；一顆 `turn/start` 都沒有、或最後一顆 `session/end-seed` 之後
+ *   還沒有時是 `-1`。
  */
 export function currentTurnStart(events: readonly SessionEvent[]): number {
   for (let at = events.length - 1; at >= 0; at -= 1) {
-    if (events[at]?.type === 'turn/start') return at;
+    const type = events[at]?.type;
+    if (type === 'session/end-seed') return -1;
+    if (type === 'turn/start') return at;
   }
   return -1;
 }
