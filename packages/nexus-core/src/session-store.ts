@@ -42,7 +42,7 @@ import type { SessionEvent } from './session-log.js';
  * **第一天就蓋，不是為了現在有兩個版本。** dsh 的 `SessionHeader` 帶 `version`
  * （`SESSION_FORMAT_VERSION`），而且它為此養著 `session-format` 加兩個遷移包
  * （`v0-to-v1`、`v1-to-v2`）。我們的事件詞彙從 [#89](https://github.com/DemianLi/nexus-agent/issues/89)
- * 的六種長到今天的十種、還會再長；不蓋版本的話，第一次改詞彙就是一次**沒有版本可以
+ * 的六種一路長到今天、還會再長；不蓋版本的話，第一次改詞彙就是一次**沒有版本可以
  * 分支的遷移**——讀方只能靠猜。
  *
  * ## 2：`turn/start` 多了 `kind: 'goal'`

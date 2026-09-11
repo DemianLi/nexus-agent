@@ -72,7 +72,7 @@ thread id 是呼叫端給的，所以編碼必須是單射的，不然兩條 thr
 `apps/harness/src/eval/runner.ts` 的檔頭）。
 
 **要留 live 跑的證據，兩個東西都要留，而且它們裝的不是同一半。** 這對 CLI 與 `serve` 都
-一樣。日誌記的是**十一種事件**（見 `session-log.ts` 的聯集），裡頭**沒有工具呼叫、也沒有
+一樣。日誌記哪幾種事件見 `session-log.ts` 的聯集，裡頭**沒有工具呼叫、也沒有
 工具結果**：
 
 - **JSONL 裝「落定的結果」。** 目標被封時 `goal/change` 那顆事件帶著 `blockedReason`，

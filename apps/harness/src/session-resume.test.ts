@@ -134,6 +134,49 @@ describe('往原檔續寫', () => {
   });
 });
 
+describe('接第二次', () => {
+  /**
+   * 續接 → 做事 → 離開 → 再續接，是一般使用者的路徑。第二次讀到的是**自己這一版蓋過的
+   * header**，seed 裡已經有一顆 end-seed，而配套入口要認的是**最後那一顆**。
+   */
+  it('中間有做事：兩顆 end-seed，第二次接回來的是第二段的狀態', async () => {
+    const runDir = await firstRun();
+    await cli(
+      ['--workspace', workspace, '--resume', runDir],
+      `/${SANDBOX_COMMAND_NAME} workspace-write\n說點什麼\n/exit\n`,
+    );
+    const { stdout, stderr } = await cli(
+      ['--workspace', workspace, '--resume', runDir],
+      `/${SANDBOX_COMMAND_NAME}\n說點什麼\n/exit\n`,
+    );
+
+    expect(stdout).toContain('起始 mode: workspace-write（從續接的日誌來）');
+    expect(stderr).not.toContain('[不變量]');
+    const after = await readLog(join(runDir, 'cli.jsonl'));
+    expect(after.map((event) => event.seq)).toEqual(after.map((_, index) => index));
+    expect(after.filter((event) => event.type === 'session/end-seed')).toHaveLength(2);
+  });
+
+  /**
+   * 帶 `--workspace` 走不到這一格：沙箱控制器每次起來都寫一顆 `sandbox/mode`，seed 不會停在
+   * end-seed。所以用一次**沒有 fence** 的跑——日誌上一顆模式都沒有，續接也不必配
+   * `--workspace`。
+   */
+  it('中間什麼都沒做：seed 已經停在 end-seed，不再補第二顆', async () => {
+    await cli(['--session-log', logs], `/${GOAL_COMMAND_NAME} 把測試修綠\n/exit\n`);
+    const entries = await readdir(logs);
+    expect(entries).toHaveLength(1);
+    const runDir = join(logs, entries[0]!);
+    await cli(['--resume', runDir]);
+    const once = await readLog(join(runDir, 'cli.jsonl'));
+    await cli(['--resume', runDir]);
+    const twice = await readLog(join(runDir, 'cli.jsonl'));
+
+    expect(twice).toEqual(once);
+    expect(twice.at(-1)).toMatchObject({ type: 'session/end-seed' });
+  });
+});
+
 describe('尾巴', () => {
   /**
    * 上一個行程當在輪中、一個命令沒落定、最後一行寫到一半——三件事都是當掉的常態。
@@ -223,6 +266,13 @@ describe('旗標', () => {
 
   it('要給一個目錄', () => {
     expect(() => parseCliArgs(['--resume', ' '])).toThrow(/--resume 要給一個 run 目錄/);
+  });
+
+  it('上一次有 `--workspace`，這一次沒給：接回來的模式會靜靜蒸發，所以擋下', async () => {
+    const runDir = await firstRun();
+    await expect(cli(['--resume', runDir])).rejects.toThrow(
+      /--resume 要配 --workspace：.*沙箱模式 read-only/,
+    );
   });
 
   it('不能在 `--workspace` 底下：續接之後新事件寫回那個目錄', async () => {

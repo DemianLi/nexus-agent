@@ -1212,6 +1212,16 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // 模式從日誌來；那一次跑沒有 fence（一顆 `sandbox/mode` 都沒有）就照常從預設起算。
   // `--sandbox` 在這條路上已經被 `parseCliArgs` 擋掉，所以這裡不會蓋掉任何人給的值。
   const resumedSandbox = resumed === undefined ? undefined : recordedSandboxMode(resumed.events);
+  // 日誌記著模式，就表示上一次有 fence（沒給 `--workspace` 一顆都不寫）。這一次不給的話
+  // 檔案跑在虛擬 FS、fence 不在路徑上，接回來的 `read-only` 會**靜靜蒸發**——與
+  // `--sandbox 要配 --workspace` 同一個理由，所以也同樣在什麼都還沒起來之前擋下。
+  if (resumedSandbox !== undefined && invocation.workspace === undefined) {
+    throw new Error(
+      `--resume 要配 --workspace：上一次跑在 --workspace 底下（日誌記著沙箱模式 ` +
+        `${resumedSandbox}），沒有 --workspace 的話那道 fence 不在路徑上，` +
+        `接回來的模式一個位元組都影響不到。\n\n${USAGE}`,
+    );
+  }
   const effective =
     resumedSandbox === undefined ? invocation : { ...invocation, sandbox: resumedSandbox };
 

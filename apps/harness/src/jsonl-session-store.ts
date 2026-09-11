@@ -128,6 +128,11 @@ function safeBaseName(sessionId: string): string {
  *
  * `truncateTo` 只在最後一行寫到一半時才有：那是當掉的常態，讀方不算它，而把手第一次寫入
  * 之前要把它截掉——不截的話，續寫的第一行會黏在那半行後面，兩行一起變成壞行。
+ *
+ * **截是跟著第一次寫入走的，不是跟著續接走的。** 續接幾乎都會寫：seed 結尾補的那顆
+ * `session/end-seed` 就是一筆待寫。唯一不寫的是 seed 本來就停在 end-seed（上一次續接之後
+ * 什麼都沒做）而這一次也什麼都沒做——那半行就留在檔上。無害：下一次讀方照樣不算它、
+ * 照樣截。
  */
 interface ResumePoint {
   readonly nextSeq: number;
