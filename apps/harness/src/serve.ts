@@ -288,7 +288,8 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         commands,
         // 落盤沒接上就被收掉（建 thread 途中失敗）的話，續接那個把手還在這裡，要自己放。
         dispose: async () => {
-          await release();
+          // 放不掉不該擋住收 agent——它底下可能有子行程。
+          await release().catch(() => {});
           await dispose();
         },
         ...(resumed !== undefined && { rootSeed: resumed.events }),
@@ -311,9 +312,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
           ? {}
           : {
               attachPersistence: (sessions: SessionRegistry) => {
-                // 從這一刻起續接那個把手歸協調器收（它的 `dispose` 會關）。
-                handedOff = true;
-                return attachSessionPersistence(sessions, sessionStore, {
+                const persistence = attachSessionPersistence(sessions, sessionStore, {
                   cwd,
                   // 續接：root 那一份往原檔續寫，只寫還沒存的後綴（第一筆就是 `session/end-seed`）。
                   ...(resumed !== undefined && {
@@ -325,6 +324,10 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
                     log(`[會話日誌] ${message}`);
                   },
                 });
+                // **協調器真的接上之後**，續接那個把手才歸它收（它的 `dispose` 會關）。先設的話，這一步
+                // 拋錯時旗標已經說「交出去了」，`release()` 變成 no-op，租約留到行程結束。
+                handedOff = true;
+                return persistence;
               },
             }),
       };
