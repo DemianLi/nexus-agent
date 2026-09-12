@@ -43,7 +43,7 @@
  *
  * serve 那一半在 `serve-session-log.test.ts` 的「重開 server 之後接得回同一條 thread」：上一次
  * 切成 `read-only`，重開之後 `/sandbox` 報的還是它；日誌記著模式而這一次沒給 `--workspace` 就
- * 擋下，同 CLI。**web 那端還記不住 thread id**，所以瀏覽器上還看不到——那是下一刀。
+ * 擋下，同 CLI。web 那端把 thread id 記在瀏覽器裡，所以重新整理之後接的是同一條（`apps/web/src/lib/remembered-thread.ts`）。
  *
  * @module
  */
