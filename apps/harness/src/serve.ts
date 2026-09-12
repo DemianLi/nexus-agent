@@ -170,7 +170,15 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // 的日誌各自一個檔落在裡面；一條 thread 一個 store 會變成一條 thread 一個目錄，
   // 而目錄名是時間戳加亂數，讀的人無從對回 thread。
   const sessionStore =
-    sessionLogDir === undefined ? undefined : createJsonlSessionStore({ rootDir: sessionLogDir });
+    sessionLogDir === undefined
+      ? undefined
+      : createJsonlSessionStore({
+          rootDir: sessionLogDir,
+          // 後端講話（例如這個平台拿不到寫租約）走伺服器日誌，前綴同協調器那條。
+          warn: (message) => {
+            log(`[會話日誌] ${message}`);
+          },
+        });
 
   let telemetryDisclosed = false;
   const handler = createWireHandler({

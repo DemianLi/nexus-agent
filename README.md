@@ -94,7 +94,9 @@ thread id 是呼叫端給的，所以編碼必須是單射的，不然兩條 thr
 ——訊息住在 checkpointer 裡，那扇門不開（[#251](https://github.com/DemianLi/nexus-agent/issues/251)）。
 要在上一次的同一個目錄底下接——header 記著那份會話屬於哪個目錄，對不上就擋（同 dsh）。
 它不能配 `--sandbox`（模式從日誌來，要換就接起來之後 `/sandbox`）或 `--session-log`（就寫回
-那個目錄）。**兩個行程同時接同一個目錄會撞號**——我們沒有 dsh 那道寫租約。
+那個目錄）。**同一份會話同一時間只有一個行程寫得進去**：照 dsh 的寫租約（kernel 的
+`flock`，行程死了就放），另一個行程還開著它時 `--resume` 當場擋下。只有 macOS 與 Linux
+鎖得到；其他平台照常寫，第一次要鎖的時候講一聲。
 
 **目標不會自己往下走，除非你說可以。** `--goal-driver` 打開之後，一個 active 的目標在
 每一輪落定時會自己再開一輪，直到它被完成、被擋住，或用完自己的 `max_goal_rounds`
