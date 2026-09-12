@@ -197,6 +197,14 @@ describe('有一輪在跑', () => {
       const subagents = run.subagents();
       expect(subagents).toHaveLength(1);
       expect(resultsOf(subagents[0] ?? [])).toEqual([abortedResult(TOOL_ABORTED)]);
+      // **子代理那一層「正常收尾」不在它的日誌上多記一步**：擋下的那次模型呼叫在起訖紀錄器
+      // 外面就回了，所以只有真的叫過的那一對。
+      expect(typesOf(subagents[0] ?? [])).toEqual([
+        'model/start',
+        'model/end',
+        'tool/call',
+        'tool/result',
+      ]);
       expect(resultsOf(run.root())).toEqual([abortedResult(TOOL_ABORTED)]);
       // root 一次、子代理一次，之後兩邊都沒再叫——腳本只寫了兩輪，多叫一次就拋。
       expect(run.model.prompts).toHaveLength(2);
@@ -306,12 +314,16 @@ describe('線上', () => {
       checkpointer: new MemorySaver(),
       plugins: [],
     });
+    let created = 0;
     const handler = createWireHandler({
-      createAgent: async () => ({
-        agent: built.agent as unknown as PumpAgent,
-        commands: emptyCommandPoint(),
-        dispose: () => built.dispose(),
-      }),
+      createAgent: async () => {
+        created += 1;
+        return {
+          agent: built.agent as unknown as PumpAgent,
+          commands: emptyCommandPoint(),
+          dispose: () => built.dispose(),
+        };
+      },
     });
     const client = createWireClient({
       baseUrl: 'http://cancel.test',
@@ -322,6 +334,16 @@ describe('線上', () => {
         type: 'success',
         result: { accepted: true },
       });
+      // **沒人開過的 thread 不為了中止而建**：建了就是一個 agent（連 MCP 子行程）憑空出生。
+      expect(created).toBe(0);
+      // 開過的那條照樣受理——這一次走的是「閒著」那一格。
+      await client.slashList('cancel-thread');
+      expect(created).toBe(1);
+      await expect(client.runCancel('cancel-thread')).resolves.toMatchObject({
+        type: 'success',
+        result: { accepted: true },
+      });
+      expect(created).toBe(1);
     } finally {
       await handler.close();
     }
