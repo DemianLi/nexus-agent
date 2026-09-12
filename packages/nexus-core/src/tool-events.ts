@@ -14,7 +14,8 @@
  *
  * ## 碼怎麼從內層走到外層
  *
- * 內層（輸出 schema 校驗、`ask_user_question`）自己產一則 `status: 'error'` 的 ToolMessage，
+ * 內層（輸出 schema 校驗、觀測政策的 `FS_*` 拒絕、`ask_user_question` 的放棄）自己產一則
+ * `status: 'error'` 的 ToolMessage，
  * 那則訊息原樣一路回到圍堵。碼**不能寫進訊息本身**：`additional_kwargs` 在轉成供應商格式時
  * 會被讀回去（`@langchain/openai` 的 `converters/completions.js:472`），寫進去就是改了模型的
  * 輸入。所以碼掛在一張以訊息為鍵的 `WeakMap` 上，對應 dsh `ToolExecutionResult.error.info`
