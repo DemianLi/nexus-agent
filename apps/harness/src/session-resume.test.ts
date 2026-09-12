@@ -28,7 +28,7 @@ import {
   PLAN_ENTERED_MESSAGE,
 } from '@nexus/plugin-plan-mode';
 
-import { parseCliArgs, RESUMED_PLAN_MODE_NOTICE, runCli } from './cli.js';
+import { parseCliArgs, RESUMED_PLAN_MODE_NOTICE, ResumeCwdConflictError, runCli } from './cli.js';
 import { SANDBOX_COMMAND_NAME } from './sandbox-mode.js';
 
 /** 分開收 stdout 與 stderr：不變量違規走的是後者。 */
@@ -45,12 +45,22 @@ function recorder() {
   };
 }
 
-/** 跑一次 CLI；`lines` 給了就是 REPL，餵完就結束。 */
-async function cli(argv: readonly string[], lines = '/exit\n') {
+/**
+ * 跑一次 CLI；`lines` 給了就是 REPL，餵完就結束。
+ *
+ * `cwd` 不給就是這個行程的 `process.cwd()`——`firstRun` 寫進 header 的也是它。
+ */
+async function cli(argv: readonly string[], lines = '/exit\n', cwd?: string) {
   const { printer, stdout, stderr } = recorder();
   const input = new PassThrough();
   input.end(lines);
-  await runCli({ argv: [...argv], input, output: new PassThrough(), printer });
+  await runCli({
+    argv: [...argv],
+    input,
+    output: new PassThrough(),
+    printer,
+    ...(cwd !== undefined && { cwd }),
+  });
   return { stdout: stdout(), stderr: stderr() };
 }
 
@@ -301,6 +311,76 @@ describe('讀不了的時候在什麼都還沒起來之前就講', () => {
 
   it('那個目錄裡沒有這份會話', async () => {
     await expect(cli(['--resume', logs])).rejects.toThrow(/裡沒有會話 "cli"/);
+  });
+});
+
+/**
+ * 組合一致：照 dsh 的 `ApiSessionCwdConflict`，**只抄得到 cwd 這一格**（理由在
+ * `ResumeCwdConflictError` 的註解）。
+ *
+ * 擋下的兩條都要斷言**檔案一個位元組都沒動**——擋在讀回之後、第一次寫之前，才是「什麼都
+ * 還沒起來」；晚一步的話 `session/end-seed` 已經寫進一份不屬於這個目錄的日誌。
+ */
+describe('屬於哪個目錄', () => {
+  /** run 目錄裡 root 那一份的兩個檔。 */
+  async function rootFiles(runDir: string) {
+    const entries = await readdir(runDir);
+    const header = entries.filter((name) => name.endsWith('.header.json'));
+    const log = entries.filter((name) => name.endsWith('.jsonl'));
+    expect(header).toHaveLength(1);
+    expect(log).toHaveLength(1);
+    return { header: join(runDir, header[0]!), log: join(runDir, log[0]!) };
+  }
+
+  it('換了目錄：擋下，訊息帶兩個目錄，檔案沒被動', async () => {
+    const runDir = await firstRun();
+    const { header, log } = await rootFiles(runDir);
+    // 前提：header 記的就是這個行程的目錄，不然下面那一條「換了」證不了什麼。
+    expect(JSON.parse(await readFile(header, 'utf8')).cwd).toBe(process.cwd());
+    const before = await readFile(log, 'utf8');
+
+    await expect(
+      cli(['--workspace', workspace, '--resume', runDir], '/exit\n', workspace),
+    ).rejects.toThrow(`屬於 ${process.cwd()}，不是 ${workspace}`);
+    expect(await readFile(log, 'utf8')).toBe(before);
+  });
+
+  it('header 沒記 cwd：一樣擋下，不猜', async () => {
+    const runDir = await firstRun();
+    const { header, log } = await rootFiles(runDir);
+    const { cwd: _dropped, ...rest } = JSON.parse(await readFile(header, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(header, JSON.stringify(rest));
+    const before = await readFile(log, 'utf8');
+
+    await expect(cli(['--workspace', workspace, '--resume', runDir])).rejects.toThrow(
+      /沒記下它屬於哪個目錄/,
+    );
+    expect(await readFile(log, 'utf8')).toBe(before);
+  });
+
+  /**
+   * **目錄先認，沙箱那道後判。** 換了目錄又沒給 `--workspace` 時兩道都會響，講的要是目錄：
+   * 目錄不對的話，日誌裡記的模式是哪一格都不該拿來判，「要配 --workspace」是一句誤導的指示。
+   */
+  it('換了目錄又沒給 `--workspace`：講的是目錄，不是 `--workspace`', async () => {
+    const runDir = await firstRun();
+    await expect(cli(['--resume', runDir], '/exit\n', workspace)).rejects.toThrow(
+      ResumeCwdConflictError,
+    );
+  });
+
+  /** 對照：明著給同一個目錄接得回來——證明上面那條擋的是目錄，不是「給了 cwd」這件事。 */
+  it('對照：同一個目錄明著給，接得回來', async () => {
+    const runDir = await firstRun();
+    const { stdout } = await cli(
+      ['--workspace', workspace, '--resume', runDir],
+      `/${SANDBOX_COMMAND_NAME}\n/exit\n`,
+      process.cwd(),
+    );
+    expect(stdout).toContain('read-only');
   });
 });
 
