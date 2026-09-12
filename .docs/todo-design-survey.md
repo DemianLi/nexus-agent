@@ -55,7 +55,7 @@ for (const spec of CODEX_MODEL_SPECS) registerHarnessProfileImpl(spec, profile);
 
 ## 三、我們樹裡的兩條路，以及一個過期的判準
 
-`@nexus/plugin-goal` 走會話事件（`registry.sessions` ＋ `goal/change`），`@nexus/plugin-plan-mode` 走 middleware 的 `stateSchema` ＋ checkpointer。#132 把「狀態放哪」寫成在這兩條之間選。
+`@nexus/plugin-goal` 走會話事件（`registry.sessions` ＋ `goal/change`），`@nexus/plugin-plan-mode` 走 middleware 的 `stateSchema` ＋ checkpointer。#132 把「狀態放哪」寫成在這兩條之間選。（**2026-09-12 補**：plan-mode 後來也搬上了事件路——[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的第二刀，`plan/mode`。本節以下講的是當時的 plan-mode，保留原樣，因為那是這份決定的依據。）
 
 **先劃掉一個不成立的判準：耐久性。** plan-mode 檔頭當時的論證是「`SessionLog` 全樹零個 hydrate／persist 路徑」，暗示走事件不比走 state 耐久。今天兩邊都查了：
 

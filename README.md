@@ -90,8 +90,8 @@ thread id 是呼叫端給的，所以編碼必須是單射的，不然兩條 thr
 
 **接著上一次跑下去（只有 CLI）。** `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 往同一個檔續寫。**回來的是住在日誌上的那一半**：沙箱模式、目標（授權打回 disarmed，要
-`/goal resume` 才會再往下走）與 todo。**對話與計劃模式從頭開始**——訊息住在 checkpointer 裡，
-那扇門不開；計劃模式要搬進日誌是下一刀（[#251](https://github.com/DemianLi/nexus-agent/issues/251)）。
+`/goal resume` 才會再往下走）、todo 與計劃模式（上一次開著，接回來還開著）。**對話從頭開始**
+——訊息住在 checkpointer 裡，那扇門不開（[#251](https://github.com/DemianLi/nexus-agent/issues/251)）。
 它不能配 `--sandbox`（模式從日誌來，要換就接起來之後 `/sandbox`）或 `--session-log`（就寫回
 那個目錄）。**兩個行程同時接同一個目錄會撞號**——我們沒有 dsh 那道寫租約。
 
@@ -155,15 +155,14 @@ banner 上。web 這端真的按得下去，所以它維持開著。
 
 | 這一行 | 做什麼 |
 | --- | --- |
-| `/plan` | 進計劃模式。**從下一輪起**指引才夾進 system prompt |
+| `/plan` | 進計劃模式，下一次請求起指引夾進 system prompt |
 | `/plan off` | 離開 |
 | 其餘參數 | 回一則錯誤。**不會被當成「進入」** —— `/plan of` 安靜地做相反的事是最貴的那種缺陷 |
 
 dsh 的 `/plan` 還收一段自由訊息（`[off|message]`），用 `agent.steer()` 插進對話；
-我們沒有那條路，所以提示是 `[off]`，收不下的東西不寫進提示。命令改的是 graph state，
-而 state 只有 invoke 期間寫得動 —— 選擇先存在 plugin 裡，由 middleware 的 `beforeAgent`
-在下一輪開頭交出去。細節與這兩條偏離的代價寫在 `packages/nexus-plugin-plan-mode/src/index.ts`
-的檔頭。
+我們沒有那條路，所以提示是 `[off]`，收不下的東西不寫進提示。選擇**當場寫進會話日誌**
+（`plan/mode`，同 dsh），所以它跟沙箱模式一樣，`--resume` 接得回來。細節與剩下那兩條偏離
+寫在 `packages/nexus-plugin-plan-mode/src/index.ts` 的檔頭。
 
 要讓一份組裝一開始就在計劃模式裡，用工廠的 `startActive`：
 

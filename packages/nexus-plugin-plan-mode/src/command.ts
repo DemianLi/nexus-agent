@@ -53,20 +53,33 @@ export function parsePlanCommandArgs(rawInput: string): PlanCommandRequest | und
 /** 參數不合法時回給人的話。**指名收得下什麼**，不然人只知道自己錯了。 */
 export const PLAN_ARGS_ERROR_MESSAGE = `/${PLAN_COMMAND_NAME} 只收兩種：不帶參數（進計劃模式）或 off（離開）。`;
 
+/**
+ * 這一份組裝還沒接上會話日誌。
+ *
+ * 模式住在日誌上（`plan/mode`），沒有日誌就沒有地方記——**說出原因**，而不是回「開了」
+ * 然後什麼都沒發生。同 `@nexus/plugin-goal` 的 `GOAL_NOT_ATTACHED_MESSAGE`：命令在接線之前
+ * 就註冊好了，所以這條路走得到。
+ */
+export const PLAN_NOT_ATTACHED_MESSAGE = `計劃模式還沒接上這個會話的日誌，/${PLAN_COMMAND_NAME} 沒有地方記下模式，所以沒有動。`;
+
+/**
+ * 這一份組裝接了不只一份 root 日誌，挑不出要改哪一份。
+ *
+ * @param count - 接了幾份。
+ * @returns 回給人的那一句。
+ */
+export function planAmbiguousMessage(count: number): string {
+  return `這個組裝接了 ${String(count)} 份會話日誌，/${PLAN_COMMAND_NAME} 不知道要改哪一份，所以沒有動。`;
+}
+
 /** `/plan`：這一刻真的把模式打開了。 */
 export const PLAN_ENTERED_MESSAGE = `計劃模式開了。用 /${PLAN_COMMAND_NAME} off 離開。`;
 
 /** `/plan`：本來就開著。 */
 export const PLAN_ALREADY_ACTIVE_MESSAGE = '已經在計劃模式裡了。';
 
-/** `/plan`：把上一句還沒生效的 `/plan off` 收回來。 */
-export const PLAN_LEAVE_CANCELLED_MESSAGE = '取消了還沒生效的離開，計劃模式維持開著。';
-
 /** `/plan off`：這一刻真的把模式關掉了。 */
 export const PLAN_LEFT_MESSAGE = '計劃模式關了。';
 
 /** `/plan off`：本來就沒開。 */
 export const PLAN_ALREADY_INACTIVE_MESSAGE = '本來就不在計劃模式裡。';
-
-/** `/plan off`：把上一句還沒生效的 `/plan` 收回來。 */
-export const PLAN_ENTER_CANCELLED_MESSAGE = '取消了還沒生效的進入，計劃模式維持關著。';

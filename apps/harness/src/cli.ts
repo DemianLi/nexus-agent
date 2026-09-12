@@ -52,7 +52,7 @@ import { createGoalPlugin, DEFAULT_MAX_GOAL_ROUNDS } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
 import { createMcpInvariantPlugin } from '@nexus/plugin-mcp/invariant';
 import { createMemoryInvariantPlugin } from '@nexus/plugin-memory/invariant';
-import { createPlanModePlugin } from '@nexus/plugin-plan-mode';
+import { createPlanModePlugin, PLAN_COMMAND_NAME, recordedPlanMode } from '@nexus/plugin-plan-mode';
 import { createPlanModeInvariantPlugin } from '@nexus/plugin-plan-mode/invariant';
 import { createQuickJsInvariantPlugin } from '@nexus/plugin-quickjs/invariant';
 import { createSkillsInvariantPlugin } from '@nexus/plugin-skills/invariant';
@@ -620,12 +620,24 @@ export function formatGoalDriverDisclosure(on: boolean, roundCap?: number): stri
 }
 
 /**
+ * 續接回來的計劃模式開著時，啟動畫面多講的那一行。
+ *
+ * **這是 [#251](https://github.com/DemianLi/nexus-agent/issues/251) 第二刀才走得到的狀態。**
+ * 計劃模式搬進日誌之前，它跨不過重啟；現在跨得過，而這個入口收不了核准
+ * （`HEADLESS_APPROVALS`）——模型交出去的計劃會被確定性拒絕，唯一的出路是人打 `/plan off`。
+ * 等模型被拒了才知道原因太晚，所以在一開始就講。
+ */
+export const RESUMED_PLAN_MODE_NOTICE = `計劃模式：開著（從續接的日誌來）。這個入口收不了核准，計劃交不出去——要動手就先 /${PLAN_COMMAND_NAME} off。`;
+
+/**
  * 一則訊息在畫面上該印成什麼，或 `undefined` 代表不印。
  *
  * **人自己說的那句不再印一次。** 基座把這一輪的輸入訊息掛在**第一個真的寫了東西的
  * 節點**的 update 上（實測：三個 `before_agent` 裡只有回傳非空更新的那一個帶著它）。
  * 照原樣印的話，畫面上會出現 `[nexusPlanMode.before_agent] 嗨`——看起來像那個 plugin
- * 在說話，而那句是使用者三秒前自己打的。
+ * 在說話，而那句是使用者三秒前自己打的。（那是當時唯一回非空更新的 `before_agent`；
+ * 計劃模式搬進日誌之後它沒有 `beforeAgent` 了，但這個形狀歸基座，下一個回非空更新的
+ * 節點照樣會帶著它，所以濾照舊。）
  *
  * **例外是圖自己插進來的 human 訊息，而那條路現在真的有了。** 這段註解過去寫著「哪天
  * 真的有東西從圖裡插一則 human message 進來，它也會跟著不見；今天沒有那條路」——
@@ -1327,9 +1339,19 @@ export async function runCli(options: RunCliOptions): Promise<void> {
         : resumed === undefined
           ? `會話日誌：${sessionStore.directory}`
           : // **照實講回來的是哪一半**：不講的話，使用者會以為對話也接上了（#251 的最後一段）。
-            `會話日誌：${sessionStore.directory}（續接：沙箱模式、目標與 todo 照日誌回來；` +
-            `對話與計劃模式從頭開始）`,
+            `會話日誌：${sessionStore.directory}（續接：沙箱模式、計劃模式、目標與 todo 照日誌回來；` +
+            `對話從頭開始）`,
     );
+    // 接回來的計劃模式開著——見 `RESUMED_PLAN_MODE_NOTICE`。**只在這次組裝真的掛了 `/plan`
+    // 時講**：自訂 `--plugins` 可能沒有計劃模式，那時日誌上那顆 `plan/mode` 沒有人讀，講了
+    // 就是在說一個不存在的模式。
+    if (
+      resumed !== undefined &&
+      commands.find(PLAN_COMMAND_NAME) !== undefined &&
+      recordedPlanMode(resumed.events) === true
+    ) {
+      printer.log(RESUMED_PLAN_MODE_NOTICE);
+    }
     // 第七行：**這一輪結束之後還會不會有下一輪**。前六行講的是東西往哪裡去，這一行講
     // 的是誰在推——而那是 `--goal-driver` 落地之後畫面上唯一看得出來的差別。
     printer.log(formatGoalDriverDisclosure(invocation.goalDriver, invocation.maxGoalRounds));
