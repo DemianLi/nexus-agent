@@ -123,7 +123,6 @@ describe('一場跑過的會話', () => {
       expect(stats.steps).toBe(3);
       // 兩顆各睡 20ms，併發跑：每一對都至少 20，加總至少 40。
       expect(stats.toolMs).toBeGreaterThanOrEqual(40);
-      expect(stats.llmMs).toBeGreaterThanOrEqual(0);
       // 工具事件落在一次模型呼叫**之後**，不在 model/start 與 model/end 之間——名字換掉的理由。
       const types = events.map((event) => event.type);
       const firstEnd = types.indexOf('model/end');

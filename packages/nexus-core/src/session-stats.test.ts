@@ -178,6 +178,25 @@ describe('工具耗時', () => {
       ]),
     ).toEqual({ turns: 1, steps: 1, llmMs: 0, toolMs: 0 });
   });
+
+  /**
+   * `turnCounted` 是唯一跨過 end-seed 的狀態。重啟之後的另一條路是一個全新的 `message` 輪：
+   * 它照樣開新的一輪，不會被併進崩潰前那一輪。
+   */
+  it('end-seed 之後的 message 開新的一輪', () => {
+    expect(
+      deriveSessionStats([
+        message(0),
+        ev('model/start', 1),
+        ev('model/end', 2),
+        ev('session/end-seed', 3),
+        message(4),
+        ev('model/start', 5),
+        ev('model/end', 6),
+        ev('turn/end', 7),
+      ]),
+    ).toMatchObject({ turns: 2, steps: 2 });
+  });
 });
 
 describe('單元的形狀', () => {
