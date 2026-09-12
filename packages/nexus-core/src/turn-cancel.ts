@@ -46,9 +46,10 @@
  *
  * ## 兩處偏離
  *
- * - **回 `Command` 的工具結果不換。** dsh 的結果只有一種形狀；我們的 `Command` 帶著狀態更新（todo、goal
- *   的收尾），而那些工具在本體裡已經把事件寫進日誌了。換成一則 ToolMessage 等於丟掉狀態更新、留下日誌
- *   上那顆事件，兩邊從此對不上。
+ * - **子代理那一層不拋，正常收尾。** dsh 把中止帶著 `parent` 原因傳給子代理，它那一輪以 aborted 收尾；
+ *   我們的子代理沒有自己的輪，而中止若從子代理往外拋，會穿過 `task` 工具的邊界、在 `streamEvents` v3
+ *   裡留下一顆沒人接的 rejection（實測，Node 預設會因此殺掉行程）。所以子代理那一層回一則空的 AI 訊息
+ *   讓圖自然結束，由 root 那一層把 `task` 的結果換成 `ABORTED`。見 `stopHere`。
  * - **半段文字不在這裡組。** dsh 在迴圈裡把已經送出的文字記成一則被打斷的回覆；我們的產品路徑
  *   （`streamEvents` v3）上，逐字片段根本不經過模型層的回呼（實測一個 token 都收不到），唯一看得到
  *   「使用者看到了哪些字」的是轉發那些片段的 pump。所以這裡只拋 {@link TurnCancelledError}，半段由
@@ -66,10 +67,12 @@
  * @module
  */
 
+import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import { RunnableBinding } from '@langchain/core/runnables';
-import { isCommand } from '@langchain/langgraph';
-import { createMiddleware } from 'langchain';
+import { Command, isCommand } from '@langchain/langgraph';
+import { createMiddleware, MiddlewareError } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import { toolCallSessionAddress } from './session-address.js';
 import {
   readToolOutcome,
   TOOL_ABORTED,
@@ -93,6 +96,15 @@ export const TOOL_ABORTED_TEXT = 'Error: tool call aborted';
 export const TOOL_ABORTED_BEFORE_DISPATCH_TEXT = 'Error: tool call aborted before dispatch';
 
 /**
+ * 被中止時模型講到一半的那一則回覆，在 `additional_kwargs` 上的記號，值是 `true`
+ * （[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q11）。
+ *
+ * 寫它的是 `apps/harness` 的 pump（見檔頭「兩處偏離」第二條）。有了它，那一則在對話狀態裡分得出
+ * 「被打斷」與「講完了」——dsh 那側是 `assistant/message` 的 `interrupted: true`。
+ */
+export const INTERRUPTED_REPLY_MARKER = 'nexus_interrupted_reply';
+
+/**
  * 這一輪被人中止了。
  *
  * **進入點要靠類別認它，不能比對訊息**：它決定這一輪收成 `turn/end`（帶 aborted）還是
@@ -104,6 +116,79 @@ export class TurnCancelledError extends Error {
   constructor(options?: { readonly cause?: unknown }) {
     super('這一輪被中止了', options);
   }
+}
+
+/**
+ * 這是一次中止嗎——**沿 `MiddlewareError` 的 `cause` 拆到底再認類別**。
+ *
+ * 從 middleware 拋出去的錯，基座每經過一層可能再包一層 `MiddlewareError`（實測：`task` 那一顆
+ * 攔到的是 `MiddlewareError`，我們那顆在它的 `cause` 裡），直接 `instanceof` 認不出來。拆法同圍堵的
+ * `classifyThrownToolError`，也同基座自己的 `#handleError`。
+ *
+ * @param error - `catch` 到的東西。
+ * @returns 拆到底是 {@link TurnCancelledError} 就是 `true`。
+ */
+export function isTurnCancelled(error: unknown): boolean {
+  let root = error;
+  while (MiddlewareError.isInstance(root)) root = root.cause;
+  return root instanceof TurnCancelledError;
+}
+
+/**
+ * 這次呼叫在子代理的圖裡嗎。判準同會話位址（`checkpoint_ns` 的段數），見 `session-address.ts`。
+ */
+function inSubagent(request: unknown): boolean {
+  const configurable = (request as { runtime?: { configurable?: unknown } }).runtime?.configurable;
+  return toolCallSessionAddress({ configurable })?.kind === 'subagent';
+}
+
+/**
+ * 在這裡停下。**root 拋，子代理不拋**——子代理那一層回一則空的 AI 訊息，讓它的圖自然收尾。
+ *
+ * 子代理不拋的理由是量到的：中止若從子代理往外拋，就會穿過 `task` 工具的邊界，基座發一顆
+ * `tool-error`，而 `streamEvents` v3 替那次工具呼叫建的 promise 跟著 reject、沒有人接
+ * （`langchain@1.5.10` 的 `agents/transformers/tool-call.ts:235`，實測是一顆 unhandled rejection）。
+ * Node 預設遇到它會殺掉整個行程——`serve` 就這樣掉了。收尾之後 `task` 正常回，root 那一層再把它的
+ * 結果換成 `ABORTED`（{@link createTurnCancelGuard} 的 `wrapToolCall`）。
+ *
+ * 那則空訊息只活在子代理的狀態裡，子代理跑完它的狀態就丟了；它不是一則使用者看得到的回覆。
+ */
+function stopHere(request: unknown, cause?: unknown): AIMessage {
+  if (inSubagent(request)) {
+    return new AIMessage({ content: '', additional_kwargs: { [INTERRUPTED_REPLY_MARKER]: true } });
+  }
+  throw new TurnCancelledError(cause === undefined ? undefined : { cause });
+}
+
+/**
+ * 被中止時把 `Command` 裡**屬於這次呼叫的那則** ToolMessage 換掉，其餘的更新原樣留著。
+ *
+ * `task`、todo、goal 的收尾都回 `Command`：它帶著狀態更新，而那些工具在本體裡已經把事件寫進日誌了。
+ * 整個換成一則 ToolMessage 會丟掉狀態更新、留下日誌上那顆事件，兩邊從此對不上；整個不換則讓一次被
+ * 中止的呼叫在日誌上記成成功。換裡面那一則兩件事都守得住，也就是 dsh「本體落定之後結果換成
+ * `ABORTED`、副作用照樣發生」的樣子。
+ *
+ * @returns 換過的 `Command`；裡面找不到屬於這次呼叫的成功訊息就原樣回去。
+ */
+function abortCommand(command: Command, callId: string, replacement: ToolMessage): Command {
+  const update = command.update;
+  if (typeof update !== 'object' || update === null || !('messages' in update)) return command;
+  const messages = (update as { messages: unknown }).messages;
+  if (!Array.isArray(messages)) return command;
+  let replaced = false;
+  const next = messages.map((message: unknown) => {
+    if (!ToolMessage.isInstance(message) || message.tool_call_id !== callId) return message;
+    if (message.status === 'error') return message;
+    replaced = true;
+    return replacement;
+  });
+  if (!replaced) return command;
+  return new Command({
+    update: { ...(update as Record<string, unknown>), messages: next },
+    ...(command.goto !== undefined && { goto: command.goto }),
+    ...(command.graph !== undefined && { graph: command.graph }),
+    ...(command.resume !== undefined && { resume: command.resume }),
+  });
 }
 
 /**
@@ -149,22 +234,26 @@ export function createTurnCancelGuard(): AgentMiddleware {
       try {
         result = await handler(request);
       } catch (error) {
-        // 子代理被同一個訊號停下時，`task` 的本體就是拋這一顆出來——那是一次被中止的呼叫，
-        // 不是工具壞了（#265 的 Q10）。其餘照拋，讓圍堵照它自己的規則分類。
-        if (signal.aborted && error instanceof TurnCancelledError) {
+        // 保險：子代理那一層照說不拋（見 `stopHere`），但被中止的原因若還是從工具裡冒出來，
+        // 那是一次被中止的呼叫，不是工具壞了（#265 的 Q10）。其餘照拋，讓圍堵照它的規則分類。
+        if (signal.aborted && isTurnCancelled(error)) {
           return aborted(TOOL_ABORTED_TEXT, TOOL_ABORTED);
         }
         throw error;
       }
-      // 只換成功的結果，而且不換 `Command`。理由見檔頭。
-      if (!signal.aborted || isCommand(result)) return result;
+      if (!signal.aborted) return result;
+      // `Command` 留著它的狀態更新，只換屬於這次呼叫的那一則，見 `abortCommand`。
+      if (isCommand(result)) {
+        return abortCommand(result, callId, aborted(TOOL_ABORTED_TEXT, TOOL_ABORTED));
+      }
+      // 只換成功的結果：工具自己回的錯照舊。
       if (readToolOutcome(result, callId).isError) return result;
       return aborted(TOOL_ABORTED_TEXT, TOOL_ABORTED);
     },
     wrapModelCall: async (request, handler) => {
       // 中止之後的下一次模型呼叫就是「這一步之後」：擋在這裡，圖停在剛落定的那批工具結果後面，
       // 對話狀態一致（AI 帶 tool_calls、每一顆都配到結果）。
-      if (signalOfRequest(request)?.aborted) throw new TurnCancelledError();
+      if (signalOfRequest(request)?.aborted) return stopHere(request);
       return handler(request);
     },
   }) as unknown as AgentMiddleware;
@@ -198,7 +287,7 @@ export function createTurnCancelModelSignal(): AgentMiddleware {
       } catch (error) {
         // 被切斷的那次拋什麼要看供應商與抽法（實測有 `Error("AbortError")`，也有
         // `DOMException`），所以認的是「訊號已經 abort」，不是錯誤長什麼樣。
-        if (signal.aborted) throw new TurnCancelledError({ cause: error });
+        if (signal.aborted) return stopHere(request, error);
         throw error;
       }
     },

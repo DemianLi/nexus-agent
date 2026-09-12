@@ -113,11 +113,33 @@ export function isSlashMethod(value: unknown): value is SlashMethod {
   return typeof value === 'string' && (SLASH_METHODS as readonly string[]).includes(value);
 }
 
+/**
+ * 中止這一輪（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。**以 thread 為單位、不帶
+ * run id**：一條 thread 一次只跑一個 run。回 `{ accepted: true }`——只代表受理，不等停穩；這一輪
+ * 結束的事實走下行（root 那顆收尾的 `lifecycle` 帶 `aborted: true`）。
+ *
+ * **這是我們加在自己 wire 上的命令**：`@langchain/protocol@0.0.18` 的 `Command` 沒有任何取消類的
+ * method（見 {@link SLASH_METHODS} 那段的清單），所以它跟斜線命令一樣不進 {@link UPLINK_METHODS}。
+ * 形狀照 dsh 的 `session.cancel({ sessionId })` → `{ accepted: true }`
+ * （`packages/api/session-controller/src/commands.ts:497-510`，`c291e79`）：不查是哪個分頁送的
+ * （#265 的 Q3）。
+ */
+export const RUN_CANCEL_METHOD = 'run.cancel';
+
+export interface RunCancelCommand {
+  readonly id: number;
+  readonly method: typeof RUN_CANCEL_METHOD;
+}
+
+export function isRunCancelMethod(value: unknown): value is typeof RUN_CANCEL_METHOD {
+  return value === RUN_CANCEL_METHOD;
+}
+
 /** `/threads/:id/commands/:method` 這條 RPC family 收得下的全部 method。 */
-export type RpcMethod = UplinkMethod | SlashMethod;
+export type RpcMethod = UplinkMethod | SlashMethod | typeof RUN_CANCEL_METHOD;
 
 export function isRpcMethod(value: unknown): value is RpcMethod {
-  return isUplinkMethod(value) || isSlashMethod(value);
+  return isUplinkMethod(value) || isSlashMethod(value) || isRunCancelMethod(value);
 }
 
 /** 命令的自由輸入怎麼提示。結構上就是 `@nexus/core` 的 `CommandInputDescriptor`。 */

@@ -98,6 +98,13 @@ export interface Conversation {
    * （dsh 的 `ASK_CANCELLED`）——**與「每一題都跳過」不同**，後者仍是一份答案。
    */
   cancelQuestions(interruptId: string): Promise<void>;
+  /**
+   * 按停止（`run.cancel`，[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。
+   *
+   * **只送出、不等停穩，也不自己改狀態**：停下來的事實走下行，折疊器把狀態翻成 `stopped`。
+   * 停在核准點時按它就是收回那幾張卡，收回的結果由伺服器那側寫。
+   */
+  cancel(): Promise<void>;
 }
 
 export function useConversation(options: UseConversationOptions = {}): Conversation {
@@ -281,6 +288,10 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     [threadId, note],
   );
 
+  const cancel = useCallback(async () => {
+    note(await clientRef.current.runCancel(threadId));
+  }, [threadId, note]);
+
   return {
     state,
     connected,
@@ -289,6 +300,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     respond,
     answer,
     cancelQuestions,
+    cancel,
     ...(connectionError === undefined ? {} : { connectionError }),
     ...(commandError === undefined ? {} : { commandError }),
     ...(slashError === undefined ? {} : { slashError }),

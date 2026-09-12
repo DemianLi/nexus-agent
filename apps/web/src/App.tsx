@@ -230,6 +230,22 @@ function ConversationView({
         <Button type="submit" disabled={!canSend}>
           送出
         </Button>
+        {/*
+          **有東西可停時才出現**：一輪在跑，或停在核准點——那時按它就是收回那幾張卡
+          （[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q7）。伺服器只回受理，停下來的
+          事實走下行，所以按下去不自己改狀態。任何分頁都按得動，不查是誰起的這一輪（Q3）。
+        */}
+        {(conversation.state.status === 'running' ||
+          conversation.state.status === 'awaiting-input') && (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={!conversation.connected}
+            onClick={() => void conversation.cancel()}
+          >
+            停止
+          </Button>
+        )}
       </form>
 
       {conversation.slashCommands.length > 0 && (

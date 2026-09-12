@@ -132,6 +132,8 @@ export { createModelCallRecorder, MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './mo
 export {
   createTurnCancelGuard,
   createTurnCancelModelSignal,
+  INTERRUPTED_REPLY_MARKER,
+  isTurnCancelled,
   TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
   TOOL_ABORTED_TEXT,
   TURN_CANCEL_CONFIG_KEY,

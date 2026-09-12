@@ -18,12 +18,13 @@ import type {
   Event,
   InputRespondOne,
   RpcMethod,
+  RunCancelCommand,
   SlashCommand,
   SlashDescriptor,
   SlashRunResult,
   WireChannel,
 } from './protocol.js';
-import { WIRE_CHANNELS, commandPath, streamPath } from './protocol.js';
+import { RUN_CANCEL_METHOD, WIRE_CHANNELS, commandPath, streamPath } from './protocol.js';
 
 export interface WireClientOptions {
   /** harness 的來源，例如 `http://localhost:8787`。結尾的斜線會被去掉。 */
@@ -96,6 +97,13 @@ export interface WireClient {
     threadId: string,
     params: Pick<InputRespondOne, 'namespace' | 'interrupt_id' | 'response'>,
   ): Promise<UplinkResult>;
+  /**
+   * 中止這一輪（`run.cancel`，[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。
+   *
+   * **回的是受理回條，不等停穩**——停下來的事實走下行（root 那顆收尾的 `lifecycle` 帶
+   * `aborted: true`）。沒有 run 在跑、也沒有等核准時，server 照樣受理、什麼都不做。
+   */
+  runCancel(threadId: string): Promise<UplinkResult>;
   /**
    * 這條 thread 上打得出哪些斜線命令。**拿來顯示，不做選單**——
    * dsh 那一套 `CommandDirectory`（epoch guard、single-flight、`ensureReady`）是另一張卡。
@@ -176,7 +184,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
   async function sendCommand(
     threadId: string,
     method: RpcMethod,
-    command: Command | SlashCommand,
+    command: Command | SlashCommand | RunCancelCommand,
   ): Promise<UplinkResult> {
     // 路徑與封包各講一次 method，server 端不合就拒——照 dsh 的端點慣例
     // （`packages/api/gateway/src/index.ts:134`，`<namespace>/<method>`）。
@@ -226,6 +234,13 @@ export function createWireClient(options: WireClientOptions): WireClient {
         id: nextCommandId++,
         method: 'input.respond',
         params,
+      });
+    },
+
+    async runCancel(threadId) {
+      return sendCommand(threadId, RUN_CANCEL_METHOD, {
+        id: nextCommandId++,
+        method: RUN_CANCEL_METHOD,
       });
     },
 

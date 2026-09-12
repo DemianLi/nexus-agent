@@ -35,6 +35,7 @@ import {
   encodeSseFrame,
   errorResponse,
   isRpcMethod,
+  isRunCancelMethod,
   isSlashMethod,
   isWireChannel,
   successResponse,
@@ -450,8 +451,16 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     if (isSlashMethod(method)) {
       return handleSlash(thread, method, envelope.id, body, signal);
     }
+    if (isRunCancelMethod(method)) {
+      // 中止這一輪（#276）：**受理就回，不等停穩**，停下來的事實走下行——照 dsh 的
+      // `session.cancel` → `{ accepted: true }`。不查是哪個分頁送的（#265 的 Q3），也不看
+      // `slashInFlight`：斜線命令有自己的中止路，`run.cancel` 只管 agent 這一輪（Q13）。
+      thread.pump.cancel();
+      return json(successResponse(envelope.id, { accepted: true }));
+    }
 
-    // **窄到上行那兩支**：路徑已經是 `UPLINK_METHODS` 之一（`isRpcMethod` 減掉斜線那兩支），
+    // **窄到上行那兩支**：路徑已經是 `UPLINK_METHODS` 之一（`isRpcMethod` 減掉斜線那兩支與
+    // `run.cancel`），
     // 而封包的 method 剛剛跟路徑比對過。少了這個窄化，下面的 `input.respond` 分支面對的
     // 是整個 `Command` union——那裡面有八個我們從不收的 method。
     const command = body as Extract<Command, { method: UplinkMethod }>;

@@ -4,10 +4,11 @@
  * 掛進真的組裝之後的行為（日誌上的碼、子代理、真的 `ChatOpenAI` 請求被切斷）在 `apps/harness`。
  */
 
-import { ToolMessage } from '@langchain/core/messages';
+import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import { RunnableBinding } from '@langchain/core/runnables';
 import { FakeListChatModel } from '@langchain/core/utils/testing';
-import { Command } from '@langchain/langgraph';
+import { Command, isCommand } from '@langchain/langgraph';
+import { MiddlewareError } from 'langchain';
 import { describe, expect, it } from 'vitest';
 import {
   TOOL_ABORTED,
@@ -21,6 +22,7 @@ import {
   TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
   TOOL_ABORTED_TEXT,
   TURN_CANCEL_CONFIG_KEY,
+  isTurnCancelled,
   TurnCancelledError,
   turnCancelSignalOf,
 } from './turn-cancel.js';
@@ -104,13 +106,32 @@ describe('工具：已經開始的等它落定，還沒開始的不開始', () =
     expect(kept).toBe(own);
   });
 
-  it('回 Command 的不換：它的狀態更新已經進了日誌', async () => {
+  /**
+   * **這條是翻面寫的。** 它原本釘「回 `Command` 的整個不換」，而那讓 `task`（它回的就是 `Command`）
+   * 被中止之後在日誌上記成成功。翻成「狀態更新留著、只換屬於這次呼叫的那一則」。
+   */
+  it('回 Command 的：狀態更新原樣留著，只把屬於這次呼叫的那則換成 ABORTED', async () => {
     const controller = new AbortController();
-    const command = new Command({ update: { messages: [success()] } });
-    const kept = await guard.wrapToolCall(toolRequest(controller.signal), async () => {
+    const other = new ToolMessage({ content: '別人的', tool_call_id: 'c9', name: 'other' });
+    const command = new Command({ update: { messages: [other, success()], todos: ['保留'] } });
+    const result = await guard.wrapToolCall(toolRequest(controller.signal), async () => {
       controller.abort();
       return command;
     });
+    expect(isCommand(result)).toBe(true);
+    const update = (result as Command).update as { messages: ToolMessage[]; todos: string[] };
+    expect(update.todos).toEqual(['保留']);
+    expect(update.messages[0]).toBe(other);
+    expect(update.messages[1]).toMatchObject({ content: TOOL_ABORTED_TEXT, status: 'error' });
+    expect(toolErrorOf(update.messages[1])).toEqual({ name: 'AbortError', code: TOOL_ABORTED });
+  });
+
+  it('沒中止時 Command 原樣交出去', async () => {
+    const command = new Command({ update: { messages: [success()] } });
+    const kept = await guard.wrapToolCall(
+      toolRequest(new AbortController().signal),
+      async () => command,
+    );
     expect(kept).toBe(command);
   });
 
@@ -201,6 +222,75 @@ describe('模型：中止之後不再叫，叫到一半的切斷', () => {
       return undefined;
     });
     expect(seen).toBe(request);
+  });
+});
+
+describe('子代理那一層不拋，正常收尾', () => {
+  /** 子代理的模型呼叫：`checkpoint_ns` 兩段，同 `session-address.ts` 的判準。 */
+  function subagentModelRequest(signal: AbortSignal) {
+    return {
+      model: new FakeListChatModel({ responses: ['好'] }),
+      messages: [],
+      runtime: {
+        configurable: {
+          [TURN_CANCEL_CONFIG_KEY]: signal,
+          checkpoint_ns: 'tools:abc|model_request:def',
+        },
+      },
+    } as never;
+  }
+
+  it('外層那顆：中止之後子代理的下一次呼叫回一則空的 AI 訊息，不拋也不叫模型', async () => {
+    let called = false;
+    const result = await guard.wrapModelCall(subagentModelRequest(aborted()), async () => {
+      called = true;
+      return undefined;
+    });
+    expect(called).toBe(false);
+    expect(AIMessage.isInstance(result)).toBe(true);
+    expect((result as AIMessage).tool_calls ?? []).toEqual([]);
+  });
+
+  it('內層那顆：子代理的模型請求被切斷，同樣回空訊息收尾', async () => {
+    const controller = new AbortController();
+    const result = await modelSignal.wrapModelCall(
+      subagentModelRequest(controller.signal),
+      async () => {
+        controller.abort();
+        throw new Error('AbortError');
+      },
+    );
+    expect(AIMessage.isInstance(result)).toBe(true);
+  });
+
+  it('對照：root 那一層照樣拋——進入點要靠它收成中止', async () => {
+    const root = {
+      model: new FakeListChatModel({ responses: ['好'] }),
+      messages: [],
+      runtime: {
+        configurable: { [TURN_CANCEL_CONFIG_KEY]: aborted(), checkpoint_ns: 'model_request:def' },
+      },
+    } as never;
+    await expect(guard.wrapModelCall(root, async () => undefined)).rejects.toBeInstanceOf(
+      TurnCancelledError,
+    );
+  });
+});
+
+describe('isTurnCancelled', () => {
+  it('沿 MiddlewareError 拆到底再認——基座每經過一層可能包一層', () => {
+    const cancelled = new TurnCancelledError();
+    expect(isTurnCancelled(cancelled)).toBe(true);
+    expect(isTurnCancelled(MiddlewareError.wrap(cancelled, 'nexusTurnCancel'))).toBe(true);
+    expect(
+      isTurnCancelled(MiddlewareError.wrap(MiddlewareError.wrap(cancelled, 'inner'), 'outer')),
+    ).toBe(true);
+  });
+
+  it('其餘的錯不是中止，包了幾層都一樣；也不比對訊息', () => {
+    expect(isTurnCancelled(MiddlewareError.wrap(new Error('429'), 'nexusTurnCancel'))).toBe(false);
+    expect(isTurnCancelled(new Error('這一輪被中止了'))).toBe(false);
+    expect(isTurnCancelled(undefined)).toBe(false);
   });
 });
 
