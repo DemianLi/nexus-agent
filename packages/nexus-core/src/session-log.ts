@@ -356,6 +356,12 @@ export interface SessionEventMap {
    * `error` 只在 `isError` 時出現，碼照 dsh（見 `tool-events.ts`）；**一般拋錯與核准被拒不帶**
    * ——dsh 只替帶碼的錯誤填這一格。**沒碼的時候整個不放 key**，同 `command/done` 的 `text`。
    *
+   * **「這次呼叫沒有生效」也是 `isError`**：goal、todo、計劃模式、root-only 樁的拒絕回的是錯誤
+   * 訊息（[#273](https://github.com/DemianLi/nexus-agent/issues/273)）。在那之前寫下的日誌把它們
+   * 記成 `isError: false`，**格式版本沒有跟著升**——詞彙沒變，dsh 也只在結構變更時升版
+   * （`references/deepseek-harness/AGENTS.md` 的 `SESSION_FORMAT_VERSION` 那條）——所以讀舊檔
+   * 數錯誤的分不出這一段。
+   *
    * 中斷不是落定：暫停的那次沒有這一顆，見 `tool/call`。
    */
   'tool/result': {

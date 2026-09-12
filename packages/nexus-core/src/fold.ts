@@ -35,6 +35,7 @@ import { createRepeatReminder, resolveRepeatReminderSettings } from './repeat-re
 import type { RepeatReminderSettings } from './repeat-reminder.js';
 import { createSummarizer, resolveSummarizationSettings } from './summarization.js';
 import type { SummarizationSettings } from './summarization.js';
+import { toolCallIdOf, toolRefusal } from './tool-events.js';
 
 /**
  * 工具呈現順序清單裡代表「其餘未列出者」的保留項。
@@ -60,20 +61,14 @@ export const TOOL_ORDER_REST = '<unlisted-tools>';
 export const ROOT_ONLY_NOTICE = '這個工具只在 root agent 上執行；在 subagent 裡呼叫一定會被拒絕。';
 
 /**
- * subagent 叫到 root-only 工具時，那顆樁回的話。
+ * subagent 叫到 root-only 工具時，那顆樁回給模型的那一句。
  *
- * **回字串而不是拋，而理由已經換過一次了。** dsh 那側是拋
+ * 樁把它包成一則 `status: 'error'` 的工具結果，不拋。dsh 那側是拋
  * （`tool-todo/src/index.ts:205-210` 的
  * `throw new Error('todo_write requires an owning agent session')`），理由是「拒絕，
- * 不要靜默 no-op」——那個理由我們照收。舊的擋路石是**拋在我們這裡達不到它**：工具一拋
- * 就是整場 run 死掉，而圍堵當時住在一個掛不掛隨人的 plugin 裡，fold 是 core，不能假設
- * 它在場。
- *
- * **那個前提已經不成立**：圍堵現在由 fold 自己打底在第 0 格（見
- * {@link ./containment.ts}），所以拋得出去也接得回來。**沒有跟著改是刻意的**——
- * 改樁的行為是另一張卡，[#159](https://github.com/DemianLi/nexus-agent/issues/159)
- * 的 Out of scope 明著把它留在外面。回字串在兩種組裝下都是同一則模型看得到的回饋，
- * 今天沒有壞掉的地方。
+ * 不要靜默 no-op」——那個理由我們照收，所以它是錯誤；不拋是因為拋給圍堵的話模型看到的字
+ * 會變成「工具 X 執行失敗：…」。**不帶碼**：dsh 沒有 root-only 這個旗標。決議見
+ * [#271](https://github.com/DemianLi/nexus-agent/issues/271)。
  *
  * @param name - 被叫到的工具名。
  * @param scope - 叫它的那個 subagent。
@@ -91,10 +86,15 @@ export function rootOnlyRefusal(name: string, scope: string): string {
  *
  * @param original - 全域註冊的那一顆。
  * @param scope - 這顆樁要放進哪個 subagent。
- * @returns 只回 {@link rootOnlyRefusal} 的同名工具。
+ * @returns 只回 {@link rootOnlyRefusal} 那則錯誤訊息的同名工具。
  */
 function rootOnlyStub(original: StructuredTool, scope: string): StructuredTool {
-  return makeTool(() => rootOnlyRefusal(original.name, scope), {
+  const refuse = (_args: unknown, config?: unknown) =>
+    toolRefusal(rootOnlyRefusal(original.name, scope), {
+      callId: toolCallIdOf(config) ?? '',
+      name: original.name,
+    });
+  return makeTool(refuse, {
     name: original.name,
     description: `${original.description} ${ROOT_ONLY_NOTICE}`,
     schema: original.schema,

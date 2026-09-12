@@ -110,7 +110,9 @@ export {
   readToolOutcome,
   TOOL_ABORTED,
   TOOL_TIMEOUT,
+  toolCallIdOf,
   toolErrorOf,
+  toolRefusal,
   UNKNOWN_TOOL,
 } from './tool-events.js';
 

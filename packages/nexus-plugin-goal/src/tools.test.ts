@@ -21,6 +21,7 @@ import {
   GOAL_WRAPUP_MARKER,
   goalId,
   SessionRegistry,
+  toolErrorOf,
 } from '@nexus/core';
 import type { NamedEntry, SessionLog } from '@nexus/core';
 
@@ -122,6 +123,16 @@ function textOf(result: unknown): string {
     if (found !== undefined) return String(found.content);
   }
   return String(result);
+}
+
+/**
+ * 那則工具結果落定成什麼：狀態與掛上的碼。圍堵讀的就是這兩格（`@nexus/core` 的
+ * `readToolOutcome`），所以文字對了而這兩格錯，日誌照樣記錯。
+ */
+function verdictOf(result: unknown): { status: unknown; error: unknown } {
+  return ToolMessage.isInstance(result)
+    ? { status: result.status, error: toolErrorOf(result) }
+    : { status: undefined, error: undefined };
 }
 
 /** 一顆 `Command` 帶的訊息串，不是 `Command` 就當場失敗。 */
@@ -550,6 +561,21 @@ describe('在續行輪次裡', () => {
     ).toBe(GOAL_TOOL_ERROR_PREFIX + goalToolBlockTooSoonMessage(3, 1));
   });
 
+  /** dsh `tool-goal/src/index.ts:308-311`。**卡上那張表漏了這一列**，照決議第 3 條補上。 */
+  it('太早報 blocked 是 GOAL_TOOL_BLOCK_THRESHOLD', async () => {
+    const b = bench();
+    const ref = await upto(b, 1);
+    const result = await b.raw(GOAL_UPDATE_TOOL_NAME, {
+      ...ref,
+      action: 'blocked',
+      blocked_reason: '卡住',
+    });
+    expect(verdictOf(result)).toEqual({
+      status: 'error',
+      error: { name: 'HarnessError', code: 'GOAL_TOOL_BLOCK_THRESHOLD' },
+    });
+  });
+
   it('撐到第 3 輪就過得去', async () => {
     const b = bench();
     const ref = await upto(b, 3);
@@ -613,9 +639,9 @@ describe('接線說得出原因', () => {
     plugin.apply(registry);
     exit();
     const found = registry.tools.effective(undefined).get(GOAL_GET_TOOL_NAME);
-    expect(String(await found?.value.invoke({} as never, ROOT_CALL as never))).toBe(
-      GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_NOT_ATTACHED_MESSAGE,
-    );
+    const result = await found?.value.invoke({} as never, ROOT_CALL as never);
+    expect(textOf(result)).toBe(GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_NOT_ATTACHED_MESSAGE);
+    expect(verdictOf(result)).toEqual({ status: 'error', error: undefined });
   });
 
   /**
@@ -628,15 +654,90 @@ describe('接線說得出原因', () => {
     const log = sessions.open({ kind: 'subagent', runId: 'tools:spawn-1' });
     human(log);
     const found = tools.get(GOAL_CREATE_TOOL_NAME);
-    const result = String(
-      await found?.value.invoke(
-        { objective: '偷偷來' } as never,
-        {
-          configurable: { checkpoint_ns: 'tools:spawn-1|tools:call-1' },
-        } as never,
-      ),
+    const result = await found?.value.invoke(
+      { objective: '偷偷來' } as never,
+      {
+        configurable: { checkpoint_ns: 'tools:spawn-1|tools:call-1' },
+      } as never,
     );
-    expect(result).toBe(GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_NO_SERVICE_MESSAGE);
+    expect(textOf(result)).toBe(GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_NO_SERVICE_MESSAGE);
+    expect(verdictOf(result)).toEqual({ status: 'error', error: undefined });
     expect(log.events.filter((event) => event.type === 'goal/change')).toEqual([]);
+  });
+});
+
+/**
+ * **每一種拒絕都落定成錯誤，碼照 dsh 逐類**（[#273](https://github.com/DemianLi/nexus-agent/issues/273)）。
+ *
+ * 文字不變由上面各組的 `toBe` 釘著，這一組只看狀態與碼；真的組裝裡日誌記下什麼在
+ * `apps/harness/src/tool-refusals.test.ts`。**碼打字面、不 import 常數**：那幾個字串歸 dsh
+ * （`tool-goal/src/authority.ts:24`、`index.ts:147-311`，`goal/goal/src/domain.ts:93-102`）。
+ */
+describe('拒絕落定成錯誤，碼照 dsh', () => {
+  const harness = (code: string) => ({ status: 'error', error: { name: 'HarnessError', code } });
+
+  it('成功的那一次不是錯誤', async () => {
+    const { raw } = bench();
+    expect(verdictOf(await raw(GOAL_GET_TOOL_NAME))).toEqual({
+      status: 'success',
+      error: undefined,
+    });
+  });
+
+  it('權限不足：create 與 update 的兩句話同一個碼', async () => {
+    const { raw } = bench();
+    expect(verdictOf(await raw(GOAL_CREATE_TOOL_NAME, { objective: '偷偷來' }))).toEqual(
+      harness('GOAL_TOOL_AUTHORITY_REQUIRED'),
+    );
+    for (const action of ['pause', 'complete']) {
+      expect(
+        verdictOf(await raw(GOAL_UPDATE_TOOL_NAME, { goal_id: 'goal-1', revision: 1, action })),
+      ).toEqual(harness('GOAL_TOOL_AUTHORITY_REQUIRED'));
+    }
+  });
+
+  it('goal_id／revision 不成形與參數配錯 action 都是 GOAL_TOOL_INVALID_UPDATE', async () => {
+    const { raw, log } = bench();
+    human(log);
+    for (const args of [
+      { goal_id: '', revision: 1, action: 'pause' },
+      { goal_id: 'g', revision: 1, action: 'pause', objective: '順便改一下' },
+      { goal_id: 'g', revision: 1, action: 'complete', blocked_reason: '順便講一下' },
+      { goal_id: 'g', revision: 1, action: 'blocked' },
+    ]) {
+      expect(verdictOf(await raw(GOAL_UPDATE_TOOL_NAME, args))).toEqual(
+        harness('GOAL_TOOL_INVALID_UPDATE'),
+      );
+    }
+  });
+
+  it('域的拒絕帶域自己的碼，類別名是 GoalError', async () => {
+    const { raw, call, log } = bench();
+    human(log);
+    await call(GOAL_CREATE_TOOL_NAME, { objective: '第一個' });
+    expect(verdictOf(await raw(GOAL_CREATE_TOOL_NAME, { objective: '第二個' }))).toEqual({
+      status: 'error',
+      error: { name: 'GoalError', code: 'GOAL_ALREADY_EXISTS' },
+    });
+    const ref = await refOf(call);
+    await call(GOAL_UPDATE_TOOL_NAME, { ...ref, action: 'edit', objective: '改一次' });
+    expect(
+      verdictOf(await raw(GOAL_UPDATE_TOOL_NAME, { ...ref, action: 'edit', objective: '再改' })),
+    ).toEqual({ status: 'error', error: { name: 'GoalError', code: 'GOAL_STALE_REVISION' } });
+  });
+
+  it('組裝沒接好是錯誤，但不帶碼', async () => {
+    const { raw } = bench();
+    expect(verdictOf(await raw(GOAL_GET_TOOL_NAME, {}, { configurable: {} }))).toEqual({
+      status: 'error',
+      error: undefined,
+    });
+  });
+
+  /** 圍堵從 `Command` 裡認這次呼叫的那則是比 id，所以 id 要原樣到得了拒絕上。 */
+  it('拒絕帶著這次呼叫的 tool_call_id 與工具名', async () => {
+    const { raw } = bench();
+    const result = await raw(GOAL_CREATE_TOOL_NAME, { objective: '偷偷來' });
+    expect(result).toMatchObject({ tool_call_id: 'call-1', name: GOAL_CREATE_TOOL_NAME });
   });
 });

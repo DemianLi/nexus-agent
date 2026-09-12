@@ -7,6 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { ToolMessage } from '@langchain/core/messages';
 import type { CreateDeepAgentParams, SubAgent } from 'deepagents';
 import { CompositeBackend } from 'deepagents';
 import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
@@ -21,6 +22,16 @@ import type { FoldOptions } from './fold.js';
 import { loadPlugins } from './load.js';
 import { fakeBackend, fakeMiddleware, fakePlugin, fakeSubAgent, fakeTool } from './fixtures.js';
 import type { NexusPlugin } from './plugin.js';
+import { toolErrorOf } from './tool-events.js';
+
+/**
+ * 樁回的東西：模型看到的字、狀態與碼。**樁是錯誤、不帶碼**（#273）——dsh 沒有 root-only 旗標，
+ * 它對同一種情況拋的是一般 `Error`。
+ */
+function stubAnswer(result: unknown): { text: string; status: unknown; error: unknown } {
+  if (!ToolMessage.isInstance(result)) throw new Error(`回的不是一則工具訊息：${String(result)}`);
+  return { text: String(result.content), status: result.status, error: toolErrorOf(result) };
+}
 
 /**
  * 跑一份清單再折，測試裡唯一的入口——fold 的輸入永遠是載入完的 registry。
@@ -600,7 +611,11 @@ describe('root-only 的工具', () => {
     expect(stub).not.toBe(goal);
     // 描述帶著那句話：模型看得到的只有描述，不寫在那裡它每一輪都會再叫一次。
     expect(stub?.description).toContain(ROOT_ONLY_NOTICE);
-    expect(await stub?.invoke({})).toBe(rootOnlyRefusal('goal', 'researcher'));
+    expect(stubAnswer(await stub?.invoke({}))).toEqual({
+      text: rootOnlyRefusal('goal', 'researcher'),
+      status: 'error',
+      error: undefined,
+    });
     // root 那一份沒有被動到。
     expect(params.tools).toEqual([goal]);
   });
@@ -636,7 +651,9 @@ describe('root-only 的工具', () => {
     ]);
     for (const subagent of params.subagents) {
       expect(subagent.tools?.[0]).not.toBe(goal);
-      expect(await subagent.tools?.[0]?.invoke({})).toBe(rootOnlyRefusal('goal', subagent.name));
+      expect(stubAnswer(await subagent.tools?.[0]?.invoke({}))).toMatchObject({
+        text: rootOnlyRefusal('goal', subagent.name),
+      });
     }
   });
 

@@ -224,11 +224,10 @@ describe('todo_write 在真的圖上', () => {
       'model/start',
       'model/end',
     ]);
-    // **絆索：模型拿到的是一句錯誤，日誌記的卻是成功。** 工具把驗證失敗接住、回一句帶
-    // `Error: ` 前綴的字串（見 `TODO_ERROR_PREFIX`），那是一則狀態成功的 ToolMessage——dsh 那側
-    // 同一件事是 `isError`。#264 動工時量到、登記、沒有改：要不要改成 `status: 'error'` 牽動
-    // goal 工具同一個先例與模型面，另外拍板。改了之後這一條會紅，翻面寫成 `isError: true`。
-    expect(sessions.root.events[3]?.data).toMatchObject({ isError: false });
+    // **模型拿到的是一句錯誤，日誌也記成錯誤**（#273）：工具回一則 `status: 'error'` 的
+    // ToolMessage，文字就是上面那一句。**不帶碼**——dsh 對這一類拋的是一般 `Error`，所以
+    // 用 `toEqual`，多出一個 `error` 會紅。
+    expect(sessions.root.events[3]?.data).toEqual({ callId: expect.any(String), isError: true });
   });
 
   it('工具進得了預設清單面向模型的那一面', async () => {
