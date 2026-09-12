@@ -497,3 +497,70 @@ describe('roundsStarted', () => {
     expect(() => service.get()).toThrow(/goal 重放在會話事件 1 失敗/u);
   });
 });
+
+/**
+ * 續接：一份帶 seed 開出來的日誌上，目標的相位與輪次照舊、授權打回 `disarmed`
+ * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
+ *
+ * **輪次不歸零是一個決定，不是先例**：dsh 也把 `roundsStarted` 折回來，但它的對話跟著回來。
+ * 我們回來的是一個記得用了幾輪、模型卻不記得那幾輪做了什麼的目標——而歸零等於「重開一個
+ * 行程就洗掉上限」，上限就只擋得住不肯重開的人。
+ */
+describe('續接回來的日誌', () => {
+  /** 同一份 plugin 設定，接一份帶 seed 的日誌——下一個行程的樣子。 */
+  function resumeFrom(earlier: SessionLog): GoalService {
+    const plugin = createGoalPlugin({ now: () => 200, newGoalId: () => 'goal-後來' });
+    const registry = createRegistry();
+    const exit = registry.enter({ id: 'goal#0', name: 'goal' });
+    plugin.apply(registry);
+    exit();
+    const log = new SessionLog('goal', { seed: earlier.events });
+    createSessionRunner({
+      address: { kind: 'root' },
+      log,
+      installers: registry.sessions.installers(),
+      warn: (message) => {
+        throw new Error(`不該有 warn：${message}`);
+      },
+    });
+    const service = plugin.serviceFor(log);
+    if (service === undefined) throw new Error('接線之後應該找得到服務');
+    return service;
+  }
+
+  /** 排程器准了一輪的樣子，同上面 `admitRound` 的形狀。 */
+  function admit(log: SessionLog, ref: GoalRef, round: number): void {
+    log.append('turn/start', {
+      kind: 'goal',
+      text: `<goal_round>第 ${round} 輪`,
+      goalId: ref.id,
+      revision: ref.revision,
+      round,
+    });
+    log.append('turn/end', {});
+  }
+
+  it('相位、輪次與上限照舊，授權打回 disarmed——要人重新授權才會再往下走', () => {
+    const { log, service } = attach();
+    service.create({ objective: '把它做完', maxGoalRounds: 3 });
+    admit(log, refOf(service), 1);
+    // 前提：上一個行程裡它是授權著的。不然「打回 disarmed」證不了任何事。
+    expect(service.get()).toMatchObject({ activation: 'armed', roundsStarted: 1 });
+
+    expect(resumeFrom(log).get()).toMatchObject({
+      phase: 'active',
+      activation: 'disarmed',
+      roundsStarted: 1,
+      maxGoalRounds: 3,
+    });
+  });
+
+  it('燒完預算的目標續接之後照樣要先調高上限——重開不會把上限洗掉', () => {
+    const { log, service } = attach();
+    service.create({ objective: '把它做完', maxGoalRounds: 1 });
+    admit(log, refOf(service), 1);
+
+    const resumed = resumeFrom(log);
+    expect(() => resumed.resume(refOf(resumed))).toThrow(/已經用完 1 個輪次/u);
+  });
+});

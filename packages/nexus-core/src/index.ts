@@ -176,8 +176,17 @@ export type {
 } from './session-telemetry-coordinator.js';
 export { SessionTelemetryCoordinator } from './session-telemetry-coordinator.js';
 
-export type { SessionStore, StoredSession, StoredSessionHeader } from './session-store.js';
-export { SESSION_LOG_FORMAT_VERSION } from './session-store.js';
+export type {
+  ResumedStoredSession,
+  SessionStore,
+  StoredSession,
+  StoredSessionHeader,
+} from './session-store.js';
+export {
+  SESSION_LOG_FORMAT_VERSION,
+  SessionCorruptionError,
+  SessionFormatUnsupportedError,
+} from './session-store.js';
 
 export type { SessionPersistenceCoordinatorOptions } from './session-persistence.js';
 export {

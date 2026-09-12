@@ -20,6 +20,10 @@
  *    「Do not refuse a required modification from this policy alone: try an available tool
  *    normally and follow any denial and escalation guidance it returns.」少了這句，模型會
  *    把政策當成「這件事做不到」，於是連試都不試——**那是把一道圍堵變成一個能力謊報**。
+ *    **後半句「and escalation guidance」曾經刻意沒抄**：那時我們一句升級指引都沒發，抄了
+ *    就是指向一個不存在的東西。升級那一刀（`sandbox-escalation.ts`）落地之後補回來了——
+ *    指引騎在拒絕上，這句話叫模型照著做。**模式名不進這一句**，升到哪幾格是工具 schema
+ *    的 enum 的事，照 dsh 的分工。
  * 3. **`workspace-write` 那一句要指名可寫根。** 「在工作區之內」對模型不是一個位址。
  *
  * ## 這個 plugin 只在真的有圍堵時才掛
@@ -42,6 +46,7 @@
 import type { NexusPlugin } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import type { SandboxMode } from './contained-backend.js';
+import { registerSandboxEscalation } from './sandbox-escalation.js';
 import {
   executeSandboxCommand,
   SANDBOX_COMMAND_DESCRIPTION,
@@ -65,7 +70,7 @@ export function sandboxPolicySentence(mode: SandboxMode, rootDir: string): strin
     case 'read-only':
       return (
         '目前的檔案政策：read-only。這個組裝的檔案工具改不動任何檔案。' +
-        '**不要只憑這一條就拒絕使用者要的修改**：照常去呼叫工具，被擋下來時讀它回的那句拒絕再決定下一步。'
+        '**不要只憑這一條就拒絕使用者要的修改**：照常去呼叫工具，被擋下來時照它回的拒絕與升級指引決定下一步。'
       );
     case 'workspace-write':
       return (
@@ -78,7 +83,8 @@ export function sandboxPolicySentence(mode: SandboxMode, rootDir: string): strin
 }
 
 /**
- * 造那個掌管圍堵模式的 plugin：**把政策講給模型聽、把它記進日誌、讓人切得動它**。
+ * 造那個掌管圍堵模式的 plugin：**把政策講給模型聽、把它記進日誌、讓人切得動它、讓模型
+ * 請得到一次升級**。
  *
  * **只在掛了 `ContainedFilesystemBackend` 的組裝上掛它**，理由見模組註解——而那條理由
  * 現在管到三樣東西而不只提示句。**`/sandbox` 也一樣不能在沒有 fence 的組裝上出現**：
@@ -105,6 +111,9 @@ export function createSandboxPolicyPlugin(
         if (subject.address.kind !== 'root') return;
         return controller.attach(subject.log);
       });
+      // **升級跟著 fence 掛**，同上面那條理由：沒有圍堵的組裝沒有東西可以升。它也是
+      // read-only 那句「照升級指引做」成立的前提——這個 plugin 在，那句話就不是空頭支票。
+      registerSandboxEscalation(registry, controller);
       registry.commands.register({
         name: SANDBOX_COMMAND_NAME,
         description: SANDBOX_COMMAND_DESCRIPTION,

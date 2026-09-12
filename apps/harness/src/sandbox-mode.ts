@@ -33,21 +33,28 @@
  * 不會共用同一格。**放進模組層或工廠閉包就會串台**，同 `@nexus/plugin-goal` 那段註解記的
  * 事故形狀：一條 thread 的 `/sandbox read-only` 收緊到另一條 thread 的檔案工具上。
  *
- * ## 跨重啟：這一刀交不出來，而理由是結構性的
+ * ## 跨重啟：CLI 接得回去，serve 還沒有
  *
- * 切換寫得進日誌，但**讀不回來**。`SessionStore` 只有 `create`，沒有任何讀介面
- * （`packages/nexus-core/src/session-store.ts`），會話 resume 的兩扇門今天都關著
- * （`session-resume-doors.test.ts`，[#203](https://github.com/DemianLi/nexus-agent/issues/203)）。
- * 所以重開一個 process 之後模式一律回到 `--sandbox` 給的那一格。**絆索在
- * `sandbox-mode.test.ts` 最後一條**：`SessionStore` 長出讀介面的那天它會紅，而那正是該把
- * 這裡接回去的時候。
+ * 切換寫得進日誌，**CLI 的 `--resume <run 目錄>` 讀得回來**：最後一顆 `sandbox/mode` 就是
+ * 起始那一格（{@link recordedSandboxMode}，[#251](https://github.com/DemianLi/nexus-agent/issues/251)
+ * 的門 A）。續接不收 `--sandbox`——兩個來源不管誰贏，另一個都是靜靜被丟掉；接起來之後要換
+ * 就用 `/sandbox`，那一次會記進日誌。**驗收在 `sandbox-mode.test.ts` 最後一組**，由原本釘住
+ * 「`SessionStore` 只有 `create`」的那條絆索翻面而來。
+ *
+ * **serve 還沒有 resume**，那條路上重開一條 thread 仍然回到 `--sandbox` 那一格——所以
+ * [#238](https://github.com/DemianLi/nexus-agent/issues/238) 第 1 項的跨重啟還差 serve 那一半。
  *
  * @module
  */
 
-import type { SessionLog } from '@nexus/core';
+import type { SessionEvent, SessionLog } from '@nexus/core';
 import { isSandboxMode, SANDBOX_MODES } from '@nexus/core';
-import type { SandboxMode, SandboxModeSource } from './contained-backend.js';
+import type {
+  SandboxGrant,
+  SandboxGrantLedger,
+  SandboxMode,
+  SandboxModeSource,
+} from './contained-backend.js';
 
 /** `/sandbox` 的命令名，不帶斜線。 */
 export const SANDBOX_COMMAND_NAME = 'sandbox';
@@ -57,6 +64,25 @@ export const SANDBOX_COMMAND_DESCRIPTION = '看或切換這個會話的檔案效
 
 /** `/sandbox` 的輸入提示。 */
 export const SANDBOX_COMMAND_HINT = `[${SANDBOX_MODES.join('｜')}]`;
+
+/**
+ * 一份日誌上**最後一顆** `sandbox/mode` 記的那一格，一顆都沒有時是 `undefined`。
+ *
+ * 續接（[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）拿它當起始那一格：
+ * `sandbox/mode` 每一筆帶整個值，所以最後一顆就是答案，不必折疊。`undefined` 是那一次跑
+ * 沒有 fence——沒給 `--workspace` 就一顆都不寫（見 `SessionEventMap['sandbox/mode']`），
+ * 續接那一次照常從預設起算。
+ *
+ * @param events - 讀回來的那一份日誌。
+ * @returns 最後一顆記的模式，或 `undefined`。
+ */
+export function recordedSandboxMode(events: readonly SessionEvent[]): SandboxMode | undefined {
+  for (let at = events.length - 1; at >= 0; at -= 1) {
+    const event = events[at];
+    if (event?.type === 'sandbox/mode') return event.data.mode;
+  }
+  return undefined;
+}
 
 /** 一次切換的結局。 */
 export type SandboxSwitchOutcome =
@@ -72,8 +98,20 @@ export type SandboxSwitchOutcome =
  * 各自透過 {@link SandboxModeController.source}。兩邊各存一份快照的話，切換那天畫面上講的
  * 與實際擋的會是兩格，而**沒有任何測試會紅**——那正是這個 class 只有一格狀態的原因。
  */
-export class SandboxModeController {
+export class SandboxModeController implements SandboxGrantLedger {
   #mode: SandboxMode;
+
+  /**
+   * 待消費的那一顆升級 grant（見 `SandboxGrant`）。
+   *
+   * **一次最多一顆**：新核准的蓋掉舊的，舊的就再也認領不到——少一顆是 fail-closed 的方向。
+   * **不進日誌**，理由同核准本身那條（[#220](https://github.com/DemianLi/nexus-agent/issues/220)：
+   * 核准在日誌上一顆事件都沒有，是認帳不做）。
+   */
+  #grant: SandboxGrant | undefined;
+
+  /** 見 {@link SandboxModeController.escalationHint}。 */
+  #escalationHint: string | undefined;
 
   /**
    * 接著的 root 日誌，**依接線順序**。
@@ -115,6 +153,47 @@ export class SandboxModeController {
    * 呼叫端變成 `this` 是 `undefined`，而那個錯要到第一次工具呼叫才炸。
    */
   readonly source: SandboxModeSource = () => this.#mode;
+
+  /**
+   * 被擋下時接在拒絕後面的升級指引。**只有真的掛了升級工具才有**——由掛它的那一步
+   * （{@link SandboxModeController.enableEscalation}）寫進來，所以 fence 與工具對「這個組裝
+   * 有沒有升級」讀的是同一個事實，不會一邊公告一邊沒有。
+   */
+  get escalationHint(): string | undefined {
+    return this.#escalationHint;
+  }
+
+  /**
+   * 掛上升級工具的那一步呼叫它。
+   * @param hint - 被擋下時要接在拒絕後面的那句話。
+   */
+  enableEscalation(hint: string): void {
+    this.#escalationHint = hint;
+  }
+
+  /**
+   * 發一顆 grant：**只蓋一個目標、只蓋一次**。
+   * @param grant - 核准來的模式與模型指名的那個檔。
+   */
+  grant(grant: SandboxGrant): void {
+    this.#grant = grant;
+  }
+
+  /** @returns 現在待消費的那一顆；只看，不消費。 */
+  peekGrant(): SandboxGrant | undefined {
+    return this.#grant;
+  }
+
+  /**
+   * 消費**這一顆**。
+   * @param grant - 先前 peek 到的那一顆。
+   * @returns 它還是待消費的那一顆時為真。
+   */
+  takeGrant(grant: SandboxGrant): boolean {
+    if (this.#grant !== grant) return false;
+    this.#grant = undefined;
+    return true;
+  }
 
   /**
    * 接一份 root 會話日誌，**並且當場把起始值釘進去**。

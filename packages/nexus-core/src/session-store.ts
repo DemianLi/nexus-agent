@@ -17,16 +17,19 @@
  *
  * ## 兩條刻意沒抄的
  *
- * - **沒有 `open`／`stat`／`list`，只有 `create`。** 那三個是給「讀回一份已存的會話」用的，
- *   而我們**今天沒有任何一個讀回的呼叫端**：三個入口都沒有跨重啟的續接
- *   （[#155](https://github.com/DemianLi/nexus-agent/issues/155) 實測）。加一個沒有消費者的
- *   讀路徑，換到的是一份沒有人走過的程式碼。**要加的時候，`create` 的拒絕就是它的掛點**
- *   ——見下一條。
+ * - **沒有 `stat`／`list`，讀回只有一個 `resume`。** dsh 的 `open`／`stat`／`list` 是給一個
+ *   會列出、查詢、續接任何會話的服務用的；我們的讀方只有一個——CLI 的 `--resume <run 目錄>`
+ *   （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A），它手上已經有位址，
+ *   不需要列。所以只抄續接要的那一條：讀回、交出一個接著寫的把手。`stat`／`list` 等有人
+ *   要列的那天再加。
  * - **沒有跨行程的寫租約（`SessionAlreadyOwnedError`）。** 退到最弱但夠用的一條：
  *   {@link SessionStore.create} 對**已經存在的 session**必須拒絕，不得覆寫也不得續寫。
  *   我們的 session id 只在一次組裝內唯一（`SessionRegistry` 的 `<root>/<runId>`），
- *   不像 dsh 的 `SessionId` 全域唯一，所以後端要自己把每一次組裝隔開。這條拒絕是
- *   **未來那個 seeded／rehydrate 路徑的絆索**：在它出現以前，任何撞名都會響。
+ *   不像 dsh 的 `SessionId` 全域唯一，所以後端要自己把每一次組裝隔開。這條拒絕
+ *   **在續接出現之後照樣成立**：續接是另一個方法（{@link SessionStore.resume}），它明著打開
+ *   一份已存的，`create` 撞到已存在的仍然拒絕——撞名照樣會響，續接不會被當成撞名。
+ *   **沒有寫租約的代價仍然在**：兩個行程同時 `--resume` 同一個目錄，兩邊會往同一個檔續寫，
+ *   `seq` 會撞號。dsh 靠 `open(id, 'write')` 的所有權把第二個擋掉，我們沒有。
  *
  * @module
  */
@@ -39,7 +42,7 @@ import type { SessionEvent } from './session-log.js';
  * **第一天就蓋，不是為了現在有兩個版本。** dsh 的 `SessionHeader` 帶 `version`
  * （`SESSION_FORMAT_VERSION`），而且它為此養著 `session-format` 加兩個遷移包
  * （`v0-to-v1`、`v1-to-v2`）。我們的事件詞彙從 [#89](https://github.com/DemianLi/nexus-agent/issues/89)
- * 的六種長到今天的十種、還會再長；不蓋版本的話，第一次改詞彙就是一次**沒有版本可以
+ * 的六種一路長到今天、還會再長；不蓋版本的話，第一次改詞彙就是一次**沒有版本可以
  * 分支的遷移**——讀方只能靠猜。
  *
  * ## 2：`turn/start` 多了 `kind: 'goal'`
@@ -47,12 +50,24 @@ import type { SessionEvent } from './session-log.js';
  * 續行驅動器（[#180](https://github.com/DemianLi/nexus-agent/issues/180)）加了第三種輪次
  * 來源，那是一次詞彙變更，所以版本跟著走。
  *
- * **沒有跟著來的遷移包**，理由不是「先欠著」：`SessionStore` 只有 `create`／`append`／
- * `flush`／`close`，**整條讀取路徑不存在**——沒有任何程式碼把存下來的 header 或事件讀
- * 回來，所以沒有讀方需要分支。dsh 為此養兩個遷移包，是因為它真的讀舊檔。這個號今天
- * 只有寫入端，它記的是「這一份存檔是照哪一版詞彙寫的」，給日後的讀方用。
+ * ## 3：`session/end-seed`
+ *
+ * 門 A（[#251](https://github.com/DemianLi/nexus-agent/issues/251)）加了一顆由建構子寫的
+ * 事件。**同一張卡也長出了第一個讀方**（{@link SessionStore.resume}），所以這個號從今天起
+ * 有人讀：
+ *
+ * - **舊的號直接讀。** v1 是 v2 的子集——`turn/start` 的 `kind` 從
+ *   [#98](https://github.com/DemianLi/nexus-agent/pull/98) 就在，格式版本到
+ *   [#173](https://github.com/DemianLi/nexus-agent/pull/173) 才開始蓋，v2 只多了 `goal`
+ *   這個變體；v2 之於 v3 同理，只多了一種事件。所以不需要遷移包——dsh 養兩個是因為它的
+ *   舊版真的長得不一樣。
+ * - **比這個號新的拒絕**，而且跟壞檔分開報（{@link SessionFormatUnsupportedError} 與
+ *   {@link SessionCorruptionError}，照 dsh 的 `SessionFormatUnsupportedError`／
+ *   `SessionPersistenceCorruptionError`）：新版寫的檔不是壞的，是這一版讀不懂。
+ * - **續寫進去的是這一版的詞彙**，所以續接的把手第一次寫入時把 header 的 `version` 蓋成
+ *   這個號——dsh 同樣在讀的時候把歷史 header 翻成目前的版本。
  */
-export const SESSION_LOG_FORMAT_VERSION = 2;
+export const SESSION_LOG_FORMAT_VERSION = 3;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。
@@ -123,4 +138,68 @@ export interface SessionStore {
    * @returns 它的把手。IO 延後到第一次 `append`／`flush`。
    */
   create(header: StoredSessionHeader): StoredSession;
+  /**
+   * 讀回一份已存的會話，交出一個**接著寫**的把手
+   * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
+   *
+   * 照 dsh 的續接：讀回來的是**實體上有效的前綴**——最後一行寫到一半（當掉時的常態）不算
+   * 進去，把手第一次寫入之前把它截掉。中段的壞行或缺號不是當掉，是壞檔，要拒絕。
+   *
+   * @param id - 要續接的會話 id，就是當初 `create` 的 `header.id`。
+   * @returns 讀回來的 header（`version` 是存的那個）、事件，與 next-seq 等於事件數的把手。
+   * @throws {@link SessionFormatUnsupportedError} header 的版本比這一版新。
+   * @throws {@link SessionCorruptionError} header 或某一行讀不懂、或 `seq` 不連續。
+   * @throws 這個 id 在這裡沒有存檔。
+   */
+  resume(id: string): Promise<ResumedStoredSession>;
+}
+
+/** {@link SessionStore.resume} 交出來的東西。 */
+export interface ResumedStoredSession {
+  /** 存的那份 header，**原樣**——`version` 是寫它的那一版，不是這一版。 */
+  readonly header: StoredSessionHeader;
+  /** 讀回來的事件，照 `seq` 排、從 0 連續。拿去當 `SessionLog` 的 seed。 */
+  readonly events: readonly SessionEvent[];
+  /** 接著寫的把手。它的 next-seq 就是 `events.length`。 */
+  readonly stored: StoredSession;
+}
+
+/**
+ * 存檔的格式版本比這一版新——**不是壞的，是讀不懂**。
+ *
+ * 與 {@link SessionCorruptionError} 分開，照 dsh：「数据没有损坏」。兩者混在一起的話，
+ * 一個升級過的使用者拿舊版打開新檔，看到的會是「你的檔案壞了」。
+ */
+export class SessionFormatUnsupportedError extends Error {
+  override readonly name = 'SessionFormatUnsupportedError';
+
+  /**
+   * @param id - 哪一份會話。
+   * @param version - 存檔上寫的版本，原樣。
+   */
+  constructor(
+    readonly id: string,
+    readonly version: unknown,
+  ) {
+    super(
+      `會話 "${id}" 的格式版本是 ${JSON.stringify(version)}，這一版只讀得懂到 ` +
+        `${SESSION_LOG_FORMAT_VERSION}。檔案沒有壞，是比這一版新。`,
+    );
+  }
+}
+
+/** 存檔讀得到但讀不懂：header 或中段某一行不是這一版寫得出來的形狀、或 `seq` 不連續。 */
+export class SessionCorruptionError extends Error {
+  override readonly name = 'SessionCorruptionError';
+
+  /**
+   * @param id - 哪一份會話。
+   * @param reason - 哪裡壞了。
+   */
+  constructor(
+    readonly id: string,
+    reason: string,
+  ) {
+    super(`會話 "${id}" 的存檔壞了：${reason}`);
+  }
 }

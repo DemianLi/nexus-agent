@@ -48,7 +48,7 @@
  */
 
 import { SessionLog } from './session-log.js';
-import type { SessionLogOptions } from './session-log.js';
+import type { SessionEvent, SessionLogOptions } from './session-log.js';
 import { sessionAddressKey } from './session-address.js';
 import type { SessionAddress } from './session-address.js';
 
@@ -68,10 +68,19 @@ export interface SessionRegistryOptions {
   /**
    * 每一份日誌的建構選項，**原樣轉給每一個 `new SessionLog(...)`**。
    *
-   * 一份而不是逐份，因為它今天只有 `onListenerError` 一格，而那一格答的是「這次組裝的
-   * warn 往哪裡去」——那是組裝點的事，不是某一份會話的事。
+   * 一份而不是逐份，因為它答的是「這次組裝的 warn 往哪裡去」——那是組裝點的事，不是某一份
+   * 會話的事。**`seed` 不收**：它是某一份會話的事，混進這裡會被原樣轉給每一份 subagent 日誌。
    */
-  readonly logOptions?: SessionLogOptions;
+  readonly logOptions?: Omit<SessionLogOptions, 'seed'>;
+  /**
+   * root 那一份的 seed：上一個行程留下的事件
+   * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。見
+   * {@link SessionLogOptions.seed}。
+   *
+   * **只有 root 有**：subagent 的日誌是這個行程第一次有人要寫的時候才出生的，上一個行程
+   * 的那些 spawn 已經跑完了，它們的檔案留在原處不接回來。
+   */
+  readonly rootSeed?: readonly SessionEvent[];
 }
 
 /**
@@ -82,7 +91,8 @@ export interface SessionRegistryOptions {
  */
 export class SessionRegistry {
   readonly #rootSessionId: string;
-  readonly #logOptions: SessionLogOptions;
+  readonly #logOptions: Omit<SessionLogOptions, 'seed'>;
+  readonly #rootSeed: readonly SessionEvent[] | undefined;
   /** 以 {@link sessionAddressKey} 為鍵，插入序（root 永遠第一個）。 */
   readonly #entries = new Map<string, SessionEntry>();
   readonly #observers = new Set<SessionObserver>();
@@ -94,6 +104,7 @@ export class SessionRegistry {
   constructor(rootSessionId: string, options: SessionRegistryOptions = {}) {
     this.#rootSessionId = rootSessionId;
     this.#logOptions = options.logOptions ?? {};
+    this.#rootSeed = options.rootSeed;
     this.#create({ kind: 'root' });
   }
 
@@ -167,7 +178,12 @@ export class SessionRegistry {
   #create(address: SessionAddress): SessionEntry {
     const entry: SessionEntry = {
       address,
-      log: new SessionLog(this.#sessionIdFor(address), this.#logOptions),
+      log: new SessionLog(
+        this.#sessionIdFor(address),
+        address.kind === 'root' && this.#rootSeed !== undefined
+          ? { ...this.#logOptions, seed: this.#rootSeed }
+          : this.#logOptions,
+      ),
     };
     this.#entries.set(sessionAddressKey(address), entry);
     return entry;

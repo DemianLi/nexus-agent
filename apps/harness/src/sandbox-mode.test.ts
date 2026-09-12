@@ -283,16 +283,17 @@ describe('組裝起來之後', () => {
   });
 });
 
-describe('跨重啟讀不回來（絆索）', () => {
-  it('`SessionStore` 只有 `create`——長出讀介面的那天，這裡就是該把模式接回去的地方', () => {
-    // 這一條不是在驗我們的行為，是在**釘住一個結構性的缺席**：`sandbox/mode` 寫得進日誌，
-    // 但沒有任何東西讀得回來（會話 resume 的兩扇門都關著，見 `session-resume-doors.test.ts`）。
-    // 所以模式在重開一個 process 之後一律回到 `--sandbox` 那一格。
+describe('跨重啟：`SessionStore` 長出了讀介面', () => {
+  it('成員是 `create` 與 `resume`——再長一個讀介面仍然響在這裡', () => {
+    // **這一條原本是絆索**：它釘住「`SessionStore` 只有 `create`」，註解寫著長出讀介面的那天
+    // 就是該把模式接回去的時候。[#251](https://github.com/DemianLi/nexus-agent/issues/251)
+    // 開門的那天它照設計紅在 `typecheck`，模式也接回去了——行為的驗收在
+    // `session-resume.test.ts`（上一次切成 `read-only`，`--resume` 回來還是 `read-only`）。
     //
-    // **釘的是介面不是某個實作的鍵**：`createJsonlSessionStore` 回的物件上多一個
-    // `directory` 這種與讀寫無關的欄位不該讓這裡響。`SessionStore` 多一個成員才該響——
-    // 那就是門 A 開了，也正是該把這裡接回去的時候。
-    const KNOWN = ['create'] as const;
+    // 這裡留下的是形狀：**釘的是介面不是某個實作的鍵**，`createJsonlSessionStore` 回的物件
+    // 上多一個 `directory` 這種與讀寫無關的欄位不該讓這裡響。`stat`／`list` 真的長出來的那
+    // 天才該響——那時候要回頭看 `session-store.ts` 檔頭那條「只抄續接要的那一條」。
+    const KNOWN = ['create', 'resume'] as const;
     KNOWN satisfies readonly (keyof SessionStore)[];
     type Exhaustive = keyof SessionStore extends (typeof KNOWN)[number] ? true : never;
     const exhaustive: Exhaustive = true;

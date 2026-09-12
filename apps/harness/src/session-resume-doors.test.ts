@@ -1,11 +1,14 @@
 /**
- * **「會話 resume」在我們這裡不是一扇門，是兩扇，而它們今天都關著。** 這一份把「關著」
- * 釘成一條**翻得了面**的絆索。
+ * **「會話 resume」在我們這裡不是一扇門，是兩扇。** 門 A（會話日誌的回讀）2026-09-11 開了
+ * ——CLI 的 `--resume`（[#251](https://github.com/DemianLi/nexus-agent/issues/251)）；門 B（落盤
+ * checkpointer）那張卡決定不開。這一份原本把「兩扇都關著」釘成**翻得了面**的絆索：門 A 那一半
+ * 已經翻面成它的形狀驗收，門 B 那一半照舊。
  *
  * 圖是 [#190](https://github.com/DemianLi/nexus-agent/issues/190)，這一份是它第 1 格
  * （`agent/session-start`）掉出來的 [#201](https://github.com/DemianLi/nexus-agent/issues/201)
  * 再掉出來的 [#203](https://github.com/DemianLi/nexus-agent/issues/203)。
- * **不建 resume，不改任何行為。**
+ * **這一份不建 resume**——門 A 的實作在 `@nexus/core` 與 `cli.ts`，行為驗在
+ * `session-resume.test.ts`；這裡只守形狀，與守著門 B。
  *
  * ## 兩扇門，各自只帶得回半個會話
  *
@@ -17,13 +20,15 @@
  * **這條裂縫是兩個相反決定的交點**：todo 走事件不走 graph state 是寫下來的判準
  * （`plugin-todo/src/index.ts`），plan-mode 走 graph state 是登記過的偏離
  * （`plugin-plan-mode/src/index.ts`）。**今天看不見，因為兩半一起消失**——只開一扇門，
- * 回來的會話會是半個，而**哪一半是真相，是開門之前就要決定的事**。
+ * 回來的會話會是半個，而**哪一半是真相，是開門之前就要決定的事**。#251 決定了：只開門 A，
+ * 回來的是日誌那一半，對話與計劃模式從頭開始，而入口照實這樣講。
  *
- * ## 絆索今天不對稱，這一份補上另一半
+ * ## 門 B 的絆索
  *
- * **門 A 有**：`SessionStore.create` 對已存在的 session 必須拒絕，`session-store.ts` 逐字
- * 說那條拒絕「是未來那個 seeded／rehydrate 路徑的絆索」，落在 `jsonl-session-store.ts`
- * 的 `open(path, 'wx')`。**門 B 一條都沒有**——換掉組裝點那一行不會撞到任何東西。
+ * 門 A 原本有兩條：`SessionStore.create` 撞到已存在的就拒絕（`jsonl-session-store.ts` 的
+ * `open(path, 'wx')`），與這一份下半那兩張結構表。開門之後前者照樣成立——續接走 `resume`
+ * 不走 `create`——後者翻面成了形狀驗收。**門 B 本來一條都沒有**——換掉組裝點那一行不會
+ * 撞到任何東西——所以這一份補上它。
  *
  * ## 這條絆索釘得到什麼、釘不到什麼
  *
@@ -44,9 +49,9 @@
  *
  * ## 這一份不做什麼
  *
- * 不建 resume、不換 checkpointer、不碰 `onlyBuiltDependencies`、不動 goal 的 `activation`
- * 語義（它今天是對的，而且保證它的是折疊規則不只是壽命：`service.ts` 讓重放時每一顆
- * `goal/change` 都主動打回 `disarmed`），也不補 `SessionStore` 的讀介面——那是門 A 的工作量。
+ * 不換 checkpointer、不碰 `onlyBuiltDependencies`、不動 goal 的 `activation` 語義（保證它的
+ * 是折疊規則不只是壽命：`service.ts` 讓重放時每一顆 `goal/change` 都主動打回 `disarmed`，
+ * 續接回來的目標因此一律要人重新授權）。
  */
 
 import { readFileSync, readdirSync } from 'node:fs';
@@ -138,21 +143,20 @@ const DOOR_B_GUIDANCE = (paths: readonly string[]): string =>
   '**門 B（落盤 checkpointer）動了。**\n' +
   '這不是把期望值改一改就好的事——會話 resume 在我們這裡是**兩扇門**，' +
   '而它們載的是不同的一半：checkpointer 帶回對話訊息、`planModeActive`、虛擬檔案系統、' +
-  '工具結果暫存；會話日誌帶回 goal 的相位與輪次、todo、`turn/*`。\n' +
-  '**只開一扇，回來的會話就是半個。開之前要先決定哪一半是真相。**\n' +
-  '真的要開的話，這三處要跟著改：\n' +
-  `  1. ${paths[0]} —— 「After session resume or fork, an active goal is disarmed…」` +
-  '這一句 dsh 的政策文字**今天刻意不抄**，理由逐字是「有回讀那天它才該回來」。' +
-  '同一個條件在 `activation` 那一格的 schema 註解裡**還有第二份**——兩處都是模型讀得到的' +
-  '文字，改一處漏一處，模型會不知道自己為什麼被 disarm。' +
-  '（goal 的**機制**不會壞：折疊規則讓重放時每一顆 `goal/change` 都主動打回 `disarmed`。）\n' +
-  `  2. ${paths[1]} —— 計劃模式為什麼不搬進會話日誌的那一段。` +
-  '它的理由已經被改過一次了（耐久了但沒有讀方），**開門那天要再改一次**。\n' +
-  `  3. ${paths[2]} 的 ${TOOL_RESULT_STASH_PREFIX} —— ` +
+  '工具結果暫存；會話日誌帶回 goal 的相位與輪次、todo、`turn/*`、沙箱模式。\n' +
+  '**門 A 已經開了**（CLI 的 `--resume`），而 ' +
+  '[#251](https://github.com/DemianLi/nexus-agent/issues/251) **決定門 B 不開**：兩份耐久來源' +
+  '的寫入順序會分岔（checkpoint 寫了日誌沒寫，或反過來），要先有一條對帳規則。' +
+  '動它之前先回去看那個決定。\n' +
+  '真的要開的話，這兩處要跟著改：\n' +
+  `  1. ${paths[0]} —— 計劃模式為什麼不搬進會話日誌的那一段。` +
+  '門 B 一開，計劃模式會從 checkpointer 回來，那一段「只開門 A 會悄悄消失」的說法跟著過期。\n' +
+  `  2. ${paths[1]} 的 ${TOOL_RESULT_STASH_PREFIX} —— ` +
   '[#155](https://github.com/DemianLi/nexus-agent/issues/155) 記著「軸 2 一旦要做，' +
   '第一個要處理的是 [#170](https://github.com/DemianLi/nexus-agent/issues/170) ' +
   '工具結果暫存的保留策略」：checkpointer 落盤之後，暫存檔要不要跟著活下來是一個新問題。\n' +
-  '全文見 [#203](https://github.com/DemianLi/nexus-agent/issues/203)。';
+  '全文見 [#203](https://github.com/DemianLi/nexus-agent/issues/203) 與 ' +
+  '[#251](https://github.com/DemianLi/nexus-agent/issues/251)。';
 
 /**
  * 失敗訊息裡那三個目的地，**逐一從磁碟讀過**。
@@ -161,19 +165,17 @@ const DOOR_B_GUIDANCE = (paths: readonly string[]): string =>
  * 用的是 `TOOL_RESULT_STASH_PREFIX` 這個 import——那一格連檔名都不必猜，編譯器會擋。
  */
 const DESTINATIONS = [
-  'packages/nexus-plugin-goal/src/tools.ts',
   'packages/nexus-plugin-plan-mode/src/index.ts',
   'apps/harness/src/agent-factory.ts',
 ] as const;
 
 /** 每個目的地必須還講著那件事。**錨點選的是改寫時不會動的那一句。** */
 const DESTINATION_ANCHORS: readonly (readonly [string, readonly string[]])[] = [
-  // 兩份都要在：政策文字那一份，與 `activation` 那一格的 schema 註解。
-  // 只釘前者的話，模型讀得到的另一半沒有人守（`model-facing-surface-is-more-than-prose`）。
-  [DESTINATIONS[0], ['有回讀那天它才該回來', '仍然沒有回讀路徑']],
-  // 這一句的**理由**是會改的（而且剛改過），結論不是——所以錨在結論上。
-  [DESTINATIONS[1], ['但計劃模式沒有跟著搬，而理由不是慣性']],
-  [DESTINATIONS[2], ['TOOL_RESULT_STASH_PREFIX']],
+  // 這一句的**理由**是會改的（而且改過兩次了），結論不是——所以錨在結論上。
+  // 原本還有 goal 的 `tools.ts` 那一格：dsh 那句 resume 政策文字「有回讀那天它才該回來」。
+  // 門 A 開的那天它回來了（#251），那一格不再是門 B 的事。
+  [DESTINATIONS[0], ['但計劃模式沒有跟著搬，而理由不是慣性']],
+  [DESTINATIONS[1], ['TOOL_RESULT_STASH_PREFIX']],
 ];
 
 describe('門 B：落盤 checkpointer', () => {
@@ -195,58 +197,93 @@ describe('門 B：落盤 checkpointer', () => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* 門 A：會話日誌的 seeded／rehydrate 路                                         */
+/* 門 A：會話日誌的 seeded 路——開了，這裡是它的形狀驗收                          */
 /* -------------------------------------------------------------------------- */
 
 /**
  * `SessionLogOptions` 的每一格逐個列出來。
  *
- * `satisfies` 那一句是這一層的骨頭：**編譯器去比對欄位集合**，多一個或少一個都在
- * `typecheck` 當場紅。今天只有一格，而**那一格與回讀無關**——`SessionLog` 沒有任何
- * 「拿一份既有事件開場」的縫。
- *
- * **門 A 開的樣子就是這裡多一格**（`events` 之類）。它多的那天，`typecheck` 會先指到這個
- * 檔案，這個檔案的失敗訊息再把人送去上面那三個目的地——順序是兩段的，同
- * `registry-channel-count.test.ts`。
+ * **這張表原本是門 A 的絆索**：當時只有 `onListenerError` 一格，註解寫著「門 A 開的樣子就是
+ * 這裡多一格」。[#251](https://github.com/DemianLi/nexus-agent/issues/251) 開門的那天它照設計
+ * 紅在 `typecheck`（`TS1360: Property 'seed' is missing`），現在翻面成形狀的驗收：**seeded 路
+ * 是一個建構選項，而且只有這一個**。再長一格，仍然紅在這裡。
  */
 const SESSION_LOG_OPTIONS = {
   onListenerError: true,
+  seed: true,
 } satisfies Record<keyof SessionLogOptions, true>;
 
 /**
  * `SessionLog` 的靜態面，同樣逐個列出來。
  *
- * **seeded 路不一定長成一個建構選項**——`SessionLog.from(storedEvents)` 這種靜態工廠是
- * 同樣自然的寫法，而它碰不到 `SessionLogOptions`，上面那張表看不見它。這一張看得見：
- * 多一個靜態成員，`typecheck` 就紅在「少一個屬性」。
- *
- * **這一張是量過的，不是寫上去就算數的。** 預檢時真的給 `SessionLog` 加了一個
- * `static from()`，`tsc` 當場報 `TS1360: Property 'from' is missing`——**一張掃空的結構
- * 表會永遠綠**，所以它必須自己證明過一次。
+ * seeded 路落在建構選項上，**沒有**長成 `SessionLog.from(storedEvents)` 這種靜態工廠——
+ * 兩條並存的話，seed 的驗證（連續、拷、凍、補 end-seed）會有一條走不到。多一個靜態成員，
+ * `typecheck` 就紅在「少一個屬性」（預檢時真的加過一個 `static from()` 量過）。
  */
 const SESSION_LOG_STATICS = {
   prototype: true,
 } satisfies Record<keyof typeof SessionLog, true>;
 
-describe('門 A：會話日誌的回讀路徑', () => {
-  it('`SessionLogOptions` 沒有任何一格是拿來塞既有事件的', () => {
-    expect(Object.keys(SESSION_LOG_OPTIONS)).toEqual(['onListenerError']);
+/** 上一個行程的樣子：一輪跑完。 */
+function earlierLog(): SessionLog {
+  const log = new SessionLog('door-a');
+  log.append('turn/start', { kind: 'message', text: '一' });
+  log.append('turn/end', {});
+  return log;
+}
+
+describe('門 A：會話日誌的 seeded 路', () => {
+  it('seeded 路是一個建構選項，沒有第二條', () => {
+    expect(Object.keys(SESSION_LOG_OPTIONS)).toEqual(['onListenerError', 'seed']);
     expect(Object.keys(SESSION_LOG_STATICS)).toEqual(['prototype']);
   });
 
-  /**
-   * **`seq` 出自位置，不出自任何被交進來的東西。**
-   *
-   * 上面兩張表擋的是**形狀**（多一個建構選項、多一個靜態工廠），這一條擋的是**行為**：
-   * 形狀一格都不動也做得到 seeded——把 `seq` 改成從一個既有的最大值續號就行。那一格
-   * 是 seeded 路徑真正要動的東西，而編譯器看不見它。
-   */
-  it('一份新日誌從空的開始，`seq` 從 0 起算', () => {
+  /** 沒給 seed 的行為不能跟著動——原本那條絆索的行為半邊，原樣留著。 */
+  it('一份新日誌仍然從空的開始，`seq` 從 0 起算', () => {
     const log = new SessionLog('door-a');
     expect(log.length).toBe(0);
     expect(log.events).toEqual([]);
     expect(log.append('turn/start', { kind: 'message', text: '一' }).seq).toBe(0);
     expect(log.append('turn/start', { kind: 'message', text: '二' }).seq).toBe(1);
     expect(log.length).toBe(2);
+  });
+
+  it('帶 seed 開的日誌從 seed 的長度續號，結尾補一顆 `session/end-seed`', () => {
+    const resumed = new SessionLog('door-a', { seed: earlierLog().events });
+    expect(resumed.events.map((event) => [event.seq, event.type])).toEqual([
+      [0, 'turn/start'],
+      [1, 'turn/end'],
+      [2, 'session/end-seed'],
+    ]);
+    expect(resumed.append('turn/start', { kind: 'message', text: '二' }).seq).toBe(3);
+  });
+
+  it('seed 已經以 `session/end-seed` 結尾就不再補——重開一份沒動過的會話不疊標記', () => {
+    const once = new SessionLog('door-a', { seed: earlierLog().events });
+    const twice = new SessionLog('door-a', { seed: once.events });
+    expect(twice.events.map((event) => event.type)).toEqual([
+      'turn/start',
+      'turn/end',
+      'session/end-seed',
+    ]);
+  });
+
+  it('seed 缺號就拒絕——開出來的日誌 `length` 與 `seq` 會對不上', () => {
+    const [, second] = earlierLog().events;
+    expect(() => new SessionLog('door-a', { seed: [second!] })).toThrow(
+      /seed 不連續：第 0 顆的 seq 是 1/,
+    );
+  });
+
+  it('seed 凍住了——從磁碟讀回來的純物件也改不動，拿去改的那一份也動不到日誌', () => {
+    const plain = JSON.parse(JSON.stringify(earlierLog().events)) as {
+      data: { text?: string };
+    }[];
+    const log = new SessionLog('door-a', { seed: plain as never });
+    const [first] = log.events;
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(Object.isFrozen(first!.data)).toBe(true);
+    plain[0]!.data.text = '改掉了';
+    expect(first!.data).toEqual({ kind: 'message', text: '一' });
   });
 });

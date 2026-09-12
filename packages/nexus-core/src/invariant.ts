@@ -22,6 +22,12 @@
  *
  * **刻意不檢「日誌結尾還有一輪開著」**：那跟「跑到一半」長得一模一樣，不是違規。
  *
+ * **同一個理由往前推一步：它在 `session/end-seed` 那裡重設。** 一份帶 seed 開出來的日誌，
+ * seed 結尾那一輪開著就是上一個行程跑到一半，**不是這個行程的違規**
+ * （[#251](https://github.com/DemianLi/nexus-agent/issues/251)）。所以這條檢查的範圍是
+ * 「一個行程的生命週期之內」，不是整份檔案——不重設的話，resume 之後第一顆 `turn/start`
+ * 必然報「上一輪還開著」，而那一輪這個行程根本沒碰過。
+ *
  * @module
  */
 
@@ -52,6 +58,11 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
       case 'turn/end':
       case 'turn/failed': {
         if (!open) fail(`${event.type}（seq ${event.seq}）關了一個沒有開著的輪`);
+        open = false;
+        break;
+      }
+      case 'session/end-seed': {
+        // seed 之前沒收的那一輪屬於上一個行程，見檔頭最後一段。
         open = false;
         break;
       }

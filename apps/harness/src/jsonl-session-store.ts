@@ -16,8 +16,9 @@
  *
  * - **沒有 Zstandard 壓縮與 checksum。** dsh 預設存成帶 checksum 的連續 Zstandard frame
  *   （也可配置成原始行）。我們存原始行：撕裂尾部的偵測與部分解碼是**讀方**的機器，
- *   而我們今天沒有讀方（[#155](https://github.com/DemianLi/nexus-agent/issues/155)：
- *   三個入口都沒有跨重啟的續接）。加壓縮換到的是一個沒有人走過的解碼路徑。
+ *   而今天的讀方只有一個：續接（{@link JsonlSessionStore.resume}，
+ *   [#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A），它讀的就是原始行。
+ *   加壓縮換到的是第二套解碼路徑，沒有人要。
  * - **沒有跨行程的寫租約。** 退到 `open(path, 'wx')`——**檔案已經在就拒絕**，不覆寫也不
  *   續寫。這條拒絕就是 `SessionStore` 檔頭說的那個絆索。
  *
@@ -31,11 +32,22 @@
  * @module
  */
 
-import { mkdir, open, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, truncate, writeFile } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import type { SessionEvent, SessionStore, StoredSession, StoredSessionHeader } from '@nexus/core';
+import {
+  SESSION_LOG_FORMAT_VERSION,
+  SessionCorruptionError,
+  SessionFormatUnsupportedError,
+} from '@nexus/core';
+import type {
+  ResumedStoredSession,
+  SessionEvent,
+  SessionStore,
+  StoredSession,
+  StoredSessionHeader,
+} from '@nexus/core';
 
 /**
  * 目錄與檔案的權限。
@@ -71,8 +83,8 @@ const DIGEST_LENGTH = 12;
  * 開 root（`thread-pump.ts:129`），而 `threadId` 直接來自 `/threads/:id/...` 的路徑。
  * 把不合法字元一律換成 `_` 的話，`a~b`、`a!b`、`a_b` 三條不同的 thread 會壓成同一個
  * 檔名——第二條的第一次寫入撞上 `wx` 而失敗，協調器按設計吞掉它（暫停自動路徑、
- * 一行 warn），於是**那條 thread 的日誌就這麼沒了**。`wx` 那條拒絕是留給「未來的
- * resume 誤開了已存的會話」的絆索，不是拿來擋這個的。
+ * 一行 warn），於是**那條 thread 的日誌就這麼沒了**。`wx` 那條拒絕是留給「`create`
+ * 撞上一份已存的會話」的絆索——續接走的是 `resume`，不走 `create`——不是拿來擋這個的。
  *
  * ## 三條規則，各擋一種撞法
  *
@@ -111,20 +123,44 @@ function safeBaseName(sessionId: string): string {
   return encoded === encoded.toLowerCase() ? encoded : `${encoded}-${digest()}`;
 }
 
+/**
+ * 續接一份已存會話時，把手要知道的兩件事。
+ *
+ * `truncateTo` 只在最後一行寫到一半時才有：那是當掉的常態，讀方不算它，而把手第一次寫入
+ * 之前要把它截掉——不截的話，續寫的第一行會黏在那半行後面，兩行一起變成壞行。
+ *
+ * **截是跟著第一次寫入走的，不是跟著續接走的。** 續接幾乎都會寫：seed 結尾補的那顆
+ * `session/end-seed` 就是一筆待寫。唯一不寫的是 seed 本來就停在 end-seed（上一次續接之後
+ * 什麼都沒做）而這一次也什麼都沒做——那半行就留在檔上。無害：下一次讀方照樣不算它、
+ * 照樣截。
+ */
+interface ResumePoint {
+  readonly nextSeq: number;
+  readonly truncateTo?: number;
+}
+
 /** 一份已存會話。IO 延後到第一次 {@link append} 或 {@link flush}。 */
 class JsonlStoredSession implements StoredSession {
   readonly #directory: string;
   readonly #base: string;
   readonly #header: StoredSessionHeader;
+  readonly #resume: ResumePoint | undefined;
   #handle: FileHandle | undefined;
   #closed = false;
   /** 已存的 next-seq。下一批的第一顆必須等於它。 */
-  #nextSeq = 0;
+  #nextSeq: number;
 
-  constructor(directory: string, header: StoredSessionHeader) {
+  /**
+   * @param directory - run 目錄。
+   * @param header - 要寫的 header。續接時是**已經翻成這一版**的那份。
+   * @param resume - 續接一份已存的會話；省略即開一份新的。
+   */
+  constructor(directory: string, header: StoredSessionHeader, resume?: ResumePoint) {
     this.#directory = directory;
     this.#base = safeBaseName(header.id);
     this.#header = header;
+    this.#resume = resume;
+    this.#nextSeq = resume?.nextSeq ?? 0;
   }
 
   async append(events: readonly SessionEvent[]): Promise<void> {
@@ -172,6 +208,7 @@ class JsonlStoredSession implements StoredSession {
   /** 第一次真的要寫時才建目錄、寫 header、開檔。之後直接回同一個 handle。 */
   async #materialize(): Promise<FileHandle> {
     if (this.#handle !== undefined) return this.#handle;
+    if (this.#resume !== undefined) return this.#materializeResumed(this.#resume);
     await mkdir(this.#directory, { recursive: true, mode: DIR_MODE });
     // header 先寫：日誌有內容而 header 不見，比反過來難解釋得多。
     await writeFile(
@@ -183,12 +220,161 @@ class JsonlStoredSession implements StoredSession {
     this.#handle = await open(join(this.#directory, `${this.#base}.jsonl`), 'wx', FILE_MODE);
     return this.#handle;
   }
+
+  /**
+   * 續接那條：**header 覆寫、日誌續寫**，兩者都不是 `wx`。
+   *
+   * header 覆寫是因為續寫進去的是這一版的詞彙（`session-store.ts` 的版本 3 那一段）；
+   * 其餘欄位原樣——`createdAt` 是這份會話出生的時間，不是這一次打開的時間。
+   */
+  async #materializeResumed(resume: ResumePoint): Promise<FileHandle> {
+    await writeFile(
+      join(this.#directory, `${this.#base}.header.json`),
+      `${JSON.stringify(this.#header, null, 2)}\n`,
+      { encoding: 'utf8', mode: FILE_MODE },
+    );
+    const logPath = join(this.#directory, `${this.#base}.jsonl`);
+    if (resume.truncateTo !== undefined) await truncate(logPath, resume.truncateTo);
+    this.#handle = await open(logPath, 'a', FILE_MODE);
+    return this.#handle;
+  }
 }
 
-/** {@link createJsonlSessionStore} 交出來的東西。 */
+/** `readFile` 撞到的是「沒有這個檔」。 */
+function isNotFound(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === 'ENOENT';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * 讀 header，**版本太新與讀不懂分開報**（見 `session-store.ts` 的版本 3 那一段）。
+ *
+ * @throws {@link SessionFormatUnsupportedError} 版本比這一版新。
+ * @throws {@link SessionCorruptionError} 不是 JSON、欄位形狀不對、或 id 對不上。
+ */
+function parseHeader(id: string, text: string): StoredSessionHeader {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new SessionCorruptionError(id, 'header 不是 JSON');
+  }
+  if (!isRecord(value)) throw new SessionCorruptionError(id, 'header 不是一個物件');
+  const { version } = value;
+  if (
+    typeof version === 'number' &&
+    Number.isSafeInteger(version) &&
+    version > SESSION_LOG_FORMAT_VERSION
+  ) {
+    throw new SessionFormatUnsupportedError(id, version);
+  }
+  if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) {
+    throw new SessionCorruptionError(id, `header 的 version 是 ${JSON.stringify(version)}`);
+  }
+  if (value['id'] !== id) {
+    throw new SessionCorruptionError(id, `header 記的 id 是 ${JSON.stringify(value['id'])}`);
+  }
+  if (typeof value['createdAt'] !== 'number') {
+    throw new SessionCorruptionError(id, 'header 沒有 createdAt');
+  }
+  return value as unknown as StoredSessionHeader;
+}
+
+/**
+ * 讀日誌本文：**實體上有效的前綴**，加上它有幾個位元組。
+ *
+ * 最後一個換行之後的東西是寫到一半的那一行——當掉時的常態，不算壞檔，只是不算進去。
+ * 換行之前的每一行都必須是一筆 `seq` 等於行號的事件；不是的話那不是當掉，是壞檔。
+ *
+ * @throws {@link SessionCorruptionError} 中段某一行讀不懂，或 `seq` 不連續。
+ */
+function parseBody(id: string, body: string): { events: SessionEvent[]; validBytes: number } {
+  const complete = body.slice(0, body.lastIndexOf('\n') + 1);
+  const lines = complete.split('\n');
+  lines.pop();
+  const events = lines.map((line, index): SessionEvent => {
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      throw new SessionCorruptionError(id, `第 ${index + 1} 行不是 JSON`);
+    }
+    if (
+      !isRecord(value) ||
+      typeof value['type'] !== 'string' ||
+      typeof value['time'] !== 'number'
+    ) {
+      throw new SessionCorruptionError(id, `第 ${index + 1} 行不是一筆會話事件`);
+    }
+    if (value['seq'] !== index) {
+      throw new SessionCorruptionError(
+        id,
+        `第 ${index + 1} 行的 seq 是 ${JSON.stringify(value['seq'])}，應該是 ${index}——缺號或重號`,
+      );
+    }
+    return value as unknown as SessionEvent;
+  });
+  return { events, validBytes: Buffer.byteLength(complete, 'utf8') };
+}
+
+/**
+ * 續接 `directory` 裡的那一份。見 {@link SessionStore.resume}。
+ *
+ * **只有 header、沒有日誌不是壞檔**：`#materialize` 先寫 header 再開日誌，兩步之間當掉
+ * 就是這個樣子——一份一筆都還沒寫進去的會話。
+ */
+async function resumeStoredSession(directory: string, id: string): Promise<ResumedStoredSession> {
+  const base = safeBaseName(id);
+  const headerPath = join(directory, `${base}.header.json`);
+  let headerText: string;
+  try {
+    headerText = await readFile(headerPath, 'utf8');
+  } catch (error: unknown) {
+    if (isNotFound(error)) {
+      throw new Error(`${directory} 裡沒有會話 "${id}"（找不到 ${headerPath}）。`);
+    }
+    throw error;
+  }
+  const header = parseHeader(id, headerText);
+  let body = '';
+  try {
+    body = await readFile(join(directory, `${base}.jsonl`), 'utf8');
+  } catch (error: unknown) {
+    if (!isNotFound(error)) throw error;
+  }
+  const { events, validBytes } = parseBody(id, body);
+  const torn = validBytes < Buffer.byteLength(body, 'utf8');
+  return {
+    header,
+    events,
+    stored: new JsonlStoredSession(
+      directory,
+      { ...header, version: SESSION_LOG_FORMAT_VERSION },
+      { nextSeq: events.length, ...(torn && { truncateTo: validBytes }) },
+    ),
+  };
+}
+
+/** {@link createJsonlSessionStore} 與 {@link openJsonlSessionStore} 交出來的東西。 */
 export interface JsonlSessionStore extends SessionStore {
   /** 這一次的 run 目錄。披露那一行印的就是它。 */
   readonly directory: string;
+}
+
+/** 落在 `directory` 上的後端。兩個工廠差在目錄是新開的還是既有的。 */
+function jsonlStoreAt(directory: string): JsonlSessionStore {
+  return {
+    directory,
+    create(header: StoredSessionHeader): StoredSession {
+      return new JsonlStoredSession(directory, header);
+    },
+    resume(id: string): Promise<ResumedStoredSession> {
+      return resumeStoredSession(directory, id);
+    },
+  };
 }
 
 /**
@@ -204,10 +390,20 @@ export function createJsonlSessionStore(options: { readonly rootDir: string }): 
     options.rootDir,
     `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`,
   );
-  return {
-    directory,
-    create(header: StoredSessionHeader): StoredSession {
-      return new JsonlStoredSession(directory, header);
-    },
-  };
+  return jsonlStoreAt(directory);
+}
+
+/**
+ * 打開一個**既有的** run 目錄——續接（`--resume`）用的。
+ *
+ * **不另開目錄**：續接照 dsh 是往同一份檔續寫，不是把舊的抄進新的——抄一份的話，兩個目錄
+ * 會帶著同一個 `(session.id, seq)`，而遙測的去重鍵正是它（`session-log.ts` 檔頭）。
+ * 這個行程新出生的 subagent 日誌也落在這裡，與上一個行程的並排；它們的 id 帶 LangGraph
+ * 的 task id（`session-address.ts`），`wx` 仍然擋撞名。
+ *
+ * @param options - 那個 run 目錄。
+ * @returns 後端；`create` 開新的、`resume` 接舊的。
+ */
+export function openJsonlSessionStore(options: { readonly directory: string }): JsonlSessionStore {
+  return jsonlStoreAt(options.directory);
 }
