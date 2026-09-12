@@ -18,8 +18,9 @@
  *
  * - **沒有 Zstandard 壓縮與 checksum。** dsh 預設存成帶 checksum 的連續 Zstandard frame
  *   （也可配置成原始行）。我們存原始行：撕裂尾部的偵測與部分解碼是**讀方**的機器，
- *   而今天的讀方只有一個：續接（{@link JsonlSessionStore.resume}，
- *   [#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A），它讀的就是原始行。
+ *   而今天的讀方只有一種：續接（{@link JsonlSessionStore.resume}，CLI 的 `--resume` 與 serve
+ *   碰到以前寫過的 thread，[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A），
+ *   它讀的就是原始行。
  *   加壓縮換到的是第二套解碼路徑，沒有人要。
  * - **寫租約照抄了**（`session-lease.ts`）：新開的在第一次實體化寫入之前拿，續接的在讀
  *   之前拿，把手關掉才放。一份會話一把，鎖檔跟日誌並排（`<base>.lock`）——理由在那個模組。
@@ -31,11 +32,13 @@
  *   路徑上，**被收成一行 warn 而不是一個錯**。dsh 也是惰性的，所以不算偏離；只是我們的
  *   協調器讓那個後果更安靜。
  *
- * ## 每一次組裝各自一個目錄
+ * ## 目錄：CLI 每次一個，serve 按專案固定一格
  *
- * dsh 的 `SessionId` 全域唯一，我們的只在一次組裝內唯一（CLI 的 root 固定叫 `cli`）。
- * 所以 {@link createJsonlSessionStore} 自己開一個 **run 目錄**，第二次啟動不會撞到第一次
- * ——沒有這一層，`wx` 會讓第二次啟動變成一個硬錯誤。
+ * dsh 的 `SessionId` 全域唯一；我們的 CLI root 固定叫 `cli`，放在固定的地方會每次都撞。
+ * 所以 CLI 用 {@link createJsonlSessionStore} 每次開一個 **run 目錄**——沒有這一層，`wx`
+ * 會讓第二次啟動變成一個硬錯誤。serve 的 root 是 thread id，本來就全域唯一，所以它照 dsh
+ * 用 {@link openJsonlSessionStore} 落在 `<根>/<projectKey(cwd)>` 那一格，重開之後找得回同一條
+ * thread。
  *
  * @see [#172](https://github.com/DemianLi/nexus-agent/issues/172)
  * @module
@@ -49,6 +52,7 @@ import {
   SESSION_LOG_FORMAT_VERSION,
   SessionCorruptionError,
   SessionFormatUnsupportedError,
+  SessionNotFoundError,
 } from '@nexus/core';
 import type {
   ResumedStoredSession,
@@ -414,7 +418,8 @@ async function resumeStoredSession(
 ): Promise<ResumedStoredSession> {
   const base = safeBaseName(id);
   const headerPath = join(directory, `${base}.header.json`);
-  const missing = () => new Error(`${directory} 裡沒有會話 "${id}"（找不到 ${headerPath}）。`);
+  const missing = () =>
+    new SessionNotFoundError(id, `${directory} 裡沒有會話 "${id}"（找不到 ${headerPath}）。`);
   // **先認得有這份，再拿租約**：打錯的 `--resume` 不該留下一個鎖檔。
   try {
     await stat(headerPath);
@@ -457,6 +462,41 @@ async function resumeStoredSession(
     await lease?.release();
     throw error;
   }
+}
+
+/**
+ * 一個專案目錄在會話根底下的目錄名——照 dsh 的 `projectKey`
+ * （`packages/session/session-persistence-jsonl/src/format.ts`，SHA `c291e79`），逐字元抄。
+ *
+ * 分隔符（`/`、`\\`、`:`）變成 `-`，連續的只留一個；不安全的 UTF-16 碼元寫成 `~XXXX`；
+ * 前後包 `--`，長度封頂。**它是有損的**（分隔符與截短），dsh 明說這是刻意的：換來的是人
+ * 在目錄裡找得到自己的專案。有損就可能撞，所以續接時照樣比 header 的 `cwd`
+ * （{@link ./resume-guards.ts | ResumeCwdConflictError}），同 dsh。
+ *
+ * @param cwd - 專案目錄。
+ * @returns 一段檔案系統安全的目錄名。
+ * @throws 空字串。
+ */
+export function projectKey(cwd: string): string {
+  if (cwd.length === 0) throw new Error('專案目錄是空字串，排不出目錄名。');
+  let readable = '';
+  let separatorRun = false;
+  for (let index = 0; index < cwd.length; index += 1) {
+    const code = cwd.charCodeAt(index);
+    const char = String.fromCharCode(code);
+    if (char === '/' || char === '\\' || char === ':') {
+      if (!separatorRun) readable += '-';
+      separatorRun = true;
+    } else if (char !== '~' && /^[A-Za-z0-9._-]$/.test(char)) {
+      readable += char;
+      separatorRun = false;
+    } else {
+      readable += `~${code.toString(16).toUpperCase().padStart(4, '0')}`;
+      separatorRun = false;
+    }
+  }
+  const slug = readable.replace(/^-+/, '') || 'root';
+  return `--${slug.slice(0, 251)}--`;
 }
 
 /** {@link createJsonlSessionStore} 與 {@link openJsonlSessionStore} 交出來的東西。 */

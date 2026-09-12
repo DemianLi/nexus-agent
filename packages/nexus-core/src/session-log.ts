@@ -72,8 +72,8 @@ import type { SandboxMode } from './sandbox.js';
  * `session/end-seed` 是**第五種生產者：建構子自己**。它不是任何人「記」下來的事，是一份
  * 帶 seed 開出來的日誌替自己畫的那條線（[#251](https://github.com/DemianLi/nexus-agent/issues/251)，
  * 照 dsh：Session 建構子是唯一合法的寫者）。「兩條路都產得出來嗎」答得出來，因為產它的
- * 是這個 class，不是哪一個進入點——**但今天只有 CLI 那條會帶 seed 開日誌**（`--resume`），
- * serve 還沒有 resume。那是入口的工作量，不是這顆事件的形狀問題。
+ * 是這個 class，不是哪一個進入點——CLI 的 `--resume` 與 serve 碰到以前寫過的 thread，兩條
+ * 都帶 seed 開日誌。
  *
  * `plan/mode` 沒有帶來新的生產者，兩個寫者各走一條舊路：`/plan` 走 `goal/change` 那條
  * （經 `registry.sessions` 接到 root 那一份的 plugin），`exit_plan_mode` 走 `todo/write` 那條
@@ -263,10 +263,9 @@ export interface SessionEventMap {
    * ——`command/run` 只記得住使用者打了什麼字，記不住生效的值，而 `--sandbox` 給的起始
    * 值在它之前就決定了，命令那條路上根本沒出現過。
    *
-   * **它回得到執行期，但只在 CLI。** `--resume <run 目錄>` 讀回那一份日誌，最後一顆就是
-   * 起始那一格（`sandbox-mode.ts` 的 `recordedSandboxMode`）——
-   * [#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A。serve 還沒有 resume，
-   * 所以那條路上重開一條 thread 仍然回到 `--sandbox` 那一格。
+   * **它回得到執行期。** CLI 的 `--resume <run 目錄>` 與 serve 碰到以前寫過的 thread 都讀回
+   * 那一份日誌，最後一顆就是起始那一格（`sandbox-mode.ts` 的 `recordedSandboxMode`）——
+   * [#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A。
    */
   'sandbox/mode': { readonly mode: SandboxMode };
   /**

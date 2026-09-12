@@ -18,9 +18,9 @@
  * ## 兩處跟 dsh 不一樣的
  *
  * - **沒有 `stat`／`list`，讀回只有一個 `resume`。** dsh 的 `open`／`stat`／`list` 是給一個
- *   會列出、查詢、續接任何會話的服務用的；我們的讀方只有一個——CLI 的 `--resume <run 目錄>`
- *   （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A），它手上已經有位址，
- *   不需要列。所以只抄續接要的那一條：讀回、交出一個接著寫的把手。`stat`／`list` 等有人
+ *   會列出、查詢、續接任何會話的服務用的；我們的讀方只有續接——CLI 的 `--resume <run 目錄>`
+ *   與 serve 碰到一條 thread 時（[#251](https://github.com/DemianLi/nexus-agent/issues/251)
+ *   的門 A），兩個手上都已經有位址（目錄與 thread id），不需要列。所以只抄續接要的那一條：讀回、交出一個接著寫的把手。`stat`／`list` 等有人
  *   要列的那天再加。
  * - **`create` 撞到已存在的 session 必須拒絕**，不得覆寫也不得續寫。我們的 session id 只在
  *   一次組裝內唯一（`SessionRegistry` 的 `<root>/<runId>`），不像 dsh 的 `SessionId` 全域
@@ -158,7 +158,7 @@ export interface SessionStore {
    * @returns 讀回來的 header（`version` 是存的那個）、事件，與 next-seq 等於事件數的把手。
    * @throws {@link SessionFormatUnsupportedError} header 的版本比這一版新。
    * @throws {@link SessionCorruptionError} header 或某一行讀不懂、或 `seq` 不連續。
-   * @throws 這個 id 在這裡沒有存檔。
+   * @throws {@link SessionNotFoundError} 這個 id 在這裡沒有存檔。
    */
   resume(id: string): Promise<ResumedStoredSession>;
 }
@@ -194,6 +194,29 @@ export class SessionFormatUnsupportedError extends Error {
       `會話 "${id}" 的格式版本是 ${JSON.stringify(version)}，這一版只讀得懂到 ` +
         `${SESSION_LOG_FORMAT_VERSION}。檔案沒有壞，是比這一版新。`,
     );
+  }
+}
+
+/**
+ * 這個 id 在這裡沒有存檔——照 dsh 的 `SessionPersistenceNotFoundError`。
+ *
+ * **它有自己的型別，是因為有人要據此改走「新開一份」**：serve 碰到一條 thread 時先試著接，
+ * 接不到才開新的。拿不到型別的話那一步只能比對字串、或一律改開新的——後者會讓一份壞掉
+ * 或版本太新的日誌退到 `create`，撞上 `wx`，而那個失敗在協調器的背景路徑上被收成一行
+ * warn：**那條 thread 的日誌就這樣沒了**。所以只有這一種失敗准退，其餘照拋。
+ */
+export class SessionNotFoundError extends Error {
+  override readonly name = 'SessionNotFoundError';
+
+  /**
+   * @param id - 找的是哪一份。
+   * @param message - 後端自己的說法（例如它找的是哪個路徑）。
+   */
+  constructor(
+    readonly id: string,
+    message: string,
+  ) {
+    super(message);
   }
 }
 

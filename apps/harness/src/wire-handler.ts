@@ -42,6 +42,7 @@ import {
 import type {
   CommandDescriptor,
   CommandRegistrationPoint,
+  SessionEvent,
   SessionLog,
   SessionRegistry,
 } from '@nexus/core';
@@ -126,10 +127,10 @@ export interface ThreadAgent {
    * ——它的答案來自**呼叫方式**（`serve.ts` 有沒有收到 `--session-log`）。所以組裝點
    * 是 `runServe` 自己的閉包，不是 `createCliAgent` 的回傳值。
    *
-   * **一個行程一個 store，一條 thread 一次接線。** store 開的 run 目錄是整個行程共用
-   * 的，每條 thread 的 root session id 就是它的 `threadId`，所以同一個目錄底下一條
+   * **一個行程一個 store，一條 thread 一次接線。** store 落在會話根按專案分的那一格，整個
+   * 行程共用；每條 thread 的 root session id 就是它的 `threadId`，所以那一格底下一條
    * thread 一個檔（檔名的單射性見 `jsonl-session-store.ts` 的 `safeBaseName`——
-   * `threadId` 是呼叫端給的字串）。
+   * `threadId` 是呼叫端給的字串），重開之後同一條 thread 找得回自己那一份。
    *
    * 前三個是觀察者，這一個是出口，所以排在最後——同 `cli.ts` 的接線順序。
    *
@@ -152,6 +153,14 @@ export interface ThreadAgent {
    * @returns 排程器那一側。
    */
   goalDriver?(log: () => SessionLog, flush: () => Promise<void>): GoalDriverPort;
+  /**
+   * root 日誌的 seed：這條 thread 以前寫過、這一次從會話根接回來時，上一個行程留下的事件
+   * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。省略即一份新日誌。
+   *
+   * 它交給 {@link ThreadPump}，因為註冊表是 pump 建的；落盤那一側（往原檔續寫、只寫還沒存的
+   * 後綴）歸 {@link attachPersistence}，由組裝點自己記著。
+   */
+  readonly rootSeed?: readonly SessionEvent[];
 }
 
 export interface WireHandlerOptions {
@@ -244,62 +253,70 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     }
     const created = (async (): Promise<ThreadState> => {
       const threadAgent = await options.createAgent(threadId);
-      // **三個東西互相要對方，所以綁定是延後的**：port 要日誌（pump 才有）與 flush
-      // （協調器才有），而 pump 的建構參數就是 port。這個格子把環打開——兩個 getter
-      // 讀它，而它在 pump 與協調器各自建好之後才被填上。
-      //
-      // **排程器第一次問這兩格是在第一輪落定的時候**，那時兩個都填好了。
-      const late: { log?: SessionLog; flush?: () => Promise<void> } = {};
-      const driver = threadAgent.goalDriver?.(
-        () => {
-          const log = late.log;
-          /* v8 ignore next -- pump 在下一行就建好，而排程器最早在第一輪落定時才問 */
-          if (log === undefined) throw new Error('這條 thread 的日誌還沒建好');
-          return log;
-        },
-        async () => void (await late.flush?.()),
-      );
-      const pump = new ThreadPump(threadAgent.agent, threadId, driver);
-      late.log = pump.sessionLog;
-      const detachTelemetry = threadAgent.attachTelemetry?.(pump.sessions);
-      const detachInvariants = threadAgent.attachInvariants?.(pump.sessions);
-      // **接在不變量之後**，同 `cli.ts` 那條的理由：參與者一裝上去就可能記東西，
-      // 那些東西該被已經在看的檢查看到。註冊表通知訂閱者的順序就是這三行的順序，
-      // 所以 subagent 後來出生的那些日誌也照這個順序被接上。
-      const detachSession = threadAgent.attachSession?.(pump.sessions);
-      // **接在最後，理由同 `cli.ts`**：前三個是觀察者，落盤不改變任何人看得到什麼，
-      // 所以順序在功能上沒有差別；排最後是為了讓讀的人看到的因果跟實際一致。
-      const persistence = threadAgent.attachPersistence?.(pump.sessions);
-      // **沒開落盤時 `flush` 就整個缺席**，而不是一個假裝成功的 no-op：`late.flush?.()`
-      // 的缺席語意就是「這條路上沒有耐久檢查點」，同 `attachPersistence` 自己的規矩。
-      late.flush = persistence === undefined ? undefined : () => persistence.flush();
-      return {
-        pump,
-        commands: threadAgent.commands,
-        // **建在這裡**：日誌是 pump 建的（一個 thread 一份），而這一行正是它誕生的地方
-        // ——跟上面兩條接線同一個位置，理由也同一個。
-        executor: createCommandExecutor({
+      // **從這裡到回傳之間拋錯，要把剛建好的 agent 收掉。** 下面說好「下一次請求該重試」，
+      // 而續接的 thread 在 `createAgent` 裡就拿了寫租約——沒人收的話，重試撞上的是**自己
+      // 上一次**留下的租約。收 agent 也順便收掉它底下的東西（MCP 的子行程之類）。
+      try {
+        // **三個東西互相要對方，所以綁定是延後的**：port 要日誌（pump 才有）與 flush
+        // （協調器才有），而 pump 的建構參數就是 port。這個格子把環打開——兩個 getter
+        // 讀它，而它在 pump 與協調器各自建好之後才被填上。
+        //
+        // **排程器第一次問這兩格是在第一輪落定的時候**，那時兩個都填好了。
+        const late: { log?: SessionLog; flush?: () => Promise<void> } = {};
+        const driver = threadAgent.goalDriver?.(
+          () => {
+            const log = late.log;
+            /* v8 ignore next -- pump 在下一行就建好，而排程器最早在第一輪落定時才問 */
+            if (log === undefined) throw new Error('這條 thread 的日誌還沒建好');
+            return log;
+          },
+          async () => void (await late.flush?.()),
+        );
+        const pump = new ThreadPump(threadAgent.agent, threadId, driver, threadAgent.rootSeed);
+        late.log = pump.sessionLog;
+        const detachTelemetry = threadAgent.attachTelemetry?.(pump.sessions);
+        const detachInvariants = threadAgent.attachInvariants?.(pump.sessions);
+        // **接在不變量之後**，同 `cli.ts` 那條的理由：參與者一裝上去就可能記東西，
+        // 那些東西該被已經在看的檢查看到。註冊表通知訂閱者的順序就是這三行的順序，
+        // 所以 subagent 後來出生的那些日誌也照這個順序被接上。
+        const detachSession = threadAgent.attachSession?.(pump.sessions);
+        // **接在最後，理由同 `cli.ts`**：前三個是觀察者，落盤不改變任何人看得到什麼，
+        // 所以順序在功能上沒有差別；排最後是為了讓讀的人看到的因果跟實際一致。
+        const persistence = threadAgent.attachPersistence?.(pump.sessions);
+        // **沒開落盤時 `flush` 就整個缺席**，而不是一個假裝成功的 no-op：`late.flush?.()`
+        // 的缺席語意就是「這條路上沒有耐久檢查點」，同 `attachPersistence` 自己的規矩。
+        late.flush = persistence === undefined ? undefined : () => persistence.flush();
+        return {
+          pump,
           commands: threadAgent.commands,
-          sessionLog: pump.sessionLog,
-        }),
-        slashInFlight: false,
-        dispose: async () => {
-          // **參與者先收，比不變量還早**：它是唯一寫得動日誌的那一個，先讓它停手，
-          // 檢查才還在看著它最後那幾筆。反過來收的話，關機途中寫進去的東西沒人檢。
-          detachSession?.();
-          // 不變量再退訂：它只是一個訂閱，退掉不會有東西要排空，而留著它跑在關機途中的
-          // 事件上只會多噪音。
-          detachInvariants?.();
-          // 遙測先收，理由同 `agent-factory.ts`：後端可能是某個 plugin 開的。
-          await detachTelemetry?.();
-          // **落盤收在 agent 之前，但這一行的依據跟上面三條不一樣，別讀成驗過的因果。**
-          // 「有這一行」是量出來的（拿掉它，`serve` 那組落盤斷言會紅）；「排在
-          // `threadAgent.dispose()` 之前」是預防，今天的組裝分不出兩種順序——同
-          // `cli.ts` 關機那兩行的處境與措辭。
-          await persistence?.dispose();
-          await threadAgent.dispose();
-        },
-      };
+          // **建在這裡**：日誌是 pump 建的（一個 thread 一份），而這一行正是它誕生的地方
+          // ——跟上面兩條接線同一個位置，理由也同一個。
+          executor: createCommandExecutor({
+            commands: threadAgent.commands,
+            sessionLog: pump.sessionLog,
+          }),
+          slashInFlight: false,
+          dispose: async () => {
+            // **參與者先收，比不變量還早**：它是唯一寫得動日誌的那一個，先讓它停手，
+            // 檢查才還在看著它最後那幾筆。反過來收的話，關機途中寫進去的東西沒人檢。
+            detachSession?.();
+            // 不變量再退訂：它只是一個訂閱，退掉不會有東西要排空，而留著它跑在關機途中的
+            // 事件上只會多噪音。
+            detachInvariants?.();
+            // 遙測先收，理由同 `agent-factory.ts`：後端可能是某個 plugin 開的。
+            await detachTelemetry?.();
+            // **落盤收在 agent 之前，但這一行的依據跟上面三條不一樣，別讀成驗過的因果。**
+            // 「有這一行」是量出來的（拿掉它，`serve` 那組落盤斷言會紅）；「排在
+            // `threadAgent.dispose()` 之前」是預防，今天的組裝分不出兩種順序——同
+            // `cli.ts` 關機那兩行的處境與措辭。
+            await persistence?.dispose();
+            await threadAgent.dispose();
+          },
+        };
+      } catch (error) {
+        await threadAgent.dispose().catch(() => {});
+        throw error;
+      }
     })();
     // 建不起來就不要把失敗記在那個 thread 上——下一次請求該重試，不是永遠拿到同一個錯。
     const tracked = created.catch((error: unknown) => {
@@ -308,6 +325,30 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     });
     threads.set(threadId, tracked);
     return tracked;
+  }
+
+  /**
+   * 這條 thread；**建不起來就回一個協定層的錯**，帶著原因。
+   *
+   * `handle()` 不接錯、`wire-server.ts` 也不接，所以讓 `threadFor` 的 rejection 往上冒的話，
+   * 那個請求一個位元組都不回、client 永遠卡著，而那顆 rejection 沒有人處理。它屬於協定層：
+   * 請求本身沒有錯，是這條 thread 起不來（壞掉的日誌、別的行程握著、目錄對不上……）。
+   * 協定的錯誤碼裡沒有「thread 起不來」，最近的是 `unknown_error`——原因寫在 message 裡。
+   *
+   * @param threadId - 哪一條。
+   * @param id - 回給哪一顆上行封包；下行那條沒有，是 `null`。
+   * @returns 這條 thread，或一個已經包好的錯誤回應。
+   */
+  async function threadOrError(
+    threadId: string,
+    id: number | null,
+  ): Promise<ThreadState | Response> {
+    try {
+      return await threadFor(threadId);
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return json(errorResponse(id, 'unknown_error', `這條 thread 建不起來：${reason}`));
+    }
   }
 
   function openStream(
@@ -373,7 +414,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     if (channels === undefined) {
       return json(errorResponse(null, 'invalid_argument', 'channels 必須是非空的白名單子集'));
     }
-    return openStream((await threadFor(threadId)).pump, channels, signal);
+    const thread = await threadOrError(threadId, null);
+    if (thread instanceof Response) return thread;
+    return openStream(thread.pump, channels, signal);
   }
 
   async function handleCommand(
@@ -402,7 +445,8 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       );
     }
 
-    const thread = await threadFor(threadId);
+    const thread = await threadOrError(threadId, envelope.id);
+    if (thread instanceof Response) return thread;
     if (isSlashMethod(method)) {
       return handleSlash(thread, method, envelope.id, body, signal);
     }

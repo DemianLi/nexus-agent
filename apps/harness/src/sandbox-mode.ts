@@ -33,16 +33,17 @@
  * 不會共用同一格。**放進模組層或工廠閉包就會串台**，同 `@nexus/plugin-goal` 那段註解記的
  * 事故形狀：一條 thread 的 `/sandbox read-only` 收緊到另一條 thread 的檔案工具上。
  *
- * ## 跨重啟：CLI 接得回去，serve 還沒有
+ * ## 跨重啟
  *
- * 切換寫得進日誌，**CLI 的 `--resume <run 目錄>` 讀得回來**：最後一顆 `sandbox/mode` 就是
+ * 切換寫得進日誌，**CLI 的 `--resume <run 目錄>` 與 serve 碰到以前寫過的 thread 都讀得回來**：最後一顆 `sandbox/mode` 就是
  * 起始那一格（{@link recordedSandboxMode}，[#251](https://github.com/DemianLi/nexus-agent/issues/251)
  * 的門 A）。續接不收 `--sandbox`——兩個來源不管誰贏，另一個都是靜靜被丟掉；接起來之後要換
  * 就用 `/sandbox`，那一次會記進日誌。**驗收在 `sandbox-mode.test.ts` 最後一組**，由原本釘住
  * 「`SessionStore` 只有 `create`」的那條絆索翻面而來。
  *
- * **serve 還沒有 resume**，那條路上重開一條 thread 仍然回到 `--sandbox` 那一格——所以
- * [#238](https://github.com/DemianLi/nexus-agent/issues/238) 第 1 項的跨重啟還差 serve 那一半。
+ * serve 那一半在 `serve-session-log.test.ts` 的「重開 server 之後接得回同一條 thread」：上一次
+ * 切成 `read-only`，重開之後 `/sandbox` 報的還是它；日誌記著模式而這一次沒給 `--workspace` 就
+ * 擋下，同 CLI。**web 那端還記不住 thread id**，所以瀏覽器上還看不到——那是下一刀。
  *
  * @module
  */
