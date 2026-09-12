@@ -1,6 +1,6 @@
 import type { ConversationStatus, PendingInput, WireClient } from '@nexus/wire';
 import { isApprovalPending, isQuestionPending } from '@nexus/wire';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { ApprovalCard } from '@/components/approval-card';
 import { QuestionCard } from '@/components/question-card';
@@ -8,6 +8,18 @@ import { StatusLine } from '@/components/status-line';
 import { Transcript } from '@/components/transcript';
 import { Button } from '@/components/ui/button';
 import { useConversation } from '@/hooks/use-conversation';
+import { recallThread, rememberThread } from '@/lib/remembered-thread';
+
+/**
+ * 接回上一次那條 thread 時講的話。
+ *
+ * **條件句不是客氣**：這一端分不出伺服器是接回來還是新開的（見 `remembered-thread.ts`）——
+ * serve 沒開 `--session-log` 時同一個 id 就是一條新的。能確定的只有前半句：這條線沒有重播，
+ * 畫面一定是空的。**最後一句是出口**：不講的話，重新整理之後只會一直回到同一條 thread 上。
+ */
+export const RESUMED_THREAD_NOTICE =
+  '接著上一次的 thread。這條線沒有重播，之前說過的話不會出現在這裡；伺服器開著 --session-log 的話，' +
+  '模式、目標、todo 與計劃模式會跟著回來。不想接就按「新對話」。';
 
 /**
  * 送出框裡那句灰字。
@@ -69,7 +81,38 @@ export function inputPlaceholder({
  * `/threads` 會轉過去（見 `vite.config.ts`）。
  */
 export function App({ client }: { client?: WireClient } = {}) {
-  const conversation = useConversation(client === undefined ? {} : { client });
+  // 初始化器只讀不寫——StrictMode 會跑它兩次（見 `recallThread`）。寫在 effect 裡，存的就是
+  // 真的留下來的那一個。
+  const [choice, setChoice] = useState(recallThread);
+  useEffect(() => {
+    rememberThread(choice.threadId);
+  }, [choice.threadId]);
+
+  // **換 thread 就整個重掛。** 只換 `threadId` 的話 hook 會重開下行，但上一條的 transcript、
+  // 錯誤與命令清單都還留在它的 state 裡——畫面會把兩條 thread 混成一條。
+  return (
+    <ConversationView
+      key={choice.threadId}
+      threadId={choice.threadId}
+      resumed={choice.resumed}
+      onNewConversation={() => setChoice({ threadId: crypto.randomUUID(), resumed: false })}
+      {...(client === undefined ? {} : { client })}
+    />
+  );
+}
+
+function ConversationView({
+  client,
+  threadId,
+  resumed,
+  onNewConversation,
+}: {
+  readonly client?: WireClient;
+  readonly threadId: string;
+  readonly resumed: boolean;
+  readonly onNewConversation: () => void;
+}) {
+  const conversation = useConversation(client === undefined ? { threadId } : { client, threadId });
   const [draft, setDraft] = useState('');
 
   // **一顆中斷一張卡**（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
@@ -99,7 +142,17 @@ export function App({ client }: { client?: WireClient } = {}) {
   return (
     <main className="mx-auto flex min-h-svh max-w-2xl flex-col gap-6 px-6 py-10">
       <header className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">nexus-agent</h1>
+        <div className="flex items-center justify-between gap-2">
+          <h1 className="text-2xl font-semibold tracking-tight">nexus-agent</h1>
+          {/*
+            **永遠按得動**，不看 `busy`／`connected`／狀態。接回一條停在核准點的 thread 時，
+            沒有重播就沒有卡片，送出去只會被「停在核准點」擋回來——這顆按鈕是那一格唯一的出口。
+            server 那端的 run 不會因此停下，跟關掉分頁一樣。
+          */}
+          <Button type="button" variant="outline" size="sm" onClick={onNewConversation}>
+            新對話
+          </Button>
+        </div>
         <StatusLine
           state={conversation.state}
           connected={conversation.connected}
@@ -116,6 +169,8 @@ export function App({ client }: { client?: WireClient } = {}) {
             ? {}
             : { slashNotice: conversation.slashNotice })}
         />
+        {/* 不掛 `role="status"`：那一格歸 `StatusLine`，這一句是背景，不是現況。 */}
+        {resumed && <p className="text-muted-foreground text-xs">{RESUMED_THREAD_NOTICE}</p>}
       </header>
 
       <section className="flex flex-1 flex-col gap-4">

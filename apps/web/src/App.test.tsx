@@ -8,11 +8,43 @@ import type {
 } from '@nexus/wire';
 import { APPROVAL_PENDING_KIND, QUESTION_PENDING_KIND } from '@nexus/wire';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { App, inputPlaceholder } from '@/App';
+import { App, inputPlaceholder, RESUMED_THREAD_NOTICE } from '@/App';
+import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
 
-afterEach(cleanup);
+/**
+ * 一份活在記憶體裡的 `Storage`。
+ *
+ * **不用環境給的那一份**：Node 25 自己帶一個全域 `localStorage`，沒給 `--localstorage-file`
+ * 時上面連 `getItem` 都沒有，而它蓋住了 jsdom 的那一份（實測 `getItem is not a function`）。
+ * App 在那種環境照樣開得起來——那正是「讀寫失敗只是記不住」那條約定——但測試要的是一份真的
+ * 記得住的。
+ */
+function memoryStorage(): Storage {
+  const entries = new Map<string, string>();
+  return {
+    get length() {
+      return entries.size;
+    },
+    clear: () => entries.clear(),
+    getItem: (key) => entries.get(key) ?? null,
+    key: (index) => [...entries.keys()][index] ?? null,
+    removeItem: (key) => void entries.delete(key),
+    setItem: (key, value) => void entries.set(key, String(value)),
+  };
+}
+
+// App 會把 thread id 記進 `localStorage`；每條一份新的，不然下一條測試就成了「接回上一次」。
+beforeEach(() => {
+  vi.stubGlobal('localStorage', memoryStorage());
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 /**
  * 畫面這一層。
@@ -61,19 +93,22 @@ function fakeClient(
   const sent: string[] = [];
   const responded: unknown[] = [];
   const slashed: string[] = [];
+  const opened: string[] = [];
   const client: WireClient = {
     slashList: async () => ({ kind: 'ok', commands: slash.commands ?? [] }),
     slashRun: async (_threadId, line) => {
       slashed.push(line);
       return slash.run?.(line) ?? { kind: 'unknown' };
     },
-    openEvents: async () =>
-      (async function* stream() {
+    openEvents: async (threadId) => {
+      opened.push(threadId);
+      return (async function* stream() {
         for (const event of events) {
           yield event;
         }
         await new Promise(() => undefined);
-      })(),
+      })();
+    },
     runStart: async (_threadId, text) => {
       sent.push(text);
       return { type: 'success', id: 1, result: {} };
@@ -83,7 +118,7 @@ function fakeClient(
       return { type: 'success', id: 2, result: {} };
     },
   };
-  return { client, sent, responded, slashed };
+  return { client, sent, responded, slashed, opened };
 }
 
 /** 一顆核准請求。逐筆詞彙照基座的形狀給——`reviewConfigs` 與 `actionRequests` 平行。 */
@@ -706,5 +741,149 @@ describe('問答的收尾在 transcript 上長什麼樣', () => {
     expect(entry.textContent).toContain('name＝（跳過）');
     expect(entry.textContent).toContain('day＝週二');
     expect(entry.textContent).not.toContain('放棄');
+  });
+});
+
+describe('記住這條 thread', () => {
+  /** 存著的那一條。沒有就是 `undefined`。 */
+  function stored(): string | undefined {
+    const raw = localStorage.getItem(REMEMBERED_THREAD_KEY);
+    return raw === null ? undefined : (JSON.parse(raw) as { threadId: string }).threadId;
+  }
+
+  function remember(threadId: string): void {
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId }));
+  }
+
+  it('第一次載入：開一條新的、記下來，不說「接著上一次」', async () => {
+    seq = 0;
+    const { client, opened } = fakeClient([]);
+    render(<App client={client} />);
+
+    await waitFor(() => expect(opened).toHaveLength(1));
+    await waitFor(() => expect(stored()).toBe(opened[0]));
+    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+  });
+
+  /** jsdom 裡的重新整理：拆掉再掛一次，中間只剩 `localStorage`。 */
+  it('重新載入：開的是同一條，而且講明畫面不會重播', async () => {
+    seq = 0;
+    const first = fakeClient([]);
+    render(<App client={first.client} />);
+    await waitFor(() => expect(stored()).toBe(first.opened[0]));
+    cleanup();
+
+    const second = fakeClient([]);
+    render(<App client={second.client} />);
+    await waitFor(() => expect(second.opened).toEqual(first.opened));
+    expect(screen.getByText(RESUMED_THREAD_NOTICE)).toBeTruthy();
+  });
+
+  it('新對話：換一個 id、記下來，上一條的話與提示都不留在畫面上', async () => {
+    seq = 0;
+    remember('上一條');
+    const { client, opened } = fakeClient([
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+    ]);
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    expect(opened).toEqual(['上一條']);
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '記一筆。' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(screen.getByText('記一筆。')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: '新對話' }));
+
+    await waitFor(() => expect(opened).toHaveLength(2));
+    expect(opened[1]).not.toBe('上一條');
+    await waitFor(() => expect(stored()).toBe(opened[1]));
+    // **只斷言「開了另一條」不夠**：不重掛的話下行照樣換一條，留下來的是上一條的 transcript。
+    expect(screen.queryByText('記一筆。')).toBeNull();
+    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+  });
+
+  /**
+   * 這一刀新走得到的一格：serve 還開著，重新整理之後接回一條停在核准點的 thread。沒有重播就
+   * 沒有卡片、送出框也沒鎖，送出去被擋回來——畫面上唯一能按的出口是「新對話」。
+   */
+  it('接回一條停在核准點的 thread：拒絕照樣說出來，新對話走得出去', async () => {
+    seq = 0;
+    remember('停著的那條');
+    const fake = fakeClient([]);
+    const opened = fake.opened;
+    const client: WireClient = {
+      ...fake.client,
+      runStart: async (threadId) =>
+        threadId === '停著的那條'
+          ? {
+              type: 'error',
+              id: 1,
+              error: 'invalid_argument',
+              message: '這條 thread 停在核准點：先用 input.respond 回答它，再說下一句話',
+            }
+          : { type: 'success', id: 1, result: {} },
+    };
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '一句話' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('停在核准點'));
+
+    fireEvent.click(screen.getByRole('button', { name: '新對話' }));
+
+    await waitFor(() => expect(opened).toHaveLength(2));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('就緒'));
+  });
+
+  it('跑著的時候「新對話」也按得動——它不看忙不忙', async () => {
+    seq = 0;
+    const { client } = fakeClient([
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+    ]);
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
+    const button = screen.getByRole('button', { name: '新對話' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+  });
+
+  it('瀏覽器不讓存：照樣開得起來，只是記不住', async () => {
+    seq = 0;
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.stubGlobal('localStorage', {
+      ...memoryStorage(),
+      getItem: () => {
+        throw new DOMException('blocked', 'SecurityError');
+      },
+      setItem: () => {
+        throw new DOMException('full', 'QuotaExceededError');
+      },
+    });
+    const { client, opened } = fakeClient([
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+    ]);
+    render(<App client={client} />);
+
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    expect(opened).toHaveLength(1);
+    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+  });
+
+  it.each([
+    ['不是 JSON', '{壞的'],
+    ['缺 threadId', '{}'],
+    ['threadId 是空字串', '{"threadId":""}'],
+    ['threadId 不是字串', '{"threadId":42}'],
+    ['null', 'null'],
+  ])('存的東西壞了（%s）：開一條新的，不當成接回來', async (_label, raw) => {
+    seq = 0;
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    localStorage.setItem(REMEMBERED_THREAD_KEY, raw);
+    const { client, opened } = fakeClient([]);
+    render(<App client={client} />);
+
+    await waitFor(() => expect(opened).toHaveLength(1));
+    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    // 壞掉的那一份被這一條蓋掉，下一次載入就接得回來。
+    await waitFor(() => expect(stored()).toBe(opened[0]));
   });
 });
