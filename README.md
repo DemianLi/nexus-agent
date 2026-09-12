@@ -55,20 +55,21 @@ pnpm --filter @nexus/harness run cli:live "..."             # 換成真實供應
 這三樣。核准之後**只有那一個檔的下一次變更**在升上去的那一格跑，用完就沒了，session 的
 模式不動。不比現在寬的請求不會去問人。
 **沒有 `--workspace` 的組裝不會有 `/sandbox`、那句話，也不會有升級工具**：一格圍堵都沒有的時候
-講「目前是 workspace-write」是說謊。**模式跨得過重啟，但只在 CLI**：`--resume <run 目錄>` 讀回
-上一次的日誌，模式照最後一顆 `sandbox/mode` 回來（見下面「接著上一次跑下去」）。serve 還沒有
-resume，重開一條 thread 仍然回到 `--sandbox` 那一格。
+講「目前是 workspace-write」是說謊。**模式跨得過重啟**：CLI 的 `--resume <run 目錄>` 讀回
+上一次的日誌、serve 碰到一條以前寫過的 thread 就接回來，模式照最後一顆 `sandbox/mode` 回來
+（見下面「接著上一次跑下去」）。
 
 **會話日誌預設不落盤。** `--session-log <dir>` 給了才寫，缺席就是只在記憶體裡活著
 （banner 上第六行會說現在是哪一種）。沒有預設路徑是刻意的：日誌裡有你打的每一句話，
 預設往家目錄寫是一個該由人做的決定。它不能指到 `--workspace` 底下 —— 寫在可寫根裡，
-模型自己 `read_file` 就讀得到、也改得動整份對話史。每一次啟動各自一個 run 目錄，
+模型自己 `read_file` 就讀得到、也改得動整份對話史。CLI 每一次啟動各自一個 run 目錄，
 一份會話一個 `.jsonl` 加一個 `.header.json`。
 
 **`serve` 也有同一個旗標**（[#174](https://github.com/DemianLi/nexus-agent/issues/174)）：
-一個行程一個 run 目錄，底下一條 thread 一個檔，檔名由 thread id 百分號編碼而來 ——
-thread id 是呼叫端給的，所以編碼必須是單射的，不然兩條 thread 會共用一個檔而其中一條
-安靜地寫不進去。**eval 那條路沒有會話日誌，而那是一個登記過的決定**（理由與絆索見
+會話根按目錄分（照 dsh 的 `projectDir`：`<dir>/--<工作目錄壓成一段>--/`），底下一條 thread
+一個檔，檔名由 thread id 百分號編碼而來 —— thread id 是呼叫端給的，所以編碼必須是單射的，
+不然兩條 thread 會共用一個檔而其中一條安靜地寫不進去。位置固定，所以**重開 serve 之後同一條
+thread 接得回來**（下一段）。**eval 那條路沒有會話日誌，而那是一個登記過的決定**（理由與絆索見
 `apps/harness/src/eval/runner.ts` 的檔頭）。
 
 **要留 live 跑的證據，兩個東西都要留，而且它們裝的不是同一半。** 這對 CLI 與 `serve` 都
@@ -88,15 +89,18 @@ thread id 是呼叫端給的，所以編碼必須是單射的，不然兩條 thr
 這兩份東西的讀者是後來自己去 grep 的人，而人要 grep 得到，檔案得還在。
 在意的是哪一筆、判別式怎麼寫，見 [#187](https://github.com/DemianLi/nexus-agent/issues/187)。
 
-**接著上一次跑下去（只有 CLI）。** `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
-往同一個檔續寫。**回來的是住在日誌上的那一半**：沙箱模式、目標（授權打回 disarmed，要
+**接著上一次跑下去。** CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、往同一個
+檔續寫；serve 不用旗標——碰到一條以前在同一個會話根寫過的 thread 就接回來（只有「找不到」
+才開新的，壞掉或版本太新的日誌照樣擋下，不會被新的一份蓋掉）。**回來的是住在日誌上的那一半**：沙箱模式、目標（授權打回 disarmed，要
 `/goal resume` 才會再往下走）、todo 與計劃模式（上一次開著，接回來還開著）。**對話從頭開始**
 ——訊息住在 checkpointer 裡，那扇門不開（[#251](https://github.com/DemianLi/nexus-agent/issues/251)）。
 要在上一次的同一個目錄底下接——header 記著那份會話屬於哪個目錄，對不上就擋（同 dsh）。
 它不能配 `--sandbox`（模式從日誌來，要換就接起來之後 `/sandbox`）或 `--session-log`（就寫回
 那個目錄）。**同一份會話同一時間只有一個行程寫得進去**：照 dsh 的寫租約（kernel 的
 `flock`，行程死了就放），另一個行程還開著它時 `--resume` 當場擋下。只有 macOS 與 Linux
-鎖得到；其他平台照常寫，第一次要鎖的時候講一聲。
+鎖得到；其他平台照常寫，第一次要鎖的時候講一聲。**web 那端還記不住 thread id**：每次重新
+載入都開一條新的，所以瀏覽器上看不到接回來——那是下一刀；今天接得回來的是同一個 thread id
+的 client。
 
 **目標不會自己往下走，除非你說可以。** `--goal-driver` 打開之後，一個 active 的目標在
 每一輪落定時會自己再開一輪，直到它被完成、被擋住，或用完自己的 `max_goal_rounds`

@@ -5,15 +5,17 @@
  * 上游那半在 `@nexus/core` 的 `session-persistence.test.ts`。這一檔只問 `serve` 獨有的
  * 三件事，而三件都不是 CLI 那條路上存在的問題：
  *
- * 1. **一個行程一個 run 目錄、一條 thread 一個檔。** CLI 的 root 固定叫 `cli`，
- *    只有一條；`serve` 有幾條 thread 就有幾份日誌。
+ * 1. **一個專案目錄一格、一條 thread 一個檔，重開 server 之後接得回來。** 會話根按目錄分
+ *    （照 dsh 的 `projectDir(root, cwd)`，[#251](https://github.com/DemianLi/nexus-agent/issues/251)
+ *    拍板的第 3 件），檔名就是 thread id，所以同一條 thread 重開之後找得回自己那一份。CLI 的
+ *    root 固定叫 `cli`，放在固定的地方會每次都撞，所以它仍然每次一個 run 目錄。
  * 2. **thread id 是呼叫端給的。** 它會出現在檔名裡，所以兩個壓平後同名的 id 必須落成
  *    兩個檔——不然第二條 thread 的日誌會安靜地消失（`jsonl-session-store.ts` 的
  *    `safeBaseName`）。
  * 3. **披露那一行**：一台正在把每一條 thread 的對話寫上磁碟的 server，畫面上要看得出來。
  */
 
-import { mkdtemp, readdir, readFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -24,6 +26,7 @@ import {
 } from '@nexus/wire';
 import type { ConversationState } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
+import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 import type { SessionEvent } from '@nexus/core';
@@ -39,11 +42,15 @@ async function tmp(prefix: string): Promise<string> {
   return mkdtemp(join(tmpdir(), prefix));
 }
 
-/** run 目錄底下唯一的那一個。 */
-async function onlyRunDir(root: string): Promise<string> {
-  const entries = await readdir(root);
-  expect(entries).toHaveLength(1);
-  return join(root, entries[0]!);
+/** 會話根底下，這個專案的那一格。`runServe` 沒給 `cwd`，所以是這個行程的。 */
+function projectDirOf(root: string): string {
+  return join(root, projectKey(process.cwd()));
+}
+
+/** 會話根底下只有這個專案那一格，回它。 */
+async function onlyProjectDir(root: string): Promise<string> {
+  expect(await readdir(root)).toEqual([projectKey(process.cwd())]);
+  return projectDirOf(root);
 }
 
 /**
@@ -88,7 +95,7 @@ describe('serve 的 --session-log', () => {
     await started.close();
     running = undefined;
 
-    const runDir = await onlyRunDir(root);
+    const runDir = await onlyProjectDir(root);
     const files = (await readdir(runDir)).filter((name) => name.endsWith('.jsonl')).sort();
     expect(files).toEqual(['alpha.jsonl', 'beta.jsonl']);
 
@@ -112,7 +119,7 @@ describe('serve 的 --session-log', () => {
     await started.close();
     running = undefined;
 
-    const runDir = await onlyRunDir(root);
+    const runDir = await onlyProjectDir(root);
     const header = JSON.parse(await readFile(join(runDir, 'gamma.header.json'), 'utf8')) as Record<
       string,
       unknown
@@ -146,7 +153,7 @@ describe('serve 的 --session-log', () => {
     await started.close();
     running = undefined;
 
-    const runDir = await onlyRunDir(root);
+    const runDir = await onlyProjectDir(root);
     const files = (await readdir(runDir)).filter((name) => name.endsWith('.jsonl'));
     expect(files).toHaveLength(2);
     // 兩個檔都真的有內容——「開得起來」與「寫得進去」是兩件事。
@@ -175,7 +182,8 @@ describe('serve 的 --session-log', () => {
       log: (line) => lines.push(line),
       env: {},
     });
-    expect(lines.join('\n')).toContain(`會話日誌：${root}`);
+    // 印的要是**那一格**，不只是根：根是那一格的前綴，斷言根的話印哪一個都綠。
+    expect(lines.join('\n')).toContain(`會話日誌：${projectDirOf(root)}`);
   });
 
   it('--session-log 不能落在 --workspace 底下', async () => {
@@ -193,5 +201,130 @@ describe('serve 的 --session-log', () => {
     await expect(
       runServe({ argv: ['--port', '0', '--session-log', '  '], log: () => undefined, env: {} }),
     ).rejects.toThrow('--session-log 要給一個目錄路徑');
+  });
+});
+
+/**
+ * 重開 server、同一條 thread——serve 那一半的續接（照 dsh：碰到一個已存的 session id 就
+ * resume）。回來的是住在日誌上的那一半，對話照舊從頭開始（門 B 不開）。
+ *
+ * **失敗的那幾條都要斷言兩件事**：這條 thread 起不來，而且檔案一個位元組都沒動。只斷言
+ * 前一件的話，「退到新開、撞上 `wx`、被收成一行 warn」那條路一樣起不來——而那正是要擋的
+ * 靜默遺失。
+ */
+describe('重開 server 之後接得回同一條 thread', () => {
+  async function start(root: string, extra: readonly string[] = []): Promise<RunningServe> {
+    running = await runServe({
+      argv: ['--port', '0', '--session-log', root, ...extra],
+      log: () => undefined,
+      env: {},
+    });
+    return running as RunningServe;
+  }
+
+  async function stop(server: RunningServe): Promise<void> {
+    await server.close();
+    running = undefined;
+  }
+
+  function count(events: readonly SessionEvent[], type: string): number {
+    return events.filter((event) => event.type === type).length;
+  }
+
+  it('同一個 thread id：同一個檔接著寫，seq 連續，中間只有一顆 end-seed', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const first = await start(root);
+    await driveTurn(first.url, 'alpha');
+    await stop(first);
+    const second = await start(root);
+    await driveTurn(second.url, 'alpha');
+    await stop(second);
+
+    const dir = await onlyProjectDir(root);
+    expect((await readdir(dir)).filter((name) => name.endsWith('.jsonl'))).toEqual(['alpha.jsonl']);
+    const events = readEvents(await readFile(join(dir, 'alpha.jsonl'), 'utf8'));
+    expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
+    expect(count(events, 'session/end-seed')).toBe(1);
+    expect(count(events, 'turn/start')).toBe(2);
+  });
+
+  it('日誌壞了：這條 thread 起不來，檔案一個位元組都沒動', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const first = await start(root);
+    await driveTurn(first.url, 'alpha');
+    await stop(first);
+    const log = join(projectDirOf(root), 'alpha.jsonl');
+    const lines = (await readFile(log, 'utf8')).split('\n');
+    lines[0] = '{壞的';
+    await writeFile(log, lines.join('\n'));
+    const before = await readFile(log, 'utf8');
+
+    const second = await start(root);
+    await expect(driveTurn(second.url, 'alpha')).rejects.toThrow();
+    await stop(second);
+    expect(await readFile(log, 'utf8')).toBe(before);
+  });
+
+  it('別的把手握著：起不來；它放了之後同一台 server 重試接得回來', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const first = await start(root);
+    await driveTurn(first.url, 'alpha');
+    await stop(first);
+    const holder = await openJsonlSessionStore({ directory: projectDirOf(root) }).resume('alpha');
+
+    const second = await start(root);
+    await expect(driveTurn(second.url, 'alpha')).rejects.toThrow();
+    await holder.stored.close();
+    await driveTurn(second.url, 'alpha');
+    await stop(second);
+
+    const events = readEvents(await readFile(join(projectDirOf(root), 'alpha.jsonl'), 'utf8'));
+    expect(count(events, 'turn/start')).toBe(2);
+  });
+
+  /**
+   * **租約在失敗時放掉了。** 目錄比對在讀回之後、已經拿了租約；擋下之後沒放的話，同一台
+   * server 下一次請求（`wire-handler.ts` 說好的重試）撞上的是自己上一次留下的租約。
+   */
+  it('目錄對不上：擋下；改回來之後同一台 server 重試接得回來', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const first = await start(root);
+    await driveTurn(first.url, 'alpha');
+    await stop(first);
+    const headerPath = join(projectDirOf(root), 'alpha.header.json');
+    const good = await readFile(headerPath, 'utf8');
+    await writeFile(headerPath, JSON.stringify({ ...JSON.parse(good), cwd: '/別的地方' }));
+    const log = join(projectDirOf(root), 'alpha.jsonl');
+    const before = await readFile(log, 'utf8');
+
+    const second = await start(root);
+    await expect(driveTurn(second.url, 'alpha')).rejects.toThrow();
+    expect(await readFile(log, 'utf8')).toBe(before);
+    await writeFile(headerPath, good);
+    await driveTurn(second.url, 'alpha');
+    await stop(second);
+  });
+
+  it('沙箱模式跟著回來；日誌記著模式而這一次沒給 --workspace：擋下', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const workspace = await tmp('nexus-serve-resume-ws-');
+    const first = await start(root, ['--workspace', workspace]);
+    const client = createWireClient({ baseUrl: first.url });
+    await client.slashRun('alpha', '/sandbox read-only');
+    await stop(first);
+
+    const bare = await start(root);
+    // 建不起這條 thread 是協定層的錯（`wire-handler.ts` 的 `threadOrError`）：斜線命令回
+    // `rejected`，不是拋。原因要講到 `--workspace`——那是人唯一改得動的東西。
+    const refused = await createWireClient({ baseUrl: bare.url }).slashRun('alpha', '/sandbox');
+    expect(refused).toMatchObject({ kind: 'rejected' });
+    expect(JSON.stringify(refused)).toContain('--workspace');
+    await stop(bare);
+
+    const second = await start(root, ['--workspace', workspace]);
+    const reported = await createWireClient({ baseUrl: second.url }).slashRun('alpha', '/sandbox');
+    await stop(second);
+    // 前提：預設是 workspace-write，所以看得到 read-only 才證明是從日誌回來的。
+    expect(JSON.stringify(reported)).toContain('read-only');
   });
 });

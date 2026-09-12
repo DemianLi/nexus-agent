@@ -543,3 +543,83 @@ describe('線的兩端與真實組裝點對得上', () => {
     }
   });
 });
+
+/**
+ * **建不起這條 thread 時，兩條路都要回一個協定層的錯，不能讓 client 卡住。**
+ *
+ * `handle()` 本身不接錯，`wire-server.ts` 也不接——`createAgent` 一拋，那個請求就一個位元組
+ * 都不回，而那顆 rejection 沒有人處理。以前走得到它的只有「plugin 載不起來」這類；serve 的
+ * 續接之後，壞掉的日誌、別的行程握著、目錄對不上都走得到。照這一層的分層（載體層用 HTTP
+ * status，協定層用 200 加 error 封包），它屬於後者：請求本身沒有錯，是這條 thread 起不來。
+ */
+describe('建不起這條 thread', () => {
+  function postTo(handler: ReturnType<typeof createWireHandler>) {
+    return (path: string, body: unknown) =>
+      handler.handle(
+        new Request(`${BASE_URL}${path}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        }),
+      );
+  }
+
+  it('createAgent 拋了：下行與上行都回 error 封包，帶著原因；下一次請求重試', async () => {
+    let attempts = 0;
+    const handler = createWireHandler({
+      createAgent: async () => {
+        attempts += 1;
+        throw new Error('這條 thread 的日誌壞了');
+      },
+    });
+    const post = postTo(handler);
+
+    const stream = await post(streamPath('broken'), { channels: ['messages'] });
+    expect(stream.status).toBe(200);
+    expect(await stream.json()).toMatchObject({ type: 'error', id: null });
+
+    const command = await post(commandPath('broken', 'slash.list'), {
+      id: 4,
+      method: 'slash.list',
+    });
+    const packet = (await command.json()) as { type: string; id: number; message: string };
+    expect(packet).toMatchObject({ type: 'error', id: 4 });
+    expect(packet.message).toContain('這條 thread 的日誌壞了');
+
+    expect(attempts).toBe(2);
+    await handler.close();
+  });
+
+  /**
+   * `createAgent` 回來之後、這條 thread 建好之前拋錯（例如某個 attach），剛建好的 agent 要收掉：
+   * 續接的 thread 在 `createAgent` 裡就拿了寫租約，沒人收的話重試撞上的是自己上一次的租約。
+   */
+  it('createAgent 回來之後才拋：agent 被收掉一次，下一次請求重試', async () => {
+    const { agent } = buildAgent(ONE_CALL);
+    let built = 0;
+    let disposed = 0;
+    const handler = createWireHandler({
+      createAgent: async () => {
+        built += 1;
+        return {
+          agent,
+          commands: emptyCommandPoint(),
+          dispose: async () => void (disposed += 1),
+          attachTelemetry: () => {
+            throw new Error('遙測接不上');
+          },
+        };
+      },
+    });
+    const post = postTo(handler);
+
+    const first = await post(commandPath('late', 'slash.list'), { id: 1, method: 'slash.list' });
+    expect(await first.json()).toMatchObject({ type: 'error', id: 1 });
+    expect(disposed).toBe(1);
+
+    await post(commandPath('late', 'slash.list'), { id: 2, method: 'slash.list' });
+    expect(built).toBe(2);
+    expect(disposed).toBe(2);
+    await handler.close();
+  });
+});

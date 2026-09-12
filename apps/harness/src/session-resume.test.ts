@@ -28,7 +28,8 @@ import {
   PLAN_ENTERED_MESSAGE,
 } from '@nexus/plugin-plan-mode';
 
-import { parseCliArgs, RESUMED_PLAN_MODE_NOTICE, ResumeCwdConflictError, runCli } from './cli.js';
+import { parseCliArgs, RESUMED_PLAN_MODE_NOTICE, runCli } from './cli.js';
+import { ResumeCwdConflictError } from './resume-guards.js';
 import { openJsonlSessionStore } from './jsonl-session-store.js';
 import { SANDBOX_COMMAND_NAME } from './sandbox-mode.js';
 
