@@ -111,7 +111,6 @@
 
 import { tool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
-import { Command } from '@langchain/langgraph';
 import type {
   AgentMiddleware,
   CommandResult,
@@ -121,6 +120,7 @@ import type {
   SessionLog,
   SessionSubject,
 } from '@nexus/core';
+import { toolCallIdOf, toolRefusal } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import { z } from 'zod';
 
@@ -330,16 +330,11 @@ function createPlanModeMiddleware(guidance: string, active: () => boolean): Agen
       const call = request.toolCall as { name?: string; id?: string };
       if (call.name !== EXIT_PLAN_MODE_TOOL_NAME) return handler(request);
       if (active()) return handler(request);
-      return new Command({
-        update: {
-          messages: [
-            {
-              type: 'tool',
-              content: NOT_IN_PLAN_MODE_MESSAGE,
-              tool_call_id: call.id ?? '',
-            },
-          ],
-        },
+      // **直接回訊息，不包進 `Command`**：圍堵從 `Command` 裡認這次呼叫的那則是比對
+      // `tool_call_id`（`@nexus/core` 的 `readToolOutcome`），id 一旦對不上就讀成成功。
+      return toolRefusal(NOT_IN_PLAN_MODE_MESSAGE, {
+        callId: call.id ?? '',
+        name: EXIT_PLAN_MODE_TOOL_NAME,
       });
     },
   }) as AgentMiddleware;
@@ -361,7 +356,7 @@ type PlanModeLookup =
  * **日誌問的是這次呼叫的 config，不是組裝的閉包**（同 `@nexus/plugin-goal` 的工具，理由見
  * `@nexus/core` 的 `sessions.ts`）。在 subagent 裡被呼叫時，`forCall` 認出來的是那個
  * subagent 自己的日誌，而計劃模式不管那一份——那裡的 middleware 也不在（`fold.ts` 不攤），
- * 所以擋的就是這裡：回 {@link NOT_IN_PLAN_MODE_MESSAGE}。**不標 `rootOnly`**：那會換掉
+ * 所以擋的就是這裡：回一則帶 {@link NOT_IN_PLAN_MODE_MESSAGE} 的錯誤訊息。**不標 `rootOnly`**：那會換掉
  * subagent 看到的工具目錄，而 dsh 的「工具目錄不隨模式變動」講的正是這一件。
  *
  * @param lookup - 認這次呼叫的日誌。
@@ -370,9 +365,18 @@ type PlanModeLookup =
 function createExitPlanModeTool(lookup: (config: unknown) => PlanModeLookup): StructuredTool {
   return tool(
     (_args: { plan: string }, config: unknown) => {
+      // 兩條拒絕都不帶碼：dsh 對模式外拋的是一般 `Error`（`plan/plan-mode/src/index.ts:292-294`），
+      // 沒接日誌 dsh 沒有對應物。
+      const refuse = (message: string) =>
+        toolRefusal(message, {
+          callId: toolCallIdOf(config) ?? '',
+          name: EXIT_PLAN_MODE_TOOL_NAME,
+        });
       const found = lookup(config);
-      if (found.kind === 'not-attached') return PLAN_NOT_ATTACHED_TOOL_MESSAGE;
-      if (found.kind === 'not-root' || !found.session.active()) return NOT_IN_PLAN_MODE_MESSAGE;
+      if (found.kind === 'not-attached') return refuse(PLAN_NOT_ATTACHED_TOOL_MESSAGE);
+      if (found.kind === 'not-root' || !found.session.active()) {
+        return refuse(NOT_IN_PLAN_MODE_MESSAGE);
+      }
       found.session.log.append('plan/mode', { active: false });
       return PLAN_APPROVED_MESSAGE;
     },

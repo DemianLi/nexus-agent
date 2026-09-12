@@ -176,6 +176,18 @@ describe('模型工具走真的 pump', () => {
         .map((message) => String(message.content));
       expect(toolText).toContain(GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_AUTHORITY_MESSAGE);
       expect(pump.sessionLog.events.filter((event) => event.type === 'goal/change')).toEqual([]);
+      // **日誌上記的是錯誤、碼照 dsh**（#273）：以前那句話是狀態成功的，日誌記成成功。
+      expect(
+        pump.sessionLog.events.flatMap((event) =>
+          event.type === 'tool/result' ? [event.data] : [],
+        ),
+      ).toEqual([
+        {
+          callId: expect.any(String),
+          isError: true,
+          error: { name: 'HarnessError', code: 'GOAL_TOOL_AUTHORITY_REQUIRED' },
+        },
+      ]);
     } finally {
       detach();
       await dispose();

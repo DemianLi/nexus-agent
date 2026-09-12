@@ -26,8 +26,8 @@
  * 剛剛把目標收掉了。#180 之前沒有自排輪次，這件事不存在。
  *
  * 載體是一顆 `Command`：工具結果與 {@link ./wrapup.ts | 收尾指示}各一則。**這條路讓
- * `update_goal` 的回傳型別從 `string` 變成 `string | Command`**——只有「自主收尾成功」
- * 那一格走 `Command`，拒絕與人打的那些照舊回一句話。dsh 那側走的是
+ * `update_goal` 的回傳型別多了 `Command`**——只有「自主收尾成功」那一格走 `Command`，
+ * 其餘成功照舊回一句話，拒絕回一則錯誤訊息（見下面「拒絕」那一節）。dsh 那側走的是
  * `ToolRunContext.deferContext()`，語意是「掛在這一顆工具自己的 result 上、那顆
  * `tool/result` 之後 append」（`packages/core/tools/src/index.ts` 的介面註解），
  * `Command({ update: { messages } })` 對得上同一個時刻，**所以這一格沒有偏離要登記**。
@@ -123,11 +123,13 @@
  * **這三格是 `model-facing-surface-is-more-than-prose` 那條規則的作用面**：丟掉或改寫
  * 一句政策文字時，schema 的 `describe` 與輸出欄位要一起掃過，它們同樣是模型讀得到的。
  *
- * ## 拒絕走「回一句話」，不走拋
+ * ## 預期的拒絕回錯誤訊息並帶 dsh 的碼，壞掉照拋
  *
- * 同 `todo_write` 的先例（`@nexus/plugin-todo` 的 `TODO_ERROR_PREFIX` 那段）：預期得到的
- * 拒絕（權限不足、CAS 過期、參數配錯 action）回一句話給模型；**壞掉**（折疊失敗那種
- * 裸 `Error`）照樣往外拋，讓 `containment.ts` 分類——兩者在日誌與遙測上是不同的東西。
+ * 預期得到的拒絕（權限不足、CAS 過期、參數配錯 action、太早報阻塞）回一則 `status: 'error'`
+ * 的工具結果，文字是給模型的那一句、帶 `Error: ` 前綴，碼照 dsh 逐類掛上（見 {@link Refusal}）；
+ * **壞掉**（折疊失敗那種裸 `Error`）照樣往外拋，讓 `containment.ts` 分類、不帶碼。dsh 沒有
+ * 「預期的拒絕 vs 壞掉」這條區分——兩者都是 `isError`，差在有沒有碼——我們用同一個判準。
+ * 決議見 [#271](https://github.com/DemianLi/nexus-agent/issues/271)。
  *
  * @module
  */
@@ -137,8 +139,8 @@ import { tool } from '@langchain/core/tools';
 import { Command } from '@langchain/langgraph';
 import { z } from 'zod';
 
-import { GOAL_WRAPUP_MARKER, goalId } from '@nexus/core';
-import type { GoalRef, SessionLog } from '@nexus/core';
+import { GOAL_WRAPUP_MARKER, goalId, toolCallIdOf, toolRefusal } from '@nexus/core';
+import type { GoalRef, SessionLog, ToolErrorInfo } from '@nexus/core';
 
 import { completionAuthority, hasDirectHumanTurn } from './authority.js';
 import type { GoalToolAuthority } from './authority.js';
@@ -346,24 +348,69 @@ function resolve(wiring: GoalToolWiring, config: unknown): Resolution {
   return { kind: 'ok', service, log: found.log };
 }
 
-/** 把一句拒絕包成模型收得到的形狀。 */
-function refuse(message: string): string {
-  return GOAL_TOOL_ERROR_PREFIX + message;
+/** 工具層拒絕的錯誤類別名：dsh `tool-goal` 拋的是 `HarnessError`。 */
+const HARNESS_ERROR = 'HarnessError';
+/** 權限不足。dsh `tool-goal/src/authority.ts:24` 的預設碼。 */
+const GOAL_TOOL_AUTHORITY_REQUIRED = 'GOAL_TOOL_AUTHORITY_REQUIRED';
+/** `goal_id`／`revision` 不成形、參數配錯 action。dsh `index.ts:147-150`、`:266-304`。 */
+const GOAL_TOOL_INVALID_UPDATE = 'GOAL_TOOL_INVALID_UPDATE';
+/** 自己排的輪次裡太早報阻塞。dsh `index.ts:308-311`。 */
+const GOAL_TOOL_BLOCK_THRESHOLD = 'GOAL_TOOL_BLOCK_THRESHOLD';
+
+/**
+ * 一次預期得到的拒絕：模型看到的那一句，以及照 dsh 分類的碼。
+ *
+ * 碼逐類對過 dsh `tool-goal`（SHA `c291e7961a515f6d7af9304e7fd1d257929aef26`）：工具層的三個
+ * 見上面那三個常數，域的拒絕帶域自己的碼（`GoalErrorCode` 與 dsh `goal/goal/src/domain.ts`
+ * 逐字相同）。**組裝沒接好的那幾句沒有碼**：dsh 沒有對應物。
+ */
+interface Refusal {
+  readonly refused: string;
+  readonly error?: ToolErrorInfo;
 }
 
-/** 域拋出來的可預期拒絕轉成一句話；其他的照原樣往外拋，見檔頭。 */
-function runDomain(work: () => GoalToolValue): GoalToolValue | string {
+/** 一句工具層的拒絕；`code` 省略即不帶碼。 */
+function refuse(message: string, code?: string): Refusal {
+  const refused = GOAL_TOOL_ERROR_PREFIX + message;
+  return code === undefined ? { refused } : { refused, error: { name: HARNESS_ERROR, code } };
+}
+
+function isRefusal(value: GoalToolValue | Refusal): value is Refusal {
+  return 'refused' in value;
+}
+
+/** 域拋出來的可預期拒絕帶著它的碼轉成 {@link Refusal}；其他的照原樣往外拋，見檔頭。 */
+function runDomain(work: () => GoalToolValue): GoalToolValue | Refusal {
   try {
     return work();
   } catch (error: unknown) {
-    if (error instanceof GoalError) return refuse(error.message);
-    throw error;
+    if (!(error instanceof GoalError)) throw error;
+    return {
+      refused: GOAL_TOOL_ERROR_PREFIX + error.message,
+      error: { name: 'GoalError', code: error.code },
+    };
   }
 }
 
-/** 輸出永遠是一行緊湊 JSON；拒絕是一句話。 */
-function render(value: GoalToolValue | string): string {
-  return typeof value === 'string' ? value : JSON.stringify(value);
+/**
+ * 輸出是一行緊湊 JSON；拒絕是一則 `status: 'error'` 的工具結果，文字同那一句。
+ *
+ * @param outcome - 這次呼叫算出來的東西。
+ * @param name - 哪一顆工具。
+ * @param config - 這次呼叫的 config，`tool_call_id` 從裡面來。
+ * @returns 交回 tool node 的那一份。
+ */
+function answer(
+  outcome: GoalToolValue | Refusal,
+  name: string,
+  config: unknown,
+): string | ToolMessage {
+  if (!isRefusal(outcome)) return JSON.stringify(outcome);
+  return toolRefusal(outcome.refused, {
+    callId: toolCallIdOf(config) ?? '',
+    name,
+    ...(outcome.error === undefined ? {} : { error: outcome.error }),
+  });
 }
 
 /** 嚴格 schema 下的空字串等同沒給，同 dsh 的 `hasText`。 */
@@ -490,23 +537,6 @@ function authorityFor(
 }
 
 /**
- * 一次工具呼叫的 `tool_call_id`，沒有就 `undefined`。
- *
- * 基座把它放在 config 上（`@langchain/core` 的 `tools/index.js:128`），而**只有以
- * `ToolCall` 形式呼叫時才有**——產品路徑上的 tool node 一律走那一條。
- *
- * @param config - 這一次呼叫的 config，形狀不保證。
- * @returns 那個 id，取不到時是 `undefined`。
- */
-function toolCallId(config: unknown): string | undefined {
-  if (typeof config !== 'object' || config === null) return undefined;
-  const call = (config as { toolCall?: unknown }).toolCall;
-  if (typeof call !== 'object' || call === null) return undefined;
-  const id = (call as { id?: unknown }).id;
-  return typeof id === 'string' ? id : undefined;
-}
-
-/**
  * 把一次成功的自主收尾包成「工具結果 ＋ 一則收尾指示」。
  *
  * ## 為什麼要自己造那顆 `ToolMessage`
@@ -534,7 +564,7 @@ function wrapupCommand(
   args: UpdateArgs,
   config: unknown,
 ): Command {
-  const id = toolCallId(config);
+  const id = toolCallIdOf(config);
   if (id === undefined) throw new Error(GOAL_TOOL_MISSING_CALL_ID_MESSAGE);
   return new Command({
     update: {
@@ -579,18 +609,28 @@ export function createGoalTools(
   const get = tool(
     (_args: Record<string, never>, config?: unknown) => {
       const found = resolve(wiring, config);
-      if (found.kind === 'refused') return refuse(found.message);
-      return render(runDomain(() => goalToolValue(found.service.get())));
+      if (found.kind === 'refused') {
+        return answer(refuse(found.message), GOAL_GET_TOOL_NAME, config);
+      }
+      return answer(
+        runDomain(() => goalToolValue(found.service.get())),
+        GOAL_GET_TOOL_NAME,
+        config,
+      );
     },
     { name: GOAL_GET_TOOL_NAME, description: GET_DESCRIPTION, schema: z.object({}) },
   );
 
   const create = tool(
     (args: { objective: string; max_goal_rounds?: number }, config?: unknown) => {
+      const reply = (outcome: GoalToolValue | Refusal) =>
+        answer(outcome, GOAL_CREATE_TOOL_NAME, config);
       const found = resolve(wiring, config);
-      if (found.kind === 'refused') return refuse(found.message);
-      if (!hasDirectHumanTurn(found.log.events)) return refuse(GOAL_TOOL_AUTHORITY_MESSAGE);
-      return render(
+      if (found.kind === 'refused') return reply(refuse(found.message));
+      if (!hasDirectHumanTurn(found.log.events)) {
+        return reply(refuse(GOAL_TOOL_AUTHORITY_MESSAGE, GOAL_TOOL_AUTHORITY_REQUIRED));
+      }
+      return reply(
         runDomain(() =>
           goalToolValue(
             found.service.create({
@@ -615,8 +655,10 @@ export function createGoalTools(
 
   const update = tool(
     (args: UpdateArgs, config?: unknown) => {
+      const reply = (outcome: GoalToolValue | Refusal) =>
+        answer(outcome, GOAL_UPDATE_TOOL_NAME, config);
       const found = resolve(wiring, config);
-      if (found.kind === 'refused') return refuse(found.message);
+      if (found.kind === 'refused') return reply(refuse(found.message));
       const service = found.service;
       // **授權按 action 分兩條**（見 `authority.ts` 的 `completionAuthority`）：只有
       // `complete`／`blocked` 收得下當前續行輪次，其餘四個一律要人。
@@ -625,24 +667,37 @@ export function createGoalTools(
       // 「你的參數哪裡配錯了」——那是在教一個不該動的呼叫方怎麼把呼叫修對。
       const authority = authorityFor(args.action, service, found.log.events);
       if (authority === undefined) {
-        return refuse(
-          isCompletionAction(args.action)
-            ? GOAL_TOOL_COMPLETION_AUTHORITY_MESSAGE
-            : GOAL_TOOL_AUTHORITY_MESSAGE,
+        // 兩句話、同一個碼：dsh 的 `requireDirectHuman` 與 `completionAuthority` 都走
+        // `authority.ts` 的 `reject()`，預設碼只有一個。
+        return reply(
+          refuse(
+            isCompletionAction(args.action)
+              ? GOAL_TOOL_COMPLETION_AUTHORITY_MESSAGE
+              : GOAL_TOOL_AUTHORITY_MESSAGE,
+            GOAL_TOOL_AUTHORITY_REQUIRED,
+          ),
         );
       }
       const ref = toRef(args.goal_id, args.revision);
-      if (ref === undefined) return refuse(GOAL_TOOL_INVALID_REF_MESSAGE);
+      if (ref === undefined) {
+        return reply(refuse(GOAL_TOOL_INVALID_REF_MESSAGE, GOAL_TOOL_INVALID_UPDATE));
+      }
       const wrong = misplaced(args);
-      if (wrong !== undefined) return refuse(wrong);
+      if (wrong !== undefined) return reply(refuse(wrong, GOAL_TOOL_INVALID_UPDATE));
       // 太早報阻塞。**只在自己排的輪次裡擋**——人叫停一律立刻生效。
       if (
         args.action === 'blocked' &&
         authority.kind === 'goal-round' &&
         authority.goal.roundsStarted < blockedAfterConsecutiveRounds
       ) {
-        return refuse(
-          goalToolBlockTooSoonMessage(blockedAfterConsecutiveRounds, authority.goal.roundsStarted),
+        return reply(
+          refuse(
+            goalToolBlockTooSoonMessage(
+              blockedAfterConsecutiveRounds,
+              authority.goal.roundsStarted,
+            ),
+            GOAL_TOOL_BLOCK_THRESHOLD,
+          ),
         );
       }
       const outcome = runDomain(() => {
@@ -671,12 +726,12 @@ export function createGoalTools(
             );
         }
       });
-      const text = render(outcome);
+      if (isRefusal(outcome)) return reply(outcome);
+      const text = JSON.stringify(outcome);
       // **收尾指示只跟著自主收尾走。** 人打的 `complete` 不注入：人自己知道自己剛做了
       // 什麼，而且那一輪本來就該由人決定下一步（dsh 的 `index.ts:312` 同此）。
-      // 拒絕（`outcome` 是一句話）與「沒有目標」都不是一次收尾，照樣只回文字。
-      if (authority.kind !== 'goal-round' || typeof outcome === 'string') return text;
-      if (outcome.goal === null) return text;
+      // 拒絕與「沒有目標」都不是一次收尾。
+      if (authority.kind !== 'goal-round' || outcome.goal === null) return text;
       return wrapupCommand(text, outcome.goal.objective, args, config);
     },
     {

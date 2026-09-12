@@ -47,11 +47,11 @@
  * 2. **沒有 `output.schema` 與 `presentCall` 的卡片。** dsh 的工具回結構化結果並自己渲染；
  *    我們的工具回一句字串（LangChain 的 `tool()` 形狀）。模型看到的那句話逐字照抄 dsh 的
  *    `Updated todo list: … pending, … in progress, … completed.`
- * 3. **驗證失敗是回字串，不是拋。** dsh 的 `execute` 直接 `throw`，它的 harness 把錯渲染
- *    成一則工具結果交回模型。**LangGraph 的 ToolNode 不接**——實測（驗收在
- *    `apps/harness/src/todo-tool.test.ts`）一顆重複的 content 會讓 `agent.invoke` 整個炸掉，
- *    也就是模型打錯一次字就死一輪。所以工具自己接住，回的那句話帶著 dsh 那個 `Error: `
- *    前綴，讓模型手上拿到的字與 dsh 一致。見 {@link TODO_ERROR_PREFIX}。
+ * 3. **驗證失敗是回錯誤訊息，不是拋。** dsh 的 `execute` 直接 `throw`，它的 harness 把錯渲染
+ *    成一則 `isError` 的工具結果交回模型。我們回一則 `status: 'error'` 的 ToolMessage——同樣
+ *    是錯誤，而模型手上的字與 dsh 一致（帶 `Error: ` 前綴，見 {@link TODO_ERROR_PREFIX}）。
+ *    不拋是因為拋給圍堵的話，模型看到的字會變成「工具 todo_write 執行失敗：…」。驗收在
+ *    `apps/harness/src/todo-tool.test.ts`；決議見 [#271](https://github.com/DemianLi/nexus-agent/issues/271)。
  *
  * @see [#132](https://github.com/DemianLi/nexus-agent/issues/132)
  * @module
@@ -59,7 +59,7 @@
 
 import { tool } from '@langchain/core/tools';
 import type { NexusPlugin, PluginRegistry, TodoItem, TodoStatus } from '@nexus/core';
-import { TODO_STATUSES } from '@nexus/core';
+import { TODO_STATUSES, toolCallIdOf, toolRefusal } from '@nexus/core';
 import { z } from 'zod';
 
 /** 註冊出來的工具名。**照 dsh 的 `todo_write`**，不是 langchain 那顆 `write_todos`。 */
@@ -91,9 +91,8 @@ export function todoAmbiguousMessage(count: number): string {
  *
  * **`Error: ` 這四個字是模型體驗的一部分，不是裝飾。** dsh 的工具是**拋**的，它的 harness
  * 把拋出來的東西渲染成 `Error: <message>` 交回模型（README 把那幾句列成「稳定失败文本」）。
- * 我們這側拋不得——實測 LangGraph 的 ToolNode **不接**，一顆重複的 content 會把整輪炸掉
- * （驗收在 `apps/harness/src/todo-tool.test.ts`）。所以工具自己接住並回字串，而字串要與
- * dsh 交到模型手上的那一句一致。
+ * 我們這側接住、回一則 `status: 'error'` 的工具結果而不拋（拋給圍堵的話字會變成「工具
+ * todo_write 執行失敗：…」），所以前綴要自己帶，模型手上的字才與 dsh 一致。
  */
 export const TODO_ERROR_PREFIX = 'Error: ';
 
@@ -240,22 +239,26 @@ export function createTodoPlugin(options: TodoPluginOptions): NexusPlugin {
       registry.tools.register(
         tool(
           ({ todos: raw }: { todos: RawTodo[] }, config?: unknown) => {
+            // 四條出口都是「這次呼叫沒有生效」，一律回錯誤訊息、不帶碼：dsh 對驗證失敗拋的是
+            // 一般 `Error`，後三條 dsh 沒有對應物。
+            const refuse = (message: string) =>
+              toolRefusal(message, { callId: toolCallIdOf(config) ?? '', name: TODO_TOOL_NAME });
             // **先驗再找日誌**：驗不過的那一次連日誌都不必問，而且錯誤訊息與「寫不進去」
             // 是兩回事——前者是模型送錯東西，後者是接線的問題。
             //
-            // **接住而不是往外拋。** dsh 那側拋得起，因為它的 harness 會把錯渲染成一則
-            // 工具結果交回模型；LangGraph 的 ToolNode **不接**，往外拋等於一顆打錯的
-            // todo 把整輪弄死。見 {@link TODO_ERROR_PREFIX}。
+            // **接住而不是往外拋**，見 {@link TODO_ERROR_PREFIX}。
             let todos: readonly TodoItem[];
             try {
               todos = toTodoList(raw, allowParallel);
             } catch (error: unknown) {
-              return TODO_ERROR_PREFIX + (error instanceof Error ? error.message : String(error));
+              return refuse(
+                TODO_ERROR_PREFIX + (error instanceof Error ? error.message : String(error)),
+              );
             }
             const found = registry.sessions.forCall(config);
-            if (found.kind === 'not-attached') return TODO_NOT_ATTACHED_MESSAGE;
-            if (found.kind === 'unknown-caller') return TODO_UNKNOWN_CALLER_MESSAGE;
-            if (found.kind === 'ambiguous') return todoAmbiguousMessage(found.count);
+            if (found.kind === 'not-attached') return refuse(TODO_NOT_ATTACHED_MESSAGE);
+            if (found.kind === 'unknown-caller') return refuse(TODO_UNKNOWN_CALLER_MESSAGE);
+            if (found.kind === 'ambiguous') return refuse(todoAmbiguousMessage(found.count));
             found.log.append('todo/write', { todos });
             return todoCountsMessage(todos);
           },
