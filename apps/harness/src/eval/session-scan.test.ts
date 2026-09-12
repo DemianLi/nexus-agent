@@ -201,6 +201,18 @@ describe('工具錯誤依種類', () => {
       [UNCODED_ERROR]: 1,
       INVALID_TOOL_OUTPUT: 1,
     });
+    // 卡上的原話是「報表的三個種類各 1」，所以印出來的那一行也看一次。
+    expect(formatScanReport([result], [], { threshold: 5 })).toContain(
+      `  工具錯誤 INVALID_TOOL_OUTPUT×1 TOOL_TIMEOUT×1 ${UNCODED_ERROR}×1`,
+    );
+  });
+
+  it('碼是從檔上讀的：叫 constructor 的碼照樣數成 1，不會讀到繼承來的東西', () => {
+    const result = scan([
+      call('odd', {}, 'x'),
+      ['tool/result', { callId: 'x', isError: true, error: { name: 'E', code: 'constructor' } }],
+    ]);
+    expect(result.errors?.['constructor']).toBe(1);
   });
 });
 

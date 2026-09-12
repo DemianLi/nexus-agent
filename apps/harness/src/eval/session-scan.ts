@@ -189,7 +189,9 @@ export function scanSessionLog(
 
   const known = log.events.filter((event) => Object.hasOwn(KNOWN_EVENT_TYPES, event.type));
   const seenCalls = new Set<string>();
-  const errors: Record<string, number> = {};
+  // 鍵是從檔上讀來的碼，不能有原型：`constructor` 這種碼會讀到繼承來的函式，數字變成字串。
+  // 同 `session-stats.ts` 對 `callId` 的 `Object.hasOwn`。
+  const errors = Object.create(null) as Record<string, number>;
   let toolCalls = 0;
   let chain: (RepeatRun & { readonly key: string }) | undefined;
   let longest: RepeatRun | null = null;
