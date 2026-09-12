@@ -208,5 +208,7 @@ export class SessionTelemetryCoordinator {
  * 結果語意歸它們自己的擁有者，不歸這裡。dsh 同一條理由。
  */
 function severityOf(event: SessionEvent): SessionTelemetrySeverity {
+  // `tool/result` 那一格照 dsh 的 `severityOf`（`packages/session/session-telemetry/src/coordinator.ts:270`）。
+  if (event.type === 'tool/result') return event.data.isError ? 'error' : 'info';
   return event.type === 'turn/failed' ? 'error' : 'info';
 }

@@ -8,9 +8,10 @@
  * （`references/deepseek-harness/packages/core/session/src/invariant.ts`），但**檢的東西
  * 少很多**，而那是對的：
  *
- * - dsh 檢的 turn/step 巢狀、`tool/call` ↔ `tool/result` 配對，
- *   {@link ./session-log.ts | SessionEventType} **沒有詞彙表達**——只有四種事件，沒有
- *   step、沒有 callId。加事件種類是另一件事，門檻寫在 `session-log.ts` 檔頭。
+ * - dsh 檢的 turn/step 巢狀，{@link ./session-log.ts | SessionEventType} **沒有詞彙表達**
+ *   ——沒有 step。`tool/call` ↔ `tool/result` 的 `callId` 配對從
+ *   [#264](https://github.com/DemianLi/nexus-agent/issues/264) 起有詞彙了，照 dsh 檢，但**只檢
+ *   配對、不檢落在哪一步**（形狀的偏離見 `session-log.ts` 的那兩顆）。
  * - `seq` 嚴格遞增、純 JSON、不可變、重入，**四樣全都已經被 `SessionLog` 自己擁有**
  *   （`#events.length`、`snapshotJsonValue`、`deepFreeze`、`#publishing`）。抄過來只是
  *   複製擁有者的邊界，dsh 明說配套入口只檢**擁有者自己不負責**的那部分。
@@ -47,9 +48,29 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
   // trace 放在 closure 裡：一份日誌一次安裝，不需要 dsh 那個
   // `WeakMap<Session, SessionTrace>`（見 `invariants.ts` 裡標註的偏離）。
   let open = false;
+  /**
+   * 記過 `tool/call`、還沒配到結果的 `callId`。
+   *
+   * **同一個 `callId` 記兩次不是違規**：被中斷的呼叫 resume 後會再記一顆（見 `session-log.ts`
+   * 的 `tool/call`），集合吃得下重複。dsh 在 `step/end` 清空；我們沒有 step，而一顆沒配到的
+   * 呼叫就是被中斷或跑到一半的那次，留著不會讓後面的檢查誤判，所以只在 end-seed 清。
+   */
+  const pendingCalls = new Set<string>();
 
   subject.observe((event) => {
     switch (event.type) {
+      case 'tool/call': {
+        pendingCalls.add(event.data.callId);
+        break;
+      }
+      case 'tool/result': {
+        if (!pendingCalls.delete(event.data.callId)) {
+          fail(
+            `tool/result（seq ${event.seq}）的 callId "${event.data.callId}" 前面沒有還沒配到的 tool/call`,
+          );
+        }
+        break;
+      }
       case 'turn/start': {
         if (open) fail(`turn/start（seq ${event.seq}）來的時候上一輪還開著`);
         open = true;
@@ -62,8 +83,10 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
         break;
       }
       case 'session/end-seed': {
-        // seed 之前沒收的那一輪屬於上一個行程，見檔頭最後一段。
+        // seed 之前沒收的那一輪屬於上一個行程，見檔頭最後一段。沒配到的呼叫同理：
+        // 上一個行程中斷的那次，resume 之後會以同一個 callId 再記一顆。
         open = false;
+        pendingCalls.clear();
         break;
       }
       case 'interrupt/raised': {

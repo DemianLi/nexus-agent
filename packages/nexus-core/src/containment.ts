@@ -57,12 +57,33 @@
  * 本體 600ms，run 結束當下工具還在跑）。dsh 是等下游靜止之後才給超時結果、絕不硬殺。
  * 差在**載體不在紀律**：`AbortSignal` 沒有 quiescence 這個原語，要模擬得自己接一層靜止
  * 追蹤。不模擬。
+ *
+ * ## 工具事件也在這一層記（[#264](https://github.com/DemianLi/nexus-agent/issues/264)）
+ *
+ * `tool/call` 在進任何一層之前記，`tool/result` 在落定之後記。**只有這一層兩樣都看得到**：
+ * 內層拋出來的原始錯誤（超時、取消、參數不合）只在這裡的 `catch` 裡還是錯誤，出了這一層
+ * 就變成訊息；內層自己回的錯誤訊息（核准被拒、schema 違規、未知工具）則原樣從 `handler()`
+ * 回來。另開一顆排在它外面的 middleware 看不到前者，而且它自己一拋就是整場 run 死掉
+ * ——那正是這一層要擋的東西。
+ *
+ * 時刻同 dsh：`tool/call` 在核准之前（`packages/core/agent-loop/src/tool-calls.ts:168` 在
+ * `prepare` 之前記），所以被閘門擋掉的呼叫一樣有一對。形狀與偏離見 `session-log.ts` 的
+ * `SessionEventMap`。
  */
 
 import { ToolMessage } from '@langchain/core/messages';
 import { isGraphBubbleUp } from '@langchain/langgraph';
-import { createMiddleware } from 'langchain';
+import { createMiddleware, MiddlewareError, ToolInvocationError } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import type { SessionLookup } from './registry.js';
+import {
+  INVALID_ARGS,
+  readToolOutcome,
+  TOOL_ABORTED,
+  TOOL_TIMEOUT,
+  UNKNOWN_TOOL,
+} from './tool-events.js';
+import type { ToolErrorInfo, ToolOutcome } from './tool-events.js';
 
 /** 圍堵 middleware 的名字。錯誤訊息與排序斷言用得到。 */
 export const CONTAINMENT_MIDDLEWARE_NAME = 'nexusToolFailureContainment';
@@ -187,7 +208,91 @@ export function resolveToolName(request: {
 }
 
 /**
- * 造一個把工具失敗翻成 error ToolMessage 的 middleware。
+ * 拋出來的那顆錯是哪一種，照 dsh 的碼；**認不出來的回 `undefined`**。
+ *
+ * 一般拋錯不給碼是照抄，見 `tool-events.ts` 檔頭。三種認得出來的：
+ *
+ * - `TimeoutError` → `TOOL_TIMEOUT`（dsh `guard/timeout-policy` 的 `ToolTimeoutError`）；
+ * - `AbortError` → `ABORTED`——使用者取消，**不是**超時，理由見 {@link isToolTimeout}；
+ * - 參數不合工具的 schema → `INVALID_ARGS`。基座把 `ToolInputParsingException` 包成
+ *   `ToolInvocationError` 從 handler 拋出來（`langchain@1.5.10` 的 `ToolNode.js:254`），
+ *   而那顆錯的 `name` 就是 `"Error"`（實測），**只認得出品牌**。中途每經過一層 middleware
+ *   可能再包一層 `MiddlewareError`，所以先沿 `.cause` 走到底——同基座自己的
+ *   `#handleError`（`:139-145`）。
+ *
+ * @param error - `catch` 到的東西。
+ * @returns 它的碼，或 `undefined`。
+ */
+export function classifyThrownToolError(error: unknown): ToolErrorInfo | undefined {
+  let root = error;
+  while (MiddlewareError.isInstance(root)) root = root.cause;
+  if (isToolTimeout(root)) return { name: 'ToolTimeoutError', code: TOOL_TIMEOUT };
+  if (root instanceof Error && root.name === 'AbortError') {
+    return { name: 'AbortError', code: TOOL_ABORTED };
+  }
+  if (ToolInvocationError.isInstance(root)) return { name: 'ToolArgsError', code: INVALID_ARGS };
+  return undefined;
+}
+
+/** 基座自己回的「沒有這顆工具」。碼照 dsh 的 `ToolNotFoundError`。 */
+const UNKNOWN_TOOL_ERROR: ToolErrorInfo = { name: 'ToolNotFoundError', code: UNKNOWN_TOOL };
+
+/** 註冊表的 `sessions` 通道裡，記工具事件用得到的那一半。 */
+export interface ToolEventSessions {
+  forCall(config: unknown): SessionLookup;
+}
+
+/** `wrapToolCall` 收到的請求裡，記工具事件讀得到的那幾格。 */
+interface RecordableRequest {
+  readonly toolCall: { readonly id?: string; readonly name: string; readonly args?: unknown };
+  readonly runtime?: { readonly configurable?: unknown };
+}
+
+/**
+ * 記下 `tool/call`，回傳記 `tool/result` 用的函式。
+ *
+ * **這次不記的時候回 `undefined`，而且是整對不記**：沒接會話、認不出屬於哪一份
+ * （`forCall` 不是 `ok`）、沒有 `callId`（配不起來）、或 `tool/call` 寫不進去。只寫得進
+ * 結果那一半的話，日誌上會有一顆找不到呼叫的結果。
+ *
+ * **記不進去不能反過來殺掉這次呼叫**，同 `model-usage.ts`：兩個 `append` 都吞掉自己的例外。
+ */
+function recordToolCall(
+  sessions: ToolEventSessions | undefined,
+  request: RecordableRequest,
+): ((outcome: ToolOutcome) => void) | undefined {
+  const callId = request.toolCall.id;
+  if (sessions === undefined || callId === undefined || callId === '') return undefined;
+  // `runtime.configurable` 就是 `forCall` 要的那份，包回一層 `configurable` 同 `model-usage.ts`。
+  const found = sessions.forCall({ configurable: request.runtime?.configurable });
+  if (found.kind !== 'ok') return undefined;
+  const { log } = found;
+  try {
+    log.append('tool/call', {
+      callId,
+      name: request.toolCall.name,
+      arguments: JSON.stringify(request.toolCall.args ?? {}),
+    });
+  } catch {
+    // 參數序列化不動或日誌不收：這一對整個不記，見上面。
+    return undefined;
+  }
+  return (outcome) => {
+    try {
+      log.append('tool/result', {
+        callId,
+        isError: outcome.isError,
+        // 沒碼的時候整個不放 key：`snapshotJsonValue` 對 `undefined` 是當場拋的。
+        ...(outcome.isError && outcome.error !== undefined ? { error: outcome.error } : {}),
+      });
+    } catch {
+      // 同 `tool/call`：日誌寫不進去不影響這次呼叫的結果。
+    }
+  };
+}
+
+/**
+ * 造一個把工具失敗翻成 error ToolMessage 的 middleware，**給了 `sessions` 就順便記工具事件**。
  *
  * **時刻：dsh 的 `tools/execute`**（環繞 waterfall：超時／重試／指標）。這一層是那個
  * 時刻在我們樹上的**第 0 格**佔用者。同一個時刻我們還有三個佔用者，而它們是同一種
@@ -198,12 +303,18 @@ export function resolveToolName(request: {
  * 與校驗器自己的 bug 都在裡面。基座自己那幾個 middleware 永遠排在所有這些之前，接不到，
  * 那是 `createDeepAgent` 的組裝順序，不是這裡能決定的事。掛法見 `fold.ts`。
  *
- * **一份實例走遍 root 與每個 subagent。** 它沒有 closure 狀態——`try/catch` 裡讀到的
- * 一切都來自那一次呼叫的 `request`。
+ * **一份實例走遍 root 與每個 subagent。** 它唯一的 closure 是 `sessions` 那個通道，而那是
+ * 查詢不是狀態：該寫進哪一份日誌，每次從那一次呼叫的 `request` 現算，同 `model-usage.ts`。
+ * `try/catch` 裡讀到的其餘一切也都來自那一次呼叫。
  *
+ * **中斷不是落定。** 核准閘門的 `interrupt()` 從這裡往外拋，那次呼叫只留下一顆 `tool/call`；
+ * resume 之後它以同一個 `callId` 再進來一次，再記一對。見 `session-log.ts` 的 `tool/call`。
+ *
+ * @param sessions - 註冊表的 `sessions` 通道。**省略就不記**——單元測試與相容用的 re-export
+ *   走這條；產品組裝由 `fold.ts` 傳進來。
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */
-export function createContainmentMiddleware(): AgentMiddleware {
+export function createContainmentMiddleware(sessions?: ToolEventSessions): AgentMiddleware {
   return createMiddleware({
     name: CONTAINMENT_MIDDLEWARE_NAME,
     wrapToolCall: async (request, handler) => {
@@ -211,13 +322,25 @@ export function createContainmentMiddleware(): AgentMiddleware {
       // 「這次呼叫在圍堵眼裡花了多久」，內層 middleware 的開銷也算在裡面。那正是要回報
       // 的東西：模型等的就是這一段。
       const startedAt = Date.now();
+      const settle = recordToolCall(sessions, request as RecordableRequest);
       try {
-        return await handler(request);
+        const result = await handler(request);
+        if (settle !== undefined) {
+          const outcome = readToolOutcome(result, request.toolCall.id ?? '');
+          // **未知工具從結構上認**：基座找不到那顆工具時 `request.tool` 是 `undefined`，
+          // 自己回一則沒標碼的錯誤（`ToolNode.js:210-221`）。不比對它的措辭。
+          settle(
+            outcome.isError && outcome.error === undefined && request.tool === undefined
+              ? { isError: true, error: UNKNOWN_TOOL_ERROR }
+              : outcome,
+          );
+        }
+        return result;
       } catch (error) {
         // 中斷、`Command` 這類控制流是用拋例外走的，接住它們等於把功能吃掉。
         if (isGraphBubbleUp(error)) throw error;
         const toolName = resolveToolName(request);
-        return new ToolMessage({
+        const message = new ToolMessage({
           content: isToolTimeout(error)
             ? formatToolTimeout(toolName, Date.now() - startedAt, declaredToolTimeoutMs(request))
             : formatToolFailure(toolName, error),
@@ -227,6 +350,9 @@ export function createContainmentMiddleware(): AgentMiddleware {
           // `undefined`），等於錯誤散文以一則結構上成功的訊息送進模型。這裡比基座嚴。
           status: 'error',
         });
+        const kind = classifyThrownToolError(error);
+        settle?.(kind === undefined ? { isError: true } : { isError: true, error: kind });
+        return message;
       }
     },
   }) as AgentMiddleware;

@@ -188,6 +188,75 @@ describe('三條關係', () => {
   });
 });
 
+/**
+ * 工具事件的 `callId` 配對（[#264](https://github.com/DemianLi/nexus-agent/issues/264)）。合法序列
+ * 照圍堵實際發的順序寫：呼叫在前、結果在後；被中斷的那次 resume 之後以同一個 `callId` 再記一顆。
+ */
+describe('tool/call ↔ tool/result 配對', () => {
+  const callOf = (callId: string) => ({ callId, name: 'probe', arguments: '{}' });
+
+  it('一對一對、併發交錯都不吵', () => {
+    const log = new SessionLog('tools');
+    const violations = watch(log);
+    log.append('tool/call', callOf('a'));
+    log.append('tool/call', callOf('b'));
+    log.append('tool/result', { callId: 'b', isError: false });
+    log.append('tool/result', { callId: 'a', isError: true });
+    expect(violations).toEqual([]);
+  });
+
+  it('被中斷的那次：同一個 callId 兩顆呼叫、一顆結果，不吵', () => {
+    const log = new SessionLog('web');
+    const violations = watch(log);
+    log.append('turn/start', { kind: 'message', text: '刪檔' });
+    log.append('tool/call', callOf('a'));
+    log.append('interrupt/raised', { interruptId: 'i-1' });
+    log.append('turn/end', {});
+    log.append('turn/start', { kind: 'resume' });
+    log.append('tool/call', callOf('a'));
+    log.append('tool/result', { callId: 'a', isError: false });
+    log.append('turn/end', {});
+    expect(violations).toEqual([]);
+  });
+
+  it('結果前面沒有呼叫 → 報', () => {
+    const log = new SessionLog('tools');
+    const violations = watch(log);
+    log.append('tool/result', { callId: 'ghost', isError: false });
+    expect(violations.map((error) => error.message)).toEqual([
+      expect.stringContaining('callId "ghost" 前面沒有還沒配到的 tool/call'),
+    ]);
+  });
+
+  it('同一顆呼叫配第二次 → 報', () => {
+    const log = new SessionLog('tools');
+    const violations = watch(log);
+    log.append('tool/call', callOf('a'));
+    log.append('tool/result', { callId: 'a', isError: false });
+    log.append('tool/result', { callId: 'a', isError: false });
+    expect(violations).toHaveLength(1);
+  });
+
+  it('上一個行程中斷的那次：續接之後重記一顆再落定，不吵', () => {
+    const earlier = new SessionLog('web');
+    earlier.append('tool/call', callOf('a'));
+    const resumed = new SessionLog('web', { seed: earlier.events });
+    const violations = watch(resumed);
+    resumed.append('tool/call', callOf('a'));
+    resumed.append('tool/result', { callId: 'a', isError: false });
+    expect(violations).toEqual([]);
+  });
+
+  it('**end-seed 之前的呼叫不替之後的結果背書**', () => {
+    const earlier = new SessionLog('web');
+    earlier.append('tool/call', callOf('a'));
+    const resumed = new SessionLog('web', { seed: earlier.events });
+    const violations = watch(resumed);
+    resumed.append('tool/result', { callId: 'a', isError: false });
+    expect(violations).toHaveLength(1);
+  });
+});
+
 describe('plugin', () => {
   it('掛上去就認領 @nexus/core 這個名字', () => {
     const registry = createRegistry();
