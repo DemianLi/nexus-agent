@@ -275,7 +275,8 @@ export function foldRegistry(
 
   const permissions = foldPermissions(registry);
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./containment.ts}。
-  const containment = createContainmentMiddleware();
+  // 它也是工具事件的生產者（#264），所以要拿得到 `sessions` 那個通道。
+  const containment = createContainmentMiddleware(registry.sessions);
   const approvalGate = foldApprovalGate(registry, options);
   const summarizer = foldSummarizer(registry, options);
   const repeatReminder = foldRepeatReminder(options);

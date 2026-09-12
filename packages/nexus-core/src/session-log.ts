@@ -28,6 +28,7 @@
 import type { GoalChangeMeta, GoalId } from './goal.js';
 import type { TodoItem } from './todo.js';
 import type { SandboxMode } from './sandbox.js';
+import type { ToolErrorInfo } from './tool-events.js';
 
 /**
  * 這一版收得下的事件種類。**加種類要同時回答「兩條路都產得出來嗎」。**
@@ -78,6 +79,12 @@ import type { SandboxMode } from './sandbox.js';
  * `plan/mode` 沒有帶來新的生產者，兩個寫者各走一條舊路：`/plan` 走 `goal/change` 那條
  * （經 `registry.sessions` 接到 root 那一份的 plugin），`exit_plan_mode` 走 `todo/write` 那條
  * （模型工具問 `forCall`）。「兩條路都產得出來嗎」答得出來——命令面與工具清單兩條路共用。
+ *
+ * `tool/call`／`tool/result` 生產者同第四種（fold 自己建的 middleware），而且就是**圍堵那一顆**
+ * （{@link ./containment.ts | createContainmentMiddleware}）：只有第 0 格同時看得到內層拋出的
+ * 錯與內層回的錯誤訊息。「兩條路都產得出來嗎」同 `model/usage`：它就是那一份組裝本身，而
+ * 工具結果在兩條路上都是一則完整的 ToolMessage，檔頭那條「顆粒度對不齊」在這裡沒有指涉對象。
+ * 跟 `model/usage` 一樣寫得進 subagent 那份。見 [#264](https://github.com/DemianLi/nexus-agent/issues/264)。
  */
 export type SessionEventType =
   | 'turn/start'
@@ -92,6 +99,8 @@ export type SessionEventType =
   | 'compaction/summary'
   | 'sandbox/mode'
   | 'plan/mode'
+  | 'tool/call'
+  | 'tool/result'
   | 'session/end-seed';
 
 /** 每一種事件帶什麼。 */
@@ -136,7 +145,8 @@ export interface SessionEventMap {
   /**
    * 一個解析得出來的斜線命令進了它的 handler。**只記日誌，永遠不進模型**。
    *
-   * 與 `command/done` 靠 `commandId` 配對，形狀照 dsh 的 `tool/call`↔`tool/result`。
+   * 與 `command/done` 靠 `commandId` 配對，形狀照 dsh 的 `tool/call`↔`tool/result`
+   * （我們自己的那一對在下面，模型的工具呼叫記在那裡）。
    * `name` 與 `args` 是 `parseCommand` 自己的切分（命令名，以及**含分隔空白的原文**），
    * 所以讀日誌的人不必再解析一次。
    *
@@ -281,6 +291,55 @@ export interface SessionEventMap {
    * 折疊它的人**不**在 end-seed 歸零。
    */
   'plan/mode': { readonly active: boolean };
+  /**
+   * 模型要叫一次工具，**在它進任何一層之前記**——照 dsh 在核准之前就記
+   * （`packages/core/agent-loop/src/tool-calls.ts:168`，`c291e79`），所以被核准閘門擋掉的
+   * 呼叫一樣有這一顆。與 `tool/result` 靠 `callId` 配對。生產者是圍堵，見 `containment.ts`。
+   *
+   * ## 對 dsh 的兩處偏離
+   *
+   * - **`arguments` 是參數物件序列化後的字串，不是模型吐的原字串。** 原字串只留在供應商那一層
+   *   的 `additional_kwargs.tool_calls`，形狀隨供應商而變，`wrapToolCall` 只拿得到解析過的
+   *   `toolCall.args`。JSON 都不合格的呼叫根本不派發（落進 `invalid_tool_calls`），這裡看不到，
+   *   見 [#269](https://github.com/DemianLi/nexus-agent/issues/269)。
+   * - **沒有 `turn`／`step`。** 我們沒有 `step/*` 事件，subagent 的日誌裡也沒有 `turn/start`
+   *   （入口點只包 root 的輪）。root 那份以落在哪一對 `turn/start`／`turn/end` 之間定輪。
+   *
+   * ## 同一個 `callId` 可能有兩顆
+   *
+   * 被核准閘門中斷的那次，resume 之後以同一個 `callId` 再進一次（實測；同批沒被擋的不重跑）。
+   * 所以暫停那一輪留一顆沒配對的、後面跟著 `interrupt/raised`，resume 那一輪再一對——
+   * **配對取最後那一顆**。這樣結果永遠跟呼叫落在同一輪，dsh `session-stats` 在 `turn/end`
+   * 丟掉沒配對的呼叫那條規則（`packages/session/session-stats/src/projection.ts:190-194`）
+   * 照抄得動。
+   *
+   * ⚠️ **`arguments` 原樣進本機日誌、也原樣進遙測**——`write_file` 寫的內容就在這裡。照 dsh
+   * 不加開關（它的 `recordInput` 只蓋斜線命令，`packages/interaction/commands/src/index.ts:376`）；
+   * 要擋在遙測外靠部署方掛脫敏規則，而脫敏只作用在送出去的那份，**本機的 jsonl 照舊是原文**。
+   */
+  'tool/call': {
+    readonly callId: string;
+    /** 模型叫的名字，不經過任何解析——未知工具也照記。 */
+    readonly name: string;
+    readonly arguments: string;
+  };
+  /**
+   * 配對的那次呼叫落定了。
+   *
+   * **只記結果的判別，不記內容**——這是對 dsh 形狀的偏離：dsh 帶模型看到的整則訊息，而下游
+   * （會話統計、離線掃描）用不到內容，記了等於開半扇門 B（對話重播），那不是這張卡的事
+   * （[#264](https://github.com/DemianLi/nexus-agent/issues/264) 拍板）。
+   *
+   * `error` 只在 `isError` 時出現，碼照 dsh（見 `tool-events.ts`）；**一般拋錯與核准被拒不帶**
+   * ——dsh 只替帶碼的錯誤填這一格。**沒碼的時候整個不放 key**，同 `command/done` 的 `text`。
+   *
+   * 中斷不是落定：暫停的那次沒有這一顆，見 `tool/call`。
+   */
+  'tool/result': {
+    readonly callId: string;
+    readonly isError: boolean;
+    readonly error?: ToolErrorInfo;
+  };
   /**
    * 一段 seed 的結尾——這一顆之前的事件是上一個行程寫的，這個行程一顆都沒寫
    * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。

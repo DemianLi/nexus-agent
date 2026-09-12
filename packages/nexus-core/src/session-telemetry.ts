@@ -15,11 +15,12 @@
 /**
  * 告警等級，**捕獲當下就映好**，讓收端零設定也能告警。
  *
- * 映射規則只有一條：`turn/failed` 是 `error`，其餘捕獲到的事件是 `info`。`warn` 留給
- * 脫敏規則與後端自己用——這一層不產生它。
+ * 映射規則兩條：`turn/failed` 與 `isError` 的 `tool/result` 是 `error`，其餘捕獲到的事件是
+ * `info`。`warn` 留給脫敏規則與後端自己用——這一層不產生它。
  *
- * **與 dsh 的差別在來源不在規則**：dsh 另外看 `tool/result` 的 `isError` 與 `turn/end`
- * 的 error reason，而我們的日誌 v1 兩者都沒有（沒有工具事件，失敗是獨立的事件種類）。
+ * **與 dsh 的差別在來源不在規則**：dsh 另外看 `turn/end` 的 error reason，而我們的失敗是
+ * 獨立的事件種類（`turn/failed`）。`tool/result` 那一格從
+ * [#264](https://github.com/DemianLi/nexus-agent/issues/264) 起跟 dsh 一樣。
  */
 export type SessionTelemetrySeverity = 'info' | 'warn' | 'error';
 

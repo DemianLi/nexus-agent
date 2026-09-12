@@ -75,8 +75,14 @@ import type { SessionEvent } from './session-log.js';
  * 計劃模式從 graph state 搬進日誌（[#251](https://github.com/DemianLi/nexus-agent/issues/251)
  * 的第二刀）。v3 的檔直接讀：一顆 `plan/mode` 都沒有的日誌，計劃模式照組裝的初值起算——
  * 跟 v3 那時候續接回來的結果一樣。
+ *
+ * ## 5：`tool/call`／`tool/result`
+ *
+ * 工具呼叫與它的結果進日誌（[#264](https://github.com/DemianLi/nexus-agent/issues/264)）。
+ * v4 的檔直接讀：一顆工具事件都沒有的日誌，就是 v4 那時候寫出來的樣子——沒有任何讀方拿
+ * 「沒有工具事件」推論什麼。
  */
-export const SESSION_LOG_FORMAT_VERSION = 4;
+export const SESSION_LOG_FORMAT_VERSION = 5;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。

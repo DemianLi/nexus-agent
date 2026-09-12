@@ -476,6 +476,10 @@ describe('什麼推得動 roundsStarted', () => {
     //
     // `plan/mode`（#251 的第二刀）：不推。它是人或 `exit_plan_mode` 選的模式，不是一輪；
     // 模式開關幾次都不該吃掉自主續行的預算。
+    //
+    // `tool/call`／`tool/result`（[#264](https://github.com/DemianLi/nexus-agent/issues/264)）：
+    // 不推，理由同 `model/usage` 而且更直接——一輪裡叫幾次工具，是 `recursionLimit` 在管的
+    // 那件事，一輪可以叫幾十次。讓它去推輪次，`maxGoalRounds` 就變成工具呼叫次數的上限。
     const KNOWN = [
       'turn/start',
       'turn/end',
@@ -489,6 +493,8 @@ describe('什麼推得動 roundsStarted', () => {
       'compaction/summary',
       'sandbox/mode',
       'plan/mode',
+      'tool/call',
+      'tool/result',
       'session/end-seed',
     ] as const;
     KNOWN satisfies readonly SessionEventType[];

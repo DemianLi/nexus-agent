@@ -39,7 +39,7 @@
 
 import { ToolMessage } from '@langchain/core/messages';
 import { Command, isCommand } from '@langchain/langgraph';
-import { resolveToolName } from '@nexus/core';
+import { INVALID_TOOL_OUTPUT, markToolError, resolveToolName } from '@nexus/core';
 import type { AgentMiddleware } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import type { ZodType } from 'zod';
@@ -95,6 +95,20 @@ function reject(feedback: string, toolCallId: string, toolName: string): ToolMes
 }
 
 /**
+ * 同 {@link reject}，**另外標上 `INVALID_TOOL_OUTPUT`**，給會話日誌的 `tool/result` 讀
+ * （[#264](https://github.com/DemianLi/nexus-agent/issues/264)）。碼照 dsh 的 `ToolOutputError`。
+ *
+ * 只有 schema 真的不合才標；校驗器自己壞掉那一格不標——那是我們的 bug，不是工具的輸出不合，
+ * 同 dsh 一般拋錯不給碼。
+ */
+function rejectOutput(feedback: string, toolCallId: string, toolName: string): ToolMessage {
+  return markToolError(reject(feedback, toolCallId, toolName), {
+    name: 'ToolOutputError',
+    code: INVALID_TOOL_OUTPUT,
+  });
+}
+
+/**
  * 造一個驗工具輸出的 middleware。
  *
  * 它**要掛在最內層**（不 `prepend`），才看得到工具原本的輸出而不是外層改過的版本。
@@ -118,7 +132,7 @@ export function createOutputSchemaMiddleware(schemas: ToolOutputSchemas): AgentM
           // 已經是錯誤的結果不再驗一次——它沒有值可驗，重寫只會蓋掉真正的原因。
           if (result.status === 'error') return result;
           const verdict = verify(toolName, result.content, schema);
-          return verdict.ok ? result : reject(verdict.feedback, toolCallId, toolName);
+          return verdict.ok ? result : rejectOutput(verdict.feedback, toolCallId, toolName);
         }
         if (isCommand(result)) {
           // **`Command` 是一行字就能造出來的靜默旁路。** 工具回 `Command` 時這裡收到的
@@ -163,7 +177,7 @@ function validateCommand(
     const verdict = verify(toolName, message.content, schema);
     // **不通過就整個 Command 不採用。** Command 除了訊息還可能帶 state 更新，
     // 而那些更新正是那個不合格的輸出算出來的——只換掉訊息會留下半套。
-    if (!verdict.ok) return reject(verdict.feedback, toolCallId, toolName);
+    if (!verdict.ok) return rejectOutput(verdict.feedback, toolCallId, toolName);
   }
   return command;
 }

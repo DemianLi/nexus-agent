@@ -90,7 +90,9 @@ export { createRegistry } from './registry.js';
 export type { LoadResult } from './load.js';
 export { loadPlugins } from './load.js';
 
+export type { ToolEventSessions } from './containment.js';
 export {
+  classifyThrownToolError,
   CONTAINMENT_MIDDLEWARE_NAME,
   createContainmentMiddleware,
   declaredToolTimeoutMs,
@@ -99,6 +101,18 @@ export {
   isToolTimeout,
   resolveToolName,
 } from './containment.js';
+
+export type { ToolErrorInfo, ToolOutcome } from './tool-events.js';
+export {
+  INVALID_ARGS,
+  INVALID_TOOL_OUTPUT,
+  markToolError,
+  readToolOutcome,
+  TOOL_ABORTED,
+  TOOL_TIMEOUT,
+  toolErrorOf,
+  UNKNOWN_TOOL,
+} from './tool-events.js';
 
 export {
   createObservationPolicy,
