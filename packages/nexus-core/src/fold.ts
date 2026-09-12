@@ -31,6 +31,7 @@ import type { PluginOrigin } from './plugin.js';
 import type { PluginRegistry } from './registry.js';
 import { createModelCallRecorder } from './model-calls.js';
 import { createModelUsageRecorder } from './model-usage.js';
+import { createTurnCancelGuard, createTurnCancelModelSignal } from './turn-cancel.js';
 import { createRepeatReminder, resolveRepeatReminderSettings } from './repeat-reminder.js';
 import type { RepeatReminderSettings } from './repeat-reminder.js';
 import { createSummarizer, resolveSummarizationSettings } from './summarization.js';
@@ -278,6 +279,10 @@ export function foldRegistry(
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./containment.ts}。
   // 它也是工具事件的生產者（#264），所以要拿得到 `sessions` 那個通道。
   const containment = createContainmentMiddleware(registry.sessions);
+  // **中止這一輪的兩顆，也是一份實例走遍 root 與每個子代理**：訊號每次從那一次呼叫的
+  // `configurable` 現讀。位置一外一內，理由見 {@link ./turn-cancel.ts}。
+  const turnCancel = createTurnCancelGuard();
+  const turnCancelModelSignal = createTurnCancelModelSignal();
   const approvalGate = foldApprovalGate(registry, options);
   const summarizer = foldSummarizer(registry, options);
   const repeatReminder = foldRepeatReminder(options);
@@ -296,6 +301,8 @@ export function foldRegistry(
       toolOrder,
       permissions,
       containment,
+      turnCancel,
+      turnCancelModelSignal,
       approvalGate,
       observationPolicy,
       summarizer,
@@ -306,6 +313,8 @@ export function foldRegistry(
     middleware: foldMiddleware(
       registry,
       containment,
+      turnCancel,
+      turnCancelModelSignal,
       approvalGate,
       observationPolicy?.(),
       summarizer?.(),
@@ -593,6 +602,8 @@ function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): Agent
 function foldMiddleware(
   registry: PluginRegistry,
   containment: AgentMiddleware,
+  turnCancel: AgentMiddleware,
+  turnCancelModelSignal: AgentMiddleware,
   approvalGate: AgentMiddleware,
   observationPolicy: AgentMiddleware | undefined,
   summarizer: AgentMiddleware | undefined,
@@ -603,6 +614,9 @@ function foldMiddleware(
   const entries = registry.middleware.list();
   return [
     containment,
+    // 緊貼圍堵：在它裡面（換過的結果圍堵才記得到碼），在起訖紀錄器外面（中止之後被擋下的那次
+    // 呼叫不算一步）。見 {@link ./turn-cancel.ts}。
+    turnCancel,
     ...entries.filter((entry) => entry.value.prepend).map((entry) => entry.value.middleware),
     approvalGate,
     ...(observationPolicy === undefined ? [] : [observationPolicy]),
@@ -613,6 +627,8 @@ function foldMiddleware(
     modelCalls,
     modelUsage,
     ...entries.filter((entry) => !entry.value.prepend).map((entry) => entry.value.middleware),
+    // 最內層：只替模型綁中止訊號，外面每一顆看到的都是原本的模型。見 {@link ./turn-cancel.ts}。
+    turnCancelModelSignal,
   ];
 }
 
@@ -761,6 +777,8 @@ function foldSubAgents(
     toolOrder: readonly string[] | undefined;
     permissions: readonly FilesystemPermission[];
     containment: AgentMiddleware;
+    turnCancel: AgentMiddleware;
+    turnCancelModelSignal: AgentMiddleware;
     approvalGate: AgentMiddleware;
     observationPolicy: (() => AgentMiddleware) | undefined;
     summarizer: (() => AgentMiddleware) | undefined;
@@ -835,6 +853,8 @@ function foldSubAgents(
       middleware: [
         // 圍堵在第 0 格：它要包住下面每一個，包含 `spec.middleware` 自己帶的那些。
         context.containment,
+        // 中止緊貼圍堵，同 root：root 按了停止，訊號經 `configurable` 傳到這裡（#265 的 Q10）。
+        context.turnCancel,
         context.approvalGate,
         // **各建一份，不共用**：觀測紀錄在 closure 裡，共用等於讓 root 讀過的檔
         // 變成這個 subagent 也可以直接改。理由見 {@link foldObservationPolicy}。
@@ -845,6 +865,8 @@ function foldSubAgents(
         context.modelCalls,
         context.modelUsage,
         ...(spec.middleware ?? []),
+        // 最內層替模型綁中止訊號，排在 subagent 自帶的那些後面，同 root。
+        context.turnCancelModelSignal,
       ],
     };
     // 空的就不要放：基座對 `permissions` 的空陣列與缺席不同義（前者是「整組替換成

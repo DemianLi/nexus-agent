@@ -41,7 +41,7 @@
  *
  * ## 照格式版本表態
  *
- * 見 {@link SESSION_LOG_FORMAT_VERSION} 那一串說明：v5 才有工具事件、v6 才有模型起訖。舊檔的那幾格
+ * 見 {@link SESSION_LOG_FORMAT_VERSION} 那一串說明：v5 才有工具事件、v6 才有模型起訖、v7 才有中止。舊檔的那幾格
  * 是**沒記**不是 0，所以報成 `null`。比這一版新的檔照樣掃，認不得的事件略過並報數——這支腳本
  * 只讀不寫，讀懂多少報多少；續接那條（`SessionStore.resume`）要往下寫，所以它拒絕，兩邊不同是對的。
  *
@@ -74,6 +74,8 @@ export const UNCODED_ERROR = '無碼';
 const TOOL_EVENTS_SINCE = 5;
 /** 模型起訖從這一版開始記。見 `session-store.ts` 的版本 6。 */
 const MODEL_CALLS_SINCE = 6;
+/** 中止（`turn/end` 帶 `reason`）從這一版開始記。見 `session-store.ts` 的版本 7。 */
+const CANCEL_SINCE = 7;
 
 /**
  * 這一版認得的事件種類。
@@ -140,6 +142,11 @@ export interface SessionScan {
   readonly errors: Readonly<Record<string, number>> | null;
   /** 最長那段到了打轉門檻。工具事件沒記時是 `null`。 */
   readonly looping: boolean | null;
+  /**
+   * 被人中止的輪數（`turn/end` 帶 `reason.kind: 'aborted'`，[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。
+   * v7 之前是 `null`：那時候沒有中止這條路，不是「一輪都沒中止」。
+   */
+  readonly aborted: number | null;
   /** 認不得而略過的事件顆數。 */
   readonly unknownEvents: number;
 }
@@ -193,6 +200,7 @@ export function scanSessionLog(
   // 同 `session-stats.ts` 對 `callId` 的 `Object.hasOwn`。
   const errors = Object.create(null) as Record<string, number>;
   let toolCalls = 0;
+  let aborted = 0;
   let chain: (RepeatRun & { readonly key: string }) | undefined;
   let longest: RepeatRun | null = null;
 
@@ -203,6 +211,10 @@ export function scanSessionLog(
         break;
       case 'session/end-seed':
         chain = undefined;
+        break;
+      case 'turn/end':
+        // 不動鏈：提醒器的鏈只在人講話時清零，一輪收尾不是人講話。
+        if (event.data.reason?.kind === 'aborted') aborted += 1;
         break;
       case 'tool/call': {
         const { callId, name } = event.data;
@@ -242,6 +254,7 @@ export function scanSessionLog(
     longestRun: hasToolEvents ? finalLongest : null,
     errors: hasToolEvents ? errors : null,
     looping: hasToolEvents ? finalLongest !== null && finalLongest.count >= threshold : null,
+    aborted: version >= CANCEL_SINCE ? aborted : null,
     unknownEvents: log.events.length - known.length,
   };
 }
@@ -378,15 +391,15 @@ export function formatScanReport(
     lines.push(
       `  步數 ${scan.steps ?? '—'} ｜工具呼叫 ${scan.toolCalls ?? '—'} ｜最長重複 ${run}`,
       `  工具錯誤 ${scan.errors === null ? '—' : formatErrors(scan.errors)}`,
+      `  中止 ${scan.aborted ?? '—'} 輪`,
     );
-    if (scan.version < MODEL_CALLS_SINCE) {
-      lines.push(
-        `  格式版本 ${scan.version}：` +
-          (scan.version < TOOL_EVENTS_SINCE
-            ? `第 ${TOOL_EVENTS_SINCE} 版才記工具事件、第 ${MODEL_CALLS_SINCE} 版才記模型起訖，`
-            : `第 ${MODEL_CALLS_SINCE} 版才記模型起訖，`) +
-          '「—」是沒記，不是 0。',
-      );
+    if (scan.version < CANCEL_SINCE) {
+      const missing = [
+        ...(scan.version < TOOL_EVENTS_SINCE ? [`第 ${TOOL_EVENTS_SINCE} 版才記工具事件`] : []),
+        ...(scan.version < MODEL_CALLS_SINCE ? [`第 ${MODEL_CALLS_SINCE} 版才記模型起訖`] : []),
+        `第 ${CANCEL_SINCE} 版才記中止`,
+      ];
+      lines.push(`  格式版本 ${scan.version}：${missing.join('、')}，「—」是沒記，不是 0。`);
     }
     if (scan.unknownEvents > 0) {
       lines.push(

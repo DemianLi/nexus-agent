@@ -106,6 +106,9 @@ describe('會話事件日誌：web 那條路', () => {
   it('跑壞了記 turn/failed，而且錯誤照樣往外拋', async () => {
     const failing: PumpAgent = {
       streamEvents: () => Promise.reject(new Error('模型不見了')),
+      // 中止這一輪（#276）才會讀寫 checkpoint，這條測試走不到。
+      getState: () => Promise.reject(new Error('這條測試用不到 checkpoint')),
+      updateState: () => Promise.reject(new Error('這條測試用不到 checkpoint')),
     };
     const pump = new ThreadPump(failing, 'web-4');
 

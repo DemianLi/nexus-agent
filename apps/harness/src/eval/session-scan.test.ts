@@ -216,6 +216,31 @@ describe('工具錯誤依種類', () => {
   });
 });
 
+describe('中止的輪數（#276）', () => {
+  const ABORTED: Entry = ['turn/end', { reason: { kind: 'aborted', cause: { kind: 'user' } } }];
+
+  it('數 `turn/end` 帶 aborted 的那幾輪，正常結束的不算', () => {
+    const result = scan([
+      turn('message'),
+      ABORTED,
+      turn('message'),
+      ['turn/end', {}],
+      turn('message'),
+      ABORTED,
+    ]);
+    expect(result.aborted).toBe(2);
+    expect(formatScanReport([result], [], { threshold: 5 })).toContain('  中止 2 輪');
+  });
+
+  it('v6 以前沒有中止這條路：那一格是 null，報表印「—」並講明', () => {
+    const old = scan([turn('message'), ['turn/end', {}]], { version: 6 });
+    expect(old.aborted).toBeNull();
+    const text = formatScanReport([old], [], { threshold: 5 }).join('\n');
+    expect(text).toContain('  中止 — 輪');
+    expect(text).toContain('格式版本 6：第 7 版才記中止');
+  });
+});
+
 describe('照格式版本表態', () => {
   it('認不得的事件種類不崩：略過、報數，認得的照算', () => {
     const result = scan([turn('message'), ['future/thing', { anything: 1 }], ...same(5)]);

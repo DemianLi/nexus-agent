@@ -110,6 +110,13 @@ export type GoalDriverIdleReason =
   | 'turn-open'
   /** 上一輪**拋錯**結束。續行不重試，見 [#180](https://github.com/DemianLi/nexus-agent/issues/180) 的 Out of scope。 */
   | 'turn-failed'
+  /**
+   * 上一輪**被人中止**（`turn/end` 帶 `reason.kind: 'aborted'`）。人按了停止，續行不接著排，等下一次
+   * 有人說話——[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q8，同 dsh 的
+   * `goal-round-driver` 看到 aborted 就不再排（`packages/goal/goal-round-driver/src/index.ts:334-338`）。
+   * 停在核准點時按停止的那一種（收回）也落在這裡：收回寫的是一輪 `resume` 帶 aborted 收尾。
+   */
+  | 'turn-aborted'
   /** 停在核准點，中斷還掛著。 */
   | 'interrupt-pending'
   /** 沒有目前的目標。 */
@@ -138,9 +145,13 @@ function turnClosed(events: readonly SessionEvent[]): GoalDriverIdleReason | und
   const start = currentTurnStart(events);
   if (start < 0) return 'no-turn';
   for (let at = start + 1; at < events.length; at += 1) {
-    const type = events[at]?.type;
-    if (type === 'turn/end') return undefined;
-    if (type === 'turn/failed') return 'turn-failed';
+    const event = events[at];
+    if (event?.type === 'turn/end') {
+      // **被中止的那一輪也以 `turn/end` 收尾**（#276）。少了這一句，人按了停止之後續行照樣排
+      // 下一輪，而沒有任何測試會紅——跟 `turn-failed` 那格同一個理由。
+      return event.data.reason?.kind === 'aborted' ? 'turn-aborted' : undefined;
+    }
+    if (event?.type === 'turn/failed') return 'turn-failed';
   }
   return 'turn-open';
 }

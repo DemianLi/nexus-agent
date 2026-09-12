@@ -91,7 +91,8 @@ export function StatusLine({
   }
   return (
     <p className="text-muted-foreground text-sm" role="status">
-      {state.status === 'running' ? '執行中…' : '就緒'}
+      {/* 已停止不是失敗（#276）：人按的，所以不用紅字。 */}
+      {state.status === 'running' ? '執行中…' : state.status === 'stopped' ? '已停止' : '就緒'}
     </p>
   );
 }

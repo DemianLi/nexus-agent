@@ -286,6 +286,66 @@ function questionRequested(interruptId = 'q-1'): Event {
   });
 }
 
+describe('按了停止（#276）', () => {
+  it('root 收尾那顆帶 aborted：狀態是已停止不是失敗，還在吐字的那則標成被打斷', () => {
+    const state = reduceAll(emptyConversation(), [
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      frame('messages', ['model_request:1'], { event: 'message-start', id: 'run-a', run_id: 'a' }),
+      frame('messages', ['model_request:1'], {
+        event: 'content-block-delta',
+        index: 0,
+        delta: { type: 'text-delta', text: '甲乙' },
+        run_id: 'a',
+      }),
+      // 被切斷的那一次基座發的是 `failed`；pump 補上 `aborted`。
+      frame('lifecycle', [], {
+        event: 'failed',
+        graph_name: 'root',
+        error: '這一輪被中止了',
+        aborted: true,
+      }),
+    ]);
+    expect(state.status).toBe('stopped');
+    expect(state.error).toBeUndefined();
+    expect(state.entries).toMatchObject([
+      { kind: 'ai', text: '甲乙', streaming: false, stopped: true },
+    ]);
+  });
+
+  it('講完的那則不標：被打斷的只有那一刻還在吐字的', () => {
+    const state = reduceAll(emptyConversation(), [
+      frame('messages', ['model_request:1'], { event: 'message-start', id: 'run-a', run_id: 'a' }),
+      frame('messages', ['model_request:1'], { event: 'message-finish', run_id: 'a' }),
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root', aborted: true }),
+    ]);
+    expect(state.status).toBe('stopped');
+    expect(state.entries[0]).not.toHaveProperty('stopped');
+  });
+
+  it('停在核准點時收回：合成的那顆收尾把卡片一起收掉', () => {
+    const state = reduceAll(emptyConversation(), [
+      frame('input.requested', [], {
+        interrupt_id: 'i1',
+        payload: {
+          actionRequests: [{ name: 'danger', args: {} }],
+          reviewConfigs: [{ actionName: 'danger', allowedDecisions: ['approve', 'reject'] }],
+        },
+      }),
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root', aborted: true }),
+    ]);
+    expect(state.status).toBe('stopped');
+    expect(state.pendings).toEqual([]);
+  });
+
+  it('對照：沒帶 aborted 的 failed 照舊是失敗', () => {
+    const state = reduceAll(emptyConversation(), [
+      frame('lifecycle', [], { event: 'failed', graph_name: 'root', error: '供應商掛了' }),
+    ]);
+    expect(state.status).toBe('failed');
+    expect(state.error).toBe('供應商掛了');
+  });
+});
+
 describe('判別式', () => {
   it('`kind` 缺席時當核准——五個既有測試檔用的 `interruptOn` payload 沒有這個欄位', () => {
     seq = 0;

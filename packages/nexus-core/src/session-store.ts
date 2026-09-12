@@ -89,8 +89,14 @@ import type { SessionEvent } from './session-log.js';
  * 模型呼叫的起訖進日誌，會話統計拿它數步數（[#266](https://github.com/DemianLi/nexus-agent/issues/266)）。
  * v5 的檔直接讀：一顆都沒有的日誌折出來的步數是 0——**那是「沒記」不是「沒叫」**，讀舊檔的
  * 統計要照格式版本表態，不能把 0 當成真的沒叫過模型。
+ *
+ * ## 7：`turn/end` 帶 `reason`，工具碼多一個 `ABORTED_BEFORE_DISPATCH`
+ *
+ * 中止這一輪（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）：被中止的那一輪以帶
+ * `reason: {kind:'aborted', ...}` 的 `turn/end` 收尾。v6 的檔直接讀：沒有 `reason` 就是正常結束——
+ * **那時候也沒有中止這條路**，所以讀舊檔數中止要表態成「沒記」，不是 0。
  */
-export const SESSION_LOG_FORMAT_VERSION = 6;
+export const SESSION_LOG_FORMAT_VERSION = 7;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。

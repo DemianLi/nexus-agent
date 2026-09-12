@@ -194,6 +194,7 @@ const INDEX: readonly InterceptionRow[] = [
     occupants: [
       'packages/nexus-core/src/containment.ts',
       'packages/nexus-core/src/fold.ts',
+      'packages/nexus-core/src/turn-cancel.ts',
       'packages/nexus-plugin-plan-mode/src/index.ts',
       'packages/nexus-plugin-validation/src/output-schema.ts',
     ],
@@ -221,7 +222,7 @@ const INDEX: readonly InterceptionRow[] = [
 const EXPECTED_ROWS = 4;
 
 /** 佔用位址的總數（列可能共用檔案，第 6 與第 7 格就共用 `output-schema.ts`）。 */
-const EXPECTED_SITES = 7;
+const EXPECTED_SITES = 8;
 
 /**
  * 第 2 格**沒有佔用者**的承重事實：全樹的產品程式碼裡沒有一個 `beforeAgent:` 實作。

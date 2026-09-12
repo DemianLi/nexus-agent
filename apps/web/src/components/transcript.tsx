@@ -134,6 +134,8 @@ function Entry({ entry }: { entry: ConversationEntry }) {
         )}
       </div>
       <p className="text-sm whitespace-pre-wrap">{entry.text}</p>
+      {/* 講到一半被人按了停止（#276）。不是失敗，所以不用紅字。 */}
+      {entry.stopped === true && <p className="text-muted-foreground text-xs">（已停止）</p>}
       {entry.error !== undefined && <p className="text-destructive text-xs">{entry.error}</p>}
     </li>
   );

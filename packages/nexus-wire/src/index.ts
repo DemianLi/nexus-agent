@@ -19,6 +19,7 @@ export type {
   EventStreamRequest,
   InputRespondOne,
   RpcMethod,
+  RunCancelCommand,
   RunStartParams,
   SlashCommand,
   SlashDescriptor,
@@ -32,6 +33,7 @@ export type {
   WireChannel,
 } from './protocol.js';
 export {
+  RUN_CANCEL_METHOD,
   SLASH_METHODS,
   UPLINK_METHODS,
   WIRE_CHANNELS,
@@ -40,6 +42,7 @@ export {
   errorResponse,
   eventId,
   isRpcMethod,
+  isRunCancelMethod,
   isSlashMethod,
   isUplinkMethod,
   isWireChannel,
