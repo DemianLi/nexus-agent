@@ -18,9 +18,10 @@
  *
  * - **沒有 Zstandard 壓縮與 checksum。** dsh 預設存成帶 checksum 的連續 Zstandard frame
  *   （也可配置成原始行）。我們存原始行：撕裂尾部的偵測與部分解碼是**讀方**的機器，
- *   而今天的讀方只有一種：續接（{@link JsonlSessionStore.resume}，CLI 的 `--resume` 與 serve
- *   碰到以前寫過的 thread，[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A），
- *   它讀的就是原始行。
+ *   而今天的讀方有兩種，讀的都是原始行：續接（{@link JsonlSessionStore.resume}，CLI 的 `--resume`
+ *   與 serve 碰到以前寫過的 thread，[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A），
+ *   與離線掃描（`eval/session-scan.ts`，[#268](https://github.com/DemianLi/nexus-agent/issues/268)，
+ *   唯讀，共用 {@link parseJsonlSessionBody}）。
  *   加壓縮換到的是第二套解碼路徑，沒有人要。
  * - **寫租約照抄了**（`session-lease.ts`）：新開的在第一次實體化寫入之前拿，續接的在讀
  *   之前拿，把手關掉才放。一份會話一把，鎖檔跟日誌並排（`<base>.lock`）——理由在那個模組。
@@ -374,9 +375,16 @@ function parseHeader(id: string, text: string): StoredSessionHeader {
  * 最後一個換行之後的東西是寫到一半的那一行——當掉時的常態，不算壞檔，只是不算進去。
  * 換行之前的每一行都必須是一筆 `seq` 等於行號的事件；不是的話那不是當掉，是壞檔。
  *
+ * **匯出給唯讀的讀方**：離線掃描（`eval/session-scan.ts`）不能走 {@link JsonlSessionStore.resume}
+ * ——那條會拿寫租約、覆寫 header、截掉撕裂的尾巴，全是寫入，還會把一個正在寫的行程擋在門外。
+ * 撕裂尾巴的規則只有這一份。
+ *
  * @throws {@link SessionCorruptionError} 中段某一行讀不懂，或 `seq` 不連續。
  */
-function parseBody(id: string, body: string): { events: SessionEvent[]; validBytes: number } {
+export function parseJsonlSessionBody(
+  id: string,
+  body: string,
+): { events: SessionEvent[]; validBytes: number } {
   const complete = body.slice(0, body.lastIndexOf('\n') + 1);
   const lines = complete.split('\n');
   lines.pop();
@@ -445,7 +453,7 @@ async function resumeStoredSession(
     } catch (error: unknown) {
       if (!isNotFound(error)) throw error;
     }
-    const { events, validBytes } = parseBody(id, body);
+    const { events, validBytes } = parseJsonlSessionBody(id, body);
     const torn = validBytes < Buffer.byteLength(body, 'utf8');
     return {
       header,
