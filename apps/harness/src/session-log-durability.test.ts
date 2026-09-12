@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest';
 
 import { runCli, resolveSessionLogDir } from './cli.js';
 import { createJsonlSessionStore } from './jsonl-session-store.js';
-import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
+import { SESSION_LOG_FORMAT_VERSION, SessionAlreadyOwnedError } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 
 function recorder(): {
@@ -221,7 +221,12 @@ describe('檔名基底是單射的', () => {
 });
 
 describe('後端的兩條拒絕', () => {
-  it('撞名時拒絕：不覆寫、也不續寫', async () => {
+  /**
+   * **撞名有兩道，各擋一個時刻。** 第一個還開著：它握著寫租約，第二個在拿租約那一步就被擋
+   * （`session-lease.ts`）。第一個關了：租約放掉，擋下來的是 `wx`——`SessionStore` 檔頭那條
+   * 撞名絆索。兩條都要跑，只跑前一條的話 `wx` 被拿掉也照樣綠。
+   */
+  it('撞名時拒絕：不覆寫、也不續寫——開著時是租約擋，關了之後是 wx 擋', async () => {
     const root = await tmp('nexus-log-');
     const store = createJsonlSessionStore({ rootDir: root });
     const header = { version: SESSION_LOG_FORMAT_VERSION, id: 'x', createdAt: 1 };
@@ -230,8 +235,15 @@ describe('後端的兩條拒絕', () => {
     const second = store.create(header);
     await expect(
       second.append([{ type: 'turn/start', seq: 0, time: 2, data: { kind: 'resume' } }]),
-    ).rejects.toThrow(/EEXIST/);
+    ).rejects.toThrow(SessionAlreadyOwnedError);
+    await second.close();
     await first.close();
+
+    const third = store.create(header);
+    await expect(
+      third.append([{ type: 'turn/start', seq: 0, time: 3, data: { kind: 'resume' } }]),
+    ).rejects.toThrow(/EEXIST/);
+    await third.close();
   });
 
   it('seq 不連續時拒絕，訊息說得出應該是幾', async () => {

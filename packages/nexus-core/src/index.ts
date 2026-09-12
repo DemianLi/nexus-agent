@@ -184,6 +184,7 @@ export type {
 } from './session-store.js';
 export {
   SESSION_LOG_FORMAT_VERSION,
+  SessionAlreadyOwnedError,
   SessionCorruptionError,
   SessionFormatUnsupportedError,
 } from './session-store.js';

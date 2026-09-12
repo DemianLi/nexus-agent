@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
+import { SESSION_LOG_FORMAT_VERSION, SessionAlreadyOwnedError } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { GOAL_COMMAND_NAME } from '@nexus/plugin-goal';
 import {
@@ -29,6 +29,7 @@ import {
 } from '@nexus/plugin-plan-mode';
 
 import { parseCliArgs, RESUMED_PLAN_MODE_NOTICE, runCli } from './cli.js';
+import { openJsonlSessionStore } from './jsonl-session-store.js';
 import { SANDBOX_COMMAND_NAME } from './sandbox-mode.js';
 
 /** 分開收 stdout 與 stderr：不變量違規走的是後者。 */
@@ -301,6 +302,41 @@ describe('讀不了的時候在什麼都還沒起來之前就講', () => {
 
   it('那個目錄裡沒有這份會話', async () => {
     await expect(cli(['--resume', logs])).rejects.toThrow(/裡沒有會話 "cli"/);
+  });
+});
+
+/**
+ * 寫租約的端到端那一半（鎖本身的行為在 `session-lease.test.ts`）：CLI 撞上別人握著時在
+ * 什麼都還沒起來之前就講，而且自己拋錯時不把鎖留在手上。
+ */
+describe('寫租約', () => {
+  it('另一個把手握著：擋下、檔案沒被動；它放了之後接得回來', async () => {
+    const runDir = await firstRun();
+    const holder = await openJsonlSessionStore({ directory: runDir }).resume('cli');
+    const log = join(runDir, 'cli.jsonl');
+    const before = await readFile(log, 'utf8');
+
+    await expect(cli(['--workspace', workspace, '--resume', runDir])).rejects.toThrow(
+      SessionAlreadyOwnedError,
+    );
+    expect(await readFile(log, 'utf8')).toBe(before);
+
+    await holder.stored.close();
+    await cli(['--workspace', workspace, '--resume', runDir]);
+  });
+
+  /**
+   * 續接在讀之前就拿了租約，要到日誌掛上之後才有人收。中間拋錯的話 CLI 行程退出、kernel
+   * 會放——但同一個行程裡緊接著再接一次，就會撞上自己沒放的鎖。
+   */
+  it('續接之後、日誌掛上之前拋錯：鎖放掉了，同一個行程馬上再接一次接得回來', async () => {
+    const runDir = await firstRun();
+    await expect(cli(['--resume', runDir])).rejects.toThrow(/--resume 要配 --workspace/);
+    const { stdout } = await cli(
+      ['--workspace', workspace, '--resume', runDir],
+      `/${SANDBOX_COMMAND_NAME}\n/exit\n`,
+    );
+    expect(stdout).toContain('read-only');
   });
 });
 
