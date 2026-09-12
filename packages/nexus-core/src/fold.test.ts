@@ -15,6 +15,10 @@ import { CONTAINMENT_MIDDLEWARE_NAME } from './containment.js';
 import { OBSERVATION_POLICY_MIDDLEWARE_NAME } from './observation.js';
 import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 import { MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
+import {
+  TURN_CANCEL_MIDDLEWARE_NAME,
+  TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
+} from './turn-cancel.js';
 import { MODEL_USAGE_MIDDLEWARE_NAME } from './model-usage.js';
 import { REPEAT_REMINDER_MIDDLEWARE_NAME } from './repeat-reminder.js';
 import { SUMMARIZATION_MIDDLEWARE_NAME } from './summarization.js';
@@ -126,12 +130,14 @@ describe('middleware 註冊點', () => {
     ]);
     expect(middlewareNames(params)).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
       'b',
       'c',
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -143,12 +149,14 @@ describe('middleware 註冊點', () => {
     ]);
     expect(middlewareNames(params)).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
       'c',
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -160,12 +168,14 @@ describe('middleware 註冊點', () => {
     ]);
     expect(middlewareNames(params)).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       'c',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 });
@@ -188,7 +198,9 @@ describe('圍堵打底', () => {
       fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
     ]);
     expect(middlewareNames(params).indexOf(CONTAINMENT_MIDDLEWARE_NAME)).toBe(0);
-    expect(middlewareNames(params).indexOf('b')).toBe(1);
+    // 中止外層那顆緊貼圍堵（#276），所以 prepend 的那一顆落在第 2 格，仍在圍堵裡面。
+    expect(middlewareNames(params).indexOf(TURN_CANCEL_MIDDLEWARE_NAME)).toBe(1);
+    expect(middlewareNames(params).indexOf('b')).toBe(2);
   });
 
   it('**每個 subagent 也有，而且同樣在第 0 格**——不注就是漏掉半棵樹', async () => {
@@ -234,12 +246,14 @@ describe('「先讀後改」策略打底', () => {
     // middleware **外面**：不然任何一個 plugin middleware 都可以在它之前把工具跑掉。
     expect(middlewareNames(params)).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       OBSERVATION_POLICY_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -258,11 +272,13 @@ describe('「先讀後改」策略打底', () => {
     );
     expect(names).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       OBSERVATION_POLICY_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -324,6 +340,41 @@ describe('「先讀後改」策略打底', () => {
     );
     expect(middlewareNames(params)).toContain(OBSERVATION_POLICY_MIDDLEWARE_NAME);
     expect(params.backend).toBeInstanceOf(CompositeBackend);
+  });
+});
+
+describe('中止這一輪打底（#276）', () => {
+  /**
+   * **兩顆的位置是承重的，而且方向相反**，理由在 `turn-cancel.ts` 的「為什麼是兩顆」：
+   * 外層那顆要在圍堵裡面（換過的結果圍堵才記得到碼）、在起訖紀錄器外面（中止之後被擋下的那次
+   * 呼叫不算一步）；內層那顆要在最後（綁上去的 `RunnableBinding` 只給它裡面的看到）。
+   * 上面每一條期望清單都跟著改了，這一組把理由講出來、並補上「清單全空」這一格。
+   */
+  it('清單全空也有：外層緊貼圍堵、在起訖紀錄器外面，內層在最後', async () => {
+    const names = middlewareNames(await fold([]));
+    expect(names.indexOf(TURN_CANCEL_MIDDLEWARE_NAME)).toBe(1);
+    expect(names.indexOf(TURN_CANCEL_MIDDLEWARE_NAME)).toBeLessThan(
+      names.indexOf(MODEL_CALL_EVENTS_MIDDLEWARE_NAME),
+    );
+    expect(names.at(-1)).toBe(TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME);
+  });
+
+  it('每個 subagent 也有、排法同 root，而且跟 root 共用同一份實例', async () => {
+    const own = fakeMiddleware('subagent-own');
+    const params = await fold([
+      fakePlugin('team', (r) => {
+        r.subagents.register({ ...fakeSubAgent('releaser'), middleware: [own] } as SubAgent);
+      }),
+    ]);
+    const sub = params.subagents[0]?.middleware ?? [];
+    const names = sub.map((mw) => (mw as unknown as { name: string }).name);
+    expect(names[1]).toBe(TURN_CANCEL_MIDDLEWARE_NAME);
+    // 內層那顆排在 subagent 自帶的那些後面：它自帶的 middleware 讀到的也是原本的模型。
+    expect(names.at(-1)).toBe(TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME);
+    expect(names.indexOf('subagent-own')).toBeLessThan(names.length - 1);
+    // 無狀態、一份走遍：訊號每次從那一次呼叫的 `configurable` 現讀。
+    expect(sub[1]).toBe(params.middleware[1]);
+    expect(sub.at(-1)).toBe(params.middleware.at(-1));
   });
 });
 
@@ -442,11 +493,13 @@ describe('approvals 註冊點', () => {
     ]);
     expect(middlewareNames(params)).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -464,10 +517,12 @@ describe('approvals 註冊點', () => {
     );
     expect(names).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -480,9 +535,11 @@ describe('approvals 註冊點', () => {
     );
     expect(names).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -912,12 +969,14 @@ describe('摘要器打底', () => {
     // 排在所有 registry middleware 之前 ＝ 任何 plugin 掛一個同名的都蓋得過我們這份。
     expect(middlewareNames(params)).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -938,11 +997,13 @@ describe('摘要器打底', () => {
     // 那條軸線一致；摘要門檻是效能與正確性的預設值，不是安全邊界。閘門那一格沒動。
     expect(names).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -1024,6 +1085,7 @@ describe('提醒器打底', () => {
     // 誰先跑由圖決定。這條釘的是「我們打底的三根都排在 registry middleware 之前」。
     expect(middlewareNames(params)).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
@@ -1031,6 +1093,7 @@ describe('提醒器打底', () => {
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -1051,11 +1114,13 @@ describe('提醒器打底', () => {
     // 到不了 subagent，所以不打底的話那個 subagent 就完全沒有這道提醒。
     expect(names).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       REPEAT_REMINDER_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 

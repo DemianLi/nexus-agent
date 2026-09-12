@@ -109,6 +109,7 @@ export {
   markToolError,
   readToolOutcome,
   TOOL_ABORTED,
+  TOOL_ABORTED_BEFORE_DISPATCH,
   TOOL_TIMEOUT,
   toolCallIdOf,
   toolErrorOf,
@@ -128,6 +129,17 @@ export {
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 export { createModelCallRecorder, MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
+export {
+  createTurnCancelGuard,
+  createTurnCancelModelSignal,
+  TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
+  TOOL_ABORTED_TEXT,
+  TURN_CANCEL_CONFIG_KEY,
+  TURN_CANCEL_MIDDLEWARE_NAME,
+  TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
+  TurnCancelledError,
+  turnCancelSignalOf,
+} from './turn-cancel.js';
 export type { SessionStats, SessionStatsState } from './session-stats.js';
 export { deriveSessionStats, sessionStatsUnit } from './session-stats.js';
 export type { ModelUsage } from './model-usage.js';
@@ -179,6 +191,7 @@ export type {
   SessionLogListener,
   SessionLogOptions,
   SessionLogView,
+  TurnEndReason,
 } from './session-log.js';
 export { currentTurnStart, hasUnansweredInterrupt, SessionLog } from './session-log.js';
 

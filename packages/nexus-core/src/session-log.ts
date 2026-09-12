@@ -89,6 +89,12 @@ import type { ToolErrorInfo } from './tool-events.js';
  * `model/start`／`model/end` 生產者同第四種（{@link ./model-calls.ts | createModelCallRecorder}），
  * 理由同 `model/usage`：同一個 middleware 實例、同一次模型呼叫，也寫得進 subagent 那份。
  * 見 [#266](https://github.com/DemianLi/nexus-agent/issues/266)。
+ *
+ * **`tool/result` 有第二個寫者：web 的 pump**，只在一種情況——停在核准點時人按了停止，那幾顆
+ * 等核准的呼叫被收回（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。那時沒有 run 在跑，
+ * 圍堵看不到它們，所以由 pump 寫 `turn/start {kind:'resume'}` → 每一顆的 `tool/result`
+ * （`ABORTED_BEFORE_DISPATCH`）→ `turn/end` 帶 aborted。配對規則不變：每一顆都配著前面那顆沒結果的
+ * `tool/call`。
  */
 export type SessionEventType =
   | 'turn/start'
@@ -108,6 +114,17 @@ export type SessionEventType =
   | 'tool/call'
   | 'tool/result'
   | 'session/end-seed';
+
+/**
+ * 一輪為什麼沒有正常結束。今天只有一種：被人中止。
+ *
+ * 原因只放 `user`：dsh 的 `parent`／`hook`／`disposed` 在我們這側沒有生產者——子代理的日誌沒有
+ * `turn/end`，用不到 `parent`。有了生產者再加成員。
+ */
+export type TurnEndReason = {
+  readonly kind: 'aborted';
+  readonly cause: { readonly kind: 'user' };
+};
 
 /** 每一種事件帶什麼。 */
 export interface SessionEventMap {
@@ -142,8 +159,18 @@ export interface SessionEventMap {
         /** 第幾輪，從 1 起算。折疊拿它推進 `roundsStarted`。 */
         readonly round: number;
       };
-  /** 一輪正常結束——**跑完與停在核准點都算**，停在核准點時前面會有一顆 `interrupt/raised`。 */
-  'turn/end': Record<string, never>;
+  /**
+   * 一輪結束——**跑完與停在核准點都算**，停在核准點時前面會有一顆 `interrupt/raised`。
+   *
+   * **被人中止的那一輪也以這一顆收尾，帶 `reason`**；正常結束時整個不放這個 key（同
+   * `command/done` 的 `text`）。照 dsh 的 `turn/end {reason: {kind: 'aborted', reason: cause}}`
+   * （`packages/core/session/src/types.ts:203`，`c291e79`），dsh 沒有 `turn/cancelled`。
+   * 內層那一格叫 `cause` 不叫 dsh 的 `reason`：外層已經叫 `reason`，兩層同名讀起來會混
+   * （[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q5）。
+   *
+   * **讀它判「這一輪收了、可以接著排」的人要看這一格**：中止之後 goal 不續行（`goal-driver.ts`）。
+   */
+  'turn/end': { readonly reason?: TurnEndReason };
   /** 一輪拋錯結束。只留訊息，堆疊不進日誌。 */
   'turn/failed': { readonly message: string };
   /** 掛上了一顆等人回答的中斷。 */
