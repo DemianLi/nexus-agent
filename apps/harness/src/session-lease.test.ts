@@ -103,6 +103,22 @@ describe('兩個把手搶同一份', () => {
   });
 });
 
+describe('同一個把手同時實體化兩次', () => {
+  /**
+   * 協調器的背景寫入與 `flush` 排在不同的隊伍上，第一次實體化時兩條都可能進 `#materialize`。
+   * 各自去拿租約的話，第二條撞上**自己的**鎖，拋出一句「另一個行程還開著它」。
+   */
+  it('一份全新的會話同時 append 與 flush：兩個都成功，日誌只有那一筆', async () => {
+    const stored = openJsonlSessionStore({ directory: dir }).create(header('cli'));
+    await Promise.all([stored.append([event(0)]), stored.flush()]);
+    await stored.close();
+
+    const back = await openJsonlSessionStore({ directory: dir }).resume('cli');
+    expect(back.events).toHaveLength(1);
+    await back.stored.close();
+  });
+});
+
 describe('一份會話一把', () => {
   /**
    * run 目錄裝著 root 與它的 subagent。整個目錄一把的話，root 會跟**自己的** subagent 搶——

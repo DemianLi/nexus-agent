@@ -185,6 +185,12 @@ class JsonlStoredSession implements StoredSession {
   readonly #context: LeaseContext;
   #lease: SessionWriteLease | undefined;
   #handle: FileHandle | undefined;
+  /**
+   * 進行中的那次實體化。`#materialize` 裡有好幾個 await，同時進來兩次的話第二次會拿不到
+   * **自己的**租約，拋出一句「另一個行程還開著它」——同一個行程、同一份會話，那句話會讓人去找
+   * 一個不存在的行程。協調器的背景寫入與 `flush` 排在不同的隊伍上，所以這不是理論上的。
+   */
+  #materializing: Promise<FileHandle> | undefined;
   #closed = false;
   /** 已存的 next-seq。下一批的第一顆必須等於它。 */
   #nextSeq: number;
@@ -261,13 +267,26 @@ class JsonlStoredSession implements StoredSession {
     if (this.#closed) throw new Error(`會話 "${this.#header.id}" 的把手已經關掉了。`);
   }
 
-  /** 第一次真的要寫時才建目錄、寫 header、開檔。之後直接回同一個 handle。 */
-  async #materialize(): Promise<FileHandle> {
-    if (this.#handle !== undefined) return this.#handle;
+  /**
+   * 第一次真的要寫時才建目錄、寫 header、開檔。之後直接回同一個 handle。
+   *
+   * 同時進來的共用同一次；失敗了就清掉，下一次重來——協調器靠的正是「失敗保留、下次再送」。
+   */
+  #materialize(): Promise<FileHandle> {
+    if (this.#handle !== undefined) return Promise.resolve(this.#handle);
+    this.#materializing ??= this.#open().catch((error: unknown) => {
+      this.#materializing = undefined;
+      throw error;
+    });
+    return this.#materializing;
+  }
+
+  async #open(): Promise<FileHandle> {
     if (this.#resume !== undefined) return this.#materializeResumed(this.#resume);
     await mkdir(this.#directory, { recursive: true, mode: DIR_MODE });
     // **租約在第一筆實體化寫入之前拿**，照 dsh：一份還沒實體化的會話在檔案系統上沒有足跡。
-    this.#lease = await leaseFor(
+    // 上一次實體化拿到租約之後才失敗的話，重試不再拿一次——那會撞上自己。
+    this.#lease ??= await leaseFor(
       this.#context,
       join(this.#directory, `${this.#base}.lock`),
       this.#header.id,

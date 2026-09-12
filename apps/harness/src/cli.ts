@@ -1235,7 +1235,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     resumedSandbox === undefined ? invocation : { ...invocation, sandbox: resumedSandbox };
 
   // **續接那個把手在讀之前就拿了寫租約**，要到日誌掛上之後才有人收（`persistence.dispose`）。
-  // 這中間任何一步拋錯都要先放掉它：CLI 行程會退出、kernel 會放，但同一個行程裡的呼叫端
+  // 這中間任何一步拋錯都要先放掉它（try 一路包到掛上日誌之前，連同三個 attach）：CLI 行程會退出、kernel 會放，但同一個行程裡的呼叫端
   // （測試、將來 serve 的續接）會撞上自己沒放的鎖。
   let built: Awaited<ReturnType<typeof createCliAgent>>;
   try {
@@ -1267,31 +1267,21 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       HEADLESS_APPROVALS,
       resumed?.events,
     );
+    // REPL 是一條連續對話，一份日誌就是整個 session，所以接線點在這裡而不是每輪。
+    // 回傳的 detach 不留：`dispose()` 會把還接著的協調器一起收掉。
+    built.attachTelemetry(built.sessions);
+    // 不變量的 runner 只是一個訂閱，沒有要排空的東西，所以 detach 也不留——行程走了它就沒了。
+    built.attachInvariants(built.sessions);
+    // **接在不變量之後**：參與者拿得到的是可寫的日誌，所以它一裝上去就可能記東西，
+    // 而那些東西該被已經在看的檢查看到。順序反過來的話，安裝期寫的第一批事件會漏檢。
+    // 同一條順序對 subagent 那些後來才出生的日誌也成立——註冊表通知訂閱者的順序就是
+    // 這三行接上去的順序。
+    built.attachSession(built.sessions);
   } catch (error) {
     await resumed?.stored.close().catch(() => {});
     throw error;
   }
-  const {
-    agent,
-    commands,
-    dispose,
-    sessions,
-    sessionLog,
-    attachTelemetry,
-    attachInvariants,
-    attachSession,
-    telemetrySharing,
-  } = built;
-  // REPL 是一條連續對話，一份日誌就是整個 session，所以接線點在這裡而不是每輪。
-  // 回傳的 detach 不留：`dispose()` 會把還接著的協調器一起收掉。
-  attachTelemetry(sessions);
-  // 不變量的 runner 只是一個訂閱，沒有要排空的東西，所以 detach 也不留——行程走了它就沒了。
-  attachInvariants(sessions);
-  // **接在不變量之後**：參與者拿得到的是可寫的日誌，所以它一裝上去就可能記東西，
-  // 而那些東西該被已經在看的檢查看到。順序反過來的話，安裝期寫的第一批事件會漏檢。
-  // 同一條順序對 subagent 那些後來才出生的日誌也成立——註冊表通知訂閱者的順序就是
-  // 這三行接上去的順序。
-  attachSession(sessions);
+  const { agent, commands, dispose, sessions, sessionLog, telemetrySharing } = built;
   // **接在最後，而且是四個裡唯一一個出口。** 前三個是觀察者，落盤不改變任何人看得到
   // 什麼，所以順序在功能上沒有差別；排在最後是為了讓讀的人看到的因果跟實際一致——
   // 先被檢查、被參與者看過，才寫下去。
