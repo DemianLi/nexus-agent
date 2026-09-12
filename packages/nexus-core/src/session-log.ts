@@ -85,6 +85,10 @@ import type { ToolErrorInfo } from './tool-events.js';
  * 錯與內層回的錯誤訊息。「兩條路都產得出來嗎」同 `model/usage`：它就是那一份組裝本身，而
  * 工具結果在兩條路上都是一則完整的 ToolMessage，檔頭那條「顆粒度對不齊」在這裡沒有指涉對象。
  * 跟 `model/usage` 一樣寫得進 subagent 那份。見 [#264](https://github.com/DemianLi/nexus-agent/issues/264)。
+ *
+ * `model/start`／`model/end` 生產者同第四種（{@link ./model-calls.ts | createModelCallRecorder}），
+ * 理由同 `model/usage`：同一個 middleware 實例、同一次模型呼叫，也寫得進 subagent 那份。
+ * 見 [#266](https://github.com/DemianLi/nexus-agent/issues/266)。
  */
 export type SessionEventType =
   | 'turn/start'
@@ -96,6 +100,8 @@ export type SessionEventType =
   | 'goal/change'
   | 'todo/write'
   | 'model/usage'
+  | 'model/start'
+  | 'model/end'
   | 'compaction/summary'
   | 'sandbox/mode'
   | 'plan/mode'
@@ -213,6 +219,22 @@ export interface SessionEventMap {
     readonly totalTokens: number;
   };
   /**
+   * 一次模型呼叫開始了。與下一顆 `model/end` 配對；會話統計拿這一對數步數、量模型耗時
+   * （`session-stats.ts`）。
+   *
+   * **這不是 dsh 的 `step/start`，名字是故意換的**：dsh 的一步包含它派發的工具，`step/end` 在
+   * 工具之後；這一對只包模型那一段，工具事件落在 `model/end` **之後**。顆數對得上（一步一次
+   * 模型請求），時刻對不上。理由見 `model-calls.ts`。
+   */
+  'model/start': Record<string, never>;
+  /**
+   * 配對的那次模型呼叫結束了——**完成、拋錯、中止都記**（在 `finally` 裡），同 dsh 那條「每一
+   * 個進入的步恰好一顆 `step/end`」。不帶結果：要知道那次成不成，看後面有沒有 `turn/failed`。
+   *
+   * 沒配到 `model/end` 的 `model/start` 只有一種成因：行程在呼叫中途死了。
+   */
+  'model/end': Record<string, never>;
+  /**
    * 壓縮真的發生了一次：舊訊息被換成一份摘要。**一次摘要一筆**。
    *
    * ## 這是 dsh 三顆事件的哪一顆，以及另外兩顆為什麼不在
@@ -302,7 +324,8 @@ export interface SessionEventMap {
    *   的 `additional_kwargs.tool_calls`，形狀隨供應商而變，`wrapToolCall` 只拿得到解析過的
    *   `toolCall.args`。JSON 都不合格的呼叫根本不派發（落進 `invalid_tool_calls`），這裡看不到，
    *   見 [#269](https://github.com/DemianLi/nexus-agent/issues/269)。
-   * - **沒有 `turn`／`step`。** 我們沒有 `step/*` 事件，subagent 的日誌裡也沒有 `turn/start`
+   * - **沒有 `turn`／`step`。** 我們沒有 `step/*` 事件（`model/start`／`model/end` 不是步的邊界，
+   *   這一顆落在它們之後，見那兩顆），subagent 的日誌裡也沒有 `turn/start`
    *   （入口點只包 root 的輪）。root 那份以落在哪一對 `turn/start`／`turn/end` 之間定輪。
    *
    * ## 同一個 `callId` 可能有兩顆

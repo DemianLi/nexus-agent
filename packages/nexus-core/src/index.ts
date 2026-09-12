@@ -125,6 +125,9 @@ export {
 
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
+export { createModelCallRecorder, MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
+export type { SessionStats, SessionStatsState } from './session-stats.js';
+export { deriveSessionStats, sessionStatsUnit } from './session-stats.js';
 export type { ModelUsage } from './model-usage.js';
 export {
   createModelUsageRecorder,

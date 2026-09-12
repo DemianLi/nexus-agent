@@ -13,6 +13,7 @@ import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
 import { CONTAINMENT_MIDDLEWARE_NAME } from './containment.js';
 import { OBSERVATION_POLICY_MIDDLEWARE_NAME } from './observation.js';
 import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
+import { MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
 import { MODEL_USAGE_MIDDLEWARE_NAME } from './model-usage.js';
 import { REPEAT_REMINDER_MIDDLEWARE_NAME } from './repeat-reminder.js';
 import { SUMMARIZATION_MIDDLEWARE_NAME } from './summarization.js';
@@ -115,6 +116,7 @@ describe('middleware 註冊點', () => {
     expect(middlewareNames(params)).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
       'b',
@@ -132,6 +134,7 @@ describe('middleware 註冊點', () => {
       CONTAINMENT_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
       'c',
@@ -149,6 +152,7 @@ describe('middleware 註冊點', () => {
       'b',
       'c',
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
     ]);
@@ -222,6 +226,7 @@ describe('「先讀後改」策略打底', () => {
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       OBSERVATION_POLICY_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
     ]);
@@ -244,6 +249,7 @@ describe('「先讀後改」策略打底', () => {
       CONTAINMENT_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       OBSERVATION_POLICY_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
     ]);
@@ -427,6 +433,7 @@ describe('approvals 註冊點', () => {
       CONTAINMENT_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
     ]);
@@ -447,6 +454,7 @@ describe('approvals 註冊點', () => {
     expect(names).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
     ]);
@@ -462,6 +470,7 @@ describe('approvals 註冊點', () => {
     expect(names).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
     ]);
   });
@@ -889,6 +898,7 @@ describe('摘要器打底', () => {
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
     ]);
@@ -913,6 +923,7 @@ describe('摘要器打底', () => {
       CONTAINMENT_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
     ]);
@@ -1000,6 +1011,7 @@ describe('提醒器打底', () => {
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       REPEAT_REMINDER_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
     ]);
@@ -1024,6 +1036,7 @@ describe('提醒器打底', () => {
       CONTAINMENT_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       REPEAT_REMINDER_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
     ]);

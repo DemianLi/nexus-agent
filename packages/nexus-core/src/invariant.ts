@@ -11,7 +11,9 @@
  * - dsh 檢的 turn/step 巢狀，{@link ./session-log.ts | SessionEventType} **沒有詞彙表達**
  *   ——沒有 step。`tool/call` ↔ `tool/result` 的 `callId` 配對從
  *   [#264](https://github.com/DemianLi/nexus-agent/issues/264) 起有詞彙了，照 dsh 檢，但**只檢
- *   配對、不檢落在哪一步**（形狀的偏離見 `session-log.ts` 的那兩顆）。
+ *   配對、不檢落在哪一步**（形狀的偏離見 `session-log.ts` 的那兩顆）。`model/start` ↔
+ *   `model/end`（[#266](https://github.com/DemianLi/nexus-agent/issues/266)）只檢結尾那一側，
+ *   理由見下面那個計數。
  * - `seq` 嚴格遞增、純 JSON、不可變、重入，**四樣全都已經被 `SessionLog` 自己擁有**
  *   （`#events.length`、`snapshotJsonValue`、`deepFreeze`、`#publishing`）。抄過來只是
  *   複製擁有者的邊界，dsh 明說配套入口只檢**擁有者自己不負責**的那部分。
@@ -56,9 +58,30 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
    * 呼叫就是被中斷或跑到一半的那次，留著不會讓後面的檢查誤判，所以只在 end-seed 清。
    */
   const pendingCalls = new Set<string>();
+  /**
+   * 開著的模型呼叫有幾個（[#266](https://github.com/DemianLi/nexus-agent/issues/266)）。
+   *
+   * **只檢一個方向**：`model/end` 前面沒有開著的 `model/start` 一定是寫錯了；反過來，
+   * `model/start` 沒配到結尾只有一種成因——行程在呼叫中途死了——一律報的話每個崩過的會話
+   * 都會紅。dsh 那側的配套入口也只檢得到「有沒有 `step/start`」。用計數不用布林，同一份日誌
+   * 裡哪天有了並行的模型呼叫也不會誤報。
+   */
+  let openModelCalls = 0;
 
   subject.observe((event) => {
     switch (event.type) {
+      case 'model/start': {
+        openModelCalls += 1;
+        break;
+      }
+      case 'model/end': {
+        if (openModelCalls === 0) {
+          fail(`model/end（seq ${event.seq}）前面沒有開著的 model/start`);
+        } else {
+          openModelCalls -= 1;
+        }
+        break;
+      }
       case 'tool/call': {
         pendingCalls.add(event.data.callId);
         break;
@@ -90,6 +113,8 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
         // 經過 `wrapToolCall`，這裡會在使用者的終端機上誤報「前面沒有 tool/call」。
         open = false;
         pendingCalls.clear();
+        // 上一個行程中途死掉的那次模型呼叫永遠等不到結尾。
+        openModelCalls = 0;
         break;
       }
       case 'interrupt/raised': {

@@ -257,6 +257,38 @@ describe('tool/call ↔ tool/result 配對', () => {
   });
 });
 
+/** [#266](https://github.com/DemianLi/nexus-agent/issues/266)：只檢結尾那一側，理由見 `invariant.ts`。 */
+describe('model/start ↔ model/end', () => {
+  it('一對一對、以及一顆沒結尾的開頭都不吵', () => {
+    const log = new SessionLog('models');
+    const violations = watch(log);
+    log.append('model/start', {});
+    log.append('model/end', {});
+    log.append('model/start', {});
+    expect(violations).toEqual([]);
+  });
+
+  it('結尾前面沒有開頭 → 報', () => {
+    const log = new SessionLog('models');
+    const violations = watch(log);
+    log.append('model/start', {});
+    log.append('model/end', {});
+    log.append('model/end', {});
+    expect(violations.map((error) => error.message)).toEqual([
+      expect.stringContaining('model/end（seq 2）前面沒有開著的 model/start'),
+    ]);
+  });
+
+  it('**end-seed 之前沒結尾的開頭，不替之後的結尾背書**', () => {
+    const earlier = new SessionLog('models');
+    earlier.append('model/start', {});
+    const resumed = new SessionLog('models', { seed: earlier.events });
+    const violations = watch(resumed);
+    resumed.append('model/end', {});
+    expect(violations).toHaveLength(1);
+  });
+});
+
 describe('plugin', () => {
   it('掛上去就認領 @nexus/core 這個名字', () => {
     const registry = createRegistry();

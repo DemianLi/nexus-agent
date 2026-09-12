@@ -158,7 +158,8 @@ describe('todo_write 在真的圖上', () => {
     });
 
     expect(violations).toEqual([
-      'invariant violated by "@nexus/plugin-todo": todo/write（seq 2）落在任何開著的輪之外',
+      // 前兩格是那一輪的模型起訖（#266），所以輪收掉之後這一顆是 seq 4。
+      'invariant violated by "@nexus/plugin-todo": todo/write（seq 4）落在任何開著的輪之外',
     ]);
   });
 
@@ -213,14 +214,21 @@ describe('todo_write 在真的圖上', () => {
     }
 
     // **壞掉的那一次一顆 `todo/write` 都沒留下**：驗證在找日誌之前。日誌上只有圍堵替這次
-    // 呼叫記的那一對工具事件（#264）。
+    // 呼叫記的那一對工具事件（#264），以及前後兩次模型呼叫的起訖（#266）。
     expect(todosIn(sessions.root.events)).toEqual([]);
-    expect(sessions.root.events.map((event) => event.type)).toEqual(['tool/call', 'tool/result']);
+    expect(sessions.root.events.map((event) => event.type)).toEqual([
+      'model/start',
+      'model/end',
+      'tool/call',
+      'tool/result',
+      'model/start',
+      'model/end',
+    ]);
     // **絆索：模型拿到的是一句錯誤，日誌記的卻是成功。** 工具把驗證失敗接住、回一句帶
     // `Error: ` 前綴的字串（見 `TODO_ERROR_PREFIX`），那是一則狀態成功的 ToolMessage——dsh 那側
     // 同一件事是 `isError`。#264 動工時量到、登記、沒有改：要不要改成 `status: 'error'` 牽動
     // goal 工具同一個先例與模型面，另外拍板。改了之後這一條會紅，翻面寫成 `isError: true`。
-    expect(sessions.root.events[1]?.data).toMatchObject({ isError: false });
+    expect(sessions.root.events[3]?.data).toMatchObject({ isError: false });
   });
 
   it('工具進得了預設清單面向模型的那一面', async () => {
