@@ -14,14 +14,14 @@
  *
  * | 狀態 | 住在哪 | 哪扇門帶得回來 |
  * | --- | --- | --- |
- * | 對話訊息、`planModeActive`、虛擬檔案系統、工具結果暫存 | graph state ／ checkpointer | **門 B** |
- * | goal 的相位與輪次、todo、`turn/*` | 會話日誌 | **門 A** |
+ * | 對話訊息、虛擬檔案系統、工具結果暫存 | graph state ／ checkpointer | **門 B** |
+ * | goal 的相位與輪次、todo、`turn/*`、沙箱模式、計劃模式 | 會話日誌 | **門 A** |
  *
- * **這條裂縫是兩個相反決定的交點**：todo 走事件不走 graph state 是寫下來的判準
- * （`plugin-todo/src/index.ts`），plan-mode 走 graph state 是登記過的偏離
- * （`plugin-plan-mode/src/index.ts`）。**今天看不見，因為兩半一起消失**——只開一扇門，
+ * **這條裂縫原本是兩個相反決定的交點**：todo 走事件不走 graph state 是寫下來的判準
+ * （`plugin-todo/src/index.ts`），plan-mode 走 graph state 是登記過的偏離。只開一扇門，
  * 回來的會話會是半個，而**哪一半是真相，是開門之前就要決定的事**。#251 決定了：只開門 A，
- * 回來的是日誌那一半，對話與計劃模式從頭開始，而入口照實這樣講。
+ * 回來的是日誌那一半；它的第二刀把計劃模式搬進日誌、收回了那條偏離，所以今天從頭開始的
+ * 只剩對話，而入口照實這樣講。
  *
  * ## 門 B 的絆索
  *
@@ -142,15 +142,15 @@ const THE_ONLY_SAVER = ['apps/harness/src/cli.ts: const checkpointer = new Memor
 const DOOR_B_GUIDANCE = (paths: readonly string[]): string =>
   '**門 B（落盤 checkpointer）動了。**\n' +
   '這不是把期望值改一改就好的事——會話 resume 在我們這裡是**兩扇門**，' +
-  '而它們載的是不同的一半：checkpointer 帶回對話訊息、`planModeActive`、虛擬檔案系統、' +
-  '工具結果暫存；會話日誌帶回 goal 的相位與輪次、todo、`turn/*`、沙箱模式。\n' +
+  '而它們載的是不同的一半：checkpointer 帶回對話訊息、虛擬檔案系統、工具結果暫存；' +
+  '會話日誌帶回 goal 的相位與輪次、todo、`turn/*`、沙箱模式、計劃模式。\n' +
   '**門 A 已經開了**（CLI 的 `--resume`），而 ' +
   '[#251](https://github.com/DemianLi/nexus-agent/issues/251) **決定門 B 不開**：兩份耐久來源' +
   '的寫入順序會分岔（checkpoint 寫了日誌沒寫，或反過來），要先有一條對帳規則。' +
   '動它之前先回去看那個決定。\n' +
   '真的要開的話，這兩處要跟著改：\n' +
-  `  1. ${paths[0]} —— 計劃模式為什麼不搬進會話日誌的那一段。` +
-  '門 B 一開，計劃模式會從 checkpointer 回來，那一段「只開門 A 會悄悄消失」的說法跟著過期。\n' +
+  `  1. ${paths[0]} —— \`--resume\` 的披露那句「對話從頭開始」。` +
+  '門 B 一開，對話會從 checkpointer 回來，那句話跟著過期，而它是使用者唯一讀得到的地方。\n' +
   `  2. ${paths[1]} 的 ${TOOL_RESULT_STASH_PREFIX} —— ` +
   '[#155](https://github.com/DemianLi/nexus-agent/issues/155) 記著「軸 2 一旦要做，' +
   '第一個要處理的是 [#170](https://github.com/DemianLi/nexus-agent/issues/170) ' +
@@ -164,17 +164,15 @@ const DOOR_B_GUIDANCE = (paths: readonly string[]): string =>
  * 讀而不 glob：檔案改名要 `ENOENT`，**不能靜靜地掃不到**（同 #195 的做法）。第三個目的地
  * 用的是 `TOOL_RESULT_STASH_PREFIX` 這個 import——那一格連檔名都不必猜，編譯器會擋。
  */
-const DESTINATIONS = [
-  'packages/nexus-plugin-plan-mode/src/index.ts',
-  'apps/harness/src/agent-factory.ts',
-] as const;
+const DESTINATIONS = ['apps/harness/src/cli.ts', 'apps/harness/src/agent-factory.ts'] as const;
 
 /** 每個目的地必須還講著那件事。**錨點選的是改寫時不會動的那一句。** */
 const DESTINATION_ANCHORS: readonly (readonly [string, readonly string[]])[] = [
-  // 這一句的**理由**是會改的（而且改過兩次了），結論不是——所以錨在結論上。
-  // 原本還有 goal 的 `tools.ts` 那一格：dsh 那句 resume 政策文字「有回讀那天它才該回來」。
-  // 門 A 開的那天它回來了（#251），那一格不再是門 B 的事。
-  [DESTINATIONS[0], ['但計劃模式沒有跟著搬，而理由不是慣性']],
+  // 原本第一格是 plan-mode 的 `index.ts`，錨在「但計劃模式沒有跟著搬，而理由不是慣性」：
+  // 門 B 一開計劃模式會從 checkpointer 回來。#251 的第二刀把計劃模式搬進日誌，那一格不再是
+  // 門 B 的事——同一刀之前，goal 的 `tools.ts` 那一格也是這樣走的。門 B 剩下帶得回的東西裡，
+  // 使用者讀得到的只有對話，所以改錨在說「對話從頭開始」的那一行披露上。
+  [DESTINATIONS[0], ['對話從頭開始']],
   [DESTINATIONS[1], ['TOOL_RESULT_STASH_PREFIX']],
 ];
 

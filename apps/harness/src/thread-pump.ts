@@ -27,7 +27,12 @@
 
 import { HumanMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
-import { SessionRegistry, type SessionEventMap, type SessionLog } from '@nexus/core';
+import {
+  SessionRegistry,
+  type SessionEvent,
+  type SessionEventMap,
+  type SessionLog,
+} from '@nexus/core';
 import type { Event, WireChannel } from '@nexus/wire';
 import { channelOfMethod, eventId } from '@nexus/wire';
 
@@ -283,10 +288,23 @@ export class ThreadPump {
    */
   readonly #driver: GoalDriverPort | undefined;
 
-  constructor(agent: PumpAgent, threadId: string, driver?: GoalDriverPort) {
+  /**
+   * @param agent - 這條 thread 的 agent。
+   * @param threadId - 就是 root 會話的 id。
+   * @param driver - 續行排程器那一側；省略即這條 thread 一輪都不自己排。
+   * @param rootSeed - root 日誌的 seed：serve 碰到一條以前寫過的 thread 時，上一個行程留下的
+   *   事件（[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A，同 CLI 的
+   *   `--resume`）。省略即一份新日誌。
+   */
+  constructor(
+    agent: PumpAgent,
+    threadId: string,
+    driver?: GoalDriverPort,
+    rootSeed?: readonly SessionEvent[],
+  ) {
     this.#agent = agent;
     this.#threadId = threadId;
-    this.#sessions = new SessionRegistry(threadId);
+    this.#sessions = new SessionRegistry(threadId, rootSeed === undefined ? {} : { rootSeed });
     this.#driver = driver;
   }
 

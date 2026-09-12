@@ -15,21 +15,24 @@
  * 3. **實體化可以延後。** 後端可以把建檔推遲到第一次 `append` 或 `flush`——那是純粹的
  *    優化，dsh 明文允許。所以 {@link SessionStore.create} 是同步的，IO 在把手上。
  *
- * ## 兩條刻意沒抄的
+ * ## 兩處跟 dsh 不一樣的
  *
  * - **沒有 `stat`／`list`，讀回只有一個 `resume`。** dsh 的 `open`／`stat`／`list` 是給一個
- *   會列出、查詢、續接任何會話的服務用的；我們的讀方只有一個——CLI 的 `--resume <run 目錄>`
- *   （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A），它手上已經有位址，
- *   不需要列。所以只抄續接要的那一條：讀回、交出一個接著寫的把手。`stat`／`list` 等有人
+ *   會列出、查詢、續接任何會話的服務用的；我們的讀方只有續接——CLI 的 `--resume <run 目錄>`
+ *   與 serve 碰到一條 thread 時（[#251](https://github.com/DemianLi/nexus-agent/issues/251)
+ *   的門 A），兩個手上都已經有位址（目錄與 thread id），不需要列。所以只抄續接要的那一條：讀回、交出一個接著寫的把手。`stat`／`list` 等有人
  *   要列的那天再加。
- * - **沒有跨行程的寫租約（`SessionAlreadyOwnedError`）。** 退到最弱但夠用的一條：
- *   {@link SessionStore.create} 對**已經存在的 session**必須拒絕，不得覆寫也不得續寫。
- *   我們的 session id 只在一次組裝內唯一（`SessionRegistry` 的 `<root>/<runId>`），
- *   不像 dsh 的 `SessionId` 全域唯一，所以後端要自己把每一次組裝隔開。這條拒絕
- *   **在續接出現之後照樣成立**：續接是另一個方法（{@link SessionStore.resume}），它明著打開
- *   一份已存的，`create` 撞到已存在的仍然拒絕——撞名照樣會響，續接不會被當成撞名。
- *   **沒有寫租約的代價仍然在**：兩個行程同時 `--resume` 同一個目錄，兩邊會往同一個檔續寫，
- *   `seq` 會撞號。dsh 靠 `open(id, 'write')` 的所有權把第二個擋掉，我們沒有。
+ * - **`create` 撞到已存在的 session 必須拒絕**，不得覆寫也不得續寫。我們的 session id 只在
+ *   一次組裝內唯一（`SessionRegistry` 的 `<root>/<runId>`），不像 dsh 的 `SessionId` 全域
+ *   唯一，所以後端要自己把每一次組裝隔開。這條拒絕**在續接出現之後照樣成立**：續接是另一個
+ *   方法（{@link SessionStore.resume}），它明著打開一份已存的，`create` 撞到已存在的仍然
+ *   拒絕——撞名照樣會響，續接不會被當成撞名。
+ *
+ * **跨行程的寫租約照抄了**（{@link SessionAlreadyOwnedError}）：兩個行程寫同一份會話的話
+ * `seq` 會撞號，dsh 靠 `open(id, 'write')` 的所有權把第二個擋掉，我們同樣。**擋的機制是後端
+ * 的事**（JSONL 那個見 `apps/harness/src/session-lease.ts`），這裡只定契約：`resume` 撞上
+ * 別人握著就拋它，而且在讀之前就拋。有了它，上面那條 `create` 的拒絕從「唯一的防線」變成
+ * 「多一道」——撞名仍然由它擋，同名同時寫由租約擋。
  *
  * @module
  */
@@ -59,15 +62,21 @@ import type { SessionEvent } from './session-log.js';
  * - **舊的號直接讀。** v1 是 v2 的子集——`turn/start` 的 `kind` 從
  *   [#98](https://github.com/DemianLi/nexus-agent/pull/98) 就在，格式版本到
  *   [#173](https://github.com/DemianLi/nexus-agent/pull/173) 才開始蓋，v2 只多了 `goal`
- *   這個變體；v2 之於 v3 同理，只多了一種事件。所以不需要遷移包——dsh 養兩個是因為它的
+ *   這個變體；v2 之於 v3、v3 之於 v4 同理，各只多了一種事件。所以不需要遷移包——dsh 養兩個是因為它的
  *   舊版真的長得不一樣。
  * - **比這個號新的拒絕**，而且跟壞檔分開報（{@link SessionFormatUnsupportedError} 與
  *   {@link SessionCorruptionError}，照 dsh 的 `SessionFormatUnsupportedError`／
  *   `SessionPersistenceCorruptionError`）：新版寫的檔不是壞的，是這一版讀不懂。
  * - **續寫進去的是這一版的詞彙**，所以續接的把手第一次寫入時把 header 的 `version` 蓋成
  *   這個號——dsh 同樣在讀的時候把歷史 header 翻成目前的版本。
+ *
+ * ## 4：`plan/mode`
+ *
+ * 計劃模式從 graph state 搬進日誌（[#251](https://github.com/DemianLi/nexus-agent/issues/251)
+ * 的第二刀）。v3 的檔直接讀：一顆 `plan/mode` 都沒有的日誌，計劃模式照組裝的初值起算——
+ * 跟 v3 那時候續接回來的結果一樣。
  */
-export const SESSION_LOG_FORMAT_VERSION = 3;
+export const SESSION_LOG_FORMAT_VERSION = 4;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。
@@ -149,7 +158,7 @@ export interface SessionStore {
    * @returns 讀回來的 header（`version` 是存的那個）、事件，與 next-seq 等於事件數的把手。
    * @throws {@link SessionFormatUnsupportedError} header 的版本比這一版新。
    * @throws {@link SessionCorruptionError} header 或某一行讀不懂、或 `seq` 不連續。
-   * @throws 這個 id 在這裡沒有存檔。
+   * @throws {@link SessionNotFoundError} 這個 id 在這裡沒有存檔。
    */
   resume(id: string): Promise<ResumedStoredSession>;
 }
@@ -185,6 +194,45 @@ export class SessionFormatUnsupportedError extends Error {
       `會話 "${id}" 的格式版本是 ${JSON.stringify(version)}，這一版只讀得懂到 ` +
         `${SESSION_LOG_FORMAT_VERSION}。檔案沒有壞，是比這一版新。`,
     );
+  }
+}
+
+/**
+ * 這個 id 在這裡沒有存檔——照 dsh 的 `SessionPersistenceNotFoundError`。
+ *
+ * **它有自己的型別，是因為有人要據此改走「新開一份」**：serve 碰到一條 thread 時先試著接，
+ * 接不到才開新的。拿不到型別的話那一步只能比對字串、或一律改開新的——後者會讓一份壞掉
+ * 或版本太新的日誌退到 `create`，撞上 `wx`，而那個失敗在協調器的背景路徑上被收成一行
+ * warn：**那條 thread 的日誌就這樣沒了**。所以只有這一種失敗准退，其餘照拋。
+ */
+export class SessionNotFoundError extends Error {
+  override readonly name = 'SessionNotFoundError';
+
+  /**
+   * @param id - 找的是哪一份。
+   * @param message - 後端自己的說法（例如它找的是哪個路徑）。
+   */
+  constructor(
+    readonly id: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * 另一個寫入把手握著這份會話——照 dsh 的 `SessionAlreadyOwnedError`
+ * （`packages/session/session-persistence/src/errors.ts`，SHA `c291e79`）。
+ *
+ * 多半是另一個行程還開著它：兩邊都寫的話 `seq` 會撞號，所以第二個不寫。行程死了租約就跟著
+ * 放掉（kernel 放的），**沒有逾期**——卡住但還活著的持有者不會被搶，照 dsh。
+ */
+export class SessionAlreadyOwnedError extends Error {
+  override readonly name = 'SessionAlreadyOwnedError';
+
+  /** @param id - 哪一份會話。 */
+  constructor(readonly id: string) {
+    super(`會話 "${id}" 已經有另一個寫入把手握著（多半是另一個行程還開著它），這一次不寫。`);
   }
 }
 

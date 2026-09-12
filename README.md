@@ -55,20 +55,21 @@ pnpm --filter @nexus/harness run cli:live "..."             # 換成真實供應
 這三樣。核准之後**只有那一個檔的下一次變更**在升上去的那一格跑，用完就沒了，session 的
 模式不動。不比現在寬的請求不會去問人。
 **沒有 `--workspace` 的組裝不會有 `/sandbox`、那句話，也不會有升級工具**：一格圍堵都沒有的時候
-講「目前是 workspace-write」是說謊。**模式跨得過重啟，但只在 CLI**：`--resume <run 目錄>` 讀回
-上一次的日誌，模式照最後一顆 `sandbox/mode` 回來（見下面「接著上一次跑下去」）。serve 還沒有
-resume，重開一條 thread 仍然回到 `--sandbox` 那一格。
+講「目前是 workspace-write」是說謊。**模式跨得過重啟**：CLI 的 `--resume <run 目錄>` 讀回
+上一次的日誌、serve 碰到一條以前寫過的 thread 就接回來，模式照最後一顆 `sandbox/mode` 回來
+（見下面「接著上一次跑下去」）。
 
 **會話日誌預設不落盤。** `--session-log <dir>` 給了才寫，缺席就是只在記憶體裡活著
 （banner 上第六行會說現在是哪一種）。沒有預設路徑是刻意的：日誌裡有你打的每一句話，
 預設往家目錄寫是一個該由人做的決定。它不能指到 `--workspace` 底下 —— 寫在可寫根裡，
-模型自己 `read_file` 就讀得到、也改得動整份對話史。每一次啟動各自一個 run 目錄，
+模型自己 `read_file` 就讀得到、也改得動整份對話史。CLI 每一次啟動各自一個 run 目錄，
 一份會話一個 `.jsonl` 加一個 `.header.json`。
 
 **`serve` 也有同一個旗標**（[#174](https://github.com/DemianLi/nexus-agent/issues/174)）：
-一個行程一個 run 目錄，底下一條 thread 一個檔，檔名由 thread id 百分號編碼而來 ——
-thread id 是呼叫端給的，所以編碼必須是單射的，不然兩條 thread 會共用一個檔而其中一條
-安靜地寫不進去。**eval 那條路沒有會話日誌，而那是一個登記過的決定**（理由與絆索見
+會話根按目錄分（照 dsh 的 `projectDir`：`<dir>/--<工作目錄壓成一段>--/`），底下一條 thread
+一個檔，檔名由 thread id 百分號編碼而來 —— thread id 是呼叫端給的，所以編碼必須是單射的，
+不然兩條 thread 會共用一個檔而其中一條安靜地寫不進去。位置固定，所以**重開 serve 之後同一條
+thread 接得回來**（下一段）。**eval 那條路沒有會話日誌，而那是一個登記過的決定**（理由與絆索見
 `apps/harness/src/eval/runner.ts` 的檔頭）。
 
 **要留 live 跑的證據，兩個東西都要留，而且它們裝的不是同一半。** 這對 CLI 與 `serve` 都
@@ -88,12 +89,18 @@ thread id 是呼叫端給的，所以編碼必須是單射的，不然兩條 thr
 這兩份東西的讀者是後來自己去 grep 的人，而人要 grep 得到，檔案得還在。
 在意的是哪一筆、判別式怎麼寫，見 [#187](https://github.com/DemianLi/nexus-agent/issues/187)。
 
-**接著上一次跑下去（只有 CLI）。** `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
-往同一個檔續寫。**回來的是住在日誌上的那一半**：沙箱模式、目標（授權打回 disarmed，要
-`/goal resume` 才會再往下走）與 todo。**對話與計劃模式從頭開始**——訊息住在 checkpointer 裡，
-那扇門不開；計劃模式要搬進日誌是下一刀（[#251](https://github.com/DemianLi/nexus-agent/issues/251)）。
+**接著上一次跑下去。** CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、往同一個
+檔續寫；serve 不用旗標——碰到一條以前在同一個會話根寫過的 thread 就接回來（只有「找不到」
+才開新的，壞掉或版本太新的日誌照樣擋下，不會被新的一份蓋掉）。**回來的是住在日誌上的那一半**：沙箱模式、目標（授權打回 disarmed，要
+`/goal resume` 才會再往下走）、todo 與計劃模式（上一次開著，接回來還開著）。**對話從頭開始**
+——訊息住在 checkpointer 裡，那扇門不開（[#251](https://github.com/DemianLi/nexus-agent/issues/251)）。
+要在上一次的同一個目錄底下接——header 記著那份會話屬於哪個目錄，對不上就擋（同 dsh）。
 它不能配 `--sandbox`（模式從日誌來，要換就接起來之後 `/sandbox`）或 `--session-log`（就寫回
-那個目錄）。**兩個行程同時接同一個目錄會撞號**——我們沒有 dsh 那道寫租約。
+那個目錄）。**同一份會話同一時間只有一個行程寫得進去**：照 dsh 的寫租約（kernel 的
+`flock`，行程死了就放），另一個行程還開著它時 `--resume` 當場擋下。只有 macOS 與 Linux
+鎖得到；其他平台照常寫，第一次要鎖的時候講一聲。**web 那端把 thread id 記在瀏覽器裡**
+（照 dsh 的 `dsh.sessions.current`），重新整理之後接的是同一條，畫面上會說一聲；線上沒有重播，
+所以之前說過的話不會出現。要換一條就按「新對話」。兩個分頁共用同一條 thread。
 
 **目標不會自己往下走，除非你說可以。** `--goal-driver` 打開之後，一個 active 的目標在
 每一輪落定時會自己再開一輪，直到它被完成、被擋住，或用完自己的 `max_goal_rounds`
@@ -155,15 +162,14 @@ banner 上。web 這端真的按得下去，所以它維持開著。
 
 | 這一行 | 做什麼 |
 | --- | --- |
-| `/plan` | 進計劃模式。**從下一輪起**指引才夾進 system prompt |
+| `/plan` | 進計劃模式，下一次請求起指引夾進 system prompt |
 | `/plan off` | 離開 |
 | 其餘參數 | 回一則錯誤。**不會被當成「進入」** —— `/plan of` 安靜地做相反的事是最貴的那種缺陷 |
 
 dsh 的 `/plan` 還收一段自由訊息（`[off|message]`），用 `agent.steer()` 插進對話；
-我們沒有那條路，所以提示是 `[off]`，收不下的東西不寫進提示。命令改的是 graph state，
-而 state 只有 invoke 期間寫得動 —— 選擇先存在 plugin 裡，由 middleware 的 `beforeAgent`
-在下一輪開頭交出去。細節與這兩條偏離的代價寫在 `packages/nexus-plugin-plan-mode/src/index.ts`
-的檔頭。
+我們沒有那條路，所以提示是 `[off]`，收不下的東西不寫進提示。選擇**當場寫進會話日誌**
+（`plan/mode`，同 dsh），所以它跟沙箱模式一樣，`--resume` 接得回來。細節與剩下那兩條偏離
+寫在 `packages/nexus-plugin-plan-mode/src/index.ts` 的檔頭。
 
 要讓一份組裝一開始就在計劃模式裡，用工廠的 `startActive`：
 

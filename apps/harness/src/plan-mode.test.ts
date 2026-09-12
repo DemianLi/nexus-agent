@@ -2,14 +2,17 @@
  * 計劃模式的**行為**驗收（[#116](https://github.com/DemianLi/nexus-agent/issues/116)）。
  *
  * `packages/nexus-plugin-plan-mode` 那邊的薄測試看的是 registry 的內容；這裡看的是
- * **模型收到的 prompt** 與**跑完之後的 state**——一個 middleware 有沒有作用，只有在
- * 真的組出一個 agent、真的跑一輪之後才看得見。
+ * **模型收到的 prompt** 與**跑完之後的日誌**——一個 middleware 有沒有作用，只有在
+ * 真的組出一個 agent、真的跑一輪之後才看得見。模式住在會話日誌上
+ * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的第二刀），所以要看模式的
+ * 那幾條都接了 `SessionRegistry`。
  *
  * 四組，各自釘一件不同的事：
  *
  * 1. **指引**：開著才夾、關著一個字都不多、而且不會踩掉別人的 prompt。
  * 2. **`exit_plan_mode` 的三條路**：有人核准、沒人可問、不在模式裡——三種結局要分得開。
- * 3. **模式狀態活得過什麼**：同一條 thread 的下一輪、以及一次真的壓縮。
+ * 3. **模式狀態活得過什麼**：同一條 thread 的下一輪、以及一次真的壓縮。跨重啟那一條在
+ *    `session-resume.test.ts`。
  * 4. **`prepend` 的證據**：模式外的呼叫拿到的是「不在計劃模式」，不是核准的措辭。
  * 5. **`/plan` 這條路**：人打的那一行到底有沒有讓下一輪的 prompt 變得不一樣
  *    （[#120](https://github.com/DemianLi/nexus-agent/issues/120)）。
@@ -21,7 +24,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Command, MemorySaver } from '@langchain/langgraph';
-import { SessionLog } from '@nexus/core';
+import { SessionRegistry } from '@nexus/core';
 import type { NexusPlugin, SessionEvent } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { createMemoryPlugin } from '@nexus/plugin-memory';
@@ -34,7 +37,7 @@ import {
   PLAN_ARGS_ERROR_MESSAGE,
   PLAN_ENTERED_MESSAGE,
   PLAN_LEFT_MESSAGE,
-  PLAN_MODE_STATE_KEY,
+  recordedPlanMode,
 } from '@nexus/plugin-plan-mode';
 import { createSummarizationMiddleware } from 'deepagents';
 import { describe, expect, it } from 'vitest';
@@ -54,15 +57,13 @@ function systemPrompt(messages: readonly BaseMessage[]): string {
 }
 
 /**
- * 跑完之後 state 裡的模式旗標。
+ * 日誌上的模式：最後一顆 `plan/mode`，一顆都沒有時是組裝的初值。
  *
- * **這一層轉型是必要的，不是偷懶。** agent 的 state 型別是組裝當下靜態算出來的，而
- * 計劃模式的 key 由 plugin 在執行期經 `registry.middleware.use()` 接進去——型別上
- * 看不到它。要讓型別看得到，`createNexusAgent` 得把 plugin 的 `stateSchema` 一路帶到
- * 回傳型別上，那是另一件事。
+ * @param sessions - 接在這次組裝上的會話註冊表。
+ * @param startActive - 組裝給的 `startActive`。
  */
-function planModeOf(state: unknown): unknown {
-  return (state as Record<string, unknown>)[PLAN_MODE_STATE_KEY];
+function planModeOf(sessions: SessionRegistry, startActive: boolean): boolean {
+  return recordedPlanMode(sessions.root.events) ?? startActive;
 }
 
 /** 訊息裡最後一則工具結果。 */
@@ -268,12 +269,14 @@ describe('exit_plan_mode 的三條路', () => {
    */
   it('獲准 → 模式關掉，下一輪的 prompt 沒有指引了', async () => {
     const model = planScript();
-    const { agent, dispose } = await createNexusAgent({
+    const { agent, attachSession, dispose } = await createNexusAgent({
       model,
       checkpointer: new MemorySaver(),
       plugins: [createPlanModePlugin({ startActive: true })],
     });
     const config = { configurable: { thread_id: 'approve' } };
+    const sessions = new SessionRegistry('approve');
+    const detach = attachSession(sessions);
 
     try {
       const paused = await agent.invoke(toAgentInvocation('幫我改一下。'), config);
@@ -285,13 +288,15 @@ describe('exit_plan_mode 的三條路', () => {
         config,
       );
 
-      expect(planModeOf(after)).toBe(false);
+      // 模式關了，而且關在日誌上——那是續接讀得回來的那一份。
+      expect(planModeOf(sessions, true)).toBe(false);
       expect(lastToolMessage(after.messages as BaseMessage[])?.text).toContain(
         PLAN_APPROVED_MESSAGE,
       );
       // 模式關了，所以獲准之後那一輪的 prompt 裡不該再有指引。
       expect(systemPrompt(model.lastPrompt)).not.toContain(DEFAULT_PLAN_GUIDANCE);
     } finally {
+      detach();
       await dispose();
     }
   });
@@ -305,12 +310,14 @@ describe('exit_plan_mode 的三條路', () => {
    */
   it('headless → 確定性拒絕，而且模式還開著', async () => {
     const model = planScript();
-    const { agent, dispose } = await createNexusAgent({
+    const { agent, attachSession, dispose } = await createNexusAgent({
       model,
       checkpointer: new MemorySaver(),
       approvals: HEADLESS_APPROVALS,
       plugins: [createPlanModePlugin({ startActive: true })],
     });
+    const sessions = new SessionRegistry('headless');
+    const detach = attachSession(sessions);
 
     let result;
     try {
@@ -318,6 +325,7 @@ describe('exit_plan_mode 的三條路', () => {
         configurable: { thread_id: 'headless' },
       });
     } finally {
+      detach();
       await dispose();
     }
 
@@ -326,8 +334,9 @@ describe('exit_plan_mode 的三條路', () => {
     const denial = lastToolMessage(result.messages as BaseMessage[]);
     expect(denial?.text).toContain('是沒有人被問到');
     expect(denial?.text).not.toContain(PLAN_APPROVED_MESSAGE);
-    // **模式沒關**：工具沒跑，那個 `Command` 就沒有發生。
-    expect(planModeOf(result)).toBe(true);
+    // **模式沒關**：工具沒跑，那顆 `plan/mode` 就沒有寫。
+    expect(planModeOf(sessions, true)).toBe(true);
+    expect(sessions.root.events.some((event) => event.type === 'plan/mode')).toBe(false);
   });
 
   /**
@@ -375,8 +384,7 @@ describe('模式狀態活得過什麼', () => {
 
     try {
       await agent.invoke(toAgentInvocation('第一句。'), config);
-      const second = await agent.invoke(toAgentInvocation('第二句。'), config);
-      expect(planModeOf(second)).toBe(true);
+      await agent.invoke(toAgentInvocation('第二句。'), config);
     } finally {
       await dispose();
     }
@@ -386,10 +394,11 @@ describe('模式狀態活得過什麼', () => {
   });
 
   /**
-   * **壓縮會重寫 `messages`，這一條問的是「它會不會順手把別人的 key 也一起吃掉」。**
+   * **壓縮會重寫 `messages`，這一條問的是「它會不會順手把模式也一起吃掉」。**
    *
-   * 不能假設。middleware state 在自己的 key 底下，但摘要器動的是同一份 state 物件，
-   * 而「它只改 `messages`」是實作細節不是承諾——基座哪天改了，這條會紅。
+   * 模式住在 graph state 裡的時候，這一條擋的是「摘要器只改 `messages`」這個沒人承諾過的
+   * 實作細節。模式搬進日誌之後它**在構造上就成立了**——摘要器碰不到日誌——但照樣留著：
+   * 它釘的是一句宣稱，不是一個機制，哪天模式又搬回 state，這一條就回到有牙齒的樣子。
    * 低門檻的摘要器是照 `summarization.test.ts` 的做法換掉內建那個。
    */
   it('一次真的壓縮之後還在', async () => {
@@ -433,7 +442,7 @@ describe('模式狀態活得過什麼', () => {
     // `/conversation_history`，那個目錄非空就是它跑過的外顯（照 `summarization.test.ts`）。
     expect(await readdir(join(root, 'conversation_history'))).not.toHaveLength(0);
 
-    expect(planModeOf(last)).toBe(true);
+    expect(last).toBeDefined();
     expect(systemPrompt(model.lastPrompt)).toContain(DEFAULT_PLAN_GUIDANCE);
   });
 });
@@ -469,12 +478,12 @@ describe('工具目錄不隨模式變動', () => {
  * 為什麼要走 `runRepl` 而不是直接呼叫 handler：這一條要證明的不是 handler 回了什麼
  * 字串（那歸 `packages/nexus-plugin-plan-mode` 的單元測試），而是**人打的那一行真的
  * 讓下一輪的 prompt 變得不一樣**。中間隔著 `parseCommand` 的 lookahead、執行器的
- * 配對日誌、`beforeAgent` 的邊界提交與 checkpointer——少了任何一段，指引都到不了模型，
- * 而每一段都只有在真的接起來的時候才驗得到。
+ * 配對日誌、會話日誌上那顆 `plan/mode` 與 plugin 對它的折疊——少了任何一段，指引都到不了
+ * 模型，而每一段都只有在真的接起來的時候才驗得到。
  *
- * **checkpointer 不是佈景。** 沒有它，state 在兩次 invoke 之間不留，第二輪一開始
- * `beforeAgent` 讀到的是 `stateSchema` 的初值——那一格會把 `committed` 同步成 `false`，
- * 計劃模式在第二輪就自己掉了。CLI 有它（`MemorySaver`），所以這裡也有。
+ * **會話日誌不是佈景，而且要是接線的那一份。** `runRepl` 把 `command/*` 寫進它收到的那份
+ * 日誌，plugin 則把 `plan/mode` 寫進 `attachSession` 接上的 root 那一份——CLI 裡兩者是同一份
+ * （`sessions.root`），這裡也照做。給一份沒接線的日誌的話，`/plan` 回的是「還沒接上」。
  */
 describe('/plan 這條路', () => {
   /** 餵幾行進 REPL，把印出來的東西與日誌一起收回來。 */
@@ -491,12 +500,14 @@ describe('/plan 這條路', () => {
     const model = new ScriptedChatModel({
       turns: Array.from({ length: turns }, () => ({ content: '好。' })),
     });
-    const { agent, commands, dispose } = await createNexusAgent({
+    const { agent, commands, attachSession, dispose } = await createNexusAgent({
       model,
       plugins,
       checkpointer: new MemorySaver(),
     });
-    const sessionLog = new SessionLog('plan-repl');
+    const sessions = new SessionRegistry('plan-repl');
+    const detach = attachSession(sessions);
+    const sessionLog = sessions.root;
     const events: SessionEvent[] = [];
     sessionLog.subscribe((event) => events.push(event));
 
@@ -514,6 +525,7 @@ describe('/plan 這條路', () => {
         commands,
       );
     } finally {
+      detach();
       await dispose();
     }
     return { model, stdout: out.join('\n'), stderr: err.join('\n'), events };
@@ -553,6 +565,10 @@ describe('/plan 這條路', () => {
 
     expect(events.filter((event) => event.type === 'command/run')).toHaveLength(2);
     expect(events.filter((event) => event.type === 'command/done')).toHaveLength(2);
+    // 兩次選擇都當場落在同一份日誌上，夾在各自那對命令事件之間。
+    expect(
+      events.flatMap((event) => (event.type === 'plan/mode' ? [event.data.active] : [])),
+    ).toEqual([true, false]);
     expect(
       events
         .filter((event) => event.type === 'turn/start')
@@ -565,9 +581,10 @@ describe('/plan 這條路', () => {
    *
    * 基座把這一輪的輸入訊息掛在**第一個真的寫了東西的節點**的 update 上，而在
    * [#120](https://github.com/DemianLi/nexus-agent/issues/120) 之前沒有任何 plugin 的
-   * `beforeAgent` 回傳非空更新——所以這個形狀是這張卡第一次讓它現形的：畫面上會出現
+   * `beforeAgent` 回傳非空更新——所以這個形狀是那張卡第一次讓它現形的：畫面上會出現
    * `[nexusPlanMode.before_agent] 先想想`，看起來像那個 plugin 在說話。`runTurn` 因此
-   * 濾掉 human message，這一條釘著它。
+   * 濾掉 human message，這一條釘著它。計劃模式搬進日誌之後它沒有 `beforeAgent` 了，這一條
+   * 照舊留著：那個形狀歸基座，下一個回非空更新的節點照樣會帶著它。
    */
   it('進了計劃模式之後，使用者那句話不會在畫面上出現兩次', async () => {
     const { stdout } = await repl(

@@ -43,6 +43,7 @@ import {
   type SessionLog,
 } from '@nexus/core';
 import { createJsonlSessionStore, openJsonlSessionStore } from './jsonl-session-store.js';
+import { assertSameCwd } from './resume-guards.js';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant';
 import { createAskUserInvariantPlugin } from '@nexus/plugin-ask-user/invariant';
@@ -52,7 +53,7 @@ import { createGoalPlugin, DEFAULT_MAX_GOAL_ROUNDS } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
 import { createMcpInvariantPlugin } from '@nexus/plugin-mcp/invariant';
 import { createMemoryInvariantPlugin } from '@nexus/plugin-memory/invariant';
-import { createPlanModePlugin } from '@nexus/plugin-plan-mode';
+import { createPlanModePlugin, PLAN_COMMAND_NAME, recordedPlanMode } from '@nexus/plugin-plan-mode';
 import { createPlanModeInvariantPlugin } from '@nexus/plugin-plan-mode/invariant';
 import { createQuickJsInvariantPlugin } from '@nexus/plugin-quickjs/invariant';
 import { createSkillsInvariantPlugin } from '@nexus/plugin-skills/invariant';
@@ -170,7 +171,8 @@ export const USAGE = `用法：cli [選項] [要說的話...]
   --session-log <dir>  把會話日誌寫進這個目錄底下（省略即不落盤）
                        它不能在 --workspace 底下：日誌是基礎建設，不是 agent 的工作區
   --resume <run 目錄>  接著上一次 --session-log 寫出來的那個 run 目錄跑下去：
-                       沙箱模式、目標與 todo 照日誌回來，對話從空的開始
+                       沙箱模式、目標、todo 與計劃模式照日誌回來，對話從空的開始
+                       要在上一次的同一個目錄底下接（日誌記著它屬於哪個目錄）
                        不能配 --sandbox（模式從日誌來）或 --session-log（就寫回那個目錄）
   --goal-driver        一個 active 的目標沒達成時自己再開一輪（預設關）
   --max-goal-rounds <n>
@@ -620,12 +622,24 @@ export function formatGoalDriverDisclosure(on: boolean, roundCap?: number): stri
 }
 
 /**
+ * 續接回來的計劃模式開著時，啟動畫面多講的那一行。
+ *
+ * **這是 [#251](https://github.com/DemianLi/nexus-agent/issues/251) 第二刀才走得到的狀態。**
+ * 計劃模式搬進日誌之前，它跨不過重啟；現在跨得過，而這個入口收不了核准
+ * （`HEADLESS_APPROVALS`）——模型交出去的計劃會被確定性拒絕，唯一的出路是人打 `/plan off`。
+ * 等模型被拒了才知道原因太晚，所以在一開始就講。
+ */
+export const RESUMED_PLAN_MODE_NOTICE = `計劃模式：開著（從續接的日誌來）。這個入口收不了核准，計劃交不出去——要動手就先 /${PLAN_COMMAND_NAME} off。`;
+
+/**
  * 一則訊息在畫面上該印成什麼，或 `undefined` 代表不印。
  *
  * **人自己說的那句不再印一次。** 基座把這一輪的輸入訊息掛在**第一個真的寫了東西的
  * 節點**的 update 上（實測：三個 `before_agent` 裡只有回傳非空更新的那一個帶著它）。
  * 照原樣印的話，畫面上會出現 `[nexusPlanMode.before_agent] 嗨`——看起來像那個 plugin
- * 在說話，而那句是使用者三秒前自己打的。
+ * 在說話，而那句是使用者三秒前自己打的。（那是當時唯一回非空更新的 `before_agent`；
+ * 計劃模式搬進日誌之後它沒有 `beforeAgent` 了，但這個形狀歸基座，下一個回非空更新的
+ * 節點照樣會帶著它，所以濾照舊。）
  *
  * **例外是圖自己插進來的 human 訊息，而那條路現在真的有了。** 這段註解過去寫著「哪天
  * 真的有東西從圖裡插一則 human message 進來，它也會跟著不見；今天沒有那條路」——
@@ -693,7 +707,8 @@ type NexusAgent = NexusAgentHandle['agent'];
  *   （[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
  * @param rootSeed - root 日誌的 seed：續接時上一個行程留下的事件（`--resume`，
  *   [#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。省略即一份新日誌。
- *   serve 不傳——它還沒有 resume。
+ *   serve 不傳：它的註冊表不是這裡建的（一條 thread 一份，在 `ThreadPump`），seed 經
+ *   `ThreadAgent.rootSeed` 交給 pump。
  * @returns 組好的 agent、收掉它的方法，與它用的 model。
  * @throws 清單載入失敗、fold 前置條件不成立，或基座擋下這份組裝。
  */
@@ -1206,8 +1221,12 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // **續接也在建 agent 之前讀**：沙箱模式的起始那一格與 root 日誌的 seed 都是組裝時就要給的
   // 東西，而讀不到（沒有那個目錄、版本太新、壞檔）也該在什麼都還沒起來的時候就講。
   const resumeDir = resolveResumeDir(invocation, options.cwd ?? process.cwd());
+  // 後端講話（例如這個平台拿不到寫租約）走 `Printer`，前綴同協調器那條 `[會話日誌]`。
+  const sessionLogWarn = (message: string): void => printer.error(`[會話日誌] ${message}`);
   const resumeStore =
-    resumeDir === undefined ? undefined : openJsonlSessionStore({ directory: resumeDir });
+    resumeDir === undefined
+      ? undefined
+      : openJsonlSessionStore({ directory: resumeDir, warn: sessionLogWarn });
   const resumed = resumeStore === undefined ? undefined : await resumeStore.resume(THREAD_ID);
   // 模式從日誌來；那一次跑沒有 fence（一顆 `sandbox/mode` 都沒有）就照常從預設起算。
   // `--sandbox` 在這條路上已經被 `parseCliArgs` 擋掉，所以這裡不會蓋掉任何人給的值。
@@ -1215,63 +1234,70 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // 日誌記著模式，就表示上一次有 fence（沒給 `--workspace` 一顆都不寫）。這一次不給的話
   // 檔案跑在虛擬 FS、fence 不在路徑上，接回來的 `read-only` 會**靜靜蒸發**——與
   // `--sandbox 要配 --workspace` 同一個理由，所以也同樣在什麼都還沒起來之前擋下。
-  if (resumedSandbox !== undefined && invocation.workspace === undefined) {
-    throw new Error(
-      `--resume 要配 --workspace：上一次跑在 --workspace 底下（日誌記著沙箱模式 ` +
-        `${resumedSandbox}），沒有 --workspace 的話那道 fence 不在路徑上，` +
-        `接回來的模式一個位元組都影響不到。\n\n${USAGE}`,
-    );
-  }
   const effective =
     resumedSandbox === undefined ? invocation : { ...invocation, sandbox: resumedSandbox };
 
-  const plugins =
-    invocation.pluginModule === undefined
-      ? DEFAULT_PLUGINS
-      : await loadPluginModule(invocation.pluginModule, options.cwd);
+  // **續接那個把手在讀之前就拿了寫租約**，要到日誌掛上之後才有人收（`persistence.dispose`）。
+  // 這中間任何一步拋錯都要先放掉它（try 一路包到掛上日誌之前，連同三個 attach）：CLI 行程會退出、kernel 會放，但同一個行程裡的呼叫端
+  // （測試、將來 serve 的續接）會撞上自己沒放的鎖。
+  let built: Awaited<ReturnType<typeof createCliAgent>>;
+  try {
+    // **先認它屬於哪個目錄**（見 `resume-guards.ts`）。排在沙箱那道檢查前面：
+    // 目錄不對的話，日誌裡記的是哪一格都不該拿來判。讀回來還沒寫過任何一筆，檔案原封不動；
+    // 它在 try 裡面，所以拋了也會放掉續接那把租約。
+    const resumeCwd = options.cwd ?? process.cwd();
+    if (resumed !== undefined) assertSameCwd('--resume', THREAD_ID, resumed.header, resumeCwd);
+    if (resumedSandbox !== undefined && invocation.workspace === undefined) {
+      throw new Error(
+        `--resume 要配 --workspace：上一次跑在 --workspace 底下（日誌記著沙箱模式 ` +
+          `${resumedSandbox}），沒有 --workspace 的話那道 fence 不在路徑上，` +
+          `接回來的模式一個位元組都影響不到。\n\n${USAGE}`,
+      );
+    }
+    const plugins =
+      invocation.pluginModule === undefined
+        ? DEFAULT_PLUGINS
+        : await loadPluginModule(invocation.pluginModule, options.cwd);
 
-  // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
-  const {
-    agent,
-    commands,
-    dispose,
-    sessions,
-    sessionLog,
-    attachTelemetry,
-    attachInvariants,
-    attachSession,
-    telemetrySharing,
-  } = await createCliAgent(
-    effective,
-    plugins,
-    options.cwd,
-    (error) =>
-      // **不繞過 `Printer`。** 違規跟 agent 的輸出落在同一個終端機上，前綴是唯一分得出
-      // 誰在講話的東西——同 `printInterrupt` 的 `[核准]`。訊息本身已經帶著
-      // `invariant violated by "<pkg>"`，所以擁有它的 package 不必在這裡再講一次。
-      printer.error(`[不變量] ${error.message}`),
-    // **這個入口沒有人在。** 收核准決定的介面在 web（`serve.ts` 那條刻意不傳這個），
-    // 這裡按不下去，所以停在核准點只有一個結局：整輪作廢。關掉之後被擋的那個工具
-    // 拿到一則模型讀得懂的拒絕，其餘照跑完（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
-    HEADLESS_APPROVALS,
-    resumed?.events,
-  );
-  // REPL 是一條連續對話，一份日誌就是整個 session，所以接線點在這裡而不是每輪。
-  // 回傳的 detach 不留：`dispose()` 會把還接著的協調器一起收掉。
-  attachTelemetry(sessions);
-  // 不變量的 runner 只是一個訂閱，沒有要排空的東西，所以 detach 也不留——行程走了它就沒了。
-  attachInvariants(sessions);
-  // **接在不變量之後**：參與者拿得到的是可寫的日誌，所以它一裝上去就可能記東西，
-  // 而那些東西該被已經在看的檢查看到。順序反過來的話，安裝期寫的第一批事件會漏檢。
-  // 同一條順序對 subagent 那些後來才出生的日誌也成立——註冊表通知訂閱者的順序就是
-  // 這三行接上去的順序。
-  attachSession(sessions);
+    // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
+    built = await createCliAgent(
+      effective,
+      plugins,
+      options.cwd,
+      (error) =>
+        // **不繞過 `Printer`。** 違規跟 agent 的輸出落在同一個終端機上，前綴是唯一分得出
+        // 誰在講話的東西——同 `printInterrupt` 的 `[核准]`。訊息本身已經帶著
+        // `invariant violated by "<pkg>"`，所以擁有它的 package 不必在這裡再講一次。
+        printer.error(`[不變量] ${error.message}`),
+      // **這個入口沒有人在。** 收核准決定的介面在 web（`serve.ts` 那條刻意不傳這個），
+      // 這裡按不下去，所以停在核准點只有一個結局：整輪作廢。關掉之後被擋的那個工具
+      // 拿到一則模型讀得懂的拒絕，其餘照跑完（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
+      HEADLESS_APPROVALS,
+      resumed?.events,
+    );
+    // REPL 是一條連續對話，一份日誌就是整個 session，所以接線點在這裡而不是每輪。
+    // 回傳的 detach 不留：`dispose()` 會把還接著的協調器一起收掉。
+    built.attachTelemetry(built.sessions);
+    // 不變量的 runner 只是一個訂閱，沒有要排空的東西，所以 detach 也不留——行程走了它就沒了。
+    built.attachInvariants(built.sessions);
+    // **接在不變量之後**：參與者拿得到的是可寫的日誌，所以它一裝上去就可能記東西，
+    // 而那些東西該被已經在看的檢查看到。順序反過來的話，安裝期寫的第一批事件會漏檢。
+    // 同一條順序對 subagent 那些後來才出生的日誌也成立——註冊表通知訂閱者的順序就是
+    // 這三行接上去的順序。
+    built.attachSession(built.sessions);
+  } catch (error) {
+    await resumed?.stored.close().catch(() => {});
+    throw error;
+  }
+  const { agent, commands, dispose, sessions, sessionLog, telemetrySharing } = built;
   // **接在最後，而且是四個裡唯一一個出口。** 前三個是觀察者，落盤不改變任何人看得到
   // 什麼，所以順序在功能上沒有差別；排在最後是為了讓讀的人看到的因果跟實際一致——
   // 先被檢查、被參與者看過，才寫下去。
   const sessionStore =
     resumeStore ??
-    (sessionLogDir === undefined ? undefined : createJsonlSessionStore({ rootDir: sessionLogDir }));
+    (sessionLogDir === undefined
+      ? undefined
+      : createJsonlSessionStore({ rootDir: sessionLogDir, warn: sessionLogWarn }));
   const persistence =
     sessionStore === undefined
       ? undefined
@@ -1327,9 +1353,19 @@ export async function runCli(options: RunCliOptions): Promise<void> {
         : resumed === undefined
           ? `會話日誌：${sessionStore.directory}`
           : // **照實講回來的是哪一半**：不講的話，使用者會以為對話也接上了（#251 的最後一段）。
-            `會話日誌：${sessionStore.directory}（續接：沙箱模式、目標與 todo 照日誌回來；` +
-            `對話與計劃模式從頭開始）`,
+            `會話日誌：${sessionStore.directory}（續接：沙箱模式、計劃模式、目標與 todo 照日誌回來；` +
+            `對話從頭開始）`,
     );
+    // 接回來的計劃模式開著——見 `RESUMED_PLAN_MODE_NOTICE`。**只在這次組裝真的掛了 `/plan`
+    // 時講**：自訂 `--plugins` 可能沒有計劃模式，那時日誌上那顆 `plan/mode` 沒有人讀，講了
+    // 就是在說一個不存在的模式。
+    if (
+      resumed !== undefined &&
+      commands.find(PLAN_COMMAND_NAME) !== undefined &&
+      recordedPlanMode(resumed.events) === true
+    ) {
+      printer.log(RESUMED_PLAN_MODE_NOTICE);
+    }
     // 第七行：**這一輪結束之後還會不會有下一輪**。前六行講的是東西往哪裡去，這一行講
     // 的是誰在推——而那是 `--goal-driver` 落地之後畫面上唯一看得出來的差別。
     printer.log(formatGoalDriverDisclosure(invocation.goalDriver, invocation.maxGoalRounds));

@@ -7,32 +7,44 @@
  * 實體化延後到第一次寫。
  *
  * **選 JSONL 不選 SQLite 是一個有代價的選擇，代價登記在這裡。** dsh 兩個 provider 都出
- * （`-jsonl` 與 `-sqlite`），我們先做 JSONL，理由三條：零原生相依（SQLite 那條要
+ * （`-jsonl` 與 `-sqlite`），我們先做 JSONL，理由三條：不必現場編譯（SQLite 那條要
  * `better-sqlite3`，而我們的 `onlyBuiltDependencies` 只放了 `esbuild`）、人讀得懂、
  * 以及未來 Proteus 的 `read_trace` 解析的就是 jsonl。丟掉的是頻繁更新時的效率，而
- * 僅追加的日誌本來就沒有頻繁更新。
+ * 僅追加的日誌本來就沒有頻繁更新。**第一條原本寫的是「零原生相依」，寫租約之後不成立了**：
+ * 租約吃一個原生模組，但它是預編譯的、沒有 install script（見 `session-lease.ts`），所以
+ * 真正擋掉 SQLite 的那件事——要在裝的機器上編——這條路仍然沒有。
  *
- * ## 兩條沒抄的，各有理由
+ * ## 一條沒抄的、一條照抄的
  *
  * - **沒有 Zstandard 壓縮與 checksum。** dsh 預設存成帶 checksum 的連續 Zstandard frame
  *   （也可配置成原始行）。我們存原始行：撕裂尾部的偵測與部分解碼是**讀方**的機器，
- *   而今天的讀方只有一個：續接（{@link JsonlSessionStore.resume}，
- *   [#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A），它讀的就是原始行。
+ *   而今天的讀方只有一種：續接（{@link JsonlSessionStore.resume}，CLI 的 `--resume` 與 serve
+ *   碰到以前寫過的 thread，[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A），
+ *   它讀的就是原始行。
  *   加壓縮換到的是第二套解碼路徑，沒有人要。
- * - **沒有跨行程的寫租約。** 退到 `open(path, 'wx')`——**檔案已經在就拒絕**，不覆寫也不
- *   續寫。這條拒絕就是 `SessionStore` 檔頭說的那個絆索。
+ * - **寫租約照抄了**（`session-lease.ts`）：新開的在第一次實體化寫入之前拿，續接的在讀
+ *   之前拿，把手關掉才放。一份會話一把，鎖檔跟日誌並排（`<base>.lock`）——理由在那個模組。
+ *   `open(path, 'wx')` 仍然在：**檔案已經在就拒絕**，不覆寫也不續寫，那是 `SessionStore`
+ *   檔頭說的撞名絆索，跟租約各擋一件事。
  *
- * ## 每一次組裝各自一個目錄
+ *   **拿租約是惰性的，所以輸的可能是先起來的那個**：一個行程還沒寫第一筆（還沒拿），另一個
+ *   就 `--resume` 了同一份，後者先拿到；前者第一次寫的時候才撞上，而那一下在協調器的背景
+ *   路徑上，**被收成一行 warn 而不是一個錯**。dsh 也是惰性的，所以不算偏離；只是我們的
+ *   協調器讓那個後果更安靜。
  *
- * dsh 的 `SessionId` 全域唯一，我們的只在一次組裝內唯一（CLI 的 root 固定叫 `cli`）。
- * 所以 {@link createJsonlSessionStore} 自己開一個 **run 目錄**，第二次啟動不會撞到第一次
- * ——沒有這一層，`wx` 會讓第二次啟動變成一個硬錯誤。
+ * ## 目錄：CLI 每次一個，serve 按專案固定一格
+ *
+ * dsh 的 `SessionId` 全域唯一；我們的 CLI root 固定叫 `cli`，放在固定的地方會每次都撞。
+ * 所以 CLI 用 {@link createJsonlSessionStore} 每次開一個 **run 目錄**——沒有這一層，`wx`
+ * 會讓第二次啟動變成一個硬錯誤。serve 的 root 是 thread id，本來就全域唯一，所以它照 dsh
+ * 用 {@link openJsonlSessionStore} 落在 `<根>/<projectKey(cwd)>` 那一格，重開之後找得回同一條
+ * thread。
  *
  * @see [#172](https://github.com/DemianLi/nexus-agent/issues/172)
  * @module
  */
 
-import { mkdir, open, readFile, truncate, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, stat, truncate, writeFile } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -40,6 +52,7 @@ import {
   SESSION_LOG_FORMAT_VERSION,
   SessionCorruptionError,
   SessionFormatUnsupportedError,
+  SessionNotFoundError,
 } from '@nexus/core';
 import type {
   ResumedStoredSession,
@@ -48,6 +61,8 @@ import type {
   StoredSession,
   StoredSessionHeader,
 } from '@nexus/core';
+import { acquireSessionLease } from './session-lease.js';
+import type { LeaseUnavailable, SessionWriteLease, TryLock } from './session-lease.js';
 
 /**
  * 目錄與檔案的權限。
@@ -137,6 +152,32 @@ function safeBaseName(sessionId: string): string {
 interface ResumePoint {
   readonly nextSeq: number;
   readonly truncateTo?: number;
+  /** 讀之前就拿到的租約；這個平台拿不到就是 `undefined`。 */
+  readonly lease: SessionWriteLease | undefined;
+}
+
+/**
+ * 一個後端裡每一份會話共用的：拿鎖的那一下，與「這個平台拿不到鎖」那張嘴。
+ *
+ * **那張嘴一個後端只開一次**——不然每個 subagent 出生都重講一遍。
+ */
+interface LeaseContext {
+  readonly lock: TryLock | undefined;
+  readonly unavailable: (outcome: LeaseUnavailable) => void;
+}
+
+/** 拿租約；拿不到的平台講一聲、回 `undefined`。搶不到與其餘的錯照常拋。 */
+async function leaseFor(
+  context: LeaseContext,
+  path: string,
+  id: string,
+): Promise<SessionWriteLease | undefined> {
+  const outcome = await acquireSessionLease(path, id, context.lock);
+  if ('unavailable' in outcome) {
+    context.unavailable(outcome);
+    return undefined;
+  }
+  return outcome;
 }
 
 /** 一份已存會話。IO 延後到第一次 {@link append} 或 {@link flush}。 */
@@ -145,7 +186,15 @@ class JsonlStoredSession implements StoredSession {
   readonly #base: string;
   readonly #header: StoredSessionHeader;
   readonly #resume: ResumePoint | undefined;
+  readonly #context: LeaseContext;
+  #lease: SessionWriteLease | undefined;
   #handle: FileHandle | undefined;
+  /**
+   * 進行中的那次實體化。`#materialize` 裡有好幾個 await，同時進來兩次的話第二次會拿不到
+   * **自己的**租約，拋出一句「另一個行程還開著它」——同一個行程、同一份會話，那句話會讓人去找
+   * 一個不存在的行程。協調器的背景寫入與 `flush` 排在不同的隊伍上，所以這不是理論上的。
+   */
+  #materializing: Promise<FileHandle> | undefined;
   #closed = false;
   /** 已存的 next-seq。下一批的第一顆必須等於它。 */
   #nextSeq: number;
@@ -153,13 +202,21 @@ class JsonlStoredSession implements StoredSession {
   /**
    * @param directory - run 目錄。
    * @param header - 要寫的 header。續接時是**已經翻成這一版**的那份。
+   * @param context - 這個後端的租約設定。
    * @param resume - 續接一份已存的會話；省略即開一份新的。
    */
-  constructor(directory: string, header: StoredSessionHeader, resume?: ResumePoint) {
+  constructor(
+    directory: string,
+    header: StoredSessionHeader,
+    context: LeaseContext,
+    resume?: ResumePoint,
+  ) {
     this.#directory = directory;
     this.#base = safeBaseName(header.id);
     this.#header = header;
+    this.#context = context;
     this.#resume = resume;
+    this.#lease = resume?.lease;
     this.#nextSeq = resume?.nextSeq ?? 0;
   }
 
@@ -193,11 +250,20 @@ class JsonlStoredSession implements StoredSession {
     this.#closed = true;
     const handle = this.#handle;
     this.#handle = undefined;
-    if (handle === undefined) return;
     try {
-      await handle.datasync();
+      if (handle !== undefined) {
+        try {
+          await handle.datasync();
+        } finally {
+          await handle.close();
+        }
+      }
     } finally {
-      await handle.close();
+      // **不論開沒開過日誌都放**：續接那條路在讀之前就拿了租約，一筆都沒寫就關也要放掉，
+      // 不然同一個行程裡下一次接同一份會撞上自己。
+      const lease = this.#lease;
+      this.#lease = undefined;
+      await lease?.release();
     }
   }
 
@@ -205,11 +271,30 @@ class JsonlStoredSession implements StoredSession {
     if (this.#closed) throw new Error(`會話 "${this.#header.id}" 的把手已經關掉了。`);
   }
 
-  /** 第一次真的要寫時才建目錄、寫 header、開檔。之後直接回同一個 handle。 */
-  async #materialize(): Promise<FileHandle> {
-    if (this.#handle !== undefined) return this.#handle;
+  /**
+   * 第一次真的要寫時才建目錄、寫 header、開檔。之後直接回同一個 handle。
+   *
+   * 同時進來的共用同一次；失敗了就清掉，下一次重來——協調器靠的正是「失敗保留、下次再送」。
+   */
+  #materialize(): Promise<FileHandle> {
+    if (this.#handle !== undefined) return Promise.resolve(this.#handle);
+    this.#materializing ??= this.#open().catch((error: unknown) => {
+      this.#materializing = undefined;
+      throw error;
+    });
+    return this.#materializing;
+  }
+
+  async #open(): Promise<FileHandle> {
     if (this.#resume !== undefined) return this.#materializeResumed(this.#resume);
     await mkdir(this.#directory, { recursive: true, mode: DIR_MODE });
+    // **租約在第一筆實體化寫入之前拿**，照 dsh：一份還沒實體化的會話在檔案系統上沒有足跡。
+    // 上一次實體化拿到租約之後才失敗的話，重試不再拿一次——那會撞上自己。
+    this.#lease ??= await leaseFor(
+      this.#context,
+      join(this.#directory, `${this.#base}.lock`),
+      this.#header.id,
+    );
     // header 先寫：日誌有內容而 header 不見，比反過來難解釋得多。
     await writeFile(
       join(this.#directory, `${this.#base}.header.json`),
@@ -326,36 +411,92 @@ function parseBody(id: string, body: string): { events: SessionEvent[]; validByt
  * **只有 header、沒有日誌不是壞檔**：`#materialize` 先寫 header 再開日誌，兩步之間當掉
  * 就是這個樣子——一份一筆都還沒寫進去的會話。
  */
-async function resumeStoredSession(directory: string, id: string): Promise<ResumedStoredSession> {
+async function resumeStoredSession(
+  directory: string,
+  id: string,
+  context: LeaseContext,
+): Promise<ResumedStoredSession> {
   const base = safeBaseName(id);
   const headerPath = join(directory, `${base}.header.json`);
-  let headerText: string;
+  const missing = () =>
+    new SessionNotFoundError(id, `${directory} 裡沒有會話 "${id}"（找不到 ${headerPath}）。`);
+  // **先認得有這份，再拿租約**：打錯的 `--resume` 不該留下一個鎖檔。
   try {
-    headerText = await readFile(headerPath, 'utf8');
+    await stat(headerPath);
   } catch (error: unknown) {
-    if (isNotFound(error)) {
-      throw new Error(`${directory} 裡沒有會話 "${id}"（找不到 ${headerPath}）。`);
-    }
+    if (isNotFound(error)) throw missing();
     throw error;
   }
-  const header = parseHeader(id, headerText);
-  let body = '';
+  // **在讀之前拿**，照 dsh：持有者在實體化時會覆寫 header（非原子），不鎖就讀可能讀到半份；
+  // 而且別人握著的話，該在什麼都還沒讀之前就講。
+  const lease = await leaseFor(context, join(directory, `${base}.lock`), id);
   try {
-    body = await readFile(join(directory, `${base}.jsonl`), 'utf8');
+    let headerText: string;
+    try {
+      headerText = await readFile(headerPath, 'utf8');
+    } catch (error: unknown) {
+      if (isNotFound(error)) throw missing();
+      throw error;
+    }
+    const header = parseHeader(id, headerText);
+    let body = '';
+    try {
+      body = await readFile(join(directory, `${base}.jsonl`), 'utf8');
+    } catch (error: unknown) {
+      if (!isNotFound(error)) throw error;
+    }
+    const { events, validBytes } = parseBody(id, body);
+    const torn = validBytes < Buffer.byteLength(body, 'utf8');
+    return {
+      header,
+      events,
+      stored: new JsonlStoredSession(
+        directory,
+        { ...header, version: SESSION_LOG_FORMAT_VERSION },
+        context,
+        { nextSeq: events.length, ...(torn && { truncateTo: validBytes }), lease },
+      ),
+    };
   } catch (error: unknown) {
-    if (!isNotFound(error)) throw error;
+    // 讀壞了就沒有把手可關，租約得在這裡放。
+    await lease?.release();
+    throw error;
   }
-  const { events, validBytes } = parseBody(id, body);
-  const torn = validBytes < Buffer.byteLength(body, 'utf8');
-  return {
-    header,
-    events,
-    stored: new JsonlStoredSession(
-      directory,
-      { ...header, version: SESSION_LOG_FORMAT_VERSION },
-      { nextSeq: events.length, ...(torn && { truncateTo: validBytes }) },
-    ),
-  };
+}
+
+/**
+ * 一個專案目錄在會話根底下的目錄名——照 dsh 的 `projectKey`
+ * （`packages/session/session-persistence-jsonl/src/format.ts`，SHA `c291e79`），逐字元抄。
+ *
+ * 分隔符（`/`、`\\`、`:`）變成 `-`，連續的只留一個；不安全的 UTF-16 碼元寫成 `~XXXX`；
+ * 前後包 `--`，長度封頂。**它是有損的**（分隔符與截短），dsh 明說這是刻意的：換來的是人
+ * 在目錄裡找得到自己的專案。有損就可能撞，所以續接時照樣比 header 的 `cwd`
+ * （{@link ./resume-guards.ts | ResumeCwdConflictError}），同 dsh。
+ *
+ * @param cwd - 專案目錄。
+ * @returns 一段檔案系統安全的目錄名。
+ * @throws 空字串。
+ */
+export function projectKey(cwd: string): string {
+  if (cwd.length === 0) throw new Error('專案目錄是空字串，排不出目錄名。');
+  let readable = '';
+  let separatorRun = false;
+  for (let index = 0; index < cwd.length; index += 1) {
+    const code = cwd.charCodeAt(index);
+    const char = String.fromCharCode(code);
+    if (char === '/' || char === '\\' || char === ':') {
+      if (!separatorRun) readable += '-';
+      separatorRun = true;
+    } else if (char !== '~' && /^[A-Za-z0-9._-]$/.test(char)) {
+      readable += char;
+      separatorRun = false;
+    } else {
+      readable += `~${code.toString(16).toUpperCase().padStart(4, '0')}`;
+      separatorRun = false;
+    }
+  }
+  const slug = readable.replace(/^-+/, '') || 'root';
+  return `--${slug.slice(0, 251)}--`;
 }
 
 /** {@link createJsonlSessionStore} 與 {@link openJsonlSessionStore} 交出來的東西。 */
@@ -364,15 +505,39 @@ export interface JsonlSessionStore extends SessionStore {
   readonly directory: string;
 }
 
+/** 兩個工廠共用的選項。 */
+export interface JsonlSessionStoreOptions {
+  /**
+   * 這個平台拿不到寫租約時講的那一句（見 `session-lease.ts`）。一個後端只講一次。
+   * 省略就走 `console.warn`；產品路徑兩個入口都各自給（CLI 走 `Printer`，serve 走伺服器日誌）。
+   */
+  readonly warn?: (message: string) => void;
+  /** 拿鎖的那一下。**只給測試換**：真的平台上量不到「拿不到」那兩條路。 */
+  readonly lock?: TryLock;
+}
+
 /** 落在 `directory` 上的後端。兩個工廠差在目錄是新開的還是既有的。 */
-function jsonlStoreAt(directory: string): JsonlSessionStore {
+function jsonlStoreAt(directory: string, options: JsonlSessionStoreOptions): JsonlSessionStore {
+  const warn = options.warn ?? ((message: string) => console.warn(`[會話日誌] ${message}`));
+  let warned = false;
+  const context: LeaseContext = {
+    lock: options.lock,
+    unavailable: (outcome) => {
+      if (warned) return;
+      warned = true;
+      warn(
+        `這個平台拿不到寫租約（${outcome.unavailable}），${directory} 裡的會話都不鎖：` +
+          `兩個行程同時寫同一份會撞號。`,
+      );
+    },
+  };
   return {
     directory,
     create(header: StoredSessionHeader): StoredSession {
-      return new JsonlStoredSession(directory, header);
+      return new JsonlStoredSession(directory, header, context);
     },
     resume(id: string): Promise<ResumedStoredSession> {
-      return resumeStoredSession(directory, id);
+      return resumeStoredSession(directory, id, context);
     },
   };
 }
@@ -383,14 +548,16 @@ function jsonlStoreAt(directory: string): JsonlSessionStore {
  * @param options - `rootDir` 底下會開一個這一次專用的 run 目錄。
  * @returns 後端，以及它實際會寫進去的那個目錄。
  */
-export function createJsonlSessionStore(options: { readonly rootDir: string }): JsonlSessionStore {
+export function createJsonlSessionStore(
+  options: { readonly rootDir: string } & JsonlSessionStoreOptions,
+): JsonlSessionStore {
   // 每一次組裝一個目錄。時間戳在前面是為了人排序得動，UUID 在後面是為了同一毫秒起兩次
   // 也不會撞（`wx` 會擋，但擋下來的是一次硬錯誤，不是我們要的行為）。
   const directory = join(
     options.rootDir,
     `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`,
   );
-  return jsonlStoreAt(directory);
+  return jsonlStoreAt(directory, options);
 }
 
 /**
@@ -401,9 +568,14 @@ export function createJsonlSessionStore(options: { readonly rootDir: string }): 
  * 這個行程新出生的 subagent 日誌也落在這裡，與上一個行程的並排；它們的 id 帶 LangGraph
  * 的 task id（`session-address.ts`），`wx` 仍然擋撞名。
  *
+ * **續接撞上別人握著就拋 {@link @nexus/core!SessionAlreadyOwnedError}**，在讀之前——另一個
+ * 行程還開著這份會話的話，兩邊一起寫會撞號。
+ *
  * @param options - 那個 run 目錄。
  * @returns 後端；`create` 開新的、`resume` 接舊的。
  */
-export function openJsonlSessionStore(options: { readonly directory: string }): JsonlSessionStore {
-  return jsonlStoreAt(options.directory);
+export function openJsonlSessionStore(
+  options: { readonly directory: string } & JsonlSessionStoreOptions,
+): JsonlSessionStore {
+  return jsonlStoreAt(options.directory, options);
 }

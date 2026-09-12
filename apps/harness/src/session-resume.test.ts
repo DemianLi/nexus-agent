@@ -19,11 +19,18 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
+import { SESSION_LOG_FORMAT_VERSION, SessionAlreadyOwnedError } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { GOAL_COMMAND_NAME } from '@nexus/plugin-goal';
+import {
+  PLAN_ALREADY_ACTIVE_MESSAGE,
+  PLAN_COMMAND_NAME,
+  PLAN_ENTERED_MESSAGE,
+} from '@nexus/plugin-plan-mode';
 
-import { parseCliArgs, runCli } from './cli.js';
+import { parseCliArgs, RESUMED_PLAN_MODE_NOTICE, runCli } from './cli.js';
+import { ResumeCwdConflictError } from './resume-guards.js';
+import { openJsonlSessionStore } from './jsonl-session-store.js';
 import { SANDBOX_COMMAND_NAME } from './sandbox-mode.js';
 
 /** 分開收 stdout 與 stderr：不變量違規走的是後者。 */
@@ -40,12 +47,22 @@ function recorder() {
   };
 }
 
-/** 跑一次 CLI；`lines` 給了就是 REPL，餵完就結束。 */
-async function cli(argv: readonly string[], lines = '/exit\n') {
+/**
+ * 跑一次 CLI；`lines` 給了就是 REPL，餵完就結束。
+ *
+ * `cwd` 不給就是這個行程的 `process.cwd()`——`firstRun` 寫進 header 的也是它。
+ */
+async function cli(argv: readonly string[], lines = '/exit\n', cwd?: string) {
   const { printer, stdout, stderr } = recorder();
   const input = new PassThrough();
   input.end(lines);
-  await runCli({ argv: [...argv], input, output: new PassThrough(), printer });
+  await runCli({
+    argv: [...argv],
+    input,
+    output: new PassThrough(),
+    printer,
+    ...(cwd !== undefined && { cwd }),
+  });
   return { stdout: stdout(), stderr: stderr() };
 }
 
@@ -98,7 +115,7 @@ describe('接回來的是日誌那一半', () => {
     expect(stdout).toContain('狀態：進行中');
     expect(stdout).toContain(`/${GOAL_COMMAND_NAME} resume`);
     // 披露照實講回來的是哪一半。
-    expect(stdout).toContain('對話與計劃模式從頭開始');
+    expect(stdout).toContain('對話從頭開始');
     expect(stderr).not.toContain('[不變量]');
   });
 
@@ -107,6 +124,58 @@ describe('接回來的是日誌那一半', () => {
     const { stdout } = await cli(['--workspace', workspace]);
     expect(stdout).toContain('起始 mode: workspace-write，');
     expect(stdout).not.toContain('從續接的日誌來');
+  });
+});
+
+describe('計劃模式跟著回來', () => {
+  /**
+   * `plan/mode` 是第一顆要**熬過** `session/end-seed` 的狀態——別的配套入口都在那顆標記上
+   * 重設，所以「在 end-seed 歸零」是這一帶最順手寫錯的那一種。驗收要接**兩次**：第二次
+   * 讀到的日誌上有兩顆標記，而模式得跨過兩顆。
+   */
+  it('上一次開了計劃模式，接回來還在；再接一次也還在', async () => {
+    await cli(['--workspace', workspace, '--session-log', logs], `/${PLAN_COMMAND_NAME}\n/exit\n`);
+    const entries = await readdir(logs);
+    const runDir = join(logs, entries[0]!);
+
+    const once = await cli(
+      ['--workspace', workspace, '--resume', runDir],
+      `/${PLAN_COMMAND_NAME}\n/exit\n`,
+    );
+    expect(once.stdout).toContain(PLAN_ALREADY_ACTIVE_MESSAGE);
+    // **接回來的是一個 CLI 收不了核准的狀態**：計劃交不出去，唯一的出路是人打 `/plan off`。
+    // 以前這個狀態跨不過重啟，現在跨得過，所以要在一開始就講，不是等模型被拒了才知道。
+    expect(once.stdout).toContain(RESUMED_PLAN_MODE_NOTICE);
+    const twice = await cli(
+      ['--workspace', workspace, '--resume', runDir],
+      `/${PLAN_COMMAND_NAME}\n/exit\n`,
+    );
+    expect(twice.stdout).toContain(PLAN_ALREADY_ACTIVE_MESSAGE);
+    expect(twice.stderr).not.toContain('[不變量]');
+
+    const events = await readLog(join(runDir, 'cli.jsonl'));
+    expect(events.filter((event) => event.type === 'session/end-seed')).toHaveLength(2);
+    // 開過一次，之後兩次都是「已經在裡面」——只有一顆。
+    expect(events.filter((event) => event.type === 'plan/mode')).toEqual([
+      expect.objectContaining({ data: { active: true } }),
+    ]);
+  });
+
+  it('對照：同一個工作區不給 `--resume`，計劃模式是關的，也不講那一行', async () => {
+    await cli(['--workspace', workspace, '--session-log', logs], `/${PLAN_COMMAND_NAME}\n/exit\n`);
+    const { stdout } = await cli(['--workspace', workspace], `/${PLAN_COMMAND_NAME}\n/exit\n`);
+    expect(stdout).toContain(PLAN_ENTERED_MESSAGE);
+    expect(stdout).not.toContain(RESUMED_PLAN_MODE_NOTICE);
+  });
+
+  it('接回來的計劃模式是關的：不講那一行', async () => {
+    await cli(
+      ['--workspace', workspace, '--session-log', logs],
+      `/${PLAN_COMMAND_NAME}\n/${PLAN_COMMAND_NAME} off\n/exit\n`,
+    );
+    const runDir = join(logs, (await readdir(logs))[0]!);
+    const { stdout } = await cli(['--workspace', workspace, '--resume', runDir]);
+    expect(stdout).not.toContain(RESUMED_PLAN_MODE_NOTICE);
   });
 });
 
@@ -244,6 +313,114 @@ describe('讀不了的時候在什麼都還沒起來之前就講', () => {
 
   it('那個目錄裡沒有這份會話', async () => {
     await expect(cli(['--resume', logs])).rejects.toThrow(/裡沒有會話 "cli"/);
+  });
+});
+
+/**
+ * 寫租約的端到端那一半（鎖本身的行為在 `session-lease.test.ts`）：CLI 撞上別人握著時在
+ * 什麼都還沒起來之前就講，而且自己拋錯時不把鎖留在手上。
+ */
+describe('寫租約', () => {
+  it('另一個把手握著：擋下、檔案沒被動；它放了之後接得回來', async () => {
+    const runDir = await firstRun();
+    const holder = await openJsonlSessionStore({ directory: runDir }).resume('cli');
+    const log = join(runDir, 'cli.jsonl');
+    const before = await readFile(log, 'utf8');
+
+    await expect(cli(['--workspace', workspace, '--resume', runDir])).rejects.toThrow(
+      SessionAlreadyOwnedError,
+    );
+    expect(await readFile(log, 'utf8')).toBe(before);
+
+    await holder.stored.close();
+    await cli(['--workspace', workspace, '--resume', runDir]);
+  });
+
+  /**
+   * 續接在讀之前就拿了租約，要到日誌掛上之後才有人收。中間拋錯的話 CLI 行程退出、kernel
+   * 會放——但同一個行程裡緊接著再接一次，就會撞上自己沒放的鎖。
+   */
+  it('續接之後、日誌掛上之前拋錯：鎖放掉了，同一個行程馬上再接一次接得回來', async () => {
+    const runDir = await firstRun();
+    await expect(cli(['--resume', runDir])).rejects.toThrow(/--resume 要配 --workspace/);
+    const { stdout } = await cli(
+      ['--workspace', workspace, '--resume', runDir],
+      `/${SANDBOX_COMMAND_NAME}\n/exit\n`,
+    );
+    expect(stdout).toContain('read-only');
+  });
+});
+
+/**
+ * 組合一致：照 dsh 的 `ApiSessionCwdConflict`，**只抄得到 cwd 這一格**（理由在
+ * `ResumeCwdConflictError` 的註解）。
+ *
+ * 擋下的兩條都要斷言**檔案一個位元組都沒動**——擋在讀回之後、第一次寫之前，才是「什麼都
+ * 還沒起來」；晚一步的話 `session/end-seed` 已經寫進一份不屬於這個目錄的日誌。
+ */
+describe('屬於哪個目錄', () => {
+  /** run 目錄裡 root 那一份的兩個檔。 */
+  async function rootFiles(runDir: string) {
+    const entries = await readdir(runDir);
+    const header = entries.filter((name) => name.endsWith('.header.json'));
+    const log = entries.filter((name) => name.endsWith('.jsonl'));
+    expect(header).toHaveLength(1);
+    expect(log).toHaveLength(1);
+    return { header: join(runDir, header[0]!), log: join(runDir, log[0]!) };
+  }
+
+  it('換了目錄：擋下，訊息帶兩個目錄，檔案沒被動', async () => {
+    const runDir = await firstRun();
+    const { header, log } = await rootFiles(runDir);
+    // 前提：header 記的就是這個行程的目錄，不然下面那一條「換了」證不了什麼。
+    expect(JSON.parse(await readFile(header, 'utf8')).cwd).toBe(process.cwd());
+    const before = await readFile(log, 'utf8');
+
+    await expect(
+      cli(['--workspace', workspace, '--resume', runDir], '/exit\n', workspace),
+    ).rejects.toThrow(`屬於 ${process.cwd()}，不是 ${workspace}`);
+    expect(await readFile(log, 'utf8')).toBe(before);
+    // 擋下的時候續接那把租約已經拿了——比對要在清理的 try 裡面，同一個行程回到對的目錄
+    // 馬上再接一次才接得回來。
+    await cli(['--workspace', workspace, '--resume', runDir]);
+  });
+
+  it('header 沒記 cwd：一樣擋下，不猜', async () => {
+    const runDir = await firstRun();
+    const { header, log } = await rootFiles(runDir);
+    const { cwd: _dropped, ...rest } = JSON.parse(await readFile(header, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(header, JSON.stringify(rest));
+    const before = await readFile(log, 'utf8');
+
+    await expect(cli(['--workspace', workspace, '--resume', runDir])).rejects.toThrow(
+      /沒記下它屬於哪個目錄/,
+    );
+    expect(await readFile(log, 'utf8')).toBe(before);
+  });
+
+  /**
+   * **目錄先認，沙箱那道後判。** 換了目錄又沒給 `--workspace` 時兩道都會響，講的要是目錄：
+   * 目錄不對的話，日誌裡記的模式是哪一格都不該拿來判，「要配 --workspace」是一句誤導的指示。
+   */
+  it('換了目錄又沒給 `--workspace`：講的是目錄，不是 `--workspace`', async () => {
+    const runDir = await firstRun();
+    await expect(cli(['--resume', runDir], '/exit\n', workspace)).rejects.toThrow(
+      ResumeCwdConflictError,
+    );
+  });
+
+  /** 對照：明著給同一個目錄接得回來——證明上面那條擋的是目錄，不是「給了 cwd」這件事。 */
+  it('對照：同一個目錄明著給，接得回來', async () => {
+    const runDir = await firstRun();
+    const { stdout } = await cli(
+      ['--workspace', workspace, '--resume', runDir],
+      `/${SANDBOX_COMMAND_NAME}\n/exit\n`,
+      process.cwd(),
+    );
+    expect(stdout).toContain('read-only');
   });
 });
 

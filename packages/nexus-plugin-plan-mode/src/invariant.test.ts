@@ -1,5 +1,5 @@
 /**
- * `/plan` 的參數契約，**走真的 runner**。
+ * `/plan` 的參數契約與 `plan/mode` 的形狀，**走真的 runner**。
  *
  * 不直接呼叫 installer：那樣驗不到 `register()` 有沒有把包名接上、也驗不到違規會不會
  * 真的從 `onViolation` 出來。這個檔案要證明的是**這個配套入口不再是在掃空氣**——
@@ -118,5 +118,43 @@ describe('收不下的參數必須落定成 error', () => {
     run(log, 'cmd-2', '');
     done(log, 'cmd-2', 'success');
     expect(violations).toEqual([]);
+  });
+});
+
+/**
+ * `plan/mode` 的形狀，照 dsh 那一條：`active` 只收布林。
+ *
+ * **型別擋得住 `append`，擋不住從磁碟讀回來的那一份。** `--resume` 的 seed 是 `JSON.parse`
+ * 出來的純物件，一路到這裡型別什麼都沒保證——所以用一份帶 seed 的日誌驗，而且它是重播進來的。
+ */
+describe('plan/mode 只收布林', () => {
+  it('布林不報，兩個值都是', () => {
+    const { log, violations } = watched();
+    log.append('plan/mode', { active: true });
+    log.append('plan/mode', { active: false });
+    expect(violations).toEqual([]);
+  });
+
+  it('從 seed 讀回來的壞形狀報得出來，而且說得出是哪一顆', () => {
+    const seed = [{ type: 'plan/mode', seq: 0, time: 1, data: { active: 'yes' } }];
+    const log = new SessionLog('t', { seed: seed as never });
+
+    const registry = createRegistry();
+    const leave = registry.enter(origin);
+    createPlanModeInvariantPlugin().apply(registry);
+    leave();
+    const violations: string[] = [];
+    createInvariantRunner({
+      log,
+      companions: registry.invariants.companions(),
+      onViolation: (error: InvariantError) => violations.push(error.message),
+      warn: (message) => {
+        throw new Error(`檢查自己壞了：${message}`);
+      },
+    });
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toContain('seq 0');
+    expect(violations[0]).toContain('"yes"');
   });
 });

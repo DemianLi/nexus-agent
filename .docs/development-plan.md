@@ -85,6 +85,9 @@ registry.memory.addSource(path); // 純累加；路徑格式在註冊期擋（�
 **它自己帶著一筆標註過的偏離**：模式狀態走 middleware 的 `stateSchema` ＋ checkpointer，
 不走 dsh 的 `plan/mode` 會話事件 ＋ 純折疊 —— plugin 拿不到 `SessionLog`，而
 `SessionEventType` 是封閉 union（#101 已明文把「加會話事件種類」排除在包自有不變量之外）。
+**（2026-09-12 補：這筆偏離收回了。**「拿不到 `SessionLog`」後來證明是錯的，而日誌耐久化、
+有了讀方之後，留著它的代價是續接回來計劃模式會悄悄關掉——[#251](https://github.com/DemianLi/nexus-agent/issues/251)
+的第二刀把模式搬回 `plan/mode`。原文保留，因為下面 #118 那段的論證是以它為前提寫的。）
 
 （誠實的一句：`.agents/notes/rejected/` 底下**沒有**明文拒絕過自我批判的 note，
 所以能主張的是「它不存在、它做了別的」，不是「dsh 拒絕過」。）

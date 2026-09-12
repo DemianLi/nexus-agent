@@ -76,6 +76,9 @@ async function wire(plugins: readonly NexusPlugin[] = DEFAULT_PLUGINS): Promise<
         return undefined;
       },
       attachInvariants: built.attachInvariants,
+      // **參與者要接，跟 `serve.ts` 一樣。** 計劃模式住在會話日誌上（#251 的第二刀），
+      // 少了這一行 `/plan` 回的是「還沒接上」——那是替身的缺，不是產品的。
+      attachSession: built.attachSession,
     }),
   });
   const client = createWireClient({
@@ -122,9 +125,9 @@ describe('打得到 /plan', () => {
 
     await client.slashRun('t', `/${PLAN_COMMAND_NAME}`);
     const again = await client.slashRun('t', `/${PLAN_COMMAND_NAME}`);
-    // 一次請求一個執行器的話，plugin 那格 pending intent 也會是新的，這裡就會拿到
+    // 一次請求一個執行器的話，plugin 那一組會是新的、接的也不是同一份日誌，這裡就會拿到
     // 「開了」而不是「本來就開著」。**同一個方向按第二次是 noop，而 noop 是成功**
-    // （`/plan` 的三值裡沒有「已經那樣了所以算失敗」這一格），所以判準在 `text` 上。
+    // （`/plan` 的兩值裡沒有「已經那樣了所以算失敗」這一格），所以判準在 `text` 上。
     expect(again).toEqual({
       kind: 'success',
       command_id: expect.any(String),

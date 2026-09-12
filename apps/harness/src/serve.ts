@@ -21,9 +21,15 @@
  */
 
 import { parseArgs } from 'node:util';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { NexusPlugin, SessionLog, SessionRegistry } from '@nexus/core';
+import type {
+  NexusPlugin,
+  ResumedStoredSession,
+  SessionLog,
+  SessionRegistry,
+  SessionStore,
+} from '@nexus/core';
 import {
   DEFAULT_PLUGINS,
   createCliAgent,
@@ -33,8 +39,10 @@ import {
   loadPluginModule,
   resolveSessionLogDir,
 } from './cli.js';
-import { createJsonlSessionStore } from './jsonl-session-store.js';
-import { attachSessionPersistence } from '@nexus/core';
+import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
+import { attachSessionPersistence, SessionNotFoundError } from '@nexus/core';
+import { assertSameCwd } from './resume-guards.js';
+import { recordedSandboxMode } from './sandbox-mode.js';
 import { LIVE_MODEL_ID } from './live-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import type { SandboxMode } from './contained-backend.js';
@@ -140,6 +148,29 @@ export interface RunningServe {
 }
 
 /**
+ * 這條 thread 以前在這個會話根寫過的話接回來；沒寫過回 `undefined`，由呼叫端開新的。
+ *
+ * **只有「找不到」准退到新開**（{@link SessionNotFoundError}）。壞檔、版本太新、別的行程
+ * 握著都照拋：退到新開的話 `create` 會撞上已存的檔（`wx`），而那個失敗在協調器的背景路徑上
+ * 被收成一行 warn——那條 thread 的日誌就這樣沒了，而且沒有人看得到。
+ *
+ * @param store - 這個專案的會話根。
+ * @param threadId - 就是 root 會話的 id。
+ * @returns 讀回來的那份，或沒寫過時的 `undefined`。
+ */
+async function resumeThread(
+  store: SessionStore,
+  threadId: string,
+): Promise<ResumedStoredSession | undefined> {
+  try {
+    return await store.resume(threadId);
+  } catch (error: unknown) {
+    if (error instanceof SessionNotFoundError) return undefined;
+    throw error;
+  }
+}
+
+/**
  * 起一台 server。
  *
  * @returns 它的位址與收掉它的方法；`--help` 時回 undefined（只印用法）。
@@ -166,16 +197,39 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
       ? DEFAULT_PLUGINS
       : await loadPluginModule(invocation.pluginModule, options.cwd);
 
-  // **一個行程一個 store，不是一條 thread 一個。** store 開的是一個 run 目錄，thread
-  // 的日誌各自一個檔落在裡面；一條 thread 一個 store 會變成一條 thread 一個目錄，
-  // 而目錄名是時間戳加亂數，讀的人無從對回 thread。
+  // **會話根按目錄分，一個專案一格**——照 dsh 的 `projectDir(root, cwd)`
+  // （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 拍板的第 3 件）。一條
+  // thread 一個檔落在那一格裡，檔名就是 thread id，所以重開 server 之後同一條 thread 找得
+  // 回自己那一份。CLI 那條仍然每次開一個 run 目錄：它的 root 固定叫 `cli`，放在固定的
+  // 地方會每次都撞；serve 的 root 是 thread id，本來就全域唯一。subagent 那幾份的 id 是
+  // `<thread>/<LangGraph task id>`，而 task id 由當下那顆 checkpoint 的 id 算出來
+  // （`uuid5(…, checkpoint.id)`，checkpoint id 是帶時間與亂數的 `uuid6`），跨行程不會重複。
   const sessionStore =
-    sessionLogDir === undefined ? undefined : createJsonlSessionStore({ rootDir: sessionLogDir });
+    sessionLogDir === undefined
+      ? undefined
+      : openJsonlSessionStore({
+          directory: join(sessionLogDir, projectKey(cwd)),
+          // 後端講話（例如這個平台拿不到寫租約）走伺服器日誌，前綴同協調器那條。
+          warn: (message) => {
+            log(`[會話日誌] ${message}`);
+          },
+        });
 
   let telemetryDisclosed = false;
   const handler = createWireHandler({
     // 一個 thread 一個 agent——各自的 checkpointer、各自的虛擬檔案系統。
-    createAgent: async () => {
+    createAgent: async (threadId: string) => {
+      // **以前寫過就接回來**（照 dsh：碰到一個已存的 session id 就 resume，不另開）。續接在讀
+      // 之前就拿了寫租約，要到落盤接上之後才歸協調器收；這中間拋錯要先放掉，不然
+      // `wire-handler.ts` 說好的「下一次請求重試」會撞上自己上一次留下的租約。
+      const resumed =
+        sessionStore === undefined ? undefined : await resumeThread(sessionStore, threadId);
+      let handedOff = false;
+      const release = async (): Promise<void> => {
+        if (handedOff) return;
+        handedOff = true;
+        await resumed?.stored.close();
+      };
       // **第四與第五個引數都刻意不傳，而且理由不同。**
       //
       // 第四個（不變量違規往哪裡講）：這條路徑維持 `createInvariantRunner` 的預設
@@ -187,6 +241,27 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
       // 入口收不了核准決定，而 web 這端真的按得下去（[#79](https://github.com/DemianLi/nexus-agent/pull/79)
       // 的核准迴圈，`serve.test.ts` 的「核准那份清單」整條走過一遍）。關掉它會把一個
       // 做得出來的功能關掉（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
+      let built: Awaited<ReturnType<typeof createCliAgent>>;
+      try {
+        if (resumed !== undefined) assertSameCwd('serve', threadId, resumed.header, cwd);
+        // 同 CLI 的 `--resume`：模式從日誌來；日誌記著模式就表示上一次有 fence，這一次沒有
+        // `--workspace` 的話那道 fence 不在路徑上，接回來的 `read-only` 會靜靜蒸發。
+        const resumedSandbox =
+          resumed === undefined ? undefined : recordedSandboxMode(resumed.events);
+        if (resumedSandbox !== undefined && invocation.workspace === undefined) {
+          throw new Error(
+            `thread "${threadId}" 接不回來：上一次跑在 --workspace 底下（日誌記著沙箱模式 ` +
+              `${resumedSandbox}），這台 server 沒給 --workspace，那道 fence 不在路徑上，` +
+              `接回來的模式一個位元組都影響不到。`,
+          );
+        }
+        const effective =
+          resumedSandbox === undefined ? invocation : { ...invocation, sandbox: resumedSandbox };
+        built = await createCliAgent(effective, plugins, options.cwd);
+      } catch (error) {
+        await release().catch(() => {});
+        throw error;
+      }
       const {
         agent,
         commands,
@@ -195,7 +270,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         attachInvariants,
         attachSession,
         telemetrySharing,
-      } = await createCliAgent(invocation, plugins, options.cwd);
+      } = built;
       // **遙測披露印在這裡而不是啟動時，因為啟動的那一刻答案不存在**：`createAgent` 是
       // lazy 的（`wire-handler.ts` 的 `pumpFor` 第一次收到請求才呼叫），plugin 沒跑過
       // `apply` 就沒有人知道有沒有掛後端。在啟動時印「未配置」會是假的。一個 process
@@ -211,7 +286,13 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         // （[#123](https://github.com/DemianLi/nexus-agent/issues/123)）；發派面本身在
         // `wire-handler.ts` 的 `threadFor`，一條 thread 一個執行器。
         commands,
-        dispose,
+        // 落盤沒接上就被收掉（建 thread 途中失敗）的話，續接那個把手還在這裡，要自己放。
+        dispose: async () => {
+          // 放不掉不該擋住收 agent——它底下可能有子行程。
+          await release().catch(() => {});
+          await dispose();
+        },
+        ...(resumed !== undefined && { rootSeed: resumed.events }),
         attachTelemetry,
         attachInvariants,
         attachSession,
@@ -230,15 +311,24 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         ...(sessionStore === undefined
           ? {}
           : {
-              attachPersistence: (sessions: SessionRegistry) =>
-                attachSessionPersistence(sessions, sessionStore, {
+              attachPersistence: (sessions: SessionRegistry) => {
+                const persistence = attachSessionPersistence(sessions, sessionStore, {
                   cwd,
+                  // 續接：root 那一份往原檔續寫，只寫還沒存的後綴（第一筆就是 `session/end-seed`）。
+                  ...(resumed !== undefined && {
+                    resumedRoot: { stored: resumed.stored, storedCount: resumed.events.length },
+                  }),
                   // CLI 那條走 `Printer` 是為了前綴分得出誰在講話；這裡沒有那個問題，
                   // 伺服器日誌本來就沒有跟誰搶終端機（同不變量那條的理由）。
                   warn: (message) => {
                     log(`[會話日誌] ${message}`);
                   },
-                }),
+                });
+                // **協調器真的接上之後**，續接那個把手才歸它收（它的 `dispose` 會關）。先設的話，這一步
+                // 拋錯時旗標已經說「交出去了」，`release()` 變成 no-op，租約留到行程結束。
+                handedOff = true;
+                return persistence;
+              },
             }),
       };
     },
