@@ -92,6 +92,7 @@ thread id 是呼叫端給的，所以編碼必須是單射的，不然兩條 thr
 往同一個檔續寫。**回來的是住在日誌上的那一半**：沙箱模式、目標（授權打回 disarmed，要
 `/goal resume` 才會再往下走）、todo 與計劃模式（上一次開著，接回來還開著）。**對話從頭開始**
 ——訊息住在 checkpointer 裡，那扇門不開（[#251](https://github.com/DemianLi/nexus-agent/issues/251)）。
+要在上一次的同一個目錄底下接——header 記著那份會話屬於哪個目錄，對不上就擋（同 dsh）。
 它不能配 `--sandbox`（模式從日誌來，要換就接起來之後 `/sandbox`）或 `--session-log`（就寫回
 那個目錄）。**兩個行程同時接同一個目錄會撞號**——我們沒有 dsh 那道寫租約。
 

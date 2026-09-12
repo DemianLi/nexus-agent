@@ -170,7 +170,8 @@ export const USAGE = `用法：cli [選項] [要說的話...]
   --session-log <dir>  把會話日誌寫進這個目錄底下（省略即不落盤）
                        它不能在 --workspace 底下：日誌是基礎建設，不是 agent 的工作區
   --resume <run 目錄>  接著上一次 --session-log 寫出來的那個 run 目錄跑下去：
-                       沙箱模式、目標與 todo 照日誌回來，對話從空的開始
+                       沙箱模式、目標、todo 與計劃模式照日誌回來，對話從空的開始
+                       要在上一次的同一個目錄底下接（日誌記著它屬於哪個目錄）
                        不能配 --sandbox（模式從日誌來）或 --session-log（就寫回那個目錄）
   --goal-driver        一個 active 的目標沒達成時自己再開一輪（預設關）
   --max-goal-rounds <n>
@@ -370,6 +371,41 @@ export function resolveResumeDir(
 ): string | undefined {
   if (invocation.resume === undefined) return undefined;
   return outsideWorkspace(invocation.resume, invocation.workspace, cwd, '--resume');
+}
+
+/**
+ * 續接的那份會話屬於另一個目錄——照 dsh 的 `ApiSessionCwdConflict`
+ * （`packages/api/session-controller/src/agent.ts`，SHA `c291e79`）。
+ *
+ * dsh 的會話**按目錄歸屬**：header 的 `cwd` 是建立當下的事實，採用一份已存會話之前先比，
+ * 對不上就拒；**沒記 `cwd` 的也拒**，不猜。這是 [#251](https://github.com/DemianLi/nexus-agent/issues/251)
+ * 「組合一致」那一件的全部：dsh 在 preset 那一格的規則是「照存的組回來」，而我們沒有 preset
+ * ——每個旗標每次都是明著的請求，「照存的組回來」表達不出來，「不符就拒」又會是一條偏離，
+ * 所以只抄得到 `cwd` 這一格。
+ *
+ * 我們這側還多一個後果：`--workspace`、`--plugins` 都照 cwd 解析，換了目錄接回來，同一串
+ * 旗標指到的就不是同一個地方。
+ */
+export class ResumeCwdConflictError extends Error {
+  override readonly name = 'ResumeCwdConflictError';
+
+  /**
+   * @param sessionId - 要續接的那份會話。
+   * @param requestedCwd - 這一次的工作目錄。
+   * @param existingCwd - header 記的那個，沒記就是 `undefined`。
+   */
+  constructor(
+    readonly sessionId: string,
+    readonly requestedCwd: string,
+    readonly existingCwd: string | undefined,
+  ) {
+    super(
+      existingCwd === undefined
+        ? `--resume 接不回來：會話 "${sessionId}" 沒記下它屬於哪個目錄，不能接到 ${requestedCwd}。`
+        : `--resume 接不回來：會話 "${sessionId}" 屬於 ${existingCwd}，不是 ${requestedCwd}。` +
+            `回到那個目錄再接。`,
+    );
+  }
 }
 
 /** 兩個日誌目錄旗標共用的那道檢查。**一份**，理由同 {@link resolveSessionLogDir} 的呼叫端。 */
@@ -1221,6 +1257,12 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   const resumeStore =
     resumeDir === undefined ? undefined : openJsonlSessionStore({ directory: resumeDir });
   const resumed = resumeStore === undefined ? undefined : await resumeStore.resume(THREAD_ID);
+  // **先認它屬於哪個目錄**（見 {@link ResumeCwdConflictError}）。排在沙箱那道檢查前面：
+  // 目錄不對的話，日誌裡記的是哪一格都不該拿來判。讀回來還沒寫過任何一筆，檔案原封不動。
+  const resumeCwd = options.cwd ?? process.cwd();
+  if (resumed !== undefined && resumed.header.cwd !== resumeCwd) {
+    throw new ResumeCwdConflictError(THREAD_ID, resumeCwd, resumed.header.cwd);
+  }
   // 模式從日誌來；那一次跑沒有 fence（一顆 `sandbox/mode` 都沒有）就照常從預設起算。
   // `--sandbox` 在這條路上已經被 `parseCliArgs` 擋掉，所以這裡不會蓋掉任何人給的值。
   const resumedSandbox = resumed === undefined ? undefined : recordedSandboxMode(resumed.events);
