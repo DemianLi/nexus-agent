@@ -480,6 +480,9 @@ describe('什麼推得動 roundsStarted', () => {
     // `tool/call`／`tool/result`（[#264](https://github.com/DemianLi/nexus-agent/issues/264)）：
     // 不推，理由同 `model/usage` 而且更直接——一輪裡叫幾次工具，是 `recursionLimit` 在管的
     // 那件事，一輪可以叫幾十次。讓它去推輪次，`maxGoalRounds` 就變成工具呼叫次數的上限。
+    //
+    // `model/start`／`model/end`（[#266](https://github.com/DemianLi/nexus-agent/issues/266)）：
+    // 不推，同 `model/usage`——一輪叫幾次模型不是輪次。
     const KNOWN = [
       'turn/start',
       'turn/end',
@@ -490,6 +493,8 @@ describe('什麼推得動 roundsStarted', () => {
       'goal/change',
       'todo/write',
       'model/usage',
+      'model/start',
+      'model/end',
       'compaction/summary',
       'sandbox/mode',
       'plan/mode',

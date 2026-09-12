@@ -164,6 +164,9 @@ describe('同名取代是唯一的縫', () => {
         'nexusApprovalGate',
         'nexusFileObservationPolicy',
         'nexusRepeatToolReminder',
+        // 模型呼叫的起訖（#266）。它原本要排在摘要器外層，而摘要器原地取代回第三格——
+        // 這一條就是「表達不出來」的證據，見 `model-calls.ts` 的偏離那一節。
+        'nexusModelCallEvents',
         'nexusModelUsage',
       ]);
 

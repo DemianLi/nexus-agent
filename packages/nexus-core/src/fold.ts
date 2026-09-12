@@ -29,6 +29,7 @@ import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
 import type { PluginRegistry } from './registry.js';
+import { createModelCallRecorder } from './model-calls.js';
 import { createModelUsageRecorder } from './model-usage.js';
 import { createRepeatReminder, resolveRepeatReminderSettings } from './repeat-reminder.js';
 import type { RepeatReminderSettings } from './repeat-reminder.js';
@@ -282,6 +283,8 @@ export function foldRegistry(
   const repeatReminder = foldRepeatReminder(options);
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./model-usage.ts}。
   const modelUsage = createModelUsageRecorder(registry.sessions);
+  // 同上，無狀態、一份走遍。位置緊貼用量記錄器，理由見 {@link ./model-calls.ts}。
+  const modelCalls = createModelCallRecorder(registry.sessions);
   // **backend 提前折**：策略要的版本 token 得從工具實際讀寫的那一個取，所以它不能等到
   // 下面才算。摘要器刻意拿的是兜底那個，兩者的差別見各自的文件。
   const backend = foldBackend(registry, options.defaultBackend);
@@ -298,6 +301,7 @@ export function foldRegistry(
       summarizer,
       repeatReminder,
       modelUsage,
+      modelCalls,
     }),
     middleware: foldMiddleware(
       registry,
@@ -307,6 +311,7 @@ export function foldRegistry(
       summarizer?.(),
       repeatReminder,
       modelUsage,
+      modelCalls,
     ),
   };
 
@@ -593,6 +598,7 @@ function foldMiddleware(
   summarizer: AgentMiddleware | undefined,
   repeatReminder: AgentMiddleware | undefined,
   modelUsage: AgentMiddleware,
+  modelCalls: AgentMiddleware,
 ): AgentMiddleware[] {
   const entries = registry.middleware.list();
   return [
@@ -602,6 +608,9 @@ function foldMiddleware(
     ...(observationPolicy === undefined ? [] : [observationPolicy]),
     ...(summarizer === undefined ? [] : [summarizer]),
     ...(repeatReminder === undefined ? [] : [repeatReminder]),
+    // 起訖排在用量外層、plugin middleware 外層：一個自己重試模型的 plugin，重試幾次都只算
+    // 一步——同 dsh 的 `llm/retry` 在一步之內。摘要器不管排哪都在它外面，見 `model-calls.ts`。
+    modelCalls,
     modelUsage,
     ...entries.filter((entry) => !entry.value.prepend).map((entry) => entry.value.middleware),
   ];
@@ -757,6 +766,7 @@ function foldSubAgents(
     summarizer: (() => AgentMiddleware) | undefined;
     repeatReminder: AgentMiddleware | undefined;
     modelUsage: AgentMiddleware;
+    modelCalls: AgentMiddleware;
   },
 ): SubAgent[] {
   const folded: SubAgent[] = [];
@@ -831,6 +841,8 @@ function foldSubAgents(
         ...(context.observationPolicy === undefined ? [] : [context.observationPolicy()]),
         ...(context.summarizer === undefined ? [] : [context.summarizer()]),
         ...(context.repeatReminder === undefined ? [] : [context.repeatReminder]),
+        // 模型呼叫的起訖同用量記錄器那條理由打底、共用一份，位置同 root。
+        context.modelCalls,
         context.modelUsage,
         ...(spec.middleware ?? []),
       ],

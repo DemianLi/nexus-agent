@@ -256,10 +256,11 @@ describe('輪的擁有者是進入點，不是工具', () => {
    * 而日誌的價值來自它記的是量到的東西。
    */
   it('工具往 subagent 的日誌寫 turn 事件，核心配套入口會報——而那是對的', async () => {
-    // seq 0 是那次工具呼叫自己的 `tool/call`（#264），工具在 handler 裡寫的那顆落在它後面。
-    // **只報這一條**：工具事件的 callId 配對在這份沒有輪的日誌上一句話都不說。
+    // seq 0、1 是叫出這次工具的那次模型呼叫的起訖（#266），seq 2 是工具呼叫自己的
+    // `tool/call`（#264），工具在 handler 裡寫的那顆落在它後面。**只報這一條**：模型起訖與
+    // 工具事件的配對在這份沒有輪的日誌上一句話都不說。
     expect(await violationsFrom(boundaryPlugin(true), WRITE_TURN)).toEqual([
-      'invariant violated by "@nexus/core": turn/failed（seq 1）關了一個沒有開著的輪',
+      'invariant violated by "@nexus/core": turn/failed（seq 3）關了一個沒有開著的輪',
     ]);
   });
 });

@@ -81,8 +81,14 @@ import type { SessionEvent } from './session-log.js';
  * 工具呼叫與它的結果進日誌（[#264](https://github.com/DemianLi/nexus-agent/issues/264)）。
  * v4 的檔直接讀：一顆工具事件都沒有的日誌，就是 v4 那時候寫出來的樣子——沒有任何讀方拿
  * 「沒有工具事件」推論什麼。
+ *
+ * ## 6：`model/start`／`model/end`
+ *
+ * 模型呼叫的起訖進日誌，會話統計拿它數步數（[#266](https://github.com/DemianLi/nexus-agent/issues/266)）。
+ * v5 的檔直接讀：一顆都沒有的日誌折出來的步數是 0——**那是「沒記」不是「沒叫」**，讀舊檔的
+ * 統計要照格式版本表態，不能把 0 當成真的沒叫過模型。
  */
-export const SESSION_LOG_FORMAT_VERSION = 5;
+export const SESSION_LOG_FORMAT_VERSION = 6;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。
