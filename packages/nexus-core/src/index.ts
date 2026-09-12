@@ -143,6 +143,8 @@ export {
   GOAL_WRAPUP_MARKER,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
+  repeatCallKey,
+  repeatReminderTracks,
   resolveRepeatReminderSettings,
 } from './repeat-reminder.js';
 export type {
