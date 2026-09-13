@@ -164,6 +164,9 @@ export type SandboxModeSource = () => SandboxMode;
  *
  * 對不上的方向照舊是不認領、照常被擋；**但不消費**，模型照指引原樣重試還拿得到它。代價是
  * 模型修正內容之後要重新升級。
+ *
+ * 比的是**送進 fence 的那一份**，不是工具參數：`submit_record` 送進來的是 append 之後的整份
+ * CSV，所以同一筆紀錄在檔案中途被改過時也對不上，要重新升級——fail-closed 的方向。
  */
 export interface SandboxGrant {
   /** 核准來的模式，**只套用在消費它的那一次變更上**。 */
@@ -183,11 +186,12 @@ export interface SandboxGrant {
  * 留摘要不留原文：這一格住在記憶體裡、只拿來比「重試是不是同一次」，用不到內容本身。
  */
 export interface SandboxDenial {
-  /** 被擋下的操作。 */
-  readonly operation: 'write' | 'edit' | 'delete';
   /** canonicalize 之後的絕對路徑。 */
   readonly target: string;
-  /** 這一次變更的參數（`write` 的內容；`edit` 的舊字串、新字串與是否全部取代）的 sha256。 */
+  /**
+   * 操作名連同這一次的參數（`write` 的內容；`edit` 的舊字串、新字串與是否全部取代）的
+   * sha256。**操作名在摘要裡**，所以同一個檔上被擋的 `write` 與 `delete` 不會是同一次。
+   */
   readonly digest: string;
 }
 
@@ -206,22 +210,20 @@ type GrantClaim =
   | { readonly kind: 'none' };
 
 /**
- * 一次變更的參數摘要。
+ * 一次變更的摘要。
+ * @param operation - 操作名。
  * @param payload - 這一次變更除了路徑以外的參數，依方法簽章的順序。
  * @returns sha256 的十六進位字串。
  */
-function digestOf(payload: readonly unknown[]): string {
-  return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+function digestOf(operation: string, payload: readonly unknown[]): string {
+  return createHash('sha256')
+    .update(JSON.stringify([operation, ...payload]))
+    .digest('hex');
 }
 
 /** 兩次被擋下的變更是不是同一次。 */
 function sameDenial(bound: SandboxDenial | undefined, call: SandboxDenial): boolean {
-  return (
-    bound !== undefined &&
-    bound.operation === call.operation &&
-    bound.target === call.target &&
-    bound.digest === call.digest
-  );
+  return bound !== undefined && bound.target === call.target && bound.digest === call.digest;
 }
 
 /**
@@ -424,7 +426,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     // `~` 與 `..` 沒有 canonical 目標：記不下這一次，也認領不到任何 grant（見 canonicalTarget）。
     const target = await this.canonicalTarget(filePath);
     if (target === undefined) return this.withHint(first);
-    const denial: SandboxDenial = { operation, target, digest: digestOf(payload) };
+    const denial: SandboxDenial = { target, digest: digestOf(operation, payload) };
 
     const claim = await this.claimGrant(denial);
     if (claim.kind === 'granted') {
@@ -432,6 +434,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       // 呼叫上，拒絕標記印的也是那一格。還是被擋的話 grant 照樣用掉了，同 dsh：它屬於這一次。
       const second = await this.verdict(claim.mode, filePath, operation);
       if (typeof second === 'string') return second;
+      // 再記一次同一顆：grant 已經用掉，模型要升到更寬那格就得再叫一次升級、再問一次人，
+      // 那顆新 grant 綁的還是這一次。不會空轉——每一輪都要人按。
       grants.recordDenial(denial);
       return this.withHint(second);
     }
