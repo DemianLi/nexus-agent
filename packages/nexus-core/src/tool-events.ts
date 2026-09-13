@@ -14,7 +14,8 @@
  *
  * ## 碼怎麼從內層走到外層
  *
- * 內層（輸出 schema 校驗、觀測政策的 `FS_*` 拒絕、`ask_user_question` 的放棄，以及 goal、
+ * 內層（輸出 schema 校驗、觀測政策的 `FS_*` 拒絕、`ask_user_question` 的放棄、基座檔案工具
+ * 的失敗——fence 擋的那條帶 `FS_SANDBOX_DENIED`，見 {@link ./fs-tool-errors.ts}——以及 goal、
  * todo、計劃模式、root-only 樁那些「這次呼叫沒有生效」的拒絕，見 {@link toolRefusal}）自己產一則
  * `status: 'error'` 的 ToolMessage，
  * 那則訊息原樣一路回到圍堵。碼**不能寫進訊息本身**：`additional_kwargs` 在轉成供應商格式時

@@ -336,6 +336,7 @@ describe('照格式版本表態', () => {
 
   it('#273 之前的拒絕記成成功這件事，每次都印在報表底下', () => {
     expect(formatScanReport([], [], { threshold: 5 }).join('\n')).toContain('#273');
+    expect(formatScanReport([], [], { threshold: 5 }).join('\n')).toContain('#293');
   });
 
   it('base 底下的印相對路徑，外面的照印絕對路徑', () => {
