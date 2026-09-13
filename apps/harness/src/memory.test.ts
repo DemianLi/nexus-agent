@@ -152,9 +152,8 @@ describe('記憶進到 system prompt', () => {
  * `buildSubagentMiddleware(input, isForkable)` 只在 `isForkable` 為真時把 root 的 memory
  * middleware 併進去，而 `SubAgent` 定義上沒有 `memory` 欄位可以自帶
  * （`createSubagentDefaultMiddleware` 有 `input.skills` 分支，沒有對應的 memory 分支）。
- * 內建的 general-purpose subagent 也一樣拿不到：它走 `normalizeSubagentSpec`
- * （`isForkable` 為 false），而它那次 `mergeMiddlewareStack` 帶 `{ appendNew: false }`
- * ——連從 `middleware` 參數塞一個同名的進去都會被丟掉。
+ * general-purpose subagent 也一樣拿不到：它由 `foldRegistry` 註冊成一般的 subagent，走
+ * `normalizeSubagentSpec`（`isForkable` 為 false）。
  *
  * 也就是「subagent 也有記憶」在 1.13.1 上沒有任何公開介面做得到。這是基座的邊界，
  * 跟 `feat/summarization-tuning` 記的「root 換掉不影響 subagent」是同一種邊界。

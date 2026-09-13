@@ -17,14 +17,12 @@
  * `@nexus/plugin-quickjs` 與 `@nexus/plugin-mcp` 的先例：**重的相依歸 plugin 自己，
  * `@nexus/core` 保持輕**。
  *
- * ## 三條偏離（AGENTS.md 的偏離規則）
+ * ## 四條偏離（AGENTS.md 的偏離規則）
  *
- * **一、`FEEDBACK_ONLY` 沒有來源。** dsh 那個 mode 靠 `feedback/record` 這個 session
- * 事件驅動（`dsh-command-feedback` 的 `/feedback` 指令），協調器在 on-demand 模式下
- * 只在收到它時補送到那個 `seq` 為止。**nexus 沒有 feedback 子系統，`SessionEventMap`
- * 裡也沒有那個事件種類**，所以這裡只出 `full` 與 `disabled`。`'feedback-only'` 仍在
- * seam 的披露字彙裡（那是 seam 的字彙不是這裡的），只是沒有 mode 產得出它。
- * **來源不存在，不是省略。**
+ * **一、預設是 `disabled`，dsh 是 `FEEDBACK_ONLY`。**
+ * （[#279](https://github.com/DemianLi/nexus-agent/issues/279) 拍板）往少送那一邊偏，同偏離二；
+ * 而且 `feedback-only` 要 `exporter.url`，預設成它的話，什麼都沒給的 `createTelemetryOtelPlugin()`
+ * 會從靜靜關閉變成當場拋。
  *
  * **二、Resource 上沒有 `user.id`。** dsh 放 `getOrCreateAnonymousUserId()`
  * （`dsh-anonymous-user-id`，存在 `~/.dsh`）。nexus 沒有那個套件、也沒有 harness home
@@ -36,6 +34,13 @@
  * ——`NexusPlugin` 的形狀是 `apply(registry)`，設定從工廠函式的參數進來。退到最接近的：
  * **四條值檢查照抄進工廠函式**，訊息一樣指名欄位。兩個 SDK 選項物件照 dsh 原樣轉交、
  * 不重新宣告——重宣告會靜靜吃掉所有沒被抄到的欄位。
+ *
+ * **四、`feedback-only` 只在回饋時送，這件事不住在這裡。** dsh 的後端在自己的建構子裡組一個
+ * on-demand 協調器、聽到回饋就補送，`emit` 則把直接送來的記錄丟掉；`DISABLED` 收到回饋時也是
+ * 它自己講一聲。我們的協調器從 [#89](https://github.com/DemianLi/nexus-agent/issues/89) 起由組裝點
+ * 組（`agent-factory.ts` 的 `attachTelemetry`，理由見下面 `createTelemetryOtelPlugin` 的說明），
+ * 所以這兩件跟著協調器住在那裡，讀的是這裡說出去的 `sharing`。這個後端收到的因此只有該送的，
+ * `emit` 不必分 mode。
  *
  * @module @nexus/plugin-telemetry-otel
  */
@@ -64,13 +69,15 @@ const OPS_SCOPE = '@nexus/plugin-telemetry-otel/ops';
 const SCOPE_VERSION = '0.0.0';
 
 /**
- * 共享策略，**只有兩個**。
+ * 共享策略。三個字跟 seam 的 `SessionTelemetrySharingStatus` 同一組，`sharing` 直接等於它。
  *
- * `'feedback-only'` 不在這裡——見模組說明的偏離一。
+ * - `full`：每一筆會話事件都送。
+ * - `feedback-only`：人送出回饋時，把日誌補送到那一顆；其餘時候一筆都不送（見模組說明的偏離四）。
+ * - `disabled`：一筆都不送，連 SDK 都不建。
  */
-export type TelemetryMode = 'full' | 'disabled';
+export type TelemetryMode = 'full' | 'feedback-only' | 'disabled';
 
-/** 省略即關閉。**預設要是不送的那一個**，跟 dsh 的 `DEFAULT_TELEMETRY_MODE` 同一條。 */
+/** 省略即關閉。**預設要是不送的那一個**；dsh 預設 `FEEDBACK_ONLY`，這裡不跟，見模組說明的偏離一。 */
 export const DEFAULT_TELEMETRY_MODE: TelemetryMode = 'disabled';
 
 /** SDK 完整關機流程的外層預設寬限。 */

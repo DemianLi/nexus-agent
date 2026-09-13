@@ -49,9 +49,8 @@ export interface MemoryPluginOptions {
  * （`buildSubagentMiddleware(input, isForkable)`）只在 `isForkable` 為真時才把 root 的
  * memory middleware 併進去，而 `SubAgent` 定義上**沒有 `memory` 欄位**可以自帶
  * ——`createSubagentDefaultMiddleware` 有處理 `input.skills`，沒有對應的 memory 分支。
- * 連內建的 general-purpose subagent 也拿不到：它走 `normalizeSubagentSpec`
- * （`isForkable` 為 false），而它那次 `mergeMiddlewareStack` 帶 `{ appendNew: false }`，
- * 所以連從 `middleware` 參數塞一個同名的進去都會被丟掉。
+ * general-purpose subagent 也拿不到：它由 `foldRegistry` 註冊成一般的 subagent，走
+ * `normalizeSubagentSpec`（`isForkable` 為 false）。基座自己補的那份也一樣拿不到。
  *
  * 也就是說「subagent 也有記憶」在 1.13.1 上**沒有任何公開介面可以做到**（`mode: 'fork'`
  * 的 subagent 除外）。這是基座的邊界，不是這裡漏寫；`apps/harness` 有一條絆索測試釘著它，

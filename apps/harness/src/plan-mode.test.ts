@@ -348,12 +348,14 @@ describe('exit_plan_mode 的三條路', () => {
    */
   it('模式外呼叫 → 說的是「不在計劃模式」，不是核准的措辭', async () => {
     const model = planScript();
-    const { agent, dispose } = await createNexusAgent({
+    const { agent, attachSession, dispose } = await createNexusAgent({
       model,
       checkpointer: new MemorySaver(),
       approvals: HEADLESS_APPROVALS,
       plugins: [createPlanModePlugin()],
     });
+    const sessions = new SessionRegistry('not-in-mode');
+    const detach = attachSession(sessions);
 
     let result;
     try {
@@ -361,12 +363,18 @@ describe('exit_plan_mode 的三條路', () => {
         configurable: { thread_id: 'not-in-mode' },
       });
     } finally {
+      detach();
       await dispose();
     }
 
     const refusal = lastToolMessage(result.messages as BaseMessage[]);
     expect(refusal?.text).toContain(NOT_IN_PLAN_MODE_MESSAGE);
     expect(refusal?.text).not.toContain('是沒有人被問到');
+    // **日誌上記的是錯誤、不帶碼**（#273）：模式外 dsh 拋的是一般 `Error`。這是 middleware
+    // 自己回結果、不往下叫的那條路，所以圍堵讀的是 middleware 那則訊息。
+    expect(
+      sessions.root.events.flatMap((event) => (event.type === 'tool/result' ? [event.data] : [])),
+    ).toEqual([{ callId: expect.any(String), isError: true }]);
   });
 });
 

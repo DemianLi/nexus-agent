@@ -44,6 +44,7 @@ import {
   createSessionRunner,
   foldRegistry,
   formatOrigin,
+  isFeedbackEvent,
   loadPlugins,
   SessionTelemetryCoordinator,
   type AgentCheckpointer,
@@ -54,6 +55,7 @@ import {
   type InvariantSelection,
   type NexusPlugin,
   type PluginRegistry,
+  type SessionLog,
   type SessionRegistry,
   type SessionTelemetrySharingStatus,
   type RepeatReminderSettings,
@@ -382,7 +384,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
 
     // 接上去但還沒收掉的協調器。**組裝點自己記著**，因為呼叫端可能只叫 `dispose()`
     // 就走人——那時 `shutdown` 標記與後端的排空都還沒發生，遙測會少掉最後一段。
-    const attached = new Set<SessionTelemetryCoordinator>();
+    const attached = new Set<TelemetryAttachment>();
     return {
       agent,
       /**
@@ -393,6 +395,11 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * 當場拋。所以這裡沒有「組裝後偷偷加命令」這條路。
        */
       commands: registry.commands,
+      /**
+       * 評分與評語的規則，**沒掛時是 `undefined`**。讀它的是 web 的 wire-handler：評分沒有模型
+       * 那一側，所以它跟 `commands` 一樣從組裝點交出去（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。
+       */
+      feedback: registry.feedback.service()?.value,
       /**
        * 掛著的遙測服務說的共享策略，**沒掛任何東西時是 `undefined`**。
        *
@@ -410,13 +417,20 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * （`packages/session/session-telemetry/src/coordinator.ts` 檔頭），per-session 的
        * 狀態掛在以 session 為鍵的 `WeakMap` 上。subagent 的日誌因此不必有人記得重接。
        *
+       * **怎麼捕獲由後端說的共享策略決定**（[#279](https://github.com/DemianLi/nexus-agent/issues/279)）：
+       * `feedback-only` 是 on-demand，只在人送出回饋時補送（{@link watchFeedback}）；其餘是 live。
+       * dsh 把這一段放在 OTel 後端自己的建構子裡（它的後端自己組協調器）；我們的協調器從
+       * [#89](https://github.com/DemianLi/nexus-agent/issues/89) 起就在這裡組，plugin 碰不到日誌，所以
+       * 策略跟著協調器住在這裡。協調器本身照舊不讀 `sharing`。
+       *
        * @param sessions - 這次組裝的會話註冊表。
        * @returns 收掉這一次接線的函式，或沒掛後端時的 `undefined`。
        */
       attachTelemetry(sessions: SessionRegistry): (() => Promise<void>) | undefined {
         const mounted = registry.telemetry.service();
         if (mounted === undefined) return undefined;
-        const mine = new Set<SessionTelemetryCoordinator>();
+        const { sharing } = mounted.value;
+        const mine = new Set<TelemetryAttachment>();
         const unobserve = sessions.observe(({ log }) => {
           const coordinator = new SessionTelemetryCoordinator({
             log,
@@ -424,16 +438,26 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
             // 現讀而不是快照：`rules()` 每次捕獲都重新問一遍，補送歷史時套的是**現在**
             // 掛著的策略。這是 dsh waterfall 的語意，折疊要接得住。
             rules: () => registry.telemetry.rules(),
+            capture: sharing === 'feedback-only' ? 'on-demand' : 'live',
           });
-          attached.add(coordinator);
-          mine.add(coordinator);
+          const unwatch = watchFeedback(log, sharing, coordinator);
+          // 退訂跟協調器綁成一個：組裝整個收掉時（下面的 `dispose`）只知道逐個收，
+          // 分開記的話觸發器會留下來，對一個關掉的後端補送。
+          const attachment: TelemetryAttachment = {
+            dispose: async () => {
+              unwatch();
+              await coordinator.dispose();
+            },
+          };
+          attached.add(attachment);
+          mine.add(attachment);
         });
         return async () => {
           unobserve();
-          for (const coordinator of [...mine]) {
-            mine.delete(coordinator);
-            attached.delete(coordinator);
-            await coordinator.dispose();
+          for (const attachment of [...mine]) {
+            mine.delete(attachment);
+            attached.delete(attachment);
+            await attachment.dispose();
           }
         };
       },
@@ -514,9 +538,9 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       async dispose() {
         // 遙測先收：後端很可能是某個 plugin 開的，plugin 的 disposer 一跑它就沒了，
         // 那時再送 `shutdown` 標記等於送進一個已經關掉的東西。
-        for (const coordinator of [...attached]) {
-          attached.delete(coordinator);
-          await coordinator.dispose();
+        for (const attachment of [...attached]) {
+          attached.delete(attachment);
+          await attachment.dispose();
         }
         await dispose();
       },
@@ -526,6 +550,49 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     await dispose().catch(() => {});
     throw error;
   }
+}
+
+/** 一份日誌的遙測接線：協調器，加上 `feedback-only`／`disabled` 那個看回饋的訂閱。 */
+interface TelemetryAttachment {
+  dispose(): Promise<void>;
+}
+
+/** 策略是關閉時收到回饋講的那一句。dsh 的 `DISABLED_FEEDBACK_WARNING` 翻過來。 */
+export const DISABLED_FEEDBACK_WARNING = '遙測：策略是關閉，這則回饋不會經遙測送出去。';
+
+/**
+ * 共享策略裡跟回饋有關的兩格，照 dsh 的 OTel 後端
+ * （`packages/session/session-telemetry-otel/src/index.ts:160-164,236-248`，`c291e79`）：
+ *
+ * - `feedback-only`：每收到一顆回饋（{@link isFeedbackEvent}），就把日誌從上次交到的地方補送到
+ *   現在。第一次是整份——前面的輪、續接帶進來的歷史都在內，照 dsh 的 `includeHistory: true`。
+ * - `disabled`：收到回饋時講一聲，這則不會經遙測出去。
+ * - `full` 本來就每顆都送，不用看。
+ *
+ * **用 `log.subscribe`，不用 `SessionSubject.observe`**：後者一接上就把日誌重播一遍，而續接回來的
+ * 日誌裡可能本來就有上一個行程的回饋——重播到它，就等於在接上的當下把整份歷史送出去，這一次
+ * 沒有人按過送出。
+ *
+ * **補送沒有上界**，dsh 的 `captureSession` 有（`throughSeq`）。這裡省掉，靠的是 `subscribe`
+ * 在 append 之後同步叫：listener 跑的當下日誌剛好到那一顆回饋。除非另一個訂閱者在同一次通知裡
+ * 又寫了一顆，今天沒有這種寫者。
+ *
+ * @param log - 這一份會話日誌。
+ * @param sharing - 掛著的後端說的策略。
+ * @param coordinator - 這一份日誌的協調器，`feedback-only` 時是 on-demand。
+ * @returns 退訂；`full` 沒有訂閱，回 no-op。
+ */
+function watchFeedback(
+  log: SessionLog,
+  sharing: SessionTelemetrySharingStatus,
+  coordinator: SessionTelemetryCoordinator,
+): () => void {
+  if (sharing === 'full') return () => {};
+  return log.subscribe((event) => {
+    if (!isFeedbackEvent(event)) return;
+    if (sharing === 'feedback-only') coordinator.captureNow();
+    else console.warn(DISABLED_FEEDBACK_WARNING);
+  });
 }
 
 /**

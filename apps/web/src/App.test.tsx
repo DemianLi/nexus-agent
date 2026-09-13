@@ -82,6 +82,16 @@ function textFrames(id: string, namespace: readonly string[], body: string): Eve
   ];
 }
 
+/**
+ * 回饋那三個 method 在這一檔裡一律「收不了」。**評分的畫面驗在 `feedback-ui.test.tsx`**；這裡的測試
+ * 不碰它們，碰到就是測試寫錯了，所以回拒絕而不是回成功。
+ */
+const UNWIRED_FEEDBACK: Pick<WireClient, 'feedbackPut' | 'feedbackDelete' | 'feedbackRecord'> = {
+  feedbackPut: async () => ({ kind: 'rejected', message: '這一檔沒有接回饋' }),
+  feedbackDelete: async () => ({ kind: 'rejected', message: '這一檔沒有接回饋' }),
+  feedbackRecord: async () => ({ kind: 'rejected', message: '這一檔沒有接回饋' }),
+};
+
 /** 一個可以隨時推 frame 進去的假 client。 */
 function fakeClient(
   events: readonly Event[],
@@ -94,6 +104,7 @@ function fakeClient(
   const responded: unknown[] = [];
   const slashed: string[] = [];
   const opened: string[] = [];
+  const cancels: string[] = [];
   const client: WireClient = {
     slashList: async () => ({ kind: 'ok', commands: slash.commands ?? [] }),
     slashRun: async (_threadId, line) => {
@@ -117,8 +128,13 @@ function fakeClient(
       responded.push(params);
       return { type: 'success', id: 2, result: {} };
     },
+    runCancel: async (threadId) => {
+      cancels.push(threadId);
+      return { type: 'success', id: 3, result: { accepted: true } };
+    },
+    ...UNWIRED_FEEDBACK,
   };
-  return { client, sent, responded, slashed, opened };
+  return { client, sent, responded, slashed, opened, cancels };
 }
 
 /** 一顆核准請求。逐筆詞彙照基座的形狀給——`reviewConfigs` 與 `actionRequests` 平行。 */
@@ -192,8 +208,10 @@ describe('對話介面', () => {
       },
       runStart: async () => ({ type: 'success', id: 1, result: {} }),
       inputRespond: async () => ({ type: 'success', id: 1, result: {} }),
+      runCancel: async () => ({ type: 'success', id: 1, result: { accepted: true } }),
       slashList: async () => ({ kind: 'ok', commands: [] }),
       slashRun: async () => ({ kind: 'unknown' }),
+      ...UNWIRED_FEEDBACK,
     };
     render(<App client={client} />);
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('連不上 agent'));
@@ -407,6 +425,64 @@ describe('斜線命令', () => {
   });
 });
 
+describe('停止（#276）', () => {
+  it('一輪在跑時出現停止，按下去送 run.cancel', async () => {
+    seq = 0;
+    const { client, cancels } = fakeClient([
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+    ]);
+    render(<App client={client} />);
+    fireEvent.click(await screen.findByRole('button', { name: '停止' }));
+    await waitFor(() => expect(cancels).toHaveLength(1));
+  });
+
+  it('停在核准點時也有停止——按它就是收回那張卡', async () => {
+    seq = 0;
+    const { client } = fakeClient([
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      approvalFrame([{ name: 'danger', allowed: ['approve', 'reject'] }]),
+    ]);
+    render(<App client={client} />);
+    expect(await screen.findByRole('button', { name: '停止' })).toBeTruthy();
+  });
+
+  it('閒著時沒有停止', async () => {
+    seq = 0;
+    const { client } = fakeClient([
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+    ]);
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('就緒'));
+    expect(screen.queryByRole('button', { name: '停止' })).toBeNull();
+  });
+
+  it('收到帶 aborted 的收尾：狀態列說已停止，不是失敗；被打斷的那則標出來', async () => {
+    seq = 0;
+    const { client } = fakeClient([
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      frame('messages', ['model_request:a'], { event: 'message-start', id: 'run-r', run_id: 'r' }),
+      frame('messages', ['model_request:a'], {
+        event: 'content-block-delta',
+        index: 0,
+        delta: { type: 'text-delta', text: '講到一半' },
+        run_id: 'r',
+      }),
+      frame('lifecycle', [], {
+        event: 'failed',
+        graph_name: 'root',
+        error: '這一輪被中止了',
+        aborted: true,
+      }),
+    ]);
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('已停止'));
+    expect(screen.getByRole('status').textContent).not.toContain('失敗');
+    expect(screen.getByText('講到一半')).toBeTruthy();
+    expect(screen.getByText('（已停止）')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '停止' })).toBeNull();
+  });
+});
+
 describe('上行被拒絕的時候', () => {
   it('說出來，而不是靜靜吞掉——那是 200 ＋ error 封包', async () => {
     seq = 0;
@@ -423,8 +499,10 @@ describe('上行被拒絕的時候', () => {
         message: '這條 thread 停在核准點：先用 input.respond 回答它，再說下一句話',
       }),
       inputRespond: async () => ({ type: 'success', id: 2, result: {} }),
+      runCancel: async () => ({ type: 'success', id: 3, result: { accepted: true } }),
       slashList: async () => ({ kind: 'ok', commands: [] }),
       slashRun: async () => ({ kind: 'unknown' }),
+      ...UNWIRED_FEEDBACK,
     };
     render(<App client={client} />);
 

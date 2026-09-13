@@ -114,9 +114,14 @@ describe('模型工具走真的 pump', () => {
     ]);
     try {
       await pump.submit({ kind: 'message', text: '幫我把整條升級流程做完' });
-      // 先確認裝置真的停在核准點——不然下面那一輪證不到 resume 這件事。
+      // 先確認裝置真的停在核准點——不然下面那一輪證不到 resume 這件事。被停住的那次呼叫
+      // 留下一顆沒配對的 `tool/call`，落在中斷之前（#264：中斷不是落定）；叫出它的那次模型
+      // 呼叫在它前面留一對起訖（#266）。
       expect(pump.sessionLog.events.map((event) => event.type)).toEqual([
         'turn/start',
+        'model/start',
+        'model/end',
+        'tool/call',
         'interrupt/raised',
         'turn/end',
       ]);
@@ -128,7 +133,7 @@ describe('模型工具走真的 pump', () => {
       });
 
       // 恢復那一輪的起點真的是 `resume`，不是又一顆 `message`。
-      expect(pump.sessionLog.events[3]?.data).toEqual({ kind: 'resume' });
+      expect(pump.sessionLog.events[6]?.data).toEqual({ kind: 'resume' });
       const changes = pump.sessionLog.events.filter((event) => event.type === 'goal/change');
       expect(changes).toHaveLength(1);
       expect(changes[0]?.data).toMatchObject({
@@ -171,6 +176,18 @@ describe('模型工具走真的 pump', () => {
         .map((message) => String(message.content));
       expect(toolText).toContain(GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_AUTHORITY_MESSAGE);
       expect(pump.sessionLog.events.filter((event) => event.type === 'goal/change')).toEqual([]);
+      // **日誌上記的是錯誤、碼照 dsh**（#273）：以前那句話是狀態成功的，日誌記成成功。
+      expect(
+        pump.sessionLog.events.flatMap((event) =>
+          event.type === 'tool/result' ? [event.data] : [],
+        ),
+      ).toEqual([
+        {
+          callId: expect.any(String),
+          isError: true,
+          error: { name: 'HarnessError', code: 'GOAL_TOOL_AUTHORITY_REQUIRED' },
+        },
+      ]);
     } finally {
       detach();
       await dispose();

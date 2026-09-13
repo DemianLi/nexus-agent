@@ -51,7 +51,8 @@ export function ApprovalCard({
           <li key={`${action.name}-${index}`} className="flex flex-col gap-1">
             <code className="text-sm font-medium">{action.name}</code>
             <pre className="text-muted-foreground overflow-x-auto text-xs">
-              {JSON.stringify(action.args)}
+              {/* 參數解不開的那顆，酬載帶的是模型吐的原字串（#281）：原樣顯示，不再包一層引號。 */}
+              {typeof action.args === 'string' ? action.args : JSON.stringify(action.args)}
             </pre>
           </li>
         ))}

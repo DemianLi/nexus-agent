@@ -13,6 +13,9 @@ import type {
   SlashRunOutcome,
   UplinkResult,
   WireClient,
+  WireFeedbackCategory,
+  WireFeedbackItem,
+  WireFeedbackRating,
 } from '@nexus/wire';
 import {
   answerResponse,
@@ -28,6 +31,26 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createAgentClient } from '@/lib/agent';
+import {
+  FEEDBACK_COMMAND_LINE,
+  FEEDBACK_COPY,
+  NO_REPLY_TAILS,
+  failureCopy,
+  trackReplyTails,
+} from '@/lib/feedback';
+import type { ReplyTails } from '@/lib/feedback';
+
+/** 回饋對話框開給誰：一則回覆（按了讚或踩），或整個會話（只打了 `/feedback`）。 */
+export type FeedbackTarget =
+  | { readonly kind: 'session' }
+  | { readonly kind: 'reply'; readonly replyId: string; readonly rating: WireFeedbackRating };
+
+export interface FeedbackDialogState {
+  readonly target: FeedbackTarget;
+  readonly submitting: boolean;
+  /** 上一次送出失敗的那句話。失敗時框留著（照 dsh）。 */
+  readonly failure?: string;
+}
 
 export interface UseConversationOptions {
   /** 注入用；省略即連同源的 harness。 */
@@ -98,13 +121,57 @@ export interface Conversation {
    * （dsh 的 `ASK_CANCELLED`）——**與「每一題都跳過」不同**，後者仍是一份答案。
    */
   cancelQuestions(interruptId: string): Promise<void>;
+  /**
+   * 按停止（`run.cancel`，[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。
+   *
+   * **只送出、不等停穩，也不自己改狀態**：停下來的事實走下行，折疊器把狀態翻成 `stopped`。
+   * 停在核准點時按它就是收回那幾張卡，收回的結果由伺服器那側寫。
+   */
+  cancel(): Promise<void>;
+  /** 長評分按鈕的那幾則回覆（[#278](https://github.com/DemianLi/nexus-agent/issues/278)），見 `trackReplyTails`。 */
+  readonly replyTails: ReadonlySet<string>;
+  /**
+   * 這個分頁看過的評分，以回覆 id 為鍵。**只在記憶體裡**：沒有 `list`，重新整理就沒了，而那時畫面上
+   * 也沒有舊回覆可以評（門 B 沒開）。
+   */
+  readonly ratings: ReadonlyMap<string, WireFeedbackItem>;
+  readonly feedbackDialog?: FeedbackDialogState;
+  /**
+   * 按了一則回覆的讚或踩。**再點已選的那顆是收回**，另一顆開對話框，送出之後才記（照 dsh）。
+   */
+  rate(replyId: string, rating: WireFeedbackRating): Promise<void>;
+  /** 送出回饋對話框。可以空著送。 */
+  submitFeedback(draft: {
+    readonly category?: WireFeedbackCategory;
+    readonly text: string;
+  }): Promise<void>;
+  dismissFeedback(): void;
 }
 
 export function useConversation(options: UseConversationOptions = {}): Conversation {
   const client = useMemo(() => options.client ?? createAgentClient(), [options.client]);
   const threadId = useMemo(() => options.threadId ?? crypto.randomUUID(), [options.threadId]);
 
-  const [state, setState] = useState<ConversationState>(emptyConversation);
+  // **收尾那則跟對話狀態住在同一格**：它要比對每一步的前後兩份狀態，分開存的話一批 frame 裡「跑起來又
+  // 收掉」只剩頭尾，中間那次 `running` 會被吃掉（見 `trackReplyTails`）。
+  const [view, setView] = useState<{ conversation: ConversationState; tails: ReplyTails }>(() => ({
+    conversation: emptyConversation(),
+    tails: NO_REPLY_TAILS,
+  }));
+  const state = view.conversation;
+  /** 所有改對話狀態的地方都走這裡。 */
+  const advance = useCallback((step: (previous: ConversationState) => ConversationState) => {
+    setView((previous) => {
+      const conversation = step(previous.conversation);
+      if (conversation === previous.conversation) return previous;
+      return {
+        conversation,
+        tails: trackReplyTails(previous.conversation, conversation, previous.tails),
+      };
+    });
+  }, []);
+  const [ratings, setRatings] = useState<ReadonlyMap<string, WireFeedbackItem>>(() => new Map());
+  const [feedbackDialog, setFeedbackDialog] = useState<FeedbackDialogState | undefined>(undefined);
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState<string | undefined>(undefined);
   const [commandError, setCommandError] = useState<string | undefined>(undefined);
@@ -116,6 +183,10 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   // 送出的那一刻要讀的是**當下**的 pending，不是這次 render 閉包起來的那份。
   const stateRef = useRef(state);
   stateRef.current = state;
+  const ratingsRef = useRef(ratings);
+  ratingsRef.current = ratings;
+  const dialogRef = useRef(feedbackDialog);
+  dialogRef.current = feedbackDialog;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -143,7 +214,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
           if (cancelled) {
             return;
           }
-          setState((previous) => reduceConversation(previous, event));
+          advance((previous) => reduceConversation(previous, event));
         }
       } catch (error) {
         if (!cancelled) {
@@ -158,7 +229,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       controller.abort();
       setConnected(false);
     };
-  }, [client, threadId]);
+  }, [client, threadId, advance]);
 
   /** 收下上行的回條：被拒就說出來，成功就把上一次的抱怨收掉。 */
   const note = useCallback((result: UplinkResult) => {
@@ -203,6 +274,14 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       if (trimmed === '') {
         return;
       }
+      if (trimmed === FEEDBACK_COMMAND_LINE) {
+        // **只打 `/feedback` 開對話框**，照 dsh 的 `/feedback` 裝飾：送出的是 `feedback.record`，
+        // 跑著也收。帶了文字的 `/feedback 很慢` 照舊走 `slash.run`（#267 的 Q2）。
+        setSlashError(undefined);
+        setSlashNotice(undefined);
+        setFeedbackDialog({ target: { kind: 'session' }, submitting: false });
+        return;
+      }
       if (trimmed.startsWith('/')) {
         await runSlash(trimmed);
         return;
@@ -210,10 +289,10 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       setSlashError(undefined);
       setSlashNotice(undefined);
       // 線上不會回聲使用者這句話，所以送出的那一刻自己補進去。
-      setState((previous) => appendHumanTurn(previous, trimmed));
+      advance((previous) => appendHumanTurn(previous, trimmed));
       note(await clientRef.current.runStart(threadId, trimmed));
     },
-    [threadId, note, runSlash],
+    [threadId, note, runSlash, advance],
   );
 
   const respond = useCallback(
@@ -228,7 +307,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       }
       // **決定在線上沒有回聲**——拒絕掉的那一批連一顆 frame 都不會有（實測），
       // 所以跟使用者那句話一樣，在送出的那一刻自己寫進去。
-      setState((previous) => appendDecision(previous, interruptId, decision));
+      advance((previous) => appendDecision(previous, interruptId, decision));
       note(
         await clientRef.current.inputRespond(threadId, {
           namespace: [...pending.namespace],
@@ -237,7 +316,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         }),
       );
     },
-    [threadId, note],
+    [threadId, note, advance],
   );
 
   const answer = useCallback(
@@ -249,7 +328,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         return;
       }
       // 同 `respond`：線上不回聲，所以送出的那一刻自己寫進去。
-      setState((previous) => appendAnswers(previous, interruptId, answers));
+      advance((previous) => appendAnswers(previous, interruptId, answers));
       note(
         await clientRef.current.inputRespond(threadId, {
           namespace: [...pending.namespace],
@@ -258,7 +337,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         }),
       );
     },
-    [threadId, note],
+    [threadId, note, advance],
   );
 
   const cancelQuestions = useCallback(
@@ -269,7 +348,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       if (pending === undefined || pending.kind !== 'question') {
         return;
       }
-      setState((previous) => appendQuestionCancel(previous, interruptId));
+      advance((previous) => appendQuestionCancel(previous, interruptId));
       note(
         await clientRef.current.inputRespond(threadId, {
           namespace: [...pending.namespace],
@@ -278,8 +357,119 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         }),
       );
     },
-    [threadId, note],
+    [threadId, note, advance],
   );
+
+  const cancel = useCallback(async () => {
+    note(await clientRef.current.runCancel(threadId));
+  }, [threadId, note]);
+
+  /** 記下一則回覆目前的評分；`null` 是沒有了。 */
+  const keepRating = useCallback((replyId: string, item: WireFeedbackItem | null) => {
+    setRatings((previous) => {
+      const next = new Map(previous);
+      if (item === null) next.delete(replyId);
+      else next.set(replyId, item);
+      return next;
+    });
+  }, []);
+
+  const rate = useCallback(
+    async (replyId: string, rating: WireFeedbackRating) => {
+      const current = ratingsRef.current.get(replyId);
+      if (current?.rating !== rating) {
+        setFeedbackDialog({ target: { kind: 'reply', replyId, rating }, submitting: false });
+        return;
+      }
+      // 再點一次已選的那顆：收回。結果不走對話框，失敗的話跟命令的失敗講在同一行。
+      setSlashError(undefined);
+      setSlashNotice(undefined);
+      let outcome;
+      try {
+        outcome = await clientRef.current.feedbackDelete(threadId, {
+          runId: replyId,
+          ifVersion: current.version,
+        });
+      } catch (error) {
+        setSlashError(
+          `${FEEDBACK_COPY.generic}：${error instanceof Error ? error.message : String(error)}`,
+        );
+        return;
+      }
+      if (outcome.kind === 'rejected') {
+        setCommandError(outcome.message);
+        return;
+      }
+      if (outcome.result.ok) {
+        keepRating(replyId, null);
+        return;
+      }
+      const { error } = outcome.result;
+      // 別的分頁先改了：畫上目前那筆，再說一聲（照 dsh 的 conflict 那一格）。
+      if (error.code === 'version-conflict') keepRating(replyId, error.current);
+      setSlashError(failureCopy(error.code));
+    },
+    [threadId, keepRating],
+  );
+
+  const submitFeedback = useCallback(
+    async (draft: { readonly category?: WireFeedbackCategory; readonly text: string }) => {
+      const open = dialogRef.current;
+      if (open === undefined || open.submitting) return;
+      setFeedbackDialog({ target: open.target, submitting: true });
+      const fail = (failure: string): void => {
+        setFeedbackDialog((current) =>
+          current === undefined ? current : { target: current.target, submitting: false, failure },
+        );
+      };
+      const text = draft.text.trim();
+      const category = draft.category === undefined ? {} : { category: draft.category };
+      try {
+        if (open.target.kind === 'session') {
+          const outcome = await clientRef.current.feedbackRecord(threadId, {
+            ...(text === '' ? {} : { text }),
+            ...category,
+          });
+          if (outcome.kind === 'rejected') {
+            fail(`${FEEDBACK_COPY.generic}：${outcome.message}`);
+            return;
+          }
+        } else {
+          const { replyId, rating } = open.target;
+          const outcome = await clientRef.current.feedbackPut(threadId, {
+            runId: replyId,
+            rating,
+            ...(text === '' ? {} : { note: text }),
+            ...category,
+            ifVersion: ratingsRef.current.get(replyId)?.version ?? null,
+          });
+          if (outcome.kind === 'rejected') {
+            fail(`${FEEDBACK_COPY.generic}：${outcome.message}`);
+            return;
+          }
+          if (!outcome.result.ok) {
+            const { error } = outcome.result;
+            if (error.code === 'version-conflict') keepRating(replyId, error.current);
+            fail(failureCopy(error.code));
+            return;
+          }
+          keepRating(replyId, outcome.result.value);
+        }
+      } catch (error) {
+        fail(`${FEEDBACK_COPY.generic}：${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+      setFeedbackDialog(undefined);
+      setSlashError(undefined);
+      // 送出之後的那句謝謝跟命令的結果講在同一行：兩者都是「這一側要說的話」，不進 transcript。
+      setSlashNotice(FEEDBACK_COPY.recorded);
+    },
+    [threadId, keepRating],
+  );
+
+  const dismissFeedback = useCallback(() => {
+    setFeedbackDialog(undefined);
+  }, []);
 
   return {
     state,
@@ -289,6 +479,13 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     respond,
     answer,
     cancelQuestions,
+    cancel,
+    replyTails: view.tails.ids,
+    ratings,
+    rate,
+    submitFeedback,
+    dismissFeedback,
+    ...(feedbackDialog === undefined ? {} : { feedbackDialog }),
     ...(connectionError === undefined ? {} : { connectionError }),
     ...(commandError === undefined ? {} : { commandError }),
     ...(slashError === undefined ? {} : { slashError }),

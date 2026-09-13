@@ -158,7 +158,8 @@ describe('todo_write 在真的圖上', () => {
     });
 
     expect(violations).toEqual([
-      'invariant violated by "@nexus/plugin-todo": todo/write（seq 2）落在任何開著的輪之外',
+      // 前兩格是那一輪的模型起訖（#266），所以輪收掉之後這一顆是 seq 4。
+      'invariant violated by "@nexus/plugin-todo": todo/write（seq 4）落在任何開著的輪之外',
     ]);
   });
 
@@ -212,8 +213,21 @@ describe('todo_write 在真的圖上', () => {
       await dispose();
     }
 
-    // **壞掉的那一次一顆事件都沒留下**：驗證在找日誌之前。
-    expect(sessions.root.events).toEqual([]);
+    // **壞掉的那一次一顆 `todo/write` 都沒留下**：驗證在找日誌之前。日誌上只有圍堵替這次
+    // 呼叫記的那一對工具事件（#264），以及前後兩次模型呼叫的起訖（#266）。
+    expect(todosIn(sessions.root.events)).toEqual([]);
+    expect(sessions.root.events.map((event) => event.type)).toEqual([
+      'model/start',
+      'model/end',
+      'tool/call',
+      'tool/result',
+      'model/start',
+      'model/end',
+    ]);
+    // **模型拿到的是一句錯誤，日誌也記成錯誤**（#273）：工具回一則 `status: 'error'` 的
+    // ToolMessage，文字就是上面那一句。**不帶碼**——dsh 對這一類拋的是一般 `Error`，所以
+    // 用 `toEqual`，多出一個 `error` 會紅。
+    expect(sessions.root.events[3]?.data).toEqual({ callId: expect.any(String), isError: true });
   });
 
   it('工具進得了預設清單面向模型的那一面', async () => {

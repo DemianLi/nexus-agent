@@ -112,7 +112,7 @@ harness 五大範圍對應：解析標準化（PluginRegistry + zod）、編排�
 ## 3. 套件結構（pnpm workspace）
 
 ```
-packages/nexus-core      契約：NexusPlugin 型別、zod manifest、PluginRegistry 九個註冊點 ＋ 五條通道、fold
+packages/nexus-core      契約：NexusPlugin 型別、zod manifest、PluginRegistry 九個註冊點 ＋ 六條通道、fold
 packages/nexus-plugin-*  plugin 系列，只相依 @nexus/core
 packages/nexus-wire      web 與 agent 之間那條線的協定：封包型別、SSE codec、route 與 channel 白名單、瀏覽器端 client
 apps/harness             組裝點：agent 工廠、訊息標準化、CLI、下行 pump 與 fetch handler；唯一呼叫 createDeepAgent 的地方
@@ -228,7 +228,7 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（線�
 
      **對 dsh 的偏離（標註）**：dsh 的對應機制 `@deepseek-ai/dsh-agent-instructions` 收的是**檔名候選**（`['AGENTS.md', 'CLAUDE.md']`），`resolveInstructionFileCandidates` 把任何含 `/` 的候選連同 `RESERVED_PATH_SEGMENTS`（`''` / `'.'` / `'..'`）**靜默濾掉**——因為往上找 project root 的走查與 `~` / `$DSH_HOME` 的展開都由 loader 自己擁有。**這個形狀在 deepagents 上表達不出來**：`memory` 參數收的就是 backend 路徑，它的 loader 不走查也不展開任何東西。退到最接近的：**擋下 dsh 濾掉的同一組路段，但改成拋錯**。靜默濾掉在 dsh 那邊無害（濾完還有其他候選與走查），在這裡等於把唯一的來源刪掉，正好製造出這道檢查要防的那種靜默。
 
-  4. **subagent 拿不到 root 的記憶，而且沒有任何公開介面給得了。** `buildSubagentMiddleware(input, isForkable)` 只在 `isForkable` 為真時併入 root 的 memory middleware，`SubAgent` 定義上**沒有 `memory` 欄位**可以自帶（`createSubagentDefaultMiddleware` 有 `input.skills` 分支，沒有 memory 的）。內建的 general-purpose subagent 也一樣：它走 `normalizeSubagentSpec`（`isForkable` 為 false），而它那次 `mergeMiddlewareStack` 帶 `{ appendNew: false }`，連從 `middleware` 參數塞一個同名的進去都會被丟掉。只有 `mode: 'fork'` 的 subagent 有。這跟下面 `feat/summarization-tuning` 記的「root 換掉不影響 subagent」是同一種邊界，要有絆索測試。
+  4. **subagent 拿不到 root 的記憶，而且沒有任何公開介面給得了。** `buildSubagentMiddleware(input, isForkable)` 只在 `isForkable` 為真時併入 root 的 memory middleware，`SubAgent` 定義上**沒有 `memory` 欄位**可以自帶（`createSubagentDefaultMiddleware` 有 `input.skills` 分支，沒有 memory 的）。general-purpose subagent 也一樣：它是一般的 subagent，走 `normalizeSubagentSpec`（`isForkable` 為 false）。（當時寫的是基座自己補的那份，它那次 `mergeMiddlewareStack` 帶 `{ appendNew: false }`；後來換成 `foldRegistry` 自己註冊的，因為基座那份連核准閘門都拿不到，見 `fold.ts` 的 `generalPurposeSpec`。）只有 `mode: 'fork'` 的 subagent 有。這跟下面 `feat/summarization-tuning` 記的「root 換掉不影響 subagent」是同一種邊界，要有絆索測試。
 
   「多來源併入 prompt」的形狀斷言照舊補（[#32](https://github.com/DemianLi/nexus-agent/issues/32)）——這一條查過是真的：`formatMemoryContents(contents, sources)` 依 `sources` 順序串。
 
@@ -247,7 +247,7 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（線�
      - **空的不算。** 載入結果為空時 `loadedSkills.length > 0` 是 false，於是**每一次 `beforeAgent` 都重掃整個來源**。實測：有 skill 的來源兩次 `invoke` 只掃 1 次，空的來源掃 2 次。一個沒有 skill 的工作區是最貴的那種，這件事原文完全沒提到。
      - **閉包與 state 是雙向的，不是單向快取。** 空閉包 + state 有 `skillsMetadata` → `loadedSkills = state.skillsMetadata`；非空閉包 + state 沒有 → 回寫 `{ skillsMetadata: loadedSkills }`。所以配上 checkpointer，一個**全新的 agent 實例**會從 thread 的 checkpoint 撿回舊 skills——「per-agent-instance」在有 checkpointer 時不成立。
 
-  5. **skills 與 memory 的 subagent 繼承規則正好相反。**（原本沒寫）`createSubagentDefaultMiddleware` 有 `input.skills` 分支，而內建的 general-purpose subagent 在 `normalizeSubagentSpec` 時被塞進了 root 的 `skills`——**它拿得到**；自訂 subagent 沒人幫它塞，要自帶 `skills` 才有。基座註解明說：「Custom subagents do NOT inherit skills from the main agent by default. Only the general-purpose subagent inherits the main agent's skills.」
+  5. **skills 與 memory 的 subagent 繼承規則正好相反。**（原本沒寫）`createSubagentDefaultMiddleware` 有 `input.skills` 分支，而 general-purpose subagent 被塞進了 root 的 `skills`——**它拿得到**（當時是基座自己補那份時在 `normalizeSubagentSpec` 塞的，現在是 `foldRegistry` 註冊時照抄的）；自訂 subagent 沒人幫它塞，要自帶 `skills` 才有。基座註解明說：「Custom subagents do NOT inherit skills from the main agent by default. Only the general-purpose subagent inherits the main agent's skills.」
 
      對照上面 `feat/memory-plugin` 第 4 條：memory 只有 `mode: 'fork'` 的 subagent 拿得到，general-purpose **拿不到**。淨結果是同一組 subagent 上兩個擴充點互為反面——**fork 有 root memory 沒 root skills，general-purpose 有 root skills 沒 root memory**。已有兩條絆索釘著。
 

@@ -56,7 +56,7 @@ import type { PluginRegistry } from '@nexus/core';
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 /**
- * 十四條通道逐個列出來。
+ * 十五條通道逐個列出來。
  *
  * `satisfies` 那一句是這個檔案的骨頭：**它讓編譯器去比對 `PluginRegistry` 的欄位集合**，
  * 少一個或多一個都在 `typecheck` 當場紅。值是什麼不重要，重要的是鍵。
@@ -72,9 +72,10 @@ const CHANNELS = {
   approvals: true,
   skills: true,
   memory: true,
-  // 五條不折進任何參數的正交通道。
+  // 六條不折進任何參數的正交通道。
   lifecycle: true,
   telemetry: true,
+  feedback: true,
   invariants: true,
   commands: true,
   sessions: true,
@@ -82,8 +83,8 @@ const CHANNELS = {
 
 /** 折進 `createDeepAgent` 參數的那幾個。`registry.ts` 檔頭的「九個註冊點」。 */
 const FOLDED_CHANNELS = 9;
-/** 不折進任何參數的正交通道。`registry.ts` 檔頭的「外加五條」。 */
-const ORTHOGONAL_CHANNELS = 5;
+/** 不折進任何參數的正交通道。`registry.ts` 檔頭的「外加六條」。 */
+const ORTHOGONAL_CHANNELS = 6;
 /** 兩者相加，也就是 `PluginRegistry` 的欄位數。 */
 const TOTAL_CHANNELS = FOLDED_CHANNELS + ORTHOGONAL_CHANNELS;
 
@@ -150,7 +151,7 @@ const PROSE_SITES: readonly ProseSite[] = [
     forbidden: offByOne(TOTAL_CHANNELS, '條通道'),
   },
   {
-    // #193 的索引：「最直覺的家是 `PluginRegistry` 的十四個欄位，那是錯的軸」。
+    // #193 的索引：「最直覺的家是 `PluginRegistry` 的十五個欄位，那是錯的軸」。
     path: 'apps/harness/src/interception-index.test.ts',
     phrases: [`${cn(TOTAL_CHANNELS)}個欄位`],
     forbidden: offByOne(TOTAL_CHANNELS, '個欄位'),

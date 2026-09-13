@@ -17,23 +17,31 @@
 
 import { tool as makeTool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
-import { CompositeBackend } from 'deepagents';
+import { CompositeBackend, GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import type { AnyBackendProtocol, FilesystemPermission, SubAgent } from 'deepagents';
 import type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
 import { createApprovalGateMiddleware } from './approval.js';
 import type { ApprovalChannel } from './approval.js';
 import { deriveApprovalChannel } from './approval.js';
 import { createContainmentMiddleware } from './containment.js';
+import {
+  createInvalidArgumentsCarrier,
+  createInvalidToolArgsMiddleware,
+} from './invalid-tool-args.js';
+import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
 import { createObservationPolicy } from './observation.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
 import type { PluginRegistry } from './registry.js';
+import { createModelCallRecorder } from './model-calls.js';
 import { createModelUsageRecorder } from './model-usage.js';
+import { createTurnCancelGuard, createTurnCancelModelSignal } from './turn-cancel.js';
 import { createRepeatReminder, resolveRepeatReminderSettings } from './repeat-reminder.js';
 import type { RepeatReminderSettings } from './repeat-reminder.js';
 import { createSummarizer, resolveSummarizationSettings } from './summarization.js';
 import type { SummarizationSettings } from './summarization.js';
+import { toolCallIdOf, toolRefusal } from './tool-events.js';
 
 /**
  * 工具呈現順序清單裡代表「其餘未列出者」的保留項。
@@ -59,20 +67,14 @@ export const TOOL_ORDER_REST = '<unlisted-tools>';
 export const ROOT_ONLY_NOTICE = '這個工具只在 root agent 上執行；在 subagent 裡呼叫一定會被拒絕。';
 
 /**
- * subagent 叫到 root-only 工具時，那顆樁回的話。
+ * subagent 叫到 root-only 工具時，那顆樁回給模型的那一句。
  *
- * **回字串而不是拋，而理由已經換過一次了。** dsh 那側是拋
+ * 樁把它包成一則 `status: 'error'` 的工具結果，不拋。dsh 那側是拋
  * （`tool-todo/src/index.ts:205-210` 的
  * `throw new Error('todo_write requires an owning agent session')`），理由是「拒絕，
- * 不要靜默 no-op」——那個理由我們照收。舊的擋路石是**拋在我們這裡達不到它**：工具一拋
- * 就是整場 run 死掉，而圍堵當時住在一個掛不掛隨人的 plugin 裡，fold 是 core，不能假設
- * 它在場。
- *
- * **那個前提已經不成立**：圍堵現在由 fold 自己打底在第 0 格（見
- * {@link ./containment.ts}），所以拋得出去也接得回來。**沒有跟著改是刻意的**——
- * 改樁的行為是另一張卡，[#159](https://github.com/DemianLi/nexus-agent/issues/159)
- * 的 Out of scope 明著把它留在外面。回字串在兩種組裝下都是同一則模型看得到的回饋，
- * 今天沒有壞掉的地方。
+ * 不要靜默 no-op」——那個理由我們照收，所以它是錯誤；不拋是因為拋給圍堵的話模型看到的字
+ * 會變成「工具 X 執行失敗：…」。**不帶碼**：dsh 沒有 root-only 這個旗標。決議見
+ * [#271](https://github.com/DemianLi/nexus-agent/issues/271)。
  *
  * @param name - 被叫到的工具名。
  * @param scope - 叫它的那個 subagent。
@@ -90,10 +92,15 @@ export function rootOnlyRefusal(name: string, scope: string): string {
  *
  * @param original - 全域註冊的那一顆。
  * @param scope - 這顆樁要放進哪個 subagent。
- * @returns 只回 {@link rootOnlyRefusal} 的同名工具。
+ * @returns 只回 {@link rootOnlyRefusal} 那則錯誤訊息的同名工具。
  */
 function rootOnlyStub(original: StructuredTool, scope: string): StructuredTool {
-  return makeTool(() => rootOnlyRefusal(original.name, scope), {
+  const refuse = (_args: unknown, config?: unknown) =>
+    toolRefusal(rootOnlyRefusal(original.name, scope), {
+      callId: toolCallIdOf(config) ?? '',
+      name: original.name,
+    });
+  return makeTool(refuse, {
     name: original.name,
     description: `${original.description} ${ROOT_ONLY_NOTICE}`,
     schema: original.schema,
@@ -274,13 +281,24 @@ export function foldRegistry(
   if (toolOrder !== undefined) validateToolOrder(toolOrder, known);
 
   const permissions = foldPermissions(registry);
+  // **解不開的參數的載體，一份組裝一份、交給三個讀者**：圍堵、核准閘門、最內層那顆。
+  // 為什麼共用而不逐個建，見 {@link ./invalid-tool-args.ts}。
+  const invalidArguments = createInvalidArgumentsCarrier();
+  const invalidToolArgs = createInvalidToolArgsMiddleware(invalidArguments);
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./containment.ts}。
-  const containment = createContainmentMiddleware();
-  const approvalGate = foldApprovalGate(registry, options);
+  // 它也是工具事件的生產者（#264），所以要拿得到 `sessions` 那個通道。
+  const containment = createContainmentMiddleware(registry.sessions, invalidArguments);
+  // **中止這一輪的兩顆，也是一份實例走遍 root 與每個子代理**：訊號每次從那一次呼叫的
+  // `configurable` 現讀。位置一外一內，理由見 {@link ./turn-cancel.ts}。
+  const turnCancel = createTurnCancelGuard();
+  const turnCancelModelSignal = createTurnCancelModelSignal();
+  const approvalGate = foldApprovalGate(registry, options, invalidArguments);
   const summarizer = foldSummarizer(registry, options);
   const repeatReminder = foldRepeatReminder(options);
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./model-usage.ts}。
   const modelUsage = createModelUsageRecorder(registry.sessions);
+  // 同上，無狀態、一份走遍。位置緊貼用量記錄器，理由見 {@link ./model-calls.ts}。
+  const modelCalls = createModelCallRecorder(registry.sessions);
   // **backend 提前折**：策略要的版本 token 得從工具實際讀寫的那一個取，所以它不能等到
   // 下面才算。摘要器刻意拿的是兜底那個，兩者的差別見各自的文件。
   const backend = foldBackend(registry, options.defaultBackend);
@@ -290,22 +308,31 @@ export function foldRegistry(
     tools: orderTools(globalTools, toolOrder),
     subagents: foldSubAgents(registry, {
       toolOrder,
+      skills: registry.skills.sources(),
       permissions,
       containment,
+      turnCancel,
+      turnCancelModelSignal,
       approvalGate,
       observationPolicy,
       summarizer,
       repeatReminder,
       modelUsage,
+      modelCalls,
+      invalidToolArgs,
     }),
     middleware: foldMiddleware(
       registry,
       containment,
+      turnCancel,
+      turnCancelModelSignal,
       approvalGate,
       observationPolicy?.(),
       summarizer?.(),
       repeatReminder,
       modelUsage,
+      modelCalls,
+      invalidToolArgs,
     ),
   };
 
@@ -330,13 +357,11 @@ export function foldRegistry(
  * 這條只能在 fold 驗：層是按名字延遲建立的，註冊當下不知道那個 subagent 之後會不會
  * 出現。
  *
- * **基座自帶的 `general-purpose` 也不算，而且這是對的答案不是暫行做法。** 讀過
- * `deepagents` 的 `src/agent.ts` 之後有兩條事實：(1) 它只在 `subagents` 裡**沒有**叫
- * `general-purpose` 的東西時才自己補一個，所以我們真的註冊一個同名的會把它整個換掉；
- * (2) 它補的那個拿 `tools: effectiveTools`，也就是 root 的工具參數本身——全域工具本來
- * 就已經在裡面了。所以往 `'general-purpose'` 這個層加工具**永遠不是**把工具送進它的
- * 正確方式：要嘛註冊全域（自動流進去），要嘛自己註冊一個同名 subagent（那就是明著換掉
- * 基座的版本）。擋下來還附帶擋住打錯字的層名，兩邊都划算。
+ * **fold 自己補的 `general-purpose` 也不算。** 那一份不在 registry 裡
+ * （{@link generalPurposeSpec}），它的工具集合就是全域那組（root-only 換成樁）。所以往
+ * `'general-purpose'` 這個層加工具不是把工具送進它的方式：要嘛註冊全域（自動流進去），
+ * 要嘛自己註冊一個同名 subagent——那就是明著換掉 fold 補的那份，這個層也跟著合法。擋下來
+ * 還附帶擋住打錯字的層名。
  */
 function assertScopesHaveSubAgents(registry: PluginRegistry): void {
   const orphans = registry.tools
@@ -524,14 +549,18 @@ function foldPermissions(registry: PluginRegistry): FilesystemPermission[] {
  *
  * `enabled` 與 checkpointer 這兩格答的是不同的問題，映射見 {@link ApprovalChannel}。
  */
-function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): AgentMiddleware {
+function foldApprovalGate(
+  registry: PluginRegistry,
+  options: FoldOptions,
+  invalidArguments: InvalidArgumentsCarrier,
+): AgentMiddleware {
   const channel: ApprovalChannel = deriveApprovalChannel({
     ...(options.approvals?.enabled !== undefined && {
       approvalsEnabled: options.approvals.enabled,
     }),
     hasCheckpointer: options.checkpointer !== undefined && options.checkpointer !== false,
   });
-  return createApprovalGateMiddleware(registry.approvals.listeners(), channel);
+  return createApprovalGateMiddleware(registry.approvals.listeners(), channel, invalidArguments);
 }
 
 /**
@@ -587,22 +616,37 @@ function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): Agent
 function foldMiddleware(
   registry: PluginRegistry,
   containment: AgentMiddleware,
+  turnCancel: AgentMiddleware,
+  turnCancelModelSignal: AgentMiddleware,
   approvalGate: AgentMiddleware,
   observationPolicy: AgentMiddleware | undefined,
   summarizer: AgentMiddleware | undefined,
   repeatReminder: AgentMiddleware | undefined,
   modelUsage: AgentMiddleware,
+  modelCalls: AgentMiddleware,
+  invalidToolArgs: AgentMiddleware,
 ): AgentMiddleware[] {
   const entries = registry.middleware.list();
   return [
     containment,
+    // 緊貼圍堵：在它裡面（換過的結果圍堵才記得到碼），在起訖紀錄器外面（中止之後被擋下的那次
+    // 呼叫不算一步）。見 {@link ./turn-cancel.ts}。
+    turnCancel,
     ...entries.filter((entry) => entry.value.prepend).map((entry) => entry.value.middleware),
     approvalGate,
     ...(observationPolicy === undefined ? [] : [observationPolicy]),
     ...(summarizer === undefined ? [] : [summarizer]),
     ...(repeatReminder === undefined ? [] : [repeatReminder]),
+    // 起訖排在用量外層、plugin middleware 外層：一個自己重試模型的 plugin，重試幾次都只算
+    // 一步——同 dsh 的 `llm/retry` 在一步之內。摘要器不管排哪都在它外面，見 `model-calls.ts`。
+    modelCalls,
     modelUsage,
     ...entries.filter((entry) => !entry.value.prepend).map((entry) => entry.value.middleware),
+    // 解不開的參數：`wrapToolCall` 在核准與每個 plugin 的內側（dsh 執行時才驗參數），改寫在每個
+    // `wrapModelCall` 的內側（外面看到的都是改寫過的那則）。見 {@link ./invalid-tool-args.ts}。
+    invalidToolArgs,
+    // 最內層：只替模型綁中止訊號，外面每一顆看到的都是原本的模型。見 {@link ./turn-cancel.ts}。
+    turnCancelModelSignal,
   ];
 }
 
@@ -713,6 +757,51 @@ function foldBackend(
 }
 
 /**
+ * fold 自己補的 `general-purpose`：**基座那份的複本，差在它拿得到我們的 stack。**
+ *
+ * 基座只在 `subagents` 裡沒有叫 `general-purpose` 的東西時才自己補一個
+ * （`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js` 的 `createDeepAgent`），而它補的那份
+ * 走 `mergeMiddlewareStack(gp, customMiddleware, [], { appendNew: false })`——**名字不撞內建
+ * 的一律丟掉**。我們的 stack 除了摘要器全是新名字，所以圍堵、中止、閘門、先讀後改、提醒、
+ * 起訖、用量、解不開的參數一顆都沒進去；撞名留下來的摘要器是 root 那一份實例，歷史會混進
+ * 同一個檔（見 {@link foldSummarizer}）。在產品組裝上實測過：被標成 `ask` 的工具照跑、
+ * 沒有中斷、沒有它自己的會話日誌，而 `task` 的描述對模型列著它。
+ *
+ * 所以 fold 自己補，讓它跟每個註冊進來的 subagent 一樣走 {@link foldSubAgents}；基座看到
+ * 同名的就不補了。**有 plugin 註冊了同名的就不補**——明著換掉這一份是那個 plugin 的事，
+ * 它拿到的一樣是整組 stack。
+ *
+ * **對照 dsh**：標準 preset 的委派是明著掛的一列 `tool-subagent`（`provider: spawn`，
+ * `packages/preset/agent-presets/presets/standard/agent.cordis.yml`，SHA
+ * `c291e7961a515f6d7af9304e7fd1d257929aef26`）。spawn 出來的是同一個 cordis context 上的
+ * 一般 child agent，全域的 `tools/pre-execute` 照樣經過它（`packages/core/tools/src/index.ts`
+ * 的 `scopeTarget(this, exec.agent)`）。那裡沒有「沒人設定就自動冒出來、閘門管不到」的
+ * 子代理；這裡把它變成 fold 明著註冊的一個。
+ *
+ * 照抄的：名字、描述、提示詞與 `mode` 取基座匯出的 `GENERAL_PURPOSE_SUBAGENT`；root 的
+ * `skills` 照基座那份傳過去（`apps/harness/src/skills.test.ts` 守著）。
+ *
+ * **抄不到的兩格，是偏離**：harness profile 對 gp 提示詞的改寫（`applyProfilePrompt`）與
+ * profile 的 `generalPurposeSubagent` 設定。profile 是基座在 fold 之後才從 model 解出來的，
+ * 這裡看不到（見 `apps/harness/src/harness-profile.ts`）。今天沒有任何組裝宣告過 profile，
+ * 所以兩格都是 no-op；哪天有組裝宣告了會改提示詞的 profile，gp 那份不會跟著改，要一起想。
+ *
+ * **工具不照抄，也是刻意的**：基座那份拿 root 的 `tools` 原樣（`effectiveTools`），root-only
+ * 工具在它裡面是原件、叫得到。這裡走 {@link foldSubAgents} 的集合，換成拒絕樁，跟每個
+ * subagent 一致。
+ *
+ * @param skills - root 的 skills 來源。
+ * @returns 還沒補 stack 的 spec，交給 {@link foldSubAgents}。
+ */
+function generalPurposeSpec(skills: readonly string[]): SubAgent {
+  return {
+    ...GENERAL_PURPOSE_SUBAGENT,
+    // 空的就不要放，同 root 那格：空陣列會讓基座建一個掃不到東西的 skills middleware。
+    ...(skills.length > 0 && { skills: [...skills] }),
+  };
+}
+
+/**
  * 每個 subagent 的有效集合。
  *
  * 三件事在這裡合起來，共同的軸線是**全域的東西主動併進每個 subagent**：基座對
@@ -744,24 +833,47 @@ function foldBackend(
  * 「parent 擋 `/restricted/**`，這個 subagent 讀得到」。**那個逃生口在我們這裡打不開。**
  * 全域規則排在你的規則前面，先命中者決定，所以你的 `permissions` 只加得了限制、
  * 鬆不了綁。要放寬只有一條路：讓那條全域 deny 自己帶 `except`。
+ *
+ * **沒有人註冊 `general-purpose` 時，清單最前面多一個 fold 自己補的**，走的是同一條路。
+ * 理由見 {@link generalPurposeSpec}。
  */
 function foldSubAgents(
   registry: PluginRegistry,
   context: {
     toolOrder: readonly string[] | undefined;
+    /** root 的 skills 來源。只給 fold 補的 `general-purpose`，同基座那份。 */
+    skills: readonly string[];
     permissions: readonly FilesystemPermission[];
     containment: AgentMiddleware;
+    turnCancel: AgentMiddleware;
+    turnCancelModelSignal: AgentMiddleware;
     approvalGate: AgentMiddleware;
     observationPolicy: (() => AgentMiddleware) | undefined;
     summarizer: (() => AgentMiddleware) | undefined;
     repeatReminder: AgentMiddleware | undefined;
     modelUsage: AgentMiddleware;
+    modelCalls: AgentMiddleware;
+    invalidToolArgs: AgentMiddleware;
   },
 ): SubAgent[] {
-  const folded: SubAgent[] = [];
-  for (const [name, entry] of registry.subagents.entries()) {
-    const spec = entry.value;
+  // 自帶的 tools 先配上來源：它們沒走 registry 那條路，來源只有這裡知道。
+  const specs = [...registry.subagents.entries()].map(([name, entry]) => ({
+    name,
+    spec: entry.value,
+    own: (entry.value.tools ?? []).map((tool) => ({ value: tool, origin: entry.origin })),
+  }));
+  // 排在最前，同基座 `inlineSubagents.unshift(generalPurposeSpec)`：`task` 的描述照清單
+  // 順序列，換位置就是改了模型讀到的字。
+  if (registry.subagents.get(GENERAL_PURPOSE_SUBAGENT.name) === undefined) {
+    specs.unshift({
+      name: GENERAL_PURPOSE_SUBAGENT.name,
+      spec: generalPurposeSpec(context.skills),
+      own: [],
+    });
+  }
 
+  const folded: SubAgent[] = [];
+  for (const { name, spec, own } of specs) {
     // 全域打底 → subagent 自帶的 tools → 該層註冊的，越後面越近。自帶的那些不會被
     // 抹掉：它們是這個 subagent 自己的東西，只是沒走 registry 那條路進來。
     //
@@ -782,8 +894,7 @@ function foldSubAgents(
           : globalEntry,
       );
     }
-    for (const tool of spec.tools ?? [])
-      merged.set(tool.name, { value: tool, origin: entry.origin });
+    for (const ownEntry of own) merged.set(ownEntry.value.name, ownEntry);
     for (const [toolName, scoped] of registry.tools.own(name)) merged.set(toolName, scoped);
 
     const permissions = [...context.permissions, ...(spec.permissions ?? [])];
@@ -824,14 +935,22 @@ function foldSubAgents(
       middleware: [
         // 圍堵在第 0 格：它要包住下面每一個，包含 `spec.middleware` 自己帶的那些。
         context.containment,
+        // 中止緊貼圍堵，同 root：root 按了停止，訊號經 `configurable` 傳到這裡（#265 的 Q10）。
+        context.turnCancel,
         context.approvalGate,
         // **各建一份，不共用**：觀測紀錄在 closure 裡，共用等於讓 root 讀過的檔
         // 變成這個 subagent 也可以直接改。理由見 {@link foldObservationPolicy}。
         ...(context.observationPolicy === undefined ? [] : [context.observationPolicy()]),
         ...(context.summarizer === undefined ? [] : [context.summarizer()]),
         ...(context.repeatReminder === undefined ? [] : [context.repeatReminder]),
+        // 模型呼叫的起訖同用量記錄器那條理由打底、共用一份，位置同 root。
+        context.modelCalls,
         context.modelUsage,
         ...(spec.middleware ?? []),
+        // 解不開的參數排在 subagent 自帶的那些內側，同 root（#269 的 Q7：root 與子代理同一顆）。
+        context.invalidToolArgs,
+        // 最內層替模型綁中止訊號，排在 subagent 自帶的那些後面，同 root。
+        context.turnCancelModelSignal,
       ],
     };
     // 空的就不要放：基座對 `permissions` 的空陣列與缺席不同義（前者是「整組替換成

@@ -1,4 +1,11 @@
-import { createSessionRunner, loadPlugins, SessionLog } from '@nexus/core';
+import { ToolMessage } from '@langchain/core/messages';
+import {
+  createSessionRunner,
+  loadPlugins,
+  SessionLog,
+  SessionRegistry,
+  toolErrorOf,
+} from '@nexus/core';
 import type {
   CommandRegistrationPoint,
   CommandResult,
@@ -10,6 +17,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createPlanModePlugin,
   EXIT_PLAN_MODE_TOOL_NAME,
+  NOT_IN_PLAN_MODE_MESSAGE,
   PLAN_ALREADY_ACTIVE_MESSAGE,
   PLAN_ALREADY_INACTIVE_MESSAGE,
   PLAN_ARGS_ERROR_MESSAGE,
@@ -20,6 +28,7 @@ import {
   PLAN_MODE_CAPABILITY,
   PLAN_MODE_MIDDLEWARE_NAME,
   PLAN_NOT_ATTACHED_MESSAGE,
+  PLAN_NOT_ATTACHED_TOOL_MESSAGE,
   planAmbiguousMessage,
   recordedPlanMode,
 } from './index.js';
@@ -78,6 +87,59 @@ function earlierEvents(active: boolean): readonly SessionEvent[] {
   earlier.append('plan/mode', { active });
   return earlier.events;
 }
+
+/**
+ * **`exit_plan_mode` 工具本體那兩條沒生效的出口**（[#273](https://github.com/DemianLi/nexus-agent/issues/273)）。
+ *
+ * root 上模式外的那條由 middleware 擋，驗收在 `apps/harness/src/plan-mode.test.ts`。這兩條
+ * 在真的組裝裡到不了：沒接日誌就沒有日誌可記，subagent 那一份又會先撞上核准閘門。
+ */
+describe('exit_plan_mode 沒有生效時', () => {
+  const CALL = {
+    name: EXIT_PLAN_MODE_TOOL_NAME,
+    args: { plan: '# 計劃' },
+    id: 'call-1',
+    type: 'tool_call',
+  };
+
+  /** 模型看到的字、狀態、碼與 id。 */
+  function verdictOf(result: unknown): Record<string, unknown> {
+    if (!ToolMessage.isInstance(result)) throw new Error(`回的不是一則工具訊息：${String(result)}`);
+    return {
+      text: String(result.content),
+      status: result.status,
+      error: toolErrorOf(result),
+      id: result.tool_call_id,
+    };
+  }
+
+  it('沒接日誌、在 subagent 裡：都是錯誤、不帶碼、文字不變', async () => {
+    const { registry } = await loadPlugins([createPlanModePlugin()]);
+    const exit = registry.tools.effective().get(EXIT_PLAN_MODE_TOOL_NAME)?.value;
+    const notAttached = await exit?.invoke(
+      CALL as never,
+      { configurable: { checkpoint_ns: 'tools:call-1' } } as never,
+    );
+    expect(verdictOf(notAttached)).toEqual({
+      text: PLAN_NOT_ATTACHED_TOOL_MESSAGE,
+      status: 'error',
+      error: undefined,
+      id: 'call-1',
+    });
+
+    registry.sessions.bind(new SessionRegistry('plan'));
+    const notRoot = await exit?.invoke(
+      CALL as never,
+      { configurable: { checkpoint_ns: 'tools:spawn-1|tools:call-1' } } as never,
+    );
+    expect(verdictOf(notRoot)).toEqual({
+      text: NOT_IN_PLAN_MODE_MESSAGE,
+      status: 'error',
+      error: undefined,
+      id: 'call-1',
+    });
+  });
+});
 
 /**
  * 薄測試，只斷言「`apply` 真的往那幾個註冊點放了東西」，加上兩條**順序**的斷言。

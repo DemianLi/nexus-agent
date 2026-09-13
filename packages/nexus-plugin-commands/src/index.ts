@@ -221,7 +221,8 @@ export function createCommandExecutor(options: CommandExecutorOptions): CommandE
       sessionLog.append('command/run', {
         commandId,
         name: parsed.name,
-        args: parsed.rawInput,
+        // 照 dsh：命令自己的 domain 事件帶著這段輸入時不再記一次（`session-log.ts` 的 `command/run`）。
+        ...(definition.recordInput === false ? {} : { args: parsed.rawInput }),
         source: { kind: 'user' },
       });
 

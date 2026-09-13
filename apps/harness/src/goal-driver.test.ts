@@ -216,6 +216,27 @@ describe('排不出來的每一種，理由各自有名字', () => {
   });
 
   /** 停在核准點也算 `turn/end`——少了這一句，排程器會把一顆掛著的中斷靜靜吃掉。 */
+  it('上一輪被人中止——`turn/end` 帶 aborted 也是收工，但不續行', () => {
+    const aborted = logOf([
+      HUMAN,
+      ['turn/end', { reason: { kind: 'aborted', cause: { kind: 'user' } } }],
+    ]).events;
+    expect(decideGoalRound(aborted, view())).toEqual({ kind: 'idle', reason: 'turn-aborted' });
+    // 對照：同一個形狀不帶 reason 就照排——擋住的是 aborted，不是 `turn/end` 本身。
+    expect(decideGoalRound(logOf([...SETTLED]).events, view()).kind).toBe('run');
+  });
+
+  it('停在核准點時按停止（收回）：resume 那一輪以 aborted 收尾，同樣不續行', () => {
+    const withdrawn = logOf([
+      HUMAN,
+      RAISED,
+      END,
+      ['turn/start', { kind: 'resume' }],
+      ['turn/end', { reason: { kind: 'aborted', cause: { kind: 'user' } } }],
+    ]).events;
+    expect(decideGoalRound(withdrawn, view())).toEqual({ kind: 'idle', reason: 'turn-aborted' });
+  });
+
   it('停在核准點', () => {
     expect(decideGoalRound(logOf([HUMAN, RAISED, END]).events, view())).toEqual({
       kind: 'idle',

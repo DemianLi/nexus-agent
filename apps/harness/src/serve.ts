@@ -270,6 +270,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         attachInvariants,
         attachSession,
         telemetrySharing,
+        feedback,
       } = built;
       // **遙測披露印在這裡而不是啟動時，因為啟動的那一刻答案不存在**：`createAgent` 是
       // lazy 的（`wire-handler.ts` 的 `pumpFor` 第一次收到請求才呼叫），plugin 沒跑過
@@ -286,6 +287,8 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         // （[#123](https://github.com/DemianLi/nexus-agent/issues/123)）；發派面本身在
         // `wire-handler.ts` 的 `threadFor`，一條 thread 一個執行器。
         commands,
+        // 評分與評語（#278）：沒掛 plugin 的組裝就缺席，那時三個回饋 method 回 `not_supported`。
+        ...(feedback !== undefined && { feedback }),
         // 落盤沒接上就被收掉（建 thread 途中失敗）的話，續接那個把手還在這裡，要自己放。
         dispose: async () => {
           // 放不掉不該擋住收 agent——它底下可能有子行程。

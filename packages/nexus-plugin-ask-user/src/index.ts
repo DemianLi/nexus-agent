@@ -41,8 +41,8 @@
 import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { interrupt } from '@langchain/langgraph';
-import type { ApprovalChannel, NexusPlugin } from '@nexus/core';
-import { QUESTION_INTERRUPT_KIND } from '@nexus/core';
+import type { ApprovalChannel, NexusPlugin, ToolErrorInfo } from '@nexus/core';
+import { markToolError, QUESTION_INTERRUPT_KIND } from '@nexus/core';
 import { z } from 'zod';
 
 /** 模型看到的工具名。與 dsh 同名。 */
@@ -100,6 +100,16 @@ export interface AskUserAnswer {
  * （`ui-user-questions` 的 `slots.ts:186`）。
  */
 export const CANCELLED_MESSAGE = `人放棄了這一組問題，沒有任何一題被回答。不要重問同一組——先講清楚你卡在哪，或換一條不需要這些資料的路。`;
+
+/**
+ * 人放棄整組時那則錯誤的碼，給會話日誌的 `tool/result` 讀
+ * （[#264](https://github.com/DemianLi/nexus-agent/issues/264)）。照 dsh 的
+ * `UserQuestionError` 與 `ASK_CANCELLED`（`packages/plan/plan-mode/src/index.ts:325`）。
+ *
+ * **其餘三個錯誤出口不標**：沒有人可以回答、空清單、看不懂的回覆。dsh 的 `EMPTY_QUESTIONS`
+ * 在 `ask()` 那一層、我們這裡是工具本體先擋，不是同一個時刻；另外兩格 dsh 沒有對應的碼。
+ */
+export const CANCELLED_ERROR: ToolErrorInfo = { name: 'UserQuestionError', code: 'ASK_CANCELLED' };
 
 export interface AskUserPluginOptions {
   /**
@@ -169,7 +179,9 @@ export function createAskUserPlugin(options: AskUserPluginOptions = {}): NexusPl
               })),
             })) as AskUserAnswer | undefined;
 
-            if (answer?.cancelled === true) return failed(CANCELLED_MESSAGE);
+            if (answer?.cancelled === true) {
+              return markToolError(failed(CANCELLED_MESSAGE), CANCELLED_ERROR);
+            }
             const answers = answer?.answers;
             if (!Array.isArray(answers)) {
               return failed(

@@ -66,6 +66,14 @@ describe('瀏覽器端的 client', () => {
     expect(calls[1]?.body).toMatchObject({ id: 2, method: 'input.respond' });
   });
 
+  it('中止這一輪走同一條 RPC family：路徑與封包各講一次 run.cancel，不帶 params', async () => {
+    const { calls, client } = stub(() => Response.json(successResponse(1, { accepted: true })));
+    const result = await client.runCancel('t 1');
+    expect(calls[0]?.url).toBe('http://agent.test/threads/t%201/commands/run.cancel');
+    expect(calls[0]?.body).toEqual({ id: 1, method: 'run.cancel' });
+    expect(result).toMatchObject({ type: 'success', result: { accepted: true } });
+  });
+
   it('下行預設訂全部放行的 channel，回來的是解好的封包', async () => {
     const { calls, client } = stub(() => sseResponse([FRAME]));
     const events = await client.openEvents('t2');

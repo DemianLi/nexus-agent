@@ -16,14 +16,22 @@ import type {
   CommandResponse,
   ErrorResponse,
   Event,
+  FeedbackCommand,
+  FeedbackDeleteCommand,
+  FeedbackDeleteResult,
+  FeedbackPutCommand,
+  FeedbackPutResult,
+  FeedbackRecordCommand,
+  FeedbackRecordResult,
   InputRespondOne,
   RpcMethod,
+  RunCancelCommand,
   SlashCommand,
   SlashDescriptor,
   SlashRunResult,
   WireChannel,
 } from './protocol.js';
-import { WIRE_CHANNELS, commandPath, streamPath } from './protocol.js';
+import { RUN_CANCEL_METHOD, WIRE_CHANNELS, commandPath, streamPath } from './protocol.js';
 
 export interface WireClientOptions {
   /** harness 的來源，例如 `http://localhost:8787`。結尾的斜線會被去掉。 */
@@ -72,6 +80,15 @@ export type SlashListOutcome =
 export type SlashRunOutcome =
   SlashRunResult | { readonly kind: 'rejected'; readonly message: string };
 
+/**
+ * 回饋三個 method 的結果。**`rejected` 與業務失敗是兩件事**，理由同 {@link SlashListOutcome}：
+ * `rejected` 是這條線收不了（這個組裝沒掛回饋、封包壞了），業務失敗在 `result` 裡
+ * （`{ ok: false, error: { code } }`）。
+ */
+export type FeedbackOutcome<T> =
+  | { readonly kind: 'ok'; readonly result: T }
+  | { readonly kind: 'rejected'; readonly message: string };
+
 export interface WireClient {
   /**
    * 開一條長期下行。它跨 run 存活：核准前後是同一條線。
@@ -96,6 +113,28 @@ export interface WireClient {
     threadId: string,
     params: Pick<InputRespondOne, 'namespace' | 'interrupt_id' | 'response'>,
   ): Promise<UplinkResult>;
+  /**
+   * 中止這一輪（`run.cancel`，[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。
+   *
+   * **回的是受理回條，不等停穩**——停下來的事實走下行（root 那顆收尾的 `lifecycle` 帶
+   * `aborted: true`）。沒有 run 在跑、也沒有等核准時，server 照樣受理、什麼都不做。
+   */
+  runCancel(threadId: string): Promise<UplinkResult>;
+  /** 評一輪（`feedback.put`，[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。 */
+  feedbackPut(
+    threadId: string,
+    params: FeedbackPutCommand['params'],
+  ): Promise<FeedbackOutcome<FeedbackPutResult>>;
+  /** 收回一輪的評分（`feedback.delete`）。 */
+  feedbackDelete(
+    threadId: string,
+    params: FeedbackDeleteCommand['params'],
+  ): Promise<FeedbackOutcome<FeedbackDeleteResult>>;
+  /** 記一則對整個會話的評語（`feedback.record`）——回饋對話框只打 `/feedback` 時送這個。 */
+  feedbackRecord(
+    threadId: string,
+    params: FeedbackRecordCommand['params'],
+  ): Promise<FeedbackOutcome<FeedbackRecordResult>>;
   /**
    * 這條 thread 上打得出哪些斜線命令。**拿來顯示，不做選單**——
    * dsh 那一套 `CommandDirectory`（epoch guard、single-flight、`ensureReady`）是另一張卡。
@@ -176,7 +215,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
   async function sendCommand(
     threadId: string,
     method: RpcMethod,
-    command: Command | SlashCommand,
+    command: Command | SlashCommand | RunCancelCommand | FeedbackCommand,
   ): Promise<UplinkResult> {
     // 路徑與封包各講一次 method，server 端不合就拒——照 dsh 的端點慣例
     // （`packages/api/gateway/src/index.ts:134`，`<namespace>/<method>`）。
@@ -185,6 +224,25 @@ export function createWireClient(options: WireClientOptions): WireClient {
       throw new Error(`上行被載體層擋下：${response.status} ${await response.text()}`);
     }
     return (await response.json()) as UplinkResult;
+  }
+
+  /**
+   * 送一個回饋命令，把回應拆成「這條線收不了」與「命令自己的結果」。
+   *
+   * 結果**只檢 `ok` 是不是布林**：值的其餘形狀是 server 那側的型別保證的（同一份 `@nexus/wire`），
+   * 這裡要擋的只有「回來的根本不是回饋結果」——那種時候當成收不了，不硬讀。
+   */
+  async function sendFeedback<T>(
+    threadId: string,
+    command: FeedbackCommand,
+  ): Promise<FeedbackOutcome<T>> {
+    const response = await sendCommand(threadId, command.method, command);
+    if (response.type === 'error') return { kind: 'rejected', message: response.message };
+    const result: unknown = response.result;
+    if (typeof (result as { ok?: unknown } | null)?.ok !== 'boolean') {
+      return { kind: 'rejected', message: `回饋的回應看不懂：${JSON.stringify(result)}` };
+    }
+    return { kind: 'ok', result: result as T };
   }
 
   return {
@@ -225,6 +283,37 @@ export function createWireClient(options: WireClientOptions): WireClient {
       return sendCommand(threadId, 'input.respond', {
         id: nextCommandId++,
         method: 'input.respond',
+        params,
+      });
+    },
+
+    async runCancel(threadId) {
+      return sendCommand(threadId, RUN_CANCEL_METHOD, {
+        id: nextCommandId++,
+        method: RUN_CANCEL_METHOD,
+      });
+    },
+
+    async feedbackPut(threadId, params) {
+      return sendFeedback<FeedbackPutResult>(threadId, {
+        id: nextCommandId++,
+        method: 'feedback.put',
+        params,
+      });
+    },
+
+    async feedbackDelete(threadId, params) {
+      return sendFeedback<FeedbackDeleteResult>(threadId, {
+        id: nextCommandId++,
+        method: 'feedback.delete',
+        params,
+      });
+    },
+
+    async feedbackRecord(threadId, params) {
+      return sendFeedback<FeedbackRecordResult>(threadId, {
+        id: nextCommandId++,
+        method: 'feedback.record',
         params,
       });
     },

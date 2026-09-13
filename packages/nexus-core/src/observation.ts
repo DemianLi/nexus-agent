@@ -50,6 +50,7 @@ import type { AnyBackendProtocol } from 'deepagents';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import { resolveToolName } from './containment.js';
+import { markToolError } from './tool-events.js';
 
 /** 這個 middleware 的名字。排序斷言用得到。 */
 export const OBSERVATION_POLICY_MIDDLEWARE_NAME = 'nexusFileObservationPolicy';
@@ -132,12 +133,17 @@ function hash(text: string): string {
 
 /** 一則說得出碼與恢復辦法的拒絕。`status: 'error'` 是模型分辨它與成功結果的唯一依據。 */
 function refusal(callId: string, toolName: string, code: string, reason: string): ToolMessage {
-  return new ToolMessage({
-    content: `[${code}] ${reason}`,
-    tool_call_id: callId,
-    name: toolName,
-    status: 'error',
-  });
+  // 碼同時標在訊息外面，給會話日誌的 `tool/result` 讀（#264）。名字照 dsh 的 `FsError`
+  // ——它繼承 `HarnessError`，`name` 是 `new.target.name`（`packages/llm/llm/src/error.ts:20`）。
+  return markToolError(
+    new ToolMessage({
+      content: `[${code}] ${reason}`,
+      tool_call_id: callId,
+      name: toolName,
+      status: 'error',
+    }),
+    { name: 'FsError', code },
+  );
 }
 
 /**

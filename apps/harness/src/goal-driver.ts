@@ -13,7 +13,7 @@
  * ## 為什麼它落在 `apps/harness` 而不是一個 plugin——一筆登記過的載體偏離
  *
  * dsh 的 driver 是一個 Cordis plugin，靠 `agent/pre-step` 與 `ctx.agents` 的 idle 判斷把
- * 一輪排進 agent 的 inbox。我們的 `PluginRegistry` 十四條通道（`registry.ts:559-572`）
+ * 一輪排進 agent 的 inbox。我們的 `PluginRegistry` 十五條通道（`registry.ts:559-572`）
  * **沒有一條排得出一輪**——輪迴圈歸入口點所有（`thread-pump.ts` 的 `#runOnce`、
  * `cli.ts` 的 `runTurn`）。所以載體丟掉、紀律照抄，同 `containment.ts` 對
  * `guard/timeout-policy` 那一筆。
@@ -36,12 +36,15 @@
  * ## CLI 的那條額外停損：做的是這一條，不是 #180 要的那一條
  *
  * [#180](https://github.com/DemianLi/nexus-agent/issues/180) 第五節要求「旗標開著時 CLI
- * 要另有一條停損：連續 N 輪沒有任何工具成功就停」。**那一條經評估後刻意不做**，理由沒有
- * 變：
+ * 要另有一條停損：連續 N 輪沒有任何工具成功就停」。**那一條經評估後刻意不做**，結論沒有
+ * 變，理由少了一條（見第一點）：
  *
- * - 「連續 N 輪沒有工具成功」在會話日誌上**量不到**（事件詞彙裡沒有工具事件），只能在
- *   `runTurn` 裡數 stream 上的 `ToolMessage`。而 `HEADLESS_APPROVALS` 是**拒絕**不是
- *   靜默——被拒的工具照樣回一則 `ToolMessage`，所以那個計數抓不到它要抓的那件事。
+ * - 「連續 N 輪沒有工具成功」**以前量不到**，[#264](https://github.com/DemianLi/nexus-agent/issues/264)
+ *   之後會話日誌有 `tool/result` 了。**但量得到不等於判得準**：`HEADLESS_APPROVALS` 是**拒絕**
+ *   不是靜默，被拒的呼叫在日誌上是一顆 `isError` 而且沒碼的結果，跟工具自己拋錯長得一樣
+ *   ——所以那個計數會把「沒有人在」數成「模型卡住了」，抓不到它要抓的那件事。量得到之後的
+ *   評估歸地圖 [#263](https://github.com/DemianLi/nexus-agent/issues/263)，而那張圖拍過板：
+ *   **會停下來的迴圈偵測不進執行期**。
  * - 「連續 N 輪沒有 `goal/change`」更糟：一個正常工作的模型可以幾十輪不碰 goal 工具，
  *   那是這條路的**正常樣子**，不是停滯。這個判準會在長任務中途把目標 block 掉。
  * - **一條會誤殺健康長任務的停損，比沒有停損更糟。**
@@ -107,6 +110,13 @@ export type GoalDriverIdleReason =
   | 'turn-open'
   /** 上一輪**拋錯**結束。續行不重試，見 [#180](https://github.com/DemianLi/nexus-agent/issues/180) 的 Out of scope。 */
   | 'turn-failed'
+  /**
+   * 上一輪**被人中止**（`turn/end` 帶 `reason.kind: 'aborted'`）。人按了停止，續行不接著排，等下一次
+   * 有人說話——[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q8，同 dsh 的
+   * `goal-round-driver` 看到 aborted 就不再排（`packages/goal/goal-round-driver/src/index.ts:334-338`）。
+   * 停在核准點時按停止的那一種（收回）也落在這裡：收回寫的是一輪 `resume` 帶 aborted 收尾。
+   */
+  | 'turn-aborted'
   /** 停在核准點，中斷還掛著。 */
   | 'interrupt-pending'
   /** 沒有目前的目標。 */
@@ -135,9 +145,13 @@ function turnClosed(events: readonly SessionEvent[]): GoalDriverIdleReason | und
   const start = currentTurnStart(events);
   if (start < 0) return 'no-turn';
   for (let at = start + 1; at < events.length; at += 1) {
-    const type = events[at]?.type;
-    if (type === 'turn/end') return undefined;
-    if (type === 'turn/failed') return 'turn-failed';
+    const event = events[at];
+    if (event?.type === 'turn/end') {
+      // **被中止的那一輪也以 `turn/end` 收尾**（#276）。少了這一句，人按了停止之後續行照樣排
+      // 下一輪，而沒有任何測試會紅——跟 `turn-failed` 那格同一個理由。
+      return event.data.reason?.kind === 'aborted' ? 'turn-aborted' : undefined;
+    }
+    if (event?.type === 'turn/failed') return 'turn-failed';
   }
   return 'turn-open';
 }

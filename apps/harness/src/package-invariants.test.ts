@@ -22,12 +22,13 @@ import {
   repositoryRoot,
 } from './package-invariants.js';
 
-/** 這個 repo 現在該有的十五個 owner。**寫死字串**：拿 glob 的結果自己比自己驗不出東西。 */
+/** 這個 repo 現在該有的十六個 owner。**寫死字串**：拿 glob 的結果自己比自己驗不出東西。 */
 const EXPECTED_OWNERS = [
   '@nexus/core',
   '@nexus/plugin-ask-user',
   '@nexus/plugin-commands',
   '@nexus/plugin-echo',
+  '@nexus/plugin-feedback',
   '@nexus/plugin-goal',
   '@nexus/plugin-mcp',
   '@nexus/plugin-memory',

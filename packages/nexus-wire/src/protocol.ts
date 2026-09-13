@@ -113,11 +113,146 @@ export function isSlashMethod(value: unknown): value is SlashMethod {
   return typeof value === 'string' && (SLASH_METHODS as readonly string[]).includes(value);
 }
 
+/**
+ * 中止這一輪（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。**以 thread 為單位、不帶
+ * run id**：一條 thread 一次只跑一個 run。回 `{ accepted: true }`——只代表受理，不等停穩；這一輪
+ * 結束的事實走下行（root 那顆收尾的 `lifecycle` 帶 `aborted: true`）。
+ *
+ * **這是我們加在自己 wire 上的命令**：`@langchain/protocol@0.0.18` 的 `Command` 沒有任何取消類的
+ * method（見 {@link SLASH_METHODS} 那段的清單），所以它跟斜線命令一樣不進 {@link UPLINK_METHODS}。
+ * 形狀照 dsh 的 `session.cancel({ sessionId })` → `{ accepted: true }`
+ * （`packages/api/session-controller/src/commands.ts:497-510`，`c291e79`）：不查是哪個分頁送的
+ * （#265 的 Q3）。
+ */
+export const RUN_CANCEL_METHOD = 'run.cancel';
+
+export interface RunCancelCommand {
+  readonly id: number;
+  readonly method: typeof RUN_CANCEL_METHOD;
+}
+
+export function isRunCancelMethod(value: unknown): value is typeof RUN_CANCEL_METHOD {
+  return value === RUN_CANCEL_METHOD;
+}
+
+/**
+ * 評分與評語（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。
+ *
+ * **三個都是我們加在自己 wire 上的命令**，理由同 {@link RUN_CANCEL_METHOD}：協定的 `Command` 沒有
+ * 這一類。形狀照 dsh 的兩個 Remote——`messageFeedback.put`／`delete` 與 `sessionFeedback.record`
+ * （`packages/feedback/*`，`c291e79`）——回應都是 `{ ok: true, value }`／`{ ok: false, error: { code } }`，
+ * 業務失敗走成功回應，`ErrorResponse` 只給「這條線收不了」。
+ *
+ * **偏離：指名的是那則回覆的 run id**（畫面上的 `AiEntry.id`），不是 dsh 的 `messageId`；server
+ * 查表換成那一輪。**不做 `list`**：重新整理之後畫面上沒有舊回覆可以評（門 B 沒開）。
+ *
+ * **任何時候都收**：跑著、停在核准點、任何分頁——不經過斜線命令那道「還在跑就擋」
+ * （#267 的 Q10）。所以 web 的回饋對話框送的是 `feedback.record`，不是 `slash.run` 的
+ * `/feedback <文字>`。
+ */
+export const FEEDBACK_METHODS = ['feedback.put', 'feedback.delete', 'feedback.record'] as const;
+
+export type FeedbackMethod = (typeof FEEDBACK_METHODS)[number];
+
+export function isFeedbackMethod(value: unknown): value is FeedbackMethod {
+  return typeof value === 'string' && (FEEDBACK_METHODS as readonly string[]).includes(value);
+}
+
+/**
+ * 回饋的分類。結構上是 `@nexus/core` 的 `FeedbackCategory`，**重新宣告的理由同
+ * {@link SlashDescriptor}**；鏡像斷言在 `@nexus/harness`。
+ */
+export type WireFeedbackCategory =
+  | 'task-result'
+  | 'instruction-following'
+  | 'product-interaction'
+  | 'service-stability'
+  | 'resource-cost'
+  | 'security-privacy-permission'
+  | 'other';
+
+export type WireFeedbackRating = 'positive' | 'negative';
+
+/** 一輪目前的評分。結構上是 `@nexus/core` 的 `MessageFeedbackItem`。 */
+export interface WireFeedbackItem {
+  readonly turn: number;
+  readonly rating: WireFeedbackRating;
+  readonly note?: string;
+  readonly category?: WireFeedbackCategory;
+  readonly version: string;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+
+export interface FeedbackPutCommand {
+  readonly id: number;
+  readonly method: 'feedback.put';
+  readonly params: {
+    /** 畫面上那則回覆的 id（`AiEntry.id`）。 */
+    readonly runId: string;
+    readonly rating: WireFeedbackRating;
+    readonly note?: string;
+    readonly category?: WireFeedbackCategory;
+    /** 看到的版本；`null` 表示要求目前沒有評分。 */
+    readonly ifVersion: string | null;
+  };
+}
+
+export interface FeedbackDeleteCommand {
+  readonly id: number;
+  readonly method: 'feedback.delete';
+  readonly params: { readonly runId: string; readonly ifVersion: string };
+}
+
+export interface FeedbackRecordCommand {
+  readonly id: number;
+  readonly method: 'feedback.record';
+  readonly params: { readonly text?: string; readonly category?: WireFeedbackCategory };
+}
+
+export type FeedbackCommand = FeedbackPutCommand | FeedbackDeleteCommand | FeedbackRecordCommand;
+
+/** 那個 run id 指不到一輪：不是這條 thread 上 root 的一則回覆，或 server 重開過。 */
+export type FeedbackTargetNotFound = { readonly code: 'target-not-found'; readonly runId: string };
+export type FeedbackVersionConflict = {
+  readonly code: 'version-conflict';
+  readonly current: WireFeedbackItem | null;
+};
+
+export type FeedbackPutResult =
+  | { readonly ok: true; readonly value: WireFeedbackItem }
+  | {
+      readonly ok: false;
+      readonly error:
+        | FeedbackTargetNotFound
+        | FeedbackVersionConflict
+        | { readonly code: 'note-blank' }
+        | {
+            readonly code: 'note-too-large';
+            readonly maxBytes: number;
+            readonly actualBytes: number;
+          };
+    };
+
+export type FeedbackDeleteResult =
+  | { readonly ok: true; readonly value: { readonly absent: true } }
+  | { readonly ok: false; readonly error: FeedbackTargetNotFound | FeedbackVersionConflict };
+
+export type FeedbackRecordResult = {
+  readonly ok: true;
+  readonly value: { readonly recorded: true };
+};
+
 /** `/threads/:id/commands/:method` 這條 RPC family 收得下的全部 method。 */
-export type RpcMethod = UplinkMethod | SlashMethod;
+export type RpcMethod = UplinkMethod | SlashMethod | typeof RUN_CANCEL_METHOD | FeedbackMethod;
 
 export function isRpcMethod(value: unknown): value is RpcMethod {
-  return isUplinkMethod(value) || isSlashMethod(value);
+  return (
+    isUplinkMethod(value) ||
+    isSlashMethod(value) ||
+    isRunCancelMethod(value) ||
+    isFeedbackMethod(value)
+  );
 }
 
 /** 命令的自由輸入怎麼提示。結構上就是 `@nexus/core` 的 `CommandInputDescriptor`。 */

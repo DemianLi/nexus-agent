@@ -25,9 +25,11 @@
  * 補訊息是後面的事，補的時候要先講清楚顆粒度怎麼對齊。
  */
 
+import type { FeedbackRecord, MessageFeedbackDelete, MessageFeedbackPut } from './feedback.js';
 import type { GoalChangeMeta, GoalId } from './goal.js';
 import type { TodoItem } from './todo.js';
 import type { SandboxMode } from './sandbox.js';
+import type { ToolErrorInfo } from './tool-events.js';
 
 /**
  * 這一版收得下的事件種類。**加種類要同時回答「兩條路都產得出來嗎」。**
@@ -78,6 +80,32 @@ import type { SandboxMode } from './sandbox.js';
  * `plan/mode` 沒有帶來新的生產者，兩個寫者各走一條舊路：`/plan` 走 `goal/change` 那條
  * （經 `registry.sessions` 接到 root 那一份的 plugin），`exit_plan_mode` 走 `todo/write` 那條
  * （模型工具問 `forCall`）。「兩條路都產得出來嗎」答得出來——命令面與工具清單兩條路共用。
+ *
+ * `tool/call`／`tool/result` 生產者同第四種（fold 自己建的 middleware），而且就是**圍堵那一顆**
+ * （{@link ./containment.ts | createContainmentMiddleware}）：只有第 0 格同時看得到內層拋出的
+ * 錯與內層回的錯誤訊息。「兩條路都產得出來嗎」同 `model/usage`：它就是那一份組裝本身，而
+ * 工具結果在兩條路上都是一則完整的 ToolMessage，檔頭那條「顆粒度對不齊」在這裡沒有指涉對象。
+ * 跟 `model/usage` 一樣寫得進 subagent 那份。見 [#264](https://github.com/DemianLi/nexus-agent/issues/264)。
+ *
+ * `model/start`／`model/end` 生產者同第四種（{@link ./model-calls.ts | createModelCallRecorder}），
+ * 理由同 `model/usage`：同一個 middleware 實例、同一次模型呼叫，也寫得進 subagent 那份。
+ * 見 [#266](https://github.com/DemianLi/nexus-agent/issues/266)。
+ *
+ * **`tool/result` 有第二個寫者：web 的 pump**，只在一種情況——停在核准點時人按了停止，那幾顆
+ * 等核准的呼叫被收回（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。那時沒有 run 在跑，
+ * 圍堵看不到它們，所以由 pump 寫 `turn/start {kind:'resume'}` → 每一顆的 `tool/result`
+ * （`ABORTED_BEFORE_DISPATCH`）→ `turn/end` 帶 aborted。配對規則不變：每一顆都配著前面那顆沒結果的
+ * `tool/call`。
+ *
+ * `feedback/*` 三顆**沒有帶來新的生產者，帶來的是新的觸發者：人在事後按的**，只寫 root 那一份。
+ * `feedback/record` 兩個寫者各走一條舊路：`/feedback` 走 `goal/change` 那條（經 `registry.sessions`
+ * 接到 root 那一份的 plugin），web 的回饋對話框走 `turn/start` 那條（進入點——wire-handler 把
+ * pump 那一份交給同一份規則）；`feedback/message-put`／`message-delete` 只有後面那條。**CLI 產不出
+ * 後兩顆**——評分只在 web
+ * （[#267](https://github.com/DemianLi/nexus-agent/issues/267) 的 Q4），這是第一種只有一條路產得
+ * 出來的事件；它們描述的是人事後怎麼看，不是模型做了什麼，所以「兩條路的顆粒度要對齊」在這裡
+ * 沒有指涉對象。**三顆都只進日誌、不進模型**：對話住在 checkpointer，寫它們的人沒有一個碰
+ * `updateState`。見 [#278](https://github.com/DemianLi/nexus-agent/issues/278)。
  */
 export type SessionEventType =
   | 'turn/start'
@@ -89,10 +117,28 @@ export type SessionEventType =
   | 'goal/change'
   | 'todo/write'
   | 'model/usage'
+  | 'model/start'
+  | 'model/end'
   | 'compaction/summary'
   | 'sandbox/mode'
   | 'plan/mode'
+  | 'tool/call'
+  | 'tool/result'
+  | 'feedback/message-put'
+  | 'feedback/message-delete'
+  | 'feedback/record'
   | 'session/end-seed';
+
+/**
+ * 一輪為什麼沒有正常結束。今天只有一種：被人中止。
+ *
+ * 原因只放 `user`：dsh 的 `parent`／`hook`／`disposed` 在我們這側沒有生產者——子代理的日誌沒有
+ * `turn/end`，用不到 `parent`。有了生產者再加成員。
+ */
+export type TurnEndReason = {
+  readonly kind: 'aborted';
+  readonly cause: { readonly kind: 'user' };
+};
 
 /** 每一種事件帶什麼。 */
 export interface SessionEventMap {
@@ -127,8 +173,18 @@ export interface SessionEventMap {
         /** 第幾輪，從 1 起算。折疊拿它推進 `roundsStarted`。 */
         readonly round: number;
       };
-  /** 一輪正常結束——**跑完與停在核准點都算**，停在核准點時前面會有一顆 `interrupt/raised`。 */
-  'turn/end': Record<string, never>;
+  /**
+   * 一輪結束——**跑完與停在核准點都算**，停在核准點時前面會有一顆 `interrupt/raised`。
+   *
+   * **被人中止的那一輪也以這一顆收尾，帶 `reason`**；正常結束時整個不放這個 key（同
+   * `command/done` 的 `text`）。照 dsh 的 `turn/end {reason: {kind: 'aborted', reason: cause}}`
+   * （`packages/core/session/src/types.ts:203`，`c291e79`），dsh 沒有 `turn/cancelled`。
+   * 內層那一格叫 `cause` 不叫 dsh 的 `reason`：外層已經叫 `reason`，兩層同名讀起來會混
+   * （[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q5）。
+   *
+   * **讀它判「這一輪收了、可以接著排」的人要看這一格**：中止之後 goal 不續行（`goal-driver.ts`）。
+   */
+  'turn/end': { readonly reason?: TurnEndReason };
   /** 一輪拋錯結束。只留訊息，堆疊不進日誌。 */
   'turn/failed': { readonly message: string };
   /** 掛上了一顆等人回答的中斷。 */
@@ -136,7 +192,8 @@ export interface SessionEventMap {
   /**
    * 一個解析得出來的斜線命令進了它的 handler。**只記日誌，永遠不進模型**。
    *
-   * 與 `command/done` 靠 `commandId` 配對，形狀照 dsh 的 `tool/call`↔`tool/result`。
+   * 與 `command/done` 靠 `commandId` 配對，形狀照 dsh 的 `tool/call`↔`tool/result`
+   * （我們自己的那一對在下面，模型的工具呼叫記在那裡）。
    * `name` 與 `args` 是 `parseCommand` 自己的切分（命令名，以及**含分隔空白的原文**），
    * 所以讀日誌的人不必再解析一次。
    *
@@ -144,13 +201,17 @@ export interface SessionEventMap {
    * 這一條照 dsh 的 `execute`：「Admission misses log nothing」。
    *
    * **`args` 是使用者原話，而它會原樣進遙測**——協調器一律鏡像每一顆事件（見
-   * `session-telemetry-coordinator.ts`）。要把使用者輸入擋在遙測外，得補 dsh 那個
-   * `recordInput` 開關；這一版沒有它，理由見 [#118](https://github.com/DemianLi/nexus-agent/issues/118)。
+   * `session-telemetry-coordinator.ts`）。
+   *
+   * **命令宣告 `recordInput: false` 時整個不放 `args`**，照 dsh
+   * （`packages/interaction/commands/src/index.ts:376`，`c291e79`）：那段輸入由命令自己的 domain 事件
+   * 帶著，這裡再記一次就是同一段話在日誌裡出現兩次。今天只有 `/feedback` 這樣宣告
+   * （[#278](https://github.com/DemianLi/nexus-agent/issues/278)）；v8 以前每一顆都帶這一格。
    */
   'command/run': {
     readonly commandId: string;
     readonly name: string;
-    readonly args: string;
+    readonly args?: string;
     readonly source: { readonly kind: 'user' };
   };
   /**
@@ -202,6 +263,22 @@ export interface SessionEventMap {
     readonly outputTokens: number;
     readonly totalTokens: number;
   };
+  /**
+   * 一次模型呼叫開始了。與下一顆 `model/end` 配對；會話統計拿這一對數步數、量模型耗時
+   * （`session-stats.ts`）。
+   *
+   * **這不是 dsh 的 `step/start`，名字是故意換的**：dsh 的一步包含它派發的工具，`step/end` 在
+   * 工具之後；這一對只包模型那一段，工具事件落在 `model/end` **之後**。顆數對得上（一步一次
+   * 模型請求），時刻對不上。理由見 `model-calls.ts`。
+   */
+  'model/start': Record<string, never>;
+  /**
+   * 配對的那次模型呼叫結束了——**完成、拋錯、中止都記**（在 `finally` 裡），同 dsh 那條「每一
+   * 個進入的步恰好一顆 `step/end`」。不帶結果：要知道那次成不成，看後面有沒有 `turn/failed`。
+   *
+   * 沒配到 `model/end` 的 `model/start` 只有一種成因：行程在呼叫中途死了。
+   */
+  'model/end': Record<string, never>;
   /**
    * 壓縮真的發生了一次：舊訊息被換成一份摘要。**一次摘要一筆**。
    *
@@ -281,6 +358,83 @@ export interface SessionEventMap {
    * 折疊它的人**不**在 end-seed 歸零。
    */
   'plan/mode': { readonly active: boolean };
+  /**
+   * 模型要叫一次工具，**在它進任何一層之前記**——照 dsh 在核准之前就記
+   * （`packages/core/agent-loop/src/tool-calls.ts:168`，`c291e79`），所以被核准閘門擋掉的
+   * 呼叫一樣有這一顆。與 `tool/result` 靠 `callId` 配對。生產者是圍堵，見 `containment.ts`。
+   *
+   * ## 對 dsh 的兩處偏離
+   *
+   * - **`arguments` 平常是參數物件序列化後的字串，不是模型吐的原字串。** 原字串只留在供應商那一層
+   *   的 `additional_kwargs.tool_calls`，形狀隨供應商而變，`wrapToolCall` 只拿得到解析過的
+   *   `toolCall.args`。**JSON 都不合格的那顆例外：記的就是模型吐的原字串，所以這一格不一定解得開
+   *   JSON**（[#281](https://github.com/DemianLi/nexus-agent/issues/281)，見 `invalid-tool-args.ts`）。
+   *   格式版本不升：dsh 只在結構變更時升，這一格的型別沒變（dsh 這一格本來就是原字串）。
+   * - **沒有 `turn`／`step`。** 我們沒有 `step/*` 事件（`model/start`／`model/end` 不是步的邊界，
+   *   這一顆落在它們之後，見那兩顆），subagent 的日誌裡也沒有 `turn/start`
+   *   （入口點只包 root 的輪）。root 那份以落在哪一對 `turn/start`／`turn/end` 之間定輪。
+   *
+   * ## 同一個 `callId` 可能有兩顆
+   *
+   * 被核准閘門中斷的那次，resume 之後以同一個 `callId` 再進一次（實測；同批沒被擋的不重跑）。
+   * 所以暫停那一輪留一顆沒配對的、後面跟著 `interrupt/raised`，resume 那一輪再一對——
+   * **配對取最後那一顆**。這樣結果永遠跟呼叫落在同一輪，dsh `session-stats` 在 `turn/end`
+   * 丟掉沒配對的呼叫那條規則（`packages/session/session-stats/src/projection.ts:190-194`）
+   * 照抄得動。
+   *
+   * ⚠️ **`arguments` 原樣進本機日誌、也原樣進遙測**——`write_file` 寫的內容就在這裡。照 dsh
+   * 不加開關（它的 `recordInput` 只蓋斜線命令，`packages/interaction/commands/src/index.ts:376`）；
+   * 要擋在遙測外靠部署方掛脫敏規則，而脫敏只作用在送出去的那份，**本機的 jsonl 照舊是原文**。
+   */
+  'tool/call': {
+    readonly callId: string;
+    /** 模型叫的名字，不經過任何解析——未知工具也照記。 */
+    readonly name: string;
+    readonly arguments: string;
+  };
+  /**
+   * 配對的那次呼叫落定了。
+   *
+   * **只記結果的判別，不記內容**——這是對 dsh 形狀的偏離：dsh 帶模型看到的整則訊息，而下游
+   * （會話統計、離線掃描）用不到內容，記了等於開半扇門 B（對話重播），那不是這張卡的事
+   * （[#264](https://github.com/DemianLi/nexus-agent/issues/264) 拍板）。
+   *
+   * `error` 只在 `isError` 時出現，碼照 dsh（見 `tool-events.ts`）；**一般拋錯與核准被拒不帶**
+   * ——dsh 只替帶碼的錯誤填這一格。**沒碼的時候整個不放 key**，同 `command/done` 的 `text`。
+   *
+   * **「這次呼叫沒有生效」也是 `isError`**：goal、todo、計劃模式、root-only 樁的拒絕回的是錯誤
+   * 訊息（[#273](https://github.com/DemianLi/nexus-agent/issues/273)）。在那之前寫下的日誌把它們
+   * 記成 `isError: false`，**格式版本沒有跟著升**——詞彙沒變，dsh 也只在結構變更時升版
+   * （`references/deepseek-harness/AGENTS.md` 的 `SESSION_FORMAT_VERSION` 那條）——所以讀舊檔
+   * 數錯誤的分不出這一段。
+   *
+   * 中斷不是落定：暫停的那次沒有這一顆，見 `tool/call`。
+   */
+  'tool/result': {
+    readonly callId: string;
+    readonly isError: boolean;
+    readonly error?: ToolErrorInfo;
+  };
+  /**
+   * 一輪的評分新建或改了，**帶修改之後的完整值**。後寫覆蓋先寫，被 `feedback/message-delete`
+   * 收回的就沒了——折疊住在 `@nexus/plugin-feedback`。
+   *
+   * 照 dsh 的同名事件（`packages/feedback/message-feedback/src/types.ts:54-58`，`c291e79`），偏離兩處：
+   * 目標欄位 `messageId` 換成 `turn`、拿掉 `sessionId`。理由見 {@link ./feedback.ts}。
+   *
+   * ⚠️ **`note` 是使用者的原話，而它會原樣進遙測**，同 `command/run` 的 `args`。
+   */
+  'feedback/message-put': MessageFeedbackPut;
+  /** 一輪的評分被收回了。**之前的評分與備註仍留在日誌裡**——收回不是抹掉。 */
+  'feedback/message-delete': MessageFeedbackDelete;
+  /**
+   * 一則對整個會話的評語。**跟任何一輪都沒有綁**。照 dsh 的 `feedback/record`
+   * （`packages/feedback/command-feedback/src/types.ts:33-40`）。
+   *
+   * ⚠️ **`text` 是使用者的原話，而它會原樣進遙測**。所以 `/feedback` 宣告 `recordInput: false`
+   * ——同一段話不在 `command/run` 再記一次。
+   */
+  'feedback/record': FeedbackRecord;
   /**
    * 一段 seed 的結尾——這一顆之前的事件是上一個行程寫的，這個行程一顆都沒寫
    * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。

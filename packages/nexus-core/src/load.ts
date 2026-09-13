@@ -196,6 +196,11 @@ function trackUndo(
       redact: (rule) => remember(registry.telemetry.redact(rule)),
       use: (service) => remember(registry.telemetry.use(service)),
     },
+    // 同 `telemetry.use`：漏了會讓回滾過的 plugin 佔著那個唯一的位子。
+    feedback: {
+      ...registry.feedback,
+      use: (service) => remember(registry.feedback.use(service)),
+    },
   };
 }
 

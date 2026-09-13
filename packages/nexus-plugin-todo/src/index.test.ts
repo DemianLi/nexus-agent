@@ -8,8 +8,9 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { ToolMessage } from '@langchain/core/messages';
 import type { StructuredTool } from '@langchain/core/tools';
-import { createRegistry, SessionRegistry } from '@nexus/core';
+import { createRegistry, SessionRegistry, toolErrorOf } from '@nexus/core';
 import type { TodoItem } from '@nexus/core';
 
 import {
@@ -60,8 +61,18 @@ async function call(
   tool: StructuredTool,
   todos: readonly { content: string; status: string }[],
   config: unknown,
-): Promise<string> {
-  return (await tool.invoke({ todos }, config as never)) as string;
+): Promise<unknown> {
+  return tool.invoke({ todos }, config as never);
+}
+
+/**
+ * 一次拒絕：模型看到的字、它落定的狀態與碼。圍堵讀的是後兩格，所以文字對了不夠。
+ *
+ * @param result - `call` 回來的東西；不是一則工具訊息就當場失敗。
+ */
+function refusalOf(result: unknown): { text: string; status: unknown; error: unknown } {
+  if (!ToolMessage.isInstance(result)) throw new Error(`回的不是一則工具訊息：${String(result)}`);
+  return { text: String(result.content), status: result.status, error: toolErrorOf(result) };
 }
 
 describe('驗證', () => {
@@ -213,7 +224,11 @@ describe('寫進哪一份', () => {
     const { tool, sessions } = mount(true);
     const answer = await call(tool, [{ content: '甲', status: 'pending' }], ROOT_CONFIG);
 
-    expect(answer).toBe(TODO_NOT_ATTACHED_MESSAGE);
+    expect(refusalOf(answer)).toEqual({
+      text: TODO_NOT_ATTACHED_MESSAGE,
+      status: 'error',
+      error: undefined,
+    });
     expect(sessions.root.events).toEqual([]);
   });
 
@@ -222,7 +237,11 @@ describe('寫進哪一份', () => {
     bind();
     const answer = await call(tool, [{ content: '甲', status: 'pending' }], undefined);
 
-    expect(answer).toBe(TODO_UNKNOWN_CALLER_MESSAGE);
+    expect(refusalOf(answer)).toEqual({
+      text: TODO_UNKNOWN_CALLER_MESSAGE,
+      status: 'error',
+      error: undefined,
+    });
     expect(sessions.root.events).toEqual([]);
   });
 
@@ -237,21 +256,29 @@ describe('寫進哪一份', () => {
 
     const entry = registry.tools.resolve(TODO_TOOL_NAME);
     const answer = await call(entry!.value, [{ content: '甲', status: 'pending' }], ROOT_CONFIG);
-    expect(answer).toBe(todoAmbiguousMessage(2));
+    expect(refusalOf(answer)).toEqual({
+      text: todoAmbiguousMessage(2),
+      status: 'error',
+      error: undefined,
+    });
   });
 
   /**
    * **驗證發生在找日誌之前。** 反過來的話，一份壞掉的清單在「沒接線」的組裝上會回
    * 「沒接線」——把模型送錯東西誤報成接線問題，而那兩件事要修的地方完全不同。
    *
-   * **而且它回字串不是拋**：LangGraph 的 ToolNode 不接拋出來的東西，端到端的驗收在
+   * **而且它回錯誤訊息不是拋**（見 `TODO_ERROR_PREFIX`），端到端的驗收在
    * `apps/harness/src/todo-tool.test.ts`。
    */
   it('清單壞掉時回的是驗證錯誤，不是接線錯誤——而且沒接線也一樣', async () => {
     const { tool, sessions } = mount(true);
-    expect(await call(tool, [{ content: '  ', status: 'pending' }], ROOT_CONFIG)).toBe(
-      TODO_ERROR_PREFIX + TODO_EMPTY_CONTENT_MESSAGE,
-    );
+    expect(
+      refusalOf(await call(tool, [{ content: '  ', status: 'pending' }], ROOT_CONFIG)),
+    ).toEqual({
+      text: TODO_ERROR_PREFIX + TODO_EMPTY_CONTENT_MESSAGE,
+      status: 'error',
+      error: undefined,
+    });
     expect(sessions.root.events).toEqual([]);
   });
 });

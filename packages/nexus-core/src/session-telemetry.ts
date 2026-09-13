@@ -12,14 +12,17 @@
  * @see [#89](https://github.com/DemianLi/nexus-agent/issues/89)
  */
 
+import type { SessionEvent, SessionEventType } from './session-log.js';
+
 /**
  * 告警等級，**捕獲當下就映好**，讓收端零設定也能告警。
  *
- * 映射規則只有一條：`turn/failed` 是 `error`，其餘捕獲到的事件是 `info`。`warn` 留給
- * 脫敏規則與後端自己用——這一層不產生它。
+ * 映射規則兩條：`turn/failed` 與 `isError` 的 `tool/result` 是 `error`，其餘捕獲到的事件是
+ * `info`。`warn` 留給脫敏規則與後端自己用——這一層不產生它。
  *
- * **與 dsh 的差別在來源不在規則**：dsh 另外看 `tool/result` 的 `isError` 與 `turn/end`
- * 的 error reason，而我們的日誌 v1 兩者都沒有（沒有工具事件，失敗是獨立的事件種類）。
+ * **與 dsh 的差別在來源不在規則**：dsh 另外看 `turn/end` 的 error reason，而我們的失敗是
+ * 獨立的事件種類（`turn/failed`）。`tool/result` 那一格從
+ * [#264](https://github.com/DemianLi/nexus-agent/issues/264) 起跟 dsh 一樣。
  */
 export type SessionTelemetrySeverity = 'info' | 'warn' | 'error';
 
@@ -80,7 +83,9 @@ export type SessionTelemetryRedactRule = (record: SessionTelemetryRecord) => Ses
  * 協調器對後端的最低要求。
  *
  * **這裡沒有 `sharing`，是刻意的**——協調器從頭到尾不讀它。共享策略是**掛載**這件事的
- * 要求，不是捕獲的要求，所以它落在 {@link SessionTelemetryService} 上。dsh 同一個切法：
+ * 要求，不是捕獲的要求，所以它落在 {@link SessionTelemetryService} 上：`feedback-only` 要怎麼捕獲，
+ * 是組裝點讀了它之後替協調器挑 `capture`（`apps/harness` 的 `attachTelemetry`，
+ * [#279](https://github.com/DemianLi/nexus-agent/issues/279)），協調器只知道 live 或 on-demand。dsh 同一個切法：
  * `sharing` 在可載入的 `SessionTelemetryBackend` 上，`SessionTelemetrySink` 上沒有。
  * 把它塞進這裡只會讓每個測試替身實作一個沒人看的欄位。
  */
@@ -118,12 +123,57 @@ export interface SessionTelemetrySink {
  * 詞彙歸 seam 所有而不是歸某個後端，這樣披露就不必知道掛的是誰。三個值照抄 dsh 的
  * `SessionTelemetrySharingStatus`。
  *
- * **`'feedback-only'` 目前沒有任何 mode 產得出來。** dsh 那個模式靠 `feedback/record`
- * 這個 session 事件驅動（`dsh-command-feedback` 的 `/feedback` 指令），nexus 沒有
- * feedback 子系統，{@link ./session-log.ts | SessionEventMap} 裡也沒有那個事件種類。
- * 字彙留著是因為它是 seam 的字彙——**來源不存在，不是省略**。
+ * `'feedback-only'` 只在人明白送出回饋時補送日誌，哪幾顆算回饋見 {@link isFeedbackEvent}
+ * （[#279](https://github.com/DemianLi/nexus-agent/issues/279)）。
  */
 export type SessionTelemetrySharingStatus = 'full' | 'feedback-only' | 'disabled';
+
+/**
+ * 每一種事件**准不准 `feedback-only` 把日誌補送出去**。只有人明白送出的回饋准：三顆 `feedback/*`。
+ * 照 dsh 的 `isFeedback`（`packages/session/session-telemetry-otel/src/index.ts:58-64`，`c291e79`）。
+ *
+ * **逐種列舉、不給預設值**：多一種事件而沒在這裡表態就編不過。漏放行與誤放行是相反的兩種病——
+ * 漏了，人按了送出卻什麼都沒送；多了，人沒同意就整份送出去。
+ */
+const RELEASES_FEEDBACK_ONLY_CAPTURE = {
+  'turn/start': false,
+  'turn/end': false,
+  'turn/failed': false,
+  'interrupt/raised': false,
+  'command/run': false,
+  'command/done': false,
+  'goal/change': false,
+  'todo/write': false,
+  'model/usage': false,
+  'model/start': false,
+  'model/end': false,
+  'compaction/summary': false,
+  'sandbox/mode': false,
+  'plan/mode': false,
+  'tool/call': false,
+  'tool/result': false,
+  'feedback/message-put': true,
+  'feedback/message-delete': true,
+  'feedback/record': true,
+  'session/end-seed': false,
+} as const satisfies Record<SessionEventType, boolean>;
+
+/**
+ * 這一顆是不是人送出的回饋——`feedback-only` 靠它決定什麼時候補送。
+ *
+ * dsh 的另外兩道守衛在我們這裡不需要，理由各一：
+ *
+ * - **分叉繼承來的回饋不算**（`event.seq < session.inheritedEventCount`）：我們不分叉。續接帶進來的
+ *   seed 裡就算有回饋也碰不到這裡——seed 不發給任何觀察者（`SessionLogOptions.seed`），接線那側
+ *   用的是不重播的 `log.subscribe`。
+ * - **`message-put`／`message-delete` 比 `sessionId`**：我們的事件沒有那一格（`feedback.ts` 的偏離）。
+ *
+ * @param event - 剛進日誌的那一顆。
+ * @returns 是回饋就 `true`。
+ */
+export function isFeedbackEvent(event: SessionEvent): boolean {
+  return RELEASES_FEEDBACK_ONLY_CAPTURE[event.type];
+}
 
 /**
  * 可掛載的後端形：{@link SessionTelemetrySink} 的能力，**加上必須表態的共享策略**。

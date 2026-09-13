@@ -74,9 +74,13 @@ import {
   createSubmitRecordInvariantPlugin,
   SUBMIT_RECORD_INVARIANT_PACKAGE,
 } from '@nexus/plugin-submit-record/invariant';
+import {
+  createFeedbackInvariantPlugin,
+  FEEDBACK_INVARIANT_PACKAGE,
+} from '@nexus/plugin-feedback/invariant';
 
 /**
- * 十五個配套入口，配上各自**應該**認領的包名。
+ * 十六個配套入口，配上各自**應該**認領的包名。
  *
  * 右邊那一欄刻意寫死字串而不是引用左邊那個常數——常數抄錯了，拿常數自己比自己
  * 是驗不出來的。
@@ -86,6 +90,7 @@ const COMPANIONS: readonly (readonly [() => NexusPlugin, string, string])[] = [
   [createAskUserInvariantPlugin, ASK_USER_INVARIANT_PACKAGE, '@nexus/plugin-ask-user'],
   [createCommandsInvariantPlugin, COMMANDS_INVARIANT_PACKAGE, '@nexus/plugin-commands'],
   [createEchoInvariantPlugin, ECHO_INVARIANT_PACKAGE, '@nexus/plugin-echo'],
+  [createFeedbackInvariantPlugin, FEEDBACK_INVARIANT_PACKAGE, '@nexus/plugin-feedback'],
   [createGoalInvariantPlugin, GOAL_INVARIANT_PACKAGE, '@nexus/plugin-goal'],
   [createMcpInvariantPlugin, MCP_INVARIANT_PACKAGE, '@nexus/plugin-mcp'],
   [createMemoryInvariantPlugin, MEMORY_INVARIANT_PACKAGE, '@nexus/plugin-memory'],
@@ -108,7 +113,7 @@ const COMPANIONS: readonly (readonly [() => NexusPlugin, string, string])[] = [
 ];
 
 describe('子路徑解析', () => {
-  it('十五個 `<pkg>/invariant` 都 import 得到，而且各自吐出一個 plugin', () => {
+  it('十六個 `<pkg>/invariant` 都 import 得到，而且各自吐出一個 plugin', () => {
     for (const [factory] of COMPANIONS) {
       const plugin = factory();
       expect(typeof plugin.apply).toBe('function');

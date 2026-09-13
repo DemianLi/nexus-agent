@@ -22,7 +22,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { SessionRegistry } from '@nexus/core';
-import type { NexusPlugin } from '@nexus/core';
+import type { NexusPlugin, SessionEvent } from '@nexus/core';
 import { createNexusAgent } from './agent-factory.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -79,6 +79,16 @@ function writerPlugin(withSubagent: boolean): NexusPlugin {
   };
 }
 
+/**
+ * 工具自己寫進去的那幾筆。
+ *
+ * 同一份日誌上還有圍堵替每次呼叫記的 `tool/call`／`tool/result`（[#264](https://github.com/DemianLi/nexus-agent/issues/264)），
+ * 那不是這一份要驗的東西——這裡問的是**工具**寫得進哪一份。
+ */
+function written(events: readonly SessionEvent[]): unknown[] {
+  return events.filter((event) => event.type === 'turn/failed').map((event) => event.data);
+}
+
 describe('模型工具與會話日誌', () => {
   it('工具寫得進這次組裝接上的那份日誌', async () => {
     const model = new ScriptedChatModel({
@@ -102,7 +112,7 @@ describe('模型工具與會話日誌', () => {
       await dispose();
     }
 
-    expect(sessions.root.events.map((event) => event.data)).toEqual([{ message: '根寫的' }]);
+    expect(written(sessions.root.events)).toEqual([{ message: '根寫的' }]);
     // 沒有 subagent 就不該有第二份 —— 日誌是懶建的，沒有人問就不該生出來。
     expect(sessions.list()).toHaveLength(1);
   });
@@ -179,8 +189,8 @@ describe('模型工具與會話日誌', () => {
 
     const entries = sessions.list();
     expect(entries.map((entry) => entry.address.kind)).toEqual(['root', 'subagent']);
-    expect(entries[0]?.log.events.map((event) => event.data)).toEqual([{ message: '根' }]);
-    expect(entries[1]?.log.events.map((event) => event.data)).toEqual([{ message: '子代理' }]);
+    expect(written(entries[0]?.log.events ?? [])).toEqual([{ message: '根' }]);
+    expect(written(entries[1]?.log.events ?? [])).toEqual([{ message: '子代理' }]);
     // **血緣讀得出來**：遙測的每一筆帶的是 `session.id`，那是外面唯一分得出誰寫的東西。
     expect(entries[1]?.log.sessionId.startsWith('lineage/')).toBe(true);
   });
@@ -236,7 +246,7 @@ describe('模型工具與會話日誌', () => {
     const subagents = sessions.list().filter((entry) => entry.address.kind === 'subagent');
     expect(subagents).toHaveLength(2);
     // 各一筆。合成一份的話這裡會是 `[2, 0]` 或少一個項目。
-    expect(subagents.map((entry) => entry.log.length)).toEqual([1, 1]);
+    expect(subagents.map((entry) => written(entry.log.events).length)).toEqual([1, 1]);
     // 兩份的 id 不同——同一個 subagent 名字，不同的執行。
     expect(new Set(subagents.map((entry) => entry.log.sessionId)).size).toBe(2);
   });

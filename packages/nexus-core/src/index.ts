@@ -78,6 +78,7 @@ export type {
   LifecycleRegistrationPoint,
   InvariantRegistrationPoint,
   TelemetryRegistrationPoint,
+  FeedbackRegistrationPoint,
   CommandRegistrationPoint,
   SessionRegistrationPoint,
   SessionLookup,
@@ -90,7 +91,9 @@ export { createRegistry } from './registry.js';
 export type { LoadResult } from './load.js';
 export { loadPlugins } from './load.js';
 
+export type { ToolEventSessions } from './containment.js';
 export {
+  classifyThrownToolError,
   CONTAINMENT_MIDDLEWARE_NAME,
   createContainmentMiddleware,
   declaredToolTimeoutMs,
@@ -99,6 +102,21 @@ export {
   isToolTimeout,
   resolveToolName,
 } from './containment.js';
+
+export type { ToolErrorInfo, ToolOutcome } from './tool-events.js';
+export {
+  INVALID_ARGS,
+  INVALID_TOOL_OUTPUT,
+  markToolError,
+  readToolOutcome,
+  TOOL_ABORTED,
+  TOOL_ABORTED_BEFORE_DISPATCH,
+  TOOL_TIMEOUT,
+  toolCallIdOf,
+  toolErrorOf,
+  toolRefusal,
+  UNKNOWN_TOOL,
+} from './tool-events.js';
 
 export {
   createObservationPolicy,
@@ -109,8 +127,33 @@ export {
   OBSERVED_WRITE_TOOL,
 } from './observation.js';
 
+export type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
+export {
+  createInvalidArgumentsCarrier,
+  createInvalidToolArgsMiddleware,
+  INVALID_ARGUMENTS_REFUSAL,
+  INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+  repairInvalidToolCalls,
+} from './invalid-tool-args.js';
+
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
+export { createModelCallRecorder, MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
+export {
+  createTurnCancelGuard,
+  createTurnCancelModelSignal,
+  INTERRUPTED_REPLY_MARKER,
+  isTurnCancelled,
+  TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
+  TOOL_ABORTED_TEXT,
+  TURN_CANCEL_CONFIG_KEY,
+  TURN_CANCEL_MIDDLEWARE_NAME,
+  TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
+  TurnCancelledError,
+  turnCancelSignalOf,
+} from './turn-cancel.js';
+export type { SessionStats, SessionStatsState } from './session-stats.js';
+export { deriveSessionStats, sessionStatsUnit } from './session-stats.js';
 export type { ModelUsage } from './model-usage.js';
 export {
   createModelUsageRecorder,
@@ -124,6 +167,8 @@ export {
   GOAL_WRAPUP_MARKER,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
+  repeatCallKey,
+  repeatReminderTracks,
   resolveRepeatReminderSettings,
 } from './repeat-reminder.js';
 export type {
@@ -152,12 +197,36 @@ export {
 } from './tool-result-pruner.js';
 
 export type {
+  FeedbackCategory,
+  FeedbackRecord,
+  FeedbackRecordResult,
+  FeedbackRejected,
+  FeedbackService,
+  FeedbackSuccess,
+  MessageFeedbackDelete,
+  MessageFeedbackDeleteRequest,
+  MessageFeedbackDeleteResult,
+  MessageFeedbackFailure,
+  MessageFeedbackItem,
+  MessageFeedbackNoteBlank,
+  MessageFeedbackNoteTooLarge,
+  MessageFeedbackPut,
+  MessageFeedbackPutRequest,
+  MessageFeedbackPutResult,
+  MessageFeedbackRating,
+  MessageFeedbackTargetNotFound,
+  MessageFeedbackVersionConflict,
+} from './feedback.js';
+export { FEEDBACK_CATEGORIES } from './feedback.js';
+
+export type {
   SessionEvent,
   SessionEventMap,
   SessionEventType,
   SessionLogListener,
   SessionLogOptions,
   SessionLogView,
+  TurnEndReason,
 } from './session-log.js';
 export { currentTurnStart, hasUnansweredInterrupt, SessionLog } from './session-log.js';
 
@@ -169,6 +238,7 @@ export type {
   SessionTelemetrySharingStatus,
   SessionTelemetrySink,
 } from './session-telemetry.js';
+export { isFeedbackEvent } from './session-telemetry.js';
 
 export type {
   SessionTelemetryCapture,

@@ -22,6 +22,8 @@ import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { BaseChatModelParams } from '@langchain/core/language_models/chat_models';
 import type { ChatResult } from '@langchain/core/outputs';
 import { MemorySaver } from '@langchain/langgraph';
+import { deriveSessionStats, SessionRegistry } from '@nexus/core';
+import type { SessionEvent } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -92,10 +94,15 @@ async function runUntilThrow(
   error: unknown,
   throwOnCall: number,
   invocations: number,
-): Promise<{ rejected: unknown; calls: number; historyFiles: string[] }> {
+): Promise<{
+  rejected: unknown;
+  calls: number;
+  historyFiles: string[];
+  events: readonly SessionEvent[];
+}> {
   const root = await mkdtemp(join(tmpdir(), 'nexus-overflow-'));
   const model = new ThrowingChatModel({ error, throwOnCall });
-  const { agent, dispose } = await createNexusAgent({
+  const { agent, attachSession, dispose } = await createNexusAgent({
     model,
     backend: new ContainedFilesystemBackend({ rootDir: root }),
     checkpointer: new MemorySaver(),
@@ -105,6 +112,8 @@ async function runUntilThrow(
       keep: { type: 'messages', value: 2 },
     },
   });
+  const sessions = new SessionRegistry('overflow');
+  const detach = attachSession(sessions);
   let rejected: unknown = null;
   try {
     for (let index = 0; index < invocations; index += 1) {
@@ -115,6 +124,7 @@ async function runUntilThrow(
   } catch (caught) {
     rejected = caught;
   } finally {
+    detach();
     await dispose();
   }
   let historyFiles: string[] = [];
@@ -123,7 +133,7 @@ async function runUntilThrow(
   } catch {
     historyFiles = [];
   }
-  return { rejected, calls: model.calls, historyFiles };
+  return { rejected, calls: model.calls, historyFiles, events: sessions.root.events };
 }
 
 describe('供應商回上下文溢出', () => {
@@ -145,6 +155,26 @@ describe('供應商回上下文溢出', () => {
     expect(calls).toBeGreaterThan(4);
     // 摘要真的落了地——「活下來」若是靠別的路徑，這裡會是空的。
     expect(historyFiles.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * **會話統計的偏離，釘成一個決定**（[#266](https://github.com/DemianLi/nexus-agent/issues/266)，
+   * 見 `packages/nexus-core/src/model-calls.ts` 的「偏離」一節）：起訖紀錄器在摘要器裡面，
+   * 所以溢出的那一次與重試的那一次各落一對起訖——四次模型節點，**五步**。摘要那次呼叫不經過
+   * 內層，不算。哪天有人把它「修」成四步或六步，這一條會紅，逼他回去改那一節。
+   */
+  it('溢出那一次算兩步，產摘要的那次呼叫不算', async () => {
+    const { rejected, calls, events } = await runUntilThrow(
+      new ContextOverflowError('Input exceeded the model context window.'),
+      4,
+      4,
+    );
+
+    expect(rejected).toBeNull();
+    const { steps } = deriveSessionStats(events);
+    expect(steps).toBe(5);
+    // 模型本身被叫了六次：三次正常、溢出一次、摘要一次、重試一次。差的那一次就是摘要。
+    expect(calls - steps).toBe(1);
   });
 
   /**

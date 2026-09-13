@@ -198,6 +198,38 @@ function canonicalize(argumentsValue: unknown): string {
 }
 
 /**
+ * 「同一個呼叫」的身分鍵：工具名加規範化後的參數。鏈只在兩次呼叫的鍵相等時才接得上。
+ *
+ * **匯出是為了只有一份判法**：離線掃描（`apps/harness/src/eval/session-scan.ts`，
+ * [#268](https://github.com/DemianLi/nexus-agent/issues/268)）拿它從日誌的 `tool/call` 重算鏈，
+ * 各寫一份的話，兩邊哪天對「同一個」的看法分岔，掃描標出來的打轉就不是提醒器看到的那一個。
+ *
+ * @param toolName - 模型叫的工具名。
+ * @param argumentsValue - 已解析的參數。
+ * @returns 可以直接比等號的字串。
+ */
+export function repeatCallKey(toolName: string, argumentsValue: unknown): string {
+  return JSON.stringify([toolName, canonicalize(argumentsValue)]);
+}
+
+/**
+ * 設定的射程編成一個述詞：這個工具名參不參與鏈。理由同 {@link repeatCallKey}。
+ *
+ * @param settings - 已經驗過的設定。
+ * @returns `include` 非空時只認列到的，`exclude` 列到的一律不認。
+ */
+export function repeatReminderTracks(
+  settings: Pick<RepeatReminderSettings, 'include' | 'exclude'>,
+): (toolName: string) => boolean {
+  const includePatterns = settings.include.map(wildcardToRegExp);
+  const excludePatterns = settings.exclude.map(wildcardToRegExp);
+  return (toolName) => {
+    if (includePatterns.length > 0 && !includePatterns.some((p) => p.test(toolName))) return false;
+    return !excludePatterns.some((p) => p.test(toolName));
+  };
+}
+
+/**
  * 把一個 `*` 萬用字元的樣式編成錨定的 RegExp（其餘 regex 元字元一律當字面處理）。
  *
  * @param pattern - 工具名樣式。
@@ -347,12 +379,11 @@ function pendingReminders(
       // 不受追蹤的呼叫對鏈**透明**：既不計數也不重置。所以 `a → todo_write → a` 在
       // `todo_write` 被排除時仍算連續兩次 `a`——穿插進迴圈的記錄類工具掩蓋不了迴圈。
       if (!tracked(call.name)) continue;
-      const canonical = canonicalize(call.args);
-      const key = JSON.stringify([call.name, canonical]);
+      const key = repeatCallKey(call.name, call.args);
       const count = chain !== undefined && chain.key === key ? chain.count + 1 : 1;
       chain = { key, count };
       if (i !== lastAi || !thresholds.has(count)) continue;
-      hits.push({ tool: call.name, count, canonical });
+      hits.push({ tool: call.name, count, canonical: canonicalize(call.args) });
     }
   }
   return hits;
@@ -384,12 +415,7 @@ function pendingReminders(
  * @returns 可以交給 `registry.middleware.use()` 或塞進 subagent 的 middleware。
  */
 export function createRepeatReminder(settings: RepeatReminderSettings): AgentMiddleware {
-  const includePatterns = settings.include.map(wildcardToRegExp);
-  const excludePatterns = settings.exclude.map(wildcardToRegExp);
-  const tracked = (toolName: string): boolean => {
-    if (includePatterns.length > 0 && !includePatterns.some((p) => p.test(toolName))) return false;
-    return !excludePatterns.some((p) => p.test(toolName));
-  };
+  const tracked = repeatReminderTracks(settings);
 
   return createMiddleware({
     name: REPEAT_REMINDER_MIDDLEWARE_NAME,

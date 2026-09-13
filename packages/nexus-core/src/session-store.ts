@@ -21,7 +21,9 @@
  *   會列出、查詢、續接任何會話的服務用的；我們的讀方只有續接——CLI 的 `--resume <run 目錄>`
  *   與 serve 碰到一條 thread 時（[#251](https://github.com/DemianLi/nexus-agent/issues/251)
  *   的門 A），兩個手上都已經有位址（目錄與 thread id），不需要列。所以只抄續接要的那一條：讀回、交出一個接著寫的把手。`stat`／`list` 等有人
- *   要列的那天再加。
+ *   要列的那天再加。**離線掃描（[#268](https://github.com/DemianLi/nexus-agent/issues/268)）是列的，
+ *   但它不經過這個介面**：它在產品路徑外、只讀 JSONL 後端的檔（`apps/harness/src/eval/session-scan.ts`），
+ *   不要把手也不拿租約。所以這一條說的仍是執行期的讀方。
  * - **`create` 撞到已存在的 session 必須拒絕**，不得覆寫也不得續寫。我們的 session id 只在
  *   一次組裝內唯一（`SessionRegistry` 的 `<root>/<runId>`），不像 dsh 的 `SessionId` 全域
  *   唯一，所以後端要自己把每一次組裝隔開。這條拒絕**在續接出現之後照樣成立**：續接是另一個
@@ -75,8 +77,33 @@ import type { SessionEvent } from './session-log.js';
  * 計劃模式從 graph state 搬進日誌（[#251](https://github.com/DemianLi/nexus-agent/issues/251)
  * 的第二刀）。v3 的檔直接讀：一顆 `plan/mode` 都沒有的日誌，計劃模式照組裝的初值起算——
  * 跟 v3 那時候續接回來的結果一樣。
+ *
+ * ## 5：`tool/call`／`tool/result`
+ *
+ * 工具呼叫與它的結果進日誌（[#264](https://github.com/DemianLi/nexus-agent/issues/264)）。
+ * v4 的檔直接讀：一顆工具事件都沒有的日誌，就是 v4 那時候寫出來的樣子——沒有任何讀方拿
+ * 「沒有工具事件」推論什麼。
+ *
+ * ## 6：`model/start`／`model/end`
+ *
+ * 模型呼叫的起訖進日誌，會話統計拿它數步數（[#266](https://github.com/DemianLi/nexus-agent/issues/266)）。
+ * v5 的檔直接讀：一顆都沒有的日誌折出來的步數是 0——**那是「沒記」不是「沒叫」**，讀舊檔的
+ * 統計要照格式版本表態，不能把 0 當成真的沒叫過模型。
+ *
+ * ## 7：`turn/end` 帶 `reason`，工具碼多一個 `ABORTED_BEFORE_DISPATCH`
+ *
+ * 中止這一輪（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）：被中止的那一輪以帶
+ * `reason: {kind:'aborted', ...}` 的 `turn/end` 收尾。v6 的檔直接讀：沒有 `reason` 就是正常結束——
+ * **那時候也沒有中止這條路**，所以讀舊檔數中止要表態成「沒記」，不是 0。
+ *
+ * ## 8：`feedback/*` 三顆，`command/run` 的 `args` 變成選填
+ *
+ * 評分與 `/feedback`（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。v7 的檔直接讀：
+ * 一顆回饋事件都沒有的日誌就是那時候寫出來的樣子——**那時候也沒有評分這條路**，所以讀舊檔數點踩
+ * 要表態成「沒記」，不是 0。`args` 選填是 dsh 的 `recordInput: false`：v7 以前每一顆 `command/run`
+ * 都帶它，讀舊檔的人照舊讀得到。
  */
-export const SESSION_LOG_FORMAT_VERSION = 4;
+export const SESSION_LOG_FORMAT_VERSION = 8;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。

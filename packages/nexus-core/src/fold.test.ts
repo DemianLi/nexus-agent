@@ -7,12 +7,19 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { ToolMessage } from '@langchain/core/messages';
 import type { CreateDeepAgentParams, SubAgent } from 'deepagents';
-import { CompositeBackend } from 'deepagents';
+import { CompositeBackend, GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
 import { CONTAINMENT_MIDDLEWARE_NAME } from './containment.js';
+import { INVALID_TOOL_ARGS_MIDDLEWARE_NAME } from './invalid-tool-args.js';
 import { OBSERVATION_POLICY_MIDDLEWARE_NAME } from './observation.js';
 import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
+import { MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
+import {
+  TURN_CANCEL_MIDDLEWARE_NAME,
+  TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
+} from './turn-cancel.js';
 import { MODEL_USAGE_MIDDLEWARE_NAME } from './model-usage.js';
 import { REPEAT_REMINDER_MIDDLEWARE_NAME } from './repeat-reminder.js';
 import { SUMMARIZATION_MIDDLEWARE_NAME } from './summarization.js';
@@ -20,6 +27,16 @@ import type { FoldOptions } from './fold.js';
 import { loadPlugins } from './load.js';
 import { fakeBackend, fakeMiddleware, fakePlugin, fakeSubAgent, fakeTool } from './fixtures.js';
 import type { NexusPlugin } from './plugin.js';
+import { toolErrorOf } from './tool-events.js';
+
+/**
+ * 樁回的東西：模型看到的字、狀態與碼。**樁是錯誤、不帶碼**（#273）——dsh 沒有 root-only 旗標，
+ * 它對同一種情況拋的是一般 `Error`。
+ */
+function stubAnswer(result: unknown): { text: string; status: unknown; error: unknown } {
+  if (!ToolMessage.isInstance(result)) throw new Error(`回的不是一則工具訊息：${String(result)}`);
+  return { text: String(result.content), status: result.status, error: toolErrorOf(result) };
+}
 
 /**
  * 跑一份清單再折，測試裡唯一的入口——fold 的輸入永遠是載入完的 registry。
@@ -60,6 +77,16 @@ function middlewareNames(params: { middleware: unknown[] }): string[] {
 
 function toolNames(tools: { name: string }[]): string[] {
   return tools.map((tool) => tool.name);
+}
+
+/**
+ * 註冊進來的那些 subagent，**不含 fold 自己補的 `general-purpose`**。
+ *
+ * 那一份只要沒人註冊同名的就永遠在、而且排在最前；這個檔大多數測試量的是「註冊進來的
+ * subagent 被折成什麼」。它自己那一組見 `describe('general-purpose 由 fold 註冊')`。
+ */
+function registered(params: { subagents: SubAgent[] }): SubAgent[] {
+  return params.subagents.filter((subagent) => subagent.name !== GENERAL_PURPOSE_SUBAGENT.name);
 }
 
 describe('backend 註冊點', () => {
@@ -114,11 +141,15 @@ describe('middleware 註冊點', () => {
     ]);
     expect(middlewareNames(params)).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
       'b',
       'c',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -130,11 +161,15 @@ describe('middleware 註冊點', () => {
     ]);
     expect(middlewareNames(params)).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
       'c',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -146,11 +181,15 @@ describe('middleware 註冊點', () => {
     ]);
     expect(middlewareNames(params)).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       'c',
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 });
@@ -173,7 +212,9 @@ describe('圍堵打底', () => {
       fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
     ]);
     expect(middlewareNames(params).indexOf(CONTAINMENT_MIDDLEWARE_NAME)).toBe(0);
-    expect(middlewareNames(params).indexOf('b')).toBe(1);
+    // 中止外層那顆緊貼圍堵（#276），所以 prepend 的那一顆落在第 2 格，仍在圍堵裡面。
+    expect(middlewareNames(params).indexOf(TURN_CANCEL_MIDDLEWARE_NAME)).toBe(1);
+    expect(middlewareNames(params).indexOf('b')).toBe(2);
   });
 
   it('**每個 subagent 也有，而且同樣在第 0 格**——不注就是漏掉半棵樹', async () => {
@@ -190,7 +231,9 @@ describe('圍堵打底', () => {
       );
       expect(names[0]).toBe(CONTAINMENT_MIDDLEWARE_NAME);
     }
-    expect(params.subagents).toHaveLength(2);
+    // 兩個註冊的，外加 fold 補的 `general-purpose`——它也在上面那個迴圈裡。
+    expect(registered(params)).toHaveLength(2);
+    expect(params.subagents).toHaveLength(3);
   });
 
   it('root 與每個 subagent 共用同一份實例——它無狀態，逐個建只是多做工', async () => {
@@ -198,7 +241,7 @@ describe('圍堵打底', () => {
       fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('releaser'))),
     ]);
     const rootOne = params.middleware[0];
-    const subOne = (params.subagents[0]?.middleware ?? [])[0];
+    const subOne = (registered(params)[0]?.middleware ?? [])[0];
     expect(subOne).toBe(rootOne);
   });
 });
@@ -219,11 +262,15 @@ describe('「先讀後改」策略打底', () => {
     // middleware **外面**：不然任何一個 plugin middleware 都可以在它之前把工具跑掉。
     expect(middlewareNames(params)).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       OBSERVATION_POLICY_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -237,15 +284,19 @@ describe('「先讀後改」策略打底', () => {
       ],
       on,
     );
-    const names = (params.subagents[0]?.middleware ?? []).map(
+    const names = (registered(params)[0]?.middleware ?? []).map(
       (mw) => (mw as unknown as { name: string }).name,
     );
     expect(names).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       OBSERVATION_POLICY_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -269,15 +320,15 @@ describe('「先讀後改」策略打底', () => {
     const pick = (list: readonly unknown[]) =>
       list.find((mw) => (mw as { name: string }).name === OBSERVATION_POLICY_MIDDLEWARE_NAME);
     const rootOne = pick(params.middleware);
-    const first = pick(params.subagents[0]?.middleware ?? []);
-    const second = pick(params.subagents[1]?.middleware ?? []);
+    const first = pick(registered(params)[0]?.middleware ?? []);
+    const second = pick(registered(params)[1]?.middleware ?? []);
 
     expect(rootOne).toBeDefined();
     expect(first).toBeDefined();
     expect(first).not.toBe(rootOne);
     expect(second).not.toBe(first);
     // 對照：圍堵是共用的，兩條放在一起才看得出這是選的、不是漏的。
-    expect(params.subagents[0]?.middleware?.[0]).toBe(params.middleware[0]);
+    expect(registered(params)[0]?.middleware?.[0]).toBe(params.middleware[0]);
   });
 
   it('明著關掉就一份都不建，root 與 subagent 都沒有', async () => {
@@ -286,7 +337,7 @@ describe('「先讀後改」策略打底', () => {
       { ...on, observationPolicy: false },
     );
     expect(middlewareNames(params)).not.toContain(OBSERVATION_POLICY_MIDDLEWARE_NAME);
-    const names = (params.subagents[0]?.middleware ?? []).map(
+    const names = (registered(params)[0]?.middleware ?? []).map(
       (mw) => (mw as unknown as { name: string }).name,
     );
     expect(names).not.toContain(OBSERVATION_POLICY_MIDDLEWARE_NAME);
@@ -307,6 +358,41 @@ describe('「先讀後改」策略打底', () => {
     );
     expect(middlewareNames(params)).toContain(OBSERVATION_POLICY_MIDDLEWARE_NAME);
     expect(params.backend).toBeInstanceOf(CompositeBackend);
+  });
+});
+
+describe('中止這一輪打底（#276）', () => {
+  /**
+   * **兩顆的位置是承重的，而且方向相反**，理由在 `turn-cancel.ts` 的「為什麼是兩顆」：
+   * 外層那顆要在圍堵裡面（換過的結果圍堵才記得到碼）、在起訖紀錄器外面（中止之後被擋下的那次
+   * 呼叫不算一步）；內層那顆要在最後（綁上去的 `RunnableBinding` 只給它裡面的看到）。
+   * 上面每一條期望清單都跟著改了，這一組把理由講出來、並補上「清單全空」這一格。
+   */
+  it('清單全空也有：外層緊貼圍堵、在起訖紀錄器外面，內層在最後', async () => {
+    const names = middlewareNames(await fold([]));
+    expect(names.indexOf(TURN_CANCEL_MIDDLEWARE_NAME)).toBe(1);
+    expect(names.indexOf(TURN_CANCEL_MIDDLEWARE_NAME)).toBeLessThan(
+      names.indexOf(MODEL_CALL_EVENTS_MIDDLEWARE_NAME),
+    );
+    expect(names.at(-1)).toBe(TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME);
+  });
+
+  it('每個 subagent 也有、排法同 root，而且跟 root 共用同一份實例', async () => {
+    const own = fakeMiddleware('subagent-own');
+    const params = await fold([
+      fakePlugin('team', (r) => {
+        r.subagents.register({ ...fakeSubAgent('releaser'), middleware: [own] } as SubAgent);
+      }),
+    ]);
+    const sub = registered(params)[0]?.middleware ?? [];
+    const names = sub.map((mw) => (mw as unknown as { name: string }).name);
+    expect(names[1]).toBe(TURN_CANCEL_MIDDLEWARE_NAME);
+    // 內層那顆排在 subagent 自帶的那些後面：它自帶的 middleware 讀到的也是原本的模型。
+    expect(names.at(-1)).toBe(TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME);
+    expect(names.indexOf('subagent-own')).toBeLessThan(names.length - 1);
+    // 無狀態、一份走遍：訊號每次從那一次呼叫的 `configurable` 現讀。
+    expect(sub[1]).toBe(params.middleware[1]);
+    expect(sub.at(-1)).toBe(params.middleware.at(-1));
   });
 });
 
@@ -395,7 +481,7 @@ describe('permissions 註冊點', () => {
       fakePlugin('secrets', (r) => void r.permissions.deny(['/.env*'])),
       fakePlugin('team', (r) => void r.subagents.register(own)),
     ]);
-    expect(params.subagents[0]?.permissions).toEqual([
+    expect(registered(params)[0]?.permissions).toEqual([
       { operations: ['read', 'write'], paths: ['/.env*'], mode: 'deny' },
       { operations: ['write'], paths: ['/notes/**'], mode: 'deny' },
     ]);
@@ -406,7 +492,7 @@ describe('permissions 註冊點', () => {
       fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('researcher'))),
     ]);
     expect(params.permissions).toBeUndefined();
-    expect(params.subagents[0]?.permissions).toBeUndefined();
+    expect(registered(params)[0]?.permissions).toBeUndefined();
   });
 });
 
@@ -425,10 +511,14 @@ describe('approvals 註冊點', () => {
     ]);
     expect(middlewareNames(params)).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -441,14 +531,18 @@ describe('approvals 註冊點', () => {
         r.subagents.register({ ...fakeSubAgent('releaser'), middleware: [own] } as SubAgent);
       }),
     ]);
-    const names = (params.subagents[0]?.middleware ?? []).map(
+    const names = (registered(params)[0]?.middleware ?? []).map(
       (mw) => (mw as unknown as { name: string }).name,
     );
     expect(names).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -456,13 +550,17 @@ describe('approvals 註冊點', () => {
     const params = await fold([
       fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('researcher'))),
     ]);
-    const names = (params.subagents[0]?.middleware ?? []).map(
+    const names = (registered(params)[0]?.middleware ?? []).map(
       (mw) => (mw as unknown as { name: string }).name,
     );
     expect(names).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -516,8 +614,8 @@ describe('fork 標記的去向', () => {
     const params = await fold([
       fakePlugin('team', (r) => void r.subagents.register(forked as unknown as SubAgent)),
     ]);
-    expect(params.subagents).toHaveLength(1);
-    expect((params.subagents[0] as { mode?: string }).mode).toBe('fork');
+    expect(registered(params)).toHaveLength(1);
+    expect((registered(params)[0] as { mode?: string }).mode).toBe('fork');
   });
 });
 
@@ -562,7 +660,7 @@ describe('每個 subagent 的有效工具集合', () => {
       fakePlugin('base', (r) => void r.tools.register(globalSearch)),
       fakePlugin('team', (r) => void r.subagents.register(own)),
     ]);
-    expect(params.subagents[0]?.tools).toEqual([ownSearch]);
+    expect(registered(params)[0]?.tools).toEqual([ownSearch]);
   });
 
   it('往不存在的 subagent 加工具 → 報錯，訊息指名那個名字與是誰加的', async () => {
@@ -584,14 +682,18 @@ describe('root-only 的工具', () => {
       fakePlugin('goal', (r) => void r.tools.register(goal, { rootOnly: true })),
       fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('researcher'))),
     ]);
-    const stub = params.subagents[0]?.tools?.[0];
+    const stub = registered(params)[0]?.tools?.[0];
 
     // 名字不變——變了模型會以為工具不見了，那是另一種失敗。
     expect(stub?.name).toBe('goal');
     expect(stub).not.toBe(goal);
     // 描述帶著那句話：模型看得到的只有描述，不寫在那裡它每一輪都會再叫一次。
     expect(stub?.description).toContain(ROOT_ONLY_NOTICE);
-    expect(await stub?.invoke({})).toBe(rootOnlyRefusal('goal', 'researcher'));
+    expect(stubAnswer(await stub?.invoke({}))).toEqual({
+      text: rootOnlyRefusal('goal', 'researcher'),
+      status: 'error',
+      error: undefined,
+    });
     // root 那一份沒有被動到。
     expect(params.tools).toEqual([goal]);
   });
@@ -607,7 +709,7 @@ describe('root-only 的工具', () => {
       }),
     ]);
     // 「這個 subagent 有它自己的版本」跟「這個工具不給 subagent」不是同一件事。
-    expect(params.subagents[0]?.tools).toEqual([scopedGoal]);
+    expect(registered(params)[0]?.tools).toEqual([scopedGoal]);
   });
 
   /**
@@ -627,7 +729,9 @@ describe('root-only 的工具', () => {
     ]);
     for (const subagent of params.subagents) {
       expect(subagent.tools?.[0]).not.toBe(goal);
-      expect(await subagent.tools?.[0]?.invoke({})).toBe(rootOnlyRefusal('goal', subagent.name));
+      expect(stubAnswer(await subagent.tools?.[0]?.invoke({}))).toMatchObject({
+        text: rootOnlyRefusal('goal', subagent.name),
+      });
     }
   });
 
@@ -637,7 +741,109 @@ describe('root-only 的工具', () => {
       fakePlugin('search', (r) => void r.tools.register(search)),
       fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('researcher'))),
     ]);
-    expect(params.subagents[0]?.tools).toEqual([search]);
+    expect(registered(params)[0]?.tools).toEqual([search]);
+  });
+});
+
+describe('general-purpose 由 fold 註冊', () => {
+  /**
+   * **這一組量的是「沒有人註冊」那一格。** 基座只在 `subagents` 裡沒有叫 `general-purpose` 的
+   * 東西時才自己補一個，而它補的那份拿不到我們的 stack（見 `fold.ts` 的
+   * {@link foldGeneralPurpose}）。所以 fold 自己補，基座就不補了。
+   */
+  const GP = GENERAL_PURPOSE_SUBAGENT.name;
+
+  function subagentMiddlewareNames(subagent: SubAgent | undefined): string[] {
+    return (subagent?.middleware ?? []).map((mw) => (mw as unknown as { name: string }).name);
+  }
+
+  it('清單全空也有一個，名字、描述、提示詞照抄基座那份', async () => {
+    const params = await fold([]);
+    expect(params.subagents.map((subagent) => subagent.name)).toEqual([GP]);
+    const [gp] = params.subagents;
+    expect(gp?.description).toBe(GENERAL_PURPOSE_SUBAGENT.description);
+    expect(gp?.systemPrompt).toBe(GENERAL_PURPOSE_SUBAGENT.systemPrompt);
+  });
+
+  it('**stack 跟註冊進來的 subagent 逐顆相同**——圍堵在第 0 格，閘門在裡面', async () => {
+    const params = await fold(
+      [fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('researcher')))],
+      {
+        summarization: undefined,
+        repeatReminder: undefined,
+        defaultBackend: fakeBackend('default'),
+      },
+    );
+    const gp = params.subagents.find((subagent) => subagent.name === GP);
+    const researcher = params.subagents.find((subagent) => subagent.name === 'researcher');
+    const names = subagentMiddlewareNames(gp);
+    expect(names).toEqual(subagentMiddlewareNames(researcher));
+    expect(names[0]).toBe(CONTAINMENT_MIDDLEWARE_NAME);
+    expect(names).toContain(APPROVAL_GATE_MIDDLEWARE_NAME);
+    expect(names).toContain(MODEL_USAGE_MIDDLEWARE_NAME);
+    expect(names).toContain(SUMMARIZATION_MIDDLEWARE_NAME);
+  });
+
+  it('排在已註冊的那些前面——同基座 `unshift` 的位置，`task` 描述的順序不變', async () => {
+    const params = await fold([
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('researcher'))),
+    ]);
+    expect(params.subagents.map((subagent) => subagent.name)).toEqual([GP, 'researcher']);
+  });
+
+  it('有 plugin 註冊了同名的就不再補——明著換掉基座那份是那個 plugin 的事', async () => {
+    const own: SubAgent = { ...fakeSubAgent(GP), description: '自己的。' };
+    const params = await fold([fakePlugin('team', (r) => void r.subagents.register(own))]);
+    expect(params.subagents.map((subagent) => subagent.description)).toEqual(['自己的。']);
+  });
+
+  it('往 `general-purpose` 這個層加工具照樣擋——fold 補的那份不在 registry 裡', async () => {
+    const plugins = [
+      fakePlugin('extra', (r) => void r.tools.register(fakeTool('search'), { scope: GP })),
+    ];
+    await expect(fold(plugins)).rejects.toThrow(/"general-purpose"[\s\S]*extra#0 \(extra\)/);
+  });
+
+  it('自己註冊了同名的，那個層就合法，工具進的是那一份', async () => {
+    const search = fakeTool('search');
+    const params = await fold([
+      fakePlugin('team', (r) => {
+        r.subagents.register(fakeSubAgent(GP));
+        r.tools.register(search, { scope: GP });
+      }),
+    ]);
+    const [gp] = params.subagents;
+    expect(params.subagents).toHaveLength(1);
+    expect(gp?.tools).toEqual([search]);
+  });
+
+  it('root 的 skills 跟著它，不跟著自訂的 subagent——照基座那份的繼承規則', async () => {
+    const params = await fold([
+      fakePlugin('skills', (r) => void r.skills.addSource('/skills/')),
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('researcher'))),
+    ]);
+    const gp = params.subagents.find((subagent) => subagent.name === GP);
+    const researcher = params.subagents.find((subagent) => subagent.name === 'researcher');
+    expect(gp?.skills).toEqual(['/skills/']);
+    expect(researcher?.skills).toBeUndefined();
+  });
+
+  it('沒有 skills 時不放空陣列', async () => {
+    const params = await fold([]);
+    const [gp] = params.subagents;
+    expect(gp).not.toHaveProperty('skills');
+  });
+
+  it('root-only 的工具在它裡面也是拒絕樁——基座那份拿的是原件', async () => {
+    const goal = fakeTool('goal');
+    const params = await fold([
+      fakePlugin('goal', (r) => void r.tools.register(goal, { rootOnly: true })),
+    ]);
+    const [gp] = params.subagents;
+    const stub = gp?.tools?.[0];
+    expect(stub?.name).toBe('goal');
+    expect(stub).not.toBe(goal);
+    expect(stubAnswer(await stub?.invoke({}))).toMatchObject({ text: rootOnlyRefusal('goal', GP) });
   });
 });
 
@@ -676,7 +882,7 @@ describe('工具呈現順序', () => {
       ],
       { toolOrder: ['write_file', TOOL_ORDER_REST] },
     );
-    expect(toolNames(params.subagents[0]?.tools ?? [])).toEqual([
+    expect(toolNames(registered(params)[0]?.tools ?? [])).toEqual([
       'write_file',
       'grep',
       'ls',
@@ -720,7 +926,7 @@ describe('工具呈現順序', () => {
     );
     // 全域那一層沒有它，不會憑空多出來。
     expect(params.tools).toEqual([]);
-    expect(toolNames(params.subagents[0]?.tools ?? [])).toEqual(['grep']);
+    expect(toolNames(registered(params)[0]?.tools ?? [])).toEqual(['grep']);
   });
 
   it('工具名叫 <unlisted-tools> → 報錯，那一格不能有歧義', async () => {
@@ -781,7 +987,7 @@ describe('工具呈現順序', () => {
       { toolOrder: ['grep', TOOL_ORDER_REST] },
     );
     expect(params.tools).toEqual([]);
-    expect(toolNames(params.subagents[0]?.tools ?? [])).toEqual(['grep']);
+    expect(toolNames(registered(params)[0]?.tools ?? [])).toEqual(['grep']);
   });
 });
 
@@ -886,11 +1092,15 @@ describe('摘要器打底', () => {
     // 排在所有 registry middleware 之前 ＝ 任何 plugin 掛一個同名的都蓋得過我們這份。
     expect(middlewareNames(params)).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -904,17 +1114,21 @@ describe('摘要器打底', () => {
       ],
       { summarization: {}, defaultBackend: fakeBackend('default') },
     );
-    const names = (params.subagents[0]?.middleware ?? []).map(
+    const names = (registered(params)[0]?.middleware ?? []).map(
       (mw) => (mw as unknown as { name: string }).name,
     );
     // **自帶的排在後面 ＝ 自帶的贏。** 這是「打底」不是「強制」，跟同一個函式裡 `tools`
     // 那條軸線一致；摘要門檻是效能與正確性的預設值，不是安全邊界。閘門那一格沒動。
     expect(names).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -932,8 +1146,8 @@ describe('摘要器打底', () => {
       list.find((mw) => (mw as { name: string }).name === SUMMARIZATION_MIDDLEWARE_NAME);
     const instances = [
       pick(params.middleware),
-      pick(params.subagents[0]?.middleware ?? []),
-      pick(params.subagents[1]?.middleware ?? []),
+      pick(registered(params)[0]?.middleware ?? []),
+      pick(registered(params)[1]?.middleware ?? []),
     ];
     expect(instances.every((instance) => instance !== undefined)).toBe(true);
     // **共用會讓歷史寫進同一個檔**：`sessionId` 在 middleware 的 closure 裡，
@@ -996,12 +1210,16 @@ describe('提醒器打底', () => {
     // 誰先跑由圖決定。這條釘的是「我們打底的三根都排在 registry middleware 之前」。
     expect(middlewareNames(params)).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       REPEAT_REMINDER_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -1015,17 +1233,21 @@ describe('提醒器打底', () => {
       ],
       { repeatReminder: {} },
     );
-    const names = (params.subagents[0]?.middleware ?? []).map(
+    const names = (registered(params)[0]?.middleware ?? []).map(
       (mw) => (mw as unknown as { name: string }).name,
     );
     // 自帶的排在後面 ＝ 自帶的贏，同 `tools` 那條軸線。root 的 `registry.middleware`
     // 到不了 subagent，所以不打底的話那個 subagent 就完全沒有這道提醒。
     expect(names).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       REPEAT_REMINDER_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
 
@@ -1043,8 +1265,8 @@ describe('提醒器打底', () => {
       list.find((mw) => (mw as { name: string }).name === REPEAT_REMINDER_MIDDLEWARE_NAME);
     const instances = [
       pick(params.middleware),
-      pick(params.subagents[0]?.middleware ?? []),
-      pick(params.subagents[1]?.middleware ?? []),
+      pick(registered(params)[0]?.middleware ?? []),
+      pick(registered(params)[1]?.middleware ?? []),
     ];
     expect(instances.every((instance) => instance !== undefined)).toBe(true);
     // **三個位置一個物件。** 這不是「共用也還好」：鏈每次從那個 agent 自己的
@@ -1058,7 +1280,7 @@ describe('提醒器打底', () => {
       { repeatReminder: false },
     );
     expect(middlewareNames(params)).not.toContain(REPEAT_REMINDER_MIDDLEWARE_NAME);
-    const names = (params.subagents[0]?.middleware ?? []).map(
+    const names = (registered(params)[0]?.middleware ?? []).map(
       (mw) => (mw as unknown as { name: string }).name,
     );
     expect(names).not.toContain(REPEAT_REMINDER_MIDDLEWARE_NAME);

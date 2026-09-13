@@ -16,6 +16,7 @@ import {
   OBSERVED_READ_TOOL,
   OBSERVED_WRITE_TOOL,
 } from './observation.js';
+import { toolErrorOf } from './tool-events.js';
 
 /** `wrapToolCall` 拿出來直接呼叫用的形狀。 */
 type Wrapper = (
@@ -92,6 +93,8 @@ describe('三個狀態', () => {
     expect(result.status).toBe('error');
     expect(String(result.content)).toContain('FS_NOT_OBSERVED');
     expect(String(result.content)).toContain('/a.md');
+    // 碼也標在訊息外面，會話日誌的 `tool/result` 讀得到（#264）。
+    expect(toolErrorOf(result)).toEqual({ name: 'FsError', code: 'FS_NOT_OBSERVED' });
     expect(calls).toEqual([]);
   });
 
@@ -115,6 +118,7 @@ describe('三個狀態', () => {
     expect(String(result.content)).toContain('FS_NOT_FOUND');
     // 兩個碼分得開才有意義：一個是「你還沒看」，一個是「你看過，它不在」。
     expect(String(result.content)).not.toContain('FS_NOT_OBSERVED');
+    expect(toolErrorOf(result)).toEqual({ name: 'FsError', code: 'FS_NOT_FOUND' });
     expect(calls).toEqual([OBSERVED_READ_TOOL]);
   });
 
