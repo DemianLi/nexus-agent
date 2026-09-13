@@ -219,7 +219,8 @@ export function resolveToolName(request: {
  *   `ToolInvocationError` 從 handler 拋出來（`langchain@1.5.10` 的 `ToolNode.js:254`），
  *   而那顆錯的 `name` 就是 `"Error"`（實測），**只認得出品牌**。中途每經過一層 middleware
  *   可能再包一層 `MiddlewareError`，所以先沿 `.cause` 走到底——同基座自己的
- *   `#handleError`（`:139-145`）。
+ *   `#handleError`（`:139-145`）。**這不是 `INVALID_ARGS` 唯一的來處**：JSON 都不合格的那顆
+ *   不經過這裡，由 `invalid-tool-args.ts` 的樁回訊息時自己標碼。
  *
  * @param error - `catch` 到的東西。
  * @returns 它的碼，或 `undefined`。
@@ -334,6 +335,7 @@ export function createContainmentMiddleware(
       const raw = callId === undefined ? undefined : invalidArguments?.rawOf(callId);
       const settle = recordToolCall(sessions, request as RecordableRequest, raw);
       // **落定才刪鍵，中斷不刪**：續接時同一個 callId 會再進來一次，那時核准與拒絕都還要讀得到。
+      // 沒接會話（`settle` 是 `undefined`）照樣刪：記不記日誌與載體的壽命是兩件事。
       const forget = (): void => {
         if (callId !== undefined) invalidArguments?.forget(callId);
       };

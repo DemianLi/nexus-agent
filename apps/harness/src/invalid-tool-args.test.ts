@@ -26,7 +26,8 @@ import {
   repairInvalidToolCalls,
   SessionRegistry,
 } from '@nexus/core';
-import type { NexusPlugin, SessionEvent } from '@nexus/core';
+import type { InvariantError, NexusPlugin, SessionEvent } from '@nexus/core';
+import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import type { Event } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -263,13 +264,20 @@ const ROOT_ID = 'invalid-args-root';
 /** CLI 那條：`agent.stream`，串流模式同 `cli.ts`（`updates`／`values`，不串逐字）。 */
 async function assembleCli(replies: readonly Reply[], plugins: readonly NexusPlugin[]) {
   const upstream = await fakeOpenAi(replies);
+  // **日誌的不變量也跑一遍**：核准那條一個 callId 有兩顆 `tool/call`、一顆 `tool/result`，
+  // 只看日誌內容的斷言看不出它配不配得起來。
+  const violations: InvariantError[] = [];
   const built = await createNexusAgent({
     model: openAi(upstream.baseURL),
     checkpointer: new MemorySaver(),
-    plugins: [...plugins],
+    plugins: [...plugins, createCoreInvariantPlugin()],
+    onInvariantViolation: (error) => violations.push(error),
   });
   const sessions = new SessionRegistry(ROOT_ID);
   const detach = built.attachSession(sessions);
+  const unwatch = built.attachInvariants(sessions);
+  // 沒接上的話 `violations` 永遠是空的，下面那條斷言就是假綠。
+  if (unwatch === undefined) throw new Error('不變量沒接上：配套入口是空的');
   const config = { configurable: { thread_id: ROOT_ID } };
   const logOf = (kind: 'root' | 'subagent'): (readonly SessionEvent[])[] =>
     sessions
@@ -291,9 +299,11 @@ async function assembleCli(replies: readonly Reply[], plugins: readonly NexusPlu
     root: (): readonly SessionEvent[] => logOf('root')[0] ?? [],
     subagents: (): (readonly SessionEvent[])[] => logOf('subagent'),
     close: async () => {
+      unwatch?.();
       detach();
       await built.dispose();
       await upstream.close();
+      expect(violations.map((error) => error.message)).toEqual([]);
     },
   };
 }
@@ -369,13 +379,17 @@ describe.each([
       { text: '參數壞了，不叫了。' },
       { text: '好。' },
     ]);
+    const violations: InvariantError[] = [];
     const built = await createNexusAgent({
       model: openAi(upstream.baseURL),
       checkpointer: new MemorySaver(),
-      plugins: [toolsPlugin(bodies)],
+      plugins: [toolsPlugin(bodies), createCoreInvariantPlugin()],
+      onInvariantViolation: (error) => violations.push(error),
     });
     const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'invalid-args-web');
     const detach = built.attachSession(pump.sessions);
+    const unwatch = built.attachInvariants(pump.sessions);
+    if (unwatch === undefined) throw new Error('不變量沒接上：配套入口是空的');
     const frames: Event[] = [];
     const line = new AbortController();
     // **刻意不訂 `messages`**：pump 從那一條學原字串，但客戶端只訂工具卡時也要換得到。
@@ -405,9 +419,11 @@ describe.each([
       await pump.submit({ kind: 'message', text: '再一句' });
       expect(upstream.requests).toHaveLength(3);
       expect(replayOf(upstream.requests[2], 'call_bad').arguments).toBe('{}');
+      expect(violations.map((error) => error.message)).toEqual([]);
     } finally {
       line.abort();
       await draining;
+      unwatch?.();
       detach();
       await built.dispose();
       await upstream.close();
