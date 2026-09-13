@@ -17,7 +17,7 @@
 
 import { tool as makeTool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
-import { CompositeBackend } from 'deepagents';
+import { CompositeBackend, GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import type { AnyBackendProtocol, FilesystemPermission, SubAgent } from 'deepagents';
 import type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
 import { createApprovalGateMiddleware } from './approval.js';
@@ -308,6 +308,7 @@ export function foldRegistry(
     tools: orderTools(globalTools, toolOrder),
     subagents: foldSubAgents(registry, {
       toolOrder,
+      skills: registry.skills.sources(),
       permissions,
       containment,
       turnCancel,
@@ -356,13 +357,11 @@ export function foldRegistry(
  * 這條只能在 fold 驗：層是按名字延遲建立的，註冊當下不知道那個 subagent 之後會不會
  * 出現。
  *
- * **基座自帶的 `general-purpose` 也不算，而且這是對的答案不是暫行做法。** 讀過
- * `deepagents` 的 `src/agent.ts` 之後有兩條事實：(1) 它只在 `subagents` 裡**沒有**叫
- * `general-purpose` 的東西時才自己補一個，所以我們真的註冊一個同名的會把它整個換掉；
- * (2) 它補的那個拿 `tools: effectiveTools`，也就是 root 的工具參數本身——全域工具本來
- * 就已經在裡面了。所以往 `'general-purpose'` 這個層加工具**永遠不是**把工具送進它的
- * 正確方式：要嘛註冊全域（自動流進去），要嘛自己註冊一個同名 subagent（那就是明著換掉
- * 基座的版本）。擋下來還附帶擋住打錯字的層名，兩邊都划算。
+ * **fold 自己補的 `general-purpose` 也不算。** 那一份不在 registry 裡
+ * （{@link generalPurposeSpec}），它的工具集合就是全域那組（root-only 換成樁）。所以往
+ * `'general-purpose'` 這個層加工具不是把工具送進它的方式：要嘛註冊全域（自動流進去），
+ * 要嘛自己註冊一個同名 subagent——那就是明著換掉 fold 補的那份，這個層也跟著合法。擋下來
+ * 還附帶擋住打錯字的層名。
  */
 function assertScopesHaveSubAgents(registry: PluginRegistry): void {
   const orphans = registry.tools
@@ -758,6 +757,51 @@ function foldBackend(
 }
 
 /**
+ * fold 自己補的 `general-purpose`：**基座那份的複本，差在它拿得到我們的 stack。**
+ *
+ * 基座只在 `subagents` 裡沒有叫 `general-purpose` 的東西時才自己補一個
+ * （`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js` 的 `createDeepAgent`），而它補的那份
+ * 走 `mergeMiddlewareStack(gp, customMiddleware, [], { appendNew: false })`——**名字不撞內建
+ * 的一律丟掉**。我們的 stack 除了摘要器全是新名字，所以圍堵、中止、閘門、先讀後改、提醒、
+ * 起訖、用量、解不開的參數一顆都沒進去；撞名留下來的摘要器是 root 那一份實例，歷史會混進
+ * 同一個檔（見 {@link foldSummarizer}）。在產品組裝上實測過：被標成 `ask` 的工具照跑、
+ * 沒有中斷、沒有它自己的會話日誌，而 `task` 的描述對模型列著它。
+ *
+ * 所以 fold 自己補，讓它跟每個註冊進來的 subagent 一樣走 {@link foldSubAgents}；基座看到
+ * 同名的就不補了。**有 plugin 註冊了同名的就不補**——明著換掉這一份是那個 plugin 的事，
+ * 它拿到的一樣是整組 stack。
+ *
+ * **對照 dsh**：標準 preset 的委派是明著掛的一列 `tool-subagent`（`provider: spawn`，
+ * `packages/preset/agent-presets/presets/standard/agent.cordis.yml`，SHA
+ * `c291e7961a515f6d7af9304e7fd1d257929aef26`）。spawn 出來的是同一個 cordis context 上的
+ * 一般 child agent，全域的 `tools/pre-execute` 照樣經過它（`packages/core/tools/src/index.ts`
+ * 的 `scopeTarget(this, exec.agent)`）。那裡沒有「沒人設定就自動冒出來、閘門管不到」的
+ * 子代理；這裡把它變成 fold 明著註冊的一個。
+ *
+ * 照抄的：名字、描述、提示詞與 `mode` 取基座匯出的 `GENERAL_PURPOSE_SUBAGENT`；root 的
+ * `skills` 照基座那份傳過去（`apps/harness/src/skills.test.ts` 守著）。
+ *
+ * **抄不到的兩格，是偏離**：harness profile 對 gp 提示詞的改寫（`applyProfilePrompt`）與
+ * profile 的 `generalPurposeSubagent` 設定。profile 是基座在 fold 之後才從 model 解出來的，
+ * 這裡看不到（見 `apps/harness/src/harness-profile.ts`）。今天沒有任何組裝宣告過 profile，
+ * 所以兩格都是 no-op；哪天有組裝宣告了會改提示詞的 profile，gp 那份不會跟著改，要一起想。
+ *
+ * **工具不照抄，也是刻意的**：基座那份拿 root 的 `tools` 原樣（`effectiveTools`），root-only
+ * 工具在它裡面是原件、叫得到。這裡走 {@link foldSubAgents} 的集合，換成拒絕樁，跟每個
+ * subagent 一致。
+ *
+ * @param skills - root 的 skills 來源。
+ * @returns 還沒補 stack 的 spec，交給 {@link foldSubAgents}。
+ */
+function generalPurposeSpec(skills: readonly string[]): SubAgent {
+  return {
+    ...GENERAL_PURPOSE_SUBAGENT,
+    // 空的就不要放，同 root 那格：空陣列會讓基座建一個掃不到東西的 skills middleware。
+    ...(skills.length > 0 && { skills: [...skills] }),
+  };
+}
+
+/**
  * 每個 subagent 的有效集合。
  *
  * 三件事在這裡合起來，共同的軸線是**全域的東西主動併進每個 subagent**：基座對
@@ -789,11 +833,16 @@ function foldBackend(
  * 「parent 擋 `/restricted/**`，這個 subagent 讀得到」。**那個逃生口在我們這裡打不開。**
  * 全域規則排在你的規則前面，先命中者決定，所以你的 `permissions` 只加得了限制、
  * 鬆不了綁。要放寬只有一條路：讓那條全域 deny 自己帶 `except`。
+ *
+ * **沒有人註冊 `general-purpose` 時，清單最前面多一個 fold 自己補的**，走的是同一條路。
+ * 理由見 {@link generalPurposeSpec}。
  */
 function foldSubAgents(
   registry: PluginRegistry,
   context: {
     toolOrder: readonly string[] | undefined;
+    /** root 的 skills 來源。只給 fold 補的 `general-purpose`，同基座那份。 */
+    skills: readonly string[];
     permissions: readonly FilesystemPermission[];
     containment: AgentMiddleware;
     turnCancel: AgentMiddleware;
@@ -807,10 +856,24 @@ function foldSubAgents(
     invalidToolArgs: AgentMiddleware;
   },
 ): SubAgent[] {
-  const folded: SubAgent[] = [];
-  for (const [name, entry] of registry.subagents.entries()) {
-    const spec = entry.value;
+  // 自帶的 tools 先配上來源：它們沒走 registry 那條路，來源只有這裡知道。
+  const specs = [...registry.subagents.entries()].map(([name, entry]) => ({
+    name,
+    spec: entry.value,
+    own: (entry.value.tools ?? []).map((tool) => ({ value: tool, origin: entry.origin })),
+  }));
+  // 排在最前，同基座 `inlineSubagents.unshift(generalPurposeSpec)`：`task` 的描述照清單
+  // 順序列，換位置就是改了模型讀到的字。
+  if (registry.subagents.get(GENERAL_PURPOSE_SUBAGENT.name) === undefined) {
+    specs.unshift({
+      name: GENERAL_PURPOSE_SUBAGENT.name,
+      spec: generalPurposeSpec(context.skills),
+      own: [],
+    });
+  }
 
+  const folded: SubAgent[] = [];
+  for (const { name, spec, own } of specs) {
     // 全域打底 → subagent 自帶的 tools → 該層註冊的，越後面越近。自帶的那些不會被
     // 抹掉：它們是這個 subagent 自己的東西，只是沒走 registry 那條路進來。
     //
@@ -831,8 +894,7 @@ function foldSubAgents(
           : globalEntry,
       );
     }
-    for (const tool of spec.tools ?? [])
-      merged.set(tool.name, { value: tool, origin: entry.origin });
+    for (const ownEntry of own) merged.set(ownEntry.value.name, ownEntry);
     for (const [toolName, scoped] of registry.tools.own(name)) merged.set(toolName, scoped);
 
     const permissions = [...context.permissions, ...(spec.permissions ?? [])];
