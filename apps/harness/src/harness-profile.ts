@@ -55,7 +55,13 @@ export interface HarnessProfileEffects {
    * profile 走的正是工廠那條。
    */
   readonly extraMiddleware: readonly string[];
-  /** 自動附加的 general-purpose subagent 被改設定。 */
+  /**
+   * 自動附加的 general-purpose subagent 被改設定。
+   *
+   * **這根槓桿在我們的組裝上拉不動**：`foldRegistry` 自己註冊了一個 `general-purpose`，基座
+   * 就不補它那份，而 profile 的 `generalPurposeSubagent`（描述、提示詞、`enabled`）只作用在
+   * 基座那份上。宣告照樣要求：這一格問的是 profile 拉了哪幾根，不是拉得動哪幾根。
+   */
   readonly generalPurposeSubagent: boolean;
 }
 

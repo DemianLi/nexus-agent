@@ -206,9 +206,9 @@ describe('skills 的快取邊界', () => {
 /**
  * **skills 與 memory 的 subagent 繼承規則正好相反**——升版絆索。
  *
- * 基座的 `createSubagentDefaultMiddleware(input)` 有 `input.skills` 分支，而內建的
- * general-purpose subagent 在 `normalizeSubagentSpec` 時被塞進了 root 的 `skills`
- * ——所以它拿得到。自訂 subagent 沒有人幫它塞，`SubAgent` 要自己帶 `skills` 才有。
+ * 基座的 `createSubagentDefaultMiddleware(input)` 有 `input.skills` 分支。基座自己補的
+ * general-purpose 在 `normalizeSubagentSpec` 時被塞進了 root 的 `skills`；它現在改由
+ * `foldRegistry` 註冊，那一格照抄——**第一條就是抄得忠不忠實的守衛**。自訂 subagent 沒有人幫它塞，`SubAgent` 要自己帶 `skills` 才有。
  * 基座註解把這件事寫得很明白：「Custom subagents do NOT inherit skills from the main
  * agent by default. Only the general-purpose subagent inherits the main agent's skills.」
  *

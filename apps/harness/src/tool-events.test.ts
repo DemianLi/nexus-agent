@@ -279,6 +279,38 @@ describe('subagent 裡的呼叫', () => {
       await run.close();
     }
   });
+
+  /**
+   * **沒有人註冊的 `general-purpose` 也一樣。** 它以前是基座自己補的那份，我們的 stack 一顆都
+   * 沒有——跑完了，但 subagent 那份日誌根本沒出生，root 那份只看得到 `task`。
+   */
+  it('general-purpose 也有自己那份，記得到它裡面的呼叫', async () => {
+    const run = await assemble(
+      [
+        {
+          content: '委派。',
+          toolCalls: [
+            { name: 'task', args: { description: '幹活', subagent_type: 'general-purpose' } },
+          ],
+        },
+        { content: '子代理動手。', toolCalls: [{ name: 'echo', args: { text: '子' } }] },
+        { content: '子代理收工。' },
+        ...done,
+      ],
+      [toolsPlugin],
+    );
+    try {
+      await run.agent.invoke(toAgentInvocation('跑。'), run.config);
+      expect([...resultsByName(run.root()).keys()]).toEqual(['task']);
+      const subagents = run.subagents();
+      expect(subagents).toHaveLength(1);
+      expect([...resultsByName(subagents[0]!).entries()]).toEqual([
+        ['echo', { callId: expect.any(String), isError: false }],
+      ]);
+    } finally {
+      await run.close();
+    }
+  });
 });
 
 /**
