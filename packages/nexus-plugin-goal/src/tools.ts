@@ -282,8 +282,9 @@ export type GoalToolValue =
 
 /**
  * {@link GoalToolValue} 的輸出 schema，三顆工具註冊時一起帶（[#252](https://github.com/DemianLi/nexus-agent/issues/252)）。
- * 對 dsh `tool-goal` 的 `output.schema`；**型別註記是承重的**——改了 `GoalToolValue` 沒改這裡，
- * 編譯就紅。拒絕是 `status: 'error'`，校驗器不驗；自主收尾那條包成 `Command`，裡面那則照驗。
+ * 對 dsh `tool-goal` 的 `output.schema`；**型別註記只擋一個方向**：`GoalToolValue` 多了必填欄位而
+ * 這裡沒跟上，編譯會紅；欄位改成可選、列舉放寬（例如 `phase` 變 `string`），編譯照過——那兩種
+ * 要靠 `tools.test.ts` 的 `parse()` 對每一次真的輸出驗 schema。拒絕是 `status: 'error'`，校驗器不驗；自主收尾那條包成 `Command`，裡面那則照驗。
  */
 export const GOAL_TOOL_OUTPUT_SCHEMA: z.ZodType<GoalToolValue> = z.union([
   z.object({ goal: z.null() }),
