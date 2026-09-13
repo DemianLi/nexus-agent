@@ -487,6 +487,31 @@ describe('升級', () => {
       expect(await exists(join(root, 'c.txt'))).toBe(false);
     });
 
+    it('兩個檔都被擋、只升級其中一個：綁到的是後擋下的那一次，拿它的內容寫這個檔也不算', async () => {
+      const controller = new SandboxModeController('read-only');
+      controller.enableEscalation(SANDBOX_ESCALATION_HINT);
+      const backend = new ContainedFilesystemBackend({
+        rootDir: root,
+        mode: controller.source,
+        grants: controller,
+      });
+
+      expect((await backend.write('/d.txt', '四')).error).toContain('這個 backend 是唯讀的');
+      expect((await backend.write('/e.txt', '五')).error).toContain('這個 backend 是唯讀的');
+      // 升級指名 d.txt，綁到的卻是 e.txt 被擋的那一次（一次只留一顆）。
+      const crossed = {
+        mode: 'workspace-write',
+        target: '/d.txt',
+        denied: controller.lastDenial,
+      } as const;
+      controller.grant(crossed);
+
+      // 操作一樣、內容也跟綁住的那次一樣——只差在那次打的是別的檔。
+      expect((await backend.write('/d.txt', '五')).error).toContain(GRANT_MISMATCH_NOTE);
+      expect(controller.peekGrant()).toBe(crossed);
+      expect(await exists(join(root, 'd.txt'))).toBe(false);
+    });
+
     it('submit_record（ro-7 那一筆）：升級之後重試把欄位改掉 → 人按了核准也寫不進去', async () => {
       const submit = (company: string): ScriptedTurn => ({
         content: '',
