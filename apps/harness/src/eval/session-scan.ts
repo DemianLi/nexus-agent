@@ -70,14 +70,14 @@ import { parseJsonlSessionBody } from '../jsonl-session-store.js';
 /** 沒帶碼的錯誤結果落在這一格。dsh 只替帶碼的錯誤填 `error`，一般拋錯與核准被拒都在這裡。 */
 export const UNCODED_ERROR = '無碼';
 
-/** 工具事件從這一版開始記。見 `session-store.ts` 的版本 5。 */
-const TOOL_EVENTS_SINCE = 5;
+/** 工具事件從這一版開始記。見 `session-store.ts` 的版本 5。`draft` 也讀。 */
+export const TOOL_EVENTS_SINCE = 5;
 /** 模型起訖從這一版開始記。見 `session-store.ts` 的版本 6。 */
 const MODEL_CALLS_SINCE = 6;
 /** 中止（`turn/end` 帶 `reason`）從這一版開始記。見 `session-store.ts` 的版本 7。 */
-const CANCEL_SINCE = 7;
+export const CANCEL_SINCE = 7;
 /** 評分與 `/feedback` 從這一版開始記。見 `session-store.ts` 的版本 8。 */
-const FEEDBACK_SINCE = 8;
+export const FEEDBACK_SINCE = 8;
 
 /**
  * 這一版認得的事件種類。
@@ -184,8 +184,9 @@ export function loopingThreshold(settings: RepeatReminderSettings): number {
 /**
  * 日誌上的 `arguments` 解回參數。解不動就原字串——**這條路會走到**：JSON 都不合格的那顆記的就是
  * 模型吐的原字串（`@nexus/core` 的 `invalid-tool-args.ts`），同一個原字串重複叫照樣配得成一串。
+ * `draft` 算逐輪的鏈也走這一份，「同一個呼叫」才只有一種判法。
  */
-function parseArguments(serialized: string): unknown {
+export function parseArguments(serialized: string): unknown {
   try {
     return JSON.parse(serialized) as unknown;
   } catch {
@@ -379,8 +380,19 @@ function formatErrors(errors: Readonly<Record<string, number>>): string {
 /** 引用參數的上限。報表是給人掃的，完整的參數在日誌裡。 */
 const ARGUMENTS_PREVIEW = 80;
 
-function preview(text: string): string {
+/** 截到 {@link ARGUMENTS_PREVIEW} 個字。`draft` 列實際呼叫也用這一份。 */
+export function preview(text: string): string {
   return text.length <= ARGUMENTS_PREVIEW ? text : `${text.slice(0, ARGUMENTS_PREVIEW)}…`;
+}
+
+/**
+ * 報表上一個路徑的寫法：`base` 給了就把它底下的印成相對的，落在它外面的照印絕對路徑（一串 `../`
+ * 比絕對路徑難讀）。
+ */
+export function displayPath(file: string, base?: string): string {
+  if (base === undefined) return file;
+  const inside = relative(base, file);
+  return inside.startsWith('..') || isAbsolute(inside) ? file : inside;
 }
 
 /**
@@ -388,8 +400,7 @@ function preview(text: string): string {
  *
  * @param scans - 每一份的結果。
  * @param unreadable - 讀不懂的那幾份。
- * @param options - `threshold` 印在標題上；`base` 給了就把它底下的路徑印成相對的，落在它外面的
- *   照印絕對路徑（一串 `../` 比絕對路徑難讀）。
+ * @param options - `threshold` 印在標題上；`base` 見 {@link displayPath}。
  * @returns 整份報表，一行一個元素。
  */
 export function formatScanReport(
@@ -397,11 +408,7 @@ export function formatScanReport(
   unreadable: readonly UnreadableSessionLog[],
   options: { readonly threshold: number; readonly base?: string },
 ): readonly string[] {
-  const shown = (file: string): string => {
-    if (options.base === undefined) return file;
-    const inside = relative(options.base, file);
-    return inside.startsWith('..') || isAbsolute(inside) ? file : inside;
-  };
+  const shown = (file: string): string => displayPath(file, options.base);
   const ordered = [...scans].sort(
     (a, b) =>
       Number(b.looping === true) - Number(a.looping === true) || a.file.localeCompare(b.file),
