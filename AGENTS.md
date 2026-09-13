@@ -78,3 +78,7 @@ Issue 與 spec 都放在 GitHub Issues（`DemianLi/nexus-agent`），一律用 `
 ### Domain docs
 
 多 context 佈局：root 的 `CONTEXT-MAP.md` 指向 `apps/*` 各自的 `CONTEXT.md`。見 [`docs/agents/domain.md`](docs/agents/domain.md)。
+
+### Code search
+
+用 codebase-memory-mcp 的知識圖檢索程式碼，專案名 `nexus-agent` 與 `deepseek-harness`，索引各自在本機建。正向查找走圖；「沒有」「只有 N 個」這類否定宣稱要配 `check_index_coverage` 與 grep。見 [`docs/agents/codebase-memory.md`](docs/agents/codebase-memory.md)。
