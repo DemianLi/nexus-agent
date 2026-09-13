@@ -162,6 +162,19 @@ describe('設定驗證', () => {
     }
   });
 
+  it('feedback-only 跟 full 走同一套驗證：少了 exporter.url 當場拋', () => {
+    expect(() => new OpenTelemetrySessionService({ mode: 'feedback-only' })).toThrow(
+      'exporter.url 是必填',
+    );
+  });
+
+  it('feedback-only 說出去的策略就是 feedback-only——組裝點靠它挑 on-demand', async () => {
+    const { url } = await mockCollector();
+    const service = new OpenTelemetrySessionService({ mode: 'feedback-only', exporter: { url } });
+    expect(service.sharing).toBe('feedback-only');
+    await service.shutdown();
+  });
+
   it('disabled 不看 exporter.url，也不建任何 SDK 狀態', async () => {
     const service = new OpenTelemetrySessionService({ mode: 'disabled' });
     expect(service.sharing).toBe('disabled');

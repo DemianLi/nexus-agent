@@ -167,7 +167,8 @@ describe('評分按鈕', () => {
     );
     const dialog = await screen.findByRole('dialog');
     expect(fake.puts).toEqual([]);
-    // 提示只留前半句：這裡不送日誌，不說會送（#267 的 Q11）。
+    // 提示只留前半句：畫面不知道遙測開在哪個模式，預設也沒掛，不說會送（#267 的 Q11；
+    // 依模式顯示要多一條協定，#279 拍板不做）。
     const detail = within(dialog).getByLabelText(FEEDBACK_COPY.detail);
     expect(detail.getAttribute('placeholder')).toBe('填寫詳情以幫助我們改善體驗');
     expect(dialog.textContent).not.toContain('日誌');

@@ -229,6 +229,7 @@ export type {
   SessionTelemetrySharingStatus,
   SessionTelemetrySink,
 } from './session-telemetry.js';
+export { isFeedbackEvent } from './session-telemetry.js';
 
 export type {
   SessionTelemetryCapture,

@@ -56,6 +56,7 @@ export class SessionTelemetryCoordinator {
   readonly #sink: SessionTelemetrySink;
   readonly #rules: () => readonly NamedEntry<SessionTelemetryRedactRule>[];
   readonly #warn: (message: string) => void;
+  readonly #capture: SessionTelemetryCapture;
   /**
    * 交付游標：**交出去過的最高 `seq`**，還沒交過任何一筆時是 `-1`。
    *
@@ -75,7 +76,8 @@ export class SessionTelemetryCoordinator {
       ((message) => {
         console.warn(message);
       });
-    if ((options.capture ?? 'live') === 'live') {
+    this.#capture = options.capture ?? 'live';
+    if (this.#capture === 'live') {
       this.captureNow();
       this.#unsubscribe = this.#log.subscribe((event) => {
         this.#contain(() => {
@@ -102,6 +104,10 @@ export class SessionTelemetryCoordinator {
   /**
    * 收掉：退訂、發一筆 `shutdown` 的 ops 記錄、轉發後端的 `shutdown()`。
    *
+   * **on-demand 不發那筆 ops 記錄**，照 dsh（「on-demand capture creates no ops records」，
+   * `packages/session/session-telemetry/src/index.ts` 的 `shutdown`）。`feedback-only` 就是跑在
+   * on-demand 上的：發了的話，人一次回饋都沒送過，後端照樣每個會話收到一筆。
+   *
    * 呼叫第二次是 no-op。後端 reject 只換來一行 warn——**盡力而為的旁路不該有讓應用程式
    * 關機失敗的權力**（dsh 同一條）。
    *
@@ -113,9 +119,11 @@ export class SessionTelemetryCoordinator {
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
     // 先發 shutdown 標記再叫後端關機：這一筆必須排在後端排空之前進到隊列裡。
-    this.#contain(() => {
-      this.#deliver(this.#redact(this.#shutdownRecord()));
-    });
+    if (this.#capture === 'live') {
+      this.#contain(() => {
+        this.#deliver(this.#redact(this.#shutdownRecord()));
+      });
+    }
     try {
       await this.#sink.shutdown();
     } catch (error: unknown) {
