@@ -11,7 +11,7 @@
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
 
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
@@ -123,6 +123,44 @@ describe('檔案工具的失敗在日誌上記成錯誤', () => {
     ]);
     expect(messages[0]?.status).toBe('error');
     expect(messages[1]?.status).not.toBe('error');
+  }, 20000);
+
+  /**
+   * 「先讀後改」只認 `status === 'error'`，所以讀失敗從此真的是失敗。**缺檔的那一種不能因此掉了
+   * 確認缺席**——那是之後受防護的新建所需要的授權（`observation.ts` 的 `observe`）。
+   */
+  it('讀一個缺檔之後新建它照樣過得去——確認缺席沒有因為讀變成錯誤而掉了', async () => {
+    const { results } = await run('workspace-write', [
+      { name: 'read_file', args: { file_path: '/new.txt' } },
+      { name: 'write_file', args: { file_path: '/new.txt', content: '新' } },
+    ]);
+    expect(results).toEqual([
+      { callId: expect.any(String), isError: true },
+      { callId: expect.any(String), isError: false },
+    ]);
+    expect(await readdir(root)).toEqual(['new.txt']);
+  }, 20000);
+
+  /**
+   * 反過來那一面：**存在的檔讀失敗（offset 超過檔尾）不再被記成「讀過」**。以前這次讀是狀態成功，
+   * 策略記下「存在」，接著的覆蓋就是一次沒看過內容的盲改——`observation.ts` 的 `observe` 那段
+   * 註解要擋的正是它。
+   */
+  it('存在的檔讀失敗之後，覆蓋它被「先讀後改」擋下', async () => {
+    await writeFile(join(root, 'a.txt'), '舊\n', 'utf8');
+    const { results } = await run('workspace-write', [
+      { name: 'read_file', args: { file_path: '/a.txt', offset: 99 } },
+      { name: 'write_file', args: { file_path: '/a.txt', content: '新' } },
+    ]);
+    expect(results).toEqual([
+      { callId: expect.any(String), isError: true },
+      {
+        callId: expect.any(String),
+        isError: true,
+        error: { name: 'FsError', code: 'FS_NOT_OBSERVED' },
+      },
+    ]);
+    expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('舊\n');
   }, 20000);
 });
 
