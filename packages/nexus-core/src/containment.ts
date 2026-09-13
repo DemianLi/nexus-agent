@@ -79,7 +79,9 @@ import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
 import type { SessionLookup } from './registry.js';
 import {
   INVALID_ARGS,
+  publishToolResult,
   readToolOutcome,
+  readToolResultText,
   TOOL_ABORTED,
   TOOL_TIMEOUT,
   UNKNOWN_TOOL,
@@ -263,7 +265,7 @@ function recordToolCall(
   sessions: ToolEventSessions | undefined,
   request: RecordableRequest,
   raw: string | undefined,
-): ((outcome: ToolOutcome) => void) | undefined {
+): ((outcome: ToolOutcome, text: string | undefined) => void) | undefined {
   const callId = request.toolCall.id;
   if (sessions === undefined || callId === undefined || callId === '') return undefined;
   // `runtime.configurable` 就是 `forCall` 要的那份，包回一層 `configurable` 同 `model-usage.ts`。
@@ -281,13 +283,16 @@ function recordToolCall(
     // 參數序列化不動或日誌不收：這一對整個不記，見上面。
     return undefined;
   }
-  return (outcome) => {
+  return (outcome, text) => {
     try {
-      log.append('tool/result', {
-        callId,
-        isError: outcome.isError,
-        // 沒碼的時候整個不放 key：`snapshotJsonValue` 對 `undefined` 是當場拋的。
-        ...(outcome.isError && outcome.error !== undefined ? { error: outcome.error } : {}),
+      // 失敗那一次的文字只在發佈期間讀得到，給 web 的 pump 畫紅字（#296），見 `tool-events.ts`。
+      publishToolResult(log, callId, outcome.isError ? text : undefined, () => {
+        log.append('tool/result', {
+          callId,
+          isError: outcome.isError,
+          // 沒碼的時候整個不放 key：`snapshotJsonValue` 對 `undefined` 是當場拋的。
+          ...(outcome.isError && outcome.error !== undefined ? { error: outcome.error } : {}),
+        });
       });
     } catch {
       // 同 `tool/call`：日誌寫不進去不影響這次呼叫的結果。
@@ -349,6 +354,7 @@ export function createContainmentMiddleware(
             outcome.isError && outcome.error === undefined && request.tool === undefined
               ? { isError: true, error: UNKNOWN_TOOL_ERROR }
               : outcome,
+            readToolResultText(result, request.toolCall.id ?? ''),
           );
         }
         forget();
@@ -368,7 +374,10 @@ export function createContainmentMiddleware(
           status: 'error',
         });
         const kind = classifyThrownToolError(error);
-        settle?.(kind === undefined ? { isError: true } : { isError: true, error: kind });
+        settle?.(
+          kind === undefined ? { isError: true } : { isError: true, error: kind },
+          message.text,
+        );
         forget();
         return message;
       }

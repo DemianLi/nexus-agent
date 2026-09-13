@@ -152,6 +152,76 @@ export function readToolOutcome(result: unknown, callId: string): ToolOutcome {
   return error === undefined ? { isError: true } : { isError: true, error };
 }
 
+/**
+ * 從 handler 回來的東西讀出模型看到的那一句。同 {@link readToolOutcome} 認兩個形狀。
+ *
+ * @param result - `handler(request)` 回來的值。
+ * @param callId - 這次呼叫的 id。
+ * @returns 那則 ToolMessage 的文字；找不到 ToolMessage 就 `undefined`。
+ */
+export function readToolResultText(result: unknown, callId: string): string | undefined {
+  const message = ToolMessage.isInstance(result) ? result : commandToolMessage(result, callId);
+  return message?.text;
+}
+
+/**
+ * 正在發佈的那顆失敗 `tool/result`，模型看到的那一句：日誌 → callId → 文字。
+ *
+ * **日誌的 `tool/result` 不帶內容**（#264），而 web 的工具卡要把那一句畫成紅字
+ * （[#296](https://github.com/DemianLi/nexus-agent/issues/296) 拍板的側表）。dsh 那側文字就在
+ * `tool/result` 裡；我們的形狀不動，另開這一格，同 `invalid-tool-args.ts` 的原字串：原文不進日誌，
+ * 需要它的讀者另外拿。
+ *
+ * **只在那顆 `append` 的回呼期間讀得到。** `SessionLog.append` 同步叫訂閱者，所以寫的人先放、
+ * `append`、回傳就刪——壽命由呼叫堆疊界定，沒有人訂閱的組裝（CLI）也不會留下任何一筆。
+ * **以日誌為鍵、不做成只以 callId 為鍵**：假模型的 callId 是 `call_1_0` 這種固定值，兩場組裝
+ * 同一個行程的話會互相讀到（同 `InvalidArgumentsCarrier` 不做成模組層級的理由）；日誌是每條
+ * thread、每份會話各一份的實例。
+ */
+const settlingTexts = new WeakMap<object, Map<string, string>>();
+
+/**
+ * 發佈一顆 `tool/result`，發佈期間讓訂閱者讀得到它的文字。
+ *
+ * @param log - 要寫的那份日誌，也是讀的人拿來查的鍵。
+ * @param callId - 這次呼叫的 id。
+ * @param text - 模型看到的那一句；`undefined` 就不放。
+ * @param append - 真正寫進日誌的那一步。
+ */
+export function publishToolResult(
+  log: object,
+  callId: string,
+  text: string | undefined,
+  append: () => void,
+): void {
+  if (text === undefined) {
+    append();
+    return;
+  }
+  let texts = settlingTexts.get(log);
+  if (texts === undefined) {
+    texts = new Map();
+    settlingTexts.set(log, texts);
+  }
+  texts.set(callId, text);
+  try {
+    append();
+  } finally {
+    texts.delete(callId);
+  }
+}
+
+/**
+ * 在 `tool/result` 的訂閱者裡讀那一句。見 {@link publishToolResult}。
+ *
+ * @param log - 發出這顆事件的那份日誌。
+ * @param callId - 事件的 `callId`。
+ * @returns 失敗那一次模型看到的文字；成功的、沒放的、或不在發佈期間讀的都是 `undefined`。
+ */
+export function toolResultTextOf(log: object, callId: string): string | undefined {
+  return settlingTexts.get(log)?.get(callId);
+}
+
 /** `Command` 裡屬於這次呼叫的那則 ToolMessage。 */
 function commandToolMessage(result: unknown, callId: string): ToolMessage | undefined {
   if (!isCommand(result)) return undefined;

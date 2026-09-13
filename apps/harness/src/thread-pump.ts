@@ -23,6 +23,22 @@
  *    **既沒執行也沒被拒絕**，而且**不會再發第二顆 `input.requested`**——核准請求就這樣
  *    蒸發了，下行上一顆 frame 都看不出來。所以 pump 記著還掛著的那些中斷
  *    （{@link ThreadPump.awaitingInput}），讓上行那一側擋得下來。
+ *
+ * ## 工具卡的終態以日誌為準（[#296](https://github.com/DemianLi/nexus-agent/issues/296)）
+ *
+ * dsh 的 web 工具卡只從會話日誌導出：`tool/call` 開卡、`tool/result` 收卡，文字是那則結果的內容
+ * （`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:52-66`，`c291e79`）。`tool/result`
+ * 在所有鉤子之後才寫，所以事後被改成錯誤的結果，畫面上就是錯誤。
+ *
+ * 我們的卡來自基座的 `tools` frame，而基座在**工具本體裡**就發了 `tool-finished`——之後才輪到把
+ * 結果改掉的 middleware。所以 pump 訂閱會話註冊表（子代理的日誌也在裡面），**終態改以圍堵寫的
+ * `tool/result` 為準**：判定先到就套在那顆 `tool-finished` 上，後到就補發一顆同 id 的更正。紅字的
+ * 文字來自圍堵發佈那顆事件時放的側表（`@nexus/core` 的 `toolResultTextOf`），因為日誌不帶內容（#264）。
+ *
+ * **登記的偏離縮成一條：開卡與逐字片段仍走基座的 `tools` frame**，不從 `tool/call` 開卡。handler
+ * 之前就被擋的呼叫因此沒有卡（[#297](https://github.com/DemianLi/nexus-agent/issues/297) 追）。
+ * 射程也只到經過圍堵的呼叫——圍堵是每一層 middleware 陣列的第 0 格，基座自己長出來、沒有我們
+ * middleware 的 agent 不會寫 `tool/result`，那裡照舊只剩本體的 `status`。
  */
 
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
@@ -36,6 +52,7 @@ import {
   TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
   TOOL_ABORTED_TEXT,
   TURN_CANCEL_CONFIG_KEY,
+  toolResultTextOf,
   type SessionEvent,
   type SessionEventMap,
   type SessionLog,
@@ -168,9 +185,8 @@ function asInterruptEntries(data: unknown): readonly InterruptEntry[] {
  * 而且把整串原始酬載當錯誤訊息印出來（[#239](https://github.com/DemianLi/nexus-agent/issues/239)
  * 實測）。
  *
- * **`tools` 那幾顆 frame 是基座產的，我們產不了**（`streamEvents(version: 'v3')` 直出），
- * 所以最靠近來源的那一層就是這裡的 `#translate`。分類放到瀏覽器那側等於讓消費端去猜
- * 一個它看不見的成因。
+ * **`tools` 那幾顆 frame 是基座產的**（`streamEvents(version: 'v3')` 直出），最靠近來源的那一層
+ * 就是這裡的 `#translate`。分類放到瀏覽器那側等於讓消費端去猜一個它看不見的成因。
  *
  * ## 判準是結構不是字串
  *
@@ -193,20 +209,6 @@ function isSuspensionMessage(message: unknown): boolean {
 }
 
 /**
- * 這則工具結果自己說它失敗了嗎。
- *
- * `tool-finished` 帶的 `output` 是一則序列化過的 `ToolMessage`，**失敗與否住在
- * `kwargs.status` 裡**（核准閘門的拒絕、`ask_user_question` 的放棄都走這條）。折疊器
- * 今天只看事件名，所以一則 `status: 'error'` 的結果在畫面上是「完成」——這是
- * [#239](https://github.com/DemianLi/nexus-agent/issues/239) 第 1 項的另一面。
- *
- * **讀 `kwargs` 這個形狀的知識留在這一層**：`@nexus/wire` 跑在瀏覽器裡、不相依
- * LangChain，讓它去拆序列化格式等於把基座的形狀搬進前端。
- *
- * @param output - `tool-finished` 的 `output`。
- * @returns 那則 ToolMessage 的 `status` 是 `'error'` 時回它的內容，否則 `undefined`。
- */
-/**
  * 把 `tools` 那一顆的 `data` 換成**說得出成因**的樣子。
  *
  * 兩件事，兩個成因不同的謊：
@@ -216,7 +218,10 @@ function isSuspensionMessage(message: unknown): boolean {
  * 2. 一則 `status: 'error'` 的 ToolMessage 來的是 `tool-finished`，補一格 `failed` 與它的
  *    內容，否則折疊器只看事件名，會把它畫成「完成」。
  *
- * **其餘一律原樣穿過去。** 這一層只加分類，不改基座的欄位。
+ * **其餘一律原樣穿過去。** 這一層只看基座那顆 frame 本身，不改基座的欄位。第 2 項讀的是**工具本體**
+ * 回的那則，而本體之後還有 middleware 會改結果——終態以日誌為準的那一步在 pump 的
+ * `#settleFinish`（[#296](https://github.com/DemianLi/nexus-agent/issues/296)），這裡的判斷是日誌
+ * 判定沒來時的退路。
  *
  * @param data - 基座給的那顆 `tools` data。
  * @returns 原樣，或補過分類的那一顆。
@@ -241,8 +246,8 @@ export function classifyToolData(data: unknown): unknown {
  * 那一顆在歷史裡已經被改寫成 `{}`（`@nexus/core` 的 `invalid-tool-args.ts`），所以基座發的
  * `tool-started` 帶的 `input` 是 `"{}"`。原字串在同一條串流上更早的地方：模型那一段收尾時的
  * `content-block-finish`，block 的 `type` 是 `invalid_tool_call`（實測）。pump 記下它，等
- * `tool-started` 來了換掉 `input`——這是 #269 登記的偏離：工具卡的參數由 pump 換，因為基座的
- * `tools` frame 我們產不了。
+ * `tool-started` 來了換掉 `input`——這是 #269 登記的偏離：工具卡的參數由 pump 換，因為開卡的
+ * `tool-started` 是基座產的，我們能做的是轉發時改它。
  *
  * **不讀 core 的載體**：那一份在工具落定時就刪鍵，而這一層讀到 frame 的時刻可能晚於落定。
  * 同一條串流上的先後則是保證的：模型那一段收尾之後，工具節點才開始。
@@ -263,6 +268,20 @@ export function invalidArgumentsOf(data: unknown): { id: string; raw: string } |
     : undefined;
 }
 
+/**
+ * 這則工具結果自己說它失敗了嗎。
+ *
+ * `tool-finished` 帶的 `output` 是一則序列化過的 `ToolMessage`，**失敗與否住在
+ * `kwargs.status` 裡**（核准閘門的拒絕、`ask_user_question` 的放棄都走這條）。折疊器
+ * 今天只看事件名，所以一則 `status: 'error'` 的結果在畫面上是「完成」——這是
+ * [#239](https://github.com/DemianLi/nexus-agent/issues/239) 第 1 項的另一面。
+ *
+ * **讀 `kwargs` 這個形狀的知識留在這一層**：`@nexus/wire` 跑在瀏覽器裡、不相依
+ * LangChain，讓它去拆序列化格式等於把基座的形狀搬進前端。
+ *
+ * @param output - `tool-finished` 的 `output`。
+ * @returns 那則 ToolMessage 的 `status` 是 `'error'` 時回它的內容，否則 `undefined`。
+ */
 function failureTextOf(output: unknown): string | undefined {
   // **這一層拿到的是 `ToolMessage` 實例，不是它序列化過的樣子。** 實測 pump 這裡的
   // `output` 帶的是 `lc_serializable` / `lc_kwargs` 那組欄位，`status` 直接掛在實例上；
@@ -277,6 +296,38 @@ function failureTextOf(output: unknown): string | undefined {
   if (status !== 'error') return undefined;
   const content = shaped?.content ?? shaped?.kwargs?.content;
   return typeof content === 'string' ? content : '未指名的錯誤';
+}
+
+/** 日誌對一次呼叫的判定（#296）：失敗與否，與失敗時模型看到的那一句。 */
+interface ToolVerdict {
+  readonly failed: boolean;
+  readonly text: string | undefined;
+}
+
+/** 已經轉發出去、還在等日誌判定的那顆 `tool-finished`。更正時原樣帶回它的 namespace 與 data。 */
+interface ForwardedFinish {
+  readonly namespace: readonly string[];
+  readonly data: Record<string, unknown>;
+}
+
+/**
+ * 把日誌的判定套到一顆 `tool-finished` 的 data 上。
+ *
+ * **`output` 原樣留著**：折疊器對它是無條件覆寫（`@nexus/wire` 的 `conversation.ts`），更正那顆
+ * 不帶的話，畫面上的輸出會被清掉。失敗的字取日誌那顆的文字（模型看到的最終那一句）；沒有的話退回
+ * 本體自己說的，再退回「未指名的錯誤」。
+ */
+function applyVerdict(
+  data: Record<string, unknown>,
+  verdict: ToolVerdict,
+): Record<string, unknown> {
+  const { failed: _failed, message: bodyText, ...rest } = data;
+  if (!verdict.failed) return rest;
+  return {
+    ...rest,
+    failed: true,
+    message: verdict.text ?? (typeof bodyText === 'string' ? bodyText : '未指名的錯誤'),
+  };
 }
 
 /** 這顆中斷在問幾件事。問不出來就當 0——上行那側只在數得出來時才校驗。 */
@@ -420,6 +471,22 @@ export class ThreadPump {
    * 結束。
    */
   readonly #invalidArguments = new Map<string, string>();
+  /**
+   * 這一輪轉發過、還在等日誌判定的 `tool-finished`：callId → 那顆 frame
+   * （[#296](https://github.com/DemianLi/nexus-agent/issues/296)）。
+   *
+   * **工具卡的終態以日誌的 `tool/result` 為準**，不以基座那顆 `tool-finished` 為準：基座在工具本體
+   * 裡就發了它，之後還有 middleware 把成功換成錯誤——檔案工具的失敗、輸出不合 schema、停止之後才落定
+   * 的那顆、內層在本體之後拋錯。判定比 frame 晚到 pump 的話，由這裡補發一顆同 id 的更正。
+   */
+  readonly #forwardedFinishes = new Map<string, ForwardedFinish>();
+  /**
+   * 比那顆 `tool-finished` 先到 pump 的判定。日誌的訂閱者是同步叫的，frame 是 `for await` 抽的，
+   * 兩種先後都會發生。
+   */
+  readonly #earlyVerdicts = new Map<string, ToolVerdict>();
+  /** 收掉日誌的訂閱：註冊表那一層，與每一份日誌那一層。 */
+  readonly #unobserveLogs: () => void;
   /** 一個 thread 一次只跑一個 run；後到的 submit 排隊，不平行跑。 */
   #tail: Promise<void> = Promise.resolve();
   /**
@@ -471,6 +538,16 @@ export class ThreadPump {
     this.#threadId = threadId;
     this.#sessions = new SessionRegistry(threadId, rootSeed === undefined ? {} : { rootSeed });
     this.#driver = driver;
+    // 訂閱**註冊表**，不是只訂 root：子代理的日誌後來才開，`observe` 會補上每一份（#296）。
+    // 這個回呼跑在寫日誌那一層的堆疊上，而註冊表不接訂閱者的例外——`subscribe` 本身不會拋。
+    const unsubscribes: (() => void)[] = [];
+    const unobserve = this.#sessions.observe(({ log }) => {
+      unsubscribes.push(log.subscribe((event) => this.#noteVerdict(log, event)));
+    });
+    this.#unobserveLogs = () => {
+      unobserve();
+      for (const unsubscribe of unsubscribes.splice(0)) unsubscribe();
+    };
   }
 
   get threadId(): string {
@@ -757,6 +834,7 @@ export class ThreadPump {
    */
   close(): void {
     this.#closed = true;
+    this.#unobserveLogs();
     for (const subscriber of this.#subscribers) {
       subscriber.done = true;
       subscriber.wake?.();
@@ -858,6 +936,12 @@ export class ThreadPump {
       throw failure;
     } finally {
       if (this.#current === current) this.#current = undefined;
+      // 一輪裡的判定在這一輪裡就落定了：圍堵在 `wrapToolCall` 回傳之前寫，而圖要等每一顆工具回傳
+      // 才走得完，串流才收得了尾。剩下的是沒有卡的那幾顆——handler 之前就被擋的、本體拋錯走
+      // `tool-error` 的——與沒接日誌的組裝轉發過的，留著只佔記憶體。**哪天有一層在回傳之後才非同步
+      // 寫 `tool/result`，這裡會把它的判定靜靜丟掉**，而沒有測試會紅。
+      this.#forwardedFinishes.clear();
+      this.#earlyVerdicts.clear();
     }
   }
 
@@ -949,22 +1033,89 @@ export class ThreadPump {
         namespace: raw.params.namespace,
         timestamp: raw.params.timestamp,
         ...(raw.params.node === undefined ? {} : { node: raw.params.node }),
-        data: raw.method === 'tools' ? this.#toolData(raw.params.data) : raw.params.data,
+        data:
+          raw.method === 'tools'
+            ? this.#toolData(raw.params.namespace, raw.params.data)
+            : raw.params.data,
       },
     } as Event);
   }
 
-  /** `tools` 那一顆：先分類，再把解不開的那顆的 `input` 換回原字串。 */
-  #toolData(data: unknown): unknown {
+  /**
+   * `tools` 那一顆：先分類，再依事件補上 pump 知道的東西——`tool-finished` 套日誌的判定，
+   * `tool-started` 把解不開的那顆的 `input` 換回原字串。
+   */
+  #toolData(namespace: readonly string[], data: unknown): unknown {
     const classified = classifyToolData(data);
     const shaped = classified as { event?: unknown; tool_call_id?: unknown } | null;
-    if (shaped?.event !== 'tool-started' || typeof shaped.tool_call_id !== 'string') {
-      return classified;
+    if (typeof shaped?.tool_call_id !== 'string') return classified;
+    if (shaped.event === 'tool-finished') {
+      return this.#settleFinish(
+        namespace,
+        shaped.tool_call_id,
+        classified as Record<string, unknown>,
+      );
     }
+    if (shaped.event !== 'tool-started') return classified;
     const raw = this.#invalidArguments.get(shaped.tool_call_id);
     if (raw === undefined) return classified;
     this.#invalidArguments.delete(shaped.tool_call_id);
     return { ...shaped, input: raw };
+  }
+
+  /** 一顆 `tool-finished` 要轉發了：判定先到就套上；還沒到就記著，等它來了再對一次。 */
+  #settleFinish(
+    namespace: readonly string[],
+    callId: string,
+    data: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const verdict = this.#earlyVerdicts.get(callId);
+    if (verdict !== undefined) {
+      this.#earlyVerdicts.delete(callId);
+      return applyVerdict(data, verdict);
+    }
+    if (this.#current !== undefined) this.#forwardedFinishes.set(callId, { namespace, data });
+    return data;
+  }
+
+  /**
+   * 日誌的訂閱者：一顆 `tool/result` 落定了（#296）。
+   *
+   * **這裡跑在寫日誌那一層的呼叫堆疊上**（圍堵的 `wrapToolCall`），而且在發佈期間——不能 `append`
+   * （日誌的重入防護會拋），拋了也只換來一行 warn、判定就丟了。所以只動兩張表與下行的佇列。
+   *
+   * **只認這一輪裡的**：pump 自己也寫 `tool/result`（停在核准點時收回，#276），那時沒有 run，那幾顆
+   * 也沒有卡。**只更正轉發過的**：handler 之前就被擋的那幾顆沒有卡，要不要替它們開卡是
+   * [#297](https://github.com/DemianLi/nexus-agent/issues/297) 的事。
+   *
+   * **判定是雙向的**，照拍板「本體的 `status` 不再決定終態」：日誌說成功，本體自己標的 `failed` 也拿掉。
+   * 今天樹上沒有「本體錯、日誌成功」的生產者（handler 之後改結果的只往錯誤那邊改；剪工具結果的那一層
+   * 原樣帶 `status`），所以這一向目前只是對稱，沒有案例。
+   */
+  #noteVerdict(log: SessionLog, event: SessionEvent): void {
+    if (event.type !== 'tool/result' || this.#current === undefined) return;
+    const { callId, isError } = event.data;
+    const verdict: ToolVerdict = {
+      failed: isError,
+      text: isError ? toolResultTextOf(log, callId) : undefined,
+    };
+    const forwarded = this.#forwardedFinishes.get(callId);
+    if (forwarded === undefined) {
+      this.#earlyVerdicts.set(callId, verdict);
+      return;
+    }
+    this.#forwardedFinishes.delete(callId);
+    const settled = applyVerdict(forwarded.data, verdict);
+    if (settled.failed === forwarded.data.failed && settled.message === forwarded.data.message) {
+      return;
+    }
+    // 同一個 `tool_call_id` 的第二顆 `tool-finished`：折疊器照 id 換掉那一格，帶著原本的 `output`。
+    this.#broadcast(
+      this.#seal({
+        method: 'tools',
+        params: { namespace: forwarded.namespace, timestamp: Date.now(), data: settled },
+      } as Event),
+    );
   }
 
   /** 蓋上這條 thread 自己的編號——**不是 run 的 `seq`**，那個每個 run 都從 0 重來。 */
