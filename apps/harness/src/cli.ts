@@ -29,6 +29,7 @@ import type {
   NexusPlugin,
   SessionEvent,
   SessionTelemetrySharingStatus,
+  FeedbackService,
 } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { createAskUserPlugin } from '@nexus/plugin-ask-user';
@@ -47,6 +48,8 @@ import { assertSameCwd } from './resume-guards.js';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant';
 import { createAskUserInvariantPlugin } from '@nexus/plugin-ask-user/invariant';
+import { createFeedbackPlugin } from '@nexus/plugin-feedback';
+import { createFeedbackInvariantPlugin } from '@nexus/plugin-feedback/invariant';
 import { createSubmitRecordInvariantPlugin } from '@nexus/plugin-submit-record/invariant';
 import { createEchoInvariantPlugin } from '@nexus/plugin-echo/invariant';
 import { createGoalPlugin, DEFAULT_MAX_GOAL_ROUNDS } from '@nexus/plugin-goal';
@@ -477,15 +480,24 @@ function outsideWorkspace(
  */
 const GOAL_PLUGIN = createGoalPlugin();
 
+/**
+ * 一則評分備註最多幾個 UTF-8 位元組。照 dsh web 那一包的設定
+ * （`packages/bundle/web-app/cordis.patch.yml:56`，`c291e79`）；plugin 自己不給預設值。
+ */
+export const FEEDBACK_MAX_NOTE_BYTES = 8192;
+
 export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
   createEchoPlugin(),
   createPlanModePlugin(),
   GOAL_PLUGIN,
   createTodoPlugin({ allowParallelInProgress: true }),
+  // 評分與 `/feedback`：預設就裝，零 plugin 設定的 serve 與 CLI 都評得到（#278）。
+  createFeedbackPlugin({ maxNoteBytes: FEEDBACK_MAX_NOTE_BYTES }),
   createCoreInvariantPlugin(),
   createCommandsInvariantPlugin(),
   createAskUserInvariantPlugin(),
   createEchoInvariantPlugin(),
+  createFeedbackInvariantPlugin(),
   createGoalInvariantPlugin(),
   createMcpInvariantPlugin(),
   createMemoryInvariantPlugin(),
@@ -731,6 +743,8 @@ export async function createCliAgent(
   attachInvariants: (sessions: SessionRegistry) => (() => void) | undefined;
   attachSession: (sessions: SessionRegistry) => () => void;
   telemetrySharing: SessionTelemetrySharingStatus | undefined;
+  /** 評分與評語的規則。serve 那條交給 wire-handler；CLI 那條只用得到 `/feedback`（走命令面）。 */
+  feedback: FeedbackService | undefined;
 }> {
   const model = createCliModel(invocation.live);
   // **channel 在這裡算一次，兩個消費者共用。** 核准閘門由 `foldRegistry` 自己算
@@ -784,6 +798,7 @@ export async function createCliAgent(
     attachInvariants,
     attachSession,
     telemetrySharing,
+    feedback,
   } = await createNexusAgent({
     model,
     plugins: [
@@ -821,6 +836,7 @@ export async function createCliAgent(
     attachInvariants,
     attachSession,
     telemetrySharing,
+    feedback,
   };
 }
 

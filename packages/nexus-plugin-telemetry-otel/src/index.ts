@@ -19,12 +19,13 @@
  *
  * ## 三條偏離（AGENTS.md 的偏離規則）
  *
- * **一、`FEEDBACK_ONLY` 沒有來源。** dsh 那個 mode 靠 `feedback/record` 這個 session
- * 事件驅動（`dsh-command-feedback` 的 `/feedback` 指令），協調器在 on-demand 模式下
- * 只在收到它時補送到那個 `seq` 為止。**nexus 沒有 feedback 子系統，`SessionEventMap`
- * 裡也沒有那個事件種類**，所以這裡只出 `full` 與 `disabled`。`'feedback-only'` 仍在
- * seam 的披露字彙裡（那是 seam 的字彙不是這裡的），只是沒有 mode 產得出它。
- * **來源不存在，不是省略。**
+ * **一、`FEEDBACK_ONLY` 還沒做。** dsh 那個 mode 靠 `feedback/record`、`feedback/message-put`、
+ * `feedback/message-delete` 這三種 session 事件驅動，協調器在 on-demand 模式下只在收到其中一顆
+ * 時補送到那個 `seq` 為止。**來源從 [#278](https://github.com/DemianLi/nexus-agent/issues/278)
+ * 起已經有了**（`@nexus/plugin-feedback`，三顆都在 `SessionEventMap` 裡），模式本身還沒做——
+ * 落地是 [#279](https://github.com/DemianLi/nexus-agent/issues/279)。在那之前這裡只出 `full`
+ * 與 `disabled`。`'feedback-only'` 仍在 seam 的披露字彙裡（那是 seam 的字彙不是這裡的），只是
+ * 還沒有 mode 產得出它。
  *
  * **二、Resource 上沒有 `user.id`。** dsh 放 `getOrCreateAnonymousUserId()`
  * （`dsh-anonymous-user-id`，存在 `~/.dsh`）。nexus 沒有那個套件、也沒有 harness home

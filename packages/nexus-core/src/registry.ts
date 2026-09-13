@@ -6,13 +6,14 @@
  * `permissions` / `approvals`）沒有名字可撞，走匿名追加。折疊成
  * `createDeepAgent` 參數的部分在 {@link ./fold.ts}。
  *
- * 外加五條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
+ * 外加六條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
  * {@link LifecycleRegistrationPoint} 回答「這些東西怎麼收掉」，
  * {@link TelemetryRegistrationPoint} 回答「這個會話發生的事往哪裡送、送之前怎麼洗」，
+ * {@link FeedbackRegistrationPoint} 回答「人事後對這個會話的評分照什麼規則記」，
  * {@link InvariantRegistrationPoint} 回答「這個會話發生的事有沒有破壞誰的約定」，
  * {@link CommandRegistrationPoint} 回答「人打得出哪些斜線命令」，
  * {@link SessionRegistrationPoint} 回答「誰拿得到這個會話的日誌」。
- * 九個註冊點回答的是「這個 agent 由什麼組成」，五者正交。
+ * 九個註冊點回答的是「這個 agent 由什麼組成」，六者正交。
  */
 
 import type { StructuredTool } from '@langchain/core/tools';
@@ -33,6 +34,7 @@ import type { SessionAddress } from './session-address.js';
 import type { SessionRegistry } from './session-registry.js';
 import type { SessionLog } from './session-log.js';
 import type { SessionTelemetryRedactRule, SessionTelemetryService } from './session-telemetry.js';
+import type { FeedbackService } from './feedback.js';
 
 /**
  * 註冊層的定址。`undefined` 是全域（root agent），字串是那個名字的 subagent。
@@ -385,6 +387,28 @@ export interface TelemetryRegistrationPoint {
 }
 
 /**
+ * `feedback` 通道：掛**評分與評語的規則**（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。
+ *
+ * 與 telemetry 同軸，偏離也是同一條：dsh 的評分是 Cordis `Service`（`ctx.messageFeedback`，重複
+ * 註冊由 Cordis 拋），我們沒有 service 註冊，退到一張只收一個的具名表——兩份規則就是兩種「內容
+ * 一樣算不算一次」的答案。產物不進 `createDeepAgent` 的參數：讀它的是 web 的 wire-handler，評分
+ * 沒有模型那一側。
+ */
+export interface FeedbackRegistrationPoint {
+  /**
+   * 掛上規則。**一個 registry 只收一個。**
+   * @param service - 規則的實作。
+   * @returns 只撤銷這一次掛載的冪等 undo。
+   */
+  use(service: FeedbackService): () => void;
+  /**
+   * 目前掛著的規則。沒掛時是 `undefined`——wire 那一側據此回「這個組裝收不了回饋」。
+   * @returns 掛著的那個，或 `undefined`。
+   */
+  service(): NamedEntry<FeedbackService> | undefined;
+}
+
+/**
  * `invariants` 通道：各 package 註冊**自己擁有的跨筆關係**的檢查。
  *
  * 註冊表自己一條產品檢查都沒有——這是 dsh 的核心設計，檢查放在擁有者旁邊。
@@ -567,6 +591,7 @@ export interface PluginRegistry {
   readonly memory: MemorySourceRegistrationPoint;
   readonly lifecycle: LifecycleRegistrationPoint;
   readonly telemetry: TelemetryRegistrationPoint;
+  readonly feedback: FeedbackRegistrationPoint;
   readonly invariants: InvariantRegistrationPoint;
   readonly commands: CommandRegistrationPoint;
   readonly sessions: SessionRegistrationPoint;
@@ -641,6 +666,13 @@ export function createRegistry(): InternalPluginRegistry {
       new Error(
         `已經有遙測服務了：${formatOrigin(existing)} 掛過，${formatOrigin(incoming)} 又掛一次。` +
           `一個 agent 只能有一個後端——兩個就是兩份出境資料，而披露只講得出一種策略。`,
+      ),
+  );
+  const feedbackServices = new NamedEntries<FeedbackService>(
+    (_key, existing, incoming) =>
+      new Error(
+        `已經有回饋規則了：${formatOrigin(existing)} 掛過，${formatOrigin(incoming)} 又掛一次。` +
+          `一個 agent 只能有一份——兩份就是兩種「內容一樣算不算一次」的答案。`,
       ),
   );
 
@@ -824,6 +856,14 @@ export function createRegistry(): InternalPluginRegistry {
     service: () => services.get(SERVICE_KEY),
   };
 
+  const feedbackPoint: FeedbackRegistrationPoint = {
+    use(service) {
+      const origin = requireOrigin('feedback.use()');
+      return feedbackServices.insert(SERVICE_KEY, service, origin);
+    },
+    service: () => feedbackServices.get(SERVICE_KEY),
+  };
+
   const invariantPoint: InvariantRegistrationPoint = {
     register(packageName, installer) {
       const origin = requireOrigin('invariants.register()');
@@ -906,6 +946,7 @@ export function createRegistry(): InternalPluginRegistry {
     memory: memoryPoint,
     lifecycle: lifecyclePoint,
     telemetry: telemetryPoint,
+    feedback: feedbackPoint,
     invariants: invariantPoint,
     commands: commandPoint,
     sessions: sessionPoint,

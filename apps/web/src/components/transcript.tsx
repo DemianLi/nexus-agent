@@ -11,13 +11,71 @@
  * 這裡就照樣顯示未歸屬：**寧可說不知道，不要說錯**。
  */
 
+import { ThumbsDown, ThumbsUp } from 'lucide-react';
+
 import type {
   AnswerEntry,
   Attribution,
   ConversationEntry,
   ConversationState,
   ToolEntry,
+  WireFeedbackItem,
+  WireFeedbackRating,
 } from '@nexus/wire';
+
+import { Button } from '@/components/ui/button';
+import { FEEDBACK_COPY } from '@/lib/feedback';
+
+/**
+ * 評分按鈕要的東西（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。放哪幾則由
+ * `trackReplyTails` 決定，這裡只畫。
+ */
+export interface TranscriptFeedback {
+  readonly tails: ReadonlySet<string>;
+  readonly ratings: ReadonlyMap<string, WireFeedbackItem>;
+  readonly busy: boolean;
+  onRate(replyId: string, rating: WireFeedbackRating): void;
+}
+
+/**
+ * 一則回覆底下的讚與踩。**已選的那顆實心、`aria-pressed`**，再點一次就是收回；另一顆開對話框
+ * （照 dsh 的 `MessageFeedbackActions`）。
+ */
+function RatingButtons({ replyId, feedback }: { replyId: string; feedback: TranscriptFeedback }) {
+  const rating = feedback.ratings.get(replyId)?.rating;
+  const likeLabel = rating === 'positive' ? FEEDBACK_COPY.likeActive : FEEDBACK_COPY.like;
+  const dislikeLabel = rating === 'negative' ? FEEDBACK_COPY.dislikeActive : FEEDBACK_COPY.dislike;
+  return (
+    <div className="flex gap-1" data-testid="rating-buttons">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="size-7"
+        title={likeLabel}
+        aria-label={likeLabel}
+        aria-pressed={rating === 'positive'}
+        disabled={feedback.busy}
+        onClick={() => feedback.onRate(replyId, 'positive')}
+      >
+        <ThumbsUp className={rating === 'positive' ? 'fill-current' : undefined} />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="size-7"
+        title={dislikeLabel}
+        aria-label={dislikeLabel}
+        aria-pressed={rating === 'negative'}
+        disabled={feedback.busy}
+        onClick={() => feedback.onRate(replyId, 'negative')}
+      >
+        <ThumbsDown className={rating === 'negative' ? 'fill-current' : undefined} />
+      </Button>
+    </div>
+  );
+}
 
 function AttributionBadge({ attribution }: { attribution: Attribution }) {
   if (attribution.kind === 'root') {
@@ -75,7 +133,7 @@ function answerSummary(entry: AnswerEntry): string {
   return `已回答：${body}`;
 }
 
-function Entry({ entry }: { entry: ConversationEntry }) {
+function Entry({ entry, feedback }: { entry: ConversationEntry; feedback?: TranscriptFeedback }) {
   if (entry.kind === 'human') {
     return (
       <li className="flex justify-end">
@@ -137,18 +195,27 @@ function Entry({ entry }: { entry: ConversationEntry }) {
       {/* 講到一半被人按了停止（#276）。不是失敗，所以不用紅字。 */}
       {entry.stopped === true && <p className="text-muted-foreground text-xs">（已停止）</p>}
       {entry.error !== undefined && <p className="text-destructive text-xs">{entry.error}</p>}
+      {feedback !== undefined && feedback.tails.has(entry.id) && (
+        <RatingButtons replyId={entry.id} feedback={feedback} />
+      )}
     </li>
   );
 }
 
-export function Transcript({ state }: { state: ConversationState }) {
+export function Transcript({
+  state,
+  feedback,
+}: {
+  state: ConversationState;
+  feedback?: TranscriptFeedback;
+}) {
   if (state.entries.length === 0) {
     return <p className="text-muted-foreground text-sm">還沒有訊息。</p>;
   }
   return (
     <ul className="flex flex-col gap-4">
       {state.entries.map((entry) => (
-        <Entry key={entry.id} entry={entry} />
+        <Entry key={entry.id} entry={entry} {...(feedback === undefined ? {} : { feedback })} />
       ))}
     </ul>
   );

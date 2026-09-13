@@ -95,8 +95,15 @@ import type { SessionEvent } from './session-log.js';
  * 中止這一輪（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）：被中止的那一輪以帶
  * `reason: {kind:'aborted', ...}` 的 `turn/end` 收尾。v6 的檔直接讀：沒有 `reason` 就是正常結束——
  * **那時候也沒有中止這條路**，所以讀舊檔數中止要表態成「沒記」，不是 0。
+ *
+ * ## 8：`feedback/*` 三顆，`command/run` 的 `args` 變成選填
+ *
+ * 評分與 `/feedback`（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。v7 的檔直接讀：
+ * 一顆回饋事件都沒有的日誌就是那時候寫出來的樣子——**那時候也沒有評分這條路**，所以讀舊檔數點踩
+ * 要表態成「沒記」，不是 0。`args` 選填是 dsh 的 `recordInput: false`：v7 以前每一顆 `command/run`
+ * 都帶它，讀舊檔的人照舊讀得到。
  */
-export const SESSION_LOG_FORMAT_VERSION = 7;
+export const SESSION_LOG_FORMAT_VERSION = 8;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。

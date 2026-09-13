@@ -81,7 +81,9 @@ export const planModeInvariant: InvariantInstaller = (subject, fail) => {
       return;
     }
     if (event.type === 'command/run') {
-      const { commandId, name, args } = event.data;
+      const { commandId, name } = event.data;
+      // `/plan` 沒有關掉 `recordInput`，它的 `command/run` 一定帶這一格；`?? ''` 只是讓型別收得下選填。
+      const args = event.data.args ?? '';
       // 每一筆 `command/run` 都重設：序列的執行器裡上一次一定已經落定了，而沒落定
       // 那件事本身歸 `@nexus/plugin-commands` 報。
       openIllegal =

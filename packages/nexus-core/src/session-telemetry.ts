@@ -119,10 +119,11 @@ export interface SessionTelemetrySink {
  * 詞彙歸 seam 所有而不是歸某個後端，這樣披露就不必知道掛的是誰。三個值照抄 dsh 的
  * `SessionTelemetrySharingStatus`。
  *
- * **`'feedback-only'` 目前沒有任何 mode 產得出來。** dsh 那個模式靠 `feedback/record`
- * 這個 session 事件驅動（`dsh-command-feedback` 的 `/feedback` 指令），nexus 沒有
- * feedback 子系統，{@link ./session-log.ts | SessionEventMap} 裡也沒有那個事件種類。
- * 字彙留著是因為它是 seam 的字彙——**來源不存在，不是省略**。
+ * **`'feedback-only'` 目前沒有任何 mode 產得出來。** dsh 那個模式靠 `feedback/record`、
+ * `feedback/message-put`、`feedback/message-delete` 驅動。**來源從
+ * [#278](https://github.com/DemianLi/nexus-agent/issues/278) 起已經有了**（三顆都在
+ * {@link ./session-log.ts | SessionEventMap} 裡），模式還沒做——落地是
+ * [#279](https://github.com/DemianLi/nexus-agent/issues/279)。字彙留著是因為它是 seam 的字彙。
  */
 export type SessionTelemetrySharingStatus = 'full' | 'feedback-only' | 'disabled';
 

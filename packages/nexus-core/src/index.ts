@@ -78,6 +78,7 @@ export type {
   LifecycleRegistrationPoint,
   InvariantRegistrationPoint,
   TelemetryRegistrationPoint,
+  FeedbackRegistrationPoint,
   CommandRegistrationPoint,
   SessionRegistrationPoint,
   SessionLookup,
@@ -185,6 +186,29 @@ export {
   pruneToolResults,
   TOOL_RESULT_PRUNE_MARKER,
 } from './tool-result-pruner.js';
+
+export type {
+  FeedbackCategory,
+  FeedbackRecord,
+  FeedbackRecordResult,
+  FeedbackRejected,
+  FeedbackService,
+  FeedbackSuccess,
+  MessageFeedbackDelete,
+  MessageFeedbackDeleteRequest,
+  MessageFeedbackDeleteResult,
+  MessageFeedbackFailure,
+  MessageFeedbackItem,
+  MessageFeedbackNoteBlank,
+  MessageFeedbackNoteTooLarge,
+  MessageFeedbackPut,
+  MessageFeedbackPutRequest,
+  MessageFeedbackPutResult,
+  MessageFeedbackRating,
+  MessageFeedbackTargetNotFound,
+  MessageFeedbackVersionConflict,
+} from './feedback.js';
+export { FEEDBACK_CATEGORIES } from './feedback.js';
 
 export type {
   SessionEvent,

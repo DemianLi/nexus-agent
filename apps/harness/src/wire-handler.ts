@@ -30,10 +30,14 @@ import type {
   SlashRunResult,
   UplinkMethod,
   WireChannel,
+  FeedbackMethod,
+  WireFeedbackCategory,
+  WireFeedbackItem,
 } from '@nexus/wire';
 import {
   encodeSseFrame,
   errorResponse,
+  isFeedbackMethod,
   isRpcMethod,
   isRunCancelMethod,
   isSlashMethod,
@@ -43,10 +47,14 @@ import {
 import type {
   CommandDescriptor,
   CommandRegistrationPoint,
+  FeedbackCategory,
+  FeedbackService,
+  MessageFeedbackItem,
   SessionEvent,
   SessionLog,
   SessionRegistry,
 } from '@nexus/core';
+import { FEEDBACK_CATEGORIES } from '@nexus/core';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import type { GoalDriverPort } from './goal-driver.js';
@@ -63,6 +71,17 @@ import { ThreadPump } from './thread-pump.js';
  */
 const _descriptorFitsTheWire: SlashDescriptor = {} as CommandDescriptor;
 void _descriptorFitsTheWire;
+
+/**
+ * 回饋的詞彙同一條理由（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。**分類兩個方向
+ * 都釘**：只釘一邊的話，線上那份多寫一類會安靜地通過，而 core 那側的折疊不認得它。
+ */
+const _categoryFitsTheWire: WireFeedbackCategory = {} as FeedbackCategory;
+const _wireCategoryIsCore: FeedbackCategory = {} as WireFeedbackCategory;
+const _feedbackItemFitsTheWire: WireFeedbackItem = {} as MessageFeedbackItem;
+void _categoryFitsTheWire;
+void _wireCategoryIsCore;
+void _feedbackItemFitsTheWire;
 
 /**
  * 一個 thread 的 agent 與它的清理函式。
@@ -83,6 +102,11 @@ export interface ThreadAgent {
    * **只讀 `find` 與 `list`**：這條線不註冊任何東西。
    */
   readonly commands: Pick<CommandRegistrationPoint, 'find' | 'list'>;
+  /**
+   * 評分與評語的規則（[#278](https://github.com/DemianLi/nexus-agent/issues/278)），選配。
+   * 沒掛 `@nexus/plugin-feedback` 的組裝就沒有，那時三個回饋 method 回 `not_supported`。
+   */
+  readonly feedback?: FeedbackService;
   dispose(): Promise<void>;
   /**
    * 把這個 thread 的**每一份**會話日誌接上遙測，選配。
@@ -224,6 +248,7 @@ interface ThreadState {
   readonly pump: ThreadPump;
   readonly commands: Pick<CommandRegistrationPoint, 'find' | 'list'>;
   readonly executor: CommandExecutor;
+  readonly feedback: FeedbackService | undefined;
   /**
    * 有沒有一次 `slash.run` 還沒回來。
    *
@@ -234,6 +259,109 @@ interface ThreadState {
    */
   slashInFlight: boolean;
   dispose(): Promise<void>;
+}
+
+const RATINGS: readonly string[] = ['positive', 'negative'];
+
+function isCategory(value: unknown): value is FeedbackCategory {
+  return typeof value === 'string' && (FEEDBACK_CATEGORIES as readonly string[]).includes(value);
+}
+
+/** 選填的一格：缺席、或合乎 `check` 的值。 */
+function optional(value: unknown, check: (candidate: unknown) => boolean): boolean {
+  return value === undefined || check(value);
+}
+
+const isString = (value: unknown): value is string => typeof value === 'string';
+
+/**
+ * 三個回饋 method 的回應（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。
+ *
+ * **參數在這裡驗**：這是線的邊界，瀏覽器送什麼都可能。規則本身（備註、版本、目標是不是一輪的起頭）
+ * 歸 `@nexus/plugin-feedback`，這裡只把 run id 換成輪——那張表在 pump 手上。
+ *
+ * **run id 查不到就是 `target-not-found`，帶的是 run id**：瀏覽器指名的是它，它看不到輪。子代理的回覆、
+ * 別條 thread 的、server 重開之前的，都走這一格。
+ */
+function feedbackResponse(
+  thread: ThreadState | undefined,
+  id: number,
+  method: FeedbackMethod,
+  body: unknown,
+): unknown {
+  const service = thread?.feedback;
+  if (thread !== undefined && service === undefined) {
+    return errorResponse(id, 'not_supported', '這個組裝沒有掛回饋（@nexus/plugin-feedback）');
+  }
+  const params = (body as { params?: unknown }).params;
+  if (typeof params !== 'object' || params === null) {
+    return errorResponse(id, 'invalid_argument', `${method} 缺 params`);
+  }
+  const p = params as Record<string, unknown>;
+
+  if (method === 'feedback.record') {
+    if (!optional(p.text, isString) || !optional(p.category, isCategory)) {
+      return errorResponse(
+        id,
+        'invalid_argument',
+        'feedback.record 的 text 要是字串、category 要是七類之一',
+      );
+    }
+    if (thread === undefined || service === undefined) {
+      return errorResponse(id, 'invalid_argument', '這條 thread 還沒開過，沒有會話可以記回饋');
+    }
+    const result = service.record(thread.pump.sessionLog, {
+      ...(typeof p.text === 'string' && { text: p.text }),
+      ...(isCategory(p.category) && { category: p.category }),
+    });
+    return successResponse(id, { ...result });
+  }
+
+  if (typeof p.runId !== 'string' || p.runId.length === 0) {
+    return errorResponse(id, 'invalid_argument', `${method} 缺 runId`);
+  }
+  const runId = p.runId;
+  const notFound = { ok: false, error: { code: 'target-not-found', runId } };
+  const turn = thread?.pump.turnOfReply(runId);
+
+  if (method === 'feedback.delete') {
+    if (typeof p.ifVersion !== 'string') {
+      return errorResponse(id, 'invalid_argument', 'feedback.delete 缺 ifVersion');
+    }
+    if (thread === undefined || service === undefined || turn === undefined) {
+      return successResponse(id, notFound);
+    }
+    return successResponse(id, {
+      ...service.delete(thread.pump.sessionLog, { turn, ifVersion: p.ifVersion }),
+    });
+  }
+
+  if (
+    typeof p.rating !== 'string' ||
+    !RATINGS.includes(p.rating) ||
+    !optional(p.note, isString) ||
+    !optional(p.category, isCategory) ||
+    !(p.ifVersion === null || typeof p.ifVersion === 'string')
+  ) {
+    return errorResponse(
+      id,
+      'invalid_argument',
+      'feedback.put 要 rating（positive／negative）、ifVersion（字串或 null），note 與 category 選填',
+    );
+  }
+  if (thread === undefined || service === undefined || turn === undefined) {
+    return successResponse(id, notFound);
+  }
+  const result = service.put(thread.pump.sessionLog, {
+    turn,
+    rating: p.rating as 'positive' | 'negative',
+    ...(typeof p.note === 'string' && { note: p.note }),
+    ...(isCategory(p.category) && { category: p.category }),
+    ifVersion: p.ifVersion,
+  });
+  // 規則那側也會回 target-not-found（那顆不是一輪的起頭）；對瀏覽器一律講 run id。
+  if (!result.ok && result.error.code === 'target-not-found') return successResponse(id, notFound);
+  return successResponse(id, { ...result });
 }
 
 export function createWireHandler(options: WireHandlerOptions): WireHandler {
@@ -296,6 +424,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
             commands: threadAgent.commands,
             sessionLog: pump.sessionLog,
           }),
+          feedback: threadAgent.feedback,
           slashInFlight: false,
           dispose: async () => {
             // **參與者先收，比不變量還早**：它是唯一寫得動日誌的那一個，先讓它停手，
@@ -460,6 +589,14 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         thread?.pump.cancel();
       }
       return json(successResponse(envelope.id, { accepted: true }));
+    }
+    if (isFeedbackMethod(method)) {
+      // 評分與評語（#278）：**不經 `threadFor`**，同 `run.cancel`——評的是這條 thread 上已經出現過
+      // 的回覆，沒開過的 thread 沒有東西可評，不為了回一個 target-not-found 建一個 agent。
+      // **也不看 `slashInFlight` 與「還在跑」**：跑著、停在核准點都能評（#267 的 Q10）。
+      const existing = threads.get(threadId);
+      const thread = existing === undefined ? undefined : await existing.catch(() => undefined);
+      return json(feedbackResponse(thread, envelope.id, method, body));
     }
     const thread = await threadOrError(threadId, envelope.id);
     if (thread instanceof Response) return thread;

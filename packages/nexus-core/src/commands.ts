@@ -83,6 +83,12 @@ export interface CommandDefinition {
   /** 有自由輸入時的提示。 */
   readonly input?: CommandInputDescriptor;
   /**
+   * `command/run` 要不要記原文，**預設要**。命令自己的 domain 事件已經帶著那段輸入時設成
+   * `false`，免得同一段話在日誌裡記兩次——照 dsh 的同名欄位
+   * （`packages/interaction/commands/src/index.ts:69-75`，`c291e79`）。
+   */
+  readonly recordInput?: boolean;
+  /**
    * 執行。**不把命令送給模型**——命令是人對工具說的話，不是對模型說的話。
    *
    * @param invocation - 這一次執行的原文、配對 id 與取消訊號。
@@ -133,10 +139,15 @@ export function normalizeCommandDefinition(definition: CommandDefinition): {
     }
     input = Object.freeze({ hint });
   }
+  const recordInput: unknown = definition.recordInput;
+  if (recordInput !== undefined && typeof recordInput !== 'boolean') {
+    throw new TypeError(`命令 "${definition.name}" 的 recordInput 要是布林。`);
+  }
   const normalized: CommandDefinition = Object.freeze({
     name: definition.name,
     description: definition.description,
     ...(input === undefined ? {} : { input }),
+    ...(recordInput === undefined ? {} : { recordInput }),
     handler: definition.handler,
   });
   const descriptor: CommandDescriptor = Object.freeze({

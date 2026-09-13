@@ -25,6 +25,7 @@
  * 補訊息是後面的事，補的時候要先講清楚顆粒度怎麼對齊。
  */
 
+import type { FeedbackRecord, MessageFeedbackDelete, MessageFeedbackPut } from './feedback.js';
 import type { GoalChangeMeta, GoalId } from './goal.js';
 import type { TodoItem } from './todo.js';
 import type { SandboxMode } from './sandbox.js';
@@ -95,6 +96,14 @@ import type { ToolErrorInfo } from './tool-events.js';
  * 圍堵看不到它們，所以由 pump 寫 `turn/start {kind:'resume'}` → 每一顆的 `tool/result`
  * （`ABORTED_BEFORE_DISPATCH`）→ `turn/end` 帶 aborted。配對規則不變：每一顆都配著前面那顆沒結果的
  * `tool/call`。
+ *
+ * `feedback/*` 三顆是**第六種生產者：人在事後按的**，只寫 root 那一份。`feedback/record` 由
+ * `/feedback` 的 handler 或 web 的回饋對話框寫；`feedback/message-put`／`message-delete` 由 web 的
+ * 評分按鈕經 wire 寫。**CLI 產不出後兩顆**——評分只在 web
+ * （[#267](https://github.com/DemianLi/nexus-agent/issues/267) 的 Q4），這是第一種只有一條路產得
+ * 出來的事件；它們描述的是人事後怎麼看，不是模型做了什麼，所以「兩條路的顆粒度要對齊」在這裡
+ * 沒有指涉對象。**三顆都只進日誌、不進模型**：對話住在 checkpointer，寫它們的人沒有一個碰
+ * `updateState`。見 [#278](https://github.com/DemianLi/nexus-agent/issues/278)。
  */
 export type SessionEventType =
   | 'turn/start'
@@ -113,6 +122,9 @@ export type SessionEventType =
   | 'plan/mode'
   | 'tool/call'
   | 'tool/result'
+  | 'feedback/message-put'
+  | 'feedback/message-delete'
+  | 'feedback/record'
   | 'session/end-seed';
 
 /**
@@ -187,13 +199,17 @@ export interface SessionEventMap {
    * 這一條照 dsh 的 `execute`：「Admission misses log nothing」。
    *
    * **`args` 是使用者原話，而它會原樣進遙測**——協調器一律鏡像每一顆事件（見
-   * `session-telemetry-coordinator.ts`）。要把使用者輸入擋在遙測外，得補 dsh 那個
-   * `recordInput` 開關；這一版沒有它，理由見 [#118](https://github.com/DemianLi/nexus-agent/issues/118)。
+   * `session-telemetry-coordinator.ts`）。
+   *
+   * **命令宣告 `recordInput: false` 時整個不放 `args`**，照 dsh
+   * （`packages/interaction/commands/src/index.ts:376`，`c291e79`）：那段輸入由命令自己的 domain 事件
+   * 帶著，這裡再記一次就是同一段話在日誌裡出現兩次。今天只有 `/feedback` 這樣宣告
+   * （[#278](https://github.com/DemianLi/nexus-agent/issues/278)）；v8 以前每一顆都帶這一格。
    */
   'command/run': {
     readonly commandId: string;
     readonly name: string;
-    readonly args: string;
+    readonly args?: string;
     readonly source: { readonly kind: 'user' };
   };
   /**
@@ -396,6 +412,26 @@ export interface SessionEventMap {
     readonly isError: boolean;
     readonly error?: ToolErrorInfo;
   };
+  /**
+   * 一輪的評分新建或改了，**帶修改之後的完整值**。後寫覆蓋先寫，被 `feedback/message-delete`
+   * 收回的就沒了——折疊住在 `@nexus/plugin-feedback`。
+   *
+   * 照 dsh 的同名事件（`packages/feedback/message-feedback/src/types.ts:54-58`，`c291e79`），偏離兩處：
+   * 目標欄位 `messageId` 換成 `turn`、拿掉 `sessionId`。理由見 {@link ./feedback.ts}。
+   *
+   * ⚠️ **`note` 是使用者的原話，而它會原樣進遙測**，同 `command/run` 的 `args`。
+   */
+  'feedback/message-put': MessageFeedbackPut;
+  /** 一輪的評分被收回了。**之前的評分與備註仍留在日誌裡**——收回不是抹掉。 */
+  'feedback/message-delete': MessageFeedbackDelete;
+  /**
+   * 一則對整個會話的評語。**跟任何一輪都沒有綁**。照 dsh 的 `feedback/record`
+   * （`packages/feedback/command-feedback/src/types.ts:33-40`）。
+   *
+   * ⚠️ **`text` 是使用者的原話，而它會原樣進遙測**。所以 `/feedback` 宣告 `recordInput: false`
+   * ——同一段話不在 `command/run` 再記一次。
+   */
+  'feedback/record': FeedbackRecord;
   /**
    * 一段 seed 的結尾——這一顆之前的事件是上一個行程寫的，這個行程一顆都沒寫
    * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
