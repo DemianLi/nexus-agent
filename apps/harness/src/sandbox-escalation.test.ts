@@ -20,7 +20,7 @@
  * grant 只有在真的 `interrupt → Command({ resume })` 之下才看得到。斷言釘在**第二顆**上。
  */
 
-import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -28,9 +28,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Command, MemorySaver } from '@langchain/langgraph';
 
+import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
+
 import { createNexusAgent } from './agent-factory.js';
 import { createCliAgent, DEFAULT_PLUGINS } from './cli.js';
-import { ContainedFilesystemBackend } from './contained-backend.js';
+import { ContainedFilesystemBackend, GRANT_MISMATCH_NOTE } from './contained-backend.js';
 import type { SandboxMode } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
 import {
@@ -115,23 +117,33 @@ describe('升級', () => {
    * @param mode - 起始那一格。
    * @param turns - 腳本。
    * @param options - `plugin: false` 組一個 fence 有 ledger、但沒掛升級的組裝；
-   *   `checkpointer: false` 是沒有核准管道；`approvals` 原樣轉給組裝點。
+   *   `checkpointer: false` 是沒有核准管道；`approvals` 原樣轉給組裝點；`submitRecord` 照
+   *   `cli.ts` 掛上 `submit_record`，拿同一份 backend。
    */
   async function assemble(
     mode: SandboxMode,
     turns: readonly ScriptedTurn[],
-    options: { plugin?: boolean; checkpointer?: boolean; approvalsEnabled?: boolean } = {},
+    options: {
+      plugin?: boolean;
+      checkpointer?: boolean;
+      approvalsEnabled?: boolean;
+      submitRecord?: boolean;
+    } = {},
   ) {
     const controller = new SandboxModeController(mode);
     const model = new ScriptedChatModel({ turns });
+    const backend = new ContainedFilesystemBackend({
+      rootDir: root,
+      mode: controller.source,
+      grants: controller,
+    });
     const { agent, dispose } = await createNexusAgent({
       model,
-      backend: new ContainedFilesystemBackend({
-        rootDir: root,
-        mode: controller.source,
-        grants: controller,
-      }),
-      plugins: options.plugin === false ? [] : [createSandboxPolicyPlugin(controller, root)],
+      backend,
+      plugins: [
+        ...(options.plugin === false ? [] : [createSandboxPolicyPlugin(controller, root)]),
+        ...(options.submitRecord === true ? [createSubmitRecordPlugin({ backend })] : []),
+      ],
       ...(options.checkpointer !== false && { checkpointer: new MemorySaver() }),
       ...(options.approvalsEnabled !== undefined && {
         approvals: { enabled: options.approvalsEnabled },
@@ -283,8 +295,9 @@ describe('升級', () => {
           sandbox_permissions: 'workspace-write',
           justification: '使用者要這個檔',
         }),
-        write('/a.txt', '二'),
-        write('/a.txt', '三'),
+        // 重試與第三顆都**原樣**：grant 綁住被擋下的那一次，內容不同的話擋下它的會是另一條。
+        write('/a.txt', '一'),
+        write('/a.txt', '一'),
         { content: '完成。' },
       ]);
       const config = { configurable: { thread_id: 'once' } };
@@ -300,7 +313,9 @@ describe('升級', () => {
         expect(retried).not.toContain('[containment]');
         // **承重的是這一條**：grant 沒被消費掉的實作會讓它過。
         expect(again).toContain('這個 backend 是唯讀的');
-        expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('二');
+        // 而且擋下它的是「用掉了」，不是「對不上」：它跟被擋下的那一次一模一樣。
+        expect(again).not.toContain(GRANT_MISMATCH_NOTE);
+        expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('一');
         expect(controller.peekGrant()).toBeUndefined();
         // 一次性 grant 不是切換 session 模式：人沒切，這一格就沒動。
         expect(controller.current).toBe('read-only');
@@ -318,7 +333,7 @@ describe('升級', () => {
           justification: '使用者要這個檔',
         }),
         write('/b.txt', '別的'),
-        write('/a.txt', '二'),
+        write('/a.txt', '一'),
         { content: '完成。' },
       ]);
       const config = { configurable: { thread_id: 'bound' } };
@@ -328,9 +343,11 @@ describe('升級', () => {
 
         const [, , other, retried] = toolTexts(await agent.invoke(APPROVE, config));
         expect(other).toContain('這個 backend 是唯讀的');
+        // 別的檔**不是**「對不上」：它根本不是這顆 grant 的目標，話照舊。
+        expect(other).not.toContain(GRANT_MISMATCH_NOTE);
         expect(retried).not.toContain('[containment]');
         expect(await exists(join(root, 'b.txt'))).toBe(false);
-        expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('二');
+        expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('一');
       } finally {
         await dispose();
       }
@@ -346,8 +363,8 @@ describe('升級', () => {
           sandbox_permissions: 'danger-full-access',
           justification: '要寫到工作區外面',
         }),
-        write('/out/x.txt', '二'),
-        write('/out/x.txt', '三'),
+        write('/out/x.txt', '一'),
+        write('/out/x.txt', '一'),
         { content: '完成。' },
       ]);
       const config = { configurable: { thread_id: 'outside' } };
@@ -360,7 +377,189 @@ describe('升級', () => {
         const [, , retried, again] = toolTexts(await agent.invoke(APPROVE, config));
         expect(retried).not.toContain('[containment]');
         expect(again).toContain('落在可寫根之外');
-        expect(await readFile(join(outside, 'x.txt'), 'utf8')).toBe('二');
+        expect(await readFile(join(outside, 'x.txt'), 'utf8')).toBe('一');
+      } finally {
+        await dispose();
+      }
+    });
+  });
+
+  /**
+   * [#254](https://github.com/DemianLi/nexus-agent/issues/254)：grant 綁住被擋下的那一次。
+   * 每一條都是「對不上的被擋」配「原樣的過得去」——只驗前一半的話，一個永遠不認領的實作也綠。
+   */
+  describe('一次核准只蓋被擋下的那一次操作', () => {
+    it('write_file：重試改了內容 → 被擋、grant 沒被吃掉；原樣再來一次 → 過得去', async () => {
+      const { agent, dispose, controller } = await assemble('read-only', [
+        write('/a.txt', '一'),
+        escalate({
+          file_path: '/a.txt',
+          sandbox_permissions: 'workspace-write',
+          justification: '使用者要這個檔',
+        }),
+        write('/a.txt', '對不起，寫不進去'),
+        write('/a.txt', '一'),
+        { content: '完成。' },
+      ]);
+      const config = { configurable: { thread_id: 'content-write' } };
+      try {
+        const paused = await agent.invoke(toAgentInvocation('寫 a.txt。'), config);
+        expect(toolTexts(paused)[0]).toContain('這個 backend 是唯讀的');
+
+        const [, , changed, exact] = toolTexts(await agent.invoke(APPROVE, config));
+        expect(changed).toContain(GRANT_MISMATCH_NOTE);
+        // 對不上時照樣接升級指引：模型要的是「原樣重試，或重新升級」。
+        expect(changed).toContain(SANDBOX_ESCALATION_HINT);
+        expect(exact).not.toContain('[containment]');
+        expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('一');
+        expect(controller.peekGrant()).toBeUndefined();
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('edit_file：新字串不同 → 被擋；原樣 → 過得去', async () => {
+      await writeFile(join(root, 'a.txt'), '舊的一行');
+      const edit = (newString: string): ScriptedTurn => ({
+        content: '',
+        toolCalls: [
+          {
+            name: 'edit_file',
+            args: { file_path: '/a.txt', old_string: '舊的', new_string: newString },
+          },
+        ],
+      });
+      const { agent, dispose } = await assemble('read-only', [
+        // 先讀：`edit_file` 有「沒讀過不准改」的護欄，不讀的話擋下它的是那一條、不是 fence。
+        { content: '', toolCalls: [{ name: 'read_file', args: { file_path: '/a.txt' } }] },
+        edit('新的'),
+        escalate({
+          file_path: '/a.txt',
+          sandbox_permissions: 'workspace-write',
+          justification: '使用者要改這一行',
+        }),
+        edit('別的'),
+        edit('新的'),
+        { content: '完成。' },
+      ]);
+      const config = { configurable: { thread_id: 'content-edit' } };
+      try {
+        const paused = await agent.invoke(toAgentInvocation('改 a.txt。'), config);
+        expect(toolTexts(paused)[1]).toContain('這個 backend 是唯讀的');
+
+        const [, , , changed, exact] = toolTexts(await agent.invoke(APPROVE, config));
+        expect(changed).toContain(GRANT_MISMATCH_NOTE);
+        expect(exact).not.toContain('[containment]');
+        expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('新的一行');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('fence 本身：操作不同也不算，沒被擋過就發的 grant 什麼都認領不到', async () => {
+      const controller = new SandboxModeController('read-only');
+      controller.enableEscalation(SANDBOX_ESCALATION_HINT);
+      const backend = new ContainedFilesystemBackend({
+        rootDir: root,
+        mode: controller.source,
+        grants: controller,
+      });
+
+      // 被擋的是 write，拿 delete 來認領：對不上、不消費。
+      expect((await backend.write('/b.txt', '二')).error).toContain('這個 backend 是唯讀的');
+      const bound = {
+        mode: 'workspace-write',
+        target: '/b.txt',
+        denied: controller.lastDenial,
+      } as const;
+      controller.grant(bound);
+      expect((await backend.delete('/b.txt')).error).toContain(GRANT_MISMATCH_NOTE);
+      expect(controller.peekGrant()).toBe(bound);
+      // 反例：原樣的 write 認領得到。
+      expect((await backend.write('/b.txt', '二')).error).toBeUndefined();
+      expect(await readFile(join(root, 'b.txt'), 'utf8')).toBe('二');
+
+      // 沒綁任何一次的 grant：連原樣都認領不到，而且留著不消費。
+      const unbound = { mode: 'workspace-write', target: '/c.txt', denied: undefined } as const;
+      controller.grant(unbound);
+      expect((await backend.write('/c.txt', '三')).error).toContain(GRANT_MISMATCH_NOTE);
+      expect(controller.peekGrant()).toBe(unbound);
+      expect(await exists(join(root, 'c.txt'))).toBe(false);
+    });
+
+    it('兩個檔都被擋、只升級其中一個：綁到的是後擋下的那一次，拿它的內容寫這個檔也不算', async () => {
+      const controller = new SandboxModeController('read-only');
+      controller.enableEscalation(SANDBOX_ESCALATION_HINT);
+      const backend = new ContainedFilesystemBackend({
+        rootDir: root,
+        mode: controller.source,
+        grants: controller,
+      });
+
+      expect((await backend.write('/d.txt', '四')).error).toContain('這個 backend 是唯讀的');
+      expect((await backend.write('/e.txt', '五')).error).toContain('這個 backend 是唯讀的');
+      // 升級指名 d.txt，綁到的卻是 e.txt 被擋的那一次（一次只留一顆）。
+      const crossed = {
+        mode: 'workspace-write',
+        target: '/d.txt',
+        denied: controller.lastDenial,
+      } as const;
+      controller.grant(crossed);
+
+      // 操作一樣、內容也跟綁住的那次一樣——只差在那次打的是別的檔。
+      expect((await backend.write('/d.txt', '五')).error).toContain(GRANT_MISMATCH_NOTE);
+      expect(controller.peekGrant()).toBe(crossed);
+      expect(await exists(join(root, 'd.txt'))).toBe(false);
+    });
+
+    it('submit_record（ro-7 那一筆）：升級之後重試把欄位改掉 → 人按了核准也寫不進去', async () => {
+      const submit = (company: string): ScriptedTurn => ({
+        content: '',
+        toolCalls: [
+          {
+            name: 'submit_record',
+            args: { file_path: '/a.csv', record: { 名字: '阿明', 公司: company } },
+          },
+        ],
+      });
+      const { agent, dispose } = await assemble(
+        'read-only',
+        [
+          submit('遠見科技'),
+          escalate({
+            file_path: '/a.csv',
+            sandbox_permissions: 'workspace-write',
+            justification: '使用者要送出這一筆',
+          }),
+          submit('對不起，無法寫入遠見科技'),
+          submit('遠見科技'),
+          { content: '完成。' },
+        ],
+        { submitRecord: true },
+      );
+      const config = { configurable: { thread_id: 'content-submit' } };
+      try {
+        // 四張卡依序是：送出、升級、改過的送出、原樣的送出。探針照樣全按核准——
+        // 擋下改過那筆的**不是人**，是 grant 綁住的那一次。
+        const cards: (string | undefined)[] = [];
+        let result = await agent.invoke(toAgentInvocation('送出這一筆。'), config);
+        for (let turn = 0; turn < 4; turn += 1) {
+          cards.push(pendingCard(result)?.name);
+          result = await agent.invoke(APPROVE, config);
+        }
+        expect(cards).toEqual([
+          'submit_record',
+          SANDBOX_ESCALATION_TOOL_NAME,
+          'submit_record',
+          'submit_record',
+        ]);
+        const [denied, , changed, exact] = toolTexts(result);
+        expect(denied).toContain('這個 backend 是唯讀的');
+        expect(changed).toContain(GRANT_MISMATCH_NOTE);
+        expect(exact).not.toContain('[containment]');
+        const written = await readFile(join(root, 'a.csv'), 'utf8');
+        expect(written).toContain('阿明,遠見科技');
+        expect(written).not.toContain('對不起');
       } finally {
         await dispose();
       }
