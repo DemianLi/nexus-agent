@@ -452,4 +452,44 @@ describe('subagent 裡的閘門', () => {
 
     expect(ran).toEqual([]);
   });
+
+  /**
+   * **沒有人註冊的那一個。** `general-purpose` 以前是基座自己補的：它那次
+   * `mergeMiddlewareStack(..., { appendNew: false })` 把名字不撞內建的 middleware 全部丟掉，
+   * 閘門就在其中——`task` 的描述對模型列著它，而叫它等於繞過核准。上一條是它的對照組。
+   */
+  it('general-purpose 裡呼叫 gated 工具 → 一樣中斷，拒絕之後工具沒跑', async () => {
+    const model = new ScriptedChatModel({
+      turns: [
+        {
+          content: '委派。',
+          toolCalls: [
+            { name: 'task', args: { description: '幹活', subagent_type: 'general-purpose' } },
+          ],
+        },
+        { content: '子代理動手。', toolCalls: [{ name: 'danger', args: {} }] },
+        { content: '子代理收工。' },
+        { content: '根收工。' },
+        { content: '根再收一次工。' },
+      ],
+    });
+
+    const { agent } = await createNexusAgent({
+      model,
+      checkpointer: new MemorySaver(),
+      plugins: [spyPlugin(['danger']), gatePlugin(['danger'])],
+    });
+    const config = { configurable: { thread_id: 'general-purpose' } };
+
+    const paused = await agent.invoke(toAgentInvocation('委派'), config);
+    expect(paused.__interrupt__).toBeDefined();
+    expect(ran).toEqual([]);
+
+    await agent.invoke(
+      new Command({ resume: { decisions: [{ type: 'reject' }] } }) as never,
+      config,
+    );
+
+    expect(ran).toEqual([]);
+  });
 });

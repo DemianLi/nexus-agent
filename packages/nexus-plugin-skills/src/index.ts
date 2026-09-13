@@ -62,8 +62,8 @@ export interface SkillsPluginOptions {
  * 它只包寫入路徑，讀一律通過。擋人的自始至終只有 `permissions` 一層。）
  *
  * **繼承規則跟 memory 正好相反。** 基座的 `createSubagentDefaultMiddleware` 有
- * `input.skills` 分支，所以 subagent **可以**有自己的 skills；而內建的 general-purpose
- * subagent 會拿到 root 的那份來源（`normalizeSubagentSpec` 把 `skills` 傳了進去）。
+ * `input.skills` 分支，所以 subagent **可以**有自己的 skills；而 general-purpose subagent
+ * 會拿到 root 的那份來源——它由 `foldRegistry` 註冊，照基座那份把 `skills` 抄了過去。
  * 對照之下 memory 只有 `mode: 'fork'` 的 subagent 拿得到、general-purpose 拿不到。
  * 淨結果是**兩個擴充點的繼承規則互為反面**，這種事只能靠絆索測試記住。
  *
