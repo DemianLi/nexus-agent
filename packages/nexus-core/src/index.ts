@@ -135,6 +135,15 @@ export {
   OBSERVED_WRITE_TOOL,
 } from './observation.js';
 
+export {
+  createFsToolErrorsMiddleware,
+  FS_SANDBOX_DENIED,
+  FS_TOOL_ERRORS_MIDDLEWARE_NAME,
+  FS_TOOL_PRIMARY_METHOD,
+  noteSandboxDenial,
+  recordBackendOutcomes,
+} from './fs-tool-errors.js';
+
 export type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
 export {
   createInvalidArgumentsCarrier,

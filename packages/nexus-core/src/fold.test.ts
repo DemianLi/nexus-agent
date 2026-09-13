@@ -12,6 +12,7 @@ import type { CreateDeepAgentParams, SubAgent } from 'deepagents';
 import { CompositeBackend, GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
 import { CONTAINMENT_MIDDLEWARE_NAME } from './containment.js';
+import { FS_TOOL_ERRORS_MIDDLEWARE_NAME } from './fs-tool-errors.js';
 import { INVALID_TOOL_ARGS_MIDDLEWARE_NAME } from './invalid-tool-args.js';
 import { OBSERVATION_POLICY_MIDDLEWARE_NAME } from './observation.js';
 import { OUTPUT_SCHEMA_MIDDLEWARE_NAME } from './output-schema.js';
@@ -119,10 +120,15 @@ describe('backend 註冊點', () => {
     expect((params.backend as CompositeBackend).routePrefixes).toEqual(['/memories/']);
   });
 
-  it('沒人掛路由就原樣交出組裝點給的那個，不多包一層', async () => {
+  it('沒人掛路由就不包成 CompositeBackend：交出去的是記錄那一層包著的同一個（#293）', async () => {
     const fallback = fakeBackend('default');
     const params = await fold([fakePlugin('noop', () => {})], { defaultBackend: fallback });
-    expect(params.backend).toBe(fallback);
+    expect(CompositeBackend.isInstance(params.backend)).toBe(false);
+    // 不是同一個參照（多了記錄檔案工具失敗的那一層），但讀到的是組裝點給的那一個。
+    expect(params.backend).not.toBe(fallback);
+    expect((params.backend as unknown as { nexusFakeBackend: string }).nexusFakeBackend).toBe(
+      'default',
+    );
   });
 
   it('掛了路由卻沒給 default backend → 報錯', async () => {
@@ -274,6 +280,8 @@ describe('「先讀後改」策略打底', () => {
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      // 有 backend 就有：檔案工具的失敗標成錯誤，貼著工具本體（#293）。
+      FS_TOOL_ERRORS_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
@@ -301,6 +309,7 @@ describe('「先讀後改」策略打底', () => {
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      FS_TOOL_ERRORS_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
@@ -1109,6 +1118,7 @@ describe('摘要器打底', () => {
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      FS_TOOL_ERRORS_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
@@ -1138,6 +1148,7 @@ describe('摘要器打底', () => {
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      FS_TOOL_ERRORS_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
@@ -1230,6 +1241,7 @@ describe('提醒器打底', () => {
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      FS_TOOL_ERRORS_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);

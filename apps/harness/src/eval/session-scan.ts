@@ -46,7 +46,8 @@
  * 只讀不寫，讀懂多少報多少；續接那條（`SessionStore.resume`）要往下寫，所以它拒絕，兩邊不同是對的。
  *
  * **有一件事版本帶不出來**：#273 之前寫的日誌把 goal、todo、計劃模式、root-only 樁的拒絕記成
- * `isError: false`，而格式版本沒升（`session-log.ts` 的 `tool/result`）。那一段的錯誤數偏低，
+ * `isError: false`，而格式版本沒升（`session-log.ts` 的 `tool/result`）。#293 之前同樣把 fence 擋下的
+ * 寫入與基座檔案工具的失敗記成成功（基座回裸字串，見 `@nexus/core` 的 `fs-tool-errors.ts`）。那一段的錯誤數偏低，
  * 逐份分不出來，所以是報表底下每次都印的一句，不是某一份的標記。
  *
  * **另一件版本也帶不出來**：續接過的檔，header 在第一次續寫時被蓋成當時的版本，而續接之前那一段
@@ -459,6 +460,7 @@ export function formatScanReport(
     '',
     '注意：步數與工具欄是逐份的，subagent 的在它自己那份。',
     '注意：#273（2026-09-12）之前寫的日誌把 goal、todo、計劃模式、root-only 樁的拒絕記成成功，' +
+      '#293（2026-09-13）之前把 fence 擋下的寫入與檔案工具的失敗記成成功，' +
       '格式版本沒升、逐份分不出來——那一段的工具錯誤數偏低。',
   );
   return lines;
