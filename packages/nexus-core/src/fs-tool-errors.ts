@@ -11,6 +11,10 @@
  * 後果是 fence 擋下的寫入在會話日誌是 `isError: false`、web 畫成「完成」、離線掃描數不到
  * （[#293](https://github.com/DemianLi/nexus-agent/issues/293)，2026-09-13 live 實跑量到）。
  *
+ * **這一層只修得到日誌與模型那一半。** web 的工具卡來自基座在工具本體裡就發的 `tool-finished`，
+ * 早於這裡換狀態；那一半由 pump 改以日誌的 `tool/result` 為準才修掉
+ * （[#296](https://github.com/DemianLi/nexus-agent/issues/296)，`apps/harness/src/thread-pump.ts`）。
+ *
  * ## 對 dsh
  *
  * dsh 的 `write`／`edit` 在工具本體裡拋 `FsError`（`packages/fs/tool-fs/src/write.ts:116-123`，

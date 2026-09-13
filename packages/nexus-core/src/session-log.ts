@@ -409,6 +409,10 @@ export interface SessionEventMap {
    * 數錯誤的分不出這一段。
    *
    * 中斷不是落定：暫停的那次沒有這一顆，見 `tool/call`。
+   *
+   * **web 的工具卡以這一顆定終態**（[#296](https://github.com/DemianLi/nexus-agent/issues/296)，
+   * 照 dsh 的卡由 `tool/result` 收）：pump 訂閱每一份日誌，失敗的就把卡畫成失敗。紅字要的那一句不在
+   * 這裡——圍堵發佈這一顆的期間另外放著，見 `tool-events.ts` 的 `publishToolResult`。
    */
   'tool/result': {
     readonly callId: string;
