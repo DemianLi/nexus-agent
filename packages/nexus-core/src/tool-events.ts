@@ -46,7 +46,12 @@ export const TOOL_ABORTED = 'ABORTED';
  * 生產者見 `turn-cancel.ts`，與停在核准點被收回的那幾顆（`apps/harness` 的 pump）。
  */
 export const TOOL_ABORTED_BEFORE_DISPATCH = 'ABORTED_BEFORE_DISPATCH';
-/** 參數不合工具宣告的 schema。dsh `ToolArgsError` 的碼。 */
+/**
+ * 參數不合工具宣告的 schema。dsh `ToolArgsError` 的碼。
+ *
+ * **兩個生產者、同一個碼**，同 dsh：圍堵認出的 schema 不合（`containment.ts`），與 JSON 都不合格的那顆
+ * （`invalid-tool-args.ts`）。下游分不開是照抄，沒有讀者要分。
+ */
 export const INVALID_ARGS = 'INVALID_ARGS';
 /** 模型叫了一個不存在的工具。dsh `ToolNotFoundError` 的碼。 */
 export const UNKNOWN_TOOL = 'UNKNOWN_TOOL';

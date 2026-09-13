@@ -24,6 +24,11 @@ import { createApprovalGateMiddleware } from './approval.js';
 import type { ApprovalChannel } from './approval.js';
 import { deriveApprovalChannel } from './approval.js';
 import { createContainmentMiddleware } from './containment.js';
+import {
+  createInvalidArgumentsCarrier,
+  createInvalidToolArgsMiddleware,
+} from './invalid-tool-args.js';
+import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
 import { createObservationPolicy } from './observation.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
@@ -276,14 +281,18 @@ export function foldRegistry(
   if (toolOrder !== undefined) validateToolOrder(toolOrder, known);
 
   const permissions = foldPermissions(registry);
+  // **解不開的參數的載體，一份組裝一份、交給三個讀者**：圍堵、核准閘門、最內層那顆。
+  // 為什麼共用而不逐個建，見 {@link ./invalid-tool-args.ts}。
+  const invalidArguments = createInvalidArgumentsCarrier();
+  const invalidToolArgs = createInvalidToolArgsMiddleware(invalidArguments);
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./containment.ts}。
   // 它也是工具事件的生產者（#264），所以要拿得到 `sessions` 那個通道。
-  const containment = createContainmentMiddleware(registry.sessions);
+  const containment = createContainmentMiddleware(registry.sessions, invalidArguments);
   // **中止這一輪的兩顆，也是一份實例走遍 root 與每個子代理**：訊號每次從那一次呼叫的
   // `configurable` 現讀。位置一外一內，理由見 {@link ./turn-cancel.ts}。
   const turnCancel = createTurnCancelGuard();
   const turnCancelModelSignal = createTurnCancelModelSignal();
-  const approvalGate = foldApprovalGate(registry, options);
+  const approvalGate = foldApprovalGate(registry, options, invalidArguments);
   const summarizer = foldSummarizer(registry, options);
   const repeatReminder = foldRepeatReminder(options);
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./model-usage.ts}。
@@ -309,6 +318,7 @@ export function foldRegistry(
       repeatReminder,
       modelUsage,
       modelCalls,
+      invalidToolArgs,
     }),
     middleware: foldMiddleware(
       registry,
@@ -321,6 +331,7 @@ export function foldRegistry(
       repeatReminder,
       modelUsage,
       modelCalls,
+      invalidToolArgs,
     ),
   };
 
@@ -539,14 +550,18 @@ function foldPermissions(registry: PluginRegistry): FilesystemPermission[] {
  *
  * `enabled` 與 checkpointer 這兩格答的是不同的問題，映射見 {@link ApprovalChannel}。
  */
-function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): AgentMiddleware {
+function foldApprovalGate(
+  registry: PluginRegistry,
+  options: FoldOptions,
+  invalidArguments: InvalidArgumentsCarrier,
+): AgentMiddleware {
   const channel: ApprovalChannel = deriveApprovalChannel({
     ...(options.approvals?.enabled !== undefined && {
       approvalsEnabled: options.approvals.enabled,
     }),
     hasCheckpointer: options.checkpointer !== undefined && options.checkpointer !== false,
   });
-  return createApprovalGateMiddleware(registry.approvals.listeners(), channel);
+  return createApprovalGateMiddleware(registry.approvals.listeners(), channel, invalidArguments);
 }
 
 /**
@@ -610,6 +625,7 @@ function foldMiddleware(
   repeatReminder: AgentMiddleware | undefined,
   modelUsage: AgentMiddleware,
   modelCalls: AgentMiddleware,
+  invalidToolArgs: AgentMiddleware,
 ): AgentMiddleware[] {
   const entries = registry.middleware.list();
   return [
@@ -627,6 +643,9 @@ function foldMiddleware(
     modelCalls,
     modelUsage,
     ...entries.filter((entry) => !entry.value.prepend).map((entry) => entry.value.middleware),
+    // 解不開的參數：`wrapToolCall` 在核准與每個 plugin 的內側（dsh 執行時才驗參數），改寫在每個
+    // `wrapModelCall` 的內側（外面看到的都是改寫過的那則）。見 {@link ./invalid-tool-args.ts}。
+    invalidToolArgs,
     // 最內層：只替模型綁中止訊號，外面每一顆看到的都是原本的模型。見 {@link ./turn-cancel.ts}。
     turnCancelModelSignal,
   ];
@@ -785,6 +804,7 @@ function foldSubAgents(
     repeatReminder: AgentMiddleware | undefined;
     modelUsage: AgentMiddleware;
     modelCalls: AgentMiddleware;
+    invalidToolArgs: AgentMiddleware;
   },
 ): SubAgent[] {
   const folded: SubAgent[] = [];
@@ -865,6 +885,8 @@ function foldSubAgents(
         context.modelCalls,
         context.modelUsage,
         ...(spec.middleware ?? []),
+        // 解不開的參數排在 subagent 自帶的那些內側，同 root（#269 的 Q7：root 與子代理同一顆）。
+        context.invalidToolArgs,
         // 最內層替模型綁中止訊號，排在 subagent 自帶的那些後面，同 root。
         context.turnCancelModelSignal,
       ],

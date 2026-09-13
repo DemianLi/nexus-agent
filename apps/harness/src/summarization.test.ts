@@ -170,6 +170,9 @@ describe('同名取代是唯一的縫', () => {
         // 這一條就是「表達不出來」的證據，見 `model-calls.ts` 的偏離那一節。
         'nexusModelCallEvents',
         'nexusModelUsage',
+        // 解不開的工具參數（#281）：`wrapToolCall` 在核准與每個 plugin 的內側、改寫在每個
+        // `wrapModelCall` 的內側，所以排在 plugin middleware 之後、綁訊號那顆之前。
+        'nexusInvalidToolArgs',
         // 中止的內層那顆（#276）：最內層，只替模型綁中止訊號。它在摘要器**裡面**，所以摘要器
         // 讀到的是原本的模型，不是那層 `RunnableBinding`——見 `turn-cancel.ts` 的「為什麼是兩顆」。
         'nexusTurnCancelModelSignal',

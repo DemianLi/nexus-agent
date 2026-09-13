@@ -75,6 +75,7 @@ import { ToolMessage } from '@langchain/core/messages';
 import { isGraphBubbleUp } from '@langchain/langgraph';
 import { createMiddleware, MiddlewareError, ToolInvocationError } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
 import type { SessionLookup } from './registry.js';
 import {
   INVALID_ARGS,
@@ -218,7 +219,8 @@ export function resolveToolName(request: {
  *   `ToolInvocationError` 從 handler 拋出來（`langchain@1.5.10` 的 `ToolNode.js:254`），
  *   而那顆錯的 `name` 就是 `"Error"`（實測），**只認得出品牌**。中途每經過一層 middleware
  *   可能再包一層 `MiddlewareError`，所以先沿 `.cause` 走到底——同基座自己的
- *   `#handleError`（`:139-145`）。
+ *   `#handleError`（`:139-145`）。**這不是 `INVALID_ARGS` 唯一的來處**：JSON 都不合格的那顆
+ *   不經過這裡，由 `invalid-tool-args.ts` 的樁回訊息時自己標碼。
  *
  * @param error - `catch` 到的東西。
  * @returns 它的碼，或 `undefined`。
@@ -260,6 +262,7 @@ interface RecordableRequest {
 function recordToolCall(
   sessions: ToolEventSessions | undefined,
   request: RecordableRequest,
+  raw: string | undefined,
 ): ((outcome: ToolOutcome) => void) | undefined {
   const callId = request.toolCall.id;
   if (sessions === undefined || callId === undefined || callId === '') return undefined;
@@ -271,7 +274,8 @@ function recordToolCall(
     log.append('tool/call', {
       callId,
       name: request.toolCall.name,
-      arguments: JSON.stringify(request.toolCall.args ?? {}),
+      // 解不開的那顆記模型吐的原字串（歷史裡它已經是 `{}`），見 `invalid-tool-args.ts`。
+      arguments: raw ?? JSON.stringify(request.toolCall.args ?? {}),
     });
   } catch {
     // 參數序列化不動或日誌不收：這一對整個不記，見上面。
@@ -295,7 +299,7 @@ function recordToolCall(
  * 造一個把工具失敗翻成 error ToolMessage 的 middleware，**給了 `sessions` 就順便記工具事件**。
  *
  * **時刻：dsh 的 `tools/execute`**（環繞 waterfall：超時／重試／指標）。這一層是那個
- * 時刻在我們樹上的**第 0 格**佔用者。同一個時刻我們還有三個佔用者，而它們是同一種
+ * 時刻在我們樹上的**第 0 格**佔用者。同一個時刻我們還有其他佔用者（逐個列在索引裡），而它們是同一種
  * 機制的不同陣列位置，不是三種權限——索引見 `apps/harness/src/interception-index.test.ts`。
  *
  * 它**必須排在整份 middleware 陣列的第 0 格**（root 與每個 subagent 都是）：`wrapToolCall`
@@ -312,9 +316,14 @@ function recordToolCall(
  *
  * @param sessions - 註冊表的 `sessions` 通道。**省略就不記**——單元測試與相容用的 re-export
  *   走這條；產品組裝由 `fold.ts` 傳進來。
+ * @param invalidArguments - 解不開的參數的載體（`invalid-tool-args.ts`）。給了就讓那幾顆的
+ *   `tool/call.arguments` 記原字串，並在落定時刪鍵——這一層是最外層，看得到每一條出口。
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */
-export function createContainmentMiddleware(sessions?: ToolEventSessions): AgentMiddleware {
+export function createContainmentMiddleware(
+  sessions?: ToolEventSessions,
+  invalidArguments?: InvalidArgumentsCarrier,
+): AgentMiddleware {
   return createMiddleware({
     name: CONTAINMENT_MIDDLEWARE_NAME,
     wrapToolCall: async (request, handler) => {
@@ -322,7 +331,14 @@ export function createContainmentMiddleware(sessions?: ToolEventSessions): Agent
       // 「這次呼叫在圍堵眼裡花了多久」，內層 middleware 的開銷也算在裡面。那正是要回報
       // 的東西：模型等的就是這一段。
       const startedAt = Date.now();
-      const settle = recordToolCall(sessions, request as RecordableRequest);
+      const callId = request.toolCall.id;
+      const raw = callId === undefined ? undefined : invalidArguments?.rawOf(callId);
+      const settle = recordToolCall(sessions, request as RecordableRequest, raw);
+      // **落定才刪鍵，中斷不刪**：續接時同一個 callId 會再進來一次，那時核准與拒絕都還要讀得到。
+      // 沒接會話（`settle` 是 `undefined`）照樣刪：記不記日誌與載體的壽命是兩件事。
+      const forget = (): void => {
+        if (callId !== undefined) invalidArguments?.forget(callId);
+      };
       try {
         const result = await handler(request);
         if (settle !== undefined) {
@@ -335,6 +351,7 @@ export function createContainmentMiddleware(sessions?: ToolEventSessions): Agent
               : outcome,
           );
         }
+        forget();
         return result;
       } catch (error) {
         // 中斷、`Command` 這類控制流是用拋例外走的，接住它們等於把功能吃掉。
@@ -352,6 +369,7 @@ export function createContainmentMiddleware(sessions?: ToolEventSessions): Agent
         });
         const kind = classifyThrownToolError(error);
         settle?.(kind === undefined ? { isError: true } : { isError: true, error: kind });
+        forget();
         return message;
       }
     },

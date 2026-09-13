@@ -117,6 +117,18 @@ describe('疑似打轉：同工具同參數連到提醒器的第二道門檻', (
     expect(scan(run).longestRun).toMatchObject({ count: 2 });
   });
 
+  it('JSON 都不合格的那顆記的是原字串：解不開照樣讀，同一個原字串照樣連成一串（#281）', () => {
+    const raw = (): Entry => [
+      'tool/call',
+      { callId: `c${nextCall++}`, name: 'grep', arguments: '{"x": 嗨}' },
+    ];
+    expect(scan([turn('message'), raw(), raw(), raw(), raw(), raw()])).toMatchObject({
+      looping: true,
+      longestRun: { tool: 'grep', count: 5 },
+      toolCalls: 5,
+    });
+  });
+
   it('射程外的工具穿插進來，鏈不斷也不算它，但工具呼叫照數', () => {
     const interleaved = same(5).flatMap((entry) => [entry, call('todo_write', { todos: [] })]);
     const result = scan([turn('message'), ...interleaved], {

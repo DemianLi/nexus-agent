@@ -365,10 +365,11 @@ export interface SessionEventMap {
    *
    * ## 對 dsh 的兩處偏離
    *
-   * - **`arguments` 是參數物件序列化後的字串，不是模型吐的原字串。** 原字串只留在供應商那一層
+   * - **`arguments` 平常是參數物件序列化後的字串，不是模型吐的原字串。** 原字串只留在供應商那一層
    *   的 `additional_kwargs.tool_calls`，形狀隨供應商而變，`wrapToolCall` 只拿得到解析過的
-   *   `toolCall.args`。JSON 都不合格的呼叫根本不派發（落進 `invalid_tool_calls`），這裡看不到，
-   *   見 [#269](https://github.com/DemianLi/nexus-agent/issues/269)。
+   *   `toolCall.args`。**JSON 都不合格的那顆例外：記的就是模型吐的原字串，所以這一格不一定解得開
+   *   JSON**（[#281](https://github.com/DemianLi/nexus-agent/issues/281)，見 `invalid-tool-args.ts`）。
+   *   格式版本不升：dsh 只在結構變更時升，這一格的型別沒變（dsh 這一格本來就是原字串）。
    * - **沒有 `turn`／`step`。** 我們沒有 `step/*` 事件（`model/start`／`model/end` 不是步的邊界，
    *   這一顆落在它們之後，見那兩顆），subagent 的日誌裡也沒有 `turn/start`
    *   （入口點只包 root 的輪）。root 那份以落在哪一對 `turn/start`／`turn/end` 之間定輪。
