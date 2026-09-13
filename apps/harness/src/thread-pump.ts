@@ -235,6 +235,34 @@ export function classifyToolData(data: unknown): unknown {
   return data;
 }
 
+/**
+ * 參數解不開的那顆，模型吐的原字串（[#281](https://github.com/DemianLi/nexus-agent/issues/281)）。
+ *
+ * 那一顆在歷史裡已經被改寫成 `{}`（`@nexus/core` 的 `invalid-tool-args.ts`），所以基座發的
+ * `tool-started` 帶的 `input` 是 `"{}"`。原字串在同一條串流上更早的地方：模型那一段收尾時的
+ * `content-block-finish`，block 的 `type` 是 `invalid_tool_call`（實測）。pump 記下它，等
+ * `tool-started` 來了換掉 `input`——這是 #269 登記的偏離：工具卡的參數由 pump 換，因為基座的
+ * `tools` frame 我們產不了。
+ *
+ * **不讀 core 的載體**：那一份在工具落定時就刪鍵，而這一層讀到 frame 的時刻可能晚於落定。
+ * 同一條串流上的先後則是保證的：模型那一段收尾之後，工具節點才開始。
+ *
+ * @param data - `messages` 那一顆的 `data`。
+ * @returns 解不開的那顆的 id 與原字串；不是那種 block 就 `undefined`。
+ */
+export function invalidArgumentsOf(data: unknown): { id: string; raw: string } | undefined {
+  const shaped = data as { event?: unknown; content?: unknown } | null;
+  if (shaped === null || typeof shaped !== 'object') return undefined;
+  if (shaped.event !== 'content-block-finish') return undefined;
+  const block = shaped.content as { type?: unknown; id?: unknown; args?: unknown } | null;
+  if (block === null || typeof block !== 'object' || block.type !== 'invalid_tool_call') {
+    return undefined;
+  }
+  return typeof block.id === 'string' && typeof block.args === 'string'
+    ? { id: block.id, raw: block.args }
+    : undefined;
+}
+
 function failureTextOf(output: unknown): string | undefined {
   // **這一層拿到的是 `ToolMessage` 實例，不是它序列化過的樣子。** 實測 pump 這裡的
   // `output` 帶的是 `lc_serializable` / `lc_kwargs` 那組欄位，`status` 直接掛在實例上；
@@ -384,6 +412,14 @@ export class ThreadPump {
    * 「回答第一顆」判成 `no_such_interrupt`。
    */
   readonly #pending = new Map<string, PendingInterrupt>();
+  /**
+   * 參數解不開的那幾顆：callId → 模型吐的原字串，見 {@link invalidArgumentsOf}。
+   *
+   * **活在 thread 上、不是 run 上**：要核准的那顆，模型那一段在第一個 run，`tool-started` 在人按了
+   * 核准之後的那個 run。換過一次就刪；被拒的那顆永遠等不到 `tool-started`，留著一筆短字串到 thread
+   * 結束。
+   */
+  readonly #invalidArguments = new Map<string, string>();
   /** 一個 thread 一次只跑一個 run；後到的 submit 排隊，不平行跑。 */
   #tail: Promise<void> = Promise.resolve();
   /**
@@ -900,6 +936,10 @@ export class ThreadPump {
       return;
     }
 
+    if (raw.method === 'messages') {
+      const invalid = invalidArgumentsOf(raw.params.data);
+      if (invalid !== undefined) this.#invalidArguments.set(invalid.id, invalid.raw);
+    }
     if (channelOfMethod(raw.method) === undefined) {
       return;
     }
@@ -909,9 +949,22 @@ export class ThreadPump {
         namespace: raw.params.namespace,
         timestamp: raw.params.timestamp,
         ...(raw.params.node === undefined ? {} : { node: raw.params.node }),
-        data: raw.method === 'tools' ? classifyToolData(raw.params.data) : raw.params.data,
+        data: raw.method === 'tools' ? this.#toolData(raw.params.data) : raw.params.data,
       },
     } as Event);
+  }
+
+  /** `tools` 那一顆：先分類，再把解不開的那顆的 `input` 換回原字串。 */
+  #toolData(data: unknown): unknown {
+    const classified = classifyToolData(data);
+    const shaped = classified as { event?: unknown; tool_call_id?: unknown } | null;
+    if (shaped?.event !== 'tool-started' || typeof shaped.tool_call_id !== 'string') {
+      return classified;
+    }
+    const raw = this.#invalidArguments.get(shaped.tool_call_id);
+    if (raw === undefined) return classified;
+    this.#invalidArguments.delete(shaped.tool_call_id);
+    return { ...shaped, input: raw };
   }
 
   /** 蓋上這條 thread 自己的編號——**不是 run 的 `seq`**，那個每個 run 都從 0 重來。 */

@@ -181,7 +181,10 @@ export function loopingThreshold(settings: RepeatReminderSettings): number {
   return second;
 }
 
-/** 日誌上的 `arguments` 解回參數。解不動就原字串——生產者寫的是 `JSON.stringify`，碰不到。 */
+/**
+ * 日誌上的 `arguments` 解回參數。解不動就原字串——**這條路會走到**：JSON 都不合格的那顆記的就是
+ * 模型吐的原字串（`@nexus/core` 的 `invalid-tool-args.ts`），同一個原字串重複叫照樣配得成一串。
+ */
 function parseArguments(serialized: string): unknown {
   try {
     return JSON.parse(serialized) as unknown;

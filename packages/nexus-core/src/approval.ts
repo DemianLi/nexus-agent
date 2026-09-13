@@ -22,6 +22,7 @@ import { interrupt, isGraphBubbleUp } from '@langchain/langgraph';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import type { NamedEntry } from './entries.js';
+import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
 import { formatOrigin } from './plugin.js';
 
 /** 核准閘門 middleware 的名字。錯誤訊息與排序斷言用得到。 */
@@ -212,13 +213,20 @@ function denial(exec: ToolExecution, reason: string): ToolMessage {
  * `apps/harness/src/interception-index.test.ts` 第 4 列的紀錄差，**源碼散文（這裡）才是第一
  * 產物**。
  *
+ * **參數解不開的那顆照樣先問人**（dsh 核准在驗參數之前），拒絕在內側那顆
+ * （`invalid-tool-args.ts`）。listener 拿到的是歷史裡的 `{}`；**只有中斷酬載的 `args` 換成
+ * 模型吐的原字串**——人要看的是模型想做什麼，不是改寫後的空物件。這是登記過的偏離：dsh 的核准
+ * 請求只帶 `callId`，連到已顯示的工具卡。
+ *
  * @param listeners - 依註冊順序的 listener。
  * @param channel - 這次組裝有沒有人可以按核准。
+ * @param invalidArguments - 解不開的參數的載體；給了，中斷酬載才讀得到原字串。
  * @returns 可以交給 `registry.middleware.use()` 或塞進 subagent 的 middleware。
  */
 export function createApprovalGateMiddleware(
   listeners: readonly NamedEntry<PreToolListener>[],
   channel: ApprovalChannel,
+  invalidArguments?: InvalidArgumentsCarrier,
 ): AgentMiddleware {
   return createMiddleware({
     name: APPROVAL_GATE_MIDDLEWARE_NAME,
@@ -250,9 +258,10 @@ export function createApprovalGateMiddleware(
 
       // `interrupt` 是用拋例外傳播的，**不能包在 try/catch 裡**
       // （`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
+      const raw = exec.callId === undefined ? undefined : invalidArguments?.rawOf(exec.callId);
       const answer = (await interrupt({
         kind: APPROVAL_INTERRUPT_KIND,
-        actionRequests: [{ name: exec.name, args: exec.args, description: because }],
+        actionRequests: [{ name: exec.name, args: raw ?? exec.args, description: because }],
         reviewConfigs: [{ actionName: exec.name, allowedDecisions: ['approve', 'reject'] }],
       })) as { decisions?: { type?: string; message?: string }[] } | undefined;
 

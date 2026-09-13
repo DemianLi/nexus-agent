@@ -12,6 +12,7 @@ import type { CreateDeepAgentParams, SubAgent } from 'deepagents';
 import { CompositeBackend } from 'deepagents';
 import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
 import { CONTAINMENT_MIDDLEWARE_NAME } from './containment.js';
+import { INVALID_TOOL_ARGS_MIDDLEWARE_NAME } from './invalid-tool-args.js';
 import { OBSERVATION_POLICY_MIDDLEWARE_NAME } from './observation.js';
 import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 import { MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
@@ -137,6 +138,7 @@ describe('middleware 註冊點', () => {
       'a',
       'b',
       'c',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -156,6 +158,7 @@ describe('middleware 註冊點', () => {
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
       'c',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -175,6 +178,7 @@ describe('middleware 註冊點', () => {
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -253,6 +257,7 @@ describe('「先讀後改」策略打底', () => {
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -278,6 +283,7 @@ describe('「先讀後改」策略打底', () => {
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -499,6 +505,7 @@ describe('approvals 註冊點', () => {
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -522,6 +529,7 @@ describe('approvals 註冊點', () => {
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -539,6 +547,7 @@ describe('approvals 註冊點', () => {
       APPROVAL_GATE_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -976,6 +985,7 @@ describe('摘要器打底', () => {
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -1003,6 +1013,7 @@ describe('摘要器打底', () => {
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -1093,6 +1104,7 @@ describe('提醒器打底', () => {
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -1120,6 +1132,7 @@ describe('提醒器打底', () => {
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });

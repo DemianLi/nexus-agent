@@ -127,6 +127,15 @@ export {
   OBSERVED_WRITE_TOOL,
 } from './observation.js';
 
+export type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
+export {
+  createInvalidArgumentsCarrier,
+  createInvalidToolArgsMiddleware,
+  INVALID_ARGUMENTS_REFUSAL,
+  INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+  repairInvalidToolCalls,
+} from './invalid-tool-args.js';
+
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 export { createModelCallRecorder, MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
