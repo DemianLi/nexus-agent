@@ -12,16 +12,23 @@
  * @see [#89](https://github.com/DemianLi/nexus-agent/issues/89)
  */
 
+import { once } from 'node:events';
+import { createServer } from 'node:http';
+
 import type { Event } from '@nexus/wire';
 import { createWireClient } from '@nexus/wire';
+import { SessionLog, SessionRegistry } from '@nexus/core';
 import type {
   NexusPlugin,
   SessionTelemetryRecord,
   SessionTelemetryRedactRule,
   SessionTelemetryService,
+  SessionTelemetrySharingStatus,
 } from '@nexus/core';
-import { describe, expect, it } from 'vitest';
+import { createTelemetryOtelPlugin } from '@nexus/plugin-telemetry-otel';
+import { describe, expect, it, vi } from 'vitest';
 
+import { DISABLED_FEEDBACK_WARNING } from './agent-factory.js';
 import { createCliAgent, DEFAULT_PLUGINS, runTurn } from './cli.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -34,13 +41,13 @@ interface Collected extends SessionTelemetryService {
   readonly shutdowns: { count: number };
 }
 
-function collectingSink(): Collected {
+function collectingSink(sharing: SessionTelemetrySharingStatus = 'full'): Collected {
   const records: SessionTelemetryRecord[] = [];
   const shutdowns = { count: 0 };
   return {
     records,
     shutdowns,
-    sharing: 'full',
+    sharing,
     emit: (record) => void records.push(record),
     shutdown: () => {
       shutdowns.count += 1;
@@ -261,5 +268,183 @@ describe('遙測接線：web 那條路', () => {
     await handler.close();
 
     expect(sink.records).toHaveLength(0);
+  });
+});
+
+/** 起一個收 `/v1/logs` 的假 collector，只記原始 body。 */
+async function mockCollector(): Promise<{ url: string; bodies: string[]; close: () => void }> {
+  const bodies: string[] = [];
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on('data', (chunk: Buffer) => void chunks.push(chunk));
+    request.on('end', () => {
+      bodies.push(Buffer.concat(chunks).toString());
+      response.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+    });
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('沒有拿到 port');
+  return {
+    url: `http://127.0.0.1:${address.port}/v1/logs`,
+    bodies,
+    close: () => {
+      server.close();
+      server.closeAllConnections();
+    },
+  };
+}
+
+describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）', () => {
+  it('回饋之前一筆都不送；第一顆回饋送整份前綴，之後只送新的那段', async () => {
+    const sink = collectingSink('feedback-only');
+    const { agent, dispose, sessions, sessionLog, attachTelemetry, feedback } =
+      await createCliAgent({ live: false }, [...DEFAULT_PLUGINS, telemetryPlugin(sink)]);
+    attachTelemetry(sessions);
+    const seqs = () => ledgerOf(sink).map((record) => record.attributes['event.seq']);
+
+    try {
+      await runTurn(agent, '嗨', silent, sessionLog);
+      expect(sink.records).toHaveLength(0);
+
+      feedback!.record(sessionLog, { text: '回答錯了' });
+      expect(ledgerOf(sink).map((record) => record.attributes['event.type'])).toEqual([
+        'turn/start',
+        'turn/end',
+        'feedback/record',
+      ]);
+
+      await runTurn(agent, '再一次', silent, sessionLog);
+      expect(seqs()).toEqual([0, 1, 2]);
+
+      // 第二顆只送上次交到之後的那段——上界不對的話，這裡會重送 0–2。
+      const put = feedback!.put(sessionLog, { turn: 3, rating: 'negative', ifVersion: null });
+      expect(put.ok).toBe(true);
+      expect(seqs()).toEqual([0, 1, 2, 3, 4, 5]);
+    } finally {
+      await dispose();
+    }
+
+    // 收掉時也不發 ops 的 shutdown：人沒按送出的東西，一筆都不出去。
+    expect(sink.records.filter((record) => record.channel === 'ops')).toHaveLength(0);
+    expect(sink.shutdowns.count).toBe(1);
+  });
+
+  it('續接回來的日誌裡本來就有回饋，接上的當下也不送', async () => {
+    const earlier = new SessionLog('cli');
+    earlier.append('turn/start', { kind: 'message', text: '上一次' });
+    earlier.append('turn/end', {});
+    earlier.append('feedback/record', { text: '上一次的回饋' });
+    const sessions = new SessionRegistry('cli', { rootSeed: earlier.events });
+
+    const sink = collectingSink('feedback-only');
+    const { dispose, attachTelemetry } = await createCliAgent({ live: false }, [
+      ...DEFAULT_PLUGINS,
+      telemetryPlugin(sink),
+    ]);
+    try {
+      attachTelemetry(sessions);
+      // 上一個行程的那顆不是這一次按的——重播到它就等於接上的當下把整份歷史送出去。
+      expect(sink.records).toHaveLength(0);
+
+      // 這一次按的那顆才放行，而前綴包括帶進來的歷史（照 dsh 的 `includeHistory: true`）。
+      sessions.root.append('feedback/record', { text: '這一次' });
+      expect(ledgerOf(sink).map((record) => record.attributes['event.type'])).toEqual([
+        'turn/start',
+        'turn/end',
+        'feedback/record',
+        'session/end-seed',
+        'feedback/record',
+      ]);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('策略是關閉時，收到回饋講一聲不會送出去；別的事件不講', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const sink = collectingSink('disabled');
+    const { agent, dispose, sessions, sessionLog, attachTelemetry, feedback } =
+      await createCliAgent({ live: false }, [...DEFAULT_PLUGINS, telemetryPlugin(sink)]);
+    attachTelemetry(sessions);
+
+    try {
+      await runTurn(agent, '嗨', silent, sessionLog);
+      expect(warn).not.toHaveBeenCalled();
+      feedback!.record(sessionLog, { text: '回答錯了' });
+      expect(warn.mock.calls).toEqual([[DISABLED_FEEDBACK_WARNING]]);
+    } finally {
+      await dispose();
+      warn.mockRestore();
+    }
+  });
+
+  it('web 回饋對話框送出的那顆也放行——寫者不同，看的是同一份 root 日誌', async () => {
+    const sink = collectingSink('feedback-only');
+    const built = await createCliAgent({ live: false }, [
+      ...DEFAULT_PLUGINS,
+      telemetryPlugin(sink),
+    ]);
+    const handler = createWireHandler({
+      createAgent: async () => ({
+        agent: built.agent as unknown as PumpAgent,
+        commands: built.commands,
+        dispose: built.dispose,
+        attachTelemetry: built.attachTelemetry,
+        ...(built.feedback !== undefined && { feedback: built.feedback }),
+      }),
+    });
+    const fetchImpl: typeof globalThis.fetch = async (input, init) =>
+      handler.handle(new Request(input as string, init));
+    const client = createWireClient({ baseUrl: BASE_URL, fetch: fetchImpl });
+
+    const events = await client.openEvents('web-feedback');
+    await client.runStart('web-feedback', '嗨');
+    await drainUntilRootCompleted(events);
+    expect(sink.records).toHaveLength(0);
+
+    await client.feedbackRecord('web-feedback', { text: '這一輪不對' });
+    await handler.close();
+
+    expect(ledgerOf(sink).map((record) => record.attributes['event.type'])).toEqual([
+      'turn/start',
+      'turn/end',
+      'feedback/record',
+    ]);
+  });
+
+  it('走真的 OTel 後端：回饋的文字與評分備註原樣進 collector', async () => {
+    // #278 留下的那件：當時是讀碼得出、沒實跑。這裡對著假 collector 真打一次。
+    const collector = await mockCollector();
+    const { agent, dispose, sessions, sessionLog, attachTelemetry, feedback } =
+      await createCliAgent({ live: false }, [
+        ...DEFAULT_PLUGINS,
+        createTelemetryOtelPlugin({ mode: 'feedback-only', exporter: { url: collector.url } }),
+      ]);
+    attachTelemetry(sessions);
+
+    try {
+      await runTurn(agent, '嗨', silent, sessionLog);
+      feedback!.record(sessionLog, { text: '會話評語原文' });
+      const put = feedback!.put(sessionLog, {
+        turn: 0,
+        rating: 'negative',
+        note: '評分備註原文',
+        ifVersion: null,
+      });
+      expect(put.ok).toBe(true);
+    } finally {
+      // 關機是排空點：batch processor 預設 5 秒才送，靠時間等會變成計時器賽跑。
+      await dispose();
+      collector.close();
+    }
+
+    const sent = collector.bodies.join('\n');
+    expect(sent).toContain('turn/start');
+    expect(sent).toContain('會話評語原文');
+    expect(sent).toContain('評分備註原文');
+    // on-demand 不發 ops 記錄。
+    expect(sent).not.toContain('telemetry.op');
   });
 });

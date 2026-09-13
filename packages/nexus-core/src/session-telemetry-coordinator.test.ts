@@ -12,6 +12,7 @@ import { fakeSink } from './fixtures.js';
 import type { PluginOrigin } from './plugin.js';
 import { SessionLog } from './session-log.js';
 import { SessionTelemetryCoordinator } from './session-telemetry-coordinator.js';
+import { isFeedbackEvent } from './session-telemetry.js';
 import type { SessionTelemetryRedactRule } from './session-telemetry.js';
 import type { NamedEntry } from './entries.js';
 
@@ -23,6 +24,26 @@ function rule(
   const origin: PluginOrigin = { id: `${name}#0`, name };
   return { value: fn, origin };
 }
+
+describe('哪幾顆准 feedback-only 補送', () => {
+  it('只有三顆 feedback/*', () => {
+    const log = new SessionLog('thread-a');
+    log.append('turn/start', { kind: 'message', text: '你好' });
+    log.append('interrupt/raised', { interruptId: 'i-1' });
+    log.append('feedback/record', { text: '回答錯了' });
+    log.append('feedback/message-put', {
+      item: { turn: 0, rating: 'negative', version: 'v1', createdAt: 1, updatedAt: 1 },
+    });
+    log.append('feedback/message-delete', { turn: 0 });
+    log.append('turn/end', {});
+
+    expect(log.events.filter(isFeedbackEvent).map((event) => event.type)).toEqual([
+      'feedback/record',
+      'feedback/message-put',
+      'feedback/message-delete',
+    ]);
+  });
+});
 
 describe('ledger 投影', () => {
   it('每筆事件鏡像成一筆 ledger 記錄，識別只有那三個', () => {
@@ -279,6 +300,19 @@ describe('關機', () => {
 
     expect(sink.shutdowns.count).toBe(1);
     expect(sink.records.filter((record) => record.channel === 'ops')).toHaveLength(1);
+  });
+
+  it('on-demand 不發 ops 的 shutdown，但照樣轉發後端的 shutdown()', async () => {
+    const log = new SessionLog('thread-a');
+    const sink = fakeSink();
+    const coordinator = new SessionTelemetryCoordinator({ log, sink, capture: 'on-demand' });
+    log.append('turn/end', {});
+
+    await coordinator.dispose();
+
+    // `feedback-only` 跑在這上面：人沒送過回饋，後端就一筆都不該收到。
+    expect(sink.records).toHaveLength(0);
+    expect(sink.shutdowns.count).toBe(1);
   });
 
   it('後端關機失敗只換來一行 warn，dispose 自己不拋', async () => {
