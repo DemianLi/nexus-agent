@@ -25,6 +25,7 @@ import type { ApprovalChannel } from './approval.js';
 import { deriveApprovalChannel } from './approval.js';
 import { createContainmentMiddleware } from './containment.js';
 import { createOutputSchemaMiddleware } from './output-schema.js';
+import { createFsToolErrorsMiddleware, recordBackendOutcomes } from './fs-tool-errors.js';
 import {
   createInvalidArgumentsCarrier,
   createInvalidToolArgsMiddleware,
@@ -307,6 +308,9 @@ export function foldRegistry(
   // 下面才算。摘要器刻意拿的是兜底那個，兩者的差別見各自的文件。
   const backend = foldBackend(registry, options.defaultBackend);
   const observationPolicy = foldObservationPolicy(options, backend);
+  // 檔案工具的失敗標成錯誤（#293）：只在有 backend 時掛——包的是交給基座的那一份，策略手上
+  // 那一個是同一個實例，見 {@link ./fs-tool-errors.ts}。無狀態，一份走遍 root 與每個 subagent。
+  const fsToolErrors = backend === undefined ? undefined : createFsToolErrorsMiddleware();
 
   const params: FoldedAgentParams = {
     tools: orderTools(globalTools, toolOrder),
@@ -324,6 +328,7 @@ export function foldRegistry(
       modelUsage,
       modelCalls,
       outputSchema,
+      fsToolErrors,
       invalidToolArgs,
     }),
     middleware: foldMiddleware(
@@ -338,12 +343,13 @@ export function foldRegistry(
       modelUsage,
       modelCalls,
       outputSchema,
+      fsToolErrors,
       invalidToolArgs,
     ),
   };
 
   if (permissions.length > 0) params.permissions = permissions;
-  if (backend !== undefined) params.backend = backend;
+  if (backend !== undefined) params.backend = recordBackendOutcomes(backend);
 
   const skills = registry.skills.sources();
   if (skills.length > 0) params.skills = skills;
@@ -631,6 +637,7 @@ function foldMiddleware(
   modelUsage: AgentMiddleware,
   modelCalls: AgentMiddleware,
   outputSchema: AgentMiddleware,
+  fsToolErrors: AgentMiddleware | undefined,
   invalidToolArgs: AgentMiddleware,
 ): AgentMiddleware[] {
   const entries = registry.middleware.list();
@@ -653,6 +660,10 @@ function foldMiddleware(
     // （dsh 在 `tools/post-execute` 之前驗）。解不開參數的那顆在它更內側，換上的樁回的是錯誤，
     // 這裡照規矩不驗。見 {@link ./output-schema.ts}。
     outputSchema,
+    // 檔案工具的失敗標成錯誤：貼著工具本體（dsh 在工具裡拋），在輸出校驗、先讀後改與圍堵的內側，
+    // 它們讀到的都是改過的狀態。解不開參數的樁不叫 backend，排在它裡面沒有東西可記。
+    // 見 {@link ./fs-tool-errors.ts}。
+    ...(fsToolErrors === undefined ? [] : [fsToolErrors]),
     // 解不開的參數：`wrapToolCall` 在核准與每個 plugin 的內側（dsh 執行時才驗參數），改寫在每個
     // `wrapModelCall` 的內側（外面看到的都是改寫過的那則）。見 {@link ./invalid-tool-args.ts}。
     invalidToolArgs,
@@ -865,6 +876,7 @@ function foldSubAgents(
     modelUsage: AgentMiddleware;
     modelCalls: AgentMiddleware;
     outputSchema: AgentMiddleware;
+    fsToolErrors: AgentMiddleware | undefined;
     invalidToolArgs: AgentMiddleware;
   },
 ): SubAgent[] {
@@ -961,6 +973,9 @@ function foldSubAgents(
         ...(spec.middleware ?? []),
         // 輸出校驗排在 subagent 自帶的那些內側，同 root；共用一份，它無狀態。
         context.outputSchema,
+        // 檔案工具的失敗標成錯誤，同 root 的位置；共用一份，它無狀態。subagent 的檔案工具由基座
+        // 用 root 那一份 `backend` 建，所以記錄的那一層在它們身上一樣在。
+        ...(context.fsToolErrors === undefined ? [] : [context.fsToolErrors]),
         // 解不開的參數排在 subagent 自帶的那些內側，同 root（#269 的 Q7：root 與子代理同一顆）。
         context.invalidToolArgs,
         // 最內層替模型綁中止訊號，排在 subagent 自帶的那些後面，同 root。
