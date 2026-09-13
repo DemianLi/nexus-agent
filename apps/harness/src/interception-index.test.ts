@@ -40,8 +40,10 @@
  * `.docs/plugin-architecture-gap-survey.md` §五第 7 條。**這一份只負責認帳，不決定要不要
  * 補**——「圖裡發生的事有沒有一條進日誌的路」是 #190 的候選 5，射程在那裡。
  *
- * 1. **第 7 格位置點不到**——`MiddlewareRegistrationPoint` 只有 `prepend` 一根槓桿，給的是
- *    最外；記在 `output-schema.ts` 檔頭與計劃 Phase 4。
+ * 1. ~~**第 7 格位置點不到**~~——**2026-09-13 由
+ *    [#252](https://github.com/DemianLi/nexus-agent/issues/252) 收掉**：輸出校驗搬進 `@nexus/core`，
+ *    由 fold 打底在每一個 plugin middleware 的內側，位置不再靠註冊順序。`MiddlewareRegistrationPoint`
+ *    仍然只有 `prepend` 一根槓桿，但這一格已經沒有 plugin 要搶最內。
  * 2. **第 2 格終止原因記不下來**——`turn/*` 由入口點在**圖外**附加（`thread-pump.ts` 的
  *    `#runOnce`、`cli.ts` 的 `runTurn`），所以 `jumpTo: 'end'` 跳掉的輪次在日誌上與正常
  *    跑完的長得一模一樣，dsh 的「blocked 輪次」表達不出來。
@@ -197,7 +199,7 @@ const INDEX: readonly InterceptionRow[] = [
       'packages/nexus-core/src/invalid-tool-args.ts',
       'packages/nexus-core/src/turn-cancel.ts',
       'packages/nexus-plugin-plan-mode/src/index.ts',
-      'packages/nexus-plugin-validation/src/output-schema.ts',
+      'packages/nexus-core/src/output-schema.ts',
     ],
     permissionDelta:
       '**這一格與第 4、7 格在我們這側是同一種機制的三個陣列位置**，dsh 那三格是三種權限' +
@@ -209,9 +211,12 @@ const INDEX: readonly InterceptionRow[] = [
     cell: 7,
     moment: 'tools/post-execute',
     permission: '檢查／變換 waterfall，可 `additionalContexts`',
-    occupants: ['packages/nexus-plugin-validation/src/output-schema.ts'],
+    occupants: ['packages/nexus-core/src/output-schema.ts'],
     permissionDelta:
-      '**位置點不到**（見檔頭缺口帳第 1 筆）。另外 `additionalContexts` 的射程只到' +
+      '佔用者是 dsh 在這一格**之前**的那一步（`createSuccessResult` 驗 `output.schema`），' +
+      '不是 post-execute 的 listener——我們這側兩者共用一個 `wrapToolCall` 載體。' +
+      '位置 2026-09-13 起由 fold 決定（[#252](https://github.com/DemianLi/nexus-agent/issues/252)，' +
+      '檔頭缺口帳第 1 筆收掉）。另外 `additionalContexts` 的射程只到' +
       '「單一生產者、一則脈絡、成功路徑」——交錯順序、失敗路徑收集、被外層阻止時丟棄' +
       '三條契約今天零生產者也就零驗證，**第二個生產者出現就要重判這一格**。',
     recordDelta: undefined,

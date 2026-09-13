@@ -38,7 +38,7 @@
  * **二、投遞掛在 `beforeModel`，不是 post-execute。**
  *
  * **這個檔案提到 `tools/post-execute` 是為了說「不是這裡」。** 真正佔住那個時刻的是
- * `@nexus/plugin-validation` 的 `output-schema.ts`（`wrapToolCall` 的 `await handler()`
+ * `@nexus/core` 的 `output-schema.ts`（`wrapToolCall` 的 `await handler()`
  * 之後那一段）；索引見 `apps/harness/src/interception-index.test.ts`。grep 這個名字
  * 會先落到這裡，所以這一行是給那個人看的。
  *

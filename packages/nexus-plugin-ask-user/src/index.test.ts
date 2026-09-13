@@ -20,8 +20,12 @@ vi.mock('@langchain/langgraph', () => ({
   },
 }));
 
-const { createAskUserPlugin, ASK_USER_QUESTION_TOOL_NAME, CANCELLED_MESSAGE } =
-  await import('./index.js');
+const {
+  createAskUserPlugin,
+  ASK_USER_OUTPUT_SCHEMA,
+  ASK_USER_QUESTION_TOOL_NAME,
+  CANCELLED_MESSAGE,
+} = await import('./index.js');
 
 async function toolOf(
   channelKind: 'human' | 'policy-never' | 'no-channel',
@@ -107,6 +111,14 @@ describe('四條出口', () => {
         { id: 'q2', selected: ['甲'], custom: '乙' },
       ],
     });
+    // 宣告的 schema 收得下真的輸出——寫得太嚴的話，產品路徑上每一次成功都會被換成錯誤。
+    expect(ASK_USER_OUTPUT_SCHEMA.safeParse(JSON.parse(result as string)).success).toBe(true);
+  });
+
+  it('輸出 schema 隨註冊帶（#252）——fold 打底的校驗器從這一顆實例查得到它', async () => {
+    const { registry } = await loadPlugins([createAskUserPlugin()]);
+    const entry = registry.tools.resolve(ASK_USER_QUESTION_TOOL_NAME);
+    expect(registry.tools.outputSchemaOf(entry?.value)).toBe(ASK_USER_OUTPUT_SCHEMA);
   });
 
   it('**放棄整組是錯誤，不是一份空答案**——模型要分得出「人不走這條路」與「每題都跳過」', async () => {

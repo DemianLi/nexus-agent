@@ -24,6 +24,7 @@ import { createApprovalGateMiddleware } from './approval.js';
 import type { ApprovalChannel } from './approval.js';
 import { deriveApprovalChannel } from './approval.js';
 import { createContainmentMiddleware } from './containment.js';
+import { createOutputSchemaMiddleware } from './output-schema.js';
 import {
   createInvalidArgumentsCarrier,
   createInvalidToolArgsMiddleware,
@@ -285,6 +286,9 @@ export function foldRegistry(
   // 為什麼共用而不逐個建，見 {@link ./invalid-tool-args.ts}。
   const invalidArguments = createInvalidArgumentsCarrier();
   const invalidToolArgs = createInvalidToolArgsMiddleware(invalidArguments);
+  // **輸出校驗也是一份走遍**：無狀態，schema 每次從那一顆工具實例現查（#252）。它是性質不是
+  // 功能，理由同圍堵，見 {@link ./output-schema.ts}。
+  const outputSchema = createOutputSchemaMiddleware((tool) => registry.tools.outputSchemaOf(tool));
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./containment.ts}。
   // 它也是工具事件的生產者（#264），所以要拿得到 `sessions` 那個通道。
   const containment = createContainmentMiddleware(registry.sessions, invalidArguments);
@@ -319,6 +323,7 @@ export function foldRegistry(
       repeatReminder,
       modelUsage,
       modelCalls,
+      outputSchema,
       invalidToolArgs,
     }),
     middleware: foldMiddleware(
@@ -332,6 +337,7 @@ export function foldRegistry(
       repeatReminder,
       modelUsage,
       modelCalls,
+      outputSchema,
       invalidToolArgs,
     ),
   };
@@ -624,6 +630,7 @@ function foldMiddleware(
   repeatReminder: AgentMiddleware | undefined,
   modelUsage: AgentMiddleware,
   modelCalls: AgentMiddleware,
+  outputSchema: AgentMiddleware,
   invalidToolArgs: AgentMiddleware,
 ): AgentMiddleware[] {
   const entries = registry.middleware.list();
@@ -642,6 +649,10 @@ function foldMiddleware(
     modelCalls,
     modelUsage,
     ...entries.filter((entry) => !entry.value.prepend).map((entry) => entry.value.middleware),
+    // 輸出校驗在每一個 plugin middleware 的內側：看到的是工具原本的輸出，不是外層改過的版本
+    // （dsh 在 `tools/post-execute` 之前驗）。解不開參數的那顆在它更內側，換上的樁回的是錯誤，
+    // 這裡照規矩不驗。見 {@link ./output-schema.ts}。
+    outputSchema,
     // 解不開的參數：`wrapToolCall` 在核准與每個 plugin 的內側（dsh 執行時才驗參數），改寫在每個
     // `wrapModelCall` 的內側（外面看到的都是改寫過的那則）。見 {@link ./invalid-tool-args.ts}。
     invalidToolArgs,
@@ -853,6 +864,7 @@ function foldSubAgents(
     repeatReminder: AgentMiddleware | undefined;
     modelUsage: AgentMiddleware;
     modelCalls: AgentMiddleware;
+    outputSchema: AgentMiddleware;
     invalidToolArgs: AgentMiddleware;
   },
 ): SubAgent[] {
@@ -947,6 +959,8 @@ function foldSubAgents(
         context.modelCalls,
         context.modelUsage,
         ...(spec.middleware ?? []),
+        // 輸出校驗排在 subagent 自帶的那些內側，同 root；共用一份，它無狀態。
+        context.outputSchema,
         // 解不開的參數排在 subagent 自帶的那些內側，同 root（#269 的 Q7：root 與子代理同一顆）。
         context.invalidToolArgs,
         // 最內層替模型綁中止訊號，排在 subagent 自帶的那些後面，同 root。
