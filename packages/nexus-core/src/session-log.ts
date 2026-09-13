@@ -97,9 +97,11 @@ import type { ToolErrorInfo } from './tool-events.js';
  * （`ABORTED_BEFORE_DISPATCH`）→ `turn/end` 帶 aborted。配對規則不變：每一顆都配著前面那顆沒結果的
  * `tool/call`。
  *
- * `feedback/*` 三顆是**第六種生產者：人在事後按的**，只寫 root 那一份。`feedback/record` 由
- * `/feedback` 的 handler 或 web 的回饋對話框寫；`feedback/message-put`／`message-delete` 由 web 的
- * 評分按鈕經 wire 寫。**CLI 產不出後兩顆**——評分只在 web
+ * `feedback/*` 三顆**沒有帶來新的生產者，帶來的是新的觸發者：人在事後按的**，只寫 root 那一份。
+ * `feedback/record` 兩個寫者各走一條舊路：`/feedback` 走 `goal/change` 那條（經 `registry.sessions`
+ * 接到 root 那一份的 plugin），web 的回饋對話框走 `turn/start` 那條（進入點——wire-handler 把
+ * pump 那一份交給同一份規則）；`feedback/message-put`／`message-delete` 只有後面那條。**CLI 產不出
+ * 後兩顆**——評分只在 web
  * （[#267](https://github.com/DemianLi/nexus-agent/issues/267) 的 Q4），這是第一種只有一條路產得
  * 出來的事件；它們描述的是人事後怎麼看，不是模型做了什麼，所以「兩條路的顆粒度要對齊」在這裡
  * 沒有指涉對象。**三顆都只進日誌、不進模型**：對話住在 checkpointer，寫它們的人沒有一個碰
