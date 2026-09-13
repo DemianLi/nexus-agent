@@ -79,6 +79,16 @@ const askSchema = z.object({
   questions: z.array(questionSchema).describe('繼續之前要問人的那幾題。'),
 });
 
+/**
+ * 成功那一條的輸出 schema，註冊時帶（[#252](https://github.com/DemianLi/nexus-agent/issues/252)）。
+ * 四條錯誤出口都是 `status: 'error'`，校驗器不驗。
+ */
+export const ASK_USER_OUTPUT_SCHEMA = z.object({
+  answers: z.array(
+    z.object({ id: z.string(), selected: z.array(z.string()), custom: z.string().optional() }),
+  ),
+});
+
 /** 一題問答的答案。空的 `selected` 且沒有 `custom` ＝ 那一題被跳過。 */
 export interface AskUserAnswerItem {
   readonly id: string;
@@ -203,6 +213,7 @@ export function createAskUserPlugin(options: AskUserPluginOptions = {}): NexusPl
             schema: askSchema,
           },
         ),
+        { outputSchema: ASK_USER_OUTPUT_SCHEMA },
       );
     },
   };

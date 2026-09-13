@@ -8,9 +8,10 @@
  * 造不出它了**：圍堵由 `foldRegistry` 打底進 root 與每個 subagent
  * （[#159](https://github.com/DemianLi/nexus-agent/issues/159)），沒有一份清單關得掉它。
  *
- * **所以這個檔案裡的組裝刻意不掛 `createValidationPlugin()`**（除了輸出 schema 那一組，
- * 那才是它今天的全部內容）。這一點是承重的：一條「掛了 plugin 然後觀察到圍堵」的測試
- * 在搬家**之前**的樹上就會過，證不到任何東西。
+ * **所以這個檔案裡的組裝一律不掛 `createValidationPlugin()`**——連輸出 schema 那一組也不掛：
+ * 校驗器同樣由 fold 打底（[#252](https://github.com/DemianLi/nexus-agent/issues/252)），schema
+ * 隨工具註冊帶。這一點是承重的：一條「掛了 plugin 然後觀察到圍堵／校驗」的測試在搬家**之前**
+ * 的樹上就會過，證不到任何東西。
  *
  * 第二組是與 [#71](https://github.com/DemianLi/nexus-agent/pull/71) 的交界：圍堵是
  * `try/catch`，而 LangGraph 的中斷也是拋例外走的。不分辨的話核准點會**無聲消失**，
@@ -24,7 +25,6 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { Command, MemorySaver, interrupt } from '@langchain/langgraph';
 import { createMiddleware } from 'langchain';
 import type { NexusPlugin } from '@nexus/core';
-import { createValidationPlugin } from '@nexus/plugin-validation';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
@@ -64,7 +64,7 @@ function boomPlugin(withSubagent = false): NexusPlugin {
 }
 
 /** 一個回傳固定字串的工具。 */
-function reportPlugin(payload: string): NexusPlugin {
+function reportPlugin(payload: string, outputSchema?: z.ZodType): NexusPlugin {
   return {
     name: 'report',
     apply(registry) {
@@ -74,6 +74,7 @@ function reportPlugin(payload: string): NexusPlugin {
           description: '回一份報告',
           schema: z.object({}),
         }),
+        outputSchema === undefined ? {} : { outputSchema },
       );
     },
   };
@@ -238,13 +239,13 @@ describe('圍堵與核准的交界', () => {
   });
 });
 
-describe('輸出 schema', () => {
-  const schemas = { report: z.object({ total: z.number() }) };
+describe('輸出 schema（隨註冊帶，fold 打底，#252）', () => {
+  const schema = z.object({ total: z.number() });
 
   it('不合宣告的形狀 → 帶原因的 error ToolMessage，原輸出不跟著出去', async () => {
     const { agent } = await createNexusAgent({
       model: scripted('report'),
-      plugins: [createValidationPlugin({ schemas }), reportPlugin('{"total":"一百"}')],
+      plugins: [reportPlugin('{"total":"一百"}', schema)],
     });
     const result = await agent.invoke(toAgentInvocation('動手'));
     const results = toolMessages(result.messages as BaseMessage[]);
@@ -256,7 +257,7 @@ describe('輸出 schema', () => {
   it('合的原樣送到模型面前（上一條的對照組）', async () => {
     const { agent } = await createNexusAgent({
       model: scripted('report'),
-      plugins: [createValidationPlugin({ schemas }), reportPlugin('{"total":100}')],
+      plugins: [reportPlugin('{"total":100}', schema)],
     });
     const result = await agent.invoke(toAgentInvocation('動手'));
     const results = toolMessages(result.messages as BaseMessage[]);
@@ -267,10 +268,7 @@ describe('輸出 schema', () => {
   it('沒宣告 schema 的工具不受影響', async () => {
     const { agent } = await createNexusAgent({
       model: scripted('report'),
-      plugins: [
-        createValidationPlugin({ schemas: { other: z.object({ x: z.number() }) } }),
-        reportPlugin('隨便什麼都行'),
-      ],
+      plugins: [reportPlugin('隨便什麼都行')],
     });
     const result = await agent.invoke(toAgentInvocation('動手'));
     const results = toolMessages(result.messages as BaseMessage[]);

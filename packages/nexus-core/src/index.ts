@@ -103,6 +103,14 @@ export {
   resolveToolName,
 } from './containment.js';
 
+export type { OutputSchemaLookup } from './output-schema.js';
+export {
+  createOutputSchemaMiddleware,
+  formatSchemaViolation,
+  formatValidatorFailure,
+  OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+} from './output-schema.js';
+
 export type { ToolErrorInfo, ToolOutcome } from './tool-events.js';
 export {
   INVALID_ARGS,

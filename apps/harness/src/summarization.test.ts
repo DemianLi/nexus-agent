@@ -170,6 +170,8 @@ describe('同名取代是唯一的縫', () => {
         // 這一條就是「表達不出來」的證據，見 `model-calls.ts` 的偏離那一節。
         'nexusModelCallEvents',
         'nexusModelUsage',
+        // 輸出 schema 校驗（#252）：fold 打底，每一個 plugin middleware 的內側。
+        'nexusToolOutputSchema',
         // 解不開的工具參數（#281）：`wrapToolCall` 在核准與每個 plugin 的內側、改寫在每個
         // `wrapModelCall` 的內側，所以排在 plugin middleware 之後、綁訊號那顆之前。
         'nexusInvalidToolArgs',

@@ -39,6 +39,7 @@ import {
   GOAL_TOOL_INVALID_REF_MESSAGE,
   GOAL_TOOL_NO_SERVICE_MESSAGE,
   GOAL_TOOL_NOT_ATTACHED_MESSAGE,
+  GOAL_TOOL_OUTPUT_SCHEMA,
   GOAL_TOOL_REASON_MISPLACED_MESSAGE,
   GOAL_TOOL_REASON_REQUIRED_MESSAGE,
   GOAL_TOOL_REPLACEMENT_MISPLACED_MESSAGE,
@@ -163,9 +164,17 @@ function human(log: SessionLog, text = '把這件事做完'): void {
   log.append('turn/start', { kind: 'message', text });
 }
 
-/** 解出一次回傳的 JSON。 */
+/**
+ * 解出一次回傳的 JSON，**並且對宣告的輸出 schema 驗過**（#252）。這個檔裡每一次成功的輸出
+ * 都走這裡，所以 schema 寫得太嚴——產品路徑上某一種真的輸出會被換成錯誤——在這裡就紅。
+ */
 function parse(raw: string): { goal: unknown; activation?: unknown } {
-  return JSON.parse(raw) as { goal: unknown; activation?: unknown };
+  const value: unknown = JSON.parse(raw);
+  const checked = GOAL_TOOL_OUTPUT_SCHEMA.safeParse(value);
+  if (!checked.success) {
+    throw new Error(`輸出不合 GOAL_TOOL_OUTPUT_SCHEMA：${checked.error.message}\n${raw}`);
+  }
+  return value as { goal: unknown; activation?: unknown };
 }
 
 /** 目前這一份的 CAS 兩格。 */

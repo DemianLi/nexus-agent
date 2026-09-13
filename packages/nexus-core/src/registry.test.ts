@@ -7,6 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { createRegistry } from './registry.js';
 import { fakeBackend, fakeMiddleware, fakeSink, fakeSubAgent, fakeTool } from './fixtures.js';
 import type { PluginOrigin } from './plugin.js';
@@ -95,6 +96,21 @@ describe('tools 註冊點', () => {
     expect(registry.tools.isRootOnly('goal')).toBe(true);
     expect(registry.tools.isRootOnly('search')).toBe(false);
     expect(registry.tools.isRootOnly('沒註冊過的')).toBe(false);
+  });
+
+  it('outputSchema 記在那一顆實例身上，撤銷就跟著沒了（#252）', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    const schema = z.object({ total: z.number() });
+    const report = fakeTool('report');
+    const undo = registry.tools.register(report, { outputSchema: schema });
+    leave();
+    expect(registry.tools.outputSchemaOf(report)).toBe(schema);
+    // 以實例查：同名的另一顆不算，沒註冊過的東西也不算。
+    expect(registry.tools.outputSchemaOf(fakeTool('report'))).toBeUndefined();
+    expect(registry.tools.outputSchemaOf(undefined)).toBeUndefined();
+    undo();
+    expect(registry.tools.outputSchemaOf(report)).toBeUndefined();
   });
 
   it('rootOnly 配 scope 當場報錯，訊息指名那個 subagent 與工具', () => {

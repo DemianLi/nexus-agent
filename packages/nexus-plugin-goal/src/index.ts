@@ -68,7 +68,7 @@ import {
 } from './command.js';
 import { assertGoalServiceOptions, GoalService } from './service.js';
 import type { GoalServiceOptions } from './service.js';
-import { createGoalTools, resolveGoalToolPolicy } from './tools.js';
+import { createGoalTools, GOAL_TOOL_OUTPUT_SCHEMA, resolveGoalToolPolicy } from './tools.js';
 import type { GoalToolPolicy } from './tools.js';
 
 export type { GoalCommand } from './command.js';
@@ -273,7 +273,11 @@ export function createGoalPlugin(options: GoalPluginOptions = {}): GoalPlugin {
         },
         options,
       )) {
-        registry.tools.register(goalTool, { rootOnly: true });
+        // 輸出 schema 隨註冊帶，同 dsh `defineTool` 的 `output`（#252）。
+        registry.tools.register(goalTool, {
+          rootOnly: true,
+          outputSchema: GOAL_TOOL_OUTPUT_SCHEMA,
+        });
       }
       registry.commands.register({
         name: GOAL_COMMAND_NAME,

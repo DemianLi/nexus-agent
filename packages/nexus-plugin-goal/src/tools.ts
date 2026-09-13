@@ -281,6 +281,27 @@ export type GoalToolValue =
     };
 
 /**
+ * {@link GoalToolValue} 的輸出 schema，三顆工具註冊時一起帶（[#252](https://github.com/DemianLi/nexus-agent/issues/252)）。
+ * 對 dsh `tool-goal` 的 `output.schema`；**型別註記是承重的**——改了 `GoalToolValue` 沒改這裡，
+ * 編譯就紅。拒絕是 `status: 'error'`，校驗器不驗；自主收尾那條包成 `Command`，裡面那則照驗。
+ */
+export const GOAL_TOOL_OUTPUT_SCHEMA: z.ZodType<GoalToolValue> = z.union([
+  z.object({ goal: z.null() }),
+  z.object({
+    goal: z.object({
+      id: z.string(),
+      revision: z.number().int(),
+      objective: z.string(),
+      phase: z.enum(['active', 'paused', 'blocked', 'complete']),
+      roundsStarted: z.number().int(),
+      maxGoalRounds: z.number().int(),
+      blockedReason: z.object({ code: z.string(), message: z.string() }).optional(),
+    }),
+    activation: z.enum(['armed', 'disarmed']),
+  }),
+]);
+
+/**
  * 把一份視圖收斂成模型看得到的那一份。
  *
  * @param goal - 目前的視圖，沒有目標時是 `undefined`。

@@ -11,6 +11,7 @@ import { createRegistry, createSessionRunner, goalId, SessionLog } from '@nexus/
 import type { GoalChangeMeta, GoalRef } from '@nexus/core';
 
 import { createGoalPlugin, GoalError } from './index.js';
+import { GOAL_TOOL_OUTPUT_SCHEMA } from './tools.js';
 import type { GoalPlugin, GoalPluginOptions, GoalService } from './index.js';
 
 /** 掛一次、接一份日誌，回手上要用的每一個東西。 */
@@ -80,6 +81,11 @@ describe('掛載', () => {
     const toolNames = [...registry.tools.effective(undefined).keys()].sort();
     expect(toolNames).toEqual(['create_goal', 'get_goal', 'update_goal']);
     expect(toolNames.filter((name) => registry.tools.isRootOnly(name))).toEqual(toolNames);
+    // 三顆都隨註冊帶輸出 schema（#252）——拿掉任何一顆的宣告，產品路徑上它就不驗了，而其餘
+    // 每一條測試照樣綠。
+    for (const entry of registry.tools.effective(undefined).values()) {
+      expect(registry.tools.outputSchemaOf(entry.value)).toBe(GOAL_TOOL_OUTPUT_SCHEMA);
+    }
     expect(registry.middleware.list()).toEqual([]);
     expect(registry.invariants.companions()).toEqual([]);
   });
