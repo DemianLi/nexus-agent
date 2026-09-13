@@ -15,7 +15,6 @@ import { Command, MemorySaver } from '@langchain/langgraph';
 import { SessionRegistry } from '@nexus/core';
 import type { NexusPlugin, SessionEvent, SessionEventMap } from '@nexus/core';
 import { createAskUserPlugin } from '@nexus/plugin-ask-user';
-import { createValidationPlugin } from '@nexus/plugin-validation';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
@@ -64,6 +63,8 @@ const toolsPlugin: NexusPlugin = {
         description: '輸出不合 schema。',
         schema: z.object({}),
       }),
+      // 輸出 schema 隨註冊帶，校驗器由 fold 打底（#252）：`total` 要是數字。
+      { outputSchema: z.object({ total: z.number() }) },
     );
     registry.tools.register(
       tool(({ n }: { n: number }) => `n=${n}`, {
@@ -99,9 +100,6 @@ const workerPlugin: NexusPlugin = {
     registry.subagents.register({ name: 'worker', description: '幹活的。' });
   },
 };
-
-/** 輸出 schema：`report` 的 `total` 要是數字。 */
-const validation = createValidationPlugin({ schemas: { report: z.object({ total: z.number() }) } });
 
 type ToolCall = SessionEventMap['tool/call'];
 type ToolResult = SessionEventMap['tool/result'];
@@ -221,7 +219,7 @@ describe('每一種失敗從它真正的生產者冒出來', () => {
         },
         ...done,
       ],
-      [toolsPlugin, validation],
+      [toolsPlugin],
     );
     try {
       await run.agent.invoke(toAgentInvocation('跑。'), run.config);

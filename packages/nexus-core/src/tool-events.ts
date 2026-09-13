@@ -137,7 +137,7 @@ export type ToolOutcome =
  * 從 handler 回來的東西讀出這次呼叫的結果。
  *
  * 工具可以回 ToolMessage，也可以回一個 `Command`，後者的 ToolMessage 埋在
- * `update.messages` 裡——同 `@nexus/plugin-validation` 的 `output-schema.ts` 處理的兩個分支。
+ * `update.messages` 裡——同 {@link ./output-schema.ts} 處理的兩個分支。
  * 找不到 ToolMessage 的就當成功：沒有東西說它失敗了。
  *
  * @param result - `handler(request)` 回來的值。

@@ -18,6 +18,7 @@
 
 import type { StructuredTool } from '@langchain/core/tools';
 import type { AnyBackendProtocol, SubAgent } from 'deepagents';
+import type { ZodType } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
 import type { PreToolListener } from './approval.js';
 import { normalizeCommandDefinition } from './commands.js';
@@ -55,6 +56,15 @@ export interface RegisterOptions {
    * 「不給 subagent」的工具——所以當場拋，不靜默忽略。
    */
   rootOnly?: boolean;
+  /**
+   * 這個工具**成功**輸出的形狀。fold 打底的校驗器對它驗每一次成功的結果，不合就換成一則
+   * 帶 `INVALID_TOOL_OUTPUT` 的錯誤（見 {@link ./output-schema.ts}）。
+   *
+   * 對 dsh `defineTool` 的 `output.schema`，但**選帶不強制**：`StructuredTool` 沒有這個欄位，
+   * 省略即不驗。只有回 JSON 字串（或夾在 `Command` 裡的 JSON ToolMessage）的工具宣告得了——
+   * 驗的是 `JSON.parse(content)`。
+   */
+  outputSchema?: ZodType;
 }
 
 /** 一層的具名表們。 */
@@ -101,6 +111,15 @@ export interface ToolRegistrationPoint {
    * @returns 全域解析得到、而且那一筆就是宣告 `rootOnly` 的那一個實例時為真。
    */
   isRootOnly(name: string): boolean;
+  /**
+   * 這一顆工具實例註冊時宣告的輸出 schema。
+   *
+   * **以實例查而不是名字**，理由同 {@link isRootOnly}；而且校驗器在執行期手上本來就是那顆
+   * 實例（`request.tool`），同名的工具在不同層可以是不同的東西。
+   * @param tool - 工具實例；不是這裡註冊過的東西一律回 `undefined`。
+   * @returns 宣告的 schema，沒宣告或已撤銷時是 `undefined`。
+   */
+  outputSchemaOf(tool: unknown): ZodType | undefined;
   /**
    * 目前有東西註冊進去的 subagent 層。層是按名字延遲建立的，而且**不驗那個名字
    * 真有對應的 subagent**——`requires` 不排序，清單裡靠前的 plugin 本來就可以往
@@ -710,6 +729,8 @@ export function createRegistry(): InternalPluginRegistry {
   // 的別人，這一格若以名字為鍵就會漏掉那個保護——撤銷過的 root-only 註冊會把旗標留在
   // 名字上，蓋到下一個同名工具身上。
   const rootOnlyTools = new Set<StructuredTool>();
+  // 同一條理由：以身分為鍵，撤銷時跟著刪。
+  const outputSchemas = new Map<StructuredTool, ZodType>();
 
   const tools: ToolRegistrationPoint = {
     register(tool, options) {
@@ -725,9 +746,11 @@ export function createRegistry(): InternalPluginRegistry {
       const layer = layerFor(scope);
       const undo = layer.tools.insert(tool.name, tool, origin);
       if (options?.rootOnly === true) rootOnlyTools.add(tool);
+      if (options?.outputSchema !== undefined) outputSchemas.set(tool, options.outputSchema);
       return () => {
         undo();
         rootOnlyTools.delete(tool);
+        outputSchemas.delete(tool);
         // 空層不留下來：層是註冊行為的產物，`scopes()` 是 fold 的輸入，回滾過的
         // plugin 不該讓 fold 看到一個它其實沒碰過的 subagent 名。
         if (scope !== undefined && layer.tools.size === 0 && scopedLayers.get(scope) === layer) {
@@ -762,6 +785,9 @@ export function createRegistry(): InternalPluginRegistry {
     isRootOnly(name) {
       const entry = globalLayer.tools.get(name);
       return entry !== undefined && rootOnlyTools.has(entry.value);
+    },
+    outputSchemaOf(tool) {
+      return outputSchemas.get(tool as StructuredTool);
     },
   };
 
