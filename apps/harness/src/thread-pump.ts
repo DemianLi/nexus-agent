@@ -396,6 +396,18 @@ export class ThreadPump {
   #closed = false;
   /** 正在跑的那一輪；沒有就是 `undefined`（閒著、停在核准點、或排著還沒開跑）。 */
   #current: CurrentRun | undefined;
+  /**
+   * root 每一則回覆的 id → 它那一輪起頭那顆 `turn/start` 的 `seq`
+   * （[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。評分指名的是畫面上那則回覆，日誌
+   * 記的是輪，這張表是兩者之間唯一的橋。
+   *
+   * **只在記憶體裡、一條 thread 一份**：server 重開之後舊回覆評不了——不做 `list`、門 B 沒開的後果，
+   * 登記成偏離。**每一則都記**，不是只記最後一則：一輪「文字 → 工具 → 文字」會有兩則，記的當下分不出
+   * 哪一則是最後的；按鈕放哪一則是畫面的事。
+   */
+  readonly #turnOfReply = new Map<string, number>();
+  /** 目前這一輪起頭那顆的 `seq`。**`resume` 不換它**：續接回來的是同一輪（#267 的 Q5）。 */
+  #originTurn: number | undefined;
 
   /**
    * 續行排程器那一側。**`undefined` 就是沒掛**——這條 thread 一輪都不會自己排。
@@ -609,6 +621,33 @@ export class ThreadPump {
   }
 
   /**
+   * 畫面上那則回覆屬於哪一輪（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。
+   *
+   * @param replyId - 畫面上那則回覆的 id（`AiEntry.id`）。
+   * @returns 那一輪起頭那顆 `turn/start` 的 `seq`；子代理的、別條 thread 的、server 重開之前的都查
+   *   不到，回 `undefined`。
+   */
+  turnOfReply(replyId: string): number | undefined {
+    return this.#turnOfReply.get(replyId);
+  }
+
+  /**
+   * root 的一則回覆開始了：記下它屬於哪一輪。
+   *
+   * **鍵跟畫面算 `AiEntry.id` 用的是同一個式子**（`run_id ?? id`，`@nexus/wire` 的
+   * `conversation.ts`）。各算各的話，只要有一則落到另一格，評它就一律 `target-not-found`——而拿自己
+   * 造的 frame 測不出來，因為造的時候自然會兩格都填（實測基座的 `message-start` 兩格都帶）。
+   * root 的判法同 {@link trackRootReply}：子代理的 namespace 至少兩段。
+   */
+  #noteReply(raw: RawProtocolEvent): void {
+    if (raw.method !== 'messages' || raw.params.namespace.length > 1) return;
+    const data = raw.params.data as { event?: unknown; run_id?: unknown; id?: unknown } | null;
+    if (data?.event !== 'message-start' || this.#originTurn === undefined) return;
+    const id = data.run_id ?? data.id;
+    if (typeof id === 'string') this.#turnOfReply.set(id, this.#originTurn);
+  }
+
+  /**
    * 停在核准點時按了停止：把那幾顆等核准的呼叫收回（#265 的 Q7，日誌形狀是 Q15）。
    *
    * 那時沒有 run 在跑，圍堵看不到它們，所以日誌由這裡寫：**一輪 `resume`**（人回覆了那張核准卡，
@@ -723,7 +762,8 @@ export class ThreadPump {
   async #runOnce(input: PumpInput): Promise<void> {
     // **記在這裡而不是 submit 裡**：submit 只是排隊，真正開跑才是這一輪的起點。
     // 記在排隊時的話，兩件事排在一起時日誌會出現「兩個 start 之後才有第一個 end」。
-    this.#sessions.root.append('turn/start', turnStartOf(input));
+    const start = this.#sessions.root.append('turn/start', turnStartOf(input));
+    if (input.kind !== 'resume') this.#originTurn = start.seq;
     // **`text` 只讀一次的那個值就是上面寫進日誌的那個。** 兩份分開算的話，一顆日誌上
     // 逐字正確的 `turn/start` 可以配上餵給模型的任意字串，而不變量伴生只看得到日誌那
     // 一份——它結構上驗不到這種偏差。所以這兩行必須共用同一個來源。
@@ -757,6 +797,7 @@ export class ThreadPump {
       });
       for await (const raw of run) {
         trackRootReply(current, raw);
+        this.#noteReply(raw);
         for (const event of this.#translate(raw)) {
           this.#broadcast(event);
         }

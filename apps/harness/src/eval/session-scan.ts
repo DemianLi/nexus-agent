@@ -76,6 +76,8 @@ const TOOL_EVENTS_SINCE = 5;
 const MODEL_CALLS_SINCE = 6;
 /** 中止（`turn/end` 帶 `reason`）從這一版開始記。見 `session-store.ts` 的版本 7。 */
 const CANCEL_SINCE = 7;
+/** 評分與 `/feedback` 從這一版開始記。見 `session-store.ts` 的版本 8。 */
+const FEEDBACK_SINCE = 8;
 
 /**
  * 這一版認得的事件種類。
@@ -100,6 +102,9 @@ const KNOWN_EVENT_TYPES: Readonly<Record<SessionEventType, true>> = {
   'plan/mode': true,
   'tool/call': true,
   'tool/result': true,
+  'feedback/message-put': true,
+  'feedback/message-delete': true,
+  'feedback/record': true,
   'session/end-seed': true,
 };
 
@@ -147,6 +152,13 @@ export interface SessionScan {
    * v7 之前是 `null`：那時候沒有中止這條路，不是「一輪都沒中止」。
    */
   readonly aborted: number | null;
+  /**
+   * 被點踩的輪數：每一輪取最後的狀態，**被收回的不算、讚不數**
+   * （[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。v8 之前是 `null`：那時候沒有評分這條路。
+   */
+  readonly negativeTurns: number | null;
+  /** `/feedback` 記下的評語則數。v8 之前是 `null`。 */
+  readonly feedbackRecords: number | null;
   /** 認不得而略過的事件顆數。 */
   readonly unknownEvents: number;
 }
@@ -201,6 +213,9 @@ export function scanSessionLog(
   const errors = Object.create(null) as Record<string, number>;
   let toolCalls = 0;
   let aborted = 0;
+  // 輪 → 目前的評分。後寫覆蓋先寫、收回就刪，同 `@nexus/plugin-feedback` 的折疊。
+  const ratings = new Map<number, string>();
+  let feedbackRecords = 0;
   let chain: (RepeatRun & { readonly key: string }) | undefined;
   let longest: RepeatRun | null = null;
 
@@ -236,6 +251,15 @@ export function scanSessionLog(
         errors[kind] = (errors[kind] ?? 0) + 1;
         break;
       }
+      case 'feedback/message-put':
+        ratings.set(event.data.item.turn, event.data.item.rating);
+        break;
+      case 'feedback/message-delete':
+        ratings.delete(event.data.turn);
+        break;
+      case 'feedback/record':
+        feedbackRecords += 1;
+        break;
       default:
         break;
     }
@@ -255,6 +279,11 @@ export function scanSessionLog(
     errors: hasToolEvents ? errors : null,
     looping: hasToolEvents ? finalLongest !== null && finalLongest.count >= threshold : null,
     aborted: version >= CANCEL_SINCE ? aborted : null,
+    negativeTurns:
+      version >= FEEDBACK_SINCE
+        ? [...ratings.values()].filter((rating) => rating === 'negative').length
+        : null,
+    feedbackRecords: version >= FEEDBACK_SINCE ? feedbackRecords : null,
     unknownEvents: log.events.length - known.length,
   };
 }
@@ -391,13 +420,14 @@ export function formatScanReport(
     lines.push(
       `  步數 ${scan.steps ?? '—'} ｜工具呼叫 ${scan.toolCalls ?? '—'} ｜最長重複 ${run}`,
       `  工具錯誤 ${scan.errors === null ? '—' : formatErrors(scan.errors)}`,
-      `  中止 ${scan.aborted ?? '—'} 輪`,
+      `  中止 ${scan.aborted ?? '—'} 輪 ｜點踩 ${scan.negativeTurns ?? '—'} 輪 ｜回饋 ${scan.feedbackRecords ?? '—'} 則`,
     );
-    if (scan.version < CANCEL_SINCE) {
+    if (scan.version < FEEDBACK_SINCE) {
       const missing = [
         ...(scan.version < TOOL_EVENTS_SINCE ? [`第 ${TOOL_EVENTS_SINCE} 版才記工具事件`] : []),
         ...(scan.version < MODEL_CALLS_SINCE ? [`第 ${MODEL_CALLS_SINCE} 版才記模型起訖`] : []),
-        `第 ${CANCEL_SINCE} 版才記中止`,
+        ...(scan.version < CANCEL_SINCE ? [`第 ${CANCEL_SINCE} 版才記中止`] : []),
+        `第 ${FEEDBACK_SINCE} 版才記點踩與回饋`,
       ];
       lines.push(`  格式版本 ${scan.version}：${missing.join('、')}，「—」是沒記，不是 0。`);
     }

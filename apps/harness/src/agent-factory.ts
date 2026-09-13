@@ -394,6 +394,11 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        */
       commands: registry.commands,
       /**
+       * 評分與評語的規則，**沒掛時是 `undefined`**。讀它的是 web 的 wire-handler：評分沒有模型
+       * 那一側，所以它跟 `commands` 一樣從組裝點交出去（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。
+       */
+      feedback: registry.feedback.service()?.value,
+      /**
        * 掛著的遙測服務說的共享策略，**沒掛任何東西時是 `undefined`**。
        *
        * 披露那一層只有在拿到 `undefined` 的時候才渲染「未配置」——這是 dsh 的規矩，

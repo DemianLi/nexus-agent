@@ -483,6 +483,9 @@ describe('什麼推得動 roundsStarted', () => {
     //
     // `model/start`／`model/end`（[#266](https://github.com/DemianLi/nexus-agent/issues/266)）：
     // 不推，同 `model/usage`——一輪叫幾次模型不是輪次。
+    //
+    // `feedback/*`（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）：不推——人事後
+    // 對某一輪按讚踩、寫回饋，那一輪早就算過了；讓它推，每評一次就吃掉一格 `maxGoalRounds`。
     const KNOWN = [
       'turn/start',
       'turn/end',
@@ -501,6 +504,9 @@ describe('什麼推得動 roundsStarted', () => {
       'tool/call',
       'tool/result',
       'session/end-seed',
+      'feedback/message-put',
+      'feedback/message-delete',
+      'feedback/record',
     ] as const;
     KNOWN satisfies readonly SessionEventType[];
     // 反過來這一條才是絆索：多一種而沒有列進來，`Exhaustive` 就變成 `never`。

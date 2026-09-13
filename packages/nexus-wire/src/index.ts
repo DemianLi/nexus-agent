@@ -17,6 +17,16 @@ export type {
   ErrorResponse,
   Event,
   EventStreamRequest,
+  FeedbackCommand,
+  FeedbackDeleteCommand,
+  FeedbackDeleteResult,
+  FeedbackMethod,
+  FeedbackPutCommand,
+  FeedbackPutResult,
+  FeedbackRecordCommand,
+  FeedbackRecordResult,
+  FeedbackTargetNotFound,
+  FeedbackVersionConflict,
   InputRespondOne,
   RpcMethod,
   RunCancelCommand,
@@ -31,8 +41,13 @@ export type {
   SlashRunResult,
   UplinkMethod,
   WireChannel,
+  WireFeedbackCategory,
+  WireFeedbackItem,
+  WireFeedbackRating,
 } from './protocol.js';
 export {
+  FEEDBACK_METHODS,
+  isFeedbackMethod,
   RUN_CANCEL_METHOD,
   SLASH_METHODS,
   UPLINK_METHODS,
@@ -85,6 +100,7 @@ export {
 } from './conversation.js';
 
 export type {
+  FeedbackOutcome,
   OpenEventsOptions,
   SlashListOutcome,
   SlashRunOutcome,

@@ -82,6 +82,16 @@ function textFrames(id: string, namespace: readonly string[], body: string): Eve
   ];
 }
 
+/**
+ * 回饋那三個 method 在這一檔裡一律「收不了」。**評分的畫面驗在 `feedback-ui.test.tsx`**；這裡的測試
+ * 不碰它們，碰到就是測試寫錯了，所以回拒絕而不是回成功。
+ */
+const UNWIRED_FEEDBACK: Pick<WireClient, 'feedbackPut' | 'feedbackDelete' | 'feedbackRecord'> = {
+  feedbackPut: async () => ({ kind: 'rejected', message: '這一檔沒有接回饋' }),
+  feedbackDelete: async () => ({ kind: 'rejected', message: '這一檔沒有接回饋' }),
+  feedbackRecord: async () => ({ kind: 'rejected', message: '這一檔沒有接回饋' }),
+};
+
 /** 一個可以隨時推 frame 進去的假 client。 */
 function fakeClient(
   events: readonly Event[],
@@ -122,6 +132,7 @@ function fakeClient(
       cancels.push(threadId);
       return { type: 'success', id: 3, result: { accepted: true } };
     },
+    ...UNWIRED_FEEDBACK,
   };
   return { client, sent, responded, slashed, opened, cancels };
 }
@@ -200,6 +211,7 @@ describe('對話介面', () => {
       runCancel: async () => ({ type: 'success', id: 1, result: { accepted: true } }),
       slashList: async () => ({ kind: 'ok', commands: [] }),
       slashRun: async () => ({ kind: 'unknown' }),
+      ...UNWIRED_FEEDBACK,
     };
     render(<App client={client} />);
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('連不上 agent'));
@@ -490,6 +502,7 @@ describe('上行被拒絕的時候', () => {
       runCancel: async () => ({ type: 'success', id: 3, result: { accepted: true } }),
       slashList: async () => ({ kind: 'ok', commands: [] }),
       slashRun: async () => ({ kind: 'unknown' }),
+      ...UNWIRED_FEEDBACK,
     };
     render(<App client={client} />);
 

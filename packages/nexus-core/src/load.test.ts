@@ -19,7 +19,17 @@ import {
   fakeSubAgent,
   fakeTool,
 } from './fixtures.js';
+import type { FeedbackService } from './feedback.js';
 import type { NexusPlugin } from './plugin.js';
+
+/** 一份什麼都不寫的回饋規則：這裡只看它佔不佔得住那個位子。 */
+function fakeFeedback(): FeedbackService {
+  return {
+    put: () => ({ ok: false, error: { code: 'target-not-found', turn: 0 } }),
+    delete: () => ({ ok: true, value: { absent: true } }),
+    record: () => ({ ok: true, value: { recorded: true } }),
+  };
+}
 
 describe('loadPlugins', () => {
   it('依清單順序跑每個 plugin 的 apply', async () => {
@@ -267,6 +277,7 @@ describe('每個註冊點的回滾', () => {
    *
    * **`telemetry` 兩個方法都在裡面。** `use` 漏追的下場最陰：回滾過的 plugin 會佔著
    * 那個唯一的後端位子，後面的 plugin 掛不上去，而錯誤訊息指的是一個已經不存在的註冊者。
+   * `feedback.use` 是同一型的唯一位子，所以也在裡面。
    */
   const greedy = fakePlugin('greedy', (registry) => {
     registry.tools.register(fakeTool('search'));
@@ -281,6 +292,7 @@ describe('每個註冊點的回滾', () => {
     registry.lifecycle.onDispose(() => {});
     registry.telemetry.redact((record) => record);
     registry.telemetry.use(fakeSink());
+    registry.feedback.use(fakeFeedback());
     registry.tools.register(fakeTool('grep'), { scope: 'researcher' });
     throw new Error('半路壞掉');
   });
@@ -302,6 +314,7 @@ describe('每個註冊點的回滾', () => {
     expect(registry.lifecycle.disposers()).toEqual([]);
     expect(registry.telemetry.rules()).toEqual([]);
     expect(registry.telemetry.service()).toBeUndefined();
+    expect(registry.feedback.service()).toBeUndefined();
   });
 
   it('服務位子回滾之後是真的空出來，別的 plugin 掛得上去', async () => {
@@ -310,9 +323,11 @@ describe('每個註冊點的回滾', () => {
 
     const later = fakePlugin('later', (r) => {
       r.telemetry.use(fakeSink());
+      r.feedback.use(fakeFeedback());
     });
     await loadPlugins([later], registry);
     expect(registry.telemetry.service()?.origin.name).toBe('later');
+    expect(registry.feedback.service()?.origin.name).toBe('later');
   });
 
   it('先前成功載入的 plugin 不受影響', async () => {

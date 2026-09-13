@@ -3,6 +3,8 @@ import { isApprovalPending, isQuestionPending } from '@nexus/wire';
 import { useEffect, useState } from 'react';
 
 import { ApprovalCard } from '@/components/approval-card';
+import { FeedbackDialog } from '@/components/feedback-dialog';
+import { FEEDBACK_COMMAND_LINE } from '@/lib/feedback';
 import { QuestionCard } from '@/components/question-card';
 import { StatusLine } from '@/components/status-line';
 import { Transcript } from '@/components/transcript';
@@ -137,7 +139,12 @@ function ConversationView({
   const busy =
     conversation.state.status === 'running' ||
     (conversation.state.status === 'awaiting-input' && !stuck);
-  const canSend = conversation.connected && !busy && draft.trim() !== '';
+  // **只打 `/feedback` 跑著也送得出去**：它不起一輪，只開回饋對話框，而那個框送的 `feedback.record`
+  // 任何時候都收（#267 的 Q10）。
+  const canSend =
+    conversation.connected &&
+    draft.trim() !== '' &&
+    (!busy || draft.trim() === FEEDBACK_COMMAND_LINE);
 
   return (
     <main className="mx-auto flex min-h-svh max-w-2xl flex-col gap-6 px-6 py-10">
@@ -174,7 +181,15 @@ function ConversationView({
       </header>
 
       <section className="flex flex-1 flex-col gap-4">
-        <Transcript state={conversation.state} />
+        <Transcript
+          state={conversation.state}
+          feedback={{
+            tails: conversation.replyTails,
+            ratings: conversation.ratings,
+            busy: !conversation.connected,
+            onRate: (replyId, rating) => void conversation.rate(replyId, rating),
+          }}
+        />
         {/*
           **按 `kind` 分派到兩個元件，不是一個元件內部分支**（#231 第 4 項）：送出的形狀
           完全不同（`{decisions:[…]}` 對 `{answers:[…]}`），而認不得的 `kind` 根本到不了
@@ -264,6 +279,19 @@ function ConversationView({
             </span>
           ))}
         </p>
+      )}
+
+      {conversation.feedbackDialog !== undefined && (
+        <FeedbackDialog
+          // 換了目標就是一張新的表單：草稿不帶過去。
+          key={JSON.stringify(conversation.feedbackDialog.target)}
+          submitting={conversation.feedbackDialog.submitting}
+          {...(conversation.feedbackDialog.failure === undefined
+            ? {}
+            : { failure: conversation.feedbackDialog.failure })}
+          onSubmit={(draft) => void conversation.submitFeedback(draft)}
+          onDismiss={conversation.dismissFeedback}
+        />
       )}
     </main>
   );

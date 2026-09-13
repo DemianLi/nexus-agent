@@ -229,7 +229,9 @@ describe('中止的輪數（#276）', () => {
       ABORTED,
     ]);
     expect(result.aborted).toBe(2);
-    expect(formatScanReport([result], [], { threshold: 5 })).toContain('  中止 2 輪');
+    expect(formatScanReport([result], [], { threshold: 5 })).toContain(
+      '  中止 2 輪 ｜點踩 0 輪 ｜回饋 0 則',
+    );
   });
 
   it('v6 以前沒有中止這條路：那一格是 null，報表印「—」並講明', () => {
@@ -238,6 +240,51 @@ describe('中止的輪數（#276）', () => {
     const text = formatScanReport([old], [], { threshold: 5 }).join('\n');
     expect(text).toContain('  中止 — 輪');
     expect(text).toContain('格式版本 6：第 7 版才記中止');
+  });
+});
+
+describe('點踩與回饋（#278）', () => {
+  const put = (turnSeq: number, rating: 'positive' | 'negative'): Entry => [
+    'feedback/message-put',
+    {
+      item: {
+        turn: turnSeq,
+        rating,
+        version: `v-${turnSeq}-${rating}`,
+        createdAt: 0,
+        updatedAt: 0,
+      },
+    },
+  ];
+
+  it('每一輪取最後狀態：收回的不算、改成讚的不算；回饋則數另算', () => {
+    const result = scan([
+      turn('message'),
+      ['turn/end', {}],
+      turn('message'),
+      ['turn/end', {}],
+      turn('message'),
+      ['turn/end', {}],
+      put(0, 'negative'),
+      put(2, 'negative'),
+      put(2, 'positive'),
+      put(4, 'negative'),
+      ['feedback/message-delete', { turn: 4 }],
+      ['feedback/record', { text: '很慢' }],
+      ['feedback/record', {}],
+    ]);
+    expect(result).toMatchObject({ negativeTurns: 1, feedbackRecords: 2, unknownEvents: 0 });
+    expect(formatScanReport([result], [], { threshold: 5 })).toContain(
+      '  中止 0 輪 ｜點踩 1 輪 ｜回饋 2 則',
+    );
+  });
+
+  it('v7 以前沒有評分這條路：兩格是 null，報表印「—」並講明；v7 的檔其餘照讀', () => {
+    const old = scan([turn('message'), ['turn/end', {}]], { version: 7 });
+    expect(old).toMatchObject({ negativeTurns: null, feedbackRecords: null, aborted: 0 });
+    const text = formatScanReport([old], [], { threshold: 5 }).join('\n');
+    expect(text).toContain('點踩 — 輪 ｜回饋 — 則');
+    expect(text).toContain('格式版本 7：第 8 版才記點踩與回饋');
   });
 });
 
