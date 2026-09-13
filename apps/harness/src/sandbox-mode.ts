@@ -51,6 +51,7 @@
 import type { SessionEvent, SessionLog } from '@nexus/core';
 import { isSandboxMode, SANDBOX_MODES } from '@nexus/core';
 import type {
+  SandboxDenial,
   SandboxGrant,
   SandboxGrantLedger,
   SandboxMode,
@@ -110,6 +111,14 @@ export class SandboxModeController implements SandboxGrantLedger {
    * 核准在日誌上一顆事件都沒有，是認帳不做）。
    */
   #grant: SandboxGrant | undefined;
+
+  /**
+   * 最近一次被 fence 擋下的變更，升級工具發 grant 時綁它（見 `SandboxGrant`）。
+   *
+   * **一次只留一顆**，同 grant：同一輪兩顆變更都被擋、模型只升級其中一顆的話，綁到的是後擋
+   * 下的那一顆，另一顆的重試認領不到——少一顆是 fail-closed 的方向。不進日誌，理由同 grant。
+   */
+  #denial: SandboxDenial | undefined;
 
   /** 見 {@link SandboxModeController.escalationHint}。 */
   #escalationHint: string | undefined;
@@ -194,6 +203,19 @@ export class SandboxModeController implements SandboxGrantLedger {
     if (this.#grant !== grant) return false;
     this.#grant = undefined;
     return true;
+  }
+
+  /**
+   * fence 擋下一次變更時記下它，蓋掉前一顆。
+   * @param denial - 這一次被擋下的變更。
+   */
+  recordDenial(denial: SandboxDenial): void {
+    this.#denial = denial;
+  }
+
+  /** @returns 最近一次被擋下的變更；還沒擋過任何一次時為 `undefined`。 */
+  get lastDenial(): SandboxDenial | undefined {
+    return this.#denial;
   }
 
   /**

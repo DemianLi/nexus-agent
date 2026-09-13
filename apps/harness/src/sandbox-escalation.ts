@@ -37,8 +37,11 @@
  * ## 偏離：grant 綁目標、跨兩顆呼叫
  *
  * dsh 把核准來的模式**蓋在同一顆呼叫上**；我們的請求與重試是兩顆，中間隔著一顆一次性的
- * grant，而它**綁住模型指名的那個檔**。為什麼一定要綁，見 `contained-backend.ts` 的
- * `SandboxGrant`（基座的摘要器也會走 `write`）。
+ * grant，而它**綁住模型指名的那個檔，也綁住那個檔剛被擋下的那一次**（操作與內容摘要，
+ * [#254](https://github.com/DemianLi/nexus-agent/issues/254)）。為什麼兩樣都要綁，見
+ * `contained-backend.ts` 的 `SandboxGrant`：綁檔是因為基座的摘要器也會走 `write`；綁那一次是
+ * 因為升級卡上看不到內容，而 `write_file` 的重試沒有自己的卡——在 dsh，人核准的那顆就是
+ * 會執行的那顆，這裡要靠綁住才成立。
  *
  * **grant 不會過期。** 它只蓋一個 canonical 目標、用過一次就沒了；沒被用掉的那顆會一直等到
  * 下一顆打到同一個檔、而且被擋下的變更。要有時效是另一顆機制，今天沒做。
@@ -102,7 +105,7 @@ export function isStrictlyWider(
 export const SANDBOX_ESCALATION_HINT =
   `[containment] 可以升級：呼叫 ${SANDBOX_ESCALATION_TOOL_NAME}，file_path 填這一個檔、` +
   'sandbox_permissions 選夠用的最窄那一格、justification 寫一句給人看的理由；核准卡會去問人。' +
-  '核准之後把這一次操作原樣重試一次——只蓋這個檔、只蓋一次。';
+  '核准之後把這一次操作原樣重試一次——只蓋這個檔的這一次操作、只蓋一次，內容改了就不算。';
 
 /**
  * 不加寬的請求的那句話。閘門與工具本體共用，兩邊擋下的是同一件事。
@@ -143,7 +146,8 @@ export function escalationReason(target: string, mode: SandboxMode, justificatio
 export const SANDBOX_ESCALATION_DESCRIPTION =
   '檔案變更被圍堵擋下來、而這件事真的需要更寬的權限時，用這個工具請人核准一次升級。' +
   '**只在剛被擋下之後用**，file_path 填被擋的那個檔；核准之後把那一次操作原樣重試一次。' +
-  '一次核准只蓋那一個檔的下一次變更。被拒絕時不要換個路徑再寫，去問人為什麼。';
+  '一次核准只蓋被擋下的那一次操作：同一個檔、同樣的內容、只蓋一次；改了內容就要重新升級。' +
+  '被拒絕時不要換個路徑再寫，去問人為什麼。';
 
 const escalationSchema = z.object({
   file_path: z.string().describe('剛才被擋下的那個檔，照被擋的那次呼叫的寫法填。'),
@@ -169,10 +173,16 @@ function createEscalationTool(controller: SandboxModeController) {
           status: 'error',
         });
       }
-      controller.grant({ mode: args.sandbox_permissions, target: args.file_path });
+      // 綁的是**這一刻**最近被擋下的那一次。同一則訊息裡另有平行的變更也被擋的話，綁到的
+      // 可能是它——那時候對不上的一邊認領不到，是 fail-closed 的方向（見控制器的 `#denial`）。
+      controller.grant({
+        mode: args.sandbox_permissions,
+        target: args.file_path,
+        denied: controller.lastDenial,
+      });
       return (
-        `核准了：${JSON.stringify(args.file_path)} 的下一次變更會在 ` +
-        `${args.sandbox_permissions} 之下跑，只有一次。現在把剛才被擋下的那次操作原樣重試。`
+        `核准了：${JSON.stringify(args.file_path)} 剛才被擋下的那一次操作可以在 ` +
+        `${args.sandbox_permissions} 之下跑一次。現在把它原樣重試——操作或內容改了就不算。`
       );
     },
     {
