@@ -94,9 +94,16 @@ const UNWIRED_FEEDBACK: Pick<WireClient, 'feedbackPut' | 'feedbackDelete' | 'fee
   feedbackRecord: async () => ({ kind: 'rejected', message: '這一檔沒有接回饋' }),
 };
 
-/** 「以前的會話」同一條理由：要清單的測試自己換掉這一格。 */
-const UNWIRED_THREAD_LIST: Pick<WireClient, 'listThreads'> = {
+/**
+ * 「以前的會話」同一條理由：要清單的測試自己換掉這一格。**歷史回一份空的、不是拒絕**：每一條 thread 開起來都會
+ * 拿歷史，拒絕的話畫面上多一行「拿不回來」，跟這一條測試要驗的東西無關。要歷史的測試自己換掉。
+ */
+const UNWIRED_THREAD_LIST: Pick<WireClient, 'listThreads' | 'threadHistory'> = {
   listThreads: async () => ({ kind: 'rejected', message: '這一條測試沒有接清單' }),
+  threadHistory: async () => ({
+    kind: 'ok',
+    result: { events: [], firstSeq: 0, throughSeq: -1, hasMore: false, legacy: false },
+  }),
 };
 
 /** 一個可以隨時推 frame 進去的假 client。 */
@@ -854,7 +861,7 @@ describe('記住這條 thread', () => {
   });
 
   /** jsdom 裡的重新整理：拆掉再掛一次，中間只剩 `localStorage`。 */
-  it('重新載入：開的是同一條，而且講明畫面不會重播', async () => {
+  it('重新載入：開的是同一條，而且講一聲是接著上一次', async () => {
     seq = 0;
     const first = fakeClient([]);
     render(<App client={first.client} />);
@@ -891,8 +898,9 @@ describe('記住這條 thread', () => {
   });
 
   /**
-   * 這一刀新走得到的一格：serve 還開著，重新整理之後接回一條停在核准點的 thread。沒有重播就
-   * 沒有卡片、送出框也沒鎖，送出去被擋回來——畫面上唯一能按的出口是「新對話」。
+   * serve 還開著，重新整理之後接回一條停在核准點的 thread。**核准卡補不回來**：歷史重播得出那幾張工具卡
+   * （#306），但中斷的酬載只在當初發出去的那一顆 frame 上。這一條的假 client 連歷史都是空的，送出框也就沒鎖，
+   * 送出去被擋回來——畫面上的出口是「新對話」。
    */
   it('接回一條停在核准點的 thread：拒絕照樣說出來，新對話走得出去', async () => {
     seq = 0;
@@ -1043,7 +1051,7 @@ describe('以前的會話', () => {
     await waitFor(() => expect(reads).toBe(2));
   });
 
-  it('點一條就切過去：開那一條、記下來、講明畫面從空的開始，上一條的話不留', async () => {
+  it('點一條就切過去：開那一條、記下來、講一聲切過去了，上一條的話不留', async () => {
     seq = 0;
     localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
     const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);

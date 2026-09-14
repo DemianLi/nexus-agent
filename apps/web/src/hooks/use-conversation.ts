@@ -25,6 +25,8 @@ import {
   appendQuestionCancel,
   cancelResponse,
   emptyConversation,
+  prependEntries,
+  reduceAll,
   reduceConversation,
   uniformDecisions,
 } from '@nexus/wire';
@@ -59,8 +61,24 @@ export interface UseConversationOptions {
   readonly threadId?: string;
 }
 
+/** 畫面上那段歷史的現況（#306）。 */
+export interface HistoryView {
+  /** 更早還有看得見的東西，「載入更早的對話」按得動。 */
+  readonly hasMore: boolean;
+  /** 舊格式的會話：模型的回覆沒有保存。見 `@nexus/wire` 的 `ThreadHistoryResult.legacy`。 */
+  readonly legacy: boolean;
+  /** 正在拿更早的那一頁。 */
+  readonly loading: boolean;
+}
+
 export interface Conversation {
   readonly state: ConversationState;
+  /** 歷史拿到了沒、還有沒有更早的。**拿到之前是 `undefined`**，拿不到時看 {@link historyError}。 */
+  readonly history?: HistoryView;
+  /** 歷史拿不回來的原因。對話照樣接得下去，只是之前說過的話不在畫面上。 */
+  readonly historyError?: string;
+  /** 往前翻一頁，接在最前面。沒有更早的、或正在拿時什麼都不做。 */
+  loadEarlier(): Promise<void>;
   /** 下行開好了沒。**開好之前不能送**——這條線沒有重播，早送的那一輪會看不到。 */
   readonly connected: boolean;
   readonly connectionError?: string;
@@ -178,6 +196,13 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const [slashCommands, setSlashCommands] = useState<readonly SlashDescriptor[]>([]);
   const [slashError, setSlashError] = useState<string | undefined>(undefined);
   const [slashNotice, setSlashNotice] = useState<string | undefined>(undefined);
+  /** 往前翻要帶回去的兩格，跟畫面要的那三格放一起。 */
+  const [history, setHistory] = useState<
+    (HistoryView & { readonly firstSeq: number; readonly throughSeq: number }) | undefined
+  >(undefined);
+  const [historyError, setHistoryError] = useState<string | undefined>(undefined);
+  const historyRef = useRef(history);
+  historyRef.current = history;
   const clientRef = useRef(client);
   clientRef.current = client;
   // 送出的那一刻要讀的是**當下**的 pending，不是這次 render 閉包起來的那份。
@@ -197,6 +222,20 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         const events = await client.openEvents(threadId, { signal: controller.signal });
         if (cancelled) {
           return;
+        }
+        // **歷史排在開線之後、放行送出之前**（#306），照 dsh 的「先訂閱、再拿 snapshot」：反過來的話，兩者
+        // 之間發生的事兩邊都沒有。拿歷史時抽下行的迴圈還沒開始，這中間來的 frame 在線上排著，折完歷史才折
+        // 它們，所以順序是對的。**`connected` 等歷史折完才翻**：早翻的話先送出去的那一句會排在歷史前面。
+        const page = await client.threadHistory(threadId);
+        if (cancelled) {
+          return;
+        }
+        if (page.kind === 'ok') {
+          const { events: frames, ...cursor } = page.result;
+          advance((previous) => reduceAll(previous, frames));
+          setHistory({ ...cursor, loading: false });
+        } else {
+          setHistoryError(page.message);
         }
         setConnected(true);
         // **抓清單排在開線之後**，跟送話同一條規則：這條線沒有重播，所有的上行都等
@@ -364,6 +403,38 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     note(await clientRef.current.runCancel(threadId));
   }, [threadId, note]);
 
+  const loadEarlier = useCallback(async () => {
+    const current = historyRef.current;
+    if (current === undefined || !current.hasMore || current.loading) return;
+    setHistory({ ...current, loading: true });
+    let page;
+    try {
+      page = await clientRef.current.threadHistory(threadId, {
+        beforeSeq: current.firstSeq,
+        throughSeq: current.throughSeq,
+      });
+    } catch (error) {
+      setHistory({ ...current, loading: false });
+      setHistoryError(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    if (page.kind === 'rejected') {
+      setHistory({ ...current, loading: false });
+      setHistoryError(page.message);
+      return;
+    }
+    // 更早那一頁自己從空的折，再接在前面：折進現在這一份的話，它的收尾會把現在的狀態蓋掉。
+    const earlier = reduceAll(emptyConversation(), page.result.events);
+    advance((previous) => prependEntries(previous, earlier));
+    setHistoryError(undefined);
+    setHistory({
+      ...current,
+      firstSeq: page.result.firstSeq,
+      hasMore: page.result.hasMore,
+      loading: false,
+    });
+  }, [threadId, advance]);
+
   /** 記下一則回覆目前的評分；`null` 是沒有了。 */
   const keepRating = useCallback((replyId: string, item: WireFeedbackItem | null) => {
     setRatings((previous) => {
@@ -474,6 +545,13 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   return {
     state,
     connected,
+    loadEarlier,
+    ...(history === undefined
+      ? {}
+      : {
+          history: { hasMore: history.hasMore, legacy: history.legacy, loading: history.loading },
+        }),
+    ...(historyError === undefined ? {} : { historyError }),
     slashCommands,
     send,
     respond,

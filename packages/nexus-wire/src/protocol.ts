@@ -355,6 +355,69 @@ export type ThreadListResponse =
   { readonly type: 'success'; readonly result: ThreadListResult } | ErrorResponse;
 
 /**
+ * 一條 thread 的歷史（[#306](https://github.com/DemianLi/nexus-agent/issues/306) 的畫面那一刀），`GET`。
+ *
+ * 對到 dsh 的兩支：`session.follow` 開頭那份 snapshot（最後 {@link HISTORY_PAGE_MESSAGES} 則）與往前翻的
+ * `session.page`（`packages/api/session-controller/src/history.ts:77-111,119-240`，`c291e79`）。形狀照它：
+ * 一頁以**則數**切，不以事件數；往前翻帶 `beforeSeq`（上一頁的 `firstSeq`）與 `throughSeq`（第一頁定下的
+ * 上界，之後每一頁讀的都是同一段日誌）。**沒有不透明的 cursor**，兩格都是日誌的位置。
+ *
+ * ## 偏離：送的是線上的 `Event`，不是日誌事件
+ *
+ * dsh 的 snapshot 與即時送的是同一種東西（日誌事件），進同一個 assembler。我們的即時 frame 是 LangGraph 的，
+ * 不是日誌事件——**表達不出「同一種」**，退到最接近的：server 把日誌事件轉成線上的 `Event`，畫面沿用
+ * `reduceConversation`，歷史與即時照樣走同一個折疊器。人打的字走 `messages` 的 `message-start`
+ * `role: "human"`，那是協定自己留的格（「human/system messages are typically replayed as complete
+ * messages」）。
+ *
+ * ## 歷史的 `Event` 一律不帶 `seq`
+ *
+ * 折疊器丟掉 `seq <= lastSeq` 的 frame，而傳輸 seq 每次行程重開從 0 起。歷史帶了日誌的耐久 seq 的話，
+ * 之後的即時 frame 會全被當成重複丟掉——畫面上看不到回覆，日誌上一切正常。耐久 seq 不能冒充傳輸 seq
+ * （[#89](https://github.com/DemianLi/nexus-agent/issues/89) 否掉 (A) 的理由）。`Event.seq` 在協定上是選填的。
+ *
+ * **`GET` 也要帶 `content-type: application/json`**，理由同 {@link THREADS_PATH}。
+ */
+export function historyPath(threadId: string): string {
+  return `/threads/${encodeURIComponent(threadId)}/history`;
+}
+
+/** 一頁歷史的則數上限，同 dsh 的預設（`history.ts:38`）。 */
+export const HISTORY_PAGE_MESSAGES = 50;
+
+/** 拿一頁歷史的參數。三格都省略就是最後一頁。 */
+export interface ThreadHistoryQuery {
+  /** 這一頁最多幾則（人打的字與模型的回覆各算一則）。 */
+  readonly maxMessages?: number;
+  /** 只要這個位置之前的；往前翻時帶上一頁的 `firstSeq`。 */
+  readonly beforeSeq?: number;
+  /** 讀到哪裡為止（含）；往前翻時帶第一頁的 `throughSeq`。 */
+  readonly throughSeq?: number;
+}
+
+/** 一頁歷史。 */
+export interface ThreadHistoryResult {
+  /** 照順序折進 `reduceConversation`。**一顆都不帶 `seq`**，見 {@link historyPath}。 */
+  readonly events: readonly Event[];
+  /** 這一頁從日誌的哪個位置起。往前翻時當 `beforeSeq` 帶回來。 */
+  readonly firstSeq: number;
+  /** 這份 snapshot 讀到哪裡為止（含）。一顆事件都沒有時是 -1。 */
+  readonly throughSeq: number;
+  /** 這一頁之前還有看得見的東西。 */
+  readonly hasMore: boolean;
+  /**
+   * 這條會話是舊格式（格式 9 以前寫的）：模型的回覆沒有保存，畫面上只有人打的字與工具卡，模型也從空的開始。
+   * 判法與推模型歷史的一側是同一條（`@nexus/core` 的 `replayConversation` 推不出來，原因是缺回覆、缺結果內容或
+   * 缺摘要本文——三樣都是格式 9 才開始記的），整份日誌判一次。
+   */
+  readonly legacy: boolean;
+}
+
+/** `GET /threads/:id/history` 的回應。錯誤分層同 {@link ThreadListResponse}。 */
+export type ThreadHistoryResponse =
+  { readonly type: 'success'; readonly result: ThreadHistoryResult } | ErrorResponse;
+
+/**
  * 上行：協定只在 WebSocket 那條路上指定怎麼送 `Command`，HTTP 這格是空的。
  * 補這一格的是 dsh 的 gateway（`packages/api/gateway/src/index.ts:134`，端點是
  * `<namespace>/<method>`）——**路徑指名 method，封包裡也帶 method，兩者不合就是錯誤**。

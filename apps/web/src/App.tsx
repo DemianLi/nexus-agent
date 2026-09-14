@@ -19,29 +19,38 @@ import type { ThreadChoice } from '@/lib/remembered-thread';
  * 接回上一次那條 thread 時講的話。
  *
  * **條件句不是客氣**：這一端分不出伺服器是接回來還是新開的（見 `remembered-thread.ts`）——
- * serve 沒開 `--session-log` 時，重開過的 server 上同一個 id 就是一條新的；沒重開過的話模型還記得
- * （`MemorySaver` 還在）。能確定的只有前半句：這個畫面還不重播，之前的話一定不在畫面上
- * （[#306](https://github.com/DemianLi/nexus-agent/issues/306) 的畫面那一刀）。**最後一句是出口**：
- * 不講的話，重新整理之後只會一直回到同一條 thread 上。
+ * serve 沒開 `--session-log` 時，重開過的 server 上同一個 id 就是一條新的，畫面與模型都從空的開始；沒重開過的話
+ * 兩者都在（日誌與 `MemorySaver` 都還在記憶體裡）。之前說過的話畫在底下，是從日誌重播的
+ * （[#306](https://github.com/DemianLi/nexus-agent/issues/306)）——所以「接得回來」看畫面就知道，不用這一句講。
+ * **最後一句是出口**：不講的話，重新整理之後只會一直回到同一條 thread 上。
  *
  * **不講 todo**：沒有人讀 `todo/write` 重建它（`@nexus/plugin-todo` 沒有投影），模型是從對話裡那幾次
  * `todo_write` 記得它的——對話回來了它就在，不是另外回來的一樣東西。
  */
 export const RESUMED_THREAD_NOTICE =
-  '接著上一次的 thread。這個畫面還不重播，之前說過的話不會出現在這裡；伺服器開著 --session-log、' +
-  '或還沒重開過的話，模型記得之前的對話，模式、目標與計劃模式也跟著回來。不想接就按「新對話」。';
+  '接著上一次的 thread。伺服器開著 --session-log、或還沒重開過的話，之前的對話重播在底下，模型也記得，' +
+  '模式、目標與計劃模式跟著回來。不想接就按「新對話」。';
 
 /**
  * 從「以前的會話」點過去時講的話（[#302](https://github.com/DemianLi/nexus-agent/issues/302)）。
  *
  * **跟上一句不同，這一句不用條件句**：清單只在開了 --session-log 的 server 上有，而且只列切得過去的，所以
- * 「日誌上的東西回來了」是確定的。對話從日誌推回模型（[#306](https://github.com/DemianLi/nexus-agent/issues/306)），
- * **只有舊格式的日誌推不回來**——它們不記模型的回覆，推不出完整的歷史就不灌半截。這一端讀不到推的結果（伺服器
- * 日誌上有），所以把例外講在句子裡。畫面還不重播，一定從空的開始。todo 不另外講，理由同上一句。
+ * 「日誌上的東西回來了」是確定的。畫面照日誌重播、模型照日誌推回（[#306](https://github.com/DemianLi/nexus-agent/issues/306)）；
+ * 舊格式那一種推不回模型，畫面上另有一句 {@link LEGACY_THREAD_NOTICE} 講，所以這一句不再帶例外。todo 不另外講，
+ * 理由同上一句。
  */
 export const SWITCHED_THREAD_NOTICE =
-  '切到以前的一條 thread。模型記得之前的對話（舊格式的日誌推不回來，模型從空的開始），' +
-  '目標、沙箱模式與計劃模式也跟著回來；這個畫面還不重播，從空的開始。';
+  '切到以前的一條 thread。之前的對話重播在底下，模型也記得，目標、沙箱模式與計劃模式跟著回來。';
+
+/**
+ * 舊格式的會話（格式 9 以前寫的，#306 拍板 2）：日誌不記模型的回覆，畫面重播得出來的只有人打的字與工具卡，模型也
+ * 從空的開始——推不出完整的歷史就不灌半截。伺服器照整份日誌判一次（`ThreadHistoryResult.legacy`）。
+ */
+export const LEGACY_THREAD_NOTICE =
+  '這條會話是舊格式：模型的回覆沒有保存，底下只有你打的字與工具卡；模型也不記得之前的對話，從空的開始。';
+
+/** 往前翻那顆按鈕。 */
+export const LOAD_EARLIER_LABEL = '載入更早的對話';
 
 const ORIGIN_NOTICE: Readonly<Record<ThreadChoice['origin'], string | undefined>> = {
   fresh: undefined,
@@ -223,9 +232,29 @@ function ConversationView({
         />
         {/* 不掛 `role="status"`：那一格歸 `StatusLine`，這一句是背景，不是現況。 */}
         {notice !== undefined && <p className="text-muted-foreground text-xs">{notice}</p>}
+        {conversation.history?.legacy === true && (
+          <p className="text-muted-foreground text-xs">{LEGACY_THREAD_NOTICE}</p>
+        )}
+        {conversation.historyError !== undefined && (
+          <p className="text-destructive text-xs">
+            之前說過的話拿不回來：{conversation.historyError}
+          </p>
+        )}
       </header>
 
       <section className="flex flex-1 flex-col gap-4">
+        {conversation.history?.hasMore === true && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="self-center"
+            disabled={conversation.history.loading}
+            onClick={() => void conversation.loadEarlier()}
+          >
+            {LOAD_EARLIER_LABEL}
+          </Button>
+        )}
         <Transcript
           state={conversation.state}
           feedback={{
