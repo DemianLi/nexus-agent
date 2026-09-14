@@ -24,9 +24,11 @@
  * - **人講話清零 → `turn/start` 的 `message` 與 `goal` 清零。** 續行輪次的頭在提醒器那側也是一則
  *   素的 `HumanMessage`，它清零（`repeat-reminder.ts` 的 `GOAL_WRAPUP_MARKER` 那段說這是對的）。
  * - **`resume` 不清零。** 回覆核准沒有新的人話，會話統計也把它併回前一輪。
- * - **`session/end-seed` 清零。** CLI 的 `--resume` 與 serve 重開之後對話從空的開始（門 B 沒開，
- *   `cli.ts` 的 `--resume` 說明），提醒器那時看到的鏈真的是新的。不清的話，兩個行程的日誌會拼出
- *   一條實際上沒有人看過的長串。
+ * - **`session/end-seed` 清零。** 寫下這條時，CLI 的 `--resume` 與 serve 重開之後對話從空的開始（門 B
+ *   沒開），提醒器那時看到的鏈真的是新的；不清的話，兩個行程的日誌會拼出一條實際上沒有人看過的長串。
+ *   ⚠️ **[#306](https://github.com/DemianLi/nexus-agent/issues/306) 之後這條只對一半的續接成立**：推得回
+ *   對話的那些，提醒器看到的鏈接著上一個行程（`conversation-restore.ts`），這裡照舊清零，會少算跨行程的
+ *   那一段；推不回來的（舊格式）才真的從空的開始。日誌上沒有一顆事件說那次續接灌了沒有，所以這裡還分不開。
  * - **subagent 那份沒有 `turn/start`**，一份就是一次委派，鏈跨整份。
  * - **同一個 `callId` 第二次出現不推進鏈。** 被核准閘門中斷的那次，resume 之後以同一個 `callId`
  *   再記一顆 `tool/call`（`session-log.ts` 的 `tool/call` 那段）。提醒器數的是 `tool_calls`，那次

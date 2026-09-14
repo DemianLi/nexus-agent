@@ -1043,7 +1043,7 @@ describe('以前的會話', () => {
     await waitFor(() => expect(reads).toBe(2));
   });
 
-  it('點一條就切過去：開那一條、記下來、講明對話沒有保存，上一條的話不留', async () => {
+  it('點一條就切過去：開那一條、記下來、講明畫面從空的開始，上一條的話不留', async () => {
     seq = 0;
     localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
     const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
