@@ -1,6 +1,6 @@
 import type { ConversationStatus, PendingInput, WireClient } from '@nexus/wire';
 import { isApprovalPending, isQuestionPending } from '@nexus/wire';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApprovalCard } from '@/components/approval-card';
 import { FeedbackDialog } from '@/components/feedback-dialog';
@@ -12,6 +12,7 @@ import { Transcript } from '@/components/transcript';
 import { Button } from '@/components/ui/button';
 import { useConversation } from '@/hooks/use-conversation';
 import { createAgentClient } from '@/lib/agent';
+import { newConversationTarget, readThreadListing } from '@/lib/new-conversation';
 import { recallThread, rememberThread } from '@/lib/remembered-thread';
 import type { ThreadChoice } from '@/lib/remembered-thread';
 
@@ -126,6 +127,37 @@ export function App({ client }: { client?: WireClient } = {}) {
   }, [choice.threadId]);
   // 一個 App 一個 client：清單與對話走同一條線。放在這裡而不是 hook 裡，是因為清單不屬於任何一條 thread。
   const wire = useMemo(() => client ?? createAgentClient(), [client]);
+  // 換 thread 有兩條路（「新對話」與從清單點一條），**後按的那一下贏**：「新對話」要先讀清單，讀回來之前人已經從清單
+  // 點了別條的話，晚到的結果不能把人拉回去。讀清單期間再按一次「新對話」不另開一次（dsh `connectWorkspace` 的
+  // `connecting`）——兩次讀到的是同一份清單，只會換一次。
+  const navigation = useRef(0);
+  const connecting = useRef(false);
+
+  /**
+   * 「新對話」（[#313](https://github.com/DemianLi/nexus-agent/issues/313)）：目前這條還是空白就留在原地，否則
+   * 拿清單上一條空白會話，都沒有才開新的。重用的那一條也是 `fresh`——它是空的，沒有「之前的對話」可講。
+   *
+   * @param engaged - 這個分頁在目前這條上講過話了（判準見 `ConversationView`）。
+   */
+  const newConversation = (engaged: boolean): void => {
+    if (!engaged || connecting.current) return;
+    connecting.current = true;
+    navigation.current += 1;
+    const ticket = navigation.current;
+    const current = choice.threadId;
+    void readThreadListing(wire)
+      .then((listing) => {
+        if (navigation.current !== ticket) return;
+        const target = newConversationTarget(listing, current);
+        setChoice({
+          threadId: target.kind === 'reuse' ? target.threadId : crypto.randomUUID(),
+          origin: 'fresh',
+        });
+      })
+      .finally(() => {
+        connecting.current = false;
+      });
+  };
 
   // **換 thread 就整個重掛。** 只換 `threadId` 的話 hook 會重開下行，但上一條的 transcript、
   // 錯誤與命令清單都還留在它的 state 裡——畫面會把兩條 thread 混成一條。從清單切過去也走這一條（#261 的重掛）。
@@ -135,8 +167,11 @@ export function App({ client }: { client?: WireClient } = {}) {
       client={wire}
       threadId={choice.threadId}
       notice={ORIGIN_NOTICE[choice.origin]}
-      onNewConversation={() => setChoice({ threadId: crypto.randomUUID(), origin: 'fresh' })}
-      onSwitch={(threadId) => setChoice({ threadId, origin: 'listed' })}
+      onNewConversation={newConversation}
+      onSwitch={(threadId) => {
+        navigation.current += 1;
+        setChoice({ threadId, origin: 'listed' });
+      }}
     />
   );
 }
@@ -151,10 +186,16 @@ function ConversationView({
   readonly client: WireClient;
   readonly threadId: string;
   readonly notice: string | undefined;
-  readonly onNewConversation: () => void;
+  readonly onNewConversation: (engaged: boolean) => void;
   readonly onSwitch: (threadId: string) => void;
 }) {
   const conversation = useConversation({ client, threadId });
+  // **這個分頁在這條上講過話沒有**，決定「新對話」要不要留在原地（#313）。照 dsh `Session.handleBlank` 的鏡像：
+  // 畫面上有東西（自己送出的話、重播回來的歷史、目標排的輪次）就不是空白，斜線命令不算——它不起一輪。
+  // **判準看自己的畫面，不看清單**：清單是冷讀磁碟，還沒落盤的這一條根本不在上面。
+  // **歷史還沒折完（`connected` 還沒翻）就當成講過**：那時分不出來，而這顆按鈕是停在核准點、連不上的 thread
+  // 唯一的出口——寧可多開一條，也不能把人留在原地。
+  const engaged = !conversation.connected || conversation.state.entries.length > 0;
   const [draft, setDraft] = useState('');
   const [listOpen, setListOpen] = useState(false);
 
@@ -195,7 +236,8 @@ function ConversationView({
           {/*
             **永遠按得動**，不看 `busy`／`connected`／狀態。接回一條停在核准點的 thread 時，
             沒有重播就沒有卡片，送出去只會被「停在核准點」擋回來——這顆按鈕是那一格唯一的出口。
-            server 那端的 run 不會因此停下，跟關掉分頁一樣。
+            server 那端的 run 不會因此停下，跟關掉分頁一樣。還沒講過話時按下去留在原地（#313），那一格不是出口
+            要走的路——判準見 `engaged`，分不出來時一律當成講過。
           */}
           <div className="flex items-center gap-2">
             {/* 同「新對話」永遠按得動：切走不會停掉這一條在 server 上的 run。 */}
@@ -208,7 +250,12 @@ function ConversationView({
             >
               以前的會話
             </Button>
-            <Button type="button" variant="outline" size="sm" onClick={onNewConversation}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => onNewConversation(engaged)}
+            >
               新對話
             </Button>
           </div>
