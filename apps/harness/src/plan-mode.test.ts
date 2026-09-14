@@ -373,7 +373,11 @@ describe('exit_plan_mode 的三條路', () => {
     // **日誌上記的是錯誤、不帶碼**（#273）：模式外 dsh 拋的是一般 `Error`。這是 middleware
     // 自己回結果、不往下叫的那條路，所以圍堵讀的是 middleware 那則訊息。
     expect(
-      sessions.root.events.flatMap((event) => (event.type === 'tool/result' ? [event.data] : [])),
+      sessions.root.events.flatMap((event) => {
+        if (event.type !== 'tool/result') return [];
+        const { message: _message, ...verdict } = event.data;
+        return [verdict];
+      }),
     ).toEqual([{ callId: expect.any(String), isError: true }]);
   });
 });

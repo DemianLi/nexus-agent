@@ -7,7 +7,7 @@
  * `apps/harness/src/validation.test.ts`，那一層才碰得到基座那條「工具拋錯就整場死」的路。
  */
 
-import { ToolMessage } from '@langchain/core/messages';
+import { HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { ToolInputParsingException } from '@langchain/core/tools';
 import { Command, GraphInterrupt } from '@langchain/langgraph';
 import { MiddlewareError, ToolInvocationError } from 'langchain';
@@ -19,8 +19,10 @@ import {
   formatToolTimeout,
   isToolTimeout,
 } from './containment.js';
+import { fromLoggedMessage } from './logged-message.js';
 import type { SessionLookup } from './registry.js';
 import { SessionLog } from './session-log.js';
+import type { SessionEventMap } from './session-log.js';
 import { INVALID_TOOL_OUTPUT, markToolError } from './tool-events.js';
 
 /** middleware 的 `wrapToolCall` 拿出來直接呼叫用的形狀。 */
@@ -193,11 +195,26 @@ describe('工具事件', () => {
     };
   }
 
-  /** 日誌裡的工具事件，只留型別與酬載。 */
+  /**
+   * 日誌裡的工具事件，只留型別與酬載。**`tool/result` 的 `message` 剝掉**：那是內容（#305），
+   * 由下面「帶模型收到的那一則」那一組另外驗；這裡的斷言照舊逐 key 比判別那幾格。
+   */
   function toolEvents(log: SessionLog): { type: string; data: unknown }[] {
     return log.events
       .filter((event) => event.type === 'tool/call' || event.type === 'tool/result')
-      .map((event) => ({ type: event.type, data: event.data }));
+      .map((event) => {
+        if (event.type !== 'tool/result') return { type: event.type, data: event.data };
+        const { message: _message, ...verdict } = event.data;
+        return { type: event.type, data: verdict };
+      });
+  }
+
+  /** 最後一顆 `tool/result` 帶的那則訊息，推回 `BaseMessage`。 */
+  function lastResultMessage(log: SessionLog): ToolMessage {
+    const found = log.events.filter((event) => event.type === 'tool/result').at(-1);
+    const message = (found?.data as SessionEventMap['tool/result'] | undefined)?.message;
+    if (message === undefined) throw new Error('最後一顆 tool/result 沒帶 message');
+    return fromLoggedMessage(message) as ToolMessage;
   }
 
   /** 最後一顆 `tool/result` 的酬載。 */
@@ -220,6 +237,67 @@ describe('工具事件', () => {
       },
       { type: 'tool/result', data: { callId: 'call-1', isError: false } },
     ]);
+  });
+
+  describe('帶模型收到的那一則（#305）', () => {
+    it('成功：推回來是同一則——同一句話、同一個 tool_call_id', async () => {
+      const log = new SessionLog('s');
+      const message = new ToolMessage({ content: '好了', tool_call_id: 'call-1', name: 'probe' });
+      await recorder(log)(call(), async () => message);
+      const back = lastResultMessage(log);
+      expect(back.text).toBe('好了');
+      expect(back.tool_call_id).toBe('call-1');
+    });
+
+    /** 失敗那一則是圍堵自己造的：記的要是回給模型的那一則，不是工具拋出來的原錯。 */
+    it('工具拋錯：記的是回給模型的那一句，status 是 error', async () => {
+      const log = new SessionLog('s');
+      const returned = (await recorder(log)(call(), async () => {
+        throw new Error('連不上');
+      })) as ToolMessage;
+      const back = lastResultMessage(log);
+      expect(back.text).toBe(returned.text);
+      expect(back.text).toContain('連不上');
+      expect(back.status).toBe('error');
+    });
+
+    /**
+     * goal 收尾那種：`Command` 裡除了結果，還有一則塞進對話的 HumanMessage。它接在 `tool/result`
+     * 後面記成 `user/message`，順序同它在對話裡的位置；結果那顆只帶屬於這次呼叫的那一則。
+     */
+    it('`Command` 夾帶的 HumanMessage 接在結果後面記成 user/message', async () => {
+      const log = new SessionLog('s');
+      await recorder(log)(
+        call(),
+        async () =>
+          new Command({
+            update: {
+              messages: [
+                new ToolMessage({ content: '收了', tool_call_id: 'call-1', name: 'probe' }),
+                new HumanMessage('收尾指示'),
+              ],
+            },
+          }),
+      );
+      expect(log.events.map((event) => event.type)).toEqual([
+        'tool/call',
+        'tool/result',
+        'user/message',
+      ]);
+      expect(lastResultMessage(log).text).toBe('收了');
+      const injected = log.events[2]!.data as SessionEventMap['user/message'];
+      expect(injected.source).toEqual({ kind: 'plugin', plugin: 'probe' });
+      expect(fromLoggedMessage(injected.message).text).toBe('收尾指示');
+    });
+
+    it('一般的 ToolMessage 不帶任何 user/message', async () => {
+      const log = new SessionLog('s');
+      await recorder(log)(
+        call(),
+        async () => new ToolMessage({ content: '好了', tool_call_id: 'call-1', name: 'probe' }),
+      );
+      expect(log.events.some((event) => event.type === 'user/message')).toBe(false);
+    });
   });
 
   it('**tool/call 在 handler 之前就記了**——擋在內層的呼叫一樣有', async () => {

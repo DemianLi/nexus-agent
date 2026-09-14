@@ -227,7 +227,12 @@ const workerPlugin: NexusPlugin = {
 function toolEvents(events: readonly SessionEvent[]): { type: string; data: unknown }[] {
   return events
     .filter((event) => event.type === 'tool/call' || event.type === 'tool/result')
-    .map((event) => ({ type: event.type, data: event.data }));
+    .map((event) => {
+      if (event.type !== 'tool/result') return { type: event.type, data: event.data };
+      // `message`（#305）是內容，這裡只比判別那幾格；內容由 `replayOf` 從請求那一側驗。
+      const { message: _message, ...verdict } = event.data;
+      return { type: event.type, data: verdict };
+    });
 }
 
 /** 解不開的那一顆在日誌上該長的樣子：原字串一對、碼 `INVALID_ARGS`。 */

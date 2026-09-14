@@ -147,6 +147,8 @@ const RELEASES_FEEDBACK_ONLY_CAPTURE = {
   'model/usage': false,
   'model/start': false,
   'model/end': false,
+  'assistant/message': false,
+  'user/message': false,
   'compaction/summary': false,
   'sandbox/mode': false,
   'plan/mode': false,
