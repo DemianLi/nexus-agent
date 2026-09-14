@@ -79,6 +79,7 @@ import {
 } from './sandbox-mode.js';
 import type { SandboxMode } from './contained-backend.js';
 import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MODEL_ID } from './live-model.js';
+import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
@@ -123,9 +124,11 @@ export interface CliInvocation {
    * 續接一個既有的 run 目錄——上一次 `--session-log` 寫出來的那一個
    * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
    *
-   * **回來的是住在日誌上的那一半**：沙箱模式、目標（授權打回 `disarmed`，要人 `/goal resume`）、
-   * todo。**對話從空的開始**——訊息住在 checkpointer 裡，而那扇門（門 B）這張卡決定不開。
-   * **計劃模式也從關著開始**：它今天住在 graph state，搬進日誌是 #251 的第二刀。
+   * **回來的是日誌上推得出來的**：沙箱模式、目標（授權打回 `disarmed`，要人 `/goal resume`）、
+   * 計劃模式，以及對話——從日誌推回模型（[#306](https://github.com/DemianLi/nexus-agent/issues/306)，
+   * 見 `conversation-restore.ts`），不是把 checkpointer 落盤（門 B 照舊不開）。**todo 沒有自己回來的
+   * 狀態**：沒有人讀 `todo/write` 重建它，模型是從推回來的對話裡那幾次 `todo_write` 記得它的。
+   * 虛擬檔案系統與工具結果暫存回不來——它們只在 graph state 裡。
    *
    * **不配 `--sandbox`**：模式從日誌來，兩個來源不管誰贏，另一個都是靜靜被丟掉——一個打了
    * `--sandbox read-only` 的人可能落在 `workspace-write` 裡。要換就接起來之後 `/sandbox`，
@@ -174,7 +177,8 @@ export const USAGE = `用法：cli [選項] [要說的話...]
   --session-log <dir>  把會話日誌寫進這個目錄底下（省略即不落盤）
                        它不能在 --workspace 底下：日誌是基礎建設，不是 agent 的工作區
   --resume <run 目錄>  接著上一次 --session-log 寫出來的那個 run 目錄跑下去：
-                       沙箱模式、目標、todo 與計劃模式照日誌回來，對話從空的開始
+                       沙箱模式、目標、計劃模式與對話照日誌回來
+                       （虛擬檔案系統與工具結果暫存不回來）
                        要在上一次的同一個目錄底下接（日誌記著它屬於哪個目錄）
                        不能配 --sandbox（模式從日誌來）或 --session-log（就寫回那個目錄）
   --goal-driver        一個 active 的目標沒達成時自己再開一輪（預設關）
@@ -1257,6 +1261,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // 這中間任何一步拋錯都要先放掉它（try 一路包到掛上日誌之前，連同三個 attach）：CLI 行程會退出、kernel 會放，但同一個行程裡的呼叫端
   // （測試、將來 serve 的續接）會撞上自己沒放的鎖。
   let built: Awaited<ReturnType<typeof createCliAgent>>;
+  let restored: Awaited<ReturnType<typeof restoreConversation>> | undefined;
   try {
     // **先認它屬於哪個目錄**（見 `resume-guards.ts`）。排在沙箱那道檢查前面：
     // 目錄不對的話，日誌裡記的是哪一格都不該拿來判。讀回來還沒寫過任何一筆，檔案原封不動；
@@ -1291,6 +1296,11 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       HEADLESS_APPROVALS,
       resumed?.events,
     );
+    // **對話從日誌推回模型**（#306），在第一輪之前。放在 try 裡：灌不進去要放掉續接那把租約。
+    restored =
+      resumed === undefined
+        ? undefined
+        : await restoreConversation(built.agent, THREAD_ID, resumed.events);
     // REPL 是一條連續對話，一份日誌就是整個 session，所以接線點在這裡而不是每輪。
     // 回傳的 detach 不留：`dispose()` 會把還接著的協調器一起收掉。
     built.attachTelemetry(built.sessions);
@@ -1366,11 +1376,13 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     printer.log(
       sessionStore === undefined
         ? '會話日誌：只在記憶體裡（行程結束就沒了；--session-log <dir> 可以落盤）'
-        : resumed === undefined
+        : restored === undefined
           ? `會話日誌：${sessionStore.directory}`
-          : // **照實講回來的是哪一半**：不講的話，使用者會以為對話也接上了（#251 的最後一段）。
-            `會話日誌：${sessionStore.directory}（續接：沙箱模式、計劃模式、目標與 todo 照日誌回來；` +
-            `對話從頭開始）`,
+          : // **照實講回來的是什麼**（#251 的最後一段）：對話回不回得來看推的結果（#306），
+            // 推不出來時講原因。回不來的也講——不講的話，一個讀暫存路徑讀到 ENOENT 的模型看起來像壞了。
+            `會話日誌：${sessionStore.directory}（續接：沙箱模式、計劃模式與目標照日誌回來；` +
+            `${formatConversationRestore(restored)}；` +
+            `${invocation.workspace === undefined ? '虛擬檔案系統與' : ''}工具結果暫存沒有回來）`,
     );
     // 接回來的計劃模式開著——見 `RESUMED_PLAN_MODE_NOTICE`。**只在這次組裝真的掛了 `/plan`
     // 時講**：自訂 `--plugins` 可能沒有計劃模式，那時日誌上那顆 `plan/mode` 沒有人讀，講了

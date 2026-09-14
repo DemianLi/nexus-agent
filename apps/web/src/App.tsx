@@ -19,23 +19,29 @@ import type { ThreadChoice } from '@/lib/remembered-thread';
  * 接回上一次那條 thread 時講的話。
  *
  * **條件句不是客氣**：這一端分不出伺服器是接回來還是新開的（見 `remembered-thread.ts`）——
- * serve 沒開 `--session-log` 時同一個 id 就是一條新的。能確定的只有前半句：這條線沒有重播，
- * 畫面一定是空的。**最後一句是出口**：不講的話，重新整理之後只會一直回到同一條 thread 上。
+ * serve 沒開 `--session-log` 時，重開過的 server 上同一個 id 就是一條新的；沒重開過的話模型還記得
+ * （`MemorySaver` 還在）。能確定的只有前半句：這個畫面還不重播，之前的話一定不在畫面上
+ * （[#306](https://github.com/DemianLi/nexus-agent/issues/306) 的畫面那一刀）。**最後一句是出口**：
+ * 不講的話，重新整理之後只會一直回到同一條 thread 上。
+ *
+ * **不講 todo**：沒有人讀 `todo/write` 重建它（`@nexus/plugin-todo` 沒有投影），模型是從對話裡那幾次
+ * `todo_write` 記得它的——對話回來了它就在，不是另外回來的一樣東西。
  */
 export const RESUMED_THREAD_NOTICE =
-  '接著上一次的 thread。這條線沒有重播，之前說過的話不會出現在這裡；伺服器開著 --session-log 的話，' +
-  '模式、目標、todo 與計劃模式會跟著回來。不想接就按「新對話」。';
+  '接著上一次的 thread。這個畫面還不重播，之前說過的話不會出現在這裡；伺服器開著 --session-log、' +
+  '或還沒重開過的話，模型記得之前的對話，模式、目標與計劃模式也跟著回來。不想接就按「新對話」。';
 
 /**
  * 從「以前的會話」點過去時講的話（[#302](https://github.com/DemianLi/nexus-agent/issues/302)）。
  *
  * **跟上一句不同，這一句不用條件句**：清單只在開了 --session-log 的 server 上有，而且只列切得過去的，所以
- * 「回來的是日誌那一半」是確定的。**「對話沒有保存」也是確定的**，同 CLI `--resume` 的披露：對話不寫進會話日誌
- * （門 B 沒開），這條線也不重播——畫面一定從空的開始。
+ * 「日誌上的東西回來了」是確定的。對話從日誌推回模型（[#306](https://github.com/DemianLi/nexus-agent/issues/306)），
+ * **只有舊格式的日誌推不回來**——它們不記模型的回覆，推不出完整的歷史就不灌半截。這一端讀不到推的結果（伺服器
+ * 日誌上有），所以把例外講在句子裡。畫面還不重播，一定從空的開始。todo 不另外講，理由同上一句。
  */
 export const SWITCHED_THREAD_NOTICE =
-  '切到以前的一條 thread。這條會話的對話沒有保存，畫面從空的開始；跟著回來的是目標、todo、' +
-  '沙箱模式與計劃模式。';
+  '切到以前的一條 thread。模型記得之前的對話（舊格式的日誌推不回來，模型從空的開始），' +
+  '目標、沙箱模式與計劃模式也跟著回來；這個畫面還不重播，從空的開始。';
 
 const ORIGIN_NOTICE: Readonly<Record<ThreadChoice['origin'], string | undefined>> = {
   fresh: undefined,

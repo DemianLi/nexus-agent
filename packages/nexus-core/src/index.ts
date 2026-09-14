@@ -114,6 +114,17 @@ export {
 export type { LoggedMessage } from './logged-message.js';
 export { fromLoggedMessage, toLoggedMessage } from './logged-message.js';
 
+export type {
+  ConversationReplay,
+  ReplayOptions,
+  UnreplayableReason,
+} from './conversation-replay.js';
+export {
+  replayConversation,
+  TOOL_NOT_STARTED_TEXT,
+  TOOL_OUTCOME_UNKNOWN_TEXT,
+} from './conversation-replay.js';
+
 export type { ToolErrorInfo, ToolOutcome } from './tool-events.js';
 export {
   INVALID_ARGS,
@@ -122,6 +133,8 @@ export {
   readToolOutcome,
   TOOL_ABORTED,
   TOOL_ABORTED_BEFORE_DISPATCH,
+  TOOL_NOT_STARTED,
+  TOOL_OUTCOME_UNKNOWN,
   TOOL_TIMEOUT,
   toolCallIdOf,
   toolErrorOf,

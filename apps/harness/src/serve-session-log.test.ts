@@ -206,7 +206,8 @@ describe('serve 的 --session-log', () => {
 
 /**
  * 重開 server、同一條 thread——serve 那一半的續接（照 dsh：碰到一個已存的 session id 就
- * resume）。回來的是住在日誌上的那一半，對話照舊從頭開始（門 B 不開）。
+ * resume）。回來的是日誌上推得出來的，對話也從日誌推回模型（門 B 照舊不開；那一半的驗收在
+ * `conversation-restore.test.ts`）。
  *
  * **失敗的那幾條都要斷言兩件事**：這條 thread 起不來，而且檔案一個位元組都沒動。只斷言
  * 前一件的話，「退到新開、撞上 `wx`、被收成一行 warn」那條路一樣起不來——而那正是要擋的

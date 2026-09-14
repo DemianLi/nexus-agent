@@ -39,6 +39,7 @@ import {
   loadPluginModule,
   resolveSessionLogDir,
 } from './cli.js';
+import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { listStoredThreads } from './session-list.js';
 import type { ThreadTitleLimits } from './session-list.js';
@@ -282,6 +283,18 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
       } catch (error) {
         await release().catch(() => {});
         throw error;
+      }
+      // **對話從日誌推回模型**（#306），同 CLI 的 `--resume`，在這條 thread 的第一輪之前。灌不進去就讓它
+      // 起不來（理由見 `conversation-restore.ts`）：剛建好的 agent 與續接那把租約都要收掉，下一次請求才重試得了。
+      if (resumed !== undefined) {
+        try {
+          const replay = await restoreConversation(built.agent, threadId, resumed.events);
+          log(`[會話日誌] thread "${threadId}" 接回來了：${formatConversationRestore(replay)}`);
+        } catch (error) {
+          await built.dispose().catch(() => {});
+          await release().catch(() => {});
+          throw error;
+        }
       }
       const {
         agent,

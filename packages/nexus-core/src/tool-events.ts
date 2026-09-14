@@ -58,6 +58,13 @@ export const INVALID_ARGS = 'INVALID_ARGS';
 export const UNKNOWN_TOOL = 'UNKNOWN_TOOL';
 /** 成功的輸出不合它宣告的 schema。dsh `ToolOutputError` 的碼。 */
 export const INVALID_TOOL_OUTPUT = 'INVALID_TOOL_OUTPUT';
+/**
+ * 行程結束時記過 `tool/call`、結果沒記下來。dsh `packages/core/session/src/repair.ts:18` 的
+ * `TOOL_OUTCOME_UNKNOWN`。生產者是推模型歷史的一側，見 {@link ./conversation-replay.ts}。
+ */
+export const TOOL_OUTCOME_UNKNOWN = 'TOOL_OUTCOME_UNKNOWN';
+/** 回覆裡要了、行程結束前還沒記到 `tool/call`。dsh 同檔 `:15` 的 `TOOL_NOT_STARTED`。 */
+export const TOOL_NOT_STARTED = 'TOOL_NOT_STARTED';
 
 /** 內層替自己產的錯誤訊息標上的碼。見檔頭「碼怎麼從內層走到外層」。 */
 const marked = new WeakMap<object, ToolErrorInfo>();
