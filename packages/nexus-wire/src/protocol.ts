@@ -311,6 +311,50 @@ export type SlashRunResult =
   | { readonly kind: 'error'; readonly command_id?: string; readonly text: string };
 
 /**
+ * 列出以前的 thread 走的路徑（[#302](https://github.com/DemianLi/nexus-agent/issues/302)），`GET`。
+ *
+ * 對到 dsh 的 `session/list`。**不進 {@link RpcMethod}**：那一族綁在 `/threads/:id/commands/:method`
+ * 上，而列表不屬於任何一條 thread；`@langchain/protocol` 的 `Command` 也沒有這個 method（同斜線命令那兩支）。
+ *
+ * **`GET` 也要帶 `content-type: application/json`**，server 沒帶就回 415。這一條不是潔癖，是上行那道
+ * 閘門的延伸：瀏覽器對不帶自訂 header 的跨來源 `GET` 不發 preflight，而這一份回應是每一條 thread 第一句話
+ * 的開頭。帶了這個 header 就不是 simple request，逼出一個這台 server 從不回答的 preflight。
+ */
+export const THREADS_PATH = '/threads';
+
+/**
+ * 列表上的一列。形狀照 dsh 的 `SessionSummary`，少掉的幾格：`parentSessionId`／`origin`（subagent 不列）、
+ * `cwd`（只列這台 server 那個目錄的）、`projections`（我們沒有投影快取）。多的一格是 `title`：dsh 的標題走
+ * 另一個 method，我們只有內建回退那一種來源，跟著列表一起給。
+ */
+export interface ThreadSummary {
+  readonly threadId: string;
+  /** Unix epoch 毫秒：`max(建立時間, 最後一則人打的字的時間)`，同 dsh。 */
+  readonly updatedAt: number;
+  /** 這台 server 上這條 thread 正在跑一輪。 */
+  readonly running: boolean;
+  /** 還沒有任何一輪，同 dsh 的 `blank`。 */
+  readonly blank: boolean;
+  /** 第一則人打的字的開頭。**缺席不等於空白**：只有目標排的輪次的 thread 不是空白，但沒有人打過字。 */
+  readonly title?: string;
+}
+
+/** `GET /threads` 的結果。 */
+export interface ThreadListResult {
+  /** 由新到舊。 */
+  readonly items: readonly ThreadSummary[];
+  /** header 讀不懂、或格式版本比這台 server 新而沒列的份數。 */
+  readonly unreadable: number;
+}
+
+/**
+ * `GET /threads` 的回應。錯誤分層同上行：載體層是 HTTP status，協定層是 200 ＋ error 封包——這台 server
+ * 沒開 `--session-log` 時是後者，**不是一份空清單**：那兩件事在畫面上要分得出來。
+ */
+export type ThreadListResponse =
+  { readonly type: 'success'; readonly result: ThreadListResult } | ErrorResponse;
+
+/**
  * 上行：協定只在 WebSocket 那條路上指定怎麼送 `Command`，HTTP 這格是空的。
  * 補這一格的是 dsh 的 gateway（`packages/api/gateway/src/index.ts:134`，端點是
  * `<namespace>/<method>`）——**路徑指名 method，封包裡也帶 method，兩者不合就是錯誤**。

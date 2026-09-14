@@ -1,16 +1,19 @@
 import type { ConversationStatus, PendingInput, WireClient } from '@nexus/wire';
 import { isApprovalPending, isQuestionPending } from '@nexus/wire';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { ApprovalCard } from '@/components/approval-card';
 import { FeedbackDialog } from '@/components/feedback-dialog';
 import { FEEDBACK_COMMAND_LINE } from '@/lib/feedback';
 import { QuestionCard } from '@/components/question-card';
 import { StatusLine } from '@/components/status-line';
+import { ThreadList } from '@/components/thread-list';
 import { Transcript } from '@/components/transcript';
 import { Button } from '@/components/ui/button';
 import { useConversation } from '@/hooks/use-conversation';
+import { createAgentClient } from '@/lib/agent';
 import { recallThread, rememberThread } from '@/lib/remembered-thread';
+import type { ThreadChoice } from '@/lib/remembered-thread';
 
 /**
  * 接回上一次那條 thread 時講的話。
@@ -22,6 +25,23 @@ import { recallThread, rememberThread } from '@/lib/remembered-thread';
 export const RESUMED_THREAD_NOTICE =
   '接著上一次的 thread。這條線沒有重播，之前說過的話不會出現在這裡；伺服器開著 --session-log 的話，' +
   '模式、目標、todo 與計劃模式會跟著回來。不想接就按「新對話」。';
+
+/**
+ * 從「以前的會話」點過去時講的話（[#302](https://github.com/DemianLi/nexus-agent/issues/302)）。
+ *
+ * **跟上一句不同，這一句不用條件句**：清單只在開了 --session-log 的 server 上有，而且只列切得過去的，所以
+ * 「回來的是日誌那一半」是確定的。**「對話沒有保存」也是確定的**，同 CLI `--resume` 的披露：對話不寫進會話日誌
+ * （門 B 沒開），這條線也不重播——畫面一定從空的開始。
+ */
+export const SWITCHED_THREAD_NOTICE =
+  '切到以前的一條 thread。這條會話的對話沒有保存，畫面從空的開始；跟著回來的是目標、todo、' +
+  '沙箱模式與計劃模式。';
+
+const ORIGIN_NOTICE: Readonly<Record<ThreadChoice['origin'], string | undefined>> = {
+  fresh: undefined,
+  recalled: RESUMED_THREAD_NOTICE,
+  listed: SWITCHED_THREAD_NOTICE,
+};
 
 /**
  * 送出框裡那句灰字。
@@ -89,16 +109,19 @@ export function App({ client }: { client?: WireClient } = {}) {
   useEffect(() => {
     rememberThread(choice.threadId);
   }, [choice.threadId]);
+  // 一個 App 一個 client：清單與對話走同一條線。放在這裡而不是 hook 裡，是因為清單不屬於任何一條 thread。
+  const wire = useMemo(() => client ?? createAgentClient(), [client]);
 
   // **換 thread 就整個重掛。** 只換 `threadId` 的話 hook 會重開下行，但上一條的 transcript、
-  // 錯誤與命令清單都還留在它的 state 裡——畫面會把兩條 thread 混成一條。
+  // 錯誤與命令清單都還留在它的 state 裡——畫面會把兩條 thread 混成一條。從清單切過去也走這一條（#261 的重掛）。
   return (
     <ConversationView
       key={choice.threadId}
+      client={wire}
       threadId={choice.threadId}
-      resumed={choice.resumed}
-      onNewConversation={() => setChoice({ threadId: crypto.randomUUID(), resumed: false })}
-      {...(client === undefined ? {} : { client })}
+      notice={ORIGIN_NOTICE[choice.origin]}
+      onNewConversation={() => setChoice({ threadId: crypto.randomUUID(), origin: 'fresh' })}
+      onSwitch={(threadId) => setChoice({ threadId, origin: 'listed' })}
     />
   );
 }
@@ -106,16 +129,19 @@ export function App({ client }: { client?: WireClient } = {}) {
 function ConversationView({
   client,
   threadId,
-  resumed,
+  notice,
   onNewConversation,
+  onSwitch,
 }: {
-  readonly client?: WireClient;
+  readonly client: WireClient;
   readonly threadId: string;
-  readonly resumed: boolean;
+  readonly notice: string | undefined;
   readonly onNewConversation: () => void;
+  readonly onSwitch: (threadId: string) => void;
 }) {
-  const conversation = useConversation(client === undefined ? { threadId } : { client, threadId });
+  const conversation = useConversation({ client, threadId });
   const [draft, setDraft] = useState('');
+  const [listOpen, setListOpen] = useState(false);
 
   // **一顆中斷一張卡**（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
   // 同一輪兩個工具都要核准時閘門逐次呼叫各自 `interrupt()`，折疊器逐 `interruptId`
@@ -156,10 +182,23 @@ function ConversationView({
             沒有重播就沒有卡片，送出去只會被「停在核准點」擋回來——這顆按鈕是那一格唯一的出口。
             server 那端的 run 不會因此停下，跟關掉分頁一樣。
           */}
-          <Button type="button" variant="outline" size="sm" onClick={onNewConversation}>
-            新對話
-          </Button>
+          <div className="flex items-center gap-2">
+            {/* 同「新對話」永遠按得動：切走不會停掉這一條在 server 上的 run。 */}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-expanded={listOpen}
+              onClick={() => setListOpen((open) => !open)}
+            >
+              以前的會話
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={onNewConversation}>
+              新對話
+            </Button>
+          </div>
         </div>
+        {listOpen && <ThreadList client={client} currentThreadId={threadId} onPick={onSwitch} />}
         <StatusLine
           state={conversation.state}
           connected={conversation.connected}
@@ -177,7 +216,7 @@ function ConversationView({
             : { slashNotice: conversation.slashNotice })}
         />
         {/* 不掛 `role="status"`：那一格歸 `StatusLine`，這一句是背景，不是現況。 */}
-        {resumed && <p className="text-muted-foreground text-xs">{RESUMED_THREAD_NOTICE}</p>}
+        {notice !== undefined && <p className="text-muted-foreground text-xs">{notice}</p>}
       </header>
 
       <section className="flex flex-1 flex-col gap-4">
