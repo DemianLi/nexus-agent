@@ -88,22 +88,13 @@ export interface ToolEntry {
 /**
  * 人在核准點上按了什麼。
  *
- * **這一則只有本地記得：下行不回聲決定。** 當初的實測是在**基座機制**上做的——中斷
- * 發生在 `afterModel`，tools node 從沒跑，而拒絕產生的那則 error ToolMessage 走
- * `updates`（白名單外），「全拒絕」與「一核准一拒絕」在下行上一模一樣。**那個機制在
- * [#112](https://github.com/DemianLi/nexus-agent/pull/112) 之後不是產品路徑了**（中斷改
- * 在 `wrapToolCall` 裡，拒絕會產生一則 `status` 為 error 的 ToolMessage）。
- *
- * **產品路徑 2026-09-09 量了，答案是它不會變成任何一顆 `tools` frame**
- * （`apps/harness/src/rejection-wire.test.ts`）：閘門的 `interrupt()` 與 `denial()` 都在
- * `handler(request)` **之前**，那一格從頭到尾沒進到基座發生命週期事件的那一段，所以連
- * `tool-started` 都沒有；同一份檔案裡核准那條是對照組，證明線本身收得到 `tools` frame。
- * **別把 `ask_user_question` 那條的測量套過來**——那顆的 `interrupt()` 在工具本體裡，
- * `tool-started` 早就發過了，掛著那段看得到 `tool-error`（`tool-frame-classify.test.ts`）。
- *
- * 結論因此比原本寫的更強：不是「不靠那個機制」，是**兩個機制都量過，下行都沒有一個欄位
- * 說「人按了什麼」**。所以決定要跟 {@link appendHumanTurn} 一樣在送出的那一刻自己寫進來，
- * 那不是裝飾，是唯一的紀錄。
+ * **這一則只有本地記得：下行不回聲決定。** 被拒的那顆呼叫在下行上有卡——pump 從會話日誌的
+ * `tool/call` 開、`tool/result` 收，畫成失敗、紅字是拒絕理由
+ * （[#297](https://github.com/DemianLi/nexus-agent/issues/297)，`apps/harness/src/rejection-wire.test.ts`）
+ * ——但卡說的是「這顆沒執行、模型看到了什麼」，**不說人按了什麼**：同一張失敗的卡也可能來自
+ * 規則直接擋、或沒有核准管道。我們沒有 dsh 的 `approval/asked`／`approval/decided`
+ * （[#220](https://github.com/DemianLi/nexus-agent/issues/220) 認帳不做），所以決定要跟
+ * {@link appendHumanTurn} 一樣在送出的那一刻自己寫進來，與那張卡並存——那不是裝飾，是唯一的紀錄。
  */
 export interface DecisionEntry {
   readonly kind: 'decision';
@@ -277,9 +268,8 @@ export function appendHumanTurn(state: ConversationState, text: string): Convers
 /**
  * 把人剛按下去的那個決定放進來，並把核准請求收掉。
  *
- * 跟 {@link appendHumanTurn} 同一個理由：**線上不回聲**。差別在這件事更嚴重——
- * 使用者說的話至少還會以模型的回應間接留下痕跡，而一個被拒絕的工具呼叫在下行上
- * 一顆 frame 都沒有（實測），這則 entry 是它存在過的唯一證據。
+ * 跟 {@link appendHumanTurn} 同一個理由：**線上不回聲**。被拒的那顆呼叫下行上有一張失敗的卡，
+ * 但「是人按了拒絕」只有這一則說得出來，見 {@link DecisionEntry}。
  *
  * 認不得那顆 `interruptId` 時原樣回傳：重複按下去的第二次不該憑空長出一則紀錄。
  * **問答那一顆也不收**——那條路的紀錄是 {@link appendAnswers}，形狀不同。
@@ -626,6 +616,28 @@ interface LifecycleData {
   readonly aborted?: boolean;
 }
 
+/** 一輪收掉時還沒有結果的那次呼叫，卡上的紅字。 */
+export const UNFINISHED_TOOL_TEXT = '這一輪已經結束，這次呼叫沒有結果';
+
+/**
+ * 這一輪關了（停止、失敗、或不是停在等人的收尾），還在執行中或掛著的工具卡收成失敗。
+ *
+ * 照 dsh：一輪或一步關閉時沒有 `tool/result` 的呼叫，畫成一則 `Interrupted` 的錯誤結果
+ * （`packages/client/ui-chat/src/client/conversation-nodes/tool.ts` 的 `projectBlock` 與
+ * `interruption`，`c291e79`）——關閉的原因不分。有結果的那些 pump 已經照日誌收了；產品路徑上會走到
+ * 這裡的是停在核准點時按了停止、等核准的在子代理裡（pump 只替 root 懸著的那幾顆寫結果）。正常收尾
+ * 的那一支今天沒有生產者：圍堵記了 `tool/call` 之後，`tool/result` 只有日誌寫不進去時才會缺。
+ */
+function settleUnfinishedTools(
+  entries: readonly ConversationEntry[],
+): readonly ConversationEntry[] {
+  return entries.map((entry) =>
+    entry.kind === 'tool' && (entry.status === 'running' || entry.status === 'suspended')
+      ? { ...entry, status: 'failed', error: UNFINISHED_TOOL_TEXT }
+      : entry,
+  );
+}
+
 function reduceLifecycle(
   state: ConversationState,
   namespace: readonly string[],
@@ -639,13 +651,13 @@ function reduceLifecycle(
   if (data.aborted === true) {
     // **人按了停止**（#276）。先於 `failed`／`completed` 判：被切斷的那一次基座發的是 `failed`，
     // 那不是失敗。停在核准點時的收回也走這裡，所以掛著的卡片一起收掉——伺服器那側已經收回了。
-    // 還在吐字的那幾則標成被打斷。
+    // 還在吐字的那幾則標成被打斷，還沒有結果的工具卡收成失敗。
     return {
       ...state,
       status: 'stopped',
       error: undefined,
       pendings: [],
-      entries: state.entries.map((entry) =>
+      entries: settleUnfinishedTools(state.entries).map((entry) =>
         entry.kind === 'ai' && entry.streaming
           ? { ...entry, streaming: false, stopped: true }
           : entry,
@@ -658,8 +670,8 @@ function reduceLifecycle(
     // 那張卡片因此不會留在畫面上等一個已經被別人回答掉的問題。
     //
     // **僅止於此。** 決定本身是本地的（見 {@link appendDecision}），所以旁觀的那一端
-    // 只知道「不必再問了」，不知道人按了什麼——它的 transcript 上沒有那一則。這條線
-    // 不回聲決定，這一層補不出來。
+    // 看得到被拒那顆的失敗卡（pump 從日誌開、收，#297），不知道是人按了拒絕——它的
+    // transcript 上沒有那一則。這條線不回聲決定，這一層補不出來。
     // **清空全部，靠再度中斷把沒答的那些接回來。** 同一輪多顆時這一顆 `running` 是答完
     // 其中一顆之後那個新 run 發的，而沒被答到的中斷會在同一個 run 裡帶著原本那顆 id
     // 再度發一次 `input.requested`（實測），上面的覆寫因此是冪等的。留著不清的話，
@@ -667,11 +679,19 @@ function reduceLifecycle(
     return { ...state, pendings: [], status: 'running', error: undefined };
   }
   if (data.event === 'failed') {
-    return { ...state, status: 'failed', error: data.error ?? '未指名的錯誤' };
+    return {
+      ...state,
+      status: 'failed',
+      error: data.error ?? '未指名的錯誤',
+      entries: settleUnfinishedTools(state.entries),
+    };
   }
   if (data.event === 'completed') {
-    // **中斷時 root 照樣發 completed**，所以停在核准點的那一輪不能被它翻成 idle。
-    return state.status === 'awaiting-input' ? state : { ...state, status: 'idle' };
+    // **中斷時 root 照樣發 completed**，所以停在核准點的那一輪不能被它翻成 idle，卡也不收——
+    // 那一輪還沒關，卡還在等人。
+    return state.status === 'awaiting-input'
+      ? state
+      : { ...state, status: 'idle', entries: settleUnfinishedTools(state.entries) };
   }
   return state;
 }

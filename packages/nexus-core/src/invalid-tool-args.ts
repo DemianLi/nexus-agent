@@ -34,12 +34,14 @@
  *
  * ### 為什麼叫 `handler` 而不是直接回訊息
  *
- * web 的工具卡來自基座的 `tools` frame，而 `tool-started` 只在工具真的被 invoke 時才發
- * （`@langchain/langgraph@1.4.12` `dist/pregel/stream.js:108-129`；核准拒絕那條連卡都沒有，見
- * `apps/harness/src/rejection-wire.test.ts`）。直接回訊息的話，那一顆在畫面上不存在。
+ * 當初的理由是 web 的工具卡：卡來自基座的 `tools` frame，而 `tool-started` 只在工具真的被 invoke
+ * 時才發（`@langchain/langgraph@1.4.12` `dist/pregel/stream.js:108-129`），直接回訊息的話那一顆在畫面上
+ * 不存在。**這個理由在 [#297](https://github.com/DemianLi/nexus-agent/issues/297) 之後不成立了**：卡改從
+ * 會話日誌的 `tool/call` 開，本體沒被呼叫到的呼叫一樣有卡。樁照舊叫 `handler`，行為沒有跟著改。
  *
- * 那張卡的 `input` 是歷史裡的 `{}`；**換成原字串的是 pump**（`apps/harness/src/thread-pump.ts`），
- * 原字串從同一條串流上模型那一段學來。不在這裡換，理由寫在 `wrapToolCall` 那一行。
+ * 基座那張卡的 `input` 是歷史裡的 `{}`；**換成原字串的是 pump**（`apps/harness/src/thread-pump.ts`），
+ * 原字串從同一條串流上模型那一段學來。不在這裡換，理由寫在 `wrapToolCall` 那一行。從日誌開的那一顆
+ * 本來就是原字串（圍堵記的就是它）。
  *
  * ### 位置：每一層的最內側
  *

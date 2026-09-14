@@ -24,21 +24,28 @@
  *    蒸發了，下行上一顆 frame 都看不出來。所以 pump 記著還掛著的那些中斷
  *    （{@link ThreadPump.awaitingInput}），讓上行那一側擋得下來。
  *
- * ## 工具卡的終態以日誌為準（[#296](https://github.com/DemianLi/nexus-agent/issues/296)）
+ * ## 工具卡從日誌開、以日誌收（[#296](https://github.com/DemianLi/nexus-agent/issues/296)、[#297](https://github.com/DemianLi/nexus-agent/issues/297)）
  *
  * dsh 的 web 工具卡只從會話日誌導出：`tool/call` 開卡、`tool/result` 收卡，文字是那則結果的內容
- * （`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:52-66`，`c291e79`）。`tool/result`
- * 在所有鉤子之後才寫，所以事後被改成錯誤的結果，畫面上就是錯誤。
+ * （`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:40-66`，`c291e79`）。`tool/call`
+ * 在核准之前就寫（`packages/core/agent-loop/src/tool-calls.ts:168`），`tool/result` 在所有鉤子之後
+ * 才寫，所以等核准時畫面上已經有卡，事後被改成錯誤的結果畫面上就是錯誤。
  *
- * 我們的卡來自基座的 `tools` frame，而基座在**工具本體裡**就發了 `tool-finished`——之後才輪到把
- * 結果改掉的 middleware。所以 pump 訂閱會話註冊表（子代理的日誌也在裡面），**終態改以圍堵寫的
- * `tool/result` 為準**：判定先到就套在那顆 `tool-finished` 上，後到就補發一顆同 id 的更正。紅字的
- * 文字來自圍堵發佈那顆事件時放的側表（`@nexus/core` 的 `toolResultTextOf`），因為日誌不帶內容（#264）。
+ * 我們的 `tools` frame 是基座在**工具本體**被呼叫時發的：本體沒被呼叫到的那些——核准閘門、先讀後改、
+ * plan-mode 在 `handler` 之前擋下的，分派前就中止的，基座找不到的工具——一顆都沒有；本體之後才把結果
+ * 改掉的 middleware，基座也看不到。所以 pump 訂閱會話註冊表（子代理的日誌也在裡面）：
  *
- * **登記的偏離縮成一條：開卡與逐字片段仍走基座的 `tools` frame**，不從 `tool/call` 開卡。handler
- * 之前就被擋的呼叫因此沒有卡（[#297](https://github.com/DemianLi/nexus-agent/issues/297) 追）。
- * 射程也只到經過圍堵的呼叫——圍堵是每一層 middleware 陣列的第 0 格，基座自己長出來、沒有我們
- * middleware 的 agent 不會寫 `tool/result`，那裡照舊只剩本體的 `status`。
+ * - **開卡**：圍堵寫 `tool/call` 的那一刻合成一顆 `tool-started`（{@link ThreadPump.#openCard}）。
+ * - **收卡**：圍堵寫的 `tool/result` 為準。基座那顆 `tool-finished` 已轉發就補發更正、還在路上就等它
+ *   來了套上；基座從沒開始的，由這裡合成收尾（{@link ThreadPump.#noteVerdict}）。紅字的文字來自圍堵
+ *   發佈那顆事件時放的側表（`@nexus/core` 的 `toolResultTextOf`），因為日誌不帶內容（#264）。
+ *
+ * **登記的偏離剩兩條。** 一、**基座的 `tools` frame 照舊轉發**，同一張卡因此收得到兩顆 `tool-started`
+ * （合成的先、基座的後，折疊器照 id 取代）：子代理的歸屬只從 `task` 那顆 frame 的 `namespace[0]` 學，
+ * 而那一段是基座的 task id，日誌上沒有（`@nexus/core` 的 `toolCallSessionAddress` 正是把它去掉的）。
+ * 二、**逐字片段仍走基座的 frame**，同 #296。射程只到經過圍堵的呼叫——圍堵是每一層 middleware 陣列的
+ * 第 0 格，基座自己長出來、沒有我們 middleware 的 agent 不寫 `tool/call`／`tool/result`，那裡照舊只有
+ * 基座的 frame。
  */
 
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
@@ -53,6 +60,8 @@ import {
   TOOL_ABORTED_TEXT,
   TURN_CANCEL_CONFIG_KEY,
   toolResultTextOf,
+  type SessionAddress,
+  type SessionEntry,
   type SessionEvent,
   type SessionEventMap,
   type SessionLog,
@@ -330,6 +339,18 @@ function applyVerdict(
   };
 }
 
+/**
+ * 從日誌開的那張卡，掛在哪個 namespace 上（#297）。
+ *
+ * 折疊器只看得懂兩件事：長度 ≤ 1 是 root，否則拿 `namespace[0]` 去查 `task` 那顆 frame 記下的子代理
+ * （`@nexus/wire` 的 `attribute`）。子代理的 `runId` 就是父圖那次 `task` 呼叫的命名空間，與基座給那顆
+ * `task` frame 的 `namespace[0]` 同一個值；第二段只是讓長度過 1，基座那一段（本次呼叫自己的 task id）
+ * 日誌上沒有。
+ */
+function cardNamespace(address: SessionAddress): readonly string[] {
+  return address.kind === 'root' ? [] : [address.runId, 'tools'];
+}
+
 /** 這顆中斷在問幾件事。問不出來就當 0——上行那側只在數得出來時才校驗。 */
 /** 一次輸入在日誌上的那顆頭。**三種各自對應一個 `kind`**，見 `session-log.ts`。 */
 function turnStartOf(input: PumpInput): SessionEventMap['turn/start'] {
@@ -485,6 +506,18 @@ export class ThreadPump {
    * 兩種先後都會發生。
    */
   readonly #earlyVerdicts = new Map<string, ToolVerdict>();
+  /**
+   * 從日誌 `tool/call` 開過、還沒收的卡：callId → 它的 namespace（#297）。
+   *
+   * **活在 thread 上、不是 run 上**，理由同 {@link ThreadPump.#invalidArguments}：被核准閘門中斷的那顆，
+   * `tool/call` 在第一個 run 記一次，resume 之後圍堵再進一次、再記一次。第二次不再開卡。
+   */
+  readonly #openCards = new Map<string, readonly string[]>();
+  /**
+   * 這一輪轉發過基座 `tool-started` 的 callId：本體被呼叫到了，它那顆 `tool-finished` 會來。
+   * 不在這裡的，落定時由 pump 自己收卡。
+   */
+  readonly #bodyStarted = new Set<string>();
   /** 收掉日誌的訂閱：註冊表那一層，與每一份日誌那一層。 */
   readonly #unobserveLogs: () => void;
   /** 一個 thread 一次只跑一個 run；後到的 submit 排隊，不平行跑。 */
@@ -541,8 +574,8 @@ export class ThreadPump {
     // 訂閱**註冊表**，不是只訂 root：子代理的日誌後來才開，`observe` 會補上每一份（#296）。
     // 這個回呼跑在寫日誌那一層的堆疊上，而註冊表不接訂閱者的例外——`subscribe` 本身不會拋。
     const unsubscribes: (() => void)[] = [];
-    const unobserve = this.#sessions.observe(({ log }) => {
-      unsubscribes.push(log.subscribe((event) => this.#noteVerdict(log, event)));
+    const unobserve = this.#sessions.observe((entry) => {
+      unsubscribes.push(entry.log.subscribe((event) => this.#noteLogEvent(entry, event)));
     });
     this.#unobserveLogs = () => {
       unobserve();
@@ -773,10 +806,11 @@ export class ThreadPump {
   async #withdraw(): Promise<void> {
     const log = this.#sessions.root;
     log.append('turn/start', { kind: 'resume' });
+    const started = (name: string) => name === DELEGATION_TOOL;
+    let dangling: { readonly id: string; readonly name: string }[];
     try {
       const config: ThreadConfig = { configurable: { thread_id: this.#threadId } };
-      const dangling = danglingToolCalls((await this.#agent.getState(config)).values);
-      const started = (name: string) => name === DELEGATION_TOOL;
+      dangling = danglingToolCalls((await this.#agent.getState(config)).values);
       for (const call of dangling) {
         log.append('tool/result', {
           callId: call.id,
@@ -805,6 +839,14 @@ export class ThreadPump {
       const failure = error instanceof Error ? error : new Error(String(error));
       log.append('turn/failed', { message: failure.message });
       throw failure;
+    }
+    // 那幾張卡照上面寫的 `tool/result` 收（#297）。**不走日誌的訂閱者**：它只認有 run 的時候，
+    // 見 `#noteVerdict`。文字就是寫進對話的那一句，模型看到的也是它。
+    for (const call of dangling) {
+      this.#closeCard(call.id, {
+        failed: true,
+        text: started(call.name) ? TOOL_ABORTED_TEXT : TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
+      });
     }
     // 看得到那張核准卡的每一條下行都要知道「不必再問了、這一輪停了」。這一顆是合成的：
     // 沒有 run，就沒有基座發的收尾 frame。
@@ -937,11 +979,12 @@ export class ThreadPump {
     } finally {
       if (this.#current === current) this.#current = undefined;
       // 一輪裡的判定在這一輪裡就落定了：圍堵在 `wrapToolCall` 回傳之前寫，而圖要等每一顆工具回傳
-      // 才走得完，串流才收得了尾。剩下的是沒有卡的那幾顆——handler 之前就被擋的、本體拋錯走
-      // `tool-error` 的——與沒接日誌的組裝轉發過的，留著只佔記憶體。**哪天有一層在回傳之後才非同步
+      // 才走得完，串流才收得了尾。剩下的是已經由日誌收掉的那幾顆（本體沒被呼叫到、或本體拋錯走
+      // `tool-error` 的）與沒接日誌的組裝轉發過的，留著只佔記憶體。**哪天有一層在回傳之後才非同步
       // 寫 `tool/result`，這裡會把它的判定靜靜丟掉**，而沒有測試會紅。
       this.#forwardedFinishes.clear();
       this.#earlyVerdicts.clear();
+      this.#bodyStarted.clear();
     }
   }
 
@@ -1057,6 +1100,9 @@ export class ThreadPump {
       );
     }
     if (shaped.event !== 'tool-started') return classified;
+    if (this.#current !== undefined) this.#bodyStarted.add(shaped.tool_call_id);
+    // 從日誌開的卡已經帶著原字串（圍堵記的就是它），折疊器對重複的 `tool-started` 也不換 `input`；
+    // 這一支留給沒接日誌、只有基座 frame 的組裝。
     const raw = this.#invalidArguments.get(shaped.tool_call_id);
     if (raw === undefined) return classified;
     this.#invalidArguments.delete(shaped.tool_call_id);
@@ -1079,21 +1125,80 @@ export class ThreadPump {
   }
 
   /**
-   * 日誌的訂閱者：一顆 `tool/result` 落定了（#296）。
+   * 日誌的訂閱者（#296、#297）。
    *
    * **這裡跑在寫日誌那一層的呼叫堆疊上**（圍堵的 `wrapToolCall`），而且在發佈期間——不能 `append`
-   * （日誌的重入防護會拋），拋了也只換來一行 warn、判定就丟了。所以只動兩張表與下行的佇列。
+   * （日誌的重入防護會拋），拋了也只換來一行 warn、判定就丟了。所以只動幾張表與下行的佇列。
+   */
+  #noteLogEvent(entry: SessionEntry, event: SessionEvent): void {
+    if (event.type === 'tool/call') this.#openCard(entry.address, event.data);
+    else if (event.type === 'tool/result') this.#noteVerdict(entry.log, event);
+  }
+
+  /**
+   * 圍堵記下一顆 `tool/call`：開卡，照 dsh 的 `rootCall`（#297）。
    *
-   * **只認這一輪裡的**：pump 自己也寫 `tool/result`（停在核准點時收回，#276），那時沒有 run，那幾顆
-   * 也沒有卡。**只更正轉發過的**：handler 之前就被擋的那幾顆沒有卡，要不要替它們開卡是
-   * [#297](https://github.com/DemianLi/nexus-agent/issues/297) 的事。
+   * **在 `handler` 之前**，所以等核准的、會被擋下的、基座找不到的都有卡；本體後來真的被呼叫到的話，
+   * 基座那顆 `tool-started` 晚到，折疊器照 id 取代。`input` 是圍堵記的那一格——平常是參數物件序列化後
+   * 的字串，解不開的那顆是模型吐的原字串。
+   */
+  #openCard(address: SessionAddress, call: SessionEventMap['tool/call']): void {
+    if (this.#openCards.has(call.callId)) return;
+    const namespace = cardNamespace(address);
+    this.#openCards.set(call.callId, namespace);
+    this.#broadcast(
+      this.#seal({
+        method: 'tools',
+        params: {
+          namespace,
+          timestamp: Date.now(),
+          data: {
+            event: 'tool-started',
+            tool_call_id: call.callId,
+            tool_name: call.name,
+            input: call.arguments,
+          },
+        },
+      } as Event),
+    );
+  }
+
+  /** 由 pump 自己收一張卡：合成一顆 `tool-finished`，掛在開卡時那個 namespace 上。 */
+  #closeCard(callId: string, verdict: ToolVerdict): void {
+    const namespace = this.#openCards.get(callId) ?? [];
+    this.#openCards.delete(callId);
+    this.#broadcast(
+      this.#seal({
+        method: 'tools',
+        params: {
+          namespace,
+          timestamp: Date.now(),
+          data: applyVerdict({ event: 'tool-finished', tool_call_id: callId }, verdict),
+        },
+      } as Event),
+    );
+  }
+
+  /**
+   * 一顆 `tool/result` 落定了：卡的終態以它為準。
+   *
+   * 三種情況：
+   *
+   * - 基座那顆 `tool-finished` **已經轉發**：跟它對一次，不同就補發一顆同 id 的更正（#296）。
+   * - 基座那顆 `tool-started` 轉發過、`tool-finished` **還在路上**：記著，它來了再套上（#296）。
+   * - **基座這一輪沒轉發過 `tool-started`**：本體沒被呼叫到，或它那顆還在串流上沒抽到——落定的這一刻
+   *   分不出來（判定與 frame 誰先到 pump 因生產者而異）。**兩種都當場收卡**，並且照樣記著：真的晚到的
+   *   `tool-started` 會把卡翻回執行中，緊接著的 `tool-finished` 再套上同一個判定，終態一樣（#297）。
+   *
+   * **只認這一輪裡的**：pump 自己也寫 `tool/result`（停在核准點時收回，#276），那時沒有 run，那幾張卡由
+   * {@link ThreadPump.#withdraw} 就地收；在這裡記著的話，會被當成下一輪同 id 那顆的判定。
    *
    * **判定是雙向的**，照拍板「本體的 `status` 不再決定終態」：日誌說成功，本體自己標的 `failed` 也拿掉。
    * 今天樹上沒有「本體錯、日誌成功」的生產者（handler 之後改結果的只往錯誤那邊改；剪工具結果的那一層
    * 原樣帶 `status`），所以這一向目前只是對稱，沒有案例。
    */
-  #noteVerdict(log: SessionLog, event: SessionEvent): void {
-    if (event.type !== 'tool/result' || this.#current === undefined) return;
+  #noteVerdict(log: SessionLog, event: SessionEvent<'tool/result'>): void {
+    if (this.#current === undefined) return;
     const { callId, isError } = event.data;
     const verdict: ToolVerdict = {
       failed: isError,
@@ -1102,8 +1207,11 @@ export class ThreadPump {
     const forwarded = this.#forwardedFinishes.get(callId);
     if (forwarded === undefined) {
       this.#earlyVerdicts.set(callId, verdict);
+      if (this.#bodyStarted.has(callId)) this.#openCards.delete(callId);
+      else this.#closeCard(callId, verdict);
       return;
     }
+    this.#openCards.delete(callId);
     this.#forwardedFinishes.delete(callId);
     const settled = applyVerdict(forwarded.data, verdict);
     if (settled.failed === forwarded.data.failed && settled.message === forwarded.data.message) {
