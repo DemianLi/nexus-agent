@@ -29,6 +29,7 @@ import {
 import type { InvariantError, NexusPlugin, SessionEvent } from '@nexus/core';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import type { Event } from '@nexus/wire';
+import { emptyConversation, reduceConversation } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
@@ -409,9 +410,22 @@ describe.each([
         .filter((frame) => frame.method === 'tools')
         .map((frame) => frame.params.data as Record<string, unknown>)
         .filter((data) => data.tool_call_id === 'call_bad');
-      expect(tools.map((data) => data.event)).toEqual(['tool-started', 'tool-finished']);
-      expect(tools[0]).toMatchObject({ tool_name: 'echo', input: raw });
-      expect(tools[1]).toMatchObject({ failed: true, message: INVALID_ARGUMENTS_REFUSAL });
+      // 卡從日誌開（#297）：第一顆是 pump 照 `tool/call` 合成的，基座那顆晚到、折疊器照 id 取代。
+      // 中間可能夾一顆合成的收尾——判定比基座那顆 `tool-started` 先到 pump 時就當場收，順序不固定。
+      expect(tools[0]).toMatchObject({ event: 'tool-started', tool_name: 'echo', input: raw });
+      // 兩個來源給的 `input` 都是原字串：日誌記的就是它，基座那顆由 pump 換回（#269）。
+      expect(
+        tools.filter((data) => data.event === 'tool-started').map((data) => data.input),
+      ).toEqual(expect.arrayContaining([raw]));
+      expect(
+        tools.filter((data) => data.event === 'tool-started').every((data) => data.input === raw),
+      ).toBe(true);
+      const card = frames
+        .reduce(reduceConversation, emptyConversation())
+        .entries.filter((entry) => entry.kind === 'tool');
+      expect(card).toMatchObject([
+        { name: 'echo', input: raw, status: 'failed', error: INVALID_ARGUMENTS_REFUSAL },
+      ]);
 
       expect(toolEvents(pump.sessions.root.events)).toEqual(refusedPair('call_bad', 'echo', raw));
       expect(bodies).toEqual([]);
