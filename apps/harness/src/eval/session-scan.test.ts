@@ -160,7 +160,20 @@ describe('鏈的邊界對到提醒器的哪一條', () => {
     });
   });
 
-  it('session/end-seed 清零：重開之後對話是空的', () => {
+  it('跨過 session/end-seed 的鏈斷在下一顆頭上：重開之後第一顆呼叫前面一定是人話或續行', () => {
+    // 前提由 `serve-history.test.ts` 釘著：重開之後回答舊中斷拿到 no_such_interrupt，接不出 resume 的頭。
+    // 提醒器那側同一個位置是一則素的 HumanMessage，不論續接有沒有把對話灌回去都清零。
+    const across = [
+      turn('message'),
+      ...same(3),
+      ['session/end-seed', {}] as const,
+      turn('message'),
+      ...same(3),
+    ];
+    expect(scan(across).longestRun).toMatchObject({ count: 3 });
+  });
+
+  it('寫不出來的形狀：接縫之後沒有頭就有呼叫，end-seed 照樣清零', () => {
     const across = [turn('message'), ...same(3), ['session/end-seed', {}] as const, ...same(3)];
     expect(scan(across).longestRun).toMatchObject({ count: 3 });
   });
