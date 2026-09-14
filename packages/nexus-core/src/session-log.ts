@@ -18,15 +18,27 @@
  * **要繼續留著、也不要去讀這裡的號**：那個是傳輸層給瀏覽器排序去重用的，這裡的是耐久
  * 序號，兩個號兩個工作。讓其中一個去冒充另一個，正是 (A) 被否掉的理由。
  *
- * **這一版刻意不記訊息內容。** 兩條路拿得到的顆粒度不一樣——web 那條經
- * `streamEvents` 收到的是 `messages` **分片**，CLI 那條經 `stream(['updates'])` 收到的是
- * **完整訊息**。要把兩者記成同一種事件，得在某一側重組，而重組出來的東西是合成的、
- * 不是量到的。v1 只收兩條路都**原樣**產得出來的那個交集：turn 邊界、中斷、失敗。
- * 補訊息是後面的事，補的時候要先講清楚顆粒度怎麼對齊。
+ * **從格式 9 起它記訊息內容，而且日誌是對話的真相**（[#305](https://github.com/DemianLi/nexus-agent/issues/305)）。
+ * 1 到 8 刻意不記，理由是兩條路拿得到的顆粒度不一樣——web 那條經 `streamEvents` 收到的是
+ * `messages` **分片**，CLI 那條經 `stream(['updates'])` 收到的是**完整訊息**，要記成同一種事件
+ * 得在某一側重組。**那個理由綁的是寫入點在進入點**：寫入點換成 fold 自己建的 middleware 之後
+ * （模型回覆在 {@link ./model-calls.ts} 的 `wrapModelCall`，工具結果在{@link ./containment.ts | 圍堵}），
+ * 兩條路看到的是同一次呼叫回來的同一則完整訊息，沒有東西要重組。訊息的形狀是
+ * {@link ./logged-message.ts | LoggedMessage}。
+ *
+ * 照 dsh，模型歷史由日誌推出來（`packages/core/session/src/index.ts` 的 `deriveMessages()`），推的
+ * 那一側是 [#306](https://github.com/DemianLi/nexus-agent/issues/306)。所以**模型看得到的每一則
+ * 訊息都要有一顆事件帶著它**：人打的字在 `turn/start`，模型回覆在 `assistant/message`，工具結果在
+ * `tool/result`，外掛塞進對話的在 `user/message`，壓縮的摘要在 `compaction/summary`。**三個例外
+ * 都是基座寫的、推得回來的**：`patchToolCallsMiddleware` 替沒配到結果的呼叫補的結果（推的一側照 dsh
+ * 的 `repair.ts` 自己補），過大的工具結果被搬去檔案之後換上的預覽（見 `tool/result`），過長的一則
+ * 人話被標上的 `lc_evicted_to`（基座在模型那一格照記號重算，推回來的那則沒有記號就不重算——那是
+ * 20 萬字元以上的一則話，推的一側要自己判）。
  */
 
 import type { FeedbackRecord, MessageFeedbackDelete, MessageFeedbackPut } from './feedback.js';
 import type { GoalChangeMeta, GoalId } from './goal.js';
+import type { LoggedMessage } from './logged-message.js';
 import type { TodoItem } from './todo.js';
 import type { SandboxMode } from './sandbox.js';
 import type { ToolErrorInfo } from './tool-events.js';
@@ -104,8 +116,17 @@ import type { ToolErrorInfo } from './tool-events.js';
  * 後兩顆**——評分只在 web
  * （[#267](https://github.com/DemianLi/nexus-agent/issues/267) 的 Q4），這是第一種只有一條路產得
  * 出來的事件；它們描述的是人事後怎麼看，不是模型做了什麼，所以「兩條路的顆粒度要對齊」在這裡
- * 沒有指涉對象。**三顆都只進日誌、不進模型**：對話住在 checkpointer，寫它們的人沒有一個碰
- * `updateState`。見 [#278](https://github.com/DemianLi/nexus-agent/issues/278)。
+ * 沒有指涉對象。**三顆都只進日誌、不進模型**：寫它們的人沒有一個碰 `updateState`，推模型歷史的
+ * 一側也不讀它們。見 [#278](https://github.com/DemianLi/nexus-agent/issues/278)。
+ *
+ * `assistant/message` 生產者同第四種（{@link ./model-calls.ts | createModelCallRecorder}，就是寫
+ * `model/start`／`model/end` 那一顆），理由同 `model/usage`，也寫得進 subagent 那份。**它有第二個
+ * 寫者：web 的 pump**，只在一種情況——人按了停止、模型講到一半，那半段由 pump 寫回對話，同時寫
+ * 一顆 `interrupted: true` 的（CLI 沒有停止這條路，見 `cli.ts` 的 `runRepl`）。
+ *
+ * `user/message` 兩個寫者各走一條舊路：repeat-reminder 走 `model/usage` 那條（fold 自己建的
+ * middleware，它的 `beforeModel`），goal 的收尾走 `tool/result` 那條（圍堵，從工具回的 `Command`
+ * 裡讀出來）。見 [#305](https://github.com/DemianLi/nexus-agent/issues/305)。
  */
 export type SessionEventType =
   | 'turn/start'
@@ -119,6 +140,8 @@ export type SessionEventType =
   | 'model/usage'
   | 'model/start'
   | 'model/end'
+  | 'assistant/message'
+  | 'user/message'
   | 'compaction/summary'
   | 'sandbox/mode'
   | 'plan/mode'
@@ -280,6 +303,57 @@ export interface SessionEventMap {
    */
   'model/end': Record<string, never>;
   /**
+   * 一次模型呼叫回來的那一則回覆，**模型看到的原樣**：文字、推理、`tool_calls` 都在 `message` 裡
+   * （{@link ./logged-message.ts | LoggedMessage}）。推模型歷史的一側讀的就是它。
+   *
+   * 照 dsh 的 `assistant/message`（`packages/core/session/src/types.ts:321-329`，`c291e79`）：每一次模型
+   * 呼叫收尾時一顆，不逐字寫。**寫在配對的 `model/end` 之前**，所以順序同 dsh——回覆在前，它派發的
+   * `tool/call` 在後。記的是 {@link ./invalid-tool-args.ts} 改寫過的那則（那顆在它內側）：解不開的呼叫
+   * 在這裡是 `args: {}`，原字串在配對的 `tool/call.arguments`——同一次呼叫兩處不同，但這一則才是之後
+   * 回送給供應商的那則。
+   *
+   * ## `interrupted`
+   *
+   * 人按了停止、畫面上已經有字時，那半段以這一顆記下，帶 `interrupted: true`；正常的回覆整個不放
+   * 這個 key。**這一顆由 pump 在這一輪收尾時寫，落在 `model/end` 之後**——被切斷的那次呼叫在寫入點
+   * 看到的是拋錯，不是回覆。一個字都沒送出就整顆不寫，同 dsh：沒有看得見的內容就不算一則回覆。
+   * 子代理那一層被切斷時回的空訊息同理不寫（`turn-cancel.ts` 的 `stopHere`）。
+   *
+   * ## 對 dsh 的三處偏離
+   *
+   * - **沒有 `stream`**（逐字的時間紀錄）。dsh 重播用的是整則訊息；`stream` 只在串流中途斷線、要把
+   *   還在跑的那次接回來時用，而我們沒有中途重接（wire 拒收 `since`）。寫入點也看不到逐字片段：v3 的
+   *   逐字片段不走模型層的回呼，只有 pump 看得到。
+   * - **沒有 `assistant/attempt`**。失敗、沒產出看得見內容的那一次，dsh 記下它的串流；我們沒有
+   *   `stream` 可記，那一次在日誌上是一對中間沒有 `assistant/message` 的 `model/start`／`model/end`。
+   * - **沒有 `turn`／`step`，也沒有 `usage`**。前兩格同 `tool/call`；用量另有 `model/usage`，而
+   *   `message` 裡的 `usage_metadata` 本來就在。
+   *
+   * ⚠️ **回覆全文原樣進本機日誌、也原樣進遙測**，同 `tool/call` 的 `arguments`。
+   */
+  'assistant/message': { readonly message: LoggedMessage; readonly interrupted?: true };
+  /**
+   * 外掛塞進對話的一則 user-role 訊息——**不是人打的字**，人打的字在 `turn/start`。
+   *
+   * 照 dsh 的 `user/message` 帶 `source: {kind: 'plugin', plugin}`（`packages/llm/llm/src/message.ts`，
+   * `c291e79`；repeat-tool-reminder 與 tool-goal 都這樣注入）。今天兩個生產者：
+   *
+   * - repeat-reminder 的提醒，`plugin` 是那顆 middleware 的名字。落在它提醒的那次模型呼叫的
+   *   `model/start` 之前，同 dsh 在 `agent/pre-step` 注入。
+   * - goal 收尾時注入的那段指示，`plugin` 是回它的那顆**工具**的名字：它包在工具回的 `Command` 裡，
+   *   由圍堵讀出來，而圍堵只知道工具、不知道工具屬於哪個 plugin。落在那次呼叫的 `tool/result` 之後，
+   *   同它在對話裡的位置。
+   *
+   * **偏離**：dsh 的人話也是 `user/message`；我們的在 `turn/start`，而那一格是授權的判別欄，不動它。
+   * 所以這一種只收外掛注入的，`source.kind` 只有 `plugin`。
+   *
+   * ⚠️ 原樣進遙測。
+   */
+  'user/message': {
+    readonly message: LoggedMessage;
+    readonly source: { readonly kind: 'plugin'; readonly plugin: string };
+  };
+  /**
    * 壓縮真的發生了一次：舊訊息被換成一份摘要。**一次摘要一筆**。
    *
    * ## 這是 dsh 三顆事件的哪一顆，以及另外兩顆為什麼不在
@@ -309,8 +383,15 @@ export interface SessionEventMap {
    * `messages.slice(cutoffIndex)`。所以 `cutoffIndex / messagesBefore` 讀得出「這次換掉了
    * 多前面的多少」。
    *
-   * **摘要本文刻意不記。** 檔頭那條「這一版不記訊息內容」在這裡是硬約束不是偏好：
-   * `summaryMessage` 就是模型產的訊息，記了它等於從側門把訊息內容放進日誌與遙測。
+   * **`summary` 是換上去的那則摘要訊息**（從格式 9 起，[#305](https://github.com/DemianLi/nexus-agent/issues/305)），
+   * 照 dsh 的 `compaction/summary` 帶 `summary`（`packages/compaction/compaction/src/types.ts`）。1 到 8 刻意
+   * 不記，理由是檔頭那條「不記訊息內容」；推模型歷史的一側要把被壓掉的那一段換成它，所以它要在日誌裡。
+   * dsh 由緊接著的一顆 `user/message {surfaceOp: replace}` 真正取代那一段；我們沒有 surface 那一軸，
+   * 取代的規則是基座的 `getEffectiveMessages`——`[summaryMessage, ...messages.slice(cutoffIndex)]`，
+   * graph state 裡的 `messages` 本身不動（`deepagents@1.13.1` `dist/langsmith-zm0ILQsV.js:2697-2702`）。
+   * 8 以前的檔沒有這一格，所以型別上是選填。
+   *
+   * ⚠️ 摘要本文原樣進遙測，同 `assistant/message`。
    */
   'compaction/summary': {
     /** 切在原始訊息串的哪裡；`[0, cutoffIndex)` 被換成了那份摘要。 */
@@ -319,6 +400,8 @@ export interface SessionEventMap {
     readonly messagesBefore: number;
     /** 被換掉的原文落在 backend 的哪個檔。**`null` ＝ 沒寫成功，原文消失了**。 */
     readonly filePath: string | null;
+    /** 換上去的那則摘要訊息。 */
+    readonly summary?: LoggedMessage;
   };
   /**
    * 這個會話的**檔案效果政策**現在是哪一格。**每一筆帶整個值**，不是差異。
@@ -393,11 +476,23 @@ export interface SessionEventMap {
     readonly arguments: string;
   };
   /**
-   * 配對的那次呼叫落定了。
+   * 配對的那次呼叫落定了，**帶模型收到的那則結果**（`message`，從格式 9 起）。
    *
-   * **只記結果的判別，不記內容**——這是對 dsh 形狀的偏離：dsh 帶模型看到的整則訊息，而下游
-   * （會話統計、離線掃描）用不到內容，記了等於開半扇門 B（對話重播），那不是這張卡的事
-   * （[#264](https://github.com/DemianLi/nexus-agent/issues/264) 拍板）。
+   * 照 dsh 的 `tool/result {message, error?}`（`packages/core/session/src/types.ts:353-360`，`c291e79`）。
+   * 1 到 8 只記判別、不記內容，那是 [#264](https://github.com/DemianLi/nexus-agent/issues/264) 拍板的
+   * 偏離，理由是「下游用不到內容」——[#305](https://github.com/DemianLi/nexus-agent/issues/305) 之後推模型
+   * 歷史的一側就是下游，那個前提不在了，偏離收回。
+   *
+   * **`message` 是選填，兩個理由**：8 以前的檔沒有；以及圍堵在 handler 的回傳裡找不到屬於這次呼叫的
+   * ToolMessage 時不放（一個不帶那則訊息的 `Command`——今天沒有生產者）。
+   *
+   * ## 記的是工具的輸出，不是模型最後看到的預覽
+   *
+   * 基座的 `FilesystemMiddleware` 排在圍堵**外層**（`createDeepAgent` 把它放在每一顆自訂 middleware
+   * 之前），它的 `wrapToolCall` 在文字超過 80,000 字元時把結果搬去 `/large_tool_results/`、換上一段
+   * 預覽（`apps/harness` 的 `TOOL_RESULT_STASH_PREFIX`）。**圍堵看不到換過的那一則**，所以這一格記的
+   * 是換之前的全文——偏離 dsh 的「模型看到的那則」。退到這裡說得通：預覽由全文照同一條規則推得回來
+   * （門檻、路徑、預覽都是確定的），全文由預覽推不回來。推模型歷史的一側要自己重算這一步。
    *
    * `error` 只在 `isError` 時出現，碼照 dsh（見 `tool-events.ts`）；**一般拋錯與核准被拒不帶**
    * ——dsh 只替帶碼的錯誤填這一格。**沒碼的時候整個不放 key**，同 `command/done` 的 `text`。
@@ -411,13 +506,17 @@ export interface SessionEventMap {
    * 中斷不是落定：暫停的那次沒有這一顆，見 `tool/call`。
    *
    * **web 的工具卡以這一顆定終態**（[#296](https://github.com/DemianLi/nexus-agent/issues/296)，
-   * 照 dsh 的卡由 `tool/result` 收）：pump 訂閱每一份日誌，失敗的就把卡畫成失敗。紅字要的那一句不在
-   * 這裡——圍堵發佈這一顆的期間另外放著，見 `tool-events.ts` 的 `publishToolResult`。
+   * 照 dsh 的卡由 `tool/result` 收）：pump 訂閱每一份日誌，失敗的就把卡畫成失敗，紅字就是 `message`
+   * 的文字。
+   *
+   * ⚠️ **工具讀到的檔案內容、指令輸出，連同裡面可能有的秘密，原樣進本機日誌、也原樣進遙測**，同
+   * `tool/call` 的 `arguments`。
    */
   'tool/result': {
     readonly callId: string;
     readonly isError: boolean;
     readonly error?: ToolErrorInfo;
+    readonly message?: LoggedMessage;
   };
   /**
    * 一輪的評分新建或改了，**帶修改之後的完整值**。後寫覆蓋先寫，被 `feedback/message-delete`

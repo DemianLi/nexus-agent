@@ -69,19 +69,25 @@
  * 時刻同 dsh：`tool/call` 在核准之前（`packages/core/agent-loop/src/tool-calls.ts:168` 在
  * `prepare` 之前記），所以被閘門擋掉的呼叫一樣有一對。形狀與偏離見 `session-log.ts` 的
  * `SessionEventMap`。
+ *
+ * **`tool/result` 帶模型收到的那則訊息**（[#305](https://github.com/DemianLi/nexus-agent/issues/305)）：
+ * 內層每一層換過的都在這裡看得到，所以它就是回給外層的那一則。**外層只剩基座那幾顆**，其中
+ * `FilesystemMiddleware` 會把過大的結果換成預覽，這一層看不到——那條偏離寫在 `tool/result` 那裡。
  */
 
 import { ToolMessage } from '@langchain/core/messages';
+import type { HumanMessage } from '@langchain/core/messages';
 import { isGraphBubbleUp } from '@langchain/langgraph';
 import { createMiddleware, MiddlewareError, ToolInvocationError } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
+import { toLoggedMessage } from './logged-message.js';
 import type { SessionLookup } from './registry.js';
 import {
   INVALID_ARGS,
-  publishToolResult,
+  readInjectedMessages,
   readToolOutcome,
-  readToolResultText,
+  readToolResultMessage,
   TOOL_ABORTED,
   TOOL_TIMEOUT,
   UNKNOWN_TOOL,
@@ -252,6 +258,13 @@ interface RecordableRequest {
   readonly runtime?: { readonly configurable?: unknown };
 }
 
+/** 記 `tool/result` 用的函式：結果、模型收到的那則，以及跟著結果塞進對話的那幾則。 */
+type SettleToolCall = (
+  outcome: ToolOutcome,
+  message: ToolMessage | undefined,
+  injected: readonly HumanMessage[],
+) => void;
+
 /**
  * 記下 `tool/call`，回傳記 `tool/result` 用的函式。
  *
@@ -259,13 +272,16 @@ interface RecordableRequest {
  * （`forCall` 不是 `ok`）、沒有 `callId`（配不起來）、或 `tool/call` 寫不進去。只寫得進
  * 結果那一半的話，日誌上會有一顆找不到呼叫的結果。
  *
- * **記不進去不能反過來殺掉這次呼叫**，同 `model-usage.ts`：兩個 `append` 都吞掉自己的例外。
+ * **跟著結果塞進對話的訊息接在 `tool/result` 後面各記一顆 `user/message`**，同它們在對話裡的位置
+ * （見 `session-log.ts`）。結果那顆沒寫成就一顆都不記：沒有結果的注入在推歷史時接不到任何地方。
+ *
+ * **記不進去不能反過來殺掉這次呼叫**，同 `model-usage.ts`：每個 `append` 都吞掉自己的例外。
  */
 function recordToolCall(
   sessions: ToolEventSessions | undefined,
   request: RecordableRequest,
   raw: string | undefined,
-): ((outcome: ToolOutcome, text: string | undefined) => void) | undefined {
+): SettleToolCall | undefined {
   const callId = request.toolCall.id;
   if (sessions === undefined || callId === undefined || callId === '') return undefined;
   // `runtime.configurable` 就是 `forCall` 要的那份，包回一層 `configurable` 同 `model-usage.ts`。
@@ -283,19 +299,29 @@ function recordToolCall(
     // 參數序列化不動或日誌不收：這一對整個不記，見上面。
     return undefined;
   }
-  return (outcome, text) => {
+  return (outcome, message, injected) => {
     try {
-      // 失敗那一次的文字只在發佈期間讀得到，給 web 的 pump 畫紅字（#296），見 `tool-events.ts`。
-      publishToolResult(log, callId, outcome.isError ? text : undefined, () => {
-        log.append('tool/result', {
-          callId,
-          isError: outcome.isError,
-          // 沒碼的時候整個不放 key：`snapshotJsonValue` 對 `undefined` 是當場拋的。
-          ...(outcome.isError && outcome.error !== undefined ? { error: outcome.error } : {}),
-        });
+      log.append('tool/result', {
+        callId,
+        isError: outcome.isError,
+        // 沒碼、沒訊息的時候整個不放 key：`snapshotJsonValue` 對 `undefined` 是當場拋的。
+        ...(outcome.isError && outcome.error !== undefined ? { error: outcome.error } : {}),
+        ...(message === undefined ? {} : { message: toLoggedMessage(message) }),
       });
     } catch {
       // 同 `tool/call`：日誌寫不進去不影響這次呼叫的結果。
+      return;
+    }
+    for (const extra of injected) {
+      try {
+        log.append('user/message', {
+          message: toLoggedMessage(extra),
+          // 圍堵只知道工具，不知道工具屬於哪個 plugin，見 `session-log.ts` 的 `user/message`。
+          source: { kind: 'plugin', plugin: request.toolCall.name },
+        });
+      } catch {
+        // 同上。
+      }
     }
   };
 }
@@ -354,7 +380,8 @@ export function createContainmentMiddleware(
             outcome.isError && outcome.error === undefined && request.tool === undefined
               ? { isError: true, error: UNKNOWN_TOOL_ERROR }
               : outcome,
-            readToolResultText(result, request.toolCall.id ?? ''),
+            readToolResultMessage(result, request.toolCall.id ?? ''),
+            readInjectedMessages(result),
           );
         }
         forget();
@@ -376,7 +403,8 @@ export function createContainmentMiddleware(
         const kind = classifyThrownToolError(error);
         settle?.(
           kind === undefined ? { isError: true } : { isError: true, error: kind },
-          message.text,
+          message,
+          [],
         );
         forget();
         return message;

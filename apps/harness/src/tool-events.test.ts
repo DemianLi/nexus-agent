@@ -10,9 +10,10 @@
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
 
+import type { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { Command, MemorySaver } from '@langchain/langgraph';
-import { SessionRegistry } from '@nexus/core';
+import { fromLoggedMessage, SessionRegistry } from '@nexus/core';
 import type { NexusPlugin, SessionEvent, SessionEventMap } from '@nexus/core';
 import { createAskUserPlugin } from '@nexus/plugin-ask-user';
 import { describe, expect, it } from 'vitest';
@@ -121,7 +122,8 @@ function resultsByName(events: readonly SessionEvent[]): Map<string, ToolResult>
       names.set((event.data as ToolCall).callId, (event.data as ToolCall).name);
       continue;
     }
-    const result = event.data as ToolResult;
+    // `message`（#305）是內容，這裡只比判別那幾格，逐 key 照舊。
+    const { message: _message, ...result } = event.data as ToolResult;
     const name = names.get(result.callId);
     if (name === undefined) throw new Error(`結果 ${result.callId} 配不到呼叫`);
     out.set(name, result);
@@ -188,11 +190,16 @@ describe('一次成功的呼叫', () => {
       const events = toolEvents(run.root());
       expect(events.map((event) => event.type)).toEqual(['tool/call', 'tool/result']);
       const call = events[0]!.data as ToolCall;
-      const result = events[1]!.data as ToolResult;
+      const { message, ...result } = events[1]!.data as ToolResult;
       expect(call.name).toBe('echo');
       expect(JSON.parse(call.arguments)).toEqual({ text: '嗨' });
       expect(call.callId.length).toBeGreaterThan(0);
       expect(result).toEqual({ callId: call.callId, isError: false });
+      // #305：帶的是模型收到的那一則，推回來同一個 `tool_call_id`、同一句話。
+      expect(message).toBeDefined();
+      const back = fromLoggedMessage(message!) as ToolMessage;
+      expect(back.tool_call_id).toBe(call.callId);
+      expect(back.text).toBe('回聲：嗨');
     } finally {
       await run.close();
     }
@@ -337,7 +344,8 @@ describe('被核准閘門中斷的呼叫', () => {
       expect(events.map((event) => event.type)).toEqual(['tool/call', 'tool/call', 'tool/result']);
       const callIds = events.map((event) => (event.data as ToolCall | ToolResult).callId);
       expect(new Set(callIds).size).toBe(1);
-      expect(events[2]!.data).toEqual({ callId: callIds[0], isError });
+      const { message: _message, ...verdict } = events[2]!.data as ToolResult;
+      expect(verdict).toEqual({ callId: callIds[0], isError });
     } finally {
       await run.close();
     }

@@ -19,9 +19,10 @@
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import { publishToolResult, TOOL_ABORTED_TEXT } from '@nexus/core';
+import { TOOL_ABORTED_TEXT, toLoggedMessage } from '@nexus/core';
 import type { NexusPlugin, SandboxMode } from '@nexus/core';
 import type { ConversationState, Event } from '@nexus/wire';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
@@ -338,13 +339,18 @@ describe('送達的兩種先後：判定比 frame 先到、比 frame 晚到，�
   ) {
     // `pump` 在下面才建；這個函式要等產生器跑起來才被叫，那時已經有了。
     const settle = () => {
-      const log = pump.sessionLog;
-      publishToolResult(log, 'c1', verdict.isError ? '被 fence 擋下' : undefined, () => {
-        log.append('tool/result', {
-          callId: 'c1',
-          isError: verdict.isError,
-          ...(verdict.isError ? { error: { name: 'FsError', code: 'FS_SANDBOX_DENIED' } } : {}),
-        });
+      pump.sessionLog.append('tool/result', {
+        callId: 'c1',
+        isError: verdict.isError,
+        ...(verdict.isError ? { error: { name: 'FsError', code: 'FS_SANDBOX_DENIED' } } : {}),
+        message: toLoggedMessage(
+          new ToolMessage({
+            content: verdict.isError ? '被 fence 擋下' : '寫好了',
+            tool_call_id: 'c1',
+            name: 'write_file',
+            ...(verdict.isError ? { status: 'error' as const } : {}),
+          }),
+        ),
       });
     };
     async function* stream() {

@@ -35,7 +35,7 @@ import { createObservationPolicy } from './observation.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
-import type { PluginRegistry } from './registry.js';
+import type { PluginRegistry, SessionLookup } from './registry.js';
 import { createModelCallRecorder } from './model-calls.js';
 import { createModelUsageRecorder } from './model-usage.js';
 import { createTurnCancelGuard, createTurnCancelModelSignal } from './turn-cancel.js';
@@ -299,7 +299,7 @@ export function foldRegistry(
   const turnCancelModelSignal = createTurnCancelModelSignal();
   const approvalGate = foldApprovalGate(registry, options, invalidArguments);
   const summarizer = foldSummarizer(registry, options);
-  const repeatReminder = foldRepeatReminder(options);
+  const repeatReminder = foldRepeatReminder(options, registry.sessions);
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./model-usage.ts}。
   const modelUsage = createModelUsageRecorder(registry.sessions);
   // 同上，無狀態、一份走遍。位置緊貼用量記錄器，理由見 {@link ./model-calls.ts}。
@@ -680,11 +680,15 @@ function foldMiddleware(
  * 只有設定，鏈每次從 `state.messages` 現算，而 `state` 本來就逐 thread、逐 agent 各一份。
  *
  * @param options - 組裝點自有的那些。
+ * @param sessions - 註冊表的 `sessions` 通道：提醒也記進日誌（#305）。它是查詢不是狀態，共用照舊成立。
  * @returns 一份可以掛在任意多個 agent 上的 middleware，或 `undefined`。
  */
-function foldRepeatReminder(options: FoldOptions): AgentMiddleware | undefined {
+function foldRepeatReminder(
+  options: FoldOptions,
+  sessions: { forCall(config: unknown): SessionLookup },
+): AgentMiddleware | undefined {
   if (options.repeatReminder === false) return undefined;
-  return createRepeatReminder(resolveRepeatReminderSettings(options.repeatReminder));
+  return createRepeatReminder(resolveRepeatReminderSettings(options.repeatReminder), sessions);
 }
 
 /**

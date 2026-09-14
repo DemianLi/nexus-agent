@@ -68,6 +68,7 @@ import { createSummarizationMiddleware } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { countTokensApproximately } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import { toLoggedMessage } from './logged-message.js';
 import type { SessionLookup } from './registry.js';
 import { pruneToolResults } from './tool-result-pruner.js';
 
@@ -404,6 +405,10 @@ function withCompactionLog(
           cutoffIndex: event.cutoffIndex,
           messagesBefore: (request.messages ?? []).length,
           filePath: event.filePath,
+          // 推模型歷史要拿它換掉被壓掉的那一段（#305）。基座一定給；沒給就整個不放 key。
+          ...(event.summaryMessage === undefined
+            ? {}
+            : { summary: toLoggedMessage(event.summaryMessage) }),
         });
       } catch {
         // 記不進去不能反過來把摘要器殺掉。見上面最後一段。
@@ -422,22 +427,39 @@ function withCompactionLog(
  *
  * 沒壓縮的那些輪回的是模型的回應，`update` 這個 key 根本不存在，所以判別是乾淨的。
  *
+ * **`summaryMessage` 也是鴨子型別**，同一條理由：認的是它有 `toDict()`，也就是
+ * {@link ./logged-message.ts | toLoggedMessage} 要的那一個方法。
+ *
  * @param response - 摘要器 `wrapModelCall` 的回傳值。
- * @returns 這次壓縮的切點與落點，或 `undefined`（這一輪沒壓縮）。
+ * @returns 這次壓縮的切點、落點與換上去的摘要訊息，或 `undefined`（這一輪沒壓縮）。
  */
 export function readSummarizationEvent(
   response: unknown,
-): { cutoffIndex: number; filePath: string | null } | undefined {
+): { cutoffIndex: number; filePath: string | null; summaryMessage?: BaseMessage } | undefined {
   if (typeof response !== 'object' || response === null) return undefined;
   const update = (response as { update?: unknown }).update;
   if (typeof update !== 'object' || update === null) return undefined;
   const event = (update as { _summarizationEvent?: unknown })._summarizationEvent;
   if (typeof event !== 'object' || event === null) return undefined;
-  const { cutoffIndex, filePath } = event as { cutoffIndex?: unknown; filePath?: unknown };
+  const { cutoffIndex, filePath, summaryMessage } = event as {
+    cutoffIndex?: unknown;
+    filePath?: unknown;
+    summaryMessage?: unknown;
+  };
   if (typeof cutoffIndex !== 'number') return undefined;
+  const summary =
+    typeof summaryMessage === 'object' &&
+    summaryMessage !== null &&
+    typeof (summaryMessage as { toDict?: unknown }).toDict === 'function'
+      ? (summaryMessage as BaseMessage)
+      : undefined;
   // `filePath` 是 `string | null`，而 `null` 是**有意義的那個值**（#66 的 fail-open），
   // 所以它不能被當成「沒有」而讓整筆消失。其餘型別當成沒寫成功。
-  return { cutoffIndex, filePath: typeof filePath === 'string' ? filePath : null };
+  return {
+    cutoffIndex,
+    filePath: typeof filePath === 'string' ? filePath : null,
+    ...(summary === undefined ? {} : { summaryMessage: summary }),
+  };
 }
 
 /**

@@ -37,8 +37,9 @@
  *
  * - **開卡**：圍堵寫 `tool/call` 的那一刻合成一顆 `tool-started`（{@link ThreadPump.#openCard}）。
  * - **收卡**：圍堵寫的 `tool/result` 為準。基座那顆 `tool-finished` 已轉發就補發更正、還在路上就等它
- *   來了套上；基座從沒開始的，由這裡合成收尾（{@link ThreadPump.#noteVerdict}）。紅字的文字來自圍堵
- *   發佈那顆事件時放的側表（`@nexus/core` 的 `toolResultTextOf`），因為日誌不帶內容（#264）。
+ *   來了套上；基座從沒開始的，由這裡合成收尾（{@link ThreadPump.#noteVerdict}）。紅字就是那顆事件帶的
+ *   訊息的文字，同 dsh（[#305](https://github.com/DemianLi/nexus-agent/issues/305) 之前日誌不帶內容，
+ *   文字另外靠一張發佈期間才讀得到的側表）。
  *
  * **登記的偏離剩兩條。** 一、**基座的 `tools` frame 照舊轉發**，同一張卡因此收得到兩顆 `tool-started`
  * （合成的先、基座的後，折疊器照 id 取代）：子代理的歸屬只從 `task` 那顆 frame 的 `namespace[0]` 學，
@@ -51,6 +52,7 @@
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import {
+  fromLoggedMessage,
   INTERRUPTED_REPLY_MARKER,
   isTurnCancelled,
   SessionRegistry,
@@ -59,7 +61,7 @@ import {
   TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
   TOOL_ABORTED_TEXT,
   TURN_CANCEL_CONFIG_KEY,
-  toolResultTextOf,
+  toLoggedMessage,
   type SessionAddress,
   type SessionEntry,
   type SessionEvent,
@@ -802,6 +804,7 @@ export class ThreadPump {
    *
    * 對話那一側也由這裡寫：每一顆一則 dsh 原字串的錯誤 ToolMessage。**不讓基座補**——
    * `patchToolCallsMiddleware` 補的那句說「another message came in」，成因是錯的（#265 的 Q12）。
+   * **日誌的 `tool/result` 帶的就是寫進對話的那一則**（#305）：同一個實例，兩邊不會各算各的。
    */
   async #withdraw(): Promise<void> {
     const log = this.#sessions.root;
@@ -811,7 +814,16 @@ export class ThreadPump {
     try {
       const config: ThreadConfig = { configurable: { thread_id: this.#threadId } };
       dangling = danglingToolCalls((await this.#agent.getState(config)).values);
-      for (const call of dangling) {
+      const withdrawn = dangling.map(
+        (call) =>
+          new ToolMessage({
+            content: started(call.name) ? TOOL_ABORTED_TEXT : TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
+            tool_call_id: call.id,
+            name: call.name,
+            status: 'error',
+          }),
+      );
+      for (const [index, call] of dangling.entries()) {
         log.append('tool/result', {
           callId: call.id,
           isError: true,
@@ -819,20 +831,11 @@ export class ThreadPump {
             name: 'AbortError',
             code: started(call.name) ? TOOL_ABORTED : TOOL_ABORTED_BEFORE_DISPATCH,
           },
+          message: toLoggedMessage(withdrawn[index]!),
         });
       }
-      if (dangling.length > 0) {
-        await this.#agent.updateState(config, {
-          messages: dangling.map(
-            (call) =>
-              new ToolMessage({
-                content: started(call.name) ? TOOL_ABORTED_TEXT : TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
-                tool_call_id: call.id,
-                name: call.name,
-                status: 'error',
-              }),
-          ),
-        });
+      if (withdrawn.length > 0) {
+        await this.#agent.updateState(config, { messages: withdrawn });
       }
       log.append('turn/end', { reason: ABORTED_BY_USER });
     } catch (error) {
@@ -993,20 +996,29 @@ export class ThreadPump {
    * （#265 的 Q11）。一個字都沒送出就不寫——同 dsh，沒有看得見的內容就不算一則回覆。
    *
    * **寫不進去不能把這一輪變成失敗**：人按了停止是事實，留不下半段只是少了一則訊息。
+   *
+   * **日誌同時記一顆 `assistant/message {interrupted: true}`**（#305），照 dsh 被中止時把已送出的
+   * 前綴收成一則帶記號的回覆。先記日誌再寫對話：日誌是對話的真相，對話那一側寫不進去時，推歷史的
+   * 一側照樣拿得到這半段。它落在被切斷那次呼叫的 `model/end` 之後——寫入點看到的是拋錯，不是回覆。
    */
   async #keepInterruptedReply(current: CurrentRun): Promise<void> {
     if (!current.replyOpen || current.partial === '') return;
+    const reply = new AIMessage({
+      content: current.partial,
+      additional_kwargs: { [INTERRUPTED_REPLY_MARKER]: true },
+    });
+    try {
+      this.#sessions.root.append('assistant/message', {
+        message: toLoggedMessage(reply),
+        interrupted: true,
+      });
+    } catch {
+      // 同下：這一輪照樣收成中止。
+    }
     try {
       await this.#agent.updateState(
         { configurable: { thread_id: this.#threadId } },
-        {
-          messages: [
-            new AIMessage({
-              content: current.partial,
-              additional_kwargs: { [INTERRUPTED_REPLY_MARKER]: true },
-            }),
-          ],
-        },
+        { messages: [reply] },
       );
     } catch {
       // 見上面：這一輪照樣收成中止。
@@ -1132,7 +1144,7 @@ export class ThreadPump {
    */
   #noteLogEvent(entry: SessionEntry, event: SessionEvent): void {
     if (event.type === 'tool/call') this.#openCard(entry.address, event.data);
-    else if (event.type === 'tool/result') this.#noteVerdict(entry.log, event);
+    else if (event.type === 'tool/result') this.#noteVerdict(event);
   }
 
   /**
@@ -1197,12 +1209,13 @@ export class ThreadPump {
    * 今天樹上沒有「本體錯、日誌成功」的生產者（handler 之後改結果的只往錯誤那邊改；剪工具結果的那一層
    * 原樣帶 `status`），所以這一向目前只是對稱，沒有案例。
    */
-  #noteVerdict(log: SessionLog, event: SessionEvent<'tool/result'>): void {
+  #noteVerdict(event: SessionEvent<'tool/result'>): void {
     if (this.#current === undefined) return;
-    const { callId, isError } = event.data;
+    const { callId, isError, message } = event.data;
     const verdict: ToolVerdict = {
       failed: isError,
-      text: isError ? toolResultTextOf(log, callId) : undefined,
+      // 紅字就是模型收到的那一句，同 dsh（#305）：推回同一則訊息再取 `text`，不另寫一份抽字的規則。
+      text: isError && message !== undefined ? fromLoggedMessage(message).text : undefined,
     };
     const forwarded = this.#forwardedFinishes.get(callId);
     if (forwarded === undefined) {

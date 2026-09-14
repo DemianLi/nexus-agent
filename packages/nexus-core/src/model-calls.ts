@@ -39,18 +39,33 @@
  * 摘要，`llmMs` 不會把同一段牆鐘算兩次。`apps/harness/src/context-overflow.test.ts` 釘著
  * 「四次模型節點、五步」。
  *
+ * ## 回覆也在這一格記（[#305](https://github.com/DemianLi/nexus-agent/issues/305)）
+ *
+ * `handler(request)` 回來的就是那一則完整的 AIMessage，web 與 CLI 兩條路都是——所以
+ * `assistant/message` 寫在這裡，在 `model/end` 之前，順序同 dsh。這一格看到的是**進 graph state 的
+ * 那一則**：外層只剩改請求不改回覆的那幾顆（摘要器、計劃模式的提示詞、基座那幾顆），改寫解不開
+ * 參數的那顆在內側。
+ *
+ * **拋錯的呼叫不記**：那次沒有回覆可記（dsh 那一次記的是 `assistant/attempt`，我們沒有，見
+ * `session-log.ts`）。子代理那一層被中止時回的空訊息也不記——它是 {@link ./turn-cancel.ts} 合成來
+ * 讓子代理的圖收尾的，不是模型的回覆；dsh 那側被中止、沒有看得見內容的那一步沒有 `assistant/message`。
+ *
  * ## 記不進去不能扳倒模型呼叫
  *
  * 同 {@link ./model-usage.ts}：`forCall` 的非 `ok` 與 `append` 自己拋，一律吃掉。**開頭那顆
- * 沒記成，結尾那顆也不記**——半對的事件比沒有更糟，不變量會把它讀成寫錯了。
+ * 沒記成，結尾那顆也不記**——半對的事件比沒有更糟，不變量會把它讀成寫錯了。回覆那顆吞得起，是因為
+ * 會讓它拋的那條路（`undefined` 欄位）已經在 {@link ./logged-message.ts} 從源頭拿掉了。
  *
  * @module
  */
 
+import { AIMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import { toLoggedMessage } from './logged-message.js';
 import type { SessionLog } from './session-log.js';
 import type { SessionLookup } from './registry.js';
+import { INTERRUPTED_REPLY_MARKER } from './turn-cancel.js';
 
 /** middleware 的名字。名字不撞基座任何一個，所以它是 novel entry。 */
 export const MODEL_CALL_EVENTS_MIDDLEWARE_NAME = 'nexusModelCallEvents';
@@ -62,6 +77,28 @@ function tryAppend(log: SessionLog, type: 'model/start' | 'model/end'): boolean 
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * 子代理被中止時 {@link ./turn-cancel.ts} 回的那則空訊息：帶中斷記號、沒有字、沒有呼叫。
+ * 它不是模型的回覆，見檔頭。
+ */
+function isSyntheticStop(message: AIMessage): boolean {
+  return (
+    message.additional_kwargs[INTERRUPTED_REPLY_MARKER] === true &&
+    message.text === '' &&
+    (message.tool_calls ?? []).length === 0
+  );
+}
+
+/** 記下這次呼叫回來的那一則。不是回覆的（`Command`、合成的空訊息）不記；記不進去就算了。 */
+function tryRecordReply(log: SessionLog, response: unknown): void {
+  if (!AIMessage.isInstance(response) || isSyntheticStop(response)) return;
+  try {
+    log.append('assistant/message', { message: toLoggedMessage(response) });
+  } catch {
+    // 見檔頭「記不進去不能扳倒模型呼叫」。
   }
 }
 
@@ -83,7 +120,9 @@ export function createModelCallRecorder(sessions: {
       });
       if (found.kind !== 'ok' || !tryAppend(found.log, 'model/start')) return handler(request);
       try {
-        return await handler(request);
+        const response = await handler(request);
+        tryRecordReply(found.log, response);
+        return response;
       } finally {
         tryAppend(found.log, 'model/end');
       }
