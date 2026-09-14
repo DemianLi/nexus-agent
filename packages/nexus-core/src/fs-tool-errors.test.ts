@@ -12,7 +12,7 @@ import {
   noteSandboxDenial,
   recordBackendOutcomes,
 } from './fs-tool-errors.js';
-import { toolErrorOf } from './tool-events.js';
+import { markToolError, toolErrorOf } from './tool-events.js';
 
 /** middleware 的 `wrapToolCall` 拿出來直接呼叫用的形狀。 */
 type Wrapper = (
@@ -209,7 +209,7 @@ describe('檔案工具的失敗標成錯誤', () => {
     expect(toolErrorOf(good)).toBeUndefined();
   });
 
-  it('不是檔案工具的呼叫不動——就算它在底下碰了 backend、fence 也喊了拒絕', async () => {
+  it('不是檔案工具、而且回成功的呼叫不動——就算它在底下碰了 backend、fence 也喊了拒絕', async () => {
     const backend = recordBackendOutcomes(new FakeBackend());
     const message = asToolMessage('done', 'task');
     expect(
@@ -218,6 +218,64 @@ describe('檔案工具的失敗標成錯誤', () => {
         return message;
       }),
     ).toBe(message);
+    expect(toolErrorOf(message)).toBeUndefined();
+  });
+});
+
+/**
+ * #316：plugin 工具（`submit_record`）走的是**沒包過**的同一個 fence，自己組錯誤訊息。碼補在它那則
+ * 上，文字、狀態、實例都不換——那是工具自己的。
+ */
+describe('fence 擋下非檔案工具：只補碼', () => {
+  const wrap = wrapperOf(createFsToolErrorsMiddleware());
+  const plain = new FakeBackend();
+
+  function refusal(content: string): ToolMessage {
+    return new ToolMessage({
+      content,
+      tool_call_id: 'call-1',
+      name: 'submit_record',
+      status: 'error',
+    });
+  }
+
+  it('工具回了錯誤、fence 喊過拒絕：同一則補上 `FS_SANDBOX_DENIED`，字不動', async () => {
+    const message = refusal('Error: 寫不進 "/deny/x"：[containment] 拒絕 write "/deny/x"');
+    const result = await wrap(requestFor('submit_record'), async () => {
+      await plain.write('/deny/x', 'x');
+      return message;
+    });
+    expect(result).toBe(message);
+    expect(message.content).toBe('Error: 寫不進 "/deny/x"：[containment] 拒絕 write "/deny/x"');
+    expect(toolErrorOf(message)).toEqual({ name: 'FsError', code: FS_SANDBOX_DENIED });
+  });
+
+  it('對照：同一顆工具的一般失敗（fence 沒喊）不帶碼', async () => {
+    const message = refusal('Error: 寫不進 "/broken"：Failed to write to /broken');
+    await wrap(requestFor('submit_record'), async () => {
+      await plain.write('/broken', 'x');
+      return message;
+    });
+    expect(toolErrorOf(message)).toBeUndefined();
+  });
+
+  it('已經有碼的不蓋掉', async () => {
+    const message = markToolError(refusal('Error: 另一種失敗'), { name: 'X', code: 'OTHER' });
+    await wrap(requestFor('submit_record'), async () => {
+      await plain.write('/deny/x', 'x');
+      return message;
+    });
+    expect(toolErrorOf(message)).toEqual({ name: 'X', code: 'OTHER' });
+  });
+
+  it('上一次的拒絕不會漏到下一次：每一顆呼叫各一份記錄', async () => {
+    await wrap(requestFor('submit_record', 'call-a'), async () => {
+      await plain.write('/deny/x', 'x');
+      return refusal('Error: 第一次');
+    });
+    const second = refusal('Error: 第二次');
+    await wrap(requestFor('submit_record', 'call-b'), async () => second);
+    expect(toolErrorOf(second)).toBeUndefined();
   });
 });
 
@@ -230,7 +288,7 @@ describe('包過的 backend', () => {
     expect(backend.size()).toBe(1);
     expect(backend.routePrefixes).toEqual(['/memories/']);
     expect(backend).toBeInstanceOf(FakeBackend);
-    // 不在任何一次檔案工具呼叫裡：fence 喊拒絕也不拋。
+    // 不在任何一次工具呼叫裡：fence 喊拒絕也不拋。
     expect(await backend.write('/deny/x', 'x')).toEqual({
       error: '[containment] 拒絕 write "/deny/x"',
     });
