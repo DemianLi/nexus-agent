@@ -155,9 +155,6 @@ export const GOAL_CREATE_TOOL_NAME = 'create_goal';
 /** 對精確修訂號做一次變更。 */
 export const GOAL_UPDATE_TOOL_NAME = 'update_goal';
 
-/** 預期得到的拒絕前綴。逐字同 `@nexus/plugin-todo`。 */
-export const GOAL_TOOL_ERROR_PREFIX = 'Error: ';
-
 /** 這次組裝沒接會話日誌時回的話。 */
 export const GOAL_TOOL_NOT_ATTACHED_MESSAGE =
   '這次組裝沒有接上會話日誌，goal 域沒有地方住，所以沒有動。';
@@ -393,8 +390,9 @@ interface Refusal {
 
 /** 一句工具層的拒絕；`code` 省略即不帶碼。 */
 function refuse(message: string, code?: string): Refusal {
-  const refused = GOAL_TOOL_ERROR_PREFIX + message;
-  return code === undefined ? { refused } : { refused, error: { name: HARNESS_ERROR, code } };
+  return code === undefined
+    ? { refused: message }
+    : { refused: message, error: { name: HARNESS_ERROR, code } };
 }
 
 function isRefusal(value: GoalToolValue | Refusal): value is Refusal {
@@ -408,7 +406,7 @@ function runDomain(work: () => GoalToolValue): GoalToolValue | Refusal {
   } catch (error: unknown) {
     if (!(error instanceof GoalError)) throw error;
     return {
-      refused: GOAL_TOOL_ERROR_PREFIX + error.message,
+      refused: error.message,
       error: { name: 'GoalError', code: error.code },
     };
   }

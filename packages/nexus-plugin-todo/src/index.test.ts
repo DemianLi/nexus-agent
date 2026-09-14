@@ -10,13 +10,12 @@ import { describe, expect, it } from 'vitest';
 
 import { ToolMessage } from '@langchain/core/messages';
 import type { StructuredTool } from '@langchain/core/tools';
-import { createRegistry, SessionRegistry, toolErrorOf } from '@nexus/core';
+import { createRegistry, SessionRegistry, TOOL_ERROR_PREFIX, toolErrorOf } from '@nexus/core';
 import type { TodoItem } from '@nexus/core';
 
 import {
   createTodoPlugin,
   TODO_EMPTY_CONTENT_MESSAGE,
-  TODO_ERROR_PREFIX,
   TODO_NOT_ATTACHED_MESSAGE,
   TODO_TOOL_NAME,
   TODO_UNKNOWN_CALLER_MESSAGE,
@@ -225,7 +224,7 @@ describe('寫進哪一份', () => {
     const answer = await call(tool, [{ content: '甲', status: 'pending' }], ROOT_CONFIG);
 
     expect(refusalOf(answer)).toEqual({
-      text: TODO_NOT_ATTACHED_MESSAGE,
+      text: `Error: ${TODO_NOT_ATTACHED_MESSAGE}`,
       status: 'error',
       error: undefined,
     });
@@ -238,7 +237,7 @@ describe('寫進哪一份', () => {
     const answer = await call(tool, [{ content: '甲', status: 'pending' }], undefined);
 
     expect(refusalOf(answer)).toEqual({
-      text: TODO_UNKNOWN_CALLER_MESSAGE,
+      text: `Error: ${TODO_UNKNOWN_CALLER_MESSAGE}`,
       status: 'error',
       error: undefined,
     });
@@ -257,7 +256,7 @@ describe('寫進哪一份', () => {
     const entry = registry.tools.resolve(TODO_TOOL_NAME);
     const answer = await call(entry!.value, [{ content: '甲', status: 'pending' }], ROOT_CONFIG);
     expect(refusalOf(answer)).toEqual({
-      text: todoAmbiguousMessage(2),
+      text: `Error: ${todoAmbiguousMessage(2)}`,
       status: 'error',
       error: undefined,
     });
@@ -267,7 +266,7 @@ describe('寫進哪一份', () => {
    * **驗證發生在找日誌之前。** 反過來的話，一份壞掉的清單在「沒接線」的組裝上會回
    * 「沒接線」——把模型送錯東西誤報成接線問題，而那兩件事要修的地方完全不同。
    *
-   * **而且它回錯誤訊息不是拋**（見 `TODO_ERROR_PREFIX`），端到端的驗收在
+   * **而且它回錯誤訊息不是拋**（見 `TOOL_ERROR_PREFIX`），端到端的驗收在
    * `apps/harness/src/todo-tool.test.ts`。
    */
   it('清單壞掉時回的是驗證錯誤，不是接線錯誤——而且沒接線也一樣', async () => {
@@ -275,7 +274,7 @@ describe('寫進哪一份', () => {
     expect(
       refusalOf(await call(tool, [{ content: '  ', status: 'pending' }], ROOT_CONFIG)),
     ).toEqual({
-      text: TODO_ERROR_PREFIX + TODO_EMPTY_CONTENT_MESSAGE,
+      text: TOOL_ERROR_PREFIX + TODO_EMPTY_CONTENT_MESSAGE,
       status: 'error',
       error: undefined,
     });

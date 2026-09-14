@@ -78,14 +78,14 @@ class FakeBackend {
 describe('檔案工具的失敗標成錯誤', () => {
   const wrap = wrapperOf(createFsToolErrorsMiddleware());
 
-  it('主要方法回錯：換成錯誤，**模型看到的字一字不變**、不帶碼', async () => {
+  it('主要方法回錯：換成錯誤，模型看到的字補上 `Error: `、不帶碼', async () => {
     const backend = recordBackendOutcomes(new FakeBackend());
     const result = (await wrap(requestFor('write_file'), async () => {
       const out = await backend.write('/broken', 'x');
       return asToolMessage(out.error ?? 'ok', 'write_file');
     })) as ToolMessage;
     expect(result.status).toBe('error');
-    expect(result.content).toBe('Failed to write to /broken');
+    expect(result.content).toBe('Error: Failed to write to /broken');
     expect(result.tool_call_id).toBe('call-1');
     expect(result.name).toBe('write_file');
     expect(toolErrorOf(result)).toBeUndefined();
@@ -98,7 +98,7 @@ describe('檔案工具的失敗標成錯誤', () => {
       return asToolMessage(out.error ?? 'ok', 'write_file');
     })) as ToolMessage;
     expect(result.status).toBe('error');
-    expect(result.content).toBe('[containment] 拒絕 write "/deny/x"');
+    expect(result.content).toBe('Error: [containment] 拒絕 write "/deny/x"');
     expect(toolErrorOf(result)).toEqual({ name: 'FsError', code: FS_SANDBOX_DENIED });
   });
 
@@ -111,6 +111,16 @@ describe('檔案工具的失敗標成錯誤', () => {
     })) as ToolMessage;
     expect(result.status).toBe('error');
     expect(result.content).toEqual(blocks);
+  });
+
+  it('基座自己寫成錯誤的字不補前綴：`ls` 的 `Error listing files: …` 不會變成 `Error: Error …`', async () => {
+    const backend = recordBackendOutcomes(new FakeBackend());
+    const result = (await wrap(requestFor('ls'), async () => {
+      const out = await backend.ls('/a-file');
+      return asToolMessage(`Error listing files: ${out.error ?? ''}`, 'ls');
+    })) as ToolMessage;
+    expect(result.status).toBe('error');
+    expect(result.content).toBe('Error listing files: not a directory');
   });
 
   it('成功的原樣放行——連「一個都沒找到」那種成功也是', async () => {
@@ -142,7 +152,7 @@ describe('檔案工具的失敗標成錯誤', () => {
     expect(result).toBe(deleted);
   });
 
-  it('已經是錯誤的：沒有碼要補就原樣交出，fence 擋的換一則帶碼的、字不變', async () => {
+  it('已經是錯誤的：沒有碼要補就原樣交出，fence 擋的換一則帶碼、補上前綴的', async () => {
     const backend = recordBackendOutcomes(new FakeBackend());
     const baseError = new ToolMessage({
       content: 'Error deleting',
@@ -171,7 +181,7 @@ describe('檔案工具的失敗標成錯誤', () => {
       });
     })) as ToolMessage;
     expect(denied.status).toBe('error');
-    expect(denied.content).toBe('[containment] 拒絕 delete "/deny/x"');
+    expect(denied.content).toBe('Error: [containment] 拒絕 delete "/deny/x"');
     expect(toolErrorOf(denied)?.code).toBe(FS_SANDBOX_DENIED);
   });
 

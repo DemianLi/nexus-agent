@@ -42,7 +42,7 @@ import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { interrupt } from '@langchain/langgraph';
 import type { ApprovalChannel, NexusPlugin, ToolErrorInfo } from '@nexus/core';
-import { markToolError, QUESTION_INTERRUPT_KIND } from '@nexus/core';
+import { markToolError, QUESTION_INTERRUPT_KIND, toolCallIdOf, toolRefusal } from '@nexus/core';
 import { z } from 'zod';
 
 /** 模型看到的工具名。與 dsh 同名。 */
@@ -162,14 +162,11 @@ export function createAskUserPlugin(options: AskUserPluginOptions = {}): NexusPl
             // 看起來一樣，在執行期不一樣：這個工具的四條錯誤出口有一條發生在 **resume
             // 之後**（人放棄整組），而那一輪的例外會從 LangGraph 的 stream mux 逸出成
             // unhandled rejection——實測整場 run 死掉，而不是模型收到一則錯誤。
-            // 核准閘門的 `denial()` 早就是這個形狀，這裡照它。
+            // 核准閘門的 `denial()` 早就是這個形狀，這裡照它；前綴也同它，由 `toolRefusal` 加（#318）。
             const failed = (message: string): ToolMessage =>
-              new ToolMessage({
-                content: message,
-                tool_call_id:
-                  (config as { toolCall?: { id?: string } } | undefined)?.toolCall?.id ?? '',
+              toolRefusal(message, {
+                callId: toolCallIdOf(config) ?? '',
                 name: ASK_USER_QUESTION_TOOL_NAME,
-                status: 'error',
               });
             // **fail-closed 排在最前面**：沒有人在的時候連中斷都不該發出去，
             // 因為 `no-channel` 底下 `interrupt()` 是當場拋，而那個錯訊說不出原因。

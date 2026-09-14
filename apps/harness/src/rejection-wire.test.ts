@@ -205,7 +205,7 @@ describe('核准的兩個方向在下行上長什麼樣', () => {
         name: GATED,
         status: 'failed',
         // 模型看到的那一句，閘門的預設拒絕文字。
-        error: `有人看過並拒絕了 "${GATED}"。`,
+        error: `Error: 有人看過並拒絕了 "${GATED}"。`,
         attribution: { kind: 'root' },
       },
     ]);

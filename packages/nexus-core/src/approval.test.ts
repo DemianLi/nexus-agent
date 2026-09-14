@@ -124,7 +124,7 @@ describe('四個拒絕，四句不同的話', () => {
     });
     const result = await wrap(request, ran);
     expect(ran).not.toHaveBeenCalled();
-    expect(result.text).toBe('線上時段禁止部署');
+    expect(result.text).toBe('Error: 線上時段禁止部署');
     expect(result.status).toBe('error');
   });
 

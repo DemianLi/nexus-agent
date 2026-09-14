@@ -113,7 +113,7 @@ describe('exit_plan_mode 沒有生效時', () => {
     };
   }
 
-  it('沒接日誌、在 subagent 裡：都是錯誤、不帶碼、文字不變', async () => {
+  it('沒接日誌、在 subagent 裡：都是錯誤、不帶碼、文字是 `Error: ` 加原句', async () => {
     const { registry } = await loadPlugins([createPlanModePlugin()]);
     const exit = registry.tools.effective().get(EXIT_PLAN_MODE_TOOL_NAME)?.value;
     const notAttached = await exit?.invoke(
@@ -121,7 +121,7 @@ describe('exit_plan_mode 沒有生效時', () => {
       { configurable: { checkpoint_ns: 'tools:call-1' } } as never,
     );
     expect(verdictOf(notAttached)).toEqual({
-      text: PLAN_NOT_ATTACHED_TOOL_MESSAGE,
+      text: `Error: ${PLAN_NOT_ATTACHED_TOOL_MESSAGE}`,
       status: 'error',
       error: undefined,
       id: 'call-1',
@@ -133,7 +133,7 @@ describe('exit_plan_mode 沒有生效時', () => {
       { configurable: { checkpoint_ns: 'tools:spawn-1|tools:call-1' } } as never,
     );
     expect(verdictOf(notRoot)).toEqual({
-      text: NOT_IN_PLAN_MODE_MESSAGE,
+      text: `Error: ${NOT_IN_PLAN_MODE_MESSAGE}`,
       status: 'error',
       error: undefined,
       id: 'call-1',

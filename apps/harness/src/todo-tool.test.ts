@@ -16,9 +16,9 @@
 
 import { MemorySaver } from '@langchain/langgraph';
 import { describe, expect, it } from 'vitest';
-import { fromLoggedMessage, SessionRegistry } from '@nexus/core';
+import { fromLoggedMessage, SessionRegistry, TOOL_ERROR_PREFIX } from '@nexus/core';
 import type { InvariantError, SessionEvent, SessionEventMap, TodoItem } from '@nexus/core';
-import { TODO_ERROR_PREFIX, TODO_TOOL_NAME, todoDuplicateMessage } from '@nexus/plugin-todo';
+import { TODO_TOOL_NAME, todoDuplicateMessage } from '@nexus/plugin-todo';
 import { createNexusAgent } from './agent-factory.js';
 import { DEFAULT_PLUGINS } from './cli.js';
 import { toAgentInvocation } from './messages.js';
@@ -207,7 +207,7 @@ describe('todo_write 在真的圖上', () => {
       const messages = result.messages as { getType(): string; text: string }[];
       const toolMessage = messages.filter((message) => message.getType() === 'tool').at(-1);
 
-      expect(toolMessage?.text).toBe(TODO_ERROR_PREFIX + todoDuplicateMessage('同一句'));
+      expect(toolMessage?.text).toBe(TOOL_ERROR_PREFIX + todoDuplicateMessage('同一句'));
     } finally {
       detach();
       await dispose();
@@ -234,7 +234,7 @@ describe('todo_write 在真的圖上', () => {
     const { message, ...verdict } = settled!.data as SessionEventMap['tool/result'];
     expect(verdict).toEqual({ callId: expect.any(String), isError: true });
     expect(message && fromLoggedMessage(message).text).toBe(
-      TODO_ERROR_PREFIX + todoDuplicateMessage('同一句'),
+      TOOL_ERROR_PREFIX + todoDuplicateMessage('同一句'),
     );
   });
 

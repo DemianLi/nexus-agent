@@ -24,6 +24,7 @@ import type { AgentMiddleware } from './base-types.js';
 import type { NamedEntry } from './entries.js';
 import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
 import { formatOrigin } from './plugin.js';
+import { toolRefusal } from './tool-events.js';
 
 /** 核准閘門 middleware 的名字。錯誤訊息與排序斷言用得到。 */
 export const APPROVAL_GATE_MIDDLEWARE_NAME = 'nexusApprovalGate';
@@ -174,14 +175,13 @@ export async function runApprovalGate(
   return step(0);
 }
 
-/** 一則說得出原因的拒絕。`status: 'error'` 是模型分辨它與成功結果的唯一依據。 */
+/**
+ * 一則說得出原因的拒絕，政策擋的與人按拒絕的都走這裡。dsh 兩種都是 `Error: <原因>`
+ * （`packages/core/tools/src/index.ts:1479-1487`）。**`status` 不是模型分辨它的依據**：Chat
+ * Completions 的轉換器不送它（見 `tool-events.ts` 的 `toolRefusal`），模型靠的是前綴與原因。
+ */
 function denial(exec: ToolExecution, reason: string): ToolMessage {
-  return new ToolMessage({
-    content: reason,
-    tool_call_id: exec.callId ?? '',
-    name: exec.name,
-    status: 'error',
-  });
+  return toolRefusal(reason, { callId: exec.callId ?? '', name: exec.name });
 }
 
 /**

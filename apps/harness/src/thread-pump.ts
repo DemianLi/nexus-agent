@@ -58,8 +58,11 @@ import {
   SessionRegistry,
   TOOL_ABORTED,
   TOOL_ABORTED_BEFORE_DISPATCH,
+  TOOL_ABORTED_BEFORE_DISPATCH_REASON,
   TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
+  TOOL_ABORTED_REASON,
   TOOL_ABORTED_TEXT,
+  toolRefusal,
   TURN_CANCEL_CONFIG_KEY,
   toLoggedMessage,
   type SessionAddress,
@@ -814,14 +817,12 @@ export class ThreadPump {
     try {
       const config: ThreadConfig = { configurable: { thread_id: this.#threadId } };
       dangling = danglingToolCalls((await this.#agent.getState(config)).values);
-      const withdrawn = dangling.map(
-        (call) =>
-          new ToolMessage({
-            content: started(call.name) ? TOOL_ABORTED_TEXT : TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
-            tool_call_id: call.id,
-            name: call.name,
-            status: 'error',
-          }),
+      // 碼不在訊息上標：這裡直接寫日誌，下面那顆 `tool/result` 自己帶。
+      const withdrawn = dangling.map((call) =>
+        toolRefusal(
+          started(call.name) ? TOOL_ABORTED_REASON : TOOL_ABORTED_BEFORE_DISPATCH_REASON,
+          { callId: call.id, name: call.name },
+        ),
       );
       for (const [index, call] of dangling.entries()) {
         log.append('tool/result', {

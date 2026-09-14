@@ -106,7 +106,8 @@ describe('沒讀過的檔不准改', () => {
     const messages = await run(root, [edit('原本的內容', '被改掉了'), ...DONE]);
 
     expect(messages[0]?.status).toBe('error');
-    expect(messages[0]?.text).toContain('FS_NOT_OBSERVED');
+    expect(messages[0]?.text).toMatch(/^Error: /);
+    expect(messages[0]?.text).not.toContain('FS_');
     expect(messages[0]?.text).toContain('read_file');
     expect(await readFile(join(root, 'notes.md'), 'utf8')).toBe(ORIGINAL);
   });
@@ -165,7 +166,8 @@ describe('write_file 那一半', () => {
     const messages = await run(root, [write('/notes.md', '整個蓋掉'), ...DONE]);
 
     expect(messages[0]?.status).toBe('error');
-    expect(messages[0]?.text).toContain('FS_NOT_OBSERVED');
+    expect(messages[0]?.text).toMatch(/^Error: /);
+    expect(messages[0]?.text).not.toContain('FS_');
     expect(await readFile(join(root, 'notes.md'), 'utf8')).toBe(ORIGINAL);
   });
 
@@ -214,7 +216,8 @@ describe('讀過之後又變了', () => {
     });
 
     expect(messages[1]?.status).toBe('error');
-    expect(messages[1]?.text).toContain('FS_STALE_VERSION');
+    expect(messages[1]?.text).toMatch(/^Error: /);
+    expect(messages[1]?.text).not.toContain('FS_');
     expect(await readFile(join(root, 'notes.md'), 'utf8')).toBe('別人改過了');
   });
 });

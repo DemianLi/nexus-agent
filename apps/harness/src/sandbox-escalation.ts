@@ -53,9 +53,9 @@
  * @module
  */
 
-import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import type { NexusPlugin } from '@nexus/core';
+import { toolRefusal } from '@nexus/core';
 import { z } from 'zod';
 
 import type { SandboxMode } from './contained-backend.js';
@@ -166,11 +166,9 @@ function createEscalationTool(controller: SandboxModeController) {
       // **核准之後再判一次**：人看卡片的那段時間裡，`/sandbox` 可能已經換過格子。
       const current = controller.current;
       if (!isStrictlyWider(current, args.sandbox_permissions)) {
-        return new ToolMessage({
-          content: nonWideningRefusal(args.sandbox_permissions, current),
-          tool_call_id: runtime?.toolCall?.id ?? '',
+        return toolRefusal(nonWideningRefusal(args.sandbox_permissions, current), {
+          callId: runtime?.toolCall?.id ?? '',
           name: SANDBOX_ESCALATION_TOOL_NAME,
-          status: 'error',
         });
       }
       // 綁的是**這一刻**最近被擋下的那一次。同一則訊息裡另有平行的變更也被擋的話，綁到的

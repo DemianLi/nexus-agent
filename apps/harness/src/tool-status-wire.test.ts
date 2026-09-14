@@ -134,7 +134,7 @@ describe('產品路徑：handler 之後被改成錯誤的結果，web 畫成失�
       await run.say('寫檔');
       const [entry] = toolEntries(run.frames);
       expect(entry).toMatchObject({ name: 'write_file', status: 'failed' });
-      expect(entry?.error).toMatch(/^\[containment\] .*這個 backend 是唯讀的/);
+      expect(entry?.error).toMatch(/^Error: \[containment\] .*這個 backend 是唯讀的/);
       expect(entry?.output).toBeDefined();
       expect(await readdir(root)).toEqual([]);
     } finally {
@@ -186,7 +186,7 @@ describe('產品路徑：handler 之後被改成錯誤的結果，web 畫成失�
       await run.say('數');
       const [entry] = toolEntries(run.frames);
       expect(entry).toMatchObject({ name: 'counter', status: 'failed' });
-      expect(entry?.error).toMatch(/^工具 counter 的輸出不合它宣告的 schema：/);
+      expect(entry?.error).toMatch(/^Error: 工具 counter 的輸出不合它宣告的 schema：/);
     } finally {
       await run.close();
     }
@@ -272,7 +272,7 @@ describe('產品路徑：handler 之後被改成錯誤的結果，web 畫成失�
       expect(entry).toMatchObject({
         name: 'fragile',
         status: 'failed',
-        error: '工具 fragile 執行失敗：之後炸了',
+        error: 'Error: 工具 fragile 執行失敗：之後炸了',
       });
     } finally {
       await run.close();
@@ -306,7 +306,7 @@ describe('產品路徑：handler 之後被改成錯誤的結果，web 畫成失�
       await run.say('交給子代理');
       const write = toolEntries(run.frames).find((entry) => entry.name === 'write_file');
       expect(write).toMatchObject({ status: 'failed' });
-      expect(write?.error).toMatch(/^\[containment\] .*這個 backend 是唯讀的/);
+      expect(write?.error).toMatch(/^Error: \[containment\] .*這個 backend 是唯讀的/);
       // 它真的在子代理那一層：前提沒發生的話，這條會在 root 那顆上假綠。
       expect(write?.attribution).not.toBeUndefined();
       expect(

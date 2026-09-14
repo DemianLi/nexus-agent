@@ -60,7 +60,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 
 import { fromLoggedMessage } from './logged-message.js';
 import type { SessionEvent } from './session-log.js';
-import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN, toolRefusal } from './tool-events.js';
+import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN, toolFeedback } from './tool-events.js';
 
 /** 記過 `tool/call`、結果沒記下來的那次。逐字照抄 dsh `repair.ts:106`。 */
 export const TOOL_OUTCOME_UNKNOWN_TEXT =
@@ -118,12 +118,15 @@ function requestedCalls(message: BaseMessage): PendingBatch['calls'] {
   );
 }
 
-/** 沒配到結果的那次，照 dsh `repair.ts` 補一則錯誤結果。 */
+/**
+ * 沒配到結果的那次，照 dsh `repair.ts` 補一則錯誤結果。**不帶 `Error: `**：那兩句是 dsh 的作者寫好的
+ * 回饋，走第二條政策（`tool-events.ts` 的 `toolRefusal`）。
+ */
 function closer(
   call: { readonly id: string; readonly name: string },
   started: boolean,
 ): ToolMessage {
-  return toolRefusal(started ? TOOL_OUTCOME_UNKNOWN_TEXT : TOOL_NOT_STARTED_TEXT, {
+  return toolFeedback(started ? TOOL_OUTCOME_UNKNOWN_TEXT : TOOL_NOT_STARTED_TEXT, {
     callId: call.id,
     name: call.name,
     error: started

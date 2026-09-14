@@ -137,7 +137,7 @@ describe('圍堵', () => {
     const result = (await wrap(requestFor('boom', 5000), async () => {
       throw new Error('連不上');
     })) as ToolMessage;
-    expect(String(result.content)).toBe('工具 boom 執行失敗：連不上');
+    expect(String(result.content)).toBe('Error: 工具 boom 執行失敗：連不上');
   });
 
   it('沒宣告預算的工具超時了，只講等了多久', async () => {
