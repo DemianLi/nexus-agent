@@ -40,6 +40,8 @@ import {
   resolveSessionLogDir,
 } from './cli.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
+import { listStoredThreads } from './session-list.js';
+import type { ThreadTitleLimits } from './session-list.js';
 import { attachSessionPersistence, SessionNotFoundError } from '@nexus/core';
 import { assertSameCwd } from './resume-guards.js';
 import { recordedSandboxMode } from './sandbox-mode.js';
@@ -54,6 +56,17 @@ import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
 
 /** 預設 port。挑一個不常撞的，`--port` 蓋得掉。 */
 export const DEFAULT_PORT = 8787;
+
+/**
+ * 列表上標題的兩個上限（[#302](https://github.com/DemianLi/nexus-agent/issues/302)）。值照 dsh 的產品組裝
+ * （`packages/bundle/base/cordis.patch.yml` 的 `session-title`：`fallbackMaxWords: 5`、`fallbackMaxBytes: 40`，
+ * SHA `c291e79`）。
+ *
+ * **寫在這裡是因為沒有別的地方寫**：dsh 放在 plugin 設定，我們的設定機制是
+ * [#46](https://github.com/DemianLi/nexus-agent/issues/46)。`listStoredThreads` 不給預設值，所以這是整棵樹上
+ * 唯一講這兩個數字的地方。40 個位元組是 13 個中文字——中文沒有空白，詞數那一格咬不到。
+ */
+export const THREAD_TITLE_LIMITS: ThreadTitleLimits = { maxWords: 5, maxBytes: 40 };
 
 export interface ServeInvocation {
   readonly live: boolean;
@@ -217,6 +230,14 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
 
   let telemetryDisclosed = false;
   const handler = createWireHandler({
+    // **冷讀那一格**（#302）：讀的是續接那條路寫進去的同一格，只列切得過去的——`cwd` 就是續接時
+    // `assertSameCwd` 比的那一個。沒開落盤就整個不給，列表那時講「列不出來」而不是「沒有」。
+    ...(sessionStore === undefined
+      ? {}
+      : {
+          listThreads: () =>
+            listStoredThreads(sessionStore.directory, { cwd, title: THREAD_TITLE_LIMITS }),
+        }),
     // 一個 thread 一個 agent——各自的 checkpointer、各自的虛擬檔案系統。
     createAgent: async (threadId: string) => {
       // **以前寫過就接回來**（照 dsh：碰到一個已存的 session id 就 resume，不另開）。續接在讀

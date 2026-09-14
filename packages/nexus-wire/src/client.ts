@@ -29,9 +29,18 @@ import type {
   SlashCommand,
   SlashDescriptor,
   SlashRunResult,
+  ThreadListResponse,
+  ThreadListResult,
+  ThreadSummary,
   WireChannel,
 } from './protocol.js';
-import { RUN_CANCEL_METHOD, WIRE_CHANNELS, commandPath, streamPath } from './protocol.js';
+import {
+  RUN_CANCEL_METHOD,
+  THREADS_PATH,
+  WIRE_CHANNELS,
+  commandPath,
+  streamPath,
+} from './protocol.js';
 
 export interface WireClientOptions {
   /** harness 的來源，例如 `http://localhost:8787`。結尾的斜線會被去掉。 */
@@ -87,6 +96,14 @@ export type SlashRunOutcome =
  */
 export type FeedbackOutcome<T> =
   | { readonly kind: 'ok'; readonly result: T }
+  | { readonly kind: 'rejected'; readonly message: string };
+
+/**
+ * `GET /threads` 的結果。`rejected` 是這台 server 列不了（例如沒開 `--session-log`），**不是空清單**，
+ * 理由見 {@link ThreadListResponse}。
+ */
+export type ThreadListOutcome =
+  | { readonly kind: 'ok'; readonly result: ThreadListResult }
   | { readonly kind: 'rejected'; readonly message: string };
 
 export interface WireClient {
@@ -147,6 +164,41 @@ export interface WireClient {
    * @param line - 完整的候選行，**原文原樣**。
    */
   slashRun(threadId: string, line: string): Promise<SlashRunOutcome>;
+  /**
+   * 這台 server 以前的 thread（[#302](https://github.com/DemianLi/nexus-agent/issues/302)）。**不綁 thread**，
+   * 也不替任何一條 thread 建 agent——server 那側照 dsh 的 `session/list` 是冷讀。
+   */
+  listThreads(): Promise<ThreadListOutcome>;
+}
+
+/** 線上回來的列表得先驗過，理由同 {@link readDescriptors}。 */
+function readThreadList(result: unknown): ThreadListResult {
+  const { items, unreadable } = result as { items?: unknown; unreadable?: unknown };
+  if (!Array.isArray(items) || typeof unreadable !== 'number') {
+    throw new Error('GET /threads 的結果裡沒有 items 陣列或 unreadable 數');
+  }
+  return {
+    unreadable,
+    items: items.map((entry: unknown): ThreadSummary => {
+      const row = entry as Record<string, unknown> | null;
+      if (
+        typeof row?.threadId !== 'string' ||
+        typeof row.updatedAt !== 'number' ||
+        typeof row.running !== 'boolean' ||
+        typeof row.blank !== 'boolean' ||
+        (row.title !== undefined && typeof row.title !== 'string')
+      ) {
+        throw new Error('GET /threads 回了不認得的一列');
+      }
+      return Object.freeze({
+        threadId: row.threadId,
+        updatedAt: row.updatedAt,
+        running: row.running,
+        blank: row.blank,
+        ...(typeof row.title === 'string' ? { title: row.title } : {}),
+      });
+    }),
+  };
 }
 
 /** 線上回來的清單得先驗過。**這是別人的位元組**，不是我們剛剛建的物件。 */
@@ -337,6 +389,21 @@ export function createWireClient(options: WireClientOptions): WireClient {
       return response.type === 'error'
         ? { kind: 'rejected', message: response.message }
         : readRunResult(response.result);
+    },
+
+    async listThreads() {
+      const response = await doFetch(`${base}${THREADS_PATH}`, {
+        method: 'GET',
+        // 同上行那一條：沒有它就是一個不發 preflight 的跨來源 simple request，見 `THREADS_PATH`。
+        headers: { 'content-type': 'application/json' },
+      });
+      if (!response.ok) {
+        throw new Error(`列表被載體層擋下：${response.status} ${await response.text()}`);
+      }
+      const body = (await response.json()) as ThreadListResponse;
+      return body.type === 'error'
+        ? { kind: 'rejected', message: body.message }
+        : { kind: 'ok', result: readThreadList(body.result) };
     },
   };
 }

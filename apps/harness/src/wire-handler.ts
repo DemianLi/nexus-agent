@@ -28,6 +28,7 @@ import type {
   SlashListResult,
   SlashMethod,
   SlashRunResult,
+  ThreadListResponse,
   UplinkMethod,
   WireChannel,
   FeedbackMethod,
@@ -35,6 +36,7 @@ import type {
   WireFeedbackItem,
 } from '@nexus/wire';
 import {
+  THREADS_PATH,
   encodeSseFrame,
   errorResponse,
   isFeedbackMethod,
@@ -58,6 +60,7 @@ import { FEEDBACK_CATEGORIES } from '@nexus/core';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import type { GoalDriverPort } from './goal-driver.js';
+import type { StoredThreadList } from './session-list.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
 
@@ -191,6 +194,17 @@ export interface ThreadAgent {
 export interface WireHandlerOptions {
   /** 一個 thread 一個 agent。第一次碰到這個 thread 時呼叫。 */
   createAgent(threadId: string): Promise<ThreadAgent>;
+  /**
+   * 讀以前落盤的 thread（`GET /threads`，[#302](https://github.com/DemianLi/nexus-agent/issues/302)），選配。
+   *
+   * **缺席就是「沒有落盤」**，那時列表回 `not_supported` 而不是空清單——同 `ThreadAgent.attachPersistence`
+   * 用缺席表達「沒開落盤」的規矩。答案來自呼叫方式（serve 有沒有收到 `--session-log`），所以跟落盤一樣
+   * 住在組裝點。
+   *
+   * **它不准碰 {@link createAgent}**：列表照 dsh 是冷讀，一條 thread 都不為它啟動。`running` 那一格由這個
+   * handler 從手上活著的 thread 補，不從檔案猜。
+   */
+  listThreads?(): Promise<StoredThreadList>;
 }
 
 export interface WireHandler {
@@ -374,6 +388,11 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
    * 訊息。順帶一提，那也會讓下面那道序列閘失效：兩個請求手上是兩個不同的執行器。
    */
   const threads = new Map<string, Promise<ThreadState>>();
+  /**
+   * 已經建好的那些，同步讀得到。**給列表用**：它要知道哪幾條正在跑，但不能等一條還在建的 thread
+   * ——`createAgent` 可能要起 MCP 子行程，列表不該被它拖住。還在建的就是還沒在跑。
+   */
+  const ready = new Map<string, ThreadState>();
 
   function threadFor(threadId: string): Promise<ThreadState> {
     const existing = threads.get(threadId);
@@ -415,7 +434,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         // **沒開落盤時 `flush` 就整個缺席**，而不是一個假裝成功的 no-op：`late.flush?.()`
         // 的缺席語意就是「這條路上沒有耐久檢查點」，同 `attachPersistence` 自己的規矩。
         late.flush = persistence === undefined ? undefined : () => persistence.flush();
-        return {
+        const state: ThreadState = {
           pump,
           commands: threadAgent.commands,
           // **建在這裡**：日誌是 pump 建的（一個 thread 一份），而這一行正是它誕生的地方
@@ -443,6 +462,8 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
             await threadAgent.dispose();
           },
         };
+        ready.set(threadId, state);
+        return state;
       } catch (error) {
         await threadAgent.dispose().catch(() => {});
         throw error;
@@ -803,6 +824,40 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     return crypto.randomUUID();
   }
 
+  /**
+   * `GET /threads`。**不經 `threadFor`**：一條 thread 都不為列表建（同 `run.cancel` 的理由，而且這裡更嚴——
+   * 列的正是還沒開起來的那些）。讀不動整個目錄是協定層的錯，同 `threadOrError` 的分寸。
+   */
+  async function handleList(): Promise<Response> {
+    if (options.listThreads === undefined) {
+      return json(
+        errorResponse(
+          null,
+          'not_supported',
+          '這台 server 的會話日誌只在記憶體裡（serve 沒給 --session-log），以前的 thread 列不出來',
+        ),
+      );
+    }
+    let stored: StoredThreadList;
+    try {
+      stored = await options.listThreads();
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return json(errorResponse(null, 'unknown_error', `以前的 thread 列不出來：${reason}`));
+    }
+    const response: ThreadListResponse = {
+      type: 'success',
+      result: {
+        unreadable: stored.unreadable,
+        items: stored.items.map((item) => ({
+          ...item,
+          running: ready.get(item.threadId)?.pump.running ?? false,
+        })),
+      },
+    };
+    return json(response);
+  }
+
   function firstHumanText(input: unknown): string | undefined {
     const messages = (input as { messages?: unknown })?.messages;
     if (!Array.isArray(messages)) {
@@ -819,13 +874,22 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
 
   return {
     async handle(request) {
-      const route = parsePath(new URL(request.url).pathname);
+      const { pathname } = new URL(request.url);
+      const mediaType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
+      const wrongMediaType = () =>
+        new Response('content type must be application/json', { status: 415 });
+      if (pathname === THREADS_PATH) {
+        if (request.method !== 'GET') return new Response('not found', { status: 404 });
+        // `GET` 沒有 body，這個 header 在這裡純粹是閘門：見 `THREADS_PATH` 的說明。
+        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+        return handleList();
+      }
+      const route = parsePath(pathname);
       if (request.method !== 'POST' || route === undefined) {
         return new Response('not found', { status: 404 });
       }
-      const mediaType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
       if (mediaType !== JSON_MEDIA_TYPE) {
-        return new Response('content type must be application/json', { status: 415 });
+        return wrongMediaType();
       }
       let body: unknown;
       try {
@@ -840,6 +904,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     async close() {
       const opened = [...threads.values()];
       threads.clear();
+      ready.clear();
       // 還在建的那些也要等——`createAgent` 已經開了資源，只是還沒交出來。
       const settled = await Promise.all(opened.map((thread) => thread.catch(() => undefined)));
       for (const thread of settled) {

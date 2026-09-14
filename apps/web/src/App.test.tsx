@@ -4,13 +4,15 @@ import type {
   PendingQuestion,
   SlashDescriptor,
   SlashRunOutcome,
+  ThreadListResult,
   WireClient,
 } from '@nexus/wire';
 import { APPROVAL_PENDING_KIND, QUESTION_PENDING_KIND } from '@nexus/wire';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { App, inputPlaceholder, RESUMED_THREAD_NOTICE } from '@/App';
+import { App, inputPlaceholder, RESUMED_THREAD_NOTICE, SWITCHED_THREAD_NOTICE } from '@/App';
+import { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/components/thread-list';
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
 
 /**
@@ -92,6 +94,11 @@ const UNWIRED_FEEDBACK: Pick<WireClient, 'feedbackPut' | 'feedbackDelete' | 'fee
   feedbackRecord: async () => ({ kind: 'rejected', message: '這一檔沒有接回饋' }),
 };
 
+/** 「以前的會話」同一條理由：要清單的測試自己換掉這一格。 */
+const UNWIRED_THREAD_LIST: Pick<WireClient, 'listThreads'> = {
+  listThreads: async () => ({ kind: 'rejected', message: '這一條測試沒有接清單' }),
+};
+
 /** 一個可以隨時推 frame 進去的假 client。 */
 function fakeClient(
   events: readonly Event[],
@@ -133,6 +140,7 @@ function fakeClient(
       return { type: 'success', id: 3, result: { accepted: true } };
     },
     ...UNWIRED_FEEDBACK,
+    ...UNWIRED_THREAD_LIST,
   };
   return { client, sent, responded, slashed, opened, cancels };
 }
@@ -212,6 +220,7 @@ describe('對話介面', () => {
       slashList: async () => ({ kind: 'ok', commands: [] }),
       slashRun: async () => ({ kind: 'unknown' }),
       ...UNWIRED_FEEDBACK,
+      ...UNWIRED_THREAD_LIST,
     };
     render(<App client={client} />);
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('連不上 agent'));
@@ -503,6 +512,7 @@ describe('上行被拒絕的時候', () => {
       slashList: async () => ({ kind: 'ok', commands: [] }),
       slashRun: async () => ({ kind: 'unknown' }),
       ...UNWIRED_FEEDBACK,
+      ...UNWIRED_THREAD_LIST,
     };
     render(<App client={client} />);
 
@@ -963,5 +973,148 @@ describe('記住這條 thread', () => {
     expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
     // 壞掉的那一份被這一條蓋掉，下一次載入就接得回來。
     await waitFor(() => expect(stored()).toBe(opened[0]));
+  });
+});
+
+/**
+ * 「以前的會話」（[#302](https://github.com/DemianLi/nexus-agent/issues/302)）。清單怎麼讀、讀得對不對在
+ * `@nexus/harness`（`session-list.test.ts` 與產品路徑的 `serve-session-list.test.ts`）；這裡只驗畫出來的
+ * 與點下去的。
+ */
+describe('以前的會話', () => {
+  const LISTED: ThreadListResult = {
+    unreadable: 1,
+    items: [
+      {
+        threadId: '跑著的那條',
+        updatedAt: 3_000,
+        running: true,
+        blank: false,
+        title: '幫我改登入頁',
+      },
+      { threadId: '目標那條', updatedAt: 2_000, running: false, blank: false },
+      { threadId: '空白那條', updatedAt: 1_000, running: false, blank: true },
+    ],
+  };
+
+  function stored(): string | undefined {
+    const raw = localStorage.getItem(REMEMBERED_THREAD_KEY);
+    return raw === null ? undefined : (JSON.parse(raw) as { threadId: string }).threadId;
+  }
+
+  function listing(fake: ReturnType<typeof fakeClient>, listThreads: WireClient['listThreads']) {
+    return { ...fake.client, listThreads };
+  }
+
+  async function openList(): Promise<HTMLElement> {
+    fireEvent.click(screen.getByRole('button', { name: '以前的會話' }));
+    return screen.findByRole('region', { name: '以前的會話' });
+  }
+
+  it('打開才讀、每次打開都重讀；三種列各有說法，跑著的有標記，讀不懂的講出份數', async () => {
+    seq = 0;
+    let reads = 0;
+    const fake = fakeClient([]);
+    render(
+      <App
+        client={listing(fake, async () => {
+          reads += 1;
+          return { kind: 'ok', result: LISTED };
+        })}
+      />,
+    );
+    await waitFor(() => expect(fake.opened).toHaveLength(1));
+    expect(reads).toBe(0);
+
+    const list = await openList();
+    await waitFor(() => expect(within(list).getAllByRole('button')).toHaveLength(3));
+    const rows = within(list)
+      .getAllByRole('button')
+      .map((row) => row.textContent ?? '');
+    expect(rows[0]).toContain('幫我改登入頁');
+    expect(rows[0]).toContain('執行中');
+    expect(rows[1]).toContain(UNTITLED_THREAD_LABEL);
+    expect(rows[1]).not.toContain('執行中');
+    expect(rows[2]).toContain(BLANK_THREAD_LABEL);
+    expect(list.textContent).toContain('另有 1 份');
+
+    fireEvent.click(screen.getByRole('button', { name: '以前的會話' }));
+    await openList();
+    await waitFor(() => expect(reads).toBe(2));
+  });
+
+  it('點一條就切過去：開那一條、記下來、講明對話沒有保存，上一條的話不留', async () => {
+    seq = 0;
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    render(<App client={listing(fake, async () => ({ kind: 'ok', result: LISTED }))} />);
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    expect(screen.getByText(RESUMED_THREAD_NOTICE)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '記一筆。' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(screen.getByText('記一筆。')).toBeTruthy());
+
+    const list = await openList();
+    fireEvent.click(await within(list).findByRole('button', { name: /幫我改登入頁/ }));
+
+    await waitFor(() => expect(fake.opened).toEqual(['上一條', '跑著的那條']));
+    await waitFor(() => expect(stored()).toBe('跑著的那條'));
+    expect(screen.getByText(SWITCHED_THREAD_NOTICE)).toBeTruthy();
+    // 從清單點的一定是接回來的：換成確定的那一句，條件句那一句不再出現。
+    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByText('記一筆。')).toBeNull();
+    // 重掛之後清單是收著的。
+    expect(screen.queryByRole('region', { name: '以前的會話' })).toBeNull();
+  });
+
+  it('目前這條在清單上標出來，按不下去', async () => {
+    seq = 0;
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '目標那條' }));
+    const fake = fakeClient([]);
+    render(<App client={listing(fake, async () => ({ kind: 'ok', result: LISTED }))} />);
+    const list = await openList();
+    const current = (await within(list).findByRole('button', {
+      name: new RegExp(UNTITLED_THREAD_LABEL.replace(/[()（）]/g, '.')),
+    })) as HTMLButtonElement;
+    expect(current.textContent).toContain('目前這條');
+    expect(current.disabled).toBe(true);
+  });
+
+  it.each([
+    [
+      'server 列不了',
+      async () => ({
+        kind: 'rejected' as const,
+        message: '會話日誌只在記憶體裡（serve 沒給 --session-log）',
+      }),
+      '--session-log',
+    ],
+    [
+      '讀取拋錯',
+      async () => {
+        throw new Error('列表被載體層擋下：415');
+      },
+      '415',
+    ],
+  ])('列不出來（%s）：講原因，不說「還沒有」', async (_label, listThreads, reason) => {
+    seq = 0;
+    const fake = fakeClient([]);
+    render(<App client={listing(fake, listThreads)} />);
+    const list = await openList();
+    await waitFor(() => expect(list.textContent).toContain('列不出來'));
+    expect(list.textContent).toContain(reason);
+    expect(list.textContent).not.toContain('還沒有以前的會話');
+  });
+
+  it('一條都沒有：講「還沒有」', async () => {
+    seq = 0;
+    const fake = fakeClient([]);
+    render(
+      <App
+        client={listing(fake, async () => ({ kind: 'ok', result: { items: [], unreadable: 0 } }))}
+      />,
+    );
+    const list = await openList();
+    await waitFor(() => expect(list.textContent).toContain('這個專案還沒有以前的會話'));
   });
 });

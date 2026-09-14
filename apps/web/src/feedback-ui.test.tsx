@@ -129,6 +129,8 @@ function fakeClient(
       records.push(params);
       return { kind: 'ok', result: { ok: true, value: { recorded: true } } };
     },
+    // 這一檔不打開「以前的會話」，碰到就是測試寫錯了。
+    listThreads: async () => ({ kind: 'rejected', message: '這一檔沒有接清單' }),
   };
   return { client, puts, deletes, records, slashed };
 }
