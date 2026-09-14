@@ -90,6 +90,7 @@ import {
   readToolResultMessage,
   TOOL_ABORTED,
   TOOL_TIMEOUT,
+  toolRefusal,
   UNKNOWN_TOOL,
 } from './tool-events.js';
 import type { ToolErrorInfo, ToolOutcome } from './tool-events.js';
@@ -390,16 +391,15 @@ export function createContainmentMiddleware(
         // 中斷、`Command` 這類控制流是用拋例外走的，接住它們等於把功能吃掉。
         if (isGraphBubbleUp(error)) throw error;
         const toolName = resolveToolName(request);
-        const message = new ToolMessage({
-          content: isToolTimeout(error)
+        // 前綴由 `toolRefusal` 加，同 dsh 的 `toolErrorResult` 渲染每一顆拋出來的錯（#318）。
+        // 基座自己的錯誤回饋**不設 `status`**（`defaultHandleToolErrors`，實測
+        // `undefined`），等於錯誤散文以一則結構上成功的訊息送進模型。這裡比基座嚴。
+        const message = toolRefusal(
+          isToolTimeout(error)
             ? formatToolTimeout(toolName, Date.now() - startedAt, declaredToolTimeoutMs(request))
             : formatToolFailure(toolName, error),
-          tool_call_id: request.toolCall.id ?? '',
-          name: toolName,
-          // 基座自己的錯誤回饋**不設 `status`**（`defaultHandleToolErrors`，實測
-          // `undefined`），等於錯誤散文以一則結構上成功的訊息送進模型。這裡比基座嚴。
-          status: 'error',
-        });
+          { callId: request.toolCall.id ?? '', name: toolName },
+        );
         const kind = classifyThrownToolError(error);
         settle?.(
           kind === undefined ? { isError: true } : { isError: true, error: kind },

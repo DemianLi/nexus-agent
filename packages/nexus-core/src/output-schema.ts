@@ -50,7 +50,7 @@ import { createMiddleware } from 'langchain';
 import type { ZodType } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
 import { resolveToolName } from './containment.js';
-import { INVALID_TOOL_OUTPUT, markToolError } from './tool-events.js';
+import { INVALID_TOOL_OUTPUT, toolRefusal } from './tool-events.js';
 
 /** 校驗 middleware 的名字。 */
 export const OUTPUT_SCHEMA_MIDDLEWARE_NAME = 'nexusToolOutputSchema';
@@ -112,14 +112,12 @@ function verify(toolName: string, content: unknown, schema: ZodType): Verdict {
   return { ok: false, feedback: formatSchemaViolation(toolName, issues) };
 }
 
-/** 造一則取代原輸出的 error ToolMessage。 */
+/**
+ * 造一則取代原輸出的 error ToolMessage。帶 `Error: `：dsh 的 `ToolOutputError` 是用拋的
+ * （`packages/core/tools/src/index.ts:506-511`），由 `toolErrorResult` 渲染（#318）。
+ */
 function reject(feedback: string, toolCallId: string, toolName: string): ToolMessage {
-  return new ToolMessage({
-    content: feedback,
-    tool_call_id: toolCallId,
-    name: toolName,
-    status: 'error',
-  });
+  return toolRefusal(feedback, { callId: toolCallId, name: toolName });
 }
 
 /**
@@ -128,9 +126,10 @@ function reject(feedback: string, toolCallId: string, toolName: string): ToolMes
  * 校驗器自己壞掉那一格不標——那是我們的 bug，不是工具的輸出不合。
  */
 function rejectOutput(feedback: string, toolCallId: string, toolName: string): ToolMessage {
-  return markToolError(reject(feedback, toolCallId, toolName), {
-    name: 'ToolOutputError',
-    code: INVALID_TOOL_OUTPUT,
+  return toolRefusal(feedback, {
+    callId: toolCallId,
+    name: toolName,
+    error: { name: 'ToolOutputError', code: INVALID_TOOL_OUTPUT },
   });
 }
 

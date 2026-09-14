@@ -495,7 +495,7 @@ describe('要核准的工具', () => {
       } else {
         // 被拒照 dsh 不帶碼，文字是閘門自己的那句。
         expect(result?.data).toEqual({ callId: 'call_bad', isError: true });
-        expect(textOf(replay.next?.content)).toBe('有人看過並拒絕了 "danger"。');
+        expect(textOf(replay.next?.content)).toBe('Error: 有人看過並拒絕了 "danger"。');
       }
       expect(bodies).toEqual([]);
     } finally {

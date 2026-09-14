@@ -708,7 +708,7 @@ describe('root-only 的工具', () => {
     // 描述帶著那句話：模型看得到的只有描述，不寫在那裡它每一輪都會再叫一次。
     expect(stub?.description).toContain(ROOT_ONLY_NOTICE);
     expect(stubAnswer(await stub?.invoke({}))).toEqual({
-      text: rootOnlyRefusal('goal', 'researcher'),
+      text: `Error: ${rootOnlyRefusal('goal', 'researcher')}`,
       status: 'error',
       error: undefined,
     });
@@ -748,7 +748,7 @@ describe('root-only 的工具', () => {
     for (const subagent of params.subagents) {
       expect(subagent.tools?.[0]).not.toBe(goal);
       expect(stubAnswer(await subagent.tools?.[0]?.invoke({}))).toMatchObject({
-        text: rootOnlyRefusal('goal', subagent.name),
+        text: `Error: ${rootOnlyRefusal('goal', subagent.name)}`,
       });
     }
   });
@@ -861,7 +861,9 @@ describe('general-purpose 由 fold 註冊', () => {
     const stub = gp?.tools?.[0];
     expect(stub?.name).toBe('goal');
     expect(stub).not.toBe(goal);
-    expect(stubAnswer(await stub?.invoke({}))).toMatchObject({ text: rootOnlyRefusal('goal', GP) });
+    expect(stubAnswer(await stub?.invoke({}))).toMatchObject({
+      text: `Error: ${rootOnlyRefusal('goal', GP)}`,
+    });
   });
 });
 

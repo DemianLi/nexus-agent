@@ -22,6 +22,7 @@ import {
   goalId,
   SessionRegistry,
   toolErrorOf,
+  TOOL_ERROR_PREFIX,
 } from '@nexus/core';
 import type { NamedEntry, SessionLog } from '@nexus/core';
 
@@ -35,7 +36,6 @@ import {
   GOAL_MODEL_REPORTED_CODE,
   GOAL_TOOL_AUTHORITY_MESSAGE,
   GOAL_TOOL_COMPLETION_AUTHORITY_MESSAGE,
-  GOAL_TOOL_ERROR_PREFIX,
   GOAL_TOOL_INVALID_REF_MESSAGE,
   GOAL_TOOL_NO_SERVICE_MESSAGE,
   GOAL_TOOL_NOT_ATTACHED_MESSAGE,
@@ -230,7 +230,7 @@ describe('create_goal', () => {
   it('這一輪追不到人類訊息就拒絕，而且什麼都沒寫', async () => {
     const { call, log } = bench();
     expect(await call(GOAL_CREATE_TOOL_NAME, { objective: '偷偷來' })).toBe(
-      GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_AUTHORITY_MESSAGE,
+      TOOL_ERROR_PREFIX + GOAL_TOOL_AUTHORITY_MESSAGE,
     );
     expect(log.events).toEqual([]);
   });
@@ -271,7 +271,7 @@ describe('create_goal', () => {
     human(log);
     await call(GOAL_CREATE_TOOL_NAME, { objective: '第一個' });
     const second = await call(GOAL_CREATE_TOOL_NAME, { objective: '第二個' });
-    expect(second.startsWith(GOAL_TOOL_ERROR_PREFIX)).toBe(true);
+    expect(second.startsWith(TOOL_ERROR_PREFIX)).toBe(true);
     expect(second).toContain('已經存在');
   });
 });
@@ -300,7 +300,7 @@ describe('update_goal', () => {
       action: 'edit',
       objective: '再改一次',
     });
-    expect(rejected.startsWith(GOAL_TOOL_ERROR_PREFIX)).toBe(true);
+    expect(rejected.startsWith(TOOL_ERROR_PREFIX)).toBe(true);
     expect(parse(await call(GOAL_GET_TOOL_NAME)).goal).toMatchObject({
       objective: '改一次',
       revision: 2,
@@ -359,7 +359,7 @@ describe('update_goal', () => {
     human(log);
     await call(GOAL_CREATE_TOOL_NAME, { objective: 'x' });
     expect(await call(GOAL_UPDATE_TOOL_NAME, { ...(await refOf(call)), action: 'blocked' })).toBe(
-      GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_REASON_REQUIRED_MESSAGE,
+      TOOL_ERROR_PREFIX + GOAL_TOOL_REASON_REQUIRED_MESSAGE,
     );
   });
 
@@ -373,7 +373,7 @@ describe('update_goal', () => {
         action: 'pause',
         objective: '順便改一下',
       }),
-    ).toBe(GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_REPLACEMENT_MISPLACED_MESSAGE);
+    ).toBe(TOOL_ERROR_PREFIX + GOAL_TOOL_REPLACEMENT_MISPLACED_MESSAGE);
   });
 
   it('blocked_reason 配在 blocked 以外的 action 上被擋', async () => {
@@ -386,17 +386,17 @@ describe('update_goal', () => {
         action: 'complete',
         blocked_reason: '順便講一下',
       }),
-    ).toBe(GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_REASON_MISPLACED_MESSAGE);
+    ).toBe(TOOL_ERROR_PREFIX + GOAL_TOOL_REASON_MISPLACED_MESSAGE);
   });
 
   it('goal_id 空的或 revision 是 0 都被擋', async () => {
     const { call, log } = bench();
     human(log);
     expect(await call(GOAL_UPDATE_TOOL_NAME, { goal_id: '', revision: 1, action: 'pause' })).toBe(
-      GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_INVALID_REF_MESSAGE,
+      TOOL_ERROR_PREFIX + GOAL_TOOL_INVALID_REF_MESSAGE,
     );
     expect(await call(GOAL_UPDATE_TOOL_NAME, { goal_id: 'g', revision: 0, action: 'pause' })).toBe(
-      GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_INVALID_REF_MESSAGE,
+      TOOL_ERROR_PREFIX + GOAL_TOOL_INVALID_REF_MESSAGE,
     );
   });
 
@@ -405,13 +405,13 @@ describe('update_goal', () => {
     // 四個一律要人。
     for (const action of ['edit', 'pause', 'resume']) {
       expect(await call(GOAL_UPDATE_TOOL_NAME, { goal_id: 'goal-1', revision: 1, action })).toBe(
-        GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_AUTHORITY_MESSAGE,
+        TOOL_ERROR_PREFIX + GOAL_TOOL_AUTHORITY_MESSAGE,
       );
     }
     // 這兩個另外收得下當前續行輪次，所以拒絕時要把那條路也講出來。
     for (const action of ['complete', 'blocked']) {
       expect(await call(GOAL_UPDATE_TOOL_NAME, { goal_id: 'goal-1', revision: 1, action })).toBe(
-        GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_COMPLETION_AUTHORITY_MESSAGE,
+        TOOL_ERROR_PREFIX + GOAL_TOOL_COMPLETION_AUTHORITY_MESSAGE,
       );
     }
   });
@@ -456,7 +456,7 @@ describe('在續行輪次裡', () => {
     const b = bench();
     const ref = await upto(b, 1);
     expect(await b.call(GOAL_CREATE_TOOL_NAME, { objective: '換一個' })).toBe(
-      GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_AUTHORITY_MESSAGE,
+      TOOL_ERROR_PREFIX + GOAL_TOOL_AUTHORITY_MESSAGE,
     );
     for (const action of ['edit', 'pause', 'resume']) {
       expect(
@@ -465,7 +465,7 @@ describe('在續行輪次裡', () => {
           action,
           ...(action === 'edit' ? { objective: '換一個' } : {}),
         }),
-      ).toBe(GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_AUTHORITY_MESSAGE);
+      ).toBe(TOOL_ERROR_PREFIX + GOAL_TOOL_AUTHORITY_MESSAGE);
     }
   });
 
@@ -567,7 +567,7 @@ describe('在續行輪次裡', () => {
     const ref = await upto(b, 1);
     expect(
       await b.call(GOAL_UPDATE_TOOL_NAME, { ...ref, action: 'blocked', blocked_reason: '卡住' }),
-    ).toBe(GOAL_TOOL_ERROR_PREFIX + goalToolBlockTooSoonMessage(3, 1));
+    ).toBe(TOOL_ERROR_PREFIX + goalToolBlockTooSoonMessage(3, 1));
   });
 
   /** dsh `tool-goal/src/index.ts:308-311`。**卡上那張表漏了這一列**，照決議第 3 條補上。 */
@@ -637,7 +637,7 @@ describe('接線說得出原因', () => {
   it('認不出呼叫者', async () => {
     const { call } = bench();
     expect(await call(GOAL_GET_TOOL_NAME, {}, { configurable: {} })).toBe(
-      GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_UNKNOWN_CALLER_MESSAGE,
+      TOOL_ERROR_PREFIX + GOAL_TOOL_UNKNOWN_CALLER_MESSAGE,
     );
   });
 
@@ -649,7 +649,7 @@ describe('接線說得出原因', () => {
     exit();
     const found = registry.tools.effective(undefined).get(GOAL_GET_TOOL_NAME);
     const result = await found?.value.invoke({} as never, ROOT_CALL as never);
-    expect(textOf(result)).toBe(GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_NOT_ATTACHED_MESSAGE);
+    expect(textOf(result)).toBe(TOOL_ERROR_PREFIX + GOAL_TOOL_NOT_ATTACHED_MESSAGE);
     expect(verdictOf(result)).toEqual({ status: 'error', error: undefined });
   });
 
@@ -669,7 +669,7 @@ describe('接線說得出原因', () => {
         configurable: { checkpoint_ns: 'tools:spawn-1|tools:call-1' },
       } as never,
     );
-    expect(textOf(result)).toBe(GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_NO_SERVICE_MESSAGE);
+    expect(textOf(result)).toBe(TOOL_ERROR_PREFIX + GOAL_TOOL_NO_SERVICE_MESSAGE);
     expect(verdictOf(result)).toEqual({ status: 'error', error: undefined });
     expect(log.events.filter((event) => event.type === 'goal/change')).toEqual([]);
   });

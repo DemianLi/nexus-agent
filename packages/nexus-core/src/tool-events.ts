@@ -109,25 +109,23 @@ export function toolCallIdOf(config: unknown): string | undefined {
 }
 
 /**
- * 一則「這次呼叫沒有生效」的工具結果：`status: 'error'`，內容逐字是給模型的那一句。
+ * 「這次呼叫沒有生效」的文字前綴。dsh `toolErrorResult` 的 `Error: `
+ * （`packages/core/tools/src/index.ts:1860-1867`）。
  *
- * 照 dsh：拒絕在那側一律是拋，註冊表接住渲染成 `isError` 的結果
- * （`packages/core/tools/src/index.ts:1860-1868`），沒有一處是狀態成功的拒絕。我們回訊息而不
- * 拋，是因為拋給圍堵的話模型看到的字會變成「工具 X 執行失敗：…」。決議見
- * [#271](https://github.com/DemianLi/nexus-agent/issues/271)。
- *
- * **`callId` 取不到時給 `''`**，同 `ask_user_question`、`submit_record` 的先例：直接回來的
- * ToolMessage，{@link readToolOutcome} 不比對 id。**包在 `Command` 裡回的不行**——那條路靠 id
- * 認出屬於這次呼叫的那則，給錯就讀成成功。
- *
- * @param content - 模型看到的那一句，逐字。
- * @param options - `callId` 與 `name` 照這次呼叫；`error` 只在 dsh 那側帶碼時給。
- * @returns 標好碼（如果有）的那則訊息。
+ * **只有 {@link toolRefusal} 加它**，別的地方不自己拼：前綴的主人只有一個，才不會有一句帶兩次。
+ * 匯出是給測試與 web 拼出模型看到的那一句用的。
  */
-export function toolRefusal(
-  content: string,
-  options: { readonly callId: string; readonly name: string; readonly error?: ToolErrorInfo },
-): ToolMessage {
+export const TOOL_ERROR_PREFIX = 'Error: ';
+
+/** {@link toolRefusal} 與 {@link toolFeedback} 共用的那幾格。 */
+interface ErrorResultOptions {
+  readonly callId: string;
+  readonly name: string;
+  readonly error?: ToolErrorInfo;
+}
+
+/** 造一則 `status: 'error'` 的 ToolMessage，碼（如果有）掛上去。前綴不在這裡決定。 */
+function errorResult(content: string, options: ErrorResultOptions): ToolMessage {
   const message = new ToolMessage({
     content,
     tool_call_id: options.callId,
@@ -135,6 +133,44 @@ export function toolRefusal(
     status: 'error',
   });
   return options.error === undefined ? message : markToolError(message, options.error);
+}
+
+/**
+ * 一則「這次呼叫沒有生效」的工具結果：`status: 'error'`，模型看到的是 `Error: <reason>`。
+ *
+ * **這是我們的 `toolErrorResult`**（[#318](https://github.com/DemianLi/nexus-agent/issues/318)）。
+ * dsh 有兩條政策：拋出來的、與 harness 自己寫的「這次沒生效」帶 `Error: `（工具本體拋錯、核准被拒
+ * `:1479-1487`、超時、中止）；作者自己寫的回饋原樣（post-execute `block` `:1738-1745`、`repair.ts`）
+ * ——後者走 {@link toolFeedback}。拒絕在 dsh 一律是拋，由註冊表接住渲染；我們回訊息而不拋
+ * （[#271](https://github.com/DemianLi/nexus-agent/issues/271)），所以渲染落在造訊息的這一處，
+ * 圍堵接住拋錯的那條也走這裡。**前綴要進文字**：Chat Completions 的轉換器只送
+ * `{ role, tool_call_id, content }`（`@langchain/openai@1.5.10` `converters/completions.js:475-479`），
+ * `status` 到不了模型。
+ *
+ * **`callId` 取不到時給 `''`**，同 `ask_user_question`、`submit_record` 的先例：直接回來的
+ * ToolMessage，{@link readToolOutcome} 不比對 id。**包在 `Command` 裡回的不行**——那條路靠 id
+ * 認出屬於這次呼叫的那則，給錯就讀成成功。
+ *
+ * @param reason - 前綴後面那一句，逐字；**不要自己帶 `Error: `**。
+ * @param options - `callId` 與 `name` 照這次呼叫；`error` 只在 dsh 那側帶碼時給。
+ * @returns 標好碼（如果有）的那則訊息。
+ */
+export function toolRefusal(reason: string, options: ErrorResultOptions): ToolMessage {
+  return errorResult(TOOL_ERROR_PREFIX + reason, options);
+}
+
+/**
+ * 一則作者自己寫好的錯誤結果：`status: 'error'`，文字原樣、不加前綴。dsh 的第二條政策
+ * （見 {@link toolRefusal}）。
+ *
+ * 今天唯一的生產者是推模型歷史時補的那兩句（`conversation-replay.ts`，逐字抄 dsh `repair.ts:102-107`）。
+ *
+ * @param content - 模型看到的那一句，逐字。
+ * @param options - 同 {@link toolRefusal}。
+ * @returns 標好碼（如果有）的那則訊息。
+ */
+export function toolFeedback(content: string, options: ErrorResultOptions): ToolMessage {
+  return errorResult(content, options);
 }
 
 /** 一次呼叫落定成什麼。`error` 只在 `isError` 而且認得出種類時有。 */

@@ -154,7 +154,7 @@ describe('工具超時', () => {
       { name: 'boom', description: 'boom', schema: z.object({}), defaultConfig: { timeout: 5000 } },
     );
     const message = await runOnce(boom as never);
-    expect(String(message.content)).toBe('工具 boom 執行失敗：連不上');
+    expect(String(message.content)).toBe('Error: 工具 boom 執行失敗：連不上');
     expect(String(message.content)).not.toContain('超時');
   }, 20000);
 

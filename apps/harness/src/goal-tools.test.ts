@@ -16,12 +16,12 @@
 
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
+import { TOOL_ERROR_PREFIX } from '@nexus/core';
 import type { NexusPlugin } from '@nexus/core';
 import {
   createGoalPlugin,
   GOAL_CREATE_TOOL_NAME,
   GOAL_TOOL_AUTHORITY_MESSAGE,
-  GOAL_TOOL_ERROR_PREFIX,
 } from '@nexus/plugin-goal';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -175,7 +175,7 @@ describe('模型工具走真的 pump', () => {
       const toolText = result.messages
         .filter((message) => message.getType() === 'tool')
         .map((message) => String(message.content));
-      expect(toolText).toContain(GOAL_TOOL_ERROR_PREFIX + GOAL_TOOL_AUTHORITY_MESSAGE);
+      expect(toolText).toContain(TOOL_ERROR_PREFIX + GOAL_TOOL_AUTHORITY_MESSAGE);
       expect(pump.sessionLog.events.filter((event) => event.type === 'goal/change')).toEqual([]);
       // **日誌上記的是錯誤、碼照 dsh**（#273）：以前那句話是狀態成功的，日誌記成成功。
       expect(

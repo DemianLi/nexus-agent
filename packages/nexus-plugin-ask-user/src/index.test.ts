@@ -124,7 +124,7 @@ describe('四條出口', () => {
   it('**放棄整組是錯誤，不是一份空答案**——模型要分得出「人不走這條路」與「每題都跳過」', async () => {
     resumeWith = { cancelled: true };
     expect(await errorTextOf(await (await toolOf('human')).invoke(ONE_QUESTION))).toBe(
-      CANCELLED_MESSAGE,
+      `Error: ${CANCELLED_MESSAGE}`,
     );
     // 而且它真的問過了——沒問就拋的話，這條測的只是參數檢查。
     expect(interrupted).toHaveLength(1);

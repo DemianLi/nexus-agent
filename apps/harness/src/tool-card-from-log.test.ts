@@ -206,7 +206,7 @@ describe('產品路徑：本體沒被呼叫到的呼叫，web 上有一張卡', 
       await run.say('交計劃');
       expect(baseToolFrames(run.frames)).toEqual([]);
       expect(toolEntries(run.frames)).toMatchObject([
-        { name: 'exit_plan_mode', status: 'failed', error: NOT_IN_PLAN_MODE_MESSAGE },
+        { name: 'exit_plan_mode', status: 'failed', error: `Error: ${NOT_IN_PLAN_MODE_MESSAGE}` },
       ]);
     } finally {
       await run.close();

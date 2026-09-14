@@ -77,6 +77,7 @@ import {
   readToolOutcome,
   TOOL_ABORTED,
   TOOL_ABORTED_BEFORE_DISPATCH,
+  TOOL_ERROR_PREFIX,
   toolRefusal,
 } from './tool-events.js';
 
@@ -89,11 +90,18 @@ export const TURN_CANCEL_MIDDLEWARE_NAME = 'nexusTurnCancel';
 /** 內層那顆的名字。 */
 export const TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME = 'nexusTurnCancelModelSignal';
 
-/** 已經開始的呼叫被中止時，模型看到的那一句。dsh 原文照抄（`tools/src/index.ts:1909-1920`）。 */
-export const TOOL_ABORTED_TEXT = 'Error: tool call aborted';
+/** 已經開始的呼叫被中止時交給 `toolRefusal` 的那一句。dsh 原文照抄（`tools/src/index.ts:1909-1920`）。 */
+export const TOOL_ABORTED_REASON = 'tool call aborted';
 
-/** 還沒開始的呼叫被中止時，模型看到的那一句。dsh 原文照抄（`agent-loop/src/tool-calls.ts:250-259`）。 */
-export const TOOL_ABORTED_BEFORE_DISPATCH_TEXT = 'Error: tool call aborted before dispatch';
+/** 還沒開始的呼叫被中止時交給 `toolRefusal` 的那一句。dsh 原文照抄（`agent-loop/src/tool-calls.ts:250-259`）。 */
+export const TOOL_ABORTED_BEFORE_DISPATCH_REASON = 'tool call aborted before dispatch';
+
+/** 已經開始的呼叫被中止時，模型看到的那一句（帶前綴）。web 的工具卡照它寫。 */
+export const TOOL_ABORTED_TEXT = TOOL_ERROR_PREFIX + TOOL_ABORTED_REASON;
+
+/** 還沒開始的呼叫被中止時，模型看到的那一句（帶前綴）。 */
+export const TOOL_ABORTED_BEFORE_DISPATCH_TEXT =
+  TOOL_ERROR_PREFIX + TOOL_ABORTED_BEFORE_DISPATCH_REASON;
 
 /**
  * 被中止時模型講到一半的那一則回覆，在 `additional_kwargs` 上的記號，值是 `true`
@@ -229,7 +237,7 @@ export function createTurnCancelGuard(): AgentMiddleware {
       const aborted = (content: string, code: string) =>
         toolRefusal(content, { callId, name, error: { name: 'AbortError', code } });
       if (signal.aborted)
-        return aborted(TOOL_ABORTED_BEFORE_DISPATCH_TEXT, TOOL_ABORTED_BEFORE_DISPATCH);
+        return aborted(TOOL_ABORTED_BEFORE_DISPATCH_REASON, TOOL_ABORTED_BEFORE_DISPATCH);
       let result: Awaited<ReturnType<typeof handler>>;
       try {
         result = await handler(request);
@@ -237,18 +245,18 @@ export function createTurnCancelGuard(): AgentMiddleware {
         // 保險：子代理那一層照說不拋（見 `stopHere`），但被中止的原因若還是從工具裡冒出來，
         // 那是一次被中止的呼叫，不是工具壞了（#265 的 Q10）。其餘照拋，讓圍堵照它的規則分類。
         if (signal.aborted && isTurnCancelled(error)) {
-          return aborted(TOOL_ABORTED_TEXT, TOOL_ABORTED);
+          return aborted(TOOL_ABORTED_REASON, TOOL_ABORTED);
         }
         throw error;
       }
       if (!signal.aborted) return result;
       // `Command` 留著它的狀態更新，只換屬於這次呼叫的那一則，見 `abortCommand`。
       if (isCommand(result)) {
-        return abortCommand(result, callId, aborted(TOOL_ABORTED_TEXT, TOOL_ABORTED));
+        return abortCommand(result, callId, aborted(TOOL_ABORTED_REASON, TOOL_ABORTED));
       }
       // 只換成功的結果：工具自己回的錯照舊。
       if (readToolOutcome(result, callId).isError) return result;
-      return aborted(TOOL_ABORTED_TEXT, TOOL_ABORTED);
+      return aborted(TOOL_ABORTED_REASON, TOOL_ABORTED);
     },
     wrapModelCall: async (request, handler) => {
       // 中止之後的下一次模型呼叫就是「這一步之後」：擋在這裡，圖停在剛落定的那批工具結果後面，
