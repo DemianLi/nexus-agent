@@ -21,8 +21,8 @@ import type { AddressInfo } from 'node:net';
 import { AIMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
-import { INTERRUPTED_REPLY_MARKER } from '@nexus/core';
-import type { SessionEvent } from '@nexus/core';
+import { fromLoggedMessage, INTERRUPTED_REPLY_MARKER } from '@nexus/core';
+import type { SessionEvent, SessionEventMap } from '@nexus/core';
 import type { Event } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
@@ -157,6 +157,15 @@ describe('真的 ChatOpenAI 串到一半按停止', () => {
       expect((last as AIMessage).text).toBe(shown);
       expect((last as AIMessage).additional_kwargs[INTERRUPTED_REPLY_MARKER]).toBe(true);
 
+      // #305：日誌同時記下那半段——`interrupted: true`，文字就是畫面上那些。它落在被切斷那次的
+      // `model/end` 之後：寫入點看到的是拋錯，不是回覆，這一顆由 pump 在收尾時寫。
+      const replies = events.filter((event) => event.type === 'assistant/message');
+      expect(replies).toHaveLength(1);
+      const interrupted = replies[0]!.data as SessionEventMap['assistant/message'];
+      expect(interrupted.interrupted).toBe(true);
+      expect(fromLoggedMessage(interrupted.message).text).toBe(shown);
+      expect(types.indexOf('assistant/message')).toBeGreaterThan(types.indexOf('model/end'));
+
       // 下一輪：送出去的請求依序是那句話、那半段、這句話。
       await pump.submit({ kind: 'message', text: '繼續' });
       const second = upstream.requests[1] ?? [];
@@ -165,6 +174,13 @@ describe('真的 ChatOpenAI 串到一半按停止', () => {
         { role: 'assistant', content: shown },
         { role: 'user', content: '繼續' },
       ]);
+      // 真的 `ChatOpenAI` 走 v3 串流回來的整則回覆也記得進去——content block、供應商的
+      // `response_metadata` 都是它自己產的，不是測試造的。這一則正常收尾，不帶 `interrupted`。
+      const after = pump.sessions.root.events.filter((event) => event.type === 'assistant/message');
+      expect(after).toHaveLength(2);
+      const full = after[1]!.data as SessionEventMap['assistant/message'];
+      expect('interrupted' in full).toBe(false);
+      expect(fromLoggedMessage(full.message).text).toBe(FULL);
     } finally {
       line.abort();
       await draining;

@@ -20,13 +20,10 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import {
-  publishToolResult,
-  TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
-  TOOL_ABORTED_TEXT,
-} from '@nexus/core';
+import { TOOL_ABORTED_BEFORE_DISPATCH_TEXT, TOOL_ABORTED_TEXT, toLoggedMessage } from '@nexus/core';
 import type { NexusPlugin } from '@nexus/core';
 import { createPlanModePlugin, NOT_IN_PLAN_MODE_MESSAGE } from '@nexus/plugin-plan-mode';
 import type { ConversationState, Event } from '@nexus/wire';
@@ -319,12 +316,18 @@ describe('送達的先後：判定比基座那顆 `tool-started` 先到', () => 
     const record = () => {
       const log = pump.sessionLog;
       log.append('tool/call', { callId: 'c1', name: 'write_file', arguments: '{"a":1}' });
-      publishToolResult(log, 'c1', '被擋下', () => {
-        log.append('tool/result', {
-          callId: 'c1',
-          isError: true,
-          error: { name: 'FsError', code: 'FS_SANDBOX_DENIED' },
-        });
+      log.append('tool/result', {
+        callId: 'c1',
+        isError: true,
+        error: { name: 'FsError', code: 'FS_SANDBOX_DENIED' },
+        message: toLoggedMessage(
+          new ToolMessage({
+            content: '被擋下',
+            tool_call_id: 'c1',
+            name: 'write_file',
+            status: 'error',
+          }),
+        ),
       });
     };
     async function* stream() {

@@ -111,14 +111,15 @@ export {
   OUTPUT_SCHEMA_MIDDLEWARE_NAME,
 } from './output-schema.js';
 
+export type { LoggedMessage } from './logged-message.js';
+export { fromLoggedMessage, toLoggedMessage } from './logged-message.js';
+
 export type { ToolErrorInfo, ToolOutcome } from './tool-events.js';
 export {
   INVALID_ARGS,
   INVALID_TOOL_OUTPUT,
   markToolError,
-  publishToolResult,
   readToolOutcome,
-  toolResultTextOf,
   TOOL_ABORTED,
   TOOL_ABORTED_BEFORE_DISPATCH,
   TOOL_TIMEOUT,

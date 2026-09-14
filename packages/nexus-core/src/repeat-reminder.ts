@@ -70,6 +70,8 @@ import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import { toLoggedMessage } from './logged-message.js';
+import type { SessionLookup } from './registry.js';
 
 /** 提醒 middleware 的名字。錯誤訊息與排序斷言用得到。 */
 export const REPEAT_REMINDER_MIDDLEWARE_NAME = 'nexusRepeatToolReminder';
@@ -411,33 +413,69 @@ function pendingReminders(
  * 換算後 ≈ 11）離 100 還很遠，所以那個常數沒有動。要拿回原本的預算就自己傳一個大的
  * `recursionLimit`，或明著傳 `repeatReminder: false`。
  *
+ * ## 塞進對話的也記進日誌（[#305](https://github.com/DemianLi/nexus-agent/issues/305)）
+ *
+ * 給了 `sessions` 就把每一則提醒記成一顆 `user/message`，寫進這次呼叫所屬的那一份——模型看得到，
+ * 推模型歷史的一側就得讀得到。照 dsh 的 `repeat-tool-reminder`（`agent/pre-step` 注入一則
+ * `source: {kind: 'plugin'}` 的 user 訊息）。身分從 `runtime.configurable` 現算，同 `model-usage.ts`，
+ * 所以共用一份實例照舊成立。記不進去就算了：提醒照樣送出。
+ *
  * @param settings - 已經 {@link resolveRepeatReminderSettings} 驗過的設定。
+ * @param sessions - 註冊表的 `sessions` 通道。**省略就不記**——單元測試走這條；產品組裝由
+ *   `fold.ts` 傳進來。
  * @returns 可以交給 `registry.middleware.use()` 或塞進 subagent 的 middleware。
  */
-export function createRepeatReminder(settings: RepeatReminderSettings): AgentMiddleware {
+export function createRepeatReminder(
+  settings: RepeatReminderSettings,
+  sessions?: { forCall(config: unknown): SessionLookup },
+): AgentMiddleware {
   const tracked = repeatReminderTracks(settings);
 
   return createMiddleware({
     name: REPEAT_REMINDER_MIDDLEWARE_NAME,
-    beforeModel: (state: { messages: readonly BaseMessage[] }) => {
+    beforeModel: (
+      state: { messages: readonly BaseMessage[] },
+      runtime?: { readonly configurable?: unknown },
+    ) => {
       const hits = pendingReminders(state.messages ?? [], settings, tracked);
       if (hits.length === 0) return undefined;
-      return {
-        messages: hits.map(({ tool, count, canonical }) => {
-          const text =
-            count === settings.thresholds[0]
-              ? GENTLE_REMINDER
-              : detailedReminder(
-                  tool,
-                  count,
-                  previewArguments(canonical, settings.argumentsPreviewChars),
-                );
-          return new HumanMessage({
-            content: text,
-            additional_kwargs: { [REPEAT_REMINDER_MARKER]: { tool, count } },
-          });
-        }),
-      };
+      const messages = hits.map(({ tool, count, canonical }) => {
+        const text =
+          count === settings.thresholds[0]
+            ? GENTLE_REMINDER
+            : detailedReminder(
+                tool,
+                count,
+                previewArguments(canonical, settings.argumentsPreviewChars),
+              );
+        return new HumanMessage({
+          content: text,
+          additional_kwargs: { [REPEAT_REMINDER_MARKER]: { tool, count } },
+        });
+      });
+      recordReminders(sessions, runtime?.configurable, messages);
+      return { messages };
     },
   }) as unknown as AgentMiddleware;
+}
+
+/** 把提醒記成 `user/message`。沒接會話、認不出屬於哪一份、或寫不進去，都不記。 */
+function recordReminders(
+  sessions: { forCall(config: unknown): SessionLookup } | undefined,
+  configurable: unknown,
+  messages: readonly HumanMessage[],
+): void {
+  if (sessions === undefined) return;
+  const found = sessions.forCall({ configurable });
+  if (found.kind !== 'ok') return;
+  for (const message of messages) {
+    try {
+      found.log.append('user/message', {
+        message: toLoggedMessage(message),
+        source: { kind: 'plugin', plugin: REPEAT_REMINDER_MIDDLEWARE_NAME },
+      });
+    } catch {
+      // 見上面：提醒照樣送出。
+    }
+  }
 }

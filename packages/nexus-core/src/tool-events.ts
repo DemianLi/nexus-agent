@@ -26,7 +26,7 @@
  * 「沒碼的錯誤」，不會變成錯的碼。
  */
 
-import { ToolMessage } from '@langchain/core/messages';
+import { HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { isCommand } from '@langchain/langgraph';
 
 /** 一次失敗的結果是哪一種。照 dsh 的 `ToolErrorInfo`：`name` 是錯誤類別名，`code` 是分類碼。 */
@@ -153,85 +153,51 @@ export function readToolOutcome(result: unknown, callId: string): ToolOutcome {
 }
 
 /**
- * 從 handler 回來的東西讀出模型看到的那一句。同 {@link readToolOutcome} 認兩個形狀。
+ * 從 handler 回來的東西讀出模型收到的那則 ToolMessage。同 {@link readToolOutcome} 認兩個形狀。
+ *
+ * 它進日誌的 `tool/result.message`（[#305](https://github.com/DemianLi/nexus-agent/issues/305)）。
+ * 在那之前日誌不帶內容（#264），web 工具卡的紅字另外靠一張發佈期間才讀得到的側表；內容進了事件，
+ * 側表跟著收掉——那句話與事件裡的是同一則訊息的同一個 `text`。
  *
  * @param result - `handler(request)` 回來的值。
  * @param callId - 這次呼叫的 id。
- * @returns 那則 ToolMessage 的文字；找不到 ToolMessage 就 `undefined`。
+ * @returns 那則 ToolMessage；找不到就 `undefined`。
  */
-export function readToolResultText(result: unknown, callId: string): string | undefined {
-  const message = ToolMessage.isInstance(result) ? result : commandToolMessage(result, callId);
-  return message?.text;
+export function readToolResultMessage(result: unknown, callId: string): ToolMessage | undefined {
+  return ToolMessage.isInstance(result) ? result : commandToolMessage(result, callId);
 }
 
 /**
- * 正在發佈的那顆失敗 `tool/result`，模型看到的那一句：日誌 → callId → 文字。
+ * 工具回的 `Command` 裡、跟著結果一起塞進對話的 HumanMessage——外掛注入的那些，照它們在
+ * `update.messages` 裡的順序。今天只有 goal 的收尾（`@nexus/plugin-goal` 的 `wrapupCommand`）。
  *
- * **日誌的 `tool/result` 不帶內容**（#264），而 web 的工具卡要把那一句畫成紅字
- * （[#296](https://github.com/DemianLi/nexus-agent/issues/296) 拍板的側表）。dsh 那側文字就在
- * `tool/result` 裡；我們的形狀不動，另開這一格，同 `invalid-tool-args.ts` 的原字串：原文不進日誌，
- * 需要它的讀者另外拿。
+ * 圍堵把它們記成 `user/message`（[#305](https://github.com/DemianLi/nexus-agent/issues/305)）：模型看得到，
+ * 推模型歷史的一側就得讀得到。**只認 HumanMessage**：`Command` 裡別種的訊息今天沒有生產者，而
+ * `user/message` 這個名字只裝得下 user-role 的那種。
  *
- * **只在那顆 `append` 的回呼期間讀得到。** `SessionLog.append` 同步叫訂閱者，所以寫的人先放、
- * `append`、回傳就刪——壽命由呼叫堆疊界定，沒有人訂閱的組裝（CLI）也不會留下任何一筆。
- * **以日誌為鍵、不做成只以 callId 為鍵**：假模型的 callId 是 `call_1_0` 這種固定值，兩場組裝
- * 同一個行程的話會互相讀到（同 `InvalidArgumentsCarrier` 不做成模組層級的理由）；日誌是每條
- * thread、每份會話各一份的實例。
+ * @param result - `handler(request)` 回來的值。
+ * @returns 那幾則；不是 `Command` 或一則都沒有就是空陣列。
  */
-const settlingTexts = new WeakMap<object, Map<string, string>>();
-
-/**
- * 發佈一顆 `tool/result`，發佈期間讓訂閱者讀得到它的文字。
- *
- * @param log - 要寫的那份日誌，也是讀的人拿來查的鍵。
- * @param callId - 這次呼叫的 id。
- * @param text - 模型看到的那一句；`undefined` 就不放。
- * @param append - 真正寫進日誌的那一步。
- */
-export function publishToolResult(
-  log: object,
-  callId: string,
-  text: string | undefined,
-  append: () => void,
-): void {
-  if (text === undefined) {
-    append();
-    return;
-  }
-  let texts = settlingTexts.get(log);
-  if (texts === undefined) {
-    texts = new Map();
-    settlingTexts.set(log, texts);
-  }
-  texts.set(callId, text);
-  try {
-    append();
-  } finally {
-    texts.delete(callId);
-  }
+export function readInjectedMessages(result: unknown): HumanMessage[] {
+  return commandMessages(result).filter((message): message is HumanMessage =>
+    HumanMessage.isInstance(message),
+  );
 }
 
-/**
- * 在 `tool/result` 的訂閱者裡讀那一句。見 {@link publishToolResult}。
- *
- * @param log - 發出這顆事件的那份日誌。
- * @param callId - 事件的 `callId`。
- * @returns 失敗那一次模型看到的文字；成功的、沒放的、或不在發佈期間讀的都是 `undefined`。
- */
-export function toolResultTextOf(log: object, callId: string): string | undefined {
-  return settlingTexts.get(log)?.get(callId);
-}
-
-/** `Command` 裡屬於這次呼叫的那則 ToolMessage。 */
-function commandToolMessage(result: unknown, callId: string): ToolMessage | undefined {
-  if (!isCommand(result)) return undefined;
+/** `Command` 的 `update.messages`；不是 `Command` 或沒有這一格就是空陣列。 */
+function commandMessages(result: unknown): readonly unknown[] {
+  if (!isCommand(result)) return [];
   const update: unknown = result.update;
   const messages =
     typeof update === 'object' && update !== null && 'messages' in update
       ? (update as { messages: unknown }).messages
       : undefined;
-  if (!Array.isArray(messages)) return undefined;
-  return messages.find(
+  return Array.isArray(messages) ? messages : [];
+}
+
+/** `Command` 裡屬於這次呼叫的那則 ToolMessage。 */
+function commandToolMessage(result: unknown, callId: string): ToolMessage | undefined {
+  return commandMessages(result).find(
     (message): message is ToolMessage =>
       ToolMessage.isInstance(message) && message.tool_call_id === callId,
   );

@@ -30,7 +30,12 @@ import { ScriptedChatModel } from './scripted-model.js';
 
 /** 一份日誌上每一顆 `tool/result` 的內容，依序。 */
 function resultsOf(events: readonly SessionEvent[]): unknown[] {
-  return events.flatMap((event) => (event.type === 'tool/result' ? [event.data] : []));
+  return events.flatMap((event) => {
+    if (event.type !== 'tool/result') return [];
+    // `message`（#305）是內容，這裡只比判別那幾格，逐 key 照舊。
+    const { message: _message, ...verdict } = event.data;
+    return [verdict];
+  });
 }
 
 /** 一次工具呼叫的腳本：模型叫那一顆，拿到結果後收工。 */

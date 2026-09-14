@@ -17,7 +17,7 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MemorySaver } from '@langchain/langgraph';
-import { SessionLog, SessionRegistry } from '@nexus/core';
+import { fromLoggedMessage, SessionLog, SessionRegistry } from '@nexus/core';
 import type { NexusPlugin, SessionEvent, SessionEventMap } from '@nexus/core';
 import { describe, expect, it, vi } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
@@ -187,13 +187,14 @@ describe('壓縮發生時，日誌裡留得下來', () => {
   });
 
   /**
-   * **摘要本文不准進日誌。** `session-log.ts` 檔頭那條「這一版不記訊息內容」在這裡是硬
-   * 約束：`summaryMessage` 就是模型產的訊息，而遙測協調器一律鏡像每一顆事件——記了它
-   * 等於從側門把訊息內容同時放進日誌與遙測。
+   * **摘要本文進日誌**（[#305](https://github.com/DemianLi/nexus-agent/issues/305)）——這一條以前是
+   * 反過來的絆索（「摘要本文不准進日誌」），理由是那時日誌不記訊息內容。推模型歷史的一側要拿它換掉
+   * 被壓掉的那一段，所以翻面：它要在，而且就是基座換上去的那一則（`lc_source: 'summarization'`
+   * 的 HumanMessage，`getEffectiveMessages` 放在最前面的那一則）。
    *
-   * 釘的是**欄位集合**而不是「不含某個字串」：把摘要塞進一個新欄位同樣會紅。
+   * 釘的仍然是**欄位集合**：多一格、少一格都紅。
    */
-  it('酬載只有三個欄位，摘要本文不在裡面', async () => {
+  it('酬載是四個欄位，summary 就是換上去的那則摘要訊息', async () => {
     const { root } = await run(chatter(), {
       summarization: { trigger: [{ type: 'tokens', value: 3_000 }] },
       invocations: 12,
@@ -201,7 +202,16 @@ describe('壓縮發生時，日誌裡留得下來', () => {
 
     expect(root.length).toBeGreaterThan(0);
     for (const record of root) {
-      expect(Object.keys(record).sort()).toEqual(['cutoffIndex', 'filePath', 'messagesBefore']);
+      expect(Object.keys(record).sort()).toEqual([
+        'cutoffIndex',
+        'filePath',
+        'messagesBefore',
+        'summary',
+      ]);
+      const summary = fromLoggedMessage(record.summary!);
+      expect(summary.getType()).toBe('human');
+      expect(summary.additional_kwargs.lc_source).toBe('summarization');
+      expect(summary.text.length).toBeGreaterThan(0);
     }
   });
 });

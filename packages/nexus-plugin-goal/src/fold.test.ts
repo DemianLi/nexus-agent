@@ -486,6 +486,10 @@ describe('什麼推得動 roundsStarted', () => {
     //
     // `feedback/*`（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）：不推——人事後
     // 對某一輪按讚踩、寫回饋，那一輪早就算過了；讓它推，每評一次就吃掉一格 `maxGoalRounds`。
+    //
+    // `assistant/message`／`user/message`（[#305](https://github.com/DemianLi/nexus-agent/issues/305)）：
+    // 不推。前者一次模型呼叫一顆，理由同 `model/usage`。後者是外掛塞進對話的一則話——**其中一個生產者
+    // 就是 goal 自己的收尾**，讓它推的話，收尾一次就多算一輪，而那一輪根本沒有開始。
     const KNOWN = [
       'turn/start',
       'turn/end',
@@ -498,6 +502,8 @@ describe('什麼推得動 roundsStarted', () => {
       'model/usage',
       'model/start',
       'model/end',
+      'assistant/message',
+      'user/message',
       'compaction/summary',
       'sandbox/mode',
       'plan/mode',

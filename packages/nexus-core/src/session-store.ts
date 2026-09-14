@@ -102,8 +102,19 @@ import type { SessionEvent } from './session-log.js';
  * 一顆回饋事件都沒有的日誌就是那時候寫出來的樣子——**那時候也沒有評分這條路**，所以讀舊檔數點踩
  * 要表態成「沒記」，不是 0。`args` 選填是 dsh 的 `recordInput: false`：v7 以前每一顆 `command/run`
  * 都帶它，讀舊檔的人照舊讀得到。
+ *
+ * ## 9：對話內容進日誌——`assistant/message`、`user/message`，`tool/result` 帶 `message`，`compaction/summary` 帶 `summary`
+ *
+ * 日誌成為對話的真相（[#305](https://github.com/DemianLi/nexus-agent/issues/305)），模型歷史由它推出來
+ * （[#306](https://github.com/DemianLi/nexus-agent/issues/306)）。v8 的檔直接讀：多出來的四格一格都沒有
+ * ——**那時候沒記，不是那時候沒有**，推模型歷史的一側對 8 以前的檔推不出完整的對話，要照格式版本表態。
+ *
+ * **這一次比前幾次更非升不可。** 前幾次升版是慣例，這一次是閘：一個讀不懂 9 的舊 runtime 接續新檔的話，
+ * 它寫下去的輪次沒有回覆、沒有結果內容，推出來的歷史就有洞。它得看到「版本太新」而拒讀
+ * （{@link SessionFormatUnsupportedError}）。守這條線的**只有**這個號：我們的 body parser 對不認得的
+ * `type` 照收（`apps/harness/src/jsonl-session-store.ts`），沒有 dsh 那個逐顆的 `ignorable` 旗標。
  */
-export const SESSION_LOG_FORMAT_VERSION = 8;
+export const SESSION_LOG_FORMAT_VERSION = 9;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。

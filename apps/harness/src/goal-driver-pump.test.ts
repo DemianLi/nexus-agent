@@ -17,8 +17,8 @@ import {
 } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
 import type { GoalPlugin } from '@nexus/plugin-goal';
-import { GOAL_WRAPUP_MARKER } from '@nexus/core';
-import type { SessionLog } from '@nexus/core';
+import { fromLoggedMessage, GOAL_WRAPUP_MARKER } from '@nexus/core';
+import type { SessionEventMap, SessionLog } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -260,6 +260,17 @@ describe('掛了旗標', () => {
     // **記號要跟著到模型那一側**：`@nexus/core` 的重複工具提醒靠它分辨「這不是人插的
     // 話」，而那個判斷讀的就是 `state.messages` 裡的這一則。
     expect(wrapup?.additional_kwargs[GOAL_WRAPUP_MARKER]).toEqual({ action: 'complete' });
+    // **日誌上也有它**（#305）：模型讀得到的，推模型歷史的一側就得讀得到。它緊接在 `update_goal`
+    // 那顆結果後面，同它在對話裡的位置；文字與記號就是模型讀到的那一則。
+    const events = pump.sessionLog.events;
+    const at = events.findIndex((event) => event.type === 'user/message');
+    expect(at).toBeGreaterThan(0);
+    expect(events[at - 1]?.type).toBe('tool/result');
+    const injected = events[at]!.data as SessionEventMap['user/message'];
+    expect(injected.source).toEqual({ kind: 'plugin', plugin: 'update_goal' });
+    const back = fromLoggedMessage(injected.message);
+    expect(back.text).toBe(wrapup?.text);
+    expect(back.additional_kwargs[GOAL_WRAPUP_MARKER]).toEqual({ action: 'complete' });
     expect(violations).toEqual([]);
     await stop();
   });

@@ -98,6 +98,8 @@ const KNOWN_EVENT_TYPES: Readonly<Record<SessionEventType, true>> = {
   'model/usage': true,
   'model/start': true,
   'model/end': true,
+  'assistant/message': true,
+  'user/message': true,
   'compaction/summary': true,
   'sandbox/mode': true,
   'plan/mode': true,

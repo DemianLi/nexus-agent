@@ -19,7 +19,7 @@ import {
   TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
   TOOL_ABORTED_TEXT,
 } from '@nexus/core';
-import type { NexusPlugin, SessionEvent } from '@nexus/core';
+import type { NexusPlugin, SessionEvent, SessionEventMap } from '@nexus/core';
 import type { Event } from '@nexus/wire';
 import { createWireClient } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
@@ -119,8 +119,13 @@ async function until(predicate: () => boolean, ms = 3000): Promise<void> {
 }
 
 const typesOf = (events: readonly SessionEvent[]) => events.map((event) => event.type);
+// `message`（#305）是內容，這裡只比判別那幾格，逐 key 照舊。
 const resultsOf = (events: readonly SessionEvent[]) =>
-  events.filter((event) => event.type === 'tool/result').map((event) => event.data);
+  events.flatMap((event) => {
+    if (event.type !== 'tool/result') return [];
+    const { message: _message, ...verdict } = event.data;
+    return [verdict];
+  });
 const ABORTED_END = { reason: { kind: 'aborted', cause: { kind: 'user' } } };
 const abortedResult = (code: string) => ({
   callId: expect.any(String),
@@ -198,9 +203,10 @@ describe('有一輪在跑', () => {
       expect(subagents).toHaveLength(1);
       expect(resultsOf(subagents[0] ?? [])).toEqual([abortedResult(TOOL_ABORTED)]);
       // **子代理那一層「正常收尾」不在它的日誌上多記一步**：擋下的那次模型呼叫在起訖紀錄器
-      // 外面就回了，所以只有真的叫過的那一對。
+      // 外面就回了，所以只有真的叫過的那一對，夾著那一次的回覆（#305）。
       expect(typesOf(subagents[0] ?? [])).toEqual([
         'model/start',
+        'assistant/message',
         'model/end',
         'tool/call',
         'tool/result',
@@ -273,7 +279,11 @@ describe('沒有一輪在跑', () => {
       const tail = run.root().slice(before);
       expect(typesOf(tail)).toEqual(['turn/start', 'tool/result', 'turn/end']);
       expect(tail[0]?.data).toEqual({ kind: 'resume' });
-      expect(tail[1]?.data).toEqual(abortedResult(TOOL_ABORTED_BEFORE_DISPATCH));
+      expect(resultsOf(tail)).toEqual([abortedResult(TOOL_ABORTED_BEFORE_DISPATCH)]);
+      // #305：帶的就是寫進對話的那一則——下面「下一句」量到模型看到的也是這一句。
+      expect((tail[1]?.data as SessionEventMap['tool/result']).message?.data.content).toBe(
+        TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
+      );
       expect(tail[2]?.data).toEqual(ABORTED_END);
       // 配的是暫停那一輪留下、還沒配到結果的那顆 `tool/call`。
       const call = run.root().find((event) => event.type === 'tool/call');
