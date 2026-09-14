@@ -85,6 +85,7 @@ export type {
 export {
   APPROVAL_PENDING_KIND,
   QUESTION_PENDING_KIND,
+  UNFINISHED_TOOL_TEXT,
   answerResponse,
   appendAnswers,
   appendQuestionCancel,

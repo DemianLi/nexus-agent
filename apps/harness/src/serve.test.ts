@@ -220,8 +220,13 @@ describe('核准那份清單', () => {
     const pending = approvalAt(state.pendings);
     expect(pending.actions.map((action) => action.name)).toEqual(['echo']);
     expect(pending.allowedDecisions).toEqual(['approve', 'reject']);
-    // 停住的時候工具還沒跑——不然這條驗的只是「畫面上有張卡片」。
-    expect(state.entries.filter((entry) => entry.kind === 'tool')).toEqual([]);
+    // 停住的時候工具還沒跑——不然這條驗的只是「畫面上有張卡片」。卡本身是有的：照 dsh，`tool/call`
+    // 在核准之前就記，pump 照它開卡（#297）；還沒跑的樣子是執行中、沒有輸出。
+    expect(
+      state.entries
+        .filter((entry) => entry.kind === 'tool')
+        .map((entry) => (entry.kind === 'tool' ? [entry.name, entry.status, entry.output] : [])),
+    ).toEqual([['echo', 'running', undefined]]);
 
     state = appendDecision(state, pending.interruptId, 'approve');
     await client.inputRespond('gated', {

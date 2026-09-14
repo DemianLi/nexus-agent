@@ -1,34 +1,27 @@
 /**
  * 核准被拒之後，**線上**留下什麼。
  *
- * 這一份補的是一句放了很久的「沒有量過」。`hitl-wire.test.ts:216` 那條（拒絕 → 線上一顆
- * frame 都沒有）走的是**基座**的機制（`interruptOn`、中斷在 `afterModel`、tools node 從沒
- * 跑），它的行內註解一路寫著「[#112](https://github.com/DemianLi/nexus-agent/pull/112)
- * 之後的產品路徑中斷在 `wrapToolCall` 裡，下行長什麼樣沒有量過」。2026-09-09 量了
- * （[#239](https://github.com/DemianLi/nexus-agent/issues/239) 收尾時順帶）：
+ * **基座一顆 `tools` frame 都不發**（2026-09-09 量的，[#239](https://github.com/DemianLi/nexus-agent/issues/239)
+ * 收尾時順帶）：產品路徑的 tools node 有跑，但 `packages/nexus-core/src/approval.ts` 的 `wrapToolCall`
+ * 在 `handler(request)` **之前**就 `interrupt()`／回 `denial()`，工具本體從沒被呼叫，基座發生命週期事件
+ * 的那一段就沒進去。這跟 `hitl-wire.test.ts` 那條基座機制（`interruptOn`、tools node 從沒跑）結論相同、
+ * 成因不同；跟 `ask_user_question` 的中斷也不同——那顆的 `interrupt()` 在工具本體裡，`tool-started`
+ * 早就發過了（`tool-frame-classify.test.ts`、`ask-user-wire.test.ts`）。**三條路的證據不能互相引用。**
  *
- * **產品路徑的結論一樣是零顆 `tools` frame，但成因不同。** 基座是整個 tools node 沒跑；
- * 產品路徑的 tools node 有跑，是 `packages/nexus-core/src/approval.ts` 的 `wrapToolCall`
- * 在 `handler(request)` **之前**就 `interrupt()`／回 `denial()`，所以那一格從頭到尾沒有進入
- * 基座發生命週期事件的那一段。被拒的那則 `status: 'error'` ToolMessage 只到得了
- * `state.messages`（`interrupt.test.ts:140-148` 釘著它真的在那裡），**下行一個字都沒說**。
+ * **卡從會話日誌來**（[#297](https://github.com/DemianLi/nexus-agent/issues/297)）：圍堵在閘門之前記
+ * `tool/call`、閘門回來之後記 `tool/result`，pump 照這兩顆開卡、收卡，同 dsh。所以這份組裝要跟 serve
+ * 一樣接上 `attachSession`——沒接的話圍堵不記日誌，「零張卡」會在一個根本不是產品路徑的組裝上綠。
  *
- * **這跟 `ask_user_question` 的中斷不是同一條線，差在誰拋。** 那顆的 `interrupt()` 在
- * **工具本體裡**，所以 `tool-started` 早就發過了，掛著那段會看到一顆 `tool-error`
- * （#239／[#243](https://github.com/DemianLi/nexus-agent/pull/243) 的測量，
- * `tool-frame-classify.test.ts` 與 `ask-user-wire.test.ts` 釘著）。核准閘門的中斷在
- * **middleware 裡**，連 `tool-started` 都沒有。**兩條路的證據不能互相引用**——這份檔案存在
- * 的理由就是這件事：把「工具自己拋」量到的結果套到「middleware 短路」上會講錯。
- *
- * **核准那一格是承重的對照組。** 少了它，「拒絕之後零顆 frame」在一個根本不轉發 `tools`
- * frame 的組裝底下**照樣綠**——而那正是這條斷言唯一會假綠的方式。
+ * **核准那一格是承重的對照組**：它證明線本身收得到基座的 `tools` frame，拒絕那條的「基座零顆」才不是
+ * 因為線收不到。
  */
 
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { NexusPlugin } from '@nexus/core';
-import type { ConversationState, Event, WireClient } from '@nexus/wire';
+import type { ConversationState, Event, ToolEntry, WireClient } from '@nexus/wire';
 import {
+  appendDecision,
   appendHumanTurn,
   createWireClient,
   emptyConversation,
@@ -108,6 +101,8 @@ async function open(threadId: string): Promise<Session> {
     createAgent: async () => ({
       agent: built.agent as unknown as PumpAgent,
       commands: emptyCommandPoint(),
+      // 同 serve：圍堵照這條記 `tool/call`／`tool/result`，卡從那裡來。
+      attachSession: built.attachSession,
       dispose: built.dispose,
     }),
   });
@@ -150,60 +145,87 @@ function settled(turns: number) {
       turns;
 }
 
-/** 線上的 `tools` frame，攤成 `事件名` 的清單。 */
-function toolEvents(session: Session): string[] {
+/**
+ * 線上的 `tools` frame，攤成 `事件名` 的清單。
+ *
+ * `source` 分兩種：pump 照日誌合成的 root 那幾顆 namespace 是 `[]`，基座發的 root 那幾顆是
+ * `['tools:<task id>']`（實測）。
+ */
+function toolEvents(session: Session, source: 'all' | 'base' = 'all'): string[] {
   return session.frames
     .filter((frame) => frame.method === 'tools')
+    .filter((frame) => source === 'all' || frame.params.namespace.length > 0)
     .map((frame) => String((frame.params as { data?: { event?: unknown } }).data?.event));
 }
 
-/** 走完一次「掛上來 → 給一個決定 → 收工」。 */
-async function decide(
+function toolCards(session: Session): ToolEntry[] {
+  return session.state.entries.filter((entry): entry is ToolEntry => entry.kind === 'tool');
+}
+
+/** 停在核准點：給一個決定，**像 web 那樣**在送出的那一刻記下那一則。 */
+async function respond(
   session: Session,
   threadId: string,
   type: 'approve' | 'reject',
 ): Promise<void> {
-  await until(session, (s) => s.frames.some((frame) => frame.method === 'input.requested'));
   const pending = approvalAt(session.state.pendings);
   await session.client.inputRespond(threadId, {
     namespace: [...pending.namespace],
     interrupt_id: pending.interruptId,
     response: uniformDecisions(pending, type),
   });
-  await until(session, settled(2));
+  session.state = appendDecision(session.state, pending.interruptId, type);
 }
 
+const requested = (session: Session): boolean =>
+  session.frames.some((frame) => frame.method === 'input.requested');
+
 describe('核准的兩個方向在下行上長什麼樣', () => {
-  it('**拒絕 → 線上零顆 `tools` frame**：中斷在 `handler` 之前，連 `tool-started` 都沒有', async () => {
+  it('**拒絕 → 一張失敗的卡、紅字是拒絕理由**，與「已拒絕」那一則並存；基座一顆 frame 都沒發', async () => {
     const session = await open('r1');
-    await decide(session, 'r1', 'reject');
+    await until(session, requested);
+    // 照 dsh：`tool/call` 在核准之前就記，所以等核准時畫面上已經有一張執行中的卡。
+    expect(toolCards(session).map((card) => [card.name, card.status])).toEqual([
+      [GATED, 'running'],
+    ]);
+
+    await respond(session, 'r1', 'reject');
+    await until(session, settled(2));
 
     // 先證中斷真的發生過——沒有這一句，「閘門根本沒觸發」也會讓下面全綠。
     expect(session.frames.filter((frame) => frame.method === 'input.requested')).toHaveLength(1);
     // 工具本體沒跑：`wrapToolCall` 回 `denial()` 時 `handler(request)` 一次都沒被呼叫。
     expect(ran).toEqual([]);
-
-    // **這就是那句「沒有量過」的答案：不會。** 基座是 tools node 沒跑，產品路徑是那一格
-    // 沒進到發事件的那一段——結論相同，成因不同。被拒的那則 error ToolMessage 只在
-    // `state.messages` 裡（`interrupt.test.ts:140-148`），下行對它一個字都沒說。
-    expect(toolEvents(session)).toEqual([]);
-    expect(session.state.entries.filter((entry) => entry.kind === 'tool')).toEqual([]);
+    // 基座一顆都沒發；那兩顆是 pump 照日誌合成的——開一次（resume 後圍堵再記的那顆 `tool/call`
+    // 不再開），收一次。
+    expect(toolEvents(session, 'base')).toEqual([]);
+    expect(toolEvents(session)).toEqual(['tool-started', 'tool-finished']);
+    expect(toolCards(session)).toMatchObject([
+      {
+        name: GATED,
+        status: 'failed',
+        // 模型看到的那一句，閘門的預設拒絕文字。
+        error: `有人看過並拒絕了 "${GATED}"。`,
+        attribution: { kind: 'root' },
+      },
+    ]);
+    // 「是人按了拒絕」只有這一則說得出來（`DecisionEntry` 的註解），所以兩則並存。
+    expect(session.state.entries.map((entry) => entry.kind)).toContain('decision');
 
     await session.close();
   });
 
-  it('**核准 → `tool-started` 與 `tool-finished` 都到**——上一條不是因為線收不到 `tools`', async () => {
+  it('**核准 → 基座的 `tool-started` 與 `tool-finished` 都到**——上一條不是因為線收不到基座的 frame', async () => {
     const session = await open('r2');
-    await decide(session, 'r2', 'approve');
+    await until(session, requested);
+    await respond(session, 'r2', 'approve');
+    await until(session, settled(2));
 
-    // **這一條承重。** 少了它，一個把 `tools` frame 整個丟掉的 pump 也會讓上一條綠。
-    expect(toolEvents(session)).toEqual(['tool-started', 'tool-finished']);
+    // **這一條承重。** 少了它，一個把基座 `tools` frame 整個丟掉的 pump 也會讓上一條綠。
+    expect(toolEvents(session, 'base')).toEqual(['tool-started', 'tool-finished']);
     expect(ran).toEqual([GATED]);
-    expect(
-      session.state.entries
-        .filter((entry) => entry.kind === 'tool')
-        .map((entry) => (entry.kind === 'tool' ? [entry.name, entry.status] : [])),
-    ).toEqual([[GATED, 'done']]);
+    // 兩個來源、同一張卡：折疊器照 `tool_call_id` 取代。
+    expect(toolCards(session).map((card) => [card.name, card.status])).toEqual([[GATED, 'done']]);
 
     await session.close();
   });

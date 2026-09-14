@@ -11,6 +11,7 @@ import {
   isApprovalPending,
   reduceAll,
   reduceConversation,
+  UNFINISHED_TOOL_TEXT,
   uniformDecisions,
 } from './conversation.js';
 import type { PendingApproval } from './conversation.js';
@@ -343,6 +344,85 @@ describe('按了停止（#276）', () => {
     ]);
     expect(state.status).toBe('failed');
     expect(state.error).toBe('供應商掛了');
+  });
+});
+
+describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Interrupted`）', () => {
+  const open = (id: string, namespace: string[] = ['tools:a']) =>
+    frame('tools', namespace, {
+      event: 'tool-started',
+      tool_call_id: id,
+      tool_name: id,
+      input: '{}',
+    });
+  const cards = (state: ReturnType<typeof emptyConversation>) =>
+    state.entries.flatMap((entry) =>
+      entry.kind === 'tool' ? [[entry.callId, entry.status, entry.error]] : [],
+    );
+
+  it('停止：執行中與掛著的收成失敗，已經有結果的不動', () => {
+    const state = reduceAll(emptyConversation(), [
+      open('running'),
+      open('suspended'),
+      frame('tools', ['tools:a'], { event: 'tool-suspended', tool_call_id: 'suspended' }),
+      open('done'),
+      frame('tools', ['tools:a'], { event: 'tool-finished', tool_call_id: 'done', output: 'ok' }),
+      open('failed'),
+      frame('tools', ['tools:a'], {
+        event: 'tool-finished',
+        tool_call_id: 'failed',
+        failed: true,
+        message: '被擋下',
+      }),
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root', aborted: true }),
+    ]);
+    expect(cards(state)).toEqual([
+      ['running', 'failed', UNFINISHED_TOOL_TEXT],
+      ['suspended', 'failed', UNFINISHED_TOOL_TEXT],
+      ['done', 'done', undefined],
+      ['failed', 'failed', '被擋下'],
+    ]);
+  });
+
+  it('失敗也收：這一輪關了，不會再有結果', () => {
+    const state = reduceAll(emptyConversation(), [
+      open('running'),
+      frame('lifecycle', [], { event: 'failed', graph_name: 'root', error: '供應商掛了' }),
+    ]);
+    expect(cards(state)).toEqual([['running', 'failed', UNFINISHED_TOOL_TEXT]]);
+  });
+
+  it('正常收尾也收：dsh 不分關閉的原因，一輪關了還沒結果就是沒有結果', () => {
+    const state = reduceAll(emptyConversation(), [
+      open('running'),
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+    ]);
+    expect(state.status).toBe('idle');
+    expect(cards(state)).toEqual([['running', 'failed', UNFINISHED_TOOL_TEXT]]);
+  });
+
+  it('對照：停在核准點那顆 `completed` 不收——那一輪還沒關，卡還在等人', () => {
+    const state = reduceAll(emptyConversation(), [
+      open('running', []),
+      frame('input.requested', [], {
+        interrupt_id: 'i1',
+        payload: {
+          actionRequests: [{ name: 'running', args: {} }],
+          reviewConfigs: [{ actionName: 'running', allowedDecisions: ['approve', 'reject'] }],
+        },
+      }),
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+    ]);
+    expect(state.status).toBe('awaiting-input');
+    expect(cards(state)).toEqual([['running', 'running', undefined]]);
+  });
+
+  it('子代理那一層的收尾不算：只有 root 那顆在講「這一輪」', () => {
+    const state = reduceAll(emptyConversation(), [
+      open('running'),
+      frame('lifecycle', ['tools:a'], { event: 'failed', graph_name: 'worker', aborted: true }),
+    ]);
+    expect(cards(state)).toEqual([['running', 'running', undefined]]);
   });
 });
 
