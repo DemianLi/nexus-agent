@@ -28,6 +28,9 @@ import type {
   SlashListResult,
   SlashMethod,
   SlashRunResult,
+  ThreadHistoryQuery,
+  ThreadHistoryResponse,
+  ThreadHistoryResult,
   ThreadListResponse,
   UplinkMethod,
   WireChannel,
@@ -59,6 +62,7 @@ import type {
 import { FEEDBACK_CATEGORIES } from '@nexus/core';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import { createCommandExecutor } from '@nexus/plugin-commands';
+import { HistoryQueryError, historyPage } from './conversation-history.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import type { StoredThreadList } from './session-list.js';
 import type { PumpAgent } from './thread-pump.js';
@@ -222,11 +226,12 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-/** `/threads/:id/stream` 或 `/threads/:id/commands/:method`，都不是就 undefined。 */
+/** `/threads/:id/stream`、`/threads/:id/history` 或 `/threads/:id/commands/:method`，都不是就 undefined。 */
 function parsePath(
   pathname: string,
 ):
   | { readonly kind: 'stream'; readonly threadId: string }
+  | { readonly kind: 'history'; readonly threadId: string }
   | { readonly kind: 'command'; readonly threadId: string; readonly method: string }
   | undefined {
   const segments = pathname.split('/').filter((segment) => segment !== '');
@@ -236,6 +241,9 @@ function parsePath(
   const threadId = decodeURIComponent(segments[1]);
   if (segments.length === 3 && segments[2] === 'stream') {
     return { kind: 'stream', threadId };
+  }
+  if (segments.length === 3 && segments[2] === 'history') {
+    return { kind: 'history', threadId };
   }
   if (segments.length === 4 && segments[2] === 'commands' && segments[3] !== undefined) {
     return { kind: 'command', threadId, method: segments[3] };
@@ -861,6 +869,42 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     return json(response);
   }
 
+  /**
+   * `GET /threads/:id/history`（#306）。**經 `threadFor`**，跟列表相反：照 dsh 的 `session.follow` 開的是那條
+   * session，而 web 拿歷史之前已經開了下行、這條 thread 本來就建起來了。
+   *
+   * **讀的是記憶體裡那份 root 日誌，不讀檔**：它含上一個行程留下的 seed（`SessionLog` 建構時接上），也含這個
+   * 行程寫的、還沒落盤的那幾筆——讀檔的話那幾筆的 frame 可能早就送出去了，兩邊都沒有。順帶的：沒開
+   * `--session-log` 的 server 上，同一個行程裡切回去也有歷史。
+   */
+  async function handleHistory(threadId: string, search: URLSearchParams): Promise<Response> {
+    const query: ThreadHistoryQuery = {};
+    for (const key of ['maxMessages', 'beforeSeq', 'throughSeq'] as const) {
+      const raw = search.get(key);
+      if (raw === null) continue;
+      const value = Number(raw);
+      if (raw.trim() === '' || !Number.isSafeInteger(value)) {
+        return json(
+          errorResponse(null, 'invalid_argument', `${key} 不是整數：${JSON.stringify(raw)}`),
+        );
+      }
+      (query as Record<string, number>)[key] = value;
+    }
+    const thread = await threadOrError(threadId, null);
+    if (thread instanceof Response) return thread;
+    let result: ThreadHistoryResult;
+    try {
+      result = historyPage(thread.pump.sessionLog.events, query, thread.pump.awaitingInput);
+    } catch (error: unknown) {
+      if (error instanceof HistoryQueryError) {
+        return json(errorResponse(null, 'invalid_argument', error.message));
+      }
+      throw error;
+    }
+    const response: ThreadHistoryResponse = { type: 'success', result };
+    return json(response);
+  }
+
   function firstHumanText(input: unknown): string | undefined {
     const messages = (input as { messages?: unknown })?.messages;
     if (!Array.isArray(messages)) {
@@ -877,7 +921,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
 
   return {
     async handle(request) {
-      const { pathname } = new URL(request.url);
+      const { pathname, searchParams } = new URL(request.url);
       const mediaType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
       const wrongMediaType = () =>
         new Response('content type must be application/json', { status: 415 });
@@ -888,6 +932,12 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         return handleList();
       }
       const route = parsePath(pathname);
+      if (route?.kind === 'history') {
+        if (request.method !== 'GET') return new Response('not found', { status: 404 });
+        // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
+        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+        return handleHistory(route.threadId, searchParams);
+      }
       if (request.method !== 'POST' || route === undefined) {
         return new Response('not found', { status: 404 });
       }

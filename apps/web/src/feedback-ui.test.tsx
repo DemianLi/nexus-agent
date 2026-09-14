@@ -131,6 +131,10 @@ function fakeClient(
     },
     // 這一檔不打開「以前的會話」，碰到就是測試寫錯了。
     listThreads: async () => ({ kind: 'rejected', message: '這一檔沒有接清單' }),
+    threadHistory: async () => ({
+      kind: 'ok',
+      result: { events: [], firstSeq: 0, throughSeq: -1, hasMore: false, legacy: false },
+    }),
   };
   return { client, puts, deletes, records, slashed };
 }
