@@ -179,9 +179,14 @@ describe('GET /threads', () => {
    * **`GET` 也要帶 JSON 的 content-type**：不帶就是一個不發 preflight 的跨來源 simple request，而這份回應是
    * 每一條 thread 第一句話的開頭（`THREADS_PATH` 的說明）。
    */
-  it('載體層：沒帶 content-type 是 415，別的 method 是 404', async () => {
+  it('載體層：沒帶或帶 simple request 認得的 content-type 是 415，別的 method 是 404', async () => {
     const server = await start(await tmp());
     expect((await fetch(`${server.url}${THREADS_PATH}`)).status).toBe(415);
+    // `text/plain` 是 CORS 放行、不發 preflight 的三個值之一：擋得住它，閘門才不是裝飾。
+    expect(
+      (await fetch(`${server.url}${THREADS_PATH}`, { headers: { 'content-type': 'text/plain' } }))
+        .status,
+    ).toBe(415);
     expect(
       (
         await fetch(`${server.url}${THREADS_PATH}`, {

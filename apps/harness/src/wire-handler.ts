@@ -391,6 +391,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
   /**
    * 已經建好的那些，同步讀得到。**給列表用**：它要知道哪幾條正在跑，但不能等一條還在建的 thread
    * ——`createAgent` 可能要起 MCP 子行程，列表不該被它拖住。還在建的就是還沒在跑。
+   *
+   * **沒有逐條刪除是對的**：進得了這張表的，是 `threadFor` 已經走完、不會再失敗的 thread（失敗那條路在
+   * `set` 之前），而 thread 只在 `close()` 一起收，那裡整張清掉。哪天有了逐條收 thread 的路，要跟著刪。
    */
   const ready = new Map<string, ThreadState>();
 
