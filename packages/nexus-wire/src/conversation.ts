@@ -22,8 +22,9 @@
  * 兩種情況 join 不起來，一律標成 `unattributed` 而**不是猜一個**：
  *
  * 1. 訂閱時沒帶 `tools` channel——鑰匙根本沒上線。
- * 2. 重連之後才接上——`tools` frame 早就過去了，而這條線沒有重播也沒有歷史重抓
- *    （見開發計劃第 7 節決策 6）。
+ * 2. 重連之後才接上——`tools` frame 早就過去了，而這條線沒有重播（見開發計劃第 7 節決策 6）。歷史重抓
+ *    （`GET /threads/:id/history`，[#306](https://github.com/DemianLi/nexus-agent/issues/306)）讀的是 root 那份
+ *    日誌，子代理的訊息不在裡面，所以接不回這把鑰匙。
  *
  * 協定其實留了位子給這件事（`LifecycleData.cause`，註解明寫「Populated by …
  * deepagents' SubagentTransformer」），但 `deepagents@1.13.1` 沒填。哪天它填了，
@@ -411,6 +412,20 @@ export function reduceAll(state: ConversationState, events: Iterable<Event>): Co
   return next;
 }
 
+/**
+ * 把更早的一頁歷史接在最前面（往前翻，#306）。
+ *
+ * **只接條目**：狀態、掛著的中斷、`lastSeq` 都是「現在」的事，更早那一頁說不動它們。那一頁要自己從
+ * {@link emptyConversation} 折好再交進來——折進現在這一份的話，它的 `lifecycle` 會把現在的狀態蓋掉。
+ * 頁是在一輪的開頭切的（server 那側），所以同一顆工具呼叫不會一半在這頁、一半在下一頁。
+ */
+export function prependEntries(
+  state: ConversationState,
+  earlier: ConversationState,
+): ConversationState {
+  return { ...state, entries: [...earlier.entries, ...state.entries] };
+}
+
 function attribute(state: ConversationState, namespace: readonly string[]): Attribution {
   if (namespace.length <= 1) {
     return ROOT;
@@ -430,6 +445,8 @@ function replace(
 
 interface MessageData {
   readonly event: string;
+  /** `message-start` 的作者。**`human` 只有歷史送**：線上不回聲人打的字，見 {@link appendHumanTurn}。 */
+  readonly role?: string;
   readonly id?: string;
   readonly run_id?: string;
   readonly delta?: { readonly type?: string; readonly text?: string };
@@ -455,6 +472,12 @@ function reduceMessage(
 
   switch (data.event) {
     case 'message-start': {
+      if (data.role === 'human') {
+        // **歷史才會送這一種**（`GET /threads/:id/history`，#306）：協定留給「整則重播的人話」的格。
+        // `status` 不動——這一句已經說過了，不是剛送出去的那一句（那一句走 `appendHumanTurn`）。
+        const entry: HumanEntry = { kind: 'human', id, text: '' };
+        return { ...state, entries: [...state.entries, entry] };
+      }
       const entry: AiEntry = {
         kind: 'ai',
         id,
@@ -473,7 +496,9 @@ function reduceMessage(
       return {
         ...state,
         entries: replace(state.entries, id, (entry) =>
-          entry.kind === 'ai' ? { ...entry, text: entry.text + text } : entry,
+          entry.kind === 'ai' || entry.kind === 'human'
+            ? { ...entry, text: entry.text + text }
+            : entry,
         ),
       };
     }

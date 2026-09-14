@@ -29,6 +29,9 @@ import type {
   SlashCommand,
   SlashDescriptor,
   SlashRunResult,
+  ThreadHistoryQuery,
+  ThreadHistoryResponse,
+  ThreadHistoryResult,
   ThreadListResponse,
   ThreadListResult,
   ThreadSummary,
@@ -39,6 +42,7 @@ import {
   THREADS_PATH,
   WIRE_CHANNELS,
   commandPath,
+  historyPath,
   streamPath,
 } from './protocol.js';
 
@@ -169,6 +173,33 @@ export interface WireClient {
    * 也不替任何一條 thread 建 agent——server 那側照 dsh 的 `session/list` 是冷讀。
    */
   listThreads(): Promise<ThreadListOutcome>;
+  /**
+   * 這條 thread 的一頁歷史（#306）。省略參數就是最後一頁；往前翻帶上一頁的 `firstSeq` 與第一頁的 `throughSeq`。
+   *
+   * **排在 {@link openEvents} 兌現之後**，照 dsh 的「先訂閱、再拿 snapshot」：反過來的話，兩者之間發生的事
+   * 兩邊都沒有。這條 thread 會為它建起來（同開下行），跟列表的冷讀不同。
+   */
+  threadHistory(threadId: string, query?: ThreadHistoryQuery): Promise<ThreadHistoryOutcome>;
+}
+
+/** `GET /threads/:id/history` 的結果。`rejected` 是這條 thread 起不來、或參數不對。 */
+export type ThreadHistoryOutcome =
+  | { readonly kind: 'ok'; readonly result: ThreadHistoryResult }
+  | { readonly kind: 'rejected'; readonly message: string };
+
+/** 線上回來的歷史得先驗過，理由同 {@link readDescriptors}。frame 本身交給折疊器，它本來就收別人的位元組。 */
+function readHistory(result: unknown): ThreadHistoryResult {
+  const { events, firstSeq, throughSeq, hasMore, legacy } = result as Record<string, unknown>;
+  if (
+    !Array.isArray(events) ||
+    typeof firstSeq !== 'number' ||
+    typeof throughSeq !== 'number' ||
+    typeof hasMore !== 'boolean' ||
+    typeof legacy !== 'boolean'
+  ) {
+    throw new Error('GET /threads/:id/history 回了不認得的結果');
+  }
+  return { events: events as Event[], firstSeq, throughSeq, hasMore, legacy };
 }
 
 /** 線上回來的列表得先驗過，理由同 {@link readDescriptors}。 */
@@ -404,6 +435,27 @@ export function createWireClient(options: WireClientOptions): WireClient {
       return body.type === 'error'
         ? { kind: 'rejected', message: body.message }
         : { kind: 'ok', result: readThreadList(body.result) };
+    },
+
+    async threadHistory(threadId, query = {}) {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(query)) {
+        if (value !== undefined) params.set(key, String(value));
+      }
+      const encoded = params.toString();
+      const search = encoded === '' ? '' : `?${encoded}`;
+      const response = await doFetch(`${base}${historyPath(threadId)}${search}`, {
+        method: 'GET',
+        // 同 `listThreads`，見 `THREADS_PATH`。
+        headers: { 'content-type': 'application/json' },
+      });
+      if (!response.ok) {
+        throw new Error(`歷史被載體層擋下：${response.status} ${await response.text()}`);
+      }
+      const body = (await response.json()) as ThreadHistoryResponse;
+      return body.type === 'error'
+        ? { kind: 'rejected', message: body.message }
+        : { kind: 'ok', result: readHistory(body.result) };
     },
   };
 }

@@ -1,0 +1,260 @@
+/**
+ * 一條 thread 的歷史，照日誌轉成畫面折得動的 frame（[#306](https://github.com/DemianLi/nexus-agent/issues/306)
+ * 的畫面那一刀）。線上的形狀與分頁規則見 `@nexus/wire` 的 `historyPath`。
+ *
+ * ## 畫面照日誌事件折，不照推回模型的那一串
+ *
+ * `@nexus/core` 的 `replayConversation` 推的是**模型看得到的**：壓縮過就是摘要加之後的、沒配到結果的呼叫補一則
+ * 合成的錯誤、格式 9 以前的日誌整串推不出來。畫面要的是**發生過什麼**——壓縮前那一段照樣在、合成的那則不是真的
+ * 結果、舊日誌照樣有人打的字與工具卡。所以兩側共用的是**哪一種事件代表什麼**，不是同一個函式；照 dsh：模型那側是
+ * `Session.deriveMessages()`，畫面那側是 client 的 `ConversationNodeAssembler` 逐顆認日誌事件，兩者本來就分開。
+ *
+ * | 日誌事件 | 畫面 |
+ * | --- | --- |
+ * | `turn/start`（`message`） | 人打的字（`message-start` `role: "human"`） |
+ * | `turn/start`（任何一種） | `lifecycle running` |
+ * | `assistant/message` | 模型的回覆；`interrupted` 的那則不收尾，由那一輪的中止標成「已停止」 |
+ * | `tool/call` ／ `tool/result` | 工具卡開、收；紅字是那則結果的文字 |
+ * | `turn/end` ／ `turn/failed` | 那一輪收掉（中止、失敗、完成）；沒結果的卡照即時那條規則收成失敗 |
+ * | `session/end-seed` | 上一個行程停在一輪中間的話，那一輪在這裡收掉 |
+ *
+ * 其餘的（壓縮、外掛注入的 `user/message`、模型起訖、命令、模式、目標、todo、回饋）即時的畫面也不畫，這裡也不畫。
+ * **壓縮不畫是偏離**：dsh 的畫面由那顆 `user/message {surfaceOp: replace}` 把被壓掉的那一段換成摘要；我們沒有
+ * surface 那一軸，即時的畫面從來沒換過，歷史跟著即時。
+ *
+ * ## 目標排的輪次不畫那一串字
+ *
+ * 即時的畫面只畫人送出去的那句（`appendHumanTurn`），目標排的那一輪的指示沒有人打過，畫面上沒有它。歷史照即時。
+ */
+
+import type { Event, ThreadHistoryQuery, ThreadHistoryResult } from '@nexus/wire';
+import { HISTORY_PAGE_MESSAGES } from '@nexus/wire';
+import type { LoggedMessage, SessionEvent, UnreplayableReason } from '@nexus/core';
+import { replayConversation } from '@nexus/core';
+
+/** 推不回模型的原因裡，說的是「這份日誌是格式 9 以前寫的」的那幾種。見 {@link historyPage}。 */
+const LEGACY_REASONS: ReadonlySet<UnreplayableReason> = new Set([
+  'reply-missing',
+  'result-missing',
+  'summary-missing',
+]);
+
+/** 參數不合規時拋的錯。wire 那側據它回 `invalid_argument`，不是 `unknown_error`。 */
+export class HistoryQueryError extends Error {}
+
+/** 一則訊息的文字：字串照原樣，區塊只取 `text` 那幾塊（推理不畫，同即時）。 */
+function textOf(message: LoggedMessage | undefined): string {
+  const content: unknown = message?.data.content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((block: unknown) => {
+      const typed = block as { type?: unknown; text?: unknown } | null;
+      return typed?.type === 'text' && typeof typed.text === 'string' ? typed.text : '';
+    })
+    .join('');
+}
+
+/** 畫面上算一則的：人打的字、模型的回覆。分頁以它計數，同 dsh 以 `user/message`／`assistant/message` 計。 */
+function isMessage(event: SessionEvent): boolean {
+  return (
+    (event.type === 'turn/start' && event.data.kind === 'message') ||
+    event.type === 'assistant/message'
+  );
+}
+
+/**
+ * 一頁可以從這裡開始：一輪的開頭，**而且不是 `resume`**——`resume` 那一輪接著上一輪停在核准點的那幾顆呼叫
+ * （同一個 `callId` 再記一次 `tool/call`），從它切的話同一張卡會一半在這頁、一半在前一頁，接起來畫面上長兩張。
+ */
+function isPageStart(event: SessionEvent): boolean {
+  return event.type === 'turn/start' && event.data.kind !== 'resume';
+}
+
+/**
+ * **不帶 `seq`**。帶了的話之後的即時 frame 全被當成重複丟掉，見 `@nexus/wire` 的 `historyPath`。namespace 一律
+ * 是 root：讀的是 root 那份日誌，子代理的在它自己那份（列表也不列子代理，#302 決定 3）。
+ */
+function frame(method: string, time: number, data: Record<string, unknown>): Event {
+  return { type: 'event', method, params: { namespace: [], timestamp: time, data } } as Event;
+}
+
+function lifecycle(time: number, data: Record<string, unknown>): Event {
+  return frame('lifecycle', time, { graph_name: 'root', ...data });
+}
+
+/** 一則完整的訊息。`open` 的那則不送 `message-finish`，留給那一輪的收尾去標。 */
+function message(
+  time: number,
+  role: 'human' | 'ai',
+  id: string,
+  text: string,
+  open = false,
+): Event[] {
+  return [
+    frame('messages', time, { event: 'message-start', role, id }),
+    frame('messages', time, {
+      event: 'content-block-delta',
+      index: 0,
+      delta: { type: 'text-delta', text },
+      id,
+    }),
+    ...(open ? [] : [frame('messages', time, { event: 'message-finish', reason: 'stop', id })]),
+  ];
+}
+
+/**
+ * 一段日誌轉成 frame。
+ *
+ * @param events - 從一輪的開頭切下來的一段（見 {@link isPageStart}）。
+ * @param awaitingInput - 這一段的最後一輪停在核准點，**而且這條 thread 現在還掛著那顆中斷**（同一個行程裡切回來）。
+ *   那幾張卡畫成「等你回答」而不收掉；卡本身（核准的按鈕）補不回來——中斷的酬載只在發出去的那一顆 frame 上，
+ *   pump 沒留。行程重開過的話中斷已經不在了（它在 checkpointer 裡），那幾張照即時那條規則收成失敗。
+ */
+export function historyFrames(events: readonly SessionEvent[], awaitingInput = false): Event[] {
+  const frames: Event[] = [];
+  let turnOpen = false;
+  let interrupted = false;
+  /** 這一輪記了 `tool/call`、還沒有 `tool/result` 的。 */
+  const unsettled = new Set<string>();
+  const last = events.at(-1);
+
+  const close = (time: number, data: Record<string, unknown>) => {
+    frames.push(lifecycle(time, data));
+    turnOpen = false;
+    interrupted = false;
+    unsettled.clear();
+  };
+
+  for (const event of events) {
+    switch (event.type) {
+      case 'turn/start':
+        if (turnOpen) close(event.time, { event: 'completed' });
+        frames.push(lifecycle(event.time, { event: 'running' }));
+        turnOpen = true;
+        if (event.data.kind === 'message') {
+          frames.push(...message(event.time, 'human', `history-${event.seq}`, event.data.text));
+        }
+        break;
+      case 'assistant/message': {
+        const text = textOf(event.data.message);
+        // 只帶工具呼叫的那一次沒有字可畫。即時的畫面那時會長一則空的，歷史不跟著長。
+        if (text !== '') {
+          frames.push(
+            ...message(event.time, 'ai', `history-${event.seq}`, text, event.data.interrupted),
+          );
+        }
+        break;
+      }
+      case 'tool/call':
+        unsettled.add(event.data.callId);
+        frames.push(
+          frame('tools', event.time, {
+            event: 'tool-started',
+            tool_call_id: event.data.callId,
+            tool_name: event.data.name,
+            input: event.data.arguments,
+          }),
+        );
+        break;
+      case 'tool/result': {
+        unsettled.delete(event.data.callId);
+        const text = textOf(event.data.message);
+        // 格式 9 以前沒有 `message`：失敗的那張只剩錯誤碼可講，碼也沒有就交給折疊器說「未指名的錯誤」。
+        const reason = text !== '' ? text : event.data.error?.code;
+        frames.push(
+          frame('tools', event.time, {
+            event: 'tool-finished',
+            tool_call_id: event.data.callId,
+            failed: event.data.isError,
+            ...(event.data.isError && reason !== undefined ? { message: reason } : {}),
+          }),
+        );
+        break;
+      }
+      case 'interrupt/raised':
+        interrupted = true;
+        break;
+      case 'turn/end':
+        if (event.data.reason?.kind === 'aborted') {
+          close(event.time, { event: 'failed', aborted: true });
+        } else if (interrupted && awaitingInput && event === last) {
+          for (const callId of unsettled) {
+            frames.push(
+              frame('tools', event.time, { event: 'tool-suspended', tool_call_id: callId }),
+            );
+          }
+          // 不收：那一輪在 server 上還停在那裡，畫面停在忙著，「停止」就是收回那幾顆（#265 的 Q7）。
+          turnOpen = false;
+        } else {
+          close(event.time, { event: 'completed' });
+        }
+        break;
+      case 'turn/failed':
+        close(event.time, { event: 'failed', error: event.data.message });
+        break;
+      case 'session/end-seed':
+        // 上一個行程死在一輪中間：那一輪沒有收尾，在這裡收，同 dsh 冷讀時補的合成收尾。
+        if (turnOpen) close(event.time, { event: 'completed' });
+        break;
+      default:
+        break;
+    }
+  }
+  return frames;
+}
+
+function checkIndex(name: string, value: number | undefined, minimum: number): void {
+  if (value !== undefined && (!Number.isSafeInteger(value) || value < minimum)) {
+    throw new HistoryQueryError(`${name} 要是不小於 ${minimum} 的整數，收到 ${String(value)}`);
+  }
+}
+
+/**
+ * 一頁歷史。
+ *
+ * @param events - 這條 thread 的 root 日誌，全部。
+ * @param query - 省略就是最後 {@link HISTORY_PAGE_MESSAGES} 則。
+ * @param awaitingInput - 這條 thread 現在停在核准點。只作用在最後一頁，見 {@link historyFrames}。
+ * @throws {@link HistoryQueryError} 參數不合規，或 `beforeSeq` 超出 `throughSeq` 之後。
+ */
+export function historyPage(
+  events: readonly SessionEvent[],
+  query: ThreadHistoryQuery = {},
+  awaitingInput = false,
+): ThreadHistoryResult {
+  const maxMessages = query.maxMessages ?? HISTORY_PAGE_MESSAGES;
+  checkIndex('maxMessages', maxMessages, 1);
+  checkIndex('beforeSeq', query.beforeSeq, 0);
+  checkIndex('throughSeq', query.throughSeq, -1);
+  const throughSeq = Math.min(query.throughSeq ?? events.length - 1, events.length - 1);
+  const window = events.slice(0, throughSeq + 1);
+  const end = query.beforeSeq ?? window.length;
+  if (end > window.length) {
+    throw new HistoryQueryError(`beforeSeq ${end} 在 throughSeq ${throughSeq} 之後`);
+  }
+
+  let cut = 0;
+  let counted = 0;
+  for (let at = end - 1; at >= 0; at -= 1) {
+    if (!isMessage(window[at]!)) continue;
+    counted += 1;
+    if (counted < maxMessages) continue;
+    cut = at;
+    // 退到那一輪的開頭，一輪不拆兩頁。
+    while (cut > 0 && !isPageStart(window[cut]!)) cut -= 1;
+    break;
+  }
+
+  const replay = replayConversation(events);
+  return {
+    // **三種原因都是舊格式**：回覆、結果內容、摘要本文都是格式 9 才開始記的（#305），缺哪一樣都只可能出自 9 以前
+    // 寫的那一段；哪一種先被撞到看的是日誌的順序（格式 8 的一輪，沒內容的結果落在收尾之前）。只認「沒有回覆」的話，
+    // 真的 v8 日誌會被判成不是舊格式。切點對不上不算：畫面上不缺東西。
+    events: historyFrames(window.slice(cut, end), awaitingInput && end === events.length),
+    firstSeq: cut,
+    throughSeq,
+    hasMore: window.slice(0, cut).some(isMessage),
+    legacy: replay.kind === 'unreplayable' && LEGACY_REASONS.has(replay.reason),
+  };
+}
