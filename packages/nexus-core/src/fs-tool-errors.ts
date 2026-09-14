@@ -25,6 +25,10 @@
  * [#318](https://github.com/DemianLi/nexus-agent/issues/318) 照 dsh 的 `toolErrorResult` 補上前綴，
  * 基座自己已經寫成錯誤的那幾句不補（見 middleware）。
  *
+ * **碼不只給基座的檔案工具**（[#316](https://github.com/DemianLi/nexus-agent/issues/316)）：dsh 的註冊表
+ * 從拋出來的錯誤通用地取碼，不看是哪顆工具，所以 plugin 工具（`submit_record`）被同一道 fence 擋下
+ * 也該帶。記錄每一顆工具呼叫都開；換狀態、補前綴仍只對基座那七個，其餘只補碼（`withSandboxCode`）。
+ *
  * **偏離：在工具外面改狀態，不是在工具裡拋。** 基座的檔案工具我們改不了，所以退到最接近的——
  * 一顆貼著工具本體的 `wrapToolCall`，結果離開之前換狀態。時刻是 dsh 的 `tools/execute`：拋在工具
  * 本體裡、註冊表接住的那一刻（攔截索引的第 6 格，`apps/harness/src/interception-index.test.ts`）。
@@ -46,6 +50,11 @@
  * - 只認得 `BackendProtocolV2` 的 `{ error }` 形狀。回裸字串的 v1 backend（plugin 掛的路由若是）
  *   由基座的轉接器轉，這一層在轉接之前，看不到。
  * - 沒有 backend 的組裝（基座自己的 `StateBackend`）不包、不掛——那條路上沒有 fence。
+ * - 非檔案工具的碼認的是「這次呼叫裡 fence 喊過拒絕，而工具回了錯誤」，不是 dsh 那樣認拋出來的
+ *   那顆錯誤。差別在同一次呼叫裡有兩件事時：子代理在 `task` 那一次呼叫裡跑，它的摘要器 offload
+ *   被擋也記在 `task` 身上。今天走不到：`task`（`deepagents@1.13.1`，`langsmith-Ck9t7AGW.cjs:3532-3568`）
+ *   成功回 `Command`、失敗是拋，都不是這裡補碼的那種結果。
+ * - 包在 `Command` 裡回的錯誤不補碼。
  *
  * @module
  */
@@ -55,7 +64,7 @@ import { ToolMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import { resolveToolName } from './containment.js';
-import { markToolError, toolRefusal } from './tool-events.js';
+import { markToolError, toolErrorOf, toolRefusal } from './tool-events.js';
 import type { ToolErrorInfo } from './tool-events.js';
 
 /** 這個 middleware 的名字。排序斷言用得到。 */
@@ -106,7 +115,7 @@ export const FS_TOOL_PRIMARY_METHOD: Readonly<Record<string, string>> = {
 
 const TRACKED_METHODS = new Set(Object.values(FS_TOOL_PRIMARY_METHOD));
 
-/** 一次檔案工具呼叫裡記下的東西。 */
+/** 一次工具呼叫裡記下的東西。 */
 interface CallRecord {
   /** 每個方法最後一次回的是不是 `{ error }`。 */
   readonly failed: Map<string, boolean>;
@@ -115,7 +124,7 @@ interface CallRecord {
 }
 
 /**
- * 正在跑的那一次檔案工具呼叫。**模組層一份**：fence 住在 `apps/harness`，它回報拒絕時要找得到
+ * 正在跑的那一次工具呼叫。**模組層一份**：fence 住在 `apps/harness`，它回報拒絕時要找得到
  * 同一個；每次呼叫各 `run` 一份記錄，兩次呼叫（含平行的）不會共用。
  */
 const currentCall = new AsyncLocalStorage<CallRecord>();
@@ -133,7 +142,7 @@ function note(method: string, result: unknown): void {
 
 /**
  * fence 擋下了這一次呼叫。**只有 fence 該叫它**：碼是 `FS_SANDBOX_DENIED`，它斷言的是「政策擋的」，
- * 不是「失敗了」。不在任何一次檔案工具呼叫裡（直接呼叫 backend 的測試、摘要器的 offload）時什麼都不做。
+ * 不是「失敗了」。不在任何一次工具呼叫裡（直接呼叫 backend 的測試、摘要器的 offload）時什麼都不做。
  */
 export function noteSandboxDenial(): void {
   const record = currentCall.getStore();
@@ -174,6 +183,20 @@ export function recordBackendOutcomes<T extends object>(backend: T): T {
 }
 
 /**
+ * 不是基座檔案工具的那一次：工具自己回了錯誤，而這次呼叫裡 fence 喊過拒絕，就替它補上
+ * `FS_SANDBOX_DENIED`（[#316](https://github.com/DemianLi/nexus-agent/issues/316)）。
+ *
+ * **只補碼**，文字與狀態是工具自己的。照 dsh：註冊表從拋出來的 `HarnessError` 通用地取碼
+ * （`packages/core/tools/src/index.ts:635-641`，SHA `c291e79`），不看是哪顆工具。成功的、已經有碼的、
+ * 包在 `Command` 裡的都原樣交出。
+ */
+function withSandboxCode<T>(result: T, record: CallRecord): T {
+  if (!record.sandboxDenied || !ToolMessage.isInstance(result)) return result;
+  if (result.status !== 'error' || toolErrorOf(result) !== undefined) return result;
+  return markToolError(result, { name: 'FsError', code: FS_SANDBOX_DENIED });
+}
+
+/**
  * 造一顆把檔案工具的失敗標成錯誤的 middleware。**無狀態**：記錄每次呼叫各一份，root 與每個
  * subagent 共用同一顆。
  *
@@ -183,10 +206,12 @@ export function createFsToolErrorsMiddleware(): AgentMiddleware {
   return createMiddleware({
     name: FS_TOOL_ERRORS_MIDDLEWARE_NAME,
     wrapToolCall: async (request, handler) => {
-      const method = FS_TOOL_PRIMARY_METHOD[resolveToolName(request)];
-      if (method === undefined) return handler(request);
+      // **每一顆工具呼叫都開一份記錄**，不只基座的檔案工具：fence 擋下的若是別的工具
+      // （`submit_record`，#316），它的回報也要有地方落。
       const record: CallRecord = { failed: new Map(), sandboxDenied: false };
       const result = await currentCall.run(record, () => handler(request));
+      const method = FS_TOOL_PRIMARY_METHOD[resolveToolName(request)];
+      if (method === undefined) return withSandboxCode(result, record);
       if (record.failed.get(method) !== true || !ToolMessage.isInstance(result)) return result;
       const error = record.sandboxDenied ? { name: 'FsError', code: FS_SANDBOX_DENIED } : undefined;
       // 已經是錯誤（`delete` 走基座的 `toolError`）而沒有碼要補：原樣交出去，別人的訊息不動。
