@@ -24,11 +24,14 @@
  * - **人講話清零 → `turn/start` 的 `message` 與 `goal` 清零。** 續行輪次的頭在提醒器那側也是一則
  *   素的 `HumanMessage`，它清零（`repeat-reminder.ts` 的 `GOAL_WRAPUP_MARKER` 那段說這是對的）。
  * - **`resume` 不清零。** 回覆核准沒有新的人話，會話統計也把它併回前一輪。
- * - **`session/end-seed` 清零。** 寫下這條時，CLI 的 `--resume` 與 serve 重開之後對話從空的開始（門 B
- *   沒開），提醒器那時看到的鏈真的是新的；不清的話，兩個行程的日誌會拼出一條實際上沒有人看過的長串。
- *   ⚠️ **[#306](https://github.com/DemianLi/nexus-agent/issues/306) 之後這條只對一半的續接成立**：推得回
- *   對話的那些，提醒器看到的鏈接著上一個行程（`conversation-restore.ts`），這裡照舊清零，會少算跨行程的
- *   那一段；推不回來的（舊格式）才真的從空的開始。日誌上沒有一顆事件說那次續接灌了沒有，所以這裡還分不開。
+ * - **`session/end-seed` 之後，鏈斷在下一顆頭上。** 行程重開之後，第一顆推得動鏈的 `tool/call` 前面一定有
+ *   一顆 `message` 或 `goal` 的 `turn/start`：`resume` 要回答一顆掛著的中斷，而中斷只活在 pump 的記憶體裡
+ *   （重開之後回答舊中斷拿到 `no_such_interrupt`，`serve-history.test.ts` 釘著）；CLI 只寫那兩種頭；續接回來的
+ *   goal driver 在這個行程的第一輪之前判成 `no-turn`、不排續行（`goal-driver.ts` 的 `turnClosed`）。提醒器那側，
+ *   同一個位置是一則素的 `HumanMessage`，它也清零——**不論那次續接有沒有把對話灌回去**
+ *   （[#306](https://github.com/DemianLi/nexus-agent/issues/306) 的 `conversation-restore.ts`），兩邊都在這裡斷。
+ *   所以 end-seed 這一格照舊清零，而它只在寫不出來的形狀上有作用（接縫之後沒有頭就有呼叫）；留著是防兩個行程的
+ *   日誌拼出一條實際上沒有人看過的長串。
  * - **subagent 那份沒有 `turn/start`**，一份就是一次委派，鏈跨整份。
  * - **同一個 `callId` 第二次出現不推進鏈。** 被核准閘門中斷的那次，resume 之後以同一個 `callId`
  *   再記一顆 `tool/call`（`session-log.ts` 的 `tool/call` 那段）。提醒器數的是 `tool_calls`，那次
