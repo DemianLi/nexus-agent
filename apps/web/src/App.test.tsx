@@ -1019,7 +1019,7 @@ describe('以前的會話', () => {
     return screen.findByRole('region', { name: '以前的會話' });
   }
 
-  it('打開才讀、每次打開都重讀；三種列各有說法，跑著的有標記，讀不懂的講出份數', async () => {
+  it('打開才讀、每次打開都重讀；別條空白的不列，跑著的有標記，讀不懂的講出份數', async () => {
     seq = 0;
     let reads = 0;
     const fake = fakeClient([]);
@@ -1035,7 +1035,7 @@ describe('以前的會話', () => {
     expect(reads).toBe(0);
 
     const list = await openList();
-    await waitFor(() => expect(within(list).getAllByRole('button')).toHaveLength(3));
+    await waitFor(() => expect(within(list).getAllByRole('button')).toHaveLength(2));
     const rows = within(list)
       .getAllByRole('button')
       .map((row) => row.textContent ?? '');
@@ -1043,7 +1043,8 @@ describe('以前的會話', () => {
     expect(rows[0]).toContain('執行中');
     expect(rows[1]).toContain(UNTITLED_THREAD_LABEL);
     expect(rows[1]).not.toContain('執行中');
-    expect(rows[2]).toContain(BLANK_THREAD_LABEL);
+    // **#313 翻過來的那一條**：以前空白那條列在第三列；目前這條是新生的 id，所以別條空白的不列（照 dsh `sessionVisible`）。
+    expect(list.textContent).not.toContain(BLANK_THREAD_LABEL);
     expect(list.textContent).toContain('另有 1 份');
 
     fireEvent.click(screen.getByRole('button', { name: '以前的會話' }));
@@ -1124,5 +1125,198 @@ describe('以前的會話', () => {
     );
     const list = await openList();
     await waitFor(() => expect(list.textContent).toContain('這個專案還沒有以前的會話'));
+  });
+
+  it('目前這條是空白、已落盤：照列，標「新會話」、不帶時間', async () => {
+    seq = 0;
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '空白那條' }));
+    const fake = fakeClient([]);
+    render(<App client={listing(fake, async () => ({ kind: 'ok', result: LISTED }))} />);
+    const list = await openList();
+
+    await waitFor(() => expect(within(list).getAllByRole('button')).toHaveLength(3));
+    const current = within(list).getByRole('button', { name: new RegExp(BLANK_THREAD_LABEL) });
+    expect(current.textContent).toBe(`${BLANK_THREAD_LABEL}目前這條`);
+  });
+
+  it('磁碟上只剩別條空白的：照講「還沒有」', async () => {
+    seq = 0;
+    const fake = fakeClient([]);
+    const blanks: ThreadListResult = {
+      items: [{ threadId: '別條空白', updatedAt: 1_000, running: false, blank: true }],
+      unreadable: 0,
+    };
+    render(<App client={listing(fake, async () => ({ kind: 'ok', result: blanks }))} />);
+    const list = await openList();
+
+    await waitFor(() => expect(list.textContent).toContain('這個專案還沒有以前的會話'));
+    expect(within(list).queryAllByRole('button')).toHaveLength(0);
+  });
+});
+
+/**
+ * 「新對話」重用空白會話（[#313](https://github.com/DemianLi/nexus-agent/issues/313)），照 dsh `connectWorkspace`。
+ * 清單讀不出來的退路由「記住這條 thread」那組驗：那裡的假 client 一律回 rejected，「新對話」照樣換一條新的。
+ */
+describe('新對話重用空白會話', () => {
+  const LISTED: ThreadListResult = {
+    unreadable: 0,
+    items: [
+      {
+        threadId: '講過話的那條',
+        updatedAt: 3_000,
+        running: false,
+        blank: false,
+        title: '改登入頁',
+      },
+      { threadId: '空白那條', updatedAt: 2_000, running: false, blank: true },
+      { threadId: '更舊的空白', updatedAt: 1_000, running: false, blank: true },
+    ],
+  };
+
+  function stored(): string | undefined {
+    const raw = localStorage.getItem(REMEMBERED_THREAD_KEY);
+    return raw === null ? undefined : (JSON.parse(raw) as { threadId: string }).threadId;
+  }
+
+  /** 一個讀清單可以卡住的假 client：`hold` 為真時，讀清單等到 `release` 才回。 */
+  function gated(fake: ReturnType<typeof fakeClient>, result: ThreadListResult) {
+    const state: { reads: number; hold: boolean; release: () => void } = {
+      reads: 0,
+      hold: false,
+      release: () => undefined,
+    };
+    const client: WireClient = {
+      ...fake.client,
+      listThreads: async () => {
+        state.reads += 1;
+        if (!state.hold) return { kind: 'ok', result };
+        await new Promise<void>((resolve) => {
+          state.release = resolve;
+        });
+        return { kind: 'ok', result };
+      },
+    };
+    return { client, state };
+  }
+
+  async function sayOnce(): Promise<void> {
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '記一筆。' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(screen.getByText('記一筆。')).toBeTruthy());
+  }
+
+  /** 讓排著的 promise 與 effect 跑完。 */
+  async function settle(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
+  it('講過話之後：切到清單上第一條空白的，不開新 id，也不講「切到以前的一條」', async () => {
+    seq = 0;
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    render(<App client={gated(fake, LISTED).client} />);
+    await sayOnce();
+
+    fireEvent.click(screen.getByRole('button', { name: '新對話' }));
+
+    await waitFor(() => expect(fake.opened).toEqual(['上一條', '空白那條']));
+    await waitFor(() => expect(stored()).toBe('空白那條'));
+    expect(screen.queryByText(SWITCHED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    expect(screen.queryByText('記一筆。')).toBeNull();
+  });
+
+  it('清單上沒有空白的：開一條新的', async () => {
+    seq = 0;
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const spoken: ThreadListResult = { unreadable: 0, items: LISTED.items.slice(0, 1) };
+    render(<App client={gated(fake, spoken).client} />);
+    await sayOnce();
+
+    fireEvent.click(screen.getByRole('button', { name: '新對話' }));
+
+    await waitFor(() => expect(fake.opened).toHaveLength(2));
+    expect(fake.opened[1]).not.toBe('上一條');
+    expect(fake.opened[1]).not.toBe('講過話的那條');
+  });
+
+  it('目前這條還沒講過話：留在原地，連清單都不讀', async () => {
+    seq = 0;
+    const fake = fakeClient([]);
+    const { client, state } = gated(fake, LISTED);
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: '新對話' }));
+    await settle();
+
+    expect(state.reads).toBe(0);
+    expect(fake.opened).toHaveLength(1);
+  });
+
+  it('連不上的 thread：畫面是空的也不算空白，新對話走得出去', async () => {
+    seq = 0;
+    const fake = fakeClient([]);
+    const tried: string[] = [];
+    const client: WireClient = {
+      ...fake.client,
+      openEvents: async (threadId) => {
+        tried.push(threadId);
+        throw new Error('下行開不起來：502');
+      },
+    };
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('連不上 agent'));
+
+    fireEvent.click(screen.getByRole('button', { name: '新對話' }));
+
+    await waitFor(() => expect(tried).toHaveLength(2));
+    expect(tried[1]).not.toBe(tried[0]);
+  });
+
+  it('讀清單期間連按兩下：只讀一次、只換一次', async () => {
+    seq = 0;
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const { client, state } = gated(fake, LISTED);
+    render(<App client={client} />);
+    await sayOnce();
+    state.hold = true;
+
+    fireEvent.click(screen.getByRole('button', { name: '新對話' }));
+    fireEvent.click(screen.getByRole('button', { name: '新對話' }));
+    await waitFor(() => expect(state.reads).toBe(1));
+    state.release();
+
+    await waitFor(() => expect(fake.opened).toEqual(['上一條', '空白那條']));
+    await settle();
+    expect(state.reads).toBe(1);
+    expect(fake.opened).toEqual(['上一條', '空白那條']);
+  });
+
+  it('讀清單期間從清單點了別條：點的那條贏，晚到的清單不把人拉走', async () => {
+    seq = 0;
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const { client, state } = gated(fake, LISTED);
+    render(<App client={client} />);
+    await sayOnce();
+    fireEvent.click(screen.getByRole('button', { name: '以前的會話' }));
+    const list = await screen.findByRole('region', { name: '以前的會話' });
+    const pick = await within(list).findByRole('button', { name: /改登入頁/ });
+    state.hold = true;
+
+    fireEvent.click(screen.getByRole('button', { name: '新對話' }));
+    await waitFor(() => expect(state.reads).toBe(2));
+    fireEvent.click(pick);
+    await waitFor(() => expect(fake.opened).toEqual(['上一條', '講過話的那條']));
+    state.release();
+    await settle();
+
+    expect(fake.opened).toEqual(['上一條', '講過話的那條']);
+    expect(stored()).toBe('講過話的那條');
   });
 });
