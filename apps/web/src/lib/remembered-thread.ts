@@ -23,7 +23,7 @@ export const REMEMBERED_THREAD_KEY = 'nexus.threads.current';
 /**
  * 現在開的是哪一條，**以及它從哪裡來**——三種來源在畫面上講的話不同：
  *
- * - `fresh`：這一次才生的 id。
+ * - `fresh`：這一次才生的 id，或按「新對話」重用的一條空白會話（#313）。兩種都是空的，畫面上不用講話。
  * - `recalled`：從上一次讀回來的。伺服器是接回來還是新開的，這一端分不出來。
  * - `listed`：從 `GET /threads` 的清單點的。那份清單只列落了盤、切得過去的 thread，所以這一條一定是接回來的。
  */

@@ -170,9 +170,10 @@ describe('停在核准點的 thread', () => {
   const APPROVAL = fileURLToPath(new URL('./approval.fixture.ts', import.meta.url));
 
   /** 送一句話，折到停在核准點。 */
-  async function stopAtApproval(client: WireClient, threadId: string): Promise<void> {
+  async function stopAtApproval(client: WireClient, threadId: string): Promise<ConversationState> {
     const { state } = await openAndSay(client, threadId, '回聲一次');
     expect(state.status).toBe('awaiting-input');
+    return state;
   }
 
   async function replayed(client: WireClient, threadId: string): Promise<ConversationState> {
@@ -203,6 +204,36 @@ describe('停在核准點的 thread', () => {
 
     expect(state.entries.map(line)).toContain('tool:echo:failed');
     expect(state.status).toBe('idle');
+  });
+
+  /**
+   * **離線掃描的前提**（`eval/session-scan.ts` 檔頭「鏈的邊界」那段）：中斷只活在 pump 的記憶體裡，所以重開之後
+   * 日誌上接不出一顆 `resume` 的頭——接縫之後推得動重複鏈的第一顆呼叫，前面一定是人話或續行的頭。哪天中斷熬得過
+   * 重開，這條會紅，那段的論證也要重寫。
+   */
+  it('重開 server 之後回答那顆舊中斷：拿真的 id 也是 no_such_interrupt', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-serve-history-'));
+    const first = await start(['--session-log', root, '--plugins', APPROVAL]);
+    const before = await stopAtApproval(createWireClient({ baseUrl: first.url }), 'mu');
+    const pending = before.pendings[0];
+    if (pending === undefined) throw new Error('沒有掛著的核准請求');
+    await stop(first);
+
+    const second = await start(['--session-log', root, '--plugins', APPROVAL]);
+    const client = createWireClient({ baseUrl: second.url });
+    const events = await client.openEvents('mu');
+    const response = await client.inputRespond('mu', {
+      namespace: [...pending.namespace],
+      interrupt_id: pending.interruptId,
+      response: { decisions: [{ type: 'approve' }] },
+    });
+    await events.return?.(undefined);
+
+    expect(response).toMatchObject({
+      type: 'error',
+      error: 'no_such_interrupt',
+      message: '這條 thread 上沒有等著回答的中斷',
+    });
   });
 });
 
