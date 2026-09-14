@@ -72,6 +72,7 @@ import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { Command } from '@langchain/langgraph';
 import type { NexusPlugin } from '@nexus/core';
+import { toolRefusal } from '@nexus/core';
 import { StateBackend, resolveBackend } from 'deepagents';
 import type { AnyBackendProtocol, BackendFactory, BackendProtocolV2 } from 'deepagents';
 import { z } from 'zod';
@@ -188,13 +189,9 @@ function createSubmitRecordTool(backend: AnyBackendProtocol | undefined) {
       runtime: ToolRuntimeLike,
     ) => {
       const callId = runtime?.toolCall?.id ?? '';
+      // 前綴由 `toolRefusal` 加（#318）：dsh 的寫入失敗是拋 `FsError`，由 `toolErrorResult` 渲染。
       const failed = (message: string): ToolMessage =>
-        new ToolMessage({
-          content: message,
-          tool_call_id: callId,
-          name: SUBMIT_RECORD_TOOL_NAME,
-          status: 'error',
-        });
+        toolRefusal(message, { callId, name: SUBMIT_RECORD_TOOL_NAME });
 
       const fs = await resolveBackend(resolved, runtime as never);
       const current = await readWhole(fs, args.file_path);

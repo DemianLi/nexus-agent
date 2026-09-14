@@ -181,7 +181,7 @@ describe('拒絕在日誌上記成錯誤', () => {
     const answers = (result.messages as BaseMessage[]).flatMap((message) =>
       ToolMessage.isInstance(message) ? [{ text: message.text, status: message.status }] : [],
     );
-    expect(answers).toEqual([{ text: todoAmbiguousMessage(2), status: 'error' }]);
+    expect(answers).toEqual([{ text: `Error: ${todoAmbiguousMessage(2)}`, status: 'error' }]);
     expect([...first.root.events, ...second.root.events]).toEqual([]);
   }, 20000);
 });

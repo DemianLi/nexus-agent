@@ -74,20 +74,23 @@ import type { ToolCall } from '@langchain/core/messages/tool';
 import { tool as makeTool } from '@langchain/core/tools';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
-import { INVALID_ARGS, toolCallIdOf, toolRefusal } from './tool-events.js';
+import { INVALID_ARGS, TOOL_ERROR_PREFIX, toolCallIdOf, toolRefusal } from './tool-events.js';
 import type { ToolErrorInfo } from './tool-events.js';
 
 /** 這顆 middleware 的名字。排序斷言用得到。 */
 export const INVALID_TOOL_ARGS_MIDDLEWARE_NAME = 'nexusInvalidToolArgs';
 
 /**
- * 那一顆拿到的結果，**逐字照 dsh**：`toolErrorResult` 的 `Error: ` 加上 `ToolArgsError` 的訊息
- * （`packages/core/tools/src/index.ts:1860-1868`、`schema.ts:466`、`json-schema.ts:418`）。
- *
- * 樹上其他「這次呼叫沒有生效」的拒絕不帶 `Error: ` 前綴（前綴統一進了地圖的 Not yet specified）；
- * 這一句帶，是 #269 的 Q2 逐字拍板的。
+ * 交給 `toolRefusal` 的那一句，**逐字照 dsh** 的 `ToolArgsError` 訊息
+ * （`schema.ts:466`、`json-schema.ts:418`）。#269 的 Q2 逐字拍板。
  */
-export const INVALID_ARGUMENTS_REFUSAL = 'Error: invalid arguments: "arguments" must be an object';
+const INVALID_ARGUMENTS_REASON = 'invalid arguments: "arguments" must be an object';
+
+/**
+ * 那一顆拿到的結果，**逐字照 dsh**：`toolErrorResult` 的 `Error: ` 加上 {@link INVALID_ARGUMENTS_REASON}
+ * （`packages/core/tools/src/index.ts:1860-1868`）。前綴由 `toolRefusal` 加，這裡只拼給測試與 web 比對。
+ */
+export const INVALID_ARGUMENTS_REFUSAL = TOOL_ERROR_PREFIX + INVALID_ARGUMENTS_REASON;
 
 /** 碼照 dsh 的 `ToolArgsError`，同圍堵認出 schema 不合時給的那一組。 */
 const INVALID_ARGS_ERROR: ToolErrorInfo = { name: 'ToolArgsError', code: INVALID_ARGS };
@@ -213,7 +216,7 @@ export function repairInvalidToolCalls(
 function refusingStub(name: string): unknown {
   return makeTool(
     (_raw: unknown, config?: unknown) =>
-      toolRefusal(INVALID_ARGUMENTS_REFUSAL, {
+      toolRefusal(INVALID_ARGUMENTS_REASON, {
         callId: toolCallIdOf(config) ?? '',
         name,
         error: INVALID_ARGS_ERROR,

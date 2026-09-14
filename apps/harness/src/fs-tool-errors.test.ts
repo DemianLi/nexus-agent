@@ -91,7 +91,7 @@ describe('檔案工具的失敗在日誌上記成錯誤', () => {
     };
   }
 
-  it('read-only 下 fence 擋下的 `write_file`：`isError` 帶 `FS_SANDBOX_DENIED`，模型看到的字不變', async () => {
+  it('read-only 下 fence 擋下的 `write_file`：`isError` 帶 `FS_SANDBOX_DENIED`，模型看到的是 `Error: ` 加 fence 那句', async () => {
     const { results, messages } = await run('read-only', [
       { name: 'write_file', args: { file_path: '/a.txt', content: '一' } },
     ]);
@@ -103,8 +103,8 @@ describe('檔案工具的失敗在日誌上記成錯誤', () => {
       },
     ]);
     expect(messages[0]?.status).toBe('error');
-    // 字不變：仍是 fence 那句，開頭是 `[containment]`，沒有被換成圍堵的措辭或多一個前綴。
-    expect(String(messages[0]?.content)).toMatch(/^\[containment\] .*這個 backend 是唯讀的/);
+    // 仍是 fence 那句、前面是 `Error: `（#318），沒有被換成圍堵的措辭，也沒有兩個前綴。
+    expect(String(messages[0]?.content)).toMatch(/^Error: \[containment\] .*這個 backend 是唯讀的/);
     expect(await readdir(root)).toEqual([]);
   }, 20000);
 

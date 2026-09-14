@@ -132,7 +132,7 @@ describe('deny 規則在 Disk backend 上', () => {
       const denial = result.messages.find((message) => message.getType() === 'tool');
       // **第一則是策略的，不是 permissions 的**——理由與代價見檔頭最後一節。
       // 承重的是下面那句：**磁碟上一個字都沒動**。
-      expect(denial?.text).toContain('FS_NOT_OBSERVED');
+      expect(denial?.text).toMatch(/^Error: .*覆蓋它之前要先讀過/);
     } finally {
       await dispose();
     }

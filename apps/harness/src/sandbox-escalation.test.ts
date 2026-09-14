@@ -233,7 +233,7 @@ describe('升級', () => {
           configurable: { thread_id: `no-widen-${current}` },
         });
         expect(pendingCard(result)).toBeUndefined();
-        expect(toolTexts(result)).toEqual([nonWideningRefusal(requested, current)]);
+        expect(toolTexts(result)).toEqual([`Error: ${nonWideningRefusal(requested, current)}`]);
         expect(controller.peekGrant()).toBeUndefined();
       } finally {
         await dispose();
@@ -279,7 +279,7 @@ describe('升級', () => {
           configurable: { thread_id: 'malformed' },
         });
         expect(pendingCard(result)).toBeUndefined();
-        expect(toolTexts(result)).toEqual([refusal]);
+        expect(toolTexts(result)).toEqual([`Error: ${refusal}`]);
       } finally {
         await dispose();
       }
@@ -652,7 +652,7 @@ describe('升級', () => {
       }
 
       expect(texts).toHaveLength(4);
-      expect(texts[0]).toBe(nonWideningRefusal('read-only', 'read-only'));
+      expect(texts[0]).toBe(`Error: ${nonWideningRefusal('read-only', 'read-only')}`);
       expect(texts[1]).toContain('拒絕了');
       // 後兩條是 `@nexus/core` 核准閘門的話，只釘分得出來的那一段，不抄全文。
       expect(texts[2]).toContain('關掉了人工核准');

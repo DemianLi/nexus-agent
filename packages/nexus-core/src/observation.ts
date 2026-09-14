@@ -50,7 +50,7 @@ import type { AnyBackendProtocol } from 'deepagents';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import { resolveToolName } from './containment.js';
-import { markToolError } from './tool-events.js';
+import { toolRefusal } from './tool-events.js';
 
 /** 這個 middleware 的名字。排序斷言用得到。 */
 export const OBSERVATION_POLICY_MIDDLEWARE_NAME = 'nexusFileObservationPolicy';
@@ -131,25 +131,22 @@ function hash(text: string): string {
   return (acc >>> 0).toString(36);
 }
 
-/** 一則說得出碼與恢復辦法的拒絕。`status: 'error'` 是模型分辨它與成功結果的唯一依據。 */
+/**
+ * 一則說得出恢復辦法的拒絕：模型看到 `Error: <原因>`，**碼不進文字**
+ * （[#318](https://github.com/DemianLi/nexus-agent/issues/318)）。照 dsh：`FsError` 拋出來由
+ * `toolErrorResult` 渲染，碼只在 `error.info`（`packages/core/tools/src/index.ts:635-641`）。
+ */
 function refusal(callId: string, toolName: string, code: string, reason: string): ToolMessage {
-  // 碼同時標在訊息外面，給會話日誌的 `tool/result` 讀（#264）。名字照 dsh 的 `FsError`
+  // 碼標在訊息外面，給會話日誌的 `tool/result` 讀（#264）。名字照 dsh 的 `FsError`
   // ——它繼承 `HarnessError`，`name` 是 `new.target.name`（`packages/llm/llm/src/error.ts:20`）。
-  return markToolError(
-    new ToolMessage({
-      content: `[${code}] ${reason}`,
-      tool_call_id: callId,
-      name: toolName,
-      status: 'error',
-    }),
-    { name: 'FsError', code },
-  );
+  return toolRefusal(reason, { callId, name: toolName, error: { name: 'FsError', code } });
 }
 
 /**
  * 這次工具呼叫是不是失敗了。
  *
- * 判準是 `status === 'error'`——`ToolMessage` 上分辨成功與失敗的唯一依據，跟圍堵與核准
+ * 判準是 `status === 'error'`——`ToolMessage` 上分辨成功與失敗的結構欄位（模型看不到它，靠的是
+ * 文字的 `Error: `；這裡是程式在讀），跟圍堵與核准
  * 閘門用的是同一格。認不得的形狀（例如 `Command`）一律當成功：這裡多算一次成功只會讓
  * 策略**多記一筆觀測**，而那條路上已經有版本新鮮度在守；多算一次失敗才會讓它漏記缺席。
  */

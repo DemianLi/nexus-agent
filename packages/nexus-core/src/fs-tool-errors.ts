@@ -20,8 +20,10 @@
  * dsh 的 `write`／`edit` 在工具本體裡拋 `FsError`（`packages/fs/tool-fs/src/write.ts:116-123`，
  * SHA `c291e79`），註冊表渲染成 `isError`；sandbox 拒絕的碼是 `FS_SANDBOX_DENIED`
  * （`tool-fs/src/sandbox.ts:124-130`），其餘檔案失敗照樣是 `isError`。**範圍照抄**：每一種 backend
- * 錯誤都是錯誤，只有 fence 拒絕帶碼——其餘要分出 `FS_NOT_FOUND` 之類得解析基座的措辭。**文字一字
- * 不變**（[#271](https://github.com/DemianLi/nexus-agent/issues/271)）。
+ * 錯誤都是錯誤，只有 fence 拒絕帶碼——其餘要分出 `FS_NOT_FOUND` 之類得解析基座的措辭。**文字只補
+ * `Error: `**：原本是一字不變（[#271](https://github.com/DemianLi/nexus-agent/issues/271)），
+ * [#318](https://github.com/DemianLi/nexus-agent/issues/318) 照 dsh 的 `toolErrorResult` 補上前綴，
+ * 基座自己已經寫成錯誤的那幾句不補（見 middleware）。
  *
  * **偏離：在工具外面改狀態，不是在工具裡拋。** 基座的檔案工具我們改不了，所以退到最接近的——
  * 一顆貼著工具本體的 `wrapToolCall`，結果離開之前換狀態。時刻是 dsh 的 `tools/execute`：拋在工具
@@ -53,13 +55,38 @@ import { ToolMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import { resolveToolName } from './containment.js';
-import { markToolError } from './tool-events.js';
+import { markToolError, toolRefusal } from './tool-events.js';
+import type { ToolErrorInfo } from './tool-events.js';
 
 /** 這個 middleware 的名字。排序斷言用得到。 */
 export const FS_TOOL_ERRORS_MIDDLEWARE_NAME = 'nexusFsToolErrors';
 
 /** fence 擋下一次變更的碼。dsh `FsErrorCode` 的同名成員。 */
 export const FS_SANDBOX_DENIED = 'FS_SANDBOX_DENIED';
+
+/**
+ * 基座自己寫成錯誤的那幾句的開頭：`read_file` 的 `Error: …`、`ls`／`glob` 的 `Error listing files: …`
+ * 與 `Error finding files: …`（`deepagents@1.13.1`，見檔頭）。這幾句不補前綴，理由見 middleware。
+ */
+const BASE_ERROR_WORD = 'Error';
+
+/**
+ * 基座的文字原樣、只換成錯誤狀態的那一則。**全樹除了 `tool-events.ts` 之外唯一手寫 `status: 'error'`
+ * 的地方**（絆索見 `apps/harness/src/tool-error-prefix.test.ts`）：這裡的文字不是我們寫的，
+ * 內容可能是文字塊陣列，`toolRefusal` 只收一句字串。
+ */
+function markBaseFailure(
+  result: ToolMessage,
+  options: { readonly callId: string; readonly name: string; readonly error?: ToolErrorInfo },
+): ToolMessage {
+  const failure = new ToolMessage({
+    content: result.content,
+    tool_call_id: options.callId,
+    name: options.name,
+    status: 'error',
+  });
+  return options.error === undefined ? failure : markToolError(failure, options.error);
+}
 
 /**
  * 基座的檔案工具 → 它回報失敗所依據的那個 backend 方法。
@@ -164,13 +191,17 @@ export function createFsToolErrorsMiddleware(): AgentMiddleware {
       const error = record.sandboxDenied ? { name: 'FsError', code: FS_SANDBOX_DENIED } : undefined;
       // 已經是錯誤（`delete` 走基座的 `toolError`）而沒有碼要補：原樣交出去，別人的訊息不動。
       if (result.status === 'error' && error === undefined) return result;
-      const failure = new ToolMessage({
-        content: result.content,
-        tool_call_id: result.tool_call_id,
-        ...(result.name !== undefined && { name: result.name }),
-        status: 'error',
-      });
-      return error === undefined ? failure : markToolError(failure, error);
+      const options = {
+        callId: result.tool_call_id,
+        name: result.name ?? resolveToolName(request),
+        ...(error === undefined ? {} : { error }),
+      };
+      // **前綴只補基座沒寫的**（#318）：`write_file`／`edit_file`／`grep` 回的是 backend 的裸錯誤，
+      // `read_file` 的 `Error: …` 與 `ls`／`glob` 的 `Error listing/finding files: …` 本來就讀得出是錯。
+      // 這是全樹唯一看文字決定前綴的地方：文字是基座寫的，我們不是它的主人。
+      return typeof result.content === 'string' && !result.content.startsWith(BASE_ERROR_WORD)
+        ? toolRefusal(result.content, options)
+        : markBaseFailure(result, options);
     },
   }) as AgentMiddleware;
 }

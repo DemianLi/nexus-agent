@@ -49,7 +49,7 @@
  *    `Updated todo list: … pending, … in progress, … completed.`
  * 3. **驗證失敗是回錯誤訊息，不是拋。** dsh 的 `execute` 直接 `throw`，它的 harness 把錯渲染
  *    成一則 `isError` 的工具結果交回模型。我們回一則 `status: 'error'` 的 ToolMessage——同樣
- *    是錯誤，而模型手上的字與 dsh 一致（帶 `Error: ` 前綴，見 {@link TODO_ERROR_PREFIX}）。
+ *    是錯誤，而模型手上的字與 dsh 一致（`Error: ` 前綴由 `@nexus/core` 的 `toolRefusal` 加）。
  *    不拋是因為拋給圍堵的話，模型看到的字會變成「工具 todo_write 執行失敗：…」。驗收在
  *    `apps/harness/src/todo-tool.test.ts`；決議見 [#271](https://github.com/DemianLi/nexus-agent/issues/271)。
  *
@@ -85,16 +85,6 @@ export const TODO_UNKNOWN_CALLER_MESSAGE =
 export function todoAmbiguousMessage(count: number): string {
   return `這次組裝接了 ${count} 份會話，挑不出該寫哪一份，所以沒有寫。`;
 }
-
-/**
- * 驗證失敗回給模型的那一句的前綴。
- *
- * **`Error: ` 這四個字是模型體驗的一部分，不是裝飾。** dsh 的工具是**拋**的，它的 harness
- * 把拋出來的東西渲染成 `Error: <message>` 交回模型（README 把那幾句列成「稳定失败文本」）。
- * 我們這側接住、回一則 `status: 'error'` 的工具結果而不拋（拋給圍堵的話字會變成「工具
- * todo_write 執行失敗：…」），所以前綴要自己帶，模型手上的字才與 dsh 一致。
- */
-export const TODO_ERROR_PREFIX = 'Error: ';
 
 /** content 空掉時的錯誤，逐字照 dsh。 */
 export const TODO_EMPTY_CONTENT_MESSAGE = 'invalid todo: `content` must be a non-empty string';
@@ -246,14 +236,12 @@ export function createTodoPlugin(options: TodoPluginOptions): NexusPlugin {
             // **先驗再找日誌**：驗不過的那一次連日誌都不必問，而且錯誤訊息與「寫不進去」
             // 是兩回事——前者是模型送錯東西，後者是接線的問題。
             //
-            // **接住而不是往外拋**，見 {@link TODO_ERROR_PREFIX}。
+            // **接住而不是往外拋**，見檔頭第 3 條。
             let todos: readonly TodoItem[];
             try {
               todos = toTodoList(raw, allowParallel);
             } catch (error: unknown) {
-              return refuse(
-                TODO_ERROR_PREFIX + (error instanceof Error ? error.message : String(error)),
-              );
+              return refuse(error instanceof Error ? error.message : String(error));
             }
             const found = registry.sessions.forCall(config);
             if (found.kind === 'not-attached') return refuse(TODO_NOT_ATTACHED_MESSAGE);

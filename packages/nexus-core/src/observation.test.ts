@@ -91,7 +91,9 @@ describe('三個狀態', () => {
 
     const result = (await wrap(requestFor(OBSERVED_EDIT_TOOL, '/a.md'), handler)) as ToolMessage;
     expect(result.status).toBe('error');
-    expect(String(result.content)).toContain('FS_NOT_OBSERVED');
+    expect(String(result.content)).toMatch(/^Error: /);
+    expect(String(result.content)).not.toContain('FS_');
+    expect(toolErrorOf(result)?.code).toBe('FS_NOT_OBSERVED');
     expect(String(result.content)).toContain('/a.md');
     // 碼也標在訊息外面，會話日誌的 `tool/result` 讀得到（#264）。
     expect(toolErrorOf(result)).toEqual({ name: 'FsError', code: 'FS_NOT_OBSERVED' });
@@ -115,7 +117,9 @@ describe('三個狀態', () => {
 
     await wrap(requestFor(OBSERVED_READ_TOOL, '/nope.md'), handler);
     const result = (await wrap(requestFor(OBSERVED_EDIT_TOOL, '/nope.md'), handler)) as ToolMessage;
-    expect(String(result.content)).toContain('FS_NOT_FOUND');
+    expect(String(result.content)).toMatch(/^Error: /);
+    expect(String(result.content)).not.toContain('FS_');
+    expect(toolErrorOf(result)?.code).toBe('FS_NOT_FOUND');
     // 兩個碼分得開才有意義：一個是「你還沒看」，一個是「你看過，它不在」。
     expect(String(result.content)).not.toContain('FS_NOT_OBSERVED');
     expect(toolErrorOf(result)).toEqual({ name: 'FsError', code: 'FS_NOT_FOUND' });
@@ -149,7 +153,9 @@ describe('write_file：新建可以，覆蓋沒讀過的不行', () => {
     const { calls, handler } = probe();
 
     const result = (await wrap(requestFor(OBSERVED_WRITE_TOOL, '/a.md'), handler)) as ToolMessage;
-    expect(String(result.content)).toContain('FS_NOT_OBSERVED');
+    expect(String(result.content)).toMatch(/^Error: /);
+    expect(String(result.content)).not.toContain('FS_');
+    expect(toolErrorOf(result)?.code).toBe('FS_NOT_OBSERVED');
     expect(calls).toEqual([]);
   });
 
@@ -164,7 +170,9 @@ describe('write_file：新建可以，覆蓋沒讀過的不行', () => {
       requestFor(OBSERVED_WRITE_TOOL, '/race.md'),
       handler,
     )) as ToolMessage;
-    expect(String(result.content)).toContain('FS_STALE_VERSION');
+    expect(String(result.content)).toMatch(/^Error: /);
+    expect(String(result.content)).not.toContain('FS_');
+    expect(toolErrorOf(result)?.code).toBe('FS_STALE_VERSION');
     expect(calls).toEqual([OBSERVED_READ_TOOL]);
   });
 });
@@ -178,7 +186,9 @@ describe('版本新鮮度', () => {
     await wrap(requestFor(OBSERVED_READ_TOOL, '/a.md'), handler);
     set('/a.md', '別人改的');
     const result = (await wrap(requestFor(OBSERVED_EDIT_TOOL, '/a.md'), handler)) as ToolMessage;
-    expect(String(result.content)).toContain('FS_STALE_VERSION');
+    expect(String(result.content)).toMatch(/^Error: /);
+    expect(String(result.content)).not.toContain('FS_');
+    expect(toolErrorOf(result)?.code).toBe('FS_STALE_VERSION');
     expect(calls).toEqual([OBSERVED_READ_TOOL]);
   });
 
@@ -190,7 +200,9 @@ describe('版本新鮮度', () => {
     await wrap(requestFor(OBSERVED_READ_TOOL, '/a.md'), handler);
     remove('/a.md');
     const result = (await wrap(requestFor(OBSERVED_EDIT_TOOL, '/a.md'), handler)) as ToolMessage;
-    expect(String(result.content)).toContain('FS_STALE_VERSION');
+    expect(String(result.content)).toMatch(/^Error: /);
+    expect(String(result.content)).not.toContain('FS_');
+    expect(toolErrorOf(result)?.code).toBe('FS_STALE_VERSION');
     expect(String(result.content)).toContain('不見了');
     expect(calls).toEqual([OBSERVED_READ_TOOL]);
   });
@@ -225,7 +237,9 @@ describe('版本新鮮度', () => {
     // 回去」在它那邊也算變了——我們一樣。這條釘的是**它有在看 `modified_at`**。
     set('/a.md', '原本的');
     const result = (await wrap(requestFor(OBSERVED_EDIT_TOOL, '/a.md'), handler)) as ToolMessage;
-    expect(String(result.content)).toContain('FS_STALE_VERSION');
+    expect(String(result.content)).toMatch(/^Error: /);
+    expect(String(result.content)).not.toContain('FS_');
+    expect(toolErrorOf(result)?.code).toBe('FS_STALE_VERSION');
     expect(calls).toEqual([OBSERVED_READ_TOOL]);
   });
 });
@@ -287,7 +301,9 @@ describe('讀失敗不算讀過', () => {
     await wrap(requestFor(OBSERVED_READ_TOOL, '/a.md'), failing);
     const { calls, handler } = probe();
     const result = (await wrap(requestFor(OBSERVED_EDIT_TOOL, '/a.md'), handler)) as ToolMessage;
-    expect(String(result.content)).toContain('FS_NOT_OBSERVED');
+    expect(String(result.content)).toMatch(/^Error: /);
+    expect(String(result.content)).not.toContain('FS_');
+    expect(toolErrorOf(result)?.code).toBe('FS_NOT_OBSERVED');
     expect(calls).toEqual([]);
   });
 
@@ -300,7 +316,9 @@ describe('讀失敗不算讀過', () => {
     await wrap(requestFor(OBSERVED_READ_TOOL, '/a.md'), failing);
     const { calls, handler } = probe();
     const result = (await wrap(requestFor(OBSERVED_WRITE_TOOL, '/a.md'), handler)) as ToolMessage;
-    expect(String(result.content)).toContain('FS_NOT_OBSERVED');
+    expect(String(result.content)).toMatch(/^Error: /);
+    expect(String(result.content)).not.toContain('FS_');
+    expect(toolErrorOf(result)?.code).toBe('FS_NOT_OBSERVED');
     expect(calls).toEqual([]);
   });
 
