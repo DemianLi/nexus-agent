@@ -8,10 +8,11 @@
  * 存的東西壞了，都只是記不住，不讓畫面壞掉——無痕模式、容量滿了、被別的版本寫壞，都不值得
  * 換來一個白畫面。
  *
- * **和 dsh 不同的一處**：dsh 的 id 由伺服器發、選取對著伺服器的清單驗；我們沒有清單
- * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 拍板的第二刀），id 是這一端自己
- * 生的，伺服器碰到一個以前寫過的 id 就接回來、沒見過就新開。所以這一端**分不出**伺服器實際上
- * 是接回來還是新開的——`resumed` 只說「這個 id 是從上一次讀回來的」，畫面上的話要照這個分寸講。
+ * **和 dsh 不同的一處**：dsh 的 id 由伺服器發、選取對著伺服器的清單驗。我們從
+ * [#302](https://github.com/DemianLi/nexus-agent/issues/302) 起有清單（`GET /threads`），但只在開了
+ * `--session-log` 的 server 上有，所以**記住的這一條不拿它驗**：id 是這一端自己生的，伺服器碰到一個以前寫過的
+ * id 就接回來、沒見過就新開，而這一端**分不出**是哪一種——`recalled` 只說「這個 id 是從上一次讀回來的」，
+ * 畫面上的話要照這個分寸講。從清單點的那一條分得出來，所以它是另一種（`listed`）。
  *
  * @module
  */
@@ -19,11 +20,16 @@
 /** 存在哪個鍵。 */
 export const REMEMBERED_THREAD_KEY = 'nexus.threads.current';
 
-/** 這一次載入要開哪一條。 */
+/**
+ * 現在開的是哪一條，**以及它從哪裡來**——三種來源在畫面上講的話不同：
+ *
+ * - `fresh`：這一次才生的 id。
+ * - `recalled`：從上一次讀回來的。伺服器是接回來還是新開的，這一端分不出來。
+ * - `listed`：從 `GET /threads` 的清單點的。那份清單只列落了盤、切得過去的 thread，所以這一條一定是接回來的。
+ */
 export interface ThreadChoice {
   readonly threadId: string;
-  /** 這個 id 是從上一次讀回來的，不是這一次才生的。 */
-  readonly resumed: boolean;
+  readonly origin: 'fresh' | 'recalled' | 'listed';
 }
 
 /**
@@ -64,8 +70,8 @@ function recalled(): string | undefined {
 export function recallThread(): ThreadChoice {
   const threadId = recalled();
   return threadId === undefined
-    ? { threadId: crypto.randomUUID(), resumed: false }
-    : { threadId, resumed: true };
+    ? { threadId: crypto.randomUUID(), origin: 'fresh' }
+    : { threadId, origin: 'recalled' };
 }
 
 /** 記下這一條，下一次載入接它。寫不進去就算了（見模組說明）。 */
