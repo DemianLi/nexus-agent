@@ -47,7 +47,8 @@
  * **偏離（登記）：快照放在 ALS，不是從子代理自己的日誌折。** dsh 子代理的 fence 從子代理的日誌折出模式；
  * 我們子代理的檔案工具是基座拿 root 那一份 backend 建的，方法簽名裡沒有呼叫者，表達不出「逐 session
  * 折」。所以 `sandbox-policy.ts` 用 ALS 包住 `task` 那一次呼叫（{@link SandboxModeController.delegate}），
- * 在裡面讀這顆控制器的一律拿到快照；日誌只是審計面，同 root。
+ * 在裡面讀這顆控制器的一律拿到快照；日誌只是審計面，同 root。子代理的摘要器 offload 也在 `task` 那一次
+ * 呼叫裡跑，所以同樣照快照判——基礎建設的寫入不會繞過它（`uploadFiles` 本來就不認領 grant）。
  *
  * ## 跨重啟
  *
