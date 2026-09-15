@@ -56,7 +56,9 @@ const ASYNC_TASK_TOOL_NAMES = [
  * `AsyncSubAgent`（帶 `graphId` 的那種）時才掛上那組工具，而
  * `registry.subagents.register()` 收的是 `SubAgent`，型別上就進不來——所以在目前的組裝
  * 裡那五個名字**永遠不會有對應的工具**。把它們放進宇宙的下場是 `toolOrder` 列了一個
- * 排不到任何東西的名字而不報錯。哪天真的支援 async subagent，這裡跟著補。
+ * 排不到任何東西的名字而不報錯。哪天真的支援 async subagent，這裡跟著補——**而且子代理的沙箱
+ * 快照要重判**：它靠 ALS 包住 `task` 那一次呼叫（`sandbox-policy.ts`，[#326](https://github.com/DemianLi/nexus-agent/issues/326)），
+ * async 那組立刻回傳、子代理跑在那次呼叫之外，快照帶不過去。
  *
  * （這份宇宙過去還餵給核准的名字檢查，那條隨機制一起走了——見
  * [#111](https://github.com/DemianLi/nexus-agent/issues/111)。）

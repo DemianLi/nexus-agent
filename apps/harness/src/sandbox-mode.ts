@@ -33,6 +33,22 @@
  * 不會共用同一格。**放進模組層或工廠閉包就會串台**，同 `@nexus/plugin-goal` 那段註解記的
  * 事故形狀：一條 thread 的 `/sandbox read-only` 收緊到另一條 thread 的檔案工具上。
  *
+ * ## 子代理照委派那一刻的那一格
+ *
+ * [#326](https://github.com/DemianLi/nexus-agent/issues/326)，照 dsh `captureDelegatedPolicyOverrides`
+ * （`packages/subagent/subagent/src/child-agent.ts`，SHA `0d1f500`）：委派那一刻拍下 root 那一格，root 之後
+ * 再切是 root 的未來，不是這個子代理的；一次性 grant 一律不給子代理。
+ *
+ * **拍的是 {@link SandboxModeController.current}，不分「明確設過」與部署預設。** dsh 分得出來，但它的
+ * 產品 bundle 組了 `permission-presets`，每一條 session 建立時就把部署值釘進日誌
+ * （`permission-presets/src/index.ts` 的 `pinInitialPermission`），所以產品路徑上每一條都有覆寫可拍。
+ * 我們的 {@link SandboxModeController.attach} 就是那一步。
+ *
+ * **偏離（登記）：快照放在 ALS，不是從子代理自己的日誌折。** dsh 子代理的 fence 從子代理的日誌折出模式；
+ * 我們子代理的檔案工具是基座拿 root 那一份 backend 建的，方法簽名裡沒有呼叫者，表達不出「逐 session
+ * 折」。所以 `sandbox-policy.ts` 用 ALS 包住 `task` 那一次呼叫（{@link SandboxModeController.delegate}），
+ * 在裡面讀這顆控制器的一律拿到快照；日誌只是審計面，同 root。
+ *
  * ## 跨重啟
  *
  * 切換寫得進日誌，**CLI 的 `--resume <run 目錄>` 與 serve 碰到以前寫過的 thread 都讀得回來**：最後一顆 `sandbox/mode` 就是
@@ -48,6 +64,7 @@
  * @module
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { SessionEvent, SessionLog } from '@nexus/core';
 import { isSandboxMode, SANDBOX_MODES } from '@nexus/core';
 import type {
@@ -124,6 +141,13 @@ export class SandboxModeController implements SandboxGrantLedger {
   #escalationHint: string | undefined;
 
   /**
+   * 委派那一刻拍下的那一格（見模組註解「子代理照委派那一刻的那一格」）。有值就是這一次呼叫在某個
+   * 子代理裡。**一顆控制器一份**，同控制器本身一條 thread 一格的理由：模組層一份的話，兩條 thread 的
+   * 快照雖然不會串（ALS 逐次 `run`），但誰在讀哪一顆控制器的委派就講不清楚了。
+   */
+  readonly #delegated = new AsyncLocalStorage<{ readonly mode: SandboxMode }>();
+
+  /**
    * 接著的 root 日誌，**依接線順序**。
    *
    * 是陣列不是單一格，理由同 `@nexus/plugin-goal`：「剛好一份」是一個假設，`attachSession`
@@ -141,9 +165,35 @@ export class SandboxModeController implements SandboxGrantLedger {
     this.#mode = initial;
   }
 
-  /** 這一刻是哪一格。 */
+  /**
+   * 這一刻是哪一格。**在子代理裡是委派那一刻拍下的那一格**，root 之後的切換影響不到它。
+   * fence（經 {@link SandboxModeController.source}）與升級閘門都讀這裡，所以兩邊一起跟著委派走。
+   */
   get current(): SandboxMode {
-    return this.#mode;
+    return this.#delegated.getStore()?.mode ?? this.#mode;
+  }
+
+  /** 委派那一刻拍下的那一格；不在任何一次委派裡時為 `undefined`。子代理的日誌開啟時讀它。 */
+  get delegatedMode(): SandboxMode | undefined {
+    return this.#delegated.getStore()?.mode;
+  }
+
+  /**
+   * 在一次委派裡跑 `run`：**進去之前同步拍下 {@link SandboxModeController.current}**，`run` 裡（含它
+   * await 的一切）讀這顆控制器的都拿到那一格，也碰不到 root 的 grant 與 denial。
+   *
+   * 拍的是 `current` 不是 root 那格：子代理再委派時，內層拿到的是它的父代理那一格，同 dsh。
+   *
+   * @param run - 委派工具那一次呼叫的本體。
+   * @returns `run` 的回傳值，原樣。
+   */
+  delegate<T>(run: () => T): T {
+    return this.#delegated.run({ mode: this.current }, run);
+  }
+
+  /** 這一次呼叫是不是在某個子代理裡。 */
+  get #inDelegation(): boolean {
+    return this.#delegated.getStore() !== undefined;
   }
 
   /**
@@ -162,7 +212,7 @@ export class SandboxModeController implements SandboxGrantLedger {
    * **是欄位不是方法**，這樣拿去傳給別人時不必再 bind——傳一個沒 bind 的方法出去會在
    * 呼叫端變成 `this` 是 `undefined`，而那個錯要到第一次工具呼叫才炸。
    */
-  readonly source: SandboxModeSource = () => this.#mode;
+  readonly source: SandboxModeSource = () => this.current;
 
   /**
    * 被擋下時接在拒絕後面的升級指引。**只有真的掛了升級工具才有**——由掛它的那一步
@@ -183,39 +233,50 @@ export class SandboxModeController implements SandboxGrantLedger {
 
   /**
    * 發一顆 grant：**只蓋一個目標、只蓋一次**。
+   *
+   * **在子代理裡什麼都不做**，下面四個同一條：一次性 grant 一律不給子代理（照 dsh），而 grant 與
+   * denial 各只有一格、是 root 的。子代理的升級今天在閘門就被拒（`policy-never`），走不到這裡；
+   * 擋在這裡是 fail-closed 的那一層。
+   *
    * @param grant - 核准來的模式與模型指名的那個檔。
    */
   grant(grant: SandboxGrant): void {
+    if (this.#inDelegation) return;
     this.#grant = grant;
   }
 
-  /** @returns 現在待消費的那一顆；只看，不消費。 */
+  /** @returns 現在待消費的那一顆；只看，不消費。**在子代理裡一律 `undefined`**：root 那顆認領不到。 */
   peekGrant(): SandboxGrant | undefined {
-    return this.#grant;
+    return this.#inDelegation ? undefined : this.#grant;
   }
 
   /**
    * 消費**這一顆**。
    * @param grant - 先前 peek 到的那一顆。
-   * @returns 它還是待消費的那一顆時為真。
+   * @returns 它還是待消費的那一顆時為真；在子代理裡一律為假。
    */
   takeGrant(grant: SandboxGrant): boolean {
-    if (this.#grant !== grant) return false;
+    if (this.#inDelegation || this.#grant !== grant) return false;
     this.#grant = undefined;
     return true;
   }
 
   /**
    * fence 擋下一次變更時記下它，蓋掉前一顆。
+   *
+   * **在子代理裡不記**：記了會蓋掉 root 剛被擋的那一次，root 接著叫升級時 grant 綁到的是子代理那一次，
+   * root 的重試就對不上（#326）。
+   *
    * @param denial - 這一次被擋下的變更。
    */
   recordDenial(denial: SandboxDenial): void {
+    if (this.#inDelegation) return;
     this.#denial = denial;
   }
 
-  /** @returns 最近一次被擋下的變更；還沒擋過任何一次時為 `undefined`。 */
+  /** @returns 最近一次被擋下的變更；還沒擋過、或在子代理裡時為 `undefined`。 */
   get lastDenial(): SandboxDenial | undefined {
-    return this.#denial;
+    return this.#inDelegation ? undefined : this.#denial;
   }
 
   /**
