@@ -460,7 +460,8 @@ function isRootTerminal(raw: RawProtocolEvent): boolean {
 /**
  * checkpoint 上最後一則帶工具呼叫的 AI 訊息裡，**還沒配到結果的那幾顆**。
  *
- * 停在核准點時就是那幾顆等核准的（或等核准的子代理那顆 `task`）。
+ * 停在核准點時就是那幾顆等核准的。子代理照 dsh 不停下來等人
+ * （[#324](https://github.com/DemianLi/nexus-agent/issues/324)），所以 `task` 不會是其中一顆。
  */
 function danglingToolCalls(values: unknown): { readonly id: string; readonly name: string }[] {
   const messages = (values as { messages?: unknown } | null)?.messages;

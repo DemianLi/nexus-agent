@@ -98,6 +98,26 @@ describe('tools 註冊點', () => {
     expect(registry.tools.isRootOnly('沒註冊過的')).toBe(false);
   });
 
+  /**
+   * 物件形式（#324）也是 root-only。三處判斷（矛盾檢查、記進表、`isRootOnly`）只要有一處還在比 `=== true`，
+   * 這一條或下面那條配 scope 的就紅——不紅的話問答那顆會原件照進子代理，照樣停下來等人。
+   */
+  it('rootOnly 給物件也是 root-only，拒絕句與碼問得出來；只給 true 的問不到', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    const refusal = {
+      message: '問不到人。',
+      error: { name: 'UserQuestionError', code: 'DELEGATED_CALLER' },
+    };
+    registry.tools.register(fakeTool('ask'), { rootOnly: refusal });
+    registry.tools.register(fakeTool('goal'), { rootOnly: true });
+    leave();
+    expect(registry.tools.isRootOnly('ask')).toBe(true);
+    expect(registry.tools.rootOnlyRefusalOf('ask')).toBe(refusal);
+    expect(registry.tools.rootOnlyRefusalOf('goal')).toBeUndefined();
+    expect(registry.tools.rootOnlyRefusalOf('沒註冊過的')).toBeUndefined();
+  });
+
   it('outputSchema 記在那一顆實例身上，撤銷就跟著沒了（#252）', () => {
     const registry = createRegistry();
     const leave = registry.enter(first);
@@ -120,6 +140,13 @@ describe('tools 註冊點', () => {
     expect(() =>
       registry.tools.register(fakeTool('goal'), { scope: 'researcher', rootOnly: true }),
     ).toThrow(/"goal"[\s\S]*"researcher"/);
+    // 物件形式同一條。
+    expect(() =>
+      registry.tools.register(fakeTool('ask'), {
+        scope: 'researcher',
+        rootOnly: { message: '問不到人。' },
+      }),
+    ).toThrow(/"ask"[\s\S]*"researcher"/);
     leave();
   });
 

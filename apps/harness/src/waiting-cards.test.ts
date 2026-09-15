@@ -1,8 +1,9 @@
 /**
  * 停下來等人的那一輪，**即時與重播畫得一樣**——[#317](https://github.com/DemianLi/nexus-agent/issues/317) 的驗收。
  *
- * 兩種等法：本體拋了中斷的（問答、子代理停下來的 `task`）是「等你回答」；停在核准閘門上的本體沒被呼叫到，照 dsh
- * 是「執行中」。日誌分不出這兩種，重播靠 pump 交進來的閘門工具名分（`conversation-history.ts` 的 `historyFrames`）。
+ * 兩種等法：本體拋了中斷的（問答）是「等你回答」；停在核准閘門上的本體沒被呼叫到，照 dsh 是「執行中」。子代理
+ * 照 dsh 不停下來等人（[#324](https://github.com/DemianLi/nexus-agent/issues/324)），所以停下來的只有 root 自己的
+ * 工具；最後一條釘住子代理那條路不再停。日誌分不出這兩種，重播靠 pump 交進來的閘門工具名分（`conversation-history.ts` 的 `historyFrames`）。
  *
  * 每條都拿同一次真的組裝跑出來的即時畫面，與它寫下的日誌重播出來的畫面對照，**而且兩邊各自寫明期望值**——只比兩邊
  * 相等的話，兩邊一起錯也會綠。重播只讀 root 那份日誌，子代理的卡不在裡面（`conversation-history.ts` 的 `frame`），
@@ -83,7 +84,10 @@ function rootCards(state: ConversationState): string[] {
     .map((entry) => `${entry.name}:${entry.status}`);
 }
 
-/** 真的組裝跑一輪到停下來等人，回傳即時與重播兩個畫面——serve 那條路的形狀，同 `tool-card-from-log.test.ts`。 */
+/**
+ * 真的組裝跑一輪到收尾（停下來等人，或跑完），回傳即時與重播兩個畫面——serve 那條路的形狀，同
+ * `tool-card-from-log.test.ts`。
+ */
 async function stopForInput(turns: readonly ScriptedTurn[], plugins: readonly NexusPlugin[]) {
   const root = await mkdtemp(join(tmpdir(), 'nexus-waiting-cards-'));
   const built = await createNexusAgent({
@@ -150,11 +154,11 @@ describe('停下來等人的那一輪，即時與重播畫得一樣', () => {
   }, 20000);
 
   /**
-   * 閘門上的名字是子代理那顆 `danger`，root 懸著的是 `task`——它的本體把子代理的中斷往外拋，即時那條畫成
-   * 「等你回答」。**這一格照即時，不是照 dsh，待決**：dsh 的工具卡沒有等人那一格，`task` 會是執行中。即時那條不在
-   * #317 的範圍，重播跟著它；要不要把即時拉回 dsh 另外決定，改了之後這一條連同即時一起翻面。
+   * **[#324](https://github.com/DemianLi/nexus-agent/issues/324) 翻了面。** 以前子代理停在核准點，root 的 `task`
+   * 兩邊都是「等你回答」；照 dsh，子代理的核准政策在委派時釘成 `never`，子代理不停下來等人，這一輪根本沒停。
+   * 留著它，是為了釘住「子代理叫到要核准的工具」這條路不再產生等人的卡。
    */
-  it('子代理停在核准點：root 的 `task` 兩邊都是「等你回答」', async () => {
+  it('子代理叫到要核准的工具：不停下來，root 的 `task` 兩邊都是完成', async () => {
     const run = await stopForInput(
       [
         {
@@ -162,16 +166,19 @@ describe('停下來等人的那一輪，即時與重播畫得一樣', () => {
           toolCalls: [{ name: 'task', args: { description: '幹活', subagent_type: 'worker' } }],
         },
         { content: '子代理動手。', toolCalls: [{ name: 'danger', args: {} }] },
+        { content: '子代理收工。' },
+        { content: '根收工。' },
       ],
       [DANGER, WORKER],
     );
     try {
-      expect(run.pump.awaitingInput).toBe(true);
+      expect(run.pump.awaitingInput).toBe(false);
+      expect(run.pump.pendings).toHaveLength(0);
       expect(run.pump.sessionLog.events.at(-1)?.type).toBe('turn/end');
-      expect([...run.pump.gatedTools]).toEqual(['danger']);
+      expect([...run.pump.gatedTools]).toEqual([]);
 
-      expect(rootCards(run.live)).toEqual(['task:suspended']);
-      expect(rootCards(run.replay)).toEqual(['task:suspended']);
+      expect(rootCards(run.live)).toEqual(['task:done']);
+      expect(rootCards(run.replay)).toEqual(['task:done']);
     } finally {
       await run.close();
     }
