@@ -91,8 +91,8 @@ function AttributionBadge({ attribution }: { attribution: Attribution }) {
 
 const TOOL_STATUS_LABEL = {
   running: '執行中',
-  // **不是「執行中」也不是「失敗」**：這顆呼叫的本體停下來等一個人回答（問答、子代理停下來的
-  // `task`）。講「執行中」會讓人以為只要等就好，講「失敗」是說謊（[#239](https://github.com/DemianLi/nexus-agent/issues/239)）。
+  // **不是「執行中」也不是「失敗」**：這顆呼叫的本體停下來等一個人回答（問答；子代理照 dsh 不停下來等人，
+  // [#324](https://github.com/DemianLi/nexus-agent/issues/324)）。講「執行中」會讓人以為只要等就好，講「失敗」是說謊（[#239](https://github.com/DemianLi/nexus-agent/issues/239)）。
   // **停在核准閘門上的不是這一格**：照 dsh 寫「執行中」，等待由核准卡表示（[#317](https://github.com/DemianLi/nexus-agent/issues/317)）。
   suspended: '等你回答',
   done: '完成',

@@ -23,11 +23,11 @@ import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import { TOOL_ABORTED_BEFORE_DISPATCH_TEXT, TOOL_ABORTED_TEXT, toLoggedMessage } from '@nexus/core';
+import { TOOL_ABORTED_BEFORE_DISPATCH_TEXT, toLoggedMessage } from '@nexus/core';
 import type { NexusPlugin } from '@nexus/core';
 import { createPlanModePlugin, NOT_IN_PLAN_MODE_MESSAGE } from '@nexus/plugin-plan-mode';
 import type { ConversationState, Event } from '@nexus/wire';
-import { emptyConversation, reduceConversation, UNFINISHED_TOOL_TEXT } from '@nexus/wire';
+import { emptyConversation, reduceConversation } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -271,33 +271,33 @@ describe('產品路徑：本體沒被呼叫到的呼叫，web 上有一張卡', 
     }
   }, 20000);
 
-  it('子代理停在核准點按停止：root 的 `task` 照 pump 寫的結果收，子代理那張由停止收', async () => {
+  /**
+   * **[#324](https://github.com/DemianLi/nexus-agent/issues/324) 翻了面。** 以前子代理停在核准點、按停止收卡；照 dsh，
+   * 子代理的核准政策在委派時釘成 `never`，它不停下來。`danger` 的本體沒被呼叫到，卡從子代理日誌的 `tool/call` 開、
+   * 由它的 `tool/result` 收成失敗，紅字是 `policy-never` 那句；root 的 `task` 照常完成。
+   */
+  it('子代理叫到要核准的工具：不停下來，卡掛在子代理底下、失敗、紅字是「沒有人被問到」', async () => {
     const run = await assemble(
-      [DELEGATE, { content: '子代理動手。', toolCalls: [{ name: 'danger', args: {} }] }],
+      [
+        DELEGATE,
+        { content: '子代理動手。', toolCalls: [{ name: 'danger', args: {} }] },
+        { content: '子代理收工。' },
+        { content: '根收工。' },
+      ],
       [DANGER, WORKER],
     );
     try {
       await run.say('派出去');
-      expect(run.pump.awaitingInput).toBe(true);
-      expect(toolEntries(run.frames).find((card) => card.name === 'danger')).toMatchObject({
-        status: 'running',
+      expect(run.pump.awaitingInput).toBe(false);
+      expect(baseToolFrames(run.frames, 'danger')).toEqual([]);
+      const cards = toolEntries(run.frames);
+      const danger = cards.find((card) => card.name === 'danger');
+      expect(danger).toMatchObject({
+        status: 'failed',
         attribution: { kind: 'subagent', name: 'worker' },
       });
-
-      run.pump.cancel();
-      await run.pump.whenIdle();
-      await until(() => run.frames.some(isStoppedFrame));
-      const cards = toolEntries(run.frames);
-      // `task` 早就開始了，所以是 ABORTED（`#withdraw` 的選碼）。
-      expect(cards.find((card) => card.name === 'task')).toMatchObject({
-        status: 'failed',
-        error: TOOL_ABORTED_TEXT,
-      });
-      // 子代理那顆日誌上沒有結果（pump 只替 root 懸著的寫），照 dsh 由這一輪關閉時收。
-      expect(cards.find((card) => card.name === 'danger')).toMatchObject({
-        status: 'failed',
-        error: UNFINISHED_TOOL_TEXT,
-      });
+      expect(danger?.error).toMatch(/沒有人被問到/);
+      expect(cards.find((card) => card.name === 'task')).toMatchObject({ status: 'done' });
     } finally {
       await run.close();
     }
