@@ -46,9 +46,10 @@
  * **grant 不會過期。** 它只蓋一個 canonical 目標、用過一次就沒了；沒被用掉的那顆會一直等到
  * 下一顆打到同一個檔、而且被擋下的變更。要有時效是另一顆機制，今天沒做。
  *
- * **subagent 沒有另外處理**：這顆工具跟 `submit_record`、`ask_user_question` 一樣不標
- * root-only，核准閘門也注進了 subagent（`fold.ts`），fence 是同一道。但 subagent 裡「被擋 →
- * 升級 → 核准 → 重試」那一整圈**沒有單獨驗過**。
+ * **subagent 拿不到 grant**（[#326](https://github.com/DemianLi/nexus-agent/issues/326)）：子代理的核准閘門
+ * 管道固定 `policy-never`（#324），它自己的升級一定被拒；root 手上那顆也認領不到——控制器在委派裡
+ * `peekGrant` 回空、`recordDenial` 不寫（見 `sandbox-mode.ts`）。閘門判「加寬」讀 `controller.current`，
+ * 在子代理裡就是委派那一刻拍下的那一格。
  *
  * @module
  */

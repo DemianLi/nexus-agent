@@ -44,6 +44,7 @@
  */
 
 import type { NexusPlugin } from '@nexus/core';
+import { resolveToolName } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import type { SandboxMode } from './contained-backend.js';
 import { registerSandboxEscalation } from './sandbox-escalation.js';
@@ -57,6 +58,11 @@ import type { SandboxModeController } from './sandbox-mode.js';
 
 /** 這個 middleware 的名字。排序斷言與錯誤訊息用得到。 */
 export const SANDBOX_POLICY_MIDDLEWARE_NAME = 'nexusSandboxPolicy';
+
+/**
+ * 基座的委派工具。**今天唯一的委派入口**：async 那組掛不上（見 `base-tools.ts`），`thread-pump.ts` 認的也是這個字。
+ */
+const DELEGATION_TOOL_NAME = 'task';
 
 /**
  * 一格模式對模型講的那一段話。
@@ -104,12 +110,15 @@ export function createSandboxPolicyPlugin(
   return {
     name: 'sandbox-policy',
     apply(registry) {
-      // **只接 root。** subagent 有自己的會話日誌（#137），不看這一格的話每一次 spawn 都會
-      // 多釘一顆起始值進那份日誌；而 fence 只有一道，審計面該只有一個家。政策本身照樣管
-      // 到 subagent——擋人的是 fence，不是這顆事件。
+      // **root 接控制器**：起始值與之後每一次切換都記。**子代理只記一顆委派那一刻拍下的那一格**
+      // （#326，照 dsh `appendDelegatedPolicyOverrides`）：root 之後再切，子代理照舊，所以 root 的日誌
+      // 答不出子代理跑在哪一格。子代理的日誌在它第一次 `forCall` 時才開，那一刻在 `task` 的 handler
+      // 裡、讀得到快照；不在任何一次委派裡被開的話不寫——拿 root 當下那格去補，寫的就是錯的值。
       registry.sessions.join((subject) => {
-        if (subject.address.kind !== 'root') return;
-        return controller.attach(subject.log);
+        if (subject.address.kind === 'root') return controller.attach(subject.log);
+        const mode = controller.delegatedMode;
+        if (mode !== undefined) subject.log.append('sandbox/mode', { mode, source: 'delegation' });
+        return undefined;
       });
       // **升級跟著 fence 掛**，同上面那條理由：沒有圍堵的組裝沒有東西可以升。它也是
       // read-only 那句「照升級指引做」成立的前提——這個 plugin 在，那句話就不是空頭支票。
@@ -135,6 +144,14 @@ export function createSandboxPolicyPlugin(
                 : { ...request, systemMessage: systemMessage.concat(`\n${sentence}`) },
             );
           },
+          // **委派那一刻拍下這一格**（#326）：子代理整個在 `task` 那一次呼叫的 handler 裡跑，所以包住
+          // handler，子代理的 fence、升級閘門、日誌開啟都讀得到快照。**同步拍**，照 dsh 在子代理啟動的
+          // 第一個 await 之前拍（`captureDelegatedPolicyOverrides`）。這顆 middleware 只到得了 root
+          // （#327），而拍照本來就是父代理那側的事。
+          wrapToolCall: (request, handler) =>
+            resolveToolName(request) === DELEGATION_TOOL_NAME
+              ? controller.delegate(() => handler(request))
+              : handler(request),
         }),
       );
     },

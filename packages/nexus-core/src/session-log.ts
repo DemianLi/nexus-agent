@@ -413,6 +413,11 @@ export interface SessionEventMap {
    * ——照 dsh 的「净变化为零的选择不追加任何内容」
    * （`packages/interaction/permission-presets/README.zh.md`）。
    *
+   * **子代理的日誌只有一顆，帶 `source: 'delegation'`**（[#326](https://github.com/DemianLi/nexus-agent/issues/326)）：
+   * 委派那一刻拍下的那一格，照 dsh 的 `appendDelegatedPolicyOverrides`
+   * （`packages/subagent/subagent/src/child-agent.ts`，SHA `0d1f500`）。子代理之後一直照這一格判，root 再切
+   * 也不會寫進子代理的日誌——所以 root 的日誌答不出子代理跑在哪一格，要記在這裡。
+   *
    * **沒掛 fence 的組裝一顆都不寫。** 沒有 `--workspace` 就沒有
    * `ContainedFilesystemBackend`，沒有東西在擋——那種組裝底下記一顆「政策是
    * workspace-write」是**在日誌裡說謊**，與 `sandbox-policy.ts` 那句提示不貢獻是同一條理由。
@@ -427,7 +432,11 @@ export interface SessionEventMap {
    * 那一份日誌，最後一顆就是起始那一格（`sandbox-mode.ts` 的 `recordedSandboxMode`）——
    * [#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A。
    */
-  'sandbox/mode': { readonly mode: SandboxMode };
+  'sandbox/mode': {
+    readonly mode: SandboxMode;
+    /** 委派那一刻拍進子代理日誌的那一顆；省略是 root 的起始值或一次切換。照 dsh 同名欄位。 */
+    readonly source?: 'delegation';
+  };
   /**
    * 計劃模式這一刻開著還是關著——**整份值，不是切換**，最後一顆就是答案
    * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的第二刀）。

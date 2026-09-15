@@ -30,6 +30,7 @@ import type { SessionStore } from '@nexus/core';
 import { createNexusAgent } from './agent-factory.js';
 import { createCliAgent, DEFAULT_PLUGINS } from './cli.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
+import type { SandboxDenial, SandboxGrant } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
 import {
   executeSandboxCommand,
@@ -208,6 +209,59 @@ describe('切換寫進會話日誌', () => {
     expect(log.events).toHaveLength(1);
     // 值照樣換了——收掉的是記帳，不是政策。
     expect(controller.current).toBe('read-only');
+  });
+});
+
+describe('委派（#326）', () => {
+  const denialA: SandboxDenial = { target: '/w/a.txt', digest: 'a' };
+  const denialB: SandboxDenial = { target: '/w/b.txt', digest: 'b' };
+  const grantA: SandboxGrant = { mode: 'workspace-write', target: '/a.txt', denied: denialA };
+
+  it('委派裡讀到拍下那一格，外面讀到 root 當下那格——跑到一半切換也一樣', async () => {
+    const controller = new SandboxModeController('workspace-write');
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+
+    const inside = controller.delegate(async () => {
+      await gate;
+      return [controller.current, controller.source(), controller.delegatedMode];
+    });
+    controller.switchTo('read-only');
+    // 反例：委派在跑的時候，外面讀到的是新那一格——快照沒有漏出去。
+    expect(controller.current).toBe('read-only');
+    expect(controller.delegatedMode).toBeUndefined();
+    release();
+
+    expect(await inside).toEqual(['workspace-write', 'workspace-write', 'workspace-write']);
+  });
+
+  it('子代理再委派：內層拍的是它的父代理那一格，不是 root 當下那格', () => {
+    const controller = new SandboxModeController('danger-full-access');
+
+    const inner = controller.delegate(() => {
+      controller.switchTo('read-only');
+      return controller.delegate(() => controller.current);
+    });
+
+    expect(inner).toBe('danger-full-access');
+  });
+
+  it('委派裡碰不到 root 的 grant 與 denial，出來之後原封不動', () => {
+    const controller = new SandboxModeController('read-only');
+    controller.recordDenial(denialA);
+    controller.grant(grantA);
+
+    controller.delegate(() => {
+      expect(controller.peekGrant()).toBeUndefined();
+      expect(controller.takeGrant(grantA)).toBe(false);
+      expect(controller.lastDenial).toBeUndefined();
+      controller.recordDenial(denialB);
+      controller.grant({ mode: 'danger-full-access', target: '/b.txt', denied: denialB });
+    });
+
+    expect(controller.peekGrant()).toBe(grantA);
+    expect(controller.lastDenial).toBe(denialA);
+    expect(controller.takeGrant(grantA)).toBe(true);
   });
 });
 
