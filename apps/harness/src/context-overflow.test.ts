@@ -12,7 +12,7 @@
  * 真端點也驗不到這一條。
  */
 
-import { mkdtemp, readdir } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ContextOverflowError } from '@langchain/core/errors';
@@ -127,13 +127,14 @@ async function runUntilThrow(
     detach();
     await dispose();
   }
-  let historyFiles: string[] = [];
-  try {
-    historyFiles = await readdir(join(root, 'conversation_history'));
-  } catch {
-    historyFiles = [];
-  }
-  return { rejected, calls: model.calls, historyFiles, events: sessions.root.events };
+  // 摘要真的寫出了歷史：看日誌上那顆 `compaction/summary` 的 `filePath`（`null` ＝ 沒寫成功）。
+  // 以前讀的是工作區裡的 `conversation_history/`，#348 之後歷史不落在那裡了。
+  const events = sessions.root.events;
+  const historyFiles = events
+    .filter((event) => event.type === 'compaction/summary')
+    .map((event) => (event.data as { filePath: string | null }).filePath)
+    .filter((path): path is string => path !== null);
+  return { rejected, calls: model.calls, historyFiles, events };
 }
 
 describe('供應商回上下文溢出', () => {

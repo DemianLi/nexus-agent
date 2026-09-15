@@ -96,6 +96,20 @@ function tunedSummarization(backend: ContainedFilesystemBackend): NexusPlugin {
   };
 }
 
+/**
+ * 組裝點預設的摘要器真的摘要過、而且歷史寫成了。
+ *
+ * 看的是模型讀到的摘要訊息：基座只有在 offload 寫成功時才寫出「saved to <路徑>」
+ * （`buildSummaryMessage` 看 `filePath`）。**#348 之後不能再數工作區裡的檔**——組裝點把
+ * `/conversation_history` 路由到 graph state，那一格不在磁碟上。自己帶 backend 的摘要器
+ * （{@link tunedSummarization}）不走那條路由，仍然用 {@link historyFiles}。
+ */
+function summarizedWithHistory(model: ScriptedChatModel): boolean {
+  return model.prompts.some((prompt) =>
+    prompt.some((message) => message.text.includes('has been saved to /conversation_history/')),
+  );
+}
+
 /** 某個根底下 `conversation_history` 裡的檔案；目錄不存在就是空的。 */
 async function historyFiles(root: string): Promise<string[]> {
   try {
@@ -332,6 +346,12 @@ describe('offload 失敗是 fail-open', () => {
  *
  * 而失敗的**方向跟直覺相反**：擋住的時候不是「原話消失」，是原話**原封不動**送進模型
  * ——20 萬字元直接灌進 context，正是 eviction 本來要避免的事。
+ *
+ * **[#348](https://github.com/DemianLi/nexus-agent/issues/348) 之後，下面兩條翻了面。** 組裝點把
+ * `/conversation_history` 路由到 graph state（`agent-factory.ts` 的 `withConversationHistory`），
+ * 這個寫入者不再碰工作區、也不再經過 fence，所以 `read-only` 底下照樣搬得走。基座的 fail-open 本身
+ * 沒變——它仍然只在寫入失敗時出現，只是這個組裝不再讓它失敗。讀不讀得回來見
+ * `conversation-history-route.test.ts`。
  */
 describe('/conversation_history 的另一個寫入者', () => {
   /** 剛好越過 `4 * 5e4` 那條線。 */
@@ -370,20 +390,22 @@ describe('/conversation_history 的另一個寫入者', () => {
     return { files, sentToModel };
   }
 
-  it('可寫的時候原話搬去 /conversation_history，模型只收到一句佔位', async () => {
+  it('可寫的時候原話搬走，但不落在工作區，模型只收到一句佔位', async () => {
     const { files, sentToModel } = await evict('workspace-write');
 
-    expect(files).toHaveLength(1);
+    // #348 之前是 1：原話落在 `<workspace>/conversation_history/`。
+    expect(files).toEqual([]);
     expect(sentToModel).toContain('Message content too large');
     expect(sentToModel.length).toBeLessThan(HUGE.length);
   });
 
-  it('fence 擋住的時候無聲失效，20 萬字元原封不動進 context', async () => {
+  it('fence 擋住的根上照樣搬得走，20 萬字元不再原封不動進 context', async () => {
     const { files, sentToModel } = await evict('read-only');
 
     expect(files).toEqual([]);
-    // 方向跟直覺相反：不是原話消失，是該搬走的沒搬走。
-    expect(sentToModel).toContain(HUGE);
+    // #348 之前這裡是 `toContain(HUGE)`：寫入被 fence 擋掉，該搬走的沒搬走。
+    expect(sentToModel).toContain('Message content too large');
+    expect(sentToModel).not.toContain(HUGE);
   });
 });
 
@@ -997,7 +1019,14 @@ describe('我們配的那份打底到每個 subagent', () => {
     }
 
     expect(await filesUnder(root, 'ours')).toHaveLength(0);
-    expect((await filesUnder(root, 'conversation_history')).length).toBeGreaterThan(0);
+    // 基座那份寫進了它寫死的前綴：摘要訊息只有在 offload 寫成功時才寫出路徑
+    // （`buildSummaryMessage` 看 `filePath`）。#348 之前這裡讀的是工作區裡的
+    // `conversation_history/`，現在那一格路由到 graph state，不在磁碟上。
+    expect(
+      model.prompts.some((prompt) =>
+        prompt.some((message) => message.text.includes('has been saved to /conversation_history/')),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -1096,7 +1125,7 @@ describe('一般長對話不會退化成逐輪重摘', () => {
       (prompt) => prompt.filter((message) => message.getType() !== 'system').length,
     );
     // 前提：真的摘要過。少了它，一個門檻根本沒碰到的組裝也會讓下面通過。
-    expect((await historyFiles(root)).length).toBeGreaterThan(0);
+    expect(summarizedWithHistory(model)).toBe(true);
     // 平線的話最大值會是 1（只剩摘要載體）。`keep: 20 則`留得下東西，所以看得到爬升。
     expect(Math.max(...sizes)).toBeGreaterThan(20);
     // 摘要器自己那幾輪的 prompt 也算在裡面，所以不要求「一則 1 都沒有」，要求的是它不是常態。
@@ -1447,7 +1476,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
     }
 
     // 前提：真的摘要過。少了它這條測的就不是「摘要之後」。
-    expect((await historyFiles(root)).length).toBeGreaterThan(0);
+    expect(summarizedWithHistory(model)).toBe(true);
     // 走得完，而且工具那一輪的結果被剪過。
     expect(last.messages.at(-1)?.getType()).toBe('ai');
     expect(prunedPrompts(model)).toBeGreaterThan(0);

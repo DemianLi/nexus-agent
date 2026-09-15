@@ -116,7 +116,7 @@ describe('接回來的是日誌那一半', () => {
     expect(stdout).toContain(`/${GOAL_COMMAND_NAME} resume`);
     // 披露照實講回來的是什麼。這一次只打了命令，日誌上沒有對話；有對話的那半在 `conversation-restore.test.ts`。
     expect(stdout).toContain(
-      '續接：沙箱模式、計劃模式與目標照日誌回來；日誌裡還沒有對話；工具結果暫存沒有回來',
+      '續接：沙箱模式、計劃模式與目標照日誌回來；日誌裡還沒有對話；工具結果暫存與會話歷史檔沒有回來',
     );
     expect(stderr).not.toContain('[不變量]');
   });

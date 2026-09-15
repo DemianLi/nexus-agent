@@ -345,6 +345,70 @@ function withToolResultStash(backend: AnyBackendProtocol): AnyBackendProtocol {
   return new CompositeBackend(backend, { [TOOL_RESULT_STASH_PREFIX]: new StateBackend() });
 }
 
+/**
+ * 會話歷史落在 backend 的哪個前綴。**抄自基座，不是我們選的。**
+ *
+ * 兩個寫入者都用它：摘要器 offload 的預設前綴（`@nexus/core` 的 `DEFAULT_SUMMARIZATION` 的
+ * `historyPathPrefix` 同值明寫），與 `createFilesystemMiddleware` 的 `beforeAgent` 把超大 human
+ * message 搬走時**寫死**的 `/conversation_history/<uuid>`（`deepagents@1.13.1`，
+ * `dist/langsmith-zm0ILQsV.js:2468`，不吃 `historyPathPrefix`）。
+ *
+ * **匯出是刻意的**，理由同 {@link TOOL_RESULT_STASH_PREFIX}：測試拿它跟摘要器的預設前綴對。
+ */
+export const CONVERSATION_HISTORY_PREFIX = '/conversation_history';
+
+/**
+ * 把會話歷史那一格路由到獨立的 {@link StateBackend}，不讓它落在 agent 的工作區上
+ * （[#348](https://github.com/DemianLi/nexus-agent/issues/348)）。
+ *
+ * ## 缺的是什麼
+ *
+ * `fold.ts` 畫的線是「歷史是基礎建設，不是 agent 的工作區」，摘要器因此拿 default backend
+ * 而不是折出來的那個。**但 default backend 就是工作區**：CLI 給了 `--workspace`，
+ * default backend 就是那個 `ContainedFilesystemBackend`，於是
+ * `<workspace>/conversation_history/*.md` 一直都在使用者的目錄裡。那條線只擋住了 plugin 的
+ * 路由，沒擋住工作區本身。#335 的量測在 8 次呼叫裡量到 6 份；放到 Proteus 底下，快照會把
+ * 它們量成「演化」。
+ *
+ * ## 為什麼路由而不是換 `historyPathPrefix`
+ *
+ * **第二個寫入者不吃那個前綴。** eviction 的路徑寫死在基座裡，換前綴只搬得走摘要器那一半。
+ * 路由按路徑前綴接住兩個。
+ *
+ * **只路由基座那個常數，不路由呼叫端自訂的前綴。** 明著設了 `historyPathPrefix` 等於明著選了
+ * 去向，那一條照舊寫進 default backend（`conversation-history-route.test.ts` 釘著）。
+ *
+ * ## 去向：graph state，與 {@link withToolResultStash} 同一個理由
+ *
+ * dsh 不把被壓掉的原文寫進任何檔案系統：原文留在會話日誌，模型只看到一則
+ * `<compacted-summary>`（`packages/compaction/compaction-basic/README.zh.md`，SHA `0d1f500`）。
+ * 我們的日誌從 [#305](https://github.com/DemianLi/nexus-agent/issues/305) 起也記著對話
+ * （`assistant/message`、`tool/result`），所以耐久的那一份已經在日誌裡；backend 上這一份只是
+ * **這個行程內**讓模型照摘要那句話去 `read_file` 的便利。放 state 不必碰磁碟（`read-only` 也
+ * 留得住，以前那次寫入被 fence 擋掉、歷史直接消失），也不必有清理政策。
+ *
+ * **偏離登記**：基座把歷史寫成檔、還在摘要裡告訴模型路徑，dsh 沒有這條路；這條路基座無條件
+ * 建、關不掉（`contained-backend.ts` 的 `read-only` 那段），所以退到「照舊寫，但寫到工作區外」。
+ *
+ * **代價講明白**，都跟暫存那一格同形：
+ *
+ * - 它進 checkpoint，跑完就不在磁碟上，**續接（`--resume`、serve 重開）帶不回來**。灌回去的
+ *   摘要仍寫著「完整歷史存在某某路徑」，那時讀不到——跟暫存預覽裡的路徑一樣，另外披露。
+ * - `CompositeBackend` 把路由前綴剝掉再交給 `StateBackend`，而 `StateBackend` 讀寫的是 graph
+ *   state 的 `files`。沒給 `--workspace` 時 default backend 也是一個 `StateBackend`，所以 agent
+ *   在自己的根目錄 `grep` 得到歷史檔（實測）。暫存那一格是同一個機制。
+ *
+ * @param backend - 組裝點的 default backend（已經包過暫存那一格）。
+ * @returns 同一個 backend，外面再包一層只有這一條路由的 `CompositeBackend`。
+ */
+function withConversationHistory(backend: AnyBackendProtocol): AnyBackendProtocol {
+  // **路由鍵要有結尾斜線。** `CompositeBackend.getBackendAndKey` 拿 `prefix.slice(0, -1)` 比對
+  // 目錄本身、`key.substring(prefix.length)` 剝前綴，兩個都假設鍵以 `/` 結尾。少了它，寫進去
+  // 的鍵變成 `//session_x.md`，照確切路徑 `read_file` 仍讀得到（兩邊同樣錯），但在這個目錄底下
+  // `ls`／`grep` 都對不上（實測 `grep` 回 No matches）。
+  return new CompositeBackend(backend, { [`${CONVERSATION_HISTORY_PREFIX}/`]: new StateBackend() });
+}
+
 export async function createNexusAgent(options: CreateNexusAgentOptions) {
   // **跑在 `loadPlugins` 之前**：它只看 `options.model`，這時候還沒有任何 plugin 開好資源，
   // 所以失敗了不必先 `dispose()`。其餘四種都在下面那個 try 裡，因為它們要等 registry。
@@ -359,7 +423,9 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     if (options.invariants !== undefined) assertInvariantSelection(options.invariants);
 
     const params = foldRegistry(registry, {
-      defaultBackend: withToolResultStash(options.backend ?? new StateBackend()),
+      defaultBackend: withConversationHistory(
+        withToolResultStash(options.backend ?? new StateBackend()),
+      ),
       toolOrder: options.toolOrder,
       baseToolNames: options.baseToolNames ?? BASE_TOOL_NAMES,
       model: options.model,

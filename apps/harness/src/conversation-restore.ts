@@ -21,8 +21,9 @@
  *
  * ## 回不來的
  *
- * 虛擬檔案系統（沒給 `--workspace` 時的檔案）、工具結果暫存（[#170](https://github.com/DemianLi/nexus-agent/issues/170)）
- * 與停在核准點還沒答的那張卡都在 graph state 裡，而那一軸（`stateSchema`＋checkpointer）是我們偏離 dsh 的產物
+ * 虛擬檔案系統（沒給 `--workspace` 時的檔案）、工具結果暫存（[#170](https://github.com/DemianLi/nexus-agent/issues/170)）、
+ * 摘要器的會話歷史檔（[#348](https://github.com/DemianLi/nexus-agent/issues/348)：灌回去的摘要仍寫著
+ * 「完整歷史存在某某路徑」，那時讀不到）與停在核准點還沒答的那張卡都在 graph state 裡，而那一軸（`stateSchema`＋checkpointer）是我們偏離 dsh 的產物
  * （[#155](https://github.com/DemianLi/nexus-agent/issues/155)），日誌上沒有它們。沒答的那張卡推回來是一則補上的
  * 錯誤結果（dsh 的 `repair.ts`），見 `conversation-replay.ts`。
  */

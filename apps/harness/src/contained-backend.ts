@@ -77,10 +77,16 @@ function denied<T extends { error: string }>(result: T): T {
  * 這樣：它的 fence 同樣只掛在兩個 mutation 上，「read-only」講的是這個 backend 不改東西，
  * 不是「這個 agent 看不到東西」。看不看得到歸 `permissions`。
  *
- * **`read-only` 就是不留對話歷史，這是明著接受的。** 長對話會觸發基座的 summarization，
- * 它把舊訊息 offload 到 `/conversation_history`；`read-only` 擋掉那次寫入，而基座對 offload
+ * **`read-only` 的根上，組裝點預設的摘要器照樣留得住對話歷史**
+ * （[#348](https://github.com/DemianLi/nexus-agent/issues/348) 之後）。長對話會觸發基座的
+ * summarization，它把舊訊息 offload 到 `/conversation_history`；`agent-factory.ts` 的
+ * `withConversationHistory` 把那個前綴路由到 graph state，所以那次寫入不經過這個 backend，
+ * 也不被 fence 擋。
+ *
+ * **#348 之前不是這樣**，而那個形狀仍在基座裡：`read-only` 擋掉那次寫入，而基座對 offload
  * 失敗是 **fail-open** —— 摘要照生、舊訊息照換掉、完整歷史沒留下副本，只有一行 `console.warn`
- * （[#66](https://github.com/DemianLi/nexus-agent/issues/66)）。
+ * （[#66](https://github.com/DemianLi/nexus-agent/issues/66)）。自己帶 backend 的摘要器（下面那段）
+ * 與自訂的 `historyPathPrefix` 不走那條路由，碰得到它。
  *
  * 「組裝期擋下 `read-only` ＋ 長對話」這個選項**在結構上不可行**：summarization 是被無條件
  * 加進 stack 的，那個組合就是**每一個** `read-only` 組裝，擋掉它等於禁用這個 mode 本身。
