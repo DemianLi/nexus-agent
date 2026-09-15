@@ -91,6 +91,71 @@ interface RawProtocolEvent {
   };
 }
 
+/** langchain 投影裡一次工具呼叫的那一格。這裡只碰得到它的 `output`。 */
+interface ToolCallProjection {
+  readonly output: Promise<unknown>;
+}
+
+/** langchain 投影裡一個子代理：自己的 `output`，外加它那一層的工具呼叫與再下一層的子代理。 */
+interface SubagentProjection {
+  readonly output: Promise<unknown>;
+  readonly toolCalls: AsyncIterable<ToolCallProjection>;
+  readonly subagents: AsyncIterable<SubagentProjection>;
+}
+
+/**
+ * langchain 在 v3 run 物件上掛的原生投影裡，**帶 promise 的那兩種**。可選：替身 agent 沒有它們。
+ *
+ * 形狀照 `langchain@1.5.10` 的 `dist/agents/transformers/tool-call.js` 與 `subagent.js`。
+ */
+interface RunProjections {
+  readonly toolCalls?: AsyncIterable<ToolCallProjection>;
+  readonly subagents?: AsyncIterable<SubagentProjection>;
+}
+
+const ignore = (): void => undefined;
+
+/**
+ * **把 langchain 投影裡沒人讀的 promise 標成已處理**（[#346](https://github.com/DemianLi/nexus-agent/issues/346)）。
+ *
+ * v3 run 替每次工具呼叫、每個子代理（連同子代理那一層的工具呼叫）各建一顆 `output`，工具本體一拋錯、
+ * 子代理那一輪一失敗就 reject。pump 讀的是原始封包，從來不 await 它們，所以每一顆都會變成未處理的
+ * rejection，而 Node 預設遇到就結束行程——serve 上所有 thread 一起斷。`containment` 救不回來：
+ * `tool-error` 是工具自己的 run manager 在拋錯當下發的（`@langchain/core` `dist/tools/index.js:141-143`），
+ * 早於任何 `wrapToolCall` 的 `catch`。
+ *
+ * **這不是吞錯。** 這一輪的失敗照舊以 `lifecycle failed` 上線、記成 `turn/failed`；工具的錯照舊由
+ * `containment` 回給模型。標掉的只是那份沒有人要讀的副本。
+ *
+ * **偏離，登記**：dsh 沒有對應物——它的串流不造出這種 promise，行程層的 unhandled rejection 在那邊是
+ * 「大聲死」（`installFailLoud`），所以我們也不在行程層接。代價是這裡**依賴投影的形狀**：哪天 langchain
+ * 加一種帶 promise 的原生投影，這裡會漏。上游修掉那天，`tool-throw-orphan.test.ts` 的上游絆索會紅，
+ * 這一段該拆。
+ *
+ * 不等它：投影在 run 收尾（或失敗）時才關，而那時 pump 早就往下走了。迭代本身在 run 失敗時也會拋，
+ * 所以每一條背景迴圈自己也要接住——不然修掉一顆孤兒又生一顆。
+ */
+function markProjectionsHandled(projections: RunProjections): void {
+  if (projections.toolCalls !== undefined) markToolCalls(projections.toolCalls);
+  if (projections.subagents !== undefined) markSubagents(projections.subagents);
+}
+
+function markToolCalls(calls: AsyncIterable<ToolCallProjection>): void {
+  void (async () => {
+    for await (const call of calls) call.output.catch(ignore);
+  })().catch(ignore);
+}
+
+function markSubagents(subagents: AsyncIterable<SubagentProjection>): void {
+  void (async () => {
+    for await (const subagent of subagents) {
+      subagent.output.catch(ignore);
+      markToolCalls(subagent.toolCalls);
+      markSubagents(subagent.subagents);
+    }
+  })().catch(ignore);
+}
+
 /** 這條 thread 的 checkpoint 位址。 */
 interface ThreadConfig {
   readonly configurable: { readonly thread_id: string };
@@ -114,7 +179,7 @@ export interface PumpAgent {
         readonly [TURN_CANCEL_CONFIG_KEY]?: AbortSignal;
       };
     },
-  ): Promise<AsyncIterable<RawProtocolEvent>>;
+  ): Promise<AsyncIterable<RawProtocolEvent> & RunProjections>;
   getState(config: ThreadConfig): Promise<{ readonly values: unknown }>;
   updateState(config: ThreadConfig, values: Record<string, unknown>): Promise<unknown>;
 }
@@ -978,6 +1043,8 @@ export class ThreadPump {
           [TURN_CANCEL_CONFIG_KEY]: current.controller.signal,
         },
       });
+      // **在第一顆封包之前**：投影裡的 promise 一建立就可能被 reject，晚掛就漏（#346）。
+      markProjectionsHandled(run);
       for await (const raw of run) {
         trackRootReply(current, raw);
         this.#noteReply(raw);

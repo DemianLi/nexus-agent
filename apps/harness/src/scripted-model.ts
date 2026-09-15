@@ -41,6 +41,11 @@ export interface ScriptedTurn {
   readonly toolCalls?: readonly ScriptedToolCall[];
   /** 這一輪的 token 用量。省略即不帶——見 {@link ScriptedUsage}。 */
   readonly usage?: ScriptedUsage;
+  /**
+   * 給了就代表這一輪的模型呼叫**拋錯**，訊息就是這個字串——代替供應商回錯（例如過載）。
+   * `content` 與 `toolCalls` 在這一輪不會被用到。
+   */
+  readonly error?: string;
 }
 
 /**
@@ -136,6 +141,7 @@ export class ScriptedChatModel extends BaseChatModel {
       );
     }
     this.shared.turn += 1;
+    if (turn.error !== undefined) throw new Error(turn.error);
     return turn;
   }
 
