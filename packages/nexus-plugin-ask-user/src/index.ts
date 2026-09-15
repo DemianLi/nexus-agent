@@ -35,6 +35,11 @@
  * （`channel.kind === 'human'` 在那邊也不代表有人真的看得到卡片），這一刀把它原樣繼承，
  * 沒有把它擴大，也沒有只為問答這條路補一半。
  *
+ * ## 子代理不問人（[#324](https://github.com/DemianLi/nexus-agent/issues/324)）
+ *
+ * 照 dsh，子代理叫這個工具一律被拒，碼是 `DELEGATED_CALLER`（{@link DELEGATED_CALLER_ERROR}）。載體是
+ * `rootOnly`：fold 把每個子代理那一份換成拒絕樁，句與碼由這裡帶。所以上面那個判準只管 root。
+ *
  * @module
  */
 
@@ -120,6 +125,21 @@ export const CANCELLED_MESSAGE = `人放棄了這一組問題，沒有任何一�
  * 在 `ask()` 那一層、我們這裡是工具本體先擋，不是同一個時刻；另外兩格 dsh 沒有對應的碼。
  */
 export const CANCELLED_ERROR: ToolErrorInfo = { name: 'UserQuestionError', code: 'ASK_CANCELLED' };
+
+/**
+ * 子代理叫到這個工具時那則錯誤的碼。照 dsh `ctx.userQuestions.ask()` 對不是 runtime root 的呼叫方拋的
+ * `UserQuestionError`／`DELEGATED_CALLER`（`packages/interaction/user-questions/src/index.ts:101-106`，
+ * `c291e79`；`tool-ask-user.spec.ts:270-299` 釘住拒絕的樣子）。
+ */
+export const DELEGATED_CALLER_ERROR: ToolErrorInfo = {
+  name: 'UserQuestionError',
+  code: 'DELEGATED_CALLER',
+};
+
+/** 子代理叫到這個工具時模型看到的那一句（前面由 `toolRefusal` 加 `Error: `）。dsh 同一處那句的中文。 */
+export const DELEGATED_CALLER_MESSAGE =
+  '呼叫的 agent 由另一個執行中的 agent 擁有，這時無法與人互動；' +
+  '把沒解決的問題或待定的決定寫進子代理的最終結果。';
 
 export interface AskUserPluginOptions {
   /**
@@ -210,7 +230,13 @@ export function createAskUserPlugin(options: AskUserPluginOptions = {}): NexusPl
             schema: askSchema,
           },
         ),
-        { outputSchema: ASK_USER_OUTPUT_SCHEMA },
+        {
+          outputSchema: ASK_USER_OUTPUT_SCHEMA,
+          // **子代理不停下來問人**（#324，照 dsh 的 `DELEGATED_CALLER`）：fold 把每個子代理那一份換成
+          // 拒絕樁。dsh 是在 `ask()` 裡查呼叫方；我們照 goal 那三顆的對應退到 `rootOnly`（理由見
+          // `@nexus/core` 的 `fold.ts` 的 `ROOT_ONLY_NOTICE`），句與碼照 dsh 帶。
+          rootOnly: { message: DELEGATED_CALLER_MESSAGE, error: DELEGATED_CALLER_ERROR },
+        },
       );
     },
   };

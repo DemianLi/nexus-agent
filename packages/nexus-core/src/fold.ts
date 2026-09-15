@@ -21,6 +21,7 @@ import { CompositeBackend, GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import type { AnyBackendProtocol, FilesystemPermission, SubAgent } from 'deepagents';
 import type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
 import { createApprovalGateMiddleware } from './approval.js';
+import { createSubagentDelegationMiddleware } from './subagent-delegation.js';
 import type { ApprovalChannel } from './approval.js';
 import { deriveApprovalChannel } from './approval.js';
 import { createContainmentMiddleware } from './containment.js';
@@ -35,7 +36,7 @@ import { createObservationPolicy } from './observation.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
-import type { PluginRegistry, SessionLookup } from './registry.js';
+import type { PluginRegistry, RootOnlyRefusal, SessionLookup } from './registry.js';
 import { createModelCallRecorder } from './model-calls.js';
 import { createModelUsageRecorder } from './model-usage.js';
 import { createTurnCancelGuard, createTurnCancelModelSignal } from './turn-cancel.js';
@@ -78,6 +79,9 @@ export const ROOT_ONLY_NOTICE = '這個工具只在 root agent 上執行；在 s
  * 會變成「工具 X 執行失敗：…」。**不帶碼**：dsh 沒有 root-only 這個旗標。決議見
  * [#271](https://github.com/DemianLi/nexus-agent/issues/271)。
  *
+ * 這是預設句。dsh 那側有現成的句與碼的工具，註冊時自己帶（`RegisterOptions.rootOnly` 給一個
+ * {@link RootOnlyRefusal}）——問答那顆帶 `DELEGATED_CALLER`（[#324](https://github.com/DemianLi/nexus-agent/issues/324)）。
+ *
  * @param name - 被叫到的工具名。
  * @param scope - 叫它的那個 subagent。
  * @returns 給模型看的那一句。
@@ -92,15 +96,24 @@ export function rootOnlyRefusal(name: string, scope: string): string {
  * 名字與參數 schema 照抄：換掉的是行為，不是模型看到的介面——名字變了模型會以為工具
  * 不見了，schema 變了它連參數都填不出來。
  *
+ * 註冊時自己帶了拒絕句與碼的（{@link RootOnlyRefusal}）用它的，沒帶的用 {@link rootOnlyRefusal}、不帶碼。
+ * 描述的 {@link ROOT_ONLY_NOTICE} 兩種都接。
+ *
  * @param original - 全域註冊的那一顆。
  * @param scope - 這顆樁要放進哪個 subagent。
- * @returns 只回 {@link rootOnlyRefusal} 那則錯誤訊息的同名工具。
+ * @param refusal - 註冊時自己帶的拒絕句與碼，沒有就是 `undefined`。
+ * @returns 只回那則錯誤訊息的同名工具。
  */
-function rootOnlyStub(original: StructuredTool, scope: string): StructuredTool {
+function rootOnlyStub(
+  original: StructuredTool,
+  scope: string,
+  refusal: RootOnlyRefusal | undefined,
+): StructuredTool {
   const refuse = (_args: unknown, config?: unknown) =>
-    toolRefusal(rootOnlyRefusal(original.name, scope), {
+    toolRefusal(refusal?.message ?? rootOnlyRefusal(original.name, scope), {
       callId: toolCallIdOf(config) ?? '',
       name: original.name,
+      ...(refusal?.error !== undefined && { error: refusal.error }),
     });
   return makeTool(refuse, {
     name: original.name,
@@ -298,6 +311,20 @@ export function foldRegistry(
   const turnCancel = createTurnCancelGuard();
   const turnCancelModelSignal = createTurnCancelModelSignal();
   const approvalGate = foldApprovalGate(registry, options, invalidArguments);
+  // **子代理另建一顆，管道固定 `policy-never`**（#324）：照 dsh 委派時把子代理的核准政策釘成 `never`
+  // （`packages/subagent/subagent/src/child-agent.ts:220-247`），不管 root 的管道是什麼。組裝時就分開，
+  // 不在執行期查身分——分得開就沒有「查不到是誰」那幾種情況。listener 同一組：判斷「要不要問」不因
+  // 誰叫而變，變的是問不問得到人。無狀態，一份走遍每個子代理。
+  //
+  // **偏離（登記）**：dsh 另把 `approval/policy: never`（`source: 'delegation'`）寫進子代理的日誌；
+  // 我們不記。root 的核准政策今天也不進日誌（見 {@link ./approval.ts} 的 `createApprovalGateMiddleware`），
+  // 這是跟 root 現況一致，不是新開的缺口。
+  const subagentApprovalGate = createApprovalGateMiddleware(
+    registry.approvals.listeners(),
+    { kind: 'policy-never' },
+    invalidArguments,
+  );
+  const subagentDelegation = createSubagentDelegationMiddleware();
   const summarizer = foldSummarizer(registry, options);
   const repeatReminder = foldRepeatReminder(options, registry.sessions);
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./model-usage.ts}。
@@ -321,7 +348,8 @@ export function foldRegistry(
       containment,
       turnCancel,
       turnCancelModelSignal,
-      approvalGate,
+      approvalGate: subagentApprovalGate,
+      delegation: subagentDelegation,
       observationPolicy,
       summarizer,
       repeatReminder,
@@ -842,6 +870,11 @@ function generalPurposeSpec(skills: readonly string[]): SubAgent {
  * 一個都不繼承**。舊機制靠的是 `interruptOn` 這個欄位可以逐個 subagent 傳，換成
  * middleware 之後那條路沒了，不注就是默默地讓 subagent 失去核准。
  *
+ * **注進去的是另一顆，管道固定 `policy-never`**（[#324](https://github.com/DemianLi/nexus-agent/issues/324)）：
+ * 照 dsh，子代理不停下來等人，需要核准的操作一律自動拒絕。listener 同一組，所以該問的照樣被判成「要問」，
+ * 只是問不到人——不注的話那些工具在子代理裡會**直接執行**，那是更糟的一邊。同一張卡的另外兩面：問答那顆
+ * 以 `rootOnly` 換成樁，以及只放進子代理的委派聲明（{@link ./subagent-delegation.ts}）。
+ *
  * **圍堵同樣逐個注進去，理由同上一條。** 它以前是 plugin middleware，所以跟其餘 plugin
  * middleware 一起射不進 subagent——也就是說 subagent 裡任何一個工具拋錯，整場 run 照樣
  * 死。[#159](https://github.com/DemianLi/nexus-agent/issues/159) 把它搬進 fold 打底，
@@ -873,7 +906,10 @@ function foldSubAgents(
     containment: AgentMiddleware;
     turnCancel: AgentMiddleware;
     turnCancelModelSignal: AgentMiddleware;
+    /** 子代理那顆，管道固定 `policy-never`——不是 root 那顆。 */
     approvalGate: AgentMiddleware;
+    /** 委派聲明，見 {@link ./subagent-delegation.ts}。只放進子代理。 */
+    delegation: AgentMiddleware;
     observationPolicy: (() => AgentMiddleware) | undefined;
     summarizer: (() => AgentMiddleware) | undefined;
     repeatReminder: AgentMiddleware | undefined;
@@ -918,7 +954,14 @@ function foldSubAgents(
       merged.set(
         toolName,
         registry.tools.isRootOnly(toolName)
-          ? { ...globalEntry, value: rootOnlyStub(globalEntry.value, name) }
+          ? {
+              ...globalEntry,
+              value: rootOnlyStub(
+                globalEntry.value,
+                name,
+                registry.tools.rootOnlyRefusalOf(toolName),
+              ),
+            }
           : globalEntry,
       );
     }
@@ -971,6 +1014,8 @@ function foldSubAgents(
         ...(context.observationPolicy === undefined ? [] : [context.observationPolicy()]),
         ...(context.summarizer === undefined ? [] : [context.summarizer()]),
         ...(context.repeatReminder === undefined ? [] : [context.repeatReminder]),
+        // 委派聲明排在 `spec.middleware` 外層：子代理自己帶的 middleware 看到的是接好聲明的請求。
+        context.delegation,
         // 模型呼叫的起訖同用量記錄器那條理由打底、共用一份，位置同 root。
         context.modelCalls,
         context.modelUsage,

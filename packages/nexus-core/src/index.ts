@@ -84,6 +84,7 @@ export type {
   SessionLookup,
   Disposer,
   RegisterOptions,
+  RootOnlyRefusal,
   ScopeKey,
 } from './registry.js';
 export { createRegistry } from './registry.js';
@@ -174,6 +175,11 @@ export {
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 export { createModelCallRecorder, MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
+export {
+  createSubagentDelegationMiddleware,
+  SUBAGENT_DELEGATION_CONTEXT,
+  SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
+} from './subagent-delegation.js';
 export {
   createTurnCancelGuard,
   createTurnCancelModelSignal,

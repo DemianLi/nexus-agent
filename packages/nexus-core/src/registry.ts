@@ -36,6 +36,7 @@ import type { SessionRegistry } from './session-registry.js';
 import type { SessionLog } from './session-log.js';
 import type { SessionTelemetryRedactRule, SessionTelemetryService } from './session-telemetry.js';
 import type { FeedbackService } from './feedback.js';
+import type { ToolErrorInfo } from './tool-events.js';
 
 /**
  * 註冊層的定址。`undefined` 是全域（root agent），字串是那個名字的 subagent。
@@ -44,6 +45,19 @@ import type { FeedbackService } from './feedback.js';
  * 不是 dsh 那種來自 Cordis context 樹的任意深度。
  */
 export type ScopeKey = string;
+
+/**
+ * root-only 工具在 subagent 裡被叫到時，自己帶的拒絕句與碼。
+ *
+ * 給了才用；`rootOnly: true` 走 fold 預設那句、不帶碼（`fold.ts` 的 `rootOnlyRefusal`）。
+ * 只有 dsh 那側有現成的碼時才該給——例如問答那顆的 `DELEGATED_CALLER`（#324）。
+ */
+export interface RootOnlyRefusal {
+  /** 模型看到的那一句，`Error: ` 之後的部分；**不要自己帶前綴**。 */
+  readonly message: string;
+  /** 帶進日誌 `tool/result` 的碼。 */
+  readonly error?: ToolErrorInfo;
+}
 
 export interface RegisterOptions {
   /** 註冊到哪一層。省略即全域。 */
@@ -54,8 +68,10 @@ export interface RegisterOptions {
    *
    * **只能配全域註冊。** 帶著 `scope` 一起給是矛盾的——那是在往 subagent 身上掛一個
    * 「不給 subagent」的工具——所以當場拋，不靜默忽略。
+   *
+   * 給一個 {@link RootOnlyRefusal} 等於 `true` 再加上自己的拒絕句與碼。
    */
-  rootOnly?: boolean;
+  rootOnly?: boolean | RootOnlyRefusal;
   /**
    * 這個工具**成功**輸出的形狀。fold 打底的校驗器對它驗每一次成功的結果，不合就換成一則
    * 帶 `INVALID_TOOL_OUTPUT` 的錯誤（見 {@link ./output-schema.ts}）。
@@ -111,6 +127,12 @@ export interface ToolRegistrationPoint {
    * @returns 全域解析得到、而且那一筆就是宣告 `rootOnly` 的那一個實例時為真。
    */
   isRootOnly(name: string): boolean;
+  /**
+   * 全域那一份裡，這個名字的 root-only 註冊自己帶的拒絕句與碼。查法同 {@link isRootOnly}。
+   * @param name - 工具名。
+   * @returns 註冊時給的那一份；不是 root-only、或只給了 `true` 時是 `undefined`。
+   */
+  rootOnlyRefusalOf(name: string): RootOnlyRefusal | undefined;
   /**
    * 這一顆工具實例註冊時宣告的輸出 schema。
    *
@@ -728,7 +750,8 @@ export function createRegistry(): InternalPluginRegistry {
   // 身分為鍵而不是名字：`NamedEntries` 的 undo 就是靠身分比對才不會誤刪後來占用同名
   // 的別人，這一格若以名字為鍵就會漏掉那個保護——撤銷過的 root-only 註冊會把旗標留在
   // 名字上，蓋到下一個同名工具身上。
-  const rootOnlyTools = new Set<StructuredTool>();
+  // 值是那一次註冊自己帶的拒絕句與碼；只給 `true` 的是 `undefined`。
+  const rootOnlyTools = new Map<StructuredTool, RootOnlyRefusal | undefined>();
   // 同一條理由：以身分為鍵，撤銷時跟著刪。
   const outputSchemas = new Map<StructuredTool, ZodType>();
 
@@ -736,7 +759,9 @@ export function createRegistry(): InternalPluginRegistry {
     register(tool, options) {
       const origin = requireOrigin('tools.register()');
       const scope = options?.scope;
-      if (options?.rootOnly === true && scope !== undefined) {
+      // 物件形式也是 root-only：三處判斷都讀這一格，不各自比 `=== true`。
+      const rootOnly = options?.rootOnly === true || typeof options?.rootOnly === 'object';
+      if (rootOnly && scope !== undefined) {
         throw new Error(
           `${formatOrigin(origin)} 把 "${tool.name}" 註冊到 subagent "${scope}" 的同時要求 rootOnly。` +
             `這兩個是矛盾的：rootOnly 的意思就是 subagent 不給用，往 subagent 層掛它沒有意義。` +
@@ -745,7 +770,12 @@ export function createRegistry(): InternalPluginRegistry {
       }
       const layer = layerFor(scope);
       const undo = layer.tools.insert(tool.name, tool, origin);
-      if (options?.rootOnly === true) rootOnlyTools.add(tool);
+      if (rootOnly) {
+        rootOnlyTools.set(
+          tool,
+          typeof options?.rootOnly === 'object' ? options.rootOnly : undefined,
+        );
+      }
       if (options?.outputSchema !== undefined) outputSchemas.set(tool, options.outputSchema);
       return () => {
         undo();
@@ -785,6 +815,10 @@ export function createRegistry(): InternalPluginRegistry {
     isRootOnly(name) {
       const entry = globalLayer.tools.get(name);
       return entry !== undefined && rootOnlyTools.has(entry.value);
+    },
+    rootOnlyRefusalOf(name) {
+      const entry = globalLayer.tools.get(name);
+      return entry === undefined ? undefined : rootOnlyTools.get(entry.value);
     },
     outputSchemaOf(tool) {
       return outputSchemas.get(tool as StructuredTool);

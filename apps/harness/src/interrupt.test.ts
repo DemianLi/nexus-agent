@@ -405,8 +405,26 @@ describe('閘門本身的邊界', () => {
   });
 });
 
+/**
+ * 子代理那一輪收到的、`danger` 被拒的那則工具訊息。子代理的訊息不在 root 的結果裡，只從模型收到的 prompt
+ * 看得到（`lastPrompt` 永遠是 root 最後那輪，所以翻整份 `prompts`）。
+ */
+function subagentRefusal(model: ScriptedChatModel): BaseMessage | undefined {
+  return model.prompts
+    .flat()
+    .find((message) => message.getType() === 'tool' && message.text.includes('danger'));
+}
+
+/**
+ * **這兩條在 [#324](https://github.com/DemianLi/nexus-agent/issues/324) 翻了面。** 以前釘的是「中斷冒到 root、
+ * 等人按」；照 dsh，子代理的核准政策在委派時釘成 `never`（`child-agent.ts:220-247`），子代理不停下來等人。
+ * 現在釘的是：**不中斷**、工具沒跑、子代理收到 `policy-never` 那句、root 的 `task` 照常收尾。
+ *
+ * **閘門照樣要逐個注進去，這兩條仍然量它**：子代理不繼承 root 的 plugin middleware，不注的話 `danger` 在
+ * 子代理裡會直接執行，`ran` 紅。腳本的輪數剛好：多一輪（例如又停下來）會當場拋。
+ */
 describe('subagent 裡的閘門', () => {
-  it('子代理呼叫 gated 工具 → 中斷冒到 root，拒絕之後工具沒跑', async () => {
+  it('子代理呼叫 gated 工具 → 不中斷、工具沒跑，子代理收到「沒有人被問到」，root 照常收尾', async () => {
     const model = new ScriptedChatModel({
       turns: [
         {
@@ -416,7 +434,6 @@ describe('subagent 裡的閘門', () => {
         { content: '子代理動手。', toolCalls: [{ name: 'danger', args: {} }] },
         { content: '子代理收工。' },
         { content: '根收工。' },
-        { content: '根再收一次工。' },
       ],
     });
 
@@ -441,16 +458,14 @@ describe('subagent 裡的閘門', () => {
     });
     const config = { configurable: { thread_id: 'subagent' } };
 
-    const paused = await agent.invoke(toAgentInvocation('委派'), config);
-    expect(paused.__interrupt__).toBeDefined();
-    expect(ran).toEqual([]);
+    const result = await agent.invoke(toAgentInvocation('委派'), config);
 
-    await agent.invoke(
-      new Command({ resume: { decisions: [{ type: 'reject' }] } }) as never,
-      config,
-    );
-
+    expect(result.__interrupt__).toBeUndefined();
     expect(ran).toEqual([]);
+    // 閘門真的判過，而且走的是 `policy-never` 那句——不是別的理由擋下，也不是有人拒絕。
+    expect(subagentRefusal(model)?.text).toContain('danger 要人看過');
+    expect(subagentRefusal(model)?.text).toContain('沒有人被問到');
+    expect((result.messages as BaseMessage[]).at(-1)?.text).toBe('根收工。');
   });
 
   /**
@@ -458,7 +473,7 @@ describe('subagent 裡的閘門', () => {
    * `mergeMiddlewareStack(..., { appendNew: false })` 把名字不撞內建的 middleware 全部丟掉，
    * 閘門就在其中——`task` 的描述對模型列著它，而叫它等於繞過核准。上一條是它的對照組。
    */
-  it('general-purpose 裡呼叫 gated 工具 → 一樣中斷，拒絕之後工具沒跑', async () => {
+  it('general-purpose 裡呼叫 gated 工具 → 一樣不中斷、工具沒跑，root 照常收尾', async () => {
     const model = new ScriptedChatModel({
       turns: [
         {
@@ -470,7 +485,6 @@ describe('subagent 裡的閘門', () => {
         { content: '子代理動手。', toolCalls: [{ name: 'danger', args: {} }] },
         { content: '子代理收工。' },
         { content: '根收工。' },
-        { content: '根再收一次工。' },
       ],
     });
 
@@ -481,15 +495,12 @@ describe('subagent 裡的閘門', () => {
     });
     const config = { configurable: { thread_id: 'general-purpose' } };
 
-    const paused = await agent.invoke(toAgentInvocation('委派'), config);
-    expect(paused.__interrupt__).toBeDefined();
-    expect(ran).toEqual([]);
+    const result = await agent.invoke(toAgentInvocation('委派'), config);
 
-    await agent.invoke(
-      new Command({ resume: { decisions: [{ type: 'reject' }] } }) as never,
-      config,
-    );
-
+    expect(result.__interrupt__).toBeUndefined();
     expect(ran).toEqual([]);
+    expect(subagentRefusal(model)?.text).toContain('danger 要人看過');
+    expect(subagentRefusal(model)?.text).toContain('沒有人被問到');
+    expect((result.messages as BaseMessage[]).at(-1)?.text).toBe('根收工。');
   });
 });

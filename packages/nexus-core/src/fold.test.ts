@@ -18,6 +18,7 @@ import { OBSERVATION_POLICY_MIDDLEWARE_NAME } from './observation.js';
 import { OUTPUT_SCHEMA_MIDDLEWARE_NAME } from './output-schema.js';
 import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 import { MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
+import { SUBAGENT_DELEGATION_MIDDLEWARE_NAME } from './subagent-delegation.js';
 import {
   TURN_CANCEL_MIDDLEWARE_NAME,
   TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
@@ -305,6 +306,7 @@ describe('「先讀後改」策略打底', () => {
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       OBSERVATION_POLICY_MIDDLEWARE_NAME,
+      SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
@@ -554,6 +556,7 @@ describe('approvals 註冊點', () => {
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
@@ -574,6 +577,7 @@ describe('approvals 註冊點', () => {
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
@@ -751,6 +755,31 @@ describe('root-only 的工具', () => {
         text: `Error: ${rootOnlyRefusal('goal', subagent.name)}`,
       });
     }
+  });
+
+  /**
+   * 問答那顆的形狀（#324）：句與碼照 dsh 的 `DELEGATED_CALLER` 帶。上面那幾條釘預設句、不帶碼，goal 三顆走那條。
+   */
+  it('註冊時帶了自己的拒絕句與碼：樁回那一句、帶那個碼，描述照樣接那句話', async () => {
+    const ask = fakeTool('ask');
+    const error = { name: 'UserQuestionError', code: 'DELEGATED_CALLER' };
+    const params = await fold([
+      fakePlugin(
+        'ask',
+        (r) => void r.tools.register(ask, { rootOnly: { message: '問不到人。', error } }),
+      ),
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('researcher'))),
+    ]);
+    const stub = registered(params)[0]?.tools?.[0];
+
+    expect(stub?.name).toBe('ask');
+    expect(stub?.description).toContain(ROOT_ONLY_NOTICE);
+    expect(stubAnswer(await stub?.invoke({}))).toEqual({
+      text: 'Error: 問不到人。',
+      status: 'error',
+      error,
+    });
+    expect(params.tools).toEqual([ask]);
   });
 
   it('沒宣告 rootOnly 的工具照舊原件進每一個 subagent', async () => {
@@ -1146,6 +1175,7 @@ describe('摘要器打底', () => {
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
+      SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
@@ -1269,6 +1299,7 @@ describe('提醒器打底', () => {
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       REPEAT_REMINDER_MIDDLEWARE_NAME,
+      SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'subagent-own',
