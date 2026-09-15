@@ -113,6 +113,57 @@ describe('起起來之後', () => {
 });
 
 /**
+ * **工具本體拋錯不會把 serve 行程弄掛**（[#346](https://github.com/DemianLi/nexus-agent/issues/346)）。
+ *
+ * 修好之前這個 fixture 在真的 `serve` 行程上是 exit 1——所有 thread 一起斷。在 vitest 裡行程
+ * 不會真的死（vitest 自己接住了），所以判準是**這條測試期間的未處理 rejection 數**，再加上
+ * 「同一條 thread 再送一句、另一條 thread 也送一句都跑得完」那一半。
+ */
+describe('serve 上的工具拋錯', () => {
+  it('同一條 thread 再送一句、另一條 thread 也送一句都跑得完，沒有未處理的 rejection', async () => {
+    const unhandled: unknown[] = [];
+    const record = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', record);
+    try {
+      running = await runServe({
+        argv: ['--port', '0', '--plugins', 'src/tool-throw.fixture.ts'],
+        log: () => undefined,
+        env: {},
+      });
+      const client = createWireClient({ baseUrl: (running as RunningServe).url });
+
+      const converse = async (threadId: string, sentences: readonly string[]) => {
+        const events = await client.openEvents(threadId);
+        let state: ConversationState = emptyConversation();
+        for (const sentence of sentences) {
+          state = appendHumanTurn(state, sentence);
+          await client.runStart(threadId, sentence);
+          while (state.status === 'running') {
+            const next = await events.next();
+            if (next.done === true) break;
+            state = reduceConversation(state, next.value);
+          }
+          expect(state.status).toBe('idle');
+        }
+        return state;
+      };
+
+      // 腳本第一句就叫那顆一律拋錯的 `echo`；第二句落在腳本的第四輪。
+      await converse('first', ['把這句話回聲一次。', '再說一句。']);
+      // 另一條 thread 有自己的一份假模型，又撞一次拋錯。
+      await converse('second', ['把這句話回聲一次。']);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(unhandled.map(String)).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', record);
+    }
+  });
+});
+
+/**
  * **這一條守的是 `serve.ts` 那一行組裝**，不是發派面本身——那一整套在
  * [`slash-wire.test.ts`](./slash-wire.test.ts) 裡對著自己建的 handler 走完。
  * 這裡只問一件事：`createCliAgent` 回的那個註冊點有沒有真的一路傳到線上
