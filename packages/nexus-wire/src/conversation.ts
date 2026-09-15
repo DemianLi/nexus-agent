@@ -76,6 +76,9 @@ export interface ToolEntry {
    * 收到的是已經分好的 `tool-suspended`。少了這一格，一顆還沒被回答的問題在畫面上是紅字
    * 「失敗」（[#239](https://github.com/DemianLi/nexus-agent/issues/239) 實測）。
    *
+   * **只給本體拋了中斷的那顆**（問答、子代理停下來的 `task`）。停在核准閘門上的那顆本體沒被呼叫到，照 dsh 是
+   * `running`——dsh 的工具卡沒有「等人」那一格，等待由核准卡表示（[#317](https://github.com/DemianLi/nexus-agent/issues/317)）。
+   *
    * **而 `done` 不等於「成功了」的那一半也一起收了**：一則 `status: 'error'` 的
    * ToolMessage 走的是 `tool-finished`，pump 會補一格 `failed`，這裡讀它。兩面不一起收的
    * 話，「掛著的不顯示失敗」單獨綠得起來——把全部都畫成「執行中」也會綠。

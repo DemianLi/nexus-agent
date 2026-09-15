@@ -12,6 +12,7 @@ import type { ConversationEntry, ConversationState } from '@nexus/wire';
 import { UNFINISHED_TOOL_TEXT, emptyConversation, prependEntries, reduceAll } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
+import type { AwaitingInput } from './conversation-history.js';
 import { HistoryQueryError, historyFrames, historyPage } from './conversation-history.js';
 
 type Draft = Pick<SessionEvent, 'type' | 'data'>;
@@ -76,9 +77,12 @@ function line(entry: ConversationEntry): string {
   }
 }
 
-function screen(events: readonly SessionEvent[], awaitingInput = false): ConversationState {
+function screen(events: readonly SessionEvent[], awaitingInput?: AwaitingInput): ConversationState {
   return reduceAll(emptyConversation(), historyFrames(events, awaitingInput));
 }
+
+/** 掛著中斷，停在閘門上的是這幾個名字。 */
+const gated = (...names: string[]): AwaitingInput => ({ gatedTools: new Set(names) });
 
 const TWO_TURNS = log(
   human('記住暗號是藍鯨'),
@@ -189,24 +193,71 @@ describe('日誌 → 畫面', () => {
     expect(state.entries.map(line)).toEqual(['human:寫檔', 'tool:write_file:done', 'ai:寫好了。']);
   });
 
-  describe('最後一輪停在核准點', () => {
+  /**
+   * 兩種等法照即時分開畫（#317）：停在閘門上的是「執行中」，本體拋了中斷的是「等你回答」。
+   *
+   * **第一條原本釘的是「停在閘門上也是等你回答」**（#310），換機制時翻面寫；少了混著掛的那一條，把每張卡都畫成
+   * 執行中的實作也會綠。
+   */
+  describe('最後一輪停下來等人', () => {
+    const interrupt = (interruptId: string): Draft => ({
+      type: 'interrupt/raised',
+      data: { interruptId },
+    });
     const pending = log(
       human('寫檔'),
       reply('', ['c1']),
       call('c1', 'write_file'),
-      { type: 'interrupt/raised', data: { interruptId: 'i1' } },
+      interrupt('i1'),
       turnEnd,
     );
 
-    it('這條 thread 還掛著那顆中斷：卡是「等你回答」，畫面停在忙著', () => {
-      const state = screen(pending, true);
+    it('停在核准閘門上、這條 thread 還掛著那顆中斷：卡跟即時一樣是「執行中」，畫面停在忙著', () => {
+      const state = screen(pending, gated('write_file'));
 
-      expect(state.entries.map(line)).toEqual(['human:寫檔', 'tool:write_file:suspended']);
+      expect(state.entries.map(line)).toEqual(['human:寫檔', 'tool:write_file:running']);
       expect(state.status).toBe('running');
     });
 
+    it('本體拋了中斷的（問答）：卡是「等你回答」', () => {
+      const state = screen(
+        log(
+          human('問'),
+          reply('', ['c1']),
+          call('c1', 'ask_user_question'),
+          interrupt('i1'),
+          turnEnd,
+        ),
+        gated(),
+      );
+
+      expect(state.entries.map(line)).toEqual(['human:問', 'tool:ask_user_question:suspended']);
+      expect(state.status).toBe('running');
+    });
+
+    it('同一輪一題問答、一顆核准：問答是「等你回答」，核准是「執行中」', () => {
+      const state = screen(
+        log(
+          human('兩個都動'),
+          reply('', ['c1', 'c2']),
+          call('c1', 'ask_user_question'),
+          call('c2', 'write_file'),
+          interrupt('i1'),
+          interrupt('i2'),
+          turnEnd,
+        ),
+        gated('write_file'),
+      );
+
+      expect(state.entries.map(line)).toEqual([
+        'human:兩個都動',
+        'tool:ask_user_question:suspended',
+        'tool:write_file:running',
+      ]);
+    });
+
     it('行程重開過、中斷已經不在了：卡照即時那條規則收成失敗', () => {
-      const state = screen(pending, false);
+      const state = screen(pending);
 
       expect(state.entries.map(line)).toEqual([
         'human:寫檔',
@@ -216,7 +267,11 @@ describe('日誌 → 畫面', () => {
     });
 
     it('掛著的判斷只作用在最後一頁', () => {
-      const page = historyPage(log(...pending, human('之後'), reply('好。'), turnEnd), {}, true);
+      const page = historyPage(
+        log(...pending, human('之後'), reply('好。'), turnEnd),
+        {},
+        gated('write_file'),
+      );
 
       expect(reduceAll(emptyConversation(), page.events).entries.map(line)).toContain(
         `tool:write_file:failed:${UNFINISHED_TOOL_TEXT}`,

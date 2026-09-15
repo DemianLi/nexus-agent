@@ -894,7 +894,11 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     if (thread instanceof Response) return thread;
     let result: ThreadHistoryResult;
     try {
-      result = historyPage(thread.pump.sessionLog.events, query, thread.pump.awaitingInput);
+      result = historyPage(
+        thread.pump.sessionLog.events,
+        query,
+        thread.pump.awaitingInput ? { gatedTools: thread.pump.gatedTools } : undefined,
+      );
     } catch (error: unknown) {
       if (error instanceof HistoryQueryError) {
         return json(errorResponse(null, 'invalid_argument', error.message));
