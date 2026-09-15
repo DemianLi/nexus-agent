@@ -237,7 +237,7 @@ describe('摘要與提醒一起跑', () => {
 /**
  * **打底到 subagent，而且是在真的 subagent 那幾輪上量的。**
  *
- * root 的 `registry.middleware` 到不了 subagent（`summarization.test.ts` 那條釘著它），
+ * 提醒器是 fold 自己建的、不經過 `registry.middleware`，
  * 所以這道提醒要嘛在 `foldSubAgents` 打底、要嘛那個 subagent 完全沒有——而長任務裡真的
  * 會打轉的正是 subagent。`fold.test.ts` 釘的是「那份陣列裡有它」；這條釘的是**基座真的
  * 把那份陣列組進了 subagent 的 stack**，兩件事會為不同的理由壞掉。

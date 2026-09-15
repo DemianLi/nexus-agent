@@ -305,18 +305,25 @@ function planCommandResult(sessions: readonly PlanModeSession[], rawInput: strin
  * 前者宣告那一格、後兩者在圖外的命令與圖內的 state 之間搬值。模式搬進日誌之後三件都沒有
  * 東西可做——**`beforeAgent` 也因此不再佔住 dsh 的 `agent/pre-step`**，那一格空了（見索引）。
  *
- * **它只掛在 root 上**：`fold.ts` 不把 plugin 的 middleware 攤給 subagent，所以這兩件事
- * 讀的永遠是 root 那一份的模式。
+ * **同一份實例掛在 root 與每個子代理上**（`fold.ts` 把 plugin 的 middleware 攤過去，
+ * [#327](https://github.com/DemianLi/nexus-agent/issues/327)），所以兩件事都先問「這一次是誰」：
+ * 照 dsh，`plan:policy` 段落與 `exit_plan_mode` 讀的都是**呼叫者自己的** session
+ * （`packages/plan/plan-mode/src/index.ts:212-220`、`:292-294`）。子代理的 session 從沒進過計劃模式，
+ * 所以 root 開著計劃模式時，子代理照樣拿不到指引，叫 `exit_plan_mode` 照樣在這一層被擋——走不到後面
+ * 那顆 `policy-never` 閘門，模型看到的是「不在計劃模式」而不是「沒人批准」，同 dsh 的先後。
  *
  * @param guidance - 模式生效時夾的那一段。
- * @param active - 這一刻在不在計劃模式裡。
+ * @param active - 這一次呼叫的呼叫者在不在計劃模式裡；收的是 handler 形狀的 config。
  * @returns 可以交給 `registry.middleware.use()` 的 middleware。
  */
-function createPlanModeMiddleware(guidance: string, active: () => boolean): AgentMiddleware {
+function createPlanModeMiddleware(
+  guidance: string,
+  active: (config: unknown) => boolean,
+): AgentMiddleware {
   return createMiddleware({
     name: PLAN_MODE_MIDDLEWARE_NAME,
     wrapModelCall: (request, handler) => {
-      if (!active()) return handler(request);
+      if (!active(callConfigOf(request))) return handler(request);
       // 兩條路是同一件事的兩個入口：`systemMessage` 在的時候接在它後面，不在的時候
       // 由 `systemPrompt` 這個字串欄位承接。基座兩個都讀，給錯那一個等於沒講。
       const { systemMessage } = request;
@@ -329,7 +336,7 @@ function createPlanModeMiddleware(guidance: string, active: () => boolean): Agen
     wrapToolCall: (request, handler) => {
       const call = request.toolCall as { name?: string; id?: string };
       if (call.name !== EXIT_PLAN_MODE_TOOL_NAME) return handler(request);
-      if (active()) return handler(request);
+      if (active(callConfigOf(request))) return handler(request);
       // **直接回訊息，不包進 `Command`**：圍堵從 `Command` 裡認這次呼叫的那則是比對
       // `tool_call_id`（`@nexus/core` 的 `readToolOutcome`），id 一旦對不上就讀成成功。
       return toolRefusal(NOT_IN_PLAN_MODE_MESSAGE, {
@@ -338,6 +345,16 @@ function createPlanModeMiddleware(guidance: string, active: () => boolean): Agen
       });
     },
   }) as AgentMiddleware;
+}
+
+/**
+ * middleware 的兩個鉤子都拿不到 handler 形狀的 config，只有 `runtime.configurable`；包回一層
+ * `configurable` 就是 `registry.sessions.forCall` 要的那份，同 `@nexus/core` 的 `model-usage.ts`。
+ */
+function callConfigOf(request: unknown): unknown {
+  return {
+    configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
+  };
 }
 
 /** 這一次工具呼叫落在哪一份日誌上——認得出來而且是這個 plugin 接著的 root 那一份才有。 */
@@ -355,8 +372,8 @@ type PlanModeLookup =
  *
  * **日誌問的是這次呼叫的 config，不是組裝的閉包**（同 `@nexus/plugin-goal` 的工具，理由見
  * `@nexus/core` 的 `sessions.ts`）。在 subagent 裡被呼叫時，`forCall` 認出來的是那個
- * subagent 自己的日誌，而計劃模式不管那一份——那裡的 middleware 也不在（`fold.ts` 不攤），
- * 所以擋的就是這裡：回一則帶 {@link NOT_IN_PLAN_MODE_MESSAGE} 的錯誤訊息。**不標 `rootOnly`**：那會換掉
+ * subagent 自己的日誌，而計劃模式不管那一份。產品組裝上那裡的 middleware 會先擋掉（#327），走不到這裡；
+ * 這一格留著，是因為工具本體不該靠 middleware 在場才對：回一則帶 {@link NOT_IN_PLAN_MODE_MESSAGE} 的錯誤訊息。**不標 `rootOnly`**：那會換掉
  * subagent 看到的工具目錄，而 dsh 的「工具目錄不隨模式變動」講的正是這一件。
  *
  * @param lookup - 認這次呼叫的日誌。
@@ -452,10 +469,20 @@ export function createPlanModePlugin(options: PlanModePluginOptions = {}): Nexus
         };
       });
 
-      // middleware 只在 root 上跑，所以問組裝的那一份就對。接了不只一份時退回初值：命令那側
-      // 會把「挑不出來」講出來，這裡猜一份的話指引會照著別人的模式夾。
-      const active = (): boolean =>
+      // middleware 掛在 root 與每個子代理上（#327），所以先問這一次是誰。三格，**不能收成兩格**：
+      // - 認得出來、是這個 plugin 接著的 root 那份日誌 → 讀它的模式。
+      // - 認得出來、是別的日誌（子代理）→ 不在計劃模式。照 dsh，子代理讀的是它自己的 session。
+      // - 認不出來（沒接日誌、沒有 `checkpoint_ns`、挑不出來）→ 沿用改之前的答案：剛好接了一份就讀它，
+      //   否則退回初值。不接日誌、開著 `startActive` 的組裝靠這一格夾指引；收成「不在」的話指引會靜靜
+      //   消失，沒有東西會紅。接了不只一份時不猜：命令那側會把「挑不出來」講出來，猜一份的話指引會照著
+      //   別人的模式夾。
+      const fallback = (): boolean =>
         attachedHere.length === 1 ? (attachedHere[0] as PlanModeSession).active() : startActive;
+      const active = (config: unknown): boolean => {
+        const found = registry.sessions.forCall(config);
+        if (found.kind !== 'ok') return fallback();
+        return sessionsHere.get(found.log)?.active() ?? false;
+      };
 
       registry.capabilities.provide(PLAN_MODE_CAPABILITY);
       registry.middleware.use(createPlanModeMiddleware(guidance, active), { prepend: true });

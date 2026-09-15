@@ -133,6 +133,9 @@ export function createSandboxPolicyPlugin(
         createMiddleware({
           name: SANDBOX_POLICY_MIDDLEWARE_NAME,
           wrapModelCall: (request, handler) => {
+            // 子代理也走這裡（#327），而且講的是**委派那一格**：子代理整個跑在 `task` 的 handler 裡、在下面那顆
+            // `wrapToolCall` 包的 ALS 之內，`controller.source` 先讀快照。同 dsh 讀子代理自己 session 上那顆
+            // `sandbox/mode { source: 'delegation' }`。
             const sentence = sandboxPolicySentence(resolveMode(), rootDir);
             // 兩條路是同一件事的兩個入口，照抄 plan-mode 那段註解：`systemMessage` 在的
             // 時候接在它後面，不在的時候由 `systemPrompt` 這個字串欄位承接。基座兩個都讀，
@@ -146,8 +149,9 @@ export function createSandboxPolicyPlugin(
           },
           // **委派那一刻拍下這一格**（#326）：子代理整個在 `task` 那一次呼叫的 handler 裡跑，所以包住
           // handler，子代理的 fence、升級閘門、日誌開啟都讀得到快照。**同步拍**，照 dsh 在子代理啟動的
-          // 第一個 await 之前拍（`captureDelegatedPolicyOverrides`）。這顆 middleware 只到得了 root
-          // （#327），而拍照本來就是父代理那側的事。
+          // 第一個 await 之前拍（`captureDelegatedPolicyOverrides`）。這顆 middleware 也掛在子代理上（#327），
+          // 但子代理手上沒有 `task`（基座的子代理 stack 沒有委派工具），所以這一半只在 root 上作用——拍照本來就是
+          // 父代理那側的事。
           wrapToolCall: (request, handler) =>
             resolveToolName(request) === DELEGATION_TOOL_NAME
               ? controller.delegate(() => handler(request))

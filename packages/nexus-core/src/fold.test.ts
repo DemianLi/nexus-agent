@@ -203,6 +203,74 @@ describe('middleware 註冊點', () => {
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
+
+  /**
+   * **每個子代理也拿到，同 root 的分區、同一個實例**（[#327](https://github.com/DemianLi/nexus-agent/issues/327)）。
+   * 照 dsh：子代理併入父代理同一份組合，同樣的 plugin 物件。
+   *
+   * 名字全列：只驗「在不在」的話，`prepend` 的排到閘門內側也會綠——而它排在閘門外側是承重的（計劃模式要在
+   * `policy-never` 之前擋掉模式外的 `exit_plan_mode`）。**假 middleware 的名字不撞基座**，所以這裡釘不到
+   * 「撞名的會被原地取代、位置不再決定層次」那一格；那一格寫在 `foldSubAgents` 的註解裡。
+   */
+  it('每個子代理也拿到 plugin 的 middleware：同 root 的分區、同一個實例', async () => {
+    const early = fakeMiddleware('early');
+    const late = fakeMiddleware('late');
+    const own = fakeMiddleware('subagent-own');
+    const params = await fold([
+      fakePlugin('a', (r) => void r.middleware.use(late)),
+      fakePlugin('b', (r) => void r.middleware.use(early, { prepend: true })),
+      fakePlugin('team', (r) => {
+        r.subagents.register({ ...fakeSubAgent('releaser'), middleware: [own] } as SubAgent);
+      }),
+    ]);
+    // 註冊的那一個，外加 fold 補的 `general-purpose`——兩個都要有。
+    expect(params.subagents).toHaveLength(2);
+    for (const subagent of params.subagents) {
+      const list = subagent.middleware ?? [];
+      const names = list.map((mw) => (mw as unknown as { name: string }).name);
+      expect(names).toEqual([
+        CONTAINMENT_MIDDLEWARE_NAME,
+        TURN_CANCEL_MIDDLEWARE_NAME,
+        'early',
+        APPROVAL_GATE_MIDDLEWARE_NAME,
+        SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
+        MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
+        MODEL_USAGE_MIDDLEWARE_NAME,
+        'late',
+        // plugin 打底、子代理自帶的在內側。
+        ...(subagent.name === 'releaser' ? ['subagent-own'] : []),
+        OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+        INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+        TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
+      ]);
+      expect(list[names.indexOf('early')]).toBe(early);
+      expect(list[names.indexOf('late')]).toBe(late);
+    }
+    expect(params.middleware).toContain(early);
+    expect(params.middleware).toContain(late);
+  });
+
+  /**
+   * **例外：名字撞上摘要器的那一顆只到 root**（#327 動工時拍板）。它是一份實例、狀態在閉包裡，攤過去會蓋掉 fold
+   * 替子代理各建的那份，root 與子代理的歷史混進同一個檔。行為面的證據在 `apps/harness/src/summarization.test.ts`
+   * 的「註冊點只蓋到 root」。
+   */
+  it('名字撞上摘要器的 plugin middleware 只到 root，不攤進子代理', async () => {
+    const replacement = fakeMiddleware(SUMMARIZATION_MIDDLEWARE_NAME);
+    const other = fakeMiddleware('other');
+    const params = await fold([
+      fakePlugin('sum', (r) => void r.middleware.use(replacement)),
+      fakePlugin('other', (r) => void r.middleware.use(other)),
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('releaser'))),
+    ]);
+    expect(params.middleware).toContain(replacement);
+    expect(params.subagents).toHaveLength(2);
+    for (const subagent of params.subagents) {
+      expect(subagent.middleware).not.toContain(replacement);
+      // 對照：同一份清單裡別的 plugin middleware 照樣攤過去——擋的是那一個名字，不是整批。
+      expect(subagent.middleware).toContain(other);
+    }
+  });
 });
 
 describe('圍堵打底', () => {
@@ -541,7 +609,7 @@ describe('approvals 註冊點', () => {
   });
 
   it('每個 subagent 也拿到閘門，而且排在它自帶的 middleware 之前', async () => {
-    // subagent 不繼承 root 的 plugin middleware（`SubAgentBase.middleware` 是
+    // 基座的 subagent 不繼承 root 的 middleware 參數（`SubAgentBase.middleware` 是
     // 「append after default_middleware」），不注就是默默地失去核准。
     const own = fakeMiddleware('subagent-own');
     const params = await fold([
@@ -1292,8 +1360,8 @@ describe('提醒器打底', () => {
     const names = (registered(params)[0]?.middleware ?? []).map(
       (mw) => (mw as unknown as { name: string }).name,
     );
-    // 自帶的排在後面 ＝ 自帶的贏，同 `tools` 那條軸線。root 的 `registry.middleware`
-    // 到不了 subagent，所以不打底的話那個 subagent 就完全沒有這道提醒。
+    // 自帶的排在後面 ＝ 自帶的贏，同 `tools` 那條軸線。提醒器是 fold 自己建的、不經過
+    // `registry.middleware`，所以不打底的話那個 subagent 就完全沒有這道提醒。
     expect(names).toEqual([
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
