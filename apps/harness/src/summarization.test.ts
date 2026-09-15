@@ -191,11 +191,15 @@ describe('同名取代是唯一的縫', () => {
   });
 
   /**
-   * **`middleware` 註冊點只蓋得到 root**——升版絆索，也是這條縫的射程邊界。
+   * **同名換掉摘要器的那一顆只蓋得到 root**——升版絆索，也是這條縫的射程邊界。
    *
    * `createSubagentDefaultMiddleware` 每個 subagent 各建一份新的
    * `createSummarizationMiddleware({ backend })`，而 `buildSubagentMiddleware` 只併
    * `input.middleware`——root 從 `middleware` 參數傳進去的那個到不了 subagent。
+   *
+   * **[#327](https://github.com/DemianLi/nexus-agent/issues/327) 之後這條是選的，不再是基座給的。** fold 把 plugin 的
+   * middleware 攤進每個子代理，**唯獨名字撞上摘要器的那一顆不攤**（`fold.ts` 的 `subagentPluginMiddleware`）：它是一份
+   * 實例、`sessionId` 在閉包裡，攤過去會讓 root 與子代理的歷史混進同一個檔。這條紅了，就是那個例外被拿掉了。
    *
    * **這條的意思在 [#142](https://github.com/DemianLi/nexus-agent/issues/142) 之後變了一半。**
    * 註冊點的射程沒變（仍然只到 root），但 subagent 那一輪拿的**不再是基座那個**：
@@ -838,7 +842,7 @@ describe('正式路徑上的門檻是我們選的', () => {
  * **打底射得到每一個 subagent**——[#142](https://github.com/DemianLi/nexus-agent/issues/142)
  * 的決定 2。
  *
- * 上面那條「取代只蓋到 root」量的是 `middleware` **註冊點**的射程，而它今天仍然只到 root。
+ * 上面那條「取代只蓋到 root」量的是 plugin 同名換掉的那一顆的射程，而它今天仍然只到 root（#327 刻意留下的例外）。
  * 這一組量的是另一條路：`foldSubAgents` 逐個 subagent 把我們配的那份注進 `spec.middleware`，
  * 走的是同一套同名取代（`buildSubagentMiddleware` 呼叫的是**同一個** `mergeMiddlewareStack`）。
  *

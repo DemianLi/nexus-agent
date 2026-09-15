@@ -25,7 +25,12 @@ import {
   DELEGATED_CALLER_ERROR,
   DELEGATED_CALLER_MESSAGE,
 } from '@nexus/plugin-ask-user';
-import { createPlanModePlugin } from '@nexus/plugin-plan-mode';
+import {
+  createPlanModePlugin,
+  DEFAULT_PLAN_GUIDANCE,
+  EXIT_PLAN_MODE_TOOL_NAME,
+  NOT_IN_PLAN_MODE_MESSAGE,
+} from '@nexus/plugin-plan-mode';
 import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import type { Event } from '@nexus/wire';
 import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
@@ -228,19 +233,11 @@ describe('委派聲明：子代理每次模型請求都有，root 的沒有', ()
 });
 
 /**
- * **真的會停下來問人的工具**，不只是測試用的 `danger`：閘門不看名字，產品裡掛 `ask` 的每一顆在子代理裡都拿到
- * `policy-never` 那句。`exit_plan_mode` 在 root 上模式外先被 plan-mode 自己那層 middleware 擋下；那層到不了子代理
- * （[#327](https://github.com/DemianLi/nexus-agent/issues/327)），所以子代理裡是閘門先拒——以前是先停下來問人、核准了才被
- * 本體拒。
+ * **真的會停下來問人的工具**，不只是測試用的 `danger`：閘門不看名字，產品裡掛 `ask`、在閘門之前沒被別層擋下的每一顆，
+ * 在子代理裡都拿到 `policy-never` 那句。`exit_plan_mode` 也掛 `ask`，但它在閘門之前就被計劃模式那層擋下，見下一組。
  */
 describe('產品裡掛 `ask` 的工具在子代理裡也不停下來', () => {
   const cases = [
-    {
-      name: 'exit_plan_mode',
-      args: { plan: '計劃' },
-      plugin: createPlanModePlugin(),
-      reason: '計劃要有人看過才算獲准',
-    },
     {
       name: 'submit_record',
       args: { file_path: '/out.csv', record: { 姓名: '阿明' } },
@@ -269,6 +266,60 @@ describe('產品裡掛 `ask` 的工具在子代理裡也不停下來', () => {
             .find((message) => message.getType() === 'tool');
           expect(refusal?.text).toContain(reason);
           expect(refusal?.text).toContain('沒有人被問到');
+        } finally {
+          await run.close();
+        }
+      },
+      20000,
+    );
+  }
+});
+
+/**
+ * **計劃模式照 dsh 讀呼叫者自己的 session**（[#327](https://github.com/DemianLi/nexus-agent/issues/327)）：計劃模式那層
+ * middleware 也掛到子代理上，而子代理的 session 從沒進過計劃模式。所以 root 開著計劃模式時，子代理拿不到指引，叫
+ * `exit_plan_mode` 在那一層就被擋、回「不在計劃模式」——走不到後面的 `policy-never` 閘門，同 dsh 的先後
+ * （`packages/plan/plan-mode/src/index.ts:292-294` 在問人之前）。
+ *
+ * **翻面寫的**：#324 時這一格釘的是「閘門先拒、沒有人被問到」，那時這層到不了子代理。
+ *
+ * **root 開著計劃模式才分得出來**：root 關著時，改之前那版（模式讀組裝閉包裡 root 那一份）也回「不在計劃模式」，
+ * 也不夾指引。
+ */
+describe('root 在計劃模式裡委派：子代理不在計劃模式', () => {
+  for (const subagentType of ['worker', GP]) {
+    it(
+      subagentType === GP ? 'fold 補的 general-purpose' : '登記過的子代理',
+      async () => {
+        const run = await runOnce(
+          [
+            delegate(subagentType),
+            {
+              content: '',
+              toolCalls: [{ name: EXIT_PLAN_MODE_TOOL_NAME, args: { plan: '# 計劃' } }],
+            },
+            { content: '子代理收工。' },
+            { content: '根收工。' },
+          ],
+          [WORKER, createPlanModePlugin({ startActive: true })],
+        );
+        try {
+          expect(run.pump.awaitingInput).toBe(false);
+
+          const subagentPrompts = run.model.prompts.filter(isSubagentPrompt);
+          const rootPrompts = run.model.prompts.filter((prompt) => !isSubagentPrompt(prompt));
+          // 前提：root 真的在計劃模式裡——它的每次請求都夾著指引。
+          expect(rootPrompts).toHaveLength(2);
+          for (const prompt of rootPrompts) {
+            expect(systemText(prompt)).toContain(DEFAULT_PLAN_GUIDANCE);
+          }
+          expect(subagentPrompts).toHaveLength(2);
+          for (const prompt of subagentPrompts) {
+            expect(systemText(prompt)).not.toContain(DEFAULT_PLAN_GUIDANCE);
+          }
+
+          const refusal = subagentPrompts.flat().find((message) => message.getType() === 'tool');
+          expect(refusal?.text).toBe(`${TOOL_ERROR_PREFIX}${NOT_IN_PLAN_MODE_MESSAGE}`);
         } finally {
           await run.close();
         }

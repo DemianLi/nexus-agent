@@ -165,8 +165,8 @@ describe('工具拋錯', () => {
   });
 
   /**
-   * **第二個掛點的驗收句。** 圍堵以前是 plugin middleware，而那些**一個都射不進
-   * subagent**（`SubAgentBase.middleware` 是「append after default_middleware」），
+   * **第二個掛點的驗收句。** 圍堵以前是 plugin middleware，而那時 plugin middleware **一個都射不進
+   * subagent**（`SubAgentBase.middleware` 是「append after default_middleware」；#327 之後 fold 才攤過去），
    * 所以只補 `foldMiddleware` 那一注就是漏掉半棵樹。
    *
    * 判準刻意不是「run 沒 reject」——那在 subagent 沒拿到圍堵時也可能只是別的原因。
