@@ -13,9 +13,10 @@
  * 而且**不能拿模型被叫幾次當判準**——判準一律放在日誌內容上。
  */
 
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { fromLoggedMessage, SessionLog, SessionRegistry } from '@nexus/core';
 import type { NexusPlugin, SessionEvent, SessionEventMap } from '@nexus/core';
@@ -50,6 +51,11 @@ interface RunResult {
   readonly subagents: CompactionSummary[][];
   /** backend 的根，用來核對 `filePath` 指到的檔真的在。 */
   readonly backendRoot: string;
+  /** 模型每一輪讀到的 prompt。摘要訊息寫不寫出歷史路徑，從這裡看。 */
+  readonly prompts: readonly (readonly BaseMessage[])[];
+  /** 同一個 backend 與 checkpointer：歷史在 graph state 裡（#348），要讀回得接同一個 thread。 */
+  readonly backend: ContainedFilesystemBackend;
+  readonly saver: MemorySaver;
 }
 
 /**
@@ -69,10 +75,12 @@ async function run(
 ): Promise<RunResult> {
   const backendRoot = await mkdtemp(join(tmpdir(), 'nexus-compaction-'));
   const model = new ScriptedChatModel({ turns });
+  const backend = new ContainedFilesystemBackend({ rootDir: backendRoot });
+  const saver = new MemorySaver();
   const { agent, attachSession, dispose } = await createNexusAgent({
     model,
-    backend: new ContainedFilesystemBackend({ rootDir: backendRoot }),
-    checkpointer: new MemorySaver(),
+    backend,
+    checkpointer: saver,
     plugins: [...(options.plugins ?? [])],
     ...(options.summarization !== undefined && { summarization: options.summarization }),
   });
@@ -91,6 +99,9 @@ async function run(
   const entries = sessions.list();
   return {
     backendRoot,
+    prompts: model.prompts,
+    backend,
+    saver,
     root: compactionsOf(entries.find((entry) => entry.address.kind === 'root')?.log.events ?? []),
     subagents: entries
       .filter((entry) => entry.address.kind === 'subagent')
@@ -162,17 +173,45 @@ describe('壓縮發生時，日誌裡留得下來', () => {
     expect(lengths).toEqual([...lengths].sort((left, right) => left - right));
   });
 
-  /** `filePath` 要指到 backend 裡真的存在的那個檔，不是一個看起來像路徑的字串。 */
+  /**
+   * `filePath` 要指到 backend 裡真的存在的那個檔，不是一個看起來像路徑的字串。
+   *
+   * **從模型那一側讀回來**：另一個 agent 接同一個 thread，照日誌記的路徑 `read_file`。#348 之前
+   * 這裡直接讀工作區裡的檔；現在那一格在 graph state 裡，而「模型照摘要那句話讀得到」本來就是
+   * 這個路徑存在的理由。`summarization: false` 讓這一輪不再壓一次——壓了的話摘要那次呼叫會吃掉
+   * 讀檔那一回合。
+   */
   it('`filePath` 指到的檔真的寫出來了', async () => {
-    const { root, backendRoot } = await run(chatter(), {
+    const { root, backend, saver } = await run(chatter(), {
       summarization: { trigger: [{ type: 'tokens', value: 3_000 }] },
       invocations: 12,
     });
 
     const path = root[0]?.filePath;
-    expect(typeof path).toBe('string');
-    const history = await readFile(join(backendRoot, String(path)), 'utf8');
-    expect(history.length).toBeGreaterThan(0);
+    expect(path).toMatch(/^\/conversation_history\//);
+
+    const reader = new ScriptedChatModel({
+      turns: [
+        { content: '', toolCalls: [{ name: 'read_file', args: { file_path: path, limit: 5 } }] },
+        { content: '讀完了。' },
+      ],
+    });
+    const { agent, dispose } = await createNexusAgent({
+      model: reader,
+      backend,
+      checkpointer: saver,
+      plugins: [],
+      summarization: false,
+    });
+    try {
+      await agent.invoke(toAgentInvocation('讀一下之前的歷史。'), {
+        configurable: { thread_id: ROOT_ID },
+      });
+    } finally {
+      await dispose();
+    }
+    const read = reader.lastPrompt.filter((message) => message.getType() === 'tool').at(-1);
+    expect(read?.text).toContain('Summarized at');
   });
 
   /**
@@ -290,28 +329,24 @@ describe('日誌寫不進去的時候', () => {
       throw new Error('日誌壞了');
     });
     try {
-      const { root, backendRoot } = await run(chatter(), {
+      const { root, prompts } = await run(chatter(), {
         summarization: { trigger: [{ type: 'tokens', value: 3_000 }] },
         invocations: 12,
       });
 
-      // 日誌當然是空的——它整個壞了。要看的是**跑完了**，而且摘要真的發生過。
+      // 日誌當然是空的——它整個壞了。要看的是**跑完了**，而且摘要真的發生過、歷史真的寫出來：
+      // 摘要訊息只有在 offload 寫成功時才寫出路徑（基座 `buildSummaryMessage` 看 `filePath`）。
+      // #348 之前這裡讀的是工作區裡的 `conversation_history/`，現在那一格在 graph state 裡。
       expect(root).toEqual([]);
-      const files = await readFile(
-        join(backendRoot, 'conversation_history', await firstHistoryFile(backendRoot)),
-        'utf8',
-      );
-      expect(files.length).toBeGreaterThan(0);
+      expect(
+        prompts.some((prompt) =>
+          prompt.some((message) =>
+            message.text.includes('has been saved to /conversation_history/'),
+          ),
+        ),
+      ).toBe(true);
     } finally {
       append.mockRestore();
     }
   });
 });
-
-/** `conversation_history` 底下第一個檔名；沒有就讓測試在這裡失敗，那正是要知道的事。 */
-async function firstHistoryFile(root: string): Promise<string> {
-  const { readdir } = await import('node:fs/promises');
-  const names = await readdir(join(root, 'conversation_history'));
-  if (names[0] === undefined) throw new Error('摘要沒有寫出任何歷史檔——它根本沒跑。');
-  return names[0];
-}

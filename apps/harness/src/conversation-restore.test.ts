@@ -129,7 +129,7 @@ describe('CLI 的 --resume', () => {
 
     expect(shape(seenRequests[0] ?? [])).toEqual([...REMEMBERED, 'human:暗號是什麼']);
     expect(stdout).toContain('對話照日誌推回模型（6 則）');
-    expect(stdout).toContain('虛擬檔案系統與工具結果暫存沒有回來');
+    expect(stdout).toContain('虛擬檔案系統、工具結果暫存與會話歷史檔沒有回來');
     expect(stdout).not.toContain('[不變量]');
   });
 
