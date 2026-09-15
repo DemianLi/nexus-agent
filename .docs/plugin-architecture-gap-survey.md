@@ -413,4 +413,4 @@ dsh 有 in-process／fork／spawn／acp／claude-code／codex 六種委派後端
    **落地處**：`apps/harness/src/interception-index.test.ts` **第 4 列**（[#221](https://github.com/DemianLi/nexus-agent/pull/221)）。那一列原本 `permissionDelta` 與 `recordDelta` 都是 `undefined`，而在那份索引裡 `undefined` 是有意義的斷言（「三欄逐欄對得上」／「沒有紀錄面的缺口」）——**兩句都比量過的多**，與這一條並存時互相矛盾。這是 [#218](https://github.com/DemianLi/nexus-agent/issues/218) 剛在第 2 列改掉的同一型病。
 
    **判為認帳不做，降到 §五第 7 條**，重開條件寫在那一列。dsh SHA `c389f96bf3a9b6807cb71ed6bdad5849be0df6d8`（`interaction/user-approval/` 相對 `d347e70` 一行沒動）。
-8. ~~**兩處過時的數字**：`packages/nexus-core/src/registry.ts` 檔頭「四條」、`development-plan.md` §1「一條 `lifecycle` 通道」，實際都是五條。~~ **已改正**：兩處今天都寫「五條」（`registry.ts:9`、`development-plan.md` §1）。2026-09-05 順手補了第三處——`development-plan.md` §3 的套件表也只寫「lifecycle 通道」。
+8. ~~**兩處過時的數字**：`packages/nexus-core/src/registry.ts` 檔頭「四條」、`development-plan.md` §1「一條 `lifecycle` 通道」，實際都是五條。~~ **已改正**：兩處今天都寫「五條」（`registry.ts:9`、`development-plan.md` §1）。2026-09-05 順手補了第三處——`development-plan.md` §3 的套件表也只寫「lifecycle 通道」。**2026-09-16 更正**：第六條 `feedback`（見 §2.1）加上之後，`registry.ts:9` 與計劃 §3 都跟著寫「六條」，只有計劃 §1 停在「五條」；同日改正。
