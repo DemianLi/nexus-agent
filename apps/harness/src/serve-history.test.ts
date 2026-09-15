@@ -163,8 +163,9 @@ describe('切回以前的 thread，畫面照日誌重播', () => {
 });
 
 /**
- * 最後一輪停在核准點。**卡的畫法由這條 thread 現在還掛不掛著那顆中斷決定**，而那一格只有 pump 知道——這一條驗的是
- * handler 真的把它交進來了（`historyFrames` 的兩種畫法本身驗在 `conversation-history.test.ts`）。
+ * 最後一輪停在核准點。**卡的畫法由這條 thread 現在還掛不掛著那顆中斷、停在閘門上的是哪幾個名字決定**，而這兩格
+ * 只有 pump 知道——這一條驗的是 handler 真的把它們交進來了（`historyFrames` 的畫法本身驗在
+ * `conversation-history.test.ts`）。
  */
 describe('停在核准點的 thread', () => {
   const APPROVAL = fileURLToPath(new URL('./approval.fixture.ts', import.meta.url));
@@ -182,14 +183,17 @@ describe('停在核准點的 thread', () => {
     return reduceAll(emptyConversation(), page.result.events);
   }
 
-  it('同一個行程裡切回去：那張卡是「等你回答」，畫面停在忙著', async () => {
+  /**
+   * 停在閘門上的名字也只有 pump 知道（#317）：handler 沒交進來的話，這張卡會是「等你回答」。
+   */
+  it('同一個行程裡切回去：那張卡跟即時一樣是「執行中」，畫面停在忙著', async () => {
     const server = await start(['--plugins', APPROVAL]);
     const client = createWireClient({ baseUrl: server.url });
     await stopAtApproval(client, 'kappa');
 
     const state = await replayed(client, 'kappa');
 
-    expect(state.entries.map(line)).toContain('tool:echo:suspended');
+    expect(state.entries.map(line)).toContain('tool:echo:running');
     expect(state.status).toBe('running');
   });
 
