@@ -234,6 +234,13 @@ export interface MiddlewareRegistrationPoint {
    * @param options - `prepend: true` 把它排到其他 plugin 的 middleware 之前。
    *   注意射程只到 plugin 之間——基座的標準 middleware stack 永遠在前面，
    *   `createDeepAgent` 的 `middleware` 參數整組接在它後面。
+   *
+   * **這一份實例會掛在 root 與每個子代理上**（[#327](https://github.com/DemianLi/nexus-agent/issues/327)，照 dsh
+   * 子代理併入父代理同一份組合）。所以逐 agent 的狀態不能放在閉包裡：要從這一次呼叫的身分查
+   * （`sessions.forCall`；`wrapModelCall` 與 `wrapToolCall` 拿到的是 `request.runtime.configurable`，包回
+   * `{ configurable }` 再問）。放在閉包裡的話 root 與子代理會靜靜串台，**沒有絆索擋得住**——這是登記過的偏離，
+   * 理由見 `fold.ts` 的 `foldSubAgents`。真的需要逐個建的，開卡加工廠。**唯一的例外**是名字撞上摘要器的那一顆：
+   * 它只到 root，子代理照舊用 fold 逐個建的那份（`fold.ts` 的 `subagentPluginMiddleware`）。
    * @returns 只撤銷這一次註冊的冪等 undo。
    */
   use(middleware: AgentMiddleware, options?: { prepend?: boolean }): () => void;

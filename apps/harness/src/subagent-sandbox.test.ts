@@ -30,7 +30,7 @@ import type { SandboxMode } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
 import { nonWideningRefusal, SANDBOX_ESCALATION_TOOL_NAME } from './sandbox-escalation.js';
 import { SandboxModeController } from './sandbox-mode.js';
-import { createSandboxPolicyPlugin } from './sandbox-policy.js';
+import { createSandboxPolicyPlugin, sandboxPolicySentence } from './sandbox-policy.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedToolCall, ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
@@ -208,6 +208,55 @@ describe('子代理的沙箱模式', () => {
       },
     };
   }
+
+  /**
+   * **子代理的模型請求也帶沙箱政策句，講的是委派那一格**（[#327](https://github.com/DemianLi/nexus-agent/issues/327)）。
+   * 照 dsh：子代理併入父代理的組合，`sandbox:policy` 段落讀子代理自己 session 上委派時寫下的模式
+   * （`packages/sandbox/sandbox-policy/src/index.ts:141-151`）。
+   *
+   * 子代理第二次請求在 `flip` 之後：root 那一格已經換了，句子仍是委派那一格——驗的是「每次」而且是「委派那格」，
+   * 不是組裝當下那格。root 收尾那次拿的是新那一格，對照組。
+   */
+  it('子代理每次請求都帶政策句，是委派那一格；root 之後切換不影響它', async () => {
+    const run = await runWithLogs('read-only', [
+      delegate,
+      flip('workspace-write'),
+      { content: '子代理收工。' },
+      { content: '根收工。' },
+    ]);
+    try {
+      const systemOf = (prompt: readonly BaseMessage[]) =>
+        prompt.find((message) => message.getType() === 'system')?.text ?? '';
+      const subagentPrompts = run.model.prompts.filter(isSubagentPrompt);
+      const rootPrompts = run.model.prompts.filter((prompt) => !isSubagentPrompt(prompt));
+      expect(subagentPrompts).toHaveLength(2);
+      for (const prompt of subagentPrompts) {
+        expect(systemOf(prompt)).toContain(sandboxPolicySentence('read-only', root));
+      }
+      expect(systemOf(rootPrompts.at(-1) ?? [])).toContain(
+        sandboxPolicySentence('workspace-write', root),
+      );
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('沒掛沙箱 plugin 的組裝（沒給 `--workspace`），子代理請求裡沒有政策句', async () => {
+    const run = await runWithLogs(
+      'read-only',
+      [delegate, { content: '子代理收工。' }, { content: '根收工。' }],
+      { fence: false },
+    );
+    try {
+      const subagentPrompts = run.model.prompts.filter(isSubagentPrompt);
+      expect(subagentPrompts).toHaveLength(1);
+      expect(
+        subagentPrompts[0]?.find((message) => message.getType() === 'system')?.text ?? '',
+      ).not.toContain('目前的檔案政策');
+    } finally {
+      await run.close();
+    }
+  });
 
   it('委派之後 root 放寬：子代理照委派那一格擋，root 自己的下一顆照新那一格放行', async () => {
     const run = await runWithLogs('read-only', [
