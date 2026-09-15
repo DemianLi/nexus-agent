@@ -25,6 +25,8 @@ import {
   DELEGATED_CALLER_ERROR,
   DELEGATED_CALLER_MESSAGE,
 } from '@nexus/plugin-ask-user';
+import { createPlanModePlugin } from '@nexus/plugin-plan-mode';
+import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import type { Event } from '@nexus/wire';
 import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import { describe, expect, it } from 'vitest';
@@ -216,6 +218,57 @@ describe('委派聲明：子代理每次模型請求都有，root 的沒有', ()
           for (const prompt of rootPrompts) {
             expect(systemText(prompt)).not.toContain(SUBAGENT_DELEGATION_CONTEXT);
           }
+        } finally {
+          await run.close();
+        }
+      },
+      20000,
+    );
+  }
+});
+
+/**
+ * **真的會停下來問人的工具**，不只是測試用的 `danger`：閘門不看名字，產品裡掛 `ask` 的每一顆在子代理裡都拿到
+ * `policy-never` 那句。`exit_plan_mode` 在 root 上模式外先被 plan-mode 自己那層 middleware 擋下；那層到不了子代理
+ * （[#327](https://github.com/DemianLi/nexus-agent/issues/327)），所以子代理裡是閘門先拒——以前是先停下來問人、核准了才被
+ * 本體拒。
+ */
+describe('產品裡掛 `ask` 的工具在子代理裡也不停下來', () => {
+  const cases = [
+    {
+      name: 'exit_plan_mode',
+      args: { plan: '計劃' },
+      plugin: createPlanModePlugin(),
+      reason: '計劃要有人看過才算獲准',
+    },
+    {
+      name: 'submit_record',
+      args: { file_path: '/out.csv', record: { 姓名: '阿明' } },
+      plugin: createSubmitRecordPlugin(),
+      reason: '這一列要寫出去，先讓人看過',
+    },
+  ];
+  for (const { name, args, plugin, reason } of cases) {
+    it(
+      name,
+      async () => {
+        const run = await runOnce(
+          [
+            delegate('worker'),
+            { content: '', toolCalls: [{ name, args }] },
+            { content: '子代理收工。' },
+            { content: '根收工。' },
+          ],
+          [WORKER, plugin],
+        );
+        try {
+          expect(run.pump.awaitingInput).toBe(false);
+          const refusal = run.model.prompts
+            .filter(isSubagentPrompt)
+            .flat()
+            .find((message) => message.getType() === 'tool');
+          expect(refusal?.text).toContain(reason);
+          expect(refusal?.text).toContain('沒有人被問到');
         } finally {
           await run.close();
         }
