@@ -60,7 +60,7 @@ import { noteSandboxDenial } from '@nexus/core';
 import type { SandboxMode } from '@nexus/core';
 
 /**
- * fence 擋下了一次變更：回報給正在跑的那一次檔案工具呼叫，讓結果帶上 `FS_SANDBOX_DENIED`
+ * fence 擋下了一次變更：回報給正在跑的那一次工具呼叫，讓結果帶上 `FS_SANDBOX_DENIED`
  * （[#293](https://github.com/DemianLi/nexus-agent/issues/293)，見 `@nexus/core` 的 `fs-tool-errors.ts`）。
  * 這一層不改字——回的仍是同一個結果；模型看到的 `Error: ` 由 `fs-tool-errors.ts` 補
  * （[#318](https://github.com/DemianLi/nexus-agent/issues/318)）。
