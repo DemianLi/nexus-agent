@@ -829,6 +829,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
    * 起一輪，然後**立刻**回。上行的回應是收件回條，不是「跑完了」——跑出來的東西
    * 走下行。這一輪炸掉的話原因已經以 `lifecycle failed` 上了線，這裡只負責不讓它
    * 變成 unhandled rejection。
+   *
+   * **射程只有 `submit` 回的這一顆。** 基座 v3 投影裡那些沒人讀的 promise（工具本體拋錯時 reject）
+   * 不經過這裡，由 `ThreadPump` 在拿到 run 物件時標掉（#346）。
    */
   function start(pump: ThreadPump, input: Parameters<ThreadPump['submit']>[0]): string {
     void pump.submit(input).catch(() => undefined);
