@@ -155,6 +155,13 @@ export interface PendingInterrupt {
   readonly interruptId: string;
   /** 這一批要回答幾筆決定——基座逐 index 配對，長度不符當場拋。 */
   readonly actionCount: number;
+  /**
+   * 停在核准閘門上的那幾顆工具的名字（酬載的 `actionRequests[].name`）；問答那一種是空的。
+   *
+   * 重播靠它分兩種等法（[#317](https://github.com/DemianLi/nexus-agent/issues/317)）：日誌上兩種都只留一顆沒落定的
+   * `tool/call` 與一顆只帶 id 的 `interrupt/raised`，閘門的酬載也沒有 callId——這裡是唯一分得出來的地方。
+   */
+  readonly gatedTools: readonly string[];
 }
 
 /** 基座把中斷發在 `updates` 上的那一顆的 data 形狀。 */
@@ -356,7 +363,6 @@ function cardNamespace(address: SessionAddress): readonly string[] {
   return address.kind === 'root' ? [] : [address.runId, 'tools'];
 }
 
-/** 這顆中斷在問幾件事。問不出來就當 0——上行那側只在數得出來時才校驗。 */
 /** 一次輸入在日誌上的那顆頭。**三種各自對應一個 `kind`**，見 `session-log.ts`。 */
 function turnStartOf(input: PumpInput): SessionEventMap['turn/start'] {
   switch (input.kind) {
@@ -375,9 +381,20 @@ function turnStartOf(input: PumpInput): SessionEventMap['turn/start'] {
   }
 }
 
+/** 這顆中斷在問幾件事。問不出來就當 0——上行那側只在數得出來時才校驗。 */
 function actionCountOf(value: unknown): number {
   const requests = (value as { actionRequests?: unknown } | null)?.actionRequests;
   return Array.isArray(requests) ? requests.length : 0;
+}
+
+/** 這顆中斷停在閘門上的工具名。問答那一種沒有 `actionRequests`，是空的。見 {@link PendingInterrupt.gatedTools}。 */
+function gatedToolsOf(value: unknown): string[] {
+  const requests = (value as { actionRequests?: unknown } | null)?.actionRequests;
+  if (!Array.isArray(requests)) return [];
+  return requests.flatMap((request: unknown) => {
+    const name = (request as { name?: unknown } | null)?.name;
+    return typeof name === 'string' ? [name] : [];
+  });
 }
 
 /** 人按了停止——`turn/end` 帶的那一格。見 `session-log.ts` 的 `turn/end`。 */
@@ -615,6 +632,11 @@ export class ThreadPump {
   /** 這條 thread 停在核准點沒有——**任何一顆**掛著就算。 */
   get awaitingInput(): boolean {
     return this.#pending.size > 0;
+  }
+
+  /** 停在核准閘門上的工具名，所有掛著的中斷合起來。見 {@link PendingInterrupt.gatedTools}。 */
+  get gatedTools(): ReadonlySet<string> {
+    return new Set([...this.#pending.values()].flatMap((pending) => pending.gatedTools));
   }
 
   /** 認領某一顆。認不得就是 `undefined`，上行那側據此回 `no_such_interrupt`。 */
@@ -1037,6 +1059,7 @@ export class ThreadPump {
         this.#pending.set(entry.id, {
           interruptId: entry.id,
           actionCount: actionCountOf(entry.value),
+          gatedTools: gatedToolsOf(entry.value),
         });
         this.#sessions.root.append('interrupt/raised', { interruptId: entry.id });
         yield this.#seal({

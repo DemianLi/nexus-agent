@@ -104,19 +104,41 @@ function message(
 }
 
 /**
+ * 這條 thread 現在還掛著中斷——同一個行程裡切回來。只有 pump 知道，見 `ThreadPump.pendings`。
+ */
+export interface AwaitingInput {
+  /** 停在核准閘門上的工具名，所有掛著的中斷合起來。見 {@link historyFrames}。 */
+  readonly gatedTools: ReadonlySet<string>;
+}
+
+/**
  * 一段日誌轉成 frame。
  *
+ * ## 停下來等人的那一輪：兩種等法畫法不同，同即時
+ *
+ * 即時那條只把**本體拋了中斷**的那顆畫成「等你回答」（`thread-pump.ts` 的 `classifyToolData`）：問答、以及子代理
+ * 停下來的那顆 `task`。停在核准閘門上的那顆本體沒被呼叫到，卡從日誌 `tool/call` 開，一直是「執行中」——照 dsh：
+ * 它的工具卡沒有「等人」那一格，核准的等待由接管輸入框的核准面板表示（#317）。
+ *
+ * 日誌分不出這兩種：都只留一顆沒落定的 `tool/call` 與一顆只帶 id 的 `interrupt/raised`。分得出來的是 pump 手上
+ * 掛著的酬載，所以由它交進來 {@link AwaitingInput.gatedTools}：名字在裡面的維持執行中，其餘的畫成「等你回答」。
+ * **認的是名字不是 callId**（閘門的酬載沒有 callId）：同一輪一顆同名的工具停在閘門、另一顆由本體拋了中斷，
+ * 後者會被畫成執行中。今天的工具走不到——本體會拋中斷的只有問答與 `task`，兩者都不過閘門。
+ *
  * @param events - 從一輪的開頭切下來的一段（見 {@link isPageStart}）。
- * @param awaitingInput - 這一段的最後一輪停在核准點，**而且這條 thread 現在還掛著那顆中斷**（同一個行程裡切回來）。
- *   那幾張卡畫成「等你回答」而不收掉；卡本身（核准的按鈕）補不回來——中斷的酬載只在發出去的那一顆 frame 上，
- *   pump 沒留。行程重開過的話中斷已經不在了（它在 checkpointer 裡），那幾張照即時那條規則收成失敗。
+ * @param awaitingInput - 有給就是這一段的最後一輪停下來等人，**而且這條 thread 現在還掛著那幾顆中斷**。那幾張卡
+ *   照上面分兩種畫，都不收掉；卡本身（核准的按鈕）補不回來——中斷的酬載只在發出去的那一顆 frame 上。行程重開過的話
+ *   中斷已經不在了（它在 checkpointer 裡），那幾張照即時那條規則收成失敗。
  */
-export function historyFrames(events: readonly SessionEvent[], awaitingInput = false): Event[] {
+export function historyFrames(
+  events: readonly SessionEvent[],
+  awaitingInput?: AwaitingInput,
+): Event[] {
   const frames: Event[] = [];
   let turnOpen = false;
   let interrupted = false;
-  /** 這一輪記了 `tool/call`、還沒有 `tool/result` 的。 */
-  const unsettled = new Set<string>();
+  /** 這一輪記了 `tool/call`、還沒有 `tool/result` 的：callId → 工具名。 */
+  const unsettled = new Map<string, string>();
   const last = events.at(-1);
 
   const close = (time: number, data: Record<string, unknown>) => {
@@ -147,7 +169,7 @@ export function historyFrames(events: readonly SessionEvent[], awaitingInput = f
         break;
       }
       case 'tool/call':
-        unsettled.add(event.data.callId);
+        unsettled.set(event.data.callId, event.data.name);
         frames.push(
           frame('tools', event.time, {
             event: 'tool-started',
@@ -178,8 +200,10 @@ export function historyFrames(events: readonly SessionEvent[], awaitingInput = f
       case 'turn/end':
         if (event.data.reason?.kind === 'aborted') {
           close(event.time, { event: 'failed', aborted: true });
-        } else if (interrupted && awaitingInput && event === last) {
-          for (const callId of unsettled) {
+        } else if (interrupted && awaitingInput !== undefined && event === last) {
+          for (const [callId, name] of unsettled) {
+            // 停在閘門上的那顆不發：`tool-started` 開的卡本來就是執行中，同即時。
+            if (awaitingInput.gatedTools.has(name)) continue;
             frames.push(
               frame('tools', event.time, { event: 'tool-suspended', tool_call_id: callId }),
             );
@@ -215,13 +239,13 @@ function checkIndex(name: string, value: number | undefined, minimum: number): v
  *
  * @param events - 這條 thread 的 root 日誌，全部。
  * @param query - 省略就是最後 {@link HISTORY_PAGE_MESSAGES} 則。
- * @param awaitingInput - 這條 thread 現在停在核准點。只作用在最後一頁，見 {@link historyFrames}。
+ * @param awaitingInput - 有給就是這條 thread 現在停下來等人。只作用在最後一頁，見 {@link historyFrames}。
  * @throws {@link HistoryQueryError} 參數不合規，或 `beforeSeq` 超出 `throughSeq` 之後。
  */
 export function historyPage(
   events: readonly SessionEvent[],
   query: ThreadHistoryQuery = {},
-  awaitingInput = false,
+  awaitingInput?: AwaitingInput,
 ): ThreadHistoryResult {
   const maxMessages = query.maxMessages ?? HISTORY_PAGE_MESSAGES;
   checkIndex('maxMessages', maxMessages, 1);
@@ -251,7 +275,10 @@ export function historyPage(
     // **三種原因都是舊格式**：回覆、結果內容、摘要本文都是格式 9 才開始記的（#305），缺哪一樣都只可能出自 9 以前
     // 寫的那一段；哪一種先被撞到看的是日誌的順序（格式 8 的一輪，沒內容的結果落在收尾之前）。只認「沒有回覆」的話，
     // 真的 v8 日誌會被判成不是舊格式。切點對不上不算：畫面上不缺東西。
-    events: historyFrames(window.slice(cut, end), awaitingInput && end === events.length),
+    events: historyFrames(
+      window.slice(cut, end),
+      end === events.length ? awaitingInput : undefined,
+    ),
     firstSeq: cut,
     throughSeq,
     hasMore: window.slice(0, cut).some(isMessage),
