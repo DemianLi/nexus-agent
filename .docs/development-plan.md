@@ -8,7 +8,7 @@
 | # | 決策 | 內容 |
 |---|---|---|
 | 1 | 技術棧全 TypeScript | LangChain JS + LangGraph JS + deepagentsjs（官方 TS 版），零 Python 基座 |
-| 2 | 插件化程度 | agent 推理迴圈為固定基座（deepagentsjs），迴圈周圍的擴充點全部走 NexusPlugin 契約；不 fork、不做「連迴圈都可替換」的徹底插件化 |
+| 2 | 插件化程度 | agent 推理迴圈為固定基座（deepagentsjs），迴圈周圍的擴充點全部走 NexusPlugin 契約；不 fork、不做「連迴圈都可替換」的徹底插件化。**對 dsh 的偏離（標註，2026-09-16 補）**：dsh 的定位是「不存在需要打补丁的特权内核」，模型適配器、工具註冊表、會話日誌連同 agent loop 本身都是 Cordis plugin，都能從設定換掉（`docs/architecture.zh.md:11-13`）。**deepagents 表達不出來**：迴圈是 `createDeepAgent` 建出來的圖，建構後不可變，不 fork 就換不掉。退到最接近的：迴圈固定，迴圈外的擴充點收成單一契約。其餘各項對照見第 1 節「與 Cordis 的對照」 |
 | 3 | 兩層薄覆蓋 | 反思與反饋層、意圖與理解層先採薄覆蓋，後續強化追蹤於 [issue #16](https://github.com/DemianLi/nexus-agent/issues/16)，Phase 0–5 全部完成後啟動 |
 | 4 | 選型決策點 | 模型供應商**已收斂**（2026-08-28）：**`openai/gpt-oss-120b`**，走 NVIDIA 的 OpenAI 相容端點。**2026-09-04 修訂：那個 id 已於 2026-09-03 下架**（410，EOL 帶日期，型錄上也沒有了），重盤重選之後是 **`nvidia/nemotron-3-super-120b-a12b`** —— 這次品質沒有打平（難題 0.98 對 0.92–0.93），它同時拿下延遲與多叫次數，只輸 token。見 [#165](https://github.com/DemianLi/nexus-agent/issues/165)。**決策點 2 不因此重開**：換的是 id 不是供應商，端點與方法都沒變。原本的三段收斂（Phase 0 定預設 Anthropic、Phase 2 驗 DeepSeek 相容性、Phase 5 比品質與成本）只走完第一段與第三段，**中間那段從沒跑過**，而第三段的結果讓它失去了對象 —— 詳見第 7 節決策 2。狀態儲存**不是一個後端而是三個正交的軸**（checkpointer／store／backend），Phase 3 分別收斂（見第 7 節決策 4） |
 
@@ -48,7 +48,7 @@ registry.memory.addSource(path); // 純累加；路徑格式在註冊期擋（�
 - `requires` 比對的是各 plugin 用 `registry.capabilities.provide(name)` 宣告的能力集合（[#28](https://github.com/DemianLi/nexus-agent/issues/28) 決議 10 要求的「能力 → 提供者」對照表，其輸入端由 [#29](https://github.com/DemianLi/nexus-agent/issues/29) 補上）。**能力是集合不是註冊表**：重複 `provide` 冪等、不報錯，獨佔性由各擴充點自己的規則守（同名 tool、同 `routePrefix`）。
 - **`name` 不唯一，plugin 層級不做唯一性檢查**（[#43](https://github.com/DemianLi/nexus-agent/issues/43)）。同一個 plugin 掛載多次是合法的 —— `createMcpPlugin({ server: 'github' })` 與 `createMcpPlugin({ server: 'linear' })` 兩個都叫 `mcp`，井水不犯河水。共同軸線的「同層報錯」管的是**註冊表**（同名 tool、同名 subagent、同 `routePrefix`），plugin 清單不是註冊表而是一份輸入序列；真撞了會撞在它們註冊的東西那一層。`name` 因此是**純標籤，唯一用途是錯誤訊息指名** —— registry 每次註冊要記住是誰註冊的，而區分同名者的是 `PluginOrigin.id`（[#104](https://github.com/DemianLi/nexus-agent/issues/104)）：plugin 沒寫就補一個 `<name>#<序號>`（`mcp#0`、`mcp#1`），要一個不隨清單變動的名字就自己寫 `id`。條目也可以 `disabled: true` 關掉——`apply` 一次都不跑，但 id 與它在診斷裡的位置留著，所以其他條目的自動編號不會因為關掉一個而位移。`version` 欄位不存在：版本號是給安裝的人看的，npm 已經在做（[#33](https://github.com/DemianLi/nexus-agent/issues/33) 的範圍規則 ＋ lockfile）。從外部**覆寫**個別 plugin 設定的機制仍然不做，見 [#46](https://github.com/DemianLi/nexus-agent/issues/46) 與 #104 的「這張不包含」。
 - `PluginRegistry` 是活的具名註冊表：插入順序、同名報錯、每次註冊回一個撤銷函式（**射程限定為載入期回滾**，不承諾執行期熱插拔——deepagents 建構後不可變）。最終仍折疊成一次 `createDeepAgent(...)` 呼叫。
-- **九個註冊點之外有五條不折疊的通道，第一條是 `lifecycle`**（`registry.lifecycle.onDispose(fn)`，`feat/mcp-plugin`；其餘四條 `telemetry` / `invariants` / `commands` / `sessions` 是後來各自的 PR 加的，總表見 `packages/nexus-core/src/registry.ts` 檔頭）。它**不是第十個註冊點**：九個註冊點回答「這個 agent 由什麼組成」、會折進 `createDeepAgent` 的參數，這條回答「這些東西怎麼收掉」、什麼都不折。`loadPlugins()` 因此多回一個 `dispose()`，組裝點的 `createNexusAgent()` 跟著回 `{ agent, dispose }`。引進它的是 MCP：MCP server 是外部程序，stdio 子行程的 pipe 是活的 handle，沒人關的話 CLI 印完答案不會退出（實測：拿掉 `dispose()` 之後 `pnpm --filter @nexus/harness run cli --plugins src/cli-mcp.fixture.ts` 停在那裡不動）。**回滾與關機是兩條路**：`apply` 中途拋錯時的資源釋放由 plugin 自己的 `try` / `catch` 負責——dsh 的 `ctx.effect` 一個函式兼兩職，那靠的是 Cordis 的 context 樹，我們沒有。**載入失敗時仍然收**：靠前的 plugin 已經開好的東西由 `loadPlugins()` 在拋出之前收掉，因為失敗的呼叫端拿到的是 exception、不是 handle（註冊內容則刻意留著，診斷要有東西可看）。
+- **九個註冊點之外有六條不折疊的通道，第一條是 `lifecycle`**（`registry.lifecycle.onDispose(fn)`，`feat/mcp-plugin`；其餘五條 `telemetry` / `invariants` / `commands` / `sessions` / `feedback` 是後來各自的 PR 加的，總表見 `packages/nexus-core/src/registry.ts` 檔頭）。它**不是第十個註冊點**：九個註冊點回答「這個 agent 由什麼組成」、會折進 `createDeepAgent` 的參數，這條回答「這些東西怎麼收掉」、什麼都不折。`loadPlugins()` 因此多回一個 `dispose()`，組裝點的 `createNexusAgent()` 跟著回 `{ agent, dispose }`。引進它的是 MCP：MCP server 是外部程序，stdio 子行程的 pipe 是活的 handle，沒人關的話 CLI 印完答案不會退出（實測：拿掉 `dispose()` 之後 `pnpm --filter @nexus/harness run cli --plugins src/cli-mcp.fixture.ts` 停在那裡不動）。**回滾與關機是兩條路**：`apply` 中途拋錯時的資源釋放由 plugin 自己的 `try` / `catch` 負責——dsh 的 `ctx.effect` 一個函式兼兩職，那靠的是 Cordis 的 context 樹，我們沒有。**載入失敗時仍然收**：靠前的 plugin 已經開好的東西由 `loadPlugins()` 在拋出之前收掉，因為失敗的呼叫端拿到的是 exception、不是 handle（註冊內容則刻意留著，診斷要有東西可看）。
 - 共同軸線：**同層報錯、跨層遮蔽、fail-closed、載入期失敗**。「層」指全域（root agent）↔ 各 subagent。**`subagents` 註冊點自己沒有層**：deepagents 的 `SubAgentBase` 沒有巢狀 subagents 欄位（`name` / `description` / `systemPrompt` / `mode` / `tools` / `model` / `middleware` / `interruptOn` / `skills`），遮蔽在那裡表達不出來，所以 subagent 只有全域一層、同名一律報錯。
 - **組裝點所有、plugin 不得提供**：default backend、工具呈現順序、model、checkpointer / store、核准政策的 session 開關。
 - 換模型、換儲存、換工具組合 = 換 plugin 清單，core 不動。此契約同時滿足補強項 6「業務邏輯解耦」。
@@ -58,6 +58,24 @@ registry.memory.addSource(path); // 純累加；路徑格式在註冊期擋（�
 - **`permissions` 不是授權邊界，是意外防護。** 它只覆蓋 `FILESYSTEM_TOOL_NAMES` 那八個內建工具裡「當前 backend 實際註冊的那些」，而且基座無規則命中即 allow。真正的檔案圍堵靠換 backend（Phase 2 `feat/fs-backends` 已落地 `ContainedFilesystemBackend`，[#34](https://github.com/DemianLi/nexus-agent/issues/34)）。而**外部 MCP server 的工具連 backend 都不經過** —— deepagents 明文「custom tools from the agent or other middleware are left untouched」，所以那些工具自己碰檔案系統不在任何管束範圍內。這是一條明文限制，不是待補的功能。
 - **`interruptOn` 的核准詞彙是封閉的。** plugin 只能貢獻 `{ toolName, reason, when? }`；`allowedDecisions` 由 harness 固定為 `["approve", "reject"]`，`argsSchema` 不使用（dsh 明文「Input rewrite is deliberately not offered」）。宣告了需核准的工具卻沒有 checkpointer，registry 要在載入期報錯——缺席即拒絕，不是放行；**核准政策的 session 開關關著卻有人宣告要核准，同樣報錯**，因為沒人回答的中斷只會把 agent 掛在那裡，靜默丟掉那些標記則是把政策解除武裝。全域的核准標記也**主動併進每個 subagent**，理由與 deny 同一條：基座是 `agentParams.interruptOn ?? defaultInterruptOn`，自帶設定的 subagent 會把全域那些整組蓋掉。
 - **工具呈現順序要自建。** deepagents 沒有對應機制，dsh 有專門的 Agent Note（註冊順序造成過真實 CI flake）。組裝點要有一份顯式清單＋`'<unlisted-tools>'` rest entry＋字典序預設，屬 Phase 1 `feat/nexus-plugin-contract` 的範圍。
+
+**與 Cordis 的對照**（2026-09-16，dsh `0d1f50007f9bca3f52b06e1c3074fa14d5fb0720`）。dsh 的定位與解耦都靠 Cordis（`docs/cordis-primer.zh.md`）；我們沒有 Cordis，下表逐項記哪些照學、哪些退了、退到什麼。每一項的理由住在出處那張卡上，這裡不重述。
+
+| Cordis 的做法 | 我們 | 出處 |
+| --- | --- | --- |
+| plugin 是命令式的 `apply(ctx)` | 照學：`apply(registry)` | [#28](https://github.com/DemianLi/nexus-agent/issues/28) 決議 9 |
+| 產品每一部分都是 plugin，包含 agent loop | 偏離：迴圈固定 | 第 0 節決策 2 |
+| context 是服務容器：plugin 以 `ctx.<key>` 查別人的服務，不 import 實作 | 退到相依隔離：plugin 只相依 `@nexus/core`，由 pnpm 機械保證；**plugin 之間沒有服務查找** | [#30](https://github.com/DemianLi/nexus-agent/issues/30)；代價見下 |
+| `inject` 宣告服務相依，載入順序由相依決定 | 退到存在性檢查：`requires` 只查能力在不在、不排序，順序由清單承擔 | [#28](https://github.com/DemianLi/nexus-agent/issues/28) 決議 10 |
+| 型別化事件，五種分派模式（`emit`／`waterfall`／`parallel`／`serial`／`bail`） | 退到 LangChain middleware 鉤子 ＋ `approvals.gate` waterfall ＋ 會話日誌事件；事件匯流排判為範圍外 | [#190](https://github.com/DemianLi/nexus-agent/issues/190) |
+| 註冊是可逆副作用，reload 與 teardown 時撤銷 | 部分：每次註冊回 undo，射程只到載入期回滾；關機另走 `lifecycle` | 本節上文 |
+| profile、組合包、patch 按條目 id 疊層，`--dump-config` 印得出整棵樹 | 部分：條目有 `id`／`disabled`，設定收在閉包裡，從外部覆寫不做 | [#104](https://github.com/DemianLi/nexus-agent/issues/104)、[#46](https://github.com/DemianLi/nexus-agent/issues/46) |
+
+**沒有服務查找的代價：服務的定義只能住在 core。** Cordis 裡任何 plugin 都能占一個新的 `ctx.<key>` 給別人用；我們這側 plugin 只能往 core 已經開好的格子裡放東西。所以兩個元件要協作只剩兩條路：一是**組裝點用閉包把同一顆物件交給兩邊**——`apps/harness/src/cli.ts` 把同一顆 `SandboxModeController` 同時交給 `ContainedFilesystemBackend` 與 sandbox-policy plugin，把 backend 交給 submit-record；二是**core 先開一格**——上文九個註冊點之外的六條通道都是 core 擁有介面、plugin 往裡放。上文「換 plugin 清單，core 不動」因此只對彼此不協作的 plugin 成立；需要協作的配對，不是組裝點知道，就是 core 多一格。
+
+**`requires` 今天沒有人用。** `packages/` 底下 7 個 plugin `provide` 能力（含示範用的 `@nexus/plugin-echo`），產品程式碼裡沒有任何條目宣告 `requires`，只有 `apps/harness/src/agent-factory.test.ts` 用它測機制本身。
+
+**事件那一列真正缺的不是匯流排。** #190 查過：dsh 的 `send()`／`steer()`／`inject()` 是同一個「帶邊界、選擇叫不叫醒」的 `UserMessage` 佇列的三個預設，我們缺的是那個佇列；今天沒有「把一步塞進正在跑的迴圈」的消費者，所以不補。
 
 ## 2. 七層架構 ↔ 實作映射
 
