@@ -3,6 +3,48 @@
 狀態：方向已確認（2026-08-23）。
 需求基準：《企業級 AI Agent 系統架構與 Harness 開發範圍說明 v1.0》（deepagents 1.13.1 / LangChain JS 1.5.x / LangGraph JS 1.4.x）。
 
+<a id="verdicts"></a>
+
+## 結論速查
+
+**這張表只回答一件事：某個決定有沒有拍板、結果是什麼。** 理由住在指向的那一節，不重述。
+
+**它的存在理由是上下文成本**：本檔 ~166KB、15 個標題，每節平均 ~11,000 字元——**要知道一個決定拍板了沒，最少得讀一萬字元**。這張表把那個答案搬到零次額外讀取的位置。
+
+**與「一個事實一個家」的關係**：結論在這裡出現第二次，理由仍然只有一個家。刻意的——結論放兩處的**不一致是看得見的**，而「要讀一萬字才知道有沒有答案」的失敗是**無聲的**。這張表與它指向的那一節不一致時，**以那一節為準並修正這裡**。
+
+### §0 已確認的決策
+
+| # | 決策 | 結論 |
+| --- | --- | --- |
+| 1 | 技術棧 | **全 TypeScript**：LangChain JS ＋ LangGraph JS ＋ deepagentsjs，零 Python 基座 |
+| 2 | 插件化程度 | **迴圈固定，不 fork**。對 dsh 的偏離已登記（2026-09-16，[#356](https://github.com/DemianLi/nexus-agent/pull/356)）：dsh 連 agent loop 都是可換的 Cordis plugin，**deepagents 表達不出來**——`createDeepAgent` 建出來的圖建構後不可變 |
+| 3 | 兩層薄覆蓋 | 反思與反饋層、意圖與理解層維持薄覆蓋，追蹤於 [#16](https://github.com/DemianLi/nexus-agent/issues/16)；該卡原列的自我批判／意圖分類兩方向**在 dsh 全樹不存在，而它做了別的**（計劃模式＋todo＋goal）——§2 明文限縮過：能主張的是「不存在、做了別的」，**不是「dsh 拒絕過」** |
+| 4 | 模型選型 | **已收斂**：`nvidia/nemotron-3-super-120b-a12b`。2026-08-28 首次定案為 `openai/gpt-oss-120b`，該 id 2026-09-03 下架（410／EOL），2026-09-04 重盤重選（[#165](https://github.com/DemianLi/nexus-agent/issues/165)） |
+
+### §7 風險與決策點
+
+| # | 題 | 結論 |
+| --- | --- | --- |
+| 1 | deepagents 演進速度 | **風險，不是決策點**。手段三樣：`~1.13.1` 擋 minor、`strictPeerDependencies` 讓 peer 抬升當場爆、升版檢查清單（[#31](https://github.com/DemianLi/nexus-agent/issues/31) 那四項人工驗證）。**擋不住 patch**，而 v3 `streamEvents` 是 experimental |
+| 2 | 模型供應商 | **已關閉**（2026-08-28，修訂 2026-09-04）。射程窄：是「這把 key 叫得動的裡最划算的」，不是「最好的模型」；**Anthropic 從來沒進過場**；Phase 2 那道「不相容則 DeepSeek 出局」的閘門**至今沒跑過**，錨在 [#61](https://github.com/DemianLi/nexus-agent/issues/61) |
+| 3 | shell sandbox | **延後**到有明確隔離方案（容器）。QuickJS 走 custom tool 而非 sandbox backend——基座不讓 `permissions` 與 sandbox backend 共存 |
+| 4 | 狀態儲存 | **三軸拆開，只做了不在三軸上的第四軸**。會話日誌落地（[#172](https://github.com/DemianLi/nexus-agent/issues/172)／[#174](https://github.com/DemianLi/nexus-agent/issues/174)，`--session-log <dir>`）；`backend` 由 `feat/memory-plugin` 收斂；**checkpointer 與 store 兩軸零消費者，判過不做**（[#155](https://github.com/DemianLi/nexus-agent/issues/155)） |
+| 5 | 結果校驗範圍 | **已拍板：只收 schema**（Phase 4，2026-09-11 回填）。不變量與業務規則不在內 |
+| 6 | `apps/web` 傳輸 | **已拍板**（Phase 5）：上行 HTTP POST，下行單向事件串流；載體先做 SSE，WebSocket 覆寫留到需要時。依據是 dsh 的實際做法 |
+
+### 其他
+
+| 主題 | 結論 | 住哪 |
+| --- | --- | --- |
+| Phase 0–5 | **全部宣告完成**（Phase 5 於 2026-08-28 由 demian 拍板） | §5 |
+| 六大補強項的落點 | 見對照表；**狀態儲存選型**那一列的結局已被 §7 第 4 項改寫 | §6 |
+| 今天還缺什麼（對照 dsh 51 套件） | 見 [`plugin-architecture-gap-survey.md`](plugin-architecture-gap-survey.md) 的**結論速查** | 另一份 |
+
+**這張表最可能的錯法不是寫錯結論，是壓掉限縮。** 建這張表時就踩到一次：§2 對「#16 兩個方向被 dsh 否掉」明文限縮過「能主張的是不存在、做了別的，不是拒絕過」，而第一版的表格把它壓回「已被 dsh 否掉」。**一列讀起來比它指向的那一節更有把握時，那一列就是錯的。**
+
+**這張表沒有絆索守著**——掃自己散文的結構 gate 會永遠綠（理由見 gap-survey §五第 7 條的慣例）。改動任一節的結論時，同一張 PR 改這裡。
+
 ## 0. 已確認的決策
 
 | # | 決策 | 內容 |
