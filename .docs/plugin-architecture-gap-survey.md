@@ -114,7 +114,7 @@
 | 17 | `fs` | `ctx.fs` 提供方約定、本地與沙箱後端、編輯前讀取策略、面向模型的檔案與搜尋工具 | `registry.backend`＋`ContainedFilesystemBackend`（#62）＋基座 filesystem 工具＋`registry.permissions`＋**編輯前讀取策略**（[#154](https://github.com/DemianLi/nexus-agent/issues/154)→[#161](https://github.com/DemianLi/nexus-agent/pull/161)，沒讀過的檔不准改）。`fs-sandbox` 那格沒有 | 有 |
 | 18 | `goal` | 每會話一個持久目標：域、模型工具、使用者命令、自動續行 | `@nexus/plugin-goal`（#128、#129、#177）＋ `apps/harness/src/goal-driver.ts`。**2026-09-15 回填**（原判「部分」，理由是四個子套件缺 `goal-round-driver`，#152 登記的空缺）：四個都有了——續行排程器由 [#180](https://github.com/DemianLi/nexus-agent/issues/180)→[#181](https://github.com/DemianLi/nexus-agent/pull/181) 落地（目標沒達成時自己再開一輪），[#183](https://github.com/DemianLi/nexus-agent/pull/183) 讓模型自己收掉目標後停手、[#184](https://github.com/DemianLi/nexus-agent/pull/184) 讓命令列壓得住輪次上限。**載體不同**：dsh 的 driver 是一個 plugin，我們的輪迴圈歸入口點所有、`PluginRegistry` 沒有一條通道排得出一輪，所以住在 `apps/harness`，偏離登記在該檔檔頭；`agent.steer()` 沒有等價物（`agent/turn-stopping` 那格只佔一半，見 §五第 3 條） | 有 |
 | 19 | `guard` | 迴圈衛生：`repeat-tool-reminder`（同參數重複呼叫 3／5／8 次時建議性提醒）、`timeout-policy`（單次工具呼叫協作式逾時→清楚的模型錯誤）。**dsh base 兩個預設開著** | **兩個行為都有了，載體沒有。** 重複提醒 [#147](https://github.com/DemianLi/nexus-agent/issues/147)→[#157](https://github.com/DemianLi/nexus-agent/pull/157)（`repeat-reminder.ts`，投遞掛在 `beforeModel`）；超時措辭 [#162](https://github.com/DemianLi/nexus-agent/issues/162)→[#176](https://github.com/DemianLi/nexus-agent/pull/176)（`containment.ts`，主詞是「等了多久」，判別式 `error.name === 'TimeoutError'` 分得開使用者按的取消）。**`@nexus/plugin-guard` 這個載體是一筆偏離登記**：基座自己就武裝截止時間（`defaultConfig:{timeout}` → `AbortSignal.timeout`），一個只剩措辭的 plugin 沒東西可武裝，而照 [#159](https://github.com/DemianLi/nexus-agent/issues/159) 的結論，圍堵旁邊的行為藏在選配 plugin 裡等於沒有。仍缺 `TOOL_TIMEOUT` 分類碼（三個消費者一個都不在，刻意不發） | 部分 |
-| 20 | `hooks` | 在 agent 運行期執行使用者**既有的** Claude Code／Codex `hooks.json` shell 鉤子：會話開始、提示詞提交、工具前後、停止時觸發；可帶模型可見訊息阻塞、附加上下文、強制繼續 | 沒有。近似物：`wrapToolCall`／`wrapModelCall`（工具、模型前後）、`registry.approvals`（阻塞工具）、`lifecycle.onDispose`（關機）。**2026-09-07 更正**（[#212](https://github.com/DemianLi/nexus-agent/issues/212)）：原文寫「缺會話開始、提示詞提交、停止三個時刻」——那三個是**格號**不是空缺，兩格佔住、一格判過不是缺口（見 §五第 3 條）。這一列判「沒有」**照舊成立**，但理由只剩一條：**沒有跑外部 shell 鉤子的引擎**，而要不要做那個引擎就是 §五第 3 條的 (b) | 沒有 |
+| 20 | `hooks` | 在 agent 運行期執行使用者**既有的** Claude Code／Codex `hooks.json` shell 鉤子：會話開始、提示詞提交、工具前後、停止時觸發；可帶模型可見訊息阻塞、附加上下文、強制繼續 | 沒有。近似物：`wrapToolCall`／`wrapModelCall`（工具、模型前後）、`registry.approvals`（阻塞工具）、`lifecycle.onDispose`（關機）。**2026-09-07 更正**（[#212](https://github.com/DemianLi/nexus-agent/issues/212)）：原文寫「缺會話開始、提示詞提交、停止三個時刻」——那三個是**格號**不是空缺，兩格佔住、一格判過不是缺口（見 §五第 3 條）。這一列判「沒有」**照舊成立**，但理由只剩一條：**沒有跑外部 shell 鉤子的引擎**，而要不要做那個引擎就是 §五第 3 條的 (b)。**2026-09-16 (b) 答完了：不做**（[#360](https://github.com/DemianLi/nexus-agent/issues/360)）——**dsh 的六個出廠 bundle 一個都沒掛 bridge**，照它的實際做法就是不放進出廠組合；而「可掛但不出廠」我們沒有 profile／patch 層可以表達（#46）。這一列因此從「下一張圖」變成**登記不排，帶三條重開條件**（見 (b)） | 沒有 |
 | 21 | `host` | Web GUI Host 側：HTTP 與 SPA 伺服器、工作區目錄選擇、插件清單投影 | `wire-server.ts`（不綁 port 的 handler ＋ 一個 socket）；沒有目錄選擇、插件清單投影 | 部分 |
 | 22 | `identity` | 匿名的 per-harness-home 關聯 id | 沒有 | 沒有 |
 | 23 | `interaction` | 人機協作：`commands`、`permission-presets`、`tool-ask-user`、`user-approval`、`user-questions` | `commands` ✅（`@nexus/plugin-commands`，形狀照 `dsh-commands`）；`user-approval` ≈ `registry.approvals`＋`approval.ts`＋`approval-card.tsx`（**2026-09-08 量過語意差**，[#220](https://github.com/DemianLi/nexus-agent/issues/220)：提問側對得上，**應答側不是掛點、結果詞彙窄一格、審計事件零顆**，逐條見 §六第 7 條，結局在 §五第 7 條）。`permission-presets` 沒有；`tool-ask-user` ✅（`@nexus/plugin-ask-user`，模型面五個欄位照抄 dsh 的工具 schema）＋ 折疊器那側的判別式（[#231](https://github.com/DemianLi/nexus-agent/issues/231) 第一刀，2026-09-09）。**`user-questions` 這個能力接縫本身沒有**：dsh 是一條獨立的 Cordis waterfall（`ctx.userQuestions`），可以有多個 answerer 競標；我們只有一顆 `interrupt()`，退成「一條通道＋一個 `kind` 判別式」，所以「誰來回答」不是可組裝的——**唯一的應答者就是接在線那頭的人**。一手證據見 [`structured-input-survey.md`](structured-input-survey.md) | 部分 |
@@ -149,7 +149,7 @@
 
 **小計（2026-09-15 更新）**：有 10（`core`、**`feedback`**、`fs`、**`goal`**、`mcp`、`plan`、`runtime-diagnostics`、`skill`、`todo`、`test-support`）；部分 14（`api`、`boot`、`client`、`code-runtime`、`compaction`、`context`、`guard`、`host`、`interaction`、`llm`、**`sandbox`**、`session`、`spill`、`subagent`）；沒有 25；不適用 2。**2026-09-15 回填三列**：`feedback` 沒有→有、`goal` 部分→有、`sandbox` 沒有→部分，理由各在該列。**`guard` 與 `spill` 是 2026-09-05 從「沒有」改過來的**——前者兩個行為都落地了只是載體不同，後者基座本來就占著而我們一直對照錯了機制。
 
-**25 個「沒有」怎麼分**（2026-09-15：原為 27，`feedback` 與 `sandbox` 移出）：企業級與分散式 15 個（`acp`、`sdk`、`typert`、`identity`、`settings`、`credentials`、`webhook`、`attachment`、`lsp`、`web`、`e2b`、`experimental`、`extensions`、`bundle`、`preset`）——定位差異，**原文寫「14 個」但列了 16 個名字，而且把 `api`／`host`／`client` 三個「部分」的算了進去，一併改正**（2026-09-05；16 個裡的 `feedback` 2026-09-15 落地，剩 15）；決策 3 明文延後 3 個（`shell`、`subprocess`、`terminal`；原本的第 4 個 `sandbox` 策略與升級那半已落地、移到「部分」，行程隔離那半仍延後）；需求未出現 5 個（`jobs`、`schedule`、`workflow`、`session-query`、`workspace`）；**agent 迴圈自己會用到、dsh base 預設開著、我們沒有的 2 個：`hooks`、`storage`**。（原本是 3 個，`guard` 已於 2026-09-05 落地；`session` 那列的 persistence 那半也落地了。）**這兩個就是 §五 收完之後留下來的東西**：`hooks` 是下一張圖，`storage` 判過零消費者不做。
+**25 個「沒有」怎麼分**（2026-09-15：原為 27，`feedback` 與 `sandbox` 移出）：企業級與分散式 15 個（`acp`、`sdk`、`typert`、`identity`、`settings`、`credentials`、`webhook`、`attachment`、`lsp`、`web`、`e2b`、`experimental`、`extensions`、`bundle`、`preset`）——定位差異，**原文寫「14 個」但列了 16 個名字，而且把 `api`／`host`／`client` 三個「部分」的算了進去，一併改正**（2026-09-05；16 個裡的 `feedback` 2026-09-15 落地，剩 15）；決策 3 明文延後 3 個（`shell`、`subprocess`、`terminal`；原本的第 4 個 `sandbox` 策略與升級那半已落地、移到「部分」，行程隔離那半仍延後）；需求未出現 5 個（`jobs`、`schedule`、`workflow`、`session-query`、`workspace`）；~~**agent 迴圈自己會用到、dsh base 預設開著、我們沒有的 2 個：`hooks`、`storage`**~~ **→ 1 個：`storage`**（2026-09-16 更正，[#360](https://github.com/DemianLi/nexus-agent/issues/360)）。（原本是 3 個，`guard` 已於 2026-09-05 落地；`session` 那列的 persistence 那半也落地了。）**`hooks` 從這一組移出：它不在 dsh base，也不在任何出廠 bundle**——`packages/bundle/` 六個 bundle 全目錄搜 `hook` 只有 4 筆，全是 React hook 與 test hook；唯一掛 bridge 的是 `snapshots/*/cordis.yml` 的 `- insert:`，而那份 patch 自稱只修「deterministic test composition」。**`storage` 這一半是對的**：`packages/bundle/base/cordis.patch.yml:141-155` 掛了 `storage`／`storage-json`／`storage-domain` 三個條目。兩者的結局因此同形但理由不同：**`hooks` 判不做，理由是 dsh 出廠也不掛**（§五第 3 條 (b)）；**`storage` 判不做，理由是零消費者**（[#155](https://github.com/DemianLi/nexus-agent/issues/155)，結論不動，重開條件照舊）。
 
 ## 四、Proteus 讀後
 
@@ -264,19 +264,21 @@ Proteus 定義了「一個 harness 可以被量」的三個前提，對著我們
 
 | Claude Code 鉤子 | 訂的攔截點 | 位置 | #190 格號 |
 | --- | --- | --- | --- |
-| `SessionStart` | `agent/session-start` | `:206` | 第 1 格 |
-| `UserPromptSubmit` | `agent/pre-step` | `:219` | 第 2 格 |
-| `PreToolUse` | `tools/pre-execute` | `:238` | 第 4 格 |
-| `PostToolUse` | `tools/post-execute` | `:247` | 第 7 格 |
-| `Stop` | `agent/turn-stopping` | `:270` | 第 3 格 |
+| `SessionStart` | `agent/created` | `:202` | 第 1 格 |
+| `UserPromptSubmit` | `agent/pre-step` | `:218` | 第 2 格 |
+| `PreToolUse` | `tools/pre-execute` | `:237` | 第 4 格 |
+| `PostToolUse` | `tools/post-execute` | `:246` | 第 7 格 |
+| `Stop` | `agent/turn-stopping` | `:269` | 第 3 格 |
 
-`hooks-codex` 訂**同樣五個**（`:188`／`:199`／`:225`／`:234`／`:260`）。dsh 明寫「『原生钩子』不是一个包——原生钩子只是一个普通的 Cordis 插件，订阅规范的生命周期事件」，`packages/hooks/` 三個套件是**橋接**，把使用者現成的 CC／Codex shell `hooks.json` 翻譯到那個介面。**所以「生命週期鉤子面」不是一個要另建的面，它就是那九格。**
+**2026-09-16 重量**（[#360](https://github.com/DemianLi/nexus-agent/issues/360)，對 `0d1f50007f9bca3f52b06e1c3074fa14d5fb0720`）：**第 1 列的事件不是改行為，是整個被併掉了。** `agent/session-start` 在現行 dsh 的 `*.ts` **零命中**，只活在 `.agents/notes/archived/`（dsh 自己的規則：archived 是凍結的，不是現行權威）；`packages/core/agent/src/runtime-types.ts` 對 `session-start` 零命中，而那正是舊表引的檔。`docs/event-producer-consumer.zh.md` 已無該列，只剩 `agent/created` — **`serial`** — 而本條點名的四個消費者全部列在它底下。併過去的那一格**是 awaited 且失敗回滾創建**（`packages/core/agent/src/index.ts:547` 的 `await this.ctx.serial(…, 'agent/created', …)`，同檔 `:417`）。其餘四列只是行號漂移。
+
+`hooks-codex` 訂**同樣五個**（`:184`／`:198`／`:224`／`:233`／`:259`；2026-09-16 重量，原記 `:188`／`:199`／`:225`／`:234`／`:260`）。dsh 明寫「『原生钩子』不是一个包——原生钩子只是一个普通的 Cordis 插件，订阅规范的生命周期事件」，`packages/hooks/` 三個套件是**橋接**，把使用者現成的 CC／Codex shell `hooks.json` 翻譯到那個介面。**所以「生命週期鉤子面」不是一個要另建的面，它就是那九格。**
 
 五格逐格的結局（`apps/harness/src/interception-index.test.ts` 是那份索引，#190 的結案留言是逐格的核對過程）：
 
 | 格 | 時刻 | 現況 |
 | --- | --- | --- |
-| 1 | `agent/session-start` | [#201](https://github.com/DemianLi/nexus-agent/issues/201) 判過**不是缺口**：dsh 那格是 `mode: 'emit'`、明著寫「a deliberate gap」；權限最弱＋消費者零＋時刻以 `SessionRegistry` 的建構存在（`session-registry.ts:169` 的 `new SessionLog(...)`；#190 記的 `:170` 已漂一行），三條缺一不可 |
+| 1 | `agent/session-start` | [#201](https://github.com/DemianLi/nexus-agent/issues/201) 判過**不是缺口**：dsh 那格是 `mode: 'emit'`、明著寫「a deliberate gap」；權限最弱＋消費者零＋時刻以 `SessionRegistry` 的建構存在（`session-registry.ts:169` 的 `new SessionLog(...)`；#190 記的 `:170` 已漂一行），三條缺一不可。**2026-09-16 更新**（#360）：**第一條的前提沒了**——`agent/session-start` 這個事件已被併進 serial 且 awaited 的 `agent/created`，「emit-only、擋不住啟動」在原始碼上反過來了，#201 引的那句 JSDoc「This is a notification, not a veto」也隨之消失。**結論 (c) 不動，理由從三條變兩條**：消費者零 ＋ 時刻以建構存在。之所以不重推，是因為會讓第 2 條倒的只有「做外部 hooks 引擎」，而那件事 2026-09-16 判為不做（見 (b)） |
 | 2 | `agent/pre-step` | ~~**佔住**：`beforeAgent`，唯一實作是 plan-mode（`packages/nexus-plugin-plan-mode/src/index.ts:390`）。~~ **2026-09-12 起沒有佔用者**：[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的第二刀把計劃模式搬進會話日誌，`/plan` 當場寫 `plan/mode`，那個 `beforeAgent` 跟著收掉，全樹不再有 `beforeAgent:` 實作；這一格已移出攔截索引（`apps/harness/src/interception-index.test.ts` 檔頭「沒有進索引的五格」，另有一條絆索等它長出佔用者）。`jumpTo: 'end'` 這條 reject 路徑實測做得到（[#192](https://github.com/DemianLi/nexus-agent/issues/192)）但我們零使用。**紀錄差**照舊是索引缺口帳第 2 筆 |
 | 3 | `agent/turn-stopping` | **佔住，只佔一半**：`apps/harness/src/goal-driver.ts` 做的正是 dsh 那句「通过 continuation 实现的 `stop`」——目標沒達成時自己再開一輪（[#181](https://github.com/DemianLi/nexus-agent/issues/181)）。`agent.steer()` 沒有等價物，輪迴圈歸入口點所有，載體偏離已登記在該檔檔頭 |
 | 4 | `tools/pre-execute` | **佔住**，逐字對得上：`approvals.gate()`，`allow`／`deny`／`ask` 三欄與鏈底 allow 都對得上 |
@@ -294,12 +296,22 @@ Proteus 定義了「一個 harness 可以被量」的三個前提，對著我們
 **兩個要分開問的問題**：
 
 - **(a) 要不要這個面（我們自己的 plugin 用）——答完了，面不必另建。** 九格就是那個面，五格逐格有結局；#190 走完之後這一格剩下的是索引裡登記的那幾筆權限差與紀錄差，不是一個缺席的面。原本「開圖條件部分滿足」那句連同它的理由一起作廢。
-- **(b) 要不要執行外部 `hooks.json`（dsh 兩個 bridge 做的事）——前置沒了，現在可以問。** 開卡之前先把價錢寫在這裡，三條都是量到的，不是推測：
-  1. **dsh 在這一格自己有沒解的瑕疵。** `hooks-claude-code/src/index.ts:205` 帶著 `TODO(session-start-gating): add a startup gate before promising first-turn delivery`——注入是 detached、best-effort，**可能錯過第一個請求**，快照測試因此 10 次重放 10 次失敗、被移出快照矩陣（#201 量過）。
-  2. **那個瑕疵不只在 session-start。** `SubagentStart`（`:284`）走的是**同一個** `detached.track`，所以照抄會把它一起抄過來。
-  3. **兩個橋接的覆蓋不對稱。** `hooks-codex` 只訂五個，**沒有 subagent 那兩格**。
+- **(b) 要不要執行外部 `hooks.json`（dsh 兩個 bridge 做的事）——2026-09-16 答完了：不做**（[#360](https://github.com/DemianLi/nexus-agent/issues/360)）。
 
-**subagent 的兩個時刻，這張表跟 #190 都漏了**：`subagent/start`（`hooks-claude-code:281`）／`subagent/end`（`:291`）。**兩張圖都漏是因為來源本身沒列**——#190 的九格出自 dsh 的設計筆記 `2026-06-30-interception-extension-points.zh.md`，那份筆記 grep `subagent` **零命中**。逐個的處置見下：
+  **理由不是「零消費者」，是照 dsh 的實際做法就是不做。** 判準是 AGENTS.md 的技術實現標準，而套用它之前要先問對問題：dsh 是「有這個套件」還是「出廠就掛」。量完是前者——`packages/bundle/` 六個 bundle（`base`／`web-app`／`headless`／`sdk-app`／`sdk-minimal`／`acp-app`）**沒有一個掛 bridge**（全目錄搜 `hook` 只有 4 筆，全是 React hook 與 test hook）。唯一掛它的是 `snapshots/*/cordis.yml`，用 `- insert:`，而那份 patch 的檔頭自己寫著「**The shipped profile owns application startup; this patch fixes only the deterministic test composition**」——是測試為了覆蓋 bridge 自己插的。`python/sdk-runtime/package.json` 那兩筆是相依宣告，不是掛載。**dsh 的實際做法因此是：寫出來、發布得出去、出廠零掛載，要用的人自己寫一行 patch。**
+
+  **而「可掛但不出廠」這個狀態我們今天表達不出來**：沒有 profile／patch 層（§三第 4 列；[#46](https://github.com/DemianLi/nexus-agent/issues/46) 明文「需要時再啟動」），所以一個不進 `DEFAULT_PLUGINS` 的 bridge 等於沒有人開得起來。這是偏離規則的標準情形——基礎建設表達不出來，最接近的實作就是不做。我們自己的樹本來就記著這件事：`packages/nexus-plugin-validation/README.md:36` 寫著「轉接使用者外部 `hooks.json` 的橋接，而**橋接不在出廠組合裡**」。
+
+  **開卡時記的三條價錢，2026-09-16 對 `0d1f5000` 重量過，兩條變了。** 留著是因為重開時還要用：
+  1. ~~`hooks-claude-code/src/index.ts:205` 帶著 `TODO(session-start-gating)`，注入是 detached、best-effort，**可能錯過第一個請求**（#201 量過）。~~ **不成立了**：TODO 全樹零命中，而且機制補上了——`ctx.on('agent/created', …)`（`:202`）末尾 `await run`（`:215`），而 `agent/created` 是 serial、awaited、失敗回滾創建。**首輪投遞現在擋得住。**
+  2. **那個瑕疵不只在 session-start** —— **一半成立**：`SubagentStart`（`:283`，原記 `:284`）與 `SubagentStop`（`:293`）仍是**不 await** 的 `detached.track`。
+  3. **兩個橋接的覆蓋不對稱** —— **照舊成立**：`hooks-codex` 只訂五個，沒有 subagent 那兩格。
+
+  **照第 7 條的慣例不掛絆索**——要守的宣稱是「dsh 的 bundle 沒掛它」，那是上游的東西，掃 `references/` 的結構 gate 守不住上游改名或搬檔（同 `context/` 那五個套件的處置）。**改為明著寫重開條件，任一成立就重開**：(1) **dsh 把 bridge 放進任一出廠 bundle**；(2) **#46 的 profile／patch 層落地**，那時「可掛但不出廠」表達得出來，第二條理由消失；(3) **有人手上有 `hooks.json` 而且要拿到 nexus 上跑**（照第 6 條的一般判法）。
+
+  **#215 移交過來的那筆帶外注入殘值（`subagent/start`）因此維持認帳**，持有人仍是這一條。
+
+**subagent 的兩個時刻，這張表跟 #190 都漏了**：`subagent/start`（`hooks-claude-code:280`）／`subagent/end`（`:290`；2026-09-16 重量，原記 `:281`／`:291`）。**兩張圖都漏是因為來源本身沒列**——#190 的九格出自 dsh 的設計筆記 `2026-06-30-interception-extension-points.zh.md`，那份筆記 grep `subagent` **零命中**。逐個的處置見下：
 
 - **`subagent/end` 判為不是缺口**，理由是**消費者一個都不存在**，與第 9 格（`tools/result`）同型：dsh 那格是 `mode: 'emit'`、只觀測；我們的 `SessionEventType` 十種（`session-log.ts:71-81`）**一顆 subagent 事件也沒有**，而更近的那個缺席（工具事件）已經婉拒過一個指名道姓的消費者（#180 第五節，理由在 `goal-driver.ts` 檔頭）。**2026-09-12 起工具事件有了**（[#264](https://github.com/DemianLi/nexus-agent/issues/264)），那個類比少了一半；這一格的判決靠的是「消費者一個都不存在」，那一條照舊成立。
 - **`subagent/start` 認帳，持有人是第 5 條那張卡。** dsh 那格與第 1 格**逐字同型**：`api-catalog.ts:3333` 是 `mode: 'emit'`，描述與第 1 格（`:3037`）一樣寫「Use `agent.inject()` to seed model-facing context. This is a notification, not a veto」——橋接能 `child.inject(context)` 是因為窗口裡從 `ctx.agents` 拿得到活著的子 agent，那是**服務**給的，不是事件給的權限。但 #201 那三條在這一格**只成立兩條半**：權限最弱 ✓、我們這側零佔用者（`grep -rn "subagent/" packages apps --include='*.ts'` 零命中）✓、而「時刻以建構存在」~~**只覆蓋靜態注入**——`foldSubAgents` 組裝期逐個 subagent 注的是 middleware／tools／permissions，`time-context` 那型要的每次新鮮的值組裝期表達不出來~~。**2026-09-07 這條理由被推翻了**（[#215](https://github.com/DemianLi/nexus-agent/issues/215) 開卡時量到）：`repeat-reminder` 就是組裝期注進每個 subagent、執行期每步現算一條新鮮 `HumanMessage` 的東西（`repeat-reminder.ts:396-415`）——**靜態的載體不等於靜態的內容**。dsh 的 `inject()` 剩下的差別是**帶外**（子代理已經存在之後，由第三方而不是父代理寫進它的歷史）。**2026-09-07 [#215](https://github.com/DemianLi/nexus-agent/issues/215) 答完了那個殘值：它成立，而持有人不是第 5 條那張卡，是下面的 (b)。** 理由是消費者只有一個，而那一個就住在 (b) 裡：`ctx.on('subagent/start', ...)` 在 dsh 全樹扣掉 `tests/` 只有兩處——`hooks-claude-code/src/index.ts:281`（真的消費者）與 `subagent/subagent/src/invariant.ts:74`（不變式伴生插件，只校驗不注入）。前者做的事是跑外部 `SubagentStart` 鉤子點，再把**鉤子行程回傳的** `contextFrom(merged)` `child.inject(context)` 進子代理——**種什麼由外部 `hooks.json` 決定，父代理不知道也編碼不進任務字串**，這正是帶外。**所以認帳移交給 (b)，不是收掉**；(b) 的價錢第 2 條已經指著同一行（`:284` 的 `detached.track`），而 `hooks-codex` 不訂 subagent 兩格這件事表示這個殘值是 **CC 方言專屬**的。
@@ -333,6 +345,8 @@ Proteus 定義了「一個 harness 可以被量」的三個前提，對著我們
 **而排在這兩題前面的那一題把它們一起收掉了：這一項不是缺口。** #215 逐條量完的判定，三條理由。
 
 1. **排序準則第二條不成立。** §五的準則第二條是「dsh base 預設就開著」，而 `packages/bundle/base/package.json` 的 83 個相依裡，**六個 `context/` 套件只有 `agent-instructions` 在內**（`grep -nE 'dsh-(time-context|agent-instructions|file-reference|session-reference|tmux-context)'` 只回 `:120`），**而那一個我們有等價物**——`@nexus/plugin-memory` 的檔頭寫著「基座的 `createMemoryMiddleware` 已經做完了載入與注入」，預設來源 `/AGENTS.md`。
+
+   **2026-09-16 同一條準則第二次失手，對象是 `hooks`**（[#360](https://github.com/DemianLi/nexus-agent/issues/360)）。§三小計把它寫成「dsh base 預設開著」的兩個之一，而 **dsh 的六個出廠 bundle 一個都沒掛 bridge**。兩次的成因一樣：**「dsh 有這個套件」被當成「dsh 出廠就開」**，而那是兩件事——dsh 發布得出去的套件遠多於任何 profile 掛起來的。**下次用這條準則之前先查 `packages/bundle/`，不要查 `packages/`。**
 2. **dsh 自己把它歸給一個我們判過不排的東西。** `time-context/README.zh.md` 概述段：「本插件需主动启用：默认组合不启用它，**Schedule Web overlay 会挂载它**」。而 `schedule` 就在第 7 條那一列。**它不是「每個 harness 都該有」，它是 Schedule 的配件。**
 3. **三個讀數逐個量，沒有一個撐得起那格節點。** 這一條要分開算，不能讓其中一個的理由蓋掉另外兩個——`time-context` 每次注的是**現在時間**、**瀏覽器時區**、**經過時長**三行。
    - **瀏覽器時區：今天沒有來源，而且不是加個 middleware 就有的。** dsh 從開放輪次的 `user-rpc` 訊息派生（`src/request-zone.ts`）；我們全樹 `timeZone`／`timezone`／`Intl.`（含 `.tsx`、扣 `node_modules` 與測試）**零命中**。`apps/web` 在，所以來源不是不可能——瀏覽器自己知道 `Intl.DateTimeFormat().resolvedOptions().timeZone`——但 `@nexus/wire` 的 `protocol.ts` 上沒有那個欄位，**要有得先擴 wire，這抬高價錢不是降低**。
