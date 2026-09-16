@@ -132,8 +132,12 @@ thread 接得回來**（下一段）。**eval 那條路沒有會話日誌，而�
 
 **agent 迴圈有上限，而那個上限是組裝點設的不是基座設的。** `createDeepAgent` 自己把
 `recursionLimit` 設成 `1e4`（約 5,000 輪模型呼叫，等於沒有上限），所以
-`createNexusAgent` 蓋成 100（約 49 輪）。CLI、`serve`、eval 都吃這個值；真的需要更長的
-呼叫端自己傳 `recursionLimit`。這條擋的是「跑掉了」，不是「複雜任務」。
+`createNexusAgent` 蓋成 100。預設組裝每一輪模型呼叫佔三格（重複提醒器掛在 `beforeModel`，
+是圖裡的一個節點），所以那是約 33 輪；每多一個 `beforeModel` 的 middleware 每輪就多一格。
+CLI、`serve`、eval 都吃這個值；這條擋的是「跑掉了」，不是「複雜任務」。真的需要更長的
+呼叫端自己傳 —— 程式裡是 `recursionLimit`，CLI 是 `--recursion-limit <n>`（`serve` 沒有這個旗標）。
+**一次性模式撞到這條上限時退出碼是 `2`**，其他失敗是 `1`，所以包它的腳本分得出「護欄切掉了」與
+「壞掉了」；REPL 裡撞到只印一行，不退出。
 
 在瀏覽器裡跟 agent 說話，要開兩個 terminal：
 

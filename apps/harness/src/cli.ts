@@ -12,6 +12,11 @@
  * 拋錯）、fold 的前置條件不成立、基座擋下這份組裝，全都發生在 agent 跑起來之前，
  * 而這裡不吞：訊息原樣進 stderr，行程以非零狀態退出。**那條傳播路徑只有一條**，
  * 它的端到端測試也因此只有一條（見 [`cli.test.ts`](./cli.test.ts)）。
+ *
+ * **非零狀態有兩個值**：一次性模式撞到 agent 自己的迴圈上限是 `2`，其餘失敗是 `1`
+ * （[#362](https://github.com/DemianLi/nexus-agent/issues/362)，見 {@link exitCodeFor}）。
+ * 走的是同一條傳播路徑，只在最後一步分岔，所以端到端那組多一條是為了釘住那個分岔，
+ * 不是第二條路徑。
  */
 
 import { parseArgs } from 'node:util';
@@ -159,6 +164,27 @@ export interface CliInvocation {
    * 收下來會變成一個看起來設過、實際上一輪都限制不到的上限。
    */
   readonly maxGoalRounds?: number;
+  /**
+   * 這一次呼叫的 agent 迴圈上限，單位是 LangGraph 的 super-step。省略即
+   * `DEFAULT_RECURSION_LIMIT`（[#362](https://github.com/DemianLi/nexus-agent/issues/362)）。
+   *
+   * **產品預設不動，這一格是給呼叫端明著傳的。** 100 是「跑掉了」的界線，對一般任務是對的
+   * 校準；需要更長的呼叫端（Proteus 的 adapter）自己傳一個大的，那時那個數字出現在呼叫端
+   * 的指令裡而不是沒有人設過。照 dsh 的房規：會隨部署變的選擇要改得動，一個 `DEFAULT_*`
+   * 常數不算 configurability（`tool-ralph` 的 `maxRounds` 就是 Config）。
+   *
+   * **它換算成幾個模型輪取決於組裝**：`模型輪數 = floor((recursionLimit − 1) / 每輪格數)`，
+   * 每多一個帶 `beforeModel` 的 middleware 每輪就多一格。預設組裝是三格，所以 `500` ≈ 166 輪；
+   * 多掛一個就變四格、≈ 124 輪。**一個固定的數字不是一個固定的輪數。**
+   *
+   * **不必配別的旗標**：它永遠有消費者（每一種組裝都有迴圈），不像 `--max-goal-rounds`。
+   *
+   * **配 `--resume` 是對的，而且每一次都要重給。** 它跟 `--sandbox` 相反：上限不記進日誌、
+   * 也推不回來，只作用在這一次行程——所以續接時沒有「兩個來源誰贏」的問題，不給就是回到
+   * 預設。別把它加進 `--resume` 的衝突檢查：Proteus 的 adapter 每個 phase 都是一次
+   * `--resume` 呼叫，靠的就是每次重給。
+   */
+  readonly recursionLimit?: number;
   /** 只印用法就退出。 */
   readonly help: boolean;
 }
@@ -185,6 +211,9 @@ export const USAGE = `用法：cli [選項] [要說的話...]
   --max-goal-rounds <n>
                        這一次呼叫最多讓它排幾輪（要配 --goal-driver）
                        目標自己的 max_goal_rounds 是模型填的，這一條它改不動
+  --recursion-limit <n>
+                       agent 迴圈上限（LangGraph super-step，預設 100 ≈ 33 個模型輪）
+                       一次性模式撞到時退出碼是 2，其他失敗是 1
   --help               印這段話
 
   REPL 裡輸入 /help 看有哪些命令，/exit 或按 Ctrl-D 結束。`;
@@ -213,6 +242,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
         resume: { type: 'string' },
         'goal-driver': { type: 'boolean', default: false },
         'max-goal-rounds': { type: 'string' },
+        'recursion-limit': { type: 'string' },
         help: { type: 'boolean', default: false },
       },
       allowPositionals: true,
@@ -256,6 +286,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
 
   const goalDriver = values['goal-driver'] === true;
   const maxGoalRounds = parseMaxGoalRounds(values['max-goal-rounds'], goalDriver);
+  const recursionLimit = parsePositiveInteger('--recursion-limit', values['recursion-limit']);
 
   const prompt = positionals.join(' ').trim();
   return {
@@ -268,6 +299,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     ...(resume !== undefined && { resume }),
     goalDriver,
     ...(maxGoalRounds !== undefined && { maxGoalRounds }),
+    ...(recursionLimit !== undefined && { recursionLimit }),
     help: values.help === true,
   };
 }
@@ -331,12 +363,23 @@ function parseMaxGoalRounds(raw: string | undefined, goalDriver: boolean): numbe
       `--max-goal-rounds 要配 --goal-driver：沒有排程器的話它一輪都限制不到。\n\n${USAGE}`,
     );
   }
+  return parsePositiveInteger('--max-goal-rounds', raw);
+}
+
+/**
+ * 命令列上的一個正整數。
+ *
+ * @param flag - 旗標名，拿來寫進錯誤訊息。
+ * @param raw - 命令列上那串字，沒給就是 `undefined`。
+ * @returns 那個數字，或沒給時的 `undefined`。
+ * @throws 不是正整數——訊息接上用法。
+ */
+function parsePositiveInteger(flag: string, raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
   const trimmed = raw.trim();
   const value = Number(trimmed);
   if (trimmed === '' || !Number.isSafeInteger(value) || value < 1) {
-    throw new Error(
-      `--max-goal-rounds 要給一個正整數（拿到 ${JSON.stringify(raw)}）。\n\n${USAGE}`,
-    );
+    throw new Error(`${flag} 要給一個正整數（拿到 ${JSON.stringify(raw)}）。\n\n${USAGE}`);
   }
   return value;
 }
@@ -729,7 +772,7 @@ type NexusAgent = NexusAgentHandle['agent'];
  * @throws 清單載入失敗、fold 前置條件不成立，或基座擋下這份組裝。
  */
 export async function createCliAgent(
-  invocation: Pick<CliInvocation, 'live' | 'workspace' | 'sandbox'>,
+  invocation: Pick<CliInvocation, 'live' | 'workspace' | 'sandbox' | 'recursionLimit'>,
   plugins: readonly NexusPlugin[],
   cwd: string = process.cwd(),
   onInvariantViolation?: (error: InvariantError) => void,
@@ -817,6 +860,7 @@ export async function createCliAgent(
         : [createSandboxPolicyPlugin(sandboxMode, workspaceRoot)]),
     ],
     ...(backend !== undefined && { backend }),
+    ...(invocation.recursionLimit !== undefined && { recursionLimit: invocation.recursionLimit }),
     systemPrompt: SYSTEM_PROMPT,
     checkpointer,
     ...(onInvariantViolation !== undefined && { onInvariantViolation }),
@@ -1187,6 +1231,8 @@ export async function runRepl(
         if (driver !== undefined)
           await driveGoalRounds(agent, printer, sessionLog, driver, roundCap);
       } catch (error) {
+        // 撞到迴圈上限也落在這裡：印一行、等下一句，**不退出**——所以 `exitCodeFor` 的
+        // 退出碼 2 只在一次性路徑上存在。
         printer.error(errorMessage(error));
       }
     }
@@ -1222,7 +1268,7 @@ export interface RunCliOptions {
 /**
  * 一次完整的 CLI 呼叫：解析、組裝、跑。
  *
- * 組裝失敗一律往外拋——由 {@link main} 印進 stderr 並把行程的退出碼設成 1。
+ * 組裝失敗一律往外拋——由 {@link main} 印進 stderr 並設行程的退出碼（{@link exitCodeFor}）。
  *
  * @param options - argv 與 I/O 兩端。
  */
@@ -1443,6 +1489,39 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   await dispose();
 }
 
+/** 撞到自己的迴圈上限時的退出碼。見 {@link exitCodeFor}。 */
+export const RECURSION_LIMIT_EXIT_CODE = 2;
+
+/**
+ * 一個跑壞的呼叫該用哪個退出碼。
+ *
+ * **撞到迴圈上限是 {@link RECURSION_LIMIT_EXIT_CODE}，其餘一律 1**（[#362](https://github.com/DemianLi/nexus-agent/issues/362)）。
+ * 分開的理由在呼叫端：Proteus 的 adapter 要把「這個 phase 被護欄切掉」與「容器自己死掉」
+ * 當成兩種終態，而 stderr 裡只剩一行散文。照 dsh 的做法，上限用盡是一等的終態不是錯誤
+ * （`tool-ralph` 的 `budget-limited`、`subagent-claude-code` 的 category `'limit'`）。
+ *
+ * **判準是 `lc_error_code`，不是比對 `message`。** `GraphRecursionError` 帶著
+ * `GRAPH_RECURSION_LIMIT`——那是 LangGraph 封閉字串聯集裡的一員、有維護承諾的識別碼；
+ * `Recursion limit of N reached` 那句話則是隨時會改的措辭。不用 `instanceof`：
+ * 同一個類別有兩份安裝時它會靜靜地認不得。
+ *
+ * **這個錯誤物件一路原樣重拋到這裡**（`runTurn`、`runCli` 的兩個 catch 都是 `throw error`），
+ * 所以欄位是完好的；把它弄丟的只會是只取 `message` 的那一步，因此判別排在印之前。
+ *
+ * ⚠️ **只在一次性路徑成立。** REPL 裡撞到上限是印一行然後等下一句（`runRepl` 的 catch
+ * 吞掉、不重拋），根本不會退出。
+ *
+ * @param error - 從 {@link runCli} 拋出來的東西。
+ * @returns 行程該用的退出碼。
+ */
+export function exitCodeFor(error: unknown): number {
+  const code =
+    typeof error === 'object' && error !== null
+      ? (error as { lc_error_code?: unknown }).lc_error_code
+      : undefined;
+  return code === 'GRAPH_RECURSION_LIMIT' ? RECURSION_LIMIT_EXIT_CODE : 1;
+}
+
 /**
  * 行程入口。
  *
@@ -1454,7 +1533,7 @@ async function main(): Promise<void> {
     await runCli({ argv: process.argv.slice(2), input: process.stdin, output: process.stdout });
   } catch (error) {
     console.error(errorMessage(error));
-    process.exitCode = 1;
+    process.exitCode = exitCodeFor(error);
   }
 }
 

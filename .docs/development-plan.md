@@ -3,12 +3,57 @@
 狀態：方向已確認（2026-08-23）。
 需求基準：《企業級 AI Agent 系統架構與 Harness 開發範圍說明 v1.0》（deepagents 1.13.1 / LangChain JS 1.5.x / LangGraph JS 1.4.x）。
 
+<a id="verdicts"></a>
+
+## 結論速查
+
+**這張表只回答一件事：某個決定有沒有拍板、結果是什麼。** 理由住在指向的那一節，不重述。
+
+**它的存在理由是上下文成本**：切檔前本檔 98,379 字元，而分布極不均——§5 一節就佔 62%，要知道一個決定拍板了沒，最少得讀數千字元。**[#364](https://github.com/DemianLi/nexus-agent/issues/364) 把最大的三塊切了出去，本檔降到約 40,000 字元（-59%）**；這張表是那次切檔的另一半——切檔讓每次讀取變小，這張表讓「要不要讀」零成本可答。
+
+（2026-09-16 更正：切檔前的量測原本寫「~11,000 字元」，那是 bytes 誤標成字元——量的容器 locale 未設、`wc -m` 退回算 bytes，CJK 一字三 bytes。比例不受影響，絕對值原本誇大約 1.7 倍。）這張表把那個答案搬到零次額外讀取的位置。
+
+**與「一個事實一個家」的關係**：結論在這裡出現第二次，理由仍然只有一個家。刻意的——結論放兩處的**不一致是看得見的**，而「要讀一萬字才知道有沒有答案」的失敗是**無聲的**。這張表與它指向的那一節不一致時，**以那一節為準並修正這裡**。
+
+### §0 已確認的決策
+
+| # | 決策 | 結論 |
+| --- | --- | --- |
+| 1 | 技術棧 | **全 TypeScript**：LangChain JS ＋ LangGraph JS ＋ deepagentsjs，零 Python 基座 |
+| 2 | 插件化程度 | **迴圈固定，不 fork**。對 dsh 的偏離已登記（2026-09-16，[#356](https://github.com/DemianLi/nexus-agent/pull/356)）：dsh 連 agent loop 都是可換的 Cordis plugin，**deepagents 表達不出來**——`createDeepAgent` 建出來的圖建構後不可變 |
+| 3 | 兩層薄覆蓋 | 反思與反饋層、意圖與理解層維持薄覆蓋，追蹤於 [#16](https://github.com/DemianLi/nexus-agent/issues/16)；該卡原列的自我批判／意圖分類兩方向**在 dsh 全樹不存在，而它做了別的**（計劃模式＋todo＋goal）——§2 明文限縮過：能主張的是「不存在、做了別的」，**不是「dsh 拒絕過」** |
+| 4 | 模型選型 | **已收斂**：`nvidia/nemotron-3-super-120b-a12b`。2026-08-28 首次定案為 `openai/gpt-oss-120b`，該 id 2026-09-03 下架（410／EOL），2026-09-04 重盤重選（[#165](https://github.com/DemianLi/nexus-agent/issues/165)） |
+
+### §7 風險與決策點
+
+| # | 題 | 結論 |
+| --- | --- | --- |
+| 1 | deepagents 演進速度 | **風險，不是決策點**。手段三樣：`~1.13.1` 擋 minor、`strictPeerDependencies` 讓 peer 抬升當場爆、升版檢查清單（[#31](https://github.com/DemianLi/nexus-agent/issues/31) 那四項人工驗證）。**擋不住 patch**，而 v3 `streamEvents` 是 experimental |
+| 2 | 模型供應商 | **已關閉**（2026-08-28，修訂 2026-09-04）。射程窄：是「這把 key 叫得動的裡最划算的」，不是「最好的模型」；**Anthropic 從來沒進過場**；Phase 2 那道「不相容則 DeepSeek 出局」的閘門**至今沒跑過**，錨在 [#61](https://github.com/DemianLi/nexus-agent/issues/61) |
+| 3 | shell sandbox | **延後**到有明確隔離方案（容器）。QuickJS 走 custom tool 而非 sandbox backend——基座不讓 `permissions` 與 sandbox backend 共存 |
+| 4 | 狀態儲存 | **三軸拆開，只做了不在三軸上的第四軸**。會話日誌落地（[#172](https://github.com/DemianLi/nexus-agent/issues/172)／[#174](https://github.com/DemianLi/nexus-agent/issues/174)，`--session-log <dir>`）；`backend` 由 `feat/memory-plugin` 收斂；**checkpointer 與 store 兩軸零消費者，判過不做**（[#155](https://github.com/DemianLi/nexus-agent/issues/155)） |
+| 5 | 結果校驗範圍 | **已拍板：只收 schema**（Phase 4，2026-09-11 回填）。不變量與業務規則不在內 |
+| 6 | `apps/web` 傳輸 | **已拍板**（Phase 5）：上行 HTTP POST，下行單向事件串流；載體先做 SSE，WebSocket 覆寫留到需要時。依據是 dsh 的實際做法 |
+
+### 其他
+
+| 主題 | 結論 | 住哪 |
+| --- | --- | --- |
+| Phase 0–5 | **全部宣告完成**（Phase 5 於 2026-08-28 由 demian 拍板） | §5 |
+| 六大補強項的落點 | 見對照表；**狀態儲存選型**那一列的結局已被 §7 第 4 項改寫 | §6 |
+| **切出去的三份** | Phase 3 → [`development-plan-phase-3.md`](development-plan-phase-3.md)；Phase 5 → [`development-plan-phase-5.md`](development-plan-phase-5.md)；§7 風險與決策點 → [`development-plan-risks.md`](development-plan-risks.md) | #364 |
+| 今天還缺什麼（對照 dsh 51 套件） | 見 [`plugin-architecture-gap-survey.md`](plugin-architecture-gap-survey.md) 的**結論速查** | 另一份 |
+
+**這張表最可能的錯法不是寫錯結論，是壓掉限縮。** 建這張表時就踩到一次：§2 對「#16 兩個方向被 dsh 否掉」明文限縮過「能主張的是不存在、做了別的，不是拒絕過」，而第一版的表格把它壓回「已被 dsh 否掉」。**一列讀起來比它指向的那一節更有把握時，那一列就是錯的。**
+
+**這張表沒有絆索守著**——掃自己散文的結構 gate 會永遠綠（理由見 gap-survey §五第 7 條的慣例）。改動任一節的結論時，同一張 PR 改這裡。
+
 ## 0. 已確認的決策
 
 | # | 決策 | 內容 |
 |---|---|---|
 | 1 | 技術棧全 TypeScript | LangChain JS + LangGraph JS + deepagentsjs（官方 TS 版），零 Python 基座 |
-| 2 | 插件化程度 | agent 推理迴圈為固定基座（deepagentsjs），迴圈周圍的擴充點全部走 NexusPlugin 契約；不 fork、不做「連迴圈都可替換」的徹底插件化 |
+| 2 | 插件化程度 | agent 推理迴圈為固定基座（deepagentsjs），迴圈周圍的擴充點全部走 NexusPlugin 契約；不 fork、不做「連迴圈都可替換」的徹底插件化。**對 dsh 的偏離（標註，2026-09-16 補）**：dsh 的定位是「不存在需要打补丁的特权内核」，模型適配器、工具註冊表、會話日誌連同 agent loop 本身都是 Cordis plugin，都能從設定換掉（`docs/architecture.zh.md:11-13`）。**deepagents 表達不出來**：迴圈是 `createDeepAgent` 建出來的圖，建構後不可變，不 fork 就換不掉。退到最接近的：迴圈固定，迴圈外的擴充點收成單一契約。其餘各項對照見第 1 節「與 Cordis 的對照」 |
 | 3 | 兩層薄覆蓋 | 反思與反饋層、意圖與理解層先採薄覆蓋，後續強化追蹤於 [issue #16](https://github.com/DemianLi/nexus-agent/issues/16)，Phase 0–5 全部完成後啟動 |
 | 4 | 選型決策點 | 模型供應商**已收斂**（2026-08-28）：**`openai/gpt-oss-120b`**，走 NVIDIA 的 OpenAI 相容端點。**2026-09-04 修訂：那個 id 已於 2026-09-03 下架**（410，EOL 帶日期，型錄上也沒有了），重盤重選之後是 **`nvidia/nemotron-3-super-120b-a12b`** —— 這次品質沒有打平（難題 0.98 對 0.92–0.93），它同時拿下延遲與多叫次數，只輸 token。見 [#165](https://github.com/DemianLi/nexus-agent/issues/165)。**決策點 2 不因此重開**：換的是 id 不是供應商，端點與方法都沒變。原本的三段收斂（Phase 0 定預設 Anthropic、Phase 2 驗 DeepSeek 相容性、Phase 5 比品質與成本）只走完第一段與第三段，**中間那段從沒跑過**，而第三段的結果讓它失去了對象 —— 詳見第 7 節決策 2。狀態儲存**不是一個後端而是三個正交的軸**（checkpointer／store／backend），Phase 3 分別收斂（見第 7 節決策 4） |
 
@@ -48,7 +93,7 @@ registry.memory.addSource(path); // 純累加；路徑格式在註冊期擋（�
 - `requires` 比對的是各 plugin 用 `registry.capabilities.provide(name)` 宣告的能力集合（[#28](https://github.com/DemianLi/nexus-agent/issues/28) 決議 10 要求的「能力 → 提供者」對照表，其輸入端由 [#29](https://github.com/DemianLi/nexus-agent/issues/29) 補上）。**能力是集合不是註冊表**：重複 `provide` 冪等、不報錯，獨佔性由各擴充點自己的規則守（同名 tool、同 `routePrefix`）。
 - **`name` 不唯一，plugin 層級不做唯一性檢查**（[#43](https://github.com/DemianLi/nexus-agent/issues/43)）。同一個 plugin 掛載多次是合法的 —— `createMcpPlugin({ server: 'github' })` 與 `createMcpPlugin({ server: 'linear' })` 兩個都叫 `mcp`，井水不犯河水。共同軸線的「同層報錯」管的是**註冊表**（同名 tool、同名 subagent、同 `routePrefix`），plugin 清單不是註冊表而是一份輸入序列；真撞了會撞在它們註冊的東西那一層。`name` 因此是**純標籤，唯一用途是錯誤訊息指名** —— registry 每次註冊要記住是誰註冊的，而區分同名者的是 `PluginOrigin.id`（[#104](https://github.com/DemianLi/nexus-agent/issues/104)）：plugin 沒寫就補一個 `<name>#<序號>`（`mcp#0`、`mcp#1`），要一個不隨清單變動的名字就自己寫 `id`。條目也可以 `disabled: true` 關掉——`apply` 一次都不跑，但 id 與它在診斷裡的位置留著，所以其他條目的自動編號不會因為關掉一個而位移。`version` 欄位不存在：版本號是給安裝的人看的，npm 已經在做（[#33](https://github.com/DemianLi/nexus-agent/issues/33) 的範圍規則 ＋ lockfile）。從外部**覆寫**個別 plugin 設定的機制仍然不做，見 [#46](https://github.com/DemianLi/nexus-agent/issues/46) 與 #104 的「這張不包含」。
 - `PluginRegistry` 是活的具名註冊表：插入順序、同名報錯、每次註冊回一個撤銷函式（**射程限定為載入期回滾**，不承諾執行期熱插拔——deepagents 建構後不可變）。最終仍折疊成一次 `createDeepAgent(...)` 呼叫。
-- **九個註冊點之外有五條不折疊的通道，第一條是 `lifecycle`**（`registry.lifecycle.onDispose(fn)`，`feat/mcp-plugin`；其餘四條 `telemetry` / `invariants` / `commands` / `sessions` 是後來各自的 PR 加的，總表見 `packages/nexus-core/src/registry.ts` 檔頭）。它**不是第十個註冊點**：九個註冊點回答「這個 agent 由什麼組成」、會折進 `createDeepAgent` 的參數，這條回答「這些東西怎麼收掉」、什麼都不折。`loadPlugins()` 因此多回一個 `dispose()`，組裝點的 `createNexusAgent()` 跟著回 `{ agent, dispose }`。引進它的是 MCP：MCP server 是外部程序，stdio 子行程的 pipe 是活的 handle，沒人關的話 CLI 印完答案不會退出（實測：拿掉 `dispose()` 之後 `pnpm --filter @nexus/harness run cli --plugins src/cli-mcp.fixture.ts` 停在那裡不動）。**回滾與關機是兩條路**：`apply` 中途拋錯時的資源釋放由 plugin 自己的 `try` / `catch` 負責——dsh 的 `ctx.effect` 一個函式兼兩職，那靠的是 Cordis 的 context 樹，我們沒有。**載入失敗時仍然收**：靠前的 plugin 已經開好的東西由 `loadPlugins()` 在拋出之前收掉，因為失敗的呼叫端拿到的是 exception、不是 handle（註冊內容則刻意留著，診斷要有東西可看）。
+- **九個註冊點之外有六條不折疊的通道，第一條是 `lifecycle`**（`registry.lifecycle.onDispose(fn)`，`feat/mcp-plugin`；其餘五條 `telemetry` / `invariants` / `commands` / `sessions` / `feedback` 是後來各自的 PR 加的，總表見 `packages/nexus-core/src/registry.ts` 檔頭）。它**不是第十個註冊點**：九個註冊點回答「這個 agent 由什麼組成」、會折進 `createDeepAgent` 的參數，這條回答「這些東西怎麼收掉」、什麼都不折。`loadPlugins()` 因此多回一個 `dispose()`，組裝點的 `createNexusAgent()` 跟著回 `{ agent, dispose }`。引進它的是 MCP：MCP server 是外部程序，stdio 子行程的 pipe 是活的 handle，沒人關的話 CLI 印完答案不會退出（實測：拿掉 `dispose()` 之後 `pnpm --filter @nexus/harness run cli --plugins src/cli-mcp.fixture.ts` 停在那裡不動）。**回滾與關機是兩條路**：`apply` 中途拋錯時的資源釋放由 plugin 自己的 `try` / `catch` 負責——dsh 的 `ctx.effect` 一個函式兼兩職，那靠的是 Cordis 的 context 樹，我們沒有。**載入失敗時仍然收**：靠前的 plugin 已經開好的東西由 `loadPlugins()` 在拋出之前收掉，因為失敗的呼叫端拿到的是 exception、不是 handle（註冊內容則刻意留著，診斷要有東西可看）。
 - 共同軸線：**同層報錯、跨層遮蔽、fail-closed、載入期失敗**。「層」指全域（root agent）↔ 各 subagent。**`subagents` 註冊點自己沒有層**：deepagents 的 `SubAgentBase` 沒有巢狀 subagents 欄位（`name` / `description` / `systemPrompt` / `mode` / `tools` / `model` / `middleware` / `interruptOn` / `skills`），遮蔽在那裡表達不出來，所以 subagent 只有全域一層、同名一律報錯。
 - **組裝點所有、plugin 不得提供**：default backend、工具呈現順序、model、checkpointer / store、核准政策的 session 開關。
 - 換模型、換儲存、換工具組合 = 換 plugin 清單，core 不動。此契約同時滿足補強項 6「業務邏輯解耦」。
@@ -58,6 +103,24 @@ registry.memory.addSource(path); // 純累加；路徑格式在註冊期擋（�
 - **`permissions` 不是授權邊界，是意外防護。** 它只覆蓋 `FILESYSTEM_TOOL_NAMES` 那八個內建工具裡「當前 backend 實際註冊的那些」，而且基座無規則命中即 allow。真正的檔案圍堵靠換 backend（Phase 2 `feat/fs-backends` 已落地 `ContainedFilesystemBackend`，[#34](https://github.com/DemianLi/nexus-agent/issues/34)）。而**外部 MCP server 的工具連 backend 都不經過** —— deepagents 明文「custom tools from the agent or other middleware are left untouched」，所以那些工具自己碰檔案系統不在任何管束範圍內。這是一條明文限制，不是待補的功能。
 - **`interruptOn` 的核准詞彙是封閉的。** plugin 只能貢獻 `{ toolName, reason, when? }`；`allowedDecisions` 由 harness 固定為 `["approve", "reject"]`，`argsSchema` 不使用（dsh 明文「Input rewrite is deliberately not offered」）。宣告了需核准的工具卻沒有 checkpointer，registry 要在載入期報錯——缺席即拒絕，不是放行；**核准政策的 session 開關關著卻有人宣告要核准，同樣報錯**，因為沒人回答的中斷只會把 agent 掛在那裡，靜默丟掉那些標記則是把政策解除武裝。全域的核准標記也**主動併進每個 subagent**，理由與 deny 同一條：基座是 `agentParams.interruptOn ?? defaultInterruptOn`，自帶設定的 subagent 會把全域那些整組蓋掉。
 - **工具呈現順序要自建。** deepagents 沒有對應機制，dsh 有專門的 Agent Note（註冊順序造成過真實 CI flake）。組裝點要有一份顯式清單＋`'<unlisted-tools>'` rest entry＋字典序預設，屬 Phase 1 `feat/nexus-plugin-contract` 的範圍。
+
+**與 Cordis 的對照**（2026-09-16，dsh `0d1f50007f9bca3f52b06e1c3074fa14d5fb0720`）。dsh 的定位與解耦都靠 Cordis（`docs/cordis-primer.zh.md`）；我們沒有 Cordis，下表逐項記哪些照學、哪些退了、退到什麼。每一項的理由住在出處那張卡上，這裡不重述。
+
+| Cordis 的做法 | 我們 | 出處 |
+| --- | --- | --- |
+| plugin 是命令式的 `apply(ctx)` | 照學：`apply(registry)` | [#28](https://github.com/DemianLi/nexus-agent/issues/28) 決議 9 |
+| 產品每一部分都是 plugin，包含 agent loop | 偏離：迴圈固定 | 第 0 節決策 2 |
+| context 是服務容器：plugin 以 `ctx.<key>` 查別人的服務，不 import 實作 | 退到相依隔離：plugin 只相依 `@nexus/core`，由 pnpm 機械保證；**plugin 之間沒有服務查找** | [#30](https://github.com/DemianLi/nexus-agent/issues/30)；代價見下 |
+| `inject` 宣告服務相依，載入順序由相依決定 | 退到存在性檢查：`requires` 只查能力在不在、不排序，順序由清單承擔 | [#28](https://github.com/DemianLi/nexus-agent/issues/28) 決議 10 |
+| 型別化事件，五種分派模式（`emit`／`waterfall`／`parallel`／`serial`／`bail`） | 退到 LangChain middleware 鉤子 ＋ `approvals.gate` waterfall ＋ 會話日誌事件；事件匯流排判為範圍外 | [#190](https://github.com/DemianLi/nexus-agent/issues/190) |
+| 註冊是可逆副作用，reload 與 teardown 時撤銷 | 部分：每次註冊回 undo，射程只到載入期回滾；關機另走 `lifecycle` | 本節上文 |
+| profile、組合包、patch 按條目 id 疊層，`--dump-config` 印得出整棵樹 | 部分：條目有 `id`／`disabled`，設定收在閉包裡，從外部覆寫不做 | [#104](https://github.com/DemianLi/nexus-agent/issues/104)、[#46](https://github.com/DemianLi/nexus-agent/issues/46) |
+
+**沒有服務查找的代價：服務的定義只能住在 core。** Cordis 裡任何 plugin 都能占一個新的 `ctx.<key>` 給別人用；我們這側 plugin 只能往 core 已經開好的格子裡放東西。所以兩個元件要協作只剩兩條路：一是**組裝點用閉包把同一顆物件交給兩邊**——`apps/harness/src/cli.ts` 把同一顆 `SandboxModeController` 同時交給 `ContainedFilesystemBackend` 與 sandbox-policy plugin，把 backend 交給 submit-record；二是**core 先開一格**——上文九個註冊點之外的六條通道都是 core 擁有介面、plugin 往裡放。上文「換 plugin 清單，core 不動」因此只對彼此不協作的 plugin 成立；需要協作的配對，不是組裝點知道，就是 core 多一格。
+
+**`requires` 今天沒有人用。** `packages/` 底下 7 個 plugin `provide` 能力（含示範用的 `@nexus/plugin-echo`），產品程式碼裡沒有任何條目宣告 `requires`，只有 `apps/harness/src/agent-factory.test.ts` 用它測機制本身。
+
+**事件那一列真正缺的不是匯流排。** #190 查過：dsh 的 `send()`／`steer()`／`inject()` 是同一個「帶邊界、選擇叫不叫醒」的 `UserMessage` 佇列的三個預設，我們缺的是那個佇列；今天沒有「把一步塞進正在跑的迴圈」的消費者，所以不補。
 
 ## 2. 七層架構 ↔ 實作映射
 
@@ -212,94 +275,7 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（線�
 
 ### Phase 3 — 記憶層（約 3 個 PR）
 
-**動工前查過一輪基座（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js`）。這次「基座已內建」是真的**——`createMemoryMiddleware`、`createSkillsMiddleware`、`createSummarizationMiddleware` 三個都在，`createDeepAgent` 上還有一等公民的 `memory?: string[]` 與 `skills?: string[]` 參數，而且 `@nexus/core` 的 `skills` / `memory` 註冊點與 fold 在 Phase 1 就接好了。**錯的是「完整」**：三個都只做「注入」，沒有一個做「保存」。以下每條都標了實測依據。
-
-- `feat/memory-plugin`：AGENTS.md memory 來源 plugin ＋ 狀態儲存決策收斂。三件實測事實決定它的形狀：
-
-  1. **memory middleware 是唯讀的。** 只有 `beforeAgent`（讀）與 `wrapModelCall`（注入 system prompt），**不註冊任何工具**。記憶要寫回去，唯一的路是模型自己呼叫 `write_file`。所以「記憶留不留得住」是 **backend** 的問題，跟 checkpointer 無關。
-  2. **來源路徑不展開 `~`。** `loadMemoryFromBackend` 把路徑原樣交給 backend 的 `downloadFiles` / `read`。基座 JSDoc 裡那個 `"~/.deepagents/AGENTS.md"` 是**已 deprecated 的 `createAgentMemoryMiddleware`** 留下的——`os.homedir()` 只出現在 node-only 的 `createSettings`，backend-agnostic 這條路上一次都沒有。照抄那個例子的下場：`ContainedFilesystemBackend` 讀時放行、找不到字面上的 `~` 目錄 → 靜默沒有記憶；而寫回去會撞上我們自己那條 `"~"` 檢查。**來源一律用 backend 命名空間下的絕對路徑。**
-  3. **載入失敗是靜默的，而且靜默是構造出來的。** 每個來源包在 `try / console.debug` 裡，收進來的條件又是 `if (content)`——空字串是 falsy，所以**讀不到、不存在、讀到空檔三者同形**，都塌成 `(No memory loaded)`。`memoryContents` 再快取在 state（`if ("memoryContents" in state ...) return`），配上 checkpointer 就是**一個 thread 只載一次**，thread 中途改 AGENTS.md 不生效。
-
-     **原文這裡寫「一條蓋到記憶檔的 deny 規則 = agent 安靜地沒有記憶」，實測是反的。** `loadMemoryFromBackend` 呼叫的是 `backend.downloadFiles` / `backend.read`——**backend 方法，不是工具**，而 `checkPermission` 只活在七個工具工廠裡。所以 deny 規則**擋不住記憶載入**：檔案內容照樣被注入 system prompt，同時模型被指示「學到東西就用 `edit_file` 存起來」——存去一個規則明文禁止它寫的檔。**讀得到、寫不回去**，而不是沒有記憶。
-
-     這是 [#66](https://github.com/DemianLi/nexus-agent/issues/66) 那件事的第三次現身：**規則表管工具，管不到 backend 方法**。差別在方向——offload 那邊是「該寫的沒寫成」，這邊是「該擋的沒擋住」，後者把檔案內容送進了模型的 context，比前者嚴重。
-
-     真正會造成「安靜地沒有記憶」的是**路徑寫錯**（`~`、相對路徑、`..`）。這一條因此收在 `@nexus/core` 的 `assertLoadableMemoryPath`：**在註冊期擋，不在跑起來之後**。放在 registry 而不是 plugin，是因為一道只有某個 plugin 做的檢查補不住一個「不經過那個 plugin 就沒人擋」的洞——也因此 `registry.memory` 原本「純累加、基座自理」的契約要跟著改。這跟 `permissions.deny()` 刻意不驗第二次是相反情況而非不一致：那邊基座自己會拋，這邊基座什麼都不做。
-
-     **對 dsh 的偏離（標註）**：dsh 的對應機制 `@deepseek-ai/dsh-agent-instructions` 收的是**檔名候選**（`['AGENTS.md', 'CLAUDE.md']`），`resolveInstructionFileCandidates` 把任何含 `/` 的候選連同 `RESERVED_PATH_SEGMENTS`（`''` / `'.'` / `'..'`）**靜默濾掉**——因為往上找 project root 的走查與 `~` / `$DSH_HOME` 的展開都由 loader 自己擁有。**這個形狀在 deepagents 上表達不出來**：`memory` 參數收的就是 backend 路徑，它的 loader 不走查也不展開任何東西。退到最接近的：**擋下 dsh 濾掉的同一組路段，但改成拋錯**。靜默濾掉在 dsh 那邊無害（濾完還有其他候選與走查），在這裡等於把唯一的來源刪掉，正好製造出這道檢查要防的那種靜默。
-
-  4. **subagent 拿不到 root 的記憶，而且沒有任何公開介面給得了。** `buildSubagentMiddleware(input, isForkable)` 只在 `isForkable` 為真時併入 root 的 memory middleware，`SubAgent` 定義上**沒有 `memory` 欄位**可以自帶（`createSubagentDefaultMiddleware` 有 `input.skills` 分支，沒有 memory 的）。general-purpose subagent 也一樣：它是一般的 subagent，走 `normalizeSubagentSpec`（`isForkable` 為 false）。（當時寫的是基座自己補的那份，它那次 `mergeMiddlewareStack` 帶 `{ appendNew: false }`；後來換成 `foldRegistry` 自己註冊的，因為基座那份連核准閘門都拿不到，見 `fold.ts` 的 `generalPurposeSpec`。）只有 `mode: 'fork'` 的 subagent 有。這跟下面 `feat/summarization-tuning` 記的「root 換掉不影響 subagent」是同一種邊界，要有絆索測試。
-
-  「多來源併入 prompt」的形狀斷言照舊補（[#32](https://github.com/DemianLi/nexus-agent/issues/32)）——這一條查過是真的：`formatMemoryContents(contents, sources)` 依 `sources` 順序串。
-
-- `feat/skills-plugin`：SKILL.md 來源 plugin。**progressive disclosure 是純 prompt，不是機制**——middleware 只把 name／description／path 注入 system prompt，然後用文字叫模型自己 `read_file`。動工前又查了一輪，原本的四條有兩條要更正、另外三條是原本沒寫的：
-
-  1. **skills 的讀取走 `permissions`——但不走我們的 fence。原文寫「與我們的 fence」是錯的。** `ContainedFilesystemBackend` 只在寫入路徑加 fence，讀一律通過（那是 Phase 2 的定案：讀的策略歸 `permissions`，兩層正交）。所以擋人的自始至終只有 `permissions` 一層。
-
-     「看得到、讀不到」本身成立，而且是這個擴充點的預設失敗模式：清單走 `listSkillsFromBackend` 的 `ls` / `downloadFiles`（**backend 方法，不經規則表**），正文走 `read_file` 工具（**經規則表**）。一條蓋到 skill 路徑的 deny 規則因此不會讓 skill 消失，只會讓它好端端列在 prompt 裡、模型每次去讀都被拒。已有測試（實測回傳 `Error: permission denied for read on /skills/<name>/SKILL.md`）。
-
-     這是 [#66](https://github.com/DemianLi/nexus-agent/issues/66) 那件事的第四次現身，但**後果比記憶那次輕**：記憶那邊 deny 擋不住整份內容進 context，這邊只有 name 與 description 進得去，正文真的擋住了。差別在於 skills 的兩條路一半經過規則表、一半不經過。
-
-  2. `allowedTools` frontmatter **解析了、印進 prompt、零強制**——原文寫「9 個出現點」，實測是 **7 個**（zod schema、解析、`formatSkillsList` 印一行），沒有一個是強制點。不能當權限用。
-  3. `module` frontmatter 只印一行 `await import("@/skills/<name>")`，**沒有東西實作那個 import**（全包 `@/skills` 只有那一個出現點）——[#64](https://github.com/DemianLi/nexus-agent/pull/64) 已記錄過同一件事。
-  4. **快取比 memory 更硬，但只在載到東西的時候。原文的「per-agent-instance，跨 thread 都不重載」兩個方向都不完整。**
-
-     - **空的不算。** 載入結果為空時 `loadedSkills.length > 0` 是 false，於是**每一次 `beforeAgent` 都重掃整個來源**。實測：有 skill 的來源兩次 `invoke` 只掃 1 次，空的來源掃 2 次。一個沒有 skill 的工作區是最貴的那種，這件事原文完全沒提到。
-     - **閉包與 state 是雙向的，不是單向快取。** 空閉包 + state 有 `skillsMetadata` → `loadedSkills = state.skillsMetadata`；非空閉包 + state 沒有 → 回寫 `{ skillsMetadata: loadedSkills }`。所以配上 checkpointer，一個**全新的 agent 實例**會從 thread 的 checkpoint 撿回舊 skills——「per-agent-instance」在有 checkpointer 時不成立。
-
-  5. **skills 與 memory 的 subagent 繼承規則正好相反。**（原本沒寫）`createSubagentDefaultMiddleware` 有 `input.skills` 分支，而 general-purpose subagent 被塞進了 root 的 `skills`——**它拿得到**（當時是基座自己補那份時在 `normalizeSubagentSpec` 塞的，現在是 `foldRegistry` 註冊時照抄的）；自訂 subagent 沒人幫它塞，要自帶 `skills` 才有。基座註解明說：「Custom subagents do NOT inherit skills from the main agent by default. Only the general-purpose subagent inherits the main agent's skills.」
-
-     對照上面 `feat/memory-plugin` 第 4 條：memory 只有 `mode: 'fork'` 的 subagent 拿得到，general-purpose **拿不到**。淨結果是同一組 subagent 上兩個擴充點互為反面——**fork 有 root memory 沒 root skills，general-purpose 有 root skills 沒 root memory**。已有兩條絆索釘著。
-
-  6. **基座驗證 skill 的名字，但驗完不擋。**（原本沒寫）`validateSkillName` 檢查 kebab-case、長度、以及「`name` 必須等於目錄名」，任一條不過都只是 `console.warn`，**metadata 照樣進清單**。三種失敗還是三種音量：讀不到（`ls` 失敗 / `SKILL.md` 讀不到）**完全無聲**、frontmatter 壞掉有 `console.warn`、名字不合規範有 warn 但照收。
-
-  7. **來源路徑的註冊期檢查比照 memory，但規則不同**（`assertLoadableSkillsPath`，`@nexus/core`）。**不能重用 `assertLoadableMemoryPath`**：那個明文拒絕結尾斜線（「記憶來源是檔不是目錄」），而 skill 來源**就是目錄**，基座還會自己補斜線。路徑寫錯的下場是 prompt 裡出現 `(No skills available yet...)`，字面上像「這個工作區還沒有 skill」，實際上是「那個目錄根本不存在」——比記憶那邊的 `(No memory loaded)` 更難察覺。順帶刻意收窄一格：基座支援 `\` 分隔，我們擋掉，理由是 backend 命名空間不是宿主檔案系統。
-
-     **接受結尾斜線就得讓重複檢查跟上。** `/skills/` 與 `/skills` 是同一個目錄，而 `skills` 註冊點的重複檢查原本拿原字串當 key——兩個 plugin 各寫一種就兩筆都進去，基座載兩次只會讓同名 skill 自己覆蓋自己，正好是那個檢查要擋的事。改成 **key 用正規化後的、value 留 plugin 寫下的原文**：交給基座的仍是原文，撞名看的是目錄。
-
-  **對 dsh 的偏離（標註）**：dsh **有**這個 seam，而且比 deepagents 完整得多——`packages/skill/` 下四個套件（`skill` 純註冊表、`skill-filesystem` 本地提供方、`tool-skill` 面向模型的 loader、`skill-badge`）。三格表達不出來：
-
-  - **progressive disclosure 在 dsh 是真機制**：`ctx.skills.get(name)` 由 loader 工具執行、每次載入重讀當前檔案，所以「正文編輯不需要 hash、修訂號、快取失效」。deepagents 這邊正文讀取是模型呼叫 `read_file`，那一格意外地同向；真正不同向的是**目錄**——dsh 有 Chokidar watcher 失效，deepagents 載到就凍住。退到：絆索釘住「目錄凍住」。
-  - **調用策略是 fail-closed**：dsh 的 `disable-model-invocation` / `user-invocable` 遇到駝峰拼寫或非布林值會**把整個 skill 從發現結果排除**，理由明文寫著「忽略無效資料可能在已停用的介面上暴露 skill」。deepagents 的 frontmatter 解析整個關在 `parseSkillMetadataFromContent` 裡，plugin 這側碰不到。退到：不動基座行為，用絆索釘住「不合規範的名字照樣進清單」。
-  - **rank 與預設根**：dsh 收的是 `customSkillDirs`（**額外**根），疊在五個 rank 過的預設根之上（project `.dsh/skills`=100、`.agents/skills`=200、custom=300、user `<dshHome>/skills`=400、`<agentsHome>/skills`=500），project root 由「最近含 `.git` 的祖先」走查決定。deepagents 的 `skills` 就是一組平等的 backend 路徑，沒有 rank、沒有走查、沒有 `$DSH_HOME`。退到：照 `sources` 的有序 last-wins，把 rank 語意能保留的唯一一格（順序即優先序）寫進 plugin 文件，並在註冊期擋掉 dsh 的 `RESERVED_PATH_SEGMENTS` 那一組路段。
-
-  skills last-wins 的形狀斷言照舊補（[#32](https://github.com/DemianLi/nexus-agent/issues/32)）——這一條查過是真的：`allSkills.set(skill.name, skill)` 依 `sources` 順序覆蓋。**但只說對一半**：`Map` 的迭代順序是**第一次**插入的順序，所以覆蓋換的是內容與路徑，**不換它在清單裡的位置**。斷言要照這個形狀寫。
-
-- `feat/summarization-tuning`：**基座上沒有「參數化」這個參數。** `createSummarizationMiddleware({ backend })` 被無條件寫死進 root 與每一個 subagent 的 stack，`CreateDeepAgentParams` 上沒有任何 summarization 欄位。唯一的縫是 `mergeMiddlewareStack` **按 `.name` 原地取代**：自己建一個同名（字串 `"SummarizationMiddleware"`）的 middleware 從 `middleware` 參數傳進去，就換掉內建那個。fold 這一側是通的（`foldMiddleware` 只做 `prepend` 排序，不包不改）。動工前又查了一輪，原本的兩件變成**四件**：
-
-  1. **這條縫掛在一個字串上**，要有絆索測試——基座改名或改合併語意時它該紅。**而且絆索要斷言「取代」而不是「有生效」**：兩者在行為上分不出來，差別只在內建那個還在不在（還在的話對話會被摘要兩次）。實測是原地取代——stack 仍是四個、位置沒動、`SummarizationMiddleware` 那一格換成我們的。
-
-  2. **這條縫的價值不只是「換掉」，而是它是唯一的設定入口。**（原本沒寫）`historyPathPrefix` 是 `createSummarizationMiddleware` 的選項（預設 `/conversation_history`），`trigger` / `keep` / `summaryPrompt` / `trimTokensToSummarize` 也都是——而基座無條件建的那個**只吃 `{ backend }`**。所以同名取代不是「調校的手段之一」，是**唯一**能碰到這些參數的路。原文把 `/conversation_history` 當成寫死的常數，那是錯的。
-
-  3. **root 換掉不影響 subagent。** `createSubagentDefaultMiddleware` 每個 subagent 各建一份新的，`buildSubagentMiddleware` 只併 `input.middleware`。而長任務的 token 大戶正是 subagent，所以「長任務 token 控制」靠換掉 root 那個是**結構上就不完整的**——要嘛每個 subagent 定義自己帶，要嘛承認這個邊界並寫下來。已有絆索。
-
-     **`harnessProfile.excludedMiddleware` 是第二條縫，但它不是這個邊界的解法。**（原本沒寫）`REQUIRED_MIDDLEWARE_NAMES` 只有 `FilesystemMiddleware` 與 `SubAgentMiddleware`，所以排除 `SummarizationMiddleware` 是被允許的，而 `buildSubagentMiddleware` 結尾那個 filter 讓排除**對每個 subagent 都生效**——射程確實比同名取代大。但兩件事讓它出局：它只能**排除**不能替換（排掉等於 subagent 完全沒有摘要，長對話直接爆 context），而且它走的是**全域 profile registry**（`registerHarnessProfile` / `resolveHarnessProfile`）、靠 model spec 字串或 provider hint 查表，`CreateDeepAgentParams` 上沒有這個欄位。那是全域可變狀態加模型識別綁定，不是組裝點的參數，更不是 plugin 表達得出來的東西。
-
-  4. **offload fail-open 的測試收在這張 PR。**（原本沒指派給任何一張）機制全在這裡，不收進來就會夾在兩張 PR 中間掉下去。詳見下面「跨 Phase 的坑」。
-
-- **跨 Phase 的坑（Phase 2 埋的）**：summarization 的 offload 寫到 `/conversation_history`。我們的 `ContainedFilesystemBackend` 在 `read-only` mode 下會擋掉它——而基座對 offload 失敗是 **fail-open**：`console.warn` 之後照樣把訊息換成摘要（`Proceeding with summary generation.`）。也就是**完整歷史靜默消失，只留一行 warn**。已收進 `feat/summarization-tuning` 並有測試（實測 warn：`Failed to offload conversation history to /conversation_history/session_*.md: [containment] 拒絕 write ...`，而四次 invoke 全部正常回話）。
-
-  **原文寫「走 backend 的 `uploadFiles`」只對了三分之一。** `offloadToBackend` 有三條分支：沒有既有檔走 `write()`、有既有檔且 backend 有 `uploadFiles` 走 `uploadFiles()`、有既有檔但沒有 `uploadFiles` 走 `edit()`。三條我們的 fence 都覆寫了，所以三條都擋得住——結論不變，但理由要對。
-
-  **而 `/conversation_history` 有第二個寫入者，比這個更安靜。**（原本完全沒寫）`createFilesystemMiddleware` 的 `beforeAgent` 有一條**超大 human message 的 eviction**：最後一則 human message 超過 `4 * humanMessageTokenLimitBeforeEvict` 字元（預設 `5e4`，即 20 萬字元）時，把它寫進 `/conversation_history/<uuid>` 並在送進模型時換成一句佔位。兩個差別都往壞的方向：**路徑寫死**（不吃 `historyPathPrefix`，同名取代那條縫救不了它），**失敗完全靜默**（`if (writeResult.error) return;`，連 `console.warn` 都沒有）。
-
-  而它失敗的**方向跟直覺相反**：fence 擋住的時候不是「原話消失」，是原話**原封不動**送進模型——20 萬字元直接灌進 context，正是 eviction 本來要避免的事。已有兩條測試（可寫時落檔一個檔、模型只收到 `Message content too large`；`read-only` 時零落檔、原話完整進 prompt）。
-
-  兩個寫入者都要在 Phase 3 有測試，不能等它們在長對話裡自己發生——現在都有了。
-
-  **而 `permissions` 對這條路完全沒有作用**——`checkPermission` 只在七個工具工廠裡被呼叫（`createWriteFileTool` / `createEditFileTool` / `createReadFileTool` / `createLsTool` / `createGlobTool` / `createGrepTool` 與 delete 那條），**不在 backend 方法上**。`uploadFiles` 是 backend 方法、不是工具，所以 offload 從來不經過規則表：一條蓋到 `/conversation_history*` 的 deny 規則**擋不住它**，歷史照樣寫進一個規則名義上禁止的路徑。這正好是 `contained-backend.test.ts` 那句「讀不經過 fence——讀的策略歸 permissions，兩層正交」的另一面：**寫不經過 permissions，寫的圍堵歸 fence**。
-
-  兩件事都要在 Phase 3 有測試，不能等它們在長對話裡自己發生。
-
-- **`feat/summarization-tuning` 的動工前一驗（第十二次）：上面那四點與「跨 Phase 的坑」**已經**在 [#70](https://github.com/DemianLi/nexus-agent/pull/70) 落地了**（`test: 釘住摘要層的設定入口與兩個歷史寫入者的靜默失敗`）—— 同名取代的絆索、subagent 邊界、offload fail-open 的兩條、eviction 那個第二寫入者的兩條，全在 `summarization.test.ts` 裡。**這張因此不是一張 feat，是三件收尾**：
-
-  1. **`permissions` 那個洞只有散文，沒有行為證據** —— 而它是最該有證據的那一種：一條寫對的規則看起來在保護一個它碰不到的東西。實測的四格對照：同一條 `deny(['/conversation_history*', '/conversation_history/**'])`，**經工具**（`write_file` 寫 `/conversation_history/x.md`）換來 `Error: permission denied for write`、磁碟零檔案；**經 backend 方法**（summarization 的 offload）`session_*.md` **照樣寫進去**。同一條規則、同一個路徑、兩個呼叫者、相反的結果。→ 這條測試補進去，並把 `permissions.test.ts` 檔頭那句「無規則命中即 allow」補上更大的那一半：**backend 方法根本不經過規則表**。
-
-  2. **`read-only` ✕ 長對話的三選一，決定是「(c) 為預設 ＋ (b) 為逃生口」。** (a)「組裝期擋下這個組合」**在結構上不可行**：summarization 是被無條件加進 stack 的，所以「read-only ＋ summarization」就是**每一個** read-only 組裝，擋掉它等於禁用 read-only 這個 mode 本身 —— 連根本不會觸發摘要的短對話也一起禁掉。所以預設是 (c)：**`read-only` 就是不留歷史**，寫進 `ContainedFilesystemBackend` 的文件。
-
-  3. **而 (b) 這條逃生口是真的存在的，實測過**：`createSummarizationMiddleware` 的 `backend` **是獨立的一格**，不必是 agent 的那個。預設 backend 用 `read-only`、摘要器指向另一個 `workspace-write` 的 backend，實測唯讀根一個檔案都沒多、歷史落在另一個根裡、四輪對話全部正常回話。→ 這是 `historyPathPrefix` 那條路之外更直接的一條，而且它連 `backend.mount()` 都不需要。**代價要寫清楚**：走這條就得自己建摘要器，也就等於接管 `trigger` / `keep` 的預設值。
-
-- 驗收：**跨 thread 記憶保留**——注意這一條**不是 checkpointer 能滿足的**（它是 thread 內的狀態），要靠落磁碟的 backend，或把 `store` 包成 `StoreBackend` 當 backend 用。**`store` 參數本身對記憶是惰性的**：memory middleware 不碰 `store`，`StoreBackend.getStore()` 才從 LangGraph 的執行 context 把它取出來——所以那不是「兩個選項」，是「backend 這一軸的兩種選法」。長對話在 token 上限內完成多步任務，且 `/conversation_history` 真的寫得出來。
+**整節搬到 [`development-plan-phase-3.md`](development-plan-phase-3.md)**（#364）。
 
 ### Phase 4 — HITL + 可觀測性 + 反思（約 3 個 PR）
 
@@ -334,133 +310,7 @@ apps/web                 輸出層：對話 + 事件流 + HITL 核准 UI（線�
 
 ### Phase 5 — Web UI + 評測（約 3–4 個 PR）
 
-**動工前先驗過一輪**（`deepagents@1.13.1`、`langchain@1.5.10`、`@langchain/core@1.2.9`、`langsmith@0.9.0`，以下每一條都是實測，探針跑完即棄）。
-
-- ~~`feat/web-chat-stream`：apps/web 對話介面 + typed event stream 呈現（含 subagent 事件）。~~ **這一句的三個部分壞的方向各不相同。**
-  - **「typed event stream」是基座內建的，而且入口是 v3 不是 v2。** `DeepAgent.streamEvents(state, { version: "v3" })` 回一個 `DeepAgentRunStream`。**實際跑過的投影**：`messages`（逐則訊息的 token 串流）、`toolCalls`（`.input` / `.output` / `.status`）、`subagents`、`values`、`output`、`interrupts`、`interrupted`、`subgraphs`（吐 agent 自己的內部節點，`path` 形如 `["model_request:<uuid>"]` / `["tools:<uuid>"]`）、`extensions`（沒註冊 transformer 時是 `{}`）。**JSDoc 列了 `middleware`，但 1.13.1 的 run 物件上沒有這個東西**（實測 `typeof run.middleware === "undefined"`）；反過來，實際有而 JSDoc 沒列的是 `lifecycle`（`{ namespace, timestamp, event, graph_name }`，一次跑吐 8 筆）與 `messagesFrom`。**要用哪個投影，以 run 物件上真的有的為準，不要照 JSDoc 抄。**基座自己的 JSDoc 寫著：預設那條 legacy stream「should not be used for new user-facing agent streaming」，而 v3「will become the default in a future major release」。Phase 4 記下的「v2 沒有被標成 deprecated」是真的，但它會誤導 —— 沒被標 deprecated 不等於該拿它做面向使用者的串流。**同一段 JSDoc 也寫著 v3「experimental and its API may change in future releases」**，那句話與第 4 節把 `deepagents` 釘在 `~1.13.1`（放行 patch）撞在一起，見第 7 節決策 1。
-  - **`streamTransformers` 是第十個擴充點。** `CreateDeepAgentParams.streamTransformers` 原樣轉交 `createAgent`，產物落在 `run.extensions`。第 1 節寫的是「九個註冊點在 Phase 1 一次到齊」，而 1.13.1 的參數表上是十個。**`streamTransformers` 是哪個版本加進來的沒查**，所以「Phase 1 當時漏了」或「是後來才有的」兩種都還開著 —— 缺口本身跟這個無關，反正現在少一個。**這次不補**，照 [#70](https://github.com/DemianLi/nexus-agent/pull/70)–[#73](https://github.com/DemianLi/nexus-agent/pull/73) 的先例：釘住邊界，不順手加擴充點。
-  - **「含 subagent 事件」不用自建 —— 這句在 in-process 那條路上對，在線上只對一半。** root 呼叫 `task` 派給名為 `writer` 的 subagent，`run.subagents` 吐出 `{ name: "writer", cause: { type: "toolCall", tool_call_id: "call_0" }, messages }`，subagent 自己那幾輪的訊息串流是分開的一條。**對照組**（一個 subagent 都沒註冊）吐零筆而且 iterator 正常收掉 —— 少了這一組，「`run.subagents` 其實是把 root 自己的內部節點也吐出來」也會過。
-    → **動工前一驗（第九次）：那個投影不在線上，而且它連 namespace 都沒有。** 實測 `run.subagents` 吐的物件只有 `name` / `cause` / `output` / `messages` / `toolCalls` / `subagents` 六個鍵 —— **沒有 `path`**。`name` 與 `cause` 是投影層算出來的，協定 frame 上一個字都沒有：subagent 的訊息在線上長成 `namespace: ["tools:<uuid>", "model_request:<uuid>"]`，那個 `tools` 是節點名不是 subagent 名。所以**線上這一端必須自己 join**：巢狀 frame 的 `namespace[0]` ↔ 帶著同一個 namespace 的 `tools` frame ↔ 它的 `tool_call_id` 與 `input.subagent_type`。
-    → **這個 join 是可靠的，而且平行 subagent 也分得開。** 一輪裡派兩個 `task` 出去，實測**每個呼叫拿到自己的 `tools:<uuid>`**（`tools:87e1…` 與 `tools:3dc7…`），兩條訊息串流逐字交錯但前綴不同，`run.subagents` 那側對應的 `cause.tool_call_id` 分別是 `call_1_0` 與 `call_1_1`。→ 折疊器（`packages/nexus-wire` 的 `conversation.ts`）做這個 join，**兩個口子明著定死而不是猜**：訂閱沒帶 `tools` channel 時，巢狀訊息標成「未歸屬」而不是掛到隨便一個 subagent 上；重連之後 `tools` frame 已經過去了（沒有重播、沒有歷史重抓，見決策 6），同樣標成未歸屬。**寧可說不知道，不要說錯。**
-  - **`ScriptedChatModel` 在 v3 這條路上是瞎的，而且是靜默的。** 同一份腳本：`invoke` 與 v2 `streamEvents` 都跑到工具；**v3 只跑一輪模型就結束，工具從沒被呼叫，`run.toolCalls` 是空的，而且沒有任何東西拋錯**。原因是兩段接不上 —— v3 掛的 callback handler 讓 `_generateUncached` 走 `_streamChatModelEvents` 那一支（`@langchain/core@1.2.9`，`chat_models.js:231`），而它的預設實作是 `convertChunksToEvents(this._streamResponseChunks(...))`，那個轉換器**只讀 `msg.tool_call_chunks`、從不讀 `msg.tool_calls`**（`compat.js:174`），我們的假模型偏偏把工具呼叫掛在後者。第二個坑緊接著：`tool_call_chunk` 的 `index` 與文字 content block 共用同一個編號空間，`index: 0` 會撞上那段文字的 block 並把它寫壞（實測 `index: i` 不通、`index: i + 1` 通）。
-    → **已修**（[#75](https://github.com/DemianLi/nexus-agent/pull/75)）：`_streamResponseChunks` 改吐 `tool_call_chunks`、`index` 從 1 起跳，配一組雙路徑對照測試（`stream-parity.test.ts`）。反向驗過兩次：退回 `tool_calls` 六條全紅；`index` 退成 0 四條紅，而且單一呼叫時工具**完全沒跑**（比原本記的「文字被寫壞」更嚴重），兩個呼叫時只有 `index: 1` 的那筆活下來。在它修好之前，任何走 v3 的 Phase 5 測試都是綠的而且什麼都沒驗到。這也是 [#32](https://github.com/DemianLi/nexus-agent/issues/32) 那份「假模型與基座真實行為悄悄分歧」清單上第一個真的被抓到的分歧 —— 而它是被 CI 抓不到的那種：分歧發生時測試不會紅，會靜靜地少驗一半。
-  - **`apps/web` 與 agent 之間沒有線，而計劃從沒記過要選哪一條。** 現有骨架是純 Vite + React：沒有 server、沒有相依 `@nexus/harness`、沒有任何 HTTP / SSE / WebSocket。agent 跑在 Node（backend、MCP 的 stdio 子行程、QuickJS 的組裝都在 Node 這側），所以中間一定要有一段傳輸 —— 那是一個決策點，「現有骨架續用」把它藏起來了。**`deepagents` 確實有 `./browser` 進入點，但那不是「整包搬進瀏覽器」的許可**：機械比對兩份 `.d.ts` 的匯出，browser 少掉的正好是 16 個 Node 專屬的名字（`FilesystemBackend`、`LocalShellBackend`、`Settings` / `findProjectRoot` / `listSkills` / `parseSkillMetadata`、`createAgentMemoryMiddleware`、`createSubAgent` 等），而我們的 `ContainedFilesystemBackend` 正是繼承 `FilesystemBackend` 的那一個。
-    → **已拍板並實作，見第 7 節決策 6**：上行 HTTP POST、下行單向事件串流（先做 SSE）。這一項因此是**兩張 PR** —— `feat/web-transport`（server 端的 pump ＋ 兩個方向的線，不含 UI）與 `feat/web-chat-stream`（UI）。**動工前一驗又推翻了依據的一半**：這條線不必自己發明，`@langchain/protocol`（`@langchain/langgraph` 的直接相依，早就在 `node_modules` 裡）已經把封包、channel 名、SSE 的 route 與 HITL 的兩個 method 都規格化了，而 v3 的 run 物件**本身就是 `AsyncIterable<ProtocolEvent>`**，吐出來的 frame 全部可 JSON 序列化。詳見決策 6。**已落地的與明著沒做的**：`packages/nexus-wire`（協定型別、SSE codec、route 與 channel 白名單、瀏覽器端 client）、`@nexus/harness` 的 `ThreadPump` ＋ 不綁 port 的 handler ＋ `node:http` 載體、`apps/web` 的連線接點；**沒有任何可執行的進入點**（沒有 `serve` script、CLI 也沒接），所以 `feat/web-chat-stream` 的第一件事就是補它——那需要決定跑哪份 plugin 清單、哪個模型、哪個 port，屬於 UI 那張的組裝決定。
-- `feat/web-hitl`：核准 UI（對應 interrupt）。**混合批次要當成全有全無**：基座在一批裡只要有一筆被拒，被核准的那幾筆會靜靜地不執行、還會從歷史裡消失（見 Phase 4 那條），所以逐筆按的介面會生出一種「按了核准卻等同從沒問過」的狀態，而那件事在畫面上看不出來。**動工前一驗（第十次）**：原本記的三條，一條在 [#77](https://github.com/DemianLi/nexus-agent/pull/77) 之後**結構上到不了了**，兩條成立但不完整；另外量到三件原本沒問的事。
-  - → **「混合批次當成全有全無」的理由在 2026-08-30 消失了**（[#111](https://github.com/DemianLi/nexus-agent/issues/111) ／ [#112](https://github.com/DemianLi/nexus-agent/pull/112)）：閘門改成逐次呼叫判之後，一批裡一個被拒不再抹掉其他筆（`apps/harness/src/interrupt.test.ts` 的「一個被拒不再拖累另一個」）。介面現在仍然一批送一個決定（`uniformDecisions`），但那從此是「還沒做」而不是「不能做」。留著上面那段是因為它記的是當時真的量到什麼。
-  - **核准 UI 要顯示的東西，基座已經整理好了 —— 但 `reviewConfigs` 是逐筆的。** `run.interrupts` 吐 `{ interruptId, payload: { actionRequests: [{ name, args, description }], reviewConfigs: [{ actionName, allowedDecisions }] } }`，`allowedDecisions` 就是第 1 節那套封閉詞彙，讀 payload 就是。**補量到的是它的基數**：`reviewConfigs` 與 `actionRequests` 是平行陣列，**逐筆詞彙真的分得開**（實測同一顆中斷上 `alpha: ["approve","reject"]`、`beta: ["approve"]` 各自出現在自己那一筆）。全有全無的介面因此要取**逐筆交集**——不是 `[0]`、也不是聯集：`processDecision` 對不在那一筆清單裡的決定是 `throw`（`hitl.js:407`），多出來的那顆「拒絕」按鈕按下去是整場 run 死。經由**我們的** fold 這種分歧到不了（`packages/nexus-core/src/fold.ts` 對每個 gated tool 固定發 `["approve","reject"]`），所以在折疊器那一層它是**要斷言的不變量**，不是可以依賴的前提。
-  - ~~**暫停時 `await run.output` 會炸，而且炸得沒有意義**~~ **→ 這個陷阱在 [#77](https://github.com/DemianLi/nexus-agent/pull/77) 之後結構上到不了了。** 原文把它記在「核准 UI 那一端」，但線接起來之後核准 UI 在線的**另一側**，一個 run 物件都看不到；pump 抽的是 raw iteration，中斷時乾淨結束，從頭到尾不碰 `run.output`。**不是當初量錯，是被 pump 的設計吸收掉了**——絆索留在 pump 那側（決策 6 第 4 條），這一端不必再防。
-  - **接得回去，而且不必換路。** `streamEvents(new Command({ resume: { decisions: [{ type: "approve" }] } }), { version: "v3" })` 實測跑得通：工具真的執行、ToolMessage 的 `status` 是 `success`。所以一場對話從頭到尾只有一條呼叫路徑，不會變成「串流用 `streamEvents`、核准用 `invoke`」。**線上補量到的**：resume 那個 run 會發 `lifecycle running / root`，被核准的那筆真的跑出 `tools tool-started` / `tool-finished`。
-  - **`decisions` 是位置對應的，長度不符會殺掉整場 run。** 基座逐 index 把 decision 配到被中斷的那幾筆工具呼叫上，`decisions.length !== interruptToolCalls.length` 當場拋。線上實測是 `lifecycle failed / root`，`error` 就是那句話 —— 瀏覽器看得到死因，但那一輪已經死了。→ 全有全無送出時要送 `actions.length` 筆同型決定；上行這一側順手擋下來，一個客戶端的 bug 不該換來一條死掉的 thread。
-  - **只拒絕、或混合批次，下行一顆 frame 都沒有。** 中斷發生在 `afterModel`，tools node 從沒跑；那則人造的 error ToolMessage 走 `updates`（白名單外）。實測「全拒絕」與「一核准一拒絕」在下行上**一模一樣**：只有模型再講一輪話，`tools` frame 零顆，工具一次都沒跑。→ 兩件事：①混合批次那個「被核准的靜靜消失」在線上**連痕跡都查不到**，比 in-process 那條更強，全有全無因此不是偏好、是必要；②**人按了什麼只有本地記得** —— 下行不回聲決定，所以它要像 `appendHumanTurn` 那樣在送出的那一刻自己寫進 transcript，那不是裝飾，是唯一的紀錄。
-    → **這一條的機制描述從 2026-08-30 起只對基座成立**（[#111](https://github.com/DemianLi/nexus-agent/issues/111) ／ [#112](https://github.com/DemianLi/nexus-agent/pull/112)）：產品路徑的中斷在 `wrapToolCall` 裡（`packages/nexus-core/src/approval.ts`），不在 `afterModel` —— 排在被擋工具**前面**的那些在人被問到時已經跑完了，`tools` frame 因此產得出來。①那條「全有全無不是偏好、是必要」的理由跟著消失（同上一條 `→`：「那從此是『還沒做』而不是『不能做』」）；②那條（人按了什麼只有本地記得）不受影響。原量測留著，因為它記的是當時真的量到什麼。
-  - **等核准時再送一句話，中斷被靜靜丟掉。** 實測對停在核准點的 thread 送 `run.start`：新的一輪照跑（`patchToolCallsMiddleware.before_agent` 補掉懸空的工具呼叫），那個工具**既沒執行也沒被拒絕**，而且**不會再發第二顆 `input.requested`** —— 核准請求就這樣蒸發了。而 [#78](https://github.com/DemianLi/nexus-agent/pull/78) 的 UI 正好到得了這個狀態（`busy` 只看 `running`）。→ UI 那側禁用送出，上行這側明著回錯而不是靜靜照做（同 `since` 那條的理由：靜靜忽略會生出看不見的斷檔）。
-  - **驗收句有一個沒寫出來的交付項。** Phase 5 的驗收是「瀏覽器完成提問 → 看事件流 → **核准工具** → 收結果」，而預設 plugin 清單不觸發任何中斷 —— 沒有一份帶 `interruptOn` 的清單，那半句在瀏覽器裡跑不出來。所以這張 PR 要交一份進版控的 fixture 清單模組，README 把那道 `--plugins` 指令寫死。
-- `feat/eval-suite`：LangSmith evaluators 跑基準任務 —— 補強項 3。模型供應商的品質與成本比較掛在這裡（[#31](https://github.com/DemianLi/nexus-agent/issues/31)）：同一組基準任務跑 Anthropic 與 DeepSeek，比工具呼叫成功率、參數正確性、token 成本。**「CI 沒憑證所以驗不了」第二次是錯的**（第一次是 [#72](https://github.com/DemianLi/nexus-agent/pull/72) 的 tracing），但這次的界線比較細：
-  - `langsmith/vitest` 的 `ls.describe` / `ls.test` **完全不連外、也不要 key**（實測跑得過，評分函式的本體真的執行）。evaluator 的邏輯與資料集的形狀因此進得了 CI。**原文把不連外的原因記在 `LANGSMITH_TEST_TRACKING=false` 上，那是記錯了對象** —— 見下面第十一次。
-  - `langsmith/evaluation` 的 `evaluate()` 則**一定連外**：對著 loopback 假端點實測，任何 evaluator 跑起來之前它就已經發了 `POST /sessions`、`GET /datasets/<id>`、`GET /sessions`。`data` 收得下記憶體裡的 `Example[]`（資料集不必是託管的），但那個 experiment 必須是。
-  - → 照 Phase 0 的切法分兩段：**evaluator 與資料集形狀進 CI，零憑證**；**`evaluate()` 的編排與 #31 的供應商數字是一次性人工驗證**，記進 PR 內文的「驗證方式」。
-  - **動工前一驗（第十一次）：CI 那半的護欄記錯了對象，live 那半的前提整個不存在。**
-    → **不連外的原因不是 `LANGSMITH_TEST_TRACKING=false`，是 `LANGSMITH_TRACING` 沒設。** 對 loopback 假端點四組對照（`langsmith@0.9.0`、`vitest@3.2.7`）：不設 `LANGSMITH_TRACING` 時**零連外**，帶不帶那支旗標、帶不帶 `langsmith/vitest/reporter` 都一樣；`LANGSMITH_TRACING=true` 而**不**設旗標則發出 `POST /sessions` 與 `GET /datasets?limit=1&name=<suite>`，而且**整個測試檔失敗、測試被 skip**（`Must provide either datasetName or datasetId` —— 開了 tracking 的 `ls.test` 要一份託管資料集）；`LANGSMITH_TRACING=true` ＋ 旗標則零連外且通過。所以今天 CI 乾淨是因為 **CI 不設 `LANGSMITH_TRACING`**，那支旗標是 tracing 打開之後才開始承重的護欄 —— 而 [#72](https://github.com/DemianLi/nexus-agent/pull/72) 的披露正是在教開發者把 tracing 打開。→ 旗標由套件**自己在模組頂層設**（實測是延遲讀取的，不必搶在 import 之前），不靠環境。
-    → **絆索要斷言「跑了幾條」，不是「沒連外」。** 上面那個壞掉的情境，症狀是 **skip** —— 被 skip 的測試同樣不發請求，所以一條只看 loopback 請求數的測試，在它要防的那個情境下照樣全綠。這與 [#79](https://github.com/DemianLi/nexus-agent/pull/79) 那個 `status === 'idle'` 停止條件是同一型的假綠。判準因此是**執行計數**，並在環境裡把 `LANGSMITH_TRACING=true` arm 起來跑最壞情況；零請求只當附帶斷言。
-    → **供應商比較的前提沒有一條成立，這一半封鎖。** ①**沒有 Anthropic 這條路**：`@langchain/anthropic` 不在任何 `package.json` 裡，`.env.example` 只有 `NVIDIA_API_KEY`，`live-model.ts` 只有一個寫死的供應商 —— 「跑兩家」缺的那一家是一段從沒被記過的工作。②[#61](https://github.com/DemianLi/nexus-agent/issues/61) 開著且標 `ready-for-human`：DeepSeek 官方端點的帳號與 key 是人工步驟，agent 做不了，`@langchain/deepseek` 也還沒裝。③**更前面的那一條**：#31 定的是三段收斂，而 Phase 2 那道「不相容則 DeepSeek 當場出局」的二元閘門**從沒跑過** —— Phase 5 的比較預設它過了關，那個前提不是延後，是不存在。
-    → **[#57](https://github.com/DemianLi/nexus-agent/issues/57) 今天複驗仍然重現，但它的選項表已經過期。** 2026-08-27 對同一個端點實測：`deepseek-ai/deepseek-v4-flash-0731` 60 秒零回應（同 #57）；#57 記的替代品 `meta/llama-3.1-8b-instruct` **已經從端點上消失**（`410 Gone`，0.2 秒，`/models` 清單也沒有它了，模型總數 95 → 84），所以選項 2 照原文寫的做不了；但清單上**多出一個同系列的 `deepseek-ai/deepseek-v4-pro-0813`**（#57 當時明寫「沒有可以原地替換的同系列選項」），實測 `200`、37 秒回得出東西。→ 當時判給 #57 決定。**2026-08-28 決定換**：`LIVE_MODEL_ID` 已改成 `deepseek-ai/deepseek-v4-pro-0813`，換之前補驗了帶 `tools` 的那一關（`finish_reason: tool_calls`、參數是合法 JSON —— 光看 200 不算，這條路整條的用途就是工具呼叫）。
-    → **所以這張 PR 不寫 `evaluate()` 的編排。** 它一定連外、而且沒有可跑的供應商，寫了就是一段從沒被執行過的程式碼；而 `evaluate()` 連外那條實測來自 [#72](https://github.com/DemianLi/nexus-agent/pull/72) 那次，這張沒有複驗，省掉這段就不必複驗。CI 那半的載體因此是 `ls.test` 而不是 `evaluate()`：資料集、評分器、runner 都真的跑，只有模型是 `ScriptedChatModel`。**評分器寫成對「跑完的結果」的純函式**，不寫成 LangSmith 的 evaluator 簽章 —— 反過來寫的話 CI 這半要呼叫它就得先偽造 `Run` / `Example`，而那正是資料集形狀會靜靜漂走的地方。
-    → **實作時又量到一件：連外的寄件人有兩個，開關也是兩個。** 把最壞情況 arm 起來
-（loopback 端點 ＋ `LANGSMITH_TRACING=true`）跑這套 eval，`ls.test` 那個寄件人閉著嘴，
-但 loopback 照樣收到 `GET /info` 與（批次過的）`POST /runs/multipart` —— 那是**真的 agent run**
-自己的 `LangChainTracer`（[#72](https://github.com/DemianLi/nexus-agent/pull/72) 記的「tracing 被動生效」），
-與 `LANGSMITH_TEST_TRACKING` 毫無關係。→ 這也是 **CI 不得設 `LANGSMITH_TRACING`** 的實質理由：
-eval 跑的是真的 agent，基準任務的題目與工具參數會跟著 trace 一起出境。斷言因此分成兩條，
-一條要求零、一條要求非零。
-    → **token 成本這一項在 CI 原本沒有路。** `ScriptedChatModel` 完全不吐 `usage_metadata`（grep 零筆），所以成本評分器會是三個指標裡唯一沒有對照組的那個。→ 假模型補上逐輪的 `usage_metadata`，並把「基座把它原封帶到最終狀態」釘成絆索。
-  - **決策（2026-08-28）：比較的形狀換掉了，這一半因此不再是封鎖，是還沒跑。** 不比兩家供應商，改成**同一個 NVIDIA 端點上的三個尺寸級距**：9B 以下、26–35B、100B 以上。三個都走同一個 `@langchain/openai`、同一把已經在用的 `NVIDIA_API_KEY` —— 不必開帳號、不必接第二家，上一條那三個「前提不成立」因此全部繞開，而不是被解決。剩下的是小工作：`createLiveModel()` 參數化成收得下三個 id（現在是一個常數）、`runBenchmarkCase` 跑三遍（model 在 [#80](https://github.com/DemianLi/nexus-agent/pull/80) 已經是參數）、數字記進 PR 內文的「驗證方式」。**「封鎖」與「還沒跑」在這份文件裡不能混** —— 前者是驗收判定不了，後者只是工還沒開，而 [#31](https://github.com/DemianLi/nexus-agent/issues/31) 的病灶正是這兩句被寫成同一句。
-    → **級距的 id 已釘，但盤點推翻了「三個桶子都有候選」這個前提。** 2026-08-28 拿 `GET /models` 的**全部** id 逐一送一個帶 `tools` 的請求（配 90 秒逾時，併發 4）：清單列 **84** 個，這把 key 只叫得動 **29** 個（其餘一律 `404 "Not found for account"` —— **清單是型錄，不是權限**），其中真的回得出 `finish_reason: tool_calls` 的只有 **14** 個。**「9B 以下」那一格是空的**：叫得動又支援工具的最小模型是 `openai/gpt-oss-20b`（總量 20B），所有 8B 以下的候選（`mistral-7b-instruct-v0.3`、`granite-3.0-8b-instruct`、`gemma-3-4b-it`、`zamba2-7b-instruct`）全部 404。→ 三個桶子因此改成**同一個家族的三個橫階**：`nemotron-3-nano-30b-a3b` / `super-120b-a12b` / `ultra-550b-a55b`，它是這把 key 上唯一在三個尺寸都有且都支援工具的家族。**這比原本的寫法更嚴**：原本允許三格各來自不同廠商、不同訓練配方，量到的差異裡有多少是尺寸造成的沒人分得開。**這份清單綁在帳號上** —— 換一把 key，這道階梯可能整個不存在，所以盤點方法寫進了 [`eval/tiers.ts`](../apps/harness/src/eval/tiers.ts) 的檔頭而不是只留一個數字。
-    → **三階都是稀疏的，所以參數量要報兩欄。** id 裡的 `-aNb` 是 NVIDIA 自己標的活化參數量（`30b-a3b` = 總量 30B、每 token 活化 3B；`GET /models` 的紀錄只有四個鍵，端點這側查不到規格，所以這是**命名慣例**不是查證過的規格）。一個 120B-a12b 的計算量離 253B 的密集模型很遠，反而更接近 12B —— 混成一欄的話，量到的崩塌點會是「哪一格剛好抽到稀疏模型」的產物。這道階梯的兩欄都單調（總量 30→120→550、活化 3→12→55，各約 4 倍一階），所以兩種讀法下都成立，這正是挑同一家族而不是湊三個廠商的理由。 → **這條規矩在新的階梯上長出一條例外，而例外的處理方式是留白。** `openai/gpt-oss-*` 的 id 沒有 `-aNb` 後綴，端點也給不出規格，所以活化那一欄是 `undefined` 而不是抄一個記來的數字；[`eval/tiers.test.ts`](../apps/harness/src/eval/tiers.test.ts) 把「後綴有就必須填且相符、沒有就必須留白」釘成斷言。直接後果有兩個：**新的那道階梯只在總量那一欄排得出順序**，而且 `nano` 的 3B 仍然是我們量過最小的活化量 —— 下面那句「底板是 30B」因此是**總量那一欄的話**。
-    → **小模型叫不出工具是結果，不是失敗。** 這正是「比尺寸」要量的東西：工具呼叫成功率與參數正確性在多小的模型上開始崩，以及那個崩塌換來多少 token 成本上的節省。#80 的評分器刻意把「少叫一次」與「參數寫錯」分成兩個數字，那個區分在這裡才真的派上用場。 → **跑了，而它沒崩。** 27 次執行（3 階 × 3 題 × 3 次取樣）三個指標全部滿分，唯一的雜訊是 super 有一次多叫了一次工具。**分不出高下不是三個模型一樣好，是這道階梯的底板太高** —— 這一家最小的一階是 30B/a3B，而崩塌點在它底下（證據見下一條）。
-    → **數字（2026-08-28，`pnpm --filter @nexus/harness eval:compare --samples 3`）**：工具呼叫成功率、參數正確性三階都是 `1.00`；多叫次數 nano `0.00`、super `0.11`（0–1）、ultra `0.00`；總 token 平均 nano `8439`（6026–9866）、super `8424`（5879–12363）、ultra `8002`（5887–9074）。**總參數量差 18 倍，成本差 5%，而且方向是反的** —— 最小的那個最貴。nano 是推理型模型，同一題吐的 output token 比 ultra 多，省下來的參數量沒有變成省下來的錢。
-    → **基準任務在 11B 上分得出來 —— 這是它探不到差異的反證。** 同一句 `echo-once` 的提示，盤點時 `meta/llama-3.2-11b-vision-instruct` 叫對了工具但參數寫成 `"把 網線测译测译⁇古代不号言。"`（`argumentCorrectness` = 0），`meta/llama-3.2-90b-vision-instruct` 寫成 `接線渮試` —— **錯一個字**，而一個只判「有沒有叫工具」的粗判準會把這一次記成通過。這是 #80 把「少叫一次」與「參數寫錯」分成兩個數字之後，第一次真的抓到行為上的差異。兩個都是 vision 微調、不屬於這道階梯，但它們證明了判準本身不鈍。**這條旁證後來被扶正** —— 11B 那個已經真的跑過 `runBenchmarkCase` 與 `scoreCase`，見下面兩條。
-    → **補了一階到 30B 以下，而它還是沒崩。** 2026-08-28 第二輪盤點（同一套做法，逐一送帶 `tools` 的請求）：30B 以下叫得動又支援工具的**只有兩個** —— `openai/gpt-oss-20b` 與 `meta/llama-3.2-11b-vision-instruct`；`google/gemma-3-12b-it`、`google/gemma-3-4b-it`、`nv-mistralai/mistral-nemo-12b-instruct`、`mistralai/codestral-22b-instruct-v0.1`、`nvidia/mistral-nemo-minitron-8b-8k-instruct`、`microsoft/phi-3.5-moe-instruct`、`bigcode/starcoder2-15b`、`nvidia/cosmos-reason2-8b` 全部 404。**補法不是往 Nemotron 那道階梯裡塞一個別家的 id** —— 那會當場毀掉「只有尺寸在變」，而 `tiers.test.ts` 的家族斷言正是為擋這件事寫的。補法是**再開一道同家族的階梯**：`openai/gpt-oss-20b` 與 `openai/gpt-oss-120b`，總量 20 → 120 把 30B 這條線夾在中間，20B 那階是重點、120B 那階是它的對照（走同一個配方，而且落在已知不會崩的尺寸區間）。**結果是又一次空手而回**：兩階的工具呼叫成功率與參數正確性都是 `1.00`。受控的底板因此從 30B 降到 20B（總量那一欄），而崩塌點仍在它底下。
-    → **判準有鑑別力，而且這次是用同一組評分器量出來的。** 上一條那個 11B 的證據是盤點時用 curl 拿到的旁證，不是走 `runBenchmarkCase` 與 `scoreCase` 量的。這次把 `meta/llama-3.2-11b-vision-instruct` 當成**判準對照**真的跑完整份基準任務：參數正確性 `0.19`（0–0.67）、工具呼叫成功率 `0.67`（0–1.00，其中兩次一顆工具都沒叫）。**它不是一階** —— 同家族的 `meta/llama-3.2-90b-vision-instruct` 三次探測全部 90 秒逾時（就是 [#57](https://github.com/DemianLi/nexus-agent/issues/57) 那個永遠不回來），沒有對照就沒有東西能把它的分數歸因到尺寸，所以它只回答「判準量不量得出 1.00 以下」。**「基準任務太淺」這個假設到此為止**：同一份題目、同一組評分器，在 11B 上量得出 1.00 以下，在 20B 以上量不出來。
-    → **數字（2026-08-28，`pnpm --filter @nexus/harness run eval:compare --samples 3`，54 次執行，循序，[#84](https://github.com/DemianLi/nexus-agent/pull/84)）**：
-
-| 階梯 | 短名 | 總量／活化 | 評到分 | 工具成功率 | 參數正確性 | 多叫次數 | 總 token 平均（全距） |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| gpt-oss | `oss-20b` | 20B ／ 不詳 | 9 | 1.00 | 1.00 | 0.33（0–2） | 5452（3492–9246） |
-| gpt-oss | `oss-120b` | 120B ／ 不詳 | 9 | 1.00 | 1.00 | 0.11（0–1） | 5071（3557–7292） |
-| nemotron-3 | `nano` | 30B ／ 3B | 9 | 1.00 | 1.00 | 0.11（0–1） | 8767（5984–13090） |
-| nemotron-3 | `super` | 120B ／ 12B | 9 | 1.00 | 1.00 | 0.22（0–1） | 8738（5887–12313） |
-| nemotron-3 | `ultra` | 550B ／ 55B | 9 | 1.00 | 1.00 | 0.00 | 7989（5891–9062） |
-| 判準對照 | `llama-11b` | 11B ／ 不詳 | **6**（失敗 `rejected`×3） | 0.67（0–1.00） | **0.19**（0–0.67） | 7.17（0–36） | 33381（2927–151524） |
-
-    → **第一個對 [#31](https://github.com/DemianLi/nexus-agent/issues/31) 真的有用的數字，而它不是尺寸效應。** 五階品質全部打平，但 gpt-oss 那一家平均 5071–5452 token、單題 1–7 秒，Nemotron 那一家 7989–8767 token、最慢 35.6 秒 —— **token 差約 1.6 倍，延遲差一個數量級**。這條線跨階梯，所以它**不能**讀成尺寸效應；但**選型本來就不是在問尺寸**，這個比較對選型是合法的。附帶推翻一句：**成本跟尺寸無關，跟配方有關** —— 最小的 `nano`（30B/a3B）比最大的 `ultra`（550B/a55B）還貴。
-    → **同一輪還抓到四件事，四件都不是尺寸效應，不要混讀。** ①那三次失敗是 `400 "This model only supports single tool-calls at once!"` —— 端點拒收**平行工具呼叫**，是模型行為撞上供應商限制，不是分數，所以它們不進平均（`評到分 6 次`）。#83 那條「丟出例外不是零分」第一次在真實資料上派上用場。②**`classify()` 原本會把它記成 `transport`**：實測丟出來的是 `MiddlewareError`、`status` 是 `undefined`，帶 `status: 400` 的 `BadRequestError` 包在 `cause` 底下**第三層**。這張 PR 改成掃整條 `cause` 鏈，而且 `status` 先掃完一趟才輪到逾時 —— 否則外層訊息裡的 `aborted` 會壓過內層一顆明確的 400，也就是拿字串壓過協定。③**`LIVE_TIMEOUT_MS` 管的是單一請求，不是整輪**：llama-11b 有一次在 `echo-then-write` 上多叫了 36 次工具、燒掉 151,524 token、跑了 208.7 秒，而每一個請求都在 90 秒以內，那道上限一次都沒觸發。護欄與真正該擋的東西不是同一個；**這次不補**，先記著。④唯一沒有打平的指標是「多叫次數」，而它在 n=9 上是雜訊 —— 全距都壓在 0–2，而且 Nemotron 那三階不是單調的。附帶：llama-11b 兩輪之間差很多（前一輪參數正確性 0.31、多叫 1.25，這一輪 0.19、7.17），**這一階本身不穩**，n=6 的數字只證明判準分得出來，不證明別的。
-    → **兩件事因此變成孤兒 —— 懸著等裁示，不是被解決。** ①[#61](https://github.com/DemianLi/nexus-agent/issues/61)（DeepSeek 官方帳號與 `@langchain/deepseek`）不再是任何東西的前置了，但它問的事沒有消失；②Phase 2 那道「不相容則 DeepSeek 出局」的二元閘門仍然沒跑過 —— 三個模型走同一個套件、同一個端點，「我們這套 stack 換一個供應商跑不跑得通」這個問題沒有被回答，只是沒人在問了。**順帶一條**：第 0 節決策表與第 4 節選型表都還寫著預設 **Anthropic**，而 eval 現在永遠不會跑到它 —— 那個決策**沒有證據路徑了**。這三張表這次刻意不動，先把落差記在這裡。**再收窄一層**：橫階定成同一個家族之後，每一道階梯回答的是「**在同一套訓練配方裡，工具呼叫隨尺寸怎麼衰減**」——比「三個尺寸級距」又窄一階，而且是疊在已經被孤立的供應商問題**之上**的第二次收窄。**開第二道階梯沒有把它放寬**：兩道階梯之間的那條線混著訓練配方，讀不成尺寸效應（報表因此按階梯分段印，不併成一張表）；能跨階梯讀的只有選型，而選型本來就不是在問尺寸。
-    → **題目變難之後，飽和解除了一半 —— 而且動的是參數那一欄，不是工具那一欄。** #84 的落點是「判準在 20B 以上飽和」，所以下一步不是再找更小的模型，是**讓判準本身有東西可扣**。挑題目的依據來自 #84 自己的資料：工具名字那一欄五階全平，參數那一欄卻在 11B 掉到 `0.19` —— **有動態範圍的是參數**。所以四條新題目裡三條的難處放在參數（`edit_file` 的 `old_string` 要一字不差重現剛讀到的內容、正確參數是前一步輸出的**變換**而不是複製、該不該叫工具），只有一條是「多加幾步」。結果：**同一組評分器第一次在階梯上量得出 1.00 以下** —— 五階裡有四階做到了，而 #84 一階都沒有。**這一句才是不依賴 n 的那個發現。** 至於方向：`gpt-oss` 那道階梯 20B → 120B 的參數 `0.94` → `1.00`、多叫 `1.38` → `0.29`，`nemotron-3` 那道則是 `0.92` / `0.97` / `0.89` 不單調。**兩道的 n 都只有 6，而 `0.94` 是由單獨一次 `0.83` 與一次 `0.80` 拉下來的** —— 所以 `gpt-oss` 那條差異只是**有提示性**，不是被確立的尺寸效應；`nemotron-3` 那條同樣在雜訊裡。要下判決得先把取樣數撐起來。
-    → **這句是動工前就寫死的，不是看到結果才補的**：五階若又全部打平，那也是**結論**而不是失敗的分支 —— 它會表示品質那一軸救不回來，選型只剩成本、延遲、失敗模式。實際上沒有全部打平，但**打開的程度要說準**：確立的是「判準在階梯上量得出 1.00 以下了」，**沒有**確立「尺寸造成了那個差異」——兩道階梯的 n 都只有 6，方向還一道順一道逆。所以 `nemotron-3` 不能讀成「大的比較差」，`gpt-oss` 也不能讀成「大的比較好」。
-    → **數字（2026-08-28，`eval:compare --cases edit-after-read,reverse-round-trip,grep-across-files,no-tool-needed --samples 2`）**。這一輪**只跑新的四題**，舊三題沿用上表 —— 舊題目在 #84 已經量過而且全平，重跑不會多說什麼，而每多一題就是階數 × 取樣數的乘積。
-
-| 階梯 | 短名 | 總量／活化 | 評到分 | 工具成功率 | 參數正確性 | 多叫次數 | 回覆提到 | 總 token 平均（全距） |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| gpt-oss | `oss-20b` | 20B ／ 不詳 | 8 | 1.00 | **0.94**（0.80–1.00） | **1.38**（0–8） | 1.00 | 9711（1772–27801） |
-| gpt-oss | `oss-120b` | 120B ／ 不詳 | 7（失敗 `transport`×1） | 1.00 | **1.00** | **0.29**（0–1） | 0.86（0–1） | 6554（1772–9791） |
-| nemotron-3 | `nano` | 30B ／ 3B | 8 | **0.94**（0.67–1.00） | **0.92**（0.50–1.00） | 0.38（0–1） | 1.00 | 12744（2970–19670） |
-| nemotron-3 | `super` | 120B ／ 12B | 8 | 1.00 | 0.97（0.80–1.00） | 0.38（0–1） | 0.88（0–1） | 11799（2931–18296） |
-| nemotron-3 | `ultra` | 550B ／ 55B | 8 | 1.00 | **0.89**（0.67–1.00） | 0.25（0–1） | 1.00 | 10070（2941–15688） |
-| 判準對照 | `llama-11b` | 11B ／ 不詳 | **8 次裡只跑完 3 次，整輪被中止** —— 見下面第三條 | | | | | |
-
-    → **「沒有可判的」現在真的不被平均了，而且報表看得到。** `no-tool-needed` 期望零筆工具呼叫，所以它在工具與參數兩欄是 `undefined` 而不是 `1` —— 上表每一階的那兩欄實際上都只判了 **6/8** 次（CLI 會印「判了 6/8 次」）。填成 `1` 的話，加了這條題目之後這兩欄的**鑑別力反而下降**，而它下降的方式看起來完全像是模型變好了。這與 `runner.ts` 區分 `usage` 的 `undefined` 與零、`compare.ts` 區分「失敗」與「零分」是同一條規矩，反向驗過：把它改回 `1`，四條測試當場紅。**順帶補回一整欄**：`mentions` 從 #80 就在算，但 `summarize()` 從來沒收，所以尺寸比較的報表上少了一欄品質指標；它問的是「有沒有把結果講出來」，跟前兩欄的「有沒有做」不同，而 `super` 與 `oss-120b` 各有一次工具全對卻答非所問（`0.00`）。
-    → **`LIVE_TIMEOUT_MS` 管不到整輪，第二次證實 —— 而且這次發生在階梯上的一階，不是對照組。** `ultra` 跑 `edit-after-read` 兩次分別花了 **420.9 秒**與 **247.3 秒**，那道 90 秒的上限**一次都沒觸發**，因為每一個單一請求都在 90 秒以內。判準對照更誇張：`llama-11b` 在 `reverse-round-trip` 上一次跑了 **792.8 秒**、多叫 **25** 次工具、燒掉 **110,936 token**（#84 那次是 208.7 秒 / 151,524 token）。**判準對照那一列沒有彙總**：8 次執行只跑完 3 次。**這裡原本記著「中止的原因不是模型，是我自己的跑法（背景 process group 被收掉）」——那句話是錯的，2026-08-28 稍晚查證後更正。** 那個行程從來沒有被收掉：它在 `llama-11b` 的 `reverse-round-trip` 第二次取樣上**活了大約兩個小時、零輸出**，是準備跑下一輪時列進程才發現並手動殺掉的。**會判斷成「被收掉」是因為當時跑的 `ps aux | grep -c` 沒有走 `rtk proxy`**，過濾層回了 `0`；用 `rtk proxy ps -eo pid,etime,command` 重跑，四個 PID 全在、`etime` 是 `02:25:51`。→ 更正之後結論更硬不更軟：那不是跑法出問題，是**一次真正的失控** —— 單一次執行超過兩小時，而當時沒有任何上限攔得住它。→ **這一輪不補跑那個對照**，理由有兩層：一是它的職責（「判準量不量得出 1.00 以下」）這次由階梯自己回答了 —— 五階裡有四階量出了 1.00 以下，而 #84 一個都沒有；二是補跑它正好是那個沒有上限的行為最會重演的地方。**整輪的成本上限仍然沒補**，但它現在有兩次獨立的實測撐著，而且是 [#85](https://github.com/DemianLi/nexus-agent/issues/85)（十個模型的橫向評測）動工前必須先有的東西。
-    → **順帶兩件小的。** ①`oss-120b` 有一次失敗被歸成 `transport`，訊息是 `Cannot read properties of undefined (reading 'message')` —— 那是個 `TypeError`，不是線路問題。我們這側所有讀 `.message` 的地方都有 `instanceof Error` 護著（grep 過），所以它來自基座或 SDK 內部；`classify()` 認不出來就歸 `transport` 而不猜，這次的行為是對的，但 `transport` 這一類現在裝著兩種很不一樣的東西。②`eval:compare` 多了 `--cases`，因為成本是題數 × 階數 × 取樣數的乘積，而題目從 3 條變成 7 條 —— 打錯的 id 一律當場拋，不默默略過（默默略過就會跑了個比預期小的子集而報表上看不出來）。
-    → **[#61](https://github.com/DemianLi/nexus-agent/issues/61) 的裁示（2026-08-28，demian）：留著當紀錄，不關。** 它已經不是任何東西的前置，但它問的兩件事沒有消失（Phase 2 那道二元閘門從沒跑過；§0／§4 的預設 Anthropic 沒有證據路徑），所以留著當那兩件事的錨點。**下一個看到它的人不要重新問「要不要關」。**
-    → **整輪的上限補了，而且槓桿早就在基座手上 —— 是它自己轉到底的。** 動工前先 grep 了基座，
-發現 `createDeepAgent` 最後一步是 `createAgent(...).withConfig({ recursionLimit: 1e4 })`：
-一萬個 super-step，換算約 **5,000 輪模型呼叫**。實測（`LoopingChatModel`，2026-08-28）裸基座
-與我們的組裝點都跑到 `GraphRecursionError: Recursion limit of 10000 reached`，模型分別被叫了
-5000 與 4999 次。**那不是沒有護欄，是一個被轉到底的護欄** —— 而它藏在 dist 的一行 `withConfig`
-裡，型別、文件、README 全都看不到。這是「基座預設會被踩掉」的**第二型**：上一次
-（[#54](https://github.com/DemianLi/nexus-agent/issues/54) 那條）是我們掛的 middleware 關掉了基座的預設，這次是基座自己。
-    → **兩道上限，各管一半，都是基座本來就有的東西。** ①`recursionLimit`：組裝點蓋成 `100`
-（約 49 輪），eval 再收緊到 `40`（約 19 輪）。實測 `withConfig` 疊得上去而且後者贏，
-**推導出來的型別沒有塌**（`invoke()` 的 `messages` 仍然是 `BaseMessage[]` 不是 `any`
-—— 這件事特地驗過，因為 `any` 是不會讓 typecheck 紅的那種壞掉，測試裡留了一條型別層的斷言）。
-②`signal`：`invoke` 收得下 `AbortSignal`，eval 給 300 秒。這一條**差點被記成「行不通」**——
-第一次探測時 `AbortSignal.timeout(1000)` 完全沒觸發、跑滿 35.6 秒到迴圈上限才停；原因是那個
-假模型每一輪都不 await 真東西，純 microtask 的迴圈把 event loop 的計時器餓死了。加上 5ms 的
-真等待之後它 1.0 秒準時中止（122 輪）。**那是探針的產物不是基座的行為**，而它差一點就變成
-一條寫進文件的錯誤結論。
-    → **`budget` 是第四類失敗，跟另外三類分開。** 另外三類講的是端點（`rejected` / `transport`）
-或端點不回話（`timeout`），這一類是**模型的行為撞上我們設的上限**。它既不是分數（題目沒做完，
-我們不知道它做不做得完），也不該混進端點的失敗裡 —— 讀到它要做的是調高上限重跑或換模型。
-`classify()` 因此多一趟掃描，而且**放在逾時那一趟前面**：`GraphRecursionError` 的訊息裡沒有
-任何逾時字眼，排後面會掉進 `transport`；而時間預算那一半**根本不靠讀錯誤**，`runOnce` 直接問
-中止訊號有沒有觸發 —— 中止丟的是 `DOMException` 而 `name` 就是 `TimeoutError`，靠字串分不開
-「我們切的」與「端點不回話」。
-    → **token 預算刻意不做。** 實測跑掉的兩次（`llama-11b` 792.8 秒 / 25 次多叫、`ultra` 420.9 秒）
-這兩道上限都攔得住，一個數 token 的 middleware 一次都用不上，而它會動到 plugin 契約那個面。
-**等到有一次跑掉是這兩道都沒攔住的，再做。**
-    → **上限第一次在真實比較裡承重，而且是迴圈那道先攔到。** 2026-08-28 的 n=12 那一輪，`llama-11b` 在 `reverse-round-trip` 上觸發了一次 `budget`：`Recursion limit of 40 reached`，**101.8 秒**。那正是兩小時那次的同一題同一個模型 —— 沒有上限時它跑了兩小時，有上限時它在第 102 秒被切掉。同一輪裡最慢的正常執行是 `ultra` 的 93.8 秒，**300 秒那道時鐘一次都沒觸發**：該攔的攔到了，不該攔的沒有誤傷。
-    → **把取樣撐到 n=12 之後，[#86](https://github.com/DemianLi/nexus-agent/pull/86) 那個 `gpt-oss` 的尺寸效應消失了。** 這正是 #86 內文預先打過折的那一條（「那個差異踩在兩次觀測上」）。數字（2026-08-28，`eval:compare --cases edit-after-read,reverse-round-trip --samples 6`，72 次執行）：
-
-| 階梯 | 短名 | 總量／活化 | 評到分 | 工具成功率 | 參數正確性 | 多叫次數 | 回覆提到 | 總 token 平均（全距） |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| gpt-oss | `oss-20b` | 20B ／ 不詳 | 12 | 0.94（0.33–1.00） | **0.91**（0.33–1.00） | 0.75（0–2） | 0.92 | 9488（7681–12526） |
-| gpt-oss | `oss-120b` | 120B ／ 不詳 | 12 | 0.94（0.67–1.00） | **0.92**（0.50–1.00） | 0.33（0–1） | 0.92 | 8519（7657–10019） |
-| nemotron-3 | `nano` | 30B ／ 3B | 12 | 0.94（0.67–1.00） | 0.92（0.50–1.00） | 0.67（0–1） | 1.00 | 17414（13428–21283） |
-| nemotron-3 | `super` | 120B ／ 12B | 12 | 1.00 | **0.98**（0.80–1.00） | 0.75（0–1） | 0.83 | 15413（12949–16318） |
-| nemotron-3 | `ultra` | 550B ／ 55B | 12 | 1.00 | **0.88**（0.67–1.00） | 0.50（0–1） | 0.83 | 14049（12333–15814） |
-| 判準對照 | `llama-11b` | 11B ／ 不詳 | 4（失敗 `rejected`×7、`budget`×1） | 0.58（0–1.00） | 0.53（0–0.83） | 1.25（0–3） | **0.00** | 14734（3070–27072） |
-
-    → **這是一個「沒有效應」的結論，而它是有效力的，因為判準沒有飽和。** 五階的參數正確性落在 `0.88`–`0.98`，全距下探到 `0.33`／`0.50` —— 判準在每一階上都還有量程，只是**尺寸沒有在那個量程上動**。`gpt-oss` 從 `0.94 → 1.00`（n=6）縮回 `0.91 → 0.92`（n=12）；`nemotron-3` 三階仍然不單調，而且 550B 那階在兩輪裡都是最低。所以 #83 → #84 → #86 這條「一直往下找崩塌點」的線到這裡收掉了：**崩塌點在 20B 底下，20B 以上這五階的品質分不出高下，而那不是題目太淺造成的**（題目已經加難過一輪，判準也證明沒飽和）。
-    → **因此 [#31](https://github.com/DemianLi/nexus-agent/issues/31) 的選型有答案了，而答案來自成本那一欄。** 品質打平時能用的軸只剩成本、延遲、失敗模式，而這三個都指向同一個：**`openai/gpt-oss-120b`** —— 參數正確性 `0.92`（與 `nano` 並列第二，離最高的 `super` 差 0.06）、**token 最省**（8519，比 Nemotron 那一家的 14049–17414 少四到五成）、**多叫次數最低**（0.33）。跨階梯讀這條線對**選型**是合法的（選型本來就不是在問尺寸），對尺寸效應則不是。**這個結論要不要拿去改第 0 節與第 4 節那兩張還寫著「預設 Anthropic」的表，是 demian 的判斷**，這裡只把證據放好。
-    → **第三輪：七題全跑、n=6（252 次執行），「沒有尺寸效應」第三次被確認 —— 而且這一輪的價值有一半在別的地方。** 2026-08-28 跑完整份資料集（七題 × 五階 + 判準對照 × 6 次）。**先講怎麼讀**：三條簡單題上五階**全部 `1.00` / `1.00`**，完全飽和，所以七題的平均（`0.96`–`0.98`）是被稀釋的數字，**不是一次新的測量** —— 有解析度的只有四條難題那一組：`oss-20b` `0.95`、`nano` `0.92`、`super` `0.96`、`ultra` `0.94`。三輪（`0.94`/`1.00`/`0.92`/`0.97`/`0.89` → `0.91`/`0.92`/`0.92`/`0.98`/`0.88` → `0.95`/—/`0.92`/`0.96`/`0.94`）全部落在同一個窄帶，方向一輪一個樣。**這條線到此為止真的可以收了。**
-    → **同一輪有一階被端點限流掉一半，而我第一次把原因判錯了 —— 下一條是更正。** `oss-120b` 42 次執行裡 **21 次被端點回 `429 Too Many Requests`**：三條簡單題 18/18 全通過，`reverse-round-trip` 與 `grep-across-files` **6/6 全滅**，`edit-after-read` 從第 3 次開始斷。單獨重跑整份七題**逐格重現**（同樣的斷點、同樣那兩條全滅、簡單題 token 平均 5045 對 5049）。**它之後跑的 168 次執行零 429**、同家族的 `oss-20b` **42 次也零 429**，所以不是整把 key 的吞吐上限，也不是 `openai/*` 這個前綴的事。→ **當時的結論是「這個模型跑不完基準任務」，而那是錯的。**
-    → **更正（2026-08-28 稍晚，量出來的）：那是我們打太快，不是模型跑不完。** 錯在兩個地方。①**「斷點跟題目綁定」不成立**：只跑那條「6/6 全滅」的題、前面什麼都不跑，是 **6/6 全過、全部滿分**，每次 5–7 秒。②**「逐格重現所以不是配額被前面的執行打滿」推論反了**：那次重跑走的是**同一串七題序列**，累計用量到同一個點才斷 —— **逐格重現正是累計效應的證據，不是它的反證**。真正的對照是換掉一個變數，不是把同一串重放一次。→ **實際機制**：每分鐘 token 配額。實測 49.5 秒內燒掉 **119,363 token** 觸發 429，**16 秒後完全恢復**（輕請求與一次真的 eval 執行都立刻通過）。→ **最反直覺的一點**：撞上它的是六個模型裡**最快**的那個 —— `nano`／`super`／`ultra` 每次 token 更多（11k–17k）但每次要 14–60 秒，`oss-120b` 每次只要 2–7 秒，單位時間的 token 率最高。**「跑得快」本身是撞限流的風險因子，而它長得跟「這個模型不行」一模一樣。**
-    → **修法：把限流接回重試，並在分類上跟 `400` 分開。** ①**基座那道的作用面比看起來窄**：`AsyncCaller` 的 `maxRetries` 預設是 6，但 `@langchain/core` 把**沒有 `retry-after` header 的 429** 分類成 `headerless_429` → `action: 'capacity'` 然後**直接拋**，而 NVIDIA 回的正是那個形狀；底層那道也關著（`@langchain/openai` 建 `OpenAI` client 時寫死 `maxRetries: 0`）。這是 [#87](https://github.com/DemianLi/nexus-agent/pull/87) 那個 `recursionLimit: 1e4` 的同型第三例。②**`throttled` 從 `rejected` 分出來**，配額耗盡的 429 留在 `rejected` —— dsh 的 [`error.ts`](../references/deepseek-harness/packages/llm/llm/src/error.ts) 把 `RATE_LIMIT` 與 `QUOTA` 分成兩個碼，只有前者在預設可重試集（[`retry-policy.ts`](../references/deepseek-harness/packages/llm/llm/src/retry-policy.ts) 的 `DEFAULT_RETRYABLE_CODES`）裡，理由一樣是「前者等一下就過，後者重試無效」。**偏離標註**：dsh 的退避是有界的（`initialDelayMs: 500`／`maxDelayMs: 10_000`／`jitterRatio: 0.1`），而 `AsyncCaller` **沒有把退避參數暴露出來**，只收 `maxRetries` 與 `onFailedAttempt` —— 所以這裡只釘得住次數，釘不住每次等多久。③**自訂 `onFailedAttempt` 會整個取代基座的預設**，順手把 `500` 與連線問題的重試一起關掉是很容易犯的退化（我第一版就犯了），所以它寫成基座 `defaultFailedAttemptHandler` 的複本、只改限流那一支，並有一條測試專門擋那個退化。
-    → **端到端驗過，而且它同時補回了缺的那一格。** 修完重跑 `oss-120b` 整份七題 × 6 = **42 次，零失敗**（修之前同一階兩輪都是 21 次 429）。七題與四條難題都是 `1.00` / `1.00`（36、18 個判分）—— **它是五階裡唯一在難題上不掉分的**。→ 直接後果：上面那條「選型的失敗模式那一軸指向反面」**撤回** —— 限流是我們的跑法，不是模型的性質，選型的三個軸都沒有變。→ **但那一格與同列另外四格之間多了一個變數**（限流重試），並排讀要記得。
-    → **`budget` 第二次承重，而判準對照本身不穩。** `llama-11b` 這一輪觸發 2 次 `budget`（`Recursion limit of 40 reached`），沒有任何一次逼近 300 秒那道時鐘。同一階的 `400`（拒收平行工具呼叫）從上一輪的 7 次跳到 **19 次** —— **這一階本身不穩定，兩輪之間差 2.7 倍**，跟計劃書早先記的「這一階本身不穩」一致，所以它的分數只證明判準分得出 1.00 以下，不證明別的。
-- 驗收：瀏覽器完成「提問 → 看事件流 → 核准工具 → 收結果」全迴圈（[#79](https://github.com/DemianLi/nexus-agent/pull/79) 已閉合）；eval 有可比較的通過率數據，且該數據足以讓模型定案 —— **前半有了，後半接近了但還沒到，而擋住的東西又換了一次**。[#83](https://github.com/DemianLi/nexus-agent/pull/83) 記的是「階梯的底板太高」，[#84](https://github.com/DemianLi/nexus-agent/pull/84) 把受控底板降到 20B（總量）卻五階全部滿分，落點因此變成「判準在 20B 以上飽和」。[#86](https://github.com/DemianLi/nexus-agent/pull/86) 把題目加難，判準在階梯上終於量得出 `1.00` 以下；[#87](https://github.com/DemianLi/nexus-agent/pull/87) 補上整輪的上限，n 才撐得起來。撐到 **n=12** 之後**答案是「沒有尺寸效應」**：五階的參數正確性 `0.88`–`0.98`、全距下探到 `0.33`，判準沒有飽和，但尺寸沒有在那個量程上動。**這是一個有效力的否定結論，不是「量不出來」** —— 而它讓選型落回成本那一欄，答案是 `openai/gpt-oss-120b`（品質並列第二、token 最省四到五成、多叫最低）。→ **驗收兩半都到齊，Phase 5 宣告完成（2026-08-28，demian 拍板）。** 第 0 節決策表第 4 列、第 4 節選型表的「模型」列、第 7 節決策點 2 同時改成 `openai/gpt-oss-120b`，決策點 2 關閉。**沒有一併關掉的**：Phase 2 那道「不相容則 DeepSeek 出局」的二元閘門仍然沒跑過，而 Anthropic 那條路從頭到尾沒有被建起來 —— 兩者都錨在 [#61](https://github.com/DemianLi/nexus-agent/issues/61)，那張留著當紀錄。**下一個發版依 README 的規則跳 minor**（發版是 `develop → main` 加 workflow_dispatch，人工步驟）。→ **宣告之後又跑了第三輪（七題全跑、n=6），結論不變。** 中間一度以為多了一條反面證據（選中的 `openai/gpt-oss-120b` 跑不完難題），**那個判斷已更正並撤回** —— 那是端點限流加上我們沒有重試，不是模型的性質；把限流接住之後重跑同一階 42 次零失敗、難題全部滿分。
-    → **2026-09-05：階梯那組裝置收掉了（[#167](https://github.com/DemianLi/nexus-agent/issues/167)），結論一個字都沒有變。** 為 [#165](https://github.com/DemianLi/nexus-agent/issues/165) 重盤時撞到端點把兩道階梯各拆掉一階（`openai/gpt-oss-120b` 下架、`nvidia/nemotron-3-nano-30b-a3b` 從型錄消失），而這把 key 上**湊不出第三道**：可用的九個裡沒有任何兩個同家族。唯一接得住全部三條斷言的 `meta/llama-3.2-` 的 `11b` + `90b`，90b 兩輪各三次探測**六次全部 90 秒逾時**（2026-09-04、2026-09-05），還在型錄上但打不到。→ **這不是「問題還沒答完」**：上面那條線在 2026-08-28 就收掉了，收的是它留下來的裝置。留空陣列會讓那六條斷言變成永遠綠的測試，所以資料與斷言一起刪，三條承重的（至少兩階／同家族前綴／至少一階在 30B 以下）翻面寫成重建的驗收條件，放在 `src/eval/tiers.ts` 的檔頭。→ **`eval:compare` 改跑 `MEASURED_MODELS`**（走完整基準任務量過的五個模型），因為 #165 選預設模型時要的正是這條路，而當時 repo 裡沒有，只能在外面拿臨時清單跑。
+**整節搬到 [`development-plan-phase-5.md`](development-plan-phase-5.md)**（#364）。
 
 ## 6. 六大補強項落點
 
@@ -475,78 +325,5 @@ eval 跑的是真的 agent，基準任務的題目與工具參數會跟著 trace
 
 ## 7. 風險與決策點
 
-1. **deepagentsjs 演進速度快，且 minor 會動相依契約**：`deepagents` 從 2025-08-03 的 1.0.0 到 2026-08-21 的 1.13.1，12 個月出了 14 個 minor、53 個穩定版。1.x 的 minor 在 semver 上宣稱相容，但實測**相依契約會在 minor 裡變動** — 1.11.0 一次新增五個 required peer（此前只有 `langsmith` 一項），1.13.0 把 `@langchain/core`、`langchain`、`@langchain/langgraph` 的下限整組抬高。對策：`deepagents` 鎖 `~1.13.1` 只跟 patch、peer 顯式宣告並照抄基座範圍、`strictPeerDependencies: true` 讓範圍不符在 install 就失敗、一組薄 smoke test 斷言擴充點的形狀事實、接觸面集中在 agent 工廠一處。
+**整節搬到 [`development-plan-risks.md`](development-plan-risks.md)**（#364）。六個決策點的結論見本檔置頂的結論速查。
 
-   smoke test 的邊界（[#32](https://github.com/DemianLi/nexus-agent/issues/32)）：**只斷言「契約明文依賴、而且基座改掉時型別檢查攔不到」的執行期行為**，落點跟著 agent 組裝點走。`createDeepAgent` 的參數名不另外斷言（呼叫本身就是斷言，改名會 compile 失敗）；同名 subagent 行為不斷言（[#28](https://github.com/DemianLi/nexus-agent/issues/28) 已把它擋在載入期，基座怎麼做不再是我們的依賴）。
-
-   **`~` 放行 patch，但基座有一個 experimental 的公開 API。** v3 `streamEvents`（第 5 節 Phase 5 要用的那個）的 JSDoc 明文「experimental and its API may change in future releases」。`~1.13.1` 擋得住 minor，擋不住 patch —— 而一個標成 experimental 的 API 是可以在 patch 裡動的。這不改分層（判準仍是「壞掉時 semver 管不管得到」，而這一條正是 semver 管不到的例子），但它讓升版檢查清單多一項：**碰過 v3 串流之後，`deepagents` 每次升版都要重跑一次事件流那組測試**，而不是只跑那四項人工驗證。
-
-   **升版檢查清單**：`deepagents` 升 minor 或 major 的 PR 上，重跑一次 [#31](https://github.com/DemianLi/nexus-agent/issues/31) 那四項人工真實模型驗證——tool call 參數以合法 JSON 回傳／`streamMode: ['updates','values']` 的事件形狀與假模型一致／Node 22 相容／key 只從環境變數讀且缺少即失敗。這是擋「`ScriptedChatModel` 與基座真實行為悄悄分歧」的機制之一。
-
-   **但「那個分歧在結構上斷言不出來」這句是錯的，Phase 5 動工前的驗證當場撞到反例。** 原文的推論是：CI 不放模型 secret（#31），所以寫得出來的斷言只能斷言假模型與我們對基座的想像一致，而那正是分歧發生時仍然全綠的東西。**漏掉的是第三種斷言：同一份腳本走兩條基座路徑，比對兩邊的結果。** `ScriptedChatModel` 在 v3 串流下對工具呼叫視而不見（見第 5 節 Phase 5），這件事完全不需要任何 key 就斷言得出來 —— 拿同一份腳本分別走 `invoke` 與 v3 `streamEvents`，斷言兩邊都跑到工具，分歧當場紅。**假模型與基座的分歧，只要基座自己有兩條路可以互為對照，就驗得出來**；驗不出來的是「真實供應商會不會這樣回」，那才是要 key 的那一半。
-2. **模型供應商決策**（[#31](https://github.com/DemianLi/nexus-agent/issues/31)）—— **已關閉（2026-08-28）：`openai/gpt-oss-120b`**。**2026-09-04 修訂：那個 id 已於 2026-09-03 下架**（410，EOL 帶日期，型錄上也沒有了），重盤重選之後是 **`nvidia/nemotron-3-super-120b-a12b`** —— 這次品質沒有打平（難題 0.98 對 0.92–0.93），它同時拿下延遲與多叫次數，只輸 token。見 [#165](https://github.com/DemianLi/nexus-agent/issues/165)。**決策點 2 不因此重開**：換的是 id 不是供應商，端點與方法都沒變。
-
-   原文：Anthropic 功能最全但成本高；DeepSeek 便宜。原本要在 Phase 0「兩者都跑基本驗證再定」，但 Phase 0 的驗收判定不了品質，也碰不到 middleware —— 那時還沒有任何 middleware。所以拆成三段：**Phase 0 只定預設**（Anthropic）並驗真實接線；**Phase 2 驗 DeepSeek 相容性**，二元判定，不相容就出局；**Phase 5 才比品質與成本**。理由是相容性是二元的、早驗早止血；品質比較是統計性的，小樣本手工跑出來的數字噪音大過訊號。
-
-   **三段裡只有第一段與第三段真的發生，而第三段換掉了問題本身。** Phase 5 沒有比「Anthropic 對 DeepSeek」——那兩條路一條沒建起來（`@langchain/anthropic` 從來不在任何 `package.json` 裡）、一條卡在人工開帳號（[#61](https://github.com/DemianLi/nexus-agent/issues/61)）。實際跑的是**同一個 NVIDIA 端點上五個模型的橫向比較**，前後三輪（四條難題 × 2 次、兩條難題 × 6 次、四條難題 × 6 次）。結果：**品質五階打平**（四條難題上 `0.92`–`0.96`，而判準沒有飽和 —— 全距下探到 `0.33`／`0.50`），所以選型落回成本、延遲、失敗模式，三個軸都指向 `openai/gpt-oss-120b`。**第三輪一度出現一條反面證據，已經更正並撤回**：當時量到選中的那個 id 跑不完四條難題中的三條（`429`），判成失敗模式那一軸指向反面。實際上那是端點的每分鐘 token 配額加上基座對 headerless 429 不重試，把限流接住之後重跑同一階 **42 次零失敗、難題全部滿分** —— 限流是我們的跑法，不是模型的性質。**選型的三個軸都沒有變。**
-
-   **這個決定要看清楚它的邊界，否則會被讀得太寬：**
-
-   - **它是「這把 key 叫得動的模型裡最划算的那個」，不是「這是最好的模型」。** 候選集合綁在帳號上（`GET /models` 列 84 個，這把 key 只叫得動 29 個、真的支援工具的 14 個），換一把 key 要重新盤點。
-   - **Anthropic 不是被比下去的，是從來沒進過場。** 要重新排入評估，缺的是一段從沒被記過的接線工作，不是一次比較。
-   - **Phase 2 那道「不相容則 DeepSeek 出局」的二元閘門到今天仍然沒跑過。** 「我們這套 stack 換一個供應商跑不跑得通」這個問題沒有被回答，只是沒有人在問了 —— 因為五個候選走的是同一個套件、同一個端點。它錨在 [#61](https://github.com/DemianLi/nexus-agent/issues/61) 上，那張刻意留著當紀錄。
-3. **shell sandbox 安全**：`execute` 工具本質是跑任意指令。先只用 QuickJS interpreter，shell sandbox 延後到有明確隔離方案（容器）再做。
-
-   **原本的預測錯了，`feat/sandbox-plugin` 當場驗出來的是更強的一件事。** 原文寫「權限規則對 `execute` 不生效，原因是它的參數是命令字串、沒有路徑可比對」。實際上基座不是讓規則靜靜失效，而是**不讓這兩件事共存**：`createFilesystemMiddleware` 在 `permissions` 非空、`execute` 工具開著、而 backend 又通過 `isSandboxBackend()` 時**直接拋錯**（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:2368`），除非所有規則路徑都收斂在 `CompositeBackend` 的 route 前綴下；`createExecuteTool` 在執行期還有第二道同樣判準的關卡。「不生效」與「構造期硬失敗」是兩件事，而基座選的是後者——理由它自己寫在訊息裡：shell 指令碰得到任何路徑，路徑規則因此形同虛設。
-
-   **這直接決定了 `feat/sandbox-plugin` 的形狀**：QuickJS 做成 sandbox backend 會讓 `permissions` 擴充點與它互斥，現有的權限行為驗收會在組裝期炸掉。所以走 custom tool（基座明文「custom tools from the agent or other middleware are left untouched」），完全不經過那條路。絆索測試在 `apps/harness/src/sandbox-backend-conflict.test.ts`，形狀照 `contained-backend.test.ts` 那組升版絆索——它紅了代表基座改了主意，那正是該回頭看這個決定的時刻。
-
-   `isSandboxBackend()` 是純 duck-type（`execute` 是函式 ＋ 非空的 `id` 字串），所以「這個 backend 算不算會執行指令」不看繼承關係，看形狀。
-4. **狀態儲存決策點是三個軸，不是一個**（Phase 3 收斂）：原文把它寫成「`MemorySaver` → 評估 `checkpoint-postgres`」，那只覆蓋 `checkpointer`（thread 內的對話狀態）。實測基座之後拆開：`store`（`BaseStore`，`StoreBackend` 明文「persist across all threads」）才是跨 thread 記憶的載體；`backend` 才是 AGENTS.md、skills 與 `/conversation_history` 實際落在哪。**三軸各自可選、失敗方式不同**——checkpointer 缺席是接不回 interrupt（fold 已經在擋，見 `foldRegistry` 對核准政策的前置檢查），store 缺席是換個 thread 就失憶，backend 選錯是記憶根本寫不回去（memory middleware 唯讀，寫回去只有模型的 `write_file` 一條路）。Phase 3 的三個 PR 要分別對上，不能用一個「狀態儲存選好了」收掉。
-
-   `@langchain/langgraph-checkpoint-postgres@1.0.5` 前兩軸同一個套件收（`.` 出 checkpointer、`./store` 出 `PostgresStore`），peer 是 `@langchain/core ^1.1.44` ＋ `@langchain/langgraph-checkpoint ^1.1.4`，與我們現有範圍相容——但那是**兩個決定**，只是剛好同一個相依。
-
-   **`feat/memory-plugin` 收斂了 backend 這一軸，而且是可執行的證據**（`apps/harness/src/memory.test.ts` 的「記憶的保存軸」）：兩個全新建的 agent、不共用 checkpointer、不共用 state，差別只有 backend——落磁碟的那個讀得到前一個 agent 寫的 `/AGENTS.md`，`StateBackend` 那個拿到 `(No memory loaded)`。**「記憶留不留得住」因此是 backend 的問題，換 checkpointer 改變不了任何事。**
-
-   同一輪也釐清了 `store` 與 `backend` 不是兩條平行的路：memory middleware 完全不碰 `store`，只有 `StoreBackend` 會去 LangGraph 的執行 context 把它取出來。所以 `store` 這一軸對記憶而言是「backend 的一種選法」，不是獨立選項。
-
-   **checkpointer 與 store 兩軸維持在 `MemorySaver` 與「未選」，理由是收下 `@langchain/langgraph-checkpoint-postgres` 會把一個活的 Postgres 拖進測試路徑**，而 CI 上沒有任何服務憑證（[#31](https://github.com/DemianLi/nexus-agent/issues/31)），測試必須是自足的。版本層級也仍然懸在那張 PR 上（見第 3 節鎖死那一列）。這兩軸目前**沒有可執行證據**，只有寫下來的判斷——照實記著，別讓它看起來像已經驗過。
-
-   **補（2026-09-05，[#155](https://github.com/DemianLi/nexus-agent/issues/155)）：這裡少了一軸，而少掉的那一軸才是先落地的那個。** 上面三軸（checkpointer／store／backend）問的都是「LangGraph 的狀態存在哪」；**會話事件日誌不在其中任何一軸上**——它不是 thread 內的對話狀態、不是跨 thread 的 KV、也不是模型看得到的檔案系統。照 dsh 的分法（`session-persistence` 與 `storage` 是兩個獨立 seam，而 LangGraph 那種狀態快照在 dsh **根本沒有對應物**，因為它的日誌就是真相、投影只是帶版本的快取），我們這側真正的三軸是**會話日誌／checkpointer／storage**，而且三者的「何時寫／寫什麼／誰讀回」沒有一格重疊，所以不必也收不到一起去。
-
-   **只有會話日誌那一軸做了**（[#172](https://github.com/DemianLi/nexus-agent/issues/172)，`--session-log <dir>`，JSONL）。另外兩軸今天**零消費者**：~~三個入口都沒有跨重啟的續接~~（`wire-handler.ts` 那個 `resume` 是行程內的 HITL）**2026-09-11 起 CLI 有了（[#251](https://github.com/DemianLi/nexus-agent/issues/251)，`--resume <run 目錄>`），但它讀回的是會話日誌這一軸**——#251 判定只開日誌那扇門、不開 checkpointer 那扇，對話照樣從頭開始，所以這一句的結論不變、理由換了：不是沒有續接，是續接不走這兩軸；`serve` 與 eval 仍然沒有續接。**再補（2026-09-14，[#306](https://github.com/DemianLi/nexus-agent/issues/306)）：上一句有兩處過期了。** `serve` 也有續接（#251 之後碰到以前寫過的 thread 就接回來）；**對話也不再從頭開始**——照 dsh，模型歷史從會話日誌推出來、在第一輪之前灌回 graph state（`apps/harness/src/conversation-restore.ts`），**仍然不走 checkpointer 那一軸**，所以「續接不走這兩軸」的結論照舊成立。eval 仍然沒有續接。**畫面也重播了**（同一張卡的第二刀）：web 切回以前的 thread 時，server 把 root 日誌轉成線上的 `Event`（不帶傳輸 `seq`）交給同一個折疊器，照 dsh 的 `session.follow` 開頭那份 snapshot 與往前翻的 `session.page`（`GET /threads/:id/history`，`apps/harness/src/conversation-history.ts`）。而 eval 的「沒有 checkpointer」是承重的（`eval/runner.ts` 那段註解）。落盤的 checkpointer 裝得起來已驗（`@langchain/langgraph-checkpoint-sqlite@1.0.4` 的 peer 全過，`@langchain/langgraph-checkpoint` 已經是 `apps/harness` 的直接相依），**但它拉原生的 `better-sqlite3`，而我們的 `onlyBuiltDependencies` 只放了 `esbuild`**——JSONL 那條零原生相依，這個不對稱本身就是先做日誌軸的理由。要做 checkpointer 那一軸時，第一件事是 [#170](https://github.com/DemianLi/nexus-agent/issues/170) 的工具結果暫存：它進 graph state、逐 thread，**會進 checkpoint**，落盤之後就變成需要保留策略的磁碟成本。
-
-5. **結果校驗範圍（Phase 4 前）**：需定義「校驗什麼」——schema、不變量、還是業務規則。~~屆時拍板。~~ **已拍板（Phase 4；2026-09-11 回填）：只收 schema。** 決議當時只寫進了 `packages/nexus-plugin-validation/src/index.ts` 的檔頭（逐字：「schema 是工具作者自己說得清楚的東西，不變量不是」），這一格一直沒回頭改，所以看起來像還沒決定。落地的是兩件（見第 5 節 Phase 4 那段）：工具**輸出**對宣告 schema 的校驗——逐工具選加，沒宣告的明文放行，**輸入**那一半基座本來就驗；以及工具失敗一律變成帶更正回饋的 error ToolMessage。**不變量與業務規則當時歸 [#16](https://github.com/DemianLi/nexus-agent/issues/16)**，而 #16 在 2026-09-01 關閉時論證的是「schema 校驗加失敗回饋就是有效的那一種、不是權宜之計」（`.docs/reflection-intent-survey.md`），**沒有接走這兩樣**——2026-09-11 開了 [#252](https://github.com/DemianLi/nexus-agent/issues/252) 接它們，連同下面那件輸出校驗的事。兩件要一起講的事實：`createValidationPlugin()` **不在 `DEFAULT_PLUGINS` 裡**（清單裡只有它的不變量配套入口），它自己的套件之外零個非測試呼叫點，所以產品路徑上輸出校驗今天沒有掛；包自有的運行時不變量（[#102](https://github.com/DemianLi/nexus-agent/pull/102)／[#110](https://github.com/DemianLi/nexus-agent/pull/110)）後來以另一個形狀落地，但它檢的是會話日誌的 turn 配對這類跨筆關係，**不是工具結果**——別把它當成這一格的「不變量」。**2026-09-13 結案（[#252](https://github.com/DemianLi/nexus-agent/issues/252)）**：輸出校驗搬進 `@nexus/core`——schema 隨 `registry.tools.register(tool, { outputSchema })` 帶、fold 打底進 root 與每個 subagent（照 #159 對圍堵的處理），產品路徑上 `get_goal`／`create_goal`／`update_goal`／`ask_user_question` 四顆宣告，其餘工具回的是散文、宣告不了。**不變量與業務規則認帳不做**：dsh 那側也沒有它們的家（訂 `tools/post-execute` 的全是政策與呈現，外加轉接使用者外部鉤子的橋接），業務規則住在工具本體；`submit_record` 那一格由人在核准卡上看。
-6. **`apps/web` 與 agent 之間的傳輸**（Phase 5 拍板）：原文從沒把它記成決策點，「現有骨架續用」那句把它藏起來了（見第 5 節 Phase 5）。**決定：上行 HTTP POST，下行單向事件串流；下行載體先做 SSE，WebSocket 覆寫留到需要時再加。形狀不變，但依據換了一半 —— 見下面「動工前一驗」。**
-
-   **依據是 dsh 的實際做法**（AGENTS.md 的技術實現標準；以下都是讀 `references/deepseek-harness` 的原始碼，不是搜尋來的）：
-
-   - 瀏覽器載體的形狀寫在檔案第一行：`packages/client/connection/src/client/web-api-client.ts` —— 「Browser API carrier: HTTP upstream plus one WebSocket per downstream event stream.」下行單向是**明文的協定不變量**，不是實作細節：`websocket-downlink.ts` 的類別註解寫「Client messages are a protocol violation: upstream traffic remains on HTTP.」
-   - **同一組 frame 在 host 這側同時有 SSE 路由**：`packages/host/apiproxy/src/fetch/handler.ts` 的 `GET /api/events.mux` 與 `/api/events.host` 回 `text/event-stream`，而 SSE 的 frame 解碼就在共用的 `AbstractApiClient` 裡；`WebApiClient` 是**覆寫**掉那條預設改用 WS。所以 SSE 不是測試用的假縫，是同一份協定的另一個載體 —— 走 SSE 的 `InProcessApiClient` 定位為「同構接點……跑完整的協定序列化與校驗路徑而不經過網路」。**先做 SSE 等於做 dsh 兩層裡的基礎那層；但 dsh 出貨給瀏覽器的是 WS，停在 SSE 就是少了那一層覆寫，這裡明著記著。**（dsh 自己也註明 SSE 那條用的是 streaming fetch 而不是 `EventSource`，見 `packages/host/apiproxy/src/fetch/client.ts`。）
-   - **事件不是「每個請求回一條串流」。** dsh 只有兩條長期下行：`mux`（跨全部 session 彙總）與 `host`（session 生命週期）。agent 的實際事件以 `session/event` 搭在 mux 上，核准請求也是（`approval/requested` 是一個可回答的 server-request），回覆走 HTTP 上行。**這一點與基座的 HITL 形狀正好對得上**：`run.interrupts` 在串流這一端、`Command({ resume })` 在下一次呼叫這一端。
-   - 重連照 dsh：`since` 在它的 v1 沒實作，明文 `reconnection = reopen the stream + refetch history`。
-   - **handler 的形狀也照抄**（`fetch/handler.ts`）：`(Request) => Response`，不綁 port；**路徑指名 method、封包裡也帶 method，兩者不合就是錯誤**；載體層的錯用 HTTP status（415 非 JSON media type、400 body 不是 JSON、404 不認得的 method），協定層的錯用 200 ＋ error 封包。那個 415 是有理由的安全閘：瀏覽器對 `text/plain` 之類的「simple POST」不發 preflight，只收 `application/json` 等於逼出一個這個 server 從不回答的 preflight。
-
-   **動工前一驗（第八次，形狀對、依據不完整）：`@langchain/protocol` 已經把這條線規格化了，而且更具體。** 它是 `@langchain/langgraph` 與 `@langchain/langgraph-sdk` 的直接相依，**早就在我們的 `node_modules` 裡**，只是計劃從沒提過。原文整段從 dsh 推出來，漏掉了「既有基礎建設自己出了規格書」這件事。AGENTS.md 的偏離規則是「**基礎建設表達不出來**才退到最接近的實作」——這裡基礎建設不但表達得出來，還把 route、封包、channel 名、HITL 的兩個 method 都指定死了。**自己發明 frame 才是需要標註的那一邊。** 實測到的內容：
-
-   - **v3 的 run 本身就是 `AsyncIterable<ProtocolEvent>`。** `GraphRunStream implements AsyncIterable<ProtocolEvent>`（`@langchain/langgraph@1.4.12`，`dist/stream/run-stream.d.ts`），`for await (const ev of run)` 直接吐 `{ type:'event', seq, method, params:{ namespace, timestamp, node?, data } }`。實測整場 56 顆 frame **全部 `JSON.parse(JSON.stringify(ev))` 過得去**，method 落在 `lifecycle` / `checkpoints` / `values` / `tasks` / `updates` / `messages` / `tools` 七個名字上，與 protocol 的 `Channel` union 一字不差。→ **pump 是一個 map，不是一層轉譯**；沒有 frame 要發明，也沒有序列化工作要做。`run.messages` / `run.toolCalls` 那些投影是給 in-process 消費者的，不是線上的東西。
-   - **protocol 明文規定 SSE 那條線**：`POST /threads/:thread_id/stream`，body 是 `EventStreamRequest`（`channels` / `namespaces` / `depth` / `since`），server 回 `text/event-stream`；`Event.event_id` 的註解寫「maps to SSE `id:`」。整份協定是 thread-centric 的。上行的 `Command` 封包（`{ id, method, params }`）在 WS 那條路上直接送，HTTP 那條路上協定沒指定 route —— 那一格由 dsh 的 `fetch/handler.ts` 補：**路徑指名 method**。
-   - **HITL 在協定裡有名字**：下行 `input.requested`、上行 `input.respond`。我們自己不必替核准這件事發明詞彙。
-   - **已考慮並排除 `@langchain/langgraph-sdk` 的 client**：它打的是 LangGraph Platform 的 API（`client.runs.stream(threadId, assistantId, …)`），前提是跑一台 LangGraph Server。我們的組裝點是 `createDeepAgent`，不跑那台 server，所以不走它。它與 protocol 共用同一份型別，這是它們形狀相似的原因，不是可以直接接上的理由。
-
-   **基座這側量到的六件事決定了 server 端要做什麼**（`deepagents@1.13.1` ＋ `@langchain/langgraph@1.4.12`，探針跑完即棄）：
-
-   1. **run 不必被抽就會自己前進。** 開了 v3 串流之後什麼都不抽，300 ms 後工具已經跑完；`await run.output` 收完整場之後再抽 `run.messages`，兩輪都還在。**但這只證明了同一個 run 物件在同一個行程內可以重播** —— 跨連線、跨行程的重連沒有驗過，所以重連策略照 dsh 的 reopen ＋ refetch，不要拿這個 buffer 當重連機制。
-   2. **一場對話不是一個 run 物件。** 停在核准點時 run 就收掉，`run.messages` 只有中斷前那一段（實測 `['我來記。']`）；`streamEvents(new Command({ resume }), …)` 回的是**另一個** run 物件（實測 `run2 !== run`），而且只帶 resume 之後的訊息（`['記好了。']`），舊的 run 再抽一次仍然只有前半段。→ **持久下行串流必須由 server 端把 N 個 run 物件接起來**，不能把某一個 run 直接交給瀏覽器。這正是 dsh 那條「一條長期下行、上行另走 HTTP」的形狀在我們這邊也成立的理由。
-   3. **`seq` 在每個 run 上從 0 重新開始。** 實測 resume 那個 run 的第一顆 frame 是 `seq: 0`。而 protocol 的 `Event.seq` 是「monotonic sequence number for ordering」、`event_id` 是重連用的 key —— 兩者都預設整條下行是單調的。→ **server 端接起 N 個 run 的時候必須重新編號**，照原樣轉出去會讓瀏覽器那側的排序與去重靜靜地壞掉：seq 不會變小到看得出來，它是一段一段重來。
-   4. **中斷時 raw iteration 乾淨結束，不拋。** 中斷本身以 `updates` frame 出現（`node: "__interrupt__"`，data 就是 `run.interrupts` 那份 `actionRequests` / `reviewConfigs`）。→ **pump 完全不必碰 `run.output`**，抽完 iteration 就是這一段的結束。第 5 節 Phase 5 記的「不能無條件 `await run.output`」仍然成立，但它是**核准 UI 那一端**的陷阱，不是 pump 的。
-   5. **`lifecycle` 的 `{ event: 'completed', graph_name: 'root' }` 在中斷時照樣會發。** → 它不是「對話結束、可以關線」的訊號。拿它當關線條件的話，每按一次核准就會斷線一次。
-   6. **失敗會先上線再拋。** 實測 run 失敗時最後一顆 frame 是 `lifecycle { event:'failed', graph_name:'root', error:'…' }`，**然後** iteration 才 throw。→ 瀏覽器從協定 frame 就知道為什麼死的，pump 的 try/catch 是用來收線的，不是用來補一顆錯誤 frame 的。（工具拋錯那一組另外還有一顆 `graph_name:'tools'` 的 failed，而且會多一個 `run.output.catch()` 攔不掉的 unhandled rejection —— 但那是第 5 節 Phase 4 那條「工具拋錯就整場死」的老問題。**[#159](https://github.com/DemianLi/nexus-agent/issues/159) 之後，我們的組裝踩不到它了**：圍堵由 `foldRegistry` 打底進 root 與每個 subagent，裸 `createDeepAgent` 才踩得到（絆索在 `apps/harness/src/baseline.test.ts`）。模型拋錯那一組沒有這個副作用。）
-
-   **channel 白名單是安全邊界，不是效能調校。** 實測 `tasks` 的每一顆 frame 都夾著整份 input message list、`updates` 夾著完整序列化的 `{"lc":1,…}` 訊息、`values` 夾整個 state。全頻道往瀏覽器倒等於每個 task event 重送一次對話狀態，而且 state 裡有什麼就送什麼。protocol 的 `EventStreamRequest.channels` 存在正是為這件事。→ **白名單預設只放 `messages` / `tools` / `lifecycle` ＋ 中斷那條**，`tasks` / `checkpoints` / `values` 要放行得是一個明白的決定。
-
-   **瀏覽器斷線不得中止 run。** `run.abort()` 與 `run.signal` 就在手邊，把 HTTP response 的 abort signal 接上去是最自然的寫法，而它是錯的 —— 下行是**長期的**、與單一 run 無關，斷線之後靠 reopen 接回來。接反了不會有任何錯誤訊息，只會變成「使用者關掉分頁 agent 就停了」。
-
-   **這張 PR 的採納範圍，與明著不做的部分。** 收：封包（`Command` / `CommandResponse` / `ErrorResponse` / `Event`）、channel 名、SSE 的 route 形狀、HITL 的 `input.respond`。**不收，而且明著記著**：`subscription.*`（SSE 那條路上訂閱就是開線本身）、`state.get` / `state.fork` / `state.listCheckpoints`、`agent.getTree`、`input.inject`、`custom:*` 頻道、`namespaces` / `depth` 過濾。**`since` 收到就明確回 `not_supported`，不靜靜忽略** —— 靜靜忽略會生出看不見的斷檔。這麼切本身就是照 dsh：它自己也只有兩條長期下行、`since` 在 v1 沒實作。跨連線的 replay 要能做得先有 frame 的持久化，而狀態儲存目前只收斂了 backend 一軸（見決策 4）。**補（2026-09-14，[#306](https://github.com/DemianLi/nexus-agent/issues/306)）**：dsh 那句的後半「refetch history」有了，**但不是 frame 的持久化**——`GET /threads/:id/history` 從會話日誌轉出線上的 `Event`，不帶傳輸 `seq`。`since` 照舊不收。
-
-   **偏離標記**：無協定層偏離，而且比原本記的更強 —— 這條線用的是**基座自己的協定詞彙**，dsh 提供的是它沒指定的那一格（HTTP 上行的 route 形狀與錯誤分層）。兩處未完成，都不是表達力問題：載體層先出 SSE 不出 WS 覆寫；協定層只實作上面那份採納範圍。
