@@ -43,11 +43,37 @@ fatal: couldn't find remote ref <branch>
 git remote prune origin
 ```
 
-### 讓它不再發生
+**這是目前唯一可靠的做法。** 撞到就跑一次，沒有能跨 session 存活的自動化 —— 理由見下節。
+
+### 讓它不再發生：目前無解
 
 上游已回報：[anthropics/claude-code#94771](https://github.com/anthropics/claude-code/issues/94771)。
 
-在上游修好之前，把下面這段貼進 **environment 的 setup script**（在 Claude Code 網頁端設定，不在容器裡也不在這個 repo 裡）。hook 由 `/opt/env-runner/environment-manager` 在每次 session 啟動時重新佈署，所以直接改檔案活不過一次 session。
+**2026-09-16 實測：把下面的 patcher 貼進 environment 的 setup script 不生效。** 在 patcher 已經貼上之後開一個全新容器檢查，標記不在檔案裡：
+
+```
+marker=0  hook=2026-09-16 15:52:43  gate=2026-09-16 15:52:43
+          boot=2026-09-16 15:52:43  syntax=ok
+```
+
+hook 由 `/opt/env-runner/environment-manager` 在每次 session 啟動時重新佈署，所以直接改檔案本來就活不過一次 session；而 setup script 這條路同樣沒成功。佐證是 `stop-hook-git-check.sh`、`stop-hook-reply-gate.py`、`user-prompt-submit-reply-reminder.py`、`launcher-settings.json` 四個檔案的 mtime **奈秒級完全相同**（觀察到的其中一次是 `15:49:34.550185779`），且落在開機後約三秒 —— 它們是被同一次佈署動作整批寫下的。
+
+還沒分辨出是下面哪一種，兩個假說現有資料都解釋得通：
+
+| | 假說 | 意義 |
+| --- | --- | --- |
+| H1 | setup script 有跑，但 hook 佈署在它之後，把 patch 蓋掉 | 這條路原理上走不通 |
+| H2 | setup script 根本沒跑 | 設定問題，可修 |
+
+分辨方法：在 setup script 最前面加一行，讓它在 `~/.claude` 以外留痕，再開新容器看檔案在不在。
+
+```bash
+date -u +'%Y-%m-%dT%H:%M:%SZ' > "$HOME/.setup-script-ran"
+```
+
+追蹤在 [#370](https://github.com/DemianLi/nexus-agent/issues/370)。
+
+patcher 本身是對的（冪等、語法檢查失敗會還原、任何一步對不上就安靜跳過），只是還沒找到能讓它在 hook 佈署**之後**執行的載體。先留在這裡，找到載體時可直接用：
 
 ```bash
 #!/bin/bash
@@ -106,6 +132,8 @@ exit 0
 **考慮過但否決的做法**：用 `git ls-remote --exit-code --heads origin "$branch"` 先確認遠端分支還在。否決理由是每次 Stop 都多一次網路往返，而且離線或 proxy 不通時會 fail closed。
 
 ### 驗證過的四個情境
+
+這張表驗的是**修正本身正確**，不是**佈署方式可行** —— 它跑在手動 patch 過的 hook 上。持久性見上節。
 
 2026-09-16 在活的容器上實跑：
 
