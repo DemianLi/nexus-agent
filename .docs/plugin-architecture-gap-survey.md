@@ -10,7 +10,7 @@
 
 **這張表只回答一件事：某個主題有沒有結論、是什麼。** 理由住在指向的那一節，不重述。
 
-**它的存在理由是上下文成本**：本檔 ~100KB、24 個標題，每節平均 4,151 字元，而 §三那 51 列的「狀態」欄只說**今天有沒有**，不說**判過沒有**——所以要知道一個「沒有」是缺口還是已經判過不做，最少得讀 4,000 字元。這張表把那個答案搬到零次額外讀取的位置。
+**它的存在理由是上下文成本**：本檔 61,427 字元（103KB）、24 個標題，每節平均 ~2,560 字元，（2026-09-16 更正：原文的「4,151 字元」是 bytes 誤標成字元，成因見 `development-plan.md` 同一處的更正；比例不受影響）而 §三那 51 列的「狀態」欄只說**今天有沒有**，不說**判過沒有**——所以要知道一個「沒有」是缺口還是已經判過不做，最少得讀 4,000 字元。這張表把那個答案搬到零次額外讀取的位置。
 
 **與「一個事實一個家」的關係**：結論在這裡出現第二次，理由仍然只有一個家。刻意的——結論放兩處的**不一致是看得見的**（兩處說法打架），而「指標不帶結論」的失敗是**無聲的**：讀的人拿到一個沒有結論的問題描述，很容易當成開著的缺口。這張表與它指向的那一節不一致時，**以那一節為準並修正這裡**。
 
@@ -438,7 +438,7 @@ dsh 有 in-process／fork／spawn／acp／claude-code／codex 六種委派後端
 
 ## 六、沒查清楚的
 
-1. ~~**Phase 5 的驗收句沒有逐條核。** `apps/web` 只確認了檔案存在與 `App.tsx` 檔頭；「完成度」是「存在」不是「驗過」。~~ **問句不成立（2026-09-08，[#226](https://github.com/DemianLi/nexus-agent/pull/226)，只讀原始碼與 PR 內文）。** 這一條講的是**這份調研 2026-09-02 當天自己的核對深度**，不是「沒人驗過」——[`development-plan.md`](development-plan.md) 早在 **2026-08-28 就宣告 Phase 5 完成（demian 拍板）**，所以這一條從一開始就不是在追一個沒答的問題，是在記「我這份筆記沒有自己去核」，而當時計劃書引的證據（#79）確實是舊機制的。驗收句（[`development-plan.md`](development-plan.md) Phase 5：「瀏覽器完成『提問 → 看事件流 → 核准工具 → 收結果』全迴圈；eval 有可比較的通過率數據」）兩半各有出處。
+1. ~~**Phase 5 的驗收句沒有逐條核。** `apps/web` 只確認了檔案存在與 `App.tsx` 檔頭；「完成度」是「存在」不是「驗過」。~~ **問句不成立（2026-09-08，[#226](https://github.com/DemianLi/nexus-agent/pull/226)，只讀原始碼與 PR 內文）。** 這一條講的是**這份調研 2026-09-02 當天自己的核對深度**，不是「沒人驗過」——[`development-plan-phase-5.md`](development-plan-phase-5.md) 早在 **2026-08-28 就宣告 Phase 5 完成（demian 拍板）**，所以這一條從一開始就不是在追一個沒答的問題，是在記「我這份筆記沒有自己去核」，而當時計劃書引的證據（#79）確實是舊機制的。驗收句（[`development-plan-phase-5.md`](development-plan-phase-5.md) Phase 5：「瀏覽器完成『提問 → 看事件流 → 核准工具 → 收結果』全迴圈；eval 有可比較的通過率數據」）兩半各有出處。
    - **前半由 [#124](https://github.com/DemianLi/nexus-agent/pull/124)（2026-09-01）的「驗證方式」走完**，而且是**今天這個機制**：`serve:live`、真模型 `openai/gpt-oss-120b`、**沒有 `--plugins`**。模型先 `ls` 探索再交計劃 → 送出 `exit_plan_mode` → 核准卡片跳出來、送出框鎖成「先回答上面那個核准請求…」 → 按「全部核准」→ 留下「已核准：exit_plan_mode」 → `write_file` 與 `read_file` 都跑完；伺服器日誌零不變量違規。那顆核准來自 `packages/nexus-plugin-plan-mode/src/index.ts` 的 `registry.approvals.gate(...)`，不是基座的 `interruptOn`。
    - **[#79](https://github.com/DemianLi/nexus-agent/pull/79) 是載體的出處，不是等價的證據。** 它第一次走完整條（含「全部拒絕」那一半：第二顆中斷「等待核准：write_file」→ 全部拒絕 → transcript 留下「已拒絕：write_file（沒有執行）」），並交了 `apps/harness/src/approval.fixture.ts` 與 README 那道 `--plugins` 指令（今天都還在）——**但它跑在舊機制上**（基座 `interruptOn`、中斷在 `afterModel`），fixture 隨後被 [#112](https://github.com/DemianLi/nexus-agent/pull/112) 改寫成 `approvals.gate`。#112 自己複驗過，**載體是 CLI 不是瀏覽器**（`printInterrupt` 讀 `actionRequests[].name` 與 `.description`，證明酬載形狀相容）；瀏覽器那個載體是 #124 補的。
    - **後半（eval 數據）**由 [#83](https://github.com/DemianLi/nexus-agent/pull/83)／[#84](https://github.com/DemianLi/nexus-agent/pull/84)／[#86](https://github.com/DemianLi/nexus-agent/pull/86)／[#87](https://github.com/DemianLi/nexus-agent/pull/87) 三輪數據收掉，[#167](https://github.com/DemianLi/nexus-agent/issues/167) 收掉階梯裝置時結論一個字都沒變。

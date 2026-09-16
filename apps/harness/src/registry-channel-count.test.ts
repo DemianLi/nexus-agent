@@ -161,7 +161,7 @@ const PROSE_SITES: readonly ProseSite[] = [
 /** 斷言擋不到、但通道數變了就要人去看一眼的地方。**這份清單是這條絆索的價值所在。** */
 const ALSO_SWEEP = [
   '.docs/plugin-architecture-gap-survey.md（「14 個欄位（9 ＋ 5）」，阿拉伯數字）',
-  '.docs/development-plan.md（「九個註冊點 ＋ 五條通道」）',
+  '.docs/development-plan.md 與 development-plan-phase-5.md（「九個註冊點」；#364 切檔後散在兩份）',
   'packages/nexus-core/src/load.ts 與 load.test.ts（「九個註冊點一個都不能漏」）',
   'registry.ts 的「九個註冊點」在五行上（:4 / :15 / :309 / :346 / :443），下面只見證其中一行——差一的那兩種寫法有 forbidden 擋著，改幅超過一就要自己數',
 ].join('\n  - ');
