@@ -22,6 +22,8 @@ Cordis，**領域**是 `packages/core/*`，**打底**是 `packages/bundle/base`�
 
 ## 一、決定
 
+登記在 [#358](https://github.com/DemianLi/nexus-agent/issues/358)。
+
 **維持三合一，不拆。** 同時**加一條相依絆索**（§七），把「容器層沒有領域相依」這件今天靠紀律
 維持的事變成會紅的測試。
 
