@@ -178,6 +178,11 @@ export interface CliInvocation {
    * 多掛一個就變四格、≈ 124 輪。**一個固定的數字不是一個固定的輪數。**
    *
    * **不必配別的旗標**：它永遠有消費者（每一種組裝都有迴圈），不像 `--max-goal-rounds`。
+   *
+   * **配 `--resume` 是對的，而且每一次都要重給。** 它跟 `--sandbox` 相反：上限不記進日誌、
+   * 也推不回來，只作用在這一次行程——所以續接時沒有「兩個來源誰贏」的問題，不給就是回到
+   * 預設。別把它加進 `--resume` 的衝突檢查：Proteus 的 adapter 每個 phase 都是一次
+   * `--resume` 呼叫，靠的就是每次重給。
    */
   readonly recursionLimit?: number;
   /** 只印用法就退出。 */
