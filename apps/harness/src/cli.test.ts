@@ -23,6 +23,7 @@ import {
   CLI_PROBE_FILE,
   createCliAgent,
   DEFAULT_PLUGINS,
+  exitCodeFor,
   loadPluginModule,
   parseCliArgs,
   runCli,
@@ -85,6 +86,50 @@ describe('parseCliArgs', () => {
 
   it('--plugins 給空字串報錯——那是打錯了，不是「不指定」', () => {
     expect(() => parseCliArgs(['--plugins', ''])).toThrow(/--plugins/);
+  });
+
+  it('--recursion-limit 收正整數，省略即不設（由組裝點用預設）', () => {
+    expect(parseCliArgs(['--recursion-limit', '500']).recursionLimit).toBe(500);
+    expect(parseCliArgs([])).not.toHaveProperty('recursionLimit');
+    // 負數要寫成 `--recursion-limit=-1`：分開寫的話 `parseArgs` 先把 `-1` 當成旗標拒絕。
+    for (const raw of ['0', '-1', '1.5', 'abc', ' ']) {
+      expect(() => parseCliArgs([`--recursion-limit=${raw}`])).toThrow(
+        /--recursion-limit 要給一個正整數[\s\S]*用法/,
+      );
+    }
+  });
+});
+
+/**
+ * [#362](https://github.com/DemianLi/nexus-agent/issues/362)：撞到迴圈上限要跟其他失敗分得開。
+ *
+ * 判準只認型別化的 `lc_error_code`——同一句散文、沒有那個碼的錯誤仍然是 1。
+ */
+describe('exitCodeFor', () => {
+  it('帶 GRAPH_RECURSION_LIMIT 的是 2，措辭一樣但沒有碼的是 1', () => {
+    const limited = Object.assign(new Error('Recursion limit of 8 reached'), {
+      lc_error_code: 'GRAPH_RECURSION_LIMIT',
+    });
+    expect(exitCodeFor(limited)).toBe(2);
+    expect(exitCodeFor(new Error('Recursion limit of 8 reached'))).toBe(1);
+    expect(exitCodeFor(Object.assign(new Error('x'), { lc_error_code: 'INVALID_UPDATE' }))).toBe(1);
+    expect(exitCodeFor('字串')).toBe(1);
+    expect(exitCodeFor(undefined)).toBe(1);
+  });
+
+  it('runCli 撞到 --recursion-limit 時拋出的錯誤帶著那個碼（沒有被中途換掉）', async () => {
+    const { printer } = recorder();
+    const failure = await runCli({
+      argv: ['--recursion-limit', '8', '說點什麼'],
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer,
+    }).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ lc_error_code: 'GRAPH_RECURSION_LIMIT' });
+    // 是**這個旗標的值**撞到的，不是預設那條——旗標真的傳到了 agent。
+    expect((failure as Error).message).toMatch(/Recursion limit of 8 reached/);
+    expect(exitCodeFor(failure)).toBe(2);
   });
 });
 
@@ -614,12 +659,26 @@ describe('CLI 行程', () => {
     });
   }
 
-  it('兩個 plugin 撞同一個工具名時非零退出，stderr 指名是誰撞了什麼', async () => {
+  it('兩個 plugin 撞同一個工具名時退出碼是 1，stderr 指名是誰撞了什麼', async () => {
     const { code, stderr } = await runProcess(['--plugins', fixture, '說點什麼']);
 
-    expect(code).not.toBe(0);
+    // **是 1 不是 2**：組裝失敗不是撞到迴圈上限，兩者要分得開。
+    expect(code).toBe(1);
     expect(stderr).toContain(COLLIDING_TOOL_NAME);
     expect(stderr).toContain(FIRST_PLUGIN_NAME);
     expect(stderr).toContain(SECOND_PLUGIN_NAME);
   }, 90_000);
+
+  /**
+   * 退出碼只存在於行程上，所以分岔要在這裡釘一次（#362）。對照組是同一句話、不帶旗標：
+   * 預設腳本兩次工具呼叫就講完，跑得完就是 0——所以 2 來自旗標，不是腳本本身出事。
+   */
+  it('一次性模式撞到 --recursion-limit 時退出碼是 2；不帶旗標跑得完是 0', async () => {
+    const limited = await runProcess(['--recursion-limit', '8', '說點什麼']);
+    expect(limited.code).toBe(2);
+    expect(limited.stderr).toMatch(/Recursion limit of 8 reached/);
+
+    const control = await runProcess(['說點什麼']);
+    expect(control.code).toBe(0);
+  }, 120_000);
 });
