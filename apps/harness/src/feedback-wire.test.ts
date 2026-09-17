@@ -30,7 +30,7 @@ import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
 import { DEFAULT_PLUGINS, createCliAgent } from './cli.js';
-import { approvalAt } from './fixtures.js';
+import { approvalAt, loopbackRequest } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
@@ -97,7 +97,7 @@ async function line(turns: readonly ScriptedTurn[]): Promise<Line> {
   const connect = () =>
     createWireClient({
       baseUrl: BASE_URL,
-      fetch: async (input, init) => handler.handle(new Request(input as string, init)),
+      fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
     });
   return {
     model,
@@ -359,7 +359,7 @@ describe('/feedback 與零 plugin 設定', () => {
     opened.push(handler);
     const client = createWireClient({
       baseUrl: BASE_URL,
-      fetch: async (input, init) => handler.handle(new Request(input as string, init)),
+      fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
     });
     return { built, client, log: () => captured! };
   }

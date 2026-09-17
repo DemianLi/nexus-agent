@@ -52,7 +52,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
-import { emptyCommandPoint } from './fixtures.js';
+import { emptyCommandPoint, loopbackRequest } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -126,7 +126,7 @@ async function connect(
   });
   const client = createWireClient({
     baseUrl: BASE_URL,
-    fetch: async (input, init) => handler.handle(new Request(input as string, init)),
+    fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
   });
   const events = await client.openEvents(threadId);
   await client.runStart(threadId, '幫我登記一位訪客');

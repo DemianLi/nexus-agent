@@ -20,6 +20,7 @@ import { createEchoPlugin } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
 
 import { createCliAgent, DEFAULT_PLUGINS, runTurn } from './cli.js';
+import { loopbackRequest } from './fixtures.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
@@ -156,7 +157,7 @@ describe('不變量接線：web 那條路', () => {
       }),
     });
     const fetchImpl: typeof globalThis.fetch = async (input, init) =>
-      handler.handle(new Request(input as string, init));
+      handler.handle(loopbackRequest(input as string, init));
     const client = createWireClient({ baseUrl: BASE_URL, fetch: fetchImpl });
 
     try {

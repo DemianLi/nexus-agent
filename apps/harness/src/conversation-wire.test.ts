@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
-import { approvalAt, approvalToolNames, emptyCommandPoint } from './fixtures.js';
+import { approvalAt, approvalToolNames, emptyCommandPoint, loopbackRequest } from './fixtures.js';
 import { createWireHandler } from './wire-handler.js';
 
 /**
@@ -87,7 +87,7 @@ function connect(agent: PumpAgent) {
     handler,
     client: createWireClient({
       baseUrl: BASE_URL,
-      fetch: async (input, init) => handler.handle(new Request(input as string, init)),
+      fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
     }),
   };
 }

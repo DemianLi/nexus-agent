@@ -13,12 +13,16 @@
  *
  * 錯誤分兩層，也照 dsh：
  *
- * - **載體層**用 HTTP status：415（media type 不是 JSON）、400（body 不是 JSON）、
- *   404（路徑不指向任何 method）。
+ * - **載體層**用 HTTP status：403（來源不可信）、415（media type 不是 JSON）、
+ *   400（body 不是 JSON）、404（路徑不指向任何 method）。
  * - **協定層**用 200 ＋ error 封包：封包形狀不對、method 與路徑不合、要的功能沒實作。
  *
  * 那個 415 是安全閘不是潔癖：瀏覽器對 `text/plain` 之類的「simple POST」不發
  * preflight，只收 `application/json` 等於逼出一個這個 server 從不回答的 preflight。
+ *
+ * **它擋得住跨站，擋不住 DNS rebinding**——被 rebinding 的頁面在瀏覽器眼裡是同源，preflight
+ * 根本不發。那一條由排在它前面的 403 擋，判準照 dsh，見 [`request-trust.ts`](./request-trust.ts)
+ * （[#387](https://github.com/DemianLi/nexus-agent/issues/387)）。
  */
 
 import type {
@@ -64,6 +68,7 @@ import type { CommandExecutor } from '@nexus/plugin-commands';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { HistoryQueryError, historyPage } from './conversation-history.js';
 import type { GoalDriverPort } from './goal-driver.js';
+import { isTrustedWireRequest } from './request-trust.js';
 import type { StoredThreadList } from './session-list.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
@@ -928,6 +933,10 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
 
   return {
     async handle(request) {
+      // 在任何路徑判斷之前：404 的路徑一樣不回答不信任的來源。見 `request-trust.ts`。
+      if (!isTrustedWireRequest(request.headers)) {
+        return new Response('untrusted host or origin', { status: 403 });
+      }
       const { pathname, searchParams } = new URL(request.url);
       const mediaType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
       const wrongMediaType = () =>

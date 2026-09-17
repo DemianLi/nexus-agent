@@ -40,7 +40,7 @@ import {
 import { beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
-import { approvalAt, approvalToolNames, emptyCommandPoint } from './fixtures.js';
+import { approvalAt, approvalToolNames, emptyCommandPoint, loopbackRequest } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -120,7 +120,7 @@ async function open(threadId: string, tools: readonly string[]): Promise<Session
   });
   const client = createWireClient({
     baseUrl: BASE_URL,
-    fetch: async (input, init) => handler.handle(new Request(input as string, init)),
+    fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
   });
   const events = await client.openEvents(threadId);
   await client.runStart(threadId, '動手');

@@ -22,6 +22,7 @@ import {
 import type { ConversationState, ThreadListOutcome } from '@nexus/wire';
 import type { SessionEvent } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { loopbackRequest } from './fixtures.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
@@ -248,7 +249,7 @@ describe('running 標記', () => {
       }),
     });
     const wireFetch: typeof globalThis.fetch = async (input, init) =>
-      handler.handle(new Request(input as string, init));
+      handler.handle(loopbackRequest(input as string, init));
     const client = createWireClient({ baseUrl: 'http://wire.test', fetch: wireFetch });
 
     try {
