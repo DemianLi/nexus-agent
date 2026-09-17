@@ -10,7 +10,9 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prototype:375": "vite --port 5375 --open '/?prototype=375'",
+    "prototype:375:build": "VITE_PROTOTYPE=375 vite build --base ./ --outDir dist-prototype-375"
   },
   "dependencies": {
     "@nexus/wire": "workspace:*",

@@ -24,3 +24,6 @@ coverage/
 
 # 第三方參考原始碼（唯讀，不進版控）
 references/
+
+# PROTOTYPE #375 的靜態建置
+dist-prototype-375/

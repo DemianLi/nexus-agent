@@ -1,0 +1,365 @@
+/*
+ * PROTOTYPE #375 — 丟棄用，不合進 develop。
+ *
+ * Libraries.dev `sites/home/public/assets/site.css`（`44fef85`）的值，粗略映射進 shadcn 語意 token。
+ * 只在 `<html data-proto-375>` 底下生效，不動 `index.css`：oklch 定稿、sidebar 的 hsl
+ * 變數怎麼處理都是「設計 token 定稿」那張卡的事。這裡用 hex／rgba 是為了快，不是提案。
+ */
+
+:root[data-proto-375] {
+  --radius: 0.875rem;
+
+  /* 動效 token：整組照抄 site.css 的 :root */
+  --duration-stagger: 40ms;
+  --duration-micro: 80ms;
+  --duration-quick: 150ms;
+  --duration-fast: 250ms;
+  --duration-medium: 350ms;
+  --duration-slow: 400ms;
+  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-bounce: cubic-bezier(0.34, 1.36, 0.64, 1);
+  --distance-micro: 4px;
+  --distance-small: 6px;
+  --distance-base: 8px;
+  --scale-large: 0.96;
+  --scale-medium: 0.97;
+  --scale-small: 0.98;
+  --scale-tiny: 0.99;
+  --blur-small: 2px;
+
+  /* 亮色：site.css :root 的值（站上不用，所以是「粗略」） */
+  --background: #fdfdfd;
+  --foreground: #1a1a1a;
+  --card: #ffffff;
+  --card-foreground: #1a1a1a;
+  --popover: #ffffff;
+  --popover-foreground: #1a1a1a;
+  --primary: #1a1a1a;
+  --primary-foreground: #fafafa;
+  --secondary: #f4f4f4;
+  --secondary-foreground: #1a1a1a;
+  --muted: #f4f4f4;
+  --muted-foreground: #6c6c6c;
+  --accent: #f1f1f1;
+  --accent-foreground: #1a1a1a;
+  --border: rgba(0, 0, 0, 0.07);
+  --input: rgba(0, 0, 0, 0.1);
+  --ring: #0073e5;
+  --brand: #0073e5;
+  --stage: #f9f9f9;
+  --chip: #f4f4f4;
+  --chip-hover: #eae9e9;
+  --material-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.04), 0 4px 42px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+
+  --sidebar: #f9f9f9;
+  --sidebar-foreground: #1a1a1a;
+  --sidebar-primary: #1a1a1a;
+  --sidebar-primary-foreground: #fafafa;
+  --sidebar-accent: #f1f1f1;
+  --sidebar-accent-foreground: #1a1a1a;
+  --sidebar-border: rgba(0, 0, 0, 0.06);
+  --sidebar-ring: #0073e5;
+}
+
+:root[data-proto-375].dark {
+  /* 暗色：site.css html[data-theme="dark"] */
+  --background: #121212;
+  --foreground: #ededed;
+  --card: #181818;
+  --card-foreground: #ededed;
+  --popover: #1c1c1c;
+  --popover-foreground: #ededed;
+  --primary: #ededed;
+  --primary-foreground: #121212;
+  --secondary: rgba(255, 255, 255, 0.07);
+  --secondary-foreground: #ededed;
+  --muted: rgba(255, 255, 255, 0.07);
+  --muted-foreground: rgba(202, 202, 202, 0.7);
+  --accent: rgba(255, 255, 255, 0.1);
+  --accent-foreground: #ededed;
+  --border: rgba(255, 255, 255, 0.06);
+  --input: rgba(255, 255, 255, 0.1);
+  --ring: #55cfff;
+  --brand: #55cfff;
+  --stage: #131313;
+  --chip: rgba(255, 255, 255, 0.07);
+  --chip-hover: rgba(255, 255, 255, 0.1);
+  --material-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04), inset 0 0 0 1px rgba(196, 196, 196, 0.08);
+
+  --sidebar: #121212;
+  --sidebar-foreground: #ededed;
+  --sidebar-primary: #ededed;
+  --sidebar-primary-foreground: #121212;
+  --sidebar-accent: rgba(255, 255, 255, 0.07);
+  --sidebar-accent-foreground: #ededed;
+  --sidebar-border: rgba(255, 255, 255, 0.04);
+  --sidebar-ring: #55cfff;
+}
+
+/* ── 兩個版本共用的進出場：開快關更快、先縮一點再長出來 ── */
+
+.proto-enter {
+  animation: proto-in var(--duration-fast) var(--ease-smooth-out) both;
+}
+
+@keyframes proto-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--distance-base)) scale(var(--scale-tiny));
+    filter: blur(var(--blur-small));
+  }
+}
+
+.proto-swap[data-phase='in'] {
+  animation: proto-pop-in var(--duration-fast) var(--ease-smooth-out) both;
+}
+
+.proto-swap[data-phase='out'] {
+  animation: proto-pop-out var(--duration-quick) var(--ease-smooth-out) both;
+}
+
+@keyframes proto-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--distance-base)) scale(var(--scale-medium));
+  }
+}
+
+@keyframes proto-pop-out {
+  to {
+    opacity: 0;
+    transform: scale(var(--scale-tiny));
+  }
+}
+
+.proto-collapsible[data-state='open'] {
+  animation: proto-expand var(--duration-fast) var(--ease-smooth-out);
+}
+
+.proto-collapsible[data-state='closed'] {
+  animation: proto-collapse var(--duration-quick) var(--ease-smooth-out);
+}
+
+@keyframes proto-expand {
+  from {
+    height: 0;
+    opacity: 0;
+  }
+  to {
+    height: var(--radix-collapsible-content-height);
+  }
+}
+
+@keyframes proto-collapse {
+  from {
+    height: var(--radix-collapsible-content-height);
+  }
+  to {
+    height: 0;
+    opacity: 0;
+  }
+}
+
+.proto-caret {
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.12em;
+  border-radius: 2px;
+  background: currentColor;
+  animation: proto-blink 1s steps(2) infinite;
+}
+
+@keyframes proto-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* ── 「純 CSS 仿」那一版的 orb ── */
+
+.proto-orb {
+  --orb-size: 20px;
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  width: var(--orb-size);
+  height: var(--orb-size);
+  color: var(--foreground);
+}
+
+.proto-orb::before,
+.proto-orb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+}
+
+/* 點陣圓：用 radial-gradient 鋪點，再用圓形遮罩切成球 */
+.proto-orb::before {
+  background: radial-gradient(circle, currentColor 0.9px, transparent 1.3px) 0 0 / 4px 4px;
+  mask: radial-gradient(circle, #000 55%, transparent 72%);
+  opacity: 0.85;
+}
+
+.proto-orb::after {
+  border: 1.5px dotted currentColor;
+  opacity: 0.35;
+}
+
+.proto-orb[data-state='working']::before {
+  animation: proto-spin 2.4s linear infinite;
+}
+
+.proto-orb[data-state='working']::after {
+  animation: proto-spin 1.2s linear infinite reverse;
+}
+
+.proto-orb[data-state='composing']::before {
+  animation: proto-wave 1.4s var(--ease-smooth-out) infinite alternate;
+}
+
+.proto-orb[data-state='breathing']::before,
+.proto-orb[data-state='breathing']::after {
+  animation: proto-breathe-scale 3s ease-in-out infinite;
+}
+
+@keyframes proto-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes proto-wave {
+  from {
+    transform: scaleY(0.7) translateY(8%);
+  }
+  to {
+    transform: scaleY(1.05) translateY(-6%);
+  }
+}
+
+@keyframes proto-breathe-scale {
+  50% {
+    transform: scale(0.82);
+    opacity: 0.5;
+  }
+}
+
+/* ── 「純 CSS 仿」那一版的 border beam ── */
+
+@property --proto-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.proto-beam {
+  position: relative;
+  isolation: isolate;
+}
+
+.proto-beam::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  z-index: 1;
+  padding: 1.5px;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--duration-medium) var(--ease-smooth-out);
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+
+.proto-beam[data-active='true']::after {
+  opacity: 1;
+}
+
+.proto-beam[data-kind='run']::after {
+  background: conic-gradient(
+    from var(--proto-angle),
+    transparent 0 62%,
+    color-mix(in oklab, var(--brand), transparent 40%) 78%,
+    var(--brand) 88%,
+    transparent 100%
+  );
+  animation: proto-angle 2s linear infinite;
+}
+
+.proto-beam[data-kind='pending']::after {
+  background: var(--brand);
+}
+
+.proto-beam[data-kind='pending'][data-active='true']::after {
+  animation: proto-pulse 2.3s ease-in-out infinite;
+}
+
+.proto-beam[data-kind='pending'][data-active='true']::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  box-shadow: 0 0 24px color-mix(in oklab, var(--brand), transparent 70%);
+  animation: proto-pulse 2.3s ease-in-out infinite;
+}
+
+@keyframes proto-angle {
+  to {
+    --proto-angle: 360deg;
+  }
+}
+
+@keyframes proto-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.proto-shimmer {
+  background: linear-gradient(
+      90deg,
+      var(--muted-foreground) 0 40%,
+      var(--foreground) 50%,
+      var(--muted-foreground) 60% 100%
+    )
+    0 0 / 250% 100%;
+  background-clip: text;
+  color: transparent;
+  animation: proto-shimmer 1.8s linear infinite;
+}
+
+@keyframes proto-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .proto-enter,
+  .proto-swap,
+  .proto-collapsible,
+  .proto-caret,
+  .proto-orb::before,
+  .proto-orb::after,
+  .proto-beam::after,
+  .proto-beam::before,
+  .proto-shimmer {
+    animation: none !important;
+  }
+}
