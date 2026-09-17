@@ -280,7 +280,8 @@ function Transcript({ scenario, settings }: { scenario: Scenario; settings: Sett
                 <MessageScrollerItem
                   key={pending.interruptId}
                   messageId={pending.interruptId}
-                  className="proto-enter"
+                  // registry 的 item 帶 content-visibility:auto＝paint containment，會把卡片的光暈切成直角方塊
+                  className="proto-enter [contain:none] [content-visibility:visible]"
                 >
                   <PendingView pending={pending} scenario={scenario} />
                 </MessageScrollerItem>

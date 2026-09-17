@@ -113,6 +113,25 @@
   --sidebar-ring: #55cfff;
 }
 
+/*
+ * body 的字色與底色一定要在 layer 外面再綁一次。Tailwind 的 `body { @apply bg-background text-foreground }`
+ * 寫在 `@layer base`，而**沒有 layer 的樣式永遠贏過有 layer 的**：Artifact 外殼自帶的 reset
+ * （淺色 color-scheme、深色字）一蓋上來，暗色主題下所有繼承顏色的字都變成黑底深字。
+ * 嵌進任何別人的頁面都會撞到同一件事，實作時 `index.css` 也要照做。
+ */
+:root[data-proto-375] {
+  color-scheme: light;
+}
+
+:root[data-proto-375].dark {
+  color-scheme: dark;
+}
+
+:root[data-proto-375] body {
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
 /* ── 兩個版本共用的進出場：開快關更快、先縮一點再長出來 ── */
 
 .proto-enter {
