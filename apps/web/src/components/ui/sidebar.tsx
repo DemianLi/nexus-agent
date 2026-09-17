@@ -76,7 +76,12 @@ function SidebarProvider({
       }
 
       // This sets the cookie to keep the sidebar state.
-      document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`;
+      // PROTOTYPE #375：沙盒 iframe（Artifact）裡寫 cookie 會拋 SecurityError。
+      try {
+        document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`;
+      } catch {
+        // 記不住側欄開關不影響原型
+      }
     },
     [setOpenProp, open],
   );

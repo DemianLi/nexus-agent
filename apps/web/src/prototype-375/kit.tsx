@@ -73,7 +73,11 @@ export function useSettings(): [Settings, (patch: Partial<Settings>) => void] {
       const next = { ...current, ...patch };
       const params = new URLSearchParams(window.location.search);
       for (const [key, value] of Object.entries(next)) params.set(key, value);
-      window.history.replaceState(null, '', `?${params.toString()}`);
+      try {
+        window.history.replaceState(null, '', `?${params.toString()}`);
+      } catch {
+        // 沙盒 iframe 裡改不了網址：設定照樣生效，只是分享不出去
+      }
       return next;
     });
   }, []);
