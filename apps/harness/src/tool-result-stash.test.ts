@@ -169,6 +169,53 @@ describe('過大的工具結果搬走之後還取得回來', () => {
   });
 });
 
+/**
+ * 跑一場「拿一坨 → 在暫存目錄底下 `ls` → 在暫存目錄底下 `grep` 暗號」。
+ *
+ * @returns 第二輪 `ls` 與第三輪 `grep` 拿回來的工具結果。
+ */
+async function fetchThenBrowse(
+  backend?: AnyBackendProtocol,
+): Promise<{ listed: string; grepped: string }> {
+  const model = new ScriptedChatModel({
+    turns: [
+      { content: '', toolCalls: [{ name: 'bulk', args: {} }] },
+      { content: '', toolCalls: [{ name: 'ls', args: { path: TOOL_RESULT_STASH_PREFIX } }] },
+      {
+        content: '',
+        toolCalls: [{ name: 'grep', args: { pattern: MARK, path: TOOL_RESULT_STASH_PREFIX } }],
+      },
+      { content: '看完了。' },
+    ],
+  });
+  const { agent, dispose } = await createNexusAgent({
+    model,
+    plugins: [bulkPlugin(OVERSIZED)],
+    ...(backend === undefined ? {} : { backend }),
+  });
+  try {
+    await agent.invoke(toAgentInvocation('去拿一坨，然後在暫存目錄底下找找。'));
+  } finally {
+    await dispose();
+  }
+  expect(model.prompts.length).toBeGreaterThanOrEqual(4);
+  return { listed: resultText(model.prompts[2]), grepped: resultText(model.prompts[3]) };
+}
+
+describe.each([
+  ['read-only', () => containedRoot('read-only').then(({ backend }) => backend)],
+  ['workspace-write', () => containedRoot('workspace-write').then(({ backend }) => backend)],
+  ['預設（StateBackend）', () => Promise.resolve(undefined)],
+] as const)('暫存目錄底下 ls 與 grep 對得上（%s）—— #354', (_, makeBackend) => {
+  it('ls 列出基座指路的那個路徑，grep 命中原文', async () => {
+    const { listed, grepped } = await fetchThenBrowse(await makeBackend());
+    // 修之前 `ls` 列出 `/large_tool_result// (directory)`（少一個 s）。
+    expect.soft(listed).toContain(STASHED);
+    // 暗號後面接著的 X 只在原文裡：找不到時的 `No matches found for pattern '<暗號>'` 不含它。
+    expect.soft(grepped).toContain(`${MARK}X`);
+  });
+});
+
 describe('暫存放在 graph state 裡，而且是逐 thread 的', () => {
   /**
    * **這條驗的是路由目標沒有自己的記憶體，所以也沒有跨對話的洩漏。**
@@ -201,15 +248,19 @@ describe('暫存放在 graph state 裡，而且是逐 thread 的', () => {
         configurable: { thread_id: 'stash' },
       });
 
-      // **state 上的鍵不是模型看到的那個路徑。** 實測是 `//call_1_0.txt` —— composite 把
-      // 路由前綴剝掉之後交給 `StateBackend`，剝完的那一份就是鍵。取回沒問題（模型的
-      // `read_file` 走同一條路、剝同一段），所以這裡只斷言「它在 state 裡」，不把那個
-      // 剝法釘死；把前綴改成帶結尾斜線會讓鍵變成乾淨的 `/call_1_0.txt`，而那**更容易**
-      // 跟預設組裝裡模型自己的檔案撞在同一格 state 上，所以刻意不那樣寫。
+      // **state 上的鍵不是模型看到的那個路徑。** composite 把路由前綴剝掉之後交給
+      // `StateBackend`，剝完的那一份就是鍵。**鍵的形狀就是 #354 的修法，所以釘死**：路由鍵
+      // 沒有結尾斜線時這裡是 `//call_1_0.txt`，而在暫存目錄底下 `ls`／`grep` 都對不上。
+      //
+      // **推翻過一次的決定，代價照實記。** 這裡原本刻意留著 `//`，理由是乾淨的
+      // `/call_1_0.txt` 更容易跟預設組裝裡模型自己的檔案撞在同一格 state 上。那個撞法是真的
+      // （實測：沒給 `--workspace` 時模型 `ls /` 看得到 `/call_1_0.txt`、照那個路徑讀得到），
+      // 但 `//` 也沒藏住它（`ls /` 列出 `// (directory)`、`grep /` 命中 `//call_1_0.txt`），
+      // 只是讓暫存目錄本身壞掉。會話歷史那一格（#348）已經帶斜線、接受同一個代價。
       const mine = Object.keys(
         ((await readState('stash')).values.files ?? {}) as Record<string, unknown>,
       );
-      expect(mine.filter((key) => key.endsWith('call_1_0.txt'))).toHaveLength(1);
+      expect(mine.filter((key) => key.endsWith('call_1_0.txt'))).toEqual(['/call_1_0.txt']);
 
       const other = Object.keys(
         ((await readState('別人')).values.files ?? {}) as Record<string, unknown>,
