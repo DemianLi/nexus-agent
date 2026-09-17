@@ -625,9 +625,12 @@ export class ThreadPump {
    * （[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。評分指名的是畫面上那則回覆，日誌
    * 記的是輪，這張表是兩者之間唯一的橋。
    *
-   * **只在記憶體裡、一條 thread 一份**：server 重開之後舊回覆評不了——不做 `list`、門 B 沒開的後果，
-   * 登記成偏離。**每一則都記**，不是只記最後一則：一輪「文字 → 工具 → 文字」會有兩則，記的當下分不出
-   * 哪一則是最後的；按鈕放哪一則是畫面的事。
+   * **只在記憶體裡、一條 thread 一份**：server 重開之後舊回覆評不了，重播出來的那幾則（id 是
+   * `history-<seq>`）也不在表裡。還沒做，見 [#382](https://github.com/DemianLi/nexus-agent/issues/382)。
+   * **這張表沒辦法從日誌重建**：鍵是串流的 run id，日誌沒記它。
+   *
+   * **每一則都記**，不是只記最後一則：一輪「文字 → 工具 → 文字」會有兩則，記的當下分不出哪一則是最後的；
+   * 按鈕放哪一則是畫面的事。
    */
   readonly #turnOfReply = new Map<string, number>();
   /** 目前這一輪起頭那顆的 `seq`。**`resume` 不換它**：續接回來的是同一輪（#267 的 Q5）。 */

@@ -5,7 +5,8 @@
  * 轉繁體台灣用語。**對話框提示只留前半句**：「提交內容會包括當前對話的日誌」只有遙測開在 `full` 或
  * `feedback-only` 時才是真的，而預設沒掛遙測。dsh 這一句無條件顯示；依模式顯示得多一條 server 把
  * 模式送到畫面的協定，#279 拍板不做、登記成偏離。說了就是騙人按送出（#267 的 Q11）。
- * `error.load` 那一句沒有搬：我們沒有 `list`，沒有東西要載入。
+ * `error.load` 那一句沒有搬：還沒有 `list`，沒有東西要載入
+ * （[#382](https://github.com/DemianLi/nexus-agent/issues/382)）。
  */
 
 import type { ConversationEntry, ConversationState, WireFeedbackCategory } from '@nexus/wire';
