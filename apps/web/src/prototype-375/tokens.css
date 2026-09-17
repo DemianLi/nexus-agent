@@ -1,15 +1,15 @@
 /*
  * PROTOTYPE #375 — 丟棄用，不合進 develop。
  *
- * Libraries.dev `sites/home/public/assets/site.css`（`44fef85`）的值，粗略映射進 shadcn 語意 token。
- * 只在 `<html data-proto-375>` 底下生效，不動 `index.css`：oklch 定稿、sidebar 的 hsl
- * 變數怎麼處理都是「設計 token 定稿」那張卡的事。這裡用 hex／rgba 是為了快，不是提案。
+ * 顏色 token 來自「設計 token 定稿」（#377）的產生器輸出 `tokens.generated.css`：
+ * Leonardo 對底色解文字、brand、狀態色；colorjs.io 解 stage／細線環這類不是對底色的配對；
+ * 起算點是原型 eb800a1 量到、demian 認可的對比度，亮暗取較強的那個共用。
  */
 
-:root[data-proto-375] {
-  --radius: 0.875rem;
+@import './tokens.generated.css';
 
-  /* 動效 token：整組照抄 site.css 的 :root */
+/* 動效 token：整組照抄 Libraries.dev site.css 的 :root（怎麼動歸 #378，這裡只是讓原型跑得起來） */
+:root[data-proto-375] {
   --duration-stagger: 40ms;
   --duration-micro: 80ms;
   --duration-quick: 150ms;
@@ -26,96 +26,55 @@
   --scale-small: 0.98;
   --scale-tiny: 0.99;
   --blur-small: 2px;
+}
 
-  /* 亮色：site.css :root 的值（站上不用，所以是「粗略」） */
-  /*
-   * 區塊鑑別度：demian 在手機上看亮色時，白卡片放在 #fdfdfd 上幾乎分不出邊界。
-   * 暗色靠底色 #121212 與卡片 #181818 的明度差分區塊，亮色原本沒有這一層，所以底色壓低到 #f7f7f7，
-   * 再把細框加深、陰影收成貼身的小陰影。
-   */
-  --background: #f7f7f7;
-  --foreground: #1a1a1a;
-  --card: #ffffff;
-  --card-foreground: #1a1a1a;
-  --popover: #ffffff;
-  --popover-foreground: #1a1a1a;
-  --primary: #1a1a1a;
-  --primary-foreground: #fafafa;
-  --secondary: #ececec;
-  --secondary-foreground: #1a1a1a;
-  --muted: #f4f4f4;
-  --muted-foreground: #6c6c6c;
-  --accent: #f1f1f1;
-  --accent-foreground: #1a1a1a;
-  --border: rgba(0, 0, 0, 0.07);
-  --input: rgba(0, 0, 0, 0.1);
-  --ring: #0073e5;
-  --brand: #0073e5;
-  --stage: #f9f9f9;
-  --chip: #ececec;
-  --chip-hover: #e4e4e4;
+/*
+ * 邊緣畫在陰影裡（#377 Q30）：同一個元素不同時用 border 與陰影。
+ * 亮色＝外側 1px 環＋投影；暗色＝Libraries.dev 的 inset 疊層。細線環的 alpha 由產生器解到對卡片 1.38。
+ * 投影數字沿用原型 eb800a1 修過、demian 認可的貼身陰影。
+ */
+:root[data-proto-375] {
+  --card-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.04);
   --material-shadow:
-    0 0 0 1px var(--card-hairline), 0 1px 2px rgba(0, 0, 0, 0.06), 0 4px 12px rgba(0, 0, 0, 0.04);
+    0 0 0 1px var(--card-hairline), 0 1px 2px rgb(0 0 0 / 0.06), 0 4px 12px rgb(0 0 0 / 0.04);
+  --menu-shadow:
+    0 0 0 1px var(--card-hairline), 0 2px 6px rgb(0 0 0 / 0.05), 0 4px 42px rgb(0 0 0 / 0.06);
+  --stage-ring: inset 0 0 0 1px var(--border);
 
-  /*
-   * 邊框效果：demian 看過原型後要求「暗色和亮色的邊框效果要一樣顯而易見」。
-   * 同一個 brand 色在白底上對比低，所以亮色用較粗的線、較濃的光暈、較高的呼吸下限去補。
-   */
+  /* 邊框光的靜態值（#377 管）：brand 在白底上對比低，亮色線粗、光暈濃、呼吸下限高 */
   --beam-width: 2px;
   --beam-glow: color-mix(in oklab, var(--brand), transparent 40%);
   --beam-glow-size: 28px;
   --beam-pulse-min: 0.55;
-  --card-hairline: rgba(0, 0, 0, 0.14);
-
-  --sidebar: #f2f2f2;
-  --sidebar-foreground: #1a1a1a;
-  --sidebar-primary: #1a1a1a;
-  --sidebar-primary-foreground: #fafafa;
-  --sidebar-accent: #f1f1f1;
-  --sidebar-accent-foreground: #1a1a1a;
-  --sidebar-border: rgba(0, 0, 0, 0.1);
-  --sidebar-ring: #0073e5;
 }
 
 :root[data-proto-375].dark {
-  /* 暗色：site.css html[data-theme="dark"] */
-  --background: #121212;
-  --foreground: #ededed;
-  --card: #181818;
-  --card-foreground: #ededed;
-  --popover: #1c1c1c;
-  --popover-foreground: #ededed;
-  --primary: #ededed;
-  --primary-foreground: #121212;
-  --secondary: rgba(255, 255, 255, 0.07);
-  --secondary-foreground: #ededed;
-  --muted: rgba(255, 255, 255, 0.07);
-  --muted-foreground: rgba(202, 202, 202, 0.7);
-  --accent: rgba(255, 255, 255, 0.1);
-  --accent-foreground: #ededed;
-  --border: rgba(255, 255, 255, 0.06);
-  --input: rgba(255, 255, 255, 0.1);
-  --ring: #55cfff;
-  --brand: #55cfff;
-  --stage: #131313;
-  --chip: rgba(255, 255, 255, 0.07);
-  --chip-hover: rgba(255, 255, 255, 0.1);
-  --material-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), inset 0 0 0 1px var(--card-hairline);
+  --material-shadow:
+    0 1px 3px rgb(0 0 0 / 0.04), inset 0 1px 0 rgb(255 255 255 / 0.04),
+    inset 0 -1px 0 rgb(0 0 0 / 0.06), inset 0 0 0 1px var(--card-hairline);
+  --menu-shadow:
+    0 0 0 1px var(--card-hairline), 0 2px 6px rgb(0 0 0 / 0.05), 0 4px 42px rgb(0 0 0 / 0.24);
 
   --beam-width: 1.5px;
   --beam-glow: color-mix(in oklab, var(--brand), transparent 70%);
   --beam-glow-size: 24px;
   --beam-pulse-min: 0.3;
-  --card-hairline: rgba(196, 196, 196, 0.08);
+}
 
-  --sidebar: #121212;
-  --sidebar-foreground: #ededed;
-  --sidebar-primary: #ededed;
-  --sidebar-primary-foreground: #121212;
-  --sidebar-accent: rgba(255, 255, 255, 0.07);
-  --sidebar-accent-foreground: #ededed;
-  --sidebar-border: rgba(255, 255, 255, 0.04);
-  --sidebar-ring: #55cfff;
+/*
+ * 焦點外框（#377 Q34）：Libraries.dev 的 2px 文字色、offset 2px。
+ * outline 放進 Tailwind 的 base layer：元件自己寫 `outline-none`（例如輸入框裡的 textarea，外框改畫在外層群組）時要讓它贏。
+ * registry 自帶的 `focus-visible:ring-[3px]` 則在 layer 外關掉：沒有 layer 的樣式贏過 utilities，兩圈才不會疊在一起。
+ */
+@layer base {
+  :root[data-proto-375] :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+:root[data-proto-375] :focus-visible {
+  --tw-ring-shadow: 0 0 #0000;
 }
 
 /*

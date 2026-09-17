@@ -98,6 +98,11 @@ import {
 } from './kit';
 import { JUMPS, useScenario, type Answer, type ProtoState } from './scenario';
 
+// 字型全部打包進本地（#377 Q39：完全內網），中文按 unicode-range 切片、只載用到的
+import '@fontsource-variable/google-sans-flex';
+import '@fontsource-variable/google-sans-code';
+import '@fontsource-variable/noto-sans-tc';
+
 import './tokens.css';
 
 type Scenario = ReturnType<typeof useScenario>;
@@ -306,7 +311,7 @@ function EntryView({ entry }: { entry: ConversationEntry }) {
         <Message align="end">
           <MessageContent>
             <Bubble variant="secondary" align="end">
-              <BubbleContent className="rounded-3xl px-4 py-2.5 text-[15px] leading-6">
+              <BubbleContent className="text-body rounded-3xl px-4 py-2.5">
                 {entry.text}
               </BubbleContent>
             </Bubble>
@@ -335,7 +340,7 @@ function EntryView({ entry }: { entry: ConversationEntry }) {
 function Marker({ children }: { children: ReactNode }) {
   return (
     <div className="flex justify-center">
-      <span className="text-muted-foreground rounded-full bg-(--chip) px-3 py-1 text-xs">
+      <span className="text-muted-foreground bg-chip rounded-full px-3 py-1 text-xs">
         {children}
       </span>
     </div>
@@ -354,7 +359,7 @@ function AiView({ entry }: { entry: AiEntry }) {
           </MessageHeader>
         )}
         <Bubble variant={entry.error === undefined ? 'ghost' : 'destructive'}>
-          <BubbleContent className="text-[15px] leading-7 whitespace-pre-wrap">
+          <BubbleContent className="text-body whitespace-pre-wrap">
             {entry.text}
             {entry.streaming && <span className="proto-caret" aria-hidden />}
           </BubbleContent>
@@ -402,12 +407,12 @@ function ToolCard({ entry }: { entry: ToolEntry }) {
     <Collapsible
       open={open}
       onOpenChange={setOpen}
-      className="bg-card rounded-2xl p-1 shadow-(--material-shadow)"
+      className="bg-card rounded-3xl p-1 shadow-material"
       data-status={entry.status}
     >
-      <CollapsibleTrigger className="group flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-xl px-3 py-2 text-left transition-colors duration-(--duration-quick) hover:bg-(--chip)">
+      <CollapsibleTrigger className="group flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-[20px] px-3 py-2 text-left transition-colors duration-(--duration-quick) hover:bg-chip-hover active:bg-chip-pressed">
         <span className="flex size-5 shrink-0 items-center justify-center">{icon}</span>
-        <span className="shrink-0 font-mono text-[13px]">{entry.name}</span>
+        <span className="text-ui shrink-0 font-mono">{entry.name}</span>
         <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
           {summarize(entry.input)}
         </span>
@@ -425,7 +430,7 @@ function ToolCard({ entry }: { entry: ToolEntry }) {
         <ChevronDown className="text-muted-foreground size-4 shrink-0 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) group-data-[state=open]:rotate-180" />
       </CollapsibleTrigger>
       <CollapsibleContent className="proto-collapsible overflow-hidden">
-        <div className="m-1 mt-0 flex flex-col gap-2 rounded-xl border bg-(--stage) p-3 font-mono text-xs">
+        <div className="bg-stage shadow-stage m-1 mt-0 flex flex-col gap-2 rounded-xl p-3 font-mono text-xs">
           <pre className="text-muted-foreground whitespace-pre-wrap">
             {JSON.stringify(JSON.parse(entry.input), null, 2)}
           </pre>
@@ -471,11 +476,11 @@ function Composer({ scenario, settings }: { scenario: Scenario; settings: Settin
 
   return (
     <Beam kind="run" active={status === 'running'} radius={24}>
-      <InputGroup className="bg-card dark:bg-card rounded-3xl border-transparent shadow-(--material-shadow)">
+      <InputGroup className="rounded-3xl">
         <InputGroupTextarea
           aria-label="要說的話"
           rows={1}
-          className="max-h-48 min-h-12 px-4 text-[15px]"
+          className="text-body max-h-48 min-h-12 px-4"
           placeholder={blocked ? '先處理上面那張卡' : busy ? '這一輪還在跑…' : '要做什麼？'}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
@@ -530,7 +535,7 @@ function PendingView({
   return (
     <Beam kind="pending" active radius={24}>
       <section
-        className="bg-card flex flex-col rounded-3xl p-1 shadow-(--material-shadow)"
+        className="bg-card shadow-material flex flex-col rounded-3xl p-1"
         aria-label={pending.kind === 'approval' ? '核准請求' : '問答請求'}
       >
         <div className="text-muted-foreground flex items-center gap-2 px-3 pt-2 pb-2 text-xs">
@@ -562,7 +567,7 @@ function ApprovalBody({
   return (
     <>
       <div
-        className={`flex flex-col gap-2 overflow-auto rounded-[20px] border bg-(--stage) p-3 ${takeover ? 'max-h-[40svh]' : ''}`}
+        className={`bg-stage shadow-stage flex flex-col gap-2 overflow-auto rounded-xl p-3 ${takeover ? 'max-h-[40svh]' : ''}`}
       >
         {pending.actions.map((action, index) => (
           <div key={`${action.name}-${index}`} className="flex flex-col gap-1.5">
@@ -619,7 +624,7 @@ function QuestionBody({
 
   return (
     <div
-      className={`overflow-auto rounded-[20px] border bg-(--stage) p-4 ${takeover ? 'max-h-[55svh]' : ''}`}
+      className={`bg-stage shadow-stage overflow-auto rounded-xl p-4 ${takeover ? 'max-h-[55svh]' : ''}`}
     >
       <Questionnaire onSubmit={submit}>
         <div className="flex items-center justify-between gap-2">

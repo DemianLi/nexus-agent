@@ -1,0 +1,10 @@
+{
+  "name": "tokengen-377",
+  "private": true,
+  "type": "module",
+  "description": "#377 設計期 token 產生器；不在 workspace、不進產品。用法：在這個目錄 npm install 後 node generate.mjs",
+  "dependencies": {
+    "@adobe/leonardo-contrast-colors": "1.1.0",
+    "colorjs.io": "0.7.1"
+  }
+}
