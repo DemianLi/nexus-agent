@@ -1,8 +1,11 @@
 /**
  * PROTOTYPE #375 — 設計語言原型。丟棄分支 `prototype/375-design-language`，不合進 develop。
  *
- * 一條路由、三個獨立開關（`?approval=card|takeover&motion=pkg|css&theme=dark|light`）
+ * 一條路由、幾個開關（`?approval=takeover|card&motion=system|full|reduce&theme=dark|light`）
  * 外加 `?button=new|old`，都在右上角的琥珀色切換列上。假資料，不連 harness。
+ *
+ * 動效照「動效策略」（#378）重寫：封閉的模式清單、reduced-motion 不是全關，
+ * 切換列可以模擬減少動態，也有手動觸發面板換入換出與接續的按鈕。
  *
  * 跟 prototype 技能預設不同的兩處，是 demian 在這張卡的 Q2 拍板的：
  * - 不是「N 個結構完全不同的版本」，是卡片定義的三個切換軸（2×2×2）。
@@ -24,7 +27,7 @@ import {
   Sun,
   X,
 } from 'lucide-react';
-import { useContext, useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useContext, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { toast } from 'sonner';
 
 import type {
@@ -39,6 +42,14 @@ import type {
 import { Badge } from '@/components/ui/badge';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   InputGroup,
   InputGroupAddon,
@@ -84,19 +95,22 @@ import {
   SidebarTrigger,
 } from '@/components/ui/sidebar';
 import { Toaster } from '@/components/ui/sonner';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 import {
   AgentOrb,
+  AutoHeight,
   Beam,
   OPTIONS,
   PButton,
   SettingsContext,
   Swap,
+  useReducedMotion,
   useSettings,
   useViewportWidth,
   type Settings,
 } from './kit';
-import { JUMPS, useScenario, type Answer, type ProtoState } from './scenario';
+import { JUMPS, useScenario, type Answer, type Jump, type ProtoState } from './scenario';
 
 // 字型全部打包進本地（#377 Q39：完全內網），中文按 unicode-range 切片、只載用到的
 import '@fontsource-variable/google-sans-flex';
@@ -118,6 +132,32 @@ const THREADS = [
 export function PrototypeApp() {
   const [settings, update] = useSettings();
   const scenario = useScenario();
+  const reduce = useReducedMotion(settings.motion);
+  // 跳到某個狀態＝載入歷史／切換對話：舊訊息直接出現，不走進場（#378 Q8）
+  const [history, setHistory] = useState({ key: 0, jumped: true });
+  const jump = (to: Jump) => {
+    setHistory((current) => ({ key: current.key + 1, jumped: true }));
+    scenario.jump(to);
+  };
+  const live =
+    <T extends unknown[]>(action: (...args: T) => undefined) =>
+    (...args: T): undefined => {
+      setHistory((current) => (current.jumped ? { ...current, jumped: false } : current));
+      action(...args);
+    };
+  const driven: Scenario = {
+    ...scenario,
+    jump,
+    // 重播＝同一批 id 從頭再來一次：換 key 重新掛載，讓每則都當成新到的
+    replay: () => {
+      setHistory((current) => ({ key: current.key + 1, jumped: false }));
+      scenario.replay();
+    },
+    send: live(scenario.send),
+    decide: live(scenario.decide),
+    answer: live(scenario.answer),
+  };
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -127,20 +167,34 @@ export function PrototypeApp() {
 
   return (
     <SettingsContext.Provider value={settings}>
-      <SidebarProvider className="h-svh">
-        <ThreadSidebar onJump={scenario.jump} />
-        <SidebarInset className="bg-background flex h-svh min-w-0 flex-col">
-          <Header state={scenario.state} settings={settings} update={update} />
-          {scenario.state.entries.length === 0 ? (
-            <Hero onStart={scenario.replay} />
-          ) : (
-            <Transcript scenario={scenario} settings={settings} />
-          )}
-          <ComposerZone scenario={scenario} settings={settings} />
-        </SidebarInset>
-      </SidebarProvider>
-      <Switcher settings={settings} update={update} scenario={scenario} />
-      <Toaster theme={settings.theme} position="top-center" />
+      <TooltipProvider>
+        <SidebarProvider className="h-svh">
+          <ThreadSidebar onJump={jump} />
+          <SidebarInset className="bg-background flex h-svh min-w-0 flex-col">
+            <Header state={scenario.state} settings={settings} update={update} />
+            {scenario.state.entries.length === 0 ? (
+              <Hero onStart={driven.replay} />
+            ) : (
+              <Transcript
+                key={history.key}
+                scenario={driven}
+                settings={settings}
+                animateInitial={!history.jumped}
+                reduce={reduce}
+              />
+            )}
+            <ComposerZone scenario={driven} settings={settings} />
+          </SidebarInset>
+        </SidebarProvider>
+        <Switcher
+          settings={settings}
+          update={update}
+          scenario={driven}
+          onOpenDialog={() => setDialogOpen(true)}
+        />
+        <FeedbackDialog open={dialogOpen} onOpenChange={setDialogOpen} />
+        <Toaster theme={settings.theme} position="top-center" />
+      </TooltipProvider>
     </SettingsContext.Provider>
   );
 }
@@ -194,21 +248,26 @@ function Header({
         <StatusLine state={state} />
       </div>
       {/* 主題切換：#374 拍板自建 */}
-      <PButton
-        variant="ghost"
-        size="icon"
-        className="size-11 rounded-full lg:size-9"
-        aria-label={settings.theme === 'dark' ? '換成亮色' : '換成暗色'}
-        onClick={() => update({ theme: settings.theme === 'dark' ? 'light' : 'dark' })}
-      >
-        {settings.theme === 'dark' ? <Sun /> : <Moon />}
-      </PButton>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PButton
+            variant="ghost"
+            size="icon"
+            className="size-11 rounded-full lg:size-9"
+            aria-label={settings.theme === 'dark' ? '換成亮色' : '換成暗色'}
+            onClick={() => update({ theme: settings.theme === 'dark' ? 'light' : 'dark' })}
+          >
+            {settings.theme === 'dark' ? <Sun /> : <Moon />}
+          </PButton>
+        </TooltipTrigger>
+        {/* tooltip：只淡入淡出＋小 blur，開 150（延遲 50）、關 150 */}
+        <TooltipContent>{settings.theme === 'dark' ? '換成亮色' : '換成暗色'}</TooltipContent>
+      </Tooltip>
     </header>
   );
 }
 
 function StatusLine({ state }: { state: ProtoState }) {
-  const { motion } = useContext(SettingsContext);
   const approvals = state.pendings.flatMap((pending) =>
     pending.kind === 'approval' ? pending.actions.map((action) => action.name) : [],
   );
@@ -217,7 +276,7 @@ function StatusLine({ state }: { state: ProtoState }) {
   let label: ReactNode;
   let orb: ReactNode = null;
   if (state.status === 'running') {
-    label = <span className={motion === 'css' ? 'proto-shimmer' : undefined}>執行中…</span>;
+    label = <span className="proto-shimmer">執行中…</span>;
     orb = <AgentOrb state="working" size={20} label="執行中" />;
   } else if (state.status === 'awaiting-input') {
     label = [
@@ -246,7 +305,7 @@ function StatusLine({ state }: { state: ProtoState }) {
 
 function Hero({ onStart }: { onStart: () => void }) {
   return (
-    <div className="proto-enter flex min-h-0 flex-1 flex-col items-center justify-center gap-5 px-6 text-center">
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 px-6 text-center">
       <AgentOrb state="breathing" size={64} label="待命" />
       <div className="flex flex-col gap-2">
         <h1 className="text-2xl font-semibold tracking-tight">今天要做什麼？</h1>
@@ -272,17 +331,41 @@ function Hero({ onStart }: { onStart: () => void }) {
  * registry 的 item 帶 `content-visibility:auto`＝paint containment：卡片的外陰影與光暈會被切成直角
  * （手機上工具卡下緣露出灰色直角、待決卡片後面一塊方框）。原型一律關掉；實作要另想保留長列表效能的辦法。
  */
-const ITEM_CLASS = 'proto-enter [contain:none] [content-visibility:visible]';
+const ITEM_CLASS = '[contain:none] [content-visibility:visible]';
 
-function Transcript({ scenario, settings }: { scenario: Scenario; settings: Settings }) {
+function Transcript({
+  scenario,
+  settings,
+  animateInitial,
+  reduce,
+}: {
+  scenario: Scenario;
+  settings: Settings;
+  animateInitial: boolean;
+  reduce: boolean;
+}) {
   const { entries, pendings } = scenario.state;
+  // 每則只在第一次出現時決定要不要進場；載入歷史（掛載時已經在的）不動
+  const seen = useRef<Map<string, boolean> | null>(null);
+  if (seen.current === null) {
+    seen.current = new Map(entries.map((entry) => [entry.id, animateInitial]));
+  }
+  const rise = (id: string) => {
+    const map = seen.current!;
+    if (!map.has(id)) map.set(id, true);
+    return map.get(id) === true ? 'motion-rise-in' : '';
+  };
   return (
     <MessageScrollerProvider autoScroll>
       <MessageScroller className="min-h-0 flex-1">
         <MessageScrollerViewport>
           <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-4 px-4 pt-6 pb-10">
             {entries.map((entry) => (
-              <MessageScrollerItem key={entry.id} messageId={entry.id} className={ITEM_CLASS}>
+              <MessageScrollerItem
+                key={entry.id}
+                messageId={entry.id}
+                className={`${ITEM_CLASS} ${rise(entry.id)}`}
+              >
                 <EntryView entry={entry} />
               </MessageScrollerItem>
             ))}
@@ -291,14 +374,14 @@ function Transcript({ scenario, settings }: { scenario: Scenario; settings: Sett
                 <MessageScrollerItem
                   key={pending.interruptId}
                   messageId={pending.interruptId}
-                  className={ITEM_CLASS}
+                  className={`${ITEM_CLASS} ${rise(pending.interruptId)}`}
                 >
                   <PendingView pending={pending} scenario={scenario} />
                 </MessageScrollerItem>
               ))}
           </MessageScrollerContent>
         </MessageScrollerViewport>
-        <MessageScrollerButton className="rounded-full" />
+        <MessageScrollerButton className="rounded-full" behavior={reduce ? 'auto' : 'smooth'} />
       </MessageScroller>
     </MessageScrollerProvider>
   );
@@ -394,7 +477,7 @@ function ToolCard({ entry }: { entry: ToolEntry }) {
   const [open, setOpen] = useState(false);
   const icon =
     entry.status === 'running' ? (
-      <AgentOrb state={entry.name === 'grep' ? 'searching' : 'working'} size={20} label="執行中" />
+      <AgentOrb state="working" size={20} label="執行中" />
     ) : entry.status === 'suspended' ? (
       <Hand className="size-4 text-(--brand)" />
     ) : entry.status === 'done' ? (
@@ -427,9 +510,13 @@ function ToolCard({ entry }: { entry: ToolEntry }) {
         >
           {TOOL_STATUS[entry.status]}
         </Badge>
-        <ChevronDown className="text-muted-foreground size-4 shrink-0 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) group-data-[state=open]:rotate-180" />
+        <ChevronDown
+          data-motion-rotate
+          className="text-muted-foreground size-4 shrink-0 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) group-data-[state=open]:rotate-180"
+        />
       </CollapsibleTrigger>
-      <CollapsibleContent className="proto-collapsible overflow-hidden">
+      {/* 展開收合：tw-animate 的 collapsible 高度＋透明度，開 250、關 150 */}
+      <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
         <div className="bg-stage shadow-stage m-1 mt-0 flex flex-col gap-2 rounded-xl p-3 font-mono text-xs">
           <pre className="text-muted-foreground whitespace-pre-wrap">
             {JSON.stringify(JSON.parse(entry.input), null, 2)}
@@ -451,13 +538,15 @@ function ComposerZone({ scenario, settings }: { scenario: Scenario; settings: Se
   const takeover = settings.approval === 'takeover' && pending !== undefined;
   return (
     <div className="mx-auto w-full max-w-3xl shrink-0 px-3 pt-1 pb-[max(env(safe-area-inset-bottom),12px)]">
-      <Swap swapKey={takeover ? pending.interruptId : 'composer'}>
-        {takeover ? (
-          <PendingView pending={pending} scenario={scenario} takeover />
-        ) : (
-          <Composer scenario={scenario} settings={settings} />
-        )}
-      </Swap>
+      <AutoHeight>
+        <Swap swapKey={takeover ? pending.interruptId : 'composer'}>
+          {takeover ? (
+            <PendingView pending={pending} scenario={scenario} takeover />
+          ) : (
+            <Composer scenario={scenario} settings={settings} />
+          )}
+        </Swap>
+      </AutoHeight>
     </div>
   );
 }
@@ -548,7 +637,12 @@ function PendingView({
         {pending.kind === 'approval' ? (
           <ApprovalBody pending={pending} onDecide={scenario.decide} takeover={takeover} />
         ) : (
-          <QuestionBody pending={pending} onAnswer={scenario.answer} takeover={takeover} />
+          <QuestionBody
+            key={pending.interruptId}
+            pending={pending}
+            onAnswer={scenario.answer}
+            takeover={takeover}
+          />
         )}
       </section>
     </Beam>
@@ -606,6 +700,26 @@ function QuestionBody({
   onAnswer: (answers: readonly Answer[] | 'cancel') => void;
   takeover: boolean;
 }) {
+  const names = pending.questions.map((question) => question.id);
+  const [item, setItem] = useState(names[0] ?? '');
+  const [dir, setDir] = useState<'next' | 'prev'>();
+  const advance = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(advance.current), []);
+
+  // 上下題：方向決定從哪邊進來（#378 Q8）
+  const go = (to: string) => {
+    clearTimeout(advance.current);
+    setDir(names.indexOf(to) > names.indexOf(item) ? 'next' : 'prev');
+    setItem(to);
+  };
+  // 單選自動跳：先停 200 讓勾選看得到，再走下一題的過場
+  const autoAdvance = (from: string) => {
+    const next = names[names.indexOf(from) + 1];
+    if (next === undefined) return;
+    clearTimeout(advance.current);
+    advance.current = setTimeout(() => go(next), 200);
+  };
+
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -626,56 +740,64 @@ function QuestionBody({
     <div
       className={`bg-stage shadow-stage overflow-auto rounded-xl p-4 ${takeover ? 'max-h-[55svh]' : ''}`}
     >
-      <Questionnaire onSubmit={submit}>
-        <div className="flex items-center justify-between gap-2">
-          <QuestionnaireProgress />
-          {/* 放棄整組：questionnaire 沒有這顆，#374 決定自補；Actions 的三欄已滿，放在進度旁 */}
-          <PButton
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground h-11 rounded-full lg:h-8"
-            onClick={() => onAnswer('cancel')}
-          >
-            <RotateCcw />
-            放棄整組
-          </PButton>
-        </div>
-        {pending.questions.map((question) => (
-          <QuestionnaireItem
-            key={question.id}
-            name={question.id}
-            multiple={question.multiSelect === true}
-          >
-            <QuestionnaireTitle>{question.question}</QuestionnaireTitle>
-            {question.header !== undefined && (
-              <QuestionnaireDescription>{question.header}</QuestionnaireDescription>
-            )}
-            {question.options === undefined ? (
-              <QuestionnaireInput type="number" placeholder="例如 500" />
-            ) : (
-              <QuestionnaireChoices>
-                {question.options.map((option) => (
-                  <QuestionnaireChoice key={option.label} value={option.label}>
-                    {option.label}
-                    {option.description !== undefined && (
-                      <QuestionnaireChoiceDescription>
-                        {option.description}
-                      </QuestionnaireChoiceDescription>
-                    )}
-                  </QuestionnaireChoice>
-                ))}
-              </QuestionnaireChoices>
-            )}
-          </QuestionnaireItem>
-        ))}
-        <QuestionnaireActions>
-          <QuestionnairePrevious>上一題</QuestionnairePrevious>
-          <QuestionnaireSkip>跳過</QuestionnaireSkip>
-          <QuestionnaireNext>下一題</QuestionnaireNext>
-          <QuestionnaireSubmit>送出答案</QuestionnaireSubmit>
-        </QuestionnaireActions>
-      </Questionnaire>
+      <AutoHeight>
+        <Questionnaire item={item} onItemChange={go} data-page-dir={dir} onSubmit={submit}>
+          <div className="flex items-center justify-between gap-2">
+            <QuestionnaireProgress />
+            {/* 放棄整組：questionnaire 沒有這顆，#374 決定自補；Actions 的三欄已滿，放在進度旁 */}
+            <PButton
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground h-11 rounded-full lg:h-8"
+              onClick={() => onAnswer('cancel')}
+            >
+              <RotateCcw />
+              放棄整組
+            </PButton>
+          </div>
+          {pending.questions.map((question) => (
+            <QuestionnaireItem
+              key={question.id}
+              name={question.id}
+              multiple={question.multiSelect === true}
+            >
+              <QuestionnaireTitle>{question.question}</QuestionnaireTitle>
+              {question.header !== undefined && (
+                <QuestionnaireDescription>{question.header}</QuestionnaireDescription>
+              )}
+              {question.options === undefined ? (
+                <QuestionnaireInput type="number" placeholder="例如 500" />
+              ) : (
+                <QuestionnaireChoices>
+                  {question.options.map((option) => (
+                    <QuestionnaireChoice
+                      key={option.label}
+                      value={option.label}
+                      onChange={
+                        question.multiSelect === true ? undefined : () => autoAdvance(question.id)
+                      }
+                    >
+                      {option.label}
+                      {option.description !== undefined && (
+                        <QuestionnaireChoiceDescription>
+                          {option.description}
+                        </QuestionnaireChoiceDescription>
+                      )}
+                    </QuestionnaireChoice>
+                  ))}
+                </QuestionnaireChoices>
+              )}
+            </QuestionnaireItem>
+          ))}
+          <QuestionnaireActions>
+            <QuestionnairePrevious>上一題</QuestionnairePrevious>
+            <QuestionnaireSkip>跳過</QuestionnaireSkip>
+            <QuestionnaireNext>下一題</QuestionnaireNext>
+            <QuestionnaireSubmit>送出答案</QuestionnaireSubmit>
+          </QuestionnaireActions>
+        </Questionnaire>
+      </AutoHeight>
     </div>
   );
 }
@@ -685,10 +807,12 @@ function Switcher({
   settings,
   update,
   scenario,
+  onOpenDialog,
 }: {
   settings: Settings;
   update: (patch: Partial<Settings>) => void;
   scenario: Scenario;
+  onOpenDialog: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const width = useViewportWidth();
@@ -709,9 +833,12 @@ function Switcher({
             <div key={key} className="flex flex-col gap-1">
               <span className="text-zinc-400">
                 {
-                  { approval: '核准與提問', motion: '動效', theme: '主題', button: 'button.tsx' }[
-                    key
-                  ]
+                  {
+                    approval: '核准與提問',
+                    motion: '動效（#378）',
+                    theme: '主題',
+                    button: 'button.tsx',
+                  }[key]
                 }
               </span>
               <div className="flex gap-1">
@@ -749,6 +876,33 @@ function Switcher({
                 </button>
               ))}
             </div>
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-zinc-400">動效手動觸發（#378）</span>
+            <div className="flex flex-wrap gap-1">
+              {(
+                [
+                  ['換入核准面板', () => scenario.jump('核准')],
+                  ['換入提問面板', () => scenario.jump('提問')],
+                  ['換回輸入框', () => scenario.jump('執行中')],
+                  ['兩個待決', () => scenario.jump('兩個待決')],
+                  ['處理掉第一個（接續）', scenario.dismissFirst],
+                  ['開對話框', onOpenDialog],
+                ] as const
+              ).map(([label, action]) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={action}
+                  className="rounded-lg bg-zinc-800 px-3 py-2 hover:bg-zinc-700"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <span className="text-[11px] leading-4 text-zinc-400">
+              上下題、單選自動跳在提問面板裡直接點；工具卡點標題展開；手機寬度點左上角開側欄。
+            </span>
           </div>
           <ButtonSwatch />
           <pre className="rounded-lg bg-zinc-900 p-2 text-[11px] leading-4 text-zinc-300">
@@ -799,5 +953,37 @@ function ButtonSwatch() {
         {row('old')}
       </div>
     </div>
+  );
+}
+
+/** 對話框模式（#378 Q8）：開 250、關 150、scale .96，遮罩淡入 200。 */
+function FeedbackDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>這則回覆哪裡不好？</DialogTitle>
+          <DialogDescription>原型：只看對話框的進出場，送出不會做任何事。</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <PButton
+            variant="outline"
+            className="h-11 rounded-full lg:h-9"
+            onClick={() => onOpenChange(false)}
+          >
+            取消
+          </PButton>
+          <PButton className="h-11 rounded-full lg:h-9" onClick={() => onOpenChange(false)}>
+            送出
+          </PButton>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

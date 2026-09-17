@@ -1,21 +1,22 @@
 /**
- * PROTOTYPE #375 — 切換設定、兩種 button、兩種動效的包裝。
+ * PROTOTYPE #375 — 切換設定、兩種 button、動效的包裝。
+ *
+ * 動效照「動效策略」（#378）：純 CSS、不裝 thinking-orbs／border-beam；樣式都在 tokens.css。
  */
 
-import { BorderBeam } from 'border-beam';
 import { cn } from 'cn';
 import {
   createContext,
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ComponentProps,
   type CSSProperties,
   type ReactNode,
 } from 'react';
-import { ThinkingOrb } from 'thinking-orbs';
 
 import { Button } from '@/components/ui/button';
 
@@ -23,19 +24,20 @@ import { Button as OldButton } from './old-button';
 
 export interface Settings {
   approval: 'card' | 'takeover';
-  motion: 'pkg' | 'css';
+  motion: 'system' | 'full' | 'reduce';
   theme: 'light' | 'dark';
   button: 'new' | 'old';
 }
 
 export const OPTIONS = {
   approval: [
-    ['card', '卡片（現況）'],
-    ['takeover', '取代輸入框（dsh）'],
+    ['takeover', '取代輸入框（#376 定案）'],
+    ['card', '卡片（舊）'],
   ],
   motion: [
-    ['pkg', '套件 orbs＋beam'],
-    ['css', '純 CSS 仿'],
+    ['system', '跟系統'],
+    ['full', '完整'],
+    ['reduce', '減少動態'],
   ],
   theme: [
     ['dark', '暗'],
@@ -47,7 +49,12 @@ export const OPTIONS = {
   ],
 } as const satisfies Record<keyof Settings, readonly (readonly [string, string])[]>;
 
-const DEFAULTS: Settings = { approval: 'card', motion: 'pkg', theme: 'dark', button: 'new' };
+const DEFAULTS: Settings = {
+  approval: 'takeover',
+  motion: 'system',
+  theme: 'dark',
+  button: 'new',
+};
 
 function readSettings(): Settings {
   const params = new URLSearchParams(window.location.search);
@@ -86,6 +93,27 @@ export function useSettings(): [Settings, (patch: Partial<Settings>) => void] {
 
 export const SettingsContext = createContext<Settings>(DEFAULTS);
 
+const REDUCE_QUERY = '(prefers-reduced-motion: reduce)';
+
+/**
+ * 算出這一刻要不要減少動態，並寫到 `<html data-reduce-motion>`。
+ * 原型讓切換列可以模擬；實作直接寫 `@media (prefers-reduced-motion: reduce)`，不需要這個 hook。
+ */
+export function useReducedMotion(setting: Settings['motion']): boolean {
+  const [system, setSystem] = useState(() => window.matchMedia(REDUCE_QUERY).matches);
+  useEffect(() => {
+    const query = window.matchMedia(REDUCE_QUERY);
+    const onChange = () => setSystem(query.matches);
+    query.addEventListener('change', onChange);
+    return () => query.removeEventListener('change', onChange);
+  }, []);
+  const reduce = setting === 'reduce' || (setting === 'system' && system);
+  useEffect(() => {
+    document.documentElement.toggleAttribute('data-reduce-motion', reduce);
+  }, [reduce]);
+  return reduce;
+}
+
 /** 依切換列選的版本畫新版或舊版 button。registry 元件自己 import 的 button 不受影響。 */
 export function PButton({ size, ...props }: ComponentProps<typeof Button>) {
   const { button } = useContext(SettingsContext);
@@ -99,23 +127,22 @@ export function PButton({ size, ...props }: ComponentProps<typeof Button>) {
   return <OldButton size={oldSize} {...props} />;
 }
 
+/** P0 只有 working 與 breathing（#378 Q10）：搜尋類工具併進 working，composing／connecting 等 P1。 */
 export function AgentOrb({
   state,
   size,
   label,
 }: {
-  state: 'working' | 'searching' | 'composing' | 'breathing';
+  state: 'working' | 'breathing';
   size: 20 | 64;
   label: string;
 }) {
-  const { motion } = useContext(SettingsContext);
-  if (motion === 'pkg') return <ThinkingOrb state={state} size={size} aria-label={label} />;
   return (
     <span
       role="img"
       aria-label={label}
       className="proto-orb"
-      data-state={state === 'searching' ? 'working' : state}
+      data-state={state}
       style={{ '--orb-size': `${size}px` } as CSSProperties}
     />
   );
@@ -134,21 +161,6 @@ export function Beam({
   className?: string;
   children: ReactNode;
 }) {
-  const { motion, theme } = useContext(SettingsContext);
-  if (motion === 'pkg') {
-    return (
-      <BorderBeam
-        size={kind === 'run' ? 'md' : 'pulse-inner'}
-        colorVariant={kind === 'run' ? 'colorful' : 'ocean'}
-        theme={theme}
-        active={active}
-        borderRadius={radius}
-        className={className}
-      >
-        {children}
-      </BorderBeam>
-    );
-  }
   return (
     <div
       className={cn('proto-beam', className)}
@@ -161,7 +173,7 @@ export function Beam({
   );
 }
 
-/** 換內容時舊的先縮一點淡出（150ms），新的再長出來（250ms）。 */
+/** 換內容：舊的縮到 .99 淡出（150），新的往上 8px、從 .97 長出來（250）。 */
 export function Swap({ swapKey, children }: { swapKey: string; children: ReactNode }) {
   const [shownKey, setShownKey] = useState(swapKey);
   const last = useRef(children);
@@ -175,8 +187,61 @@ export function Swap({ swapKey, children }: { swapKey: string; children: ReactNo
   }, [leaving, swapKey]);
 
   return (
-    <div key={shownKey} className="proto-swap" data-phase={leaving ? 'out' : 'in'}>
+    <div key={shownKey} className="motion-swap" data-phase={leaving ? 'out' : 'in'}>
       {leaving ? last.current : children}
+    </div>
+  );
+}
+
+/**
+ * resize：內容高度變了，外框從舊高度用 300 smooth-out 走到新高度。
+ * 只在變化期間裁切（`data-resizing`），平常不擋卡片的陰影與邊框光。
+ * reduced-motion 下直接到位。
+ */
+export function AutoHeight({ children, className }: { children: ReactNode; className?: string }) {
+  const outer = useRef<HTMLDivElement>(null);
+  const inner = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const outerEl = outer.current;
+    const innerEl = inner.current;
+    if (outerEl === null || innerEl === null) return;
+    let last = innerEl.offsetHeight;
+    let fallback: ReturnType<typeof setTimeout> | undefined;
+
+    const finish = () => {
+      clearTimeout(fallback);
+      outerEl.style.height = '';
+      outerEl.removeAttribute('data-resizing');
+    };
+    const onEnd = (event: TransitionEvent) => {
+      if (event.target === outerEl && event.propertyName === 'height') finish();
+    };
+    const observer = new ResizeObserver(() => {
+      const next = innerEl.offsetHeight;
+      const previous = outerEl.hasAttribute('data-resizing') ? outerEl.offsetHeight : last;
+      last = next;
+      if (previous === next) return;
+      if (document.documentElement.hasAttribute('data-reduce-motion')) return finish();
+      outerEl.style.height = `${previous}px`;
+      outerEl.setAttribute('data-resizing', '');
+      void outerEl.offsetHeight; // 先讓瀏覽器認得起點
+      outerEl.style.height = `${next}px`;
+      clearTimeout(fallback);
+      fallback = setTimeout(finish, 400);
+    });
+    observer.observe(innerEl);
+    outerEl.addEventListener('transitionend', onEnd);
+    return () => {
+      observer.disconnect();
+      outerEl.removeEventListener('transitionend', onEnd);
+      clearTimeout(fallback);
+    };
+  }, []);
+
+  return (
+    <div ref={outer} className={cn('motion-resize', className)}>
+      <div ref={inner}>{children}</div>
     </div>
   );
 }

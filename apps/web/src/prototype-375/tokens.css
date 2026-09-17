@@ -8,24 +8,36 @@
 
 @import './tokens.generated.css';
 
-/* 動效 token：整組照抄 Libraries.dev site.css 的 :root（怎麼動歸 #378，這裡只是讓原型跑得起來） */
+/*
+ * 動效 token（#378 Q3）：整組照 Libraries.dev site.css 的 :root，外加按壓與 resize。
+ * 元件只能從下面「模式清單」裡挑；清單外沒有動效，只留顏色過渡。
+ */
 :root[data-proto-375] {
   --duration-stagger: 40ms;
   --duration-micro: 80ms;
+  --duration-press: 120ms;
   --duration-quick: 150ms;
+  --duration-overlay: 200ms;
   --duration-fast: 250ms;
   --duration-medium: 350ms;
   --duration-slow: 400ms;
-  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --duration-very-slow: 500ms;
   --ease-bounce: cubic-bezier(0.34, 1.36, 0.64, 1);
   --distance-micro: 4px;
   --distance-small: 6px;
   --distance-base: 8px;
+  --distance-medium: 12px;
+  --distance-large: 30px;
   --scale-large: 0.96;
   --scale-medium: 0.97;
   --scale-small: 0.98;
   --scale-tiny: 0.99;
   --blur-small: 2px;
+  --blur-medium: 3px;
+  --blur-large: 8px;
+  --resize-dur: 300ms;
+  --resize-ease: var(--ease-smooth-out);
+  --auto-advance-delay: 200ms;
 }
 
 /*
@@ -96,69 +108,144 @@
   color: var(--foreground);
 }
 
-/* ── 兩個版本共用的進出場：開快關更快、先縮一點再長出來 ── */
+/*
+ * ── 動效模式清單（#378 Q3、Q8）──
+ * 浮層彈出、對話框、側滑抽屜：registry 的 animate-in／out（index.css 的 @theme 已改成開 250／關 150），
+ *   各元件只調縮放、位移與個別時長。
+ * 換內容、上下題、進場、展開收合、按壓、resize、持續狀態：下面這些。
+ *
+ * @keyframes 允許清單（實作卡要用建置出來的 CSS 驗，#378 Q13）：
+ *   tw-animate-css：enter、exit、collapsible-down、collapsible-up
+ *   本檔：motion-fade-in、motion-fade-out、motion-rise-in、motion-swap-in、motion-swap-out、
+ *         motion-page-in、motion-orb-spin、motion-orb-breathe、motion-beam-angle、motion-beam-pulse、
+ *         motion-shimmer、motion-caret
+ *
+ * 效能（#378 Q12）：持續動畫只動 transform／opacity，唯一例外是執行中邊框光的 conic 角度
+ * （同時最多一個：輸入框與面板互斥）；blur 只給小元素；不常駐 will-change。
+ */
 
-.proto-enter {
-  animation: proto-in var(--duration-fast) var(--ease-smooth-out) both;
-}
-
-@keyframes proto-in {
+@keyframes motion-fade-in {
   from {
     opacity: 0;
-    transform: translateY(var(--distance-base)) scale(var(--scale-tiny));
-    filter: blur(var(--blur-small));
   }
 }
 
-.proto-swap[data-phase='in'] {
-  animation: proto-pop-in var(--duration-fast) var(--ease-smooth-out) both;
+@keyframes motion-fade-out {
+  to {
+    opacity: 0;
+  }
 }
 
-.proto-swap[data-phase='out'] {
-  animation: proto-pop-out var(--duration-quick) var(--ease-smooth-out) both;
+/*
+ * 進場類一律 fill-mode backwards：只有起點，播完就放手，不留一個填著的動畫在元素上。
+ * 退場類才用 both（淡出後要保持透明，直到元件卸載）。
+ */
+
+/* 進場：新訊息、工具卡。往上 8px 淡入，不縮不模糊（大面積不用 blur）。 */
+.motion-rise-in {
+  animation: motion-rise-in var(--duration-fast) var(--ease-smooth-out) backwards;
 }
 
-@keyframes proto-pop-in {
+@keyframes motion-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--rise-distance, var(--distance-base)));
+  }
+}
+
+/* 換內容：輸入框 ↔ 核准／提問面板、面板接續。舊的縮到 .99 淡出 150，新的往上 8px、從 .97 長出來 250。 */
+.motion-swap[data-phase='in'] {
+  animation: motion-swap-in var(--duration-fast) var(--ease-smooth-out) backwards;
+}
+
+.motion-swap[data-phase='out'] {
+  animation: motion-swap-out var(--duration-quick) var(--ease-smooth-out) both;
+}
+
+@keyframes motion-swap-in {
   from {
     opacity: 0;
     transform: translateY(var(--distance-base)) scale(var(--scale-medium));
   }
 }
 
-@keyframes proto-pop-out {
+@keyframes motion-swap-out {
   to {
     opacity: 0;
     transform: scale(var(--scale-tiny));
   }
 }
 
-.proto-collapsible[data-state='open'] {
-  animation: proto-expand var(--duration-fast) var(--ease-smooth-out);
+/* 上下題：下一題從右 8px、上一題從左 8px，250。沒有 blur（面板在手機上是大面積）。 */
+[data-page-dir] > [data-slot='questionnaire-item'][data-active] {
+  animation: motion-page-in var(--duration-fast) var(--ease-smooth-out) backwards;
 }
 
-.proto-collapsible[data-state='closed'] {
-  animation: proto-collapse var(--duration-quick) var(--ease-smooth-out);
+[data-page-dir='next'] {
+  --page-from: var(--distance-base);
 }
 
-@keyframes proto-expand {
+[data-page-dir='prev'] {
+  --page-from: calc(var(--distance-base) * -1);
+}
+
+@keyframes motion-page-in {
   from {
-    height: 0;
     opacity: 0;
-  }
-  to {
-    height: var(--radix-collapsible-content-height);
+    transform: translateX(var(--page-from));
   }
 }
 
-@keyframes proto-collapse {
-  from {
-    height: var(--radix-collapsible-content-height);
-  }
-  to {
-    height: 0;
-    opacity: 0;
-  }
+/* stagger（#378 Q6）：同一刻出現的一小組，只給提問選項，最多前 6 個（總延遲 ≤ 240ms）。 */
+[data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice'] {
+  --rise-distance: var(--distance-micro);
+  animation: motion-rise-in var(--duration-fast) var(--ease-smooth-out) backwards;
 }
+
+[data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice']:nth-child(2) {
+  animation-delay: calc(var(--duration-stagger) * 1);
+}
+[data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice']:nth-child(3) {
+  animation-delay: calc(var(--duration-stagger) * 2);
+}
+[data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice']:nth-child(4) {
+  animation-delay: calc(var(--duration-stagger) * 3);
+}
+[data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice']:nth-child(5) {
+  animation-delay: calc(var(--duration-stagger) * 4);
+}
+[data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice']:nth-child(n + 6) {
+  animation-delay: calc(var(--duration-stagger) * 5);
+}
+
+/* resize：高度跟著內容變（面板換入換出、上下題），300 smooth-out。只有變化期間才裁切。 */
+.motion-resize[data-resizing] {
+  overflow: hidden;
+  transition: height var(--resize-dur) var(--resize-ease);
+}
+
+/* 按壓（#378 Q5）：只給實心主按鈕與送出鍵，scale .96、120ms。其他按鈕只換底色。 */
+:is(
+  [data-slot='button'],
+  [data-slot='questionnaire-next'],
+  [data-slot='questionnaire-submit']
+)[data-variant='default'] {
+  transition-property: color, background-color, box-shadow, opacity, scale;
+  transition-duration:
+    var(--duration-quick), var(--duration-quick), var(--duration-quick), var(--duration-quick),
+    var(--duration-press);
+  transition-timing-function: var(--ease-smooth-out);
+}
+
+:is(
+    [data-slot='button'],
+    [data-slot='questionnaire-next'],
+    [data-slot='questionnaire-submit']
+  )[data-variant='default']:not(:disabled):active {
+  scale: var(--scale-large);
+}
+
+/* ── 持續狀態：串流游標 ── */
 
 .proto-caret {
   display: inline-block;
@@ -168,16 +255,16 @@
   vertical-align: -0.12em;
   border-radius: 2px;
   background: currentColor;
-  animation: proto-blink 1s steps(2) infinite;
+  animation: motion-caret 1s steps(2) infinite;
 }
 
-@keyframes proto-blink {
+@keyframes motion-caret {
   50% {
     opacity: 0;
   }
 }
 
-/* ── 「純 CSS 仿」那一版的 orb ── */
+/* ── 持續狀態：orb（P0 只有 working 與 breathing，#378 Q10）── */
 
 .proto-orb {
   --orb-size: 20px;
@@ -210,45 +297,32 @@
 }
 
 .proto-orb[data-state='working']::before {
-  animation: proto-spin 2.4s linear infinite;
+  animation: motion-orb-spin 2.4s linear infinite;
 }
 
 .proto-orb[data-state='working']::after {
-  animation: proto-spin 1.2s linear infinite reverse;
-}
-
-.proto-orb[data-state='composing']::before {
-  animation: proto-wave 1.4s var(--ease-smooth-out) infinite alternate;
+  animation: motion-orb-spin 1.2s linear infinite reverse;
 }
 
 .proto-orb[data-state='breathing']::before,
 .proto-orb[data-state='breathing']::after {
-  animation: proto-breathe-scale 3s ease-in-out infinite;
+  animation: motion-orb-breathe 3s ease-in-out infinite;
 }
 
-@keyframes proto-spin {
+@keyframes motion-orb-spin {
   to {
     transform: rotate(360deg);
   }
 }
 
-@keyframes proto-wave {
-  from {
-    transform: scaleY(0.7) translateY(8%);
-  }
-  to {
-    transform: scaleY(1.05) translateY(-6%);
-  }
-}
-
-@keyframes proto-breathe-scale {
+@keyframes motion-orb-breathe {
   50% {
     transform: scale(0.82);
     opacity: 0.5;
   }
 }
 
-/* ── 「純 CSS 仿」那一版的 border beam ── */
+/* ── 持續狀態：邊框光（靜態值歸 #377，這裡只管怎麼動）── */
 
 @property --proto-angle {
   syntax: '<angle>';
@@ -261,26 +335,39 @@
   isolation: isolate;
 }
 
+.proto-beam::before,
 .proto-beam::after {
   content: '';
   position: absolute;
-  inset: -1px;
-  z-index: 1;
-  padding: var(--beam-width);
   border-radius: inherit;
   pointer-events: none;
   opacity: 0;
   transition: opacity var(--duration-medium) var(--ease-smooth-out);
+}
+
+/* 線 */
+.proto-beam::after {
+  inset: -1px;
+  z-index: 1;
+  padding: var(--beam-width);
   mask:
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
   mask-composite: exclude;
 }
 
-.proto-beam[data-active='true']::after {
+/* 光暈：box-shadow 不動，只動 opacity，走合成層 */
+.proto-beam::before {
+  inset: 0;
+  z-index: -1;
+}
+
+.proto-beam[data-active='true']::after,
+.proto-beam[data-active='true']::before {
   opacity: 1;
 }
 
+/* 執行中：conic 光一圈 2s，開始與結束各淡 350 */
 .proto-beam[data-kind='run']::after {
   background: conic-gradient(
     from var(--proto-angle),
@@ -289,44 +376,35 @@
     var(--brand) 86%,
     transparent 100%
   );
-  animation: proto-angle 2s linear infinite;
+  animation: motion-beam-angle 2s linear infinite;
 }
 
-.proto-beam[data-kind='run'][data-active='true']::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  border-radius: inherit;
+.proto-beam[data-kind='run']::before {
   box-shadow: 0 0 calc(var(--beam-glow-size) * 0.6)
     color-mix(in oklab, var(--beam-glow), transparent 30%);
 }
 
+/* 等你處理：整圈呼吸 2.3s，亮度在 --beam-pulse-min 與 1 之間 */
 .proto-beam[data-kind='pending']::after {
   background: var(--brand);
 }
 
-.proto-beam[data-kind='pending'][data-active='true']::after {
-  animation: proto-pulse 2.3s ease-in-out infinite;
-}
-
-.proto-beam[data-kind='pending'][data-active='true']::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  border-radius: inherit;
+.proto-beam[data-kind='pending']::before {
   box-shadow: 0 0 var(--beam-glow-size) var(--beam-glow);
-  animation: proto-pulse 2.3s ease-in-out infinite;
 }
 
-@keyframes proto-angle {
+.proto-beam[data-kind='pending'][data-active='true']::after,
+.proto-beam[data-kind='pending'][data-active='true']::before {
+  animation: motion-beam-pulse 2.3s ease-in-out infinite;
+}
+
+@keyframes motion-beam-angle {
   to {
     --proto-angle: 360deg;
   }
 }
 
-@keyframes proto-pulse {
+@keyframes motion-beam-pulse {
   0%,
   100% {
     opacity: var(--beam-pulse-min);
@@ -335,6 +413,14 @@
     opacity: 1;
   }
 }
+
+/* CPU 降速檢查的退路（#378 Q12）：執行中邊框光改成只動 opacity 的呼吸，不重繪角度。 */
+:root[data-beam-fallback] .proto-beam[data-kind='run']::after {
+  background: var(--brand);
+  animation: motion-beam-pulse 2.3s ease-in-out infinite;
+}
+
+/* ── 持續狀態：狀態列 shimmer ── */
 
 .proto-shimmer {
   background: linear-gradient(
@@ -346,10 +432,10 @@
     0 0 / 250% 100%;
   background-clip: text;
   color: transparent;
-  animation: proto-shimmer 1.8s linear infinite;
+  animation: motion-shimmer 1.8s linear infinite;
 }
 
-@keyframes proto-shimmer {
+@keyframes motion-shimmer {
   from {
     background-position: 100% 0;
   }
@@ -358,16 +444,83 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .proto-enter,
-  .proto-swap,
-  .proto-collapsible,
-  .proto-caret,
-  .proto-orb::before,
-  .proto-orb::after,
-  .proto-beam::after,
-  .proto-beam::before,
-  .proto-shimmer {
-    animation: none !important;
-  }
+/*
+ * ── reduced-motion（#378 Q4、Q9）：不是全關 ──
+ * 位移／縮放／模糊拿掉，留 150 的透明度；尺寸瞬間到位；循環動畫停在一格；狀態不靠動效表達。
+ *
+ * 原型用 `data-reduce-motion` 屬性（切換列可以模擬，也可以跟系統），
+ * 實作要寫成 `@media (prefers-reduced-motion: reduce)`，內容相同。
+ */
+:root[data-reduce-motion] {
+  --animate-in: motion-fade-in 150ms ease backwards;
+  --animate-out: motion-fade-out 150ms ease both;
+  --animate-collapsible-down: motion-fade-in 150ms ease;
+  --animate-collapsible-up: none;
+  scroll-behavior: auto;
+}
+
+:root[data-reduce-motion] .motion-rise-in,
+:root[data-reduce-motion] .motion-swap[data-phase='in'],
+:root[data-reduce-motion] [data-page-dir] > [data-slot='questionnaire-item'][data-active],
+:root[data-reduce-motion]
+  [data-slot='questionnaire-item'][data-active]
+  [data-slot='questionnaire-choice'] {
+  animation: motion-fade-in 150ms ease backwards;
+  animation-delay: 0s;
+}
+
+:root[data-reduce-motion] .motion-swap[data-phase='out'] {
+  animation: motion-fade-out 150ms ease both;
+}
+
+:root[data-reduce-motion] .motion-resize[data-resizing],
+:root[data-reduce-motion] [data-slot='sidebar-gap'],
+:root[data-reduce-motion] [data-slot='sidebar-container'],
+:root[data-reduce-motion] [data-slot='message-scroller-button'],
+:root[data-reduce-motion] .proto-beam::before,
+:root[data-reduce-motion] .proto-beam::after,
+:root[data-reduce-motion] [data-motion-rotate] {
+  transition: none;
+}
+
+:root[data-reduce-motion] [data-variant='default']:not(:disabled):active {
+  scale: none;
+}
+
+/* 循環動畫停在一格 */
+:root[data-reduce-motion] .proto-caret,
+:root[data-reduce-motion] .proto-orb::before,
+:root[data-reduce-motion] .proto-orb::after,
+:root[data-reduce-motion] .proto-beam::before,
+:root[data-reduce-motion] .proto-beam::after,
+:root[data-reduce-motion] .proto-shimmer,
+:root[data-reduce-motion] .animate-spin,
+:root[data-reduce-motion] .animate-pulse {
+  animation: none;
+}
+
+/* orb：working 停在轉了一點的角度，breathing 停在呼吸中段 */
+:root[data-reduce-motion] .proto-orb[data-state='working']::before {
+  transform: rotate(30deg);
+}
+
+:root[data-reduce-motion] .proto-orb[data-state='breathing']::before,
+:root[data-reduce-motion] .proto-orb[data-state='breathing']::after {
+  transform: scale(0.91);
+  opacity: 0.7;
+}
+
+/* 邊框光：執行中＝靜態整圈細線、沒有光暈；等你處理＝整圈細線加光暈、全亮 */
+:root[data-reduce-motion] .proto-beam[data-kind='run']::after {
+  background: color-mix(in oklab, var(--brand), transparent 30%);
+}
+
+:root[data-reduce-motion] .proto-beam[data-kind='run']::before {
+  display: none;
+}
+
+/* shimmer 退成一般次要文字 */
+:root[data-reduce-motion] .proto-shimmer {
+  background: none;
+  color: var(--muted-foreground);
 }

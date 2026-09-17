@@ -266,7 +266,7 @@ function settle(state: ProtoState, steps: readonly Step[]): ProtoState {
   }, state);
 }
 
-export const JUMPS = ['空白', '執行中', '核准', '提問', '失敗'] as const;
+export const JUMPS = ['空白', '執行中', '核准', '提問', '兩個待決', '失敗'] as const;
 export type Jump = (typeof JUMPS)[number];
 
 function jumpState(jump: Jump): ProtoState {
@@ -285,6 +285,11 @@ function jumpState(jump: Jump): ProtoState {
       return settle(EMPTY, OPENING);
     case '提問':
       return settle(settle(EMPTY, OPENING), APPROVED);
+    case '兩個待決': {
+      // 面板接續（#378 Q8）：處理完一個換下一個，用切換列的「處理掉第一個」觸發
+      const atApproval = settle(EMPTY, OPENING);
+      return { ...atApproval, pendings: [...atApproval.pendings, QUESTION] };
+    }
     case '失敗': {
       const upToBash = OPENING.slice(
         0,
@@ -347,6 +352,14 @@ export function useScenario() {
     decide: (decision: string) => void play(decision === 'approve' ? APPROVED : REJECTED),
     answer: (answers: readonly Answer[] | 'cancel') => void play(answered(answers)),
     send: (text: string) => void play(replyTo(text)),
+    /** 原型用：直接拿掉第一個待決，看面板接續的過場。 */
+    dismissFirst: () => {
+      run.current++;
+      setState((current) => {
+        const pendings = current.pendings.slice(1);
+        return { ...current, pendings, status: pendings.length > 0 ? current.status : 'running' };
+      });
+    },
     stop: () => {
       run.current++;
       setState((current) => ({

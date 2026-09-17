@@ -1,4 +1,25 @@
 @import 'tailwindcss';
+@import 'tw-animate-css';
+
+/*
+ * 動效（#378）：registry 元件寫的 animate-in／animate-out 靠 tw-animate-css 才有 CSS。
+ * 在這裡把進出場改成「開快關更快」：開 250、關 150、曲線 smooth-out。刻意不讀 --tw-duration，
+ * registry 各自寫的 duration-200 就蓋不掉；真要單獨改（例如抽屜）用 animation-duration-*。
+ * 不用 inline：reduced-motion 要在執行期把這幾個變數換成只有透明度的版本。
+ */
+@theme {
+  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --animate-in: enter var(--tw-animation-duration, 250ms) var(--ease-smooth-out)
+    var(--tw-animation-delay, 0s) 1 normal backwards;
+  --animate-out: exit var(--tw-animation-duration, 150ms) var(--ease-smooth-out)
+    var(--tw-animation-delay, 0s) 1 normal both;
+  --animate-collapsible-down:
+    collapsible-down var(--tw-animation-duration, 250ms) var(--ease-smooth-out),
+    motion-fade-in var(--tw-animation-duration, 250ms) var(--ease-smooth-out);
+  --animate-collapsible-up:
+    collapsible-up var(--tw-animation-duration, 150ms) var(--ease-smooth-out),
+    motion-fade-out var(--tw-animation-duration, 150ms) var(--ease-smooth-out);
+}
 
 @custom-variant dark (&:is(.dark *));
 
