@@ -30,6 +30,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { DISABLED_FEEDBACK_WARNING } from './agent-factory.js';
 import { createCliAgent, DEFAULT_PLUGINS, runTurn } from './cli.js';
+import { loopbackRequest } from './fixtures.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
@@ -223,7 +224,7 @@ describe('遙測接線：web 那條路', () => {
       }),
     });
     const fetchImpl: typeof globalThis.fetch = async (input, init) =>
-      handler.handle(new Request(input as string, init));
+      handler.handle(loopbackRequest(input as string, init));
     const client = createWireClient({ baseUrl: BASE_URL, fetch: fetchImpl });
 
     // `run.start` 是 fire-and-forget，所以同步機制是下行本身而不是時間：抽到 root
@@ -259,7 +260,7 @@ describe('遙測接線：web 那條路', () => {
       }),
     });
     const fetchImpl: typeof globalThis.fetch = async (input, init) =>
-      handler.handle(new Request(input as string, init));
+      handler.handle(loopbackRequest(input as string, init));
     const client = createWireClient({ baseUrl: BASE_URL, fetch: fetchImpl });
 
     const events = await client.openEvents('web-none');
@@ -396,7 +397,7 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
       }),
     });
     const fetchImpl: typeof globalThis.fetch = async (input, init) =>
-      handler.handle(new Request(input as string, init));
+      handler.handle(loopbackRequest(input as string, init));
     const client = createWireClient({ baseUrl: BASE_URL, fetch: fetchImpl });
 
     const events = await client.openEvents('web-feedback');

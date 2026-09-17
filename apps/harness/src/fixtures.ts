@@ -29,6 +29,23 @@ export function emptyCommandPoint(): Pick<CommandRegistrationPoint, 'find' | 'li
   return createRegistry().commands;
 }
 
+/**
+ * 把 handler 當 fetch 用時的請求：補上一個 loopback 的 `Host`。
+ *
+ * handler 在任何路徑判斷之前先過瀏覽器信任圍欄（`request-trust.ts`，#387），而 `new Request(url)`
+ * 不會替你帶 `Host`——真的 HTTP/1.1 請求一定有，所以圍欄缺 Host 就拒、不退回去讀 URL。
+ * 測試的 base URL（`http://wire.test` 之類）跟 Host 無關，保留原樣。
+ *
+ * @param input - 請求 URL。
+ * @param init - 其餘照 `fetch` 傳進來的原樣。
+ * @returns 帶著 `host: localhost` 的請求。
+ */
+export function loopbackRequest(input: string, init?: RequestInit): Request {
+  const headers = new Headers(init?.headers);
+  headers.set('host', 'localhost');
+  return new Request(input, { ...init, headers });
+}
+
 /** fixture plugin 註冊的工具名。 */
 export const NOTE_TOOL_NAME = 'take_note';
 

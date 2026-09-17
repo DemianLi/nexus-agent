@@ -11,7 +11,7 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
-import { emptyCommandPoint } from './fixtures.js';
+import { emptyCommandPoint, loopbackRequest } from './fixtures.js';
 import { createWireHandler } from './wire-handler.js';
 
 /**
@@ -72,7 +72,7 @@ function connect(agent: PumpAgent) {
     }),
   });
   const fetchImpl: typeof globalThis.fetch = async (input, init) =>
-    handler.handle(new Request(input as string, init));
+    handler.handle(loopbackRequest(input as string, init));
   return {
     handler,
     fetch: fetchImpl,
@@ -429,6 +429,63 @@ describe('失敗與拒絕', () => {
     expect(await noLine.json()).toMatchObject({ type: 'error', id: 10, error: 'invalid_argument' });
   });
 
+  it('不可信的來源在任何路徑判斷之前就拿 403，連 thread 都不建（#387）', async () => {
+    let created = 0;
+    const handler = createWireHandler({
+      createAgent: async () => {
+        created += 1;
+        return {
+          agent: buildAgent(ONE_CALL).agent,
+          commands: emptyCommandPoint(),
+          dispose: async () => undefined,
+        };
+      },
+    });
+    const send = (method: string, path: string, headers: Record<string, string>, body?: unknown) =>
+      handler.handle(
+        new Request(`${BASE_URL}${path}`, {
+          method,
+          headers: { 'content-type': 'application/json', ...headers },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        }),
+      );
+    const routes: readonly [string, string, unknown][] = [
+      ['GET', '/threads', undefined],
+      ['GET', '/threads/t20/history', undefined],
+      ['POST', streamPath('t20'), { channels: ['messages'] }],
+      ['POST', commandPath('t20', 'slash.list'), { id: 1, method: 'slash.list' }],
+      ['POST', '/threads/t20/commands/state.get', { id: 2 }],
+    ];
+    const untrusted: readonly Record<string, string>[] = [
+      {},
+      { host: 'evil.example:8787', origin: 'http://evil.example:8787' },
+      { host: 'localhost:8787', 'sec-fetch-site': 'cross-site' },
+      { host: 'localhost:8787', origin: 'http://localhost:5173' },
+      { host: 'localhost:8787', origin: 'null' },
+    ];
+    for (const [method, path, body] of routes) {
+      for (const headers of untrusted) {
+        const response = await send(method, path, headers, body);
+        expect({ method, path, headers, status: response.status }).toEqual({
+          method,
+          path,
+          headers,
+          status: 403,
+        });
+      }
+    }
+    expect(created).toBe(0);
+
+    // 同一組路徑，loopback 的 Host 就進得去（`state.get` 那條照舊是 404）。
+    const trusted = { host: 'localhost:8787', origin: 'http://localhost:8787' };
+    expect(
+      (await send('POST', commandPath('t20', 'slash.list'), trusted, routes[3]![2])).status,
+    ).toBe(200);
+    expect((await send('POST', '/threads/t20/commands/state.get', trusted, { id: 2 })).status).toBe(
+      404,
+    );
+  });
+
   it('上行的回應是收件回條，不是跑完了', async () => {
     const { agent, calls } = buildAgent(ONE_CALL);
     const { client } = connect(agent);
@@ -462,7 +519,7 @@ describe('一條 thread 一個 agent', () => {
     });
     const post = (path: string, body: unknown) =>
       handler.handle(
-        new Request(`${BASE_URL}${path}`, {
+        loopbackRequest(`${BASE_URL}${path}`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(body),
@@ -528,7 +585,7 @@ describe('線的兩端與真實組裝點對得上', () => {
       });
       const client = createWireClient({
         baseUrl: BASE_URL,
-        fetch: async (input, init) => handler.handle(new Request(input as string, init)),
+        fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
       });
       const events = await client.openEvents('real', { channels: ['messages'] });
       await client.runStart('real', '哈囉。');
@@ -556,7 +613,7 @@ describe('建不起這條 thread', () => {
   function postTo(handler: ReturnType<typeof createWireHandler>) {
     return (path: string, body: unknown) =>
       handler.handle(
-        new Request(`${BASE_URL}${path}`, {
+        loopbackRequest(`${BASE_URL}${path}`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(body),
