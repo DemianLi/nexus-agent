@@ -263,6 +263,12 @@ function Hero({ onStart }: { onStart: () => void }) {
   );
 }
 
+/**
+ * registry 的 item 帶 `content-visibility:auto`＝paint containment：卡片的外陰影與光暈會被切成直角
+ * （手機上工具卡下緣露出灰色直角、待決卡片後面一塊方框）。原型一律關掉；實作要另想保留長列表效能的辦法。
+ */
+const ITEM_CLASS = 'proto-enter [contain:none] [content-visibility:visible]';
+
 function Transcript({ scenario, settings }: { scenario: Scenario; settings: Settings }) {
   const { entries, pendings } = scenario.state;
   return (
@@ -271,7 +277,7 @@ function Transcript({ scenario, settings }: { scenario: Scenario; settings: Sett
         <MessageScrollerViewport>
           <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-4 px-4 pt-6 pb-10">
             {entries.map((entry) => (
-              <MessageScrollerItem key={entry.id} messageId={entry.id} className="proto-enter">
+              <MessageScrollerItem key={entry.id} messageId={entry.id} className={ITEM_CLASS}>
                 <EntryView entry={entry} />
               </MessageScrollerItem>
             ))}
@@ -280,8 +286,7 @@ function Transcript({ scenario, settings }: { scenario: Scenario; settings: Sett
                 <MessageScrollerItem
                   key={pending.interruptId}
                   messageId={pending.interruptId}
-                  // registry 的 item 帶 content-visibility:auto＝paint containment，會把卡片的光暈切成直角方塊
-                  className="proto-enter [contain:none] [content-visibility:visible]"
+                  className={ITEM_CLASS}
                 >
                   <PendingView pending={pending} scenario={scenario} />
                 </MessageScrollerItem>

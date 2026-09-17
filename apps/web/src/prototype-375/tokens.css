@@ -28,7 +28,12 @@
   --blur-small: 2px;
 
   /* 亮色：site.css :root 的值（站上不用，所以是「粗略」） */
-  --background: #fdfdfd;
+  /*
+   * 區塊鑑別度：demian 在手機上看亮色時，白卡片放在 #fdfdfd 上幾乎分不出邊界。
+   * 暗色靠底色 #121212 與卡片 #181818 的明度差分區塊，亮色原本沒有這一層，所以底色壓低到 #f7f7f7，
+   * 再把細框加深、陰影收成貼身的小陰影。
+   */
+  --background: #f7f7f7;
   --foreground: #1a1a1a;
   --card: #ffffff;
   --card-foreground: #1a1a1a;
@@ -36,7 +41,7 @@
   --popover-foreground: #1a1a1a;
   --primary: #1a1a1a;
   --primary-foreground: #fafafa;
-  --secondary: #f4f4f4;
+  --secondary: #ececec;
   --secondary-foreground: #1a1a1a;
   --muted: #f4f4f4;
   --muted-foreground: #6c6c6c;
@@ -47,10 +52,10 @@
   --ring: #0073e5;
   --brand: #0073e5;
   --stage: #f9f9f9;
-  --chip: #f4f4f4;
-  --chip-hover: #eae9e9;
+  --chip: #ececec;
+  --chip-hover: #e4e4e4;
   --material-shadow:
-    0 0 0 1px var(--card-hairline), 0 4px 42px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+    0 0 0 1px var(--card-hairline), 0 1px 2px rgba(0, 0, 0, 0.06), 0 4px 12px rgba(0, 0, 0, 0.04);
 
   /*
    * 邊框效果：demian 看過原型後要求「暗色和亮色的邊框效果要一樣顯而易見」。
@@ -60,15 +65,15 @@
   --beam-glow: color-mix(in oklab, var(--brand), transparent 40%);
   --beam-glow-size: 28px;
   --beam-pulse-min: 0.55;
-  --card-hairline: rgba(0, 0, 0, 0.09);
+  --card-hairline: rgba(0, 0, 0, 0.14);
 
-  --sidebar: #f9f9f9;
+  --sidebar: #f2f2f2;
   --sidebar-foreground: #1a1a1a;
   --sidebar-primary: #1a1a1a;
   --sidebar-primary-foreground: #fafafa;
   --sidebar-accent: #f1f1f1;
   --sidebar-accent-foreground: #1a1a1a;
-  --sidebar-border: rgba(0, 0, 0, 0.06);
+  --sidebar-border: rgba(0, 0, 0, 0.1);
   --sidebar-ring: #0073e5;
 }
 
