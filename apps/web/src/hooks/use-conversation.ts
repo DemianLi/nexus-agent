@@ -149,8 +149,8 @@ export interface Conversation {
   /** 長評分按鈕的那幾則回覆（[#278](https://github.com/DemianLi/nexus-agent/issues/278)），見 `trackReplyTails`。 */
   readonly replyTails: ReadonlySet<string>;
   /**
-   * 這個分頁看過的評分，以回覆 id 為鍵。**只在記憶體裡**：沒有 `list`，重新整理就沒了，而那時畫面上
-   * 也沒有舊回覆可以評（門 B 沒開）。
+   * 這個分頁看過的評分，以回覆 id 為鍵。**只在記憶體裡**：還沒有 `list`，重新整理或切回舊會話就沒了，
+   * 重播出來的舊回覆也沒有按鈕。見 [#382](https://github.com/DemianLi/nexus-agent/issues/382)。
    */
   readonly ratings: ReadonlyMap<string, WireFeedbackItem>;
   readonly feedbackDialog?: FeedbackDialogState;
