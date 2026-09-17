@@ -50,7 +50,17 @@
   --chip: #f4f4f4;
   --chip-hover: #eae9e9;
   --material-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.04), 0 4px 42px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+    0 0 0 1px var(--card-hairline), 0 4px 42px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+
+  /*
+   * 邊框效果：demian 看過原型後要求「暗色和亮色的邊框效果要一樣顯而易見」。
+   * 同一個 brand 色在白底上對比低，所以亮色用較粗的線、較濃的光暈、較高的呼吸下限去補。
+   */
+  --beam-width: 2px;
+  --beam-glow: color-mix(in oklab, var(--brand), transparent 40%);
+  --beam-glow-size: 28px;
+  --beam-pulse-min: 0.55;
+  --card-hairline: rgba(0, 0, 0, 0.09);
 
   --sidebar: #f9f9f9;
   --sidebar-foreground: #1a1a1a;
@@ -85,8 +95,13 @@
   --stage: #131313;
   --chip: rgba(255, 255, 255, 0.07);
   --chip-hover: rgba(255, 255, 255, 0.1);
-  --material-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04), inset 0 0 0 1px rgba(196, 196, 196, 0.08);
+  --material-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), inset 0 0 0 1px var(--card-hairline);
+
+  --beam-width: 1.5px;
+  --beam-glow: color-mix(in oklab, var(--brand), transparent 70%);
+  --beam-glow-size: 24px;
+  --beam-pulse-min: 0.3;
+  --card-hairline: rgba(196, 196, 196, 0.08);
 
   --sidebar: #121212;
   --sidebar-foreground: #ededed;
@@ -268,7 +283,7 @@
   position: absolute;
   inset: -1px;
   z-index: 1;
-  padding: 1.5px;
+  padding: var(--beam-width);
   border-radius: inherit;
   pointer-events: none;
   opacity: 0;
@@ -287,11 +302,21 @@
   background: conic-gradient(
     from var(--proto-angle),
     transparent 0 62%,
-    color-mix(in oklab, var(--brand), transparent 40%) 78%,
-    var(--brand) 88%,
+    color-mix(in oklab, var(--brand), transparent 40%) 74%,
+    var(--brand) 86%,
     transparent 100%
   );
   animation: proto-angle 2s linear infinite;
+}
+
+.proto-beam[data-kind='run'][data-active='true']::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  box-shadow: 0 0 calc(var(--beam-glow-size) * 0.6)
+    color-mix(in oklab, var(--beam-glow), transparent 30%);
 }
 
 .proto-beam[data-kind='pending']::after {
@@ -308,7 +333,7 @@
   inset: 0;
   z-index: -1;
   border-radius: inherit;
-  box-shadow: 0 0 24px color-mix(in oklab, var(--brand), transparent 70%);
+  box-shadow: 0 0 var(--beam-glow-size) var(--beam-glow);
   animation: proto-pulse 2.3s ease-in-out infinite;
 }
 
@@ -321,7 +346,7 @@
 @keyframes proto-pulse {
   0%,
   100% {
-    opacity: 0.3;
+    opacity: var(--beam-pulse-min);
   }
   50% {
     opacity: 1;
