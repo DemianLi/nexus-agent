@@ -342,7 +342,12 @@ export const TOOL_RESULT_STASH_PREFIX = '/large_tool_results';
  * @returns 同一個 backend，外面包一層只有這一條路由的 `CompositeBackend`。
  */
 function withToolResultStash(backend: AnyBackendProtocol): AnyBackendProtocol {
-  return new CompositeBackend(backend, { [TOOL_RESULT_STASH_PREFIX]: new StateBackend() });
+  // **路由鍵要有結尾斜線**（[#354](https://github.com/DemianLi/nexus-agent/issues/354)），理由同
+  // {@link withConversationHistory}。少了它，照確切路徑 `read_file` 仍讀得到，但在這個目錄底下
+  // `ls` 列出 `/large_tool_result// (directory)`、`grep` 回 No matches（實測）。代價同歷史那一格：
+  // 預設組裝裡 state 的 `files` 是共用的，模型在根目錄看得到 `/call_<id>.txt`——斜線之前也看得到，
+  // 只是形狀是 `//call_<id>.txt`（`tool-result-stash.test.ts` 的 state 那條記著）。
+  return new CompositeBackend(backend, { [`${TOOL_RESULT_STASH_PREFIX}/`]: new StateBackend() });
 }
 
 /**
