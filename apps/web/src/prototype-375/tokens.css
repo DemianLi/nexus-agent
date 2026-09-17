@@ -83,6 +83,14 @@
     outline: 2px solid var(--ring);
     outline-offset: 2px;
   }
+
+  /*
+   * 程式把焦點搬到面板或題目容器（tabIndex=-1）時不畫外框（#384 Q17）：
+   * 那不是可操作的元件，WCAG 2.4.7 管的是可操作的；按鈕、選項、輸入框照畫。
+   */
+  :root[data-proto-375] [tabindex='-1']:focus-visible {
+    outline: none;
+  }
 }
 
 :root[data-proto-375] :focus-visible {

@@ -16,18 +16,26 @@
  */
 
 import {
+  ArrowDown,
   ArrowUp,
   Check,
   ChevronDown,
   Hand,
   Moon,
   Plus,
-  RotateCcw,
   Square,
   Sun,
   X,
 } from 'lucide-react';
-import { useContext, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import {
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { toast } from 'sonner';
 
 import type {
@@ -72,6 +80,7 @@ import {
   QuestionnaireChoiceDescription,
   QuestionnaireChoices,
   QuestionnaireDescription,
+  QuestionnaireError,
   QuestionnaireInput,
   QuestionnaireItem,
   QuestionnaireNext,
@@ -104,7 +113,6 @@ import {
   OPTIONS,
   PButton,
   SettingsContext,
-  Swap,
   useReducedMotion,
   useSettings,
   useViewportWidth,
@@ -201,7 +209,8 @@ export function PrototypeApp() {
 
 function ThreadSidebar({ onJump }: { onJump: Scenario['jump'] }) {
   return (
-    <Sidebar>
+    // axe 的 region 規則：側欄的內容要在地標裡，不然算「不在任何地標內」（#384）
+    <Sidebar aria-label="對話" role="navigation">
       <SidebarHeader className="gap-3 p-3">
         <span className="px-2 pt-1 text-sm font-semibold">nexus</span>
         <PButton
@@ -267,25 +276,23 @@ function Header({
   );
 }
 
+/**
+ * 狀態列是全站唯一的 role=status（#384 Q11、Q12）：待決面板出現、串流開始、失敗都由它唸。
+ * 旁邊的 orb 只是同一件事的圖像，設 aria-hidden，不然會唸兩次。
+ */
 function StatusLine({ state }: { state: ProtoState }) {
-  const approvals = state.pendings.flatMap((pending) =>
-    pending.kind === 'approval' ? pending.actions.map((action) => action.name) : [],
-  );
-  const questions = state.pendings.filter((pending) => pending.kind === 'question').length;
+  const streaming = state.entries.some((entry) => entry.kind === 'ai' && entry.streaming === true);
 
   let label: ReactNode;
   let orb: ReactNode = null;
   if (state.status === 'running') {
-    label = <span className="proto-shimmer">執行中…</span>;
-    orb = <AgentOrb state="working" size={20} label="執行中" />;
+    label = <span className="proto-shimmer">{streaming ? '回覆中…' : '執行中…'}</span>;
+    orb = <AgentOrb state="working" size={20} decorative />;
   } else if (state.status === 'awaiting-input') {
-    label = [
-      approvals.length > 0 ? `等待核准：${approvals.join('、')}` : undefined,
-      questions > 0 ? `等你回答 ${questions} 組問題` : undefined,
-    ]
-      .filter(Boolean)
+    label = state.pendings
+      .map((pending, index) => pendingLabel(pending, { index, total: state.pendings.length }))
       .join('；');
-    orb = <span className="size-2 rounded-full bg-(--brand)" />;
+    orb = <span className="size-2 rounded-full bg-(--brand)" aria-hidden />;
   } else if (state.status === 'failed') {
     label = <span className="text-destructive">這一輪失敗了：{state.error}</span>;
   } else {
@@ -355,11 +362,30 @@ function Transcript({
     if (!map.has(id)) map.set(id, true);
     return map.get(id) === true ? 'motion-rise-in' : '';
   };
+
+  /**
+   * 串流中不唸逐字（#384 Q12）：對話列表的 role=log 關掉 live，
+   * 改在回覆結束時把全文丟進一個 polite 區唸一次。
+   */
+  const [announced, setAnnounced] = useState('');
+  const doneIds = useRef(new Set<string>());
+  useEffect(() => {
+    for (const entry of entries) {
+      if (entry.kind !== 'ai' || entry.streaming === true || entry.text === '') continue;
+      if (doneIds.current.has(entry.id)) continue;
+      doneIds.current.add(entry.id);
+      setAnnounced(entry.text);
+    }
+  }, [entries]);
+
   return (
     <MessageScrollerProvider autoScroll>
       <MessageScroller className="min-h-0 flex-1">
-        <MessageScrollerViewport>
-          <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-4 px-4 pt-6 pb-10">
+        <MessageScrollerViewport aria-label="對話訊息">
+          <MessageScrollerContent
+            aria-live="off"
+            className="mx-auto w-full max-w-3xl gap-4 px-4 pt-6 pb-10"
+          >
             {entries.map((entry) => (
               <MessageScrollerItem
                 key={entry.id}
@@ -381,8 +407,14 @@ function Transcript({
               ))}
           </MessageScrollerContent>
         </MessageScrollerViewport>
-        <MessageScrollerButton className="rounded-full" behavior={reduce ? 'auto' : 'smooth'} />
+        <MessageScrollerButton className="rounded-full" behavior={reduce ? 'auto' : 'smooth'}>
+          <ArrowDown />
+          <span className="sr-only">捲到最新的訊息</span>
+        </MessageScrollerButton>
       </MessageScroller>
+      <p aria-live="polite" className="sr-only">
+        {announced}
+      </p>
     </MessageScrollerProvider>
   );
 }
@@ -533,25 +565,99 @@ function ToolCard({ entry }: { entry: ToolEntry }) {
   );
 }
 
+/**
+ * 輸入框與待決面板換手。#376：輸入框**隱藏不卸載**（草稿要留著），所以這裡不是換元件，
+ * 是把沒在用的那一邊 `hidden` 起來，`inert` 讓它退出 Tab 順序。
+ * 動效沿用「換內容」：舊的淡出 150、新的長出 250（#378）。
+ */
 function ComposerZone({ scenario, settings }: { scenario: Scenario; settings: Settings }) {
-  const pending = scenario.state.pendings[0];
+  const pendings = scenario.state.pendings;
+  const pending = pendings[0];
   const takeover = settings.approval === 'takeover' && pending !== undefined;
+  const target = takeover ? pending.interruptId : 'composer';
+  const [shown, setShown] = useState(target);
+  const leaving = target !== shown;
+
+  // 淡出中還要畫舊的那一張，所以留最後一次的 pending
+  const lastPending = useRef(pending);
+  if (pending !== undefined) lastPending.current = pending;
+  const shownPending = pendings.find((item) => item.interruptId === shown) ?? lastPending.current;
+  const showComposer = shown === 'composer';
+
+  useEffect(() => {
+    if (!leaving) return;
+    const timer = setTimeout(() => setShown(target), 150);
+    return () => clearTimeout(timer);
+  }, [leaving, target]);
+
+  const zone = useRef<HTMLDivElement>(null);
+  const composer = useRef<HTMLTextAreaElement>(null);
+  const mounted = useRef(false);
+
+  /**
+   * 焦點只在「本來就會丟掉」時才搬（#384 Q4）：焦點在這一區裡（輸入框被藏起來、上一張面板被拿掉）
+   * 或已經掉到 body 才搬；人在別處看工具卡就不搶，改由狀態列報讀。
+   */
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    const active = document.activeElement;
+    const lost =
+      active === null || active === document.body || (zone.current?.contains(active) ?? false);
+    if (!lost) return;
+    if (showComposer) {
+      composer.current?.focus();
+      return;
+    }
+    const panel = zone.current?.querySelector<HTMLElement>('[data-slot="pending-panel"]');
+    // 提問面板落在當前題目的 fieldset（跟 questionnaire 換題時一致），核准面板落在面板本身
+    const item = panel?.querySelector<HTMLElement>(
+      '[data-slot="questionnaire-item"]:not([hidden])',
+    );
+    (item ?? panel)?.focus();
+  }, [shown, showComposer]);
+
   return (
-    <div className="mx-auto w-full max-w-3xl shrink-0 px-3 pt-1 pb-[max(env(safe-area-inset-bottom),12px)]">
+    <div
+      ref={zone}
+      className="mx-auto w-full max-w-3xl shrink-0 px-3 pt-1 pb-[max(env(safe-area-inset-bottom),12px)]"
+    >
       <AutoHeight>
-        <Swap swapKey={takeover ? pending.interruptId : 'composer'}>
-          {takeover ? (
-            <PendingView pending={pending} scenario={scenario} takeover />
-          ) : (
-            <Composer scenario={scenario} settings={settings} />
+        <div className="motion-swap" data-phase={leaving ? 'out' : 'in'}>
+          <div hidden={!showComposer} inert={!showComposer}>
+            <Composer scenario={scenario} settings={settings} ref={composer} />
+          </div>
+          {!showComposer && shownPending !== undefined && (
+            <PendingView
+              pending={shownPending}
+              scenario={scenario}
+              takeover
+              position={{
+                index: Math.max(
+                  0,
+                  pendings.findIndex((item) => item.interruptId === shownPending.interruptId),
+                ),
+                total: Math.max(1, pendings.length),
+              }}
+            />
           )}
-        </Swap>
+        </div>
       </AutoHeight>
     </div>
   );
 }
 
-function Composer({ scenario, settings }: { scenario: Scenario; settings: Settings }) {
+function Composer({
+  scenario,
+  settings,
+  ref,
+}: {
+  scenario: Scenario;
+  settings: Settings;
+  ref?: RefObject<HTMLTextAreaElement | null>;
+}) {
   const [draft, setDraft] = useState('');
   const { status, pendings } = scenario.state;
   const busy = status === 'running' || status === 'awaiting-input';
@@ -567,6 +673,7 @@ function Composer({ scenario, settings }: { scenario: Scenario; settings: Settin
     <Beam kind="run" active={status === 'running'} radius={24}>
       <InputGroup className="rounded-3xl">
         <InputGroupTextarea
+          ref={ref}
           aria-label="要說的話"
           rows={1}
           className="text-body max-h-48 min-h-12 px-4"
@@ -612,37 +719,119 @@ function Composer({ scenario, settings }: { scenario: Scenario; settings: Settin
   );
 }
 
+/**
+ * 面板的名稱就是報讀的內容（#384 Q11）：出現時由狀態列唸，焦點搬進來時唸這個名稱。
+ * 跨面板進度「（1／2）」也放進名稱裡。
+ */
+function pendingLabel(pending: PendingInput, position?: { index: number; total: number }): string {
+  const base =
+    pending.kind === 'approval'
+      ? `等待核准：${pending.actions.map((action) => action.name).join('、')}`
+      : `有 ${pending.questions.length} 個問題要你回答`;
+  return position !== undefined && position.total > 1
+    ? `${base}（${position.index + 1}／${position.total}）`
+    : base;
+}
+
 function PendingView({
   pending,
   scenario,
   takeover = false,
+  position,
 }: {
   pending: PendingInput;
   scenario: Scenario;
   takeover?: boolean;
+  position?: { index: number; total: number };
 }) {
+  // 提問面板可以收起（#376），核准面板不行
+  const [open, setOpen] = useState(true);
+  const question = pending.kind === 'question' ? pending : undefined;
+  const label = pendingLabel(pending, position);
+  const stop = () => {
+    scenario.stop();
+    toast('已停止這一輪。工具卡裡有題目，可以直接打字回覆。');
+  };
+
+  const head = (
+    <div className="text-muted-foreground flex items-center gap-2 px-3 pt-2 pb-2 text-xs">
+      <span className="size-1.5 shrink-0 rounded-full bg-(--brand)" aria-hidden />
+      <span className="min-w-0 truncate">{label}</span>
+      {question !== undefined && (
+        <>
+          <CollapsibleTrigger
+            className="ml-auto flex size-8 shrink-0 items-center justify-center rounded-full transition-colors duration-(--duration-quick) hover:bg-chip-hover active:bg-chip-pressed"
+            aria-label={open ? '收起這些問題' : '展開這些問題'}
+          >
+            <ChevronDown
+              data-motion-rotate
+              className={`size-4 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) ${open ? 'rotate-180' : ''}`}
+            />
+          </CollapsibleTrigger>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <PButton
+                variant="ghost"
+                size="icon-sm"
+                className="size-8 shrink-0 rounded-full"
+                aria-label="停止這一輪，不回答這些問題"
+                onClick={stop}
+              >
+                <X />
+              </PButton>
+            </TooltipTrigger>
+            <TooltipContent>停止這一輪，不回答這些問題</TooltipContent>
+          </Tooltip>
+        </>
+      )}
+    </div>
+  );
+
+  const body =
+    question === undefined ? (
+      <ApprovalBody
+        pending={pending as PendingApproval}
+        onDecide={scenario.decide}
+        takeover={takeover}
+      />
+    ) : (
+      <QuestionBody
+        key={pending.interruptId}
+        pending={question}
+        onAnswer={scenario.answer}
+        takeover={takeover}
+      />
+    );
+
   return (
     <Beam kind="pending" active radius={24}>
       <section
+        data-slot="pending-panel"
+        tabIndex={-1}
         className="bg-card shadow-material flex flex-col rounded-3xl p-1"
-        aria-label={pending.kind === 'approval' ? '核准請求' : '問答請求'}
+        aria-label={label}
+        onKeyDown={(event) => {
+          // Esc＝收起，不是停止（#384 Q9）
+          if (event.key !== 'Escape' || question === undefined || !open) return;
+          event.preventDefault();
+          setOpen(false);
+          event.currentTarget
+            .querySelector<HTMLElement>('[data-slot="collapsible-trigger"]')
+            ?.focus();
+        }}
       >
-        <div className="text-muted-foreground flex items-center gap-2 px-3 pt-2 pb-2 text-xs">
-          <span className="size-1.5 rounded-full bg-(--brand)" />
-          {pending.kind === 'approval'
-            ? '等待核准'
-            : `要繼續得先問你 ${pending.questions.length} 件事`}
-          {takeover && <span className="ml-auto">輸入框暫時換成這張</span>}
-        </div>
-        {pending.kind === 'approval' ? (
-          <ApprovalBody pending={pending} onDecide={scenario.decide} takeover={takeover} />
+        {question === undefined ? (
+          <>
+            {head}
+            {body}
+          </>
         ) : (
-          <QuestionBody
-            key={pending.interruptId}
-            pending={pending}
-            onAnswer={scenario.answer}
-            takeover={takeover}
-          />
+          <Collapsible open={open} onOpenChange={setOpen}>
+            {head}
+            <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
+              {body}
+            </CollapsibleContent>
+          </Collapsible>
         )}
       </section>
     </Beam>
@@ -660,7 +849,11 @@ function ApprovalBody({
 }) {
   return (
     <>
+      {/* 可捲動 → 要能用鍵盤捲，所以進 Tab 順序並給名稱（#384 Q5） */}
       <div
+        role="group"
+        tabIndex={0}
+        aria-label="要執行的內容"
         className={`bg-stage shadow-stage flex flex-col gap-2 overflow-auto rounded-xl p-3 ${takeover ? 'max-h-[40svh]' : ''}`}
       >
         {pending.actions.map((action, index) => (
@@ -712,6 +905,8 @@ function QuestionBody({
     setDir(names.indexOf(to) > names.indexOf(item) ? 'next' : 'prev');
     setItem(to);
   };
+  // 只有滑鼠／觸控（含 VoiceOver 點兩下）選的才自動跳；鍵盤改選取不跳，要按 Enter（#384 Q10）
+  const pointerPicked = useRef(false);
   // 單選自動跳：先停 200 讓勾選看得到，再走下一題的過場
   const autoAdvance = (from: string) => {
     const next = names[names.indexOf(from) + 1];
@@ -741,31 +936,40 @@ function QuestionBody({
       className={`bg-stage shadow-stage overflow-auto rounded-xl p-4 ${takeover ? 'max-h-[55svh]' : ''}`}
     >
       <AutoHeight>
-        <Questionnaire item={item} onItemChange={go} data-page-dir={dir} onSubmit={submit}>
-          <div className="flex items-center justify-between gap-2">
-            <QuestionnaireProgress />
-            {/* 放棄整組：questionnaire 沒有這顆，#374 決定自補；Actions 的三欄已滿，放在進度旁 */}
-            <PButton
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground h-11 rounded-full lg:h-8"
-              onClick={() => onAnswer('cancel')}
-            >
-              <RotateCcw />
-              放棄整組
-            </PButton>
-          </div>
+        <Questionnaire
+          item={item}
+          onItemChange={go}
+          data-page-dir={dir}
+          onSubmit={submit}
+          shortcuts="numbers"
+        >
+          {/* 進度自己寫中文；aria-live 關掉，改由題目的 legend 一次唸（#384 Q11） */}
+          <QuestionnaireProgress
+            aria-live="off"
+            aria-valuetext={`第 ${Math.max(0, names.indexOf(item)) + 1} 題，共 ${names.length} 題`}
+          >
+            {`第 ${Math.max(0, names.indexOf(item)) + 1} 題，共 ${names.length} 題`}
+          </QuestionnaireProgress>
           {pending.questions.map((question) => (
             <QuestionnaireItem
               key={question.id}
               name={question.id}
               multiple={question.multiSelect === true}
             >
-              <QuestionnaireTitle>{question.question}</QuestionnaireTitle>
-              {question.header !== undefined && (
-                <QuestionnaireDescription>{question.header}</QuestionnaireDescription>
-              )}
+              <QuestionnaireTitle>
+                {/* 焦點落到 fieldset 時一次唸「第 n 題，共 m 題：題目」（#384 Q11） */}
+                <span className="sr-only">{`第 ${names.indexOf(question.id) + 1} 題，共 ${names.length} 題：`}</span>
+                {question.question}
+              </QuestionnaireTitle>
+              <QuestionnaireDescription>
+                {question.header !== undefined && <span>{question.header}</span>}
+                {question.options !== undefined && question.multiSelect !== true && (
+                  // WCAG 3.2.2「事先告知」：自動跳題之前要先講（#384 Q10）
+                  <span className="sr-only">
+                    選了會跳到下一題，可以按上一題回來改。也可以按數字鍵選。
+                  </span>
+                )}
+              </QuestionnaireDescription>
               {question.options === undefined ? (
                 <QuestionnaireInput type="number" placeholder="例如 500" />
               ) : (
@@ -774,9 +978,17 @@ function QuestionBody({
                     <QuestionnaireChoice
                       key={option.label}
                       value={option.label}
-                      onChange={
-                        question.multiSelect === true ? undefined : () => autoAdvance(question.id)
-                      }
+                      onPointerDown={() => {
+                        pointerPicked.current = true;
+                      }}
+                      onKeyDown={() => {
+                        pointerPicked.current = false;
+                      }}
+                      onChange={() => {
+                        if (question.multiSelect === true || !pointerPicked.current) return;
+                        pointerPicked.current = false;
+                        autoAdvance(question.id);
+                      }}
                     >
                       {option.label}
                       {option.description !== undefined && (
@@ -788,6 +1000,8 @@ function QuestionBody({
                   ))}
                 </QuestionnaireChoices>
               )}
+              {/* registry 有這顆但原型之前沒渲染：被擋下來時只有 aria-invalid、沒有訊息（#384 Q14） */}
+              <QuestionnaireError>還沒回答這一題，選一個或按跳過。</QuestionnaireError>
             </QuestionnaireItem>
           ))}
           <QuestionnaireActions>
@@ -966,7 +1180,13 @@ function FeedbackDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent
+        onCloseAutoFocus={(event) => {
+          // 受控開啟沒有 radix Trigger，radix 就不知道要還給誰（#384 Q13）
+          event.preventDefault();
+          document.querySelector<HTMLElement>('button.bg-amber-300')?.focus();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>這則回覆哪裡不好？</DialogTitle>
           <DialogDescription>原型：只看對話框的進出場，送出不會做任何事。</DialogDescription>

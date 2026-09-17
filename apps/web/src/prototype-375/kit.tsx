@@ -132,15 +132,19 @@ export function AgentOrb({
   state,
   size,
   label,
+  decorative = false,
 }: {
   state: 'working' | 'breathing';
   size: 20 | 64;
-  label: string;
+  label?: string;
+  /** 旁邊已經有同義的文字時設 true：不然螢幕閱讀器會把「執行中」唸兩次（#384 Q12） */
+  decorative?: boolean;
 }) {
   return (
     <span
-      role="img"
-      aria-label={label}
+      role={decorative ? undefined : 'img'}
+      aria-hidden={decorative || undefined}
+      aria-label={decorative ? undefined : label}
       className="proto-orb"
       data-state={state}
       style={{ '--orb-size': `${size}px` } as CSSProperties}
@@ -169,26 +173,6 @@ export function Beam({
       style={{ borderRadius: radius }}
     >
       {children}
-    </div>
-  );
-}
-
-/** 換內容：舊的縮到 .99 淡出（150），新的往上 8px、從 .97 長出來（250）。 */
-export function Swap({ swapKey, children }: { swapKey: string; children: ReactNode }) {
-  const [shownKey, setShownKey] = useState(swapKey);
-  const last = useRef(children);
-  const leaving = swapKey !== shownKey;
-  if (!leaving) last.current = children;
-
-  useEffect(() => {
-    if (!leaving) return;
-    const timer = setTimeout(() => setShownKey(swapKey), 150);
-    return () => clearTimeout(timer);
-  }, [leaving, swapKey]);
-
-  return (
-    <div key={shownKey} className="motion-swap" data-phase={leaving ? 'out' : 'in'}>
-      {leaving ? last.current : children}
     </div>
   );
 }
