@@ -1,0 +1,133 @@
+/*
+ * 助理回覆的 markdown 排版（`components/markdown-text.tsx`，#405）。規則見 `.docs/web-ui-spec.md` §5：
+ * 連結用 `--brand`；程式碼區塊是內層 stage、圓角 2xl（16px）；字重只用 400／500。
+ * 放在 components layer：元件自己寫的 utility 蓋得過它。
+ */
+@layer components {
+  .markdown {
+    overflow-wrap: anywhere;
+  }
+
+  .markdown > * + *,
+  .markdown li > * + *,
+  .markdown blockquote > * + * {
+    margin-top: 0.75em;
+  }
+
+  .markdown :is(h1, h2, h3, h4, h5, h6) {
+    font-weight: 500;
+    line-height: 1.35;
+  }
+  .markdown > :is(h1, h2, h3, h4, h5, h6):not(:first-child) {
+    margin-top: 1.25em;
+  }
+  .markdown h1 {
+    font-size: 1.375em;
+  }
+  .markdown h2 {
+    font-size: 1.2em;
+  }
+  .markdown h3 {
+    font-size: 1.075em;
+  }
+
+  .markdown :is(ul, ol) {
+    padding-inline-start: 1.5em;
+  }
+  .markdown ul {
+    list-style: disc;
+  }
+  .markdown ol {
+    list-style: decimal;
+  }
+  .markdown li + li {
+    margin-top: 0.25em;
+  }
+  .markdown ul.contains-task-list {
+    list-style: none;
+    padding-inline-start: 0.25em;
+  }
+  .markdown .task-list-item input {
+    margin-inline-end: 0.4em;
+    vertical-align: -0.1em;
+  }
+
+  .markdown a {
+    color: var(--brand);
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+    text-decoration-thickness: 1px;
+  }
+
+  .markdown blockquote {
+    border-inline-start: 2px solid var(--border);
+    padding-inline-start: 0.9em;
+    color: var(--muted-foreground);
+  }
+
+  .markdown hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .markdown :not(pre) > code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    background: var(--chip);
+    border-radius: var(--radius-sm);
+    padding: 0.1em 0.35em;
+  }
+
+  .markdown .md-code {
+    background: var(--stage);
+    box-shadow: var(--stage-ring);
+    border-radius: var(--radius-2xl);
+    overflow: hidden;
+  }
+  .markdown .md-code-lang {
+    font-family: var(--font-mono);
+    font-size: var(--text-micro);
+    color: var(--muted-foreground);
+    padding: 0.6rem 1rem 0;
+  }
+  .markdown .md-code pre {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.6;
+    padding: 0.75rem 1rem;
+    overflow-x: auto;
+  }
+
+  .markdown .md-table-scroll {
+    overflow-x: auto;
+  }
+  .markdown table {
+    border-collapse: collapse;
+    font-size: 0.95em;
+  }
+  .markdown :is(th, td) {
+    border: 1px solid var(--border);
+    padding: 0.35em 0.7em;
+    text-align: start;
+    vertical-align: top;
+  }
+  .markdown th {
+    font-weight: 500;
+    background: var(--chip);
+  }
+
+  .markdown .md-image-alt {
+    color: var(--muted-foreground);
+  }
+
+  .markdown .footnotes {
+    border-top: 1px solid var(--border);
+    padding-top: 0.75em;
+    font-size: 0.875em;
+    color: var(--muted-foreground);
+  }
+  .markdown .footnotes ol {
+    list-style: decimal;
+    padding-inline-start: 1.5em;
+  }
+}

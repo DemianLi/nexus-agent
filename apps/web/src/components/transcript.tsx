@@ -10,7 +10,8 @@
  * （見 `@nexus/wire` 的 `conversation.ts`）。join 不起來的時候它說「未歸屬」，
  * 這裡就照樣顯示未歸屬：**寧可說不知道，不要說錯**。
  *
- * 外殼是 shadcn `message-scroller`＋`message`／`bubble`（規格 §4.2 列 9–11）；markdown 是 ⑤ 的事，這裡先照純文字畫。
+ * 外殼是 shadcn `message-scroller`＋`message`／`bubble`（規格 §4.2 列 9–11）；助理回覆走自建 markdown
+ * （`markdown-text.tsx`，#405），使用者說的照原文畫（人打的字不當 markdown 解）。
  */
 
 import { ArrowDown, ThumbsDown, ThumbsUp } from 'lucide-react';
@@ -28,6 +29,7 @@ import type {
 } from '@nexus/wire';
 
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
+import { MarkdownText } from '@/components/markdown-text';
 import { Button } from '@/components/ui/button';
 import { Message, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message';
 import {
@@ -231,10 +233,13 @@ function Entry({ entry, feedback }: { entry: ConversationEntry; feedback?: Trans
           </MessageHeader>
         )}
         <Bubble variant="ghost">
-          <BubbleContent className="text-body whitespace-pre-wrap">
-            {entry.text}
-            {/* 串流中只有游標在閃；狀態由狀態列講，這裡不唸（§8）。 */}
-            {entry.streaming && <span className="stream-caret" aria-hidden />}
+          <BubbleContent className="text-body">
+            <MarkdownText
+              text={entry.text}
+              streaming={entry.streaming}
+              // 串流中只有游標在閃；狀態由狀態列講，這裡不唸（§8）。
+              {...(entry.streaming ? { caret: <span className="stream-caret" aria-hidden /> } : {})}
+            />
           </BubbleContent>
         </Bubble>
         {/* 講到一半被人按了停止（#276）。不是失敗，所以不用紅字。 */}
