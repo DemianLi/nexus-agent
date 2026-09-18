@@ -9,7 +9,8 @@
  * - 評語：`packages/feedback/command-feedback/src/index.ts`——`/feedback <文字>` 記一顆
  *   `feedback/record`，空字串回用法說明，`recordInput: false`。
  *
- * 評分的目標是**輪**不是訊息，理由與其他偏離見 `@nexus/core` 的 `feedback.ts`。這裡的偏離：
+ * 評分的目標是一則回覆的訊息 id，同 dsh；格式 10 以前以輪記的怎麼讀、其他偏離見 `@nexus/core` 的
+ * `feedback.ts`。這裡的偏離：
  *
  * - **回覆拿掉「Anonymous user」那一行**：我們沒有匿名使用者 id（遙測的偏離二），印一個編出來的
  *   id 就是說假話。
@@ -24,12 +25,14 @@
 
 import { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
+import { currentMessageFeedback, loggedMessageId } from '@nexus/core';
 import type {
   FeedbackRecord,
   FeedbackService,
   MessageFeedbackDeleteRequest,
   MessageFeedbackDeleteResult,
   MessageFeedbackItem,
+  MessageFeedbackListResult,
   MessageFeedbackPutRequest,
   MessageFeedbackPutResult,
   NexusPlugin,
@@ -53,31 +56,31 @@ export interface FeedbackPluginOptions {
 }
 
 /**
- * 從日誌折出每一輪目前的評分：後寫覆蓋先寫，收回的就刪。同 dsh 的 `currentItems`。
+ * 從日誌折出每一則回覆目前的評分，同 dsh 的 `currentItems`。舊日誌裡以輪記、對不到回覆的那幾筆不在裡面：
+ * 它們沒有訊息 id 可以指名，這裡的操作也就碰不到它們。
  *
  * @param events - 一份日誌的全部事件。
- * @returns 輪 → 目前那一筆。
+ * @returns 訊息 id → 目前那一筆，依第一次評的先後。
  */
 export function currentFeedbackItems(
   events: readonly SessionEvent[],
-): ReadonlyMap<number, MessageFeedbackItem> {
-  const items = new Map<number, MessageFeedbackItem>();
-  for (const event of events) {
-    if (event.type === 'feedback/message-put') items.set(event.data.item.turn, event.data.item);
-    else if (event.type === 'feedback/message-delete') items.delete(event.data.turn);
+): ReadonlyMap<string, MessageFeedbackItem> {
+  const items = new Map<string, MessageFeedbackItem>();
+  for (const { item } of currentMessageFeedback(events)) {
+    if ('messageId' in item) items.set(item.messageId, item);
   }
   return items;
 }
 
 /**
- * 那個 `seq` 是不是一輪的起頭：一顆**不是 `resume`** 的 `turn/start`。
- *
- * 對到 dsh 的「目標必須是一則附加上去的 assistant 訊息」那道檢查。呼叫端（web 的 pump）已經只會
- * 交出起頭的 `seq`，這裡再驗一次是因為 wire 誰都送得到。
+ * 這份日誌裡有沒有一顆 `assistant/message` 記著這個訊息 id。同 dsh 的「目標必須是一則附加上去的
+ * assistant 訊息」。人打的那一則、子代理的回覆（在它自己那一份日誌）、不存在的 id 都不是。
  */
-function isTurnStart(events: readonly SessionEvent[], turn: number): boolean {
-  const event = events.find((candidate) => candidate.seq === turn);
-  return event?.type === 'turn/start' && event.data.kind !== 'resume';
+function isAssistantMessage(events: readonly SessionEvent[], messageId: string): boolean {
+  return events.some(
+    (event) =>
+      event.type === 'assistant/message' && loggedMessageId(event.data.message) === messageId,
+  );
 }
 
 /**
@@ -107,10 +110,10 @@ export function createFeedbackService(options: FeedbackPluginOptions): FeedbackS
         }
       }
       const events = log.events;
-      if (!isTurnStart(events, request.turn)) {
-        return { ok: false, error: { code: 'target-not-found', turn: request.turn } };
+      if (!isAssistantMessage(events, request.messageId)) {
+        return { ok: false, error: { code: 'target-not-found', messageId: request.messageId } };
       }
-      const existing = currentFeedbackItems(events).get(request.turn);
+      const existing = currentFeedbackItems(events).get(request.messageId);
       if (request.ifVersion !== (existing?.version ?? null)) {
         return { ok: false, error: { code: 'version-conflict', current: existing ?? null } };
       }
@@ -124,7 +127,7 @@ export function createFeedbackService(options: FeedbackPluginOptions): FeedbackS
       }
       const now = Date.now();
       const item: MessageFeedbackItem = {
-        turn: request.turn,
+        messageId: request.messageId,
         rating: request.rating,
         ...(note === undefined ? {} : { note }),
         ...(request.category === undefined ? {} : { category: request.category }),
@@ -132,18 +135,23 @@ export function createFeedbackService(options: FeedbackPluginOptions): FeedbackS
         createdAt: existing?.createdAt ?? now,
         updatedAt: existing === undefined ? now : Math.max(now, existing.updatedAt),
       };
-      return { ok: true, value: log.append('feedback/message-put', { item }).data.item };
+      log.append('feedback/message-put', { item });
+      return { ok: true, value: item };
     },
 
     delete(log: SessionLog, request: MessageFeedbackDeleteRequest): MessageFeedbackDeleteResult {
-      const existing = currentFeedbackItems(log.events).get(request.turn);
+      const existing = currentFeedbackItems(log.events).get(request.messageId);
       if (existing !== undefined) {
         if (request.ifVersion !== existing.version) {
           return { ok: false, error: { code: 'version-conflict', current: existing } };
         }
-        log.append('feedback/message-delete', { turn: request.turn });
+        log.append('feedback/message-delete', { messageId: request.messageId });
       }
       return { ok: true, value: { absent: true } };
+    },
+
+    list(log: SessionLog): MessageFeedbackListResult {
+      return { ok: true, value: { items: [...currentFeedbackItems(log.events).values()] } };
     },
 
     record(log: SessionLog, entry: FeedbackRecord) {

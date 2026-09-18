@@ -75,7 +75,10 @@ export function ThreadList({
       : [];
 
   return (
-    <section aria-label="以前的會話" className="space-y-2 rounded-md border p-3 text-sm">
+    <section
+      aria-label="以前的會話"
+      className="bg-card shadow-material space-y-2 rounded-md p-3 text-sm"
+    >
       {listing.kind === 'loading' && <p className="text-muted-foreground">讀取中…</p>}
       {/* 列不出來與「沒有」是兩件事：沒開 --session-log 的 server 走這一格，原因照 server 講的印。 */}
       {listing.kind === 'failed' && <p className="text-destructive">列不出來：{listing.message}</p>}

@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App, inputPlaceholder, RESUMED_THREAD_NOTICE, SWITCHED_THREAD_NOTICE } from '@/App';
 import { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/components/thread-list';
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
+import { axeViolations } from '@/test/axe';
 
 /**
  * 一份活在記憶體裡的 `Storage`。
@@ -85,12 +86,16 @@ function textFrames(id: string, namespace: readonly string[], body: string): Eve
 }
 
 /**
- * 回饋那三個 method 在這一檔裡一律「收不了」。**評分的畫面驗在 `feedback-ui.test.tsx`**；這裡的測試
+ * 回饋那四個 method 在這一檔裡一律「收不了」。**評分的畫面驗在 `feedback-ui.test.tsx`**；這裡的測試
  * 不碰它們，碰到就是測試寫錯了，所以回拒絕而不是回成功。
  */
-const UNWIRED_FEEDBACK: Pick<WireClient, 'feedbackPut' | 'feedbackDelete' | 'feedbackRecord'> = {
+const UNWIRED_FEEDBACK: Pick<
+  WireClient,
+  'feedbackPut' | 'feedbackDelete' | 'feedbackList' | 'feedbackRecord'
+> = {
   feedbackPut: async () => ({ kind: 'rejected', message: '這一檔沒有接回饋' }),
   feedbackDelete: async () => ({ kind: 'rejected', message: '這一檔沒有接回饋' }),
+  feedbackList: async () => ({ kind: 'rejected', message: '這一檔沒有接回饋' }),
   feedbackRecord: async () => ({ kind: 'rejected', message: '這一檔沒有接回饋' }),
 };
 
@@ -199,6 +204,27 @@ describe('對話介面', () => {
     expect(screen.getByText('子代理 writer')).toBeTruthy();
     expect(screen.getByText('take_note')).toBeTruthy();
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('就緒'));
+  });
+
+  it('主畫面（對話流＋工具＋子代理歸屬）過 axe', async () => {
+    seq = 0;
+    const { client } = fakeClient([
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      ...textFrames('root-1', ['model_request:a'], '兩個都派。'),
+      frame('tools', ['tools:x'], {
+        event: 'tool-started',
+        tool_call_id: 'call_1_0',
+        tool_name: 'task',
+        input: '{"subagent_type":"writer"}',
+      }),
+      ...textFrames('sub-1', ['tools:x', 'model_request:b'], 'writer 寫好了。'),
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+    ]);
+
+    const { container } = render(<App client={client} />);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('就緒'));
+
+    expect(await axeViolations(container)).toEqual([]);
   });
 
   it('送出之前先把使用者那句話放上去——線上不會回聲它', async () => {

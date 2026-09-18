@@ -1,0 +1,449 @@
+/*
+ * 動效：token、模式清單、keyframes、reduced-motion。現行規則見 `.docs/web-ui-spec.md` §7；
+ * 從原型 tag `proto-375-design-language` 的 `prototype-375/tokens.css` 搬來（#401），原型的
+ * `proto-*` class 改名（`agent-orb`、`border-beam`、`text-shimmer`、`stream-caret`），`data-reduce-motion` 模擬
+ * 改成真的 media query，CPU 降速退路拿掉（量過 60fps，規格說不需要）。
+ *
+ * 進出場的 `--animate-in`／`--animate-out`／`--animate-collapsible-*` 在 `index.css` 的 `@theme`；
+ * 它們引用本檔的 `motion-fade-in`／`motion-fade-out`，兩邊要一起搬、一起改。
+ */
+
+/*
+ * 動效 token：整組照 Libraries.dev site.css 的 :root，外加按壓與 resize。
+ * 元件只能從下面「模式清單」裡挑；清單外沒有動效，只留顏色過渡。
+ */
+:root {
+  --duration-stagger: 40ms;
+  --duration-micro: 80ms;
+  --duration-press: 120ms;
+  --duration-quick: 150ms;
+  --duration-overlay: 200ms;
+  --duration-fast: 250ms;
+  --duration-medium: 350ms;
+  --duration-slow: 400ms;
+  --duration-very-slow: 500ms;
+  --ease-bounce: cubic-bezier(0.34, 1.36, 0.64, 1);
+  --distance-micro: 4px;
+  --distance-small: 6px;
+  --distance-base: 8px;
+  --distance-medium: 12px;
+  --distance-large: 30px;
+  --scale-large: 0.96;
+  --scale-medium: 0.97;
+  --scale-small: 0.98;
+  --scale-tiny: 0.99;
+  --blur-small: 2px;
+  --blur-medium: 3px;
+  --blur-large: 8px;
+  --resize-dur: 300ms;
+  --resize-ease: var(--ease-smooth-out);
+  --auto-advance-delay: 200ms;
+}
+
+/*
+ * ── 動效模式清單 ──
+ * 浮層彈出、對話框、側滑抽屜：registry 的 animate-in／out（index.css 的 @theme 已改成開 250／關 150），
+ *   各元件只調縮放、位移與個別時長。
+ * 換內容、上下題、進場、展開收合、按壓、resize、持續狀態：下面這些。
+ *
+ * 新增或刪掉 @keyframes 時，同一個 PR 更新 `scripts/check-built-css.mjs` 的允許清單（它量建置出來的 CSS）。
+ *
+ * 效能：持續動畫只動 transform／opacity，唯一例外是執行中邊框光的 conic 角度
+ * （同時最多一個：輸入框與面板互斥）；blur 只給小元素；不常駐 will-change。
+ */
+
+@keyframes motion-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes motion-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/*
+ * 進場類一律 fill-mode backwards：只有起點，播完就放手，不留一個填著的動畫在元素上。
+ * 退場類才用 both（淡出後要保持透明，直到元件卸載）。
+ */
+
+/* 進場：新訊息、工具卡。往上 8px 淡入，不縮不模糊（大面積不用 blur）。 */
+.motion-rise-in {
+  animation: motion-rise-in var(--duration-fast) var(--ease-smooth-out) backwards;
+}
+
+@keyframes motion-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--rise-distance, var(--distance-base)));
+  }
+}
+
+/* 換內容：輸入框 ↔ 核准／提問面板、面板接續。舊的縮到 .99 淡出 150，新的往上 8px、從 .97 長出來 250。 */
+.motion-swap[data-phase='in'] {
+  animation: motion-swap-in var(--duration-fast) var(--ease-smooth-out) backwards;
+}
+
+.motion-swap[data-phase='out'] {
+  animation: motion-swap-out var(--duration-quick) var(--ease-smooth-out) both;
+}
+
+@keyframes motion-swap-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--distance-base)) scale(var(--scale-medium));
+  }
+}
+
+@keyframes motion-swap-out {
+  to {
+    opacity: 0;
+    transform: scale(var(--scale-tiny));
+  }
+}
+
+/* 上下題：下一題從右 8px、上一題從左 8px，250。沒有 blur（面板在手機上是大面積）。 */
+[data-page-dir] > [data-slot='questionnaire-item'][data-active] {
+  animation: motion-page-in var(--duration-fast) var(--ease-smooth-out) backwards;
+}
+
+[data-page-dir='next'] {
+  --page-from: var(--distance-base);
+}
+
+[data-page-dir='prev'] {
+  --page-from: calc(var(--distance-base) * -1);
+}
+
+@keyframes motion-page-in {
+  from {
+    opacity: 0;
+    transform: translateX(var(--page-from));
+  }
+}
+
+/* stagger：同一刻出現的一小組，只給提問選項，最多前 6 個（總延遲 ≤ 240ms）。 */
+[data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice'] {
+  --rise-distance: var(--distance-micro);
+  animation: motion-rise-in var(--duration-fast) var(--ease-smooth-out) backwards;
+}
+
+[data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice']:nth-child(2) {
+  animation-delay: calc(var(--duration-stagger) * 1);
+}
+[data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice']:nth-child(3) {
+  animation-delay: calc(var(--duration-stagger) * 2);
+}
+[data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice']:nth-child(4) {
+  animation-delay: calc(var(--duration-stagger) * 3);
+}
+[data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice']:nth-child(5) {
+  animation-delay: calc(var(--duration-stagger) * 4);
+}
+[data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice']:nth-child(n + 6) {
+  animation-delay: calc(var(--duration-stagger) * 5);
+}
+
+/* resize：高度跟著內容變（面板換入換出、上下題），300 smooth-out。只有變化期間才裁切。 */
+.motion-resize[data-resizing] {
+  overflow: hidden;
+  transition: height var(--resize-dur) var(--resize-ease);
+}
+
+/* 按壓：只給實心主按鈕與送出鍵，scale .96、120ms。其他按鈕只換底色。 */
+:is(
+  [data-slot='button'],
+  [data-slot='questionnaire-next'],
+  [data-slot='questionnaire-submit']
+)[data-variant='default'] {
+  transition-property: color, background-color, box-shadow, opacity, scale;
+  transition-duration:
+    var(--duration-quick), var(--duration-quick), var(--duration-quick), var(--duration-quick),
+    var(--duration-press);
+  transition-timing-function: var(--ease-smooth-out);
+}
+
+:is(
+    [data-slot='button'],
+    [data-slot='questionnaire-next'],
+    [data-slot='questionnaire-submit']
+  )[data-variant='default']:not(:disabled):active {
+  scale: var(--scale-large);
+}
+
+/* ── 持續狀態：串流游標 ── */
+
+.stream-caret {
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.12em;
+  border-radius: 2px;
+  background: currentColor;
+  animation: motion-caret 1s steps(2) infinite;
+}
+
+@keyframes motion-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* ── 持續狀態：orb（P0 只有 working 與 breathing）── */
+
+.agent-orb {
+  --orb-size: 20px;
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  width: var(--orb-size);
+  height: var(--orb-size);
+  color: var(--foreground);
+}
+
+.agent-orb::before,
+.agent-orb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+}
+
+/* 點陣圓：用 radial-gradient 鋪點，再用圓形遮罩切成球 */
+.agent-orb::before {
+  background: radial-gradient(circle, currentColor 0.9px, transparent 1.3px) 0 0 / 4px 4px;
+  mask: radial-gradient(circle, #000 55%, transparent 72%);
+  opacity: 0.85;
+}
+
+.agent-orb::after {
+  border: 1.5px dotted currentColor;
+  opacity: 0.35;
+}
+
+.agent-orb[data-state='working']::before {
+  animation: motion-orb-spin 2.4s linear infinite;
+}
+
+.agent-orb[data-state='working']::after {
+  animation: motion-orb-spin 1.2s linear infinite reverse;
+}
+
+.agent-orb[data-state='breathing']::before,
+.agent-orb[data-state='breathing']::after {
+  animation: motion-orb-breathe 3s ease-in-out infinite;
+}
+
+@keyframes motion-orb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes motion-orb-breathe {
+  50% {
+    transform: scale(0.82);
+    opacity: 0.5;
+  }
+}
+
+/* ── 持續狀態：邊框光（靜態值在 theme.css，這裡只管怎麼動）── */
+
+@property --beam-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.border-beam {
+  position: relative;
+  isolation: isolate;
+}
+
+.border-beam::before,
+.border-beam::after {
+  content: '';
+  position: absolute;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--duration-medium) var(--ease-smooth-out);
+}
+
+/* 線 */
+.border-beam::after {
+  inset: -1px;
+  z-index: 1;
+  padding: var(--beam-width);
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+
+/* 光暈：box-shadow 不動，只動 opacity，走合成層 */
+.border-beam::before {
+  inset: 0;
+  z-index: -1;
+}
+
+.border-beam[data-active='true']::after,
+.border-beam[data-active='true']::before {
+  opacity: 1;
+}
+
+/* 執行中：conic 光一圈 2s，開始與結束各淡 350 */
+.border-beam[data-kind='run']::after {
+  background: conic-gradient(
+    from var(--beam-angle),
+    transparent 0 62%,
+    color-mix(in oklab, var(--brand), transparent 40%) 74%,
+    var(--brand) 86%,
+    transparent 100%
+  );
+  animation: motion-beam-angle 2s linear infinite;
+}
+
+.border-beam[data-kind='run']::before {
+  box-shadow: 0 0 calc(var(--beam-glow-size) * 0.6)
+    color-mix(in oklab, var(--beam-glow), transparent 30%);
+}
+
+/* 等你處理：整圈呼吸 2.3s，亮度在 --beam-pulse-min 與 1 之間 */
+.border-beam[data-kind='pending']::after {
+  background: var(--brand);
+}
+
+.border-beam[data-kind='pending']::before {
+  box-shadow: 0 0 var(--beam-glow-size) var(--beam-glow);
+}
+
+.border-beam[data-kind='pending'][data-active='true']::after,
+.border-beam[data-kind='pending'][data-active='true']::before {
+  animation: motion-beam-pulse 2.3s ease-in-out infinite;
+}
+
+@keyframes motion-beam-angle {
+  to {
+    --beam-angle: 360deg;
+  }
+}
+
+@keyframes motion-beam-pulse {
+  0%,
+  100% {
+    opacity: var(--beam-pulse-min);
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ── 持續狀態：狀態列 shimmer ── */
+
+.text-shimmer {
+  background: linear-gradient(
+      90deg,
+      var(--muted-foreground) 0 40%,
+      var(--foreground) 50%,
+      var(--muted-foreground) 60% 100%
+    )
+    0 0 / 250% 100%;
+  background-clip: text;
+  color: transparent;
+  animation: motion-shimmer 1.8s linear infinite;
+}
+
+@keyframes motion-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+
+/*
+ * ── reduced-motion：不是全關 ──
+ * 位移／縮放／模糊拿掉，留 150 的透明度；尺寸瞬間到位；循環動畫停在一格；狀態不靠動效表達。
+ *
+ * 每條都帶 `:root:root` 前綴：補回原型 `:root[data-reduce-motion]` 的 (0,2,0) specificity。拿掉它，
+ * `.agent-orb[data-state='working']::before`、`[data-kind='pending'][data-active='true']` 這類帶狀態的選擇器
+ * 就比這裡的強，reduced-motion 會無聲失效（`scripts/check-built-css.mjs` 比對 specificity）。
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root:root {
+    --animate-in: motion-fade-in 150ms ease backwards;
+    --animate-out: motion-fade-out 150ms ease both;
+    --animate-collapsible-down: motion-fade-in 150ms ease;
+    --animate-collapsible-up: none;
+    scroll-behavior: auto;
+  }
+
+  :root:root .motion-rise-in,
+  :root:root .motion-swap[data-phase='in'],
+  :root:root [data-page-dir] > [data-slot='questionnaire-item'][data-active],
+  :root:root [data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice'] {
+    animation: motion-fade-in 150ms ease backwards;
+    animation-delay: 0s;
+  }
+
+  :root:root .motion-swap[data-phase='out'] {
+    animation: motion-fade-out 150ms ease both;
+  }
+
+  :root:root .motion-resize[data-resizing],
+  :root:root [data-slot='sidebar-gap'],
+  :root:root [data-slot='sidebar-container'],
+  :root:root [data-slot='message-scroller-button'],
+  :root:root .border-beam::before,
+  :root:root .border-beam::after,
+  :root:root [data-motion-rotate] {
+    transition: none;
+  }
+
+  :root:root [data-variant='default']:not(:disabled):active {
+    scale: none;
+  }
+
+  /* 循環動畫停在一格 */
+  :root:root .stream-caret,
+  :root:root .agent-orb::before,
+  :root:root .agent-orb::after,
+  :root:root .border-beam::before,
+  :root:root .border-beam::after,
+  :root:root .text-shimmer,
+  :root:root .animate-spin,
+  :root:root .animate-pulse {
+    animation: none;
+  }
+
+  /* orb：working 停在轉了一點的角度，breathing 停在呼吸中段 */
+  :root:root .agent-orb[data-state='working']::before {
+    transform: rotate(30deg);
+  }
+
+  :root:root .agent-orb[data-state='breathing']::before,
+  :root:root .agent-orb[data-state='breathing']::after {
+    transform: scale(0.91);
+    opacity: 0.7;
+  }
+
+  /* 邊框光：執行中＝靜態整圈細線、沒有光暈；等你處理＝整圈細線加光暈、全亮 */
+  :root:root .border-beam[data-kind='run']::after {
+    background: color-mix(in oklab, var(--brand), transparent 30%);
+  }
+
+  :root:root .border-beam[data-kind='run']::before {
+    display: none;
+  }
+
+  /* shimmer 退成一般次要文字 */
+  :root:root .text-shimmer {
+    background: none;
+    color: var(--muted-foreground);
+  }
+}

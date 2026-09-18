@@ -59,6 +59,20 @@ export interface AiEntry {
    * 它說到哪。
    */
   readonly stopped?: true;
+  /**
+   * 那則回覆在日誌裡的訊息 id，**評分指名的就是它**（[#382](https://github.com/DemianLi/nexus-agent/issues/382)）。
+   * 取自 `message-start` 的 `id`：即時的是串流層給的那個，量過等於日誌 `assistant/message` 記的；重播的由
+   * server 照日誌填。沒有這一格的（日誌沒記 id）評不了。
+   *
+   * **不是 {@link AiEntry.id}**：entry 的 key 是 `run_id`，因為逐字片段只帶它。
+   */
+  readonly messageId?: string;
+  /**
+   * 這一輪收尾的那一則：一輪結束時，那一輪裡最後一則有文字的 root 回覆。評分按鈕放在它上面，同 dsh 的
+   * `TurnTailNodeView` 取收尾節點（`ddefc45`）。**續接不切輪**：停在核准點不是收尾，續接之後算的是整輪。
+   * 判法見 {@link reduceConversation}，即時與歷史走同一條。
+   */
+  readonly turnTail?: true;
 }
 
 export interface ToolEntry {
@@ -251,12 +265,14 @@ export interface ConversationState {
   readonly lastSeq: number;
   /** `namespace[0]` → 那個 `task` 呼叫派出去的 subagent。 */
   readonly subagents: Readonly<Record<string, { readonly name: string; readonly callId: string }>>;
+  /** 目前這一輪從 `entries` 的哪一格開始，見 {@link AiEntry.turnTail}。 */
+  readonly turnStart: number;
 }
 
 const ROOT: Attribution = { kind: 'root' };
 
 export function emptyConversation(): ConversationState {
-  return { entries: [], status: 'idle', pendings: [], lastSeq: -1, subagents: {} };
+  return { entries: [], status: 'idle', pendings: [], lastSeq: -1, subagents: {}, turnStart: 0 };
 }
 
 /**
@@ -267,7 +283,48 @@ export function emptyConversation(): ConversationState {
  */
 export function appendHumanTurn(state: ConversationState, text: string): ConversationState {
   const entry: HumanEntry = { kind: 'human', id: `human-${state.entries.length}`, text };
-  return { ...state, entries: [...state.entries, entry], status: 'running' };
+  return trackTurn(state, { ...state, entries: [...state.entries, entry], status: 'running' });
+}
+
+/** 一輪在跑或停下來等人：還沒收尾。 */
+function isTurnActive(status: ConversationStatus): boolean {
+  return status === 'running' || status === 'awaiting-input';
+}
+
+function isTailCandidate(entry: ConversationEntry): boolean {
+  return (
+    entry.kind === 'ai' &&
+    entry.attribution.kind === 'root' &&
+    entry.text !== '' &&
+    !entry.streaming
+  );
+}
+
+/**
+ * 狀態每走一步，照輪的起訖標收尾那則（{@link AiEntry.turnTail}）。**要一步一步走**：一批 frame 裡
+ * 「跑起來又收掉」只看頭尾的話，中間那次 `running` 會被吃掉——所以它住在折疊器裡，每一個改狀態的出口都過它，
+ * 歷史一次折完（{@link reduceAll}）也是逐顆過。
+ *
+ * - **一輪從沒在跑走到 `running` 算起**：人送一句話、續行驅動器排了一輪，都是。從 `awaiting-input` 回到
+ *   `running` 是續接，同一輪。
+ * - **收尾是 `idle`、`stopped`、`failed`**。停在核准點不是收尾；停在核准點時按停止是。
+ * - 子代理那幾則、串流中的、整輪只有工具的，都不標。
+ */
+function trackTurn(previous: ConversationState, next: ConversationState): ConversationState {
+  if (next === previous) return next;
+  const wasActive = isTurnActive(previous.status);
+  if (!wasActive && next.status === 'running') {
+    return { ...next, turnStart: previous.entries.length };
+  }
+  if (!wasActive || isTurnActive(next.status)) return next;
+  for (let at = next.entries.length - 1; at >= next.turnStart; at -= 1) {
+    const entry = next.entries[at];
+    if (entry === undefined || !isTailCandidate(entry)) continue;
+    const entries = [...next.entries];
+    entries[at] = { ...entry, turnTail: true } as AiEntry;
+    return { ...next, entries, turnStart: next.entries.length };
+  }
+  return { ...next, turnStart: next.entries.length };
 }
 
 /**
@@ -385,6 +442,10 @@ export function uniformDecisions(pending: PendingApproval, decision: string): un
 }
 
 export function reduceConversation(state: ConversationState, event: Event): ConversationState {
+  return trackTurn(state, reduceFrame(state, event));
+}
+
+function reduceFrame(state: ConversationState, event: Event): ConversationState {
   const seq = event.seq;
   if (seq !== undefined && seq <= state.lastSeq) {
     // 重複或亂序——線上的 seq 是單調的，退回去的那些沒有新東西。
@@ -427,7 +488,12 @@ export function prependEntries(
   state: ConversationState,
   earlier: ConversationState,
 ): ConversationState {
-  return { ...state, entries: [...earlier.entries, ...state.entries] };
+  // 目前這一輪的起點跟著往後挪；不挪的話收尾時會往回找進接上來的那一頁（#382 順帶修的）。
+  return {
+    ...state,
+    entries: [...earlier.entries, ...state.entries],
+    turnStart: state.turnStart + earlier.entries.length,
+  };
 }
 
 function attribute(state: ConversationState, namespace: readonly string[]): Attribution {
@@ -488,6 +554,7 @@ function reduceMessage(
         text: '',
         streaming: true,
         attribution: attribute(state, namespace),
+        ...(typeof data.id === 'string' && data.id !== '' && { messageId: data.id }),
       };
       return { ...state, entries: [...state.entries, entry] };
     }

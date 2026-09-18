@@ -21,9 +21,11 @@ import type { AddressInfo } from 'node:net';
 import { AIMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
-import { fromLoggedMessage, INTERRUPTED_REPLY_MARKER } from '@nexus/core';
+import { fromLoggedMessage, INTERRUPTED_REPLY_MARKER, loggedMessageId } from '@nexus/core';
 import type { SessionEvent, SessionEventMap } from '@nexus/core';
+import { createFeedbackService } from '@nexus/plugin-feedback';
 import type { Event } from '@nexus/wire';
+import { emptyConversation, reduceConversation } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { ThreadPump } from './thread-pump.js';
@@ -165,6 +167,23 @@ describe('真的 ChatOpenAI 串到一半按停止', () => {
       expect(interrupted.interrupted).toBe(true);
       expect(fromLoggedMessage(interrupted.message).text).toBe(shown);
       expect(types.indexOf('assistant/message')).toBeGreaterThan(types.indexOf('model/end'));
+
+      // #382：那半段在日誌裡是新建的一則、沒有 id，所以評不到——畫面那則手上的 `messageId` 是串流那次呼叫的。
+      // 這就是 web 的 `isRatable` 把被停下來的那則排掉的理由；哪天記半段時帶上了 id，這裡先紅，那條排除要重看。
+      expect(loggedMessageId(interrupted.message)).toBeUndefined();
+      const stopped = frames
+        .reduce(reduceConversation, emptyConversation())
+        .entries.find((entry) => entry.kind === 'ai' && entry.stopped === true);
+      expect(stopped).toMatchObject({ kind: 'ai', turnTail: true });
+      const messageId = stopped?.kind === 'ai' ? stopped.messageId : undefined;
+      expect(messageId).toBeDefined();
+      expect(
+        createFeedbackService({ maxNoteBytes: 64 }).put(pump.sessions.root, {
+          messageId: messageId!,
+          rating: 'negative',
+          ifVersion: null,
+        }),
+      ).toEqual({ ok: false, error: { code: 'target-not-found', messageId } });
 
       // 下一輪：送出去的請求依序是那句話、那半段、這句話。
       await pump.submit({ kind: 'message', text: '繼續' });

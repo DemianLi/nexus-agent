@@ -13,13 +13,15 @@
  *
  * ## 單位是輪，不是份
  *
- * 四個信號裡三個本來就綁在輪上（點踩的 `turn`、`turn/end` 的中止、`turn/failed`），打轉在 `scan`
+ * 四個信號裡三個本來就歸得到輪上（點踩的那則回覆所屬那一輪、`turn/end` 的中止、`turn/failed`；
+ * 點踩怎麼歸見 `session-scan.ts` 的 `ratingsByTurn`），打轉在 `scan`
  * 裡卻是逐份的最長串。這裡把它也收到輪上，而且**不必另訂規則**：提醒器那條鏈清零的地方（不是
  * `resume` 的 `turn/start`、`session/end-seed`，見 `session-scan.ts` 檔頭）恰好就是輪的邊界，所以
  * 「一輪裡的最長串」就是那條鏈在這一輪裡走到的最長。測試拿 `scan` 的逐份最長串對過。
  *
- * 輪＝起頭那顆**不是 `resume`** 的 `turn/start`，`resume` 那一段併回去——同點踩綁的輪
- * （[#267](https://github.com/DemianLi/nexus-agent/issues/267)）與 pump 的 `#originTurn`。
+ * 輪＝起頭那顆**不是 `resume`** 的 `turn/start`，`resume` 那一段併回去——同 `@nexus/core` 的
+ * `currentMessageFeedback` 把回覆歸到輪的算法（格式 10 以前點踩直接綁這個輪，
+ * [#267](https://github.com/DemianLi/nexus-agent/issues/267)）。
  * `session/end-seed` 收掉當下那一輪：之後、下一顆起頭之前的事件沒有輪可歸，略過。
  *
  * ## 排序
@@ -51,6 +53,7 @@ import {
   loopingThreshold,
   parseArguments,
   preview,
+  ratingsByTurn,
   TOOL_EVENTS_SINCE,
   UNCODED_ERROR,
 } from './session-scan.js';
@@ -91,7 +94,7 @@ export interface DraftToolCall {
 
 /** 一輪。**每一輪都在**，`signals` 空的就是沒入選。 */
 export interface DraftTurn {
-  /** 起頭那顆 `turn/start` 的 `seq`，點踩綁的就是它。 */
+  /** 起頭那顆 `turn/start` 的 `seq`。點踩綁的是這一輪裡的回覆（格式 10 以前綁的是它）。 */
   readonly seq: number;
   /** 這份日誌裡的第幾輪，從 1 起算，給人看的。 */
   readonly ordinal: number;
@@ -103,7 +106,7 @@ export interface DraftTurn {
   readonly longestRun: RepeatRun | null;
   /** `turn/failed` 的訊息，照順序。 */
   readonly failures: readonly string[];
-  /** 這一輪最後的評分；被收回的就沒有。 */
+  /** 這一輪的評分（一輪有幾則被評時點踩優先，見 `ratingsByTurn`）；被收回的就沒有。 */
   readonly rating?: Rating;
   /** 命中的信號，照 {@link DRAFT_SIGNALS} 的順序。 */
   readonly signals: readonly DraftSignal[];
@@ -155,8 +158,7 @@ export function draftSessionLog(
   let current: OpenTurn | undefined;
   // callId → 它落在哪一輪。結果可能在 resume 之後才到，要回到呼叫那一輪。
   const callTurn = new Map<string, OpenTurn>();
-  // 輪 → 目前的評分。後寫覆蓋先寫、收回就刪，同 `@nexus/plugin-feedback` 的折疊。
-  const ratings = new Map<number, Rating>();
+  const ratings = ratingsByTurn(log.events);
   const feedbackRecords: FeedbackRecord[] = [];
 
   for (const event of log.events) {
@@ -206,12 +208,6 @@ export function draftSessionLog(
         call.result = { isError, ...(code !== undefined && { code }) };
         break;
       }
-      case 'feedback/message-put':
-        ratings.set(event.data.item.turn, event.data.item);
-        break;
-      case 'feedback/message-delete':
-        ratings.delete(event.data.turn);
-        break;
       case 'feedback/record':
         feedbackRecords.push(event.data);
         break;
