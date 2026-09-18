@@ -3,10 +3,15 @@
  *
  * `awaiting-input` **不是結束**：基座在中斷時照樣發 `lifecycle completed / root`，
  * 折疊器因此不讓那顆把狀態翻回 idle。按鈕在 `ApprovalCard`，這一行只說它在等人。
+ *
+ * **全站唯一的 `role="status"`**（§8）：待決、串流、失敗都由它唸。執行中配 working orb 與 shimmer（§7），
+ * orb 旁已有同義文字所以 `aria-hidden`；reduced-motion 下兩者都停在一格，字照樣在。
  */
 
 import type { ConversationState } from '@nexus/wire';
 import { isApprovalPending, isQuestionPending } from '@nexus/wire';
+
+import { AgentOrb } from '@/components/agent-orb';
 
 export function StatusLine({
   state,
@@ -89,10 +94,18 @@ export function StatusLine({
       </p>
     );
   }
+  if (state.status === 'running') {
+    return (
+      <p className="text-muted-foreground flex items-center gap-1.5 text-sm" role="status">
+        <AgentOrb state="working" size={20} decorative />
+        <span className="text-shimmer">執行中…</span>
+      </p>
+    );
+  }
   return (
     <p className="text-muted-foreground text-sm" role="status">
       {/* 已停止不是失敗（#276）：人按的，所以不用紅字。 */}
-      {state.status === 'running' ? '執行中…' : state.status === 'stopped' ? '已停止' : '就緒'}
+      {state.status === 'stopped' ? '已停止' : '就緒'}
     </p>
   );
 }

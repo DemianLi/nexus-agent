@@ -4,15 +4,24 @@
  * 一張表單兩個目標，照 dsh 的 `FeedbackDialogController`：按讚或點踩時是那一則回覆，只打 `/feedback`
  * 時是整個會話。送出失敗時框留著，失敗那句話寫在框裡。
  *
- * **自己寫，不是 shadcn 的 Dialog**：那一份靠 `@radix-ui/react-dialog`，而這個 repo 還沒有它；為了一個
- * 框多一條相依不划算。所以這裡只做到框該做的：蓋住底下、Esc 關、開起來時游標落在備註欄。
+ * 外殼是 shadcn `dialog`（規格 §4.2 列 35；`radix-ui` 從 #401 起就在）：蓋住底下、Esc 與點外面都算關、
+ * 焦點困在框裡、關掉後回到打開前的地方，都由 Radix 做。這裡只管表單，開起來時游標落在備註欄。
+ *
+ * **框常駐、用 `open` 開關**，退場動效才跑得完；換目標時呼叫端換 `key`，草稿不帶過去。
  */
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 
 import type { WireFeedbackCategory } from '@nexus/wire';
 
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { CATEGORIES, CATEGORY_LABEL, FEEDBACK_COPY } from '@/lib/feedback';
 
 export interface FeedbackDraft {
@@ -21,11 +30,13 @@ export interface FeedbackDraft {
 }
 
 export function FeedbackDialog({
+  open,
   submitting,
   failure,
   onSubmit,
   onDismiss,
 }: {
+  open: boolean;
   submitting: boolean;
   failure?: string;
   onSubmit: (draft: FeedbackDraft) => void;
@@ -33,29 +44,28 @@ export function FeedbackDialog({
 }) {
   const [category, setCategory] = useState<WireFeedbackCategory | undefined>(undefined);
   const [text, setText] = useState('');
-  const titleId = useId();
   const detailRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => {
-    detailRef.current?.focus();
-  }, []);
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') onDismiss();
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onDismiss();
       }}
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        className="bg-card flex w-full max-w-md flex-col gap-4 rounded-lg p-4 shadow-menu"
+      <DialogContent
+        showCloseButton={false}
+        // 沒有另外的說明文字：標題與欄位的名字已經講完了。
+        aria-describedby={undefined}
+        className="max-w-md"
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          detailRef.current?.focus();
+        }}
       >
-        <h2 id={titleId} className="text-base font-semibold">
-          {FEEDBACK_COPY.title}
-        </h2>
+        <DialogHeader>
+          <DialogTitle>{FEEDBACK_COPY.title}</DialogTitle>
+        </DialogHeader>
         <div className="flex flex-wrap gap-2" role="group" aria-label={FEEDBACK_COPY.categories}>
           {CATEGORIES.map((candidate) => (
             <Button
@@ -85,7 +95,7 @@ export function FeedbackDialog({
             {failure}
           </p>
         )}
-        <div className="flex justify-end gap-2">
+        <DialogFooter>
           <Button type="button" variant="outline" disabled={submitting} onClick={onDismiss}>
             {FEEDBACK_COPY.close}
           </Button>
@@ -96,8 +106,8 @@ export function FeedbackDialog({
           >
             {submitting ? FEEDBACK_COPY.submitting : FEEDBACK_COPY.submit}
           </Button>
-        </div>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
