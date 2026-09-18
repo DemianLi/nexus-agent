@@ -17,6 +17,9 @@ import {
   AGENT_INSTRUCTIONS_INTRO,
   isAgentInstructionsMessage,
 } from '@nexus/plugin-agent-instructions';
+import { REPEAT_REMINDER_MARKER } from '@nexus/core';
+import type { NexusPlugin } from '@nexus/core';
+import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import type { Event } from '@nexus/wire';
 import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import { describe, expect, it } from 'vitest';
@@ -54,12 +57,41 @@ function systemText(prompt: readonly BaseMessage[]): string {
   return prompt.find((message) => message.getType() === 'system')?.text ?? '';
 }
 
+/** 一份日誌裡由這顆 plugin 注入的那幾則。 */
+function injectedBaselines(events: readonly { type: string; data: unknown }[]) {
+  return events.filter(
+    (event) =>
+      event.type === 'user/message' &&
+      (event.data as { source?: { kind?: string; plugin?: string } }).source?.plugin ===
+        'AgentInstructionsMiddleware',
+  );
+}
+
+/** 只登記一個具名子代理，其他什麼都不做。 */
+const WORKER_HOST: NexusPlugin = {
+  name: 'worker-host',
+  apply(registry) {
+    registry.subagents.register({
+      name: 'worker',
+      description: '幹活的。',
+      systemPrompt: '你是 worker。',
+    });
+  },
+};
+
 interface RunOptions {
   /** 要在工作區裡先放好的檔。給 `undefined` 就不給 `--workspace`（預設 `StateBackend`）。 */
   readonly files?: Record<string, string>;
   readonly turns: readonly ScriptedTurn[];
   /** 送幾句話。預設一句。 */
   readonly submits?: readonly string[];
+  /**
+   * 加在 `DEFAULT_PLUGINS` **後面**的 plugin。
+   *
+   * 今天只有一個用途：登記一個具名子代理，好讓「具名的與 fold 補的各拿一份」兩種都走得到。
+   * 它只註冊一個子代理定義，不碰工作區指令那條路——**零設定那個判準沒有被放寬**。
+   */
+  readonly extraPlugins?: readonly NexusPlugin[];
 }
 
 /** 真的組裝、真的 pump——serve 那條路的形狀，plugin 清單就是 `DEFAULT_PLUGINS`。 */
@@ -72,7 +104,7 @@ async function run(options: RunOptions) {
   const built = await createNexusAgent({
     model,
     checkpointer: new MemorySaver(),
-    plugins: [...DEFAULT_PLUGINS],
+    plugins: [...DEFAULT_PLUGINS, ...(options.extraPlugins ?? [])],
     ...(options.files !== undefined && {
       backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
     }),
@@ -101,7 +133,14 @@ async function run(options: RunOptions) {
     await built.dispose();
     await rm(root, { recursive: true, force: true });
   };
-  return { model, sessions, prompts: model.prompts as readonly (readonly BaseMessage[])[], close };
+  return {
+    model,
+    sessions,
+    /** **最後一句話那一輪**送出去的 frame。`frames` 每輪都清空，所以它只有最後一輪的。 */
+    frames,
+    prompts: model.prompts as readonly (readonly BaseMessage[])[],
+    close,
+  };
 }
 
 describe('裸組裝（零 --plugins）就看得到工作區指令', () => {
@@ -210,10 +249,13 @@ describe('一個 agent 一份，不會越積越多', () => {
 });
 
 describe('子代理也各有一份', () => {
-  for (const subagentType of [GP]) {
-    it(`委派給 ${subagentType}：子代理那幾輪的 prompt 裡有基線`, async () => {
+  // **兩種都要走**：登記過的那一種走 fold 的子代理組裝，`general-purpose` 是 fold 自己補的，
+  // 而基座自動補的那一顆歷來是漏射程的常客。
+  for (const subagentType of ['worker', GP]) {
+    it(`委派給 ${subagentType}：子代理那幾輪的 prompt 裡有基線，自己的日誌也記得到`, async () => {
       const found = await run({
         files: { 'AGENTS.md': '規矩。' },
+        extraPlugins: [WORKER_HOST],
         turns: [
           {
             content: '委派。',
@@ -231,9 +273,73 @@ describe('子代理也各有一份', () => {
         );
         expect(subagentPrompts.length).toBeGreaterThan(0);
         for (const prompt of subagentPrompts) expect(baselines(prompt)).toHaveLength(1);
+
+        // **記進的是子代理自己那份日誌，不是 root 的。** 認不出身分的話這裡是 0，而畫面與
+        // 續接都從日誌重建——模型看得到、日誌看不到的狀態，`--resume` 帶不回來。
+        const subagent = found.sessions.find((session) => session.address.kind === 'subagent');
+        expect(subagent).toBeDefined();
+        expect(injectedBaselines(subagent?.log.events ?? [])).toHaveLength(1);
       } finally {
         await found.close();
       }
     }, 20000);
   }
+});
+
+describe('畫面上看不到它', () => {
+  /**
+   * **這一則不該出現在對話畫面上。** 它是給模型看的工作區指令，不是誰講的話；畫進去的話每個
+   * 會話開頭都會多一顆幾百個位元組的 `<system-reminder>` 泡泡。
+   *
+   * 歷史那一側 `conversation-history.ts` 檔頭明文寫著「外掛注入的 `user/message` 不畫」，這一條
+   * 釘的是**即時**那一側：真的 pump、真的訂閱，掃過那一輪送出去的每一個 frame。
+   */
+  it('即時 frame 一個字都不帶基線', async () => {
+    const found = await run({
+      files: { 'AGENTS.md': '這一句只該給模型看。' },
+      turns: [{ content: '好。' }],
+    });
+    try {
+      // 先確定前提真的發生了：基線這一輪確實注入了（不然這條是空掃，永遠綠）。
+      expect(baselines(found.prompts[0] ?? [])).toHaveLength(1);
+      const wire = JSON.stringify(found.frames);
+      expect(wire).not.toContain('這一句只該給模型看。');
+      expect(wire).not.toContain('<system-reminder>');
+      expect(wire).not.toContain(AGENT_INSTRUCTIONS_INTRO);
+    } finally {
+      await found.close();
+    }
+  }, 20000);
+
+  /**
+   * **同一個病，更早就在了。** 擋它的護欄（`thread-pump.ts` 的 `#injectedMessages`）擋的是「圖裡注進來的
+   * human 訊息」整類，不是工作區指令一種——重複提醒（#147／#305）走 `beforeModel` 注入，2026-09-18 實測
+   * 在這條線上一樣會變成一顆使用者泡泡。這一條把它一起釘住，免得哪天護欄窄化成只認基線。
+   */
+  it('重複提醒也一樣不上線——護欄擋的是整類，不是這一顆 plugin', async () => {
+    const echoTwice = {
+      content: '再來一次。',
+      toolCalls: [{ name: ECHO_TOOL_NAME, args: { message: '一樣的參數' } }],
+    };
+    const found = await run({
+      files: { 'AGENTS.md': '規矩。' },
+      turns: [echoTwice, echoTwice, echoTwice, echoTwice, { content: '好了。' }],
+    });
+    try {
+      // 前提：提醒真的出現在某一輪的 prompt 裡（沒出現的話這條是空掃）。
+      const reminded = found.prompts.some((prompt) =>
+        prompt.some(
+          (message) =>
+            message.getType() === 'human' &&
+            message.additional_kwargs[REPEAT_REMINDER_MARKER] != null,
+        ),
+      );
+      expect(reminded).toBe(true);
+      expect(JSON.stringify(found.frames)).not.toContain(
+        'You are repeating the exact same tool call',
+      );
+    } finally {
+      await found.close();
+    }
+  }, 20000);
 });

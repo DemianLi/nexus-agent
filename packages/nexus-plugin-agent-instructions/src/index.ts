@@ -97,8 +97,10 @@ export const INSTRUCTION_FILE_CANDIDATES = [
 ] as const;
 
 /**
- * 一則基線的位元組上限。照 dsh 在 `dsh-base` 給這顆 plugin 的值
- * （`packages/bundle/base/package.json:122`，`maxBytes: 65536`）。
+ * 一則基線的位元組上限。照 dsh 在 `dsh-base` 給這顆 plugin 的值：`packages/bundle/base/cordis.patch.yml:278`
+ * 的 `id: agent-instructions` 底下 `maxBytes: 65536`（`ddefc45`，自己核過）。**這個套件出廠就掛**是另一件
+ * 事，證據在 `packages/bundle/base/package.json:122` 的相依宣告——「有這個套件」與「出廠就開」是兩件事，
+ * 這個 repo 在那上面失手過三次（見 `.docs/plugin-architecture-gap-survey.md` §五第 5 條）。
  */
 export const DEFAULT_MAX_BYTES = 65536;
 
