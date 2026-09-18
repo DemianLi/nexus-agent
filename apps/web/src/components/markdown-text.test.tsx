@@ -12,6 +12,29 @@ import { parseGfm } from '@/lib/markdown/parse';
 
 afterEach(cleanup);
 
+/** 畫面上看得到的：程式碼區塊以外逐字元比；程式碼區塊逐行、逐段比字與顏色。 */
+function looks(root: HTMLElement) {
+  const clone = root.cloneNode(true) as HTMLElement;
+  const blocks = [...clone.querySelectorAll('.md-code')].map((block) => {
+    const pre = block.querySelector('pre');
+    const lines = pre?.classList.contains('shiki')
+      ? [...pre.querySelectorAll('.line')].map((line) =>
+          [...line.querySelectorAll<HTMLElement>('span[style]')].map(
+            (span) => `${span.textContent ?? ''}|${span.style.color}`,
+          ),
+        )
+      : undefined;
+    const summary = {
+      lang: block.querySelector('.md-code-lang')?.textContent,
+      text: pre?.textContent,
+      lines,
+    };
+    block.replaceChildren();
+    return summary;
+  });
+  return { html: clone.innerHTML, blocks };
+}
+
 describe('GFM', () => {
   it('表格、清單、task list、行內 code、刪除線', () => {
     const { container } = render(
@@ -49,9 +72,9 @@ describe('GFM', () => {
     expect(container.querySelector('del')?.textContent).toBe('刪掉');
   });
 
-  it('程式碼區塊先用等寬靜態呈現，帶語言標籤', () => {
+  it('程式碼區塊帶語言標籤，內容原字不動', () => {
     const { container } = render(<MarkdownText text={'```ts {1}\nconst a = 1;\n```'} />);
-    expect(container.querySelector('pre code.language-ts')?.textContent).toBe('const a = 1;');
+    expect(container.querySelector('.md-code pre')?.textContent).toBe('const a = 1;');
     expect(container.querySelector('.md-code-lang')?.textContent).toBe('ts');
   });
 });
@@ -177,10 +200,11 @@ describe('增量解析', () => {
       expect(live.container.innerHTML).toBe(fresh.container.innerHTML);
       fresh.unmount();
     }
-    // 講完換成整份解析，跟直接畫講完的一樣。
+    // 講完換成整份解析，跟直接畫講完的一樣。程式碼區塊講完時留用串流那棵 span 樹，直接畫的是 shiki 的 HTML：
+    // 字串不同（style 的空白、外面多一層 div），逐 token 比字與顏色（同 dsh `streaming-code-block` 的比法）。
     live.rerender(<MarkdownText text={STREAM_DOC} />);
     const settled = render(<MarkdownText text={STREAM_DOC} />);
-    expect(live.container.innerHTML).toBe(settled.container.innerHTML);
+    expect(looks(live.container)).toEqual(looks(settled.container));
   });
 
   it('凍結的 block 跨過邊界時沿用同一個 DOM 節點，不重掛', () => {
