@@ -266,7 +266,7 @@
 **還沒驗過的**（實作時要補驗或留意）：
 
 - 停在**提問**時按停止：`turn-cancel.test.ts` 只測了停在核准；模型看到「before dispatch」後會不會重問同一組，要實跑（[#376](https://github.com/DemianLi/nexus-agent/issues/376#issuecomment-5709355235)）。
-- 自建 markdown＋shiki＋katex 的 bundle 大小（[#374](https://github.com/DemianLi/nexus-agent/issues/374#issuecomment-5707786108)）。
+- 自建 markdown＋shiki＋katex 的 bundle 大小；`cn` 套件與 clsx＋tailwind-merge 是否完全等價——`button` 的 240 組已驗（197 組觸發合併、差異 0，#401），其他 registry 元件進來時各卡順手比對（[#374](https://github.com/DemianLi/nexus-agent/issues/374#issuecomment-5707786108)）。
 - 下拉、popover、指令選單的動效值（[#378](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887)）。
 - macOS VoiceOver 沒走過，只有 iPhone VoiceOver（[#384](https://github.com/DemianLi/nexus-agent/issues/384#issuecomment-5719457797)）。
 - Artifact 沙盒裡的字型載入（[#377](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498)）。
