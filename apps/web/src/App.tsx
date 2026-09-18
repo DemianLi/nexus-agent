@@ -7,6 +7,7 @@ import { FeedbackDialog } from '@/components/feedback-dialog';
 import { FEEDBACK_COMMAND_LINE } from '@/lib/feedback';
 import { QuestionCard } from '@/components/question-card';
 import { StatusLine } from '@/components/status-line';
+import { ThemeToggle } from '@/components/theme-toggle';
 import { ThreadList } from '@/components/thread-list';
 import { Transcript } from '@/components/transcript';
 import { Button } from '@/components/ui/button';
@@ -240,6 +241,8 @@ function ConversationView({
             要走的路——判準見 `engaged`，分不出來時一律當成講過。
           */}
           <div className="flex items-center gap-2">
+            {/* ③ 換殼時跟著 header 一起搬。 */}
+            <ThemeToggle />
             {/* 同「新對話」永遠按得動：切走不會停掉這一條在 server 上的 run。 */}
             <Button
               type="button"
