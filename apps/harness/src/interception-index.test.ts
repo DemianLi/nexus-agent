@@ -160,8 +160,10 @@ const INDEX: readonly InterceptionRow[] = [
     frequencyDelta:
       'dsh 每一步都發，我們一次 agent 呼叫只發一次——**2026-09-18 在新佔用者身上重量**：' +
       '同一條 thread 送第二句話會再進一次（`agent-instructions.test.ts` 靠去重擋住第二份），' +
-      '同一次 invoke 的第二輪不會。基線只要一次所以夠用；要「每一步」的東西（#389 的刷新）' +
-      '這一格撐不住，得換每輪多一個 super-step 的 `beforeModel`。',
+      '同一次 invoke 的第二輪不會。價錢是**每次 invoke 一格、每輪零格**（上限 100：33 輪變 32 輪；' +
+      '#394 寫的「零」是上限 20 被 floor 吃掉的讀數）。摘要把基線切掉之後，dsh 下一步就補回、' +
+      '我們等到下一次 invoke（#397，登記在 plugin 檔頭）。要「每一步」的東西這一格撐不住，' +
+      '得換每輪多一格的 `beforeModel`（33 輪變 24 輪）——#389 因此以 not planned 關閉，重開條件在卡上。',
   },
   {
     cell: 3,

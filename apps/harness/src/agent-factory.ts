@@ -214,7 +214,9 @@ export interface CreateNexusAgentOptions {
  * {@link CreateNexusAgentOptions.repeatReminder} 就是一個。通式是
  * `模型輪數 = floor((recursionLimit - 1) / 每輪格數)`，所以**預設組裝每一輪是三格，
  * 100 換算成 33 輪而不是 49**。2026-09-03 實測，逐格對照見
- * [`looping-model.ts`](./looping-model.ts) 的檔頭。
+ * [`looping-model.ts`](./looping-model.ts) 的檔頭。`beforeAgent` 也是節點，只是每次 invoke 走一次：
+ * CLI 與 serve 給了 `--workspace` 時，`DEFAULT_PLUGINS` 裡的工作區指令那顆每次 invoke 再吃一格，
+ * 100 換算成 32 輪（2026-09-18 實測，見 `@nexus/plugin-agent-instructions` 檔頭「代價」）。
  *
  * **這個常數沒有跟著動。** 方向是護欄變嚴不是變鬆，而校準的兩端換算過去都還成立（見
  * 上一段）。要拿回原本的預算就自己傳一個大的 `recursionLimit`，或明著關掉提醒器。
