@@ -9,16 +9,20 @@
  *   ⑨ 的當前題），沒有就落在面板本身（`tabIndex=-1`，核准面板不落在按鈕上）；面板收掉時到下一張或回輸入框。
  * - **動效是「換內容」**（§7）：舊的 150 淡出，換過去之後新的 250 長出（`motion-swap`，在 `styles/motion.css`）。
  *   第一次畫出來不動：載入歷史、切換對話不走動效。
+ * - **提問面板可以收起，核准面板不行**（§4.3）：收起是 collapsible 的 250／150，內容**保持掛載**（答到一半的不丟），
+ *   關完才 `hidden`。Esc＝收起（不是停止），焦點落到展開鈕上（§8）。核准面板 Esc 不做事。
  */
 
+import { ChevronDown } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import type { PendingInput } from '@nexus/wire';
 
 import { Card } from '@/components/ui/card';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { pendingLabel } from '@/lib/pending-label';
 
-/** 舊的那一邊淡出多久（`--duration-quick`）；淡完才換成新的。 */
+/** 舊的那一邊淡出多久（`--duration-quick`）；淡完才換成新的。收起的關也是這麼久（§7）。 */
 const SWAP_OUT_MS = 150;
 
 const COMPOSER = 'composer';
@@ -28,6 +32,7 @@ export function PendingSwap({
   composer,
   composerRef,
   renderPanel,
+  renderActions,
 }: {
   readonly pendings: readonly PendingInput[];
   /** 輸入框：沒有待決時畫它，有待決時藏起來。 */
@@ -36,6 +41,8 @@ export function PendingSwap({
   readonly composerRef: RefObject<HTMLTextAreaElement | null>;
   /** 面板裡面的東西；外框、名稱與邊框光由這一層畫。 */
   readonly renderPanel: (pending: PendingInput) => ReactNode;
+  /** 名稱那一列最右邊的按鈕（提問面板的 ❌）。 */
+  readonly renderActions?: (pending: PendingInput) => ReactNode;
 }) {
   const pending = pendings[0];
   const target = pending?.interruptId ?? COMPOSER;
@@ -93,25 +100,105 @@ export function PendingSwap({
           {composer}
         </div>
         {panel !== undefined && label !== undefined && (
-          <Card
+          <PendingPanel
             key={panel.interruptId}
-            data-slot="pending-panel"
-            tabIndex={-1}
-            role="region"
-            aria-label={label}
-            // 邊框光（§5、§7）：等你處理的整圈呼吸；靜態補償在 `styles/theme.css`。
-            className="border-beam gap-0 rounded-3xl p-1"
-            data-kind="pending"
-            data-active="true"
+            label={label}
+            collapsible={panel.kind === 'question'}
+            actions={renderActions?.(panel)}
           >
-            <div className="text-muted-foreground flex items-center gap-2 px-3 pt-2 pb-2 text-xs">
-              <span className="size-1.5 shrink-0 rounded-full bg-(--brand)" aria-hidden />
-              <span className="min-w-0 truncate">{label}</span>
-            </div>
             {renderPanel(panel)}
-          </Card>
+          </PendingPanel>
         )}
       </div>
     </div>
+  );
+}
+
+/** 一個面板：名稱列（brand 點、名稱、收起鈕、呼叫端的按鈕）＋內容。每一顆中斷一個，換顆就重來（收起狀態不帶過去）。 */
+function PendingPanel({
+  label,
+  collapsible,
+  actions,
+  children,
+}: {
+  readonly label: string;
+  readonly collapsible: boolean;
+  readonly actions: ReactNode;
+  readonly children: ReactNode;
+}) {
+  const [open, setOpen] = useState(true);
+  // 關的動效跑完才 `hidden`：內容一直掛著，答到一半的不丟。
+  const [closed, setClosed] = useState(false);
+  useEffect(() => {
+    if (open) return;
+    const timer = setTimeout(() => setClosed(true), SWAP_OUT_MS);
+    return () => clearTimeout(timer);
+  }, [open]);
+  const trigger = useRef<HTMLButtonElement>(null);
+
+  const head = (
+    <div className="text-muted-foreground flex min-h-11 items-center gap-2 px-3 py-1 text-xs lg:min-h-9">
+      <span className="size-1.5 shrink-0 rounded-full bg-(--brand)" aria-hidden />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {collapsible && (
+        <CollapsibleTrigger
+          ref={trigger}
+          className="hover:bg-chip-hover active:bg-chip-pressed flex size-11 shrink-0 items-center justify-center rounded-full transition-colors duration-(--duration-quick) lg:size-8"
+          aria-label={open ? '收起這些問題' : '展開這些問題'}
+        >
+          <ChevronDown
+            aria-hidden
+            data-motion-rotate
+            className={`size-4 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) ${open ? 'rotate-180' : ''}`}
+          />
+        </CollapsibleTrigger>
+      )}
+      {actions}
+    </div>
+  );
+
+  return (
+    <Card
+      data-slot="pending-panel"
+      tabIndex={-1}
+      role="region"
+      aria-label={label}
+      // 邊框光（§5、§7）：等你處理的整圈呼吸；靜態補償在 `styles/theme.css`。
+      className="border-beam gap-0 rounded-3xl p-1"
+      data-kind="pending"
+      data-active="true"
+      onKeyDown={(event) => {
+        // Esc＝收起，不是停止（§8）；核准面板不做事。
+        if (event.key !== 'Escape' || !collapsible || !open) return;
+        event.preventDefault();
+        setOpen(false);
+        trigger.current?.focus();
+      }}
+    >
+      {collapsible ? (
+        <Collapsible
+          open={open}
+          onOpenChange={(next) => {
+            setOpen(next);
+            if (next) setClosed(false);
+          }}
+        >
+          {head}
+          <CollapsibleContent
+            forceMount
+            hidden={closed}
+            inert={!open}
+            className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden"
+          >
+            {children}
+          </CollapsibleContent>
+        </Collapsible>
+      ) : (
+        <>
+          {head}
+          {children}
+        </>
+      )}
+    </Card>
   );
 }
