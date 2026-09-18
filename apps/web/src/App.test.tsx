@@ -1040,12 +1040,12 @@ describe('以前的會話', () => {
     return { ...fake.client, listThreads };
   }
 
+  /** 桌面（jsdom 沒有 `matchMedia` 就是桌面）側欄預設展開，清單一開始就在。 */
   async function openList(): Promise<HTMLElement> {
-    fireEvent.click(screen.getByRole('button', { name: '以前的會話' }));
-    return screen.findByRole('region', { name: '以前的會話' });
+    return screen.findByRole('group', { name: '以前的會話' });
   }
 
-  it('打開才讀、每次打開都重讀；別條空白的不列，跑著的有標記，讀不懂的講出份數', async () => {
+  it('側欄看得到才讀、收起來再打開就重讀；別條空白的不列，跑著的有標記，讀不懂的講出份數', async () => {
     seq = 0;
     let reads = 0;
     const fake = fakeClient([]);
@@ -1057,9 +1057,6 @@ describe('以前的會話', () => {
         })}
       />,
     );
-    await waitFor(() => expect(fake.opened).toHaveLength(1));
-    expect(reads).toBe(0);
-
     const list = await openList();
     await waitFor(() => expect(within(list).getAllByRole('button')).toHaveLength(2));
     const rows = within(list)
@@ -1072,8 +1069,16 @@ describe('以前的會話', () => {
     // **#313 翻過來的那一條**：以前空白那條列在第三列；目前這條是新生的 id，所以別條空白的不列（照 dsh `sessionVisible`）。
     expect(list.textContent).not.toContain(BLANK_THREAD_LABEL);
     expect(list.textContent).toContain('另有 1 份');
+    expect(reads).toBe(1);
 
-    fireEvent.click(screen.getByRole('button', { name: '以前的會話' }));
+    fireEvent.click(screen.getByRole('button', { name: '開關側欄' }));
+    await waitFor(() => expect(screen.queryByRole('group', { name: '以前的會話' })).toBeNull());
+    expect(reads).toBe(1);
+    // 收起來只是推到畫面外：整條 inert，Tab 才不會走進去。
+    expect(
+      screen.getByRole('navigation', { name: '對話', hidden: true }).hasAttribute('inert'),
+    ).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: '開關側欄' }));
     await openList();
     await waitFor(() => expect(reads).toBe(2));
   });
@@ -1098,8 +1103,57 @@ describe('以前的會話', () => {
     // 從清單點的一定是接回來的：換成確定的那一句，條件句那一句不再出現。
     expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
     expect(screen.queryByText('記一筆。')).toBeNull();
-    // 重掛之後清單是收著的。
-    expect(screen.queryByRole('region', { name: '以前的會話' })).toBeNull();
+  });
+
+  it('手機（1024 以下）清單在抽屜裡：打開才讀，點一條就切過去並收起抽屜', async () => {
+    seq = 0;
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query.includes('max-width'),
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    let reads = 0;
+    const fake = fakeClient([]);
+    render(
+      <App
+        client={listing(fake, async () => {
+          reads += 1;
+          return { kind: 'ok', result: LISTED };
+        })}
+      />,
+    );
+    await waitFor(() => expect(fake.opened).toHaveLength(1));
+    expect(screen.queryByRole('group', { name: '以前的會話' })).toBeNull();
+    expect(reads).toBe(0);
+
+    fireEvent.click(screen.getByRole('button', { name: '開關側欄' }));
+    const drawer = await screen.findByRole('dialog', { name: '側欄' });
+    const list = await within(drawer).findByRole('group', { name: '以前的會話' });
+    fireEvent.click(await within(list).findByRole('button', { name: /幫我改登入頁/ }));
+
+    await waitFor(() => expect(fake.opened).toHaveLength(2));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '側欄' })).toBeNull());
+    expect(reads).toBe(1);
+  });
+
+  it('手機抽屜：沒有地標與命名上的 axe 違規；Esc 關掉後焦點回到開關', async () => {
+    seq = 0;
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query.includes('max-width'),
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    const fake = fakeClient([]);
+    render(<App client={listing(fake, async () => ({ kind: 'ok', result: LISTED }))} />);
+    const trigger = screen.getByRole('button', { name: '開關側欄' });
+    fireEvent.click(trigger);
+    const drawer = await screen.findByRole('dialog', { name: '側欄' });
+    await within(drawer).findByRole('button', { name: /幫我改登入頁/ });
+    expect(await axeViolations(document.body)).toEqual([]);
+
+    fireEvent.keyDown(drawer, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '側欄' })).toBeNull());
+    expect(document.activeElement).toBe(trigger);
   });
 
   it('目前這條在清單上標出來，按不下去', async () => {
@@ -1275,11 +1329,13 @@ describe('新對話重用空白會話', () => {
     const { client, state } = gated(fake, LISTED);
     render(<App client={client} />);
     await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    // 側欄的清單掛上來讀的那一次；下面驗的是「新對話」自己不讀。
+    await waitFor(() => expect(state.reads).toBe(1));
 
     fireEvent.click(screen.getByRole('button', { name: '新對話' }));
     await settle();
 
-    expect(state.reads).toBe(0);
+    expect(state.reads).toBe(1);
     expect(fake.opened).toHaveLength(1);
   });
 
@@ -1310,16 +1366,20 @@ describe('新對話重用空白會話', () => {
     const { client, state } = gated(fake, LISTED);
     render(<App client={client} />);
     await sayOnce();
+    // 側欄的清單掛上來讀的那一次。
+    await waitFor(() => expect(state.reads).toBe(1));
     state.hold = true;
 
     fireEvent.click(screen.getByRole('button', { name: '新對話' }));
     fireEvent.click(screen.getByRole('button', { name: '新對話' }));
-    await waitFor(() => expect(state.reads).toBe(1));
+    await waitFor(() => expect(state.reads).toBe(2));
+    state.hold = false;
     state.release();
 
     await waitFor(() => expect(fake.opened).toEqual(['上一條', '空白那條']));
     await settle();
-    expect(state.reads).toBe(1);
+    // 第三次是切過去之後側欄跟著重掛、重讀清單；「新對話」只讀了一次。
+    expect(state.reads).toBe(3);
     expect(fake.opened).toEqual(['上一條', '空白那條']);
   });
 
@@ -1330,8 +1390,7 @@ describe('新對話重用空白會話', () => {
     const { client, state } = gated(fake, LISTED);
     render(<App client={client} />);
     await sayOnce();
-    fireEvent.click(screen.getByRole('button', { name: '以前的會話' }));
-    const list = await screen.findByRole('region', { name: '以前的會話' });
+    const list = await screen.findByRole('group', { name: '以前的會話' });
     const pick = await within(list).findByRole('button', { name: /改登入頁/ });
     state.hold = true;
 

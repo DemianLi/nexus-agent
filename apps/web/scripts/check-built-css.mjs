@@ -264,6 +264,25 @@ for (const rule of rules) {
     failures.push(`第 5 條：${rule.selector} 的 infinite 動畫在 reduced-motion 下沒有被蓋掉`);
 }
 
+// 第 3 條的延伸：元件寫的 `animation-duration-*` 直接設時長，會蓋掉 reduced-motion 換成 150 的那組變數
+// （#403：抽屜淡入卻還是 350）。有超過 150ms 的，reduced-motion 裡就要有一條把它壓回 150 以下的。
+const seconds = (v) => (/ms$/.test(v) ? parseFloat(v) / 1000 : parseFloat(v));
+const longDurations = rules.filter(
+  (r) =>
+    !REDUCED_MOTION.test(r.media) &&
+    /animation-duration-/.test(r.selector) &&
+    seconds(declarations(r.body).get('animation-duration') ?? '0') > 0.15,
+);
+const durationCap = reduced.some(
+  (r) =>
+    /\[class\*=["']?animation-duration-/.test(r.selector) &&
+    seconds(declarations(r.body).get('animation-duration') ?? '1') <= 0.15,
+);
+if (longDurations.length > 0 && !durationCap)
+  failures.push(
+    `第 3 條：reduced-motion 沒有壓住 animation-duration-*（${longDurations.map((r) => r.selector).join('、')}）`,
+  );
+
 // 引用到的 motion-* keyframes 要存在
 for (const rule of rules)
   for (const [, value] of declarations(rule.body))
