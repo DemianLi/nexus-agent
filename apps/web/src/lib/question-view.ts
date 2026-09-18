@@ -17,11 +17,12 @@ export const ASK_USER_QUESTION = 'ask_user_question';
 export const STOPPED_QUESTION_TEXT = '已停止，請直接打字回覆';
 
 /**
- * 停止時 pump 替懸著的那顆呼叫寫進對話與日誌的結果（`@nexus/core` 的 `TOOL_ABORTED_BEFORE_DISPATCH_TEXT`，
- * `ThreadPump.#withdraw`）。即時與重播的工具卡紅字都是這一句。web 不相依 `@nexus/core`，所以抄一份，
- * `question-view.test.ts` 讀那邊的原始碼對字。
+ * 停止時 pump 替懸著的那顆呼叫寫進對話與日誌的結果，**理由那半句**（`@nexus/core` 的
+ * `TOOL_ABORTED_BEFORE_DISPATCH_REASON`，`ThreadPump.#withdraw`）。卡上的紅字是 core 的 `Error: ` 前綴接這一句；
+ * 前綴只有一個主人（`apps/harness/src/tool-error-prefix.test.ts`），所以這裡只抄理由、比結尾。web 不相依
+ * `@nexus/core`，`question-view.test.ts` 讀那邊的原始碼對字。
  */
-export const WITHDRAWN_TOOL_TEXT = 'Error: tool call aborted before dispatch';
+export const WITHDRAWN_TOOL_REASON = 'tool call aborted before dispatch';
 
 /**
  * 這張卡是不是停在提問時被停止的那一張。
@@ -34,7 +35,7 @@ export function isStoppedQuestion(entry: ToolEntry): boolean {
   return (
     entry.name === ASK_USER_QUESTION &&
     entry.status === 'failed' &&
-    (entry.error === WITHDRAWN_TOOL_TEXT || entry.error === UNFINISHED_TOOL_TEXT)
+    (entry.error?.endsWith(WITHDRAWN_TOOL_REASON) === true || entry.error === UNFINISHED_TOOL_TEXT)
   );
 }
 

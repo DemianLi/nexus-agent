@@ -17,7 +17,7 @@ import {
 } from '@/App';
 import { NO_DECISION_REASON } from '@/components/approval-card';
 import { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/components/thread-list';
-import { STOPPED_QUESTION_TEXT, WITHDRAWN_TOOL_TEXT } from '@/lib/question-view';
+import { STOPPED_QUESTION_TEXT, WITHDRAWN_TOOL_REASON } from '@/lib/question-view';
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
 import { axeViolations } from '@/test/axe';
 import { stubCmdkLayout } from '@/test/cmdk';
@@ -777,7 +777,7 @@ function stoppedQuestionFrames(): Event[] {
       event: 'tool-finished',
       tool_call_id: 'ask-1',
       failed: true,
-      message: WITHDRAWN_TOOL_TEXT,
+      message: `Error: ${WITHDRAWN_TOOL_REASON}`,
     }),
     frame('lifecycle', [], { event: 'completed', graph_name: 'root', aborted: true }),
   ];
@@ -797,7 +797,7 @@ describe('停在提問時停止之後', () => {
     expect(within(card).getByText('哪一天？')).toBeTruthy();
     expect(within(card).getByText('週一：早上')).toBeTruthy();
     // 那句紅字是給模型看的英文；停止不是失敗（#276）。
-    expect(within(card).queryByText(WITHDRAWN_TOOL_TEXT)).toBeNull();
+    expect(within(card).queryByText(`Error: ${WITHDRAWN_TOOL_REASON}`)).toBeNull();
     expect(within(card).queryByText('失敗')).toBeNull();
   });
 

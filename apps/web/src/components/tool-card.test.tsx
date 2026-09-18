@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ToolCard } from '@/components/tool-card';
-import { WITHDRAWN_TOOL_TEXT } from '@/lib/question-view';
+import { WITHDRAWN_TOOL_REASON } from '@/lib/question-view';
 import { Transcript } from '@/components/transcript';
 import { axeViolations } from '@/test/axe';
 
@@ -142,7 +142,7 @@ describe('對話流裡的工具卡', () => {
     expect(card.getAttribute('data-state')).toBe('closed');
     view.rerender(
       <ToolCard
-        entry={tool({ ...ask, status: 'failed', error: WITHDRAWN_TOOL_TEXT })}
+        entry={tool({ ...ask, status: 'failed', error: `Error: ${WITHDRAWN_TOOL_REASON}` })}
         beam={false}
       />,
     );

@@ -9,8 +9,11 @@ import {
   isStoppedQuestion,
   questionsOf,
   stoppedOnQuestion,
-  WITHDRAWN_TOOL_TEXT,
+  WITHDRAWN_TOOL_REASON,
 } from '@/lib/question-view';
+
+/** pump 收回時卡上的那一句（前綴＋理由）。 */
+const WITHDRAWN = `Error: ${WITHDRAWN_TOOL_REASON}`;
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
 
@@ -22,7 +25,7 @@ function tool(patch: Partial<ToolEntry>): ToolEntry {
     name: 'ask_user_question',
     input: '',
     status: 'failed',
-    error: WITHDRAWN_TOOL_TEXT,
+    error: WITHDRAWN,
     attribution: { kind: 'root' },
     ...patch,
   };
@@ -33,16 +36,15 @@ function state(status: ConversationState['status'], entries: ConversationEntry[]
 }
 
 describe('停在提問時被停止的那張卡', () => {
-  it('抄來的那一句跟 `@nexus/core` 對得上（web 不相依 core，改了那邊這裡要紅）', () => {
+  it('抄來的理由跟 `@nexus/core` 對得上（web 不相依 core，改了那邊這裡要紅）', () => {
     const source = read('../../../../packages/nexus-core/src/turn-cancel.ts');
-    const prefix = /TOOL_ERROR_PREFIX = '([^']*)'/.exec(
-      read('../../../../packages/nexus-core/src/tool-events.ts'),
-    )?.[1];
-    const reason = /TOOL_ABORTED_BEFORE_DISPATCH_REASON = '([^']*)'/.exec(source)?.[1];
+    expect(/TOOL_ABORTED_BEFORE_DISPATCH_REASON = '([^']*)'/.exec(source)?.[1]).toBe(
+      WITHDRAWN_TOOL_REASON,
+    );
+    // 卡上的字是前綴接理由：理由要在結尾，比結尾才成立。
     expect(source).toMatch(
       /TOOL_ABORTED_BEFORE_DISPATCH_TEXT =\s*TOOL_ERROR_PREFIX \+ TOOL_ABORTED_BEFORE_DISPATCH_REASON/,
     );
-    expect(`${prefix}${reason}`).toBe(WITHDRAWN_TOOL_TEXT);
   });
 
   it('收回的那一句、折疊器補的那一句都算；別的失敗、別的工具、還沒收的不算', () => {
