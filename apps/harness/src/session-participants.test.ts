@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import { createCliAgent, runCli } from './cli.js';
+import { loopbackRequest } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -162,7 +163,7 @@ describe('web 那條', () => {
     close = () => handler.close();
     const client = createWireClient({
       baseUrl: 'http://session-participants.test',
-      fetch: async (input, init) => handler.handle(new Request(input as string, init)),
+      fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
     });
 
     expect(plugin.attached()).toEqual([]);

@@ -25,7 +25,7 @@ import { createWireClient } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
-import { emptyCommandPoint } from './fixtures.js';
+import { emptyCommandPoint, loopbackRequest } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
@@ -337,7 +337,7 @@ describe('線上', () => {
     });
     const client = createWireClient({
       baseUrl: 'http://cancel.test',
-      fetch: async (input, init) => handler.handle(new Request(input as string, init)),
+      fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
     });
     try {
       await expect(client.runCancel('cancel-thread')).resolves.toMatchObject({

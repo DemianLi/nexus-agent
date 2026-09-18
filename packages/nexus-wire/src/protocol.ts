@@ -144,7 +144,8 @@ export function isRunCancelMethod(value: unknown): value is typeof RUN_CANCEL_ME
  * 業務失敗走成功回應，`ErrorResponse` 只給「這條線收不了」。
  *
  * **偏離：指名的是那則回覆的 run id**（畫面上的 `AiEntry.id`），不是 dsh 的 `messageId`；server
- * 查表換成那一輪。**不做 `list`**：重新整理之後畫面上沒有舊回覆可以評（門 B 沒開）。
+ * 查表換成那一輪。**還沒有 `list`**：重新整理之後評過的分畫不回來，重播出來的舊回覆也評不了，見
+ * [#382](https://github.com/DemianLi/nexus-agent/issues/382)。
  *
  * **任何時候都收**：跑著、停在核准點、任何分頁——不經過斜線命令那道「還在跑就擋」
  * （#267 的 Q10）。所以 web 的回饋對話框送的是 `feedback.record`，不是 `slash.run` 的

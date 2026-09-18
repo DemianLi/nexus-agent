@@ -33,6 +33,7 @@ import type { WireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { DEFAULT_PLUGINS, createCliAgent } from './cli.js';
+import { loopbackRequest } from './fixtures.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
@@ -83,7 +84,7 @@ async function wire(plugins: readonly NexusPlugin[] = DEFAULT_PLUGINS): Promise<
   });
   const client = createWireClient({
     baseUrl: BASE_URL,
-    fetch: async (input, init) => handler.handle(new Request(input as string, init)),
+    fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
   });
   const wired: Wired = {
     client,
