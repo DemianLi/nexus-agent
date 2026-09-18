@@ -104,7 +104,7 @@
 
 ## 5. 設計 token
 
-出處：[設計 token 定稿](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498)。**色碼與完整對比度表不在這裡**，在 tag 上的 `apps/web/src/prototype-375/tokengen/token-table.md` 與 `tokens.generated.css`。
+出處：[設計 token 定稿](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498)。**色碼與完整對比度表不在這裡**，在 `apps/web/tokengen/token-table.md` 與 `apps/web/src/styles/tokens.generated.css`（產生器 `apps/web/tokengen/generate.mjs`，`pnpm --filter @nexus/web tokens:gen`）。
 
 **顏色**
 - 全部 oklch，**語意 token 直接寫值**，不另建色板層；registry 帶進來的 `--sidebar-*` 由 `hsl()` 轉掉。
@@ -113,7 +113,7 @@
 - 原型另加的名字：`--stage`、`--chip`／`--chip-hover`／`--chip-pressed`、`--card-hairline`、`--material-shadow`／`--menu-shadow`／`--card-shadow`、`--beam-*`。
 
 **對比度目標**（Leonardo `@adobe/leonardo-contrast-colors`＋WCAG 2.x；表面層用 colorjs.io 逐對解）
-- 文字 ≥ 4.5，非文字 ≥ 3（SC 1.4.11）；狀態色對卡片 **5.2**；brand 在亮色底色上 ≥ 4.5。
+- 文字 ≥ 4.5，非文字 ≥ 3（SC 1.4.11）；狀態色對**底色** **5.2**（產生器的解目標，讓暗色狀態色對卡片仍過 4.5）；brand 在亮色底色上 ≥ 4.5。
 - **亮暗鑑別度一樣**：兩主題共用一組目標，取兩主題較強者；起算點是原型 `eb800a1` 認可的對比度。
 - 不用 APCA（2023-07 已從 WCAG 3 草稿移除）。人工抽驗用 Vispero Colour Contrast Analyser，CI 用 colorjs.io 重算（§11）。
 
@@ -252,7 +252,7 @@
 | 1 | 同一 className 同時有 `border` 與 `shadow-`（排除 `shadow-none`）就報錯 | [#377](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498) |
 | 2 | 用 colorjs.io 重算產生出來的 token，達到 §5 的對比度目標（文字、非文字、狀態色、亮暗共用） | [#377](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498) |
 | 3 | reduced-motion 下 `--animate-in`／`--animate-out` 換成只有透明度的版本 | [#378](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887) |
-| 4 | `@keyframes` 名稱在允許清單上，清單分兩段：**我們的** `motion-*`（清單在 tag 上 `tokens.css` 的註解）；**第三方** tw-animate 的 `enter`／`exit`／`collapsible-*`（之後裝 accordion 多 `accordion-*`）、Tailwind 的 `spin`／`pulse`、sonner 的 `sonner-fade-*`／`sonner-spin`／`swipe-out-*`。只寫第一段，第一次跑就紅 | [#378](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887) |
+| 4 | `@keyframes` 名稱在允許清單上（清單在 `apps/web/scripts/check-built-css.mjs`），清單分兩段：**我們的** `motion-*`；**第三方** tw-animate 的 `enter`／`exit`／`collapsible-*`（之後裝 accordion 多 `accordion-*`）、Tailwind 的 `spin`／`pulse`、sonner 的 `sonner-fade-*`／`sonner-spin`／`swipe-out-*`。只寫第一段，第一次跑就紅 | [#378](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887) |
 | 5 | 每個 `infinite` 動畫在 reduced-motion 下都有對應：`spin`／`pulse` 用 class 蓋，`sonner-spin` 由 sonner 自己的 media query 關——要認得這兩種寫法 | [#378](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887) |
 | 6 | axe-core 的 vitest（開發期相依），至少掃原型驗過的四個畫面：核准面板 375 暗、提問面板 375 暗、提問面板 1280 亮、對話流＋輸入框 375 暗 | [#384](https://github.com/DemianLi/nexus-agent/issues/384#issuecomment-5719457797) |
 | 7 | 對話列表 `role="log"` 的 `aria-live="off"` 單獨釘一條 | [#384](https://github.com/DemianLi/nexus-agent/issues/384#issuecomment-5719457797) |
@@ -266,7 +266,7 @@
 **還沒驗過的**（實作時要補驗或留意）：
 
 - 停在**提問**時按停止：`turn-cancel.test.ts` 只測了停在核准；模型看到「before dispatch」後會不會重問同一組，要實跑（[#376](https://github.com/DemianLi/nexus-agent/issues/376#issuecomment-5709355235)）。
-- 自建 markdown＋shiki＋katex 的 bundle 大小；`cn` 套件與 clsx＋tailwind-merge 是否完全等價（[#374](https://github.com/DemianLi/nexus-agent/issues/374#issuecomment-5707786108)）。
+- 自建 markdown＋shiki＋katex 的 bundle 大小（[#374](https://github.com/DemianLi/nexus-agent/issues/374#issuecomment-5707786108)）。
 - 下拉、popover、指令選單的動效值（[#378](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887)）。
 - macOS VoiceOver 沒走過，只有 iPhone VoiceOver（[#384](https://github.com/DemianLi/nexus-agent/issues/384#issuecomment-5719457797)）。
 - Artifact 沙盒裡的字型載入（[#377](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498)）。

@@ -41,7 +41,7 @@ export function ApprovalCard({
 }) {
   return (
     <section
-      className="border-border bg-card flex flex-col gap-3 rounded-lg border p-4"
+      className="bg-card shadow-material flex flex-col gap-3 rounded-lg p-4"
       aria-label="核准請求"
       data-testid="approval-card"
     >
