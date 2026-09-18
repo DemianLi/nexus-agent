@@ -131,3 +131,33 @@
     padding-inline-start: 1.5em;
   }
 }
+
+/*
+ * KaTeX 的覆寫放在 layer 外：`katex/dist/katex.min.css` 沒有 layer，layer 裡的規則權重再高也蓋不過它。
+ * 這裡的選擇器都比 KaTeX 的具體，所以不靠載入順序。
+ */
+/* 區塊公式太寬時自己橫向捲動，不撐開整則回覆（同 dsh；捲動放在可 focus 的 `.md-math`，見 `render.tsx`）。 */
+.markdown .md-math {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/*
+ * 帶 \tag 的區塊公式：KaTeX 把編號絕對定位在右緣，公式放不下時編號疊在公式上、也捲不動。改成 flex：
+ * 公式與編號並排，放不下就整塊橫向捲動；寬的時候兩邊的 auto 邊界讓公式大致置中、編號靠右。
+ */
+.markdown .katex-display > .katex > .katex-html:has(> .tag) {
+  display: flex;
+  align-items: baseline;
+}
+
+.markdown .katex-display > .katex > .katex-html:has(> .tag) > .base:first-child {
+  margin-left: auto;
+}
+
+.markdown .katex-display > .katex > .katex-html > .tag {
+  position: static;
+  margin-left: auto;
+  padding-left: 1em;
+}

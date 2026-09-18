@@ -15,6 +15,7 @@ import { App, inputPlaceholder, RESUMED_THREAD_NOTICE, SWITCHED_THREAD_NOTICE } 
 import { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/components/thread-list';
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
 import { axeViolations } from '@/test/axe';
+import { stubCmdkLayout } from '@/test/cmdk';
 
 /**
  * 一份活在記憶體裡的 `Storage`。
@@ -396,15 +397,52 @@ describe('斜線命令', () => {
     input: { hint: '[off]' },
   };
 
-  it('清單畫出來，但打 `/` 不跳選單——這一版只有扁平清單', async () => {
+  beforeEach(stubCmdkLayout);
+
+  it('打 `/` 跳命令選單（#407）；輸入框底下不再有扁平清單', async () => {
     seq = 0;
     const { client } = fakeClient([], { commands: [planCommand] });
     render(<App client={client} />);
 
-    await waitFor(() => expect(screen.getByText('/plan [off]')).toBeTruthy());
-    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '/' } });
-    // 沒有候選清單、沒有補全——那一套（dsh 的 `CommandDirectory`）是另一張卡。
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    expect(screen.queryByText('/plan [off]')).toBeNull();
     expect(screen.queryByRole('listbox')).toBeNull();
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '/' } });
+    const listbox = await screen.findByRole('listbox');
+    expect(within(listbox).getByRole('option').textContent).toContain('/plan [off]');
+  });
+
+  it('從選單選 `/feedback`：開回饋框、不走 slash.run（它帶參數，但光打名字另有動作）', async () => {
+    seq = 0;
+    const { client, slashed } = fakeClient([], {
+      commands: [{ name: 'feedback', description: '記下回饋', input: { hint: '<內容>' } }],
+    });
+    render(<App client={client} />);
+
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '/fe' } });
+    await screen.findByRole('listbox');
+    fireEvent.keyDown(screen.getByLabelText('要說的話'), { key: 'Enter' });
+    await screen.findByRole('dialog');
+    expect(slashed).toEqual([]);
+  });
+
+  it('一輪在跑時從選單選不帶參數的命令：不執行，那一行留在草稿裡', async () => {
+    seq = 0;
+    const { client, slashed } = fakeClient(
+      [frame('lifecycle', [], { event: 'running', graph_name: 'root' })],
+      { commands: [{ name: 'todo', description: '列出待辦' }] },
+    );
+    render(<App client={client} />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '停止' })).toBeTruthy());
+    const input = screen.getByLabelText<HTMLTextAreaElement>('要說的話');
+    fireEvent.change(input, { target: { value: '/to' } });
+    await screen.findByRole('listbox');
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(input.value).toBe('/todo');
+    expect(slashed).toEqual([]);
+    expect(screen.getByRole('button', { name: '送出' }).hasAttribute('disabled')).toBe(true);
   });
 
   it('第一個字是 `/` 就走 slash.run，而且不進 transcript', async () => {

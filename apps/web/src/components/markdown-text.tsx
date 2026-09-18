@@ -2,7 +2,7 @@
  * 助理回覆的 markdown（規格 §4.2 列 10／11，#405）。照 dsh `ui-primitives/src/markdown/MarkdownText.tsx`
  * （本機 clone `ddefc45`，MIT）：
  *
- * - **講完的**：整份解析一次、收齊定義、畫出來。
+ * - **講完的**：整份解析一次（多了 TeX 的文法）、收齊定義、畫出來。
  * - **串流中**：`IncrementalMarkdownParser` 凍結前面的 block，凍結的那些快取成 React 元素，每個 delta 只重解、重畫
  *   最後那一段；凍結的 block 跨過邊界時 key 不變（來源 offset），React 對齊而不是重掛。
  *
@@ -15,7 +15,7 @@ import { cloneElement, isValidElement, memo, useMemo, useRef } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 
 import { IncrementalMarkdownParser } from '@/lib/markdown/incremental';
-import { parseGfm } from '@/lib/markdown/parse';
+import { parseGfm, parseGfmWithMath } from '@/lib/markdown/parse';
 import {
   collectReferenceTargets,
   createReferenceTargets,
@@ -23,9 +23,11 @@ import {
   renderFootnoteSection,
 } from '@/lib/markdown/render';
 import type { MarkdownRenderContext, ReferenceTargets } from '@/lib/markdown/render';
+// KaTeX 的樣式與字型隨建置打包（同 dsh 在 MarkdownText 引入；完全內網，不走 CDN）。
+import 'katex/dist/katex.min.css';
 
 function renderSettled(text: string): ReactNode[] {
-  const root = parseGfm(text);
+  const root = parseGfmWithMath(text);
   const targets = createReferenceTargets();
   collectReferenceTargets(root.children, targets);
   const context: MarkdownRenderContext = {
