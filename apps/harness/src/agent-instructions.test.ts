@@ -521,3 +521,46 @@ describe('摘要之後下一句話把基線補回來', () => {
     }
   }, 20000);
 });
+
+/**
+ * **宣告 `stateSchema` 沒有把私有鍵推上輸出通道。** `summarization.test.ts` 那條「回傳值只有 `files` 與
+ * `messages`」量的組裝沒有這顆 plugin；這顆為了讀切點宣告了同一個鍵，而宣告 `stateSchema` 就是往圖的
+ * channel 表上加東西。這一條在 `DEFAULT_PLUGINS`＋`--workspace`、而且摘要真的發生過的組裝上再量一次。
+ */
+it('DEFAULT_PLUGINS 摘要過之後，invoke 的回傳值還是只有 files 與 messages', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'nexus-instructions-keys-'));
+  await writeFile(join(root, 'AGENTS.md'), '規矩。', 'utf8');
+  const model = new ScriptedChatModel({
+    turns: Array.from({ length: 12 }, (_, index) => ({ content: `第 ${index + 1} 次回話。` })),
+  });
+  const built = await createNexusAgent({
+    model,
+    checkpointer: new MemorySaver(),
+    plugins: [...DEFAULT_PLUGINS],
+    backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
+    summarization: {
+      trigger: [{ type: 'messages', value: 3 }],
+      keep: { type: 'messages', value: 1 },
+    },
+  });
+  try {
+    let returned: object = {};
+    for (const line of ['第一句。', '第二句。', '第三句。', '第四句。']) {
+      returned = (await built.agent.invoke(toAgentInvocation(line), {
+        configurable: { thread_id: 'keys' },
+      })) as object;
+    }
+    // 前提：摘要真的發生過，那顆鍵在 graph state 裡有值。
+    const snapshot = await (
+      built.agent as unknown as {
+        getState: (config: unknown) => Promise<{ values: Record<string, unknown> }>;
+      }
+    ).getState({ configurable: { thread_id: 'keys' } });
+    expect(snapshot.values._summarizationEvent).toBeDefined();
+
+    expect(Object.keys(returned).sort()).toEqual(['files', 'messages']);
+  } finally {
+    await built.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 30000);
