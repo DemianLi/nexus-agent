@@ -10,7 +10,7 @@ const ICON = { system: Monitor, light: Sun, dark: Moon };
  * header 右上的亮暗切換：一顆鈕循環三態，圖示顯示**目前**這一態（§6）。
  * 不做下拉選單：為三個選項多一層選單、多一套焦點管理不划算（#391）。切換不做動效。
  */
-export function ThemeToggle() {
+export function ThemeToggle({ className }: { readonly className?: string }) {
   const [preference, cycle] = useThemePreference();
   const Icon = ICON[preference];
   return (
@@ -18,6 +18,7 @@ export function ThemeToggle() {
       type="button"
       variant="ghost"
       size="icon-sm"
+      className={className}
       aria-label={`目前：${THEME_LABEL[preference]}，按一下改成${THEME_LABEL[NEXT_THEME[preference]]}`}
       onClick={cycle}
     >
