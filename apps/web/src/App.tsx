@@ -210,7 +210,13 @@ function ConversationView({
   const [draft, setDraft] = useState('');
   // 關掉之後留著最後那一份：退場動效那 150ms 裡框裡的字不能先消失。
   const lastDialog = useRef(conversation.feedbackDialog);
-  if (conversation.feedbackDialog !== undefined) lastDialog.current = conversation.feedbackDialog;
+  // **每打開一次就是一張新表單**（跟以前關掉就卸掉一樣）：同一則關掉再開，草稿不留。
+  const dialogWasOpen = useRef(false);
+  const dialogOpens = useRef(0);
+  const dialogOpen = conversation.feedbackDialog !== undefined;
+  if (dialogOpen && !dialogWasOpen.current) dialogOpens.current += 1;
+  dialogWasOpen.current = dialogOpen;
+  if (dialogOpen) lastDialog.current = conversation.feedbackDialog;
   const feedbackDialog = lastDialog.current;
 
   // **一顆中斷一張卡**（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
@@ -424,9 +430,9 @@ function ConversationView({
 
       {feedbackDialog !== undefined && (
         <FeedbackDialog
-          // 換了目標就是一張新的表單：草稿不帶過去。
-          key={JSON.stringify(feedbackDialog.target)}
-          open={conversation.feedbackDialog !== undefined}
+          // 每打開一次、或換了目標，就是一張新的表單：草稿不帶過去。
+          key={`${dialogOpens.current}:${JSON.stringify(feedbackDialog.target)}`}
+          open={dialogOpen}
           submitting={feedbackDialog.submitting}
           {...(feedbackDialog.failure === undefined ? {} : { failure: feedbackDialog.failure })}
           onSubmit={(draft) => void conversation.submitFeedback(draft)}

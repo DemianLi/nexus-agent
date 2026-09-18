@@ -32,6 +32,8 @@ function subscribe(onChange: () => void): () => void {
   window.addEventListener('storage', onStorage);
   return () => {
     listeners.delete(onChange);
+    // 沒有人在看了，只留在這個分頁的那一份也沒有要留給誰（測試之間也不殘留）。
+    if (listeners.size === 0) unsaved = undefined;
     window.removeEventListener('storage', onStorage);
   };
 }
