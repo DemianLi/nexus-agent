@@ -6,8 +6,11 @@
  * **照搬的安全規則**：連結只放行 http／https／mailto（其他協定與相對路徑都只留文字）；raw HTML 一律當文字，
  * 不進 DOM；站內錨點不過 allowlist，所以腳註只畫上標數字、不做頁內連結。
  *
- * **沒搬的**（nexus 目前沒有對應的東西）：TeX 數學（katex 在 ⑥ 之後）、本機檔案連結與 inline code 的檔案提及
- * （要一個開檔的宿主）、本機路徑圖片、外部連結交給宿主開啟的 delegate。
+ * **TeX**（#406）：講完那一臂的 math／inlineMath 節點與 ` ```math ` fence 交給 KaTeX（`./katex.tsx`，不開 `trust`）；
+ * 串流中文法裡沒有 TeX，` ```math ` 也照一般程式碼區塊畫，寫到一半的公式不會閃錯誤。
+ *
+ * **沒搬的**（nexus 目前沒有對應的東西）：本機檔案連結與 inline code 的檔案提及（要一個開檔的宿主）、本機路徑
+ * 圖片、外部連結交給宿主開啟的 delegate。
  *
  * **跟 dsh 不同的一處**：圖片**不自動載入**，畫成指向原圖的連結（文字是 alt）。模型的輸出可以放任何網址，自動
  * 載入等於讓一段回覆替使用者發出請求（網址裡可以帶資料）；而完全內網的部署裡外部圖片本來就載不到，dsh 的退路
@@ -19,11 +22,13 @@
 import { Fragment, createElement } from 'react';
 import type { Key, ReactNode } from 'react';
 import type * as Md from 'mdast';
+import type {} from 'mdast-util-math';
 import { normalizeUri } from 'micromark-util-sanitize-uri';
 
 import { CodeBlock } from '@/components/markdown/code-block';
 
 import type { PositionedBlock } from './incremental';
+import { renderTexToReact } from './katex';
 
 function sanitizeUrl(url: string): string {
   try {
@@ -115,6 +120,28 @@ function renderChildren(
   return nodes.map((node, index) => renderNode(node, index, context));
 }
 
+/**
+ * 區塊公式：外面包一層可以 focus 的 `.md-math`，太寬時在這一層橫向捲動，鍵盤也捲得到（同程式碼區塊的 `pre`）。
+ * dsh 直接放 KaTeX 的輸出；這一層是外觀，不影響畫出來的公式。
+ */
+function renderDisplayMath(value: string, key: Key): ReactNode {
+  return (
+    <div key={key} className="md-math" tabIndex={0}>
+      {renderTexToReact(value, true)}
+    </div>
+  );
+}
+
+function renderCode(node: Md.Code, key: Key, context: MarkdownRenderContext): ReactNode {
+  const lang =
+    node.lang === null || node.lang === undefined ? undefined : /^[\w-]+/.exec(node.lang)?.[0];
+  if (!context.streaming && lang === 'math') {
+    // 講完時 ```math fence 畫成區塊 TeX（同 dsh）；dsh 取字時看得到程式碼區塊結尾的換行，這裡補上。
+    return renderDisplayMath(`${node.value}\n`, key);
+  }
+  return <CodeBlock key={key} code={node.value} lang={lang} streaming={context.streaming} />;
+}
+
 function renderNode(node: Md.RootContent, key: Key, context: MarkdownRenderContext): ReactNode {
   switch (node.type) {
     case 'text':
@@ -147,18 +174,11 @@ function renderNode(node: Md.RootContent, key: Key, context: MarkdownRenderConte
       // 沒有 HTML 解析器：raw HTML 一律當文字。
       return node.value;
     case 'code':
-      return (
-        <CodeBlock
-          key={key}
-          code={node.value}
-          lang={
-            node.lang === null || node.lang === undefined
-              ? undefined
-              : /^[\w-]+/.exec(node.lang)?.[0]
-          }
-          streaming={context.streaming}
-        />
-      );
+      return renderCode(node, key, context);
+    case 'math':
+      return renderDisplayMath(node.value, key);
+    case 'inlineMath':
+      return <Fragment key={key}>{renderTexToReact(node.value, false)}</Fragment>;
     case 'list':
       return renderList(node, key, context);
     case 'listItem':
