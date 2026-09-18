@@ -1,12 +1,14 @@
 import type { ConversationStatus, PendingInput, WireClient } from '@nexus/wire';
 import { isApprovalPending, isQuestionPending } from '@nexus/wire';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { toast } from 'sonner';
 
 import { AppSidebar } from '@/components/app-sidebar';
 import { ApprovalCard } from '@/components/approval-card';
 import { Composer } from '@/components/composer';
 import { EmptyHero } from '@/components/empty-hero';
 import { FeedbackDialog } from '@/components/feedback-dialog';
+import { PendingSwap } from '@/components/pending-swap';
 import { FEEDBACK_COMMAND_LINE } from '@/lib/feedback';
 import { QuestionCard } from '@/components/question-card';
 import { StatusLine } from '@/components/status-line';
@@ -185,7 +187,7 @@ export function App({ client }: { client?: WireClient } = {}) {
           setChoice({ threadId, origin: 'listed' });
         }}
       />
-      {/* 還沒有人呼叫 `toast()`：第一個用的是 ⑧（#408）的「已停止這一輪」。先掛好，主題跟著切換鈕走。 */}
+      {/* 核准面板沒有出路時的「停止這一輪」（#408）講一聲。主題跟著切換鈕走。 */}
       <Toaster theme={theme} position="top-center" />
     </SidebarProvider>
   );
@@ -223,17 +225,16 @@ function ConversationView({
   if (dialogOpen) lastDialog.current = conversation.feedbackDialog;
   const feedbackDialog = lastDialog.current;
 
-  // **一顆中斷一張卡**（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
+  // **一顆中斷一個面板**（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
   // 同一輪兩個工具都要核准時閘門逐次呼叫各自 `interrupt()`，折疊器逐 `interruptId`
-  // 並存——每一顆各自帶著回答自己要用的那把鑰匙，所以每一張卡按下去落在自己那顆上。
+  // 並存——每一顆各自帶著回答自己要用的那把鑰匙，所以每一個面板按下去落在自己那顆上。
+  // 面板換掉輸入框、一次一個、先來先處理（#408，`PendingSwap`）。
   const pendings = conversation.state.pendings;
   const isFresh = useFreshItems(
-    [
-      ...conversation.state.entries.map((entry) => entry.id),
-      ...pendings.map((pending) => pending.interruptId),
-    ],
+    conversation.state.entries.map((entry) => entry.id),
     conversation.connected,
   );
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   // **`awaiting-input` 也算忙**。少了它，等核准時送得出下一句話——而基座那時會把
   // 中斷靜靜丟掉：那個工具既沒執行也沒被拒絕，也不會再問第二次（實測）。
   //
@@ -308,7 +309,7 @@ function ConversationView({
           </div>
         </div>
 
-        {conversation.state.entries.length === 0 && pendings.length === 0 ? (
+        {conversation.state.entries.length === 0 ? (
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6">
             <EmptyHero />
           </div>
@@ -337,71 +338,77 @@ function ConversationView({
                 </Button>
               )
             }
-            // **按 `kind` 分派到兩個元件，不是一個元件內部分支**（#231 第 4 項）：送出的形狀
-            // 完全不同（`{decisions:[…]}` 對 `{answers:[…]}`），而認不得的 `kind` 根本到不了
-            // 這裡——折疊器那一層就把它翻成 `failed` 了，理由見 `reduceInputRequested`。
-            // 卡片先接在對話後面；換掉輸入框的換手層是 ⑧（#408）的事。
-            after={pendings.map((pending) => ({
-              id: pending.interruptId,
-              node:
-                pending.kind === 'question' ? (
-                  <QuestionCard
-                    pending={pending}
-                    busy={!conversation.connected}
-                    onAnswer={(answers) => void conversation.answer(pending.interruptId, answers)}
-                    onCancel={() => void conversation.cancelQuestions(pending.interruptId)}
-                  />
-                ) : (
-                  <ApprovalCard
-                    pending={pending}
-                    busy={!conversation.connected}
-                    onDecide={(decision) =>
-                      void conversation.respond(pending.interruptId, decision)
-                    }
-                  />
-                ),
-            }))}
           />
         )}
 
         <div className="mx-auto w-full max-w-2xl shrink-0 px-6 pt-2 pb-6">
-          <Composer
-            draft={draft}
-            onDraftChange={setDraft}
-            placeholder={inputPlaceholder({
-              status: conversation.state.status,
-              connected: conversation.connected,
-              pendings,
-              stuck,
-            })}
-            canSend={canSend}
-            onSubmit={() => {
-              if (!canSend) {
-                return;
-              }
-              const text = draft;
-              setDraft('');
-              void conversation.send(text);
-            }}
-            commands={conversation.slashCommands}
-            decorated={DECORATED_COMMANDS}
-            // 從 `/` 選單直接執行不帶參數的命令：跟送出同一道閘（跑著時只有 `/feedback` 過得去）。
-            onRunCommand={(line) => {
-              if (!canSendLine(line)) {
-                return false;
-              }
-              void conversation.send(line);
-              return true;
-            }}
-            // **有東西可停時才出現**：一輪在跑，或停在核准點——那時按它就是收回那幾張卡
-            // （[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q7）。伺服器只回受理，停下來的
-            // 事實走下行，所以按下去不自己改狀態。任何分頁都按得動，不查是誰起的這一輪（Q3）。
-            stoppable={
-              conversation.state.status === 'running' ||
-              conversation.state.status === 'awaiting-input'
+          <PendingSwap
+            pendings={pendings}
+            composerRef={composerRef}
+            // **按 `kind` 分派到兩個元件，不是一個元件內部分支**（#231 第 4 項）：送出的形狀
+            // 完全不同（`{decisions:[…]}` 對 `{answers:[…]}`），而認不得的 `kind` 根本到不了
+            // 這裡——折疊器那一層就把它翻成 `failed` 了，理由見 `reduceInputRequested`。
+            renderPanel={(pending) =>
+              pending.kind === 'question' ? (
+                <QuestionCard
+                  pending={pending}
+                  busy={!conversation.connected}
+                  onAnswer={(answers) => void conversation.answer(pending.interruptId, answers)}
+                  onCancel={() => void conversation.cancelQuestions(pending.interruptId)}
+                />
+              ) : (
+                <ApprovalCard
+                  pending={pending}
+                  busy={!conversation.connected}
+                  onDecide={(decision) => void conversation.respond(pending.interruptId, decision)}
+                  onStop={() => {
+                    void conversation.cancel();
+                    toast('已停止這一輪');
+                  }}
+                />
+              )
             }
-            stopDisabled={!conversation.connected}
-            onStop={() => void conversation.cancel()}
+            composer={
+              <Composer
+                textareaRef={composerRef}
+                draft={draft}
+                onDraftChange={setDraft}
+                placeholder={inputPlaceholder({
+                  status: conversation.state.status,
+                  connected: conversation.connected,
+                  pendings,
+                  stuck,
+                })}
+                canSend={canSend}
+                onSubmit={() => {
+                  if (!canSend) {
+                    return;
+                  }
+                  const text = draft;
+                  setDraft('');
+                  void conversation.send(text);
+                }}
+                commands={conversation.slashCommands}
+                decorated={DECORATED_COMMANDS}
+                // 從 `/` 選單直接執行不帶參數的命令：跟送出同一道閘（跑著時只有 `/feedback` 過得去）。
+                onRunCommand={(line) => {
+                  if (!canSendLine(line)) {
+                    return false;
+                  }
+                  void conversation.send(line);
+                  return true;
+                }}
+                // **有東西可停時才出現**：一輪在跑，或停在核准點——那時按它就是收回那幾張卡
+                // （[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q7）。伺服器只回受理，停下來的
+                // 事實走下行，所以按下去不自己改狀態。任何分頁都按得動，不查是誰起的這一輪（Q3）。
+                stoppable={
+                  conversation.state.status === 'running' ||
+                  conversation.state.status === 'awaiting-input'
+                }
+                stopDisabled={!conversation.connected}
+                onStop={() => void conversation.cancel()}
+              />
+            }
           />
         </div>
       </SidebarInset>
