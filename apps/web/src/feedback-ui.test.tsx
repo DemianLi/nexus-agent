@@ -157,7 +157,7 @@ function fakeClient(
 
 /** 那則回覆所在的條目。 */
 function entryOf(text: string): HTMLElement {
-  const node = screen.getByText(text).closest('li');
+  const node = screen.getByText(text).closest<HTMLElement>('[data-slot="message-scroller-item"]');
   if (node === null) throw new Error(`找不到「${text}」那一則`);
   return node;
 }

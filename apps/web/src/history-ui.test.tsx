@@ -1,5 +1,5 @@
 import type { Event, ThreadHistoryQuery, ThreadHistoryResult, WireClient } from '@nexus/wire';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App, LEGACY_THREAD_NOTICE, LOAD_EARLIER_LABEL } from '@/App';
@@ -131,12 +131,15 @@ const LIVE_REPLY: readonly Event[] = [
 function fakeClient(
   history: WireClient['threadHistory'],
   live: readonly Event[] = [],
+  /** 即時的 frame 晚多久才到；0 表示跟歷史在同一串 microtask 裡到（會和連上那一格合成一次 render）。 */
+  liveDelayMs = 0,
 ): { readonly client: WireClient; readonly sent: string[] } {
   const sent: string[] = [];
   const rejected = async () => ({ kind: 'rejected' as const, message: '這一檔沒有接' });
   const client: WireClient = {
     openEvents: async () =>
       (async function* stream() {
+        if (liveDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, liveDelayMs));
         for (const event of live) yield event;
         await new Promise(() => undefined);
       })(),
@@ -160,10 +163,9 @@ function fakeClient(
 
 /** 畫面上對話那一段的字，照順序。 */
 function transcript(): string[] {
-  return screen
-    .getAllByRole('listitem')
-    .map((item) => item.textContent ?? '')
-    .filter((text) => text !== '');
+  const items = [...document.querySelectorAll('[data-slot="message-scroller-item"]')];
+  if (items.length === 0) throw new Error('對話裡一則都沒有');
+  return items.map((item) => item.textContent ?? '').filter((text) => text !== '');
 }
 
 describe('畫面照日誌重播', () => {
@@ -261,5 +263,85 @@ describe('畫面照日誌重播', () => {
     expect(queries[1]).toEqual({ beforeSeq: 10, throughSeq: 20 });
     expect(transcript()[0]).toBe('最早那句');
     expect(screen.queryByRole('button', { name: LOAD_EARLIER_LABEL })).toBeNull();
+  });
+});
+
+/**
+ * 對話流的進場與報讀（#404，規格 §7、§8、§11 第 7 條）：只有看著它長出來的那幾則動、講完唸一次；
+ * 重播的歷史與往回捲載入的更早歷史都不動、不唸。
+ */
+describe('進場動效與報讀', () => {
+  function item(text: string): HTMLElement {
+    // 講完的那則也會出現在 polite 區，所以只在對話列表裡找。
+    const node = within(screen.getByRole('log'))
+      .getByText(text)
+      .closest<HTMLElement>('[data-slot="message-scroller-item"]');
+    if (node === null) throw new Error(`找不到「${text}」那一則`);
+    return node;
+  }
+
+  it('歷史與往回捲載入的不動不唸；即時的那則往上進場，講完把全文唸一次', async () => {
+    const { client } = fakeClient(
+      async (_threadId, query) =>
+        query?.beforeSeq === undefined
+          ? {
+              kind: 'ok',
+              result: page(turn(10, '後來那句', '後來的回覆'), { firstSeq: 10, hasMore: true }),
+            }
+          : { kind: 'ok', result: page(turn(0, '最早那句', '最早的回覆')) },
+      LIVE_REPLY,
+      // 真的網路上即時的回覆在連上之後才到；同一串 microtask 裡到的會跟歷史一起被當成「連上時已經在的」。
+      30,
+    );
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByText('即時的回覆')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: LOAD_EARLIER_LABEL }));
+    await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
+
+    for (const text of ['最早那句', '最早的回覆', '後來那句', '後來的回覆']) {
+      expect(item(text).classList.contains('motion-rise-in')).toBe(false);
+    }
+    expect(item('即時的回覆').classList.contains('motion-rise-in')).toBe(true);
+
+    const polite = document.querySelector('[aria-live="polite"]');
+    expect(polite?.textContent).toBe('即時的回覆');
+  });
+
+  it('從空白送出第一句：那一則也進場（hero 換成對話列表的那一刻不算「連上時已經在的」）', async () => {
+    const { client } = fakeClient(async () => ({ kind: 'ok', result: page([]) }));
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '第一句' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+
+    await waitFor(() => expect(item('第一句').classList.contains('motion-rise-in')).toBe(true));
+  });
+
+  it('第 7 條：對話列表是 role="log"，而且 aria-live 關掉（串流不逐字唸）', async () => {
+    const { client } = fakeClient(async () => ({
+      kind: 'ok',
+      result: page(turn(0, '一句', '回覆')),
+    }));
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByText('回覆')).toBeTruthy());
+
+    const log = screen.getByRole('log');
+    expect(log.getAttribute('aria-live')).toBe('off');
+    expect(screen.getByRole('region', { name: '對話訊息' }).contains(log)).toBe(true);
+  });
+
+  it('報讀字串沒有留下 registry 的英文', async () => {
+    const { client } = fakeClient(async () => ({
+      kind: 'ok',
+      result: page(turn(0, '一句', '回覆')),
+    }));
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByText('回覆')).toBeTruthy());
+
+    const english = [...document.querySelectorAll('[aria-label], .sr-only')]
+      .map((node) => node.getAttribute('aria-label') ?? node.textContent ?? '')
+      .filter((text) => /Messages|Scroll to|Notifications|Toggle Sidebar|Sidebar|Close/.test(text));
+    expect(english).toEqual([]);
   });
 });

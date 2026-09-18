@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { ThemeToggle } from '@/components/theme-toggle';
+import { useThemePreference } from '@/hooks/use-theme-preference';
 import { applyTheme, readThemePreference, THEME_PREFERENCE_KEY } from '@/lib/theme';
 
 /**
@@ -176,5 +177,52 @@ describe('切換鈕', () => {
     render(<ThemeToggle />);
     screen.getByRole('button', { name: '目前：跟隨系統，按一下改成淺色' });
     expect(applied().dark).toBe(false);
+  });
+});
+
+describe('同一分頁的多個使用者', () => {
+  function Probe() {
+    const [preference] = useThemePreference();
+    return <output aria-label="偏好">{preference}</output>;
+  }
+
+  test('切換鈕按下去，別的元件（例如 Toaster）讀到同一份', () => {
+    stubSystem(false);
+    render(
+      <>
+        <ThemeToggle />
+        <Probe />
+      </>,
+    );
+    expect(screen.getByLabelText('偏好').textContent).toBe('system');
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.getByLabelText('偏好').textContent).toBe('light');
+  });
+
+  test('寫不進 localStorage 時，這次的選擇留在這個分頁', () => {
+    stubSystem(false);
+    vi.stubGlobal('localStorage', {
+      getItem: () => null,
+      setItem: () => {
+        throw new DOMException('full', 'QuotaExceededError');
+      },
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    render(
+      <>
+        <ThemeToggle />
+        <Probe />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.getByLabelText('偏好').textContent).toBe('light');
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.getByLabelText('偏好').textContent).toBe('dark');
+    expect(applied().dark).toBe(true);
+    // 別的分頁改了偏好就讓位（清掉只留在這個分頁的那一份）。
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', { key: THEME_PREFERENCE_KEY }));
+    });
+    expect(screen.getByLabelText('偏好').textContent).toBe('system');
   });
 });
