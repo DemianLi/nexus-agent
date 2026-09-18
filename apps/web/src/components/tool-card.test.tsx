@@ -42,11 +42,14 @@ describe('工具卡', () => {
     expect(trigger.textContent).toContain('read_file');
     expect(trigger.textContent).toContain('src/App.tsx');
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
-    expect(screen.queryByText(/"file_path"/)).toBeNull();
+    // 參數高亮後被切成一段一段的 span，改看整塊程式碼的字。
+    expect(document.querySelector('.md-code')).toBeNull();
 
     fireEvent.click(trigger);
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getByText(/"file_path": "src\/App.tsx"/)).toBeTruthy();
+    expect(document.querySelector('.md-code pre')?.textContent).toContain(
+      '"file_path": "src/App.tsx"',
+    );
   });
 
   it('失敗時收著那一行就是錯誤的第一行，展開看全文', () => {
