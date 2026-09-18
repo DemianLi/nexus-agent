@@ -1,0 +1,74 @@
+/*
+ * 非顏色的外觀 token 與全站規則。顏色在 `tokens.generated.css`（產生器輸出，不要手改）。
+ * 現行規則見 `.docs/web-ui-spec.md` §5；從原型 tag `proto-375-design-language` 的 `prototype-375/tokens.css` 搬來（#401）。
+ */
+
+/*
+ * 邊緣畫在陰影裡：同一個元素不同時用 border 與陰影（`src/styles/border-shadow.test.ts` 會擋）。
+ * 亮色＝外側 1px 環＋投影；暗色＝inset 疊層。細線環的 alpha 由產生器解。
+ */
+:root {
+  --card-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.04);
+  --material-shadow:
+    0 0 0 1px var(--card-hairline), 0 1px 2px rgb(0 0 0 / 0.06), 0 4px 12px rgb(0 0 0 / 0.04);
+  --menu-shadow:
+    0 0 0 1px var(--card-hairline), 0 2px 6px rgb(0 0 0 / 0.05), 0 4px 42px rgb(0 0 0 / 0.06);
+  --stage-ring: inset 0 0 0 1px var(--border);
+
+  /* 邊框光的靜態值：brand 在白底上對比低，亮色線粗、光暈濃、呼吸下限高 */
+  --beam-width: 2px;
+  --beam-glow: color-mix(in oklab, var(--brand), transparent 40%);
+  --beam-glow-size: 28px;
+  --beam-pulse-min: 0.55;
+}
+
+.dark {
+  --material-shadow:
+    0 1px 3px rgb(0 0 0 / 0.04), inset 0 1px 0 rgb(255 255 255 / 0.04),
+    inset 0 -1px 0 rgb(0 0 0 / 0.06), inset 0 0 0 1px var(--card-hairline);
+  --menu-shadow:
+    0 0 0 1px var(--card-hairline), 0 2px 6px rgb(0 0 0 / 0.05), 0 4px 42px rgb(0 0 0 / 0.24);
+
+  --beam-width: 1.5px;
+  --beam-glow: color-mix(in oklab, var(--brand), transparent 70%);
+  --beam-glow-size: 24px;
+  --beam-pulse-min: 0.3;
+}
+
+/*
+ * 焦點外框：2px 文字色、offset 2px。
+ * outline 放進 base layer：元件自己寫 `outline-none`（例如外框改畫在外層群組）時要讓它贏。
+ * registry 自帶的 `focus-visible:ring-[3px]` 在 layer 外關掉：沒有 layer 的樣式贏過 utilities，兩圈才不會疊在一起。
+ */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /* 程式把焦點搬到面板或題目容器（tabIndex=-1）時不畫外框：那不是可操作的元件。 */
+  [tabindex='-1']:focus-visible {
+    outline: none;
+  }
+}
+
+:focus-visible {
+  --tw-ring-shadow: 0 0 #0000;
+}
+
+/*
+ * body 的字色、底色與 color-scheme 一定要寫在 layer 外面。寫在 `@layer base` 時，
+ * **沒有 layer 的樣式永遠贏過有 layer 的**：頁面被嵌進任何帶 reset 的外殼，暗色會變成黑底深字。
+ */
+:root {
+  color-scheme: light;
+}
+
+.dark {
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+}

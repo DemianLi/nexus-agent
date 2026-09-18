@@ -51,7 +51,7 @@ export function FeedbackDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="bg-background flex w-full max-w-md flex-col gap-4 rounded-lg border p-4 shadow-lg"
+        className="bg-card flex w-full max-w-md flex-col gap-4 rounded-lg p-4 shadow-menu"
       >
         <h2 id={titleId} className="text-base font-semibold">
           {FEEDBACK_COPY.title}
