@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App, inputPlaceholder, RESUMED_THREAD_NOTICE, SWITCHED_THREAD_NOTICE } from '@/App';
 import { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/components/thread-list';
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
+import { axeViolations } from '@/test/axe';
 
 /**
  * 一份活在記憶體裡的 `Storage`。
@@ -199,6 +200,27 @@ describe('對話介面', () => {
     expect(screen.getByText('子代理 writer')).toBeTruthy();
     expect(screen.getByText('take_note')).toBeTruthy();
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('就緒'));
+  });
+
+  it('主畫面（對話流＋工具＋子代理歸屬）過 axe', async () => {
+    seq = 0;
+    const { client } = fakeClient([
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      ...textFrames('root-1', ['model_request:a'], '兩個都派。'),
+      frame('tools', ['tools:x'], {
+        event: 'tool-started',
+        tool_call_id: 'call_1_0',
+        tool_name: 'task',
+        input: '{"subagent_type":"writer"}',
+      }),
+      ...textFrames('sub-1', ['tools:x', 'model_request:b'], 'writer 寫好了。'),
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+    ]);
+
+    const { container } = render(<App client={client} />);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('就緒'));
+
+    expect(await axeViolations(container)).toEqual([]);
   });
 
   it('送出之前先把使用者那句話放上去——線上不會回聲它', async () => {

@@ -79,7 +79,7 @@ export function QuestionCard({
 
   return (
     <section
-      className="border-border bg-card flex flex-col gap-4 rounded-lg border p-4"
+      className="bg-card shadow-material flex flex-col gap-4 rounded-lg p-4"
       aria-label="問答請求"
       data-testid="question-card"
     >
