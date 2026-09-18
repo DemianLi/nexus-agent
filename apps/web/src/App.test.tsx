@@ -15,6 +15,7 @@ import { App, inputPlaceholder, RESUMED_THREAD_NOTICE, SWITCHED_THREAD_NOTICE } 
 import { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/components/thread-list';
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
 import { axeViolations } from '@/test/axe';
+import { stubCmdkLayout } from '@/test/cmdk';
 
 /**
  * 一份活在記憶體裡的 `Storage`。
@@ -396,15 +397,19 @@ describe('斜線命令', () => {
     input: { hint: '[off]' },
   };
 
-  it('清單畫出來，但打 `/` 不跳選單——這一版只有扁平清單', async () => {
+  beforeEach(stubCmdkLayout);
+
+  it('打 `/` 跳命令選單（#407）；輸入框底下不再有扁平清單', async () => {
     seq = 0;
     const { client } = fakeClient([], { commands: [planCommand] });
     render(<App client={client} />);
 
-    await waitFor(() => expect(screen.getByText('/plan [off]')).toBeTruthy());
-    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '/' } });
-    // 沒有候選清單、沒有補全——那一套（dsh 的 `CommandDirectory`）是另一張卡。
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    expect(screen.queryByText('/plan [off]')).toBeNull();
     expect(screen.queryByRole('listbox')).toBeNull();
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '/' } });
+    const listbox = await screen.findByRole('listbox');
+    expect(within(listbox).getByRole('option').textContent).toContain('/plan [off]');
   });
 
   it('第一個字是 `/` 就走 slash.run，而且不進 transcript', async () => {
