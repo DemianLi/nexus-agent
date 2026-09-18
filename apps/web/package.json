@@ -21,6 +21,7 @@
     "@shadcn/react": "^0.3.1",
     "@shikijs/langs": "^4.4.3",
     "class-variance-authority": "^0.7.1",
+    "cmdk": "^1.1.1",
     "cn": "^0.3.0",
     "katex": "^0.16.47",
     "lucide-react": "^0.552.0",

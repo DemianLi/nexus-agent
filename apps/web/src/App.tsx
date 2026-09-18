@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { AppSidebar } from '@/components/app-sidebar';
 import { ApprovalCard } from '@/components/approval-card';
+import { Composer } from '@/components/composer';
 import { EmptyHero } from '@/components/empty-hero';
 import { FeedbackDialog } from '@/components/feedback-dialog';
 import { FEEDBACK_COMMAND_LINE } from '@/lib/feedback';
@@ -63,6 +64,9 @@ const ORIGIN_NOTICE: Readonly<Record<ThreadChoice['origin'], string | undefined>
   recalled: RESUMED_THREAD_NOTICE,
   listed: SWITCHED_THREAD_NOTICE,
 };
+
+/** 光打名字就另有動作的命令（`/feedback` 開回饋框，見 `use-conversation` 的 `send`）。 */
+const DECORATED_COMMANDS: ReadonlySet<string> = new Set([FEEDBACK_COMMAND_LINE.slice(1)]);
 
 /**
  * 送出框裡那句灰字。
@@ -250,10 +254,11 @@ function ConversationView({
     (conversation.state.status === 'awaiting-input' && !stuck);
   // **只打 `/feedback` 跑著也送得出去**：它不起一輪，只開回饋對話框，而那個框送的 `feedback.record`
   // 任何時候都收（#267 的 Q10）。
-  const canSend =
+  const canSendLine = (line: string) =>
     conversation.connected &&
-    draft.trim() !== '' &&
-    (!busy || draft.trim() === FEEDBACK_COMMAND_LINE);
+    line.trim() !== '' &&
+    (!busy || line.trim() === FEEDBACK_COMMAND_LINE);
+  const canSend = canSendLine(draft);
 
   return (
     <>
@@ -359,11 +364,18 @@ function ConversationView({
           />
         )}
 
-        <div className="mx-auto w-full max-w-2xl shrink-0 space-y-2 px-6 pt-2 pb-6">
-          <form
-            className="flex items-center gap-2"
-            onSubmit={(event) => {
-              event.preventDefault();
+        <div className="mx-auto w-full max-w-2xl shrink-0 px-6 pt-2 pb-6">
+          <Composer
+            draft={draft}
+            onDraftChange={setDraft}
+            placeholder={inputPlaceholder({
+              status: conversation.state.status,
+              connected: conversation.connected,
+              pendings,
+              stuck,
+            })}
+            canSend={canSend}
+            onSubmit={() => {
               if (!canSend) {
                 return;
               }
@@ -371,60 +383,26 @@ function ConversationView({
               setDraft('');
               void conversation.send(text);
             }}
-          >
-            <label className="sr-only" htmlFor="prompt">
-              要說的話
-            </label>
-            <input
-              id="prompt"
-              className="border-input bg-background flex-1 rounded-md border px-3 py-2 text-sm"
-              value={draft}
-              placeholder={inputPlaceholder({
-                status: conversation.state.status,
-                connected: conversation.connected,
-                pendings,
-                stuck,
-              })}
-              onChange={(event) => setDraft(event.target.value)}
-            />
-            <Button type="submit" disabled={!canSend}>
-              送出
-            </Button>
-            {/*
-          **有東西可停時才出現**：一輪在跑，或停在核准點——那時按它就是收回那幾張卡
-          （[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q7）。伺服器只回受理，停下來的
-          事實走下行，所以按下去不自己改狀態。任何分頁都按得動，不查是誰起的這一輪（Q3）。
-        */}
-            {(conversation.state.status === 'running' ||
-              conversation.state.status === 'awaiting-input') && (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={!conversation.connected}
-                onClick={() => void conversation.cancel()}
-              >
-                停止
-              </Button>
-            )}
-          </form>
-
-          {conversation.slashCommands.length > 0 && (
-            // **扁平清單，不是選單。** 打 `/` 不會跳候選、不補全——那一套（dsh 的
-            // `CommandDirectory`）是另一張卡。這裡只讓人知道打得出什麼
-            // （[#123](https://github.com/DemianLi/nexus-agent/issues/123)）。
-            <p className="text-muted-foreground text-xs">
-              命令：
-              {conversation.slashCommands.map((command, index) => (
-                <span key={command.name}>
-                  {index === 0 ? '' : '、'}
-                  <code title={command.description}>
-                    /{command.name}
-                    {command.input === undefined ? '' : ` ${command.input.hint}`}
-                  </code>
-                </span>
-              ))}
-            </p>
-          )}
+            commands={conversation.slashCommands}
+            decorated={DECORATED_COMMANDS}
+            // 從 `/` 選單直接執行不帶參數的命令：跟送出同一道閘（跑著時只有 `/feedback` 過得去）。
+            onRunCommand={(line) => {
+              if (!canSendLine(line)) {
+                return false;
+              }
+              void conversation.send(line);
+              return true;
+            }}
+            // **有東西可停時才出現**：一輪在跑，或停在核准點——那時按它就是收回那幾張卡
+            // （[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q7）。伺服器只回受理，停下來的
+            // 事實走下行，所以按下去不自己改狀態。任何分頁都按得動，不查是誰起的這一輪（Q3）。
+            stoppable={
+              conversation.state.status === 'running' ||
+              conversation.state.status === 'awaiting-input'
+            }
+            stopDisabled={!conversation.connected}
+            onStop={() => void conversation.cancel()}
+          />
         </div>
       </SidebarInset>
 

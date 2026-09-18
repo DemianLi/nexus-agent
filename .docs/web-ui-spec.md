@@ -160,7 +160,7 @@
 
 | 互動 | 開／關 |
 | --- | --- |
-| 下拉、popover、指令選單 | 250／150，scale .97／.99（**原型沒有這三個元件，值沒在瀏覽器驗過**） |
+| 下拉、popover、指令選單 | 250／150，scale .97／.99（popover 與指令選單在 [#407](https://github.com/DemianLi/nexus-agent/issues/407) 的真 Chrome 量過：開 250、scale .97、曲線 smooth-out、fill backwards；關 150、scale .99、fill both；reduced-motion 只剩 150 淡入淡出。**下拉還沒有這個元件，沒驗過**） |
 | tooltip | 150（延遲 50）／150，只淡入＋blur 3px |
 | 對話框 | 250／150，scale .96；遮罩 200 |
 | 手機側欄（<1024） | 350／250 |
@@ -267,7 +267,7 @@
 
 - 停在**提問**時按停止：`turn-cancel.test.ts` 只測了停在核准；模型看到「before dispatch」後會不會重問同一組，要實跑（[#376](https://github.com/DemianLi/nexus-agent/issues/376#issuecomment-5709355235)）。
 - 自建 markdown＋shiki＋katex 的 bundle 大小；`cn` 套件與 clsx＋tailwind-merge 是否完全等價——`button` 的 240 組已驗（197 組觸發合併、差異 0，#401），其他 registry 元件進來時各卡順手比對（[#374](https://github.com/DemianLi/nexus-agent/issues/374#issuecomment-5707786108)）。
-- 下拉、popover、指令選單的動效值（[#378](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887)）。
+- 下拉的動效值（[#378](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887)；popover 與指令選單已在 [#407](https://github.com/DemianLi/nexus-agent/issues/407) 量過，見 §7）。
 - macOS VoiceOver 沒走過，只有 iPhone VoiceOver（[#384](https://github.com/DemianLi/nexus-agent/issues/384#issuecomment-5719457797)）。
 - Artifact 沙盒裡的字型載入（[#377](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498)）。
 
