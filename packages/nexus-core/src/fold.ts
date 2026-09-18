@@ -36,7 +36,12 @@ import { createObservationPolicy } from './observation.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
-import type { PluginRegistry, RootOnlyRefusal, SessionLookup } from './registry.js';
+import type {
+  MiddlewareRegistration,
+  PluginRegistry,
+  RootOnlyRefusal,
+  SessionLookup,
+} from './registry.js';
 import { createModelCallRecorder } from './model-calls.js';
 import { createModelUsageRecorder } from './model-usage.js';
 import { createTurnCancelGuard, createTurnCancelModelSignal } from './turn-cancel.js';
@@ -342,6 +347,9 @@ export function foldRegistry(
   // 檔案工具的失敗標成錯誤（#293）：只在有 backend 時掛——包的是交給基座的那一份，策略手上
   // 那一個是同一個實例，見 {@link ./fs-tool-errors.ts}。無狀態，一份走遍 root 與每個 subagent。
   const fsToolErrors = backend === undefined ? undefined : createFsToolErrorsMiddleware();
+  // **plugin middleware 在這裡就攤平，只攤一次**：要 backend 的那一種（`useWithBackend`，#388）
+  // 建出來的實例得走遍 root 與每個子代理，這裡各算一次的話兩邊拿到的會是兩份。
+  const plugins = pluginMiddleware(registry, backend);
 
   const params: FoldedAgentParams = {
     tools: orderTools(globalTools, toolOrder),
@@ -354,7 +362,7 @@ export function foldRegistry(
       turnCancelModelSignal,
       approvalGate: subagentApprovalGate,
       delegation: subagentDelegation,
-      plugins: subagentPluginMiddleware(registry),
+      plugins: subagentPluginMiddleware(plugins),
       observationPolicy,
       summarizer,
       repeatReminder,
@@ -365,7 +373,7 @@ export function foldRegistry(
       invalidToolArgs,
     }),
     middleware: foldMiddleware(
-      registry,
+      plugins,
       containment,
       turnCancel,
       turnCancelModelSignal,
@@ -659,7 +667,7 @@ function foldApprovalGate(
  * 的政策**，兩件事要一起想。
  */
 function foldMiddleware(
-  registry: PluginRegistry,
+  plugins: PluginMiddleware,
   containment: AgentMiddleware,
   turnCancel: AgentMiddleware,
   turnCancelModelSignal: AgentMiddleware,
@@ -673,7 +681,6 @@ function foldMiddleware(
   fsToolErrors: AgentMiddleware | undefined,
   invalidToolArgs: AgentMiddleware,
 ): AgentMiddleware[] {
-  const plugins = pluginMiddleware(registry);
   return [
     containment,
     // 緊貼圍堵：在它裡面（換過的結果圍堵才記得到碼），在起訖紀錄器外面（中止之後被擋下的那次
@@ -711,17 +718,38 @@ function foldMiddleware(
  * root 與每個子代理拿的是**同一份切法、同一批實例**（[#327](https://github.com/DemianLi/nexus-agent/issues/327)），
  * 所以切法只寫在這裡一次：兩邊各切一次的話，哪天一邊改了分區規則，子代理的順序會悄悄跟 root 不一樣。
  */
-function pluginMiddleware(registry: PluginRegistry): {
-  prepended: AgentMiddleware[];
-  rest: AgentMiddleware[];
-} {
+function pluginMiddleware(
+  registry: PluginRegistry,
+  backend: AnyBackendProtocol | undefined,
+): PluginMiddleware {
+  // **工廠在這裡攤成實例**（`useWithBackend`，#388）。沒有 backend 就整條略過：那一種 middleware
+  // 要的就是檔案系統，沒有它的時候「什麼都不做」是唯一誠實的結果，見
+  // `MiddlewareRegistrationPoint.useWithBackend`。
+  const materialize = (entry: NamedEntry<MiddlewareRegistration>): AgentMiddleware | undefined =>
+    entry.value.build === undefined
+      ? entry.value.middleware
+      : backend === undefined
+        ? undefined
+        : entry.value.build(backend);
+  const isMiddleware = (value: AgentMiddleware | undefined): value is AgentMiddleware =>
+    value !== undefined;
   const entries = registry.middleware.list();
   return {
     prepended: entries
       .filter((entry) => entry.value.prepend)
-      .map((entry) => entry.value.middleware),
-    rest: entries.filter((entry) => !entry.value.prepend).map((entry) => entry.value.middleware),
+      .map(materialize)
+      .filter(isMiddleware),
+    rest: entries
+      .filter((entry) => !entry.value.prepend)
+      .map(materialize)
+      .filter(isMiddleware),
   };
+}
+
+/** {@link pluginMiddleware} 攤平之後的兩區。 */
+interface PluginMiddleware {
+  prepended: AgentMiddleware[];
+  rest: AgentMiddleware[];
 }
 
 /**
@@ -735,11 +763,7 @@ function pluginMiddleware(registry: PluginRegistry): {
  *
  * 只挑這一個名字，不是「撞上基座的一律不給」：其他撞名的今天樹上一顆都沒有，也沒有量過它們的閉包。
  */
-function subagentPluginMiddleware(registry: PluginRegistry): {
-  prepended: AgentMiddleware[];
-  rest: AgentMiddleware[];
-} {
-  const { prepended, rest } = pluginMiddleware(registry);
+function subagentPluginMiddleware({ prepended, rest }: PluginMiddleware): PluginMiddleware {
   const keep = (middleware: AgentMiddleware) =>
     (middleware as { name?: string }).name !== SUMMARIZATION_MIDDLEWARE_NAME;
   return { prepended: prepended.filter(keep), rest: rest.filter(keep) };

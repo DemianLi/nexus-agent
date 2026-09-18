@@ -186,7 +186,7 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是 echo ＋ 計劃模式 ＋ goal ＋ todo ＋ feedback ＋ 十六個配套入口', async () => {
+  it('預設清單是 echo ＋ 工作區指令 ＋ 計劃模式 ＋ goal ＋ todo ＋ feedback ＋ 十七個配套入口', async () => {
     // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
     // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
     // 讓計劃模式進來，理由寫在 `DEFAULT_PLUGINS` 的 JSDoc 上（命令沒進預設清單就等於
@@ -206,15 +206,20 @@ describe('一次性模式', () => {
     // **`feedback` 進來的理由是驗收句本身**：零 plugin 設定的 serve 與 CLI 都要評得到
     // （[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。它不多一顆面向模型的工具，
     // 只多一個命令與一條 wire 用的規則。
+    // **`agent-instructions` 進來的理由是它不進來就等於不存在**：`AGENTS.md` 是使用者放在工作區
+    // 裡、期待 agent 會讀的東西，而讀它的東西不在預設清單上的話，不帶 `--plugins` 的 CLI 與 serve
+    // 一個字都看不到（[#388](https://github.com/DemianLi/nexus-agent/issues/388)）。它不多一顆面向
+    // 模型的工具，多的是每個 agent 開頭的一則訊息，而且**沒有工作區時它什麼都不加**。
     const names = DEFAULT_PLUGINS.map((plugin) => plugin.name);
     expect(names.filter((name) => !name.endsWith('-invariant'))).toEqual([
       'echo',
+      'agent-instructions',
       'plan-mode',
       'goal',
       'todo',
       'feedback',
     ]);
-    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(16);
+    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(17);
   });
 
   it('**違規印到 stderr 而且帶前綴**——不是靠 runner 預設的 `console.error`', async () => {

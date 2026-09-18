@@ -219,12 +219,25 @@ export interface BackendRegistrationPoint {
   mounts(): [string, NamedEntry<AnyBackendProtocol>][];
 }
 
-/** 一次 middleware 註冊。 */
-export interface MiddlewareRegistration {
-  readonly middleware: AgentMiddleware;
-  /** 是否插到其他 plugin 的 middleware 之前。 */
-  readonly prepend: boolean;
-}
+/**
+ * 一次 middleware 註冊：直接給實例，或給一個要 backend 才建得出來的工廠。
+ *
+ * 兩種**在同一條清單上**，所以註冊順序就是它們之間的順序——分兩條清單的話，
+ * 「工廠的排在實例之後」會變成一條沒有人選過的規則。
+ */
+export type MiddlewareRegistration =
+  | {
+      readonly middleware: AgentMiddleware;
+      readonly build?: undefined;
+      /** 是否插到其他 plugin 的 middleware 之前。 */
+      readonly prepend: boolean;
+    }
+  | {
+      readonly middleware?: undefined;
+      readonly build: (backend: AnyBackendProtocol) => AgentMiddleware;
+      /** 是否插到其他 plugin 的 middleware 之前。 */
+      readonly prepend: boolean;
+    };
 
 /** `middleware` 註冊點：清單順序，`prepend` 為唯一例外閥。 */
 export interface MiddlewareRegistrationPoint {
@@ -244,6 +257,29 @@ export interface MiddlewareRegistrationPoint {
    * @returns 只撤銷這一次註冊的冪等 undo。
    */
   use(middleware: AgentMiddleware, options?: { prepend?: boolean }): () => void;
+  /**
+   * 追加一個**要 backend 才建得出來**的 middleware（[#388](https://github.com/DemianLi/nexus-agent/issues/388)）。
+   *
+   * plugin 的 `apply` 看不到那個 backend：`backend.mount()` 掛的是路由分支，兜底的那個是組裝點
+   * 自己的一格，而且要等 {@link foldRegistry} 把兩者折起來才算得出來（`fold.ts` 的 `foldBackend`）。
+   * 所以要讀工作區檔案的 middleware **只能由 fold 建**——摘要器與「先讀後改」策略走的是同一條路，
+   * 差別只在它們是組裝點自有的東西，這一條是 plugin 的。
+   *
+   * **一次組裝只建一次**，建出來的那一份走遍 root 與每個子代理，與 {@link use} 同一條契約
+   * ——逐 agent 的狀態不能放在閉包裡。
+   *
+   * **這次組裝一個 backend 都沒有時，工廠一次都不會被呼叫**，等於沒註冊過。要讀檔的東西沒有檔案
+   * 系統可讀，唯一誠實的結果就是什麼都不做（dsh 的 `agent-instructions` 在 `ctx.get('fs')` 拿不到
+   * 提供方時同樣直接返回）。
+   *
+   * @param build - 拿折出來的 backend，回一份 middleware。
+   * @param options - 同 {@link use}。
+   * @returns 只撤銷這一次註冊的冪等 undo。
+   */
+  useWithBackend(
+    build: (backend: AnyBackendProtocol) => AgentMiddleware,
+    options?: { prepend?: boolean },
+  ): () => void;
   /**
    * 目前註冊的 middleware。
    * @returns 依註冊順序的每一筆，`prepend` 的分區留給 fold 處理。
@@ -870,6 +906,10 @@ export function createRegistry(): InternalPluginRegistry {
     use(middleware, options) {
       const origin = requireOrigin('middleware.use()');
       return middlewares.append({ middleware, prepend: options?.prepend === true }, origin);
+    },
+    useWithBackend(build, options) {
+      const origin = requireOrigin('middleware.useWithBackend()');
+      return middlewares.append({ build, prepend: options?.prepend === true }, origin);
     },
     list: () => [...middlewares.entries()],
   };
