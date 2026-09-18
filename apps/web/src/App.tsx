@@ -2,15 +2,17 @@ import type { ConversationStatus, PendingInput, WireClient } from '@nexus/wire';
 import { isApprovalPending, isQuestionPending } from '@nexus/wire';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { AppSidebar } from '@/components/app-sidebar';
 import { ApprovalCard } from '@/components/approval-card';
+import { EmptyHero } from '@/components/empty-hero';
 import { FeedbackDialog } from '@/components/feedback-dialog';
 import { FEEDBACK_COMMAND_LINE } from '@/lib/feedback';
 import { QuestionCard } from '@/components/question-card';
 import { StatusLine } from '@/components/status-line';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { ThreadList } from '@/components/thread-list';
 import { Transcript } from '@/components/transcript';
 import { Button } from '@/components/ui/button';
+import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { useConversation } from '@/hooks/use-conversation';
 import { createAgentClient } from '@/lib/agent';
 import { newConversationTarget, readThreadListing } from '@/lib/new-conversation';
@@ -162,18 +164,21 @@ export function App({ client }: { client?: WireClient } = {}) {
 
   // **換 thread 就整個重掛。** 只換 `threadId` 的話 hook 會重開下行，但上一條的 transcript、
   // 錯誤與命令清單都還留在它的 state 裡——畫面會把兩條 thread 混成一條。從清單切過去也走這一條（#261 的重掛）。
+  // 側欄的開關放在 thread 外面：換一條不會把收起來的側欄又打開。
   return (
-    <ConversationView
-      key={choice.threadId}
-      client={wire}
-      threadId={choice.threadId}
-      notice={ORIGIN_NOTICE[choice.origin]}
-      onNewConversation={newConversation}
-      onSwitch={(threadId) => {
-        navigation.current += 1;
-        setChoice({ threadId, origin: 'listed' });
-      }}
-    />
+    <SidebarProvider className="h-svh">
+      <ConversationView
+        key={choice.threadId}
+        client={wire}
+        threadId={choice.threadId}
+        notice={ORIGIN_NOTICE[choice.origin]}
+        onNewConversation={newConversation}
+        onSwitch={(threadId) => {
+          navigation.current += 1;
+          setChoice({ threadId, origin: 'listed' });
+        }}
+      />
+    </SidebarProvider>
   );
 }
 
@@ -198,7 +203,6 @@ function ConversationView({
   // 唯一的出口——寧可多開一條，也不能把人留在原地。
   const engaged = !conversation.connected || conversation.state.entries.length > 0;
   const [draft, setDraft] = useState('');
-  const [listOpen, setListOpen] = useState(false);
 
   // **一顆中斷一張卡**（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
   // 同一輪兩個工具都要核准時閘門逐次呼叫各自 `interrupt()`，折疊器逐 `interruptId`
@@ -230,181 +234,177 @@ function ConversationView({
     (!busy || draft.trim() === FEEDBACK_COMMAND_LINE);
 
   return (
-    <main className="mx-auto flex min-h-svh max-w-2xl flex-col gap-6 px-6 py-10">
-      <header className="space-y-1">
-        <div className="flex items-center justify-between gap-2">
-          <h1 className="text-2xl font-semibold tracking-tight">nexus-agent</h1>
-          {/*
-            **永遠按得動**，不看 `busy`／`connected`／狀態。接回一條停在核准點的 thread 時，
-            沒有重播就沒有卡片，送出去只會被「停在核准點」擋回來——這顆按鈕是那一格唯一的出口。
-            server 那端的 run 不會因此停下，跟關掉分頁一樣。還沒講過話時按下去留在原地（#313），那一格不是出口
-            要走的路——判準見 `engaged`，分不出來時一律當成講過。
-          */}
-          <div className="flex items-center gap-2">
-            {/* ③ 換殼時跟著 header 一起搬。 */}
-            <ThemeToggle />
-            {/* 同「新對話」永遠按得動：切走不會停掉這一條在 server 上的 run。 */}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              aria-expanded={listOpen}
-              onClick={() => setListOpen((open) => !open)}
-            >
-              以前的會話
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => onNewConversation(engaged)}
-            >
-              新對話
-            </Button>
-          </div>
-        </div>
-        {listOpen && <ThreadList client={client} currentThreadId={threadId} onPick={onSwitch} />}
-        <StatusLine
-          state={conversation.state}
-          connected={conversation.connected}
-          {...(conversation.connectionError === undefined
-            ? {}
-            : { connectionError: conversation.connectionError })}
-          {...(conversation.commandError === undefined
-            ? {}
-            : { commandError: conversation.commandError })}
-          {...(conversation.slashError === undefined
-            ? {}
-            : { slashError: conversation.slashError })}
-          {...(conversation.slashNotice === undefined
-            ? {}
-            : { slashNotice: conversation.slashNotice })}
-        />
-        {/* 不掛 `role="status"`：那一格歸 `StatusLine`，這一句是背景，不是現況。 */}
-        {notice !== undefined && <p className="text-muted-foreground text-xs">{notice}</p>}
-        {conversation.history?.legacy === true && (
-          <p className="text-muted-foreground text-xs">{LEGACY_THREAD_NOTICE}</p>
-        )}
-        {conversation.historyError !== undefined && (
-          <p className="text-destructive text-xs">
-            之前說過的話拿不回來：{conversation.historyError}
-          </p>
-        )}
-      </header>
+    <>
+      <AppSidebar
+        client={client}
+        currentThreadId={threadId}
+        onNewConversation={() => onNewConversation(engaged)}
+        onPick={onSwitch}
+      />
+      {/* `SidebarInset` 就是 `<main>`。 */}
+      <SidebarInset className="flex h-svh min-w-0 flex-col">
+        <header className="flex h-14 shrink-0 items-center gap-2 border-b px-2">
+          {/* 觸控目標 44px，1024 以上回到 36（§9）。 */}
+          <SidebarTrigger className="size-11 rounded-full lg:size-9" />
+          <h1 className="min-w-0 flex-1 truncate text-sm font-medium">nexus-agent</h1>
+          <ThemeToggle className="size-11 rounded-full lg:size-9" />
+        </header>
 
-      <section className="flex flex-1 flex-col gap-4">
-        {conversation.history?.hasMore === true && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="self-center"
-            disabled={conversation.history.loading}
-            onClick={() => void conversation.loadEarlier()}
-          >
-            {LOAD_EARLIER_LABEL}
-          </Button>
-        )}
-        <Transcript
-          state={conversation.state}
-          feedback={{
-            ratings: conversation.ratings,
-            busy: !conversation.connected,
-            loadFailed: conversation.ratingsLoadFailed,
-            onSeed: conversation.seedRatings,
-            onRate: (messageId, rating) => void conversation.rate(messageId, rating),
-          }}
-        />
-        {/*
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="mx-auto flex min-h-full max-w-2xl flex-col gap-6 px-6 py-6">
+            <div className="space-y-1">
+              <StatusLine
+                state={conversation.state}
+                connected={conversation.connected}
+                {...(conversation.connectionError === undefined
+                  ? {}
+                  : { connectionError: conversation.connectionError })}
+                {...(conversation.commandError === undefined
+                  ? {}
+                  : { commandError: conversation.commandError })}
+                {...(conversation.slashError === undefined
+                  ? {}
+                  : { slashError: conversation.slashError })}
+                {...(conversation.slashNotice === undefined
+                  ? {}
+                  : { slashNotice: conversation.slashNotice })}
+              />
+              {/* 不掛 `role="status"`：那一格歸 `StatusLine`，這一句是背景，不是現況。 */}
+              {notice !== undefined && <p className="text-muted-foreground text-xs">{notice}</p>}
+              {conversation.history?.legacy === true && (
+                <p className="text-muted-foreground text-xs">{LEGACY_THREAD_NOTICE}</p>
+              )}
+              {conversation.historyError !== undefined && (
+                <p className="text-destructive text-xs">
+                  之前說過的話拿不回來：{conversation.historyError}
+                </p>
+              )}
+            </div>
+
+            <section className="flex flex-1 flex-col gap-4">
+              {conversation.history?.hasMore === true && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="self-center"
+                  disabled={conversation.history.loading}
+                  onClick={() => void conversation.loadEarlier()}
+                >
+                  {LOAD_EARLIER_LABEL}
+                </Button>
+              )}
+              {conversation.state.entries.length === 0 && pendings.length === 0 ? (
+                <EmptyHero />
+              ) : (
+                <Transcript
+                  state={conversation.state}
+                  feedback={{
+                    ratings: conversation.ratings,
+                    busy: !conversation.connected,
+                    loadFailed: conversation.ratingsLoadFailed,
+                    onSeed: conversation.seedRatings,
+                    onRate: (messageId, rating) => void conversation.rate(messageId, rating),
+                  }}
+                />
+              )}
+              {/*
           **按 `kind` 分派到兩個元件，不是一個元件內部分支**（#231 第 4 項）：送出的形狀
           完全不同（`{decisions:[…]}` 對 `{answers:[…]}`），而認不得的 `kind` 根本到不了
           這裡——折疊器那一層就把它翻成 `failed` 了，理由見 `reduceInputRequested`。
         */}
-        {pendings.map((pending) =>
-          pending.kind === 'question' ? (
-            <QuestionCard
-              key={pending.interruptId}
-              pending={pending}
-              busy={!conversation.connected}
-              onAnswer={(answers) => void conversation.answer(pending.interruptId, answers)}
-              onCancel={() => void conversation.cancelQuestions(pending.interruptId)}
-            />
-          ) : (
-            <ApprovalCard
-              key={pending.interruptId}
-              pending={pending}
-              busy={!conversation.connected}
-              onDecide={(decision) => void conversation.respond(pending.interruptId, decision)}
-            />
-          ),
-        )}
-      </section>
+              {pendings.map((pending) =>
+                pending.kind === 'question' ? (
+                  <QuestionCard
+                    key={pending.interruptId}
+                    pending={pending}
+                    busy={!conversation.connected}
+                    onAnswer={(answers) => void conversation.answer(pending.interruptId, answers)}
+                    onCancel={() => void conversation.cancelQuestions(pending.interruptId)}
+                  />
+                ) : (
+                  <ApprovalCard
+                    key={pending.interruptId}
+                    pending={pending}
+                    busy={!conversation.connected}
+                    onDecide={(decision) =>
+                      void conversation.respond(pending.interruptId, decision)
+                    }
+                  />
+                ),
+              )}
+            </section>
+          </div>
+        </div>
 
-      <form
-        className="flex items-center gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!canSend) {
-            return;
-          }
-          const text = draft;
-          setDraft('');
-          void conversation.send(text);
-        }}
-      >
-        <label className="sr-only" htmlFor="prompt">
-          要說的話
-        </label>
-        <input
-          id="prompt"
-          className="border-input bg-background flex-1 rounded-md border px-3 py-2 text-sm"
-          value={draft}
-          placeholder={inputPlaceholder({
-            status: conversation.state.status,
-            connected: conversation.connected,
-            pendings,
-            stuck,
-          })}
-          onChange={(event) => setDraft(event.target.value)}
-        />
-        <Button type="submit" disabled={!canSend}>
-          送出
-        </Button>
-        {/*
+        <div className="mx-auto w-full max-w-2xl shrink-0 space-y-2 px-6 pb-6">
+          <form
+            className="flex items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!canSend) {
+                return;
+              }
+              const text = draft;
+              setDraft('');
+              void conversation.send(text);
+            }}
+          >
+            <label className="sr-only" htmlFor="prompt">
+              要說的話
+            </label>
+            <input
+              id="prompt"
+              className="border-input bg-background flex-1 rounded-md border px-3 py-2 text-sm"
+              value={draft}
+              placeholder={inputPlaceholder({
+                status: conversation.state.status,
+                connected: conversation.connected,
+                pendings,
+                stuck,
+              })}
+              onChange={(event) => setDraft(event.target.value)}
+            />
+            <Button type="submit" disabled={!canSend}>
+              送出
+            </Button>
+            {/*
           **有東西可停時才出現**：一輪在跑，或停在核准點——那時按它就是收回那幾張卡
           （[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q7）。伺服器只回受理，停下來的
           事實走下行，所以按下去不自己改狀態。任何分頁都按得動，不查是誰起的這一輪（Q3）。
         */}
-        {(conversation.state.status === 'running' ||
-          conversation.state.status === 'awaiting-input') && (
-          <Button
-            type="button"
-            variant="outline"
-            disabled={!conversation.connected}
-            onClick={() => void conversation.cancel()}
-          >
-            停止
-          </Button>
-        )}
-      </form>
+            {(conversation.state.status === 'running' ||
+              conversation.state.status === 'awaiting-input') && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!conversation.connected}
+                onClick={() => void conversation.cancel()}
+              >
+                停止
+              </Button>
+            )}
+          </form>
 
-      {conversation.slashCommands.length > 0 && (
-        // **扁平清單，不是選單。** 打 `/` 不會跳候選、不補全——那一套（dsh 的
-        // `CommandDirectory`）是另一張卡。這裡只讓人知道打得出什麼
-        // （[#123](https://github.com/DemianLi/nexus-agent/issues/123)）。
-        <p className="text-muted-foreground text-xs">
-          命令：
-          {conversation.slashCommands.map((command, index) => (
-            <span key={command.name}>
-              {index === 0 ? '' : '、'}
-              <code title={command.description}>
-                /{command.name}
-                {command.input === undefined ? '' : ` ${command.input.hint}`}
-              </code>
-            </span>
-          ))}
-        </p>
-      )}
+          {conversation.slashCommands.length > 0 && (
+            // **扁平清單，不是選單。** 打 `/` 不會跳候選、不補全——那一套（dsh 的
+            // `CommandDirectory`）是另一張卡。這裡只讓人知道打得出什麼
+            // （[#123](https://github.com/DemianLi/nexus-agent/issues/123)）。
+            <p className="text-muted-foreground text-xs">
+              命令：
+              {conversation.slashCommands.map((command, index) => (
+                <span key={command.name}>
+                  {index === 0 ? '' : '、'}
+                  <code title={command.description}>
+                    /{command.name}
+                    {command.input === undefined ? '' : ` ${command.input.hint}`}
+                  </code>
+                </span>
+              ))}
+            </p>
+          )}
+        </div>
+      </SidebarInset>
 
       {conversation.feedbackDialog !== undefined && (
         <FeedbackDialog
@@ -418,6 +418,6 @@ function ConversationView({
           onDismiss={conversation.dismissFeedback}
         />
       )}
-    </main>
+    </>
   );
 }

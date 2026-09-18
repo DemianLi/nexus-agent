@@ -1,0 +1,55 @@
+/**
+ * 來源：shadcn registry `tooltip`（style new-york，https://ui.shadcn.com/r/styles/new-york-v4/tooltip.json），
+ * shadcn CLI 4.21.0 `shadcn add sidebar sheet --overwrite`。裝進來就是我們的原始碼，不靠重跑 `shadcn add` 更新。
+ * 改過的地方（照原型 tag `proto-375-design-language`）：只淡入＋blur 3px、開 150（延遲 50）／關 150（§7），拿掉 zoom 與 slide。
+ */
+import * as React from 'react';
+import { cn } from 'cn';
+import { Tooltip as TooltipPrimitive } from 'radix-ui';
+
+function TooltipProvider({
+  delayDuration = 0,
+  ...props
+}: React.ComponentProps<typeof TooltipPrimitive.Provider>) {
+  return (
+    <TooltipPrimitive.Provider
+      data-slot="tooltip-provider"
+      delayDuration={delayDuration}
+      {...props}
+    />
+  );
+}
+
+function Tooltip({ ...props }: React.ComponentProps<typeof TooltipPrimitive.Root>) {
+  return <TooltipPrimitive.Root data-slot="tooltip" {...props} />;
+}
+
+function TooltipTrigger({ ...props }: React.ComponentProps<typeof TooltipPrimitive.Trigger>) {
+  return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />;
+}
+
+function TooltipContent({
+  className,
+  sideOffset = 0,
+  children,
+  ...props
+}: React.ComponentProps<typeof TooltipPrimitive.Content>) {
+  return (
+    <TooltipPrimitive.Portal>
+      <TooltipPrimitive.Content
+        data-slot="tooltip-content"
+        sideOffset={sideOffset}
+        className={cn(
+          'z-50 w-fit origin-(--radix-tooltip-content-transform-origin) animate-in rounded-md bg-foreground px-3 py-1.5 text-xs text-balance text-background animation-duration-150 delay-50 fade-in-0 blur-in-3 data-[state=closed]:animate-out data-[state=closed]:delay-0 data-[state=closed]:fade-out-0',
+          className,
+        )}
+        {...props}
+      >
+        {children}
+        <TooltipPrimitive.Arrow className="z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-[2px] bg-foreground fill-foreground" />
+      </TooltipPrimitive.Content>
+    </TooltipPrimitive.Portal>
+  );
+}
+
+export { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider };

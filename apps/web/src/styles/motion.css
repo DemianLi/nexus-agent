@@ -383,6 +383,14 @@
     scroll-behavior: auto;
   }
 
+  /*
+   * 元件自己寫的 `animation-duration-*`（抽屜 350／250）直接設 `animation-duration`，蓋掉上面那組變數裡的 150：
+   * 動畫換成了淡入淡出，時長卻還是 350。這裡把它壓回 150。
+   */
+  :root:root [class*='animation-duration-'] {
+    animation-duration: 150ms;
+  }
+
   :root:root .motion-rise-in,
   :root:root .motion-swap[data-phase='in'],
   :root:root [data-page-dir] > [data-slot='questionnaire-item'][data-active],
