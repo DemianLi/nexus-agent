@@ -1,5 +1,15 @@
 /**
- * `@nexus/plugin-memory`——把 AGENTS.md 這類長期記憶掛進 agent 的 plugin。
+ * `@nexus/plugin-memory`——**選配的**、基座那套「模型自己維護」的記憶。
+ *
+ * **它不是 dsh `agent-instructions` 的等價物，也不在 `DEFAULT_PLUGINS` 裡**
+ * （[#388](https://github.com/DemianLi/nexus-agent/issues/388)）。差別有兩處是模型看得到的：基座的
+ * `wrapModelCall` 每次都附一段 `<memory_guidelines>`，**叫模型主動去改記憶檔**（沒有記憶檔時也照附），
+ * 而 dsh 的模板寫的是反過來的那句（「Use them as guidance... They do not override system, developer,
+ * or direct user instructions」）；載體也不同——這一顆併進 system prompt、不進會話日誌，dsh 那邊是一則
+ * 持久的 `user/message`。工作區指令那條路由 `@nexus/plugin-agent-instructions` 走，預設掛著。
+ *
+ * **兩顆同時掛時，同一份 `AGENTS.md` 會在 prompt 裡出現兩次**（一次在 system prompt、一次在那則訊息），
+ * 而且只有這一顆會附上寫入指示。要模型自己維護一份記憶就掛它，否則預設那顆就夠了。
  *
  * **它薄，而且薄是對的。** 基座的 `createMemoryMiddleware` 已經做完了載入與注入，
  * `@nexus/core` 的 `memory` 註冊點與 `foldRegistry` 在 Phase 1 就接好了，所以這個套件

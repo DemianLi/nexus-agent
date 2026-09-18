@@ -1423,3 +1423,79 @@ describe('提醒器打底', () => {
     expect(middlewareNames(params)).toContain(REPEAT_REMINDER_MIDDLEWARE_NAME);
   });
 });
+
+/**
+ * `useWithBackend`：要 backend 才建得出來的 plugin middleware（[#388](https://github.com/DemianLi/nexus-agent/issues/388)）。
+ *
+ * plugin 的 `apply` 看不到折出來的 backend，所以這一種的建構點在 fold。三件事在這裡釘住：
+ * 拿到的是**折完的**那一個、root 與子代理拿到**同一份實例**、**沒有 backend 時工廠一次都不呼叫**。
+ */
+describe('useWithBackend', () => {
+  const marker = (backend: unknown): string =>
+    (backend as { nexusFakeBackend?: string }).nexusFakeBackend ?? '（不是假 backend）';
+
+  it('工廠拿到的是折出來的那個 backend，而且整場只建一份，root 與子代理共用', async () => {
+    const seen: unknown[] = [];
+    const built: unknown[] = [];
+    const params = await fold(
+      [
+        fakePlugin('reader', (r) => {
+          r.subagents.register(fakeSubAgent('one'));
+          r.middleware.useWithBackend((backend) => {
+            seen.push(backend);
+            const middleware = { name: 'NeedsBackend' } as never;
+            built.push(middleware);
+            return middleware;
+          });
+        }),
+      ],
+      { defaultBackend: fakeBackend('default') },
+    );
+
+    // **只呼叫一次**：root 與子代理各算一次的話，兩邊會是兩份實例。
+    expect(seen).toHaveLength(1);
+    expect(marker(seen[0])).toBe('default');
+    expect(middlewareNames(params)).toContain('NeedsBackend');
+    const subagentMiddleware = registered(params)[0]?.middleware ?? [];
+    expect(subagentMiddleware).toContain(built[0]);
+    expect(params.middleware).toContain(built[0]);
+  });
+
+  it('掛了路由時拿到的是包好的 CompositeBackend，不是組裝點給的那一個', async () => {
+    const seen: unknown[] = [];
+    await fold(
+      [
+        fakePlugin('store', (r) => {
+          r.backend.mount('/memories/', fakeBackend('store'));
+          r.middleware.useWithBackend((backend) => {
+            seen.push(backend);
+            return { name: 'NeedsBackend' } as never;
+          });
+        }),
+      ],
+      { defaultBackend: fakeBackend('default') },
+    );
+    expect(CompositeBackend.isInstance(seen[0])).toBe(true);
+  });
+
+  it('一個 backend 都沒有：工廠一次都不呼叫，那顆 middleware 也不在清單上', async () => {
+    let calls = 0;
+    const params = await fold([
+      fakePlugin('reader', (r) => {
+        r.middleware.useWithBackend(() => {
+          calls += 1;
+          return { name: 'NeedsBackend' } as never;
+        });
+      }),
+    ]);
+    expect(calls).toBe(0);
+    expect(middlewareNames(params)).not.toContain('NeedsBackend');
+  });
+
+  it('直接給實例的那一種不受影響：沒有 backend 照樣掛得上', async () => {
+    const params = await fold([
+      fakePlugin('plain', (r) => void r.middleware.use({ name: 'Plain' } as never)),
+    ]);
+    expect(middlewareNames(params)).toContain('Plain');
+  });
+});

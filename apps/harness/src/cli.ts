@@ -38,6 +38,7 @@ import type {
 } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { createAskUserPlugin } from '@nexus/plugin-ask-user';
+import { createAgentInstructionsPlugin } from '@nexus/plugin-agent-instructions';
 import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import {
@@ -53,6 +54,7 @@ import { assertSameCwd } from './resume-guards.js';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant';
 import { createAskUserInvariantPlugin } from '@nexus/plugin-ask-user/invariant';
+import { createAgentInstructionsInvariantPlugin } from '@nexus/plugin-agent-instructions/invariant';
 import { createFeedbackPlugin } from '@nexus/plugin-feedback';
 import { createFeedbackInvariantPlugin } from '@nexus/plugin-feedback/invariant';
 import { createSubmitRecordInvariantPlugin } from '@nexus/plugin-submit-record/invariant';
@@ -535,12 +537,16 @@ export const FEEDBACK_MAX_NOTE_BYTES = 8192;
 
 export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
   createEchoPlugin(),
+  // 工作區指令（#388）：不帶 `--plugins` 的 CLI 與 serve 也看得到 `AGENTS.md`。有 backend 才會真的
+  // 建 middleware，所以沒給 `--workspace` 時它什麼都不加——與 dsh「沒有檔案系統提供方就載不到」同形。
+  createAgentInstructionsPlugin(),
   createPlanModePlugin(),
   GOAL_PLUGIN,
   createTodoPlugin({ allowParallelInProgress: true }),
   // 評分與 `/feedback`：預設就裝，零 plugin 設定的 serve 與 CLI 都評得到（#278）。
   createFeedbackPlugin({ maxNoteBytes: FEEDBACK_MAX_NOTE_BYTES }),
   createCoreInvariantPlugin(),
+  createAgentInstructionsInvariantPlugin(),
   createCommandsInvariantPlugin(),
   createAskUserInvariantPlugin(),
   createEchoInvariantPlugin(),

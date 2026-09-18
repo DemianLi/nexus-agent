@@ -37,6 +37,7 @@
     "@langchain/langgraph-sdk": "^1.9.23",
     "@langchain/openai": "^1.5.10",
     "@nexus/core": "workspace:*",
+    "@nexus/plugin-agent-instructions": "workspace:*",
     "@nexus/plugin-ask-user": "workspace:*",
     "@nexus/plugin-feedback": "workspace:*",
     "@nexus/plugin-commands": "workspace:*",

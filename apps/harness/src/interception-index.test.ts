@@ -31,8 +31,8 @@
  * [#215](https://github.com/DemianLi/nexus-agent/issues/215) 第 2 題量到的一件事：第 2 格的
  * **事件名對得上而節奏對不上**。它跟上面兩欄有一處**刻意的不對稱**——那兩欄的 `undefined`
  * ＝ 量過、對得上，頻率這一欄則是**必填**，沒量的寫 {@link UNMEASURED}。
- * **量過的只有第 2 格，而那一格 2026-09-12 起沒有佔用者了**（見下面「沒有進索引的格」），
- * 所以今天索引裡的四列全是沒量，不是對得上。
+ * **量過的只有第 2 格**：它 2026-09-12 起空了一段，2026-09-18 由 #388 的工作區指令基線重新佔住，
+ * 頻率也在新佔用者身上重量過（見下面第 2 列）。其餘四列全是沒量，不是對得上。
  *
  * ## 缺口帳：四筆，其中兩筆是同一個缺件
  *
@@ -62,28 +62,28 @@
  * `jumpTo: 'end'` 跳掉的輪次仍然只有圖外的入口點看得到結尾。第 4 筆與第 2 筆**只是同一個
  * 結構成因**（紀錄由入口點在圖外附加），**不是同一個缺件**——理由寫在第 4 列那一欄裡。
  *
- * ## 沒有進索引的五格
+ * ## 沒有進索引的四格
  *
- * 第 1（`agent/session-start`）、2（`agent/pre-step`）、5（`ctx.tools.guard()`）、
- * 8（`ToolDefinition.finalizeContent`）、9（`tools/result`）格今天沒有佔用者，所以索引裡沒有
- * 它們的列——**這一份索引的軸是「誰佔住」，空格沒有東西可指**。第 5 與第 8 格是 #190 的
- * 候選 4，第 9 格見上面的缺口帳。
+ * 第 1（`agent/session-start`）、5（`ctx.tools.guard()`）、8（`ToolDefinition.finalizeContent`）、
+ * 9（`tools/result`）格今天沒有佔用者，所以索引裡沒有它們的列——**這一份索引的軸是「誰佔住」，
+ * 空格沒有東西可指**。第 5 與第 8 格是 #190 的候選 4，第 9 格見上面的缺口帳。
  *
- * **第 2 格是從索引裡搬出來的，不是一直不在。** 它原本的佔用者是 plan-mode 的
+ * **第 2 格空過一段，2026-09-18 又有佔用者了。** 它原本的佔用者是 plan-mode 的
  * `beforeAgent`——「`/plan` 選好的模式在下一次 agent 呼叫開頭交成 state update」，自己登記為
  * dsh `agent/pre-step` **邊界提交**的對應物。[#251](https://github.com/DemianLi/nexus-agent/issues/251)
  * 的第二刀把計劃模式搬進會話日誌、`/plan` 當場寫進去，那一格 pending intent 跟著收掉，
- * `beforeAgent` 就沒了；全樹從此沒有 `beforeAgent:` 的實作（下面最後一條斷言釘著）。
- * 那一列記過的三件事，去處各不同：
+ * `beforeAgent` 就沒了；[#388](https://github.com/DemianLi/nexus-agent/issues/388) 的工作區指令
+ * 基線又長出一個，**所以第 2 列是重建的，不是搬回來的**——三件事逐件重判：
  *
  * - **攔截那半**（`jumpTo: 'end'`）：基座做得到（#192 實測，裸基座與我們的組裝一致，模型呼叫
  *   次數 0、無模型可見訊息），鉤子要寫成 `{ hook, canJumpTo: ['end'] }` 才裝得上 router，
- *   而產品程式碼零使用——**它從來就沒有佔用者**，只是以前寄住在那一列。
+ *   而產品程式碼零使用——**它從來就沒有佔用者**，新的這一個也不用它（基線只注入，不攔截）。
+ *   所以它照舊不算在這一列的佔用上，只寫進權限差。
  * - **紀錄差**（終止原因記不下來）：不看佔用者，照舊是上面缺口帳的第 2 筆。
- * - **頻率差**（dsh 每步跑、我們每次 agent 呼叫一次，#215 第 2 題量到、#218 補進來）：
- *   它量的是**那個佔用者的節奏**，佔用者不在了，這一筆沒有指涉對象。`beforeModel` 仍然是
- *   圖裡每步一格的節點（`repeat-reminder.ts` 掛在上面），但它不是 pre-step 注入。**哪天有人
- *   在第 2 格長出佔用者，這一筆要重量**，不是照抄回來。
+ * - **頻率差**：**2026-09-18 重量過，不是照抄** —— 見下面第 2 列。舊那一筆量的是 plan-mode 那個
+ *   `beforeAgent` 的節奏；新的佔用者節奏相同（每次 agent 呼叫一次），但這次是**在新佔用者身上量的**
+ *   （`agent-instructions.test.ts` 的兩輪那條、`probe` 的三組 super-step 對照）。`beforeModel` 仍然是
+ *   圖裡每步一格的節點（`repeat-reminder.ts` 掛在上面），但它不是 pre-step 注入。
  *
  * **九格之外的縫也沒有列。** dsh 的 `approval/request`（應答者 waterfall）不是那九個時刻名
  * 之一，落不進這個軸；它記在第 4 列的權限差裡，因為第 4 格是我們這側唯一的提問者。規矩往
@@ -108,7 +108,7 @@ const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 /**
  * 「這一格的頻率**沒有量過**」——見 {@link InterceptionRow.frequencyDelta}。
  *
- * **不是「量過、對得上」**：那是隔壁兩欄 `undefined` 的意思，而頻率這一軸今天一格都沒量過。
+ * **不是「量過、對得上」**：那是隔壁兩欄 `undefined` 的意思，而頻率這一軸今天量過的只有第 2 格。
  */
 const UNMEASURED = '（未量）';
 
@@ -133,7 +133,7 @@ interface InterceptionRow {
    * 頻率那一軸比 dsh 少了什麼。**{@link UNMEASURED} ＝ 沒量過**，不是「對得上」。
    *
    * **這一欄刻意必填**，不跟上面兩欄一樣用缺席表達。那兩欄的 `undefined` ＝ 量過、沒有缺口；
-   * 頻率這一軸量過的只有第 2 格，而它已經不在索引裡。做成選填的話，新增一列時省略它是無聲的，而讀者會照隔壁
+   * 頻率這一軸量過的只有第 2 格。做成選填的話，新增一列時省略它是無聲的，而讀者會照隔壁
    * 兩欄的規矩把缺席讀成「對得上」——**誤讀的方向剛好是錯的那一邊**。
    *
    * **型別沒有在擋內容**：`string` 收任何字串，哨兵是約定不是護欄。承重的是必填。
@@ -142,10 +142,27 @@ interface InterceptionRow {
 }
 
 /**
- * 四條。**#190 九格核完時 (a) 是五格**，第 2 格 2026-09-12 起沒有佔用者（見檔頭）；沒有
- * 佔用者的五格不在這裡。
+ * 五條。**#190 九格核完時 (a) 是五格**，第 2 格 2026-09-12 起空了一段、2026-09-18 由 #388
+ * 重新佔住（見檔頭）；沒有佔用者的四格不在這裡。
  */
 const INDEX: readonly InterceptionRow[] = [
+  {
+    cell: 2,
+    moment: 'agent/pre-step',
+    permission: '讀／改這一步要送出的訊息批次，可 `jumpTo: "end"` 收掉這一輪',
+    occupants: ['packages/nexus-plugin-agent-instructions/src/index.ts'],
+    permissionDelta:
+      '**只佔了注入那半**：dsh 拿得到整個 `decision.messages` 自己 splice（插在已領取的訊息之後），' +
+      '我們的 `beforeAgent` 只能**追加**——刪不掉、也指定不了位置，位置由基座決定' +
+      '（2026-09-18 實測落在使用者那一句之後，與 dsh 同位，但那是基座的行為不是我們的選擇）。' +
+      '攔截那半（`jumpTo: "end"`）照舊零使用，見檔頭。',
+    recordDelta: undefined,
+    frequencyDelta:
+      'dsh 每一步都發，我們一次 agent 呼叫只發一次——**2026-09-18 在新佔用者身上重量**：' +
+      '同一條 thread 送第二句話會再進一次（`agent-instructions.test.ts` 靠去重擋住第二份），' +
+      '同一次 invoke 的第二輪不會。基線只要一次所以夠用；要「每一步」的東西（#389 的刷新）' +
+      '這一格撐不住，得換每輪多一個 super-step 的 `beforeModel`。',
+  },
   {
     cell: 3,
     moment: 'agent/turn-stopping',
@@ -227,18 +244,19 @@ const INDEX: readonly InterceptionRow[] = [
 ];
 
 /** 索引的列數。**釘死是刻意的**：只 grep 不數，刪掉一列這份測試照樣綠。 */
-const EXPECTED_ROWS = 4;
+const EXPECTED_ROWS = 5;
 
 /** 佔用位址的總數（列可能共用檔案，第 6 與第 7 格就共用 `output-schema.ts`）。 */
-const EXPECTED_SITES = 10;
+const EXPECTED_SITES = 11;
 
 /**
- * 第 2 格**沒有佔用者**的承重事實：全樹的產品程式碼裡沒有一個 `beforeAgent:` 實作。
+ * 第 2 列的承重事實：全樹的產品程式碼裡，`beforeAgent:` 的實作**恰好就是這一列列出的那些**。
  *
- * **這條是翻面寫的。** 它原本釘的是「第 2 列的佔用者是 `beforeAgent` 形狀」（頻率差靠它
+ * **這條翻過兩次面。** 它原本釘的是「第 2 列的佔用者是 `beforeAgent` 形狀」（頻率差靠它
  * 撐著）；[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的第二刀拿掉了那個佔用者，
- * 它就翻成「一個都沒有」。哪天有人長出一個，這裡紅——**那正是把第 2 列加回來、而且重量
- * 頻率差的時候**（見檔頭「沒有進索引的五格」）。
+ * 它翻成「一個都沒有」；[#388](https://github.com/DemianLi/nexus-agent/issues/388) 又長出一個，
+ * 它翻回「恰好是這幾個」。**兩個方向都會紅**：多一個沒進索引的佔用者會紅（該重量頻率差、
+ * 重判權限差，上一個佔用者的那一筆不能照抄），少一個也會紅（第 2 列該搬出索引）。
  *
  * `beforeModel`、`wrapModelCall` 不算：它們是別的節點，第 2 格當年就判過它們不是 pre-step
  * 注入。掃的範圍同門 B 那條（`session-resume-doors.test.ts`）：只掃產品原始碼，測試與 fixture 排除。
@@ -301,19 +319,21 @@ describe('攔截時刻索引', () => {
     },
   );
 
-  it('第 2 格今天沒有佔用者：產品程式碼裡一個 `beforeAgent:` 都沒有', () => {
-    expect(INDEX.map((row) => row.cell)).not.toContain(2);
+  it('第 2 格的 `beforeAgent:` 實作恰好是索引裡列的那幾個', () => {
+    const listed = INDEX.find((row) => row.cell === 2)?.occupants ?? [];
     const found: string[] = [];
     for (const root of PRE_STEP_ROOTS) {
       for (const file of productSources(join(REPO_ROOT, root))) {
-        if (/\bbeforeAgent\s*:/u.test(readFileSync(file, 'utf8'))) found.push(file);
+        if (/\bbeforeAgent\s*:/u.test(readFileSync(file, 'utf8'))) {
+          found.push(file.slice(REPO_ROOT.length));
+        }
       }
     }
     expect(
-      found,
-      '第 2 格（agent/pre-step）長出了佔用者。把它加回索引，而且重量頻率差——' +
-        '以前那一筆量的是 plan-mode 那個 `beforeAgent` 的節奏，不是這一個的。',
-    ).toEqual([]);
+      [...found].sort(),
+      '第 2 格（agent/pre-step）的佔用者變了。多的那個要進索引，而且**重量頻率差、重判權限差**' +
+        '——每一個佔用者的節奏與拿得到的權限都要自己量；少了就把第 2 列搬出索引。',
+    ).toEqual([...listed].sort());
   });
 
   it(`第 ${RECORD_ANCHOR.cell} 格的紀錄差靠「一顆核准事件都沒有」撐著`, () => {

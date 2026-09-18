@@ -154,7 +154,9 @@ describe('createPlanModePlugin', () => {
     expect(registry.capabilities.has(PLAN_MODE_CAPABILITY)).toBe(true);
     expect(registry.sessions.installers()).toHaveLength(1);
     expect([...registry.tools.effective().keys()]).toContain(EXIT_PLAN_MODE_TOOL_NAME);
-    expect(registry.middleware.list().map((entry) => entry.value.middleware.name)).toEqual([
+    // `middleware` 可能是 `undefined`——那是 `useWithBackend()` 註冊的那一種（#388）。
+    // **這裡不補 `?.`就好**：計劃模式走的是直接給實例那條，拿不到名字就是註冊方式變了。
+    expect(registry.middleware.list().map((entry) => entry.value.middleware?.name)).toEqual([
       PLAN_MODE_MIDDLEWARE_NAME,
     ]);
     expect(registry.approvals.listeners()).toHaveLength(1);
