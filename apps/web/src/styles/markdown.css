@@ -1,7 +1,7 @@
 /*
  * 助理回覆的 markdown 排版（`components/markdown-text.tsx`，#405）。規則見 `.docs/web-ui-spec.md` §5：
  * 連結用 `--brand`；程式碼區塊是內層 stage、圓角 2xl（16px）；字重只用 400／500。
- * 放在 components layer：元件自己寫的 utility 蓋得過它。
+ * 放在 components layer：元件自己寫的 utility 蓋得過它。`.md-code` 不限在 `.markdown` 裡：工具卡的參數也用它。
  */
 @layer components {
   .markdown {
@@ -78,19 +78,19 @@
     padding: 0.1em 0.35em;
   }
 
-  .markdown .md-code {
+  .md-code {
     background: var(--stage);
     box-shadow: var(--stage-ring);
     border-radius: var(--radius-2xl);
     overflow: hidden;
   }
-  .markdown .md-code-lang {
+  .md-code-lang {
     font-family: var(--font-mono);
     font-size: var(--text-micro);
     color: var(--muted-foreground);
     padding: 0.6rem 1rem 0;
   }
-  .markdown .md-code pre {
+  .md-code pre {
     font-family: var(--font-mono);
     font-size: 13px;
     line-height: 1.6;

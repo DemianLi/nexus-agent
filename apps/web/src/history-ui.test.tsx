@@ -294,7 +294,8 @@ describe('進場動效與報讀', () => {
       30,
     );
     render(<App client={client} />);
-    await waitFor(() => expect(screen.getByText('即時的回覆')).toBeTruthy());
+    // 講完之後 polite 區也有同一句，所以用 getAll（只用 getBy 時，看講完的時間點落在哪，會時紅時綠）。
+    await waitFor(() => expect(screen.getAllByText('即時的回覆').length).toBeGreaterThan(0));
 
     fireEvent.click(screen.getByRole('button', { name: LOAD_EARLIER_LABEL }));
     await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());

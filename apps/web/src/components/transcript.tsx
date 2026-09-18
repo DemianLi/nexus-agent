@@ -20,16 +20,15 @@ import type { ReactNode } from 'react';
 
 import type {
   AnswerEntry,
-  Attribution,
   ConversationEntry,
   ConversationState,
-  ToolEntry,
   WireFeedbackItem,
   WireFeedbackRating,
 } from '@nexus/wire';
 
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { MarkdownText } from '@/components/markdown-text';
+import { AttributionBadge, ToolCard } from '@/components/tool-card';
 import { Button } from '@/components/ui/button';
 import { Message, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message';
 import {
@@ -113,32 +112,6 @@ function RatingButtons({
   );
 }
 
-function AttributionBadge({ attribution }: { attribution: Attribution }) {
-  if (attribution.kind === 'root') {
-    return null;
-  }
-  const label = attribution.kind === 'subagent' ? `子代理 ${attribution.name}` : '未歸屬的子代理';
-  return (
-    <span className="bg-secondary text-secondary-foreground rounded px-1.5 py-0.5 text-xs">
-      {label}
-    </span>
-  );
-}
-
-const TOOL_STATUS_LABEL = {
-  running: '執行中',
-  // **不是「執行中」也不是「失敗」**：這顆呼叫的本體停下來等一個人回答（問答；子代理照 dsh 不停下來等人，
-  // [#324](https://github.com/DemianLi/nexus-agent/issues/324)）。講「執行中」會讓人以為只要等就好，講「失敗」是說謊（[#239](https://github.com/DemianLi/nexus-agent/issues/239)）。
-  // **停在核准閘門上的不是這一格**：照 dsh 寫「執行中」，等待由核准卡表示（[#317](https://github.com/DemianLi/nexus-agent/issues/317)）。
-  suspended: '等你回答',
-  done: '完成',
-  failed: '失敗',
-} as const satisfies Record<ToolEntry['status'], string>;
-
-function ToolBadge({ status }: { status: ToolEntry['status'] }) {
-  return <span className="text-muted-foreground text-xs">{TOOL_STATUS_LABEL[status]}</span>;
-}
-
 /**
  * 一則問答紀錄在畫面上的那一行。
  *
@@ -170,7 +143,30 @@ function answerSummary(entry: AnswerEntry): string {
   return `已回答：${body}`;
 }
 
-function Entry({ entry, feedback }: { entry: ConversationEntry; feedback?: TranscriptFeedback }) {
+/** 決定與問答紀錄（列 22）：置中的一顆 chip，不是對話的一則。 */
+function Marker({ children, testId }: { children: string; testId: string }) {
+  return (
+    <div className="flex justify-center">
+      <p
+        className="text-muted-foreground bg-chip rounded-full px-3 py-1 text-xs"
+        data-testid={testId}
+      >
+        {children}
+      </p>
+    </div>
+  );
+}
+
+function Entry({
+  entry,
+  feedback,
+  beam,
+}: {
+  entry: ConversationEntry;
+  feedback?: TranscriptFeedback;
+  /** 這顆工具卡帶執行中的邊框光（同時最多一個）。 */
+  beam: boolean;
+}) {
   if (entry.kind === 'human') {
     return (
       <Message align="end">
@@ -188,35 +184,18 @@ function Entry({ entry, feedback }: { entry: ConversationEntry; feedback?: Trans
   if (entry.kind === 'decision') {
     const approved = entry.decision === 'approve';
     return (
-      <p className="text-muted-foreground text-xs" data-testid="decision-entry">
-        {approved ? '已核准' : entry.decision === 'reject' ? '已拒絕' : entry.decision}：
-        {entry.actions.join('、')}
-        {!approved && '（沒有執行）'}
-      </p>
+      <Marker testId="decision-entry">
+        {`${approved ? '已核准' : entry.decision === 'reject' ? '已拒絕' : entry.decision}：${entry.actions.join('、')}${approved ? '' : '（沒有執行）'}`}
+      </Marker>
     );
   }
 
   if (entry.kind === 'answer') {
-    return (
-      <p className="text-muted-foreground text-xs" data-testid="answer-entry">
-        {answerSummary(entry)}
-      </p>
-    );
+    return <Marker testId="answer-entry">{answerSummary(entry)}</Marker>;
   }
 
   if (entry.kind === 'tool') {
-    // 工具卡的新樣子是 ⑥（#406）的事，這裡只換到新的容器裡。
-    return (
-      <div className="flex flex-col gap-1" data-testid="tool-entry">
-        <div className="flex items-center gap-2">
-          <AttributionBadge attribution={entry.attribution} />
-          <code className="text-sm font-medium">{entry.name}</code>
-          <ToolBadge status={entry.status} />
-        </div>
-        <pre className="text-muted-foreground overflow-x-auto text-xs">{entry.input}</pre>
-        {entry.error !== undefined && <p className="text-destructive text-xs">{entry.error}</p>}
-      </div>
-    );
+    return <ToolCard entry={entry} beam={beam} />;
   }
 
   const indented = entry.attribution.kind !== 'root';
@@ -317,10 +296,20 @@ export function Transcript({
   /** 接在最後一則後面的（等人處理的卡片），各自帶一個 id。 */
   after?: ReadonlyArray<{ readonly id: string; readonly node: ReactNode }>;
 }) {
+  // 執行中的邊框光同時最多一個（§7 效能）：給最後一顆還在跑的工具。
+  const beamId = state.entries.findLast(
+    (entry) => entry.kind === 'tool' && entry.status === 'running',
+  )?.id;
   const items = [
     ...state.entries.map((entry) => ({
       id: entry.id,
-      node: <Entry entry={entry} {...(feedback === undefined ? {} : { feedback })} />,
+      node: (
+        <Entry
+          entry={entry}
+          beam={entry.id === beamId}
+          {...(feedback === undefined ? {} : { feedback })}
+        />
+      ),
     })),
     ...after,
   ];
