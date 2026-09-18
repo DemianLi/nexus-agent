@@ -308,10 +308,11 @@ function ConversationView({
         <Transcript
           state={conversation.state}
           feedback={{
-            tails: conversation.replyTails,
             ratings: conversation.ratings,
             busy: !conversation.connected,
-            onRate: (replyId, rating) => void conversation.rate(replyId, rating),
+            loadFailed: conversation.ratingsLoadFailed,
+            onSeed: conversation.seedRatings,
+            onRate: (messageId, rating) => void conversation.rate(messageId, rating),
           }}
         />
         {/*

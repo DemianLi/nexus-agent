@@ -19,6 +19,7 @@ import type {
   FeedbackCommand,
   FeedbackDeleteCommand,
   FeedbackDeleteResult,
+  FeedbackListResult,
   FeedbackPutCommand,
   FeedbackPutResult,
   FeedbackRecordCommand,
@@ -141,16 +142,18 @@ export interface WireClient {
    * `aborted: true`）。沒有 run 在跑、也沒有等核准時，server 照樣受理、什麼都不做。
    */
   runCancel(threadId: string): Promise<UplinkResult>;
-  /** 評一輪（`feedback.put`，[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。 */
+  /** 評一則回覆（`feedback.put`，[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。 */
   feedbackPut(
     threadId: string,
     params: FeedbackPutCommand['params'],
   ): Promise<FeedbackOutcome<FeedbackPutResult>>;
-  /** 收回一輪的評分（`feedback.delete`）。 */
+  /** 收回一則回覆的評分（`feedback.delete`）。 */
   feedbackDelete(
     threadId: string,
     params: FeedbackDeleteCommand['params'],
   ): Promise<FeedbackOutcome<FeedbackDeleteResult>>;
+  /** 讀回這條 thread 目前的評分（`feedback.list`，[#382](https://github.com/DemianLi/nexus-agent/issues/382)）。 */
+  feedbackList(threadId: string): Promise<FeedbackOutcome<FeedbackListResult>>;
   /** 記一則對整個會話的評語（`feedback.record`）——回饋對話框只打 `/feedback` 時送這個。 */
   feedbackRecord(
     threadId: string,
@@ -390,6 +393,14 @@ export function createWireClient(options: WireClientOptions): WireClient {
         id: nextCommandId++,
         method: 'feedback.delete',
         params,
+      });
+    },
+
+    async feedbackList(threadId) {
+      return sendFeedback<FeedbackListResult>(threadId, {
+        id: nextCommandId++,
+        method: 'feedback.list',
+        params: {},
       });
     },
 

@@ -136,22 +136,27 @@ export function isRunCancelMethod(value: unknown): value is typeof RUN_CANCEL_ME
 }
 
 /**
- * 評分與評語（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。
+ * 評分與評語（[#278](https://github.com/DemianLi/nexus-agent/issues/278)、
+ * [#382](https://github.com/DemianLi/nexus-agent/issues/382)）。
  *
- * **三個都是我們加在自己 wire 上的命令**，理由同 {@link RUN_CANCEL_METHOD}：協定的 `Command` 沒有
- * 這一類。形狀照 dsh 的兩個 Remote——`messageFeedback.put`／`delete` 與 `sessionFeedback.record`
- * （`packages/feedback/*`，`c291e79`）——回應都是 `{ ok: true, value }`／`{ ok: false, error: { code } }`，
+ * **四個都是我們加在自己 wire 上的命令**，理由同 {@link RUN_CANCEL_METHOD}：協定的 `Command` 沒有
+ * 這一類。形狀照 dsh 的兩個 Remote——`messageFeedback.put`／`delete`／`list` 與 `sessionFeedback.record`
+ * （`packages/feedback/*`，`ddefc45`）——回應都是 `{ ok: true, value }`／`{ ok: false, error: { code } }`，
  * 業務失敗走成功回應，`ErrorResponse` 只給「這條線收不了」。
  *
- * **偏離：指名的是那則回覆的 run id**（畫面上的 `AiEntry.id`），不是 dsh 的 `messageId`；server
- * 查表換成那一輪。**還沒有 `list`**：重新整理之後評過的分畫不回來，重播出來的舊回覆也評不了，見
- * [#382](https://github.com/DemianLi/nexus-agent/issues/382)。
+ * **指名的是那則回覆的訊息 id**（`AiEntry.messageId`），同 dsh 的 `messageId`。沒有 `sessionId`：一條
+ * thread 就是一個會話。
  *
  * **任何時候都收**：跑著、停在核准點、任何分頁——不經過斜線命令那道「還在跑就擋」
  * （#267 的 Q10）。所以 web 的回饋對話框送的是 `feedback.record`，不是 `slash.run` 的
  * `/feedback <文字>`。
  */
-export const FEEDBACK_METHODS = ['feedback.put', 'feedback.delete', 'feedback.record'] as const;
+export const FEEDBACK_METHODS = [
+  'feedback.put',
+  'feedback.delete',
+  'feedback.list',
+  'feedback.record',
+] as const;
 
 export type FeedbackMethod = (typeof FEEDBACK_METHODS)[number];
 
@@ -174,9 +179,9 @@ export type WireFeedbackCategory =
 
 export type WireFeedbackRating = 'positive' | 'negative';
 
-/** 一輪目前的評分。結構上是 `@nexus/core` 的 `MessageFeedbackItem`。 */
+/** 一則回覆目前的評分。結構上是 `@nexus/core` 的 `MessageFeedbackItem`。 */
 export interface WireFeedbackItem {
-  readonly turn: number;
+  readonly messageId: string;
   readonly rating: WireFeedbackRating;
   readonly note?: string;
   readonly category?: WireFeedbackCategory;
@@ -189,8 +194,8 @@ export interface FeedbackPutCommand {
   readonly id: number;
   readonly method: 'feedback.put';
   readonly params: {
-    /** 畫面上那則回覆的 id（`AiEntry.id`）。 */
-    readonly runId: string;
+    /** 那則回覆的訊息 id（`AiEntry.messageId`）。 */
+    readonly messageId: string;
     readonly rating: WireFeedbackRating;
     readonly note?: string;
     readonly category?: WireFeedbackCategory;
@@ -202,7 +207,16 @@ export interface FeedbackPutCommand {
 export interface FeedbackDeleteCommand {
   readonly id: number;
   readonly method: 'feedback.delete';
-  readonly params: { readonly runId: string; readonly ifVersion: string };
+  readonly params: { readonly messageId: string; readonly ifVersion: string };
+}
+
+/**
+ * 讀回這條 thread 目前的評分。web 照 dsh **在第一次滑過或聚焦讚踩時才讀**，重連之後再讀一次。
+ */
+export interface FeedbackListCommand {
+  readonly id: number;
+  readonly method: 'feedback.list';
+  readonly params: Record<string, never>;
 }
 
 export interface FeedbackRecordCommand {
@@ -211,10 +225,14 @@ export interface FeedbackRecordCommand {
   readonly params: { readonly text?: string; readonly category?: WireFeedbackCategory };
 }
 
-export type FeedbackCommand = FeedbackPutCommand | FeedbackDeleteCommand | FeedbackRecordCommand;
+export type FeedbackCommand =
+  FeedbackPutCommand | FeedbackDeleteCommand | FeedbackListCommand | FeedbackRecordCommand;
 
-/** 那個 run id 指不到一輪：不是這條 thread 上 root 的一則回覆，或 server 重開過。 */
-export type FeedbackTargetNotFound = { readonly code: 'target-not-found'; readonly runId: string };
+/** 那個訊息 id 指不到：這條 thread 的 root 日誌裡沒有一則回覆記著它（人打的那一則、子代理的都不是）。 */
+export type FeedbackTargetNotFound = {
+  readonly code: 'target-not-found';
+  readonly messageId: string;
+};
 export type FeedbackVersionConflict = {
   readonly code: 'version-conflict';
   readonly current: WireFeedbackItem | null;
@@ -238,6 +256,12 @@ export type FeedbackPutResult =
 export type FeedbackDeleteResult =
   | { readonly ok: true; readonly value: { readonly absent: true } }
   | { readonly ok: false; readonly error: FeedbackTargetNotFound | FeedbackVersionConflict };
+
+/** 目前的評分，依第一次評的先後。 */
+export type FeedbackListResult = {
+  readonly ok: true;
+  readonly value: { readonly items: readonly WireFeedbackItem[] };
+};
 
 export type FeedbackRecordResult = {
   readonly ok: true;

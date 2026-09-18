@@ -1,5 +1,5 @@
 import { createRegistry, loadPlugins, SessionLog, SessionRegistry } from '@nexus/core';
-import type { SessionEvent } from '@nexus/core';
+import type { LoggedMessage, SessionEvent } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import {
   createFeedbackPlugin,
@@ -10,13 +10,26 @@ import {
 
 const service = createFeedbackService({ maxNoteBytes: 16 });
 
-/** 一份有兩輪的日誌：第一輪停在核准點又續接，第二輪是 goal 排的。回傳兩輪起頭的 `seq`。 */
-function logWithTurns(): { log: SessionLog; first: number; resume: number; second: number } {
+/** 一則記進日誌的回覆。`id` 省略就是沒記 id 的那種。 */
+function ai(text: string, id?: string): LoggedMessage {
+  return {
+    type: 'ai',
+    data: { content: text, ...(id === undefined ? {} : { id }) },
+  } as LoggedMessage;
+}
+
+/**
+ * 一份有兩輪的日誌：第一輪先叫工具、停在核准點又續接，續接後才有文字回覆；第二輪是 goal 排的。
+ * 回傳兩輪起頭的 `seq`。
+ */
+function logWithTurns(): { log: SessionLog; first: number; second: number } {
   const log = new SessionLog('feedback-test');
   const first = log.append('turn/start', { kind: 'message', text: '跑。' }).seq;
+  log.append('assistant/message', { message: ai('', 'm-tool') });
   log.append('interrupt/raised', { interruptId: 'i1' });
   log.append('turn/end', {});
-  const resume = log.append('turn/start', { kind: 'resume' }).seq;
+  log.append('turn/start', { kind: 'resume' });
+  log.append('assistant/message', { message: ai('跑完了。', 'm-first') });
   log.append('turn/end', {});
   const second = log.append('turn/start', {
     kind: 'goal',
@@ -25,8 +38,9 @@ function logWithTurns(): { log: SessionLog; first: number; resume: number; secon
     revision: 1,
     round: 1,
   }).seq;
+  log.append('assistant/message', { message: ai('續完了。', 'm-goal') });
   log.append('turn/end', {});
-  return { log, first, resume, second };
+  return { log, first, second };
 }
 
 function feedbackEvents(log: SessionLog): SessionEvent[] {
@@ -34,10 +48,10 @@ function feedbackEvents(log: SessionLog): SessionEvent[] {
 }
 
 describe('評分', () => {
-  it('新建要 ifVersion: null，寫一顆 feedback/message-put，turn 是起頭那顆', () => {
-    const { log, first } = logWithTurns();
+  it('新建要 ifVersion: null，寫一顆 feedback/message-put，目標是那則回覆的訊息 id', () => {
+    const { log } = logWithTurns();
     const result = service.put(log, {
-      turn: first,
+      messageId: 'm-first',
       rating: 'negative',
       category: 'task-result',
       ifVersion: null,
@@ -45,7 +59,7 @@ describe('評分', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value).toMatchObject({
-      turn: first,
+      messageId: 'm-first',
       rating: 'negative',
       category: 'task-result',
     });
@@ -55,31 +69,39 @@ describe('評分', () => {
     expect(events[0]!.data).toEqual({ item: result.value });
   });
 
-  it('resume 那顆與不存在的 seq 都是 target-not-found，日誌不動', () => {
-    const { log, resume } = logWithTurns();
-    for (const turn of [resume, 999, -1]) {
-      expect(service.put(log, { turn, rating: 'positive', ifVersion: null })).toEqual({
+  it('不是 assistant/message 記的 id 都是 target-not-found，日誌不動', () => {
+    const { log } = logWithTurns();
+    // 外掛注入的 user/message 帶了 id 也不算：目標只認 assistant 訊息（同 dsh）。
+    log.append('user/message', {
+      message: { ...ai('提醒', 'm-user'), type: 'human' } as LoggedMessage,
+      source: { kind: 'plugin', plugin: 'x' },
+    });
+    for (const messageId of ['m-user', 'nope', 'history-0', '']) {
+      expect(service.put(log, { messageId, rating: 'positive', ifVersion: null })).toEqual({
         ok: false,
-        error: { code: 'target-not-found', turn },
+        error: { code: 'target-not-found', messageId },
       });
     }
     expect(feedbackEvents(log)).toEqual([]);
   });
 
-  it('goal 排的那一輪也評得到', () => {
-    const { log, second } = logWithTurns();
-    expect(service.put(log, { turn: second, rating: 'positive', ifVersion: null }).ok).toBe(true);
+  it('goal 排的那一輪的回覆也評得到', () => {
+    const { log } = logWithTurns();
+    expect(service.put(log, { messageId: 'm-goal', rating: 'positive', ifVersion: null }).ok).toBe(
+      true,
+    );
   });
 
   it('版本對不上回 version-conflict 並附目前那筆；已有評分時再送 null 也衝突', () => {
-    const { log, first } = logWithTurns();
-    const created = service.put(log, { turn: first, rating: 'positive', ifVersion: null });
+    const { log } = logWithTurns();
+    const target = { messageId: 'm-first' };
+    const created = service.put(log, { ...target, rating: 'positive', ifVersion: null });
     if (!created.ok) throw new Error('建不起來');
-    expect(service.put(log, { turn: first, rating: 'negative', ifVersion: null })).toEqual({
+    expect(service.put(log, { ...target, rating: 'negative', ifVersion: null })).toEqual({
       ok: false,
       error: { code: 'version-conflict', current: created.value },
     });
-    expect(service.put(log, { turn: first, rating: 'negative', ifVersion: 'stale' })).toEqual({
+    expect(service.put(log, { ...target, rating: 'negative', ifVersion: 'stale' })).toEqual({
       ok: false,
       error: { code: 'version-conflict', current: created.value },
     });
@@ -87,16 +109,17 @@ describe('評分', () => {
   });
 
   it('內容一樣就不記、版本不換；改了才記、換版本、保留建立時間', () => {
-    const { log, first } = logWithTurns();
+    const { log } = logWithTurns();
+    const target = { messageId: 'm-first' };
     const created = service.put(log, {
-      turn: first,
+      ...target,
       rating: 'negative',
       note: '慢',
       ifVersion: null,
     });
     if (!created.ok) throw new Error('建不起來');
     const same = service.put(log, {
-      turn: first,
+      ...target,
       rating: 'negative',
       note: '慢',
       ifVersion: created.value.version,
@@ -105,7 +128,7 @@ describe('評分', () => {
     expect(feedbackEvents(log)).toHaveLength(1);
 
     const changed = service.put(log, {
-      turn: first,
+      ...target,
       rating: 'positive',
       ifVersion: created.value.version,
     });
@@ -117,51 +140,133 @@ describe('評分', () => {
   });
 
   it('備註全是空白回 note-blank；超過位元組上限回 note-too-large（多位元組照位元組算）', () => {
-    const { log, first } = logWithTurns();
+    const { log } = logWithTurns();
+    const target = { messageId: 'm-first' };
     expect(
-      service.put(log, { turn: first, rating: 'negative', note: '  \n', ifVersion: null }),
+      service.put(log, { ...target, rating: 'negative', note: '  \n', ifVersion: null }),
     ).toEqual({
       ok: false,
       error: { code: 'note-blank' },
     });
     // 六個中文字＝18 個 UTF-8 位元組，上限 16。
     expect(
-      service.put(log, { turn: first, rating: 'negative', note: '一二三四五六', ifVersion: null }),
+      service.put(log, { ...target, rating: 'negative', note: '一二三四五六', ifVersion: null }),
     ).toEqual({
       ok: false,
       error: { code: 'note-too-large', maxBytes: 16, actualBytes: 18 },
     });
     // 剛好 16 個位元組收得下。
     expect(
-      service.put(log, { turn: first, rating: 'negative', note: '一二三四五x', ifVersion: null })
-        .ok,
+      service.put(log, { ...target, rating: 'negative', note: '一二三四五x', ifVersion: null }).ok,
     ).toBe(true);
   });
 
   it('收回：寫一顆 message-delete；不存在的成功但不記；版本不對衝突', () => {
-    const { log, first } = logWithTurns();
-    expect(service.delete(log, { turn: first, ifVersion: 'whatever' })).toEqual({
+    const { log } = logWithTurns();
+    const target = { messageId: 'm-first' };
+    expect(service.delete(log, { ...target, ifVersion: 'whatever' })).toEqual({
       ok: true,
       value: { absent: true },
     });
     expect(feedbackEvents(log)).toEqual([]);
 
-    const created = service.put(log, { turn: first, rating: 'negative', ifVersion: null });
+    const created = service.put(log, { ...target, rating: 'negative', ifVersion: null });
     if (!created.ok) throw new Error('建不起來');
-    expect(service.delete(log, { turn: first, ifVersion: 'stale' })).toEqual({
+    expect(service.delete(log, { ...target, ifVersion: 'stale' })).toEqual({
       ok: false,
       error: { code: 'version-conflict', current: created.value },
     });
-    expect(service.delete(log, { turn: first, ifVersion: created.value.version }).ok).toBe(true);
+    expect(service.delete(log, { ...target, ifVersion: created.value.version }).ok).toBe(true);
     expect(feedbackEvents(log).map((event) => event.type)).toEqual([
       'feedback/message-put',
       'feedback/message-delete',
     ]);
+    expect(feedbackEvents(log)[1]!.data).toEqual(target);
     expect(currentFeedbackItems(log.events).size).toBe(0);
     // 收回之後重新評要當成新建。
-    expect(service.put(log, { turn: first, rating: 'positive', ifVersion: null }).ok).toBe(true);
+    expect(service.put(log, { ...target, rating: 'positive', ifVersion: null }).ok).toBe(true);
   });
 
+  it('list：目前的評分，依第一次評的先後；收回的不在裡面', () => {
+    const { log } = logWithTurns();
+    expect(service.list(log)).toEqual({ ok: true, value: { items: [] } });
+    const goal = service.put(log, { messageId: 'm-goal', rating: 'positive', ifVersion: null });
+    const first = service.put(log, { messageId: 'm-first', rating: 'negative', ifVersion: null });
+    if (!goal.ok || !first.ok) throw new Error('建不起來');
+    const changed = service.put(log, {
+      messageId: 'm-goal',
+      rating: 'negative',
+      ifVersion: goal.value.version,
+    });
+    if (!changed.ok) throw new Error('改不動');
+    expect(service.list(log)).toEqual({ ok: true, value: { items: [changed.value, first.value] } });
+    service.delete(log, { messageId: 'm-goal', ifVersion: changed.value.version });
+    expect(service.list(log)).toEqual({ ok: true, value: { items: [first.value] } });
+  });
+});
+
+describe('格式 10 以前以輪記的評分', () => {
+  const legacy = (turn: number, version: string) => ({
+    turn,
+    rating: 'negative' as const,
+    version,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+
+  it('對到那一輪最後一則有文字的回覆：續接之後那則，不是只叫工具的那則', () => {
+    const { log, first } = logWithTurns();
+    log.append('feedback/message-put', { item: legacy(first, 'v-old') });
+    expect(service.list(log)).toEqual({
+      ok: true,
+      value: {
+        items: [
+          {
+            messageId: 'm-first',
+            rating: 'negative',
+            version: 'v-old',
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+      },
+    });
+  });
+
+  it('那一輪沒有對得到的回覆（格式 9 以前沒記回覆、或回覆沒記 id）就不列', () => {
+    const log = new SessionLog('feedback-legacy');
+    const v8 = log.append('turn/start', { kind: 'message', text: '舊的。' }).seq;
+    log.append('turn/end', {});
+    const noId = log.append('turn/start', { kind: 'message', text: '沒 id。' }).seq;
+    log.append('assistant/message', { message: ai('有字沒 id。') });
+    log.append('turn/end', {});
+    log.append('feedback/message-put', { item: legacy(v8, 'v1') });
+    log.append('feedback/message-put', { item: legacy(noId, 'v2') });
+    expect(service.list(log)).toEqual({ ok: true, value: { items: [] } });
+  });
+
+  it('同一則回覆的新評分接著舊的那筆改：版本要對、建立時間留著；舊格式的收回也收得掉', () => {
+    const { log, first, second } = logWithTurns();
+    log.append('feedback/message-put', { item: legacy(first, 'v-old') });
+    expect(
+      service.put(log, { messageId: 'm-first', rating: 'positive', ifVersion: null }),
+    ).toMatchObject({ ok: false, error: { code: 'version-conflict' } });
+    const changed = service.put(log, {
+      messageId: 'm-first',
+      rating: 'positive',
+      ifVersion: 'v-old',
+    });
+    if (!changed.ok) throw new Error('改不動');
+    expect(changed.value).toMatchObject({ messageId: 'm-first', createdAt: 1 });
+    expect(service.list(log)).toEqual({ ok: true, value: { items: [changed.value] } });
+
+    log.append('feedback/message-put', { item: legacy(second, 'v-goal') });
+    log.append('feedback/message-delete', { turn: second });
+    expect(service.list(log)).toEqual({ ok: true, value: { items: [changed.value] } });
+  });
+});
+
+describe('設定', () => {
   it('maxNoteBytes 不是正的安全整數就拒絕', () => {
     for (const maxNoteBytes of [0, -1, 1.5, Number.NaN]) {
       expect(() => createFeedbackService({ maxNoteBytes })).toThrow(TypeError);

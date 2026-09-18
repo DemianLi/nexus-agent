@@ -25,8 +25,9 @@ import type { NexusPlugin } from './plugin.js';
 /** 一份什麼都不寫的回饋規則：這裡只看它佔不佔得住那個位子。 */
 function fakeFeedback(): FeedbackService {
   return {
-    put: () => ({ ok: false, error: { code: 'target-not-found', turn: 0 } }),
+    put: () => ({ ok: false, error: { code: 'target-not-found', messageId: 'm' } }),
     delete: () => ({ ok: true, value: { absent: true } }),
+    list: () => ({ ok: true, value: { items: [] } }),
     record: () => ({ ok: true, value: { recorded: true } }),
   };
 }

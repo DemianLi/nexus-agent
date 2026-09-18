@@ -304,6 +304,32 @@ describe('點踩與回饋（#278）', () => {
     );
   });
 
+  it('格式 10 評的是回覆：算到它所屬那一輪（續接回來的也是）；同一輪兩則有讚有踩算點踩一輪', () => {
+    const reply = (id: string): Entry => [
+      'assistant/message',
+      { message: { type: 'ai', data: { content: '答。', id } } },
+    ];
+    const rate = (messageId: string, rating: 'positive' | 'negative'): Entry => [
+      'feedback/message-put',
+      { item: { messageId, rating, version: `v-${messageId}`, createdAt: 0, updatedAt: 0 } },
+    ];
+    const result = scan([
+      turn('message'),
+      reply('a1'),
+      ['turn/end', {}],
+      ['turn/start', { kind: 'resume' }],
+      reply('a2'),
+      ['turn/end', {}],
+      turn('message'),
+      reply('b1'),
+      ['turn/end', {}],
+      rate('a1', 'positive'),
+      rate('a2', 'negative'),
+      rate('b1', 'positive'),
+    ]);
+    expect(result.negativeTurns).toBe(1);
+  });
+
   it('v7 以前沒有評分這條路：兩格是 null，報表印「—」並講明；v7 的檔其餘照讀', () => {
     const old = scan([turn('message'), ['turn/end', {}]], { version: 7 });
     expect(old).toMatchObject({ negativeTurns: null, feedbackRecords: null, aborted: 0 });

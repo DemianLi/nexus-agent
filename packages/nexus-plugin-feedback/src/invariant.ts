@@ -7,7 +7,7 @@
  * 跟日誌分岔的狀態，所以沒有跨筆關係可以檢。
  *
  * **這個 package 的契約實際證在哪裡**：規則（樂觀鎖、內容一樣不記、收回不存在不記、備註的兩道
- * 檢查、目標只認起頭的 `turn/start`）由 `index.test.ts` 直接驗；走真的線那一條在
+ * 檢查、目標只認記著那個 id 的 `assistant/message`、舊格式以輪記的怎麼讀）由 `index.test.ts` 直接驗；走真的線那一條在
  * `apps/harness/src/feedback-wire.test.ts`。
  *
  * @module

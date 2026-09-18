@@ -358,6 +358,105 @@ describe('日誌 → 畫面', () => {
   });
 });
 
+describe('評分要的兩格（#382）', () => {
+  /** 一則有 id 的回覆。 */
+  function replyWithId(text: string, id: string, callIds: readonly string[] = []): Draft {
+    return {
+      type: 'assistant/message',
+      data: {
+        message: toLoggedMessage(
+          new AIMessage({
+            content: text,
+            id,
+            tool_calls: callIds.map((callId) => ({ id: callId, name: 'echo', args: {} })),
+          }),
+        ),
+      },
+    };
+  }
+
+  it('回覆帶日誌記的訊息 id；key 照舊是 history-<seq>；沒記 id 的就沒有', () => {
+    const state = screen(
+      log(human('跑'), replyWithId('有 id。', 'm-1'), reply('沒 id。'), turnEnd),
+    );
+    expect(
+      state.entries.flatMap((entry) => (entry.kind === 'ai' ? [[entry.id, entry.messageId]] : [])),
+    ).toEqual([
+      ['history-1', 'm-1'],
+      ['history-2', undefined],
+    ]);
+    // 人那一則沒有訊息 id：它不是評分的目標。
+    expect(state.entries[0]).toEqual({ kind: 'human', id: 'history-0', text: '跑' });
+  });
+
+  it('停在核准點又續接的一輪不在中間收掉：收尾只有續接後那則，同即時', () => {
+    const state = screen(
+      log(
+        human('寫檔'),
+        replyWithId('要動手了。', 'm-1', ['c1']),
+        call('c1', 'write_file'),
+        { type: 'interrupt/raised', data: { interruptId: 'i1' } },
+        turnEnd,
+        resume,
+        call('c1', 'write_file'),
+        result('c1', '寫好了'),
+        replyWithId('寫好了。', 'm-2'),
+        turnEnd,
+      ),
+    );
+    expect(
+      state.entries.flatMap((entry) =>
+        entry.kind === 'ai' ? [[entry.text, entry.turnTail === true]] : [],
+      ),
+    ).toEqual([
+      ['要動手了。', false],
+      ['寫好了。', true],
+    ]);
+    expect(state.entries.map(line)).toContain('tool:write_file:done');
+  });
+
+  it('停在中斷上、之後另起一輪（沒有續接）：那一輪在下一輪開頭收掉，卡照即時收成失敗', () => {
+    const state = screen(
+      log(
+        human('寫檔'),
+        replyWithId('要動手了。', 'm-1', ['c1']),
+        call('c1', 'write_file'),
+        { type: 'interrupt/raised', data: { interruptId: 'i1' } },
+        turnEnd,
+        human('算了'),
+        replyWithId('好。', 'm-2'),
+        turnEnd,
+      ),
+    );
+    expect(state.entries.map(line)).toEqual([
+      'human:寫檔',
+      'ai:要動手了。',
+      `tool:write_file:failed:${UNFINISHED_TOOL_TEXT}`,
+      'human:算了',
+      'ai:好。',
+    ]);
+    expect(
+      state.entries.flatMap((entry) => (entry.kind === 'ai' && entry.turnTail ? [entry.text] : [])),
+    ).toEqual(['要動手了。', '好。']);
+  });
+
+  it('停在中斷上、之後只有別的事件（例如人送了回饋）而現在還掛著：照舊停在等人', () => {
+    const state = screen(
+      log(
+        human('寫檔'),
+        replyWithId('', 'm-1', ['c1']),
+        call('c1', 'write_file'),
+        { type: 'interrupt/raised', data: { interruptId: 'i1' } },
+        turnEnd,
+        { type: 'feedback/record', data: { text: '慢' } },
+      ),
+      gated('write_file'),
+    );
+    expect(state.status).toBe('running');
+    expect(state.entries.map(line)).toEqual(['human:寫檔', 'tool:write_file:running']);
+  });
+});
+
 describe('分頁', () => {
   /** 五輪，每輪一句人話一則回覆。 */
   const FIVE = log(
