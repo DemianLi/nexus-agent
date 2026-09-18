@@ -63,6 +63,10 @@
  * plugin，選擇權在宿主那側；我們的等價物是一個旗標，而旗標後面直接是一支燒 API key 的
  * 迴圈（`cli.ts` 的 `driveGoalRounds`）。
  *
+ * （2026-09-19 註：「刻意掛載」這半句要打折——dsh 的 base 其實出廠就掛著這顆 driver，擋續行的
+ * 是行程本地、每次 `agent/created` 歸零的啟用狀態。多一條操作者上限這個偏離本身不受影響，見
+ * `.docs/plugin-architecture-gap-survey.md` §三第 18 列。）
+ *
  * 剩下的那一半照舊：`blockedAfterConsecutiveRounds`（預設 3）讓模型從第 3 輪起**可以**把
  * 自己 block 出去——那是准許不是保證，沒有東西逼它用。所以 CLI 開旗標時要把**兩條**上限
  * 都印出來、講明哪一條在管，見 `cli.ts`。
