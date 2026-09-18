@@ -2,16 +2,16 @@
  * 這一輪跑到哪了。
  *
  * `awaiting-input` **不是結束**：基座在中斷時照樣發 `lifecycle completed / root`，
- * 折疊器因此不讓那顆把狀態翻回 idle。按鈕在 `ApprovalCard`，這一行只說它在等人。
+ * 折疊器因此不讓那顆把狀態翻回 idle。按鈕在換手層的面板上，這一行只說它在等人。
  *
  * **全站唯一的 `role="status"`**（§8）：待決、串流、失敗都由它唸。執行中配 working orb 與 shimmer（§7），
  * orb 旁已有同義文字所以 `aria-hidden`；reduced-motion 下兩者都停在一格，字照樣在。
  */
 
 import type { ConversationState } from '@nexus/wire';
-import { isApprovalPending, isQuestionPending } from '@nexus/wire';
 
 import { AgentOrb } from '@/components/agent-orb';
+import { pendingLabel } from '@/lib/pending-label';
 
 export function StatusLine({
   state,
@@ -75,22 +75,13 @@ export function StatusLine({
       </p>
     );
   }
-  if (state.status === 'awaiting-input') {
-    // 兩種中斷可以同時掛著，而它們等的不是同一件事——「核准」與「回答」擠成一句話，
-    // 人會以為畫面上那張問答卡是要他核准什麼。
-    const names = state.pendings
-      .flatMap((pending) => (isApprovalPending(pending) ? pending.actions : []))
-      .map((action) => action.name)
-      .join('、');
-    const questions = state.pendings.filter(isQuestionPending).length;
+  const pending = state.pendings[0];
+  if (state.status === 'awaiting-input' && pending !== undefined) {
+    // **唸的是換手層上那一個面板的名稱**（§8）：面板出現不另開 live region，名稱與面板的 `aria-label` 同一句，
+    // 帶跨面板進度「（1／2）」——兩種中斷混著掛時，進度讓人知道後面還有幾個。
     return (
       <p className="text-sm" role="status">
-        {[
-          names === '' ? undefined : `等待核准：${names}`,
-          questions === 0 ? undefined : `等你回答 ${questions} 組問題`,
-        ]
-          .filter((part) => part !== undefined)
-          .join('；')}
+        {pendingLabel(pending, { index: 0, total: state.pendings.length })}
       </p>
     );
   }

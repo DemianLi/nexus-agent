@@ -12,6 +12,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App, inputPlaceholder, RESUMED_THREAD_NOTICE, SWITCHED_THREAD_NOTICE } from '@/App';
+import { NO_DECISION_REASON } from '@/components/approval-card';
 import { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/components/thread-list';
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
 import { axeViolations } from '@/test/axe';
@@ -278,8 +279,12 @@ describe('核准請求', () => {
     await waitFor(() => expect(screen.getByTestId('approval-card')).toBeTruthy());
     expect(screen.getByText('alpha')).toBeTruthy();
     expect(screen.getByText('beta')).toBeTruthy();
-    // 等核准時送不出下一句話：基座那時會把中斷靜靜丟掉。
-    expect(screen.getByRole('button', { name: '送出' }).hasAttribute('disabled')).toBe(true);
+    // 等核准時送不出下一句話：基座那時會把中斷靜靜丟掉。面板換掉了輸入框（#408），送出鍵不在可及的畫面上，
+    // 藏起來的那一顆也照舊是停用的。
+    expect(screen.queryByRole('button', { name: '送出' })).toBeNull();
+    expect(
+      screen.getByRole('button', { name: '送出', hidden: true }).hasAttribute('disabled'),
+    ).toBe(true);
 
     fireEvent.click(screen.getByRole('button', { name: '全部核准' }));
 
@@ -303,9 +308,33 @@ describe('核准請求', () => {
     render(<App client={client} />);
 
     await waitFor(() => expect(screen.getByTestId('approval-card')).toBeTruthy());
-    expect(screen.getByText(/這裡按不了/)).toBeTruthy();
+    expect(screen.getByText(NO_DECISION_REASON)).toBeTruthy();
+    // 解鎖的機制照舊（`stuck` 由 ⑨ 重寫）。輸入框被面板換掉了，所以查藏起來的那一顆；
+    // 畫面上的出口是面板上的「停止這一輪」（#376 第 12 條），下一條在釘它。
     fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '換條路' } });
-    expect(screen.getByRole('button', { name: '送出' }).hasAttribute('disabled')).toBe(false);
+    expect(
+      screen.getByRole('button', { name: '送出', hidden: true }).hasAttribute('disabled'),
+    ).toBe(false);
+  });
+
+  it('沒有出路的核准：原因、摺疊的原始中斷與「停止這一輪」，沒有允許與不允許（#376 第 12 條）', async () => {
+    seq = 0;
+    const { client, cancels } = fakeClient([
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      approvalFrame([{ name: 'alpha', allowed: [] }]),
+    ]);
+    render(<App client={client} />);
+
+    const panel = await screen.findByTestId('approval-card');
+    expect(within(panel).queryByRole('button', { name: '全部核准' })).toBeNull();
+    expect(within(panel).queryByRole('button', { name: '全部拒絕' })).toBeNull();
+    // 原始中斷先摺著。
+    expect(within(panel).queryByText('alpha')).toBeNull();
+    fireEvent.click(within(panel).getByRole('button', { name: '原始中斷內容' }));
+    expect(await within(panel).findByText('alpha')).toBeTruthy();
+
+    fireEvent.click(within(panel).getByRole('button', { name: '停止這一輪' }));
+    await waitFor(() => expect(cancels).toHaveLength(1));
   });
 
   it('按鈕只長出交集裡的那些', async () => {
@@ -324,13 +353,12 @@ describe('核准請求', () => {
     expect(screen.queryByRole('button', { name: '全部拒絕' })).toBeNull();
   });
 
-  it('**同一輪兩顆中斷：兩張卡，各按各的，決定落在自己那顆上**', async () => {
+  it('**同一輪兩顆中斷：一次一個面板、先來先處理，決定落在自己那顆上**', async () => {
     // 逐次呼叫的閘門會發**兩顆**中斷（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
-    // 這條原本釘的是中間態（折疊器兩顆都留著、畫面只渲染第一張），現在翻成驗收句。
+    // #408 起面板換掉輸入框、同時只一個、先來先處理（#376 第 4 條），名稱帶跨面板進度。
     //
-    // **承重的是最後那兩句 `interrupt_id`。** 只驗「有兩張卡」的話，兩張卡都把決定送給
-    // `pendings[0]` 也會綠——而那正是這一刀最可能長出來的 bug：人按的是 beta 那張，
-    // 答掉的是 alpha。所以要按**第二張**，並看它送出去的鑰匙是不是 `int-2`。
+    // **承重的是兩句 `interrupt_id`。** 兩個面板都把決定送給 `pendings[0]` 的話，第二次會送出 `int-1`——
+    // 而那正是換手最可能長出來的 bug：畫面換到 beta，答掉的還是 alpha。
     seq = 0;
     const { client, responded } = fakeClient([
       approvalFrame([{ name: 'alpha', allowed: ['approve', 'reject'] }], 'int-1'),
@@ -338,35 +366,27 @@ describe('核准請求', () => {
     ]);
     render(<App client={client} />);
 
-    await waitFor(() => expect(screen.getAllByTestId('approval-card')).toHaveLength(2));
-    const [alphaCard, betaCard] = screen.getAllByTestId('approval-card');
-    if (alphaCard === undefined || betaCard === undefined) throw new Error('沒有兩張卡');
-    // 順序照中斷發出的順序——反過來的話下面按的就是另一顆。
-    expect(within(alphaCard).getByText('alpha')).toBeTruthy();
-    expect(within(betaCard).getByText('beta')).toBeTruthy();
-    // 狀態列是第二道證據，講得出兩個名字。
-    expect(screen.getByRole('status').textContent).toContain('等待核准：alpha、beta');
+    // 先來的那顆先畫；只有一個面板。
+    const first = await screen.findByRole('region', { name: '等待核准：alpha（1／2）' });
+    expect(screen.getAllByTestId('approval-card')).toHaveLength(1);
+    expect(within(first).queryByText('beta')).toBeNull();
+    // 狀態列唸的就是面板名稱。
+    expect(screen.getByRole('status').textContent).toBe('等待核准：alpha（1／2）');
 
-    // **按第二張那顆按鈕**，不是第一張。
-    fireEvent.click(within(betaCard).getByRole('button', { name: '全部核准' }));
-
+    fireEvent.click(within(first).getByRole('button', { name: '全部核准' }));
     await waitFor(() => expect(responded.length).toBe(1));
     expect(responded[0]).toEqual({
       namespace: ['tools:a'],
-      interrupt_id: 'int-2',
+      interrupt_id: 'int-1',
       response: { decisions: [{ type: 'approve' }] },
     });
-    // 答掉的那張收走，另一張留著等人——**只收一張**，兩張一起消失是另一種壞法。
-    await waitFor(() => expect(screen.getAllByTestId('approval-card')).toHaveLength(1));
-    expect(within(screen.getByTestId('approval-card')).getByText('alpha')).toBeTruthy();
-    expect(screen.getByRole('status').textContent).toContain('等待核准：alpha');
 
-    // 再按剩下那張，鑰匙是 `int-1`。
-    fireEvent.click(
-      within(screen.getByTestId('approval-card')).getByRole('button', { name: '全部核准' }),
-    );
+    // 答掉的收走，下一個接上——只剩一個，不帶進度。
+    const second = await screen.findByRole('region', { name: '等待核准：beta' });
+    expect(screen.getByRole('status').textContent).toBe('等待核准：beta');
+    fireEvent.click(within(second).getByRole('button', { name: '全部核准' }));
     await waitFor(() => expect(responded.length).toBe(2));
-    expect(responded[1]).toMatchObject({ interrupt_id: 'int-1' });
+    expect(responded[1]).toMatchObject({ interrupt_id: 'int-2' });
   });
 
   it('**兩張卡裡只要有一張沒有出路，送出框就解鎖**', async () => {
@@ -383,10 +403,12 @@ describe('核准請求', () => {
     ]);
     render(<App client={client} />);
 
-    await waitFor(() => expect(screen.getAllByTestId('approval-card')).toHaveLength(2));
-    expect(screen.getByText(/這裡按不了/)).toBeTruthy();
+    // 先來先處理：按得動的那個先上來，沒有出路的那個排在後面（#408）。解鎖看的是全部，不是畫面上那一個。
+    await screen.findByRole('region', { name: '等待核准：alpha（1／2）' });
     fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '換條路' } });
-    expect(screen.getByRole('button', { name: '送出' }).hasAttribute('disabled')).toBe(false);
+    expect(
+      screen.getByRole('button', { name: '送出', hidden: true }).hasAttribute('disabled'),
+    ).toBe(false);
   });
 });
 
@@ -516,14 +538,18 @@ describe('停止（#276）', () => {
     await waitFor(() => expect(cancels).toHaveLength(1));
   });
 
-  it('停在核准點時也有停止——按它就是收回那張卡', async () => {
+  it('停在核准點時沒有停止——想結束就按不允許（#376 第 10、11 條）', async () => {
+    // 翻面的絆索：#265 Q7「停在核准點按停止收回」在畫面上沒有入口了，demian 知情後選的。
     seq = 0;
     const { client } = fakeClient([
       frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
       approvalFrame([{ name: 'danger', allowed: ['approve', 'reject'] }]),
     ]);
     render(<App client={client} />);
-    expect(await screen.findByRole('button', { name: '停止' })).toBeTruthy();
+    const panel = await screen.findByTestId('approval-card');
+    expect(screen.queryByRole('button', { name: '停止' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '停止這一輪' })).toBeNull();
+    expect(within(panel).getByRole('button', { name: '全部拒絕' })).toBeTruthy();
   });
 
   it('閒著時沒有停止', async () => {
@@ -689,7 +715,7 @@ describe('問答卡', () => {
     });
   });
 
-  it('兩種中斷同時掛著時各畫各的，答掉問答那顆不會動到核准那張', async () => {
+  it('兩種中斷同時掛著時先來先處理，答掉核准那顆才輪到問答，各送各的形狀', async () => {
     seq = 0;
     const { client, responded } = fakeClient([
       approvalFrame([{ name: 'write_file', allowed: ['approve', 'reject'] }], 'int-1'),
@@ -697,8 +723,9 @@ describe('問答卡', () => {
     ]);
     render(<App client={client} />);
 
-    const question = await screen.findByTestId('question-card');
-    expect(screen.getByTestId('approval-card')).toBeTruthy();
+    // #408：同時只一個面板、先來先處理——核准先發，所以先畫核准；問答排在後面，進度數兩種一起。
+    const approval = await screen.findByRole('region', { name: '等待核准：write_file（1／2）' });
+    expect(screen.queryByTestId('question-card')).toBeNull();
 
     // **「兩種都掛著時兩種都講」是這一刀自己判的那一格**，所以它要在真的 frame ＋ 真的
     // 折疊器底下也成立一次——純函式那一組餵的是手工 pending，餵錯了會一起錯。
@@ -706,34 +733,30 @@ describe('問答卡', () => {
     expect(bothPlaceholder).toContain('核准');
     expect(bothPlaceholder).toContain('問題');
 
+    // **核准那顆送核准的形狀**：旁邊多了一種中斷不能讓它送錯地方。
+    fireEvent.click(within(approval).getByRole('button', { name: '全部核准' }));
+    await waitFor(() => {
+      expect(responded).toHaveLength(1);
+    });
+    expect(responded[0]).toEqual({
+      namespace: ['tools:a'],
+      interrupt_id: 'int-1',
+      response: { decisions: [{ type: 'approve' }] },
+    });
+
+    // 核准那顆收掉，問答接上。**另一個方向也要按一次**：誤放行的兩個方向要各釘一條，只釘一邊的話，
+    // 把兩種面板的送出接反了仍有一半會綠。
+    const question = await screen.findByTestId('question-card');
+    expect(screen.queryByTestId('approval-card')).toBeNull();
     // 按下去之後那顆的字會變成「這題已跳過」，所以每次都重新抓剩下的第一顆——
     // 抓一次存起來按兩下，第二下會落在一個已經不是「跳過」的按鈕上。
     fireEvent.click(within(question).getAllByRole('button', { name: '跳過這題' })[0]!);
     fireEvent.click(within(question).getAllByRole('button', { name: '跳過這題' })[0]!);
     fireEvent.click(within(question).getByRole('button', { name: '送出答案' }));
-
-    await waitFor(() => {
-      expect(responded).toHaveLength(1);
-    });
-    expect(responded[0]).toMatchObject({ interrupt_id: 'q-1' });
-    // 問答那張收掉了，核准那張還在——這是「逐顆認領」在畫面上的樣子。
-    await waitFor(() => {
-      expect(screen.queryByTestId('question-card')).toBeNull();
-    });
-    const approval = screen.getByTestId('approval-card');
-
-    // **另一個方向也要按一次。** 上面證的是「問答卡送問答形狀」，這一句證的是核准卡沒有
-    // 因為旁邊多了一種卡就送錯地方——誤放行的兩個方向要各釘一條，只釘一邊的話，把兩張卡
-    // 的送出接反了仍有一半會綠。
-    fireEvent.click(within(approval).getByRole('button', { name: '全部核准' }));
     await waitFor(() => {
       expect(responded).toHaveLength(2);
     });
-    expect(responded[1]).toEqual({
-      namespace: ['tools:a'],
-      interrupt_id: 'int-1',
-      response: { decisions: [{ type: 'approve' }] },
-    });
+    expect(responded[1]).toMatchObject({ interrupt_id: 'q-1' });
   });
 });
 
@@ -851,7 +874,8 @@ describe('送出框說的話', () => {
     ]);
     render(<App client={client} />);
 
-    await screen.findByTestId('question-card');
+    // 先來先處理（#408）：卡死的核准先上來，問答排在後面；輸入框藏著，但它說的話照舊兩件事都講。
+    await screen.findByTestId('approval-card');
     const input = screen.getByLabelText('要說的話');
     await waitFor(() => {
       expect(input.getAttribute('placeholder')).toContain('問題');

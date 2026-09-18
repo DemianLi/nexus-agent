@@ -78,11 +78,8 @@ export function QuestionCard({
   };
 
   return (
-    <section
-      className="bg-card shadow-material flex flex-col gap-4 rounded-lg p-4"
-      aria-label="問答請求"
-      data-testid="question-card"
-    >
+    // 換手層的面板裡面（#408）：外框、名稱、邊框光與焦點歸 `pending-swap.tsx`。⑨（#409）換成 `questionnaire`。
+    <div className="flex flex-col gap-4 px-3 pb-3" data-testid="question-card">
       <p className="text-sm font-medium">要繼續得先問你 {pending.questions.length} 件事：</p>
       <ol className="flex flex-col gap-4">
         {pending.questions.map((question, index) => {
@@ -160,6 +157,6 @@ export function QuestionCard({
           放棄整組問題
         </Button>
       </div>
-    </section>
+    </div>
   );
 }
