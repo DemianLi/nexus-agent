@@ -11,6 +11,7 @@
 > - **效果套件**：demian 看過原型後的反應是**純 CSS 仿**、不裝 `thinking-orbs`／`border-beam`，由[動效策略](https://github.com/DemianLi/nexus-agent/issues/378)那張卡拍板（[原型結論](https://github.com/DemianLi/nexus-agent/issues/375#issuecomment-5708312161)）。§3.3 的「套件 → 狀態」提案表因此只剩參考價值。
 > - **亮暗規則**：暗色和亮色的邊框效果、區塊鑑別度要一樣明顯，由[設計 token 定稿](https://github.com/DemianLi/nexus-agent/issues/377)那張卡落成數字。
 > - **§4 的起圖素材已經用掉**，地圖與子卡以 GitHub 上的為準。
+> - **地圖 #372 八張卡的結論已收攏進 [web-ui-spec.md](web-ui-spec.md)（2026-09-18），實作以那份為準。**
 
 ## 結論速查表
 
