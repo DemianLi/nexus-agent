@@ -191,21 +191,27 @@ const STREAM_DOC = [
 ].join('\n');
 
 describe('增量解析', () => {
-  it.each([1, 3, 7, 16])('每一個前綴都跟重新掛一次一樣（每次 %i 字）', (chunk) => {
-    const live = render(<MarkdownText text="" streaming />);
-    for (let end = chunk; end < STREAM_DOC.length + chunk; end += chunk) {
-      const prefix = STREAM_DOC.slice(0, Math.min(end, STREAM_DOC.length));
-      live.rerender(<MarkdownText text={prefix} streaming />);
-      const fresh = render(<MarkdownText text={prefix} streaming />);
-      expect(live.container.innerHTML).toBe(fresh.container.innerHTML);
-      fresh.unmount();
-    }
-    // 講完換成整份解析，跟直接畫講完的一樣。程式碼區塊講完時留用串流那棵 span 樹，直接畫的是 shiki 的 HTML：
-    // 字串不同（style 的空白、外面多一層 div），逐 token 比字與顏色（同 dsh `streaming-code-block` 的比法）。
-    live.rerender(<MarkdownText text={STREAM_DOC} />);
-    const settled = render(<MarkdownText text={STREAM_DOC} />);
-    expect(looks(live.container)).toEqual(looks(settled.container));
-  });
+  it.each([1, 3, 7, 16])(
+    '每一個前綴都跟重新掛一次一樣（每次 %i 字）',
+    (chunk) => {
+      const live = render(<MarkdownText text="" streaming />);
+      for (let end = chunk; end < STREAM_DOC.length + chunk; end += chunk) {
+        const prefix = STREAM_DOC.slice(0, Math.min(end, STREAM_DOC.length));
+        live.rerender(<MarkdownText text={prefix} streaming />);
+        const fresh = render(<MarkdownText text={prefix} streaming />);
+        expect(live.container.innerHTML).toBe(fresh.container.innerHTML);
+        fresh.unmount();
+      }
+      // 講完換成整份解析，跟直接畫講完的一樣。程式碼區塊講完時留用串流那棵 span 樹，直接畫的是 shiki 的 HTML：
+      // 字串不同（style 的空白、外面多一層 div），逐 token 比字與顏色（同 dsh `streaming-code-block` 的比法）。
+      live.rerender(<MarkdownText text={STREAM_DOC} />);
+      const settled = render(<MarkdownText text={STREAM_DOC} />);
+      expect(looks(live.container)).toEqual(looks(settled.container));
+      // 逐字那一格每個前綴都重畫兩次：本機約 0.5 秒，CI 跟其他檔並行時約 8 倍（#421 3.1 秒、#422 3.9 秒、
+      // #425 5.1 秒撞到預設的 5 秒）。量的是結果不是速度，給足上限。
+    },
+    30_000,
+  );
 
   it('凍結的 block 跨過邊界時沿用同一個 DOM 節點，不重掛', () => {
     const paragraphs = Array.from({ length: 8 }, (_, i) => `第 ${i} 段。`);
