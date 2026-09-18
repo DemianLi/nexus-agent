@@ -9,6 +9,7 @@
 @import './styles/tokens.generated.css';
 @import './styles/theme.css';
 @import './styles/motion.css';
+@import './styles/markdown.css';
 
 /* 建置工具的註解會寫到 class 名（例如 `.animate-spin`），不讓 Tailwind 把它們當成要產出的 utility。 */
 @source not '../scripts';
