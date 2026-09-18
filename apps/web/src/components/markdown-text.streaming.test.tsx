@@ -10,6 +10,7 @@ const parsed = vi.hoisted(() => ({ chars: 0 }));
 vi.mock('@/lib/markdown/parse', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/markdown/parse')>();
   return {
+    parseGfmWithMath: actual.parseGfmWithMath,
     parseGfm: (text: string) => {
       parsed.chars += text.length;
       return actual.parseGfm(text);
