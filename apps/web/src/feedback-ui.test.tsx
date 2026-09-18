@@ -157,7 +157,7 @@ function fakeClient(
 
 /** 那則回覆所在的條目。 */
 function entryOf(text: string): HTMLElement {
-  const node = screen.getByText(text).closest('li');
+  const node = screen.getByText(text).closest<HTMLElement>('[data-slot="message-scroller-item"]');
   if (node === null) throw new Error(`找不到「${text}」那一則`);
   return node;
 }
@@ -226,6 +226,30 @@ describe('評分按鈕', () => {
     );
     // 收回不開對話框。
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('對話框：打開時游標在備註欄；Esc 關掉不記，同一則再開是空白的表單', async () => {
+    seq = 0;
+    const fake = fakeClient();
+    render(<App client={fake.client} />);
+    await ready();
+    const dislike = () =>
+      within(entryOf('收工了。')).getByRole('button', { name: FEEDBACK_COPY.dislike });
+
+    fireEvent.click(dislike());
+    const dialog = await screen.findByRole('dialog', { name: FEEDBACK_COPY.title });
+    const detail = within(dialog).getByLabelText(FEEDBACK_COPY.detail);
+    await waitFor(() => expect(document.activeElement).toBe(detail));
+    fireEvent.change(detail, { target: { value: '寫到一半' } });
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(fake.puts).toEqual([]);
+
+    fireEvent.click(dislike());
+    const again = await screen.findByRole('dialog', { name: FEEDBACK_COPY.title });
+    expect((within(again).getByLabelText(FEEDBACK_COPY.detail) as HTMLTextAreaElement).value).toBe(
+      '',
+    );
   });
 
   it('別的分頁先改了：框留著、講衝突那一句，按鈕畫上目前那筆', async () => {

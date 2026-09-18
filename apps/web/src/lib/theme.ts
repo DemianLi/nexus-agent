@@ -54,11 +54,16 @@ export function readThemePreference(): ThemePreference {
   }
 }
 
-export function writeThemePreference(preference: ThemePreference): void {
+/** 寫不進去時回 `false`：呼叫端要自己把這次的選擇留在這個分頁。 */
+export function writeThemePreference(preference: ThemePreference): boolean {
   try {
-    storage()?.setItem(THEME_PREFERENCE_KEY, preference);
+    const target = storage();
+    if (target === undefined) return false;
+    target.setItem(THEME_PREFERENCE_KEY, preference);
+    return true;
   } catch (error) {
     console.error(`寫不進 ${THEME_PREFERENCE_KEY}，這次的選擇只留在這個分頁：`, error);
+    return false;
   }
 }
 

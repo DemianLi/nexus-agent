@@ -9,9 +9,13 @@
  * 而**歸屬是折疊器 join 出來的**——線上沒有 subagent 的名字，只有 namespace 樹
  * （見 `@nexus/wire` 的 `conversation.ts`）。join 不起來的時候它說「未歸屬」，
  * 這裡就照樣顯示未歸屬：**寧可說不知道，不要說錯**。
+ *
+ * 外殼是 shadcn `message-scroller`＋`message`／`bubble`（規格 §4.2 列 9–11）；markdown 是 ⑤ 的事，這裡先照純文字畫。
  */
 
-import { ThumbsDown, ThumbsUp } from 'lucide-react';
+import { ArrowDown, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 
 import type {
   AnswerEntry,
@@ -23,7 +27,17 @@ import type {
   WireFeedbackRating,
 } from '@nexus/wire';
 
+import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { Button } from '@/components/ui/button';
+import { Message, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message';
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from '@/components/ui/message-scroller';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
 
 /**
@@ -157,36 +171,41 @@ function answerSummary(entry: AnswerEntry): string {
 function Entry({ entry, feedback }: { entry: ConversationEntry; feedback?: TranscriptFeedback }) {
   if (entry.kind === 'human') {
     return (
-      <li className="flex justify-end">
-        <p className="bg-primary text-primary-foreground max-w-[80%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap">
-          {entry.text}
-        </p>
-      </li>
+      <Message align="end">
+        <MessageContent>
+          <Bubble variant="secondary" align="end">
+            <BubbleContent className="text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap">
+              {entry.text}
+            </BubbleContent>
+          </Bubble>
+        </MessageContent>
+      </Message>
     );
   }
 
   if (entry.kind === 'decision') {
     const approved = entry.decision === 'approve';
     return (
-      <li className="text-muted-foreground text-xs" data-testid="decision-entry">
+      <p className="text-muted-foreground text-xs" data-testid="decision-entry">
         {approved ? '已核准' : entry.decision === 'reject' ? '已拒絕' : entry.decision}：
         {entry.actions.join('、')}
         {!approved && '（沒有執行）'}
-      </li>
+      </p>
     );
   }
 
   if (entry.kind === 'answer') {
     return (
-      <li className="text-muted-foreground text-xs" data-testid="answer-entry">
+      <p className="text-muted-foreground text-xs" data-testid="answer-entry">
         {answerSummary(entry)}
-      </li>
+      </p>
     );
   }
 
   if (entry.kind === 'tool') {
+    // 工具卡的新樣子是 ⑥（#406）的事，這裡只換到新的容器裡。
     return (
-      <li className="flex flex-col gap-1" data-testid="tool-entry">
+      <div className="flex flex-col gap-1" data-testid="tool-entry">
         <div className="flex items-center gap-2">
           <AttributionBadge attribution={entry.attribution} />
           <code className="text-sm font-medium">{entry.name}</code>
@@ -194,50 +213,142 @@ function Entry({ entry, feedback }: { entry: ConversationEntry; feedback?: Trans
         </div>
         <pre className="text-muted-foreground overflow-x-auto text-xs">{entry.input}</pre>
         {entry.error !== undefined && <p className="text-destructive text-xs">{entry.error}</p>}
-      </li>
+      </div>
     );
   }
 
   const indented = entry.attribution.kind !== 'root';
   return (
-    <li
+    <Message
+      align="start"
       className={indented ? 'border-border ml-4 border-l pl-3' : undefined}
       data-testid="ai-entry"
     >
-      <div className="flex items-center gap-2">
-        <AttributionBadge attribution={entry.attribution} />
-        {entry.streaming && (
-          <span className="text-muted-foreground text-xs" role="status">
-            輸入中…
-          </span>
+      <MessageContent>
+        {indented && (
+          <MessageHeader className="px-0">
+            <AttributionBadge attribution={entry.attribution} />
+          </MessageHeader>
         )}
-      </div>
-      <p className="text-sm whitespace-pre-wrap">{entry.text}</p>
-      {/* 講到一半被人按了停止（#276）。不是失敗，所以不用紅字。 */}
-      {entry.stopped === true && <p className="text-muted-foreground text-xs">（已停止）</p>}
-      {entry.error !== undefined && <p className="text-destructive text-xs">{entry.error}</p>}
-      {feedback !== undefined && isRatable(entry) && (
-        <RatingButtons messageId={entry.messageId} feedback={feedback} />
-      )}
-    </li>
+        <Bubble variant="ghost">
+          <BubbleContent className="text-body whitespace-pre-wrap">
+            {entry.text}
+            {/* 串流中只有游標在閃；狀態由狀態列講，這裡不唸（§8）。 */}
+            {entry.streaming && <span className="stream-caret" aria-hidden />}
+          </BubbleContent>
+        </Bubble>
+        {/* 講到一半被人按了停止（#276）。不是失敗，所以不用紅字。 */}
+        {entry.stopped === true && <MessageFooter className="px-0">（已停止）</MessageFooter>}
+        {entry.error !== undefined && <p className="text-destructive text-xs">{entry.error}</p>}
+        {feedback !== undefined && isRatable(entry) && (
+          <RatingButtons messageId={entry.messageId} feedback={feedback} />
+        )}
+      </MessageContent>
+    </Message>
   );
+}
+
+/**
+ * 哪幾則（含等人處理的卡片）是**這一次看著它長出來的**：只有這些做進場動效（往上 8px，§7）、講完時唸一次（§8）。
+ *
+ * 不算的：第一次連上時已經在的（重播的歷史，而折疊器把歷史與 `connected` 在同一次 render 交出來，所以連上那一格
+ * 看到的全算歷史）、連上前就在的、以及插在已知那幾則**前面**的（往回捲載入的更早歷史）。切換對話整個重掛，
+ * 所以也不動。
+ *
+ * **要在常駐的元件裡呼叫**（`ConversationView`），不是在 `Transcript` 裡：對話還空著時畫的是 hero、`Transcript`
+ * 還沒掛上，第一句話出現時它才掛——在它裡面判，第一句會被當成「連上時已經在的」。
+ */
+export function useFreshItems(ids: readonly string[], connected: boolean) {
+  const fresh = useRef(new Map<string, boolean>());
+  const settled = useRef(false);
+  const live = connected && settled.current;
+  let lastKnown = -1;
+  ids.forEach((id, index) => {
+    if (fresh.current.has(id)) lastKnown = index;
+  });
+  ids.forEach((id, index) => {
+    if (!fresh.current.has(id)) fresh.current.set(id, live && index > lastKnown);
+  });
+  if (connected) settled.current = true;
+  return (id: string) => fresh.current.get(id) === true;
+}
+
+/** 串流不逐字唸（`role="log"` 關掉 live），一則回覆講完時把全文丟進 polite 區唸一次（§8）。 */
+function useFinishedReply(entries: readonly ConversationEntry[], isFresh: (id: string) => boolean) {
+  const [announced, setAnnounced] = useState('');
+  const done = useRef(new Set<string>());
+  useEffect(() => {
+    for (const entry of entries) {
+      if (entry.kind !== 'ai' || entry.streaming || entry.text === '') continue;
+      if (!isFresh(entry.id) || done.current.has(entry.id)) continue;
+      done.current.add(entry.id);
+      setAnnounced(entry.text);
+    }
+  }, [entries, isFresh]);
+  return announced;
+}
+
+/** JS 的捲動不看 CSS 的 reduced-motion，要自己讀（§7）。 */
+function scrollBehavior(): ScrollBehavior {
+  const reduce =
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  return reduce ? 'auto' : 'smooth';
 }
 
 export function Transcript({
   state,
+  isFresh,
   feedback,
+  before,
+  after = [],
 }: {
   state: ConversationState;
+  /** 哪幾則是這一次看著它長出來的（`useFreshItems`，在常駐的元件裡算）。 */
+  isFresh: (id: string) => boolean;
   feedback?: TranscriptFeedback;
+  /** 列表最上面的東西（「載入更早的訊息」）。 */
+  before?: ReactNode;
+  /** 接在最後一則後面的（等人處理的卡片），各自帶一個 id。 */
+  after?: ReadonlyArray<{ readonly id: string; readonly node: ReactNode }>;
 }) {
-  if (state.entries.length === 0) {
-    return <p className="text-muted-foreground text-sm">還沒有訊息。</p>;
-  }
+  const items = [
+    ...state.entries.map((entry) => ({
+      id: entry.id,
+      node: <Entry entry={entry} {...(feedback === undefined ? {} : { feedback })} />,
+    })),
+    ...after,
+  ];
+  const announced = useFinishedReply(state.entries, isFresh);
+
   return (
-    <ul className="flex flex-col gap-4">
-      {state.entries.map((entry) => (
-        <Entry key={entry.id} entry={entry} {...(feedback === undefined ? {} : { feedback })} />
-      ))}
-    </ul>
+    <MessageScrollerProvider autoScroll>
+      <MessageScroller className="min-h-0 flex-1">
+        <MessageScrollerViewport aria-label="對話訊息" preserveScrollOnPrepend>
+          <MessageScrollerContent
+            aria-live="off"
+            className="mx-auto w-full max-w-2xl gap-4 px-6 pt-4 pb-10"
+          >
+            {before}
+            {items.map((item) => (
+              <MessageScrollerItem
+                key={item.id}
+                messageId={item.id}
+                className={isFresh(item.id) ? 'motion-rise-in' : undefined}
+              >
+                {item.node}
+              </MessageScrollerItem>
+            ))}
+          </MessageScrollerContent>
+        </MessageScrollerViewport>
+        <MessageScrollerButton className="rounded-full" behavior={scrollBehavior()}>
+          <ArrowDown />
+          <span className="sr-only">捲到最新的訊息</span>
+        </MessageScrollerButton>
+      </MessageScroller>
+      <p aria-live="polite" className="sr-only">
+        {announced}
+      </p>
+    </MessageScrollerProvider>
   );
 }

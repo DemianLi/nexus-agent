@@ -424,7 +424,7 @@ describe('斜線命令', () => {
     // 命令是人對工具說的話，不是對模型說的話。
     expect(sent).toEqual([]);
     expect(slashed).toEqual(['/plan']);
-    expect(screen.queryAllByRole('listitem')).toEqual([]);
+    expect(document.querySelectorAll('[data-slot="message-scroller-item"]')).toHaveLength(0);
   });
 
   it('認不得的一行說「不認得」，不是靜靜送給模型', async () => {

@@ -10,10 +10,12 @@ import { FEEDBACK_COMMAND_LINE } from '@/lib/feedback';
 import { QuestionCard } from '@/components/question-card';
 import { StatusLine } from '@/components/status-line';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { Transcript } from '@/components/transcript';
+import { Transcript, useFreshItems } from '@/components/transcript';
 import { Button } from '@/components/ui/button';
+import { Toaster } from '@/components/ui/sonner';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { useConversation } from '@/hooks/use-conversation';
+import { useThemePreference } from '@/hooks/use-theme-preference';
 import { createAgentClient } from '@/lib/agent';
 import { newConversationTarget, readThreadListing } from '@/lib/new-conversation';
 import { recallThread, rememberThread } from '@/lib/remembered-thread';
@@ -130,6 +132,7 @@ export function App({ client }: { client?: WireClient } = {}) {
   }, [choice.threadId]);
   // 一個 App 一個 client：清單與對話走同一條線。放在這裡而不是 hook 裡，是因為清單不屬於任何一條 thread。
   const wire = useMemo(() => client ?? createAgentClient(), [client]);
+  const [theme] = useThemePreference();
   // 換 thread 有兩條路（「新對話」與從清單點一條），**後按的那一下贏**：「新對話」要先讀清單，讀回來之前人已經從清單
   // 點了別條的話，晚到的結果不能把人拉回去。讀清單期間再按一次「新對話」不另開一次（dsh `connectWorkspace` 的
   // `connecting`）——兩次讀到的是同一份清單，只會換一次。
@@ -178,6 +181,8 @@ export function App({ client }: { client?: WireClient } = {}) {
           setChoice({ threadId, origin: 'listed' });
         }}
       />
+      {/* 還沒有人呼叫 `toast()`：第一個用的是 ⑧（#408）的「已停止這一輪」。先掛好，主題跟著切換鈕走。 */}
+      <Toaster theme={theme} position="top-center" />
     </SidebarProvider>
   );
 }
@@ -203,11 +208,28 @@ function ConversationView({
   // 唯一的出口——寧可多開一條，也不能把人留在原地。
   const engaged = !conversation.connected || conversation.state.entries.length > 0;
   const [draft, setDraft] = useState('');
+  // 關掉之後留著最後那一份：退場動效那 150ms 裡框裡的字不能先消失。
+  const lastDialog = useRef(conversation.feedbackDialog);
+  // **每打開一次就是一張新表單**（跟以前關掉就卸掉一樣）：同一則關掉再開，草稿不留。
+  const dialogWasOpen = useRef(false);
+  const dialogOpens = useRef(0);
+  const dialogOpen = conversation.feedbackDialog !== undefined;
+  if (dialogOpen && !dialogWasOpen.current) dialogOpens.current += 1;
+  dialogWasOpen.current = dialogOpen;
+  if (dialogOpen) lastDialog.current = conversation.feedbackDialog;
+  const feedbackDialog = lastDialog.current;
 
   // **一顆中斷一張卡**（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
   // 同一輪兩個工具都要核准時閘門逐次呼叫各自 `interrupt()`，折疊器逐 `interruptId`
   // 並存——每一顆各自帶著回答自己要用的那把鑰匙，所以每一張卡按下去落在自己那顆上。
   const pendings = conversation.state.pendings;
+  const isFresh = useFreshItems(
+    [
+      ...conversation.state.entries.map((entry) => entry.id),
+      ...pendings.map((pending) => pending.interruptId),
+    ],
+    conversation.connected,
+  );
   // **`awaiting-input` 也算忙**。少了它，等核准時送得出下一句話——而基座那時會把
   // 中斷靜靜丟掉：那個工具既沒執行也沒被拒絕，也不會再問第二次（實測）。
   //
@@ -250,39 +272,54 @@ function ConversationView({
           <ThemeToggle className="size-11 rounded-full lg:size-9" />
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto flex min-h-full max-w-2xl flex-col gap-6 px-6 py-6">
-            <div className="space-y-1">
-              <StatusLine
-                state={conversation.state}
-                connected={conversation.connected}
-                {...(conversation.connectionError === undefined
-                  ? {}
-                  : { connectionError: conversation.connectionError })}
-                {...(conversation.commandError === undefined
-                  ? {}
-                  : { commandError: conversation.commandError })}
-                {...(conversation.slashError === undefined
-                  ? {}
-                  : { slashError: conversation.slashError })}
-                {...(conversation.slashNotice === undefined
-                  ? {}
-                  : { slashNotice: conversation.slashNotice })}
-              />
-              {/* 不掛 `role="status"`：那一格歸 `StatusLine`，這一句是背景，不是現況。 */}
-              {notice !== undefined && <p className="text-muted-foreground text-xs">{notice}</p>}
-              {conversation.history?.legacy === true && (
-                <p className="text-muted-foreground text-xs">{LEGACY_THREAD_NOTICE}</p>
-              )}
-              {conversation.historyError !== undefined && (
-                <p className="text-destructive text-xs">
-                  之前說過的話拿不回來：{conversation.historyError}
-                </p>
-              )}
-            </div>
+        <div className="mx-auto w-full max-w-2xl shrink-0 px-6 pt-4">
+          <div className="space-y-1">
+            <StatusLine
+              state={conversation.state}
+              connected={conversation.connected}
+              {...(conversation.connectionError === undefined
+                ? {}
+                : { connectionError: conversation.connectionError })}
+              {...(conversation.commandError === undefined
+                ? {}
+                : { commandError: conversation.commandError })}
+              {...(conversation.slashError === undefined
+                ? {}
+                : { slashError: conversation.slashError })}
+              {...(conversation.slashNotice === undefined
+                ? {}
+                : { slashNotice: conversation.slashNotice })}
+            />
+            {/* 不掛 `role="status"`：那一格歸 `StatusLine`，這一句是背景，不是現況。 */}
+            {notice !== undefined && <p className="text-muted-foreground text-xs">{notice}</p>}
+            {conversation.history?.legacy === true && (
+              <p className="text-muted-foreground text-xs">{LEGACY_THREAD_NOTICE}</p>
+            )}
+            {conversation.historyError !== undefined && (
+              <p className="text-destructive text-xs">
+                之前說過的話拿不回來：{conversation.historyError}
+              </p>
+            )}
+          </div>
+        </div>
 
-            <section className="flex flex-1 flex-col gap-4">
-              {conversation.history?.hasMore === true && (
+        {conversation.state.entries.length === 0 && pendings.length === 0 ? (
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6">
+            <EmptyHero />
+          </div>
+        ) : (
+          <Transcript
+            state={conversation.state}
+            isFresh={isFresh}
+            feedback={{
+              ratings: conversation.ratings,
+              busy: !conversation.connected,
+              loadFailed: conversation.ratingsLoadFailed,
+              onSeed: conversation.seedRatings,
+              onRate: (messageId, rating) => void conversation.rate(messageId, rating),
+            }}
+            before={
+              conversation.history?.hasMore === true && (
                 <Button
                   type="button"
                   variant="ghost"
@@ -293,30 +330,17 @@ function ConversationView({
                 >
                   {LOAD_EARLIER_LABEL}
                 </Button>
-              )}
-              {conversation.state.entries.length === 0 && pendings.length === 0 ? (
-                <EmptyHero />
-              ) : (
-                <Transcript
-                  state={conversation.state}
-                  feedback={{
-                    ratings: conversation.ratings,
-                    busy: !conversation.connected,
-                    loadFailed: conversation.ratingsLoadFailed,
-                    onSeed: conversation.seedRatings,
-                    onRate: (messageId, rating) => void conversation.rate(messageId, rating),
-                  }}
-                />
-              )}
-              {/*
-          **按 `kind` 分派到兩個元件，不是一個元件內部分支**（#231 第 4 項）：送出的形狀
-          完全不同（`{decisions:[…]}` 對 `{answers:[…]}`），而認不得的 `kind` 根本到不了
-          這裡——折疊器那一層就把它翻成 `failed` 了，理由見 `reduceInputRequested`。
-        */}
-              {pendings.map((pending) =>
+              )
+            }
+            // **按 `kind` 分派到兩個元件，不是一個元件內部分支**（#231 第 4 項）：送出的形狀
+            // 完全不同（`{decisions:[…]}` 對 `{answers:[…]}`），而認不得的 `kind` 根本到不了
+            // 這裡——折疊器那一層就把它翻成 `failed` 了，理由見 `reduceInputRequested`。
+            // 卡片先接在對話後面；換掉輸入框的換手層是 ⑧（#408）的事。
+            after={pendings.map((pending) => ({
+              id: pending.interruptId,
+              node:
                 pending.kind === 'question' ? (
                   <QuestionCard
-                    key={pending.interruptId}
                     pending={pending}
                     busy={!conversation.connected}
                     onAnswer={(answers) => void conversation.answer(pending.interruptId, answers)}
@@ -324,7 +348,6 @@ function ConversationView({
                   />
                 ) : (
                   <ApprovalCard
-                    key={pending.interruptId}
                     pending={pending}
                     busy={!conversation.connected}
                     onDecide={(decision) =>
@@ -332,12 +355,11 @@ function ConversationView({
                     }
                   />
                 ),
-              )}
-            </section>
-          </div>
-        </div>
+            }))}
+          />
+        )}
 
-        <div className="mx-auto w-full max-w-2xl shrink-0 space-y-2 px-6 pb-6">
+        <div className="mx-auto w-full max-w-2xl shrink-0 space-y-2 px-6 pt-2 pb-6">
           <form
             className="flex items-center gap-2"
             onSubmit={(event) => {
@@ -406,14 +428,13 @@ function ConversationView({
         </div>
       </SidebarInset>
 
-      {conversation.feedbackDialog !== undefined && (
+      {feedbackDialog !== undefined && (
         <FeedbackDialog
-          // 換了目標就是一張新的表單：草稿不帶過去。
-          key={JSON.stringify(conversation.feedbackDialog.target)}
-          submitting={conversation.feedbackDialog.submitting}
-          {...(conversation.feedbackDialog.failure === undefined
-            ? {}
-            : { failure: conversation.feedbackDialog.failure })}
+          // 每打開一次、或換了目標，就是一張新的表單：草稿不帶過去。
+          key={`${dialogOpens.current}:${JSON.stringify(feedbackDialog.target)}`}
+          open={dialogOpen}
+          submitting={feedbackDialog.submitting}
+          {...(feedbackDialog.failure === undefined ? {} : { failure: feedbackDialog.failure })}
           onSubmit={(draft) => void conversation.submitFeedback(draft)}
           onDismiss={conversation.dismissFeedback}
         />
