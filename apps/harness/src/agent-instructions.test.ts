@@ -22,11 +22,14 @@ import type { NexusPlugin } from '@nexus/core';
 import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import type { Event } from '@nexus/wire';
 import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import { DEFAULT_PLUGINS } from './cli.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
+import { restoreConversation } from './conversation-restore.js';
+import { LoopingChatModel } from './looping-model.js';
+import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
@@ -82,7 +85,18 @@ const WORKER_HOST: NexusPlugin = {
 interface RunOptions {
   /** 要在工作區裡先放好的檔。給 `undefined` 就不給 `--workspace`（預設 `StateBackend`）。 */
   readonly files?: Record<string, string>;
-  readonly turns: readonly ScriptedTurn[];
+  /** 腳本模型的回話。給了 {@link RunOptions.looping} 時不用。 */
+  readonly turns?: readonly ScriptedTurn[];
+  /**
+   * 換成永遠再叫一次工具的模型，每一句話都跑到迴圈上限才停——摘要要壓得到，得先有夠長的對話，
+   * 而腳本模型的回話會被摘要器那次呼叫吃掉一輪，對不齊。
+   *
+   * 門檻壓低是為了在上限內摘要得到；**plugin 清單照舊是 `DEFAULT_PLUGINS`**。
+   */
+  readonly looping?: {
+    readonly summarization: { readonly messages: number; readonly keep: number };
+    readonly recursionLimit: number;
+  };
   /** 送幾句話。預設一句。 */
   readonly submits?: readonly string[];
   /**
@@ -100,13 +114,25 @@ async function run(options: RunOptions) {
   for (const [name, content] of Object.entries(options.files ?? {})) {
     await writeFile(join(root, name), content, 'utf8');
   }
-  const model = new ScriptedChatModel({ turns: options.turns });
+  const looping = options.looping;
+  const model =
+    looping === undefined
+      ? new ScriptedChatModel({ turns: options.turns ?? [] })
+      : new LoopingChatModel({ toolName: ECHO_TOOL_NAME });
+  const checkpointer = new MemorySaver();
   const built = await createNexusAgent({
     model,
-    checkpointer: new MemorySaver(),
+    checkpointer,
     plugins: [...DEFAULT_PLUGINS, ...(options.extraPlugins ?? [])],
     ...(options.files !== undefined && {
       backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
+    }),
+    ...(looping !== undefined && {
+      recursionLimit: looping.recursionLimit,
+      summarization: {
+        trigger: [{ type: 'messages', value: looping.summarization.messages }],
+        keep: { type: 'messages', value: looping.summarization.keep },
+      },
     }),
   });
   const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'instructions');
@@ -118,9 +144,17 @@ async function run(options: RunOptions) {
     for await (const frame of stream) frames.push(frame);
   })();
 
+  /** 每一句話送出前，模型已經被問過幾次——切得出「這一句話的第一次呼叫」。 */
+  const callsBefore: number[] = [];
+  const prompts = (): readonly (readonly BaseMessage[])[] =>
+    model instanceof LoopingChatModel ? model.seen : model.prompts;
   for (const text of options.submits ?? ['開工']) {
+    callsBefore.push(prompts().length);
     frames.length = 0;
-    await pump.submit({ kind: 'message', text });
+    // 迴圈模型每一句話都停在上限上：那是預期的收場，不是這裡要驗的失敗。
+    await pump.submit({ kind: 'message', text }).catch((error: unknown) => {
+      if (looping === undefined || !String(error).includes('Recursion limit')) throw error;
+    });
     await until(() => frames.some(isRootDone));
     await pump.whenIdle();
   }
@@ -138,7 +172,18 @@ async function run(options: RunOptions) {
     sessions,
     /** **最後一句話那一輪**送出去的 frame。`frames` 每輪都清空，所以它只有最後一輪的。 */
     frames,
-    prompts: model.prompts as readonly (readonly BaseMessage[])[],
+    prompts: prompts(),
+    /** 第 n 句話（0 起算）的第一次模型呼叫在 `prompts` 裡的位置。 */
+    callsBefore,
+    /** 最後的 graph state。摘要事件只在這裡讀得到（不在 `invoke` 的回傳值裡）。 */
+    state: async () =>
+      (
+        await (
+          built.agent as unknown as {
+            getState: (config: unknown) => Promise<{ values: Record<string, unknown> }>;
+          }
+        ).getState({ configurable: { thread_id: 'instructions' } })
+      ).values,
     close,
   };
 }
@@ -340,6 +385,139 @@ describe('畫面上看不到它', () => {
       );
     } finally {
       await found.close();
+    }
+  }, 20000);
+});
+
+/** 基座摘要器塞進來的那一則（`lc_source: 'summarization'`）。 */
+function isSummary(message: BaseMessage): boolean {
+  return (
+    message.getType() === 'human' && message.additional_kwargs['lc_source'] === 'summarization'
+  );
+}
+
+/**
+ * **摘要之後（[#397](https://github.com/DemianLi/nexus-agent/issues/397)）。** 基座的摘要器不改寫
+ * `state.messages`，只記一顆 `_summarizationEvent`，每次模型呼叫現組 `[summary, ...messages.slice(cutoffIndex)]`
+ * （`deepagents@1.13.1` 的 `getEffectiveMessages`）。所以舊基線還在 state 裡、模型卻看不到；v0.4.30 的去重看
+ * `state.messages`，說「有」，於是整條 thread 再也補不回來（實測：第二句話 14 次呼叫全是 0 則）。
+ *
+ * 一場跑三句話，每一句都跑到迴圈上限，摘要每一句都發生好幾次。**要三句**：第二句補回來的那一則，第二句自己
+ * 就會再被切掉；第三句要再補一次——判準若寫成一次性的旗標或只看第一次的切點，只有第三句會紅。
+ *
+ * 補的時刻是**下一句話**，不是下一步：同一句話裡摘要之後的那幾輪仍然看不到，那是登記過的偏離
+ * （plugin 檔頭）。這裡不驗那一半。
+ */
+describe('摘要之後下一句話把基線補回來', () => {
+  const submits = ['第一句', '第二句', '第三句'];
+  let found: Awaited<ReturnType<typeof run>>;
+  let state: Record<string, unknown>;
+
+  beforeAll(async () => {
+    found = await run({
+      files: { 'AGENTS.md': '規矩。' },
+      looping: { summarization: { messages: 8, keep: 3 }, recursionLimit: 40 },
+      submits,
+    });
+    state = await found.state();
+  }, 60000);
+  afterAll(async () => {
+    await found.close();
+  });
+
+  /** agent 自己的呼叫。摘要器那次也走同一個模型，但它的 prompt 沒有 system。 */
+  const isAgentCall = (prompt: readonly BaseMessage[]) => prompt[0]?.getType() === 'system';
+
+  it('第二、三句話的第一次模型呼叫各看得到恰好一則基線，排在摘要之後', () => {
+    for (const sentence of [1, 2]) {
+      const from = found.callsBefore[sentence] ?? 0;
+      const before = found.prompts.slice(0, from).filter(isAgentCall).at(-1) ?? [];
+      const first = found.prompts.slice(from).find(isAgentCall) ?? [];
+
+      // 前提：上一句話收尾時基線已經被切掉了，而這一句的第一次呼叫確實是摘要過的。沒有這兩條，
+      // 下面那條在一個沒摘要過的 thread 上也會通過。
+      expect(baselines(before)).toHaveLength(0);
+      expect(before.some(isSummary)).toBe(true);
+      expect(first.some(isSummary)).toBe(true);
+
+      expect(baselines(first)).toHaveLength(1);
+      expect(first.indexOf(baselines(first)[0] as BaseMessage)).toBeGreaterThan(
+        first.findIndex(isSummary),
+      );
+    }
+  });
+
+  it('每補一則就記一筆 user/message：三句話三筆，續接時重建得回來', () => {
+    const root = found.sessions.find((session) => session.address.kind === 'root');
+    expect(injectedBaselines(root?.log.events ?? [])).toHaveLength(submits.length);
+    expect((state.messages as BaseMessage[]).filter(isAgentInstructionsMessage)).toHaveLength(
+      submits.length,
+    );
+  });
+
+  /**
+   * **上游絆索。** 判準讀的是基座的私有 state 鍵，升 `deepagents` 時這兩件事要紅在這裡，而不是讓
+   * 工作區指令又默默消失：
+   *
+   * 1. 鍵名是 `_summarizationEvent`，帶 `cutoffIndex` 與 `summaryMessage`；
+   * 2. `cutoffIndex` 是 **`state.messages`** 的索引——模型在摘要之後看到的，就是 state 從那一格起的那一串。
+   *
+   * 量的是基座自己寫下的那一顆，不是我們塞的：最後一次 agent 呼叫的 prompt 逐則比 id。
+   */
+  it('上游絆索：切點記在 _summarizationEvent，而且是 state.messages 的索引', () => {
+    const event = state._summarizationEvent as
+      { cutoffIndex?: unknown; summaryMessage?: BaseMessage } | undefined;
+    expect(typeof event?.cutoffIndex).toBe('number');
+    const cutoff = event?.cutoffIndex as number;
+
+    const last = found.prompts.filter(isAgentCall).at(-1) ?? [];
+    expect(last[1] !== undefined && isSummary(last[1])).toBe(true);
+    expect(last[1]?.text).toBe(event?.summaryMessage?.text);
+    const seen = last.slice(2).map((message) => message.id);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((id) => typeof id === 'string')).toBe(true);
+    expect(seen).toEqual(
+      (state.messages as BaseMessage[]).slice(cutoff, cutoff + seen.length).map((m) => m.id),
+    );
+
+    // 判準唯一的假陽性來源：摘要那一則被認成基線。基座真的建出來的那一則，一次都不能是。
+    expect(found.prompts.flat().filter(isSummary).some(isAgentInstructionsMessage)).toBe(false);
+  });
+
+  /**
+   * **續接（`--resume`／serve 碰到舊 thread）不靠切點。** `conversation-restore.ts` 刻意只灌 `messages`、不帶
+   * `_summarizationEvent`，而灌回去的是「摘要＋之後的」——被切掉的基線本來就不在那一串裡，判準退回「有沒有」
+   * 也照樣補一則。2026-09-18 實測：推回 9 則、其中 0 則基線，續接後第一次呼叫看得到 1 則。
+   */
+  it('續接之後：灌回去的那一串沒有切點、也沒有舊基線，第一次呼叫照樣看得到一則', async () => {
+    const root = found.sessions.find((session) => session.address.kind === 'root');
+    const model = new ScriptedChatModel({ turns: [{ content: '續接好。' }] });
+    const workspace = await mkdtemp(join(tmpdir(), 'nexus-instructions-resume-'));
+    await writeFile(join(workspace, 'AGENTS.md'), '規矩。', 'utf8');
+    const resumed = await createNexusAgent({
+      model,
+      checkpointer: new MemorySaver(),
+      plugins: [...DEFAULT_PLUGINS],
+      backend: new ContainedFilesystemBackend({ rootDir: workspace, mode: 'workspace-write' }),
+    });
+    try {
+      const replay = await restoreConversation(
+        resumed.agent as never,
+        'resumed',
+        root?.log.events ?? [],
+      );
+      expect(replay.kind).toBe('replayed');
+      const replayed = replay.kind === 'replayed' ? replay.messages : [];
+      expect(replayed.some(isSummary)).toBe(true);
+      expect(replayed.filter(isAgentInstructionsMessage)).toHaveLength(0);
+
+      await resumed.agent.invoke(toAgentInvocation('續接之後'), {
+        configurable: { thread_id: 'resumed' },
+      });
+      expect(baselines(model.prompts[0] ?? [])).toHaveLength(1);
+    } finally {
+      await resumed.dispose();
+      await rm(workspace, { recursive: true, force: true });
     }
   }, 20000);
 });

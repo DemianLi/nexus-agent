@@ -35,16 +35,29 @@ async function inject(
   files: Record<string, string>,
   messages: readonly BaseMessage[] = [],
   maxBytes = DEFAULT_MAX_BYTES,
+  summarizationEvent?: unknown,
 ): Promise<BaseMessage[] | undefined> {
   const middleware = createAgentInstructionsMiddleware(
     fakeBackend(files) as never,
     maxBytes,
   ) as unknown as {
-    beforeAgent: (state: { messages: readonly BaseMessage[] }) => Promise<unknown>;
+    beforeAgent: (state: {
+      messages: readonly BaseMessage[];
+      _summarizationEvent?: unknown;
+    }) => Promise<unknown>;
   };
-  const result = (await middleware.beforeAgent({ messages })) as
-    { messages: BaseMessage[] } | undefined;
+  const result = (await middleware.beforeAgent({
+    messages,
+    ...(summarizationEvent !== undefined && { _summarizationEvent: summarizationEvent }),
+  })) as { messages: BaseMessage[] } | undefined;
   return result?.messages;
+}
+
+function baselineMessage(): HumanMessage {
+  return new HumanMessage({
+    content: '舊的基線',
+    additional_kwargs: { [AGENT_INSTRUCTIONS_MARKER]: true },
+  });
 }
 
 describe('createAgentInstructionsPlugin', () => {
@@ -124,10 +137,7 @@ describe('讀工作區根那一層', () => {
 
 describe('一個 agent 一份', () => {
   it('訊息串裡已經有基線就不再加', async () => {
-    const existing = new HumanMessage({
-      content: '舊的基線',
-      additional_kwargs: { [AGENT_INSTRUCTIONS_MARKER]: true },
-    });
+    const existing = baselineMessage();
     expect(isAgentInstructionsMessage(existing)).toBe(true);
     expect(await inject({ '/AGENTS.md': '規矩。' }, [existing])).toBeUndefined();
   });
@@ -137,5 +147,49 @@ describe('一個 agent 一份', () => {
     const copy = new HumanMessage({ content: rendered?.[0]?.text ?? '' });
     expect(isAgentInstructionsMessage(copy)).toBe(false);
     expect(await inject({ '/AGENTS.md': '規矩。' }, [copy])).toHaveLength(1);
+  });
+});
+
+/**
+ * 摘要之後（[#397](https://github.com/DemianLi/nexus-agent/issues/397)）。基座的摘要器不改寫
+ * `state.messages`，只記一顆 `_summarizationEvent`，模型看到的是 `[summary, ...messages.slice(cutoffIndex)]`。
+ * 這裡餵的是那顆事件的形狀；它真的是基座寫的那個形狀，由組裝點那側的上游絆索負責。
+ */
+describe('摘要之後：模型看得到一則才算有', () => {
+  const summary = new HumanMessage({
+    content: '前情提要。',
+    additional_kwargs: { lc_source: 'summarization' },
+  });
+  const history = (): BaseMessage[] => [
+    new HumanMessage('第一句'),
+    baselineMessage(),
+    new HumanMessage('第二句'),
+    new HumanMessage('第三句'),
+  ];
+
+  it('舊基線落在切點之前：補一則新的', async () => {
+    const event = { cutoffIndex: 2, summaryMessage: summary, filePath: null };
+    const messages = await inject({ '/AGENTS.md': '規矩。' }, history(), DEFAULT_MAX_BYTES, event);
+    expect(messages).toHaveLength(1);
+    expect(isAgentInstructionsMessage(messages?.[0] as BaseMessage)).toBe(true);
+  });
+
+  it('舊基線就在切點上（模型看得到）：不補', async () => {
+    const event = { cutoffIndex: 1, summaryMessage: summary, filePath: null };
+    expect(
+      await inject({ '/AGENTS.md': '規矩。' }, history(), DEFAULT_MAX_BYTES, event),
+    ).toBeUndefined();
+  });
+
+  it('摘要訊息本身不會被當成基線——它是判準唯一可能的假陽性來源', () => {
+    expect(isAgentInstructionsMessage(summary)).toBe(false);
+  });
+
+  it('認不出形狀的事件當成沒摘要過：退回「state 裡有一則就不補」', async () => {
+    for (const event of [null, { cutoffIndex: '2', summaryMessage: summary }, { cutoffIndex: 2 }]) {
+      expect(
+        await inject({ '/AGENTS.md': '規矩。' }, history(), DEFAULT_MAX_BYTES, event),
+      ).toBeUndefined();
+    }
   });
 });

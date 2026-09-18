@@ -5,8 +5,8 @@
  * 每一檔的標頭、跳脫、預算超出時的通知文字、省略與截斷的順序，逐字同一份。抄的理由是這些字串與
  * 順序**是模型看到的東西**——改一個字就是改了一次提示詞，而那不該在移植的時候順便發生。
  *
- * 沒有抄過來的三段，都是這一刀不做的（見 `index.ts` 檔頭與
- * [#389](https://github.com/DemianLi/nexus-agent/issues/389)）：
+ * 沒有抄過來的三段，都是這裡不做的（見 `index.ts` 檔頭；刷新與巢狀發現的
+ * [#389](https://github.com/DemianLi/nexus-agent/issues/389) 已以 not planned 關閉）：
  *
  * - `REPLACEMENT_*_INTRO`（基線被取代時的引言）與 `changedSectionText`：那是刷新。
  * - `additionalSectionText`（巢狀目錄的 `Additional instructions from:`）：那是巢狀發現。
