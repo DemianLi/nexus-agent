@@ -66,7 +66,12 @@ export function failureCopy(code: string): string {
 
 /**
  * 這則回覆長不長讚踩：**那一輪收尾的那則**（`turnTail`，同 dsh 的 `TurnTailNodeView`），而且指名得到
- * （有 `messageId`）。**講到一半被停下來的那則不長**：dsh 凍結的半段沒有 `messageId`，那一輪就沒有按鈕。
+ * （有 `messageId`）。
+ *
+ * **講到一半被停下來的那則不長**，同 dsh（凍結的半段沒有 `messageId`，那一輪就沒有按鈕），而我們這邊的
+ * 理由是同一個：pump 把那半段記進日誌時是新建的一則、沒有 id（`thread-pump.ts` 的
+ * `#keepInterruptedReply`），server 找不到它。即時那則手上的 `messageId` 是串流那次呼叫的，評下去一律
+ * `target-not-found`；重播出來的那則則是根本沒有 `messageId`。
  *
  * @param entry - 一則回覆。
  * @returns 要不要畫讚踩。

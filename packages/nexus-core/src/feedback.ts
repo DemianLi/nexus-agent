@@ -17,6 +17,10 @@
  * （[#382](https://github.com/DemianLi/nexus-agent/issues/382) 的量測；絆索在
  * `apps/harness/src/feedback-wire.test.ts`）。
  *
+ * **只有記了 id 的回覆評得到。** 沒記 id 的不是目標，畫面上也不長按鈕：被停下來的那半段（pump 新建的一則），
+ * 以及不走 v3 串流、供應商又沒給 id 的那幾則（CLI 跑假模型時就是這樣；CLI 接真的供應商實測有
+ * `chatcmpl-…`）。
+ *
  * **格式 10 以前以輪記的評分照舊讀得到**（[#278](https://github.com/DemianLi/nexus-agent/issues/278)
  * 那時我們的日誌還不記回覆）：日誌只增不改，讀的時候把它對到那一輪最後一則有文字的回覆，見
  * {@link currentMessageFeedback}。

@@ -237,8 +237,6 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
           setHistoryError(page.message);
         }
         setConnected(true);
-        // **重連之後重讀評分**，照 dsh：讀過的才重讀（還沒讀過的等第一次滑過），而且排在路上的修改後面。
-        if (ratingsController.view.status !== 'cold') void ratingsController.resync();
         // **抓清單排在開線之後**，跟送話同一條規則：這條線沒有重播，所有的上行都等
         // 下行開好。清單本身不需要重播，但兩套順序規則比一套容易記錯。
         const listed = await client.slashList(threadId);
@@ -269,7 +267,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       controller.abort();
       setConnected(false);
     };
-  }, [client, threadId, advance, ratingsController]);
+  }, [client, threadId, advance]);
 
   /** 收下上行的回條：被拒就說出來，成功就把上一次的抱怨收掉。 */
   const note = useCallback((result: UplinkResult) => {

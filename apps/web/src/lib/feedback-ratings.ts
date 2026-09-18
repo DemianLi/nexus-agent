@@ -9,6 +9,10 @@
  * - **修改逐筆排隊**：每一次修改都拿「前一次修改落定之後」的版本去比，兩次連點不會拿同一個舊版本各送一次。
  * - **重連時的重讀也排在修改後面**（{@link RatingsController.resync}）：不排的話，一份在修改之前發出、
  *   之後才回來的清單會把剛寫進去的版本蓋回舊的。
+ *
+ * **`resync` 今天沒有人叫**：這個 web 還沒有重連——下行只在掛上時開一次，斷了只報錯
+ * （`use-conversation.ts`）。dsh 在重連時叫它（`ui-message-feedback/src/client/index.ts:72`）；重連落地時
+ * 接在「下行重新開好」之後，條件同 dsh：讀過的（不是 `cold`）才重讀。
  */
 
 import type {
