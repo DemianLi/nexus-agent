@@ -2,6 +2,7 @@ import type {
   Event,
   FeedbackDeleteCommand,
   FeedbackDeleteResult,
+  FeedbackListResult,
   FeedbackPutCommand,
   FeedbackPutResult,
   FeedbackRecordCommand,
@@ -17,9 +18,9 @@ import { FEEDBACK_COPY } from '@/lib/feedback';
 /**
  * 評分與 `/feedback` 的畫面（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。
  *
- * **按鈕放哪一則的判法驗在 `lib/feedback.test.ts`**，對著真的折疊器；host 那側的規則與 run id 對到
- * 輪，驗在 `@nexus/harness` 的 `feedback-wire.test.ts`。這裡驗的是點下去之後送出了什麼、畫面變成什麼，
- * 所以 client 是假的、frame 是手餵的。
+ * **按鈕放哪一則的判法驗在 `@nexus/wire` 的 `turn-tail.test.ts`**，對著真的折疊器；host 那側的規則與
+ * 畫面拿到的 `messageId` 對得上日誌，驗在 `@nexus/harness` 的 `feedback-wire.test.ts`。這裡驗的是點下去之後
+ * 送出了什麼、畫面變成什麼，所以 client 是假的、frame 是手餵的。
  */
 
 function memoryStorage(): Storage {
@@ -80,15 +81,25 @@ const ONE_RUN: readonly Event[] = [
 ];
 
 function item(overrides: Partial<WireFeedbackItem> = {}): WireFeedbackItem {
-  return { turn: 0, rating: 'negative', version: 'v1', createdAt: 0, updatedAt: 0, ...overrides };
+  return {
+    messageId: 'run-b',
+    rating: 'negative',
+    version: 'v1',
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides,
+  };
 }
 
 function fakeClient(
   options: {
     readonly put?: (params: FeedbackPutCommand['params']) => FeedbackPutResult;
     readonly del?: (params: FeedbackDeleteCommand['params']) => FeedbackDeleteResult;
+    /** 省略就是一筆都沒有；`'rejected'` 是線收不下。 */
+    readonly list?: FeedbackListResult | 'rejected';
   } = {},
 ) {
+  const lists: number[] = [];
   const puts: FeedbackPutCommand['params'][] = [];
   const deletes: FeedbackDeleteCommand['params'][] = [];
   const records: FeedbackRecordCommand['params'][] = [];
@@ -125,6 +136,11 @@ function fakeClient(
       deletes.push(params);
       return { kind: 'ok', result: options.del?.(params) ?? { ok: true, value: { absent: true } } };
     },
+    feedbackList: async () => {
+      lists.push(lists.length);
+      if (options.list === 'rejected') return { kind: 'rejected', message: '讀不到' };
+      return { kind: 'ok', result: options.list ?? { ok: true, value: { items: [] } } };
+    },
     feedbackRecord: async (_threadId, params) => {
       records.push(params);
       return { kind: 'ok', result: { ok: true, value: { recorded: true } } };
@@ -136,7 +152,7 @@ function fakeClient(
       result: { events: [], firstSeq: 0, throughSeq: -1, hasMore: false, legacy: false },
     }),
   };
-  return { client, puts, deletes, records, slashed };
+  return { client, lists, puts, deletes, records, slashed };
 }
 
 /** 那則回覆所在的條目。 */
@@ -185,7 +201,13 @@ describe('評分按鈕', () => {
 
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(fake.puts).toEqual([
-      { runId: 'b', rating: 'negative', note: '很慢', category: 'task-result', ifVersion: null },
+      {
+        messageId: 'run-b',
+        rating: 'negative',
+        note: '很慢',
+        category: 'task-result',
+        ifVersion: null,
+      },
     ]);
     expect(screen.getByRole('status').textContent).toBe(FEEDBACK_COPY.recorded);
     const pressed = within(entryOf('收工了。')).getByRole('button', {
@@ -194,7 +216,7 @@ describe('評分按鈕', () => {
     expect(pressed.getAttribute('aria-pressed')).toBe('true');
 
     fireEvent.click(pressed);
-    await waitFor(() => expect(fake.deletes).toEqual([{ runId: 'b', ifVersion: 'v1' }]));
+    await waitFor(() => expect(fake.deletes).toEqual([{ messageId: 'run-b', ifVersion: 'v1' }]));
     await waitFor(() =>
       expect(
         within(entryOf('收工了。'))
@@ -231,6 +253,65 @@ describe('評分按鈕', () => {
         .getByRole('button', { name: FEEDBACK_COPY.likeActive })
         .getAttribute('aria-pressed'),
     ).toBe('true');
+  });
+});
+
+describe('讀回評分（list，#382）', () => {
+  const stored = {
+    ok: true,
+    value: { items: [item({ rating: 'negative', version: 'v-stored' })] },
+  } as const;
+
+  it('滑過之前是空心、不讀；第一次滑過讀一次，畫上存著的那筆；之後不再讀', async () => {
+    seq = 0;
+    const fake = fakeClient({ list: stored });
+    render(<App client={fake.client} />);
+    await ready();
+    const dislike = () =>
+      within(entryOf('收工了。')).getByRole('button', {
+        name: /^(有問題的回答|取消標記)$/,
+      });
+    expect(dislike().getAttribute('aria-pressed')).toBe('false');
+    expect(fake.lists).toEqual([]);
+
+    fireEvent.pointerEnter(dislike());
+    await waitFor(() => expect(dislike().getAttribute('aria-pressed')).toBe('true'));
+    fireEvent.pointerEnter(dislike());
+    fireEvent.focus(dislike());
+    expect(fake.lists).toHaveLength(1);
+  });
+
+  it('沒滑過就直接點：先等讀回，存著的是踩就是收回，帶的是存著的那個版本', async () => {
+    seq = 0;
+    const fake = fakeClient({ list: stored });
+    render(<App client={fake.client} />);
+    await ready();
+
+    fireEvent.click(
+      within(entryOf('收工了。')).getByRole('button', { name: FEEDBACK_COPY.dislike }),
+    );
+    await waitFor(() =>
+      expect(fake.deletes).toEqual([{ messageId: 'run-b', ifVersion: 'v-stored' }]),
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('讀不回來：按鈕旁講一句，點下去照樣開對話框', async () => {
+    seq = 0;
+    const fake = fakeClient({ list: 'rejected' });
+    render(<App client={fake.client} />);
+    await ready();
+
+    fireEvent.pointerEnter(
+      within(entryOf('收工了。')).getByRole('button', { name: FEEDBACK_COPY.dislike }),
+    );
+    await waitFor(() =>
+      expect(within(entryOf('收工了。')).getByText(FEEDBACK_COPY.load)).toBeTruthy(),
+    );
+    fireEvent.click(
+      within(entryOf('收工了。')).getByRole('button', { name: FEEDBACK_COPY.dislike }),
+    );
+    expect(await screen.findByRole('dialog')).toBeTruthy();
   });
 });
 

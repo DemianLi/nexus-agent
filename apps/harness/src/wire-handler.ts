@@ -116,7 +116,7 @@ export interface ThreadAgent {
   readonly commands: Pick<CommandRegistrationPoint, 'find' | 'list'>;
   /**
    * 評分與評語的規則（[#278](https://github.com/DemianLi/nexus-agent/issues/278)），選配。
-   * 沒掛 `@nexus/plugin-feedback` 的組裝就沒有，那時三個回饋 method 回 `not_supported`。
+   * 沒掛 `@nexus/plugin-feedback` 的組裝就沒有，那時四個回饋 method 回 `not_supported`。
    */
   readonly feedback?: FeedbackService;
   dispose(): Promise<void>;
@@ -302,13 +302,12 @@ function optional(value: unknown, check: (candidate: unknown) => boolean): boole
 const isString = (value: unknown): value is string => typeof value === 'string';
 
 /**
- * 三個回饋 method 的回應（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。
+ * 四個回饋 method 的回應（[#278](https://github.com/DemianLi/nexus-agent/issues/278)、
+ * [#382](https://github.com/DemianLi/nexus-agent/issues/382)）。
  *
- * **參數在這裡驗**：這是線的邊界，瀏覽器送什麼都可能。規則本身（備註、版本、目標是不是一輪的起頭）
- * 歸 `@nexus/plugin-feedback`，這裡只把 run id 換成輪——那張表在 pump 手上。
- *
- * **run id 查不到就是 `target-not-found`，帶的是 run id**：瀏覽器指名的是它，它看不到輪。子代理的回覆、
- * 別條 thread 的、server 重開之前的，都走這一格。
+ * **參數在這裡驗**：這是線的邊界，瀏覽器送什麼都可能。規則本身（備註、版本、目標是不是 root 日誌裡的一則
+ * 回覆）歸 `@nexus/plugin-feedback`，這裡原樣交過去：瀏覽器指名的訊息 id 就是日誌記的那個，沒有要換的。
+ * 子代理的回覆在它自己那一份日誌裡，這裡交的是 root 那一份，所以評不到。
  */
 function feedbackResponse(
   thread: ThreadState | undefined,
@@ -344,22 +343,27 @@ function feedbackResponse(
     return successResponse(id, { ...result });
   }
 
-  if (typeof p.runId !== 'string' || p.runId.length === 0) {
-    return errorResponse(id, 'invalid_argument', `${method} 缺 runId`);
+  if (method === 'feedback.list') {
+    // 還沒開過的 thread 沒有日誌，也就沒有評分：回空的，不回錯（web 在任何一條 thread 上都會問）。
+    if (thread === undefined || service === undefined) {
+      return successResponse(id, { ok: true, value: { items: [] } });
+    }
+    return successResponse(id, { ...service.list(thread.pump.sessionLog) });
   }
-  const runId = p.runId;
-  const notFound = { ok: false, error: { code: 'target-not-found', runId } };
-  const turn = thread?.pump.turnOfReply(runId);
+
+  if (typeof p.messageId !== 'string' || p.messageId.length === 0) {
+    return errorResponse(id, 'invalid_argument', `${method} 缺 messageId`);
+  }
+  const messageId = p.messageId;
+  const notFound = { ok: false, error: { code: 'target-not-found', messageId } };
 
   if (method === 'feedback.delete') {
     if (typeof p.ifVersion !== 'string') {
       return errorResponse(id, 'invalid_argument', 'feedback.delete 缺 ifVersion');
     }
-    if (thread === undefined || service === undefined || turn === undefined) {
-      return successResponse(id, notFound);
-    }
+    if (thread === undefined || service === undefined) return successResponse(id, notFound);
     return successResponse(id, {
-      ...service.delete(thread.pump.sessionLog, { turn, ifVersion: p.ifVersion }),
+      ...service.delete(thread.pump.sessionLog, { messageId, ifVersion: p.ifVersion }),
     });
   }
 
@@ -376,18 +380,14 @@ function feedbackResponse(
       'feedback.put 要 rating（positive／negative）、ifVersion（字串或 null），note 與 category 選填',
     );
   }
-  if (thread === undefined || service === undefined || turn === undefined) {
-    return successResponse(id, notFound);
-  }
+  if (thread === undefined || service === undefined) return successResponse(id, notFound);
   const result = service.put(thread.pump.sessionLog, {
-    turn,
+    messageId,
     rating: p.rating as 'positive' | 'negative',
     ...(typeof p.note === 'string' && { note: p.note }),
     ...(isCategory(p.category) && { category: p.category }),
     ifVersion: p.ifVersion,
   });
-  // 規則那側也會回 target-not-found（那顆不是一輪的起頭）；對瀏覽器一律講 run id。
-  if (!result.ok && result.error.code === 'target-not-found') return successResponse(id, notFound);
   return successResponse(id, { ...result });
 }
 

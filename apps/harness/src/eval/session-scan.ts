@@ -64,13 +64,20 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { isAbsolute, join, relative } from 'node:path';
 import {
+  currentMessageFeedback,
   deriveSessionStats,
   repeatCallKey,
   repeatReminderTracks,
   resolveRepeatReminderSettings,
   SESSION_LOG_FORMAT_VERSION,
 } from '@nexus/core';
-import type { RepeatReminderSettings, SessionEvent, SessionEventType } from '@nexus/core';
+import type {
+  LegacyTurnFeedbackItem,
+  MessageFeedbackItem,
+  RepeatReminderSettings,
+  SessionEvent,
+  SessionEventType,
+} from '@nexus/core';
 import { parseJsonlSessionBody } from '../jsonl-session-store.js';
 
 /** 沒帶碼的錯誤結果落在這一格。dsh 只替帶碼的錯誤填 `error`，一般拋錯與核准被拒都在這裡。 */
@@ -203,6 +210,31 @@ export function parseArguments(serialized: string): unknown {
 }
 
 /**
+ * 輪 → 那一輪目前的評分。折疊是 `@nexus/core` 的 `currentMessageFeedback`，格式 10 前後兩種都讀
+ * （[#382](https://github.com/DemianLi/nexus-agent/issues/382)）。
+ *
+ * **一輪有好幾則回覆被評時點踩優先**，其次取後評的：按鈕只放在每一輪最後一則，但線上指得到任何一則
+ * 回覆，而這裡要回答的是「這一輪有沒有被點踩」。
+ *
+ * @param events - root 那一份日誌的全部事件。
+ * @returns 輪（起頭那顆 `turn/start` 的 `seq`）→ 那一筆。
+ */
+export function ratingsByTurn(
+  events: readonly SessionEvent[],
+): ReadonlyMap<number, MessageFeedbackItem | LegacyTurnFeedbackItem> {
+  const byTurn = new Map<number, MessageFeedbackItem | LegacyTurnFeedbackItem>();
+  for (const { item, turn } of currentMessageFeedback(events)) {
+    const held = byTurn.get(turn);
+    const negative = item.rating === 'negative';
+    const outranks =
+      held === undefined ||
+      (negative !== (held.rating === 'negative') ? negative : item.updatedAt >= held.updatedAt);
+    if (outranks) byTurn.set(turn, item);
+  }
+  return byTurn;
+}
+
+/**
  * 掃一份。
  *
  * @param log - 讀進來的那一份。
@@ -225,8 +257,6 @@ export function scanSessionLog(
   const errors = Object.create(null) as Record<string, number>;
   let toolCalls = 0;
   let aborted = 0;
-  // 輪 → 目前的評分。後寫覆蓋先寫、收回就刪，同 `@nexus/plugin-feedback` 的折疊。
-  const ratings = new Map<number, string>();
   let feedbackRecords = 0;
   let chain: (RepeatRun & { readonly key: string }) | undefined;
   let longest: RepeatRun | null = null;
@@ -263,12 +293,6 @@ export function scanSessionLog(
         errors[kind] = (errors[kind] ?? 0) + 1;
         break;
       }
-      case 'feedback/message-put':
-        ratings.set(event.data.item.turn, event.data.item.rating);
-        break;
-      case 'feedback/message-delete':
-        ratings.delete(event.data.turn);
-        break;
       case 'feedback/record':
         feedbackRecords += 1;
         break;
@@ -293,7 +317,7 @@ export function scanSessionLog(
     aborted: version >= CANCEL_SINCE ? aborted : null,
     negativeTurns:
       version >= FEEDBACK_SINCE
-        ? [...ratings.values()].filter((rating) => rating === 'negative').length
+        ? [...ratingsByTurn(known).values()].filter((item) => item.rating === 'negative').length
         : null,
     feedbackRecords: version >= FEEDBACK_SINCE ? feedbackRecords : null,
     unknownEvents: log.events.length - known.length,

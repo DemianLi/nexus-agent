@@ -5,11 +5,12 @@
  * 轉繁體台灣用語。**對話框提示只留前半句**：「提交內容會包括當前對話的日誌」只有遙測開在 `full` 或
  * `feedback-only` 時才是真的，而預設沒掛遙測。dsh 這一句無條件顯示；依模式顯示得多一條 server 把
  * 模式送到畫面的協定，#279 拍板不做、登記成偏離。說了就是騙人按送出（#267 的 Q11）。
- * `error.load` 那一句沒有搬：還沒有 `list`，沒有東西要載入
+ *
+ * 放哪幾則由折疊器的 `AiEntry.turnTail` 決定（`@nexus/wire`），讀回與修改的次序在 `feedback-ratings.ts`
  * （[#382](https://github.com/DemianLi/nexus-agent/issues/382)）。
  */
 
-import type { ConversationEntry, ConversationState, WireFeedbackCategory } from '@nexus/wire';
+import type { AiEntry, WireFeedbackCategory } from '@nexus/wire';
 
 /** 只打這一行時開對話框，不送 `slash.run`（照 dsh 的 `/feedback` 裝飾）。 */
 export const FEEDBACK_COMMAND_LINE = '/feedback';
@@ -30,6 +31,7 @@ export const FEEDBACK_COPY = {
   conflict: '這則回饋已在別處改動，已顯示最新狀態',
   generic: '回饋儲存失敗',
   noteTooLarge: '描述太長，請縮短後再提交',
+  load: '回饋狀態載入失敗',
 } as const;
 
 /**
@@ -63,60 +65,17 @@ export function failureCopy(code: string): string {
 }
 
 /**
- * 哪幾則回覆長評分按鈕：**每一次 run 收尾時，那一段裡最後一則有文字的 root 回覆**（#267 的 Q7）。
+ * 這則回覆長不長讚踩：**那一輪收尾的那則**（`turnTail`，同 dsh 的 `TurnTailNodeView`），而且指名得到
+ * （有 `messageId`）。
  *
- * - 「一次 run」從狀態進 `running` 算起：人送一句話、人答了核准卡、續行驅動器排了一輪，都是。
- *   **不靠使用者那一則切段**——續行那幾輪在畫面上沒有使用者的話。
- * - 收尾是 `idle`、`stopped`、`failed`。**停在核准點不是收尾**：那一段的回覆不長按鈕，續接之後才算
- *   （續接時重新起算，所以按鈕只在續接後那則上）。停在核准點時按停止是收尾，那時算的是停下之前那段。
- * - 子代理那幾則、串流中的、整段只有工具的，都沒有。
- */
-export interface ReplyTails {
-  /** 長按鈕的回覆 id（`AiEntry.id`）。 */
-  readonly ids: ReadonlySet<string>;
-  /** 目前這一次 run 從 `entries` 的哪一格開始。 */
-  readonly runStart: number;
-}
-
-export const NO_REPLY_TAILS: ReplyTails = { ids: new Set(), runStart: 0 };
-
-function isTailCandidate(entry: ConversationEntry): boolean {
-  return (
-    entry.kind === 'ai' &&
-    entry.attribution.kind === 'root' &&
-    entry.text !== '' &&
-    !entry.streaming
-  );
-}
-
-/**
- * 狀態每走一步，算一次收尾那則。**要一步一步餵**：一批 frame 裡「跑起來又收掉」只看頭尾的話，
- * 中間那次 `running` 會被吃掉。
+ * **講到一半被停下來的那則不長**，同 dsh（凍結的半段沒有 `messageId`，那一輪就沒有按鈕），而我們這邊的
+ * 理由是同一個：pump 把那半段記進日誌時是新建的一則、沒有 id（`thread-pump.ts` 的
+ * `#keepInterruptedReply`），server 找不到它。即時那則手上的 `messageId` 是串流那次呼叫的，評下去一律
+ * `target-not-found`；重播出來的那則則是根本沒有 `messageId`。
  *
- * @param previous - 這一步之前的狀態。
- * @param next - 這一步之後的狀態。
- * @param tails - 目前為止的結果。
- * @returns 新的結果；沒有變化時原樣回傳同一個物件。
+ * @param entry - 一則回覆。
+ * @returns 要不要畫讚踩。
  */
-export function trackReplyTails(
-  previous: ConversationState,
-  next: ConversationState,
-  tails: ReplyTails,
-): ReplyTails {
-  if (next.status === 'running' && previous.status !== 'running') {
-    return { ids: tails.ids, runStart: previous.entries.length };
-  }
-  const wasActive = previous.status === 'running' || previous.status === 'awaiting-input';
-  const ended = next.status === 'idle' || next.status === 'stopped' || next.status === 'failed';
-  if (!wasActive || !ended) return tails;
-  let tail: ConversationEntry | undefined;
-  for (let at = next.entries.length - 1; at >= tails.runStart; at -= 1) {
-    const entry = next.entries[at];
-    if (entry !== undefined && isTailCandidate(entry)) {
-      tail = entry;
-      break;
-    }
-  }
-  if (tail === undefined) return { ids: tails.ids, runStart: next.entries.length };
-  return { ids: new Set([...tails.ids, tail.id]), runStart: next.entries.length };
+export function isRatable(entry: AiEntry): entry is AiEntry & { readonly messageId: string } {
+  return entry.turnTail === true && entry.messageId !== undefined && entry.stopped !== true;
 }

@@ -240,6 +240,7 @@ export {
 } from './tool-result-pruner.js';
 
 export type {
+  CurrentMessageFeedback,
   FeedbackCategory,
   FeedbackRecord,
   FeedbackRecordResult,
@@ -251,6 +252,8 @@ export type {
   MessageFeedbackDeleteResult,
   MessageFeedbackFailure,
   MessageFeedbackItem,
+  LegacyTurnFeedbackItem,
+  MessageFeedbackListResult,
   MessageFeedbackNoteBlank,
   MessageFeedbackNoteTooLarge,
   MessageFeedbackPut,
@@ -260,7 +263,7 @@ export type {
   MessageFeedbackTargetNotFound,
   MessageFeedbackVersionConflict,
 } from './feedback.js';
-export { FEEDBACK_CATEGORIES } from './feedback.js';
+export { currentMessageFeedback, FEEDBACK_CATEGORIES, loggedMessageId } from './feedback.js';
 
 export type {
   SessionEvent,

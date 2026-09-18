@@ -24,29 +24,40 @@ import type {
 } from '@nexus/wire';
 
 import { Button } from '@/components/ui/button';
-import { FEEDBACK_COPY } from '@/lib/feedback';
+import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
 
 /**
- * 評分按鈕要的東西（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。放哪幾則由
- * `trackReplyTails` 決定，這裡只畫。
+ * 評分按鈕要的東西（[#278](https://github.com/DemianLi/nexus-agent/issues/278)、
+ * [#382](https://github.com/DemianLi/nexus-agent/issues/382)）。放哪幾則由折疊器的 `turnTail` 決定（見
+ * `isRatable`），這裡只畫。
  */
 export interface TranscriptFeedback {
-  readonly tails: ReadonlySet<string>;
+  /** 訊息 id → 目前那一筆。 */
   readonly ratings: ReadonlyMap<string, WireFeedbackItem>;
   readonly busy: boolean;
-  onRate(replyId: string, rating: WireFeedbackRating): void;
+  /** 讀回評分失敗了：按鈕旁邊講一句（dsh 的 `error.load`）。 */
+  readonly loadFailed: boolean;
+  /** 第一次滑過或聚焦讚踩時讀回評分，照 dsh 的 `seed`。 */
+  onSeed(): void;
+  onRate(messageId: string, rating: WireFeedbackRating): void;
 }
 
 /**
  * 一則回覆底下的讚與踩。**已選的那顆實心、`aria-pressed`**，再點一次就是收回；另一顆開對話框
  * （照 dsh 的 `MessageFeedbackActions`）。
  */
-function RatingButtons({ replyId, feedback }: { replyId: string; feedback: TranscriptFeedback }) {
-  const rating = feedback.ratings.get(replyId)?.rating;
+function RatingButtons({
+  messageId,
+  feedback,
+}: {
+  messageId: string;
+  feedback: TranscriptFeedback;
+}) {
+  const rating = feedback.ratings.get(messageId)?.rating;
   const likeLabel = rating === 'positive' ? FEEDBACK_COPY.likeActive : FEEDBACK_COPY.like;
   const dislikeLabel = rating === 'negative' ? FEEDBACK_COPY.dislikeActive : FEEDBACK_COPY.dislike;
   return (
-    <div className="flex gap-1" data-testid="rating-buttons">
+    <div className="flex items-center gap-1" data-testid="rating-buttons">
       <Button
         type="button"
         variant="ghost"
@@ -56,7 +67,9 @@ function RatingButtons({ replyId, feedback }: { replyId: string; feedback: Trans
         aria-label={likeLabel}
         aria-pressed={rating === 'positive'}
         disabled={feedback.busy}
-        onClick={() => feedback.onRate(replyId, 'positive')}
+        onPointerEnter={feedback.onSeed}
+        onFocus={feedback.onSeed}
+        onClick={() => feedback.onRate(messageId, 'positive')}
       >
         <ThumbsUp className={rating === 'positive' ? 'fill-current' : undefined} />
       </Button>
@@ -69,10 +82,17 @@ function RatingButtons({ replyId, feedback }: { replyId: string; feedback: Trans
         aria-label={dislikeLabel}
         aria-pressed={rating === 'negative'}
         disabled={feedback.busy}
-        onClick={() => feedback.onRate(replyId, 'negative')}
+        onPointerEnter={feedback.onSeed}
+        onFocus={feedback.onSeed}
+        onClick={() => feedback.onRate(messageId, 'negative')}
       >
         <ThumbsDown className={rating === 'negative' ? 'fill-current' : undefined} />
       </Button>
+      {feedback.loadFailed && (
+        <span className="text-muted-foreground text-xs" role="status">
+          {FEEDBACK_COPY.load}
+        </span>
+      )}
     </div>
   );
 }
@@ -196,8 +216,8 @@ function Entry({ entry, feedback }: { entry: ConversationEntry; feedback?: Trans
       {/* 講到一半被人按了停止（#276）。不是失敗，所以不用紅字。 */}
       {entry.stopped === true && <p className="text-muted-foreground text-xs">（已停止）</p>}
       {entry.error !== undefined && <p className="text-destructive text-xs">{entry.error}</p>}
-      {feedback !== undefined && feedback.tails.has(entry.id) && (
-        <RatingButtons replyId={entry.id} feedback={feedback} />
+      {feedback !== undefined && isRatable(entry) && (
+        <RatingButtons messageId={entry.messageId} feedback={feedback} />
       )}
     </li>
   );

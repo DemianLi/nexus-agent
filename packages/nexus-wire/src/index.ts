@@ -20,6 +20,8 @@ export type {
   FeedbackCommand,
   FeedbackDeleteCommand,
   FeedbackDeleteResult,
+  FeedbackListCommand,
+  FeedbackListResult,
   FeedbackMethod,
   FeedbackPutCommand,
   FeedbackPutResult,

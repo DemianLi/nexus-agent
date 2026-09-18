@@ -113,8 +113,15 @@ import type { SessionEvent } from './session-log.js';
  * 它寫下去的輪次沒有回覆、沒有結果內容，推出來的歷史就有洞。它得看到「版本太新」而拒讀
  * （{@link SessionFormatUnsupportedError}）。守這條線的**只有**這個號：我們的 body parser 對不認得的
  * `type` 照收（`apps/harness/src/jsonl-session-store.ts`），沒有 dsh 那個逐顆的 `ignorable` 旗標。
+ *
+ * ## 10：評分指名回覆，不指名輪
+ *
+ * `feedback/message-put` 的 `item` 與 `feedback/message-delete` 帶 `messageId`（那顆 `assistant/message`
+ * 記的訊息 id），同 dsh（[#382](https://github.com/DemianLi/nexus-agent/issues/382)）。v9 以前的檔直接讀：
+ * 以輪記的那幾顆由 `currentMessageFeedback` 對到那一輪最後一則有文字的回覆。**非升不可**：讀不懂 10 的
+ * 舊 runtime 會把 `messageId` 那幾顆當成輪讀，`item.turn` 是 `undefined`。
  */
-export const SESSION_LOG_FORMAT_VERSION = 9;
+export const SESSION_LOG_FORMAT_VERSION = 10;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。
