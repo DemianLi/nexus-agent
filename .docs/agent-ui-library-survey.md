@@ -10,6 +10,7 @@
 > - **§6「代價與風險」第 1、4、6 點與 §7 前兩點已由實測回答**（[#373 結果](https://github.com/DemianLi/nexus-agent/issues/373#issuecomment-5706000767)）：AI Elements registry **沒有**替每個元件加 `ai`／`@ai-sdk/react`／`zod`（只有真的 import 的四個帶 `ai`）；`questionnaire` 在 new-york 下 404、用 `radix-vega` 完整網址裝得上；AI Elements `question` 線上 registry 沒部署；`reasoning`／AI Elements `message` 讓主 chunk 漲到約 2 MB。
 > - **提問卡走 shadcn `questionnaire`**，缺的部分自己補（[設計語言原型](https://github.com/DemianLi/nexus-agent/issues/375#issuecomment-5708312161)）。
 > - **核准與提問都換掉輸入框**（照 dsh 的 composer takeover），不是 §6 表裡的「自己的卡」（[核准與提問](https://github.com/DemianLi/nexus-agent/issues/376#issuecomment-5709355235)）。
+> - **地圖 #372 八張卡的結論已收攏進 [web-ui-spec.md](web-ui-spec.md)（2026-09-18），實作以那份為準。**
 
 ## 結論速查表
 
