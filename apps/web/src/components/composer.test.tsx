@@ -17,7 +17,13 @@ const plan: SlashDescriptor = {
   description: '進出計劃模式。',
   input: { hint: '[off]' },
 };
-const feedback: SlashDescriptor = { name: 'feedback', description: '留一則回饋。' };
+// 真的伺服器給的 `/feedback` 帶參數（`<內容>`），光打名字另有動作（開回饋框）：選單要直接執行它。
+const feedback: SlashDescriptor = {
+  name: 'feedback',
+  description: '留一則回饋。',
+  input: { hint: '<內容>' },
+};
+const todo: SlashDescriptor = { name: 'todo', description: '列出待辦。' };
 const goal: SlashDescriptor = {
   name: 'goal',
   description: '設定目標。',
@@ -47,7 +53,8 @@ function Harness({
           onSubmit(draft);
           setDraft('');
         }}
-        commands={[plan, feedback, goal]}
+        commands={[plan, feedback, goal, todo]}
+        decorated={new Set(['feedback'])}
         onRunCommand={run}
         stoppable={false}
         stopDisabled={false}
@@ -100,8 +107,9 @@ describe('`/` 選單', () => {
     type('/');
     expect(options()).toEqual([
       '/plan [off]進出計劃模式。',
-      '/feedback留一則回饋。',
+      '/feedback <內容>留一則回饋。',
       '/goal <目標>設定目標。',
+      '/todo列出待辦。',
     ]);
     await waitFor(() => {
       expect(input().getAttribute('aria-controls')).toBe(screen.getByRole('listbox').id);
@@ -119,8 +127,18 @@ describe('`/` 選單', () => {
     expect(selected()?.textContent).toContain('/feedback');
     key('ArrowUp');
     key('ArrowUp');
-    expect(selected()?.textContent).toContain('/goal');
+    expect(selected()?.textContent).toContain('/todo');
     await waitFor(() => expect(input().getAttribute('aria-activedescendant')).toBe(selected()?.id));
+  });
+
+  it('選單開著時 Shift＋Enter 不選（留給換行）', () => {
+    const run = vi.fn(() => true);
+    render(<Harness run={run} />);
+    type('/to');
+    key('Enter', { shiftKey: true });
+    expect(run).not.toHaveBeenCalled();
+    expect(input().value).toBe('/to');
+    expect(screen.getByRole('listbox')).toBeTruthy();
   });
 
   it('Enter 選帶參數的命令：填上 `/名稱 `、不執行、選單收起', () => {
@@ -139,8 +157,17 @@ describe('`/` 選單', () => {
   it('Tab 選不帶參數的命令：從草稿拿掉、直接執行', () => {
     const run = vi.fn(() => true);
     render(<Harness run={run} />);
-    type('/fe');
+    type('/to');
     key('Tab');
+    expect(run).toHaveBeenCalledWith('/todo');
+    expect(input().value).toBe('');
+  });
+
+  it('有裝飾的 `/feedback` 雖然帶參數，Enter 選到就直接執行（照 dsh：裝飾先判），不是填 `/feedback `', () => {
+    const run = vi.fn(() => true);
+    render(<Harness run={run} />);
+    type('/fe');
+    key('Enter');
     expect(run).toHaveBeenCalledWith('/feedback');
     expect(input().value).toBe('');
   });
@@ -191,7 +218,7 @@ describe('`/` 選單', () => {
   it('句中的 `/` 只列不帶參數的命令；網址不開', () => {
     render(<Harness />);
     type('先記一下 /');
-    expect(options()).toEqual(['/feedback留一則回饋。']);
+    expect(options()).toEqual(['/todo列出待辦。']);
     type('看 https://example.com/');
     expect(screen.queryByRole('listbox')).toBeNull();
   });
