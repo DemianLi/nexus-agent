@@ -150,6 +150,10 @@ export interface CliInvocation {
    * 方」（`packages/goal/README.zh.md`），而我們的入口點擁有輪迴圈——**掛載的等價物就是
    * 這個旗標**。
    *
+   * （2026-09-19 註：引文是 dsh 當時 README 的原話，但 dsh 的 base 其實出廠就掛著續行驅動器——
+   * 「可選」指套件可以不掛，不是出廠關著。這個決定不動，前提待重核，見
+   * `.docs/plugin-architecture-gap-survey.md` §三第 18 列。）
+   *
    * 開著的時候，唯一的硬上限是那個目標自己的 `max_goal_rounds`；額外那條停損刻意沒做，
    * 理由在 `goal-driver.ts` 檔頭。
    */

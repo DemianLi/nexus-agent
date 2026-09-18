@@ -47,10 +47,12 @@
  * 的結論，圍堵旁邊的行為藏在選配 plugin 裡等於沒有。**載體丟掉，紀律照抄**：分類
  * （它是超時，不是一般失敗）與射程（只作用在這次工具呼叫，不動整場 run）。
  *
- * **`TOOL_TIMEOUT` 這個碼刻意不發。** dsh 把用途寫在原始碼裡：讓 retry／sandbox
- * plugin 與 replay 路由用。我們三個消費者一個都不在——沒有工具層的 retry、sandbox 由
- * 決策 3 延後、而 replay 雖然在 [#175](https://github.com/DemianLi/nexus-agent/pull/175)
- * 之後有了耐久日誌，仍然沒有任何東西讀得回來。一個沒有目的地的判別式加了只是好看。
+ * **`TOOL_TIMEOUT` 這個碼有在發，目的地是會話日誌。** dsh 把用途寫在原始碼裡：讓 retry／
+ * sandbox plugin 與 replay 路由用，那三個用途我們今天仍然沒有。這個碼去的是另一個地方：
+ * {@link classifyThrownToolError} 標出來的碼，經 `settle` 寫進會話日誌那顆 `tool/result`
+ * 的 `error`（[#270](https://github.com/DemianLi/nexus-agent/pull/270) 起）。**2026-09-19
+ * 更正**：這一段原本寫「刻意不發」，那是 [#176](https://github.com/DemianLi/nexus-agent/pull/176)
+ * 當時的事實，#270 之後就過期了。
  *
  * **`tool()` 的「放生」也不修，明著登記。** abort 當下它 reject 外層 promise、把 `func`
  * 留在背景跑完（`@langchain/core` `dist/tools/index.js:290-301`；#148 實測預算 120ms、
