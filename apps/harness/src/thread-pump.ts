@@ -581,6 +581,20 @@ export class ThreadPump {
    */
   readonly #invalidArguments = new Map<string, string>();
   /**
+   * 圖裡注進來的那幾則 human 訊息的 `run_id`——**這些 frame 不上線**（[#388](https://github.com/DemianLi/nexus-agent/issues/388)）。
+   *
+   * middleware 往 state 塞一則 `HumanMessage` 時（工作區指令的基線、重複提醒），LangGraph 照樣把它當成
+   * 一則訊息串出來：`message-start role: "human"` ＋ 逐段 `content-block-delta`。而 `@nexus/wire` 的
+   * `reduceMessage` 看到 `role: "human"` 就開一顆使用者泡泡——它的註解寫著「**`human` 只有歷史送**：
+   * 線上不回聲人打的字」，那句話一直是**假設**，不是有人在擋。基線一來就被打破：畫面上每個會話開頭都會多
+   * 一顆幾百個位元組的 `<system-reminder>` 泡泡，而那是給模型看的東西，不是誰講的話。
+   *
+   * **所以這裡把那個假設變成護欄**：線上一則 human 訊息都不送。人剛打的那句走 `appendHumanTurn`，
+   * 重播的那幾句走歷史（`conversation-history.ts`，它同樣不畫外掛注入的 `user/message`）——兩條都不經過
+   * 這裡。認的是 `run_id`：`content-block-delta` 與 `message-finish` 上沒有 `role`。
+   */
+  readonly #injectedMessages = new Set<string>();
+  /**
    * 這一輪轉發過、還在等日誌判定的 `tool-finished`：callId → 那顆 frame
    * （[#296](https://github.com/DemianLi/nexus-agent/issues/296)）。
    *
@@ -1173,6 +1187,8 @@ export class ThreadPump {
     if (raw.method === 'messages') {
       const invalid = invalidArgumentsOf(raw.params.data);
       if (invalid !== undefined) this.#invalidArguments.set(invalid.id, invalid.raw);
+      // 圖裡注進來的 human 訊息一則都不上線，見 {@link ThreadPump.#injectedMessages}。
+      if (this.#dropInjectedMessage(raw.params.data)) return;
     }
     if (channelOfMethod(raw.method) === undefined) {
       return;
@@ -1189,6 +1205,34 @@ export class ThreadPump {
             : raw.params.data,
       },
     } as Event);
+  }
+
+  /**
+   * 這一顆 `messages` frame 是圖裡注進來的 human 訊息嗎——是的話整則丟掉。
+   *
+   * 見 {@link ThreadPump.#injectedMessages}。**`message-finish` 也丟，而且丟完才忘掉那個 `run_id`**：
+   * 留著它的話 `reduceMessage` 會收到一顆對不到 entry 的收尾。
+   *
+   * @param data - frame 的 `params.data`。
+   * @returns 要丟掉就是 `true`。
+   */
+  #dropInjectedMessage(data: unknown): boolean {
+    const shaped = data as {
+      event?: unknown;
+      role?: unknown;
+      run_id?: unknown;
+      id?: unknown;
+    } | null;
+    const id = typeof shaped?.run_id === 'string' ? shaped.run_id : shaped?.id;
+    if (typeof id !== 'string') return false;
+    if (shaped?.event === 'message-start') {
+      if (shaped.role !== 'human') return false;
+      this.#injectedMessages.add(id);
+      return true;
+    }
+    if (!this.#injectedMessages.has(id)) return false;
+    if (shaped?.event === 'message-finish') this.#injectedMessages.delete(id);
+    return true;
   }
 
   /**

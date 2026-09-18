@@ -11,7 +11,8 @@ packages/nexus-plugin-echo   最小 plugin 範例，只相依 @nexus/core
 packages/nexus-plugin-goal   一個會話的長期目標：狀態、CAS 變更、續行授權，加上 /goal
 packages/nexus-plugin-mcp    把 MCP server 的工具接進 registry
 packages/nexus-plugin-quickjs  QuickJS 沙箱裡跑 JavaScript 的 custom tool
-packages/nexus-plugin-memory 把 AGENTS.md 這類長期記憶掛進 agent
+packages/nexus-plugin-agent-instructions  預設掛：工作區的 AGENTS.md 當一則訊息送進每個 agent
+packages/nexus-plugin-memory 選配：基座那套「模型自己維護」的記憶，會附上寫入指示
 packages/nexus-plugin-plan-mode  計劃模式：先探索再執行，計劃交出去等人批准
 packages/nexus-plugin-skills 把 SKILL.md 這類隨選工作流掛進 agent
 packages/nexus-plugin-validation  相容殼：輸出校驗與圍堵都已搬進 @nexus/core
