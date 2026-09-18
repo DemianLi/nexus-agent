@@ -30,7 +30,7 @@
 import type { Event, ThreadHistoryQuery, ThreadHistoryResult } from '@nexus/wire';
 import { HISTORY_PAGE_MESSAGES } from '@nexus/wire';
 import type { LoggedMessage, SessionEvent, UnreplayableReason } from '@nexus/core';
-import { replayConversation } from '@nexus/core';
+import { loggedMessageId, replayConversation } from '@nexus/core';
 
 /** 推不回模型的原因裡，說的是「這份日誌是格式 9 以前寫的」的那幾種。見 {@link historyPage}。 */
 const LEGACY_REASONS: ReadonlySet<UnreplayableReason> = new Set([
@@ -83,23 +83,36 @@ function lifecycle(time: number, data: Record<string, unknown>): Event {
   return frame('lifecycle', time, { graph_name: 'root', ...data });
 }
 
-/** 一則完整的訊息。`open` 的那則不送 `message-finish`，留給那一輪的收尾去標。 */
+/**
+ * 一則完整的訊息。`open` 的那則不送 `message-finish`，留給那一輪的收尾去標。
+ *
+ * **回覆的形狀同即時**（[#382](https://github.com/DemianLi/nexus-agent/issues/382)）：entry 的 key 放
+ * `run_id`（`history-<seq>`），`message-start` 的 `id` 放日誌記的訊息 id——畫面據它評分，同即時那則的
+ * `id`。日誌沒記 id 的就不帶，那則評不了。人那一則照舊只帶 `id`：它不是評分的目標。
+ */
 function message(
   time: number,
   role: 'human' | 'ai',
-  id: string,
+  key: string,
   text: string,
   open = false,
+  messageId?: string,
 ): Event[] {
+  const ids = role === 'ai' ? { run_id: key } : { id: key };
   return [
-    frame('messages', time, { event: 'message-start', role, id }),
+    frame('messages', time, {
+      event: 'message-start',
+      role,
+      ...ids,
+      ...(messageId !== undefined && { id: messageId }),
+    }),
     frame('messages', time, {
       event: 'content-block-delta',
       index: 0,
       delta: { type: 'text-delta', text },
-      id,
+      ...ids,
     }),
-    ...(open ? [] : [frame('messages', time, { event: 'message-finish', reason: 'stop', id })]),
+    ...(open ? [] : [frame('messages', time, { event: 'message-finish', reason: 'stop', ...ids })]),
   ];
 }
 
@@ -137,6 +150,11 @@ export function historyFrames(
   const frames: Event[] = [];
   let turnOpen = false;
   let interrupted = false;
+  /**
+   * 上一輪停在中斷上收了尾（`turn/end`），還不知道下一步是續接還是另起一輪。**先不收**：續接的話是同一輪，
+   * 即時那條上它也沒收過（停在核准點不是收尾），畫面的「一輪收尾那則」才對得上即時（#382）。
+   */
+  let suspended = false;
   /** 這一輪記了 `tool/call`、還沒有 `tool/result` 的：callId → 工具名。 */
   const unsettled = new Map<string, string>();
   const last = events.at(-1);
@@ -145,13 +163,21 @@ export function historyFrames(
     frames.push(lifecycle(time, data));
     turnOpen = false;
     interrupted = false;
+    suspended = false;
     unsettled.clear();
   };
 
   for (const event of events) {
     switch (event.type) {
       case 'turn/start':
-        if (turnOpen) close(event.time, { event: 'completed' });
+        if (suspended && event.data.kind === 'resume') {
+          // 續接：同一輪接著跑。那幾張卡照舊開著，等這一輪的 `tool/call` 再記一次、`tool/result` 收掉。
+          suspended = false;
+          interrupted = false;
+          turnOpen = true;
+          break;
+        }
+        if (turnOpen || suspended) close(event.time, { event: 'completed' });
         frames.push(lifecycle(event.time, { event: 'running' }));
         turnOpen = true;
         if (event.data.kind === 'message') {
@@ -163,7 +189,14 @@ export function historyFrames(
         // 只帶工具呼叫的那一次沒有字可畫。即時的畫面那時會長一則空的，歷史不跟著長。
         if (text !== '') {
           frames.push(
-            ...message(event.time, 'ai', `history-${event.seq}`, text, event.data.interrupted),
+            ...message(
+              event.time,
+              'ai',
+              `history-${event.seq}`,
+              text,
+              event.data.interrupted,
+              loggedMessageId(event.data.message),
+            ),
           );
         }
         break;
@@ -200,16 +233,9 @@ export function historyFrames(
       case 'turn/end':
         if (event.data.reason?.kind === 'aborted') {
           close(event.time, { event: 'failed', aborted: true });
-        } else if (interrupted && awaitingInput !== undefined && event === last) {
-          for (const [callId, name] of unsettled) {
-            // 停在閘門上的那顆不發：`tool-started` 開的卡本來就是執行中，同即時。
-            if (awaitingInput.gatedTools.has(name)) continue;
-            frames.push(
-              frame('tools', event.time, { event: 'tool-suspended', tool_call_id: callId }),
-            );
-          }
-          // 不收：那一輪在 server 上還停在那裡，畫面停在忙著，「停止」就是收回那幾顆（#265 的 Q7）。
+        } else if (interrupted) {
           turnOpen = false;
+          suspended = true;
         } else {
           close(event.time, { event: 'completed' });
         }
@@ -219,10 +245,23 @@ export function historyFrames(
         break;
       case 'session/end-seed':
         // 上一個行程死在一輪中間：那一輪沒有收尾，在這裡收，同 dsh 冷讀時補的合成收尾。
-        if (turnOpen) close(event.time, { event: 'completed' });
+        if (turnOpen || suspended) close(event.time, { event: 'completed' });
         break;
       default:
         break;
+    }
+  }
+  if (suspended && last !== undefined) {
+    if (awaitingInput === undefined) {
+      // 停在中斷上、之後沒有續接，而這條 thread 現在也沒掛著它（行程重開過，或這一頁不是最後一頁）：收掉。
+      close(last.time, { event: 'completed' });
+    } else {
+      for (const [callId, name] of unsettled) {
+        // 停在閘門上的那顆不發：`tool-started` 開的卡本來就是執行中，同即時。
+        if (awaitingInput.gatedTools.has(name)) continue;
+        frames.push(frame('tools', last.time, { event: 'tool-suspended', tool_call_id: callId }));
+      }
+      // 不收：那一輪在 server 上還停在那裡，畫面停在忙著，「停止」就是收回那幾顆（#265 的 Q7）。
     }
   }
   return frames;

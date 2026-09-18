@@ -1,161 +1,226 @@
-import type { ConversationState, Event } from '@nexus/wire';
-import {
-  appendDecision,
-  appendHumanTurn,
-  emptyConversation,
-  reduceConversation,
+import type {
+  AiEntry,
+  FeedbackListResult,
+  FeedbackOutcome,
+  FeedbackPutResult,
+  WireFeedbackItem,
 } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
-import { NO_REPLY_TAILS, trackReplyTails } from '@/lib/feedback';
-import type { ReplyTails } from '@/lib/feedback';
+import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
+import { RatingsController } from '@/lib/feedback-ratings';
+import type { RatingsRemote, RatingsView } from '@/lib/feedback-ratings';
 
 /**
- * 按鈕放哪幾則（#267 的 Q7）。狀態由**真的折疊器**折出來，這裡只驗 `trackReplyTails` 對著它的轉換
- * 算對了沒有——手寫 `ConversationState` 的話，「折疊器其實不會那樣轉」這種漂移驗不到。
+ * 按鈕放哪一則的判法在折疊器（`@nexus/wire` 的 `turn-tail.test.ts`），這裡只驗畫面那一道：收尾那則、指名得到、
+ * 不是講到一半被停下來的。讀回與修改的次序照 dsh 的 `controller.client.spec.ts`（`ddefc45`）。
  */
 
-const ROOT = ['model_request:1'];
-const SUB = ['tools:t1', 'model_request:2'];
-
-let seq = 0;
-function frame(method: string, namespace: readonly string[], data: unknown): Event {
-  const current = seq++;
+function ai(overrides: Partial<AiEntry> = {}): AiEntry {
   return {
-    type: 'event',
-    seq: current,
-    event_id: `t:${current}`,
-    method,
-    params: { namespace, timestamp: 0, data },
-  } as Event;
+    kind: 'ai',
+    id: 'r1',
+    text: '答。',
+    streaming: false,
+    attribution: { kind: 'root' },
+    ...overrides,
+  };
 }
 
-const running = () => frame('lifecycle', [], { event: 'running', graph_name: 'root' });
-const completed = () => frame('lifecycle', [], { event: 'completed', graph_name: 'root' });
-const stopped = () =>
-  frame('lifecycle', [], { event: 'failed', graph_name: 'root', aborted: true });
+describe('isRatable', () => {
+  it('收尾那則、有 messageId 才長；被停下來的那則不長（同 dsh：凍結的半段沒有 messageId）', () => {
+    expect(isRatable(ai({ turnTail: true, messageId: 'm1' }))).toBe(true);
+    expect(isRatable(ai({ messageId: 'm1' }))).toBe(false);
+    expect(isRatable(ai({ turnTail: true }))).toBe(false);
+    expect(isRatable(ai({ turnTail: true, messageId: 'm1', stopped: true }))).toBe(false);
+  });
+});
 
-function reply(
-  id: string,
-  text: string,
-  namespace: readonly string[] = ROOT,
-  finish = true,
-): Event[] {
-  return [
-    frame('messages', namespace, { event: 'message-start', id: `run-${id}`, run_id: id }),
-    frame('messages', namespace, {
-      event: 'content-block-delta',
-      index: 0,
-      delta: { type: 'text-delta', text },
-      run_id: id,
-    }),
-    ...(finish
-      ? [frame('messages', namespace, { event: 'message-finish', reason: 'stop', run_id: id })]
-      : []),
-  ];
+function item(overrides: Partial<WireFeedbackItem> = {}): WireFeedbackItem {
+  return {
+    messageId: 'm1',
+    rating: 'negative',
+    version: 'v1',
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides,
+  };
 }
 
-function approval(): Event {
-  return frame('input.requested', ['tools:a'], {
-    interrupt_id: 'int-1',
-    payload: {
-      actionRequests: [{ name: 'danger', args: {} }],
-      reviewConfigs: [{ actionName: 'danger', allowedDecisions: ['approve', 'reject'] }],
+/** 一個手動放行的 promise。 */
+function gate<T>() {
+  let open!: (value: T) => void;
+  const promise = new Promise<T>((resolve) => {
+    open = resolve;
+  });
+  return { promise, open };
+}
+
+const listed = (items: readonly WireFeedbackItem[]): FeedbackOutcome<FeedbackListResult> => ({
+  kind: 'ok',
+  result: { ok: true, value: { items } },
+});
+
+function remote(overrides: Partial<RatingsRemote> = {}): RatingsRemote & { calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    list: async () => {
+      calls.push('list');
+      return listed([]);
     },
-  });
+    put: async (params) => {
+      calls.push(`put ${params.messageId} ${String(params.ifVersion)}`);
+      return { kind: 'ok', result: { ok: true, value: item({ rating: params.rating }) } };
+    },
+    delete: async (params) => {
+      calls.push(`delete ${params.messageId} ${params.ifVersion}`);
+      return { kind: 'ok', result: { ok: true, value: { absent: true } } };
+    },
+    ...overrides,
+  };
 }
 
-/** 一步一步走，同 `use-conversation` 的 `advance`。 */
-function walk(steps: readonly ((state: ConversationState) => ConversationState)[]): {
-  state: ConversationState;
-  tails: ReplyTails;
+function controllerOf(backend: RatingsRemote): {
+  controller: RatingsController;
+  views: RatingsView[];
 } {
-  let state = emptyConversation();
-  let tails = NO_REPLY_TAILS;
-  for (const step of steps) {
-    const next = step(state);
-    tails = trackReplyTails(state, next, tails);
-    state = next;
-  }
-  return { state, tails };
+  const views: RatingsView[] = [];
+  return { controller: new RatingsController(backend, (view) => views.push(view)), views };
 }
 
-const events = (list: readonly Event[]) =>
-  list.map((event) => (state: ConversationState) => reduceConversation(state, event));
-const human = (text: string) => (state: ConversationState) => appendHumanTurn(state, text);
-
-/** 長按鈕的那幾則的 id。 */
-function tailIds(tails: ReplyTails): string[] {
-  return [...tails.ids].map((id) => id);
-}
-
-describe('每一次 run 收尾時的最後一則 root 回覆', () => {
-  it('一輪兩則：只有最後那則', () => {
-    const { tails } = walk([
-      human('跑。'),
-      ...events([running(), ...reply('a', '先說。'), ...reply('b', '收工。'), completed()]),
-    ]);
-    expect(tailIds(tails)).toEqual(['b']);
+describe('RatingsController', () => {
+  it('ensure 只讀一次；同時來的共用同一次', async () => {
+    const backend = remote({
+      list: async () => {
+        backend.calls.push('list');
+        return listed([item()]);
+      },
+    });
+    const { controller } = controllerOf(backend);
+    await Promise.all([controller.ensure(), controller.ensure()]);
+    await controller.ensure();
+    expect(backend.calls).toEqual(['list']);
+    expect(controller.view.status).toBe('ready');
+    expect(controller.view.items.get('m1')).toEqual(item());
   });
 
-  it('還在跑的不長；收尾之後才長', () => {
-    const during = walk([human('跑。'), ...events([running(), ...reply('a', '說。')])]);
-    expect(tailIds(during.tails)).toEqual([]);
+  it('修改前先讀回：拿存著的那個版本去比', async () => {
+    const backend = remote({
+      list: async () => {
+        backend.calls.push('list');
+        return listed([item({ version: 'v-stored' })]);
+      },
+    });
+    const { controller } = controllerOf(backend);
+    expect(await controller.rate('m1', 'positive')).toEqual({ ok: true });
+    expect(backend.calls).toEqual(['list', 'put m1 v-stored']);
+    expect(controller.view.items.get('m1')?.rating).toBe('positive');
   });
 
-  it('停在核准點不長；續接之後只長在續接後那則', () => {
-    const paused = walk([
-      human('做。'),
-      ...events([running(), ...reply('a', '要動手了。'), approval(), completed()]),
-    ]);
-    expect(paused.state.status).toBe('awaiting-input');
-    expect(tailIds(paused.tails)).toEqual([]);
-
-    const { tails } = walk([
-      human('做。'),
-      ...events([running(), ...reply('a', '要動手了。'), approval(), completed()]),
-      (state) => appendDecision(state, 'int-1', 'approve'),
-      ...events([running(), ...reply('b', '做完了。'), completed()]),
-    ]);
-    expect(tailIds(tails)).toEqual(['b']);
+  it('修改逐筆排隊：第二次拿的是第一次落定後的版本', async () => {
+    const first = gate<FeedbackOutcome<FeedbackPutResult>>();
+    let puts = 0;
+    const backend = remote({
+      put: async (params) => {
+        backend.calls.push(`put ${params.messageId} ${String(params.ifVersion)}`);
+        puts += 1;
+        if (puts === 1) return first.promise;
+        return { kind: 'ok', result: { ok: true, value: item({ version: 'v2' }) } };
+      },
+    });
+    const { controller } = controllerOf(backend);
+    const one = controller.rate('m1', 'negative');
+    const two = controller.rate('m1', 'positive');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(backend.calls).toEqual(['list', 'put m1 null']);
+    first.open({ kind: 'ok', result: { ok: true, value: item({ version: 'v1' }) } });
+    await Promise.all([one, two]);
+    expect(backend.calls).toEqual(['list', 'put m1 null', 'put m1 v1']);
   });
 
-  it('被停止的那則有；停在核准點時按停止，算的是停下之前那段', () => {
-    const cut = walk([
-      human('跑。'),
-      ...events([running(), ...reply('a', '講到一', ROOT, false), stopped()]),
-    ]);
-    expect(tailIds(cut.tails)).toEqual(['a']);
-
-    const withdrawn = walk([
-      human('做。'),
-      ...events([running(), ...reply('a', '要動手了。'), approval(), completed(), stopped()]),
-    ]);
-    expect(tailIds(withdrawn.tails)).toEqual(['a']);
+  it('重連的重讀排在路上的修改後面：舊的清單蓋不回剛寫進去的版本', async () => {
+    const put = gate<FeedbackOutcome<FeedbackPutResult>>();
+    let reads = 0;
+    const backend = remote({
+      list: async () => {
+        reads += 1;
+        backend.calls.push(`list ${reads}`);
+        // 第一次是還沒評；重讀那次 server 已經有新版本。
+        return listed(reads === 1 ? [] : [item({ version: 'v-new', rating: 'positive' })]);
+      },
+      put: async () => {
+        backend.calls.push('put');
+        return put.promise;
+      },
+    });
+    const { controller } = controllerOf(backend);
+    await controller.ensure();
+    const rating = controller.rate('m1', 'positive');
+    const resync = controller.resync();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // 重讀還沒送出去：它排在那一次 put 後面。
+    expect(backend.calls).toEqual(['list 1', 'put']);
+    put.open({
+      kind: 'ok',
+      result: { ok: true, value: item({ version: 'v-new', rating: 'positive' }) },
+    });
+    await Promise.all([rating, resync]);
+    expect(backend.calls).toEqual(['list 1', 'put', 'list 2']);
+    expect(controller.view.items.get('m1')?.version).toBe('v-new');
   });
 
-  it('整段只有工具的不長，也不會拿前一輪那則充數；子代理那幾則不長', () => {
-    const { tails } = walk([
-      human('一。'),
-      ...events([running(), ...reply('a', '第一輪。'), completed()]),
-      human('二。'),
-      ...events([running(), ...reply('s', '子代理講的。', SUB), completed()]),
-    ]);
-    expect(tailIds(tails)).toEqual(['a']);
+  it('收回排到了才重看：已經不是那個評分就什麼都不送', async () => {
+    const backend = remote({
+      list: async () => {
+        backend.calls.push('list');
+        return listed([item({ rating: 'positive' })]);
+      },
+    });
+    const { controller } = controllerOf(backend);
+    expect(await controller.retract('m1', 'negative')).toEqual({ ok: true });
+    expect(backend.calls).toEqual(['list']);
+    expect(await controller.retract('m1', 'positive')).toEqual({ ok: true });
+    expect(backend.calls).toEqual(['list', 'delete m1 v1']);
+    expect(controller.view.items.has('m1')).toBe(false);
   });
 
-  it('續行連排兩輪（畫面上沒有人的話）：各自一顆', () => {
-    const { tails } = walk([
-      human('開始。'),
-      ...events([
-        running(),
-        ...reply('a', '第一輪。'),
-        completed(),
-        running(),
-        ...reply('b', '第二輪。'),
-        completed(),
-      ]),
-    ]);
-    expect(tailIds(tails)).toEqual(['a', 'b']);
+  it('衝突：畫上目前那筆，講衝突那一句', async () => {
+    const backend = remote({
+      put: async () => ({
+        kind: 'ok',
+        result: {
+          ok: false,
+          error: { code: 'version-conflict', current: item({ rating: 'positive', version: 'v9' }) },
+        },
+      }),
+    });
+    const { controller } = controllerOf(backend);
+    expect(await controller.rate('m1', 'negative')).toEqual({
+      ok: false,
+      failure: FEEDBACK_COPY.conflict,
+    });
+    expect(controller.view.items.get('m1')?.version).toBe('v9');
+  });
+
+  it('讀不回來：狀態是 failed、修改不送出；下一次再試', async () => {
+    let reads = 0;
+    const backend = remote({
+      list: async () => {
+        reads += 1;
+        backend.calls.push('list');
+        if (reads === 1) return { kind: 'rejected', message: '斷了' };
+        return listed([]);
+      },
+    });
+    const { controller } = controllerOf(backend);
+    expect(await controller.rate('m1', 'negative')).toEqual({
+      ok: false,
+      failure: `${FEEDBACK_COPY.generic}：斷了`,
+    });
+    expect(controller.view.status).toBe('failed');
+    expect(backend.calls).toEqual(['list']);
+    expect(await controller.rate('m1', 'negative')).toEqual({ ok: true });
+    expect(backend.calls).toEqual(['list', 'list', 'put m1 null']);
   });
 });

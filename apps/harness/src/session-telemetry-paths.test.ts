@@ -19,6 +19,7 @@ import type { Event } from '@nexus/wire';
 import { createWireClient } from '@nexus/wire';
 import { SessionLog, SessionRegistry } from '@nexus/core';
 import type {
+  LoggedMessage,
   NexusPlugin,
   SessionTelemetryRecord,
   SessionTelemetryRedactRule,
@@ -67,6 +68,18 @@ function telemetryPlugin(sink: SessionTelemetryService, redact?: SessionTelemetr
     },
   };
   return plugin;
+}
+
+/**
+ * 補一則記著 id 的回覆，回傳那個 id：評分的目標。
+ *
+ * CLI 那條路跑假模型時日誌裡沒有記著 id 的回覆，而評分只在 web。這幾條驗的是遙測怎麼送回饋，不是目標怎麼認，
+ * 所以直接補一則。**它是日誌的一顆，會跟著前綴一起送**，數號碼的那條要算進去。
+ */
+function ratableReply(log: SessionLog): string {
+  const message = { type: 'ai', data: { content: '答。', id: 'm-telemetry' } } as LoggedMessage;
+  log.append('assistant/message', { message });
+  return 'm-telemetry';
 }
 
 function ledgerOf(sink: Collected): SessionTelemetryRecord[] {
@@ -319,10 +332,14 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
       await runTurn(agent, '再一次', silent, sessionLog);
       expect(seqs()).toEqual([0, 1, 2]);
 
-      // 第二顆只送上次交到之後的那段——上界不對的話，這裡會重送 0–2。
-      const put = feedback!.put(sessionLog, { turn: 3, rating: 'negative', ifVersion: null });
+      // 第二顆只送上次交到之後的那段——上界不對的話，這裡會重送 0–2。3–5 是第二輪與補上的那則回覆。
+      const put = feedback!.put(sessionLog, {
+        messageId: ratableReply(sessionLog),
+        rating: 'negative',
+        ifVersion: null,
+      });
       expect(put.ok).toBe(true);
-      expect(seqs()).toEqual([0, 1, 2, 3, 4, 5]);
+      expect(seqs()).toEqual([0, 1, 2, 3, 4, 5, 6]);
     } finally {
       await dispose();
     }
@@ -429,7 +446,7 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
       await runTurn(agent, '嗨', silent, sessionLog);
       feedback!.record(sessionLog, { text: '會話評語原文' });
       const put = feedback!.put(sessionLog, {
-        turn: 0,
+        messageId: ratableReply(sessionLog),
         rating: 'negative',
         note: '評分備註原文',
         ifVersion: null,

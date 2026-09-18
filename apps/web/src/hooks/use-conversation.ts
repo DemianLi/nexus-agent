@@ -33,19 +33,14 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createAgentClient } from '@/lib/agent';
-import {
-  FEEDBACK_COMMAND_LINE,
-  FEEDBACK_COPY,
-  NO_REPLY_TAILS,
-  failureCopy,
-  trackReplyTails,
-} from '@/lib/feedback';
-import type { ReplyTails } from '@/lib/feedback';
+import { FEEDBACK_COMMAND_LINE, FEEDBACK_COPY } from '@/lib/feedback';
+import { RatingsController } from '@/lib/feedback-ratings';
+import type { RatingsView } from '@/lib/feedback-ratings';
 
 /** 回饋對話框開給誰：一則回覆（按了讚或踩），或整個會話（只打了 `/feedback`）。 */
 export type FeedbackTarget =
   | { readonly kind: 'session' }
-  | { readonly kind: 'reply'; readonly replyId: string; readonly rating: WireFeedbackRating };
+  | { readonly kind: 'reply'; readonly messageId: string; readonly rating: WireFeedbackRating };
 
 export interface FeedbackDialogState {
   readonly target: FeedbackTarget;
@@ -146,18 +141,21 @@ export interface Conversation {
    * 停在核准點時按它就是收回那幾張卡，收回的結果由伺服器那側寫。
    */
   cancel(): Promise<void>;
-  /** 長評分按鈕的那幾則回覆（[#278](https://github.com/DemianLi/nexus-agent/issues/278)），見 `trackReplyTails`。 */
-  readonly replyTails: ReadonlySet<string>;
   /**
-   * 這個分頁看過的評分，以回覆 id 為鍵。**只在記憶體裡**：還沒有 `list`，重新整理或切回舊會話就沒了，
-   * 重播出來的舊回覆也沒有按鈕。見 [#382](https://github.com/DemianLi/nexus-agent/issues/382)。
+   * 這條 thread 目前的評分，以訊息 id（`AiEntry.messageId`）為鍵（[#382](https://github.com/DemianLi/nexus-agent/issues/382)）。
+   * **第一次 {@link seedRatings} 之前是空的**，照 dsh。
    */
   readonly ratings: ReadonlyMap<string, WireFeedbackItem>;
+  /** 讀回評分失敗了（dsh 的 `error.load`）。下一次滑過或按下去會再試。 */
+  readonly ratingsLoadFailed: boolean;
+  /** 讀回這條 thread 的評分，讀過就不再讀。畫面掛在讚踩的第一次滑過或聚焦上。 */
+  seedRatings(): void;
   readonly feedbackDialog?: FeedbackDialogState;
   /**
    * 按了一則回覆的讚或踩。**再點已選的那顆是收回**，另一顆開對話框，送出之後才記（照 dsh）。
+   * 先等讀回評分：還沒滑過就直接按的話，看到的也是存著的那一筆。
    */
-  rate(replyId: string, rating: WireFeedbackRating): Promise<void>;
+  rate(messageId: string, rating: WireFeedbackRating): Promise<void>;
   /** 送出回饋對話框。可以空著送。 */
   submitFeedback(draft: {
     readonly category?: WireFeedbackCategory;
@@ -170,25 +168,28 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const client = useMemo(() => options.client ?? createAgentClient(), [options.client]);
   const threadId = useMemo(() => options.threadId ?? crypto.randomUUID(), [options.threadId]);
 
-  // **收尾那則跟對話狀態住在同一格**：它要比對每一步的前後兩份狀態，分開存的話一批 frame 裡「跑起來又
-  // 收掉」只剩頭尾，中間那次 `running` 會被吃掉（見 `trackReplyTails`）。
-  const [view, setView] = useState<{ conversation: ConversationState; tails: ReplyTails }>(() => ({
-    conversation: emptyConversation(),
-    tails: NO_REPLY_TAILS,
-  }));
-  const state = view.conversation;
+  const [state, setState] = useState<ConversationState>(emptyConversation);
   /** 所有改對話狀態的地方都走這裡。 */
   const advance = useCallback((step: (previous: ConversationState) => ConversationState) => {
-    setView((previous) => {
-      const conversation = step(previous.conversation);
-      if (conversation === previous.conversation) return previous;
-      return {
-        conversation,
-        tails: trackReplyTails(previous.conversation, conversation, previous.tails),
-      };
-    });
+    setState(step);
   }, []);
-  const [ratings, setRatings] = useState<ReadonlyMap<string, WireFeedbackItem>>(() => new Map());
+  const [ratingsView, setRatingsView] = useState<RatingsView>(() => ({
+    status: 'cold',
+    items: new Map(),
+  }));
+  // **一條 thread 一個**：換 thread 時整個 view 重掛（`App.tsx` 的 `key`），不會拿著上一條的評分。
+  const ratingsController = useMemo(
+    () =>
+      new RatingsController(
+        {
+          list: () => client.feedbackList(threadId),
+          put: (params) => client.feedbackPut(threadId, params),
+          delete: (params) => client.feedbackDelete(threadId, params),
+        },
+        setRatingsView,
+      ),
+    [client, threadId],
+  );
   const [feedbackDialog, setFeedbackDialog] = useState<FeedbackDialogState | undefined>(undefined);
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState<string | undefined>(undefined);
@@ -208,8 +209,6 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   // 送出的那一刻要讀的是**當下**的 pending，不是這次 render 閉包起來的那份。
   const stateRef = useRef(state);
   stateRef.current = state;
-  const ratingsRef = useRef(ratings);
-  ratingsRef.current = ratings;
   const dialogRef = useRef(feedbackDialog);
   dialogRef.current = feedbackDialog;
 
@@ -238,6 +237,8 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
           setHistoryError(page.message);
         }
         setConnected(true);
+        // **重連之後重讀評分**，照 dsh：讀過的才重讀（還沒讀過的等第一次滑過），而且排在路上的修改後面。
+        if (ratingsController.view.status !== 'cold') void ratingsController.resync();
         // **抓清單排在開線之後**，跟送話同一條規則：這條線沒有重播，所有的上行都等
         // 下行開好。清單本身不需要重播，但兩套順序規則比一套容易記錯。
         const listed = await client.slashList(threadId);
@@ -268,7 +269,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       controller.abort();
       setConnected(false);
     };
-  }, [client, threadId, advance]);
+  }, [client, threadId, advance, ratingsController]);
 
   /** 收下上行的回條：被拒就說出來，成功就把上一次的抱怨收掉。 */
   const note = useCallback((result: UplinkResult) => {
@@ -435,52 +436,24 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     });
   }, [threadId, advance]);
 
-  /** 記下一則回覆目前的評分；`null` 是沒有了。 */
-  const keepRating = useCallback((replyId: string, item: WireFeedbackItem | null) => {
-    setRatings((previous) => {
-      const next = new Map(previous);
-      if (item === null) next.delete(replyId);
-      else next.set(replyId, item);
-      return next;
-    });
-  }, []);
+  const seedRatings = useCallback(() => {
+    void ratingsController.ensure();
+  }, [ratingsController]);
 
   const rate = useCallback(
-    async (replyId: string, rating: WireFeedbackRating) => {
-      const current = ratingsRef.current.get(replyId);
-      if (current?.rating !== rating) {
-        setFeedbackDialog({ target: { kind: 'reply', replyId, rating }, submitting: false });
+    async (messageId: string, rating: WireFeedbackRating) => {
+      const loaded = await ratingsController.ensure();
+      if (!loaded.ok || ratingsController.view.items.get(messageId)?.rating !== rating) {
+        setFeedbackDialog({ target: { kind: 'reply', messageId, rating }, submitting: false });
         return;
       }
       // 再點一次已選的那顆：收回。結果不走對話框，失敗的話跟命令的失敗講在同一行。
       setSlashError(undefined);
       setSlashNotice(undefined);
-      let outcome;
-      try {
-        outcome = await clientRef.current.feedbackDelete(threadId, {
-          runId: replyId,
-          ifVersion: current.version,
-        });
-      } catch (error) {
-        setSlashError(
-          `${FEEDBACK_COPY.generic}：${error instanceof Error ? error.message : String(error)}`,
-        );
-        return;
-      }
-      if (outcome.kind === 'rejected') {
-        setCommandError(outcome.message);
-        return;
-      }
-      if (outcome.result.ok) {
-        keepRating(replyId, null);
-        return;
-      }
-      const { error } = outcome.result;
-      // 別的分頁先改了：畫上目前那筆，再說一聲（照 dsh 的 conflict 那一格）。
-      if (error.code === 'version-conflict') keepRating(replyId, error.current);
-      setSlashError(failureCopy(error.code));
+      const result = await ratingsController.retract(messageId, rating);
+      if (!result.ok) setSlashError(result.failure);
     },
-    [threadId, keepRating],
+    [ratingsController],
   );
 
   const submitFeedback = useCallback(
@@ -506,25 +479,15 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
             return;
           }
         } else {
-          const { replyId, rating } = open.target;
-          const outcome = await clientRef.current.feedbackPut(threadId, {
-            runId: replyId,
-            rating,
+          const { messageId, rating } = open.target;
+          const result = await ratingsController.rate(messageId, rating, {
             ...(text === '' ? {} : { note: text }),
             ...category,
-            ifVersion: ratingsRef.current.get(replyId)?.version ?? null,
           });
-          if (outcome.kind === 'rejected') {
-            fail(`${FEEDBACK_COPY.generic}：${outcome.message}`);
+          if (!result.ok) {
+            fail(result.failure);
             return;
           }
-          if (!outcome.result.ok) {
-            const { error } = outcome.result;
-            if (error.code === 'version-conflict') keepRating(replyId, error.current);
-            fail(failureCopy(error.code));
-            return;
-          }
-          keepRating(replyId, outcome.result.value);
         }
       } catch (error) {
         fail(`${FEEDBACK_COPY.generic}：${error instanceof Error ? error.message : String(error)}`);
@@ -535,7 +498,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       // 送出之後的那句謝謝跟命令的結果講在同一行：兩者都是「這一側要說的話」，不進 transcript。
       setSlashNotice(FEEDBACK_COPY.recorded);
     },
-    [threadId, keepRating],
+    [threadId, ratingsController],
   );
 
   const dismissFeedback = useCallback(() => {
@@ -558,8 +521,9 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     answer,
     cancelQuestions,
     cancel,
-    replyTails: view.tails.ids,
-    ratings,
+    ratings: ratingsView.items,
+    ratingsLoadFailed: ratingsView.status === 'failed',
+    seedRatings,
     rate,
     submitFeedback,
     dismissFeedback,

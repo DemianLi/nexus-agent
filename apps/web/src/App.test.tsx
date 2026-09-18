@@ -85,12 +85,16 @@ function textFrames(id: string, namespace: readonly string[], body: string): Eve
 }
 
 /**
- * 回饋那三個 method 在這一檔裡一律「收不了」。**評分的畫面驗在 `feedback-ui.test.tsx`**；這裡的測試
+ * 回饋那四個 method 在這一檔裡一律「收不了」。**評分的畫面驗在 `feedback-ui.test.tsx`**；這裡的測試
  * 不碰它們，碰到就是測試寫錯了，所以回拒絕而不是回成功。
  */
-const UNWIRED_FEEDBACK: Pick<WireClient, 'feedbackPut' | 'feedbackDelete' | 'feedbackRecord'> = {
+const UNWIRED_FEEDBACK: Pick<
+  WireClient,
+  'feedbackPut' | 'feedbackDelete' | 'feedbackList' | 'feedbackRecord'
+> = {
   feedbackPut: async () => ({ kind: 'rejected', message: '這一檔沒有接回饋' }),
   feedbackDelete: async () => ({ kind: 'rejected', message: '這一檔沒有接回饋' }),
+  feedbackList: async () => ({ kind: 'rejected', message: '這一檔沒有接回饋' }),
   feedbackRecord: async () => ({ kind: 'rejected', message: '這一檔沒有接回饋' }),
 };
 

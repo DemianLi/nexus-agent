@@ -528,16 +528,16 @@ export interface SessionEventMap {
     readonly message?: LoggedMessage;
   };
   /**
-   * 一輪的評分新建或改了，**帶修改之後的完整值**。後寫覆蓋先寫，被 `feedback/message-delete`
-   * 收回的就沒了——折疊住在 `@nexus/plugin-feedback`。
+   * 一則回覆的評分新建或改了，**帶修改之後的完整值**。後寫覆蓋先寫，被 `feedback/message-delete`
+   * 收回的就沒了——折疊是 `feedback.ts` 的 `currentMessageFeedback`。
    *
-   * 照 dsh 的同名事件（`packages/feedback/message-feedback/src/types.ts:54-58`，`c291e79`），偏離兩處：
-   * 目標欄位 `messageId` 換成 `turn`、拿掉 `sessionId`。理由見 {@link ./feedback.ts}。
+   * 照 dsh 的同名事件（`packages/feedback/message-feedback/src/types.ts:54-58`，`ddefc45`），偏離一處：
+   * 拿掉 `sessionId`，理由見 {@link ./feedback.ts}。**格式 10 以前的目標是輪**（`item.turn`），照舊讀。
    *
    * ⚠️ **`note` 是使用者的原話，而它會原樣進遙測**，同 `command/run` 的 `args`。
    */
   'feedback/message-put': MessageFeedbackPut;
-  /** 一輪的評分被收回了。**之前的評分與備註仍留在日誌裡**——收回不是抹掉。 */
+  /** 一則回覆的評分被收回了。**之前的評分與備註仍留在日誌裡**——收回不是抹掉。格式 10 以前指名的是輪。 */
   'feedback/message-delete': MessageFeedbackDelete;
   /**
    * 一則對整個會話的評語。**跟任何一輪都沒有綁**。照 dsh 的 `feedback/record`

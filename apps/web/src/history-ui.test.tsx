@@ -150,6 +150,7 @@ function fakeClient(
     slashRun: async () => ({ kind: 'unknown' }),
     feedbackPut: rejected,
     feedbackDelete: rejected,
+    feedbackList: rejected,
     feedbackRecord: rejected,
     listThreads: rejected,
     threadHistory: history,
