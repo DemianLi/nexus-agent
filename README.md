@@ -26,7 +26,7 @@ pnpm workspace，Node >= 22。
 
 ```bash
 pnpm install
-pnpm dev          # 啟動 web（http://localhost:5173）
+pnpm dev          # 監看 web 原始碼，重建到 apps/web/dist（vite build --watch；網頁由 serve 服務，見下面）
 pnpm lint         # eslint（遞迴全部套件）
 pnpm typecheck    # tsc --noEmit
 pnpm test         # vitest run
@@ -145,13 +145,16 @@ CLI、`serve`、eval 都吃這個值；這條擋的是「跑掉了」，不是�
 在瀏覽器裡跟 agent 說話，要開兩個 terminal：
 
 ```bash
-pnpm --filter @nexus/harness run serve      # agent 掛上 HTTP（http://127.0.0.1:8787）
-pnpm dev                                    # web（http://localhost:5173）
+pnpm dev                                    # 網頁建成 apps/web/dist，改了原始碼會自動重建
+pnpm --filter @nexus/harness run serve      # agent 掛上 HTTP，並服務 apps/web/dist（http://127.0.0.1:8787）
 ```
 
 `serve` 的組裝與 CLI 完全一樣（同一份預設 plugin 清單、同一個 `--live`、同一個
-`--workspace`），只是把 agent 掛上 HTTP。dev server 會把 `/threads` 轉給它，所以
-瀏覽器那端是同源的、不需要 CORS；harness 換了 port 就設 `NEXUS_AGENT_URL`。
+`--workspace`），只是把 agent 掛上 HTTP，並且自己服務網頁，所以網頁與 API 同源、不需要 CORS。
+改了網頁等重建完（約一兩秒），**手動重新整理**——沒有 HMR，照 dsh。
+
+**網頁從來不由 Vite 服務**（[#426](https://github.com/DemianLi/nexus-agent/issues/426)，照 dsh）：`vite` 與
+`vite preview` 會拒絕啟動。Vite 的開發伺服器會把整個 repo 的檔案交給連得到那個 port 的任何人，而部署主機是多人共用的。
 `serve` 也吃 `--live`（或直接 `run serve:live`）—— 假模型的腳本只有四輪，問到第三句
 就會用完，畫面上會紅字說是為什麼。
 
