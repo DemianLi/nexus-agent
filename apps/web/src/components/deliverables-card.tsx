@@ -92,9 +92,7 @@ export function DeliverablesCard({ files }: { files: readonly PresentedFile[] })
               <span className="text-muted-foreground text-xs">
                 {file.description ?? fallbackDescription(file.path)}
               </span>
-              <span className="text-muted-foreground truncate font-mono text-xs" title={file.path}>
-                {file.path}
-              </span>
+              <span className="text-muted-foreground font-mono text-xs break-all">{file.path}</span>
             </div>
             <CopyPathButton path={file.path} />
           </li>

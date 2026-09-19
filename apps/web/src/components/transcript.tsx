@@ -7,6 +7,8 @@
  *
  * 人答的問題也只有本地記得，但**不自成一則**：答案列在配到的那張提問卡上（`pairAnswers`，§4.3，#409）。
  *
+ * 交付也不在原位畫：同一輪 `present` 成功交付的檔案收攏成一張卡，放在這一輪尾端（`transcriptItems`，#441）。
+ *
  * 模型與工具都可能來自 subagent，
  * 而**歸屬是折疊器 join 出來的**——線上沒有 subagent 的名字，只有 namespace 樹
  * （見 `@nexus/wire` 的 `conversation.ts`）。join 不起來的時候它說「未歸屬」，
@@ -29,6 +31,7 @@ import type {
 } from '@nexus/wire';
 
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
+import { DeliverablesCard } from '@/components/deliverables-card';
 import { MarkdownText } from '@/components/markdown-text';
 import { AttributionBadge, ToolCard } from '@/components/tool-card';
 import { Button } from '@/components/ui/button';
@@ -41,6 +44,7 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller';
+import { transcriptItems } from '@/lib/deliverables-view';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
 import { pairAnswers } from '@/lib/question-view';
 
@@ -171,7 +175,7 @@ function Entry({
   }
 
   if (entry.kind === 'deliverables') {
-    // 交付卡還沒做（#441 第二刀的畫面，dev-ui）：折疊器先長出這一格，這裡暫時不畫。
+    // 不在原位畫：同一輪的交付收攏成一張卡，放在這一輪尾端（`transcriptItems`，#441）。
     return null;
   }
 
@@ -279,22 +283,24 @@ export function Transcript({
     (entry) => entry.kind === 'tool' && entry.status === 'running',
   )?.id;
   const answers = useMemo(() => pairAnswers(state.entries), [state.entries]);
-  const items = state.entries
-    .filter((entry) => entry.kind !== 'answer')
-    .map((entry) => {
-      const answer = answers.get(entry.id);
-      return {
-        id: entry.id,
-        node: (
-          <Entry
-            entry={entry}
-            beam={entry.id === beamId}
-            {...(feedback === undefined ? {} : { feedback })}
-            {...(answer === undefined ? {} : { answer })}
-          />
-        ),
-      };
-    });
+  const items = transcriptItems(state.entries).map((item) => {
+    if (item.kind === 'deliverables') {
+      return { id: item.id, node: <DeliverablesCard files={item.files} /> };
+    }
+    const { entry } = item;
+    const answer = answers.get(entry.id);
+    return {
+      id: entry.id,
+      node: (
+        <Entry
+          entry={entry}
+          beam={entry.id === beamId}
+          {...(feedback === undefined ? {} : { feedback })}
+          {...(answer === undefined ? {} : { answer })}
+        />
+      ),
+    };
+  });
   const announced = useFinishedReply(state.entries, isFresh);
 
   return (
