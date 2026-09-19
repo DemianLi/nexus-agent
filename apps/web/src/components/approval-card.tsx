@@ -1,7 +1,7 @@
 /**
  * **一顆核准中斷一個面板**：這一顆的那批工具呼叫，一個決定。
  *
- * 問答中斷有它自己的卡（`question-card.tsx`）。**兩個元件不是一個元件內部分支**——
+ * 問答中斷有它自己的面板（`question-panel.tsx`）。**兩個元件不是一個元件內部分支**——
  * 送出的形狀完全不同（`{decisions:[…]}` 對 `{answers:[…]}`），而 dsh 那邊也是兩個 slot。
  *
  * 界線在中斷上，不在輪次上（[#232](https://github.com/DemianLi/nexus-agent/issues/232)）。
