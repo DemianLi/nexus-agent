@@ -15,12 +15,21 @@
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`，工作區與暫存根都是暫存目錄，測試不碰真的 `~/.nexus-agent`。
  */
 
-import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { MemorySaver } from '@langchain/langgraph';
-import type { InvariantError, NexusPlugin, SessionRegistry } from '@nexus/core';
+import type { InvariantError, NexusPlugin, SandboxMode, SessionRegistry } from '@nexus/core';
 import { createWorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import type { Event } from '@nexus/wire';
 import {
@@ -71,8 +80,14 @@ interface Outcome {
   readonly violations: readonly string[];
   /** 這一份的暫存根：底下的東西在 `close` 之前看得到。 */
   readonly tempRoot: string;
-  /** 在 thread 還活著時打一條路由。 */
+  /** 在 thread 還活著時打一條路由（帶會話 cookie、loopback 的 Host）。 */
   readonly get: (path: string, init?: RequestInit) => Promise<Response>;
+  /** 原樣交給 handler，不補 cookie 與 Host：驗認證那兩道閘門用。 */
+  readonly raw: (request: Request) => Promise<Response>;
+  /** 模型實際拿到的工具名單。 */
+  readonly boundToolNames: readonly string[];
+  /** 工作區根。 */
+  readonly root: string;
   /** 收掉 thread。 */
   readonly close: () => Promise<void>;
 }
@@ -83,15 +98,18 @@ interface Outcome {
 async function run(
   turns: readonly ScriptedTurn[],
   files: Record<string, string> = {},
+  options: { mode?: SandboxMode; setup?: (root: string) => Promise<void> } = {},
 ): Promise<Outcome> {
   const root = await directory('nexus-changes-e2e-');
   const tempRoot = await directory('nexus-changes-temp-');
   for (const [name, content] of Object.entries(files)) await writeFile(join(root, name), content);
-  const sandboxMode = new SandboxModeController('workspace-write');
+  await options.setup?.(root);
+  const sandboxMode = new SandboxModeController(options.mode ?? 'workspace-write');
+  const model = new ScriptedChatModel({ turns });
   const violations: string[] = [];
   const changes = createWorkspaceChanges({ root, tempRoot });
   const built = await createNexusAgent({
-    model: new ScriptedChatModel({ turns }),
+    model,
     checkpointer: new MemorySaver(),
     plugins: [
       ...DEFAULT_PLUGINS,
@@ -157,6 +175,9 @@ async function run(
             ...init,
           }),
         ),
+      raw: (request) => handler.handle(request),
+      boundToolNames: model.boundToolNames,
+      root,
       close: () => handler.close(),
     };
   } catch (error) {
@@ -281,6 +302,19 @@ describe('每一輪的改動紀錄在真的圖上', () => {
         body: '{}',
       });
       expect(post.status).toBe(404);
+      // **兩道認證閘門排在路徑判斷之前**（#424）：多人共用主機上，同機的其他使用者拿不到摘要與內容。
+      for (const path of [`${summaryPath}?seq=${seq}`, `${diffPath}?seq=${seq}&index=0`]) {
+        const url = `${BASE_URL}${path}`;
+        const json = { 'content-type': 'application/json' };
+        const noCookie = await outcome.raw(
+          new Request(url, { headers: { ...json, host: 'localhost' } }),
+        );
+        expect(noCookie.status, path).toBe(401);
+        const untrusted = await outcome.raw(
+          new Request(url, { headers: { ...json, host: 'evil.example' } }),
+        );
+        expect(untrusted.status, path).toBe(403);
+      }
     } finally {
       await outcome.close();
     }
@@ -329,11 +363,39 @@ describe('每一輪的改動紀錄在真的圖上', () => {
   it('沒呼叫工具的一輪：不記、不送', async () => {
     const outcome = await run([{ content: '只是聊天。' }], FILES);
     try {
+      // **這一刀的前提**：`--workspace` 底下模型改檔只經這三顆，沒有 `execute`（#443 第二則決議）。
+      // 這一條紅了表示換了一顆有 shell 的 backend，擷取不再涵蓋全部改檔的路，git 快照（#461）就不能再等。
+      expect(outcome.boundToolNames).toEqual(
+        expect.arrayContaining(['write_file', 'edit_file', 'delete']),
+      );
+      expect(outcome.boundToolNames).not.toContain('execute');
       expect(outcome.sessions.root.events.some((event) => event.type === 'workspace/changes')).toBe(
         false,
       );
       expect(changesIn(outcome.live)).toEqual([]);
       expect(changesIn(outcome.history)).toEqual([]);
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('被 fence 擋下的寫入不列：基座把拒絕報成成功，但檔案前後一樣', async () => {
+    const outcome = await run(
+      [
+        {
+          content: '寫。',
+          toolCalls: [{ name: 'write_file', args: { file_path: '/new.md', content: 'hi\n' } }],
+        },
+        { content: '寫了。' },
+      ],
+      FILES,
+      { mode: 'read-only' },
+    );
+    try {
+      expect(outcome.sessions.root.events.some((event) => event.type === 'workspace/changes')).toBe(
+        false,
+      );
+      await expect(stat(join(outcome.root, 'new.md'))).rejects.toThrow();
     } finally {
       await outcome.close();
     }
@@ -364,6 +426,79 @@ describe('組裝點', () => {
       } finally {
         await built.dispose();
       }
+    }
+  });
+});
+
+describe('工作區外', () => {
+  /**
+   * 「外面」放在 `/var/tmp`：它不在 `/tmp`、也不在 `os.tmpdir()` 底下（macOS 與 Linux 都是），所以不會被「工作區外
+   * 的暫存目錄不列」那條規則先排掉——放在 `os.tmpdir()` 底下的話，這一條量到的是那條規則，不是 fence。
+   */
+  async function outsideDirectory(): Promise<string> {
+    const path = await mkdtemp('/var/tmp/nexus-changes-outside-');
+    roots.push(path);
+    await writeFile(join(path, 'secret.txt'), 'top secret\n');
+    return path;
+  }
+
+  const THROUGH_LINK: ScriptedTurn[] = [
+    { content: '讀。', toolCalls: [{ name: 'read_file', args: { file_path: '/out/secret.txt' } }] },
+    {
+      content: '改。',
+      toolCalls: [
+        {
+          name: 'edit_file',
+          args: { file_path: '/out/secret.txt', old_string: 'top', new_string: 'no' },
+        },
+      ],
+    },
+    { content: '好。' },
+  ];
+
+  it('workspace-write：經符號連結寫到根外被 fence 擋下，檔案沒變，不列', async () => {
+    const outside = await outsideDirectory();
+    const outcome = await run(THROUGH_LINK, FILES, {
+      setup: (root) => symlink(outside, join(root, 'out')),
+    });
+    try {
+      expect(await readFile(join(outside, 'secret.txt'), 'utf8')).toBe('top secret\n');
+      expect(outcome.sessions.root.events.some((event) => event.type === 'workspace/changes')).toBe(
+        false,
+      );
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('danger-full-access：照 dsh 列出來，`path` 是主機絕對路徑，diff 帶內容', async () => {
+    // dsh README 的已知限制：比較會把工作區外的檔的全文送到 client；必須把這類內容留在 Host 上的部署要把
+    // 這個 plugin 組合出去。瀏覽器那端是通過會話認證（#424）的同一個人，讀得到的也是 harness 行程本來就讀得到的。
+    const outside = await outsideDirectory();
+    const outcome = await run(THROUGH_LINK, FILES, {
+      mode: 'danger-full-access',
+      setup: (root) => symlink(outside, join(root, 'out')),
+    });
+    try {
+      const target = join(await realpath(outside), 'secret.txt');
+      const event = outcome.sessions.root.events.find(
+        (entry) => entry.type === 'workspace/changes',
+      );
+      expect(event).toBeDefined();
+      const summary = await outcome.get(`${changesSummaryPath(THREAD_ID)}?seq=${event!.seq}`);
+      expect(await summary.json()).toEqual({
+        files: [{ path: target, display: target, added: 1, deleted: 1 }],
+        total: 1,
+        added: 1,
+        deleted: 1,
+      });
+      const diff = await outcome.get(`${changesDiffPath(THREAD_ID)}?seq=${event!.seq}&index=0`);
+      expect(await diff.json()).toMatchObject({
+        path: target,
+        hunks: [{ lines: ['-top secret', '+no secret'] }],
+      });
+    } finally {
+      await outcome.close();
     }
   });
 });

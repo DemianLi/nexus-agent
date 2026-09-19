@@ -24,8 +24,8 @@
  * 3. **擷取的工具換成我們基座的那三個**，見 `capture.ts` 的 `mutationPath`。`delete` 是 dsh 沒有的工具。
  * 4. **掛點**：dsh 的 `tools/pre-execute`、`agent/turn-stopping` 與 `session/event`，在我們這裡是 middleware 的
  *    `wrapToolCall`、`afterAgent` 與 `sessions.join` 的 `observe`。`afterAgent` 是圖裡的一個節點，每一輪多走一步
- *    （root 與子代理都是，子代理那一步直接返回）；它是基座唯一一個在輪內、在 `turn/end` 之前、而且只在正常
- *    收尾時才跑的掛點。
+ *    （root 與子代理都是，子代理那一步直接返回）；選它是因為它在輪內、在 pump 寫 `turn/end` 之前，而且只在
+ *    正常收尾時才跑——停在核准點、中止、失敗都不會走到，那幾種由 `turn/end` 之後的補記收。
  * 5. **子代理改的檔算進 root 這一輪**。dsh 不記子代理的會話（`eligible`），這一點照做：事件與摘要只在 root。
  *    但 dsh 的主路徑是 git 快照，子代理在這一輪裡改的檔本來就會出現在 root 的摘要裡；只有「沒有 git」那條
  *    模式漏掉它們。這一刀沒有快照，所以子代理的檔案工具呼叫也在本體前擷取，記在 root 的記錄器上——

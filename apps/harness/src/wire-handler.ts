@@ -979,6 +979,10 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
    * `GET /threads/:id/changes/summary?seq=`（[#443](https://github.com/DemianLi/nexus-agent/issues/443)），照 dsh 的
    * `handleChangesSummary`：400 座標不對，404 這台 server 不再服務這份摘要。
    *
+   * **錯誤協定是這個檔案的第三種寫法，刻意的**：檔頭那兩層（載體層 status、協定層 200＋封包）是我們自己的 RPC
+   * 形狀，這兩條照的是 dsh 的裸 status。「這台 server 根本不記改動（沒給 `--workspace`）」與「這份摘要已經不在」
+   * 也刻意壓成同一個 404——跟 `handleList` 分得出「沒開」與「空的」不同，對 web 這兩種是同一個動作：不畫卡。
+   *
    * **不經 `threadFor`**：摘要只對這個行程裡活著的 thread 存在，為了回一句「沒有」把一條 thread 建起來是反的
    * （同 `handleList` 的分寸）。
    */
