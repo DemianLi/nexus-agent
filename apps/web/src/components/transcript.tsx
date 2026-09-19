@@ -45,7 +45,7 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller';
-import type { ChangesSummaryStore } from '@/lib/changes-summary';
+import type { ChangesStores } from '@/lib/changes-diff';
 import { transcriptItems } from '@/lib/deliverables-view';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
 import { pairAnswers } from '@/lib/question-view';
@@ -280,8 +280,8 @@ export function Transcript({
   feedback?: TranscriptFeedback;
   /** 列表最上面的東西（「載入更早的訊息」）。 */
   before?: ReactNode;
-  /** 改動摘要從哪裡讀（#443）。沒給就不畫改動卡。 */
-  changes?: ChangesSummaryStore;
+  /** 改動的摘要與比較從哪裡讀（#443）。沒給就不畫改動卡。 */
+  changes?: ChangesStores;
 }) {
   // 執行中的邊框光同時最多一個（§7 效能）：給最後一顆還在跑的工具。
   const beamId = state.entries.findLast(
@@ -292,7 +292,7 @@ export function Transcript({
     if (item.kind === 'changes') {
       return changes === undefined
         ? []
-        : [{ id: item.id, node: <ChangesCard seq={item.seq} store={changes} /> }];
+        : [{ id: item.id, node: <ChangesCard seq={item.seq} changes={changes} /> }];
     }
     if (item.kind === 'deliverables') {
       return { id: item.id, node: <DeliverablesCard files={item.files} /> };

@@ -10,7 +10,7 @@ import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { Transcript } from '@/components/transcript';
-import { createChangesSummaryStore } from '@/lib/changes-summary';
+import { createChangesStores } from '@/lib/changes-diff';
 import { transcriptItems } from '@/lib/deliverables-view';
 
 /**
@@ -172,7 +172,7 @@ describe('交付卡片歸到輪尾', () => {
       added: 3,
       deleted: 1,
     };
-    const found = createChangesSummaryStore({
+    const found = createChangesStores({
       threadId: 't',
       baseUrl: '',
       fetch: (async () => new Response(JSON.stringify(summary))) as typeof fetch,
@@ -191,7 +191,7 @@ describe('交付卡片歸到輪尾', () => {
     ).toBeTruthy();
     view.unmount();
 
-    const gone = createChangesSummaryStore({
+    const gone = createChangesStores({
       threadId: 't',
       baseUrl: '',
       fetch: (async () =>

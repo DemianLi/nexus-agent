@@ -21,7 +21,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { useConversation } from '@/hooks/use-conversation';
 import { useThemePreference } from '@/hooks/use-theme-preference';
 import { agentBaseUrl, createAgentClient } from '@/lib/agent';
-import { createChangesSummaryStore } from '@/lib/changes-summary';
+import { createChangesStores } from '@/lib/changes-diff';
 import { newConversationTarget, readThreadListing } from '@/lib/new-conversation';
 import { STOPPED_QUESTION_TEXT, stoppedOnQuestion } from '@/lib/question-view';
 import { recallThread, rememberThread } from '@/lib/remembered-thread';
@@ -181,9 +181,9 @@ function ConversationView({
   readonly onSwitch: (threadId: string) => void;
 }) {
   const conversation = useConversation({ client, threadId });
-  // 改動摘要每個 seq 只讀一次，留到這條 thread 的畫面卸掉（換 thread 整個重掛，#443）。
+  // 改動的摘要與比較都快取到這條 thread 的畫面卸掉（換 thread 整個重掛，#443）。
   const changes = useMemo(
-    () => createChangesSummaryStore({ threadId, baseUrl: agentBaseUrl() }),
+    () => createChangesStores({ threadId, baseUrl: agentBaseUrl() }),
     [threadId],
   );
   // **這個分頁在這條上講過話沒有**，決定「新對話」要不要留在原地（#313）。照 dsh `Session.handleBlank` 的鏡像：

@@ -4,7 +4,8 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ChangesCard, COLLAPSED_ROWS } from '@/components/changes-card';
-import { createChangesSummaryStore, isChangesSummary } from '@/lib/changes-summary';
+import { createChangesStores } from '@/lib/changes-diff';
+import { isChangesSummary } from '@/lib/changes-summary';
 import { axeViolations } from '@/test/axe';
 
 /** 改動卡（#443 web 第一刀）：摘要讀一次、404 不畫、一檔一列、超過三列收起。 */
@@ -40,11 +41,11 @@ function fakeFetch(respond: () => Response | Promise<Response>) {
 
 async function renderCard(respond: () => Response | Promise<Response>, seq = 7) {
   const { fetch, calls } = fakeFetch(respond);
-  const store = createChangesSummaryStore({ threadId: 't 1', baseUrl: 'http://h/', fetch });
-  const view = render(<ChangesCard seq={seq} store={store} />);
+  const changes = createChangesStores({ threadId: 't 1', baseUrl: 'http://h/', fetch });
+  const view = render(<ChangesCard seq={seq} changes={changes} />);
   // 讓 fetch 與 json 的 promise 都走完。
   await act(async () => {});
-  return { ...view, calls, store };
+  return { ...view, calls, changes };
 }
 
 describe('改動摘要的讀取', () => {
@@ -57,8 +58,8 @@ describe('改動摘要的讀取', () => {
   });
 
   it('同一個 seq 只讀一次：第二張卡直接用快取', async () => {
-    const { calls, store } = await renderCard(() => json(SUMMARY));
-    render(<ChangesCard seq={7} store={store} />);
+    const { calls, changes } = await renderCard(() => json(SUMMARY));
+    render(<ChangesCard seq={7} changes={changes} />);
     await act(async () => {});
     expect(calls).toHaveLength(1);
     expect(screen.getAllByTestId('changes')).toHaveLength(2);
@@ -71,9 +72,9 @@ describe('改動摘要的讀取', () => {
     ['形狀不對', () => json({ files: [{ path: 1 }], total: 1, added: 0, deleted: 0 })],
     ['沒有檔', () => json({ files: [], total: 0, added: 0, deleted: 0 })],
   ])('%s：不畫卡，也不重試', async (_name, respond) => {
-    const { container, calls, store } = await renderCard(respond);
+    const { container, calls, changes } = await renderCard(respond);
     expect(container.innerHTML).toBe('');
-    render(<ChangesCard seq={7} store={store} />);
+    render(<ChangesCard seq={7} changes={changes} />);
     await act(async () => {});
     expect(calls).toHaveLength(1);
   });
