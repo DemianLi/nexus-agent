@@ -569,6 +569,9 @@ export interface SessionEventMap {
    * 可能對不上的輪。
    *
    * web 只收 root 那一份的這一顆，即時與重新整理同一條規則——歷史路由只讀 root（`conversation-history.ts`）。
+   *
+   * ⚠️ **檔案路徑與模型寫的說明原樣進本機日誌、也原樣進遙測**，同 `tool/call` 的 `arguments`（同一串路徑
+   * 本來就在那顆呼叫的參數裡）。
    */
   'deliverables/presented': {
     /** 配對的那顆 `tool/call`／`tool/result` 的 `callId`。 */

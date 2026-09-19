@@ -22,7 +22,12 @@ import { MemorySaver } from '@langchain/langgraph';
 import type { InvariantError, NexusPlugin, SessionEvent, SessionRegistry } from '@nexus/core';
 import { PRESENT_NO_WORKSPACE_MESSAGE, PRESENT_TOOL_NAME } from '@nexus/plugin-present';
 import type { DeliverablesPresentedPayload, Event } from '@nexus/wire';
-import { createWireClient, DELIVERABLES_PRESENTED } from '@nexus/wire';
+import {
+  createWireClient,
+  DELIVERABLES_PRESENTED,
+  emptyConversation,
+  reduceAll,
+} from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -248,6 +253,15 @@ describe('present 在真的圖上', () => {
     const delivery = events.find((event) => event.type === 'deliverables/presented');
     expect(delivery?.seq).toBeGreaterThan(resultSeq ?? Infinity);
     expect(outcome.violations).toEqual([]);
+    // **web 今天的折疊器不讀它**：折出來的畫面（包括決定評分按鈕位置的輪尾）跟沒有這顆 frame 一模一樣。
+    // dev-ui 的第二刀開始折它的那天，這一條要刻意翻面。
+    const without = (frames: readonly Event[]) =>
+      frames.filter((frame) => frame.method !== 'custom');
+    for (const frames of [outcome.live, outcome.history]) {
+      expect(reduceAll(emptyConversation(), frames)).toEqual(
+        reduceAll(emptyConversation(), without(frames)),
+      );
+    }
   });
 
   it('找不到檔案：卡片失敗、沒有交付', async () => {

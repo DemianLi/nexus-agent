@@ -18,6 +18,12 @@
  * async 函式，`await` 一次之後才寫；它若拋，日誌把 reject 收成一行 warn，不會變成殺掉行程的
  * unhandled rejection。
  *
+ * **等結果的那個訂閱一個 `callId` 只留一個。** 圍堵對控制流例外（中斷）是原樣往外拋、不寫
+ * `tool/result` 的（`containment.ts` 的 `isGraphBubbleUp`），而 resume 之後同一個 `callId` 會再進來一次。
+ * 本體要是在那之前跑過，舊的訂閱還掛著，結果落定時兩個一起觸發就交付兩次。今天核准閘門擋在本體之前，
+ * 產品路徑上碰不到——這是一個沒人守的前提，所以新的一次先退掉舊的；組裝收掉時全部退掉，不留在
+ * 活得跟行程一樣長的日誌上。
+ *
  * ## 寫進哪一份：呼叫者自己那一份
  *
  * 照 dsh 的所有權規則：「交付歸調用方 Session 所有；父 Session 如需聲明交付子 Agent 創建的文件，必須
@@ -193,6 +199,12 @@ export function createPresentPlugin(options: PresentPluginOptions = {}): NexusPl
       // （#388 開的窄縫）。所以掛一顆沒有鉤子的 middleware，只為了接住它。變數放在 `apply` 裡：
       // 同一個 plugin 物件被好幾次組裝各跑一次 `apply`，每次各一格，不會互相看到。
       let backend: AnyBackendProtocol | undefined;
+      /** 還在等結果的訂閱，依 `callId`。見檔頭「一個 `callId` 只留一個」。 */
+      const waiting = new Map<string, () => void>();
+      registry.lifecycle.onDispose(() => {
+        for (const unsubscribe of waiting.values()) unsubscribe();
+        waiting.clear();
+      });
       registry.middleware.useWithBackend((folded) => {
         backend = folded;
         return { name: PRESENT_BACKEND_MIDDLEWARE_NAME };
@@ -234,14 +246,17 @@ export function createPresentPlugin(options: PresentPluginOptions = {}): NexusPl
               });
             }
             const { log } = found;
+            waiting.get(callId)?.();
             const unsubscribe = log.subscribe(async (event) => {
               if (event.type !== 'tool/result' || event.data.callId !== callId) return;
               unsubscribe();
+              if (waiting.get(callId) === unsubscribe) waiting.delete(callId);
               if (event.data.isError) return;
               // 還在日誌的發佈回呼裡，現在寫會撞重入防護。見檔頭。
               await Promise.resolve();
               log.append('deliverables/presented', { callId, files });
             });
+            waiting.set(callId, unsubscribe);
             return presentedText(files);
           },
           {

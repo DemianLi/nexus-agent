@@ -205,6 +205,31 @@ describe('成功的那一次', () => {
     expect(deliveries(log).map((event) => event.data.callId)).toEqual(['mine']);
   });
 
+  it('同一個 callId 在結果落定前又進來一次（中斷後 resume）：只交付一次', async () => {
+    const root = await workspace();
+    await writeFile(join(root, 'a'), 'a');
+    const mounted = mount({ root });
+    const log = mounted.sessions.root;
+    // 第一次本體跑完、外層拋了中斷所以沒有結果；resume 之後同一個 callId 再跑一次。
+    await callThrough(mounted, log, [{ path: 'a' }], rootConfig('again'), 'pending');
+    await callThrough(mounted, log, [{ path: 'a' }], rootConfig('again'), 'pending');
+    log.append('tool/result', { callId: 'again', isError: false });
+    await Promise.resolve();
+    expect(deliveries(log).map((event) => event.data.callId)).toEqual(['again']);
+  });
+
+  it('組裝收掉之後才落定的結果不交付，等著的訂閱一個都不留', async () => {
+    const root = await workspace();
+    await writeFile(join(root, 'a'), 'a');
+    const mounted = mount({ root });
+    const log = mounted.sessions.root;
+    await callThrough(mounted, log, [{ path: 'a' }], rootConfig('late'), 'pending');
+    for (const entry of mounted.registry.lifecycle.disposers()) await entry.value();
+    log.append('tool/result', { callId: 'late', isError: false });
+    await Promise.resolve();
+    expect(deliveries(log)).toEqual([]);
+  });
+
   it('子代理叫的寫進子代理那一份，root 那一份沒有', async () => {
     const root = await workspace();
     await writeFile(join(root, 'a'), 'a');
