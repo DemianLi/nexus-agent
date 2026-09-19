@@ -596,6 +596,18 @@ describe('git 快照（#461）', () => {
     expect(m.warnings).toEqual([]);
   });
 
+  it('模型沒呼叫工具的一輪：使用者改了檔也不記——配套入口要求那一輪跑過工具，同 dsh', async () => {
+    const root = await repository({ 'a.md': 'a\n' });
+    const m = await mount({}, {}, { root });
+    m.log.append('turn/start', { kind: 'message', text: '聊天。' });
+    await m.settle();
+    await writeFile(join(root, 'a.md'), 'b\n');
+    await m.afterAgent();
+    m.log.append('turn/end', {});
+    await m.settle();
+    expect(m.changes()).toEqual([]);
+  });
+
   it('repo 的 index、物件庫、ref 在一輪前後逐位元組不變；私有物件在暫存目錄裡，收掉時一起刪', async () => {
     const root = await repository({ 'a.md': 'a\n' });
     const before = await fingerprint(join(root, '.git'));
