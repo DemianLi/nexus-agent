@@ -68,6 +68,8 @@ import { createPlanModeInvariantPlugin } from '@nexus/plugin-plan-mode/invariant
 import { createQuickJsInvariantPlugin } from '@nexus/plugin-quickjs/invariant';
 import { createSkillsInvariantPlugin } from '@nexus/plugin-skills/invariant';
 import { createTelemetryOtelInvariantPlugin } from '@nexus/plugin-telemetry-otel/invariant';
+import { createPresentPlugin } from '@nexus/plugin-present';
+import { createPresentInvariantPlugin } from '@nexus/plugin-present/invariant';
 import { createTodoPlugin } from '@nexus/plugin-todo';
 import { createTodoInvariantPlugin } from '@nexus/plugin-todo/invariant';
 import { createValidationInvariantPlugin } from '@nexus/plugin-validation/invariant';
@@ -498,23 +500,28 @@ function outsideWorkspace(
  * （`tool-session-log.test.ts` 那條同一個 subagent 併發兩次的驗收），而 dsh 對這種部署
  * 開的就是 `true`。這個開關沒有預設值，理由見 `TodoPluginOptions`。
  *
- * **十三個不變量配套入口是那句話的例外，而例外要說得出理由**
+ * **`@nexus/plugin-present` 是第四筆**（[#441](https://github.com/DemianLi/nexus-agent/issues/441)）：dsh 的
+ * standard preset 掛 `tool-present`，而 web 的交付卡片讀的事件只有它寫得出來。代價同 todo，**多一顆面向
+ * 模型的工具**（`present`）；沒有工作區時工具照樣在、叫了被拒，同 dsh。
+ *
+ * **十八個不變量配套入口是那句話的例外，而例外要說得出理由**
  * （[#107](https://github.com/DemianLi/nexus-agent/issues/107) 拍板）：
  *
  * - **它們不裝功能，只裝觀察。** 一個配套入口不註冊工具、不改 prompt、不碰 backend，
  *   所以「替誰決定該裝什麼」這個顧慮對它們不成立——沒有人的 agent 因為它們而不一樣。
  * - **關得掉。** [#104](https://github.com/DemianLi/nexus-agent/issues/104) 之後條目層有
  *   `disabled`、組裝點有 `invariants` 選擇，所以進來不是單向門。這是它進得來的前提。
- * - **十三個全進，不是只有 `@nexus/core`。** 八個是空 installer，掛上去一個檢查都不裝，
- *   買到的只有包名歸屬；真的在檢查的是五個——`@nexus/core`（turn 配對）、
+ * - **十八個全進，不是只有 `@nexus/core`。** 十二個是空 installer，掛上去一個檢查都不裝，
+ *   買到的只有包名歸屬；真的在檢查的是六個——`@nexus/core`（turn 配對）、
  *   `@nexus/plugin-commands`（命令生命週期配對，
  *   [#118](https://github.com/DemianLi/nexus-agent/issues/118)）與
  *   `@nexus/plugin-plan-mode`（`/plan` 的參數契約，
  *   [#120](https://github.com/DemianLi/nexus-agent/issues/120)）與 `@nexus/plugin-goal`
  *   （耐久 goal 串，[#126](https://github.com/DemianLi/nexus-agent/issues/126)）與
  *   `@nexus/plugin-todo`（耐久待辦快照的形狀與歸屬，
- *   [#132](https://github.com/DemianLi/nexus-agent/issues/132)）。
- *   **代價是每一次執行多十三個條目、十三次 `apply`**，而換到的是這份
+ *   [#132](https://github.com/DemianLi/nexus-agent/issues/132)）與 `@nexus/plugin-present`（每一筆交付
+ *   對得上一次成功的 `present`，[#441](https://github.com/DemianLi/nexus-agent/issues/441)）。
+ *   **代價是每一次執行多十八個條目、十八次 `apply`**，而換到的是這份
  *   清單與 `registry.invariants.companions()` 對得起來——少掛的那幾個會讓「這個 package
  *   沒有可檢的關係」與「這個 package 的檢查沒掛上」在診斷裡長得一模一樣。
  *
@@ -549,6 +556,8 @@ export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
   createTodoPlugin({ allowParallelInProgress: true }),
   // 評分與 `/feedback`：預設就裝，零 plugin 設定的 serve 與 CLI 都評得到（#278）。
   createFeedbackPlugin({ maxNoteBytes: FEEDBACK_MAX_NOTE_BYTES }),
+  // 交付宣告（#441）：dsh 的 standard preset 掛 `tool-present`。沒有工作區時工具照樣在，叫了會被拒。
+  createPresentPlugin(),
   createCoreInvariantPlugin(),
   createAgentInstructionsInvariantPlugin(),
   createCommandsInvariantPlugin(),
@@ -559,6 +568,7 @@ export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
   createMcpInvariantPlugin(),
   createMemoryInvariantPlugin(),
   createPlanModeInvariantPlugin(),
+  createPresentInvariantPlugin(),
   createQuickJsInvariantPlugin(),
   createSkillsInvariantPlugin(),
   createSubmitRecordInvariantPlugin(),

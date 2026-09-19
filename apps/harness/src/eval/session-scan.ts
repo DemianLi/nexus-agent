@@ -120,6 +120,7 @@ const KNOWN_EVENT_TYPES: Readonly<Record<SessionEventType, true>> = {
   'feedback/message-put': true,
   'feedback/message-delete': true,
   'feedback/record': true,
+  'deliverables/presented': true,
   'session/end-seed': true,
 };
 

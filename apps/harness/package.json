@@ -50,6 +50,7 @@
     "@nexus/plugin-skills": "workspace:*",
     "@nexus/plugin-submit-record": "workspace:*",
     "@nexus/plugin-telemetry-otel": "workspace:*",
+    "@nexus/plugin-present": "workspace:*",
     "@nexus/plugin-todo": "workspace:*",
     "@nexus/plugin-validation": "workspace:*",
     "@nexus/wire": "workspace:*",

@@ -17,6 +17,7 @@
  * | `tool/call` ／ `tool/result` | 工具卡開、收；紅字是那則結果的文字 |
  * | `turn/end` ／ `turn/failed` | 那一輪收掉（中止、失敗、完成）；沒結果的卡照即時那條規則收成失敗 |
  * | `session/end-seed` | 上一個行程停在一輪中間的話，那一輪在這裡收掉 |
+ * | `deliverables/presented` | `custom` frame，`data` 同即時（{@link deliverablesData}） |
  *
  * 其餘的（壓縮、外掛注入的 `user/message`、模型起訖、命令、模式、目標、todo、回饋）即時的畫面也不畫，這裡也不畫。
  * **壓縮不畫是偏離**：dsh 的畫面由那顆 `user/message {surfaceOp: replace}` 把被壓掉的那一段換成摘要；我們沒有
@@ -27,9 +28,14 @@
  * 即時的畫面只畫人送出去的那句（`appendHumanTurn`），目標排的那一輪的指示沒有人打過，畫面上沒有它。歷史照即時。
  */
 
-import type { Event, ThreadHistoryQuery, ThreadHistoryResult } from '@nexus/wire';
-import { HISTORY_PAGE_MESSAGES } from '@nexus/wire';
-import type { LoggedMessage, SessionEvent, UnreplayableReason } from '@nexus/core';
+import type {
+  DeliverablesPresentedPayload,
+  Event,
+  ThreadHistoryQuery,
+  ThreadHistoryResult,
+} from '@nexus/wire';
+import { DELIVERABLES_PRESENTED, HISTORY_PAGE_MESSAGES } from '@nexus/wire';
+import type { LoggedMessage, SessionEvent, SessionEventMap, UnreplayableReason } from '@nexus/core';
 import { loggedMessageId, replayConversation } from '@nexus/core';
 
 /** 推不回模型的原因裡，說的是「這份日誌是格式 9 以前寫的」的那幾種。見 {@link historyPage}。 */
@@ -77,6 +83,23 @@ function isPageStart(event: SessionEvent): boolean {
  */
 function frame(method: string, time: number, data: Record<string, unknown>): Event {
   return { type: 'event', method, params: { namespace: [], timestamp: time, data } } as Event;
+}
+
+/**
+ * 一筆交付在線上的 `custom` 事件 `data`。**即時（pump）與這裡共用這一個**，兩條路才產得出同一種 frame
+ * （[#441](https://github.com/DemianLi/nexus-agent/issues/441)）。只收 root 那一份的：呼叫端自己篩。
+ * @param presented - 日誌裡那一顆的酬載。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `DeliverablesPresentedPayload`。
+ */
+export function deliverablesData(presented: SessionEventMap['deliverables/presented']): {
+  readonly name: typeof DELIVERABLES_PRESENTED;
+  readonly payload: DeliverablesPresentedPayload;
+} {
+  const payload: DeliverablesPresentedPayload = {
+    callId: presented.callId,
+    files: presented.files.map((file) => ({ ...file })),
+  };
+  return { name: DELIVERABLES_PRESENTED, payload };
 }
 
 function lifecycle(time: number, data: Record<string, unknown>): Event {
@@ -227,6 +250,10 @@ export function historyFrames(
         );
         break;
       }
+      case 'deliverables/presented':
+        // 這裡讀的本來就只有 root 那一份，子代理的交付不在裡面——同即時那條規則。
+        frames.push(frame('custom', event.time, deliverablesData(event.data)));
+        break;
       case 'interrupt/raised':
         interrupted = true;
         break;
