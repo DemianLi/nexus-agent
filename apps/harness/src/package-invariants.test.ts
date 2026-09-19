@@ -22,7 +22,7 @@ import {
   repositoryRoot,
 } from './package-invariants.js';
 
-/** 這個 repo 現在該有的十八個 owner。**寫死字串**：拿 glob 的結果自己比自己驗不出東西。 */
+/** 這個 repo 現在該有的十九個 owner。**寫死字串**：拿 glob 的結果自己比自己驗不出東西。 */
 const EXPECTED_OWNERS = [
   '@nexus/core',
   '@nexus/plugin-agent-instructions',
@@ -41,6 +41,7 @@ const EXPECTED_OWNERS = [
   '@nexus/plugin-telemetry-otel',
   '@nexus/plugin-todo',
   '@nexus/plugin-validation',
+  '@nexus/plugin-workspace-changes',
   '@nexus/wire',
 ];
 
@@ -118,7 +119,7 @@ describe('對著真的 repo', () => {
     expect(packageInvariantOwners().map((owner) => owner.dir)).toContain('packages/nexus-core');
   });
 
-  it('**掃出來的 owner 正好是那十八個**——glob 壞掉時這一條紅，零違規那一條不會', () => {
+  it('**掃出來的 owner 正好是那十九個**——glob 壞掉時這一條紅，零違規那一條不會', () => {
     expect(
       packageInvariantOwners()
         .map((owner) => owner.packageName)
@@ -126,7 +127,7 @@ describe('對著真的 repo', () => {
     ).toEqual([...EXPECTED_OWNERS].sort());
   });
 
-  it('十八個現在全部合格', () => {
+  it('十九個現在全部合格', () => {
     expect(collectPackageInvariantViolations()).toEqual([]);
   });
 });

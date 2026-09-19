@@ -53,6 +53,7 @@
     "@nexus/plugin-present": "workspace:*",
     "@nexus/plugin-todo": "workspace:*",
     "@nexus/plugin-validation": "workspace:*",
+    "@nexus/plugin-workspace-changes": "workspace:*",
     "@nexus/wire": "workspace:*",
     "@nexus/web": "workspace:*",
     "deepagents": "~1.13.1",

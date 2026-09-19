@@ -127,8 +127,14 @@ import type { SessionEvent } from './session-log.js';
  * 一顆都沒有的日誌就是那時候寫出來的樣子——**那時候也沒有 `present` 這個工具**，所以讀舊檔數交付要表態成
  * 「沒記」，不是 0。升版照前幾次新增種類的慣例：讀不懂 11 的舊 runtime 看到「版本太新」而拒讀，不會把它
  * 不認得的那幾顆照收之後續寫下去。
+ *
+ * ## 12：`workspace/changes`
+ *
+ * 一輪改了工作區的檔，摘要留在 server 上（[#443](https://github.com/DemianLi/nexus-agent/issues/443)）。v11 的
+ * 檔直接讀：那時候沒有記錄器，一顆都沒有就是當時的樣子。從檔案接回來的這一顆指到的摘要一律不在了（摘要只活到
+ * 會話結束），路由回 404。升版理由同 11。
  */
-export const SESSION_LOG_FORMAT_VERSION = 11;
+export const SESSION_LOG_FORMAT_VERSION = 12;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。

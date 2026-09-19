@@ -157,6 +157,7 @@ export type SessionEventType =
   | 'feedback/message-delete'
   | 'feedback/record'
   | 'deliverables/presented'
+  | 'workspace/changes'
   | 'session/end-seed';
 
 /**
@@ -579,6 +580,22 @@ export interface SessionEventMap {
     /** 通過檢查的檔案，順序照模型給的。 */
     readonly files: readonly PresentedFile[];
   };
+  /**
+   * 一輪改了工作區的檔，**摘要留在 server 上**，這一顆只是指標：摘要與逐檔比較由
+   * `@nexus/plugin-workspace-changes` 保管，web 拿這一顆的 `seq` 去兩條路由要，會話結束就沒了。
+   *
+   * 照 dsh 的同名事件（`packages/deliverables/workspace-changes/src/types.ts`，`ddefc45`）。只寫在 root 那一份
+   * （dsh 不記子代理的會話）。同一輪可能有不只一顆：後寫的取代先寫的。
+   *
+   * ## 對 dsh 的偏離：沒有 `turn`
+   *
+   * 同 `deliverables/presented`：這一筆屬於哪一輪由 `seq` 推，往前找最近一顆不是 resume 的 `turn/start`
+   * （[#443](https://github.com/DemianLi/nexus-agent/issues/443) 第二則決議）。**所以它一定落在它那一輪的
+   * `turn/start` 之後、下一輪的之前**，記錄器為此在輪內記，見那個套件的 `recorder.ts`。
+   *
+   * 資料是空的，所以進遙測也沒有東西外洩——檔名與內容都不在日誌上。
+   */
+  'workspace/changes': Record<string, never>;
   /**
    * 一段 seed 的結尾——這一顆之前的事件是上一個行程寫的，這個行程一顆都沒寫
    * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。

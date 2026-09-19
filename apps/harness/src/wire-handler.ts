@@ -48,6 +48,8 @@ import type {
 } from '@nexus/wire';
 import {
   THREADS_PATH,
+  changesDiffPath,
+  changesSummaryPath,
   encodeSseFrame,
   errorResponse,
   isFeedbackMethod,
@@ -69,6 +71,7 @@ import type {
 } from '@nexus/core';
 import { FEEDBACK_CATEGORIES } from '@nexus/core';
 import type { CommandExecutor } from '@nexus/plugin-commands';
+import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { HistoryQueryError, historyPage } from './conversation-history.js';
 import type { GoalDriverPort } from './goal-driver.js';
@@ -123,6 +126,11 @@ export interface ThreadAgent {
    * 沒掛 `@nexus/plugin-feedback` 的組裝就沒有，那時四個回饋 method 回 `not_supported`。
    */
   readonly feedback?: FeedbackService;
+  /**
+   * 每一輪改動檔案的摘要與比較（[#443](https://github.com/DemianLi/nexus-agent/issues/443)），選配。
+   * 沒給 `--workspace` 的組裝就沒有，那時兩條 `changes` 路由一律 404——同「這台 server 不服務這份摘要」。
+   */
+  readonly workspaceChanges?: WorkspaceChanges;
   dispose(): Promise<void>;
   /**
    * 把這個 thread 的**每一份**會話日誌接上遙測，選配。
@@ -248,12 +256,17 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-/** `/threads/:id/stream`、`/threads/:id/history` 或 `/threads/:id/commands/:method`，都不是就 undefined。 */
+/**
+ * `/threads/:id/stream`、`/threads/:id/history`、`/threads/:id/changes/{summary,diff}` 或
+ * `/threads/:id/commands/:method`，都不是就 undefined。
+ */
 function parsePath(
   pathname: string,
 ):
   | { readonly kind: 'stream'; readonly threadId: string }
   | { readonly kind: 'history'; readonly threadId: string }
+  | { readonly kind: 'changes-summary'; readonly threadId: string }
+  | { readonly kind: 'changes-diff'; readonly threadId: string }
   | { readonly kind: 'command'; readonly threadId: string; readonly method: string }
   | undefined {
   const segments = pathname.split('/').filter((segment) => segment !== '');
@@ -267,10 +280,36 @@ function parsePath(
   if (segments.length === 3 && segments[2] === 'history') {
     return { kind: 'history', threadId };
   }
+  if (segments.length === 4 && segments[2] === 'changes') {
+    if (pathname === changesSummaryPath(threadId)) return { kind: 'changes-summary', threadId };
+    if (pathname === changesDiffPath(threadId)) return { kind: 'changes-diff', threadId };
+  }
   if (segments.length === 4 && segments[2] === 'commands' && segments[3] !== undefined) {
     return { kind: 'command', threadId, method: segments[3] };
   }
   return undefined;
+}
+
+const NUMERIC = /^\d+$/;
+
+/** 查詢字串裡的一個非負整數座標，照 dsh `present-open.ts` 的 `coordinate`。 */
+function coordinate(value: string | null): number | undefined {
+  return value !== null && NUMERIC.test(value) && Number.isSafeInteger(Number(value))
+    ? Number(value)
+    : undefined;
+}
+
+/** `changes` 兩條路由的回應：錯誤協定照 dsh，純文字加 HTTP status；成功是 JSON。一律不快取。 */
+function changesResponse(body: unknown, status = 200): Response {
+  return status === 200
+    ? new Response(JSON.stringify(body), {
+        status,
+        headers: {
+          'content-type': `${JSON_MEDIA_TYPE}; charset=utf-8`,
+          'cache-control': 'no-store',
+        },
+      })
+    : new Response(String(body), { status, headers: { 'cache-control': 'no-store' } });
 }
 
 function requestedChannels(body: EventStreamRequest): readonly WireChannel[] | undefined {
@@ -293,6 +332,7 @@ interface ThreadState {
   readonly commands: Pick<CommandRegistrationPoint, 'find' | 'list'>;
   readonly executor: CommandExecutor;
   readonly feedback: FeedbackService | undefined;
+  readonly workspaceChanges: WorkspaceChanges | undefined;
   /**
    * 有沒有一次 `slash.run` 還沒回來。
    *
@@ -477,6 +517,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
             sessionLog: pump.sessionLog,
           }),
           feedback: threadAgent.feedback,
+          workspaceChanges: threadAgent.workspaceChanges,
           slashInFlight: false,
           dispose: async () => {
             // **參與者先收，比不變量還早**：它是唯一寫得動日誌的那一個，先讓它停手，
@@ -934,6 +975,50 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     return json(response);
   }
 
+  /**
+   * `GET /threads/:id/changes/summary?seq=`（[#443](https://github.com/DemianLi/nexus-agent/issues/443)），照 dsh 的
+   * `handleChangesSummary`：400 座標不對，404 這台 server 不再服務這份摘要。
+   *
+   * **不經 `threadFor`**：摘要只對這個行程裡活著的 thread 存在，為了回一句「沒有」把一條 thread 建起來是反的
+   * （同 `handleList` 的分寸）。
+   */
+  function handleChangesSummary(threadId: string, search: URLSearchParams): Response {
+    const seq = coordinate(search.get('seq'));
+    if (seq === undefined) return changesResponse('Invalid change summary coordinates.', 400);
+    const summary = ready.get(threadId)?.workspaceChanges?.summary(seq);
+    if (summary === undefined) return changesResponse('Change summary unavailable.', 404);
+    return changesResponse(summary);
+  }
+
+  /**
+   * `GET /threads/:id/changes/diff?seq=&index=`，照 dsh 的 `handleChangesDiff`：400 座標不對，404 這台 server 不再
+   * 服務這份摘要、或沒有那個 index，500 讀檔失敗（找不到檔算 404）。請求被取消時照樣拋出去，由載體收掉。
+   */
+  async function handleChangesDiff(
+    threadId: string,
+    search: URLSearchParams,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    const seq = coordinate(search.get('seq'));
+    const index = coordinate(search.get('index'));
+    if (seq === undefined || index === undefined) {
+      return changesResponse('Invalid changed file coordinates.', 400);
+    }
+    const service = ready.get(threadId)?.workspaceChanges;
+    try {
+      const diff = await service?.diff(seq, index, signal);
+      if (diff === undefined) return changesResponse('Change comparison unavailable.', 404);
+      return changesResponse(diff);
+    } catch (error: unknown) {
+      signal.throwIfAborted();
+      const code = (error as { code?: unknown } | null)?.code;
+      return changesResponse(
+        'Change comparison unavailable.',
+        code === 'ENOENT' || code === 'ENOTDIR' ? 404 : 500,
+      );
+    }
+  }
+
   function firstHumanText(input: unknown): string | undefined {
     const messages = (input as { messages?: unknown })?.messages;
     if (!Array.isArray(messages)) {
@@ -977,6 +1062,14 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
         if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
         return handleHistory(route.threadId, searchParams);
+      }
+      if (route?.kind === 'changes-summary' || route?.kind === 'changes-diff') {
+        if (request.method !== 'GET') return new Response('not found', { status: 404 });
+        // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
+        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+        return route.kind === 'changes-summary'
+          ? handleChangesSummary(route.threadId, searchParams)
+          : handleChangesDiff(route.threadId, searchParams, request.signal);
       }
       if (request.method !== 'POST' || route === undefined) {
         return new Response('not found', { status: 404 });
