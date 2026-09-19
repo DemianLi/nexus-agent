@@ -8,9 +8,11 @@
  * - **報讀**（§8）：狀態變化不唸，狀態由狀態列講；orb 旁有同義文字，所以 `aria-hidden`。
  * - **停在提問時被停止的 `ask_user_question`**（§4.3，#409）：直接展開、列出題目與選項，標「已停止，請直接打字回覆」，
  *   不畫紅字——停止不是失敗（#276），而那句紅字是給模型看的英文。判法在 `lib/question-view.ts`。
+ * - **答完的 `ask_user_question`**（§4.3，#409）：展開列「問題 → 回答」，答案是呼叫端按題目 id 配來的（`pairAnswers`）；
+ *   配不到（重新整理、別的分頁）就只列題目、收著那一行照講「已回答 N 題」。參數原文不畫：它就是這幾題。
  */
 
-import type { Attribution, QuestionItem, ToolEntry } from '@nexus/wire';
+import type { AnswerEntry, Attribution, QuestionItem, ToolEntry } from '@nexus/wire';
 import { Check, ChevronDown, Hand, X } from 'lucide-react';
 import { useState } from 'react';
 
@@ -18,7 +20,14 @@ import { AgentOrb } from '@/components/agent-orb';
 import { CodeBlock } from '@/components/markdown/code-block';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { isStoppedQuestion, questionsOf, STOPPED_QUESTION_TEXT } from '@/lib/question-view';
+import {
+  answerText,
+  ASK_USER_QUESTION,
+  isStoppedQuestion,
+  questionsOf,
+  questionSummary,
+  STOPPED_QUESTION_TEXT,
+} from '@/lib/question-view';
 import { classifyTool, firstLine, toolInputBody, toolSummary, toolTitle } from '@/lib/tool-view';
 
 export const TOOL_STATUS_LABEL = {
@@ -48,25 +57,45 @@ function StatusIcon({ status }: { status: ToolEntry['status'] }) {
   return <X aria-hidden className="text-destructive size-4" />;
 }
 
-/** 停下來那一組問題：題目與選項照問的順序列出來，人照著打字回覆。 */
-function StoppedQuestions({ questions }: { questions: readonly QuestionItem[] }) {
+/**
+ * 那一組問題照問的順序列出來。有答案時每題接「→ 回答」；沒有時列選項——停下來那一組人照著打字回覆，
+ * 還沒答的看得到在問什麼。
+ */
+function QuestionList({
+  questions,
+  answer,
+}: {
+  questions: readonly QuestionItem[];
+  answer: AnswerEntry | undefined;
+}) {
   return (
     <ol className="bg-stage shadow-stage flex flex-col gap-3 rounded-xl p-3 text-sm">
       {questions.map((question) => (
-        <li key={question.id} className="flex flex-col gap-1">
+        <li key={question.id} className="flex flex-col gap-1" data-testid="question-row">
           {question.header !== undefined && (
             <span className="text-muted-foreground text-xs">{question.header}</span>
           )}
           <span>{question.question}</span>
-          {question.options !== undefined && question.options.length > 0 && (
-            <ul className="text-muted-foreground flex list-disc flex-col gap-0.5 pl-5 text-xs">
-              {question.options.map((option) => (
-                <li key={option.label}>
-                  {option.label}
-                  {option.description !== undefined && `：${option.description}`}
-                </li>
-              ))}
-            </ul>
+          {answer !== undefined ? (
+            <span className="text-foreground font-medium">
+              <span aria-hidden className="text-muted-foreground">
+                →{' '}
+              </span>
+              <span className="sr-only">回答：</span>
+              {answerText(answer.answers.find((candidate) => candidate.id === question.id))}
+            </span>
+          ) : (
+            question.options !== undefined &&
+            question.options.length > 0 && (
+              <ul className="text-muted-foreground flex list-disc flex-col gap-0.5 pl-5 text-xs">
+                {question.options.map((option) => (
+                  <li key={option.label}>
+                    {option.label}
+                    {option.description !== undefined && `：${option.description}`}
+                  </li>
+                ))}
+              </ul>
+            )
           )}
         </li>
       ))}
@@ -74,7 +103,16 @@ function StoppedQuestions({ questions }: { questions: readonly QuestionItem[] })
   );
 }
 
-export function ToolCard({ entry, beam }: { entry: ToolEntry; beam: boolean }) {
+export function ToolCard({
+  entry,
+  beam,
+  answer,
+}: {
+  entry: ToolEntry;
+  beam: boolean;
+  /** 配到這張提問卡的那一則答案（`pairAnswers`）；別的工具、或配不到時沒有。 */
+  answer?: AnswerEntry;
+}) {
   const stopped = isStoppedQuestion(entry);
   const [open, setOpen] = useState(stopped);
   // 停下來的那一刻這張卡早就在畫面上了（等你回答），所以要在**翻成**停止時打開，初始值只管重播出來的那種。
@@ -85,8 +123,9 @@ export function ToolCard({ entry, beam }: { entry: ToolEntry; beam: boolean }) {
   }
   const variant = classifyTool(entry.name);
   const body = toolInputBody(entry.name, entry.input);
-  const questions = stopped ? questionsOf(entry.input) : undefined;
+  const questions = entry.name === ASK_USER_QUESTION ? questionsOf(entry.input) : undefined;
   const failed = entry.status === 'failed' && !stopped;
+  const answered = entry.status === 'done';
   return (
     <Collapsible
       open={open}
@@ -116,7 +155,9 @@ export function ToolCard({ entry, beam }: { entry: ToolEntry; beam: boolean }) {
             ? STOPPED_QUESTION_TEXT
             : failed && entry.error !== undefined
               ? firstLine(entry.error)
-              : toolSummary(entry.name, entry.input)}
+              : questions !== undefined
+                ? questionSummary(questions, answered)
+                : toolSummary(entry.name, entry.input)}
         </span>
         <span className="hidden sm:inline-flex">
           <AttributionBadge attribution={entry.attribution} />
@@ -138,7 +179,14 @@ export function ToolCard({ entry, beam }: { entry: ToolEntry; beam: boolean }) {
             </div>
           )}
           {questions !== undefined ? (
-            <StoppedQuestions questions={questions} />
+            <>
+              <QuestionList questions={questions} answer={answer} />
+              {answered && answer === undefined && (
+                <p className="text-muted-foreground px-3 pb-1 text-xs">
+                  答案只記在作答的那個分頁，這裡看不到。
+                </p>
+              )}
+            </>
           ) : body === undefined ? (
             <p className="text-muted-foreground px-3 py-2 text-xs">沒有參數。</p>
           ) : (
