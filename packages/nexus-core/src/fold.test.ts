@@ -48,6 +48,8 @@ function stubAnswer(result: unknown): { text: string; status: unknown; error: un
  * （[#142](https://github.com/DemianLi/nexus-agent/issues/142)），而它需要一個
  * default backend。這個檔裡絕大多數測試量的是別的規則、不給 backend，所以在入口統一
  * 宣告「這些測試不關心摘要」比逐條塞一個假 backend 誠實。摘要那一組自己明著打開。
+ * 關掉之後 stack 裡仍有一顆同名空殼（#446），所以順序斷言照樣列著
+ * `SUMMARIZATION_MIDDLEWARE_NAME`。
  *
  * **「先讀後改」策略也預設關掉，理由跟摘要器同一條**：它需要一個折出來的 backend，
  * 而這個檔絕大多數測試不給。它自己那一組明著打開。
@@ -151,6 +153,7 @@ describe('middleware 註冊點', () => {
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
@@ -173,6 +176,7 @@ describe('middleware 註冊點', () => {
       TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
@@ -195,6 +199,7 @@ describe('middleware 註冊點', () => {
       'b',
       'c',
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
@@ -233,6 +238,7 @@ describe('middleware 註冊點', () => {
         TURN_CANCEL_MIDDLEWARE_NAME,
         'early',
         APPROVAL_GATE_MIDDLEWARE_NAME,
+        SUMMARIZATION_MIDDLEWARE_NAME,
         SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
         MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
         MODEL_USAGE_MIDDLEWARE_NAME,
@@ -345,6 +351,7 @@ describe('「先讀後改」策略打底', () => {
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       OBSERVATION_POLICY_MIDDLEWARE_NAME,
+      SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
@@ -374,6 +381,7 @@ describe('「先讀後改」策略打底', () => {
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       OBSERVATION_POLICY_MIDDLEWARE_NAME,
+      SUMMARIZATION_MIDDLEWARE_NAME,
       SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
@@ -599,6 +607,7 @@ describe('approvals 註冊點', () => {
       TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       'a',
@@ -624,6 +633,7 @@ describe('approvals 註冊點', () => {
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      SUMMARIZATION_MIDDLEWARE_NAME,
       SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
@@ -645,6 +655,7 @@ describe('approvals 註冊點', () => {
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      SUMMARIZATION_MIDDLEWARE_NAME,
       SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
@@ -1194,7 +1205,7 @@ describe('組裝點自有的那五樣', () => {
  *
  * 這個檔的入口 helper 預設 `summarization: false`（其餘測試都不關心摘要，而打底需要一個
  * default backend），所以**這一組要自己明著打開**——不然 fold 產出的摘要器在 core 這側
- * 一條測試都沒有。
+ * 一條測試都沒有。`false` 本身折出什麼也在這一組量（#446）。
  */
 describe('摘要器打底', () => {
   it('排在閘門之後、其餘 registry middleware 之前', async () => {
@@ -1278,6 +1289,34 @@ describe('摘要器打底', () => {
     expect(new Set(instances).size).toBe(3);
   });
 
+  /**
+   * **`false` 是真的關掉，射程涵蓋三種 agent**（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）。
+   *
+   * 不給的話基座會補回它自己那顆，所以要的是「每一處都有一顆同名、沒有任何鉤子的」。
+   * 只看 root 的話，「空殼沒發給子代理」這個錯寫法照樣綠——行為上也量不出來，基座那顆的
+   * 兜底門檻是 170k token，測試裡永遠碰不到。
+   */
+  it('false 給 root、宣告的 subagent 與 general-purpose 各一顆同名空殼', async () => {
+    const params = await fold(
+      [fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('writer')))],
+      { summarization: false },
+    );
+    const pick = (list: readonly unknown[]): unknown =>
+      list.find((mw) => (mw as { name: string }).name === SUMMARIZATION_MIDDLEWARE_NAME);
+    const stacks = [params.middleware, ...params.subagents.map((sub) => sub.middleware ?? [])];
+    expect(params.subagents.map((sub) => sub.name).sort()).toEqual(
+      [GENERAL_PURPOSE_SUBAGENT.name, 'writer'].sort(),
+    );
+    for (const stack of stacks)
+      expect(pick(stack)).toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+  });
+
+  it('關掉時不需要 default backend', async () => {
+    await expect(
+      fold([fakePlugin('noop', () => {})], { summarization: false }),
+    ).resolves.toBeDefined();
+  });
+
   it('沒關掉又沒給 default backend，訊息指得出逃生口', async () => {
     await expect(fold([fakePlugin('noop', () => {})], { summarization: {} })).rejects.toThrow(
       /summarization: false/,
@@ -1306,6 +1345,22 @@ describe('摘要器打底', () => {
       }),
     ).rejects.toThrow(`summarization.${where}`);
   });
+
+  /**
+   * 剪刀的預算在組裝時驗，**摘要關掉時也驗**：這一格那時不發生作用，但設定寫錯是載入期
+   * 的錯，不因為今天剛好沒用到就放過（#446，見 `FoldOptions.toolResultPruning`）。
+   */
+  it.each([
+    ['摘要開著', { summarization: {}, defaultBackend: fakeBackend('default') }],
+    ['摘要關掉', { summarization: false as const }],
+  ])('toolResultPruning 不成立時當場拋（%s）', async (_label, options) => {
+    await expect(
+      fold([fakePlugin('noop', () => {})], {
+        ...options,
+        toolResultPruning: { thresholdChars: 100, headChars: 100 },
+      }),
+    ).rejects.toThrow(/工具結果預算不成立/);
+  });
 });
 
 /**
@@ -1315,8 +1370,9 @@ describe('摘要器打底', () => {
  * 混進同一個檔，所以那邊逐個建；提醒器的鏈是從 `state.messages` 現算的，closure 裡只有
  * 設定，而 `state` 本來就逐 thread、逐 agent 各一份。
  *
- * 二、**`false` 的意思相反**。摘要那格的 `false` 是退回基座無條件建的那個；這格的
- * `false` 是**真的沒有**——基座沒有這種 middleware。
+ * 二、**`false` 之後 stack 裡留下的東西不同**。摘要那格的 `false` 留一顆同名空殼，因為
+ * 不留的話基座會補回它自己那顆（#446）；這格的 `false` 是**什麼都不留**——基座沒有這種
+ * middleware。
  */
 describe('提醒器打底', () => {
   it('排在摘要器之後、其餘 registry middleware 之前', async () => {
@@ -1366,6 +1422,7 @@ describe('提醒器打底', () => {
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
+      SUMMARIZATION_MIDDLEWARE_NAME,
       REPEAT_REMINDER_MIDDLEWARE_NAME,
       SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,

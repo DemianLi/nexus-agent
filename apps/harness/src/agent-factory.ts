@@ -60,6 +60,7 @@ import {
   type SessionTelemetrySharingStatus,
   type RepeatReminderSettings,
   type SummarizationSettings,
+  type ToolResultPruneConfig,
 } from '@nexus/core';
 import { CompositeBackend, createDeepAgent, StateBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
@@ -115,7 +116,7 @@ export interface CreateNexusAgentOptions {
   readonly approvals?: ApprovalPolicy;
   /**
    * 摘要的門檻與去向。省略即 `DEFAULT_SUMMARIZATION`，給物件就逐格淺合併上去，
-   * `false` 是明著退回基座那個。
+   * `false` 是真的關掉：沒有摘要、沒有歷史 offload，也沒有工具結果剪刀（#446）。
    *
    * **這一格存在是因為基座沒有這個參數。** `createSummarizationMiddleware({ backend })`
    * 被無條件寫死進 root 與每個 subagent 的 stack，`CreateDeepAgentParams` 上一個
@@ -129,6 +130,14 @@ export interface CreateNexusAgentOptions {
    * 數值的理由見 [`summarization.ts`](../../../packages/nexus-core/src/summarization.ts)。
    */
   readonly summarization?: Partial<SummarizationSettings> | false;
+  /**
+   * 摘要器外面那把工具結果剪刀的預算。省略即 `DEFAULT_TOOL_RESULT_PRUNE`（dsh 的
+   * 8192／4096／1024），給物件就逐格淺合併上去，`false` 是摘要照跑、只是不先剪。
+   *
+   * 照 dsh 只在摘要開著時有作用；給了物件照樣在組裝時驗。CLI 與 serve 還沒有入口，
+   * 等設定層（#46）。形狀見 `@nexus/core` 的 `tool-result-pruner.ts`。
+   */
+  readonly toolResultPruning?: Partial<ToolResultPruneConfig> | false;
   /**
    * 重複工具呼叫的提醒門檻與射程。省略即 `DEFAULT_REPEAT_REMINDER`（門檻 3／5／8），
    * 給物件就逐格淺合併上去，`false` 是明著不要。
@@ -440,6 +449,9 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       store: options.store,
       approvals: options.approvals,
       ...(options.summarization !== undefined && { summarization: options.summarization }),
+      ...(options.toolResultPruning !== undefined && {
+        toolResultPruning: options.toolResultPruning,
+      }),
       ...(options.repeatReminder !== undefined && { repeatReminder: options.repeatReminder }),
       ...(options.observationPolicy !== undefined && {
         observationPolicy: options.observationPolicy,
