@@ -70,7 +70,8 @@ import { countTokensApproximately } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import { toLoggedMessage } from './logged-message.js';
 import type { SessionLookup } from './registry.js';
-import { pruneToolResults } from './tool-result-pruner.js';
+import { DEFAULT_TOOL_RESULT_PRUNE, withToolResultPruning } from './tool-result-pruner.js';
+import type { ToolResultPruneConfig } from './tool-result-pruner.js';
 
 /**
  * 基座那個 middleware 的名字。
@@ -267,7 +268,7 @@ function assertThreshold(threshold: SummarizationThreshold, where: string): void
  *
  * 回傳的不是基座那顆本人，是**它加一層前處理**：壓力達標時先剪掉過大的工具結果，再把
  * 剪過的訊息串交給基座那顆去決定要不要摘要。剪完壓力若已消失，基座自己會判 `false`，
- * **那一輪摘要用的模型呼叫就不會發生**。
+ * **那一輪摘要用的模型呼叫就不會發生**。`pruning: false` 就不包，其餘照舊。
  *
  * **包住它是唯一的做法，不是偏好。** 基座的 `mergeMiddlewareStack` 回的是
  * `[...預設（同名就地取代）, ...新名字的, ...tail]`，而 `SummarizationMiddleware` 在預設
@@ -286,12 +287,15 @@ function assertThreshold(threshold: SummarizationThreshold, where: string): void
  * @param sessions - 註冊表的 `sessions` 通道，用來問「這次壓縮該記進哪一份日誌」。
  *   **省略即不記**，而那是常態不是異常：`eval/runner.ts` 與絕大多數測試的組裝都沒有
  *   會話註冊表，它們不該為此拿到一個例外。同 {@link ./model-usage.ts} 的 `not-attached`。
+ * @param pruning - 包在外面的那把剪刀的預算，來自 `resolveToolResultPruneConfig`；
+ *   `false` 就不包（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）。
  * @returns 可以直接放進 `middleware` 的 middleware。
  */
 export function createSummarizer(
   backend: AnyBackendProtocol,
   settings: SummarizationSettings,
   sessions?: { forCall(config: unknown): SessionLookup },
+  pruning: ToolResultPruneConfig | false = DEFAULT_TOOL_RESULT_PRUNE,
 ): AgentMiddleware {
   const base = createSummarizationMiddleware({
     backend,
@@ -309,41 +313,13 @@ export function createSummarizer(
   // 兩層各管一個方向，刻意不合成一層：剪刀改請求、日誌讀回傳，合起來寫會讓兩個獨立的
   // 失敗模式共用一個 try。順序無所謂——它們碰的不是同一樣東西。
   const logged = sessions === undefined ? base : withCompactionLog(base, sessions);
-  return withToolResultPruning(logged, settings.trigger);
-}
-
-/**
- * 把一把剪刀包在摘要器外面。
- *
- * 基座那顆是一個普通物件（`name` / `stateSchema` / `wrapModelCall` ／其餘鉤子皆為
- * `undefined`，全部可列舉），所以展開它就能原封不動保住 `name` 與 `stateSchema`——
- * **這兩樣少一樣，同名取代就不成立、狀態就對不上**，實測過才這樣寫。
- *
- * 這一層**沒有 closure 狀態**，所以 `foldSummarizer` 逐個 agent 建一份的理由沒有變多也
- * 沒有變少，還是原本那一條（基座那顆的 `sessionId` 在它自己的 closure 裡）。
- *
- * @param base - 基座那顆摘要器。
- * @param trigger - 我們配的那組門檻，同時當成「壓縮即將運行」的判準。
- * @returns 同名、同狀態、外面多一層前處理的 middleware。
- */
-function withToolResultPruning(
-  base: AgentMiddleware,
-  trigger: readonly SummarizationThreshold[],
-): AgentMiddleware {
-  const inner = base.wrapModelCall?.bind(base);
-  /* v8 ignore next -- 基座那顆一定有 wrapModelCall；沒有的話包了也沒意義，原樣回去。 */
-  if (inner === undefined) return base;
-  return {
-    ...base,
-    wrapModelCall: async (request, handler) => {
-      const messages = request.messages ?? [];
-      if (!isUnderCompactionPressure(effectiveMessages(messages, request.state), trigger))
-        return inner(request, handler);
-      const { prunedCount, messages: pruned } = pruneToolResults(messages);
-      if (prunedCount === 0) return inner(request, handler);
-      return inner({ ...request, messages: [...pruned] }, handler);
-    },
-  } as AgentMiddleware;
+  if (pruning === false) return logged;
+  return withToolResultPruning(
+    logged,
+    (messages, state) =>
+      isUnderCompactionPressure(effectiveMessages(messages, state), settings.trigger),
+    pruning,
+  );
 }
 
 /**

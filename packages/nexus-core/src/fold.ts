@@ -54,6 +54,8 @@ import {
 } from './summarization.js';
 import type { SummarizationSettings } from './summarization.js';
 import { toolCallIdOf, toolRefusal } from './tool-events.js';
+import { resolveToolResultPruneConfig } from './tool-result-pruner.js';
+import type { ToolResultPruneConfig } from './tool-result-pruner.js';
 
 /**
  * 工具呈現順序清單裡代表「其餘未列出者」的保留項。
@@ -196,23 +198,34 @@ export interface FoldOptions {
   /**
    * 摘要的門檻與去向。省略即 {@link DEFAULT_SUMMARIZATION}，給物件就逐格淺合併上去。
    *
-   * **`false` 是明著放棄。** 它讓 fold 一份摘要器都不建，於是 root 與每個 subagent 拿
-   * 回基座無條件建的那個——也就是一組沒有人在檢查的門檻，加上預設的
-   * `/conversation_history`。那是這張卡要消滅的狀態，所以它只能是**明著寫出來**的選擇，
-   * 沒有靜默退回這條路。用得到它的是「我就是要看裸基座」的測試。
+   * **`false` 是真的關掉**（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）：
+   * root、宣告的 subagent 與 fold 補的 `general-purpose` 各拿到一顆同名空殼，基座無條件
+   * 建的那顆被它原地取代，於是沒有摘要、沒有歷史 offload、也沒有
+   * {@link FoldOptions.toolResultPruning} 那把剪刀。這是 dsh minimal preset 的形狀
+   * （不掛 compaction）。**連帶沒有的**：上下文溢出時基座那條緊急摘要——dsh 沒掛
+   * compaction 時一樣沒有溢出恢復。
    *
    * 建摘要器需要一個 backend。**用的是這裡的 {@link FoldOptions.defaultBackend}，不是
    * {@link foldBackend} 折出來的那個**，理由見 {@link foldRegistry}。所以沒給
-   * default backend 又沒關掉摘要時，fold 當場拋。
+   * default backend 又沒關掉摘要時，fold 當場拋；關掉時不需要。
    */
   summarization?: Partial<SummarizationSettings> | false;
+  /**
+   * 摘要器外面那把工具結果剪刀的預算。省略即 {@link DEFAULT_TOOL_RESULT_PRUNE}，給物件就
+   * 逐格淺合併上去，`false` 是明著不要——摘要照跑，只是不先剪。
+   *
+   * **照 dsh，它只在摘要開著時有作用**：dsh 的 pruner 唯一的消費者是 compaction，摘要
+   * 不掛就沒人叫它。所以 {@link FoldOptions.summarization} 是 `false` 時這一格不發生作用，
+   * 但**給了物件照樣驗**：設定寫錯在載入期失敗，不因為今天剛好沒用到就放過。
+   * 形狀與理由見 {@link ./tool-result-pruner.ts}。
+   */
+  toolResultPruning?: Partial<ToolResultPruneConfig> | false;
   /**
    * 重複工具呼叫的提醒門檻與射程。省略即 {@link DEFAULT_REPEAT_REMINDER}，給物件就
    * 逐格淺合併上去，`false` 是明著不要。
    *
-   * **這一格跟 {@link FoldOptions.summarization} 不同型**：那一格的 `false` 是退回基座
-   * 無條件建的那個，這一格的 `false` 是**真的沒有**——基座沒有這種 middleware，
-   * `recursionLimit` 是唯一會讓打轉停下來的東西，而它不分辨在進展還是在打轉。
+   * `false` 之後**真的沒有**——基座沒有這種 middleware，`recursionLimit` 是唯一會讓
+   * 打轉停下來的東西，而它不分辨在進展還是在打轉。
    *
    * 它建的 middleware 是無狀態的（鏈從 `state.messages` 現算），所以 root 與每個
    * subagent 共用同一份實例，不像摘要器要逐個建。
@@ -379,7 +392,7 @@ export function foldRegistry(
       turnCancelModelSignal,
       approvalGate,
       observationPolicy?.(),
-      summarizer?.(),
+      summarizer(),
       repeatReminder,
       modelUsage,
       modelCalls,
@@ -673,7 +686,7 @@ function foldMiddleware(
   turnCancelModelSignal: AgentMiddleware,
   approvalGate: AgentMiddleware,
   observationPolicy: AgentMiddleware | undefined,
-  summarizer: AgentMiddleware | undefined,
+  summarizer: AgentMiddleware,
   repeatReminder: AgentMiddleware | undefined,
   modelUsage: AgentMiddleware,
   modelCalls: AgentMiddleware,
@@ -689,7 +702,7 @@ function foldMiddleware(
     ...plugins.prepended,
     approvalGate,
     ...(observationPolicy === undefined ? [] : [observationPolicy]),
-    ...(summarizer === undefined ? [] : [summarizer]),
+    summarizer,
     ...(repeatReminder === undefined ? [] : [repeatReminder]),
     // 起訖排在用量外層、plugin middleware 外層：一個自己重試模型的 plugin，重試幾次都只算
     // 一步——同 dsh 的 `llm/retry` 在一步之內。摘要器不管排哪都在它外面，見 `model-calls.ts`。
@@ -789,7 +802,7 @@ function foldRepeatReminder(
 }
 
 /**
- * 摘要器的**工廠**，或在明著關掉時回 `undefined`。
+ * 摘要器的**工廠**。明著關掉時工廠給的是同名空殼。
  *
  * **回工廠而不是一份實例，是量出來的。** `createSummarizationMiddleware` 把
  * `sessionId` 與 `tokenEstimationMultiplier` 放在 closure 裡（`let sessionId = null`），
@@ -802,11 +815,19 @@ function foldRepeatReminder(
  * subagent 的 state 塞一個新的 `_summarizationSessionId`，但那條路徑在共用實例底下
  * 沒有把兩邊分開——所以答案是別共用，不是靠那個欄位。
  *
+ * **關掉是給空殼，不是不給。** 不給的話基座會補回它自己那顆——一組沒有人在檢查的門檻，
+ * 加上寫死的 `/conversation_history`，那正是
+ * [#142](https://github.com/DemianLi/nexus-agent/issues/142) 要消滅的狀態。同名取代是
+ * 唯一能讓基座那顆消失的縫（見 {@link SUMMARIZATION_MIDDLEWARE_NAME}）；基座的
+ * `excludedMiddleware` 掛在按模型名稱查的行程級 profile 上，做不成「這次組裝關掉」。
+ * 空殼沒有任何鉤子、也沒有 `stateSchema`：基座的 `task` 照樣往子代理的 state 塞
+ * `_summarizationSessionId`，實測委派不受影響（`summarization.test.ts`）。
+ * [#446](https://github.com/DemianLi/nexus-agent/issues/446)。
+ *
  * **沒有 default backend 又沒關掉是拋，不是靜默跳過。** 這一格的失敗方向有主人：
- * 靜默跳過等於退回基座那組沒有人檢查的門檻，而那正是
- * [#142](https://github.com/DemianLi/nexus-agent/issues/142) 要消滅的狀態——它會長得
- * 跟「一切正常」一模一樣。同型的前例是 {@link foldBackend} 對「掛了路由卻沒給兜底」
- * 那條。**檢查跑在這裡一次**，工廠被呼叫幾次都不重驗。
+ * 靜默跳過等於讓基座那顆回來，而它會長得跟「一切正常」一模一樣。同型的前例是
+ * {@link foldBackend} 對「掛了路由卻沒給兜底」那條。**檢查跑在這裡一次**，工廠被呼叫
+ * 幾次都不重驗；剪刀的預算也是。
  *
  * `registry.sessions` 一路傳下去是為了 `compaction/summary` 那顆事件
  * （[#143](https://github.com/DemianLi/nexus-agent/issues/143)）。**它跟工廠不衝突**：
@@ -814,22 +835,20 @@ function foldRepeatReminder(
  *
  * @param registry - 折的那張註冊表，這裡只用它的 `sessions`。
  * @param options - 組裝點自有的那些。
- * @returns 每呼叫一次就給一份新的摘要器，或 `undefined`。
+ * @returns 每呼叫一次就給一份新的摘要器（或空殼）。
  */
-function foldSummarizer(
-  registry: PluginRegistry,
-  options: FoldOptions,
-): (() => AgentMiddleware) | undefined {
-  if (options.summarization === false) return undefined;
+function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => AgentMiddleware {
+  // 關掉時照樣驗：設定寫錯在載入期失敗，見 {@link FoldOptions.toolResultPruning}。
+  const pruning = resolveToolResultPruneConfig(options.toolResultPruning);
+  if (options.summarization === false) return () => ({ name: SUMMARIZATION_MIDDLEWARE_NAME });
   const settings = resolveSummarizationSettings(options.summarization);
   const backend = options.defaultBackend;
   if (backend === undefined)
     throw new Error(
       '要配摘要器，但組裝點沒給 default backend——摘要器把歷史寫進 backend，沒有它就沒有' +
-        '地方放。給一個 default backend，或明著傳 `summarization: false` 退回基座那個' +
-        '（那等於接受一組沒有人在檢查的門檻，見 #142）。',
+        '地方放。給一個 default backend，或明著傳 `summarization: false` 關掉摘要。',
     );
-  return () => createSummarizer(backend, settings, registry.sessions);
+  return () => createSummarizer(backend, settings, registry.sessions, pruning);
 }
 
 /**
@@ -994,7 +1013,7 @@ function foldSubAgents(
     /** plugin 註冊的，跟 root 同一批實例，見 {@link pluginMiddleware}。 */
     plugins: { prepended: readonly AgentMiddleware[]; rest: readonly AgentMiddleware[] };
     observationPolicy: (() => AgentMiddleware) | undefined;
-    summarizer: (() => AgentMiddleware) | undefined;
+    summarizer: () => AgentMiddleware;
     repeatReminder: AgentMiddleware | undefined;
     modelUsage: AgentMiddleware;
     modelCalls: AgentMiddleware;
@@ -1098,7 +1117,7 @@ function foldSubAgents(
         // **各建一份，不共用**：觀測紀錄在 closure 裡，共用等於讓 root 讀過的檔
         // 變成這個 subagent 也可以直接改。理由見 {@link foldObservationPolicy}。
         ...(context.observationPolicy === undefined ? [] : [context.observationPolicy()]),
-        ...(context.summarizer === undefined ? [] : [context.summarizer()]),
+        context.summarizer(),
         ...(context.repeatReminder === undefined ? [] : [context.repeatReminder]),
         // 委派聲明排在 `spec.middleware` 外層：子代理自己帶的 middleware 看到的是接好聲明的請求。
         context.delegation,

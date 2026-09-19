@@ -17,7 +17,8 @@
 import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { BaseMessage, ToolMessage } from '@langchain/core/messages';
+import { ToolMessage } from '@langchain/core/messages';
+import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import {
   codePointLength,
@@ -27,7 +28,7 @@ import {
   TOOL_RESULT_PRUNE_MARKER,
 } from '@nexus/core';
 import type { NexusPlugin } from '@nexus/core';
-import { tool } from 'langchain';
+import { countTokensApproximately, tool } from 'langchain';
 import { z } from 'zod';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { computeSummarizationDefaults, createSummarizationMiddleware } from 'deepagents';
@@ -993,41 +994,132 @@ describe('我們配的那份打底到每個 subagent', () => {
       false,
     ]);
   });
+});
 
-  /**
-   * **`summarization: false` 真的把整件事還回去。**
-   *
-   * 沒有這條的話，「打底生效」與「打底根本沒建」在別的測試裡分不出來——它們都會讓歷史
-   * 落在某個地方。這條釘的是逃生口本身：關掉之後前綴回到基座寫死的那個。
-   */
-  it('關掉之後歷史回到基座寫死的前綴', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'nexus-sum-'));
-    const backend = new ContainedFilesystemBackend({ rootDir: root });
-    const model = crewModel();
+/**
+ * **`summarization: false` 是真的關掉**（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）。
+ *
+ * 這組是翻面過的絆索：它原本釘的是「關掉之後歷史回到基座寫死的前綴」，也就是退回基座
+ * 那顆。現在 fold 在每一處放一顆同名空殼，基座那顆被原地取代。
+ *
+ * **量具要碰得到基座的兜底門檻才分得出兩者。** 基座那顆在我們的模型上走
+ * `FALLBACK_TRIGGER`（170k token）與 `FALLBACK_KEEP`（6 則），兩件事都成立它才會叫模型：
+ * 壓力超過那道門檻，而且訊息多於 6 則（不然 `cutoffIndex <= 0`，它直接放行）。少一件，
+ * 「沒有摘要」對兩種寫法都成立。
+ *
+ * **體積也不能放在同一則訊息上**：基座的 FilesystemMiddleware 會把超過 8 萬字元的訊息
+ * （工具結果與使用者輸入都會）搬去檔案系統、換成一段預覽，摘要器根本看不到那個體積。
+ * 第一版塞一則 72 萬字元的輸入，突變照樣綠，就是這樣假綠的。所以這裡用 {@link CALLS}
+ * 次平行呼叫、每次回 {@link CHUNK} 字元，並當場斷言三個前提。
+ *
+ * 射程：root 一條、委派過去的 subagent（宣告的與 `general-purpose`）各一條——後兩條的
+ * 工具結果只落在 subagent 那一側，root 只看到它回的一句話。
+ */
+describe('關掉摘要是真的關掉', () => {
+  /** 基座 eviction 是「超過 80,000 字元」，每則留在門檻下。 */
+  const CHUNK = 'x'.repeat(79_000);
+  const CALLS = 10;
 
+  const crew: NexusPlugin = {
+    name: 'crew',
+    apply: (registry) => {
+      registry.subagents.register({ name: 'writer', description: '負責寫東西。' });
+      registry.tools.register(
+        tool(() => CHUNK, { name: 'chunk', description: '回一大段。', schema: z.object({}) }),
+      );
+    },
+  };
+
+  /** 一輪平行叫 {@link CALLS} 次 `chunk`，下一輪用 `last` 收尾。 */
+  function chunkRounds(
+    last: string,
+  ): { content: string; toolCalls?: { name: string; args: Record<string, unknown> }[] }[] {
+    return [
+      {
+        content: '',
+        toolCalls: Array.from({ length: CALLS }, () => ({ name: 'chunk', args: {} })),
+      },
+      { content: last },
+    ];
+  }
+
+  /** 前提：這一坨真的讓基座那顆動手。不成立的話下面每一條都是假綠。 */
+  function assertBaseWouldSummarize(model: ScriptedChatModel): void {
+    const { trigger, keep } = computeSummarizationDefaults(model as never) as {
+      trigger: { type: string; value: number };
+      keep: { type: string; value: number };
+    };
+    const results = Array.from(
+      { length: CALLS },
+      (_, index) => new ToolMessage({ content: CHUNK, tool_call_id: String(index) }),
+    );
+    expect(CHUNK.length).toBeLessThanOrEqual(80_000);
+    expect(trigger.type).toBe('tokens');
+    expect(countTokensApproximately(results)).toBeGreaterThan(trigger.value);
+    // 1 則輸入 ＋ 1 則 AI ＋ CALLS 則結果。
+    expect(keep.type).toBe('messages');
+    expect(2 + CALLS).toBeGreaterThan(keep.value);
+  }
+
+  it('root：壓力遠超基座的兜底門檻，也沒有摘要那次模型呼叫', async () => {
+    const model = new ScriptedChatModel({
+      turns: [...chunkRounds('收工。'), { content: '備料，摘要器動手才會用到。' }],
+    });
+    assertBaseWouldSummarize(model);
     const { agent, dispose } = await createNexusAgent({
       model,
-      backend,
-      plugins: [crew, createEchoPlugin(), tunedSummarization(backend)],
+      plugins: [crew],
       summarization: false,
     });
-
     try {
-      await agent.invoke(toAgentInvocation('叫 writer 去做事。'));
+      await agent.invoke(toAgentInvocation('去拿。'));
     } finally {
       await dispose();
     }
 
-    expect(await filesUnder(root, 'ours')).toHaveLength(0);
-    // 基座那份寫進了它寫死的前綴：摘要訊息只有在 offload 寫成功時才寫出路徑
-    // （`buildSummaryMessage` 看 `filePath`）。#348 之前這裡讀的是工作區裡的
-    // `conversation_history/`，現在那一格路由到 graph state，不在磁碟上。
-    expect(
-      model.prompts.some((prompt) =>
-        prompt.some((message) => message.text.includes('has been saved to /conversation_history/')),
-      ),
-    ).toBe(true);
+    expect(model.prompts).toHaveLength(2);
+    expect(summarizedWithHistory(model)).toBe(false);
   });
+
+  it.each(['writer', 'general-purpose'])(
+    '委派給 %s：壓力只在 subagent 那側，也沒有摘要，委派照常',
+    async (subagentType) => {
+      const model = new ScriptedChatModel({
+        turns: [
+          {
+            content: '',
+            toolCalls: [
+              { name: 'task', args: { description: '去拿。', subagent_type: subagentType } },
+            ],
+          },
+          ...chunkRounds('subagent 做完了。'),
+          { content: '收工。' },
+          { content: '備料，摘要器動手才會用到。' },
+        ],
+      });
+      assertBaseWouldSummarize(model);
+      const { agent, dispose } = await createNexusAgent({
+        model,
+        plugins: [crew],
+        summarization: false,
+      });
+      let messages: readonly BaseMessage[] = [];
+      try {
+        ({ messages } = (await agent.invoke(toAgentInvocation('叫人去拿。'))) as {
+          messages: BaseMessage[];
+        });
+      } finally {
+        await dispose();
+      }
+
+      // root 委派 → subagent 叫工具 → subagent 回話 → root 收尾。多一次就是摘要器動手了。
+      expect(model.prompts).toHaveLength(4);
+      expect(summarizedWithHistory(model)).toBe(false);
+      // 基座的 `task` 照樣往子代理的 state 塞 `_summarizationSessionId`，而空殼沒有那個
+      // channel——委派不受影響。
+      expect(messages.at(-1)?.text).toBe('收工。');
+    },
+  );
 });
 
 /**
@@ -1377,9 +1469,10 @@ describe('壓縮前先剪掉過大的工具結果', () => {
   /**
    * **`summarization: false` 就沒有剪。**
    *
-   * 剪刀搭在摘要器上，摘要器不在就一起不在。這與 dsh 一致（那邊的 pruner 也是 optional，
-   * `ctx.get('toolResultPruner')` 拿不到就不剪），而且**它不是第二顆開關**——我們沒有加
-   * 開關。這條釘住那個耦合，免得下一個人以為關掉摘要還會剩下剪刀。
+   * 照 dsh，剪刀只在摘要開著時作用：那邊的 pruner 唯一的消費者是 compaction，
+   * `ctx.get('toolResultPruner')` 選擇性地讀，摘要不掛就沒人叫它。剪刀有自己的開關
+   * （`toolResultPruning`，#446），但那是「摘要照跑、只是不先剪」；反過來沒有「只剪不摘要」。
+   * 這條釘住那個方向，免得下一個人以為關掉摘要還會剩下剪刀。
    */
   it('關掉摘要就一起沒有剪刀', async () => {
     const model = bulkTurns();
@@ -1395,6 +1488,62 @@ describe('壓縮前先剪掉過大的工具結果', () => {
     }
 
     expect(String(toolResults(model.prompts[1]!)[0]!.content)).toBe(BULK);
+  });
+
+  /**
+   * **剪刀可以單獨關掉**（#446）：摘要照跑，只是不先剪。壓力用 `messages: 2` 確定達標——
+   * 同「沒超過預算的工具結果一字不動」那條；`keep` 用預設的 20 則，所以摘要器自己不會
+   * 動手，模型看到的就是剪刀留下（或沒留下）的東西。
+   */
+  it('toolResultPruning: false 時壓力達標也不剪', async () => {
+    const model = bulkTurns();
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [bulkPlugin(BULK)],
+      summarization: { trigger: [{ type: 'messages', value: 2 }] },
+      toolResultPruning: false,
+    });
+    try {
+      await agent.invoke(toAgentInvocation('去拿一大坨。'));
+    } finally {
+      await dispose();
+    }
+
+    expect(String(toolResults(model.prompts[1]!)[0]!.content)).toBe(BULK);
+  });
+
+  /**
+   * **覆寫的預算真的傳到剪刀手上。** 5,000 字元在預設的 8,192 之下，只有覆寫生效才會剪；
+   * 頭尾長度也照覆寫的值。
+   */
+  it('toolResultPruning 的覆寫會生效', async () => {
+    const medium = 'M'.repeat(5_000);
+    const budget = { thresholdChars: 2_000, headChars: 500, tailChars: 100 };
+    const model = bulkTurns();
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [bulkPlugin(medium)],
+      summarization: { trigger: [{ type: 'messages', value: 2 }] },
+      toolResultPruning: budget,
+    });
+    try {
+      await agent.invoke(toAgentInvocation('去拿一坨。'));
+    } finally {
+      await dispose();
+    }
+
+    const text = String(toolResults(model.prompts[1]!)[0]!.content);
+    expect(text).toBe(`${'M'.repeat(500)}${TOOL_RESULT_PRUNE_MARKER}${'M'.repeat(100)}`);
+  });
+
+  it('toolResultPruning 不成立時組裝當場拋', async () => {
+    await expect(
+      createNexusAgent({
+        model: bulkTurns(),
+        plugins: [],
+        toolResultPruning: { thresholdChars: 1_000, headChars: 1_000 },
+      }),
+    ).rejects.toThrow(/工具結果預算不成立/);
   });
 
   /** 射程：subagent 那半也要剪，理由與 `foldSubAgents` 打底那條線相同。 */
