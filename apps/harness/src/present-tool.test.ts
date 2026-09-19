@@ -253,15 +253,36 @@ describe('present 在真的圖上', () => {
     const delivery = events.find((event) => event.type === 'deliverables/presented');
     expect(delivery?.seq).toBeGreaterThan(resultSeq ?? Infinity);
     expect(outcome.violations).toEqual([]);
-    // **web 今天的折疊器不讀它**：折出來的畫面（包括決定評分按鈕位置的輪尾）跟沒有這顆 frame 一模一樣。
-    // dev-ui 的第二刀開始折它的那天，這一條要刻意翻面。
+    // **折疊器把它折成獨立的一格**（#441 第二刀，由原本「不讀它」那條翻面）：即時與歷史各折出同一格，
+    // 落在那張 `present` 工具卡之後；拿掉這一格，剩下的畫面（包括決定評分按鈕位置的輪尾）跟沒有這顆
+    // frame 時一模一樣。
     const without = (frames: readonly Event[]) =>
       frames.filter((frame) => frame.method !== 'custom');
-    for (const frames of [outcome.live, outcome.history]) {
-      expect(reduceAll(emptyConversation(), frames)).toEqual(
-        reduceAll(emptyConversation(), without(frames)),
+    const folded = [outcome.live, outcome.history].map((frames) => {
+      const state = reduceAll(emptyConversation(), frames);
+      const at = state.entries.findIndex((entry) => entry.kind === 'deliverables');
+      const card = state.entries.findIndex(
+        (entry) => entry.kind === 'tool' && entry.callId === callId,
       );
-    }
+      expect(at).toBeGreaterThan(card);
+      expect(card).toBeGreaterThanOrEqual(0);
+      // `turnStart` 是 `entries` 的索引，多一格就跟著多 1；輪尾標在哪一則由 `entries` 逐格比。
+      const bare = reduceAll(emptyConversation(), without(frames));
+      expect({
+        ...state,
+        entries: state.entries.filter((entry) => entry.kind !== 'deliverables'),
+        turnStart: bare.turnStart,
+      }).toEqual(bare);
+      expect(state.turnStart).toBe(bare.turnStart + 1);
+      return state.entries.filter((entry) => entry.kind === 'deliverables');
+    });
+    const entry = {
+      kind: 'deliverables',
+      id: `deliverables:${callId!}`,
+      callId: callId!,
+      files: [{ path: 'report.md', description: '報告' }],
+    };
+    expect(folded).toEqual([[entry], [entry]]);
   });
 
   it('找不到檔案：卡片失敗、沒有交付', async () => {

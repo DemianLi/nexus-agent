@@ -85,6 +85,7 @@ export type {
   AnswerEntry,
   Attribution,
   ConversationEntry,
+  DeliverablesEntry,
   ConversationState,
   ConversationStatus,
   DecisionEntry,
