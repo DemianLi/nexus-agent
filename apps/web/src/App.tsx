@@ -20,7 +20,8 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/s
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useConversation } from '@/hooks/use-conversation';
 import { useThemePreference } from '@/hooks/use-theme-preference';
-import { createAgentClient } from '@/lib/agent';
+import { agentBaseUrl, createAgentClient } from '@/lib/agent';
+import { createChangesSummaryStore } from '@/lib/changes-summary';
 import { newConversationTarget, readThreadListing } from '@/lib/new-conversation';
 import { STOPPED_QUESTION_TEXT, stoppedOnQuestion } from '@/lib/question-view';
 import { recallThread, rememberThread } from '@/lib/remembered-thread';
@@ -180,6 +181,11 @@ function ConversationView({
   readonly onSwitch: (threadId: string) => void;
 }) {
   const conversation = useConversation({ client, threadId });
+  // 改動摘要每個 seq 只讀一次，留到這條 thread 的畫面卸掉（換 thread 整個重掛，#443）。
+  const changes = useMemo(
+    () => createChangesSummaryStore({ threadId, baseUrl: agentBaseUrl() }),
+    [threadId],
+  );
   // **這個分頁在這條上講過話沒有**，決定「新對話」要不要留在原地（#313）。照 dsh `Session.handleBlank` 的鏡像：
   // 畫面上有東西（自己送出的話、重播回來的歷史、目標排的輪次）就不是空白，斜線命令不算——它不起一輪。
   // **判準看自己的畫面，不看清單**：清單是冷讀磁碟，還沒落盤的這一條根本不在上面。
@@ -280,6 +286,7 @@ function ConversationView({
           <Transcript
             state={conversation.state}
             isFresh={isFresh}
+            changes={changes}
             feedback={{
               ratings: conversation.ratings,
               busy: !conversation.connected,

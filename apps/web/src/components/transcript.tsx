@@ -31,6 +31,7 @@ import type {
 } from '@nexus/wire';
 
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
+import { ChangesCard } from '@/components/changes-card';
 import { DeliverablesCard } from '@/components/deliverables-card';
 import { MarkdownText } from '@/components/markdown-text';
 import { AttributionBadge, ToolCard } from '@/components/tool-card';
@@ -44,6 +45,7 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller';
+import type { ChangesSummaryStore } from '@/lib/changes-summary';
 import { transcriptItems } from '@/lib/deliverables-view';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
 import { pairAnswers } from '@/lib/question-view';
@@ -174,13 +176,8 @@ function Entry({
     return null;
   }
 
-  if (entry.kind === 'deliverables') {
-    // 不在原位畫：同一輪的交付收攏成一張卡，放在這一輪尾端（`transcriptItems`，#441）。
-    return null;
-  }
-
-  if (entry.kind === 'workspace-changes') {
-    // 改動卡還沒做（#443 的畫面，dev-ui）：折疊器先長出這一格，這裡暫時不畫。
+  if (entry.kind === 'deliverables' || entry.kind === 'workspace-changes') {
+    // 不在原位畫：改動與交付收到這一輪尾端（`transcriptItems`，#441、#443）。
     return null;
   }
 
@@ -275,6 +272,7 @@ export function Transcript({
   isFresh,
   feedback,
   before,
+  changes,
 }: {
   state: ConversationState;
   /** 哪幾則是這一次看著它長出來的（`useFreshItems`，在常駐的元件裡算）。 */
@@ -282,13 +280,20 @@ export function Transcript({
   feedback?: TranscriptFeedback;
   /** 列表最上面的東西（「載入更早的訊息」）。 */
   before?: ReactNode;
+  /** 改動摘要從哪裡讀（#443）。沒給就不畫改動卡。 */
+  changes?: ChangesSummaryStore;
 }) {
   // 執行中的邊框光同時最多一個（§7 效能）：給最後一顆還在跑的工具。
   const beamId = state.entries.findLast(
     (entry) => entry.kind === 'tool' && entry.status === 'running',
   )?.id;
   const answers = useMemo(() => pairAnswers(state.entries), [state.entries]);
-  const items = transcriptItems(state.entries).map((item) => {
+  const items = transcriptItems(state.entries).flatMap((item) => {
+    if (item.kind === 'changes') {
+      return changes === undefined
+        ? []
+        : [{ id: item.id, node: <ChangesCard seq={item.seq} store={changes} /> }];
+    }
     if (item.kind === 'deliverables') {
       return { id: item.id, node: <DeliverablesCard files={item.files} /> };
     }
@@ -321,7 +326,8 @@ export function Transcript({
               <MessageScrollerItem
                 key={item.id}
                 messageId={item.id}
-                className={isFresh(item.id) ? 'motion-rise-in' : undefined}
+                // 卡片可能什麼都不畫（改動摘要 404，#443）：空的那一格不佔列表的間距。
+                className={isFresh(item.id) ? 'motion-rise-in empty:hidden' : 'empty:hidden'}
               >
                 {item.node}
               </MessageScrollerItem>
