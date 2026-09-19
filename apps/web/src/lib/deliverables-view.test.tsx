@@ -6,10 +6,11 @@ import {
   reduceAll,
   WORKSPACE_CHANGES,
 } from '@nexus/wire';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { Transcript } from '@/components/transcript';
+import { createChangesSummaryStore } from '@/lib/changes-summary';
 import { transcriptItems } from '@/lib/deliverables-view';
 
 /**
@@ -78,12 +79,14 @@ function turn(text: string, events: () => Event[], from = emptyConversation()): 
   return reduceAll(appendHumanTurn(from, text), [start, ...body, completed()]);
 }
 
-/** 每一格的種類；交付卡寫成 `卡:路徑,路徑`。 */
+/** 每一格的種類；交付卡寫成 `卡:路徑,路徑`，改動卡寫成 `改:seq`。 */
 function layout(state: ConversationState): string[] {
   return transcriptItems(state.entries).map((item) =>
     item.kind === 'deliverables'
       ? `卡:${item.files.map((file) => file.path).join(',')}`
-      : item.entry.kind,
+      : item.kind === 'changes'
+        ? `改:${item.seq}`
+        : item.entry.kind,
   );
 }
 
@@ -144,14 +147,61 @@ describe('交付卡片歸到輪尾', () => {
     );
   });
 
-  it('改動紀錄那一格（#443）還沒有卡：不佔列表的一格，也不打斷交付卡', () => {
+  it('改動卡（#443）也收到輪尾，排在交付卡前面；不跑到下一輪', () => {
+    const first = turn('改檔。', () => [
+      ...present('c1', ['a.md']),
+      delivered({ callId: 'c1', files: [{ path: 'a.md' }] }),
+      frame('custom', [], { name: WORKSPACE_CHANGES, payload: { seq: 42 } }),
+      ...reply('r1', '好了。'),
+    ]);
+    const second = turn('再來。', () => reply('r2', '嗯。'), first);
+    expect(first.entries.map((entry) => entry.kind)).toContain('workspace-changes');
+    expect(layout(second)).toEqual(['human', 'tool', 'ai', '改:42', '卡:a.md', 'human', 'ai']);
+  });
+
+  it('畫在 Transcript 裡：改動卡在回覆之後、交付卡之前；摘要 404 時那一格是空的', async () => {
     const state = turn('改檔。', () => [
       ...present('c1', ['a.md']),
       delivered({ callId: 'c1', files: [{ path: 'a.md' }] }),
       frame('custom', [], { name: WORKSPACE_CHANGES, payload: { seq: 42 } }),
       ...reply('r1', '好了。'),
     ]);
-    expect(state.entries.map((entry) => entry.kind)).toContain('workspace-changes');
-    expect(layout(state)).toEqual(['human', 'tool', 'ai', '卡:a.md']);
+    const summary = {
+      files: [{ path: 'a.md', display: 'a.md', added: 3, deleted: 1 }],
+      total: 1,
+      added: 3,
+      deleted: 1,
+    };
+    const found = createChangesSummaryStore({
+      threadId: 't',
+      baseUrl: '',
+      fetch: (async () => new Response(JSON.stringify(summary))) as typeof fetch,
+    });
+    const view = render(<Transcript state={state} isFresh={() => false} changes={found} />);
+    await act(async () => {});
+    const regions = screen
+      .getAllByRole('region')
+      .map((region) => region.getAttribute('aria-label'))
+      .filter((label) => label?.startsWith('這一輪'));
+    expect(regions).toEqual(['這一輪改動的檔案，共 1 個', '這一輪交付的檔案，共 1 個']);
+    const changesCard = screen.getByTestId('changes');
+    expect(
+      screen.getByTestId('ai-entry').compareDocumentPosition(changesCard) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    view.unmount();
+
+    const gone = createChangesSummaryStore({
+      threadId: 't',
+      baseUrl: '',
+      fetch: (async () =>
+        new Response('Change summary unavailable.', { status: 404 })) as typeof fetch,
+    });
+    render(<Transcript state={state} isFresh={() => false} changes={gone} />);
+    await act(async () => {});
+    expect(screen.queryByTestId('changes')).toBeNull();
+    // 空的那一格收起來、不佔列表的間距（`empty:hidden`）。
+    const slot = document.querySelector('[data-slot="message-scroller-item"]:empty');
+    expect(slot?.className).toContain('empty:hidden');
   });
 });
