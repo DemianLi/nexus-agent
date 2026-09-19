@@ -170,6 +170,11 @@ function Entry({
     return null;
   }
 
+  if (entry.kind === 'deliverables') {
+    // 交付卡還沒做（#441 第二刀的畫面，dev-ui）：折疊器先長出這一格，這裡暫時不畫。
+    return null;
+  }
+
   if (entry.kind === 'tool') {
     return <ToolCard entry={entry} beam={beam} {...(answer === undefined ? {} : { answer })} />;
   }
