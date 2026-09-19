@@ -608,6 +608,34 @@ describe('git 快照（#461）', () => {
     expect(m.changes()).toEqual([]);
   });
 
+  it('跟上次寫 index 同一秒改的同大小檔案，隔一秒收尾照樣看得到（私有 index 保留時間戳）', async () => {
+    const second = (ms: number) => Math.floor(ms / 1000);
+    let held = false;
+    for (let attempt = 0; attempt < 5 && !held; attempt += 1) {
+      // 從一秒的開頭起跑，commit、基準、改檔才落得進同一秒。
+      await new Promise((resolve) => setTimeout(resolve, 1000 - (Date.now() % 1000)));
+      const root = await repository({ 'a.md': 'a\n' });
+      const m = await mount({}, {}, { root });
+      m.log.append('turn/start', { kind: 'message', text: '改。' });
+      await m.settle();
+      await writeFile(join(root, 'a.md'), 'A\n');
+      const indexWritten = (await stat(join(root, '.git', 'index'))).mtimeMs;
+      const edited = await stat(join(root, 'a.md'));
+      // 前提：改檔與上次寫 index 在同一秒。沒成立就換一個 repo 重來。
+      if (second(edited.mtimeMs) !== second(indexWritten)) continue;
+      held = true;
+      // 收尾那次快照要落在下一秒，副本的時間戳才會比項目新。
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      result(m.log);
+      await m.afterAgent();
+      const [event] = m.changes();
+      expect(m.service.summary(event!.seq)?.files).toEqual([
+        { path: 'a.md', display: 'a.md', added: 1, deleted: 1 },
+      ]);
+    }
+    expect(held).toBe(true);
+  }, 20_000);
+
   it('repo 的 index、物件庫、ref 在一輪前後逐位元組不變；私有物件在暫存目錄裡，收掉時一起刪', async () => {
     const root = await repository({ 'a.md': 'a\n' });
     const before = await fingerprint(join(root, '.git'));

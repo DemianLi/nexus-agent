@@ -15,12 +15,21 @@
  *   {@link GitRunner.run} 裡自己做。
  * - **找執行檔**：能力層的 `resolveExecutable` 在淨化過的 `PATH` 裡找，見 {@link resolveGitExecutable}。
  *
+ * ## 與 dsh 的偏離：私有 index 保留原本的時間戳
+ *
+ * dsh 的 `snapshotTree` 把 repo 的 index `copyFile` 一份當種子，副本的 mtime 是「現在」。**git 判斷一個 index
+ * 項目要不要重讀內容，看的是 index 檔自己的 mtime**（racy git：項目的 mtime 不早於 index 的，就不信 stat）。
+ * 副本一旦比原本的新，一個跟上次寫 index 同一秒改、大小沒變的檔，stat 看起來跟快取一樣，`git add` 就不讀它，
+ * 那次改動從快照裡消失。實測 git 2.50.1：commit 後立刻改同大小的檔、隔一秒再拍，新時間戳的副本三次都漏、
+ * 保留時間戳的三次都看得到（Node 的 `copyFile` 在 macOS 與 Linux 上都不保留 mtime）。所以副本照原本的
+ * 時間戳，讓 git 在副本上做的判斷跟在真的 index 上一樣。
+ *
  * @module
  */
 
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { access, copyFile, mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
+import { access, copyFile, mkdir, mkdtemp, rm, stat, utimes } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { delimiter, isAbsolute, join, relative, resolve } from 'node:path';
 
@@ -321,10 +330,20 @@ export async function snapshotTree(
   const scratch = await mkdtemp(join(workspace.scratch, 'index-'));
   try {
     const index = join(scratch, 'index');
-    // 還沒有 index 的 repo（剛 `git init`）從空的開始。
-    await copyFile(join(workspace.gitDir, 'index'), index).catch((error: unknown) => {
-      if (!isMissing(error)) throw error;
-    });
+    // 還沒有 index 的 repo（剛 `git init`）從空的開始。副本保留原本的時間戳，見檔頭第二段偏離。
+    // 先量時間戳再複製：兩步之間 index 被重寫的話，副本只會比內容舊，git 多讀幾個檔，不會少讀。
+    const source = join(workspace.gitDir, 'index');
+    const times = await stat(source).then(
+      ({ atime, mtime }) => ({ atime, mtime }),
+      (error: unknown) => {
+        if (!isMissing(error)) throw error;
+        return undefined;
+      },
+    );
+    if (times !== undefined) {
+      await copyFile(source, index);
+      await utimes(index, times.atime, times.mtime);
+    }
     const env = { ...workspace.env, GIT_INDEX_FILE: index };
     // `--ignore-errors` 跳過讀不到的檔，以結束碼 1 回報；index 照樣是完整的。
     const pathspec =
