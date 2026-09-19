@@ -55,6 +55,14 @@ export type {
 } from './protocol.js';
 export type { DeliverablesPresentedPayload, WirePresentedFile } from './deliverables.js';
 export { DELIVERABLES_PRESENTED } from './deliverables.js';
+export type {
+  WorkspaceChangedFile,
+  WorkspaceChangesPayload,
+  WorkspaceChangesSummary,
+  WorkspaceDiffHunk,
+  WorkspaceFileDiff,
+} from './workspace-changes.js';
+export { changesDiffPath, changesSummaryPath, WORKSPACE_CHANGES } from './workspace-changes.js';
 export {
   FEEDBACK_METHODS,
   HISTORY_PAGE_MESSAGES,
@@ -95,6 +103,7 @@ export type {
   PendingQuestion,
   QuestionItem,
   ToolEntry,
+  WorkspaceChangesEntry,
 } from './conversation.js';
 export {
   APPROVAL_PENDING_KIND,

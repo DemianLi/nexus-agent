@@ -75,7 +75,7 @@ import {
 import type { Event, WireChannel } from '@nexus/wire';
 import { channelOfMethod, eventId } from '@nexus/wire';
 
-import { deliverablesData } from './conversation-history.js';
+import { deliverablesData, workspaceChangesData } from './conversation-history.js';
 import { driveGoalRound } from './goal-driver.js';
 import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
 
@@ -1244,6 +1244,8 @@ export class ThreadPump {
     else if (event.type === 'tool/result') this.#noteVerdict(event);
     else if (event.type === 'deliverables/presented' && entry.address.kind === 'root') {
       this.#presentDeliverables(event.data);
+    } else if (event.type === 'workspace/changes' && entry.address.kind === 'root') {
+      this.#presentCustom(workspaceChangesData(event.seq));
     }
   }
 
@@ -1255,11 +1257,20 @@ export class ThreadPump {
    * 自己再叫一次 `present`。`data` 與歷史那一側共用 {@link deliverablesData}。
    */
   #presentDeliverables(presented: SessionEventMap['deliverables/presented']): void {
+    this.#presentCustom(deliverablesData(presented));
+  }
+
+  /**
+   * 送一顆從 root 日誌合成的 `custom` frame。一輪的改動紀錄（`workspace/changes`，
+   * [#443](https://github.com/DemianLi/nexus-agent/issues/443)）也走這裡，`data` 與歷史那一側共用
+   * {@link workspaceChangesData}。
+   */
+  #presentCustom(data: { readonly name: string; readonly payload: unknown }): void {
     this.#broadcast(
       this.#seal({
         type: 'event',
         method: 'custom',
-        params: { namespace: [], timestamp: Date.now(), data: deliverablesData(presented) },
+        params: { namespace: [], timestamp: Date.now(), data },
       } as Event),
     );
   }

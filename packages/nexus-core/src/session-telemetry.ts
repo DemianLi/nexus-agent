@@ -158,6 +158,7 @@ const RELEASES_FEEDBACK_ONLY_CAPTURE = {
   'feedback/message-delete': true,
   'feedback/record': true,
   'deliverables/presented': false,
+  'workspace/changes': false,
   'session/end-seed': false,
 } as const satisfies Record<SessionEventType, boolean>;
 

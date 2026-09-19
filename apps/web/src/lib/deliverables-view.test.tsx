@@ -1,5 +1,11 @@
 import type { ConversationState, DeliverablesPresentedPayload, Event } from '@nexus/wire';
-import { appendHumanTurn, DELIVERABLES_PRESENTED, emptyConversation, reduceAll } from '@nexus/wire';
+import {
+  appendHumanTurn,
+  DELIVERABLES_PRESENTED,
+  emptyConversation,
+  reduceAll,
+  WORKSPACE_CHANGES,
+} from '@nexus/wire';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -136,5 +142,16 @@ describe('交付卡片歸到輪尾', () => {
     expect(within(card).getByTestId('deliverable').textContent).toBe(
       'report.pdf季報out/report.pdf',
     );
+  });
+
+  it('改動紀錄那一格（#443）還沒有卡：不佔列表的一格，也不打斷交付卡', () => {
+    const state = turn('改檔。', () => [
+      ...present('c1', ['a.md']),
+      delivered({ callId: 'c1', files: [{ path: 'a.md' }] }),
+      frame('custom', [], { name: WORKSPACE_CHANGES, payload: { seq: 42 } }),
+      ...reply('r1', '好了。'),
+    ]);
+    expect(state.entries.map((entry) => entry.kind)).toContain('workspace-changes');
+    expect(layout(state)).toEqual(['human', 'tool', 'ai', '卡:a.md']);
   });
 });

@@ -179,6 +179,11 @@ function Entry({
     return null;
   }
 
+  if (entry.kind === 'workspace-changes') {
+    // 改動卡還沒做（#443 的畫面，dev-ui）：折疊器先長出這一格，這裡暫時不畫。
+    return null;
+  }
+
   if (entry.kind === 'tool') {
     return <ToolCard entry={entry} beam={beam} {...(answer === undefined ? {} : { answer })} />;
   }

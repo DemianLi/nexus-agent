@@ -18,6 +18,7 @@
  * | `turn/end` ／ `turn/failed` | 那一輪收掉（中止、失敗、完成）；沒結果的卡照即時那條規則收成失敗 |
  * | `session/end-seed` | 上一個行程停在一輪中間的話，那一輪在這裡收掉 |
  * | `deliverables/presented` | `custom` frame，`data` 同即時（{@link deliverablesData}） |
+ * | `workspace/changes` | `custom` frame，`data` 同即時（{@link workspaceChangesData}）；它指到的摘要可能已經不在 |
  *
  * 其餘的（壓縮、外掛注入的 `user/message`、模型起訖、命令、模式、目標、todo、回饋）即時的畫面也不畫，這裡也不畫。
  * **壓縮不畫是偏離**：dsh 的畫面由那顆 `user/message {surfaceOp: replace}` 把被壓掉的那一段換成摘要；我們沒有
@@ -33,8 +34,9 @@ import type {
   Event,
   ThreadHistoryQuery,
   ThreadHistoryResult,
+  WorkspaceChangesPayload,
 } from '@nexus/wire';
-import { DELIVERABLES_PRESENTED, HISTORY_PAGE_MESSAGES } from '@nexus/wire';
+import { DELIVERABLES_PRESENTED, HISTORY_PAGE_MESSAGES, WORKSPACE_CHANGES } from '@nexus/wire';
 import type { LoggedMessage, SessionEvent, SessionEventMap, UnreplayableReason } from '@nexus/core';
 import { loggedMessageId, replayConversation } from '@nexus/core';
 
@@ -100,6 +102,20 @@ export function deliverablesData(presented: SessionEventMap['deliverables/presen
     files: presented.files.map((file) => ({ ...file })),
   };
   return { name: DELIVERABLES_PRESENTED, payload };
+}
+
+/**
+ * 一輪的改動紀錄在線上的 `custom` 事件 `data`（[#443](https://github.com/DemianLi/nexus-agent/issues/443)）。
+ * 即時與這裡共用這一個，同 {@link deliverablesData}。**`seq` 是那顆事件在 root 日誌裡的位置**，web 拿它去
+ * `changes/summary` 要摘要；從日誌重播出來的那幾顆，摘要多半已經不在了（只活到會話結束），路由回 404。
+ * @param seq - 那顆 `workspace/changes` 的 `seq`。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `WorkspaceChangesPayload`。
+ */
+export function workspaceChangesData(seq: number): {
+  readonly name: typeof WORKSPACE_CHANGES;
+  readonly payload: WorkspaceChangesPayload;
+} {
+  return { name: WORKSPACE_CHANGES, payload: { seq } };
 }
 
 function lifecycle(time: number, data: Record<string, unknown>): Event {
@@ -253,6 +269,10 @@ export function historyFrames(
       case 'deliverables/presented':
         // 這裡讀的本來就只有 root 那一份，子代理的交付不在裡面——同即時那條規則。
         frames.push(frame('custom', event.time, deliverablesData(event.data)));
+        break;
+      case 'workspace/changes':
+        // 同上：只讀 root 那一份，而記錄器本來就只寫在 root。
+        frames.push(frame('custom', event.time, workspaceChangesData(event.seq)));
         break;
       case 'interrupt/raised':
         interrupted = true;
