@@ -53,6 +53,8 @@ export type {
   WireFeedbackItem,
   WireFeedbackRating,
 } from './protocol.js';
+export type { DeliverablesPresentedPayload, WirePresentedFile } from './deliverables.js';
+export { DELIVERABLES_PRESENTED } from './deliverables.js';
 export {
   FEEDBACK_METHODS,
   HISTORY_PAGE_MESSAGES,

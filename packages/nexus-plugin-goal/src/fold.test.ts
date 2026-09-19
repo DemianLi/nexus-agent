@@ -490,6 +490,8 @@ describe('什麼推得動 roundsStarted', () => {
     // `assistant/message`／`user/message`（[#305](https://github.com/DemianLi/nexus-agent/issues/305)）：
     // 不推。前者一次模型呼叫一顆，理由同 `model/usage`。後者是外掛塞進對話的一則話——**其中一個生產者
     // 就是 goal 自己的收尾**，讓它推的話，收尾一次就多算一輪，而那一輪根本沒有開始。
+    // `deliverables/presented`（[#441](https://github.com/DemianLi/nexus-agent/issues/441)）：不推。它是一次
+    // 工具呼叫成功之後的紀錄，一輪裡要幾顆有幾顆，同 `tool/result`。
     const KNOWN = [
       'turn/start',
       'turn/end',
@@ -513,6 +515,7 @@ describe('什麼推得動 roundsStarted', () => {
       'feedback/message-put',
       'feedback/message-delete',
       'feedback/record',
+      'deliverables/presented',
     ] as const;
     KNOWN satisfies readonly SessionEventType[];
     // 反過來這一條才是絆索：多一種而沒有列進來，`Exhaustive` 就變成 `never`。

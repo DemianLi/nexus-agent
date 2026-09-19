@@ -44,7 +44,7 @@
  */
 
 import type { NexusPlugin } from '@nexus/core';
-import { resolveToolName } from '@nexus/core';
+import { resolveToolName, WORKSPACE_CAPABILITY } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import type { SandboxMode } from './contained-backend.js';
 import { registerSandboxEscalation } from './sandbox-escalation.js';
@@ -110,6 +110,9 @@ export function createSandboxPolicyPlugin(
   return {
     name: 'sandbox-policy',
     apply(registry) {
+      // **這顆在，工作區就在**：它只在有圍堵的組裝裡掛。`present` 據它回答「有沒有工作區」（#441），
+      // 見 `@nexus/core` 的 `WORKSPACE_CAPABILITY`。
+      registry.capabilities.provide(WORKSPACE_CAPABILITY);
       // **root 接控制器**：起始值與之後每一次切換都記。**子代理只記一顆委派那一刻拍下的那一格**
       // （#326，照 dsh `appendDelegatedPolicyOverrides`）：root 之後再切，子代理照舊，所以 root 的日誌
       // 答不出子代理跑在哪一格。子代理的日誌在它第一次 `forCall` 時才開，那一刻在 `task` 的 handler
