@@ -58,6 +58,8 @@ const TOOL_TITLES: Readonly<Record<string, string>> = {
   update_goal: '更新目標',
   exit_plan_mode: '交出計劃',
   ask_user_question: '提問',
+  // #441：harness 那半還沒合；工具名照 dsh `tool-present`，合進來時 `tool-view.test.ts` 會從原始碼讀到它。
+  present: '交付檔案',
   request_sandbox_escalation: '申請放寬沙箱',
   submit_record: '提交紀錄',
 };

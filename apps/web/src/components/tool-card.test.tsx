@@ -206,3 +206,61 @@ describe('對話流裡的工具卡', () => {
     });
   });
 });
+
+describe('交付檔案的工具卡（#441 第一刀）', () => {
+  const present = tool({
+    name: 'present',
+    input: JSON.stringify({
+      files: [{ path: 'out/report.md', description: '這週的週報' }, { path: 'data/report.md' }],
+    }),
+  });
+
+  it('收著講檔名與總數，展開逐個列檔名、完整路徑、說明，不畫參數原文', () => {
+    render(<ToolCard entry={present} beam={false} />);
+    const card = screen.getByTestId('tool-entry');
+    const trigger = within(card).getByRole('button', { name: /交付檔案/ });
+    expect(trigger.textContent).toContain('report.md、report.md（共 2 個）');
+    fireEvent.click(trigger);
+    expect(
+      within(card)
+        .getAllByTestId('presented-file')
+        .map((row) => row.textContent),
+    ).toEqual(['report.mdout/report.md這週的週報', 'report.mddata/report.md']);
+    expect(card.textContent).not.toContain('"files"');
+  });
+
+  it('參數還是半截（串流中）：退回通用卡，原文照樣看得到', () => {
+    render(
+      <ToolCard
+        entry={tool({ name: 'present', input: '{"files":[{"path":"out/re', status: 'running' })}
+        beam
+      />,
+    );
+    const card = screen.getByTestId('tool-entry');
+    expect(within(card).queryAllByTestId('presented-file')).toHaveLength(0);
+    fireEvent.click(within(card).getByRole('button', { name: /交付檔案/ }));
+    expect(document.querySelector('.md-code pre')?.textContent).toContain('out/re');
+  });
+
+  it('被拒（檔案不存在）：照一般失敗畫，收著是錯誤的第一行', () => {
+    render(
+      <ToolCard
+        entry={{
+          ...present,
+          status: 'failed',
+          error: 'Error: Cannot present out/report.md: file not found.',
+        }}
+        beam={false}
+      />,
+    );
+    const trigger = screen.getByRole('button', { name: /交付檔案/ });
+    expect(trigger.textContent).toContain('file not found');
+    expect(within(trigger).getByText('失敗')).toBeTruthy();
+  });
+
+  it('展開的交付卡過 axe', async () => {
+    const { container } = render(<ToolCard entry={present} beam={false} />);
+    fireEvent.click(screen.getByRole('button', { name: /交付檔案/ }));
+    expect(await axeViolations(container)).toEqual([]);
+  });
+});
