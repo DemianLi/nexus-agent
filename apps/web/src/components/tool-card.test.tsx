@@ -150,4 +150,59 @@ describe('對話流裡的工具卡', () => {
     expect(within(card).getByText('哪一天？')).toBeTruthy();
     expect(within(card).getAllByText('已停止，請直接打字回覆').length).toBeGreaterThan(0);
   });
+
+  describe('答完的提問卡（§4.3）', () => {
+    const ask = tool({
+      name: 'ask_user_question',
+      input: JSON.stringify({
+        questions: [
+          { id: 'day', question: '哪一天？', options: [{ label: '週一' }, { label: '週二' }] },
+          { id: 'food', question: '要準備什麼？', multi_select: true },
+        ],
+      }),
+    });
+
+    it('配到答案：收著講「已回答 N 題」，展開逐題「問題 → 回答」，不畫參數原文', () => {
+      render(
+        <ToolCard
+          entry={ask}
+          beam={false}
+          answer={{
+            kind: 'answer',
+            id: 'answer-q',
+            answers: [
+              { id: 'day', selected: ['週二'] },
+              { id: 'food', selected: ['茶'], custom: '氣泡水' },
+            ],
+          }}
+        />,
+      );
+      const card = screen.getByTestId('tool-entry');
+      expect(within(card).getByText('已回答 2 題')).toBeTruthy();
+      fireEvent.click(within(card).getByRole('button', { name: /提問/ }));
+      expect(
+        within(card)
+          .getAllByTestId('question-row')
+          .map((row) => row.textContent),
+      ).toEqual(['哪一天？→ 回答：週二', '要準備什麼？→ 回答：茶、氣泡水']);
+      expect(card.textContent).not.toContain('"questions"');
+      expect(within(card).queryByText(/看不到/)).toBeNull();
+    });
+
+    it('配不到（重新整理、別的分頁）：照樣「已回答 N 題」，展開列題目與選項，講明答案在哪', () => {
+      render(<ToolCard entry={ask} beam={false} />);
+      const card = screen.getByTestId('tool-entry');
+      expect(within(card).getByText('已回答 2 題')).toBeTruthy();
+      fireEvent.click(within(card).getByRole('button', { name: /提問/ }));
+      expect(within(card).getAllByTestId('question-row')).toHaveLength(2);
+      expect(within(card).getByText('週一')).toBeTruthy();
+      expect(within(card).queryByText(/→/)).toBeNull();
+      expect(within(card).getByText('答案只記在作答的那個分頁，這裡看不到。')).toBeTruthy();
+    });
+
+    it('還沒答完：收著講第一題與題數，不是參數 JSON（#409 第一刀留下的）', () => {
+      render(<ToolCard entry={{ ...ask, status: 'suspended' }} beam={false} />);
+      expect(screen.getByText('哪一天？（共 2 題）')).toBeTruthy();
+    });
+  });
 });

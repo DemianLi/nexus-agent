@@ -22,8 +22,6 @@ import {
   appendAnswers,
   appendDecision,
   appendHumanTurn,
-  appendQuestionCancel,
-  cancelResponse,
   emptyConversation,
   prependEntries,
   reduceAll,
@@ -129,11 +127,6 @@ export interface Conversation {
    * 那條路」。認不得那顆 id、或那顆不是問答時，什麼都不做。
    */
   answer(interruptId: string, answers: AnswerEntry['answers']): Promise<void>;
-  /**
-   * 放棄**指名的那一組**問題。工具會收到錯誤，模型因此知道人不打算走這條路
-   * （dsh 的 `ASK_CANCELLED`）——**與「每一題都跳過」不同**，後者仍是一份答案。
-   */
-  cancelQuestions(interruptId: string): Promise<void>;
   /**
    * 按停止（`run.cancel`，[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。
    *
@@ -378,26 +371,6 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     [threadId, note, advance],
   );
 
-  const cancelQuestions = useCallback(
-    async (interruptId: string) => {
-      const pending = stateRef.current.pendings.find(
-        (candidate) => candidate.interruptId === interruptId,
-      );
-      if (pending === undefined || pending.kind !== 'question') {
-        return;
-      }
-      advance((previous) => appendQuestionCancel(previous, interruptId));
-      note(
-        await clientRef.current.inputRespond(threadId, {
-          namespace: [...pending.namespace],
-          interrupt_id: pending.interruptId,
-          response: cancelResponse(),
-        }),
-      );
-    },
-    [threadId, note, advance],
-  );
-
   const cancel = useCallback(async () => {
     note(await clientRef.current.runCancel(threadId));
   }, [threadId, note]);
@@ -517,7 +490,6 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     send,
     respond,
     answer,
-    cancelQuestions,
     cancel,
     ratings: ratingsView.items,
     ratingsLoadFailed: ratingsView.status === 'failed',

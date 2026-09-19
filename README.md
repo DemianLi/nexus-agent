@@ -26,7 +26,7 @@ pnpm workspace，Node >= 22。
 
 ```bash
 pnpm install
-pnpm dev          # 啟動 web 的開發伺服器（http://localhost:5173；只在自己的機器上用，見下面 serve 那段）
+pnpm dev          # 監看 web 原始碼，重建到 apps/web/dist（vite build --watch；網頁由 serve 服務，見下面）
 pnpm lint         # eslint（遞迴全部套件）
 pnpm typecheck    # tsc --noEmit
 pnpm test         # vitest run
@@ -145,13 +145,16 @@ CLI、`serve`、eval 都吃這個值；這條擋的是「跑掉了」，不是�
 在瀏覽器裡跟 agent 說話：先 build 網頁，再起 `serve`，然後開它**印出來的那個網址**：
 
 ```bash
-pnpm build                                  # 網頁建成 apps/web/dist（改了網頁要重跑）
+pnpm dev                                    # 網頁建成 apps/web/dist，改了原始碼會自動重建
 pnpm --filter @nexus/harness run serve      # 印出「nexus-agent 在 http://127.0.0.1:8787/?token=…」
 ```
 
 `serve` 的組裝與 CLI 完全一樣（同一份預設 plugin 清單、同一個 `--live`、同一個
 `--workspace`），只是把 agent 掛上 HTTP，並且自己服務 `apps/web/dist`——網頁與 API 同一個來源，
-不需要 CORS。
+不需要 CORS。改了網頁等重建完（約一兩秒），**手動重新整理**——沒有 HMR，照 dsh。
+
+**網頁從來不由 Vite 服務**（[#426](https://github.com/DemianLi/nexus-agent/issues/426)，照 dsh）：`vite` 與
+`vite preview` 會拒絕啟動。Vite 的開發伺服器會把整個 repo 的檔案交給連得到那個 port 的任何人，而部署主機是多人共用的。
 
 **網頁與 API 都要瀏覽器會話**（[#424](https://github.com/DemianLi/nexus-agent/issues/424)，照 dsh）：
 印出來的網址帶著這個行程的 token，開一次就換到一顆 cookie（`HttpOnly`、`SameSite=Strict`、30 天，
@@ -168,12 +171,7 @@ serve 重啟之後照樣有效），沒有 cookie 的請求一律 401。綁 `127
   懷疑外洩時刪掉 `~/.nexus-agent/browser-session.json` 再重啟 serve，所有既有會話一起作廢。
 - **在多人共用的主機上**，只支援從自己的電腦用 SSH 轉 port 連進去：
   `ssh -L 8787:127.0.0.1:8787 <主機>`，然後在自己電腦的瀏覽器開 serve 印出的網址。
-  **不要在共用主機上跑 `pnpm dev`**：Vite 的開發伺服器會把整個 repo 的檔案交給同機任何人
-  （[#426](https://github.com/DemianLi/nexus-agent/issues/426)）。
-- **開發網頁時**（在自己的機器上）照舊可以用 `pnpm dev`（http://localhost:5173），它把 `/threads` 轉給
-  serve；harness 換了 port 就設 `NEXUS_AGENT_URL`。第一次要開
-  `http://localhost:5173/?token=<serve 印出的 token>` 換 cookie——這一步要等 web 那側把 `/?token=`
-  也轉給 serve（#424 的 web 那半）。
+
 `serve` 也吃 `--live`（或直接 `run serve:live`）—— 假模型的腳本只有四輪，問到第三句
 就會用完，畫面上會紅字說是為什麼。
 
