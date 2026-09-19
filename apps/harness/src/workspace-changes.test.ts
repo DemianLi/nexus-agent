@@ -11,10 +11,12 @@
  * 4. 子代理用檔案工具改的檔算進 root 那一輪。
  * 5. 暫存目錄是 `0700`，thread 收掉時整個刪掉。
  * 6. 組裝點只在 serve、有 `--workspace` 時掛。
+ * 7. 工作區是 git repo 時，檔案工具以外的改動也在摘要裡（[#461](https://github.com/DemianLi/nexus-agent/issues/461)）。
  *
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`，工作區與暫存根都是暫存目錄，測試不碰真的 `~/.nexus-agent`。
  */
 
+import { execFileSync } from 'node:child_process';
 import {
   mkdtemp,
   readdir,
@@ -28,6 +30,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { InvariantError, NexusPlugin, SandboxMode, SessionRegistry } from '@nexus/core';
 import { createWorkspaceChanges } from '@nexus/plugin-workspace-changes';
@@ -41,6 +44,7 @@ import {
   WORKSPACE_CHANGES,
 } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
 import { createCliAgent, DEFAULT_PLUGINS } from './cli.js';
@@ -100,7 +104,11 @@ interface Outcome {
 async function run(
   turns: readonly ScriptedTurn[],
   files: Record<string, string> = {},
-  options: { mode?: SandboxMode; setup?: (root: string) => Promise<void> } = {},
+  options: {
+    mode?: SandboxMode;
+    setup?: (root: string) => Promise<void>;
+    plugins?: readonly NexusPlugin[];
+  } = {},
 ): Promise<Outcome> {
   const root = await directory('nexus-changes-e2e-');
   const tempRoot = await directory('nexus-changes-temp-');
@@ -117,6 +125,7 @@ async function run(
       ...DEFAULT_PLUGINS,
       WORKER,
       createSandboxPolicyPlugin(sandboxMode, root),
+      ...(options.plugins ?? []),
       changes.plugin,
     ],
     backend: new ContainedFilesystemBackend({
@@ -387,8 +396,9 @@ describe('每一輪的改動紀錄在真的圖上', () => {
   it('沒呼叫工具的一輪：不記、不送', async () => {
     const outcome = await run([{ content: '只是聊天。' }], FILES);
     try {
-      // **這一刀的前提**：`--workspace` 底下模型改檔只經這三顆，沒有 `execute`（#443 第二則決議）。
-      // 這一條紅了表示換了一顆有 shell 的 backend，擷取不再涵蓋全部改檔的路，git 快照（#461）就不能再等。
+      // **不在 repo 裡的工作區的前提**：`--workspace` 底下模型改檔只經這三顆，沒有 `execute`（#443 第二則
+      // 決議）。這一條紅了表示換了一顆有 shell 的 backend：repo 裡的工作區有 git 快照（#461）照樣涵蓋，
+      // 不在 repo 裡的會漏掉 shell 改的檔——dsh 同樣（README 的已知限制），但那時要重新決定要不要接受。
       expect(outcome.boundToolNames).toEqual(
         expect.arrayContaining(['write_file', 'edit_file', 'delete']),
       );
@@ -521,6 +531,76 @@ describe('工作區外', () => {
         path: target,
         hunks: [{ lines: ['-top secret', '+no secret'] }],
       });
+    } finally {
+      await outcome.close();
+    }
+  });
+});
+
+describe('工作區是 git repo（#461）', () => {
+  it('檔案工具以外的改動（像 MCP 工具在外面寫的）也列出來，行數由 git 算', async () => {
+    let workspace = '';
+    const external: NexusPlugin = {
+      name: 'external-writer',
+      apply(registry) {
+        registry.tools.register(
+          tool(
+            async () => {
+              await writeFile(join(workspace, 'notes.md'), 'n1\nn2\n');
+              return '寫好了';
+            },
+            { name: 'external_write', description: '在外面寫檔。', schema: z.object({}) },
+          ),
+        );
+      },
+    };
+    const outcome = await run(
+      [
+        { content: '寫。', toolCalls: [{ name: 'external_write', args: {} }] },
+        { content: '好了。' },
+      ],
+      { 'a.md': 'a\n' },
+      {
+        plugins: [external],
+        setup: async (root) => {
+          workspace = root;
+          const env = Object.fromEntries(
+            Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+          );
+          const git = (...args: string[]) =>
+            execFileSync(
+              'git',
+              ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args],
+              {
+                cwd: root,
+                env: { ...env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
+                stdio: 'pipe',
+              },
+            );
+          git('init', '-q');
+          git('add', '-A');
+          git('commit', '-q', '-m', 'init');
+        },
+      },
+    );
+    try {
+      const [payload] = changesIn(outcome.live) as { seq: number }[];
+      const query = `?seq=${payload!.seq}`;
+      const summary = await outcome.get(`${changesSummaryPath(THREAD_ID)}${query}`);
+      expect(await summary.json()).toEqual({
+        files: [{ path: 'notes.md', display: 'notes.md', added: 2, deleted: 0 }],
+        total: 1,
+        added: 2,
+        deleted: 0,
+      });
+      const diff = await outcome.get(`${changesDiffPath(THREAD_ID)}${query}&index=0`);
+      expect(await diff.json()).toMatchObject({
+        kind: 'text',
+        before: false,
+        after: true,
+        hunks: [{ lines: ['+n1', '+n2'] }],
+      });
+      expect(outcome.violations).toEqual([]);
     } finally {
       await outcome.close();
     }

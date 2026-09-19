@@ -82,11 +82,12 @@ export function isTemporaryPath(path: string, roots: readonly string[]): boolean
  * 一個改過的檔的排序鍵與標籤，見 `WorkspaceChangedFile.display`。
  * @param absolute - 標準化的絕對路徑。
  * @param cwd - 標準化的工作區根。
+ * @param root - repo 的頂層目錄；沒有快照時就是工作區根。repo 裡、工作區之上的檔是 `../` 形式。
  * @param home - 標準化的家目錄，空字串表示不用 `~` 形式。
  * @returns 斜線分隔的顯示路徑。
  */
-export function displayPathOf(absolute: string, cwd: string, home: string): string {
-  if (isInside(cwd, absolute)) return toPosix(relative(cwd, absolute));
+export function displayPathOf(absolute: string, cwd: string, root: string, home: string): string {
+  if (isInside(cwd, absolute) || isInside(root, absolute)) return toPosix(relative(cwd, absolute));
   if (home !== '' && isInside(home, absolute)) return `~/${toPosix(relative(home, absolute))}`;
   return toPosix(absolute);
 }

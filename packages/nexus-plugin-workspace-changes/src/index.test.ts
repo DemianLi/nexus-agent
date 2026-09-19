@@ -7,9 +7,23 @@
  * 工具本體由測試自己扮演：`wrapToolCall` 的 `handler` 就是那次改檔。
  */
 
-import { mkdtemp, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  symlink,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -65,16 +79,25 @@ interface Mounted {
 async function mount(
   files: Record<string, string | Buffer> = {},
   limits: Partial<WorkspaceChangesLimits> = {},
+  options: {
+    /** 事先準備好的工作區根（例如一個 repo）；給了就不寫 `files`。 */
+    readonly root?: string;
+    readonly git?: string | null;
+  } = {},
 ): Promise<Mounted> {
-  const root = await directory('nexus-wc-root-');
+  const root = options.root ?? (await directory('nexus-wc-root-'));
   const tempRoot = await directory('nexus-wc-temp-');
-  for (const [name, content] of Object.entries(files)) await writeFile(join(root, name), content);
+  if (options.root === undefined) {
+    for (const [name, content] of Object.entries(files)) await writeFile(join(root, name), content);
+  }
   const warnings: string[] = [];
   const { plugin, service } = createWorkspaceChanges({
     root,
     tempRoot,
     limits,
     warn: (message) => void warnings.push(message),
+    info: () => undefined,
+    ...(options.git !== undefined && { git: options.git }),
   });
   const registry = createRegistry();
   const exit = registry.enter({ id: 'workspace-changes#0', name: plugin.name });
@@ -396,12 +419,16 @@ describe('上限與內容', () => {
   });
 
   it('上限要是正的安全整數，照 dsh 在建立時就驗', () => {
-    for (const bad of [0, -1, 1.5, Number.NaN]) {
-      expect(() => createWorkspaceChanges({ root: tmpdir(), limits: { maxFiles: bad } })).toThrow(
-        'workspace-changes requires a positive integer maxFiles',
-      );
+    for (const field of ['maxFiles', 'timeoutMs', 'outputMaxBytes'] as const) {
+      for (const bad of [0, -1, 1.5, Number.NaN]) {
+        expect(() => createWorkspaceChanges({ root: tmpdir(), limits: { [field]: bad } })).toThrow(
+          `workspace-changes requires a positive integer ${field}`,
+        );
+      }
     }
     expect(WORKSPACE_CHANGES_LIMITS).toEqual({
+      timeoutMs: 30_000,
+      outputMaxBytes: 8 * 1024 * 1024,
       maxFiles: 500,
       maxFileBytes: 2 * 1024 * 1024,
       diffTimeoutMs: 100,
@@ -448,5 +475,315 @@ describe('暫存目錄', () => {
     expect(await readdir(m.tempRoot)).toEqual([]);
     expect(m.service.summary(event!.seq)).toBeUndefined();
     expect(await m.service.diff(event!.seq, 0, new AbortController().signal)).toBeUndefined();
+  });
+});
+
+/** 測試自己動 repo 用的 git：不吃環境裡的 `GIT_*`、全域與系統設定，提交者寫死。 */
+function git(cwd: string, ...args: string[]): string {
+  return gitWithInput(cwd, undefined, args);
+}
+
+/** 一段內容的 blob id。 */
+function hashObject(cwd: string, content: string): string {
+  return gitWithInput(cwd, content, ['hash-object', '--stdin']).trim();
+}
+
+function gitWithInput(cwd: string, input: string | undefined, args: readonly string[]): string {
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+  );
+  return execFileSync(
+    'git',
+    [
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@example.invalid',
+      '-c',
+      'commit.gpgsign=false',
+      '-c',
+      'init.defaultBranch=main',
+      '-c',
+      'advice.addEmbeddedRepo=false',
+      ...args,
+    ],
+    {
+      cwd,
+      env: { ...env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
+      encoding: 'utf8',
+      stdio: 'pipe',
+      ...(input !== undefined && { input }),
+    },
+  );
+}
+
+/** 一個提交過 `files` 的 repo。 */
+async function repository(files: Record<string, string>): Promise<string> {
+  const root = await directory('nexus-wc-repo-');
+  for (const [name, content] of Object.entries(files)) {
+    await mkdir(dirname(join(root, name)), { recursive: true });
+    await writeFile(join(root, name), content);
+  }
+  git(root, 'init', '-q');
+  git(root, 'add', '-A');
+  git(root, 'commit', '-q', '-m', 'init');
+  return root;
+}
+
+/** 一個目錄底下每一個檔的內容雜湊，依相對路徑。 */
+async function fingerprint(root: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const path of (await readdir(root, { recursive: true })).sort()) {
+    const absolute = join(root, path);
+    if (!(await stat(absolute)).isFile()) continue;
+    out[path] = createHash('sha1')
+      .update(await readFile(absolute))
+      .digest('hex');
+  }
+  return out;
+}
+
+describe('git 快照（#461）', () => {
+  it('檔案工具以外的改動也列出來，行數由 git 算；改名認得出來；輪開始前沒提交的改動不算', async () => {
+    const root = await repository({
+      'a.md': 'one\ntwo\n',
+      'old.md': 'same\n',
+      'dirty.md': 'x\n',
+    });
+    // 使用者在這一輪之前就改了、沒提交：不是這一輪的。
+    await writeFile(join(root, 'dirty.md'), 'x\ny\n');
+    const m = await mount({}, {}, { root });
+    m.log.append('turn/start', { kind: 'message', text: '改。' });
+    await m.settle();
+    // 使用者在這一輪裡自己改的檔，沒有經過任何工具。
+    await writeFile(join(root, 'a.md'), 'one\n2\nthree\n');
+    await rename(join(root, 'old.md'), join(root, 'new.md'));
+    // `submit_record` 寫進工作區：它不是 `mutationPath` 認得的工具，第一刀漏掉它。
+    await m.tool('submit_record', { file_path: 'rows.csv', record: { a: 1 } }, () =>
+      writeFile(join(root, 'rows.csv'), 'a\n1\n'),
+    );
+    result(m.log);
+    await m.afterAgent();
+    const [event] = m.changes();
+    expect(m.service.summary(event!.seq)).toEqual({
+      files: [
+        { path: 'a.md', display: 'a.md', added: 2, deleted: 1 },
+        { path: 'new.md', display: 'new.md', added: 0, deleted: 0 },
+        { path: 'rows.csv', display: 'rows.csv', added: 2, deleted: 0 },
+      ],
+      total: 3,
+      added: 4,
+      deleted: 1,
+    });
+    const signal = new AbortController().signal;
+    expect(await m.service.diff(event!.seq, 0, signal)).toMatchObject({
+      kind: 'text',
+      before: true,
+      after: true,
+      hunks: [{ lines: [' one', '-two', '+2', '+three'] }],
+    });
+    // 改名的那一側從舊路徑讀。
+    expect(await m.service.diff(event!.seq, 1, signal)).toMatchObject({
+      kind: 'text',
+      before: true,
+      after: true,
+      hunks: [],
+    });
+    expect(await m.service.diff(event!.seq, 2, signal)).toMatchObject({
+      before: false,
+      after: true,
+    });
+    expect(m.warnings).toEqual([]);
+  });
+
+  it('repo 的 index、物件庫、ref 在一輪前後逐位元組不變；私有物件在暫存目錄裡，收掉時一起刪', async () => {
+    const root = await repository({ 'a.md': 'a\n' });
+    const before = await fingerprint(join(root, '.git'));
+    const m = await mount({}, {}, { root });
+    m.log.append('turn/start', { kind: 'message', text: '改。' });
+    await m.settle();
+    await writeFile(join(root, 'a.md'), 'b\n');
+    await writeFile(join(root, 'new.md'), 'n\n');
+    result(m.log);
+    await m.afterAgent();
+    expect(m.changes()).toHaveLength(1);
+    expect(await fingerprint(join(root, '.git'))).toEqual(before);
+
+    const [scratch] = await readdir(m.tempRoot);
+    const objects = Object.keys(await fingerprint(join(m.tempRoot, scratch!, 'objects')));
+    // 這一輪新出現的兩個 blob 寫在私有庫裡，repo 的庫裡沒有。基準那棵樹就是已提交的那棵，所以沒有再寫一份。
+    for (const content of ['b\n', 'n\n']) {
+      const oid = hashObject(root, content);
+      const loose = join(oid.slice(0, 2), oid.slice(2));
+      expect(objects).toContain(loose);
+      expect(Object.keys(before)).not.toContain(join('objects', loose));
+    }
+    await m.dispose();
+    expect(await readdir(m.tempRoot)).toEqual([]);
+  });
+
+  it('被忽略的檔：檔案工具改的照副本列，其他人改的不列；巢狀 repo 裡的不列', async () => {
+    const root = await repository({ '.gitignore': 'out/\n', 'a.md': 'a\n' });
+    await mkdir(join(root, 'out'));
+    await writeFile(join(root, 'out', 'tool.txt'), 'x\n');
+    const nested = join(root, 'vendor');
+    await mkdir(nested);
+    await writeFile(join(nested, 'v.md'), 'v\n');
+    git(nested, 'init', '-q');
+    git(nested, 'add', '-A');
+    git(nested, 'commit', '-q', '-m', 'v');
+    git(root, 'add', 'vendor');
+    git(root, 'commit', '-q', '-m', 'vendor');
+    const m = await mount({}, {}, { root });
+    m.log.append('turn/start', { kind: 'message', text: '改。' });
+    await m.tool('write_file', { file_path: 'out/tool.txt', content: 'y' }, () =>
+      writeFile(join(root, 'out', 'tool.txt'), 'x\ny\n'),
+    );
+    await writeFile(join(root, 'out', 'other.txt'), 'o\n');
+    await m.tool('edit_file', { file_path: 'vendor/v.md', old_string: 'v', new_string: 'w' }, () =>
+      writeFile(join(nested, 'v.md'), 'w\n'),
+    );
+    result(m.log);
+    await m.afterAgent();
+    const [event] = m.changes();
+    expect(m.service.summary(event!.seq)?.files).toEqual([
+      { path: 'out/tool.txt', display: 'out/tool.txt', added: 1, deleted: 0 },
+    ]);
+  });
+
+  it('repo 根在工作區之上：上面的檔以 `../` 顯示、`path` 是絕對路徑', async () => {
+    const repo = await repository({ 'README.md': 'r\n', 'app/a.md': 'a\n' });
+    const m = await mount({}, {}, { root: join(repo, 'app') });
+    m.log.append('turn/start', { kind: 'message', text: '改。' });
+    await m.settle();
+    await writeFile(join(repo, 'README.md'), 'r\ns\n');
+    await writeFile(join(repo, 'app', 'a.md'), 'b\n');
+    result(m.log);
+    await m.afterAgent();
+    const [event] = m.changes();
+    expect(m.service.summary(event!.seq)?.files).toEqual([
+      {
+        path: join(await realpath(repo), 'README.md'),
+        display: '../README.md',
+        added: 1,
+        deleted: 0,
+      },
+      { path: 'a.md', display: 'a.md', added: 1, deleted: 1 },
+    ]);
+  });
+
+  it('經由符號連結寫的檔：快照與副本對到同一個標準路徑，只列一次', async () => {
+    const repo = await repository({ 'real/a.md': 'a\n', 'b.md': 'b\n' });
+    // 工作區裡一個指向 repo 內目錄的連結，與一個經由連結給的工作區根。
+    await symlink(join(repo, 'real'), join(repo, 'alias'));
+    git(repo, 'add', 'alias');
+    git(repo, 'commit', '-q', '-m', 'alias');
+    const link = join(await directory('nexus-wc-link-'), 'ws');
+    await symlink(repo, link);
+    const m = await mount({}, {}, { root: link });
+    m.log.append('turn/start', { kind: 'message', text: '改。' });
+    await m.tool('edit_file', { file_path: 'alias/a.md', old_string: 'a', new_string: 'A' }, () =>
+      writeFile(join(link, 'alias', 'a.md'), 'A\n'),
+    );
+    await m.tool('edit_file', { file_path: 'b.md', old_string: 'b', new_string: 'B' }, () =>
+      writeFile(join(link, 'b.md'), 'B\n'),
+    );
+    result(m.log);
+    await m.afterAgent();
+    const [event] = m.changes();
+    expect(m.service.summary(event!.seq)?.files).toEqual([
+      { path: 'b.md', display: 'b.md', added: 1, deleted: 1 },
+      { path: 'real/a.md', display: 'real/a.md', added: 1, deleted: 1 },
+    ]);
+    expect(m.warnings).toEqual([]);
+  });
+
+  it('沒有 git：在 repo 裡也只列檔案工具的改動，同第一刀', async () => {
+    const root = await repository({ 'a.md': 'a\n', 'b.md': 'b\n' });
+    const m = await mount({}, {}, { root, git: null });
+    m.log.append('turn/start', { kind: 'message', text: '改。' });
+    await m.tool('edit_file', { file_path: 'a.md', old_string: 'a', new_string: 'A' }, () =>
+      writeFile(join(root, 'a.md'), 'A\n'),
+    );
+    await writeFile(join(root, 'b.md'), 'B\n');
+    result(m.log);
+    await m.afterAgent();
+    const [event] = m.changes();
+    expect(m.service.summary(event!.seq)?.files.map((file) => file.path)).toEqual(['a.md']);
+    // 沒有快照就沒有私有物件庫。
+    const [scratch] = await readdir(m.tempRoot);
+    expect(await readdir(join(m.tempRoot, scratch!))).toEqual(['captures']);
+  });
+
+  it('git 失敗的一輪什麼都不記、留一行 warn，下一輪重來', async () => {
+    const root = await repository({ 'a.md': 'a\n' });
+    const m = await mount({}, {}, { root, git: join(root, 'not-git') });
+    m.log.append('turn/start', { kind: 'message', text: '改。' });
+    // 有一顆檔案工具的副本：失敗的那一輪不能退成「沒有 repo」只列副本。
+    await m.tool('edit_file', { file_path: 'a.md', old_string: 'a', new_string: 'b' }, () =>
+      writeFile(join(root, 'a.md'), 'b\n'),
+    );
+    result(m.log);
+    await m.afterAgent();
+    expect(m.changes()).toEqual([]);
+    expect(m.warnings).toHaveLength(1);
+    expect(m.warnings[0]).toMatch(/^workspace-changes: Error: spawn .*not-git ENOENT/);
+  });
+
+  it('接上時重播的舊輪不跑 git；serve 重開後在核准點接回來，resume 那一刻才拍基準', async () => {
+    const root = await repository({ 'a.md': 'a\n', 'b.md': 'b\n' });
+    const tempRoot = await directory('nexus-wc-temp-');
+    const { plugin, service } = createWorkspaceChanges({ root, tempRoot, info: () => undefined });
+    const registry = createRegistry();
+    const exit = registry.enter({ id: 'workspace-changes#0', name: plugin.name });
+    void plugin.apply(registry);
+    exit();
+    const sessions = new SessionRegistry('seeded');
+    registry.sessions.bind(sessions);
+    const log = sessions.root;
+    for (let turn = 0; turn < 3; turn += 1) {
+      log.append('turn/start', { kind: 'message', text: `以前第 ${turn} 輪。` });
+      log.append('tool/result', { callId: `old-${turn}`, isError: false });
+      log.append('turn/end', {});
+    }
+    // 最後一輪停在核准點，serve 在這時重開。
+    log.append('turn/start', { kind: 'message', text: '停在核准點的那一輪。' });
+    log.append('tool/result', { callId: 'before-restart', isError: false });
+    log.append('interrupt/raised', { interruptId: 'i1' });
+    log.append('turn/end', {});
+    createSessionRunner({
+      address: { kind: 'root' },
+      log,
+      installers: registry.sessions.installers(),
+    });
+    const [entry] = registry.middleware.list();
+    const middleware = entry!.value.middleware as unknown as {
+      wrapToolCall: (request: unknown, handler: () => Promise<unknown>) => Promise<unknown>;
+      afterAgent: (state: unknown, runtime: unknown) => Promise<unknown>;
+    };
+    /** 等排著的工作落定，走產品路徑（同 `mount` 的 `settle`）：git 是子行程，繞事件迴圈等不到。 */
+    const settle = () =>
+      middleware.wrapToolCall(
+        {
+          toolCall: { id: 'settle', name: 'read_file', args: {} },
+          runtime: { configurable: ROOT_TOOL },
+        },
+        async () => 'ok',
+      );
+    await settle();
+    // 重播完：沒有找 repo、沒有快照，所以連暫存目錄都沒建。
+    expect(await readdir(tempRoot)).toEqual([]);
+    expect(log.events.some((event) => event.type === 'workspace/changes')).toBe(false);
+
+    // 在核准點停著的時候使用者改了 a.md：那是接回來之前的，不算。
+    await writeFile(join(root, 'a.md'), 'A\n');
+    log.append('turn/start', { kind: 'resume' });
+    await settle();
+    await writeFile(join(root, 'b.md'), 'B\n');
+    log.append('tool/result', { callId: 'after-restart', isError: false });
+    await middleware.afterAgent({}, { configurable: ROOT_AFTER });
+    const [event] = log.events.filter((e) => e.type === 'workspace/changes');
+    expect(service.summary(event!.seq)?.files.map((file) => file.path)).toEqual(['b.md']);
+    for (const { value } of registry.lifecycle.disposers()) await value();
   });
 });
