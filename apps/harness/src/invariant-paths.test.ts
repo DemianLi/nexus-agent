@@ -20,7 +20,7 @@ import { createEchoPlugin } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
 
 import { createCliAgent, DEFAULT_PLUGINS, runTurn } from './cli.js';
-import { loopbackRequest } from './fixtures.js';
+import { loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
@@ -149,6 +149,7 @@ describe('不變量接線：web 那條路', () => {
     const original = console.error;
     console.error = (message: unknown) => void violations.push(String(message));
     const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
         agent: built.agent as unknown as PumpAgent,
         commands: built.commands,

@@ -6,7 +6,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
-import { emptyCommandPoint } from './fixtures.js';
+import {
+  emptyCommandPoint,
+  fetchWithCookie,
+  TEST_BROWSER_AUTH,
+  testSessionCookie,
+} from './fixtures.js';
 import { createWireHandler } from './wire-handler.js';
 import { startWireServer } from './wire-server.js';
 import type { WireServer } from './wire-server.js';
@@ -35,6 +40,7 @@ describe('接上真的 socket', () => {
       backend: new StateBackend(),
     }) as unknown as PumpAgent;
     const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
         agent,
         commands: emptyCommandPoint(),
@@ -47,7 +53,10 @@ describe('接上真的 socket', () => {
     // 少了它，直連看起來一切正常，而經過 dev server 的 proxy 就永遠停在「連線中」。
     const response = await fetch(`${running.url}/threads/prelude/stream`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        cookie: testSessionCookie(new URL(running.url).host),
+      },
       body: JSON.stringify({ channels: ['lifecycle'] }),
     });
     expect(response.headers.get('content-type')).toContain('text/event-stream');
@@ -92,6 +101,7 @@ describe('接上真的 socket', () => {
     }) as unknown as PumpAgent;
 
     const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
         agent,
         commands: emptyCommandPoint(),
@@ -99,8 +109,11 @@ describe('接上真的 socket', () => {
       }),
     });
     running = await startWireServer({ handler });
-    // 這裡刻意用全域的 fetch，不注入——走的是真的 HTTP。
-    const client = createWireClient({ baseUrl: running.url });
+    // 這裡刻意包的是全域的 fetch——走的是真的 HTTP，只多帶一顆會話 cookie（#424）。
+    const client = createWireClient({
+      baseUrl: running.url,
+      fetch: fetchWithCookie(testSessionCookie(new URL(running.url).host)),
+    });
 
     const events = await client.openEvents('socket', {
       channels: ['messages', 'tools', 'lifecycle'],

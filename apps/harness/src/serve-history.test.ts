@@ -14,7 +14,6 @@ import { fileURLToPath } from 'node:url';
 import type { ConversationEntry, ConversationState, WireClient } from '@nexus/wire';
 import {
   appendHumanTurn,
-  createWireClient,
   emptyConversation,
   historyPath,
   reduceAll,
@@ -24,6 +23,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { exchangeServeToken, fetchWithCookie, serveClient } from './fixtures.js';
 
 let running: RunningServe | undefined;
 
@@ -85,22 +85,14 @@ describe('切回以前的 thread，畫面照日誌重播', () => {
   it('重開 server 之後：上一次的人話、回覆、工具卡依序回來，之後的即時回覆接在下面', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-serve-history-'));
     const first = await start(['--session-log', root]);
-    const before = await openAndSay(
-      createWireClient({ baseUrl: first.url }),
-      'alpha',
-      '記住暗號是藍鯨',
-    );
+    const before = await openAndSay(await serveClient(first), 'alpha', '記住暗號是藍鯨');
     await stop(first);
     // 前提：上一次那一輪畫得出回覆與工具卡，重播才有東西可比。
     const previous = before.state.entries.map(line);
     expect(previous.filter((entry) => entry.startsWith('tool:')).length).toBeGreaterThan(0);
 
     const second = await start(['--session-log', root]);
-    const after = await openAndSay(
-      createWireClient({ baseUrl: second.url }),
-      'alpha',
-      '暗號是什麼',
-    );
+    const after = await openAndSay(await serveClient(second), 'alpha', '暗號是什麼');
 
     const lines = after.state.entries.map(line);
     expect(lines.slice(0, after.historyCount)).toEqual(previous);
@@ -113,7 +105,7 @@ describe('切回以前的 thread，畫面照日誌重播', () => {
 
   it('沒開 --session-log、同一個行程裡切回去：歷史照樣在（讀的是記憶體裡那份日誌）', async () => {
     const server = await start([]);
-    const client = createWireClient({ baseUrl: server.url });
+    const client = await serveClient(server);
     const before = await openAndSay(client, 'beta', '第一句');
     await openAndSay(client, 'gamma', '別條');
 
@@ -126,7 +118,7 @@ describe('切回以前的 thread，畫面照日誌重播', () => {
 
   it('往前翻：真的 client 帶得動三個參數，接起來就是整份', async () => {
     const server = await start([]);
-    const client = createWireClient({ baseUrl: server.url });
+    const client = await serveClient(server);
     await openAndSay(client, 'iota', '第一句');
     await openAndSay(client, 'iota', '第二句');
 
@@ -153,7 +145,7 @@ describe('切回以前的 thread，畫面照日誌重播', () => {
 
   it('沒寫過的 thread：歷史是空的', async () => {
     const server = await start([]);
-    const page = await createWireClient({ baseUrl: server.url }).threadHistory('delta');
+    const page = await (await serveClient(server)).threadHistory('delta');
 
     expect(page).toEqual({
       kind: 'ok',
@@ -188,7 +180,7 @@ describe('停在核准點的 thread', () => {
    */
   it('同一個行程裡切回去：那張卡跟即時一樣是「執行中」，畫面停在忙著', async () => {
     const server = await start(['--plugins', APPROVAL]);
-    const client = createWireClient({ baseUrl: server.url });
+    const client = await serveClient(server);
     await stopAtApproval(client, 'kappa');
 
     const state = await replayed(client, 'kappa');
@@ -200,11 +192,11 @@ describe('停在核准點的 thread', () => {
   it('對照：重開 server 之後中斷不在了，那張卡收成失敗', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-serve-history-'));
     const first = await start(['--session-log', root, '--plugins', APPROVAL]);
-    await stopAtApproval(createWireClient({ baseUrl: first.url }), 'lambda');
+    await stopAtApproval(await serveClient(first), 'lambda');
     await stop(first);
 
     const second = await start(['--session-log', root, '--plugins', APPROVAL]);
-    const state = await replayed(createWireClient({ baseUrl: second.url }), 'lambda');
+    const state = await replayed(await serveClient(second), 'lambda');
 
     expect(state.entries.map(line)).toContain('tool:echo:failed');
     expect(state.status).toBe('idle');
@@ -218,13 +210,13 @@ describe('停在核准點的 thread', () => {
   it('重開 server 之後回答那顆舊中斷：拿真的 id 也是 no_such_interrupt', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-serve-history-'));
     const first = await start(['--session-log', root, '--plugins', APPROVAL]);
-    const before = await stopAtApproval(createWireClient({ baseUrl: first.url }), 'mu');
+    const before = await stopAtApproval(await serveClient(first), 'mu');
     const pending = before.pendings[0];
     if (pending === undefined) throw new Error('沒有掛著的核准請求');
     await stop(first);
 
     const second = await start(['--session-log', root, '--plugins', APPROVAL]);
-    const client = createWireClient({ baseUrl: second.url });
+    const client = await serveClient(second);
     const events = await client.openEvents('mu');
     const response = await client.inputRespond('mu', {
       namespace: [...pending.namespace],
@@ -244,7 +236,8 @@ describe('停在核准點的 thread', () => {
 describe('GET /threads/:id/history 的載體與協定層', () => {
   it('參數不是整數：協定層的 invalid_argument', async () => {
     const server = await start([]);
-    const response = await fetch(`${server.url}${historyPath('epsilon')}?beforeSeq=abc`, {
+    const authed = fetchWithCookie(await exchangeServeToken(server.authenticatedUrl));
+    const response = await authed(`${server.url}${historyPath('epsilon')}?beforeSeq=abc`, {
       headers: { 'content-type': 'application/json' },
     });
 
@@ -253,7 +246,9 @@ describe('GET /threads/:id/history 的載體與協定層', () => {
 
   it('beforeSeq 超出日誌：協定層的 invalid_argument', async () => {
     const server = await start([]);
-    const page = await createWireClient({ baseUrl: server.url }).threadHistory('zeta', {
+    const page = await (
+      await serveClient(server)
+    ).threadHistory('zeta', {
       beforeSeq: 99,
     });
 
@@ -262,14 +257,16 @@ describe('GET /threads/:id/history 的載體與協定層', () => {
 
   it('沒帶 application/json：415，同列表', async () => {
     const server = await start([]);
-    const response = await fetch(`${server.url}${historyPath('eta')}`);
+    const authed = fetchWithCookie(await exchangeServeToken(server.authenticatedUrl));
+    const response = await authed(`${server.url}${historyPath('eta')}`);
 
     expect(response.status).toBe(415);
   });
 
   it('不是 GET：404', async () => {
     const server = await start([]);
-    const response = await fetch(`${server.url}${historyPath('theta')}`, {
+    const authed = fetchWithCookie(await exchangeServeToken(server.authenticatedUrl));
+    const response = await authed(`${server.url}${historyPath('theta')}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',

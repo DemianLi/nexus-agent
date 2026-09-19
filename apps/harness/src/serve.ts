@@ -20,9 +20,12 @@
  * `lifecycle failed` 上線**，所以瀏覽器那端看得到原因，不是一片空白。
  */
 
+import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { THREADS_PATH } from '@nexus/wire';
 import type {
   NexusPlugin,
   ResumedStoredSession,
@@ -49,7 +52,12 @@ import { recordedSandboxMode } from './sandbox-mode.js';
 import { LIVE_MODEL_ID } from './live-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import type { SandboxMode } from './contained-backend.js';
+import { BrowserAuth } from './browser-auth.js';
+import { loadOrCreateBrowserSessionSecret } from './browser-session-secret.js';
+import { HARNESS_HOME_ENV, resolveHarnessHome } from './harness-home.js';
+import { createWebStaticHandler } from './web-static.js';
 import { createWireHandler } from './wire-handler.js';
+import type { WireHandler } from './wire-handler.js';
 import { startWireServer } from './wire-server.js';
 import type { WireServer } from './wire-server.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
@@ -97,7 +105,11 @@ const USAGE = `用法：
                        上限是那個目標自己的 max_goal_rounds
   --help               印這段話
 
-按 Ctrl-C 結束——收線時會把每個 thread 的 agent 一起清掉。`;
+環境變數：
+  ${HARNESS_HOME_ENV}  瀏覽器會話密鑰所在的 harness home（預設 ~/.nexus-agent）
+
+啟動時印出的網址帶著這次行程的登入 token：只給自己用，別轉存到別人讀得到的檔。
+網頁要先 build（pnpm build）。按 Ctrl-C 結束——收線時會把每個 thread 的 agent 一起清掉。`;
 
 export function parseServeArgs(argv: readonly string[]): ServeInvocation {
   let parsed;
@@ -154,11 +166,51 @@ export interface RunServeOptions {
   readonly cwd?: string;
   readonly log?: (line: string) => void;
   readonly env?: NodeJS.ProcessEnv;
+  /**
+   * 網頁 `dist` 的目錄，只給測試用。產品路徑不設：照 dsh `web-app` 的 `resolveDistIndex`，
+   * 位置由前端套件的 manifest 反查，不是設定（dsh 同樣有一個「production never mutates」的測試鉤子）。
+   */
+  readonly webDist?: string;
 }
 
 export interface RunningServe {
   readonly url: string;
+  /**
+   * 帶著這個行程登入 token 的網址——啟動時印的就是這一個（#424）。在瀏覽器開它，換到會話 cookie。
+   */
+  readonly authenticatedUrl: string;
   close(): Promise<void>;
+}
+
+/**
+ * 網頁 `dist` 的位置：照 dsh `packages/bundle/web-app/src/index.ts` 的 `resolveDistIndex`（`ddefc45`），
+ * 從前端套件的 manifest 反查，不做成設定。**存不存在是請求當下的事**（`web-static.ts`）。
+ */
+function resolveWebDist(): string {
+  const require = createRequire(import.meta.url);
+  return join(dirname(require.resolve('@nexus/web/package.json')), 'dist');
+}
+
+/**
+ * 按路徑把請求分給兩個面（[#424](https://github.com/DemianLi/nexus-agent/issues/424)）。
+ *
+ * `/threads` 與它底下的路徑給 wire——圍欄、會話 cookie、JSON 閘門都在那裡；其他給網頁的靜態服務。
+ * 換 token 的 `GET /?token=` 因此碰不到 wire 的 JSON 閘門（瀏覽器導覽不帶 `content-type`），照 dsh：
+ * index 走 `frontend-static` 的 `authorizeIndex`，API 走 `requestRejection`。
+ */
+function routeBySurface(
+  wire: WireHandler,
+  web: (request: Request) => Promise<Response>,
+): WireHandler {
+  return {
+    handle: (request) => {
+      const { pathname } = new URL(request.url);
+      return pathname === THREADS_PATH || pathname.startsWith(`${THREADS_PATH}/`)
+        ? wire.handle(request)
+        : web(request);
+    },
+    close: () => wire.close(),
+  };
 }
 
 /**
@@ -205,6 +257,11 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // `--workspace` 底下」那條檢查兩個入口共用一份。
   const cwd = options.cwd ?? process.cwd();
   const sessionLogDir = resolveSessionLogDir(invocation, cwd);
+  // **瀏覽器會話的密鑰也在這裡讀**（#424），同一條理由：權限過寬、記錄壞掉，都該在 server 還沒
+  // 起來的時候就講。每次啟動只讀這一次，之後在記憶體裡驗。
+  const env = options.env ?? process.env;
+  const auth = new BrowserAuth(await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)));
+  const webDist = options.webDist ?? resolveWebDist();
 
   const plugins: readonly NexusPlugin[] =
     invocation.pluginModule === undefined
@@ -231,6 +288,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
 
   let telemetryDisclosed = false;
   const handler = createWireHandler({
+    auth,
     // **冷讀那一格**（#302）：讀的是續接那條路寫進去的同一格，只列切得過去的——`cwd` 就是續接時
     // `assertSameCwd` 比的那一個。沒開落盤就整個不給，列表那時講「列不出來」而不是「沒有」。
     ...(sessionStore === undefined
@@ -373,15 +431,26 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
 
   let server: WireServer;
   try {
-    server = await startWireServer({ handler, port: invocation.port });
+    server = await startWireServer({
+      handler: routeBySurface(handler, createWebStaticHandler({ distRoot: webDist, auth })),
+      port: invocation.port,
+    });
   } catch (error) {
     await handler.close();
     throw error;
   }
 
-  log(`nexus-agent 在 ${server.url}`);
+  // **這一行是敏感輸出**（dsh 決策筆記「后果」）：token 在這個行程活著的期間都換得到 cookie。
+  // 只印這一次，別處不重複。
+  const authenticatedUrl = auth.authenticatedUrl(server.url);
+  log(`nexus-agent 在 ${authenticatedUrl}`);
   log(`模型：${invocation.live ? LIVE_MODEL_ID : '假模型（ScriptedChatModel）'}`);
   log(`plugin：${plugins.map((plugin) => plugin.name).join('、') || '（空）'}`);
+  log(
+    existsSync(join(webDist, 'index.html'))
+      ? `網頁：${webDist}`
+      : `網頁：${webDist}（還沒 build——先跑 pnpm build，不然開網址只會看到 404）`,
+  );
   // **披露，不是設定。** 不講的話，「這台 server 正在把每一條 thread 的對話寫上磁碟」
   // 與「行程結束就沒了」在畫面上一模一樣。
   log(
@@ -392,12 +461,13 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // 同一條規矩底下的另一行：**這一輪結束之後還會不會有下一輪**。這台 server 上它是
   // per-thread 的行為，但旗標是整個 process 的，所以講在這裡。
   log(formatGoalDriverDisclosure(invocation.goalDriver));
-  for (const line of formatTracingDisclosure(readTracingDisclosure(options.env ?? process.env))) {
+  for (const line of formatTracingDisclosure(readTracingDisclosure(env))) {
     log(line);
   }
 
   return {
     url: server.url,
+    authenticatedUrl,
     close: async () => {
       await server.close();
       await handler.close();

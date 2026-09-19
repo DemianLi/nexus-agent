@@ -31,7 +31,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { DISABLED_FEEDBACK_WARNING } from './agent-factory.js';
 import { createCliAgent, DEFAULT_PLUGINS, runTurn } from './cli.js';
-import { loopbackRequest } from './fixtures.js';
+import { loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
@@ -229,6 +229,7 @@ describe('遙測接線：web 那條路', () => {
       telemetryPlugin(sink),
     ]);
     const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
         agent: built.agent as unknown as PumpAgent,
         commands: built.commands,
@@ -266,6 +267,7 @@ describe('遙測接線：web 那條路', () => {
       telemetryPlugin(sink),
     ]);
     const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
         agent: built.agent as unknown as PumpAgent,
         commands: built.commands,
@@ -405,6 +407,7 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
       telemetryPlugin(sink),
     ]);
     const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
         agent: built.agent as unknown as PumpAgent,
         commands: built.commands,

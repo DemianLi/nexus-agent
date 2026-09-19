@@ -10,11 +10,12 @@
 import { tool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
 import type { CommandRegistrationPoint, NexusPlugin } from '@nexus/core';
-import type { PendingApproval, PendingInput } from '@nexus/wire';
-import { isApprovalPending } from '@nexus/wire';
+import type { PendingApproval, PendingInput, WireClient } from '@nexus/wire';
+import { createWireClient, isApprovalPending } from '@nexus/wire';
 import { createRegistry } from '@nexus/core';
 import { StateBackend } from 'deepagents';
 import { z } from 'zod';
+import { BrowserAuth } from './browser-auth.js';
 
 /**
  * 一個真的、但沒有人註冊過任何命令的命令註冊點。
@@ -30,20 +31,98 @@ export function emptyCommandPoint(): Pick<CommandRegistrationPoint, 'find' | 'li
 }
 
 /**
- * 把 handler 當 fetch 用時的請求：補上一個 loopback 的 `Host`。
+ * 測試用的瀏覽器會話密鑰與認證（#424）。
  *
- * handler 在任何路徑判斷之前先過瀏覽器信任圍欄（`request-trust.ts`，#387），而 `new Request(url)`
- * 不會替你帶 `Host`——真的 HTTP/1.1 請求一定有，所以圍欄缺 Host 就拒、不退回去讀 URL。
- * 測試的 base URL（`http://wire.test` 之類）跟 Host 無關，保留原樣。
+ * **換的是密鑰，不是那道檢查**：`createWireHandler` 的 `auth` 是必填的，測試把這一個交進去，
+ * 請求再帶一顆用同一把密鑰換來的 cookie。產品路徑上的密鑰來自 harness home 的檔（`serve.ts`）。
+ */
+export const TEST_BROWSER_SESSION_SECRET = Buffer.alloc(32, 7);
+export const TEST_BROWSER_AUTH = new BrowserAuth(TEST_BROWSER_SESSION_SECRET);
+
+/**
+ * 用 {@link TEST_BROWSER_AUTH} 走一次真的 token 交換，換一顆給某個 authority 的 cookie。
+ *
+ * **每次呼叫當下才換**：cookie 的簽發時間取當下的 `Date.now()`，用假時鐘的測試因此不會拿到一顆
+ * 「未來才簽發」或「已經過期」的 cookie。
+ *
+ * @param authority - 請求的 `Host`（cookie 的名字與簽章都綁它）。
+ * @returns `名字=值`，可以直接放進 `cookie` 標頭。
+ */
+export function testSessionCookie(authority = 'localhost'): string {
+  const response = TEST_BROWSER_AUTH.authorizeIndex(
+    new Request(TEST_BROWSER_AUTH.authenticatedUrl(`http://${authority}`), {
+      headers: { host: authority },
+    }),
+  );
+  const setCookie = response?.headers.get('set-cookie');
+  if (response?.status !== 303 || setCookie === null || setCookie === undefined) {
+    throw new Error('測試的 token 交換沒有換到 cookie');
+  }
+  return setCookie.split(';', 1)[0]!;
+}
+
+/**
+ * 把 handler 當 fetch 用時的請求：補上一個 loopback 的 `Host` 與一顆有效的會話 cookie。
+ *
+ * handler 在任何路徑判斷之前先過瀏覽器信任圍欄（`request-trust.ts`，#387），再驗會話（#424）；而
+ * `new Request(url)` 不會替你帶 `Host`——真的 HTTP/1.1 請求一定有，所以圍欄缺 Host 就拒、不退回去讀 URL。
+ * 測試的 base URL（`http://wire.test` 之類）跟 Host 無關，保留原樣。呼叫端自己帶了 `cookie` 就不蓋。
  *
  * @param input - 請求 URL。
  * @param init - 其餘照 `fetch` 傳進來的原樣。
- * @returns 帶著 `host: localhost` 的請求。
+ * @returns 帶著 `host: localhost` 與 {@link TEST_BROWSER_AUTH} 認得的 cookie 的請求。
  */
 export function loopbackRequest(input: string, init?: RequestInit): Request {
   const headers = new Headers(init?.headers);
   headers.set('host', 'localhost');
+  if (!headers.has('cookie')) headers.set('cookie', testSessionCookie('localhost'));
   return new Request(input, { ...init, headers });
+}
+
+/**
+ * 對一台真的 `runServe` 走產品路徑上的 token 交換，拿到會話 cookie。
+ *
+ * @param authenticatedUrl - `RunningServe.authenticatedUrl`（啟動時印出的那一個）。
+ * @returns `名字=值`。
+ */
+export async function exchangeServeToken(authenticatedUrl: string): Promise<string> {
+  const response = await fetch(authenticatedUrl, { redirect: 'manual' });
+  const setCookie = response.headers.get('set-cookie');
+  if (response.status !== 303 || setCookie === null) {
+    throw new Error(`token 交換失敗：${response.status}`);
+  }
+  return setCookie.split(';', 1)[0]!;
+}
+
+/**
+ * 每個請求都帶同一顆 cookie 的 `fetch`。
+ *
+ * @param cookie - `名字=值`。
+ * @returns 可以交給 `createWireClient` 的 `fetch`。
+ */
+export function fetchWithCookie(cookie: string): typeof globalThis.fetch {
+  return (input, init) => {
+    const headers = new Headers(init?.headers);
+    headers.set('cookie', cookie);
+    return fetch(input, { ...init, headers });
+  };
+}
+
+/**
+ * 一台真的 serve 的 wire client：先走產品路徑上的 token 交換，之後每個請求都帶那顆 cookie（#424）。
+ *
+ * cookie 綁的是那台 server 的 authority（含 port），所以重開在別的 port 上要重新換一顆——
+ * 對新的那台再叫一次這個函式就是。
+ *
+ * @param running - `runServe` 回的那台。
+ * @returns 帶著會話的 client。
+ */
+export async function serveClient(running: {
+  readonly url: string;
+  readonly authenticatedUrl: string;
+}): Promise<WireClient> {
+  const cookie = await exchangeServeToken(running.authenticatedUrl);
+  return createWireClient({ baseUrl: running.url, fetch: fetchWithCookie(cookie) });
 }
 
 /** fixture plugin 註冊的工具名。 */

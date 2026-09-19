@@ -1,0 +1,103 @@
+/**
+ * 由 serve 服務 `apps/web` 建置好的 `dist`（[#424](https://github.com/DemianLi/nexus-agent/issues/424)）。
+ *
+ * **照 dsh 的形狀**：dsh 的網頁從來不由 Vite 服務（它的 `apps/web/vite.config.ts` 用
+ * `rejectStandaloneServe` 擋掉 `vite` 與 `vite preview`），而由 host 的 `frontend-static` 服務
+ * `dist`。這裡逐條照 `packages/host/frontend-static/src/index.ts` 的 `serveStatic` 與 fallback
+ * （`ddefc45`）：
+ *
+ * - 不是 `GET`／`HEAD` 回 405；
+ * - 解出來的路徑跑出 `dist` 回 403；
+ * - `/` 與 `/index.html` 先過 `BrowserAuth.authorizeIndex`——換 token、驗 cookie，都在讀 index 之前；
+ * - 其他檔案公開，依副檔名給 content-type；不存在、是目錄、路徑中間不是目錄回 404。
+ *
+ * **dist 存不存在在請求當下才判**，同 dsh：沒 build 的時候 serve 照樣起得來，index 回 404。
+ *
+ * **跟 dsh 不同的一格**：網址的百分比編碼解不開時 dsh 讓它拋給 webserver 的失敗處理；我們的
+ * `wire-server.ts` 把 handler 放在一個沒人接的 async 裡，拋出去會變成沒人處理的 rejection，
+ * 所以這裡回 400。
+ */
+
+import { readFile } from 'node:fs/promises';
+import { extname, join, normalize, resolve, sep } from 'node:path';
+import type { BrowserAuth } from './browser-auth.js';
+
+const HTML_MIME = 'text/html; charset=utf-8';
+
+/** 照 dsh 的對照表，再補上 `dist` 裡實際會出現的字型與圖檔。 */
+const MIME: Readonly<Record<string, string>> = {
+  '.html': HTML_MIME,
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.json': 'application/json',
+  '.map': 'application/json',
+  '.webmanifest': 'application/manifest+json',
+  '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
+  '.ttf': 'font/ttf',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+};
+
+/** 只有這幾種算「找不到」；其他檔案系統失敗照實回 500。 */
+const STATIC_MISS_CODES: ReadonlySet<string | undefined> = new Set(['ENOENT', 'EISDIR', 'ENOTDIR']);
+
+export interface WebStaticOptions {
+  /** `dist` 的目錄。 */
+  readonly distRoot: string;
+  /** 只用到 index 那一格的認證。 */
+  readonly auth: Pick<BrowserAuth, 'authorizeIndex'>;
+}
+
+function isStaticMiss(error: unknown): boolean {
+  return STATIC_MISS_CODES.has((error as NodeJS.ErrnoException | null)?.code);
+}
+
+/**
+ * 建一個服務 `dist` 的 handler。
+ *
+ * @param options - `dist` 的位置與 index 的認證。
+ * @returns `(Request) => Response`；不會拋，所有失敗都變成狀態碼。
+ */
+export function createWebStaticHandler(
+  options: WebStaticOptions,
+): (request: Request) => Promise<Response> {
+  const distRoot = resolve(options.distRoot);
+  const distIndex = join(distRoot, 'index.html');
+
+  return async (request) => {
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return new Response(null, { status: 405 });
+    }
+    let pathname: string;
+    try {
+      pathname = decodeURIComponent(new URL(request.url).pathname);
+    } catch {
+      // 百分比編碼解不開（例如孤立的 `%`）：見檔頭最後一段。
+      return new Response(null, { status: 400 });
+    }
+    const target = resolve(normalize(join(distRoot, pathname)));
+    // `sep` 而不是 '/'：Windows 上 resolve() 給的是反斜線。
+    if (target !== distRoot && !target.startsWith(distRoot + sep)) {
+      return new Response(null, { status: 403 });
+    }
+    const isIndex = target === distRoot || target === distIndex;
+    if (isIndex) {
+      const denied = options.auth.authorizeIndex(request);
+      if (denied !== undefined) return denied;
+    }
+    let body: Buffer;
+    try {
+      body = await readFile(isIndex ? distIndex : target);
+    } catch (error) {
+      if (isStaticMiss(error)) return new Response(null, { status: 404 });
+      return new Response(null, { status: 500 });
+    }
+    const type = isIndex ? HTML_MIME : (MIME[extname(target)] ?? 'application/octet-stream');
+    return new Response(request.method === 'HEAD' ? null : body, {
+      status: 200,
+      headers: { 'content-type': type },
+    });
+  };
+}

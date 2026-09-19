@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import { createCliAgent, runCli } from './cli.js';
-import { loopbackRequest } from './fixtures.js';
+import { loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -153,6 +153,7 @@ describe('web 那條', () => {
     const plugin = createGoalPlugin();
     const built = await createCliAgent({ live: false }, [createEchoPlugin(), plugin]);
     const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
         agent: built.agent as unknown as PumpAgent,
         commands: built.commands,

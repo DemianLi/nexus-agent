@@ -46,7 +46,11 @@ async function toRequest(incoming: IncomingMessage, origin: string): Promise<Req
 }
 
 async function writeResponse(response: Response, outgoing: ServerResponse): Promise<void> {
-  outgoing.writeHead(response.status, Object.fromEntries(response.headers.entries()));
+  const headers: Record<string, string | string[]> = Object.fromEntries(response.headers.entries());
+  // `Headers` 逐顆列出 `set-cookie`，`fromEntries` 只會留最後一顆；照原樣交給 node:http 的陣列形式。
+  const setCookies = response.headers.getSetCookie();
+  if (setCookies.length > 0) headers['set-cookie'] = setCookies;
+  outgoing.writeHead(response.status, headers);
   if (response.body === null) {
     outgoing.end();
     return;

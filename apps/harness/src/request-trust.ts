@@ -26,14 +26,15 @@
  *   `assertTrustedAuthority` 驗格式）。我們的 `serve` 沒有 `--host`，非 loopback 暴露沒有路徑，
  *   宣告了也沒有東西會用到。**重開條件**：`serve` 加上 `--host`——那天把 dsh 的
  *   `isTrustedAuthority` 分支與 `assertTrustedAuthority` 一起帶進來。
- * - **沒有瀏覽器會話認證。** dsh 過了這道圍欄還要過 `browser-auth.ts`（行程 token 換簽章
- *   cookie，不過回 401），防的是同機其他使用者或行程直接打 API，跟 rebinding 是不同的威脅。
- *   我們的 SPA 由 Vite 服務、不經過 harness，要做得改 serve 與 web 的啟動與連線方式。
- *   **重開條件**：`serve` 加上 `--host`，或要在多使用者的機器上跑。
- * - **Origin 的落差修在 proxy，不修在這裡。** dsh 由同一個 host 服務 SPA 與 API，瀏覽器的
- *   Origin 本來就等於 Host。我們的 web 經 Vite proxy 進來，`changeOrigin` 只改寫 Host、不改
- *   Origin，照抄第 3 道會把自己的 POST 全擋掉；所以由 `apps/web/src/lib/proxy-origin.ts` 把
+ * - **Origin 的落差只剩開發迴圈要修，修在 proxy，不修在這裡。** 產品路徑上網頁由 serve 自己服務
+ *   （`web-static.ts`，[#424](https://github.com/DemianLi/nexus-agent/issues/424)），跟 dsh 一樣
+ *   瀏覽器的 Origin 本來就等於 Host。開發時 web 經 Vite proxy 進來，`changeOrigin` 只改寫 Host、
+ *   不改 Origin，照抄第 3 道會把自己的 POST 全擋掉；所以由 `apps/web/src/lib/proxy-origin.ts` 把
  *   「等於 Vite 自己來源」的 Origin 改寫成 target，這裡的判準一個字不動。
+ *
+ * **圍欄不建立身分**：過了這一道還要過瀏覽器會話（`browser-auth.ts`，#424），防的是同機其他
+ * 使用者或行程直接打 API，跟 rebinding 是不同的威脅。原本登記在這裡的「沒有瀏覽器會話認證」
+ * 偏離，重開條件（在多使用者的機器上跑）2026-09-19 觸發，已由 #424 補上。
  */
 
 /**
