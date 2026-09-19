@@ -101,7 +101,16 @@ describe('路徑', () => {
     const target = await canonicalPath(join(root, 'link', 'x.md'));
     expect(durablePathOf(join(cwd, 'a', 'b.md'), cwd)).toBe('a/b.md');
     expect(durablePathOf(target, cwd)).toBe(target);
-    expect(displayPathOf(target, cwd, '')).toBe(target);
-    expect(displayPathOf(target, cwd, await canonicalPath(outside))).toBe('~/x.md');
+    expect(displayPathOf(target, cwd, cwd, '')).toBe(target);
+    expect(displayPathOf(target, cwd, cwd, await canonicalPath(outside))).toBe('~/x.md');
+  });
+
+  it('repo 裡、工作區之上的檔是 `../` 形式，`path` 是絕對路徑；repo 外照舊', () => {
+    const repo = '/r';
+    const cwd = '/r/app';
+    expect(displayPathOf('/r/README.md', cwd, repo, '')).toBe('../README.md');
+    expect(displayPathOf('/r/lib/x.ts', cwd, repo, '/r')).toBe('../lib/x.ts');
+    expect(durablePathOf('/r/README.md', cwd)).toBe('/r/README.md');
+    expect(displayPathOf('/elsewhere/x.md', cwd, repo, '')).toBe('/elsewhere/x.md');
   });
 });

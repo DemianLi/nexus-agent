@@ -2,10 +2,12 @@
  * 每一輪改了工作區哪些檔（[#443](https://github.com/DemianLi/nexus-agent/issues/443)），照 dsh
  * `@deepseek-ai/dsh-workspace-changes`（`packages/deliverables/workspace-changes`，`ddefc45`）。
  *
- * 檔案工具（`write_file`、`edit_file`、`delete`）改一個檔之前，先把那個檔整份複製一份，每一輪每個路徑只複製
- * 第一次；一輪收尾時再複製一次，兩份比較出這一輪改了什麼。有改的話，root 日誌寫一顆 `workspace/changes`，
- * 摘要與逐檔比較留在記錄器裡，經 {@link WorkspaceChanges} 服務到會話結束。模型看不到任何東西：這一條只寫
- * 日誌，web 讀。
+ * 工作區在 git repo 裡時，輪開始與收尾各拍一次工作樹快照，兩棵樹比出這一輪改了什麼——連檔案工具以外的改動
+ * （使用者自己改的、`submit_record` 寫的、MCP 工具在外面改的）都在（[#461](https://github.com/DemianLi/nexus-agent/issues/461)）。
+ * 檔案工具（`write_file`、`edit_file`、`delete`）改一個檔之前，另外把那個檔整份複製一份，每一輪每個路徑只複製
+ * 第一次、收尾時再複製一次，快照蓋不到的路徑（被忽略的、repo 外的）用這兩份比；不在 repo 裡、或沒有 git 時，
+ * 只有這兩份。有改的話，root 日誌寫一顆 `workspace/changes`，摘要與逐檔比較留在記錄器裡，經
+ * {@link WorkspaceChanges} 服務到會話結束。模型看不到任何東西：這一條只寫日誌，web 讀。
  *
  * ## 掛法：只在 serve、只在有 `--workspace` 的時候
  *
@@ -17,19 +19,18 @@
  *
  * ## 與 dsh 的偏離
  *
- * 1. **這一刀沒有 git 快照**（#443 第二則決議）：`--workspace` 底下沒有 `execute`，模型改檔只經上面三個工具，
- *    都在本體跑之前擷取。dsh「沒有 git」那條模式本來就是這樣。git 那半是 [#461](https://github.com/DemianLi/nexus-agent/issues/461)，
- *    所以 Config 的 `timeoutMs`、`outputMaxBytes` 這裡沒有。
- * 2. **事件不帶 `turn`**，時序因此另有要求，見 `recorder.ts` 檔頭。
+ * 1. **git 用 `node:child_process` 跑**，不是 dsh 的 `subprocess` 能力：我們沒有這個服務。能力層附帶的環境淨化、
+ *    逾時、輸出上限、找執行檔明著抄過來，見 `git.ts` 檔頭。
+ * 2. **事件不帶 `turn`**，時序因此另有要求；接上時重播的舊輪不拍快照。見 `recorder.ts` 檔頭。
  * 3. **擷取的工具換成我們基座的那三個**，見 `capture.ts` 的 `mutationPath`。`delete` 是 dsh 沒有的工具。
  * 4. **掛點**：dsh 的 `tools/pre-execute`、`agent/turn-stopping` 與 `session/event`，在我們這裡是 middleware 的
  *    `wrapToolCall`、`afterAgent` 與 `sessions.join` 的 `observe`。`afterAgent` 是圖裡的一個節點，每一輪多走一步
  *    （root 與子代理都是，子代理那一步直接返回）；選它是因為它在輪內、在 pump 寫 `turn/end` 之前，而且只在
  *    正常收尾時才跑——停在核准點、中止、失敗都不會走到，那幾種由 `turn/end` 之後的補記收。
  * 5. **子代理改的檔算進 root 這一輪**。dsh 不記子代理的會話（`eligible`），這一點照做：事件與摘要只在 root。
- *    但 dsh 的主路徑是 git 快照，子代理在這一輪裡改的檔本來就會出現在 root 的摘要裡；只有「沒有 git」那條
- *    模式漏掉它們。這一刀沒有快照，所以子代理的檔案工具呼叫也在本體前擷取，記在 root 的記錄器上——
- *    結果與 dsh 主路徑一樣。
+ *    dsh 的主路徑是 git 快照，子代理在這一輪裡改的檔本來就會出現在 root 的摘要裡；只有快照蓋不到的路徑、
+ *    與「沒有 git」那條模式漏掉它們。所以子代理的檔案工具呼叫也在本體前擷取，記在 root 的記錄器上——
+ *    結果在每一條路上都與 dsh 主路徑一樣。
  * 6. **Config 值的載體**：dsh 是 schemastery Config；我們的設定機制是 [#46](https://github.com/DemianLi/nexus-agent/issues/46)，
  *    在那之前預設值寫在 {@link WORKSPACE_CHANGES_LIMITS} 一處，工廠照 dsh 在建立時驗。
  *
@@ -44,9 +45,11 @@ import type { AgentMiddleware } from 'langchain';
 import type { NexusPlugin, PluginRegistry, SessionLog } from '@nexus/core';
 import type { WorkspaceChangesSummary, WorkspaceFileDiff } from '@nexus/wire';
 
+import { GitRunner, resolveGitExecutable } from './git.js';
 import { TurnRecorder } from './recorder.js';
 
 export { mutationPath } from './capture.js';
+export { GitRunner, resolveGitExecutable, scrubbedParentEnv } from './git.js';
 export { TurnRecorder } from './recorder.js';
 export type { RecorderEnvironment } from './recorder.js';
 
@@ -55,9 +58,16 @@ export const WORKSPACE_CHANGES_MIDDLEWARE_NAME = 'WorkspaceChanges';
 
 /** 上限，照 dsh 的 Config。 */
 export interface WorkspaceChangesLimits {
+  /** 一次 git 指令可以跑幾毫秒，超過就放棄這一輪的紀錄。 */
+  readonly timeoutMs: number;
+  /** 每次指令保留多少位元組的 git 輸出；比較清單更大時放棄這一輪的紀錄。 */
+  readonly outputMaxBytes: number;
   /** 一份摘要最多帶幾個檔；`total` 照樣報完整的數目。 */
   readonly maxFiles: number;
-  /** 一份副本的位元組上限（含）。更大的檔列出來但沒有行數、沒有比較。 */
+  /**
+   * 一份副本、以及比較時從快照讀的一個檔的位元組上限（含）。更大的檔沒有比較；檔案工具擷取的那種也列出來但
+   * 沒有行數。
+   */
   readonly maxFileBytes: number;
   /** 逐行比較可以跑幾毫秒，超過就退成整檔替換。 */
   readonly diffTimeoutMs: number;
@@ -70,6 +80,8 @@ export interface WorkspaceChangesLimits {
  * [#46](https://github.com/DemianLi/nexus-agent/issues/46)，前例是 serve 的 `THREAD_TITLE_LIMITS`。
  */
 export const WORKSPACE_CHANGES_LIMITS: WorkspaceChangesLimits = {
+  timeoutMs: 30_000,
+  outputMaxBytes: 8 * 1024 * 1024,
   maxFiles: 500,
   maxFileBytes: 2 * 1024 * 1024,
   diffTimeoutMs: 100,
@@ -104,6 +116,13 @@ export interface WorkspaceChangesOptions {
   readonly tempRoot?: string;
   /** 失敗往哪裡講，省略是 `console.warn`。 */
   readonly warn?: (message: string) => void;
+  /** 「沒有 git」這類一次性的消息往哪裡講，省略是 `console.info`。 */
+  readonly info?: (message: string) => void;
+  /**
+   * git 執行檔。省略是在 `PATH` 裡找（見 `git.ts` 的 `resolveGitExecutable`）；`null` 是當成沒有 git，
+   * 行為同 dsh 在沒有 git 的 Host 上。
+   */
+  readonly git?: string | null;
 }
 
 /**
@@ -123,9 +142,33 @@ export function createWorkspaceChanges(options: WorkspaceChangesOptions): {
       throw new Error(`workspace-changes requires a positive integer ${field}`);
     }
   }
+  const info =
+    options.info ??
+    ((message: string) => {
+      console.info(message);
+    });
+  /** 找 git 延到第一份記錄器要用時，一個實例找一次，同 dsh 的 `gitRunner`。 */
+  let runner: Promise<GitRunner | null> | undefined;
+  const git = (): Promise<GitRunner | null> => {
+    runner ??= (
+      options.git === undefined ? resolveGitExecutable() : Promise.resolve(options.git)
+    ).then((executable) => {
+      if (executable === null) {
+        info('workspace-changes: 沒有 git，只列檔案工具的改動');
+        return null;
+      }
+      return new GitRunner(executable, {
+        timeoutMs: limits.timeoutMs,
+        outputMaxBytes: limits.outputMaxBytes,
+      });
+    });
+    return runner;
+  };
   const env = {
     tempRoot: options.tempRoot ?? tmpdir(),
-    ...limits,
+    maxFiles: limits.maxFiles,
+    maxFileBytes: limits.maxFileBytes,
+    diffTimeoutMs: limits.diffTimeoutMs,
     warn:
       options.warn ??
       ((message: string) => {
@@ -150,16 +193,19 @@ export function createWorkspaceChanges(options: WorkspaceChangesOptions): {
       registry.sessions.join((subject) => {
         // 照 dsh 的 `eligible`：子代理的會話不記。
         if (subject.address.kind !== 'root') return;
-        const recorder = new TurnRecorder(subject.log, options.root, env);
+        const recorder = new TurnRecorder(subject.log, options.root, { ...env, git: git() });
         recorders.set(subject.log, recorder);
         current = recorder;
-        // 接上當下已經在的事件（續接的 seed）會先重播一遍，照樣推動記錄器——那沒有害處：副本只在這個行程裡
-        // 產生，重播出來的舊輪一個副本都沒有，補記也列不出東西；而每一輪真的開跑都先有一顆新的 `turn/start`。
+        // 接上當下已經在的事件（續接的 seed）會先重播一遍。**重播出來的輪不拍快照**：一份有 N 輪的 thread
+        // 接上就會跑 N 次 `git add --all`，見 `recorder.ts` 檔頭第 3 點。其餘的照樣推動記錄器——副本只在這個
+        // 行程裡產生，重播出來的舊輪一個副本都沒有，補記也列不出東西。
+        const joinedAt = subject.log.length;
         subject.observe((event) => {
+          const live = event.seq >= joinedAt;
           switch (event.type) {
             case 'turn/start':
-              if (event.data.kind === 'resume') recorder.resume();
-              else recorder.start();
+              if (event.data.kind === 'resume') recorder.resume(live);
+              else recorder.start(live);
               break;
             case 'interrupt/raised':
               recorder.pause();
