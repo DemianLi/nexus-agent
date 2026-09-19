@@ -11,7 +11,13 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
-import { emptyCommandPoint, loopbackRequest } from './fixtures.js';
+import {
+  emptyCommandPoint,
+  loopbackRequest,
+  TEST_BROWSER_AUTH,
+  testSessionCookie,
+} from './fixtures.js';
+import { BrowserAuth } from './browser-auth.js';
 import { createWireHandler } from './wire-handler.js';
 
 /**
@@ -65,6 +71,7 @@ function buildAgent(turns: readonly ScriptedTurn[], options: { gated?: boolean }
 /** 把 handler 當成 fetch 用——瀏覽器端跑的是同一份 client。 */
 function connect(agent: PumpAgent) {
   const handler = createWireHandler({
+    auth: TEST_BROWSER_AUTH,
     createAgent: async () => ({
       agent,
       commands: emptyCommandPoint(),
@@ -432,6 +439,7 @@ describe('失敗與拒絕', () => {
   it('不可信的來源在任何路徑判斷之前就拿 403，連 thread 都不建（#387）', async () => {
     let created = 0;
     const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
       createAgent: async () => {
         created += 1;
         return {
@@ -462,6 +470,12 @@ describe('失敗與拒絕', () => {
       { host: 'localhost:8787', 'sec-fetch-site': 'cross-site' },
       { host: 'localhost:8787', origin: 'http://localhost:5173' },
       { host: 'localhost:8787', origin: 'null' },
+      // 帶著一顆有效的會話 cookie 也一樣：圍欄排在會話之前（#424）。
+      {
+        host: 'evil.example:8787',
+        origin: 'http://evil.example:8787',
+        cookie: testSessionCookie('evil.example:8787'),
+      },
     ];
     for (const [method, path, body] of routes) {
       for (const headers of untrusted) {
@@ -477,13 +491,83 @@ describe('失敗與拒絕', () => {
     expect(created).toBe(0);
 
     // 同一組路徑，loopback 的 Host 就進得去（`state.get` 那條照舊是 404）。
-    const trusted = { host: 'localhost:8787', origin: 'http://localhost:8787' };
+    const trusted = {
+      host: 'localhost:8787',
+      origin: 'http://localhost:8787',
+      cookie: testSessionCookie('localhost:8787'),
+    };
     expect(
       (await send('POST', commandPath('t20', 'slash.list'), trusted, routes[3]![2])).status,
     ).toBe(200);
     expect((await send('POST', '/threads/t20/commands/state.get', trusted, { id: 2 })).status).toBe(
       404,
     );
+  });
+
+  it('可信的來源沒有有效會話：任何路徑判斷之前就拿 401，連 thread 都不建（#424）', async () => {
+    let created = 0;
+    const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
+      createAgent: async () => {
+        created += 1;
+        return {
+          agent: buildAgent(ONE_CALL).agent,
+          commands: emptyCommandPoint(),
+          dispose: async () => undefined,
+        };
+      },
+    });
+    const send = (method: string, path: string, headers: Record<string, string>, body?: unknown) =>
+      handler.handle(
+        new Request(`${BASE_URL}${path}`, {
+          method,
+          headers,
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        }),
+      );
+    const valid = testSessionCookie('localhost:8787');
+    const [name, value] = valid.split('=') as [string, string];
+    const otherSecret = new BrowserAuth(Buffer.alloc(32, 9));
+    const foreign = otherSecret.authorizeIndex(
+      new Request(otherSecret.authenticatedUrl('http://localhost:8787'), {
+        headers: { host: 'localhost:8787' },
+      }),
+    );
+    const routes: readonly [string, string, unknown][] = [
+      ['GET', '/threads', undefined],
+      ['GET', '/threads/t21/history', undefined],
+      ['POST', streamPath('t21'), { channels: ['messages'] }],
+      ['POST', commandPath('t21', 'run.start'), { id: 1, method: 'run.start', params: {} }],
+      // 不存在的路徑、沒帶 content-type：401 都排在 404、415 前面。
+      ['POST', '/threads/t21/commands/state.get', { id: 2 }],
+      ['GET', '/threads/t21/nope', undefined],
+    ];
+    const sessions: readonly (string | undefined)[] = [
+      undefined,
+      // 別的 authority 簽的（同一台機器別的 port）。
+      testSessionCookie('localhost:8788'),
+      // 改過一個字的簽章。
+      `${name}=${value.slice(0, -1)}${value.endsWith('A') ? 'B' : 'A'}`,
+      // 別把密鑰簽的。
+      foreign?.headers.get('set-cookie')?.split(';', 1)[0],
+    ];
+    for (const [method, path, body] of routes) {
+      for (const cookie of sessions) {
+        const headers: Record<string, string> = {
+          host: 'localhost:8787',
+          ...(cookie === undefined ? {} : { cookie }),
+        };
+        const response = await send(method, path, headers, body);
+        expect({ method, path, cookie, status: response.status }).toEqual({
+          method,
+          path,
+          cookie,
+          status: 401,
+        });
+        expect(response.headers.get('cache-control')).toBe('no-store');
+      }
+    }
+    expect(created).toBe(0);
   });
 
   it('上行的回應是收件回條，不是跑完了', async () => {
@@ -506,6 +590,7 @@ describe('一條 thread 一個 agent', () => {
     let built = 0;
     let disposed = 0;
     const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
       createAgent: async () => {
         built += 1;
         // 讓兩個請求真的疊在一起：不 await 的話，第一個會在第二個進來之前就寫回去。
@@ -577,6 +662,7 @@ describe('線的兩端與真實組裝點對得上', () => {
       // 這件事只有這裡驗得到——編不過就是 `PumpAgent` 的形狀錯了。
       const assignable: PumpAgent = agent;
       const handler = createWireHandler({
+        auth: TEST_BROWSER_AUTH,
         createAgent: async () => ({
           agent: assignable,
           commands: emptyCommandPoint(),
@@ -624,6 +710,7 @@ describe('建不起這條 thread', () => {
   it('createAgent 拋了：下行與上行都回 error 封包，帶著原因；下一次請求重試', async () => {
     let attempts = 0;
     const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
       createAgent: async () => {
         attempts += 1;
         throw new Error('這條 thread 的日誌壞了');
@@ -656,6 +743,7 @@ describe('建不起這條 thread', () => {
     let built = 0;
     let disposed = 0;
     const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
       createAgent: async () => {
         built += 1;
         return {

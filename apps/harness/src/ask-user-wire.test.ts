@@ -31,7 +31,7 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
-import { emptyCommandPoint, loopbackRequest } from './fixtures.js';
+import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -67,6 +67,7 @@ async function open(threadId: string): Promise<Session> {
     plugins: [createAskUserPlugin()],
   });
   const handler = createWireHandler({
+    auth: TEST_BROWSER_AUTH,
     createAgent: async () => ({
       agent: built.agent as unknown as PumpAgent,
       commands: emptyCommandPoint(),

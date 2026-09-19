@@ -33,7 +33,7 @@ import type { WireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { DEFAULT_PLUGINS, createCliAgent } from './cli.js';
-import { loopbackRequest } from './fixtures.js';
+import { loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
@@ -67,6 +67,7 @@ async function wire(plugins: readonly NexusPlugin[] = DEFAULT_PLUGINS): Promise<
   );
   let captured: SessionLog | undefined;
   const handler = createWireHandler({
+    auth: TEST_BROWSER_AUTH,
     createAgent: async () => ({
       agent: built.agent as unknown as PumpAgent,
       commands: built.commands,

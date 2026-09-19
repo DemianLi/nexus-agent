@@ -2,10 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "web",
+      "name": "serve",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@nexus/web", "run", "dev"],
-      "port": 5173
+      "runtimeArgs": ["--filter", "@nexus/harness", "run", "serve"],
+      "port": 8787
     }
   ]
 }

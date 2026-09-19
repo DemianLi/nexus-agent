@@ -13,8 +13,8 @@
  *
  * 錯誤分兩層，也照 dsh：
  *
- * - **載體層**用 HTTP status：403（來源不可信）、415（media type 不是 JSON）、
- *   400（body 不是 JSON）、404（路徑不指向任何 method）。
+ * - **載體層**用 HTTP status：403（來源不可信）、401（沒有有效的瀏覽器會話）、
+ *   415（media type 不是 JSON）、400（body 不是 JSON）、404（路徑不指向任何 method）。
  * - **協定層**用 200 ＋ error 封包：封包形狀不對、method 與路徑不合、要的功能沒實作。
  *
  * 那個 415 是安全閘不是潔癖：瀏覽器對 `text/plain` 之類的「simple POST」不發
@@ -23,6 +23,10 @@
  * **它擋得住跨站，擋不住 DNS rebinding**——被 rebinding 的頁面在瀏覽器眼裡是同源，preflight
  * 根本不發。那一條由排在它前面的 403 擋，判準照 dsh，見 [`request-trust.ts`](./request-trust.ts)
  * （[#387](https://github.com/DemianLi/nexus-agent/issues/387)）。
+ *
+ * **圍欄不建立身分**：curl 帶一個 loopback 的 `Host` 就過得去。緊接在它後面的 401 才是身分——
+ * 瀏覽器會話 cookie，照 dsh `rpc-host.ts` 的 `requestRejection`（先 403、再 401，都在路徑判斷之前），
+ * 見 [`browser-auth.ts`](./browser-auth.ts)（[#424](https://github.com/DemianLi/nexus-agent/issues/424)）。
  */
 
 import type {
@@ -214,6 +218,19 @@ export interface WireHandlerOptions {
    * handler 從手上活著的 thread 補，不從檔案猜。
    */
   listThreads?(): Promise<StoredThreadList>;
+  /**
+   * 瀏覽器會話的驗證（[#424](https://github.com/DemianLi/nexus-agent/issues/424)）。
+   *
+   * **必填，沒有「不驗」的選項**：這條線上每一條路由都能以 serve 擁有者的身分操作 agent，
+   * 一個可以省略的開關遲早會被產品組裝省略。測試換的是密鑰（`fixtures.ts` 的 `TEST_BROWSER_AUTH`），
+   * 不是這道檢查。
+   */
+  readonly auth: WireAuth;
+}
+
+/** wire 只需要知道「這個請求帶的會話有沒有效」。`BrowserAuth` 滿足它。 */
+export interface WireAuth {
+  isAuthenticated(headers: Headers): boolean;
 }
 
 export interface WireHandler {
@@ -936,6 +953,13 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       // 在任何路徑判斷之前：404 的路徑一樣不回答不信任的來源。見 `request-trust.ts`。
       if (!isTrustedWireRequest(request.headers)) {
         return new Response('untrusted host or origin', { status: 403 });
+      }
+      // 同一個位置、排在圍欄之後：不存在的路徑一樣先要身分。見 `browser-auth.ts`。
+      if (!options.auth.isAuthenticated(request.headers)) {
+        return new Response('unauthorized', {
+          status: 401,
+          headers: { 'cache-control': 'no-store' },
+        });
       }
       const { pathname, searchParams } = new URL(request.url);
       const mediaType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();

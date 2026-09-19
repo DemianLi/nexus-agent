@@ -98,6 +98,9 @@ importers:
       '@nexus/plugin-validation':
         specifier: workspace:*
         version: link:../../packages/nexus-plugin-validation
+      '@nexus/web':
+        specifier: workspace:*
+        version: link:../web
       '@nexus/wire':
         specifier: workspace:*
         version: link:../../packages/nexus-wire
