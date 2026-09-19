@@ -22,7 +22,13 @@ import {
 import type { ConversationState, ThreadListOutcome } from '@nexus/wire';
 import type { SessionEvent } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { loopbackRequest } from './fixtures.js';
+import {
+  exchangeServeToken,
+  fetchWithCookie,
+  loopbackRequest,
+  serveClient,
+  TEST_BROWSER_AUTH,
+} from './fixtures.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
@@ -56,8 +62,8 @@ async function stop(server: RunningServe): Promise<void> {
 }
 
 /** 跑完一整輪。同 `serve-session-log.test.ts` 那一份。 */
-async function driveTurn(url: string, threadId: string, prompt: string): Promise<void> {
-  const client = createWireClient({ baseUrl: url });
+async function driveTurn(server: RunningServe, threadId: string, prompt: string): Promise<void> {
+  const client = await serveClient(server);
   const events = await client.openEvents(threadId);
   await client.runStart(threadId, prompt);
   let state: ConversationState = appendHumanTurn(emptyConversation(), prompt);
@@ -69,8 +75,8 @@ async function driveTurn(url: string, threadId: string, prompt: string): Promise
   await events.return?.(undefined);
 }
 
-async function list(url: string): Promise<ThreadListOutcome> {
-  return createWireClient({ baseUrl: url }).listThreads();
+async function list(server: RunningServe): Promise<ThreadListOutcome> {
+  return (await serveClient(server)).listThreads();
 }
 
 /** 這台 server 建過 agent 沒有。見檔頭第 1 件。 */
@@ -89,13 +95,13 @@ describe('GET /threads', () => {
   it('重開之後列得出以前的 thread：由新到舊、標題是第一句話，列表一條 agent 都不建', async () => {
     const root = await tmp();
     const first = await start(root);
-    await driveTurn(first.url, 'alpha', '先開的那條');
-    await driveTurn(first.url, 'beta', '後開的那條');
+    await driveTurn(first, 'alpha', '先開的那條');
+    await driveTurn(first, 'beta', '後開的那條');
     await stop(first);
 
     const lines: string[] = [];
     const second = await start(root, lines);
-    const listed = await list(second.url);
+    const listed = await list(second);
     expect(listed).toEqual({
       kind: 'ok',
       result: {
@@ -119,10 +125,10 @@ describe('GET /threads', () => {
     expect(agentBuilt(lines)).toBe(false);
 
     // 量具會動：切過去一次，agent 就建了。
-    await driveTurn(second.url, 'alpha', '接著講');
+    await driveTurn(second, 'alpha', '接著講');
     expect(agentBuilt(lines)).toBe(true);
     // 標題還是第一句；剛講過話的那條排到最前面。
-    const again = await list(second.url);
+    const again = await list(second);
     expect(
       again.kind === 'ok' && again.result.items.map((item) => [item.threadId, item.title]),
     ).toEqual([
@@ -142,7 +148,7 @@ describe('GET /threads', () => {
   it('別的把手握著那一份：照樣列得出來，也沒有建 agent', async () => {
     const root = await tmp();
     const first = await start(root);
-    await driveTurn(first.url, 'alpha', '握著的那條');
+    await driveTurn(first, 'alpha', '握著的那條');
     await stop(first);
     const holder = await openJsonlSessionStore({
       directory: join(root, projectKey(process.cwd())),
@@ -151,13 +157,13 @@ describe('GET /threads', () => {
     try {
       const lines: string[] = [];
       const second = await start(root, lines);
-      const listed = await list(second.url);
+      const listed = await list(second);
       expect(listed.kind === 'ok' && listed.result.items.map((item) => item.threadId)).toEqual([
         'alpha',
       ]);
       expect(agentBuilt(lines)).toBe(false);
       // 對照組：真的去接，撞上握著的把手。
-      await expect(driveTurn(second.url, 'alpha', '接不回來')).rejects.toThrow();
+      await expect(driveTurn(second, 'alpha', '接不回來')).rejects.toThrow();
       await stop(second);
     } finally {
       await holder.stored.close();
@@ -166,14 +172,14 @@ describe('GET /threads', () => {
 
   it('沒給 --session-log：講「列不出來」，不是一份空清單', async () => {
     const server = await start(undefined);
-    const listed = await list(server.url);
+    const listed = await list(server);
     expect(listed.kind).toBe('rejected');
     expect(listed.kind === 'rejected' && listed.message).toContain('--session-log');
   });
 
   it('還沒有任何 thread：一份空清單', async () => {
     const server = await start(await tmp());
-    expect(await list(server.url)).toEqual({ kind: 'ok', result: { items: [], unreadable: 0 } });
+    expect(await list(server)).toEqual({ kind: 'ok', result: { items: [], unreadable: 0 } });
   });
 
   /**
@@ -182,15 +188,18 @@ describe('GET /threads', () => {
    */
   it('載體層：沒帶或帶 simple request 認得的 content-type 是 415，別的 method 是 404', async () => {
     const server = await start(await tmp());
-    expect((await fetch(`${server.url}${THREADS_PATH}`)).status).toBe(415);
+    // 沒有會話 cookie 的話連 415 都輪不到：401 排在媒體型別閘門之前（#424）。
+    expect((await fetch(`${server.url}${THREADS_PATH}`)).status).toBe(401);
+    const authed = fetchWithCookie(await exchangeServeToken(server.authenticatedUrl));
+    expect((await authed(`${server.url}${THREADS_PATH}`)).status).toBe(415);
     // `text/plain` 是 CORS 放行、不發 preflight 的三個值之一：擋得住它，閘門才不是裝飾。
     expect(
-      (await fetch(`${server.url}${THREADS_PATH}`, { headers: { 'content-type': 'text/plain' } }))
+      (await authed(`${server.url}${THREADS_PATH}`, { headers: { 'content-type': 'text/plain' } }))
         .status,
     ).toBe(415);
     expect(
       (
-        await fetch(`${server.url}${THREADS_PATH}`, {
+        await authed(`${server.url}${THREADS_PATH}`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: '{}',
@@ -199,7 +208,7 @@ describe('GET /threads', () => {
     ).toBe(404);
     expect(
       (
-        await fetch(`${server.url}${THREADS_PATH}`, {
+        await authed(`${server.url}${THREADS_PATH}`, {
           headers: { 'content-type': 'application/json' },
         })
       ).status,
@@ -232,6 +241,7 @@ describe('running 標記', () => {
       updateState: async () => undefined,
     };
     const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
       createAgent: async () => {
         created += 1;
         return {

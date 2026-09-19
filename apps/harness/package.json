@@ -27,7 +27,7 @@
     "eslint": "^9.39.0",
     "tsx": "^4.22.4",
     "typescript": "^5.9.3",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.11"
   },
   "dependencies": {
     "@deepseek-ai/node-addon-system": "0.1.2",
@@ -53,6 +53,7 @@
     "@nexus/plugin-todo": "workspace:*",
     "@nexus/plugin-validation": "workspace:*",
     "@nexus/wire": "workspace:*",
+    "@nexus/web": "workspace:*",
     "deepagents": "~1.13.1",
     "langchain": "^1.5.10",
     "langsmith": ">=0.7.1 <0.10.0",

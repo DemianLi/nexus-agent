@@ -42,7 +42,7 @@
 | Phase 0–5 | **全部宣告完成**（Phase 5 於 2026-08-28 由 demian 拍板） | §5 |
 | 六大補強項的落點 | 見對照表；**狀態儲存選型**那一列的結局已被 §7 第 4 項改寫 | §6 |
 | **切出去的三份** | Phase 3 → [`development-plan-phase-3.md`](development-plan-phase-3.md)；Phase 5 → [`development-plan-phase-5.md`](development-plan-phase-5.md)；§7 風險與決策點 → [`development-plan-risks.md`](development-plan-risks.md) | #364 |
-| 今天還缺什麼（對照 dsh 51 套件） | 見 [`plugin-architecture-gap-survey.md`](plugin-architecture-gap-survey.md) 的**結論速查** | 另一份 |
+| 今天還缺什麼（對照 dsh 的頂層套件；2026-09-19 對 `ddefc45` 重核為 54 個） | 見 [`plugin-architecture-gap-survey.md`](plugin-architecture-gap-survey.md) 的**結論速查** | 另一份 |
 
 **這張表最可能的錯法不是寫錯結論，是壓掉限縮。** 建這張表時就踩到一次：§2 對「#16 兩個方向被 dsh 否掉」明文限縮過「能主張的是不存在、做了別的，不是拒絕過」，而第一版的表格把它壓回「已被 dsh 否掉」。**一列讀起來比它指向的那一節更有把握時，那一列就是錯的。**
 

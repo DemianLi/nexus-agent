@@ -37,7 +37,7 @@ import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
 import { DEFAULT_PLUGINS, createCliAgent } from './cli.js';
-import { approvalAt, loopbackRequest } from './fixtures.js';
+import { approvalAt, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
@@ -90,6 +90,7 @@ async function line(turns: readonly ScriptedTurn[]): Promise<Line> {
   });
   let captured: SessionLog | undefined;
   const handler = createWireHandler({
+    auth: TEST_BROWSER_AUTH,
     createAgent: async () => ({
       agent: built.agent as unknown as PumpAgent,
       commands: built.commands,
@@ -543,6 +544,7 @@ describe('/feedback 與零 plugin 設定', () => {
     const built = await createCliAgent({ live: false }, DEFAULT_PLUGINS);
     let captured: SessionLog | undefined;
     const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
         agent: built.agent as unknown as PumpAgent,
         commands: built.commands,

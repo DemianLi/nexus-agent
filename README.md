@@ -26,11 +26,11 @@ pnpm workspace，Node >= 22。
 
 ```bash
 pnpm install
-pnpm dev          # 啟動 web（http://localhost:5173）
+pnpm dev          # 監看 web 原始碼，重建到 apps/web/dist（vite build --watch；網頁由 serve 服務，見下面）
 pnpm lint         # eslint（遞迴全部套件）
 pnpm typecheck    # tsc --noEmit
 pnpm test         # vitest run
-pnpm build        # vite build
+pnpm build        # vite build（serve 服務的就是它產出的 apps/web/dist）
 ```
 
 跟 agent 說話（`apps/harness` 的 CLI）：
@@ -118,6 +118,8 @@ thread 接得回來**（下一段）。**eval 那條路沒有會話日誌，而�
 每一輪落定時會自己再開一輪，直到它被完成、被擋住，或用完自己的 `max_goal_rounds`
 （banner 上會說現在是哪一種）。預設關 —— 這是 dsh 那條「goal 是狀態而非調度器，自動續行
 是需要你刻意掛載的可選消費方」，而我們的入口點擁有輪迴圈，掛載的等價物就是這個旗標。
+（2026-09-19 註：那句是 dsh 當時 README 的原話，但它的 base 其實出廠就掛著續行驅動器，
+「可選」指套件可以不掛、不是出廠關著；見[調研筆記](.docs/plugin-architecture-gap-survey.md) §三第 18 列。）
 `serve` 吃同一個旗標。
 
 開著的時候**唯一的硬上限是那個目標自己的 `max_goal_rounds`**（預設 256）。模型從第
@@ -140,16 +142,36 @@ CLI、`serve`、eval 都吃這個值；這條擋的是「跑掉了」，不是�
 **一次性模式撞到這條上限時退出碼是 `2`**，其他失敗是 `1`，所以包它的腳本分得出「護欄切掉了」與
 「壞掉了」；REPL 裡撞到只印一行，不退出。
 
-在瀏覽器裡跟 agent 說話，要開兩個 terminal：
+在瀏覽器裡跟 agent 說話：先 build 網頁，再起 `serve`，然後開它**印出來的那個網址**：
 
 ```bash
-pnpm --filter @nexus/harness run serve      # agent 掛上 HTTP（http://127.0.0.1:8787）
-pnpm dev                                    # web（http://localhost:5173）
+pnpm dev                                    # 網頁建成 apps/web/dist，改了原始碼會自動重建
+pnpm --filter @nexus/harness run serve      # 印出「nexus-agent 在 http://127.0.0.1:8787/?token=…」
 ```
 
 `serve` 的組裝與 CLI 完全一樣（同一份預設 plugin 清單、同一個 `--live`、同一個
-`--workspace`），只是把 agent 掛上 HTTP。dev server 會把 `/threads` 轉給它，所以
-瀏覽器那端是同源的、不需要 CORS；harness 換了 port 就設 `NEXUS_AGENT_URL`。
+`--workspace`），只是把 agent 掛上 HTTP，並且自己服務 `apps/web/dist`——網頁與 API 同一個來源，
+不需要 CORS。改了網頁等重建完（約一兩秒），**手動重新整理**——沒有 HMR，照 dsh。
+
+**網頁從來不由 Vite 服務**（[#426](https://github.com/DemianLi/nexus-agent/issues/426)，照 dsh）：`vite` 與
+`vite preview` 會拒絕啟動。Vite 的開發伺服器會把整個 repo 的檔案交給連得到那個 port 的任何人，而部署主機是多人共用的。
+
+**網頁與 API 都要瀏覽器會話**（[#424](https://github.com/DemianLi/nexus-agent/issues/424)，照 dsh）：
+印出來的網址帶著這個行程的 token，開一次就換到一顆 cookie（`HttpOnly`、`SameSite=Strict`、30 天，
+serve 重啟之後照樣有效），沒有 cookie 的請求一律 401。綁 `127.0.0.1` 擋不住同一台機器上的其他使用者，
+這顆 cookie 才擋得住。
+
+- **那一行是敏感輸出。** token 在 serve 活著的期間都換得到 cookie。別貼給別人，也別把 serve 的輸出轉存到
+  別人讀得到的檔——`serve > serve.log` 在預設 umask 下是 `0644`。
+- **簽章密鑰住在 harness home**：`~/.nexus-agent/browser-session.json`（目錄 `0700`、檔案 `0600`；
+  `NEXUS_AGENT_HOME` 可以換位置）。刪掉它再重啟 serve，所有瀏覽器會話一起失效；這個檔別人讀得到的話，
+  serve 會拒絕啟動並告訴你要跑的 `chmod`。
+- **serve 沒在跑的時候別開那個網址。** cookie 是持有即用的憑證：別人趁 serve 沒跑先佔住同一個 port，
+  你的瀏覽器（經 SSH 轉 port 也一樣）就會把 cookie 送給他，等你在同一個 port 重開 serve，那顆 cookie 仍然有效。
+  懷疑外洩時刪掉 `~/.nexus-agent/browser-session.json` 再重啟 serve，所有既有會話一起作廢。
+- **在多人共用的主機上**，只支援從自己的電腦用 SSH 轉 port 連進去：
+  `ssh -L 8787:127.0.0.1:8787 <主機>`，然後在自己電腦的瀏覽器開 serve 印出的網址。
+
 `serve` 也吃 `--live`（或直接 `run serve:live`）—— 假模型的腳本只有四輪，問到第三句
 就會用完，畫面上會紅字說是為什麼。
 

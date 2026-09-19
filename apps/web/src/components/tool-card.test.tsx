@@ -1,0 +1,208 @@
+import type { ConversationState, ToolEntry } from '@nexus/wire';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { ToolCard } from '@/components/tool-card';
+import { WITHDRAWN_TOOL_REASON } from '@/lib/question-view';
+import { Transcript } from '@/components/transcript';
+import { axeViolations } from '@/test/axe';
+
+/** 工具卡（#406）。四格狀態怎麼從日誌定出來在 `@nexus/wire` 與 harness 的測試裡；這裡只驗畫出來的。 */
+
+afterEach(cleanup);
+
+function tool(overrides: Partial<ToolEntry> = {}): ToolEntry {
+  return {
+    kind: 'tool',
+    id: 'tool-1',
+    callId: 'call-1',
+    name: 'read_file',
+    input: '{"file_path":"src/App.tsx"}',
+    status: 'done',
+    attribution: { kind: 'root' },
+    ...overrides,
+  };
+}
+
+describe('工具卡', () => {
+  it.each([
+    ['running', '執行中'],
+    ['suspended', '等你回答'],
+    ['done', '完成'],
+    ['failed', '失敗'],
+  ] as const)('四格狀態各自的字：%s → %s', (status, label) => {
+    render(<ToolCard entry={tool({ status })} beam={false} />);
+    const card = screen.getByTestId('tool-entry');
+    expect(card.getAttribute('data-status')).toBe(status);
+    expect(within(card).getByText(label)).toBeTruthy();
+  });
+
+  it('收著一行：分類的標題、工具名、參數摘要；展開看排好的參數', () => {
+    render(<ToolCard entry={tool()} beam={false} />);
+    const trigger = screen.getByRole('button', { name: /讀取/ });
+    expect(trigger.textContent).toContain('read_file');
+    expect(trigger.textContent).toContain('src/App.tsx');
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    // 參數高亮後被切成一段一段的 span，改看整塊程式碼的字。
+    expect(document.querySelector('.md-code')).toBeNull();
+
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(document.querySelector('.md-code pre')?.textContent).toContain(
+      '"file_path": "src/App.tsx"',
+    );
+  });
+
+  it('失敗時收著那一行就是錯誤的第一行，展開看全文', () => {
+    render(
+      <ToolCard
+        entry={tool({ status: 'failed', error: '人拒絕了這次呼叫\n第二行細節' })}
+        beam={false}
+      />,
+    );
+    const trigger = screen.getByRole('button', { name: /讀取/ });
+    expect(trigger.textContent).toContain('人拒絕了這次呼叫');
+    expect(trigger.textContent).not.toContain('第二行細節');
+    fireEvent.click(trigger);
+    expect(screen.getByText(/第二行細節/)).toBeTruthy();
+  });
+
+  it('子代理的工具帶歸屬；未歸屬照講', () => {
+    render(
+      <>
+        <ToolCard
+          entry={tool({ attribution: { kind: 'subagent', name: 'writer', callId: 'call-0' } })}
+          beam={false}
+        />
+        <ToolCard
+          entry={tool({ id: 't2', attribution: { kind: 'unattributed', namespace: ['tools:x'] } })}
+          beam={false}
+        />
+      </>,
+    );
+    expect(screen.getByText('子代理 writer')).toBeTruthy();
+    expect(screen.getByText('未歸屬的子代理')).toBeTruthy();
+  });
+
+  it('狀態變化不唸：卡片裡沒有 live region', () => {
+    const { container } = render(<ToolCard entry={tool({ status: 'running' })} beam />);
+    expect(container.querySelector('[aria-live], [role="status"], [role="alert"]')).toBeNull();
+  });
+});
+
+describe('對話流裡的工具卡', () => {
+  function state(entries: ToolEntry[]): ConversationState {
+    return { status: 'running', entries, pendings: [] } as unknown as ConversationState;
+  }
+
+  it('執行中的邊框光同時最多一個：給最後一顆還在跑的', () => {
+    render(
+      <Transcript
+        state={state([
+          tool({ id: 'a', status: 'running' }),
+          tool({ id: 'b', status: 'done' }),
+          tool({ id: 'c', status: 'running' }),
+        ])}
+        isFresh={() => false}
+      />,
+    );
+    const active = screen
+      .getAllByTestId('tool-entry')
+      .map((card) => card.getAttribute('data-active'));
+    expect(active).toEqual(['false', 'false', 'true']);
+  });
+
+  it('含工具卡（收著與展開）的對話流過 axe', async () => {
+    const { container } = render(
+      <Transcript
+        state={state([
+          tool({ id: 'a', status: 'running', name: 'execute', input: '{"command":"pnpm test"}' }),
+          tool({
+            id: 'b',
+            status: 'failed',
+            error: '沒有這個檔',
+            attribution: { kind: 'subagent', name: 'writer', callId: 'call-0' },
+          }),
+          tool({ id: 'c', name: 'mcp__github__create_issue', input: '{"title":"壞了"}' }),
+        ])}
+        isFresh={() => false}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /執行指令/ }));
+    expect(await axeViolations(container)).toEqual([]);
+  });
+
+  it('停在提問時被停止：等人回答時就在畫面上的那張卡，翻成停止的那一刻打開（實跑抓到的）', () => {
+    const ask = {
+      name: 'ask_user_question',
+      input: JSON.stringify({ questions: [{ id: 'd', question: '哪一天？' }] }),
+    };
+    const view = render(<ToolCard entry={tool({ ...ask, status: 'suspended' })} beam={false} />);
+    const card = screen.getByTestId('tool-entry');
+    expect(card.getAttribute('data-state')).toBe('closed');
+    view.rerender(
+      <ToolCard
+        entry={tool({ ...ask, status: 'failed', error: `Error: ${WITHDRAWN_TOOL_REASON}` })}
+        beam={false}
+      />,
+    );
+    expect(card.getAttribute('data-state')).toBe('open');
+    expect(within(card).getByText('哪一天？')).toBeTruthy();
+    expect(within(card).getAllByText('已停止，請直接打字回覆').length).toBeGreaterThan(0);
+  });
+
+  describe('答完的提問卡（§4.3）', () => {
+    const ask = tool({
+      name: 'ask_user_question',
+      input: JSON.stringify({
+        questions: [
+          { id: 'day', question: '哪一天？', options: [{ label: '週一' }, { label: '週二' }] },
+          { id: 'food', question: '要準備什麼？', multi_select: true },
+        ],
+      }),
+    });
+
+    it('配到答案：收著講「已回答 N 題」，展開逐題「問題 → 回答」，不畫參數原文', () => {
+      render(
+        <ToolCard
+          entry={ask}
+          beam={false}
+          answer={{
+            kind: 'answer',
+            id: 'answer-q',
+            answers: [
+              { id: 'day', selected: ['週二'] },
+              { id: 'food', selected: ['茶'], custom: '氣泡水' },
+            ],
+          }}
+        />,
+      );
+      const card = screen.getByTestId('tool-entry');
+      expect(within(card).getByText('已回答 2 題')).toBeTruthy();
+      fireEvent.click(within(card).getByRole('button', { name: /提問/ }));
+      expect(
+        within(card)
+          .getAllByTestId('question-row')
+          .map((row) => row.textContent),
+      ).toEqual(['哪一天？→ 回答：週二', '要準備什麼？→ 回答：茶、氣泡水']);
+      expect(card.textContent).not.toContain('"questions"');
+      expect(within(card).queryByText(/看不到/)).toBeNull();
+    });
+
+    it('配不到（重新整理、別的分頁）：照樣「已回答 N 題」，展開列題目與選項，講明答案在哪', () => {
+      render(<ToolCard entry={ask} beam={false} />);
+      const card = screen.getByTestId('tool-entry');
+      expect(within(card).getByText('已回答 2 題')).toBeTruthy();
+      fireEvent.click(within(card).getByRole('button', { name: /提問/ }));
+      expect(within(card).getAllByTestId('question-row')).toHaveLength(2);
+      expect(within(card).getByText('週一')).toBeTruthy();
+      expect(within(card).queryByText(/→/)).toBeNull();
+      expect(within(card).getByText('答案只記在作答的那個分頁，這裡看不到。')).toBeTruthy();
+    });
+
+    it('還沒答完：收著講第一題與題數，不是參數 JSON（#409 第一刀留下的）', () => {
+      render(<ToolCard entry={{ ...ask, status: 'suspended' }} beam={false} />);
+      expect(screen.getByText('哪一天？（共 2 題）')).toBeTruthy();
+    });
+  });
+});

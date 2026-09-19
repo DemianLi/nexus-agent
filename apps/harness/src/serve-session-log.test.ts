@@ -18,18 +18,14 @@
 import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  appendHumanTurn,
-  createWireClient,
-  emptyConversation,
-  reduceConversation,
-} from '@nexus/wire';
+import { appendHumanTurn, emptyConversation, reduceConversation } from '@nexus/wire';
 import type { ConversationState } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 import type { SessionEvent } from '@nexus/core';
+import { serveClient } from './fixtures.js';
 
 let running: RunningServe | undefined;
 
@@ -59,8 +55,8 @@ async function onlyProjectDir(root: string): Promise<string> {
  * 折疊器的 `status` 是收線條件——同 `serve.test.ts` 那條，理由也一樣：這一層沒有
  * 「這一輪完了」的單一封包，有的是折出來的狀態。
  */
-async function driveTurn(url: string, threadId: string): Promise<void> {
-  const client = createWireClient({ baseUrl: url });
+async function driveTurn(server: RunningServe, threadId: string): Promise<void> {
+  const client = await serveClient(server);
   const events = await client.openEvents(threadId);
   const prompt = '把這句話回聲一次。';
   await client.runStart(threadId, prompt);
@@ -89,8 +85,8 @@ describe('serve 的 --session-log', () => {
       env: {},
     });
     const started = running as RunningServe;
-    await driveTurn(started.url, 'alpha');
-    await driveTurn(started.url, 'beta');
+    await driveTurn(started, 'alpha');
+    await driveTurn(started, 'beta');
     // 收線會排空並關檔——落盤的驗收只有在 `close()` 之後才成立。
     await started.close();
     running = undefined;
@@ -115,7 +111,7 @@ describe('serve 的 --session-log', () => {
       env: {},
     });
     const started = running as RunningServe;
-    await driveTurn(started.url, 'gamma');
+    await driveTurn(started, 'gamma');
     await started.close();
     running = undefined;
 
@@ -148,8 +144,8 @@ describe('serve 的 --session-log', () => {
       env: {},
     });
     const started = running as RunningServe;
-    await driveTurn(started.url, 'a~b');
-    await driveTurn(started.url, 'a_b');
+    await driveTurn(started, 'a~b');
+    await driveTurn(started, 'a_b');
     await started.close();
     running = undefined;
 
@@ -169,7 +165,7 @@ describe('serve 的 --session-log', () => {
       log: (line) => lines.push(line),
       env: {},
     });
-    await driveTurn((running as RunningServe).url, 'delta');
+    await driveTurn(running as RunningServe, 'delta');
     expect(lines.join('\n')).toContain('會話日誌：只在記憶體裡');
     expect(lines.join('\n')).toContain('--session-log');
   });
@@ -235,10 +231,10 @@ describe('重開 server 之後接得回同一條 thread', () => {
   it('同一個 thread id：同一個檔接著寫，seq 連續，中間只有一顆 end-seed', async () => {
     const root = await tmp('nexus-serve-resume-');
     const first = await start(root);
-    await driveTurn(first.url, 'alpha');
+    await driveTurn(first, 'alpha');
     await stop(first);
     const second = await start(root);
-    await driveTurn(second.url, 'alpha');
+    await driveTurn(second, 'alpha');
     await stop(second);
 
     const dir = await onlyProjectDir(root);
@@ -252,7 +248,7 @@ describe('重開 server 之後接得回同一條 thread', () => {
   it('日誌壞了：這條 thread 起不來，檔案一個位元組都沒動', async () => {
     const root = await tmp('nexus-serve-resume-');
     const first = await start(root);
-    await driveTurn(first.url, 'alpha');
+    await driveTurn(first, 'alpha');
     await stop(first);
     const log = join(projectDirOf(root), 'alpha.jsonl');
     const lines = (await readFile(log, 'utf8')).split('\n');
@@ -261,7 +257,7 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const before = await readFile(log, 'utf8');
 
     const second = await start(root);
-    await expect(driveTurn(second.url, 'alpha')).rejects.toThrow();
+    await expect(driveTurn(second, 'alpha')).rejects.toThrow();
     await stop(second);
     expect(await readFile(log, 'utf8')).toBe(before);
   });
@@ -269,14 +265,14 @@ describe('重開 server 之後接得回同一條 thread', () => {
   it('別的把手握著：起不來；它放了之後同一台 server 重試接得回來', async () => {
     const root = await tmp('nexus-serve-resume-');
     const first = await start(root);
-    await driveTurn(first.url, 'alpha');
+    await driveTurn(first, 'alpha');
     await stop(first);
     const holder = await openJsonlSessionStore({ directory: projectDirOf(root) }).resume('alpha');
 
     const second = await start(root);
-    await expect(driveTurn(second.url, 'alpha')).rejects.toThrow();
+    await expect(driveTurn(second, 'alpha')).rejects.toThrow();
     await holder.stored.close();
-    await driveTurn(second.url, 'alpha');
+    await driveTurn(second, 'alpha');
     await stop(second);
 
     const events = readEvents(await readFile(join(projectDirOf(root), 'alpha.jsonl'), 'utf8'));
@@ -290,7 +286,7 @@ describe('重開 server 之後接得回同一條 thread', () => {
   it('目錄對不上：擋下；改回來之後同一台 server 重試接得回來', async () => {
     const root = await tmp('nexus-serve-resume-');
     const first = await start(root);
-    await driveTurn(first.url, 'alpha');
+    await driveTurn(first, 'alpha');
     await stop(first);
     const headerPath = join(projectDirOf(root), 'alpha.header.json');
     const good = await readFile(headerPath, 'utf8');
@@ -299,10 +295,10 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const before = await readFile(log, 'utf8');
 
     const second = await start(root);
-    await expect(driveTurn(second.url, 'alpha')).rejects.toThrow();
+    await expect(driveTurn(second, 'alpha')).rejects.toThrow();
     expect(await readFile(log, 'utf8')).toBe(before);
     await writeFile(headerPath, good);
-    await driveTurn(second.url, 'alpha');
+    await driveTurn(second, 'alpha');
     await stop(second);
   });
 
@@ -310,20 +306,20 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const root = await tmp('nexus-serve-resume-');
     const workspace = await tmp('nexus-serve-resume-ws-');
     const first = await start(root, ['--workspace', workspace]);
-    const client = createWireClient({ baseUrl: first.url });
+    const client = await serveClient(first);
     await client.slashRun('alpha', '/sandbox read-only');
     await stop(first);
 
     const bare = await start(root);
     // 建不起這條 thread 是協定層的錯（`wire-handler.ts` 的 `threadOrError`）：斜線命令回
     // `rejected`，不是拋。原因要講到 `--workspace`——那是人唯一改得動的東西。
-    const refused = await createWireClient({ baseUrl: bare.url }).slashRun('alpha', '/sandbox');
+    const refused = await (await serveClient(bare)).slashRun('alpha', '/sandbox');
     expect(refused).toMatchObject({ kind: 'rejected' });
     expect(JSON.stringify(refused)).toContain('--workspace');
     await stop(bare);
 
     const second = await start(root, ['--workspace', workspace]);
-    const reported = await createWireClient({ baseUrl: second.url }).slashRun('alpha', '/sandbox');
+    const reported = await (await serveClient(second)).slashRun('alpha', '/sandbox');
     await stop(second);
     // 前提：預設是 workspace-write，所以看得到 read-only 才證明是從日誌回來的。
     expect(JSON.stringify(reported)).toContain('read-only');

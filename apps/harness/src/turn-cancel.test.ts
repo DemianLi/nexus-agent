@@ -25,7 +25,7 @@ import { createWireClient } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
-import { emptyCommandPoint, loopbackRequest } from './fixtures.js';
+import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
@@ -326,6 +326,7 @@ describe('線上', () => {
     });
     let created = 0;
     const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
       createAgent: async () => {
         created += 1;
         return {

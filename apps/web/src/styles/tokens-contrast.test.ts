@@ -73,6 +73,12 @@ const TEXT: [string, string][] = [
   ['success', 'card'],
   ['warning', 'card'],
   ['info', 'card'],
+  // 程式碼區塊（stage）上的語法色（`shiki.css`）。
+  ['foreground', 'stage'],
+  ['brand', 'stage'],
+  ['destructive', 'stage'],
+  ['success', 'stage'],
+  ['warning', 'stage'],
 ];
 
 const NON_TEXT: [string, string][] = [

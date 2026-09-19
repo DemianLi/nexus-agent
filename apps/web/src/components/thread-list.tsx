@@ -1,5 +1,13 @@
 import type { ThreadListResult, ThreadSummary, WireClient } from '@nexus/wire';
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
+
+import {
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from '@/components/ui/sidebar';
 
 /**
  * 以前的會話——[#302](https://github.com/DemianLi/nexus-agent/issues/302)。照 dsh 的 `session/list`：
@@ -44,6 +52,7 @@ export function ThreadList({
   readonly onPick: (threadId: string) => void;
 }) {
   const [listing, setListing] = useState<Listing>({ kind: 'loading' });
+  const labelId = useId();
 
   useEffect(() => {
     let live = true;
@@ -75,34 +84,36 @@ export function ThreadList({
       : [];
 
   return (
-    <section
-      aria-label="以前的會話"
-      className="bg-card shadow-material space-y-2 rounded-md p-3 text-sm"
-    >
-      {listing.kind === 'loading' && <p className="text-muted-foreground">讀取中…</p>}
+    <SidebarGroup role="group" aria-labelledby={labelId} className="text-sm">
+      <SidebarGroupLabel id={labelId}>以前的會話</SidebarGroupLabel>
+      {listing.kind === 'loading' && <p className="text-muted-foreground px-2">讀取中…</p>}
       {/* 列不出來與「沒有」是兩件事：沒開 --session-log 的 server 走這一格，原因照 server 講的印。 */}
-      {listing.kind === 'failed' && <p className="text-destructive">列不出來：{listing.message}</p>}
+      {listing.kind === 'failed' && (
+        <p className="text-destructive px-2">列不出來：{listing.message}</p>
+      )}
       {listing.kind === 'ok' && (
         <>
           {/*
            **判的是藏過之後的**：磁碟上只剩別條空白會話時，列表一列都不畫——那些不是以前的會話，所以照講「還沒有」。
            */}
           {visible.length === 0 ? (
-            <p className="text-muted-foreground">這個專案還沒有以前的會話。</p>
+            <p className="text-muted-foreground px-2">這個專案還沒有以前的會話。</p>
           ) : (
-            <ul className="space-y-1">
+            <SidebarMenu>
               {visible.map((item) => {
                 const current = item.threadId === currentThreadId;
                 return (
-                  <li key={item.threadId}>
-                    <button
+                  <SidebarMenuItem key={item.threadId}>
+                    {/* 觸控目標 44px，1024 以上回到 36（§9）。 */}
+                    <SidebarMenuButton
                       type="button"
+                      isActive={current}
                       disabled={current}
                       onClick={() => onPick(item.threadId)}
-                      className="hover:bg-muted flex w-full items-baseline justify-between gap-2 rounded px-2 py-1 text-left disabled:opacity-60"
+                      className="h-auto min-h-11 flex-col items-start gap-0.5 lg:min-h-9"
                     >
-                      <span className="truncate">{labelOf(item)}</span>
-                      <span className="text-muted-foreground shrink-0 text-xs">
+                      <span className="w-full truncate">{labelOf(item)}</span>
+                      <span className="text-muted-foreground text-xs">
                         {[
                           ...(current ? ['目前這條'] : []),
                           ...(item.running ? ['執行中'] : []),
@@ -110,19 +121,19 @@ export function ThreadList({
                           ...(item.blank ? [] : [formatTime(item.updatedAt)]),
                         ].join(' · ')}
                       </span>
-                    </button>
-                  </li>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
                 );
               })}
-            </ul>
+            </SidebarMenu>
           )}
           {listing.result.unreadable > 0 && (
-            <p className="text-muted-foreground text-xs">
+            <p className="text-muted-foreground px-2 text-xs">
               另有 {listing.result.unreadable} 份讀不懂、或格式比這台 server 新，沒有列出來。
             </p>
           )}
         </>
       )}
-    </section>
+    </SidebarGroup>
   );
 }
