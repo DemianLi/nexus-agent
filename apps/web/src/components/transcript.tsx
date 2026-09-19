@@ -285,7 +285,6 @@ export function Transcript({
   isFresh,
   feedback,
   before,
-  after = [],
 }: {
   state: ConversationState;
   /** 哪幾則是這一次看著它長出來的（`useFreshItems`，在常駐的元件裡算）。 */
@@ -293,8 +292,6 @@ export function Transcript({
   feedback?: TranscriptFeedback;
   /** 列表最上面的東西（「載入更早的訊息」）。 */
   before?: ReactNode;
-  /** 接在最後一則後面的（等人處理的卡片），各自帶一個 id。 */
-  after?: ReadonlyArray<{ readonly id: string; readonly node: ReactNode }>;
 }) {
   // 執行中的邊框光同時最多一個（§7 效能）：給最後一顆還在跑的工具。
   const beamId = state.entries.findLast(
@@ -311,7 +308,6 @@ export function Transcript({
         />
       ),
     })),
-    ...after,
   ];
   const announced = useFinishedReply(state.entries, isFresh);
 

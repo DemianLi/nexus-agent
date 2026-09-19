@@ -6,9 +6,11 @@
  * - **動效**（§7）：展開收合 250／150 高度＋透明度（collapsible）；出現往上 8px 由對話列表管；
  *   執行中的邊框光**同時最多一個**（`beam` 由呼叫端決定給誰）。
  * - **報讀**（§8）：狀態變化不唸，狀態由狀態列講；orb 旁有同義文字，所以 `aria-hidden`。
+ * - **停在提問時被停止的 `ask_user_question`**（§4.3，#409）：直接展開、列出題目與選項，標「已停止，請直接打字回覆」，
+ *   不畫紅字——停止不是失敗（#276），而那句紅字是給模型看的英文。判法在 `lib/question-view.ts`。
  */
 
-import type { Attribution, ToolEntry } from '@nexus/wire';
+import type { Attribution, QuestionItem, ToolEntry } from '@nexus/wire';
 import { Check, ChevronDown, Hand, X } from 'lucide-react';
 import { useState } from 'react';
 
@@ -16,6 +18,7 @@ import { AgentOrb } from '@/components/agent-orb';
 import { CodeBlock } from '@/components/markdown/code-block';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { isStoppedQuestion, questionsOf, STOPPED_QUESTION_TEXT } from '@/lib/question-view';
 import { classifyTool, firstLine, toolInputBody, toolSummary, toolTitle } from '@/lib/tool-view';
 
 export const TOOL_STATUS_LABEL = {
@@ -45,11 +48,45 @@ function StatusIcon({ status }: { status: ToolEntry['status'] }) {
   return <X aria-hidden className="text-destructive size-4" />;
 }
 
+/** 停下來那一組問題：題目與選項照問的順序列出來，人照著打字回覆。 */
+function StoppedQuestions({ questions }: { questions: readonly QuestionItem[] }) {
+  return (
+    <ol className="bg-stage shadow-stage flex flex-col gap-3 rounded-xl p-3 text-sm">
+      {questions.map((question) => (
+        <li key={question.id} className="flex flex-col gap-1">
+          {question.header !== undefined && (
+            <span className="text-muted-foreground text-xs">{question.header}</span>
+          )}
+          <span>{question.question}</span>
+          {question.options !== undefined && question.options.length > 0 && (
+            <ul className="text-muted-foreground flex list-disc flex-col gap-0.5 pl-5 text-xs">
+              {question.options.map((option) => (
+                <li key={option.label}>
+                  {option.label}
+                  {option.description !== undefined && `：${option.description}`}
+                </li>
+              ))}
+            </ul>
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 export function ToolCard({ entry, beam }: { entry: ToolEntry; beam: boolean }) {
-  const [open, setOpen] = useState(false);
+  const stopped = isStoppedQuestion(entry);
+  const [open, setOpen] = useState(stopped);
+  // 停下來的那一刻這張卡早就在畫面上了（等你回答），所以要在**翻成**停止時打開，初始值只管重播出來的那種。
+  const [wasStopped, setWasStopped] = useState(stopped);
+  if (stopped !== wasStopped) {
+    setWasStopped(stopped);
+    if (stopped) setOpen(true);
+  }
   const variant = classifyTool(entry.name);
   const body = toolInputBody(entry.name, entry.input);
-  const failed = entry.status === 'failed';
+  const questions = stopped ? questionsOf(entry.input) : undefined;
+  const failed = entry.status === 'failed' && !stopped;
   return (
     <Collapsible
       open={open}
@@ -63,7 +100,11 @@ export function ToolCard({ entry, beam }: { entry: ToolEntry; beam: boolean }) {
     >
       <CollapsibleTrigger className="group hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-[20px] px-3 py-2 text-left transition-colors duration-(--duration-quick)">
         <span className="flex size-5 shrink-0 items-center justify-center">
-          <StatusIcon status={entry.status} />
+          {stopped ? (
+            <X aria-hidden className="text-muted-foreground size-4" />
+          ) : (
+            <StatusIcon status={entry.status} />
+          )}
         </span>
         <span className="text-ui shrink-0 font-medium">{toolTitle(entry.name)}</span>
         <code className="text-muted-foreground shrink-0 font-mono text-xs">{entry.name}</code>
@@ -71,15 +112,17 @@ export function ToolCard({ entry, beam }: { entry: ToolEntry; beam: boolean }) {
           className={`min-w-0 flex-1 truncate text-xs ${failed ? 'text-destructive' : 'text-muted-foreground'}`}
         >
           {/* 失敗時這一格換成錯誤的第一行（照 dsh `errorSummary`）：收著也看得到為什麼。 */}
-          {failed && entry.error !== undefined
-            ? firstLine(entry.error)
-            : toolSummary(entry.name, entry.input)}
+          {stopped
+            ? STOPPED_QUESTION_TEXT
+            : failed && entry.error !== undefined
+              ? firstLine(entry.error)
+              : toolSummary(entry.name, entry.input)}
         </span>
         <span className="hidden sm:inline-flex">
           <AttributionBadge attribution={entry.attribution} />
         </span>
         <Badge variant={failed ? 'destructive' : 'secondary'} className="shrink-0">
-          {TOOL_STATUS_LABEL[entry.status]}
+          {stopped ? '已停止' : TOOL_STATUS_LABEL[entry.status]}
         </Badge>
         <ChevronDown
           aria-hidden
@@ -94,12 +137,14 @@ export function ToolCard({ entry, beam }: { entry: ToolEntry; beam: boolean }) {
               <AttributionBadge attribution={entry.attribution} />
             </div>
           )}
-          {body === undefined ? (
+          {questions !== undefined ? (
+            <StoppedQuestions questions={questions} />
+          ) : body === undefined ? (
             <p className="text-muted-foreground px-3 py-2 text-xs">沒有參數。</p>
           ) : (
             <CodeBlock code={body.text} lang={body.lang} streaming={entry.status === 'running'} />
           )}
-          {entry.error !== undefined && (
+          {entry.error !== undefined && !stopped && (
             <pre className="bg-stage shadow-stage text-destructive rounded-xl p-3 font-mono text-xs whitespace-pre-wrap">
               {entry.error}
             </pre>

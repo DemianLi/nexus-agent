@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ToolCard } from '@/components/tool-card';
+import { WITHDRAWN_TOOL_REASON } from '@/lib/question-view';
 import { Transcript } from '@/components/transcript';
 import { axeViolations } from '@/test/axe';
 
@@ -129,5 +130,24 @@ describe('對話流裡的工具卡', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: /執行指令/ }));
     expect(await axeViolations(container)).toEqual([]);
+  });
+
+  it('停在提問時被停止：等人回答時就在畫面上的那張卡，翻成停止的那一刻打開（實跑抓到的）', () => {
+    const ask = {
+      name: 'ask_user_question',
+      input: JSON.stringify({ questions: [{ id: 'd', question: '哪一天？' }] }),
+    };
+    const view = render(<ToolCard entry={tool({ ...ask, status: 'suspended' })} beam={false} />);
+    const card = screen.getByTestId('tool-entry');
+    expect(card.getAttribute('data-state')).toBe('closed');
+    view.rerender(
+      <ToolCard
+        entry={tool({ ...ask, status: 'failed', error: `Error: ${WITHDRAWN_TOOL_REASON}` })}
+        beam={false}
+      />,
+    );
+    expect(card.getAttribute('data-state')).toBe('open');
+    expect(within(card).getByText('哪一天？')).toBeTruthy();
+    expect(within(card).getAllByText('已停止，請直接打字回覆').length).toBeGreaterThan(0);
   });
 });
