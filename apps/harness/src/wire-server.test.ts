@@ -2,6 +2,7 @@ import { tool } from '@langchain/core/tools';
 import { createWireClient } from '@nexus/wire';
 import type { Event } from '@nexus/wire';
 import { createDeepAgent, StateBackend } from 'deepagents';
+import { connect } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -14,6 +15,7 @@ import {
 } from './fixtures.js';
 import { createWireHandler } from './wire-handler.js';
 import { startWireServer } from './wire-server.js';
+import type { WireHandler } from './wire-handler.js';
 import type { WireServer } from './wire-server.js';
 
 /**
@@ -164,5 +166,57 @@ describe('接上真的 socket', () => {
         .map((frame) => (frame.params.data as { tool_name?: string }).tool_name),
     ).toContain('take_note');
     handler.close();
+  });
+});
+
+/** 直接寫進 socket 的請求，才寫得出 absolute-form 的請求行與壞掉的網址（fetch 會先幫你正規化）。 */
+function rawRequest(port: number, text: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, '127.0.0.1', () => socket.write(text));
+    let data = '';
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk: string) => {
+      data += chunk;
+    });
+    socket.on('end', () => resolve(data));
+    socket.on('error', reject);
+  });
+}
+
+describe('最後一道防線（照 dsh webserver）', () => {
+  it('absolute-form 的請求行照樣處理：只取路徑與 query，帶的 authority 不算數', async () => {
+    const seen: string[] = [];
+    const handler: WireHandler = {
+      handle: async (request) => {
+        seen.push(request.url);
+        return new Response('ok');
+      },
+      close: async () => undefined,
+    };
+    running = await startWireServer({ handler });
+    const port = Number(new URL(running.url).port);
+    const reply = await rawRequest(
+      port,
+      `GET http://evil.example/threads/x?y=1 HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`,
+    );
+    expect(reply.split('\r\n', 1)[0]).toBe('HTTP/1.1 200 OK');
+    expect(seen).toEqual([`${running.url}/threads/x?y=1`]);
+  });
+
+  it('handler 拋錯：記一筆、回 400，行程照跑、下一個請求照常', async () => {
+    const warned: Error[] = [];
+    const handler: WireHandler = {
+      handle: async (request) => {
+        if (new URL(request.url).pathname === '/boom') throw new Error('炸了');
+        return new Response('ok');
+      },
+      close: async () => undefined,
+    };
+    running = await startWireServer({ handler, warn: (error) => void warned.push(error) });
+    expect((await fetch(`${running.url}/boom`)).status).toBe(400);
+    expect(warned.map((error) => error.message)).toEqual(['炸了']);
+    const next = await fetch(`${running.url}/fine`);
+    expect(next.status).toBe(200);
+    expect(await next.text()).toBe('ok');
   });
 });

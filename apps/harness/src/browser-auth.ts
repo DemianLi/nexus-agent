@@ -45,7 +45,7 @@ const COOKIE_PREFIX = 'nexus-auth-';
 const COOKIE_PAYLOAD_VERSION = 1;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]*$/;
 const UNAUTHORIZED_TEXT =
-  'nexus-agent 需要登入：請重開 serve 啟動時印出的那個網址（帶 ?token=）。\n';
+  'nexus-agent 需要登入：請在瀏覽器開 serve 啟動時印出的那個網址（帶 ?token=）。\n';
 
 interface BrowserCookiePayload {
   readonly version: typeof COOKIE_PAYLOAD_VERSION;

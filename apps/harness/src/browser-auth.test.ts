@@ -128,7 +128,7 @@ describe('BrowserAuth', () => {
       expect(Object.fromEntries(denied?.headers.entries() ?? [])).toEqual(UNAUTHORIZED_HEADERS);
       const body = await denied?.text();
       if (candidate.method === 'HEAD') expect(body).toBe('');
-      else expect(body).toContain('重開 serve 啟動時印出的那個網址');
+      else expect(body).toContain('在瀏覽器開 serve 啟動時印出的那個網址');
     }
   });
 
@@ -179,6 +179,16 @@ describe('BrowserAuth', () => {
     // 別把密鑰簽的。
     const foreign = exchange(new BrowserAuth(Buffer.alloc(32, 4)));
     expect(auth.isAuthenticated(headers(AUTHORITY, foreign.cookie))).toBe(false);
+
+    // 過期的邊界精確到毫秒：到期前一毫秒還認，到期那一刻就不認。
+    const boundary = new BrowserAuth(SECRET);
+    vi.setSystemTime(new Date('2026-09-19T00:00:00.000Z'));
+    const issued = exchange(boundary).cookie;
+    vi.setSystemTime(new Date('2026-10-18T23:59:59.999Z'));
+    expect(boundary.isAuthenticated(headers(AUTHORITY, issued))).toBe(true);
+    vi.setSystemTime(new Date('2026-10-19T00:00:00.000Z'));
+    expect(boundary.isAuthenticated(headers(AUTHORITY, issued))).toBe(false);
+    vi.setSystemTime(new Date('2026-09-19T00:00:00.000Z'));
 
     // 設定的期限比 cookie 帶的短：不認。
     expect(new BrowserAuth(SECRET, 1).isAuthenticated(headers(AUTHORITY, cookie))).toBe(false);

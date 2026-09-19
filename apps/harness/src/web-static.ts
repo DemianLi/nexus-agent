@@ -13,9 +13,8 @@
  *
  * **dist 存不存在在請求當下才判**，同 dsh：沒 build 的時候 serve 照樣起得來，index 回 404。
  *
- * **跟 dsh 不同的一格**：網址的百分比編碼解不開時 dsh 讓它拋給 webserver 的失敗處理；我們的
- * `wire-server.ts` 把 handler 放在一個沒人接的 async 裡，拋出去會變成沒人處理的 rejection，
- * 所以這裡回 400。
+ * **其他失敗照 dsh 往外拋**：百分比編碼解不開、「找不到」以外的檔案系統錯誤，交給 `wire-server.ts`
+ * 那道最後防線記一筆、回 400（dsh 的 webserver 同一個位置同一種處置）。
  */
 
 import { readFile } from 'node:fs/promises';
@@ -40,7 +39,7 @@ const MIME: Readonly<Record<string, string>> = {
   '.ico': 'image/x-icon',
 };
 
-/** 只有這幾種算「找不到」；其他檔案系統失敗照實回 500。 */
+/** 只有這幾種算「找不到」；其他檔案系統失敗照拋（見檔頭）。 */
 const STATIC_MISS_CODES: ReadonlySet<string | undefined> = new Set(['ENOENT', 'EISDIR', 'ENOTDIR']);
 
 export interface WebStaticOptions {
@@ -58,7 +57,7 @@ function isStaticMiss(error: unknown): boolean {
  * 建一個服務 `dist` 的 handler。
  *
  * @param options - `dist` 的位置與 index 的認證。
- * @returns `(Request) => Response`；不會拋，所有失敗都變成狀態碼。
+ * @returns `(Request) => Response`。解不開的網址與「找不到」以外的讀檔失敗會拋，交給 `wire-server.ts`。
  */
 export function createWebStaticHandler(
   options: WebStaticOptions,
@@ -70,13 +69,8 @@ export function createWebStaticHandler(
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       return new Response(null, { status: 405 });
     }
-    let pathname: string;
-    try {
-      pathname = decodeURIComponent(new URL(request.url).pathname);
-    } catch {
-      // 百分比編碼解不開（例如孤立的 `%`）：見檔頭最後一段。
-      return new Response(null, { status: 400 });
-    }
+    // 解不開的百分比編碼（例如孤立的 `%`）在這裡拋：見檔頭最後一段。
+    const pathname = decodeURIComponent(new URL(request.url).pathname);
     const target = resolve(normalize(join(distRoot, pathname)));
     // `sep` 而不是 '/'：Windows 上 resolve() 給的是反斜線。
     if (target !== distRoot && !target.startsWith(distRoot + sep)) {
@@ -92,7 +86,7 @@ export function createWebStaticHandler(
       body = await readFile(isIndex ? distIndex : target);
     } catch (error) {
       if (isStaticMiss(error)) return new Response(null, { status: 404 });
-      return new Response(null, { status: 500 });
+      throw error;
     }
     const type = isIndex ? HTML_MIME : (MIME[extname(target)] ?? 'application/octet-stream');
     return new Response(request.method === 'HEAD' ? null : body, {

@@ -2,7 +2,7 @@
  * 由 serve 服務 `dist`（#424）：分面照 dsh `frontend-static` 的 `serveStatic`。
  */
 
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -49,7 +49,7 @@ describe('createWebStaticHandler', () => {
     for (const path of ['/', '/index.html']) {
       const denied = await handle(get(path));
       expect(denied.status).toBe(401);
-      expect(await denied.text()).toContain('重開 serve 啟動時印出的那個網址');
+      expect(await denied.text()).toContain('在瀏覽器開 serve 啟動時印出的那個網址');
 
       const served = await handle(get(path, { cookie }));
       expect(served.status).toBe(200);
@@ -113,9 +113,18 @@ describe('createWebStaticHandler', () => {
     expect(await headIndex.text()).toBe('');
   });
 
-  it('百分比編碼解不開：400，不拋', async () => {
-    const response = await handle(get('/%E0%A4%A'));
-    expect(response.status).toBe(400);
+  it('百分比編碼解不開、讀檔失敗（找不到以外）：照 dsh 往外拋，交給 wire-server 回 400', async () => {
+    await expect(handle(get('/%E0%A4%A'))).rejects.toThrow(URIError);
+    if (process.platform !== 'win32') {
+      const locked = join(dist, 'assets', 'locked.js');
+      await writeFile(locked, 'secret');
+      await chmod(locked, 0o000);
+      try {
+        await expect(handle(get('/assets/locked.js'))).rejects.toMatchObject({ code: 'EACCES' });
+      } finally {
+        await chmod(locked, 0o600);
+      }
+    }
   });
 
   it('dist 還沒 build：index 與資產都是 404，不拋', async () => {

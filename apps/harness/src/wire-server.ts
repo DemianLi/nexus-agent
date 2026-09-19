@@ -23,6 +23,8 @@ export interface StartWireServerOptions {
   /** 預設 0——由作業系統挑一個空的，測試因此可以平行跑。 */
   readonly port?: number;
   readonly host?: string;
+  /** 一個請求處理失敗時往哪裡講（見 {@link startWireServer} 的最後一道防線）。預設 `console.warn`。 */
+  readonly warn?: (error: Error) => void;
 }
 
 async function toRequest(incoming: IncomingMessage, origin: string): Promise<Request> {
@@ -38,7 +40,11 @@ async function toRequest(incoming: IncomingMessage, origin: string): Promise<Req
   }
   const method = incoming.method ?? 'GET';
   const hasBody = method !== 'GET' && method !== 'HEAD';
-  return new Request(`${origin}${incoming.url ?? '/'}`, {
+  // **只取路徑與 query**，照 dsh `packages/host/webserver/src/index.ts` 的 `new URL(req.url, 'http://x').pathname`：
+  // 請求行可以是 absolute-form（`GET http://evil/threads HTTP/1.1`），直接接在 origin 後面會拼出一個
+  // 解析不了的網址。它帶的 authority 不算數——信任看 `Host` 標頭（`request-trust.ts`）。
+  const target = new URL(incoming.url ?? '/', 'http://x');
+  return new Request(`${origin}${target.pathname}${target.search}`, {
     method,
     headers,
     ...(hasBody ? { body: Buffer.concat(chunks) } : {}),
@@ -78,19 +84,30 @@ async function writeResponse(response: Response, outgoing: ServerResponse): Prom
 
 export async function startWireServer(options: StartWireServerOptions): Promise<WireServer> {
   const host = options.host ?? '127.0.0.1';
+  const warn = options.warn ?? ((error: Error) => console.warn(error));
+  const handle = async (incoming: IncomingMessage, outgoing: ServerResponse): Promise<void> => {
+    const address = server.address() as AddressInfo;
+    const origin = `http://${host}:${address.port}`;
+    // 對方斷線就中止這個 request 的 signal——**中止的是這條線，不是 agent 的 run**。
+    const aborted = new AbortController();
+    outgoing.on('close', () => aborted.abort());
+    const request = await toRequest(incoming, origin);
+    const response = await options.handler.handle(new Request(request, { signal: aborted.signal }));
+    await writeResponse(response, outgoing);
+  };
+  // **最後一道防線**，照 dsh `packages/host/webserver/src/index.ts`（`ddefc45`）：一個請求的失敗只收在那個
+  // 請求上——記一筆、回 400，已經送出標頭的就斷線。沒有這一層，`handle` 的 rejection 沒人接，Node 會讓
+  // 整個行程退出：同機任何人送一個畸形的請求就能把 serve 打掉（#424 審查時實測過）。
   const server: Server = createServer((incoming, outgoing) => {
-    void (async () => {
-      const address = server.address() as AddressInfo;
-      const origin = `http://${host}:${address.port}`;
-      // 對方斷線就中止這個 request 的 signal——**中止的是這條線，不是 agent 的 run**。
-      const aborted = new AbortController();
-      outgoing.on('close', () => aborted.abort());
-      const request = await toRequest(incoming, origin);
-      const response = await options.handler.handle(
-        new Request(request, { signal: aborted.signal }),
-      );
-      await writeResponse(response, outgoing);
-    })();
+    void handle(incoming, outgoing).catch((error: unknown) => {
+      warn(error instanceof Error ? error : new Error(String(error)));
+      if (outgoing.headersSent) {
+        outgoing.destroy();
+        return;
+      }
+      outgoing.writeHead(400);
+      outgoing.end();
+    });
   });
 
   await new Promise<void>((resolve, reject) => {

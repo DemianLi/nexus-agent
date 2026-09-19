@@ -8,7 +8,7 @@
  */
 
 import { request as httpRequest } from 'node:http';
-import { createServer } from 'node:net';
+import { connect, createServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { chmod, mkdir, mkdtemp, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -97,6 +97,19 @@ async function exchange(
   return { cookie: setCookie.split(';', 1)[0]!, setCookie };
 }
 
+function rawRequest(port: number, text: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, '127.0.0.1', () => socket.write(text));
+    let data = '';
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk: string) => {
+      data += chunk;
+    });
+    socket.on('end', () => resolve(data));
+    socket.on('error', reject);
+  });
+}
+
 const JSON_HEADERS = { 'content-type': 'application/json' };
 
 describe('serve 的瀏覽器會話', () => {
@@ -122,7 +135,7 @@ describe('serve 的瀏覽器會話', () => {
     );
     const index = await fetch(`${server.url}/`);
     expect(index.status).toBe(401);
-    expect(await index.text()).toContain('重開 serve 啟動時印出的那個網址');
+    expect(await index.text()).toContain('在瀏覽器開 serve 啟動時印出的那個網址');
     // 資產公開，照 dsh。
     expect((await fetch(`${server.url}/assets/app.js`)).status).toBe(200);
 
@@ -205,6 +218,34 @@ describe('serve 的瀏覽器會話', () => {
 
     // 兩次都在開 port 之前就停了：那個 port 還空著。
     await expect(fetch(`http://127.0.0.1:${port}/`)).rejects.toThrow();
+  });
+
+  it('同機的人送畸形請求打不掉 serve：absolute-form、壞掉的百分比編碼都只收在那個請求上', async () => {
+    const home = await tmp('nexus-serve-home-');
+    const lines: string[] = [];
+    const server = await start({ home, webDist: await builtDist() }, lines);
+    const port = Number(new URL(server.url).port);
+    const status = (reply: string) => reply.split('\r\n', 1)[0];
+
+    // absolute-form：只取路徑，照樣走圍欄與會話——沒有 cookie 就是 401，不是崩潰。
+    const absolute = await rawRequest(
+      port,
+      `GET http://evil.example/threads HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`,
+    );
+    expect(status(absolute)).toBe('HTTP/1.1 401 Unauthorized');
+    const badEscape = await rawRequest(
+      port,
+      `GET /%E0%A4%A HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`,
+    );
+    expect(status(badEscape)).toBe('HTTP/1.1 400 Bad Request');
+    expect(lines.some((line) => line.startsWith('[請求] 處理失敗，回 400'))).toBe(true);
+
+    // 沒帶 content-type、不存在的路徑：401 排在 415、404 前面。
+    expect(
+      (await rawGet(server.url, '/threads/nope', { host: new URL(server.url).host })).status,
+    ).toBe(401);
+    // 行程還活著。
+    expect((await fetch(`${server.url}/`)).status).toBe(401);
   });
 
   it('沒 build 過的 dist：照樣起得來，畫面上講得出要先 build', async () => {

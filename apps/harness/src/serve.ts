@@ -434,6 +434,8 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     server = await startWireServer({
       handler: routeBySurface(handler, createWebStaticHandler({ distRoot: webDist, auth })),
       port: invocation.port,
+      // 一個請求處理失敗（畸形的網址、讀檔錯誤）：記進伺服器日誌、回 400，行程照跑。見 `wire-server.ts`。
+      warn: (error) => serverLog(`[請求] 處理失敗，回 400：${error.message}`),
     });
   } catch (error) {
     await handler.close();
