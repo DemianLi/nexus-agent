@@ -163,6 +163,9 @@ serve 重啟之後照樣有效），沒有 cookie 的請求一律 401。綁 `127
 - **簽章密鑰住在 harness home**：`~/.nexus-agent/browser-session.json`（目錄 `0700`、檔案 `0600`；
   `NEXUS_AGENT_HOME` 可以換位置）。刪掉它再重啟 serve，所有瀏覽器會話一起失效；這個檔別人讀得到的話，
   serve 會拒絕啟動並告訴你要跑的 `chmod`。
+- **serve 沒在跑的時候別開那個網址。** cookie 是持有即用的憑證：別人趁 serve 沒跑先佔住同一個 port，
+  你的瀏覽器（經 SSH 轉 port 也一樣）就會把 cookie 送給他，等你在同一個 port 重開 serve，那顆 cookie 仍然有效。
+  懷疑外洩時刪掉 `~/.nexus-agent/browser-session.json` 再重啟 serve，所有既有會話一起作廢。
 - **在多人共用的主機上**，只支援從自己的電腦用 SSH 轉 port 連進去：
   `ssh -L 8787:127.0.0.1:8787 <主機>`，然後在自己電腦的瀏覽器開 serve 印出的網址。
   **不要在共用主機上跑 `pnpm dev`**：Vite 的開發伺服器會把整個 repo 的檔案交給同機任何人
