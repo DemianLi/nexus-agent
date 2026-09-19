@@ -8,8 +8,8 @@
  * 1. **落在一輪裡**：同一份日誌前面有一顆 `turn/start`。子代理的日誌沒有 `turn/start`，所以這一條同時擋住
  *    「寫進子代理那一份」——記錄器只接 root。
  * 2. **那一輪跑過工具**：從最近一顆不是 resume 的 `turn/start` 算起，至少有一顆 `tool/result`。記錄器在一輪
- *    沒有任何結果時不記（同 dsh 的 `lastToolResultSeq < 0`）。**web 認輪用的就是這個起點**（見 `@nexus/wire`
- *    的 `workspace-changes.ts`），一顆落在錯的輪裡的事件會先在這裡露出來。
+ *    沒有任何結果時不記（同 dsh 的 `lastToolResultSeq < 0`）。**web 認輪靠的就是事件在串流裡的位置**
+ *    （`@nexus/wire` 的 `WorkspaceChangesEntry`），一顆落在錯的輪裡的事件會先在這裡露出來。
  * 3. **資料是空的**：不帶 `turn`（#443 第二則決議），也沒有別的欄。
  *
  * 「一輪一顆」**不是**不變量：同一輪先記一份、之後又改，dsh 會再寫一顆取代前一顆。

@@ -32,7 +32,8 @@ export function transcriptItems(entries: readonly ConversationEntry[]): Transcri
     files = [];
   };
   for (const entry of entries) {
-    if (entry.kind === 'answer') continue;
+    // 改動卡還沒做（#443，dev-ui）：先不給它一格，不然列表會多出一段空白間距。
+    if (entry.kind === 'answer' || entry.kind === 'workspace-changes') continue;
     if (entry.kind === 'deliverables') {
       id ??= entry.id;
       files.push(...entry.files);

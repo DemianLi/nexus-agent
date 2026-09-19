@@ -103,6 +103,7 @@ export type {
   PendingQuestion,
   QuestionItem,
   ToolEntry,
+  WorkspaceChangesEntry,
 } from './conversation.js';
 export {
   APPROVAL_PENDING_KIND,

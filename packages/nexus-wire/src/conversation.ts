@@ -33,6 +33,7 @@
 
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
 import type { WirePresentedFile } from './deliverables.js';
+import { WORKSPACE_CHANGES } from './workspace-changes.js';
 import type { Event } from './protocol.js';
 
 /** 一則東西是誰說的。 */
@@ -181,8 +182,31 @@ export interface DeliverablesEntry {
   readonly files: readonly WirePresentedFile[];
 }
 
+/**
+ * 一輪改動了工作區哪些檔的指標（[#443](https://github.com/DemianLi/nexus-agent/issues/443)）。來源是 `custom`
+ * frame，`data.name` 為 {@link WORKSPACE_CHANGES}，見 `workspace-changes.ts`。
+ *
+ * **只帶 `seq`**：摘要留在 server，web 拿它去 `changes/summary` 要，回 404 就不畫（serve 重開之後一定是 404）。
+ * 它跟 {@link DeliverablesEntry} 一樣是獨立的一格、落在它在串流裡的位置：web 的對話狀態裡沒有 `turn/start`，
+ * 「由 `seq` 往前找 `turn/start` 認輪」在那頭做不到，所以認輪交給這一格的位置，同交付卡由 human 那一格切輪。
+ * 不影響 `status`、`pendings`，也不會是 {@link AiEntry.turnTail}；{@link prependEntries} 原樣接上。
+ */
+export interface WorkspaceChangesEntry {
+  readonly kind: 'workspace-changes';
+  /** `workspace-changes:<seq>`：確定值，當 React key。同一個 `seq` 第二次出現就忽略。 */
+  readonly id: string;
+  /** 那顆 `workspace/changes` 在 root 日誌裡的 `seq`，兩條路由拿它定位摘要。 */
+  readonly seq: number;
+}
+
 export type ConversationEntry =
-  HumanEntry | AiEntry | ToolEntry | DecisionEntry | AnswerEntry | DeliverablesEntry;
+  | HumanEntry
+  | AiEntry
+  | ToolEntry
+  | DecisionEntry
+  | AnswerEntry
+  | DeliverablesEntry
+  | WorkspaceChangesEntry;
 
 /**
  * 型別窄化：這一顆是核准請求嗎。
@@ -502,14 +526,14 @@ function isPresentedFile(value: unknown): value is WirePresentedFile {
 }
 
 /**
- * `custom` frame。**只認 {@link DELIVERABLES_PRESENTED}**，其他名字、形狀不對的一律略過：這個 channel 上的
- * 東西由 pump 從日誌合成，今天只有這一種，認不得的不猜。
+ * `custom` frame。**只認 {@link DELIVERABLES_PRESENTED} 與 {@link WORKSPACE_CHANGES}**，其他名字、形狀不對的
+ * 一律略過：這個 channel 上的東西由 pump 從日誌合成，認不得的不猜。
  */
 function reduceCustom(state: ConversationState, data: unknown): ConversationState {
   const { name, payload } = (data ?? {}) as { name?: unknown; payload?: unknown };
-  if (name !== DELIVERABLES_PRESENTED || typeof payload !== 'object' || payload === null) {
-    return state;
-  }
+  if (typeof payload !== 'object' || payload === null) return state;
+  if (name === WORKSPACE_CHANGES) return reduceWorkspaceChanges(state, payload);
+  if (name !== DELIVERABLES_PRESENTED) return state;
   const { callId, files } = payload as { callId?: unknown; files?: unknown };
   if (typeof callId !== 'string' || !Array.isArray(files) || !files.every(isPresentedFile)) {
     return state;
@@ -517,6 +541,16 @@ function reduceCustom(state: ConversationState, data: unknown): ConversationStat
   const id = `deliverables:${callId}`;
   if (state.entries.some((entry) => entry.id === id)) return state;
   const entry: DeliverablesEntry = { kind: 'deliverables', id, callId, files };
+  return { ...state, entries: [...state.entries, entry] };
+}
+
+/** `workspace/changes` 的 `payload`：`seq` 要是非負整數，同一個 `seq` 只長一格。 */
+function reduceWorkspaceChanges(state: ConversationState, payload: object): ConversationState {
+  const { seq } = payload as { seq?: unknown };
+  if (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 0) return state;
+  const id = `workspace-changes:${seq}`;
+  if (state.entries.some((entry) => entry.id === id)) return state;
+  const entry: WorkspaceChangesEntry = { kind: 'workspace-changes', id, seq };
   return { ...state, entries: [...state.entries, entry] };
 }
 

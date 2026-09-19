@@ -6,7 +6,7 @@
  * 證不了的是：
  *
  * 1. 基座真的經過那顆 `wrapToolCall`、真的跑到 `afterAgent`——事件落在 root 日誌那一輪的 `turn/end` 之前。
- * 2. **即時與重新整理產出同一顆 `custom` frame**，帶的 `seq` 拿得到摘要。
+ * 2. **即時與重新整理產出同一顆 `custom` frame**，帶的 `seq` 拿得到摘要；折疊器各折出同一格，拿掉它畫面不變。
  * 3. 兩條路由的載體：座標、media type、404、`no-store`。
  * 4. 子代理用檔案工具改的檔算進 root 那一輪。
  * 5. 暫存目錄是 `0700`，thread 收掉時整個刪掉。
@@ -36,6 +36,8 @@ import {
   changesDiffPath,
   changesSummaryPath,
   createWireClient,
+  emptyConversation,
+  reduceAll,
   WORKSPACE_CHANGES,
 } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -231,6 +233,28 @@ describe('每一輪的改動紀錄在真的圖上', () => {
       expect(changesIn(outcome.live)).toEqual([{ seq }]);
       expect(changesIn(outcome.history)).toEqual([{ seq }]);
       expect(outcome.violations).toEqual([]);
+      // **折疊器替它長一格**（照 #441，由原本「不替它長格子」那條翻面）：即時與歷史各折出同一格，落在最後
+      // 那張工具卡之後；拿掉這一格，剩下的畫面（包括決定評分按鈕位置的輪尾）跟沒有這顆 frame 時一模一樣。
+      const without = (frames: readonly Event[]) =>
+        frames.filter((frame) => changesIn([frame]).length === 0);
+      const folded = [outcome.live, outcome.history].map((frames) => {
+        const state = reduceAll(emptyConversation(), frames);
+        const at = state.entries.findIndex((entry) => entry.kind === 'workspace-changes');
+        const lastTool = state.entries.findLastIndex((entry) => entry.kind === 'tool');
+        expect(lastTool).toBeGreaterThanOrEqual(0);
+        expect(at).toBeGreaterThan(lastTool);
+        // `turnStart` 是 `entries` 的索引，多一格就跟著多 1；輪尾標在哪一則由 `entries` 逐格比。
+        const bare = reduceAll(emptyConversation(), without(frames));
+        expect({
+          ...state,
+          entries: state.entries.filter((entry) => entry.kind !== 'workspace-changes'),
+          turnStart: bare.turnStart,
+        }).toEqual(bare);
+        expect(state.turnStart).toBe(bare.turnStart + 1);
+        return state.entries.filter((entry) => entry.kind === 'workspace-changes');
+      });
+      const entry = { kind: 'workspace-changes', id: `workspace-changes:${seq}`, seq };
+      expect(folded).toEqual([[entry], [entry]]);
 
       const summary = await outcome.get(`${changesSummaryPath(THREAD_ID)}?seq=${seq}`);
       expect(summary.status).toBe(200);

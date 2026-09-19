@@ -12,8 +12,9 @@
  * ## 與 dsh 的偏離
  *
  * 1. **不帶 `turn`**（#443 第二則決議）。我們的 `turn/start` 沒有輪號；同一個輪尾並排的交付卡
- *    （`deliverables/presented`，#441）已經不帶，兩張卡用同一條規則認輪：**由 `seq` 往前找最近一顆不是
- *    resume 的 `turn/start`**。所以摘要也不帶 `turn`。
+ *    （`deliverables/presented`，#441）已經不帶。在日誌上，**由 `seq` 往前找最近一顆不是 resume 的
+ *    `turn/start`** 就是它那一輪；web 的對話狀態裡沒有 `turn/start`，所以折疊器照 #441 的做法替它長一格
+ *    （`WorkspaceChangesEntry`），落在它在串流裡的位置，web 由那一格的位置認輪。所以摘要也不帶 `turn`。
  * 2. **路徑掛在 thread 底下**：dsh 是 `/api/changes.summary?sessionId&seq`，我們的 server 一律以 thread 分路
  *    （`/threads/:id/...`），thread id 就是 root 會話的 id。錯誤協定照 dsh：400（座標不對）、404（這台 server
  *    不再服務這份摘要，或沒有那個 index）、500（讀檔失敗），回應帶 `cache-control: no-store`。
