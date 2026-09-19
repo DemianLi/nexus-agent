@@ -833,12 +833,28 @@ describe('送出框說的話', () => {
 });
 
 /**
- * 問答收尾之後 transcript 上留下的那一行（這一格下一刀換成工具卡上的「問題 → 回答」，#409）。
+ * 答完之後（§4.3）：答案列在那張提問工具卡上，transcript 不另插一行。
  */
-describe('問答的收尾在 transcript 上長什麼樣', () => {
-  it('**答完的照舊逐題攤開**，而且「跳過」與「沒答」分得出來', async () => {
+describe('答完的問題列在提問工具卡上', () => {
+  it('**逐題「問題 → 回答」**，而且「跳過」與選了什麼分得出來；沒有另一行紀錄', async () => {
     seq = 0;
-    const { client } = fakeClient([questionFrame('q-a')]);
+    const input = JSON.stringify({
+      questions: [
+        { id: 'name', question: '訪客姓名？', header: '姓名' },
+        { id: 'day', question: '哪一天？', options: [{ label: '週一' }, { label: '週二' }] },
+      ],
+    });
+    const { client } = fakeClient([
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      frame('tools', ['tools:a'], {
+        event: 'tool-started',
+        tool_call_id: 'ask-1',
+        tool_name: 'ask_user_question',
+        input,
+      }),
+      frame('tools', ['tools:a'], { event: 'tool-suspended', tool_call_id: 'ask-1' }),
+      questionFrame('q-a'),
+    ]);
     render(<App client={client} />);
     const panel = await questionPanel();
 
@@ -848,10 +864,15 @@ describe('問答的收尾在 transcript 上長什麼樣', () => {
     fireEvent.click(await within(panel).findByRole('radio', { name: '週二' }));
     fireEvent.click(within(panel).getByRole('button', { name: '送出答案' }));
 
-    const entry = await screen.findByTestId('answer-entry');
-    expect(entry.textContent).toContain('已回答');
-    expect(entry.textContent).toContain('name＝（跳過）');
-    expect(entry.textContent).toContain('day＝週二');
+    await waitFor(() => expect(screen.queryByRole('region', { name: /問題要你回答/ })).toBeNull());
+    const card = screen.getByTestId('tool-entry');
+    fireEvent.click(within(card).getByRole('button', { name: /提問/ }));
+    const rows = within(card).getAllByTestId('question-row');
+    expect(rows.map((row) => row.textContent)).toEqual([
+      '姓名訪客姓名？→ 回答：（跳過）',
+      '哪一天？→ 回答：週二',
+    ]);
+    expect(screen.queryByTestId('answer-entry')).toBeNull();
   });
 });
 

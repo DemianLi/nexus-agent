@@ -5,6 +5,8 @@
  * 本地記得**——下行不回聲決定。被拒的那顆呼叫線上有一張失敗的卡，但「是人按了拒絕」
  * 只有這一則說得出來，所以兩則並存（見 `@nexus/wire` 的 `DecisionEntry`）。
  *
+ * 人答的問題也只有本地記得，但**不自成一則**：答案列在配到的那張提問卡上（`pairAnswers`，§4.3，#409）。
+ *
  * 模型與工具都可能來自 subagent，
  * 而**歸屬是折疊器 join 出來的**——線上沒有 subagent 的名字，只有 namespace 樹
  * （見 `@nexus/wire` 的 `conversation.ts`）。join 不起來的時候它說「未歸屬」，
@@ -15,7 +17,7 @@
  */
 
 import { ArrowDown, ThumbsDown, ThumbsUp } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import type {
@@ -40,6 +42,7 @@ import {
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
+import { pairAnswers } from '@/lib/question-view';
 
 /**
  * 評分按鈕要的東西（[#278](https://github.com/DemianLi/nexus-agent/issues/278)、
@@ -112,38 +115,7 @@ function RatingButtons({
   );
 }
 
-/**
- * 一則問答紀錄在畫面上的那一行。
- *
- * **三格，不是「已回答：」加一個 join。** 原本一律寫「已回答：」再把 `answers` 攤開接起來，
- * 於是「放棄整組」——它的 `answers` 是空的——長出「已回答：」後面一片空白
- * （[#239](https://github.com/DemianLi/nexus-agent/issues/239) 在真瀏覽器裡量到的三處說謊
- * 之一）。而**放棄不是一種回答**：全跳過仍然是一份答案、工具正常回傳，放棄則讓工具收到
- * 錯誤，模型知道人不打算走這條路（見 `@nexus/wire` 的 `AnswerEntry.cancelled`）。畫成同
- * 一句話，就是把這兩件事在畫面上抹平。
- *
- * **第三格是防它從別的入口長回來。** 空的 `answers` 而且沒有 `cancelled` today 走不到
- * UI（問答卡送得出去的只有「逐題有交代」與「放棄整組」兩種），但 `appendAnswers` 收任何
- * 一份 `answers`、包含空陣列，型別上那條路開著。留一句說得出口的話，比留一片空白誠實。
- */
-function answerSummary(entry: AnswerEntry): string {
-  if (entry.cancelled === true) {
-    return '放棄了這組問題——一題都沒有回答。';
-  }
-  if (entry.answers.length === 0) {
-    return '已回答：（這一則沒有帶任何一題）';
-  }
-  const body = entry.answers
-    .map((answer) => {
-      const picked = [...answer.selected, ...(answer.custom === undefined ? [] : [answer.custom])];
-      // 空的 `selected` 且沒有 `custom` ＝ 那一題被跳過（照抄 dsh 的編碼）。
-      return `${answer.id}＝${picked.length === 0 ? '（跳過）' : picked.join('、')}`;
-    })
-    .join('，');
-  return `已回答：${body}`;
-}
-
-/** 決定與問答紀錄（列 22）：置中的一顆 chip，不是對話的一則。 */
+/** 決定紀錄（列 22）：置中的一顆 chip，不是對話的一則。 */
 function Marker({ children, testId }: { children: string; testId: string }) {
   return (
     <div className="flex justify-center">
@@ -161,11 +133,14 @@ function Entry({
   entry,
   feedback,
   beam,
+  answer,
 }: {
   entry: ConversationEntry;
   feedback?: TranscriptFeedback;
   /** 這顆工具卡帶執行中的邊框光（同時最多一個）。 */
   beam: boolean;
+  /** 配到這張提問卡的答案。 */
+  answer?: AnswerEntry;
 }) {
   if (entry.kind === 'human') {
     return (
@@ -191,11 +166,12 @@ function Entry({
   }
 
   if (entry.kind === 'answer') {
-    return <Marker testId="answer-entry">{answerSummary(entry)}</Marker>;
+    // 不自己畫：答案列在配到的那張提問卡上（`pairAnswers`，§4.3）。列表也不給它一格。
+    return null;
   }
 
   if (entry.kind === 'tool') {
-    return <ToolCard entry={entry} beam={beam} />;
+    return <ToolCard entry={entry} beam={beam} {...(answer === undefined ? {} : { answer })} />;
   }
 
   const indented = entry.attribution.kind !== 'root';
@@ -297,18 +273,23 @@ export function Transcript({
   const beamId = state.entries.findLast(
     (entry) => entry.kind === 'tool' && entry.status === 'running',
   )?.id;
-  const items = [
-    ...state.entries.map((entry) => ({
-      id: entry.id,
-      node: (
-        <Entry
-          entry={entry}
-          beam={entry.id === beamId}
-          {...(feedback === undefined ? {} : { feedback })}
-        />
-      ),
-    })),
-  ];
+  const answers = useMemo(() => pairAnswers(state.entries), [state.entries]);
+  const items = state.entries
+    .filter((entry) => entry.kind !== 'answer')
+    .map((entry) => {
+      const answer = answers.get(entry.id);
+      return {
+        id: entry.id,
+        node: (
+          <Entry
+            entry={entry}
+            beam={entry.id === beamId}
+            {...(feedback === undefined ? {} : { feedback })}
+            {...(answer === undefined ? {} : { answer })}
+          />
+        ),
+      };
+    });
   const announced = useFinishedReply(state.entries, isFresh);
 
   return (
