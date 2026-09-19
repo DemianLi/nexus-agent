@@ -4,12 +4,7 @@
     {
       "name": "serve",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": [
-        "--filter",
-        "@nexus/harness",
-        "run",
-        "serve"
-      ],
+      "runtimeArgs": ["--filter", "@nexus/harness", "run", "serve"],
       "port": 8787
     }
   ]
