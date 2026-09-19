@@ -27,12 +27,7 @@ import {
   TOOL_OUTCOME_UNKNOWN_TEXT,
 } from '@nexus/core';
 import type { NexusPlugin, SessionEvent } from '@nexus/core';
-import {
-  appendHumanTurn,
-  createWireClient,
-  emptyConversation,
-  reduceConversation,
-} from '@nexus/wire';
+import { appendHumanTurn, emptyConversation, reduceConversation } from '@nexus/wire';
 import type { ConversationState } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -45,6 +40,7 @@ import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { serveClient } from './fixtures.js';
 
 const FIXTURE = fileURLToPath(new URL('./conversation-restore.fixture.ts', import.meta.url));
 
@@ -228,8 +224,8 @@ describe('serve 重開之後', () => {
   }
 
   /** 說一句話，等這一輪收掉。 */
-  async function say(url: string, threadId: string, prompt: string): Promise<void> {
-    const client = createWireClient({ baseUrl: url });
+  async function say(server: RunningServe, threadId: string, prompt: string): Promise<void> {
+    const client = await serveClient(server);
     const events = await client.openEvents(threadId);
     await client.runStart(threadId, prompt);
     let state: ConversationState = appendHumanTurn(emptyConversation(), prompt);
@@ -244,13 +240,13 @@ describe('serve 重開之後', () => {
   it('同一條 thread：重開之後第一次請求帶著上一次的對話，伺服器日誌講得出來', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-restore-serve-'));
     const first = await start(root);
-    await say(first.url, 'alpha', '記住暗號是藍鯨');
+    await say(first, 'alpha', '記住暗號是藍鯨');
     await stop(first);
     seenRequests.length = 0;
 
     const lines: string[] = [];
     const second = await start(root, lines);
-    await say(second.url, 'alpha', '暗號是什麼');
+    await say(second, 'alpha', '暗號是什麼');
 
     expect(shape(seenRequests[0] ?? [])).toEqual([...REMEMBERED, 'human:暗號是什麼']);
     expect(lines.join('\n')).toContain(
@@ -261,7 +257,7 @@ describe('serve 重開之後', () => {
   it('對照：沒寫過的 thread 從空的開始', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-restore-serve-'));
     const server = await start(root);
-    await say(server.url, 'beta', '第一句');
+    await say(server, 'beta', '第一句');
 
     expect(shape(seenRequests[0] ?? [])).toEqual(['human:第一句']);
   });

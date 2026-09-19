@@ -4,7 +4,7 @@ import {
   GOAL_NOT_ATTACHED_MESSAGE,
 } from '@nexus/plugin-goal';
 import { PLAN_COMMAND_NAME, PLAN_ENTERED_MESSAGE } from '@nexus/plugin-plan-mode';
-import { createWireClient } from '@nexus/wire';
+
 import {
   appendDecision,
   appendHumanTurn,
@@ -14,7 +14,7 @@ import {
 } from '@nexus/wire';
 import type { ConversationState } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
-import { approvalAt } from './fixtures.js';
+import { approvalAt, serveClient } from './fixtures.js';
 import { DEFAULT_PORT, parseServeArgs, runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 
@@ -91,7 +91,7 @@ describe('起起來之後', () => {
     expect(lines[1]).toContain('假模型');
     expect(lines[2]).toContain('echo');
 
-    const client = createWireClient({ baseUrl: started.url });
+    const client = await serveClient(started);
     const events = await client.openEvents('web');
     await client.runStart('web', '把這句話回聲一次。');
 
@@ -133,7 +133,7 @@ describe('serve 上的工具拋錯', () => {
         log: () => undefined,
         env: {},
       });
-      const client = createWireClient({ baseUrl: (running as RunningServe).url });
+      const client = await serveClient(running as RunningServe);
 
       const converse = async (threadId: string, sentences: readonly string[]) => {
         const events = await client.openEvents(threadId);
@@ -176,7 +176,7 @@ describe('serve 的命令面', () => {
   it('預設清單起的 server 上，瀏覽器打得到 /plan', async () => {
     running = await runServe({ argv: ['--port', '0'], log: () => undefined, env: {} });
     const started = running as RunningServe;
-    const client = createWireClient({ baseUrl: started.url });
+    const client = await serveClient(started);
     await client.openEvents('planning');
 
     const listed = await client.slashList('planning');
@@ -198,7 +198,7 @@ describe('serve 的命令面', () => {
     // 假設破掉的話這裡不會靜靜串台，會直接收到 `goalAmbiguousMessage` 那句錯誤。
     running = await runServe({ argv: ['--port', '0'], log: () => undefined, env: {} });
     const started = running as RunningServe;
-    const client = createWireClient({ baseUrl: started.url });
+    const client = await serveClient(started);
     await client.openEvents('alpha');
     await client.openEvents('beta');
 
@@ -227,7 +227,7 @@ describe('serve 的命令面', () => {
     // ——一句為了排除這種情況而寫的錯誤，出現在一條合法的路徑上。
     running = await runServe({ argv: ['--port', '0'], log: () => undefined, env: {} });
     const started = running as RunningServe;
-    const client = createWireClient({ baseUrl: started.url });
+    const client = await serveClient(started);
 
     const created = await client.slashRun('gamma', `/${GOAL_COMMAND_NAME} 把測試修綠`);
     if (created.kind !== 'success') throw new Error(JSON.stringify(created));
@@ -253,7 +253,7 @@ describe('核准那份清單', () => {
       env: {},
     });
     const started = running as RunningServe;
-    const client = createWireClient({ baseUrl: started.url });
+    const client = await serveClient(started);
     const events = await client.openEvents('gated');
     await client.runStart('gated', '把這句話回聲一次。');
 

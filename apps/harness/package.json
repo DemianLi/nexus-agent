@@ -53,6 +53,7 @@
     "@nexus/plugin-todo": "workspace:*",
     "@nexus/plugin-validation": "workspace:*",
     "@nexus/wire": "workspace:*",
+    "@nexus/web": "workspace:*",
     "deepagents": "~1.13.1",
     "langchain": "^1.5.10",
     "langsmith": ">=0.7.1 <0.10.0",
