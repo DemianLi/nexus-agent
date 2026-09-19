@@ -5,7 +5,7 @@
 - #180 的前提重核，以及 `document`；
 - 單一職責盤點（[`srp-audit-2026-09-19.md`](srp-audit-2026-09-19.md)）帶出來的第 12 題。
 
-對照版本是 dsh `ddefc45` 與 develop `8fb2e51`。
+對照版本是 dsh `ddefc45` 與 develop `8fb2e51`。拍板後開的卡，開出去之前照 develop `2c87265` 重核過出處；七層盤點寫於 develop `c1857a8`。三個版本之間，`apps/harness` 與 `packages/` 只多了 #423 加的註解，沒有程式碼改動；引用的行號可能因此差幾行。
 
 **拍板**：demian 2026-09-19 回覆「照建議」，12 題全部照下表的建議。後續的卡號列在表的最後一欄。
 
@@ -86,7 +86,7 @@
 - **建議 A**：這是 dsh「機械可檢查的不變量要進 gate」的做法，也是唯一能在 review 時看到「模型實際收到哪些工具描述」的選項。選配的 plugin 不列進去，並在檔頭寫明。
 - **下一步**：開一張卡（harness／CI）。如果第 12 題選了 C，之後可以依 profile 各產一份。
 
-> **開卡前查核更正（2026-09-19）**：上面「選配的 plugin 不列」讀錯了 dsh。dsh 的 `docs/tool-catalog.md` 收錄 `packages/*/tool-*` 底下每一個出廠的工具套件，連 base 出廠關掉的 `dsh-experimental-tool-agent-team` 也收，只排除 `examples/`。每個套件用預設 Config 單獨啟動來讀 schema，另有完整性檢查（`scripts/gen-tool-catalog.ts` 的 `assertManifestComplete`）。所以目錄按套件分、不按組合分，「依 profile 各產一份」也不需要。#442 照 dsh 做；拍板的 A（自動產出＋gate）不變。
+> **開卡前查核更正（2026-09-19）**：上面「選配的 plugin 不列」讀錯了 dsh。dsh 的 `docs/tool-catalog.md` 收錄每一個會註冊工具的出廠套件：`packages/*/tool-*` 之外，還有 `plugin-manager`、`mcp-resources`、`plan-mode`、`schedule`、`tools` 等（清單是 `scripts/gen-tool-catalog.ts` 的 `TOOL_PACKAGES`）；連 base 出廠關掉的 `dsh-experimental-tool-agent-team` 也收，只排除 `examples/`。每個套件用預設 Config 單獨啟動來讀 schema；完整性檢查 `assertManifestComplete` 以 `packages/*/tool-*` 為底，漏列就讓產生器失敗。所以目錄按套件分、不按組合分，「依 profile 各產一份」也不需要。#442 照 dsh 做；拍板的 A（自動產出＋gate）不變。
 
 ### 5. 跨會話引用（session-reference）⚠ 建議與素材不同
 
