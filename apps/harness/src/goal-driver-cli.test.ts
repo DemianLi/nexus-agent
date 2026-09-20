@@ -24,6 +24,7 @@ import {
   DEFAULT_PLUGINS,
   driveGoalRounds,
   formatGoalDriverDisclosure,
+  goalDriverPort,
   runCli,
   runTurn,
 } from './cli.js';
@@ -435,6 +436,43 @@ describe('披露', () => {
 describe('goals 服務綁的是這一次組裝', () => {
   it('預設清單掛的就是模組層級那一顆 goal plugin', () => {
     expect(DEFAULT_PLUGINS.filter((entry) => entry.plugin === goalPlugin)).toHaveLength(1);
+  });
+
+  /**
+   * **`goalDriverPort` 自己那三格要真的打到注入進來的那一份。**
+   *
+   * 其餘每一條排程器測試都自己搭一個 port（要塞得進替身與計數），所以
+   * `goalDriverPort` 這個函式本身一直沒有人驅動過——把它的 `goal()` 改成永遠回
+   * `undefined`，整套 harness 測試照樣綠（實測）。這一條就是那個洞。
+   */
+  it('goalDriverPort 的 goal / block / disarm 都打在注入的那一份上', async () => {
+    const built = await createCliAgent({ live: false }, DEFAULT_PLUGINS);
+    try {
+      built.attachSession(built.sessions);
+      const service = built.goals?.serviceFor(built.sessionLog);
+      if (service === undefined) throw new Error('接了線就該找得到服務');
+      const created = service.create({ objective: '量這一條' });
+
+      const port = goalDriverPort(
+        built.goals,
+        () => built.sessionLog,
+        () => Promise.resolve(),
+        () => undefined,
+      );
+      expect(port.goal()?.objective).toBe('量這一條');
+
+      port.disarm();
+      expect(service.get()?.activation).toBe('disarmed');
+
+      port.block(
+        { id: created.id, revision: service.get()?.revision ?? created.revision },
+        { code: 'round-limit', message: '量一下' },
+      );
+      expect(service.get()?.phase).toBe('blocked');
+      expect(service.get()?.blockedReason?.code).toBe('round-limit');
+    } finally {
+      await built.dispose();
+    }
   });
 
   it('兩次 createCliAgent 各拿各的——serve 每條 thread 組裝一次', async () => {

@@ -73,7 +73,6 @@ import {
   createGoalTools,
   DEFAULT_BLOCKED_AFTER_CONSECUTIVE_ROUNDS,
   GOAL_TOOL_OUTPUT_SCHEMA,
-  resolveGoalToolPolicy,
 } from './tools.js';
 
 export type { GoalCommand } from './command.js';
@@ -259,8 +258,9 @@ function applyGoal(registry: PluginRegistry, config: GoalConfig, seams: GoalSeam
     ...seams,
   };
   assertGoalServiceOptions(serviceOptions);
-  // 同一條理由（設定錯誤要炸在設定的地方），只是這一格歸工具不歸域。
-  resolveGoalToolPolicy(config);
+  // **工具政策那一格不在這裡驗**：`createGoalTools` 自己第一行就 `resolveGoalToolPolicy`，
+  // 在這裡再叫一次是一道量不出來的重複——拿掉它整套測試照樣綠（實測，突變 7）。兩者的
+  // 差別只有「在 `sessions.join` 之前還是之後拋」，而載入失敗本來就會把已登記的撤掉。
   // 它是陣列不是單一格，因為「剛好一份」是一個**假設**：`attachSession` 是組裝點
   // 自己呼叫的一步，沒有東西攔得住它被呼叫兩次。多了或少了都由命令當場說出來，
   // 見 `command.ts` 的 `goalAmbiguousMessage`。
