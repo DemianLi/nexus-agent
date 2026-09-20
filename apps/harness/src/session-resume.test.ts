@@ -31,7 +31,7 @@ import {
 import { parseCliArgs, RESUMED_PLAN_MODE_NOTICE, runCli } from './cli.js';
 import { ResumeCwdConflictError } from './resume-guards.js';
 import { openJsonlSessionStore } from './jsonl-session-store.js';
-import { SANDBOX_COMMAND_NAME } from './sandbox-mode.js';
+import { SANDBOX_COMMAND_NAME } from '@nexus/plugin-sandbox-policy';
 
 /** 分開收 stdout 與 stderr：不變量違規走的是後者。 */
 function recorder() {

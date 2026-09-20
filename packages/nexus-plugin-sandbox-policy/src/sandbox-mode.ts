@@ -46,7 +46,7 @@
  *
  * **偏離（登記）：快照放在 ALS，不是從子代理自己的日誌折。** dsh 子代理的 fence 從子代理的日誌折出模式；
  * 我們子代理的檔案工具是基座拿 root 那一份 backend 建的，方法簽名裡沒有呼叫者，表達不出「逐 session
- * 折」。所以 `sandbox-policy.ts` 用 ALS 包住 `task` 那一次呼叫（{@link SandboxModeController.delegate}），
+ * 折」。所以本套件的 `index.ts` 用 ALS 包住 `task` 那一次呼叫（{@link SandboxModeController.delegate}），
  * 在裡面讀這顆控制器的一律拿到快照；日誌只是審計面，同 root。子代理的摘要器 offload 也在 `task` 那一次
  * 呼叫裡跑，所以同樣照快照判——基礎建設的寫入不會繞過它（`uploadFiles` 本來就不認領 grant）。
  *
@@ -66,15 +66,16 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { SessionEvent, SessionLog } from '@nexus/core';
-import { isSandboxMode, SANDBOX_MODES } from '@nexus/core';
 import type {
   SandboxDenial,
   SandboxGrant,
   SandboxGrantLedger,
   SandboxMode,
   SandboxModeSource,
-} from './contained-backend.js';
+  SessionEvent,
+  SessionLog,
+} from '@nexus/core';
+import { isSandboxMode, SANDBOX_MODES } from '@nexus/core';
 
 /** `/sandbox` 的命令名，不帶斜線。 */
 export const SANDBOX_COMMAND_NAME = 'sandbox';
@@ -114,7 +115,7 @@ export type SandboxSwitchOutcome =
 /**
  * 這個組裝的檔案效果政策現在是哪一格，以及切它的權威入口。
  *
- * **fence（`ContainedFilesystemBackend`）與提示句（`sandbox-policy.ts`）都跟這一顆讀**，
+ * **fence（`@nexus/harness` 的 `ContainedFilesystemBackend`）與提示句（本套件的 `index.ts`）都跟這一顆讀**，
  * 各自透過 {@link SandboxModeController.source}。兩邊各存一份快照的話，切換那天畫面上講的
  * 與實際擋的會是兩格，而**沒有任何測試會紅**——那正是這個 class 只有一格狀態的原因。
  */

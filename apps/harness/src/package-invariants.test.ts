@@ -3,7 +3,7 @@
  *
  * 分成兩半，而**上半才是這張的理由**：
  *
- * 1. **對著真的 repo 跑。** 掃得到的 owner 正好是那十一個、而且現在零違規。glob 寫壞、腳本
+ * 1. **對著真的 repo 跑。** 掃得到的 owner 正好是那二十個、而且現在零違規。glob 寫壞、腳本
  *    搬家、repo 根算錯——這幾種缺陷會讓 gate 掃到空清單然後回報零違規，也就是**永遠綠**。
  *    一個永遠綠的結構 gate 比沒有 gate 更糟，所以這一條是逐條 AST 規則之上的那一條。
  * 2. **對著臨時目錄裡的壞樣本跑。** 每一條規則配一個真的會紅的樣本；規則沒接上去的話，
@@ -22,7 +22,7 @@ import {
   repositoryRoot,
 } from './package-invariants.js';
 
-/** 這個 repo 現在該有的十九個 owner。**寫死字串**：拿 glob 的結果自己比自己驗不出東西。 */
+/** 這個 repo 現在該有的二十個 owner。**寫死字串**：拿 glob 的結果自己比自己驗不出東西。 */
 const EXPECTED_OWNERS = [
   '@nexus/core',
   '@nexus/plugin-agent-instructions',
@@ -36,6 +36,7 @@ const EXPECTED_OWNERS = [
   '@nexus/plugin-plan-mode',
   '@nexus/plugin-present',
   '@nexus/plugin-quickjs',
+  '@nexus/plugin-sandbox-policy',
   '@nexus/plugin-skills',
   '@nexus/plugin-submit-record',
   '@nexus/plugin-telemetry-otel',
@@ -121,7 +122,7 @@ describe('對著真的 repo', () => {
     expect(packageInvariantOwners().map((owner) => owner.dir)).toContain('packages/nexus-core');
   });
 
-  it('**掃出來的 owner 正好是那十九個**——glob 壞掉時這一條紅，零違規那一條不會', () => {
+  it('**掃出來的 owner 正好是那二十個**——glob 壞掉時這一條紅，零違規那一條不會', () => {
     expect(
       packageInvariantOwners()
         .map((owner) => owner.packageName)
@@ -129,7 +130,7 @@ describe('對著真的 repo', () => {
     ).toEqual([...EXPECTED_OWNERS].sort());
   });
 
-  it('十九個現在全部合格', () => {
+  it('二十個現在全部合格', () => {
     expect(collectPackageInvariantViolations()).toEqual([]);
   });
 });

@@ -45,8 +45,9 @@
 
 import type { NexusPlugin, PluginEntry } from '@nexus/core';
 import { resolveToolName, WORKSPACE_CAPABILITY } from '@nexus/core';
+import type { SandboxMode } from '@nexus/core';
 import { createMiddleware } from 'langchain';
-import type { SandboxMode } from './contained-backend.js';
+
 import { registerSandboxEscalation } from './sandbox-escalation.js';
 import {
   executeSandboxCommand,
@@ -211,3 +212,34 @@ export default sandboxPolicyPlugin;
 export function createSandboxPolicyPlugin(): PluginEntry {
   return { plugin: sandboxPolicyPlugin };
 }
+
+/**
+ * 那顆會被切的格子，與讀它的兩個入口。
+ *
+ * **組裝點要 `SandboxModeController`**：它由組裝點建、經 {@link SANDBOX_POLICY_SERVICE}
+ * 注進來（偏離登記見 {@link SandboxPolicyService}），所以建構那一步在 app 那側。
+ * `recordedSandboxMode` 與 {@link SANDBOX_COMMAND_NAME} 則是 `--resume` 與 serve 那兩條
+ * 路上讀日誌用的。
+ */
+export {
+  executeSandboxCommand,
+  recordedSandboxMode,
+  SANDBOX_COMMAND_NAME,
+  SandboxModeController,
+} from './sandbox-mode.js';
+
+/**
+ * 升級那一半對外講的每一句話。
+ *
+ * 出成公開面是因為**驗收句要對著同一份字串**：走得到產品路徑的那些斷言住在
+ * `@nexus/harness` 的 `sandbox-escalation.test.ts`（它們要跑得起一個 agent），
+ * 各自複製一份措辭的話，改了話而忘了改測試就會靜靜地綠。
+ */
+export {
+  BLANK_JUSTIFICATION_REFUSAL,
+  escalationReason,
+  MISSING_TARGET_REFUSAL,
+  nonWideningRefusal,
+  SANDBOX_ESCALATION_HINT,
+  SANDBOX_ESCALATION_TOOL_NAME,
+} from './sandbox-escalation.js';

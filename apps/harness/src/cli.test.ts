@@ -189,7 +189,7 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是 echo ＋ 工作區指令 ＋ 計劃模式 ＋ goal ＋ todo ＋ feedback ＋ present ＋ 十九個配套入口', async () => {
+  it('預設清單是 echo ＋ 工作區指令 ＋ 計劃模式 ＋ goal ＋ todo ＋ feedback ＋ present ＋ 二十個配套入口', async () => {
     // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
     // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
     // 讓計劃模式進來，理由寫在 `DEFAULT_PLUGINS` 的 JSDoc 上（命令沒進預設清單就等於
@@ -227,9 +227,9 @@ describe('一次性模式', () => {
       'feedback',
       'present',
     ]);
-    // 十九個配套入口裡有 `@nexus/plugin-workspace-changes` 的，**那個功能本身不在這份清單裡**：它要工作區的根，
+    // 二十個配套入口裡有 `@nexus/plugin-workspace-changes` 的，**那個功能本身不在這份清單裡**：它要工作區的根，
     // 只由 serve 經 `createCliAgent` 掛（#443），同 dsh 只在 web-app bundle 掛。
-    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(19);
+    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(20);
   });
 
   it('**違規印到 stderr 而且帶前綴**——不是靠 runner 預設的 `console.error`', async () => {

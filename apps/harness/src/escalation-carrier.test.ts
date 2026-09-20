@@ -59,8 +59,8 @@ import type { PluginEntry } from '@nexus/core';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
-import { SANDBOX_ESCALATION_TOOL_NAME } from './sandbox-escalation.js';
-import { SandboxModeController } from './sandbox-mode.js';
+import { SANDBOX_ESCALATION_TOOL_NAME } from '@nexus/plugin-sandbox-policy';
+import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 

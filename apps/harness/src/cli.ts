@@ -68,6 +68,7 @@ import { createMemoryInvariantPlugin } from '@nexus/plugin-memory/invariant';
 import { createPlanModePlugin, PLAN_COMMAND_NAME, recordedPlanMode } from '@nexus/plugin-plan-mode';
 import { createPlanModeInvariantPlugin } from '@nexus/plugin-plan-mode/invariant';
 import { createQuickJsInvariantPlugin } from '@nexus/plugin-quickjs/invariant';
+import { createSandboxPolicyInvariantPlugin } from '@nexus/plugin-sandbox-policy/invariant';
 import { createSkillsInvariantPlugin } from '@nexus/plugin-skills/invariant';
 import { createTelemetryOtelInvariantPlugin } from '@nexus/plugin-telemetry-otel/invariant';
 import { createPresentPlugin } from '@nexus/plugin-present';
@@ -85,12 +86,12 @@ import { driveGoalRound } from './goal-driver.js';
 import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
 import type { NexusAgentHandle } from './agent-factory.js';
 import { isSandboxMode, SANDBOX_MODES, ContainedFilesystemBackend } from './contained-backend.js';
-import { createSandboxPolicyPlugin } from './sandbox-policy.js';
+import { createSandboxPolicyPlugin } from '@nexus/plugin-sandbox-policy';
 import {
   recordedSandboxMode,
   SANDBOX_COMMAND_NAME,
   SandboxModeController,
-} from './sandbox-mode.js';
+} from '@nexus/plugin-sandbox-policy';
 import type { SandboxMode } from './contained-backend.js';
 import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MODEL_ID } from './live-model.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
@@ -509,14 +510,14 @@ function outsideWorkspace(
  * standard preset 掛 `tool-present`，而 web 的交付卡片讀的事件只有它寫得出來。代價同 todo，**多一顆面向
  * 模型的工具**（`present`）；沒有工作區時工具照樣在、叫了被拒，同 dsh。
  *
- * **十九個不變量配套入口是那句話的例外，而例外要說得出理由**
+ * **二十個不變量配套入口是那句話的例外，而例外要說得出理由**
  * （[#107](https://github.com/DemianLi/nexus-agent/issues/107) 拍板）：
  *
  * - **它們不裝功能，只裝觀察。** 一個配套入口不註冊工具、不改 prompt、不碰 backend，
  *   所以「替誰決定該裝什麼」這個顧慮對它們不成立——沒有人的 agent 因為它們而不一樣。
  * - **關得掉。** [#104](https://github.com/DemianLi/nexus-agent/issues/104) 之後條目層有
  *   `disabled`、組裝點有 `invariants` 選擇，所以進來不是單向門。這是它進得來的前提。
- * - **十九個全進，不是只有 `@nexus/core`。** 十二個是空 installer，掛上去一個檢查都不裝，
+ * - **二十個全進，不是只有 `@nexus/core`。** 十三個是空 installer，掛上去一個檢查都不裝，
  *   買到的只有包名歸屬；真的在檢查的是七個——`@nexus/core`（turn 配對）、
  *   `@nexus/plugin-commands`（命令生命週期配對，
  *   [#118](https://github.com/DemianLi/nexus-agent/issues/118)）與
@@ -528,7 +529,7 @@ function outsideWorkspace(
  *   對得上一次成功的 `present`，[#441](https://github.com/DemianLi/nexus-agent/issues/441)）與
  *   `@nexus/plugin-workspace-changes`（每一筆改動紀錄落在跑過工具的一輪裡，
  *   [#443](https://github.com/DemianLi/nexus-agent/issues/443)；那個功能本身不在這份清單裡，只由 serve 掛）。
- *   **代價是每一次執行多十九個條目、十九次 `apply`**，而換到的是這份
+ *   **代價是每一次執行多二十個條目、二十次 `apply`**，而換到的是這份
  *   清單與 `registry.invariants.companions()` 對得起來——少掛的那幾個會讓「這個 package
  *   沒有可檢的關係」與「這個 package 的檢查沒掛上」在診斷裡長得一模一樣。
  *
@@ -565,6 +566,7 @@ export const DEFAULT_PLUGINS: readonly PluginEntry[] = [
   createPresentInvariantPlugin(),
   createQuickJsInvariantPlugin(),
   createWorkspaceChangesInvariantPlugin(),
+  createSandboxPolicyInvariantPlugin(),
   createSkillsInvariantPlugin(),
   createSubmitRecordInvariantPlugin(),
   createTelemetryOtelInvariantPlugin(),

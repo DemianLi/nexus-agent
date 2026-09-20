@@ -57,7 +57,12 @@ import { FilesystemBackend } from 'deepagents';
 import type { DeleteResult, EditResult, FileUploadResponse, WriteResult } from 'deepagents';
 
 import { noteSandboxDenial } from '@nexus/core';
-import type { SandboxMode } from '@nexus/core';
+import type {
+  SandboxDenial,
+  SandboxGrantLedger,
+  SandboxMode,
+  SandboxModeSource,
+} from '@nexus/core';
 
 /**
  * fence 擋下了一次變更：回報給正在跑的那一次工具呼叫，讓結果帶上 `FS_SANDBOX_DENIED`
@@ -132,90 +137,21 @@ export type { SandboxMode } from '@nexus/core';
 export { isSandboxMode, SANDBOX_MODES } from '@nexus/core';
 
 /**
- * 圍堵強度的來源——**每一次變更呼叫問一次**，不是建構期釘死的一個值。
+ * fence 與政策之間的**合約**，詞彙同一條路：**住在 `@nexus/core`**（`sandbox.ts`）。
  *
- * ## 為什麼是函式而不是一個欄位
+ * 搬過去的理由與 {@link SandboxMode} 同型，只是對面換了人：實作 {@link SandboxGrantLedger}
+ * 的是 `@nexus/plugin-sandbox-policy` 的 `SandboxModeController`，跟這道 fence 分屬兩個
+ * 套件。合約放在其中一邊，另一邊就得反向依賴。dsh 也是這樣分的——基底套件
+ * `@deepseek-ai/dsh-sandbox` 出詞彙**加上**升級協定，policy 與執行端各自依賴它。
  *
- * 照 dsh：模式是**逐次呼叫從統一歸屬位置解析**的，不是提供方身上的一個固定值
- * （`references/deepseek-harness/packages/sandbox/sandbox/src/index.ts` 的 `SandboxPolicy`
- * 檔頭逐字寫著「carried PER CALL, not fixed on the provider」，理由是同一瞬間兩個消費者
- * 可以在不同政策底下跑）。釘死在建構子上的話，「換一格」就只能重建整個 backend——而
- * backend 是**兩個消費者共用的那一份**（`cli.ts` 那條註解：建兩個會讓 `submit_record` 與
- * `write_file` 寫到兩個地方，而且兩邊都成功、一條測試都不會紅）。
- *
- * ## 偏離登記
- *
- * dsh 把解析出來的 `SandboxPolicy` **當參數傳進那一次變更**，所以「檢查的」與「執行的」
- * 是同一顆值，連傳遞都不必經過共享狀態。我們傳不了：`BackendProtocolV2` 的
- * `write`／`edit`／`delete`／`uploadFiles` 簽章是基座定的，多不出一格。**退到「backend 自己
- * 去問一顆外面的來源」**——所以解析點在 fence 裡而不是在呼叫端。
- *
- * 代價是一次呼叫內部有 `await`（realpath、canonicalize），來源在那之間變了就會出現撕裂讀。
- * 因此 `checkedPath()` **在最上面解析一次**，整個判斷與拒絕訊息都用那一顆——這正是 dsh
- * 「一次呼叫一份政策」那條規矩在我們這個形狀底下的寫法。
+ * 從這個檔案 re-export 是為了讓 fence 的使用者仍然只需要認得一個門。
  */
-export type SandboxModeSource = () => SandboxMode;
-
-/**
- * 一顆核准過的升級：**只蓋一個目標、只蓋一次**。
- *
- * ## 為什麼一定要綁目標
- *
- * dsh 的升級欄位騎在**那一次寫入**身上，核准來的模式直接蓋到那一次呼叫
- * （`references/deepseek-harness/packages/fs/tool-fs/src/sandbox.ts` 的 `resolvePolicy`），
- * 所以「一次核准蓋這一次呼叫」由編排順便保證。我們的升級是另一顆工具
- * （[#238](https://github.com/DemianLi/nexus-agent/issues/238) 的甲），請求與重試是**兩顆
- * 呼叫**，中間隔著這顆 grant。
- *
- * 不綁目標的話，**第一個被擋下的變更就會吃掉它——而那可能根本不是模型**：基座的摘要器
- * offload 對話歷史時第一次走 `write`、fallback 走 `edit`（`deepagents@1.13.1`，
- * `dist/langsmith-Ck9t7AGW.cjs` 的 `offloadToBackend`），在 `read-only` 之下它一樣會被擋。
- * 綁住 canonical 目標之後，那條路從結構上就碰不到這顆 grant；對不上的方向是**不認領**，
- * 也就是照常被擋——fail-closed。
- *
- * 附帶的好處是核准卡上看得到是哪一個檔。dsh 的人本來就看得到（欄位騎在那次寫入上），
- * 所以這一格不是新的偏離，是「兩顆呼叫」那條已登記的偏離把該付的價付清。
- *
- * ## 為什麼也綁被擋下的那一次
- *
- * 只綁目標的話，人核准的與實際執行的可以是兩份內容：升級卡上只有檔名與理由，重試寫什麼
- * 都會被放行，而 `write_file`／`edit_file` 的重試**一張卡都沒有**。dsh 不必比對——核准的那顆
- * 就是會執行的那顆（欄位騎在重試上，卡片靠 `callId` 貼在它身上）。我們拆成兩顆呼叫，所以把
- * 「被擋下的那一次」整個綁進來（[#254](https://github.com/DemianLi/nexus-agent/issues/254)）：
- * 操作、canonical 目標、內容摘要都對得上才認領。這是上面那筆價的另一半。
- *
- * 對不上的方向照舊是不認領、照常被擋；**但不消費**，模型照指引原樣重試還拿得到它。代價是
- * 模型修正內容之後要重新升級。
- *
- * 比的是**送進 fence 的那一份**，不是工具參數：`submit_record` 送進來的是 append 之後的整份
- * CSV，所以同一筆紀錄在檔案中途被改過時也對不上，要重新升級——fail-closed 的方向。
- */
-export interface SandboxGrant {
-  /** 核准來的模式，**只套用在消費它的那一次變更上**。 */
-  readonly mode: SandboxMode;
-  /** 模型指名的虛擬路徑。比對時兩邊都 canonicalize：經 symlink 的別名對得上，`..` 與 `~` 一律對不上。 */
-  readonly target: string;
-  /**
-   * 發 grant 那一刻最近一次被擋下的變更。那時候沒有被擋過就是 `undefined`，這顆 grant
-   * 就認領不到任何變更。
-   */
-  readonly denied: SandboxDenial | undefined;
-}
-
-/**
- * fence 擋下的一次變更，**只留比對要用的東西**。
- *
- * 留摘要不留原文：這一格住在記憶體裡、只拿來比「重試是不是同一次」，用不到內容本身。
- */
-export interface SandboxDenial {
-  /** canonicalize 之後的絕對路徑。 */
-  readonly target: string;
-  /**
-   * 操作名連同這一次的參數（`write` 的內容；`edit` 的舊字串、新字串與是否全部取代）的
-   * sha256。**操作名在摘要裡**，所以同一個檔上被擋的 `write` 與 `delete` 不會是同一次。
-   */
-  readonly digest: string;
-}
+export type {
+  SandboxDenial,
+  SandboxGrant,
+  SandboxGrantLedger,
+  SandboxModeSource,
+} from '@nexus/core';
 
 /**
  * 目標對得上 grant、但它綁的不是這一次時，接在拒絕後面的那一行。開頭同 fence 的其他話，
@@ -246,31 +182,6 @@ function digestOf(operation: string, payload: readonly unknown[]): string {
 /** 兩次被擋下的變更是不是同一次。 */
 function sameDenial(bound: SandboxDenial | undefined, call: SandboxDenial): boolean {
   return bound !== undefined && bound.target === call.target && bound.digest === call.digest;
-}
-
-/**
- * fence 向外面認領 grant 的介面。`SandboxModeController` 就是它的實作。
- *
- * **`escalationHint` 在場就等於「這個組裝有升級工具」**——那是掛上工具的那一步寫進去的
- * 同一個事實，所以 fence 不會對一個沒有那顆工具的模型講「可以升級」（照 dsh：
- * `escalationModes` 為空時不公告）。
- */
-export interface SandboxGrantLedger {
-  /** 被擋下時接在拒絕後面的升級指引；這個組裝沒有升級工具時為 `undefined`。 */
-  readonly escalationHint: string | undefined;
-  /** 現在待消費的那一顆。**只看，不消費。** */
-  peekGrant(): SandboxGrant | undefined;
-  /**
-   * 消費**這一顆**。
-   * @param grant - 先前 {@link SandboxGrantLedger.peekGrant} 看到的那一顆。
-   * @returns 它還是待消費的那一顆時為真；已經被別人消費、或被新的一顆換掉時為假。
-   */
-  takeGrant(grant: SandboxGrant): boolean;
-  /**
-   * 記下被擋下的這一次。**一次只留最近的一顆**：升級工具發 grant 時綁的就是它。
-   * @param denial - 這一次被擋下的變更。
-   */
-  recordDenial(denial: SandboxDenial): void;
 }
 
 export interface ContainedFilesystemBackendOptions {
