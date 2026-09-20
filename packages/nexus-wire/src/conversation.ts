@@ -102,7 +102,20 @@ export interface ToolEntry {
    * 話，「掛著的不顯示失敗」單獨綠得起來——把全部都畫成「執行中」也會綠。
    */
   readonly status: 'running' | 'suspended' | 'done' | 'failed';
-  readonly output?: unknown;
+  /**
+   * 這次呼叫的**結果文字**，成功與失敗都有
+   * （[#439](https://github.com/DemianLi/nexus-agent/issues/439)）。
+   *
+   * 就是模型收到的那一段（harness 從會話日誌的 `tool/result` 抽，兩條路共用同一個規則），
+   * 同 dsh：工具卡的內容是那則結果的 content，`isError` 只是另一個旗標。**內容不是剛好一塊
+   * 文字時這一格不給**（照 dsh 的 `singleResultText`，不自己把幾塊拼起來），太長的那幾段由
+   * harness 取頭尾各半、中間放一行說明。
+   *
+   * **`tool-finished` 失敗的那些，{@link ToolEntry.error} 裝的是同一串字**：紅字那一格留給
+   * 畫面，判斷畫哪一種看 {@link ToolEntry.status}。`tool-error`（本體炸了、基座那條路）只寫
+   * `error`，那一顆線上本來就沒有結果訊息可抽。
+   */
+  readonly text?: string;
   readonly error?: string;
   readonly attribution: Attribution;
 }
@@ -685,7 +698,10 @@ interface ToolData {
   readonly tool_call_id: string;
   readonly tool_name?: string;
   readonly input?: string;
-  readonly output?: unknown;
+  /**
+   * 這次呼叫的結果文字（#439）。`tool-finished` 成功與失敗都帶，`tool-error` 是錯誤那一句。
+   * 由 pump 從日誌抽，見 harness 的 `tool-result-text.ts`。
+   */
   readonly message?: string;
   /** `tool-finished` 專用：那則 ToolMessage 自己說它失敗了。由 pump 分類，見它的檔頭。 */
   readonly failed?: boolean;
@@ -741,7 +757,7 @@ function reduceTool(
         subagents,
         entries: replace(state.entries, id, (existing) =>
           existing.kind === 'tool'
-            ? { ...existing, status: 'running', error: undefined, output: undefined }
+            ? { ...existing, status: 'running', error: undefined, text: undefined }
             : existing,
         ),
       };
@@ -768,7 +784,7 @@ function reduceTool(
           ? {
               ...entry,
               status: failed ? 'failed' : 'done',
-              output: data.output,
+              text: data.message,
               ...(failed ? { error: data.message ?? '未指名的錯誤' } : {}),
             }
           : entry,

@@ -12,7 +12,12 @@
  */
 
 import { MemorySaver } from '@langchain/langgraph';
-import { QUESTION_INTERRUPT_KIND, APPROVAL_INTERRUPT_KIND } from '@nexus/core';
+import {
+  QUESTION_INTERRUPT_KIND,
+  APPROVAL_INTERRUPT_KIND,
+  SessionRegistry,
+  type SessionEvent,
+} from '@nexus/core';
 import { createAskUserPlugin, ASK_USER_QUESTION_TOOL_NAME } from '@nexus/plugin-ask-user';
 import type { ConversationState, Event, WireClient } from '@nexus/wire';
 import {
@@ -31,6 +36,7 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
+import { historyFrames } from './conversation-history.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
@@ -48,6 +54,8 @@ interface Session {
   readonly events: AsyncGenerator<Event, void, undefined>;
   readonly frames: Event[];
   state: ConversationState;
+  /** root 那份會話日誌：模型那一側的原樣（見 {@link toolMessageOf}）。 */
+  log(): readonly SessionEvent[];
   close(): Promise<void>;
 }
 
@@ -66,11 +74,19 @@ async function open(threadId: string): Promise<Session> {
     checkpointer: new MemorySaver(),
     plugins: [createAskUserPlugin()],
   });
+  // **日誌要接在 pump 自己那一份註冊表上**：handler 建完 pump 才把它交過來（`wire-handler.ts`），
+  // 另外建一份的話圍堵寫的是別人，pump 一顆 `tool/result` 都收不到——工具卡的終態就退回只看基座的
+  // frame，#439 的結果文字也不會出現。產品路徑（`serve.ts`）走的就是這一條。
+  let sessions: SessionRegistry | undefined;
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,
     createAgent: async () => ({
       agent: built.agent as unknown as PumpAgent,
       commands: emptyCommandPoint(),
+      attachSession: (registry: SessionRegistry) => {
+        sessions = registry;
+        return built.attachSession(registry);
+      },
       dispose: built.dispose,
     }),
   });
@@ -85,6 +101,11 @@ async function open(threadId: string): Promise<Session> {
     events,
     frames: [],
     state: appendHumanTurn(emptyConversation(), '幫我登記一位訪客'),
+    log: () =>
+      sessions
+        ?.list()
+        .filter((entry) => entry.address.kind === 'root')
+        .map((entry) => entry.log.events)[0] ?? [],
     close: () => handler.close(),
   };
 }
@@ -121,16 +142,23 @@ function settled(session: Session): boolean {
  *
  * **這裡讀的是模型那一側，`ToolEntry.status` 讀的是畫面那一側。** 兩邊今天說的是同一件事
  * （[#239](https://github.com/DemianLi/nexus-agent/issues/239) 第 1 項之後 pump 會把
- * `kwargs.status === 'error'` 分類成 `failed`），但**它們的來源不同**：這一份是序列化過的
- * ToolMessage，那一格是折疊器的狀態機。所以兩邊各驗各的——只驗其中一邊，另一邊靜靜地
+ * `kwargs.status === 'error'` 分類成 `failed`），但**它們的來源不同**：這一份是圍堵記進會話
+ * 日誌的那一則，那一格是折疊器的狀態機。所以兩邊各驗各的——只驗其中一邊，另一邊靜靜地
  * 分岔不會有人知道。
+ *
+ * **從日誌讀，不從工具卡讀**：[#439](https://github.com/DemianLi/nexus-agent/issues/439)
+ * 之後那顆序列化的 ToolMessage 不再上線（卡上只剩抽好的文字），而模型那一側的原樣一直都在
+ * 日誌裡。
  */
-function toolMessageOf(entry: { output?: unknown }): { status?: string; content?: string } {
-  const output = entry.output as { kwargs?: { status?: string; content?: string } } | undefined;
-  const kwargs = output?.kwargs;
-  if (kwargs === undefined)
-    throw new Error(`這則工具紀錄沒有 ToolMessage：${JSON.stringify(output)}`);
-  return kwargs;
+function toolMessageOf(session: Session): { status?: string; content?: string } {
+  const results = session.log().filter((event) => event.type === 'tool/result');
+  const last = results.at(-1);
+  if (last === undefined || last.type !== 'tool/result')
+    throw new Error('日誌裡一顆 tool/result 都沒有');
+  const message = last.data.message;
+  if (message === undefined) throw new Error('那顆 tool/result 沒有帶訊息');
+  const data = message.data as { status?: string; content?: string };
+  return { status: data.status, content: data.content };
 }
 
 /**
@@ -195,7 +223,7 @@ describe('ask_user_question 走真的線', () => {
     });
     await until(session, settled);
 
-    const message = toolMessageOf(lastToolEntry(session));
+    const message = toolMessageOf(session);
     expect(message.status).toBe('success');
     expect(JSON.parse(String(message.content))).toEqual({
       answers: [
@@ -203,8 +231,27 @@ describe('ask_user_question 走真的線', () => {
         { id: 'day', selected: ['週二'] },
       ],
     });
+    // **畫面那一側拿到同一段字**（#439）：卡上的結果文字就是模型收到的那一則的內容，
+    // web 的提問卡靠它逐題配答案。少了這一格，重新整理之後答案就不見了。
+    expect(lastToolEntry(session).text).toBe(message.content);
     // 沒有殘留——答完了就不該還掛著一張卡。
     expect(session.state.pendings).toEqual([]);
+
+    // **重新整理之後還在**（#439 存在的理由）：同一份日誌重播出來的卡，狀態是完成、文字是
+    // 同一串，web 的提問卡靠它逐題配答案。這條路上這顆呼叫的 `tool/call` 有**兩顆**（中斷一次、
+    // resume 重跑一次），所以它同時也釘住重播那側把它們折成同一張卡。
+    const replayed = historyFrames(session.log())
+      .reduce(reduceConversation, emptyConversation())
+      .entries.filter((entry) => entry.kind === 'tool');
+    expect(replayed).toHaveLength(1);
+    const card = replayed[0];
+    expect(card?.kind === 'tool' ? card.status : undefined).toBe('done');
+    expect(JSON.parse(String(card?.kind === 'tool' ? card.text : ''))).toEqual({
+      answers: [
+        { id: 'name', selected: [], custom: '阿明' },
+        { id: 'day', selected: ['週二'] },
+      ],
+    });
     await session.close();
   });
 
@@ -240,7 +287,7 @@ describe('ask_user_question 走真的線', () => {
     });
     await until(session, settled);
 
-    const message = toolMessageOf(lastToolEntry(session));
+    const message = toolMessageOf(session);
     // **承重的是 `status`**：只看內容的話，一則普通的工具結果也可能夾著這串字，
     // 而模型分不分得出「這次失敗了」靠的正是這一格。
     expect(message.status).toBe('error');
