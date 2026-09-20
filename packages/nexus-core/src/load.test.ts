@@ -333,7 +333,11 @@ describe('每個註冊點的回滾', () => {
     registry.feedback.use(fakeFeedback());
     registry.services.provide('collaborator', { who: 'greedy' });
     registry.invariants.register('@nexus/greedy', () => () => {});
-    registry.commands.register({ name: 'greedy', description: '貪心', handler: () => undefined });
+    registry.commands.register({
+      name: 'greedy',
+      description: '貪心',
+      handler: () => ({ kind: 'success', text: '好' }),
+    });
     registry.sessions.join(() => undefined);
     registry.tools.register(fakeTool('grep'), { scope: 'researcher' });
     throw new Error('半路壞掉');

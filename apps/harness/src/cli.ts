@@ -589,10 +589,12 @@ export const DEFAULT_PLUGINS: readonly PluginEntry[] = [
  * 從一個模組載 plugin 清單。
  *
  * **這不是 [#46](https://github.com/DemianLi/nexus-agent/issues/46) 的外部設定機制**：
- * 條目的唯一 id 與停用已經在 [#104](https://github.com/DemianLi/nexus-agent/issues/104)
- * 落地了，**沒落地的是逐項覆寫個別 plugin 的設定**——我們這側設定收在工廠閉包裡，
- * 從外面 patch 不了。這裡則只回答「清單從哪個模組來」——組裝點本來就擁有的那個問題。
- * 約定薄到只有一句：模組的預設匯出是一個 plugin 陣列。
+ * 條目的唯一 id 與停用在 [#104](https://github.com/DemianLi/nexus-agent/issues/104) 落地，
+ * 設定改成條目上驗過的資料在 [#453](https://github.com/DemianLi/nexus-agent/issues/453)，
+ * 協作者改成服務注入在 [#459](https://github.com/DemianLi/nexus-agent/issues/459)。
+ * **沒落地的是 YAML 那一層**——從檔案讀清單與逐項覆寫設定是
+ * [#454](https://github.com/DemianLi/nexus-agent/issues/454) 的事。這裡只回答「清單從哪個
+ * 模組來」——組裝點本來就擁有的那個問題。約定薄到只有一句：模組的預設匯出是一個條目陣列。
  *
  * @param specifier - 模組路徑，相對於 `cwd` 解析。
  * @param cwd - 解析的基準目錄，省略即行程的工作目錄。

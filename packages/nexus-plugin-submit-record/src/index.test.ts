@@ -183,9 +183,9 @@ describe('閘門只認 submit_record', () => {
   it('認得它 → `ask`；別人 → 走到鏈底 `allow`', async () => {
     const { backend } = fakeBackend();
     const { registry } = await loadPlugins([
-    createHostServicesPlugin({ backend }),
-    createSubmitRecordPlugin(),
-  ]);
+      createHostServicesPlugin({ backend }),
+      createSubmitRecordPlugin(),
+    ]);
     const listeners = registry.approvals.listeners();
 
     const mine = await runApprovalGate(listeners, {

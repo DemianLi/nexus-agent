@@ -144,9 +144,7 @@ describe('升級', () => {
       plugins: [
         createHostServicesPlugin({
           backend,
-          ...(options.plugin === false
-            ? {}
-            : { sandboxPolicy: { controller, rootDir: root } }),
+          ...(options.plugin === false ? {} : { sandboxPolicy: { controller, rootDir: root } }),
         }),
         ...(options.plugin === false ? [] : [createSandboxPolicyPlugin()]),
         ...(options.submitRecord === true ? [createSubmitRecordPlugin()] : []),

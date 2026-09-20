@@ -121,15 +121,17 @@ registry.memory.addSource(path); // 純累加；路徑格式在註冊期擋（�
 | --- | --- | --- |
 | plugin 是命令式的 `apply(ctx)` | 照學：`apply(registry)` | [#28](https://github.com/DemianLi/nexus-agent/issues/28) 決議 9 |
 | 產品每一部分都是 plugin，包含 agent loop | 偏離：迴圈固定 | 第 0 節決策 2 |
-| context 是服務容器：plugin 以 `ctx.<key>` 查別人的服務，不 import 實作 | 退到相依隔離：plugin 只相依 `@nexus/core`，由 pnpm 機械保證；**plugin 之間沒有服務查找** | [#30](https://github.com/DemianLi/nexus-agent/issues/30)；代價見下 |
-| `inject` 宣告服務相依，載入順序由相依決定 | 退到存在性檢查：`requires` 只查能力在不在、不排序，順序由清單承擔 | [#28](https://github.com/DemianLi/nexus-agent/issues/28) 決議 10 |
+| context 是服務容器：plugin 以 `ctx.<key>` 查別人的服務，不 import 實作 | 照學：`registry.services.provide/use/get`（#459）。實作仍然不 import——plugin 只相依 `@nexus/core`，由 pnpm 機械保證 | [#30](https://github.com/DemianLi/nexus-agent/issues/30)、[#459](https://github.com/DemianLi/nexus-agent/issues/459)；偏離見下 |
+| `inject` 宣告服務相依，載入順序由相依決定 | 退到存在性檢查：`requires` 只查能力或服務在不在、不排序；**硬相依的服務由 `services.use()` 在 `apply` 當下擋**，順序仍由清單承擔 | [#28](https://github.com/DemianLi/nexus-agent/issues/28) 決議 10、[#459](https://github.com/DemianLi/nexus-agent/issues/459) |
 | 型別化事件，五種分派模式（`emit`／`waterfall`／`parallel`／`serial`／`bail`） | 退到 LangChain middleware 鉤子 ＋ `approvals.gate` waterfall ＋ 會話日誌事件；事件匯流排判為範圍外 | [#190](https://github.com/DemianLi/nexus-agent/issues/190) |
 | 註冊是可逆副作用，reload 與 teardown 時撤銷 | 部分：每次註冊回 undo，射程只到載入期回滾；關機另走 `lifecycle` | 本節上文 |
 | profile、組合包、patch 按條目 id 疊層，`--dump-config` 印得出整棵樹 | 部分：條目有 `id`／`disabled`／`config`，設定是 plugin `Config` 驗過的資料（#453）；profile、patch 疊層與 `--dump-config` 還沒做 | [#104](https://github.com/DemianLi/nexus-agent/issues/104)、[#453](https://github.com/DemianLi/nexus-agent/issues/453)、[#454](https://github.com/DemianLi/nexus-agent/issues/454)、[#46](https://github.com/DemianLi/nexus-agent/issues/46) |
 
-**沒有服務查找的代價：服務的定義只能住在 core。** Cordis 裡任何 plugin 都能占一個新的 `ctx.<key>` 給別人用；我們這側 plugin 只能往 core 已經開好的格子裡放東西。所以兩個元件要協作只剩兩條路：一是**組裝點用閉包把同一顆物件交給兩邊**——`apps/harness/src/cli.ts` 把同一顆 `SandboxModeController` 同時交給 `ContainedFilesystemBackend` 與 sandbox-policy plugin，把 backend 交給 submit-record；二是**core 先開一格**——上文九個註冊點之外的六條通道都是 core 擁有介面、plugin 往裡放。上文「換 plugin 清單，core 不動」因此只對彼此不協作的 plugin 成立；需要協作的配對，不是組裝點知道，就是 core 多一格。
+**服務查找有了（[#459](https://github.com/DemianLi/nexus-agent/issues/459)），這一段的結論翻掉了。** 從前這裡寫著「服務的定義只能住在 core，兩個元件要協作只剩組裝點用閉包交同一顆物件、或 core 先開一格兩條路」。現在 `registry.services` 是第七條正交通道：任何 plugin（含組裝點自己貢獻的那個條目）都能 `provide(name, value)`，消費者 `use()`（硬相依，缺件當場拋）或 `get()`（軟相依）。名字對應的型別由**擁有那個型別的套件**用宣告合併補進 `NexusServices`，照 dsh 的 `declare module '@deepseek-ai/cordis' { interface Context { … } }`。
 
-**`requires` 今天沒有人用。** `packages/` 底下 7 個 plugin `provide` 能力（含示範用的 `@nexus/plugin-echo`），產品程式碼裡沒有任何條目宣告 `requires`，只有 `apps/harness/src/agent-factory.test.ts` 用它測機制本身。
+**還留著的偏離是缺件的處理，不是查找本身。** Cordis 的 `inject` 是反應式的——缺件時 fiber 停在 INACTIVE，等到有人提供才啟動；我們的載入是一趟到底的命令式折疊（deepagents / LangGraph 沒有 context 樹與 fiber 狀態機），所以**缺件當場失敗**。直接後果是「誰提供、誰消費」之間清單順序承重，而組裝點的協作者條目因此排在最前面。**plugin → plugin 的服務相依還沒有人做**，#459 的五個協作者全是組裝點與 plugin 之間的單向流；真的要那天，順序才會變成一個要解的問題。
+
+**`requires` 的第一個產品消費者是 `sandbox-policy`（#459）**：它宣告 `requires: ['sandboxPolicy']`，沒有人提供控制器就載入失敗。在那之前產品程式碼裡一個條目都沒宣告過，只有 `apps/harness/src/agent-factory.test.ts` 用它測機制本身。
 
 **事件那一列真正缺的不是匯流排。** #190 查過：dsh 的 `send()`／`steer()`／`inject()` 是同一個「帶邊界、選擇叫不叫醒」的 `UserMessage` 佇列的三個預設，我們缺的是那個佇列；今天沒有「把一步塞進正在跑的迴圈」的消費者，所以不補。
 
