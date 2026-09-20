@@ -21,9 +21,22 @@ import {
 } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { AIMessage, ToolMessage } from '@langchain/core/messages';
+import type { SessionEvent } from '@nexus/core';
+import { toLoggedMessage } from '@nexus/core';
+
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
-import { exchangeServeToken, fetchWithCookie, serveClient } from './fixtures.js';
+import {
+  exchangeServeToken,
+  fetchWithCookie,
+  loopbackRequest,
+  serveClient,
+  TEST_BROWSER_AUTH,
+} from './fixtures.js';
+import { TOOL_TEXT_MAX_BYTES } from './tool-result-text.js';
+import type { PumpAgent } from './thread-pump.js';
+import { createWireHandler } from './wire-handler.js';
 
 let running: RunningServe | undefined;
 
@@ -273,5 +286,93 @@ describe('GET /threads/:id/history 的載體與協定層', () => {
     });
 
     expect(response.status).toBe(404);
+  });
+});
+
+/**
+ * **軟上限撐破時 server 真的講得出話**（[#479](https://github.com/DemianLi/nexus-agent/issues/479)）。
+ *
+ * `historyPage` 那一層的判斷由 `conversation-history.test.ts` 釘著；這裡釘的是**接線**：route 有沒有
+ * 把回呼接到 `createWireHandler` 的 `warn` 上。兩條線任何一條斷掉，那件事就完全看不見——回應照樣 200、
+ * 畫面照樣對。用 `rootSeed` 直接餵一份超標的日誌，不必讓假模型真的讀 85 次檔。
+ */
+describe('一頁撐破位元組上限時，server 講一聲', () => {
+  function oversizedSeed(): SessionEvent[] {
+    const ids = Array.from({ length: 85 }, (_, i) => `c${i}`);
+    const body = 'x'.repeat(TOOL_TEXT_MAX_BYTES);
+    const drafts: Pick<SessionEvent, 'type' | 'data'>[] = [
+      { type: 'turn/start', data: { kind: 'message', text: '讀一堆檔。' } },
+      {
+        type: 'assistant/message',
+        data: {
+          message: toLoggedMessage(
+            new AIMessage({
+              content: '讀了。',
+              tool_calls: ids.map((id) => ({
+                id,
+                name: 'read_file',
+                args: { file_path: `/x/${id}` },
+              })),
+            }),
+          ),
+        },
+      },
+      ...ids.flatMap((id) => [
+        { type: 'tool/call' as const, data: { callId: id, name: 'read_file', arguments: '{}' } },
+        {
+          type: 'tool/result' as const,
+          data: {
+            callId: id,
+            isError: false,
+            message: toLoggedMessage(new ToolMessage({ content: body, tool_call_id: id })),
+          },
+        },
+      ]),
+      { type: 'turn/end', data: {} },
+    ];
+    return drafts.map((draft, seq) => ({ ...draft, seq, time: 1000 + seq }) as SessionEvent);
+  }
+
+  /** 一顆什麼都不吐的 agent：這條測試不跑任何一輪，只打歷史路由。 */
+  const idle: PumpAgent = {
+    streamEvents: async () => ({
+      [Symbol.asyncIterator]: () => ({
+        next: async () => ({ done: true as const, value: undefined }),
+      }),
+    }),
+    getState: async () => ({ values: {} }),
+    updateState: async () => undefined,
+  };
+
+  it('超標那一頁走過 route 之後，warn 收到一行；正常的一頁不講', async () => {
+    for (const [label, seed, expected] of [
+      ['超標', oversizedSeed(), 1],
+      ['正常', oversizedSeed().slice(0, 6), 0],
+    ] as const) {
+      const said: string[] = [];
+      const handler = createWireHandler({
+        auth: TEST_BROWSER_AUTH,
+        warn: (message) => void said.push(message),
+        createAgent: async () => ({
+          agent: idle,
+          commands: { find: () => undefined, list: () => [] },
+          dispose: async () => undefined,
+          rootSeed: seed,
+        }),
+      });
+      try {
+        const response = await handler.handle(
+          loopbackRequest(`http://wire.test${historyPath('big')}`, {
+            method: 'GET',
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+        expect(response.status, label).toBe(200);
+        expect(said, label).toHaveLength(expected);
+        if (expected === 1) expect(said[0]).toMatch(/一頁超過上限/u);
+      } finally {
+        await handler.close();
+      }
+    }
   });
 });

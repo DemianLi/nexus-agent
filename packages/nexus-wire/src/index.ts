@@ -65,6 +65,7 @@ export type {
 export { changesDiffPath, changesSummaryPath, WORKSPACE_CHANGES } from './workspace-changes.js';
 export {
   FEEDBACK_METHODS,
+  HISTORY_PAGE_MAX_BYTES,
   HISTORY_PAGE_MESSAGES,
   historyPath,
   isFeedbackMethod,
