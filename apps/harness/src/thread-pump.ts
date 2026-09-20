@@ -52,7 +52,6 @@
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import {
-  fromLoggedMessage,
   INTERRUPTED_REPLY_MARKER,
   isTurnCancelled,
   SessionRegistry,
@@ -78,6 +77,7 @@ import { channelOfMethod, eventId } from '@nexus/wire';
 import { deliverablesData, workspaceChangesData } from './conversation-history.js';
 import { driveGoalRound } from './goal-driver.js';
 import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
+import { toolResultText } from './tool-result-text.js';
 
 /** 基座 v3 run 抽出來的一顆原始封包（`GraphRunStream implements AsyncIterable<ProtocolEvent>`）。 */
 interface RawProtocolEvent {
@@ -400,16 +400,18 @@ interface ForwardedFinish {
 /**
  * 把日誌的判定套到一顆 `tool-finished` 的 data 上。
  *
- * **`output` 原樣留著**：折疊器對它是無條件覆寫（`@nexus/wire` 的 `conversation.ts`），更正那顆
- * 不帶的話，畫面上的輸出會被清掉。失敗的字取日誌那顆的文字（模型看到的最終那一句）；沒有的話退回
- * 本體自己說的，再退回「未指名的錯誤」。
+ * `message` 是**這次呼叫的結果文字**，成功與失敗都帶（#439）：成功時就是日誌那一則的內容，
+ * 沒抽出文字（多塊內容）就不帶這一格；失敗時取同一段字，沒有的話退回本體自己說的，再退回
+ * 「未指名的錯誤」。畫面上分紅字還是輸出，看的是 `failed`，同 dsh 的 content ＋ isError。
  */
 function applyVerdict(
   data: Record<string, unknown>,
   verdict: ToolVerdict,
 ): Record<string, unknown> {
   const { failed: _failed, message: bodyText, ...rest } = data;
-  if (!verdict.failed) return rest;
+  if (!verdict.failed) {
+    return verdict.text === undefined ? rest : { ...rest, message: verdict.text };
+  }
   return {
     ...rest,
     failed: true,
@@ -1222,8 +1224,11 @@ export class ThreadPump {
   #settleFinish(
     namespace: readonly string[],
     callId: string,
-    data: Record<string, unknown>,
+    raw: Record<string, unknown>,
   ): Record<string, unknown> {
+    // **`output` 不上線**（#439）：它是序列化過的 `ToolMessage`，而且是基座搬移過的預覽——
+    // 文字現在由 `message` 交出來，`output` 就只剩沒有上限的重複品，瀏覽器那側也從來沒有人讀它。
+    const { output: _output, ...data } = raw;
     const verdict = this.#earlyVerdicts.get(callId);
     if (verdict !== undefined) {
       this.#earlyVerdicts.delete(callId);
@@ -1342,8 +1347,10 @@ export class ThreadPump {
     const { callId, isError, message } = event.data;
     const verdict: ToolVerdict = {
       failed: isError,
-      // 紅字就是模型收到的那一句，同 dsh（#305）：推回同一則訊息再取 `text`，不另寫一份抽字的規則。
-      text: isError && message !== undefined ? fromLoggedMessage(message).text : undefined,
+      // **成功也帶文字**（#439）：dsh 的工具卡文字就是這一則的內容，`isError` 是另一個旗標。
+      // 抽字的規則與重播那一條共用（`tool-result-text.ts`），兩邊不共用的話同一張卡會「即時
+      // 一個樣、重新整理另一個樣」。
+      text: toolResultText(message),
     };
     const forwarded = this.#forwardedFinishes.get(callId);
     if (forwarded === undefined) {

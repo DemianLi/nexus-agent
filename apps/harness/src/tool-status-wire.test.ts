@@ -135,7 +135,8 @@ describe('產品路徑：handler 之後被改成錯誤的結果，web 畫成失�
       const [entry] = toolEntries(run.frames);
       expect(entry).toMatchObject({ name: 'write_file', status: 'failed' });
       expect(entry?.error).toMatch(/^Error: \[containment\] .*這個 backend 是唯讀的/);
-      expect(entry?.output).toBeDefined();
+      // 結果文字跟紅字是同一串：失敗那一側 #439 之後也走 `text`。
+      expect(entry?.text).toBe(entry?.error);
       expect(await readdir(root)).toEqual([]);
     } finally {
       await run.close();
@@ -393,27 +394,34 @@ describe('送達的兩種先後：判定比 frame 先到、比 frame 晚到，�
     const frames = await play('verdict-first', { isError: true });
     expect(finishesOf(frames, 'c1')).toBe(1);
     expect(toolEntries(frames)).toMatchObject([
-      { status: 'failed', error: '被 fence 擋下', output: OUTPUT },
+      { status: 'failed', error: '被 fence 擋下', text: '被 fence 擋下' },
     ]);
   });
 
-  it('判定後到：補發一顆同 id、同 namespace、帶原輸出的更正', async () => {
+  it('判定後到：補發一顆同 id、同 namespace 的更正', async () => {
     const frames = await play('frame-first', { isError: true });
     expect(finishesOf(frames, 'c1')).toBe(2);
     const correction = frames.filter((next) => next.method === 'tools').at(-1);
     expect(correction?.params.namespace).toEqual(NAMESPACE);
     expect(toolEntries(frames)).toMatchObject([
-      { status: 'failed', error: '被 fence 擋下', output: OUTPUT },
+      { status: 'failed', error: '被 fence 擋下', text: '被 fence 擋下' },
     ]);
   });
 
-  it('對照：判定是成功的話，兩種先後都不多發、照舊是完成', async () => {
+  /**
+   * **成功那一側現在也有東西要更正**（[#439](https://github.com/DemianLi/nexus-agent/issues/439)）：
+   * 結果文字只有日誌有，所以基座那顆先到時照樣補一顆。這一條在 #439 之前釘的是「成功不多發」，
+   * 翻面之後釘的是「多發的那一顆帶的是文字，而且終態沒有變成失敗」。
+   */
+  it('成功也把文字補上：基座那顆先到就補一顆，判定先到就套在同一顆上', async () => {
+    const counts: number[] = [];
     for (const order of ['verdict-first', 'frame-first'] as const) {
       const frames = await play(order, { isError: false });
-      expect(finishesOf(frames, 'c1')).toBe(1);
-      expect(toolEntries(frames)).toMatchObject([{ status: 'done', output: OUTPUT }]);
+      counts.push(finishesOf(frames, 'c1'));
+      expect(toolEntries(frames)).toMatchObject([{ status: 'done', text: '寫好了' }]);
       expect(toolEntries(frames)[0]?.error).toBeUndefined();
     }
+    expect(counts).toEqual([1, 2]);
   });
 
   /**
@@ -425,6 +433,8 @@ describe('送達的兩種先後：判定比 frame 先到、比 frame 晚到，�
       pump.sessionLog.append('tool/result', { callId: 'c1', isError: true });
     });
     expect(finishesOf(frames, 'c1')).toBe(1);
-    expect(toolEntries(frames)).toMatchObject([{ status: 'done', output: OUTPUT }]);
+    expect(toolEntries(frames)).toMatchObject([{ status: 'done' }]);
+    // **沒有判定就沒有結果文字**：文字只從日誌來（#439），基座那顆的 `output` 不上線。
+    expect(toolEntries(frames)[0]?.text).toBeUndefined();
   });
 });

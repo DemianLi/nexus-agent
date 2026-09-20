@@ -121,6 +121,22 @@ describe('日誌 → 畫面', () => {
     expect(frames.filter((frame) => frame.seq !== undefined)).toEqual([]);
   });
 
+  /**
+   * **成功那一側也帶結果文字**（[#439](https://github.com/DemianLi/nexus-agent/issues/439)）。
+   * 重新整理之後提問卡要靠它逐題配答案——少了這一格，答案只有作答的那個分頁記得。
+   * 「即時與重播是同一串」那一條在 `tool-card-from-log.test.ts`。
+   */
+  it('工具成功：卡是完成，結果文字帶上、紅字不給', () => {
+    const state = screen(
+      log(human('跑'), reply('', ['c1']), call('c1'), result('c1', '回聲：c1'), turnEnd),
+    );
+    const tool = state.entries.find((entry) => entry.kind === 'tool');
+
+    expect(tool?.kind === 'tool' ? tool.text : undefined).toBe('回聲：c1');
+    expect(tool?.kind === 'tool' ? tool.error : '有紅字').toBeUndefined();
+    expect(state.entries.map(line)).toEqual(['human:跑', 'tool:echo:done']);
+  });
+
   it('工具失敗：卡是失敗，紅字是模型收到的那則', () => {
     const state = screen(
       log(human('跑'), reply('', ['c1']), call('c1'), result('c1', '找不到那個檔', true), turnEnd),
