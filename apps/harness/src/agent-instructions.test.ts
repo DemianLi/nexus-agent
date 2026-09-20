@@ -18,7 +18,7 @@ import {
   isAgentInstructionsMessage,
 } from '@nexus/plugin-agent-instructions';
 import { REPEAT_REMINDER_MARKER } from '@nexus/core';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import type { Event } from '@nexus/wire';
 import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
@@ -71,14 +71,16 @@ function injectedBaselines(events: readonly { type: string; data: unknown }[]) {
 }
 
 /** 只登記一個具名子代理，其他什麼都不做。 */
-const WORKER_HOST: NexusPlugin = {
-  name: 'worker-host',
-  apply(registry) {
-    registry.subagents.register({
-      name: 'worker',
-      description: '幹活的。',
-      systemPrompt: '你是 worker。',
-    });
+const WORKER_HOST: PluginEntry = {
+  plugin: {
+    name: 'worker-host',
+    apply(registry) {
+      registry.subagents.register({
+        name: 'worker',
+        description: '幹活的。',
+        systemPrompt: '你是 worker。',
+      });
+    },
   },
 };
 
@@ -105,7 +107,7 @@ interface RunOptions {
    * 今天只有一個用途：登記一個具名子代理，好讓「具名的與 fold 補的各拿一份」兩種都走得到。
    * 它只註冊一個子代理定義，不碰工作區指令那條路——**零設定那個判準沒有被放寬**。
    */
-  readonly extraPlugins?: readonly NexusPlugin[];
+  readonly extraPlugins?: readonly PluginEntry[];
 }
 
 /** 真的組裝、真的 pump——serve 那條路的形狀，plugin 清單就是 `DEFAULT_PLUGINS`。 */

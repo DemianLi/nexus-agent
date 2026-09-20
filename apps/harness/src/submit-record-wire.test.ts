@@ -122,6 +122,9 @@ async function connect(
     createAgent: async () => ({
       agent: built.agent as unknown as PumpAgent,
       commands: emptyCommandPoint(),
+      // 接的是 pump 自己那一份註冊表（handler 建完才交過來），同產品路徑 `serve.ts`。工具卡的終態
+      // 與結果文字都從日誌來（#296、#439），不接的話卡上只剩基座 frame 說得出的那幾格。
+      attachSession: built.attachSession,
       dispose: built.dispose,
     }),
   });
@@ -300,7 +303,9 @@ describe('沒有 --workspace 的那條路（`serve` 的預設）', () => {
     );
     expect(read).toHaveLength(1);
     // `read_file` 會在每一行前面加行號，所以比對的是「這一列在裡面」而不是整份相等。
-    expect(JSON.stringify(read[0])).toContain('阿明,週二');
+    // 讀的是卡上的結果文字（#439 之後那一格叫 `text`，來源是日誌那顆 `tool/result`）。
+    const card = read[0];
+    expect(card?.kind === 'tool' ? card.text : undefined).toContain('阿明,週二');
     await session.close();
   });
 });

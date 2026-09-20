@@ -19,7 +19,7 @@
  * SDK 狀態都不建。
  */
 
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { createEchoPlugin } from '@nexus/plugin-echo';
 import { createTelemetryOtelPlugin } from '@nexus/plugin-telemetry-otel';
 
@@ -38,4 +38,4 @@ export default [
           processor: { scheduledDelayMillis: 500 },
         },
   ),
-] satisfies NexusPlugin[];
+] satisfies PluginEntry[];

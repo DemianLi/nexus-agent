@@ -5,10 +5,19 @@
  * `apps/harness`，而且只有那一個地方。
  */
 
-export type { NexusPlugin, PluginEntry, PluginManifest, PluginOrigin } from './plugin.js';
+export type {
+  EntryManifest,
+  NexusPlugin,
+  PluginEntry,
+  PluginManifest,
+  PluginOrigin,
+  ResolvedPluginEntry,
+} from './plugin.js';
 export {
+  entryManifestSchema,
   pluginManifestSchema,
-  parsePluginManifest,
+  parseEntry,
+  parseEntryConfig,
   resolveEntries,
   formatOrigin,
 } from './plugin.js';

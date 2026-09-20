@@ -65,7 +65,7 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -82,9 +82,11 @@ async function workspace(): Promise<string> {
 }
 
 /** 擋掉 `.env` 類路徑的 plugin。 */
-const guard: NexusPlugin = {
-  name: 'guard',
-  apply: (registry) => void registry.permissions.deny(['/.env*']),
+const guard: PluginEntry = {
+  plugin: {
+    name: 'guard',
+    apply: (registry) => void registry.permissions.deny(['/.env*']),
+  },
 };
 
 /**
@@ -98,14 +100,16 @@ const guard: NexusPlugin = {
  *
  * 它自己那條規則刻意跟 `.env` 無關——它只是用來讓 `input.permissions` 非空。
  */
-const crew: NexusPlugin = {
-  name: 'crew',
-  apply: (registry) =>
-    void registry.subagents.register({
-      name: 'writer',
-      description: '負責寫檔的 subagent。',
-      permissions: [{ operations: ['read', 'write'], paths: ['/機密/**'], mode: 'deny' }],
-    }),
+const crew: PluginEntry = {
+  plugin: {
+    name: 'crew',
+    apply: (registry) =>
+      void registry.subagents.register({
+        name: 'writer',
+        description: '負責寫檔的 subagent。',
+        permissions: [{ operations: ['read', 'write'], paths: ['/機密/**'], mode: 'deny' }],
+      }),
+  },
 };
 
 describe('deny 規則在 Disk backend 上', () => {

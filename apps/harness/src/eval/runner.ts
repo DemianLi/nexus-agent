@@ -37,7 +37,7 @@
 
 import { AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import type { AgentModel, NexusPlugin } from '@nexus/core';
+import type { AgentModel, PluginEntry } from '@nexus/core';
 import { createNexusAgent, HEADLESS_APPROVALS } from '../agent-factory.js';
 import { toAgentInvocation } from '../messages.js';
 import type { BenchmarkCase } from './dataset.js';
@@ -75,7 +75,7 @@ export interface RunBenchmarkOptions {
   /** 這一輪用哪個模型。CI 傳假模型，供應商比較傳真模型。 */
   readonly model: AgentModel;
   /** plugin 清單。兩邊必須是同一份，否則比的不是模型是組裝。 */
-  readonly plugins: readonly NexusPlugin[];
+  readonly plugins: readonly PluginEntry[];
   /** 附加的 system prompt。省略即不加。 */
   readonly systemPrompt?: string;
   /**

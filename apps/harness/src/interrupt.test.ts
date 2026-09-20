@@ -30,7 +30,7 @@
 import { tool } from '@langchain/core/tools';
 import type { AIMessage, BaseMessage } from '@langchain/core/messages';
 import { Command, MemorySaver } from '@langchain/langgraph';
-import type { NexusPlugin, ToolExecution } from '@nexus/core';
+import type { PluginEntry, ToolExecution } from '@nexus/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
@@ -45,21 +45,23 @@ beforeEach(() => {
 });
 
 /** 註冊幾個只做一件事的間諜工具：把自己的名字記進 {@link ran}。 */
-function spyPlugin(names: readonly string[]): NexusPlugin {
+function spyPlugin(names: readonly string[]): PluginEntry {
   return {
-    name: 'spy',
-    apply(registry) {
-      for (const name of names) {
-        registry.tools.register(
-          tool(
-            () => {
-              ran.push(name);
-              return `${name} 跑過了`;
-            },
-            { name, description: `間諜工具 ${name}`, schema: z.object({}) },
-          ),
-        );
-      }
+    plugin: {
+      name: 'spy',
+      apply(registry) {
+        for (const name of names) {
+          registry.tools.register(
+            tool(
+              () => {
+                ran.push(name);
+                return `${name} 跑過了`;
+              },
+              { name, description: `間諜工具 ${name}`, schema: z.object({}) },
+            ),
+          );
+        }
+      },
     },
   };
 }
@@ -73,16 +75,18 @@ function spyPlugin(names: readonly string[]): NexusPlugin {
 function gatePlugin(
   names: readonly string[],
   observe?: (exec: ToolExecution) => void,
-): NexusPlugin {
+): PluginEntry {
   return {
-    name: 'gate',
-    apply(registry) {
-      registry.approvals.gate((exec, next) => {
-        observe?.(exec);
-        return names.includes(exec.name)
-          ? { kind: 'ask', reason: `${exec.name} 要人看過` }
-          : next();
-      });
+    plugin: {
+      name: 'gate',
+      apply(registry) {
+        registry.approvals.gate((exec, next) => {
+          observe?.(exec);
+          return names.includes(exec.name)
+            ? { kind: 'ask', reason: `${exec.name} 要人看過` }
+            : next();
+        });
+      },
     },
   };
 }
@@ -443,14 +447,16 @@ describe('subagent 裡的閘門', () => {
       plugins: [
         spyPlugin(['danger']),
         {
-          name: 'delegate',
-          apply(registry) {
-            // 刻意不自帶 `tools`——什麼都不帶的 subagent 沿用 root 那組，`danger`
-            // 因此在子代理裡也叫得到，而閘門是不是跟著下去正是這一條要問的事。
-            // **這一條在換機制之後更吃重**：subagent 不繼承 root 的 plugin middleware
-            // （`SubAgentBase.middleware` 是「append after default_middleware」），
-            // 閘門是 fold 逐個注進去的。沒注就是默默地失去核准，而它紅在這裡。
-            registry.subagents.register({ name: 'worker', description: '幹活的。' });
+          plugin: {
+            name: 'delegate',
+            apply(registry) {
+              // 刻意不自帶 `tools`——什麼都不帶的 subagent 沿用 root 那組，`danger`
+              // 因此在子代理裡也叫得到，而閘門是不是跟著下去正是這一條要問的事。
+              // **這一條在換機制之後更吃重**：subagent 不繼承 root 的 plugin middleware
+              // （`SubAgentBase.middleware` 是「append after default_middleware」），
+              // 閘門是 fold 逐個注進去的。沒注就是默默地失去核准，而它紅在這裡。
+              registry.subagents.register({ name: 'worker', description: '幹活的。' });
+            },
           },
         },
         gatePlugin(['danger']),

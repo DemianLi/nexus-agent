@@ -15,7 +15,7 @@
 
 import type { Event } from '@nexus/wire';
 import { createWireClient } from '@nexus/wire';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { createEchoPlugin } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
 
@@ -47,13 +47,15 @@ async function drainUntilRootCompleted(
 }
 
 /** 一個一律報違規的配套入口，用來證明接線真的通了。 */
-function noisyInvariantPlugin(): NexusPlugin {
+function noisyInvariantPlugin(): PluginEntry {
   return {
-    name: 'noisy-invariant',
-    apply(registry) {
-      registry.invariants.register('@nexus/noisy', (subject, fail) => {
-        subject.observe((event) => fail(`看到 ${event.type}`));
-      });
+    plugin: {
+      name: 'noisy-invariant',
+      apply(registry) {
+        registry.invariants.register('@nexus/noisy', (subject, fail) => {
+          subject.observe((event) => fail(`看到 ${event.type}`));
+        });
+      },
     },
   };
 }
@@ -139,7 +141,9 @@ describe('預設清單', () => {
     } finally {
       await dispose();
     }
-    expect(DEFAULT_PLUGINS.filter((plugin) => plugin.name.endsWith('-invariant'))).toHaveLength(19);
+    expect(
+      DEFAULT_PLUGINS.filter((entry) => entry.plugin.name.endsWith('-invariant')),
+    ).toHaveLength(19);
   });
 });
 

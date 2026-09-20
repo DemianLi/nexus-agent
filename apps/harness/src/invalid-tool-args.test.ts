@@ -26,7 +26,7 @@ import {
   repairInvalidToolCalls,
   SessionRegistry,
 } from '@nexus/core';
-import type { InvariantError, NexusPlugin, SessionEvent } from '@nexus/core';
+import type { InvariantError, PluginEntry, SessionEvent } from '@nexus/core';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
 import type { Event } from '@nexus/wire';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
@@ -182,45 +182,51 @@ function openAi(baseURL: string): ChatOpenAI {
 }
 
 /** 兩顆工具，本體被叫到就記下名字——「本體零次」看的就是這一份。 */
-function toolsPlugin(bodies: string[]): NexusPlugin {
+function toolsPlugin(bodies: string[]): PluginEntry {
   return {
-    name: 'invalid-args-tools',
-    apply(registry) {
-      registry.tools.register(
-        tool(
-          ({ text }: { text: string }) => {
-            bodies.push('echo');
-            return `回聲：${text}`;
-          },
-          { name: 'echo', description: '原樣回聲。', schema: z.object({ text: z.string() }) },
-        ),
-      );
-      registry.tools.register(
-        tool(
-          () => {
-            bodies.push('danger');
-            return '危險的事做完了';
-          },
-          { name: 'danger', description: '要核准。', schema: z.object({ target: z.string() }) },
-        ),
-      );
+    plugin: {
+      name: 'invalid-args-tools',
+      apply(registry) {
+        registry.tools.register(
+          tool(
+            ({ text }: { text: string }) => {
+              bodies.push('echo');
+              return `回聲：${text}`;
+            },
+            { name: 'echo', description: '原樣回聲。', schema: z.object({ text: z.string() }) },
+          ),
+        );
+        registry.tools.register(
+          tool(
+            () => {
+              bodies.push('danger');
+              return '危險的事做完了';
+            },
+            { name: 'danger', description: '要核准。', schema: z.object({ target: z.string() }) },
+          ),
+        );
+      },
     },
   };
 }
 
-const gatePlugin: NexusPlugin = {
-  name: 'invalid-args-gate',
-  apply(registry) {
-    registry.approvals.gate((exec, next) =>
-      exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
-    );
+const gatePlugin: PluginEntry = {
+  plugin: {
+    name: 'invalid-args-gate',
+    apply(registry) {
+      registry.approvals.gate((exec, next) =>
+        exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
+      );
+    },
   },
 };
 
-const workerPlugin: NexusPlugin = {
-  name: 'invalid-args-worker',
-  apply(registry) {
-    registry.subagents.register({ name: 'worker', description: '幹活的。' });
+const workerPlugin: PluginEntry = {
+  plugin: {
+    name: 'invalid-args-worker',
+    apply(registry) {
+      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    },
   },
 };
 
@@ -268,7 +274,7 @@ function textOf(content: unknown): string {
 const ROOT_ID = 'invalid-args-root';
 
 /** CLI 那條：`agent.stream`，串流模式同 `cli.ts`（`updates`／`values`，不串逐字）。 */
-async function assembleCli(replies: readonly Reply[], plugins: readonly NexusPlugin[]) {
+async function assembleCli(replies: readonly Reply[], plugins: readonly PluginEntry[]) {
   const upstream = await fakeOpenAi(replies);
   // **日誌的不變量也跑一遍**：核准那條一個 callId 有兩顆 `tool/call`、一顆 `tool/result`，
   // 只看日誌內容的斷言看不出它配不配得起來。

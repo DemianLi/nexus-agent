@@ -43,7 +43,7 @@
  */
 
 import { tool } from '@langchain/core/tools';
-import type { NexusPlugin, PluginRegistry } from '@nexus/core';
+import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
 import { getQuickJS, shouldInterruptAfterDeadline } from 'quickjs-emscripten';
 import type { QuickJSContext, QuickJSHandle } from 'quickjs-emscripten';
 import { z } from 'zod';
@@ -69,29 +69,31 @@ export const DEFAULT_MEMORY_LIMIT_BYTES = 16 * 1024 * 1024;
 /** 一個 VM 的預設堆疊上限。 */
 export const DEFAULT_MAX_STACK_SIZE_BYTES = 512 * 1024;
 
-export interface QuickJsPluginOptions {
-  /**
-   * 一次求值最多跑多久，毫秒。省略即 {@link DEFAULT_TIMEOUT_MS}。
-   *
-   * 這是**主執行緒被塞住的上限**，不是背景逾時，而且精度等於「最長的那一個操作」——
-   * 見本檔頂端的邊界說明。瘋狂配置記憶體的程式擋不住，那是
-   * {@link QuickJsPluginOptions.memoryLimitBytes} 的工作。
-   */
-  readonly timeoutMs?: number;
-  /**
-   * 一個 VM 最多配置多少記憶體，位元組。省略即 {@link DEFAULT_MEMORY_LIMIT_BYTES}。
-   */
-  readonly memoryLimitBytes?: number;
-  /**
-   * 一個 VM 的堆疊上限，位元組。省略即 {@link DEFAULT_MAX_STACK_SIZE_BYTES}。
-   *
-   * 與記憶體上限分開的理由是無窮遞迴吃的是堆疊不是堆積，只設前者擋不住它。
-   */
-  readonly maxStackSizeBytes?: number;
-}
+/**
+ * 這個 plugin 的設定：三條資源上限。
+ *
+ * 三格都是正的安全整數。`timeoutMs` 是**主執行緒被塞住的上限**，不是背景逾時，精度等於
+ * 「最長的那一個操作」——見本檔頂端的邊界說明；瘋狂配置記憶體的程式擋不住，那是
+ * `memoryLimitBytes` 的工作。堆疊上限與記憶體上限分開的理由是無窮遞迴吃的是堆疊不是堆積，
+ * 只設前者擋不住它。
+ */
+export const quickJsConfigSchema = z.strictObject({
+  /** 一次求值最多跑多久，毫秒。省略即 {@link DEFAULT_TIMEOUT_MS}。 */
+  timeoutMs: z.number().int().positive().default(DEFAULT_TIMEOUT_MS),
+  /** 一個 VM 最多配置多少記憶體，位元組。省略即 {@link DEFAULT_MEMORY_LIMIT_BYTES}。 */
+  memoryLimitBytes: z.number().int().positive().default(DEFAULT_MEMORY_LIMIT_BYTES),
+  /** 一個 VM 的堆疊上限，位元組。省略即 {@link DEFAULT_MAX_STACK_SIZE_BYTES}。 */
+  maxStackSizeBytes: z.number().int().positive().default(DEFAULT_MAX_STACK_SIZE_BYTES),
+});
+
+/** 驗過的設定。 */
+export type QuickJsConfig = z.infer<typeof quickJsConfigSchema>;
+
+/** 工廠收的東西：schema 的輸入面，每一格都可以省略。 */
+export type QuickJsPluginOptions = z.input<typeof quickJsConfigSchema>;
 
 /**
- * 建一個 QuickJS plugin。
+ * QuickJS plugin。
  *
  * `apply` 是 async 的，唯一的理由是**在載入期就把 WASM 模組拉起來**。載不起來就讓整份
  * plugin 清單載入失敗，而不是等模型第一次呼叫工具時才在對話中間變成一句錯誤字串——
@@ -103,37 +105,46 @@ export interface QuickJsPluginOptions {
  * context 是**每次呼叫現建現拆**、在 `finally` 裡收掉。登記一個什麼都不做的 disposer
  * 只會讓關機清單看起來比實際上熱鬧。
  *
- * @param options - 資源上限。
- * @returns 可以放進組裝點清單的 plugin。
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
+ * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
  */
-export function createQuickJsPlugin(options: QuickJsPluginOptions = {}): NexusPlugin {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const memoryLimitBytes = options.memoryLimitBytes ?? DEFAULT_MEMORY_LIMIT_BYTES;
-  const maxStackSizeBytes = options.maxStackSizeBytes ?? DEFAULT_MAX_STACK_SIZE_BYTES;
+export const quickJsPlugin: NexusPlugin<QuickJsConfig> = {
+  name: 'quickjs',
+  Config: quickJsConfigSchema,
+  async apply(registry: PluginRegistry, config: QuickJsConfig): Promise<void> {
+    const { timeoutMs, memoryLimitBytes, maxStackSizeBytes } = config;
+    const quickjs = await getQuickJS();
 
-  return {
-    name: 'quickjs',
-    async apply(registry: PluginRegistry): Promise<void> {
-      const quickjs = await getQuickJS();
+    registry.capabilities.provide(QUICKJS_CAPABILITY);
+    registry.tools.register(
+      tool(
+        ({ code }) => runInVm(quickjs, code, { timeoutMs, memoryLimitBytes, maxStackSizeBytes }),
+        {
+          name: RUN_JAVASCRIPT_TOOL_NAME,
+          description:
+            '在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。' +
+            `VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。` +
+            `執行超過 ${timeoutMs} 毫秒會被中斷。`,
+          schema: z.object({
+            code: z.string().describe('要求值的 JavaScript。最後一個運算式的值就是回傳值。'),
+          }),
+        },
+      ),
+    );
+  },
+};
 
-      registry.capabilities.provide(QUICKJS_CAPABILITY);
-      registry.tools.register(
-        tool(
-          ({ code }) => runInVm(quickjs, code, { timeoutMs, memoryLimitBytes, maxStackSizeBytes }),
-          {
-            name: RUN_JAVASCRIPT_TOOL_NAME,
-            description:
-              '在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。' +
-              `VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。` +
-              `執行超過 ${timeoutMs} 毫秒會被中斷。`,
-            schema: z.object({
-              code: z.string().describe('要求值的 JavaScript。最後一個運算式的值就是回傳值。'),
-            }),
-          },
-        ),
-      );
-    },
-  };
+export default quickJsPlugin;
+
+/**
+ * 建一個條目。**薄薄一層**：設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
+ *
+ * @param options - 設定，形狀見 {@link quickJsConfigSchema}。
+ * @returns 可以放進組裝點清單的條目。
+ */
+export function createQuickJsPlugin(options: QuickJsPluginOptions = {}): PluginEntry {
+  return { plugin: quickJsPlugin, config: options };
 }
 
 /** {@link runInVm} 用到的那幾個上限。 */

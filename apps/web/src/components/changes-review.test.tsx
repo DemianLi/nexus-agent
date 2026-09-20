@@ -49,11 +49,14 @@ function textDiff(overrides: Partial<Extract<WorkspaceFileDiff, { kind: 'text' }
 type Reply = () => Response | Promise<Response>;
 
 /** 摘要照給、比較照 index 給；記下每次比較打的 index。 */
-async function renderCard(diffs: (index: number, attempt: number) => Response | Promise<Response>) {
+async function renderCard(
+  diffs: (index: number, attempt: number) => Response | Promise<Response>,
+  summary: WorkspaceChangesSummary = SUMMARY,
+) {
   const asked: number[] = [];
   const fetch = vi.fn(async (url: string | URL | Request) => {
     const target = new URL(String(url));
-    if (target.pathname.endsWith('/summary')) return new Response(JSON.stringify(SUMMARY));
+    if (target.pathname.endsWith('/summary')) return new Response(JSON.stringify(summary));
     const index = Number(target.searchParams.get('index'));
     asked.push(index);
     return diffs(index, asked.filter((at) => at === index).length);
@@ -228,6 +231,67 @@ describe('讀不到的時候', () => {
     expect(within(screen.getByRole('dialog')).getByRole('status').textContent).toBe(
       '正在讀取改動…',
     );
+  });
+});
+
+describe('git 快照帶來的新值（#467）', () => {
+  /** 只有一個檔的摘要。 */
+  const only = (file: WorkspaceChangesSummary['files'][number]): WorkspaceChangesSummary => ({
+    files: [file],
+    total: 1,
+    added: file.added,
+    deleted: file.deleted,
+  });
+
+  it('工作區之上的檔：卡片、審查頁標頭與選檔器都原樣給出 ../ 開頭的路徑', async () => {
+    const display = '../packages/nexus-wire/src/workspace-changes.ts';
+    const file = { path: '/srv/repo/packages/nexus-wire/src/workspace-changes.ts', display, added: 2, deleted: 1 }; // prettier-ignore
+    await renderCard(() => json(textDiff({ path: file.path, display }))(), only(file));
+    expect(rows()[0]!.textContent).toContain(display);
+
+    await click(rows()[0]!);
+    // 截字是 CSS 的事，jsdom 量不到；這裡釘的是沒有人在字串上動手腳。
+    expect(screen.getByTestId('review-file').textContent).toBe(display);
+    expect(screen.getByRole('button', { name: `選擇要看的檔案，現在是 ${display}` })).toBeTruthy();
+  });
+
+  it('路徑太長時檔名優先：目錄與檔名拆成兩段，只有目錄那段會被吃掉', async () => {
+    const display = '../packages/nexus-wire/src/workspace-changes.ts';
+    const file = { path: `/srv/repo/${display}`, display, added: 2, deleted: 1 };
+    await renderCard(() => json(textDiff({ path: file.path, display }))(), only(file));
+    await click(rows()[0]!);
+
+    const label = screen.getByTestId('review-file').querySelector('span.flex')!;
+    const parts = [...label.children].map((part) => part.textContent);
+    expect(parts).toEqual(['../packages/nexus-wire/src/', 'workspace-changes.ts']);
+    // 會被截掉的是目錄那一段，檔名那段不縮。
+    expect(label.children[0]!.className).toContain('truncate');
+    expect(label.children[1]!.className).toContain('shrink-0');
+  });
+
+  it('改名的檔：摘要 0/0、比較沒有 hunks，審查頁說兩側內容相同', async () => {
+    const file = { path: 'src/renamed.ts', display: 'src/renamed.ts', added: 0, deleted: 0 };
+    const diff = textDiff({ path: file.path, display: file.display, hunks: [] });
+    await renderCard(() => json(diff)(), only(file));
+    expect(rows()[0]!.textContent).toContain('+0');
+    expect(rows()[0]!.textContent).toContain('−0');
+
+    await click(rows()[0]!);
+    const body = screen.getByTestId('review-body');
+    expect(body.textContent).toContain('兩側內容相同');
+    expect(body.querySelectorAll('[data-diff-line]')).toHaveLength(0);
+  });
+
+  it('摘要有行數、比較卻回 oversized：卡片照列行數，點開才說檔案過大', async () => {
+    const file = { path: 'data/dump.json', display: 'data/dump.json', added: 1200, deleted: 4 };
+    const diff = { kind: 'oversized', path: file.path, display: file.display };
+    await renderCard(() => json(diff)(), only(file));
+    // 摘要沒有標 oversized，所以卡片上就是一般的行數。
+    expect(rows()[0]!.textContent).toContain('+1,200');
+    expect(rows()[0]!.textContent).not.toContain('檔案過大');
+
+    await click(rows()[0]!);
+    expect(screen.getByRole('dialog').textContent).toContain('檔案過大，沒辦法顯示改動');
   });
 });
 

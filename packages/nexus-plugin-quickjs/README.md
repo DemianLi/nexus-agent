@@ -18,7 +18,18 @@ export default [
 ```
 
 三個都可以省略，預設值就是上面那組（`DEFAULT_TIMEOUT_MS`、
-`DEFAULT_MEMORY_LIMIT_BYTES`、`DEFAULT_MAX_STACK_SIZE_BYTES`）。
+`DEFAULT_MEMORY_LIMIT_BYTES`、`DEFAULT_MAX_STACK_SIZE_BYTES`），而且**預設值寫在
+`quickJsConfigSchema` 裡**，不寫在 `apply` 裡。
+
+`createQuickJsPlugin()` 只是薄薄一層，回的是一個**條目**
+（[#453](https://github.com/DemianLi/nexus-agent/issues/453)）。設定不在工廠裡驗，驗在
+載入的時候——那時候才有 id 可以指名。同一份設定也可以不經過工廠直接寫：
+
+```ts
+import { quickJsPlugin } from '@nexus/plugin-quickjs';
+
+export default [{ id: 'js', plugin: quickJsPlugin, config: { timeoutMs: 1_000 } }];
+```
 
 `apply` 是 async 的，唯一的理由是在**載入期**把 WASM 模組拉起來——載不起來就讓整份
 plugin 清單載入失敗，而不是等模型第一次呼叫工具時才在對話中間變成一句錯誤字串。

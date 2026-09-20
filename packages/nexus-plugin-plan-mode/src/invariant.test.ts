@@ -27,7 +27,7 @@ function watched(seed: (log: SessionLog) => void = () => {}) {
 
   const registry = createRegistry();
   const leave = registry.enter(origin);
-  createPlanModeInvariantPlugin().apply(registry);
+  createPlanModeInvariantPlugin().plugin.apply(registry, undefined);
   leave();
 
   const violations: string[] = [];
@@ -141,7 +141,7 @@ describe('plan/mode 只收布林', () => {
 
     const registry = createRegistry();
     const leave = registry.enter(origin);
-    createPlanModeInvariantPlugin().apply(registry);
+    createPlanModeInvariantPlugin().plugin.apply(registry, undefined);
     leave();
     const violations: string[] = [];
     createInvariantRunner({

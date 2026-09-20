@@ -10,7 +10,7 @@ import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
 
 import { SessionLog } from '@nexus/core';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { z } from 'zod';
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
 import {
@@ -138,7 +138,10 @@ describe('loadPluginModule', () => {
 
   it('載得到模組的預設匯出', async () => {
     const plugins = await loadPluginModule(fixture);
-    expect(plugins.map((plugin) => plugin.name)).toEqual([FIRST_PLUGIN_NAME, SECOND_PLUGIN_NAME]);
+    expect(plugins.map((entry) => entry.plugin.name)).toEqual([
+      FIRST_PLUGIN_NAME,
+      SECOND_PLUGIN_NAME,
+    ]);
   });
 
   it('相對路徑相對於呼叫者站的地方解析，不是相對於 cli.ts 也不是行程的工作目錄', async () => {
@@ -214,7 +217,7 @@ describe('一次性模式', () => {
     // **`present` 進來的理由是 dsh 的 standard preset 掛它**（`agent.cordis.yml:261`），而交付卡片讀的
     // 事件只有它寫得出來（[#441](https://github.com/DemianLi/nexus-agent/issues/441)）。它多一顆面向模型的
     // 工具；沒有工作區時工具照樣在、叫了回 `present requires a workspace`，同 dsh。
-    const names = DEFAULT_PLUGINS.map((plugin) => plugin.name);
+    const names = DEFAULT_PLUGINS.map((entry) => entry.plugin.name);
     expect(names.filter((name) => !name.endsWith('-invariant'))).toEqual([
       'echo',
       'agent-instructions',
@@ -327,22 +330,24 @@ describe('停在核准點的那一輪', () => {
       checkpointer: new MemorySaver(),
       plugins: [
         {
-          name: 'gated',
-          apply(registry) {
-            registry.tools.register(
-              tool(() => '跑過了', {
-                name: 'danger',
-                description: '會弄壞東西的工具。',
-                schema: z.object({}),
-              }),
-            );
-            // 理由由 listener 自己給，CLI 印的就是它。**兩位 listener 不再把理由串起來**
-            // ——waterfall 是第一個回非 allow 的人說了算，後面那位根本沒被問到。
-            registry.approvals.gate((exec, next) =>
-              exec.name === 'danger'
-                ? { kind: 'ask', reason: '這個會弄壞東西，而且不可逆' }
-                : next(),
-            );
+          plugin: {
+            name: 'gated',
+            apply(registry) {
+              registry.tools.register(
+                tool(() => '跑過了', {
+                  name: 'danger',
+                  description: '會弄壞東西的工具。',
+                  schema: z.object({}),
+                }),
+              );
+              // 理由由 listener 自己給，CLI 印的就是它。**兩位 listener 不再把理由串起來**
+              // ——waterfall 是第一個回非 allow 的人說了算，後面那位根本沒被問到。
+              registry.approvals.gate((exec, next) =>
+                exec.name === 'danger'
+                  ? { kind: 'ask', reason: '這個會弄壞東西，而且不可逆' }
+                  : next(),
+              );
+            },
           },
         },
       ],
@@ -413,12 +418,14 @@ describe('CLI 的核准政策', () => {
   it('沒被擋的工具照跑——關掉核准不是關掉整條工具路徑', async () => {
     // 只擋 `write_file`，`echo` 放行。上一條的 fixture 兩個都擋，所以它證不了這件事：
     // 「閘門把每個工具都拒絕掉」在那條測試底下長得一模一樣。
-    const gateWriteFile: NexusPlugin = {
-      name: 'gate-write-file',
-      apply(registry) {
-        registry.approvals.gate((exec, next) =>
-          exec.name === 'write_file' ? { kind: 'ask', reason: '寫檔要人看過' } : next(),
-        );
+    const gateWriteFile: PluginEntry = {
+      plugin: {
+        name: 'gate-write-file',
+        apply(registry) {
+          registry.approvals.gate((exec, next) =>
+            exec.name === 'write_file' ? { kind: 'ask', reason: '寫檔要人看過' } : next(),
+          );
+        },
       },
     };
 

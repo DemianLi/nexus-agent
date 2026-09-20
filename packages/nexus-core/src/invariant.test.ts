@@ -15,7 +15,7 @@ import type { InvariantCompanion, InvariantError } from './invariants.js';
 import { createRegistry } from './registry.js';
 import { goalId } from './goal.js';
 import { SessionLog } from './session-log.js';
-import { createCoreInvariantPlugin, CORE_INVARIANT_PACKAGE } from './invariant.js';
+import { coreInvariantPlugin, CORE_INVARIANT_PACKAGE } from './invariant.js';
 import { sessionInvariant } from './invariant.js';
 
 /** 接上配套入口，回傳收到的違規。 */
@@ -293,7 +293,7 @@ describe('plugin', () => {
   it('掛上去就認領 @nexus/core 這個名字', () => {
     const registry = createRegistry();
     const exit = registry.enter({ id: 'core-invariant#0', name: 'core-invariant' });
-    createCoreInvariantPlugin().apply(registry);
+    coreInvariantPlugin.apply(registry);
     exit();
 
     const companions = registry.invariants.companions();

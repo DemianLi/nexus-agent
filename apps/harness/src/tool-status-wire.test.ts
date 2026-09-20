@@ -23,7 +23,7 @@ import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { TOOL_ABORTED_TEXT, toLoggedMessage } from '@nexus/core';
-import type { NexusPlugin, SandboxMode } from '@nexus/core';
+import type { PluginEntry, SandboxMode } from '@nexus/core';
 import type { ConversationState, Event } from '@nexus/wire';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
 import { createMiddleware } from 'langchain';
@@ -83,7 +83,7 @@ describe('產品路徑：handler 之後被改成錯誤的結果，web 畫成失�
   /** 真的組裝接上一個 pump 與一條下行——serve 那條路的形狀，同 `turn-cancel.test.ts`。 */
   async function assemble(
     turns: readonly ScriptedTurn[],
-    options: { plugins?: readonly NexusPlugin[]; mode?: SandboxMode } = {},
+    options: { plugins?: readonly PluginEntry[]; mode?: SandboxMode } = {},
   ) {
     const built = await createNexusAgent({
       model: new ScriptedChatModel({ turns }),
@@ -135,7 +135,8 @@ describe('產品路徑：handler 之後被改成錯誤的結果，web 畫成失�
       const [entry] = toolEntries(run.frames);
       expect(entry).toMatchObject({ name: 'write_file', status: 'failed' });
       expect(entry?.error).toMatch(/^Error: \[containment\] .*這個 backend 是唯讀的/);
-      expect(entry?.output).toBeDefined();
+      // 結果文字跟紅字是同一串：失敗那一側 #439 之後也走 `text`。
+      expect(entry?.text).toBe(entry?.error);
       expect(await readdir(root)).toEqual([]);
     } finally {
       await run.close();
@@ -165,17 +166,19 @@ describe('產品路徑：handler 之後被改成錯誤的結果，web 畫成失�
   }, 20000);
 
   it('輸出不合宣告的 schema：失敗、紅字是校驗器那一句', async () => {
-    const shaped: NexusPlugin = {
-      name: 'shaped',
-      apply(registry) {
-        registry.tools.register(
-          tool(() => JSON.stringify({ count: '三' }), {
-            name: 'counter',
-            description: '數東西。',
-            schema: z.object({}),
-          }),
-          { outputSchema: z.object({ count: z.number() }) },
-        );
+    const shaped: PluginEntry = {
+      plugin: {
+        name: 'shaped',
+        apply(registry) {
+          registry.tools.register(
+            tool(() => JSON.stringify({ count: '三' }), {
+              name: 'counter',
+              description: '數東西。',
+              schema: z.object({}),
+            }),
+            { outputSchema: z.object({ count: z.number() }) },
+          );
+        },
       },
     };
     const run = await assemble(
@@ -198,19 +201,21 @@ describe('產品路徑：handler 之後被改成錯誤的結果，web 畫成失�
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const slow: NexusPlugin = {
-      name: 'slow',
-      apply(registry) {
-        registry.tools.register(
-          tool(
-            async () => {
-              started += 1;
-              await gate;
-              return '寫好了';
-            },
-            { name: 'slow_write', description: '慢慢寫。', schema: z.object({}) },
-          ),
-        );
+    const slow: PluginEntry = {
+      plugin: {
+        name: 'slow',
+        apply(registry) {
+          registry.tools.register(
+            tool(
+              async () => {
+                started += 1;
+                await gate;
+                return '寫好了';
+              },
+              { name: 'slow_write', description: '慢慢寫。', schema: z.object({}) },
+            ),
+          );
+        },
       },
     };
     const run = await assemble(
@@ -240,26 +245,28 @@ describe('產品路徑：handler 之後被改成錯誤的結果，web 畫成失�
   }, 20000);
 
   it('本體成功、內層 middleware 在它之後拋錯：失敗、紅字是圍堵那一句', async () => {
-    const fragile: NexusPlugin = {
-      name: 'fragile',
-      apply(registry) {
-        registry.tools.register(
-          tool(() => '做完了', {
-            name: 'fragile',
-            description: '會被後面炸掉。',
-            schema: z.object({}),
-          }),
-        );
-        registry.middleware.use(
-          createMiddleware({
-            name: 'blowsUpAfter',
-            wrapToolCall: async (request, handler) => {
-              const result = await handler(request);
-              if (request.toolCall.name === 'fragile') throw new Error('之後炸了');
-              return result;
-            },
-          }) as never,
-        );
+    const fragile: PluginEntry = {
+      plugin: {
+        name: 'fragile',
+        apply(registry) {
+          registry.tools.register(
+            tool(() => '做完了', {
+              name: 'fragile',
+              description: '會被後面炸掉。',
+              schema: z.object({}),
+            }),
+          );
+          registry.middleware.use(
+            createMiddleware({
+              name: 'blowsUpAfter',
+              wrapToolCall: async (request, handler) => {
+                const result = await handler(request);
+                if (request.toolCall.name === 'fragile') throw new Error('之後炸了');
+                return result;
+              },
+            }) as never,
+          );
+        },
       },
     };
     const run = await assemble(
@@ -280,10 +287,12 @@ describe('產品路徑：handler 之後被改成錯誤的結果，web 畫成失�
   }, 20000);
 
   it('子代理裡被 fence 擋下的 `write_file` 也畫成失敗——子代理的日誌也在訂閱範圍裡', async () => {
-    const worker: NexusPlugin = {
-      name: 'worker-host',
-      apply(registry) {
-        registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    const worker: PluginEntry = {
+      plugin: {
+        name: 'worker-host',
+        apply(registry) {
+          registry.subagents.register({ name: 'worker', description: '幹活的。' });
+        },
       },
     };
     const run = await assemble(
@@ -393,27 +402,34 @@ describe('送達的兩種先後：判定比 frame 先到、比 frame 晚到，�
     const frames = await play('verdict-first', { isError: true });
     expect(finishesOf(frames, 'c1')).toBe(1);
     expect(toolEntries(frames)).toMatchObject([
-      { status: 'failed', error: '被 fence 擋下', output: OUTPUT },
+      { status: 'failed', error: '被 fence 擋下', text: '被 fence 擋下' },
     ]);
   });
 
-  it('判定後到：補發一顆同 id、同 namespace、帶原輸出的更正', async () => {
+  it('判定後到：補發一顆同 id、同 namespace 的更正', async () => {
     const frames = await play('frame-first', { isError: true });
     expect(finishesOf(frames, 'c1')).toBe(2);
     const correction = frames.filter((next) => next.method === 'tools').at(-1);
     expect(correction?.params.namespace).toEqual(NAMESPACE);
     expect(toolEntries(frames)).toMatchObject([
-      { status: 'failed', error: '被 fence 擋下', output: OUTPUT },
+      { status: 'failed', error: '被 fence 擋下', text: '被 fence 擋下' },
     ]);
   });
 
-  it('對照：判定是成功的話，兩種先後都不多發、照舊是完成', async () => {
+  /**
+   * **成功那一側現在也有東西要更正**（[#439](https://github.com/DemianLi/nexus-agent/issues/439)）：
+   * 結果文字只有日誌有，所以基座那顆先到時照樣補一顆。這一條在 #439 之前釘的是「成功不多發」，
+   * 翻面之後釘的是「多發的那一顆帶的是文字，而且終態沒有變成失敗」。
+   */
+  it('成功也把文字補上：基座那顆先到就補一顆，判定先到就套在同一顆上', async () => {
+    const counts: number[] = [];
     for (const order of ['verdict-first', 'frame-first'] as const) {
       const frames = await play(order, { isError: false });
-      expect(finishesOf(frames, 'c1')).toBe(1);
-      expect(toolEntries(frames)).toMatchObject([{ status: 'done', output: OUTPUT }]);
+      counts.push(finishesOf(frames, 'c1'));
+      expect(toolEntries(frames)).toMatchObject([{ status: 'done', text: '寫好了' }]);
       expect(toolEntries(frames)[0]?.error).toBeUndefined();
     }
+    expect(counts).toEqual([1, 2]);
   });
 
   /**
@@ -425,6 +441,8 @@ describe('送達的兩種先後：判定比 frame 先到、比 frame 晚到，�
       pump.sessionLog.append('tool/result', { callId: 'c1', isError: true });
     });
     expect(finishesOf(frames, 'c1')).toBe(1);
-    expect(toolEntries(frames)).toMatchObject([{ status: 'done', output: OUTPUT }]);
+    expect(toolEntries(frames)).toMatchObject([{ status: 'done' }]);
+    // **沒有判定就沒有結果文字**：文字只從日誌來（#439），基座那顆的 `output` 不上線。
+    expect(toolEntries(frames)[0]?.text).toBeUndefined();
   });
 });

@@ -42,7 +42,13 @@
  * @module
  */
 
-import type { InvariantFailure, InvariantInstaller, NexusPlugin, SessionEvent } from '@nexus/core';
+import type {
+  InvariantFailure,
+  InvariantInstaller,
+  NexusPlugin,
+  PluginEntry,
+  SessionEvent,
+} from '@nexus/core';
 import { TODO_STATUSES } from '@nexus/core';
 
 /** 這個配套入口認領的 package 名。 */
@@ -124,13 +130,19 @@ export const todoSnapshotInvariant: InvariantInstaller = (subject, fail) => {
 /**
  * 把待辦快照的配套入口掛上去。
  *
- * @returns 註冊 `@nexus/plugin-todo` 配套入口的 plugin。
+ * @returns 掛著它的條目，註冊 `@nexus/plugin-todo` 配套入口的 plugin。
  */
-export function createTodoInvariantPlugin(): NexusPlugin {
-  return {
-    name: 'todo-invariant',
-    apply(registry) {
-      registry.invariants.register(TODO_INVARIANT_PACKAGE, todoSnapshotInvariant);
-    },
-  };
+export function createTodoInvariantPlugin(): PluginEntry {
+  return { plugin: todoInvariantPlugin };
 }
+
+/**
+ * 模組層級的那一顆。不收設定，所以沒有 `Config`；
+ * [#454](https://github.com/DemianLi/nexus-agent/issues/454) 從設定檔 import 的就是它。
+ */
+export const todoInvariantPlugin: NexusPlugin = {
+  name: 'todo-invariant',
+  apply(registry) {
+    registry.invariants.register(TODO_INVARIANT_PACKAGE, todoSnapshotInvariant);
+  },
+};

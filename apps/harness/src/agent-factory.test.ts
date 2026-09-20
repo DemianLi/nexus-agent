@@ -1,7 +1,7 @@
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { loadPlugins, SessionRegistry } from '@nexus/core';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent, DEFAULT_RECURSION_LIMIT } from './agent-factory.js';
@@ -131,12 +131,14 @@ describe('createNexusAgent', () => {
       plugins: [
         createNotePlugin(),
         {
-          name: 'gatekeeper',
-          requires: ['note'],
-          apply(registry) {
-            registry.approvals.gate((exec, next) =>
-              exec.name === NOTE_TOOL_NAME ? { kind: 'ask', reason: '記筆記要人看過' } : next(),
-            );
+          plugin: {
+            name: 'gatekeeper',
+            requires: ['note'],
+            apply(registry) {
+              registry.approvals.gate((exec, next) =>
+                exec.name === NOTE_TOOL_NAME ? { kind: 'ask', reason: '記筆記要人看過' } : next(),
+              );
+            },
           },
         },
       ],
@@ -197,11 +199,13 @@ describe('createNexusAgent', () => {
         toolOrder: ['task', '<unlisted-tools>'],
         plugins: [
           {
-            name: 'gatekeeper',
-            apply: (registry) =>
-              void registry.approvals.gate((exec, next) =>
-                exec.name === 'task' ? { kind: 'ask', reason: '委派出去要人看過' } : next(),
-              ),
+            plugin: {
+              name: 'gatekeeper',
+              apply: (registry) =>
+                void registry.approvals.gate((exec, next) =>
+                  exec.name === 'task' ? { kind: 'ask', reason: '委派出去要人看過' } : next(),
+                ),
+            },
           },
         ],
       }),
@@ -255,7 +259,7 @@ describe('createNexusAgent', () => {
       await expect(
         createNexusAgent({
           model: new ScriptedChatModel({ turns: [] }),
-          plugins: [{ name: 'needs-mcp', requires: ['mcp'], apply: () => {} }],
+          plugins: [{ plugin: { name: 'needs-mcp', requires: ['mcp'], apply: () => {} } }],
         }),
       ).rejects.toThrow(/需要能力 "mcp"/);
     });
@@ -270,11 +274,13 @@ describe('createNexusAgent', () => {
           plugins: [
             createNotePlugin(),
             {
-              name: 'gatekeeper',
-              apply: (registry) =>
-                void registry.approvals.gate((exec, next) =>
-                  exec.name === NOTE_TOOL_NAME ? { kind: 'ask', reason: '要人看過' } : next(),
-                ),
+              plugin: {
+                name: 'gatekeeper',
+                apply: (registry) =>
+                  void registry.approvals.gate((exec, next) =>
+                    exec.name === NOTE_TOOL_NAME ? { kind: 'ask', reason: '要人看過' } : next(),
+                  ),
+              },
             },
           ],
         }),
@@ -296,12 +302,14 @@ describe('createNexusAgent', () => {
           model: new ScriptedChatModel({ turns: [] }),
           plugins: [
             {
-              name: 'researcher',
-              apply: (registry) =>
-                void registry.subagents.register({
-                  name: 'researcher',
-                  description: '測試用的 subagent',
-                }),
+              plugin: {
+                name: 'researcher',
+                apply: (registry) =>
+                  void registry.subagents.register({
+                    name: 'researcher',
+                    description: '測試用的 subagent',
+                  }),
+              },
             },
             createToolPlugin('grep', 'researcher'),
           ],
@@ -328,13 +336,15 @@ describe('createNexusAgent', () => {
           model: new ScriptedChatModel({ turns: [] }),
           plugins: [
             {
-              name: 'researcher',
-              apply: (registry) =>
-                void registry.subagents.register({
-                  name: 'researcher',
-                  description: '測試用的 subagent',
-                  tools: [fakeTool('delete')],
-                }),
+              plugin: {
+                name: 'researcher',
+                apply: (registry) =>
+                  void registry.subagents.register({
+                    name: 'researcher',
+                    description: '測試用的 subagent',
+                    tools: [fakeTool('delete')],
+                  }),
+              },
             },
           ],
         }),
@@ -469,13 +479,15 @@ describe('迴圈上限', () => {
  * 一個一律報違規的配套入口。**選擇有沒有生效只有靠它看得出來**：安靜的配套入口在
  * 「裝了但沒違規」與「根本沒裝」之間長得一模一樣。
  */
-function noisyInvariantPlugin(packageName: string, name = 'noisy-invariant'): NexusPlugin {
+function noisyInvariantPlugin(packageName: string, name = 'noisy-invariant'): PluginEntry {
   return {
-    name,
-    apply(registry) {
-      registry.invariants.register(packageName, (subject, fail) => {
-        subject.observe((event) => fail(`看到 ${event.type}`));
-      });
+    plugin: {
+      name,
+      apply(registry) {
+        registry.invariants.register(packageName, (subject, fail) => {
+          subject.observe((event) => fail(`看到 ${event.type}`));
+        });
+      },
     },
   };
 }
@@ -487,7 +499,7 @@ function noisyInvariantPlugin(packageName: string, name = 'noisy-invariant'): Ne
  * ——違規就是印到那裡去（同 `invariant-paths.test.ts` 的理由）。
  */
 async function violationsUnder(
-  plugins: readonly NexusPlugin[],
+  plugins: readonly PluginEntry[],
   invariants?: Parameters<typeof createNexusAgent>[0]['invariants'],
 ): Promise<string[] | undefined> {
   const { attachInvariants, dispose } = await createNexusAgent({

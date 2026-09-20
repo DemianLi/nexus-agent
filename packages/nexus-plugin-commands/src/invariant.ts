@@ -32,7 +32,7 @@
  * @module
  */
 
-import type { InvariantInstaller, NexusPlugin } from '@nexus/core';
+import type { InvariantInstaller, NexusPlugin, PluginEntry } from '@nexus/core';
 
 /** 這個配套入口認領的 package 名。 */
 export const COMMANDS_INVARIANT_PACKAGE = '@nexus/plugin-commands';
@@ -91,13 +91,19 @@ export const commandsInvariant: InvariantInstaller = (subject, fail) => {
  * **這一個掛了會真的裝上檢查**——與其他九個不同。違規的去處仍然是進入點的事
  * （CLI 走 `onInvariantViolation`），這個檔案只負責註冊。
  *
- * @returns 註冊 `@nexus/plugin-commands` 配套入口的 plugin。
+ * @returns 掛著它的條目，註冊 `@nexus/plugin-commands` 配套入口的 plugin。
  */
-export function createCommandsInvariantPlugin(): NexusPlugin {
-  return {
-    name: 'commands-invariant',
-    apply(registry) {
-      registry.invariants.register(COMMANDS_INVARIANT_PACKAGE, commandsInvariant);
-    },
-  };
+export function createCommandsInvariantPlugin(): PluginEntry {
+  return { plugin: commandsInvariantPlugin };
 }
+
+/**
+ * 模組層級的那一顆。不收設定，所以沒有 `Config`；
+ * [#454](https://github.com/DemianLi/nexus-agent/issues/454) 從設定檔 import 的就是它。
+ */
+export const commandsInvariantPlugin: NexusPlugin = {
+  name: 'commands-invariant',
+  apply(registry) {
+    registry.invariants.register(COMMANDS_INVARIANT_PACKAGE, commandsInvariant);
+  },
+};

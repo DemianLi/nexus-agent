@@ -9,7 +9,7 @@
 import { MemorySaver } from '@langchain/langgraph';
 import type { SessionLog } from '@nexus/core';
 import { createGoalPlugin, renderGoalRoundPrompt } from '@nexus/plugin-goal';
-import type { GoalPlugin } from '@nexus/plugin-goal';
+import type { GoalPluginEntry } from '@nexus/plugin-goal';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 
@@ -44,7 +44,7 @@ function recorder(): {
 async function build(turns: readonly ScriptedTurn[]): Promise<{
   agent: NexusAgent;
   log: SessionLog;
-  plugin: GoalPlugin;
+  plugin: GoalPluginEntry;
   port: GoalDriverPort & { readonly warnings: string[] };
   state: ScriptedModelState;
   stop: () => Promise<void>;
@@ -62,9 +62,9 @@ async function build(turns: readonly ScriptedTurn[]): Promise<{
   const warnings: string[] = [];
   const port: GoalDriverPort & { readonly warnings: string[] } = {
     warnings,
-    goal: () => plugin.serviceFor(sessions.root)?.get(),
-    block: (ref, reason) => void plugin.serviceFor(sessions.root)?.block(ref, reason),
-    disarm: () => void plugin.serviceFor(sessions.root)?.disarm(),
+    goal: () => plugin.plugin.serviceFor(sessions.root)?.get(),
+    block: (ref, reason) => void plugin.plugin.serviceFor(sessions.root)?.block(ref, reason),
+    disarm: () => void plugin.plugin.serviceFor(sessions.root)?.disarm(),
     flush: () => Promise.resolve(),
     warn: (message) => void warnings.push(message),
   };
@@ -294,7 +294,7 @@ describe('--max-goal-rounds', () => {
     await driveGoalRounds(agent, printer, log, port, 1);
 
     expect(startKinds(log)).toEqual(['message', 'goal']);
-    const goal = plugin.serviceFor(log)?.get();
+    const goal = plugin.plugin.serviceFor(log)?.get();
     expect(goal?.maxGoalRounds).toBe(5);
     expect(goal?.phase).toBe('blocked');
     expect(goal?.blockedReason?.code).toBe(ROUND_CAP_BLOCK_CODE);
@@ -324,7 +324,7 @@ describe('--max-goal-rounds', () => {
     await driveGoalRounds(agent, printer, log, port);
 
     expect(startKinds(log)).toEqual(['message', 'goal', 'goal', 'goal', 'goal', 'goal']);
-    expect(plugin.serviceFor(log)?.get()?.blockedReason?.code).toBe('round-limit');
+    expect(plugin.plugin.serviceFor(log)?.get()?.blockedReason?.code).toBe('round-limit');
     await stop();
   });
 

@@ -28,7 +28,7 @@
 
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import type { ConversationState, Event, WireClient } from '@nexus/wire';
 import {
   appendHumanTurn,
@@ -60,33 +60,37 @@ beforeEach(() => {
   ran = [];
 });
 
-function spyPlugin(names: readonly string[]): NexusPlugin {
+function spyPlugin(names: readonly string[]): PluginEntry {
   return {
-    name: 'spy',
-    apply(registry) {
-      for (const name of names) {
-        registry.tools.register(
-          tool(
-            () => {
-              ran.push(name);
-              return `${name} 跑過了`;
-            },
-            { name, description: `間諜工具 ${name}`, schema: z.object({}) },
-          ),
-        );
-      }
+    plugin: {
+      name: 'spy',
+      apply(registry) {
+        for (const name of names) {
+          registry.tools.register(
+            tool(
+              () => {
+                ran.push(name);
+                return `${name} 跑過了`;
+              },
+              { name, description: `間諜工具 ${name}`, schema: z.object({}) },
+            ),
+          );
+        }
+      },
     },
   };
 }
 
 /** 一位 listener 判所有工具，名字從 `exec` 上讀——換機制之後該有的寫法。 */
-function gatePlugin(names: readonly string[]): NexusPlugin {
+function gatePlugin(names: readonly string[]): PluginEntry {
   return {
-    name: 'gate',
-    apply(registry) {
-      registry.approvals.gate((exec, next) =>
-        names.includes(exec.name) ? { kind: 'ask', reason: `${exec.name} 要人看過` } : next(),
-      );
+    plugin: {
+      name: 'gate',
+      apply(registry) {
+        registry.approvals.gate((exec, next) =>
+          names.includes(exec.name) ? { kind: 'ask', reason: `${exec.name} 要人看過` } : next(),
+        );
+      },
     },
   };
 }

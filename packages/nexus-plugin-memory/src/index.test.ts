@@ -1,6 +1,11 @@
 import { loadPlugins } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
-import { createMemoryPlugin, DEFAULT_MEMORY_SOURCE, MEMORY_CAPABILITY } from './index.js';
+import {
+  createMemoryPlugin,
+  DEFAULT_MEMORY_SOURCE,
+  MEMORY_CAPABILITY,
+  memoryPlugin,
+} from './index.js';
 
 /**
  * 薄測試，只斷言「`apply` 真的往那兩個註冊點放了東西」，加上這個套件自己拒絕的那一種。
@@ -24,8 +29,17 @@ describe('createMemoryPlugin', () => {
     expect(registry.memory.sources()).toEqual(['/專案/AGENTS.md', '/AGENTS.md']);
   });
 
-  // 空清單與沒掛 plugin 在 fold 之後完全同形，所以差別必須在這裡就吵出來。
-  it('空的 sources 當場拋錯，不會靜默變成「沒有記憶」', () => {
-    expect(() => createMemoryPlugin({ sources: [] })).toThrow('空的來源清單');
+  // 空清單與沒掛 plugin 在 fold 之後完全同形，所以差別必須在載入時就吵出來。
+  // **翻面過的絆索**（#453）：原本是工廠當場拋。
+  it('空的 sources 讓載入失敗，不會靜默變成「沒有記憶」', async () => {
+    const bad = [createMemoryPlugin({ sources: [] })];
+    await expect(loadPlugins(bad)).rejects.toThrow('memory#0 (memory)');
+    await expect(loadPlugins(bad)).rejects.toThrow('空的來源清單');
+  });
+
+  it('未知欄位讓載入失敗（登記的偏離：dsh 放行）', async () => {
+    await expect(
+      loadPlugins([{ plugin: memoryPlugin, config: { source: ['/AGENTS.md'] } }]),
+    ).rejects.toThrow(/source\b/);
   });
 });

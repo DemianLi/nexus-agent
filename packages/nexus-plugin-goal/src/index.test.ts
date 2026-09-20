@@ -12,11 +12,11 @@ import type { GoalChangeMeta, GoalRef } from '@nexus/core';
 
 import { createGoalPlugin, GoalError } from './index.js';
 import { GOAL_TOOL_OUTPUT_SCHEMA } from './tools.js';
-import type { GoalPlugin, GoalPluginOptions, GoalService } from './index.js';
+import type { GoalPluginEntry, GoalPluginOptions, GoalService } from './index.js';
 
 /** 掛一次、接一份日誌，回手上要用的每一個東西。 */
 function attach(options: GoalPluginOptions = {}): {
-  plugin: GoalPlugin;
+  plugin: GoalPluginEntry;
   log: SessionLog;
   service: GoalService;
   detach: () => void;
@@ -31,7 +31,7 @@ function attach(options: GoalPluginOptions = {}): {
   });
   const registry = createRegistry();
   const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-  plugin.apply(registry);
+  plugin.plugin.apply(registry);
   exit();
   const log = new SessionLog('goal');
   const detach = createSessionRunner({
@@ -42,7 +42,7 @@ function attach(options: GoalPluginOptions = {}): {
       throw new Error(`不該有 warn：${message}`);
     },
   });
-  const service = plugin.serviceFor(log);
+  const service = plugin.plugin.serviceFor(log);
   if (service === undefined) throw new Error('接線之後應該找得到服務');
   return {
     plugin,
@@ -74,7 +74,7 @@ describe('掛載', () => {
     // middleware 與配套入口仍然一格都不碰。
     const registry = createRegistry();
     const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-    createGoalPlugin().apply(registry);
+    createGoalPlugin().plugin.apply(registry);
     exit();
     expect(registry.sessions.installers()).toHaveLength(1);
     expect(registry.commands.list().map((entry) => entry.name)).toEqual(['goal']);
@@ -94,30 +94,30 @@ describe('掛載', () => {
     const plugin = createGoalPlugin();
     const registry = createRegistry();
     const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-    plugin.apply(registry);
+    plugin.plugin.apply(registry);
     exit();
     const log = new SessionLog('goal');
-    expect(plugin.serviceFor(log)).toBeUndefined();
-    expect(plugin.attached()).toEqual([]);
+    expect(plugin.plugin.serviceFor(log)).toBeUndefined();
+    expect(plugin.plugin.attached()).toEqual([]);
 
     const detach = createSessionRunner({
       address: { kind: 'root' },
       log,
       installers: registry.sessions.installers(),
     });
-    expect(plugin.serviceFor(log)).toBeDefined();
-    expect(plugin.attached()).toHaveLength(1);
+    expect(plugin.plugin.serviceFor(log)).toBeDefined();
+    expect(plugin.plugin.attached()).toHaveLength(1);
 
     detach();
-    expect(plugin.serviceFor(log)).toBeUndefined();
-    expect(plugin.attached()).toEqual([]);
+    expect(plugin.plugin.serviceFor(log)).toBeUndefined();
+    expect(plugin.plugin.attached()).toEqual([]);
   });
 
   it('一份日誌一個服務——兩份日誌的目標互不相干', () => {
     const plugin = createGoalPlugin();
     const registry = createRegistry();
     const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-    plugin.apply(registry);
+    plugin.plugin.apply(registry);
     exit();
     const first = new SessionLog('a');
     const second = new SessionLog('b');
@@ -132,10 +132,10 @@ describe('掛載', () => {
       installers: registry.sessions.installers(),
     });
 
-    plugin.serviceFor(first)?.create({ objective: '第一份的目標' });
-    expect(plugin.serviceFor(first)?.get()?.objective).toBe('第一份的目標');
-    expect(plugin.serviceFor(second)?.get()).toBeUndefined();
-    expect(plugin.attached()).toHaveLength(2);
+    plugin.plugin.serviceFor(first)?.create({ objective: '第一份的目標' });
+    expect(plugin.plugin.serviceFor(first)?.get()?.objective).toBe('第一份的目標');
+    expect(plugin.plugin.serviceFor(second)?.get()).toBeUndefined();
+    expect(plugin.plugin.attached()).toHaveLength(2);
   });
 });
 
@@ -398,7 +398,7 @@ describe('接上一份已經有內容的日誌', () => {
     const later = createGoalPlugin();
     const registry = createRegistry();
     const exit = registry.enter({ id: 'goal#1', name: 'goal' });
-    later.apply(registry);
+    later.plugin.apply(registry);
     exit();
     createSessionRunner({
       address: { kind: 'root' },
@@ -406,7 +406,7 @@ describe('接上一份已經有內容的日誌', () => {
       installers: registry.sessions.installers(),
     });
 
-    const view = later.serviceFor(first.log)?.get();
+    const view = later.plugin.serviceFor(first.log)?.get();
     expect(view?.phase).toBe('paused');
     expect(view?.revision).toBe(2);
     // **授權不重播**：它是 process 內的東西，重放一段歷史不該讓誰自己動起來。
@@ -518,7 +518,7 @@ describe('續接回來的日誌', () => {
     const plugin = createGoalPlugin({ now: () => 200, newGoalId: () => 'goal-後來' });
     const registry = createRegistry();
     const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-    plugin.apply(registry);
+    plugin.plugin.apply(registry);
     exit();
     const log = new SessionLog('goal', { seed: earlier.events });
     createSessionRunner({
@@ -529,7 +529,7 @@ describe('續接回來的日誌', () => {
         throw new Error(`不該有 warn：${message}`);
       },
     });
-    const service = plugin.serviceFor(log);
+    const service = plugin.plugin.serviceFor(log);
     if (service === undefined) throw new Error('接線之後應該找得到服務');
     return service;
   }

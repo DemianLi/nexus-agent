@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { attachSessionPersistence, SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
-import type { NexusPlugin, SessionEvent } from '@nexus/core';
+import type { PluginEntry, SessionEvent } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -345,7 +345,7 @@ describe('草稿', () => {
  */
 async function runAndDraft(
   model: ScriptedChatModel | LoopingChatModel,
-  plugins: readonly NexusPlugin[],
+  plugins: readonly PluginEntry[],
   drive: (pump: ThreadPump) => Promise<void>,
   options: { recursionLimit?: number } = {},
 ): Promise<{ drafts: SessionDrafts; root: readonly SessionEvent[] }> {
@@ -399,15 +399,17 @@ describe('跟真的組裝對得上', () => {
    * 事件；這裡要量的是它指的 `seq` 是執行期寫的那顆起頭。
    */
   it('停在核准點再 resume：那一段併回起頭那一輪，點踩綁在起頭那顆的 seq 上', async () => {
-    const tools: NexusPlugin = {
-      name: 'draft-tools',
-      apply(registry) {
-        registry.tools.register(
-          tool(() => '做完了', { name: 'danger', description: '要核准。', schema: z.object({}) }),
-        );
-        registry.approvals.gate((exec, next) =>
-          exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
-        );
+    const tools: PluginEntry = {
+      plugin: {
+        name: 'draft-tools',
+        apply(registry) {
+          registry.tools.register(
+            tool(() => '做完了', { name: 'danger', description: '要核准。', schema: z.object({}) }),
+          );
+          registry.approvals.gate((exec, next) =>
+            exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
+          );
+        },
       },
     };
     const model = new ScriptedChatModel({

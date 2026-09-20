@@ -54,7 +54,7 @@ import { z } from 'zod';
 import { Command } from '@langchain/langgraph';
 import { createMiddleware, tool } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -88,11 +88,13 @@ class RecordingModel extends ScriptedChatModel {
   }
 }
 
-function probePlugin(middleware: AgentMiddleware): NexusPlugin {
+function probePlugin(middleware: AgentMiddleware): PluginEntry {
   return {
-    name: 'escalation-carrier-probe',
-    apply: (registry) => {
-      registry.middleware.use(middleware);
+    plugin: {
+      name: 'escalation-carrier-probe',
+      apply: (registry) => {
+        registry.middleware.use(middleware);
+      },
     },
   };
 }

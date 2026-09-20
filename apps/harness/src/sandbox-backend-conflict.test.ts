@@ -25,7 +25,7 @@
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -47,9 +47,11 @@ class 會執行指令的 extends ContainedFilesystemBackend {
 }
 
 /** 擋掉 `.env` 類路徑的 plugin，跟 `permissions.test.ts` 用的是同一條規則。 */
-const guard: NexusPlugin = {
-  name: 'guard',
-  apply: (registry) => void registry.permissions.deny(['/.env*']),
+const guard: PluginEntry = {
+  plugin: {
+    name: 'guard',
+    apply: (registry) => void registry.permissions.deny(['/.env*']),
+  },
 };
 
 const model = new ScriptedChatModel({ turns: [{ content: '不會跑到這裡。' }] });

@@ -21,7 +21,8 @@
 import type { StructuredTool } from '@langchain/core/tools';
 import { MultiServerMCPClient } from '@langchain/mcp-adapters';
 import type { Connection } from '@langchain/mcp-adapters';
-import type { NexusPlugin, PluginRegistry } from '@nexus/core';
+import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
+import { z } from 'zod';
 import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
 
 export { publicToolName, SERVER_NAME_PATTERN } from './names.js';
@@ -33,46 +34,72 @@ export const MCP_CAPABILITY = 'mcp';
 export const DEFAULT_TOOL_CALL_TIMEOUT_MS = 60_000;
 
 /** 以子行程方式啟動的 MCP server。 */
-export interface McpStdioConnection {
-  readonly transport: 'stdio';
+export const mcpStdioConnectionSchema = z.strictObject({
+  transport: z.literal('stdio'),
   /** 要執行的程式。 */
-  readonly command: string;
+  command: z.string().min(1),
   /** 傳給它的參數。 */
-  readonly args?: readonly string[];
+  args: z.array(z.string()).optional(),
   /**
    * 額外的環境變數。
    *
    * **秘密只從呼叫端的環境變數來**（`docs/standards.md`）：這裡收的是值，寫死 token 的
    * 地方不在這個型別裡，而在填它的那一行。
    */
-  readonly env?: Readonly<Record<string, string>>;
+  env: z.record(z.string(), z.string()).optional(),
   /** 子行程的工作目錄。 */
-  readonly cwd?: string;
-}
+  cwd: z.string().optional(),
+});
 
 /** 走 Streamable HTTP 的 MCP server。 */
-export interface McpHttpConnection {
-  readonly transport: 'http';
+export const mcpHttpConnectionSchema = z.strictObject({
+  transport: z.literal('http'),
   /** server 的網址。 */
-  readonly url: string;
+  url: z.string().min(1),
   /** 額外的標頭，例如授權用的。 */
-  readonly headers?: Readonly<Record<string, string>>;
-}
-
-export interface McpPluginOptions {
-  /**
-   * 這一台 server 的命名空間，會成為工具名的一段。
-   * 形狀照 dsh：`[A-Za-z0-9_-]{1,32}`，不合法當場報錯。
-   */
-  readonly serverName: string;
-  /** 怎麼連上它。 */
-  readonly connection: McpStdioConnection | McpHttpConnection;
-  /** 一次 `tools/call` 的逾時。省略即 {@link DEFAULT_TOOL_CALL_TIMEOUT_MS}。 */
-  readonly toolCallTimeoutMs?: number;
-}
+  headers: z.record(z.string(), z.string()).optional(),
+});
 
 /**
- * 建一個 MCP plugin。
+ * 怎麼連上它。
+ *
+ * **判別式聯集，不是一般聯集**：`transport` 選定分支之後，錯誤訊息指得到是哪一格打錯；
+ * 一般聯集會把兩個分支的抱怨一起印出來，而其中一半必然是無關的。
+ */
+export const mcpConnectionSchema = z.discriminatedUnion('transport', [
+  mcpStdioConnectionSchema,
+  mcpHttpConnectionSchema,
+]);
+
+/** 以子行程方式啟動的 MCP server。 */
+export type McpStdioConnection = z.infer<typeof mcpStdioConnectionSchema>;
+
+/** 走 Streamable HTTP 的 MCP server。 */
+export type McpHttpConnection = z.infer<typeof mcpHttpConnectionSchema>;
+
+/** 這個 plugin 的設定。 */
+export const mcpConfigSchema = z.strictObject({
+  /**
+   * 這一台 server 的命名空間，會成為工具名的一段。
+   *
+   * 形狀照 dsh：`[A-Za-z0-9_-]{1,32}`。它會成為工具名的一段（`mcp__<serverName>__…`），
+   * 而供應商的 function name 契約不收其他字元。
+   */
+  serverName: z.string().regex(SERVER_NAME_PATTERN, 'serverName 只能是 1 到 32 個 [A-Za-z0-9_-]'),
+  /** 怎麼連上它。 */
+  connection: mcpConnectionSchema,
+  /** 一次 `tools/call` 的逾時。省略即 {@link DEFAULT_TOOL_CALL_TIMEOUT_MS}。 */
+  toolCallTimeoutMs: z.number().int().positive().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
+});
+
+/** 驗過的設定。 */
+export type McpConfig = z.infer<typeof mcpConfigSchema>;
+
+/** 工廠收的東西：schema 的輸入面。 */
+export type McpPluginOptions = z.input<typeof mcpConfigSchema>;
+
+/**
+ * MCP plugin。
  *
  * `apply` 是 async 的，裡面做三件事：連上 server、`tools/list` 拿工具、逐個註冊。三件
  * 事**都在載入期**——agent 跑起來的時候工具集合已經定了，這是共同軸線的「載入期失敗」
@@ -85,59 +112,62 @@ export interface McpPluginOptions {
  * `throwOnLoadError: true`）本來就站在同一邊，所以照 adapter 的預設走。理由是 repo
  * 層級的軸線，不是套件層級的預設值偏好。
  *
- * @param options - 這一台 server 的身分與連線方式。
- * @returns 可以放進組裝點清單的 plugin。
- * @throws `serverName` 不合法時當場報錯——那是寫錯清單，不必等到連線才發現。
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
+ * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
  */
-export function createMcpPlugin(options: McpPluginOptions): NexusPlugin {
-  const { serverName } = options;
-  if (!SERVER_NAME_PATTERN.test(serverName)) {
-    throw new Error(
-      `serverName "${serverName}" 不合法：只能是 1 到 32 個 [A-Za-z0-9_-]。` +
-        `它會成為工具名的一段（mcp__${serverName}__…），而供應商的 function name ` +
-        `契約不收其他字元。`,
-    );
-  }
+export const mcpPlugin: NexusPlugin<McpConfig> = {
+  name: 'mcp',
+  Config: mcpConfigSchema,
+  async apply(registry: PluginRegistry, config: McpConfig): Promise<void> {
+    const { serverName } = config;
+    const client = new MultiServerMCPClient({
+      mcpServers: { [serverName]: toAdapterConnection(config) },
+      // 名字由 `publicToolName` 一個地方說了算，所以 adapter 這邊的前綴全部關掉。
+      // 開著的話會有兩份拼名字的邏輯，而其中一份不做正規化。
+      prefixToolNameWithServerName: false,
+      additionalToolNamePrefix: '',
+      throwOnLoadError: true,
+      onConnectionError: 'throw',
+    });
 
-  return {
-    name: 'mcp',
-    async apply(registry: PluginRegistry): Promise<void> {
-      const client = new MultiServerMCPClient({
-        mcpServers: { [serverName]: toAdapterConnection(options) },
-        // 名字由 `publicToolName` 一個地方說了算，所以 adapter 這邊的前綴全部關掉。
-        // 開著的話會有兩份拼名字的邏輯，而其中一份不做正規化。
-        prefixToolNameWithServerName: false,
-        additionalToolNamePrefix: '',
-        throwOnLoadError: true,
-        onConnectionError: 'throw',
-      });
-
-      try {
-        for (const tool of await client.getTools()) {
-          // 改的是**註冊給模型看的**名字。`tools/call` 送上線的是 adapter 在建這個工具時
-          // 就閉包住的 raw name（`dist/tools.js:456`），不是這個欄位——所以改它不會讓
-          // 呼叫送到不存在的工具上。
-          tool.name = publicToolName(serverName, tool.name);
-          registry.tools.register(tool as StructuredTool);
-        }
-      } catch (error) {
-        // 回滾期的資源釋放是 plugin 自己的事——`lifecycle` 通道只管關機，而這裡是
-        // `apply` 還沒跑完就壞掉，登記根本還沒發生。連線已經開了就得收掉，否則這個
-        // 子行程會活過整個行程。
-        await client.close().catch(() => {});
-        throw error;
+    try {
+      for (const tool of await client.getTools()) {
+        // 改的是**註冊給模型看的**名字。`tools/call` 送上線的是 adapter 在建這個工具時
+        // 就閉包住的 raw name（`dist/tools.js:456`），不是這個欄位——所以改它不會讓
+        // 呼叫送到不存在的工具上。
+        tool.name = publicToolName(serverName, tool.name);
+        registry.tools.register(tool as StructuredTool);
       }
+    } catch (error) {
+      // 回滾期的資源釋放是 plugin 自己的事——`lifecycle` 通道只管關機，而這裡是
+      // `apply` 還沒跑完就壞掉，登記根本還沒發生。連線已經開了就得收掉，否則這個
+      // 子行程會活過整個行程。
+      await client.close().catch(() => {});
+      throw error;
+    }
 
-      registry.capabilities.provide(MCP_CAPABILITY);
-      registry.lifecycle.onDispose(() => client.close());
-    },
-  };
+    registry.capabilities.provide(MCP_CAPABILITY);
+    registry.lifecycle.onDispose(() => client.close());
+  },
+};
+
+export default mcpPlugin;
+
+/**
+ * 建一個條目。**薄薄一層**：設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
+ *
+ * @param options - 設定，形狀見 {@link mcpConfigSchema}。
+ * @returns 可以放進組裝點清單的條目。
+ */
+export function createMcpPlugin(options: McpPluginOptions): PluginEntry {
+  return { plugin: mcpPlugin, config: options };
 }
 
 /** 把我們的連線設定翻成 adapter 收的形狀。 */
-function toAdapterConnection(options: McpPluginOptions): Connection {
-  const timeout = options.toolCallTimeoutMs ?? DEFAULT_TOOL_CALL_TIMEOUT_MS;
-  const connection = options.connection;
+function toAdapterConnection(config: McpConfig): Connection {
+  const timeout = config.toolCallTimeoutMs;
+  const connection = config.connection;
   if (connection.transport === 'stdio') {
     return {
       transport: 'stdio',

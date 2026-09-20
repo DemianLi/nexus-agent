@@ -8,7 +8,7 @@
 
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import {
   createGoalPlugin,
   GOAL_TOOL_AUTHORITY_MESSAGE,
@@ -16,7 +16,7 @@ import {
   renderWrapupContext,
 } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
-import type { GoalPlugin } from '@nexus/plugin-goal';
+import type { GoalPluginEntry } from '@nexus/plugin-goal';
 import { fromLoggedMessage, GOAL_WRAPUP_MARKER } from '@nexus/core';
 import type { SessionEventMap, SessionLog } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
@@ -31,7 +31,7 @@ import { ThreadPump } from './thread-pump.js';
 
 /** 一份 port，記下它被要求做過什麼。 */
 function portFor(
-  plugin: GoalPlugin,
+  plugin: GoalPluginEntry,
   log: () => SessionLog,
   overrides: Partial<GoalDriverPort> = {},
 ): GoalDriverPort & { readonly warnings: string[]; readonly blocks: string[] } {
@@ -40,12 +40,12 @@ function portFor(
   return {
     warnings,
     blocks,
-    goal: () => plugin.serviceFor(log())?.get(),
+    goal: () => plugin.plugin.serviceFor(log())?.get(),
     block: (ref, reason) => {
       blocks.push(reason.code);
-      plugin.serviceFor(log())?.block(ref, reason);
+      plugin.plugin.serviceFor(log())?.block(ref, reason);
     },
-    disarm: () => void plugin.serviceFor(log())?.disarm(),
+    disarm: () => void plugin.plugin.serviceFor(log())?.disarm(),
     flush: () => Promise.resolve(),
     warn: (message) => void warnings.push(message),
     ...overrides,
@@ -67,13 +67,15 @@ function noteTool() {
 }
 
 /** 掛那顆工具與一道會問人的閘門。 */
-const GATED_FIXTURE: NexusPlugin = {
-  name: 'goal-driver-fixture',
-  apply(registration) {
-    registration.tools.register(noteTool());
-    registration.approvals.gate((execution, next) =>
-      execution.name === 'take_note' ? { kind: 'ask', reason: '看一下' } : next(),
-    );
+const GATED_FIXTURE: PluginEntry = {
+  plugin: {
+    name: 'goal-driver-fixture',
+    apply(registration) {
+      registration.tools.register(noteTool());
+      registration.approvals.gate((execution, next) =>
+        execution.name === 'take_note' ? { kind: 'ask', reason: '看一下' } : next(),
+      );
+    },
   },
 };
 

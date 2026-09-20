@@ -15,23 +15,25 @@
  * 閘門拿到的是執行當下的那一次呼叫，沒有名字宇宙要對齊（[#111](https://github.com/DemianLi/nexus-agent/issues/111)）。
  */
 
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { ECHO_TOOL_NAME, createEchoPlugin } from '@nexus/plugin-echo';
 
 /** 這份清單裡要人核准的工具。 */
 export const GATED_TOOL_NAMES: readonly string[] = [ECHO_TOOL_NAME, 'write_file'];
 
-const gatePlugin: NexusPlugin = {
-  name: 'approval-demo',
-  apply(registry) {
-    // 一位 listener 判所有工具，而不是逐個工具註冊一筆 —— 這正是換掉宣告式清單之後
-    // 該有的寫法：名字在 `exec` 上，不在我們手上的一份表裡。
-    registry.approvals.gate((exec, next) =>
-      GATED_TOOL_NAMES.includes(exec.name)
-        ? { kind: 'ask', reason: `${exec.name} 會動到外面，先給人看過` }
-        : next(),
-    );
+const gatePlugin: PluginEntry = {
+  plugin: {
+    name: 'approval-demo',
+    apply(registry) {
+      // 一位 listener 判所有工具，而不是逐個工具註冊一筆 —— 這正是換掉宣告式清單之後
+      // 該有的寫法：名字在 `exec` 上，不在我們手上的一份表裡。
+      registry.approvals.gate((exec, next) =>
+        GATED_TOOL_NAMES.includes(exec.name)
+          ? { kind: 'ask', reason: `${exec.name} 會動到外面，先給人看過` }
+          : next(),
+      );
+    },
   },
 };
 
-export default [createEchoPlugin(), gatePlugin] satisfies NexusPlugin[];
+export default [createEchoPlugin(), gatePlugin] satisfies PluginEntry[];

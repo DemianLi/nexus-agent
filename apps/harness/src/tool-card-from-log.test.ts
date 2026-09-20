@@ -24,7 +24,7 @@ import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { TOOL_ABORTED_BEFORE_DISPATCH_TEXT, toLoggedMessage } from '@nexus/core';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { createPlanModePlugin, NOT_IN_PLAN_MODE_MESSAGE } from '@nexus/plugin-plan-mode';
 import type { ConversationState, Event } from '@nexus/wire';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
@@ -33,6 +33,7 @@ import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
+import { historyFrames } from './conversation-history.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
@@ -79,26 +80,30 @@ function baseToolFrames(frames: readonly Event[], callName?: string): Event[] {
   );
 }
 
-const DANGER: NexusPlugin = {
-  name: 'danger',
-  apply(registry) {
-    registry.tools.register(
-      tool(() => '危險的事做完了', {
-        name: 'danger',
-        description: '要核准。',
-        schema: z.object({}),
-      }),
-    );
-    registry.approvals.gate((exec, next) =>
-      exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
-    );
+const DANGER: PluginEntry = {
+  plugin: {
+    name: 'danger',
+    apply(registry) {
+      registry.tools.register(
+        tool(() => '危險的事做完了', {
+          name: 'danger',
+          description: '要核准。',
+          schema: z.object({}),
+        }),
+      );
+      registry.approvals.gate((exec, next) =>
+        exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
+      );
+    },
   },
 };
 
-const WORKER: NexusPlugin = {
-  name: 'worker-host',
-  apply(registry) {
-    registry.subagents.register({ name: 'worker', description: '幹活的。' });
+const WORKER: PluginEntry = {
+  plugin: {
+    name: 'worker-host',
+    apply(registry) {
+      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    },
   },
 };
 
@@ -119,7 +124,7 @@ describe('產品路徑：本體沒被呼叫到的呼叫，web 上有一張卡', 
   });
 
   /** 真的組裝接上一個 pump 與一條下行——serve 那條路的形狀，同 `tool-status-wire.test.ts`。 */
-  async function assemble(turns: readonly ScriptedTurn[], plugins: readonly NexusPlugin[] = []) {
+  async function assemble(turns: readonly ScriptedTurn[], plugins: readonly PluginEntry[] = []) {
     const built = await createNexusAgent({
       model: new ScriptedChatModel({ turns }),
       checkpointer: new MemorySaver(),
@@ -381,7 +386,117 @@ describe('送達的先後：判定比基座那顆 `tool-started` 先到', () => 
   it('基座那顆晚到：當場收過的卡被翻回執行中，緊接著的 `tool-finished` 套上同一個判定，終態一樣', async () => {
     const frames = await play('late');
     expect(toolEntries(frames)).toMatchObject([
-      { name: 'write_file', status: 'failed', error: '被擋下', output: OUTPUT },
+      { name: 'write_file', status: 'failed', error: '被擋下', text: '被擋下' },
     ]);
+  });
+});
+
+/**
+ * 結果文字：成功那一側也交出來，而且**即時與重播是同一串**
+ * （[#439](https://github.com/DemianLi/nexus-agent/issues/439)）。
+ *
+ * 抽字的規則兩條路共用（`tool-result-text.ts`）。各寫一份的話，同一張卡會「即時一個樣、
+ * 重新整理另一個樣」——而且兩邊各自的測試都會綠。
+ */
+describe('結果文字：即時與重播同一串（#439）', () => {
+  /** 兩行，才看得出「只取一塊」跟「把每塊接起來」在單行上分不出差別。 */
+  const BODY = '回聲：第一行\n回聲：第二行';
+
+  function frame(method: string, namespace: string[], data: unknown) {
+    return { type: 'event' as const, seq: 0, method, params: { namespace, timestamp: 0, data } };
+  }
+
+  /** 兩塊文字：抽字的規則對它是「不給」，把幾塊接起來的規則對它是「給一串」。 */
+  const TWO_BLOCKS = [
+    { type: 'text', text: '第一塊' },
+    { type: 'text', text: '第二塊' },
+  ];
+
+  /** 日誌寫一對成功的 `tool/call`／`tool/result`；基座的 frame 要不要跟由參數排。 */
+  async function play(base: 'none' | 'late', content: unknown = BODY) {
+    const record = () => {
+      const log = pump.sessionLog;
+      log.append('tool/call', { callId: 'c1', name: 'echo', arguments: '{"message":"嗨"}' });
+      log.append('tool/result', {
+        callId: 'c1',
+        isError: false,
+        message: toLoggedMessage(
+          new ToolMessage({ content: content as string, tool_call_id: 'c1', name: 'echo' }),
+        ),
+      });
+    };
+    async function* stream() {
+      record();
+      if (base === 'late') {
+        yield frame('tools', ['tools:x'], {
+          event: 'tool-started',
+          tool_call_id: 'c1',
+          tool_name: 'echo',
+          input: '{"message":"嗨"}',
+        });
+        yield frame('tools', ['tools:x'], {
+          event: 'tool-finished',
+          tool_call_id: 'c1',
+          output: { status: 'success', content: '本體說好了' },
+        });
+      }
+      yield frame('lifecycle', [], { event: 'completed', graph_name: 'root' });
+    }
+    const agent = {
+      streamEvents: async () => stream(),
+      getState: async () => ({ values: {} }),
+      updateState: async () => ({}),
+    };
+    const pump = new ThreadPump(agent as unknown as PumpAgent, 'text');
+    const frames: Event[] = [];
+    const line = new AbortController();
+    const draining = (async () => {
+      for await (const next of pump.subscribe(['tools', 'lifecycle'], line.signal))
+        frames.push(next);
+    })();
+    await pump.submit({ kind: 'message', text: '回聲' });
+    await until(() => frames.some(isRootDone));
+    line.abort();
+    await draining;
+    return { frames, events: pump.sessionLog.events };
+  }
+
+  it('基座一顆都沒發：pump 合成的那顆收卡也帶文字', async () => {
+    const { frames } = await play('none');
+    expect(toolEntries(frames)).toMatchObject([{ name: 'echo', status: 'done', text: BODY }]);
+    expect(toolEntries(frames)[0]?.error).toBeUndefined();
+  });
+
+  it('基座那顆先到：補一顆更正把文字帶上，`output` 一路都不上線', async () => {
+    const { frames } = await play('late');
+    expect(toolEntries(frames)).toMatchObject([{ status: 'done', text: BODY }]);
+    // **序列化的 ToolMessage 不再出現在任何一顆 frame 上**：它是基座搬移過的預覽，
+    // 文字改由 `message` 交出來（#439）。
+    const payloads = frames
+      .filter((next) => next.method === 'tools')
+      .map((next) => next.params.data as Record<string, unknown>);
+    expect(payloads.some((data) => 'output' in data)).toBe(false);
+  });
+
+  it('**重播抽出來的是同一串**：同一份日誌，兩條路的卡上文字相等', async () => {
+    const { frames, events } = await play('late');
+    const live = toolEntries(frames)[0]?.text;
+    const replayed = toolEntries(historyFrames(events))[0]?.text;
+    expect(live).toBe(BODY);
+    expect(replayed).toBe(live);
+  });
+
+  /**
+   * **這一條才讓「共用同一個抽字函式」承重。** 上面那條的內容是單塊，「只取一塊」與「把幾塊
+   * 接起來」對它的答案一樣，所以兩邊各寫一份規則也會綠。多塊的內容兩種規則答案相反：
+   * 一邊不給，一邊給一串我們自己拼的字。
+   */
+  it('多塊的內容：兩條路都不給文字，不是一邊給一邊不給', async () => {
+    const { frames, events } = await play('late', TWO_BLOCKS);
+    const live = toolEntries(frames)[0];
+    const replayed = toolEntries(historyFrames(events))[0];
+    expect(live).toMatchObject({ status: 'done' });
+    expect(live?.text).toBeUndefined();
+    expect(replayed?.text).toBeUndefined();
   });
 });

@@ -46,7 +46,7 @@
 import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { interrupt } from '@langchain/langgraph';
-import type { ApprovalChannel, NexusPlugin, ToolErrorInfo } from '@nexus/core';
+import type { ApprovalChannel, PluginEntry, ToolErrorInfo } from '@nexus/core';
 import { markToolError, QUESTION_INTERRUPT_KIND, toolCallIdOf, toolRefusal } from '@nexus/core';
 import { z } from 'zod';
 
@@ -169,75 +169,79 @@ export function noAnswererMessage(channel: ApprovalChannel): string {
  * @param options - 見 {@link AskUserPluginOptions}。
  * @returns 註冊 `ask_user_question` 的 plugin。
  */
-export function createAskUserPlugin(options: AskUserPluginOptions = {}): NexusPlugin {
+export function createAskUserPlugin(options: AskUserPluginOptions = {}): PluginEntry {
   const channel: ApprovalChannel = options.channel ?? { kind: 'human' };
   return {
-    name: 'ask-user',
-    apply(registry) {
-      registry.tools.register(
-        tool(
-          async (args, config) => {
-            const { questions } = args as z.infer<typeof askSchema>;
-            // **回一則 `status: 'error'` 的 ToolMessage，不是 `throw`。** 兩者在模型那頭
-            // 看起來一樣，在執行期不一樣：這個工具的四條錯誤出口有一條發生在 **resume
-            // 之後**（人放棄整組），而那一輪的例外會從 LangGraph 的 stream mux 逸出成
-            // unhandled rejection——實測整場 run 死掉，而不是模型收到一則錯誤。
-            // 核准閘門的 `denial()` 早就是這個形狀，這裡照它；前綴也同它，由 `toolRefusal` 加（#318）。
-            const failed = (message: string): ToolMessage =>
-              toolRefusal(message, {
-                callId: toolCallIdOf(config) ?? '',
-                name: ASK_USER_QUESTION_TOOL_NAME,
+    plugin: {
+      name: 'ask-user',
+      apply(registry) {
+        registry.tools.register(
+          tool(
+            async (args, config) => {
+              const { questions } = args as z.infer<typeof askSchema>;
+              // **回一則 `status: 'error'` 的 ToolMessage，不是 `throw`。** 兩者在模型那頭
+              // 看起來一樣，在執行期不一樣：這個工具的四條錯誤出口有一條發生在 **resume
+              // 之後**（人放棄整組），而那一輪的例外會從 LangGraph 的 stream mux 逸出成
+              // unhandled rejection——實測整場 run 死掉，而不是模型收到一則錯誤。
+              // 核准閘門的 `denial()` 早就是這個形狀，這裡照它；前綴也同它，由 `toolRefusal` 加（#318）。
+              const failed = (message: string): ToolMessage =>
+                toolRefusal(message, {
+                  callId: toolCallIdOf(config) ?? '',
+                  name: ASK_USER_QUESTION_TOOL_NAME,
+                });
+              // **fail-closed 排在最前面**：沒有人在的時候連中斷都不該發出去，
+              // 因為 `no-channel` 底下 `interrupt()` 是當場拋，而那個錯訊說不出原因。
+              if (channel.kind !== 'human') return failed(noAnswererMessage(channel));
+              if (questions.length === 0) return failed(EMPTY_QUESTIONS_MESSAGE);
+
+              // `interrupt` 用拋例外傳播，**不能包在 try/catch 裡**
+              // （`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
+              const answer = (await interrupt({
+                kind: QUESTION_INTERRUPT_KIND,
+                questions: questions.map((question) => ({
+                  id: question.id,
+                  question: question.question,
+                  ...(question.header !== undefined && { header: question.header }),
+                  ...(question.options !== undefined && { options: question.options }),
+                  ...(question.multi_select !== undefined && {
+                    multiSelect: question.multi_select,
+                  }),
+                })),
+              })) as AskUserAnswer | undefined;
+
+              if (answer?.cancelled === true) {
+                return markToolError(failed(CANCELLED_MESSAGE), CANCELLED_ERROR);
+              }
+              const answers = answer?.answers;
+              if (!Array.isArray(answers)) {
+                return failed(
+                  `問答回覆看不懂：${JSON.stringify(answer)}。` +
+                    `這一格只收 { answers: [{ id, selected: string[], custom?: string }] }。`,
+                );
+              }
+              return JSON.stringify({
+                answers: answers.map((item) => ({
+                  id: item.id,
+                  selected: [...item.selected],
+                  ...(item.custom !== undefined && { custom: item.custom }),
+                })),
               });
-            // **fail-closed 排在最前面**：沒有人在的時候連中斷都不該發出去，
-            // 因為 `no-channel` 底下 `interrupt()` 是當場拋，而那個錯訊說不出原因。
-            if (channel.kind !== 'human') return failed(noAnswererMessage(channel));
-            if (questions.length === 0) return failed(EMPTY_QUESTIONS_MESSAGE);
-
-            // `interrupt` 用拋例外傳播，**不能包在 try/catch 裡**
-            // （`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
-            const answer = (await interrupt({
-              kind: QUESTION_INTERRUPT_KIND,
-              questions: questions.map((question) => ({
-                id: question.id,
-                question: question.question,
-                ...(question.header !== undefined && { header: question.header }),
-                ...(question.options !== undefined && { options: question.options }),
-                ...(question.multi_select !== undefined && { multiSelect: question.multi_select }),
-              })),
-            })) as AskUserAnswer | undefined;
-
-            if (answer?.cancelled === true) {
-              return markToolError(failed(CANCELLED_MESSAGE), CANCELLED_ERROR);
-            }
-            const answers = answer?.answers;
-            if (!Array.isArray(answers)) {
-              return failed(
-                `問答回覆看不懂：${JSON.stringify(answer)}。` +
-                  `這一格只收 { answers: [{ id, selected: string[], custom?: string }] }。`,
-              );
-            }
-            return JSON.stringify({
-              answers: answers.map((item) => ({
-                id: item.id,
-                selected: [...item.selected],
-                ...(item.custom !== undefined && { custom: item.custom }),
-              })),
-            });
-          },
+            },
+            {
+              name: ASK_USER_QUESTION_TOOL_NAME,
+              description: ASK_USER_QUESTION_DESCRIPTION,
+              schema: askSchema,
+            },
+          ),
           {
-            name: ASK_USER_QUESTION_TOOL_NAME,
-            description: ASK_USER_QUESTION_DESCRIPTION,
-            schema: askSchema,
+            outputSchema: ASK_USER_OUTPUT_SCHEMA,
+            // **子代理不停下來問人**（#324，照 dsh 的 `DELEGATED_CALLER`）：fold 把每個子代理那一份換成
+            // 拒絕樁。dsh 是在 `ask()` 裡查呼叫方；我們照 goal 那三顆的對應退到 `rootOnly`（理由見
+            // `@nexus/core` 的 `fold.ts` 的 `ROOT_ONLY_NOTICE`），句與碼照 dsh 帶。
+            rootOnly: { message: DELEGATED_CALLER_MESSAGE, error: DELEGATED_CALLER_ERROR },
           },
-        ),
-        {
-          outputSchema: ASK_USER_OUTPUT_SCHEMA,
-          // **子代理不停下來問人**（#324，照 dsh 的 `DELEGATED_CALLER`）：fold 把每個子代理那一份換成
-          // 拒絕樁。dsh 是在 `ask()` 裡查呼叫方；我們照 goal 那三顆的對應退到 `rootOnly`（理由見
-          // `@nexus/core` 的 `fold.ts` 的 `ROOT_ONLY_NOTICE`），句與碼照 dsh 帶。
-          rootOnly: { message: DELEGATED_CALLER_MESSAGE, error: DELEGATED_CALLER_ERROR },
-        },
-      );
+        );
+      },
     },
   };
 }

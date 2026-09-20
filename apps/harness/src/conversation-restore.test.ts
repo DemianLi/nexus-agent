@@ -26,7 +26,7 @@ import {
   toLoggedMessage,
   TOOL_OUTCOME_UNKNOWN_TEXT,
 } from '@nexus/core';
-import type { NexusPlugin, SessionEvent } from '@nexus/core';
+import type { PluginEntry, SessionEvent } from '@nexus/core';
 import { appendHumanTurn, emptyConversation, reduceConversation } from '@nexus/wire';
 import type { ConversationState } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -269,12 +269,14 @@ describe('serve 重開之後', () => {
  */
 describe('過大的工具結果', () => {
   async function evicted(body: string): Promise<{ seen: ToolMessage; logged: ToolMessage }> {
-    const big: NexusPlugin = {
-      name: 'big',
-      apply(registry) {
-        registry.tools.register(
-          tool(async () => body, { name: 'big', description: '回一大段', schema: z.object({}) }),
-        );
+    const big: PluginEntry = {
+      plugin: {
+        name: 'big',
+        apply(registry) {
+          registry.tools.register(
+            tool(async () => body, { name: 'big', description: '回一大段', schema: z.object({}) }),
+          );
+        },
       },
     };
     const { agent, attachSession, dispose } = await createNexusAgent({

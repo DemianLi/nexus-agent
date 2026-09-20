@@ -9,11 +9,11 @@
  * **這是唯一的定義點。**
  */
 
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { createEchoPlugin } from '@nexus/plugin-echo';
 
 /** 基準任務跑的 plugin 清單。 */
-export function benchmarkPlugins(): readonly NexusPlugin[] {
+export function benchmarkPlugins(): readonly PluginEntry[] {
   return [createEchoPlugin()];
 }
 

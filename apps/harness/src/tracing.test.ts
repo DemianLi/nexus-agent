@@ -31,7 +31,7 @@ import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import { LangChainTracer } from '@langchain/core/tracers/tracer_langchain';
 import { tool } from '@langchain/core/tools';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { Client } from 'langsmith';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -114,16 +114,18 @@ async function waitForHits(count: number): Promise<void> {
   expect(hits.length).toBeGreaterThanOrEqual(count);
 }
 
-const plugin: NexusPlugin = {
-  name: 'tracing-probe',
-  apply: (registry) =>
-    void registry.tools.register(
-      tool(({ secret }) => `讀到了：${secret}`, {
-        name: 'probe_tool',
-        description: '把收到的東西唸一次。',
-        schema: z.object({ secret: z.string().describe('一串不該出境的東西') }),
-      }),
-    ),
+const plugin: PluginEntry = {
+  plugin: {
+    name: 'tracing-probe',
+    apply: (registry) =>
+      void registry.tools.register(
+        tool(({ secret }) => `讀到了：${secret}`, {
+          name: 'probe_tool',
+          description: '把收到的東西唸一次。',
+          schema: z.object({ secret: z.string().describe('一串不該出境的東西') }),
+        }),
+      ),
+  },
 };
 
 /** 跑一輪：模型拿 {@link SECRET} 當參數呼叫工具，然後收工。 */

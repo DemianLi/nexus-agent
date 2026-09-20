@@ -1,6 +1,6 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { tool } from '@langchain/core/tools';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { z } from 'zod';
 import { createNexusAgent } from '../agent-factory.js';
 import { ScriptedChatModel } from '../scripted-model.js';
@@ -78,9 +78,11 @@ const SYSTEM_PROMPT = [
 ].join('\n');
 
 /** 把 spike 的自訂工具包成一個 plugin —— 組裝點只收 plugin 清單。 */
-const spikePlugin: NexusPlugin = {
-  name: 'spike',
-  apply: (registry) => void registry.tools.register(recordFinding),
+const spikePlugin: PluginEntry = {
+  plugin: {
+    name: 'spike',
+    apply: (registry) => void registry.tools.register(recordFinding),
+  },
 };
 
 /**

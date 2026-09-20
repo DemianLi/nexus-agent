@@ -15,7 +15,7 @@
  * @module
  */
 
-import type { InvariantInstaller, NexusPlugin } from '@nexus/core';
+import type { InvariantInstaller, NexusPlugin, PluginEntry } from '@nexus/core';
 
 /** 這個配套入口認領的 package 名。 */
 export const SUBMIT_RECORD_INVARIANT_PACKAGE = '@nexus/plugin-submit-record';
@@ -28,13 +28,19 @@ const install: InvariantInstaller = () => {};
  *
  * 掛了它**不會裝上任何檢查**，唯一的作用是保留包名歸屬。
  *
- * @returns 註冊 `@nexus/plugin-submit-record` 配套入口的 plugin。
+ * @returns 掛著它的條目，註冊 `@nexus/plugin-submit-record` 配套入口的 plugin。
  */
-export function createSubmitRecordInvariantPlugin(): NexusPlugin {
-  return {
-    name: 'submit-record-invariant',
-    apply(registry) {
-      registry.invariants.register(SUBMIT_RECORD_INVARIANT_PACKAGE, install);
-    },
-  };
+export function createSubmitRecordInvariantPlugin(): PluginEntry {
+  return { plugin: submitRecordInvariantPlugin };
 }
+
+/**
+ * 模組層級的那一顆。不收設定，所以沒有 `Config`；
+ * [#454](https://github.com/DemianLi/nexus-agent/issues/454) 從設定檔 import 的就是它。
+ */
+export const submitRecordInvariantPlugin: NexusPlugin = {
+  name: 'submit-record-invariant',
+  apply(registry) {
+    registry.invariants.register(SUBMIT_RECORD_INVARIANT_PACKAGE, install);
+  },
+};

@@ -17,7 +17,7 @@
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { TOOL_ERROR_PREFIX } from '@nexus/core';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import {
   createGoalPlugin,
   GOAL_CREATE_TOOL_NAME,
@@ -47,13 +47,15 @@ async function buildPump(
   turns: readonly ScriptedTurn[],
 ): Promise<{ pump: ThreadPump; stop: () => Promise<void> }> {
   let serial = 0;
-  const fixture: NexusPlugin = {
-    name: 'goal-tools-fixture',
-    apply(registration) {
-      registration.tools.register(noteTool());
-      registration.approvals.gate((execution, next) =>
-        execution.name === 'take_note' ? { kind: 'ask', reason: '看一下' } : next(),
-      );
+  const fixture: PluginEntry = {
+    plugin: {
+      name: 'goal-tools-fixture',
+      apply(registration) {
+        registration.tools.register(noteTool());
+        registration.approvals.gate((execution, next) =>
+          execution.name === 'take_note' ? { kind: 'ask', reason: '看一下' } : next(),
+        );
+      },
     },
   };
   const { agent, dispose, attachSession } = await createNexusAgent({

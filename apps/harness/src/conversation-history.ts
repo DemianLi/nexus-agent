@@ -14,7 +14,7 @@
  * | `turn/start`（`message`） | 人打的字（`message-start` `role: "human"`） |
  * | `turn/start`（任何一種） | `lifecycle running` |
  * | `assistant/message` | 模型的回覆；`interrupted` 的那則不收尾，由那一輪的中止標成「已停止」 |
- * | `tool/call` ／ `tool/result` | 工具卡開、收；紅字是那則結果的文字 |
+ * | `tool/call` ／ `tool/result` | 工具卡開、收；那則結果的文字成功失敗都帶（成功是輸出、失敗是紅字，[#439](https://github.com/DemianLi/nexus-agent/issues/439)） |
  * | `turn/end` ／ `turn/failed` | 那一輪收掉（中止、失敗、完成）；沒結果的卡照即時那條規則收成失敗 |
  * | `session/end-seed` | 上一個行程停在一輪中間的話，那一輪在這裡收掉 |
  * | `deliverables/presented` | `custom` frame，`data` 同即時（{@link deliverablesData}） |
@@ -39,6 +39,8 @@ import type {
 import { DELIVERABLES_PRESENTED, HISTORY_PAGE_MESSAGES, WORKSPACE_CHANGES } from '@nexus/wire';
 import type { LoggedMessage, SessionEvent, SessionEventMap, UnreplayableReason } from '@nexus/core';
 import { loggedMessageId, replayConversation } from '@nexus/core';
+
+import { toolResultText } from './tool-result-text.js';
 
 /** 推不回模型的原因裡，說的是「這份日誌是格式 9 以前寫的」的那幾種。見 {@link historyPage}。 */
 const LEGACY_REASONS: ReadonlySet<UnreplayableReason> = new Set([
@@ -253,15 +255,17 @@ export function historyFrames(
         break;
       case 'tool/result': {
         unsettled.delete(event.data.callId);
-        const text = textOf(event.data.message);
+        // **成功也帶文字**（#439）：抽字的規則與即時那條共用（`tool-result-text.ts`），
+        // 兩邊各寫一份的話，同一張卡會「即時一個樣、重新整理另一個樣」。
+        const text = toolResultText(event.data.message);
         // 格式 9 以前沒有 `message`：失敗的那張只剩錯誤碼可講，碼也沒有就交給折疊器說「未指名的錯誤」。
-        const reason = text !== '' ? text : event.data.error?.code;
+        const reason = text ?? (event.data.isError ? event.data.error?.code : undefined);
         frames.push(
           frame('tools', event.time, {
             event: 'tool-finished',
             tool_call_id: event.data.callId,
             failed: event.data.isError,
-            ...(event.data.isError && reason !== undefined ? { message: reason } : {}),
+            ...(reason !== undefined ? { message: reason } : {}),
           }),
         );
         break;

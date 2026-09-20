@@ -8,17 +8,19 @@
  * 壞掉的東西，但那一輪跑成功時清理失敗就要浮上來——沒收乾淨代表可能有子行程還活著。
  */
 
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 
 /** 清理拋出的訊息，測試靠它認出浮上來的是哪一個錯誤。 */
 export const DISPOSE_FAILURE = '這個 plugin 關不掉';
 
 export default [
   {
-    name: 'leaky',
-    apply: (registry) =>
-      void registry.lifecycle.onDispose(() => {
-        throw new Error(DISPOSE_FAILURE);
-      }),
+    plugin: {
+      name: 'leaky',
+      apply: (registry) =>
+        void registry.lifecycle.onDispose(() => {
+          throw new Error(DISPOSE_FAILURE);
+        }),
+    },
   },
-] satisfies NexusPlugin[];
+] satisfies PluginEntry[];

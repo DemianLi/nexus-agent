@@ -15,7 +15,7 @@
  */
 
 import { fileURLToPath } from 'node:url';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { createEchoPlugin } from '@nexus/plugin-echo';
 import { createMcpPlugin } from '@nexus/plugin-mcp';
 
@@ -31,4 +31,4 @@ export default [
       args: ['--import', 'tsx', FIXTURE_SERVER],
     },
   }),
-] satisfies NexusPlugin[];
+] satisfies PluginEntry[];

@@ -54,7 +54,7 @@
 import { posix } from 'node:path';
 
 import { tool } from '@langchain/core/tools';
-import type { NexusPlugin, PluginRegistry, PresentedFile } from '@nexus/core';
+import type { NexusPlugin, PluginEntry, PluginRegistry, PresentedFile } from '@nexus/core';
 import { toolCallIdOf, toolRefusal, WORKSPACE_CAPABILITY } from '@nexus/core';
 import { adaptBackendProtocol } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
@@ -135,11 +135,30 @@ export function presentedText(files: readonly PresentedFile[]): string {
   return files.map((file) => `Presented ${file.path}`).join('\n');
 }
 
-/** 掛載參數。 */
-export interface PresentPluginOptions {
+/**
+ * 掛載參數。
+ *
+ * dsh 在掛載時就驗這一格（`present requires a positive integer maxFiles`）；
+ * 我們驗在同一個時刻，只是換成 schema——訊息因此帶得出是清單裡哪一個條目。
+ */
+export const presentConfigSchema = z.strictObject({
   /** 一次呼叫最多幾個檔。正整數，省略即 {@link DEFAULT_MAX_FILES}。 */
-  readonly maxFiles?: number;
-}
+  maxFiles: z
+    // **一條判準，一句話**：dsh 對每一種壞值都回同一句。拆成 `.number().int().positive()`
+    // 的話訊息會隨壞法換三種，而 `Infinity` 印出來的是「expected number, received number」
+    // （實測），對著設定檔的人看不懂那在講什麼。
+    .custom<number>(
+      (value) => Number.isSafeInteger(value) && (value as number) >= 1,
+      'present requires a positive integer maxFiles',
+    )
+    .default(DEFAULT_MAX_FILES),
+});
+
+/** 驗過的設定。 */
+export type PresentConfig = z.infer<typeof presentConfigSchema>;
+
+/** 工廠收的東西：schema 的輸入面。 */
+export type PresentPluginOptions = z.input<typeof presentConfigSchema>;
 
 /** 一個路徑在 backend 上是什麼。 */
 type Inspection = 'file' | 'not-file' | 'missing';
@@ -178,108 +197,114 @@ async function inspect(backend: AnyBackendProtocol, path: string): Promise<Inspe
 }
 
 /**
- * 建一個 present plugin。
+ * present plugin。
  *
- * @param options - 每次呼叫的檔數上限。
- * @returns 這一次掛載。
- * @throws `maxFiles` 不是正的安全整數。照 dsh 在掛載時就驗（`present requires a positive integer maxFiles`）。
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
+ * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
  */
-export function createPresentPlugin(options: PresentPluginOptions = {}): NexusPlugin {
-  const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
-  if (!Number.isSafeInteger(maxFiles) || maxFiles < 1) {
-    throw new Error(
-      `createPresentPlugin({ maxFiles: ${String(options.maxFiles)} })：present requires a positive integer maxFiles`,
-    );
-  }
-  return {
-    name: 'present',
-    apply(registry: PluginRegistry): void {
-      registry.capabilities.provide(PRESENT_CAPABILITY);
-      // **plugin 在 `apply` 裡看不到 backend**，只有 `useWithBackend` 的工廠拿得到折好的那一顆
-      // （#388 開的窄縫）。所以掛一顆沒有鉤子的 middleware，只為了接住它。變數放在 `apply` 裡：
-      // 同一個 plugin 物件被好幾次組裝各跑一次 `apply`，每次各一格，不會互相看到。
-      let backend: AnyBackendProtocol | undefined;
-      /** 還在等結果的訂閱，依 `callId`。見檔頭「一個 `callId` 只留一個」。 */
-      const waiting = new Map<string, () => void>();
-      registry.lifecycle.onDispose(() => {
-        for (const unsubscribe of waiting.values()) unsubscribe();
-        waiting.clear();
-      });
-      registry.middleware.useWithBackend((folded) => {
-        backend = folded;
-        return { name: PRESENT_BACKEND_MIDDLEWARE_NAME };
-      });
-      registry.tools.register(
-        tool(
-          async (
-            { files: requested }: { files: { path: string; description?: string }[] },
-            config?: unknown,
-          ) => {
-            const callId = toolCallIdOf(config);
-            const refuse = (message: string, error?: { name: string; code: string }) =>
-              toolRefusal(message, {
-                callId: callId ?? '',
-                name: PRESENT_TOOL_NAME,
-                ...(error !== undefined && { error }),
-              });
-            // 檢查的順序照 dsh 的 `execute`：先要有會話，再看檔數、工作區，最後逐個看路徑。
-            const found = registry.sessions.forCall(config);
-            if (callId === undefined || found.kind !== 'ok') {
-              return refuse(PRESENT_NO_SESSION_MESSAGE);
-            }
-            if (requested.length === 0 || requested.length > maxFiles) {
-              return refuse(presentCountMessage(maxFiles));
-            }
-            if (!registry.capabilities.has(WORKSPACE_CAPABILITY) || backend === undefined) {
-              return refuse(PRESENT_NO_WORKSPACE_MESSAGE);
-            }
-            const files: PresentedFile[] = [];
-            for (const file of requested) {
-              if (file.path.trim().length === 0) return refuse(PRESENT_EMPTY_PATH_MESSAGE);
-              const kind = await inspect(backend, file.path);
-              if (kind === 'missing') return refuse(presentNotFoundMessage(file.path), NOT_FOUND);
-              if (kind === 'not-file') return refuse(presentNotFileMessage(file.path));
-              // `description` 沒給就整個不放 key：日誌收不下 `undefined`。
-              files.push({
-                path: file.path,
-                ...(file.description !== undefined && { description: file.description }),
-              });
-            }
-            const { log } = found;
-            waiting.get(callId)?.();
-            const unsubscribe = log.subscribe(async (event) => {
-              if (event.type !== 'tool/result' || event.data.callId !== callId) return;
-              unsubscribe();
-              if (waiting.get(callId) === unsubscribe) waiting.delete(callId);
-              if (event.data.isError) return;
-              // 還在日誌的發佈回呼裡，現在寫會撞重入防護。見檔頭。
-              await Promise.resolve();
-              log.append('deliverables/presented', { callId, files });
+export const presentPlugin: NexusPlugin<PresentConfig> = {
+  name: 'present',
+  Config: presentConfigSchema,
+  apply(registry: PluginRegistry, config: PresentConfig): void {
+    const { maxFiles } = config;
+    registry.capabilities.provide(PRESENT_CAPABILITY);
+    // **plugin 在 `apply` 裡看不到 backend**，只有 `useWithBackend` 的工廠拿得到折好的那一顆
+    // （#388 開的窄縫）。所以掛一顆沒有鉤子的 middleware，只為了接住它。變數放在 `apply` 裡：
+    // 同一個 plugin 物件被好幾次組裝各跑一次 `apply`，每次各一格，不會互相看到。
+    let backend: AnyBackendProtocol | undefined;
+    /** 還在等結果的訂閱，依 `callId`。見檔頭「一個 `callId` 只留一個」。 */
+    const waiting = new Map<string, () => void>();
+    registry.lifecycle.onDispose(() => {
+      for (const unsubscribe of waiting.values()) unsubscribe();
+      waiting.clear();
+    });
+    registry.middleware.useWithBackend((folded) => {
+      backend = folded;
+      return { name: PRESENT_BACKEND_MIDDLEWARE_NAME };
+    });
+    registry.tools.register(
+      tool(
+        async (
+          { files: requested }: { files: { path: string; description?: string }[] },
+          config?: unknown,
+        ) => {
+          const callId = toolCallIdOf(config);
+          const refuse = (message: string, error?: { name: string; code: string }) =>
+            toolRefusal(message, {
+              callId: callId ?? '',
+              name: PRESENT_TOOL_NAME,
+              ...(error !== undefined && { error }),
             });
-            waiting.set(callId, unsubscribe);
-            return presentedText(files);
-          },
-          {
-            name: PRESENT_TOOL_NAME,
-            description: PRESENT_TOOL_DESCRIPTION,
-            schema: z.object({
-              files: z.array(
-                z
-                  .object({
-                    path: z
-                      .string()
-                      .describe(
-                        'Path of an existing regular file. Relative paths use the Session working directory.',
-                      ),
-                    description: z.string().optional().describe('Brief description for the user.'),
-                  })
-                  // 照 dsh 的 `additionalProperties: false`：落庫的要等於模型以為它寫的。
-                  .strict(),
-              ),
-            }),
-          },
-        ),
-      );
-    },
-  };
+          // 檢查的順序照 dsh 的 `execute`：先要有會話，再看檔數、工作區，最後逐個看路徑。
+          const found = registry.sessions.forCall(config);
+          if (callId === undefined || found.kind !== 'ok') {
+            return refuse(PRESENT_NO_SESSION_MESSAGE);
+          }
+          if (requested.length === 0 || requested.length > maxFiles) {
+            return refuse(presentCountMessage(maxFiles));
+          }
+          if (!registry.capabilities.has(WORKSPACE_CAPABILITY) || backend === undefined) {
+            return refuse(PRESENT_NO_WORKSPACE_MESSAGE);
+          }
+          const files: PresentedFile[] = [];
+          for (const file of requested) {
+            if (file.path.trim().length === 0) return refuse(PRESENT_EMPTY_PATH_MESSAGE);
+            const kind = await inspect(backend, file.path);
+            if (kind === 'missing') return refuse(presentNotFoundMessage(file.path), NOT_FOUND);
+            if (kind === 'not-file') return refuse(presentNotFileMessage(file.path));
+            // `description` 沒給就整個不放 key：日誌收不下 `undefined`。
+            files.push({
+              path: file.path,
+              ...(file.description !== undefined && { description: file.description }),
+            });
+          }
+          const { log } = found;
+          waiting.get(callId)?.();
+          const unsubscribe = log.subscribe(async (event) => {
+            if (event.type !== 'tool/result' || event.data.callId !== callId) return;
+            unsubscribe();
+            if (waiting.get(callId) === unsubscribe) waiting.delete(callId);
+            if (event.data.isError) return;
+            // 還在日誌的發佈回呼裡，現在寫會撞重入防護。見檔頭。
+            await Promise.resolve();
+            log.append('deliverables/presented', { callId, files });
+          });
+          waiting.set(callId, unsubscribe);
+          return presentedText(files);
+        },
+        {
+          name: PRESENT_TOOL_NAME,
+          description: PRESENT_TOOL_DESCRIPTION,
+          schema: z.object({
+            files: z.array(
+              z
+                .object({
+                  path: z
+                    .string()
+                    .describe(
+                      'Path of an existing regular file. Relative paths use the Session working directory.',
+                    ),
+                  description: z.string().optional().describe('Brief description for the user.'),
+                })
+                // 照 dsh 的 `additionalProperties: false`：落庫的要等於模型以為它寫的。
+                .strict(),
+            ),
+          }),
+        },
+      ),
+    );
+  },
+};
+
+export default presentPlugin;
+
+/**
+ * 建一個條目。**薄薄一層**：設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
+ *
+ * @param options - 設定，形狀見 {@link presentConfigSchema}。
+ * @returns 可以放進組裝點清單的條目。
+ */
+export function createPresentPlugin(options: PresentPluginOptions = {}): PluginEntry {
+  return { plugin: presentPlugin, config: options };
 }

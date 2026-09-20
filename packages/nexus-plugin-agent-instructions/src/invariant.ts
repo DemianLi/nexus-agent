@@ -18,7 +18,7 @@
  * @module
  */
 
-import type { InvariantInstaller, NexusPlugin } from '@nexus/core';
+import type { InvariantInstaller, NexusPlugin, PluginEntry } from '@nexus/core';
 
 /** 這個配套入口認領的 package 名。 */
 export const AGENT_INSTRUCTIONS_INVARIANT_PACKAGE = '@nexus/plugin-agent-instructions';
@@ -36,13 +36,19 @@ const install: InvariantInstaller = () => {};
  *
  * 掛了它**不會裝上任何檢查**，唯一的作用是**保留包名歸屬**。
  *
- * @returns 註冊 `@nexus/plugin-agent-instructions` 配套入口的 plugin。
+ * @returns 掛著它的條目，註冊 `@nexus/plugin-agent-instructions` 配套入口的 plugin。
  */
-export function createAgentInstructionsInvariantPlugin(): NexusPlugin {
-  return {
-    name: 'agent-instructions-invariant',
-    apply(registry) {
-      registry.invariants.register(AGENT_INSTRUCTIONS_INVARIANT_PACKAGE, install);
-    },
-  };
+export function createAgentInstructionsInvariantPlugin(): PluginEntry {
+  return { plugin: agentInstructionsInvariantPlugin };
 }
+
+/**
+ * 模組層級的那一顆。不收設定，所以沒有 `Config`；
+ * [#454](https://github.com/DemianLi/nexus-agent/issues/454) 從設定檔 import 的就是它。
+ */
+export const agentInstructionsInvariantPlugin: NexusPlugin = {
+  name: 'agent-instructions-invariant',
+  apply(registry) {
+    registry.invariants.register(AGENT_INSTRUCTIONS_INVARIANT_PACKAGE, install);
+  },
+};

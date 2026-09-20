@@ -75,7 +75,7 @@
 
 | 計劃寫的 | 狀態 | 證據 |
 | --- | --- | --- |
-| `NexusPlugin { id?, name, requires?, disabled?, apply }`，zod 只驗條目層四欄 | ✅ | `packages/nexus-core/src/plugin.ts`；#28 決議 9、#43（`name` 不唯一）、#104（`id`／`disabled`） |
+| `NexusPlugin { id?, name, requires?, disabled?, apply }`，zod 只驗條目層四欄 | ✅ 但**形狀已換** | `packages/nexus-core/src/plugin.ts`；#28 決議 9、#43（`name` 不唯一）、#104（`id`／`disabled`）。[#453](https://github.com/DemianLi/nexus-agent/issues/453) 起：plugin 是 `{ name, requires?, Config?, apply(registry, config) }`，`id`／`disabled` 搬到**條目** `{ id?, plugin, config?, disabled? }` 上，設定由 `Config` 在載入期驗（未知欄位失敗，登記的偏離） |
 | 九個折疊註冊點：`tools`／`subagents`／`capabilities`／`backend`／`middleware`／`permissions`／`approvals`／`skills`／`memory` | ✅ | `packages/nexus-core/src/registry.ts:559-567`；折疊在 `fold.ts` |
 | 「九個之外有一條 `lifecycle` 通道」 | ✅ 但**數字過時** | 現在是**六條**不折的通道：`lifecycle`（#59 為 MCP 的 stdio 子行程引進）、`telemetry`（#89→#100）、`invariants`（#101）、`commands`（#118→#119）、`sessions`（#132→#138）、`feedback`（[#278](https://github.com/DemianLi/nexus-agent/issues/278)，2026-09-13 補上）。`PluginRegistry` 是 15 個欄位。`registry.ts` 檔頭與計劃 §1 原本寫「四條」／「一條」，**與這份筆記同一張 PR 改正** |
 | 一個 plugin 只相依 `@nexus/core`，靠 pnpm 隔離擋住 `import '@nexus/harness'` | ✅ | `packages/nexus-plugin-echo/src/index.ts` 檔頭；#30 |

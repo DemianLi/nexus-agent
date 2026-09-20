@@ -32,7 +32,7 @@ import { join } from 'node:path';
 
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import type { InvariantError, NexusPlugin, SandboxMode, SessionRegistry } from '@nexus/core';
+import type { InvariantError, PluginEntry, SandboxMode, SessionRegistry } from '@nexus/core';
 import { createWorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import type { Event } from '@nexus/wire';
 import {
@@ -72,10 +72,12 @@ async function directory(prefix: string): Promise<string> {
 }
 
 /** 一個子代理的來源：委派那一條要有人可以委派。 */
-const WORKER: NexusPlugin = {
-  name: 'worker-source',
-  apply(registry) {
-    registry.subagents.register({ name: 'worker', description: '幹活的。' });
+const WORKER: PluginEntry = {
+  plugin: {
+    name: 'worker-source',
+    apply(registry) {
+      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    },
   },
 };
 
@@ -107,7 +109,7 @@ async function run(
   options: {
     mode?: SandboxMode;
     setup?: (root: string) => Promise<void>;
-    plugins?: readonly NexusPlugin[];
+    plugins?: readonly PluginEntry[];
   } = {},
 ): Promise<Outcome> {
   const root = await directory('nexus-changes-e2e-');
@@ -126,7 +128,7 @@ async function run(
       WORKER,
       createSandboxPolicyPlugin(sandboxMode, root),
       ...(options.plugins ?? []),
-      changes.plugin,
+      changes.entry,
     ],
     backend: new ContainedFilesystemBackend({
       rootDir: root,
@@ -540,18 +542,20 @@ describe('工作區外', () => {
 describe('工作區是 git repo（#461）', () => {
   it('檔案工具以外的改動（像 MCP 工具在外面寫的）也列出來，行數由 git 算', async () => {
     let workspace = '';
-    const external: NexusPlugin = {
-      name: 'external-writer',
-      apply(registry) {
-        registry.tools.register(
-          tool(
-            async () => {
-              await writeFile(join(workspace, 'notes.md'), 'n1\nn2\n');
-              return '寫好了';
-            },
-            { name: 'external_write', description: '在外面寫檔。', schema: z.object({}) },
-          ),
-        );
+    const external: PluginEntry = {
+      plugin: {
+        name: 'external-writer',
+        apply(registry) {
+          registry.tools.register(
+            tool(
+              async () => {
+                await writeFile(join(workspace, 'notes.md'), 'n1\nn2\n');
+                return '寫好了';
+              },
+              { name: 'external_write', description: '在外面寫檔。', schema: z.object({}) },
+            ),
+          );
+        },
       },
     };
     const outcome = await run(

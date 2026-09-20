@@ -162,23 +162,18 @@ describe('對話流裡的工具卡', () => {
       }),
     });
 
-    it('配到答案：收著講「已回答 N 題」，展開逐題「問題 → 回答」，不畫參數原文', () => {
-      render(
-        <ToolCard
-          entry={ask}
-          beam={false}
-          answer={{
-            kind: 'answer',
-            id: 'answer-q',
-            answers: [
-              { id: 'day', selected: ['週二'] },
-              { id: 'food', selected: ['茶'], custom: '氣泡水' },
-            ],
-          }}
-        />,
-      );
+    /** 成功的 `ask_user_question` 回的那一段（`ToolEntry.text`）。 */
+    const answersText = (answers: unknown) => JSON.stringify({ answers });
+
+    const ANSWERS = [
+      { id: 'day', selected: ['週二'] },
+      { id: 'food', selected: ['茶'], custom: '氣泡水' },
+    ];
+
+    it('線上帶著答案（#439）：收著講答了幾題，展開逐題「問題 → 回答」，不畫參數原文', () => {
+      render(<ToolCard entry={{ ...ask, text: answersText(ANSWERS) }} beam={false} />);
       const card = screen.getByTestId('tool-entry');
-      expect(within(card).getByText('已回答 2 題')).toBeTruthy();
+      expect(within(card).getByText('已回答 2/2 題')).toBeTruthy();
       fireEvent.click(within(card).getByRole('button', { name: /提問/ }));
       expect(
         within(card)
@@ -186,10 +181,98 @@ describe('對話流裡的工具卡', () => {
           .map((row) => row.textContent),
       ).toEqual(['哪一天？→ 回答：週二', '要準備什麼？→ 回答：茶、氣泡水']);
       expect(card.textContent).not.toContain('"questions"');
-      expect(within(card).queryByText(/看不到/)).toBeNull();
+      expect(within(card).queryByText(/讀不出來|對不起來/)).toBeNull();
     });
 
-    it('配不到（重新整理、別的分頁）：照樣「已回答 N 題」，展開列題目與選項，講明答案在哪', () => {
+    it('跳過的那題不算答了：講 1/2，那一行寫「（跳過）」', () => {
+      const text = answersText([
+        { id: 'day', selected: ['週二'] },
+        { id: 'food', selected: [] },
+      ]);
+      render(<ToolCard entry={{ ...ask, text }} beam={false} />);
+      const card = screen.getByTestId('tool-entry');
+      expect(within(card).getByText('已回答 1/2 題')).toBeTruthy();
+      fireEvent.click(within(card).getByRole('button', { name: /提問/ }));
+      expect(
+        within(card)
+          .getAllByTestId('question-row')
+          .map((row) => row.textContent),
+      ).toEqual(['哪一天？→ 回答：週二', '要準備什麼？→ 回答：（跳過）']);
+    });
+
+    it('沒有 text 的舊日誌：退回本地那一則答案', () => {
+      render(
+        <ToolCard
+          entry={ask}
+          beam={false}
+          answer={{ kind: 'answer', id: 'answer-q', answers: ANSWERS }}
+        />,
+      );
+      const card = screen.getByTestId('tool-entry');
+      expect(within(card).getByText('已回答 2/2 題')).toBeTruthy();
+      fireEvent.click(within(card).getByRole('button', { name: /提問/ }));
+      expect(
+        within(card)
+          .getAllByTestId('question-row')
+          .map((row) => row.textContent),
+      ).toEqual(['哪一天？→ 回答：週二', '要準備什麼？→ 回答：茶、氣泡水']);
+    });
+
+    it('兩份都在時以線上那份為準：本地那則不會蓋掉它', () => {
+      render(
+        <ToolCard
+          entry={{ ...ask, text: answersText(ANSWERS) }}
+          beam={false}
+          answer={{
+            kind: 'answer',
+            id: 'answer-q',
+            answers: [
+              { id: 'day', selected: ['週一'] },
+              { id: 'food', selected: ['咖啡'] },
+            ],
+          }}
+        />,
+      );
+      const card = screen.getByTestId('tool-entry');
+      fireEvent.click(within(card).getByRole('button', { name: /提問/ }));
+      expect(card.textContent).toContain('週二');
+      expect(card.textContent).not.toContain('週一→');
+    });
+
+    it('結果文字被截過（頭尾還在、中間沒了）：退回「已回答 N 題」，講明讀不出來', () => {
+      // harness 超過 50000 bytes 時取頭尾各半（`apps/harness/src/tool-result-text.ts`）：
+      // 開頭 `{"answers":[`、結尾 `]}` 都還在，所以只看頭尾字元會把它當成完整的 JSON。
+      const whole = answersText(ANSWERS);
+      const truncated = `${whole.slice(0, 14)}\n…（中間 40000 個位元組沒有送出來，全文在會話日誌裡）\n${whole.slice(-14)}`;
+      expect(truncated.startsWith('{')).toBe(true);
+      expect(truncated.endsWith('}')).toBe(true);
+
+      render(<ToolCard entry={{ ...ask, text: truncated }} beam={false} />);
+      const card = screen.getByTestId('tool-entry');
+      expect(within(card).getByText('已回答 2 題')).toBeTruthy();
+      fireEvent.click(within(card).getByRole('button', { name: /提問/ }));
+      expect(within(card).getAllByTestId('question-row')).toHaveLength(2);
+      expect(within(card).getByText('週一')).toBeTruthy();
+      expect(within(card).queryByText(/→/)).toBeNull();
+      expect(
+        within(card).getByText('這次的答案讀不出來：結果文字太長被截過，或不是預期的形狀。'),
+      ).toBeTruthy();
+    });
+
+    it('答案與題目對不起來：只列題目，講明對不起來', () => {
+      const text = answersText([
+        { id: 'day', selected: ['週二'] },
+        { id: '別的', selected: ['茶'] },
+      ]);
+      render(<ToolCard entry={{ ...ask, text }} beam={false} />);
+      const card = screen.getByTestId('tool-entry');
+      expect(within(card).getByText('已回答 2/2 題')).toBeTruthy();
+      fireEvent.click(within(card).getByRole('button', { name: /提問/ }));
+      expect(within(card).queryByText(/→/)).toBeNull();
+      expect(within(card).getByText('答案和題目對不起來，只列題目。')).toBeTruthy();
+    });
+
+    it('兩份都沒有：照樣「已回答 N 題」，展開列題目與選項', () => {
       render(<ToolCard entry={ask} beam={false} />);
       const card = screen.getByTestId('tool-entry');
       expect(within(card).getByText('已回答 2 題')).toBeTruthy();
@@ -197,7 +280,9 @@ describe('對話流裡的工具卡', () => {
       expect(within(card).getAllByTestId('question-row')).toHaveLength(2);
       expect(within(card).getByText('週一')).toBeTruthy();
       expect(within(card).queryByText(/→/)).toBeNull();
-      expect(within(card).getByText('答案只記在作答的那個分頁，這裡看不到。')).toBeTruthy();
+      expect(
+        within(card).getByText('這次的答案讀不出來：結果文字太長被截過，或不是預期的形狀。'),
+      ).toBeTruthy();
     });
 
     it('還沒答完：收著講第一題與題數，不是參數 JSON（#409 第一刀留下的）', () => {

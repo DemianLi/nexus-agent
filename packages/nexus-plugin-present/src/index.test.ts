@@ -14,12 +14,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ToolMessage } from '@langchain/core/messages';
 import type { StructuredTool } from '@langchain/core/tools';
-import { createRegistry, SessionRegistry, toolErrorOf, WORKSPACE_CAPABILITY } from '@nexus/core';
+import {
+  createRegistry,
+  loadPlugins,
+  SessionRegistry,
+  toolErrorOf,
+  WORKSPACE_CAPABILITY,
+} from '@nexus/core';
 import type { PluginRegistry, SessionEvent, SessionLog } from '@nexus/core';
 import { FilesystemBackend } from 'deepagents';
 
 import {
   createPresentPlugin,
+  DEFAULT_MAX_FILES,
+  presentConfigSchema,
   PRESENT_BACKEND_MIDDLEWARE_NAME,
   PRESENT_EMPTY_PATH_MESSAGE,
   PRESENT_NO_SESSION_MESSAGE,
@@ -59,8 +67,8 @@ function mount(options: { root?: string; workspace?: boolean; maxFiles?: number 
   const plugin = createPresentPlugin(
     options.maxFiles === undefined ? {} : { maxFiles: options.maxFiles },
   );
-  const exit = registry.enter({ id: 'present#0', name: plugin.name });
-  void plugin.apply(registry);
+  const exit = registry.enter({ id: 'present#0', name: plugin.plugin.name });
+  void plugin.plugin.apply(registry, presentConfigSchema.parse(plugin.config));
   exit();
   if (options.workspace ?? true) {
     const leave = registry.enter({ id: 'sandbox-policy#0', name: 'sandbox-policy' });
@@ -336,9 +344,16 @@ describe('已知的偏離', () => {
 });
 
 describe('掛載', () => {
-  it('maxFiles 不是正的安全整數就在掛載時拋', () => {
+  // **翻面過的絆索**（#453）：原本是工廠當場拋，現在驗在載入的時候，訊息因此指得出條目。
+  it('maxFiles 不是正的安全整數就讓載入失敗', async () => {
     for (const maxFiles of [0, 1.5, Number.POSITIVE_INFINITY, -1]) {
-      expect(() => createPresentPlugin({ maxFiles })).toThrow('positive integer maxFiles');
+      const bad = [createPresentPlugin({ maxFiles })];
+      await expect(loadPlugins(bad)).rejects.toThrow('present#0 (present)');
+      await expect(loadPlugins(bad)).rejects.toThrow('positive integer maxFiles');
     }
+  });
+
+  it('省略時由 schema 補上預設值', () => {
+    expect(presentConfigSchema.parse({})).toEqual({ maxFiles: DEFAULT_MAX_FILES });
   });
 });

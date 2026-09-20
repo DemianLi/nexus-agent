@@ -35,7 +35,7 @@
  */
 
 import type { InvariantInstaller } from './invariants.js';
-import type { NexusPlugin } from './plugin.js';
+import type { NexusPlugin, PluginEntry } from './plugin.js';
 
 /** 這個配套入口認領的 package 名。 */
 export const CORE_INVARIANT_PACKAGE = '@nexus/core';
@@ -147,13 +147,19 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
  * `CreateNexusAgentOptions.onInvariantViolation` 印到 stderr，`serve.ts` 維持
  * `createInvariantRunner` 的預設。這個檔案只負責註冊，不負責回報去處。
  *
- * @returns 註冊 `@nexus/core` 配套入口的 plugin。
+ * @returns 掛著它的條目，註冊 `@nexus/core` 配套入口的 plugin。
  */
-export function createCoreInvariantPlugin(): NexusPlugin {
-  return {
-    name: 'core-invariant',
-    apply(registry) {
-      registry.invariants.register(CORE_INVARIANT_PACKAGE, sessionInvariant);
-    },
-  };
+export function createCoreInvariantPlugin(): PluginEntry {
+  return { plugin: coreInvariantPlugin };
 }
+
+/**
+ * 模組層級的那一顆。不收設定，所以沒有 `Config`；
+ * [#454](https://github.com/DemianLi/nexus-agent/issues/454) 從設定檔 import 的就是它。
+ */
+export const coreInvariantPlugin: NexusPlugin = {
+  name: 'core-invariant',
+  apply(registry) {
+    registry.invariants.register(CORE_INVARIANT_PACKAGE, sessionInvariant);
+  },
+};

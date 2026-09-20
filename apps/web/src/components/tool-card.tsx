@@ -8,8 +8,9 @@
  * - **報讀**（§8）：狀態變化不唸，狀態由狀態列講；orb 旁有同義文字，所以 `aria-hidden`。
  * - **停在提問時被停止的 `ask_user_question`**（§4.3，#409）：直接展開、列出題目與選項，標「已停止，請直接打字回覆」，
  *   不畫紅字——停止不是失敗（#276），而那句紅字是給模型看的英文。判法在 `lib/question-view.ts`。
- * - **答完的 `ask_user_question`**（§4.3，#409）：展開列「問題 → 回答」，答案是呼叫端按題目 id 配來的（`pairAnswers`）；
- *   配不到（重新整理、別的分頁）就只列題目、收著那一行照講「已回答 N 題」。參數原文不畫：它就是這幾題。
+ * - **答完的 `ask_user_question`**（§4.3，#409；#439 之後）：展開列「問題 → 回答」，答案讀線上的 `ToolEntry.text`
+ *   （那一段就是模型收到的結果），所以重新整理、別的分頁、往回載入的歷史都看得到；沒有 `text` 的舊日誌退回本地那一則
+ *   `AnswerEntry`。兩份都讀不到、或配不起來就只列題目，收著那一行退回「已回答 N 題」。參數原文不畫：它就是這幾題。
  * - **`present`**（#441 第一刀）：收著講檔名，展開逐個列檔名、完整路徑、說明，不畫參數原文。只講這顆呼叫說了什麼；
  *   交付成不成立看狀態，交付卡片是第二刀。判法在 `lib/present-view.ts`。
  */
@@ -23,13 +24,16 @@ import { CodeBlock } from '@/components/markdown/code-block';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
+  answersOfText,
   answerText,
   ASK_USER_QUESTION,
   isStoppedQuestion,
+  pairQuestions,
   questionsOf,
   questionSummary,
   STOPPED_QUESTION_TEXT,
 } from '@/lib/question-view';
+import type { QuestionAnswer } from '@/lib/question-view';
 import { basename, PRESENT, presentedFilesOf, presentSummary } from '@/lib/present-view';
 import type { PresentedFile } from '@/lib/present-view';
 import { classifyTool, firstLine, toolInputBody, toolSummary, toolTitle } from '@/lib/tool-view';
@@ -67,10 +71,11 @@ function StatusIcon({ status }: { status: ToolEntry['status'] }) {
  */
 function QuestionList({
   questions,
-  answer,
+  answers,
 }: {
   questions: readonly QuestionItem[];
-  answer: AnswerEntry | undefined;
+  /** 題目 id → 那一題的答案（`pairQuestions`）；讀不到或配不起來時沒有。 */
+  answers: ReadonlyMap<string, QuestionAnswer> | undefined;
 }) {
   return (
     <ol className="bg-stage shadow-stage flex flex-col gap-3 rounded-xl p-3 text-sm">
@@ -80,13 +85,13 @@ function QuestionList({
             <span className="text-muted-foreground text-xs">{question.header}</span>
           )}
           <span>{question.question}</span>
-          {answer !== undefined ? (
+          {answers !== undefined ? (
             <span className="text-foreground font-medium">
               <span aria-hidden className="text-muted-foreground">
                 →{' '}
               </span>
               <span className="sr-only">回答：</span>
-              {answerText(answer.answers.find((candidate) => candidate.id === question.id))}
+              {answerText(answers.get(question.id))}
             </span>
           ) : (
             question.options !== undefined &&
@@ -149,6 +154,11 @@ export function ToolCard({
   const variant = classifyTool(entry.name);
   const body = toolInputBody(entry.name, entry.input);
   const questions = entry.name === ASK_USER_QUESTION ? questionsOf(entry.input) : undefined;
+  // 答案優先讀線上那一份（#439）：它不分分頁，重新整理與重播都在。本地那一則是舊日誌（沒有 `text`）的退路。
+  const given =
+    questions === undefined ? undefined : (answersOfText(entry.text) ?? answer?.answers);
+  const paired =
+    questions === undefined || given === undefined ? undefined : pairQuestions(questions, given);
   const presented = entry.name === PRESENT ? presentedFilesOf(entry.input) : undefined;
   const failed = entry.status === 'failed' && !stopped;
   const answered = entry.status === 'done';
@@ -182,7 +192,7 @@ export function ToolCard({
             : failed && entry.error !== undefined
               ? firstLine(entry.error)
               : questions !== undefined
-                ? questionSummary(questions, answered)
+                ? questionSummary(questions, answered, given)
                 : presented !== undefined
                   ? presentSummary(presented)
                   : toolSummary(entry.name, entry.input)}
@@ -208,10 +218,12 @@ export function ToolCard({
           )}
           {questions !== undefined ? (
             <>
-              <QuestionList questions={questions} answer={answer} />
-              {answered && answer === undefined && (
+              <QuestionList questions={questions} answers={paired} />
+              {answered && paired === undefined && (
                 <p className="text-muted-foreground px-3 pb-1 text-xs">
-                  答案只記在作答的那個分頁，這裡看不到。
+                  {given === undefined
+                    ? '這次的答案讀不出來：結果文字太長被截過，或不是預期的形狀。'
+                    : '答案和題目對不起來，只列題目。'}
                 </p>
               )}
             </>

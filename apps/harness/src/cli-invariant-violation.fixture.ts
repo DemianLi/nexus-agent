@@ -24,19 +24,21 @@
  * `run cli --plugins` 才炸出來的。
  */
 
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { createEchoPlugin } from '@nexus/plugin-echo';
 
 /** 這份清單認領的假 package 名。真的 package 不會用它，所以撞不到任何人。 */
 export const NOISY_INVARIANT_PACKAGE = '@nexus/noisy';
 
-const noisy: NexusPlugin = {
-  name: 'noisy-invariant',
-  apply(registry) {
-    registry.invariants.register(NOISY_INVARIANT_PACKAGE, (subject, fail) => {
-      subject.observe((event) => fail(`看到 ${event.type}`));
-    });
+const noisy: PluginEntry = {
+  plugin: {
+    name: 'noisy-invariant',
+    apply(registry) {
+      registry.invariants.register(NOISY_INVARIANT_PACKAGE, (subject, fail) => {
+        subject.observe((event) => fail(`看到 ${event.type}`));
+      });
+    },
   },
 };
 
-export default [createEchoPlugin(), noisy] satisfies NexusPlugin[];
+export default [createEchoPlugin(), noisy] satisfies PluginEntry[];

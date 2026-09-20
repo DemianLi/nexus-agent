@@ -18,7 +18,7 @@
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import { tool } from '@langchain/core/tools';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
@@ -62,16 +62,18 @@ afterEach(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
-const plugin: NexusPlugin = {
-  name: 'tracing-probe',
-  apply: (registry) =>
-    void registry.tools.register(
-      tool(({ secret }) => `讀到了：${secret}`, {
-        name: 'probe_tool',
-        description: '把收到的東西唸一次。',
-        schema: z.object({ secret: z.string().describe('一串不該出境的東西') }),
-      }),
-    ),
+const plugin: PluginEntry = {
+  plugin: {
+    name: 'tracing-probe',
+    apply: (registry) =>
+      void registry.tools.register(
+        tool(({ secret }) => `讀到了：${secret}`, {
+          name: 'probe_tool',
+          description: '把收到的東西唸一次。',
+          schema: z.object({ secret: z.string().describe('一串不該出境的東西') }),
+        }),
+      ),
+  },
 };
 
 describe('HIDE_INPUTS / HIDE_OUTPUTS', () => {

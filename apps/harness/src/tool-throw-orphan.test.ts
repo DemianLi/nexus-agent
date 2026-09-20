@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import type { NexusPlugin, SessionEvent } from '@nexus/core';
+import type { PluginEntry, SessionEvent } from '@nexus/core';
 import { createDeepAgent, GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -38,17 +38,21 @@ const boom = tool(
   { name: 'boom', description: '一律拋錯。', schema: z.object({}) },
 );
 
-const BOOM: NexusPlugin = {
-  name: 'boom',
-  apply(registry) {
-    registry.tools.register(boom);
+const BOOM: PluginEntry = {
+  plugin: {
+    name: 'boom',
+    apply(registry) {
+      registry.tools.register(boom);
+    },
   },
 };
 
-const WORKER: NexusPlugin = {
-  name: 'worker-host',
-  apply(registry) {
-    registry.subagents.register({ name: 'worker', description: '幹活的。' });
+const WORKER: PluginEntry = {
+  plugin: {
+    name: 'worker-host',
+    apply(registry) {
+      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    },
   },
 };
 
@@ -85,7 +89,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 /** 真的組裝跑一輪到收尾，回 root 日誌。 */
 async function runOnce(
   turns: readonly ScriptedTurn[],
-  plugins: readonly NexusPlugin[],
+  plugins: readonly PluginEntry[],
 ): Promise<readonly SessionEvent[]> {
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns }),

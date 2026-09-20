@@ -27,7 +27,7 @@ import {
   SESSION_LOG_FORMAT_VERSION,
   SessionRegistry,
 } from '@nexus/core';
-import type { NexusPlugin, SessionEvent, SessionEventMap } from '@nexus/core';
+import type { PluginEntry, SessionEvent, SessionEventMap } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -42,24 +42,28 @@ import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 
 /** 一顆會成功的工具。 */
-const echoPlugin: NexusPlugin = {
-  name: 'log-content-echo',
-  apply(registry) {
-    registry.tools.register(
-      tool(({ text }: { text: string }) => `回聲：${text}`, {
-        name: 'echo',
-        description: '原樣回聲。',
-        schema: z.object({ text: z.string() }),
-      }),
-    );
+const echoPlugin: PluginEntry = {
+  plugin: {
+    name: 'log-content-echo',
+    apply(registry) {
+      registry.tools.register(
+        tool(({ text }: { text: string }) => `回聲：${text}`, {
+          name: 'echo',
+          description: '原樣回聲。',
+          schema: z.object({ text: z.string() }),
+        }),
+      );
+    },
   },
 };
 
 /** 只註冊一個 subagent。 */
-const workerPlugin: NexusPlugin = {
-  name: 'log-content-worker',
-  apply(registry) {
-    registry.subagents.register({ name: 'worker', description: '幹活的。' });
+const workerPlugin: PluginEntry = {
+  plugin: {
+    name: 'log-content-worker',
+    apply(registry) {
+      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    },
   },
 };
 

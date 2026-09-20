@@ -16,7 +16,16 @@
 import type { StructuredTool } from '@langchain/core/tools';
 import { loadPlugins } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
-import { createQuickJsPlugin, QUICKJS_CAPABILITY, RUN_JAVASCRIPT_TOOL_NAME } from './index.js';
+import {
+  createQuickJsPlugin,
+  DEFAULT_MAX_STACK_SIZE_BYTES,
+  DEFAULT_MEMORY_LIMIT_BYTES,
+  DEFAULT_TIMEOUT_MS,
+  quickJsConfigSchema,
+  quickJsPlugin,
+  QUICKJS_CAPABILITY,
+  RUN_JAVASCRIPT_TOOL_NAME,
+} from './index.js';
 import type { QuickJsPluginOptions } from './index.js';
 
 /** 掛一次 plugin，把註冊出來的那個工具拿出來，餵它一段程式。 */
@@ -199,5 +208,29 @@ describe('plugin 的接線', () => {
   // 會撞上基座 sandbox backend 的同名工具。
   it('工具名不是 execute', () => {
     expect(RUN_JAVASCRIPT_TOOL_NAME).toBe('run_javascript');
+  });
+});
+
+describe('設定（#453）', () => {
+  it('省略時三格都由 schema 補上預設值', () => {
+    expect(quickJsConfigSchema.parse({})).toEqual({
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+      memoryLimitBytes: DEFAULT_MEMORY_LIMIT_BYTES,
+      maxStackSizeBytes: DEFAULT_MAX_STACK_SIZE_BYTES,
+    });
+  });
+
+  it('不是正整數就讓載入失敗，訊息帶 `<id> (<name>)` 與欄位路徑', async () => {
+    for (const bad of [{ timeoutMs: 0 }, { memoryLimitBytes: -1 }, { maxStackSizeBytes: 1.5 }]) {
+      const field = Object.keys(bad)[0]!;
+      await expect(loadPlugins([createQuickJsPlugin(bad)])).rejects.toThrow('quickjs#0 (quickjs)');
+      await expect(loadPlugins([createQuickJsPlugin(bad)])).rejects.toThrow(field);
+    }
+  });
+
+  it('未知欄位讓載入失敗（登記的偏離：dsh 放行）', async () => {
+    await expect(
+      loadPlugins([{ plugin: quickJsPlugin, config: { timeoutMS: 100 } }]),
+    ).rejects.toThrow(/timeoutMS/);
   });
 });

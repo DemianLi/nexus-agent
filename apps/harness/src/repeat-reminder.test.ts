@@ -16,7 +16,7 @@
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { REPEAT_REMINDER_MARKER } from '@nexus/core';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
@@ -137,12 +137,14 @@ describe('提醒在正式路徑上進得了模型的 prompt', () => {
    * 「自動成立」是推理，不是證據，所以這裡量一次。
    */
   it('呼叫被核准閘門拒掉，照樣計數照樣提醒', async () => {
-    const denyEcho: NexusPlugin = {
-      name: 'deny-echo',
-      apply: (registry) =>
-        void registry.approvals.gate((exec, next) =>
-          exec.name === ECHO_TOOL_NAME ? { kind: 'deny', reason: '這次不給跑' } : next(),
-        ),
+    const denyEcho: PluginEntry = {
+      plugin: {
+        name: 'deny-echo',
+        apply: (registry) =>
+          void registry.approvals.gate((exec, next) =>
+            exec.name === ECHO_TOOL_NAME ? { kind: 'deny', reason: '這次不給跑' } : next(),
+          ),
+      },
     };
     const model = new LoopingChatModel({ toolName: ECHO_TOOL_NAME });
     const { agent, dispose } = await createNexusAgent({
@@ -252,10 +254,12 @@ describe('摘要與提醒一起跑', () => {
  */
 describe('subagent 那一輪也有，而且跟 root 的計數分開', () => {
   it('root 先重複兩次再派工，subagent 自己數到三次拿到的是溫和版', async () => {
-    const crew: NexusPlugin = {
-      name: 'crew',
-      apply: (registry) =>
-        void registry.subagents.register({ name: 'writer', description: '負責寫東西。' }),
+    const crew: PluginEntry = {
+      plugin: {
+        name: 'crew',
+        apply: (registry) =>
+          void registry.subagents.register({ name: 'writer', description: '負責寫東西。' }),
+      },
     };
     const repeat = {
       content: '',

@@ -188,8 +188,8 @@ describe('註冊', () => {
   it('掛上去就認領自己的包名', () => {
     const registry = createRegistry();
     const plugin = createTodoInvariantPlugin();
-    const exit = registry.enter({ id: `${plugin.name}#0`, name: plugin.name });
-    plugin.apply(registry);
+    const exit = registry.enter({ id: `${plugin.plugin.name}#0`, name: plugin.plugin.name });
+    plugin.plugin.apply(registry, undefined);
     exit();
 
     expect(registry.invariants.companions().map((entry) => entry.packageName)).toEqual([

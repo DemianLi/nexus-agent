@@ -25,7 +25,7 @@ import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Command, MemorySaver } from '@langchain/langgraph';
 import { SessionRegistry } from '@nexus/core';
-import type { NexusPlugin, SessionEvent } from '@nexus/core';
+import type { PluginEntry, SessionEvent } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { createMemoryPlugin } from '@nexus/plugin-memory';
 import {
@@ -183,24 +183,26 @@ describe('計劃指引進不進 system prompt', () => {
    */
   it('更外層的 prompt 不會被吃掉', async () => {
     const marker = '<更外層的那一段>';
-    const outer: NexusPlugin = {
-      name: 'outer-prompt',
-      apply: (registry) =>
-        void registry.middleware.use(
-          {
-            name: 'outerPrompt',
-            wrapModelCall: (
-              request: { systemMessage?: { concat: (text: string) => unknown } },
-              handler: (next: unknown) => unknown,
-            ) =>
-              handler(
-                request.systemMessage === undefined
-                  ? { ...request, systemPrompt: marker }
-                  : { ...request, systemMessage: request.systemMessage.concat(`\n${marker}`) },
-              ),
-          } as never,
-          { prepend: true },
-        ),
+    const outer: PluginEntry = {
+      plugin: {
+        name: 'outer-prompt',
+        apply: (registry) =>
+          void registry.middleware.use(
+            {
+              name: 'outerPrompt',
+              wrapModelCall: (
+                request: { systemMessage?: { concat: (text: string) => unknown } },
+                handler: (next: unknown) => unknown,
+              ) =>
+                handler(
+                  request.systemMessage === undefined
+                    ? { ...request, systemPrompt: marker }
+                    : { ...request, systemMessage: request.systemMessage.concat(`\n${marker}`) },
+                ),
+            } as never,
+            { prepend: true },
+          ),
+      },
     };
 
     const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
@@ -420,16 +422,18 @@ describe('模式狀態活得過什麼', () => {
       turns: Array.from({ length: 12 }, (_, index) => ({ content: `第 ${index + 1} 次回話。` })),
     });
 
-    const tuned: NexusPlugin = {
-      name: 'tuned-summarization',
-      apply: (registry) =>
-        void registry.middleware.use(
-          createSummarizationMiddleware({
-            backend,
-            trigger: { type: 'messages', value: 3 },
-            keep: { type: 'messages', value: 1 },
-          }) as never,
-        ),
+    const tuned: PluginEntry = {
+      plugin: {
+        name: 'tuned-summarization',
+        apply: (registry) =>
+          void registry.middleware.use(
+            createSummarizationMiddleware({
+              backend,
+              trigger: { type: 'messages', value: 3 },
+              keep: { type: 'messages', value: 1 },
+            }) as never,
+          ),
+      },
     };
 
     const { agent, dispose } = await createNexusAgent({
@@ -500,7 +504,7 @@ describe('工具目錄不隨模式變動', () => {
 describe('/plan 這條路', () => {
   /** 餵幾行進 REPL，把印出來的東西與日誌一起收回來。 */
   async function repl(
-    plugins: readonly NexusPlugin[],
+    plugins: readonly PluginEntry[],
     lines: string,
     turns: number,
   ): Promise<{
