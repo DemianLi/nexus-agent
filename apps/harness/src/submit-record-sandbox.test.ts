@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Command, MemorySaver } from '@langchain/langgraph';
-import { SessionRegistry } from '@nexus/core';
+import { createHostServicesPlugin, SessionRegistry } from '@nexus/core';
 import type { SandboxMode, SessionEvent } from '@nexus/core';
 import { createSubmitRecordPlugin, SUBMIT_RECORD_TOOL_NAME } from '@nexus/plugin-submit-record';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -75,7 +75,7 @@ describe('submit_record 被 fence 擋下', () => {
       }),
       backend,
       checkpointer: new MemorySaver(),
-      plugins: [createSubmitRecordPlugin({ backend })],
+      plugins: [createHostServicesPlugin({ backend }), createSubmitRecordPlugin()],
     });
     const sessions = new SessionRegistry('submit-record-sandbox');
     const detach = attachSession(sessions);

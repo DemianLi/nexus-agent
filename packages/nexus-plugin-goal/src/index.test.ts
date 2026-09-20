@@ -8,15 +8,39 @@
 import { describe, expect, it } from 'vitest';
 
 import { createRegistry, createSessionRunner, goalId, SessionLog } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import type { GoalChangeMeta, GoalRef } from '@nexus/core';
 
-import { createGoalPlugin, GoalError } from './index.js';
+import {
+  createGoalPlugin,
+  goalConfigSchema,
+  GoalError,
+  goalPlugin,
+  GOALS_SERVICE,
+} from './index.js';
 import { GOAL_TOOL_OUTPUT_SCHEMA } from './tools.js';
-import type { GoalPluginEntry, GoalPluginOptions, GoalService } from './index.js';
+import type { GoalPluginOptions, GoalServices, GoalService } from './index.js';
+
+/**
+ * 掛一次，回**這一次組裝**的 `goals` 服務。
+ *
+ * 走 `registry.services.use()` 而不是問 plugin 物件——[#459](https://github.com/DemianLi/nexus-agent/issues/459)
+ * 之後查表活在 `apply` 的閉包裡，plugin 物件上沒有那一格（那一格就是兩次組裝串台的來源）。
+ */
+function applyGoalTo(
+  registry: ReturnType<typeof createRegistry>,
+  entry: PluginEntry,
+  id = 'goal#0',
+): GoalServices {
+  const exit = registry.enter({ id, name: 'goal' });
+  entry.plugin.apply(registry, goalConfigSchema.parse(entry.config));
+  exit();
+  return registry.services.use(GOALS_SERVICE);
+}
 
 /** 掛一次、接一份日誌，回手上要用的每一個東西。 */
 function attach(options: GoalPluginOptions = {}): {
-  plugin: GoalPluginEntry;
+  goals: GoalServices;
   log: SessionLog;
   service: GoalService;
   detach: () => void;
@@ -30,9 +54,7 @@ function attach(options: GoalPluginOptions = {}): {
     ...options,
   });
   const registry = createRegistry();
-  const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-  plugin.plugin.apply(registry);
-  exit();
+  const goals = applyGoalTo(registry, plugin);
   const log = new SessionLog('goal');
   const detach = createSessionRunner({
     address: { kind: 'root' },
@@ -42,10 +64,10 @@ function attach(options: GoalPluginOptions = {}): {
       throw new Error(`不該有 warn：${message}`);
     },
   });
-  const service = plugin.plugin.serviceFor(log);
+  const service = goals.serviceFor(log);
   if (service === undefined) throw new Error('接線之後應該找得到服務');
   return {
-    plugin,
+    goals,
     log,
     service,
     detach,
@@ -73,9 +95,7 @@ describe('掛載', () => {
     // 而且三顆都是 `rootOnly`**——多一顆、少一顆、或哪天有人把 `rootOnly` 拿掉，這裡紅。
     // middleware 與配套入口仍然一格都不碰。
     const registry = createRegistry();
-    const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-    createGoalPlugin().plugin.apply(registry);
-    exit();
+    applyGoalTo(registry, createGoalPlugin());
     expect(registry.sessions.installers()).toHaveLength(1);
     expect(registry.commands.list().map((entry) => entry.name)).toEqual(['goal']);
     const toolNames = [...registry.tools.effective(undefined).keys()].sort();
@@ -91,34 +111,28 @@ describe('掛載', () => {
   });
 
   it('接線之前找不到服務，收線之後也找不到', () => {
-    const plugin = createGoalPlugin();
     const registry = createRegistry();
-    const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-    plugin.plugin.apply(registry);
-    exit();
+    const goals = applyGoalTo(registry, createGoalPlugin());
     const log = new SessionLog('goal');
-    expect(plugin.plugin.serviceFor(log)).toBeUndefined();
-    expect(plugin.plugin.attached()).toEqual([]);
+    expect(goals.serviceFor(log)).toBeUndefined();
+    expect(goals.attached()).toEqual([]);
 
     const detach = createSessionRunner({
       address: { kind: 'root' },
       log,
       installers: registry.sessions.installers(),
     });
-    expect(plugin.plugin.serviceFor(log)).toBeDefined();
-    expect(plugin.plugin.attached()).toHaveLength(1);
+    expect(goals.serviceFor(log)).toBeDefined();
+    expect(goals.attached()).toHaveLength(1);
 
     detach();
-    expect(plugin.plugin.serviceFor(log)).toBeUndefined();
-    expect(plugin.plugin.attached()).toEqual([]);
+    expect(goals.serviceFor(log)).toBeUndefined();
+    expect(goals.attached()).toEqual([]);
   });
 
   it('一份日誌一個服務——兩份日誌的目標互不相干', () => {
-    const plugin = createGoalPlugin();
     const registry = createRegistry();
-    const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-    plugin.plugin.apply(registry);
-    exit();
+    const goals = applyGoalTo(registry, createGoalPlugin());
     const first = new SessionLog('a');
     const second = new SessionLog('b');
     createSessionRunner({
@@ -132,10 +146,10 @@ describe('掛載', () => {
       installers: registry.sessions.installers(),
     });
 
-    plugin.plugin.serviceFor(first)?.create({ objective: '第一份的目標' });
-    expect(plugin.plugin.serviceFor(first)?.get()?.objective).toBe('第一份的目標');
-    expect(plugin.plugin.serviceFor(second)?.get()).toBeUndefined();
-    expect(plugin.plugin.attached()).toHaveLength(2);
+    goals.serviceFor(first)?.create({ objective: '第一份的目標' });
+    expect(goals.serviceFor(first)?.get()?.objective).toBe('第一份的目標');
+    expect(goals.serviceFor(second)?.get()).toBeUndefined();
+    expect(goals.attached()).toHaveLength(2);
   });
 });
 
@@ -395,18 +409,15 @@ describe('接上一份已經有內容的日誌', () => {
     first.service.pause(refOf(first.service));
 
     // 同一份日誌，接第二個 plugin 上去——它沒看過前面那兩筆，只能靠重播。
-    const later = createGoalPlugin();
     const registry = createRegistry();
-    const exit = registry.enter({ id: 'goal#1', name: 'goal' });
-    later.plugin.apply(registry);
-    exit();
+    const later = applyGoalTo(registry, createGoalPlugin(), 'goal#1');
     createSessionRunner({
       address: { kind: 'root' },
       log: first.log,
       installers: registry.sessions.installers(),
     });
 
-    const view = later.plugin.serviceFor(first.log)?.get();
+    const view = later.serviceFor(first.log)?.get();
     expect(view?.phase).toBe('paused');
     expect(view?.revision).toBe(2);
     // **授權不重播**：它是 process 內的東西，重放一段歷史不該讓誰自己動起來。
@@ -515,11 +526,11 @@ describe('roundsStarted', () => {
 describe('續接回來的日誌', () => {
   /** 同一份 plugin 設定，接一份帶 seed 的日誌——下一個行程的樣子。 */
   function resumeFrom(earlier: SessionLog): GoalService {
-    const plugin = createGoalPlugin({ now: () => 200, newGoalId: () => 'goal-後來' });
     const registry = createRegistry();
-    const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-    plugin.plugin.apply(registry);
-    exit();
+    const goals = applyGoalTo(
+      registry,
+      createGoalPlugin({ now: () => 200, newGoalId: () => 'goal-後來' }),
+    );
     const log = new SessionLog('goal', { seed: earlier.events });
     createSessionRunner({
       address: { kind: 'root' },
@@ -529,7 +540,7 @@ describe('續接回來的日誌', () => {
         throw new Error(`不該有 warn：${message}`);
       },
     });
-    const service = plugin.plugin.serviceFor(log);
+    const service = goals.serviceFor(log);
     if (service === undefined) throw new Error('接線之後應該找得到服務');
     return service;
   }
@@ -568,5 +579,54 @@ describe('續接回來的日誌', () => {
 
     const resumed = resumeFrom(log);
     expect(() => resumed.resume(refOf(resumed))).toThrow(/已經用完 1 個輪次/u);
+  });
+});
+
+/**
+ * **服務注入點**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
+ *
+ * 以前查表掛在 plugin 物件上，而 `apps/harness` 為了問它在模組層級留了一顆 handle——
+ * 於是同一個 process 裡兩次組裝共用一份查表。`serve.ts` 每條 thread 組裝一次
+ * （`:341`），所以那是「一條 thread 的目標被另一條 thread 讀到」。
+ */
+describe('goals 服務', () => {
+  /**
+   * **這一條守的是量具，不是行為**：下面那條隔離測試要量的必須是 `DEFAULT_PLUGINS` 真的
+   * 掛的那顆物件。帶了測試縫的那條路另外包一顆，而幾乎每一個 goal 測試都帶縫——量錯物件
+   * 的話，隔離測試會在一顆沒有人用的 plugin 上綠。
+   */
+  it('不帶測試縫時，條目上的就是模組層級那一顆本身', () => {
+    expect(createGoalPlugin().plugin).toBe(goalPlugin);
+    expect(createGoalPlugin({ defaultMaxGoalRounds: 8 }).plugin).toBe(goalPlugin);
+    // 帶了縫才另外包一顆——兩條路的 `apply` 是同一個函式，差的只有那個閉包。
+    expect(createGoalPlugin({ now: () => 1 }).plugin).not.toBe(goalPlugin);
+  });
+
+  it('兩次組裝各一份查表——第二次看不到第一次接上的那份日誌', () => {
+    const first = createRegistry();
+    const goalsA = applyGoalTo(first, createGoalPlugin(), 'goal#a');
+    const second = createRegistry();
+    const goalsB = applyGoalTo(second, createGoalPlugin(), 'goal#b');
+
+    const log = new SessionLog('shared');
+    createSessionRunner({
+      address: { kind: 'root' },
+      log,
+      installers: first.sessions.installers(),
+    });
+
+    expect(goalsA.serviceFor(log)).toBeDefined();
+    expect(goalsA.attached()).toHaveLength(1);
+    // **這兩條在查表回到模組層級的那一天會紅。**
+    expect(goalsB.serviceFor(log)).toBeUndefined();
+    expect(goalsB.attached()).toEqual([]);
+  });
+
+  it('提供的是晚綁的把手，不是一顆服務——`provide` 的時候一份日誌都還沒接', () => {
+    const registry = createRegistry();
+    const goals = applyGoalTo(registry, createGoalPlugin());
+    // `apply` 已經跑完，而 `attachSession` 還沒發生：服務要到那時才出生。
+    expect(goals.attached()).toEqual([]);
+    expect(registry.services.provider(GOALS_SERVICE)).toEqual({ id: 'goal#0', name: 'goal' });
   });
 });

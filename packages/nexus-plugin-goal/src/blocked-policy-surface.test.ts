@@ -44,7 +44,7 @@ import { createRegistry } from '@nexus/core';
 import type { NamedEntry } from '@nexus/core';
 import type { StructuredTool } from '@langchain/core/tools';
 
-import { createGoalPlugin } from './index.js';
+import { createGoalPlugin, goalConfigSchema } from './index.js';
 import { GOAL_UPDATE_TOOL_NAME, goalToolBlockTooSoonMessage } from './tools.js';
 
 /**
@@ -68,7 +68,8 @@ const CURRENT_ROUND = 2;
 function registeredDescription(): string {
   const registry = createRegistry();
   const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-  createGoalPlugin({ blockedAfterConsecutiveRounds: THRESHOLD }).plugin.apply(registry);
+  const entry = createGoalPlugin({ blockedAfterConsecutiveRounds: THRESHOLD });
+  entry.plugin.apply(registry, goalConfigSchema.parse(entry.config));
   exit();
   const tools: Map<string, NamedEntry<StructuredTool>> = registry.tools.effective(undefined);
   const found = tools.get(GOAL_UPDATE_TOOL_NAME);

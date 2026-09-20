@@ -569,3 +569,90 @@ describe('telemetry 註冊點', () => {
     );
   });
 });
+
+describe('services 註冊點', () => {
+  it('提供之後取得的是同一個物件', () => {
+    const registry = createRegistry();
+    const collaborator = { kind: 'channel' };
+    const leave = registry.enter(first);
+    registry.services.provide('anything', collaborator);
+    leave();
+
+    expect(registry.services.get('anything')).toBe(collaborator);
+    expect(registry.services.use('anything')).toBe(collaborator);
+    expect(registry.services.provider('anything')).toEqual(first);
+    expect(registry.services.names()).toEqual(['anything']);
+  });
+
+  it('沒人提供時 get 回 undefined，不拋', () => {
+    const registry = createRegistry();
+    expect(registry.services.get('anything')).toBeUndefined();
+    expect(registry.services.provider('anything')).toBeUndefined();
+  });
+
+  /**
+   * **單一佔位，重名拋錯**，照 cordis 的 `reflect.provide`
+   * （`service "<name>" has been registered at <fiber>`）。這與 `capabilities.provide`
+   * 的冪等多提供者正好相反，而那個對比正是兩個點沒有合成一個的理由。
+   */
+  it('重名拋錯，訊息同時指名兩個提供者與服務名', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    registry.services.provide('anything', {});
+    leaveFirst();
+
+    const leaveSecond = registry.enter(second);
+    expect(() => registry.services.provide('anything', {})).toThrow(
+      /alpha#0 \(alpha\)[\s\S]*mcp#0 \(mcp\)/,
+    );
+    expect(() => registry.services.provide('anything', {})).toThrow('"anything"');
+    leaveSecond();
+  });
+
+  it('撤銷之後位子是真的空出來，別人提供得上去', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    const undo = registry.services.provide('anything', { who: 'alpha' });
+    leaveFirst();
+    undo();
+    undo();
+
+    expect(registry.services.get('anything')).toBeUndefined();
+    const leaveSecond = registry.enter(second);
+    expect(() => registry.services.provide('anything', { who: 'mcp' })).not.toThrow();
+    leaveSecond();
+    expect(registry.services.provider('anything')).toEqual(second);
+  });
+
+  it('provide 只能在 apply 裡叫', () => {
+    const registry = createRegistry();
+    expect(() => registry.services.provide('anything', {})).toThrow('services.provide()');
+  });
+
+  /**
+   * **缺件的兩句話不一樣**，見 `missingServiceError`：在 `apply` 裡缺件時要指名是誰要的
+   * （#459 驗收「錯誤訊息要指名缺哪一個、是誰要的」），在載入之外缺件時沒有誰可以指。
+   */
+  it('use 在 apply 裡缺件 → 訊息指名服務與要它的 plugin', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(second);
+    expect(() => registry.services.use('anything')).toThrow('mcp#0 (mcp)');
+    expect(() => registry.services.use('anything')).toThrow('"anything"');
+    leave();
+  });
+
+  it('use 在 apply 之外缺件 → 只說沒有人提供，不留一個空的「誰要的」', () => {
+    const registry = createRegistry();
+    expect(() => registry.services.use('anything')).toThrow('沒有人提供服務 "anything"');
+  });
+
+  it('缺件訊息列出目前有的服務，沒有時明說一個都沒有', () => {
+    const registry = createRegistry();
+    expect(() => registry.services.use('anything')).toThrow('這個組裝一個服務都沒有');
+
+    const leave = registry.enter(first);
+    registry.services.provide('channel', {});
+    leave();
+    expect(() => registry.services.use('anything')).toThrow('channel');
+  });
+});

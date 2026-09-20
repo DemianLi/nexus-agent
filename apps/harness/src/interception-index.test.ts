@@ -7,7 +7,7 @@
  *
  * ## 為什麼是這裡，而不是 `registry.ts` 的檔頭
  *
- * 最直覺的家是 `PluginRegistry` 的十五個欄位。**那是錯的軸**：第 2、6、7 格全擠在
+ * 最直覺的家是 `PluginRegistry` 的十六個欄位。**那是錯的軸**：第 2、6、7 格全擠在
  * `middleware` 一個欄位，第 3 格落在 `apps/harness` 根本沒有欄位，而第 6／7 格的**位置**
  * 是 `fold.ts` 決定的、不由註冊順序決定——欄位這一軸連「排在第幾個」都表達不出來。
  * #190 記著同型的坑：grep `lifecycle` 找生命週期鉤子會落到關機 disposer 上。
@@ -201,7 +201,7 @@ const INDEX: readonly InterceptionRow[] = [
       '只回一則 ToolMessage）；人那條路只有一顆 `interrupt/raised`，**只帶 `interruptId`**；' +
       '**結果從來沒進日誌**（`apps/harness/src/wire-handler.ts` 收到 `decisions` 之後零個 ' +
       '`append`），日誌上只剩 `turn/start` 的 resume 那一格，而它分不出核准與拒絕。' +
-      '兩個生產者都在圖外（`apps/harness/src/thread-pump.ts:384`、`apps/harness/src/cli.ts:733`）' +
+      '兩個生產者都在圖外（`apps/harness/src/thread-pump.ts:1107`、`apps/harness/src/cli.ts:1052`）' +
       '——**與第 2 列同一個結構成因，這是第二個實例**。' +
       '**這不是缺口帳第 3 筆**：那一筆是工具事件（對 dsh 的 `tool/call`↔`tool/result`，' +
       '#264 已補上），這一筆是核准自己那兩顆，宣告在別的套件、別的事件名上。**兩筆分開，不要合**' +

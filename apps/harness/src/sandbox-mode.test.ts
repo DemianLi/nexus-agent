@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { SessionLog } from '@nexus/core';
+import { createHostServicesPlugin, SessionLog } from '@nexus/core';
 import type { SessionStore } from '@nexus/core';
 
 import { createNexusAgent } from './agent-factory.js';
@@ -95,7 +95,10 @@ describe('一次切換搬得動兩個消費者', () => {
       model,
       // **fence 與 plugin 拿的是同一顆控制器**，這正是 `cli.ts` 的接法。
       backend: new ContainedFilesystemBackend({ rootDir: root, mode: controller.source }),
-      plugins: [createSandboxPolicyPlugin(controller, root)],
+      plugins: [
+        createHostServicesPlugin({ sandboxPolicy: { controller, rootDir: root } }),
+        createSandboxPolicyPlugin(),
+      ],
     });
 
     try {

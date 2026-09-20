@@ -22,7 +22,9 @@ import { DEFAULT_PLUGINS, createCliAgent, parseCliArgs, runTurn } from './cli.js
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import type { SandboxMode } from './contained-backend.js';
 import { parseServeArgs } from './serve.js';
-import { sandboxPolicySentence } from './sandbox-policy.js';
+import { createHostServicesPlugin, loadPlugins } from '@nexus/core';
+import { createSandboxPolicyPlugin, sandboxPolicySentence } from './sandbox-policy.js';
+import { SandboxModeController } from './sandbox-mode.js';
 
 const silent = { log: () => undefined, error: () => undefined };
 
@@ -167,5 +169,33 @@ describe('--sandbox 的解析', () => {
 
   it('沒給就是不給——預設留給 backend 決定', () => {
     expect(parseCliArgs(['--workspace', '/w']).sandbox).toBeUndefined();
+  });
+});
+
+/**
+ * **硬相依**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）：控制器與可寫根
+ * 走服務注入，而這顆 plugin 沒有它們一件事都做不了——所以缺件是**載入失敗**，不是
+ * 靜靜地少掛半套。
+ *
+ * 兩條各守一半：`use()` 當場拋的那句要指名是誰要的（`requires` 的事後檢查來不及，消費者
+ * 會先撞上一個 `undefined`），而正面那條確認有提供者時這顆真的掛得上去。
+ */
+describe('圍堵政策的協作者是硬相依', () => {
+  it('沒有人提供 sandboxPolicy → 載入失敗，訊息指名服務與要它的 plugin', async () => {
+    await expect(loadPlugins([createSandboxPolicyPlugin()])).rejects.toThrow('"sandboxPolicy"');
+    await expect(loadPlugins([createSandboxPolicyPlugin()])).rejects.toThrow('sandbox-policy');
+  });
+
+  it('組裝點提供了就掛得上去，而且拿到的是同一顆控制器', async () => {
+    const controller = new SandboxModeController('read-only');
+    const { registry } = await loadPlugins([
+      createHostServicesPlugin({ sandboxPolicy: { controller, rootDir: '/workspace' } }),
+      createSandboxPolicyPlugin(),
+    ]);
+    expect(registry.commands.find('sandbox')).toBeDefined();
+    // **同一顆，不是快照**：切換之後這顆 plugin 讀到的要跟著動。
+    controller.switchTo('danger-full-access');
+    expect(registry.services.use('sandboxPolicy').controller).toBe(controller);
+    expect(registry.services.use('sandboxPolicy').controller.source()).toBe('danger-full-access');
   });
 });

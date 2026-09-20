@@ -43,6 +43,7 @@ import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import {
   attachSessionPersistence,
+  createHostServicesPlugin,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   SessionRegistry,
@@ -59,7 +60,8 @@ import { createFeedbackPlugin } from '@nexus/plugin-feedback';
 import { createFeedbackInvariantPlugin } from '@nexus/plugin-feedback/invariant';
 import { createSubmitRecordInvariantPlugin } from '@nexus/plugin-submit-record/invariant';
 import { createEchoInvariantPlugin } from '@nexus/plugin-echo/invariant';
-import { createGoalPlugin, DEFAULT_MAX_GOAL_ROUNDS } from '@nexus/plugin-goal';
+import { createGoalPlugin, DEFAULT_MAX_GOAL_ROUNDS, GOALS_SERVICE } from '@nexus/plugin-goal';
+import type { GoalServices } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
 import { createMcpInvariantPlugin } from '@nexus/plugin-mcp/invariant';
 import { createMemoryInvariantPlugin } from '@nexus/plugin-memory/invariant';
@@ -70,7 +72,7 @@ import { createSkillsInvariantPlugin } from '@nexus/plugin-skills/invariant';
 import { createTelemetryOtelInvariantPlugin } from '@nexus/plugin-telemetry-otel/invariant';
 import { createPresentPlugin } from '@nexus/plugin-present';
 import { createPresentInvariantPlugin } from '@nexus/plugin-present/invariant';
-import { createWorkspaceChanges } from '@nexus/plugin-workspace-changes';
+import { createWorkspaceChanges, WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { createWorkspaceChangesInvariantPlugin } from '@nexus/plugin-workspace-changes/invariant';
 import { createTodoPlugin } from '@nexus/plugin-todo';
@@ -533,19 +535,6 @@ function outsideWorkspace(
  * 違規往哪裡印見 {@link runCli} 接線的那一行。
  */
 /**
- * 預設清單裡的 goal 域，**單獨留一個 handle**。
- *
- * 續行排程器要靠它的 `serviceFor(log)` 拿到某一份日誌上的服務——那是唯一問得到
- * `activation` 的地方，而 `activation` 是 process 內的、**折疊算不出來**（重放不會重新
- * 授權，那正是「掛載之後絕不自行復活」那條政策）。`GoalPlugin` 檔頭說這兩個方法「沒有
- * production 消費者」，這一行就是第一個。
- *
- * **它與清單裡那一項是同一個物件**，不是第二次 `createGoalPlugin()`——服務綁的是日誌，
- * 而查表在 plugin 物件上。
- */
-const GOAL_PLUGIN = createGoalPlugin();
-
-/**
  * 一則評分備註最多幾個 UTF-8 位元組。照 dsh web 那一包的設定
  * （`packages/bundle/web-app/cordis.patch.yml:56`，`c291e79`）；plugin 自己不給預設值。
  */
@@ -557,7 +546,7 @@ export const DEFAULT_PLUGINS: readonly PluginEntry[] = [
   // 建 middleware，所以沒給 `--workspace` 時它什麼都不加——與 dsh「沒有檔案系統提供方就載不到」同形。
   createAgentInstructionsPlugin(),
   createPlanModePlugin(),
-  GOAL_PLUGIN,
+  createGoalPlugin(),
   createTodoPlugin({ allowParallelInProgress: true }),
   // 評分與 `/feedback`：預設就裝，零 plugin 設定的 serve 與 CLI 都評得到（#278）。
   createFeedbackPlugin({ maxNoteBytes: FEEDBACK_MAX_NOTE_BYTES }),
@@ -588,10 +577,12 @@ export const DEFAULT_PLUGINS: readonly PluginEntry[] = [
  * 從一個模組載 plugin 清單。
  *
  * **這不是 [#46](https://github.com/DemianLi/nexus-agent/issues/46) 的外部設定機制**：
- * 條目的唯一 id 與停用已經在 [#104](https://github.com/DemianLi/nexus-agent/issues/104)
- * 落地了，**沒落地的是逐項覆寫個別 plugin 的設定**——我們這側設定收在工廠閉包裡，
- * 從外面 patch 不了。這裡則只回答「清單從哪個模組來」——組裝點本來就擁有的那個問題。
- * 約定薄到只有一句：模組的預設匯出是一個 plugin 陣列。
+ * 條目的唯一 id 與停用在 [#104](https://github.com/DemianLi/nexus-agent/issues/104) 落地，
+ * 設定改成條目上驗過的資料在 [#453](https://github.com/DemianLi/nexus-agent/issues/453)，
+ * 協作者改成服務注入在 [#459](https://github.com/DemianLi/nexus-agent/issues/459)。
+ * **沒落地的是 YAML 那一層**——從檔案讀清單與逐項覆寫設定是
+ * [#454](https://github.com/DemianLi/nexus-agent/issues/454) 的事。這裡只回答「清單從哪個
+ * 模組來」——組裝點本來就擁有的那個問題。約定薄到只有一句：模組的預設匯出是一個條目陣列。
  *
  * @param specifier - 模組路徑，相對於 `cwd` 解析。
  * @param cwd - 解析的基準目錄，省略即行程的工作目錄。
@@ -826,6 +817,11 @@ export async function createCliAgent(
   feedback: FeedbackService | undefined;
   /** 每一輪的改動摘要，serve 交給 wire-handler 的兩條路由。沒開或沒有工作區時是 `undefined`。 */
   workspaceChanges: WorkspaceChanges | undefined;
+  /**
+   * 這一次組裝的 goal 域，**沒掛時是 `undefined`**（`--plugins` 換掉預設清單那條路）。
+   * 兩條進入點都拿它去組 {@link goalDriverPort}。
+   */
+  goals: GoalServices | undefined;
 }> {
   const model = createCliModel(invocation.live);
   // **channel 在這裡算一次，兩個消費者共用。** 核准閘門由 `foldRegistry` 自己算
@@ -871,7 +867,7 @@ export async function createCliAgent(
           mode: sandboxMode.source,
           grants: sandboxMode,
         });
-  // **一條 thread 一份**：服務答的是這一次組裝的 root，所以建在這裡，同上面的控制器。
+  // **一條 thread 一份**：服務答的是這一次組裝的 root，所以條目建在這裡，同上面的控制器。
   const workspaceChanges =
     invocation.workspaceChanges === true && workspaceRoot !== undefined
       ? createWorkspaceChanges({ root: workspaceRoot })
@@ -885,19 +881,27 @@ export async function createCliAgent(
     attachSession,
     telemetrySharing,
     feedback,
+    services,
   } = await createNexusAgent({
     model,
     plugins: [
+      // **組裝點的協作者排最前面**（#459）：submit-record 與 sandbox-policy 在自己的
+      // `apply` 當下就讀，排後面它們會拿不到。載入是一趟到底的，不會回頭等。
+      createHostServicesPlugin({
+        channel,
+        backend,
+        ...(workspaceRoot === undefined
+          ? {}
+          : { sandboxPolicy: { controller: sandboxMode, rootDir: workspaceRoot } }),
+      }),
       ...plugins,
-      createAskUserPlugin({ channel }),
-      createSubmitRecordPlugin({ ...(backend !== undefined && { backend }) }),
+      createAskUserPlugin(),
+      createSubmitRecordPlugin(),
       // **有圍堵才講**。沒有 `--workspace` 的組裝一格圍堵都沒有，那時候講「目前的檔案
       // 政策是 workspace-write」是對模型說謊——它會以為根外被擋著，而整道 fence 不在
       // 路徑上。理由與 dsh 的 `ctx.fs.sandboxMode === undefined` 就不貢獻同一條。
-      ...(workspaceRoot === undefined
-        ? []
-        : [createSandboxPolicyPlugin(sandboxMode, workspaceRoot)]),
-      ...(workspaceChanges === undefined ? [] : [workspaceChanges.entry]),
+      ...(workspaceRoot === undefined ? [] : [createSandboxPolicyPlugin()]),
+      ...(workspaceChanges === undefined ? [] : [workspaceChanges]),
     ],
     ...(backend !== undefined && { backend }),
     ...(invocation.recursionLimit !== undefined && { recursionLimit: invocation.recursionLimit }),
@@ -925,7 +929,8 @@ export async function createCliAgent(
     attachSession,
     telemetrySharing,
     feedback,
-    workspaceChanges: workspaceChanges?.service,
+    workspaceChanges: services.get(WORKSPACE_CHANGES_SERVICE),
+    goals: services.get(GOALS_SERVICE),
   };
 }
 
@@ -1076,12 +1081,19 @@ export async function runTurn(
  * `log` 是 getter 不是值，因為 serve 那條路上日誌由 `ThreadPump` 建，而 port 要在 pump
  * 之前組好（pump 的建構參數就是它）。
  *
+ * **`goals` 是這一次組裝的那一份**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
+ * 以前它是模組層級的一顆 plugin 物件上的查表，所以同一個 process 裡兩次組裝共用一份
+ * ——症狀是一條 thread 的目標被另一條 thread 的排程器讀到。現在它由
+ * `registry.services` 交出來，一次組裝一份。
+ *
+ * @param goals - 這一次組裝的 goal 域；**沒掛就是 `undefined`**。
  * @param log - 讀那一份日誌；服務綁在它上面。
  * @param flush - 耐久檢查點。沒落盤時給一個 no-op。
  * @param warn - 排程器出事時說話的去處。
  * @returns 排程器要問域的四件事。
  */
 export function goalDriverPort(
+  goals: GoalServices | undefined,
   log: () => SessionLog,
   flush: () => Promise<void>,
   warn: (message: string) => void,
@@ -1089,9 +1101,9 @@ export function goalDriverPort(
   return {
     // **查不到就是 `undefined`**：`--plugins` 換掉預設清單時這條路就沒有 goal 域，
     // 那時排程器安靜地什麼都不做。
-    goal: () => GOAL_PLUGIN.plugin.serviceFor(log())?.get(),
-    block: (ref, reason) => void GOAL_PLUGIN.plugin.serviceFor(log())?.block(ref, reason),
-    disarm: () => void GOAL_PLUGIN.plugin.serviceFor(log())?.disarm(),
+    goal: () => goals?.serviceFor(log())?.get(),
+    block: (ref, reason) => void goals?.serviceFor(log())?.block(ref, reason),
+    disarm: () => void goals?.serviceFor(log())?.disarm(),
     flush,
     warn: (message) => warn(`[續行] ${message}`),
   };
@@ -1402,7 +1414,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     await resumed?.stored.close().catch(() => {});
     throw error;
   }
-  const { agent, commands, dispose, sessions, sessionLog, telemetrySharing } = built;
+  const { agent, commands, dispose, goals, sessions, sessionLog, telemetrySharing } = built;
   // **接在最後，而且是四個裡唯一一個出口。** 前三個是觀察者，落盤不改變任何人看得到
   // 什麼，所以順序在功能上沒有差別；排在最後是為了讓讀的人看到的因果跟實際一致——
   // 先被檢查、被參與者看過，才寫下去。
@@ -1487,6 +1499,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
 
     const driver = invocation.goalDriver
       ? goalDriverPort(
+          goals,
           () => sessionLog,
           async () => void (await persistence?.flush()),
           (message) => printer.error(message),

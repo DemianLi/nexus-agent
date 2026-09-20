@@ -131,9 +131,13 @@ async function disposeAll(registry: InternalPluginRegistry): Promise<void> {
  * 包一層 registry，把這一輪 `apply` 拿到的每個 undo 都記進堆疊。
  *
  * 只包會產生 undo 的方法——讀取路徑原封轉發，plugin 在自己的 `apply` 裡讀得到
- * 先前 plugin 註冊的東西。**九個註冊點一個都不能漏**：漏掉的那個不會有任何現有測試
- * 發現，只會在回滾時默默留下一筆孤兒。`load.test.ts` 有一條九個點各註冊一樣東西後
- * throw 的測試守著這件事。
+ * 先前 plugin 註冊的東西。**每一個會發 undo 的點一個都不能漏**：漏掉的那個不會有任何
+ * 現有測試發現，只會在回滾時默默留下一筆孤兒。`load.test.ts` 有一條「每個點各註冊一樣
+ * 東西後 throw」的測試守著這件事。
+ *
+ * **`invariants` / `commands` / `sessions` 三個是 [#459](https://github.com/DemianLi/nexus-agent/issues/459)
+ * 第一刀才補進來的**：它們三個一直會發 undo 卻一直沒被包，而上面那條測試是照這個函式
+ * 的內容寫的，所以它也沒發現。那是一個比這張卡更早的洞，順手補掉。
  *
  * `lifecycle` 也在追蹤範圍，但它撤銷的意思不同：撤掉的是**登記**，不是跑那個清理。
  * 回滾期的資源釋放由 plugin 自己的 `try` / `catch` 負責——理由見
@@ -164,6 +168,10 @@ function trackUndo(
     capabilities: {
       ...registry.capabilities,
       provide: (name) => remember(registry.capabilities.provide(name)),
+    },
+    services: {
+      ...registry.services,
+      provide: (name: string, value: unknown) => remember(registry.services.provide(name, value)),
     },
     backend: {
       ...registry.backend,
@@ -203,6 +211,19 @@ function trackUndo(
       ...registry.feedback,
       use: (service) => remember(registry.feedback.use(service)),
     },
+    invariants: {
+      ...registry.invariants,
+      register: (packageName, installer) =>
+        remember(registry.invariants.register(packageName, installer)),
+    },
+    commands: {
+      ...registry.commands,
+      register: (definition) => remember(registry.commands.register(definition)),
+    },
+    sessions: {
+      ...registry.sessions,
+      join: (installer) => remember(registry.sessions.join(installer)),
+    },
   };
 }
 
@@ -211,6 +232,16 @@ function trackUndo(
  *
  * 只能是之後：`requires` 明文不排序，清單裡靠前的 plugin 需要的能力可以由靠後的
  * plugin 提供。
+ *
+ * **能力與服務兩邊都查**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
+ * 服務名**不寫進 `capabilities`**：寫進去的話，一句與任何服務都無關的
+ * `capabilities.provide('sandboxPolicy')` 就能滿足 `requires: ['sandboxPolicy']`，
+ * 而那條 `requires` 要的是真的有東西可以 `use()`。兩個集合的碰撞政策也不同
+ * （能力冪等多提供者、服務單一佔位），合成一個就得犧牲一邊。
+ *
+ * **這裡是事後的網，不是唯一的閘門**：硬相依在 `services.use()` 當下就拋，訊息更精準
+ * （消費者不會先撞上一個 `undefined`）。這條守的是「宣告了 `requires` 卻從來沒 `use()`」
+ * 的那一半。
  *
  * **停用的條目兩邊都不算**：它的 `requires` 不檢查（沒跑的東西不需要任何能力），而它
  * 本來會提供的能力也真的沒被提供。所以缺件訊息把它們列出來——`disabled` 一加進來，
@@ -224,14 +255,15 @@ function assertRequires(
   for (const { plugin, origin, disabled } of entries) {
     if (disabled) continue;
     for (const capability of plugin.requires ?? []) {
-      if (!registry.capabilities.has(capability)) {
-        missing.push(`${formatOrigin(origin)} 需要能力 "${capability}"`);
-      }
+      if (registry.capabilities.has(capability)) continue;
+      if (registry.services.provider(capability) !== undefined) continue;
+      missing.push(`${formatOrigin(origin)} 需要能力 "${capability}"`);
     }
   }
   if (missing.length === 0) return;
-  const available = registry.capabilities.names();
-  const known = available.length === 0 ? '（沒有任何 plugin 宣告能力）' : available.join('、');
+  const available = [...registry.capabilities.names(), ...registry.services.names()];
+  const known =
+    available.length === 0 ? '（沒有任何 plugin 宣告能力或提供服務）' : available.join('、');
   const off = entries.filter((entry) => entry.disabled).map((entry) => formatOrigin(entry.origin));
   const hint =
     off.length === 0 ? '' : `。清單裡有停用的條目，它們一個能力都沒提供：${off.join('、')}`;

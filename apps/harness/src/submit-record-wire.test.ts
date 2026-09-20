@@ -56,6 +56,7 @@ import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixture
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+import { createHostServicesPlugin } from '@nexus/core';
 
 const BASE_URL = 'http://record.test';
 const CSV_PATH = '/visitors.csv';
@@ -113,8 +114,9 @@ async function connect(
     // **backend 給同一個物件**，就像 `cli.ts` 那樣。給兩個的失敗方式是兩個工具寫到兩個
     // 地方，而兩邊都會寫成功——所以這裡同時也在示範正確的接法。
     plugins: [
+      createHostServicesPlugin({ backend }),
       createAskUserPlugin(),
-      createSubmitRecordPlugin({ ...(backend !== undefined && { backend }) }),
+      createSubmitRecordPlugin(),
     ],
   });
   const handler = createWireHandler({

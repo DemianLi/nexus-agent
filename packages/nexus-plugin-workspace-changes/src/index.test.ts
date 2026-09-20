@@ -27,11 +27,34 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createRegistry, createSessionRunner, SessionRegistry } from '@nexus/core';
-import type { SessionEvent, SessionLog } from '@nexus/core';
+import { createRegistry, createSessionRunner, loadPlugins, SessionRegistry } from '@nexus/core';
+import type { PluginEntry, SessionEvent, SessionLog } from '@nexus/core';
 
-import { createWorkspaceChanges, WORKSPACE_CHANGES_LIMITS } from './index.js';
-import type { WorkspaceChangesLimits } from './index.js';
+import {
+  createWorkspaceChanges,
+  WORKSPACE_CHANGES_LIMITS,
+  WORKSPACE_CHANGES_SERVICE,
+  workspaceChangesConfigSchema,
+  workspaceChangesPlugin,
+} from './index.js';
+import type { WorkspaceChanges, WorkspaceChangesLimits } from './index.js';
+
+/**
+ * 把一個條目掛上一個 registry，回它提供的服務。
+ *
+ * **走 `entry.plugin.apply(registry, Config.parse(entry.config))`**，與 `loadPlugins` 做的同一件事；
+ * 服務從 `registry.services` 取，不從工廠產物上拿——那正是這一刀改掉的東西。
+ */
+function applyWorkspaceChangesTo(
+  registry: ReturnType<typeof createRegistry>,
+  entry: PluginEntry,
+  id = 'workspace-changes#0',
+): WorkspaceChanges {
+  const exit = registry.enter({ id, name: entry.plugin.name });
+  entry.plugin.apply(registry, workspaceChangesConfigSchema.parse(entry.config));
+  exit();
+  return registry.services.use(WORKSPACE_CHANGES_SERVICE);
+}
 
 const cleanup: string[] = [];
 afterEach(async () => {
@@ -55,7 +78,7 @@ interface Mounted {
   readonly tempRoot: string;
   readonly log: SessionLog;
   readonly warnings: string[];
-  readonly service: ReturnType<typeof createWorkspaceChanges>['service'];
+  readonly service: WorkspaceChanges;
   /** 扮演一顆檔案工具：擷取、等排著的工作，然後跑 `body`（那次改檔）。 */
   tool(
     name: string,
@@ -91,18 +114,16 @@ async function mount(
     for (const [name, content] of Object.entries(files)) await writeFile(join(root, name), content);
   }
   const warnings: string[] = [];
-  const { entry: wcEntry, service } = createWorkspaceChanges({
+  const wcEntry = createWorkspaceChanges({
     root,
     tempRoot,
-    limits,
+    ...limits,
     warn: (message) => void warnings.push(message),
     info: () => undefined,
     ...(options.git !== undefined && { git: options.git }),
   });
   const registry = createRegistry();
-  const exit = registry.enter({ id: 'workspace-changes#0', name: wcEntry.plugin.name });
-  void wcEntry.plugin.apply(registry, undefined);
-  exit();
+  const service = applyWorkspaceChangesTo(registry, wcEntry);
   const sessions = new SessionRegistry('wc');
   registry.sessions.bind(sessions);
   const log = sessions.root;
@@ -354,11 +375,8 @@ describe('輪的邊界', () => {
   it('續接：接上時已經在的舊輪重播過去，不會補記、也不建暫存目錄', async () => {
     const root = await directory('nexus-wc-seed-');
     const tempRoot = await directory('nexus-wc-temp-');
-    const { entry: wcEntry } = createWorkspaceChanges({ root, tempRoot });
     const registry = createRegistry();
-    const exit = registry.enter({ id: 'workspace-changes#0', name: wcEntry.plugin.name });
-    void wcEntry.plugin.apply(registry, undefined);
-    exit();
+    applyWorkspaceChangesTo(registry, createWorkspaceChanges({ root, tempRoot }));
     const sessions = new SessionRegistry('seeded');
     const log = sessions.root;
     log.append('turn/start', { kind: 'message', text: '以前那一輪。' });
@@ -418,13 +436,20 @@ describe('上限與內容', () => {
     });
   });
 
-  it('上限要是正的安全整數，照 dsh 在建立時就驗', () => {
+  it('上限要是正的安全整數，照 dsh 在 apply 當下驗，所以載入當場失敗', async () => {
     for (const field of ['maxFiles', 'timeoutMs', 'outputMaxBytes'] as const) {
-      for (const bad of [0, -1, 1.5, Number.NaN]) {
-        expect(() => createWorkspaceChanges({ root: tmpdir(), limits: { [field]: bad } })).toThrow(
-          `workspace-changes requires a positive integer ${field}`,
-        );
+      for (const bad of [0, -1, 1.5]) {
+        // `loadPlugins` 把 `apply` 的拋出包進一層 generic `Error`（`load.ts:80-82`），所以對的是
+        // 訊息文字——這一刀之前它是工廠當場拋的，句子沒換，換的只有拋的時刻。
+        await expect(
+          loadPlugins([createWorkspaceChanges({ root: tmpdir(), [field]: bad })]),
+        ).rejects.toThrow(`workspace-changes requires a positive integer ${field}`);
       }
+      // **`NaN` 由載體先擋掉**：zod 4 的 `z.number()` 不收 NaN（schemastery 收，所以 dsh 那句話
+      // 在它那邊管得到四種）。載入照樣失敗，只是這一種的訊息出處是 schema 不是 dsh 那一行。
+      await expect(
+        loadPlugins([createWorkspaceChanges({ root: tmpdir(), [field]: Number.NaN })]),
+      ).rejects.toThrow(new RegExp(`config 不合法 — ${field}`, 'u'));
     }
     expect(WORKSPACE_CHANGES_LIMITS).toEqual({
       timeoutMs: 30_000,
@@ -435,19 +460,50 @@ describe('上限與內容', () => {
     });
   });
 
-  it('一份只能掛一次組裝', () => {
-    const { entry: wcEntry } = createWorkspaceChanges({ root: tmpdir() });
-    const apply = () => {
-      const registry = createRegistry();
-      const exit = registry.enter({ id: 'workspace-changes#0', name: wcEntry.plugin.name });
-      try {
-        void wcEntry.plugin.apply(registry, undefined);
-      } finally {
-        exit();
-      }
-    };
-    apply();
-    expect(apply).toThrow('只能掛一次組裝');
+  /**
+   * 從前這裡是 `'一份只能掛一次組裝'`：工廠回的那一份帶著閉包狀態，掛第二次會靜靜地把兩次組裝
+   * 混在一起，所以用一顆 `applied` 旗標擋住。旗標沒了，擋的人換成 `services.provide`，而它擋的
+   * 理由也換了——**同一顆 plugin 掛兩次組裝現在是對的**。所以舊的那一條翻成下面兩條。
+   */
+  it('同一顆 plugin 掛兩次組裝，第二次看不到第一次記下的東西', async () => {
+    const m = await mount({ 'a.md': 'a\n' });
+    // 第二次組裝：同一顆 plugin、同一個工作區根，另一個 registry，而且**沒有接上任何日誌**。
+    // 記錄器與 `current` 住在各自 `apply` 的閉包裡，所以這一份應該什麼都答不出來；把它們提到
+    // 模組層級的話，這一份會看到第一次那顆記錄器（突變驗收 7）。
+    const second = applyWorkspaceChangesTo(
+      createRegistry(),
+      createWorkspaceChanges({ root: m.root }),
+    );
+    m.log.append('turn/start', { kind: 'message', text: '改。' });
+    await m.tool('edit_file', { file_path: 'a.md', old_string: 'a', new_string: 'b' }, () =>
+      writeFile(join(m.root, 'a.md'), 'b\n'),
+    );
+    result(m.log);
+    await m.afterAgent();
+    const [event] = m.changes();
+    expect(m.service.summary(event!.seq)?.files.map((file) => file.path)).toEqual(['a.md']);
+    expect(second.summary(event!.seq)).toBeUndefined();
+    expect(second).not.toBe(m.service);
+  });
+
+  it('同一個 registry 裡提供兩次會拋，訊息指名前一個提供者', () => {
+    const registry = createRegistry();
+    applyWorkspaceChangesTo(registry, createWorkspaceChanges({ root: tmpdir() }));
+    expect(() =>
+      applyWorkspaceChangesTo(
+        registry,
+        createWorkspaceChanges({ root: tmpdir() }),
+        'workspace-changes#1',
+      ),
+    ).toThrow(/workspace-changes#0/u);
+  });
+
+  it('沒有縫的時候回的就是模組層級那一顆，有縫才包一層', () => {
+    // 生產路徑一道縫都不傳，所以「測試量到的」與「出廠跑的」必須是同一顆物件。
+    expect(createWorkspaceChanges({ root: tmpdir() }).plugin).toBe(workspaceChangesPlugin);
+    expect(createWorkspaceChanges({ root: tmpdir(), warn: () => undefined }).plugin).not.toBe(
+      workspaceChangesPlugin,
+    );
   });
 });
 
@@ -773,15 +829,11 @@ describe('git 快照（#461）', () => {
   it('接上時重播的舊輪不跑 git；serve 重開後在核准點接回來，resume 那一刻才拍基準', async () => {
     const root = await repository({ 'a.md': 'a\n', 'b.md': 'b\n' });
     const tempRoot = await directory('nexus-wc-temp-');
-    const { entry: wcEntry, service } = createWorkspaceChanges({
-      root,
-      tempRoot,
-      info: () => undefined,
-    });
     const registry = createRegistry();
-    const exit = registry.enter({ id: 'workspace-changes#0', name: wcEntry.plugin.name });
-    void wcEntry.plugin.apply(registry, undefined);
-    exit();
+    const service = applyWorkspaceChangesTo(
+      registry,
+      createWorkspaceChanges({ root, tempRoot, info: () => undefined }),
+    );
     const sessions = new SessionRegistry('seeded');
     registry.sessions.bind(sessions);
     const log = sessions.root;

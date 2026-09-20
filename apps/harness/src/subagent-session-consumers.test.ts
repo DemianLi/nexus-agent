@@ -27,7 +27,12 @@ import type {
   SessionTelemetryRecord,
   SessionTelemetryService,
 } from '@nexus/core';
-import { createGoalPlugin, GOAL_COMMAND_NAME, goalAmbiguousMessage } from '@nexus/plugin-goal';
+import {
+  createGoalPlugin,
+  GOAL_COMMAND_NAME,
+  goalAmbiguousMessage,
+  GOALS_SERVICE,
+} from '@nexus/plugin-goal';
 import { createNexusAgent } from './agent-factory.js';
 import { DEFAULT_PLUGINS } from './cli.js';
 import { toAgentInvocation } from './messages.js';
@@ -282,11 +287,10 @@ describe('輪的擁有者是進入點，不是工具', () => {
  */
 describe('goal 的參與者只掛在 root 上', () => {
   it('委派過之後 `/goal` 照樣答得出來，不是「接了不只一份」', async () => {
-    const goal = createGoalPlugin();
-    const { agent, commands, attachSession, dispose } = await createNexusAgent({
+    const { agent, commands, attachSession, dispose, services } = await createNexusAgent({
       model: delegatingModel(OPEN_ONLY),
       checkpointer: new MemorySaver(),
-      plugins: [goal, boundaryPlugin(false)],
+      plugins: [createGoalPlugin(), boundaryPlugin(false)],
     });
     const sessions = new SessionRegistry('goal-root');
     const detach = attachSession(sessions);
@@ -295,7 +299,7 @@ describe('goal 的參與者只掛在 root 上', () => {
       // 子代理那一份真的開出來了，這一條才問得出東西。
       expect(sessions.list()).toHaveLength(2);
       // 掛著的服務仍然只有一個——root 那個。
-      expect(goal.plugin.attached()).toHaveLength(1);
+      expect(services.use(GOALS_SERVICE).attached()).toHaveLength(1);
 
       const definition = commands.find(GOAL_COMMAND_NAME);
       const answer = await definition?.handler({

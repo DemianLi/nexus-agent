@@ -82,7 +82,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import type { BaseMessage } from '@langchain/core/messages';
 import { GOAL_WRAPUP_MARKER } from '@nexus/core';
 import type { SessionLog } from '@nexus/core';
-import { createGoalPlugin } from '@nexus/plugin-goal';
+import { createGoalPlugin, GOALS_SERVICE } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
 import { describe, expect, it } from 'vitest';
 
@@ -214,7 +214,7 @@ describe('自主收尾與另一顆工具同批時，收尾指示插在兩顆結�
     const plugin = createGoalPlugin({ now: () => 100, newGoalId: () => `goal-${(serial += 1)}` });
     const state: ScriptedModelState = { turn: 0, boundToolNames: [], lastPrompt: [], prompts: [] };
     const violations: string[] = [];
-    const { agent, dispose, attachSession, attachInvariants } = await createNexusAgent({
+    const { agent, dispose, attachSession, attachInvariants, services } = await createNexusAgent({
       model: new ScriptedChatModel({ turns: TURNS, shared: state }) as never,
       plugins: [plugin, createGoalInvariantPlugin()],
       checkpointer: new MemorySaver(),
@@ -222,11 +222,11 @@ describe('自主收尾與另一顆工具同批時，收尾指示插在兩顆結�
     });
     // 同 `wire-handler.ts`：port 要日誌，而日誌由 pump 建，而 pump 的建構參數是 port。
     const late: { log?: SessionLog } = {};
+    const goals = services.use(GOALS_SERVICE);
     const port: GoalDriverPort = {
-      goal: () => plugin.plugin.serviceFor(late.log as SessionLog)?.get(),
-      block: (ref, reason) =>
-        void plugin.plugin.serviceFor(late.log as SessionLog)?.block(ref, reason),
-      disarm: () => void plugin.plugin.serviceFor(late.log as SessionLog)?.disarm(),
+      goal: () => goals.serviceFor(late.log as SessionLog)?.get(),
+      block: (ref, reason) => void goals.serviceFor(late.log as SessionLog)?.block(ref, reason),
+      disarm: () => void goals.serviceFor(late.log as SessionLog)?.disarm(),
       flush: () => Promise.resolve(),
       warn: () => {},
     };

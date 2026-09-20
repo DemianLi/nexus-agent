@@ -47,6 +47,7 @@ import { SandboxModeController } from './sandbox-mode.js';
 import { createSandboxPolicyPlugin, sandboxPolicySentence } from './sandbox-policy.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedToolCall, ScriptedTurn } from './scripted-model.js';
+import { createHostServicesPlugin } from '@nexus/core';
 
 /** 把一則訊息的 `content` 攤成字串，同 `sandbox-policy.test.ts`。 */
 function flatten(content: unknown): string {
@@ -141,8 +142,12 @@ describe('升級', () => {
       model,
       backend,
       plugins: [
-        ...(options.plugin === false ? [] : [createSandboxPolicyPlugin(controller, root)]),
-        ...(options.submitRecord === true ? [createSubmitRecordPlugin({ backend })] : []),
+        createHostServicesPlugin({
+          backend,
+          ...(options.plugin === false ? {} : { sandboxPolicy: { controller, rootDir: root } }),
+        }),
+        ...(options.plugin === false ? [] : [createSandboxPolicyPlugin()]),
+        ...(options.submitRecord === true ? [createSubmitRecordPlugin()] : []),
       ],
       ...(options.checkpointer !== false && { checkpointer: new MemorySaver() }),
       ...(options.approvalsEnabled !== undefined && {

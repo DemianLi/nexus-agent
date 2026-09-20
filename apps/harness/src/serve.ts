@@ -369,6 +369,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         telemetrySharing,
         feedback,
         workspaceChanges,
+        goals,
       } = built;
       // **遙測披露印在這裡而不是啟動時，因為啟動的那一刻答案不存在**：`createAgent` 是
       // lazy 的（`wire-handler.ts` 的 `pumpFor` 第一次收到請求才呼叫），plugin 沒跑過
@@ -406,7 +407,9 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         ...(invocation.goalDriver
           ? {
               goalDriver: (log: () => SessionLog, flush: () => Promise<void>) =>
-                goalDriverPort(log, flush, (message) => {
+                // **`goals` 是這一條 thread 自己那一次組裝的**：`createCliAgent` 每條
+                // thread 各跑一次（`:341`），所以兩條 thread 的目標從此分得開（#459）。
+                goalDriverPort(goals, log, flush, (message) => {
                   serverLog(message);
                 }),
             }
