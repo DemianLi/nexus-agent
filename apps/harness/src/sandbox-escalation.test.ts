@@ -37,14 +37,14 @@ import type { SandboxMode } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
 import {
   BLANK_JUSTIFICATION_REFUSAL,
+  createSandboxPolicyPlugin,
   escalationReason,
   MISSING_TARGET_REFUSAL,
   nonWideningRefusal,
   SANDBOX_ESCALATION_HINT,
   SANDBOX_ESCALATION_TOOL_NAME,
-} from './sandbox-escalation.js';
-import { SandboxModeController } from './sandbox-mode.js';
-import { createSandboxPolicyPlugin, sandboxPolicySentence } from './sandbox-policy.js';
+  SandboxModeController,
+} from '@nexus/plugin-sandbox-policy';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedToolCall, ScriptedTurn } from './scripted-model.js';
 import { createHostServicesPlugin } from '@nexus/core';
@@ -697,12 +697,5 @@ describe('升級', () => {
     } finally {
       await fenced.dispose();
     }
-  });
-
-  it('read-only 那句叫模型照升級指引做，但不在提示句裡講模式名', () => {
-    const sentence = sandboxPolicySentence('read-only', '/w');
-    expect(sentence).toContain('升級指引');
-    expect(sentence).not.toContain('workspace-write');
-    expect(sentence).not.toContain('danger-full-access');
   });
 });

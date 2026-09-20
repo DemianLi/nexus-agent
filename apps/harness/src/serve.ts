@@ -48,7 +48,7 @@ import { listStoredThreads } from './session-list.js';
 import type { ThreadTitleLimits } from './session-list.js';
 import { attachSessionPersistence, SessionNotFoundError } from '@nexus/core';
 import { assertSameCwd } from './resume-guards.js';
-import { recordedSandboxMode } from './sandbox-mode.js';
+import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
 import { LIVE_MODEL_ID } from './live-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import type { SandboxMode } from './contained-backend.js';

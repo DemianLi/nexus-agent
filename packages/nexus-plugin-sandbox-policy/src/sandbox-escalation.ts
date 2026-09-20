@@ -39,7 +39,7 @@
  * dsh 把核准來的模式**蓋在同一顆呼叫上**；我們的請求與重試是兩顆，中間隔著一顆一次性的
  * grant，而它**綁住模型指名的那個檔，也綁住那個檔剛被擋下的那一次**（操作與內容摘要，
  * [#254](https://github.com/DemianLi/nexus-agent/issues/254)）。為什麼兩樣都要綁，見
- * `contained-backend.ts` 的 `SandboxGrant`：綁檔是因為基座的摘要器也會走 `write`；綁那一次是
+ * `@nexus/core` 的 `SandboxGrant`（fence 與這顆格子之間的合約）：綁檔是因為基座的摘要器也會走 `write`；綁那一次是
  * 因為升級卡上看不到內容，而 `write_file` 的重試沒有自己的卡——在 dsh，人核准的那顆就是
  * 會執行的那顆，這裡要靠綁住才成立。
  *
@@ -59,7 +59,7 @@ import type { NexusPlugin } from '@nexus/core';
 import { toolRefusal } from '@nexus/core';
 import { z } from 'zod';
 
-import type { SandboxMode } from './contained-backend.js';
+import type { SandboxMode } from '@nexus/core';
 import type { SandboxModeController } from './sandbox-mode.js';
 
 /** 模型看到的工具名。**閘門認的就是這個字串**，所以它是導出的。 */
