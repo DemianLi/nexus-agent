@@ -234,6 +234,14 @@ export interface WireHandlerOptions {
    * 不是這道檢查。
    */
   readonly auth: WireAuth;
+  /**
+   * 這台 server 講話的地方，選配（[#479](https://github.com/DemianLi/nexus-agent/issues/479)）。
+   *
+   * **這是這個檔案的第一個、而且目前唯一的記錄點**，加它的理由很窄：一頁歷史的位元組上限是**軟的**
+   * （單獨一輪就超標時不從輪中間切，見 `conversation-history.ts` 的 `fitBytes`），而那件事發生時回應
+   * 照樣是 200、畫面照樣對——不講就完全看不見。缺席就是不講，測試不必為它接線。
+   */
+  warn?(message: string): void;
 }
 
 /** wire 只需要知道「這個請求帶的會話有沒有效」。`BrowserAuth` 滿足它。 */
@@ -964,6 +972,12 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         thread.pump.sessionLog.events,
         query,
         thread.pump.awaitingInput ? { gatedTools: thread.pump.gatedTools } : undefined,
+        // **不要在這裡讀 `result`**：這顆回呼跑在 `historyPage` 裡面，那時它還沒被賦值。
+        (bytes) =>
+          options.warn?.(
+            `[歷史] thread ${threadId} 的一頁超過上限：${String(bytes)} bytes。` +
+              `單獨一輪就超標，不從輪中間切（#479）。`,
+          ),
       );
     } catch (error: unknown) {
       if (error instanceof HistoryQueryError) {
