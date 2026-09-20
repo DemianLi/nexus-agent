@@ -36,7 +36,12 @@ import type {
   ThreadHistoryResult,
   WorkspaceChangesPayload,
 } from '@nexus/wire';
-import { DELIVERABLES_PRESENTED, HISTORY_PAGE_MESSAGES, WORKSPACE_CHANGES } from '@nexus/wire';
+import {
+  DELIVERABLES_PRESENTED,
+  HISTORY_PAGE_MAX_BYTES,
+  HISTORY_PAGE_MESSAGES,
+  WORKSPACE_CHANGES,
+} from '@nexus/wire';
 import type { LoggedMessage, SessionEvent, SessionEventMap, UnreplayableReason } from '@nexus/core';
 import { loggedMessageId, replayConversation } from '@nexus/core';
 
@@ -324,18 +329,85 @@ function checkIndex(name: string, value: number | undefined, minimum: number): v
   }
 }
 
+/** 一段折出來的 frame 在線上有多重。判準是**序列化之後**的位元組，見 {@link fitBytes}。 */
+function weigh(segment: readonly SessionEvent[], awaitingInput?: AwaitingInput): number {
+  return Buffer.byteLength(JSON.stringify(historyFrames(segment, awaitingInput)), 'utf8');
+}
+
+/**
+ * 把切點往後推到這一頁不超過 {@link HISTORY_PAGE_MAX_BYTES}（[#479](https://github.com/DemianLi/nexus-agent/issues/479)）。
+ *
+ * ## 只在輪邊界上推，而且**至少留一整輪**
+ *
+ * 位元組上限是軟的：輪邊界那條保證比它強（見 `@nexus/wire` 的 `ThreadHistoryResult.events`）。所以這裡
+ * 走的是 `[messageCut, end)` 裡的 `isPageStart` 位置，從最後一段往回收，**最後那一段無條件收下**——
+ * 於是「一頁至少一整輪」不是另外寫的一條保底規則，是這個迴圈的形狀本身；`firstSeq` 因此嚴格遞減，
+ * 客戶端拿著同一個 `beforeSeq` 永遠不會原地打轉。
+ *
+ * ## 為什麼秤序列化後的，而不是把各段內容長度相加
+ *
+ * 相加會漏掉骨架。合成日誌量過（2026-09-20）：25 輪純對話的工具內容是 0，而線上是 31 KB——小頁整個量錯。
+ * 內容一大時兩者才趨近（wire ≈ content × 1.01）。
+ *
+ * ## 這樣秤付得起嗎：量過才寫
+ *
+ * 每一段只序列化一次（O(n)），不是每個候選切點把整段重秤一次（O(n²)）。代價是累加值與「整段一次序列化」
+ * 不完全相等——`historyFrames` 是有狀態的走訪器。實測三種跨量級的形狀（25 輪純對話／每輪 3 次小讀／
+ * 每輪 10 次滿版讀）差的都是 **24 bytes，固定值、而且是高估**。高估的方向是安全的：拿它當判準只會讓頁
+ * 略小，不會讓真的送出去的超過上限。
+ *
+ * @param window - `throughSeq` 以內的日誌。
+ * @param messageCut - 則數上限算出來的切點，已經退到輪邊界。
+ * @param end - 這一頁的結束位置（不含）。
+ * @param awaitingInput - 最後一頁才有；秤最後一段時要帶上它。
+ * @returns 新的切點（一定 `>= messageCut`），與秤到的位元組。**位元組一起回**是為了讓呼叫端不必為了
+ *   知道這一頁多重而把整頁再序列化一次——一頁 12 MiB 的話那是實打實的第二次。
+ */
+function fitBytes(
+  window: readonly SessionEvent[],
+  messageCut: number,
+  end: number,
+  awaitingInput?: AwaitingInput,
+): { readonly cut: number; readonly bytes: number } {
+  const starts: number[] = [];
+  for (let at = messageCut; at < end; at += 1) {
+    if (at === messageCut || isPageStart(window[at]!)) starts.push(at);
+  }
+  // 窗口裡一個輪邊界都沒有（整段是個片段）：沒有推得動的地方。
+  if (starts.length === 0) {
+    return { cut: messageCut, bytes: weigh(window.slice(messageCut, end), awaitingInput) };
+  }
+
+  // **最後那一整輪無條件收下**，而且是在迴圈外收的——「一頁至少一整輪」就住在這兩行裡，不是迴圈裡一個
+  // 可以被拿掉的條件。往回延伸的那幾段才問上限。
+  const lastStart = starts[starts.length - 1]!;
+  let cut = lastStart;
+  let bytes = weigh(window.slice(lastStart, end), awaitingInput);
+  for (let i = starts.length - 2; i >= 0; i -= 1) {
+    const from = starts[i]!;
+    const size = weigh(window.slice(from, starts[i + 1]!));
+    if (bytes + size > HISTORY_PAGE_MAX_BYTES) break;
+    bytes += size;
+    cut = from;
+  }
+  return { cut, bytes };
+}
+
 /**
  * 一頁歷史。
  *
  * @param events - 這條 thread 的 root 日誌，全部。
  * @param query - 省略就是最後 {@link HISTORY_PAGE_MESSAGES} 則。
  * @param awaitingInput - 有給就是這條 thread 現在停下來等人。只作用在最後一頁，見 {@link historyFrames}。
+ * @param onOversize - 這一頁撐破了 {@link HISTORY_PAGE_MAX_BYTES} 時叫一次，帶秤到的位元組。單獨一輪就
+ *   超標時會發生（輪邊界比上限強，見 {@link fitBytes}），而那件事在線上一點痕跡都沒有。
  * @throws {@link HistoryQueryError} 參數不合規，或 `beforeSeq` 超出 `throughSeq` 之後。
  */
 export function historyPage(
   events: readonly SessionEvent[],
   query: ThreadHistoryQuery = {},
   awaitingInput?: AwaitingInput,
+  onOversize?: (bytes: number) => void,
 ): ThreadHistoryResult {
   const maxMessages = query.maxMessages ?? HISTORY_PAGE_MESSAGES;
   checkIndex('maxMessages', maxMessages, 1);
@@ -359,6 +431,14 @@ export function historyPage(
     while (cut > 0 && !isPageStart(window[cut]!)) cut -= 1;
     break;
   }
+
+  // **`awaitingInput` 只作用在最後一頁**，而它會多出 `tool-suspended` 那幾顆 frame。秤重時要用真的那一份，
+  // 否則最後一段會被低估，而低估的方向正好是「真的送出去的比上限大」。
+  const tail = end === events.length ? awaitingInput : undefined;
+  const fitted = fitBytes(window, cut, end, tail);
+  cut = fitted.cut;
+  // 軟上限撐破了。**沒有人講的話這件事在線上完全看不見**——回應照樣是 200、畫面照樣對。
+  if (fitted.bytes > HISTORY_PAGE_MAX_BYTES) onOversize?.(fitted.bytes);
 
   const replay = replayConversation(events);
   return {

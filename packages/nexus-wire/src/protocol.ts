@@ -414,7 +414,46 @@ export function historyPath(threadId: string): string {
 /** 一頁歷史的則數上限，同 dsh 的預設（`history.ts:38`）。 */
 export const HISTORY_PAGE_MESSAGES = 50;
 
-/** 拿一頁歷史的參數。三格都省略就是最後一頁。 */
+/**
+ * 一頁歷史的**位元組上限**（[#479](https://github.com/DemianLi/nexus-agent/issues/479)）。
+ *
+ * ## 為什麼則數上限不夠
+ *
+ * {@link HISTORY_PAGE_MESSAGES} 數的是「則」，而**一則底下可以掛任意多張工具卡**。
+ * [#471](https://github.com/DemianLi/nexus-agent/pull/471) 把成功的工具結果文字放上線之後，一頁的量變成
+ * 「這個窗口裡的工具卡數 × 每則 50000 bytes 上限」，而卡數那一項沒有任何上限——一輪連著呼叫幾十次
+ * `read_file` 是正常的。合成日誌量過（2026-09-20，**不是真的 session log**）：每輪 10 次滿版讀的 25 輪
+ * 窗口是 12.04 MiB，每輪 40 次是 48.05 MiB。一個往回翻的請求就能讓 server 一次把那些組出來送掉。
+ *
+ * ## dsh 沒有這個上限
+ *
+ * dsh 的 `paginate` 只數訊息數（`packages/api/session-controller/src/history.ts:38,384-410`，`ddefc45`），
+ * 全檔沒有位元組上限。**這一格是我們主動多加的一層，不是補上我們缺的東西**：它的 spill 通知帶得出 spill
+ * 檔的位址、超出的部分使用者取得回來，我們截在 wire 層、通知沒有位址可指（#471 登記的偏離）。
+ *
+ * ## 這個數字怎麼來的
+ *
+ * `4_000_000` ＝ **80 × 每則工具結果的 50000 bytes 上限**，讀作「一頁最多裝 80 則滿版工具結果」。
+ * 80 這個倍數對著量測挑：典型的一頁是 0.20 MiB 量級，離這裡有 19 倍餘裕，所以正常瀏覽一次都不會被切
+ * （切了只會讓分頁變碎，對所有人都變差）；而上面那兩個病態形狀會落回單位數 MiB。
+ *
+ * **與那個 50000 的關係由 `apps/harness` 的絆索釘著**（`TOOL_TEXT_MAX_BYTES` 住在 app 裡，wire 不能往上
+ * import，所以這裡只能寫字面值）：那條測試逐字比對 `80 × TOOL_TEXT_MAX_BYTES`，每則上限哪天動了、這裡
+ * 沒跟著動，它會紅。同一個做法見 `conversation.ts:927` 那條。
+ *
+ * ## 它是**軟的**
+ *
+ * 見 {@link ThreadHistoryResult.events}：切點只落在輪邊界上，所以單獨一輪就超標時那一頁就是超標。
+ */
+export const HISTORY_PAGE_MAX_BYTES = 4_000_000;
+
+/**
+ * 拿一頁歷史的參數。三格都省略就是最後一頁。
+ *
+ * **位元組上限不在這裡**（#479）：{@link HISTORY_PAGE_MAX_BYTES} 限的是「server 為一個呼叫端一次組多少
+ * 東西出來」，而呼叫端正是被限的那個人——可以被調高的參數限不住任何東西。只能調低的參數今天沒有消費者
+ * （要小一點的頁調 {@link ThreadHistoryQuery.maxMessages} 就是了），哪天真有再加。
+ */
 export interface ThreadHistoryQuery {
   /** 這一頁最多幾則（人打的字與模型的回覆各算一則）。 */
   readonly maxMessages?: number;
@@ -426,7 +465,16 @@ export interface ThreadHistoryQuery {
 
 /** 一頁歷史。 */
 export interface ThreadHistoryResult {
-  /** 照順序折進 `reduceConversation`。**一顆都不帶 `seq`**，見 {@link historyPath}。 */
+  /**
+   * 照順序折進 `reduceConversation`。**一顆都不帶 `seq`**，見 {@link historyPath}。
+   *
+   * **切點一律落在一輪的開頭**，而且這條保證比 {@link HISTORY_PAGE_MAX_BYTES} 強：單獨一輪就超過那個
+   * 上限時，**那一頁就是超標**，不會從輪中間切開（#479）。從輪中間切會送出孤兒工具卡——有 `tool/result`
+   * 沒有對應的 `tool/call`——畫面上是半張卡。dsh 的 `paginate` 也把切點無條件退到群組開頭
+   * （`history.ts:397-405` 的 `groupStart`），這一條與它同向。
+   *
+   * 於是「一頁至少一整輪」是這條保證的推論，不是另一條規則：`firstSeq` 因此嚴格遞減，往前翻一定會前進。
+   */
   readonly events: readonly Event[];
   /** 這一頁從日誌的哪個位置起。往前翻時當 `beforeSeq` 帶回來。 */
   readonly firstSeq: number;

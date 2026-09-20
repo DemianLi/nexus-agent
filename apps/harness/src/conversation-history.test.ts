@@ -8,12 +8,19 @@
 import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { GoalId, SessionEvent } from '@nexus/core';
 import { TOOL_ABORTED, toLoggedMessage } from '@nexus/core';
-import type { ConversationEntry, ConversationState } from '@nexus/wire';
-import { UNFINISHED_TOOL_TEXT, emptyConversation, prependEntries, reduceAll } from '@nexus/wire';
+import type { ConversationEntry, ConversationState, ThreadHistoryQuery } from '@nexus/wire';
+import {
+  HISTORY_PAGE_MAX_BYTES,
+  UNFINISHED_TOOL_TEXT,
+  emptyConversation,
+  prependEntries,
+  reduceAll,
+} from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import type { AwaitingInput } from './conversation-history.js';
 import { HistoryQueryError, historyFrames, historyPage } from './conversation-history.js';
+import { TOOL_TEXT_MAX_BYTES } from './tool-result-text.js';
 
 type Draft = Pick<SessionEvent, 'type' | 'data'>;
 
@@ -630,5 +637,130 @@ describe('舊格式', () => {
 
   it('對照：格式 9 的不是舊格式', () => {
     expect(historyPage(TWO_TURNS).legacy).toBe(false);
+  });
+});
+
+/**
+ * **一頁的位元組上限**（[#479](https://github.com/DemianLi/nexus-agent/issues/479)）。
+ *
+ * 則數上限綁不住位元組量——一則底下可以掛任意多張工具卡。這一組釘的是那個上限與**輪邊界**的關係：
+ * 輪邊界贏，所以上限是軟的。
+ */
+describe('一頁的位元組上限', () => {
+  /** 一輪：人一句、模型叫 n 次工具、n 顆結果、收尾。`bytes` 是每顆結果的大小。 */
+  function turn(index: number, reads: number, bytes: number, replyText = '讀了。'): Draft[] {
+    const ids = Array.from({ length: reads }, (_, i) => `c${index}-${i}`);
+    const body = 'x'.repeat(bytes);
+    return [
+      human(`第 ${index} 輪。`),
+      reply(replyText, ids),
+      ...ids.flatMap((id) => [call(id), result(id, body)]),
+      turnEnd,
+    ];
+  }
+
+  const build = (turns: number, reads: number, bytes: number, replyText?: string): SessionEvent[] =>
+    log(...Array.from({ length: turns }, (_, i) => turn(i, reads, bytes, replyText)).flat());
+
+  const wire = (page: ReturnType<typeof historyPage>): number =>
+    Buffer.byteLength(JSON.stringify(page.events), 'utf8');
+
+  /** 這一頁的第一顆必須是一輪的開頭（而且不是 `resume`）——從輪中間切會送出孤兒工具卡。 */
+  function expectPageStart(events: readonly SessionEvent[], at: number): void {
+    const first = events[at];
+    expect(first?.type, `firstSeq=${at}`).toBe('turn/start');
+    expect((first?.data as { kind?: string } | undefined)?.kind).not.toBe('resume');
+  }
+
+  it('超標的窗口切成多頁，每一頁都從輪邊界開始、而且落在上限內', () => {
+    // 25 輪 × 每輪 10 次滿版讀 ≈ 12 MiB，遠超過上限。
+    const events = build(25, 10, TOOL_TEXT_MAX_BYTES);
+    const page = historyPage(events);
+
+    expect(page.firstSeq).toBeGreaterThan(0);
+    expect(page.hasMore).toBe(true);
+    expect(wire(page)).toBeLessThanOrEqual(HISTORY_PAGE_MAX_BYTES);
+    expectPageStart(events, page.firstSeq);
+
+    // 往前翻也一樣：每一頁都從輪邊界開始，而且 `firstSeq` 嚴格遞減（不會原地打轉）。
+    let before = page.firstSeq;
+    for (let hop = 0; hop < 3 && before > 0; hop += 1) {
+      const older = historyPage(events, { beforeSeq: before, throughSeq: page.throughSeq });
+      expect(older.firstSeq, `第 ${hop} 跳`).toBeLessThan(before);
+      expect(wire(older)).toBeLessThanOrEqual(HISTORY_PAGE_MAX_BYTES);
+      expectPageStart(events, older.firstSeq);
+      before = older.firstSeq;
+    }
+  });
+
+  it('單獨一輪就超標時，那一頁照樣回得出來——輪邊界比上限強', () => {
+    // 一輪 200 次滿版讀 ≈ 9.6 MiB，一輪就爆。
+    const events = build(1, 200, TOOL_TEXT_MAX_BYTES);
+    const page = historyPage(events);
+
+    expect(page.firstSeq).toBe(0);
+    expect(page.events.length).toBeGreaterThan(0);
+    expect(page.hasMore).toBe(false);
+    // **超標是刻意的**：不從輪中間切，所以這一頁就是比上限大。
+    expect(wire(page)).toBeGreaterThan(HISTORY_PAGE_MAX_BYTES);
+    expectPageStart(events, page.firstSeq);
+  });
+
+  it('典型的一頁不受影響：25 輪 × 每輪 3 次小讀整頁都在', () => {
+    const events = build(25, 3, 2_000);
+    const page = historyPage(events);
+
+    expect(page.firstSeq).toBe(0);
+    expect(page.hasMore).toBe(false);
+    // 離上限還有一個量級以上的餘裕——正常瀏覽不該被切碎。
+    expect(wire(page) * 10).toBeLessThan(HISTORY_PAGE_MAX_BYTES);
+  });
+
+  it('判準是序列化後的長度，不是各段內容相加：零工具的一頁照樣切得動', () => {
+    // **這一條釘的是「量什麼」**：底下一顆工具卡都沒有，所以「把工具結果長度相加」會量到 0、永遠不切。
+    const events = build(30, 0, 0, 'y'.repeat(300_000));
+    const page = historyPage(events, { maxMessages: 1_000 });
+
+    expect(page.firstSeq).toBeGreaterThan(0);
+    expect(page.hasMore).toBe(true);
+    expect(wire(page)).toBeLessThanOrEqual(HISTORY_PAGE_MAX_BYTES);
+    expectPageStart(events, page.firstSeq);
+  });
+
+  it('上限不是查詢參數：呼叫端調不高', () => {
+    const events = build(25, 10, TOOL_TEXT_MAX_BYTES);
+    const capped = historyPage(events);
+    // 塞一個不存在的參數進去（協定上沒有這一格），頁的大小一個位元組都不會變。
+    const attempted = historyPage(events, {
+      maxBytes: HISTORY_PAGE_MAX_BYTES * 100,
+    } as ThreadHistoryQuery);
+
+    expect(attempted.firstSeq).toBe(capped.firstSeq);
+    expect(wire(attempted)).toBe(wire(capped));
+  });
+
+  it('撐破上限時叫一次 onOversize，帶秤到的位元組；沒撐破就不叫', () => {
+    const oversized: number[] = [];
+    const single = build(1, 200, TOOL_TEXT_MAX_BYTES);
+    historyPage(single, {}, undefined, (bytes) => void oversized.push(bytes));
+    expect(oversized).toHaveLength(1);
+    expect(oversized[0]).toBeGreaterThan(HISTORY_PAGE_MAX_BYTES);
+    // 秤到的跟真的送出去的要對得上（累加值是高估，所以只會大一點點）。
+    const actual = wire(historyPage(single));
+    expect(oversized[0]).toBeGreaterThanOrEqual(actual);
+    expect(oversized[0]! - actual).toBeLessThan(1_000);
+
+    const quiet: number[] = [];
+    historyPage(build(25, 3, 2_000), {}, undefined, (bytes) => void quiet.push(bytes));
+    expect(quiet).toEqual([]);
+  });
+
+  /**
+   * **兩個常數的關係要有人釘**：`HISTORY_PAGE_MAX_BYTES` 住在 `@nexus/wire`、`TOOL_TEXT_MAX_BYTES` 住在
+   * 這個 app，wire 不能往上 import，所以那邊只寫得出字面值。這條在唯一同時相依兩邊的地方比對它們——
+   * 每則上限哪天動了而頁上限沒跟著動，這裡會紅。同一個做法見 `@nexus/wire` 的 `conversation.ts:927`。
+   */
+  it('頁上限就是 80 則滿版工具結果', () => {
+    expect(HISTORY_PAGE_MAX_BYTES).toBe(80 * TOOL_TEXT_MAX_BYTES);
   });
 });

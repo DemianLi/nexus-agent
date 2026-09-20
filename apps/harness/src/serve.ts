@@ -289,6 +289,10 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   let telemetryDisclosed = false;
   const handler = createWireHandler({
     auth,
+    // 一頁歷史撐破軟上限時講一聲（#479）。只有這一件事會走到它。
+    warn: (message) => {
+      serverLog(message);
+    },
     // **冷讀那一格**（#302）：讀的是續接那條路寫進去的同一格，只列切得過去的——`cwd` 就是續接時
     // `assertSameCwd` 比的那一個。沒開落盤就整個不給，列表那時講「列不出來」而不是「沒有」。
     ...(sessionStore === undefined
