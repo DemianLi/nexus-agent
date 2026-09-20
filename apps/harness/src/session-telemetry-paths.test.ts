@@ -18,6 +18,7 @@ import { createServer } from 'node:http';
 import type { Event } from '@nexus/wire';
 import { createWireClient } from '@nexus/wire';
 import { SessionLog, SessionRegistry } from '@nexus/core';
+import { SESSION_TELEMETRY_SERVICE } from '@nexus/core';
 import type {
   LoggedMessage,
   PluginEntry,
@@ -64,7 +65,7 @@ function telemetryPlugin(sink: SessionTelemetryService, redact?: SessionTelemetr
     plugin: {
       name: 'telemetry',
       apply(registry) {
-        registry.telemetry.use(sink);
+        registry.services.provide(SESSION_TELEMETRY_SERVICE, sink);
         if (redact !== undefined) registry.telemetry.redact(redact);
       },
     },

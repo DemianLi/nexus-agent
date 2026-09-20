@@ -25,7 +25,7 @@
 
 import { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
-import { currentMessageFeedback, loggedMessageId } from '@nexus/core';
+import { currentMessageFeedback, loggedMessageId, MESSAGE_FEEDBACK_SERVICE } from '@nexus/core';
 import { z } from 'zod';
 import type {
   FeedbackRecord,
@@ -100,7 +100,7 @@ function isAssistantMessage(events: readonly SessionEvent[], messageId: string):
  * 建評分與評語的規則。
  *
  * @param options - 備註上限。
- * @returns 掛到 `registry.feedback` 上的那個。
+ * @returns 提供成 `messageFeedback` 服務的那個。
  * @throws `maxNoteBytes` 不是正的安全整數。
  */
 export function createFeedbackService(options: FeedbackConfig): FeedbackService {
@@ -195,7 +195,10 @@ export const feedbackPlugin: NexusPlugin<FeedbackConfig> = {
     // **服務建在 `apply` 裡，不在模組層級**：設定是這一次掛載的，而 `serve.ts` 每個
     // thread 組裝一次。共用一份的話兩邊會用同一個上限，而且誰都改不動。
     const service = createFeedbackService(config);
-    registry.feedback.use(service);
+    // **單一佔位，重名當場拋**（[#477](https://github.com/DemianLi/nexus-agent/issues/477)）：
+    // 兩份規則就是兩種「內容一樣算不算一次」的答案。那句領域說明原本寫在 `registry.feedback`
+    // 的重名訊息裡；搬到 `services` 之後訊息是通用的（照 cordis），所以說明留在這裡。
+    registry.services.provide(MESSAGE_FEEDBACK_SERVICE, service);
     const rootsHere: SessionLog[] = [];
     registry.sessions.join((subject) => {
       if (subject.address.kind !== 'root') return undefined;

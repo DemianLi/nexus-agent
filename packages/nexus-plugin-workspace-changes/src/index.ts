@@ -40,7 +40,7 @@
  *    - `git`：dsh 經 `subprocess` 能力找執行檔（`src/index.ts:74`），我們沒有那個服務（偏離 1），所以「用哪一個
  *      執行檔／當成沒有 git」攤成資料。
  * 7. **`warn`／`info` 退成預設回呼**。dsh 講話走 `ctx.logger`（`src/index.ts:123`、`:136`）；我們的
- *    {@link PluginRegistry} 十六個註冊點沒有說話管道。**退的是載體不是紀律**：「沒有 git 只講一次 `info`、
+ *    {@link PluginRegistry} 十五個註冊點沒有說話管道。**退的是載體不是紀律**：「沒有 git 只講一次 `info`、
  *    每一次失敗 `warn`」照抄，只有承載它的東西換成 `console.*`。它們是函式不是資料，所以**不進 Config**，
  *    走 {@link createWorkspaceChanges} 的縫，同 `@nexus/plugin-goal` 的 `now`／`newGoalId`。
  *

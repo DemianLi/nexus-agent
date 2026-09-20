@@ -17,21 +17,13 @@ import {
   fakeMiddleware,
   fakePlugin,
   fakeSink,
+  fakeFeedback,
   fakeSubAgent,
   fakeTool,
 } from './fixtures.js';
-import type { FeedbackService } from './feedback.js';
 import type { PluginEntry } from './plugin.js';
-
-/** 一份什麼都不寫的回饋規則：這裡只看它佔不佔得住那個位子。 */
-function fakeFeedback(): FeedbackService {
-  return {
-    put: () => ({ ok: false, error: { code: 'target-not-found', messageId: 'm' } }),
-    delete: () => ({ ok: true, value: { absent: true } }),
-    list: () => ({ ok: true, value: { items: [] } }),
-    record: () => ({ ok: true, value: { recorded: true } }),
-  };
-}
+import { MESSAGE_FEEDBACK_SERVICE } from './feedback.js';
+import { SESSION_TELEMETRY_SERVICE } from './session-telemetry.js';
 
 describe('loadPlugins', () => {
   it('依清單順序跑每個 plugin 的 apply', async () => {
@@ -329,8 +321,8 @@ describe('每個註冊點的回滾', () => {
     registry.memory.addSource('/AGENTS.md');
     registry.lifecycle.onDispose(() => {});
     registry.telemetry.redact((record) => record);
-    registry.telemetry.use(fakeSink());
-    registry.feedback.use(fakeFeedback());
+    registry.services.provide(SESSION_TELEMETRY_SERVICE, fakeSink());
+    registry.services.provide(MESSAGE_FEEDBACK_SERVICE, fakeFeedback());
     registry.services.provide('collaborator', { who: 'greedy' });
     registry.invariants.register('@nexus/greedy', () => () => {});
     registry.commands.register({
@@ -359,8 +351,8 @@ describe('每個註冊點的回滾', () => {
     expect(registry.memory.sources()).toEqual([]);
     expect(registry.lifecycle.disposers()).toEqual([]);
     expect(registry.telemetry.rules()).toEqual([]);
-    expect(registry.telemetry.service()).toBeUndefined();
-    expect(registry.feedback.service()).toBeUndefined();
+    expect(registry.services.get(SESSION_TELEMETRY_SERVICE)).toBeUndefined();
+    expect(registry.services.get(MESSAGE_FEEDBACK_SERVICE)).toBeUndefined();
     expect(registry.services.get('collaborator')).toBeUndefined();
     expect(registry.invariants.companions()).toEqual([]);
     expect(registry.commands.list()).toEqual([]);
@@ -372,12 +364,12 @@ describe('每個註冊點的回滾', () => {
     await expect(loadPlugins([greedy], registry)).rejects.toThrow('半路壞掉');
 
     const later = fakePlugin('later', (r) => {
-      r.telemetry.use(fakeSink());
-      r.feedback.use(fakeFeedback());
+      r.services.provide(SESSION_TELEMETRY_SERVICE, fakeSink());
+      r.services.provide(MESSAGE_FEEDBACK_SERVICE, fakeFeedback());
     });
     await loadPlugins([later], registry);
-    expect(registry.telemetry.service()?.origin.name).toBe('later');
-    expect(registry.feedback.service()?.origin.name).toBe('later');
+    expect(registry.services.provider(SESSION_TELEMETRY_SERVICE)?.name).toBe('later');
+    expect(registry.services.provider(MESSAGE_FEEDBACK_SERVICE)?.name).toBe('later');
   });
 
   it('先前成功載入的 plugin 不受影響', async () => {

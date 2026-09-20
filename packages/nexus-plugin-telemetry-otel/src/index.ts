@@ -53,6 +53,7 @@ import type {
   SessionTelemetrySeverity,
   SessionTelemetrySharingStatus,
 } from '@nexus/core';
+import { SESSION_TELEMETRY_SERVICE } from '@nexus/core';
 import { SeverityNumber } from '@opentelemetry/api-logs';
 import type { AnyValue, Logger } from '@opentelemetry/api-logs';
 import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http';
@@ -215,7 +216,7 @@ function assertShutdownTimeout(millis: number): number {
 }
 
 /**
- * 掛得上 `registry.telemetry.use()` 的 OTel 服務。
+ * 提供給 {@link @nexus/core!SESSION_TELEMETRY_SERVICE} 的 OTel 服務。
  *
  * `disabled` 完全不建 SDK 狀態：`emit` 是 no-op、`shutdown` 立刻 resolve。**它仍然是
  * 一個掛著的服務**，所以披露會說「已掛後端但策略是關閉」而不是「未配置」——那兩件事
@@ -327,7 +328,7 @@ export class OpenTelemetrySessionService implements SessionTelemetryService {
  * 必填、必須合法、必須 http(s)；`processor.maxExportBatchSize` 必須是正整數；
  * `shutdownTimeoutMillis` 必須在範圍內。**建構就會拋**，不會拖到跑起來。
  *
- * `apply` 只做一件事——`registry.telemetry.use()`。**協調器不在這裡建**：接線需要一份
+ * `apply` 只做一件事——提供 {@link @nexus/core!SESSION_TELEMETRY_SERVICE}。**協調器不在這裡建**：接線需要一份
  * `SessionLog`，而 plugin 看不到它，那是組裝點的事（`agent-factory.ts` 的
  * `attachTelemetry`）。
  *
@@ -343,7 +344,11 @@ export const telemetryOtelPlugin: NexusPlugin<TelemetryOtelConfig> = {
     // 而 `SessionTelemetryCoordinator.dispose()` 會轉發它的 `shutdown()`——共用一份的話，
     // `serve.ts` 裡第一條關掉的 thread 會把其他 thread 的遙測一起關掉（改成資料之前就是
     // 這個形狀，因為 plugin 清單是載一次、每條 thread 共用）。一次組裝一份就沒有這回事。
-    registry.telemetry.use(new OpenTelemetrySessionService(config));
+    // **單一佔位，重名當場拋**（[#477](https://github.com/DemianLi/nexus-agent/issues/477)）：
+    // 兩個後端就是兩份出境資料，而披露那一層只講得出一種策略。那句領域說明原本寫在
+    // `registry.telemetry` 的重名訊息裡；搬到 `services` 之後訊息是通用的（照 cordis），
+    // 所以說明留在這裡。
+    registry.services.provide(SESSION_TELEMETRY_SERVICE, new OpenTelemetrySessionService(config));
     // 服務的生命週期歸協調器：`SessionTelemetryCoordinator.dispose()` 會轉發
     // `shutdown()`。這裡**不**再登記一次 `lifecycle.onDispose`，否則排空會跑兩遍。
   },

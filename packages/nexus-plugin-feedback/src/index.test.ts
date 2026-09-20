@@ -1,4 +1,10 @@
-import { createRegistry, loadPlugins, SessionLog, SessionRegistry } from '@nexus/core';
+import {
+  createRegistry,
+  loadPlugins,
+  MESSAGE_FEEDBACK_SERVICE,
+  SessionLog,
+  SessionRegistry,
+} from '@nexus/core';
 import type { LoggedMessage, SessionEvent } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import {
@@ -299,8 +305,8 @@ describe('設定', () => {
     // 裡才會有兩份。建在模組層級的話兩次組裝共用同一個上限，而且不會拋。
     const small = await loadPlugins([createFeedbackPlugin({ maxNoteBytes: 4 })]);
     const large = await loadPlugins([createFeedbackPlugin({ maxNoteBytes: 4096 })]);
-    const a = small.registry.feedback.service()!.value;
-    const b = large.registry.feedback.service()!.value;
+    const a = small.registry.services.use(MESSAGE_FEEDBACK_SERVICE);
+    const b = large.registry.services.use(MESSAGE_FEEDBACK_SERVICE);
 
     expect(a).not.toBe(b);
     const log = new SessionRegistry('限額').root;
@@ -351,7 +357,7 @@ describe('/feedback', () => {
     }
   });
 
-  it('掛上 registry.feedback；沒掛時是 undefined', () => {
-    expect(createRegistry().feedback.service()).toBeUndefined();
+  it('提供成 messageFeedback 服務；沒人提供時是 undefined', () => {
+    expect(createRegistry().services.get(MESSAGE_FEEDBACK_SERVICE)).toBeUndefined();
   });
 });

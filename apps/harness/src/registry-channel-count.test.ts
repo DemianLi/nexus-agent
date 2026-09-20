@@ -74,10 +74,9 @@ const CHANNELS = {
   approvals: true,
   skills: true,
   memory: true,
-  // 七條不折進任何參數的正交通道。
+  // 六條不折進任何參數的正交通道。
   lifecycle: true,
   telemetry: true,
-  feedback: true,
   invariants: true,
   commands: true,
   sessions: true,
@@ -86,8 +85,8 @@ const CHANNELS = {
 
 /** 折進 `createDeepAgent` 參數的那幾個。`registry.ts` 檔頭的「九個註冊點」。 */
 const FOLDED_CHANNELS = 9;
-/** 不折進任何參數的正交通道。`registry.ts` 檔頭的「外加七條」。 */
-const ORTHOGONAL_CHANNELS = 7;
+/** 不折進任何參數的正交通道。`registry.ts` 檔頭的「外加六條」。 */
+const ORTHOGONAL_CHANNELS = 6;
 /** 兩者相加，也就是 `PluginRegistry` 的欄位數。 */
 const TOTAL_CHANNELS = FOLDED_CHANNELS + ORTHOGONAL_CHANNELS;
 
