@@ -47,12 +47,27 @@ function isComment(line: string): boolean {
  * 不是 `EventSource`**。這一點也照 dsh（`packages/host/apiproxy/src/fetch/client.ts`）：
  * `EventSource` 只能 GET、不能帶 body，而協定規定下行是 `POST … /stream` 帶
  * `EventStreamRequest`，兩者接不上。
+ *
+ * **body 在呼叫的當下就鎖住，不等第一次 `next()`。** generator 的本體要到第一次 `next()` 才開跑；body 在那之前
+ * 沒鎖、也沒讀過的話，Node 內建的 fetch（undici）會在 `Response` 物件被回收時把它 `cancel` 掉
+ * （`streamRegistry`：`!stream.locked && !isDisturbed(stream)` 就 `cancel("Response object has been garbage
+ * collected")`），之後的 `read()` 只拿到乾淨的 `done`——下行一顆 frame 都沒有就「結束」了，server 那側毫無動靜。
+ * 開下行之後先拿歷史、再送上行，正好是那段空檔；負載一大 GC 就落進去（serve-history 的測試在整套跑時穩定紅，
+ * 強制 GC 可以每次重現）。瀏覽器沒有這條回收規則，但早鎖對它無害。
+ *
+ * @param body - 下行回應的 body。
+ * @returns 一顆一顆的 `Event`。
  */
-export async function* decodeSseStream(
+export function decodeSseStream(
   body: ReadableStream<Uint8Array>,
 ): AsyncGenerator<Event, void, undefined> {
+  return decodeFrames(body.getReader());
+}
+
+async function* decodeFrames(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): AsyncGenerator<Event, void, undefined> {
   const decoder = new TextDecoder();
-  const reader = body.getReader();
   let buffer = '';
 
   try {
