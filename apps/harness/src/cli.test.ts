@@ -391,7 +391,7 @@ describe('CLI 的核准政策', () => {
   it('標了核准的清單也跑得完一整輪——被擋的沒跑，理由是「沒有人被問到」', async () => {
     const { printer, stdout } = recorder();
     await runCli({
-      // 跟 README 與 `serve.test.ts` 同一份 fixture：`echo` 與 `write_file` 都標了要核准，
+      // 跟 `docs/operations.md` 與 `serve.test.ts` 同一份 fixture：`echo` 與 `write_file` 都標了要核准，
       // 而假模型的腳本兩個都會叫。
       argv: ['--plugins', 'src/approval.fixture.ts', '動手'],
       input: new PassThrough(),

@@ -23,4 +23,4 @@ GitHub 會自行為 ruleset 增加新的參數欄位。實測（2026-08）線上
 | 允許的合併方式 | 僅 squash | 僅 merge commit |
 | strict（分支需與 base 同步） | 是 | 否 |
 
-`main` 刻意不開 strict 的原因見 [README.md](../../README.md) 的分支策略段。
+`main` 刻意不開 strict 的原因見 [AGENTS.md](../../AGENTS.md) 的分支策略段。
