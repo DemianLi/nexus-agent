@@ -197,7 +197,7 @@ export const sandboxPolicyPlugin: NexusPlugin = {
   },
 };
 
-export { sandboxPolicyPlugin as default };
+export default sandboxPolicyPlugin;
 
 /**
  * 建一個條目。**薄薄一層**：控制器與可寫根不從這裡進去，由組裝點當服務提供
