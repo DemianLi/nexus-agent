@@ -30,7 +30,8 @@
  * 3. **subagent 拿不到 root 的記憶。** 見 {@link createMemoryPlugin} 的說明。
  */
 
-import type { PluginEntry, PluginRegistry } from '@nexus/core';
+import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
+import { z } from 'zod';
 
 /** 這個 plugin 宣告的能力名。要相依它的 plugin 把這個字串放進自己的 `requires`。 */
 export const MEMORY_CAPABILITY = 'memory';
@@ -44,16 +45,32 @@ export const MEMORY_CAPABILITY = 'memory';
  */
 export const DEFAULT_MEMORY_SOURCE = '/AGENTS.md';
 
-export interface MemoryPluginOptions {
+/**
+ * 這個 plugin 的設定。
+ *
+ * **空清單擋在 schema 裡**：它會讓 `foldRegistry` 直接省略 `memory` 參數、基座連 middleware
+ * 都不建，結果與「沒掛這個 plugin」一模一樣——而呼叫端顯然以為自己掛了。這種要嘛全有要嘛
+ * 全無的差別不該是靜默的。
+ */
+export const memoryConfigSchema = z.strictObject({
   /**
    * 記憶來源，依序併進 prompt（基座的 `formatMemoryContents(contents, sources)` 照這個
    * 順序串）。省略即只有 {@link DEFAULT_MEMORY_SOURCE}。
    */
-  readonly sources?: readonly string[];
-}
+  sources: z
+    .array(z.string())
+    .min(1, '空的來源清單等於沒掛這個 plugin——真的不要記憶就別把它放進清單')
+    .default([DEFAULT_MEMORY_SOURCE]),
+});
+
+/** 驗過的設定。 */
+export type MemoryConfig = z.infer<typeof memoryConfigSchema>;
+
+/** 工廠收的東西：schema 的輸入面。 */
+export type MemoryPluginOptions = z.input<typeof memoryConfigSchema>;
 
 /**
- * 建一個 memory plugin。
+ * memory plugin。
  *
  * **這個 plugin 只覆蓋 root agent。** 基座組裝 subagent 的那段
  * （`buildSubagentMiddleware(input, isForkable)`）只在 `isForkable` 為真時才把 root 的
@@ -66,30 +83,29 @@ export interface MemoryPluginOptions {
  * 的 subagent 除外）。這是基座的邊界，不是這裡漏寫；`apps/harness` 有一條絆索測試釘著它，
  * 基座哪天補上了那條會紅。
  *
- * @param options - 來源清單。
- * @returns 可以放進組裝點清單的 plugin。
- * @throws `sources` 給了空陣列。空清單會讓 `foldRegistry` 直接省略 `memory` 參數、
- *   基座連 middleware 都不建，結果與「沒掛這個 plugin」一模一樣——而呼叫端顯然以為
- *   自己掛了。這種要嘛全有要嘛全無的差別不該是靜默的。
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
+ * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
+ */
+export const memoryPlugin: NexusPlugin<MemoryConfig> = {
+  name: 'memory',
+  Config: memoryConfigSchema,
+  apply(registry: PluginRegistry, config: MemoryConfig): void {
+    const { sources } = config;
+    registry.capabilities.provide(MEMORY_CAPABILITY);
+    // 路徑格式的檢查在 registry 那一側（`assertLoadableMemoryPath`），不在這裡。
+    for (const source of sources) registry.memory.addSource(source);
+  },
+};
+
+export default memoryPlugin;
+
+/**
+ * 建一個條目。**薄薄一層**：設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
+ *
+ * @param options - 設定，形狀見 {@link memoryConfigSchema}。
+ * @returns 可以放進組裝點清單的條目。
  */
 export function createMemoryPlugin(options: MemoryPluginOptions = {}): PluginEntry {
-  const sources = options.sources ?? [DEFAULT_MEMORY_SOURCE];
-  if (sources.length === 0) {
-    throw new Error(
-      'createMemoryPlugin({ sources: [] })：空的來源清單等於沒掛這個 plugin——' +
-        'fold 會省略 memory 參數，基座連 memory middleware 都不會建。' +
-        '真的不要記憶就別把這個 plugin 放進清單。',
-    );
-  }
-
-  return {
-    plugin: {
-      name: 'memory',
-      apply(registry: PluginRegistry): void {
-        registry.capabilities.provide(MEMORY_CAPABILITY);
-        // 路徑格式的檢查在 registry 那一側（`assertLoadableMemoryPath`），不在這裡。
-        for (const source of sources) registry.memory.addSource(source);
-      },
-    },
-  };
+  return { plugin: memoryPlugin, config: options };
 }

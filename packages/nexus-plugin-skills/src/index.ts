@@ -23,7 +23,8 @@
  *    載到空清單時每一輪 `beforeAgent` 都會重掃整個 backend。
  */
 
-import type { PluginEntry, PluginRegistry } from '@nexus/core';
+import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
+import { z } from 'zod';
 
 /** 這個 plugin 宣告的能力名。要相依它的 plugin 把這個字串放進自己的 `requires`。 */
 export const SKILLS_CAPABILITY = 'skills';
@@ -37,7 +38,13 @@ export const SKILLS_CAPABILITY = 'skills';
  */
 export const DEFAULT_SKILLS_SOURCE = '/skills/';
 
-export interface SkillsPluginOptions {
+/**
+ * 這個 plugin 的設定。
+ *
+ * **空清單擋在 schema 裡**：它會讓 `foldRegistry` 直接省略 `skills` 參數、基座連 middleware
+ * 都不建，結果與「沒掛這個 plugin」一模一樣——而呼叫端顯然以為自己掛了。
+ */
+export const skillsConfigSchema = z.strictObject({
   /**
    * skill 來源目錄，**依序即優先序**：基座用 `allSkills.set(skill.name, skill)` 逐一
    * 覆蓋，所以後面的來源贏過前面的同名 skill。省略即只有
@@ -46,11 +53,20 @@ export interface SkillsPluginOptions {
    * 覆蓋只換內容、不換位置——`Map` 的迭代順序是**第一次**出現的順序，所以被後來者
    * 覆蓋掉的那個 skill，它在 prompt 清單裡的位置仍然是前一個來源給的。
    */
-  readonly sources?: readonly string[];
-}
+  sources: z
+    .array(z.string())
+    .min(1, '空的來源清單等於沒掛這個 plugin——真的不要 skills 就別把它放進清單')
+    .default([DEFAULT_SKILLS_SOURCE]),
+});
+
+/** 驗過的設定。 */
+export type SkillsConfig = z.infer<typeof skillsConfigSchema>;
+
+/** 工廠收的東西：schema 的輸入面。 */
+export type SkillsPluginOptions = z.input<typeof skillsConfigSchema>;
 
 /**
- * 建一個 skills plugin。
+ * skills plugin。
  *
  * **這個擴充點的預設失敗模式是「看得到、讀不到」。** 清單是基座用 backend 方法
  * （`ls` / `downloadFiles`）自己掃出來的，**不經過 `permissions`**；而模型要拿到正文
@@ -67,30 +83,29 @@ export interface SkillsPluginOptions {
  * 對照之下 memory 只有 `mode: 'fork'` 的 subagent 拿得到、general-purpose 拿不到。
  * 淨結果是**兩個擴充點的繼承規則互為反面**，這種事只能靠絆索測試記住。
  *
- * @param options - 來源清單。
- * @returns 可以放進組裝點清單的 plugin。
- * @throws `sources` 給了空陣列。空清單會讓 `foldRegistry` 直接省略 `skills` 參數、
- *   基座連 middleware 都不建，結果與「沒掛這個 plugin」一模一樣——而呼叫端顯然以為
- *   自己掛了。
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
+ * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
+ */
+export const skillsPlugin: NexusPlugin<SkillsConfig> = {
+  name: 'skills',
+  Config: skillsConfigSchema,
+  apply(registry: PluginRegistry, config: SkillsConfig): void {
+    const { sources } = config;
+    registry.capabilities.provide(SKILLS_CAPABILITY);
+    // 路徑格式的檢查在 registry 那一側（`assertLoadableSkillsPath`），不在這裡。
+    for (const source of sources) registry.skills.addSource(source);
+  },
+};
+
+export default skillsPlugin;
+
+/**
+ * 建一個條目。**薄薄一層**：設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
+ *
+ * @param options - 設定，形狀見 {@link skillsConfigSchema}。
+ * @returns 可以放進組裝點清單的條目。
  */
 export function createSkillsPlugin(options: SkillsPluginOptions = {}): PluginEntry {
-  const sources = options.sources ?? [DEFAULT_SKILLS_SOURCE];
-  if (sources.length === 0) {
-    throw new Error(
-      'createSkillsPlugin({ sources: [] })：空的來源清單等於沒掛這個 plugin——' +
-        'fold 會省略 skills 參數，基座連 skills middleware 都不會建。' +
-        '真的不要 skills 就別把這個 plugin 放進清單。',
-    );
-  }
-
-  return {
-    plugin: {
-      name: 'skills',
-      apply(registry: PluginRegistry): void {
-        registry.capabilities.provide(SKILLS_CAPABILITY);
-        // 路徑格式的檢查在 registry 那一側（`assertLoadableSkillsPath`），不在這裡。
-        for (const source of sources) registry.skills.addSource(source);
-      },
-    },
-  };
+  return { plugin: skillsPlugin, config: options };
 }

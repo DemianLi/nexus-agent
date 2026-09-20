@@ -58,7 +58,7 @@
  */
 
 import { tool } from '@langchain/core/tools';
-import type { PluginEntry, PluginRegistry, TodoItem, TodoStatus } from '@nexus/core';
+import type { NexusPlugin, PluginEntry, PluginRegistry, TodoItem, TodoStatus } from '@nexus/core';
 import { TODO_STATUSES, toolCallIdOf, toolRefusal } from '@nexus/core';
 import { z } from 'zod';
 
@@ -194,23 +194,28 @@ export function todoCountsMessage(todos: readonly TodoItem[]): string {
   );
 }
 
-/** 掛 todo 工具時要決定的東西。 */
-export interface TodoPluginOptions {
-  /**
-   * 允不允許同時有多條 `in_progress`。
-   *
-   * **必填，沒有預設**——這一條照 dsh，而它的理由值得抄過來：工具**觀測不到執行期的
-   * 並行**，所以這是部署方要拍的板，不是工具猜得出來的東西。它同時決定模型看到的描述
-   * （見 {@link todoToolDescription}）與拒絕條件，兩者必須是同一個答案。
-   *
-   * **不變量刻意不跟著它走**：一份在允許並行時寫下的日誌，在政策收緊之後仍然要回放得了。
-   * 見 [`./invariant.ts`](./invariant.ts)。
-   */
-  readonly allowParallelInProgress: boolean;
-}
+/**
+ * 掛 todo 工具時要決定的東西。
+ *
+ * `allowParallelInProgress` **必填，沒有預設**——這一條照 dsh，而它的理由值得抄過來：
+ * 工具**觀測不到執行期的並行**，所以這是部署方要拍的板，不是工具猜得出來的東西。它同時
+ * 決定模型看到的描述（見 {@link todoToolDescription}）與拒絕條件，兩者必須是同一個答案。
+ *
+ * **不變量刻意不跟著它走**：一份在允許並行時寫下的日誌，在政策收緊之後仍然要回放得了。
+ * 見 [`./invariant.ts`](./invariant.ts)。
+ */
+export const todoConfigSchema = z.strictObject({
+  allowParallelInProgress: z.boolean(),
+});
+
+/** 驗過的設定。 */
+export type TodoConfig = z.infer<typeof todoConfigSchema>;
+
+/** 工廠收的東西：schema 的輸入面。 */
+export type TodoPluginOptions = z.input<typeof todoConfigSchema>;
 
 /**
- * 建一個 todo plugin。
+ * todo plugin。
  *
  * 它只掛一樣東西：`tools` 通道的 `todo_write`。**不註冊命令、不改 prompt、不碰 backend**
  * ——理由見檔頭那張表。
@@ -218,63 +223,71 @@ export interface TodoPluginOptions {
  * **刻意不是 `rootOnly`。** 宣告 `rootOnly` 的話 fold 會把每個 subagent 那一份裡的同名項
  * 換成拒絕樁，而那與 dsh 的單一所有者規則相反。
  *
- * @param options - 並行政策，必填。
- * @returns 這一次掛載。
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
+ * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
+ */
+export const todoPlugin: NexusPlugin<TodoConfig> = {
+  name: 'todo',
+  Config: todoConfigSchema,
+  apply(registry: PluginRegistry, config: TodoConfig): void {
+    const allowParallel = config.allowParallelInProgress;
+    registry.tools.register(
+      tool(
+        ({ todos: raw }: { todos: RawTodo[] }, invocation?: unknown) => {
+          // 四條出口都是「這次呼叫沒有生效」，一律回錯誤訊息、不帶碼：dsh 對驗證失敗拋的是
+          // 一般 `Error`，後三條 dsh 沒有對應物。
+          const refuse = (message: string) =>
+            toolRefusal(message, { callId: toolCallIdOf(invocation) ?? '', name: TODO_TOOL_NAME });
+          // **先驗再找日誌**：驗不過的那一次連日誌都不必問，而且錯誤訊息與「寫不進去」
+          // 是兩回事——前者是模型送錯東西，後者是接線的問題。
+          //
+          // **接住而不是往外拋**，見檔頭第 3 條。
+          let todos: readonly TodoItem[];
+          try {
+            todos = toTodoList(raw, allowParallel);
+          } catch (error: unknown) {
+            return refuse(error instanceof Error ? error.message : String(error));
+          }
+          const found = registry.sessions.forCall(invocation);
+          if (found.kind === 'not-attached') return refuse(TODO_NOT_ATTACHED_MESSAGE);
+          if (found.kind === 'unknown-caller') return refuse(TODO_UNKNOWN_CALLER_MESSAGE);
+          if (found.kind === 'ambiguous') return refuse(todoAmbiguousMessage(found.count));
+          found.log.append('todo/write', { todos });
+          return todoCountsMessage(todos);
+        },
+        {
+          name: TODO_TOOL_NAME,
+          description: todoToolDescription(allowParallel),
+          schema: z.object({
+            todos: z
+              .array(
+                z
+                  .object({
+                    content: z.string().describe('What the task is — a short imperative line.'),
+                    status: z
+                      .enum(TODO_STATUSES)
+                      .describe('pending (not started) | in_progress (now) | completed (done).'),
+                  })
+                  // 多餘的鍵**當場擋**，不靜默攤平：落庫的快照要等於模型以為它寫的東西。
+                  .strict(),
+              )
+              .describe('The COMPLETE task list, replacing any previous list.'),
+          }),
+        },
+      ),
+    );
+  },
+};
+
+export default todoPlugin;
+
+/**
+ * 建一個條目。**薄薄一層**：設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
+ *
+ * @param options - 設定，形狀見 {@link todoConfigSchema}。
+ * @returns 可以放進組裝點清單的條目。
  */
 export function createTodoPlugin(options: TodoPluginOptions): PluginEntry {
-  const allowParallel = options.allowParallelInProgress;
-  return {
-    plugin: {
-      name: 'todo',
-      apply(registry: PluginRegistry): void {
-        registry.tools.register(
-          tool(
-            ({ todos: raw }: { todos: RawTodo[] }, config?: unknown) => {
-              // 四條出口都是「這次呼叫沒有生效」，一律回錯誤訊息、不帶碼：dsh 對驗證失敗拋的是
-              // 一般 `Error`，後三條 dsh 沒有對應物。
-              const refuse = (message: string) =>
-                toolRefusal(message, { callId: toolCallIdOf(config) ?? '', name: TODO_TOOL_NAME });
-              // **先驗再找日誌**：驗不過的那一次連日誌都不必問，而且錯誤訊息與「寫不進去」
-              // 是兩回事——前者是模型送錯東西，後者是接線的問題。
-              //
-              // **接住而不是往外拋**，見檔頭第 3 條。
-              let todos: readonly TodoItem[];
-              try {
-                todos = toTodoList(raw, allowParallel);
-              } catch (error: unknown) {
-                return refuse(error instanceof Error ? error.message : String(error));
-              }
-              const found = registry.sessions.forCall(config);
-              if (found.kind === 'not-attached') return refuse(TODO_NOT_ATTACHED_MESSAGE);
-              if (found.kind === 'unknown-caller') return refuse(TODO_UNKNOWN_CALLER_MESSAGE);
-              if (found.kind === 'ambiguous') return refuse(todoAmbiguousMessage(found.count));
-              found.log.append('todo/write', { todos });
-              return todoCountsMessage(todos);
-            },
-            {
-              name: TODO_TOOL_NAME,
-              description: todoToolDescription(allowParallel),
-              schema: z.object({
-                todos: z
-                  .array(
-                    z
-                      .object({
-                        content: z.string().describe('What the task is — a short imperative line.'),
-                        status: z
-                          .enum(TODO_STATUSES)
-                          .describe(
-                            'pending (not started) | in_progress (now) | completed (done).',
-                          ),
-                      })
-                      // 多餘的鍵**當場擋**，不靜默攤平：落庫的快照要等於模型以為它寫的東西。
-                      .strict(),
-                  )
-                  .describe('The COMPLETE task list, replacing any previous list.'),
-              }),
-            },
-          ),
-        );
-      },
-    },
-  };
+  return { plugin: todoPlugin, config: options };
 }

@@ -26,6 +26,7 @@
 import { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
 import { currentMessageFeedback, loggedMessageId } from '@nexus/core';
+import { z } from 'zod';
 import type {
   FeedbackRecord,
   FeedbackService,
@@ -35,6 +36,7 @@ import type {
   MessageFeedbackListResult,
   MessageFeedbackPutRequest,
   MessageFeedbackPutResult,
+  NexusPlugin,
   PluginEntry,
   SessionEvent,
   SessionLog,
@@ -47,13 +49,24 @@ export const FEEDBACK_COMMAND_NAME = 'feedback';
 export const FEEDBACK_USAGE = '要寫下回饋的內容。用法：/feedback <內容>';
 
 /** 這個 plugin 的設定。 */
-export interface FeedbackPluginOptions {
+export const feedbackConfigSchema = z.strictObject({
   /**
    * 一則備註最多幾個 UTF-8 位元組。**必填、沒有預設值**，照 dsh（`Config.maxNoteBytes` 是
    * `required()`）：這是部署方的選擇，由組裝點給。
    */
-  readonly maxNoteBytes: number;
-}
+  maxNoteBytes: z.number().int().positive(),
+});
+
+/** 驗過的設定。 */
+export type FeedbackConfig = z.infer<typeof feedbackConfigSchema>;
+
+/**
+ * 工廠與 {@link createFeedbackService} 收的東西。
+ *
+ * **服務那一支自己留著執行期檢查**：它是一支獨立的 API，走得到的路不只有 plugin 這一條
+ * （`apps/harness` 有測試直接叫它），而 schema 只守 plugin 那條路。
+ */
+export type FeedbackPluginOptions = z.input<typeof feedbackConfigSchema>;
 
 /**
  * 從日誌折出每一則回覆目前的評分，同 dsh 的 `currentItems`。舊日誌裡以輪記、對不到回覆的那幾筆不在裡面：
@@ -90,7 +103,7 @@ function isAssistantMessage(events: readonly SessionEvent[], messageId: string):
  * @returns 掛到 `registry.feedback` 上的那個。
  * @throws `maxNoteBytes` 不是正的安全整數。
  */
-export function createFeedbackService(options: FeedbackPluginOptions): FeedbackService {
+export function createFeedbackService(options: FeedbackConfig): FeedbackService {
   const { maxNoteBytes } = options;
   if (!Number.isSafeInteger(maxNoteBytes) || maxNoteBytes < 1) {
     throw new TypeError(`回饋的 maxNoteBytes 要是正的安全整數，拿到的是 ${String(maxNoteBytes)}。`);
@@ -171,45 +184,57 @@ export function createFeedbackService(options: FeedbackPluginOptions): FeedbackS
  * `/feedback` 寫的是**這次組裝接上的 root 那一份日誌**：同 `@nexus/plugin-goal` 的命令，只接
  * root、subagent 那些一份都不接；接到的不是剛好一份時當場回一句錯誤，不猜。
  *
- * @param options - 備註上限。
- * @returns plugin。
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
+ * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
+ */
+export const feedbackPlugin: NexusPlugin<FeedbackConfig> = {
+  name: 'feedback',
+  Config: feedbackConfigSchema,
+  apply(registry, config: FeedbackConfig) {
+    // **服務建在 `apply` 裡，不在模組層級**：設定是這一次掛載的，而 `serve.ts` 每個
+    // thread 組裝一次。共用一份的話兩邊會用同一個上限，而且誰都改不動。
+    const service = createFeedbackService(config);
+    registry.feedback.use(service);
+    const rootsHere: SessionLog[] = [];
+    registry.sessions.join((subject) => {
+      if (subject.address.kind !== 'root') return undefined;
+      rootsHere.push(subject.log);
+      return () => {
+        const at = rootsHere.indexOf(subject.log);
+        if (at >= 0) rootsHere.splice(at, 1);
+      };
+    });
+    registry.commands.register({
+      name: FEEDBACK_COMMAND_NAME,
+      description: '記下對這個會話的回饋',
+      input: { hint: '<內容>' },
+      // 那段文字由 `feedback/record` 帶著，`command/run` 不再記一次（照 dsh）。
+      recordInput: false,
+      handler: ({ rawInput }) => {
+        if (rawInput.trim().length === 0) return { kind: 'error', text: FEEDBACK_USAGE };
+        const [log, ...others] = rootsHere;
+        if (log === undefined || others.length > 0) {
+          return {
+            kind: 'error',
+            text: `這次組裝接著 ${String(rootsHere.length)} 份會話日誌，挑不出要記在哪一份。`,
+          };
+        }
+        service.record(log, { text: rawInput });
+        return { kind: 'success', text: `已記下對這個會話的回饋（${log.sessionId}）。` };
+      },
+    });
+  },
+};
+
+export default feedbackPlugin;
+
+/**
+ * 建一個條目。**薄薄一層**：設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
+ *
+ * @param options - 設定，形狀見 {@link feedbackConfigSchema}。
+ * @returns 可以放進組裝點清單的條目。
  */
 export function createFeedbackPlugin(options: FeedbackPluginOptions): PluginEntry {
-  const service = createFeedbackService(options);
-  return {
-    plugin: {
-      name: 'feedback',
-      apply(registry) {
-        registry.feedback.use(service);
-        const rootsHere: SessionLog[] = [];
-        registry.sessions.join((subject) => {
-          if (subject.address.kind !== 'root') return undefined;
-          rootsHere.push(subject.log);
-          return () => {
-            const at = rootsHere.indexOf(subject.log);
-            if (at >= 0) rootsHere.splice(at, 1);
-          };
-        });
-        registry.commands.register({
-          name: FEEDBACK_COMMAND_NAME,
-          description: '記下對這個會話的回饋',
-          input: { hint: '<內容>' },
-          // 那段文字由 `feedback/record` 帶著，`command/run` 不再記一次（照 dsh）。
-          recordInput: false,
-          handler: ({ rawInput }) => {
-            if (rawInput.trim().length === 0) return { kind: 'error', text: FEEDBACK_USAGE };
-            const [log, ...others] = rootsHere;
-            if (log === undefined || others.length > 0) {
-              return {
-                kind: 'error',
-                text: `這次組裝接著 ${String(rootsHere.length)} 份會話日誌，挑不出要記在哪一份。`,
-              };
-            }
-            service.record(log, { text: rawInput });
-            return { kind: 'success', text: `已記下對這個會話的回饋（${log.sessionId}）。` };
-          },
-        });
-      },
-    },
-  };
+  return { plugin: feedbackPlugin, config: options };
 }

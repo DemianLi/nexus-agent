@@ -10,11 +10,19 @@ import { describe, expect, it } from 'vitest';
 
 import { ToolMessage } from '@langchain/core/messages';
 import type { StructuredTool } from '@langchain/core/tools';
-import { createRegistry, SessionRegistry, TOOL_ERROR_PREFIX, toolErrorOf } from '@nexus/core';
+import {
+  createRegistry,
+  loadPlugins,
+  SessionRegistry,
+  TOOL_ERROR_PREFIX,
+  toolErrorOf,
+} from '@nexus/core';
 import type { TodoItem } from '@nexus/core';
 
 import {
   createTodoPlugin,
+  todoPlugin,
+  todoConfigSchema,
   TODO_EMPTY_CONTENT_MESSAGE,
   TODO_NOT_ATTACHED_MESSAGE,
   TODO_TOOL_NAME,
@@ -36,7 +44,7 @@ function mount(allowParallelInProgress: boolean): {
   const registry = createRegistry();
   const plugin = createTodoPlugin({ allowParallelInProgress });
   const exit = registry.enter({ id: 'todo#0', name: plugin.plugin.name });
-  plugin.plugin.apply(registry, undefined);
+  plugin.plugin.apply(registry, todoConfigSchema.parse(plugin.config));
   exit();
   const entry = registry.tools.resolve(TODO_TOOL_NAME);
   if (entry === undefined) throw new Error('工具沒註冊上');
@@ -248,7 +256,7 @@ describe('寫進哪一份', () => {
     const registry = createRegistry();
     const plugin = createTodoPlugin({ allowParallelInProgress: true });
     const exit = registry.enter({ id: 'todo#0', name: plugin.plugin.name });
-    plugin.plugin.apply(registry, undefined);
+    plugin.plugin.apply(registry, todoConfigSchema.parse(plugin.config));
     exit();
     registry.sessions.bind(new SessionRegistry('a'));
     registry.sessions.bind(new SessionRegistry('b'));
@@ -287,7 +295,7 @@ describe('註冊', () => {
     const registry = createRegistry();
     const plugin = createTodoPlugin({ allowParallelInProgress: true });
     const exit = registry.enter({ id: 'todo#0', name: plugin.plugin.name });
-    plugin.plugin.apply(registry, undefined);
+    plugin.plugin.apply(registry, todoConfigSchema.parse(plugin.config));
     exit();
 
     expect([...registry.tools.effective().keys()]).toEqual([TODO_TOOL_NAME]);
@@ -305,9 +313,29 @@ describe('註冊', () => {
     const registry = createRegistry();
     const plugin = createTodoPlugin({ allowParallelInProgress: true });
     const exit = registry.enter({ id: 'todo#0', name: plugin.plugin.name });
-    plugin.plugin.apply(registry, undefined);
+    plugin.plugin.apply(registry, todoConfigSchema.parse(plugin.config));
     exit();
 
     expect(registry.tools.isRootOnly(TODO_TOOL_NAME)).toBe(false);
+  });
+});
+
+describe('設定（#453）', () => {
+  it('**必填、沒有預設**：一格都不給就讓載入失敗（照 dsh）', async () => {
+    // 工具觀測不到執行期的並行，所以這是部署方要拍的板，猜一個預設值等於替它拍板。
+    await expect(loadPlugins([{ plugin: todoPlugin }])).rejects.toThrow('todo#0 (todo)');
+    await expect(loadPlugins([{ plugin: todoPlugin }])).rejects.toThrow('allowParallelInProgress');
+  });
+
+  it('只收字面布林——字串 false 這種寫法會讓載入失敗，不是靜靜當成真', async () => {
+    const bad = [{ plugin: todoPlugin, config: { allowParallelInProgress: 'false' } }];
+    await expect(loadPlugins(bad)).rejects.toThrow('allowParallelInProgress');
+  });
+
+  it('未知欄位讓載入失敗（登記的偏離：dsh 放行）', async () => {
+    const typo = [
+      { plugin: todoPlugin, config: { allowParallelInProgress: true, allowParallel: true } },
+    ];
+    await expect(loadPlugins(typo)).rejects.toThrow(/allowParallel\b/);
   });
 });

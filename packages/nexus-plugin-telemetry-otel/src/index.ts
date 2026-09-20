@@ -46,6 +46,7 @@
  */
 
 import type {
+  NexusPlugin,
   PluginEntry,
   SessionTelemetryRecord,
   SessionTelemetryService,
@@ -55,10 +56,10 @@ import type {
 import { SeverityNumber } from '@opentelemetry/api-logs';
 import type { AnyValue, Logger } from '@opentelemetry/api-logs';
 import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http';
-import type { OTLPExporterNodeConfigBase } from '@opentelemetry/otlp-exporter-base';
+import { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { BatchLogRecordProcessor, LoggerProvider } from '@opentelemetry/sdk-logs';
-import type { BatchLogRecordProcessorOptions } from '@opentelemetry/sdk-logs';
+import { z } from 'zod';
 
 /** 這個 plugin 的名字，也是錯誤訊息的前綴。 */
 export const PLUGIN_NAME = 'telemetry-otel';
@@ -96,27 +97,72 @@ const SEVERITY: Record<
   error: { severityNumber: SeverityNumber.ERROR, severityText: 'ERROR' },
 };
 
-export interface TelemetryOtelOptions {
+/**
+ * 送去 collector 的那一端。
+ *
+ * **登記的偏離：這裡是一次 API 收窄。** 原本 `exporter` 是**原樣轉交**整個
+ * `OTLPExporterNodeConfigBase`，SDK 有什麼欄位就收什麼；改成資料之後只留得下
+ * **純資料的那幾格**，因為設定要從 YAML 讀得進來（#454），而那個型別允許傳函式
+ * （`headers` 可以是 `HeadersFactory`、`httpAgentOptions` 可以是 `HttpAgentFactory`）。
+ *
+ * **留下來的**：`url`、`headers`（只收字串表）、`concurrencyLimit`、`timeoutMillis`、
+ * `keepAlive`、`compression`、`userAgent`。
+ * **擋掉的**：`httpAgentOptions`（可以是工廠函式，物件形式也是一整包 Node agent 選項）、
+ * `selfObsMeterProvider`（是一個活的 MeterProvider）。真的要它們的部署得自己寫一顆 plugin。
+ */
+export const telemetryExporterConfigSchema = z.strictObject({
+  /** 完整的 logs 端點（例如 `https://collector.example.com/v1/logs`）。`disabled` 之外必填。 */
+  url: z.string().optional(),
+  /** 額外的標頭，例如授權用的。**只收字串表**，不收工廠函式。 */
+  headers: z.record(z.string(), z.string()).optional(),
+  /** 同時最多幾個送出中的請求。 */
+  concurrencyLimit: z.number().int().positive().optional(),
+  /** 每一批送出的等待上限，毫秒。 */
+  timeoutMillis: z.number().int().positive().optional(),
+  /** 重用連線。 */
+  keepAlive: z.boolean().optional(),
+  /** 壓縮方式，照 SDK 的 `CompressionAlgorithm`。 */
+  compression: z.enum(CompressionAlgorithm).optional(),
+  /** 前綴在 SDK 預設值前面的 user agent。 */
+  userAgent: z.string().optional(),
+});
+
+/**
+ * 批次送出的那一端。同樣是**只收資料的收窄**：SDK 的 `exporter`（由這個套件自己填）與
+ * `selfObsMeterProvider`（活物件）都不在裡面。
+ */
+export const telemetryProcessorConfigSchema = z.strictObject({
+  /** 每一批最多幾筆。 */
+  maxExportBatchSize: z.number().int().positive().optional(),
+  /** 兩次送出之間隔多久，毫秒。 */
+  scheduledDelayMillis: z.number().int().positive().optional(),
+  /** 一次送出最多跑多久，毫秒。 */
+  exportTimeoutMillis: z.number().int().positive().optional(),
+  /** 佇列最多幾筆，滿了就丟。 */
+  maxQueueSize: z.number().int().positive().optional(),
+});
+
+/** 這個 plugin 的設定。 */
+export const telemetryOtelConfigSchema = z.strictObject({
   /** 共享策略。省略即 {@link DEFAULT_TELEMETRY_MODE}。 */
-  readonly mode?: TelemetryMode;
-  /**
-   * **原樣轉交** SDK 的 OTLP/HTTP log exporter，完整的 `OTLPExporterNodeConfigBase`
-   * 形狀（`headers`、`timeoutMillis`、`compression`、`keepAlive`……）由 SDK 擁有與
-   * 記錄。`url` 是這個套件唯一自己要求並驗證的欄位。
-   */
-  readonly exporter?: OTLPExporterNodeConfigBase & {
-    /** 完整的 logs 端點（例如 `https://collector.example.com/v1/logs`）。`disabled` 之外必填。 */
-    readonly url?: string;
-  };
-  /** **原樣轉交** `BatchLogRecordProcessor`（除了 exporter 那一格由這裡填）。 */
-  readonly processor?: Omit<BatchLogRecordProcessorOptions, 'exporter'>;
+  mode: z.enum(['full', 'feedback-only', 'disabled']).default(DEFAULT_TELEMETRY_MODE),
+  /** 送去 collector 的那一端，見 {@link telemetryExporterConfigSchema}。 */
+  exporter: telemetryExporterConfigSchema.optional(),
+  /** 批次送出的那一端，見 {@link telemetryProcessorConfigSchema}。 */
+  processor: telemetryProcessorConfigSchema.optional(),
   /** 等 SDK 完整關機的上限。省略即 {@link DEFAULT_SHUTDOWN_TIMEOUT_MILLIS}。 */
-  readonly shutdownTimeoutMillis?: number;
+  shutdownTimeoutMillis: z.number().positive().default(DEFAULT_SHUTDOWN_TIMEOUT_MILLIS),
   /** Resource 的 `service.name`。省略即 `nexus-agent`。 */
-  readonly serviceName?: string;
+  serviceName: z.string().default('nexus-agent'),
   /** Resource 的 `service.version`。省略即不放這個屬性。 */
-  readonly serviceVersion?: string;
-}
+  serviceVersion: z.string().optional(),
+});
+
+/** 驗過的設定。 */
+export type TelemetryOtelConfig = z.infer<typeof telemetryOtelConfigSchema>;
+
+/** 工廠與 {@link OpenTelemetrySessionService} 收的東西：schema 的輸入面。 */
+export type TelemetryOtelOptions = z.input<typeof telemetryOtelConfigSchema>;
 
 function fail(message: string): never {
   throw new Error(`${PLUGIN_NAME}：${message}`);
@@ -285,20 +331,32 @@ export class OpenTelemetrySessionService implements SessionTelemetryService {
  * `SessionLog`，而 plugin 看不到它，那是組裝點的事（`agent-factory.ts` 的
  * `attachTelemetry`）。
  *
- * @param options - mode 與兩個原樣轉交的 SDK 選項物件。
- * @returns 可載入的 plugin。
- * @throws 設定不合法——四條檢查各自的訊息都指名是哪個欄位。
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
+ * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
+ */
+export const telemetryOtelPlugin: NexusPlugin<TelemetryOtelConfig> = {
+  Config: telemetryOtelConfigSchema,
+  name: PLUGIN_NAME,
+  apply(registry, config: TelemetryOtelConfig) {
+    // **服務建在 `apply` 裡，不在模組層級。** 這一格帶著一個 OTel `LoggerProvider`，
+    // 而 `SessionTelemetryCoordinator.dispose()` 會轉發它的 `shutdown()`——共用一份的話，
+    // `serve.ts` 裡第一條關掉的 thread 會把其他 thread 的遙測一起關掉（改成資料之前就是
+    // 這個形狀，因為 plugin 清單是載一次、每條 thread 共用）。一次組裝一份就沒有這回事。
+    registry.telemetry.use(new OpenTelemetrySessionService(config));
+    // 服務的生命週期歸協調器：`SessionTelemetryCoordinator.dispose()` 會轉發
+    // `shutdown()`。這裡**不**再登記一次 `lifecycle.onDispose`，否則排空會跑兩遍。
+  },
+};
+
+export default telemetryOtelPlugin;
+
+/**
+ * 建一個條目。**薄薄一層**：設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
+ *
+ * @param options - 設定，形狀見 {@link telemetryOtelConfigSchema}。
+ * @returns 可以放進組裝點清單的條目。
  */
 export function createTelemetryOtelPlugin(options: TelemetryOtelOptions = {}): PluginEntry {
-  const service = new OpenTelemetrySessionService(options);
-  return {
-    plugin: {
-      name: PLUGIN_NAME,
-      apply(registry) {
-        registry.telemetry.use(service);
-        // 服務的生命週期歸協調器：`SessionTelemetryCoordinator.dispose()` 會轉發
-        // `shutdown()`。這裡**不**再登記一次 `lifecycle.onDispose`，否則排空會跑兩遍。
-      },
-    },
-  };
+  return { plugin: telemetryOtelPlugin, config: options };
 }

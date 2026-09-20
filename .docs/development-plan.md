@@ -125,7 +125,7 @@ registry.memory.addSource(path); // 純累加；路徑格式在註冊期擋（�
 | `inject` 宣告服務相依，載入順序由相依決定 | 退到存在性檢查：`requires` 只查能力在不在、不排序，順序由清單承擔 | [#28](https://github.com/DemianLi/nexus-agent/issues/28) 決議 10 |
 | 型別化事件，五種分派模式（`emit`／`waterfall`／`parallel`／`serial`／`bail`） | 退到 LangChain middleware 鉤子 ＋ `approvals.gate` waterfall ＋ 會話日誌事件；事件匯流排判為範圍外 | [#190](https://github.com/DemianLi/nexus-agent/issues/190) |
 | 註冊是可逆副作用，reload 與 teardown 時撤銷 | 部分：每次註冊回 undo，射程只到載入期回滾；關機另走 `lifecycle` | 本節上文 |
-| profile、組合包、patch 按條目 id 疊層，`--dump-config` 印得出整棵樹 | 部分：條目有 `id`／`disabled`，設定收在閉包裡，從外部覆寫不做 | [#104](https://github.com/DemianLi/nexus-agent/issues/104)、[#46](https://github.com/DemianLi/nexus-agent/issues/46) |
+| profile、組合包、patch 按條目 id 疊層，`--dump-config` 印得出整棵樹 | 部分：條目有 `id`／`disabled`／`config`，設定是 plugin `Config` 驗過的資料（#453）；profile、patch 疊層與 `--dump-config` 還沒做 | [#104](https://github.com/DemianLi/nexus-agent/issues/104)、[#453](https://github.com/DemianLi/nexus-agent/issues/453)、[#454](https://github.com/DemianLi/nexus-agent/issues/454)、[#46](https://github.com/DemianLi/nexus-agent/issues/46) |
 
 **沒有服務查找的代價：服務的定義只能住在 core。** Cordis 裡任何 plugin 都能占一個新的 `ctx.<key>` 給別人用；我們這側 plugin 只能往 core 已經開好的格子裡放東西。所以兩個元件要協作只剩兩條路：一是**組裝點用閉包把同一顆物件交給兩邊**——`apps/harness/src/cli.ts` 把同一顆 `SandboxModeController` 同時交給 `ContainedFilesystemBackend` 與 sandbox-policy plugin，把 backend 交給 submit-record；二是**core 先開一格**——上文九個註冊點之外的六條通道都是 core 擁有介面、plugin 往裡放。上文「換 plugin 清單，core 不動」因此只對彼此不協作的 plugin 成立；需要協作的配對，不是組裝點知道，就是 core 多一格。
 
