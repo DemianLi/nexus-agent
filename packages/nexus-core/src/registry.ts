@@ -6,14 +6,15 @@
  * `permissions` / `approvals`）沒有名字可撞，走匿名追加。折疊成
  * `createDeepAgent` 參數的部分在 {@link ./fold.ts}。
  *
- * 外加六條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
+ * 外加七條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
  * {@link LifecycleRegistrationPoint} 回答「這些東西怎麼收掉」，
  * {@link TelemetryRegistrationPoint} 回答「這個會話發生的事往哪裡送、送之前怎麼洗」，
  * {@link FeedbackRegistrationPoint} 回答「人事後對這個會話的評分照什麼規則記」，
  * {@link InvariantRegistrationPoint} 回答「這個會話發生的事有沒有破壞誰的約定」，
  * {@link CommandRegistrationPoint} 回答「人打得出哪些斜線命令」，
- * {@link SessionRegistrationPoint} 回答「誰拿得到這個會話的日誌」。
- * 九個註冊點回答的是「這個 agent 由什麼組成」，六者正交。
+ * {@link SessionRegistrationPoint} 回答「誰拿得到這個會話的日誌」，
+ * {@link ServiceRegistrationPoint} 回答「這次組裝的協作者從哪裡拿」（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
+ * 九個註冊點回答的是「這個 agent 由什麼組成」，七者正交。
  */
 
 import type { StructuredTool } from '@langchain/core/tools';
@@ -196,6 +197,89 @@ export interface CapabilityRegistrationPoint {
   /**
    * 目前被提供的所有能力。
    * @returns 依首次宣告順序的能力名。
+   */
+  names(): string[];
+}
+
+/**
+ * 服務名 → 服務型別的對照表。**故意是空的**：每個服務由**擁有那個型別的套件**用宣告合併
+ * 補一格，照 dsh 的做法（`declare module '@deepseek-ai/cordis' { interface Context { goals: GoalService } }`，
+ * `references/deepseek-harness/packages/goal/goal/src/index.ts:59-63`，SHA `6b1808f`）。
+ *
+ * 沒補進來的名字仍然放得進去、取得出來，只是型別退到 `unknown`——`services` 的每個方法
+ * 都有寬的那條多載。這與 dsh 一致：它的 `ctx.provide(name: string, value?: any)` 也留著。
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface NexusServices {}
+
+/** 已經宣告過型別的服務名。空表時是 `never`，那時只有寬的多載可用。 */
+export type KnownServiceName = keyof NexusServices & string;
+
+/**
+ * `services` 註冊點：**依名字提供一個物件，依名字取得它**。
+ *
+ * 這是 [#459](https://github.com/DemianLi/nexus-agent/issues/459) 要的注入點，照 dsh 的
+ * `ctx.provide` / `ctx.get`（`vendor/cordis/src/reflect.ts:277-305`）。它存在的理由是
+ * **讓 plugin 的設定回到「只是資料」**：協作者（通道、backend、圍堵控制器）從這裡拿，
+ * 不再塞進工廠的閉包裡。
+ *
+ * **與 `capabilities` 的分野在碰撞政策，不是口味**：`capabilities.provide` 冪等、多提供者
+ * （`providers(name)` 回陣列，回滾其中一個不能抹掉另一個）；服務是**單一佔位**，重名
+ * 直接拋，照 cordis 的 `service "<name>" has been registered at <fiber>`。兩種語意塞進
+ * 同一個點就得犧牲一邊。
+ *
+ * **`requires` 照樣管得到服務**：`assertRequires` 兩邊都查（見 `load.ts`），所以宣告
+ * `requires: ['sandboxPolicy']` 的 plugin 在沒人提供時一樣是載入失敗。服務名**不會**
+ * 被寫進 `capabilities`——那會讓一句 `capabilities.provide('sandboxPolicy')` 在沒有
+ * 任何服務的情況下滿足那條 `requires`。
+ *
+ * ## 偏離登記：缺件是失敗，不是等待
+ *
+ * cordis 的 `inject` 是反應式的——缺件時 fiber 停在 INACTIVE，等到有人提供才啟動
+ * （`vendor/cordis/src/fiber.ts:611-622` 的 `_refresh`）。我們的載入是**一趟到底**的
+ * 命令式折疊，deepagents / LangGraph 沒有 context 樹與 fiber 狀態機可以表達那件事，
+ * 所以退到最接近的實作：**缺件當場失敗**。
+ *
+ * 直接後果：**清單順序在「誰提供、誰消費」之間是承重的**。今天沒有人踩到——#459 的五個
+ * 協作者全是「組裝點提供、plugin 消費」或反過來，一條 plugin → plugin 的服務相依都沒有
+ * ——所以組裝點把自己那幾個放在清單最前面就夠了。**plugin → plugin 的服務相依不在
+ * #459 的射程內**；真要的那天，順序才會變成承重的，那時再決定是拓撲排序還是照 dsh 做成惰性。
+ */
+export interface ServiceRegistrationPoint {
+  /**
+   * 提供一個服務。
+   * @param name - 服務名，**全域唯一**。
+   * @param value - 服務物件。借用的，不複製。
+   * @returns 只撤銷這一次提供的冪等 undo。
+   * @throws 這個名字已經有人提供了——訊息指名前一個提供者。
+   */
+  provide<K extends KnownServiceName>(name: K, value: NexusServices[K]): () => void;
+  provide(name: string, value: unknown): () => void;
+  /**
+   * 取一個**必須在**的服務。硬相依，對應 dsh 的 `inject`。
+   * @param name - 服務名。
+   * @returns 服務物件。
+   * @throws 沒有人提供這個名字——訊息指名缺哪一個，在 `apply` 裡時連帶指名是誰要的。
+   */
+  use<K extends KnownServiceName>(name: K): NexusServices[K];
+  use<T = unknown>(name: string): T;
+  /**
+   * 取一個**可以不在**的服務。軟相依，對應 dsh 的 `ctx.get('sandboxPolicy')`
+   * （`references/deepseek-harness/packages/shell/tool-bash/src/index.ts:193`）。
+   * @param name - 服務名。
+   * @returns 服務物件，或沒人提供時的 `undefined`。
+   */
+  get<K extends KnownServiceName>(name: K): NexusServices[K] | undefined;
+  get<T = unknown>(name: string): T | undefined;
+  /**
+   * 誰提供了這個服務。缺件診斷與 `requires` 的存在性檢查靠它。
+   * @param name - 服務名。
+   * @returns 提供者，或沒人提供時的 `undefined`。
+   */
+  provider(name: string): PluginOrigin | undefined;
+  /**
+   * 目前被提供的所有服務。
+   * @returns 依提供順序的服務名。
    */
   names(): string[];
 }
@@ -667,6 +751,7 @@ export interface PluginRegistry {
   readonly tools: ToolRegistrationPoint;
   readonly subagents: SubAgentRegistrationPoint;
   readonly capabilities: CapabilityRegistrationPoint;
+  readonly services: ServiceRegistrationPoint;
   readonly backend: BackendRegistrationPoint;
   readonly middleware: MiddlewareRegistrationPoint;
   readonly permissions: PermissionRegistrationPoint;
@@ -722,6 +807,14 @@ export function createRegistry(): InternalPluginRegistry {
       ),
   );
   const capabilities = new CapabilitySet();
+  const serviceEntries = new NamedEntries<unknown>(
+    (name, existing, incoming) =>
+      new Error(
+        `服務 "${name}" 已經有人提供了：${formatOrigin(existing)} 提供過，` +
+          `${formatOrigin(incoming)} 又提供一次。服務是單一佔位——` +
+          `讓後來的蓋掉前面的，等於消費者拿到誰由載入順序決定。`,
+      ),
+  );
   const backends = new NamedEntries<AnyBackendProtocol>(
     (routePrefix, existing, incoming) =>
       new Error(
@@ -887,6 +980,42 @@ export function createRegistry(): InternalPluginRegistry {
     names: () => capabilities.names(),
   };
 
+  const servicePoint: ServiceRegistrationPoint = {
+    provide(name: string, value: unknown) {
+      const origin = requireOrigin('services.provide()');
+      return serviceEntries.insert(name, value, origin);
+    },
+    use(name: string) {
+      const entry = serviceEntries.get(name);
+      if (entry === undefined) throw missingServiceError(name);
+      return entry.value as never;
+    },
+    get(name: string) {
+      return serviceEntries.get(name)?.value as never;
+    },
+    provider: (name) => serviceEntries.get(name)?.origin,
+    names: () => [...serviceEntries.entries()].map(([name]) => name),
+  };
+
+  /**
+   * 缺件的錯誤訊息。**兩種呼叫端要講兩句不一樣的話**：在某個 `apply` 裡缺件時，
+   * 「誰要的」就是那個 plugin，要修的是清單；在載入之外缺件時，問的人是組裝點自己，
+   * 那句話只能講「沒有人提供」。把「誰要的」寫成一個有時候是空的子句，空的那次會
+   * 讀起來像 bug。
+   */
+  function missingServiceError(name: string): Error {
+    const available = [...serviceEntries.entries()].map(([serviceName]) => serviceName);
+    const known = available.length === 0 ? '（這個組裝一個服務都沒有）' : available.join('、');
+    if (current === undefined) {
+      return new Error(`沒有人提供服務 "${name}"。目前被提供的服務：${known}。`);
+    }
+    return new Error(
+      `${formatOrigin(current)} 要服務 "${name}"，但沒有人提供它。` +
+        `目前被提供的服務：${known}。提供者要排在消費者前面——` +
+        `載入是一趟到底的，不會回頭等。`,
+    );
+  }
+
   const backendPoint: BackendRegistrationPoint = {
     mount(routePrefix, backend) {
       const origin = requireOrigin('backend.mount()');
@@ -1045,6 +1174,7 @@ export function createRegistry(): InternalPluginRegistry {
     tools,
     subagents: subagentPoint,
     capabilities: capabilityPoint,
+    services: servicePoint,
     backend: backendPoint,
     middleware: middlewarePoint,
     permissions: permissionPoint,

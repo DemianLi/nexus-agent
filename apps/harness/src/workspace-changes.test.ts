@@ -33,6 +33,7 @@ import { join } from 'node:path';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { InvariantError, PluginEntry, SandboxMode, SessionRegistry } from '@nexus/core';
+import { createHostServicesPlugin } from '@nexus/core';
 import { createWorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import type { Event } from '@nexus/wire';
 import {
@@ -124,9 +125,10 @@ async function run(
     model,
     checkpointer: new MemorySaver(),
     plugins: [
+      createHostServicesPlugin({ sandboxPolicy: { controller: sandboxMode, rootDir: root } }),
       ...DEFAULT_PLUGINS,
       WORKER,
-      createSandboxPolicyPlugin(sandboxMode, root),
+      createSandboxPolicyPlugin(),
       ...(options.plugins ?? []),
       changes.entry,
     ],

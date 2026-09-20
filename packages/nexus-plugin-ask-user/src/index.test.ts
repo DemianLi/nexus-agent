@@ -7,7 +7,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { loadPlugins } from '@nexus/core';
+import { createHostServicesPlugin, loadPlugins } from '@nexus/core';
 import type { StructuredTool } from '@langchain/core/tools';
 
 const interrupted: unknown[] = [];
@@ -30,7 +30,12 @@ const {
 async function toolOf(
   channelKind: 'human' | 'policy-never' | 'no-channel',
 ): Promise<StructuredTool> {
-  const { registry } = await loadPlugins([createAskUserPlugin({ channel: { kind: channelKind } })]);
+  // **走真的那條路**：通道由組裝點當服務提供，同 `apps/harness`。這裡自己塞一個替身的話，
+  // 注入那一段就沒有人走過。
+  const { registry } = await loadPlugins([
+    createHostServicesPlugin({ channel: { kind: channelKind } }),
+    createAskUserPlugin(),
+  ]);
   const entry = registry.tools.resolve(ASK_USER_QUESTION_TOOL_NAME);
   if (entry === undefined) throw new Error('工具沒有註冊上去');
   return entry.value;

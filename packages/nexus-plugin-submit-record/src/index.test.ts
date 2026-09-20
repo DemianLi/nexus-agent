@@ -7,7 +7,7 @@
  */
 
 import type { StructuredTool } from '@langchain/core/tools';
-import { loadPlugins, runApprovalGate } from '@nexus/core';
+import { createHostServicesPlugin, loadPlugins, runApprovalGate } from '@nexus/core';
 import type { AnyBackendProtocol, FileData, WriteResult } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 
@@ -43,7 +43,10 @@ function fakeBackend(seed: Record<string, string> = {}, checkpoint = false) {
 }
 
 async function toolOf(backend: AnyBackendProtocol): Promise<StructuredTool> {
-  const { registry } = await loadPlugins([createSubmitRecordPlugin({ backend })]);
+  const { registry } = await loadPlugins([
+    createHostServicesPlugin({ backend }),
+    createSubmitRecordPlugin(),
+  ]);
   const entry = registry.tools.resolve(SUBMIT_RECORD_TOOL_NAME);
   if (entry === undefined) throw new Error('工具沒有註冊上去');
   return entry.value;
@@ -179,7 +182,10 @@ describe('checkpoint backend 那一支', () => {
 describe('閘門只認 submit_record', () => {
   it('認得它 → `ask`；別人 → 走到鏈底 `allow`', async () => {
     const { backend } = fakeBackend();
-    const { registry } = await loadPlugins([createSubmitRecordPlugin({ backend })]);
+    const { registry } = await loadPlugins([
+    createHostServicesPlugin({ backend }),
+    createSubmitRecordPlugin(),
+  ]);
     const listeners = registry.approvals.listeners();
 
     const mine = await runApprovalGate(listeners, {

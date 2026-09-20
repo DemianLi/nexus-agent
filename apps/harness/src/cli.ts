@@ -43,6 +43,7 @@ import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import {
   attachSessionPersistence,
+  createHostServicesPlugin,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   SessionRegistry,
@@ -888,15 +889,22 @@ export async function createCliAgent(
   } = await createNexusAgent({
     model,
     plugins: [
+      // **組裝點的協作者排最前面**（#459）：submit-record 與 sandbox-policy 在自己的
+      // `apply` 當下就讀，排後面它們會拿不到。載入是一趟到底的，不會回頭等。
+      createHostServicesPlugin({
+        channel,
+        backend,
+        ...(workspaceRoot === undefined
+          ? {}
+          : { sandboxPolicy: { controller: sandboxMode, rootDir: workspaceRoot } }),
+      }),
       ...plugins,
-      createAskUserPlugin({ channel }),
-      createSubmitRecordPlugin({ ...(backend !== undefined && { backend }) }),
+      createAskUserPlugin(),
+      createSubmitRecordPlugin(),
       // **有圍堵才講**。沒有 `--workspace` 的組裝一格圍堵都沒有，那時候講「目前的檔案
       // 政策是 workspace-write」是對模型說謊——它會以為根外被擋著，而整道 fence 不在
       // 路徑上。理由與 dsh 的 `ctx.fs.sandboxMode === undefined` 就不貢獻同一條。
-      ...(workspaceRoot === undefined
-        ? []
-        : [createSandboxPolicyPlugin(sandboxMode, workspaceRoot)]),
+      ...(workspaceRoot === undefined ? [] : [createSandboxPolicyPlugin()]),
       ...(workspaceChanges === undefined ? [] : [workspaceChanges.entry]),
     ],
     ...(backend !== undefined && { backend }),

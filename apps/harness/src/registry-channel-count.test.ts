@@ -8,11 +8,13 @@
  * ## 那兩處不是過期，是從沒對過
  *
  * `apps/harness/src/goal-driver.ts` 與 `packages/nexus-plugin-goal/src/index.ts` 都寫著
- * 「`PluginRegistry` 十五條通道沒有一條排得出一輪」，兩處由**同一顆 commit** 生出
- * （`c4fe696`，[#181](https://github.com/DemianLi/nexus-agent/pull/181)，2026-09-05）。在它的
- * 父節點上數 `PluginRegistry` 就已經是 14 個欄位——第十四條 `sessions` 早四天就在了
- * （[#138](https://github.com/DemianLi/nexus-agent/pull/138)）。**寫下去的那一刻它就是錯的。**
- * 而且那句話自己打自己：它引著 `registry.ts:559-572`，那是 **14 行**。
+ * 「`PluginRegistry` N 條通道沒有一條排得出一輪」，兩處由**同一顆 commit** 生出
+ * （`c4fe696`，[#181](https://github.com/DemianLi/nexus-agent/pull/181)，2026-09-05）。當年寫的
+ * 是十五，而在它的父節點上數 `PluginRegistry` 就已經是 14 個欄位——第十四條 `sessions`
+ * 早四天就在了（[#138](https://github.com/DemianLi/nexus-agent/pull/138)）。**寫下去的那一刻
+ * 它就是錯的。** 而且那句話自己打自己：它引著 `registry.ts:559-572`，那是 **14 行**。
+ * （兩處的數字現在由下面的斷言看著。`services` 落地之後是 16，
+ * [#459](https://github.com/DemianLi/nexus-agent/issues/459)。）
  *
  * **這個數字漂過兩次。** 第一次記在 `.docs/plugin-architecture-gap-survey.md` 那張表上
  * （`registry.ts` 檔頭與計劃書當時寫著「一條」／「四條」，跟那份筆記同一張 PR 改正）。兩次
@@ -72,19 +74,20 @@ const CHANNELS = {
   approvals: true,
   skills: true,
   memory: true,
-  // 六條不折進任何參數的正交通道。
+  // 七條不折進任何參數的正交通道。
   lifecycle: true,
   telemetry: true,
   feedback: true,
   invariants: true,
   commands: true,
   sessions: true,
+  services: true,
 } satisfies Record<keyof PluginRegistry, true>;
 
 /** 折進 `createDeepAgent` 參數的那幾個。`registry.ts` 檔頭的「九個註冊點」。 */
 const FOLDED_CHANNELS = 9;
-/** 不折進任何參數的正交通道。`registry.ts` 檔頭的「外加六條」。 */
-const ORTHOGONAL_CHANNELS = 6;
+/** 不折進任何參數的正交通道。`registry.ts` 檔頭的「外加七條」。 */
+const ORTHOGONAL_CHANNELS = 7;
 /** 兩者相加，也就是 `PluginRegistry` 的欄位數。 */
 const TOTAL_CHANNELS = FOLDED_CHANNELS + ORTHOGONAL_CHANNELS;
 
@@ -115,8 +118,8 @@ interface ProseSite {
    * 這個檔案裡**不准**出現的字串：同一句話寫成差一的樣子。
    *
    * **這一欄擋的是掃了一半。** 光有 `phrases`，一個檔案裡同一個數字出現五次而只改了
-   * 第一次，斷言照樣綠——`registry.ts` 的「九個註冊點」正是五行（`:4` / `:15` / `:309` /
-   * `:346` / `:443`，其中 `:309` 一行兩次）。改了頭沒改身體時，舊的那個字還在，這一欄
+   * 第一次，斷言照樣綠——`registry.ts` 的「九個註冊點」正是五行（`:4` / `:17` / `:479` /
+   * `:516` / `:635`，其中 `:479` 一行兩次）。改了頭沒改身體時，舊的那個字還在，這一欄
    * 當場紅。只涵蓋差一，那是通道增刪唯一實際會發生的幅度。
    */
   readonly forbidden: readonly string[];
@@ -139,7 +142,7 @@ const PROSE_SITES: readonly ProseSite[] = [
     ],
   },
   {
-    // #181 的載體偏離：「沒有一條排得出一輪」。十五是在這裡被寫下去的。
+    // #181 的載體偏離：「沒有一條排得出一輪」。當年的「十五」是在這裡被寫下去的。
     path: 'apps/harness/src/goal-driver.ts',
     phrases: [`${cn(TOTAL_CHANNELS)}條通道`],
     forbidden: offByOne(TOTAL_CHANNELS, '條通道'),

@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { InvariantError, PluginEntry, SessionEvent, SessionRegistry } from '@nexus/core';
+import { createHostServicesPlugin } from '@nexus/core';
 import { PRESENT_NO_WORKSPACE_MESSAGE, PRESENT_TOOL_NAME } from '@nexus/plugin-present';
 import type { DeliverablesPresentedPayload, Event } from '@nexus/wire';
 import {
@@ -115,10 +116,13 @@ async function run(
     model: new ScriptedChatModel({ turns }),
     checkpointer: new MemorySaver(),
     plugins: [
+      ...(workspace
+        ? [createHostServicesPlugin({ sandboxPolicy: { controller: sandboxMode, rootDir: root } })]
+        : []),
       ...DEFAULT_PLUGINS,
       WORKER,
       ...(options.extra ?? []),
-      ...(workspace ? [createSandboxPolicyPlugin(sandboxMode, root)] : []),
+      ...(workspace ? [createSandboxPolicyPlugin()] : []),
     ],
     ...(workspace && {
       backend: new ContainedFilesystemBackend({
