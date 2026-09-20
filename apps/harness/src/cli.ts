@@ -72,7 +72,7 @@ import { createSkillsInvariantPlugin } from '@nexus/plugin-skills/invariant';
 import { createTelemetryOtelInvariantPlugin } from '@nexus/plugin-telemetry-otel/invariant';
 import { createPresentPlugin } from '@nexus/plugin-present';
 import { createPresentInvariantPlugin } from '@nexus/plugin-present/invariant';
-import { createWorkspaceChanges } from '@nexus/plugin-workspace-changes';
+import { createWorkspaceChanges, WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { createWorkspaceChangesInvariantPlugin } from '@nexus/plugin-workspace-changes/invariant';
 import { createTodoPlugin } from '@nexus/plugin-todo';
@@ -867,7 +867,7 @@ export async function createCliAgent(
           mode: sandboxMode.source,
           grants: sandboxMode,
         });
-  // **一條 thread 一份**：服務答的是這一次組裝的 root，所以建在這裡，同上面的控制器。
+  // **一條 thread 一份**：服務答的是這一次組裝的 root，所以條目建在這裡，同上面的控制器。
   const workspaceChanges =
     invocation.workspaceChanges === true && workspaceRoot !== undefined
       ? createWorkspaceChanges({ root: workspaceRoot })
@@ -901,7 +901,7 @@ export async function createCliAgent(
       // 政策是 workspace-write」是對模型說謊——它會以為根外被擋著，而整道 fence 不在
       // 路徑上。理由與 dsh 的 `ctx.fs.sandboxMode === undefined` 就不貢獻同一條。
       ...(workspaceRoot === undefined ? [] : [createSandboxPolicyPlugin()]),
-      ...(workspaceChanges === undefined ? [] : [workspaceChanges.entry]),
+      ...(workspaceChanges === undefined ? [] : [workspaceChanges]),
     ],
     ...(backend !== undefined && { backend }),
     ...(invocation.recursionLimit !== undefined && { recursionLimit: invocation.recursionLimit }),
@@ -929,7 +929,7 @@ export async function createCliAgent(
     attachSession,
     telemetrySharing,
     feedback,
-    workspaceChanges: workspaceChanges?.service,
+    workspaceChanges: services.get(WORKSPACE_CHANGES_SERVICE),
     goals: services.get(GOALS_SERVICE),
   };
 }

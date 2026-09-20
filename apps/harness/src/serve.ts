@@ -408,7 +408,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
           ? {
               goalDriver: (log: () => SessionLog, flush: () => Promise<void>) =>
                 // **`goals` 是這一條 thread 自己那一次組裝的**：`createCliAgent` 每條
-                // thread 各跑一次（`:343`），所以兩條 thread 的目標從此分得開（#459）。
+                // thread 各跑一次（`:341`），所以兩條 thread 的目標從此分得開（#459）。
                 goalDriverPort(goals, log, flush, (message) => {
                   serverLog(message);
                 }),

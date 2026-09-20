@@ -34,7 +34,7 @@ import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { InvariantError, PluginEntry, SandboxMode, SessionRegistry } from '@nexus/core';
 import { createHostServicesPlugin } from '@nexus/core';
-import { createWorkspaceChanges } from '@nexus/plugin-workspace-changes';
+import { createWorkspaceChanges, WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
 import type { Event } from '@nexus/wire';
 import {
   changesDiffPath,
@@ -130,7 +130,7 @@ async function run(
       WORKER,
       createSandboxPolicyPlugin(),
       ...(options.plugins ?? []),
-      changes.entry,
+      changes,
     ],
     backend: new ContainedFilesystemBackend({
       rootDir: root,
@@ -146,7 +146,7 @@ async function run(
       agent: built.agent as unknown as PumpAgent,
       commands: built.commands,
       dispose: built.dispose,
-      workspaceChanges: changes.service,
+      workspaceChanges: built.services.use(WORKSPACE_CHANGES_SERVICE),
       attachInvariants: built.attachInvariants,
       attachSession: (registry) => {
         sessions = registry;
@@ -464,6 +464,29 @@ describe('組裝點', () => {
       } finally {
         await built.dispose();
       }
+    }
+  });
+
+  /**
+   * **兩次組裝各拿各的一份**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
+   *
+   * 從前工廠回的那一份帶著閉包狀態，所以「一份只能掛一次組裝」要用一顆 `applied` 旗標擋。
+   * 現在狀態住在 `apply` 裡，而 `serve.ts` 每條 thread 各跑一次 `createCliAgent`（`:341`）——
+   * 這一條釘的是「`createCliAgent` 交出來的是這一次組裝提供的那一份」。服務名寫錯、或
+   * `provide` 整個拿掉，這裡就是 `undefined`。
+   */
+  it('兩次 createCliAgent 各拿各的一份', async () => {
+    const workspace = await directory('nexus-changes-cli-');
+    const invocation = { live: false, workspace, workspaceChanges: true } as const;
+    const first = await createCliAgent(invocation, DEFAULT_PLUGINS);
+    const second = await createCliAgent(invocation, DEFAULT_PLUGINS);
+    try {
+      expect(first.workspaceChanges).toBeDefined();
+      expect(second.workspaceChanges).toBeDefined();
+      expect(first.workspaceChanges).not.toBe(second.workspaceChanges);
+    } finally {
+      await first.dispose();
+      await second.dispose();
     }
   });
 });

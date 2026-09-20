@@ -587,7 +587,7 @@ describe('續接回來的日誌', () => {
  *
  * 以前查表掛在 plugin 物件上，而 `apps/harness` 為了問它在模組層級留了一顆 handle——
  * 於是同一個 process 裡兩次組裝共用一份查表。`serve.ts` 每條 thread 組裝一次
- * （`:343`），所以那是「一條 thread 的目標被另一條 thread 讀到」。
+ * （`:341`），所以那是「一條 thread 的目標被另一條 thread 讀到」。
  */
 describe('goals 服務', () => {
   /**
