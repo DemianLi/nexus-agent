@@ -12,7 +12,7 @@ import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 
 import { SessionLog } from '@nexus/core';
-import type { NexusPlugin, SessionEvent } from '@nexus/core';
+import type { PluginEntry, SessionEvent } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 
 import { createNexusAgent } from './agent-factory.js';
@@ -41,38 +41,42 @@ function recorder() {
 
 /** 註冊一個 `/ping` 的 plugin，並記下它被叫到時收到什麼。 */
 function pingPlugin(seen: string[], result: { kind: 'success' | 'error'; text?: string }) {
-  const plugin: NexusPlugin = {
-    name: 'ping',
-    apply(registry) {
-      registry.commands.register({
-        name: 'ping',
-        description: '回一句話，不驚動模型',
-        input: { hint: '[任何字]' },
-        handler: ({ rawInput }) => {
-          seen.push(rawInput);
-          return result as { kind: 'success'; text?: string };
-        },
-      });
+  const plugin: PluginEntry = {
+    plugin: {
+      name: 'ping',
+      apply(registry) {
+        registry.commands.register({
+          name: 'ping',
+          description: '回一句話，不驚動模型',
+          input: { hint: '[任何字]' },
+          handler: ({ rawInput }) => {
+            seen.push(rawInput);
+            return result as { kind: 'success'; text?: string };
+          },
+        });
+      },
     },
   };
   return plugin;
 }
 
 /** 註冊一個指定名字的命令，專門用來撞 REPL 自己那兩個名字。 */
-function helpNamedPlugin(name: string): NexusPlugin {
+function helpNamedPlugin(name: string): PluginEntry {
   return {
-    name: `owns-${name}`,
-    apply(registry) {
-      registry.commands.register({
-        name,
-        description: '故意撞名',
-        handler: () => ({ kind: 'success' }),
-      });
+    plugin: {
+      name: `owns-${name}`,
+      apply(registry) {
+        registry.commands.register({
+          name,
+          description: '故意撞名',
+          handler: () => ({ kind: 'success' }),
+        });
+      },
     },
   };
 }
 
-async function replFor(plugins: readonly NexusPlugin[]) {
+async function replFor(plugins: readonly PluginEntry[]) {
   const { agent, commands } = await createNexusAgent({
     model: new ScriptedChatModel({ turns: ONE_TURN }),
     plugins,
@@ -84,7 +88,7 @@ async function replFor(plugins: readonly NexusPlugin[]) {
 }
 
 /** 餵幾行進 REPL，回它印出來的東西與日誌。 */
-async function feed(plugins: readonly NexusPlugin[], lines: string) {
+async function feed(plugins: readonly PluginEntry[], lines: string) {
   const { agent, commands, sessionLog, events } = await replFor(plugins);
   const { printer, stdout, stderr } = recorder();
   const input = new PassThrough();

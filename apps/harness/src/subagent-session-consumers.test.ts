@@ -23,7 +23,7 @@ import { z } from 'zod';
 import { SessionRegistry } from '@nexus/core';
 import type {
   InvariantError,
-  NexusPlugin,
+  PluginEntry,
   SessionTelemetryRecord,
   SessionTelemetryService,
 } from '@nexus/core';
@@ -57,40 +57,42 @@ function collectingSink(records: SessionTelemetryRecord[]): SessionTelemetryServ
  * **四樣掛在同一個 `apply` 裡是刻意的**：這一檔問的正是「同一次組裝裡，後來才出生的那份
  * 日誌有沒有被同一批消費者接上」。拆成四個 plugin 問的是另一個問題。
  */
-function observingPlugin(seen: Seen): NexusPlugin {
+function observingPlugin(seen: Seen): PluginEntry {
   return {
-    name: 'observing',
-    apply(registry) {
-      registry.tools.register(
-        tool(
-          ({ note }: { note: string }, config?: unknown) => {
-            const found = registry.sessions.forCall(config);
-            if (found.kind !== 'ok') return `寫不進去：${found.kind}`;
-            // **`turn/failed` 在這裡只是「一個帶字串的事件」**，不是真工具該寫的東西：
-            // turn 的擁有者是進入點。下面「輪的擁有者」那一組把這件事講清楚並釘住。
-            found.log.append('turn/failed', { message: note });
-            return '記了一筆。';
-          },
-          {
-            name: WRITER_TOOL_NAME,
-            description: '把一句話記進會話日誌。',
-            schema: z.object({ note: z.string() }),
-          },
-        ),
-      );
-      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    plugin: {
+      name: 'observing',
+      apply(registry) {
+        registry.tools.register(
+          tool(
+            ({ note }: { note: string }, config?: unknown) => {
+              const found = registry.sessions.forCall(config);
+              if (found.kind !== 'ok') return `寫不進去：${found.kind}`;
+              // **`turn/failed` 在這裡只是「一個帶字串的事件」**，不是真工具該寫的東西：
+              // turn 的擁有者是進入點。下面「輪的擁有者」那一組把這件事講清楚並釘住。
+              found.log.append('turn/failed', { message: note });
+              return '記了一筆。';
+            },
+            {
+              name: WRITER_TOOL_NAME,
+              description: '把一句話記進會話日誌。',
+              schema: z.object({ note: z.string() }),
+            },
+          ),
+        );
+        registry.subagents.register({ name: 'worker', description: '幹活的。' });
 
-      registry.invariants.register('@nexus/observing', (subject) => {
-        subject.observe(
-          (event) => void seen.invariants.push(`${subject.log.sessionId}/${event.type}`),
-        );
-      });
-      registry.sessions.join((subject) => {
-        subject.observe(
-          (event) => void seen.participants.push(`${subject.log.sessionId}/${event.type}`),
-        );
-      });
-      registry.telemetry.use(collectingSink(seen.telemetry));
+        registry.invariants.register('@nexus/observing', (subject) => {
+          subject.observe(
+            (event) => void seen.invariants.push(`${subject.log.sessionId}/${event.type}`),
+          );
+        });
+        registry.sessions.join((subject) => {
+          subject.observe(
+            (event) => void seen.participants.push(`${subject.log.sessionId}/${event.type}`),
+          );
+        });
+        registry.telemetry.use(collectingSink(seen.telemetry));
+      },
     },
   };
 }
@@ -162,26 +164,28 @@ const OPEN_ONLY = 'open_only';
 /** 委派一次、子代理往自己那份日誌寫一顆 turn 事件。 */
 const WRITE_TURN = 'write_turn';
 
-function boundaryPlugin(write: boolean): NexusPlugin {
+function boundaryPlugin(write: boolean): PluginEntry {
   return {
-    name: 'boundary',
-    apply(registry) {
-      registry.tools.register(
-        tool(
-          (_input: Record<string, never>, config?: unknown) => {
-            const found = registry.sessions.forCall(config);
-            if (found.kind !== 'ok') return `寫不進去：${found.kind}`;
-            if (write) found.log.append('turn/failed', { message: '子代理寫的' });
-            return '好了。';
-          },
-          {
-            name: write ? WRITE_TURN : OPEN_ONLY,
-            description: '碰一下自己那份會話日誌。',
-            schema: z.object({}),
-          },
-        ),
-      );
-      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    plugin: {
+      name: 'boundary',
+      apply(registry) {
+        registry.tools.register(
+          tool(
+            (_input: Record<string, never>, config?: unknown) => {
+              const found = registry.sessions.forCall(config);
+              if (found.kind !== 'ok') return `寫不進去：${found.kind}`;
+              if (write) found.log.append('turn/failed', { message: '子代理寫的' });
+              return '好了。';
+            },
+            {
+              name: write ? WRITE_TURN : OPEN_ONLY,
+              description: '碰一下自己那份會話日誌。',
+              schema: z.object({}),
+            },
+          ),
+        );
+        registry.subagents.register({ name: 'worker', description: '幹活的。' });
+      },
     },
   };
 }
@@ -210,7 +214,7 @@ function delegatingModel(toolName: string): ScriptedChatModel {
  * 終端機（`cli.ts` 的 `printer.error('[不變量] …')`），一條會在正常流量上誤報的檢查比
  * 沒有檢查更糟——同 `invariant-paths.test.ts` 檔頭那一條。
  */
-async function violationsFrom(plugin: NexusPlugin, toolName: string): Promise<string[]> {
+async function violationsFrom(plugin: PluginEntry, toolName: string): Promise<string[]> {
   const violations: string[] = [];
   const { agent, attachInvariants, attachSession, dispose } = await createNexusAgent({
     model: delegatingModel(toolName),
@@ -291,7 +295,7 @@ describe('goal 的參與者只掛在 root 上', () => {
       // 子代理那一份真的開出來了，這一條才問得出東西。
       expect(sessions.list()).toHaveLength(2);
       // 掛著的服務仍然只有一個——root 那個。
-      expect(goal.attached()).toHaveLength(1);
+      expect(goal.plugin.attached()).toHaveLength(1);
 
       const definition = commands.find(GOAL_COMMAND_NAME);
       const answer = await definition?.handler({

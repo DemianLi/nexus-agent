@@ -54,10 +54,12 @@ async function run(
     plugins: [
       ...DEFAULT_PLUGINS,
       {
-        name: 'worker-source',
-        apply(registry) {
-          if (extraSubagent)
-            registry.subagents.register({ name: 'worker', description: '幹活的。' });
+        plugin: {
+          name: 'worker-source',
+          apply(registry) {
+            if (extraSubagent)
+              registry.subagents.register({ name: 'worker', description: '幹活的。' });
+          },
         },
       },
     ],

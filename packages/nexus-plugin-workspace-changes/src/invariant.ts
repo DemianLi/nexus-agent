@@ -18,7 +18,7 @@
  * @module
  */
 
-import type { InvariantInstaller, NexusPlugin, SessionEvent } from '@nexus/core';
+import type { InvariantInstaller, NexusPlugin, PluginEntry, SessionEvent } from '@nexus/core';
 
 /** 這個配套入口認領的 package 名。 */
 export const WORKSPACE_CHANGES_INVARIANT_PACKAGE = '@nexus/plugin-workspace-changes';
@@ -59,13 +59,19 @@ export const workspaceChangesInvariant: InvariantInstaller = (subject, fail) => 
 /**
  * 把這個配套入口掛上去。
  *
- * @returns 註冊 `@nexus/plugin-workspace-changes` 配套入口的 plugin。
+ * @returns 掛著它的條目，註冊 `@nexus/plugin-workspace-changes` 配套入口的 plugin。
  */
-export function createWorkspaceChangesInvariantPlugin(): NexusPlugin {
-  return {
-    name: 'workspace-changes-invariant',
-    apply(registry) {
-      registry.invariants.register(WORKSPACE_CHANGES_INVARIANT_PACKAGE, workspaceChangesInvariant);
-    },
-  };
+export function createWorkspaceChangesInvariantPlugin(): PluginEntry {
+  return { plugin: workspaceChangesInvariantPlugin };
 }
+
+/**
+ * 模組層級的那一顆。不收設定，所以沒有 `Config`；
+ * [#454](https://github.com/DemianLi/nexus-agent/issues/454) 從設定檔 import 的就是它。
+ */
+export const workspaceChangesInvariantPlugin: NexusPlugin = {
+  name: 'workspace-changes-invariant',
+  apply(registry) {
+    registry.invariants.register(WORKSPACE_CHANGES_INVARIANT_PACKAGE, workspaceChangesInvariant);
+  },
+};

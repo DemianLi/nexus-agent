@@ -71,7 +71,7 @@
 import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { Command } from '@langchain/langgraph';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { toolRefusal } from '@nexus/core';
 import { StateBackend, resolveBackend } from 'deepagents';
 import type { AnyBackendProtocol, BackendFactory, BackendProtocolV2 } from 'deepagents';
@@ -252,16 +252,18 @@ function createSubmitRecordTool(backend: AnyBackendProtocol | undefined) {
  * @param options - 見 {@link SubmitRecordPluginOptions}。
  * @returns 可以放進組裝點清單的 plugin。
  */
-export function createSubmitRecordPlugin(options: SubmitRecordPluginOptions = {}): NexusPlugin {
+export function createSubmitRecordPlugin(options: SubmitRecordPluginOptions = {}): PluginEntry {
   return {
-    name: 'submit-record',
-    apply(registry) {
-      registry.tools.register(createSubmitRecordTool(options.backend));
-      registry.approvals.gate((exec, next) =>
-        exec.name === SUBMIT_RECORD_TOOL_NAME
-          ? { kind: 'ask', reason: '這一列要寫出去，先讓人看過' }
-          : next(),
-      );
+    plugin: {
+      name: 'submit-record',
+      apply(registry) {
+        registry.tools.register(createSubmitRecordTool(options.backend));
+        registry.approvals.gate((exec, next) =>
+          exec.name === SUBMIT_RECORD_TOOL_NAME
+            ? { kind: 'ask', reason: '這一列要寫出去，先讓人看過' }
+            : next(),
+        );
+      },
     },
   };
 }

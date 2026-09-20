@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { OBSERVATION_POLICY_NOTICE } from '@nexus/core';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -39,10 +39,12 @@ async function workspace(): Promise<string> {
 }
 
 /** 註冊一個 subagent，其餘什麼都不做。 */
-const crew: NexusPlugin = {
-  name: 'crew',
-  apply: (registry) =>
-    void registry.subagents.register({ name: 'writer', description: '寫檔的。' }),
+const crew: PluginEntry = {
+  plugin: {
+    name: 'crew',
+    apply: (registry) =>
+      void registry.subagents.register({ name: 'writer', description: '寫檔的。' }),
+  },
 };
 
 /**
@@ -56,7 +58,7 @@ const crew: NexusPlugin = {
 async function run(
   root: string,
   turns: ScriptedTurn[],
-  options: { policy?: boolean; plugins?: NexusPlugin[] } = {},
+  options: { policy?: boolean; plugins?: PluginEntry[] } = {},
 ): Promise<{ text: string; status?: string }[]> {
   const { agent, dispose } = await createNexusAgent({
     model: new ScriptedChatModel({ turns }),
@@ -201,14 +203,16 @@ describe('讀過之後又變了', () => {
    */
   it('讀過之後檔案被外部改掉 → FS_STALE_VERSION，改不進去', async () => {
     const root = await workspace();
-    const touch: NexusPlugin = {
-      name: 'touch',
-      apply(registry) {
-        // 在模型讀完、還沒改之前把檔案換掉——這正是策略要抓的那個縫。
-        registry.approvals.gate(async (exec, next) => {
-          if (exec.name === 'edit_file') await writeFile(join(root, 'notes.md'), '別人改過了');
-          return next();
-        });
+    const touch: PluginEntry = {
+      plugin: {
+        name: 'touch',
+        apply(registry) {
+          // 在模型讀完、還沒改之前把檔案換掉——這正是策略要抓的那個縫。
+          registry.approvals.gate(async (exec, next) => {
+            if (exec.name === 'edit_file') await writeFile(join(root, 'notes.md'), '別人改過了');
+            return next();
+          });
+        },
       },
     };
     const messages = await run(root, [read(), edit('原本的內容', '被改掉了'), ...DONE], {

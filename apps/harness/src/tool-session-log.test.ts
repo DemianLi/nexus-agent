@@ -22,7 +22,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { SessionRegistry } from '@nexus/core';
-import type { NexusPlugin, SessionEvent } from '@nexus/core';
+import type { PluginEntry, SessionEvent } from '@nexus/core';
 import { createNexusAgent } from './agent-factory.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -53,28 +53,30 @@ const AMBIGUOUS = '這次組裝接了不只一份會話，挑不出該寫哪一�
  * @param withSubagent - 要不要順便註冊一個 subagent。
  * @returns 可以放進組裝清單的 plugin。
  */
-function writerPlugin(withSubagent: boolean): NexusPlugin {
+function writerPlugin(withSubagent: boolean): PluginEntry {
   return {
-    name: 'writer',
-    apply(registry) {
-      registry.tools.register(
-        tool(
-          ({ note }: { note: string }, config?: unknown) => {
-            const found = registry.sessions.forCall(config);
-            if (found.kind === 'not-attached') return NOT_ATTACHED;
-            if (found.kind === 'unknown-caller') return UNKNOWN_CALLER;
-            if (found.kind === 'ambiguous') return AMBIGUOUS;
-            found.log.append('turn/failed', { message: note });
-            return `記了一筆，現在 ${found.log.length} 筆。`;
-          },
-          {
-            name: WRITER_TOOL_NAME,
-            description: '把一句話記進會話日誌。',
-            schema: z.object({ note: z.string() }),
-          },
-        ),
-      );
-      if (withSubagent) registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    plugin: {
+      name: 'writer',
+      apply(registry) {
+        registry.tools.register(
+          tool(
+            ({ note }: { note: string }, config?: unknown) => {
+              const found = registry.sessions.forCall(config);
+              if (found.kind === 'not-attached') return NOT_ATTACHED;
+              if (found.kind === 'unknown-caller') return UNKNOWN_CALLER;
+              if (found.kind === 'ambiguous') return AMBIGUOUS;
+              found.log.append('turn/failed', { message: note });
+              return `記了一筆，現在 ${found.log.length} 筆。`;
+            },
+            {
+              name: WRITER_TOOL_NAME,
+              description: '把一句話記進會話日誌。',
+              schema: z.object({ note: z.string() }),
+            },
+          ),
+        );
+        if (withSubagent) registry.subagents.register({ name: 'worker', description: '幹活的。' });
+      },
     },
   };
 }

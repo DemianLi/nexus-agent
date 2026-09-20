@@ -24,7 +24,7 @@ import { tool } from '@langchain/core/tools';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Command, MemorySaver, interrupt } from '@langchain/langgraph';
 import { createMiddleware } from 'langchain';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
@@ -45,74 +45,82 @@ beforeEach(() => {
  * @param withSubagent - 要不要順便註冊一個 `worker`，讓錯發生在 subagent 裡。
  * @returns 可以放進組裝清單的 plugin。
  */
-function boomPlugin(withSubagent = false): NexusPlugin {
+function boomPlugin(withSubagent = false): PluginEntry {
   return {
-    name: 'boom',
-    apply(registry) {
-      registry.tools.register(
-        tool(
-          () => {
-            ran.push('boom');
-            throw new Error('磁碟滿了');
-          },
-          { name: 'boom', description: '會炸的工具', schema: z.object({}) },
-        ),
-      );
-      if (withSubagent) registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    plugin: {
+      name: 'boom',
+      apply(registry) {
+        registry.tools.register(
+          tool(
+            () => {
+              ran.push('boom');
+              throw new Error('磁碟滿了');
+            },
+            { name: 'boom', description: '會炸的工具', schema: z.object({}) },
+          ),
+        );
+        if (withSubagent) registry.subagents.register({ name: 'worker', description: '幹活的。' });
+      },
     },
   };
 }
 
 /** 一個回傳固定字串的工具。 */
-function reportPlugin(payload: string, outputSchema?: z.ZodType): NexusPlugin {
+function reportPlugin(payload: string, outputSchema?: z.ZodType): PluginEntry {
   return {
-    name: 'report',
-    apply(registry) {
-      registry.tools.register(
-        tool(() => payload, {
-          name: 'report',
-          description: '回一份報告',
-          schema: z.object({}),
-        }),
-        outputSchema === undefined ? {} : { outputSchema },
-      );
+    plugin: {
+      name: 'report',
+      apply(registry) {
+        registry.tools.register(
+          tool(() => payload, {
+            name: 'report',
+            description: '回一份報告',
+            schema: z.object({}),
+          }),
+          outputSchema === undefined ? {} : { outputSchema },
+        );
+      },
     },
   };
 }
 
 /** 一個自己就會炸掉的 plugin middleware——用來驗圍堵接不接得到內層。 */
-function brokenMiddlewarePlugin(): NexusPlugin {
+function brokenMiddlewarePlugin(): PluginEntry {
   return {
-    name: 'broken',
-    apply(registry) {
-      registry.middleware.use(
-        createMiddleware({
-          name: 'brokenMiddleware',
-          wrapToolCall: async (request, handler) => {
-            await handler(request);
-            throw new TypeError('這個 middleware 自己有 bug');
-          },
-        }) as never,
-      );
+    plugin: {
+      name: 'broken',
+      apply(registry) {
+        registry.middleware.use(
+          createMiddleware({
+            name: 'brokenMiddleware',
+            wrapToolCall: async (request, handler) => {
+              await handler(request);
+              throw new TypeError('這個 middleware 自己有 bug');
+            },
+          }) as never,
+        );
+      },
     },
   };
 }
 
 /** 一個會問人的工具。 */
-function askPlugin(): NexusPlugin {
+function askPlugin(): PluginEntry {
   return {
-    name: 'ask',
-    apply(registry) {
-      registry.tools.register(
-        tool(
-          () => {
-            const answer = interrupt({ question: '要繼續嗎' });
-            ran.push('ask');
-            return `使用者說：${String(answer)}`;
-          },
-          { name: 'ask', description: '問一句', schema: z.object({}) },
-        ),
-      );
+    plugin: {
+      name: 'ask',
+      apply(registry) {
+        registry.tools.register(
+          tool(
+            () => {
+              const answer = interrupt({ question: '要繼續嗎' });
+              ran.push('ask');
+              return `使用者說：${String(answer)}`;
+            },
+            { name: 'ask', description: '問一句', schema: z.object({}) },
+          ),
+        );
+      },
     },
   };
 }

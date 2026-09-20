@@ -70,17 +70,19 @@ function companionSource(
   } = overrides;
   return `${header}
 
-import type { InvariantInstaller, NexusPlugin } from '@nexus/core';
+import type { InvariantInstaller, PluginEntry } from '@nexus/core';
 
 export const SAMPLE_PACKAGE = '@nexus/sample';
 
 ${declarationComment}${installer}
 ${extra}
-export function createSampleInvariantPlugin(): NexusPlugin {
+export function createSampleInvariantPlugin(): PluginEntry {
   return {
-    name: 'sample-invariant',
-    apply(registry) {
-      ${registration}
+    plugin: {
+      name: 'sample-invariant',
+      apply(registry) {
+        ${registration}
+      },
     },
   };
 }

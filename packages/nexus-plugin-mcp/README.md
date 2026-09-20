@@ -5,7 +5,7 @@
 
 ## 用法
 
-**一個 plugin 實例對一台 server。** `NexusPlugin.name` 不唯一，所以同一個工廠掛幾次都行：
+**一個條目對一台 server。** `NexusPlugin.name` 不唯一，所以同一個工廠掛幾次都行（工廠回的是條目，#453）：
 
 ```ts
 import { createMcpPlugin } from '@nexus/plugin-mcp';

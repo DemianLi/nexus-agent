@@ -19,7 +19,7 @@ import { join } from 'node:path';
 
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import type { InvariantError, NexusPlugin, SessionEvent, SessionRegistry } from '@nexus/core';
+import type { InvariantError, PluginEntry, SessionEvent, SessionRegistry } from '@nexus/core';
 import { PRESENT_NO_WORKSPACE_MESSAGE, PRESENT_TOOL_NAME } from '@nexus/plugin-present';
 import type { DeliverablesPresentedPayload, Event } from '@nexus/wire';
 import {
@@ -51,28 +51,36 @@ afterEach(async () => {
 });
 
 /** 一個子代理的來源：委派那幾條要有人可以委派。 */
-const WORKER: NexusPlugin = {
-  name: 'worker-source',
-  apply(registry) {
-    registry.subagents.register({ name: 'worker', description: '幹活的。' });
+const WORKER: PluginEntry = {
+  plugin: {
+    name: 'worker-source',
+    apply(registry) {
+      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    },
   },
 };
 
 /** 一顆用 `config.writer` 往圖的 `custom` channel 寫東西的工具。 */
-const WRITER: NexusPlugin = {
-  name: 'custom-writer',
-  apply(registry) {
-    registry.tools.register(
-      tool(
-        (_input: Record<string, never>, config?: unknown) => {
-          (config as { writer?: (chunk: unknown) => void } | undefined)?.writer?.({
-            secret: '不該上線',
-          });
-          return '寫了。';
-        },
-        { name: 'custom_writer', description: '往 custom channel 寫一顆。', schema: z.object({}) },
-      ),
-    );
+const WRITER: PluginEntry = {
+  plugin: {
+    name: 'custom-writer',
+    apply(registry) {
+      registry.tools.register(
+        tool(
+          (_input: Record<string, never>, config?: unknown) => {
+            (config as { writer?: (chunk: unknown) => void } | undefined)?.writer?.({
+              secret: '不該上線',
+            });
+            return '寫了。';
+          },
+          {
+            name: 'custom_writer',
+            description: '往 custom channel 寫一顆。',
+            schema: z.object({}),
+          },
+        ),
+      );
+    },
   },
 };
 
@@ -93,7 +101,7 @@ interface Outcome {
  */
 async function run(
   turns: readonly ScriptedTurn[],
-  options: { workspace?: boolean; files?: Record<string, string>; extra?: NexusPlugin[] } = {},
+  options: { workspace?: boolean; files?: Record<string, string>; extra?: PluginEntry[] } = {},
 ): Promise<Outcome> {
   const root = await mkdtemp(join(tmpdir(), 'nexus-present-e2e-'));
   roots.push(root);

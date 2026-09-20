@@ -43,7 +43,7 @@
  * @module
  */
 
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { resolveToolName, WORKSPACE_CAPABILITY } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import type { SandboxMode } from './contained-backend.js';
@@ -105,62 +105,65 @@ export function sandboxPolicySentence(mode: SandboxMode, rootDir: string): strin
 export function createSandboxPolicyPlugin(
   controller: SandboxModeController,
   rootDir: string,
-): NexusPlugin {
+): PluginEntry {
   const resolveMode = controller.source;
   return {
-    name: 'sandbox-policy',
-    apply(registry) {
-      // **這顆在，工作區就在**：它只在有圍堵的組裝裡掛。`present` 據它回答「有沒有工作區」（#441），
-      // 見 `@nexus/core` 的 `WORKSPACE_CAPABILITY`。
-      registry.capabilities.provide(WORKSPACE_CAPABILITY);
-      // **root 接控制器**：起始值與之後每一次切換都記。**子代理只記一顆委派那一刻拍下的那一格**
-      // （#326，照 dsh `appendDelegatedPolicyOverrides`）：root 之後再切，子代理照舊，所以 root 的日誌
-      // 答不出子代理跑在哪一格。子代理的日誌在它第一次 `forCall` 時才開，那一刻在 `task` 的 handler
-      // 裡、讀得到快照；不在任何一次委派裡被開的話不寫——拿 root 當下那格去補，寫的就是錯的值。
-      registry.sessions.join((subject) => {
-        if (subject.address.kind === 'root') return controller.attach(subject.log);
-        const mode = controller.delegatedMode;
-        if (mode !== undefined) subject.log.append('sandbox/mode', { mode, source: 'delegation' });
-        return undefined;
-      });
-      // **升級跟著 fence 掛**，同上面那條理由：沒有圍堵的組裝沒有東西可以升。它也是
-      // read-only 那句「照升級指引做」成立的前提——這個 plugin 在，那句話就不是空頭支票。
-      registerSandboxEscalation(registry, controller);
-      registry.commands.register({
-        name: SANDBOX_COMMAND_NAME,
-        description: SANDBOX_COMMAND_DESCRIPTION,
-        input: { hint: SANDBOX_COMMAND_HINT },
-        handler: ({ rawInput }) => executeSandboxCommand(controller, rootDir, rawInput),
-      });
-      registry.middleware.use(
-        createMiddleware({
-          name: SANDBOX_POLICY_MIDDLEWARE_NAME,
-          wrapModelCall: (request, handler) => {
-            // 子代理也走這裡（#327），而且講的是**委派那一格**：子代理整個跑在 `task` 的 handler 裡、在下面那顆
-            // `wrapToolCall` 包的 ALS 之內，`controller.source` 先讀快照。同 dsh 讀子代理自己 session 上那顆
-            // `sandbox/mode { source: 'delegation' }`。
-            const sentence = sandboxPolicySentence(resolveMode(), rootDir);
-            // 兩條路是同一件事的兩個入口，照抄 plan-mode 那段註解：`systemMessage` 在的
-            // 時候接在它後面，不在的時候由 `systemPrompt` 這個字串欄位承接。基座兩個都讀，
-            // 給錯那一個等於沒講。
-            const { systemMessage } = request;
-            return handler(
-              systemMessage === undefined
-                ? { ...request, systemPrompt: sentence }
-                : { ...request, systemMessage: systemMessage.concat(`\n${sentence}`) },
-            );
-          },
-          // **委派那一刻拍下這一格**（#326）：子代理整個在 `task` 那一次呼叫的 handler 裡跑，所以包住
-          // handler，子代理的 fence、升級閘門、日誌開啟都讀得到快照。**同步拍**，照 dsh 在子代理啟動的
-          // 第一個 await 之前拍（`captureDelegatedPolicyOverrides`）。這顆 middleware 也掛在子代理上（#327），
-          // 但子代理手上沒有 `task`（基座的子代理 stack 沒有委派工具），所以這一半只在 root 上作用——拍照本來就是
-          // 父代理那側的事。
-          wrapToolCall: (request, handler) =>
-            resolveToolName(request) === DELEGATION_TOOL_NAME
-              ? controller.delegate(() => handler(request))
-              : handler(request),
-        }),
-      );
+    plugin: {
+      name: 'sandbox-policy',
+      apply(registry) {
+        // **這顆在，工作區就在**：它只在有圍堵的組裝裡掛。`present` 據它回答「有沒有工作區」（#441），
+        // 見 `@nexus/core` 的 `WORKSPACE_CAPABILITY`。
+        registry.capabilities.provide(WORKSPACE_CAPABILITY);
+        // **root 接控制器**：起始值與之後每一次切換都記。**子代理只記一顆委派那一刻拍下的那一格**
+        // （#326，照 dsh `appendDelegatedPolicyOverrides`）：root 之後再切，子代理照舊，所以 root 的日誌
+        // 答不出子代理跑在哪一格。子代理的日誌在它第一次 `forCall` 時才開，那一刻在 `task` 的 handler
+        // 裡、讀得到快照；不在任何一次委派裡被開的話不寫——拿 root 當下那格去補，寫的就是錯的值。
+        registry.sessions.join((subject) => {
+          if (subject.address.kind === 'root') return controller.attach(subject.log);
+          const mode = controller.delegatedMode;
+          if (mode !== undefined)
+            subject.log.append('sandbox/mode', { mode, source: 'delegation' });
+          return undefined;
+        });
+        // **升級跟著 fence 掛**，同上面那條理由：沒有圍堵的組裝沒有東西可以升。它也是
+        // read-only 那句「照升級指引做」成立的前提——這個 plugin 在，那句話就不是空頭支票。
+        registerSandboxEscalation(registry, controller);
+        registry.commands.register({
+          name: SANDBOX_COMMAND_NAME,
+          description: SANDBOX_COMMAND_DESCRIPTION,
+          input: { hint: SANDBOX_COMMAND_HINT },
+          handler: ({ rawInput }) => executeSandboxCommand(controller, rootDir, rawInput),
+        });
+        registry.middleware.use(
+          createMiddleware({
+            name: SANDBOX_POLICY_MIDDLEWARE_NAME,
+            wrapModelCall: (request, handler) => {
+              // 子代理也走這裡（#327），而且講的是**委派那一格**：子代理整個跑在 `task` 的 handler 裡、在下面那顆
+              // `wrapToolCall` 包的 ALS 之內，`controller.source` 先讀快照。同 dsh 讀子代理自己 session 上那顆
+              // `sandbox/mode { source: 'delegation' }`。
+              const sentence = sandboxPolicySentence(resolveMode(), rootDir);
+              // 兩條路是同一件事的兩個入口，照抄 plan-mode 那段註解：`systemMessage` 在的
+              // 時候接在它後面，不在的時候由 `systemPrompt` 這個字串欄位承接。基座兩個都讀，
+              // 給錯那一個等於沒講。
+              const { systemMessage } = request;
+              return handler(
+                systemMessage === undefined
+                  ? { ...request, systemPrompt: sentence }
+                  : { ...request, systemMessage: systemMessage.concat(`\n${sentence}`) },
+              );
+            },
+            // **委派那一刻拍下這一格**（#326）：子代理整個在 `task` 那一次呼叫的 handler 裡跑，所以包住
+            // handler，子代理的 fence、升級閘門、日誌開啟都讀得到快照。**同步拍**，照 dsh 在子代理啟動的
+            // 第一個 await 之前拍（`captureDelegatedPolicyOverrides`）。這顆 middleware 也掛在子代理上（#327），
+            // 但子代理手上沒有 `task`（基座的子代理 stack 沒有委派工具），所以這一半只在 root 上作用——拍照本來就是
+            // 父代理那側的事。
+            wrapToolCall: (request, handler) =>
+              resolveToolName(request) === DELEGATION_TOOL_NAME
+                ? controller.delegate(() => handler(request))
+                : handler(request),
+          }),
+        );
+      },
     },
   };
 }

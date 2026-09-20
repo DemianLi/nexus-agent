@@ -43,7 +43,7 @@
  */
 
 import { tool } from '@langchain/core/tools';
-import type { NexusPlugin, PluginRegistry } from '@nexus/core';
+import type { PluginEntry, PluginRegistry } from '@nexus/core';
 import { getQuickJS, shouldInterruptAfterDeadline } from 'quickjs-emscripten';
 import type { QuickJSContext, QuickJSHandle } from 'quickjs-emscripten';
 import { z } from 'zod';
@@ -106,32 +106,35 @@ export interface QuickJsPluginOptions {
  * @param options - 資源上限。
  * @returns 可以放進組裝點清單的 plugin。
  */
-export function createQuickJsPlugin(options: QuickJsPluginOptions = {}): NexusPlugin {
+export function createQuickJsPlugin(options: QuickJsPluginOptions = {}): PluginEntry {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const memoryLimitBytes = options.memoryLimitBytes ?? DEFAULT_MEMORY_LIMIT_BYTES;
   const maxStackSizeBytes = options.maxStackSizeBytes ?? DEFAULT_MAX_STACK_SIZE_BYTES;
 
   return {
-    name: 'quickjs',
-    async apply(registry: PluginRegistry): Promise<void> {
-      const quickjs = await getQuickJS();
+    plugin: {
+      name: 'quickjs',
+      async apply(registry: PluginRegistry): Promise<void> {
+        const quickjs = await getQuickJS();
 
-      registry.capabilities.provide(QUICKJS_CAPABILITY);
-      registry.tools.register(
-        tool(
-          ({ code }) => runInVm(quickjs, code, { timeoutMs, memoryLimitBytes, maxStackSizeBytes }),
-          {
-            name: RUN_JAVASCRIPT_TOOL_NAME,
-            description:
-              '在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。' +
-              `VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。` +
-              `執行超過 ${timeoutMs} 毫秒會被中斷。`,
-            schema: z.object({
-              code: z.string().describe('要求值的 JavaScript。最後一個運算式的值就是回傳值。'),
-            }),
-          },
-        ),
-      );
+        registry.capabilities.provide(QUICKJS_CAPABILITY);
+        registry.tools.register(
+          tool(
+            ({ code }) =>
+              runInVm(quickjs, code, { timeoutMs, memoryLimitBytes, maxStackSizeBytes }),
+            {
+              name: RUN_JAVASCRIPT_TOOL_NAME,
+              description:
+                '在一個隔離的 QuickJS 直譯器裡求值一段 JavaScript，回傳最後一個運算式的值。' +
+                `VM 裡沒有檔案系統、沒有網路、沒有 require / import / process，只有標準的 ECMAScript。` +
+                `執行超過 ${timeoutMs} 毫秒會被中斷。`,
+              schema: z.object({
+                code: z.string().describe('要求值的 JavaScript。最後一個運算式的值就是回傳值。'),
+              }),
+            },
+          ),
+        );
+      },
     },
   };
 }

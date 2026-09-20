@@ -127,8 +127,8 @@ describe('掛上去', () => {
   it('配套入口認領自己的包名', () => {
     const registry = createRegistry();
     const plugin = createPresentInvariantPlugin();
-    const exit = registry.enter({ id: 'present-invariant#0', name: plugin.name });
-    void plugin.apply(registry);
+    const exit = registry.enter({ id: 'present-invariant#0', name: plugin.plugin.name });
+    void plugin.plugin.apply(registry, undefined);
     exit();
     expect(registry.invariants.companions().map((entry) => entry.packageName)).toEqual([
       PRESENT_INVARIANT_PACKAGE,

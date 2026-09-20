@@ -14,7 +14,7 @@ import type { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { Command, MemorySaver } from '@langchain/langgraph';
 import { fromLoggedMessage, SessionRegistry } from '@nexus/core';
-import type { NexusPlugin, SessionEvent, SessionEventMap } from '@nexus/core';
+import type { PluginEntry, SessionEvent, SessionEventMap } from '@nexus/core';
 import { createAskUserPlugin } from '@nexus/plugin-ask-user';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -26,79 +26,85 @@ import type { ScriptedTurn } from './scripted-model.js';
 const ROOT_ID = 'tool-events-root';
 
 /** 每一種失敗各一顆工具，外加一顆會成功的。 */
-const toolsPlugin: NexusPlugin = {
-  name: 'tool-events-tools',
-  apply(registry) {
-    registry.tools.register(
-      tool(({ text }: { text: string }) => `回聲：${text}`, {
-        name: 'echo',
-        description: '原樣回聲。',
-        schema: z.object({ text: z.string() }),
-      }),
-    );
-    registry.tools.register(
-      tool(
-        async () => {
-          await new Promise((resolve) => setTimeout(resolve, 300));
-          return '太慢了';
-        },
-        {
-          name: 'slow',
-          description: '會超時。',
+const toolsPlugin: PluginEntry = {
+  plugin: {
+    name: 'tool-events-tools',
+    apply(registry) {
+      registry.tools.register(
+        tool(({ text }: { text: string }) => `回聲：${text}`, {
+          name: 'echo',
+          description: '原樣回聲。',
+          schema: z.object({ text: z.string() }),
+        }),
+      );
+      registry.tools.register(
+        tool(
+          async () => {
+            await new Promise((resolve) => setTimeout(resolve, 300));
+            return '太慢了';
+          },
+          {
+            name: 'slow',
+            description: '會超時。',
+            schema: z.object({}),
+            defaultConfig: { timeout: 30 },
+          },
+        ),
+      );
+      registry.tools.register(
+        tool(
+          () => {
+            throw new Error('連不上');
+          },
+          { name: 'boom', description: '會拋錯。', schema: z.object({}) },
+        ),
+      );
+      registry.tools.register(
+        tool(() => '{"total":"一百"}', {
+          name: 'report',
+          description: '輸出不合 schema。',
           schema: z.object({}),
-          defaultConfig: { timeout: 30 },
-        },
-      ),
-    );
-    registry.tools.register(
-      tool(
-        () => {
-          throw new Error('連不上');
-        },
-        { name: 'boom', description: '會拋錯。', schema: z.object({}) },
-      ),
-    );
-    registry.tools.register(
-      tool(() => '{"total":"一百"}', {
-        name: 'report',
-        description: '輸出不合 schema。',
-        schema: z.object({}),
-      }),
-      // 輸出 schema 隨註冊帶，校驗器由 fold 打底（#252）：`total` 要是數字。
-      { outputSchema: z.object({ total: z.number() }) },
-    );
-    registry.tools.register(
-      tool(({ n }: { n: number }) => `n=${n}`, {
-        name: 'typed',
-        description: '參數要數字。',
-        schema: z.object({ n: z.number() }),
-      }),
-    );
-    registry.tools.register(
-      tool(() => '危險的事做完了', {
-        name: 'danger',
-        description: '要核准。',
-        schema: z.object({}),
-      }),
-    );
+        }),
+        // 輸出 schema 隨註冊帶，校驗器由 fold 打底（#252）：`total` 要是數字。
+        { outputSchema: z.object({ total: z.number() }) },
+      );
+      registry.tools.register(
+        tool(({ n }: { n: number }) => `n=${n}`, {
+          name: 'typed',
+          description: '參數要數字。',
+          schema: z.object({ n: z.number() }),
+        }),
+      );
+      registry.tools.register(
+        tool(() => '危險的事做完了', {
+          name: 'danger',
+          description: '要核准。',
+          schema: z.object({}),
+        }),
+      );
+    },
   },
 };
 
 /** `danger` 一律要人看過。 */
-const gatePlugin: NexusPlugin = {
-  name: 'tool-events-gate',
-  apply(registry) {
-    registry.approvals.gate((exec, next) =>
-      exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
-    );
+const gatePlugin: PluginEntry = {
+  plugin: {
+    name: 'tool-events-gate',
+    apply(registry) {
+      registry.approvals.gate((exec, next) =>
+        exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
+      );
+    },
   },
 };
 
 /** 只註冊一個 subagent。 */
-const workerPlugin: NexusPlugin = {
-  name: 'worker-host',
-  apply(registry) {
-    registry.subagents.register({ name: 'worker', description: '幹活的。' });
+const workerPlugin: PluginEntry = {
+  plugin: {
+    name: 'worker-host',
+    apply(registry) {
+      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    },
   },
 };
 
@@ -132,7 +138,7 @@ function resultsByName(events: readonly SessionEvent[]): Map<string, ToolResult>
 }
 
 /** 一場組裝加上它的會話註冊表。 */
-async function assemble(turns: readonly ScriptedTurn[], plugins: readonly NexusPlugin[]) {
+async function assemble(turns: readonly ScriptedTurn[], plugins: readonly PluginEntry[]) {
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns }),
     checkpointer: new MemorySaver(),

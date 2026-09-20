@@ -26,7 +26,7 @@ function watched(seed: (log: SessionLog) => void = () => {}) {
 
   const registry = createRegistry();
   const leave = registry.enter(origin);
-  createCommandsInvariantPlugin().apply(registry);
+  createCommandsInvariantPlugin().plugin.apply(registry, undefined);
   leave();
 
   const violations: string[] = [];
@@ -146,7 +146,7 @@ describe('接線', () => {
   it('認領的包名就是這個 package 自己', () => {
     const registry = createRegistry();
     const leave = registry.enter(origin);
-    createCommandsInvariantPlugin().apply(registry);
+    createCommandsInvariantPlugin().plugin.apply(registry, undefined);
     leave();
     expect(registry.invariants.companions().map((entry) => entry.packageName)).toEqual([
       '@nexus/plugin-commands',
@@ -158,7 +158,7 @@ describe('接線', () => {
 function watchedLog(log: SessionLog): string[] {
   const registry = createRegistry();
   const leave = registry.enter(origin);
-  createCommandsInvariantPlugin().apply(registry);
+  createCommandsInvariantPlugin().plugin.apply(registry, undefined);
   leave();
   const violations: string[] = [];
   createInvariantRunner({

@@ -35,7 +35,7 @@ import type {
   MessageFeedbackListResult,
   MessageFeedbackPutRequest,
   MessageFeedbackPutResult,
-  NexusPlugin,
+  PluginEntry,
   SessionEvent,
   SessionLog,
 } from '@nexus/core';
@@ -174,40 +174,42 @@ export function createFeedbackService(options: FeedbackPluginOptions): FeedbackS
  * @param options - 備註上限。
  * @returns plugin。
  */
-export function createFeedbackPlugin(options: FeedbackPluginOptions): NexusPlugin {
+export function createFeedbackPlugin(options: FeedbackPluginOptions): PluginEntry {
   const service = createFeedbackService(options);
   return {
-    name: 'feedback',
-    apply(registry) {
-      registry.feedback.use(service);
-      const rootsHere: SessionLog[] = [];
-      registry.sessions.join((subject) => {
-        if (subject.address.kind !== 'root') return undefined;
-        rootsHere.push(subject.log);
-        return () => {
-          const at = rootsHere.indexOf(subject.log);
-          if (at >= 0) rootsHere.splice(at, 1);
-        };
-      });
-      registry.commands.register({
-        name: FEEDBACK_COMMAND_NAME,
-        description: '記下對這個會話的回饋',
-        input: { hint: '<內容>' },
-        // 那段文字由 `feedback/record` 帶著，`command/run` 不再記一次（照 dsh）。
-        recordInput: false,
-        handler: ({ rawInput }) => {
-          if (rawInput.trim().length === 0) return { kind: 'error', text: FEEDBACK_USAGE };
-          const [log, ...others] = rootsHere;
-          if (log === undefined || others.length > 0) {
-            return {
-              kind: 'error',
-              text: `這次組裝接著 ${String(rootsHere.length)} 份會話日誌，挑不出要記在哪一份。`,
-            };
-          }
-          service.record(log, { text: rawInput });
-          return { kind: 'success', text: `已記下對這個會話的回饋（${log.sessionId}）。` };
-        },
-      });
+    plugin: {
+      name: 'feedback',
+      apply(registry) {
+        registry.feedback.use(service);
+        const rootsHere: SessionLog[] = [];
+        registry.sessions.join((subject) => {
+          if (subject.address.kind !== 'root') return undefined;
+          rootsHere.push(subject.log);
+          return () => {
+            const at = rootsHere.indexOf(subject.log);
+            if (at >= 0) rootsHere.splice(at, 1);
+          };
+        });
+        registry.commands.register({
+          name: FEEDBACK_COMMAND_NAME,
+          description: '記下對這個會話的回饋',
+          input: { hint: '<內容>' },
+          // 那段文字由 `feedback/record` 帶著，`command/run` 不再記一次（照 dsh）。
+          recordInput: false,
+          handler: ({ rawInput }) => {
+            if (rawInput.trim().length === 0) return { kind: 'error', text: FEEDBACK_USAGE };
+            const [log, ...others] = rootsHere;
+            if (log === undefined || others.length > 0) {
+              return {
+                kind: 'error',
+                text: `這次組裝接著 ${String(rootsHere.length)} 份會話日誌，挑不出要記在哪一份。`,
+              };
+            }
+            service.record(log, { text: rawInput });
+            return { kind: 'success', text: `已記下對這個會話的回饋（${log.sessionId}）。` };
+          },
+        });
+      },
     },
   };
 }

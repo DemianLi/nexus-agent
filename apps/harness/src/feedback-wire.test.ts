@@ -19,7 +19,7 @@ import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
 import { loggedMessageId } from '@nexus/core';
-import type { NexusPlugin, SessionEvent, SessionLog } from '@nexus/core';
+import type { PluginEntry, SessionEvent, SessionLog } from '@nexus/core';
 import { createFeedbackPlugin } from '@nexus/plugin-feedback';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import type { AiEntry, ConversationState, Event, WireClient } from '@nexus/wire';
@@ -48,20 +48,22 @@ import type { WireHandler } from './wire-handler.js';
 const BASE_URL = 'http://feedback.test';
 
 /** 一顆要核准的工具，外加一個子代理。 */
-const fixturePlugin: NexusPlugin = {
-  name: 'feedback-fixture',
-  apply(registry) {
-    registry.tools.register(
-      tool(() => '危險的事做完了', {
-        name: 'danger',
-        description: '要核准。',
-        schema: z.object({}),
-      }),
-    );
-    registry.approvals.gate((exec, next) =>
-      exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
-    );
-    registry.subagents.register({ name: 'worker', description: '幹活的。' });
+const fixturePlugin: PluginEntry = {
+  plugin: {
+    name: 'feedback-fixture',
+    apply(registry) {
+      registry.tools.register(
+        tool(() => '危險的事做完了', {
+          name: 'danger',
+          description: '要核准。',
+          schema: z.object({}),
+        }),
+      );
+      registry.approvals.gate((exec, next) =>
+        exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
+      );
+      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    },
   },
 };
 

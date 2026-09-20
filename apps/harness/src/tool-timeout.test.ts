@@ -16,7 +16,7 @@
 import { tool } from '@langchain/core/tools';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Command, MemorySaver } from '@langchain/langgraph';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
@@ -48,10 +48,12 @@ function sleeper(name: string, bodyMs: number, budgetMs?: number) {
 async function runOnce(
   toolToUse: ReturnType<typeof sleeper>,
 ): Promise<BaseMessage & { status?: string }> {
-  const plugin: NexusPlugin = {
-    name: 'timeout-fixture',
-    apply(registration) {
-      registration.tools.register(toolToUse);
+  const plugin: PluginEntry = {
+    plugin: {
+      name: 'timeout-fixture',
+      apply(registration) {
+        registration.tools.register(toolToUse);
+      },
     },
   };
   const { agent, dispose } = await createNexusAgent({
@@ -87,13 +89,15 @@ async function runGated(
   toolToUse: ReturnType<typeof sleeper>,
   thinkMs: number,
 ): Promise<(BaseMessage & { status?: string }) | undefined> {
-  const plugin: NexusPlugin = {
-    name: 'gated-fixture',
-    apply(registration) {
-      registration.tools.register(toolToUse);
-      registration.approvals.gate((execution, next) =>
-        execution.name === toolToUse.name ? { kind: 'ask', reason: '看一下' } : next(),
-      );
+  const plugin: PluginEntry = {
+    plugin: {
+      name: 'gated-fixture',
+      apply(registration) {
+        registration.tools.register(toolToUse);
+        registration.approvals.gate((execution, next) =>
+          execution.name === toolToUse.name ? { kind: 'ask', reason: '看一下' } : next(),
+        );
+      },
     },
   };
   const { agent, dispose } = await createNexusAgent({

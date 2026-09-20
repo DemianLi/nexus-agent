@@ -59,8 +59,8 @@ function mount(options: { root?: string; workspace?: boolean; maxFiles?: number 
   const plugin = createPresentPlugin(
     options.maxFiles === undefined ? {} : { maxFiles: options.maxFiles },
   );
-  const exit = registry.enter({ id: 'present#0', name: plugin.name });
-  void plugin.apply(registry);
+  const exit = registry.enter({ id: 'present#0', name: plugin.plugin.name });
+  void plugin.plugin.apply(registry, undefined);
   exit();
   if (options.workspace ?? true) {
     const leave = registry.enter({ id: 'sandbox-policy#0', name: 'sandbox-policy' });

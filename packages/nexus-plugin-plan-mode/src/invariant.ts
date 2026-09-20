@@ -50,7 +50,7 @@
  * @module
  */
 
-import type { InvariantInstaller, NexusPlugin } from '@nexus/core';
+import type { InvariantInstaller, NexusPlugin, PluginEntry } from '@nexus/core';
 
 import { parsePlanCommandArgs, PLAN_COMMAND_NAME } from './command.js';
 
@@ -111,13 +111,19 @@ export const planModeInvariant: InvariantInstaller = (subject, fail) => {
  * **掛了會真的裝上檢查**（`plan/mode` 的形狀與 `/plan` 的參數契約），與空的那些不同。違規的去處
  * 仍然是進入點的事（CLI 走 `onInvariantViolation`），這個檔案只負責註冊。
  *
- * @returns 註冊 `@nexus/plugin-plan-mode` 配套入口的 plugin。
+ * @returns 掛著它的條目，註冊 `@nexus/plugin-plan-mode` 配套入口的 plugin。
  */
-export function createPlanModeInvariantPlugin(): NexusPlugin {
-  return {
-    name: 'plan-mode-invariant',
-    apply(registry) {
-      registry.invariants.register(PLAN_MODE_INVARIANT_PACKAGE, planModeInvariant);
-    },
-  };
+export function createPlanModeInvariantPlugin(): PluginEntry {
+  return { plugin: planModeInvariantPlugin };
 }
+
+/**
+ * 模組層級的那一顆。不收設定，所以沒有 `Config`；
+ * [#454](https://github.com/DemianLi/nexus-agent/issues/454) 從設定檔 import 的就是它。
+ */
+export const planModeInvariantPlugin: NexusPlugin = {
+  name: 'plan-mode-invariant',
+  apply(registry) {
+    registry.invariants.register(PLAN_MODE_INVARIANT_PACKAGE, planModeInvariant);
+  },
+};

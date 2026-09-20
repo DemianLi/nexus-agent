@@ -23,7 +23,7 @@
  * [`cli-invariant-violation.fixture.ts`](./cli-invariant-violation.fixture.ts) 那份一樣。
  */
 
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { createEchoPlugin } from '@nexus/plugin-echo';
 import { GoalService } from '@nexus/plugin-goal';
 
@@ -33,20 +33,22 @@ export const GOAL_PROBE_PACKAGE = '@nexus/goal-probe';
 /** 參與者建的那個目標的敘述，測試靠它認出回音。 */
 export const PROBE_OBJECTIVE = '證明 CLI 這條路接上了 sessions 通道';
 
-const probe: NexusPlugin = {
-  name: 'goal-probe',
-  apply(registry) {
-    registry.sessions.join((subject) => {
-      // 時鐘與 id 都固定：這份 fixture 手動跑的時候輸出要逐字一樣。
-      const service = new GoalService(subject, { now: () => 0, newGoalId: () => 'goal-probe' });
-      service.create({ objective: PROBE_OBJECTIVE });
-    });
-    registry.invariants.register(GOAL_PROBE_PACKAGE, (subject, fail) => {
-      subject.observe((event) => {
-        if (event.type === 'goal/change') fail(`看到 ${event.type}（seq ${event.seq}）`);
+const probe: PluginEntry = {
+  plugin: {
+    name: 'goal-probe',
+    apply(registry) {
+      registry.sessions.join((subject) => {
+        // 時鐘與 id 都固定：這份 fixture 手動跑的時候輸出要逐字一樣。
+        const service = new GoalService(subject, { now: () => 0, newGoalId: () => 'goal-probe' });
+        service.create({ objective: PROBE_OBJECTIVE });
       });
-    });
+      registry.invariants.register(GOAL_PROBE_PACKAGE, (subject, fail) => {
+        subject.observe((event) => {
+          if (event.type === 'goal/change') fail(`看到 ${event.type}（seq ${event.seq}）`);
+        });
+      });
+    },
   },
 };
 
-export default [createEchoPlugin(), probe] satisfies NexusPlugin[];
+export default [createEchoPlugin(), probe] satisfies PluginEntry[];

@@ -10,29 +10,31 @@
  */
 
 import { tool } from '@langchain/core/tools';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { z } from 'zod';
 
 /** 那顆 `echo` 拋出來的訊息。 */
 export const TOOL_THROW_MESSAGE = 'Service temporarily overloaded';
 
-const throwingEcho: NexusPlugin = {
-  name: 'throwing-echo',
-  apply(registry) {
-    registry.tools.register(
-      tool(
-        async () => {
-          throw new Error(TOOL_THROW_MESSAGE);
-        },
-        {
-          name: ECHO_TOOL_NAME,
-          description: '一律拋錯。',
-          schema: z.object({ message: z.string() }),
-        },
-      ),
-    );
+const throwingEcho: PluginEntry = {
+  plugin: {
+    name: 'throwing-echo',
+    apply(registry) {
+      registry.tools.register(
+        tool(
+          async () => {
+            throw new Error(TOOL_THROW_MESSAGE);
+          },
+          {
+            name: ECHO_TOOL_NAME,
+            description: '一律拋錯。',
+            schema: z.object({ message: z.string() }),
+          },
+        ),
+      );
+    },
   },
 };
 
-export default [throwingEcho] satisfies NexusPlugin[];
+export default [throwingEcho] satisfies PluginEntry[];

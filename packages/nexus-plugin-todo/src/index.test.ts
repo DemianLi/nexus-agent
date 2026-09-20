@@ -35,8 +35,8 @@ function mount(allowParallelInProgress: boolean): {
 } {
   const registry = createRegistry();
   const plugin = createTodoPlugin({ allowParallelInProgress });
-  const exit = registry.enter({ id: 'todo#0', name: plugin.name });
-  plugin.apply(registry);
+  const exit = registry.enter({ id: 'todo#0', name: plugin.plugin.name });
+  plugin.plugin.apply(registry, undefined);
   exit();
   const entry = registry.tools.resolve(TODO_TOOL_NAME);
   if (entry === undefined) throw new Error('工具沒註冊上');
@@ -247,8 +247,8 @@ describe('寫進哪一份', () => {
   it('綁著兩份會話時挑不出來，說得出有幾份', async () => {
     const registry = createRegistry();
     const plugin = createTodoPlugin({ allowParallelInProgress: true });
-    const exit = registry.enter({ id: 'todo#0', name: plugin.name });
-    plugin.apply(registry);
+    const exit = registry.enter({ id: 'todo#0', name: plugin.plugin.name });
+    plugin.plugin.apply(registry, undefined);
     exit();
     registry.sessions.bind(new SessionRegistry('a'));
     registry.sessions.bind(new SessionRegistry('b'));
@@ -286,8 +286,8 @@ describe('註冊', () => {
   it('只掛一顆工具，命令與 middleware 一個都不碰', () => {
     const registry = createRegistry();
     const plugin = createTodoPlugin({ allowParallelInProgress: true });
-    const exit = registry.enter({ id: 'todo#0', name: plugin.name });
-    plugin.apply(registry);
+    const exit = registry.enter({ id: 'todo#0', name: plugin.plugin.name });
+    plugin.plugin.apply(registry, undefined);
     exit();
 
     expect([...registry.tools.effective().keys()]).toEqual([TODO_TOOL_NAME]);
@@ -304,8 +304,8 @@ describe('註冊', () => {
   it('刻意不是 rootOnly——subagent 也要有自己的清單', () => {
     const registry = createRegistry();
     const plugin = createTodoPlugin({ allowParallelInProgress: true });
-    const exit = registry.enter({ id: 'todo#0', name: plugin.name });
-    plugin.apply(registry);
+    const exit = registry.enter({ id: 'todo#0', name: plugin.plugin.name });
+    plugin.plugin.apply(registry, undefined);
     exit();
 
     expect(registry.tools.isRootOnly(TODO_TOOL_NAME)).toBe(false);

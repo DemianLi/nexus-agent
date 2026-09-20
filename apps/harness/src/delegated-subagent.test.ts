@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { SUBAGENT_DELEGATION_CONTEXT, TOOL_ERROR_PREFIX } from '@nexus/core';
 import {
   ASK_USER_QUESTION_TOOL_NAME,
@@ -46,24 +46,28 @@ import type { PumpAgent } from './thread-pump.js';
 
 const WORKER_PROMPT = '你是 worker，只做交代給你的事。';
 
-const WORKER: NexusPlugin = {
-  name: 'worker-host',
-  apply(registry) {
-    registry.subagents.register({
-      name: 'worker',
-      description: '幹活的。',
-      systemPrompt: WORKER_PROMPT,
-    });
+const WORKER: PluginEntry = {
+  plugin: {
+    name: 'worker-host',
+    apply(registry) {
+      registry.subagents.register({
+        name: 'worker',
+        description: '幹活的。',
+        systemPrompt: WORKER_PROMPT,
+      });
+    },
   },
 };
 
 /** 什麼都不做的工具：讓子代理多叫一次模型，驗「每次」而不是「第一次」。 */
-const NOOP: NexusPlugin = {
-  name: 'noop',
-  apply(registry) {
-    registry.tools.register(
-      tool(() => '好', { name: 'noop', description: '什麼都不做。', schema: z.object({}) }),
-    );
+const NOOP: PluginEntry = {
+  plugin: {
+    name: 'noop',
+    apply(registry) {
+      registry.tools.register(
+        tool(() => '好', { name: 'noop', description: '什麼都不做。', schema: z.object({}) }),
+      );
+    },
   },
 };
 
@@ -91,7 +95,7 @@ async function until(predicate: () => boolean, ms = 5000): Promise<void> {
 }
 
 /** 真的組裝跑一輪到收尾——serve 那條路的形狀。 */
-async function runOnce(turns: readonly ScriptedTurn[], plugins: readonly NexusPlugin[]) {
+async function runOnce(turns: readonly ScriptedTurn[], plugins: readonly PluginEntry[]) {
   const root = await mkdtemp(join(tmpdir(), 'nexus-delegated-'));
   const model = new ScriptedChatModel({ turns });
   const built = await createNexusAgent({

@@ -58,7 +58,7 @@
  * @module
  */
 
-import type { NexusPlugin, SessionLog } from '@nexus/core';
+import type { NexusPlugin, PluginEntry, SessionLog } from '@nexus/core';
 
 import {
   executeGoalCommand,
@@ -175,6 +175,10 @@ export interface GoalPluginOptions extends GoalServiceOptions, GoalToolPolicy {}
  * 就是答案（同 `@nexus/plugin-plan-mode` 的 cell）。這兩個方法留著是**診斷用的**，
  * 沒有 production 消費者。
  */
+export interface GoalPluginEntry extends PluginEntry {
+  readonly plugin: GoalPlugin;
+}
+
 export interface GoalPlugin extends NexusPlugin {
   /**
    * 某一份日誌上的服務。
@@ -210,82 +214,85 @@ export interface GoalPlugin extends NexusPlugin {
  *
  * @param options - 預設輪次上限、時鐘、id 工廠與 block 門檻；省略即真的時鐘與
  *   `randomUUID`。
- * @returns 這一次掛載。
+ * @returns 這一次掛載的條目。**控制面（{@link GoalPlugin.serviceFor}）在 `entry.plugin` 上**——
+ *   goal 的設定裡有活的協作者與測試縫，搬不成資料，留給 #459。
  * @throws {@link GoalError} `defaultMaxGoalRounds` 不是正的安全整數——**在這裡就拋**，
  *   不拖到接線期，見 {@link assertGoalServiceOptions}。
  * @throws `blockedAfterConsecutiveRounds` 不是正的安全整數（`TypeError`）。
  */
-export function createGoalPlugin(options: GoalPluginOptions = {}): GoalPlugin {
+export function createGoalPlugin(options: GoalPluginOptions = {}): GoalPluginEntry {
   assertGoalServiceOptions(options);
   // 同一條理由（設定錯誤要炸在設定的地方），只是這一格歸工具不歸域。
   resolveGoalToolPolicy(options);
   // 插入序的 Map：`attached()` 要回得出「先接的在前」，而 Set／物件都給不了那個保證。
   const services = new Map<SessionLog, GoalService>();
   return {
-    name: 'goal',
-    apply(registry) {
-      // **這一格活在 `apply` 裡，不在 `createGoalPlugin` 裡**，同 `@nexus/plugin-plan-mode`
-      // 的 cell：`load.ts` 一次組裝呼叫一次 `apply`，所以放這裡就是一組裝一格。放進工廠
-      // 閉包的話，同一個 plugin 物件被兩次組裝共用時兩邊會串台——`serve.ts` 每個 thread
-      // 組裝一次，串台就是一個 thread 的 `/goal pause` 暫停到另一個 thread 的目標。
-      //
-      // 它是陣列不是單一格，因為「剛好一份」是一個**假設**：`attachSession` 是組裝點
-      // 自己呼叫的一步，沒有東西攔得住它被呼叫兩次。多了或少了都由命令當場說出來，
-      // 見 `command.ts` 的 `goalAmbiguousMessage`。
-      const attachedHere: GoalService[] = [];
-      // **工具問的是「這次呼叫的那份日誌」，命令問的是「這次組裝的那一份」**，所以除了
-      // 上面那個陣列還要一張依日誌查的表。兩者同生同滅，在同一個 `join` 裡進出。
-      const servicesHere = new Map<SessionLog, GoalService>();
-      registry.sessions.join((subject) => {
-        // **只管 root，subagent 那些一份都不接。**
+    plugin: {
+      name: 'goal',
+      apply(registry) {
+        // **這一格活在 `apply` 裡，不在 `createGoalPlugin` 裡**，同 `@nexus/plugin-plan-mode`
+        // 的 cell：`load.ts` 一次組裝呼叫一次 `apply`，所以放這裡就是一組裝一格。放進工廠
+        // 閉包的話，同一個 plugin 物件被兩次組裝共用時兩邊會串台——`serve.ts` 每個 thread
+        // 組裝一次，串台就是一個 thread 的 `/goal pause` 暫停到另一個 thread 的目標。
         //
-        // [#137](https://github.com/DemianLi/nexus-agent/issues/137) 之後 subagent 有自己
-        // 的會話日誌，而參與者是**每一份會話各裝一次**的。不看這一格的話，每一次 spawn
-        // 都會多長出一個 `GoalService`，`/goal` 於是從第二次委派開始一律回
-        // `goalAmbiguousMessage`——一個沒有人動過 `/goal` 卻壞掉的命令。
-        //
-        // 而「只管 root」不是為了繞過那件事，**它就是 dsh 對 goal 的政策**：`tool-goal`
-        // 的 `hasDirectHumanInput` 第一道是 `ctx.agents.roots().includes(execution.agent)`
-        // （`packages/goal/tool-goal/src/authority.ts`）。目標是**人**交代的，subagent
-        // 沒有人可以交代。同一條政策的另一半是
-        // [#136](https://github.com/DemianLi/nexus-agent/pull/136) 的 `rootOnly`。
-        if (subject.address.kind !== 'root') return;
-        const service = new GoalService(subject, options);
-        services.set(subject.log, service);
-        servicesHere.set(subject.log, service);
-        attachedHere.push(service);
-        return () => {
-          services.delete(subject.log);
-          servicesHere.delete(subject.log);
-          const at = attachedHere.indexOf(service);
-          if (at >= 0) attachedHere.splice(at, 1);
-        };
-      });
-      // **三顆工具一律 `rootOnly`。** `fold.ts` 會把每個 subagent 那一份裡的同名項換成
-      // 拒絕樁，而**那正是 dsh 對 `tool-goal` 的政策本身**（`authority.ts` 的
-      // `ctx.agents.roots().includes(execution.agent)`），不是我們的收窄。目標是人交代
-      // 的，subagent 沒有人可以交代。
-      for (const goalTool of createGoalTools(
-        {
-          forCall: (config) => registry.sessions.forCall(config),
-          serviceFor: (log) => servicesHere.get(log),
-        },
-        options,
-      )) {
-        // 輸出 schema 隨註冊帶，同 dsh `defineTool` 的 `output`（#252）。
-        registry.tools.register(goalTool, {
-          rootOnly: true,
-          outputSchema: GOAL_TOOL_OUTPUT_SCHEMA,
+        // 它是陣列不是單一格，因為「剛好一份」是一個**假設**：`attachSession` 是組裝點
+        // 自己呼叫的一步，沒有東西攔得住它被呼叫兩次。多了或少了都由命令當場說出來，
+        // 見 `command.ts` 的 `goalAmbiguousMessage`。
+        const attachedHere: GoalService[] = [];
+        // **工具問的是「這次呼叫的那份日誌」，命令問的是「這次組裝的那一份」**，所以除了
+        // 上面那個陣列還要一張依日誌查的表。兩者同生同滅，在同一個 `join` 裡進出。
+        const servicesHere = new Map<SessionLog, GoalService>();
+        registry.sessions.join((subject) => {
+          // **只管 root，subagent 那些一份都不接。**
+          //
+          // [#137](https://github.com/DemianLi/nexus-agent/issues/137) 之後 subagent 有自己
+          // 的會話日誌，而參與者是**每一份會話各裝一次**的。不看這一格的話，每一次 spawn
+          // 都會多長出一個 `GoalService`，`/goal` 於是從第二次委派開始一律回
+          // `goalAmbiguousMessage`——一個沒有人動過 `/goal` 卻壞掉的命令。
+          //
+          // 而「只管 root」不是為了繞過那件事，**它就是 dsh 對 goal 的政策**：`tool-goal`
+          // 的 `hasDirectHumanInput` 第一道是 `ctx.agents.roots().includes(execution.agent)`
+          // （`packages/goal/tool-goal/src/authority.ts`）。目標是**人**交代的，subagent
+          // 沒有人可以交代。同一條政策的另一半是
+          // [#136](https://github.com/DemianLi/nexus-agent/pull/136) 的 `rootOnly`。
+          if (subject.address.kind !== 'root') return;
+          const service = new GoalService(subject, options);
+          services.set(subject.log, service);
+          servicesHere.set(subject.log, service);
+          attachedHere.push(service);
+          return () => {
+            services.delete(subject.log);
+            servicesHere.delete(subject.log);
+            const at = attachedHere.indexOf(service);
+            if (at >= 0) attachedHere.splice(at, 1);
+          };
         });
-      }
-      registry.commands.register({
-        name: GOAL_COMMAND_NAME,
-        description: GOAL_COMMAND_DESCRIPTION,
-        input: { hint: GOAL_COMMAND_HINT },
-        handler: ({ rawInput }) => executeGoalCommand(attachedHere, rawInput),
-      });
+        // **三顆工具一律 `rootOnly`。** `fold.ts` 會把每個 subagent 那一份裡的同名項換成
+        // 拒絕樁，而**那正是 dsh 對 `tool-goal` 的政策本身**（`authority.ts` 的
+        // `ctx.agents.roots().includes(execution.agent)`），不是我們的收窄。目標是人交代
+        // 的，subagent 沒有人可以交代。
+        for (const goalTool of createGoalTools(
+          {
+            forCall: (config) => registry.sessions.forCall(config),
+            serviceFor: (log) => servicesHere.get(log),
+          },
+          options,
+        )) {
+          // 輸出 schema 隨註冊帶，同 dsh `defineTool` 的 `output`（#252）。
+          registry.tools.register(goalTool, {
+            rootOnly: true,
+            outputSchema: GOAL_TOOL_OUTPUT_SCHEMA,
+          });
+        }
+        registry.commands.register({
+          name: GOAL_COMMAND_NAME,
+          description: GOAL_COMMAND_DESCRIPTION,
+          input: { hint: GOAL_COMMAND_HINT },
+          handler: ({ rawInput }) => executeGoalCommand(attachedHere, rawInput),
+        });
+      },
+      serviceFor: (log) => services.get(log),
+      attached: () => [...services.values()],
     },
-    serviceFor: (log) => services.get(log),
-    attached: () => [...services.values()],
   };
 }

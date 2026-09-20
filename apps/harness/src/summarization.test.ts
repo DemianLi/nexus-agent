@@ -27,7 +27,7 @@ import {
   resolveSummarizationSettings,
   TOOL_RESULT_PRUNE_MARKER,
 } from '@nexus/core';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { countTokensApproximately, tool } from 'langchain';
 import { z } from 'zod';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
@@ -83,17 +83,19 @@ function middlewareNames(agent: unknown): string[] {
  * `backend` 收成參數而不是寫死，是因為它**是獨立的一格**：摘要器寫歷史用的 backend 不必是
  * agent 那個。最後一組測試就靠這一點。
  */
-function tunedSummarization(backend: ContainedFilesystemBackend): NexusPlugin {
+function tunedSummarization(backend: ContainedFilesystemBackend): PluginEntry {
   return {
-    name: 'tuned-summarization',
-    apply: (registry) =>
-      void registry.middleware.use(
-        createSummarizationMiddleware({
-          backend,
-          trigger: { type: 'messages', value: 3 },
-          keep: { type: 'messages', value: 1 },
-        }) as never,
-      ),
+    plugin: {
+      name: 'tuned-summarization',
+      apply: (registry) =>
+        void registry.middleware.use(
+          createSummarizationMiddleware({
+            backend,
+            trigger: { type: 'messages', value: 3 },
+            keep: { type: 'messages', value: 1 },
+          }) as never,
+        ),
+    },
   };
 }
 
@@ -123,17 +125,19 @@ async function historyFiles(root: string): Promise<string[]> {
 const MARKER = '<這是我們自己的摘要器>';
 
 /** 一個只在 system prompt 留記號的假摘要器，名字剛好撞上內建那個。 */
-function markerSummarization(): NexusPlugin {
+function markerSummarization(): PluginEntry {
   return {
-    name: 'marker-summarization',
-    apply: (registry) =>
-      void registry.middleware.use({
-        name: 'SummarizationMiddleware',
-        wrapModelCall: (
-          request: { systemMessage: { concat: (text: string) => unknown } },
-          handler: (next: unknown) => unknown,
-        ) => handler({ ...request, systemMessage: request.systemMessage.concat(`\n${MARKER}`) }),
-      } as never),
+    plugin: {
+      name: 'marker-summarization',
+      apply: (registry) =>
+        void registry.middleware.use({
+          name: 'SummarizationMiddleware',
+          wrapModelCall: (
+            request: { systemMessage: { concat: (text: string) => unknown } },
+            handler: (next: unknown) => unknown,
+          ) => handler({ ...request, systemMessage: request.systemMessage.concat(`\n${MARKER}`) }),
+        } as never),
+    },
   };
 }
 
@@ -229,10 +233,12 @@ describe('同名取代是唯一的縫', () => {
    */
   it('註冊點只蓋到 root，記號不會外溢到 subagent 那輪', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-sum-'));
-    const crew: NexusPlugin = {
-      name: 'crew',
-      apply: (registry) =>
-        void registry.subagents.register({ name: 'writer', description: '負責寫東西。' }),
+    const crew: PluginEntry = {
+      plugin: {
+        name: 'crew',
+        apply: (registry) =>
+          void registry.subagents.register({ name: 'writer', description: '負責寫東西。' }),
+      },
     };
     // 三輪：root 叫 subagent → subagent 回話 → root 收尾。
     const model = new ScriptedChatModel({
@@ -427,10 +433,12 @@ describe('/conversation_history 的另一個寫入者', () => {
  * 指到別處（見下一組）。
  */
 describe('deny 規則擋得住工具，擋不住 offload', () => {
-  const denyHistory: NexusPlugin = {
-    name: 'deny-history',
-    apply: (registry) =>
-      void registry.permissions.deny(['/conversation_history*', '/conversation_history/**']),
+  const denyHistory: PluginEntry = {
+    plugin: {
+      name: 'deny-history',
+      apply: (registry) =>
+        void registry.permissions.deny(['/conversation_history*', '/conversation_history/**']),
+    },
   };
 
   it('經工具寫同一個路徑：擋住了，磁碟上零檔案', async () => {
@@ -582,12 +590,14 @@ describe('fraction 型別的門檻在我們的模型上是壞的', () => {
     const model = new ScriptedChatModel({
       turns: Array.from({ length: 20 }, (_, index) => ({ content: `第 ${index + 1} 次回話。` })),
     });
-    const plugin: NexusPlugin = {
-      name: 'fraction-probe',
-      apply: (registry) =>
-        void registry.middleware.use(
-          createSummarizationMiddleware({ backend, ...options }) as never,
-        ),
+    const plugin: PluginEntry = {
+      plugin: {
+        name: 'fraction-probe',
+        apply: (registry) =>
+          void registry.middleware.use(
+            createSummarizationMiddleware({ backend, ...options }) as never,
+          ),
+      },
     };
 
     const { agent, dispose } = await createNexusAgent({
@@ -659,24 +669,29 @@ describe('fraction 型別的門檻在我們的模型上是壞的', () => {
  */
 describe('subagent 自帶的 middleware 到得了那個 subagent', () => {
   it('記號只出現在 subagent 那一輪，root 的兩輪都沒有', async () => {
-    const crew: NexusPlugin = {
-      name: 'crew',
-      apply: (registry) =>
-        void registry.subagents.register({
-          name: 'writer',
-          description: '負責寫東西。',
-          // 名字撞上內建那個，但塞的是 subagent 的 spec 而不是 root 的註冊點。
-          middleware: [
-            {
-              name: 'SummarizationMiddleware',
-              wrapModelCall: (
-                request: { systemMessage: { concat: (text: string) => unknown } },
-                handler: (next: unknown) => unknown,
-              ) =>
-                handler({ ...request, systemMessage: request.systemMessage.concat(`\n${MARKER}`) }),
-            },
-          ],
-        } as never),
+    const crew: PluginEntry = {
+      plugin: {
+        name: 'crew',
+        apply: (registry) =>
+          void registry.subagents.register({
+            name: 'writer',
+            description: '負責寫東西。',
+            // 名字撞上內建那個，但塞的是 subagent 的 spec 而不是 root 的註冊點。
+            middleware: [
+              {
+                name: 'SummarizationMiddleware',
+                wrapModelCall: (
+                  request: { systemMessage: { concat: (text: string) => unknown } },
+                  handler: (next: unknown) => unknown,
+                ) =>
+                  handler({
+                    ...request,
+                    systemMessage: request.systemMessage.concat(`\n${MARKER}`),
+                  }),
+              },
+            ],
+          } as never),
+      },
     };
     // 三輪：root 叫 subagent → subagent 回話 → root 收尾。
     const model = new ScriptedChatModel({
@@ -901,10 +916,12 @@ describe('我們配的那份打底到每個 subagent', () => {
     });
   }
 
-  const crew: NexusPlugin = {
-    name: 'crew',
-    apply: (registry) =>
-      void registry.subagents.register({ name: 'writer', description: '負責寫東西。' }),
+  const crew: PluginEntry = {
+    plugin: {
+      name: 'crew',
+      apply: (registry) =>
+        void registry.subagents.register({ name: 'writer', description: '負責寫東西。' }),
+    },
   };
 
   it('自訂前綴底下有 root 與 subagent 各一份，基座那個前綴是空的', async () => {
@@ -945,23 +962,28 @@ describe('我們配的那份打底到每個 subagent', () => {
    */
   it('subagent 自帶一個同名的，贏的是它', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-sum-'));
-    const withOwn: NexusPlugin = {
-      name: 'crew-with-own',
-      apply: (registry) =>
-        void registry.subagents.register({
-          name: 'writer',
-          description: '負責寫東西。',
-          middleware: [
-            {
-              name: 'SummarizationMiddleware',
-              wrapModelCall: (
-                request: { systemMessage: { concat: (text: string) => unknown } },
-                handler: (next: unknown) => unknown,
-              ) =>
-                handler({ ...request, systemMessage: request.systemMessage.concat(`\n${MARKER}`) }),
-            },
-          ] as never,
-        }),
+    const withOwn: PluginEntry = {
+      plugin: {
+        name: 'crew-with-own',
+        apply: (registry) =>
+          void registry.subagents.register({
+            name: 'writer',
+            description: '負責寫東西。',
+            middleware: [
+              {
+                name: 'SummarizationMiddleware',
+                wrapModelCall: (
+                  request: { systemMessage: { concat: (text: string) => unknown } },
+                  handler: (next: unknown) => unknown,
+                ) =>
+                  handler({
+                    ...request,
+                    systemMessage: request.systemMessage.concat(`\n${MARKER}`),
+                  }),
+              },
+            ] as never,
+          }),
+      },
     };
     // 三輪：root 叫 subagent → subagent 回話 → root 收尾。
     const model = new ScriptedChatModel({
@@ -1020,13 +1042,15 @@ describe('關掉摘要是真的關掉', () => {
   const CHUNK = 'x'.repeat(79_000);
   const CALLS = 10;
 
-  const crew: NexusPlugin = {
-    name: 'crew',
-    apply: (registry) => {
-      registry.subagents.register({ name: 'writer', description: '負責寫東西。' });
-      registry.tools.register(
-        tool(() => CHUNK, { name: 'chunk', description: '回一大段。', schema: z.object({}) }),
-      );
+  const crew: PluginEntry = {
+    plugin: {
+      name: 'crew',
+      apply: (registry) => {
+        registry.subagents.register({ name: 'writer', description: '負責寫東西。' });
+        registry.tools.register(
+          tool(() => CHUNK, { name: 'chunk', description: '回一大段。', schema: z.object({}) }),
+        );
+      },
     },
   };
 
@@ -1261,18 +1285,20 @@ describe('壓縮前先剪掉過大的工具結果', () => {
   const BULK = 'X'.repeat(40_000);
 
   /** 一個參數是空的、結果很大的工具。體積全在結果上，剪刀才有事做。 */
-  function bulkPlugin(payload: string, subagent = false): NexusPlugin {
+  function bulkPlugin(payload: string, subagent = false): PluginEntry {
     return {
-      name: 'bulk',
-      apply: (registry) => {
-        registry.tools.register(
-          tool(() => payload, {
-            name: 'bulk',
-            description: '回一大坨東西',
-            schema: z.object({}),
-          }),
-        );
-        if (subagent) registry.subagents.register({ name: 'worker', description: '幹活的。' });
+      plugin: {
+        name: 'bulk',
+        apply: (registry) => {
+          registry.tools.register(
+            tool(() => payload, {
+              name: 'bulk',
+              description: '回一大坨東西',
+              schema: z.object({}),
+            }),
+          );
+          if (subagent) registry.subagents.register({ name: 'worker', description: '幹活的。' });
+        },
       },
     };
   }
@@ -1429,21 +1455,23 @@ describe('壓縮前先剪掉過大的工具結果', () => {
     const backend = new ContainedFilesystemBackend({
       rootDir: await mkdtemp(join(tmpdir(), 'nexus-bare-')),
     });
-    const bare: NexusPlugin = {
-      name: 'bare-summarization',
-      apply: (registry) =>
-        void registry.middleware.use(
-          createSummarizationMiddleware({
-            backend,
-            trigger: [...settings.trigger],
-            keep: { ...settings.keep },
-            historyPathPrefix: settings.historyPathPrefix,
-            truncateArgsSettings: {
-              trigger: { ...settings.truncateArgs.trigger },
-              keep: { ...settings.truncateArgs.keep },
-            },
-          }) as never,
-        ),
+    const bare: PluginEntry = {
+      plugin: {
+        name: 'bare-summarization',
+        apply: (registry) =>
+          void registry.middleware.use(
+            createSummarizationMiddleware({
+              backend,
+              trigger: [...settings.trigger],
+              keep: { ...settings.keep },
+              historyPathPrefix: settings.historyPathPrefix,
+              truncateArgsSettings: {
+                trigger: { ...settings.truncateArgs.trigger },
+                keep: { ...settings.truncateArgs.keep },
+              },
+            }) as never,
+          ),
+      },
     };
     const model = bulkTurns(1, 3);
     const { agent, dispose } = await createNexusAgent({

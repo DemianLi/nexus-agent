@@ -223,9 +223,10 @@ describe('自主收尾與另一顆工具同批時，收尾指示插在兩顆結�
     // 同 `wire-handler.ts`：port 要日誌，而日誌由 pump 建，而 pump 的建構參數是 port。
     const late: { log?: SessionLog } = {};
     const port: GoalDriverPort = {
-      goal: () => plugin.serviceFor(late.log as SessionLog)?.get(),
-      block: (ref, reason) => void plugin.serviceFor(late.log as SessionLog)?.block(ref, reason),
-      disarm: () => void plugin.serviceFor(late.log as SessionLog)?.disarm(),
+      goal: () => plugin.plugin.serviceFor(late.log as SessionLog)?.get(),
+      block: (ref, reason) =>
+        void plugin.plugin.serviceFor(late.log as SessionLog)?.block(ref, reason),
+      disarm: () => void plugin.plugin.serviceFor(late.log as SessionLog)?.disarm(),
       flush: () => Promise.resolve(),
       warn: () => {},
     };

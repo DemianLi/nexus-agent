@@ -91,7 +91,7 @@ async function mount(
     for (const [name, content] of Object.entries(files)) await writeFile(join(root, name), content);
   }
   const warnings: string[] = [];
-  const { plugin, service } = createWorkspaceChanges({
+  const { entry: wcEntry, service } = createWorkspaceChanges({
     root,
     tempRoot,
     limits,
@@ -100,8 +100,8 @@ async function mount(
     ...(options.git !== undefined && { git: options.git }),
   });
   const registry = createRegistry();
-  const exit = registry.enter({ id: 'workspace-changes#0', name: plugin.name });
-  void plugin.apply(registry);
+  const exit = registry.enter({ id: 'workspace-changes#0', name: wcEntry.plugin.name });
+  void wcEntry.plugin.apply(registry, undefined);
   exit();
   const sessions = new SessionRegistry('wc');
   registry.sessions.bind(sessions);
@@ -354,10 +354,10 @@ describe('輪的邊界', () => {
   it('續接：接上時已經在的舊輪重播過去，不會補記、也不建暫存目錄', async () => {
     const root = await directory('nexus-wc-seed-');
     const tempRoot = await directory('nexus-wc-temp-');
-    const { plugin } = createWorkspaceChanges({ root, tempRoot });
+    const { entry: wcEntry } = createWorkspaceChanges({ root, tempRoot });
     const registry = createRegistry();
-    const exit = registry.enter({ id: 'workspace-changes#0', name: plugin.name });
-    void plugin.apply(registry);
+    const exit = registry.enter({ id: 'workspace-changes#0', name: wcEntry.plugin.name });
+    void wcEntry.plugin.apply(registry, undefined);
     exit();
     const sessions = new SessionRegistry('seeded');
     const log = sessions.root;
@@ -436,12 +436,12 @@ describe('上限與內容', () => {
   });
 
   it('一份只能掛一次組裝', () => {
-    const { plugin } = createWorkspaceChanges({ root: tmpdir() });
+    const { entry: wcEntry } = createWorkspaceChanges({ root: tmpdir() });
     const apply = () => {
       const registry = createRegistry();
-      const exit = registry.enter({ id: 'workspace-changes#0', name: plugin.name });
+      const exit = registry.enter({ id: 'workspace-changes#0', name: wcEntry.plugin.name });
       try {
-        void plugin.apply(registry);
+        void wcEntry.plugin.apply(registry, undefined);
       } finally {
         exit();
       }
@@ -773,10 +773,14 @@ describe('git 快照（#461）', () => {
   it('接上時重播的舊輪不跑 git；serve 重開後在核准點接回來，resume 那一刻才拍基準', async () => {
     const root = await repository({ 'a.md': 'a\n', 'b.md': 'b\n' });
     const tempRoot = await directory('nexus-wc-temp-');
-    const { plugin, service } = createWorkspaceChanges({ root, tempRoot, info: () => undefined });
+    const { entry: wcEntry, service } = createWorkspaceChanges({
+      root,
+      tempRoot,
+      info: () => undefined,
+    });
     const registry = createRegistry();
-    const exit = registry.enter({ id: 'workspace-changes#0', name: plugin.name });
-    void plugin.apply(registry);
+    const exit = registry.enter({ id: 'workspace-changes#0', name: wcEntry.plugin.name });
+    void wcEntry.plugin.apply(registry, undefined);
     exit();
     const sessions = new SessionRegistry('seeded');
     registry.sessions.bind(sessions);

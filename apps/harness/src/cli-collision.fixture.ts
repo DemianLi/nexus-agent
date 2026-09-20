@@ -9,7 +9,7 @@
  * 兩個都叫同一個名字就分不出來了。
  */
 
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { fakeTool } from './fixtures.js';
 
 /** 兩個 plugin 都想註冊的工具名。 */
@@ -21,12 +21,14 @@ export const FIRST_PLUGIN_NAME = 'alpha-search';
 /** 撞上去的那個。 */
 export const SECOND_PLUGIN_NAME = 'beta-search';
 
-const collidingPlugin = (name: string): NexusPlugin => ({
-  name,
-  apply: (registry) => void registry.tools.register(fakeTool(COLLIDING_TOOL_NAME)),
+const collidingPlugin = (name: string): PluginEntry => ({
+  plugin: {
+    name,
+    apply: (registry) => void registry.tools.register(fakeTool(COLLIDING_TOOL_NAME)),
+  },
 });
 
 export default [
   collidingPlugin(FIRST_PLUGIN_NAME),
   collidingPlugin(SECOND_PLUGIN_NAME),
-] satisfies NexusPlugin[];
+] satisfies PluginEntry[];

@@ -17,7 +17,7 @@ import { mkdtemp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage, ToolMessage } from '@langchain/core/messages';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { MemorySaver } from '@langchain/langgraph';
 import type { AnyBackendProtocol } from 'deepagents';
 import { tool } from 'langchain';
@@ -41,13 +41,15 @@ const SMALL = `${MARK}${'X'.repeat(100)}`;
 /** 基座搬完之後告訴模型去讀的那個檔名。`call_1_0` 是腳本模型第一輪那次呼叫的 id。 */
 const STASHED = `${TOOL_RESULT_STASH_PREFIX}/call_1_0.txt`;
 
-function bulkPlugin(payload: string): NexusPlugin {
+function bulkPlugin(payload: string): PluginEntry {
   return {
-    name: 'bulk',
-    apply: (registry) => {
-      registry.tools.register(
-        tool(() => payload, { name: 'bulk', description: '拿一坨東西。', schema: z.object({}) }),
-      );
+    plugin: {
+      name: 'bulk',
+      apply: (registry) => {
+        registry.tools.register(
+          tool(() => payload, { name: 'bulk', description: '拿一坨東西。', schema: z.object({}) }),
+        );
+      },
     },
   };
 }
@@ -70,7 +72,7 @@ function resultText(prompt: readonly BaseMessage[] | undefined): string {
 async function fetchThenRead(
   payload: string,
   backend?: AnyBackendProtocol,
-  extra: readonly NexusPlugin[] = [],
+  extra: readonly PluginEntry[] = [],
 ): Promise<{ first: string; readBack: string }> {
   const model = new ScriptedChatModel({
     turns: [

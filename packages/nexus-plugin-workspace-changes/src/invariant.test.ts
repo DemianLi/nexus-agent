@@ -73,8 +73,8 @@ describe('workspace/changes 的配套入口', () => {
   it('配套入口認領自己的包名', () => {
     const registry = createRegistry();
     const plugin = createWorkspaceChangesInvariantPlugin();
-    const exit = registry.enter({ id: 'workspace-changes-invariant#0', name: plugin.name });
-    void plugin.apply(registry);
+    const exit = registry.enter({ id: 'workspace-changes-invariant#0', name: plugin.plugin.name });
+    void plugin.plugin.apply(registry, undefined);
     exit();
     expect(registry.invariants.companions().map((entry) => entry.packageName)).toEqual([
       WORKSPACE_CHANGES_INVARIANT_PACKAGE,

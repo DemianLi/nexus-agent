@@ -29,7 +29,7 @@ import { SUMMARIZATION_MIDDLEWARE_NAME } from './summarization.js';
 import type { FoldOptions } from './fold.js';
 import { loadPlugins } from './load.js';
 import { fakeBackend, fakeMiddleware, fakePlugin, fakeSubAgent, fakeTool } from './fixtures.js';
-import type { NexusPlugin } from './plugin.js';
+import type { PluginEntry } from './plugin.js';
 import { toolErrorOf } from './tool-events.js';
 
 /**
@@ -59,7 +59,7 @@ function stubAnswer(result: unknown): { text: string; status: unknown; error: un
  * 測試跑得起來，而是為了讓**順序斷言只列它真的在量的那幾根**——不然這個檔裡每一條
  * middleware 順序測試都要多背一個跟它無關的名字。提醒那一組自己明著打開。
  */
-async function fold(plugins: NexusPlugin[], options: FoldOptions = {}) {
+async function fold(plugins: PluginEntry[], options: FoldOptions = {}) {
   const { registry } = await loadPlugins(plugins);
   return foldRegistry(registry, {
     summarization: false,
