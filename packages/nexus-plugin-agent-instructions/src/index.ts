@@ -90,7 +90,7 @@
 import { createHash } from 'node:crypto';
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import type { PluginEntry, PluginRegistry, SessionLookup } from '@nexus/core';
+import type { NexusPlugin, PluginEntry, PluginRegistry, SessionLookup } from '@nexus/core';
 import { effectiveMessages, toLoggedMessage } from '@nexus/core';
 import { adaptBackendProtocol } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
@@ -137,10 +137,26 @@ export const INSTRUCTION_FILE_CANDIDATES = [
  */
 export const DEFAULT_MAX_BYTES = 65536;
 
-export interface AgentInstructionsPluginOptions {
-  /** 一則基線的 UTF-8 位元組上限。省略即 {@link DEFAULT_MAX_BYTES}。 */
-  readonly maxBytes?: number;
-}
+/**
+ * 這個 plugin 的設定。
+ *
+ * **dsh 拿非正數當「關掉」，我們這側不留那條路**：要關就別把這個 plugin 放進清單，而一個
+ * 看起來像設定值的 `0` 靜靜關掉整個功能是那種沒有人會發現的失敗。這條是登記過的偏離。
+ */
+export const agentInstructionsConfigSchema = z.strictObject({
+  /** 一則基線的 UTF-8 位元組上限。正的有限數，省略即 {@link DEFAULT_MAX_BYTES}。 */
+  maxBytes: z
+    .number()
+    .positive('上限要是正的有限數')
+    .finite('上限要是正的有限數')
+    .default(DEFAULT_MAX_BYTES),
+});
+
+/** 驗過的設定。 */
+export type AgentInstructionsConfig = z.infer<typeof agentInstructionsConfigSchema>;
+
+/** 工廠收的東西：schema 的輸入面。 */
+export type AgentInstructionsPluginOptions = z.input<typeof agentInstructionsConfigSchema>;
 
 /** 這一則訊息是基線嗎。 */
 export function isAgentInstructionsMessage(message: BaseMessage): boolean {
@@ -257,29 +273,29 @@ function record(
  *
  * @param options - 位元組上限。
  * @returns 可以放進組裝點清單的 plugin。
- * @throws `maxBytes` 不是正的有限數。dsh 拿非正數當「關掉」，我們這側不留那條路：**要關就別把這個
- *   plugin 放進清單**，而一個看起來像設定值的 `0` 靜靜關掉整個功能是那種沒有人會發現的失敗。
+ */
+export const agentInstructionsPlugin: NexusPlugin<AgentInstructionsConfig> = {
+  name: 'agent-instructions',
+  Config: agentInstructionsConfigSchema,
+  apply(registry: PluginRegistry, config: AgentInstructionsConfig): void {
+    const { maxBytes } = config;
+    registry.capabilities.provide(AGENT_INSTRUCTIONS_CAPABILITY);
+    registry.middleware.useWithBackend((backend) =>
+      createAgentInstructionsMiddleware(backend, maxBytes, registry.sessions),
+    );
+  },
+};
+
+export default agentInstructionsPlugin;
+
+/**
+ * 建一個條目。**薄薄一層**：設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
+ *
+ * @param options - 設定，形狀見 {@link agentInstructionsConfigSchema}。
+ * @returns 可以放進組裝點清單的條目。
  */
 export function createAgentInstructionsPlugin(
   options: AgentInstructionsPluginOptions = {},
 ): PluginEntry {
-  const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
-  if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
-    throw new Error(
-      `createAgentInstructionsPlugin({ maxBytes: ${String(options.maxBytes)} })：` +
-        '上限要是正的有限數。真的不要工作區指令就別把這個 plugin 放進清單。',
-    );
-  }
-
-  return {
-    plugin: {
-      name: 'agent-instructions',
-      apply(registry: PluginRegistry): void {
-        registry.capabilities.provide(AGENT_INSTRUCTIONS_CAPABILITY);
-        registry.middleware.useWithBackend((backend) =>
-          createAgentInstructionsMiddleware(backend, maxBytes, registry.sessions),
-        );
-      },
-    },
-  };
+  return { plugin: agentInstructionsPlugin, config: options };
 }

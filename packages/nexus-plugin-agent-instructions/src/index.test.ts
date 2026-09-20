@@ -72,10 +72,15 @@ describe('createAgentInstructionsPlugin', () => {
     expect(entries[0]?.value.middleware).toBeUndefined();
   });
 
-  it('上限不是正的有限數就當場拋，不會靜默變成「沒有工作區指令」', () => {
-    expect(() => createAgentInstructionsPlugin({ maxBytes: 0 })).toThrow('正的有限數');
-    expect(() => createAgentInstructionsPlugin({ maxBytes: -1 })).toThrow('正的有限數');
-    expect(() => createAgentInstructionsPlugin({ maxBytes: Number.NaN })).toThrow('正的有限數');
+  // **翻面過的絆索**（#453）：原本是工廠當場拋，現在驗在載入的時候，訊息因此指得出條目。
+  // dsh 拿非正數當「關掉」，我們這側不留那條路——一個看起來像設定值的 `0` 靜靜關掉整個功能
+  // 是那種沒有人會發現的失敗。
+  it('上限不是正的有限數就讓載入失敗，不會靜默變成「沒有工作區指令」', async () => {
+    for (const maxBytes of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const bad = [createAgentInstructionsPlugin({ maxBytes })];
+      await expect(loadPlugins(bad)).rejects.toThrow('agent-instructions#0 (agent-instructions)');
+      await expect(loadPlugins(bad)).rejects.toThrow('maxBytes');
+    }
   });
 });
 

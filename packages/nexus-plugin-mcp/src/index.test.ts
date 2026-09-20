@@ -13,7 +13,13 @@
 import { fileURLToPath } from 'node:url';
 import { loadPlugins } from '@nexus/core';
 import { describe, expect, it, vi } from 'vitest';
-import { createMcpPlugin, MCP_CAPABILITY } from './index.js';
+import {
+  createMcpPlugin,
+  DEFAULT_TOOL_CALL_TIMEOUT_MS,
+  MCP_CAPABILITY,
+  mcpConfigSchema,
+  mcpPlugin,
+} from './index.js';
 import { RELEASE_NOTE } from './fixture-server.js';
 import { publicToolName } from './names.js';
 
@@ -77,14 +83,39 @@ describe('publicToolName', () => {
   });
 });
 
-describe('createMcpPlugin 的設定檢查', () => {
-  it('serverName 不合法時當場報錯，不必等到連線', () => {
-    expect(() => createMcpPlugin({ serverName: 'has space', connection: emptyStdio() })).toThrow(
-      'serverName "has space"',
-    );
-    expect(() => createMcpPlugin({ serverName: '', connection: emptyStdio() })).toThrow(
-      '[A-Za-z0-9_-]',
-    );
+describe('設定的檢查（#453：驗在載入的時候，不在工廠裡）', () => {
+  it('serverName 不合法時載入就失敗，不必等到連線', async () => {
+    // **翻面過的絆索**：原本是 `createMcpPlugin()` 當場拋。工廠現在只是薄薄一層，檢查搬到
+    // schema，所以訊息帶得出是清單裡哪一個條目——那正是從 YAML 載入時唯一指得到的東西。
+    for (const serverName of ['has space', '', 'x'.repeat(33)]) {
+      const bad = [createMcpPlugin({ serverName, connection: emptyStdio() })];
+      await expect(loadPlugins(bad)).rejects.toThrow('mcp#0 (mcp)');
+      await expect(loadPlugins(bad)).rejects.toThrow('[A-Za-z0-9_-]');
+    }
+  });
+
+  it('連線那一層的未知欄位也擋得住，而且路徑指得到那一層', async () => {
+    const typo = [
+      {
+        plugin: mcpPlugin,
+        config: { serverName: 'x', connection: { ...emptyStdio(), commnd: 'npx' } },
+      },
+    ];
+    await expect(loadPlugins(typo)).rejects.toThrow('mcp#0 (mcp)');
+    await expect(loadPlugins(typo)).rejects.toThrow(/connection(\.|:)/);
+  });
+
+  it('判別式聯集：transport 打錯時訊息講的是 transport，不是兩個分支的抱怨', async () => {
+    const bad = [
+      { plugin: mcpPlugin, config: { serverName: 'x', connection: { transport: 'stdout' } } },
+    ];
+    await expect(loadPlugins(bad)).rejects.toThrow(/transport/);
+  });
+
+  it('逾時省略時由 schema 補上預設值', async () => {
+    expect(mcpConfigSchema.parse({ serverName: 'x', connection: emptyStdio() })).toMatchObject({
+      toolCallTimeoutMs: DEFAULT_TOOL_CALL_TIMEOUT_MS,
+    });
   });
 });
 
@@ -166,7 +197,7 @@ describe('接上一台真的 MCP server', () => {
 
 /** 只用來餵設定檢查，不會真的去連。 */
 function emptyStdio() {
-  return { transport: 'stdio', command: process.execPath, args: [] } as const;
+  return { transport: 'stdio' as const, command: process.execPath, args: [] };
 }
 
 /**

@@ -420,6 +420,9 @@ importers:
       '@nexus/core':
         specifier: workspace:*
         version: link:../nexus-core
+      zod:
+        specifier: ^4.3.6
+        version: 4.4.3
     devDependencies:
       '@types/node':
         specifier: ^24.10.0
@@ -501,6 +504,9 @@ importers:
       '@nexus/core':
         specifier: workspace:*
         version: link:../nexus-core
+      zod:
+        specifier: ^4.3.6
+        version: 4.4.3
     devDependencies:
       '@types/node':
         specifier: ^24.10.0
@@ -607,6 +613,9 @@ importers:
       '@nexus/core':
         specifier: workspace:*
         version: link:../nexus-core
+      zod:
+        specifier: ^4.3.6
+        version: 4.4.3
     devDependencies:
       '@types/node':
         specifier: ^24.10.0
@@ -672,6 +681,9 @@ importers:
       '@opentelemetry/sdk-logs':
         specifier: ^0.221.0
         version: 0.221.0(@opentelemetry/api@1.9.1)
+      zod:
+        specifier: ^4.3.6
+        version: 4.4.3
     devDependencies:
       '@types/node':
         specifier: ^24.10.0

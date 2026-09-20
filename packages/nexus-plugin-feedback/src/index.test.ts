@@ -3,6 +3,7 @@ import type { LoggedMessage, SessionEvent } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import {
   createFeedbackPlugin,
+  feedbackPlugin,
   createFeedbackService,
   currentFeedbackItems,
   FEEDBACK_USAGE,
@@ -267,10 +268,52 @@ describe('格式 10 以前以輪記的評分', () => {
 });
 
 describe('設定', () => {
-  it('maxNoteBytes 不是正的安全整數就拒絕', () => {
+  // **服務那一支自己留著執行期檢查**：它是一支獨立的 API（`apps/harness` 有測試直接叫它），
+  // 而 schema 只守 plugin 那條路。兩條路都要擋得住。
+  it('maxNoteBytes 不是正的安全整數就拒絕（服務那一支）', () => {
     for (const maxNoteBytes of [0, -1, 1.5, Number.NaN]) {
       expect(() => createFeedbackService({ maxNoteBytes })).toThrow(TypeError);
     }
+  });
+
+  it('maxNoteBytes 不是正的安全整數就讓載入失敗（#453：驗在載入的時候）', async () => {
+    for (const maxNoteBytes of [0, -1, 1.5, Number.NaN]) {
+      const bad = [createFeedbackPlugin({ maxNoteBytes })];
+      await expect(loadPlugins(bad)).rejects.toThrow('feedback#0 (feedback)');
+      await expect(loadPlugins(bad)).rejects.toThrow('maxNoteBytes');
+    }
+  });
+
+  it('必填：一格都不給也是載入失敗，沒有預設值（照 dsh 的 `required()`）', async () => {
+    await expect(loadPlugins([{ plugin: feedbackPlugin }])).rejects.toThrow('maxNoteBytes');
+  });
+
+  it('未知欄位讓載入失敗（登記的偏離：dsh 放行）', async () => {
+    await expect(
+      loadPlugins([{ plugin: feedbackPlugin, config: { maxNoteBytes: 8, maxNotBytes: 8 } }]),
+    ).rejects.toThrow(/maxNotBytes/);
+  });
+
+  it('**一次組裝一份服務**：同一顆 plugin 掛兩次，兩邊的上限各自算各自的', async () => {
+    // plugin 提到模組層級之後，這一條是「設定真的是每次掛載的」的絆索：服務建在 `apply`
+    // 裡才會有兩份。建在模組層級的話兩次組裝共用同一個上限，而且不會拋。
+    const small = await loadPlugins([createFeedbackPlugin({ maxNoteBytes: 4 })]);
+    const large = await loadPlugins([createFeedbackPlugin({ maxNoteBytes: 4096 })]);
+    const a = small.registry.feedback.service()!.value;
+    const b = large.registry.feedback.service()!.value;
+
+    expect(a).not.toBe(b);
+    const log = new SessionRegistry('限額').root;
+    const note = 'x'.repeat(100);
+    expect(a.put(log, { messageId: '無', note, ifVersion: null })).toMatchObject({
+      ok: false,
+      error: { code: 'note-too-large', maxBytes: 4 },
+    });
+    // 大的那一份走到下一關（目標訊息不存在），代表它沒有被小的那個上限擋下來。
+    expect(b.put(log, { messageId: '無', note, ifVersion: null })).toMatchObject({
+      ok: false,
+      error: { code: 'target-not-found' },
+    });
   });
 });
 

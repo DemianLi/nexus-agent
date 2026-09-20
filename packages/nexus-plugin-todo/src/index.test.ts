@@ -15,6 +15,7 @@ import type { TodoItem } from '@nexus/core';
 
 import {
   createTodoPlugin,
+  todoConfigSchema,
   TODO_EMPTY_CONTENT_MESSAGE,
   TODO_NOT_ATTACHED_MESSAGE,
   TODO_TOOL_NAME,
@@ -36,7 +37,7 @@ function mount(allowParallelInProgress: boolean): {
   const registry = createRegistry();
   const plugin = createTodoPlugin({ allowParallelInProgress });
   const exit = registry.enter({ id: 'todo#0', name: plugin.plugin.name });
-  plugin.plugin.apply(registry, undefined);
+  plugin.plugin.apply(registry, todoConfigSchema.parse(plugin.config));
   exit();
   const entry = registry.tools.resolve(TODO_TOOL_NAME);
   if (entry === undefined) throw new Error('工具沒註冊上');
@@ -248,7 +249,7 @@ describe('寫進哪一份', () => {
     const registry = createRegistry();
     const plugin = createTodoPlugin({ allowParallelInProgress: true });
     const exit = registry.enter({ id: 'todo#0', name: plugin.plugin.name });
-    plugin.plugin.apply(registry, undefined);
+    plugin.plugin.apply(registry, todoConfigSchema.parse(plugin.config));
     exit();
     registry.sessions.bind(new SessionRegistry('a'));
     registry.sessions.bind(new SessionRegistry('b'));
@@ -287,7 +288,7 @@ describe('註冊', () => {
     const registry = createRegistry();
     const plugin = createTodoPlugin({ allowParallelInProgress: true });
     const exit = registry.enter({ id: 'todo#0', name: plugin.plugin.name });
-    plugin.plugin.apply(registry, undefined);
+    plugin.plugin.apply(registry, todoConfigSchema.parse(plugin.config));
     exit();
 
     expect([...registry.tools.effective().keys()]).toEqual([TODO_TOOL_NAME]);
@@ -305,7 +306,7 @@ describe('註冊', () => {
     const registry = createRegistry();
     const plugin = createTodoPlugin({ allowParallelInProgress: true });
     const exit = registry.enter({ id: 'todo#0', name: plugin.plugin.name });
-    plugin.plugin.apply(registry, undefined);
+    plugin.plugin.apply(registry, todoConfigSchema.parse(plugin.config));
     exit();
 
     expect(registry.tools.isRootOnly(TODO_TOOL_NAME)).toBe(false);

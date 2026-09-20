@@ -20,6 +20,7 @@ import {
   DEFAULT_TELEMETRY_MODE,
   OpenTelemetrySessionService,
   createTelemetryOtelPlugin,
+  telemetryOtelPlugin,
 } from './index.js';
 
 /** OTLP/JSON 裡這些斷言碰得到的那幾格。 */
@@ -342,7 +343,39 @@ describe('plugin 這一層', () => {
     await registry.telemetry.service()!.value.shutdown();
   });
 
-  it('設定錯誤在建 plugin 的當下就拋，不會拖到載入或跑起來', () => {
-    expect(() => createTelemetryOtelPlugin({ mode: 'full' })).toThrow('exporter.url 是必填');
+  // **翻面過的絆索**（#453）：原本是工廠當場拋，現在驗在載入的時候——工廠只是薄薄一層，
+  // 錯誤訊息因此指得出是清單裡哪一個條目，那是從 YAML 載入時唯一指得到的東西。
+  it('設定錯誤在載入時就爆，不會拖到跑起來', async () => {
+    await expect(loadPlugins([createTelemetryOtelPlugin({ mode: 'full' })])).rejects.toThrow(
+      'exporter.url 是必填',
+    );
+  });
+
+  it('exporter 的未知欄位讓載入失敗——**這一格是登記過的 API 收窄**', async () => {
+    // 原本 `exporter` 是原樣轉交整個 `OTLPExporterNodeConfigBase`，SDK 有什麼就收什麼。
+    // 改成資料之後只留得下純資料的那幾格：`httpAgentOptions` 可以是工廠函式，擋掉了。
+    const bad = [
+      {
+        plugin: telemetryOtelPlugin,
+        config: { mode: 'full', exporter: { url: 'http://x/v1/logs', httpAgentOptions: {} } },
+      },
+    ];
+    await expect(loadPlugins(bad)).rejects.toThrow('telemetry-otel#0 (telemetry-otel)');
+    await expect(loadPlugins(bad)).rejects.toThrow(/httpAgentOptions/);
+  });
+
+  it('**一次組裝一份服務**：兩次載入拿到的不是同一顆', async () => {
+    // 這一格帶著一個 OTel `LoggerProvider`，而協調器關機時會轉發它的 `shutdown()`。共用一份
+    // 的話，`serve.ts` 裡第一條關掉的 thread 會把其他 thread 的遙測一起關掉。
+    const { url } = await mockCollector();
+    const entry = createTelemetryOtelPlugin({ mode: 'full', exporter: { url } });
+    const a = await loadPlugins([entry]);
+    const b = await loadPlugins([entry]);
+    const first = a.registry.telemetry.service()!.value;
+    const second = b.registry.telemetry.service()!.value;
+
+    expect(first).not.toBe(second);
+    await first.shutdown();
+    await second.shutdown();
   });
 });

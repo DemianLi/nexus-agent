@@ -114,6 +114,7 @@ import type { StructuredTool } from '@langchain/core/tools';
 import type {
   AgentMiddleware,
   CommandResult,
+  NexusPlugin,
   PluginEntry,
   PluginRegistry,
   SessionEvent,
@@ -189,13 +190,14 @@ export const PLAN_NOT_ATTACHED_TOOL_MESSAGE =
 /** 計劃被批准、離開計劃模式時回給模型的話。 */
 export const PLAN_APPROVED_MESSAGE = '計劃已獲准，計劃模式關閉了。從下一步起可以執行。';
 
-export interface PlanModePluginOptions {
+/** 這個 plugin 的設定。 */
+export const planModeConfigSchema = z.strictObject({
   /**
    * 計劃模式生效時夾進 system prompt 的指引。省略即 {@link DEFAULT_PLAN_GUIDANCE}。
    *
    * **它是部署持有的原樣文本**，照 dsh：這個套件不替部署決定要怎麼講話。
    */
-  readonly guidance?: string;
+  guidance: z.string().default(DEFAULT_PLAN_GUIDANCE),
   /**
    * **日誌上一顆 `plan/mode` 都沒有時**，這個組裝在不在計劃模式裡。省略即**否**。
    *
@@ -210,10 +212,16 @@ export interface PlanModePluginOptions {
    * 人打 `/plan off`（[#120](https://github.com/DemianLi/nexus-agent/issues/120)）。在 web 上
    * 打開則是「提了計劃、有人按批准」那條正路。
    *
-   * **這個選項今天剩下的用途是測試**：要走真的那條路而不是直接往日誌裡寫。
+   * **這一格今天剩下的用途是測試**：要走真的那條路而不是直接往日誌裡寫。
    */
-  readonly startActive?: boolean;
-}
+  startActive: z.boolean().default(false),
+});
+
+/** 驗過的設定。 */
+export type PlanModeConfig = z.infer<typeof planModeConfigSchema>;
+
+/** 工廠收的東西：schema 的輸入面，每一格都可以省略。 */
+export type PlanModePluginOptions = z.input<typeof planModeConfigSchema>;
 
 /**
  * 一份 root 日誌上的模式。
@@ -437,77 +445,82 @@ function createExitPlanModeTool(lookup: (config: unknown) => PlanModeLookup): St
  * schema 裡，「這樣狀態轉換不會在規劃策略變更之外額外造成工具目錄變動」。代價是模式關著的
  * 時候它是活的 schema、死的執行路徑。
  *
- * @param options - 見 {@link PlanModePluginOptions}。
- * @returns 可以放進組裝點清單的 plugin。
+ */
+export const planModePlugin: NexusPlugin<PlanModeConfig> = {
+  name: 'plan-mode',
+  Config: planModeConfigSchema,
+  apply(registry: PluginRegistry, config: PlanModeConfig): void {
+    const { guidance, startActive } = config;
+    // **這兩格活在 `apply` 裡，不在模組層級。** `load.ts` 一次組裝
+    // 呼叫一次 `plugin.apply(tracked, config)`，所以放這裡就是一組裝一份。寫在模組層級
+    // 的話，同一顆 plugin 被兩次組裝共用時兩邊會串台——`serve.ts` 每個 thread 組裝
+    // 一次，串台就是一個 thread 的 `/plan` 開到另一個 thread 的模式上，**而且不會拋**。
+    //
+    // 陣列不是單一格，理由同 goal：「剛好一份」是一個假設，`attachSession` 被呼叫兩次時
+    // 由命令當場說出來（`planAmbiguousMessage`）。表是給工具用的——工具問的是「這次呼叫
+    // 的那份日誌」，命令問的是「這次組裝的那一份」。兩者同生同滅。
+    const attachedHere: PlanModeSession[] = [];
+    const sessionsHere = new Map<SessionLog, PlanModeSession>();
+    registry.sessions.join((subject) => {
+      if (subject.address.kind !== 'root') return;
+      const session = trackPlanMode(subject, startActive);
+      attachedHere.push(session);
+      sessionsHere.set(subject.log, session);
+      return () => {
+        sessionsHere.delete(subject.log);
+        const at = attachedHere.indexOf(session);
+        if (at >= 0) attachedHere.splice(at, 1);
+      };
+    });
+
+    // middleware 掛在 root 與每個子代理上（#327），所以先問這一次是誰。三格，**不能收成兩格**：
+    // - 認得出來、是這個 plugin 接著的 root 那份日誌 → 讀它的模式。
+    // - 認得出來、是別的日誌（子代理）→ 不在計劃模式。照 dsh，子代理讀的是它自己的 session。
+    // - 認不出來（沒接日誌、沒有 `checkpoint_ns`、挑不出來）→ 沿用改之前的答案：剛好接了一份就讀它，
+    //   否則退回初值。不接日誌、開著 `startActive` 的組裝靠這一格夾指引；收成「不在」的話指引會靜靜
+    //   消失，沒有東西會紅。接了不只一份時不猜：命令那側會把「挑不出來」講出來，猜一份的話指引會照著
+    //   別人的模式夾。
+    const fallback = (): boolean =>
+      attachedHere.length === 1 ? (attachedHere[0] as PlanModeSession).active() : startActive;
+    const active = (config: unknown): boolean => {
+      const found = registry.sessions.forCall(config);
+      if (found.kind !== 'ok') return fallback();
+      return sessionsHere.get(found.log)?.active() ?? false;
+    };
+
+    registry.capabilities.provide(PLAN_MODE_CAPABILITY);
+    registry.middleware.use(createPlanModeMiddleware(guidance, active), { prepend: true });
+    registry.tools.register(
+      createExitPlanModeTool((config) => {
+        const found = registry.sessions.forCall(config);
+        if (found.kind === 'not-attached') return { kind: 'not-attached' };
+        if (found.kind !== 'ok') return { kind: 'not-root' };
+        const session = sessionsHere.get(found.log);
+        return session === undefined ? { kind: 'not-root' } : { kind: 'ok', session };
+      }),
+    );
+    registry.commands.register({
+      name: PLAN_COMMAND_NAME,
+      description: PLAN_COMMAND_DESCRIPTION,
+      input: { hint: PLAN_COMMAND_HINT },
+      handler: ({ rawInput }) => planCommandResult(attachedHere, rawInput),
+    });
+    registry.approvals.gate((exec, next) =>
+      exec.name === EXIT_PLAN_MODE_TOOL_NAME
+        ? { kind: 'ask', reason: '計劃要有人看過才算獲准' }
+        : next(),
+    );
+  },
+};
+
+export default planModePlugin;
+
+/**
+ * 建一個條目。**薄薄一層**：設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
+ *
+ * @param options - 設定，形狀見 {@link planModeConfigSchema}。
+ * @returns 可以放進組裝點清單的條目。
  */
 export function createPlanModePlugin(options: PlanModePluginOptions = {}): PluginEntry {
-  const guidance = options.guidance ?? DEFAULT_PLAN_GUIDANCE;
-  const startActive = options.startActive ?? false;
-
-  return {
-    plugin: {
-      name: 'plan-mode',
-      apply(registry: PluginRegistry): void {
-        // **這兩格活在 `apply` 裡，不在 `createPlanModePlugin` 裡。** `load.ts` 一次組裝
-        // 呼叫一次 `plugin.apply(tracked)`，所以放這裡就是一組裝一份。放到工廠函式的閉包裡
-        // 的話，同一個 plugin 物件被兩次組裝共用時兩邊會串台——`serve.ts` 每個 thread 組裝
-        // 一次，串台就是一個 thread 的 `/plan` 開到另一個 thread 的模式上，**而且不會拋**。
-        //
-        // 陣列不是單一格，理由同 goal：「剛好一份」是一個假設，`attachSession` 被呼叫兩次時
-        // 由命令當場說出來（`planAmbiguousMessage`）。表是給工具用的——工具問的是「這次呼叫
-        // 的那份日誌」，命令問的是「這次組裝的那一份」。兩者同生同滅。
-        const attachedHere: PlanModeSession[] = [];
-        const sessionsHere = new Map<SessionLog, PlanModeSession>();
-        registry.sessions.join((subject) => {
-          if (subject.address.kind !== 'root') return;
-          const session = trackPlanMode(subject, startActive);
-          attachedHere.push(session);
-          sessionsHere.set(subject.log, session);
-          return () => {
-            sessionsHere.delete(subject.log);
-            const at = attachedHere.indexOf(session);
-            if (at >= 0) attachedHere.splice(at, 1);
-          };
-        });
-
-        // middleware 掛在 root 與每個子代理上（#327），所以先問這一次是誰。三格，**不能收成兩格**：
-        // - 認得出來、是這個 plugin 接著的 root 那份日誌 → 讀它的模式。
-        // - 認得出來、是別的日誌（子代理）→ 不在計劃模式。照 dsh，子代理讀的是它自己的 session。
-        // - 認不出來（沒接日誌、沒有 `checkpoint_ns`、挑不出來）→ 沿用改之前的答案：剛好接了一份就讀它，
-        //   否則退回初值。不接日誌、開著 `startActive` 的組裝靠這一格夾指引；收成「不在」的話指引會靜靜
-        //   消失，沒有東西會紅。接了不只一份時不猜：命令那側會把「挑不出來」講出來，猜一份的話指引會照著
-        //   別人的模式夾。
-        const fallback = (): boolean =>
-          attachedHere.length === 1 ? (attachedHere[0] as PlanModeSession).active() : startActive;
-        const active = (config: unknown): boolean => {
-          const found = registry.sessions.forCall(config);
-          if (found.kind !== 'ok') return fallback();
-          return sessionsHere.get(found.log)?.active() ?? false;
-        };
-
-        registry.capabilities.provide(PLAN_MODE_CAPABILITY);
-        registry.middleware.use(createPlanModeMiddleware(guidance, active), { prepend: true });
-        registry.tools.register(
-          createExitPlanModeTool((config) => {
-            const found = registry.sessions.forCall(config);
-            if (found.kind === 'not-attached') return { kind: 'not-attached' };
-            if (found.kind !== 'ok') return { kind: 'not-root' };
-            const session = sessionsHere.get(found.log);
-            return session === undefined ? { kind: 'not-root' } : { kind: 'ok', session };
-          }),
-        );
-        registry.commands.register({
-          name: PLAN_COMMAND_NAME,
-          description: PLAN_COMMAND_DESCRIPTION,
-          input: { hint: PLAN_COMMAND_HINT },
-          handler: ({ rawInput }) => planCommandResult(attachedHere, rawInput),
-        });
-        registry.approvals.gate((exec, next) =>
-          exec.name === EXIT_PLAN_MODE_TOOL_NAME
-            ? { kind: 'ask', reason: '計劃要有人看過才算獲准' }
-            : next(),
-        );
-      },
-    },
-  };
+  return { plugin: planModePlugin, config: options };
 }
