@@ -14,6 +14,7 @@ import {
 } from '@nexus/wire';
 import type { ConversationState } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
+import { documentedFixture } from './documented-fixture.js';
 import { approvalAt, serveClient } from './fixtures.js';
 import { DEFAULT_PORT, parseServeArgs, runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
@@ -246,9 +247,10 @@ describe('serve 的命令面', () => {
 describe('核准那份清單', () => {
   it('docs/operations.md 寫的那道指令真的停得下來，也接得回去', async () => {
     running = await runServe({
-      // docs/operations.md 與開發計劃 Phase 5 驗收句共用這一份 —— 預設清單不觸發任何中斷，
-      // 少了它「核准工具」那半句在瀏覽器裡跑不出來。
-      argv: ['--port', '0', '--plugins', 'src/approval.fixture.ts'],
+      // **fixture 是從 `docs/operations.md` 讀進來的，不是抄的**（#490）——文件教人跑的那道
+      // 指令改了路徑，這一條會當場紅。開發計劃 Phase 5 的驗收句共用同一份：預設清單不觸發
+      // 任何中斷，少了它「核准工具」那半句在瀏覽器裡跑不出來。
+      argv: ['--port', '0', '--plugins', documentedFixture()],
       log: () => undefined,
       env: {},
     });

@@ -87,5 +87,6 @@ pnpm --filter @nexus/web dlx shadcn@latest add <component>   # 新增 shadcn/ui 
 （含對 DeepSeek Harness 的偏離規則）見 [AGENTS.md](AGENTS.md)。
 
 CI 只有 `gate` 一個 required status check，無條件觸發、在 job 內以 `git diff` 決定要掃什麼，
-沒有可掃的檔案時直接綠燈——純文件的 PR 不會卡住。細節見
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
+沒有可掃的檔案時直接綠燈——純文件的 PR 不會卡住。**一個例外**：`docs/operations.md` 會觸發完整
+掃描，因為測試會從它讀核准 fixture 的參數（[#490](https://github.com/DemianLi/nexus-agent/issues/490)），
+只改那份文件也可能弄紅測試。細節見 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
