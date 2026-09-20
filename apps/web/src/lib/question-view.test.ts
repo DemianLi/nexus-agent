@@ -6,9 +6,11 @@ import { UNFINISHED_TOOL_TEXT } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import {
+  answersOfText,
   answerText,
   isStoppedQuestion,
   pairAnswers,
+  pairQuestions,
   questionsOf,
   questionSummary,
   stoppedOnQuestion,
@@ -179,5 +181,72 @@ describe('答案配到哪一張提問卡', () => {
     expect(questionSummary(qs, true)).toBe('已回答 2 題');
     expect(questionSummary(qs, false)).toBe('哪一天？（共 2 題）');
     expect(questionSummary(qs.slice(0, 1), false)).toBe('哪一天？');
+  });
+
+  describe('線上帶來的答案（#439）', () => {
+    const ANSWERS = [
+      { id: 'a', selected: ['週二'] },
+      { id: 'b', selected: ['茶'], custom: '氣泡水' },
+    ];
+    const text = JSON.stringify({ answers: ANSWERS });
+
+    it('讀出逐題的答案，欄位照原樣', () => {
+      expect(answersOfText(text)).toEqual(ANSWERS);
+      expect(answersOfText(undefined)).toBeUndefined();
+    });
+
+    it('截過的結果文字解不開——而且頭尾看起來還是完整的 JSON', () => {
+      // harness 超過 50000 bytes 時取頭尾各半、中間放一行說明（`apps/harness/src/tool-result-text.ts`）。
+      const truncated = `${text.slice(0, 14)}\n…（中間 40000 個位元組沒有送出來，全文在會話日誌裡）\n${text.slice(-14)}`;
+      // 粗略的頭尾檢查會放行，所以判準只能是真的 parse。
+      expect(truncated.startsWith('{') && truncated.endsWith('}')).toBe(true);
+      expect(answersOfText(truncated)).toBeUndefined();
+    });
+
+    it.each([
+      ['不是 JSON', 'boom'],
+      ['不是物件', '[]'],
+      ['沒有 answers', '{}'],
+      ['answers 不是陣列', '{"answers":{}}'],
+      ['id 不是字串', '{"answers":[{"id":1,"selected":[]}]}'],
+      ['沒有 selected', '{"answers":[{"id":"a"}]}'],
+      ['selected 裡不是字串', '{"answers":[{"id":"a","selected":[1]}]}'],
+      ['custom 不是字串', '{"answers":[{"id":"a","selected":[],"custom":2}]}'],
+    ])('%s：整份不要', (_name, bad) => {
+      expect(answersOfText(bad)).toBeUndefined();
+    });
+
+    it('形狀壞的那一筆會讓整份不要，不挑能用的', () => {
+      expect(
+        answersOfText('{"answers":[{"id":"a","selected":["茶"]},{"id":2,"selected":[]}]}'),
+      ).toBeUndefined();
+    });
+
+    it('逐題配：題數不同、id 重複、有題目配不到，就整組不配', () => {
+      const qs = [
+        { id: 'a', question: '哪一天？' },
+        { id: 'b', question: '幾點？' },
+      ];
+      expect([...pairQuestions(qs, ANSWERS)!.keys()]).toEqual(['a', 'b']);
+      expect(pairQuestions(qs, ANSWERS.slice(0, 1))).toBeUndefined();
+      // 多出來的那一筆：每一題都配得到，只有題數對不上，所以這一條是唯一擋得住它的。
+      expect(pairQuestions(qs, [...ANSWERS, { id: 'c', selected: ['多的'] }])).toBeUndefined();
+      expect(pairQuestions(qs, [ANSWERS[0]!, { id: 'a', selected: [] }])).toBeUndefined();
+      expect(pairQuestions(qs, [ANSWERS[0]!, { id: '別的', selected: [] }])).toBeUndefined();
+    });
+
+    it('收著那一行改講答了幾題／共幾題，跳過的不算答', () => {
+      const qs = [
+        { id: 'a', question: '哪一天？' },
+        { id: 'b', question: '幾點？' },
+      ];
+      expect(questionSummary(qs, true, ANSWERS)).toBe('已回答 2/2 題');
+      expect(questionSummary(qs, true, [ANSWERS[0]!, { id: 'b', selected: [] }])).toBe(
+        '已回答 1/2 題',
+      );
+      expect(questionSummary(qs, true, [ANSWERS[0]!, { id: 'b', selected: [], custom: '' }])).toBe(
+        '已回答 1/2 題',
+      );
+    });
   });
 });

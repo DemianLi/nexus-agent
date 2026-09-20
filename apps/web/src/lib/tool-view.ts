@@ -4,8 +4,9 @@
  * 七類 variant、一張「工具名 → variant」的表、查不到就是 `others`、摘要從參數挑一個欄位。
  * **表的內容照 nexus 實際的工具名**（deepagents 基座＋各 plugin 匯出的 `*_TOOL_NAME`），不是 dsh 的。
  *
- * **不畫工具的輸出**：`ToolEntry.output` 是序列化過的 ToolMessage（`{ lc, type, kwargs }`），拆它等於把基座的形狀
- * 搬進前端（`apps/harness/src/thread-pump.ts` 的 `failureTextOf` 講過這條界線）。要畫得先讓 pump 交出文字。
+ * **這一份只管參數，不管輸出**：結果文字現在有了（`ToolEntry.text`，[#439](https://github.com/DemianLi/nexus-agent/issues/439)
+ * 之後 harness 從會話日誌的 `tool/result` 抽，即時與重播同一串），但**只有 `ask_user_question` 在用**
+ * （`lib/question-view.ts` 解 `{answers}` 逐題配）。其他工具要不要畫輸出是另一個決定，#439 沒有做。
  *
  * 新增工具時在 {@link TOOL_VARIANTS}（或 {@link TOOL_TITLES}）加一列；`tool-view.test.ts` 列著每一個實際工具名，
  * 漏了會紅。

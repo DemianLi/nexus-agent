@@ -73,7 +73,7 @@
 | 11 | 助理訊息（markdown、串流中、被停止） | P0（`AiEntry`，含 `stopped`） | `ui-chat/AssistantMarkdown`、`AssistantNodeView` | AIE `message`（streamdown） | 字元 shimmer（`Solving....` 那種） | |
 | 12 | 推理區塊 | P1（`AiEntry` 沒有 reasoning 欄位，只有 `text`／`streaming`／`attribution`／`error`／`stopped`；`conversation.ts:496` 註解 reasoning 的 delta「這一版不呈現」） | `ui-chat/ReasoningRow` | AIE `reasoning`、`chain-of-thought` | `thinking-orbs` `composing`（20px） | |
 | 13 | 工具呼叫卡（四種狀態） | P0（`ToolEntry.status`） | `ui-tool/ToolCallTree`、`toolviews/` | AIE `tool` | 執行中 `thinking-orbs` `working` | 狀態映射見選型筆記 §3.1 |
-| 14 | 工具專屬呈現（讀檔、搜尋、終端、網頁、diff、JSON） | P0（`ToolEntry.input`／`output`） | `ui-primitives/ReadBlock`、`SearchBlock`、`TerminalBlock`、`WebBlock`、`DiffBlock`、`JsonTree` | AIE `code-block`、`terminal`、`schema-display`、`stack-trace` | 展開 `--resize-dur` | dsh 是「按工具名換呈現」的 slot |
+| 14 | 工具專屬呈現（讀檔、搜尋、終端、網頁、diff、JSON） | P0（`ToolEntry.input`／`text`） | `ui-primitives/ReadBlock`、`SearchBlock`、`TerminalBlock`、`WebBlock`、`DiffBlock`、`JsonTree` | AIE `code-block`、`terminal`、`schema-display`、`stack-trace` | 展開 `--resize-dur` | dsh 是「按工具名換呈現」的 slot |
 | 15 | 子代理歸屬標示 | P0（`Attribution`） | `ui-subagent/SubagentHeaderLineage` | AIE `agent` | — | nexus「未歸屬」要照樣顯示 |
 | 16 | 子代理對話檢視（唯讀 composer） | P1 | `ui-subagent/SubagentReadOnlyComposer` | — | — | |
 | 17 | 回合分隔與用量 | P1 | `ui-chat/TurnUsagePanel`、`StatsPills`、`TurnTailNodeView` | AIE `context` | 數字滾動 | |

@@ -135,16 +135,95 @@ export function pairAnswers(
   return paired;
 }
 
+/** 一題的答案：`AnswerEntry` 裡那一格，工具結果文字回的也是同一個形狀。 */
+export type QuestionAnswer = AnswerEntry['answers'][number];
+
+/**
+ * 工具結果文字裡的答案（[#439](https://github.com/DemianLi/nexus-agent/issues/439)）。
+ *
+ * 成功的 `ask_user_question` 回的就是 `{"answers":[{id,selected,custom?}]}`（`@nexus/plugin-ask-user`），
+ * 這一段在 {@link ToolEntry.text}，即時與重播同一串，**不分分頁**——所以重新整理、在別的分頁打開、往回載入
+ * 歷史都讀得到，不再只靠本地的 `AnswerEntry`。
+ *
+ * 形狀檢查照 dsh `ask-question-row.tsx` 的 `answerEntries`（`ddefc45`）：**對不上就整份不要**，不挑能用的那幾筆。
+ *
+ * **一定要真的 `JSON.parse`**：文字超過 50000 bytes 時 harness 取頭尾各半、中間放一行說明
+ * （`apps/harness/src/tool-result-text.ts`），截過的那一份**開頭 `{"answers":[`、結尾 `]}` 都還在**，
+ * 用頭尾字元判斷會把它當成完整的 JSON。
+ */
+export function answersOfText(text: string | undefined): readonly QuestionAnswer[] | undefined {
+  if (text === undefined) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  const answers = (parsed as { answers?: unknown } | null)?.answers;
+  if (!Array.isArray(answers)) return undefined;
+  const items: QuestionAnswer[] = [];
+  for (const raw of answers) {
+    const answer = raw as Record<string, unknown> | null;
+    if (typeof answer?.id !== 'string') return undefined;
+    if (!Array.isArray(answer.selected)) return undefined;
+    if (!answer.selected.every((item) => typeof item === 'string')) return undefined;
+    if (answer.custom !== undefined && typeof answer.custom !== 'string') return undefined;
+    items.push({
+      id: answer.id,
+      selected: answer.selected as readonly string[],
+      ...(answer.custom === undefined ? {} : { custom: answer.custom }),
+    });
+  }
+  return items;
+}
+
+/**
+ * 逐題配上答案：題目 id → 那一題的答案。
+ *
+ * 照 dsh `pairAnswers`：**題數不同、答案的 id 重複、有一題配不到，就整組不配**（回 `undefined`），
+ * 卡片退回只列題目。配一半比不配更難看出哪裡不對。
+ */
+export function pairQuestions(
+  questions: readonly QuestionItem[],
+  answers: readonly QuestionAnswer[],
+): ReadonlyMap<string, QuestionAnswer> | undefined {
+  if (questions.length !== answers.length) return undefined;
+  const byId = new Map<string, QuestionAnswer>();
+  for (const answer of answers) {
+    if (byId.has(answer.id)) return undefined;
+    byId.set(answer.id, answer);
+  }
+  if (questions.some((question) => !byId.has(question.id))) return undefined;
+  return byId;
+}
+
+/** 這一題算不算答了：選了東西或自己寫了字（照 dsh 算 `answered` 的規則）。 */
+function isAnswered(answer: QuestionAnswer): boolean {
+  return answer.selected.length > 0 || (answer.custom ?? '') !== '';
+}
+
 /** 一題的回答怎麼寫：選到的與自己寫的接起來；**兩者都空＝跳過**（照抄 dsh 的編碼，`AnswerEntry`）。 */
-export function answerText(answer: AnswerEntry['answers'][number] | undefined): string {
+export function answerText(answer: QuestionAnswer | undefined): string {
   if (answer === undefined) return '（沒有紀錄）';
   const picked = [...answer.selected, ...(answer.custom === undefined ? [] : [answer.custom])];
   return picked.length === 0 ? '（跳過）' : picked.join('、');
 }
 
-/** 提問卡收著時那一行：答完了講幾題，還沒答講問什麼。 */
-export function questionSummary(questions: readonly QuestionItem[], done: boolean): string {
-  if (done) return `已回答 ${questions.length} 題`;
+/**
+ * 提問卡收著時那一行：答完了講幾題，還沒答講問什麼。
+ *
+ * 讀得到答案時講**答了幾題／共幾題**（照 dsh `ask.answered`＝`{answered}/{total} 已回答`，跳過的不算答）；
+ * 讀不到就只講題數，同 [#429](https://github.com/DemianLi/nexus-agent/pull/429) 那條退路。
+ */
+export function questionSummary(
+  questions: readonly QuestionItem[],
+  done: boolean,
+  answers?: readonly QuestionAnswer[],
+): string {
+  if (done) {
+    if (answers === undefined) return `已回答 ${questions.length} 題`;
+    return `已回答 ${answers.filter(isAnswered).length}/${answers.length} 題`;
+  }
   const first = questions[0]?.question ?? '';
   return questions.length > 1 ? `${first}（共 ${questions.length} 題）` : first;
 }
