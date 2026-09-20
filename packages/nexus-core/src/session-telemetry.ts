@@ -182,7 +182,7 @@ export function isFeedbackEvent(event: SessionEvent): boolean {
 /**
  * 可掛載的後端形：{@link SessionTelemetrySink} 的能力，**加上必須表態的共享策略**。
  *
- * `registry.telemetry.use()` 收的是這個。dsh 的對應物是 `SessionTelemetryBackend`
+ * `registry.services.provide(SESSION_TELEMETRY_SERVICE, …)` 收的是這個。dsh 的對應物是 `SessionTelemetryBackend`
  * ——Cordis `Service` 的可載入形，`abstract readonly sharing` 就在它上面。
  *
  * **每個掛上來的後端都必須表態。** 消費端只有在「一個都沒掛」的時候才渲染未配置，
@@ -193,3 +193,13 @@ export interface SessionTelemetryService extends SessionTelemetrySink {
   /** 這個後端當前的共享策略。**只陳述策略，不承諾投遞。** */
   readonly sharing: SessionTelemetrySharingStatus;
 }
+
+/**
+ * 遙測後端這個服務的名字。**照 dsh 的 `ctx.sessionTelemetry`**
+ * （`references/deepseek-harness/packages/session/session-telemetry/src/index.ts:19-21`，SHA `6b1808f`）。
+ *
+ * 型別那一格在 {@link ./registry.ts | NexusServices} 上，所以
+ * `registry.services.get(SESSION_TELEMETRY_SERVICE)` 回的是
+ * `SessionTelemetryService | undefined`，不必轉型。
+ */
+export const SESSION_TELEMETRY_SERVICE = 'sessionTelemetry';

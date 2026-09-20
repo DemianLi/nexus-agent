@@ -12,7 +12,13 @@ import { createServer } from 'node:http';
 import type { IncomingHttpHeaders, Server } from 'node:http';
 import { once } from 'node:events';
 
-import { SessionLog, SessionTelemetryCoordinator, createRegistry, loadPlugins } from '@nexus/core';
+import {
+  SESSION_TELEMETRY_SERVICE,
+  SessionLog,
+  SessionTelemetryCoordinator,
+  createRegistry,
+  loadPlugins,
+} from '@nexus/core';
 import type { SessionTelemetrySink } from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -338,9 +344,9 @@ describe('plugin 這一層', () => {
     const registry = createRegistry();
     await loadPlugins([createTelemetryOtelPlugin({ mode: 'full', exporter: { url } })], registry);
 
-    expect(registry.telemetry.service()?.value.sharing).toBe('full');
-    expect(registry.telemetry.service()?.origin.name).toBe('telemetry-otel');
-    await registry.telemetry.service()!.value.shutdown();
+    expect(registry.services.get(SESSION_TELEMETRY_SERVICE)?.sharing).toBe('full');
+    expect(registry.services.provider(SESSION_TELEMETRY_SERVICE)?.name).toBe('telemetry-otel');
+    await registry.services.use(SESSION_TELEMETRY_SERVICE).shutdown();
   });
 
   // **翻面過的絆索**（#453）：原本是工廠當場拋，現在驗在載入的時候——工廠只是薄薄一層，
@@ -371,8 +377,8 @@ describe('plugin 這一層', () => {
     const entry = createTelemetryOtelPlugin({ mode: 'full', exporter: { url } });
     const a = await loadPlugins([entry]);
     const b = await loadPlugins([entry]);
-    const first = a.registry.telemetry.service()!.value;
-    const second = b.registry.telemetry.service()!.value;
+    const first = a.registry.services.use(SESSION_TELEMETRY_SERVICE);
+    const second = b.registry.services.use(SESSION_TELEMETRY_SERVICE);
 
     expect(first).not.toBe(second);
     await first.shutdown();

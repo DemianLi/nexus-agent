@@ -97,7 +97,6 @@ export type {
   LifecycleRegistrationPoint,
   InvariantRegistrationPoint,
   TelemetryRegistrationPoint,
-  FeedbackRegistrationPoint,
   CommandRegistrationPoint,
   SessionRegistrationPoint,
   SessionLookup,
@@ -284,7 +283,12 @@ export type {
   MessageFeedbackTargetNotFound,
   MessageFeedbackVersionConflict,
 } from './feedback.js';
-export { currentMessageFeedback, FEEDBACK_CATEGORIES, loggedMessageId } from './feedback.js';
+export {
+  currentMessageFeedback,
+  FEEDBACK_CATEGORIES,
+  loggedMessageId,
+  MESSAGE_FEEDBACK_SERVICE,
+} from './feedback.js';
 
 export type {
   SessionEvent,
@@ -305,7 +309,7 @@ export type {
   SessionTelemetrySharingStatus,
   SessionTelemetrySink,
 } from './session-telemetry.js';
-export { isFeedbackEvent } from './session-telemetry.js';
+export { isFeedbackEvent, SESSION_TELEMETRY_SERVICE } from './session-telemetry.js';
 
 export type {
   SessionTelemetryCapture,

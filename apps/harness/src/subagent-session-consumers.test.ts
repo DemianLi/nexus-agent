@@ -21,6 +21,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { SessionRegistry } from '@nexus/core';
+import { SESSION_TELEMETRY_SERVICE } from '@nexus/core';
 import type {
   InvariantError,
   PluginEntry,
@@ -96,7 +97,7 @@ function observingPlugin(seen: Seen): PluginEntry {
             (event) => void seen.participants.push(`${subject.log.sessionId}/${event.type}`),
           );
         });
-        registry.telemetry.use(collectingSink(seen.telemetry));
+        registry.services.provide(SESSION_TELEMETRY_SERVICE, collectingSink(seen.telemetry));
       },
     },
   };

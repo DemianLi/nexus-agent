@@ -174,7 +174,7 @@ export type MessageFeedbackListResult = FeedbackSuccess<{
 export type FeedbackRecordResult = FeedbackSuccess<{ readonly recorded: true }>;
 
 /**
- * 評分與評語的規則，由 `@nexus/plugin-feedback` 掛上 `registry.feedback`。
+ * 評分與評語的規則，由 `@nexus/plugin-feedback` 提供成 {@link MESSAGE_FEEDBACK_SERVICE} 服務。
  *
  * **三個方法都是同步的，而那就是 dsh 那條 `enqueue` 的替身**：dsh 要把「讀、比、寫」包在一段
  * 非同步的寫入權裡，因為中間隔著磁碟；我們的日誌 `append` 是同步的，同一個行程裡兩次呼叫交錯
@@ -296,3 +296,12 @@ export function currentMessageFeedback(
   }
   return [...current.values()];
 }
+
+/**
+ * 評分規則這個服務的名字。**照 dsh 的 `ctx.messageFeedback`**
+ * （`references/deepseek-harness/packages/feedback/message-feedback/src/index.ts:45-47`，SHA `6b1808f`）。
+ *
+ * 用 dsh 的字而不是我們的 `feedback`：服務名是跨套件的位址，照標準取名才不會在
+ * [#454](https://github.com/DemianLi/nexus-agent/issues/454) 的設定檔裡長出第二套詞彙。
+ */
+export const MESSAGE_FEEDBACK_SERVICE = 'messageFeedback';
