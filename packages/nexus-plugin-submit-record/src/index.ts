@@ -71,7 +71,7 @@
 import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { Command } from '@langchain/langgraph';
-import type { PluginEntry } from '@nexus/core';
+import type { NexusPlugin, PluginEntry } from '@nexus/core';
 import { toolRefusal } from '@nexus/core';
 import { StateBackend, resolveBackend } from 'deepagents';
 import type { AnyBackendProtocol, BackendFactory, BackendProtocolV2 } from 'deepagents';
@@ -101,15 +101,19 @@ const submitSchema = z.object({
     .describe('這一列的欄位，鍵是欄名、值是欄位內容。值一律是字串。'),
 });
 
-/** 這個 plugin 的組裝參數。 */
-export interface SubmitRecordPluginOptions {
-  /**
-   * 寫出去用的 backend。
-   *
-   * **給組裝點交給 `createNexusAgent` 的那一個**，理由見模組註解。省略即基座那個預設
-   * （`StateBackend`，跑在 state 裡不碰磁碟）。
-   */
-  readonly backend?: AnyBackendProtocol;
+/**
+ * 「寫出去用的 backend」這個服務的名字。
+ *
+ * 由**組裝點**提供：要的是它交給 `createNexusAgent` 的**同一個** backend，理由見模組註解。
+ * 沒人提供時退到基座那個預設（`StateBackend`，跑在 state 裡不碰磁碟）。
+ */
+export const BACKEND_SERVICE = 'backend';
+
+declare module '@nexus/core' {
+  interface NexusServices {
+    /** 這次組裝的預設 backend。見 {@link BACKEND_SERVICE}。 */
+    backend: AnyBackendProtocol;
+  }
 }
 
 /** 這次執行拿到的 runtime。只用得到兩格，所以不整包相依基座的型別。 */
@@ -252,18 +256,35 @@ function createSubmitRecordTool(backend: AnyBackendProtocol | undefined) {
  * @param options - 見 {@link SubmitRecordPluginOptions}。
  * @returns 可以放進組裝點清單的 plugin。
  */
-export function createSubmitRecordPlugin(options: SubmitRecordPluginOptions = {}): PluginEntry {
-  return {
-    plugin: {
-      name: 'submit-record',
-      apply(registry) {
-        registry.tools.register(createSubmitRecordTool(options.backend));
-        registry.approvals.gate((exec, next) =>
-          exec.name === SUBMIT_RECORD_TOOL_NAME
-            ? { kind: 'ask', reason: '這一列要寫出去，先讓人看過' }
-            : next(),
-        );
-      },
-    },
-  };
+/**
+ * `submit_record` 的 plugin。
+ *
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。它沒有任何資料設定——唯一要的東西是協作者，走
+ * {@link BACKEND_SERVICE} 注入（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
+ *
+ * **軟相依，不是硬的**（`services.get` 不是 `services.use`）：沒人提供時退到基座那個
+ * 預設，與這一刀之前 `options.backend` 省略時完全一樣。
+ */
+export const submitRecordPlugin: NexusPlugin = {
+  name: 'submit-record',
+  apply(registry) {
+    registry.tools.register(createSubmitRecordTool(registry.services.get(BACKEND_SERVICE)));
+    registry.approvals.gate((exec, next) =>
+      exec.name === SUBMIT_RECORD_TOOL_NAME
+        ? { kind: 'ask', reason: '這一列要寫出去，先讓人看過' }
+        : next(),
+    );
+  },
+};
+
+export default submitRecordPlugin;
+
+/**
+ * 建一個條目。**薄薄一層**，同 `@nexus/plugin-ask-user`：沒有資料設定，協作者走服務注入。
+ *
+ * @returns 可以放進組裝點清單的條目。
+ */
+export function createSubmitRecordPlugin(): PluginEntry {
+  return { plugin: submitRecordPlugin };
 }

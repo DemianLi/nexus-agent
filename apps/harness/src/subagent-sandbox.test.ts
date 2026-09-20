@@ -20,6 +20,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { Command, MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry } from '@nexus/core';
+import { createHostServicesPlugin } from '@nexus/core';
 import type { Event } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -159,9 +160,12 @@ describe('子代理的沙箱模式', () => {
       model,
       checkpointer: new MemorySaver(),
       plugins: [
+        ...(fence
+          ? [createHostServicesPlugin({ sandboxPolicy: { controller, rootDir: root } })]
+          : []),
         WORKER,
         flipPlugin(controller),
-        ...(fence ? [createSandboxPolicyPlugin(controller, root)] : []),
+        ...(fence ? [createSandboxPolicyPlugin()] : []),
       ],
       ...(fence && {
         backend: new ContainedFilesystemBackend({

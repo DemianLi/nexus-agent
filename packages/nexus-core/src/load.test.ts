@@ -271,6 +271,42 @@ describe('requires', () => {
     const plugins = [fakePlugin('consumer', () => {}, ['filesystem', 'network'])];
     await expect(loadPlugins(plugins)).rejects.toThrow(/"filesystem"[\s\S]*"network"/);
   });
+
+  /**
+   * **服務也算數**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
+   * 服務名刻意不寫進 `capabilities`，所以這條查的是 `assertRequires` 有沒有真的問第二個
+   * 集合——少了它，一個宣告 `requires: ['sandboxPolicy']` 的 plugin 在服務提供得好好的
+   * 時候會載入失敗。
+   */
+  it('requires 由服務滿足，不必另外宣告能力', async () => {
+    const plugins = [
+      fakePlugin('host', (r) => void r.services.provide('sandboxPolicy', { mode: 'read-only' })),
+      fakePlugin('consumer', () => {}, ['sandboxPolicy']),
+    ];
+    const { registry } = await loadPlugins(plugins);
+    expect(registry.capabilities.has('sandboxPolicy')).toBe(false);
+    expect(registry.services.provider('sandboxPolicy')?.name).toBe('host');
+  });
+
+  it('缺件訊息把服務跟能力一起列出來', async () => {
+    const plugins = [
+      fakePlugin('host', (r) => void r.services.provide('sandboxPolicy', {})),
+      fakePlugin('provider', (r) => void r.capabilities.provide('filesystem')),
+      fakePlugin('consumer', () => {}, ['network']),
+    ];
+    await expect(loadPlugins(plugins)).rejects.toThrow(/filesystem[\s\S]*sandboxPolicy/);
+  });
+
+  it('回滾掉的服務不會拿去滿足別人的 requires', async () => {
+    const plugins = [
+      fakePlugin('host', (r) => {
+        r.services.provide('sandboxPolicy', {});
+        throw new Error('提供到一半爆了');
+      }),
+      fakePlugin('consumer', () => {}, ['sandboxPolicy']),
+    ];
+    await expect(loadPlugins(plugins)).rejects.toThrow('host#0 (host)');
+  });
 });
 
 describe('每個註冊點的回滾', () => {
@@ -295,6 +331,14 @@ describe('每個註冊點的回滾', () => {
     registry.telemetry.redact((record) => record);
     registry.telemetry.use(fakeSink());
     registry.feedback.use(fakeFeedback());
+    registry.services.provide('collaborator', { who: 'greedy' });
+    registry.invariants.register('@nexus/greedy', () => () => {});
+    registry.commands.register({
+      name: 'greedy',
+      description: '貪心',
+      handler: () => ({ kind: 'success', text: '好' }),
+    });
+    registry.sessions.join(() => undefined);
     registry.tools.register(fakeTool('grep'), { scope: 'researcher' });
     throw new Error('半路壞掉');
   });
@@ -317,6 +361,10 @@ describe('每個註冊點的回滾', () => {
     expect(registry.telemetry.rules()).toEqual([]);
     expect(registry.telemetry.service()).toBeUndefined();
     expect(registry.feedback.service()).toBeUndefined();
+    expect(registry.services.get('collaborator')).toBeUndefined();
+    expect(registry.invariants.companions()).toEqual([]);
+    expect(registry.commands.list()).toEqual([]);
+    expect(registry.sessions.installers()).toEqual([]);
   });
 
   it('服務位子回滾之後是真的空出來，別的 plugin 掛得上去', async () => {

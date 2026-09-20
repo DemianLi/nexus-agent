@@ -77,6 +77,9 @@ export type {
   ToolRegistrationPoint,
   SubAgentRegistrationPoint,
   CapabilityRegistrationPoint,
+  ServiceRegistrationPoint,
+  NexusServices,
+  KnownServiceName,
   BackendRegistrationPoint,
   MiddlewareRegistrationPoint,
   MiddlewareRegistration,
@@ -98,6 +101,8 @@ export type {
   ScopeKey,
 } from './registry.js';
 export { createRegistry } from './registry.js';
+export type { HostServices } from './host-services.js';
+export { createHostServicesPlugin } from './host-services.js';
 
 export type { LoadResult } from './load.js';
 export { loadPlugins } from './load.js';
