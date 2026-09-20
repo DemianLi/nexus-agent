@@ -85,7 +85,7 @@ export interface WorkspaceChangesLimits {
 }
 
 /**
- * 上限的預設值，照 dsh `workspace-changes` 的 Config 預設（`src/index.ts:48-54`，`ddefc45`）。
+ * 上限的預設值，照 dsh `workspace-changes` 的 Config 預設（`src/index.ts:50-56`，`ddefc45`）。
  *
  * {@link workspaceChangesConfigSchema} 的 `.default()` 逐格讀這裡，所以預設值只有這一個出處。
  */
@@ -177,7 +177,7 @@ declare module '@nexus/core' {
  * 一次掛載。**每一次組裝各跑一遍，狀態全在這個函式的閉包裡**——模組層級一格都沒有。
  *
  * 這一點是承重的：服務答的是**這一次組裝**的 root，而 `serve.ts` 每條 thread 各跑一次
- * `createCliAgent`（`:343`）。從前用一顆 `applied` 旗標擋「一份只能掛一次組裝」，是因為狀態住在
+ * `createCliAgent`（`:341`）。從前用一顆 `applied` 旗標擋「一份只能掛一次組裝」，是因為狀態住在
  * 工廠的閉包裡、沒有地方交出控制面；現在狀態住在這裡，而重複提供由
  * `registry.services.provide` 自己擋（重名拋錯，訊息指名前一個提供者）。
  *

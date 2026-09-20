@@ -471,7 +471,7 @@ describe('組裝點', () => {
    * **兩次組裝各拿各的一份**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
    *
    * 從前工廠回的那一份帶著閉包狀態，所以「一份只能掛一次組裝」要用一顆 `applied` 旗標擋。
-   * 現在狀態住在 `apply` 裡，而 `serve.ts` 每條 thread 各跑一次 `createCliAgent`（`:343`）——
+   * 現在狀態住在 `apply` 裡，而 `serve.ts` 每條 thread 各跑一次 `createCliAgent`（`:341`）——
    * 這一條釘的是「`createCliAgent` 交出來的是這一次組裝提供的那一份」。服務名寫錯、或
    * `provide` 整個拿掉，這裡就是 `undefined`。
    */
