@@ -19,7 +19,7 @@ import {
   TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
   TOOL_ABORTED_TEXT,
 } from '@nexus/core';
-import type { NexusPlugin, SessionEvent, SessionEventMap } from '@nexus/core';
+import type { PluginEntry, SessionEvent, SessionEventMap } from '@nexus/core';
 import type { Event } from '@nexus/wire';
 import { createWireClient } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
@@ -38,44 +38,48 @@ interface Probe {
   settled: number;
 }
 
-function toolsPlugin(probe: Probe): NexusPlugin {
+function toolsPlugin(probe: Probe): PluginEntry {
   return {
-    name: 'cancel-tools',
-    apply(registry) {
-      registry.tools.register(
-        tool(
-          async () => {
-            probe.started += 1;
-            await new Promise((resolve) => setTimeout(resolve, 60));
-            probe.settled += 1;
-            return '寫好了';
-          },
-          { name: 'slow_write', description: '慢慢寫一個檔。', schema: z.object({}) },
-        ),
-      );
-      registry.tools.register(
-        tool(() => '危險的事做完了', {
-          name: 'danger',
-          description: '要核准。',
-          schema: z.object({}),
-        }),
-      );
-      registry.approvals.gate((exec, next) =>
-        exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
-      );
+    plugin: {
+      name: 'cancel-tools',
+      apply(registry) {
+        registry.tools.register(
+          tool(
+            async () => {
+              probe.started += 1;
+              await new Promise((resolve) => setTimeout(resolve, 60));
+              probe.settled += 1;
+              return '寫好了';
+            },
+            { name: 'slow_write', description: '慢慢寫一個檔。', schema: z.object({}) },
+          ),
+        );
+        registry.tools.register(
+          tool(() => '危險的事做完了', {
+            name: 'danger',
+            description: '要核准。',
+            schema: z.object({}),
+          }),
+        );
+        registry.approvals.gate((exec, next) =>
+          exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
+        );
+      },
     },
   };
 }
 
-const workerPlugin: NexusPlugin = {
-  name: 'worker-host',
-  apply(registry) {
-    registry.subagents.register({ name: 'worker', description: '幹活的。' });
+const workerPlugin: PluginEntry = {
+  plugin: {
+    name: 'worker-host',
+    apply(registry) {
+      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    },
   },
 };
 
 /** 真的組裝接上一個 pump 與一條下行——serve 那條路的形狀。 */
-async function assemble(turns: readonly ScriptedTurn[], plugins: readonly NexusPlugin[]) {
+async function assemble(turns: readonly ScriptedTurn[], plugins: readonly PluginEntry[]) {
   const model = new ScriptedChatModel({ turns });
   const built = await createNexusAgent({
     model,

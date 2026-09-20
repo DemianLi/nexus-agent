@@ -12,6 +12,7 @@ import { z } from 'zod';
 import type {
   AgentMiddleware,
   NexusPlugin,
+  PluginEntry,
   PluginRegistry,
   SessionTelemetryRecord,
   SessionTelemetryService,
@@ -41,18 +42,23 @@ export function fakeSubAgent(name: string): SubAgent {
 }
 
 /**
- * 包一個 plugin。
+ * 包一個 plugin，回傳掛著它的**條目**——清單收的是條目，所以測試直接把它放進 `plugins` 即可。
+ *
+ * 不收 `config`：假 plugin 沒有 `Config`，給了 config 是錯誤（見 `plugin.ts` 的 `parseEntryConfig`）。
+ * 要驗設定那條路的測試自己寫條目。
+ *
  * @param name - plugin 名，不必唯一。
  * @param apply - 註冊內容。
  * @param requires - 需要的能力。
- * @returns 可載入的 plugin。
+ * @returns 可載入的條目。
  */
 export function fakePlugin(
   name: string,
   apply: (registry: PluginRegistry) => void | Promise<void>,
   requires?: string[],
-): NexusPlugin {
-  return requires === undefined ? { name, apply } : { name, requires, apply };
+): PluginEntry {
+  const plugin: NexusPlugin = requires === undefined ? { name, apply } : { name, requires, apply };
+  return { plugin };
 }
 
 /**

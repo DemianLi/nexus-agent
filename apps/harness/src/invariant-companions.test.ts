@@ -31,7 +31,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createRegistry, SessionLog } from '@nexus/core';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { createCoreInvariantPlugin, CORE_INVARIANT_PACKAGE } from '@nexus/core/invariant';
 import { createEchoInvariantPlugin, ECHO_INVARIANT_PACKAGE } from '@nexus/plugin-echo/invariant';
 import { createMcpInvariantPlugin, MCP_INVARIANT_PACKAGE } from '@nexus/plugin-mcp/invariant';
@@ -85,7 +85,7 @@ import {
  * 右邊那一欄刻意寫死字串而不是引用左邊那個常數——常數抄錯了，拿常數自己比自己
  * 是驗不出來的。
  */
-const COMPANIONS: readonly (readonly [() => NexusPlugin, string, string])[] = [
+const COMPANIONS: readonly (readonly [() => PluginEntry, string, string])[] = [
   [createCoreInvariantPlugin, CORE_INVARIANT_PACKAGE, '@nexus/core'],
   [createAskUserInvariantPlugin, ASK_USER_INVARIANT_PACKAGE, '@nexus/plugin-ask-user'],
   [createCommandsInvariantPlugin, COMMANDS_INVARIANT_PACKAGE, '@nexus/plugin-commands'],
@@ -116,8 +116,8 @@ describe('子路徑解析', () => {
   it('十六個 `<pkg>/invariant` 都 import 得到，而且各自吐出一個 plugin', () => {
     for (const [factory] of COMPANIONS) {
       const plugin = factory();
-      expect(typeof plugin.apply).toBe('function');
-      expect(plugin.name).toMatch(/-invariant$/);
+      expect(typeof plugin.plugin.apply).toBe('function');
+      expect(plugin.plugin.name).toMatch(/-invariant$/);
     }
   });
 
@@ -134,8 +134,8 @@ describe('包名歸屬', () => {
     for (const [factory] of COMPANIONS) {
       const plugin = factory();
       // 十五個的 name 各不相同，所以 `resolveEntries` 補出來的就是 `<name>#0`。
-      const exit = registry.enter({ id: `${plugin.name}#0`, name: plugin.name });
-      plugin.apply(registry);
+      const exit = registry.enter({ id: `${plugin.plugin.name}#0`, name: plugin.plugin.name });
+      plugin.plugin.apply(registry, undefined);
       exit();
     }
 
@@ -149,8 +149,8 @@ describe('包名歸屬', () => {
     for (const [factory] of COMPANIONS) {
       const plugin = factory();
       // 十五個的 name 各不相同，所以 `resolveEntries` 補出來的就是 `<name>#0`。
-      const exit = registry.enter({ id: `${plugin.name}#0`, name: plugin.name });
-      plugin.apply(registry);
+      const exit = registry.enter({ id: `${plugin.plugin.name}#0`, name: plugin.plugin.name });
+      plugin.plugin.apply(registry, undefined);
       exit();
     }
 

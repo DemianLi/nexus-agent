@@ -16,7 +16,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { createSkillsPlugin } from '@nexus/plugin-skills';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
@@ -90,9 +90,11 @@ describe('skills 進到 system prompt', () => {
         { content: '讀不到。' },
       ],
     });
-    const guard: NexusPlugin = {
-      name: 'guard',
-      apply: (registry) => void registry.permissions.deny(['/skills/**']),
+    const guard: PluginEntry = {
+      plugin: {
+        name: 'guard',
+        apply: (registry) => void registry.permissions.deny(['/skills/**']),
+      },
     };
 
     const { agent, dispose } = await createNexusAgent({
@@ -257,10 +259,12 @@ describe('subagent 的 skills 邊界', () => {
 
   it('自訂 subagent 那輪什麼都沒有——連 Skills System 那段都不在', async () => {
     const root = await workspace({ skills: { 'web-research': '上網查資料。' } });
-    const crew: NexusPlugin = {
-      name: 'crew',
-      apply: (registry) =>
-        void registry.subagents.register({ name: 'writer', description: '負責寫東西。' }),
+    const crew: PluginEntry = {
+      plugin: {
+        name: 'crew',
+        apply: (registry) =>
+          void registry.subagents.register({ name: 'writer', description: '負責寫東西。' }),
+      },
     };
     const model = threeTurns('writer');
 

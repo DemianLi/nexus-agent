@@ -30,11 +30,11 @@ import type {
   ApprovalPolicy,
   CommandDescriptor,
   CommandRegistrationPoint,
+  FeedbackService,
   InvariantError,
-  NexusPlugin,
+  PluginEntry,
   SessionEvent,
   SessionTelemetrySharingStatus,
-  FeedbackService,
 } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { createAskUserPlugin } from '@nexus/plugin-ask-user';
@@ -551,7 +551,7 @@ const GOAL_PLUGIN = createGoalPlugin();
  */
 export const FEEDBACK_MAX_NOTE_BYTES = 8192;
 
-export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
+export const DEFAULT_PLUGINS: readonly PluginEntry[] = [
   createEchoPlugin(),
   // 工作區指令（#388）：不帶 `--plugins` 的 CLI 與 serve 也看得到 `AGENTS.md`。有 backend 才會真的
   // 建 middleware，所以沒給 `--workspace` 時它什麼都不加——與 dsh「沒有檔案系統提供方就載不到」同形。
@@ -601,7 +601,7 @@ export const DEFAULT_PLUGINS: readonly NexusPlugin[] = [
 export async function loadPluginModule(
   specifier: string,
   cwd: string = process.cwd(),
-): Promise<readonly NexusPlugin[]> {
+): Promise<readonly PluginEntry[]> {
   const path = resolve(cwd, specifier);
   let module: { default?: unknown };
   try {
@@ -620,7 +620,7 @@ export async function loadPluginModule(
         `--plugins 指的模組要 \`export default [ ... ]\` 一份 plugin 清單。`,
     );
   }
-  return module.default as readonly NexusPlugin[];
+  return module.default as readonly PluginEntry[];
 }
 
 /**
@@ -805,7 +805,7 @@ export async function createCliAgent(
      */
     readonly workspaceChanges?: boolean;
   },
-  plugins: readonly NexusPlugin[],
+  plugins: readonly PluginEntry[],
   cwd: string = process.cwd(),
   onInvariantViolation?: (error: InvariantError) => void,
   approvals?: ApprovalPolicy,
@@ -897,7 +897,7 @@ export async function createCliAgent(
       ...(workspaceRoot === undefined
         ? []
         : [createSandboxPolicyPlugin(sandboxMode, workspaceRoot)]),
-      ...(workspaceChanges === undefined ? [] : [workspaceChanges.plugin]),
+      ...(workspaceChanges === undefined ? [] : [workspaceChanges.entry]),
     ],
     ...(backend !== undefined && { backend }),
     ...(invocation.recursionLimit !== undefined && { recursionLimit: invocation.recursionLimit }),
@@ -1089,9 +1089,9 @@ export function goalDriverPort(
   return {
     // **查不到就是 `undefined`**：`--plugins` 換掉預設清單時這條路就沒有 goal 域，
     // 那時排程器安靜地什麼都不做。
-    goal: () => GOAL_PLUGIN.serviceFor(log())?.get(),
-    block: (ref, reason) => void GOAL_PLUGIN.serviceFor(log())?.block(ref, reason),
-    disarm: () => void GOAL_PLUGIN.serviceFor(log())?.disarm(),
+    goal: () => GOAL_PLUGIN.plugin.serviceFor(log())?.get(),
+    block: (ref, reason) => void GOAL_PLUGIN.plugin.serviceFor(log())?.block(ref, reason),
+    disarm: () => void GOAL_PLUGIN.plugin.serviceFor(log())?.disarm(),
     flush,
     warn: (message) => warn(`[續行] ${message}`),
   };

@@ -18,7 +18,7 @@
 
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import type { ConversationState, Event, ToolEntry, WireClient } from '@nexus/wire';
 import {
   appendDecision,
@@ -46,31 +46,35 @@ beforeEach(() => {
   ran = [];
 });
 
-function spyPlugin(): NexusPlugin {
+function spyPlugin(): PluginEntry {
   return {
-    name: 'spy',
-    apply(registry) {
-      registry.tools.register(
-        tool(
-          () => {
-            ran.push(GATED);
-            return `${GATED} 跑過了`;
-          },
-          { name: GATED, description: `間諜工具 ${GATED}`, schema: z.object({}) },
-        ),
-      );
+    plugin: {
+      name: 'spy',
+      apply(registry) {
+        registry.tools.register(
+          tool(
+            () => {
+              ran.push(GATED);
+              return `${GATED} 跑過了`;
+            },
+            { name: GATED, description: `間諜工具 ${GATED}`, schema: z.object({}) },
+          ),
+        );
+      },
     },
   };
 }
 
 /** 產品路徑的閘門：`approvals.gate`，fold 成 `wrapToolCall` 上的 pre-execute waterfall。 */
-function gatePlugin(): NexusPlugin {
+function gatePlugin(): PluginEntry {
   return {
-    name: 'gate',
-    apply(registry) {
-      registry.approvals.gate((exec, next) =>
-        exec.name === GATED ? { kind: 'ask', reason: `${GATED} 要人看過` } : next(),
-      );
+    plugin: {
+      name: 'gate',
+      apply(registry) {
+        registry.approvals.gate((exec, next) =>
+          exec.name === GATED ? { kind: 'ask', reason: `${GATED} 要人看過` } : next(),
+        );
+      },
     },
   };
 }

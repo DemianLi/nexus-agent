@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { ASK_USER_QUESTION_TOOL_NAME, createAskUserPlugin } from '@nexus/plugin-ask-user';
 import type { ConversationState, Event } from '@nexus/wire';
 import { emptyConversation, reduceAll, reduceConversation } from '@nexus/wire';
@@ -34,26 +34,30 @@ import type { PumpAgent } from './thread-pump.js';
 
 type ToolEntry = Extract<ConversationState['entries'][number], { kind: 'tool' }>;
 
-const DANGER: NexusPlugin = {
-  name: 'danger',
-  apply(registry) {
-    registry.tools.register(
-      tool(() => '危險的事做完了', {
-        name: 'danger',
-        description: '要核准。',
-        schema: z.object({}),
-      }),
-    );
-    registry.approvals.gate((exec, next) =>
-      exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
-    );
+const DANGER: PluginEntry = {
+  plugin: {
+    name: 'danger',
+    apply(registry) {
+      registry.tools.register(
+        tool(() => '危險的事做完了', {
+          name: 'danger',
+          description: '要核准。',
+          schema: z.object({}),
+        }),
+      );
+      registry.approvals.gate((exec, next) =>
+        exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
+      );
+    },
   },
 };
 
-const WORKER: NexusPlugin = {
-  name: 'worker-host',
-  apply(registry) {
-    registry.subagents.register({ name: 'worker', description: '幹活的。' });
+const WORKER: PluginEntry = {
+  plugin: {
+    name: 'worker-host',
+    apply(registry) {
+      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    },
   },
 };
 
@@ -88,7 +92,7 @@ function rootCards(state: ConversationState): string[] {
  * 真的組裝跑一輪到收尾（停下來等人，或跑完），回傳即時與重播兩個畫面——serve 那條路的形狀，同
  * `tool-card-from-log.test.ts`。
  */
-async function stopForInput(turns: readonly ScriptedTurn[], plugins: readonly NexusPlugin[]) {
+async function stopForInput(turns: readonly ScriptedTurn[], plugins: readonly PluginEntry[]) {
   const root = await mkdtemp(join(tmpdir(), 'nexus-waiting-cards-'));
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns }),

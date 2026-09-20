@@ -11,7 +11,7 @@
 import { createRegistry } from './registry.js';
 import type { InternalPluginRegistry } from './registry.js';
 import { formatOrigin, resolveEntries } from './plugin.js';
-import type { NexusPlugin, PluginEntry, PluginOrigin } from './plugin.js';
+import type { PluginEntry, PluginOrigin, ResolvedPluginEntry } from './plugin.js';
 
 export interface LoadResult {
   /** 載入完成的 registry，接著交給 fold。 */
@@ -22,7 +22,7 @@ export interface LoadResult {
    * **停用的也在裡面**（`entry.disabled` 是 `true`）。那是 `disabled: true` 與「把這一行
    * 刪掉」的差別所在：關著的條目仍然指得出名字，診斷才講得出「它在清單裡，只是關著」。
    */
-  entries: readonly PluginEntry[];
+  entries: readonly ResolvedPluginEntry[];
   /**
    * 收掉 plugin 經 `lifecycle.onDispose()` 登記的東西，逆序、冪等。
    *
@@ -39,23 +39,24 @@ export interface LoadResult {
  * 載入失敗——fail-closed，不接受「載了一半的 agent」。先前成功的 plugin 註冊的
  * 東西留在 registry 上不動，錯誤處理與診斷才有東西可看。
  *
- * 帶 `disabled: true` 的條目**整個跳過**——`apply` 不跑、`requires` 不驗。它仍然佔著
- * 自己的 id 與回傳的 `entries` 裡的位置，理由見 {@link ../plugin.ts | NexusPlugin.disabled}。
+ * 帶 `disabled: true` 的條目**整個跳過**——`apply` 不跑、`requires` 不驗、`config` 不驗。
+ * 它仍然佔著自己的 id 與回傳的 `entries` 裡的位置，理由見
+ * {@link ../plugin.ts | PluginEntry.disabled}。
  *
- * @param plugins - 待載入的清單，順序有意義。
+ * @param plugins - 待載入的條目清單，順序有意義。
  * @param registry - 要載入進去的 registry，省略即開一個新的。
  * @returns 載入結果。
  */
 export async function loadPlugins(
-  plugins: readonly NexusPlugin[],
+  plugins: readonly PluginEntry[],
   registry: InternalPluginRegistry = createRegistry(),
 ): Promise<LoadResult> {
-  // **整份清單先解析完才開始跑。** 補 id 與抓重複 id 都是整份清單的性質，而且這兩種
-  // 失敗要發生在任何 `apply` 之前——已經有 plugin 掛上去之後才發現身分是壞的，那些
+  // **整份清單先解析完才開始跑。** 補 id、抓重複 id 與驗設定都是整份清單的性質，而且這三種
+  // 失敗要發生在任何 `apply` 之前——已經有 plugin 掛上去之後才發現身分或設定是壞的，那些
   // 註冊留在 registry 上就沒有名字可以指。
   const entries = resolveEntries(plugins);
 
-  for (const { plugin, origin, disabled } of entries) {
+  for (const { plugin, origin, disabled, config } of entries) {
     // **停用＝`apply` 一次都不跑**，不是「跑了再撤」。照 dsh 的載入路徑：`refresh()`
     // 開頭就是 `if (this.disabled) return`（`vendor/loader/src/config/entry.ts` 的
     // `Entry.refresh`），從來不 `init()`。dsh 那條「跑了再撤」只存在於 `update()`
@@ -65,7 +66,8 @@ export async function loadPlugins(
     const tracked = trackUndo(registry, undos);
     const leave = registry.enter(origin);
     try {
-      await plugin.apply(tracked);
+      // `config` 是 `resolveEntries` 驗過的那一份（沒有 `Config` 的 plugin 是 `undefined`）。
+      await plugin.apply(tracked, config);
     } catch (error) {
       for (const undo of undos.reverse()) undo();
       // **註冊內容留著、活資源不留。** 先前成功的 plugin 的註冊留在 registry 上是刻意的
@@ -214,7 +216,10 @@ function trackUndo(
  * 本來會提供的能力也真的沒被提供。所以缺件訊息把它們列出來——`disabled` 一加進來，
  * 「我關錯了東西」就會是這條錯誤最常見的原因，而那件事從「有能力沒人提供」看不出來。
  */
-function assertRequires(entries: readonly PluginEntry[], registry: InternalPluginRegistry): void {
+function assertRequires(
+  entries: readonly ResolvedPluginEntry[],
+  registry: InternalPluginRegistry,
+): void {
   const missing: string[] = [];
   for (const { plugin, origin, disabled } of entries) {
     if (disabled) continue;

@@ -73,7 +73,7 @@ function bench(options: GoalPluginOptions = {}): {
   });
   const registry = createRegistry();
   const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-  plugin.apply(registry);
+  plugin.plugin.apply(registry);
   exit();
   const sessions = new SessionRegistry('goal');
   attach(registry, sessions);
@@ -645,7 +645,7 @@ describe('接線說得出原因', () => {
     const plugin = createGoalPlugin();
     const registry = createRegistry();
     const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-    plugin.apply(registry);
+    plugin.plugin.apply(registry);
     exit();
     const found = registry.tools.effective(undefined).get(GOAL_GET_TOOL_NAME);
     const result = await found?.value.invoke({} as never, ROOT_CALL as never);

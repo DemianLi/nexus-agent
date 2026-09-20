@@ -67,8 +67,8 @@ describe('註冊', () => {
   it('認領自己的 package 名，一個就好', () => {
     const registry = createRegistry();
     const plugin = createGoalInvariantPlugin();
-    const exit = registry.enter({ id: `${plugin.name}#0`, name: plugin.name });
-    plugin.apply(registry);
+    const exit = registry.enter({ id: `${plugin.plugin.name}#0`, name: plugin.plugin.name });
+    plugin.plugin.apply(registry, undefined);
     exit();
     const companions = registry.invariants.companions();
     expect(companions).toHaveLength(1);

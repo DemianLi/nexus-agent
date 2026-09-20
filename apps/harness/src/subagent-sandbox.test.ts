@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { Command, MemorySaver } from '@langchain/langgraph';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import type { Event } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -36,37 +36,41 @@ import type { ScriptedToolCall, ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 
-const WORKER: NexusPlugin = {
-  name: 'worker-host',
-  apply(registry) {
-    registry.subagents.register({
-      name: 'worker',
-      description: '幹活的。',
-      systemPrompt: '你是 worker，只做交代給你的事。',
-    });
+const WORKER: PluginEntry = {
+  plugin: {
+    name: 'worker-host',
+    apply(registry) {
+      registry.subagents.register({
+        name: 'worker',
+        description: '幹活的。',
+        systemPrompt: '你是 worker，只做交代給你的事。',
+      });
+    },
   },
 };
 
 /** `/sandbox` 的替身，理由見檔頭。 */
-function flipPlugin(controller: SandboxModeController): NexusPlugin {
+function flipPlugin(controller: SandboxModeController): PluginEntry {
   return {
-    name: 'flip',
-    apply(registry) {
-      registry.tools.register(
-        tool(
-          ({ to }: { to: SandboxMode }) => {
-            controller.switchTo(to);
-            return `切到 ${to}`;
-          },
-          {
-            name: 'flip',
-            description: '切 root 的沙箱模式。',
-            schema: z.object({
-              to: z.enum(['read-only', 'workspace-write', 'danger-full-access']),
-            }),
-          },
-        ),
-      );
+    plugin: {
+      name: 'flip',
+      apply(registry) {
+        registry.tools.register(
+          tool(
+            ({ to }: { to: SandboxMode }) => {
+              controller.switchTo(to);
+              return `切到 ${to}`;
+            },
+            {
+              name: 'flip',
+              description: '切 root 的沙箱模式。',
+              schema: z.object({
+                to: z.enum(['read-only', 'workspace-write', 'danger-full-access']),
+              }),
+            },
+          ),
+        );
+      },
     },
   };
 }

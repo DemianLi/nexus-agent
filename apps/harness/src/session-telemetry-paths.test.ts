@@ -20,7 +20,7 @@ import { createWireClient } from '@nexus/wire';
 import { SessionLog, SessionRegistry } from '@nexus/core';
 import type {
   LoggedMessage,
-  NexusPlugin,
+  PluginEntry,
   SessionTelemetryRecord,
   SessionTelemetryRedactRule,
   SessionTelemetryService,
@@ -60,11 +60,13 @@ function collectingSink(sharing: SessionTelemetrySharingStatus = 'full'): Collec
 
 /** 一個只掛遙測的 plugin——真的走 `apply(registry)`，不是繞過契約直接組協調器。 */
 function telemetryPlugin(sink: SessionTelemetryService, redact?: SessionTelemetryRedactRule) {
-  const plugin: NexusPlugin = {
-    name: 'telemetry',
-    apply(registry) {
-      registry.telemetry.use(sink);
-      if (redact !== undefined) registry.telemetry.redact(redact);
+  const plugin: PluginEntry = {
+    plugin: {
+      name: 'telemetry',
+      apply(registry) {
+        registry.telemetry.use(sink);
+        if (redact !== undefined) registry.telemetry.redact(redact);
+      },
     },
   };
   return plugin;

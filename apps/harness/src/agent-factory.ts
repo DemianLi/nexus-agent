@@ -53,7 +53,7 @@ import {
   type ApprovalPolicy,
   type InvariantError,
   type InvariantSelection,
-  type NexusPlugin,
+  type PluginEntry,
   type PluginRegistry,
   type SessionLog,
   type SessionRegistry,
@@ -70,7 +70,7 @@ import type { HarnessProfileEffects } from './harness-profile.js';
 
 export interface CreateNexusAgentOptions {
   /** plugin 清單。順序有意義：middleware 的順序、以及 `except` 的射程都跟著它。 */
-  readonly plugins: readonly NexusPlugin[];
+  readonly plugins: readonly PluginEntry[];
   /**
    * 模型。**刻意是必填**——基座省略時會退到它自己的預設（`anthropic:claude-sonnet-4-6`），
    * 那會讓「忘了指定」與「就是要 Anthropic」看起來一模一樣，而前者的代價是打一支
@@ -165,7 +165,7 @@ export interface CreateNexusAgentOptions {
   /**
    * 哪些 package 的不變量檢查要真的裝上去。省略即全裝。
    *
-   * **這是次要的那個開關。** 條目層的 {@link NexusPlugin.disabled} 才是主要答案：一個配套
+   * **這是次要的那個開關。** 條目層的 {@link PluginEntry.disabled} 才是主要答案：一個配套
    * 入口 plugin 對一個 package 名，關掉那個條目就等於關掉那個 package 的檢查，而且
    * 錯誤訊息裡指得出是誰。這裡收的 selection 補的是條目層表達不了的兩件事——`enabled:
    * false` 這個總開關，以及跨多個 package 的 regex 樣式。

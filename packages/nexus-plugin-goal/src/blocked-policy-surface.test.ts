@@ -68,7 +68,7 @@ const CURRENT_ROUND = 2;
 function registeredDescription(): string {
   const registry = createRegistry();
   const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-  createGoalPlugin({ blockedAfterConsecutiveRounds: THRESHOLD }).apply(registry);
+  createGoalPlugin({ blockedAfterConsecutiveRounds: THRESHOLD }).plugin.apply(registry);
   exit();
   const tools: Map<string, NamedEntry<StructuredTool>> = registry.tools.effective(undefined);
   const found = tools.get(GOAL_UPDATE_TOOL_NAME);

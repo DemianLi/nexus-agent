@@ -10,26 +10,28 @@
  */
 
 import type { BaseMessage } from '@langchain/core/messages';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { createEchoPlugin } from '@nexus/plugin-echo';
 import { createMiddleware } from 'langchain';
 
 /** 依發生順序的每一次模型請求。測試自己清。 */
 export const seenRequests: (readonly BaseMessage[])[] = [];
 
-const recorder: NexusPlugin = {
-  name: 'request-recorder',
-  apply(registry) {
-    registry.middleware.use(
-      createMiddleware({
-        name: 'RequestRecorder',
-        wrapModelCall: (request, handler) => {
-          seenRequests.push([...request.messages]);
-          return handler(request);
-        },
-      }),
-    );
+const recorder: PluginEntry = {
+  plugin: {
+    name: 'request-recorder',
+    apply(registry) {
+      registry.middleware.use(
+        createMiddleware({
+          name: 'RequestRecorder',
+          wrapModelCall: (request, handler) => {
+            seenRequests.push([...request.messages]);
+            return handler(request);
+          },
+        }),
+      );
+    },
   },
 };
 
-export default [createEchoPlugin(), recorder] satisfies NexusPlugin[];
+export default [createEchoPlugin(), recorder] satisfies PluginEntry[];

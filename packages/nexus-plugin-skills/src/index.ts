@@ -23,7 +23,7 @@
  *    載到空清單時每一輪 `beforeAgent` 都會重掃整個 backend。
  */
 
-import type { NexusPlugin, PluginRegistry } from '@nexus/core';
+import type { PluginEntry, PluginRegistry } from '@nexus/core';
 
 /** 這個 plugin 宣告的能力名。要相依它的 plugin 把這個字串放進自己的 `requires`。 */
 export const SKILLS_CAPABILITY = 'skills';
@@ -73,7 +73,7 @@ export interface SkillsPluginOptions {
  *   基座連 middleware 都不建，結果與「沒掛這個 plugin」一模一樣——而呼叫端顯然以為
  *   自己掛了。
  */
-export function createSkillsPlugin(options: SkillsPluginOptions = {}): NexusPlugin {
+export function createSkillsPlugin(options: SkillsPluginOptions = {}): PluginEntry {
   const sources = options.sources ?? [DEFAULT_SKILLS_SOURCE];
   if (sources.length === 0) {
     throw new Error(
@@ -84,11 +84,13 @@ export function createSkillsPlugin(options: SkillsPluginOptions = {}): NexusPlug
   }
 
   return {
-    name: 'skills',
-    apply(registry: PluginRegistry): void {
-      registry.capabilities.provide(SKILLS_CAPABILITY);
-      // 路徑格式的檢查在 registry 那一側（`assertLoadableSkillsPath`），不在這裡。
-      for (const source of sources) registry.skills.addSource(source);
+    plugin: {
+      name: 'skills',
+      apply(registry: PluginRegistry): void {
+        registry.capabilities.provide(SKILLS_CAPABILITY);
+        // 路徑格式的檢查在 registry 那一側（`assertLoadableSkillsPath`），不在這裡。
+        for (const source of sources) registry.skills.addSource(source);
+      },
     },
   };
 }

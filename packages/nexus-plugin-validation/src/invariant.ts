@@ -22,7 +22,7 @@
  * @module
  */
 
-import type { InvariantInstaller, NexusPlugin } from '@nexus/core';
+import type { InvariantInstaller, NexusPlugin, PluginEntry } from '@nexus/core';
 
 /** 這個配套入口認領的 package 名。 */
 export const VALIDATION_INVARIANT_PACKAGE = '@nexus/plugin-validation';
@@ -41,13 +41,19 @@ const install: InvariantInstaller = () => {};
  * 掛了它**不會裝上任何檢查**，唯一的作用是**保留包名歸屬**：`register()` 就算在
  * installer 是空的時候也把名字佔住，兩個 plugin 不會靜默認領同一個包名。
  *
- * @returns 註冊 `@nexus/plugin-validation` 配套入口的 plugin。
+ * @returns 掛著它的條目，註冊 `@nexus/plugin-validation` 配套入口的 plugin。
  */
-export function createValidationInvariantPlugin(): NexusPlugin {
-  return {
-    name: 'validation-invariant',
-    apply(registry) {
-      registry.invariants.register(VALIDATION_INVARIANT_PACKAGE, install);
-    },
-  };
+export function createValidationInvariantPlugin(): PluginEntry {
+  return { plugin: validationInvariantPlugin };
 }
+
+/**
+ * 模組層級的那一顆。不收設定，所以沒有 `Config`；
+ * [#454](https://github.com/DemianLi/nexus-agent/issues/454) 從設定檔 import 的就是它。
+ */
+export const validationInvariantPlugin: NexusPlugin = {
+  name: 'validation-invariant',
+  apply(registry) {
+    registry.invariants.register(VALIDATION_INVARIANT_PACKAGE, install);
+  },
+};

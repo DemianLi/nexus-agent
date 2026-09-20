@@ -17,7 +17,7 @@
  * 本體，或人在核准卡上看。
  */
 
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 
 // 兩半都搬去 core 了。這幾個名字留在這裡是**相容用的 re-export**，不是實作——
 // 新的呼叫端請直接從 `@nexus/core` 拿。
@@ -41,11 +41,13 @@ export const VALIDATION_CAPABILITY = 'validation';
  *
  * @returns 可載入的 plugin。
  */
-export function createValidationPlugin(): NexusPlugin {
+export function createValidationPlugin(): PluginEntry {
   return {
-    name: 'validation',
-    apply(registry) {
-      registry.capabilities.provide(VALIDATION_CAPABILITY);
+    plugin: {
+      name: 'validation',
+      apply(registry) {
+        registry.capabilities.provide(VALIDATION_CAPABILITY);
+      },
     },
   };
 }

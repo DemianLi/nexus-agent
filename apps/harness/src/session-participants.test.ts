@@ -88,11 +88,11 @@ describe('組裝點', () => {
       const log = sessions.root;
       const detach = attachSession(sessions);
       expect(detach).toBeDefined();
-      expect(plugin.attached()).toHaveLength(1);
-      plugin.serviceFor(log)?.create({ objective: '接上了' });
+      expect(plugin.plugin.attached()).toHaveLength(1);
+      plugin.plugin.serviceFor(log)?.create({ objective: '接上了' });
       expect(log.events.map((event) => event.type)).toEqual(['goal/change']);
       detach();
-      expect(plugin.attached()).toEqual([]);
+      expect(plugin.plugin.attached()).toEqual([]);
     } finally {
       await dispose();
     }
@@ -167,12 +167,12 @@ describe('web 那條', () => {
       fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
     });
 
-    expect(plugin.attached()).toEqual([]);
+    expect(plugin.plugin.attached()).toEqual([]);
     await client.openEvents('t1');
-    expect(plugin.attached()).toHaveLength(1);
+    expect(plugin.plugin.attached()).toHaveLength(1);
     await client.openEvents('t2');
     // **一個 thread 一份日誌，所以是兩個服務不是一個**——這正是服務綁日誌而不是綁
     // registry 的理由。
-    expect(plugin.attached()).toHaveLength(2);
+    expect(plugin.plugin.attached()).toHaveLength(2);
   });
 });

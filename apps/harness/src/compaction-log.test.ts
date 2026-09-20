@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { fromLoggedMessage, SessionLog, SessionRegistry } from '@nexus/core';
-import type { NexusPlugin, SessionEvent, SessionEventMap } from '@nexus/core';
+import type { PluginEntry, SessionEvent, SessionEventMap } from '@nexus/core';
 import { describe, expect, it, vi } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -32,10 +32,12 @@ type CompactionSummary = SessionEventMap['compaction/summary'];
 const ROOT_ID = 'compaction-root';
 
 /** 只註冊一個 subagent，其餘什麼都不做。 */
-const withWorker: NexusPlugin = {
-  name: 'worker-host',
-  apply(registry) {
-    registry.subagents.register({ name: 'worker', description: '幹活的。' });
+const withWorker: PluginEntry = {
+  plugin: {
+    name: 'worker-host',
+    apply(registry) {
+      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    },
   },
 };
 
@@ -69,7 +71,7 @@ async function run(
   turns: readonly ScriptedTurn[],
   options: {
     summarization?: Parameters<typeof createNexusAgent>[0]['summarization'];
-    plugins?: readonly NexusPlugin[];
+    plugins?: readonly PluginEntry[];
     invocations?: number;
   } = {},
 ): Promise<RunResult> {

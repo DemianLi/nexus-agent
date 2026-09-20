@@ -49,7 +49,7 @@ function mount(
   });
   const registry = createRegistry();
   const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-  plugin.apply(registry);
+  plugin.plugin.apply(registry);
   exit();
 
   const opened: SessionLog[] = [];
@@ -76,7 +76,7 @@ function mount(
     command,
     logs: opened,
     serviceFor: (log) => {
-      const service = plugin.serviceFor(log);
+      const service = plugin.plugin.serviceFor(log);
       if (service === undefined) throw new Error('接線之後應該找得到服務');
       return service;
     },
@@ -197,7 +197,7 @@ describe('找得到要動的那一份', () => {
     const plugin = createGoalPlugin();
     const registry = createRegistry();
     const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-    plugin.apply(registry);
+    plugin.plugin.apply(registry);
     exit();
     const installers = registry.sessions.installers();
     const first = new SessionLog('a');
@@ -238,7 +238,7 @@ describe('找得到要動的那一份', () => {
     const mountOne = (name: string): { run: (input: string) => CommandResult; log: SessionLog } => {
       const registry = createRegistry();
       const exit = registry.enter({ id: `goal#${name}`, name: 'goal' });
-      plugin.apply(registry);
+      plugin.plugin.apply(registry);
       exit();
       const log = new SessionLog(name);
       createSessionRunner({

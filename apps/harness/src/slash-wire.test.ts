@@ -19,7 +19,7 @@
  *   「兩個都被擋掉」也長這樣。
  */
 
-import type { NexusPlugin, SessionLog } from '@nexus/core';
+import type { PluginEntry, SessionLog } from '@nexus/core';
 import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant';
 import { createEchoPlugin } from '@nexus/plugin-echo';
 import {
@@ -60,7 +60,7 @@ afterEach(async () => {
  * 日誌是從 `attachTelemetry` 那條縫拿的——**那是組裝點唯一看得到 pump 那張註冊表的地方**
  * （`ThreadAgent` 的說明），拿它當觀測點不需要在 handler 上開新的洞。
  */
-async function wire(plugins: readonly NexusPlugin[] = DEFAULT_PLUGINS): Promise<Wired> {
+async function wire(plugins: readonly PluginEntry[] = DEFAULT_PLUGINS): Promise<Wired> {
   const violations: string[] = [];
   const built = await createCliAgent({ live: false }, plugins, undefined, (error) =>
     violations.push(error.message),
@@ -222,10 +222,12 @@ describe('序列', () => {
   });
 
   it('停在核准點的時候也不收', async () => {
-    const gate: NexusPlugin = {
-      name: 'gate-everything',
-      apply: (registry) =>
-        void registry.approvals.gate(() => ({ kind: 'ask', reason: '先給人看過' })),
+    const gate: PluginEntry = {
+      plugin: {
+        name: 'gate-everything',
+        apply: (registry) =>
+          void registry.approvals.gate(() => ({ kind: 'ask', reason: '先給人看過' })),
+      },
     };
     const wired = await wire([...DEFAULT_PLUGINS, gate]);
     const events = await wired.client.openEvents('t');
@@ -248,18 +250,20 @@ describe('序列', () => {
     let release: (() => void) | undefined;
     let entered: (() => void) | undefined;
     const started = new Promise<void>((resolve) => (entered = resolve));
-    const slow: NexusPlugin = {
-      name: 'slow-command',
-      apply: (registry) =>
-        void registry.commands.register({
-          name: 'slow',
-          description: '等人放行才回來。',
-          handler: async () => {
-            entered?.();
-            await new Promise<void>((resolve) => (release = resolve));
-            return { kind: 'success', text: '放行了。' };
-          },
-        }),
+    const slow: PluginEntry = {
+      plugin: {
+        name: 'slow-command',
+        apply: (registry) =>
+          void registry.commands.register({
+            name: 'slow',
+            description: '等人放行才回來。',
+            handler: async () => {
+              entered?.();
+              await new Promise<void>((resolve) => (release = resolve));
+              return { kind: 'success', text: '放行了。' };
+            },
+          }),
+      },
     };
     const wired = await wire([createEchoPlugin(), createCommandsInvariantPlugin(), slow]);
     await wired.client.openEvents('t');

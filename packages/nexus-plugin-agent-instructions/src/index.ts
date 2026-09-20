@@ -90,7 +90,7 @@
 import { createHash } from 'node:crypto';
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import type { NexusPlugin, PluginRegistry, SessionLookup } from '@nexus/core';
+import type { PluginEntry, PluginRegistry, SessionLookup } from '@nexus/core';
 import { effectiveMessages, toLoggedMessage } from '@nexus/core';
 import { adaptBackendProtocol } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
@@ -262,7 +262,7 @@ function record(
  */
 export function createAgentInstructionsPlugin(
   options: AgentInstructionsPluginOptions = {},
-): NexusPlugin {
+): PluginEntry {
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
   if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
     throw new Error(
@@ -272,12 +272,14 @@ export function createAgentInstructionsPlugin(
   }
 
   return {
-    name: 'agent-instructions',
-    apply(registry: PluginRegistry): void {
-      registry.capabilities.provide(AGENT_INSTRUCTIONS_CAPABILITY);
-      registry.middleware.useWithBackend((backend) =>
-        createAgentInstructionsMiddleware(backend, maxBytes, registry.sessions),
-      );
+    plugin: {
+      name: 'agent-instructions',
+      apply(registry: PluginRegistry): void {
+        registry.capabilities.provide(AGENT_INSTRUCTIONS_CAPABILITY);
+        registry.middleware.useWithBackend((backend) =>
+          createAgentInstructionsMiddleware(backend, maxBytes, registry.sessions),
+        );
+      },
     },
   };
 }

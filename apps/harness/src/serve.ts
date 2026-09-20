@@ -27,7 +27,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { THREADS_PATH } from '@nexus/wire';
 import type {
-  NexusPlugin,
+  PluginEntry,
   ResumedStoredSession,
   SessionLog,
   SessionRegistry,
@@ -263,7 +263,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   const auth = new BrowserAuth(await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)));
   const webDist = options.webDist ?? resolveWebDist();
 
-  const plugins: readonly NexusPlugin[] =
+  const plugins: readonly PluginEntry[] =
     invocation.pluginModule === undefined
       ? DEFAULT_PLUGINS
       : await loadPluginModule(invocation.pluginModule, options.cwd);
@@ -455,7 +455,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   const authenticatedUrl = auth.authenticatedUrl(server.url);
   log(`nexus-agent 在 ${authenticatedUrl}`);
   log(`模型：${invocation.live ? LIVE_MODEL_ID : '假模型（ScriptedChatModel）'}`);
-  log(`plugin：${plugins.map((plugin) => plugin.name).join('、') || '（空）'}`);
+  log(`plugin：${plugins.map((entry) => entry.plugin.name).join('、') || '（空）'}`);
   log(
     existsSync(join(webDist, 'index.html'))
       ? `網頁：${webDist}`

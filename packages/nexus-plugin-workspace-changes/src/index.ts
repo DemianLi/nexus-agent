@@ -42,7 +42,7 @@ import { tmpdir } from 'node:os';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 
-import type { NexusPlugin, PluginRegistry, SessionLog } from '@nexus/core';
+import type { NexusPlugin, PluginEntry, PluginRegistry, SessionLog } from '@nexus/core';
 import type { WorkspaceChangesSummary, WorkspaceFileDiff } from '@nexus/wire';
 
 import { GitRunner, resolveGitExecutable } from './git.js';
@@ -129,11 +129,16 @@ export interface WorkspaceChangesOptions {
  * 建一份：plugin 與它的服務。**一份只掛一次組裝**——服務沒有會話 id，它答的是掛上的那一次組裝的 root。
  *
  * @param options - 工作區根與上限。
- * @returns plugin，與讀它記下的摘要的服務。
+ * @returns 條目，與讀它記下的摘要的服務。
  * @throws 上限不是正的安全整數，同 dsh 在載入時驗。
  */
 export function createWorkspaceChanges(options: WorkspaceChangesOptions): {
-  readonly plugin: NexusPlugin;
+  /**
+   * 掛上去的條目。**設定不走 `Config`**：`warn`／`info`／`git` 是活的協作者，`service`
+   * 是對外的控制面，兩者都搬不成資料，留給
+   * [#459](https://github.com/DemianLi/nexus-agent/issues/459)。
+   */
+  readonly entry: PluginEntry;
   readonly service: WorkspaceChanges;
 } {
   const limits = { ...WORKSPACE_CHANGES_LIMITS, ...options.limits };
@@ -243,7 +248,7 @@ export function createWorkspaceChanges(options: WorkspaceChangesOptions): {
     summary: (seq) => current?.summary(seq),
     diff: (seq, index, signal) => current?.diff(seq, index, signal) ?? Promise.resolve(undefined),
   };
-  return { plugin, service };
+  return { entry: { plugin }, service };
 }
 
 /**

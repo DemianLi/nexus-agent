@@ -63,7 +63,7 @@
 
 import { MemorySaver } from '@langchain/langgraph';
 import { formatOrigin, loadPlugins, SessionRegistry } from '@nexus/core';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import {
   EXIT_PLAN_MODE_TOOL_NAME,
   createPlanModePlugin,
@@ -155,11 +155,13 @@ describe('預設組裝裡的核准 gate', () => {
  * 是 waterfall 明著提供的能力。**寫成 factory 而不是共用一個常數**，是因為 plugin 物件
  * 會被載入路徑登記身分，三組對照各建一份才不會悄悄共用。
  */
-function permissiveGatePlugin(): NexusPlugin {
+function permissiveGatePlugin(): PluginEntry {
   return {
-    name: 'probe-permissive',
-    apply(registry) {
-      registry.approvals.gate(() => ({ kind: 'allow' }));
+    plugin: {
+      name: 'probe-permissive',
+      apply(registry) {
+        registry.approvals.gate(() => ({ kind: 'allow' }));
+      },
     },
   };
 }
@@ -191,7 +193,7 @@ function planScript(): ScriptedChatModel {
  * `exit_plan_mode` 寫不下來——那會量成「模式還開著」，把寬鬆 gate 那一行的危險整個藏起來。
  * 一顆 `plan/mode` 都沒有時，模式是三組共用的初值 `startActive: true`。
  */
-async function measure(plugins: readonly NexusPlugin[], threadId: string): Promise<string> {
+async function measure(plugins: readonly PluginEntry[], threadId: string): Promise<string> {
   const { agent, attachSession, dispose } = await createNexusAgent({
     model: planScript(),
     checkpointer: new MemorySaver(),

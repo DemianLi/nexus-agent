@@ -9,7 +9,7 @@
 
 import { tool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
-import type { CommandRegistrationPoint, NexusPlugin } from '@nexus/core';
+import type { CommandRegistrationPoint, PluginEntry } from '@nexus/core';
 import type { PendingApproval, PendingInput, WireClient } from '@nexus/wire';
 import { createWireClient, isApprovalPending } from '@nexus/wire';
 import { createRegistry } from '@nexus/core';
@@ -140,21 +140,23 @@ export const NOTE_TOOL_NAME = 'take_note';
  * @param options - `deny` 給 `false` 可以拿掉那條規則。
  * @returns 可載入的 plugin。
  */
-export function createNotePlugin(options: { deny?: boolean } = {}): NexusPlugin {
+export function createNotePlugin(options: { deny?: boolean } = {}): PluginEntry {
   return {
-    name: 'note',
-    apply(registry) {
-      registry.capabilities.provide('note');
-      registry.tools.register(
-        tool(({ text }) => `已記下：${text}`, {
-          name: NOTE_TOOL_NAME,
-          description: '把一段文字記下來。',
-          schema: z.object({ text: z.string().describe('要記下的內容') }),
-        }),
-      );
-      if (options.deny !== false) {
-        registry.permissions.deny(['/secrets/**'], { except: ['/secrets/public/**'] });
-      }
+    plugin: {
+      name: 'note',
+      apply(registry) {
+        registry.capabilities.provide('note');
+        registry.tools.register(
+          tool(({ text }) => `已記下：${text}`, {
+            name: NOTE_TOOL_NAME,
+            description: '把一段文字記下來。',
+            schema: z.object({ text: z.string().describe('要記下的內容') }),
+          }),
+        );
+        if (options.deny !== false) {
+          registry.permissions.deny(['/secrets/**'], { except: ['/secrets/public/**'] });
+        }
+      },
     },
   };
 }
@@ -168,10 +170,12 @@ export function createNotePlugin(options: { deny?: boolean } = {}): NexusPlugin 
  * @param routePrefix - 掛載點，要以 `/` 開頭且結尾。
  * @returns 可載入的 plugin。
  */
-export function createMountPlugin(routePrefix: string): NexusPlugin {
+export function createMountPlugin(routePrefix: string): PluginEntry {
   return {
-    name: 'mount',
-    apply: (registry) => void registry.backend.mount(routePrefix, new StateBackend()),
+    plugin: {
+      name: 'mount',
+      apply: (registry) => void registry.backend.mount(routePrefix, new StateBackend()),
+    },
   };
 }
 
@@ -194,11 +198,13 @@ export function fakeTool(name: string): StructuredTool {
  * @param scope - 註冊到哪一層，省略即全域。
  * @returns 可載入的 plugin。
  */
-export function createToolPlugin(name: string, scope?: string): NexusPlugin {
+export function createToolPlugin(name: string, scope?: string): PluginEntry {
   return {
-    name: `provides-${name}`,
-    apply(registry) {
-      registry.tools.register(fakeTool(name), scope === undefined ? undefined : { scope });
+    plugin: {
+      name: `provides-${name}`,
+      apply(registry) {
+        registry.tools.register(fakeTool(name), scope === undefined ? undefined : { scope });
+      },
     },
   };
 }

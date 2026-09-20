@@ -10,7 +10,7 @@
 import { MemorySaver } from '@langchain/langgraph';
 import { describe, expect, it } from 'vitest';
 import { SessionRegistry } from '@nexus/core';
-import type { ModelUsage, NexusPlugin, SessionEvent } from '@nexus/core';
+import type { ModelUsage, PluginEntry, SessionEvent } from '@nexus/core';
 import { createNexusAgent } from './agent-factory.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -19,10 +19,12 @@ import type { ScriptedTurn } from './scripted-model.js';
 const ROOT_ID = 'usage-root';
 
 /** 只註冊一個 subagent，其餘什麼都不做。 */
-const withWorker: NexusPlugin = {
-  name: 'worker-host',
-  apply(registry) {
-    registry.subagents.register({ name: 'worker', description: '幹活的。' });
+const withWorker: PluginEntry = {
+  plugin: {
+    name: 'worker-host',
+    apply(registry) {
+      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    },
   },
 };
 
@@ -43,7 +45,7 @@ function usageOf(events: readonly SessionEvent[]): ModelUsage[] {
  */
 async function run(
   turns: readonly ScriptedTurn[],
-  plugins: readonly NexusPlugin[] = [],
+  plugins: readonly PluginEntry[] = [],
   streaming = false,
 ): Promise<{ root: ModelUsage[]; subagents: ModelUsage[][] }> {
   const model = new ScriptedChatModel({ turns });

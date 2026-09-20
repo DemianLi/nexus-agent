@@ -23,7 +23,7 @@ import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { TOOL_ABORTED_TEXT, toLoggedMessage } from '@nexus/core';
-import type { NexusPlugin, SandboxMode } from '@nexus/core';
+import type { PluginEntry, SandboxMode } from '@nexus/core';
 import type { ConversationState, Event } from '@nexus/wire';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
 import { createMiddleware } from 'langchain';
@@ -83,7 +83,7 @@ describe('產品路徑：handler 之後被改成錯誤的結果，web 畫成失�
   /** 真的組裝接上一個 pump 與一條下行——serve 那條路的形狀，同 `turn-cancel.test.ts`。 */
   async function assemble(
     turns: readonly ScriptedTurn[],
-    options: { plugins?: readonly NexusPlugin[]; mode?: SandboxMode } = {},
+    options: { plugins?: readonly PluginEntry[]; mode?: SandboxMode } = {},
   ) {
     const built = await createNexusAgent({
       model: new ScriptedChatModel({ turns }),
@@ -166,17 +166,19 @@ describe('產品路徑：handler 之後被改成錯誤的結果，web 畫成失�
   }, 20000);
 
   it('輸出不合宣告的 schema：失敗、紅字是校驗器那一句', async () => {
-    const shaped: NexusPlugin = {
-      name: 'shaped',
-      apply(registry) {
-        registry.tools.register(
-          tool(() => JSON.stringify({ count: '三' }), {
-            name: 'counter',
-            description: '數東西。',
-            schema: z.object({}),
-          }),
-          { outputSchema: z.object({ count: z.number() }) },
-        );
+    const shaped: PluginEntry = {
+      plugin: {
+        name: 'shaped',
+        apply(registry) {
+          registry.tools.register(
+            tool(() => JSON.stringify({ count: '三' }), {
+              name: 'counter',
+              description: '數東西。',
+              schema: z.object({}),
+            }),
+            { outputSchema: z.object({ count: z.number() }) },
+          );
+        },
       },
     };
     const run = await assemble(
@@ -199,19 +201,21 @@ describe('產品路徑：handler 之後被改成錯誤的結果，web 畫成失�
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const slow: NexusPlugin = {
-      name: 'slow',
-      apply(registry) {
-        registry.tools.register(
-          tool(
-            async () => {
-              started += 1;
-              await gate;
-              return '寫好了';
-            },
-            { name: 'slow_write', description: '慢慢寫。', schema: z.object({}) },
-          ),
-        );
+    const slow: PluginEntry = {
+      plugin: {
+        name: 'slow',
+        apply(registry) {
+          registry.tools.register(
+            tool(
+              async () => {
+                started += 1;
+                await gate;
+                return '寫好了';
+              },
+              { name: 'slow_write', description: '慢慢寫。', schema: z.object({}) },
+            ),
+          );
+        },
       },
     };
     const run = await assemble(
@@ -241,26 +245,28 @@ describe('產品路徑：handler 之後被改成錯誤的結果，web 畫成失�
   }, 20000);
 
   it('本體成功、內層 middleware 在它之後拋錯：失敗、紅字是圍堵那一句', async () => {
-    const fragile: NexusPlugin = {
-      name: 'fragile',
-      apply(registry) {
-        registry.tools.register(
-          tool(() => '做完了', {
-            name: 'fragile',
-            description: '會被後面炸掉。',
-            schema: z.object({}),
-          }),
-        );
-        registry.middleware.use(
-          createMiddleware({
-            name: 'blowsUpAfter',
-            wrapToolCall: async (request, handler) => {
-              const result = await handler(request);
-              if (request.toolCall.name === 'fragile') throw new Error('之後炸了');
-              return result;
-            },
-          }) as never,
-        );
+    const fragile: PluginEntry = {
+      plugin: {
+        name: 'fragile',
+        apply(registry) {
+          registry.tools.register(
+            tool(() => '做完了', {
+              name: 'fragile',
+              description: '會被後面炸掉。',
+              schema: z.object({}),
+            }),
+          );
+          registry.middleware.use(
+            createMiddleware({
+              name: 'blowsUpAfter',
+              wrapToolCall: async (request, handler) => {
+                const result = await handler(request);
+                if (request.toolCall.name === 'fragile') throw new Error('之後炸了');
+                return result;
+              },
+            }) as never,
+          );
+        },
       },
     };
     const run = await assemble(
@@ -281,10 +287,12 @@ describe('產品路徑：handler 之後被改成錯誤的結果，web 畫成失�
   }, 20000);
 
   it('子代理裡被 fence 擋下的 `write_file` 也畫成失敗——子代理的日誌也在訂閱範圍裡', async () => {
-    const worker: NexusPlugin = {
-      name: 'worker-host',
-      apply(registry) {
-        registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    const worker: PluginEntry = {
+      plugin: {
+        name: 'worker-host',
+        apply(registry) {
+          registry.subagents.register({ name: 'worker', description: '幹活的。' });
+        },
       },
     };
     const run = await assemble(

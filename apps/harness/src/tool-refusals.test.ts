@@ -19,7 +19,7 @@ import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { SessionRegistry } from '@nexus/core';
-import type { NexusPlugin, SessionEvent } from '@nexus/core';
+import type { PluginEntry, SessionEvent } from '@nexus/core';
 import {
   createGoalPlugin,
   GOAL_CREATE_TOOL_NAME,
@@ -101,10 +101,12 @@ describe('拒絕在日誌上記成錯誤', () => {
 
   /** goal 工具宣告 `rootOnly`，subagent 那一份拿到的是 fold 換上的樁。 */
   it('root-only 樁：subagent 那一份日誌上記成錯誤、不帶碼', async () => {
-    const worker: NexusPlugin = {
-      name: 'worker-host',
-      apply(registry) {
-        registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    const worker: PluginEntry = {
+      plugin: {
+        name: 'worker-host',
+        apply(registry) {
+          registry.subagents.register({ name: 'worker', description: '幹活的。' });
+        },
       },
     };
     const { agent, attachSession, dispose } = await createNexusAgent({

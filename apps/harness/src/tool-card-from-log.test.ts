@@ -24,7 +24,7 @@ import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { TOOL_ABORTED_BEFORE_DISPATCH_TEXT, toLoggedMessage } from '@nexus/core';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { createPlanModePlugin, NOT_IN_PLAN_MODE_MESSAGE } from '@nexus/plugin-plan-mode';
 import type { ConversationState, Event } from '@nexus/wire';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
@@ -80,26 +80,30 @@ function baseToolFrames(frames: readonly Event[], callName?: string): Event[] {
   );
 }
 
-const DANGER: NexusPlugin = {
-  name: 'danger',
-  apply(registry) {
-    registry.tools.register(
-      tool(() => '危險的事做完了', {
-        name: 'danger',
-        description: '要核准。',
-        schema: z.object({}),
-      }),
-    );
-    registry.approvals.gate((exec, next) =>
-      exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
-    );
+const DANGER: PluginEntry = {
+  plugin: {
+    name: 'danger',
+    apply(registry) {
+      registry.tools.register(
+        tool(() => '危險的事做完了', {
+          name: 'danger',
+          description: '要核准。',
+          schema: z.object({}),
+        }),
+      );
+      registry.approvals.gate((exec, next) =>
+        exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
+      );
+    },
   },
 };
 
-const WORKER: NexusPlugin = {
-  name: 'worker-host',
-  apply(registry) {
-    registry.subagents.register({ name: 'worker', description: '幹活的。' });
+const WORKER: PluginEntry = {
+  plugin: {
+    name: 'worker-host',
+    apply(registry) {
+      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    },
   },
 };
 
@@ -120,7 +124,7 @@ describe('產品路徑：本體沒被呼叫到的呼叫，web 上有一張卡', 
   });
 
   /** 真的組裝接上一個 pump 與一條下行——serve 那條路的形狀，同 `tool-status-wire.test.ts`。 */
-  async function assemble(turns: readonly ScriptedTurn[], plugins: readonly NexusPlugin[] = []) {
+  async function assemble(turns: readonly ScriptedTurn[], plugins: readonly PluginEntry[] = []) {
     const built = await createNexusAgent({
       model: new ScriptedChatModel({ turns }),
       checkpointer: new MemorySaver(),

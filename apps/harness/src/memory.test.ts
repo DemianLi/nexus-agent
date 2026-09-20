@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { createMemoryPlugin } from '@nexus/plugin-memory';
 import { StateBackend } from 'deepagents';
 import { describe, expect, it } from 'vitest';
@@ -92,9 +92,11 @@ describe('記憶進到 system prompt', () => {
   it('deny 規則擋不住記憶載入——規則表管工具，管不到 backend 方法', async () => {
     const root = await workspace({ 'AGENTS.md': CODENAME });
     const model = new ScriptedChatModel({ turns: [{ content: '知道了。' }] });
-    const guard: NexusPlugin = {
-      name: 'guard',
-      apply: (registry) => void registry.permissions.deny(['/AGENTS.md']),
+    const guard: PluginEntry = {
+      plugin: {
+        name: 'guard',
+        apply: (registry) => void registry.permissions.deny(['/AGENTS.md']),
+      },
     };
 
     const { agent, dispose } = await createNexusAgent({
@@ -161,10 +163,12 @@ describe('記憶進到 system prompt', () => {
 describe('subagent 的記憶邊界', () => {
   it('root 那幾輪有 <agent_memory>，subagent 那輪沒有', async () => {
     const root = await workspace({ 'AGENTS.md': CODENAME });
-    const crew: NexusPlugin = {
-      name: 'crew',
-      apply: (registry) =>
-        void registry.subagents.register({ name: 'writer', description: '負責寫東西。' }),
+    const crew: PluginEntry = {
+      plugin: {
+        name: 'crew',
+        apply: (registry) =>
+          void registry.subagents.register({ name: 'writer', description: '負責寫東西。' }),
+      },
     };
     // 三輪：root 叫 subagent → subagent 回話 → root 收尾。
     const model = new ScriptedChatModel({

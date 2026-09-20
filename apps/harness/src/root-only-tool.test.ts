@@ -26,7 +26,7 @@ import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import type { NexusPlugin } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 import { createNexusAgent } from './agent-factory.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -40,25 +40,27 @@ const REAL_RESULT = '真的那一顆跑了。';
  * @param calls - 真的那一顆每被叫到一次就推一筆。
  * @returns 可以放進組裝清單的 plugin。
  */
-function rootOnlyPlugin(calls: string[]): NexusPlugin {
+function rootOnlyPlugin(calls: string[]): PluginEntry {
   return {
-    name: 'root-only',
-    apply(registry) {
-      registry.tools.register(
-        tool(
-          () => {
-            calls.push(TOOL_NAME);
-            return REAL_RESULT;
-          },
-          {
-            name: TOOL_NAME,
-            description: '只有 root 叫得動的探針。',
-            schema: z.object({}),
-          },
-        ),
-        { rootOnly: true },
-      );
-      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    plugin: {
+      name: 'root-only',
+      apply(registry) {
+        registry.tools.register(
+          tool(
+            () => {
+              calls.push(TOOL_NAME);
+              return REAL_RESULT;
+            },
+            {
+              name: TOOL_NAME,
+              description: '只有 root 叫得動的探針。',
+              schema: z.object({}),
+            },
+          ),
+          { rootOnly: true },
+        );
+        registry.subagents.register({ name: 'worker', description: '幹活的。' });
+      },
     },
   };
 }

@@ -38,7 +38,7 @@
  * @module
  */
 
-import type { InvariantInstaller, NexusPlugin } from '@nexus/core';
+import type { InvariantInstaller, NexusPlugin, PluginEntry } from '@nexus/core';
 
 import { applyGoalEvent, emptyGoalFoldState } from './fold.js';
 import type { GoalFoldState } from './fold.js';
@@ -108,13 +108,19 @@ export const goalStreamInvariant: InvariantInstaller = (subject, fail) => {
  * 觀察，所以它適用那份清單裡「十一個配套入口全進」的那條例外；域是功能，功能等它有
  * 人打得到的入口再說。
  *
- * @returns 註冊 `@nexus/plugin-goal` 配套入口的 plugin。
+ * @returns 掛著它的條目，註冊 `@nexus/plugin-goal` 配套入口的 plugin。
  */
-export function createGoalInvariantPlugin(): NexusPlugin {
-  return {
-    name: 'goal-invariant',
-    apply(registry) {
-      registry.invariants.register(GOAL_INVARIANT_PACKAGE, goalStreamInvariant);
-    },
-  };
+export function createGoalInvariantPlugin(): PluginEntry {
+  return { plugin: goalInvariantPlugin };
 }
+
+/**
+ * 模組層級的那一顆。不收設定，所以沒有 `Config`；
+ * [#454](https://github.com/DemianLi/nexus-agent/issues/454) 從設定檔 import 的就是它。
+ */
+export const goalInvariantPlugin: NexusPlugin = {
+  name: 'goal-invariant',
+  apply(registry) {
+    registry.invariants.register(GOAL_INVARIANT_PACKAGE, goalStreamInvariant);
+  },
+};

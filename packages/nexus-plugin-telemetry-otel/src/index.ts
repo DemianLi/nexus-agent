@@ -46,7 +46,7 @@
  */
 
 import type {
-  NexusPlugin,
+  PluginEntry,
   SessionTelemetryRecord,
   SessionTelemetryService,
   SessionTelemetrySeverity,
@@ -289,14 +289,16 @@ export class OpenTelemetrySessionService implements SessionTelemetryService {
  * @returns 可載入的 plugin。
  * @throws 設定不合法——四條檢查各自的訊息都指名是哪個欄位。
  */
-export function createTelemetryOtelPlugin(options: TelemetryOtelOptions = {}): NexusPlugin {
+export function createTelemetryOtelPlugin(options: TelemetryOtelOptions = {}): PluginEntry {
   const service = new OpenTelemetrySessionService(options);
   return {
-    name: PLUGIN_NAME,
-    apply(registry) {
-      registry.telemetry.use(service);
-      // 服務的生命週期歸協調器：`SessionTelemetryCoordinator.dispose()` 會轉發
-      // `shutdown()`。這裡**不**再登記一次 `lifecycle.onDispose`，否則排空會跑兩遍。
+    plugin: {
+      name: PLUGIN_NAME,
+      apply(registry) {
+        registry.telemetry.use(service);
+        // 服務的生命週期歸協調器：`SessionTelemetryCoordinator.dispose()` 會轉發
+        // `shutdown()`。這裡**不**再登記一次 `lifecycle.onDispose`，否則排空會跑兩遍。
+      },
     },
   };
 }

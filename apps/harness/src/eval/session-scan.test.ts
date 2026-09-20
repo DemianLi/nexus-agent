@@ -20,7 +20,7 @@ import {
   REPEAT_REMINDER_MARKER,
   SESSION_LOG_FORMAT_VERSION,
 } from '@nexus/core';
-import type { NexusPlugin, RepeatReminderSettings, SessionEvent } from '@nexus/core';
+import type { PluginEntry, RepeatReminderSettings, SessionEvent } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -493,7 +493,7 @@ function reminderTexts(prompts: readonly (readonly BaseMessage[])[]): string[] {
  */
 async function runAndScan(
   model: ScriptedChatModel | LoopingChatModel,
-  plugins: readonly NexusPlugin[],
+  plugins: readonly PluginEntry[],
   drive: (pump: ThreadPump) => Promise<void>,
   options: { recursionLimit?: number } = {},
 ): Promise<{ scans: SessionScan[]; root: readonly SessionEvent[] }> {
@@ -562,15 +562,17 @@ describe('跟真的組裝對得上', () => {
    * 沒發生的事。
    */
   it('停在核准點再 resume：日誌上兩顆同 callId，掃描只算一次', async () => {
-    const tools: NexusPlugin = {
-      name: 'scan-tools',
-      apply(registry) {
-        registry.tools.register(
-          tool(() => '做完了', { name: 'danger', description: '要核准。', schema: z.object({}) }),
-        );
-        registry.approvals.gate((exec, next) =>
-          exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
-        );
+    const tools: PluginEntry = {
+      plugin: {
+        name: 'scan-tools',
+        apply(registry) {
+          registry.tools.register(
+            tool(() => '做完了', { name: 'danger', description: '要核准。', schema: z.object({}) }),
+          );
+          registry.approvals.gate((exec, next) =>
+            exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
+          );
+        },
       },
     };
     const model = new ScriptedChatModel({

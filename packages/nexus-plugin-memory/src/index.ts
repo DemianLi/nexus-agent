@@ -30,7 +30,7 @@
  * 3. **subagent 拿不到 root 的記憶。** 見 {@link createMemoryPlugin} 的說明。
  */
 
-import type { NexusPlugin, PluginRegistry } from '@nexus/core';
+import type { PluginEntry, PluginRegistry } from '@nexus/core';
 
 /** 這個 plugin 宣告的能力名。要相依它的 plugin 把這個字串放進自己的 `requires`。 */
 export const MEMORY_CAPABILITY = 'memory';
@@ -72,7 +72,7 @@ export interface MemoryPluginOptions {
  *   基座連 middleware 都不建，結果與「沒掛這個 plugin」一模一樣——而呼叫端顯然以為
  *   自己掛了。這種要嘛全有要嘛全無的差別不該是靜默的。
  */
-export function createMemoryPlugin(options: MemoryPluginOptions = {}): NexusPlugin {
+export function createMemoryPlugin(options: MemoryPluginOptions = {}): PluginEntry {
   const sources = options.sources ?? [DEFAULT_MEMORY_SOURCE];
   if (sources.length === 0) {
     throw new Error(
@@ -83,11 +83,13 @@ export function createMemoryPlugin(options: MemoryPluginOptions = {}): NexusPlug
   }
 
   return {
-    name: 'memory',
-    apply(registry: PluginRegistry): void {
-      registry.capabilities.provide(MEMORY_CAPABILITY);
-      // 路徑格式的檢查在 registry 那一側（`assertLoadableMemoryPath`），不在這裡。
-      for (const source of sources) registry.memory.addSource(source);
+    plugin: {
+      name: 'memory',
+      apply(registry: PluginRegistry): void {
+        registry.capabilities.provide(MEMORY_CAPABILITY);
+        // 路徑格式的檢查在 registry 那一側（`assertLoadableMemoryPath`），不在這裡。
+        for (const source of sources) registry.memory.addSource(source);
+      },
     },
   };
 }

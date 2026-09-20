@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { loadPlugins } from './load.js';
 import { createRegistry } from './registry.js';
 import {
@@ -20,7 +21,7 @@ import {
   fakeTool,
 } from './fixtures.js';
 import type { FeedbackService } from './feedback.js';
-import type { NexusPlugin } from './plugin.js';
+import type { PluginEntry } from './plugin.js';
 
 /** 一份什麼都不寫的回饋規則：這裡只看它佔不佔得住那個位子。 */
 function fakeFeedback(): FeedbackService {
@@ -53,7 +54,7 @@ describe('loadPlugins', () => {
   });
 
   it('plugin 名不唯一——同一個工廠掛兩次是合法的', async () => {
-    const mcp = (server: string): NexusPlugin =>
+    const mcp = (server: string): PluginEntry =>
       fakePlugin('mcp', (registry) => {
         registry.tools.register(fakeTool(`${server}_search`));
       });
@@ -99,7 +100,7 @@ describe('loadPlugins', () => {
   });
 
   it('manifest 不合法時載入失敗，訊息指得出是清單裡哪一個', async () => {
-    const broken = { name: '', apply: () => {} } as NexusPlugin;
+    const broken: PluginEntry = { plugin: { name: '', apply: () => {} } };
     await expect(loadPlugins([fakePlugin('ok', () => {}), broken])).rejects.toThrow('plugins[1]');
   });
 });
@@ -194,7 +195,7 @@ describe('載入期回滾', () => {
 });
 
 describe('停用', () => {
-  const off = (plugin: NexusPlugin): NexusPlugin => ({ ...plugin, disabled: true });
+  const off = (entry: PluginEntry): PluginEntry => ({ ...entry, disabled: true });
 
   it('apply 一次都不跑——不是跑了再撤', async () => {
     const applied: string[] = [];
@@ -371,7 +372,7 @@ describe('每個註冊點的回滾', () => {
 describe('關機清理', () => {
   it('逆序跑：後開的先收', async () => {
     const closed: string[] = [];
-    const opener = (id: string): NexusPlugin =>
+    const opener = (id: string): PluginEntry =>
       fakePlugin(id, (registry) => {
         registry.lifecycle.onDispose(() => void closed.push(id));
       });
@@ -447,5 +448,45 @@ describe('關機清理', () => {
     const { dispose } = await loadPlugins(plugins);
     await expect(dispose()).rejects.toThrow(/bad#0 \(bad\)[\s\S]*關不掉/);
     expect(closed).toEqual(['good']);
+  });
+});
+
+describe('設定驗證排在所有 apply 之前（#453）', () => {
+  /** 一顆會記下自己跑過的、帶 Config 的假 plugin。 */
+  const sized = z.strictObject({ maxBytes: z.number().int().positive().default(1) });
+
+  it('清單裡第二個條目的 config 不合法時，第一個條目的 apply 一次都不跑', async () => {
+    // **這一條擋的是「邊跑邊驗」那個寫法。** 邊跑邊驗的話第一顆會先掛上去，載入失敗之後
+    // 那些註冊留在 registry 上——而呼叫端拿到的是一個 exception，沒有人會去撤它。
+    const applied: string[] = [];
+    const first = fakePlugin('first', () => void applied.push('first'));
+    const second = {
+      plugin: { name: 'second', Config: sized, apply: () => void applied.push('second') },
+      config: { maxBytes: -1 },
+    };
+    await expect(loadPlugins([first, second])).rejects.toThrow('second#0 (second)');
+    expect(applied).toEqual([]);
+  });
+
+  it('驗過的那一份原樣交給 apply——預設值補齊，不是把原始的 config 傳過去', async () => {
+    const seen: unknown[] = [];
+    const entry = {
+      plugin: {
+        name: 'sized',
+        Config: sized,
+        apply: (_r: unknown, c: unknown) => void seen.push(c),
+      },
+    };
+    await loadPlugins([entry]);
+    expect(seen).toEqual([{ maxBytes: 1 }]);
+  });
+
+  it('沒有 Config 的 plugin 拿到的是 undefined', async () => {
+    const seen: unknown[] = [];
+    const entry = {
+      plugin: { name: 'plain', apply: (_r: unknown, c: unknown) => void seen.push(c) },
+    };
+    await loadPlugins([entry]);
+    expect(seen).toEqual([undefined]);
   });
 });
