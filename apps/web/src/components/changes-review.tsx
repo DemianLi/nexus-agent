@@ -133,6 +133,22 @@ export function ChangesReview({
   );
 }
 
+/**
+ * 一個檔的路徑標籤：**檔名優先**。位置不夠時先吃掉目錄那一截，不是從尾巴切，
+ * 免得 `../packages/nexus-wire/src/workspace-cha…` 這種只剩目錄、看不出是哪個檔
+ * （git 快照之後 `display` 會出現 `../` 與 `~` 開頭，路徑更長，見 [#470](https://github.com/DemianLi/nexus-agent/issues/470)）。
+ */
+function PathLabel({ display }: { display: string }) {
+  const cut = display.lastIndexOf('/');
+  if (cut < 0) return <span className="truncate">{display}</span>;
+  return (
+    <span className="flex min-w-0 items-baseline">
+      <span className="truncate">{display.slice(0, cut + 1)}</span>
+      <span className="max-w-full shrink-0 truncate">{display.slice(cut + 1)}</span>
+    </span>
+  );
+}
+
 /** 選檔器：檔多時可以打字找（摘要最多列 500 個）。 */
 function FilePicker({
   summary,
@@ -157,7 +173,7 @@ function FilePicker({
           aria-label={`選擇要看的檔案，現在是 ${file.display}`}
           data-testid="review-file"
         >
-          <span className="truncate">{file.display}</span>
+          <PathLabel display={file.display} />
           <ChevronsUpDown className="opacity-60" />
         </Button>
       </PopoverTrigger>
@@ -178,7 +194,9 @@ function FilePicker({
                 className="gap-3"
               >
                 <Check className={cn('size-4', at === index ? 'opacity-100' : 'opacity-0')} />
-                <span className="min-w-0 flex-1 truncate font-mono text-xs">{entry.display}</span>
+                <span className="min-w-0 flex-1 font-mono text-xs">
+                  <PathLabel display={entry.display} />
+                </span>
                 <FileCounts file={entry} />
               </CommandItem>
             ))}
