@@ -201,7 +201,7 @@ const INDEX: readonly InterceptionRow[] = [
       '只回一則 ToolMessage）；人那條路只有一顆 `interrupt/raised`，**只帶 `interruptId`**；' +
       '**結果從來沒進日誌**（`apps/harness/src/wire-handler.ts` 收到 `decisions` 之後零個 ' +
       '`append`），日誌上只剩 `turn/start` 的 resume 那一格，而它分不出核准與拒絕。' +
-      '兩個生產者都在圖外（`apps/harness/src/thread-pump.ts:384`、`apps/harness/src/cli.ts:733`）' +
+      '兩個生產者都在圖外（`apps/harness/src/thread-pump.ts:1107`、`apps/harness/src/cli.ts:1052`）' +
       '——**與第 2 列同一個結構成因，這是第二個實例**。' +
       '**這不是缺口帳第 3 筆**：那一筆是工具事件（對 dsh 的 `tool/call`↔`tool/result`，' +
       '#264 已補上），這一筆是核准自己那兩顆，宣告在別的套件、別的事件名上。**兩筆分開，不要合**' +

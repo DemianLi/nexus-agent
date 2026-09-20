@@ -12,7 +12,12 @@
 import { PassThrough } from 'node:stream';
 
 import { createEchoPlugin } from '@nexus/plugin-echo';
-import { createGoalPlugin, GOAL_CLEARED_MESSAGE, GOAL_COMMAND_NAME } from '@nexus/plugin-goal';
+import {
+  createGoalPlugin,
+  GOAL_CLEARED_MESSAGE,
+  GOAL_COMMAND_NAME,
+  GOALS_SERVICE,
+} from '@nexus/plugin-goal';
 import { SessionRegistry } from '@nexus/core';
 import { createWireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -78,21 +83,21 @@ describe('組裝點', () => {
   });
 
   it('有人 join 就接得起來，交出去的是呼叫端給的那一份日誌', async () => {
-    const plugin = createGoalPlugin();
-    const { attachSession, dispose } = await createNexusAgent({
+    const { attachSession, dispose, services } = await createNexusAgent({
       model: MODEL(),
-      plugins: [createEchoPlugin(), plugin],
+      plugins: [createEchoPlugin(), createGoalPlugin()],
     });
     try {
+      const goals = services.use(GOALS_SERVICE);
       const sessions = new SessionRegistry('one');
       const log = sessions.root;
       const detach = attachSession(sessions);
       expect(detach).toBeDefined();
-      expect(plugin.plugin.attached()).toHaveLength(1);
-      plugin.plugin.serviceFor(log)?.create({ objective: '接上了' });
+      expect(goals.attached()).toHaveLength(1);
+      goals.serviceFor(log)?.create({ objective: '接上了' });
       expect(log.events.map((event) => event.type)).toEqual(['goal/change']);
       detach();
-      expect(plugin.plugin.attached()).toEqual([]);
+      expect(goals.attached()).toEqual([]);
     } finally {
       await dispose();
     }
@@ -150,8 +155,9 @@ describe('web 那條', () => {
   });
 
   it('每個 thread 的日誌各接一次——`wire-handler` 沒有把它丟掉', async () => {
-    const plugin = createGoalPlugin();
-    const built = await createCliAgent({ live: false }, [createEchoPlugin(), plugin]);
+    const built = await createCliAgent({ live: false }, [createEchoPlugin(), createGoalPlugin()]);
+    const goals = built.goals;
+    if (goals === undefined) throw new Error('掛了 goal 就該拿得到服務');
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
@@ -167,12 +173,12 @@ describe('web 那條', () => {
       fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
     });
 
-    expect(plugin.plugin.attached()).toEqual([]);
+    expect(goals.attached()).toEqual([]);
     await client.openEvents('t1');
-    expect(plugin.plugin.attached()).toHaveLength(1);
+    expect(goals.attached()).toHaveLength(1);
     await client.openEvents('t2');
     // **一個 thread 一份日誌，所以是兩個服務不是一個**——這正是服務綁日誌而不是綁
     // registry 的理由。
-    expect(plugin.plugin.attached()).toHaveLength(2);
+    expect(goals.attached()).toHaveLength(2);
   });
 });

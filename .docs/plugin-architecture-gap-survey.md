@@ -433,7 +433,7 @@ dsh 有 in-process／fork／spawn／acp／claude-code／codex 六種委派後端
 
 **基座的判別式認的是存在的標記，不是欄位的缺席。** `isForkedSubAgent()` 的三行是 `'mode' in value && value.mode === 'fork'`（`langsmith-*.js:3287`），不是「沒有 `systemPrompt`」——所以一個沒寫 `systemPrompt` 的普通 `SubAgent` **不會**被誤判成 fork。這件事查之前不知道，而它是兩種很不一樣的世界：如果判別式認的是缺席，fork 語意就是**任何人少寫一個欄位就踩得到**的東西；認的是存在的標記，就得有人明著寫 `mode: 'fork'` 才碰得到。
 
-**生產路徑上只有一個生產者，而它是原樣傳遞的那種**：`foldRegistry`（`fold.ts:290` → `agent-factory.ts:359` → `createDeepAgent`）。我們自己的程式碼裡那條路上沒有 cast、沒有 `@ts-expect-error`——但那擋的是**我們**，不是未來寫 plugin 的人。**而今天這條路上零佔用者**：扣掉測試與 fixture 之後，沒有任何生產 plugin 呼叫過 `subagents.register()`。
+**生產路徑上只有一個生產者，而它是原樣傳遞的那種**：`foldRegistry`（`fold.ts:305` → `agent-factory.ts:441` → `createDeepAgent`）。我們自己的程式碼裡那條路上沒有 cast、沒有 `@ts-expect-error`——但那擋的是**我們**，不是未來寫 plugin 的人。**而今天這條路上零佔用者**：扣掉測試與 fixture 之後，沒有任何生產 plugin 呼叫過 `subagents.register()`。
 
 **判定：認帳不做，這是這一條唯一值得推翻的判斷。** 理由三條——(1) 今天零消費者，也零註冊者，沒有任何 plugin 要求「繼承父代理的對話」；(2) 這條窄是**我們自己選的**，不是基座缺，放寬的成本是一行型別加上想清楚 fork 的權限與 middleware 怎麼折（`foldSubAgents` 的 `{ ...spec }` 展開對 `ForkedSubAgent` 不會直接成立，它沒有 `systemPrompt`）；(3) 其餘四種後端（spawn／acp／claude-code／codex）基座根本沒有，那是決策 3 延後的那一類與定位差異，不在這一格。**需求出現時再開卡，而兩條絆索保證那天不會是「咦，什麼時候變得進得來了」。**
 
@@ -475,7 +475,7 @@ dsh 有 in-process／fork／spawn／acp／claude-code／codex 六種委派後端
 
    1. **應答者在 dsh 是掛點，在我們這側是寫死的一格。** `approval/request`（`interaction/user-approval/src/types.ts:85`）是一條 Cordis waterfall：回一個結果就是替那個 agent 作答，否則 `next()`；UI 通道與 ACP 橋接**各是一位應答者**，提問者也不只一個（`core/tools`、`sandbox/escalation.ts`、`shell/tool-bash`）。我們的 `registry.approvals` **只收提問者**（`gate()`），應答者是 `approval.ts` 裡寫死的 `interrupt(...)`，`ApprovalChannel` 是 fold 當下的一個判決、不是掛點。
    2. **結果詞彙四值 vs 兩值。** `ApprovalOutcome`（`types.ts:32`）＝ `'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'`，`serviceAsk` 一對一映回 deny，並把 `cancelled` 抬成一個 `approvalCancelled` 旗標餵給呼叫端的中止判斷。我們只有 approve／reject，**`cancelled` 沒有表達式**。
-   3. **審計事件我們一顆都沒有。** dsh 每次 request 追加 `approval/asked` ＋ `approval/decided`（`types.ts:44-58`，log-only audit，**是自己的事件種類、不是 `tool/*`**），另有 `invariant.ts` 在同一個未結束的輪次內按 id 配對。我們這側：`deny`／`policy-never`／`no-channel` 三條路一顆都不記；人那條只有一顆**只帶 `interruptId`** 的 `interrupt/raised`；**結果從來沒進日誌**（`wire-handler.ts` 收到 `decisions` 之後零個 `append`），日誌上只剩 `turn/start` 的 resume 那一格，而它分不出核准與拒絕。兩個生產者都在圖外（`thread-pump.ts:384`、`cli.ts:733`）——**與 #190 第 2 格的紀錄差同一個結構成因**。
+   3. **審計事件我們一顆都沒有。** dsh 每次 request 追加 `approval/asked` ＋ `approval/decided`（`types.ts:44-58`，log-only audit，**是自己的事件種類、不是 `tool/*`**），另有 `invariant.ts` 在同一個未結束的輪次內按 id 配對。我們這側：`deny`／`policy-never`／`no-channel` 三條路一顆都不記；人那條只有一顆**只帶 `interruptId`** 的 `interrupt/raised`；**結果從來沒進日誌**（`wire-handler.ts` 收到 `decisions` 之後零個 `append`），日誌上只剩 `turn/start` 的 resume 那一格，而它分不出核准與拒絕。兩個生產者都在圖外（`thread-pump.ts:1107`、`cli.ts:1052`）——**與 #190 第 2 格的紀錄差同一個結構成因**。
    4. **政策只對了 `never` 那一半。** dsh 的 `ask` 是預設，而且**當前政策會貢獻進模型看得到的執行期上下文快照**（`user-approval/src/index.ts:156` 的 `'approval:policy'`），`setPolicy()` 還活著切換得了、並為下一步注一則帶來源的 user message。我們的 `approvals.enabled` 是 fold 當下定死的，模型看不到政策。
    5. **輪次邊界。** dsh 的 `request()` 要求身處未結束的輪次，空閒或輪次之間呼叫**在審計之前就拋**——理由是輪次是持久日誌的提交／回放邊界。我們沒有這個要求，也沒有審計可以保護。
 
