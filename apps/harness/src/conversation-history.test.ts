@@ -145,6 +145,42 @@ describe('日誌 → 畫面', () => {
     expect(state.entries.map(line)).toEqual(['human:跑', 'tool:echo:failed:找不到那個檔']);
   });
 
+  /**
+   * **多塊內容的失敗訊息：紅字退回泛用那句**（#439 的副作用，明著釘住）。以前這裡是把每一塊
+   * 接起來，現在照 dsh 的規則不是剛好一塊就不給——退路是錯誤碼，再退是「未指名的錯誤」。
+   * 今天樹上沒有產多塊內容的工具，所以這條釘的是規則，不是現況。
+   */
+  it('失敗訊息是多塊內容：不自己拼，紅字退回錯誤碼', () => {
+    const state = screen(
+      log(
+        human('跑'),
+        reply('', ['c1']),
+        call('c1'),
+        {
+          type: 'tool/result',
+          data: {
+            callId: 'c1',
+            isError: true,
+            error: { name: 'FsError', code: 'FS_SANDBOX_DENIED' },
+            message: toLoggedMessage(
+              new ToolMessage({
+                content: [
+                  { type: 'text', text: '第一塊' },
+                  { type: 'text', text: '第二塊' },
+                ],
+                tool_call_id: 'c1',
+                status: 'error',
+              }),
+            ),
+          },
+        },
+        turnEnd,
+      ),
+    );
+
+    expect(state.entries.map(line)).toEqual(['human:跑', 'tool:echo:failed:FS_SANDBOX_DENIED']);
+  });
+
   it('舊格式的失敗結果沒有內容：紅字是錯誤碼', () => {
     const state = screen(
       log(

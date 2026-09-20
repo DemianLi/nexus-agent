@@ -36,6 +36,7 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
+import { historyFrames } from './conversation-history.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
@@ -235,6 +236,22 @@ describe('ask_user_question 走真的線', () => {
     expect(lastToolEntry(session).text).toBe(message.content);
     // 沒有殘留——答完了就不該還掛著一張卡。
     expect(session.state.pendings).toEqual([]);
+
+    // **重新整理之後還在**（#439 存在的理由）：同一份日誌重播出來的卡，狀態是完成、文字是
+    // 同一串，web 的提問卡靠它逐題配答案。這條路上這顆呼叫的 `tool/call` 有**兩顆**（中斷一次、
+    // resume 重跑一次），所以它同時也釘住重播那側把它們折成同一張卡。
+    const replayed = historyFrames(session.log())
+      .reduce(reduceConversation, emptyConversation())
+      .entries.filter((entry) => entry.kind === 'tool');
+    expect(replayed).toHaveLength(1);
+    const card = replayed[0];
+    expect(card?.kind === 'tool' ? card.status : undefined).toBe('done');
+    expect(JSON.parse(String(card?.kind === 'tool' ? card.text : ''))).toEqual({
+      answers: [
+        { id: 'name', selected: [], custom: '阿明' },
+        { id: 'day', selected: ['週二'] },
+      ],
+    });
     await session.close();
   });
 

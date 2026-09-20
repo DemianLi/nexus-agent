@@ -111,8 +111,9 @@ export interface ToolEntry {
    * 文字時這一格不給**（照 dsh 的 `singleResultText`，不自己把幾塊拼起來），太長的那幾段由
    * harness 取頭尾各半、中間放一行說明。
    *
-   * 失敗時 {@link ToolEntry.error} 裝的是同一串字：紅字那一格留給畫面，判斷畫哪一種看
-   * {@link ToolEntry.status}。
+   * **`tool-finished` 失敗的那些，{@link ToolEntry.error} 裝的是同一串字**：紅字那一格留給
+   * 畫面，判斷畫哪一種看 {@link ToolEntry.status}。`tool-error`（本體炸了、基座那條路）只寫
+   * `error`，那一顆線上本來就沒有結果訊息可抽。
    */
   readonly text?: string;
   readonly error?: string;
