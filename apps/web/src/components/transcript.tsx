@@ -7,6 +7,8 @@
  *
  * 人答的問題也只有本地記得，但**不自成一則**：答案列在配到的那張提問卡上（`pairAnswers`，§4.3，#409）。
  *
+ * 交付也不在原位畫：同一輪 `present` 成功交付的檔案收攏成一張卡，放在這一輪尾端（`transcriptItems`，#441）。
+ *
  * 模型與工具都可能來自 subagent，
  * 而**歸屬是折疊器 join 出來的**——線上沒有 subagent 的名字，只有 namespace 樹
  * （見 `@nexus/wire` 的 `conversation.ts`）。join 不起來的時候它說「未歸屬」，
@@ -29,6 +31,8 @@ import type {
 } from '@nexus/wire';
 
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
+import { ChangesCard } from '@/components/changes-card';
+import { DeliverablesCard } from '@/components/deliverables-card';
 import { MarkdownText } from '@/components/markdown-text';
 import { AttributionBadge, ToolCard } from '@/components/tool-card';
 import { Button } from '@/components/ui/button';
@@ -41,6 +45,8 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller';
+import type { ChangesStores } from '@/lib/changes-diff';
+import { transcriptItems } from '@/lib/deliverables-view';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
 import { pairAnswers } from '@/lib/question-view';
 
@@ -170,6 +176,11 @@ function Entry({
     return null;
   }
 
+  if (entry.kind === 'deliverables' || entry.kind === 'workspace-changes') {
+    // 不在原位畫：改動與交付收到這一輪尾端（`transcriptItems`，#441、#443）。
+    return null;
+  }
+
   if (entry.kind === 'tool') {
     return <ToolCard entry={entry} beam={beam} {...(answer === undefined ? {} : { answer })} />;
   }
@@ -261,6 +272,7 @@ export function Transcript({
   isFresh,
   feedback,
   before,
+  changes,
 }: {
   state: ConversationState;
   /** 哪幾則是這一次看著它長出來的（`useFreshItems`，在常駐的元件裡算）。 */
@@ -268,28 +280,37 @@ export function Transcript({
   feedback?: TranscriptFeedback;
   /** 列表最上面的東西（「載入更早的訊息」）。 */
   before?: ReactNode;
+  /** 改動的摘要與比較從哪裡讀（#443）。沒給就不畫改動卡。 */
+  changes?: ChangesStores;
 }) {
   // 執行中的邊框光同時最多一個（§7 效能）：給最後一顆還在跑的工具。
   const beamId = state.entries.findLast(
     (entry) => entry.kind === 'tool' && entry.status === 'running',
   )?.id;
   const answers = useMemo(() => pairAnswers(state.entries), [state.entries]);
-  const items = state.entries
-    .filter((entry) => entry.kind !== 'answer')
-    .map((entry) => {
-      const answer = answers.get(entry.id);
-      return {
-        id: entry.id,
-        node: (
-          <Entry
-            entry={entry}
-            beam={entry.id === beamId}
-            {...(feedback === undefined ? {} : { feedback })}
-            {...(answer === undefined ? {} : { answer })}
-          />
-        ),
-      };
-    });
+  const items = transcriptItems(state.entries).flatMap((item) => {
+    if (item.kind === 'changes') {
+      return changes === undefined
+        ? []
+        : [{ id: item.id, node: <ChangesCard seq={item.seq} changes={changes} /> }];
+    }
+    if (item.kind === 'deliverables') {
+      return { id: item.id, node: <DeliverablesCard files={item.files} /> };
+    }
+    const { entry } = item;
+    const answer = answers.get(entry.id);
+    return {
+      id: entry.id,
+      node: (
+        <Entry
+          entry={entry}
+          beam={entry.id === beamId}
+          {...(feedback === undefined ? {} : { feedback })}
+          {...(answer === undefined ? {} : { answer })}
+        />
+      ),
+    };
+  });
   const announced = useFinishedReply(state.entries, isFresh);
 
   return (
@@ -305,7 +326,8 @@ export function Transcript({
               <MessageScrollerItem
                 key={item.id}
                 messageId={item.id}
-                className={isFresh(item.id) ? 'motion-rise-in' : undefined}
+                // 卡片可能什麼都不畫（改動摘要 404，#443）：空的那一格不佔列表的間距。
+                className={isFresh(item.id) ? 'motion-rise-in empty:hidden' : 'empty:hidden'}
               >
                 {item.node}
               </MessageScrollerItem>

@@ -337,7 +337,12 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         }
         const effective =
           resumedSandbox === undefined ? invocation : { ...invocation, sandbox: resumedSandbox };
-        built = await createCliAgent(effective, plugins, options.cwd);
+        // 每一輪改了哪些檔（#443）：只有 serve 開，見 `createCliAgent` 那一格。
+        built = await createCliAgent(
+          { ...effective, workspaceChanges: true },
+          plugins,
+          options.cwd,
+        );
       } catch (error) {
         await release().catch(() => {});
         throw error;
@@ -363,6 +368,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         attachSession,
         telemetrySharing,
         feedback,
+        workspaceChanges,
       } = built;
       // **遙測披露印在這裡而不是啟動時，因為啟動的那一刻答案不存在**：`createAgent` 是
       // lazy 的（`wire-handler.ts` 的 `pumpFor` 第一次收到請求才呼叫），plugin 沒跑過
@@ -381,6 +387,8 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         commands,
         // 評分與評語（#278）：沒掛 plugin 的組裝就缺席，那時三個回饋 method 回 `not_supported`。
         ...(feedback !== undefined && { feedback }),
+        // 每一輪的改動摘要（#443）：沒給 `--workspace` 就缺席，兩條 `changes` 路由一律 404。
+        ...(workspaceChanges !== undefined && { workspaceChanges }),
         // 落盤沒接上就被收掉（建 thread 途中失敗）的話，續接那個把手還在這裡，要自己放。
         dispose: async () => {
           // 放不掉不該擋住收 agent——它底下可能有子行程。

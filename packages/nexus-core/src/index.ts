@@ -53,10 +53,11 @@ export type {
 export { GOAL_CHANGE_VERSION, goalId } from './goal.js';
 
 export type { TodoItem, TodoStatus } from './todo.js';
+export type { PresentedFile } from './deliverables.js';
 export { TODO_STATUSES } from './todo.js';
 
 export type { SandboxMode } from './sandbox.js';
-export { isSandboxMode, SANDBOX_MODES } from './sandbox.js';
+export { isSandboxMode, SANDBOX_MODES, WORKSPACE_CAPABILITY } from './sandbox.js';
 
 export type { NamedEntry, DuplicateErrorFactory } from './entries.js';
 export { AnonymousEntries, NamedEntries, CapabilitySet } from './entries.js';

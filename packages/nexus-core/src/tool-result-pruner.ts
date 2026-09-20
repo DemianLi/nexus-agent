@@ -83,13 +83,15 @@
  * 那段，新名字的一律排在它**後面**（也就是更內層）。**沒有任何一個陣列位置能讓一個新
  * 名字的 middleware 站到摘要器外面**（#159 的「排第 0 格」只排得贏其他 custom，同一個
  * 天花板）。所以這把剪刀不是一顆獨立的 middleware，而是**包在同名取代的那顆摘要器外面**
- * ——見 {@link ./summarization.ts} 的 `createSummarizer`。
+ * ——見 {@link withToolResultPruning}，組裝在 {@link ./summarization.ts} 的 `createSummarizer`。
  *
  * 兩個後果要明講：
  *
- * - **`summarization: false` 就沒有剪。** 剪刀搭在摘要器上，摘要器不在就一起不在。這與
- *   dsh 一致（那邊的 pruner 也是 optional，`ctx.get('toolResultPruner')` 拿不到就不剪），
- *   而且它**不是**第二顆開關——我們沒有加開關。
+ * - **它有自己的開關，但只在摘要開著時有作用**（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）。
+ *   dsh 的 pruner 是一個 Service，唯一的消費者是 `compaction-basic`（`ctx.get('toolResultPruner')`
+ *   選擇性地讀，拿不到就不剪）：修剪可以單獨不掛，摘要照跑；摘要不掛，修剪就沒人叫。
+ *   我們的兩格對應同一張表——`FoldOptions.toolResultPruning: false` 是摘要外面不包剪刀，
+ *   `summarization: false` 則連剪刀一起沒有。
  * - **與 `truncateArgs` 是兩件事。** 那個剪的是舊訊息裡的工具**參數**（門檻
  *   `{messages: 20}`），這個剪的是工具**結果**，而且跑在它前面。互不取代。
  *
@@ -105,6 +107,7 @@
 
 import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
+import type { AgentMiddleware } from './base-types.js';
 
 /** 每一段被剪掉的中段換成這個標記。結構照抄 dsh 的 `PRUNE_MARKER`，字面走中文。 */
 export const TOOL_RESULT_PRUNE_MARKER = '\n\n[... 工具結果中段已剪除 ...]\n\n';
@@ -292,4 +295,60 @@ export function pruneToolResults(
   });
   if (prunedCount === 0) return { messages, prunedCount: 0, charsRemoved: 0 };
   return { messages: next, prunedCount, charsRemoved };
+}
+
+/**
+ * 把組裝點給的那一格補成一份預算，或明著不要。
+ *
+ * 省略即 {@link DEFAULT_TOOL_RESULT_PRUNE}；給物件就逐格淺合併上去，再用
+ * {@link assertToolResultPruneConfig} 驗——照 dsh，設定寫錯在載入期就失敗，不等到第一次
+ * 真的要剪。`false` 原樣回去。
+ *
+ * @param option - `FoldOptions.toolResultPruning` 那一格。
+ * @returns 驗過的預算，或 `false`。
+ * @throws 合併後的預算不成立，見 {@link assertToolResultPruneConfig}。
+ */
+export function resolveToolResultPruneConfig(
+  option: Partial<ToolResultPruneConfig> | false | undefined,
+): ToolResultPruneConfig | false {
+  if (option === false) return false;
+  return assertToolResultPruneConfig({ ...DEFAULT_TOOL_RESULT_PRUNE, ...option });
+}
+
+/**
+ * 把一把剪刀包在摘要器外面。
+ *
+ * 基座那顆是一個普通物件（`name` / `stateSchema` / `wrapModelCall` ／其餘鉤子皆為
+ * `undefined`，全部可列舉），所以展開它就能原封不動保住 `name` 與 `stateSchema`——
+ * **這兩樣少一樣，同名取代就不成立、狀態就對不上**，實測過才這樣寫。
+ *
+ * 這一層**沒有 closure 狀態**，所以 `foldSummarizer` 逐個 agent 建一份的理由沒有變多也
+ * 沒有變少，還是原本那一條（基座那顆的 `sessionId` 在它自己的 closure 裡）。
+ *
+ * **「壓力到了沒」由呼叫端給。** 判準是摘要器自己的門檻（dsh 的 `compaction-basic` 壓力
+ * 達標才 `pruneSession()`），那是摘要那一側的知識；這個檔只管怎麼剪。
+ *
+ * @param base - 基座那顆摘要器。
+ * @param underPressure - 這次請求的訊息與 state 到了壓縮門檻沒有。
+ * @param config - 預算，來自 {@link resolveToolResultPruneConfig}。
+ * @returns 同名、同狀態、外面多一層前處理的 middleware。
+ */
+export function withToolResultPruning(
+  base: AgentMiddleware,
+  underPressure: (messages: readonly BaseMessage[], state: unknown) => boolean,
+  config: ToolResultPruneConfig,
+): AgentMiddleware {
+  const inner = base.wrapModelCall?.bind(base);
+  /* v8 ignore next -- 基座那顆一定有 wrapModelCall；沒有的話包了也沒意義，原樣回去。 */
+  if (inner === undefined) return base;
+  return {
+    ...base,
+    wrapModelCall: async (request, handler) => {
+      const messages = request.messages ?? [];
+      if (!underPressure(messages, request.state)) return inner(request, handler);
+      const { prunedCount, messages: pruned } = pruneToolResults(messages, config);
+      if (prunedCount === 0) return inner(request, handler);
+      return inner({ ...request, messages: [...pruned] }, handler);
+    },
+  } as AgentMiddleware;
 }

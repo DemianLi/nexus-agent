@@ -10,6 +10,8 @@
  *   不畫紅字——停止不是失敗（#276），而那句紅字是給模型看的英文。判法在 `lib/question-view.ts`。
  * - **答完的 `ask_user_question`**（§4.3，#409）：展開列「問題 → 回答」，答案是呼叫端按題目 id 配來的（`pairAnswers`）；
  *   配不到（重新整理、別的分頁）就只列題目、收著那一行照講「已回答 N 題」。參數原文不畫：它就是這幾題。
+ * - **`present`**（#441 第一刀）：收著講檔名，展開逐個列檔名、完整路徑、說明，不畫參數原文。只講這顆呼叫說了什麼；
+ *   交付成不成立看狀態，交付卡片是第二刀。判法在 `lib/present-view.ts`。
  */
 
 import type { AnswerEntry, Attribution, QuestionItem, ToolEntry } from '@nexus/wire';
@@ -28,6 +30,8 @@ import {
   questionSummary,
   STOPPED_QUESTION_TEXT,
 } from '@/lib/question-view';
+import { basename, PRESENT, presentedFilesOf, presentSummary } from '@/lib/present-view';
+import type { PresentedFile } from '@/lib/present-view';
 import { classifyTool, firstLine, toolInputBody, toolSummary, toolTitle } from '@/lib/tool-view';
 
 export const TOOL_STATUS_LABEL = {
@@ -103,6 +107,27 @@ function QuestionList({
   );
 }
 
+/** 宣告交付的檔案照宣告的順序列出來：檔名一眼認，完整路徑分得出同名檔，說明是模型給人看的那句。 */
+function PresentedFileList({ files }: { files: readonly PresentedFile[] }) {
+  return (
+    <ul className="bg-stage shadow-stage flex flex-col gap-3 rounded-xl p-3 text-sm">
+      {files.map((file, index) => (
+        <li
+          key={`${index}:${file.path}`}
+          className="flex min-w-0 flex-col gap-0.5"
+          data-testid="presented-file"
+        >
+          <span className="font-medium break-all">{basename(file.path)}</span>
+          <code className="text-muted-foreground font-mono text-xs break-all">{file.path}</code>
+          {file.description !== undefined && (
+            <span className="text-muted-foreground text-xs">{file.description}</span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function ToolCard({
   entry,
   beam,
@@ -124,6 +149,7 @@ export function ToolCard({
   const variant = classifyTool(entry.name);
   const body = toolInputBody(entry.name, entry.input);
   const questions = entry.name === ASK_USER_QUESTION ? questionsOf(entry.input) : undefined;
+  const presented = entry.name === PRESENT ? presentedFilesOf(entry.input) : undefined;
   const failed = entry.status === 'failed' && !stopped;
   const answered = entry.status === 'done';
   return (
@@ -157,7 +183,9 @@ export function ToolCard({
               ? firstLine(entry.error)
               : questions !== undefined
                 ? questionSummary(questions, answered)
-                : toolSummary(entry.name, entry.input)}
+                : presented !== undefined
+                  ? presentSummary(presented)
+                  : toolSummary(entry.name, entry.input)}
         </span>
         <span className="hidden sm:inline-flex">
           <AttributionBadge attribution={entry.attribution} />
@@ -187,6 +215,8 @@ export function ToolCard({
                 </p>
               )}
             </>
+          ) : presented !== undefined && presented.length > 0 ? (
+            <PresentedFileList files={presented} />
           ) : body === undefined ? (
             <p className="text-muted-foreground px-3 py-2 text-xs">沒有參數。</p>
           ) : (

@@ -1,3 +1,8 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
+
 import { describe, expect, it } from 'vitest';
 import type { Event } from './protocol.js';
 import { decodeSseStream, encodeSseFrame } from './sse.js';
@@ -74,5 +79,38 @@ describe('SSE codec', () => {
     const complete = encodeSseFrame(event(0, 'lifecycle', '一'));
     const payload = `${complete}event: messages\ndata: {"type":"eve`;
     expect(await drain(streamOf(payload, 4))).toEqual([event(0, 'lifecycle', '一')]);
+  });
+});
+
+describe('真的 fetch 的 body', () => {
+  it('開線之後、第一次 next() 之前 Response 被回收：下行照樣收得到 frame', async () => {
+    // 不必另加執行旗標就拿到 `gc`：開旗標後在新的 context 裡取。
+    setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+    const frame = encodeSseFrame(event(0, 'messages', '還在'));
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.write(': connected\n\n');
+      // 第一顆 frame 晚一點才來，跟真的 server 一樣：要等上行送出去。
+      setTimeout(() => response.end(frame), 100);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const { port } = server.address() as AddressInfo;
+      // 只留 generator，`Response` 物件在這個函式回來之後就沒人拿著——跟 `openEvents` 一樣。
+      const open = async () => decodeSseStream((await fetch(`http://127.0.0.1:${port}/`)).body!);
+      const events = await open();
+      for (let i = 0; i < 5; i += 1) {
+        gc();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const first = await events.next();
+      expect(first.done).toBe(false);
+      expect(first.value).toEqual(event(0, 'messages', '還在'));
+      await events.return(undefined);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });

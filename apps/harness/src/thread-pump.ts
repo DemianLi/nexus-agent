@@ -75,6 +75,7 @@ import {
 import type { Event, WireChannel } from '@nexus/wire';
 import { channelOfMethod, eventId } from '@nexus/wire';
 
+import { deliverablesData, workspaceChangesData } from './conversation-history.js';
 import { driveGoalRound } from './goal-driver.js';
 import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
 
@@ -1145,7 +1146,9 @@ export class ThreadPump {
       // 圖裡注進來的 human 訊息一則都不上線，見 {@link ThreadPump.#injectedMessages}。
       if (this.#dropInjectedMessage(raw.params.data)) return;
     }
-    if (channelOfMethod(raw.method) === undefined) {
+    // **圖自己發的 `custom` 不上線**：那一格只放 pump 從日誌合成的 domain 事件（見 `@nexus/wire` 的
+    // `WIRE_CHANNELS`）。放行它的話，任何一顆用 `config.writer` 的工具都能往瀏覽器寫東西。
+    if (raw.method === 'custom' || channelOfMethod(raw.method) === undefined) {
       return;
     }
     yield this.#seal({
@@ -1239,6 +1242,37 @@ export class ThreadPump {
   #noteLogEvent(entry: SessionEntry, event: SessionEvent): void {
     if (event.type === 'tool/call') this.#openCard(entry.address, event.data);
     else if (event.type === 'tool/result') this.#noteVerdict(event);
+    else if (event.type === 'deliverables/presented' && entry.address.kind === 'root') {
+      this.#presentDeliverables(event.data);
+    } else if (event.type === 'workspace/changes' && entry.address.kind === 'root') {
+      this.#presentCustom(workspaceChangesData(event.seq));
+    }
+  }
+
+  /**
+   * root 那一份記了一筆交付：合成一顆 `custom` frame（[#441](https://github.com/DemianLi/nexus-agent/issues/441)）。
+   *
+   * **只收 root 那一份**：歷史路由只讀 root（`conversation-history.ts`），子代理的交付即時送出去的話，
+   * 重新整理之後就不見了。照 dsh 的所有權規則，子代理宣告的本來就歸子代理那個會話，主代理要交付得
+   * 自己再叫一次 `present`。`data` 與歷史那一側共用 {@link deliverablesData}。
+   */
+  #presentDeliverables(presented: SessionEventMap['deliverables/presented']): void {
+    this.#presentCustom(deliverablesData(presented));
+  }
+
+  /**
+   * 送一顆從 root 日誌合成的 `custom` frame。一輪的改動紀錄（`workspace/changes`，
+   * [#443](https://github.com/DemianLi/nexus-agent/issues/443)）也走這裡，`data` 與歷史那一側共用
+   * {@link workspaceChangesData}。
+   */
+  #presentCustom(data: { readonly name: string; readonly payload: unknown }): void {
+    this.#broadcast(
+      this.#seal({
+        type: 'event',
+        method: 'custom',
+        params: { namespace: [], timestamp: Date.now(), data },
+      } as Event),
+    );
   }
 
   /**
