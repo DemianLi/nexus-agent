@@ -137,6 +137,9 @@ declare module '@nexus/core' {
  */
 export const sandboxPolicyPlugin: NexusPlugin = {
   name: 'sandbox-policy',
+  // **真正擋下來的是下面那行 `use()`**，不是這條宣告：`assertRequires` 跑在每個 `apply`
+  // 之後，而 `use()` 在 `apply` 當下就拋。這條是照 dsh 的 `inject` 把相依寫明著——它同時
+  // 是把 `use()` 改成 `get()` 那天的第二道網。
   requires: [SANDBOX_POLICY_SERVICE],
   apply(registry) {
     const { controller, rootDir } = registry.services.use(SANDBOX_POLICY_SERVICE);
