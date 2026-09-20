@@ -756,6 +756,36 @@ describe('一頁的位元組上限', () => {
   });
 
   /**
+   * **秤最後一段時要帶真的那一份 `awaitingInput`**。
+   *
+   * 停在核准點的那一輪會多出 `tool-suspended` 那幾顆 frame（每顆未收的呼叫一顆）。秤重時不帶它，
+   * 秤到的就比真的送出去的小——而**低估的方向正好是「真的超出上限而判準以為沒有」**。這一條是那道
+   * 防線自己的量測：`fitBytes` 裡那個參數被拿掉的話，這裡會紅。
+   */
+  it('最後一輪停在核准點時，秤到的不小於真的送出去的', () => {
+    const settled = Array.from({ length: 85 }, (_, i) => `s${i}`);
+    const pending = Array.from({ length: 60 }, (_, i) => `p${i}`);
+    const body = 'x'.repeat(TOOL_TEXT_MAX_BYTES);
+    const events = log(
+      human('讀一堆檔，然後要寫。'),
+      reply('讀了，接著寫。', [...settled, ...pending]),
+      ...settled.flatMap((id) => [call(id), result(id, body)]),
+      ...pending.map((id) => call(id, 'write_file')),
+      { type: 'interrupt/raised', data: { interruptId: 'i1' } },
+      turnEnd,
+    );
+    // 一顆都不閘：60 顆全都會多出 `tool-suspended`。
+    const waiting = gated();
+
+    const measured: number[] = [];
+    const page = historyPage(events, {}, waiting, (bytes) => void measured.push(bytes));
+
+    expect(page.firstSeq).toBe(0);
+    expect(measured).toHaveLength(1);
+    expect(measured[0]).toBeGreaterThanOrEqual(wire(page));
+  });
+
+  /**
    * **兩個常數的關係要有人釘**：`HISTORY_PAGE_MAX_BYTES` 住在 `@nexus/wire`、`TOOL_TEXT_MAX_BYTES` 住在
    * 這個 app，wire 不能往上 import，所以那邊只寫得出字面值。這條在唯一同時相依兩邊的地方比對它們——
    * 每則上限哪天動了而頁上限沒跟著動，這裡會紅。同一個做法見 `@nexus/wire` 的 `conversation.ts:927`。
