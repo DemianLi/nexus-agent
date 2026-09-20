@@ -12,11 +12,12 @@ import type { PluginEntry } from '@nexus/core';
 import {
   createGoalPlugin,
   GOAL_TOOL_AUTHORITY_MESSAGE,
+  GOALS_SERVICE,
   renderGoalRoundPrompt,
   renderWrapupContext,
 } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
-import type { GoalPluginEntry } from '@nexus/plugin-goal';
+import type { GoalServices } from '@nexus/plugin-goal';
 import { fromLoggedMessage, GOAL_WRAPUP_MARKER } from '@nexus/core';
 import type { SessionEventMap, SessionLog } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
@@ -31,7 +32,7 @@ import { ThreadPump } from './thread-pump.js';
 
 /** 一份 port，記下它被要求做過什麼。 */
 function portFor(
-  plugin: GoalPluginEntry,
+  goals: GoalServices,
   log: () => SessionLog,
   overrides: Partial<GoalDriverPort> = {},
 ): GoalDriverPort & { readonly warnings: string[]; readonly blocks: string[] } {
@@ -40,12 +41,12 @@ function portFor(
   return {
     warnings,
     blocks,
-    goal: () => plugin.plugin.serviceFor(log())?.get(),
+    goal: () => goals.serviceFor(log())?.get(),
     block: (ref, reason) => {
       blocks.push(reason.code);
-      plugin.plugin.serviceFor(log())?.block(ref, reason);
+      goals.serviceFor(log())?.block(ref, reason);
     },
-    disarm: () => void plugin.plugin.serviceFor(log())?.disarm(),
+    disarm: () => void goals.serviceFor(log())?.disarm(),
     flush: () => Promise.resolve(),
     warn: (message) => void warnings.push(message),
     ...overrides,
@@ -96,7 +97,7 @@ async function build(options: {
   const plugin = createGoalPlugin({ now: () => 100, newGoalId: () => `goal-${(serial += 1)}` });
   const state: ScriptedModelState = { turn: 0, boundToolNames: [], lastPrompt: [], prompts: [] };
   const violations: string[] = [];
-  const { agent, dispose, attachSession, attachInvariants } = await createNexusAgent({
+  const { agent, dispose, attachSession, attachInvariants, services } = await createNexusAgent({
     model: new ScriptedChatModel({ turns: options.turns, shared: state }) as never,
     plugins: [
       plugin,
@@ -108,7 +109,11 @@ async function build(options: {
   });
   // 同 `wire-handler.ts`：port 要日誌，而日誌由 pump 建，而 pump 的建構參數是 port。
   const late: { log?: SessionLog } = {};
-  const port = portFor(plugin, () => late.log as SessionLog, options.portOverrides ?? {});
+  const port = portFor(
+    services.use(GOALS_SERVICE),
+    () => late.log as SessionLog,
+    options.portOverrides ?? {},
+  );
   const pump = new ThreadPump(
     agent as unknown as PumpAgent,
     options.threadId,

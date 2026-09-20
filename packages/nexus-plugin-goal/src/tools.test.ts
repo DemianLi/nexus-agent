@@ -20,13 +20,14 @@ import {
   createSessionRunner,
   GOAL_WRAPUP_MARKER,
   goalId,
+  loadPlugins,
   SessionRegistry,
   toolErrorOf,
   TOOL_ERROR_PREFIX,
 } from '@nexus/core';
 import type { NamedEntry, SessionLog } from '@nexus/core';
 
-import { createGoalPlugin } from './index.js';
+import { createGoalPlugin, goalConfigSchema } from './index.js';
 import type { GoalPluginOptions } from './index.js';
 import { hasDirectHumanTurn } from './authority.js';
 import { renderWrapupContext } from './wrapup.js';
@@ -73,7 +74,7 @@ function bench(options: GoalPluginOptions = {}): {
   });
   const registry = createRegistry();
   const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-  plugin.plugin.apply(registry);
+  plugin.plugin.apply(registry, goalConfigSchema.parse(plugin.config));
   exit();
   const sessions = new SessionRegistry('goal');
   attach(registry, sessions);
@@ -618,11 +619,24 @@ describe('在續行輪次裡', () => {
     expect(value.goal).toMatchObject({ phase: 'blocked' });
   });
 
-  it('門檻不是正整數的話，建 plugin 當場拋', () => {
-    expect(() => createGoalPlugin({ blockedAfterConsecutiveRounds: 0 })).toThrow(
-      /blockedAfterConsecutiveRounds 必須是正的安全整數/u,
-    );
-    expect(() => createGoalPlugin({ blockedAfterConsecutiveRounds: 1.5 })).toThrow(TypeError);
+  /**
+   * **驗的時刻從「建條目」搬到「載入」**（#459）：設定現在走 `Config`，而條目是資料，
+   * 沒有地方可以當場拋。搬到載入不是放寬——那時候才有 plugin id 可以指名，同其餘每一顆
+   * 有 `Config` 的 plugin（#453）。
+   */
+  it('門檻不是正整數的話，載入當場拋，而且原因是 TypeError', async () => {
+    await expect(
+      loadPlugins([createGoalPlugin({ blockedAfterConsecutiveRounds: 0 })]),
+    ).rejects.toThrow(/blockedAfterConsecutiveRounds 必須是正的安全整數/u);
+    // **分類不能在包裝裡掉**：`TypeError` 是「組裝設定錯」，而 `GoalError` 是「誰對一個
+    // 目標做錯了什麼」，兩者分開是 `resolveGoalToolPolicy` 檔頭那條。
+    await expect(
+      loadPlugins([createGoalPlugin({ blockedAfterConsecutiveRounds: 1.5 })]).catch(
+        (error: unknown) => {
+          throw (error as { cause?: unknown }).cause;
+        },
+      ),
+    ).rejects.toBeInstanceOf(TypeError);
   });
 
   /** 說明文字**是算出來的**：門檻換掉，模型讀到的數字要跟著換。 */
@@ -645,7 +659,7 @@ describe('接線說得出原因', () => {
     const plugin = createGoalPlugin();
     const registry = createRegistry();
     const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-    plugin.plugin.apply(registry);
+    plugin.plugin.apply(registry, goalConfigSchema.parse(plugin.config));
     exit();
     const found = registry.tools.effective(undefined).get(GOAL_GET_TOOL_NAME);
     const result = await found?.value.invoke({} as never, ROOT_CALL as never);

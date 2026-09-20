@@ -486,6 +486,18 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        */
       feedback: registry.feedback.service()?.value,
       /**
+       * plugin 提供的**服務**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
+       *
+       * 交出去的是整個註冊點而不是某幾個名字，理由有兩條。一是**這個檔案一顆 plugin 都不
+       * import**：`feedback` 與 `telemetry` 走的是 `@nexus/core` 自己的通道，而服務名住在
+       * 各個 plugin 裡，在這裡列名字等於讓通用工廠認得特定 plugin。二是 `provide()` 自己
+       * 就擋得住誤用——它要 `requireOrigin()`，而組裝之後沒有任何 `apply` 在跑，呼叫它會
+       * 當場拋（同 `commands` 那一格的理由）。
+       *
+       * 今天的消費者是續行排程器（`cli.ts` 的 `goalDriverPort` 讀 `goals`）。
+       */
+      services: registry.services,
+      /**
        * 掛著的遙測服務說的共享策略，**沒掛任何東西時是 `undefined`**。
        *
        * 披露那一層只有在拿到 `undefined` 的時候才渲染「未配置」——這是 dsh 的規矩，

@@ -14,6 +14,8 @@ import type { CommandDefinition, CommandResult, GoalChangeMeta, PluginRegistry }
 import {
   createGoalPlugin,
   executeGoalCommand,
+  goalConfigSchema,
+  GOALS_SERVICE,
   GOAL_CLEARED_MESSAGE,
   GOAL_COMMAND_HINT,
   GOAL_COMMAND_NAME,
@@ -49,8 +51,9 @@ function mount(
   });
   const registry = createRegistry();
   const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-  plugin.plugin.apply(registry);
+  plugin.plugin.apply(registry, goalConfigSchema.parse(plugin.config));
   exit();
+  const goals = registry.services.use(GOALS_SERVICE);
 
   const opened: SessionLog[] = [];
   const detachers: (() => void)[] = [];
@@ -76,7 +79,7 @@ function mount(
     command,
     logs: opened,
     serviceFor: (log) => {
-      const service = plugin.plugin.serviceFor(log);
+      const service = goals.serviceFor(log);
       if (service === undefined) throw new Error('接線之後應該找得到服務');
       return service;
     },
@@ -197,7 +200,7 @@ describe('找得到要動的那一份', () => {
     const plugin = createGoalPlugin();
     const registry = createRegistry();
     const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-    plugin.plugin.apply(registry);
+    plugin.plugin.apply(registry, goalConfigSchema.parse(plugin.config));
     exit();
     const installers = registry.sessions.installers();
     const first = new SessionLog('a');
@@ -238,7 +241,7 @@ describe('找得到要動的那一份', () => {
     const mountOne = (name: string): { run: (input: string) => CommandResult; log: SessionLog } => {
       const registry = createRegistry();
       const exit = registry.enter({ id: `goal#${name}`, name: 'goal' });
-      plugin.plugin.apply(registry);
+      plugin.plugin.apply(registry, goalConfigSchema.parse(plugin.config));
       exit();
       const log = new SessionLog(name);
       createSessionRunner({

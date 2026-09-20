@@ -8,8 +8,13 @@
 
 import { MemorySaver } from '@langchain/langgraph';
 import type { SessionLog } from '@nexus/core';
-import { createGoalPlugin, renderGoalRoundPrompt } from '@nexus/plugin-goal';
-import type { GoalPluginEntry } from '@nexus/plugin-goal';
+import {
+  createGoalPlugin,
+  goalPlugin,
+  GOALS_SERVICE,
+  renderGoalRoundPrompt,
+} from '@nexus/plugin-goal';
+import type { GoalServices } from '@nexus/plugin-goal';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 
@@ -44,7 +49,7 @@ function recorder(): {
 async function build(turns: readonly ScriptedTurn[]): Promise<{
   agent: NexusAgent;
   log: SessionLog;
-  plugin: GoalPluginEntry;
+  goals: GoalServices;
   port: GoalDriverPort & { readonly warnings: string[] };
   state: ScriptedModelState;
   stop: () => Promise<void>;
@@ -52,26 +57,28 @@ async function build(turns: readonly ScriptedTurn[]): Promise<{
   let serial = 0;
   const plugin = createGoalPlugin({ now: () => 100, newGoalId: () => `goal-${(serial += 1)}` });
   const state: ScriptedModelState = { turn: 0, boundToolNames: [], lastPrompt: [], prompts: [] };
-  const { agent, dispose, attachSession } = await createNexusAgent({
+  const { agent, dispose, attachSession, services } = await createNexusAgent({
     model: new ScriptedChatModel({ turns, shared: state }) as never,
     plugins: [plugin],
     checkpointer: new MemorySaver(),
   });
   const sessions = new SessionRegistry('cli-driver');
   const detach = attachSession(sessions);
+  // **這一次組裝的那一份**（#459）：以前是問模組層級的 plugin 物件。
+  const goals = services.use(GOALS_SERVICE);
   const warnings: string[] = [];
   const port: GoalDriverPort & { readonly warnings: string[] } = {
     warnings,
-    goal: () => plugin.plugin.serviceFor(sessions.root)?.get(),
-    block: (ref, reason) => void plugin.plugin.serviceFor(sessions.root)?.block(ref, reason),
-    disarm: () => void plugin.plugin.serviceFor(sessions.root)?.disarm(),
+    goal: () => goals.serviceFor(sessions.root)?.get(),
+    block: (ref, reason) => void goals.serviceFor(sessions.root)?.block(ref, reason),
+    disarm: () => void goals.serviceFor(sessions.root)?.disarm(),
     flush: () => Promise.resolve(),
     warn: (message) => void warnings.push(message),
   };
   return {
     agent,
     log: sessions.root,
-    plugin,
+    goals,
     port,
     state,
     stop: async () => {
@@ -279,7 +286,7 @@ describe('伴生在預設組裝上是武裝的，旗標關著也一樣', () => {
  */
 describe('--max-goal-rounds', () => {
   it('模型自己填 5，人給 1，就只跑得到 1 輪', async () => {
-    const { agent, log, plugin, port, stop } = await build([
+    const { agent, log, goals, port, stop } = await build([
       {
         content: '',
         toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 5 } }],
@@ -294,7 +301,7 @@ describe('--max-goal-rounds', () => {
     await driveGoalRounds(agent, printer, log, port, 1);
 
     expect(startKinds(log)).toEqual(['message', 'goal']);
-    const goal = plugin.plugin.serviceFor(log)?.get();
+    const goal = goals.serviceFor(log)?.get();
     expect(goal?.maxGoalRounds).toBe(5);
     expect(goal?.phase).toBe('blocked');
     expect(goal?.blockedReason?.code).toBe(ROUND_CAP_BLOCK_CODE);
@@ -306,7 +313,7 @@ describe('--max-goal-rounds', () => {
    * 上面那條綠證不了「只跑一輪」是那條上限造成的——腳本自己跑完也會停。
    */
   it('同一份腳本不給上限就跑滿模型自己填的 5——對照組', async () => {
-    const { agent, log, plugin, port, stop } = await build([
+    const { agent, log, goals, port, stop } = await build([
       {
         content: '',
         toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 5 } }],
@@ -324,7 +331,7 @@ describe('--max-goal-rounds', () => {
     await driveGoalRounds(agent, printer, log, port);
 
     expect(startKinds(log)).toEqual(['message', 'goal', 'goal', 'goal', 'goal', 'goal']);
-    expect(plugin.plugin.serviceFor(log)?.get()?.blockedReason?.code).toBe('round-limit');
+    expect(goals.serviceFor(log)?.get()?.blockedReason?.code).toBe('round-limit');
     await stop();
   });
 
@@ -382,9 +389,10 @@ describe('披露', () => {
   /**
    * **`--plugins` 換掉預設清單之後，那條路上就沒有 goal 域了。**
    *
-   * 排程器的 `goal()` 走 `GOAL_PLUGIN.serviceFor(log)`，而 `GOAL_PLUGIN` 是**預設清單裡
-   * 那一個物件**——換掉清單就查不到服務。那時要安靜地什麼都不做，不是拋。
-   * 這一格用 port override 假裝不出來：它問的是那個 module 層級物件的身分。
+   * 排程器的 `goal()` 走 `goals?.serviceFor(log)`，而 `goals` 是 `createCliAgent` 從
+   * `registry.services` 交出來的——換掉清單就沒有人提供 `goals`，那一格是 `undefined`。
+   * 那時要安靜地什麼都不做，不是拋。這一格用 port override 假裝不出來：它問的是這一次
+   * 組裝到底有沒有那個服務。
    */
   it('--plugins 換掉清單之後，開著旗標也安靜地什麼都不做', async () => {
     const { printer, out } = recorder();
@@ -414,6 +422,44 @@ describe('披露', () => {
         env: {},
       });
       expect(out.join('\n')).toContain(formatGoalDriverDisclosure(on));
+    }
+  });
+});
+
+/**
+ * **排程器問的是哪一份 goal 域**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
+ *
+ * 這一組量的是交付物：`DEFAULT_PLUGINS` 那份清單，與 `createCliAgent` 真的組出來的東西。
+ * 在手搭的 registry 上驗隔離證明不了這條——**清單裡掛的是哪一顆物件**才是以前串台的來源。
+ */
+describe('goals 服務綁的是這一次組裝', () => {
+  it('預設清單掛的就是模組層級那一顆 goal plugin', () => {
+    expect(DEFAULT_PLUGINS.filter((entry) => entry.plugin === goalPlugin)).toHaveLength(1);
+  });
+
+  it('兩次 createCliAgent 各拿各的——serve 每條 thread 組裝一次', async () => {
+    const first = await createCliAgent({ live: false }, DEFAULT_PLUGINS);
+    const second = await createCliAgent({ live: false }, DEFAULT_PLUGINS);
+    try {
+      const firstGoals = first.goals;
+      const secondGoals = second.goals;
+      if (firstGoals === undefined || secondGoals === undefined) {
+        throw new Error('預設清單掛了 goal，兩次組裝都該拿得到服務');
+      }
+      // **不是同一個把手**：以前兩次組裝共用模組層級那一格。
+      expect(firstGoals).not.toBe(secondGoals);
+
+      first.attachSession(first.sessions);
+      firstGoals.serviceFor(first.sessionLog)?.create({ objective: '第一次組裝的目標' });
+
+      expect(firstGoals.attached()).toHaveLength(1);
+      expect(firstGoals.serviceFor(first.sessionLog)?.get()?.objective).toBe('第一次組裝的目標');
+      // **第二次組裝一份都看不到**——連第一次那份日誌都查不到。
+      expect(secondGoals.attached()).toEqual([]);
+      expect(secondGoals.serviceFor(first.sessionLog)).toBeUndefined();
+    } finally {
+      await first.dispose();
+      await second.dispose();
     }
   });
 });
