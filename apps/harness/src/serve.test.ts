@@ -244,9 +244,9 @@ describe('serve 的命令面', () => {
  * 它紅了而 `cli.test.ts` 的「CLI 的核准政策」還綠著，代表關錯了入口。
  */
 describe('核准那份清單', () => {
-  it('README 寫的那道指令真的停得下來，也接得回去', async () => {
+  it('docs/operations.md 寫的那道指令真的停得下來，也接得回去', async () => {
     running = await runServe({
-      // README 與開發計劃 Phase 5 驗收句共用這一份 —— 預設清單不觸發任何中斷，
+      // docs/operations.md 與開發計劃 Phase 5 驗收句共用這一份 —— 預設清單不觸發任何中斷，
       // 少了它「核准工具」那半句在瀏覽器裡跑不出來。
       argv: ['--port', '0', '--plugins', 'src/approval.fixture.ts'],
       log: () => undefined,
