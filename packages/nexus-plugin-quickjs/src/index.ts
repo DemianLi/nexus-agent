@@ -93,7 +93,7 @@ export type QuickJsConfig = z.infer<typeof quickJsConfigSchema>;
 export type QuickJsPluginOptions = z.input<typeof quickJsConfigSchema>;
 
 /**
- * 建一個 QuickJS plugin。
+ * QuickJS plugin。
  *
  * `apply` 是 async 的，唯一的理由是**在載入期就把 WASM 模組拉起來**。載不起來就讓整份
  * plugin 清單載入失敗，而不是等模型第一次呼叫工具時才在對話中間變成一句錯誤字串——
@@ -105,6 +105,9 @@ export type QuickJsPluginOptions = z.input<typeof quickJsConfigSchema>;
  * context 是**每次呼叫現建現拆**、在 `finally` 裡收掉。登記一個什麼都不做的 disposer
  * 只會讓關機清單看起來比實際上熱鬧。
  *
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
+ * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
  */
 export const quickJsPlugin: NexusPlugin<QuickJsConfig> = {
   name: 'quickjs',

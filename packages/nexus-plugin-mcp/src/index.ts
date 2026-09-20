@@ -99,7 +99,7 @@ export type McpConfig = z.infer<typeof mcpConfigSchema>;
 export type McpPluginOptions = z.input<typeof mcpConfigSchema>;
 
 /**
- * 建一個 MCP plugin。
+ * MCP plugin。
  *
  * `apply` 是 async 的，裡面做三件事：連上 server、`tools/list` 拿工具、逐個註冊。三件
  * 事**都在載入期**——agent 跑起來的時候工具集合已經定了，這是共同軸線的「載入期失敗」
@@ -112,6 +112,9 @@ export type McpPluginOptions = z.input<typeof mcpConfigSchema>;
  * `throwOnLoadError: true`）本來就站在同一邊，所以照 adapter 的預設走。理由是 repo
  * 層級的軸線，不是套件層級的預設值偏好。
  *
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
+ * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
  */
 export const mcpPlugin: NexusPlugin<McpConfig> = {
   name: 'mcp',

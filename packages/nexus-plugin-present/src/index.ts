@@ -197,8 +197,11 @@ async function inspect(backend: AnyBackendProtocol, path: string): Promise<Inspe
 }
 
 /**
- * 建一個 present plugin。
+ * present plugin。
  *
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
+ * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
  */
 export const presentPlugin: NexusPlugin<PresentConfig> = {
   name: 'present',

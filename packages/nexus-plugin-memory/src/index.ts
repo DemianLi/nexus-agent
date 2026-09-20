@@ -70,7 +70,7 @@ export type MemoryConfig = z.infer<typeof memoryConfigSchema>;
 export type MemoryPluginOptions = z.input<typeof memoryConfigSchema>;
 
 /**
- * 建一個 memory plugin。
+ * memory plugin。
  *
  * **這個 plugin 只覆蓋 root agent。** 基座組裝 subagent 的那段
  * （`buildSubagentMiddleware(input, isForkable)`）只在 `isForkable` 為真時才把 root 的
@@ -83,6 +83,9 @@ export type MemoryPluginOptions = z.input<typeof memoryConfigSchema>;
  * 的 subagent 除外）。這是基座的邊界，不是這裡漏寫；`apps/harness` 有一條絆索測試釘著它，
  * 基座哪天補上了那條會紅。
  *
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
+ * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
  */
 export const memoryPlugin: NexusPlugin<MemoryConfig> = {
   name: 'memory',

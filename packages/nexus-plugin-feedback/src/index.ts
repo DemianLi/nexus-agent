@@ -184,6 +184,9 @@ export function createFeedbackService(options: FeedbackConfig): FeedbackService 
  * `/feedback` 寫的是**這次組裝接上的 root 那一份日誌**：同 `@nexus/plugin-goal` 的命令，只接
  * root、subagent 那些一份都不接；接到的不是剛好一份時當場回一句錯誤，不猜。
  *
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
+ * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
  */
 export const feedbackPlugin: NexusPlugin<FeedbackConfig> = {
   name: 'feedback',

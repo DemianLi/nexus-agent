@@ -331,9 +331,9 @@ export class OpenTelemetrySessionService implements SessionTelemetryService {
  * `SessionLog`，而 plugin 看不到它，那是組裝點的事（`agent-factory.ts` 的
  * `attachTelemetry`）。
  *
- * @param options - mode 與兩個原樣轉交的 SDK 選項物件。
- * @returns 可載入的 plugin。
- * @throws 設定不合法——四條檢查各自的訊息都指名是哪個欄位。
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
+ * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
  */
 export const telemetryOtelPlugin: NexusPlugin<TelemetryOtelConfig> = {
   Config: telemetryOtelConfigSchema,

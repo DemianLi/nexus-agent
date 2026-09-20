@@ -215,7 +215,7 @@ export type TodoConfig = z.infer<typeof todoConfigSchema>;
 export type TodoPluginOptions = z.input<typeof todoConfigSchema>;
 
 /**
- * 建一個 todo plugin。
+ * todo plugin。
  *
  * 它只掛一樣東西：`tools` 通道的 `todo_write`。**不註冊命令、不改 prompt、不碰 backend**
  * ——理由見檔頭那張表。
@@ -223,6 +223,9 @@ export type TodoPluginOptions = z.input<typeof todoConfigSchema>;
  * **刻意不是 `rootOnly`。** 宣告 `rootOnly` 的話 fold 會把每個 subagent 那一份裡的同名項
  * 換成拒絕樁，而那與 dsh 的單一所有者規則相反。
  *
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
+ * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
  */
 export const todoPlugin: NexusPlugin<TodoConfig> = {
   name: 'todo',

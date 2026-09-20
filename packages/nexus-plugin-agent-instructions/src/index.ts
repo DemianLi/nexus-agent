@@ -269,10 +269,11 @@ function record(
 }
 
 /**
- * 建一個 agent-instructions plugin。
+ * agent-instructions plugin。
  *
- * @param options - 位元組上限。
- * @returns 可以放進組裝點清單的 plugin。
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
+ * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
  */
 export const agentInstructionsPlugin: NexusPlugin<AgentInstructionsConfig> = {
   name: 'agent-instructions',

@@ -445,6 +445,9 @@ function createExitPlanModeTool(lookup: (config: unknown) => PlanModeLookup): St
  * schema 裡，「這樣狀態轉換不會在規劃策略變更之外額外造成工具目錄變動」。代價是模式關著的
  * 時候它是活的 schema、死的執行路徑。
  *
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
+ * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
  */
 export const planModePlugin: NexusPlugin<PlanModeConfig> = {
   name: 'plan-mode',

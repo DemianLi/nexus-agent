@@ -66,7 +66,7 @@ export type SkillsConfig = z.infer<typeof skillsConfigSchema>;
 export type SkillsPluginOptions = z.input<typeof skillsConfigSchema>;
 
 /**
- * 建一個 skills plugin。
+ * skills plugin。
  *
  * **這個擴充點的預設失敗模式是「看得到、讀不到」。** 清單是基座用 backend 方法
  * （`ls` / `downloadFiles`）自己掃出來的，**不經過 `permissions`**；而模型要拿到正文
@@ -83,6 +83,9 @@ export type SkillsPluginOptions = z.input<typeof skillsConfigSchema>;
  * 對照之下 memory 只有 `mode: 'fork'` 的 subagent 拿得到、general-purpose 拿不到。
  * 淨結果是**兩個擴充點的繼承規則互為反面**，這種事只能靠絆索測試記住。
  *
+ * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
+ * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
  */
 export const skillsPlugin: NexusPlugin<SkillsConfig> = {
   name: 'skills',
