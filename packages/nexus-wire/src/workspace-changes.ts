@@ -23,7 +23,8 @@
  *
  * **兩條路由送出去的東西不一樣多**：摘要只送路徑與行數；**比較送的是檔案全文**（兩側的每一行都在 hunk 裡），
  * 包括工作區外的檔——`danger-full-access` 或核准過的升級經符號連結改到根外時，那個檔會以主機絕對路徑列出來，
- * 同 dsh README 的已知限制。兩條都在瀏覽器會話認證（#424）之後。
+ * 同 dsh README 的已知限制；工作區在一個更大的 git repo 裡時，repo 裡、工作區之上被改的檔也列出來
+ * （[#461](https://github.com/DemianLi/nexus-agent/issues/461)，同 dsh）。兩條都在瀏覽器會話認證（#424）之後。
  *
  * **`GET` 也要帶 `content-type: application/json`**，理由同 `THREADS_PATH`。
  *
@@ -43,13 +44,16 @@ export interface WorkspaceChangesPayload {
 export interface WorkspaceChangedFile {
   /** 相對工作區根的路徑；在工作區外時是 server 上的絕對路徑。 */
   readonly path: string;
-  /** 排序與標籤：工作區內是相對路徑，家目錄底下是 `~` 開頭，其餘是絕對路徑。一律用斜線。 */
+  /**
+   * 排序與標籤：工作區內是相對路徑，repo 裡、工作區之上的是 `../` 開頭，家目錄底下是 `~` 開頭，其餘是絕對路徑。
+   * 一律用斜線。
+   */
   readonly display: string;
   /** 新增的行數；二進位或過大的檔是 0。 */
   readonly added: number;
   /** 刪掉的行數；二進位或過大的檔是 0。 */
   readonly deleted: number;
-  /** 有一側含 NUL 位元組。 */
+  /** git 判成二進位，或有一側含 NUL 位元組。 */
   readonly binary?: true;
   /** 有一側超過大小上限，列出來但沒有行數、也沒有比較。 */
   readonly oversized?: true;
@@ -93,7 +97,7 @@ export type WorkspaceFileDiff =
       /** 逐行比較逾時，退成整檔替換。 */
       readonly coarse: boolean;
     }
-  /** 有一側含 NUL 位元組，不送內容。 */
+  /** git 判成二進位，或有一側含 NUL 位元組，不送內容。 */
   | { readonly kind: 'binary'; readonly path: string; readonly display: string }
   /** 有一側超過大小上限，不送內容。 */
   | { readonly kind: 'oversized'; readonly path: string; readonly display: string };
