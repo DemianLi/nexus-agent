@@ -72,6 +72,15 @@ describe('createAgentInstructionsPlugin', () => {
     expect(entries[0]?.value.middleware).toBeUndefined();
   });
 
+  it('合法的覆寫會生效——上限換小之後，同一份基線就被截了', async () => {
+    const long = 'x'.repeat(200);
+    const full = await inject({ '/AGENTS.md': long });
+    const capped = await inject({ '/AGENTS.md': long }, [], 32);
+
+    expect(String(full?.[0]?.content)).toContain(long);
+    expect(String(capped?.[0]?.content)).not.toContain(long);
+  });
+
   // **翻面過的絆索**（#453）：原本是工廠當場拋，現在驗在載入的時候，訊息因此指得出條目。
   // dsh 拿非正數當「關掉」，我們這側不留那條路——一個看起來像設定值的 `0` 靜靜關掉整個功能
   // 是那種沒有人會發現的失敗。

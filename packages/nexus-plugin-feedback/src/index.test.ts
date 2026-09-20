@@ -305,12 +305,16 @@ describe('設定', () => {
     expect(a).not.toBe(b);
     const log = new SessionRegistry('限額').root;
     const note = 'x'.repeat(100);
-    expect(a.put(log, { messageId: '無', note, ifVersion: null })).toMatchObject({
+    expect(
+      a.put(log, { messageId: '無', rating: 'positive', note, ifVersion: null }),
+    ).toMatchObject({
       ok: false,
       error: { code: 'note-too-large', maxBytes: 4 },
     });
     // 大的那一份走到下一關（目標訊息不存在），代表它沒有被小的那個上限擋下來。
-    expect(b.put(log, { messageId: '無', note, ifVersion: null })).toMatchObject({
+    expect(
+      b.put(log, { messageId: '無', rating: 'positive', note, ifVersion: null }),
+    ).toMatchObject({
       ok: false,
       error: { code: 'target-not-found' },
     });

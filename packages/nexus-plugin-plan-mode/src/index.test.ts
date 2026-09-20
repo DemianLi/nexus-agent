@@ -16,6 +16,9 @@ import type {
 import { describe, expect, it } from 'vitest';
 import {
   createPlanModePlugin,
+  DEFAULT_PLAN_GUIDANCE,
+  planModeConfigSchema,
+  planModePlugin,
   EXIT_PLAN_MODE_TOOL_NAME,
   NOT_IN_PLAN_MODE_MESSAGE,
   PLAN_ALREADY_ACTIVE_MESSAGE,
@@ -420,5 +423,48 @@ describe('模式的作用範圍', () => {
     });
     expect(modes(firstLog)).toEqual([true]);
     expect(modes(secondLog)).toEqual([true]);
+  });
+});
+
+describe('設定（#453）', () => {
+  it('省略時由 schema 補上預設值——指引是套件的那一份，模式從關的開始', () => {
+    expect(planModeConfigSchema.parse({})).toEqual({
+      guidance: DEFAULT_PLAN_GUIDANCE,
+      startActive: false,
+    });
+  });
+
+  it('合法的覆寫會生效——夾進 prompt 的是部署給的那份原樣文本', async () => {
+    const guidance = '這一台只准先講清楚要做什麼。';
+    const { registry } = await assemble({ guidance, startActive: true });
+    const entry = registry.middleware
+      .list()
+      .find((one) => one.value.middleware?.name === PLAN_MODE_MIDDLEWARE_NAME);
+    const middleware = entry!.value.middleware as unknown as {
+      wrapModelCall: (
+        request: unknown,
+        handler: (request: { systemPrompt?: string }) => unknown,
+      ) => unknown;
+    };
+    let seen: string | undefined;
+    middleware.wrapModelCall({}, (request) => {
+      seen = request.systemPrompt;
+      return undefined;
+    });
+
+    expect(seen).toBe(guidance);
+    expect(seen).not.toBe(DEFAULT_PLAN_GUIDANCE);
+  });
+
+  it('型別錯就讓載入失敗，訊息帶 `<id> (<name>)` 與欄位路徑', async () => {
+    const bad = [{ plugin: planModePlugin, config: { startActive: 'yes' } }];
+    await expect(loadPlugins(bad)).rejects.toThrow('plan-mode#0 (plan-mode)');
+    await expect(loadPlugins(bad)).rejects.toThrow('startActive');
+  });
+
+  it('未知欄位讓載入失敗（登記的偏離：dsh 放行）', async () => {
+    await expect(
+      loadPlugins([{ plugin: planModePlugin, config: { guidence: '講清楚' } }]),
+    ).rejects.toThrow(/guidence/);
   });
 });

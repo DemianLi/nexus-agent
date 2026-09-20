@@ -105,7 +105,20 @@ describe('設定的檢查（#453：驗在載入的時候，不在工廠裡）', 
     await expect(loadPlugins(typo)).rejects.toThrow(/connection(\.|:)/);
   });
 
-  it('判別式聯集：transport 打錯時訊息講的是 transport，不是兩個分支的抱怨', async () => {
+  it('判別式聯集：stdio 那格打錯時只抱怨 stdio，不連 http 分支一起念', async () => {
+    // **這一條才擋得住「換成一般 `z.union`」**：一般聯集會把兩個分支的抱怨一起印出來，
+    // 於是使用者被告知「少了 url」——而他根本沒打算走 http。
+    const typo = [
+      {
+        plugin: mcpPlugin,
+        config: { serverName: 'x', connection: { transport: 'stdio', commnd: 'npx' } },
+      },
+    ];
+    await expect(loadPlugins(typo)).rejects.toThrow(/commnd|command/);
+    await expect(loadPlugins(typo)).rejects.not.toThrow(/url/);
+  });
+
+  it('transport 自己打錯時，訊息講的是 transport', async () => {
     const bad = [
       { plugin: mcpPlugin, config: { serverName: 'x', connection: { transport: 'stdout' } } },
     ];
