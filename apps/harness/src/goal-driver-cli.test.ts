@@ -21,7 +21,6 @@ import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import {
   createCliAgent,
-  DEFAULT_PLUGINS,
   driveGoalRounds,
   formatGoalDriverDisclosure,
   goalDriverPort,
@@ -34,7 +33,10 @@ import { ROUND_CAP_BLOCK_CODE } from './goal-driver.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedModelState, ScriptedTurn } from './scripted-model.js';
 import type { NexusAgentHandle } from './agent-factory.js';
+import { shippedPlugins } from './fixtures.js';
 import { goalId, SessionRegistry } from '@nexus/core';
+
+const shipped = await shippedPlugins();
 
 type NexusAgent = NexusAgentHandle['agent'];
 
@@ -196,7 +198,7 @@ describe('REPL 那條路自己排下一輪', () => {
  * （`invariant.ts`、`index.ts`、`goal-driver.ts`）。
  *
  * `invariant.test.ts` 那一組是同一個形狀，但它自己組配套入口；這裡走的是**真的預設清單**
- * ——`DEFAULT_PLUGINS` 裡同時有 goal 域與它的配套入口，而旗標關著。只在掛了排程器時才擋
+ * ——出貨清單裡同時有 goal 域與它的配套入口，而旗標關著。只在掛了排程器時才擋
  * 的檢查，對一顆手寫或寫壞的輪次是零防守，而那正是這裡量的東西。
  */
 describe('伴生在預設組裝上是武裝的，旗標關著也一樣', () => {
@@ -221,7 +223,7 @@ describe('伴生在預設組裝上是武裝的，旗標關著也一樣', () => {
   ): Promise<{ violations: string[]; kinds: string[] }> {
     const { dispose, sessions, sessionLog, attachInvariants } = await createCliAgent(
       { live: false },
-      DEFAULT_PLUGINS,
+      shipped,
     );
     const violations: string[] = [];
     const original = console.error;
@@ -430,12 +432,12 @@ describe('披露', () => {
 /**
  * **排程器問的是哪一份 goal 域**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
  *
- * 這一組量的是交付物：`DEFAULT_PLUGINS` 那份清單，與 `createCliAgent` 真的組出來的東西。
+ * 這一組量的是交付物：出貨的那份清單（`apps/harness/cordis.yml`），與 `createCliAgent` 真的組出來的東西。
  * 在手搭的 registry 上驗隔離證明不了這條——**清單裡掛的是哪一顆物件**才是以前串台的來源。
  */
 describe('goals 服務綁的是這一次組裝', () => {
   it('預設清單掛的就是模組層級那一顆 goal plugin', () => {
-    expect(DEFAULT_PLUGINS.filter((entry) => entry.plugin === goalPlugin)).toHaveLength(1);
+    expect(shipped.filter((entry) => entry.plugin === goalPlugin)).toHaveLength(1);
   });
 
   /**
@@ -446,7 +448,7 @@ describe('goals 服務綁的是這一次組裝', () => {
    * `undefined`，整套 harness 測試照樣綠（實測）。這一條就是那個洞。
    */
   it('goalDriverPort 的 goal / block / disarm 都打在注入的那一份上', async () => {
-    const built = await createCliAgent({ live: false }, DEFAULT_PLUGINS);
+    const built = await createCliAgent({ live: false }, shipped);
     try {
       built.attachSession(built.sessions);
       const service = built.goals?.serviceFor(built.sessionLog);
@@ -476,8 +478,8 @@ describe('goals 服務綁的是這一次組裝', () => {
   });
 
   it('兩次 createCliAgent 各拿各的——serve 每條 thread 組裝一次', async () => {
-    const first = await createCliAgent({ live: false }, DEFAULT_PLUGINS);
-    const second = await createCliAgent({ live: false }, DEFAULT_PLUGINS);
+    const first = await createCliAgent({ live: false }, shipped);
+    const second = await createCliAgent({ live: false }, shipped);
     try {
       const firstGoals = first.goals;
       const secondGoals = second.goals;

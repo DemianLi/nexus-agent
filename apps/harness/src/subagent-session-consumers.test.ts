@@ -35,9 +35,12 @@ import {
   GOALS_SERVICE,
 } from '@nexus/plugin-goal';
 import { createNexusAgent } from './agent-factory.js';
-import { DEFAULT_PLUGINS } from './cli.js';
+
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { shippedPlugins } from './fixtures.js';
+
+const shipped = await shippedPlugins();
 
 const WRITER_TOOL_NAME = 'writer_tool';
 const ROOT_ID = 'consumers';
@@ -225,7 +228,7 @@ async function violationsFrom(plugin: PluginEntry, toolName: string): Promise<st
   const { agent, attachInvariants, attachSession, dispose } = await createNexusAgent({
     model: delegatingModel(toolName),
     checkpointer: new MemorySaver(),
-    plugins: [...DEFAULT_PLUGINS, plugin],
+    plugins: [...shipped, plugin],
     onInvariantViolation: (error: InvariantError) => void violations.push(error.message),
   });
   const sessions = new SessionRegistry('boundary');

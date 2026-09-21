@@ -3,7 +3,7 @@
  * 「discover 讀得到什麼」這一層（backend 是替身，不經過 agent）。
  *
  * **基線真的有沒有進到模型、會不會重複**的驗收在組裝點（`apps/harness/src/agent-instructions.test.ts`），
- * 而且那裡用的是零設定的 `DEFAULT_PLUGINS`。兩件事。
+ * 而且那裡用的是零設定的出貨清單（`apps/harness/cordis.yml`）。兩件事。
  */
 
 import { HumanMessage } from '@langchain/core/messages';

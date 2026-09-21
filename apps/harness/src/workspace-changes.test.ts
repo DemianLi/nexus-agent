@@ -48,15 +48,17 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
-import { createCliAgent, DEFAULT_PLUGINS } from './cli.js';
+import { createCliAgent } from './cli.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
-import { loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
+import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
 import { createSandboxPolicyPlugin } from '@nexus/plugin-sandbox-policy';
 import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+
+const shipped = await shippedPlugins();
 
 const BASE_URL = 'http://changes.test';
 const THREAD_ID = 'changes';
@@ -126,7 +128,7 @@ async function run(
     checkpointer: new MemorySaver(),
     plugins: [
       createHostServicesPlugin({ sandboxPolicy: { controller: sandboxMode, rootDir: root } }),
-      ...DEFAULT_PLUGINS,
+      ...shipped,
       WORKER,
       createSandboxPolicyPlugin(),
       ...(options.plugins ?? []),
@@ -458,7 +460,7 @@ describe('組裝點', () => {
       [{ live: false, workspace }, false],
     ] as const;
     for (const [invocation, mounted] of cases) {
-      const built = await createCliAgent(invocation, DEFAULT_PLUGINS);
+      const built = await createCliAgent(invocation, shipped);
       try {
         expect(built.workspaceChanges !== undefined, JSON.stringify(invocation)).toBe(mounted);
       } finally {
@@ -478,8 +480,8 @@ describe('組裝點', () => {
   it('兩次 createCliAgent 各拿各的一份', async () => {
     const workspace = await directory('nexus-changes-cli-');
     const invocation = { live: false, workspace, workspaceChanges: true } as const;
-    const first = await createCliAgent(invocation, DEFAULT_PLUGINS);
-    const second = await createCliAgent(invocation, DEFAULT_PLUGINS);
+    const first = await createCliAgent(invocation, shipped);
+    const second = await createCliAgent(invocation, shipped);
     try {
       expect(first.workspaceChanges).toBeDefined();
       expect(second.workspaceChanges).toBeDefined();

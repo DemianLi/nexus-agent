@@ -1,10 +1,10 @@
 /**
  * 從 YAML 組裝 plugin 清單：出貨的預設 ＋ 使用者的 patch 層。
  *
- * **這一刀只做組裝，不接線。** `cli.ts` 與 `serve.ts` 還是走 `DEFAULT_PLUGINS`；把它們改成
- * 走這裡是下一刀的事（[#454](https://github.com/DemianLi/nexus-agent/issues/454) 的第三刀）。
- * 分開的理由是失敗的形狀不同：解析錯了是這個檔案的問題，組裝錯了是接線的問題，混在一張
- * diff 裡沒有人分得出來哪一半該回滾。
+ * **`cli.ts` 與 `serve.ts` 沒給 `--plugins` 時走的就是這裡**
+ * （[#454](https://github.com/DemianLi/nexus-agent/issues/454)）。兩個入口共用
+ * {@link loadDefaultPlugins}，接線的實測在
+ * [`plugin-config-wire.test.ts`](./plugin-config-wire.test.ts)。
  *
  * ## 兩種方言，照 dsh
  *

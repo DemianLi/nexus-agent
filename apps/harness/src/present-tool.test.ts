@@ -33,15 +33,17 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
-import { DEFAULT_PLUGINS } from './cli.js';
+
 import { ContainedFilesystemBackend } from './contained-backend.js';
-import { loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
+import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
 import { createSandboxPolicyPlugin } from '@nexus/plugin-sandbox-policy';
 import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+
+const shipped = await shippedPlugins();
 
 const BASE_URL = 'http://present.test';
 const THREAD_ID = 'present';
@@ -119,7 +121,7 @@ async function run(
       ...(workspace
         ? [createHostServicesPlugin({ sandboxPolicy: { controller: sandboxMode, rootDir: root } })]
         : []),
-      ...DEFAULT_PLUGINS,
+      ...shipped,
       WORKER,
       ...(options.extra ?? []),
       ...(workspace ? [createSandboxPolicyPlugin()] : []),

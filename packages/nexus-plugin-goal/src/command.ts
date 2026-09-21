@@ -5,7 +5,7 @@
  * （`references/deepseek-harness/packages/goal/command-goal/src/index.ts`，對讀版本
  * `0a53fb55bea101816fa226bb964ae2bed71c343b`）。那邊是獨立套件，這邊住在域的套件裡
  * ——**這是形狀差異不是偏離**：dsh 拆開是因為它的組裝清單逐套件掛載，域與命令要分別
- * 選；我們的 `DEFAULT_PLUGINS` 掛的是工廠函式，`createGoalPlugin()` 與
+ * 選；我們的出貨清單掛的是模組層級那一顆，`createGoalPlugin()` 與
  * `createGoalCommandPlugin()` 拆成兩個並不會讓任何一種組裝變得表達得出來，只會多一個
  * 「掛了域卻沒掛命令」的無聲失敗態。
  *

@@ -133,14 +133,14 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
 /**
  * 把會話日誌的配套入口掛上去。
  *
- * **它在 `@nexus/harness` 的 `DEFAULT_PLUGINS` 裡**，連同另外八個配套入口——
+ * **它在出貨清單裡**（`apps/harness/cordis.yml`），連同另外八個配套入口——
  * [#107](https://github.com/DemianLi/nexus-agent/issues/107) 拍板。這與 dsh 對得上：
  * dsh 的標準組合（`agent-spine-demo`）也掛了服務加核心配套入口；它的規矩只說「單獨掛
  * 註冊表不會裝上任何檢查」，沒說預設組合該掛什麼。
  *
  * **進得來的前提是關得掉**：[#104](https://github.com/DemianLi/nexus-agent/issues/104)
  * 給了條目層的 `disabled` 與組裝點的 `invariants` 選擇，所以這不是單向門。理由與代價
- * （九個全進、每次執行多九個條目）寫在 `DEFAULT_PLUGINS` 自己的 JSDoc 上——那份清單
+ * （九個全進、每次執行多九個條目）寫在 `apps/harness/cordis.yml` 的註解裡——那份清單
  * 明說它「不替誰決定該裝什麼」，例外要在例外那邊講。
  *
  * **但掛上它不等於違規看得見。** 違規的去處是進入點的事：CLI 走

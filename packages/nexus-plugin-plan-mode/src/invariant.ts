@@ -45,7 +45,7 @@
  * 這條規則假設日誌裡那個叫 `plan` 的命令是**我們註冊的那個**。同一份組裝裡這是保證的
  * （`registry.commands.register()` 撞名當場拋），但配套入口與 plugin 本體是分開掛的，
  * 所以「掛了配套入口、沒掛 plugin、別人註冊了自己的 `/plan`」在理論上會誤報。
- * 預設清單兩個都掛（`cli.ts` 的 `DEFAULT_PLUGINS`），這條路只有自訂清單走得到。
+ * 出貨清單兩個都掛（`apps/harness/cordis.yml`），這條路只有自訂清單走得到。
  *
  * @module
  */

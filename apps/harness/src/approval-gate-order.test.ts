@@ -53,7 +53,7 @@
  * 它是「**建了那一層之後**」的驗收句，而 #198 判的正是不建。正確的說法是本檔第二層那三行：
  * **釘住今天的實際值**。這是 #190 的第七次自我更正，對象是上一張卡的**答案**，不是它的判決。
  *
- * ## 射程：只到 `DEFAULT_PLUGINS`
+ * ## 射程：只到出貨清單
  *
  * 第一層只釘 `apps/harness/src/cli.ts` 的那一份**預設組裝**。`--plugins` 載入的模組
  * （`approval.fixture.ts` 那一類）**刻意在柵欄外**：那條路上的清單由呼叫端自己決定，釘它
@@ -72,9 +72,12 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
-import { DEFAULT_PLUGINS } from './cli.js';
+
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { shippedPlugins } from './fixtures.js';
+
+const shipped = await shippedPlugins();
 
 /* -------------------------------------------------------------------------- */
 /* 第一層：預設組裝裡的核准 gate 是誰掛的                                        */
@@ -96,14 +99,17 @@ import { ScriptedChatModel } from './scripted-model.js';
  * 是逐個掛載唯一的，所以陣列版連同名的那種也擋得住；順帶還釘住了**順序**，而順序正是這張
  * 卡的整個主題。
  *
- * ## `#0` 那個序號是可以釘的
+ * ## id 現在是人寫的，不是自動編的
  *
- * `plugin.ts` 明說自動 id 的 `<name>#<序號>` **不承諾跨清單穩定**。那條警告講的是**同名**
- * 條目之間的相對位置：計數器是 per-name 的（`createEchoPlugin()` 排在 index 0，plan-mode
- * 仍然是 `#0`），所以插入別的 plugin 動不到它。**它會移動的唯一情形，是清單裡多了一個同名
- * 的 plugin——那本來就是該響的事。**
+ * 以前這裡寫的是 `plan-mode#0`——`DEFAULT_PLUGINS` 的條目沒寫 id，由 `resolveEntries` 補
+ * `<name>#<序號>`。**[#454](https://github.com/DemianLi/nexus-agent/issues/454) 之後清單從
+ * `apps/harness/cordis.yml` 來，每一列都寫著看得懂的 id**，所以這裡是 `plan-mode`。
+ *
+ * 這一格因此比以前更穩：自動編號的 `<name>#<序號>` 本來就不承諾跨清單穩定，而設定檔裡的
+ * id 是人指定的，**它會變的唯一情形是有人真的去改那一行**——那本來就是該響的事。id 是
+ * 外部 patch 指得著這一列的唯一辦法，改它會靜靜弄壞別人的 patch。
  */
-const EXPECTED_APPROVAL_GATES: readonly string[] = ['plan-mode#0 (plan-mode)'];
+const EXPECTED_APPROVAL_GATES: readonly string[] = ['plan-mode (plan-mode)'];
 
 /**
  * 這條絆索響的時候，讀的人該往哪裡去。
@@ -124,9 +130,10 @@ describe('預設組裝裡的核准 gate', () => {
   /**
    * **這一條刻意不吃參數。**
    *
-   * 寫成 `origins(plugins = DEFAULT_PLUGINS)` 再拿別的清單去「驗」它，證明的是斷言邏輯會動，
+   * 寫成 `origins(plugins = 出貨清單)` 再拿別的清單去「驗」它，證明的是斷言邏輯會動，
    * 而**不是這條絆索焊在產品那份清單上**——那就是 #195 那個空轉絆索換一件衣服。所以下面
-   * 直接讀 `DEFAULT_PLUGINS`，預檢的三個突變是真的去改 `cli.ts` 再還原。
+   * 直接讀出貨的那一份（`apps/harness/cordis.yml`），預檢的三個突變是真的去改那份檔案
+   * 再還原。
    *
    * 這一條**同時擋得住規矩的第二位**（有呼叫 `next()` 的那種）。那是刻意的：絆索的工作是
    * 「有人來了，回答上面那個問題」，不是「偵測強制允許」。只擋沒禮貌的那種，順序這個危險
@@ -134,7 +141,7 @@ describe('預設組裝裡的核准 gate', () => {
    * 正是規矩的那種，這個形狀早就存在。
    */
   it('恰好是 plan-mode 一位，依 waterfall 順序', async () => {
-    const { registry, dispose } = await loadPlugins([...DEFAULT_PLUGINS]);
+    const { registry, dispose } = await loadPlugins([...shipped]);
     try {
       const gates = registry.approvals.listeners().map((entry) => formatOrigin(entry.origin));
       expect(gates, NEW_GATE_GUIDANCE).toEqual(EXPECTED_APPROVAL_GATES);

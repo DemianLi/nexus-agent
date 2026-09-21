@@ -27,7 +27,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createHostServicesPlugin } from '@nexus/core';
 
 import { createNexusAgent } from './agent-factory.js';
-import { createCliAgent, DEFAULT_PLUGINS } from './cli.js';
+import { createCliAgent } from './cli.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
 import {
@@ -37,6 +37,9 @@ import {
   SandboxModeController,
 } from '@nexus/plugin-sandbox-policy';
 import { ScriptedChatModel } from './scripted-model.js';
+import { shippedPlugins } from './fixtures.js';
+
+const shipped = await shippedPlugins();
 
 /** 把一則訊息的 `content` 攤成可以搜尋的字串，同 `sandbox-policy.test.ts` 的理由。 */
 function flatten(content: unknown): string {
@@ -134,7 +137,7 @@ describe('組裝起來之後', () => {
   it('掛了 --workspace 的組裝有 `/sandbox`，日誌上也有那顆起始值', async () => {
     const { commands, sessions, attachSession, sessionLog, dispose } = await createCliAgent(
       { live: false, workspace: root, sandbox: 'read-only' },
-      DEFAULT_PLUGINS,
+      shipped,
       root,
     );
     const detach = attachSession(sessions);
@@ -154,7 +157,7 @@ describe('組裝起來之後', () => {
   it('**沒有 --workspace 就沒有 `/sandbox`，日誌上也一顆都沒有**', async () => {
     const { commands, sessions, attachSession, sessionLog, dispose } = await createCliAgent(
       { live: false },
-      DEFAULT_PLUGINS,
+      shipped,
       root,
     );
     const detach = attachSession(sessions);
@@ -170,8 +173,8 @@ describe('組裝起來之後', () => {
   });
 
   it('兩次組裝是兩格，一邊切不動另一邊——`serve` 一條 thread 一次組裝', async () => {
-    const first = await createCliAgent({ live: false, workspace: root }, DEFAULT_PLUGINS, root);
-    const second = await createCliAgent({ live: false, workspace: root }, DEFAULT_PLUGINS, root);
+    const first = await createCliAgent({ live: false, workspace: root }, shipped, root);
+    const second = await createCliAgent({ live: false, workspace: root }, shipped, root);
     try {
       // **活的 signal**，不是一個已經 abort 的。發派面在中止時根本不呼叫 handler
       // （`@nexus/plugin-commands` 的 `execute` 在進 handler 之前就 `throw abortError`），

@@ -18,10 +18,13 @@ import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { DEFAULT_PLUGINS, createCliAgent, parseCliArgs, runTurn } from './cli.js';
+import { createCliAgent, parseCliArgs, runTurn } from './cli.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import type { SandboxMode } from './contained-backend.js';
 import { parseServeArgs } from './serve.js';
+import { shippedPlugins } from './fixtures.js';
+
+const shipped = await shippedPlugins();
 
 const silent = { log: () => undefined, error: () => undefined };
 
@@ -57,7 +60,7 @@ async function promptOf(
 ): Promise<string> {
   const { agent, dispose, model, sessionLog } = await createCliAgent(
     { live: false, ...invocation },
-    DEFAULT_PLUGINS,
+    shipped,
     cwd,
   );
   try {
