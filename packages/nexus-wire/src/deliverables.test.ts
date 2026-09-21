@@ -75,7 +75,7 @@ describe('交付', () => {
     const state = reduceAll(appendHumanTurn(emptyConversation(), '交付。'), [
       running(),
       ...tool('c1'),
-      delivered({ callId: 'c1', files: FILES }),
+      delivered({ callId: 'c1', seq: 1, files: FILES }),
       ...reply('r1', '好了。'),
       completed(),
     ]);
@@ -84,34 +84,51 @@ describe('交付', () => {
       kind: 'deliverables',
       id: 'deliverables:c1',
       callId: 'c1',
+      seq: 1,
       files: FILES,
     });
   });
 
   it('同一個 callId 第二次出現就略過', () => {
     const state = reduceAll(emptyConversation(), [
-      delivered({ callId: 'c1', files: FILES }),
-      delivered({ callId: 'c1', files: [{ path: 'other.md' }] }),
-      delivered({ callId: 'c2', files: [{ path: 'c.md' }] }),
+      delivered({ callId: 'c1', seq: 2, files: FILES }),
+      delivered({ callId: 'c1', seq: 3, files: [{ path: 'other.md' }] }),
+      delivered({ callId: 'c2', seq: 4, files: [{ path: 'c.md' }] }),
     ]);
     expect(state.entries.map((entry) => entry.id)).toEqual(['deliverables:c1', 'deliverables:c2']);
-    expect(state.entries[0]).toMatchObject({ files: FILES });
+    // **`seq` 不同也照樣只長一格**：去重的鍵是 `callId`，不是座標。留著第一顆的 `seq`，
+    // 因為那一顆才是真的被畫出來的那一格。
+    expect(state.entries[0]).toMatchObject({ files: FILES, seq: 2 });
   });
 
   it('別的名字、壞掉的形狀一律略過，但 seq 照樣往前走', () => {
     const noise = [
-      frame('custom', [], { name: 'something/else', payload: { callId: 'x', files: FILES } }),
-      frame('custom', [], { payload: { callId: 'x', files: FILES } }),
+      frame('custom', [], {
+        name: 'something/else',
+        payload: { callId: 'x', seq: 0, files: FILES },
+      }),
+      frame('custom', [], { payload: { callId: 'x', seq: 0, files: FILES } }),
       frame('custom', [], { name: DELIVERABLES_PRESENTED }),
-      frame('custom', [], { name: DELIVERABLES_PRESENTED, payload: { files: FILES } }),
-      frame('custom', [], { name: DELIVERABLES_PRESENTED, payload: { callId: 'x' } }),
+      frame('custom', [], { name: DELIVERABLES_PRESENTED, payload: { seq: 0, files: FILES } }),
+      frame('custom', [], { name: DELIVERABLES_PRESENTED, payload: { callId: 'x', seq: 0 } }),
       frame('custom', [], {
         name: DELIVERABLES_PRESENTED,
-        payload: { callId: 'x', files: [{ path: 1 }] },
+        payload: { callId: 'x', seq: 0, files: [{ path: 1 }] },
       }),
       frame('custom', [], {
         name: DELIVERABLES_PRESENTED,
-        payload: { callId: 'x', files: [{ path: 'a.md', description: 2 }] },
+        payload: { callId: 'x', seq: 0, files: [{ path: 'a.md', description: 2 }] },
+      }),
+      // **座標缺席或不合法的也略過**（#452）：沒有 `seq` 就指不到那顆事件，讀檔路由沒有東西可查。
+      // 這三條跟 `workspace/changes` 那側共用同一個判準（`isSeq`）。
+      frame('custom', [], { name: DELIVERABLES_PRESENTED, payload: { callId: 'x', files: FILES } }),
+      frame('custom', [], {
+        name: DELIVERABLES_PRESENTED,
+        payload: { callId: 'x', seq: -1, files: FILES },
+      }),
+      frame('custom', [], {
+        name: DELIVERABLES_PRESENTED,
+        payload: { callId: 'x', seq: 1.5, files: FILES },
       }),
       frame('custom', [], null),
     ];
@@ -125,7 +142,7 @@ describe('交付', () => {
       running(),
       ...reply('r1', '先寫。'),
       ...tool('c1'),
-      delivered({ callId: 'c1', files: FILES }),
+      delivered({ callId: 'c1', seq: 5, files: FILES }),
     ]);
     expect(state.status).toBe('running');
     expect(state.pendings).toEqual([]);
@@ -134,7 +151,7 @@ describe('交付', () => {
     const tails = done.entries.filter((entry) => entry.kind === 'ai' && entry.turnTail === true);
     expect(tails.map((entry) => entry.id)).toEqual(['r1']);
     // 收尾之後才到的（只呼叫工具、沒有文字的一輪也一樣）不改動任何一格的輪尾。
-    const late = reduceAll(done, [delivered({ callId: 'c2', files: FILES })]);
+    const late = reduceAll(done, [delivered({ callId: 'c2', seq: 6, files: FILES })]);
     expect(late.status).toBe('idle');
     expect(late.entries.slice(0, -1)).toEqual(done.entries);
   });
@@ -142,7 +159,7 @@ describe('交付', () => {
   it('往前翻頁：較早那一頁的交付原樣接在最前面', () => {
     const earlier = reduceAll(emptyConversation(), [
       ...tool('c1'),
-      delivered({ callId: 'c1', files: FILES }),
+      delivered({ callId: 'c1', seq: 7, files: FILES }),
     ]);
     const now = reduceAll(emptyConversation(), [...reply('r2', '後來。')]);
     const joined = prependEntries(now, earlier);

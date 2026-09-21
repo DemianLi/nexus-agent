@@ -32,6 +32,16 @@ export interface WirePresentedFile {
 export interface DeliverablesPresentedPayload {
   /** 那次 `present` 呼叫的 `tool_call_id`，對得上同一輪那張 `present` 工具卡。 */
   readonly callId: string;
+  /**
+   * 那顆 `deliverables/presented` 在 root 日誌裡的 `seq`（[#452](https://github.com/DemianLi/nexus-agent/issues/452)）。
+   *
+   * **它是座標，不是編號**：`(seq, index)` 一起指名「那一次交付宣告的第 index 個檔」，`index` 是它在
+   * {@link DeliverablesPresentedPayload.files} 裡的位置。照 dsh 的 `handlePresentOpen`——那條路由也不收
+   * 路徑輸入，只收座標，所以路徑遍歷在形狀上就不可能發生。
+   *
+   * `callId` 取代不了它：`callId` 認得出是哪一次呼叫，但日誌那側要的是「哪一顆事件」。
+   */
+  readonly seq: number;
   /** 通過檢查的檔案，順序照模型給的。 */
   readonly files: readonly WirePresentedFile[];
 }

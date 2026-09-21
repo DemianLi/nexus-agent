@@ -240,9 +240,20 @@ describe('present 在真的圖上', () => {
     // callId 對得上同一輪那張 `present` 工具卡——web 靠它把交付接回那張卡。
     const callId = callIdOf(outcome.live, PRESENT_TOOL_NAME);
     expect(callId).toBeDefined();
+    // `seq` 是那顆 `deliverables/presented` 在 root 日誌裡的位置（#452）：web 拿 `(seq, index)`
+    // 當讀檔路由的座標。**從日誌取、不寫死**——寫死一個數字的話，兩條路一起指錯也照樣綠，
+    // 而這條測試的全部價值就在「即時與重新整理是同一顆」。
+    const presentedSeq = outcome.sessions.root.events.find(
+      (event) => event.type === 'deliverables/presented',
+    )?.seq;
+    expect(presentedSeq).toBeDefined();
     const expected: { name: string; payload: DeliverablesPresentedPayload } = {
       name: DELIVERABLES_PRESENTED,
-      payload: { callId: callId!, files: [{ path: 'report.md', description: '報告' }] },
+      payload: {
+        callId: callId!,
+        seq: presentedSeq!,
+        files: [{ path: 'report.md', description: '報告' }],
+      },
     };
     expect(live).toEqual([expected]);
     expect(deliveriesIn(outcome.history)).toEqual([expected]);
@@ -294,6 +305,8 @@ describe('present 在真的圖上', () => {
       kind: 'deliverables',
       id: `deliverables:${callId!}`,
       callId: callId!,
+      // 同上：座標從日誌取。折出來的那一格帶的就是 frame 上那一個。
+      seq: presentedSeq!,
       files: [{ path: 'report.md', description: '報告' }],
     };
     expect(folded).toEqual([[entry], [entry]]);
