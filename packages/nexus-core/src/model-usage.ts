@@ -194,9 +194,18 @@ export const MODEL_USAGE_PLUGIN_NAME = 'model-usage';
  * **因此這一列不可以帶 `config`**：`parseEntryConfig` 對「沒有 Config schema 卻給了
  * config」是當場拋，不是默默吞掉（見 {@link ./plugin.ts | parseEntryConfig}）。
  *
- * **關掉它之後不見的是日誌裡的 `model/usage`**，而讀那些紀錄的是評估那條路
- * （`apps/harness/src/eval` 的用量統計）——關掉它，那些統計會是空的，不是零。這件事
- * 寫在 `docs/operations.md` 的表上，因為從這個條目本身看不出來。
+ * **關掉它之後不見的是日誌裡的 `model/usage`**——檔頭第一段講的那本帳。**今天樹上沒有
+ * 任何一處在加總它**，所以關掉它不會有任何東西當場變少，而那正是這個代價非寫下來不可的
+ * 理由：沒有人會紅。數過（2026-09-22）：
+ *
+ * - `apps/harness/src/eval/runner.ts` 的用量是它**自己從 `usage_metadata` 加的**，而且
+ *   那條路連 `attachSession` 都不接（它的檔頭寫明「這條路沒有消費者」，還配了
+ *   `session-absence.test.ts` 當絆索）。**評估那邊的數字跟這一顆無關。**
+ * - `apps/harness/src/eval/session-scan.ts` 只把它列在「這一版認得的事件種類」裡，不算它。
+ * - `deriveSessionStats` 的 `steps` 數的是 `model/start`／`model/end`，不是這一顆。
+ *
+ * 所以不見的是落盤日誌裡那本逐次呼叫的帳。這件事也寫在 `docs/operations.md` 的表上，
+ * 因為從這個條目本身看不出來。
  *
  * **偏離登記**同 {@link ./repeat-reminder.ts | repeatReminderPlugin}：載體是
  * `@nexus/core` 的子路徑而不是獨立套件；而這一顆更前面還有一條**檔頭本來就登記過**的

@@ -113,8 +113,9 @@ export interface CreateNexusAgentOptions {
   /**
    * 每一次模型呼叫的 token 帳目要不要記進會話日誌。省略即開著。
    *
-   * `false` 之後日誌裡不會有 `model/usage`，而那是評估那條路算用量的唯一來源——
-   * 那些統計會是**空的**，不是零。形狀與理由見 `@nexus/core` 的 `model-usage.ts`。
+   * `false` 之後落盤日誌裡不會有 `model/usage`。**評估那條路的數字不受影響**——
+   * `eval/runner.ts` 是自己從 `usage_metadata` 加的，而且它不接 `attachSession`。
+   * 形狀與理由見 `@nexus/core` 的 `model-usage.ts`。
    */
   readonly modelUsage?: boolean;
   /** checkpointer。有 plugin 宣告要核准的工具卻沒給，fold 會報錯。 */

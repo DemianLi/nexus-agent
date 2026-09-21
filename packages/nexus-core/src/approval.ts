@@ -282,7 +282,7 @@ export function createApprovalGateMiddleware(
 /**
  * 這個條目的 plugin 名。
  *
- * **它跟另外四顆 core 條目的鍵不同型**：那幾顆的名字是拿去問
+ * **它跟另外五顆 core 條目的鍵不同型**：那幾顆的名字是拿去問
  * {@link ./registry.ts | DisabledEntryView} 的（「這一顆被關掉了嗎」），這一顆**沒有人
  * 會去問**——它關不掉，載入器在條目驗證那一刻就擋下來了
  * （`apps/harness/src/plugin-config.ts` 的保護名單）。這個常數的用途只有一個：讓

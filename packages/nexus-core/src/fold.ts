@@ -284,10 +284,11 @@ export interface FoldOptions {
    * **沒有設定**，所以它只有三態而不是四態，理由見
    * {@link ./model-usage.ts | modelUsagePlugin}。
    *
-   * **關掉它不會讓任何東西失敗，所以它的代價要自己讀出來**：不見的是日誌裡的
-   * `model/usage`，而那是評估那條路算用量的唯一來源——關掉之後那些統計是**空的**，
-   * 不是零。它坐在 request path 上但不准拋（見 {@link ./model-usage.ts}），所以沒有
-   * 「留著它會弄壞什麼」這一面可以拿來權衡。
+   * **關掉它不會讓任何東西失敗，所以它的代價要自己讀出來**：不見的是落盤日誌裡那本
+   * 逐次呼叫的 token 帳（`model/usage`）。**今天樹上沒有任何一處在加總它**——評估那條路
+   * 的數字是它自己從 `usage_metadata` 加的，跟這一顆無關（數過，見
+   * {@link ./model-usage.ts | modelUsagePlugin}）。它坐在 request path 上但不准拋，
+   * 所以也沒有「留著它會弄壞什麼」這一面可以拿來權衡。
    *
    * 它**無狀態**，所以 root 與每個 subagent 共用同一份實例，不像「先讀後改」那樣逐個建。
    * 見 {@link createModelUsageRecorder}。
