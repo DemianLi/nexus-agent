@@ -58,7 +58,7 @@ import type { PluginRegistry } from '@nexus/core';
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 /**
- * 十五條通道逐個列出來。
+ * 每一條通道逐個列出來。
  *
  * `satisfies` 那一句是這個檔案的骨頭：**它讓編譯器去比對 `PluginRegistry` 的欄位集合**，
  * 少一個或多一個都在 `typecheck` 當場紅。值是什麼不重要，重要的是鍵。
@@ -81,12 +81,16 @@ const CHANNELS = {
   commands: true,
   sessions: true,
   services: true,
+  // 第七條是唯讀視圖，不是註冊點——沒有人往它註冊東西
+  // （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。它照樣要進這份窮舉表，
+  // 因為 `satisfies` 比的是 `PluginRegistry` 的欄位集合，而它確實是一個欄位。
+  disabledEntries: true,
 } satisfies Record<keyof PluginRegistry, true>;
 
 /** 折進 `createDeepAgent` 參數的那幾個。`registry.ts` 檔頭的「九個註冊點」。 */
 const FOLDED_CHANNELS = 9;
-/** 不折進任何參數的正交通道。`registry.ts` 檔頭的「外加六條」。 */
-const ORTHOGONAL_CHANNELS = 6;
+/** 不折進任何參數的正交通道。`registry.ts` 檔頭的「外加七條」。 */
+const ORTHOGONAL_CHANNELS = 7;
 /** 兩者相加，也就是 `PluginRegistry` 的欄位數。 */
 const TOTAL_CHANNELS = FOLDED_CHANNELS + ORTHOGONAL_CHANNELS;
 
@@ -162,14 +166,15 @@ const PROSE_SITES: readonly ProseSite[] = [
 
 /** 斷言擋不到、但通道數變了就要人去看一眼的地方。**這份清單是這條絆索的價值所在。** */
 const ALSO_SWEEP = [
-  '.docs/plugin-architecture-gap-survey.md（「14 個欄位（9 ＋ 5）」，阿拉伯數字）',
-  '.docs/development-plan.md 與 development-plan-phase-5.md（「九個註冊點」；#364 切檔後散在兩份）',
+  '.docs/plugin-architecture-gap-survey.md（兩處：§2 的「N 個欄位（9 ＋ M 條不折的通道）」與 §2.1 表格那一列的通道清單——**用阿拉伯數字，而且列出每一條的名字**，所以改幅不只是數字）',
+  '.docs/development-plan.md 與 development-plan-phase-5.md（「九個註冊點」、以及 development-plan.md 的「九個註冊點之外有 N 條不折疊的通道」＋那一串名字；#364 切檔後散在兩份）',
+  "**掃的時候按形狀不按值**：`grep '個欄位（9\\|條通道\\|個註冊點'`。照上一版字面去掃會掃空——那幾處自己就漂過（#456 動工時量到 §2 與 development-plan 都還列著 #477 已經收掉的 `feedback`）",
   'packages/nexus-core/src/load.ts 與 load.test.ts（「九個註冊點一個都不能漏」）',
   'registry.ts 的「九個註冊點」在五行上（:4 / :15 / :309 / :346 / :443），下面只見證其中一行——差一的那兩種寫法有 forbidden 擋著，改幅超過一就要自己數',
 ].join('\n  - ');
 
 describe('PluginRegistry 的通道數', () => {
-  it(`是 ${TOTAL_CHANNELS} 條，而且九加五的拆法沒變`, () => {
+  it(`是 ${TOTAL_CHANNELS} 條，而且${cn(FOLDED_CHANNELS)}加${cn(ORTHOGONAL_CHANNELS)}的拆法沒變`, () => {
     expect(Object.keys(CHANNELS)).toHaveLength(TOTAL_CHANNELS);
     expect(FOLDED_CHANNELS + ORTHOGONAL_CHANNELS).toBe(TOTAL_CHANNELS);
   });

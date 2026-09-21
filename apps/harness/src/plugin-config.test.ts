@@ -28,6 +28,8 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { DEFAULT_REPEAT_REMINDER } from '@nexus/core';
+
 import {
   applyEntryPatches,
   composeEntries,
@@ -68,10 +70,10 @@ function writePrivate(root: string, name: string, content: string): string {
 describe('出貨的 cordis.yml', () => {
   it('每一列都載得起來，而且每一顆都是真的 plugin', async () => {
     const fromYaml = await loadPluginConfig();
-    // 27 = 7 個功能 ＋ 20 個配套入口。**數目寫在這裡是為了擋「靜靜少一列」**：底下那些
-    // 測試各自只看得到自己關心的那幾列，少掉一個空 installer 不會有人紅。確切該有哪些
-    // 配套入口由 `invariant-companions.test.ts` 對帳（#489）。
-    expect(fromYaml).toHaveLength(27);
+    // 28 = 7 個功能 ＋ 1 個 core middleware 設定（#456）＋ 20 個配套入口。**數目寫在這裡
+    // 是為了擋「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個空
+    // installer 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
+    expect(fromYaml).toHaveLength(28);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -91,13 +93,17 @@ describe('出貨的 cordis.yml', () => {
    * 是有：少一列 present → 3 個檔紅、少一列 plan-mode → 6 個檔、少一個空 installer 的配套
    * 入口 → 3 個檔、改一個 id → `approval-gate-order` 紅、把 goal 關掉 → 4 個檔。
    *
-   * **但兩個 `config` 值改掉是全綠的。** 它們只在執行期被讀，不在任何註冊點上留下痕跡，所以
+   * **但那幾個 `config` 值改掉是全綠的。** 它們只在執行期被讀，不在任何註冊點上留下痕跡，所以
    * 十七個載出貨清單的測試檔一個都不會動。那是等價探針原本蓋著、而它退休之後露出來的洞。
    *
-   * **這不是「副本相等」那個反模式**：它釘的不是整份清單，是**兩個被決定過的數字**，而且
+   * **這不是「副本相等」那個反模式**：它釘的不是整份清單，是**幾個被決定過的數字**，而且
    * 每一個都寫得出它的出處。清單長什麼樣仍然由上面那些行為測試守著。
+   *
+   * `repeat-reminder` 是 [#456](https://github.com/DemianLi/nexus-agent/issues/456) 加進來的
+   * 第三列，而它的四格**同時也是 plugin schema 的預設值**——兩份會悄悄漂，所以下面那一條
+   * 直接拿常數對它，不是再抄一次數字。
    */
-  it('兩個只在執行期被讀的 config 值，改掉不會有別人紅——所以釘在這裡', () => {
+  it('只在執行期被讀的 config 值，改掉不會有別人紅——所以釘在這裡', () => {
     const byId = new Map(composeEntries().map((entry) => [entry.id, entry.config]));
 
     // 這棵樹的 subagent 是真的併發跑的（`tool-session-log.test.ts` 那條同一個 subagent
@@ -109,10 +115,16 @@ describe('出貨的 cordis.yml', () => {
     // 所以出貨檔那一行是整棵樹上唯一講這個數字的地方。
     expect(byId.get('feedback')).toEqual({ maxNoteBytes: 8192 });
 
+    // **出貨檔寫出來的那四格，值必須就是 plugin schema 的預設**（#456）。寫出來是刻意的
+    // ——patch 是整份替換 `config`，照著改的人手上要有完整的一份可以抄，而
+    // `--dump-config` 印的是疊完的原始列、看不到 schema 裡的預設值。代價是同一組數字有
+    // 兩份，所以這一行拿常數對它：漂了就紅，而不是等到某天有人發現產品跟預設不一樣。
+    expect(byId.get('repeat-reminder')).toEqual({ ...DEFAULT_REPEAT_REMINDER });
+
     // **其餘每一列都不帶 config**，這半句同樣承重：二十個配套入口一個 `Config` schema 都
     // 沒有，給它們設定會在載入時拋（`parseEntryConfig`）。
     const withConfig = [...byId].filter(([, config]) => config !== undefined).map(([id]) => id);
-    expect(withConfig).toEqual(['todo', 'feedback']);
+    expect(withConfig).toEqual(['todo', 'feedback', 'repeat-reminder']);
   });
 
   it('出貨檔的路徑指到真的存在的那一份', () => {

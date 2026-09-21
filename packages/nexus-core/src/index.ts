@@ -80,6 +80,7 @@ export { AnonymousEntries, NamedEntries, CapabilitySet } from './entries.js';
 export type {
   PluginRegistry,
   InternalPluginRegistry,
+  DisabledEntryView,
   ToolRegistrationPoint,
   SubAgentRegistrationPoint,
   CapabilityRegistrationPoint,
@@ -223,14 +224,22 @@ export {
   MODEL_USAGE_MIDDLEWARE_NAME,
   readModelUsage,
 } from './model-usage.js';
-export type { RepeatReminderMark, RepeatReminderSettings } from './repeat-reminder.js';
+export type {
+  RepeatReminderConfig,
+  RepeatReminderMark,
+  RepeatReminderSettings,
+} from './repeat-reminder.js';
 export {
   createRepeatReminder,
   DEFAULT_REPEAT_REMINDER,
   GOAL_WRAPUP_MARKER,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
+  REPEAT_REMINDER_PLUGIN_NAME,
+  REPEAT_REMINDER_SERVICE,
   repeatCallKey,
+  repeatReminderConfigSchema,
+  repeatReminderPlugin,
   repeatReminderTracks,
   resolveRepeatReminderSettings,
 } from './repeat-reminder.js';
