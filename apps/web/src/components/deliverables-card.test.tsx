@@ -6,7 +6,7 @@ import {
   DeliverablesCard,
   fallbackDescription,
 } from '@/components/deliverables-card';
-import type { PresentedFile } from '@/lib/present-view';
+import type { LocatedFile } from '@/lib/deliverables-view';
 import { axeViolations } from '@/test/axe';
 
 const toastSpy = vi.hoisted(() => {
@@ -26,8 +26,17 @@ afterEach(() => {
   document.documentElement.classList.remove('dark');
 });
 
-const REPORT: PresentedFile = { path: 'out/report.pdf', description: '季報' };
-const NOTES: PresentedFile = { path: 'notes/README' };
+/**
+ * **座標由這裡補，呼叫點不寫**（#452）：這幾條測的是卡片怎麼畫，跟讀檔路由無關。同一份清單裡 `index`
+ * 遞增、`seq` 固定，剛好是「一顆事件宣告了這幾個檔」的形狀。要驗座標本身的是
+ * `lib/deliverables-view.test.tsx`（合併之後每群檔案帶回自己那顆事件的 `seq`）。
+ */
+function located(files: readonly { path: string; description?: string }[]): LocatedFile[] {
+  return files.map((file, index) => ({ ...file, seq: 0, index }));
+}
+
+const REPORT = { path: 'out/report.pdf', description: '季報' };
+const NOTES = { path: 'notes/README' };
 
 const rows = () => screen.getAllByTestId('deliverable');
 
@@ -38,7 +47,7 @@ describe('交付卡片', () => {
   });
 
   it('每列是檔名、說明（沒給退回副檔名）、完整路徑', () => {
-    render(<DeliverablesCard files={[REPORT, { path: 'src/a.ts' }, NOTES]} />);
+    render(<DeliverablesCard files={located([REPORT, { path: 'src/a.ts' }, NOTES])} />);
     expect(screen.getByRole('region', { name: '這一輪交付的檔案，共 3 個' })).toBeTruthy();
     expect(rows().map((row) => row.textContent)).toEqual([
       'report.pdf季報out/report.pdf',
@@ -59,7 +68,7 @@ describe('交付卡片', () => {
       const writeText = vi.fn().mockResolvedValue(undefined);
       vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
       vi.stubGlobal('isSecureContext', true);
-      render(<DeliverablesCard files={[REPORT]} />);
+      render(<DeliverablesCard files={located([REPORT])} />);
       const button = screen.getByRole('button', { name: '複製路徑：out/report.pdf' });
       await act(async () => {
         fireEvent.click(button);
@@ -78,7 +87,7 @@ describe('交付卡片', () => {
     vi.stubGlobal('navigator', { ...navigator, clipboard: undefined });
     const exec = vi.fn().mockReturnValue(false);
     document.execCommand = exec;
-    render(<DeliverablesCard files={[REPORT]} />);
+    render(<DeliverablesCard files={located([REPORT])} />);
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '複製路徑：out/report.pdf' }));
     });
@@ -89,7 +98,7 @@ describe('交付卡片', () => {
 
   it(`超過 ${COLLAPSED_COUNT} 個先收起，展開再收回`, () => {
     const files = Array.from({ length: 6 }, (_, i) => ({ path: `f${i}.txt` }));
-    render(<DeliverablesCard files={files} />);
+    render(<DeliverablesCard files={located(files)} />);
     expect(rows()).toHaveLength(COLLAPSED_COUNT);
     const toggle = screen.getByRole('button', { name: /顯示全部 6 個/ });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
@@ -102,13 +111,13 @@ describe('交付卡片', () => {
 
   it(`剛好 ${COLLAPSED_COUNT} 個不給切換鈕`, () => {
     const files = Array.from({ length: COLLAPSED_COUNT }, (_, i) => ({ path: `f${i}.txt` }));
-    render(<DeliverablesCard files={files} />);
+    render(<DeliverablesCard files={located(files)} />);
     const region = screen.getByRole('region');
     expect(within(region).queryByRole('button', { name: /顯示全部/ })).toBeNull();
   });
 
   it('axe：亮與暗', async () => {
-    render(<DeliverablesCard files={[REPORT, NOTES]} />);
+    render(<DeliverablesCard files={located([REPORT, NOTES])} />);
     expect(await axeViolations(document.body)).toEqual([]);
     document.documentElement.classList.add('dark');
     expect(await axeViolations(document.body)).toEqual([]);
