@@ -35,6 +35,7 @@ import {
   loadOverlayPatches,
   loadPluginConfig,
   parseEntryList,
+  renderConfigDump,
   parsePatchList,
   PluginConfigError,
   resolveEntryModule,
@@ -369,5 +370,90 @@ describe('模組解析', () => {
 
   it('模組載得起來但不是一顆 plugin 也拋', async () => {
     await expect(resolveEntryModule({ name: 'node:path' })).rejects.toThrow('沒有匯出一顆 plugin');
+  });
+});
+
+describe('--dump-config', () => {
+  /**
+   * **不做黃金檔比對。** dsh 自己的開發備註寫著這份輸出不承諾跨包版本的位元組穩定性
+   * （`packages/boot/app-boot/README.zh.md` 的「待定：配置 dump 稳定性」）。照抄一個它自己
+   * 說不穩定的東西當判準，是把別人的免責聲明變成我們的絆索。所以驗的是結構性質。
+   */
+  it('印出來的東西讀得回來，而且就是啟動真的會掛的那一份', () => {
+    const dumped = renderConfigDump();
+    // (a) 它是一份合法的 YAML 文件——`# ==` 註解不會讓它讀不回來。
+    const reparsed = parseEntryList(dumped, 'dump');
+    // (b) 讀回來的條目清單與 `composeEntries` 完全相同。**這是 dump 與啟動同源的驗收句。**
+    expect(reparsed).toEqual(composeEntries());
+  });
+
+  it('每一段連續的列前面都有它的來源註解', () => {
+    const root = privateDirectory();
+    const shipped = writePrivate(
+      root,
+      'cordis.yml',
+      "- id: echo\n  name: '@nexus/plugin-echo'\n- id: todo\n  name: '@nexus/plugin-todo'\n",
+    );
+    const overlay = writePrivate(
+      root,
+      'o.yml',
+      '- id: todo\n  config: { allowParallelInProgress: true }\n',
+    );
+
+    const dumped = renderConfigDump({ shipped, overlays: [overlay], warn: () => {} });
+    // 第一段只有出貨檔改過；第二段被 overlay 修過，所以標籤不一樣，分成兩段。
+    expect(dumped).toContain(`# == ${shipped}\n`);
+    expect(dumped).toContain(`# == ${shipped}, patched by ${overlay}\n`);
+    expect(parseEntryList(dumped, 'dump')).toHaveLength(2);
+  });
+
+  it('insert 進來的列，來源記成插它的那一層', () => {
+    const root = privateDirectory();
+    const shipped = writePrivate(root, 'cordis.yml', "- id: echo\n  name: '@nexus/plugin-echo'\n");
+    const overlay = writePrivate(
+      root,
+      'o.yml',
+      "- insert:\n    - id: todo\n      name: '@nexus/plugin-todo'\n",
+    );
+
+    const dumped = renderConfigDump({ shipped, overlays: [overlay], warn: () => {} });
+    expect(dumped).toContain(`# == ${overlay}\n`);
+    expect(parseEntryList(dumped, 'dump')).toHaveLength(2);
+  });
+
+  it('沒命中任何列的 patch 帶著層標籤報出去', () => {
+    const root = privateDirectory();
+    const shipped = writePrivate(root, 'cordis.yml', "- id: echo\n  name: '@nexus/plugin-echo'\n");
+    const overlay = writePrivate(root, 'o.yml', '- id: 不在\n  config: {}\n');
+    const said: string[] = [];
+
+    renderConfigDump({ shipped, overlays: [overlay], warn: (message) => said.push(message) });
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain(`[${overlay}]`);
+    expect(said[0]).toContain('"不在"');
+  });
+
+  it('兩層各自的警告歸各自那一層，不會全部掛在最後一層上', () => {
+    const root = privateDirectory();
+    const shipped = writePrivate(root, 'cordis.yml', "- id: echo\n  name: '@nexus/plugin-echo'\n");
+    const first = writePrivate(root, 'a.yml', '- id: 甲不在\n  config: {}\n');
+    const second = writePrivate(root, 'b.yml', '- id: 乙不在\n  config: {}\n');
+    const said: string[] = [];
+
+    renderConfigDump({ shipped, overlays: [first, second], warn: (m) => said.push(m) });
+    expect(said).toHaveLength(2);
+    expect(said[0]).toContain(`[${first}]`);
+    expect(said[0]).toContain('甲不在');
+    expect(said[1]).toContain(`[${second}]`);
+    expect(said[1]).toContain('乙不在');
+  });
+
+  it('設定壞掉時 dump 也失敗，不印一棵啟動不起來的樹', () => {
+    const root = privateDirectory();
+    const shipped = writePrivate(root, 'cordis.yml', "- id: echo\n  name: '@nexus/plugin-echo'\n");
+    const overlay = writePrivate(root, 'o.yml', '- id: echo\n  inject: [x]\n');
+    expect(() => renderConfigDump({ shipped, overlays: [overlay], warn: () => {} })).toThrow(
+      PluginConfigError,
+    );
   });
 });

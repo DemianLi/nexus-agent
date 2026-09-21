@@ -51,7 +51,7 @@ import { fileURLToPath } from 'node:url';
 import type { PluginEntry } from '@nexus/core';
 
 import { resolveHarnessHome } from './harness-home.js';
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 
 /** 出貨的預設清單，放在 `apps/harness/` 底下。 */
@@ -480,6 +480,35 @@ export interface PluginConfigSources {
  * @throws {PluginConfigError} 任何一層讀不了、形狀不合，或疊完之後有壞掉的列。
  */
 export function composeEntries(sources: PluginConfigSources = {}): ConfigEntry[] {
+  const { shipped, rows, layers } = readLayers(sources);
+  const patches = layers.flatMap((layer) => layer.patches);
+  return validateEntries(applyEntryPatches(rows, patches, sources.warn), shipped);
+}
+
+/** 一層 patch 加上它在 dump 的來源註解裡叫什麼。 */
+export interface ConfigLayer {
+  /** 來源標籤，dump 的 `# ==` 註解印的就是這個。 */
+  readonly label: string;
+  readonly patches: readonly ConfigPatch[];
+}
+
+/**
+ * 把三層讀進來，**還沒疊**。
+ *
+ * `composeEntries` 與 {@link renderConfigDump} 共用這一段，所以 dump 印出來的層與啟動真的
+ * 疊的層是同一組——照 dsh，它的 dump 與 `boot()` 共用 `applyEntryPatches`，理由是
+ * 「dump 不可能與實際啟動漂移，因為它復用掛載程式碼」
+ * （`.agents/notes/archived/feature/2026-07-30-dsh-dump-config.zh.md`）。
+ *
+ * @param sources - 三層的來源。
+ * @returns 出貨檔的路徑、它的每一列，以及帶標籤的各層。
+ * @throws {PluginConfigError} 任何一層讀不了或形狀不合。
+ */
+function readLayers(sources: PluginConfigSources): {
+  shipped: string;
+  rows: Record<string, unknown>[];
+  layers: ConfigLayer[];
+} {
   const shipped = sources.shipped ?? shippedConfigPath();
   let source: string;
   try {
@@ -489,15 +518,108 @@ export function composeEntries(sources: PluginConfigSources = {}): ConfigEntry[]
   }
   const rows = parseEntryList(source, shipped);
 
-  const patches: ConfigPatch[] = [];
+  const layers: ConfigLayer[] = [];
   if (sources.userPatch !== undefined) {
-    patches.push(...(loadOptionalPatches(sources.userPatch) ?? []));
+    const patches = loadOptionalPatches(sources.userPatch);
+    if (patches !== undefined) layers.push({ label: sources.userPatch, patches });
   }
   for (const overlay of sources.overlays ?? []) {
-    patches.push(...loadOverlayPatches(overlay));
+    layers.push({ label: overlay, patches: loadOverlayPatches(overlay) });
+  }
+  return { shipped, rows, layers };
+}
+
+/**
+ * 把疊完的設定印成一份**讀得回來的** YAML。
+ *
+ * 逐條照 dsh 的 `renderConfigDump`（`packages/boot/app-boot/src/index.ts:403`）：
+ *
+ * - **所有層攤平成一次 {@link applyEntryPatches} 呼叫**，跟啟動的呼叫形狀完全一樣。分層各
+ *   呼叫一次會在層與層之間重建 id 索引，印出一棵啟動從來不會掛的樹。
+ * - **來源是從前綴快照按位置 diff 出來的**：疊完第 1..k 層之後某一列的 JSON 變了，就算第 k
+ *   層修過它；索引超出前一份快照長度的，是第 k 層插進來的。patch 演算法只會原地改寫或在
+ *   尾巴追加，所以頂層索引在各快照之間指的是同一列。
+ * - **每一段來源相同的連續列前面加一行 `# ==` 註解**，所以輸出既看得出哪一段來自哪個檔，
+ *   又仍然是一份合法的 YAML 文件。
+ * - **沒命中任何列的 patch 帶著層標籤報出去**，與啟動時的警告一致。早先那幾層在每一份含
+ *   有它們的快照裡看到的前置狀態都一樣，所以每份快照的警告清單是前一份的延長，新增的尾巴
+ *   屬於剛加進來的那一層。
+ *
+ * **不做黃金檔比對。** dsh 自己的開發備註寫著這份輸出「不承諾跨包版本的位元組穩定性；在
+ * 程式化消費它之前，請先決定 dump 要不要成為序列化約定」——照抄一個它自己說不穩定的東西
+ * 當測試判準，是把別人的免責聲明變成我們的絆索。測試驗的是結構性質。
+ *
+ * @param sources - 三層的來源。
+ * @returns 一份 YAML 文件，帶來源註解。
+ * @throws {PluginConfigError} 任何一層讀不了、形狀不合，或疊完之後有壞掉的列。
+ */
+export function renderConfigDump(sources: PluginConfigSources = {}): string {
+  const { shipped, rows, layers } = readLayers(sources);
+  const warn = sources.warn ?? warnToStderr;
+
+  // **每份快照都自己 clone 一份 patch**：`applyEntryPatches` 會把 `insert` 的列放進結果，
+  // 共用同一批 patch 物件會讓後一份快照的改動漏進前一份的結果裡。dsh 同一條理由。
+  const snapshot = (count: number, warnings: string[]): Record<string, unknown>[] =>
+    applyEntryPatches(
+      rows,
+      structuredClone(layers.slice(0, count).flatMap((layer) => [...layer.patches])),
+      (message) => warnings.push(message),
+    );
+
+  const origins = rows.map(() => ({ origin: shipped, patchedBy: [] as string[] }));
+  let previous: Record<string, unknown>[] = rows;
+  let previousWarnings: string[] = [];
+  let composed: Record<string, unknown>[] = rows;
+
+  for (const [index, layer] of layers.entries()) {
+    const warnings: string[] = [];
+    composed = snapshot(index + 1, warnings);
+    for (const line of warnings.slice(previousWarnings.length)) warn(`[${layer.label}] ${line}`);
+
+    const before = previous.map((row) => JSON.stringify(row));
+    for (const [position, row] of composed.entries()) {
+      if (position >= before.length) origins.push({ origin: layer.label, patchedBy: [] });
+      else if (JSON.stringify(row) !== before[position])
+        origins[position]?.patchedBy.push(layer.label);
+    }
+    previous = composed;
+    previousWarnings = warnings;
   }
 
-  return validateEntries(applyEntryPatches(rows, patches, sources.warn), shipped);
+  // 疊完先驗過才印：印一棵啟動不起來的樹，讀的人會以為問題在別的地方。
+  validateEntries(composed, shipped);
+  return groupedDump(composed, origins);
+}
+
+/** 每一段來源相同的連續列，前面加一行 `# ==`。 */
+function groupedDump(
+  composed: readonly Record<string, unknown>[],
+  origins: readonly { origin: string; patchedBy: string[] }[],
+): string {
+  const lines: string[] = [];
+  let current: string | undefined;
+  let group: Record<string, unknown>[] = [];
+  const flush = (): void => {
+    if (current === undefined || group.length === 0) return;
+    lines.push(`# == ${current}`);
+    lines.push(stringifyYaml(group).trimEnd());
+    group = [];
+  };
+  for (const [index, row] of composed.entries()) {
+    const record = origins[index];
+    if (record === undefined) continue;
+    const label =
+      record.patchedBy.length === 0
+        ? record.origin
+        : `${record.origin}, patched by ${record.patchedBy.join(', ')}`;
+    if (label !== current) {
+      flush();
+      current = label;
+    }
+    group.push(row);
+  }
+  flush();
+  return `${lines.join('\n')}\n`;
 }
 
 /**
@@ -527,18 +649,48 @@ export async function loadPluginConfig(sources: PluginConfigSources = {}): Promi
  * @throws {PluginConfigError} 任何一層讀不了、形狀不合、別人動得了，或模組載不起來。
  */
 export async function loadDefaultPlugins(
-  options: {
-    readonly env?: NodeJS.ProcessEnv;
-    readonly patches?: readonly string[];
-    readonly warn?: PluginConfigWarn;
-  } = {},
+  options: DefaultConfigOptions = {},
 ): Promise<PluginEntry[]> {
+  return loadPluginConfig(defaultSources(options));
+}
+
+/** {@link loadDefaultPlugins} 與 {@link renderDefaultConfigDump} 共用的那幾格。 */
+export interface DefaultConfigOptions {
+  /** 決定 harness home 落在哪，省略即 `process.env`。 */
+  readonly env?: NodeJS.ProcessEnv;
+  /** `--patch` 給的那幾個檔，照命令列順序。 */
+  readonly patches?: readonly string[];
+  /** 跳過某條 patch 時往哪裡講，省略即 stderr。 */
+  readonly warn?: PluginConfigWarn;
+}
+
+/**
+ * 產品路徑上那三層的來源。
+ *
+ * **`--dump-config` 與啟動共用這一個**，所以 dump 印的層與啟動疊的層是同一組。各自算一次
+ * 的下場是有一天 dump 說「你的 home patch 沒生效」而它其實生效了——那比沒有 dump 更糟。
+ *
+ * @param options - env、`--patch`、警告出口。
+ * @returns 三層的來源。
+ */
+function defaultSources(options: DefaultConfigOptions): PluginConfigSources {
   const home = resolveHarnessHome(options.env ?? process.env);
-  return loadPluginConfig({
+  return {
     userPatch: join(home, USER_PATCH_FILENAME),
     ...(options.patches !== undefined && { overlays: options.patches }),
     ...(options.warn !== undefined && { warn: options.warn }),
-  });
+  };
+}
+
+/**
+ * 產品路徑上那三層疊完的樣子，印成 YAML。
+ *
+ * @param options - 與 {@link loadDefaultPlugins} 同一組。
+ * @returns 一份帶來源註解的 YAML 文件。
+ * @throws {PluginConfigError} 任何一層讀不了、形狀不合，或疊完之後有壞掉的列。
+ */
+export function renderDefaultConfigDump(options: DefaultConfigOptions = {}): string {
+  return renderConfigDump(defaultSources(options));
 }
 
 function isPluginShaped(value: unknown): value is PluginEntry['plugin'] {

@@ -230,3 +230,55 @@ describe('serve 也真的走設定檔那條路', () => {
     ).rejects.toThrow(/可寫/u);
   });
 });
+
+describe('--dump-config 在兩個入口都印得出來', () => {
+  it('CLI：印出疊完的設定就退出，一個 plugin 都沒載', async () => {
+    const home = privateHome();
+    const patch = writePatch(home, 'p.yml', '- id: todo\n  disabled: true\n');
+    const printed: string[] = [];
+
+    await runCli({
+      argv: ['--dump-config', '--patch', patch],
+      env: { [HARNESS_HOME_ENV]: home },
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer: { log: (line) => printed.push(line), error: () => undefined },
+    });
+
+    const dumped = printed.join('\n');
+    expect(dumped).toContain('# ==');
+    expect(dumped).toContain(patch);
+    expect(dumped).toContain('disabled: true');
+  });
+
+  it('serve：印完就走，沒有綁任何 port', async () => {
+    const home = privateHome();
+    const patch = writePatch(home, 'p.yml', '- id: todo\n  disabled: true\n');
+    const printed: string[] = [];
+
+    const result = await runServe({
+      argv: ['--dump-config', '--patch', patch, '--port', '0'],
+      log: (line) => printed.push(line),
+      env: { [HARNESS_HOME_ENV]: home },
+    });
+
+    // **回 undefined 才代表沒起 server**：有起來的話它回的是 `{ url, close }`。
+    expect(result).toBeUndefined();
+    expect(printed.join('\n')).toContain('disabled: true');
+  });
+
+  it('不能配 --plugins：那條路上沒有設定樹可以印', () => {
+    expect(() => parseCliArgs(['--dump-config', '--plugins', 'x.ts'])).toThrow(
+      '--dump-config 不能配 --plugins',
+    );
+    expect(() => parseServeArgs(['--dump-config', '--plugins', 'x.ts'])).toThrow(
+      '--dump-config 不能配 --plugins',
+    );
+  });
+
+  it('CLI 上不能配 --resume：印設定不跑任何一輪', () => {
+    expect(() => parseCliArgs(['--dump-config', '--resume', '/tmp/run'])).toThrow(
+      '--dump-config 不能配 --resume',
+    );
+  });
+});

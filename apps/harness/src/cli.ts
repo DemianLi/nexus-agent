@@ -71,7 +71,7 @@ import {
 import type { SandboxMode } from './contained-backend.js';
 import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MODEL_ID } from './live-model.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
-import { loadDefaultPlugins } from './plugin-config.js';
+import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
@@ -186,6 +186,13 @@ export interface CliInvocation {
    * 被換掉的清單上沒有意義——那些 patch 會一條都命不中，然後只留下幾行警告。
    */
   readonly patches?: readonly string[];
+  /**
+   * 把疊完的設定印出來就退出，一個 plugin 都不載。
+   *
+   * 照 dsh 的 `--dump-config`：它印的是**啟動真的會掛的那一份**，而印它不需要把每一顆
+   * plugin 都載起來（`renderConfigDump` 是純函式那條路）。
+   */
+  readonly dumpConfig: boolean;
   /** 只印用法就退出。 */
   readonly help: boolean;
 }
@@ -218,6 +225,9 @@ export const USAGE = `用法：cli [選項] [要說的話...]
   --recursion-limit <n>
                        agent 迴圈上限（LangGraph super-step，預設 100 ≈ 33 個模型輪）
                        一次性模式撞到時退出碼是 2，其他失敗是 1
+  --dump-config        把三層疊完的 plugin 設定印出來就退出（一個 plugin 都不載）
+                       每一段前面的 # == 註解標明那幾列來自哪個檔、被哪幾層改過
+                       不能配 --plugins（那條路上沒有設定樹）或 --resume
   --help               印這段話
 
   REPL 裡輸入 /help 看有哪些命令，/exit 或按 Ctrl-D 結束。`;
@@ -248,6 +258,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
         'goal-driver': { type: 'boolean', default: false },
         'max-goal-rounds': { type: 'string' },
         'recursion-limit': { type: 'string' },
+        'dump-config': { type: 'boolean', default: false },
         help: { type: 'boolean', default: false },
       },
       allowPositionals: true,
@@ -306,6 +317,21 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   const maxGoalRounds = parseMaxGoalRounds(values['max-goal-rounds'], goalDriver);
   const recursionLimit = parsePositiveInteger('--recursion-limit', values['recursion-limit']);
 
+  const dumpConfig = values['dump-config'] === true;
+  if (dumpConfig) {
+    // **照 dsh：dump 旗標拒絕只在啟動時才有意義的旗標。** 靜靜收下的下場是畫面上印出一棵
+    // 設定樹，而那個人以為自己驗證的是 `--plugins` 那條路——他要的答案根本不在裡面。
+    if (values.plugins !== undefined) {
+      throw new Error(
+        `--dump-config 不能配 --plugins：那條路上的清單來自一個模組，不是設定檔，` +
+          `沒有設定樹可以印。\n\n${USAGE}`,
+      );
+    }
+    if (resume !== undefined) {
+      throw new Error(`--dump-config 不能配 --resume：印設定不跑任何一輪。\n\n${USAGE}`);
+    }
+  }
+
   const prompt = positionals.join(' ').trim();
   return {
     ...(prompt.length > 0 && { prompt }),
@@ -319,6 +345,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     goalDriver,
     ...(maxGoalRounds !== undefined && { maxGoalRounds }),
     ...(recursionLimit !== undefined && { recursionLimit }),
+    dumpConfig,
     help: values.help === true,
   };
 }
@@ -1220,6 +1247,19 @@ export async function runCli(options: RunCliOptions): Promise<void> {
 
   if (invocation.help) {
     printer.log(USAGE);
+    return;
+  }
+
+  // **在 `--session-log` 那些解析之前**：`--dump-config` 印的是設定，而設定跟日誌落在哪裡
+  // 無關——先擋在後面的話，一個指錯地方的 `--session-log` 會讓你連設定都看不到。
+  if (invocation.dumpConfig) {
+    printer.log(
+      renderDefaultConfigDump({
+        env: options.env ?? process.env,
+        ...(invocation.patches !== undefined && { patches: invocation.patches }),
+        warn: (message) => printer.error(message),
+      }).trimEnd(),
+    );
     return;
   }
 
