@@ -123,6 +123,25 @@ describe('交付卡片歸到輪尾', () => {
     expect(transcriptItems(state.entries).at(-1)?.id).toBe('deliverables:c1');
   });
 
+  it('合併成一張卡之後，每個檔案仍然帶著自己那顆事件的座標（#452）', () => {
+    const state = turn('兩次。', () => [
+      ...present('c1', ['a.md']),
+      delivered({ callId: 'c1', files: [{ path: 'a.md' }] }, 11),
+      ...present('c2', ['b.md', 'c.md']),
+      delivered({ callId: 'c2', files: [{ path: 'b.md' }, { path: 'c.md' }] }, 22),
+      ...reply('r1', '好了。'),
+    ]);
+    const card = transcriptItems(state.entries).at(-1);
+    expect(card?.kind).toBe('deliverables');
+    // **`b.md` 的 `index` 是 0 不是 1**：它是第二顆事件宣告的第一個檔。合併弄丟的就是這個——卡裡的
+    // 位置是 1，而讀檔路由要的是 0。`c.md` 同理跟著 `seq: 22` 走。
+    expect(card?.kind === 'deliverables' ? card.files : []).toEqual([
+      { path: 'a.md', seq: 11, index: 0 },
+      { path: 'b.md', seq: 22, index: 0 },
+      { path: 'c.md', seq: 22, index: 1 },
+    ]);
+  });
+
   it('只有工具、沒有文字的輪（沒有輪尾）照樣有卡，而且不跑到下一輪', () => {
     const first = turn('只交付。', () => [
       ...present('c1', ['a.md']),
