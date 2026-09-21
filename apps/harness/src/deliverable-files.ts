@@ -44,7 +44,7 @@
  * @module
  */
 
-import { lstat, readFile, realpath, stat } from 'node:fs/promises';
+import { lstat, open, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 
 import type { SessionEvent } from '@nexus/core';
@@ -251,10 +251,28 @@ export async function readDeliverableBytes(
         `${DELIVERABLE_MAX_FILE_BYTES} 的上限。上限是拒絕，不是截斷。`,
     );
   }
+  // **上限綁在讀本身，不是只綁在前面那次 stat 上。** 只看 stat 的話，兩次之間長大的檔就整份
+  // 進記憶體了——這台機器是多人共用的。緩衝區開 `min(當時的大小, 上限) + 1`：那個 +1 就是
+  // 「它長大了」的偵測器。dsh 同樣把上限傳進讀裡（`readAll` 的 `maxFileBytes`）。
+  let handle: Awaited<ReturnType<typeof open>>;
   try {
-    return { kind: 'ok', value: await readFile(located.target) };
+    handle = await open(located.target, 'r');
   } catch {
     return refuse('not-found', `讀不到：${located.stat.path} 不在了。`);
+  }
+  try {
+    const room = Math.min(located.stat.bytes, DELIVERABLE_MAX_FILE_BYTES) + 1;
+    const buffer = Buffer.alloc(room);
+    const { bytesRead } = await handle.read(buffer, 0, room, 0);
+    if (bytesRead > DELIVERABLE_MAX_FILE_BYTES) {
+      return refuse(
+        'too-large',
+        `讀不到：${located.stat.path} 讀的時候已經超過 ${DELIVERABLE_MAX_FILE_BYTES} 的上限。`,
+      );
+    }
+    return { kind: 'ok', value: buffer.subarray(0, bytesRead) };
+  } finally {
+    await handle.close();
   }
 }
 

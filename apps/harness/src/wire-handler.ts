@@ -1149,12 +1149,22 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       return { kind: 'refused', reason: 'bad-request', message: '交付檔的座標不對。' };
     }
     const state = ready.get(threadId);
-    const root = state?.workspaceRoot;
-    if (state === undefined || root === undefined) {
+    if (state === undefined) {
       return {
         kind: 'refused',
         reason: 'no-anchor',
-        message: `讀不到：thread "${threadId}" 這台 server 沒有在服務，或這一次沒給 --workspace。`,
+        message: `讀不到：thread "${threadId}" 這台 server 沒有在服務。`,
+      };
+    }
+    // **兩個拒絕分開講。** 壓成同一句的話，`workspaceRoot` 從組裝點一路傳到這裡的那條線就
+    // **沒有任何觀察點**——拔掉 `cli.ts` 的回傳或 `serve.ts` 的轉交，全樹測試照樣綠，而真的
+    // serve 上每一顆交付都 404。量過：兩條都拔，1169 條一條都不紅。
+    const root = state.workspaceRoot;
+    if (root === undefined) {
+      return {
+        kind: 'refused',
+        reason: 'no-anchor',
+        message: `讀不到：這台 server 這一次沒給 --workspace，交付檔沒有錨。`,
       };
     }
     const declared = locateDeliverable(state.pump.sessionLog.events, state.storedCount, seq, index);

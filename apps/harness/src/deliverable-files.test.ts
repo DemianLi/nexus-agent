@@ -33,7 +33,15 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { DELIVERABLE_MAX_LINES, locateDeliverable } from './deliverable-files.js';
-import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
+import {
+  exchangeServeToken,
+  fetchWithCookie,
+  loopbackRequest,
+  shippedPlugins,
+  TEST_BROWSER_AUTH,
+} from './fixtures.js';
+import { runServe } from './serve.js';
+import type { RunningServe } from './serve.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -389,6 +397,61 @@ describe('閘門', () => {
     } finally {
       await outcome.close();
     }
+  });
+});
+
+describe('真的 serve 上，錨從組裝點傳到路由', () => {
+  /**
+   * **這一組不驗讀得到什麼，只驗錨有沒有到。**
+   *
+   * 上面每一條測試都自己手搭 `createAgent`、直接交 `workspaceRoot`，所以
+   * `createCliAgent` 回傳它、`serve.ts` 轉交它那兩行**完全沒有觀察點**——量過：兩行都拔掉，
+   * 全樹 1169 條一條都不紅，而真的 serve 上每一顆交付都會 404。
+   *
+   * 判別靠的是兩句不同的拒絕：錨到了，才問得到「那個 seq 上沒有交付宣告」；錨沒到，講的是
+   * 「沒給 --workspace」。
+   */
+  let running: RunningServe | undefined;
+  afterEach(async () => {
+    await running?.close();
+    running = undefined;
+  });
+
+  /**
+   * 起一台 serve、開一條 thread（拿歷史就會把它建起來），然後打預覽那條路由。
+   *
+   * @param argv - 額外的旗標。
+   * @returns 那一次拒絕的文字。
+   */
+  async function refusalText(argv: readonly string[]): Promise<string> {
+    running = (await runServe({
+      argv: ['--port', '0', ...argv],
+      log: () => undefined,
+      env: {},
+    })) as RunningServe;
+    const server = running;
+    const cookie = await exchangeServeToken(server.authenticatedUrl);
+    const client = createWireClient({ baseUrl: server.url, fetch: fetchWithCookie(cookie) });
+    // **拿歷史就把 thread 建起來了**（`handleHistory` → `threadOrError` → `threadFor`），
+    // 所以 `ready` 有它——這正是 #452 修訂決議查出來的那件事。
+    const page = await client.threadHistory('anchored');
+    if (page.kind !== 'ok') throw new Error(`歷史拿不到：${page.message}`);
+    const response = await fetchWithCookie(cookie)(
+      `${server.url}${deliverableFilePath('anchored')}?seq=0&index=0`,
+      { method: 'GET', headers: { 'content-type': 'application/json' } },
+    );
+    expect(response.status).toBe(404);
+    return response.text();
+  }
+
+  it('給了 --workspace：錨到得了路由，拒絕的理由是座標而不是沒錨', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-deliverable-serve-'));
+    roots.push(root);
+    expect(await refusalText(['--workspace', root])).toContain('沒有交付宣告');
+  });
+
+  it('沒給 --workspace：拒絕的理由就是沒有錨', async () => {
+    expect(await refusalText([])).toContain('--workspace');
   });
 });
 
