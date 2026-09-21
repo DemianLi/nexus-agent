@@ -302,6 +302,46 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await stop(second);
   });
 
+  /**
+   * **第二道守衛也接在 serve 上**（[#504](https://github.com/DemianLi/nexus-agent/issues/504)）。
+   *
+   * 這一條要單獨存在的理由：`cwd` 那一格在這裡**全程一樣**（`runServe` 沒給 `cwd`，兩台
+   * server 都是這個行程的目錄），所以上面那條目錄守衛從頭到尾放行——紅起來的只可能是工作區
+   * 那一道。只在 CLI 那側測的話，「serve 也接上了」這個宣稱會無聲失效。
+   *
+   * 租約那一半同上一條：擋下之後要放掉，同一台 server 換回對的根才重試得了。
+   */
+  it('換了 --workspace：擋下；換回來之後同一台 server 重試接得回來', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const workspace = await tmp('nexus-serve-resume-ws-');
+    const other = await tmp('nexus-serve-resume-ws2-');
+    const first = await start(root, ['--workspace', workspace]);
+    await driveTurn(first, 'alpha');
+    await stop(first);
+    // 前提：header 真的記了那一格。沒記的日誌照設計是放行的，下面那句證不了東西。
+    const headerPath = join(projectDirOf(root), 'alpha.header.json');
+    expect(JSON.parse(await readFile(headerPath, 'utf8')).workspaceRoot).toBe(workspace);
+    const log = join(projectDirOf(root), 'alpha.jsonl');
+    const before = await readFile(log, 'utf8');
+
+    const second = await start(root, ['--workspace', other]);
+    await expect(driveTurn(second, 'alpha')).rejects.toThrow();
+    expect(await readFile(log, 'utf8')).toBe(before);
+    // **訊息要活著到瀏覽器那端**（卡上寫的是「訊息指名兩個根」）。只斷言「拋了」的話，有人
+    // 把 `threadOrError` 的錯包成一句通用的「thread 不可用」，這一條照樣綠，而多人共用主機上
+    // 的維運者失去唯一改得動的線索。形狀同下面那條沙箱檢查：協定層回 `rejected`，不是拋。
+    const refused = await (await serveClient(second)).slashRun('alpha', '/sandbox');
+    expect(refused).toMatchObject({ kind: 'rejected' });
+    expect(JSON.stringify(refused)).toContain(workspace);
+    expect(JSON.stringify(refused)).toContain(other);
+    await stop(second);
+
+    const third = await start(root, ['--workspace', workspace]);
+    await driveTurn(third, 'alpha');
+    await stop(third);
+    expect(count(readEvents(await readFile(log, 'utf8')), 'turn/start')).toBe(2);
+  });
+
   it('沙箱模式跟著回來；日誌記著模式而這一次沒給 --workspace：擋下', async () => {
     const root = await tmp('nexus-serve-resume-');
     const workspace = await tmp('nexus-serve-resume-ws-');

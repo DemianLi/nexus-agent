@@ -220,10 +220,16 @@ export class SessionPersistenceCoordinator {
  *
  * @param sessions - 這次組裝的會話註冊表。
  * @param store - 後端。
- * @param options - `cwd` 進 header；`warn` 轉給每個協調器；`resumedRoot` 是續接時 root 那一份
- *   **接著寫**的把手與它已存的筆數——給了就不替 root `create`（見
+ * @param options - `cwd` 與 `workspaceRoot` 進 header；`warn` 轉給每個協調器；`resumedRoot`
+ *   是續接時 root 那一份**接著寫**的把手與它已存的筆數——給了就不替 root `create`（見
  *   {@link SessionPersistenceCoordinatorOptions.storedCount}）。subagent 那些照常 `create`：
  *   它們是這個行程新開的。
+ *
+ *   **`resumedRoot` 那條路把這裡建的 header 整個丟掉**，而那正是「續接不回填 `workspaceRoot`」
+ *   自動成立的機制（[#504](https://github.com/DemianLi/nexus-agent/issues/504)）：一份舊日誌
+ *   接回來之後 header 的 `version` 會升到這一版（那是 `jsonl-session-store.ts` 覆寫的），
+ *   但**不會**長出這一格。同一個 run 目錄裡因此可能「root 沒有、subagent 有」——subagent
+ *   那些日誌是這個行程新生的，它們的根就是這一次的根，所以那是對的，不要改成回填。
  * @returns `flush()` 把每一份都排空（響亮）；`dispose()` 退訂並收掉每一份（響亮）。
  */
 export function attachSessionPersistence(
@@ -231,6 +237,7 @@ export function attachSessionPersistence(
   store: SessionStore,
   options: {
     readonly cwd?: string;
+    readonly workspaceRoot?: string;
     readonly warn?: (message: string) => void;
     readonly resumedRoot?: { readonly stored: StoredSession; readonly storedCount: number };
   } = {},
@@ -242,6 +249,9 @@ export function attachSessionPersistence(
       id: log.sessionId,
       createdAt: Date.now(),
       ...(options.cwd !== undefined && { cwd: options.cwd }),
+      // 沒跑在工作區底下就不寫這一格（#504）。**缺席與空字串不是同一件事**：續接的守衛
+      // 對「沒記」放行，而對任何記下來的值逐字比。
+      ...(options.workspaceRoot !== undefined && { workspaceRoot: options.workspaceRoot }),
       // 血緣：subagent 那些的 id 是 `<root>/<runId>`，root 就是它的父。
       ...(address.kind === 'subagent' && { parentSession: sessions.root.sessionId }),
     };

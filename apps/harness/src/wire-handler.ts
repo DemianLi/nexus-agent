@@ -1136,8 +1136,16 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
    *
    * **`ready` 拿不到就拒，但那不是這條路的規則**，只是規則的推論：一條不在服務中的 thread，
    * 這個行程一顆事件都沒往它寫，所以它每一顆事件都在 `seq < storedCount` 那一側——真正的
-   * 規則是逐事件的那一條（見 `deliverable-files.ts` 的檔頭）。[#504](https://github.com/DemianLi/nexus-agent/issues/504)
-   * 落地之後線以下的那些會有自己的錨，那時這裡要加的是冷讀 header，**契約不必改**。
+   * 規則是逐事件的那一條（見 `deliverable-files.ts` 的檔頭）。
+   *
+   * [#504](https://github.com/DemianLi/nexus-agent/issues/504) **已經落地**：格式 13 起 header
+   * 記著工作區根，而續接的守衛保證了「有記的那一格 ⟹ 它等於今天這台 server 的根」。所以線以下
+   * 那些裡**有記那一格的**錨得住了，放寬要加的是冷讀 header、**契約不必改**——但放寬本身是另一
+   * 張卡，#504 明著寫了它不改這條路由今天的行為。
+   *
+   * **判準是那一格在不在，不是 `version >= 13`。** 一份 12 的日誌被 13 接回來之後，header 的
+   * `version` 會被覆寫成 13 而那一格仍然不在（續接不回填，見 `session-store.ts`）——照版本號
+   * 判就會做出一次靜默錯檔，剛好是 #504 存在的理由。
    */
   async function locateRequested(
     threadId: string,

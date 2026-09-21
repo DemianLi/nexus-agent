@@ -13,12 +13,19 @@
  * `seq < storedCount`——而 `storedCount` 就是接回來那批的長度，`SessionLog` 的 `#adoptSeed`
  * 釘死 `event.seq === index`，所以這個比較是精確的，不是估計。
  *
- * 線**以下**的今天一律拒：會話日誌還沒有記工作區根那一格（[#504](https://github.com/DemianLi/nexus-agent/issues/504)），
- * 所以上一個行程當時的根**無從得知**。用今天這台 server 的 `--workspace` 去讀昨天的路徑，讀到的
- * 會是另一個工作區裡的同名檔，而畫面上跟讀對了一模一樣——現有兩道守衛（`resume-guards.ts` 的
- * `assertSameCwd`、`serve.ts` 那條沙箱模式檢查）都不比 workspace 的路徑值，所以「同一個 cwd、
- * 不同的 `--workspace`」穿得過去。**不猜、直接拒**不是新發明：`assertSameCwd` 對
- * `header.cwd === undefined` 的處置就是拒絕。
+ * 線**以下**的今天一律拒。原本的理由是「會話日誌沒有記工作區根那一格，所以上一個行程當時的根
+ * 無從得知」——[#504](https://github.com/DemianLi/nexus-agent/issues/504) 把那一格加上去了，所以
+ * **理由換了一半，結論沒換**：
+ *
+ * - **格式 13 以前寫的日誌永遠沒有那一格**（續接不回填），那些仍然無從得知，仍然是上面那句話。
+ * - **13 以後寫的有**，而且續接時 `assertSameWorkspaceRoot` 已經擋下「同一個 cwd、不同的
+ *   `--workspace`」，所以 `header.workspaceRoot` 在場時它就等於今天這台 server 的根。那條線
+ *   因此**放寬得了**——「有那一格就准用今天的根」加上把 `header.workspaceRoot` 從 `ThreadAgent`
+ *   串到這裡。**那是另一張卡**，#504 明著寫了它不改這條路由今天的行為。
+ *
+ * 讀錯檔的樣子仍然要寫著，因為放寬的那天它就是要防的東西：用今天這台 server 的 `--workspace`
+ * 去讀昨天的路徑，讀到的會是另一個工作區裡的同名檔，而畫面上跟讀對了一模一樣。**不猜、直接拒**
+ * 不是新發明：`assertSameCwd` 對 `header.cwd === undefined` 的處置就是拒絕。
  *
  * ## 為什麼錨是呼叫端交出來的，不是從 `threadFor` 拿的
  *
@@ -119,7 +126,8 @@ export function locateDeliverable(
   if (seq < storedCount) {
     return refuse(
       'no-anchor',
-      `讀不到：seq ${seq} 那顆交付是上一個行程寫的，而會話日誌沒記下它當時的工作區根，` +
+      `讀不到：seq ${seq} 那顆交付是上一個行程寫的，而這條路由手上沒有它當時的工作區根` +
+        `——格式 13 以前的日誌根本沒記，13 以後記了但這條路由還沒去讀。` +
         `不能拿這一次的 --workspace 去讀它宣告的路徑（#504）。`,
     );
   }
