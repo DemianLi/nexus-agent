@@ -9,7 +9,7 @@
  * 這個 package 真正會壞的兩件事**都證得到，只是不在這裡**：
  *
  * - **基線到不到得了模型、會不會重複**：`apps/harness/src/agent-instructions.test.ts`，量的是**零
- *   `--plugins`** 的裸組裝——判準必須是產品路徑上的那一份，掛著 plugin 觀察是假綠。
+ *   patch** 的出貨組裝——判準必須是產品路徑上的那一份，掛著 plugin 觀察是假綠。
  * - **渲染與預算**：`src/render.test.ts`，字串與位元組帳逐條對 dsh。
  *
  * 那一則基線是 `user/message`，而「日誌裡的訊息推得回模型歷史」已經有 `@nexus/core` 的不變量在管；

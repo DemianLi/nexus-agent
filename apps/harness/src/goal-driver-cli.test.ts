@@ -10,6 +10,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import type { SessionLog } from '@nexus/core';
 import {
   createGoalPlugin,
+  GOAL_COMMAND_NAME,
   goalPlugin,
   GOALS_SERVICE,
   renderGoalRoundPrompt,
@@ -390,17 +391,21 @@ describe('披露', () => {
   });
 
   /**
-   * **`--plugins` 換掉預設清單之後，那條路上就沒有 goal 域了。**
+   * **開著旗標、沒有 active goal 時安靜地什麼都不做，不是拋。**
    *
-   * 排程器的 `goal()` 走 `goals?.serviceFor(log)`，而 `goals` 是 `createCliAgent` 從
-   * `registry.services` 交出來的——換掉清單就沒有人提供 `goals`，那一格是 `undefined`。
-   * 那時要安靜地什麼都不做，不是拋。這一格用 port override 假裝不出來：它問的是這一次
-   * 組裝到底有沒有那個服務。
+   * **這一條看不出 goal 域在不在**，而它以前的檔頭聲稱看得出來——那句話是假的：假模型腳本
+   * 從來不設 goal，所以「沒有 goal 域」與「有 goal 域但沒有 active goal」在畫面上一模一樣
+   * （實測：把這份 patch 清空、或把它的 `id` 打錯，這一條照樣綠）。在
+   * [#455](https://github.com/DemianLi/nexus-agent/issues/455) 拿掉 `--plugins` 之前也一樣假，
+   * 換掉整份清單只是同一個觀察。
+   *
+   * 「這一次組裝到底有沒有那個服務」由下一條用 REPL 的 `/goal` 問——那個觀察點分得開。
+   * 排程器對 `goals === undefined` 的行為由 `goal-driver-pump.test.ts` 在單元層釘。
    */
-  it('--plugins 換掉清單之後，開著旗標也安靜地什麼都不做', async () => {
+  it('patch 把 goal 那一列關掉之後，開著旗標也安靜地什麼都不做', async () => {
     const { printer, out } = recorder();
     await runCli({
-      argv: ['--plugins', 'src/plugins-flag.fixture.ts', '--goal-driver', '動手'],
+      argv: ['--patch', 'src/goal-disabled.patch.yml', '--goal-driver', '動手'],
       input: new PassThrough(),
       output: new PassThrough(),
       printer,
@@ -412,6 +417,31 @@ describe('披露', () => {
     // 但一輪都沒排，也沒有任何抱怨。
     expect(said).not.toContain('[續行] 第');
     expect(said).not.toContain('[續行] 排下一輪時出事');
+  });
+
+  /**
+   * **同一份 patch 真的把 goal 拿掉了**——這一條才是「組裝裡有沒有那個服務」的判準。
+   *
+   * 觀察點是 REPL 的 `/goal`：它是 goal plugin 註冊的命令，那一列關著就沒有人註冊它，
+   * 於是那一行不被當命令攔下、直接當一句話送進模型（假模型的第一輪是回聲）。
+   * 對照組是 `session-participants.test.ts` 的同一個命令跑在出貨清單上：那裡印「目標建好了」。
+   */
+  it('同一份 patch 真的把 goal 拿掉了——REPL 裡 /goal 已經不是命令', async () => {
+    const { printer, out } = recorder();
+    const input = new PassThrough();
+    input.end(`/${GOAL_COMMAND_NAME} 隨便一個目標\n/exit\n`);
+    await runCli({
+      argv: ['--patch', 'src/goal-disabled.patch.yml'],
+      input,
+      output: new PassThrough(),
+      printer,
+      env: {},
+    });
+    const said = out.join('\n');
+    // 命令不在了：沒有 goal plugin 的回應。
+    expect(said).not.toContain('目標建好了');
+    // 而那一行真的被當成一句話送進去了——正面證據，不只是「沒看到」。
+    expect(said).toContain('回聲：');
   });
 
   it('runCli 印的那一行跟著旗標走，不是固定字串', async () => {

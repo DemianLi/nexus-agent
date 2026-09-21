@@ -22,7 +22,7 @@
 import { parseArgs } from 'node:util';
 import { createInterface } from 'node:readline/promises';
 import { resolve, sep } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
@@ -84,11 +84,6 @@ export interface CliInvocation {
   readonly prompt?: string;
   /** 用真實供應商而不是假模型。 */
   readonly live: boolean;
-  /**
-   * plugin 清單的來源模組。**省略即出貨的 `cordis.yml` 加上使用者那兩層**
-   * （[#454](https://github.com/DemianLi/nexus-agent/issues/454)），見 {@link loadDefaultPlugins}。
-   */
-  readonly pluginModule?: string;
   /**
    * 真實磁碟上的可寫根。給了就換成有路徑圍堵的 Disk backend，省略即跑在 state 裡的
    * 虛擬 FS（`StateBackend`，不碰磁碟）。
@@ -182,8 +177,9 @@ export interface CliInvocation {
   /**
    * `--patch` 疊在出貨 `cordis.yml` 上的那幾層，照命令列順序（後面的蓋前面的）。
    *
-   * 與 {@link CliInvocation.pluginModule} **互斥**：`--plugins` 換掉的是整份清單，疊在一份
-   * 被換掉的清單上沒有意義——那些 patch 會一條都命不中，然後只留下幾行警告。
+   * **換掉整份清單這件事沒有旗標可以做**（[#455](https://github.com/DemianLi/nexus-agent/issues/455)
+   * 拿掉了 `--plugins`）。要一棵完全不一樣的樹是 profile 的工作，dsh 的產品 CLI 也是這樣分的；
+   * 低層嵌入方與測試走程式路徑（`createCliAgent`），不走旗標。
    */
   readonly patches?: readonly string[];
   /**
@@ -203,10 +199,8 @@ export const USAGE = `用法：cli [選項] [要說的話...]
 
 選項：
   --live               換成真實供應商（${LIVE_MODEL_ID}），需要 API key
-  --plugins <module>   從指定模組載 plugin 清單（預設匯出一個陣列）
   --patch <file>       把這個 patch 檔疊在出貨的 cordis.yml 上（可以給多次，後面的蓋前面的）
                        另一層是 $NEXUS_AGENT_HOME/cordis.patch.yml，它排在 --patch 之前
-                       不能配 --plugins（那個換掉的是整份清單）
   --workspace <dir>    在真實磁碟的這個目錄上跑，變更被圍堵在它之下
                        （省略即虛擬檔案系統，完全不碰磁碟）
   --sandbox <mode>     圍堵強度：read-only｜workspace-write｜danger-full-access
@@ -227,7 +221,7 @@ export const USAGE = `用法：cli [選項] [要說的話...]
                        一次性模式撞到時退出碼是 2，其他失敗是 1
   --dump-config        把三層疊完的 plugin 設定印出來就退出（一個 plugin 都不載）
                        每一段前面的 # == 註解標明那幾列來自哪個檔、被哪幾層改過
-                       不能配 --plugins（那條路上沒有設定樹）或 --resume
+                       不能配 --resume（印設定不跑任何一輪）
   --help               印這段話
 
   REPL 裡輸入 /help 看有哪些命令，/exit 或按 Ctrl-D 結束。`;
@@ -240,7 +234,7 @@ export const USAGE = `用法：cli [選項] [要說的話...]
  *
  * @param argv - `process.argv.slice(2)`。
  * @returns 解析出來的呼叫。
- * @throws 旗標不認得，或 `--plugins` 沒給值——訊息接上用法。
+ * @throws 旗標不認得，或旗標沒給值——訊息接上用法。
  */
 export function parseCliArgs(argv: readonly string[]): CliInvocation {
   let parsed;
@@ -249,7 +243,6 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
       args: [...argv],
       options: {
         live: { type: 'boolean', default: false },
-        plugins: { type: 'string' },
         patch: { type: 'string', multiple: true },
         workspace: { type: 'string' },
         sandbox: { type: 'string' },
@@ -269,9 +262,6 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   }
 
   const { values, positionals } = parsed;
-  if (values.plugins !== undefined && values.plugins.trim() === '') {
-    throw new Error(`--plugins 要給一個模組路徑。\n\n${USAGE}`);
-  }
   if (values.workspace !== undefined && values.workspace.trim() === '') {
     throw new Error(`--workspace 要給一個目錄路徑。\n\n${USAGE}`);
   }
@@ -279,13 +269,6 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   if (patches !== undefined) {
     if (patches.some((patch) => patch.trim() === '')) {
       throw new Error(`--patch 要給一個檔案路徑。\n\n${USAGE}`);
-    }
-    if (values.plugins !== undefined) {
-      throw new Error(
-        `--patch 不能配 --plugins：--patch 疊在出貨的 cordis.yml 上，而 --plugins 換掉的是` +
-          `整份清單。兩個一起給的話，那幾條 patch 一條都命不中，只會留下幾行警告。` +
-          `\n\n${USAGE}`,
-      );
     }
   }
   // **續接的衝突先講**：`--resume --sandbox read-only` 沒配 `--workspace` 的話，下一行會先
@@ -319,14 +302,8 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
 
   const dumpConfig = values['dump-config'] === true;
   if (dumpConfig) {
-    // **照 dsh：dump 旗標拒絕只在啟動時才有意義的旗標。** 靜靜收下的下場是畫面上印出一棵
-    // 設定樹，而那個人以為自己驗證的是 `--plugins` 那條路——他要的答案根本不在裡面。
-    if (values.plugins !== undefined) {
-      throw new Error(
-        `--dump-config 不能配 --plugins：那條路上的清單來自一個模組，不是設定檔，` +
-          `沒有設定樹可以印。\n\n${USAGE}`,
-      );
-    }
+    // **照 dsh：dump 旗標拒絕只在啟動時才有意義的旗標。** 靜靜收下的下場是印出一棵設定樹，
+    // 而那個人以為自己驗證的是接回上一次那條路——他要的答案根本不在裡面。
     if (resume !== undefined) {
       throw new Error(`--dump-config 不能配 --resume：印設定不跑任何一輪。\n\n${USAGE}`);
     }
@@ -336,7 +313,6 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   return {
     ...(prompt.length > 0 && { prompt }),
     live: values.live === true,
-    ...(values.plugins !== undefined && { pluginModule: values.plugins }),
     ...(patches !== undefined && { patches }),
     ...(values.workspace !== undefined && { workspace: values.workspace }),
     ...(sandbox !== undefined && { sandbox }),
@@ -490,51 +466,10 @@ function outsideWorkspace(
 }
 
 /**
- * 從一個模組載 plugin 清單。
- *
- * **這不是 [#46](https://github.com/DemianLi/nexus-agent/issues/46) 的外部設定機制**：
- * 條目的唯一 id 與停用在 [#104](https://github.com/DemianLi/nexus-agent/issues/104) 落地，
- * 設定改成條目上驗過的資料在 [#453](https://github.com/DemianLi/nexus-agent/issues/453)，
- * 協作者改成服務注入在 [#459](https://github.com/DemianLi/nexus-agent/issues/459)。
- * **沒落地的是 YAML 那一層**——從檔案讀清單與逐項覆寫設定是
- * [#454](https://github.com/DemianLi/nexus-agent/issues/454) 的事。這裡只回答「清單從哪個
- * 模組來」——組裝點本來就擁有的那個問題。約定薄到只有一句：模組的預設匯出是一個條目陣列。
- *
- * @param specifier - 模組路徑，相對於 `cwd` 解析。
- * @param cwd - 解析的基準目錄，省略即行程的工作目錄。
- * @returns 該模組匯出的清單。
- * @throws 模組載不起來，或它的預設匯出不是陣列——兩種都指名是哪個模組。
- */
-export async function loadPluginModule(
-  specifier: string,
-  cwd: string = process.cwd(),
-): Promise<readonly PluginEntry[]> {
-  const path = resolve(cwd, specifier);
-  let module: { default?: unknown };
-  try {
-    // 兩步各修一件事：`resolve` 讓路徑相對於**使用者站的地方**，而不是相對於這個檔案
-    // （裸的相對 specifier 在 `import()` 裡是後者）；`pathToFileURL` 是為了 Windows——
-    // `C:\...` 這種絕對路徑不是合法的 import specifier，POSIX 上兩者才恰好等價。
-    module = (await import(pathToFileURL(path).href)) as { default?: unknown };
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`載不了 plugin 清單模組 ${path} — ${reason}`, { cause: error });
-  }
-
-  if (!Array.isArray(module.default)) {
-    throw new Error(
-      `${path} 的預設匯出不是陣列（拿到 ${typeof module.default}）。` +
-        `--plugins 指的模組要 \`export default [ ... ]\` 一份 plugin 清單。`,
-    );
-  }
-  return module.default as readonly PluginEntry[];
-}
-
-/**
  * 假模型的腳本：呼叫一次 echo 再回一句話。
  *
- * **它是對著出貨清單（`apps/harness/cordis.yml`）寫的。** 換了 `--plugins` 就該一起換 `--live`——
- * 腳本裡的工具名在別份清單裡多半不存在，那時假模型只會製造一個看不懂的失敗。
+ * **它是對著出貨清單（`apps/harness/cordis.yml`）寫的。** 拿 patch 把 `echo` 那一列關掉或換掉
+ * 就該一起換 `--live`——腳本裡的工具名那時多半不存在，假模型只會製造一個看不懂的失敗。
  * 腳本三輪，而第一句話就用掉兩輪（呼叫工具、拿到結果再回覆），所以假模型下的 REPL
  * 問到第三句就會用完（`ScriptedChatModel` 選擇當場失敗而不是靜默重播）；REPL 的正經
  * 用法是 `--live`。
@@ -734,8 +669,9 @@ export async function createCliAgent(
   /** 每一輪的改動摘要，serve 交給 wire-handler 的兩條路由。沒開或沒有工作區時是 `undefined`。 */
   workspaceChanges: WorkspaceChanges | undefined;
   /**
-   * 這一次組裝的 goal 域，**沒掛時是 `undefined`**（`--plugins` 換掉預設清單那條路）。
-   * 兩條進入點都拿它去組 {@link goalDriverPort}。
+   * 這一次組裝的 goal 域，**沒掛時是 `undefined`**——出貨清單上有 goal，但一份 patch
+   * 可以把那一列 `disabled: true` 關掉（[#455](https://github.com/DemianLi/nexus-agent/issues/455)
+   * 拿掉 `--plugins` 之後，這是剩下的那條路）。兩條進入點都拿它去組 {@link goalDriverPort}。
    */
   goals: GoalServices | undefined;
 }> {
@@ -1015,7 +951,7 @@ export function goalDriverPort(
   warn: (message: string) => void,
 ): GoalDriverPort {
   return {
-    // **查不到就是 `undefined`**：`--plugins` 換掉預設清單時這條路就沒有 goal 域，
+    // **查不到就是 `undefined`**：patch 把 goal 那一列關掉時這條路就沒有 goal 域，
     // 那時排程器安靜地什麼都不做。
     goal: () => goals?.serviceFor(log())?.get(),
     block: (ref, reason) => void goals?.serviceFor(log())?.block(ref, reason),
@@ -1303,15 +1239,11 @@ export async function runCli(options: RunCliOptions): Promise<void> {
           `接回來的模式一個位元組都影響不到。\n\n${USAGE}`,
       );
     }
-    // **產品路徑上的清單從 `cordis.yml` 來**（#454）。`--plugins` 還在，它換掉的是整份
-    // 清單；拿掉它是 [#455](https://github.com/DemianLi/nexus-agent/issues/455) 的事。
-    const plugins =
-      invocation.pluginModule === undefined
-        ? await loadDefaultPlugins({
-            env: options.env ?? process.env,
-            ...(invocation.patches !== undefined && { patches: invocation.patches }),
-          })
-        : await loadPluginModule(invocation.pluginModule, options.cwd);
+    // **清單只有一個來源：出貨的 `cordis.yml` 加上使用者那兩層**（#454、#455）。
+    const plugins = await loadDefaultPlugins({
+      env: options.env ?? process.env,
+      ...(invocation.patches !== undefined && { patches: invocation.patches }),
+    });
 
     // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
     built = await createCliAgent(
@@ -1418,8 +1350,8 @@ export async function runCli(options: RunCliOptions): Promise<void> {
             `${invocation.workspace === undefined ? '虛擬檔案系統、' : ''}工具結果暫存與會話歷史檔沒有回來）`,
     );
     // 接回來的計劃模式開著——見 `RESUMED_PLAN_MODE_NOTICE`。**只在這次組裝真的掛了 `/plan`
-    // 時講**：自訂 `--plugins` 可能沒有計劃模式，那時日誌上那顆 `plan/mode` 沒有人讀，講了
-    // 就是在說一個不存在的模式。
+    // 時講**：一份 patch 可以把計劃模式那一列關掉，那時日誌上那顆 `plan/mode` 沒有人讀，
+    // 講了就是在說一個不存在的模式。
     if (
       resumed !== undefined &&
       commands.find(PLAN_COMMAND_NAME) !== undefined &&

@@ -19,7 +19,6 @@ import {
   CLI_PROBE_FILE,
   createCliAgent,
   exitCodeFor,
-  loadPluginModule,
   parseCliArgs,
   runCli,
   runRepl,
@@ -71,20 +70,16 @@ describe('parseCliArgs', () => {
   });
 
   it('旗標與那句話同時收得下，順序不拘', () => {
-    const invocation = parseCliArgs(['--plugins', './list.js', '說點什麼', '--live']);
+    const invocation = parseCliArgs(['--patch', './p.yml', '說點什麼', '--live']);
     expect(invocation).toMatchObject({
       live: true,
-      pluginModule: './list.js',
+      patches: ['./p.yml'],
       prompt: '說點什麼',
     });
   });
 
   it('不認得的旗標報錯，訊息接上用法', () => {
     expect(() => parseCliArgs(['--nope'])).toThrow(/--nope[\s\S]*用法/);
-  });
-
-  it('--plugins 給空字串報錯——那是打錯了，不是「不指定」', () => {
-    expect(() => parseCliArgs(['--plugins', ''])).toThrow(/--plugins/);
   });
 
   it('--recursion-limit 收正整數，省略即不設（由組裝點用預設）', () => {
@@ -129,33 +124,6 @@ describe('exitCodeFor', () => {
     // 是**這個旗標的值**撞到的，不是預設那條——旗標真的傳到了 agent。
     expect((failure as Error).message).toMatch(/Recursion limit of 8 reached/);
     expect(exitCodeFor(failure)).toBe(2);
-  });
-});
-
-describe('loadPluginModule', () => {
-  const fixture = fileURLToPath(new URL('./plugins-flag.fixture.ts', import.meta.url));
-
-  it('載得到模組的預設匯出', async () => {
-    const plugins = await loadPluginModule(fixture);
-    expect(plugins).toHaveLength(1);
-    expect(plugins[0]!.plugin.name).toBe('echo');
-  });
-
-  it('相對路徑相對於呼叫者站的地方解析，不是相對於 cli.ts 也不是行程的工作目錄', async () => {
-    // 刻意用 repo 根目錄當基準——它不等於跑測試時的工作目錄（`apps/harness`），
-    // 兩者相同的話這條測試會在「根本沒解析」的實作下照樣通過。
-    const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
-    const plugins = await loadPluginModule('./apps/harness/src/plugins-flag.fixture.ts', repoRoot);
-    expect(plugins).toHaveLength(1);
-  });
-
-  it('預設匯出不是陣列時報錯，指名是哪個模組', async () => {
-    const notAList = fileURLToPath(new URL('./messages.js', import.meta.url));
-    await expect(loadPluginModule(notAList)).rejects.toThrow(/messages[\s\S]*不是陣列/);
-  });
-
-  it('載不到模組時報錯，把原因接進訊息', async () => {
-    await expect(loadPluginModule('./沒有這個檔.js')).rejects.toThrow(/載不了 plugin 清單模組/);
   });
 });
 
@@ -207,7 +175,7 @@ describe('一次性模式', () => {
     // （[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。它不多一顆面向模型的工具，
     // 只多一個命令與一條 wire 用的規則。
     // **`agent-instructions` 進來的理由是它不進來就等於不存在**：`AGENTS.md` 是使用者放在工作區
-    // 裡、期待 agent 會讀的東西，而讀它的東西不在預設清單上的話，不帶 `--plugins` 的 CLI 與 serve
+    // 裡、期待 agent 會讀的東西，而讀它的東西不在出貨清單上的話，產品路徑上的 CLI 與 serve
     // 一個字都看不到（[#388](https://github.com/DemianLi/nexus-agent/issues/388)）。它不多一顆面向
     // 模型的工具，多的是每個 agent 開頭的一則訊息，而且**沒有工作區時它什麼都不加**。
     //

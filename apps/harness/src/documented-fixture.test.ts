@@ -54,23 +54,26 @@ describe('從文件讀 fixture 參數', () => {
     ).toBe('src/approval.patch.yml');
   });
 
-  it('散文裡提到 `--patch`（沒有 `run serve` 前綴）不會被誤抓', () => {
-    // 新正則錨在 `run serve --patch` 指令，散文裡的 `--patch` 提及（例如「任意個 `--patch <檔>`」
-    // 或「`--patch` 不能配 `--plugins`」）都沒有 `run serve` 前綴，所以不該被命中。
-    // 這也正是改錨的理由：舊版釘的是「任何一處旗標」，新版釘的是「那道指令」。
-    expect(() =>
-      parseDocumentedFixture(
-        '任意個 `--patch <檔>` 疊在出貨清單上\n\n' +
-          '`--patch` 不能配 `--plugins`\n\n' +
-          'pnpm --filter @nexus/harness run serve --patch src/test.yml',
-      ),
-    ).not.toThrow();
-    expect(
-      parseDocumentedFixture(
-        '任意個 `--patch <檔>` 疊在出貨清單上\n\n' +
-          '`--patch` 不能配 `--plugins`\n\n' +
-          'pnpm --filter @nexus/harness run serve --patch src/test.yml',
-      ),
-    ).toBe('src/test.yml');
+  it('散文裡提到旗標不會被誤抓，連「run serve --patch」這幾個字都寫在散文裡也不會', () => {
+    // 新正則錨在那道指令上，而不是旗標上。兩種散文都要放過：
+    //
+    // 1. 有旗標、沒有 `run serve` 前綴（文件第 119 行的「任意個 `--patch <檔>`」）。
+    // 2. **連 `run serve --patch` 這幾個字都在散文裡**（文件第 200 行講「多出第二道
+    //    `run serve --patch`」的那一句）。它躲過正則靠的是後面緊接一個反引號而不是空白——
+    //    那是個薄邊界，所以釘在這裡：有人把那句寫成「第二道 `run serve --patch <檔>`」的
+    //    當天，這條會紅，而那正是該紅的時候（文件會變成有兩道指令）。
+    const prose =
+      '任意個 `--patch <檔>` 疊在出貨清單上\n\n' +
+      '整段指令改寫法、或這份文件多出第二道 `run serve --patch`，解析會當場拋\n\n';
+    const withCommand = `${prose}pnpm --filter @nexus/harness run serve --patch src/test.yml`;
+    expect(parseDocumentedFixture(withCommand)).toBe('src/test.yml');
+    // 反面：只有散文、沒有那道指令的話是零命中，不是「抓到散文裡那一個」。
+    expect(() => parseDocumentedFixture(prose)).toThrow(DocumentedFixtureError);
+  });
+
+  it('真的那份文件裡，散文提到的旗標一次都沒被算進去', () => {
+    // 上面那條用的是手寫的散文；這一條對著**真的檔案**問同一件事——文件改寫之後，
+    // 手寫樣本不會跟著變，真檔案會。
+    expect(documentedFixture()).toBe('src/approval.patch.yml');
   });
 });

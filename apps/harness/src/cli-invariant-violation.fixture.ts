@@ -18,7 +18,7 @@
  * ——CLI 的輸出全部走 `Printer`，違規不是例外。
  *
  * **不要 `import` `cli.js`——那會死鎖。** `cli.ts` 當腳本跑時最後一行是 top-level
- * `await main()`，而這份 fixture 是 `main()` 裡面 `loadPluginModule()` 動態載進來的：
+ * `await main()`，而這份 fixture 是 `main()` 裡面由 patch 的 `insert` 動態載進來的：
  * 靜態 import 回 `./cli.js` 等於等一個還沒結束的模組求值，行程會停在
  * `Detected unsettled top-level await` 然後以 13 退出。**單元測試看不到這件事**
  * （vitest 是 import 這個模組，`main()` 的 guard 是 false），是手動跑 `run cli --patch`

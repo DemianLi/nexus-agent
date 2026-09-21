@@ -30,7 +30,7 @@ pnpm workspace，Node >= 22。
 
 ## 能力
 
-**開箱就有**，`--plugins` 換不掉（CLI 與 serve 共用同一個組裝函式）：`ask_user_question`、
+**開箱就有**，patch 也關不掉（CLI 與 serve 共用同一個組裝函式）：`ask_user_question`、
 `submit_record`，以及給了 `--workspace` 才掛的檔案圍堵與 `/sandbox`、工作區改動紀錄。
 
 **在出貨的清單裡**（[`apps/harness/cordis.yml`](apps/harness/cordis.yml)，用 patch 檔改，見 [`docs/operations.md`](docs/operations.md#plugin-清單)）：
