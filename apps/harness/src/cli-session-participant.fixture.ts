@@ -3,8 +3,12 @@
  * `goal/change` 就吭聲的配套入口。
  *
  * ```
- * pnpm --filter @nexus/harness run cli --plugins src/cli-session-participant.fixture.ts "回聲一下"
+ * pnpm --filter @nexus/harness run cli -- --patch src/cli-session-participant.patch.yml "回聲一下"
  * ```
+ *
+ * **它是一顆 plugin，不是一份清單**（[#455](https://github.com/DemianLi/nexus-agent/issues/455)）：
+ * 旁邊那份 patch 檔把它 `insert` 到出貨清單上。echo 本來就在出貨清單裡，所以這裡不再自己
+ * 列一份——**這也是這次搬家真正的差別**：底下量的那一行，現在是在出貨的 27 列之上發生的。
  *
  * **它證的是 CLI 那條路真的接了 `sessions` 通道**，而不是「goal 域算得對」（那件事在
  * `@nexus/plugin-goal` 自己的測試裡）。`createCliAgent` 那一層只證明 `attachSession`
@@ -19,12 +23,9 @@
  * `GoalService` 的 `create()` 會在 append 之後立刻讀自己的折疊；`observe()` 如果是等
  * 這一輪裝完才生效，這一行會當場拋。
  *
- * **清單自己列，不 `import` `cli.js`——那會死鎖**，理由與
- * [`cli-invariant-violation.fixture.ts`](./cli-invariant-violation.fixture.ts) 那份一樣。
  */
 
-import type { PluginEntry } from '@nexus/core';
-import { createEchoPlugin } from '@nexus/plugin-echo';
+import type { NexusPlugin } from '@nexus/core';
 import { GoalService } from '@nexus/plugin-goal';
 
 /** 這份清單認領的假 package 名。真的 package 不會用它，所以撞不到任何人。 */
@@ -33,22 +34,20 @@ export const GOAL_PROBE_PACKAGE = '@nexus/goal-probe';
 /** 參與者建的那個目標的敘述，測試靠它認出回音。 */
 export const PROBE_OBJECTIVE = '證明 CLI 這條路接上了 sessions 通道';
 
-const probe: PluginEntry = {
-  plugin: {
-    name: 'goal-probe',
-    apply(registry) {
-      registry.sessions.join((subject) => {
-        // 時鐘與 id 都固定：這份 fixture 手動跑的時候輸出要逐字一樣。
-        const service = new GoalService(subject, { now: () => 0, newGoalId: () => 'goal-probe' });
-        service.create({ objective: PROBE_OBJECTIVE });
+const probe: NexusPlugin = {
+  name: 'goal-probe',
+  apply(registry) {
+    registry.sessions.join((subject) => {
+      // 時鐘與 id 都固定：這份 fixture 手動跑的時候輸出要逐字一樣。
+      const service = new GoalService(subject, { now: () => 0, newGoalId: () => 'goal-probe' });
+      service.create({ objective: PROBE_OBJECTIVE });
+    });
+    registry.invariants.register(GOAL_PROBE_PACKAGE, (subject, fail) => {
+      subject.observe((event) => {
+        if (event.type === 'goal/change') fail(`看到 ${event.type}（seq ${event.seq}）`);
       });
-      registry.invariants.register(GOAL_PROBE_PACKAGE, (subject, fail) => {
-        subject.observe((event) => {
-          if (event.type === 'goal/change') fail(`看到 ${event.type}（seq ${event.seq}）`);
-        });
-      });
-    },
+    });
   },
 };
 
-export default [createEchoPlugin(), probe] satisfies PluginEntry[];
+export default probe;

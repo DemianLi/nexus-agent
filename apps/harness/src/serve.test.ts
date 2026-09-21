@@ -132,7 +132,7 @@ describe('serve 上的工具拋錯', () => {
     process.on('unhandledRejection', record);
     try {
       running = await runServe({
-        argv: ['--port', '0', '--plugins', 'src/tool-throw.fixture.ts'],
+        argv: ['--port', '0', '--patch', 'src/tool-throw.patch.yml'],
         log: () => undefined,
         env: {},
       });

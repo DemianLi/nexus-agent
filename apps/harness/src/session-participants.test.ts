@@ -113,7 +113,7 @@ describe('CLI 那條', () => {
     // 是「不變量先、參與者後」——反過來的話，安裝期寫的那一筆沒有人在看。
     const { printer, stderr } = recorder();
     await runCli({
-      argv: ['--plugins', 'src/cli-session-participant.fixture.ts', '說點什麼'],
+      argv: ['--patch', 'src/cli-session-participant.patch.yml', '說點什麼'],
       input: new PassThrough(),
       output: new PassThrough(),
       printer,
