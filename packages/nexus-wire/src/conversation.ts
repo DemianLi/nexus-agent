@@ -191,6 +191,8 @@ export interface DeliverablesEntry {
   readonly id: string;
   /** 那次 `present` 呼叫的 `tool_call_id`。 */
   readonly callId: string;
+  /** 那顆事件在 root 日誌裡的 `seq`，配上檔案在 {@link files} 裡的位置就是讀檔路由的座標（#452）。 */
+  readonly seq: number;
   /** 交付的檔案，順序照模型給的。 */
   readonly files: readonly WirePresentedFile[];
 }
@@ -547,20 +549,35 @@ function reduceCustom(state: ConversationState, data: unknown): ConversationStat
   if (typeof payload !== 'object' || payload === null) return state;
   if (name === WORKSPACE_CHANGES) return reduceWorkspaceChanges(state, payload);
   if (name !== DELIVERABLES_PRESENTED) return state;
-  const { callId, files } = payload as { callId?: unknown; files?: unknown };
-  if (typeof callId !== 'string' || !Array.isArray(files) || !files.every(isPresentedFile)) {
+  const { callId, seq, files } = payload as { callId?: unknown; seq?: unknown; files?: unknown };
+  if (
+    typeof callId !== 'string' ||
+    !isSeq(seq) ||
+    !Array.isArray(files) ||
+    !files.every(isPresentedFile)
+  ) {
     return state;
   }
   const id = `deliverables:${callId}`;
   if (state.entries.some((entry) => entry.id === id)) return state;
-  const entry: DeliverablesEntry = { kind: 'deliverables', id, callId, files };
+  const entry: DeliverablesEntry = { kind: 'deliverables', id, callId, seq, files };
   return { ...state, entries: [...state.entries, entry] };
+}
+
+/**
+ * 日誌位置的形狀：非負安全整數。
+ *
+ * **兩種 `custom` frame 共用這一個**（#452）。各寫一份的話，其中一邊放寬了不會有任何東西紅——
+ * 而兩邊的 `seq` 是同一份日誌上的同一種座標。
+ */
+function isSeq(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 /** `workspace/changes` 的 `payload`：`seq` 要是非負整數，同一個 `seq` 只長一格。 */
 function reduceWorkspaceChanges(state: ConversationState, payload: object): ConversationState {
   const { seq } = payload as { seq?: unknown };
-  if (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 0) return state;
+  if (!isSeq(seq)) return state;
   const id = `workspace-changes:${seq}`;
   if (state.entries.some((entry) => entry.id === id)) return state;
   const entry: WorkspaceChangesEntry = { kind: 'workspace-changes', id, seq };

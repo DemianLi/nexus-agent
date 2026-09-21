@@ -173,7 +173,7 @@ describe('切回以前的 thread，畫面照日誌重播', () => {
  * `conversation-history.test.ts`）。
  */
 describe('停在核准點的 thread', () => {
-  const APPROVAL = fileURLToPath(new URL('./approval.fixture.ts', import.meta.url));
+  const APPROVAL = fileURLToPath(new URL('./approval.patch.yml', import.meta.url));
 
   /** 送一句話，折到停在核准點。 */
   async function stopAtApproval(client: WireClient, threadId: string): Promise<ConversationState> {
@@ -192,7 +192,7 @@ describe('停在核准點的 thread', () => {
    * 停在閘門上的名字也只有 pump 知道（#317）：handler 沒交進來的話，這張卡會是「等你回答」。
    */
   it('同一個行程裡切回去：那張卡跟即時一樣是「執行中」，畫面停在忙著', async () => {
-    const server = await start(['--plugins', APPROVAL]);
+    const server = await start(['--patch', APPROVAL]);
     const client = await serveClient(server);
     await stopAtApproval(client, 'kappa');
 
@@ -204,11 +204,11 @@ describe('停在核准點的 thread', () => {
 
   it('對照：重開 server 之後中斷不在了，那張卡收成失敗', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-serve-history-'));
-    const first = await start(['--session-log', root, '--plugins', APPROVAL]);
+    const first = await start(['--session-log', root, '--patch', APPROVAL]);
     await stopAtApproval(await serveClient(first), 'lambda');
     await stop(first);
 
-    const second = await start(['--session-log', root, '--plugins', APPROVAL]);
+    const second = await start(['--session-log', root, '--patch', APPROVAL]);
     const state = await replayed(await serveClient(second), 'lambda');
 
     expect(state.entries.map(line)).toContain('tool:echo:failed');
@@ -222,13 +222,13 @@ describe('停在核准點的 thread', () => {
    */
   it('重開 server 之後回答那顆舊中斷：拿真的 id 也是 no_such_interrupt', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-serve-history-'));
-    const first = await start(['--session-log', root, '--plugins', APPROVAL]);
+    const first = await start(['--session-log', root, '--patch', APPROVAL]);
     const before = await stopAtApproval(await serveClient(first), 'mu');
     const pending = before.pendings[0];
     if (pending === undefined) throw new Error('沒有掛著的核准請求');
     await stop(first);
 
-    const second = await start(['--session-log', root, '--plugins', APPROVAL]);
+    const second = await start(['--session-log', root, '--patch', APPROVAL]);
     const client = await serveClient(second);
     const events = await client.openEvents('mu');
     const response = await client.inputRespond('mu', {

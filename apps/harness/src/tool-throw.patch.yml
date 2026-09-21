@@ -1,0 +1,11 @@
+# 把出貨清單裡的 `echo` 換成一顆一律拋錯的（#346）。
+#
+# **兩條，不是一條。** patch 上的 `name` 是斷言不是設定器，所以改不了某一列掛哪個模組；
+# 要換掉一顆就是「關掉原本那一列，再插一顆新的」。兩顆都註冊 `echo` 的話 registry 會當場
+# 擋下重名——少了第一條的話這份 patch 根本載不起來，而那正是它該有的樣子。
+- id: echo
+  disabled: true
+
+- insert:
+    - id: throwing-echo
+      name: './tool-throw.fixture.ts'

@@ -7,7 +7,10 @@
  * 副檔名）、一顆動作；超過 {@link COLLAPSED_COUNT} 個先收起。
  *
  * **動作只有「複製路徑」**（#441 決議 3）：dsh 的「在 Host 上開啟」不做——部署在多人共用的遠端主機、經 SSH 轉 port
- * 連進來，在 Host 上開啟使用者看不到，而且等於讓瀏覽器驅動伺服器開程式。預覽與下載另見 #452。
+ * 連進來，在 Host 上開啟使用者看不到，而且等於讓瀏覽器驅動伺服器開程式。
+ *
+ * **每個檔案帶著讀檔路由的座標**（{@link LocatedFile}，[#452](https://github.com/DemianLi/nexus-agent/issues/452)）：
+ * 這一刀只接線，畫面一點都沒動；預覽與下載是下一刀，那時 `(seq, index)` 已經在手上。
  */
 
 import { Check, ChevronDown, ChevronUp, Copy, FileText } from 'lucide-react';
@@ -16,8 +19,8 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { copyText } from '@/lib/clipboard';
+import type { LocatedFile } from '@/lib/deliverables-view';
 import { basename } from '@/lib/present-view';
-import type { PresentedFile } from '@/lib/present-view';
 
 /** 收起時先列幾個（dsh `COLLAPSED_PRESENTED_COUNT`）。 */
 export const COLLAPSED_COUNT = 4;
@@ -66,7 +69,7 @@ function CopyPathButton({ path }: { path: string }) {
   );
 }
 
-export function DeliverablesCard({ files }: { files: readonly PresentedFile[] }) {
+export function DeliverablesCard({ files }: { files: readonly LocatedFile[] }) {
   const [expanded, setExpanded] = useState(false);
   if (files.length === 0) return null;
   const collapsible = files.length > COLLAPSED_COUNT;
@@ -79,10 +82,11 @@ export function DeliverablesCard({ files }: { files: readonly PresentedFile[] })
       data-testid="deliverables"
     >
       <ul className="grid gap-2 sm:grid-cols-2">
-        {shown.map((file, index) => (
+        {shown.map((file) => (
           <li
-            // 同一輪可能宣告兩次同一個路徑，所以帶上位置。
-            key={`${index}:${file.path}`}
+            // **用座標當 key，不用列表位置**：同一輪可能宣告兩次同一個路徑，而 `(seq, index)` 本來就唯一
+            // ——`seq` 是日誌位置，一顆事件一個（#452）。列表位置在合併之後不再對應宣告當下的位置。
+            key={`${file.seq}:${file.index}`}
             className="bg-stage shadow-stage flex min-w-0 items-start gap-3 rounded-xl p-3"
             data-testid="deliverable"
           >

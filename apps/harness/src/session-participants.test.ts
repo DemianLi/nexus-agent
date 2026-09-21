@@ -113,7 +113,7 @@ describe('CLI 那條', () => {
     // 是「不變量先、參與者後」——反過來的話，安裝期寫的那一筆沒有人在看。
     const { printer, stderr } = recorder();
     await runCli({
-      argv: ['--plugins', 'src/cli-session-participant.fixture.ts', '說點什麼'],
+      argv: ['--patch', 'src/cli-session-participant.patch.yml', '說點什麼'],
       input: new PassThrough(),
       output: new PassThrough(),
       printer,
@@ -123,7 +123,7 @@ describe('CLI 那條', () => {
     );
   });
 
-  it('**REPL 裡打 `/goal` 真的動得了那一份日誌**——預設清單，不帶 `--plugins`', async () => {
+  it('**REPL 裡打 `/goal` 真的動得了那一份日誌**——出貨清單，沒有任何 patch', async () => {
     // 這是 [#126](https://github.com/DemianLi/nexus-agent/issues/126) 在 CLI 這條路上的
     // 端到端驗收，而它必須走 `runCli`：上面那條證的是「參與者裝上了」，證不了「人打的
     // 那一行找得到它」。中間那一段是 `apply` 閉包裡的那一格，只有真的發派一次才走得到。

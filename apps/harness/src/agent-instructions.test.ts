@@ -2,7 +2,7 @@
  * 工作區指令進不進得了模型——[#388](https://github.com/DemianLi/nexus-agent/issues/388) 的驗收。
  *
  * **每一條都用出貨清單，一個 plugin 都不自己傳。** 這是這張卡存在的原因：`memory.test.ts`
- * 綠著，是因為每一條都自己把 plugin 傳進去，而產品路徑上（不帶 `--plugins` 的 CLI 與 serve）那顆
+ * 綠著，是因為每一條都自己把 plugin 傳進去，而產品路徑上（走出貨清單的 CLI 與 serve）那顆
  * 根本沒掛。判準是零設定的組裝看到什麼，不是「掛上去之後會怎樣」。
  *
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
@@ -193,7 +193,7 @@ async function run(options: RunOptions) {
   };
 }
 
-describe('裸組裝（零 --plugins）就看得到工作區指令', () => {
+describe('產品路徑上的出貨清單就看得到工作區指令', () => {
   it('給了 --workspace 與 AGENTS.md：第一輪 prompt 裡就有那一則基線，內容與路徑都在', async () => {
     const found = await run({
       files: { 'AGENTS.md': '這個 repo 的規矩：先跑測試。' },

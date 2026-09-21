@@ -155,7 +155,6 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   寫壞了」在磁碟上長得一樣，所以不猜。
 - **patch 檔只有你自己動得了才會被接受。** 檔案本身與它每一層上層目錄都不能讓群組或其他人
   可寫（sticky 的目錄除外），否則拒絕啟動。這台機器是多人共用的，而 patch 檔停得掉核准。
-- **`--patch` 不能配 `--plugins`**：後者換掉的是整份清單，疊在上面的 patch 會一條都命不中。
 
 ### 看這台機器上疊出來的是什麼
 
@@ -192,13 +191,13 @@ server、不綁 port：
 標成要核准的清單：
 
 ```bash
-pnpm --filter @nexus/harness run serve --plugins src/approval.fixture.ts
+pnpm --filter @nexus/harness run serve --patch src/approval.patch.yml
 ```
 
-> **這道指令的 `--plugins` 值被測試讀走。** `apps/harness/src/documented-fixture.ts` 會從這一段解析
+> **這道指令的 `--patch` 值被測試讀走。** `apps/harness/src/documented-fixture.ts` 會從這一段解析
 > 出來餵進 `serve.test.ts` 與 `cli.test.ts`，所以這份文件是那個值的唯一來源——改了它，測試會紅，
 > 那是設計不是故障。也因為這樣，只改這份文件的 PR 會觸發 CI 的完整掃描（`ci.yml` 的窄例外）。
-> 整段指令改寫法、或這份文件多出第二道 `--plugins`，解析會當場拋並指名該修哪裡。
+> 整段指令改寫法、或這份文件多出第二道 `run serve --patch`，解析會當場拋並指名該修哪裡。
 
 這一份把 `echo` 與 `write_file` 標起來，假模型的腳本正好兩個都會呼叫——一條對話會停兩次，核准或
 拒絕都繼續得下去。**介面一批只送一個決定**（`uniformDecisions`）：逐筆按是介面還沒做，不是底下擋著。

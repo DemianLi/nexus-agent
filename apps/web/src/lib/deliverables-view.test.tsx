@@ -68,8 +68,13 @@ function present(callId: string, paths: readonly string[]): Event[] {
   ];
 }
 
-function delivered(payload: DeliverablesPresentedPayload): Event {
-  return frame('custom', [], { name: DELIVERABLES_PRESENTED, payload });
+/**
+ * **`seq` 由這裡補，呼叫點不寫**（[#452](https://github.com/DemianLi/nexus-agent/issues/452)）：這幾條測
+ * 的是交付卡怎麼歸位，跟讀檔路由的座標無關。但折疊器要求酬載帶得出座標（缺了就整顆略過），所以
+ * 要有一個。去重的鍵是 `callId` 不是 `seq`，同一個值餵給每一條是安全的。
+ */
+function delivered(payload: Omit<DeliverablesPresentedPayload, 'seq'>, seq = 0): Event {
+  return frame('custom', [], { name: DELIVERABLES_PRESENTED, payload: { ...payload, seq } });
 }
 
 /** 一輪：frame 照線上的順序取 seq，所以本體要在 `running` 之後才建（先建的 seq 比較小，會被當成重複丟掉）。 */
@@ -116,6 +121,25 @@ describe('交付卡片歸到輪尾', () => {
     ]);
     expect(layout(state)).toEqual(['human', 'tool', 'tool', 'ai', '卡:a.md,b.md,c.md']);
     expect(transcriptItems(state.entries).at(-1)?.id).toBe('deliverables:c1');
+  });
+
+  it('合併成一張卡之後，每個檔案仍然帶著自己那顆事件的座標（#452）', () => {
+    const state = turn('兩次。', () => [
+      ...present('c1', ['a.md']),
+      delivered({ callId: 'c1', files: [{ path: 'a.md' }] }, 11),
+      ...present('c2', ['b.md', 'c.md']),
+      delivered({ callId: 'c2', files: [{ path: 'b.md' }, { path: 'c.md' }] }, 22),
+      ...reply('r1', '好了。'),
+    ]);
+    const card = transcriptItems(state.entries).at(-1);
+    expect(card?.kind).toBe('deliverables');
+    // **`b.md` 的 `index` 是 0 不是 1**：它是第二顆事件宣告的第一個檔。合併弄丟的就是這個——卡裡的
+    // 位置是 1，而讀檔路由要的是 0。`c.md` 同理跟著 `seq: 22` 走。
+    expect(card?.kind === 'deliverables' ? card.files : []).toEqual([
+      { path: 'a.md', seq: 11, index: 0 },
+      { path: 'b.md', seq: 22, index: 0 },
+      { path: 'c.md', seq: 22, index: 1 },
+    ]);
   });
 
   it('只有工具、沒有文字的輪（沒有輪尾）照樣有卡，而且不跑到下一輪', () => {

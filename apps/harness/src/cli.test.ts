@@ -13,17 +13,12 @@ import { SessionLog } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { z } from 'zod';
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
-import {
-  COLLIDING_TOOL_NAME,
-  FIRST_PLUGIN_NAME,
-  SECOND_PLUGIN_NAME,
-} from './cli-collision.fixture.js';
+import { FIRST_PLUGIN_NAME, SECOND_PLUGIN_NAME } from './cli-collision.fixture.js';
 import {
   APPROVAL_DISCLOSURE,
   CLI_PROBE_FILE,
   createCliAgent,
   exitCodeFor,
-  loadPluginModule,
   parseCliArgs,
   runCli,
   runRepl,
@@ -75,20 +70,16 @@ describe('parseCliArgs', () => {
   });
 
   it('旗標與那句話同時收得下，順序不拘', () => {
-    const invocation = parseCliArgs(['--plugins', './list.js', '說點什麼', '--live']);
+    const invocation = parseCliArgs(['--patch', './p.yml', '說點什麼', '--live']);
     expect(invocation).toMatchObject({
       live: true,
-      pluginModule: './list.js',
+      patches: ['./p.yml'],
       prompt: '說點什麼',
     });
   });
 
   it('不認得的旗標報錯，訊息接上用法', () => {
     expect(() => parseCliArgs(['--nope'])).toThrow(/--nope[\s\S]*用法/);
-  });
-
-  it('--plugins 給空字串報錯——那是打錯了，不是「不指定」', () => {
-    expect(() => parseCliArgs(['--plugins', ''])).toThrow(/--plugins/);
   });
 
   it('--recursion-limit 收正整數，省略即不設（由組裝點用預設）', () => {
@@ -133,35 +124,6 @@ describe('exitCodeFor', () => {
     // 是**這個旗標的值**撞到的，不是預設那條——旗標真的傳到了 agent。
     expect((failure as Error).message).toMatch(/Recursion limit of 8 reached/);
     expect(exitCodeFor(failure)).toBe(2);
-  });
-});
-
-describe('loadPluginModule', () => {
-  const fixture = fileURLToPath(new URL('./cli-collision.fixture.ts', import.meta.url));
-
-  it('載得到模組的預設匯出', async () => {
-    const plugins = await loadPluginModule(fixture);
-    expect(plugins.map((entry) => entry.plugin.name)).toEqual([
-      FIRST_PLUGIN_NAME,
-      SECOND_PLUGIN_NAME,
-    ]);
-  });
-
-  it('相對路徑相對於呼叫者站的地方解析，不是相對於 cli.ts 也不是行程的工作目錄', async () => {
-    // 刻意用 repo 根目錄當基準——它不等於跑測試時的工作目錄（`apps/harness`），
-    // 兩者相同的話這條測試會在「根本沒解析」的實作下照樣通過。
-    const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
-    const plugins = await loadPluginModule('./apps/harness/src/cli-collision.fixture.ts', repoRoot);
-    expect(plugins).toHaveLength(2);
-  });
-
-  it('預設匯出不是陣列時報錯，指名是哪個模組', async () => {
-    const notAList = fileURLToPath(new URL('./messages.js', import.meta.url));
-    await expect(loadPluginModule(notAList)).rejects.toThrow(/messages[\s\S]*不是陣列/);
-  });
-
-  it('載不到模組時報錯，把原因接進訊息', async () => {
-    await expect(loadPluginModule('./沒有這個檔.js')).rejects.toThrow(/載不了 plugin 清單模組/);
   });
 });
 
@@ -213,7 +175,7 @@ describe('一次性模式', () => {
     // （[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。它不多一顆面向模型的工具，
     // 只多一個命令與一條 wire 用的規則。
     // **`agent-instructions` 進來的理由是它不進來就等於不存在**：`AGENTS.md` 是使用者放在工作區
-    // 裡、期待 agent 會讀的東西，而讀它的東西不在預設清單上的話，不帶 `--plugins` 的 CLI 與 serve
+    // 裡、期待 agent 會讀的東西，而讀它的東西不在出貨清單上的話，產品路徑上的 CLI 與 serve
     // 一個字都看不到（[#388](https://github.com/DemianLi/nexus-agent/issues/388)）。它不多一顆面向
     // 模型的工具，多的是每個 agent 開頭的一則訊息，而且**沒有工作區時它什麼都不加**。
     //
@@ -244,7 +206,7 @@ describe('一次性模式', () => {
     // 這裡的 `stderr()` 會是空的，`console.error` 才有東西。
     const { printer, stdout, stderr } = recorder();
     await runCli({
-      argv: ['--plugins', 'src/cli-invariant-violation.fixture.ts', '說點什麼'],
+      argv: ['--patch', 'src/cli-invariant-violation.patch.yml', '說點什麼'],
       input: new PassThrough(),
       output: new PassThrough(),
       printer,
@@ -396,7 +358,7 @@ describe('CLI 的核准政策', () => {
     await runCli({
       // **fixture 是從 `docs/operations.md` 讀進來的**（#490），跟 `serve.test.ts` 同一份：
       // `echo` 與 `write_file` 都標了要核准，而假模型的腳本兩個都會叫。
-      argv: ['--plugins', documentedFixture(), '動手'],
+      argv: ['--patch', documentedFixture(), '動手'],
       input: new PassThrough(),
       output: new PassThrough(),
       printer,
@@ -518,7 +480,7 @@ describe('--workspace 換成真實磁碟', () => {
  * 發生在 `dispose()` 之前。
  */
 describe('關機清理與原本的錯誤', () => {
-  const fixture = fileURLToPath(new URL('./cli-dispose-failure.fixture.ts', import.meta.url));
+  const fixture = fileURLToPath(new URL('./cli-dispose-failure.patch.yml', import.meta.url));
 
   it('那一輪跑壞時，浮上來的是原本那個錯誤，不是清理失敗', async () => {
     const failure = new Error('那一輪就壞在這裡');
@@ -531,7 +493,7 @@ describe('關機清理與原本的錯誤', () => {
 
     await expect(
       runCli({
-        argv: ['--plugins', fixture, '說點什麼'],
+        argv: ['--patch', fixture, '說點什麼'],
         input: new PassThrough(),
         output: new PassThrough(),
         printer,
@@ -544,7 +506,7 @@ describe('關機清理與原本的錯誤', () => {
 
     await expect(
       runCli({
-        argv: ['--plugins', fixture, '說點什麼'],
+        argv: ['--patch', fixture, '說點什麼'],
         input: new PassThrough(),
         output: new PassThrough(),
         printer,
@@ -656,7 +618,7 @@ describe('REPL', () => {
  */
 describe('CLI 行程', () => {
   const cli = fileURLToPath(new URL('./cli.ts', import.meta.url));
-  const fixture = fileURLToPath(new URL('./cli-collision.fixture.ts', import.meta.url));
+  const fixture = fileURLToPath(new URL('./cli-collision.patch.yml', import.meta.url));
   const harnessDir = fileURLToPath(new URL('../', import.meta.url));
 
   /** 起一個 CLI 行程，關掉 stdin（否則沒給話的呼叫會停在 REPL 等輸入）。 */
@@ -682,13 +644,23 @@ describe('CLI 行程', () => {
   }
 
   it('兩個 plugin 撞同一個工具名時退出碼是 1，stderr 指名是誰撞了什麼', async () => {
-    const { code, stderr } = await runProcess(['--plugins', fixture, '說點什麼']);
+    const { code, stderr } = await runProcess(['--patch', fixture, '說點什麼']);
 
     // **是 1 不是 2**：組裝失敗不是撞到迴圈上限，兩者要分得開。
     expect(code).toBe(1);
-    expect(stderr).toContain(COLLIDING_TOOL_NAME);
-    expect(stderr).toContain(FIRST_PLUGIN_NAME);
-    expect(stderr).toContain(SECOND_PLUGIN_NAME);
+    // **不能只 `toContain(FIRST_PLUGIN_NAME)`**：出貨清單上那顆 echo plugin 的名字，跟它
+    // 註冊的那個工具名是同一個字串（`ECHO_TOOL_NAME === 'echo'`），而衝突訊息本來就會講
+    // 「已經有名為 echo 的工具」——那半句自己就滿足了斷言，於是「有指名先註冊的是誰」
+    // 變成恆真。裸組裝的年代那兩個名字不一樣，所以以前看不出來；換成疊在出貨清單上之後
+    // 才重合。實測過：把 `duplicateToolError` 裡的 `formatOrigin(existing)` 換成一句不指名
+    // 的話，舊的兩條 `toContain` 照樣綠，底下這一條會紅。
+    expect(stderr).toMatch(
+      new RegExp(
+        `${FIRST_PLUGIN_NAME} \\(${FIRST_PLUGIN_NAME}\\) 註冊過[\\s\\S]*` +
+          `${SECOND_PLUGIN_NAME} \\(${SECOND_PLUGIN_NAME}\\) 又註冊一次`,
+        'u',
+      ),
+    );
   }, 90_000);
 
   /**

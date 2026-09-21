@@ -1248,7 +1248,7 @@ export class ThreadPump {
     if (event.type === 'tool/call') this.#openCard(entry.address, event.data);
     else if (event.type === 'tool/result') this.#noteVerdict(event);
     else if (event.type === 'deliverables/presented' && entry.address.kind === 'root') {
-      this.#presentDeliverables(event.data);
+      this.#presentDeliverables(event.data, event.seq);
     } else if (event.type === 'workspace/changes' && entry.address.kind === 'root') {
       this.#presentCustom(workspaceChangesData(event.seq));
     }
@@ -1261,8 +1261,8 @@ export class ThreadPump {
    * 重新整理之後就不見了。照 dsh 的所有權規則，子代理宣告的本來就歸子代理那個會話，主代理要交付得
    * 自己再叫一次 `present`。`data` 與歷史那一側共用 {@link deliverablesData}。
    */
-  #presentDeliverables(presented: SessionEventMap['deliverables/presented']): void {
-    this.#presentCustom(deliverablesData(presented));
+  #presentDeliverables(presented: SessionEventMap['deliverables/presented'], seq: number): void {
+    this.#presentCustom(deliverablesData(presented, seq));
   }
 
   /**

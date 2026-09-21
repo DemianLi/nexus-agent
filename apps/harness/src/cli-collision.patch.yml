@@ -1,0 +1,9 @@
+# 把 `cli-collision.fixture.ts` 那顆想搶 echo 工具名的 plugin 插到出貨清單上。
+#
+# 這會跟出貨清單上的 `echo`（id: `echo`）工具名衝突。
+#
+# `name` 是相對這個檔的路徑，載入前會轉成 file URL（#499）。模組要 `export default` 那顆
+# plugin——一個 patch 條目對一顆，不是對一份清單。
+- insert:
+    - id: collision-probe
+      name: './cli-collision.fixture.ts'

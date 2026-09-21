@@ -42,7 +42,7 @@ import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 import { serveClient } from './fixtures.js';
 
-const FIXTURE = fileURLToPath(new URL('./conversation-restore.fixture.ts', import.meta.url));
+const FIXTURE = fileURLToPath(new URL('./conversation-restore.patch.yml', import.meta.url));
 
 /** 一次請求攤成「類別:文字」。 */
 function shape(messages: readonly BaseMessage[]): string[] {
@@ -101,7 +101,7 @@ describe('CLI 的 --resume', () => {
     const input = new PassThrough();
     input.end(lines);
     await runCli({
-      argv: [...argv, '--plugins', FIXTURE],
+      argv: [...argv, '--patch', FIXTURE],
       input,
       output: new PassThrough(),
       printer: { log: (line) => void out.push(line), error: (line) => void out.push(line) },
@@ -211,7 +211,7 @@ describe('serve 重開之後', () => {
 
   async function start(root: string, lines: string[] = []): Promise<RunningServe> {
     running = await runServe({
-      argv: ['--port', '0', '--session-log', root, '--plugins', FIXTURE],
+      argv: ['--port', '0', '--session-log', root, '--patch', FIXTURE],
       log: (line) => void lines.push(line),
       env: {},
     });

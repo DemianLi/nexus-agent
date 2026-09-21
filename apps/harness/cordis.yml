@@ -30,7 +30,7 @@
 - id: echo
   name: '@nexus/plugin-echo'
 
-# 工作區指令（#388）：不帶 `--plugins` 的 CLI 與 serve 也看得到 `AGENTS.md`。有 backend
+# 工作區指令（#388）：產品路徑上的 CLI 與 serve 也看得到 `AGENTS.md`。有 backend
 # 才會真的建 middleware，所以沒給 `--workspace` 時它什麼都不加——與 dsh「沒有檔案系統
 # 提供方就載不到」同形。
 - id: agent-instructions

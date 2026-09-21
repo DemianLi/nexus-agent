@@ -59,8 +59,8 @@ describe('serve 的旗標', () => {
     expect(() => parseServeArgs(['--port', '99999'])).toThrow('--port 要給 0 到 65535');
   });
 
-  it('--plugins 給空字串是錯的，不是「沒給」', () => {
-    expect(() => parseServeArgs(['--plugins', '  '])).toThrow('--plugins 要給一個模組路徑');
+  it('--patch 給空字串是錯的，不是「沒給」', () => {
+    expect(() => parseServeArgs(['--patch', '  '])).toThrow('--patch 要給一個檔案路徑');
   });
 
   it('--help 只印用法，不起 server', async () => {
@@ -132,7 +132,7 @@ describe('serve 上的工具拋錯', () => {
     process.on('unhandledRejection', record);
     try {
       running = await runServe({
-        argv: ['--port', '0', '--plugins', 'src/tool-throw.fixture.ts'],
+        argv: ['--port', '0', '--patch', 'src/tool-throw.patch.yml'],
         log: () => undefined,
         env: {},
       });
@@ -187,7 +187,7 @@ describe('serve 的命令面', () => {
     expect(listed.commands.map((command) => command.name)).toContain(PLAN_COMMAND_NAME);
 
     // **這就是那份 `startActive: true` 的 fixture 清單不再是必要的那一刻**：不用
-    // `--plugins`，瀏覽器自己打得開計劃模式。
+    // 任何旗標，瀏覽器自己打得開計劃模式。
     expect(await client.slashRun('planning', `/${PLAN_COMMAND_NAME}`)).toEqual({
       kind: 'success',
       command_id: expect.any(String),
@@ -252,7 +252,7 @@ describe('核准那份清單', () => {
       // **fixture 是從 `docs/operations.md` 讀進來的，不是抄的**（#490）——文件教人跑的那道
       // 指令改了路徑，這一條會當場紅。開發計劃 Phase 5 的驗收句共用同一份：預設清單不觸發
       // 任何中斷，少了它「核准工具」那半句在瀏覽器裡跑不出來。
-      argv: ['--port', '0', '--plugins', documentedFixture()],
+      argv: ['--port', '0', '--patch', documentedFixture()],
       log: () => undefined,
       env: {},
     });
