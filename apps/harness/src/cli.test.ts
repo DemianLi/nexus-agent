@@ -191,8 +191,8 @@ describe('一次性模式', () => {
       'todo',
       'feedback',
       'present',
-      // **底下這三顆不是第五、六、七個例外**，它們跟上面七個不同類：不多一顆工具、不多一
-      // 個命令、不改 prompt。它們只把 core 那三顆 middleware 的設定從程式碼搬到部署設定裡
+      // **底下這四顆不是第五到第八個例外**，它們跟上面七個不同類：不多一顆工具、不多一
+      // 個命令、不改 prompt。它們只把 core 那四顆 middleware 的設定從程式碼搬到部署設定裡
       // （[#456](https://github.com/DemianLi/nexus-agent/issues/456)），middleware 本身
       // 一直都在。它們在這份清單上的作用是**讓 `disabled: true` 指得著**。
       //
@@ -200,6 +200,7 @@ describe('一次性模式', () => {
       // **只剩**那一件——照 dsh 的 `fs-observation-policy`（it registers no service）。
       'repeat-reminder',
       'tool-result-pruner',
+      'summarization',
       'observation-policy',
     ]);
     // 二十個配套入口裡有 `@nexus/plugin-workspace-changes` 的，**那個功能本身不在這份清單裡**：它要工作區的根，

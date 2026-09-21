@@ -46,6 +46,7 @@ import type { SessionLog } from './session-log.js';
 import type { SessionTelemetryRedactRule, SessionTelemetryService } from './session-telemetry.js';
 import type { FeedbackService } from './feedback.js';
 import type { RepeatReminderSettings } from './repeat-reminder.js';
+import type { SummarizationSettings } from './summarization.js';
 import type { ToolResultPruneConfig } from './tool-result-pruner.js';
 import type { ToolErrorInfo } from './tool-events.js';
 
@@ -258,6 +259,15 @@ export interface NexusServices {
    * （見 {@link ./observation.ts | observationPolicyPlugin}）。
    */
   toolResultPruning: ToolResultPruneConfig;
+  /**
+   * 摘要的門檻與去向，由 `@nexus/core/summarization` 這個條目提供
+   * （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。名字見
+   * {@link ./summarization.ts | SUMMARIZATION_SERVICE}。
+   *
+   * **沒人提供不等於「關掉」**——而且這一顆的「關掉」不是「沒有」，是一顆同名空殼
+   * （基座無條件建的那顆要靠同名取代才消得掉）。分野見 {@link DisabledEntryView}。
+   */
+  summarization: SummarizationSettings;
 }
 
 /** 已經宣告過型別的服務名。空表時是 `never`，那時只有寬的多載可用。 */

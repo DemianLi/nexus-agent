@@ -132,6 +132,24 @@
     headChars: 4096
     tailChars: 1024
 
+# 壓力達標時把舊訊息摘要成一則，歷史 offload 到 backend（#143）。四格**全部寫出來**，理由
+# 同上面兩列：patch 是整份替換 `config`。這幾個數字的來歷（尤其 `tokens: 100000` 為什麼是
+# 這個值、以及換模型要重量一次）寫在 `DEFAULT_SUMMARIZATION` 的檔頭上，不在這裡重述。
+#
+# **關掉它（`disabled: true`）發的是一顆同名空殼，不是「沒有」**：基座無條件建一顆摘要器，
+# 同名取代是唯一消得掉它的辦法。連帶沒有的還有歷史 offload 與上面那把剪刀。
+- id: summarization
+  name: '@nexus/core/summarization'
+  config:
+    trigger:
+      - { type: tokens, value: 100000 }
+      - { type: messages, value: 60 }
+    keep: { type: messages, value: 20 }
+    truncateArgs:
+      trigger: { type: messages, value: 20 }
+      keep: { type: messages, value: 20 }
+    historyPathPrefix: /conversation_history
+
 # 先讀後改：沒讀過的檔不准改（#273）。照 dsh base 的 `fs-observation-policy`
 # （`packages/bundle/base/cordis.patch.yml:264`，`ddefc45`）預設就載著。
 #

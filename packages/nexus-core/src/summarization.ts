@@ -67,9 +67,11 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { createSummarizationMiddleware } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { countTokensApproximately } from 'langchain';
+import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
 import { toLoggedMessage } from './logged-message.js';
-import type { SessionLookup } from './registry.js';
+import type { NexusPlugin } from './plugin.js';
+import type { PluginRegistry, SessionLookup } from './registry.js';
 import { DEFAULT_TOOL_RESULT_PRUNE, withToolResultPruning } from './tool-result-pruner.js';
 import type { ToolResultPruneConfig } from './tool-result-pruner.js';
 
@@ -503,3 +505,101 @@ export function isUnderCompactionPressure(
   }
   return false;
 }
+
+/**
+ * 摘要設定的服務名。fold 從這裡讀條目提供的那一份。
+ *
+ * **沒人提供不等於「關掉」**：那兩種成因的正確答案相反，分野見
+ * {@link ./registry.ts | DisabledEntryView}。
+ */
+export const SUMMARIZATION_SERVICE = 'summarization';
+
+/**
+ * 這個條目的 plugin 名。
+ *
+ * **承重的常數**：{@link ./fold.ts | foldRegistry} 拿它去問
+ * {@link ./registry.ts | DisabledEntryView}。刻意不是條目的 `id`——id 是使用者的 patch
+ * 改得動的字串（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+ */
+export const SUMMARIZATION_PLUGIN_NAME = 'summarization';
+
+/**
+ * 一道門檻的形狀。
+ *
+ * **`type` 用 `z.enum` 是為了型別對得上，不是因為它在守門。** 這一格必須是
+ * {@link SummarizationThreshold} 的那個聯集，`resolveSummarizationSettings` 才收得下；而值
+ * 的規則（正的有限數、`trigger` 不可以是空陣列）留在那個 resolve 裡，沒有抄過來。
+ *
+ * **把它放寬成 `z.string()` 不會改變任何結果——量過的。** 那時擋下 `'fraction'` 的換成
+ * `assertThreshold`，載入一樣失敗、訊息一樣指得出是哪一格，只有措辭不同（zod 的
+ * 「expected one of」換成那段講 `'fraction'` 為什麼一律不准的長篇）。所以**不要**把這一行
+ * 當成那條規則的守衛去釘它：它是等價突變，釘了只會釘住 zod 的措辭。
+ */
+const thresholdSchema = z.strictObject({
+  type: z.enum(['messages', 'tokens']),
+  value: z.number(),
+});
+
+/**
+ * 條目收的設定。每一格都可省，省掉的那格用 {@link DEFAULT_SUMMARIZATION} 的值。
+ *
+ * **預設值只寫在一個地方**：這裡的 `.default()` 指的就是那個常數的欄位。物件與陣列的
+ * 預設寫成 thunk 並且複製一份，因為 zod 的 `.default()` 只收可變的東西，而
+ * {@link DEFAULT_SUMMARIZATION} 的欄位是 `readonly`——複製也順帶保證沒有人能從驗出來的
+ * 設定改到那個常數。
+ *
+ * **`truncateArgs` 是整顆有預設，不是逐格。** 所以只給 `truncateArgs: { trigger: ... }`
+ * 會在 zod 當場失敗（`keep` 是必填）。**這比今天那條路好**：`resolveSummarizationSettings`
+ * 是淺合併，給半顆 `truncateArgs` 之後 `assertThreshold` 會去讀 `undefined.type`。
+ * 兩條路不一致是刻意的，不是漏對齊。
+ */
+export const summarizationConfigSchema = z.strictObject({
+  /** 見 {@link SummarizationSettings.trigger}。 */
+  trigger: z
+    .array(thresholdSchema)
+    .default(() => DEFAULT_SUMMARIZATION.trigger.map((threshold) => ({ ...threshold }))),
+  /** 見 {@link SummarizationSettings.keep}。 */
+  keep: thresholdSchema.default(() => ({ ...DEFAULT_SUMMARIZATION.keep })),
+  /** 見 {@link SummarizationSettings.truncateArgs}。 */
+  truncateArgs: z
+    .strictObject({
+      trigger: thresholdSchema,
+      keep: thresholdSchema,
+      maxLength: z.number().optional(),
+    })
+    .default(() => ({
+      trigger: { ...DEFAULT_SUMMARIZATION.truncateArgs.trigger },
+      keep: { ...DEFAULT_SUMMARIZATION.truncateArgs.keep },
+    })),
+  /** 見 {@link SummarizationSettings.historyPathPrefix}。 */
+  historyPathPrefix: z.string().default(DEFAULT_SUMMARIZATION.historyPathPrefix),
+});
+
+/** {@link summarizationConfigSchema} 驗完的形狀。 */
+export type SummarizationConfig = z.infer<typeof summarizationConfigSchema>;
+
+/**
+ * 摘要的**設定條目**（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+ *
+ * 它只做一件事：把驗過的設定提供成 {@link SUMMARIZATION_SERVICE} 服務。
+ * **摘要器不在這裡建**——它由 {@link ./fold.ts | foldRegistry} 逐個 agent 各建一份
+ * （`sessionId` 在 closure 裡，共用會讓兩個 agent 的歷史寫進同一個檔）。
+ *
+ * **關掉它跟前兩顆不同形。** `disabled: true` 之後 fold 發出去的不是「沒有」，是一顆
+ * **同名空殼**——基座無條件建的那顆摘要器靠同名取代才消得掉，真的不掛的話它會補回來。
+ * 射程是 root、宣告的 subagent 與 fold 補的 `general-purpose` 各一顆。
+ *
+ * **這是登記過的偏離**，同前兩顆：dsh 那側 `compaction-basic` 是 base 的一個獨立套件。
+ * 我們表達不出來的是「逐個 agent 各建一份」與「同名取代基座那顆」。偏的是載體。
+ */
+export const summarizationPlugin: NexusPlugin<SummarizationConfig> = {
+  name: SUMMARIZATION_PLUGIN_NAME,
+  Config: summarizationConfigSchema,
+  apply(registry: PluginRegistry, config: SummarizationConfig) {
+    // **驗在這裡、只驗一次。** 值的規則住在 resolve 裡，所以提供出去的是已經正規化過的
+    // 設定，fold 拿到就直接用。
+    registry.services.provide(SUMMARIZATION_SERVICE, resolveSummarizationSettings(config));
+  },
+};
+
+export default summarizationPlugin;

@@ -29,7 +29,11 @@ import {
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   repeatReminderPlugin,
 } from './repeat-reminder.js';
-import { SUMMARIZATION_MIDDLEWARE_NAME } from './summarization.js';
+import {
+  DEFAULT_SUMMARIZATION,
+  SUMMARIZATION_MIDDLEWARE_NAME,
+  summarizationPlugin,
+} from './summarization.js';
 import { DEFAULT_TOOL_RESULT_PRUNE, toolResultPrunerPlugin } from './tool-result-pruner.js';
 import type { FoldOptions } from './fold.js';
 import { loadPlugins } from './load.js';
@@ -1773,5 +1777,119 @@ describe('剪刀的預算從條目來', () => {
         toolResultPruning: { thresholdChars: 100, headChars: 100 },
       }),
     ).rejects.toThrow(/工具結果預算不成立/);
+  });
+});
+
+/**
+ * 摘要的設定從條目來——**四態，但「關掉」不是「沒有」**。
+ *
+ * 第 3 態發的是一顆同名空殼：基座無條件建一顆摘要器，同名取代是唯一消得掉它的辦法。
+ * 所以這一組的驗收句是「**stack 裡是空殼，而且基座那顆沒回來**」，兩個半句各要一條——
+ * 空殼的形狀在這裡釘，基座那顆沒回來在
+ * [`summarization.test.ts`](../../../apps/harness/src/summarization.test.ts) 釘（那邊量的是
+ * 模型有沒有被多叫一次）。只釘一邊的話：只看形狀，一個「空殼對但另有人補了一顆會動的」
+ * 照樣綠；只看行為，一個「空殼畸形但剛好不動」也照樣綠。
+ */
+describe('摘要的設定從條目來', () => {
+  const pick = (list: readonly unknown[]): unknown =>
+    list.find((mw) => (mw as { name: string }).name === SUMMARIZATION_MIDDLEWARE_NAME);
+
+  /** 不帶 `summarization` 的折——這樣才問得到後三態。 */
+  async function foldBare(plugins: PluginEntry[], options: FoldOptions = {}) {
+    const { registry } = await loadPlugins([
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('writer'))),
+      ...plugins,
+    ]);
+    return foldRegistry(registry, {
+      repeatReminder: false,
+      observationPolicy: false,
+      defaultBackend: fakeBackend('default'),
+      ...options,
+    });
+  }
+
+  /** root、宣告的 subagent 與 `general-purpose` 三疊。 */
+  function stacks(params: {
+    middleware: readonly unknown[];
+    subagents: SubAgent[];
+  }): readonly (readonly unknown[])[] {
+    return [params.middleware, ...params.subagents.map((sub) => sub.middleware ?? [])];
+  }
+
+  it('第 4 態：誰都沒講話時是一顆真的摘要器，不是空殼', async () => {
+    // **那 188 個手搭清單的呼叫點的護欄。** 把「沒有服務」當成關掉的話，它們會靜靜換成
+    // 空殼——而空殼跟真貨同名，任何只比名字的斷言都看不出差別。
+    const params = await foldBare([]);
+    for (const stack of stacks(params)) {
+      expect(pick(stack)).toBeDefined();
+      expect(pick(stack)).not.toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+    }
+  });
+
+  it('第 2 態：條目在清單上時，設定從它來', async () => {
+    const params = await foldBare([
+      { plugin: summarizationPlugin, config: { trigger: [{ type: 'messages', value: 2 }] } },
+    ]);
+    for (const stack of stacks(params))
+      expect(pick(stack)).not.toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+  });
+
+  it('第 3 態：`disabled: true` 給三種 agent 各一顆同名空殼', async () => {
+    // **這是卡上那句驗收的前半。** 射程要涵蓋 root、宣告的 subagent 與 fold 補的
+    // `general-purpose`——基座是逐個 agent 建摘要器的，少發一處那一處就有真貨。
+    const params = await foldBare([{ plugin: summarizationPlugin, disabled: true }]);
+    expect(params.subagents.map((sub) => sub.name).sort()).toEqual(
+      [GENERAL_PURPOSE_SUBAGENT.name, 'writer'].sort(),
+    );
+    for (const stack of stacks(params))
+      expect(pick(stack)).toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+  });
+
+  it('第 1 態：組裝點明著講的贏過條目——傳 false 就是空殼', async () => {
+    const params = await foldBare(
+      [{ plugin: summarizationPlugin, config: { trigger: [{ type: 'messages', value: 2 }] } }],
+      { summarization: false },
+    );
+    for (const stack of stacks(params))
+      expect(pick(stack)).toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+  });
+
+  it('被關掉時不需要 default backend——空殼沒有歷史要寫', async () => {
+    // **順序釘在這裡。** 把空殼那條早退挪到「沒 backend 就拋」的後面，這一條會炸。
+    const params = await foldBare([{ plugin: summarizationPlugin, disabled: true }], {
+      defaultBackend: undefined,
+    });
+    expect(pick(params.middleware)).toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+  });
+
+  it('條目不在清單上、又沒給 default backend 時照樣拋', async () => {
+    // 配對的另一半：上一條不可以順手把這條不變式一起鬆掉。
+    const { registry } = await loadPlugins([fakePlugin('noop', () => {})]);
+    expect(() =>
+      foldRegistry(registry, { repeatReminder: false, observationPolicy: false }),
+    ).toThrow(/default backend/);
+  });
+
+  it('條目沒給 config 時拿到的是 schema 的預設，逐格等於那個常數', async () => {
+    const { registry } = await loadPlugins([{ plugin: summarizationPlugin }]);
+    expect(registry.services.get('summarization')).toEqual({ ...DEFAULT_SUMMARIZATION });
+  });
+
+  it('條目的空 trigger 在載入期就失敗——那條規則留在 resolve 裡', async () => {
+    await expect(
+      loadPlugins([{ plugin: summarizationPlugin, config: { trigger: [] } }]),
+    ).rejects.toThrow(/summarization\.trigger 是空陣列/);
+  });
+
+  it('條目的壞門檻型別在載入期就失敗，而且訊息指得出是哪一格', async () => {
+    // **只斷言得到這麼多，而那是量出來的。** 今天擋它的是 schema 的 `z.enum`，但把那一格
+    // 放寬成 `z.string()` 之後換成 `assertThreshold` 擋，載入一樣失敗、一樣指名 `keep`
+    // ——兩層對這個輸入是等價的，差別只有措辭。斷言寫到「是哪一層」就是在釘 zod 的訊息
+    // 格式，不是在釘我們的行為。理由見 `summarizationConfigSchema` 的檔頭。
+    await expect(
+      loadPlugins([
+        { plugin: summarizationPlugin, config: { keep: { type: 'fraction', value: 0.5 } } },
+      ]),
+    ).rejects.toThrow(/keep/);
   });
 });

@@ -183,12 +183,13 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `repeatReminder` 時，以那句話為準；而手搭 plugin 清單（沒有這幾列）的組裝拿到的是內建
   預設，不是「什麼都沒掛」。
 
-今天有三列：
+今天有四列：
 
 | id | 管什麼 | 有 `config` 嗎 |
 | --- | --- | --- |
 | `repeat-reminder` | 連續重複同參數呼叫同一個工具時提醒模型 | 有（四格） |
 | `tool-result-pruner` | 摘要之前先剪掉過長工具結果的中段 | 有（三格） |
+| `summarization` | 壓力達標時把舊訊息摘要成一則，歷史 offload 到 backend | 有（四格） |
 | `observation-policy` | 先讀後改：沒讀過的檔不准改 | **沒有** |
 
 `observation-policy` 那一列**不可以加 `config:`**——它沒有設定，載入器對「這顆 plugin 沒有
@@ -199,6 +200,11 @@ Config schema 卻給了 config」是當場拋。它列在這裡的唯一意義�
 
 **`tool-result-pruner` 只在摘要開著時有作用**（摘要不掛就沒人叫剪刀），但它的設定照樣在載入
 期驗——寫錯不會因為今天剛好沒用到就放過。
+
+**關掉 `summarization` 連帶關掉的比你想的多**：沒有摘要、沒有歷史 offload、也沒有上面那把
+剪刀，而且上下文溢出時基座那條緊急摘要也一起沒有。它的 `config` 那四格是**整顆換**的
+（給了 `truncateArgs` 就要把它底下兩格都寫出來），而 `trigger` 那兩個數字的來歷寫在
+`DEFAULT_SUMMARIZATION` 的檔頭上——**換模型要重量一次**。
 
 ### 看這台機器上疊出來的是什麼
 
