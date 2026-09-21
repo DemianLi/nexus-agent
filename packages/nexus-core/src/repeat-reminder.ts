@@ -69,9 +69,11 @@
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
+import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
 import { toLoggedMessage } from './logged-message.js';
-import type { SessionLookup } from './registry.js';
+import type { NexusPlugin } from './plugin.js';
+import type { PluginRegistry, SessionLookup } from './registry.js';
 
 /** 提醒 middleware 的名字。錯誤訊息與排序斷言用得到。 */
 export const REPEAT_REMINDER_MIDDLEWARE_NAME = 'nexusRepeatToolReminder';
@@ -479,3 +481,77 @@ function recordReminders(
     }
   }
 }
+
+/**
+ * 提醒器設定的服務名。
+ *
+ * 用 dsh 的套件名當詞根（`repeat-tool-reminder`）而不是我們的內部名，同
+ * {@link ./feedback.ts | MESSAGE_FEEDBACK_SERVICE}：服務名是跨套件的位址，照標準取名
+ * 才不會在設定檔裡長出第二套詞彙。
+ */
+export const REPEAT_REMINDER_SERVICE = 'repeatReminder';
+
+/**
+ * 這個條目的 plugin 名。
+ *
+ * **承重的常數**：{@link ./fold.ts | foldRegistry} 拿它去問
+ * {@link ./registry.ts | DisabledEntryView}，所以它是「這一顆被明著關掉了」的鍵。
+ * 刻意不是條目的 `id`——id 是使用者的 patch 改得動的字串（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+ */
+export const REPEAT_REMINDER_PLUGIN_NAME = 'repeat-reminder';
+
+/**
+ * 條目收的設定。每一格都可省，省掉的那格用 {@link DEFAULT_REPEAT_REMINDER} 的值。
+ *
+ * **預設值只寫在一個地方**：這裡的 `.default()` 指的就是那個常數的欄位，不是把數字再抄
+ * 一次。**規則（整數、≥ 2、不重複、升冪）不在這個 schema 裡**，它們留在
+ * {@link resolveRepeatReminderSettings}——那是唯一知道跨欄位規則的地方，抄進 schema 就
+ * 是第二個真相。所以壞值的失敗點是 `apply`，而 `apply` 一樣在載入期，而且 `loadPlugins`
+ * 會把它註冊過的東西逆序撤乾淨再讓整個載入失敗。
+ *
+ * **YAML 的 patch 是整份替換 `config`，這一層卻是逐欄補預設**（卡 #456 要求寫明的那個
+ * 語意差）。兩者不打架，因為**合併的底盤兩邊都是預設值**：`config: { thresholds: [4] }`
+ * 之後其餘三格拿到的還是 {@link DEFAULT_REPEAT_REMINDER} 的值，跟今天
+ * `resolveRepeatReminderSettings({ thresholds: [4] })` 的結果逐格相同。
+ *
+ * 三個陣列的預設寫成 thunk（`() => [...]`），因為 zod 的 `.default()` 只收可變陣列而
+ * {@link DEFAULT_REPEAT_REMINDER} 的欄位是 `readonly`——複製一份也順帶保證沒有人能從
+ * 驗出來的設定改到那個常數。
+ */
+export const repeatReminderConfigSchema = z.strictObject({
+  /** 見 {@link RepeatReminderSettings.thresholds}。 */
+  thresholds: z.array(z.number()).default(() => [...DEFAULT_REPEAT_REMINDER.thresholds]),
+  /** 見 {@link RepeatReminderSettings.include}。 */
+  include: z.array(z.string()).default(() => [...DEFAULT_REPEAT_REMINDER.include]),
+  /** 見 {@link RepeatReminderSettings.exclude}。 */
+  exclude: z.array(z.string()).default(() => [...DEFAULT_REPEAT_REMINDER.exclude]),
+  /** 見 {@link RepeatReminderSettings.argumentsPreviewChars}。 */
+  argumentsPreviewChars: z.number().default(DEFAULT_REPEAT_REMINDER.argumentsPreviewChars),
+});
+
+/** {@link repeatReminderConfigSchema} 驗完的形狀。 */
+export type RepeatReminderConfig = z.infer<typeof repeatReminderConfigSchema>;
+
+/**
+ * 提醒器的**設定條目**（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+ *
+ * 它只做一件事：把驗過的設定提供成 {@link REPEAT_REMINDER_SERVICE} 服務。
+ * **middleware 不在這裡建**——它由 {@link ./fold.ts | foldRegistry} 建與排位。
+ *
+ * **這是登記過的偏離。** dsh 那側 `repeat-tool-reminder` 是 base 的一個普通套件條目，
+ * plugin 自己掛 middleware。我們表達不出來的有兩件：`registry.middleware.use()` 貢獻的
+ * 是一份共用實例、而且插在「其餘 registry middleware」那一區，而這一顆的位置是
+ * 「摘要器之後、其餘之前」並且有四條測試釘著。偏的是載體——條目只負責設定，位置與
+ * 建構仍由 fold 決定。
+ */
+export const repeatReminderPlugin: NexusPlugin<RepeatReminderConfig> = {
+  name: REPEAT_REMINDER_PLUGIN_NAME,
+  Config: repeatReminderConfigSchema,
+  apply(registry: PluginRegistry, config: RepeatReminderConfig) {
+    // **驗在這裡、只驗一次。** 跨欄位規則（升冪、不重複、≥ 2）住在 resolve 裡，
+    // 所以提供出去的是**已經正規化**的設定，fold 拿到就直接用。
+    registry.services.provide(REPEAT_REMINDER_SERVICE, resolveRepeatReminderSettings(config));
+  },
+};
+
+export default repeatReminderPlugin;

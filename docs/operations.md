@@ -156,6 +156,33 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 - **patch 檔只有你自己動得了才會被接受。** 檔案本身與它每一層上層目錄都不能讓群組或其他人
   可寫（sticky 的目錄除外），否則拒絕啟動。這台機器是多人共用的，而 patch 檔停得掉核准。
 
+### core 自己那幾顆 middleware
+
+有幾顆 middleware 住在 `@nexus/core` 裡、由組裝時的折疊決定位置，但**設定從這份清單來**
+（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。它們在清單上長得跟別的條目
+一樣，只是 `name` 指到 core 的一個子路徑：
+
+```yaml
+- id: repeat-reminder
+  name: '@nexus/core/repeat-reminder'
+  config:
+    thresholds: [3, 5, 8]
+    include: []
+    exclude: []
+    argumentsPreviewChars: 500
+```
+
+- **關掉就是 `disabled: true`**，語意跟別的條目一樣：那一顆 middleware 真的不在 stack 裡，
+  root 與每一個 subagent 都沒有。
+- **改設定就在 patch 檔裡重寫這一列的 `config`**。整份替換的規則照舊——但**沒重述的欄位會回到
+  預設值，不是回到出貨檔寫的值**。出貨檔那幾行寫的就是預設值本身，所以這兩件事今天結果相同；
+  真正的差別要在你先用一層 patch 改過、第二層 patch 又只寫一格的時候才看得到。
+- **這幾列不是功能開關。** 它們不多一顆工具、不多一個命令、不改 prompt；middleware 本身一直
+  都在，這一列的作用是讓 `disabled: true` 與 `config` 指得著它。
+- **程式路徑上直接傳的參數贏過這份清單。** 嵌入方自己叫 `createNexusAgent` 並明著傳
+  `repeatReminder` 時，以那句話為準；而手搭 plugin 清單（沒有這幾列）的組裝拿到的是內建
+  預設，不是「什麼都沒掛」。
+
 ### 看這台機器上疊出來的是什麼
 
 ```bash

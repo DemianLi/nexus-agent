@@ -191,6 +191,11 @@ describe('一次性模式', () => {
       'todo',
       'feedback',
       'present',
+      // **`repeat-reminder` 不是第五個例外**，它跟上面七個不同類：不多一顆工具、不多一個
+      // 命令、不改 prompt。它只把 core 那顆提醒器的設定從程式碼搬到部署設定裡
+      // （[#456](https://github.com/DemianLi/nexus-agent/issues/456)），middleware 本身
+      // 一直都在。它在這份清單上的作用是**讓 `disabled: true` 指得著**。
+      'repeat-reminder',
     ]);
     // 二十個配套入口裡有 `@nexus/plugin-workspace-changes` 的，**那個功能本身不在這份清單裡**：它要工作區的根，
     // 只由 serve 經 `createCliAgent` 掛（#443），同 dsh 只在 web-app bundle 掛。

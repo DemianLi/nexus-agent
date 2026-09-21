@@ -15,7 +15,7 @@
 
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { REPEAT_REMINDER_MARKER } from '@nexus/core';
+import { REPEAT_REMINDER_MARKER, repeatReminderPlugin } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
@@ -54,10 +54,14 @@ function reminderTexts(prompt: readonly BaseMessage[]): string[] {
  * 第一道與第二道門檻各一次。
  *
  * @param argsFor - 第 n 輪要用的參數。省略即每輪同一份。
+ * @param extra - 多掛幾個條目，或明著傳 `repeatReminder`。給後面那一組
+ *   （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）用的：設定從條目來的時候，
+ *   觀察點是**提醒早一輪出現**，不是 stack 裡有沒有那個名字。
  * @returns 依輪次的 prompt。
  */
 async function loopPrompts(
   argsFor?: (call: number) => Record<string, unknown>,
+  extra?: { readonly plugins?: readonly PluginEntry[]; readonly repeatReminder?: false },
 ): Promise<(readonly BaseMessage[])[]> {
   const model = new LoopingChatModel({
     toolName: ECHO_TOOL_NAME,
@@ -65,7 +69,8 @@ async function loopPrompts(
   });
   const { agent, dispose } = await createNexusAgent({
     model,
-    plugins: [createEchoPlugin()],
+    plugins: [createEchoPlugin(), ...(extra?.plugins ?? [])],
+    ...(extra?.repeatReminder !== undefined && { repeatReminder: extra.repeatReminder }),
     recursionLimit: 20,
     // 摘要關掉是為了隔離變數：跑滿的迴圈會把訊息數推過打底的 `messages: 60`，摘要一剪
     // 鏈就從剪過的訊息串重算，而這條量的是偵測本身。摘要與提醒的互動另有其位（見下）。
@@ -342,5 +347,46 @@ describe('提醒在 CLI 的逐字稿上印得出來', () => {
 
   it('使用者自己打的那句照樣跳過 —— 例外沒有把規則吃掉', () => {
     expect(transcriptLine('nexusPlanMode.before_agent', new HumanMessage('嗨'))).toBeUndefined();
+  });
+});
+
+/**
+ * 設定從部署設定的條目來（[#456](https://github.com/DemianLi/nexus-agent/issues/456)），
+ * **在正式路徑上**。
+ *
+ * `packages/nexus-core/src/fold.test.ts` 那一組量的是四態各自掛不掛、root 與 subagent
+ * 兩個 stack 都問；這裡量的是它問不到的那一件：**條目的 `config` 真的走到了 middleware
+ * 的行為裡**。判別式是門檻——條目給 `[2]`，第一條提醒就該比預設的 `[3, 5, 8]` 早一輪。
+ * 少了這一條，「服務讀成 `undefined` 之後安靜地退回內建預設」會全綠，因為出貨檔那一列的
+ * 值**刻意等於預設值**。
+ */
+describe('提醒器的設定從條目來，在正式路徑上', () => {
+  it('條目給 `thresholds: [2]` 時，提醒比預設早一輪出現', async () => {
+    const prompts = await loopPrompts(undefined, {
+      plugins: [{ plugin: repeatReminderPlugin, config: { thresholds: [2] } }],
+    });
+    expect(prompts.length).toBeGreaterThanOrEqual(4);
+    // 第 3 輪看到的是第 2 次重複的結果——門檻 2，提醒就掛在它後面。預設門檻 3 的那條
+    // （本檔第一條）在這一輪是 `false`，兩條合起來才是「設定真的換了」。
+    expect(prompts.slice(0, 3).map(hasReminder)).toEqual([false, false, true]);
+    expect(reminderTexts(prompts[2] ?? [])[0]).toContain(GENTLE_HEAD);
+  });
+
+  it('條目 `disabled: true` 時，整場一條提醒都沒有', async () => {
+    const prompts = await loopPrompts(undefined, {
+      plugins: [{ plugin: repeatReminderPlugin, disabled: true }],
+    });
+    // 跑滿六輪、同參數重複到第 5 次——預設組裝在這裡會給兩條（本檔第二條測的就是它）。
+    expect(prompts.length).toBeGreaterThanOrEqual(6);
+    expect(prompts.flatMap(reminderTexts)).toEqual([]);
+  });
+
+  it('組裝點明著關掉時，條目說什麼都不算', async () => {
+    const prompts = await loopPrompts(undefined, {
+      plugins: [{ plugin: repeatReminderPlugin, config: { thresholds: [2] } }],
+      repeatReminder: false,
+    });
+    expect(prompts.length).toBeGreaterThanOrEqual(6);
+    expect(prompts.flatMap(reminderTexts)).toEqual([]);
   });
 });
