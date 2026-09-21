@@ -136,6 +136,12 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
       name: '@nexus/plugin-mcp'
       config:
         servers: []
+
+# 插一顆自己寫的：路徑錨在這個 patch 檔旁邊（`./` 與 `../` 都可以，絕對路徑也可以），
+# 模組要 `export default` 那顆 plugin
+- insert:
+    - id: my-probe
+      name: './my-probe.ts'
 ```
 
 幾條會讓人踩到的規則：

@@ -45,8 +45,8 @@
  */
 
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import type { PluginEntry } from '@nexus/core';
 
@@ -174,8 +174,44 @@ export function parsePatchList(source: string, label: string): ConfigPatch[] {
         `${label} 第 ${String(index + 1)} 列不是一條合法的 patch — ${formatIssues(result.error)}`,
       );
     }
-    return result.data;
+    return anchorInsertedNames(result.data, label);
   });
+}
+
+/**
+ * 把 `insert` 條目裡的檔案路徑錨在 patch 檔旁邊。
+ *
+ * **這是一個修正，不是新功能。** 沒有它的話，`name: './probe.ts'` 會被
+ * {@link resolveEntryModule} 的 `import()` 解析到 **`plugin-config.ts` 自己的位置**——因為裸
+ * 的相對 specifier 錨在做 import 的那個模組上，不是使用者手上那個檔。實測的訊息是
+ * `Cannot find module '…/apps/harness/src/probe.ts'`，而那底下剛好有同名檔的時候，它會
+ * **安靜地載錯一顆**。
+ *
+ * 照 dsh 的 `anchorInsertedPluginNames`（`packages/boot/app-boot/src/index.ts:319`）：
+ *
+ * - 絕對路徑、以及相對 patch 檔的 `./` 與 `../`，轉成 file URL；
+ * - **其餘原樣**——裸的套件名（`@nexus/plugin-echo`）要留給 Node 的解析器，轉成 URL 會讓
+ *   它變成一個不存在的檔案路徑。
+ * - **對既有條目的 `name` 斷言不動。** 那個欄位是拿來跟清單上的字串比的
+ *   （{@link applyEntryPatches} 的 name mismatch 那一條），轉成 file URL 之後它永遠比不中，
+ *   而失敗的樣子是「這條 patch 被靜靜跳過」——比載錯模組更難查。所以只動 `insert` 裡的。
+ *
+ * @param patch - 驗過的一條 patch。
+ * @param file - 這條 patch 來自哪個檔，相對路徑錨在它旁邊。
+ * @returns 同一條 patch，`insert` 裡的路徑換成 file URL。
+ */
+function anchorInsertedNames(patch: ConfigPatch, file: string): ConfigPatch {
+  if (patch.insert === undefined) return patch;
+  const base = dirname(resolve(file));
+  return {
+    ...patch,
+    insert: patch.insert.map((row) => {
+      const name = row['name'];
+      if (typeof name !== 'string') return row;
+      if (!isAbsolute(name) && !name.startsWith('./') && !name.startsWith('../')) return row;
+      return { ...row, name: pathToFileURL(resolve(base, name)).href };
+    }),
+  };
 }
 
 /**

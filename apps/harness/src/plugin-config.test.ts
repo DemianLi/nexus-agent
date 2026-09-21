@@ -457,3 +457,92 @@ describe('--dump-config', () => {
     );
   });
 });
+
+describe('insert 的模組路徑錨在 patch 檔旁邊', () => {
+  /**
+   * **這一組守的是一個會安靜載錯模組的缺陷。** 裸的相對 specifier 錨在做 `import()` 的那個
+   * 模組上（`plugin-config.ts`），不是使用者手上那個 patch 檔。沒有錨定的話 `./probe.ts`
+   * 會被解析到 `apps/harness/src/probe.ts`——今天那裡沒有這個檔所以是「載不起來」，哪天有了
+   * 就變成「載到別的東西，而且不吭聲」。
+   */
+  function probeModule(root: string, name: string, pluginName: string): string {
+    const path = join(root, name);
+    writeFileSync(path, `export default { name: '${pluginName}', apply() {} };\n`);
+    chmodSync(path, 0o600);
+    return path;
+  }
+
+  it('相對 patch 檔的 ./ 指得到它旁邊那個模組', async () => {
+    const root = privateDirectory();
+    const shipped = writePrivate(root, 'cordis.yml', '[]\n');
+    probeModule(root, 'probe.ts', 'probe');
+    const patch = writePrivate(
+      root,
+      'p.yml',
+      "- insert:\n    - id: probe\n      name: './probe.ts'\n",
+    );
+
+    const loaded = await loadPluginConfig({ shipped, overlays: [patch], warn: () => {} });
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]?.plugin.name).toBe('probe');
+  });
+
+  it('../ 也指得到，錨點是 patch 檔不是 cwd 也不是 loader', async () => {
+    const root = privateDirectory();
+    const nested = join(root, 'nested');
+    mkdirSync(nested);
+    const shipped = writePrivate(root, 'cordis.yml', '[]\n');
+    probeModule(root, 'up.ts', 'up');
+    const patch = writePrivate(
+      nested,
+      'p.yml',
+      "- insert:\n    - id: up\n      name: '../up.ts'\n",
+    );
+
+    const loaded = await loadPluginConfig({ shipped, overlays: [patch], warn: () => {} });
+    expect(loaded[0]?.plugin.name).toBe('up');
+  });
+
+  it('絕對路徑也轉成 file URL', async () => {
+    const root = privateDirectory();
+    const shipped = writePrivate(root, 'cordis.yml', '[]\n');
+    const module = probeModule(root, 'abs.ts', 'abs');
+    const patch = writePrivate(
+      root,
+      'p.yml',
+      `- insert:\n    - id: abs\n      name: '${module}'\n`,
+    );
+
+    const loaded = await loadPluginConfig({ shipped, overlays: [patch], warn: () => {} });
+    expect(loaded[0]?.plugin.name).toBe('abs');
+  });
+
+  it('裸的套件名原樣留給 Node 解析——轉成 URL 會變成一個不存在的路徑', async () => {
+    const root = privateDirectory();
+    const shipped = writePrivate(root, 'cordis.yml', '[]\n');
+    const patch = writePrivate(
+      root,
+      'p.yml',
+      "- insert:\n    - id: echo\n      name: '@nexus/plugin-echo'\n",
+    );
+
+    const loaded = await loadPluginConfig({ shipped, overlays: [patch], warn: () => {} });
+    expect(loaded[0]?.plugin.name).toBe('echo');
+  });
+
+  it('對既有條目的 name 斷言不動——轉了它就永遠比不中', () => {
+    const root = privateDirectory();
+    const shipped = writePrivate(root, 'cordis.yml', "- id: echo\n  name: '@nexus/plugin-echo'\n");
+    // `name` 在這裡是斷言：它必須跟清單上那個字串比得中，patch 才會套上去。
+    const patch = writePrivate(
+      root,
+      'p.yml',
+      "- id: echo\n  name: '@nexus/plugin-echo'\n  disabled: true\n",
+    );
+    const said: string[] = [];
+
+    const entries = composeEntries({ shipped, overlays: [patch], warn: (m) => said.push(m) });
+    expect(said).toEqual([]);
+    expect(entries[0]).toMatchObject({ disabled: true });
+  });
+});
