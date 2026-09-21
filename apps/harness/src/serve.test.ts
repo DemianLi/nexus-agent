@@ -59,8 +59,8 @@ describe('serve 的旗標', () => {
     expect(() => parseServeArgs(['--port', '99999'])).toThrow('--port 要給 0 到 65535');
   });
 
-  it('--plugins 給空字串是錯的，不是「沒給」', () => {
-    expect(() => parseServeArgs(['--plugins', '  '])).toThrow('--plugins 要給一個模組路徑');
+  it('--patch 給空字串是錯的，不是「沒給」', () => {
+    expect(() => parseServeArgs(['--patch', '  '])).toThrow('--patch 要給一個檔案路徑');
   });
 
   it('--help 只印用法，不起 server', async () => {
@@ -187,7 +187,7 @@ describe('serve 的命令面', () => {
     expect(listed.commands.map((command) => command.name)).toContain(PLAN_COMMAND_NAME);
 
     // **這就是那份 `startActive: true` 的 fixture 清單不再是必要的那一刻**：不用
-    // `--plugins`，瀏覽器自己打得開計劃模式。
+    // 任何旗標，瀏覽器自己打得開計劃模式。
     expect(await client.slashRun('planning', `/${PLAN_COMMAND_NAME}`)).toEqual({
       kind: 'success',
       command_id: expect.any(String),

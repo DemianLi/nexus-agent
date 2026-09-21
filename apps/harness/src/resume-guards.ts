@@ -20,7 +20,7 @@ import type { StoredSessionHeader } from '@nexus/core';
  * ——每個旗標每次都是明著的請求，「照存的組回來」表達不出來，「不符就拒」又會是一條偏離，
  * 所以只抄得到 `cwd` 這一格。
  *
- * 我們這側還多一個後果：`--workspace`、`--plugins` 都照 cwd 解析，換了目錄接回來，同一串
+ * 我們這側還多一個後果：`--workspace`、`--patch` 都照 cwd 解析，換了目錄接回來，同一串
  * 旗標指到的就不是同一個地方。serve 那條另有一個理由：會話根按目錄分（`projectKey`），而
  * 那個目錄名是有損的，兩個不同的目錄可能落在同一格——header 的 `cwd` 是唯一分得開的東西。
  */

@@ -98,13 +98,22 @@ describe('--patch 的解析（兩個入口同一份規則）', () => {
     expect(() => parseServeArgs(['--patch', ''])).toThrow(/--patch/u);
   });
 
-  it('不能配 --plugins——疊在一份被換掉的清單上沒有意義', () => {
-    expect(() => parseCliArgs(['--patch', 'a.yml', '--plugins', 'x.ts'])).toThrow(
-      '--patch 不能配 --plugins',
-    );
-    expect(() => parseServeArgs(['--patch', 'a.yml', '--plugins', 'x.ts'])).toThrow(
-      '--patch 不能配 --plugins',
-    );
+  /**
+   * **`--plugins` 拿掉了，而「拿掉」要是會講話的**（[#455](https://github.com/DemianLi/nexus-agent/issues/455)）。
+   *
+   * 靜靜忽略一個曾經存在的旗標是最壞的那種相容：那個人以為自己換掉了整份清單，實際上跑的是
+   * 出貨清單，而畫面看起來一模一樣。`parseArgs` 的 strict 模式會把它當成不認得的旗標拒絕——
+   * 這一條釘的是**那件事真的發生**，不是「選項表裡沒有它」（後者刪掉判準也不會紅）。
+   *
+   * 舊的兩條互斥規則（`--patch 不能配 --plugins`、`--dump-config 不能配 --plugins`）由這一條
+   * 取代：沒有那個旗標，就沒有東西要互斥。
+   */
+  it('--plugins 已經沒有了，給了就當不認得的旗標拒絕', () => {
+    expect(() => parseCliArgs(['--plugins', 'x.ts'])).toThrow(/--plugins[\s\S]*用法/u);
+    expect(() => parseServeArgs(['--plugins', 'x.ts'])).toThrow(/--plugins[\s\S]*用法/u);
+    // 配著 --patch 給也一樣：拒絕的理由是旗標不存在，不是兩個旗標打架。
+    expect(() => parseCliArgs(['--patch', 'a.yml', '--plugins', 'x.ts'])).toThrow(/--plugins/u);
+    expect(() => parseServeArgs(['--patch', 'a.yml', '--plugins', 'x.ts'])).toThrow(/--plugins/u);
   });
 });
 
@@ -192,8 +201,8 @@ describe('CLI 真的走設定檔那條路', () => {
  * 讀檔與形狀那一層是 `composeEntries` 在開機當下做的，所以下面兩條在兩個入口上都成立。
  */
 describe('serve 也真的走設定檔那條路', () => {
-  // **兩個入口各釘一條，不是只釘一個然後說「另一邊一樣」。** 兩條路各自有一行
-  // `invocation.pluginModule === undefined ? … : …`，只接一邊是型別過得去的改法。
+  // **兩個入口各釘一條，不是只釘一個然後說「另一邊一樣」。** 兩條路各自呼叫一次
+  // `loadDefaultPlugins`，只接一邊是型別過得去的改法。
   it('home 那一層壞掉就起不來', async () => {
     const home = privateHome();
     writePatch(home, 'cordis.patch.yml', BAD_SHAPE);
@@ -265,15 +274,6 @@ describe('--dump-config 在兩個入口都印得出來', () => {
     // **回 undefined 才代表沒起 server**：有起來的話它回的是 `{ url, close }`。
     expect(result).toBeUndefined();
     expect(printed.join('\n')).toContain('disabled: true');
-  });
-
-  it('不能配 --plugins：那條路上沒有設定樹可以印', () => {
-    expect(() => parseCliArgs(['--dump-config', '--plugins', 'x.ts'])).toThrow(
-      '--dump-config 不能配 --plugins',
-    );
-    expect(() => parseServeArgs(['--dump-config', '--plugins', 'x.ts'])).toThrow(
-      '--dump-config 不能配 --plugins',
-    );
   });
 
   it('CLI 上不能配 --resume：印設定不跑任何一輪', () => {

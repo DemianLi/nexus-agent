@@ -513,7 +513,7 @@ describe('掛了旗標', () => {
     await stop();
   });
 
-  /** 沒有 goal 域（`--plugins` 換掉了預設清單）時安靜地什麼都不做。 */
+  /** 沒有 goal 域（patch 把 `goal` 那一列關掉了）時安靜地什麼都不做。 */
   it('查不到域就不排，也不吭聲', async () => {
     const { pump, port, stop } = await build({
       turns: CREATE_TURNS,

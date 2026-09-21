@@ -228,7 +228,7 @@ export interface GoalDriverPort {
   /**
    * 目前那份視圖。
    *
-   * **查不到域時回 `undefined`**——`--plugins` 換掉預設清單的話就沒有 goal 這個 plugin，
+   * **查不到域時回 `undefined`**——patch 把 `goal` 那一列關掉的話就沒有 goal 這個 plugin，
    * 那時排程器要安靜地什麼都不做，不是拋。
    */
   goal(): GoalView | undefined;
