@@ -59,7 +59,7 @@ import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
 import { startWireServer } from './wire-server.js';
 import type { WireServer } from './wire-server.js';
-import { loadDefaultPlugins } from './plugin-config.js';
+import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
 import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
 
@@ -89,6 +89,8 @@ export interface ServeInvocation {
   readonly sessionLog?: string;
   /** 見 `cli.ts` 的 `CliInvocation.goalDriver`。**兩個入口共用同一個旗標名與同一個預設**。 */
   readonly goalDriver: boolean;
+  /** 見 `cli.ts` 的 `CliInvocation.dumpConfig`。**兩個入口印的是同一份設定**。 */
+  readonly dumpConfig: boolean;
   readonly help: boolean;
 }
 
@@ -101,6 +103,8 @@ const USAGE = `用法：
   --patch <file>       把這個 patch 檔疊在出貨的 cordis.yml 上（可以給多次，後面的蓋前面的）
                        另一層是 $NEXUS_AGENT_HOME/cordis.patch.yml，它排在 --patch 之前
                        不能配 --plugins（那個換掉的是整份清單）
+  --dump-config        把三層疊完的 plugin 設定印出來就退出（不開 server、不載 plugin）
+                       不能配 --plugins（那條路上沒有設定樹）
   --workspace <dir>    把檔案落在這個目錄底下（省略即虛擬檔案系統）
   --sandbox <mode>     圍堵強度：read-only｜workspace-write｜danger-full-access
                        預設 workspace-write（可寫根之內放行）；要配 --workspace
@@ -130,6 +134,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
         'session-log': { type: 'string' },
         port: { type: 'string' },
         'goal-driver': { type: 'boolean', default: false },
+        'dump-config': { type: 'boolean', default: false },
         help: { type: 'boolean', default: false },
       },
     });
@@ -163,6 +168,14 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
 
   const sandbox = parseSandboxMode(values.sandbox, values.workspace, USAGE);
 
+  const dumpConfig = values['dump-config'] === true;
+  if (dumpConfig && values.plugins !== undefined) {
+    throw new Error(
+      `--dump-config 不能配 --plugins：那條路上的清單來自一個模組，不是設定檔，` +
+        `沒有設定樹可以印。\n\n${USAGE}`,
+    );
+  }
+
   const port = values.port === undefined ? DEFAULT_PORT : Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`--port 要給 0 到 65535 之間的整數，收到 "${values.port}"。\n\n${USAGE}`);
@@ -177,6 +190,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     ...(sandbox !== undefined && { sandbox }),
     ...(values['session-log'] !== undefined && { sessionLog: values['session-log'] }),
     goalDriver: values['goal-driver'] === true,
+    dumpConfig,
     help: values.help === true,
   };
 }
@@ -269,6 +283,18 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   const invocation = parseServeArgs(options.argv);
   if (invocation.help) {
     log(USAGE);
+    return undefined;
+  }
+
+  // **在開 server 之前印完就走**，同 `cli.ts`：印設定不需要綁 port，也不該因為 port 被佔住
+  // 就看不到設定。
+  if (invocation.dumpConfig) {
+    log(
+      renderDefaultConfigDump({
+        env: options.env ?? process.env,
+        ...(invocation.patches !== undefined && { patches: invocation.patches }),
+      }).trimEnd(),
+    );
     return undefined;
   }
 

@@ -151,6 +151,31 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   可寫（sticky 的目錄除外），否則拒絕啟動。這台機器是多人共用的，而 patch 檔停得掉核准。
 - **`--patch` 不能配 `--plugins`**：後者換掉的是整份清單，疊在上面的 patch 會一條都命不中。
 
+### 看這台機器上疊出來的是什麼
+
+```bash
+pnpm --filter @nexus/harness run cli -- --dump-config
+```
+
+`serve` 也收同一個旗標。它印出**啟動真的會掛的那一份**，而且一個 plugin 都不載、不開
+server、不綁 port：
+
+```yaml
+# == /path/to/apps/harness/cordis.yml
+- id: echo
+  name: "@nexus/plugin-echo"
+# == /path/to/apps/harness/cordis.yml, patched by /home/you/.nexus-agent/cordis.patch.yml
+- id: todo
+  name: "@nexus/plugin-todo"
+  disabled: true
+```
+
+每一段前面的 `# ==` 註解標明那幾列來自哪個檔、被哪幾層改過，而整份輸出仍然是合法的 YAML
+（讀得回來）。指到不存在 `id` 的 patch 會連同它那一層的標籤報到 stderr——**那是「我的 patch
+為什麼沒生效」最快的答案**。
+
+輸出的位元組不是約定，不要拿它去做程式化的比對：dsh 對自己那份 dump 也明講了同一件事。
+
 ## 核准
 
 **`serve` 是三個入口裡唯一會停下來的那個。** CLI 與 eval 收不了核准決定，所以它們把核准關掉
