@@ -38,7 +38,7 @@ import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
 import type { MiddlewareRegistration, PluginRegistry, RootOnlyRefusal } from './registry.js';
 import { createModelCallRecorder } from './model-calls.js';
-import { createModelUsageRecorder } from './model-usage.js';
+import { createModelUsageRecorder, MODEL_USAGE_PLUGIN_NAME } from './model-usage.js';
 import { createTurnCancelGuard, createTurnCancelModelSignal } from './turn-cancel.js';
 import {
   REPEAT_REMINDER_PLUGIN_NAME,
@@ -275,6 +275,24 @@ export interface FoldOptions {
    * **各建一份**，不共用。見 {@link createObservationPolicy}。
    */
   observationPolicy?: boolean;
+
+  /**
+   * 每一次模型呼叫的 token 帳目要不要記進會話日誌。省略即開著，`false` 是明著關掉。
+   *
+   * **省略時還有第二條關法**：部署設定層把 `@nexus/core/model-usage` 那一列標成
+   * `disabled: true`（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。這一顆
+   * **沒有設定**，所以它只有三態而不是四態，理由見
+   * {@link ./model-usage.ts | modelUsagePlugin}。
+   *
+   * **關掉它不會讓任何東西失敗，所以它的代價要自己讀出來**：不見的是日誌裡的
+   * `model/usage`，而那是評估那條路算用量的唯一來源——關掉之後那些統計是**空的**，
+   * 不是零。它坐在 request path 上但不准拋（見 {@link ./model-usage.ts}），所以沒有
+   * 「留著它會弄壞什麼」這一面可以拿來權衡。
+   *
+   * 它**無狀態**，所以 root 與每個 subagent 共用同一份實例，不像「先讀後改」那樣逐個建。
+   * 見 {@link createModelUsageRecorder}。
+   */
+  modelUsage?: boolean;
 }
 
 /**
@@ -371,8 +389,9 @@ export function foldRegistry(
   const subagentDelegation = createSubagentDelegationMiddleware();
   const summarizer = foldSummarizer(registry, options);
   const repeatReminder = foldRepeatReminder(registry, options);
-  // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./model-usage.ts}。
-  const modelUsage = createModelUsageRecorder(registry.sessions);
+  // **一份實例走遍 root 與每個 subagent**，或在明著關掉時沒有。它無狀態，見
+  // {@link ./model-usage.ts}。
+  const modelUsage = foldModelUsage(registry, options);
   // 同上，無狀態、一份走遍。位置緊貼用量記錄器，理由見 {@link ./model-calls.ts}。
   const modelCalls = createModelCallRecorder(registry.sessions);
   // **backend 提前折**：策略要的版本 token 得從工具實際讀寫的那一個取，所以它不能等到
@@ -710,7 +729,7 @@ function foldMiddleware(
   observationPolicy: AgentMiddleware | undefined,
   summarizer: AgentMiddleware,
   repeatReminder: AgentMiddleware | undefined,
-  modelUsage: AgentMiddleware,
+  modelUsage: AgentMiddleware | undefined,
   modelCalls: AgentMiddleware,
   outputSchema: AgentMiddleware,
   fsToolErrors: AgentMiddleware | undefined,
@@ -729,7 +748,7 @@ function foldMiddleware(
     // 起訖排在用量外層、plugin middleware 外層：一個自己重試模型的 plugin，重試幾次都只算
     // 一步——同 dsh 的 `llm/retry` 在一步之內。摘要器不管排哪都在它外面，見 `model-calls.ts`。
     modelCalls,
-    modelUsage,
+    ...(modelUsage === undefined ? [] : [modelUsage]),
     ...plugins.rest,
     // 輸出校驗在每一個 plugin middleware 的內側：看到的是工具原本的輸出，不是外層改過的版本
     // （dsh 在 `tools/post-execute` 之前驗）。解不開參數的那顆在它更內側，換上的樁回的是錯誤，
@@ -995,6 +1014,42 @@ function foldObservationPolicy(
 }
 
 /**
+ * 用量記錄器，或在明著關掉時回 `undefined`——**三態，依序問**。
+ *
+ * ```
+ * 1. 組裝點明著傳了 `modelUsage: false`     → 不要
+ * 2. 條目在清單上但被明著關掉               → 不要
+ * 3. 以上都沒有                             → 掛著（維持今天的行為）
+ * ```
+ *
+ * **三態不是四態**，同 {@link foldObservationPolicy}：這一顆沒有設定，「條目在場」與
+ * 「沒有經過部署設定層」的正確答案都是「照預設開著」。細節見
+ * {@link ./model-usage.ts | modelUsagePlugin}。
+ *
+ * **回一份實例而不是工廠**，跟「先讀後改」相反而且是量過的差別：這一顆的 closure 裡
+ * 一個狀態都沒有，鏈與身分每次從執行期的 `configurable` 現算。見
+ * {@link createModelUsageRecorder}。
+ *
+ * **沒有「沒有 X 就拋」那一條。** 它要的 `sessions` 通道每個 registry 都有，而
+ * `forCall` 回 `not-attached` 是**常態不是異常**（檔頭最後一段：`eval/runner.ts`、
+ * `spike` 與絕大多數測試的組裝都不接日誌）。所以它跟摘要器、「先讀後改」那兩顆不同型
+ * ——那兩顆缺了 backend 會長得跟一切正常一樣，這一顆缺了日誌本來就該安靜。
+ *
+ * @param registry - 已經跑完 `loadPlugins()` 的 registry。
+ * @param options - 組裝點自有的那些。
+ * @returns 一份可以掛在任意多個 agent 上的 middleware，或 `undefined`。
+ */
+function foldModelUsage(
+  registry: PluginRegistry,
+  options: FoldOptions,
+): AgentMiddleware | undefined {
+  if (options.modelUsage === false) return undefined;
+  if (options.modelUsage === undefined && registry.disabledEntries.has(MODEL_USAGE_PLUGIN_NAME))
+    return undefined;
+  return createModelUsageRecorder(registry.sessions);
+}
+
+/**
  * 這次組裝的剪刀預算——**四態，依序問**，同
  * {@link repeatReminderDisposition}。第 3 態（條目被明著關掉）落在 `false`，不是
  * `undefined`：消費端的形狀是 `ToolResultPruneConfig | false`，`false` 才是「不剪」。
@@ -1152,7 +1207,7 @@ function foldSubAgents(
     observationPolicy: (() => AgentMiddleware) | undefined;
     summarizer: () => AgentMiddleware;
     repeatReminder: AgentMiddleware | undefined;
-    modelUsage: AgentMiddleware;
+    modelUsage: AgentMiddleware | undefined;
     modelCalls: AgentMiddleware;
     outputSchema: AgentMiddleware;
     fsToolErrors: AgentMiddleware | undefined;
@@ -1260,7 +1315,7 @@ function foldSubAgents(
         context.delegation,
         // 模型呼叫的起訖同用量記錄器那條理由打底、共用一份，位置同 root。
         context.modelCalls,
-        context.modelUsage,
+        ...(context.modelUsage === undefined ? [] : [context.modelUsage]),
         // 其餘 plugin 的，同 root 的位置（#327）。排在 `spec.middleware` 外層：plugin 打底、子代理自帶的在內側，
         // 同 `tools` 那條「全域 → 自帶」的軸線。
         ...context.plugins.rest,

@@ -105,6 +105,9 @@
 #
 # **關掉它就是 `disabled: true`**，語意照 dsh：條目不掛，那一顆 middleware 真的不在 stack
 # 裡。要改設定就在 patch 檔裡重寫這一列的 `config`——整份替換，沒重述的欄位回到預設值。
+#
+# **最後那一列是例外，而且是明著的例外**：核准閘門關不掉，`disabled: true` 在載入期當場
+# 拋。理由寫在它自己那一段上。
 
 # 連續重複同參數呼叫同一個工具時提醒模型（#147）。門檻與參數預覽字數照 dsh base 的
 # `repeat-tool-reminder`（`packages/bundle/base/cordis.patch.yml:441`，`ddefc45`）；
@@ -161,6 +164,31 @@
 # 關掉它等於**這個組裝接受盲改**，不是省一點開銷。
 - id: observation-policy
   name: '@nexus/core/observation-policy'
+
+# 每一次模型呼叫的 token 帳目記進會話日誌（#264）。**這一列刻意沒有 `config:`**，理由同上
+# 一列：這一顆沒有任何數字可以調，plugin 也就沒有 Config schema，而載入器對「沒有 schema
+# 卻給了 config」是當場拋。所以它跟上面那一列一樣是三態。
+#
+# **關掉它之後不見的是日誌裡的 `model/usage`**，而那是評估那條路算用量的唯一來源——關掉
+# 之後那些統計是**空的**，不是零。它不會讓任何東西失敗，所以這個代價只能從這裡讀到。
+- id: model-usage
+  name: '@nexus/core/model-usage'
+
+# 核准閘門（#111）。**這一列關不掉**：寫 `disabled: true` 會在載入期當場拋，`--dump-config`
+# 也一樣擋——檢查住在 `validateEntries` 裡，兩條路共用它。
+#
+# 它跟上面四列都不同型：上面四列的 `disabled` 是真的會讓那一顆不在 stack 裡，這一列的
+# `disabled` 是一個錯誤。閘門由 `foldRegistry` 無條件建，今天沒有任何設定關得掉它，
+# 而這一列不存在的時候 `- id: approval-gate` ＋ `disabled: true` 只會警告一行然後跳過
+# ——讀起來像成功關掉了，實際上核准照樣在問。量過（2026-09-22）：exit 0、stderr 一行、
+# dump 與沒帶那份 patch 逐字相同。
+#
+# 第二個理由跟擋人無關：**這一列讓核准在 `--dump-config` 裡看得見**。沒有它的時候，那份
+# dump 從頭到尾沒有任何一列跟核准有關，想確認「這台機器上核准是開的嗎」的人分不出來。
+#
+# `config:` 同上，不可以加。
+- id: approval-gate
+  name: '@nexus/core/approval-gate'
 
 # ── 配套入口 ──────────────────────────────────────────────────────────────────
 #

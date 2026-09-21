@@ -110,6 +110,13 @@ export interface CreateNexusAgentOptions {
    * 形狀與理由見 `@nexus/core` 的 `observation.ts`。
    */
   readonly observationPolicy?: boolean;
+  /**
+   * 每一次模型呼叫的 token 帳目要不要記進會話日誌。省略即開著。
+   *
+   * `false` 之後日誌裡不會有 `model/usage`，而那是評估那條路算用量的唯一來源——
+   * 那些統計會是**空的**，不是零。形狀與理由見 `@nexus/core` 的 `model-usage.ts`。
+   */
+  readonly modelUsage?: boolean;
   /** checkpointer。有 plugin 宣告要核准的工具卻沒給，fold 會報錯。 */
   readonly checkpointer?: AgentCheckpointer;
   /** 長期記憶用的 store。 */
@@ -458,6 +465,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       ...(options.observationPolicy !== undefined && {
         observationPolicy: options.observationPolicy,
       }),
+      ...(options.modelUsage !== undefined && { modelUsage: options.modelUsage }),
     });
 
     // `withConfig` 疊在基座自己那一層 `withConfig` 上面，後者贏（實測 `8` → 模型只被叫
