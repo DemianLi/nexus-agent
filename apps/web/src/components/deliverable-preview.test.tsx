@@ -40,6 +40,18 @@ function mount(respond: (url: string) => Response, files: readonly LocatedFile[]
 const json = (body: unknown) =>
   new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
 
+/**
+ * 第 n 次請求的 URL。
+ *
+ * `mock.calls` 的每一格在型別上都可能是 `undefined`（`noUncheckedIndexedAccess`），所以這裡**斷言一次**
+ * 而不是一路 `?.`——沒發生的那次請求要當場紅，不是靜靜變成字串 "undefined" 然後 `toContain` 失敗。
+ */
+function requestedUrl(doFetch: typeof globalThis.fetch, nth: number): string {
+  const call = (doFetch as unknown as ReturnType<typeof vi.fn>).mock.calls[nth];
+  expect(call).toBeDefined();
+  return String((call as unknown[])[0]);
+}
+
 /** 按下那個檔的預覽鈕。 */
 function open(file: LocatedFile = FILE) {
   fireEvent.click(screen.getByRole('button', { name: `預覽：${file.path}` }));
@@ -57,7 +69,7 @@ describe('交付檔預覽', () => {
     const { doFetch } = mount(() => json(PAGE));
     open();
     expect(await screen.findByText('第一段內容')).toBeTruthy();
-    const url = String((doFetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    const url = requestedUrl(doFetch, 0);
     expect(url).toContain('seq=11');
     expect(url).toContain('index=0');
     // **在預覽面裡面找**：卡片那一列也印著同一個路徑，整頁找會撞到兩個。
@@ -70,7 +82,7 @@ describe('交付檔預覽', () => {
     const { doFetch } = mount(() => json(PAGE), [FILE, second]);
     open(second);
     await screen.findByText('第一段內容');
-    const url = String((doFetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    const url = requestedUrl(doFetch, 0);
     expect(url).toContain('seq=22');
     expect(url).toContain('index=0');
   });
@@ -109,9 +121,7 @@ describe('交付檔預覽', () => {
     fireEvent.click(screen.getByRole('button', { name: /讀下一段/ }));
     expect(await screen.findByText('尾')).toBeTruthy();
     // **是 offset + lines，不是 offset + 我們記著的每頁行數**：每頁幾行由路由決定。
-    expect(String((doFetch as unknown as ReturnType<typeof vi.fn>).mock.calls[1][0])).toContain(
-      'offset=3',
-    );
+    expect(requestedUrl(doFetch, 1)).toContain('offset=3');
     // 到檔尾就收起那顆鈕。
     expect(screen.queryByRole('button', { name: /讀下一段/ })).toBeNull();
   });
