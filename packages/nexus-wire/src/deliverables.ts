@@ -45,3 +45,81 @@ export interface DeliverablesPresentedPayload {
   /** 通過檢查的檔案，順序照模型給的。 */
   readonly files: readonly WirePresentedFile[];
 }
+
+/**
+ * 一個交付檔在 server 上的身分，照 dsh 的 `statOf`
+ * （`packages/api/workspace-files/src/index.ts:448-454`，`ddefc45`）。
+ *
+ * **不回 `absolutePath`，這是一條偏離。** dsh 那一格是給它的「在 Host 上開啟」用的——瀏覽器拿著
+ * 主機絕對路徑去叫 `present.open`。我們不做那個動作（#452 的背景：多人共用的遠端主機，在那裡開檔
+ * 使用者看不到），所以那一格在我們這裡沒有消費者，而它會把工作區的佈局講給瀏覽器聽。改回
+ * {@link DeliverableFileStat.path}：模型宣告時給的原字串，前端本來就拿它當標籤。
+ */
+export interface DeliverableFileStat {
+  /** 模型宣告當下給的那個字串，原樣。前端不解析它（同 {@link WirePresentedFile.path}）。 */
+  readonly path: string;
+  /** 這一次 stat 拍到的新鮮度標記，**不解析**，同 dsh 的 `version`。同值即同一份內容。 */
+  readonly version: string;
+  /** 完整檔案的位元組數。 */
+  readonly bytes: number;
+}
+
+/**
+ * 預覽路由的結果：從一份文字檔切出來的一頁。
+ *
+ * **頁的上限是拒絕，不是截斷**（dsh `Config.maxBytes` 的理由逐字：「a silently cut page reads as the
+ * whole page」）。所以超標時這個結果不會出現，出現的是 413。**檔案本身沒有大小上限**——呼叫端翻頁，
+ * 同 dsh。
+ */
+export interface DeliverableFilePage extends DeliverableFileStat {
+  /** 這一頁從第幾行起，0 起算。 */
+  readonly offset: number;
+  /** 這一頁的內容，**不帶行號**（dsh 的 `read` 也不帶；行號是基座 `read` 的形狀，不是路由的）。 */
+  readonly text: string;
+  /** `text` 裡的行數；整頁都在最後一行之後時是 0。 */
+  readonly lines: number;
+  /** 這一頁碰到檔尾了。 */
+  readonly eof: boolean;
+}
+
+/**
+ * 預覽一個宣告過的交付檔，`GET`，帶 `?seq=&index=`，選配 `?offset=&limit=`。
+ *
+ * **只收座標，不收路徑**，照 dsh 的 `handlePresentOpen`——路徑遍歷在形狀上就不可能發生。
+ * 座標的意義見 {@link DeliverablesPresentedPayload.seq}。
+ *
+ * 錯誤協定照隔壁 `changes` 兩條（裸 status ＋純文字 ＋`cache-control: no-store`），而狀態碼**要分得出
+ * 前端該做什麼**：400 座標不對；404 這台 server 錨不住這顆座標、或檔不在、或不是一般檔；
+ * 413 超過上限；**422 含 NUL 位元組**（＝不是文字，前端改提供下載）。
+ *
+ * **不是 415**：那個碼這條線上已經在講「請求沒帶 `content-type: application/json`」，壓在一起
+ * 前端就分不出「我忘了帶 header」與「這個檔是二進位」。
+ *
+ * @param threadId - thread id，就是 root 會話的 id。
+ * @returns 路徑。
+ */
+export function deliverableFilePath(threadId: string): string {
+  return `/threads/${encodeURIComponent(threadId)}/deliverables/file`;
+}
+
+/**
+ * 下載一個宣告過的交付檔，`GET`，帶 `?seq=&index=`。回的是**原始位元組**
+ * （`application/octet-stream` ＋ `content-disposition: attachment`）。
+ *
+ * **回原始位元組而不是 base64，是一條偏離。** dsh 的 `readAll` 回 base64 是因為它的載體是 RPC、
+ * 帶不動位元組；我們的載體是 HTTP，原始位元組就是同一件事在這個載體上的講法，而 base64 會讓每一份
+ * 下載多三分之一。
+ *
+ * **它跟這條線上每一條 `GET` 一樣要帶 `content-type: application/json`**（理由見 `THREADS_PATH`：
+ * 那個 header 是閘門，擋的是不發 preflight 的跨來源 simple request）。**所以下載不能用
+ * `<a download>`**——那種連結設不了 header。前端要 `fetch` 成 blob 再存。這是契約的一部分，
+ * 不是實作建議：拿掉那道閘門才能用 `<a download>`，而那會把閘門本身挖掉。
+ *
+ * 上限是 `maxFileBytes`，超標回 413（**拒絕，不截斷**，同 dsh）。
+ *
+ * @param threadId - thread id，就是 root 會話的 id。
+ * @returns 路徑。
+ */
+export function deliverableDownloadPath(threadId: string): string {
+  return `/threads/${encodeURIComponent(threadId)}/deliverables/download`;
+}

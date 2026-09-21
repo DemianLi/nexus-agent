@@ -24,7 +24,11 @@ import {
   TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
 } from './turn-cancel.js';
 import { MODEL_USAGE_MIDDLEWARE_NAME } from './model-usage.js';
-import { REPEAT_REMINDER_MIDDLEWARE_NAME } from './repeat-reminder.js';
+import {
+  DEFAULT_REPEAT_REMINDER,
+  REPEAT_REMINDER_MIDDLEWARE_NAME,
+  repeatReminderPlugin,
+} from './repeat-reminder.js';
 import { SUMMARIZATION_MIDDLEWARE_NAME } from './summarization.js';
 import type { FoldOptions } from './fold.js';
 import { loadPlugins } from './load.js';
@@ -1478,6 +1482,95 @@ describe('提醒器打底', () => {
   it('不需要 default backend —— 它不寫任何東西', async () => {
     const params = await fold([fakePlugin('noop', () => {})], { repeatReminder: {} });
     expect(middlewareNames(params)).toContain(REPEAT_REMINDER_MIDDLEWARE_NAME);
+  });
+});
+
+/**
+ * 提醒器的設定**從部署設定的條目來**（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+ *
+ * 這一組釘的是 {@link repeatReminderDisposition} 那四態，而**第 3 與第 4 態分得開才是整張
+ * 卡的關鍵**：兩者在 `services.get()` 眼中一模一樣（都是 `undefined`），正確答案卻相反。
+ * 所以這裡刻意不走上面那個 `fold()` helper——它預設就把提醒器關掉（第 1 態），那會把要量
+ * 的東西整個蓋掉。
+ *
+ * **每一條都問 root 與每個 subagent 兩個 stack。** 提醒器在兩邊各有一個插入點，只驗 root
+ * 的話「只補一半」會綠著，而那正好是 subagent 那幾輪繼續（或不再）收到提醒。
+ */
+describe('提醒器的設定從條目來', () => {
+  /** 不帶任何 `FoldOptions` 的折——這樣才問得到後三態。 */
+  async function foldBare(plugins: PluginEntry[]) {
+    const { registry } = await loadPlugins([
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('one'))),
+      ...plugins,
+    ]);
+    return foldRegistry(registry, { summarization: false, observationPolicy: false });
+  }
+
+  /** 那一顆在不在 root 與每個 subagent 的 stack 裡。 */
+  function present(params: Parameters<typeof middlewareNames>[0] & { subagents: SubAgent[] }) {
+    const inRoot = middlewareNames(params).includes(REPEAT_REMINDER_MIDDLEWARE_NAME);
+    const inSubagents = registered(params).map((subagent) =>
+      (subagent.middleware ?? [])
+        .map((mw) => (mw as unknown as { name: string }).name)
+        .includes(REPEAT_REMINDER_MIDDLEWARE_NAME),
+    );
+    return { inRoot, inSubagents };
+  }
+
+  it('第 4 態：誰都沒講話時維持內建預設——root 與 subagent 都有', async () => {
+    // **這一條是那 188 個手搭清單的 `createNexusAgent` 呼叫點的護欄。** 把「沒有服務」
+    // 一律當成關掉的話，它們會靜靜少掉這一顆，而沒有任何測試在問。
+    expect(await foldBare([]).then(present)).toEqual({ inRoot: true, inSubagents: [true] });
+  });
+
+  it('第 2 態：條目在清單上時，設定從它來', async () => {
+    const params = await foldBare([{ plugin: repeatReminderPlugin, config: { thresholds: [2] } }]);
+    expect(present(params)).toEqual({ inRoot: true, inSubagents: [true] });
+  });
+
+  it('第 3 態：條目 `disabled: true` 就真的沒有，root 與 subagent 都沒有', async () => {
+    // **這是卡上那句驗收。** 跟第 4 態的差別只有 `disabled`，而兩條的答案相反——所以
+    // 這一對就是「被關掉」與「沒有人問過部署設定層」分不分得開的判別式。
+    expect(
+      await foldBare([{ plugin: repeatReminderPlugin, disabled: true }]).then(present),
+    ).toEqual({ inRoot: false, inSubagents: [false] });
+  });
+
+  it('第 1 態：組裝點明著講的贏過條目', async () => {
+    const { registry } = await loadPlugins([
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('one'))),
+      { plugin: repeatReminderPlugin, config: { thresholds: [2] } },
+    ]);
+    const params = foldRegistry(registry, {
+      summarization: false,
+      observationPolicy: false,
+      repeatReminder: false,
+    });
+    expect(present(params)).toEqual({ inRoot: false, inSubagents: [false] });
+  });
+
+  it('條目的壞設定在載入期就失敗，不是等到 fold', async () => {
+    // 跨欄位規則住在 `resolveRepeatReminderSettings`，條目的 `apply` 叫它——所以壞值的
+    // 失敗點是 `apply`，而 `loadPlugins` 會把它註冊過的東西撤乾淨再讓整個載入失敗。
+    await expect(
+      loadPlugins([{ plugin: repeatReminderPlugin, config: { thresholds: [1] } }]),
+    ).rejects.toThrow(/repeatReminder\.thresholds/);
+  });
+
+  it('條目沒給 config 時拿到的是 schema 的預設，逐格等於那個常數', async () => {
+    // **預設值只有一份。** schema 的 `.default()` 指的就是那個常數的欄位；這一條擋的是
+    // 有人在 schema 裡把數字抄成第二份。
+    const { registry } = await loadPlugins([{ plugin: repeatReminderPlugin }]);
+    expect(registry.services.get('repeatReminder')).toEqual({ ...DEFAULT_REPEAT_REMINDER });
+  });
+
+  it('沒被關掉的條目不會留下痕跡，被關掉的才會', async () => {
+    const enabled = await loadPlugins([{ plugin: repeatReminderPlugin }]);
+    expect(enabled.registry.disabledEntries.names()).toEqual([]);
+    const off = await loadPlugins([{ plugin: repeatReminderPlugin, disabled: true }]);
+    expect(off.registry.disabledEntries.names()).toEqual(['repeat-reminder']);
+    expect(off.registry.disabledEntries.has('repeat-reminder')).toBe(true);
+    expect(off.registry.disabledEntries.has('echo')).toBe(false);
   });
 });
 

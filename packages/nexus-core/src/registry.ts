@@ -6,7 +6,7 @@
  * `permissions` / `approvals`）沒有名字可撞，走匿名追加。折疊成
  * `createDeepAgent` 參數的部分在 {@link ./fold.ts}。
  *
- * 外加六條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
+ * 外加七條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
  * {@link LifecycleRegistrationPoint} 回答「這些東西怎麼收掉」，
  * {@link TelemetryRegistrationPoint} 回答「送出去之前怎麼洗」，
  * {@link InvariantRegistrationPoint} 回答「這個會話發生的事有沒有破壞誰的約定」，
@@ -14,6 +14,11 @@
  * {@link SessionRegistrationPoint} 回答「誰拿得到這個會話的日誌」，
  * {@link ServiceRegistrationPoint} 回答「這次組裝的協作者從哪裡拿」（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
  * 九個註冊點回答的是「這個 agent 由什麼組成」，六者正交。
+ *
+ * **第七條是唯一一條沒有人往裡面註冊東西的**：{@link DisabledEntryView | disabledEntries}
+ * 回答「產生這個 registry 的那份清單說了什麼」，是唯讀視圖而不是註冊點
+ * （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。它進得了這份清單是因為
+ * 它確實是 `PluginRegistry` 的一個欄位，而那個數字有絆索在數（`registry-channel-count.test.ts`）。
  *
  * **遙測後端與回饋規則不在這份清單上**，它們是 `services` 上的兩個名字
  * （[#477](https://github.com/DemianLi/nexus-agent/issues/477)）：兩者本來各有一個「一個
@@ -40,6 +45,7 @@ import type { SessionRegistry } from './session-registry.js';
 import type { SessionLog } from './session-log.js';
 import type { SessionTelemetryRedactRule, SessionTelemetryService } from './session-telemetry.js';
 import type { FeedbackService } from './feedback.js';
+import type { RepeatReminderSettings } from './repeat-reminder.js';
 import type { ToolErrorInfo } from './tool-events.js';
 
 /**
@@ -230,6 +236,15 @@ export interface NexusServices {
    * 名字見 {@link ./feedback.ts | MESSAGE_FEEDBACK_SERVICE}。
    */
   messageFeedback: FeedbackService;
+  /**
+   * 重複工具呼叫提醒器的設定，由 `@nexus/core/repeat-reminder` 這個條目提供
+   * （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。名字見
+   * {@link ./repeat-reminder.ts | REPEAT_REMINDER_SERVICE}。
+   *
+   * **沒人提供不等於「關掉」**：那兩種成因的正確答案相反，分野見
+   * {@link DisabledEntryView}。
+   */
+  repeatReminder: RepeatReminderSettings;
 }
 
 /** 已經宣告過型別的服務名。空表時是 `never`，那時只有寬的多載可用。 */
@@ -741,6 +756,35 @@ export type SessionLookup =
    */
   | { readonly kind: 'ambiguous'; readonly count: number };
 
+/**
+ * 清單上**明著被關掉**的那些條目（`disabled: true`）。**不是註冊點**——沒有人往裡面
+ * 註冊東西，它是「產生這個 registry 的那份清單說了什麼」的一個唯讀視圖。
+ *
+ * 它回答折疊那側問不出來的一個問題：**「這一顆沒有提供服務」有兩種成因**——條目被關掉了，
+ * 或者這次組裝根本沒有經過部署設定層（低層嵌入方與測試手搭清單，見
+ * [#455](https://github.com/DemianLi/nexus-agent/issues/455)）。兩者的正確答案相反：前者
+ * 要真的不掛，後者要維持內建預設。少了這個視圖，兩者在 `services.get()` 眼中一模一樣。
+ *
+ * **dsh 沒有這第三態，所以這是登記過的偏離**
+ * （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）：它的 `boot()` 只有一個
+ * 來源——設定樹，條目不在就是不掛（`fs-observation-policy` 的檔頭逐字：“Without this
+ * plugin, tools retain the bare provider's unconditional mutation behavior”）。我們的
+ * {@link ./fold.ts | foldRegistry} 同時是公開的程式介面而且帶內建預設，於是多出一態。
+ */
+export interface DisabledEntryView {
+  /**
+   * 這個 plugin 名有沒有出現在某個明著被關掉的條目上。
+   *
+   * **比對的是 {@link ../plugin.ts | NexusPlugin.name} 而不是條目的 id**：id 是使用者的
+   * patch 改得動的字串，拿它當行為開關等於讓改名變成關功能。
+   *
+   * @param pluginName - 那顆 plugin 的 `name`。
+   */
+  has(pluginName: string): boolean;
+  /** 全部，依清單順序；同一顆掛載多次又都被關掉時會出現重複。 */
+  names(): readonly string[];
+}
+
 export interface PluginRegistry {
   readonly tools: ToolRegistrationPoint;
   readonly subagents: SubAgentRegistrationPoint;
@@ -757,6 +801,8 @@ export interface PluginRegistry {
   readonly invariants: InvariantRegistrationPoint;
   readonly commands: CommandRegistrationPoint;
   readonly sessions: SessionRegistrationPoint;
+  /** 清單上明著被關掉的條目，見 {@link DisabledEntryView}。**不算註冊點。** */
+  readonly disabledEntries: DisabledEntryView;
 }
 
 /**
@@ -772,6 +818,15 @@ export interface InternalPluginRegistry extends PluginRegistry {
    * @returns 清掉游標的函式。
    */
   enter(origin: PluginOrigin): () => void;
+  /**
+   * 記下清單上明著被關掉的一個條目。
+   *
+   * **只有 {@link ./load.ts | loadPlugins} 叫得到它**，因為只有它看得見 `disabled`；
+   * plugin 的 `apply` 拿到的是窄的 {@link PluginRegistry}，碰不到這個方法。
+   *
+   * @param pluginName - 被跳過的那顆 plugin 的 `name`。
+   */
+  markDisabled(pluginName: string): void;
 }
 
 function duplicateToolError(scope: ScopeKey | undefined) {
@@ -1133,6 +1188,9 @@ export function createRegistry(): InternalPluginRegistry {
     takeDisposers: () => disposers.drain(),
   };
 
+  /** 明著被關掉的條目留下的唯一痕跡，見 {@link DisabledEntryView}。 */
+  const disabledNames: string[] = [];
+
   return {
     tools,
     subagents: subagentPoint,
@@ -1149,6 +1207,13 @@ export function createRegistry(): InternalPluginRegistry {
     invariants: invariantPoint,
     commands: commandPoint,
     sessions: sessionPoint,
+    disabledEntries: {
+      has: (pluginName) => disabledNames.includes(pluginName),
+      names: () => [...disabledNames],
+    },
+    markDisabled(pluginName) {
+      disabledNames.push(pluginName);
+    },
     enter(origin) {
       if (current !== undefined) {
         throw new Error(

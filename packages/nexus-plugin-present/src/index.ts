@@ -166,10 +166,16 @@ type Inspection = 'file' | 'not-file' | 'missing';
 /**
  * 把模型給的路徑換成 backend 命名空間裡的絕對路徑。相對路徑以工作區根為起點（見檔頭偏離 3）。
  * `..` 不在這裡擋：backend 自己的 `resolvePath` 會拒，拒了就是找不到。
+ *
+ * **匯出是因為讀檔路由要用同一份**（[#452](https://github.com/DemianLi/nexus-agent/issues/452)）。
+ * 事件裡存的是模型給的原字串（見下面 `log.append` 那一行），**正規化的結果不落庫**，所以之後
+ * 要把那個字串變回一個路徑的人得自己走一次這裡。複製一份的話就是第二個真相——`cli.ts:341`
+ * 對同型的情況已經寫過下場：「有一天只有一邊擋」。
+ *
  * @param path - 模型給的路徑。
  * @returns 正規化之後、不帶尾斜線的虛擬路徑；工作區根本身是 `/`。
  */
-function virtualPathOf(path: string): string {
+export function virtualPathOf(path: string): string {
   const normalized = posix.normalize(path.startsWith('/') ? path : `/${path}`);
   return normalized.length > 1 && normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
 }

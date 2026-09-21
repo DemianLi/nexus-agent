@@ -94,6 +94,30 @@
 - id: present
   name: '@nexus/plugin-present'
 
+# ── core 的 middleware 設定 ───────────────────────────────────────────────────
+#
+# 這幾列**不裝功能，只講設定**（#456）。middleware 本身由 `foldRegistry` 建與排位——位置
+# 是承重的（有四條測試釘著）、而且有一顆必須逐個 agent 各建一份，這兩件事
+# `registry.middleware.use()` 都表達不出來。所以條目的 `apply` 只做一件事：把驗過的設定
+# 提供成一個服務，fold 從那裡讀。偏離登記在 `@nexus/core` 對應那個檔的檔頭上。
+#
+# **關掉它就是 `disabled: true`**，語意照 dsh：條目不掛，那一顆 middleware 真的不在 stack
+# 裡。要改設定就在 patch 檔裡重寫這一列的 `config`——整份替換，沒重述的欄位回到預設值。
+
+# 連續重複同參數呼叫同一個工具時提醒模型（#147）。門檻與參數預覽字數照 dsh base 的
+# `repeat-tool-reminder`（`packages/bundle/base/cordis.patch.yml:441`，`ddefc45`）；
+# `include`／`exclude` 是我們多的兩格，空陣列＝追蹤全部工具。
+#
+# **這一列寫出全部四格是刻意的**：patch 是整份替換 `config`，所以照著改的人手上要有完整
+# 的一份可以抄；而預設值本身寫在 plugin 的 schema 裡，不是寫在這裡。
+- id: repeat-reminder
+  name: '@nexus/core/repeat-reminder'
+  config:
+    thresholds: [3, 5, 8]
+    include: []
+    exclude: []
+    argumentsPreviewChars: 500
+
 # ── 配套入口 ──────────────────────────────────────────────────────────────────
 #
 # 二十個全進，不是只有 `@nexus/core`（#107 拍板）。理由三條：

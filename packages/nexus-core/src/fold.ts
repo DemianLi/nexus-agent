@@ -36,16 +36,16 @@ import { createObservationPolicy } from './observation.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
-import type {
-  MiddlewareRegistration,
-  PluginRegistry,
-  RootOnlyRefusal,
-  SessionLookup,
-} from './registry.js';
+import type { MiddlewareRegistration, PluginRegistry, RootOnlyRefusal } from './registry.js';
 import { createModelCallRecorder } from './model-calls.js';
 import { createModelUsageRecorder } from './model-usage.js';
 import { createTurnCancelGuard, createTurnCancelModelSignal } from './turn-cancel.js';
-import { createRepeatReminder, resolveRepeatReminderSettings } from './repeat-reminder.js';
+import {
+  REPEAT_REMINDER_PLUGIN_NAME,
+  REPEAT_REMINDER_SERVICE,
+  createRepeatReminder,
+  resolveRepeatReminderSettings,
+} from './repeat-reminder.js';
 import type { RepeatReminderSettings } from './repeat-reminder.js';
 import {
   createSummarizer,
@@ -348,7 +348,7 @@ export function foldRegistry(
   );
   const subagentDelegation = createSubagentDelegationMiddleware();
   const summarizer = foldSummarizer(registry, options);
-  const repeatReminder = foldRepeatReminder(options, registry.sessions);
+  const repeatReminder = foldRepeatReminder(registry, options);
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./model-usage.ts}。
   const modelUsage = createModelUsageRecorder(registry.sessions);
   // 同上，無狀態、一份走遍。位置緊貼用量記錄器，理由見 {@link ./model-calls.ts}。
@@ -794,11 +794,53 @@ function subagentPluginMiddleware({ prepended, rest }: PluginMiddleware): Plugin
  * @returns 一份可以掛在任意多個 agent 上的 middleware，或 `undefined`。
  */
 function foldRepeatReminder(
+  registry: PluginRegistry,
   options: FoldOptions,
-  sessions: { forCall(config: unknown): SessionLookup },
 ): AgentMiddleware | undefined {
-  if (options.repeatReminder === false) return undefined;
-  return createRepeatReminder(resolveRepeatReminderSettings(options.repeatReminder), sessions);
+  const settings = repeatReminderDisposition(registry, options);
+  if (settings === undefined) return undefined;
+  return createRepeatReminder(settings, registry.sessions);
+}
+
+/**
+ * 這次組裝要不要提醒器、用哪一份設定——**四態，依序問**。
+ *
+ * ```
+ * 1. 組裝點明著傳了 `repeatReminder`        → 它贏（`false` 就是不要）
+ * 2. 部署設定層提供了服務                    → 用那一份（條目在清單上、沒被關）
+ * 3. 條目在清單上但被明著關掉                → 真的不掛
+ * 4. 以上都沒有                              → 內建預設（維持今天的行為）
+ * ```
+ *
+ * **第 1 與第 2 的先後是拍板過的**（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）：
+ * `FoldOptions` 是低層嵌入方與測試走的程式路徑（[#455](https://github.com/DemianLi/nexus-agent/issues/455)
+ * 的分工），最靠近呼叫端的那一句話應該贏。**今天沒有人踩到這個先後**：量過，載出貨
+ * `cordis.yml` 的六個測試檔裡，傳這幾個 option 的是零個，而產品程式碼一處都沒有在傳。
+ *
+ * **第 3 與第 4 分得開才是這一整張卡的關鍵。** 兩者在 `services.get()` 眼中一模一樣
+ * （都是 `undefined`），而正確答案相反：把第 4 態也當成關掉的話，188 個手搭清單的
+ * `createNexusAgent` 呼叫點會**靜靜**少掉這一顆；把第 3 態當成預設的話，設定檔裡的
+ * `disabled: true` 就只是一行沒有作用的字。分野的載體是
+ * {@link ./registry.ts | DisabledEntryView}。
+ *
+ * @param registry - 已經跑完 `loadPlugins()` 的 registry。
+ * @param options - 組裝點自有的那些。
+ * @returns 正規化過的設定，或「這次不掛」。
+ */
+function repeatReminderDisposition(
+  registry: PluginRegistry,
+  options: FoldOptions,
+): RepeatReminderSettings | undefined {
+  if (options.repeatReminder !== undefined) {
+    return options.repeatReminder === false
+      ? undefined
+      : resolveRepeatReminderSettings(options.repeatReminder);
+  }
+  // 條目提供的那一份**已經正規化過**（在它的 `apply` 裡），這裡不再 resolve 一次。
+  const provided = registry.services.get(REPEAT_REMINDER_SERVICE);
+  if (provided !== undefined) return provided;
+  if (registry.disabledEntries.has(REPEAT_REMINDER_PLUGIN_NAME)) return undefined;
+  return resolveRepeatReminderSettings();
 }
 
 /**

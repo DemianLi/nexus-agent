@@ -11,6 +11,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { Transcript } from '@/components/transcript';
 import { createChangesStores } from '@/lib/changes-diff';
+import { createDeliverableDownloader } from '@/lib/deliverable-download';
+import { createDeliverableFileStore } from '@/lib/deliverable-file';
 import { transcriptItems } from '@/lib/deliverables-view';
 
 /**
@@ -169,6 +171,33 @@ describe('交付卡片歸到輪尾', () => {
     expect(within(card).getByTestId('deliverable').textContent).toBe(
       'report.pdf季報out/report.pdf',
     );
+  });
+
+  it('兩個 store 有交到卡片手上（#452）——沒交到的話那兩顆鈕就不見了', () => {
+    // **這條釘的是接線，不是卡片。** `Transcript` 到 `DeliverablesCard` 的那兩個 prop 拿掉任何一個，
+    // 卡片仍然畫得出來（檔名、說明、複製路徑都不需要讀檔），畫面看起來正常而鈕默默消失。
+    // 量過：拿掉 `download={deliverableDownload}`，這個檔以外一條都不紅。
+    const state = turn('交付。', () => [
+      ...present('c1', ['out/report.pdf']),
+      delivered({ callId: 'c1', files: [{ path: 'out/report.pdf' }] }),
+      ...reply('r1', '好了。'),
+    ]);
+    // 只畫鈕，不會發請求；真的發了就是這條測試問錯問題了。
+    const doFetch = (() => {
+      throw new Error('這條測試不該發請求');
+    }) as unknown as typeof globalThis.fetch;
+    const wiring = { threadId: 't1', baseUrl: '', fetch: doFetch };
+    render(
+      <Transcript
+        state={state}
+        isFresh={() => false}
+        deliverableFiles={createDeliverableFileStore(wiring)}
+        deliverableDownload={createDeliverableDownloader(wiring)}
+      />,
+    );
+    const card = screen.getByRole('region', { name: '這一輪交付的檔案，共 1 個' });
+    expect(within(card).getByRole('button', { name: '預覽：out/report.pdf' })).toBeTruthy();
+    expect(within(card).getByRole('button', { name: '下載：out/report.pdf' })).toBeTruthy();
   });
 
   it('改動卡（#443）也收到輪尾，排在交付卡前面；不跑到下一輪', () => {

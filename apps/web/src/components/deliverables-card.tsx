@@ -6,19 +6,25 @@
  * `PresentedFileCard`（`packages/client/ui-deliverables/src/client/`，`ddefc45`）：檔案圖示、檔名、說明（沒給就退回
  * 副檔名）、一顆動作；超過 {@link COLLAPSED_COUNT} 個先收起。
  *
- * **動作只有「複製路徑」**（#441 決議 3）：dsh 的「在 Host 上開啟」不做——部署在多人共用的遠端主機、經 SSH 轉 port
+ * **不做「在 Host 上開啟」**（#441 決議 3）：dsh 有那顆，我們沒有——部署在多人共用的遠端主機、經 SSH 轉 port
  * 連進來，在 Host 上開啟使用者看不到，而且等於讓瀏覽器驅動伺服器開程式。
  *
  * **每個檔案帶著讀檔路由的座標**（{@link LocatedFile}，[#452](https://github.com/DemianLi/nexus-agent/issues/452)）：
- * 這一刀只接線，畫面一點都沒動；預覽與下載是下一刀，那時 `(seq, index)` 已經在手上。
+ * 第一刀接線，第二刀拿那組 `(seq, index)` 開預覽（{@link DeliverablePreview}），第三刀是下載
+ * （{@link DownloadIconButton}）。三顆動作鈕**各自獨立可選**：`preview` 與 `download` 哪個沒給就不畫哪顆，
+ * 複製路徑一直都在——它不需要讀檔。
  */
 
-import { Check, ChevronDown, ChevronUp, Copy, FileText } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Copy, Eye, FileText } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
+import { DownloadIconButton } from '@/components/deliverable-download-button';
+import { DeliverablePreview } from '@/components/deliverable-preview';
 import { Button } from '@/components/ui/button';
 import { copyText } from '@/lib/clipboard';
+import type { DeliverableDownloader } from '@/lib/deliverable-download';
+import type { DeliverableFileStore } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import { basename } from '@/lib/present-view';
 
@@ -69,8 +75,19 @@ function CopyPathButton({ path }: { path: string }) {
   );
 }
 
-export function DeliverablesCard({ files }: { files: readonly LocatedFile[] }) {
+export function DeliverablesCard({
+  files,
+  preview,
+  download,
+}: {
+  files: readonly LocatedFile[];
+  /** 沒給就不畫預覽鈕——卡片其餘的部分（含複製路徑）不需要它。 */
+  preview?: DeliverableFileStore;
+  /** 沒給就不畫下載鈕，預覽面裡讀不到的那幾格也不畫。 */
+  download?: DeliverableDownloader;
+}) {
   const [expanded, setExpanded] = useState(false);
+  const [showing, setShowing] = useState<LocatedFile | undefined>(undefined);
   if (files.length === 0) return null;
   const collapsible = files.length > COLLAPSED_COUNT;
   const shown = collapsible && !expanded ? files.slice(0, COLLAPSED_COUNT) : files;
@@ -98,6 +115,20 @@ export function DeliverablesCard({ files }: { files: readonly LocatedFile[] }) {
               </span>
               <span className="text-muted-foreground font-mono text-xs break-all">{file.path}</span>
             </div>
+            {preview !== undefined && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8 shrink-0"
+                title={`預覽：${file.path}`}
+                aria-label={`預覽：${file.path}`}
+                onClick={() => setShowing(file)}
+              >
+                <Eye />
+              </Button>
+            )}
+            {download !== undefined && <DownloadIconButton file={file} downloader={download} />}
             <CopyPathButton path={file.path} />
           </li>
         ))}
@@ -114,6 +145,17 @@ export function DeliverablesCard({ files }: { files: readonly LocatedFile[] }) {
           {expanded ? '收起' : `顯示全部 ${files.length} 個`}
           {expanded ? <ChevronUp /> : <ChevronDown />}
         </Button>
+      )}
+      {preview !== undefined && (
+        <DeliverablePreview
+          file={showing}
+          store={preview}
+          downloader={download}
+          open={showing !== undefined}
+          onOpenChange={(open) => {
+            if (!open) setShowing(undefined);
+          }}
+        />
       )}
     </section>
   );

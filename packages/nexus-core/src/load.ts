@@ -61,7 +61,14 @@ export async function loadPlugins(
     // 開頭就是 `if (this.disabled) return`（`vendor/loader/src/config/entry.ts` 的
     // `Entry.refresh`），從來不 `init()`。dsh 那條「跑了再撤」只存在於 `update()`
     // ——即時重載的路徑，而我們**沒有** `update()`，設定只在組裝時讀一次。
-    if (disabled) continue;
+    if (disabled) {
+      // **跳過之前留一個痕跡。** 少了這一行，「這一顆沒有提供服務」的兩種成因——被關掉、
+      // 與這次組裝根本沒有經過部署設定層——在折疊那側長得一模一樣，而正確答案相反
+      // （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。理由見
+      // {@link ./registry.ts | DisabledEntryView}。
+      registry.markDisabled(plugin.name);
+      continue;
+    }
     const undos: (() => void)[] = [];
     const tracked = trackUndo(registry, undos);
     const leave = registry.enter(origin);
