@@ -102,7 +102,9 @@ function PageBody({
 
   return (
     <>
-      <pre className="overflow-x-auto px-4 py-3 font-mono text-xs leading-relaxed">{state.text}</pre>
+      <pre className="overflow-x-auto px-4 py-3 font-mono text-xs leading-relaxed">
+        {state.text}
+      </pre>
       {!state.eof && (
         <div className="px-4 pb-4">
           <Button

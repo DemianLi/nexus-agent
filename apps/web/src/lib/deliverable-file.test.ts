@@ -37,12 +37,7 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 /** 讀一次並等它落地。 */
-async function load(
-  store: ReturnType<typeof storeWith>['store'],
-  seq = 1,
-  index = 0,
-  offset = 0,
-) {
+async function load(store: ReturnType<typeof storeWith>['store'], seq = 1, index = 0, offset = 0) {
   store.load(seq, index, offset);
   await vi.waitFor(() => expect(store.read(seq, index, offset)).not.toBe('loading'));
   return store.read(seq, index, offset);
@@ -131,7 +126,9 @@ describe('交付檔的讀取', () => {
   });
 
   it('version 沒換就不動其他頁', async () => {
-    const { store } = storeWith((url) => json({ ...PAGE, offset: url.includes('offset=40') ? 40 : 0 }));
+    const { store } = storeWith((url) =>
+      json({ ...PAGE, offset: url.includes('offset=40') ? 40 : 0 }),
+    );
     await load(store, 1, 0, 0);
     await load(store, 1, 0, 40);
     expect(store.read(1, 0, 0)).toMatchObject({ version: 'v1', offset: 0 });
