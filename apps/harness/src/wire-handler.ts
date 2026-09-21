@@ -50,6 +50,8 @@ import {
   THREADS_PATH,
   changesDiffPath,
   changesSummaryPath,
+  deliverableDownloadPath,
+  deliverableFilePath,
   encodeSseFrame,
   errorResponse,
   isFeedbackMethod,
@@ -74,6 +76,18 @@ import type { CommandExecutor } from '@nexus/plugin-commands';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { HistoryQueryError, historyPage } from './conversation-history.js';
+import type {
+  DeliverableRefusal,
+  DeliverableResult,
+  LocatedDeliverable,
+} from './deliverable-files.js';
+import {
+  DELIVERABLE_MAX_LINES,
+  locateDeliverable,
+  locateDeliverableFile,
+  readDeliverableBytes,
+  readDeliverablePage,
+} from './deliverable-files.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import { isTrustedWireRequest } from './request-trust.js';
 import type { StoredThreadList } from './session-list.js';
@@ -210,6 +224,15 @@ export interface ThreadAgent {
    * 後綴）歸 {@link attachPersistence}，由組裝點自己記著。
    */
   readonly rootSeed?: readonly SessionEvent[];
+  /**
+   * 這一次組裝的工作區根，**沒給 `--workspace` 就是 `undefined`**
+   * （[#452](https://github.com/DemianLi/nexus-agent/issues/452)）。
+   *
+   * 兩條交付讀檔路由拿它當錨。**由組裝點交出來，不是這裡算的**——算它的是
+   * `createCliAgent`，而呼叫端不准再寫一次 `resolve(cwd, ...)`（見 `cli.ts` 的
+   * `resolveWorkspaceRoot`）。
+   */
+  readonly workspaceRoot?: string;
 }
 
 export interface WireHandlerOptions {
@@ -265,8 +288,9 @@ function json(body: unknown, status = 200): Response {
 }
 
 /**
- * `/threads/:id/stream`、`/threads/:id/history`、`/threads/:id/changes/{summary,diff}` 或
- * `/threads/:id/commands/:method`，都不是就 undefined。
+ * `/threads/:id/stream`、`/threads/:id/history`、`/threads/:id/changes/{summary,diff}`、
+ * `/threads/:id/deliverables/{file,download}` 或 `/threads/:id/commands/:method`，
+ * 都不是就 undefined。
  */
 function parsePath(
   pathname: string,
@@ -275,6 +299,8 @@ function parsePath(
   | { readonly kind: 'history'; readonly threadId: string }
   | { readonly kind: 'changes-summary'; readonly threadId: string }
   | { readonly kind: 'changes-diff'; readonly threadId: string }
+  | { readonly kind: 'deliverable-file'; readonly threadId: string }
+  | { readonly kind: 'deliverable-download'; readonly threadId: string }
   | { readonly kind: 'command'; readonly threadId: string; readonly method: string }
   | undefined {
   const segments = pathname.split('/').filter((segment) => segment !== '');
@@ -291,6 +317,12 @@ function parsePath(
   if (segments.length === 4 && segments[2] === 'changes') {
     if (pathname === changesSummaryPath(threadId)) return { kind: 'changes-summary', threadId };
     if (pathname === changesDiffPath(threadId)) return { kind: 'changes-diff', threadId };
+  }
+  if (segments.length === 4 && segments[2] === 'deliverables') {
+    if (pathname === deliverableFilePath(threadId)) return { kind: 'deliverable-file', threadId };
+    if (pathname === deliverableDownloadPath(threadId)) {
+      return { kind: 'deliverable-download', threadId };
+    }
   }
   if (segments.length === 4 && segments[2] === 'commands' && segments[3] !== undefined) {
     return { kind: 'command', threadId, method: segments[3] };
@@ -320,6 +352,55 @@ function changesResponse(body: unknown, status = 200): Response {
     : new Response(String(body), { status, headers: { 'cache-control': 'no-store' } });
 }
 
+/**
+ * 一個拒絕的理由對到哪個 HTTP status。
+ *
+ * **不壓成同一個碼，因為前端對每一種的動作不一樣**：`not-text` 是「改給下載鈕」，`too-large`
+ * 是「講一句太大了」，`no-anchor` 與 `not-found` 才是「這張卡讀不到」。壓掉它們等於把前端
+ * 唯一的判別依據拿走——而錯的那一側長得跟對的一模一樣。
+ */
+const DELIVERABLE_STATUS: Readonly<Record<DeliverableRefusal, number>> = {
+  'bad-request': 400,
+  'no-anchor': 404,
+  'not-found': 404,
+  'not-regular-file': 404,
+  'too-large': 413,
+  // **422 而不是 415。** 415 這條線上已經有人用了——`wrongMediaType` 拿它講「你的請求沒帶
+  // `content-type: application/json`」。兩件事壓在同一個碼上，前端就分不出「我忘了帶 header」
+  // 與「這個檔是二進位、改給下載鈕」，而那是兩個完全不同的修法。
+  'not-text': 422,
+};
+
+/** 交付兩條路由的拒絕：協定同 `changes`，裸 status ＋純文字 ＋不快取。 */
+function deliverableRefused(result: {
+  readonly reason: DeliverableRefusal;
+  readonly message: string;
+}): Response {
+  return new Response(result.message, {
+    status: DELIVERABLE_STATUS[result.reason],
+    headers: { 'cache-control': 'no-store' },
+  });
+}
+
+/**
+ * 下載那條的 `content-disposition`。
+ *
+ * 檔名取宣告路徑的最後一段。**兩種寫法都給**：`filename=` 那一份把非 ASCII 換成底線（舊
+ * 瀏覽器只看得懂它），`filename*=` 那一份帶完整的 UTF-8。換掉的還有引號與控制字元——它們
+ * 進得了 header 值就能把這個欄位切成兩半。
+ */
+function attachmentHeader(declaredPath: string): string {
+  const name =
+    declaredPath
+      .split('/')
+      .filter((part) => part !== '')
+      .pop() ?? 'deliverable';
+  // 白名單寫法：只留可列印的 ASCII，剩下的（含控制字元）一律換掉。用黑名單列控制字元的話
+  // 少列一個就是一個漏，而漏的後果是 header 被切成兩半。
+  const ascii = name.replaceAll(/[^\u0020-\u007e]|["\\]/gu, '_');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
 function requestedChannels(body: EventStreamRequest): readonly WireChannel[] | undefined {
   const { channels } = body;
   if (!Array.isArray(channels) || channels.length === 0 || !channels.every(isWireChannel)) {
@@ -341,6 +422,15 @@ interface ThreadState {
   readonly executor: CommandExecutor;
   readonly feedback: FeedbackService | undefined;
   readonly workspaceChanges: WorkspaceChanges | undefined;
+  /**
+   * 接回來那批事件的長度；沒續接就是 0（[#452](https://github.com/DemianLi/nexus-agent/issues/452)）。
+   *
+   * **它是一條分界線**：`seq < storedCount` 的事件是上一個行程寫的，這個行程手上的
+   * {@link workspaceRoot} 不是它們的錨。見 `deliverable-files.ts` 的檔頭。
+   */
+  readonly storedCount: number;
+  /** 這一次組裝的工作區根，沒給 `--workspace` 就是 `undefined`。見 {@link ThreadAgent.workspaceRoot}。 */
+  readonly workspaceRoot: string | undefined;
   /**
    * 有沒有一次 `slash.run` 還沒回來。
    *
@@ -526,6 +616,10 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           }),
           feedback: threadAgent.feedback,
           workspaceChanges: threadAgent.workspaceChanges,
+          // **就是 seed 的長度**，不另外傳一個數字：兩個來源各記一次的話，有一天它們會不一樣，
+          // 而那時錯的方向是「把重播的事件當成這個行程寫的」——靜靜讀到另一個工作區的同名檔。
+          storedCount: threadAgent.rootSeed?.length ?? 0,
+          workspaceRoot: threadAgent.workspaceRoot,
           slashInFlight: false,
           dispose: async () => {
             // **參與者先收，比不變量還早**：它是唯一寫得動日誌的那一個，先讓它停手，
@@ -1037,6 +1131,90 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     }
   }
 
+  /**
+   * 兩條交付讀檔路由共用的前半：座標 → 一個通過所有閘門的檔。
+   *
+   * **`ready` 拿不到就拒，但那不是這條路的規則**，只是規則的推論：一條不在服務中的 thread，
+   * 這個行程一顆事件都沒往它寫，所以它每一顆事件都在 `seq < storedCount` 那一側——真正的
+   * 規則是逐事件的那一條（見 `deliverable-files.ts` 的檔頭）。[#504](https://github.com/DemianLi/nexus-agent/issues/504)
+   * 落地之後線以下的那些會有自己的錨，那時這裡要加的是冷讀 header，**契約不必改**。
+   */
+  async function locateRequested(
+    threadId: string,
+    search: URLSearchParams,
+  ): Promise<DeliverableResult<LocatedDeliverable>> {
+    const seq = coordinate(search.get('seq'));
+    const index = coordinate(search.get('index'));
+    if (seq === undefined || index === undefined) {
+      return { kind: 'refused', reason: 'bad-request', message: '交付檔的座標不對。' };
+    }
+    const state = ready.get(threadId);
+    const root = state?.workspaceRoot;
+    if (state === undefined || root === undefined) {
+      return {
+        kind: 'refused',
+        reason: 'no-anchor',
+        message: `讀不到：thread "${threadId}" 這台 server 沒有在服務，或這一次沒給 --workspace。`,
+      };
+    }
+    const declared = locateDeliverable(state.pump.sessionLog.events, state.storedCount, seq, index);
+    if (declared.kind === 'refused') return declared;
+    return locateDeliverableFile(root, declared.value);
+  }
+
+  /**
+   * `GET /threads/:id/deliverables/file?seq=&index=&offset=&limit=`
+   * （[#452](https://github.com/DemianLi/nexus-agent/issues/452)）：預覽一個宣告過的交付檔。
+   *
+   * 錯誤協定與狀態碼見 {@link DELIVERABLE_STATUS}；契約見 `@nexus/wire` 的 `deliverableFilePath`。
+   */
+  async function handleDeliverableFile(
+    threadId: string,
+    search: URLSearchParams,
+  ): Promise<Response> {
+    const offset = coordinate(search.get('offset') ?? '0');
+    const limit = coordinate(search.get('limit') ?? String(DELIVERABLE_MAX_LINES));
+    if (offset === undefined || limit === undefined) {
+      return new Response('交付檔的翻頁參數不對。', {
+        status: 400,
+        headers: { 'cache-control': 'no-store' },
+      });
+    }
+    const found = await locateRequested(threadId, search);
+    if (found.kind === 'refused') return deliverableRefused(found);
+    const page = await readDeliverablePage(found.value, offset, limit);
+    if (page.kind === 'refused') return deliverableRefused(page);
+    return new Response(JSON.stringify(page.value), {
+      headers: {
+        'content-type': `${JSON_MEDIA_TYPE}; charset=utf-8`,
+        'cache-control': 'no-store',
+      },
+    });
+  }
+
+  /**
+   * `GET /threads/:id/deliverables/download?seq=&index=`：下載一個宣告過的交付檔，**原始位元組**。
+   *
+   * **它跟隔壁每一條 `GET` 一樣要帶 `content-type: application/json`**，所以前端不能用
+   * `<a download>`——理由與後果逐字寫在 `@nexus/wire` 的 `deliverableDownloadPath`。
+   */
+  async function handleDeliverableDownload(
+    threadId: string,
+    search: URLSearchParams,
+  ): Promise<Response> {
+    const found = await locateRequested(threadId, search);
+    if (found.kind === 'refused') return deliverableRefused(found);
+    const bytes = await readDeliverableBytes(found.value);
+    if (bytes.kind === 'refused') return deliverableRefused(bytes);
+    return new Response(bytes.value, {
+      headers: {
+        'content-type': 'application/octet-stream',
+        'content-disposition': attachmentHeader(found.value.stat.path),
+        'cache-control': 'no-store',
+      },
+    });
+  }
+
   function firstHumanText(input: unknown): string | undefined {
     const messages = (input as { messages?: unknown })?.messages;
     if (!Array.isArray(messages)) {
@@ -1080,6 +1258,15 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
         if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
         return handleHistory(route.threadId, searchParams);
+      }
+      if (route?.kind === 'deliverable-file' || route?.kind === 'deliverable-download') {
+        if (request.method !== 'GET') return new Response('not found', { status: 404 });
+        // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。**下載也不例外**，見
+        // `@nexus/wire` 的 `deliverableDownloadPath`。
+        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+        return route.kind === 'deliverable-file'
+          ? handleDeliverableFile(route.threadId, searchParams)
+          : handleDeliverableDownload(route.threadId, searchParams);
       }
       if (route?.kind === 'changes-summary' || route?.kind === 'changes-diff') {
         if (request.method !== 'GET') return new Response('not found', { status: 404 });
