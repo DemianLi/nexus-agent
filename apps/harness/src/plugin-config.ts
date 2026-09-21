@@ -17,6 +17,13 @@
  * 出貨預設 → `$NEXUS_AGENT_HOME/cordis.patch.yml` → 任意個 `--patch`，照命令列順序。
  * **不從目前目錄讀**——那一份會跟著 clone 一起到來，而它能停用核准。
  *
+ * ## 權限檢查只管使用者那兩層
+ *
+ * {@link assertPrivateFile} 跑在 home 那一層與 `--patch` 上，**不跑在出貨的 `cordis.yml`
+ * 上**。這不是漏掉：信任邊界劃在安裝目錄上——`cordis.yml` 跟著 `apps/harness/` 一起來，
+ * 別人動得了它就等於別人動得了整棵樹的原始碼，那時候檢查一個檔的模式位沒有任何意義。
+ * 使用者那兩層不一樣：它們住在 home 底下，是安裝之後才出現、而且**預期會被編輯**的東西。
+ *
  * ## 驗證排在疊加之後
  *
  * 條目的形狀（{@link entrySchema}）**在 patch 全部疊完之後才驗**。先驗再疊的話，一個 patch
@@ -39,6 +46,7 @@
 
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import type { PluginEntry } from '@nexus/core';
 import { parse as parseYaml } from 'yaml';
@@ -395,9 +403,15 @@ export function loadOverlayPatches(path: string): ConfigPatch[] {
   return parsePatchList(source, path);
 }
 
-/** 出貨那一份的絕對路徑。`apps/harness/src/` 往上一層就是 `apps/harness/`。 */
+/**
+ * 出貨那一份的絕對路徑。`apps/harness/src/` 往上一層就是 `apps/harness/`。
+ *
+ * **`fileURLToPath` 而不是 `.pathname`**：`.pathname` 不做百分號解碼，安裝路徑裡只要有一個
+ * 空白就會變成 `%20`，而 `readFileSync` 開不了那個字面路徑。本機的路徑剛好沒有這種字元，
+ * 所以這一格測不出來——它是讀出來的，不是量出來的。
+ */
 export function shippedConfigPath(): string {
-  return new URL(`../${SHIPPED_CONFIG_FILENAME}`, import.meta.url).pathname;
+  return fileURLToPath(new URL(`../${SHIPPED_CONFIG_FILENAME}`, import.meta.url));
 }
 
 /**
