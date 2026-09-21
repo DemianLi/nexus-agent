@@ -97,15 +97,27 @@ function frame(method: string, time: number, data: Record<string, unknown>): Eve
 /**
  * 一筆交付在線上的 `custom` 事件 `data`。**即時（pump）與這裡共用這一個**，兩條路才產得出同一種 frame
  * （[#441](https://github.com/DemianLi/nexus-agent/issues/441)）。只收 root 那一份的：呼叫端自己篩。
+ * **`seq` 是那顆事件在 root 日誌裡的位置**（[#452](https://github.com/DemianLi/nexus-agent/issues/452)）：
+ * 配上檔案在 `files` 裡的位置，`(seq, index)` 就是讀檔路由的座標。同 {@link workspaceChangesData}——
+ * 兩條 `custom` frame 用的是同一份日誌上的同一種座標。
+ *
+ * **兩條路各自傳 `seq` 進來，不從 `presented` 裡拿**：酬載是 plugin 寫的，`seq` 是日誌 append 當下
+ * 才決定的，寫的人手上還沒有它。
+ *
  * @param presented - 日誌裡那一顆的酬載。
+ * @param seq - 那顆 `deliverables/presented` 的 `seq`。
  * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `DeliverablesPresentedPayload`。
  */
-export function deliverablesData(presented: SessionEventMap['deliverables/presented']): {
+export function deliverablesData(
+  presented: SessionEventMap['deliverables/presented'],
+  seq: number,
+): {
   readonly name: typeof DELIVERABLES_PRESENTED;
   readonly payload: DeliverablesPresentedPayload;
 } {
   const payload: DeliverablesPresentedPayload = {
     callId: presented.callId,
+    seq,
     files: presented.files.map((file) => ({ ...file })),
   };
   return { name: DELIVERABLES_PRESENTED, payload };
@@ -277,7 +289,7 @@ export function historyFrames(
       }
       case 'deliverables/presented':
         // 這裡讀的本來就只有 root 那一份，子代理的交付不在裡面——同即時那條規則。
-        frames.push(frame('custom', event.time, deliverablesData(event.data)));
+        frames.push(frame('custom', event.time, deliverablesData(event.data, event.seq)));
         break;
       case 'workspace/changes':
         // 同上：只讀 root 那一份，而記錄器本來就只寫在 root。

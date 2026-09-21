@@ -68,8 +68,13 @@ function present(callId: string, paths: readonly string[]): Event[] {
   ];
 }
 
-function delivered(payload: DeliverablesPresentedPayload): Event {
-  return frame('custom', [], { name: DELIVERABLES_PRESENTED, payload });
+/**
+ * **`seq` 由這裡補，呼叫點不寫**（[#452](https://github.com/DemianLi/nexus-agent/issues/452)）：這幾條測
+ * 的是交付卡怎麼歸位，跟讀檔路由的座標無關。但折疊器要求酬載帶得出座標（缺了就整顆略過），所以
+ * 要有一個。去重的鍵是 `callId` 不是 `seq`，同一個值餵給每一條是安全的。
+ */
+function delivered(payload: Omit<DeliverablesPresentedPayload, 'seq'>, seq = 0): Event {
+  return frame('custom', [], { name: DELIVERABLES_PRESENTED, payload: { ...payload, seq } });
 }
 
 /** 一輪：frame 照線上的順序取 seq，所以本體要在 `running` 之後才建（先建的 seq 比較小，會被當成重複丟掉）。 */
