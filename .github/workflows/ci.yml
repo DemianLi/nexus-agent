@@ -100,11 +100,18 @@ jobs:
             echo "尚無 package.json，略過 TypeScript 檢查。"
             exit 0
           fi
-          # `docs/operations.md` 是刻意的窄例外，不是「開始掃 .md」：`documented-fixture.ts` 會從
-          # 那份文件讀核准 fixture 的 `--plugins` 值餵進 serve/cli 的測試（#490）。只改那份文件的
-          # PR 命不中上面任何一條，測試整段跳過、gate 直接綠——而那正是這道護欄唯一承重的案例。
-          # 別放寬成所有 .md：「純文件的 PR 不會卡住」是設計，不是疏漏。
-          if grep -qE '\.(ts|tsx|mts|cts)$|^package\.json$|^pnpm-lock\.yaml$|^tsconfig.*\.json$|^docs/operations\.md$' changed.txt; then
+          # 底下兩個非 TypeScript 的檔名是刻意的窄例外，不是「開始掃文件與 YAML」：
+          #
+          # - `docs/operations.md`：`documented-fixture.ts` 會從那份文件讀核准 fixture 的
+          #   `--plugins` 值餵進 serve/cli 的測試（#490）。
+          # - `apps/harness/cordis.yml`：出貨的 plugin 清單，`plugin-config.test.ts` 會拿它組一次
+          #   agent 再跟 `DEFAULT_PLUGINS` 逐條比（#454）。**它是組裝的唯一來源**，只改它的 PR
+          #   正是最需要跑測試的那一種。
+          #
+          # 兩者的共通點是「測試會讀這個檔」。只改它們的 PR 命不中上面任何一條，測試整段跳過、
+          # gate 直接綠——而那正是這道護欄唯一承重的案例。別放寬成所有 `.md` 或所有 `.yml`：
+          # 「純文件的 PR 不會卡住」是設計，不是疏漏。
+          if grep -qE '\.(ts|tsx|mts|cts)$|^package\.json$|^pnpm-lock\.yaml$|^tsconfig.*\.json$|^docs/operations\.md$|^apps/harness/cordis\.yml$' changed.txt; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
