@@ -252,7 +252,7 @@ describe('核准那份清單', () => {
       // **fixture 是從 `docs/operations.md` 讀進來的，不是抄的**（#490）——文件教人跑的那道
       // 指令改了路徑，這一條會當場紅。開發計劃 Phase 5 的驗收句共用同一份：預設清單不觸發
       // 任何中斷，少了它「核准工具」那半句在瀏覽器裡跑不出來。
-      argv: ['--port', '0', '--plugins', documentedFixture()],
+      argv: ['--port', '0', '--patch', documentedFixture()],
       log: () => undefined,
       env: {},
     });

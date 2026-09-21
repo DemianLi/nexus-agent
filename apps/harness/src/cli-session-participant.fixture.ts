@@ -3,7 +3,7 @@
  * `goal/change` 就吭聲的配套入口。
  *
  * ```
- * pnpm --filter @nexus/harness run cli -- --patch src/cli-session-participant.patch.yml "回聲一下"
+ * pnpm --filter @nexus/harness run cli --patch src/cli-session-participant.patch.yml "回聲一下"
  * ```
  *
  * **它是一顆 plugin，不是一份清單**（[#455](https://github.com/DemianLi/nexus-agent/issues/455)）：

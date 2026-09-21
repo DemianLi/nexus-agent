@@ -400,7 +400,7 @@ describe('披露', () => {
   it('--plugins 換掉清單之後，開著旗標也安靜地什麼都不做', async () => {
     const { printer, out } = recorder();
     await runCli({
-      argv: ['--plugins', 'src/approval.fixture.ts', '--goal-driver', '動手'],
+      argv: ['--plugins', 'src/plugins-flag.fixture.ts', '--goal-driver', '動手'],
       input: new PassThrough(),
       output: new PassThrough(),
       printer,
