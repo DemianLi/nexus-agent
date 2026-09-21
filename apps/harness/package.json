@@ -47,6 +47,7 @@
     "@nexus/plugin-memory": "workspace:*",
     "@nexus/plugin-plan-mode": "workspace:*",
     "@nexus/plugin-quickjs": "workspace:*",
+    "@nexus/plugin-sandbox-policy": "workspace:*",
     "@nexus/plugin-skills": "workspace:*",
     "@nexus/plugin-submit-record": "workspace:*",
     "@nexus/plugin-telemetry-otel": "workspace:*",
@@ -59,6 +60,7 @@
     "deepagents": "~1.13.1",
     "langchain": "^1.5.10",
     "langsmith": ">=0.7.1 <0.10.0",
+    "yaml": "^2.9.0",
     "zod": "^4.3.6"
   }
 }

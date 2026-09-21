@@ -46,6 +46,8 @@ import {
   formatOrigin,
   isFeedbackEvent,
   loadPlugins,
+  MESSAGE_FEEDBACK_SERVICE,
+  SESSION_TELEMETRY_SERVICE,
   SessionTelemetryCoordinator,
   type AgentCheckpointer,
   type AgentModel,
@@ -224,7 +226,7 @@ export interface CreateNexusAgentOptions {
  * `模型輪數 = floor((recursionLimit - 1) / 每輪格數)`，所以**預設組裝每一輪是三格，
  * 100 換算成 33 輪而不是 49**。2026-09-03 實測，逐格對照見
  * [`looping-model.ts`](./looping-model.ts) 的檔頭。`beforeAgent` 也是節點，只是每次 invoke 走一次：
- * CLI 與 serve 給了 `--workspace` 時，`DEFAULT_PLUGINS` 裡的工作區指令那顆每次 invoke 再吃一格，
+ * CLI 與 serve 給了 `--workspace` 時，出貨清單裡的工作區指令那顆每次 invoke 再吃一格，
  * 100 換算成 32 輪（2026-09-18 實測，見 `@nexus/plugin-agent-instructions` 檔頭「代價」）。
  *
  * **這個常數沒有跟著動。** 方向是護欄變嚴不是變鬆，而校準的兩端換算過去都還成立（見
@@ -484,7 +486,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * 評分與評語的規則，**沒掛時是 `undefined`**。讀它的是 web 的 wire-handler：評分沒有模型
        * 那一側，所以它跟 `commands` 一樣從組裝點交出去（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。
        */
-      feedback: registry.feedback.service()?.value,
+      feedback: registry.services.get(MESSAGE_FEEDBACK_SERVICE),
       /**
        * plugin 提供的**服務**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
        *
@@ -503,8 +505,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * 披露那一層只有在拿到 `undefined` 的時候才渲染「未配置」——這是 dsh 的規矩，
        * 也是為什麼這裡回的是「有沒有掛」而不是一個保險的預設值。
        */
-      telemetrySharing: registry.telemetry.service()?.value.sharing as
-        SessionTelemetrySharingStatus | undefined,
+      telemetrySharing: registry.services.get(SESSION_TELEMETRY_SERVICE)?.sharing,
       /**
        * 把一次組裝的**每一份**會話日誌接上遙測。**沒掛後端時回 `undefined`**——沒有後端
        * 就沒有出口，建一個把記錄丟進虛空的協調器只會讓熱路徑白付投影與脫敏的成本。
@@ -524,14 +525,14 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * @returns 收掉這一次接線的函式，或沒掛後端時的 `undefined`。
        */
       attachTelemetry(sessions: SessionRegistry): (() => Promise<void>) | undefined {
-        const mounted = registry.telemetry.service();
+        const mounted = registry.services.get(SESSION_TELEMETRY_SERVICE);
         if (mounted === undefined) return undefined;
-        const { sharing } = mounted.value;
+        const { sharing } = mounted;
         const mine = new Set<TelemetryAttachment>();
         const unobserve = sessions.observe(({ log }) => {
           const coordinator = new SessionTelemetryCoordinator({
             log,
-            sink: mounted.value,
+            sink: mounted,
             // 現讀而不是快照：`rules()` 每次捕獲都重新問一遍，補送歷史時套的是**現在**
             // 掛著的策略。這是 dsh waterfall 的語意，折疊要接得住。
             rules: () => registry.telemetry.rules(),

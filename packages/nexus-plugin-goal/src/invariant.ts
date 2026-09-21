@@ -104,7 +104,7 @@ export const goalStreamInvariant: InvariantInstaller = (subject, fail) => {
 /**
  * 把 goal 串的配套入口掛上去。
  *
- * **它進 `DEFAULT_PLUGINS`，但域本身不進**——見 `index.ts` 檔頭。配套入口不裝功能只裝
+ * **它進出貨清單，但域本身不進**——見 `index.ts` 檔頭。配套入口不裝功能只裝
  * 觀察，所以它適用那份清單裡「十一個配套入口全進」的那條例外；域是功能，功能等它有
  * 人打得到的入口再說。
  *
@@ -124,3 +124,5 @@ export const goalInvariantPlugin: NexusPlugin = {
     registry.invariants.register(GOAL_INVARIANT_PACKAGE, goalStreamInvariant);
   },
 };
+
+export default goalInvariantPlugin;

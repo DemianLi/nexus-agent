@@ -31,23 +31,26 @@ import { Command, MemorySaver } from '@langchain/langgraph';
 import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 
 import { createNexusAgent } from './agent-factory.js';
-import { createCliAgent, DEFAULT_PLUGINS } from './cli.js';
+import { createCliAgent } from './cli.js';
 import { ContainedFilesystemBackend, GRANT_MISMATCH_NOTE } from './contained-backend.js';
 import type { SandboxMode } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
 import {
   BLANK_JUSTIFICATION_REFUSAL,
+  createSandboxPolicyPlugin,
   escalationReason,
   MISSING_TARGET_REFUSAL,
   nonWideningRefusal,
   SANDBOX_ESCALATION_HINT,
   SANDBOX_ESCALATION_TOOL_NAME,
-} from './sandbox-escalation.js';
-import { SandboxModeController } from './sandbox-mode.js';
-import { createSandboxPolicyPlugin, sandboxPolicySentence } from './sandbox-policy.js';
+  SandboxModeController,
+} from '@nexus/plugin-sandbox-policy';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedToolCall, ScriptedTurn } from './scripted-model.js';
+import { shippedPlugins } from './fixtures.js';
 import { createHostServicesPlugin } from '@nexus/core';
+
+const shipped = await shippedPlugins();
 
 /** 把一則訊息的 `content` 攤成字串，同 `sandbox-policy.test.ts`。 */
 function flatten(content: unknown): string {
@@ -673,7 +676,7 @@ describe('升級', () => {
    * 這裡走**產品路徑**（`createCliAgent`），量模型實際拿到的工具清單。
    */
   it('產品路徑：沒有 --workspace 的組裝，模型的工具清單裡沒有升級工具；有的話才有', async () => {
-    const bare = await createCliAgent({ live: false }, DEFAULT_PLUGINS, root);
+    const bare = await createCliAgent({ live: false }, shipped, root);
     try {
       await bare.agent.invoke(toAgentInvocation('看一下。'), {
         configurable: { thread_id: 'bare' },
@@ -686,7 +689,7 @@ describe('升級', () => {
       await bare.dispose();
     }
 
-    const fenced = await createCliAgent({ live: false, workspace: root }, DEFAULT_PLUGINS, root);
+    const fenced = await createCliAgent({ live: false, workspace: root }, shipped, root);
     try {
       await fenced.agent.invoke(toAgentInvocation('看一下。'), {
         configurable: { thread_id: 'fenced' },
@@ -697,12 +700,5 @@ describe('升級', () => {
     } finally {
       await fenced.dispose();
     }
-  });
-
-  it('read-only 那句叫模型照升級指引做，但不在提示句裡講模式名', () => {
-    const sentence = sandboxPolicySentence('read-only', '/w');
-    expect(sentence).toContain('升級指引');
-    expect(sentence).not.toContain('workspace-write');
-    expect(sentence).not.toContain('danger-full-access');
   });
 });

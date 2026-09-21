@@ -59,3 +59,5 @@ export const wireInvariantPlugin: NexusPlugin = {
     registry.invariants.register(WIRE_INVARIANT_PACKAGE, install);
   },
 };
+
+export default wireInvariantPlugin;

@@ -6,15 +6,18 @@
  * `permissions` / `approvals`）沒有名字可撞，走匿名追加。折疊成
  * `createDeepAgent` 參數的部分在 {@link ./fold.ts}。
  *
- * 外加七條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
+ * 外加六條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
  * {@link LifecycleRegistrationPoint} 回答「這些東西怎麼收掉」，
- * {@link TelemetryRegistrationPoint} 回答「這個會話發生的事往哪裡送、送之前怎麼洗」，
- * {@link FeedbackRegistrationPoint} 回答「人事後對這個會話的評分照什麼規則記」，
+ * {@link TelemetryRegistrationPoint} 回答「送出去之前怎麼洗」，
  * {@link InvariantRegistrationPoint} 回答「這個會話發生的事有沒有破壞誰的約定」，
  * {@link CommandRegistrationPoint} 回答「人打得出哪些斜線命令」，
  * {@link SessionRegistrationPoint} 回答「誰拿得到這個會話的日誌」，
  * {@link ServiceRegistrationPoint} 回答「這次組裝的協作者從哪裡拿」（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
- * 九個註冊點回答的是「這個 agent 由什麼組成」，七者正交。
+ * 九個註冊點回答的是「這個 agent 由什麼組成」，六者正交。
+ *
+ * **遙測後端與回饋規則不在這份清單上**，它們是 `services` 上的兩個名字
+ * （[#477](https://github.com/DemianLi/nexus-agent/issues/477)）：兩者本來各有一個「一個
+ * registry 只收一個」的註冊點，而那正是 `services.provide()` 一次解決的事。
  */
 
 import type { StructuredTool } from '@langchain/core/tools';
@@ -202,15 +205,32 @@ export interface CapabilityRegistrationPoint {
 }
 
 /**
- * 服務名 → 服務型別的對照表。**故意是空的**：每個服務由**擁有那個型別的套件**用宣告合併
- * 補一格，照 dsh 的做法（`declare module '@deepseek-ai/cordis' { interface Context { goals: GoalService } }`，
+ * 服務名 → 服務型別的對照表。每個服務由**擁有那個型別的套件**用宣告合併補一格，照 dsh 的
+ * 做法（`declare module '@deepseek-ai/cordis' { interface Context { goals: GoalService } }`，
  * `references/deepseek-harness/packages/goal/goal/src/index.ts:59-63`，SHA `6b1808f`）。
  *
  * 沒補進來的名字仍然放得進去、取得出來，只是型別退到 `unknown`——`services` 的每個方法
  * 都有寬的那條多載。這與 dsh 一致：它的 `ctx.provide(name: string, value?: any)` 也留著。
+ *
+ * **下面兩格直接寫在這裡，不走宣告合併**，因為擁有這兩個型別的套件就是 core 自己
+ * （[#477](https://github.com/DemianLi/nexus-agent/issues/477)）。規則沒有變——補格子的還是
+ * 型別的擁有者，只是這一次擁有者不必從外面 `declare module` 進來。dsh 的位置也在這裡：
+ * `sessionTelemetry` 那一格宣告在基底套件 `dsh-session-telemetry`，不在 OTel 後端裡
+ * （`references/deepseek-harness/packages/session/session-telemetry/src/index.ts:19-21`）。
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface NexusServices {}
+export interface NexusServices {
+  /**
+   * 遙測後端。**沒人提供時 `services.get()` 回 `undefined`，那才是「未配置」**——這是 dsh
+   * 的規矩，披露那一層據它渲染。名字見
+   * {@link ./session-telemetry.ts | SESSION_TELEMETRY_SERVICE}。
+   */
+  sessionTelemetry: SessionTelemetryService;
+  /**
+   * 評分與評語的規則。沒人提供時是 `undefined`，wire 那一側據此回「這個組裝收不了回饋」。
+   * 名字見 {@link ./feedback.ts | MESSAGE_FEEDBACK_SERVICE}。
+   */
+  messageFeedback: FeedbackService;
+}
 
 /** 已經宣告過型別的服務名。空表時是 `never`，那時只有寬的多載可用。 */
 export type KnownServiceName = keyof NexusServices & string;
@@ -511,7 +531,14 @@ export interface LifecycleRegistrationPoint {
 }
 
 /**
- * `telemetry` 通道：掛遙測後端，以及**送出去之前**的脫敏規則。
+ * `telemetry` 通道：**送出去之前**的脫敏規則。
+ *
+ * **後端本身不在這裡**（[#477](https://github.com/DemianLi/nexus-agent/issues/477)）：它走
+ * {@link ServiceRegistrationPoint}，名字是 {@link ./session-telemetry.ts | SESSION_TELEMETRY_SERVICE}。
+ * 分成兩個通道不是我們的口味，**是 dsh 自己的形狀**——它把後端掛在 `interface Context`
+ * （`ctx.sessionTelemetry`），把脫敏掛在 `interface Events` 的 waterfall
+ * （`references/deepseek-harness/packages/session/session-telemetry/src/index.ts:19-40`，SHA `6b1808f`）。
+ * 兩個不同的軸，收成一格反而是偏離。
  *
  * **它與九個註冊點不同軸**，理由跟 lifecycle 一樣：產物不進 `createDeepAgent` 的參數。
  * 遙測是會話事件的第二個出口，走的不是 agent 那條線。
@@ -519,13 +546,15 @@ export interface LifecycleRegistrationPoint {
  * **`WIRE_CHANNELS` 那份下行白名單擋不到這條路。** 那是 web 傳輸的邊界，遙測是另一個
  * 出口——脫敏規則要自己長一份，不能靠 wire 那份代勞。
  *
- * **與 dsh 的偏離**（AGENTS.md 的偏離規則）：dsh 的後端是 Cordis `Service`
- * （`ctx.sessionTelemetry`，重複註冊由 Cordis 拋），脫敏是 waterfall 事件
- * `session-telemetry/record`。**我們沒有 service 註冊也沒有事件匯流排**，`deepagents` /
- * LangChain JS / LangGraph JS 三者都不提供可掛任意具名事件的 waterfall。退到最接近的：
- * 一個註冊點，`use` 用具名表擋重複（等價於 Service 的重複拋），`redact` 用依序折疊
- * 取代 waterfall。折疊丟掉的是「不呼叫 `next()` 就截斷底下所有規則」那個能力，**刻意
+ * **與 dsh 的偏離**（AGENTS.md 的偏離規則）：dsh 的脫敏是 waterfall 事件
+ * `session-telemetry/record`，而**我們沒有事件匯流排**——`deepagents` / LangChain JS /
+ * LangGraph JS 三者都不提供可掛任意具名事件的 waterfall。退到最接近的：`redact` 用依序
+ * 折疊取代 waterfall。折疊丟掉的是「不呼叫 `next()` 就截斷底下所有規則」那個能力，**刻意
  * 丟的**——理由見 {@link ./session-telemetry.ts | SessionTelemetryRedactRule}。
+ *
+ * （後端那一半原本也在這裡，配一張只收一個的具名表，登記的理由是「我們沒有 service
+ * 註冊」。[#459](https://github.com/DemianLi/nexus-agent/issues/459) 落地之後那個前提沒了，
+ * 所以那條偏離連同它的載體一起收掉。）
  */
 export interface TelemetryRegistrationPoint {
   /**
@@ -539,41 +568,6 @@ export interface TelemetryRegistrationPoint {
    * @returns 依註冊順序的每一條，帶著是誰掛的。
    */
   rules(): NamedEntry<SessionTelemetryRedactRule>[];
-  /**
-   * 掛遙測服務。**一個 registry 只收一個**——兩個後端就是兩份出境資料，而披露那一層
-   * 只講得出一種策略。
-   * @param service - 後端實例，必須表態 `sharing`。
-   * @returns 只撤銷這一次掛載的冪等 undo。
-   */
-  use(service: SessionTelemetryService): () => void;
-  /**
-   * 目前掛著的服務。**披露那一層要靠它回答「有沒有東西在送、策略是什麼」**——
-   * `undefined` 才是「未配置」，這是 dsh 的規矩。
-   * @returns 掛著的那個，或沒掛時的 `undefined`。
-   */
-  service(): NamedEntry<SessionTelemetryService> | undefined;
-}
-
-/**
- * `feedback` 通道：掛**評分與評語的規則**（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。
- *
- * 與 telemetry 同軸，偏離也是同一條：dsh 的評分是 Cordis `Service`（`ctx.messageFeedback`，重複
- * 註冊由 Cordis 拋），我們沒有 service 註冊，退到一張只收一個的具名表——兩份規則就是兩種「內容
- * 一樣算不算一次」的答案。產物不進 `createDeepAgent` 的參數：讀它的是 web 的 wire-handler，評分
- * 沒有模型那一側。
- */
-export interface FeedbackRegistrationPoint {
-  /**
-   * 掛上規則。**一個 registry 只收一個。**
-   * @param service - 規則的實作。
-   * @returns 只撤銷這一次掛載的冪等 undo。
-   */
-  use(service: FeedbackService): () => void;
-  /**
-   * 目前掛著的規則。沒掛時是 `undefined`——wire 那一側據此回「這個組裝收不了回饋」。
-   * @returns 掛著的那個，或 `undefined`。
-   */
-  service(): NamedEntry<FeedbackService> | undefined;
 }
 
 /**
@@ -760,7 +754,6 @@ export interface PluginRegistry {
   readonly memory: MemorySourceRegistrationPoint;
   readonly lifecycle: LifecycleRegistrationPoint;
   readonly telemetry: TelemetryRegistrationPoint;
-  readonly feedback: FeedbackRegistrationPoint;
   readonly invariants: InvariantRegistrationPoint;
   readonly commands: CommandRegistrationPoint;
   readonly sessions: SessionRegistrationPoint;
@@ -836,23 +829,6 @@ export function createRegistry(): InternalPluginRegistry {
   const sessionInstallers = new AnonymousEntries<SessionInstaller>();
   const disposers = new AnonymousEntries<Disposer>();
   const redactRules = new AnonymousEntries<SessionTelemetryRedactRule>();
-  // 具名表配一個固定的 key：唯一性與 undo 都不必另外寫，重複掛載直接撞在這裡。
-  const SERVICE_KEY = 'service';
-  const services = new NamedEntries<SessionTelemetryService>(
-    (_key, existing, incoming) =>
-      new Error(
-        `已經有遙測服務了：${formatOrigin(existing)} 掛過，${formatOrigin(incoming)} 又掛一次。` +
-          `一個 agent 只能有一個後端——兩個就是兩份出境資料，而披露只講得出一種策略。`,
-      ),
-  );
-  const feedbackServices = new NamedEntries<FeedbackService>(
-    (_key, existing, incoming) =>
-      new Error(
-        `已經有回饋規則了：${formatOrigin(existing)} 掛過，${formatOrigin(incoming)} 又掛一次。` +
-          `一個 agent 只能有一份——兩份就是兩種「內容一樣算不算一次」的答案。`,
-      ),
-  );
-
   const companions = new NamedEntries<InvariantInstaller>(duplicateCompanionError);
   const commandEntries = new NamedEntries<{
     definition: CommandDefinition;
@@ -1085,19 +1061,6 @@ export function createRegistry(): InternalPluginRegistry {
       return redactRules.append(rule, origin);
     },
     rules: () => [...redactRules.entries()],
-    use(service) {
-      const origin = requireOrigin('telemetry.use()');
-      return services.insert(SERVICE_KEY, service, origin);
-    },
-    service: () => services.get(SERVICE_KEY),
-  };
-
-  const feedbackPoint: FeedbackRegistrationPoint = {
-    use(service) {
-      const origin = requireOrigin('feedback.use()');
-      return feedbackServices.insert(SERVICE_KEY, service, origin);
-    },
-    service: () => feedbackServices.get(SERVICE_KEY),
   };
 
   const invariantPoint: InvariantRegistrationPoint = {
@@ -1183,7 +1146,6 @@ export function createRegistry(): InternalPluginRegistry {
     memory: memoryPoint,
     lifecycle: lifecyclePoint,
     telemetry: telemetryPoint,
-    feedback: feedbackPoint,
     invariants: invariantPoint,
     commands: commandPoint,
     sessions: sessionPoint,

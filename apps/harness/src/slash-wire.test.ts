@@ -32,10 +32,12 @@ import { createWireClient } from '@nexus/wire';
 import type { WireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { DEFAULT_PLUGINS, createCliAgent } from './cli.js';
-import { loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
+import { createCliAgent } from './cli.js';
+import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+
+const shipped = await shippedPlugins();
 
 const BASE_URL = 'http://slash.test';
 
@@ -60,7 +62,7 @@ afterEach(async () => {
  * 日誌是從 `attachTelemetry` 那條縫拿的——**那是組裝點唯一看得到 pump 那張註冊表的地方**
  * （`ThreadAgent` 的說明），拿它當觀測點不需要在 handler 上開新的洞。
  */
-async function wire(plugins: readonly PluginEntry[] = DEFAULT_PLUGINS): Promise<Wired> {
+async function wire(plugins: readonly PluginEntry[] = shipped): Promise<Wired> {
   const violations: string[] = [];
   const built = await createCliAgent({ live: false }, plugins, undefined, (error) =>
     violations.push(error.message),
@@ -229,7 +231,7 @@ describe('序列', () => {
           void registry.approvals.gate(() => ({ kind: 'ask', reason: '先給人看過' })),
       },
     };
-    const wired = await wire([...DEFAULT_PLUGINS, gate]);
+    const wired = await wire([...shipped, gate]);
     const events = await wired.client.openEvents('t');
     await wired.client.runStart('t', '把這句話回聲一次。');
     for await (const event of events) {

@@ -17,7 +17,7 @@
  * 本體，或人在核准卡上看。
  */
 
-import type { PluginEntry } from '@nexus/core';
+import type { NexusPlugin, PluginEntry } from '@nexus/core';
 
 // 兩半都搬去 core 了。這幾個名字留在這裡是**相容用的 re-export**，不是實作——
 // 新的呼叫端請直接從 `@nexus/core` 拿。
@@ -39,15 +39,25 @@ export const VALIDATION_CAPABILITY = 'validation';
  * 只認領 `validation` 這個能力名的 plugin。**一個 middleware 都不掛**——輸出校驗與圍堵都由
  * fold 打底，掛不掛這個 plugin 不影響它們在不在。
  *
+ * 模組層級的那一顆，不收設定所以沒有 `Config`。原本它寫在工廠的 return 裡，沒有名字也就
+ * 沒有辦法從外面指著它說話；[#454](https://github.com/DemianLi/nexus-agent/issues/454) 的
+ * 設定檔要靠 `name` 把模組 import 進來再拿 default export，所以抽出來，形狀跟其他十六個
+ * plugin 套件對齊。
+ */
+export const validationPlugin: NexusPlugin = {
+  name: 'validation',
+  apply(registry) {
+    registry.capabilities.provide(VALIDATION_CAPABILITY);
+  },
+};
+
+export default validationPlugin;
+
+/**
+ * 掛上去。
+ *
  * @returns 可載入的 plugin。
  */
 export function createValidationPlugin(): PluginEntry {
-  return {
-    plugin: {
-      name: 'validation',
-      apply(registry) {
-        registry.capabilities.provide(VALIDATION_CAPABILITY);
-      },
-    },
-  };
+  return { plugin: validationPlugin };
 }

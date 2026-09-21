@@ -55,3 +55,5 @@ export const quickJsInvariantPlugin: NexusPlugin = {
     registry.invariants.register(QUICKJS_INVARIANT_PACKAGE, install);
   },
 };
+
+export default quickJsInvariantPlugin;

@@ -14,6 +14,7 @@ import {
 } from '@nexus/wire';
 import type { ConversationState } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
+import { documentedFixture } from './documented-fixture.js';
 import { approvalAt, serveClient } from './fixtures.js';
 import { DEFAULT_PORT, parseServeArgs, runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
@@ -43,6 +44,8 @@ describe('serve 的旗標', () => {
       // 消費方」，而我們的入口點擁有輪迴圈，掛載的等價物就是這個旗標。（2026-09-19 註：dsh 的
       // base 其實出廠就掛著續行驅動器，這個前提待重核，見調研筆記 §三第 18 列。）
       goalDriver: false,
+      // 印設定預設關——它是一個診斷出口，不是一種跑法（#454）。
+      dumpConfig: false,
       help: false,
     });
   });
@@ -244,11 +247,12 @@ describe('serve 的命令面', () => {
  * 它紅了而 `cli.test.ts` 的「CLI 的核准政策」還綠著，代表關錯了入口。
  */
 describe('核准那份清單', () => {
-  it('README 寫的那道指令真的停得下來，也接得回去', async () => {
+  it('docs/operations.md 寫的那道指令真的停得下來，也接得回去', async () => {
     running = await runServe({
-      // README 與開發計劃 Phase 5 驗收句共用這一份 —— 預設清單不觸發任何中斷，
-      // 少了它「核准工具」那半句在瀏覽器裡跑不出來。
-      argv: ['--port', '0', '--plugins', 'src/approval.fixture.ts'],
+      // **fixture 是從 `docs/operations.md` 讀進來的，不是抄的**（#490）——文件教人跑的那道
+      // 指令改了路徑，這一條會當場紅。開發計劃 Phase 5 的驗收句共用同一份：預設清單不觸發
+      // 任何中斷，少了它「核准工具」那半句在瀏覽器裡跑不出來。
+      argv: ['--port', '0', '--plugins', documentedFixture()],
       log: () => undefined,
       env: {},
     });

@@ -56,3 +56,5 @@ export const skillsInvariantPlugin: NexusPlugin = {
     registry.invariants.register(SKILLS_INVARIANT_PACKAGE, install);
   },
 };
+
+export default skillsInvariantPlugin;

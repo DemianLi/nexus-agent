@@ -9,7 +9,16 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createRegistry } from './registry.js';
-import { fakeBackend, fakeMiddleware, fakeSink, fakeSubAgent, fakeTool } from './fixtures.js';
+import {
+  fakeBackend,
+  fakeFeedback,
+  fakeMiddleware,
+  fakeSink,
+  fakeSubAgent,
+  fakeTool,
+} from './fixtures.js';
+import { MESSAGE_FEEDBACK_SERVICE } from './feedback.js';
+import { SESSION_TELEMETRY_SERVICE } from './session-telemetry.js';
 import type { PluginOrigin } from './plugin.js';
 
 const first: PluginOrigin = { id: 'alpha#0', name: 'alpha' };
@@ -527,45 +536,78 @@ describe('telemetry 註冊點', () => {
     expect(registry.telemetry.rules()).toHaveLength(1);
   });
 
-  it('第二個服務掛不上去，訊息同時指名兩個 plugin', () => {
+  it('redact() 只能在 apply 裡呼叫', () => {
+    const registry = createRegistry();
+    expect(() => registry.telemetry.redact((record) => record)).toThrow(
+      'telemetry.redact()只能在 plugin 的 apply 裡呼叫',
+    );
+  });
+});
+
+/**
+ * 這一組是**翻面的絆索**（[#477](https://github.com/DemianLi/nexus-agent/issues/477)）。
+ *
+ * 遙測後端與回饋規則本來各有一個「一個 registry 只收一個」的註冊點，上面那些斷言原本釘著
+ * `telemetry.use()` / `feedback.use()`。搬到 `services` 之後**那幾條保證一條都不能少**，
+ * 只是換了載體——所以舊斷言不是刪掉，是照新機制重寫一次。
+ *
+ * **訊息換人了，這是唯一真的變的東西。** 原本是領域句（「兩個後端就是兩份出境資料」），
+ * 現在是 `services` 的通用句。照標準接受：cordis 自己就是通用的
+ * （`vendor/cordis/src/reflect.ts:290` 的 `service "<name>" has been registered at <fiber>`）。
+ * 領域說明搬進各自 plugin 的文件。
+ */
+describe('遙測與回饋走 services', () => {
+  it('遙測後端仍然是單一佔位，訊息同時指名兩個 plugin', () => {
     const registry = createRegistry();
     const leaveFirst = registry.enter(first);
-    registry.telemetry.use(fakeSink());
+    registry.services.provide(SESSION_TELEMETRY_SERVICE, fakeSink());
     leaveFirst();
 
     const leaveSecond = registry.enter(second);
-    expect(() => registry.telemetry.use(fakeSink())).toThrow(
+    expect(() => registry.services.provide(SESSION_TELEMETRY_SERVICE, fakeSink())).toThrow(
       /alpha#0 \(alpha\)[\s\S]*mcp#0 \(mcp\)/,
     );
     leaveSecond();
   });
 
-  it('撤掉服務之後那個位子是真的空的，別人掛得上', () => {
+  it('回饋規則仍然是單一佔位', () => {
     const registry = createRegistry();
     const leaveFirst = registry.enter(first);
-    const undo = registry.telemetry.use(fakeSink());
+    registry.services.provide(MESSAGE_FEEDBACK_SERVICE, fakeFeedback());
+    leaveFirst();
+
+    const leaveSecond = registry.enter(second);
+    expect(() => registry.services.provide(MESSAGE_FEEDBACK_SERVICE, fakeFeedback())).toThrow(
+      /alpha#0 \(alpha\)[\s\S]*mcp#0 \(mcp\)/,
+    );
+    leaveSecond();
+  });
+
+  it('撤掉之後那個位子是真的空的，別人提供得上', () => {
+    const registry = createRegistry();
+    const leaveFirst = registry.enter(first);
+    const undo = registry.services.provide(SESSION_TELEMETRY_SERVICE, fakeSink());
     leaveFirst();
 
     undo();
-    expect(registry.telemetry.service()).toBeUndefined();
+    expect(registry.services.get(SESSION_TELEMETRY_SERVICE)).toBeUndefined();
 
     const leaveSecond = registry.enter(second);
-    registry.telemetry.use(fakeSink());
+    registry.services.provide(SESSION_TELEMETRY_SERVICE, fakeSink());
     leaveSecond();
-    expect(registry.telemetry.service()?.origin.name).toBe('mcp');
+    expect(registry.services.provider(SESSION_TELEMETRY_SERVICE)?.name).toBe('mcp');
   });
 
-  it('沒掛服務時 service() 是 undefined——披露那一層要靠它回答', () => {
-    expect(createRegistry().telemetry.service()).toBeUndefined();
-  });
-
-  it('兩個方法都只能在 apply 裡呼叫', () => {
+  it('沒人提供時是 undefined——披露那一層要靠它回答', () => {
     const registry = createRegistry();
-    expect(() => registry.telemetry.redact((record) => record)).toThrow(
-      'telemetry.redact()只能在 plugin 的 apply 裡呼叫',
-    );
-    expect(() => registry.telemetry.use(fakeSink())).toThrow(
-      'telemetry.use()只能在 plugin 的 apply 裡呼叫',
+    expect(registry.services.get(SESSION_TELEMETRY_SERVICE)).toBeUndefined();
+    expect(registry.services.get(MESSAGE_FEEDBACK_SERVICE)).toBeUndefined();
+  });
+
+  it('provide() 只能在 apply 裡呼叫', () => {
+    const registry = createRegistry();
+    expect(() => registry.services.provide(SESSION_TELEMETRY_SERVICE, fakeSink())).toThrow(
+      'services.provide()只能在 plugin 的 apply 裡呼叫',
     );
   });
 });

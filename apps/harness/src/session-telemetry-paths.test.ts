@@ -18,6 +18,7 @@ import { createServer } from 'node:http';
 import type { Event } from '@nexus/wire';
 import { createWireClient } from '@nexus/wire';
 import { SessionLog, SessionRegistry } from '@nexus/core';
+import { SESSION_TELEMETRY_SERVICE } from '@nexus/core';
 import type {
   LoggedMessage,
   PluginEntry,
@@ -30,10 +31,12 @@ import { createTelemetryOtelPlugin } from '@nexus/plugin-telemetry-otel';
 import { describe, expect, it, vi } from 'vitest';
 
 import { DISABLED_FEEDBACK_WARNING } from './agent-factory.js';
-import { createCliAgent, DEFAULT_PLUGINS, runTurn } from './cli.js';
-import { loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
+import { createCliAgent, runTurn } from './cli.js';
+import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+
+const shipped = await shippedPlugins();
 
 const BASE_URL = 'http://telemetry.test';
 const silent = { log: () => undefined, error: () => undefined };
@@ -64,7 +67,7 @@ function telemetryPlugin(sink: SessionTelemetryService, redact?: SessionTelemetr
     plugin: {
       name: 'telemetry',
       apply(registry) {
-        registry.telemetry.use(sink);
+        registry.services.provide(SESSION_TELEMETRY_SERVICE, sink);
         if (redact !== undefined) registry.telemetry.redact(redact);
       },
     },
@@ -112,7 +115,7 @@ describe('遙測接線：CLI 那條路', () => {
     const sink = collectingSink();
     const { agent, dispose, sessions, sessionLog, attachTelemetry } = await createCliAgent(
       { live: false },
-      [...DEFAULT_PLUGINS, telemetryPlugin(sink)],
+      [...shipped, telemetryPlugin(sink)],
     );
     const detach = attachTelemetry(sessions);
     expect(detach).toBeDefined();
@@ -134,7 +137,7 @@ describe('遙測接線：CLI 那條路', () => {
   it('dispose 會把協調器一起收掉：ops 的 shutdown 送出、後端也被關', async () => {
     const sink = collectingSink();
     const { dispose, sessions, attachTelemetry } = await createCliAgent({ live: false }, [
-      ...DEFAULT_PLUGINS,
+      ...shipped,
       telemetryPlugin(sink),
     ]);
     attachTelemetry(sessions);
@@ -149,7 +152,7 @@ describe('遙測接線：CLI 那條路', () => {
   it('沒有 plugin 掛後端時不接線——沒有出口就不付投影的成本', async () => {
     const { dispose, sessions, attachTelemetry, telemetrySharing } = await createCliAgent(
       { live: false },
-      DEFAULT_PLUGINS,
+      shipped,
     );
     try {
       expect(attachTelemetry(sessions)).toBeUndefined();
@@ -162,7 +165,7 @@ describe('遙測接線：CLI 那條路', () => {
 
   it('掛了後端時，披露讀得到那個後端說的策略', async () => {
     const { dispose, telemetrySharing } = await createCliAgent({ live: false }, [
-      ...DEFAULT_PLUGINS,
+      ...shipped,
       telemetryPlugin(collectingSink()),
     ]);
     try {
@@ -180,7 +183,7 @@ describe('遙測接線：CLI 那條路', () => {
     });
     const { dispose, sessions, sessionLog, attachTelemetry } = await createCliAgent(
       { live: false },
-      [...DEFAULT_PLUGINS, telemetryPlugin(sink, scrub)],
+      [...shipped, telemetryPlugin(sink, scrub)],
     );
     attachTelemetry(sessions);
 
@@ -203,7 +206,7 @@ describe('遙測接線：CLI 那條路', () => {
     const { agent, dispose, sessions, sessionLog, attachTelemetry } = await createCliAgent(
       { live: false },
       [
-        ...DEFAULT_PLUGINS,
+        ...shipped,
         telemetryPlugin(sink, () => {
           throw new Error('規則壞了');
         }),
@@ -226,10 +229,7 @@ describe('遙測接線：CLI 那條路', () => {
 describe('遙測接線：web 那條路', () => {
   it('接的是 pump 自己那份日誌——session.id 是 threadId', async () => {
     const sink = collectingSink();
-    const built = await createCliAgent({ live: false }, [
-      ...DEFAULT_PLUGINS,
-      telemetryPlugin(sink),
-    ]);
+    const built = await createCliAgent({ live: false }, [...shipped, telemetryPlugin(sink)]);
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
@@ -264,10 +264,7 @@ describe('遙測接線：web 那條路', () => {
 
   it('createAgent 沒給 attachTelemetry 時什麼都不會發生', async () => {
     const sink = collectingSink();
-    const built = await createCliAgent({ live: false }, [
-      ...DEFAULT_PLUGINS,
-      telemetryPlugin(sink),
-    ]);
+    const built = await createCliAgent({ live: false }, [...shipped, telemetryPlugin(sink)]);
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
@@ -318,7 +315,7 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
   it('回饋之前一筆都不送；第一顆回饋送整份前綴，之後只送新的那段', async () => {
     const sink = collectingSink('feedback-only');
     const { agent, dispose, sessions, sessionLog, attachTelemetry, feedback } =
-      await createCliAgent({ live: false }, [...DEFAULT_PLUGINS, telemetryPlugin(sink)]);
+      await createCliAgent({ live: false }, [...shipped, telemetryPlugin(sink)]);
     attachTelemetry(sessions);
     const seqs = () => ledgerOf(sink).map((record) => record.attributes['event.seq']);
 
@@ -362,7 +359,7 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
 
     const sink = collectingSink('feedback-only');
     const { dispose, attachTelemetry } = await createCliAgent({ live: false }, [
-      ...DEFAULT_PLUGINS,
+      ...shipped,
       telemetryPlugin(sink),
     ]);
     try {
@@ -388,7 +385,7 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const sink = collectingSink('disabled');
     const { agent, dispose, sessions, sessionLog, attachTelemetry, feedback } =
-      await createCliAgent({ live: false }, [...DEFAULT_PLUGINS, telemetryPlugin(sink)]);
+      await createCliAgent({ live: false }, [...shipped, telemetryPlugin(sink)]);
     attachTelemetry(sessions);
 
     try {
@@ -404,10 +401,7 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
 
   it('web 回饋對話框送出的那顆也放行——寫者不同，看的是同一份 root 日誌', async () => {
     const sink = collectingSink('feedback-only');
-    const built = await createCliAgent({ live: false }, [
-      ...DEFAULT_PLUGINS,
-      telemetryPlugin(sink),
-    ]);
+    const built = await createCliAgent({ live: false }, [...shipped, telemetryPlugin(sink)]);
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
@@ -442,7 +436,7 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
     const collector = await mockCollector();
     const { agent, dispose, sessions, sessionLog, attachTelemetry, feedback } =
       await createCliAgent({ live: false }, [
-        ...DEFAULT_PLUGINS,
+        ...shipped,
         createTelemetryOtelPlugin({ mode: 'feedback-only', exporter: { url: collector.url } }),
       ]);
     attachTelemetry(sessions);

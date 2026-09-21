@@ -19,10 +19,12 @@ import type { PluginEntry } from '@nexus/core';
 import { createEchoPlugin } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
 
-import { createCliAgent, DEFAULT_PLUGINS, runTurn } from './cli.js';
-import { loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
+import { createCliAgent, runTurn } from './cli.js';
+import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+
+const shipped = await shippedPlugins();
 
 const BASE_URL = 'http://invariant.test';
 const silent = { log: () => undefined, error: () => undefined };
@@ -62,11 +64,11 @@ function noisyInvariantPlugin(): PluginEntry {
 
 describe('不變量接線：CLI 那條路', () => {
   it('真的跑一輪，配套入口一條違規都不報', async () => {
-    // **不再自己補 `createCoreInvariantPlugin()`**：它已經在 `DEFAULT_PLUGINS` 裡
+    // **不再自己補 `createCoreInvariantPlugin()`**：它已經在出貨清單裡
     // （#107），補第二份會撞包名歸屬當場拋。
     const { agent, dispose, sessions, sessionLog, attachInvariants } = await createCliAgent(
       { live: false },
-      DEFAULT_PLUGINS,
+      shipped,
     );
     // 這一條刻意**不**傳 `onInvariantViolation`，走 runner 的預設，因為它問的是
     // 「有沒有誤報」而不是「印去哪裡」——預設那條路徑也得是安靜的。
@@ -91,7 +93,7 @@ describe('不變量接線：CLI 那條路', () => {
   it('接線真的通了——換一個一律報違規的配套入口就看得到違規', async () => {
     const { agent, dispose, sessions, sessionLog, attachInvariants } = await createCliAgent(
       { live: false },
-      [...DEFAULT_PLUGINS, noisyInvariantPlugin()],
+      [...shipped, noisyInvariantPlugin()],
     );
     // 預設的 `onViolation` 是 `console.error`，這裡只需要知道它有沒有跑到，所以攔下來。
     const violations: string[] = [];
@@ -114,7 +116,7 @@ describe('不變量接線：CLI 那條路', () => {
   });
 
   it('沒有 plugin 註冊配套入口時不接線——沒有檢查就不多掛一個訂閱', async () => {
-    // **清單自己寫，不能用 `DEFAULT_PLUGINS`**：它現在掛著十一個配套入口（#107），
+    // **清單自己寫，不能用出貨的那一份**：它現在掛著十一個配套入口（#107），
     // 拿它問「沒有人註冊時會怎樣」問的是另一個問題。
     const { dispose, sessions, attachInvariants } = await createCliAgent({ live: false }, [
       createEchoPlugin(),
@@ -128,28 +130,23 @@ describe('不變量接線：CLI 那條路', () => {
 });
 
 describe('預設清單', () => {
-  it('十九個配套入口都在，而且各自認領自己的包名', async () => {
+  it('二十個配套入口都在，而且各自認領自己的包名', async () => {
     // #107 拍的是「全進」。少掛的那幾個會讓「這個 package 沒有可檢的關係」與
-    // 「這個 package 的檢查沒掛上」在診斷裡長得一模一樣，所以這裡數的是**十九**（#441 加了 `@nexus/plugin-present`，#443 加了
+    // 「這個 package 的檢查沒掛上」在診斷裡長得一模一樣，所以這裡數的是**二十**（#441 加了 `@nexus/plugin-present`，#443 加了
     // `@nexus/plugin-workspace-changes`）。
-    const { dispose, sessions, attachInvariants } = await createCliAgent(
-      { live: false },
-      DEFAULT_PLUGINS,
-    );
+    const { dispose, sessions, attachInvariants } = await createCliAgent({ live: false }, shipped);
     try {
       expect(attachInvariants(sessions)).toBeDefined();
     } finally {
       await dispose();
     }
-    expect(
-      DEFAULT_PLUGINS.filter((entry) => entry.plugin.name.endsWith('-invariant')),
-    ).toHaveLength(19);
+    expect(shipped.filter((entry) => entry.plugin.name.endsWith('-invariant'))).toHaveLength(20);
   });
 });
 
 describe('不變量接線：web 那條路', () => {
   it('接的是 pump 自己那份日誌，真的跑一輪也不誤報', async () => {
-    const built = await createCliAgent({ live: false }, DEFAULT_PLUGINS);
+    const built = await createCliAgent({ live: false }, shipped);
     const violations: string[] = [];
     const original = console.error;
     console.error = (message: unknown) => void violations.push(String(message));

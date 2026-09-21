@@ -1,7 +1,7 @@
 /**
  * 工作區指令進不進得了模型——[#388](https://github.com/DemianLi/nexus-agent/issues/388) 的驗收。
  *
- * **每一條都用 `DEFAULT_PLUGINS`，一個 plugin 都不自己傳。** 這是這張卡存在的原因：`memory.test.ts`
+ * **每一條都用出貨清單，一個 plugin 都不自己傳。** 這是這張卡存在的原因：`memory.test.ts`
  * 綠著，是因為每一條都自己把 plugin 傳進去，而產品路徑上（不帶 `--plugins` 的 CLI 與 serve）那顆
  * 根本沒掛。判準是零設定的組裝看到什麼，不是「掛上去之後會怎樣」。
  *
@@ -25,7 +25,7 @@ import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
-import { DEFAULT_PLUGINS } from './cli.js';
+
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { restoreConversation } from './conversation-restore.js';
 import { LoopingChatModel } from './looping-model.js';
@@ -34,6 +34,9 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
+import { shippedPlugins } from './fixtures.js';
+
+const shipped = await shippedPlugins();
 
 const GP = GENERAL_PURPOSE_SUBAGENT.name;
 
@@ -93,7 +96,7 @@ interface RunOptions {
    * 換成永遠再叫一次工具的模型，每一句話都跑到迴圈上限才停——摘要要壓得到，得先有夠長的對話，
    * 而腳本模型的回話會被摘要器那次呼叫吃掉一輪，對不齊。
    *
-   * 門檻壓低是為了在上限內摘要得到；**plugin 清單照舊是 `DEFAULT_PLUGINS`**。
+   * 門檻壓低是為了在上限內摘要得到；**plugin 清單照舊是出貨的那一份**。
    */
   readonly looping?: {
     readonly summarization: { readonly messages: number; readonly keep: number };
@@ -102,7 +105,7 @@ interface RunOptions {
   /** 送幾句話。預設一句。 */
   readonly submits?: readonly string[];
   /**
-   * 加在 `DEFAULT_PLUGINS` **後面**的 plugin。
+   * 加在出貨清單**後面**的 plugin。
    *
    * 今天只有一個用途：登記一個具名子代理，好讓「具名的與 fold 補的各拿一份」兩種都走得到。
    * 它只註冊一個子代理定義，不碰工作區指令那條路——**零設定那個判準沒有被放寬**。
@@ -110,7 +113,7 @@ interface RunOptions {
   readonly extraPlugins?: readonly PluginEntry[];
 }
 
-/** 真的組裝、真的 pump——serve 那條路的形狀，plugin 清單就是 `DEFAULT_PLUGINS`。 */
+/** 真的組裝、真的 pump——serve 那條路的形狀，plugin 清單就是出貨的那一份。 */
 async function run(options: RunOptions) {
   const root = await mkdtemp(join(tmpdir(), 'nexus-instructions-'));
   for (const [name, content] of Object.entries(options.files ?? {})) {
@@ -125,7 +128,7 @@ async function run(options: RunOptions) {
   const built = await createNexusAgent({
     model,
     checkpointer,
-    plugins: [...DEFAULT_PLUGINS, ...(options.extraPlugins ?? [])],
+    plugins: [...shipped, ...(options.extraPlugins ?? [])],
     ...(options.files !== undefined && {
       backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
     }),
@@ -499,7 +502,7 @@ describe('摘要之後下一句話把基線補回來', () => {
     const resumed = await createNexusAgent({
       model,
       checkpointer: new MemorySaver(),
-      plugins: [...DEFAULT_PLUGINS],
+      plugins: [...shipped],
       backend: new ContainedFilesystemBackend({ rootDir: workspace, mode: 'workspace-write' }),
     });
     try {
@@ -527,9 +530,9 @@ describe('摘要之後下一句話把基線補回來', () => {
 /**
  * **宣告 `stateSchema` 沒有把私有鍵推上輸出通道。** `summarization.test.ts` 那條「回傳值只有 `files` 與
  * `messages`」量的組裝沒有這顆 plugin；這顆為了讀切點宣告了同一個鍵，而宣告 `stateSchema` 就是往圖的
- * channel 表上加東西。這一條在 `DEFAULT_PLUGINS`＋`--workspace`、而且摘要真的發生過的組裝上再量一次。
+ * channel 表上加東西。這一條在出貨清單＋`--workspace`、而且摘要真的發生過的組裝上再量一次。
  */
-it('DEFAULT_PLUGINS 摘要過之後，invoke 的回傳值還是只有 files 與 messages', async () => {
+it('shipped 摘要過之後，invoke 的回傳值還是只有 files 與 messages', async () => {
   const root = await mkdtemp(join(tmpdir(), 'nexus-instructions-keys-'));
   await writeFile(join(root, 'AGENTS.md'), '規矩。', 'utf8');
   const model = new ScriptedChatModel({
@@ -538,7 +541,7 @@ it('DEFAULT_PLUGINS 摘要過之後，invoke 的回傳值還是只有 files 與 
   const built = await createNexusAgent({
     model,
     checkpointer: new MemorySaver(),
-    plugins: [...DEFAULT_PLUGINS],
+    plugins: [...shipped],
     backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
     summarization: {
       trigger: [{ type: 'messages', value: 3 }],

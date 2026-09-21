@@ -19,7 +19,7 @@
  * `GoalService` 的 `create()` 會在 append 之後立刻讀自己的折疊；`observe()` 如果是等
  * 這一輪裝完才生效，這一行會當場拋。
  *
- * **清單自己列，不 `import { DEFAULT_PLUGINS } from './cli.js'`——那會死鎖**，理由與
+ * **清單自己列，不 `import` `cli.js`——那會死鎖**，理由與
  * [`cli-invariant-violation.fixture.ts`](./cli-invariant-violation.fixture.ts) 那份一樣。
  */
 

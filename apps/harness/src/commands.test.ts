@@ -16,9 +16,12 @@ import type { PluginEntry, SessionEvent } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 
 import { createNexusAgent } from './agent-factory.js';
-import { createCliAgent, DEFAULT_PLUGINS, runRepl } from './cli.js';
+import { createCliAgent, runRepl } from './cli.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
+import { shippedPlugins } from './fixtures.js';
+
+const shipped = await shippedPlugins();
 
 /** 一輪：叫一次 echo 就收工。腳本只有這一輪，**第二輪會拋**。 */
 const ONE_TURN: readonly ScriptedTurn[] = [
@@ -305,7 +308,7 @@ describe('預設組裝', () => {
     const violations: string[] = [];
     const { dispose, sessions, sessionLog, attachInvariants } = await createCliAgent(
       { live: false },
-      DEFAULT_PLUGINS,
+      shipped,
       undefined,
       (error) => violations.push(error.message),
     );

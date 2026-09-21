@@ -1,506 +1,94 @@
 # nexus-agent
 
-TypeScript + React (shadcn/ui) 專案，架構分為 harness 與 web UI 兩部分。
+**萬物皆可插件的 Deep Agents Harness**，全 TypeScript——LangChain JS ＋ LangGraph JS ＋
+deepagents，零 Python 基座。
 
-## 專案結構
+要解決的問題：deepagents 的擴充入口原本分散在 `tools`、`middleware`、`backend`、`subagents`、
+`permissions`、`interruptOn` 各自的參數裡，各傳各的。nexus 把它們**收斂成單一的 `NexusPlugin`
+契約**——一份清單，一個註冊表，所有能力用同一種方式掛上去。路線是**不從零重造**：約七成需求由
+deepagents 覆蓋，自建的是 plugin 統一註冊、結果校驗、可觀測性接線與 web UI。
+
+## 架構
+
+**`apps/harness` 是組裝點**——它把一份 plugin 清單摺進 deepagents 的 agent，再接上三個入口。
 
 ```
-packages/nexus-core          NexusPlugin 契約：型別、manifest、PluginRegistry、fold
-packages/nexus-plugin-commands  人打的斜線命令：解析、執行、生命週期記日誌
-packages/nexus-plugin-echo   最小 plugin 範例，只相依 @nexus/core
-packages/nexus-plugin-goal   一個會話的長期目標：狀態、CAS 變更、續行授權，加上 /goal
-packages/nexus-plugin-mcp    把 MCP server 的工具接進 registry
-packages/nexus-plugin-quickjs  QuickJS 沙箱裡跑 JavaScript 的 custom tool
-packages/nexus-plugin-agent-instructions  預設掛：工作區的 AGENTS.md 當一則訊息送進每個 agent
-packages/nexus-plugin-memory 選配：基座那套「模型自己維護」的記憶，會附上寫入指示
-packages/nexus-plugin-plan-mode  計劃模式：先探索再執行，計劃交出去等人批准
-packages/nexus-plugin-skills 把 SKILL.md 這類隨選工作流掛進 agent
-packages/nexus-plugin-validation  相容殼：輸出校驗與圍堵都已搬進 @nexus/core
-apps/harness                 組裝點：agent 工廠、訊息標準化、CLI（Node / TypeScript）
-apps/web                     Vite + React 19 + Tailwind v4 + shadcn/ui
+plugin 清單 ──fold──▶ agent ──┬──▶ CLI（一次性／REPL）
+  (NexusPlugin)               ├──▶ serve（HTTP ＋ 靜態網頁）
+                              └──▶ eval（基準任務）
 ```
+
+| 位置 | 職責 |
+| --- | --- |
+| `packages/nexus-core` | `NexusPlugin` 契約：型別、manifest、`PluginRegistry`、fold、輸出校驗與圍堵 |
+| `packages/nexus-plugin-*` | 各項能力，一個能力一個套件 |
+| `packages/nexus-wire` | harness 與 web 之間的傳輸型別 |
+| `apps/harness` | 組裝點：agent 工廠、訊息標準化、CLI 與 serve |
+| `apps/web` | Vite ＋ React 19 ＋ Tailwind v4 ＋ shadcn/ui |
 
 pnpm workspace，Node >= 22。
 
-## 開發
+## 能力
+
+**開箱就有**，`--plugins` 換不掉（CLI 與 serve 共用同一個組裝函式）：`ask_user_question`、
+`submit_record`，以及給了 `--workspace` 才掛的檔案圍堵與 `/sandbox`、工作區改動紀錄。
+
+**在出貨的清單裡**（[`apps/harness/cordis.yml`](apps/harness/cordis.yml)，用 patch 檔改，見 [`docs/operations.md`](docs/operations.md#plugin-清單)）：
+
+| 能力 | 一句話 | 細節在 `packages/` |
+| --- | --- | --- |
+| 計劃模式 | 先探索再動手，計劃交出去等人批准；開關是 `/plan` | `nexus-plugin-plan-mode` |
+| 長期目標 | 一個會話記得住跨多輪的目標；開關是 `/goal` | `nexus-plugin-goal` |
+| Todo | 模型自己維護的工作清單 | `nexus-plugin-todo` |
+| 工作區指令 | 工作區的 `AGENTS.md` 當一則訊息送進每個 agent | `nexus-plugin-agent-instructions` |
+| 交付宣告 | 模型指名這一輪交付了哪些檔 | `nexus-plugin-present` |
+| 評分與回饋 | `/feedback` | `nexus-plugin-feedback` |
+
+**要自己疊一層 patch 才掛**：MCP、QuickJS 沙箱、skills、記憶、OpenTelemetry 遙測。每個套件的
+`src/index.ts` 檔頭寫著它自己的完整規格與偏離標註。人打的斜線命令不經過模型，由進入點解析發派。
+
+## 跑起來
 
 ```bash
 pnpm install
-pnpm dev          # 監看 web 原始碼，重建到 apps/web/dist（vite build --watch；網頁由 serve 服務，見下面）
-pnpm lint         # eslint（遞迴全部套件）
-pnpm typecheck    # tsc --noEmit
-pnpm test         # vitest run
-pnpm build        # vite build（serve 服務的就是它產出的 apps/web/dist）
-```
-
-跟 agent 說話（`apps/harness` 的 CLI）：
-
-```bash
 pnpm --filter @nexus/harness run cli "把這句話回聲一次。"   # 一次性，跑完就退出
 pnpm --filter @nexus/harness run cli                        # REPL，/help 看命令，/exit 結束
 pnpm --filter @nexus/harness run cli:live "..."             # 換成真實供應商，需要 API key
 ```
 
-預設走寫死腳本的假模型，不需要任何 key —— 那條路徑驗的是接線，不是模型。
-真正要試 agent 行為時用 `cli:live`。`--plugins <module>` 可以換掉預設的 plugin 清單
-（模組 `export default` 一個陣列）。
+**預設走寫死腳本的假模型，不需要任何 key**——那條路徑驗的是接線，不是模型。
 
-**檔案圍堵要 `--workspace` 才存在。** 沒給的話檔案跑在虛擬檔案系統裡，那道 fence 根本
-不在路徑上。給了之後 `--sandbox <mode>` 決定**起始**強度 —— `read-only`、`workspace-write`
-（預設）、`danger-full-access` —— 而**跑起來之後 `/sandbox` 切得動它**：不帶引數報告現在
-是哪一格，帶一個模式名就切過去。切換同時作用在兩個地方：檔案工具擋不擋得住，以及模型
-自己知不知道現在在哪一格（那句話每次模型呼叫重算）。每一次真的變了都會在會話日誌裡留一顆
-`sandbox/mode`，接線當下也會釘一顆起始值 —— 所以一份日誌答得出「這一輪跑的時候政策是哪一格」。
-**被擋下來時，模型可以請一次升級。** 拒絕後面會接一行指引，模型照著呼叫
-`request_sandbox_escalation`，指名那個檔、要升到哪一格、一句給人看的理由；核准卡上看得到
-這三樣。核准之後**只有那一個檔的下一次變更**在升上去的那一格跑，用完就沒了，session 的
-模式不動。不比現在寬的請求不會去問人。
-**沒有 `--workspace` 的組裝不會有 `/sandbox`、那句話，也不會有升級工具**：一格圍堵都沒有的時候
-講「目前是 workspace-write」是說謊。**模式跨得過重啟**：CLI 的 `--resume <run 目錄>` 讀回
-上一次的日誌、serve 碰到一條以前寫過的 thread 就接回來，模式照最後一顆 `sandbox/mode` 回來
-（見下面「接著上一次跑下去」）。
-
-**會話日誌預設不落盤。** `--session-log <dir>` 給了才寫，缺席就是只在記憶體裡活著
-（banner 上第六行會說現在是哪一種）。沒有預設路徑是刻意的：日誌裡有你打的每一句話、模型的
-每一則回覆，以及工具讀到的檔案內容與指令輸出 —— 連同裡面可能有的秘密（格式 9 起，
-[#305](https://github.com/DemianLi/nexus-agent/issues/305)），預設往家目錄寫是一個該由人做的決定。
-遙測開著的話這些內容也原樣送出去；部署方的脫敏規則只作用在送出去的那一份，本機的 jsonl 照舊是原文。它不能指到 `--workspace` 底下 —— 寫在可寫根裡，
-模型自己 `read_file` 就讀得到、也改得動整份對話史。CLI 每一次啟動各自一個 run 目錄，
-一份會話一個 `.jsonl` 加一個 `.header.json`。
-
-**`serve` 也有同一個旗標**（[#174](https://github.com/DemianLi/nexus-agent/issues/174)）：
-會話根按目錄分（照 dsh 的 `projectDir`：`<dir>/--<工作目錄壓成一段>--/`），底下一條 thread
-一個檔，檔名由 thread id 百分號編碼而來 —— thread id 是呼叫端給的，所以編碼必須是單射的，
-不然兩條 thread 會共用一個檔而其中一條安靜地寫不進去。位置固定，所以**重開 serve 之後同一條
-thread 接得回來**（下一段）。**eval 那條路沒有會話日誌，而那是一個登記過的決定**（理由與絆索見
-`apps/harness/src/eval/runner.ts` 的檔頭）。
-
-**要留 live 跑的證據，留 JSONL 就夠了。** 這對 CLI 與 `serve` 都一樣。日誌記哪幾種事件見
-`session-log.ts` 的聯集；格式 9 起它記的是整段對話：人打的字、模型的回覆、工具呼叫與它的
-結果、外掛塞進對話的話、壓縮的摘要。
-
-- **落定的結果在裡面。** 目標被封時 `goal/change` 那顆事件帶著 `blockedReason`，
-  `code` 分得出是系統封的（`round-limit`／`round-cap`）還是模型自己報的
-  （`model-reported`）。所以 `--session-log` 要指到一個**留得住**的目錄 ——
-  指進 `/tmp` 或某個會被清掉的暫存目錄，那一跑跑完就什麼都沒剩。
-- **被擋下來的那幾次也在裡面。** 工具的拒絕字串就是那顆 `tool/result` 帶的訊息，想知道模型
-  連續幾輪撞的是不是同一件事，讀那幾顆就好。**格式 8 以前的檔沒有**：那時結果只記成敗、
-  不記內容，拒絕字串只在畫面上，要看得靠當時自己 `| tee` 的那一份。
-
-留得住**不等於**往家目錄丟 —— 上面那條理由沒有變，日誌裡有整段對話，路徑仍然
-是一個該由人做的決定。JSONL 今天有一個讀方——CLI 的 `--resume`（下一段）；除此之外，
-這兩份東西的讀者是後來自己去 grep 的人，而人要 grep 得到，檔案得還在。
-在意的是哪一筆、判別式怎麼寫，見 [#187](https://github.com/DemianLi/nexus-agent/issues/187)。
-
-**接著上一次跑下去。** CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、往同一個
-檔續寫；serve 不用旗標——碰到一條以前在同一個會話根寫過的 thread 就接回來（只有「找不到」
-才開新的，壞掉或版本太新的日誌照樣擋下，不會被新的一份蓋掉）。**回來的是日誌上推得出來的**：沙箱模式、目標（授權打回 disarmed，要
-`/goal resume` 才會再往下走）、計劃模式（上一次開著，接回來還開著），以及**對話**——照 dsh，
-模型歷史從日誌推出來、在第一輪之前灌回模型（[#306](https://github.com/DemianLi/nexus-agent/issues/306)），
-不是把 checkpointer 落盤（那扇門照舊不開，[#251](https://github.com/DemianLi/nexus-agent/issues/251)）。
-壓縮過的會話灌回去的是摘要加之後的；上一次停在半路、沒配到結果的工具呼叫補一則「結果不明」的錯誤結果
-（照 dsh 的 `repair.ts`）。**推不出完整歷史的就不灌半截**，模型從空的開始，入口會講原因——格式 9 以前寫的
-日誌不記模型的回覆，都是這樣。**回不來的**：虛擬檔案系統、工具結果暫存（過大結果的預覽指的那個檔讀不到），
-以及停在核准點還沒答的那張卡——它們只在 graph state 裡。todo 沒有自己回來的狀態，模型從推回來的對話裡記得它。
-要在上一次的同一個目錄底下接——header 記著那份會話屬於哪個目錄，對不上就擋（同 dsh）。
-它不能配 `--sandbox`（模式從日誌來，要換就接起來之後 `/sandbox`）或 `--session-log`（就寫回
-那個目錄）。**同一份會話同一時間只有一個行程寫得進去**：照 dsh 的寫租約（kernel 的
-`flock`，行程死了就放），另一個行程還開著它時 `--resume` 當場擋下。只有 macOS 與 Linux
-鎖得到；其他平台照常寫，第一次要鎖的時候講一聲。**web 那端把 thread id 記在瀏覽器裡**
-（照 dsh 的 `dsh.sessions.current`），重新整理之後接的是同一條，畫面上會說一聲。**切回以前的 thread
-（重新整理、或從「以前的會話」點過去），之前說過的話照日誌重播在畫面上**：人打的字、模型的回覆、工具卡，
-一次最後 50 則，更早的按「載入更早的對話」往前翻（照 dsh 的 `session.follow`／`session.page`）。舊格式的
-日誌沒有回覆可播，畫面上只有人打的字與工具卡，並講明這一點。壓縮過的會話畫面上照樣是全部，不換成摘要（即時的畫面
-也不換）。停在核准點還沒答的那張核准卡補不回來，那幾張工具卡畫成「等你回答」，按「停止」收回。
-要換一條就按「新對話」。兩個分頁共用同一條 thread。
-
-**目標不會自己往下走，除非你說可以。** `--goal-driver` 打開之後，一個 active 的目標在
-每一輪落定時會自己再開一輪，直到它被完成、被擋住，或用完自己的 `max_goal_rounds`
-（banner 上會說現在是哪一種）。預設關 —— 這是 dsh 那條「goal 是狀態而非調度器，自動續行
-是需要你刻意掛載的可選消費方」，而我們的入口點擁有輪迴圈，掛載的等價物就是這個旗標。
-（2026-09-19 註：那句是 dsh 當時 README 的原話，但它的 base 其實出廠就掛著續行驅動器，
-「可選」指套件可以不掛、不是出廠關著；見[調研筆記](.docs/plugin-architecture-gap-survey.md) §三第 18 列。）
-`serve` 吃同一個旗標。
-
-開著的時候**唯一的硬上限是那個目標自己的 `max_goal_rounds`**（預設 256）。模型從第
-`blockedAfterConsecutiveRounds` 輪（預設 3）起可以把自己標成 blocked 而退出迴圈，但那是
-准許不是保證 —— 沒有東西逼它用。額外那條「連續 N 輪沒進展就停」刻意沒做，理由在
-`apps/harness/src/goal-driver.ts` 檔頭：每一個量得到的判準都是 proxy，而一條會誤殺健康
-長任務的停損比沒有停損更糟。
-
-**模型在自己排的輪次裡收掉目標之後，會馬上收到一段收尾指示**（`<goal_complete>` 或
-`<goal_blocked>`）：不要再叫工具了，把結果交代給人——講清楚做完了什麼、怎麼驗的、東西在
-哪裡，或者卡在哪一格、需要人做什麼。沒有它的話那一輪剩下的部分不知道目標已經結束，會照
-著上一則續行指示繼續做事。人自己打的 `complete` 不注入：人知道自己剛做了什麼。
-
-**agent 迴圈有上限，而那個上限是組裝點設的不是基座設的。** `createDeepAgent` 自己把
-`recursionLimit` 設成 `1e4`（約 5,000 輪模型呼叫，等於沒有上限），所以
-`createNexusAgent` 蓋成 100。預設組裝每一輪模型呼叫佔三格（重複提醒器掛在 `beforeModel`，
-是圖裡的一個節點），所以那是約 33 輪；每多一個 `beforeModel` 的 middleware 每輪就多一格。
-CLI、`serve`、eval 都吃這個值；這條擋的是「跑掉了」，不是「複雜任務」。真的需要更長的
-呼叫端自己傳 —— 程式裡是 `recursionLimit`，CLI 是 `--recursion-limit <n>`（`serve` 沒有這個旗標）。
-**一次性模式撞到這條上限時退出碼是 `2`**，其他失敗是 `1`，所以包它的腳本分得出「護欄切掉了」與
-「壞掉了」；REPL 裡撞到只印一行，不退出。
-
-在瀏覽器裡跟 agent 說話：先 build 網頁，再起 `serve`，然後開它**印出來的那個網址**：
+在瀏覽器裡跟 agent 說話——**先 build 網頁再起 `serve`**，網頁是 `apps/web/dist` 的靜態產物，
+順序反了什麼都沒有：
 
 ```bash
-pnpm dev                                    # 網頁建成 apps/web/dist，改了原始碼會自動重建
+pnpm dev                                    # 建進 apps/web/dist，改了原始碼自動重建
 pnpm --filter @nexus/harness run serve      # 印出「nexus-agent 在 http://127.0.0.1:8787/?token=…」
 ```
 
-`serve` 的組裝與 CLI 完全一樣（同一份預設 plugin 清單、同一個 `--live`、同一個
-`--workspace`），只是把 agent 掛上 HTTP，並且自己服務 `apps/web/dist`——網頁與 API 同一個來源，
-不需要 CORS。改了網頁等重建完（約一兩秒），**手動重新整理**——沒有 HMR，照 dsh。
+開它**印出來的那個網址**——那串 token 是登入用的，是敏感輸出，別貼給別人。
+**不要用 `vite` 或 `vite preview`**，它們被刻意做成拒絕啟動；網頁一律由 `serve` 服務。
+**要檔案圍堵就得給 `--workspace`**：沒給的話那道 fence 根本不在路徑上，而畫面看起來一模一樣。
 
-**網頁從來不由 Vite 服務**（[#426](https://github.com/DemianLi/nexus-agent/issues/426)，照 dsh）：`vite` 與
-`vite preview` 會拒絕啟動。Vite 的開發伺服器會把整個 repo 的檔案交給連得到那個 port 的任何人，而部署主機是多人共用的。
+跑起來之後的事——圍堵怎麼切、會話日誌寫到哪、多人共用主機怎麼連、執行上限、核准、評測——見
+[`docs/operations.md`](docs/operations.md)。
 
-**網頁與 API 都要瀏覽器會話**（[#424](https://github.com/DemianLi/nexus-agent/issues/424)，照 dsh）：
-印出來的網址帶著這個行程的 token，開一次就換到一顆 cookie（`HttpOnly`、`SameSite=Strict`、30 天，
-serve 重啟之後照樣有效），沒有 cookie 的請求一律 401。綁 `127.0.0.1` 擋不住同一台機器上的其他使用者，
-這顆 cookie 才擋得住。
-
-- **那一行是敏感輸出。** token 在 serve 活著的期間都換得到 cookie。別貼給別人，也別把 serve 的輸出轉存到
-  別人讀得到的檔——`serve > serve.log` 在預設 umask 下是 `0644`。
-- **簽章密鑰住在 harness home**：`~/.nexus-agent/browser-session.json`（目錄 `0700`、檔案 `0600`；
-  `NEXUS_AGENT_HOME` 可以換位置）。刪掉它再重啟 serve，所有瀏覽器會話一起失效；這個檔別人讀得到的話，
-  serve 會拒絕啟動並告訴你要跑的 `chmod`。
-- **serve 沒在跑的時候別開那個網址。** cookie 是持有即用的憑證：別人趁 serve 沒跑先佔住同一個 port，
-  你的瀏覽器（經 SSH 轉 port 也一樣）就會把 cookie 送給他，等你在同一個 port 重開 serve，那顆 cookie 仍然有效。
-  懷疑外洩時刪掉 `~/.nexus-agent/browser-session.json` 再重啟 serve，所有既有會話一起作廢。
-- **在多人共用的主機上**，只支援從自己的電腦用 SSH 轉 port 連進去：
-  `ssh -L 8787:127.0.0.1:8787 <主機>`，然後在自己電腦的瀏覽器開 serve 印出的網址。
-
-`serve` 也吃 `--live`（或直接 `run serve:live`）—— 假模型的腳本只有四輪，問到第三句
-就會用完，畫面上會紅字說是為什麼。
-
-要在瀏覽器裡跑到核准那一段，換一份把工具標成要核准的清單：
+## 開發
 
 ```bash
-pnpm --filter @nexus/harness run serve --plugins src/approval.fixture.ts
+pnpm lint         # eslint（遞迴全部套件）
+pnpm typecheck    # tsc --noEmit
+pnpm test         # vitest run
+pnpm build        # vite build
+pnpm --filter @nexus/web dlx shadcn@latest add <component>   # 新增 shadcn/ui 元件
 ```
 
-預設清單不觸發任何中斷，所以核准的按鈕沒有東西可按。這一份把 `echo` 與 `write_file`
-標起來，假模型的腳本正好兩個都會呼叫 —— 一條對話會停兩次，核准或拒絕都繼續得下去。
-**介面一批只送一個決定**（`uniformDecisions`）：逐筆按是介面還沒做，不是底下擋著。
-
-**而 `serve` 是三個入口裡唯一會停下來的那個。** CLI 與 eval 收不了核准決定，所以它們
-把核准關掉（`HEADLESS_APPROVALS`）—— 需要核准的工具拿到一則說明是「沒有人被問到」的
-拒絕，其餘照跑完，而不是整輪停在那裡等一個不會來的答案。CLI 每次啟動都會把這件事印在
-banner 上。web 這端真的按得下去，所以它維持開著。
-
-### 計劃模式
-
-`@nexus/plugin-plan-mode` 讓 agent 先探索與設計、把完整的計劃交出去等人批准，再開始動手。
-形狀照 dsh 的 `plan-mode`：一段模式生效時才夾進 system prompt 的**部署持有的指引**、
-一個 `exit_plan_mode` 工具，加上一份**跟著 checkpointer 走的模式狀態**。
-
-**它預設是關的，開關是 `/plan`。** 這個 plugin 在 CLI 的預設清單裡，所以 REPL 裡直接打：
-
-| 這一行 | 做什麼 |
-| --- | --- |
-| `/plan` | 進計劃模式，下一次請求起指引夾進 system prompt |
-| `/plan off` | 離開 |
-| 其餘參數 | 回一則錯誤。**不會被當成「進入」** —— `/plan of` 安靜地做相反的事是最貴的那種缺陷 |
-
-dsh 的 `/plan` 還收一段自由訊息（`[off|message]`），用 `agent.steer()` 插進對話；
-我們沒有那條路，所以提示是 `[off]`，收不下的東西不寫進提示。選擇**當場寫進會話日誌**
-（`plan/mode`，同 dsh），所以它跟沙箱模式一樣，`--resume` 接得回來。細節與剩下那兩條偏離
-寫在 `packages/nexus-plugin-plan-mode/src/index.ts` 的檔頭。
-
-要讓一份組裝一開始就在計劃模式裡，用工廠的 `startActive`：
-
-```ts
-createPlanModePlugin({ startActive: true, guidance: '（部署自己寫的那一段）' })
-```
-
-**但預設清單不必換。** `serve` 那條線上有命令介面了（[#123](https://github.com/DemianLi/nexus-agent/issues/123)），
-web 那端自己打 `/plan` 就進得去：
-
-```bash
-pnpm --filter @nexus/harness run serve:live
-```
-
-**`serve` 才是走得完整條路的地方，而且要 `--live`。** `exit_plan_mode` 是需要核准的工具，
-CLI 與 eval 走 `HEADLESS_APPROVALS`：在那裡提出的計劃會被確定性拒絕 —— CLI 上還打得出
-`/plan off` 自己爬出來，web 上按得下批准。假模型的腳本另外寫死在 `cli.ts`，它不會呼叫
-`exit_plan_mode` —— 換清單改不了模型的腳本，所以「規劃 → 交計劃 → 有人按批准 → 開始動手」
-要真模型。
-
-模式沒啟用時，`exit_plan_mode` 仍留在工具目錄裡（照 dsh：狀態轉換不該順帶改變工具目錄），
-但它的執行路徑會拒絕 —— 回的是「不在計劃模式」，不是核准的措辭。
-
-### 長期目標
-
-`@nexus/plugin-goal` 讓一個會話記得住一個跨很多輪的目標：**事件溯源的耐久狀態**
-（`goal/change` 帶著整份快照）、**CAS 變更**（改之前要拿對修訂號），與 process 內
-的續行授權。形狀照 dsh 的 `packages/goal/`。
-
-**它在 CLI 的預設清單裡，開關是 `/goal`。** 六種輸入：
-
-| 這一行 | 做什麼 |
-| --- | --- |
-| `/goal` | 印出目前的目標、相位、輪次與上限、續行授權，與**現在打得動的命令** |
-| `/goal <目標>` | 建一個目標並授權續行；完成掉的目標可以直接被換掉 |
-| `/goal edit <目標>` | 改敘述，**不動相位也不動授權** |
-| `/goal pause` | 暫停進行中的目標並收回授權 |
-| `/goal resume` | 把停住的接回來，或替續上的 session 重新授權 |
-| `/goal clear` | 清掉目前的目標，**歷史留著** |
-
-**控制詞只有填滿整串輸入時才算控制詞**：`/goal pause after verification` 建的是
-「pause after verification」這個字面目標。照抄 dsh 的文法，理由是這個命令主要用來打
-一句話，而一句話很可能以控制詞開頭。
-
-dsh 那邊 `/goal` 還收圖片附件，我們沒有——`CommandInvocation` 沒有 `attachments`，
-整條水管不存在，所以提示字串裡也不寫圖片。
-
-**模型側的三顆工具在了**（`get_goal`、`create_goal`、`update_goal`，#177）：模型從一則
-人類直接訊息推得出長期目標就建得起來，也改得動、停得掉、標得完。權限在執行時擋——
-變更要求「這條輪次鏈往回追得到一則人類訊息」，而且三顆都是 `rootOnly`，subagent 那一份
-拿到的是拒絕樁。**自動續行的 `goal-round-driver` 不在這一版**：它是 dsh 自己標成可選的
-消費方，而且要先給 `turn/start` 一個 `source` 判別欄——沒有那一格，一輪由驅動器排出來的
-輪次跟人打的在日誌上一模一樣，權限就被它自己拿走了（#152 的決議）。細節與每一條偏離的
-代價寫在 `packages/nexus-plugin-goal/src/index.ts` 與 `tools.ts` 的檔頭。
-
-web 那條也打得到，而且**每條 thread 各有各的目標**——`serve.ts` 一個 thread 一個
-agent，所以一份 registry 一份會話日誌。
-
-### 人的命令
-
-`@nexus/plugin-commands` 是**人打的斜線命令**那條路：`registry.commands.register()` 註冊，
-進入點解析並發派，**不經過模型**。形狀照 dsh 的 `dsh-commands`。
-
-```ts
-registry.commands.register({
-  name: 'ping',
-  description: '回一句話，不驚動模型',
-  input: { hint: '[任何字]' },
-  handler: ({ rawInput }) => ({ kind: 'success', text: `pong${rawInput}` }),
-});
-```
-
-一行 `/name` 有四條路，**最後一條跟接上命令之前一模一樣**：
-
-| 這一行 | 去哪裡 |
-| --- | --- |
-| 註冊過的命令 | 跑 handler，結果印給人看（`error` 進 stderr） |
-| `/help`（後面的字忽略） | 印出命令清單。**不留日誌，也不驚動模型** |
-| `/exit` | 收工 |
-| 其餘（語法不符、名字不認得） | 照原樣送給模型 |
-
-**`/exit` 與 `/help` 刻意不是命令**：它們控制／描述的是這條 REPL，不是 agent，所以
-`commands.list()` 裡沒有它們，`/help` 自己把這兩行補進清單。dsh 也是這樣切的——它
-**根本沒有 `/help`**，探索面是 web composer 打 `/` 跳出來的候選選單，資料來源同樣是
-`commands.list()`；dsh 自己的 CLI 則一個命令發派面都沒有。我們照抄的是真相來源，換掉
-的是呈現形式（一行一行的 `readline`，不是 composer）。
-
-因為 REPL 在執行器之前攔這兩個名字，**plugin 註冊了 `help` 或 `exit` 會在 REPL 開起來
-時當場拋**——那份註冊本來永遠不會被叫到，而且沒有徵兆。
-
-認得的命令會在會話日誌留下一對 `command/run` / `command/done`；**收不下的行不留痕跡**。
-`@nexus/plugin-commands` 的不變量配套入口檢查這一對的三條關係（id 不重複、一次一個、
-done 配得到 run）——**這是全樹第一個非空的 package 配套入口**。
-
-命令的**文法**則歸擁有它的 package：`@nexus/plugin-plan-mode` 的配套入口檢的是
-「`/plan` 的參數收不下時，配對的 `command/done` 必須是 `error`」。生命週期那份不知道
-`plan` 的文法長什麼樣，所以那一條只有這裡檢得到。
-
-`command/run` 的 `args` 是使用者原話，而會話事件會**原樣鏡像進遙測**。要把使用者輸入
-擋在遙測外，得補 dsh 那個 `recordInput` 開關；這一版沒有它。
-
-跑基準任務（eval）：
-
-```bash
-pnpm --filter @nexus/harness exec vitest run src/eval
-```
-
-資料集在 `apps/harness/src/eval/dataset.ts`，評分器在 `scorers.ts`，跑一條任務的
-runner 在 `runner.ts`。**model 是 runner 的參數**，所以 CI 這條（假模型、零憑證、
-不需要任何 key）與換上真實供應商的那條跑的是同一份資料、同一組評分器。
-
-**七條題目分兩批。** 前三條由淺入深（單一工具 → 兩個工具且有順序 → 工具之間有資料相依），
-後四條是為了讓分數重新有解析度而加的，**難處刻意放在參數**：`edit_file` 的 `old_string`
-要一字不差重現剛讀到的內容、正確的參數是前一步輸出的**變換**而不是複製、以及一條
-「該克制就別叫工具」的題。挑這個方向是因為量到的資料就長這樣 —— 工具名字那一欄大家都對，
-參數那一欄才分得出高下。
-
-**「沒有可判的」一律是 `undefined`，不是 1 也不是 0。** 期望零筆工具呼叫的題目在工具與
-參數兩欄沒有東西可判，填成 1 的話等於替每個模型的平均無條件送一分滿分進去 —— 加了那條
-題目之後這兩欄的鑑別力反而下降，而它下降的方式看起來完全像是模型變好了。這與「模型沒回報
-usage 就是 `undefined` 不是零」、「端點失敗是沒有資料不是零分」是同一條規矩。
-
-**不要在 CI 設 `LANGSMITH_TRACING`。** eval 跑的是真的 agent，tracing 開著時基準任務的
-題目與工具參數會跟著 trace 送出去 —— 那條路徑跟 `langsmith/vitest` 自己的上傳是**兩個
-獨立的開關**，關掉一個不影響另一個（`src/eval/eval.test.ts` 的檔頭記著實測）。
-
-尺寸比較（**要 key、會花錢、不進 CI**）：
-
-```bash
-pnpm --filter @nexus/harness run eval:compare --samples 2
-pnpm --filter @nexus/harness run eval:compare --cases edit-after-read --samples 3
-```
-
-**2026-09-05 起這支不再是「尺寸比較」，兩道階梯收掉了（[#167](https://github.com/DemianLi/nexus-agent/issues/167)）。**
-它現在跑 `MEASURED_MODELS` —— 走完整基準任務量過的五個模型 —— 一段印完，多一個 `--models`
-可以挑子集。收的理由是端點把裝置拆了（`openai/gpt-oss-120b` 下架、`nemotron-3-nano-30b-a3b`
-從型錄消失，而這把 key 上湊不出第三道同家族的階梯），而**那條線本來就已經結案** ——
-下面那個「沒有尺寸效應」的結論是三輪量出來的，不受影響。要重建階梯的話，驗收條件寫在
-`src/eval/tiers.ts` 的檔頭 —— 那份檔頭現在裝的是**盤點方法**與**重建的四條驗收條件**，
-不再是「階梯怎麼挑出來的」（下一段那句指路因此要讀成歷史）。**以下這段記的是收掉之前的樣子。**
-
-同一份基準任務跑**兩道階梯**，只有 model 這一個參數不同：`openai/gpt-oss-20b` → `-120b`，
-以及 Nemotron-3 的 `nano-30b-a3b` / `super-120b-a12b` / `ultra-550b-a55b`。
-**一道階梯 = 一個家族**，所以「只有尺寸在變」只在階梯**內部**成立；報表因此按階梯分段印，
-跨階梯那條線混著訓練配方。階梯怎麼挑出來的、以及**那份清單為什麼是綁在帳號上的**
-（`GET /models` 列 84 個，一把 key 通常只叫得動其中 29 個），寫在 `src/eval/tiers.ts`
-的檔頭；換一把 key 要重新盤點。
-
-`--cases` 只跑指定的題目。**成本是題數 × 階數 × 取樣數的乘積** —— 跑滿（七題 ×
-六個模型 × 6 次取樣 = 252 次執行）實測是**三小時級**，不是半小時，
-所以只想看某幾題時不必把整份重跑一遍。認不得的 id 一律當場拋，不默默略過。
-
-最後還跑一個**判準對照**（`meta/llama-3.2-11b-vision-instruct`）。它**不是階梯上的一階** ——
-它的同家族對照 `-90b` 三次探測全部逾時，沒有對照就沒有東西能把它的分數歸因到尺寸。
-它只回答一個問題：**這組評分器量不量得出 1.00 以下的數字。**
-
-**結論是「沒有尺寸效應」，而且它已經被三輪獨立測量確認過。** 舊的三條題目上五個橫階
-全部 `1.00`，分不出高下；換成加難過的題目之後判準才有量程。三輪的參數正確性：
-
-| 輪次 | 跑了什麼 | 每階判分數 | `oss-20b` | `oss-120b` | `nano` | `super` | `ultra` |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 第一輪 | 四條難題 × 2 次 | 6 | 0.94 | 1.00 | 0.92 | 0.97 | 0.89 |
-| 第二輪 | 兩條難題 × 6 次 | 12 | 0.91 | 0.92 | 0.92 | 0.98 | 0.88 |
-| 第三輪 | 四條難題 × 6 次 | 18 | 0.95 | 1.00※ | 0.92 | 0.96 | 0.94 |
-
-※ **`oss-120b` 那一格是補測的，跟同列其他四格不是同一輪。** 第三輪它 42 次執行有 21 次
-被限流掉（見下），樣本不足以讀；把限流接住之後單獨重跑一次 42 次、**零失敗**，四條難題
-18 個判分**全部滿分**。所以它是這五階裡唯一在難題上不掉分的 —— 但這一格與其他四格之間
-多了一個變數（限流重試），並排讀要記得這件事。
-
-**「判分數」不等於執行次數** —— `no-tool-needed` 期望零筆工具呼叫，那兩欄沒有東西可判，
-所以四條難題 × 6 次是 24 次執行、18 個判分。
-
-三輪都落在同一個窄帶裡，方向一輪一個樣。**判準沒有飽和**（全距下探到 `0.33`／`0.50`），
-只是尺寸沒有在那個量程上動。
-
-**七題全跑那一輪必須拆開讀，否則會誤判成判準又飽和了。** 三條簡單題（`echo-once` /
-`echo-then-write` / `write-then-read`）上五階**全部 `1.00` / `1.00`** —— 完全飽和。
-所以七題的平均（`0.96`–`0.98`）是被簡單題稀釋出來的數字，**不是一次新的測量**；
-有解析度的只有四條難題那一組，上表第三列取的就是它。同一件事在成本上反過來：
-簡單題的 token 佔比壓低了平均，所以要比成本得看同一組題目。
-
-**那一輪 `gpt-oss-120b` 有 21 次被端點回 `429`，而那不是模型的問題 —— 是我們打太快。**
-（**這段更正了本節先前的說法**，原本寫的是「它跑不完難題」「斷點跟題目綁定」。）
-量下去之後兩句都不成立：**只跑那條「6/6 全滅」的題、前面什麼都不跑，是 6/6 全過、
-全部滿分**，每次 5–7 秒。斷點跟題目無關，跟**累計用量**有關 —— 實測 49.5 秒內燒掉
-**119,363 token** 觸發 429（約 120k 的每分鐘 token 配額），而 **16 秒後就完全恢復**，
-輕請求與一次真的 eval 執行都立刻通過。
-
-先前那句「冷開機重跑逐格重現，所以不是配額被前面的執行打滿」**推論反了**：那次重跑走的是
-同一串七題序列，累計到同一個點才斷 —— **逐格重現正是累計效應的證據，不是它的反證**。
-真正的對照是換掉一個變數（只跑那條題），不是把同一串重放一次。
-
-**最反直覺的一點：撞上限流的是六個模型裡最快的那個。** `nano` / `super` / `ultra` 每次
-token 更多（11k–17k），但每次要 14–60 秒；`oss-120b` 每次只要 2–7 秒 —— 單位時間的
-token 率最高，所以只有它超速。**「跑得快」本身是撞限流的風險因子，而它長得跟「這個模型
-不行」一模一樣。** **把限流接住之後重跑同一階，42 次零失敗**，七題與四條難題
-都是 `1.00` / `1.00`（各 36、18 個判分）—— 它不但跑得完，還是五階裡唯一在難題上不掉分的。
-
-**上面整段是 2026-08-28 的結論，原文照留 —— 但那個選擇已經被端點取消了。**
-`openai/gpt-oss-120b` 於 **2026-09-03 下架**（410，EOL 帶日期），型錄上也沒有它了。
-2026-09-04 重盤重選，答案是 **`nvidia/nemotron-3-super-120b-a12b`**，而這次的形狀不一樣：
-**品質沒有打平**（難題 0.98 對其他三個候選的 0.92–0.93），它同時拿下延遲與多叫次數，
-只輸 token。見 [#165](https://github.com/DemianLi/nexus-agent/issues/165) 與
-[`.docs/model-inventory.md`](.docs/model-inventory.md)。順帶量到兩件以前拿不到的事：
-**上下文窗口是逐顆的**（同端點兩顆差五倍以上），以及**可用的候選只剩 9 個**，
-沒過 [#85](https://github.com/DemianLi/nexus-agent/issues/85) 的十個門檻。
-
-**選型維持 `openai/gpt-oss-120b`（2026-08-28）。** 那 21 次 429 一度被讀成失敗模式那一軸的
-反面證據，更正之後**它不是** —— 限流是我們的跑法，不是模型的性質。品質並列第二、
-token 最省四到五成、多叫次數最低，三個軸都沒有變。
-跨階梯讀這條線對**選型**合法，對**尺寸效應**不合法。順帶：**成本跟尺寸無關，跟配方有關**
-—— 最便宜的一階是 120B 的 `oss-120b`，而最小的 `nano` 比最大的 `ultra` 還貴。
-
-**一次執行有兩道上限，超過就記成 `budget`。** 迴圈 40 個 super-step（約 19 輪模型呼叫）、
-時鐘 300 秒。兩道各管一半：一次跑掉可以是「叫太多次」，也可以是「叫沒幾次但每次都久」。
-而 `LIVE_TIMEOUT_MS`（90 秒）那道**一次都沒觸發過**，因為它管的是單一請求。
-
-實測攔到過一次：`llama-3.2-11b` 在同一題上，**沒有上限時跑了兩個小時**（單一次執行，
-零輸出，最後是人工殺掉的），**有上限時在第 101.8 秒被迴圈那道切掉**。同一輪裡最慢的
-正常執行是 93.8 秒，所以 300 秒那道沒有誤傷任何東西。
-
-**`budget` 是資料損失，不是低分。** 模型有沒有做完那題我們不知道，所以它跟端點的 4xx
-一樣不進平均，但要做的事不同：那是「調高上限重跑」或「這個模型在這題上跑不完」，
-不是換 id 也不是查網路。
-
-驅動器把**失敗與零分分開**：模型叫不出工具是 0 分（有資料），端點回 4xx 或掛住是
-「沒有資料」，後者不會被平均進通過率。判準對照曾經出現的 `400 "This model only supports
-single tool-calls at once!"` 就是這樣 —— 拒的是平行工具呼叫，那不是分數。
-
-**限流另外記一類 `throttled`，不跟 `400` 混在 `rejected` 裡。** `400` 是**模型行為**撞上
-供應商限制（重跑一模一樣，要換 id 或改題目），`429` 是**我們打太快**（重跑不一定一樣，
-跟模型好壞無關）。混在一起讀會出事 —— 2026-08-28 就出過一次。配額耗盡的 429 **不算**
-這一類，它留在 `rejected`：dsh 把 `RATE_LIMIT` 與 `QUOTA` 分成兩個碼，理由一樣是
-「前者等一下就過，後者重試無效」。
-
-**限流會先被重試接住，接不住才記成 `throttled`。** 這道要自己接，是因為基座那道的作用面
-比看起來窄：`AsyncCaller` 的 `maxRetries` 預設是 6，但 `@langchain/core` 把**沒有
-`retry-after` header 的 429** 分類成 `headerless_429` 然後**直接放棄**，而 NVIDIA 回的
-正是那個形狀；底層那道也關著（`@langchain/openai` 建 client 時寫死 `maxRetries: 0`）。
-所以 `createLiveModel` 傳自訂的 `onFailedAttempt`，**只改限流那一支** —— 它會整個取代掉
-基座的預設，順手把 `500` 與連線問題的重試一起關掉是很容易犯的退化，測試有一條專門擋它。
-
-clone 之後各自設定一次，讓 `git fetch` / `git pull` 自動清掉遠端已刪除的分支：
-
-```bash
-git config fetch.prune true
-```
-
-PR 合併後 GitHub 會自動刪掉 head branch（repo 開了 `delete_branch_on_merge`），
-沒設 prune 的話本地會累積一堆早已不存在的 `origin/*`。這條寫在 `.git/config`，不進版控。
-
-新增 shadcn/ui 元件：
-
-```bash
-pnpm --filter @nexus/web dlx shadcn@latest add <component>
-```
-
-## 分支策略
-
-```
-feature/*  --squash-->  develop  --merge commit-->  main  --workflow_dispatch-->  Release
-```
-
-| 分支 | 角色 |
-|---|---|
-| `develop` | 預設分支。所有日常開發的整合目標。 |
-| `main` | 發佈分支。唯一能產出 GitHub Release 的分支。 |
-
-### 規則
-
-- **兩條分支都禁止直接 push**，一律走 Pull Request。
-- **`gate` CI 必須綠燈**才能合併，且分支必須與 base 同步（strict）。
-- **PR 標題必須符合 `<type>: <描述>` 格式**，由 `gate` 強制；格式見 [AGENTS.md](AGENTS.md)。
-- **`main` 只接受來自 `develop` 的 PR**，由 `gate` 檢查 head branch 強制執行。緊急修補同樣先進 `develop`。
-- **禁止 force push 與刪除分支**，無人可繞過規則（含 repo owner）。
-- **`develop` 要求分支與 base 同步（strict）**；`main` 刻意不開 strict — 因為 `develop → main` 的 merge commit 只存在於 `main`，開了 strict 會讓第二次發版的 PR 永遠處於 out-of-date 而無法合併。
-- 合併方式：`feature → develop` 只能 squash；`develop → main` 只能 merge commit（保留可追溯性，因此 `main` 不啟用 linear history）。
-
-### 發佈
-
-到 Actions 頁面執行 **Release** workflow，branch 選 `main` 並輸入版號（`vX.Y.Z`）。
-workflow 會自行打 tag 並建立 GitHub Release。因為 `workflow_dispatch` 限定在 `main` 執行，
-「從 develop 發版」在機制上不可能發生。
-
-版號規則在 1.0 之前從簡：**完成一個 Phase 跳 minor，其餘一律 patch**。
-1.0 之前 semver 本來就不承諾相容性，此刻套用完整規則只是徒增判斷成本。
-
-不維護手寫的 CHANGELOG。release notes 由 `--generate-notes` 依 PR 標題自動生成，
-而 PR 標題規範已經強制每個變更都有一句可讀的中文描述 — 那就是 changelog 的原料。
-
-## CI
-
-`gate` 是唯一的 required status check，名稱永久固定。
-它無條件觸發，在 job 內以 `git diff` 計算異動檔案再決定要掃什麼；
-沒有可掃的檔案時直接綠燈通過，因此純文件的 PR 不會卡住。
+程式碼規範見 [`docs/standards.md`](docs/standards.md)。分支策略、PR 標題格式、發版流程與設計方法論
+（含對 DeepSeek Harness 的偏離規則）見 [AGENTS.md](AGENTS.md)。
+
+CI 只有 `gate` 一個 required status check，無條件觸發、在 job 內以 `git diff` 決定要掃什麼，
+沒有可掃的檔案時直接綠燈——純文件的 PR 不會卡住。**兩個例外**，共通點是「測試會讀這個檔」：
+`docs/operations.md`（測試從它讀核准 fixture 的參數，[#490](https://github.com/DemianLi/nexus-agent/issues/490)）
+與 `apps/harness/cordis.yml`（出貨的 plugin 清單，十七個測試檔真的拿它組 agent，
+[#454](https://github.com/DemianLi/nexus-agent/issues/454)）。只改這兩個檔也可能弄紅測試，所以它們
+會觸發完整掃描。細節見 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。

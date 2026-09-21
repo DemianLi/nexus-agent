@@ -18,11 +18,14 @@ import { createDeepAgent, StateBackend } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { createCliAgent, DEFAULT_PLUGINS, runTurn } from './cli.js';
+import { createCliAgent, runTurn } from './cli.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
+import { shippedPlugins } from './fixtures.js';
+
+const shipped = await shippedPlugins();
 
 function noteTool() {
   return tool(({ text }: { text: string }) => `已記下：${text}`, {
@@ -126,7 +129,7 @@ describe('會話事件日誌：CLI 那條路', () => {
   const silent = { log: () => undefined, error: () => undefined };
 
   it('CLI 也在寫，而且 seq 跨輪連續——同一份日誌活得比一輪久', async () => {
-    const { agent, dispose, sessionLog } = await createCliAgent({ live: false }, DEFAULT_PLUGINS);
+    const { agent, dispose, sessionLog } = await createCliAgent({ live: false }, shipped);
 
     try {
       await runTurn(agent, '第一句', silent, sessionLog);

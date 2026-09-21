@@ -5,6 +5,7 @@
  * 偷偷要求你伸手進 harness 內部的那一個）是 `packages/nexus-plugin-echo` 的事。
  */
 
+import type { FeedbackService } from './feedback.js';
 import { tool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
 import type { AnyBackendProtocol, SubAgent } from 'deepagents';
@@ -127,5 +128,15 @@ export function fakeSink(
       options.onShutdown?.();
       return Promise.resolve();
     },
+  };
+}
+
+/** 一份什麼都不寫的回饋規則：拿它的測試只看它佔不佔得住那個位子。 */
+export function fakeFeedback(): FeedbackService {
+  return {
+    put: () => ({ ok: false, error: { code: 'target-not-found', messageId: 'm' } }),
+    delete: () => ({ ok: true, value: { absent: true } }),
+    list: () => ({ ok: true, value: { items: [] } }),
+    record: () => ({ ok: true, value: { recorded: true } }),
   };
 }

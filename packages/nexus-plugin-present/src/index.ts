@@ -4,7 +4,7 @@
  *
  * 形狀照 dsh 的 `packages/deliverables/tool-present/`（`ddefc45`）：模型看到的描述、參數、每一句
  * 拒絕與 `Presented <path>` 的結果逐字照抄；每次最多 `maxFiles`（預設 8）個；**只記路徑與說明，
- * 不讀、不複製內容**。dsh 的 standard preset 掛它，所以它在 `DEFAULT_PLUGINS` 裡。
+ * 不讀、不複製內容**。dsh 的 standard preset 掛它，所以它在出貨清單裡。
  *
  * ## 什麼時候寫：配對的 `tool/result` 落定成功之後
  *
