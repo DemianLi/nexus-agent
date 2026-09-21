@@ -13,7 +13,7 @@
  */
 
 import { Download } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -40,12 +40,20 @@ function complaint(failure: DeliverableDownloadFailure): { title: string; descri
   }
 }
 
-/** 兩種長相共用的那一份：飛行狀態、呼叫、失敗的話講哪一句。 */
+/**
+ * 兩種長相共用的那一份：飛行狀態、呼叫、失敗的話講哪一句。
+ *
+ * **守衛讀的是 ref，不是那個 state。** `pending` 是 render 當下的值：同一拍內連按兩次時，兩次
+ * 讀到的都還是 `false`，而 `disabled` 也還沒畫上去。**量過——那時真的會發出兩份整檔。**
+ * ref 是唯一在同一拍內看得到自己剛寫進去的東西。`pending` 仍然留著，它的工作是畫面
+ * （`disabled` 與那行字），不是防重入。
+ */
 function useDownload(file: LocatedFile, downloader: DeliverableDownloader) {
   const [pending, setPending] = useState(false);
+  const inFlight = useRef(false);
   const run = async () => {
-    // **飛行中直接回頭**，不是只把鈕畫成 disabled：鍵盤與程式點得到一顆 disabled 的鈕之外的路。
-    if (pending) return;
+    if (inFlight.current) return;
+    inFlight.current = true;
     setPending(true);
     try {
       const result = await downloader.download(file);
@@ -54,6 +62,7 @@ function useDownload(file: LocatedFile, downloader: DeliverableDownloader) {
         toast.error(title, { description });
       }
     } finally {
+      inFlight.current = false;
       setPending(false);
     }
   };

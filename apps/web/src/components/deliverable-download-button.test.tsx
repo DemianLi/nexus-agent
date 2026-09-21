@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DeliverablesCard } from '@/components/deliverables-card';
@@ -103,10 +103,30 @@ describe('卡片上的下載鈕', () => {
       name: `下載：${FILE.path}`,
     }) as HTMLButtonElement;
     fireEvent.click(button);
-    // 鈕被鎖住只是第一道；下面那兩次點擊要證明的是**即使點得到也不會再發**。
     await waitFor(() => expect(button.disabled).toBe(true));
     fireEvent.click(button);
-    fireEvent.click(button);
+    expect(downloadCalls(doFetch)).toHaveLength(1);
+    release(octets());
+    await waitFor(() => expect(button.disabled).toBe(false));
+  });
+
+  it('同一拍內連點兩次也只發一份——那時 disabled 還沒生效', async () => {
+    let release = (_: Response) => {};
+    const inFlight = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    const { doFetch } = mount(() => inFlight);
+    const button = screen.getByRole('button', {
+      name: `下載：${FILE.path}`,
+    }) as HTMLButtonElement;
+    // **不用 `fireEvent`**：它每次都會 flush，第二次點下去時鈕已經是 `disabled`，那樣擋住的是
+    // 屬性、不是 `run` 裡那道守衛——把守衛拿掉這條測試照樣綠（量過）。真實的競態發生在 re-render
+    // 之前，所以兩次派發要落在同一個 act 批次裡。
+    act(() => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await waitFor(() => expect(downloadCalls(doFetch)).toHaveLength(1));
     expect(downloadCalls(doFetch)).toHaveLength(1);
     release(octets());
     await waitFor(() => expect(button.disabled).toBe(false));
