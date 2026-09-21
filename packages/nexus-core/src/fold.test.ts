@@ -14,7 +14,7 @@ import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
 import { CONTAINMENT_MIDDLEWARE_NAME } from './containment.js';
 import { FS_TOOL_ERRORS_MIDDLEWARE_NAME } from './fs-tool-errors.js';
 import { INVALID_TOOL_ARGS_MIDDLEWARE_NAME } from './invalid-tool-args.js';
-import { OBSERVATION_POLICY_MIDDLEWARE_NAME } from './observation.js';
+import { OBSERVATION_POLICY_MIDDLEWARE_NAME, observationPolicyPlugin } from './observation.js';
 import { OUTPUT_SCHEMA_MIDDLEWARE_NAME } from './output-schema.js';
 import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 import { MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
@@ -30,6 +30,7 @@ import {
   repeatReminderPlugin,
 } from './repeat-reminder.js';
 import { SUMMARIZATION_MIDDLEWARE_NAME } from './summarization.js';
+import { DEFAULT_TOOL_RESULT_PRUNE, toolResultPrunerPlugin } from './tool-result-pruner.js';
 import type { FoldOptions } from './fold.js';
 import { loadPlugins } from './load.js';
 import { fakeBackend, fakeMiddleware, fakePlugin, fakeSubAgent, fakeTool } from './fixtures.js';
@@ -1647,5 +1648,130 @@ describe('useWithBackend', () => {
       fakePlugin('plain', (r) => void r.middleware.use({ name: 'Plain' } as never)),
     ]);
     expect(middlewareNames(params)).toContain('Plain');
+  });
+});
+
+/**
+ * 「先讀後改」的條目——**三態，不是四態**。
+ *
+ * 它沒有設定，所以「條目在場」與「沒有人問過部署設定層」的正確答案都是「照預設開著」，
+ * 一顆只能表達「開著」的服務帶不了任何資訊。要分的只有一件事：有沒有被明著關掉。
+ */
+describe('先讀後改的條目', () => {
+  /** 不帶 `observationPolicy` 的折——這樣才問得到後兩態。 */
+  async function foldBare(plugins: PluginEntry[]) {
+    const { registry } = await loadPlugins([
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('one'))),
+      ...plugins,
+    ]);
+    return foldRegistry(registry, { summarization: false, defaultBackend: fakeBackend('default') });
+  }
+
+  /** 那一顆在不在 root 與每個 subagent 的 stack 裡。 */
+  function present(params: Parameters<typeof middlewareNames>[0] & { subagents: SubAgent[] }) {
+    const inRoot = middlewareNames(params).includes(OBSERVATION_POLICY_MIDDLEWARE_NAME);
+    const inSubagents = registered(params).map((subagent) =>
+      (subagent.middleware ?? [])
+        .map((mw) => (mw as unknown as { name: string }).name)
+        .includes(OBSERVATION_POLICY_MIDDLEWARE_NAME),
+    );
+    return { inRoot, inSubagents };
+  }
+
+  it('條目不在清單上時照樣開著——root 與 subagent 都有', async () => {
+    expect(await foldBare([]).then(present)).toEqual({ inRoot: true, inSubagents: [true] });
+  });
+
+  it('條目在清單上、沒被關：跟上一條一模一樣（它不帶設定，所以帶不了差別）', async () => {
+    expect(await foldBare([{ plugin: observationPolicyPlugin }]).then(present)).toEqual({
+      inRoot: true,
+      inSubagents: [true],
+    });
+  });
+
+  it('`disabled: true` 就真的沒有，root 與 subagent 都沒有', async () => {
+    expect(
+      await foldBare([{ plugin: observationPolicyPlugin, disabled: true }]).then(present),
+    ).toEqual({ inRoot: false, inSubagents: [false] });
+  });
+
+  it('組裝點明著傳 `true` 贏過 `disabled: true`', async () => {
+    const { registry } = await loadPlugins([
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('one'))),
+      { plugin: observationPolicyPlugin, disabled: true },
+    ]);
+    const params = foldRegistry(registry, {
+      summarization: false,
+      defaultBackend: fakeBackend('default'),
+      observationPolicy: true,
+    });
+    expect(present(params)).toEqual({ inRoot: true, inSubagents: [true] });
+  });
+
+  it('被關掉又沒有 backend 時不拋——`disabled` 是第二條正當的「不要」', async () => {
+    // **這一條釘的是順序。** 把 `disabled` 那一問挪到拋的後面，這裡就會炸；而「沒關掉又
+    // 沒 backend 要拋」那條不變式由下一條守著，兩條缺一不可。
+    const { registry } = await loadPlugins([{ plugin: observationPolicyPlugin, disabled: true }]);
+    const params = foldRegistry(registry, { summarization: false });
+    expect(middlewareNames(params)).not.toContain(OBSERVATION_POLICY_MIDDLEWARE_NAME);
+  });
+
+  it('條目在清單上、沒被關，又一個 backend 都沒有時照樣拋', async () => {
+    const { registry } = await loadPlugins([{ plugin: observationPolicyPlugin }]);
+    expect(() => foldRegistry(registry, { summarization: false })).toThrow(/先讀後改/);
+  });
+
+  it('它一顆服務都不註冊——照 dsh 的 `fs-observation-policy`', async () => {
+    // `apply` 是空的是承重的，不是漏寫：留下的唯一痕跡是 `disabledEntries`。
+    const { registry } = await loadPlugins([{ plugin: observationPolicyPlugin }]);
+    expect(registry.services.names()).toEqual([]);
+    const off = await loadPlugins([{ plugin: observationPolicyPlugin, disabled: true }]);
+    expect(off.registry.disabledEntries.names()).toEqual(['observation-policy']);
+  });
+
+  it('它不收 config——給了會在載入期拋', async () => {
+    // 這一顆沒有 Config schema，而 `parseEntryConfig` 對這件事是當場拋，不是默默吞掉。
+    // 出貨的 `cordis.yml` 那一列因此刻意沒有 `config:`。
+    await expect(
+      loadPlugins([{ plugin: observationPolicyPlugin, config: { anything: 1 } } as PluginEntry]),
+    ).rejects.toThrow(/不收 config/);
+  });
+});
+
+/** 剪刀的預算從條目來——四態，同提醒器，但第 3 態落在 `false` 不是 `undefined`。 */
+describe('剪刀的預算從條目來', () => {
+  it('條目沒給 config 時拿到的是 schema 的預設，逐格等於那個常數', async () => {
+    const { registry } = await loadPlugins([{ plugin: toolResultPrunerPlugin }]);
+    expect(registry.services.get('toolResultPruning')).toEqual({ ...DEFAULT_TOOL_RESULT_PRUNE });
+  });
+
+  it('條目的壞預算在載入期就失敗，不是等到 fold', async () => {
+    // 跨欄位規則住在 `assertToolResultPruneConfig`，條目的 `apply` 叫它。
+    await expect(
+      loadPlugins([
+        { plugin: toolResultPrunerPlugin, config: { thresholdChars: 100, headChars: 100 } },
+      ]),
+    ).rejects.toThrow(/工具結果預算不成立/);
+  });
+
+  it('摘要關掉時，條目的壞預算照樣在載入期失敗', async () => {
+    // 這一格那時不發生作用，但失敗點在 `apply`，比 fold 更早——所以「關掉時照樣驗」
+    // 這條不變式在條目這條路上是**更強**的，不是更弱的。
+    await expect(
+      loadPlugins([
+        { plugin: toolResultPrunerPlugin, config: { thresholdChars: 100, tailChars: 100 } },
+      ]),
+    ).rejects.toThrow(/工具結果預算不成立/);
+  });
+
+  it('組裝點明著傳的壞預算照樣當場拋，而且摘要關掉時也拋', async () => {
+    // **條目這條路長出來之後，原本那條不變式不可以鬆掉。** `toolResultPruningDisposition`
+    // 被挪到 `summarization === false` 那個早退**之後**的話，這一條會綠。
+    await expect(
+      fold([{ plugin: toolResultPrunerPlugin }], {
+        summarization: false,
+        toolResultPruning: { thresholdChars: 100, headChars: 100 },
+      }),
+    ).rejects.toThrow(/工具結果預算不成立/);
   });
 });

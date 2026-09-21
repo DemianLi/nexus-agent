@@ -107,7 +107,10 @@
 
 import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
+import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
+import type { NexusPlugin } from './plugin.js';
+import type { PluginRegistry } from './registry.js';
 
 /** 每一段被剪掉的中段換成這個標記。結構照抄 dsh 的 `PRUNE_MARKER`，字面走中文。 */
 export const TOOL_RESULT_PRUNE_MARKER = '\n\n[... 工具結果中段已剪除 ...]\n\n';
@@ -352,3 +355,68 @@ export function withToolResultPruning(
     },
   } as AgentMiddleware;
 }
+
+/**
+ * 剪刀預算的服務名。fold 從這裡讀條目提供的那一份。
+ *
+ * **沒人提供不等於「不剪」**：那兩種成因的正確答案相反，分野見
+ * {@link ./registry.ts | DisabledEntryView}。
+ */
+export const TOOL_RESULT_PRUNE_SERVICE = 'toolResultPruning';
+
+/**
+ * 這個條目的 plugin 名。
+ *
+ * **承重的常數**：{@link ./fold.ts | foldRegistry} 拿它去問
+ * {@link ./registry.ts | DisabledEntryView}。刻意不是條目的 `id`——id 是使用者的 patch
+ * 改得動的字串（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+ */
+export const TOOL_RESULT_PRUNER_PLUGIN_NAME = 'tool-result-pruner';
+
+/**
+ * 條目收的設定。每一格都可省，省掉的那格用 {@link DEFAULT_TOOL_RESULT_PRUNE} 的值。
+ *
+ * **預設值只寫在一個地方**：這裡的 `.default()` 指的就是那個常數的欄位，不是把數字再抄
+ * 一次。**跨欄位那條規則（`headChars ＋ 標記 ＋ tailChars ≤ thresholdChars`）不在這個
+ * schema 裡**，它留在 {@link assertToolResultPruneConfig}——那是唯一知道它的地方，抄進
+ * schema 就是第二個真相。所以壞值的失敗點是 `apply`，而 `apply` 一樣在載入期。
+ *
+ * **YAML 的 patch 是整份替換 `config`，這一層卻是逐欄補預設**。兩者不打架，因為合併的
+ * 底盤兩邊都是預設值：`config: { thresholdChars: 4096 }` 之後其餘兩格拿到的還是
+ * {@link DEFAULT_TOOL_RESULT_PRUNE} 的值，跟 `resolveToolResultPruneConfig({ thresholdChars: 4096 })`
+ * 的結果逐格相同。
+ */
+export const toolResultPrunerConfigSchema = z.strictObject({
+  /** 見 {@link ToolResultPruneConfig.thresholdChars}。 */
+  thresholdChars: z.number().default(DEFAULT_TOOL_RESULT_PRUNE.thresholdChars),
+  /** 見 {@link ToolResultPruneConfig.headChars}。 */
+  headChars: z.number().default(DEFAULT_TOOL_RESULT_PRUNE.headChars),
+  /** 見 {@link ToolResultPruneConfig.tailChars}。 */
+  tailChars: z.number().default(DEFAULT_TOOL_RESULT_PRUNE.tailChars),
+});
+
+/** {@link toolResultPrunerConfigSchema} 驗完的形狀。 */
+export type ToolResultPrunerConfig = z.infer<typeof toolResultPrunerConfigSchema>;
+
+/**
+ * 工具結果剪刀的**設定條目**（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+ *
+ * 它只做一件事：把驗過的預算提供成 {@link TOOL_RESULT_PRUNE_SERVICE} 服務。
+ * **剪刀不在這裡包**——它由 {@link ./fold.ts | foldRegistry} 包在摘要器外面，而且只在摘要
+ * 開著時有作用（dsh 的 pruner 唯一的消費者是 compaction）。
+ *
+ * **這是登記過的偏離**，同 {@link ./repeat-reminder.ts | repeatReminderPlugin}：dsh 那側
+ * `tool-result-pruner` 是 base 的一個獨立套件；我們表達不出來的是「包在摘要器外面、逐個
+ * agent 跟著摘要器一起建」。偏的是載體，設定的語意沒有偏。
+ */
+export const toolResultPrunerPlugin: NexusPlugin<ToolResultPrunerConfig> = {
+  name: TOOL_RESULT_PRUNER_PLUGIN_NAME,
+  Config: toolResultPrunerConfigSchema,
+  apply(registry: PluginRegistry, config: ToolResultPrunerConfig) {
+    // **驗在這裡、只驗一次。** 跨欄位規則住在 assert 裡，所以提供出去的是已經驗過的
+    // 預算，fold 拿到就直接用。
+    registry.services.provide(TOOL_RESULT_PRUNE_SERVICE, assertToolResultPruneConfig(config));
+  },
+};
+
+export default toolResultPrunerPlugin;

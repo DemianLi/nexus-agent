@@ -98,8 +98,10 @@
 #
 # 這幾列**不裝功能，只講設定**（#456）。middleware 本身由 `foldRegistry` 建與排位——位置
 # 是承重的（有四條測試釘著）、而且有一顆必須逐個 agent 各建一份，這兩件事
-# `registry.middleware.use()` 都表達不出來。所以條目的 `apply` 只做一件事：把驗過的設定
-# 提供成一個服務，fold 從那裡讀。偏離登記在 `@nexus/core` 對應那個檔的檔頭上。
+# `registry.middleware.use()` 都表達不出來。所以帶設定的條目，`apply` 只做一件事：把驗過的
+# 設定提供成一個服務，fold 從那裡讀；**沒有設定的那一顆連服務都不註冊**（照 dsh 的
+# `fs-observation-policy`），它在場的唯一意義是「關得掉」。偏離登記在 `@nexus/core` 對應那
+# 個檔的檔頭上。
 #
 # **關掉它就是 `disabled: true`**，語意照 dsh：條目不掛，那一顆 middleware 真的不在 stack
 # 裡。要改設定就在 patch 檔裡重寫這一列的 `config`——整份替換，沒重述的欄位回到預設值。
@@ -117,6 +119,30 @@
     include: []
     exclude: []
     argumentsPreviewChars: 500
+
+# 摘要之前先把過長的工具結果剪掉中段（#446）。三格預算照 dsh base 的 `tool-result-pruner`
+# （`packages/bundle/base/cordis.patch.yml:404`，`ddefc45`）。
+#
+# **只在摘要開著時有作用**：dsh 的 pruner 唯一的消費者是 compaction，摘要不掛就沒人叫它。
+# 但設定照樣在載入期驗——寫錯不會因為今天剛好沒用到就放過。
+- id: tool-result-pruner
+  name: '@nexus/core/tool-result-pruner'
+  config:
+    thresholdChars: 8192
+    headChars: 4096
+    tailChars: 1024
+
+# 先讀後改：沒讀過的檔不准改（#273）。照 dsh base 的 `fs-observation-policy`
+# （`packages/bundle/base/cordis.patch.yml:264`，`ddefc45`）預設就載著。
+#
+# **這一列刻意沒有 `config:`**，而且不可以加：這一顆沒有設定，plugin 也就沒有 Config
+# schema，而載入器對「沒有 schema 卻給了 config」是**當場拋**，不是默默吞掉。它跟上面兩列
+# 因此差一格——上面兩列是四態（明著傳的 > 條目的設定 > 被關掉 > 內建預設），這一列只有
+# 三態，因為「條目在場」與「沒有經過設定檔」的答案都是「開著」。
+#
+# 關掉它等於**這個組裝接受盲改**，不是省一點開銷。
+- id: observation-policy
+  name: '@nexus/core/observation-policy'
 
 # ── 配套入口 ──────────────────────────────────────────────────────────────────
 #

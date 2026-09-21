@@ -28,7 +28,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { DEFAULT_REPEAT_REMINDER } from '@nexus/core';
+import { DEFAULT_REPEAT_REMINDER, DEFAULT_TOOL_RESULT_PRUNE } from '@nexus/core';
 
 import {
   applyEntryPatches,
@@ -70,10 +70,10 @@ function writePrivate(root: string, name: string, content: string): string {
 describe('出貨的 cordis.yml', () => {
   it('每一列都載得起來，而且每一顆都是真的 plugin', async () => {
     const fromYaml = await loadPluginConfig();
-    // 28 = 7 個功能 ＋ 1 個 core middleware 設定（#456）＋ 20 個配套入口。**數目寫在這裡
+    // 30 = 7 個功能 ＋ 3 個 core middleware 設定（#456）＋ 20 個配套入口。**數目寫在這裡
     // 是為了擋「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個空
     // installer 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
-    expect(fromYaml).toHaveLength(28);
+    expect(fromYaml).toHaveLength(30);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -121,10 +121,17 @@ describe('出貨的 cordis.yml', () => {
     // 兩份，所以這一行拿常數對它：漂了就紅，而不是等到某天有人發現產品跟預設不一樣。
     expect(byId.get('repeat-reminder')).toEqual({ ...DEFAULT_REPEAT_REMINDER });
 
+    // 剪刀那三格同理（#456）。
+    expect(byId.get('tool-result-pruner')).toEqual({ ...DEFAULT_TOOL_RESULT_PRUNE });
+
     // **其餘每一列都不帶 config**，這半句同樣承重：二十個配套入口一個 `Config` schema 都
     // 沒有，給它們設定會在載入時拋（`parseEntryConfig`）。
+    //
+    // **`observation-policy` 不在這張名單上，而那是承重的不對稱**（#456）：那一顆沒有設定、
+    // 也沒有 Config schema，所以替它加一行 `config:` 會在載入期拋。它進到這棵樹裡的唯一
+    // 意義是「關得掉」，關掉的行為由 `observation-policy-entry` 那組測試守著。
     const withConfig = [...byId].filter(([, config]) => config !== undefined).map(([id]) => id);
-    expect(withConfig).toEqual(['todo', 'feedback', 'repeat-reminder']);
+    expect(withConfig).toEqual(['todo', 'feedback', 'repeat-reminder', 'tool-result-pruner']);
   });
 
   it('出貨檔的路徑指到真的存在的那一份', () => {

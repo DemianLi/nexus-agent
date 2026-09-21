@@ -170,6 +170,8 @@ export {
   createObservationPolicy,
   OBSERVATION_POLICY_MIDDLEWARE_NAME,
   OBSERVATION_POLICY_NOTICE,
+  OBSERVATION_POLICY_PLUGIN_NAME,
+  observationPolicyPlugin,
   OBSERVED_EDIT_TOOL,
   OBSERVED_READ_TOOL,
   OBSERVED_WRITE_TOOL,
@@ -257,7 +259,11 @@ export {
   resolveSummarizationSettings,
   SUMMARIZATION_MIDDLEWARE_NAME,
 } from './summarization.js';
-export type { ToolResultPruneConfig, ToolResultPruneResult } from './tool-result-pruner.js';
+export type {
+  ToolResultPruneConfig,
+  ToolResultPruneResult,
+  ToolResultPrunerConfig,
+} from './tool-result-pruner.js';
 export {
   assertToolResultPruneConfig,
   codePointLength,
@@ -266,6 +272,10 @@ export {
   pruneToolResultContent,
   pruneToolResults,
   TOOL_RESULT_PRUNE_MARKER,
+  TOOL_RESULT_PRUNE_SERVICE,
+  TOOL_RESULT_PRUNER_PLUGIN_NAME,
+  toolResultPrunerConfigSchema,
+  toolResultPrunerPlugin,
 } from './tool-result-pruner.js';
 
 export type {

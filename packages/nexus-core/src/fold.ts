@@ -32,7 +32,7 @@ import {
   createInvalidToolArgsMiddleware,
 } from './invalid-tool-args.js';
 import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
-import { createObservationPolicy } from './observation.js';
+import { createObservationPolicy, OBSERVATION_POLICY_PLUGIN_NAME } from './observation.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
@@ -54,7 +54,11 @@ import {
 } from './summarization.js';
 import type { SummarizationSettings } from './summarization.js';
 import { toolCallIdOf, toolRefusal } from './tool-events.js';
-import { resolveToolResultPruneConfig } from './tool-result-pruner.js';
+import {
+  resolveToolResultPruneConfig,
+  TOOL_RESULT_PRUNE_SERVICE,
+  TOOL_RESULT_PRUNER_PLUGIN_NAME,
+} from './tool-result-pruner.js';
 import type { ToolResultPruneConfig } from './tool-result-pruner.js';
 
 /**
@@ -211,8 +215,13 @@ export interface FoldOptions {
    */
   summarization?: Partial<SummarizationSettings> | false;
   /**
-   * 摘要器外面那把工具結果剪刀的預算。省略即 {@link DEFAULT_TOOL_RESULT_PRUNE}，給物件就
-   * 逐格淺合併上去，`false` 是明著不要——摘要照跑，只是不先剪。
+   * 摘要器外面那把工具結果剪刀的預算。給物件就逐格淺合併到
+   * {@link DEFAULT_TOOL_RESULT_PRUNE} 上，`false` 是明著不要——摘要照跑，只是不先剪。
+   *
+   * **省略時不一定是預設值**：那時改由部署設定層的 `@nexus/core/tool-result-pruner` 條目
+   * 決定，四態的順序見 {@link toolResultPruningDisposition}
+   * （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。手搭 plugin 清單、
+   * 沒有經過設定檔的組裝拿到的還是內建預設。
    *
    * **照 dsh，它只在摘要開著時有作用**：dsh 的 pruner 唯一的消費者是 compaction，摘要
    * 不掛就沒人叫它。所以 {@link FoldOptions.summarization} 是 `false` 時這一格不發生作用，
@@ -236,6 +245,11 @@ export interface FoldOptions {
   repeatReminder?: Partial<RepeatReminderSettings> | false;
   /**
    * 「先讀後改」策略：沒讀過的檔不准改。省略即開著，`false` 是明著關掉。
+   *
+   * **省略時還有第二條關法**：部署設定層把 `@nexus/core/observation-policy` 那一列標成
+   * `disabled: true`（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。這一顆
+   * **沒有設定**，所以它只有三態而不是四態，理由見
+   * {@link ./observation.ts | observationPolicyPlugin}。
    *
    * **預設開著是照 dsh**：它那側這是預設載入的插件，連工具描述都寫著「the **default**
    * fs-observation-policy requires it」。關掉的意思是「這個組裝接受盲改」——例如一個
@@ -356,7 +370,7 @@ export function foldRegistry(
   // **backend 提前折**：策略要的版本 token 得從工具實際讀寫的那一個取，所以它不能等到
   // 下面才算。摘要器刻意拿的是兜底那個，兩者的差別見各自的文件。
   const backend = foldBackend(registry, options.defaultBackend);
-  const observationPolicy = foldObservationPolicy(options, backend);
+  const observationPolicy = foldObservationPolicy(registry, options, backend);
   // 檔案工具的失敗標成錯誤（#293）：只在有 backend 時掛——包的是交給基座的那一份，策略手上
   // 那一個是同一個實例，見 {@link ./fs-tool-errors.ts}。無狀態，一份走遍 root 與每個 subagent。
   const fsToolErrors = backend === undefined ? undefined : createFsToolErrorsMiddleware();
@@ -875,13 +889,15 @@ function repeatReminderDisposition(
  * （[#143](https://github.com/DemianLi/nexus-agent/issues/143)）。**它跟工廠不衝突**：
  * 那個通道無狀態，逐個 agent 建的是摘要器不是它，每次呼叫現問「這次屬於哪一份日誌」。
  *
- * @param registry - 折的那張註冊表，這裡只用它的 `sessions`。
+ * @param registry - 折的那張註冊表：`sessions`，以及剪刀預算走的那兩條（服務與
+ *   {@link ./registry.ts | DisabledEntryView}，見 {@link toolResultPruningDisposition}）。
  * @param options - 組裝點自有的那些。
  * @returns 每呼叫一次就給一份新的摘要器（或空殼）。
  */
 function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => AgentMiddleware {
-  // 關掉時照樣驗：設定寫錯在載入期失敗，見 {@link FoldOptions.toolResultPruning}。
-  const pruning = resolveToolResultPruneConfig(options.toolResultPruning);
+  // **在摘要那條早退之前就問。** 關掉時照樣驗：設定寫錯在載入期失敗，見
+  // {@link FoldOptions.toolResultPruning}。挪到早退之後就等於默默放掉這條不變式。
+  const pruning = toolResultPruningDisposition(registry, options);
   if (options.summarization === false) return () => ({ name: SUMMARIZATION_MIDDLEWARE_NAME });
   const settings = resolveSummarizationSettings(options.summarization);
   const backend = options.defaultBackend;
@@ -904,22 +920,60 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
  * **沒有 backend 又沒關掉是拋，不是靜默跳過。** 拿不到版本 token 的策略沒有東西可以比，
  * 而它會長得跟「一切正常」一模一樣。同型的前例是 {@link foldSummarizer}。
  *
+ * **三態不是四態。** 這一顆沒有設定，所以「條目在場」與「沒有經過部署設定層」的正確答案
+ * 都是「照預設開著」，一顆只能表達「開著」的服務帶不了任何資訊——要分的只有「有沒有被
+ * 明著關掉」。細節見 {@link ./observation.ts | observationPolicyPlugin}。
+ *
+ * @param registry - 已經跑完 `loadPlugins()` 的 registry，這裡只問它
+ *   {@link ./registry.ts | DisabledEntryView}。
  * @param options - 組裝點自有的那些。
  * @param backend - {@link foldBackend} 折出來的那個。
  * @returns 每呼叫一次就給一份新的策略 middleware，或 `undefined`。
  */
 function foldObservationPolicy(
+  registry: PluginRegistry,
   options: FoldOptions,
   backend: AnyBackendProtocol | undefined,
 ): (() => AgentMiddleware) | undefined {
   if (options.observationPolicy === false) return undefined;
+  // **這一格要問在拋之前。** `disabled: true` 是第二條正當的「不要」，而不要的組裝不必
+  // 有 backend——問在拋之後的話，一個正確關掉了它、又沒有 backend 的組裝會當場炸。
+  if (
+    options.observationPolicy === undefined &&
+    registry.disabledEntries.has(OBSERVATION_POLICY_PLUGIN_NAME)
+  )
+    return undefined;
   if (backend === undefined)
     throw new Error(
       '要配「先讀後改」策略，但這次組裝一個 backend 都沒有——策略要從 backend 取版本' +
-        'token，沒有它就沒有東西可以比。給一個 default backend，或明著傳' +
-        '`observationPolicy: false`（那等於接受盲改）。',
+        'token，沒有它就沒有東西可以比。給一個 default backend、明著傳' +
+        '`observationPolicy: false`，或在部署設定裡把 `@nexus/core/observation-policy` ' +
+        '那一列標成 `disabled: true`（三者都等於接受盲改）。',
     );
   return () => createObservationPolicy(backend);
+}
+
+/**
+ * 這次組裝的剪刀預算——**四態，依序問**，同
+ * {@link repeatReminderDisposition}。第 3 態（條目被明著關掉）落在 `false`，不是
+ * `undefined`：消費端的形狀是 `ToolResultPruneConfig | false`，`false` 才是「不剪」。
+ *
+ * **條目提供的那一份已經驗過**（在它的 `apply` 裡），這裡不再驗一次。
+ *
+ * @param registry - 已經跑完 `loadPlugins()` 的 registry。
+ * @param options - 組裝點自有的那些。
+ * @returns 要用的預算，或 `false`＝不剪。
+ */
+function toolResultPruningDisposition(
+  registry: PluginRegistry,
+  options: FoldOptions,
+): ToolResultPruneConfig | false {
+  if (options.toolResultPruning !== undefined)
+    return resolveToolResultPruneConfig(options.toolResultPruning);
+  const provided = registry.services.get(TOOL_RESULT_PRUNE_SERVICE);
+  if (provided !== undefined) return provided;
+  if (registry.disabledEntries.has(TOOL_RESULT_PRUNER_PLUGIN_NAME)) return false;
+  return resolveToolResultPruneConfig(undefined);
 }
 
 /** 有人掛過路由就包成 `CompositeBackend`，否則原樣交出組裝點給的那個。 */
