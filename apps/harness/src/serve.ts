@@ -399,6 +399,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         feedback,
         workspaceChanges,
         goals,
+        workspaceRoot,
       } = built;
       // **遙測披露印在這裡而不是啟動時，因為啟動的那一刻答案不存在**：`createAgent` 是
       // lazy 的（`wire-handler.ts` 的 `pumpFor` 第一次收到請求才呼叫），plugin 沒跑過
@@ -419,6 +420,9 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         ...(feedback !== undefined && { feedback }),
         // 每一輪的改動摘要（#443）：沒給 `--workspace` 就缺席，兩條 `changes` 路由一律 404。
         ...(workspaceChanges !== undefined && { workspaceChanges }),
+        // 交付讀檔路由的錨（#452）：沒給 `--workspace` 就缺席，兩條路由一律 404。
+        // **這個值由 `createCliAgent` 算、從這裡原樣轉交**，呼叫端不再寫一次 `resolve(cwd, ...)`。
+        ...(workspaceRoot !== undefined && { workspaceRoot }),
         // 落盤沒接上就被收掉（建 thread 途中失敗）的話，續接那個把手還在這裡，要自己放。
         dispose: async () => {
           // 放不掉不該擋住收 agent——它底下可能有子行程。

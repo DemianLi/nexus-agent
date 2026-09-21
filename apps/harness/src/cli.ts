@@ -446,6 +446,25 @@ export function resolveResumeDir(
   return outsideWorkspace(invocation.resume, invocation.workspace, cwd, '--resume');
 }
 
+/**
+ * `--workspace` 那一格解析出來的絕對根，沒給就是 `undefined`。
+ *
+ * **一份**：這棵樹上曾經有兩處各寫一次 `resolve(cwd, workspace)`（這裡與
+ * {@link createCliAgent}），而 {@link outsideWorkspace} 的檔頭對同型情況已經寫過下場
+ * ——「有一天只有一邊擋」。[#504](https://github.com/DemianLi/nexus-agent/issues/504)
+ * 要把這個值寫進會話 header，那是第三個消費者，所以這裡先抽出來。
+ *
+ * @param workspace - `--workspace` 命令列上那串字，沒給就是 `undefined`。
+ * @param cwd - 解析的起點。
+ * @returns 絕對根，或沒給時的 `undefined`。
+ */
+export function resolveWorkspaceRoot(
+  workspace: string | undefined,
+  cwd: string,
+): string | undefined {
+  return workspace === undefined ? undefined : resolve(cwd, workspace);
+}
+
 /** 兩個日誌目錄旗標共用的那道檢查。**一份**，理由同 {@link resolveSessionLogDir} 的呼叫端。 */
 function outsideWorkspace(
   path: string,
@@ -454,8 +473,8 @@ function outsideWorkspace(
   flag: string,
 ): string {
   const directory = resolve(cwd, path);
-  if (workspacePath === undefined) return directory;
-  const workspace = resolve(cwd, workspacePath);
+  const workspace = resolveWorkspaceRoot(workspacePath, cwd);
+  if (workspace === undefined) return directory;
   if (directory === workspace || directory.startsWith(`${workspace}${sep}`)) {
     throw new Error(
       `${flag} 不能在 --workspace 底下（${directory} 在 ${workspace} 之內）。` +
@@ -674,6 +693,15 @@ export async function createCliAgent(
    * 拿掉 `--plugins` 之後，這是剩下的那條路）。兩條進入點都拿它去組 {@link goalDriverPort}。
    */
   goals: GoalServices | undefined;
+  /**
+   * `--workspace` 解析出來的絕對根，**沒給就是 `undefined`**
+   * （[#452](https://github.com/DemianLi/nexus-agent/issues/452)）。
+   *
+   * 回傳它是因為算它的地方（這個函式裡）與要用它的地方是兩個 scope：serve 把它交給
+   * wire-handler 的讀檔路由當錨。**呼叫端不要再寫一次 `resolve(cwd, ...)`**，見
+   * {@link resolveWorkspaceRoot}。
+   */
+  workspaceRoot: string | undefined;
 }> {
   const model = createCliModel(invocation.live);
   // **channel 在這裡算一次，兩個消費者共用。** 核准閘門由 `foldRegistry` 自己算
@@ -706,8 +734,7 @@ export async function createCliAgent(
   // `createCliAgent`，所以一條 thread 一格。建在模組層或工廠閉包裡的話兩條 thread 會共用
   // 同一格——一條 thread 的 `/sandbox read-only` 收緊到另一條 thread 的檔案工具上，
   // 而那是靜默的（見 `sandbox-mode.ts` 的模組註解）。
-  const workspaceRoot =
-    invocation.workspace === undefined ? undefined : resolve(cwd, invocation.workspace);
+  const workspaceRoot = resolveWorkspaceRoot(invocation.workspace, cwd);
   const sandboxMode = new SandboxModeController(invocation.sandbox ?? 'workspace-write');
   const backend =
     workspaceRoot === undefined
@@ -783,6 +810,7 @@ export async function createCliAgent(
     feedback,
     workspaceChanges: services.get(WORKSPACE_CHANGES_SERVICE),
     goals: services.get(GOALS_SERVICE),
+    workspaceRoot,
   };
 }
 

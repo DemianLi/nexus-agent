@@ -53,8 +53,17 @@ export type {
   WireFeedbackItem,
   WireFeedbackRating,
 } from './protocol.js';
-export type { DeliverablesPresentedPayload, WirePresentedFile } from './deliverables.js';
-export { DELIVERABLES_PRESENTED } from './deliverables.js';
+export type {
+  DeliverableFilePage,
+  DeliverableFileStat,
+  DeliverablesPresentedPayload,
+  WirePresentedFile,
+} from './deliverables.js';
+export {
+  deliverableDownloadPath,
+  deliverableFilePath,
+  DELIVERABLES_PRESENTED,
+} from './deliverables.js';
 export type {
   WorkspaceChangedFile,
   WorkspaceChangesPayload,
