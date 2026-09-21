@@ -16,6 +16,30 @@ import { createRegistry } from '@nexus/core';
 import { StateBackend } from 'deepagents';
 import { z } from 'zod';
 import { BrowserAuth } from './browser-auth.js';
+import { loadPluginConfig } from './plugin-config.js';
+
+/**
+ * 出貨那份清單，載一次就快取。
+ *
+ * **測試要的是產品真的組出來的那一份**，所以這裡讀的是 `apps/harness/cordis.yml`，不是
+ * 另一份寫死在測試裡的清單——[#490](https://github.com/DemianLi/nexus-agent/issues/490) 的
+ * 教訓：一份「跟產品一樣」的副本守的是副本相等，不是產品是對的。
+ *
+ * **只讀出貨那一層，不疊使用者的 patch**：測試要的是「出廠是什麼樣」，而不是跑測試的這台
+ * 機器上那個人的偏好。`loadPluginConfig` 不給 `userPatch` 就不讀 home——這比傳一個暫存目錄
+ * 更直接，因為連「有沒有讀到」這件事都不必假設。
+ *
+ * **快取是安全的**：[#453](https://github.com/DemianLi/nexus-agent/issues/453) 之後每個 plugin
+ * 都是模組層級的常數（設定是條目上的資料，不在閉包裡），所以兩次組裝共用同一顆 plugin 物件
+ * 跟以前共用 `DEFAULT_PLUGINS` 那份模組常數（#454 之前）是同一回事。
+ *
+ * @returns 出貨清單，跟產品路徑上零設定時組出來的那一份相同。
+ */
+let shipped: Promise<readonly PluginEntry[]> | undefined;
+export function shippedPlugins(): Promise<readonly PluginEntry[]> {
+  shipped ??= loadPluginConfig();
+  return shipped;
+}
 
 /**
  * 一個真的、但沒有人註冊過任何命令的命令註冊點。

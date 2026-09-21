@@ -38,9 +38,8 @@ import type {
 } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { createAskUserPlugin } from '@nexus/plugin-ask-user';
-import { createAgentInstructionsPlugin } from '@nexus/plugin-agent-instructions';
 import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
-import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import {
   attachSessionPersistence,
   createHostServicesPlugin,
@@ -52,34 +51,11 @@ import {
 } from '@nexus/core';
 import { createJsonlSessionStore, openJsonlSessionStore } from './jsonl-session-store.js';
 import { assertSameCwd } from './resume-guards.js';
-import { createCoreInvariantPlugin } from '@nexus/core/invariant';
-import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant';
-import { createAskUserInvariantPlugin } from '@nexus/plugin-ask-user/invariant';
-import { createAgentInstructionsInvariantPlugin } from '@nexus/plugin-agent-instructions/invariant';
-import { createFeedbackPlugin } from '@nexus/plugin-feedback';
-import { createFeedbackInvariantPlugin } from '@nexus/plugin-feedback/invariant';
-import { createSubmitRecordInvariantPlugin } from '@nexus/plugin-submit-record/invariant';
-import { createEchoInvariantPlugin } from '@nexus/plugin-echo/invariant';
-import { createGoalPlugin, DEFAULT_MAX_GOAL_ROUNDS, GOALS_SERVICE } from '@nexus/plugin-goal';
+import { DEFAULT_MAX_GOAL_ROUNDS, GOALS_SERVICE } from '@nexus/plugin-goal';
 import type { GoalServices } from '@nexus/plugin-goal';
-import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
-import { createMcpInvariantPlugin } from '@nexus/plugin-mcp/invariant';
-import { createMemoryInvariantPlugin } from '@nexus/plugin-memory/invariant';
-import { createPlanModePlugin, PLAN_COMMAND_NAME, recordedPlanMode } from '@nexus/plugin-plan-mode';
-import { createPlanModeInvariantPlugin } from '@nexus/plugin-plan-mode/invariant';
-import { createQuickJsInvariantPlugin } from '@nexus/plugin-quickjs/invariant';
-import { createSandboxPolicyInvariantPlugin } from '@nexus/plugin-sandbox-policy/invariant';
-import { createSkillsInvariantPlugin } from '@nexus/plugin-skills/invariant';
-import { createTelemetryOtelInvariantPlugin } from '@nexus/plugin-telemetry-otel/invariant';
-import { createPresentPlugin } from '@nexus/plugin-present';
-import { createPresentInvariantPlugin } from '@nexus/plugin-present/invariant';
+import { PLAN_COMMAND_NAME, recordedPlanMode } from '@nexus/plugin-plan-mode';
 import { createWorkspaceChanges, WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
-import { createWorkspaceChangesInvariantPlugin } from '@nexus/plugin-workspace-changes/invariant';
-import { createTodoPlugin } from '@nexus/plugin-todo';
-import { createTodoInvariantPlugin } from '@nexus/plugin-todo/invariant';
-import { createValidationInvariantPlugin } from '@nexus/plugin-validation/invariant';
-import { createWireInvariantPlugin } from '@nexus/wire/invariant';
 
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
 import { driveGoalRound } from './goal-driver.js';
@@ -487,132 +463,6 @@ function outsideWorkspace(
 }
 
 /**
- * 出貨清單的**遷移參照**，不是產品路徑。
- *
- * **產品路徑已經改走 `apps/harness/cordis.yml`**（[#454](https://github.com/DemianLi/nexus-agent/issues/454)
- * 的第三刀）：`runCli` 與 `runServe` 沒給 `--plugins` 時叫的是 {@link loadDefaultPlugins}。
- * 這份常數留著只為一件事——`plugin-config.test.ts` 拿它跟 YAML 組出來的東西逐條比，證明
- * 這次搬家沒有弄丟任何東西。**那條斷言與這份常數會在下一刀一起刪掉**：留著它就變成第二份
- * 要維護的清單，而它守的會是「副本相等」不是「設定是對的」（#490 拒絕過這個形狀）。
- *
- * 底下這些理由屬於**那份清單**，不屬於這個常數——搬家的時候一起搬進了 `cordis.yml` 的註解。
- *
- * 工具只有 echo 一個——CLI 的預設組裝要能證明「工具真的接上了」，而不是替誰決定該裝什麼。
- * 哪些**工具** plugin 該進預設清單是設定的事，那要等**外部**設定機制才有地方講
- * （[#46](https://github.com/DemianLi/nexus-agent/issues/46)）。
- *
- * **計劃模式與 goal 是第二與第三個例外，理由與那十二個不同**
- * （[#120](https://github.com/DemianLi/nexus-agent/issues/120)）：它註冊的是一個
- * **人打得到的命令**，而命令沒進預設清單就等於不存在——`/plan` 會被 `parseCommand`
- * 判成「名字不認得」，照原樣掉回模型，變成一行沒人懂的純文字。所以「不替誰決定該裝
- * 什麼」在這裡撞上「那就誰也用不到」，而後者比較貴。
- *
- * 它進來的代價要講清楚，三筆：
- *
- * - **`startActive` 是關的**，所以預設行為與這行改動之前一模一樣：不打 `/plan` 的話，
- *   指引一個 token 都不夾。
- * - **`exit_plan_mode` 一律出現在面向模型的工具清單裡**（照 dsh：模式轉換不該額外造成
- *   工具目錄變動）。CLI 上它是活的 schema、死的執行路徑——模式外撞 middleware、模式內
- *   撞 {@link HEADLESS_APPROVALS} 的確定性拒絕。
- * - **[`serve.ts`](./serve.ts) 也吃這份清單**，而那條路上現在有命令介面了
- *   （[#123](https://github.com/DemianLi/nexus-agent/issues/123)）：web 那端自己打
- *   `/plan` 就進得去，而且核准是開著的，所以「規劃 → 交計劃 → 有人按批准 → 開始動手」
- *   整條走得完——那是 CLI 這條路走不完的（`HEADLESS_APPROVALS` 會確定性拒絕）。
- *
- * **`@nexus/plugin-goal` 走同一條例外，代價不一樣**
- * （[#126](https://github.com/DemianLi/nexus-agent/issues/126)）：它註冊 `/goal`，而
- * 上一句話對它同樣成立——命令沒進清單，`/goal 把測試修綠` 會掉回模型變成一句閒聊。
- * 它的代價有兩筆：**每一次執行多接一位會話參與者**，與**模型側多三顆工具**——
- * `create_goal`／`get_goal`／`update_goal`，[#177](https://github.com/DemianLi/nexus-agent/issues/177)
- * 之後才有的東西，一律 `rootOnly`，所以 subagent 那幾份看到的是拒絕樁。它不改 prompt、
- * 不碰 backend，沒有目標時也連一顆事件都不寫；但**工具清單與那幾顆的 token 不再跟這行
- * 改動之前一模一樣**——這句話原本寫著「一模一樣」，那在 #177 之前是真的。
- *
- * **域與命令是同一個 plugin**，不像 dsh 拆成兩個套件——理由寫在
- * `@nexus/plugin-goal` 的檔頭上。
- *
- * **`@nexus/plugin-todo` 是第三筆，而它的代價是三者裡最重的**
- * （[#132](https://github.com/DemianLi/nexus-agent/issues/132)）：它**真的多一顆面向模型的
- * 工具**（`todo_write`），所以每一次請求都多一份 schema 與描述的 token，不打任何命令也一樣。
- *
- * 它進得來的理由不是「順便」，是**它沒有別的入口**：todo 是模型自己的規劃工具，人不打
- * 它、命令也叫不動它，所以「沒進清單就等於不存在」對它比對前兩個更絕對。dsh 對「先想再
- * 做」的答案是計劃模式 ＋ todo ＋ goal 三件一組，這是第三件。
- *
- * **`allowParallelInProgress: true`**：這棵樹的 subagent 是真的併發跑的
- * （`tool-session-log.test.ts` 那條同一個 subagent 併發兩次的驗收），而 dsh 對這種部署
- * 開的就是 `true`。這個開關沒有預設值，理由見 `TodoPluginOptions`。
- *
- * **`@nexus/plugin-present` 是第四筆**（[#441](https://github.com/DemianLi/nexus-agent/issues/441)）：dsh 的
- * standard preset 掛 `tool-present`，而 web 的交付卡片讀的事件只有它寫得出來。代價同 todo，**多一顆面向
- * 模型的工具**（`present`）；沒有工作區時工具照樣在、叫了被拒，同 dsh。
- *
- * **二十個不變量配套入口是那句話的例外，而例外要說得出理由**
- * （[#107](https://github.com/DemianLi/nexus-agent/issues/107) 拍板）：
- *
- * - **它們不裝功能，只裝觀察。** 一個配套入口不註冊工具、不改 prompt、不碰 backend，
- *   所以「替誰決定該裝什麼」這個顧慮對它們不成立——沒有人的 agent 因為它們而不一樣。
- * - **關得掉。** [#104](https://github.com/DemianLi/nexus-agent/issues/104) 之後條目層有
- *   `disabled`、組裝點有 `invariants` 選擇，所以進來不是單向門。這是它進得來的前提。
- * - **二十個全進，不是只有 `@nexus/core`。** 十三個是空 installer，掛上去一個檢查都不裝，
- *   買到的只有包名歸屬；真的在檢查的是七個——`@nexus/core`（turn 配對）、
- *   `@nexus/plugin-commands`（命令生命週期配對，
- *   [#118](https://github.com/DemianLi/nexus-agent/issues/118)）與
- *   `@nexus/plugin-plan-mode`（`/plan` 的參數契約，
- *   [#120](https://github.com/DemianLi/nexus-agent/issues/120)）與 `@nexus/plugin-goal`
- *   （耐久 goal 串，[#126](https://github.com/DemianLi/nexus-agent/issues/126)）與
- *   `@nexus/plugin-todo`（耐久待辦快照的形狀與歸屬，
- *   [#132](https://github.com/DemianLi/nexus-agent/issues/132)）與 `@nexus/plugin-present`（每一筆交付
- *   對得上一次成功的 `present`，[#441](https://github.com/DemianLi/nexus-agent/issues/441)）與
- *   `@nexus/plugin-workspace-changes`（每一筆改動紀錄落在跑過工具的一輪裡，
- *   [#443](https://github.com/DemianLi/nexus-agent/issues/443)；那個功能本身不在這份清單裡，只由 serve 掛）。
- *   **代價是每一次執行多二十個條目、二十次 `apply`**，而換到的是這份
- *   清單與 `registry.invariants.companions()` 對得起來——少掛的那幾個會讓「這個 package
- *   沒有可檢的關係」與「這個 package 的檢查沒掛上」在診斷裡長得一模一樣。
- *
- * 違規往哪裡印見 {@link runCli} 接線的那一行。
- */
-/**
- * 一則評分備註最多幾個 UTF-8 位元組。照 dsh web 那一包的設定
- * （`packages/bundle/web-app/cordis.patch.yml:56`，`c291e79`）；plugin 自己不給預設值。
- */
-export const FEEDBACK_MAX_NOTE_BYTES = 8192;
-
-export const DEFAULT_PLUGINS: readonly PluginEntry[] = [
-  createEchoPlugin(),
-  // 工作區指令（#388）：不帶 `--plugins` 的 CLI 與 serve 也看得到 `AGENTS.md`。有 backend 才會真的
-  // 建 middleware，所以沒給 `--workspace` 時它什麼都不加——與 dsh「沒有檔案系統提供方就載不到」同形。
-  createAgentInstructionsPlugin(),
-  createPlanModePlugin(),
-  createGoalPlugin(),
-  createTodoPlugin({ allowParallelInProgress: true }),
-  // 評分與 `/feedback`：預設就裝，零 plugin 設定的 serve 與 CLI 都評得到（#278）。
-  createFeedbackPlugin({ maxNoteBytes: FEEDBACK_MAX_NOTE_BYTES }),
-  // 交付宣告（#441）：dsh 的 standard preset 掛 `tool-present`。沒有工作區時工具照樣在，叫了會被拒。
-  createPresentPlugin(),
-  createCoreInvariantPlugin(),
-  createAgentInstructionsInvariantPlugin(),
-  createCommandsInvariantPlugin(),
-  createAskUserInvariantPlugin(),
-  createEchoInvariantPlugin(),
-  createFeedbackInvariantPlugin(),
-  createGoalInvariantPlugin(),
-  createMcpInvariantPlugin(),
-  createMemoryInvariantPlugin(),
-  createPlanModeInvariantPlugin(),
-  createPresentInvariantPlugin(),
-  createQuickJsInvariantPlugin(),
-  createWorkspaceChangesInvariantPlugin(),
-  createSandboxPolicyInvariantPlugin(),
-  createSkillsInvariantPlugin(),
-  createSubmitRecordInvariantPlugin(),
-  createTelemetryOtelInvariantPlugin(),
-  createTodoInvariantPlugin(),
-  createValidationInvariantPlugin(),
-  createWireInvariantPlugin(),
-];
-
-/**
  * 從一個模組載 plugin 清單。
  *
  * **這不是 [#46](https://github.com/DemianLi/nexus-agent/issues/46) 的外部設定機制**：
@@ -656,7 +506,7 @@ export async function loadPluginModule(
 /**
  * 假模型的腳本：呼叫一次 echo 再回一句話。
  *
- * **它是對著 {@link DEFAULT_PLUGINS} 寫的。** 換了 `--plugins` 就該一起換 `--live`——
+ * **它是對著出貨清單（`apps/harness/cordis.yml`）寫的。** 換了 `--plugins` 就該一起換 `--live`——
  * 腳本裡的工具名在別份清單裡多半不存在，那時假模型只會製造一個看不懂的失敗。
  * 腳本三輪，而第一句話就用掉兩輪（呼叫工具、拿到結果再回覆），所以假模型下的 REPL
  * 問到第三句就會用完（`ScriptedChatModel` 選擇當場失敗而不是靜默重播）；REPL 的正經
@@ -867,7 +717,7 @@ export async function createCliAgent(
   // （同一個 `deriveApprovalChannel`），`ask_user_question` 拿的是這一份——兩邊分岔的
   // 樣子是「核准擋得下來、問答還掛在那裡」，而那不會有任何測試紅。
   //
-  // **它掛在這裡而不是 `DEFAULT_PLUGINS` 裡**：那份清單是模組層級的常數，看不到這一次
+  // **它掛在這裡而不是出貨清單裡**：那份清單是一個設定檔，看不到這一次
   // 呼叫的 checkpointer 與 `approvals`。
   // **綁在真的那個值上，不是寫死 `true`。** 今天這條路一律給 `MemorySaver`，但把它寫成
   // 字面量的那一刻，這個推導就不再跟著組裝走了——有人讓 checkpointer 變成有條件的那天，

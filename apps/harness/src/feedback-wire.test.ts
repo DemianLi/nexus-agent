@@ -36,14 +36,16 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
-import { DEFAULT_PLUGINS, createCliAgent } from './cli.js';
-import { approvalAt, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
+import { createCliAgent } from './cli.js';
+import { TEST_BROWSER_AUTH, approvalAt, loopbackRequest, shippedPlugins } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
+
+const shipped = await shippedPlugins();
 
 const BASE_URL = 'http://feedback.test';
 
@@ -541,9 +543,9 @@ describe('上游絆索：串流 message-start 的 id 就是日誌 assistant/mess
 });
 
 describe('/feedback 與零 plugin 設定', () => {
-  /** 產品路徑上的組裝：`DEFAULT_PLUGINS`，一個 plugin 都不多掛。 */
+  /** 產品路徑上的組裝：出貨清單，一個 plugin 都不多掛。 */
   async function productLine() {
-    const built = await createCliAgent({ live: false }, DEFAULT_PLUGINS);
+    const built = await createCliAgent({ live: false }, shipped);
     let captured: SessionLog | undefined;
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,
@@ -601,7 +603,7 @@ describe('/feedback 與零 plugin 設定', () => {
   });
 
   it('CLI：預設清單的 `/feedback 很慢` 同樣記一顆 record、command/run 不帶原文', async () => {
-    const built = await createCliAgent({ live: false }, DEFAULT_PLUGINS);
+    const built = await createCliAgent({ live: false }, shipped);
     const detach = built.attachSession(built.sessions);
     try {
       const executor = createCommandExecutor({

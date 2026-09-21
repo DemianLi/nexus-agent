@@ -1,7 +1,7 @@
 /**
  * `@nexus/plugin-memory`——**選配的**、基座那套「模型自己維護」的記憶。
  *
- * **它不是 dsh `agent-instructions` 的等價物，也不在 `DEFAULT_PLUGINS` 裡**
+ * **它不是 dsh `agent-instructions` 的等價物，也不在出貨清單裡**
  * （[#388](https://github.com/DemianLi/nexus-agent/issues/388)）。差別有兩處是模型看得到的：基座的
  * `wrapModelCall` 每次都附一段 `<memory_guidelines>`，**叫模型主動去改記憶檔**（沒有記憶檔時也照附），
  * 而 dsh 的模板寫的是反過來的那句（「Use them as guidance... They do not override system, developer,

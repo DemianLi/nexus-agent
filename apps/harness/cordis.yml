@@ -18,57 +18,104 @@
 
 # ── 功能 ──────────────────────────────────────────────────────────────────────
 #
-# 工具只有 echo 一個：預設組裝要能證明「工具真的接上了」，而不是替誰決定該裝什麼。
-# 計劃模式、goal、todo、present 是講得出理由的例外，理由逐條寫在 `cli.ts` 的
-# `DEFAULT_PLUGINS` 檔頭上（#120／#126／#132／#441）。
+# **工具只有 echo 一個。** 預設組裝要能證明「工具真的接上了」，而不是替誰決定該裝什麼。
+# 哪些工具 plugin 該進出貨清單是設定的事——這份檔案就是那件事有地方講之後的樣子（#46）。
+#
+# 下面四個是講得出理由的例外，每一個的代價都寫在它自己那一列上。
 
 - id: echo
   name: '@nexus/plugin-echo'
 
 # 工作區指令（#388）：不帶 `--plugins` 的 CLI 與 serve 也看得到 `AGENTS.md`。有 backend
-# 才會真的建 middleware，所以沒給 `--workspace` 時它什麼都不加。
+# 才會真的建 middleware，所以沒給 `--workspace` 時它什麼都不加——與 dsh「沒有檔案系統
+# 提供方就載不到」同形。
 - id: agent-instructions
   name: '@nexus/plugin-agent-instructions'
 
+# **例外一：計劃模式**（#120）。它註冊的是一個**人打得到的命令**，而命令沒進出貨清單就
+# 等於不存在——`/plan` 會被 `parseCommand` 判成「名字不認得」，照原樣掉回模型，變成一行
+# 沒人懂的純文字。「不替誰決定該裝什麼」在這裡撞上「那就誰也用不到」，後者比較貴。
+#
+# 代價三筆：
+#
+# - `startActive` 是關的，所以不打 `/plan` 的話指引一個 token 都不夾。
+# - `exit_plan_mode` 一律出現在面向模型的工具清單裡（照 dsh：模式轉換不該額外造成工具
+#   目錄變動）。CLI 上它是活的 schema、死的執行路徑——模式外撞 middleware、模式內撞
+#   `HEADLESS_APPROVALS` 的確定性拒絕。
+# - **serve 也吃這份清單**，而那條路上有命令介面（#123）：web 那端自己打 `/plan` 就進得
+#   去，而且核准是開著的，所以「規劃 → 交計劃 → 有人按批准 → 開始動手」整條走得完——那
+#   是 CLI 這條路走不完的。
 - id: plan-mode
   name: '@nexus/plugin-plan-mode'
 
+# **例外二：goal**（#126）。同一條理由：命令沒進清單，`/goal 把測試修綠` 會掉回模型變成
+# 一句閒聊。代價兩筆：每一次執行多接一位會話參與者，以及模型側多三顆工具
+# （`create_goal`／`get_goal`／`update_goal`，#177 之後才有的東西，一律 `rootOnly`，所以
+# subagent 那幾份看到的是拒絕樁）。它不改 prompt、不碰 backend，沒有目標時連一顆事件都
+# 不寫；但工具清單與那幾顆的 token 確實變了。
+#
+# **域與命令是同一個 plugin**，不像 dsh 拆成兩個套件——理由寫在 `@nexus/plugin-goal` 的
+# 檔頭上。
 - id: goal
   name: '@nexus/plugin-goal'
 
-# `allowParallelInProgress`：這棵樹的 subagent 是真的併發跑的，而 dsh 對這種部署開的就是
-# true。這個開關沒有預設值，理由見 `TodoPluginOptions`。
+# **例外三：todo**（#132），代價是四者裡最重的：它**真的多一顆面向模型的工具**
+# （`todo_write`），所以每一次請求都多一份 schema 與描述的 token，不打任何命令也一樣。
+#
+# 它進得來的理由不是「順便」，是**它沒有別的入口**：todo 是模型自己的規劃工具，人不打
+# 它、命令也叫不動它，所以「沒進清單就等於不存在」對它比對前兩個更絕對。dsh 對「先想再
+# 做」的答案是計劃模式 ＋ todo ＋ goal 三件一組，這是第三件。
+#
+# `allowParallelInProgress`：這棵樹的 subagent 是真的併發跑的（`tool-session-log.test.ts`
+# 那條同一個 subagent 併發兩次的驗收），而 dsh 對這種部署開的就是 true。這個開關沒有預設
+# 值，理由見 `TodoPluginOptions`。
 - id: todo
   name: '@nexus/plugin-todo'
   config:
     allowParallelInProgress: true
 
-# 一則評分備註最多幾個 UTF-8 位元組。照 dsh web 那一包的設定
-# （`packages/bundle/web-app/cordis.patch.yml:56`，`c291e79`）；plugin 自己不給預設值。
+# 評分與 `/feedback`：預設就裝，零設定的 serve 與 CLI 都評得到（#278）。
+#
+# `maxNoteBytes` 是一則評分備註最多幾個 UTF-8 位元組。照 dsh web 那一包的設定
+# （`packages/bundle/web-app/cordis.patch.yml:56`，`c291e79`）；plugin 自己不給預設值，
+# 所以這一行是整棵樹上唯一講這個數字的地方。
 - id: feedback
   name: '@nexus/plugin-feedback'
   config:
     maxNoteBytes: 8192
 
-# 交付宣告（#441）：dsh 的 standard preset 掛 `tool-present`。沒有工作區時工具照樣在，
-# 叫了會被拒。
+# **例外四：交付宣告**（#441）。dsh 的 standard preset 掛 `tool-present`，而 web 的交付
+# 卡片讀的事件只有它寫得出來。代價同 todo，多一顆面向模型的工具（`present`）；沒有工作區
+# 時工具照樣在、叫了被拒，同 dsh。
 - id: present
   name: '@nexus/plugin-present'
 
 # ── 配套入口 ──────────────────────────────────────────────────────────────────
 #
-# 二十個全進，不是只有 `@nexus/core`（#107 拍板）。十三個是空 installer，掛上去一個檢查
-# 都不裝，買到的只有包名歸屬；真的在檢查的是七個。它們不裝功能只裝觀察，而且關得掉——
-# 所以「不替誰決定該裝什麼」這條顧慮對它們不成立。
+# 二十個全進，不是只有 `@nexus/core`（#107 拍板）。理由三條：
+#
+# - **它們不裝功能，只裝觀察。** 一個配套入口不註冊工具、不改 prompt、不碰 backend，所以
+#   「替誰決定該裝什麼」這個顧慮對它們不成立——沒有人的 agent 因為它們而不一樣。
+# - **關得掉。** 條目層有 `disabled`（#104），組裝點有 `invariants` 選擇，所以進來不是
+#   單向門。這是它們進得來的前提，而現在連 `disabled` 都寫得進使用者自己的 patch 檔。
+# - **二十個全進。** 十三個是空 installer，掛上去一個檢查都不裝，買到的只有包名歸屬；真的
+#   在檢查的是七個——`@nexus/core`（turn 配對）、`@nexus/plugin-commands`（命令生命週期
+#   配對，#118）、`@nexus/plugin-plan-mode`（`/plan` 的參數契約，#120）、
+#   `@nexus/plugin-goal`（耐久 goal 串，#126）、`@nexus/plugin-todo`（耐久待辦快照的形狀
+#   與歸屬，#132）、`@nexus/plugin-present`（每一筆交付對得上一次成功的 `present`，#441）、
+#   `@nexus/plugin-workspace-changes`（每一筆改動紀錄落在跑過工具的一輪裡，#443；那個功能
+#   本身不在這份清單裡，只由 serve 掛）。
+#
+# **代價是每一次執行多二十個條目、二十次 `apply`**，換到的是這份清單與
+# `registry.invariants.companions()` 對得起來。違規往哪裡印，見 `runCli` 接線的那一行。
 #
 # 這份清單要跟 `packages/*/src/invariant.ts` 對得上：少掛的那幾個會讓「這個 package 沒有
 # 可檢的關係」與「這個 package 的檢查沒掛上」在診斷裡長得一模一樣。對帳由
 # `invariant-companions.test.ts` 與 `package-invariants.test.ts` 守著（#489）。
 #
-# **順序照抄 `DEFAULT_PLUGINS`**（所以這裡不是字母序）。順序不承載語意，照抄是為了讓
-# `plugin-config.test.ts` 的等價斷言可以嚴格比到順序，而不必在斷言裡先把它排序掉——一個
-# 先排序再比的斷言，順序真的變重要的那天不會紅。要整理順序的話自己開一張，那顆探針就是
-# 它的驗收句。
+# **順序不是字母序，它是從舊的 `DEFAULT_PLUGINS` 照抄過來的**（#454 的搬家）。順序不承載
+# 語意——啟用與否由服務相依決定，不由列的先後決定。要整理的話自己開一張卡，那不是這份
+# 檔案裡的任何一條註解在擋你，只是沒有人做過。
 
 - id: core-invariant
   name: '@nexus/core/invariant'

@@ -22,7 +22,6 @@ import {
   APPROVAL_DISCLOSURE,
   CLI_PROBE_FILE,
   createCliAgent,
-  DEFAULT_PLUGINS,
   exitCodeFor,
   loadPluginModule,
   parseCliArgs,
@@ -34,6 +33,9 @@ import { DISPOSE_FAILURE } from './cli-dispose-failure.fixture.js';
 import { documentedFixture } from './documented-fixture.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
+import { shippedPlugins } from './fixtures.js';
+
+const shipped = await shippedPlugins();
 
 /** 收 CLI 印出來的東西，讓斷言看得到順序。 */
 function recorder() {
@@ -193,7 +195,7 @@ describe('一次性模式', () => {
   it('預設清單是 echo ＋ 工作區指令 ＋ 計劃模式 ＋ goal ＋ todo ＋ feedback ＋ present ＋ 二十個配套入口', async () => {
     // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
     // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
-    // 讓計劃模式進來，理由寫在 `DEFAULT_PLUGINS` 的 JSDoc 上（命令沒進預設清單就等於
+    // 讓計劃模式進來，理由寫在 `apps/harness/cordis.yml` 的註解上（命令沒進預設清單就等於
     // 不存在）。**改成 `toHaveLength` 會把這條線整個放掉**，所以名字仍然逐個寫死：
     // 下一個想塞東西進來的人還是得先改這一行，並且說得出理由。
     //
@@ -218,7 +220,7 @@ describe('一次性模式', () => {
     // **`present` 進來的理由是 dsh 的 standard preset 掛它**（`agent.cordis.yml:261`），而交付卡片讀的
     // 事件只有它寫得出來（[#441](https://github.com/DemianLi/nexus-agent/issues/441)）。它多一顆面向模型的
     // 工具；沒有工作區時工具照樣在、叫了回 `present requires a workspace`，同 dsh。
-    const names = DEFAULT_PLUGINS.map((entry) => entry.plugin.name);
+    const names = shipped.map((entry) => entry.plugin.name);
     expect(names.filter((name) => !name.endsWith('-invariant'))).toEqual([
       'echo',
       'agent-instructions',
@@ -554,7 +556,7 @@ describe('關機清理與原本的錯誤', () => {
 describe('對話的連續性', () => {
   it('第二輪看得到第一輪說過的話——REPL 是一條對話，不是一串互不相干的呼叫', async () => {
     const { printer } = recorder();
-    const { agent, model, sessionLog } = await createCliAgent({ live: false }, DEFAULT_PLUGINS);
+    const { agent, model, sessionLog } = await createCliAgent({ live: false }, shipped);
 
     await runTurn(agent, '第一句：記住「胡桃」這兩個字。', printer, sessionLog);
     await runTurn(agent, '第二句：剛剛那兩個字是什麼？', printer, sessionLog);
@@ -581,7 +583,7 @@ describe('REPL', () => {
   async function replAgent() {
     const { agent, commands } = await createNexusAgent({
       model: new ScriptedChatModel({ turns: ONE_TURN }),
-      plugins: DEFAULT_PLUGINS,
+      plugins: shipped,
     });
     return { agent, commands };
   }

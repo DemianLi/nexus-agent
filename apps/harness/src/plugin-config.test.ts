@@ -1,19 +1,23 @@
 /**
  * 從 YAML 組裝 plugin 清單。
  *
- * **第一個 describe 才是這一份的理由**：出貨的 `cordis.yml` 組出來的東西，與 develop 上
- * 那份 `DEFAULT_PLUGINS` 組出來的東西，在 `PluginRegistry` 的**十五條通道上逐條相等**。
+ * ## 那條等價斷言已經退休了，而接手的是什麼要講清楚
  *
- * 比兩份清單的 plugin 名稱是量相似品：兩邊叫得出同一串名字，而註冊內容可以完全不同。
- * 所以比的是**組裝的結果**——每一條通道各自的列舉讀法，逐條投影出內容。通道的清單不是
- * 手抄的，是 [`registry-channel-count.test.ts`](./registry-channel-count.test.ts) 那份
- * `satisfies Record<keyof PluginRegistry, true>` 的窮舉表；少一條或多一條都在 `typecheck`
- * 當場紅，所以第十六條通道落地那天，這個探針會跟著要求回答「它等不等價」。
+ * 搬家的那幾刀裡，這個檔案釘的是「`cordis.yml` 組出來的 == `DEFAULT_PLUGINS` 組出來的」，
+ * 十五條通道逐條比。**那是一條遷移絆索，它的工作在接線落地那天就做完了。**
  *
- * **`origin.id` 刻意不進投影，而這是一個要明著講的差異。** `PluginOrigin` 是
- * `{ id, name }`；`DEFAULT_PLUGINS` 的條目沒寫 `id`，由 `resolveEntries` 補
- * `<name>#<序號>`，而 `cordis.yml` 寫的是看得懂的 id——id 存在的理由就是讓外部 patch 指得
- * 著它，所以兩條路的 id 本來就不該相同。那一格由底下「id 就是 YAML 宣告的那些」單獨釘。
+ * 繼續留著它的代價是 `DEFAULT_PLUGINS` 得跟著留著，而它已經不在任何產品路徑上——那就變成
+ * 第二份要維護的清單，而它守的是「副本相等」不是「設定是對的」。
+ * [#490](https://github.com/DemianLi/nexus-agent/issues/490) 拒絕過這個形狀。
+ *
+ * **接手的不是另一條等價測試，是出貨檔自己變成了交付物**：`apps/harness/cordis.yml` 現在
+ * 由 **17 個測試檔**經 `shippedPlugins()` 真的載進去組裝（`invariant-paths`、
+ * `approval-gate-order`、`agent-instructions`、`session-telemetry-paths`、`sandbox-*`、
+ * `goal-driver-cli`……），加上 `invariant-companions.test.ts` 與 `package-invariants.test.ts`
+ * 的配套入口對帳（[#489](https://github.com/DemianLi/nexus-agent/issues/489)）。少掉一列、
+ * 改錯一個 id 或一個 config 值，紅的是那些測試——它們量的是行為，不是清單長得像不像。
+ *
+ * 這個檔案留下的是**機制**：解析、疊加、權限、模組解析，以及出貨那一份真的組得起來。
  *
  * @see [#454](https://github.com/DemianLi/nexus-agent/issues/454)
  */
@@ -22,11 +26,8 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { InternalPluginRegistry, PluginEntry } from '@nexus/core';
-import { loadPlugins, resolveEntries } from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { DEFAULT_PLUGINS } from './cli.js';
 import {
   applyEntryPatches,
   composeEntries,
@@ -63,89 +64,13 @@ function writePrivate(root: string, name: string, content: string): string {
   return path;
 }
 
-/** 十五條通道逐條的內容投影。鍵是通道名，值是那條通道上註冊了什麼。 */
-function projectRegistry(registry: InternalPluginRegistry): Record<string, unknown> {
-  return {
-    tools: [...registry.tools.effective().entries()].map(([name, entry]) => ({
-      name,
-      origin: entry.origin.name,
-      description: entry.value.description,
-      rootOnly: registry.tools.isRootOnly(name),
-      hasOutputSchema: registry.tools.outputSchemaOf(entry.value) !== undefined,
-    })),
-    toolScopes: registry.tools.scopes(),
-    subagents: [...registry.subagents.entries()].map(([name, entry]) => ({
-      name,
-      origin: entry.origin.name,
-    })),
-    capabilities: registry.capabilities.names().map((name) => ({
-      name,
-      providers: registry.capabilities.providers(name).map((o) => o.name),
-    })),
-    services: registry.services
-      .names()
-      .map((name) => ({ name, provider: registry.services.provider(name)?.name })),
-    backend: registry.backend.mounts().map(([prefix, entry]) => ({
-      prefix,
-      origin: entry.origin.name,
-    })),
-    // 順序是承重的：middleware 的先後決定誰包住誰。
-    middleware: registry.middleware.list().map((entry) => ({
-      origin: entry.origin.name,
-      prepend: entry.value.prepend,
-      kind: entry.value.build === undefined ? 'instance' : 'build',
-      name: entry.value.middleware?.name,
-    })),
-    permissions: registry.permissions.rules().map((entry) => ({
-      origin: entry.origin.name,
-      paths: entry.value.paths,
-      except: entry.value.except,
-    })),
-    // 核准閘門的順序同樣承重（`approval-gate-order.test.ts`）。
-    approvals: registry.approvals.listeners().map((entry) => entry.origin.name),
-    skills: registry.skills.sources(),
-    memory: registry.memory.sources(),
-    lifecycle: registry.lifecycle.disposers().map((entry) => entry.origin.name),
-    telemetry: registry.telemetry.rules().map((entry) => entry.origin.name),
-    invariants: registry.invariants.companions().map((companion) => companion.packageName),
-    commands: registry.commands.list().map((descriptor) => ({ ...descriptor })),
-    sessions: registry.sessions.installers().map((entry) => entry.origin.name),
-  };
-}
-
-/**
- * 註冊內容 ＋ **每一次掛載驗過的 `config`**。
- *
- * 通道投影看不到全部的設定：一個只在執行期被讀的值（`@nexus/plugin-feedback` 的
- * `maxNoteBytes` 就是）不會在任何註冊點上留下痕跡，改掉它十五條通道一條都不會動。實測過
- * ——把 `cordis.yml` 的 8192 改成 4096，只比通道的那一版是綠的。所以 `resolveEntries` 驗完
- * 的 `config` 也要比：那是**真的交給 `apply` 的那一份**，不是 YAML 的原文。
- */
-async function project(plugins: readonly PluginEntry[]): Promise<Record<string, unknown>> {
-  const loaded = await loadPlugins(plugins);
-  try {
-    return {
-      ...projectRegistry(loaded.registry),
-      entries: resolveEntries(plugins).map(({ origin, disabled, config }) => ({
-        name: origin.name,
-        disabled,
-        config,
-      })),
-    };
-  } finally {
-    await loaded.dispose();
-  }
-}
-
 describe('出貨的 cordis.yml', () => {
-  it('組出來的東西與 DEFAULT_PLUGINS 在十五條通道上逐條相等', async () => {
+  it('每一列都載得起來，而且每一顆都是真的 plugin', async () => {
     const fromYaml = await loadPluginConfig();
-    expect(await project(fromYaml)).toEqual(await project(DEFAULT_PLUGINS));
-  });
-
-  it('條目數與 DEFAULT_PLUGINS 一樣，而且每一列都載得起來', async () => {
-    const fromYaml = await loadPluginConfig();
-    expect(fromYaml).toHaveLength(DEFAULT_PLUGINS.length);
+    // 27 = 7 個功能 ＋ 20 個配套入口。**數目寫在這裡是為了擋「靜靜少一列」**：底下那些
+    // 測試各自只看得到自己關心的那幾列，少掉一個空 installer 不會有人紅。確切該有哪些
+    // 配套入口由 `invariant-companions.test.ts` 對帳（#489）。
+    expect(fromYaml).toHaveLength(27);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -156,6 +81,37 @@ describe('出貨的 cordis.yml', () => {
     expect(ids).toContain('core-invariant');
     // 二十個配套入口一個不漏，對帳的另一半在 `invariant-companions.test.ts`。
     expect(ids.filter((id) => id?.endsWith('-invariant'))).toHaveLength(20);
+  });
+
+  /**
+   * **這一條是量出來的，不是想出來的。**
+   *
+   * 等價斷言退休之後跑了一輪突變，問「`cordis.yml` 被改壞時還有沒有人紅」。結構那幾格答案
+   * 是有：少一列 present → 3 個檔紅、少一列 plan-mode → 6 個檔、少一個空 installer 的配套
+   * 入口 → 3 個檔、改一個 id → `approval-gate-order` 紅、把 goal 關掉 → 4 個檔。
+   *
+   * **但兩個 `config` 值改掉是全綠的。** 它們只在執行期被讀，不在任何註冊點上留下痕跡，所以
+   * 十七個載出貨清單的測試檔一個都不會動。那是等價探針原本蓋著、而它退休之後露出來的洞。
+   *
+   * **這不是「副本相等」那個反模式**：它釘的不是整份清單，是**兩個被決定過的數字**，而且
+   * 每一個都寫得出它的出處。清單長什麼樣仍然由上面那些行為測試守著。
+   */
+  it('兩個只在執行期被讀的 config 值，改掉不會有別人紅——所以釘在這裡', () => {
+    const byId = new Map(composeEntries().map((entry) => [entry.id, entry.config]));
+
+    // 這棵樹的 subagent 是真的併發跑的（`tool-session-log.test.ts` 那條同一個 subagent
+    // 併發兩次的驗收），而 dsh 對這種部署開的就是 true。這個開關沒有預設值。
+    expect(byId.get('todo')).toEqual({ allowParallelInProgress: true });
+
+    // 一則評分備註最多幾個 UTF-8 位元組。照 dsh web 那一包的設定
+    // （`packages/bundle/web-app/cordis.patch.yml:56`，`c291e79`）；plugin 自己不給預設值，
+    // 所以出貨檔那一行是整棵樹上唯一講這個數字的地方。
+    expect(byId.get('feedback')).toEqual({ maxNoteBytes: 8192 });
+
+    // **其餘每一列都不帶 config**，這半句同樣承重：二十個配套入口一個 `Config` schema 都
+    // 沒有，給它們設定會在載入時拋（`parseEntryConfig`）。
+    const withConfig = [...byId].filter(([, config]) => config !== undefined).map(([id]) => id);
+    expect(withConfig).toEqual(['todo', 'feedback']);
   });
 
   it('出貨檔的路徑指到真的存在的那一份', () => {

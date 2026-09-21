@@ -6,7 +6,7 @@
  * ```
  *
  * **它證的是「違規真的看得見」，不是「檢查真的對」。** 那兩件事需要相反的素材：正確性
- * 要一份不吭聲的檢查跑在真流量上（`DEFAULT_PLUGINS` 現在就有——見
+ * 要一份不吭聲的檢查跑在真流量上（出貨清單現在就有——見
  * [#107](https://github.com/DemianLi/nexus-agent/issues/107)，跑一次 `run cli` 沒有任何
  * `[不變量]` 就是通過），可見性要一份保證會吭聲的。
  *
@@ -16,7 +16,7 @@
  * 印出來的每一行都帶 `[不變量]` 前綴走 stderr，而不是 runner 預設的 `console.error`
  * ——CLI 的輸出全部走 `Printer`，違規不是例外。
  *
- * **清單自己列，不 `import { DEFAULT_PLUGINS } from './cli.js'`——那會死鎖。** `cli.ts`
+ * **清單自己列，不 `import` `cli.js`——那會死鎖。** `cli.ts`
  * 當腳本跑時最後一行是 top-level `await main()`，而這份 fixture 是 `main()` 裡面
  * `loadPluginModule()` 動態載進來的：靜態 import 回 `./cli.js` 等於等一個還沒結束的
  * 模組求值，行程會停在 `Detected unsettled top-level await` 然後以 13 退出。**單元測試

@@ -20,9 +20,12 @@ import { fromLoggedMessage, SessionRegistry, TOOL_ERROR_PREFIX } from '@nexus/co
 import type { InvariantError, SessionEvent, SessionEventMap, TodoItem } from '@nexus/core';
 import { TODO_TOOL_NAME, todoDuplicateMessage } from '@nexus/plugin-todo';
 import { createNexusAgent } from './agent-factory.js';
-import { DEFAULT_PLUGINS } from './cli.js';
+
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { shippedPlugins } from './fixtures.js';
+
+const shipped = await shippedPlugins();
 
 const THREAD_ID = 'todo';
 
@@ -52,7 +55,7 @@ async function run(
     model,
     checkpointer: new MemorySaver(),
     plugins: [
-      ...DEFAULT_PLUGINS,
+      ...shipped,
       {
         plugin: {
           name: 'worker-source',
@@ -197,7 +200,7 @@ describe('todo_write 在真的圖上', () => {
     const { agent, attachSession, dispose } = await createNexusAgent({
       model,
       checkpointer: new MemorySaver(),
-      plugins: [...DEFAULT_PLUGINS],
+      plugins: [...shipped],
     });
     const sessions = new SessionRegistry('bad-input');
     const detach = attachSession(sessions);
@@ -245,7 +248,7 @@ describe('todo_write 在真的圖上', () => {
     const { agent, dispose } = await createNexusAgent({
       model,
       checkpointer: new MemorySaver(),
-      plugins: [...DEFAULT_PLUGINS],
+      plugins: [...shipped],
     });
     try {
       await agent.invoke(toAgentInvocation('跑。'), { configurable: { thread_id: 'listing' } });

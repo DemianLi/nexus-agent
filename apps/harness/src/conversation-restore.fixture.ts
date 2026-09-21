@@ -5,7 +5,7 @@
  * `runServe` 都不交出 agent 與模型，這條路離開行程的只有 stdout 與日誌，而「模型記得」只看得到模型收到了什麼。
  * 記在模組層：測試 import 同一個模組，讀的是同一份。
  *
- * **清單自己列，不 `import { DEFAULT_PLUGINS } from './cli.js'`——那會死鎖**，理由與
+ * **清單自己列，不 `import` `cli.js`——那會死鎖**，理由與
  * [`cli-invariant-violation.fixture.ts`](./cli-invariant-violation.fixture.ts) 那份一樣。
  */
 

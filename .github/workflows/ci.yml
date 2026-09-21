@@ -105,8 +105,8 @@ jobs:
           # - `docs/operations.md`：`documented-fixture.ts` 會從那份文件讀核准 fixture 的
           #   `--plugins` 值餵進 serve/cli 的測試（#490）。
           # - `apps/harness/cordis.yml`：出貨的 plugin 清單，`plugin-config.test.ts` 會拿它組一次
-          #   agent 再跟 `DEFAULT_PLUGINS` 逐條比（#454）。**它是組裝的唯一來源**，只改它的 PR
-          #   正是最需要跑測試的那一種。
+          #   agent（`shippedPlugins()`，十七個測試檔在用）。**它是組裝的唯一來源**，只改它的
+          #   PR 正是最需要跑測試的那一種。
           #
           # 兩者的共通點是「測試會讀這個檔」。只改它們的 PR 命不中上面任何一條，測試整段跳過、
           # gate 直接綠——而那正是這道護欄唯一承重的案例。別放寬成所有 `.md` 或所有 `.yml`：

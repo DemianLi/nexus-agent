@@ -89,6 +89,6 @@ pnpm --filter @nexus/web dlx shadcn@latest add <component>   # 新增 shadcn/ui 
 CI 只有 `gate` 一個 required status check，無條件觸發、在 job 內以 `git diff` 決定要掃什麼，
 沒有可掃的檔案時直接綠燈——純文件的 PR 不會卡住。**兩個例外**，共通點是「測試會讀這個檔」：
 `docs/operations.md`（測試從它讀核准 fixture 的參數，[#490](https://github.com/DemianLi/nexus-agent/issues/490)）
-與 `apps/harness/cordis.yml`（出貨的 plugin 清單，測試拿它組一次 agent 再跟 `DEFAULT_PLUGINS` 逐條比，
+與 `apps/harness/cordis.yml`（出貨的 plugin 清單，十七個測試檔真的拿它組 agent，
 [#454](https://github.com/DemianLi/nexus-agent/issues/454)）。只改這兩個檔也可能弄紅測試，所以它們
 會觸發完整掃描。細節見 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。

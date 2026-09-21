@@ -46,7 +46,7 @@
  *
  * **上一張 PR 這裡寫的是「不進」**，理由是「域在 `/goal` 落地之前沒有任何人打得到的
  * 入口」。`/goal` 落地了，那個理由就沒了：`createGoalPlugin()` 現在同時掛域與命令，
- * 兩件事一起進 `DEFAULT_PLUGINS`。位置跟在計劃模式後面、所有配套入口前面——啟動時印的
+ * 兩件事一起進出貨清單（`apps/harness/cordis.yml`）。位置跟在計劃模式後面、所有配套入口前面——啟動時印的
  * `plugin：` 那一行按清單順序走，域與配套入口混在一起會讓那行讀不出誰是誰。
  *
  * **域與命令不拆成兩個 plugin。** dsh 拆（`dsh-goal` 與 `dsh-command-goal` 是兩個套件），
@@ -338,7 +338,7 @@ function applyGoal(registry: PluginRegistry, config: GoalConfig, seams: GoalSeam
  * 的——那條路回一句說得出原因的錯誤，見 `command.ts` 的 `GOAL_NOT_ATTACHED_MESSAGE`。
  *
  * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
- * 從設定檔 import。**這一顆就是 `DEFAULT_PLUGINS` 裡的那一顆**（`createGoalPlugin()`
+ * 從設定檔 import。**這一顆就是出貨清單載進去的那一顆**（`createGoalPlugin()`
  * 不帶測試縫時回的是它本身，`index.test.ts` 釘著這條）。
  */
 export const goalPlugin: NexusPlugin<GoalConfig> = {
