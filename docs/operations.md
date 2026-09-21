@@ -192,13 +192,13 @@ server、不綁 port：
 標成要核准的清單：
 
 ```bash
-pnpm --filter @nexus/harness run serve --plugins src/approval.fixture.ts
+pnpm --filter @nexus/harness run serve --patch src/approval.patch.yml
 ```
 
-> **這道指令的 `--plugins` 值被測試讀走。** `apps/harness/src/documented-fixture.ts` 會從這一段解析
+> **這道指令的 `--patch` 值被測試讀走。** `apps/harness/src/documented-fixture.ts` 會從這一段解析
 > 出來餵進 `serve.test.ts` 與 `cli.test.ts`，所以這份文件是那個值的唯一來源——改了它，測試會紅，
 > 那是設計不是故障。也因為這樣，只改這份文件的 PR 會觸發 CI 的完整掃描（`ci.yml` 的窄例外）。
-> 整段指令改寫法、或這份文件多出第二道 `--plugins`，解析會當場拋並指名該修哪裡。
+> 整段指令改寫法、或這份文件多出第二道 `run serve --patch`，解析會當場拋並指名該修哪裡。
 
 這一份把 `echo` 與 `write_file` 標起來，假模型的腳本正好兩個都會呼叫——一條對話會停兩次，核准或
 拒絕都繼續得下去。**介面一批只送一個決定**（`uniformDecisions`）：逐筆按是介面還沒做，不是底下擋著。
