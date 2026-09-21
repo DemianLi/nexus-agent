@@ -28,7 +28,11 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { DEFAULT_REPEAT_REMINDER, DEFAULT_TOOL_RESULT_PRUNE } from '@nexus/core';
+import {
+  DEFAULT_REPEAT_REMINDER,
+  DEFAULT_SUMMARIZATION,
+  DEFAULT_TOOL_RESULT_PRUNE,
+} from '@nexus/core';
 
 import {
   applyEntryPatches,
@@ -70,10 +74,10 @@ function writePrivate(root: string, name: string, content: string): string {
 describe('出貨的 cordis.yml', () => {
   it('每一列都載得起來，而且每一顆都是真的 plugin', async () => {
     const fromYaml = await loadPluginConfig();
-    // 30 = 7 個功能 ＋ 3 個 core middleware 設定（#456）＋ 20 個配套入口。**數目寫在這裡
+    // 31 = 7 個功能 ＋ 4 個 core middleware 設定（#456）＋ 20 個配套入口。**數目寫在這裡
     // 是為了擋「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個空
     // installer 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
-    expect(fromYaml).toHaveLength(30);
+    expect(fromYaml).toHaveLength(31);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -124,6 +128,10 @@ describe('出貨的 cordis.yml', () => {
     // 剪刀那三格同理（#456）。
     expect(byId.get('tool-result-pruner')).toEqual({ ...DEFAULT_TOOL_RESULT_PRUNE });
 
+    // 摘要那四格同理（#456）。`tokens: 100000` 的來歷在 `DEFAULT_SUMMARIZATION` 的檔頭上，
+    // 這一行只管出貨檔跟它沒有漂開。
+    expect(byId.get('summarization')).toEqual({ ...DEFAULT_SUMMARIZATION });
+
     // **其餘每一列都不帶 config**，這半句同樣承重：二十個配套入口一個 `Config` schema 都
     // 沒有，給它們設定會在載入時拋（`parseEntryConfig`）。
     //
@@ -131,7 +139,13 @@ describe('出貨的 cordis.yml', () => {
     // 也沒有 Config schema，所以替它加一行 `config:` 會在載入期拋。它進到這棵樹裡的唯一
     // 意義是「關得掉」，關掉的行為由 `observation-policy-entry` 那組測試守著。
     const withConfig = [...byId].filter(([, config]) => config !== undefined).map(([id]) => id);
-    expect(withConfig).toEqual(['todo', 'feedback', 'repeat-reminder', 'tool-result-pruner']);
+    expect(withConfig).toEqual([
+      'todo',
+      'feedback',
+      'repeat-reminder',
+      'tool-result-pruner',
+      'summarization',
+    ]);
   });
 
   it('出貨檔的路徑指到真的存在的那一份', () => {

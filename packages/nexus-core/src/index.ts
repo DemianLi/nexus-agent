@@ -247,6 +247,7 @@ export {
 } from './repeat-reminder.js';
 export type {
   SummarizationArgTruncation,
+  SummarizationConfig,
   SummarizationSettings,
   SummarizationThreshold,
 } from './summarization.js';
@@ -258,6 +259,10 @@ export {
   readSummarizationEvent,
   resolveSummarizationSettings,
   SUMMARIZATION_MIDDLEWARE_NAME,
+  SUMMARIZATION_PLUGIN_NAME,
+  SUMMARIZATION_SERVICE,
+  summarizationConfigSchema,
+  summarizationPlugin,
 } from './summarization.js';
 export type {
   ToolResultPruneConfig,

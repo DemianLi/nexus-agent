@@ -26,6 +26,7 @@ import {
   DEFAULT_TOOL_RESULT_PRUNE,
   resolveSummarizationSettings,
   TOOL_RESULT_PRUNE_MARKER,
+  summarizationPlugin,
   toolResultPrunerPlugin,
 } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
@@ -1145,6 +1146,71 @@ describe('關掉摘要是真的關掉', () => {
       expect(messages.at(-1)?.text).toBe('收工。');
     },
   );
+
+  /**
+   * **條目 `disabled: true` 走的是同一條路，而這是卡上那句驗收的後半**
+   * （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+   *
+   * 空殼的**形狀**在 [`fold.test.ts`](../../../packages/nexus-core/src/fold.test.ts) 釘；
+   * 這裡量的是**基座那顆有沒有回來**——`assertBaseWouldSummarize` 先證明這一坨真的會讓
+   * 基座動手，然後「模型只被叫兩次」才有意義。少了前提，這條是假綠。
+   */
+  it('條目 `disabled: true`：壓力遠超基座的兜底門檻，也沒有摘要那次模型呼叫', async () => {
+    const model = new ScriptedChatModel({
+      turns: [...chunkRounds('收工。'), { content: '備料，摘要器動手才會用到。' }],
+    });
+    assertBaseWouldSummarize(model);
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [crew, { plugin: summarizationPlugin, disabled: true }],
+    });
+    try {
+      await agent.invoke(toAgentInvocation('去拿。'));
+    } finally {
+      await dispose();
+    }
+
+    expect(model.prompts).toHaveLength(2);
+    expect(summarizedWithHistory(model)).toBe(false);
+  });
+
+  /**
+   * **對照組，承重的，而且它同時是第 2 態的行為判準。**
+   *
+   * 少了它，一個「條目一放進去摘要就壞掉」的實作會讓上面那條通過。
+   *
+   * **門檻是條目給的，不是預設的**，而那是量出來的：同樣這一坨，走**預設**設定也不會摘要
+   * ——我們預設的剪刀（`thresholdChars: 8192`）先把十則結果各剪成五千字上下，壓力就掉到
+   * `tokens: 100000` 之下了。`assertBaseWouldSummarize` 證的是**基座那顆**會動手，不是我們
+   * 這份設定會動手，兩者在這個 payload 上剛好相反。所以這條改用條目給 `messages: 2`：
+   * 它一次證兩件事——條目沒被關時摘要器真的會動，而且**動用的是條目那份設定**。
+   */
+  it('條目給低門檻時摘要照樣動手——證明那份設定真的被讀了', async () => {
+    const model = new ScriptedChatModel({
+      turns: [...chunkRounds('收工。'), { content: '備料，摘要器動手才會用到。' }],
+    });
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [
+        crew,
+        {
+          plugin: summarizationPlugin,
+          config: {
+            trigger: [{ type: 'messages', value: 2 }],
+            keep: { type: 'messages', value: 2 },
+          },
+        },
+      ],
+    });
+    try {
+      await agent.invoke(toAgentInvocation('去拿。'));
+    } finally {
+      await dispose();
+    }
+
+    expect(model.prompts.length).toBeGreaterThan(2);
+    expect(summarizedWithHistory(model)).toBe(true);
+  });
 });
 
 /**
@@ -1179,6 +1245,34 @@ describe('預設門檻在跑滿的迴圈裡摘要一次', () => {
     // 預設組裝每輪三格：`模型輪數 = floor((上限 - 1) / 3)`。
     const agentTurns = Math.floor((DEFAULT_RECURSION_LIMIT - 1) / 3);
     expect(model.calls).toBe(agentTurns + 1);
+  });
+
+  /**
+   * **同一個場景、只換條目——這是第 3 態與第 4 態的判別式**
+   * （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+   *
+   * 上一條證明**預設組裝在這裡真的會摘要一次**；把 `@nexus/core/summarization` 那一列標成
+   * `disabled: true` 之後那一次就該不見。兩條共用同一個模型、同一個上限、同一個換算，
+   * 差別只有那一格——所以「第 3 態悄悄退回預設」這種寫法在這裡會當場紅。
+   *
+   * **`關掉摘要是真的關掉` 那一組抓不到這個**：那個 payload 走預設設定本來就不摘要
+   * （我們的剪刀先把壓力剪掉了），所以那邊的「模型只被叫兩次」同時被兩態滿足。
+   */
+  it('條目 `disabled: true` 之後，多的那一次不見了', async () => {
+    const model = new LoopingChatModel();
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [createEchoPlugin(), { plugin: summarizationPlugin, disabled: true }],
+    });
+
+    try {
+      await expect(agent.invoke(toAgentInvocation('一直跑'))).rejects.toThrow(/Recursion limit/);
+    } finally {
+      await dispose();
+    }
+
+    const agentTurns = Math.floor((DEFAULT_RECURSION_LIMIT - 1) / 3);
+    expect(model.calls).toBe(agentTurns);
   });
 });
 

@@ -51,6 +51,8 @@ import {
   createSummarizer,
   resolveSummarizationSettings,
   SUMMARIZATION_MIDDLEWARE_NAME,
+  SUMMARIZATION_PLUGIN_NAME,
+  SUMMARIZATION_SERVICE,
 } from './summarization.js';
 import type { SummarizationSettings } from './summarization.js';
 import { toolCallIdOf, toolRefusal } from './tool-events.js';
@@ -200,7 +202,13 @@ export interface FoldOptions {
   /** 核准政策的 session 開關。 */
   approvals?: ApprovalPolicy;
   /**
-   * 摘要的門檻與去向。省略即 {@link DEFAULT_SUMMARIZATION}，給物件就逐格淺合併上去。
+   * 摘要的門檻與去向。給物件就逐格淺合併到 {@link DEFAULT_SUMMARIZATION} 上。
+   *
+   * **省略時不一定是預設值**：那時改由部署設定層的 `@nexus/core/summarization` 條目決定，
+   * 四態的順序見 {@link summarizationDisposition}
+   * （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。那一列標成
+   * `disabled: true` 的效果跟這裡傳 `false` 一樣——**都是一顆同名空殼，不是「沒有」**。
+   * 手搭 plugin 清單、沒有經過設定檔的組裝拿到的還是內建預設。
    *
    * **`false` 是真的關掉**（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）：
    * root、宣告的 subagent 與 fold 補的 `general-purpose` 各拿到一顆同名空殼，基座無條件
@@ -898,15 +906,48 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
   // **在摘要那條早退之前就問。** 關掉時照樣驗：設定寫錯在載入期失敗，見
   // {@link FoldOptions.toolResultPruning}。挪到早退之後就等於默默放掉這條不變式。
   const pruning = toolResultPruningDisposition(registry, options);
-  if (options.summarization === false) return () => ({ name: SUMMARIZATION_MIDDLEWARE_NAME });
-  const settings = resolveSummarizationSettings(options.summarization);
+  const settings = summarizationDisposition(registry, options);
+  // **空殼要在拋之前。** 不要摘要的組裝沒有歷史要寫，也就不必有 backend；而「不要」今天
+  // 有兩個來源（明著傳的 `false`、條目的 `disabled: true`），兩個都走這條早退。
+  if (settings === false) return () => ({ name: SUMMARIZATION_MIDDLEWARE_NAME });
   const backend = options.defaultBackend;
   if (backend === undefined)
     throw new Error(
       '要配摘要器，但組裝點沒給 default backend——摘要器把歷史寫進 backend，沒有它就沒有' +
-        '地方放。給一個 default backend，或明著傳 `summarization: false` 關掉摘要。',
+        '地方放。給一個 default backend、明著傳 `summarization: false`，或在部署設定裡把' +
+        ' `@nexus/core/summarization` 那一列標成 `disabled: true`。',
     );
   return () => createSummarizer(backend, settings, registry.sessions, pruning);
+}
+
+/**
+ * 這次組裝要不要摘要、用哪一份設定——**四態，依序問**，同
+ * {@link repeatReminderDisposition}。
+ *
+ * **第 3 態（條目被明著關掉）落在 `false`，而 `false` 在這一顆是「一顆同名空殼」，
+ * 不是「沒有」。** 基座無條件建一顆摘要器，同名取代是唯一消得掉它的辦法；真的不掛的話
+ * 它會補回來，而它的兜底門檻在測試裡碰不到——那會長得跟「關掉了」一模一樣。
+ *
+ * **這是 `foldSummarizer` 裡唯一讀 `options.summarization` 的地方**，刻意的：第二個讀取點
+ * 會讓「條目關掉」與「明著傳 false」在某一處悄悄分岔，而今天這兩個述詞永遠同進同出，
+ * 沒有任何測試看得到那個分岔。
+ *
+ * @param registry - 已經跑完 `loadPlugins()` 的 registry。
+ * @param options - 組裝點自有的那些。
+ * @returns 正規化過的設定，或 `false`＝發一顆同名空殼。
+ */
+function summarizationDisposition(
+  registry: PluginRegistry,
+  options: FoldOptions,
+): SummarizationSettings | false {
+  if (options.summarization !== undefined)
+    return options.summarization === false
+      ? false
+      : resolveSummarizationSettings(options.summarization);
+  const provided = registry.services.get(SUMMARIZATION_SERVICE);
+  if (provided !== undefined) return provided;
+  if (registry.disabledEntries.has(SUMMARIZATION_PLUGIN_NAME)) return false;
+  return resolveSummarizationSettings();
 }
 
 /**
