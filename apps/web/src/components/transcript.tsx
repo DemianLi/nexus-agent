@@ -46,6 +46,7 @@ import {
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller';
 import type { ChangesStores } from '@/lib/changes-diff';
+import type { DeliverableDownloader } from '@/lib/deliverable-download';
 import type { DeliverableFileStore } from '@/lib/deliverable-file';
 import { transcriptItems } from '@/lib/deliverables-view';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
@@ -275,6 +276,7 @@ export function Transcript({
   before,
   changes,
   deliverableFiles,
+  deliverableDownload,
 }: {
   state: ConversationState;
   /** 哪幾則是這一次看著它長出來的（`useFreshItems`，在常駐的元件裡算）。 */
@@ -289,6 +291,8 @@ export function Transcript({
    * （檔名、說明、複製路徑）不需要讀檔。這一點跟改動卡相反：那一張沒有摘要就整張沒有內容。
    */
   deliverableFiles?: DeliverableFileStore;
+  /** 交付檔的下載（#452 第三刀）。沒給就不畫下載鈕，同上——交付卡照畫。 */
+  deliverableDownload?: DeliverableDownloader;
 }) {
   // 執行中的邊框光同時最多一個（§7 效能）：給最後一顆還在跑的工具。
   const beamId = state.entries.findLast(
@@ -304,7 +308,13 @@ export function Transcript({
     if (item.kind === 'deliverables') {
       return {
         id: item.id,
-        node: <DeliverablesCard files={item.files} preview={deliverableFiles} />,
+        node: (
+          <DeliverablesCard
+            files={item.files}
+            preview={deliverableFiles}
+            download={deliverableDownload}
+          />
+        ),
       };
     }
     const { entry } = item;

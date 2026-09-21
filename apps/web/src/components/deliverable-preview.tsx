@@ -9,14 +9,18 @@
  * **讀不到的四種各自有話講**（見 {@link DeliverableFileState}）：座標不對是 bug、錨不住是正常的、太大是
  * 拒絕不是截斷、二進位要改走下載。**只有真的讀壞了才給重試**。
  *
- * **下載鈕還沒有**：它是這張卡的第三刀。下載得 `fetch` 成 blob（那條線上每一條 `GET` 都要帶
- * `content-type: application/json`，而 `<a download>` 設不了 header），驗收要比整串位元組——值得自己一刀，
- * 不該塞在這一刀的尾巴。所以 `'binary'` 這一格現在只講「這是二進位」，按鈕下一刀補。
+ * **兩格有下載鈕**（第三刀補上）：`'binary'` 是它本來就該去的地方，`'too-large'` 則是因為**預覽的 413
+ * 有兩個成因**——整檔超過 32 MiB，或這一頁超過 2 MiB。下載只吃前者，所以一個「行太長、單頁爆掉」的
+ * 純文字檔預覽不了卻下載得下來；沒有這顆鈕的話，它在畫面上就完全拿不到了。
+ *
+ * **那顆鈕不保證成功**：整檔真的超過上限時它會再撞一次 413，而下載的 413 是終局。那句話由
+ * {@link DownloadAction} 自己講（`複製路徑` 那種 toast），這裡不預測。
  */
 
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 
+import { DownloadAction } from '@/components/deliverable-download-button';
 import { Button } from '@/components/ui/button';
 import {
   Sheet,
@@ -25,6 +29,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
+import type { DeliverableDownloader } from '@/lib/deliverable-download';
 import type {
   DeliverableFileFailure,
   DeliverableFileState,
@@ -51,15 +56,38 @@ function Status({ children, busy = false }: { children: ReactNode; busy?: boolea
  * **窮盡列舉，沒有 fallthrough**：之後多一種失敗狀態時這裡是型別錯誤，而不是靜靜多一顆對著
  * 永遠不會成功的請求打的重試鈕。
  */
-function Failure({ state, onRetry }: { state: DeliverableFileFailure; onRetry: () => void }) {
+function Failure({
+  state,
+  file,
+  downloader,
+  onRetry,
+}: {
+  state: DeliverableFileFailure;
+  file: LocatedFile;
+  downloader: DeliverableDownloader | undefined;
+  onRetry: () => void;
+}) {
+  const download =
+    downloader === undefined ? null : <DownloadAction file={file} downloader={downloader} />;
   switch (state) {
     case 'missing':
       return <Status>這個檔已經讀不到了</Status>;
     case 'too-large':
       // 上限是拒絕不是截斷，所以不能講成「只顯示前面一段」——那會讓人以為看到的是全部。
-      return <Status>檔案太大，沒辦法在這裡預覽</Status>;
+      // 下載鈕在這裡是承重的：單頁超標的那一半下載得下來，見檔頭。
+      return (
+        <Status>
+          檔案太大，沒辦法在這裡預覽
+          {download}
+        </Status>
+      );
     case 'binary':
-      return <Status>二進位檔，沒辦法預覽</Status>;
+      return (
+        <Status>
+          二進位檔，沒辦法預覽
+          {download}
+        </Status>
+      );
     case 'invalid':
       // 座標是程式給的，不是人打的——會走到這裡就是我們算錯了，所以講法跟其他三種不同。
       return <Status>讀不到這個檔：座標不對</Status>;
@@ -80,11 +108,13 @@ function PageBody({
   file,
   offset,
   store,
+  downloader,
   onMore,
 }: {
   file: LocatedFile;
   offset: number;
   store: DeliverableFileStore;
+  downloader: DeliverableDownloader | undefined;
   onMore: (next: number) => void;
 }) {
   const { seq, index } = file;
@@ -98,7 +128,14 @@ function PageBody({
 
   if (state === undefined || state === 'loading') return <Status busy>正在讀取檔案…</Status>;
   if (!isPage(state))
-    return <Failure state={state} onRetry={() => store.load(seq, index, offset)} />;
+    return (
+      <Failure
+        state={state}
+        file={file}
+        downloader={downloader}
+        onRetry={() => store.load(seq, index, offset)}
+      />
+    );
 
   return (
     <>
@@ -126,11 +163,14 @@ function PageBody({
 export function DeliverablePreview({
   file,
   store,
+  downloader,
   open,
   onOpenChange,
 }: {
   file: LocatedFile | undefined;
   store: DeliverableFileStore;
+  /** 沒給就不畫下載鈕——讀不到的那幾格仍然講得出發生了什麼事。 */
+  downloader?: DeliverableDownloader;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -153,7 +193,13 @@ export function DeliverablePreview({
         </SheetHeader>
         <div className="min-h-0 flex-1 overflow-y-auto">
           {file !== undefined && (
-            <PageBody file={file} offset={offset} store={store} onMore={setOffset} />
+            <PageBody
+              file={file}
+              offset={offset}
+              store={store}
+              downloader={downloader}
+              onMore={setOffset}
+            />
           )}
         </div>
       </SheetContent>
