@@ -22,6 +22,7 @@ import { useConversation } from '@/hooks/use-conversation';
 import { useThemePreference } from '@/hooks/use-theme-preference';
 import { agentBaseUrl, createAgentClient } from '@/lib/agent';
 import { createChangesStores } from '@/lib/changes-diff';
+import { createDeliverableFileStore } from '@/lib/deliverable-file';
 import { newConversationTarget, readThreadListing } from '@/lib/new-conversation';
 import { STOPPED_QUESTION_TEXT, stoppedOnQuestion } from '@/lib/question-view';
 import { recallThread, rememberThread } from '@/lib/remembered-thread';
@@ -186,6 +187,11 @@ function ConversationView({
     () => createChangesStores({ threadId, baseUrl: agentBaseUrl() }),
     [threadId],
   );
+  // 交付檔的頁同理快取到畫面卸掉為止（#452 第二刀）。
+  const deliverableFiles = useMemo(
+    () => createDeliverableFileStore({ threadId, baseUrl: agentBaseUrl() }),
+    [threadId],
+  );
   // **這個分頁在這條上講過話沒有**，決定「新對話」要不要留在原地（#313）。照 dsh `Session.handleBlank` 的鏡像：
   // 畫面上有東西（自己送出的話、重播回來的歷史、目標排的輪次）就不是空白，斜線命令不算——它不起一輪。
   // **判準看自己的畫面，不看清單**：清單是冷讀磁碟，還沒落盤的這一條根本不在上面。
@@ -287,6 +293,7 @@ function ConversationView({
             state={conversation.state}
             isFresh={isFresh}
             changes={changes}
+            deliverableFiles={deliverableFiles}
             feedback={{
               ratings: conversation.ratings,
               busy: !conversation.connected,

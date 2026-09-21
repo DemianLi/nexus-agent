@@ -8,7 +8,10 @@
  *
  * **dsh 有、這裡沒有的兩顆鈕**：
  * - 用 Host 的預設程式開檔（`changes.open`）：#443 決議 1 不做，Host 是多人共用的遠端主機。
- * - 在側欄打開整個檔（`review.openFile`）：我們沒有看檔的面（預覽在 #452，還在 triage）。
+ * - 在側欄打開整個檔（`review.openFile`）：**改動**這一側沒有這顆鈕。看檔的面現在有了
+ *   （`deliverable-preview.tsx`，#452 第二刀），但它讀的是**交付**路由——只收 `(seq, index)` 座標、
+ *   只認這一輪宣告過的交付檔，指不到一個改動過的任意路徑。要讓這裡也能開整個檔，得先有一條吃路徑的
+ *   路由，那是另一張卡。
  */
 
 import { Check, ChevronsUpDown, Columns2, WrapText } from 'lucide-react';
