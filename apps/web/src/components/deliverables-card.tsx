@@ -10,15 +10,21 @@
  * 連進來，在 Host 上開啟使用者看不到，而且等於讓瀏覽器驅動伺服器開程式。
  *
  * **每個檔案帶著讀檔路由的座標**（{@link LocatedFile}，[#452](https://github.com/DemianLi/nexus-agent/issues/452)）：
- * 這一刀只接線，畫面一點都沒動；預覽與下載是下一刀，那時 `(seq, index)` 已經在手上。
+ * 第一刀接線，這一刀拿那組 `(seq, index)` 開預覽（{@link DeliverablePreview}）。
+ *
+ * **下載還沒有**，它是第三刀：下載得 `fetch` 成 blob 而不是 `<a download>`（那條線上每一條 `GET` 都要帶
+ * `content-type: application/json`，連結設不了 header），而且驗收要比整串位元組——基座那支 `readRaw` 會把
+ * 二進位當 UTF-8 解掉，「有內容」「長度對」這種斷言對它是瞎的。那條驗收該當主角，不該是這一刀的尾巴。
  */
 
-import { Check, ChevronDown, ChevronUp, Copy, FileText } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Copy, Eye, FileText } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
+import { DeliverablePreview } from '@/components/deliverable-preview';
 import { Button } from '@/components/ui/button';
 import { copyText } from '@/lib/clipboard';
+import type { DeliverableFileStore } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import { basename } from '@/lib/present-view';
 
@@ -69,8 +75,16 @@ function CopyPathButton({ path }: { path: string }) {
   );
 }
 
-export function DeliverablesCard({ files }: { files: readonly LocatedFile[] }) {
+export function DeliverablesCard({
+  files,
+  preview,
+}: {
+  files: readonly LocatedFile[];
+  /** 沒給就不畫預覽鈕——卡片其餘的部分（含複製路徑）不需要它。 */
+  preview?: DeliverableFileStore;
+}) {
   const [expanded, setExpanded] = useState(false);
+  const [showing, setShowing] = useState<LocatedFile | undefined>(undefined);
   if (files.length === 0) return null;
   const collapsible = files.length > COLLAPSED_COUNT;
   const shown = collapsible && !expanded ? files.slice(0, COLLAPSED_COUNT) : files;
@@ -98,6 +112,19 @@ export function DeliverablesCard({ files }: { files: readonly LocatedFile[] }) {
               </span>
               <span className="text-muted-foreground font-mono text-xs break-all">{file.path}</span>
             </div>
+            {preview !== undefined && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8 shrink-0"
+                title={`預覽：${file.path}`}
+                aria-label={`預覽：${file.path}`}
+                onClick={() => setShowing(file)}
+              >
+                <Eye />
+              </Button>
+            )}
             <CopyPathButton path={file.path} />
           </li>
         ))}
@@ -114,6 +141,16 @@ export function DeliverablesCard({ files }: { files: readonly LocatedFile[] }) {
           {expanded ? '收起' : `顯示全部 ${files.length} 個`}
           {expanded ? <ChevronUp /> : <ChevronDown />}
         </Button>
+      )}
+      {preview !== undefined && (
+        <DeliverablePreview
+          file={showing}
+          store={preview}
+          open={showing !== undefined}
+          onOpenChange={(open) => {
+            if (!open) setShowing(undefined);
+          }}
+        />
       )}
     </section>
   );

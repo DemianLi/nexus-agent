@@ -46,6 +46,7 @@ import {
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller';
 import type { ChangesStores } from '@/lib/changes-diff';
+import type { DeliverableFileStore } from '@/lib/deliverable-file';
 import { transcriptItems } from '@/lib/deliverables-view';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
 import { pairAnswers } from '@/lib/question-view';
@@ -273,6 +274,7 @@ export function Transcript({
   feedback,
   before,
   changes,
+  deliverableFiles,
 }: {
   state: ConversationState;
   /** 哪幾則是這一次看著它長出來的（`useFreshItems`，在常駐的元件裡算）。 */
@@ -282,6 +284,11 @@ export function Transcript({
   before?: ReactNode;
   /** 改動的摘要與比較從哪裡讀（#443）。沒給就不畫改動卡。 */
   changes?: ChangesStores;
+  /**
+   * 交付檔的內容從哪裡讀（#452 第二刀）。沒給就不畫預覽鈕——**但交付卡照畫**，它其餘的部分
+   * （檔名、說明、複製路徑）不需要讀檔。這一點跟改動卡相反：那一張沒有摘要就整張沒有內容。
+   */
+  deliverableFiles?: DeliverableFileStore;
 }) {
   // 執行中的邊框光同時最多一個（§7 效能）：給最後一顆還在跑的工具。
   const beamId = state.entries.findLast(
@@ -295,7 +302,10 @@ export function Transcript({
         : [{ id: item.id, node: <ChangesCard seq={item.seq} changes={changes} /> }];
     }
     if (item.kind === 'deliverables') {
-      return { id: item.id, node: <DeliverablesCard files={item.files} /> };
+      return {
+        id: item.id,
+        node: <DeliverablesCard files={item.files} preview={deliverableFiles} />,
+      };
     }
     const { entry } = item;
     const answer = answers.get(entry.id);
