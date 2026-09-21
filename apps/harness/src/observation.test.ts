@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import { OBSERVATION_POLICY_NOTICE } from '@nexus/core';
+import { OBSERVATION_POLICY_NOTICE, observationPolicyPlugin } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
@@ -331,5 +331,46 @@ describe('規則要在模型動手之前就講給它聽', () => {
       .map((message) => message.text)
       .join('\n');
     expect(system).not.toContain(OBSERVATION_POLICY_NOTICE);
+  });
+});
+
+/**
+ * 策略的開關從部署設定的條目來（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+ *
+ * **判準在磁碟上，不在 stack 名單上。** 這一顆沒有設定，所以「條目在場」跟「條目不在」
+ * 長得一模一樣——唯一有行為差別的是 `disabled: true`，而它的差別正好是這張卡要擋的那件事
+ * 有沒有發生：盲改過不過得去。
+ */
+describe('先讀後改的開關從條目來', () => {
+  it('條目 `disabled: true` → 盲改過得去，磁碟真的被改了', async () => {
+    const root = await workspace();
+    const messages = await run(root, [edit('原本的內容', '被改掉了'), ...DONE], {
+      plugins: [{ plugin: observationPolicyPlugin, disabled: true }],
+    });
+
+    expect(messages[0]?.status).not.toBe('error');
+    expect(await readFile(join(root, 'notes.md'), 'utf8')).toContain('被改掉了');
+  });
+
+  it('條目在清單上、沒被關 → 照樣擋，磁碟一個字都沒動', async () => {
+    // **對照組，承重的。** 少了它，上面那條也會被「條目一放進去就壞掉」滿足。
+    const root = await workspace();
+    const messages = await run(root, [edit('原本的內容', '被改掉了'), ...DONE], {
+      plugins: [{ plugin: observationPolicyPlugin }],
+    });
+
+    expect(messages[0]?.status).toBe('error');
+    expect(await readFile(join(root, 'notes.md'), 'utf8')).toBe(ORIGINAL);
+  });
+
+  it('組裝點明著傳 `true` 時，條目關不掉它', async () => {
+    const root = await workspace();
+    const messages = await run(root, [edit('原本的內容', '被改掉了'), ...DONE], {
+      policy: true,
+      plugins: [{ plugin: observationPolicyPlugin, disabled: true }],
+    });
+
+    expect(messages[0]?.status).toBe('error');
+    expect(await readFile(join(root, 'notes.md'), 'utf8')).toBe(ORIGINAL);
   });
 });

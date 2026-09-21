@@ -26,6 +26,7 @@ import {
   DEFAULT_TOOL_RESULT_PRUNE,
   resolveSummarizationSettings,
   TOOL_RESULT_PRUNE_MARKER,
+  toolResultPrunerPlugin,
 } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { countTokensApproximately, tool } from 'langchain';
@@ -1687,5 +1688,81 @@ describe('壓縮前先剪掉過大的工具結果', () => {
     const text = String(toolResults(model.prompts[1]!)[0]!.content);
     expect(text).not.toContain(TOOL_RESULT_PRUNE_MARKER);
     expect(text).toContain('read_file');
+  });
+
+  /**
+   * 剪刀的預算從部署設定的條目來（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+   *
+   * **判準必須是行為，不能是「stack 裡有那一顆」。** 剪刀不是獨立的一顆 middleware，它包在
+   * 摘要器外面，名字還是摘要器的；而且出貨檔寫的三格**剛好等於預設值**，所以「條目提供的
+   * 那一份真的被讀了」只有在預算跟預設不同時才看得出來。三條都把摘要開著，因為剪刀只在
+   * 摘要開著時作用。
+   */
+  describe('剪刀的預算從條目來，在正式路徑上', () => {
+    it('條目給的預算真的傳到剪刀手上——頭尾長度照它的值', async () => {
+      const medium = 'M'.repeat(5_000);
+      const model = bulkTurns();
+      const { agent, dispose } = await createNexusAgent({
+        model,
+        plugins: [
+          bulkPlugin(medium),
+          {
+            plugin: toolResultPrunerPlugin,
+            config: { thresholdChars: 2_000, headChars: 500, tailChars: 100 },
+          },
+        ],
+        summarization: { trigger: [{ type: 'messages', value: 2 }] },
+      });
+      try {
+        await agent.invoke(toAgentInvocation('去拿一坨。'));
+      } finally {
+        await dispose();
+      }
+
+      // 5,000 在預設的 8,192 之下——預設那條路會一字不動。剪成這個樣子只有條目那份預算
+      // 生效才可能。
+      const text = String(toolResults(model.prompts[1]!)[0]!.content);
+      expect(text).toBe(`${'M'.repeat(500)}${TOOL_RESULT_PRUNE_MARKER}${'M'.repeat(100)}`);
+    });
+
+    it('條目 `disabled: true` → 壓力達標也不剪，摘要照跑', async () => {
+      const model = bulkTurns();
+      const { agent, dispose } = await createNexusAgent({
+        model,
+        plugins: [bulkPlugin(BULK), { plugin: toolResultPrunerPlugin, disabled: true }],
+        summarization: { trigger: [{ type: 'messages', value: 2 }] },
+      });
+      try {
+        await agent.invoke(toAgentInvocation('去拿一大坨。'));
+      } finally {
+        await dispose();
+      }
+
+      // 對照組是本檔「超過預算就剪掉中段」那條：同樣的 `BULK`、同樣的壓力，預設組裝會剪。
+      expect(String(toolResults(model.prompts[1]!)[0]!.content)).toBe(BULK);
+    });
+
+    it('組裝點明著傳的贏過條目', async () => {
+      const model = bulkTurns();
+      const { agent, dispose } = await createNexusAgent({
+        model,
+        plugins: [
+          bulkPlugin(BULK),
+          {
+            plugin: toolResultPrunerPlugin,
+            config: { thresholdChars: 2_000, headChars: 500, tailChars: 100 },
+          },
+        ],
+        summarization: { trigger: [{ type: 'messages', value: 2 }] },
+        toolResultPruning: false,
+      });
+      try {
+        await agent.invoke(toAgentInvocation('去拿一大坨。'));
+      } finally {
+        await dispose();
+      }
+
+      expect(String(toolResults(model.prompts[1]!)[0]!.content)).toBe(BULK);
+    });
   });
 });

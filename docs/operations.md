@@ -183,6 +183,23 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `repeatReminder` 時，以那句話為準；而手搭 plugin 清單（沒有這幾列）的組裝拿到的是內建
   預設，不是「什麼都沒掛」。
 
+今天有三列：
+
+| id | 管什麼 | 有 `config` 嗎 |
+| --- | --- | --- |
+| `repeat-reminder` | 連續重複同參數呼叫同一個工具時提醒模型 | 有（四格） |
+| `tool-result-pruner` | 摘要之前先剪掉過長工具結果的中段 | 有（三格） |
+| `observation-policy` | 先讀後改：沒讀過的檔不准改 | **沒有** |
+
+`observation-policy` 那一列**不可以加 `config:`**——它沒有設定，載入器對「這顆 plugin 沒有
+Config schema 卻給了 config」是當場拋。它列在這裡的唯一意義就是讓 `disabled: true` 指得著。
+
+**關掉 `observation-policy` 等於這個組裝接受盲改**，不是省一點開銷：模型可以對一個沒讀過的
+檔直接 `edit_file`。只有「只寫新檔、從不編輯」那種批次流程才該關它。
+
+**`tool-result-pruner` 只在摘要開著時有作用**（摘要不掛就沒人叫剪刀），但它的設定照樣在載入
+期驗——寫錯不會因為今天剛好沒用到就放過。
+
 ### 看這台機器上疊出來的是什麼
 
 ```bash
