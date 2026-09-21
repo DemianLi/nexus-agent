@@ -75,3 +75,5 @@ export const workspaceChangesInvariantPlugin: NexusPlugin = {
     registry.invariants.register(WORKSPACE_CHANGES_INVARIANT_PACKAGE, workspaceChangesInvariant);
   },
 };
+
+export default workspaceChangesInvariantPlugin;

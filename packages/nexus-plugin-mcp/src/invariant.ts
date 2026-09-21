@@ -55,3 +55,5 @@ export const mcpInvariantPlugin: NexusPlugin = {
     registry.invariants.register(MCP_INVARIANT_PACKAGE, install);
   },
 };
+
+export default mcpInvariantPlugin;

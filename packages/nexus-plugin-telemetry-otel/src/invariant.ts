@@ -58,3 +58,5 @@ export const telemetryOtelInvariantPlugin: NexusPlugin = {
     registry.invariants.register(TELEMETRY_OTEL_INVARIANT_PACKAGE, install);
   },
 };
+
+export default telemetryOtelInvariantPlugin;

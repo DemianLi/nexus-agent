@@ -52,3 +52,5 @@ export const agentInstructionsInvariantPlugin: NexusPlugin = {
     registry.invariants.register(AGENT_INSTRUCTIONS_INVARIANT_PACKAGE, install);
   },
 };
+
+export default agentInstructionsInvariantPlugin;

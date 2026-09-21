@@ -53,3 +53,5 @@ export const sandboxPolicyInvariantPlugin: NexusPlugin = {
     registry.invariants.register(SANDBOX_POLICY_INVARIANT_PACKAGE, install);
   },
 };
+
+export default sandboxPolicyInvariantPlugin;

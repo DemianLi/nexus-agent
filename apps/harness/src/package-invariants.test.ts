@@ -59,6 +59,7 @@ function companionSource(
     readonly declarationComment?: string;
     readonly installer?: string;
     readonly registration?: string;
+    readonly defaultExport?: string;
     readonly extra?: string;
   } = {},
 ): string {
@@ -67,25 +68,28 @@ function companionSource(
     declarationComment = '',
     installer = 'const install: InvariantInstaller = () => {};',
     registration = 'registry.invariants.register(SAMPLE_PACKAGE, install);',
+    defaultExport = 'export default samplePlugin;',
     extra = '',
   } = overrides;
   return `${header}
 
-import type { InvariantInstaller, PluginEntry } from '@nexus/core';
+import type { InvariantInstaller, NexusPlugin, PluginEntry } from '@nexus/core';
 
 export const SAMPLE_PACKAGE = '@nexus/sample';
 
 ${declarationComment}${installer}
 ${extra}
+export const samplePlugin: NexusPlugin = {
+  name: 'sample-invariant',
+  apply(registry) {
+    ${registration}
+  },
+};
+
+${defaultExport}
+
 export function createSampleInvariantPlugin(): PluginEntry {
-  return {
-    plugin: {
-      name: 'sample-invariant',
-      apply(registry) {
-        ${registration}
-      },
-    },
-  };
+  return { plugin: samplePlugin };
 }
 `;
 }
@@ -219,9 +223,30 @@ describe('原始碼', () => {
     expect(violationsFor(source)).toEqual([expect.stringContaining('create*InvariantPlugin')]);
   });
 
-  it('default export 是違規', () => {
-    const source = companionSource({ extra: 'export default install;' });
-    expect(violationsFor(source)).toEqual([expect.stringContaining('不得 default export')]);
+  it('沒有 default export 是違規——設定檔叫不出這個條目的名字', () => {
+    const source = companionSource({ defaultExport: '' });
+    expect(violationsFor(source)).toEqual([expect.stringContaining('default export 缺一個')]);
+  });
+
+  it('default export 就地寫一顆物件是違規——它要留得住具名匯出', () => {
+    // 這一條是舊規則（「不得 default export」）翻面之後留下來的那一半：舊規則守的是
+    // 「specifier 要留得住具名匯出」，而那件事現在由「必須是本檔具名 export 的常數」守著。
+    const source = companionSource({
+      defaultExport: "export default { name: 'sample-invariant', apply() {} };",
+    });
+    expect(violationsFor(source)).toEqual([
+      expect.stringContaining('必須是本檔具名 export 的常數'),
+    ]);
+  });
+
+  it('default export 指到沒有 export 的區域常數也是違規', () => {
+    const source = companionSource({
+      extra: "const hidden: NexusPlugin = { name: 'hidden', apply() {} };",
+      defaultExport: 'export default hidden;',
+    });
+    expect(violationsFor(source)).toEqual([
+      expect.stringContaining('必須是本檔具名 export 的常數'),
+    ]);
   });
 });
 

@@ -124,3 +124,5 @@ export const goalInvariantPlugin: NexusPlugin = {
     registry.invariants.register(GOAL_INVARIANT_PACKAGE, goalStreamInvariant);
   },
 };
+
+export default goalInvariantPlugin;

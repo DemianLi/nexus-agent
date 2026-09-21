@@ -42,3 +42,5 @@ export const feedbackInvariantPlugin: NexusPlugin = {
     registry.invariants.register(FEEDBACK_INVARIANT_PACKAGE, install);
   },
 };
+
+export default feedbackInvariantPlugin;

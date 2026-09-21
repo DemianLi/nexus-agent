@@ -43,3 +43,5 @@ export const askUserInvariantPlugin: NexusPlugin = {
     registry.invariants.register(ASK_USER_INVARIANT_PACKAGE, install);
   },
 };
+
+export default askUserInvariantPlugin;

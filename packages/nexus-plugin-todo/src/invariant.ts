@@ -146,3 +146,5 @@ export const todoInvariantPlugin: NexusPlugin = {
     registry.invariants.register(TODO_INVARIANT_PACKAGE, todoSnapshotInvariant);
   },
 };
+
+export default todoInvariantPlugin;

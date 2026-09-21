@@ -107,3 +107,5 @@ export const commandsInvariantPlugin: NexusPlugin = {
     registry.invariants.register(COMMANDS_INVARIANT_PACKAGE, commandsInvariant);
   },
 };
+
+export default commandsInvariantPlugin;
