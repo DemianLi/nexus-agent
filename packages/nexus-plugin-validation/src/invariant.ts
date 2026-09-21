@@ -57,3 +57,5 @@ export const validationInvariantPlugin: NexusPlugin = {
     registry.invariants.register(VALIDATION_INVARIANT_PACKAGE, install);
   },
 };
+
+export default validationInvariantPlugin;

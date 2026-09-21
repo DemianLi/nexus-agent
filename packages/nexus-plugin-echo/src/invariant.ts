@@ -57,3 +57,5 @@ export const echoInvariantPlugin: NexusPlugin = {
     registry.invariants.register(ECHO_INVARIANT_PACKAGE, install);
   },
 };
+
+export default echoInvariantPlugin;

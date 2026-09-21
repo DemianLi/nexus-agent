@@ -122,3 +122,5 @@ export const presentInvariantPlugin: NexusPlugin = {
     registry.invariants.register(PRESENT_INVARIANT_PACKAGE, presentDeliveryInvariant);
   },
 };
+
+export default presentInvariantPlugin;

@@ -13,6 +13,17 @@
  * （`scripts/package-invariants.ts` 與 `scripts/verify-package-invariants.ts`）。
  * 與 dsh 逐條的異同見 [#108](https://github.com/DemianLi/nexus-agent/issues/108)。
  *
+ * **有一條規則現在是反過來的，那是登記過的偏離**（[#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 第一刀）：dsh 的規則是「**不得** default export」，我們是「**必須** default export 一顆
+ * 具名常數」。理由是前提不同，不是口味——dsh 的配套入口把 `name` / `inject` / `apply` 散在
+ * 頂層（`packages/core/session/src/invariant.ts:18`），**模組的 namespace 自己就是那顆
+ * plugin**，而 loader 的 `unwrapExports` 是 `exports.default ?? exports`
+ * （`vendor/loader/src/index.ts:189`），所以在那邊一個 default export 會把真的 plugin 遮掉。
+ * 我們的配套入口匯出的是一顆巢狀的 `NexusPlugin` 常數，namespace 不是 plugin，遮不掉任何
+ * 東西；而 `cordis.yml` 的 `name` 要靠 default export 才指得到它。舊規則的理由（「specifier
+ * 要留得住具名匯出」）沒有被丟掉，它變成「default export 必須是**本檔具名 export 的常數**」
+ * 那一條。
+ *
  * @module
  */
 
@@ -254,11 +265,21 @@ function checkSource(
       '必須具名 export 一個 create*InvariantPlugin 工廠——沒有它，這個配套入口誰都掛不上',
     );
   }
-  if (hasDefaultExport(sourceFile)) {
+  const defaultExport = defaultExportOf(sourceFile);
+  if (defaultExport === undefined) {
     addViolation(
       violations,
       owner.sourcePath,
-      '不得 default export：配套入口的 specifier 要留得住具名匯出',
+      'default export 缺一個：`cordis.yml` 的 `name` 靠它解析，缺了的話這個配套入口在設定檔裡' +
+        '叫不出名字（#454）。寫成 `export default <那顆 NexusPlugin 常數>;`',
+    );
+  } else if (!topLevelExportedConstants(sourceFile).has(defaultExport)) {
+    addViolation(
+      violations,
+      owner.sourcePath,
+      'default export 必須是本檔具名 export 的常數' +
+        `（實際是 ${defaultExport === '' ? '就地寫的宣告或運算式' : JSON.stringify(defaultExport)}）` +
+        '——沒有第二個名字的話，設定檔載到的東西在程式碼裡指不著',
     );
   }
 
@@ -422,15 +443,43 @@ function hasExportedPluginFactory(sourceFile: ts.SourceFile): boolean {
   );
 }
 
-function hasDefaultExport(sourceFile: ts.SourceFile): boolean {
-  return sourceFile.statements.some((statement) => {
-    if (ts.isExportAssignment(statement)) return true;
-    return ts.canHaveModifiers(statement)
-      ? (ts.getModifiers(statement) ?? []).some(
-          (modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword,
-        )
-      : false;
-  });
+/**
+ * default export 的識別字。
+ *
+ * **三種結果要分得開，因為訊息不一樣**：`undefined` 是「一個 default export 都沒有」，
+ * 空字串是「有 default export 但它不是一個識別字」（`export default { ... }`、
+ * `export default function ...`），其餘是那個識別字。第二種會落到「必須是本檔具名 export
+ * 的常數」那一條——**留得住具名匯出**正是這條規則反過來寫的那一版原本要守的東西
+ * （見 {@link checkSource} 那一段的註解）。
+ *
+ * @param sourceFile - 配套入口的 AST。
+ * @returns 識別字、空字串（有但不是識別字），或 `undefined`（沒有）。
+ */
+function defaultExportOf(sourceFile: ts.SourceFile): string | undefined {
+  for (const statement of sourceFile.statements) {
+    if (ts.isExportAssignment(statement) && statement.isExportEquals !== true) {
+      return ts.isIdentifier(statement.expression) ? statement.expression.text : '';
+    }
+    const isDefaultDeclaration =
+      ts.canHaveModifiers(statement) &&
+      (ts.getModifiers(statement) ?? []).some(
+        (modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword,
+      );
+    if (isDefaultDeclaration) return '';
+  }
+  return undefined;
+}
+
+/** 本檔頂層 `export const` 宣告的名字。 */
+function topLevelExportedConstants(sourceFile: ts.SourceFile): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement) || !hasExportModifier(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (ts.isIdentifier(declaration.name)) names.add(declaration.name.text);
+    }
+  }
+  return names;
 }
 
 function hasExportModifier(statement: ts.Statement): boolean {

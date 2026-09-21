@@ -56,3 +56,5 @@ export const memoryInvariantPlugin: NexusPlugin = {
     registry.invariants.register(MEMORY_INVARIANT_PACKAGE, install);
   },
 };
+
+export default memoryInvariantPlugin;

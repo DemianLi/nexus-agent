@@ -127,3 +127,5 @@ export const planModeInvariantPlugin: NexusPlugin = {
     registry.invariants.register(PLAN_MODE_INVARIANT_PACKAGE, planModeInvariant);
   },
 };
+
+export default planModeInvariantPlugin;

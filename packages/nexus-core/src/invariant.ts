@@ -163,3 +163,5 @@ export const coreInvariantPlugin: NexusPlugin = {
     registry.invariants.register(CORE_INVARIANT_PACKAGE, sessionInvariant);
   },
 };
+
+export default coreInvariantPlugin;

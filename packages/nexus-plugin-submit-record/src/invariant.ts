@@ -44,3 +44,5 @@ export const submitRecordInvariantPlugin: NexusPlugin = {
     registry.invariants.register(SUBMIT_RECORD_INVARIANT_PACKAGE, install);
   },
 };
+
+export default submitRecordInvariantPlugin;
