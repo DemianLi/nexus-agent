@@ -1,0 +1,112 @@
+# 出貨的預設 plugin 清單。
+#
+# 這份檔案是「零設定的 nexus 由什麼組成」的唯一來源（#454）。使用者要改的話不是編輯它，
+# 而是在 `$NEXUS_AGENT_HOME/cordis.patch.yml`（預設 `~/.nexus-agent/`）或 `--patch <檔>`
+# 裡按 `id` 覆寫、停用、插入——patch 是整份替換 `config`，不是深層合併，所以覆寫的時候要
+# 把想保留的欄位一起重述。
+#
+# 每一列的欄位：
+#
+#   id        這一次掛載的識別。外面的 patch 靠它指到這一列，所以名字是承重的。
+#   name      模組 specifier，用動態 import 載進來再取 default export。
+#   config    交給那顆 plugin 的設定，由它自己的 `Config` schema 驗。沒有 `Config` 的
+#             plugin（下面二十個配套入口全部是）不得寫這個欄位。
+#   disabled  這一次掛載不跑。只收字面布林——dsh 那邊可以寫 `!!js` 運算式，我們刻意不接
+#             （#104 的偏離標註）。
+#
+# 順序不承載語意，分組是給人看的。
+
+# ── 功能 ──────────────────────────────────────────────────────────────────────
+#
+# 工具只有 echo 一個：預設組裝要能證明「工具真的接上了」，而不是替誰決定該裝什麼。
+# 計劃模式、goal、todo、present 是講得出理由的例外，理由逐條寫在 `cli.ts` 的
+# `DEFAULT_PLUGINS` 檔頭上（#120／#126／#132／#441）。
+
+- id: echo
+  name: '@nexus/plugin-echo'
+
+# 工作區指令（#388）：不帶 `--plugins` 的 CLI 與 serve 也看得到 `AGENTS.md`。有 backend
+# 才會真的建 middleware，所以沒給 `--workspace` 時它什麼都不加。
+- id: agent-instructions
+  name: '@nexus/plugin-agent-instructions'
+
+- id: plan-mode
+  name: '@nexus/plugin-plan-mode'
+
+- id: goal
+  name: '@nexus/plugin-goal'
+
+# `allowParallelInProgress`：這棵樹的 subagent 是真的併發跑的，而 dsh 對這種部署開的就是
+# true。這個開關沒有預設值，理由見 `TodoPluginOptions`。
+- id: todo
+  name: '@nexus/plugin-todo'
+  config:
+    allowParallelInProgress: true
+
+# 一則評分備註最多幾個 UTF-8 位元組。照 dsh web 那一包的設定
+# （`packages/bundle/web-app/cordis.patch.yml:56`，`c291e79`）；plugin 自己不給預設值。
+- id: feedback
+  name: '@nexus/plugin-feedback'
+  config:
+    maxNoteBytes: 8192
+
+# 交付宣告（#441）：dsh 的 standard preset 掛 `tool-present`。沒有工作區時工具照樣在，
+# 叫了會被拒。
+- id: present
+  name: '@nexus/plugin-present'
+
+# ── 配套入口 ──────────────────────────────────────────────────────────────────
+#
+# 二十個全進，不是只有 `@nexus/core`（#107 拍板）。十三個是空 installer，掛上去一個檢查
+# 都不裝，買到的只有包名歸屬；真的在檢查的是七個。它們不裝功能只裝觀察，而且關得掉——
+# 所以「不替誰決定該裝什麼」這條顧慮對它們不成立。
+#
+# 這份清單要跟 `packages/*/src/invariant.ts` 對得上：少掛的那幾個會讓「這個 package 沒有
+# 可檢的關係」與「這個 package 的檢查沒掛上」在診斷裡長得一模一樣。對帳由
+# `invariant-companions.test.ts` 與 `package-invariants.test.ts` 守著（#489）。
+#
+# **順序照抄 `DEFAULT_PLUGINS`**（所以這裡不是字母序）。順序不承載語意，照抄是為了讓
+# `plugin-config.test.ts` 的等價斷言可以嚴格比到順序，而不必在斷言裡先把它排序掉——一個
+# 先排序再比的斷言，順序真的變重要的那天不會紅。要整理順序的話自己開一張，那顆探針就是
+# 它的驗收句。
+
+- id: core-invariant
+  name: '@nexus/core/invariant'
+- id: agent-instructions-invariant
+  name: '@nexus/plugin-agent-instructions/invariant'
+- id: commands-invariant
+  name: '@nexus/plugin-commands/invariant'
+- id: ask-user-invariant
+  name: '@nexus/plugin-ask-user/invariant'
+- id: echo-invariant
+  name: '@nexus/plugin-echo/invariant'
+- id: feedback-invariant
+  name: '@nexus/plugin-feedback/invariant'
+- id: goal-invariant
+  name: '@nexus/plugin-goal/invariant'
+- id: mcp-invariant
+  name: '@nexus/plugin-mcp/invariant'
+- id: memory-invariant
+  name: '@nexus/plugin-memory/invariant'
+- id: plan-mode-invariant
+  name: '@nexus/plugin-plan-mode/invariant'
+- id: present-invariant
+  name: '@nexus/plugin-present/invariant'
+- id: quickjs-invariant
+  name: '@nexus/plugin-quickjs/invariant'
+- id: workspace-changes-invariant
+  name: '@nexus/plugin-workspace-changes/invariant'
+- id: sandbox-policy-invariant
+  name: '@nexus/plugin-sandbox-policy/invariant'
+- id: skills-invariant
+  name: '@nexus/plugin-skills/invariant'
+- id: submit-record-invariant
+  name: '@nexus/plugin-submit-record/invariant'
+- id: telemetry-otel-invariant
+  name: '@nexus/plugin-telemetry-otel/invariant'
+- id: todo-invariant
+  name: '@nexus/plugin-todo/invariant'
+- id: validation-invariant
+  name: '@nexus/plugin-validation/invariant'
+- id: wire-invariant
+  name: '@nexus/wire/invariant'
