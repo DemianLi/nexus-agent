@@ -144,6 +144,11 @@ describe('卡片上的下載鈕', () => {
     expect(toastSpy.error.mock.calls[0]![0]).toBe(said);
   });
 
+  it('axe：一列三顆圖示鈕沒有違規', async () => {
+    mount(() => octets());
+    expect(await axeViolations(document.body)).toEqual([]);
+  });
+
   it('413 跟 500 講的不是同一件事——一個是終局，一個叫你再按一次', async () => {
     mount(() => new Response('', { status: 413 }));
     fireEvent.click(screen.getByRole('button', { name: `下載：${FILE.path}` }));
