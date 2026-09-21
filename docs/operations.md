@@ -106,6 +106,51 @@ web 那端把 thread id 記在瀏覽器裡，重新整理之後接的是同一�
 但那是准許不是保證。額外那條「連續 N 輪沒進展就停」刻意沒做，理由在
 `apps/harness/src/goal-driver.ts` 的檔頭。
 
+## plugin 清單
+
+零設定的 CLI 與 serve 掛哪些 plugin，由**出貨的 `apps/harness/cordis.yml`** 決定
+（[#454](https://github.com/DemianLi/nexus-agent/issues/454)）。那份檔案進版控，是「這個
+agent 由什麼組成」的唯一來源。
+
+要改它不是去編輯那份檔案，而是疊一層自己的 patch。**三層，後面的蓋前面的**：
+
+1. 出貨的 `apps/harness/cordis.yml`
+2. `$NEXUS_AGENT_HOME/cordis.patch.yml`（預設 `~/.nexus-agent/cordis.patch.yml`）
+3. 任意個 `--patch <檔>`，照命令列順序
+
+patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
+
+```yaml
+# 把 todo 關掉
+- id: todo
+  disabled: true
+
+# 換掉 feedback 的設定。**整份替換，不是深層合併**——想保留的欄位要一起重述
+- id: feedback
+  config:
+    maxNoteBytes: 4096
+
+# 插一個原本不在清單裡的 plugin
+- insert:
+    - id: mcp
+      name: '@nexus/plugin-mcp'
+      config:
+        servers: []
+```
+
+幾條會讓人踩到的規則：
+
+- **`config` 是整份替換。** 這一條照 dsh，理由是 patch 疊 patch 的深層合併沒有人推得出最後
+  的值。
+- **指到不存在的 `id` 只會警告，不會失敗。** 一份 patch 給多台機器共用時不必每一棵樹都命中。
+- **寫了 `name` 就變成斷言**：對不上那一列就整條跳過，原列一個字都不動。它是防手滑的，不是
+  選擇器。
+- **空檔與只有註解的檔會讓啟動失敗。** 要停用某一層請寫 `[]`——「我把它清空了」與「我把它
+  寫壞了」在磁碟上長得一樣，所以不猜。
+- **patch 檔只有你自己動得了才會被接受。** 檔案本身與它每一層上層目錄都不能讓群組或其他人
+  可寫（sticky 的目錄除外），否則拒絕啟動。這台機器是多人共用的，而 patch 檔停得掉核准。
+- **`--patch` 不能配 `--plugins`**：後者換掉的是整份清單，疊在上面的 patch 會一條都命不中。
+
 ## 核准
 
 **`serve` 是三個入口裡唯一會停下來的那個。** CLI 與 eval 收不了核准決定，所以它們把核准關掉

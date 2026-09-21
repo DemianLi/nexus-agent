@@ -34,7 +34,6 @@ import type {
   SessionStore,
 } from '@nexus/core';
 import {
-  DEFAULT_PLUGINS,
   createCliAgent,
   parseSandboxMode,
   formatGoalDriverDisclosure,
@@ -60,6 +59,7 @@ import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
 import { startWireServer } from './wire-server.js';
 import type { WireServer } from './wire-server.js';
+import { loadDefaultPlugins } from './plugin-config.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
 import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
 
@@ -84,6 +84,8 @@ export interface ServeInvocation {
   /** 見 `cli.ts` 的 `CliInvocation.sandbox`。**兩個入口共用同一個旗標名、同一份驗證、同一個預設**。 */
   readonly sandbox?: SandboxMode;
   readonly pluginModule?: string;
+  /** 見 `cli.ts` 的 `CliInvocation.patches`。**兩個入口共用同一個旗標名、同一份驗證、同一份疊加。** */
+  readonly patches?: readonly string[];
   readonly sessionLog?: string;
   /** 見 `cli.ts` 的 `CliInvocation.goalDriver`。**兩個入口共用同一個旗標名與同一個預設**。 */
   readonly goalDriver: boolean;
@@ -96,6 +98,9 @@ const USAGE = `用法：
 選項：
   --live               換成真實供應商（${LIVE_MODEL_ID}），需要 API key
   --plugins <module>   從指定模組載 plugin 清單（預設匯出一個陣列）
+  --patch <file>       把這個 patch 檔疊在出貨的 cordis.yml 上（可以給多次，後面的蓋前面的）
+                       另一層是 $NEXUS_AGENT_HOME/cordis.patch.yml，它排在 --patch 之前
+                       不能配 --plugins（那個換掉的是整份清單）
   --workspace <dir>    把檔案落在這個目錄底下（省略即虛擬檔案系統）
   --sandbox <mode>     圍堵強度：read-only｜workspace-write｜danger-full-access
                        預設 workspace-write（可寫根之內放行）；要配 --workspace
@@ -119,6 +124,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
       options: {
         live: { type: 'boolean', default: false },
         plugins: { type: 'string' },
+        patch: { type: 'string', multiple: true },
         workspace: { type: 'string' },
         sandbox: { type: 'string' },
         'session-log': { type: 'string' },
@@ -138,6 +144,19 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
   if (values.workspace !== undefined && values.workspace.trim() === '') {
     throw new Error(`--workspace 要給一個目錄路徑。\n\n${USAGE}`);
   }
+  const patches = values.patch;
+  if (patches !== undefined) {
+    if (patches.some((patch) => patch.trim() === '')) {
+      throw new Error(`--patch 要給一個檔案路徑。\n\n${USAGE}`);
+    }
+    if (values.plugins !== undefined) {
+      throw new Error(
+        `--patch 不能配 --plugins：--patch 疊在出貨的 cordis.yml 上，而 --plugins 換掉的是` +
+          `整份清單。兩個一起給的話，那幾條 patch 一條都命不中，只會留下幾行警告。` +
+          `\n\n${USAGE}`,
+      );
+    }
+  }
   if (values['session-log'] !== undefined && values['session-log'].trim() === '') {
     throw new Error(`--session-log 要給一個目錄路徑。\n\n${USAGE}`);
   }
@@ -153,6 +172,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     live: values.live === true,
     port,
     ...(values.plugins !== undefined && { plugins: values.plugins, pluginModule: values.plugins }),
+    ...(patches !== undefined && { patches }),
     ...(values.workspace !== undefined && { workspace: values.workspace }),
     ...(sandbox !== undefined && { sandbox }),
     ...(values['session-log'] !== undefined && { sessionLog: values['session-log'] }),
@@ -263,9 +283,14 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   const auth = new BrowserAuth(await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)));
   const webDist = options.webDist ?? resolveWebDist();
 
+  // **產品路徑上的清單從 `cordis.yml` 來**（#454），與 CLI 同一條路：同一個函式、同一個
+  // home 層、同一組 `--patch`。
   const plugins: readonly PluginEntry[] =
     invocation.pluginModule === undefined
-      ? DEFAULT_PLUGINS
+      ? await loadDefaultPlugins({
+          env,
+          ...(invocation.patches !== undefined && { patches: invocation.patches }),
+        })
       : await loadPluginModule(invocation.pluginModule, options.cwd);
 
   // **會話根按目錄分，一個專案一格**——照 dsh 的 `projectDir(root, cwd)`

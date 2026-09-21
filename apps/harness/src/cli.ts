@@ -95,6 +95,7 @@ import {
 import type { SandboxMode } from './contained-backend.js';
 import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MODEL_ID } from './live-model.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
+import { loadDefaultPlugins } from './plugin-config.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
@@ -107,7 +108,10 @@ export interface CliInvocation {
   readonly prompt?: string;
   /** 用真實供應商而不是假模型。 */
   readonly live: boolean;
-  /** plugin 清單的來源模組。省略即 {@link DEFAULT_PLUGINS}。 */
+  /**
+   * plugin 清單的來源模組。**省略即出貨的 `cordis.yml` 加上使用者那兩層**
+   * （[#454](https://github.com/DemianLi/nexus-agent/issues/454)），見 {@link loadDefaultPlugins}。
+   */
   readonly pluginModule?: string;
   /**
    * 真實磁碟上的可寫根。給了就換成有路徑圍堵的 Disk backend，省略即跑在 state 裡的
@@ -199,6 +203,13 @@ export interface CliInvocation {
    * `--resume` 呼叫，靠的就是每次重給。
    */
   readonly recursionLimit?: number;
+  /**
+   * `--patch` 疊在出貨 `cordis.yml` 上的那幾層，照命令列順序（後面的蓋前面的）。
+   *
+   * 與 {@link CliInvocation.pluginModule} **互斥**：`--plugins` 換掉的是整份清單，疊在一份
+   * 被換掉的清單上沒有意義——那些 patch 會一條都命不中，然後只留下幾行警告。
+   */
+  readonly patches?: readonly string[];
   /** 只印用法就退出。 */
   readonly help: boolean;
 }
@@ -210,6 +221,9 @@ export const USAGE = `用法：cli [選項] [要說的話...]
 選項：
   --live               換成真實供應商（${LIVE_MODEL_ID}），需要 API key
   --plugins <module>   從指定模組載 plugin 清單（預設匯出一個陣列）
+  --patch <file>       把這個 patch 檔疊在出貨的 cordis.yml 上（可以給多次，後面的蓋前面的）
+                       另一層是 $NEXUS_AGENT_HOME/cordis.patch.yml，它排在 --patch 之前
+                       不能配 --plugins（那個換掉的是整份清單）
   --workspace <dir>    在真實磁碟的這個目錄上跑，變更被圍堵在它之下
                        （省略即虛擬檔案系統，完全不碰磁碟）
   --sandbox <mode>     圍堵強度：read-only｜workspace-write｜danger-full-access
@@ -250,6 +264,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
       options: {
         live: { type: 'boolean', default: false },
         plugins: { type: 'string' },
+        patch: { type: 'string', multiple: true },
         workspace: { type: 'string' },
         sandbox: { type: 'string' },
         'session-log': { type: 'string' },
@@ -272,6 +287,19 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   }
   if (values.workspace !== undefined && values.workspace.trim() === '') {
     throw new Error(`--workspace 要給一個目錄路徑。\n\n${USAGE}`);
+  }
+  const patches = values.patch;
+  if (patches !== undefined) {
+    if (patches.some((patch) => patch.trim() === '')) {
+      throw new Error(`--patch 要給一個檔案路徑。\n\n${USAGE}`);
+    }
+    if (values.plugins !== undefined) {
+      throw new Error(
+        `--patch 不能配 --plugins：--patch 疊在出貨的 cordis.yml 上，而 --plugins 換掉的是` +
+          `整份清單。兩個一起給的話，那幾條 patch 一條都命不中，只會留下幾行警告。` +
+          `\n\n${USAGE}`,
+      );
+    }
   }
   // **續接的衝突先講**：`--resume --sandbox read-only` 沒配 `--workspace` 的話，下一行會先
   // 報「--sandbox 要配 --workspace」，而那不是這個人真正做錯的事。
@@ -307,6 +335,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     ...(prompt.length > 0 && { prompt }),
     live: values.live === true,
     ...(values.plugins !== undefined && { pluginModule: values.plugins }),
+    ...(patches !== undefined && { patches }),
     ...(values.workspace !== undefined && { workspace: values.workspace }),
     ...(sandbox !== undefined && { sandbox }),
     ...(sessionLog !== undefined && { sessionLog }),
@@ -458,7 +487,15 @@ function outsideWorkspace(
 }
 
 /**
- * 沒指定 `--plugins` 時載的清單。
+ * 出貨清單的**遷移參照**，不是產品路徑。
+ *
+ * **產品路徑已經改走 `apps/harness/cordis.yml`**（[#454](https://github.com/DemianLi/nexus-agent/issues/454)
+ * 的第三刀）：`runCli` 與 `runServe` 沒給 `--plugins` 時叫的是 {@link loadDefaultPlugins}。
+ * 這份常數留著只為一件事——`plugin-config.test.ts` 拿它跟 YAML 組出來的東西逐條比，證明
+ * 這次搬家沒有弄丟任何東西。**那條斷言與這份常數會在下一刀一起刪掉**：留著它就變成第二份
+ * 要維護的清單，而它守的會是「副本相等」不是「設定是對的」（#490 拒絕過這個形狀）。
+ *
+ * 底下這些理由屬於**那份清單**，不屬於這個常數——搬家的時候一起搬進了 `cordis.yml` 的註解。
  *
  * 工具只有 echo 一個——CLI 的預設組裝要能證明「工具真的接上了」，而不是替誰決定該裝什麼。
  * 哪些**工具** plugin 該進預設清單是設定的事，那要等**外部**設定機制才有地方講
@@ -1149,8 +1186,8 @@ export async function driveGoalRounds(
  * **為什麼 `/help` 不註冊成一個真的命令**：一份清單該長什麼樣，是**發派面自己的問題**。
  * 這條 REPL 的答案必須含 `/exit`（不然清單漏掉一個真的打得出去的東西）；dsh 那種 composer
  * 選單的答案則**不該含 `/help`**（選單自己就是 help）。同一個註冊上去的 handler 生不出
- * 這兩份。而 `DEFAULT_PLUGINS` 正是 `cli.ts` 與 [`serve.ts`](./serve.ts) 共用的那一份
- * 清單——註冊上去就是把 REPL 的答案塞給所有人。探索面歸發派它的那一側，這也正是 dsh
+ * 這兩份。而出貨的那份清單（`apps/harness/cordis.yml`）正是 `cli.ts` 與
+ * [`serve.ts`](./serve.ts) 共用的那一份——註冊上去就是把 REPL 的答案塞給所有人。探索面歸發派它的那一側，這也正是 dsh
  * 的切法（見 {@link formatCommandHelp}）。
  *
  * 描述的口氣跟 plugin 註冊的那些對齊：一句話，說它做什麼。
@@ -1376,9 +1413,14 @@ export async function runCli(options: RunCliOptions): Promise<void> {
           `接回來的模式一個位元組都影響不到。\n\n${USAGE}`,
       );
     }
+    // **產品路徑上的清單從 `cordis.yml` 來**（#454）。`--plugins` 還在，它換掉的是整份
+    // 清單；拿掉它是 [#455](https://github.com/DemianLi/nexus-agent/issues/455) 的事。
     const plugins =
       invocation.pluginModule === undefined
-        ? DEFAULT_PLUGINS
+        ? await loadDefaultPlugins({
+            env: options.env ?? process.env,
+            ...(invocation.patches !== undefined && { patches: invocation.patches }),
+          })
         : await loadPluginModule(invocation.pluginModule, options.cwd);
 
     // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。

@@ -33,7 +33,7 @@ pnpm workspace，Node >= 22。
 **開箱就有**，`--plugins` 換不掉（CLI 與 serve 共用同一個組裝函式）：`ask_user_question`、
 `submit_record`，以及給了 `--workspace` 才掛的檔案圍堵與 `/sandbox`、工作區改動紀錄。
 
-**在預設清單裡**（`DEFAULT_PLUGINS`，`--plugins` 會整份換掉）：
+**在出貨的清單裡**（[`apps/harness/cordis.yml`](apps/harness/cordis.yml)，用 patch 檔改，見 [`docs/operations.md`](docs/operations.md#plugin-清單)）：
 
 | 能力 | 一句話 | 細節在 `packages/` |
 | --- | --- | --- |
@@ -44,7 +44,7 @@ pnpm workspace，Node >= 22。
 | 交付宣告 | 模型指名這一輪交付了哪些檔 | `nexus-plugin-present` |
 | 評分與回饋 | `/feedback` | `nexus-plugin-feedback` |
 
-**要自己用 `--plugins` 掛**：MCP、QuickJS 沙箱、skills、記憶、OpenTelemetry 遙測。每個套件的
+**要自己疊一層 patch 才掛**：MCP、QuickJS 沙箱、skills、記憶、OpenTelemetry 遙測。每個套件的
 `src/index.ts` 檔頭寫著它自己的完整規格與偏離標註。人打的斜線命令不經過模型，由進入點解析發派。
 
 ## 跑起來

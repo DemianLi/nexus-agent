@@ -45,10 +45,12 @@
  */
 
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { PluginEntry } from '@nexus/core';
+
+import { resolveHarnessHome } from './harness-home.js';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 
@@ -510,6 +512,33 @@ export async function loadPluginConfig(sources: PluginConfigSources = {}): Promi
   const loaded: PluginEntry[] = [];
   for (const entry of entries) loaded.push(await resolveEntryModule(entry));
   return loaded;
+}
+
+/**
+ * 產品路徑上那一次組裝：出貨預設 ＋ harness home 那一層 ＋ `--patch`。
+ *
+ * **`cli.ts` 與 `serve.ts` 共用這一個**，理由同 `parseSandboxMode`：兩份各寫一次的下場是
+ * 有一天只有一邊讀得到 home 那一層，而那種缺陷在畫面上看不出來——少疊一層只是「我的設定
+ * 沒有生效」，不會有任何東西變紅。
+ *
+ * @param options - `env` 決定 harness home 落在哪（省略即 `process.env`）；`patches` 是
+ *   `--patch` 給的那幾個檔，照命令列順序；`warn` 省略即 stderr。
+ * @returns 可以交給 `createNexusAgent` 的清單。
+ * @throws {PluginConfigError} 任何一層讀不了、形狀不合、別人動得了，或模組載不起來。
+ */
+export async function loadDefaultPlugins(
+  options: {
+    readonly env?: NodeJS.ProcessEnv;
+    readonly patches?: readonly string[];
+    readonly warn?: PluginConfigWarn;
+  } = {},
+): Promise<PluginEntry[]> {
+  const home = resolveHarnessHome(options.env ?? process.env);
+  return loadPluginConfig({
+    userPatch: join(home, USER_PATCH_FILENAME),
+    ...(options.patches !== undefined && { overlays: options.patches }),
+    ...(options.warn !== undefined && { warn: options.warn }),
+  });
 }
 
 function isPluginShaped(value: unknown): value is PluginEntry['plugin'] {
