@@ -132,6 +132,10 @@ export class ResumeWorkspaceConflictError extends Error {
  * `locateRequested` 在 `state.workspaceRoot === undefined` 時回 `no-anchor`，而
  * `no-anchor` 對到 404。讀不到檔，就沒有讀錯檔這回事。
  *
+ * **[#519](https://github.com/DemianLi/nexus-agent/issues/519) 放寬了那條路由，但沒有碰這個理由。**
+ * 放寬的是「線以下那些在 header 記著根時錨得住」；「這一次沒給 `--workspace` 就一律拒」那一道
+ * 原封不動，連 header 記著根的時候也照拒。那條測試在 `deliverable-files.test.ts`，指名了這一列。
+ *
  * **不 `realpath`，直接 `!==`**——同旁邊的 {@link assertSameCwd}。兩道守衛同形才不會有一天
  * 一邊認得符號連結、另一邊不認得。經過符號連結到達同一個目錄會被誤拒，那是保守的方向，
  * 跟 #452「沒錨就拒，不猜」同一個態度。

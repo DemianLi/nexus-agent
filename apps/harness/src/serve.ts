@@ -435,6 +435,13 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         // 交付讀檔路由的錨（#452）：沒給 `--workspace` 就缺席，兩條路由一律 404。
         // **這個值由 `createCliAgent` 算、從這裡原樣轉交**，呼叫端不再寫一次 `resolve(cwd, ...)`。
         ...(workspaceRoot !== undefined && { workspaceRoot }),
+        // 續接線**以下**那些交付的錨（#519）：**來自磁碟上那份 header，不是這一次的
+        // `--workspace`**。沒續接、或那份 header 沒記那一格（13 以前的日誌都沒有，而且續接
+        // 不回填）就整個不給，那時線以下的每一顆照舊 404——判準是那一格在不在，不是
+        // `header.version`，理由見 `wire-handler.ts` 的 `locateRequested`。
+        ...(resumed?.header.workspaceRoot !== undefined && {
+          resumedWorkspaceRoot: resumed.header.workspaceRoot,
+        }),
         // 落盤沒接上就被收掉（建 thread 途中失敗）的話，續接那個把手還在這裡，要自己放。
         dispose: async () => {
           // 放不掉不該擋住收 agent——它底下可能有子行程。

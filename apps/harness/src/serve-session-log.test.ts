@@ -18,14 +18,21 @@
 import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { appendHumanTurn, emptyConversation, reduceConversation } from '@nexus/wire';
+import {
+  appendHumanTurn,
+  createWireClient,
+  deliverableFilePath,
+  emptyConversation,
+  reduceConversation,
+} from '@nexus/wire';
 import type { ConversationState } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
-import { serveClient } from './fixtures.js';
+import { exchangeServeToken, fetchWithCookie, serveClient } from './fixtures.js';
 
 let running: RunningServe | undefined;
 
@@ -67,6 +74,32 @@ async function driveTurn(server: RunningServe, threadId: string): Promise<void> 
     state = reduceConversation(state, next.value);
   }
   await events.return?.(undefined);
+}
+
+/**
+ * 打一次交付預覽路由，座標固定在 `seq 0`——**接回來的 thread 上，`seq 0` 一定在續接線以下**。
+ *
+ * 回的是那一次拒絕的文字：兩條路都是 404，分得開它們的只有訊息
+ * （[#519](https://github.com/DemianLi/nexus-agent/issues/519)）。
+ *
+ * @param server - 正在跑的那台。
+ * @param threadId - 哪一條 thread。
+ * @returns 那一次拒絕的文字。
+ */
+async function deliverableRefusal(server: RunningServe, threadId: string): Promise<string> {
+  const cookie = await exchangeServeToken(server.authenticatedUrl);
+  const withCookie = fetchWithCookie(cookie);
+  // **拿歷史就把 thread 建起來了**，`ready` 有它，路由才問得到錨（同 `deliverable-files.test.ts`）。
+  const page = await createWireClient({ baseUrl: server.url, fetch: withCookie }).threadHistory(
+    threadId,
+  );
+  if (page.kind !== 'ok') throw new Error(`歷史拿不到：${page.message}`);
+  const response = await withCookie(`${server.url}${deliverableFilePath(threadId)}?seq=0&index=0`, {
+    method: 'GET',
+    headers: { 'content-type': 'application/json' },
+  });
+  expect(response.status).toBe(404);
+  return response.text();
 }
 
 function readEvents(body: string): readonly SessionEvent[] {
@@ -340,6 +373,49 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await driveTurn(third, 'alpha');
     await stop(third);
     expect(count(readEvents(await readFile(log, 'utf8')), 'turn/start')).toBe(2);
+  });
+
+  /**
+   * **`serve.ts` 把 header 記的工作區根轉交給路由那一行，唯一的觀察點**
+   * （[#519](https://github.com/DemianLi/nexus-agent/issues/519)）。`deliverable-files.test.ts`
+   * 那一組全部自己手搭 `createAgent`、直接交那一格，所以拔掉 `serve.ts` 那三行它一條都不紅，
+   * 而真的 serve 上每一顆重播的交付都會 404——跟 `workspaceRoot` 當初量到的是同一個病。
+   *
+   * **兩條臂只差 header 有沒有那一格**，其餘一個位元組都不動；兩條都是 404，分得開它們的只有
+   * 訊息。順帶把「判準是那一格在不在，不是 `version >= 13`」釘在產品路徑上：第二臂跑完之後
+   * 那份 header 的 `version` 已經被續接覆寫成今天這一版，而那一格仍然不在。
+   */
+  it('接回來之後線以下那些的錨：header 記著就錨得住，沒記就拒——判準不是 version', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const workspace = await tmp('nexus-serve-resume-ws-');
+    const first = await start(root, ['--workspace', workspace]);
+    await driveTurn(first, 'alpha');
+    await stop(first);
+    const headerPath = join(projectDirOf(root), 'alpha.header.json');
+    // 前提：第一次真的把那一格寫下去了。沒有這一條，下面兩臂的對比證不了東西。
+    expect(JSON.parse(await readFile(headerPath, 'utf8')).workspaceRoot).toBe(workspace);
+
+    // 第一臂：header 記著根。錨過得了，於是問得到下一道閘——那個 seq 上沒有交付宣告。
+    const second = await start(root, ['--workspace', workspace]);
+    expect(await deliverableRefusal(second, 'alpha')).toContain('沒有交付宣告');
+    await stop(second);
+
+    // 第二臂：把那一格拿掉（13 以前的日誌就長這樣），其餘原封不動。
+    const { workspaceRoot: dropped, ...rest } = JSON.parse(
+      await readFile(headerPath, 'utf8'),
+    ) as Record<string, unknown>;
+    expect(dropped).toBe(workspace);
+    await writeFile(headerPath, JSON.stringify(rest));
+
+    const third = await start(root, ['--workspace', workspace]);
+    expect(await deliverableRefusal(third, 'alpha')).toContain('header 沒記工作區根');
+    await stop(third);
+
+    // **續接把 version 覆寫成今天這一版，那一格仍然不在。** 照版本號判的實作會在上一句放行，
+    // 然後拿這一次的 `--workspace` 去讀一個沒人驗證過的錨——靜默錯檔，剛好是 #504 存在的理由。
+    const rewritten = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
+    expect(rewritten['version']).toBe(SESSION_LOG_FORMAT_VERSION);
+    expect(rewritten).not.toHaveProperty('workspaceRoot');
   });
 
   it('沙箱模式跟著回來；日誌記著模式而這一次沒給 --workspace：擋下', async () => {

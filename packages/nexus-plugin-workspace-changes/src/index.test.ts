@@ -581,6 +581,12 @@ async function repository(files: Record<string, string>): Promise<string> {
     await writeFile(join(root, name), content);
   }
   git(root, 'init', '-q');
+  // **關掉 git 的自動維護**，不然下面那次 `commit` 會在背景起一次 `git maintenance run --auto`，
+  // 而它在 `.git/objects/` 底下建一個 `maintenance.lock` 再刪掉。{@link fingerprint} 掃到的 `.git`
+  // 因此是會動的：CI 上量到過 `readdir` 列出那個 lock、`stat` 的時候它已經不在了（ENOENT）。
+  // **修的是成因不是量具**——把 lock 檔濾掉會讓「收掉之後沒留下鎖」這件事一起變成看不見的。
+  git(root, 'config', 'maintenance.auto', 'false');
+  git(root, 'config', 'gc.auto', '0');
   git(root, 'add', '-A');
   git(root, 'commit', '-q', '-m', 'init');
   return root;
