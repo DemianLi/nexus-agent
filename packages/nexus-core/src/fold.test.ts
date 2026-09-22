@@ -14,7 +14,7 @@ import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
 import { CONTAINMENT_MIDDLEWARE_NAME } from './containment.js';
 import { FS_TOOL_ERRORS_MIDDLEWARE_NAME } from './fs-tool-errors.js';
 import { INVALID_TOOL_ARGS_MIDDLEWARE_NAME } from './invalid-tool-args.js';
-import { OBSERVATION_POLICY_MIDDLEWARE_NAME } from './observation.js';
+import { OBSERVATION_POLICY_MIDDLEWARE_NAME, observationPolicyPlugin } from './observation.js';
 import { OUTPUT_SCHEMA_MIDDLEWARE_NAME } from './output-schema.js';
 import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 import { MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
@@ -23,13 +23,18 @@ import {
   TURN_CANCEL_MIDDLEWARE_NAME,
   TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
 } from './turn-cancel.js';
-import { MODEL_USAGE_MIDDLEWARE_NAME } from './model-usage.js';
+import { MODEL_USAGE_MIDDLEWARE_NAME, modelUsagePlugin } from './model-usage.js';
 import {
   DEFAULT_REPEAT_REMINDER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   repeatReminderPlugin,
 } from './repeat-reminder.js';
-import { SUMMARIZATION_MIDDLEWARE_NAME } from './summarization.js';
+import {
+  DEFAULT_SUMMARIZATION,
+  SUMMARIZATION_MIDDLEWARE_NAME,
+  summarizationPlugin,
+} from './summarization.js';
+import { DEFAULT_TOOL_RESULT_PRUNE, toolResultPrunerPlugin } from './tool-result-pruner.js';
 import type { FoldOptions } from './fold.js';
 import { loadPlugins } from './load.js';
 import { fakeBackend, fakeMiddleware, fakePlugin, fakeSubAgent, fakeTool } from './fixtures.js';
@@ -1647,5 +1652,347 @@ describe('useWithBackend', () => {
       fakePlugin('plain', (r) => void r.middleware.use({ name: 'Plain' } as never)),
     ]);
     expect(middlewareNames(params)).toContain('Plain');
+  });
+});
+
+/**
+ * 「先讀後改」的條目——**三態，不是四態**。
+ *
+ * 它沒有設定，所以「條目在場」與「沒有人問過部署設定層」的正確答案都是「照預設開著」，
+ * 一顆只能表達「開著」的服務帶不了任何資訊。要分的只有一件事：有沒有被明著關掉。
+ */
+describe('先讀後改的條目', () => {
+  /** 不帶 `observationPolicy` 的折——這樣才問得到後兩態。 */
+  async function foldBare(plugins: PluginEntry[]) {
+    const { registry } = await loadPlugins([
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('one'))),
+      ...plugins,
+    ]);
+    return foldRegistry(registry, { summarization: false, defaultBackend: fakeBackend('default') });
+  }
+
+  /** 那一顆在不在 root 與每個 subagent 的 stack 裡。 */
+  function present(params: Parameters<typeof middlewareNames>[0] & { subagents: SubAgent[] }) {
+    const inRoot = middlewareNames(params).includes(OBSERVATION_POLICY_MIDDLEWARE_NAME);
+    const inSubagents = registered(params).map((subagent) =>
+      (subagent.middleware ?? [])
+        .map((mw) => (mw as unknown as { name: string }).name)
+        .includes(OBSERVATION_POLICY_MIDDLEWARE_NAME),
+    );
+    return { inRoot, inSubagents };
+  }
+
+  it('條目不在清單上時照樣開著——root 與 subagent 都有', async () => {
+    expect(await foldBare([]).then(present)).toEqual({ inRoot: true, inSubagents: [true] });
+  });
+
+  it('條目在清單上、沒被關：跟上一條一模一樣（它不帶設定，所以帶不了差別）', async () => {
+    expect(await foldBare([{ plugin: observationPolicyPlugin }]).then(present)).toEqual({
+      inRoot: true,
+      inSubagents: [true],
+    });
+  });
+
+  it('`disabled: true` 就真的沒有，root 與 subagent 都沒有', async () => {
+    expect(
+      await foldBare([{ plugin: observationPolicyPlugin, disabled: true }]).then(present),
+    ).toEqual({ inRoot: false, inSubagents: [false] });
+  });
+
+  it('組裝點明著傳 `true` 贏過 `disabled: true`', async () => {
+    const { registry } = await loadPlugins([
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('one'))),
+      { plugin: observationPolicyPlugin, disabled: true },
+    ]);
+    const params = foldRegistry(registry, {
+      summarization: false,
+      defaultBackend: fakeBackend('default'),
+      observationPolicy: true,
+    });
+    expect(present(params)).toEqual({ inRoot: true, inSubagents: [true] });
+  });
+
+  it('被關掉又沒有 backend 時不拋——`disabled` 是第二條正當的「不要」', async () => {
+    // **這一條釘的是順序。** 把 `disabled` 那一問挪到拋的後面，這裡就會炸；而「沒關掉又
+    // 沒 backend 要拋」那條不變式由下一條守著，兩條缺一不可。
+    const { registry } = await loadPlugins([{ plugin: observationPolicyPlugin, disabled: true }]);
+    const params = foldRegistry(registry, { summarization: false });
+    expect(middlewareNames(params)).not.toContain(OBSERVATION_POLICY_MIDDLEWARE_NAME);
+  });
+
+  it('條目在清單上、沒被關，又一個 backend 都沒有時照樣拋', async () => {
+    const { registry } = await loadPlugins([{ plugin: observationPolicyPlugin }]);
+    expect(() => foldRegistry(registry, { summarization: false })).toThrow(/先讀後改/);
+  });
+
+  it('它一顆服務都不註冊——照 dsh 的 `fs-observation-policy`', async () => {
+    // `apply` 是空的是承重的，不是漏寫：留下的唯一痕跡是 `disabledEntries`。
+    const { registry } = await loadPlugins([{ plugin: observationPolicyPlugin }]);
+    expect(registry.services.names()).toEqual([]);
+    const off = await loadPlugins([{ plugin: observationPolicyPlugin, disabled: true }]);
+    expect(off.registry.disabledEntries.names()).toEqual(['observation-policy']);
+  });
+
+  it('它不收 config——給了會在載入期拋', async () => {
+    // 這一顆沒有 Config schema，而 `parseEntryConfig` 對這件事是當場拋，不是默默吞掉。
+    // 出貨的 `cordis.yml` 那一列因此刻意沒有 `config:`。
+    await expect(
+      loadPlugins([{ plugin: observationPolicyPlugin, config: { anything: 1 } } as PluginEntry]),
+    ).rejects.toThrow(/不收 config/);
+  });
+});
+
+/**
+ * 用量記錄器的條目——**三態，同「先讀後改」**。
+ *
+ * 它沒有設定（{@link createModelUsageRecorder} 只收一個 `sessions` 通道），所以「條目在場」
+ * 與「沒有人問過部署設定層」的正確答案都是「照預設開著」。
+ *
+ * **這裡量的是 stack 的形狀，那不是完整的判準。** 它寫不寫得進日誌還取決於
+ * `sessions.forCall()`，而 `not-attached` 是常態——行為那一半（配正對照）在
+ * `apps/harness/src/model-usage-log.test.ts`。兩邊缺一不可：只量形狀的話，一個「在 stack 裡
+ * 但被接錯通道」照樣綠；只量行為的話，subagent 與 general-purpose 那兩疊看不到。
+ */
+describe('用量記錄器的條目', () => {
+  /** 不帶 `modelUsage` 的折——這樣才問得到後兩態。 */
+  async function foldBare(plugins: PluginEntry[]) {
+    const { registry } = await loadPlugins([
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('one'))),
+      ...plugins,
+    ]);
+    return foldRegistry(registry, { summarization: false, observationPolicy: false });
+  }
+
+  /**
+   * 那一顆在不在 root、宣告的 subagent、以及**基座自己補的 general-purpose** 裡。
+   *
+   * general-purpose 要一起數：它不是我們註冊的，漏掉的話「關掉了」會在那一疊上
+   * 靜靜地不成立——反過來「還開著」也是。
+   */
+  function present(params: Parameters<typeof middlewareNames>[0] & { subagents: SubAgent[] }) {
+    const has = (stack: readonly unknown[]) =>
+      stack.map((mw) => (mw as { name: string }).name).includes(MODEL_USAGE_MIDDLEWARE_NAME);
+    return {
+      inRoot: has(params.middleware),
+      inSubagents: params.subagents.map((subagent) => has(subagent.middleware ?? [])),
+      subagentNames: params.subagents.map((subagent) => subagent.name),
+    };
+  }
+
+  it('條目不在清單上時照樣掛著——root、subagent、general-purpose 三疊都有', async () => {
+    const seen = present(await foldBare([]));
+    // 三疊都在場，而且 general-purpose 真的在這份清單裡——不然下面那條「都沒有」會是空談。
+    expect(seen.subagentNames).toContain(GENERAL_PURPOSE_SUBAGENT.name);
+    expect(seen.inRoot).toBe(true);
+    expect(seen.inSubagents).toEqual([true, true]);
+  });
+
+  it('條目在清單上、沒被關：跟上一條一模一樣（它不帶設定，所以帶不了差別）', async () => {
+    const seen = present(await foldBare([{ plugin: modelUsagePlugin }]));
+    expect(seen.inRoot).toBe(true);
+    expect(seen.inSubagents).toEqual([true, true]);
+  });
+
+  it('`disabled: true` 就真的沒有——root、subagent、general-purpose 三疊都沒有', async () => {
+    const seen = present(await foldBare([{ plugin: modelUsagePlugin, disabled: true }]));
+    expect(seen.inRoot).toBe(false);
+    expect(seen.inSubagents).toEqual([false, false]);
+  });
+
+  it('組裝點明著傳 `false` 就沒有，即使條目在場沒被關', async () => {
+    const { registry } = await loadPlugins([
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('one'))),
+      { plugin: modelUsagePlugin },
+    ]);
+    const seen = present(
+      foldRegistry(registry, { summarization: false, observationPolicy: false, modelUsage: false }),
+    );
+    expect(seen.inRoot).toBe(false);
+    expect(seen.inSubagents).toEqual([false, false]);
+  });
+
+  it('組裝點明著傳 `true` 贏過 `disabled: true`', async () => {
+    const { registry } = await loadPlugins([
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('one'))),
+      { plugin: modelUsagePlugin, disabled: true },
+    ]);
+    const seen = present(
+      foldRegistry(registry, { summarization: false, observationPolicy: false, modelUsage: true }),
+    );
+    expect(seen.inRoot).toBe(true);
+    expect(seen.inSubagents).toEqual([true, true]);
+  });
+
+  it('關掉它不會動到隔壁那一層——模型呼叫的起訖照樣在', async () => {
+    // 兩顆在 `foldMiddleware` 裡緊貼著，gate 寫在錯的變數上會把隔壁一起拿掉。
+    const params = await foldBare([{ plugin: modelUsagePlugin, disabled: true }]);
+    expect(middlewareNames(params)).not.toContain(MODEL_USAGE_MIDDLEWARE_NAME);
+    expect(middlewareNames(params)).toContain(MODEL_CALL_EVENTS_MIDDLEWARE_NAME);
+  });
+
+  it('它一顆服務都不註冊——同 `observation-policy`', async () => {
+    // `apply` 是空的是承重的，不是漏寫：留下的唯一痕跡是 `disabledEntries`。
+    const { registry } = await loadPlugins([{ plugin: modelUsagePlugin }]);
+    expect(registry.services.names()).toEqual([]);
+    const off = await loadPlugins([{ plugin: modelUsagePlugin, disabled: true }]);
+    expect(off.registry.disabledEntries.names()).toEqual(['model-usage']);
+  });
+
+  it('它不收 config——給了會在載入期拋', async () => {
+    await expect(
+      loadPlugins([{ plugin: modelUsagePlugin, config: { anything: 1 } } as PluginEntry]),
+    ).rejects.toThrow(/不收 config/);
+  });
+});
+
+/** 剪刀的預算從條目來——四態，同提醒器，但第 3 態落在 `false` 不是 `undefined`。 */
+describe('剪刀的預算從條目來', () => {
+  it('條目沒給 config 時拿到的是 schema 的預設，逐格等於那個常數', async () => {
+    const { registry } = await loadPlugins([{ plugin: toolResultPrunerPlugin }]);
+    expect(registry.services.get('toolResultPruning')).toEqual({ ...DEFAULT_TOOL_RESULT_PRUNE });
+  });
+
+  it('條目的壞預算在載入期就失敗，不是等到 fold', async () => {
+    // 跨欄位規則住在 `assertToolResultPruneConfig`，條目的 `apply` 叫它。
+    await expect(
+      loadPlugins([
+        { plugin: toolResultPrunerPlugin, config: { thresholdChars: 100, headChars: 100 } },
+      ]),
+    ).rejects.toThrow(/工具結果預算不成立/);
+  });
+
+  it('摘要關掉時，條目的壞預算照樣在載入期失敗', async () => {
+    // 這一格那時不發生作用，但失敗點在 `apply`，比 fold 更早——所以「關掉時照樣驗」
+    // 這條不變式在條目這條路上是**更強**的，不是更弱的。
+    await expect(
+      loadPlugins([
+        { plugin: toolResultPrunerPlugin, config: { thresholdChars: 100, tailChars: 100 } },
+      ]),
+    ).rejects.toThrow(/工具結果預算不成立/);
+  });
+
+  it('組裝點明著傳的壞預算照樣當場拋，而且摘要關掉時也拋', async () => {
+    // **條目這條路長出來之後，原本那條不變式不可以鬆掉。** `toolResultPruningDisposition`
+    // 被挪到 `summarization === false` 那個早退**之後**的話，這一條會綠。
+    await expect(
+      fold([{ plugin: toolResultPrunerPlugin }], {
+        summarization: false,
+        toolResultPruning: { thresholdChars: 100, headChars: 100 },
+      }),
+    ).rejects.toThrow(/工具結果預算不成立/);
+  });
+});
+
+/**
+ * 摘要的設定從條目來——**四態，但「關掉」不是「沒有」**。
+ *
+ * 第 3 態發的是一顆同名空殼：基座無條件建一顆摘要器，同名取代是唯一消得掉它的辦法。
+ * 所以這一組的驗收句是「**stack 裡是空殼，而且基座那顆沒回來**」，兩個半句各要一條——
+ * 空殼的形狀在這裡釘，基座那顆沒回來在
+ * [`summarization.test.ts`](../../../apps/harness/src/summarization.test.ts) 釘（那邊量的是
+ * 模型有沒有被多叫一次）。只釘一邊的話：只看形狀，一個「空殼對但另有人補了一顆會動的」
+ * 照樣綠；只看行為，一個「空殼畸形但剛好不動」也照樣綠。
+ */
+describe('摘要的設定從條目來', () => {
+  const pick = (list: readonly unknown[]): unknown =>
+    list.find((mw) => (mw as { name: string }).name === SUMMARIZATION_MIDDLEWARE_NAME);
+
+  /** 不帶 `summarization` 的折——這樣才問得到後三態。 */
+  async function foldBare(plugins: PluginEntry[], options: FoldOptions = {}) {
+    const { registry } = await loadPlugins([
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('writer'))),
+      ...plugins,
+    ]);
+    return foldRegistry(registry, {
+      repeatReminder: false,
+      observationPolicy: false,
+      defaultBackend: fakeBackend('default'),
+      ...options,
+    });
+  }
+
+  /** root、宣告的 subagent 與 `general-purpose` 三疊。 */
+  function stacks(params: {
+    middleware: readonly unknown[];
+    subagents: SubAgent[];
+  }): readonly (readonly unknown[])[] {
+    return [params.middleware, ...params.subagents.map((sub) => sub.middleware ?? [])];
+  }
+
+  it('第 4 態：誰都沒講話時是一顆真的摘要器，不是空殼', async () => {
+    // **那 188 個手搭清單的呼叫點的護欄。** 把「沒有服務」當成關掉的話，它們會靜靜換成
+    // 空殼——而空殼跟真貨同名，任何只比名字的斷言都看不出差別。
+    const params = await foldBare([]);
+    for (const stack of stacks(params)) {
+      expect(pick(stack)).toBeDefined();
+      expect(pick(stack)).not.toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+    }
+  });
+
+  it('第 2 態：條目在清單上時，設定從它來', async () => {
+    const params = await foldBare([
+      { plugin: summarizationPlugin, config: { trigger: [{ type: 'messages', value: 2 }] } },
+    ]);
+    for (const stack of stacks(params))
+      expect(pick(stack)).not.toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+  });
+
+  it('第 3 態：`disabled: true` 給三種 agent 各一顆同名空殼', async () => {
+    // **這是卡上那句驗收的前半。** 射程要涵蓋 root、宣告的 subagent 與 fold 補的
+    // `general-purpose`——基座是逐個 agent 建摘要器的，少發一處那一處就有真貨。
+    const params = await foldBare([{ plugin: summarizationPlugin, disabled: true }]);
+    expect(params.subagents.map((sub) => sub.name).sort()).toEqual(
+      [GENERAL_PURPOSE_SUBAGENT.name, 'writer'].sort(),
+    );
+    for (const stack of stacks(params))
+      expect(pick(stack)).toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+  });
+
+  it('第 1 態：組裝點明著講的贏過條目——傳 false 就是空殼', async () => {
+    const params = await foldBare(
+      [{ plugin: summarizationPlugin, config: { trigger: [{ type: 'messages', value: 2 }] } }],
+      { summarization: false },
+    );
+    for (const stack of stacks(params))
+      expect(pick(stack)).toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+  });
+
+  it('被關掉時不需要 default backend——空殼沒有歷史要寫', async () => {
+    // **順序釘在這裡。** 把空殼那條早退挪到「沒 backend 就拋」的後面，這一條會炸。
+    const params = await foldBare([{ plugin: summarizationPlugin, disabled: true }], {
+      defaultBackend: undefined,
+    });
+    expect(pick(params.middleware)).toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+  });
+
+  it('條目不在清單上、又沒給 default backend 時照樣拋', async () => {
+    // 配對的另一半：上一條不可以順手把這條不變式一起鬆掉。
+    const { registry } = await loadPlugins([fakePlugin('noop', () => {})]);
+    expect(() =>
+      foldRegistry(registry, { repeatReminder: false, observationPolicy: false }),
+    ).toThrow(/default backend/);
+  });
+
+  it('條目沒給 config 時拿到的是 schema 的預設，逐格等於那個常數', async () => {
+    const { registry } = await loadPlugins([{ plugin: summarizationPlugin }]);
+    expect(registry.services.get('summarization')).toEqual({ ...DEFAULT_SUMMARIZATION });
+  });
+
+  it('條目的空 trigger 在載入期就失敗——那條規則留在 resolve 裡', async () => {
+    await expect(
+      loadPlugins([{ plugin: summarizationPlugin, config: { trigger: [] } }]),
+    ).rejects.toThrow(/summarization\.trigger 是空陣列/);
+  });
+
+  it('條目的壞門檻型別在載入期就失敗，而且訊息指得出是哪一格', async () => {
+    // **只斷言得到這麼多，而那是量出來的。** 今天擋它的是 schema 的 `z.enum`，但把那一格
+    // 放寬成 `z.string()` 之後換成 `assertThreshold` 擋，載入一樣失敗、一樣指名 `keep`
+    // ——兩層對這個輸入是等價的，差別只有措辭。斷言寫到「是哪一層」就是在釘 zod 的訊息
+    // 格式，不是在釘我們的行為。理由見 `summarizationConfigSchema` 的檔頭。
+    await expect(
+      loadPlugins([
+        { plugin: summarizationPlugin, config: { keep: { type: 'fraction', value: 0.5 } } },
+      ]),
+    ).rejects.toThrow(/keep/);
   });
 });

@@ -28,7 +28,11 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { DEFAULT_REPEAT_REMINDER } from '@nexus/core';
+import {
+  DEFAULT_REPEAT_REMINDER,
+  DEFAULT_SUMMARIZATION,
+  DEFAULT_TOOL_RESULT_PRUNE,
+} from '@nexus/core';
 
 import {
   applyEntryPatches,
@@ -44,6 +48,7 @@ import {
   shippedConfigPath,
   validateEntries,
   assertPrivateFile,
+  PROTECTED_ENTRY_NAMES,
 } from './plugin-config.js';
 
 const temporary: string[] = [];
@@ -70,10 +75,11 @@ function writePrivate(root: string, name: string, content: string): string {
 describe('出貨的 cordis.yml', () => {
   it('每一列都載得起來，而且每一顆都是真的 plugin', async () => {
     const fromYaml = await loadPluginConfig();
-    // 28 = 7 個功能 ＋ 1 個 core middleware 設定（#456）＋ 20 個配套入口。**數目寫在這裡
-    // 是為了擋「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個空
-    // installer 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
-    expect(fromYaml).toHaveLength(28);
+    // 33 = 7 個功能 ＋ 6 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門）
+    // ＋ 20 個配套入口。**數目寫在這裡是為了擋「靜靜少一列」**：底下那些測試各自只看得到
+    // 自己關心的那幾列，少掉一個空 installer 不會有人紅。確切該有哪些配套入口由
+    // `invariant-companions.test.ts` 對帳（#489）。
+    expect(fromYaml).toHaveLength(33);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -121,10 +127,27 @@ describe('出貨的 cordis.yml', () => {
     // 兩份，所以這一行拿常數對它：漂了就紅，而不是等到某天有人發現產品跟預設不一樣。
     expect(byId.get('repeat-reminder')).toEqual({ ...DEFAULT_REPEAT_REMINDER });
 
+    // 剪刀那三格同理（#456）。
+    expect(byId.get('tool-result-pruner')).toEqual({ ...DEFAULT_TOOL_RESULT_PRUNE });
+
+    // 摘要那四格同理（#456）。`tokens: 100000` 的來歷在 `DEFAULT_SUMMARIZATION` 的檔頭上，
+    // 這一行只管出貨檔跟它沒有漂開。
+    expect(byId.get('summarization')).toEqual({ ...DEFAULT_SUMMARIZATION });
+
     // **其餘每一列都不帶 config**，這半句同樣承重：二十個配套入口一個 `Config` schema 都
     // 沒有，給它們設定會在載入時拋（`parseEntryConfig`）。
+    //
+    // **`observation-policy` 不在這張名單上，而那是承重的不對稱**（#456）：那一顆沒有設定、
+    // 也沒有 Config schema，所以替它加一行 `config:` 會在載入期拋。它進到這棵樹裡的唯一
+    // 意義是「關得掉」，關掉的行為由 `observation-policy-entry` 那組測試守著。
     const withConfig = [...byId].filter(([, config]) => config !== undefined).map(([id]) => id);
-    expect(withConfig).toEqual(['todo', 'feedback', 'repeat-reminder']);
+    expect(withConfig).toEqual([
+      'todo',
+      'feedback',
+      'repeat-reminder',
+      'tool-result-pruner',
+      'summarization',
+    ]);
   });
 
   it('出貨檔的路徑指到真的存在的那一份', () => {
@@ -467,6 +490,106 @@ describe('--dump-config', () => {
     expect(() => renderConfigDump({ shipped, overlays: [overlay], warn: () => {} })).toThrow(
       PluginConfigError,
     );
+  });
+});
+
+/**
+ * **核准閘門關不掉**（[#456](https://github.com/DemianLi/nexus-agent/issues/456) 第四刀）。
+ *
+ * 這一組釘的是兩件事，兩件都是量過之後才寫的：
+ *
+ * 1. **`disabled: true` 是失敗，不是一行警告。** 這一列不存在的時候，`- id: approval-gate`
+ *    走的是 `applyEntryPatches` 的「找不到 id」那條——量過（2026-09-22）：`exit 0`、
+ *    stderr 剛好一行、dump 跟沒帶那份 patch 逐字相同。核准照樣開著，但讀起來像關掉了。
+ * 2. **`--dump-config` 跟真啟動一起擋，而那是這一整個機制放在 `validateEntries` 裡的理由。**
+ *    `renderConfigDump` 在印之前自己跑一次它。檢查若搬到 import／`apply` 那一層，dump 會
+ *    高高興興印出 `disabled: true` 替錯的信念背書——而 `cordis.yml` 的檔頭正是叫人用
+ *    `--dump-config` 看這台機器上實際長什麼樣。下面那條 dump 的測試就是這件事的絆索：
+ *    搬走它就紅。
+ */
+describe('保護名單', () => {
+  /** 一份最小的出貨清單，帶那一列受保護的。 */
+  function shippedWithGate(root: string): string {
+    return writePrivate(
+      root,
+      'cordis.yml',
+      "- id: echo\n  name: '@nexus/plugin-echo'\n" +
+        "- id: approval-gate\n  name: '@nexus/core/approval-gate'\n",
+    );
+  }
+
+  it('出貨的清單上真的有那一列——不然下面每一條都是空談', () => {
+    const entries = composeEntries();
+    const gate = entries.find((entry) => entry.name === '@nexus/core/approval-gate');
+    expect(gate).toBeDefined();
+    // patch 指得著的是 `id`，所以它必須有一個。
+    expect(gate?.id).toBe('approval-gate');
+    expect(PROTECTED_ENTRY_NAMES.has('@nexus/core/approval-gate')).toBe(true);
+  });
+
+  it('真啟動那條：`disabled: true` 當場拋，訊息講得出為什麼關不掉', () => {
+    const root = privateDirectory();
+    const shipped = shippedWithGate(root);
+    const overlay = writePrivate(root, 'o.yml', '- id: approval-gate\n  disabled: true\n');
+    expect(() => composeEntries({ shipped, overlays: [overlay], warn: () => {} })).toThrow(
+      /關不掉/,
+    );
+    expect(() => composeEntries({ shipped, overlays: [overlay], warn: () => {} })).toThrow(
+      PluginConfigError,
+    );
+  });
+
+  it('**`--dump-config` 那條也拋**——檢查搬離 `validateEntries` 就會紅', () => {
+    const root = privateDirectory();
+    const shipped = shippedWithGate(root);
+    const overlay = writePrivate(root, 'o.yml', '- id: approval-gate\n  disabled: true\n');
+    expect(() => renderConfigDump({ shipped, overlays: [overlay], warn: () => {} })).toThrow(
+      /關不掉/,
+    );
+  });
+
+  it('`disabled: false` 與沒寫都放行——擋的是「關掉」，不是「提到這一列」', () => {
+    const root = privateDirectory();
+    const shipped = shippedWithGate(root);
+    const overlay = writePrivate(root, 'o.yml', '- id: approval-gate\n  disabled: false\n');
+    expect(() => composeEntries({ shipped, overlays: [overlay], warn: () => {} })).not.toThrow();
+    expect(() => composeEntries({ shipped, warn: () => {} })).not.toThrow();
+  });
+
+  it('鍵是 `name` 不是 `id`：換個 id `insert` 一列同名的，照樣擋得下', () => {
+    // `id` 與 `name` 兩個 patch 都改不動（`applyEntryPatches` 把它們解構在 `overrides` 外），
+    // 但 `insert` 進來的列一樣會走到 `validateEntries`——以 `id` 為鍵的話這一條會漏掉。
+    const root = privateDirectory();
+    const shipped = shippedWithGate(root);
+    const overlay = writePrivate(
+      root,
+      'o.yml',
+      "- insert:\n    - id: 別的名字\n      name: '@nexus/core/approval-gate'\n      disabled: true\n",
+    );
+    expect(() => composeEntries({ shipped, overlays: [overlay], warn: () => {} })).toThrow(
+      /關不掉/,
+    );
+  });
+
+  it('名單外的條目照樣關得掉——這條擋的是名單長胖', () => {
+    const root = privateDirectory();
+    const shipped = shippedWithGate(root);
+    const overlay = writePrivate(root, 'o.yml', '- id: echo\n  disabled: true\n');
+    const entries = composeEntries({ shipped, overlays: [overlay], warn: () => {} });
+    expect(entries.find((entry) => entry.id === 'echo')?.disabled).toBe(true);
+  });
+
+  it('同一份檔案又關核准又撞 id 時，先講核准那一句', () => {
+    // 兩條錯都在的時候，維運者要先看到的是關於核准的那一句。
+    const root = privateDirectory();
+    const shipped = writePrivate(
+      root,
+      'cordis.yml',
+      "- id: approval-gate\n  name: '@nexus/core/approval-gate'\n  disabled: true\n" +
+        "- id: echo\n  name: '@nexus/plugin-echo'\n" +
+        "- id: echo\n  name: '@nexus/plugin-echo'\n",
+    );
+    expect(() => composeEntries({ shipped, warn: () => {} })).toThrow(/關不掉/);
   });
 });
 

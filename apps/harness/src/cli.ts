@@ -50,7 +50,7 @@ import {
   type SessionLog,
 } from '@nexus/core';
 import { createJsonlSessionStore, openJsonlSessionStore } from './jsonl-session-store.js';
-import { assertSameCwd } from './resume-guards.js';
+import { assertSameCwd, assertSameWorkspaceRoot } from './resume-guards.js';
 import { DEFAULT_MAX_GOAL_ROUNDS, GOALS_SERVICE } from '@nexus/plugin-goal';
 import type { GoalServices } from '@nexus/plugin-goal';
 import { PLAN_COMMAND_NAME, recordedPlanMode } from '@nexus/plugin-plan-mode';
@@ -1260,6 +1260,18 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     // 它在 try 裡面，所以拋了也會放掉續接那把租約。
     const resumeCwd = options.cwd ?? process.cwd();
     if (resumed !== undefined) assertSameCwd('--resume', THREAD_ID, resumed.header, resumeCwd);
+    // **再認它跑在哪個工作區底下**（#504）。排在目錄那道後面、沙箱那道前面，理由同上一段：
+    // 目錄不對的話這一格也不該拿來判。**這裡自己算一次根**，因為 `createCliAgent` 還沒跑
+    // ——而一道要在「什麼都還沒起來之前」響的檢查等不到它。算的是同一個 `resolveWorkspaceRoot`
+    // 與同一個 cwd，所以跟組裝拿到的是同一個值，不是第二份 `resolve(cwd, ...)`。
+    if (resumed !== undefined) {
+      assertSameWorkspaceRoot(
+        '--resume',
+        THREAD_ID,
+        resumed.header,
+        resolveWorkspaceRoot(invocation.workspace, resumeCwd),
+      );
+    }
     if (resumedSandbox !== undefined && invocation.workspace === undefined) {
       throw new Error(
         `--resume 要配 --workspace：上一次跑在 --workspace 底下（日誌記著沙箱模式 ` +
@@ -1308,7 +1320,8 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     await resumed?.stored.close().catch(() => {});
     throw error;
   }
-  const { agent, commands, dispose, goals, sessions, sessionLog, telemetrySharing } = built;
+  const { agent, commands, dispose, goals, sessions, sessionLog, telemetrySharing, workspaceRoot } =
+    built;
   // **接在最後，而且是四個裡唯一一個出口。** 前三個是觀察者，落盤不改變任何人看得到
   // 什麼，所以順序在功能上沒有差別；排在最後是為了讓讀的人看到的因果跟實際一致——
   // 先被檢查、被參與者看過，才寫下去。
@@ -1322,6 +1335,9 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       ? undefined
       : attachSessionPersistence(sessions, sessionStore, {
           cwd: options.cwd ?? process.cwd(),
+          // **錨（#504）取的是組裝真的用的那一個**，不是在這裡再算一次：`createCliAgent`
+          // 回著它正是為了這個。沒給 `--workspace` 就不寫那一格。
+          ...(workspaceRoot !== undefined && { workspaceRoot }),
           // 續接：root 那一份往原檔續寫，只寫還沒存的後綴（第一筆就是 `session/end-seed`）。
           ...(resumed !== undefined && {
             resumedRoot: { stored: resumed.stored, storedCount: resumed.events.length },

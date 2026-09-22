@@ -88,6 +88,35 @@ export const entrySchema = z.strictObject({
 export type ConfigEntry = z.infer<typeof entrySchema>;
 
 /**
+ * 關不掉的條目，以 `name` 為鍵。
+ *
+ * **鍵是 `name` 不是 `id`，而那是從 {@link applyEntryPatches} 的解構讀出來的**：
+ * `const { id, name, insert, ...overrides } = patch` —— `id` 與 `name` 兩個都不在
+ * `overrides` 裡，所以 patch 改不動它們（`name` 給了只是一句斷言，對不上就跳過整條）。
+ * 兩個都釘得住，但 `name` 多守一條路：`insert` 進來的列一樣會走到
+ * {@link validateEntries}，所以一列
+ * `{ name: '@nexus/core/approval-gate', disabled: true }` 換個 id 插進來，以 `name` 為鍵
+ * 擋得下，以 `id` 為鍵擋不下。今天那樣插一列不會有任何後果（閘門是
+ * `foldApprovalGate` 無條件建的，不看清單），但鍵的選擇不應該靠「今天剛好沒有後果」。
+ *
+ * **為什麼要有這份名單**：一條指向不存在的 id 的 patch 是**警告不是失敗**
+ * （見 {@link applyEntryPatches}），所以在 `approval-gate` 這一列存在之前，
+ * `- id: approval-gate` ＋ `disabled: true` 的下場是一行 stderr、`exit 0`、而且
+ * `--dump-config` 的輸出跟沒帶那份 patch 逐字相同——量過（2026-09-22）。核准其實照樣
+ * 開著，但讀起來像成功關掉了。這個部署是完全內網、多人共用主機
+ * （[#387](https://github.com/DemianLi/nexus-agent/issues/387)），那個誤會的代價由別人付。
+ *
+ * **名單裡只有核准閘門，而「圍堵不進來」是量過的結論不是疏漏。** 圍堵
+ * （`@nexus/core` 的 `containment.ts`）**連 id 都不該有**：它是註冊表管線自己的 `catch`
+ * （dsh `packages/core/tools/src/index.ts:1494`，`4e84901`），不是一顆掛不掛隨人的
+ * plugin，而且把它從兩個插入點拿掉的突變量到 **126 條紅**。沒有條目，就沒有「關得掉」
+ * 這個問題要擋。
+ *
+ * @see {@link assertNotProtected}
+ */
+export const PROTECTED_ENTRY_NAMES: ReadonlySet<string> = new Set(['@nexus/core/approval-gate']);
+
+/**
  * 一列 patch。
  *
  * 形狀照 dsh 的 `PatchOptions`（`vendor/include/src/index.ts:130`）砍掉我們沒有的欄位。
@@ -310,6 +339,9 @@ export function validateEntries(
           formatIssues(result.error),
       );
     }
+    // **在這裡問，不是在迴圈後面。** 一份檔案同時寫壞了兩件事的時候，維運者要先看到的是
+    // 關於核准的那一句，不是 id 撞號那一句。
+    assertNotProtected(result.data, label, position);
     return result.data;
   });
 
@@ -332,6 +364,39 @@ export function validateEntries(
 }
 
 /**
+ * 保護名單上的條目不准被 `disabled: true` 關掉——**當場拋，而且在載入期**。
+ *
+ * **這個檢查住在 {@link validateEntries} 裡，而那個位置是被量具逼出來的、不是偏好。**
+ * {@link renderConfigDump} 在印之前自己跑一次 `validateEntries`（「印一棵啟動不起來的樹，
+ * 讀的人會以為問題在別的地方」），{@link composeEntries} 走同一支。所以放在這裡的檢查，
+ * `--dump-config` 與真的啟動**兩條路都擋得到**。
+ *
+ * 放到 import／`apply` 那一層就只擋得到真的啟動：`--dump-config` 會高高興興印出
+ * `disabled: true`，替錯的信念背書——而 `cordis.yml` 的檔頭正是叫人用 `--dump-config`
+ * 看「這台機器上實際長什麼樣」。那等於把這整件事要消滅的病往上搬一層。
+ *
+ * **`disabled: false` 與沒寫都放行**，只有明著寫 `true` 才拋：擋的是「關掉」這個動作，
+ * 不是「提到這一列」。
+ *
+ * @param entry - 驗過形狀的那一列。
+ * @param label - 錯誤訊息裡怎麼稱呼這份清單。
+ * @param position - 它在疊完的清單裡的索引（從 0 數）。
+ * @throws {PluginConfigError} 這一列在 {@link PROTECTED_ENTRY_NAMES} 上而且被關掉了。
+ */
+function assertNotProtected(entry: ConfigEntry, label: string, position: number): void {
+  if (entry.disabled !== true) return;
+  if (!PROTECTED_ENTRY_NAMES.has(entry.name)) return;
+  throw new PluginConfigError(
+    `${label} 疊完之後第 ${String(position + 1)} 列把 ${JSON.stringify(entry.name)} ` +
+      '標成了 `disabled: true`，而這一列關不掉。' +
+      '核准閘門不是一顆掛不掛隨人的 plugin：它由組裝時無條件建起來，' +
+      '今天沒有任何設定關得掉它。這一行如果安靜地被跳過，讀的人會以為核准已經關了' +
+      '——實際上照樣會問，而這台機器是多人共用的。' +
+      '把這一列的 `disabled` 拿掉（或寫成 `false`）再啟動。',
+  );
+}
+
+/**
  * 這個檔案只有目前使用者動得了。
  *
  * **判準照 dsh 的 `hasProtectedAncestors`**（`packages/spill/spill-local/src/cleanup.ts:86`）：
@@ -340,8 +405,15 @@ export function validateEntries(
  *
  * **這是比 dsh 嚴的一條，要登記**：dsh 把這個判準用在 spill root 上，**沒有**用在
  * `cordis.patch.yml` 上。我們用在 patch 檔上，因為這個部署是完全內網、多人共用主機
- * （[#387](https://github.com/DemianLi/nexus-agent/issues/387)），而 patch 檔停得掉核准。
- * 偏離的是「用在哪」，不是判準本身。
+ * （[#387](https://github.com/DemianLi/nexus-agent/issues/387)），而一份 patch 檔**決定
+ * 這個行程載入哪些模組**：`insert` 進來的列，它的 `name` 會被 `resolveEntryModule`
+ * 直接 import，相對路徑還錨在 patch 檔自己旁邊。別人寫得動那個檔，就是別人替你決定跑
+ * 什麼程式碼。偏離的是「用在哪」，不是判準本身。
+ *
+ * **這句理由改過一次，而改的是理由不是結論**（#456 第四刀）：原本寫的是「patch 檔停得掉
+ * 核准」。那件事現在擋住了——`approval-gate` 那一列在 {@link PROTECTED_ENTRY_NAMES} 上，
+ * `disabled: true` 當場拋。但這條檢查該留，射程反而比原本那句寬：patch 檔照樣改得動其餘
+ * 每一列的 `config`、關得掉名單外的條目，還能插新模組進來。
  *
  * **先 `realpath` 再檢查**：符號連結會讓「被檢查的路徑」與「真的被讀的檔」變成兩個，而
  * `readFileSync` 跟的是後者。dsh 的 `resolveRoot` 同樣解析成 canonical 路徑才信任它。

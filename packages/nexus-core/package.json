@@ -6,8 +6,13 @@
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./approval-gate": "./src/approval.ts",
     "./invariant": "./src/invariant.ts",
+    "./model-usage": "./src/model-usage.ts",
+    "./observation-policy": "./src/observation.ts",
     "./repeat-reminder": "./src/repeat-reminder.ts",
+    "./summarization": "./src/summarization.ts",
+    "./tool-result-pruner": "./src/tool-result-pruner.ts",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },

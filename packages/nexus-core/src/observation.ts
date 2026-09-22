@@ -50,6 +50,7 @@ import type { AnyBackendProtocol } from 'deepagents';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import { resolveToolName } from './containment.js';
+import type { NexusPlugin } from './plugin.js';
 import { toolRefusal } from './tool-events.js';
 
 /** 這個 middleware 的名字。排序斷言用得到。 */
@@ -307,3 +308,44 @@ export function createObservationPolicy(backend: AnyBackendProtocol): AgentMiddl
       : `"${path}" 在你讀過之後被改動了——重新讀一次，再重試。`;
   }
 }
+
+/**
+ * 這個條目的 plugin 名。
+ *
+ * **承重的常數**：{@link ./fold.ts | foldRegistry} 拿它去問
+ * {@link ./registry.ts | DisabledEntryView}，所以它是「這一顆被明著關掉了」的唯一鍵。
+ * 刻意不是條目的 `id`——id 是使用者的 patch 改得動的字串
+ * （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+ */
+export const OBSERVATION_POLICY_PLUGIN_NAME = 'observation-policy';
+
+/**
+ * 「先讀後改」的**設定條目**（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+ *
+ * **它一顆服務都不註冊，`apply` 是空的。** 這不是漏寫，是照抄 dsh：那側
+ * `fs-observation-policy` 的檔頭第一句就是「Event-only filesystem observation policy;
+ * **it registers no service**」。原因在這一顆**沒有設定**——`FoldOptions.observationPolicy`
+ * 是 `boolean` 不是物件，dsh base 那一列（`packages/bundle/base/cordis.patch.yml:264`，
+ * `ddefc45`）也沒有 `config`。
+ *
+ * 所以它跟 {@link ./repeat-reminder.ts | repeatReminderPlugin} 差一格：那邊是四態，這邊
+ * **只有三態**。「條目提供了服務」與「這次組裝沒有經過部署設定層」兩格的正確答案都是
+ * 「照預設開著」，一顆只能表達「開著」的服務因此帶不了任何資訊。真正要分的只有一件事
+ * ——**有沒有被明著關掉**，而那件事 `disabledEntries` 已經記著了。
+ *
+ * **因此這一列不可以帶 `config`**：`parseEntryConfig` 對「沒有 Config schema 卻給了
+ * config」是當場拋，不是默默吞掉（見 {@link ./plugin.ts | parseEntryConfig}）。
+ *
+ * **偏離登記**同 {@link ./repeat-reminder.ts | repeatReminderPlugin}：dsh 那側是 base 的一個
+ * 獨立套件、plugin 自己掛 middleware；我們表達不出來的是「逐個 agent 各建一份」
+ * （觀測紀錄在 closure 裡，共用等於把這件事要擋的東西放掉）與位置。偏的是載體，
+ * 建構與排位仍由 fold 決定。
+ */
+export const observationPolicyPlugin: NexusPlugin = {
+  name: OBSERVATION_POLICY_PLUGIN_NAME,
+  apply() {
+    // 空的，而且是承重的空：見上面的檔頭。這一顆唯一的作用是「在場、可以被 disabled」。
+  },
+};
+
+export default observationPolicyPlugin;

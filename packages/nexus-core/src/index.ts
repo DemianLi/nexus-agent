@@ -32,6 +32,8 @@ export type {
 } from './approval.js';
 export {
   APPROVAL_GATE_MIDDLEWARE_NAME,
+  APPROVAL_GATE_PLUGIN_NAME,
+  approvalGatePlugin,
   APPROVAL_INTERRUPT_KIND,
   QUESTION_INTERRUPT_KIND,
   createApprovalGateMiddleware,
@@ -170,6 +172,8 @@ export {
   createObservationPolicy,
   OBSERVATION_POLICY_MIDDLEWARE_NAME,
   OBSERVATION_POLICY_NOTICE,
+  OBSERVATION_POLICY_PLUGIN_NAME,
+  observationPolicyPlugin,
   OBSERVED_EDIT_TOOL,
   OBSERVED_READ_TOOL,
   OBSERVED_WRITE_TOOL,
@@ -222,6 +226,8 @@ export type { ModelUsage } from './model-usage.js';
 export {
   createModelUsageRecorder,
   MODEL_USAGE_MIDDLEWARE_NAME,
+  MODEL_USAGE_PLUGIN_NAME,
+  modelUsagePlugin,
   readModelUsage,
 } from './model-usage.js';
 export type {
@@ -245,6 +251,7 @@ export {
 } from './repeat-reminder.js';
 export type {
   SummarizationArgTruncation,
+  SummarizationConfig,
   SummarizationSettings,
   SummarizationThreshold,
 } from './summarization.js';
@@ -256,8 +263,16 @@ export {
   readSummarizationEvent,
   resolveSummarizationSettings,
   SUMMARIZATION_MIDDLEWARE_NAME,
+  SUMMARIZATION_PLUGIN_NAME,
+  SUMMARIZATION_SERVICE,
+  summarizationConfigSchema,
+  summarizationPlugin,
 } from './summarization.js';
-export type { ToolResultPruneConfig, ToolResultPruneResult } from './tool-result-pruner.js';
+export type {
+  ToolResultPruneConfig,
+  ToolResultPruneResult,
+  ToolResultPrunerConfig,
+} from './tool-result-pruner.js';
 export {
   assertToolResultPruneConfig,
   codePointLength,
@@ -266,6 +281,10 @@ export {
   pruneToolResultContent,
   pruneToolResults,
   TOOL_RESULT_PRUNE_MARKER,
+  TOOL_RESULT_PRUNE_SERVICE,
+  TOOL_RESULT_PRUNER_PLUGIN_NAME,
+  toolResultPrunerConfigSchema,
+  toolResultPrunerPlugin,
 } from './tool-result-pruner.js';
 
 export type {

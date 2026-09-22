@@ -32,13 +32,13 @@ import {
   createInvalidToolArgsMiddleware,
 } from './invalid-tool-args.js';
 import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
-import { createObservationPolicy } from './observation.js';
+import { createObservationPolicy, OBSERVATION_POLICY_PLUGIN_NAME } from './observation.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
 import type { MiddlewareRegistration, PluginRegistry, RootOnlyRefusal } from './registry.js';
 import { createModelCallRecorder } from './model-calls.js';
-import { createModelUsageRecorder } from './model-usage.js';
+import { createModelUsageRecorder, MODEL_USAGE_PLUGIN_NAME } from './model-usage.js';
 import { createTurnCancelGuard, createTurnCancelModelSignal } from './turn-cancel.js';
 import {
   REPEAT_REMINDER_PLUGIN_NAME,
@@ -51,10 +51,16 @@ import {
   createSummarizer,
   resolveSummarizationSettings,
   SUMMARIZATION_MIDDLEWARE_NAME,
+  SUMMARIZATION_PLUGIN_NAME,
+  SUMMARIZATION_SERVICE,
 } from './summarization.js';
 import type { SummarizationSettings } from './summarization.js';
 import { toolCallIdOf, toolRefusal } from './tool-events.js';
-import { resolveToolResultPruneConfig } from './tool-result-pruner.js';
+import {
+  resolveToolResultPruneConfig,
+  TOOL_RESULT_PRUNE_SERVICE,
+  TOOL_RESULT_PRUNER_PLUGIN_NAME,
+} from './tool-result-pruner.js';
 import type { ToolResultPruneConfig } from './tool-result-pruner.js';
 
 /**
@@ -196,7 +202,13 @@ export interface FoldOptions {
   /** 核准政策的 session 開關。 */
   approvals?: ApprovalPolicy;
   /**
-   * 摘要的門檻與去向。省略即 {@link DEFAULT_SUMMARIZATION}，給物件就逐格淺合併上去。
+   * 摘要的門檻與去向。給物件就逐格淺合併到 {@link DEFAULT_SUMMARIZATION} 上。
+   *
+   * **省略時不一定是預設值**：那時改由部署設定層的 `@nexus/core/summarization` 條目決定，
+   * 四態的順序見 {@link summarizationDisposition}
+   * （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。那一列標成
+   * `disabled: true` 的效果跟這裡傳 `false` 一樣——**都是一顆同名空殼，不是「沒有」**。
+   * 手搭 plugin 清單、沒有經過設定檔的組裝拿到的還是內建預設。
    *
    * **`false` 是真的關掉**（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）：
    * root、宣告的 subagent 與 fold 補的 `general-purpose` 各拿到一顆同名空殼，基座無條件
@@ -211,8 +223,13 @@ export interface FoldOptions {
    */
   summarization?: Partial<SummarizationSettings> | false;
   /**
-   * 摘要器外面那把工具結果剪刀的預算。省略即 {@link DEFAULT_TOOL_RESULT_PRUNE}，給物件就
-   * 逐格淺合併上去，`false` 是明著不要——摘要照跑，只是不先剪。
+   * 摘要器外面那把工具結果剪刀的預算。給物件就逐格淺合併到
+   * {@link DEFAULT_TOOL_RESULT_PRUNE} 上，`false` 是明著不要——摘要照跑，只是不先剪。
+   *
+   * **省略時不一定是預設值**：那時改由部署設定層的 `@nexus/core/tool-result-pruner` 條目
+   * 決定，四態的順序見 {@link toolResultPruningDisposition}
+   * （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。手搭 plugin 清單、
+   * 沒有經過設定檔的組裝拿到的還是內建預設。
    *
    * **照 dsh，它只在摘要開著時有作用**：dsh 的 pruner 唯一的消費者是 compaction，摘要
    * 不掛就沒人叫它。所以 {@link FoldOptions.summarization} 是 `false` 時這一格不發生作用，
@@ -237,6 +254,11 @@ export interface FoldOptions {
   /**
    * 「先讀後改」策略：沒讀過的檔不准改。省略即開著，`false` 是明著關掉。
    *
+   * **省略時還有第二條關法**：部署設定層把 `@nexus/core/observation-policy` 那一列標成
+   * `disabled: true`（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。這一顆
+   * **沒有設定**，所以它只有三態而不是四態，理由見
+   * {@link ./observation.ts | observationPolicyPlugin}。
+   *
    * **預設開著是照 dsh**：它那側這是預設載入的插件，連工具描述都寫著「the **default**
    * fs-observation-policy requires it」。關掉的意思是「這個組裝接受盲改」——例如一個
    * 只寫新檔、從不編輯的批次流程。
@@ -253,6 +275,25 @@ export interface FoldOptions {
    * **各建一份**，不共用。見 {@link createObservationPolicy}。
    */
   observationPolicy?: boolean;
+
+  /**
+   * 每一次模型呼叫的 token 帳目要不要記進會話日誌。省略即開著，`false` 是明著關掉。
+   *
+   * **省略時還有第二條關法**：部署設定層把 `@nexus/core/model-usage` 那一列標成
+   * `disabled: true`（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。這一顆
+   * **沒有設定**，所以它只有三態而不是四態，理由見
+   * {@link ./model-usage.ts | modelUsagePlugin}。
+   *
+   * **關掉它不會讓任何東西失敗，所以它的代價要自己讀出來**：不見的是落盤日誌裡那本
+   * 逐次呼叫的 token 帳（`model/usage`）。**今天樹上沒有任何一處在加總它**——評估那條路
+   * 的數字是它自己從 `usage_metadata` 加的，跟這一顆無關（數過，見
+   * {@link ./model-usage.ts | modelUsagePlugin}）。它坐在 request path 上但不准拋，
+   * 所以也沒有「留著它會弄壞什麼」這一面可以拿來權衡。
+   *
+   * 它**無狀態**，所以 root 與每個 subagent 共用同一份實例，不像「先讀後改」那樣逐個建。
+   * 見 {@link createModelUsageRecorder}。
+   */
+  modelUsage?: boolean;
 }
 
 /**
@@ -349,14 +390,15 @@ export function foldRegistry(
   const subagentDelegation = createSubagentDelegationMiddleware();
   const summarizer = foldSummarizer(registry, options);
   const repeatReminder = foldRepeatReminder(registry, options);
-  // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./model-usage.ts}。
-  const modelUsage = createModelUsageRecorder(registry.sessions);
+  // **一份實例走遍 root 與每個 subagent**，或在明著關掉時沒有。它無狀態，見
+  // {@link ./model-usage.ts}。
+  const modelUsage = foldModelUsage(registry, options);
   // 同上，無狀態、一份走遍。位置緊貼用量記錄器，理由見 {@link ./model-calls.ts}。
   const modelCalls = createModelCallRecorder(registry.sessions);
   // **backend 提前折**：策略要的版本 token 得從工具實際讀寫的那一個取，所以它不能等到
   // 下面才算。摘要器刻意拿的是兜底那個，兩者的差別見各自的文件。
   const backend = foldBackend(registry, options.defaultBackend);
-  const observationPolicy = foldObservationPolicy(options, backend);
+  const observationPolicy = foldObservationPolicy(registry, options, backend);
   // 檔案工具的失敗標成錯誤（#293）：只在有 backend 時掛——包的是交給基座的那一份，策略手上
   // 那一個是同一個實例，見 {@link ./fs-tool-errors.ts}。無狀態，一份走遍 root 與每個 subagent。
   const fsToolErrors = backend === undefined ? undefined : createFsToolErrorsMiddleware();
@@ -688,7 +730,7 @@ function foldMiddleware(
   observationPolicy: AgentMiddleware | undefined,
   summarizer: AgentMiddleware,
   repeatReminder: AgentMiddleware | undefined,
-  modelUsage: AgentMiddleware,
+  modelUsage: AgentMiddleware | undefined,
   modelCalls: AgentMiddleware,
   outputSchema: AgentMiddleware,
   fsToolErrors: AgentMiddleware | undefined,
@@ -707,7 +749,7 @@ function foldMiddleware(
     // 起訖排在用量外層、plugin middleware 外層：一個自己重試模型的 plugin，重試幾次都只算
     // 一步——同 dsh 的 `llm/retry` 在一步之內。摘要器不管排哪都在它外面，見 `model-calls.ts`。
     modelCalls,
-    modelUsage,
+    ...(modelUsage === undefined ? [] : [modelUsage]),
     ...plugins.rest,
     // 輸出校驗在每一個 plugin middleware 的內側：看到的是工具原本的輸出，不是外層改過的版本
     // （dsh 在 `tools/post-execute` 之前驗）。解不開參數的那顆在它更內側，換上的樁回的是錯誤，
@@ -875,22 +917,57 @@ function repeatReminderDisposition(
  * （[#143](https://github.com/DemianLi/nexus-agent/issues/143)）。**它跟工廠不衝突**：
  * 那個通道無狀態，逐個 agent 建的是摘要器不是它，每次呼叫現問「這次屬於哪一份日誌」。
  *
- * @param registry - 折的那張註冊表，這裡只用它的 `sessions`。
+ * @param registry - 折的那張註冊表：`sessions`，以及剪刀預算走的那兩條（服務與
+ *   {@link ./registry.ts | DisabledEntryView}，見 {@link toolResultPruningDisposition}）。
  * @param options - 組裝點自有的那些。
  * @returns 每呼叫一次就給一份新的摘要器（或空殼）。
  */
 function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => AgentMiddleware {
-  // 關掉時照樣驗：設定寫錯在載入期失敗，見 {@link FoldOptions.toolResultPruning}。
-  const pruning = resolveToolResultPruneConfig(options.toolResultPruning);
-  if (options.summarization === false) return () => ({ name: SUMMARIZATION_MIDDLEWARE_NAME });
-  const settings = resolveSummarizationSettings(options.summarization);
+  // **在摘要那條早退之前就問。** 關掉時照樣驗：設定寫錯在載入期失敗，見
+  // {@link FoldOptions.toolResultPruning}。挪到早退之後就等於默默放掉這條不變式。
+  const pruning = toolResultPruningDisposition(registry, options);
+  const settings = summarizationDisposition(registry, options);
+  // **空殼要在拋之前。** 不要摘要的組裝沒有歷史要寫，也就不必有 backend；而「不要」今天
+  // 有兩個來源（明著傳的 `false`、條目的 `disabled: true`），兩個都走這條早退。
+  if (settings === false) return () => ({ name: SUMMARIZATION_MIDDLEWARE_NAME });
   const backend = options.defaultBackend;
   if (backend === undefined)
     throw new Error(
       '要配摘要器，但組裝點沒給 default backend——摘要器把歷史寫進 backend，沒有它就沒有' +
-        '地方放。給一個 default backend，或明著傳 `summarization: false` 關掉摘要。',
+        '地方放。給一個 default backend、明著傳 `summarization: false`，或在部署設定裡把' +
+        ' `@nexus/core/summarization` 那一列標成 `disabled: true`。',
     );
   return () => createSummarizer(backend, settings, registry.sessions, pruning);
+}
+
+/**
+ * 這次組裝要不要摘要、用哪一份設定——**四態，依序問**，同
+ * {@link repeatReminderDisposition}。
+ *
+ * **第 3 態（條目被明著關掉）落在 `false`，而 `false` 在這一顆是「一顆同名空殼」，
+ * 不是「沒有」。** 基座無條件建一顆摘要器，同名取代是唯一消得掉它的辦法；真的不掛的話
+ * 它會補回來，而它的兜底門檻在測試裡碰不到——那會長得跟「關掉了」一模一樣。
+ *
+ * **這是 `foldSummarizer` 裡唯一讀 `options.summarization` 的地方**，刻意的：第二個讀取點
+ * 會讓「條目關掉」與「明著傳 false」在某一處悄悄分岔，而今天這兩個述詞永遠同進同出，
+ * 沒有任何測試看得到那個分岔。
+ *
+ * @param registry - 已經跑完 `loadPlugins()` 的 registry。
+ * @param options - 組裝點自有的那些。
+ * @returns 正規化過的設定，或 `false`＝發一顆同名空殼。
+ */
+function summarizationDisposition(
+  registry: PluginRegistry,
+  options: FoldOptions,
+): SummarizationSettings | false {
+  if (options.summarization !== undefined)
+    return options.summarization === false
+      ? false
+      : resolveSummarizationSettings(options.summarization);
+  const provided = registry.services.get(SUMMARIZATION_SERVICE);
+  if (provided !== undefined) return provided;
+  if (registry.disabledEntries.has(SUMMARIZATION_PLUGIN_NAME)) return false;
+  return resolveSummarizationSettings();
 }
 
 /**
@@ -904,22 +981,96 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
  * **沒有 backend 又沒關掉是拋，不是靜默跳過。** 拿不到版本 token 的策略沒有東西可以比，
  * 而它會長得跟「一切正常」一模一樣。同型的前例是 {@link foldSummarizer}。
  *
+ * **三態不是四態。** 這一顆沒有設定，所以「條目在場」與「沒有經過部署設定層」的正確答案
+ * 都是「照預設開著」，一顆只能表達「開著」的服務帶不了任何資訊——要分的只有「有沒有被
+ * 明著關掉」。細節見 {@link ./observation.ts | observationPolicyPlugin}。
+ *
+ * @param registry - 已經跑完 `loadPlugins()` 的 registry，這裡只問它
+ *   {@link ./registry.ts | DisabledEntryView}。
  * @param options - 組裝點自有的那些。
  * @param backend - {@link foldBackend} 折出來的那個。
  * @returns 每呼叫一次就給一份新的策略 middleware，或 `undefined`。
  */
 function foldObservationPolicy(
+  registry: PluginRegistry,
   options: FoldOptions,
   backend: AnyBackendProtocol | undefined,
 ): (() => AgentMiddleware) | undefined {
   if (options.observationPolicy === false) return undefined;
+  // **這一格要問在拋之前。** `disabled: true` 是第二條正當的「不要」，而不要的組裝不必
+  // 有 backend——問在拋之後的話，一個正確關掉了它、又沒有 backend 的組裝會當場炸。
+  if (
+    options.observationPolicy === undefined &&
+    registry.disabledEntries.has(OBSERVATION_POLICY_PLUGIN_NAME)
+  )
+    return undefined;
   if (backend === undefined)
     throw new Error(
       '要配「先讀後改」策略，但這次組裝一個 backend 都沒有——策略要從 backend 取版本' +
-        'token，沒有它就沒有東西可以比。給一個 default backend，或明著傳' +
-        '`observationPolicy: false`（那等於接受盲改）。',
+        'token，沒有它就沒有東西可以比。給一個 default backend、明著傳' +
+        '`observationPolicy: false`，或在部署設定裡把 `@nexus/core/observation-policy` ' +
+        '那一列標成 `disabled: true`（三者都等於接受盲改）。',
     );
   return () => createObservationPolicy(backend);
+}
+
+/**
+ * 用量記錄器，或在明著關掉時回 `undefined`——**三態，依序問**。
+ *
+ * ```
+ * 1. 組裝點明著傳了 `modelUsage: false`     → 不要
+ * 2. 條目在清單上但被明著關掉               → 不要
+ * 3. 以上都沒有                             → 掛著（維持今天的行為）
+ * ```
+ *
+ * **三態不是四態**，同 {@link foldObservationPolicy}：這一顆沒有設定，「條目在場」與
+ * 「沒有經過部署設定層」的正確答案都是「照預設開著」。細節見
+ * {@link ./model-usage.ts | modelUsagePlugin}。
+ *
+ * **回一份實例而不是工廠**，跟「先讀後改」相反而且是量過的差別：這一顆的 closure 裡
+ * 一個狀態都沒有，鏈與身分每次從執行期的 `configurable` 現算。見
+ * {@link createModelUsageRecorder}。
+ *
+ * **沒有「沒有 X 就拋」那一條。** 它要的 `sessions` 通道每個 registry 都有，而
+ * `forCall` 回 `not-attached` 是**常態不是異常**（檔頭最後一段：`eval/runner.ts`、
+ * `spike` 與絕大多數測試的組裝都不接日誌）。所以它跟摘要器、「先讀後改」那兩顆不同型
+ * ——那兩顆缺了 backend 會長得跟一切正常一樣，這一顆缺了日誌本來就該安靜。
+ *
+ * @param registry - 已經跑完 `loadPlugins()` 的 registry。
+ * @param options - 組裝點自有的那些。
+ * @returns 一份可以掛在任意多個 agent 上的 middleware，或 `undefined`。
+ */
+function foldModelUsage(
+  registry: PluginRegistry,
+  options: FoldOptions,
+): AgentMiddleware | undefined {
+  if (options.modelUsage === false) return undefined;
+  if (options.modelUsage === undefined && registry.disabledEntries.has(MODEL_USAGE_PLUGIN_NAME))
+    return undefined;
+  return createModelUsageRecorder(registry.sessions);
+}
+
+/**
+ * 這次組裝的剪刀預算——**四態，依序問**，同
+ * {@link repeatReminderDisposition}。第 3 態（條目被明著關掉）落在 `false`，不是
+ * `undefined`：消費端的形狀是 `ToolResultPruneConfig | false`，`false` 才是「不剪」。
+ *
+ * **條目提供的那一份已經驗過**（在它的 `apply` 裡），這裡不再驗一次。
+ *
+ * @param registry - 已經跑完 `loadPlugins()` 的 registry。
+ * @param options - 組裝點自有的那些。
+ * @returns 要用的預算，或 `false`＝不剪。
+ */
+function toolResultPruningDisposition(
+  registry: PluginRegistry,
+  options: FoldOptions,
+): ToolResultPruneConfig | false {
+  if (options.toolResultPruning !== undefined)
+    return resolveToolResultPruneConfig(options.toolResultPruning);
+  const provided = registry.services.get(TOOL_RESULT_PRUNE_SERVICE);
+  if (provided !== undefined) return provided;
+  if (registry.disabledEntries.has(TOOL_RESULT_PRUNER_PLUGIN_NAME)) return false;
+  return resolveToolResultPruneConfig(undefined);
 }
 
 /** 有人掛過路由就包成 `CompositeBackend`，否則原樣交出組裝點給的那個。 */
@@ -1057,7 +1208,7 @@ function foldSubAgents(
     observationPolicy: (() => AgentMiddleware) | undefined;
     summarizer: () => AgentMiddleware;
     repeatReminder: AgentMiddleware | undefined;
-    modelUsage: AgentMiddleware;
+    modelUsage: AgentMiddleware | undefined;
     modelCalls: AgentMiddleware;
     outputSchema: AgentMiddleware;
     fsToolErrors: AgentMiddleware | undefined;
@@ -1165,7 +1316,7 @@ function foldSubAgents(
         context.delegation,
         // 模型呼叫的起訖同用量記錄器那條理由打底、共用一份，位置同 root。
         context.modelCalls,
-        context.modelUsage,
+        ...(context.modelUsage === undefined ? [] : [context.modelUsage]),
         // 其餘 plugin 的，同 root 的位置（#327）。排在 `spec.middleware` 外層：plugin 打底、子代理自帶的在內側，
         // 同 `tools` 那條「全域 → 自帶」的軸線。
         ...context.plugins.rest,

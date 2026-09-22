@@ -98,11 +98,16 @@
 #
 # 這幾列**不裝功能，只講設定**（#456）。middleware 本身由 `foldRegistry` 建與排位——位置
 # 是承重的（有四條測試釘著）、而且有一顆必須逐個 agent 各建一份，這兩件事
-# `registry.middleware.use()` 都表達不出來。所以條目的 `apply` 只做一件事：把驗過的設定
-# 提供成一個服務，fold 從那裡讀。偏離登記在 `@nexus/core` 對應那個檔的檔頭上。
+# `registry.middleware.use()` 都表達不出來。所以帶設定的條目，`apply` 只做一件事：把驗過的
+# 設定提供成一個服務，fold 從那裡讀；**沒有設定的那一顆連服務都不註冊**（照 dsh 的
+# `fs-observation-policy`），它在場的唯一意義是「關得掉」。偏離登記在 `@nexus/core` 對應那
+# 個檔的檔頭上。
 #
 # **關掉它就是 `disabled: true`**，語意照 dsh：條目不掛，那一顆 middleware 真的不在 stack
 # 裡。要改設定就在 patch 檔裡重寫這一列的 `config`——整份替換，沒重述的欄位回到預設值。
+#
+# **最後那一列是例外，而且是明著的例外**：核准閘門關不掉，`disabled: true` 在載入期當場
+# 拋。理由寫在它自己那一段上。
 
 # 連續重複同參數呼叫同一個工具時提醒模型（#147）。門檻與參數預覽字數照 dsh base 的
 # `repeat-tool-reminder`（`packages/bundle/base/cordis.patch.yml:441`，`ddefc45`）；
@@ -117,6 +122,74 @@
     include: []
     exclude: []
     argumentsPreviewChars: 500
+
+# 摘要之前先把過長的工具結果剪掉中段（#446）。三格預算照 dsh base 的 `tool-result-pruner`
+# （`packages/bundle/base/cordis.patch.yml:404`，`ddefc45`）。
+#
+# **只在摘要開著時有作用**：dsh 的 pruner 唯一的消費者是 compaction，摘要不掛就沒人叫它。
+# 但設定照樣在載入期驗——寫錯不會因為今天剛好沒用到就放過。
+- id: tool-result-pruner
+  name: '@nexus/core/tool-result-pruner'
+  config:
+    thresholdChars: 8192
+    headChars: 4096
+    tailChars: 1024
+
+# 壓力達標時把舊訊息摘要成一則，歷史 offload 到 backend（#143）。四格**全部寫出來**，理由
+# 同上面兩列：patch 是整份替換 `config`。這幾個數字的來歷（尤其 `tokens: 100000` 為什麼是
+# 這個值、以及換模型要重量一次）寫在 `DEFAULT_SUMMARIZATION` 的檔頭上，不在這裡重述。
+#
+# **關掉它（`disabled: true`）發的是一顆同名空殼，不是「沒有」**：基座無條件建一顆摘要器，
+# 同名取代是唯一消得掉它的辦法。連帶沒有的還有歷史 offload 與上面那把剪刀。
+- id: summarization
+  name: '@nexus/core/summarization'
+  config:
+    trigger:
+      - { type: tokens, value: 100000 }
+      - { type: messages, value: 60 }
+    keep: { type: messages, value: 20 }
+    truncateArgs:
+      trigger: { type: messages, value: 20 }
+      keep: { type: messages, value: 20 }
+    historyPathPrefix: /conversation_history
+
+# 先讀後改：沒讀過的檔不准改（#273）。照 dsh base 的 `fs-observation-policy`
+# （`packages/bundle/base/cordis.patch.yml:264`，`ddefc45`）預設就載著。
+#
+# **這一列刻意沒有 `config:`**，而且不可以加：這一顆沒有設定，plugin 也就沒有 Config
+# schema，而載入器對「沒有 schema 卻給了 config」是**當場拋**，不是默默吞掉。它跟上面兩列
+# 因此差一格——上面兩列是四態（明著傳的 > 條目的設定 > 被關掉 > 內建預設），這一列只有
+# 三態，因為「條目在場」與「沒有經過設定檔」的答案都是「開著」。
+#
+# 關掉它等於**這個組裝接受盲改**，不是省一點開銷。
+- id: observation-policy
+  name: '@nexus/core/observation-policy'
+
+# 每一次模型呼叫的 token 帳目記進會話日誌（#264）。**這一列刻意沒有 `config:`**，理由同上
+# 一列：這一顆沒有任何數字可以調，plugin 也就沒有 Config schema，而載入器對「沒有 schema
+# 卻給了 config」是當場拋。所以它跟上面那一列一樣是三態。
+#
+# **關掉它之後不見的是落盤日誌裡那本逐次呼叫的 token 帳**（`model/usage`）。今天樹上沒有
+# 任何一處在加總它——評估那條路的數字是它自己從 `usage_metadata` 加的，跟這一顆無關。所以
+# 關掉它不會有任何東西當場變少，而那正是這個代價非寫在這裡不可的理由。
+- id: model-usage
+  name: '@nexus/core/model-usage'
+
+# 核准閘門（#111）。**這一列關不掉**：寫 `disabled: true` 會在載入期當場拋，`--dump-config`
+# 也一樣擋——檢查住在 `validateEntries` 裡，兩條路共用它。
+#
+# 它跟上面五列都不同型：上面五列的 `disabled` 是真的會讓那一顆不在 stack 裡，這一列的
+# `disabled` 是一個錯誤。閘門由 `foldRegistry` 無條件建，今天沒有任何設定關得掉它，
+# 而這一列不存在的時候 `- id: approval-gate` ＋ `disabled: true` 只會警告一行然後跳過
+# ——讀起來像成功關掉了，實際上核准照樣在問。量過（2026-09-22）：exit 0、stderr 一行、
+# dump 與沒帶那份 patch 逐字相同。
+#
+# 第二個理由跟擋人無關：**這一列讓核准在 `--dump-config` 裡看得見**。沒有它的時候，那份
+# dump 從頭到尾沒有任何一列跟核准有關，想確認「這台機器上核准是開的嗎」的人分不出來。
+#
+# `config:` 同上，不可以加。
+- id: approval-gate
+  name: '@nexus/core/approval-gate'
 
 # ── 配套入口 ──────────────────────────────────────────────────────────────────
 #
