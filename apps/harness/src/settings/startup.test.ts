@@ -39,6 +39,7 @@ import {
   DEFAULT_DELIVERABLE_MAX_PAGE_BYTES,
 } from './deliverable-files.js';
 import { startupSetting } from './startup.js';
+import { toolTextPlugin } from './tool-text.js';
 import { DEFAULT_THREAD_TITLE_MAX_WORDS, threadTitlePlugin } from './thread-title.js';
 
 const OVERRIDE_PATCH = 'src/settings/settings-override.patch.yml';
@@ -270,6 +271,17 @@ describe('startupSetting', () => {
     const at = source.indexOf('const pump = new ThreadPump(');
     expect(at).toBeGreaterThan(0);
     expect(source.slice(at, source.indexOf(');', at))).toContain('toolTextLimits,');
+  });
+
+  it('工具文字上限低於 schema 的下限：載入期就失敗', () => {
+    // **釘的是 schema 那條 `min(128)`**，不是 `capToolText` 的行為（那條在
+    // `tool-result-text.test.ts`）。少了這一條，把下限放寬到 1 不會有任何東西紅。
+    expect(() =>
+      startupSetting(
+        [{ plugin: toolTextPlugin, id: 'tool-text', config: { maxBytes: 127 } }],
+        toolTextPlugin,
+      ),
+    ).toThrow(/tool-text/u);
   });
 
   it('落盤窗口超過計時器收得住的上限：載入期就失敗', () => {

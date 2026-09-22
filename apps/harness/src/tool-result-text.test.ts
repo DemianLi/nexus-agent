@@ -116,6 +116,19 @@ describe('上限', () => {
     expect(capToolText(text, CAP)).toBe(text);
   });
 
+  /**
+   * **下限那個值仍然講得完一句話，而且還看得到原文**——`settings/tool-text.ts` 的 schema 把
+   * `maxBytes` 的下限釘在 128，理由就是這一條量到的東西（2026-09-23）：64 的時候通知塞滿整段、
+   * 一個原文字元都不剩；40 的時候連通知自己都被截斷。
+   */
+  it('設定容許的最小上限：通知完整，而且頭尾還留得下原文', () => {
+    const capped = capToolText('x'.repeat(5_000), 128);
+    expect(Buffer.byteLength(capped, 'utf8')).toBeLessThanOrEqual(128);
+    expect(capped).toContain('沒有送出來');
+    expect(capped.startsWith('x')).toBe(true);
+    expect(capped.endsWith('x')).toBe(true);
+  });
+
   it('抽字時就套上限，兩條路拿到的都是截過的那一份', () => {
     const capped = toolResultText(logged(`${HALF}藍鯨${HALF}`), CAP);
     expect(capped).toBeDefined();
