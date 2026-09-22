@@ -233,6 +233,19 @@ export interface ThreadAgent {
    * `resolveWorkspaceRoot`）。
    */
   readonly workspaceRoot?: string;
+  /**
+   * **接回來那份日誌的 header 記的工作區根**，沒續接、或那份 header 沒記那一格就是 `undefined`
+   * （[#519](https://github.com/DemianLi/nexus-agent/issues/519)）。
+   *
+   * 它跟 {@link workspaceRoot} 是兩個來源：這一格來自磁碟上的 header，那一格來自這一次的
+   * `--workspace`。**兩個都有值的時候它們一定相等**——`assertSameWorkspaceRoot` 在續接那一刻
+   * 就擋下了不等的情形——而 `locateRequested` 對不等**再拒一次**，理由見那裡。
+   *
+   * **是 header 有沒有那一格，不是 `version >= 13`。** 一份 12 的日誌被 13 接回來之後 header 的
+   * `version` 會被覆寫成 13，而那一格仍然不在（續接不回填，見 `session-store.ts` 的版本 13
+   * 那一段）；照版本號判就會替那些更早的事件宣稱一個沒人驗證過的錨。
+   */
+  readonly resumedWorkspaceRoot?: string;
 }
 
 export interface WireHandlerOptions {
@@ -432,6 +445,11 @@ interface ThreadState {
   /** 這一次組裝的工作區根，沒給 `--workspace` 就是 `undefined`。見 {@link ThreadAgent.workspaceRoot}。 */
   readonly workspaceRoot: string | undefined;
   /**
+   * 接回來那份 header 記的工作區根，沒續接或沒記就是 `undefined`。
+   * 見 {@link ThreadAgent.resumedWorkspaceRoot}。
+   */
+  readonly resumedWorkspaceRoot: string | undefined;
+  /**
    * 有沒有一次 `slash.run` 還沒回來。
    *
    * **HTTP handler 本身沒有序列性**：`handle()` 是一次請求一次呼叫，兩個分頁同時打
@@ -620,6 +638,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           // 而那時錯的方向是「把重播的事件當成這個行程寫的」——靜靜讀到另一個工作區的同名檔。
           storedCount: threadAgent.rootSeed?.length ?? 0,
           workspaceRoot: threadAgent.workspaceRoot,
+          resumedWorkspaceRoot: threadAgent.resumedWorkspaceRoot,
           slashInFlight: false,
           dispose: async () => {
             // **參與者先收，比不變量還早**：它是唯一寫得動日誌的那一個，先讓它停手，
@@ -1132,20 +1151,48 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
   }
 
   /**
-   * 兩條交付讀檔路由共用的前半：座標 → 一個通過所有閘門的檔。
+   * 兩條交付讀檔路由共用的前半：座標 → 一個通過所有閘門的檔。**挑錨的是這裡**，見
+   * `deliverable-files.ts` 的檔頭。
    *
-   * **`ready` 拿不到就拒，但那不是這條路的規則**，只是規則的推論：一條不在服務中的 thread，
-   * 這個行程一顆事件都沒往它寫，所以它每一顆事件都在 `seq < storedCount` 那一側——真正的
-   * 規則是逐事件的那一條（見 `deliverable-files.ts` 的檔頭）。
+   * **`ready` 拿不到就拒，理由是手上根本沒有那份 events**：`state.pump.sessionLog` 才是這條
+   * thread 的日誌，沒有 state 就沒有日誌可查，連那個 `seq` 上有沒有交付都答不出來。
    *
-   * [#504](https://github.com/DemianLi/nexus-agent/issues/504) **已經落地**：格式 13 起 header
-   * 記著工作區根，而續接的守衛保證了「有記的那一格 ⟹ 它等於今天這台 server 的根」。所以線以下
-   * 那些裡**有記那一格的**錨得住了，放寬要加的是冷讀 header、**契約不必改**——但放寬本身是另一
-   * 張卡，#504 明著寫了它不改這條路由今天的行為。
+   * ## 續接線以下那些（[#519](https://github.com/DemianLi/nexus-agent/issues/519)）
    *
-   * **判準是那一格在不在，不是 `version >= 13`。** 一份 12 的日誌被 13 接回來之後，header 的
-   * `version` 會被覆寫成 13 而那一格仍然不在（續接不回填，見 `session-store.ts`）——照版本號
-   * 判就會做出一次靜默錯檔，剛好是 #504 存在的理由。
+   * 一條續接回來的 thread，日誌裡混著兩群事件：**線以下**的（上一個行程寫的）與**以上**的
+   * （這個行程寫的）。分界是逐事件的 `seq < storedCount`——`storedCount` 就是接回來那批的長度，
+   * `SessionLog` 的 `#adoptSeed` 釘死 `event.seq === index`，所以這個比較是精確的，不是估計。
+   *
+   * 線以下那些**以前一律拒**（[#452](https://github.com/DemianLi/nexus-agent/issues/452)），理由是
+   * 「上一個行程當時的工作區根無從得知」。
+   * [#504](https://github.com/DemianLi/nexus-agent/issues/504) 把那一格加進 header 之後，那句話只
+   * 對了一半：**那份日誌的 header 記著根的時候，線以下那些錨得住**，所以這裡改成逐事件問
+   * {@link ThreadState.resumedWorkspaceRoot} 在不在。
+   *
+   * ### 為什麼「header 記著根」蘊含「線以下每一顆交付都錨在它」
+   *
+   * 這一步是整刀的承重句，**兩個別處的事實撐著它**，兩個都配了上游斷言：
+   *
+   * 1. **沒有工作區的那一段生不出交付。** `present` 在 `registry.capabilities` 沒有工作區能力、
+   *    或 backend 缺席時直接拒（`packages/nexus-plugin-present/src/index.ts` 的
+   *    `PRESENT_NO_WORKSPACE_MESSAGE`），所以一個沒給 `--workspace` 的行程續寫進這份日誌的那一段，
+   *    裡面一顆 `deliverables/presented` 都不會有。**這是放寬的正確性前提**：哪天 `present` 改成
+   *    「沒有工作區就錨在 cwd」，這條路就變成一次靜默錯檔。
+   * 2. **有給 `--workspace` 的那些段落，根一定等於 header 記的那個。** `assertSameWorkspaceRoot`
+   *    在每一次續接當場比過（`resume-guards.ts` 的四格表），不等就拋。
+   *
+   * 兩條合起來：header 記著根 ⟹ 這份日誌裡每一顆 `deliverables/presented` 都是在那個根底下宣告的。
+   * 而 header 那一格只在會話出生時寫得進去——續接只覆寫 `version`、**不回填**那一格，格式 13 以前
+   * 的行程又讀不動 13 的 header（`parseHeader` 的版本閘），所以沒有第三條路徑把它種進去。
+   *
+   * ### 兩道判準，都 fail-closed
+   *
+   * - **是那一格在不在，不是 `version >= 13`。** 一份 12 的日誌被 13 接回來之後 header 的
+   *   `version` 會被覆寫成 13 而那一格仍然不在——照版本號判就會做出一次靜默錯檔，剛好是 #504
+   *   存在的理由。
+   * - **記的根跟這一次的根不等也拒。** 上面第 2 條保證了走到這裡時兩者相等，所以這一道今天
+   *   **永遠不會響**——它是那個保證的觀察點：守衛哪天鬆掉或轉交途中被換掉，這裡當場 404，
+   *   而不是靜靜讀到另一個工作區裡的同名檔。
    */
   async function locateRequested(
     threadId: string,
@@ -1175,7 +1222,28 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         message: `讀不到：這台 server 這一次沒給 --workspace，交付檔沒有錨。`,
       };
     }
-    const declared = locateDeliverable(state.pump.sessionLog.events, state.storedCount, seq, index);
+    if (seq < state.storedCount) {
+      // 線以下：那份日誌的 header 記著根，才准用今天這個根當錨。兩道判準見檔頭。
+      const recorded = state.resumedWorkspaceRoot;
+      if (recorded === undefined) {
+        return {
+          kind: 'refused',
+          reason: 'no-anchor',
+          message:
+            `讀不到：seq ${seq} 那顆交付是上一個行程寫的，而那份日誌的 header 沒記工作區根` +
+            `——格式 13 以前的日誌都沒有這一格，所以它當時的根無從得知。` +
+            `不能拿這一次的 --workspace 去讀它宣告的路徑（#504）。`,
+        };
+      }
+      if (recorded !== root) {
+        return {
+          kind: 'refused',
+          reason: 'no-anchor',
+          message: `讀不到：seq ${seq} 那顆交付錨在工作區 ${recorded}，這台 server 這一次跑在 ${root}。`,
+        };
+      }
+    }
+    const declared = locateDeliverable(state.pump.sessionLog.events, seq, index);
     if (declared.kind === 'refused') return declared;
     return locateDeliverableFile(root, declared.value);
   }

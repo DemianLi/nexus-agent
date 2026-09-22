@@ -6,32 +6,19 @@
  *
  * 照 dsh 的 `workspace-files`（`packages/api/workspace-files/src/index.ts`，`ddefc45`）。
  *
- * ## 錨怎麼選的
+ * ## 錨怎麼選的：**不在這裡**
  *
- * 一條續接回來的 thread，日誌裡混著兩群事件：**續接線以下**的（上一個行程寫的）與**以上**的
- * （這個行程寫的）。以 thread 為單位的閘會同時誤殺後者、放過前者，所以分界是逐事件的
- * `seq < storedCount`——而 `storedCount` 就是接回來那批的長度，`SessionLog` 的 `#adoptSeed`
- * 釘死 `event.seq === index`，所以這個比較是精確的，不是估計。
+ * 這個模組不挑錨，也不認得續接線。錨是呼叫端交出來的一個目錄
+ * （{@link locateDeliverableFile} 的 `rootDir`），怎麼挑的寫在 `wire-handler.ts` 的
+ * `locateRequested`——那是唯一挑得起的地方，因為線的位置（`storedCount`）與日誌 header 記下的
+ * 根都只在那裡（[#519](https://github.com/DemianLi/nexus-agent/issues/519)）。
  *
- * 線**以下**的今天一律拒。原本的理由是「會話日誌沒有記工作區根那一格，所以上一個行程當時的根
- * 無從得知」——[#504](https://github.com/DemianLi/nexus-agent/issues/504) 把那一格加上去了，所以
- * **理由換了一半，結論沒換**：
+ * **把它留在呼叫端不是成本考量，是正確性。** 從 `threadFor` 拿到的是**這一次組裝**的 backend；
+ * 對一顆重播的事件而言那就是錯的錨——它不是通往修復的路，它就是那個 bug。
  *
- * - **格式 13 以前寫的日誌永遠沒有那一格**（續接不回填），那些仍然無從得知，仍然是上面那句話。
- * - **13 以後寫的有**，而且續接時 `assertSameWorkspaceRoot` 已經擋下「同一個 cwd、不同的
- *   `--workspace`」，所以 `header.workspaceRoot` 在場時它就等於今天這台 server 的根。那條線
- *   因此**放寬得了**——「有那一格就准用今天的根」加上把 `header.workspaceRoot` 從 `ThreadAgent`
- *   串到這裡。**那是另一張卡**，#504 明著寫了它不改這條路由今天的行為。
- *
- * 讀錯檔的樣子仍然要寫著，因為放寬的那天它就是要防的東西：用今天這台 server 的 `--workspace`
- * 去讀昨天的路徑，讀到的會是另一個工作區裡的同名檔，而畫面上跟讀對了一模一樣。**不猜、直接拒**
- * 不是新發明：`assertSameCwd` 對 `header.cwd === undefined` 的處置就是拒絕。
- *
- * ## 為什麼錨是呼叫端交出來的，不是從 `threadFor` 拿的
- *
- * **不是成本考量，是正確性。** 從 `threadFor` 拿到的是**這一次組裝**的 backend；對一顆重播的事件
- * 而言那就是錯的錨——它不是通往修復的路，它就是那個 bug。這裡用的根是呼叫端明著交出來的那一個，
- * 而呼叫端只在 `seq >= storedCount` 時才有資格交。
+ * 讀錯檔的樣子要寫在這裡，因為那是錨挑錯時唯一的徵兆：拿這台 server 這一次的 `--workspace` 去讀
+ * 上一個行程宣告的路徑，讀到的會是另一個工作區裡的同名檔，而畫面上跟讀對了一模一樣。**不猜、
+ * 直接拒**不是新發明：`assertSameCwd` 對 `header.cwd === undefined` 的處置就是拒絕。
  *
  * ## 與 dsh 的偏離
  *
@@ -81,7 +68,10 @@ const NUL = String.fromCharCode(0);
 export type DeliverableRefusal =
   /** 座標不是非負整數、或 `limit` 超過上限。 */
   | 'bad-request'
-  /** 這顆座標這台 server 錨不住（線以下的重播事件、或這條 thread 不在服務中）。 */
+  /**
+   * 這顆座標這台 server 錨不住：這條 thread 不在服務中、這一次沒給 `--workspace`、或它是一顆
+   * 線以下的重播事件而那份日誌的 header 沒記工作區根。**每一種都由呼叫端判**（見檔頭）。
+   */
   | 'no-anchor'
   /** 那個座標上沒有交付事件、沒有那個 index、或檔案不在磁碟上。 */
   | 'not-found'
@@ -104,33 +94,23 @@ function refuse<T>(reason: DeliverableRefusal, message: string): DeliverableResu
 /**
  * 把 `(seq, index)` 換成模型當初宣告的那個路徑字串。
  *
- * **線以下的一律拒**，見檔頭。線以上的要通過三道形狀檢查：那個 `seq` 上真的有事件、它真的是
- * `deliverables/presented`、而且真的有第 `index` 個檔。
+ * **三道形狀檢查**：那個 `seq` 上真的有事件、它真的是 `deliverables/presented`、而且真的有第
+ * `index` 個檔。**錨錨不錨得住不在這裡問**，那是呼叫端的事（見檔頭）。
  *
  * 那道型別檢查不只是防呆——**它是子代理那條路的封口**。子代理宣告的交付落在子代理自己的日誌裡
  * （`@nexus/wire` 的 `deliverables.ts` 檔頭：「只有 root 那一份」），root 日誌的同一個 `seq` 上
  * 是別的事件，於是這裡拒絕。少了它，一個亂給的座標會落到一顆無關的事件上。
  *
  * @param events - root 日誌這一刻的全部事件，`seq === index`。
- * @param storedCount - 接回來那批的長度；沒續接就是 0。
  * @param seq - 那顆 `deliverables/presented` 的位置。
  * @param index - 它在 `files` 裡的位置。
  * @returns 模型給的原路徑字串，或拒絕。
  */
 export function locateDeliverable(
   events: readonly SessionEvent[],
-  storedCount: number,
   seq: number,
   index: number,
 ): DeliverableResult<string> {
-  if (seq < storedCount) {
-    return refuse(
-      'no-anchor',
-      `讀不到：seq ${seq} 那顆交付是上一個行程寫的，而這條路由手上沒有它當時的工作區根` +
-        `——格式 13 以前的日誌根本沒記，13 以後記了但這條路由還沒去讀。` +
-        `不能拿這一次的 --workspace 去讀它宣告的路徑（#504）。`,
-    );
-  }
   const event = events[seq];
   if (event?.type !== 'deliverables/presented') {
     return refuse('not-found', `讀不到：seq ${seq} 上沒有交付宣告。`);

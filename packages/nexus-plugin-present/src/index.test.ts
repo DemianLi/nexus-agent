@@ -288,6 +288,13 @@ describe('拒絕', () => {
     ).toBe('Presented a\nPresented a');
   });
 
+  /**
+   * **這兩條同時是 `apps/harness` 那條交付讀檔路由的正確性前提**
+   * （[#519](https://github.com/DemianLi/nexus-agent/issues/519)）：那條路由「日誌 header 記著
+   * 工作區根 ⟹ 線以下每一顆交付都錨在它」的推理，靠的就是「沒有工作區的那一段生不出交付」。
+   * 這裡改成「沒有工作區就錨在 cwd」的那天，那條路由會開始靜默錯檔，而 `apps/harness` 不會有
+   * 任何東西紅——所以要從這裡紅。
+   */
   it('沒有人宣告工作區就拒絕——即使 backend 在（沒有工作區時組裝點照樣墊一顆 StateBackend）', async () => {
     const root = await workspace();
     await writeFile(join(root, 'a'), 'a');

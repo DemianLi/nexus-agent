@@ -175,7 +175,10 @@ export interface StoredSessionHeader {
    *
    * **跟 {@link cwd} 是兩件事。** `--workspace` 照 cwd 解析，所以同一個 cwd 底下換一個
    * `--workspace`，兩次跑的根不同而 `cwd` 一模一樣——`cwd` 那一格分不出這件事。記下它是為了
-   * 讓一顆重播的 `deliverables/presented` 有錨（#452）。
+   * 讓一顆重播的 `deliverables/presented` 有錨（#452），而
+   * [#519](https://github.com/DemianLi/nexus-agent/issues/519) 起真的有人在讀它：
+   * `apps/harness/src/wire-handler.ts` 的 `locateRequested` 拿「這一格在不在」當准不准用今天
+   * 這個根的判準（**不是拿 {@link version} 判**，理由見那裡與下一段）。
    *
    * **舊日誌永遠沒有這一格，而且續接不回填。** 續接時 root 那一份走的是已存的把手，
    * `attachSessionPersistence` 新建的 header 只有這個行程新開的 subagent 用得到；
