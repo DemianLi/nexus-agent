@@ -132,18 +132,42 @@ Jev 只在美西有端點、沒有 on-prem。出貨給甲方的版本不含這�
   （`nvidia/nemotron-3-super-120b-a12b`）、而且 `looping` 的正解有 8 筆來自同一種人造機制
   （核准拒絕）。**先讓純觀測在真實使用裡累積**，等正例來自沒被設計過的情境再談承重。
 
-### D. 三筆偏離要不要現在登記
+### D. 偏離登記（**已登記在這張 PR 的內文**）
 
-1. **接一顆專職的判斷模型**：dsh 唯一的「模型做判斷」是 `packages/experimental/auto-review`，
-   而它**重用當前 agent 自己的 provider/model 路由**；dsh 的「第二顆模型」只用在生成
-   （會話標題、compaction 摘要、web search），從不用在判斷。
-   偏離理由：**Jev 不生成文字、當不了主模型**，「重用 agent 路由」在它身上表達不出來。
-2. **純觀測／影子模式在 dsh 沒有範本**：auto-review 直接承重且 fail closed；
-   session-title 是生成用途、fail soft 退回規則。偏離理由：**前提不同**——dsh 用的是自己已經
-   信任的主模型，我們對 Jev 沒有數字。
-3. **#263 拍板的重開條件**寫成「由證據觸發，不由新工具觸發」。
-- **建議**：**等第一張 PR 存在時一起登記**（照 AGENTS.md，偏離登記寫在 PR 內文或決議檔）。
-  現在先記在這裡，免得掉在中間。
+對照 dsh `ddefc45`，行號逐條親眼核過。**兩筆是對 dsh 的偏離，第三筆不是**，分開寫。
+
+**偏離一：接一顆專職的判斷模型**
+
+- **dsh 怎麼做**：唯一「模型做判斷」的地方是 `packages/experimental/auto-review`
+  （LLM-as-authorizer，掛在 `tools/pre-execute` 的 prepend，閉合 enum，每次判斷重建，
+  **fail closed**——`src/index.ts:673` 的 `if (decision === undefined) return denied(exec)`）。
+  而它**重用當前 agent 自己的 provider/model 路由**（`src/index.ts:620` 的
+  `provider: snapshot.provider`；`README.md:14`「the current agent's provider and model
+  assess the pending action」）。dsh 的「第二顆模型」形狀是選填的 `provider`+`model`
+  成對覆寫、缺省繼承主路由，而且**只用在生成**（會話標題、compaction 摘要、web search），
+  **從不用在判斷**。
+- **為什麼表達不出來**：Jev 不生成自由文字，當不了 agent 的主模型，所以「重用 agent 路由」
+  這一條在它身上沒有對應物。
+- **退到什麼**：一顆獨立路由的判斷模型，但**形狀照抄 auto-review 的四個訊號**——閉合輸出
+  協定、middleware 掛點、每次判斷重建、fail closed；並且與 auto-review 同級：
+  出貨清單外、預設不掛（dsh 的 bundle 與 preset 對 auto-review **零引用**，
+  `README.md:14`「ships this layer switched off」）。
+
+**偏離二：純觀測（跑但不承重）**
+
+- **dsh 怎麼做**：兩個範本方向相反，而且**都不是純觀測**。auto-review（判斷）直接承重、
+  fail closed；session-title（生成）fail soft，退回先寫好的規則路
+  （`packages/session/session-title/src/normalize.ts:70` 的 `fallbackSessionTitle`，
+  消費點在 `src/index.ts:788`）。dsh 裡沒有「跑但不承重」這個形狀。
+- **為什麼退**：**這一筆不是「表達不出來」，是刻意比標準更保守**，得講清楚。dsh 敢讓
+  auto-review 承重，因為那是他們自己已經信任的主模型；我們對 Jev 的判斷品質在開跑時
+  一個數字都沒有。**前提不同才是理由**，不是照抄不來。
+- **退到什麼**：判斷只寫進會話日誌，`decideGoalRound` 行為零變化（Q14=C、Q16=A）。
+  承重要等 §四 C 的重開條件成立。
+
+**第三筆不是偏離**：#263 拍板「會停下來的迴圈偵測不進執行期」是**我們自己**的決定，
+Q15 把它的重開條件定成「由證據觸發，不由新工具觸發」。這裡要登記的不是偏離，是
+**那條拍板還沒被推翻**——§四 C 的建議明確寫「還不算觸發」。
 
 ---
 
