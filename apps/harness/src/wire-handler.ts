@@ -82,12 +82,15 @@ import type {
   LocatedDeliverable,
 } from './deliverable-files.js';
 import {
-  DELIVERABLE_MAX_LINES,
   locateDeliverable,
   locateDeliverableFile,
   readDeliverableBytes,
   readDeliverablePage,
 } from './deliverable-files.js';
+import {
+  deliverableFilesConfigSchema,
+  type DeliverableFilesConfig,
+} from './settings/deliverable-files.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import { isTrustedWireRequest } from './request-trust.js';
 import type { StoredThreadList } from './session-list.js';
@@ -270,6 +273,19 @@ export interface WireHandlerOptions {
    * 不是這道檢查。
    */
   readonly auth: WireAuth;
+  /**
+   * 交付檔的三個上限，來自 plugin 清單上 `#settings/deliverable-files` 那一列
+   * （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
+   *
+   * **選配，省略即那一列 schema 的預設值**——同 `BrowserAuth` 的有效期那一格，省略是給手搭的
+   * 測試用的，拿到的跟出貨清單一模一樣。產品路徑由 `serve.ts` 在起動期 `startupSetting` 解出來
+   * 傳進來。
+   *
+   * **它是 server 的性質，所以在這裡而不是在 `ThreadAgent` 上**：這兩條路由住在這個閉包裡、
+   * 一個 server 一次，`threadId` 是它們的參數。放進 `ThreadAgent` 會讓「每條 thread 的交付上限
+   * 可以不同」變成一個可表達而沒有意義的狀態。
+   */
+  readonly deliverableLimits?: DeliverableFilesConfig;
   /**
    * 這台 server 講話的地方，選配（[#479](https://github.com/DemianLi/nexus-agent/issues/479)）。
    *
@@ -568,6 +584,14 @@ function feedbackResponse(
 }
 
 export function createWireHandler(options: WireHandlerOptions): WireHandler {
+  /**
+   * 這台 server 的交付上限，**一個 server 解一次**。
+   *
+   * 省略時走 schema——`parse({})` 的答案就是那一列不寫 `config:` 時的答案，所以「手搭的測試」與
+   * 「出貨清單」拿到的是同一份，不是兩份各自維護的預設值。
+   */
+  const deliverableLimits: DeliverableFilesConfig =
+    options.deliverableLimits ?? deliverableFilesConfigSchema.parse({});
   /**
    * **存的是 promise 不是狀態**，而且是同步就存進去的。
    *
@@ -1262,7 +1286,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     search: URLSearchParams,
   ): Promise<Response> {
     const offset = coordinate(search.get('offset') ?? '0');
-    const limit = coordinate(search.get('limit') ?? String(DELIVERABLE_MAX_LINES));
+    // **沒給 `limit` 就是那一列講的上限**，而同一個數字在 `readDeliverablePage` 裡當「不准超過」。
+    // 兩處都讀 `deliverableLimits.maxLines`：只接一處的話，設定一動兩個方向都會 400。
+    const limit = coordinate(search.get('limit') ?? String(deliverableLimits.maxLines));
     if (offset === undefined || limit === undefined) {
       return new Response('交付檔的翻頁參數不對。', {
         status: 400,
@@ -1271,7 +1297,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     }
     const found = await locateRequested(threadId, search);
     if (found.kind === 'refused') return deliverableRefused(found);
-    const page = await readDeliverablePage(found.value, offset, limit);
+    const page = await readDeliverablePage(found.value, deliverableLimits, offset, limit);
     if (page.kind === 'refused') return deliverableRefused(page);
     return new Response(JSON.stringify(page.value), {
       headers: {
@@ -1293,7 +1319,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
   ): Promise<Response> {
     const found = await locateRequested(threadId, search);
     if (found.kind === 'refused') return deliverableRefused(found);
-    const bytes = await readDeliverableBytes(found.value);
+    const bytes = await readDeliverableBytes(found.value, deliverableLimits);
     if (bytes.kind === 'refused') return deliverableRefused(bytes);
     return new Response(bytes.value, {
       headers: {

@@ -34,7 +34,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
-import { DELIVERABLE_MAX_LINES, locateDeliverable } from './deliverable-files.js';
+import { locateDeliverable } from './deliverable-files.js';
+import {
+  deliverableFilesConfigSchema,
+  DEFAULT_DELIVERABLE_MAX_LINES,
+  type DeliverableFilesConfig,
+} from './settings/deliverable-files.js';
 import {
   exchangeServeToken,
   fetchWithCookie,
@@ -85,6 +90,8 @@ async function present(
     seed?: readonly SessionEvent[];
     resumedRoot?: 'same' | 'other';
     setup?: (root: string) => Promise<void>;
+    /** 交給 `createWireHandler` 的三個上限。缺席即那一列 schema 的預設值。 */
+    limits?: DeliverableFilesConfig;
   } = {},
 ): Promise<Outcome> {
   const root = await mkdtemp(join(tmpdir(), 'nexus-deliverable-'));
@@ -123,6 +130,7 @@ async function present(
   let sessions: SessionRegistry | undefined;
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,
+    ...(options.limits !== undefined && { deliverableLimits: options.limits }),
     createAgent: async () => ({
       agent: built.agent as unknown as PumpAgent,
       commands: built.commands,
@@ -210,6 +218,104 @@ describe('預覽', () => {
     }
   });
 
+  /**
+   * **`maxLines` 是雙用的，這兩條一起釘住它**（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
+   *
+   * 那一格同時是「沒給 `limit` 查詢參數時用的預設」（`wire-handler.ts` 的
+   * `handleDeliverableFile`）與「給了就不准超過的上限」（`deliverable-files.ts` 的
+   * `readDeliverablePage`）。dsh 同形，兩處讀同一個 `this.config.maxLines`。
+   *
+   * **只接其中一處的話，兩個方向都會壞**：設定高於另一邊寫死的上限 → 不帶 `limit` 的請求全部
+   * 400；設定低於另一邊寫死的預設 → 一樣。所以第一條刻意**不帶 `limit`**——一條每次都明著傳
+   * `limit` 的測試會從這個缺陷底下綠著走過去。
+   *
+   * 7 這個數字挑得比檔案的 20 行小、也跟預設的 5000 差得遠：兩邊任何一處退回讀常數，行數都對不上。
+   */
+  describe('三個上限從設定來', () => {
+    /** 20 行，行號寫在內容裡，切到第幾行看得出來。 */
+    const twenty = `${Array.from({ length: 20 }, (_, index) => `line ${String(index)}`).join('\n')}\n`;
+    const withMaxLines = (maxLines: number): DeliverableFilesConfig =>
+      deliverableFilesConfigSchema.parse({ maxLines });
+
+    it('不給 limit 時用設定的行數當預設，不是那個常數', async () => {
+      const outcome = await present({ 'a.md': twenty }, ['a.md'], { limits: withMaxLines(7) });
+      try {
+        // **不帶 `limit`**：這一條的全部價值在這裡。
+        const page = (await (
+          await outcome.get(filePath(`seq=${outcome.seq}&index=0`))
+        ).json()) as DeliverableFilePage;
+        expect(page.lines).toBe(7);
+        expect(page.text).toBe('line 0\nline 1\nline 2\nline 3\nline 4\nline 5\nline 6');
+        expect(page.eof).toBe(false);
+      } finally {
+        await outcome.close();
+      }
+    });
+
+    it('明著要超過設定的行數是拒絕——上限那一半也接上了', async () => {
+      const outcome = await present({ 'a.md': twenty }, ['a.md'], { limits: withMaxLines(7) });
+      try {
+        const refused = await outcome.get(filePath(`seq=${outcome.seq}&index=0&limit=8`));
+        expect(refused.status).toBe(400);
+        expect(await refused.text()).toContain('limit 最多 7 行');
+        // 正好等於上限的那一個要過——擋的是「超過」，不是「碰到」。
+        const ok = await outcome.get(filePath(`seq=${outcome.seq}&index=0&limit=7`));
+        expect(ok.status).toBe(200);
+      } finally {
+        await outcome.close();
+      }
+    });
+
+    it('整檔上限也從設定來：比檔案小就拒，而且講得出是幾', async () => {
+      const outcome = await present({ 'a.md': twenty }, ['a.md'], {
+        limits: deliverableFilesConfigSchema.parse({ maxFileBytes: 10 }),
+      });
+      try {
+        const refused = await outcome.get(filePath(`seq=${outcome.seq}&index=0`));
+        expect(refused.status).toBe(413);
+        expect(await refused.text()).toContain('超過 10 的上限');
+      } finally {
+        await outcome.close();
+      }
+    });
+
+    /**
+     * **serve 那條線只能這樣釘，而理由是量出來的。**
+     *
+     * 上面四條證的是「`createWireHandler` 收到什麼就用什麼」。缺的那一步是「`serve.ts` 起動期
+     * 解出來的那一份，真的傳給了 handler」——而那一步**在 serve 上觀察不到**：要看見它就得有一個
+     * 宣告過的交付檔，而 serve 不帶 `--live` 時的假模型腳本（`cli.ts` 的 `CLI_SCRIPT`）只呼叫
+     * `echo` 與 `write_file`，一次都不呼叫 `present`。為了測試去改產品腳本是本末倒置。
+     *
+     * **實測過缺口是真的**：把 `serve.ts` 那一行 `deliverableLimits,` 刪掉，`apps/harness` 全套
+     * 1234 條**全綠**。一條用參數傳的線天生沒有觀察點（同 `settings/startup.test.ts` 的檔頭），
+     * 而這一格連那個檔的兩臂手法都用不上。
+     *
+     * 所以退到結構性檢查，形狀照 `eval/session-absence.test.ts`。它擋的正是那次突變：那一行被
+     * 刪掉、或那一列不再被解出來，這裡當場紅。
+     */
+    it('serve 起動期解出那一列，而且真的傳給 handler', async () => {
+      const source = await readFile(new URL('./serve.ts', import.meta.url), 'utf8');
+      expect(source).toContain('startupSetting(plugins, deliverableFilesPlugin)');
+      // `createWireHandler({` 那一段裡要有它——不是檔案裡任何地方有這個字就算。
+      const call = source.slice(source.indexOf('createWireHandler({'));
+      expect(call.slice(0, call.indexOf('createAgent'))).toContain('deliverableLimits,');
+    });
+
+    it('一頁的位元組上限也從設定來', async () => {
+      const outcome = await present({ 'a.md': twenty }, ['a.md'], {
+        limits: deliverableFilesConfigSchema.parse({ maxBytes: 12 }),
+      });
+      try {
+        const refused = await outcome.get(filePath(`seq=${outcome.seq}&index=0`));
+        expect(refused.status).toBe(413);
+        expect(await refused.text()).toContain('超過 12 的上限');
+      } finally {
+        await outcome.close();
+      }
+    });
+  });
+
   it('version 的契約：內容沒動就同值，動過就換值', async () => {
     const outcome = await present({ 'a.md': 'one\n' }, ['a.md']);
     try {
@@ -280,7 +386,7 @@ describe('預覽', () => {
     const outcome = await present({ 'a.md': 'one\n' }, ['a.md']);
     try {
       const response = await outcome.get(
-        filePath(`seq=${outcome.seq}&index=0&limit=${DELIVERABLE_MAX_LINES + 1}`),
+        filePath(`seq=${outcome.seq}&index=0&limit=${DEFAULT_DELIVERABLE_MAX_LINES + 1}`),
       );
       expect(response.status).toBe(400);
     } finally {

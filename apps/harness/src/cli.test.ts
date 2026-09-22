@@ -154,7 +154,7 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是七顆功能 ＋ 六列 core 設定 ＋ 三列 harness 設定 ＋ 二十個配套入口', async () => {
+  it('預設清單是七顆功能 ＋ 六列 core 設定 ＋ 四列 harness 設定 ＋ 二十個配套入口', async () => {
     // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
     // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
     // 讓計劃模式進來，理由寫在 `apps/harness/cordis.yml` 的註解上（命令沒進預設清單就等於
@@ -209,23 +209,25 @@ describe('一次性模式', () => {
       'observation-policy',
       'model-usage',
       'approval-gate',
-      // **這三顆跟上面那六顆同類——不裝功能、只講設定——但擁有者住在 `apps/harness`**
+      // **這四顆跟上面那六顆同類——不裝功能、只講設定——但擁有者住在 `apps/harness`**
       // （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。它們內部又分兩層，
       // 分界是消費點跑的時刻。
       //
-      // **前兩列跑在任何 agent 出生之前**（serve 的冷讀清單、`BrowserAuth` 的建構子），那一刻
-      // 註冊表還不存在，所以 `apply` 是空的，值由 `settings/startup.ts` 的 `startupSetting`
-      // 在起動期解一次。**CLI 這條路一個都不讀它們**——消費者都在 serve 那一側；它們出現在這份
-      // 清單上，是因為清單只有一份（#454），不是因為 CLI 用得到。
+      // **前三列跑在任何 agent 出生之前**（serve 的冷讀清單、`BrowserAuth` 的建構子、
+      // `createWireHandler` 閉包裡的兩條交付路由），那一刻註冊表還不存在，所以 `apply` 是空的，
+      // 值由 `settings/startup.ts` 的 `startupSetting` 在起動期解一次。**CLI 這條路一個都不讀
+      // 它們**——消費者都在 serve 那一側；它們出現在這份清單上，是因為清單只有一份（#454），
+      // 不是因為 CLI 用得到。
       //
       // **`recursion-limit` 相反，它正是 CLI 在讀的那一個**：消費點是 `agent-factory.ts`，跑在
       // `loadPlugins` 之後，註冊表就在手上，所以它跟上面 core 那三列完全同形——`apply` 把驗過的
       // 值提供成服務，組裝點去讀。三態（旗標 > 條目 > 內建預設）釘在 `agent-factory.test.ts`。
       //
-      // **三列同樣在 `PROTECTED_ENTRY_NAMES` 上**，但理由分兩種，而且現在是逐列寫在
+      // **四列同樣在 `PROTECTED_ENTRY_NAMES` 上**，但理由分兩種，而且現在是逐列寫在
       // `PROTECTED_ENTRY_REASONS` 這張表上的（訊息不再共用一段講核准閘門的文字）。
       'thread-title',
       'browser-session',
+      'deliverable-files',
       'recursion-limit',
     ]);
     // 二十個配套入口裡有 `@nexus/plugin-workspace-changes` 的，**那個功能本身不在這份清單裡**：它要工作區的根，

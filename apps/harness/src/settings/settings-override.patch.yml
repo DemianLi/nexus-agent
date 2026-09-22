@@ -1,4 +1,9 @@
-# 把 harness 自己那三列的設定改掉（#529 的驗收：「在設定裡覆寫會生效」）。
+# 把 harness 自己那幾列的設定改掉（#529 的驗收：「在設定裡覆寫會生效」）。
+#
+# **`deliverable-files` 那一列不在這裡**，那是刻意的：它的覆寫要看得見就得有一個宣告過的交付檔，
+# 而 serve 不帶 `--live` 時的假模型腳本（`cli.ts` 的 `CLI_SCRIPT`）一次都不呼叫 `present`。
+# 它的驗收因此在 `deliverable-files.test.ts`——四條走 `createWireHandler` 的行為測試，
+# 外加一條釘住 `serve.ts` 那一行的結構性檢查。
 #
 # **`config` 是整份替換，不是逐格合併**，所以 `thread-title` 這一列沒有重述 `maxWords`：
 # 它回到 schema 的預設值。那正是這裡要的——順帶證明沒重述的那一格不會變成 `undefined`。

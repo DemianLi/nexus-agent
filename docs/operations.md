@@ -200,7 +200,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `repeatReminder` 時，以那句話為準；而手搭 plugin 清單（沒有這幾列）的組裝拿到的是內建
   預設，不是「什麼都沒掛」。
 
-今天有九列：
+今天有十列：
 
 | id | 管什麼 | 有 `config` 嗎 | 關得掉嗎 |
 | --- | --- | --- | --- |
@@ -212,20 +212,22 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `approval-gate` | 核准閘門 | **沒有** | **關不掉** |
 | `thread-title` | 執行緒列表上標題的兩個上限 | 有（兩格） | **關不掉** |
 | `browser-session` | 瀏覽器 cookie 的絕對有效期 | 有（一格） | **關不掉** |
+| `deliverable-files` | 交付檔的三個上限（一頁位元組／整檔位元組／一頁行數） | 有（三格） | **關不掉** |
 | `recursion-limit` | agent 迴圈的 super-step 上限 | 有（一格） | **關不掉** |
 
-**最後三列的擁有者住在 `apps/harness`，不在 `@nexus/core`**（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
+**最後四列的擁有者住在 `apps/harness`，不在 `@nexus/core`**（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
 它們內部又分兩層，**分界是消費點跑的時刻**：
 
-- **`thread-title` 與 `browser-session` 跑在任何 agent 出生之前**（serve 的冷讀清單、瀏覽器會話的
-  建構子），那一刻註冊表還不存在，所以 `apply` 是空的、值在起動期解一次。**它們只在 `serve` 上有
-  作用，CLI 一列都不讀**；出現在同一份清單上是因為清單只有一份。
+- **`thread-title`、`browser-session`、`deliverable-files` 跑在任何 agent 出生之前**（serve 的冷讀
+  清單、瀏覽器會話的建構子、兩條交付路由所在的 `createWireHandler` 閉包），那一刻註冊表還不存在，
+  所以 `apply` 是空的、值在起動期解一次。**它們只在 `serve` 上有作用，CLI 一列都不讀**；出現在
+  同一份清單上是因為清單只有一份。
 - **`recursion-limit` 相反，兩條路都讀它**：消費點是組裝期的 `agent-factory`，跟前六列同一個位置，
   所以它跟前六列完全同形（`apply` 提供一顆服務、組裝點去讀）。**CLI 的 `--recursion-limit` 仍然贏過
   這一列**——程式路徑上直接傳的參數贏過這份清單，那條規則對它照樣適用。
 
-**這三列都關不掉**，但理由分兩種。`thread-title` 與 `browser-session` 是「關掉沒有意義」：它們
-**不裝任何東西**，關掉不會讓標題不再被裁切、也不會讓 cookie 不再過期。`recursion-limit` 硬一級
+**這四列都關不掉**，但理由分兩種。起動期那三列是「關掉沒有意義」：它們**不裝任何東西**，關掉
+不會讓標題不再被裁切、cookie 不再過期、交付檔不再有上限。`recursion-limit` 硬一級
 ——關掉它確實會讓那顆服務消失，但組裝點接著落回內建的 100，**護欄還在**，讀起來卻像把迴圈上限
 解除了（基座自己那層是一萬）。兩種都只會讓你以為關掉了什麼。寫 `disabled: true` 是啟動失敗，
 **訊息會指名你那一列自己的理由**，不是一段通用的話。
@@ -262,9 +264,12 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 （給了 `truncateArgs` 就要把它底下兩格都寫出來），而 `trigger` 那兩個數字的來歷寫在
 `DEFAULT_SUMMARIZATION` 的檔頭上——**換模型要重量一次**。
 
-**最後三列的 `config` 同樣是整份替換。** 沒重述的欄位回到 schema 的預設值，不是保留原本那一列
-寫的值——例如 `thread-title` 只寫 `maxBytes` 的話，`maxWords` 拿到的是預設的 5。`thread-title` 與
-`browser-session` 的預設（`5`／`40`、`30` 天）都照 dsh 的產品組裝；`recursion-limit` 的 `100`
+**最後四列的 `config` 同樣是整份替換。** 沒重述的欄位回到 schema 的預設值，不是保留原本那一列
+寫的值——例如 `thread-title` 只寫 `maxBytes` 的話，`maxWords` 拿到的是預設的 5。`thread-title`、
+`browser-session` 與 `deliverable-files` 的預設（`5`／`40`、`30` 天、2 MiB／32 MiB／5000 行）都照
+dsh 的產品組裝；**`deliverable-files` 的 `maxLines` 是雙用的**——它同時是「不給 `limit` 查詢參數時
+每頁幾行」與「給了就不准超過幾行」，所以改那一格會同時動到兩個行為（dsh 同形）。
+`recursion-limit` 的 `100`
 **沒有 dsh 的對應物**（dsh 不跑 LangGraph），它是對著一次實測跑掉的執行校準出來的，換算成幾輪
 模型呼叫取決於這一次掛了哪些 middleware——預設組裝是 33 輪，再給 `--workspace` 是 32 輪。逐段
 實測見 `apps/harness/src/settings/recursion-limit.ts` 的檔頭。

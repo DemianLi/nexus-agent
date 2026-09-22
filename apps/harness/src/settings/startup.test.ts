@@ -1,6 +1,10 @@
 /**
  * **「在設定裡覆寫會生效」的驗收**——[#529](https://github.com/DemianLi/nexus-agent/issues/529)
- * 第一刀，[#457](https://github.com/DemianLi/nexus-agent/issues/457) 的兩個值。
+ * 起動期那幾列，[#457](https://github.com/DemianLi/nexus-agent/issues/457) 的五個值（標題兩個、
+ * cookie 一個、交付檔三個裡走 `startupSetting` 的那一份）。
+ *
+ * **交付檔那三個的行為驗收不在這裡**，在 `deliverable-files.test.ts`：那條線要有一個宣告過的
+ * 交付檔才看得見，而 serve 的假模型腳本一次都不呼叫 `present`。這裡只驗它讀得出來。
  *
  * 這一組**不驗那兩個數字本身**（那是 `browser-auth.test.ts` 與 `serve-session-list.test.ts` 的事），
  * 只驗**那條線通不通**：出貨清單 → `--patch` → `startupSetting` → 真的 serve 上的行為。
@@ -26,6 +30,12 @@ import { loadDefaultPlugins } from '../plugin-config.js';
 import { runServe } from '../serve.js';
 import type { RunningServe } from '../serve.js';
 import { browserSessionPlugin, DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS } from './browser-session.js';
+import {
+  deliverableFilesPlugin,
+  DEFAULT_DELIVERABLE_MAX_FILE_BYTES,
+  DEFAULT_DELIVERABLE_MAX_LINES,
+  DEFAULT_DELIVERABLE_MAX_PAGE_BYTES,
+} from './deliverable-files.js';
 import { startupSetting } from './startup.js';
 import { DEFAULT_THREAD_TITLE_MAX_WORDS, threadTitlePlugin } from './thread-title.js';
 
@@ -130,6 +140,11 @@ describe('startupSetting', () => {
     expect(startupSetting([], browserSessionPlugin).maxAgeDays).toBe(
       DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS,
     );
+    expect(startupSetting([], deliverableFilesPlugin)).toEqual({
+      maxBytes: DEFAULT_DELIVERABLE_MAX_PAGE_BYTES,
+      maxFileBytes: DEFAULT_DELIVERABLE_MAX_FILE_BYTES,
+      maxLines: DEFAULT_DELIVERABLE_MAX_LINES,
+    });
   });
 
   it('那一列的 config 不合法：當場拋，訊息指名是哪一列', () => {
@@ -141,9 +156,16 @@ describe('startupSetting', () => {
     ).toThrow(/thread-title/u);
   });
 
-  it('出貨清單上真的讀得到那兩列——不是只有手搭的清單走得通', async () => {
+  it('出貨清單上真的讀得到那三列——不是只有手搭的清單走得通', async () => {
     const plugins = await loadDefaultPlugins({ env: {} });
     expect(startupSetting(plugins, threadTitlePlugin).maxBytes).toBe(40);
     expect(startupSetting(plugins, browserSessionPlugin).maxAgeDays).toBe(30);
+    // **字面值，不是那三個常數**：出貨那一列與 schema 的預設今天是同一個數字，兩邊都讀常數的話
+    // 改掉常數兩邊一起動，這一條就再也分不出「那一列在講話」與「那一列不見了」。
+    expect(startupSetting(plugins, deliverableFilesPlugin)).toEqual({
+      maxBytes: 2097152,
+      maxFileBytes: 33554432,
+      maxLines: 5000,
+    });
   });
 });

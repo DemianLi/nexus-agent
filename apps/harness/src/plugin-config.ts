@@ -112,12 +112,12 @@ export type ConfigEntry = z.infer<typeof entrySchema>;
  * plugin，而且把它從兩個插入點拿掉的突變量到 **126 條紅**。沒有條目，就沒有「關得掉」
  * 這個問題要擋。
  *
- * **名單上另外三列是只講設定的條目**（`#settings/*`，
+ * **名單上另外四列是只講設定的條目**（`#settings/*`，
  * [#529](https://github.com/DemianLi/nexus-agent/issues/529)）。理由跟核准閘門同形但不同源：
  * 它們**不裝任何東西**，所以「關掉」對它們沒有意義。名單擋的正是那個誤會。
  *
  * **理由跟名字綁在同一張表上，不共用一段文字。** 從前這裡是一個 `Set`、訊息只有一段，而那段
- * 逐字在講核准閘門——名單長到四列之後，關掉 `#settings/thread-title` 的人會拿到一整段關於核准
+ * 逐字在講核准閘門——名單長出第二種列之後，關掉 `#settings/thread-title` 的人會拿到一整段關於核准
  * 與多人共用主機的說明，那對他那一列完全是錯的（實測）。改成表之後，**加一列就必須寫它自己的
  * 理由**，漏寫是 typecheck 紅，不是一段安靜的錯話。
  *
@@ -139,6 +139,12 @@ const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
     '#settings/browser-session',
     '這一列不裝任何東西，只講瀏覽器 cookie 的絕對有效期。關掉它不會讓 cookie 不再過期' +
       '——過期由 `BrowserAuth` 無條件做——只會讓這份設定讀起來像關掉了什麼。',
+  ],
+  [
+    '#settings/deliverable-files',
+    '這一列不裝任何東西，只講交付檔的三個上限（一頁的位元組、整檔的位元組、一頁的行數）。' +
+      '關掉它不會讓交付檔不再有上限——`startupSetting` 把關掉的那一列當成沒有那一列，' +
+      '三個值於是回到 schema 的預設，行為一個位元組都不變，只會讓這份設定讀起來像關掉了什麼。',
   ],
   [
     '#settings/recursion-limit',
