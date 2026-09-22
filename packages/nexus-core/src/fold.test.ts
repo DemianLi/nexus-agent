@@ -23,7 +23,7 @@ import {
   TURN_CANCEL_MIDDLEWARE_NAME,
   TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
 } from './turn-cancel.js';
-import { MODEL_USAGE_MIDDLEWARE_NAME } from './model-usage.js';
+import { MODEL_USAGE_MIDDLEWARE_NAME, modelUsagePlugin } from './model-usage.js';
 import {
   DEFAULT_REPEAT_REMINDER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
@@ -1738,6 +1738,109 @@ describe('先讀後改的條目', () => {
     // 出貨的 `cordis.yml` 那一列因此刻意沒有 `config:`。
     await expect(
       loadPlugins([{ plugin: observationPolicyPlugin, config: { anything: 1 } } as PluginEntry]),
+    ).rejects.toThrow(/不收 config/);
+  });
+});
+
+/**
+ * 用量記錄器的條目——**三態，同「先讀後改」**。
+ *
+ * 它沒有設定（{@link createModelUsageRecorder} 只收一個 `sessions` 通道），所以「條目在場」
+ * 與「沒有人問過部署設定層」的正確答案都是「照預設開著」。
+ *
+ * **這裡量的是 stack 的形狀，那不是完整的判準。** 它寫不寫得進日誌還取決於
+ * `sessions.forCall()`，而 `not-attached` 是常態——行為那一半（配正對照）在
+ * `apps/harness/src/model-usage-log.test.ts`。兩邊缺一不可：只量形狀的話，一個「在 stack 裡
+ * 但被接錯通道」照樣綠；只量行為的話，subagent 與 general-purpose 那兩疊看不到。
+ */
+describe('用量記錄器的條目', () => {
+  /** 不帶 `modelUsage` 的折——這樣才問得到後兩態。 */
+  async function foldBare(plugins: PluginEntry[]) {
+    const { registry } = await loadPlugins([
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('one'))),
+      ...plugins,
+    ]);
+    return foldRegistry(registry, { summarization: false, observationPolicy: false });
+  }
+
+  /**
+   * 那一顆在不在 root、宣告的 subagent、以及**基座自己補的 general-purpose** 裡。
+   *
+   * general-purpose 要一起數：它不是我們註冊的，漏掉的話「關掉了」會在那一疊上
+   * 靜靜地不成立——反過來「還開著」也是。
+   */
+  function present(params: Parameters<typeof middlewareNames>[0] & { subagents: SubAgent[] }) {
+    const has = (stack: readonly unknown[]) =>
+      stack.map((mw) => (mw as { name: string }).name).includes(MODEL_USAGE_MIDDLEWARE_NAME);
+    return {
+      inRoot: has(params.middleware),
+      inSubagents: params.subagents.map((subagent) => has(subagent.middleware ?? [])),
+      subagentNames: params.subagents.map((subagent) => subagent.name),
+    };
+  }
+
+  it('條目不在清單上時照樣掛著——root、subagent、general-purpose 三疊都有', async () => {
+    const seen = present(await foldBare([]));
+    // 三疊都在場，而且 general-purpose 真的在這份清單裡——不然下面那條「都沒有」會是空談。
+    expect(seen.subagentNames).toContain(GENERAL_PURPOSE_SUBAGENT.name);
+    expect(seen.inRoot).toBe(true);
+    expect(seen.inSubagents).toEqual([true, true]);
+  });
+
+  it('條目在清單上、沒被關：跟上一條一模一樣（它不帶設定，所以帶不了差別）', async () => {
+    const seen = present(await foldBare([{ plugin: modelUsagePlugin }]));
+    expect(seen.inRoot).toBe(true);
+    expect(seen.inSubagents).toEqual([true, true]);
+  });
+
+  it('`disabled: true` 就真的沒有——root、subagent、general-purpose 三疊都沒有', async () => {
+    const seen = present(await foldBare([{ plugin: modelUsagePlugin, disabled: true }]));
+    expect(seen.inRoot).toBe(false);
+    expect(seen.inSubagents).toEqual([false, false]);
+  });
+
+  it('組裝點明著傳 `false` 就沒有，即使條目在場沒被關', async () => {
+    const { registry } = await loadPlugins([
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('one'))),
+      { plugin: modelUsagePlugin },
+    ]);
+    const seen = present(
+      foldRegistry(registry, { summarization: false, observationPolicy: false, modelUsage: false }),
+    );
+    expect(seen.inRoot).toBe(false);
+    expect(seen.inSubagents).toEqual([false, false]);
+  });
+
+  it('組裝點明著傳 `true` 贏過 `disabled: true`', async () => {
+    const { registry } = await loadPlugins([
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('one'))),
+      { plugin: modelUsagePlugin, disabled: true },
+    ]);
+    const seen = present(
+      foldRegistry(registry, { summarization: false, observationPolicy: false, modelUsage: true }),
+    );
+    expect(seen.inRoot).toBe(true);
+    expect(seen.inSubagents).toEqual([true, true]);
+  });
+
+  it('關掉它不會動到隔壁那一層——模型呼叫的起訖照樣在', async () => {
+    // 兩顆在 `foldMiddleware` 裡緊貼著，gate 寫在錯的變數上會把隔壁一起拿掉。
+    const params = await foldBare([{ plugin: modelUsagePlugin, disabled: true }]);
+    expect(middlewareNames(params)).not.toContain(MODEL_USAGE_MIDDLEWARE_NAME);
+    expect(middlewareNames(params)).toContain(MODEL_CALL_EVENTS_MIDDLEWARE_NAME);
+  });
+
+  it('它一顆服務都不註冊——同 `observation-policy`', async () => {
+    // `apply` 是空的是承重的，不是漏寫：留下的唯一痕跡是 `disabledEntries`。
+    const { registry } = await loadPlugins([{ plugin: modelUsagePlugin }]);
+    expect(registry.services.names()).toEqual([]);
+    const off = await loadPlugins([{ plugin: modelUsagePlugin, disabled: true }]);
+    expect(off.registry.disabledEntries.names()).toEqual(['model-usage']);
+  });
+
+  it('它不收 config——給了會在載入期拋', async () => {
+    await expect(
+      loadPlugins([{ plugin: modelUsagePlugin, config: { anything: 1 } } as PluginEntry]),
     ).rejects.toThrow(/不收 config/);
   });
 });

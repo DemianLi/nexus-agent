@@ -32,6 +32,8 @@ export type {
 } from './approval.js';
 export {
   APPROVAL_GATE_MIDDLEWARE_NAME,
+  APPROVAL_GATE_PLUGIN_NAME,
+  approvalGatePlugin,
   APPROVAL_INTERRUPT_KIND,
   QUESTION_INTERRUPT_KIND,
   createApprovalGateMiddleware,
@@ -224,6 +226,8 @@ export type { ModelUsage } from './model-usage.js';
 export {
   createModelUsageRecorder,
   MODEL_USAGE_MIDDLEWARE_NAME,
+  MODEL_USAGE_PLUGIN_NAME,
+  modelUsagePlugin,
   readModelUsage,
 } from './model-usage.js';
 export type {
