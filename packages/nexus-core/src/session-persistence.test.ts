@@ -221,6 +221,40 @@ describe('接在註冊表上', () => {
     await persistence.dispose();
     expect(handles.every((handle) => handle.closes === 1)).toBe(true);
   });
+
+  /**
+   * 工作區根（[#504](https://github.com/DemianLi/nexus-agent/issues/504)）。**缺席與空字串
+   * 不是同一件事**：續接的守衛對「沒記」放行、對記下來的值逐字比，所以沒給的時候那一格
+   * 必須整個不在，不能是 `undefined` 以外的任何東西。
+   */
+  it('給了根：每一份 header 都帶；沒給：一份都沒有那一格', async () => {
+    function headersFor(options: { readonly workspaceRoot?: string }) {
+      const sessions = new SessionRegistry('root-w');
+      const headers: StoredSessionHeader[] = [];
+      const store: SessionStore = {
+        create(header) {
+          headers.push(header);
+          return fakeStored();
+        },
+        resume() {
+          return Promise.reject(new Error('這一條不續接'));
+        },
+      };
+      const persistence = attachSessionPersistence(sessions, store, { cwd: '/w', ...options });
+      sessions.open({ kind: 'subagent', runId: 'r1' });
+      return { headers, persistence };
+    }
+
+    const given = headersFor({ workspaceRoot: '/ws' });
+    expect(given.headers.map((header) => header.workspaceRoot)).toEqual(['/ws', '/ws']);
+    await given.persistence.dispose();
+
+    const omitted = headersFor({});
+    expect(omitted.headers).toHaveLength(2);
+    // `toBeUndefined` 也會被 `{ workspaceRoot: undefined }` 滿足，所以問的是鍵在不在。
+    expect(omitted.headers.every((header) => !('workspaceRoot' in header))).toBe(true);
+    await omitted.persistence.dispose();
+  });
 });
 
 describe('續接：只寫還沒存的後綴', () => {
@@ -261,6 +295,42 @@ describe('續接：只寫還沒存的後綴', () => {
     sessions.open({ kind: 'subagent', runId: 'r1' }).append('todo/write', { todos: [] });
     await persistence.dispose();
     expect(created).toEqual(['root-r/r1']);
+  });
+
+  /**
+   * **續接不回填工作區根**（[#504](https://github.com/DemianLi/nexus-agent/issues/504)）。
+   * 機制不是一道判斷，是 root 那條路整個不用這裡建的 header——所以一份 13 以前寫的日誌
+   * 接回來之後，`version` 會被後端升到這一版（那是 `jsonl-session-store.ts` 覆寫的），
+   * 但**不會**長出這一格。subagent 那些是這個行程新生的，照常帶這一次的根。
+   *
+   * 這一條釘的是**不要「順手修好」成回填**：補進去等於替續接線以下那些更早的事件宣稱
+   * 一個沒人驗證過的錨。
+   */
+  it('續接不回填：root 沒有新 header，只有 subagent 那一份帶這一次的根', async () => {
+    const earlier = new SessionLog('root-r');
+    earlier.append('turn/start', { kind: 'message', text: '一' });
+    const sessions = new SessionRegistry('root-r', { rootSeed: earlier.events });
+    const headers: StoredSessionHeader[] = [];
+    const store: SessionStore = {
+      create(header) {
+        headers.push(header);
+        return fakeStored();
+      },
+      resume() {
+        return Promise.reject(new Error('協調器不該自己去續接'));
+      },
+    };
+    const persistence = attachSessionPersistence(sessions, store, {
+      resumedRoot: { stored: fakeStored(), storedCount: earlier.length },
+      workspaceRoot: '/今天的根',
+    });
+    // root 一份 header 都沒建——這一次的根碰不到那一份已存的日誌。
+    expect(headers).toEqual([]);
+    sessions.open({ kind: 'subagent', runId: 'r1' });
+    expect(headers.map((header) => [header.id, header.workspaceRoot])).toEqual([
+      ['root-r/r1', '/今天的根'],
+    ]);
+    await persistence.dispose();
   });
 
   /** 反例：已存筆數不給的話，seed 那兩筆會被重送——撞號就是這個樣子。 */

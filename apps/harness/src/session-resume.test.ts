@@ -29,7 +29,11 @@ import {
 } from '@nexus/plugin-plan-mode';
 
 import { parseCliArgs, RESUMED_PLAN_MODE_NOTICE, runCli } from './cli.js';
-import { ResumeCwdConflictError } from './resume-guards.js';
+import {
+  assertSameWorkspaceRoot,
+  ResumeCwdConflictError,
+  ResumeWorkspaceConflictError,
+} from './resume-guards.js';
 import { openJsonlSessionStore } from './jsonl-session-store.js';
 import { SANDBOX_COMMAND_NAME } from '@nexus/plugin-sandbox-policy';
 
@@ -423,6 +427,128 @@ describe('屬於哪個目錄', () => {
       process.cwd(),
     );
     expect(stdout).toContain('read-only');
+  });
+});
+
+/**
+ * 跑在哪個工作區底下（[#504](https://github.com/DemianLi/nexus-agent/issues/504)）。
+ *
+ * **`cwd` 那一格分不出這件事**：`--workspace` 照 cwd 解析，所以下面每一條都站在**同一個
+ * `process.cwd()`**——上面那個 describe 的守衛全程放行，紅起來的只可能是這一道。
+ *
+ * 這一格跟 `cwd` 的處置**相反**：沒記就放行。13 以前寫的日誌每一份都缺它，照那一格的
+ * 「沒記也拒」會讓 13 出貨那天每一份舊日誌永久接不回來，包含接回同一個工作區那些完全正確的。
+ */
+describe('屬於哪個工作區', () => {
+  /** run 目錄裡 root 那一份的兩個檔。 */
+  async function rootFiles(runDir: string) {
+    const entries = await readdir(runDir);
+    const header = entries.filter((name) => name.endsWith('.header.json'));
+    const log = entries.filter((name) => name.endsWith('.jsonl'));
+    expect(header).toHaveLength(1);
+    expect(log).toHaveLength(1);
+    return { header: join(runDir, header[0]!), log: join(runDir, log[0]!) };
+  }
+
+  it('換了 `--workspace`：擋下，訊息帶兩個根，檔案沒被動', async () => {
+    const runDir = await firstRun();
+    const { header, log } = await rootFiles(runDir);
+    // 前提：header 真的記了那一格，而且記的就是第一次跑的那個根。沒有這一條，下面那句
+    // 「換了」證不了東西——一份沒記的日誌照設計是放行的。
+    expect(JSON.parse(await readFile(header, 'utf8')).workspaceRoot).toBe(workspace);
+    const before = await readFile(log, 'utf8');
+    const other = await mkdtemp(join(tmpdir(), 'nexus-resume-ws2-'));
+
+    try {
+      await expect(cli(['--workspace', other, '--resume', runDir])).rejects.toThrow(
+        `跑在工作區 ${workspace} 底下，不是 ${other}`,
+      );
+      expect(await readFile(log, 'utf8')).toBe(before);
+      // 擋下的時候續接那把租約已經拿了——回到對的根馬上再接一次才接得回來。
+      await cli(['--workspace', workspace, '--resume', runDir]);
+    } finally {
+      await rm(other, { recursive: true, force: true });
+    }
+  });
+
+  /** 對照：同一個根接得回來——證明上面那條擋的是根，不是「給了 `--workspace`」這件事。 */
+  it('對照：同一個 `--workspace`，接得回來', async () => {
+    const runDir = await firstRun();
+    const { stdout } = await cli(
+      ['--workspace', workspace, '--resume', runDir],
+      `/${SANDBOX_COMMAND_NAME}\n/exit\n`,
+    );
+    expect(stdout).toContain('read-only');
+  });
+
+  /**
+   * **跟 `cwd` 那一格相反的那一條，而且它是這張卡最容易被做錯的地方。** 照抄
+   * `assertSameCwd` 的「沒記也拒」會讓格式 13 出貨那天，每一份跑在工作區底下的舊日誌
+   * 永久接不回來。
+   */
+  it('header 沒記那一格（13 以前的日誌）：放行', async () => {
+    const runDir = await firstRun();
+    const { header } = await rootFiles(runDir);
+    const { workspaceRoot: dropped, ...rest } = JSON.parse(
+      await readFile(header, 'utf8'),
+    ) as Record<string, unknown>;
+    // 前提：拿掉的是一個真的在的東西。
+    expect(dropped).toBe(workspace);
+    await writeFile(header, JSON.stringify(rest));
+
+    const { stdout } = await cli(
+      ['--workspace', workspace, '--resume', runDir],
+      `/${SANDBOX_COMMAND_NAME}\n/exit\n`,
+    );
+    expect(stdout).toContain('read-only');
+  });
+
+  /**
+   * **目錄先認，工作區後判。** 兩邊都換的時候講的要是目錄：目錄不對的話，日誌裡記的是
+   * 哪一格都不該拿來判，「用 --workspace X 再接」是一句誤導的指示——那個 X 在另一個目錄底下。
+   */
+  it('目錄與工作區同時換掉：講的是目錄', async () => {
+    const runDir = await firstRun();
+    const other = await mkdtemp(join(tmpdir(), 'nexus-resume-ws2-'));
+    try {
+      await expect(
+        cli(['--workspace', other, '--resume', runDir], '/exit\n', workspace),
+      ).rejects.toThrow(ResumeCwdConflictError);
+    } finally {
+      await rm(other, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * 四格表剩下的那兩格，與畸形值。
+   *
+   * **第二格（記了、這一次沒給 `--workspace`）今天走不到產品路徑**：給了 `--workspace`
+   * 就一定掛 sandbox-policy，而它 `attach` 當場把起始值釘進日誌（`sandbox-mode.ts`），所以
+   * 「日誌有 `workspaceRoot` 卻沒有 `sandbox/mode`」只有在那顆 plugin 被一份 patch 關掉時
+   * 才長得出來——`--resume` 那條沙箱檢查會先攔住其餘每一種。所以這一格在函式上量。
+   *
+   * 畸形值同理：`parseHeader` 對這一格是直接 cast（`cwd` 今天也一樣），磁碟上放什麼都進得來。
+   */
+  describe('四格表與畸形值', () => {
+    function check(stored: unknown, requested: string | undefined) {
+      return () =>
+        assertSameWorkspaceRoot('--resume', 's', { workspaceRoot: stored } as never, requested);
+    }
+
+    it('記了、這一次沒給 `--workspace`：放行', () => {
+      expect(check('/A', undefined)).not.toThrow();
+    });
+
+    it('記了、這一次一樣：放行', () => {
+      expect(check('/A', '/A')).not.toThrow();
+    });
+
+    it('畸形值一律 fail-closed：只有 `undefined` 走得到放行', () => {
+      for (const bad of [42, null, '', {}, false]) {
+        expect(check(bad, '/A')).toThrow(ResumeWorkspaceConflictError);
+      }
+      expect(check(undefined, '/A')).not.toThrow();
+    });
   });
 });
 
