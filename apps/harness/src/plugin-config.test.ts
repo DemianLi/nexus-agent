@@ -49,6 +49,7 @@ import {
   validateEntries,
   assertPrivateFile,
   PROTECTED_ENTRY_NAMES,
+  PROTECTED_ENTRY_REASONS,
 } from './plugin-config.js';
 import { DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS } from './settings/browser-session.js';
 import {
@@ -601,6 +602,69 @@ describe('保護名單', () => {
     expect(compose).toThrow(/標題/u);
     // **這一條才是這個缺陷的絆索**：共用那段文字的話它必紅。
     expect(compose).not.toThrow(/核准/u);
+  });
+
+  /**
+   * **哪幾列必須在名單上——這份清單刻意寫死，不從 `PROTECTED_ENTRY_NAMES` 導出。**
+   *
+   * 底下那條表驅動的測試遍歷名單自己，所以「某一列被移出名單」對它是隱形的（實測：把
+   * `#settings/deliverable-files` 刪掉，那一條照樣綠）。**斷言端與生產端讀同一個來源時，
+   * 改掉那個來源兩邊會一起動。** 這一條因此自己列出名字：少掉任何一列都是行為變了，要在這裡紅。
+   */
+  it('這幾列必須在保護名單上', () => {
+    for (const name of [
+      '@nexus/core/approval-gate',
+      '#settings/thread-title',
+      '#settings/browser-session',
+      '#settings/deliverable-files',
+      '#settings/recursion-limit',
+    ]) {
+      expect(PROTECTED_ENTRY_NAMES.has(name), name).toBe(true);
+    }
+  });
+
+  /**
+   * **整份名單掃一遍，不是只挑一列驗。**
+   *
+   * 從前這組只驗 `approval-gate` 那一列真的關不掉。名單後來長到四列
+   * （[#529](https://github.com/DemianLi/nexus-agent/issues/529) 的三刀各加一列），而**新加的
+   * 三列一條都沒有**——「它在名單上」與「它真的擋得住」之間沒有任何測試。逐列補會再漏下一次，
+   * 所以這裡走表：**加一列就自動涵蓋**。
+   *
+   * **但它只證得了「名單上的擋得住」，證不了「某一列在名單上」**——遍歷的是名單自己，一列被移出去
+   * 迴圈就不檢查它。實測過：把 `#settings/deliverable-files` 從表上刪掉，這一條照樣綠。所以那一半
+   * 由上面那條**寫死清單**的測試守，兩條缺一不可。
+   */
+  it('名單上每一列都真的關不掉，而 `disabled: false` 與沒寫都放行', () => {
+    // 前提：名單非空，否則下面整段是空轉。精確的成員由上面那條守。
+    expect(PROTECTED_ENTRY_NAMES.size).toBeGreaterThan(0);
+    for (const name of PROTECTED_ENTRY_NAMES) {
+      const disabled = (): unknown => validateEntries([{ id: 'x', name, disabled: true }], '測試');
+      expect(disabled, name).toThrow(PluginConfigError);
+      expect(disabled, name).toThrow(/關不掉/u);
+      // **擋的是「關掉」，不是「提到這一列」**——同 `approval-gate` 那條的理由。
+      expect(
+        () => validateEntries([{ id: 'x', name, disabled: false }], '測試'),
+        name,
+      ).not.toThrow();
+      expect(() => validateEntries([{ id: 'x', name }], '測試'), name).not.toThrow();
+    }
+  });
+
+  /**
+   * **每一列的理由都是自己的。**
+   *
+   * `PROTECTED_ENTRY_REASONS` 的型別逼人寫一段文字，但逼不了那段文字是對的——複製隔壁那一列的
+   * 理由照樣編得過，而那正是這份名單從前的實際狀態（四列共用一段講核准閘門的話）。
+   *
+   * **比的是理由本身，不是完整訊息。** 第一版比完整訊息，而那是假綠：訊息裡嵌著
+   * `"<列名>"`，所以就算理由整段抄隔壁，兩則訊息照樣不同。實測過——把
+   * `#settings/deliverable-files` 的理由換成 `#settings/thread-title` 的，比訊息的那一版全綠。
+   */
+  it('每一列的理由都不一樣——沒有人借用另一列的', () => {
+    const reasons = [...PROTECTED_ENTRY_REASONS.values()];
+    expect(reasons).toHaveLength(PROTECTED_ENTRY_NAMES.size);
+    expect(new Set(reasons).size).toBe(reasons.length);
   });
 
   it('**`--dump-config` 那條也拋**——檢查搬離 `validateEntries` 就會紅', () => {

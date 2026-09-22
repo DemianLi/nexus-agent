@@ -123,7 +123,7 @@ export type ConfigEntry = z.infer<typeof entrySchema>;
  *
  * @see {@link assertNotProtected}
  */
-const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
+export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
   [
     '@nexus/core/approval-gate',
     '核准閘門不是一顆掛不掛隨人的 plugin：它由組裝時無條件建起來，' +
