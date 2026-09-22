@@ -308,13 +308,15 @@ function* causeLinks(error: unknown): Generator<object> {
 }
 
 /**
- * 嗅第一則串流事件時，最多緩衝幾個位元組。
+ * 嗅第一則串流事件時，最多緩衝幾個字元。
  *
- * **這是逃生閥不是判準。** 正常的 SSE 第一則事件只有幾百個位元組，永遠碰不到這個數字；
- * 碰到的只有「送了一堆位元組卻一則事件都沒收尾」的病態串流。那時候放棄嗅探、原樣放行，
- * 讓 {@link LIVE_TIMEOUT_MS} 去管它 —— 這一層不負責處理掛住的連線。
+ * **數的是解碼之後的字元，不是位元組** —— 這一層別處講邊界都用位元組（見
+ * {@link withInbandStreamErrors}），只有這個數字不是，所以名字裡寫清楚。
+ *
+ * **這是逃生閥不是判準。** 正常的 SSE 第一則事件只有幾百個字元，永遠碰不到這個數字；
+ * 碰到的只有「送了一堆位元組卻一則事件都沒收尾」的病態串流。那時候放棄嗅探、原樣放行。
  */
-export const INBAND_PEEK_MAX_BYTES = 65_536;
+export const INBAND_PEEK_MAX_CHARS = 65_536;
 
 /** SSE 的事件邊界。`\r\n\r\n` 不含 `\n\n`，所以兩個都要認。 */
 const SSE_EVENT_BOUNDARY = /\r\n\r\n|\n\n/;
@@ -441,6 +443,12 @@ function inbandStatus(envelope: Record<string, unknown>): number {
  *
  * 這兩類今天的行為不變：當場失敗、零重試。要涵蓋它們得買下第三層，那是另一張卡。
  *
+ * **掛住的連線也不歸這一層管，而那是量出來的不是推的。** 嗅探迴圈在 fetch 裡面 await
+ * `read()`，所以「開了線卻不吐位元組」看起來會從重試射程外被搬進射程內。實測兩側的請求數
+ * 相同（`live-model.test.ts` 的「開了線卻不吐位元組」那條）：SDK 的逾時本來就掛在整個請求
+ * 上，{@link retryDecision} 本來就判它重試。那個「逾時 × 重試次數」的乘法在這一刀之前
+ * 就存在。
+ *
  * ## 這**不**保證 live 跑得完
  *
  * 它保證的只有「政策會被問到」。問到之後救不救得回來，取決於上游是不是間歇的 ——
@@ -467,7 +475,7 @@ export function withInbandStreamErrors(baseFetch: typeof fetch = fetch): typeof 
     let ended = false;
     while (
       !SSE_EVENT_BOUNDARY.test(buffered) &&
-      buffered.length < INBAND_PEEK_MAX_BYTES &&
+      buffered.length < INBAND_PEEK_MAX_CHARS &&
       !ended
     ) {
       const next = await reader.read();

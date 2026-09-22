@@ -551,7 +551,8 @@ describe('串流內回報的錯誤（#516）', () => {
     error: { message: 'Invalid tool schema', type: 'BadRequestError', code: 400 },
   } as const;
 
-  type Cell = 'http500' | 'head503' | 'head400' | 'okstream' | 'mid503' | 'midslow' | 'truncated';
+  type Cell =
+    'http500' | 'head503' | 'head400' | 'okstream' | 'mid503' | 'midslow' | 'truncated' | 'stalled';
 
   function sseChunk(delta: Record<string, unknown>, finish: string | null = null): string {
     return `data: ${JSON.stringify({
@@ -582,6 +583,9 @@ describe('串流內回報的錯誤（#516）', () => {
 
       response.writeHead(200, { 'content-type': 'text/event-stream' });
       const send = (text: string): void => void response.write(text);
+
+      // 開了線就不吐任何位元組 —— #57 那個「永遠不回來」的失敗模式。
+      if (cell === 'stalled') return;
 
       if (cell === 'head503' || cell === 'head400') {
         const envelope = cell === 'head503' ? CAPTURED_INBAND_ERROR : INBAND_BAD_REQUEST;
@@ -641,6 +645,8 @@ describe('串流內回報的錯誤（#516）', () => {
   });
 
   afterEach(async () => {
+    // `stalled` 那一格會留著一條沒關的連線，不砍掉的話 `close` 永遠不回來。
+    server.closeAllConnections();
     await new Promise<void>((done) => server.close(() => done()));
   });
 
@@ -648,13 +654,14 @@ describe('串流內回報的錯誤（#516）', () => {
    * `createLiveModel` 那組設定，只換掉 baseURL 與重試次數。
    * @param wrapped - 掛不掛 #516 那一層。不掛的那一格是**今天的行為**（對照組）。
    */
-  function modelAgainstStream(wrapped: boolean): ChatOpenAI {
+  function modelAgainstStream(wrapped: boolean, timeoutMs?: number, retries = RETRIES): ChatOpenAI {
     return new ChatOpenAI({
       apiKey: 'fake-key-for-loopback',
       model: LIVE_MODEL_ID,
       configuration: { baseURL, ...(wrapped && { fetch: withInbandStreamErrors() }) },
       maxTokens: LIVE_MAX_OUTPUT_TOKENS,
-      maxRetries: RETRIES,
+      maxRetries: retries,
+      ...(timeoutMs !== undefined && { timeout: timeoutMs }),
       onFailedAttempt: classifyFailedAttempt,
     });
   }
@@ -670,7 +677,12 @@ describe('串流內回報的錯誤（#516）', () => {
     readonly error?: unknown;
   }
 
-  async function runCell(which: Cell, wrapped: boolean): Promise<Run> {
+  async function runCell(
+    which: Cell,
+    wrapped: boolean,
+    timeoutMs?: number,
+    retries?: number,
+  ): Promise<Run> {
     cell = which;
     hits = 0;
     let chunks = 0;
@@ -678,7 +690,8 @@ describe('串流內回報的錯誤（#516）', () => {
     let toolArgs = '';
     const toolNames: string[] = [];
     try {
-      for await (const part of await modelAgainstStream(wrapped).stream('present report.md')) {
+      const model = modelAgainstStream(wrapped, timeoutMs, retries);
+      for await (const part of await model.stream('present report.md')) {
         chunks += 1;
         if (typeof part.content === 'string') text += part.content;
         for (const call of part.tool_call_chunks ?? []) {
@@ -781,12 +794,42 @@ describe('串流內回報的錯誤（#516）', () => {
     expect(after.text).toBe('交付物已備妥');
   });
 
+  /**
+   * **開了線卻不吐位元組**（#57 那個「永遠不回來」的失敗模式）**：這一層沒有動到它。**
+   *
+   * 這條是為了一個**看起來很合理但實測不成立**的顧慮而存在的。嗅探迴圈是在 fetch
+   * **裡面** await `read()` 的，所以掛住的連線會變成從 `configuration.fetch` 逃出去的
+   * 東西，落進 {@link retryDecision} —— 推論上，這一層把「逾時」從重試射程外搬進了射程內，
+   * 於是 {@link LIVE_TIMEOUT_MS} 的止血變成「逾時 × 重試次數」。
+   *
+   * **實測說不是**：兩側的請求數相同，而且**都**是 `retries + 1`。SDK 的逾時本來就是掛在
+   * 整個請求上（`APIConnectionTimeoutError` 的 `name` 不是 `AbortError`、沒有 status，
+   * 所以 {@link retryDecision} 本來就判它重試）。**這個乘法在這一刀之前就存在**，不是
+   * 這一層帶來的；要不要壓掉它是另一張卡。
+   *
+   * 這條的價值就是把那件事釘住：哪天兩側分岔了，那才是這一層動到了掛住的連線。
+   *
+   * **`retries` 壓到 1**：這裡要等完退避才數得到次數，而它證的是「兩側相同」，不是那個數字。
+   */
+  it('開了線卻不吐位元組：兩側相同 —— 這一層沒有把它搬進重試射程', async () => {
+    const wrapped = await runCell('stalled', true, 300, 1);
+    const control = await runCell('stalled', false, 300, 1);
+
+    expect(wrapped.outcome).toBe('threw');
+    expect(control.outcome).toBe('threw');
+    expect(wrapped.requests).toBe(control.requests);
+    expect(wrapped.requests).toBe(2);
+  }, 30_000);
+
   /** 串流中途斷掉（#516 的 Q3）：同樣落在第一則事件之外，同樣不涵蓋。 */
   it('串流中途斷掉：不涵蓋，只打一次', async () => {
     const run = await runCell('truncated', true);
 
     expect(run.outcome).toBe('threw');
     expect(run.requests).toBe(1);
+    // **前提**：沒收到內容就代表這一格量的是「連線失敗」而不是「中途斷」 —— 那是完全
+    // 不同的東西（而且會被重試）。第一次寫這條時正是踩在這裡。
+    expect(run.chunks).toBeGreaterThan(0);
   });
 });
 
