@@ -438,8 +438,11 @@ interface ThreadState {
   /**
    * 接回來那批事件的長度；沒續接就是 0（[#452](https://github.com/DemianLi/nexus-agent/issues/452)）。
    *
-   * **它是一條分界線**：`seq < storedCount` 的事件是上一個行程寫的，這個行程手上的
-   * {@link workspaceRoot} 不是它們的錨。見 `deliverable-files.ts` 的檔頭。
+   * **它是一條分界線**：`seq < storedCount` 的事件是上一個行程寫的，所以這個行程手上的
+   * {@link workspaceRoot} 不會自動是它們的錨——准不准拿它當錨，由
+   * {@link resumedWorkspaceRoot} 在不在決定
+   * （[#519](https://github.com/DemianLi/nexus-agent/issues/519)，判準與證明見
+   * `locateRequested` 的檔頭）。
    */
   readonly storedCount: number;
   /** 這一次組裝的工作區根，沒給 `--workspace` 就是 `undefined`。見 {@link ThreadAgent.workspaceRoot}。 */
