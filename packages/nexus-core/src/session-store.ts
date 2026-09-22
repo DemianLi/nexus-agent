@@ -133,8 +133,26 @@ import type { SessionEvent } from './session-log.js';
  * 一輪改了工作區的檔，摘要留在 server 上（[#443](https://github.com/DemianLi/nexus-agent/issues/443)）。v11 的
  * 檔直接讀：那時候沒有記錄器，一顆都沒有就是當時的樣子。從檔案接回來的這一顆指到的摘要一律不在了（摘要只活到
  * 會話結束），路由回 404。升版理由同 11。
+ *
+ * ## 13：header 多一格 `workspaceRoot`
+ *
+ * 會話日誌記下它跑在哪個工作區根底下（[#504](https://github.com/DemianLi/nexus-agent/issues/504)）。
+ * **這是 header 的形狀第一次變**——前十二次全是事件詞彙的變更，header 從 v1 起沒動過。
+ *
+ * **非升不可，而且機制指得出來。** 不升的話：一台停在 12 的 server 接回一份帶著
+ * `workspaceRoot: /A` 的日誌，續接重寫 header 那一行是 `{ ...header, version: … }`
+ * （`apps/harness/src/jsonl-session-store.ts`），**未知欄位原樣活過重寫**；而 12 沒有任何守衛
+ * 在比這一格，於是它在 `/B` 底下跑、把 `/B` 生出來的事件續寫進同一份日誌，之後一台 13 讀它，
+ * 照 header 把 `/B` 的檔錨到 `/A`。升到 13 把這條路封掉——12 讀 header 的時候就以
+ * {@link SessionFormatUnsupportedError} 拒讀。這正是 dsh 那條門檻寫的原文情形
+ * （`packages/core/session/src/types.ts:75-87`，`ddefc45`：「parses without error」不算 correctness，
+ * 靜靜略過會左右重建的內容就是一次讀錯）。
+ *
+ * 12 以前的檔直接讀，但這一次「舊檔怎麼讀」跟前幾次不同：**沒有那一格是常態，不是異常**
+ * ——每一份 13 以前的日誌都缺它，而且續接**不回填**。所以續接的守衛對「沒記」放行，
+ * 跟 `cwd` 那一格的「沒記就拒」相反，四格表在 `apps/harness/src/resume-guards.ts`。
  */
-export const SESSION_LOG_FORMAT_VERSION = 12;
+export const SESSION_LOG_FORMAT_VERSION = 13;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。
@@ -151,6 +169,20 @@ export interface StoredSessionHeader {
   readonly createdAt: number;
   /** 建立當下的工作目錄，有的話。 */
   readonly cwd?: string;
+  /**
+   * 建立當下的工作區根——`--workspace` 解析出來的絕對路徑，**沒跑在工作區底下就沒有這一格**
+   * （[#504](https://github.com/DemianLi/nexus-agent/issues/504)）。
+   *
+   * **跟 {@link cwd} 是兩件事。** `--workspace` 照 cwd 解析，所以同一個 cwd 底下換一個
+   * `--workspace`，兩次跑的根不同而 `cwd` 一模一樣——`cwd` 那一格分不出這件事。記下它是為了
+   * 讓一顆重播的 `deliverables/presented` 有錨（#452）。
+   *
+   * **舊日誌永遠沒有這一格，而且續接不回填。** 續接時 root 那一份走的是已存的把手，
+   * `attachSessionPersistence` 新建的 header 只有這個行程新開的 subagent 用得到；
+   * 所以同一個 run 目錄裡會出現「root 沒有這一格、subagent 有」，那是對的，不要順手補齊
+   * ——補進去等於替那些更早的事件宣稱一個沒人驗證過的錨。
+   */
+  readonly workspaceRoot?: string;
   /**
    * 它 fork／spawn 自哪一份，有的話。
    *

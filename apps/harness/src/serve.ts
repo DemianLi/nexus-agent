@@ -39,13 +39,14 @@ import {
   formatGoalDriverDisclosure,
   goalDriverPort,
   resolveSessionLogDir,
+  resolveWorkspaceRoot,
 } from './cli.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { listStoredThreads } from './session-list.js';
 import type { ThreadTitleLimits } from './session-list.js';
 import { attachSessionPersistence, SessionNotFoundError } from '@nexus/core';
-import { assertSameCwd } from './resume-guards.js';
+import { assertSameCwd, assertSameWorkspaceRoot } from './resume-guards.js';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
 import { LIVE_MODEL_ID } from './live-model.js';
 import type { PumpAgent } from './thread-pump.js';
@@ -353,6 +354,17 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
       let built: Awaited<ReturnType<typeof createCliAgent>>;
       try {
         if (resumed !== undefined) assertSameCwd('serve', threadId, resumed.header, cwd);
+        // **再認它跑在哪個工作區底下**（#504）。順序與理由逐字同 CLI 的 `--resume`：目錄先認，
+        // 這一道在沙箱那一道之前。根在這裡自己算（`createCliAgent` 還沒跑），走的是同一個
+        // `resolveWorkspaceRoot` 與同一個 cwd。
+        if (resumed !== undefined) {
+          assertSameWorkspaceRoot(
+            'serve',
+            threadId,
+            resumed.header,
+            resolveWorkspaceRoot(invocation.workspace, cwd),
+          );
+        }
         // 同 CLI 的 `--resume`：模式從日誌來；日誌記著模式就表示上一次有 fence，這一次沒有
         // `--workspace` 的話那道 fence 不在路徑上，接回來的 `read-only` 會靜靜蒸發。
         const resumedSandbox =
@@ -453,6 +465,9 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
               attachPersistence: (sessions: SessionRegistry) => {
                 const persistence = attachSessionPersistence(sessions, sessionStore, {
                   cwd,
+                  // 錨（#504）：同 CLI，取的是這一次組裝真的用的那一個（上面從 `built`
+                  // destructure 出來的）。沒給 `--workspace` 就不寫那一格。
+                  ...(workspaceRoot !== undefined && { workspaceRoot }),
                   // 續接：root 那一份往原檔續寫，只寫還沒存的後綴（第一筆就是 `session/end-seed`）。
                   ...(resumed !== undefined && {
                     resumedRoot: { stored: resumed.stored, storedCount: resumed.events.length },

@@ -34,8 +34,16 @@
  * 6. **Config 多三格資料**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。dsh 的 `Config` 只有五個
  *    上限（`src/index.ts:50-56`，`ddefc45`），我們逐格照抄，另外多了 `root`、`tempRoot`、`git` 三格：
  *    - `root`：dsh 每一份會話各自從 header 的 `cwd` 拿根（`src/index.ts:58-61` 的 `eligible`），**一顆 plugin
- *      服務得了整台 Host 的每一份會話**；我們的根是 `--workspace` 解析出來的一個值，會話本身不帶它，
- *      「每份會話各自的根」表達不出來。退到最接近的實作：根是資料，寫在 Config 裡。
+ *      服務得了整台 Host 的每一份會話**；我們的根是 `--workspace` 解析出來的一個值。退到最接近的實作：
+ *      根是資料，寫在 Config 裡。
+ *
+ *      **這一條的前提換過一次，結論沒換。** 原本寫的是「會話本身不帶它」——
+ *      [#504](https://github.com/DemianLi/nexus-agent/issues/504) 之後不成立了：格式 13 起
+ *      `StoredSessionHeader` 有 `workspaceRoot` 那一格。但那一格在**持久化那一側**，
+ *      `SessionLog` 不帶 header（`session-store.ts` 的檔頭：header 不進 `SessionEventMap`），
+ *      而 plugin 手上只有日誌——所以「每份會話各自從自己的 header 拿根」對一顆 plugin 而言
+ *      仍然表達不出來。另一半也還在：dsh 那顆 plugin 服務整台 Host，我們的 `createCliAgent`
+ *      **每條 thread 各跑一次**，一次組裝本來就只有一個根。
  *    - `tempRoot`：dsh 寫死 `tmpdir()`（`src/index.ts:134`）。
  *    - `git`：dsh 經 `subprocess` 能力找執行檔（`src/index.ts:74`），我們沒有那個服務（偏離 1），所以「用哪一個
  *      執行檔／當成沒有 git」攤成資料。
