@@ -31,6 +31,7 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
+import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
 
 type ToolEntry = Extract<ConversationState['entries'][number], { kind: 'tool' }>;
 
@@ -118,7 +119,9 @@ async function stopForInput(turns: readonly ScriptedTurn[], plugins: readonly Pl
     live: frames.reduce(reduceConversation, emptyConversation()),
     replay: reduceAll(
       emptyConversation(),
-      historyFrames(pump.sessionLog.events, { gatedTools: pump.gatedTools }),
+      historyFrames(pump.sessionLog.events, DEFAULT_TOOL_TEXT_MAX_BYTES, {
+        gatedTools: pump.gatedTools,
+      }),
     ),
     close: async () => {
       line.abort();

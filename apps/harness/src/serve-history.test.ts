@@ -34,7 +34,9 @@ import {
   serveClient,
   TEST_BROWSER_AUTH,
 } from './fixtures.js';
-import { TOOL_TEXT_MAX_BYTES } from './tool-result-text.js';
+import { HISTORY_PAGE_MAX_BYTES } from '@nexus/wire';
+
+import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
@@ -297,9 +299,12 @@ describe('GET /threads/:id/history 的載體與協定層', () => {
  * 畫面照樣對。用 `rootSeed` 直接餵一份超標的日誌，不必讓假模型真的讀 85 次檔。
  */
 describe('一頁撐破位元組上限時，server 講一聲', () => {
+  /** 幾則滿版工具結果才撐得破一頁。85 × 50000 = 4.25 MB > 4 MB。 */
+  const OVERSIZED_CALLS = 85;
+
   function oversizedSeed(): SessionEvent[] {
-    const ids = Array.from({ length: 85 }, (_, i) => `c${i}`);
-    const body = 'x'.repeat(TOOL_TEXT_MAX_BYTES);
+    const ids = Array.from({ length: OVERSIZED_CALLS }, (_, i) => `c${i}`);
+    const body = 'x'.repeat(DEFAULT_TOOL_TEXT_MAX_BYTES);
     const drafts: Pick<SessionEvent, 'type' | 'data'>[] = [
       { type: 'turn/start', data: { kind: 'message', text: '讀一堆檔。' } },
       {
@@ -343,6 +348,82 @@ describe('一頁撐破位元組上限時，server 講一聲', () => {
     getState: async () => ({ values: {} }),
     updateState: async () => undefined,
   };
+
+  /**
+   * **這條的前提是 schema 的預設值，而 #538 之後那個值改得動。**
+   *
+   * 每則上限可設定了（`tool-text` 那一列），所以「85 則滿版會超過一頁上限」只在預設值
+   * 底下成立——部署把它調小，這個 seed 就不再超標，這條測試會變成一條什麼都沒測的綠燈。
+   * 那正是 #538 三選一裡第三條明著接受的代價。
+   *
+   * 所以前提寫成顯性斷言：**預設值哪天小到讓這個 seed 不再超標，這裡當場紅**，而不是靜靜空轉。
+   */
+  it('前提：預設上限底下，85 則滿版確實撐得破一頁', () => {
+    expect(OVERSIZED_CALLS * DEFAULT_TOOL_TEXT_MAX_BYTES).toBeGreaterThan(HISTORY_PAGE_MAX_BYTES);
+  });
+
+  /**
+   * **`createWireHandler` 真的把那一格轉給重播那條**（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）。
+   *
+   * `tool-card-from-log.test.ts` 那條驗的是 `ThreadPump` 與 `historyFrames` 收得到上限，但它
+   * **直接建 pump**——handler 忘了把設定往下傳的話，那一條照樣綠。這一條走的是真的 route，
+   * 所以釘的是 `createWireHandler` 裡那兩個轉發點。
+   *
+   * 兩臂：同一份 seed、同一條 route，只差 handler 收到的那一格。
+   */
+  it('handler 收到的上限真的走到重播那條路上', async () => {
+    const long = 'x'.repeat(2_000);
+    const seed = oversizedSeed().slice(0, 6);
+    // seed 的第六筆是第一則 `tool/result`，把它的內容換成一段夠長的文字。
+    const withLong = seed.map((event) =>
+      event.type === 'tool/result'
+        ? ({
+            ...event,
+            data: {
+              ...event.data,
+              message: toLoggedMessage(new ToolMessage({ content: long, tool_call_id: 'c0' })),
+            },
+          } as SessionEvent)
+        : event,
+    );
+
+    async function textFor(toolTextLimits?: { maxBytes: number }): Promise<string> {
+      const handler = createWireHandler({
+        auth: TEST_BROWSER_AUTH,
+        ...(toolTextLimits !== undefined && { toolTextLimits }),
+        createAgent: async () => ({
+          agent: idle,
+          commands: { find: () => undefined, list: () => [] },
+          dispose: async () => undefined,
+          rootSeed: withLong,
+        }),
+      });
+      try {
+        const response = await handler.handle(
+          loopbackRequest(`http://wire.test${historyPath('big')}`, {
+            method: 'GET',
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+        expect(response.status).toBe(200);
+        // **判準不挑 frame 的內部欄位**：整頁序列化之後那段文字在不在。第一版挑了
+        // `params.data.text`，猜錯欄位名、當場紅；換成這個之後，frame 的形狀哪天變了，
+        // 這一條仍然問得出同一件事。
+        return JSON.stringify((await response.json()) as unknown);
+      } finally {
+        await handler.close();
+      }
+    }
+
+    // 前提：不給那一格時，那段文字整段都在——沒有這一行，下面那句可能只是「它根本沒出現過」。
+    const bare = await textFor();
+    expect(bare).toContain(long);
+    expect(bare).not.toContain('沒有送出來');
+
+    const capped = await textFor({ maxBytes: 300 });
+    expect(capped).not.toContain(long);
+    expect(capped).toContain('沒有送出來');
+  });
 
   it('超標那一頁走過 route 之後，warn 收到一行；正常的一頁不講', async () => {
     for (const [label, seed, expected] of [

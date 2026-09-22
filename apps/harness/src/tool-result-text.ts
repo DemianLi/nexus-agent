@@ -30,14 +30,17 @@
  *
  * 我們沒有 spill 這個能力，日誌又刻意保著搬移前的全文，所以只能截在**放上線**這一刻：
  *
- * - 數值 50000 bytes 與 head/tail 各半照 dsh（`spill-policy/src/index.ts:96-103`，
- *   `Math.ceil`／`Math.floor` 分頭尾）；
+ * - **數值由清單上 `tool-text` 那一列講**（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）——
+ *   預設 50000 一樣照 dsh `spill-policy` 的 `maxInlineBytes`，但它現在是 schema 的預設值，不是
+ *   寫死在這裡的常數。**「可設定」這件事本身沒有偏離**：dsh 那側它本來就是條目的一格；
+ *   **寫死才是偏離**，而 #538 把它收掉了。頭尾各半的形狀照 dsh
+ *   （`spill-policy/src/index.ts:96-103`，`Math.ceil`／`Math.floor` 分頭尾）；
  * - 但**通知的位置跟 dsh 不一樣**：dsh 的 `TextRetainer({ kind: 'headTail' })` 在兩段之間
  *   **不插任何東西**，通知接在整段預覽的**尾巴**（`spill-policy/src/index.ts:170` 的
  *   `previewText + '\n\n' + notice`）。把說明插在**中間**的是 dsh 的另一顆 plugin——
  *   `compaction-tool-result-pruner` 的 `PRUNE_MARKER`（`src/config.ts:7`），而那顆的單位是
  *   code point 不是 byte。**我們等於各取一半**：位元組上限與頭尾取自 `spill-policy`，
- *   中間那句說明取自 pruner。查證見 [#538](https://github.com/DemianLi/nexus-agent/issues/538)；
+ *   中間那句說明取自 pruner。查證見 [#539](https://github.com/DemianLi/nexus-agent/pull/539)；
  * - **通知裡也沒有位址**可指（沒有 spill 檔），只能說被截掉了；
  * - **不學 dsh 的 `read` 例外**：那個例外成立在模型面（`read` 自己已經有上限），我們截在傳輸層，
  *   放行就等於讓一次 2000 行的 `read` 整份上線；
@@ -47,14 +50,6 @@
  */
 
 import type { LoggedMessage } from '@nexus/core';
-
-/**
- * 一段結果文字放上線的上限（UTF-8 位元組）。
- *
- * 照 dsh base bundle 的 `maxInlineBytes`。超過時取頭尾各半，中間換成一行通知，**含通知在內**
- * 不超過這個數。
- */
-export const TOOL_TEXT_MAX_BYTES = 50_000;
 
 /** 中間被截掉那一段的說明。長度只隨位數變，所以預留時用上界算。 */
 function notice(dropped: number): string {
@@ -92,17 +87,22 @@ function tail(text: string, max: number): string {
 /**
  * 套上限：超過就取頭尾各半，中間放一行通知。
  *
+ * **上限是傳進來的，不是這個模組的常數**（#538）：值住在清單上 `tool-text` 那一列，由
+ * `serve.ts` 在起動期解出來、穿過 `createWireHandler` 傳到這裡。刻意**沒有預設參數**——
+ * 一個預設值會讓「呼叫端忘了傳」跟「設定就是這個數」長得一模一樣，而這條路上有兩個呼叫端。
+ *
  * @param text - 原文。
- * @returns 原文，或截過的那一份（含通知不超過 {@link TOOL_TEXT_MAX_BYTES}）。
+ * @param maxBytes - 上限，見 `settings/tool-text.ts`。
+ * @returns 原文，或截過的那一份（含通知不超過 `maxBytes`）。
  */
-export function capToolText(text: string): string {
+export function capToolText(text: string, maxBytes: number): string {
   const total = Buffer.byteLength(text, 'utf8');
-  if (total <= TOOL_TEXT_MAX_BYTES) return text;
+  if (total <= maxBytes) return text;
   // 通知的長度取決於被截掉幾個位元組，而那又取決於預留給通知的長度。用 `total` 當上界先算一次
   // 預留量：實際截掉的一定比 `total` 少，所以真正的通知只會更短，總長因此保證不超過上限。
   const reserved = Buffer.byteLength(notice(total), 'utf8');
-  const budget = TOOL_TEXT_MAX_BYTES - reserved;
-  if (budget <= 0) return head(notice(total), TOOL_TEXT_MAX_BYTES);
+  const budget = maxBytes - reserved;
+  if (budget <= 0) return head(notice(total), maxBytes);
   const front = head(text, Math.ceil(budget / 2));
   const back = tail(text, Math.floor(budget / 2));
   const dropped = total - Buffer.byteLength(front, 'utf8') - Buffer.byteLength(back, 'utf8');
@@ -113,13 +113,17 @@ export function capToolText(text: string): string {
  * 一則 `tool/result` 的結果文字。
  *
  * @param message - 日誌記的那一則（格式 9 以前沒有，所以可以是 `undefined`）。
+ * @param maxBytes - 上限，見 {@link capToolText}。
  * @returns 那段文字（已套上限）；沒有訊息、或內容不是剛好一塊文字時 `undefined`。
  */
-export function toolResultText(message: LoggedMessage | undefined): string | undefined {
+export function toolResultText(
+  message: LoggedMessage | undefined,
+  maxBytes: number,
+): string | undefined {
   const content: unknown = message?.data.content;
-  if (typeof content === 'string') return capToolText(content);
+  if (typeof content === 'string') return capToolText(content, maxBytes);
   if (!Array.isArray(content) || content.length !== 1) return undefined;
   const only = content[0] as { type?: unknown; text?: unknown } | null;
   if (only?.type !== 'text' || typeof only.text !== 'string') return undefined;
-  return capToolText(only.text);
+  return capToolText(only.text, maxBytes);
 }

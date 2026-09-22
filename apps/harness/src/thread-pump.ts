@@ -78,6 +78,8 @@ import { deliverablesData, workspaceChangesData } from './conversation-history.j
 import { driveGoalRound } from './goal-driver.js';
 import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
 import { toolResultText } from './tool-result-text.js';
+import { toolTextConfigSchema } from './settings/tool-text.js';
+import type { ToolTextConfig } from './settings/tool-text.js';
 
 /** 基座 v3 run 抽出來的一顆原始封包（`GraphRunStream implements AsyncIterable<ProtocolEvent>`）。 */
 interface RawProtocolEvent {
@@ -556,6 +558,8 @@ function danglingToolCalls(values: unknown): { readonly id: string; readonly nam
 export class ThreadPump {
   readonly #agent: PumpAgent;
   readonly #threadId: string;
+  /** 一段工具結果文字放上線的上限，見建構子的 `toolText`（#538）。 */
+  readonly #toolTextMaxBytes: number;
   readonly #subscribers = new Set<Subscriber>();
   readonly #sessions: SessionRegistry;
   /**
@@ -652,15 +656,20 @@ export class ThreadPump {
    * @param rootSeed - root 日誌的 seed：serve 碰到一條以前寫過的 thread 時，上一個行程留下的
    *   事件（[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A，同 CLI 的
    *   `--resume`）。省略即一份新日誌。
+   * @param toolText - 一段工具結果文字放上線的上限（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）。
+   *   值由 `serve.ts` 在起動期從清單解出來、經 `createWireHandler` 傳進來。**省略即 schema 的
+   *   預設**——這條路上有二十九個測試呼叫點，全部改成必填買不到任何東西：它們量的不是上限。
    */
   constructor(
     agent: PumpAgent,
     threadId: string,
     driver?: GoalDriverPort,
     rootSeed?: readonly SessionEvent[],
+    toolText?: ToolTextConfig,
   ) {
     this.#agent = agent;
     this.#threadId = threadId;
+    this.#toolTextMaxBytes = (toolText ?? toolTextConfigSchema.parse({})).maxBytes;
     this.#sessions = new SessionRegistry(threadId, rootSeed === undefined ? {} : { rootSeed });
     this.#driver = driver;
     // 訂閱**註冊表**，不是只訂 root：子代理的日誌後來才開，`observe` 會補上每一份（#296）。
@@ -1350,7 +1359,7 @@ export class ThreadPump {
       // **成功也帶文字**（#439）：dsh 的工具卡文字就是這一則的內容，`isError` 是另一個旗標。
       // 抽字的規則與重播那一條共用（`tool-result-text.ts`），兩邊不共用的話同一張卡會「即時
       // 一個樣、重新整理另一個樣」。
-      text: toolResultText(message),
+      text: toolResultText(message, this.#toolTextMaxBytes),
     };
     const forwarded = this.#forwardedFinishes.get(callId);
     if (forwarded === undefined) {

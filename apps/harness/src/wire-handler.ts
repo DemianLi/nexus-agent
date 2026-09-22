@@ -91,6 +91,8 @@ import {
   deliverableFilesConfigSchema,
   type DeliverableFilesConfig,
 } from './settings/deliverable-files.js';
+import { toolTextConfigSchema } from './settings/tool-text.js';
+import type { ToolTextConfig } from './settings/tool-text.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import { isTrustedWireRequest } from './request-trust.js';
 import type { StoredThreadList } from './session-list.js';
@@ -286,6 +288,13 @@ export interface WireHandlerOptions {
    * 可以不同」變成一個可表達而沒有意義的狀態。
    */
   readonly deliverableLimits?: DeliverableFilesConfig;
+  /**
+   * 一段工具結果文字放上線的上限（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）。
+   *
+   * **兩個消費點都在這個閉包底下**：即時那條走 `new ThreadPump(...)`，重播那條走
+   * `historyPage(...)`。省略即 schema 的預設。
+   */
+  readonly toolTextLimits?: ToolTextConfig;
   /**
    * 這台 server 講話的地方，選配（[#479](https://github.com/DemianLi/nexus-agent/issues/479)）。
    *
@@ -592,6 +601,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
    */
   const deliverableLimits: DeliverableFilesConfig =
     options.deliverableLimits ?? deliverableFilesConfigSchema.parse({});
+  // **解一次、兩個消費點共用同一份**：即時與重播對同一則結果要截得一模一樣，不然同一張卡會
+  // 「即時一個樣、重新整理另一個樣」——那正是 `tool-result-text.ts` 存在的理由。
+  const toolTextLimits: ToolTextConfig = options.toolTextLimits ?? toolTextConfigSchema.parse({});
   /**
    * **存的是 promise 不是狀態**，而且是同步就存進去的。
    *
@@ -636,7 +648,13 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           },
           async () => void (await late.flush?.()),
         );
-        const pump = new ThreadPump(threadAgent.agent, threadId, driver, threadAgent.rootSeed);
+        const pump = new ThreadPump(
+          threadAgent.agent,
+          threadId,
+          driver,
+          threadAgent.rootSeed,
+          toolTextLimits,
+        );
         late.log = pump.sessionLog;
         const detachTelemetry = threadAgent.attachTelemetry?.(pump.sessions);
         const detachInvariants = threadAgent.attachInvariants?.(pump.sessions);
@@ -1118,6 +1136,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
             `[歷史] thread ${threadId} 的一頁超過上限：${String(bytes)} bytes。` +
               `單獨一輪就超標，不從輪中間切（#479）。`,
           ),
+        toolTextLimits,
       );
     } catch (error: unknown) {
       if (error instanceof HistoryQueryError) {
