@@ -51,6 +51,7 @@ import {
   PROTECTED_ENTRY_NAMES,
 } from './plugin-config.js';
 import { DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS } from './settings/browser-session.js';
+import { DEFAULT_RECURSION_LIMIT } from './settings/recursion-limit.js';
 import {
   DEFAULT_THREAD_TITLE_MAX_BYTES,
   DEFAULT_THREAD_TITLE_MAX_WORDS,
@@ -80,15 +81,15 @@ function writePrivate(root: string, name: string, content: string): string {
 describe('出貨的 cordis.yml', () => {
   it('每一列都載得起來，而且每一顆都是真的 plugin', async () => {
     const fromYaml = await loadPluginConfig();
-    // 35 = 7 個功能 ＋ 6 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門）
-    // ＋ **2 個 harness 自己的設定條目**（#529）＋ 20 個配套入口。**數目寫在這裡是為了擋
+    // 36 = 7 個功能 ＋ 6 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門）
+    // ＋ **3 個 harness 自己的設定條目**（#529）＋ 20 個配套入口。**數目寫在這裡是為了擋
     // 「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個空 installer
     // 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
     //
     // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
-    // `loadPluginConfig`，所以那兩列要真的經由 `apps/harness/package.json` 的 `imports`
-    // 解析、import、而且長得像一顆 plugin，才數得到 35。拿掉那個 `imports` 區塊，這裡當場紅。
-    expect(fromYaml).toHaveLength(35);
+    // `loadPluginConfig`，所以那三列要真的經由 `apps/harness/package.json` 的 `imports`
+    // 解析、import、而且長得像一顆 plugin，才數得到 36。拿掉那個 `imports` 區塊，這裡當場紅。
+    expect(fromYaml).toHaveLength(36);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -149,8 +150,9 @@ describe('出貨的 cordis.yml', () => {
     // **`observation-policy` 不在這張名單上，而那是承重的不對稱**（#456）：那一顆沒有設定、
     // 也沒有 Config schema，所以替它加一行 `config:` 會在載入期拋。它進到這棵樹裡的唯一
     // 意義是「關得掉」，關掉的行為由 `observation-policy-entry` 那組測試守著。
-    // harness 自己那兩列（#529）：跟上面那幾列同一個用途（只講設定），差別是消費者跑在
-    // 任何 agent 出生之前，所以 `apply` 是空的、值由 `startupSetting` 在起動期讀。
+    // harness 自己那三列（#529）：跟上面那幾列同一個用途（只講設定），擁有者住在 `apps/harness`。
+    // 前兩列的消費者跑在任何 agent 出生之前，所以 `apply` 是空的、值由 `startupSetting` 在起動期
+    // 讀；`recursion-limit` 的消費者在組裝期，所以它跟上面那幾列一樣走服務。
     expect(byId.get('thread-title')).toEqual({
       maxWords: DEFAULT_THREAD_TITLE_MAX_WORDS,
       maxBytes: DEFAULT_THREAD_TITLE_MAX_BYTES,
@@ -158,6 +160,9 @@ describe('出貨的 cordis.yml', () => {
     expect(byId.get('browser-session')).toEqual({
       maxAgeDays: DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS,
     });
+    // `recursion-limit` 是這三列裡唯一走服務的（消費點在組裝期，註冊表在手上）——
+    // 它的 `apply` 不是空的，三態的解析由 `agent-factory.test.ts` 那組釘著。
+    expect(byId.get('recursion-limit')).toEqual({ limit: DEFAULT_RECURSION_LIMIT });
 
     const withConfig = [...byId].filter(([, config]) => config !== undefined).map(([id]) => id);
     expect(withConfig).toEqual([
@@ -168,6 +173,7 @@ describe('出貨的 cordis.yml', () => {
       'summarization',
       'thread-title',
       'browser-session',
+      'recursion-limit',
     ]);
   });
 
@@ -558,6 +564,32 @@ describe('保護名單', () => {
     expect(() => composeEntries({ shipped, overlays: [overlay], warn: () => {} })).toThrow(
       PluginConfigError,
     );
+  });
+
+  /**
+   * **訊息逐列不同，而且不會串台。**
+   *
+   * 從前這裡是一個 `Set` ＋ 一段共用的訊息，而那段訊息逐字在講核准閘門。名單在 #529 長到四列
+   * 之後，關掉 `#settings/thread-title` 的人會拿到一整段關於核准與多人共用主機的說明——對他那
+   * 一列完全是錯的。**現有的測試抓不到它**：它們斷言的是 `/關不掉/`，而那四個字每一列都有。
+   *
+   * 所以這一條釘的是訊息的**內容**：指名自己那一列的理由，而且**不提別列的**。
+   */
+  it('訊息逐列不同——關掉設定條目不會收到一段講核准閘門的話', () => {
+    const root = privateDirectory();
+    const shipped = writePrivate(
+      root,
+      'cordis.yml',
+      "- id: echo\n  name: '@nexus/plugin-echo'\n" +
+        "- id: thread-title\n  name: '#settings/thread-title'\n",
+    );
+    const overlay = writePrivate(root, 'o.yml', '- id: thread-title\n  disabled: true\n');
+    const compose = (): unknown => composeEntries({ shipped, overlays: [overlay], warn: () => {} });
+
+    expect(compose).toThrow(/關不掉/u);
+    expect(compose).toThrow(/標題/u);
+    // **這一條才是這個缺陷的絆索**：共用那段文字的話它必紅。
+    expect(compose).not.toThrow(/核准/u);
   });
 
   it('**`--dump-config` 那條也拋**——檢查搬離 `validateEntries` 就會紅', () => {

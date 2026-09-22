@@ -103,8 +103,12 @@ web 那端把 thread id 記在瀏覽器裡，重新整理之後接的是同一�
 **agent 迴圈的上限是組裝點設的不是基座設的。** `createDeepAgent` 自己把 `recursionLimit` 設成 `1e4`
 （等於沒有上限），所以 `createNexusAgent` 蓋成 100。預設組裝每一輪模型呼叫佔三格，所以那是約 33 輪；
 每多一個 `beforeModel` 的 middleware 每輪就多一格。CLI、`serve`、eval 都吃這個值；這條擋的是
-「跑掉了」，不是「複雜任務」。真的需要更長的呼叫端自己傳——程式裡是 `recursionLimit`，CLI 是
-`--recursion-limit <n>`（`serve` 沒有這個旗標）。
+「跑掉了」，不是「複雜任務」。
+
+**要改它有三條路，由贏的順序排**：程式裡直接傳 `recursionLimit`；CLI 打 `--recursion-limit <n>`
+（`serve` 沒有這個旗標）；或在 plugin 清單裡改 `recursion-limit` 那一列的 `config.limit`——**那條
+兩邊都吃，是 `serve` 唯一調得動它的辦法**（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
+上面兩條任一個在場都贏過清單，清單再贏過內建的 100。那一列見〈plugin 清單〉。
 
 **一次性模式撞到這條上限時退出碼是 `2`**，其他失敗是 `1`，所以包它的腳本分得出「護欄切掉了」與
 「壞掉了」；REPL 裡撞到只印一行，不退出。
@@ -196,7 +200,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `repeatReminder` 時，以那句話為準；而手搭 plugin 清單（沒有這幾列）的組裝拿到的是內建
   預設，不是「什麼都沒掛」。
 
-今天有八列：
+今天有九列：
 
 | id | 管什麼 | 有 `config` 嗎 | 關得掉嗎 |
 | --- | --- | --- | --- |
@@ -208,14 +212,23 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `approval-gate` | 核准閘門 | **沒有** | **關不掉** |
 | `thread-title` | 執行緒列表上標題的兩個上限 | 有（兩格） | **關不掉** |
 | `browser-session` | 瀏覽器 cookie 的絕對有效期 | 有（一格） | **關不掉** |
+| `recursion-limit` | agent 迴圈的 super-step 上限 | 有（一格） | **關不掉** |
 
-**最後兩列跟前六列差在消費者跑的時刻**（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）：
-前六列的消費者是組裝期的 `foldRegistry`，這兩列的消費者跑在**任何 agent 出生之前**（serve 的冷讀
-清單、瀏覽器會話的建構子），所以它們的 `apply` 是空的，值在起動期解一次。兩件跟著來的事：
+**最後三列的擁有者住在 `apps/harness`，不在 `@nexus/core`**（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
+它們內部又分兩層，**分界是消費點跑的時刻**：
 
-- **它們只在 `serve` 上有作用**，CLI 一列都不讀。它們出現在同一份清單上，是因為清單只有一份。
-- **它們關不掉**，理由跟核准閘門同形但不同源：它們**不裝任何東西**，關掉不會讓標題不再被裁切、
-  也不會讓 cookie 不再過期，只會讓你以為關掉了什麼。寫 `disabled: true` 是啟動失敗。
+- **`thread-title` 與 `browser-session` 跑在任何 agent 出生之前**（serve 的冷讀清單、瀏覽器會話的
+  建構子），那一刻註冊表還不存在，所以 `apply` 是空的、值在起動期解一次。**它們只在 `serve` 上有
+  作用，CLI 一列都不讀**；出現在同一份清單上是因為清單只有一份。
+- **`recursion-limit` 相反，兩條路都讀它**：消費點是組裝期的 `agent-factory`，跟前六列同一個位置，
+  所以它跟前六列完全同形（`apply` 提供一顆服務、組裝點去讀）。**CLI 的 `--recursion-limit` 仍然贏過
+  這一列**——程式路徑上直接傳的參數贏過這份清單，那條規則對它照樣適用。
+
+**這三列都關不掉**，但理由分兩種。`thread-title` 與 `browser-session` 是「關掉沒有意義」：它們
+**不裝任何東西**，關掉不會讓標題不再被裁切、也不會讓 cookie 不再過期。`recursion-limit` 硬一級
+——關掉它確實會讓那顆服務消失，但組裝點接著落回內建的 100，**護欄還在**，讀起來卻像把迴圈上限
+解除了（基座自己那層是一萬）。兩種都只會讓你以為關掉了什麼。寫 `disabled: true` 是啟動失敗，
+**訊息會指名你那一列自己的理由**，不是一段通用的話。
 
 `observation-policy`、`model-usage`、`approval-gate` 那三列**不可以加 `config:`**——它們沒有
 設定，載入器對「這顆 plugin 沒有 Config schema 卻給了 config」是當場拋。前兩列列在這裡的唯一
@@ -249,9 +262,12 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 （給了 `truncateArgs` 就要把它底下兩格都寫出來），而 `trigger` 那兩個數字的來歷寫在
 `DEFAULT_SUMMARIZATION` 的檔頭上——**換模型要重量一次**。
 
-**`thread-title` 與 `browser-session` 的 `config` 同樣是整份替換。** 沒重述的欄位回到 schema 的
-預設值，不是保留原本那一列寫的值——例如只寫 `maxBytes` 的話，`maxWords` 拿到的是預設的 5。
-兩個值的預設（`5`／`40`、`30` 天）都照 dsh 的產品組裝。
+**最後三列的 `config` 同樣是整份替換。** 沒重述的欄位回到 schema 的預設值，不是保留原本那一列
+寫的值——例如 `thread-title` 只寫 `maxBytes` 的話，`maxWords` 拿到的是預設的 5。`thread-title` 與
+`browser-session` 的預設（`5`／`40`、`30` 天）都照 dsh 的產品組裝；`recursion-limit` 的 `100`
+**沒有 dsh 的對應物**（dsh 不跑 LangGraph），它是對著一次實測跑掉的執行校準出來的，換算成幾輪
+模型呼叫取決於這一次掛了哪些 middleware——預設組裝是 33 輪，再給 `--workspace` 是 32 輪。逐段
+實測見 `apps/harness/src/settings/recursion-limit.ts` 的檔頭。
 
 ### 看這台機器上疊出來的是什麼
 
