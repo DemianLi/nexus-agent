@@ -15,6 +15,7 @@ import {
   isDerivedContextOverflow,
   modelGoneMessage,
   retryDecision,
+  withInbandStreamErrors,
 } from './live-model.js';
 import { MEASURED_MODELS } from './eval/tiers.js';
 
@@ -508,4 +509,363 @@ describe('假端點回那個 410，我們只打一次就放棄', () => {
 
     expect(hits).toBe(RETRIES + 1);
   }, 30_000);
+});
+
+/**
+ * 用 `200 OK` 開線、再把錯誤當成一則事件送進 body 的失敗
+ * （[#516](https://github.com/DemianLi/nexus-agent/issues/516)）。
+ *
+ * ## 這一段釘的是「政策有沒有被問到」，不是「政策判得對不對」
+ *
+ * 上面那些測試釘得住 `retryDecision` 的判斷力（400 不重試、410 不重試）。**它們釘不住
+ * 重試政策有沒有被呼叫到** —— 而 #516 正是後者：端點回 `200`，重試包裝器當場判定成功，
+ * 錯誤稍後才從串流裡冒出來，那時已經在射程外。政策整條靜默地沒有作用，
+ * 而每一條既有測試照樣是綠的。
+ *
+ * **所以判準是假端點收到幾個請求**，不是錯誤長什麼樣。這個數字沒有辦法從推論得到。
+ *
+ * | 假端點送什麼 | 期望 | 它擋住什麼回歸 |
+ * | --- | --- | --- |
+ * | HTTP 500 | `RETRIES + 1` | 重試政策整條失效（對照組） |
+ * | `200` ＋第一則事件是 503 | `RETRIES + 1` | **#516 本身**（修好前是 1） |
+ * | `200` ＋第一則事件是 400 | 1 | 修法把政策變成「一律重試」 |
+ * | 正常多 chunk ＋ tool call | 1，且 chunk 與參數逐格相同 | 修法弄壞快樂路徑 |
+ *
+ * **第四列是承重的**：前三列全綠而第四列紅，代表「修好了失敗、弄壞了成功」，
+ * 而那在只看失敗的表裡看不見。
+ *
+ * **`RETRIES = 2` 的理由同上一段**：要真的等完退避才數得到重試次數。
+ *
+ * **零憑證、零外部連線**：loopback 上的假 SSE 伺服器。
+ */
+describe('串流內回報的錯誤（#516）', () => {
+  const RETRIES = 2;
+
+  /** 2026-09-22 真打抓下來的那個信封。**逐字，不改寫。** */
+  const CAPTURED_INBAND_ERROR = {
+    error: { message: 'Service temporarily overloaded', type: 'service_unavailable', code: 503 },
+  } as const;
+
+  /** 同一個形狀，但碼是「重試無用」的那一種。 */
+  const INBAND_BAD_REQUEST = {
+    error: { message: 'Invalid tool schema', type: 'BadRequestError', code: 400 },
+  } as const;
+
+  type Cell =
+    'http500' | 'head503' | 'head400' | 'okstream' | 'mid503' | 'midslow' | 'truncated' | 'stalled';
+
+  function sseChunk(delta: Record<string, unknown>, finish: string | null = null): string {
+    return `data: ${JSON.stringify({
+      id: 'chatcmpl-1',
+      object: 'chat.completion.chunk',
+      created: 1_790_000_000,
+      model: LIVE_MODEL_ID,
+      choices: [{ index: 0, delta, finish_reason: finish, logprobs: null }],
+    })}\n\n`;
+  }
+
+  let server: Server;
+  let baseURL: string;
+  let hits = 0;
+  let cell: Cell = 'head503';
+
+  beforeEach(async () => {
+    hits = 0;
+    server = createServer((request, response) => {
+      hits += 1;
+      request.resume();
+
+      if (cell === 'http500') {
+        response.writeHead(500, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: { message: 'Internal server error', code: 500 } }));
+        return;
+      }
+
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      const send = (text: string): void => void response.write(text);
+
+      // 開了線就不吐任何位元組 —— #57 那個「永遠不回來」的失敗模式。
+      if (cell === 'stalled') return;
+
+      if (cell === 'head503' || cell === 'head400') {
+        const envelope = cell === 'head503' ? CAPTURED_INBAND_ERROR : INBAND_BAD_REQUEST;
+        send(`data: ${JSON.stringify(envelope)}\n\n`);
+        response.end('data: [DONE]\n\n');
+        return;
+      }
+
+      send(sseChunk({ role: 'assistant', content: '' }));
+      for (const piece of ['交付', '物已', '備妥']) send(sseChunk({ content: piece }));
+
+      if (cell === 'truncated') {
+        // 串流中途斷掉（`ERR_INCOMPLETE_CHUNKED_ENCODING` 那一類）。**要等資料真的沖出去
+        // 再砍** —— 當場砍掉的話客戶端連第一則事件都沒收到，那量到的是「連線失敗」
+        // 這個完全不同的東西（實測：那樣會被重試，因為失敗落在建立串流的那次呼叫裡）。
+        setTimeout(() => response.socket?.destroy(), 50);
+        return;
+      }
+
+      const tail = (): void => {
+        send(`data: ${JSON.stringify(CAPTURED_INBAND_ERROR)}\n\n`);
+        response.end('data: [DONE]\n\n');
+      };
+      if (cell === 'mid503') {
+        tail();
+        return;
+      }
+      if (cell === 'midslow') {
+        // **刻意插延遲**，逼那則錯誤落在第一次網路讀取之外。它與 `mid503` 的結果必須
+        // 相同 —— 那正是「邊界是事件不是位元組」的判準。
+        setTimeout(tail, 300);
+        return;
+      }
+
+      send(
+        sseChunk({
+          tool_calls: [
+            {
+              index: 0,
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'present', arguments: '' },
+            },
+          ],
+        }),
+      );
+      for (const piece of ['{"path', '":"re', 'port.md"}']) {
+        send(sseChunk({ tool_calls: [{ index: 0, function: { arguments: piece } }] }));
+      }
+      send(sseChunk({}, 'tool_calls'));
+      response.end('data: [DONE]\n\n');
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('拿不到 loopback 埠');
+    baseURL = `http://127.0.0.1:${address.port}/v1`;
+  });
+
+  afterEach(async () => {
+    // `stalled` 那一格會留著一條沒關的連線，不砍掉的話 `close` 永遠不回來。
+    server.closeAllConnections();
+    await new Promise<void>((done) => server.close(() => done()));
+  });
+
+  /**
+   * `createLiveModel` 那組設定，只換掉 baseURL 與重試次數。
+   * @param wrapped - 掛不掛 #516 那一層。不掛的那一格是**今天的行為**（對照組）。
+   */
+  function modelAgainstStream(wrapped: boolean, timeoutMs?: number, retries = RETRIES): ChatOpenAI {
+    return new ChatOpenAI({
+      apiKey: 'fake-key-for-loopback',
+      model: LIVE_MODEL_ID,
+      configuration: { baseURL, ...(wrapped && { fetch: withInbandStreamErrors() }) },
+      maxTokens: LIVE_MAX_OUTPUT_TOKENS,
+      maxRetries: retries,
+      ...(timeoutMs !== undefined && { timeout: timeoutMs }),
+      onFailedAttempt: classifyFailedAttempt,
+    });
+  }
+
+  interface Run {
+    readonly outcome: 'completed' | 'threw';
+    /** **這一次**送出去幾個請求。`runCell` 自己歸零 —— 一條測試裡跑兩格時不會互相累加。 */
+    readonly requests: number;
+    readonly chunks: number;
+    readonly text: string;
+    readonly toolNames: readonly string[];
+    readonly toolArgs: string;
+    readonly error?: unknown;
+  }
+
+  async function runCell(
+    which: Cell,
+    wrapped: boolean,
+    timeoutMs?: number,
+    retries?: number,
+  ): Promise<Run> {
+    cell = which;
+    hits = 0;
+    let chunks = 0;
+    let text = '';
+    let toolArgs = '';
+    const toolNames: string[] = [];
+    try {
+      const model = modelAgainstStream(wrapped, timeoutMs, retries);
+      for await (const part of await model.stream('present report.md')) {
+        chunks += 1;
+        if (typeof part.content === 'string') text += part.content;
+        for (const call of part.tool_call_chunks ?? []) {
+          if (call.name !== undefined && call.name !== '') toolNames.push(call.name);
+          if (call.args !== undefined) toolArgs += call.args;
+        }
+      }
+      return { outcome: 'completed', requests: hits, chunks, text, toolNames, toolArgs };
+    } catch (error: unknown) {
+      return { outcome: 'threw', requests: hits, chunks, text, toolNames, toolArgs, error };
+    }
+  }
+
+  /**
+   * **對照組：政策本身是好的。** 同一個失敗用 HTTP 狀態碼送來時重試滿次數。
+   *
+   * 少了這一條，`head503` 那條紅了也分不出是「政策沒被問到」還是「政策壞了」。
+   */
+  it('HTTP 500：兩側都重試滿次數 —— 政策本身沒問題', async () => {
+    const before = await runCell('http500', false);
+    expect(before.outcome).toBe('threw');
+    expect(before.requests).toBe(RETRIES + 1);
+
+    const after = await runCell('http500', true);
+    expect(after.outcome).toBe('threw');
+    expect(after.requests).toBe(RETRIES + 1);
+  }, 30_000);
+
+  /** **這一條就是 #516。** 修好前這裡是 1。 */
+  it('第一則事件是 503：接上之後重試滿次數，沒接就只打一次', async () => {
+    const before = await runCell('head503', false);
+    expect(before.outcome).toBe('threw');
+    expect(before.chunks).toBe(0);
+    expect(before.requests).toBe(1);
+
+    const after = await runCell('head503', true);
+    expect(after.outcome).toBe('threw');
+    // **零 chunk 外洩**：錯誤發生在任何內容之前，所以沒有「丟掉已顯示內容」的問題。
+    expect(after.chunks).toBe(0);
+    expect(after.requests).toBe(RETRIES + 1);
+  }, 30_000);
+
+  /**
+   * **這一條擋的是「把政策變成一律重試」。** 同樣是串流內的錯誤，碼是 400 就該一次收工。
+   *
+   * 它同時證明供應商的原話沒有在翻譯途中掉 —— 我們回的是一個 HTTP 錯誤回應而不是拋，
+   * 所以 SDK 走它本來的錯誤路徑，訊息留在原位（拋的話會變成 `Connection error.`）。
+   */
+  it('第一則事件是 400：只打一次，而且上游原話還在', async () => {
+    const run = await runCell('head400', true);
+
+    expect(run.outcome).toBe('threw');
+    expect(run.requests).toBe(1);
+    expect(String((run.error as Error).message)).toContain('Invalid tool schema');
+  });
+
+  /**
+   * **承重的對照**：這一層要把串流開頭讀出來再接回去，這是弄壞成功路徑最可能的地方。
+   */
+  it('正常串流：兩側逐格相同，而且只打一次', async () => {
+    const before = await runCell('okstream', false);
+    expect(before.requests).toBe(1);
+    const after = await runCell('okstream', true);
+    expect(after.requests).toBe(1);
+
+    expect(after.outcome).toBe('completed');
+    expect(after.chunks).toBe(before.chunks);
+    expect(after.text).toBe('交付物已備妥');
+    expect(after.text).toBe(before.text);
+    expect(after.toolNames).toEqual(['present']);
+    expect(after.toolArgs).toBe('{"path":"report.md"}');
+    expect(after.toolArgs).toBe(before.toolArgs);
+  });
+
+  /**
+   * ## 明確未涵蓋，而且這兩條就是那個宣告
+   *
+   * 涵蓋範圍是**第一則 SSE 事件**。中段才出錯的串流不在裡面 —— 買下它要能表示
+   * 「已經送出去的那一段作廢」，而我們今天沒有那個載體（偏離登記見
+   * {@link withInbandStreamErrors} 的檔頭）。
+   *
+   * **`mid503` 與 `midslow` 必須給出相同的結果**，那是「邊界是事件、不是位元組」的判準：
+   * 前者整份 body 在 loopback 上會被併成一段送達，後者插了 0.3 秒逼它分段。
+   * 一個實作若是拿「第一次網路讀取拿到的位元組」當邊界，`mid503` 會**意外地**被涵蓋，
+   * 而 `midslow` 不會 —— 這兩條就會分岔。
+   */
+  it.each([
+    ['mid503', '整份 body 一次送達'],
+    ['midslow', '插了延遲、逼它分段'],
+  ] as const)('中段才出錯（%s，%s）：不涵蓋，行為與今天相同', async (which, _why) => {
+    const before = await runCell(which, false);
+    const after = await runCell(which, true);
+
+    expect(after.outcome).toBe('threw');
+    expect(after.requests).toBe(1);
+    expect(before.requests).toBe(1);
+    // 已經吐出來的內容照樣到得了消費端 —— 我們沒有把它吃掉。
+    expect(after.chunks).toBe(before.chunks);
+    expect(after.chunks).toBeGreaterThan(0);
+    expect(after.text).toBe('交付物已備妥');
+  });
+
+  /**
+   * **開了線卻不吐位元組**（#57 那個「永遠不回來」的失敗模式）**：這一層沒有動到它。**
+   *
+   * 這條是為了一個**看起來很合理但實測不成立**的顧慮而存在的。嗅探迴圈是在 fetch
+   * **裡面** await `read()` 的，所以掛住的連線會變成從 `configuration.fetch` 逃出去的
+   * 東西，落進 {@link retryDecision} —— 推論上，這一層把「逾時」從重試射程外搬進了射程內，
+   * 於是 {@link LIVE_TIMEOUT_MS} 的止血變成「逾時 × 重試次數」。
+   *
+   * **實測說不是**：兩側的請求數相同，而且**都**是 `retries + 1`。SDK 的逾時本來就是掛在
+   * 整個請求上（`APIConnectionTimeoutError` 的 `name` 不是 `AbortError`、沒有 status，
+   * 所以 {@link retryDecision} 本來就判它重試）。**這個乘法在這一刀之前就存在**，不是
+   * 這一層帶來的；要不要壓掉它是另一張卡。
+   *
+   * 這條的價值就是把那件事釘住：哪天兩側分岔了，那才是這一層動到了掛住的連線。
+   *
+   * **`retries` 壓到 1**：這裡要等完退避才數得到次數，而它證的是「兩側相同」，不是那個數字。
+   */
+  it('開了線卻不吐位元組：兩側相同 —— 這一層沒有把它搬進重試射程', async () => {
+    const wrapped = await runCell('stalled', true, 300, 1);
+    const control = await runCell('stalled', false, 300, 1);
+
+    expect(wrapped.outcome).toBe('threw');
+    expect(control.outcome).toBe('threw');
+    expect(wrapped.requests).toBe(control.requests);
+    expect(wrapped.requests).toBe(2);
+  }, 30_000);
+
+  /** 串流中途斷掉（#516 的 Q3）：同樣落在第一則事件之外，同樣不涵蓋。 */
+  it('串流中途斷掉：不涵蓋，只打一次', async () => {
+    const run = await runCell('truncated', true);
+
+    expect(run.outcome).toBe('threw');
+    expect(run.requests).toBe(1);
+    // **前提**：沒收到內容就代表這一格量的是「連線失敗」而不是「中途斷」 —— 那是完全
+    // 不同的東西（而且會被重試）。第一次寫這條時正是踩在這裡。
+    expect(run.chunks).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * **接上去了沒有。**
+ *
+ * 上面那一段量的是 {@link withInbandStreamErrors} 這支函式，用的是測試自己組的
+ * `ChatOpenAI`。**那證不了 `createLiveModel` 真的把它掛上去** —— 拿掉工廠裡那一行，
+ * 上面每一條照樣全綠。這一條把那個缺口補起來：問的是工廠**真的建出來的那顆** client。
+ */
+describe('createLiveModel 真的掛上了那一層（#516）', () => {
+  const original = process.env[LIVE_API_KEY_ENV];
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    if (original === undefined) delete process.env[LIVE_API_KEY_ENV];
+    else process.env[LIVE_API_KEY_ENV] = original;
+  });
+
+  it('工廠建出來的 client，它的 fetch 會把串流內錯誤翻成 HTTP 錯誤回應', async () => {
+    process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
+    // 這一層的底層 fetch 是它被建出來那一刻的全域 fetch，所以先換掉再建工廠。
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(
+          'data: {"error":{"message":"Service temporarily overloaded","code":503}}\n\ndata: [DONE]\n\n',
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        ),
+      )) as typeof fetch;
+
+    const wired = createLiveModel().clientConfig.fetch;
+    expect(wired).toBeDefined();
+
+    const response = await wired!(`${LIVE_BASE_URL}/chat/completions`, { method: 'POST' });
+    expect(response.status).toBe(503);
+    expect(await response.text()).toContain('Service temporarily overloaded');
+  });
 });

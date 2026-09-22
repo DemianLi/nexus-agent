@@ -308,6 +308,225 @@ function* causeLinks(error: unknown): Generator<object> {
 }
 
 /**
+ * 嗅第一則串流事件時，最多緩衝幾個字元。
+ *
+ * **數的是解碼之後的字元，不是位元組** —— 這一層別處講邊界都用位元組（見
+ * {@link withInbandStreamErrors}），只有這個數字不是，所以名字裡寫清楚。
+ *
+ * **這是逃生閥不是判準。** 正常的 SSE 第一則事件只有幾百個字元，永遠碰不到這個數字；
+ * 碰到的只有「送了一堆位元組卻一則事件都沒收尾」的病態串流。那時候放棄嗅探、原樣放行。
+ */
+export const INBAND_PEEK_MAX_CHARS = 65_536;
+
+/** SSE 的事件邊界。`\r\n\r\n` 不含 `\n\n`，所以兩個都要認。 */
+const SSE_EVENT_BOUNDARY = /\r\n\r\n|\n\n/;
+
+/**
+ * 第一則串流事件其實是個錯誤物件嗎。
+ *
+ * @param buffered - 已經緩衝下來的串流開頭（可能不只一則事件）。
+ * @param ended - 串流是不是已經結束了；結束了的話沒有邊界也算一則完整的事件。
+ * @returns 供應商那個錯誤信封原封不動；不是錯誤就 `undefined`。
+ */
+function firstEventError(buffered: string, ended: boolean): Record<string, unknown> | undefined {
+  const boundary = SSE_EVENT_BOUNDARY.exec(buffered);
+  if (boundary === null && !ended) return undefined;
+  const event = boundary === null ? buffered : buffered.slice(0, boundary.index);
+
+  // SSE 的一則事件可以有多行 `data:`，語意是換行接起來。
+  const data = event
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trim())
+    .join('\n');
+  if (data === '' || data === '[DONE]') return undefined;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data);
+  } catch {
+    // 解不開就**不猜**：當成內容放行，維持今天的行為。
+    return undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return undefined;
+  const error = (parsed as { error?: unknown }).error;
+  if (typeof error !== 'object' || error === null) return undefined;
+  return parsed as Record<string, unknown>;
+}
+
+/**
+ * 那個錯誤信封要當成哪個 HTTP 狀態碼。
+ *
+ * **只認結構化的數字碼，認不出來就 500。** 500 不是保守的預設，是**照 dsh 抄的**：
+ * 它的 `providerError` 在沒有 HTTP 狀態碼可看時（`status === undefined`，正是串流內
+ * 錯誤的情形）落到 `code = 'SERVER'`（`llm-deepseek/src/protocols/messages/transport.ts:35`），
+ * 而 `SERVER` 在預設可重試集裡（`llm/src/retry-policy.ts:18`）。翻成我們的載體就是
+ * 「一個不在 {@link STATUS_NO_RETRY} 裡的 5xx」。
+ *
+ * 只收 400–599：Response 的建構子不讓 204／304 帶 body，而一個「錯誤」本來也不該是 2xx。
+ */
+function inbandStatus(envelope: Record<string, unknown>): number {
+  const error = envelope.error as Record<string, unknown>;
+  for (const candidate of [error.code, error.status]) {
+    if (
+      typeof candidate === 'number' &&
+      Number.isInteger(candidate) &&
+      candidate >= 400 &&
+      candidate <= 599
+    ) {
+      return candidate;
+    }
+  }
+  return 500;
+}
+
+/**
+ * 把「用 `200 OK` 開線、再把錯誤當成一則事件送進 body」的失敗，翻成一個 HTTP 錯誤回應。
+ *
+ * ## 病在哪裡
+ *
+ * NVIDIA 的串流端點會這樣回（[#516](https://github.com/DemianLi/nexus-agent/issues/516)）：
+ *
+ * ```
+ * data: {"error":{"message":"Service temporarily overloaded","type":"service_unavailable","code":503}}
+ * data: [DONE]
+ * ```
+ *
+ * 重試包裝器（`AsyncCaller` → `p-retry`）包的是**建立串流的那一次呼叫**。那次拿到 `200`，
+ * 當場判定成功；錯誤是稍後消費串流時才冒出來的，**那時候已經在重試的射程之外**。
+ * 結果是 {@link retryDecision} 那一整套政策對這一類失敗**從來沒有被問到** ——
+ * 不是判錯，是沒被呼叫到。
+ *
+ * ## 做法：翻譯投遞方式，不是新增政策
+ *
+ * 在 fetch 這一層先把第一則事件讀出來。是錯誤物件的話，**不往外拋，而是回一個帶著
+ * 供應商原始信封的 HTTP 錯誤回應** —— 於是 SDK 走它本來就有的 HTTP 錯誤路徑，
+ * 建出帶 `status` 的 `APIError`，那顆錯誤落在 `AsyncCaller` 的重試迴圈**裡面**。
+ *
+ * **為什麼不用拋的**：`openai@7.5.0` 會把自訂 `fetch` 拋出來的東西包成 `APIConnectionError`
+ * （`client.js:558`），而訊息來自 `getConnectionErrorMessage`，它對這個情形回 `undefined`
+ * （`client.js:960-965`）—— 也就是人看到的第一句話會從供應商的原話變成 `Connection error.`，
+ * 原話退到 `cause` 鏈第二層。回一個 Response 就沒有這個代價：訊息、`status`、`retry-after`
+ * 全都留在原來的位置。
+ *
+ * ## 偏離登記：dsh 的射程比這裡大，差的是載體不是紀律
+ *
+ * dsh 對這件事有三層，我們表達得出前兩層：
+ *
+ * 1. **分類不分投遞方式。** `llm/src/error.ts:76`：adapter 把 provider 的 code／type／
+ *    message 併成一串餵進同一支分類器，「so both thrown and in-band delivery styles share
+ *    one classifier」。這裡同向：in-band 的錯誤被翻成跟 HTTP 錯誤同一個形狀。
+ * 2. **adapter 負責翻譯投遞方式。** `llm-pi-ai/src/stream.ts:129-133`：「pi-ai never throws
+ *    mid-stream —— failures arrive as `error` events, which become error/aborted `finish`
+ *    chunks (the harness protocol's other error-delivery style)」。我們動不了
+ *    `@langchain/openai` 那支 adapter（跟 {@link isDerivedContextOverflow} 的偏離登記一同因），
+ *    所以退到手上最靠近 adapter 的一格：建 client 的這個工廠。
+ * 3. **重試掛在迴圈的步級掛點**（`llm/src/retry-policy.ts:5`、`llm-retry/src/index.ts` 聽
+ *    `agent/request-error`），所以它是在整條串流跑完之後才判 `finish.kind === 'error'`
+ *    （`core/agent-loop/src/agent.ts:444`）—— **中段才出錯的串流 dsh 照樣重試**。
+ *
+ * **第三層我們退掉了，而理由不是「重試中段錯誤不值得」。** dsh 付得起那個代價，是因為它
+ * 有第一級的載體表示「那一次作廢、這是新的一次」：`assistant/attempt` 事件與
+ * `assistantStreamRevision`（`core/agent-loop/src/agent.ts:381-384`、`:446-447`）。
+ * **我們沒有那個載體** —— 已經送到畫面上的字沒有地方宣告作廢。所以這裡只涵蓋
+ * **第一則事件**就是錯誤的那一類，也就是 #516 實際觀察到的長相。
+ *
+ * ## 邊界：第一則事件，不是「串流錯誤」
+ *
+ * 涵蓋的是**串流的第一則 SSE 事件**。判準刻意是事件而不是「第一次網路讀取拿到的位元組」——
+ * 後者會隨網路分段漂移（loopback 上整份 body 會被併成一段，量出來的覆蓋率是假的）。
+ *
+ * **明確未涵蓋**，而且有測試釘住這件事：
+ *
+ * - 吐了內容之後中段才出錯（第 2 則以後的事件是 error）。
+ * - 串流中途斷掉（`ERR_INCOMPLETE_CHUNKED_ENCODING`）。
+ *
+ * 這兩類今天的行為不變：當場失敗、零重試。要涵蓋它們得買下第三層，那是另一張卡。
+ *
+ * **掛住的連線也不歸這一層管，而那是量出來的不是推的。** 嗅探迴圈在 fetch 裡面 await
+ * `read()`，所以「開了線卻不吐位元組」看起來會從重試射程外被搬進射程內。實測兩側的請求數
+ * 相同（`live-model.test.ts` 的「開了線卻不吐位元組」那條）：SDK 的逾時本來就掛在整個請求
+ * 上，{@link retryDecision} 本來就判它重試。那個「逾時 × 重試次數」的乘法在這一刀之前
+ * 就存在。
+ *
+ * ## 這**不**保證 live 跑得完
+ *
+ * 它保證的只有「政策會被問到」。問到之後救不救得回來，取決於上游是不是間歇的 ——
+ * #516 的第四則留言對真端點量到串流內 503 重試 **7/7** 在 `+2s` 內恢復，
+ * 但 **n=7**，而且沒有量到上游真的壞窗裡的行為。
+ *
+ * @param baseFetch - 底層的 fetch。預設全域那個；測試用它換掉。
+ * @returns 一個 fetch：非 SSE、非 2xx、沒有 body 的回應原樣放行，其餘嗅第一則事件。
+ */
+export function withInbandStreamErrors(baseFetch: typeof fetch = fetch): typeof fetch {
+  return async (input, init) => {
+    const response = await baseFetch(input, init);
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!response.ok || response.body === null || !contentType.includes('text/event-stream')) {
+      return response;
+    }
+
+    // **當場鎖住 reader。** 沒鎖的 body 會在 GC 時被取消，症狀是下行讀到一個乾淨的
+    // `done` 而伺服器那側沒有關 —— 看起來像串流正常結束。
+    const reader = response.body.getReader();
+    const prefix: Uint8Array[] = [];
+    const decoder = new TextDecoder();
+    let buffered = '';
+    let ended = false;
+    while (
+      !SSE_EVENT_BOUNDARY.test(buffered) &&
+      buffered.length < INBAND_PEEK_MAX_CHARS &&
+      !ended
+    ) {
+      const next = await reader.read();
+      if (next.done) {
+        ended = true;
+        break;
+      }
+      prefix.push(next.value);
+      buffered += decoder.decode(next.value, { stream: true });
+    }
+
+    const envelope = firstEventError(buffered, ended);
+    if (envelope !== undefined) {
+      await reader.cancel();
+      const headers = new Headers({ 'content-type': 'application/json' });
+      for (const name of ['retry-after', 'x-request-id', 'request-id']) {
+        const value = response.headers.get(name);
+        if (value !== null) headers.set(name, value);
+      }
+      return new Response(JSON.stringify(envelope), { status: inbandStatus(envelope), headers });
+    }
+
+    // 沒事：把嗅掉的那幾段原樣接回去。**接的是原始位元組**，不是解碼後再編碼回來的字串。
+    const relayed = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of prefix) controller.enqueue(chunk);
+        if (ended) controller.close();
+      },
+      async pull(controller) {
+        if (ended) return;
+        const next = await reader.read();
+        if (next.done) {
+          ended = true;
+          controller.close();
+          return;
+        }
+        controller.enqueue(next.value);
+      },
+      cancel(reason) {
+        void reader.cancel(reason);
+      },
+    });
+    return new Response(relayed, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  };
+}
+
+/**
  * 真實供應商的 model。
  *
  * key **只從環境變數讀**，缺少時直接失敗，沒有預設值也不 fallback
@@ -330,7 +549,8 @@ export function createLiveModel(modelId: string = LIVE_MODEL_ID): ChatOpenAI {
   return new ChatOpenAI({
     apiKey,
     model: modelId,
-    configuration: { baseURL: LIVE_BASE_URL },
+    // `fetch` 是 #516 那一層：串流內回報的錯誤翻成 HTTP 錯誤回應，才進得了重試射程。
+    configuration: { baseURL: LIVE_BASE_URL, fetch: withInbandStreamErrors() },
     temperature: 1,
     topP: 0.95,
     maxTokens: LIVE_MAX_OUTPUT_TOKENS,
