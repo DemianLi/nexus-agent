@@ -60,6 +60,7 @@ import { startWireServer } from './wire-server.js';
 import type { WireServer } from './wire-server.js';
 import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js';
 import { browserSessionPlugin } from './settings/browser-session.js';
+import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { startupSetting } from './settings/startup.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
@@ -288,6 +289,9 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // 可以讀服務。理由與偏離登記見 `settings/startup.ts` 的檔頭。
   const browserSession = startupSetting(plugins, browserSessionPlugin);
   const threadTitle = startupSetting(plugins, threadTitlePlugin);
+  // 交付檔那三個上限（#529）。**它們是 server 的性質，不是一條 thread 的性質**——兩條交付路由
+  // 住在 `createWireHandler` 的閉包裡，一個 server 一次，所以值在這裡解、往下傳一份。
+  const deliverableLimits = startupSetting(plugins, deliverableFilesPlugin);
   const auth = new BrowserAuth(
     await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)),
     browserSession.maxAgeDays,
@@ -315,6 +319,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   let telemetryDisclosed = false;
   const handler = createWireHandler({
     auth,
+    deliverableLimits,
     // 一頁歷史撐破軟上限時講一聲（#479）。只有這一件事會走到它。
     warn: (message) => {
       serverLog(message);
