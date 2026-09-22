@@ -60,6 +60,7 @@ import {
   DEFAULT_DELIVERABLE_MAX_PAGE_BYTES,
 } from './settings/deliverable-files.js';
 import { DEFAULT_RECURSION_LIMIT } from './settings/recursion-limit.js';
+import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
 import {
   DEFAULT_THREAD_TITLE_MAX_BYTES,
   DEFAULT_THREAD_TITLE_MAX_WORDS,
@@ -89,16 +90,16 @@ function writePrivate(root: string, name: string, content: string): string {
 describe('出貨的 cordis.yml', () => {
   it('每一列都載得起來，而且每一顆都是真的 plugin', async () => {
     const fromYaml = await loadPluginConfig();
-    // 38 = 7 個功能 ＋ 7 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
+    // 39 = 7 個功能 ＋ 7 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
     // 外加 #529 的 `session-persistence`——它是 core 那一段裡唯一消費點在起動期的）
-    // ＋ **4 個 harness 自己的設定條目**（#529）＋ 20 個配套入口。**數目寫在這裡是為了擋
+    // ＋ **5 個 harness 自己的設定條目**（#529、#538）＋ 20 個配套入口。**數目寫在這裡是為了擋
     // 「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個空 installer
     // 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
     //
     // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
     // `loadPluginConfig`，所以那四列要真的經由 `apps/harness/package.json` 的 `imports`
-    // 解析、import、而且長得像一顆 plugin，才數得到 38。拿掉那個 `imports` 區塊，這裡當場紅。
-    expect(fromYaml).toHaveLength(38);
+    // 解析、import、而且長得像一顆 plugin，才數得到 39。拿掉那個 `imports` 區塊，這裡當場紅。
+    expect(fromYaml).toHaveLength(39);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -174,7 +175,10 @@ describe('出貨的 cordis.yml', () => {
       maxFileBytes: DEFAULT_DELIVERABLE_MAX_FILE_BYTES,
       maxLines: DEFAULT_DELIVERABLE_MAX_LINES,
     });
-    // `recursion-limit` 是這四列裡唯一走服務的（消費點在組裝期，註冊表在手上）——
+    // **每則工具結果文字的上限**（#538）。出貨那一行的值必須就是 schema 的預設，同上面幾列。
+    expect(byId.get('tool-text')).toEqual({ maxBytes: DEFAULT_TOOL_TEXT_MAX_BYTES });
+
+    // `recursion-limit` 是這五列裡唯一走服務的（消費點在組裝期，註冊表在手上）——
     // 它的 `apply` 不是空的，三態的解析由 `agent-factory.test.ts` 那組釘著。
     expect(byId.get('recursion-limit')).toEqual({ limit: DEFAULT_RECURSION_LIMIT });
 
@@ -194,6 +198,7 @@ describe('出貨的 cordis.yml', () => {
       'thread-title',
       'browser-session',
       'deliverable-files',
+      'tool-text',
       'recursion-limit',
     ]);
   });
@@ -627,6 +632,7 @@ describe('保護名單', () => {
       '#settings/thread-title',
       '#settings/browser-session',
       '#settings/deliverable-files',
+      '#settings/tool-text',
       '#settings/recursion-limit',
     ];
     for (const name of expected) {

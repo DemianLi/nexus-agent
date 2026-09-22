@@ -20,7 +20,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { AwaitingInput } from './conversation-history.js';
 import { HistoryQueryError, historyFrames, historyPage } from './conversation-history.js';
-import { TOOL_TEXT_MAX_BYTES } from './tool-result-text.js';
+import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
 
 type Draft = Pick<SessionEvent, 'type' | 'data'>;
 
@@ -85,7 +85,10 @@ function line(entry: ConversationEntry): string {
 }
 
 function screen(events: readonly SessionEvent[], awaitingInput?: AwaitingInput): ConversationState {
-  return reduceAll(emptyConversation(), historyFrames(events, awaitingInput));
+  return reduceAll(
+    emptyConversation(),
+    historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES, awaitingInput),
+  );
 }
 
 /** 掛著中斷，停在閘門上的是這幾個名字。 */
@@ -674,7 +677,7 @@ describe('一頁的位元組上限', () => {
 
   it('超標的窗口切成多頁，每一頁都從輪邊界開始、而且落在上限內', () => {
     // 25 輪 × 每輪 10 次滿版讀 ≈ 12 MiB，遠超過上限。
-    const events = build(25, 10, TOOL_TEXT_MAX_BYTES);
+    const events = build(25, 10, DEFAULT_TOOL_TEXT_MAX_BYTES);
     const page = historyPage(events);
 
     expect(page.firstSeq).toBeGreaterThan(0);
@@ -695,7 +698,7 @@ describe('一頁的位元組上限', () => {
 
   it('單獨一輪就超標時，那一頁照樣回得出來——輪邊界比上限強', () => {
     // 一輪 200 次滿版讀 ≈ 9.6 MiB，一輪就爆。
-    const events = build(1, 200, TOOL_TEXT_MAX_BYTES);
+    const events = build(1, 200, DEFAULT_TOOL_TEXT_MAX_BYTES);
     const page = historyPage(events);
 
     expect(page.firstSeq).toBe(0);
@@ -728,7 +731,7 @@ describe('一頁的位元組上限', () => {
   });
 
   it('上限不是查詢參數：呼叫端調不高', () => {
-    const events = build(25, 10, TOOL_TEXT_MAX_BYTES);
+    const events = build(25, 10, DEFAULT_TOOL_TEXT_MAX_BYTES);
     const capped = historyPage(events);
     // 塞一個不存在的參數進去（協定上沒有這一格），頁的大小一個位元組都不會變。
     const attempted = historyPage(events, {
@@ -741,7 +744,7 @@ describe('一頁的位元組上限', () => {
 
   it('撐破上限時叫一次 onOversize，帶秤到的位元組；沒撐破就不叫', () => {
     const oversized: number[] = [];
-    const single = build(1, 200, TOOL_TEXT_MAX_BYTES);
+    const single = build(1, 200, DEFAULT_TOOL_TEXT_MAX_BYTES);
     historyPage(single, {}, undefined, (bytes) => void oversized.push(bytes));
     expect(oversized).toHaveLength(1);
     expect(oversized[0]).toBeGreaterThan(HISTORY_PAGE_MAX_BYTES);
@@ -765,7 +768,7 @@ describe('一頁的位元組上限', () => {
   it('最後一輪停在核准點時，秤到的不小於真的送出去的', () => {
     const settled = Array.from({ length: 85 }, (_, i) => `s${i}`);
     const pending = Array.from({ length: 60 }, (_, i) => `p${i}`);
-    const body = 'x'.repeat(TOOL_TEXT_MAX_BYTES);
+    const body = 'x'.repeat(DEFAULT_TOOL_TEXT_MAX_BYTES);
     const events = log(
       human('讀一堆檔，然後要寫。'),
       reply('讀了，接著寫。', [...settled, ...pending]),
@@ -786,11 +789,22 @@ describe('一頁的位元組上限', () => {
   });
 
   /**
-   * **兩個常數的關係要有人釘**：`HISTORY_PAGE_MAX_BYTES` 住在 `@nexus/wire`、`TOOL_TEXT_MAX_BYTES` 住在
-   * 這個 app，wire 不能往上 import，所以那邊只寫得出字面值。這條在唯一同時相依兩邊的地方比對它們——
-   * 每則上限哪天動了而頁上限沒跟著動，這裡會紅。同一個做法見 `@nexus/wire` 的 `conversation.ts:927`。
+   * **兩個常數的關係要有人釘**：`HISTORY_PAGE_MAX_BYTES` 住在 `@nexus/wire`、每則上限住在這個 app，
+   * wire 不能往上 import，所以那邊只寫得出字面值。這條在唯一同時相依兩邊的地方比對它們——頁上限
+   * 哪天動了而預設的每則上限沒跟著動，這裡會紅。同一個做法見 `@nexus/wire` 的 `conversation.ts:927`。
+   *
+   * ## 它現在只保證到 schema 的預設值為止（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）
+   *
+   * 每則上限變成一列條目的 `config` 之後，**部署在 patch 裡改掉它，這個比例就不再成立，而且沒有
+   * 任何東西會紅**——配對的另一半是協定常數，在 #457 的射程外，而且 wire 結構上 import 不到 harness。
+   *
+   * 那是 #538 三選一裡**明著選的第三條**（2026-09-23 拍板），不是漏掉的。另外兩條分別要把協定常數
+   * 變成設定、或讓 wire 反過來收 harness 注入的值，兩條都在動協定層的形狀；而 dsh 那側沒有先例可抄
+   * ——它的歷史分頁按則數算，組頁路徑上一個位元組預算都沒有，兩個值沒有共同單位可以做比例。
+   *
+   * 所以這一條比的是 `DEFAULT_TOOL_TEXT_MAX_BYTES`，**名字本身就是射程宣告**：它釘的是出廠那一份。
    */
-  it('頁上限就是 80 則滿版工具結果', () => {
-    expect(HISTORY_PAGE_MAX_BYTES).toBe(80 * TOOL_TEXT_MAX_BYTES);
+  it('頁上限就是 80 則滿版工具結果——在 schema 的預設上限底下', () => {
+    expect(HISTORY_PAGE_MAX_BYTES).toBe(80 * DEFAULT_TOOL_TEXT_MAX_BYTES);
   });
 });

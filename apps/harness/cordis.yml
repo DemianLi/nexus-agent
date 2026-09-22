@@ -224,7 +224,7 @@
 #
 # **它們內部又分兩層，分界是消費點跑的時刻**：
 #
-# - **起動期**（`thread-title`、`browser-session`、`deliverable-files`）：消費者是 `serve.ts` 的
+# - **起動期**（`thread-title`、`browser-session`、`deliverable-files`、`tool-text`）：消費者是 `serve.ts` 的
 #   冷讀清單、`BrowserAuth` 的建構子、以及 `createWireHandler` 閉包裡的兩條交付路由，全都跑在
 #   **任何 agent 出生之前**，那一刻註冊表還不存在。所以這幾列的 `apply` 是空的，值由
 #   `src/settings/startup.ts` 的 `startupSetting` 在起動期解一次、往下傳一份——形狀上仍是
@@ -233,12 +233,12 @@
 #   **註冊表就在手上**。所以這一列跟上面 core 那三列完全同形——`apply` 把驗過的值提供成一個
 #   服務，消費點去讀服務。這一層做得到的事，不該跟著上一層退。
 #
-# **`name` 是 `#settings/…` 而不是一個套件名**，那是一條登記過的偏離，四列共用：dsh 的每個可調值
+# **`name` 是 `#settings/…` 而不是一個套件名**，那是一條登記過的偏離，五列共用：dsh 的每個可調值
 # 都由一個套件擁有，而 `apps/harness` **解不到自己**（條目走 `import(entry.name)`，`@nexus/harness`
 # 沒有連進自己的 `node_modules`，實測是 `Cannot find package`）。退到 Node 的 `imports` 欄位，映射
 # 寫在 `apps/harness/package.json` 裡看得見。逐條理由在 `src/settings/thread-title.ts` 的檔頭。
 #
-# **這四列關不掉**（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`），但理由分兩種。起動期那三列是
+# **這五列關不掉**（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`），但理由分兩種。起動期那四列是
 # 「關掉沒有意義」：它們不裝任何東西，關掉不會讓標題不再被裁切、cookie 不再過期、交付檔不再有
 # 上限——`startupSetting` 把關掉的那一列當成沒有那一列，於是回到 schema 的預設值。
 # `recursion-limit` 硬一級——關掉它在機制上確實會讓服務消失、於是落回內建的 100，**看起來像關掉了
@@ -290,6 +290,24 @@
 #
 # **CLI 的 `--recursion-limit` 仍然贏過這一列**，走的是 #456 那三列既有的第一態（明著傳給組裝點
 # 的參數 > 條目的服務 > 內建預設），不是一條新機制。
+# 一段工具結果文字放上線的位元組上限（#538／#457）。**「可設定」這件事本身沒有偏離，寫死才有**：
+# dsh 那側它本來就是條目的一格（`spill-policy` 的 `maxInlineBytes: 50000`，
+# `packages/bundle/base/cordis.patch.yml:393-396`，`ddefc45`，**數字一模一樣**），所以這一刀是把一條
+# 既存的偏離收掉。**截在哪一層**那條偏離仍然登記在 `src/tool-result-text.ts` 的檔頭上——dsh 截在
+# 模型面、超標存成 spill 檔、通知裡帶得出檔案位址；我們沒有 spill 能力，只能截在放上線那一刻。
+#
+# 欄位名沒照 dsh 的 `maxInlineBytes`：那個名字描述的是 dsh 的二分（inline 還是進 spill 檔），而我們
+# 超過就是截斷，沒有「另一半去哪裡」這回事。
+#
+# **改這一格會讓一條跨套件的比例失效，而且沒有任何東西會紅。** `@nexus/wire` 的
+# `HISTORY_PAGE_MAX_BYTES = 4_000_000` 是 `80 × 50000`，那個關係一直由 `apps/harness` 的一條測試釘著；
+# 這一列讓它**只在 schema 的預設值底下成立**。那是 #538 三選一裡明著選的第三條（2026-09-23 拍板），
+# 逐條理由見 `src/settings/tool-text.ts` 的檔頭。
+- id: tool-text
+  name: '#settings/tool-text'
+  config:
+    maxBytes: 50000
+
 - id: recursion-limit
   name: '#settings/recursion-limit'
   config:

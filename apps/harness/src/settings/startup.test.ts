@@ -243,6 +243,35 @@ describe('startupSetting', () => {
     expect(call.slice(0, call.indexOf('});'))).toContain('windowMs: persistenceWindow.windowMs');
   });
 
+  it('serve 起動期解出工具文字那一列，而且真的傳給 handler——結構性的', async () => {
+    // **同 `deliverable-files` 那一條的處境**（#536）：`serve.ts → createWireHandler` 這一跳
+    // 沒有行為觀察點——產品路徑上的假模型只會 echo 一句十幾個位元組的話，造不出一段會被
+    // 300 位元組上限截到的工具結果。實測過：把 `serve.ts` 那一行拿掉，全套 1243 條全綠。
+    //
+    // 所以這裡釘原始碼。**handler 往下那兩跳有真的行為測試**（`serve-history.test.ts` 走 route、
+    // `tool-card-from-log.test.ts` 走即時），紅的分工因此是：那兩條管轉發，這一條管接線。
+    const source = await readFile(new URL('../serve.ts', import.meta.url), 'utf8');
+    expect(source).toContain('toolTextLimits = startupSetting(plugins, toolTextPlugin)');
+    const call = source.slice(source.indexOf('createWireHandler({'));
+    expect(call.slice(0, call.indexOf('createAgent'))).toContain('toolTextLimits,');
+  });
+
+  it('handler 把工具文字那一格轉給即時那條——結構性的', async () => {
+    // **重播那一跳有行為測試**（`serve-history.test.ts` 走真的 route），**即時這一跳沒有**：
+    // handler 的即時路徑要經過 SSE，而這棵樹上走那條路的假 agent 都不產生夠長的工具結果。
+    // 實測過：把 `new ThreadPump(...)` 的那一格拿掉，全套 1246 條全綠。
+    //
+    // **`ThreadPump` 用得到那個值本身有行為證據**（`tool-card-from-log.test.ts` 那條驗即時與
+    // 重播截在同一個位置），所以這裡缺的只有「handler 真的傳」這一格，釘原始碼剛好補它。
+    const source = await readFile(new URL('../wire-handler.ts', import.meta.url), 'utf8');
+    // **錨點要指到真的呼叫，不是講到它的散文。** 第一版用 `new ThreadPump(`，命中的是那個
+    // 選項自己的檔頭裡「即時那條走 `new ThreadPump(...)`」那句，往後掃到的第一個 `);` 中間
+    // 正好包著 `readonly toolTextLimits?`——於是它**永遠綠**。突變抓到的。
+    const at = source.indexOf('const pump = new ThreadPump(');
+    expect(at).toBeGreaterThan(0);
+    expect(source.slice(at, source.indexOf(');', at))).toContain('toolTextLimits,');
+  });
+
   it('落盤窗口超過計時器收得住的上限：載入期就失敗', () => {
     // **這個方向的壞值長得像「把落盤調得很懶」，實際上是窗口消失**——`setTimeout` 對超出 32
     // 位元的延遲立刻觸發，於是每一顆事件各寫一次。所以它必須在載入期就紅，不能等到執行期

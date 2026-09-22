@@ -38,6 +38,7 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
+import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
 
 type ToolEntry = Extract<ConversationState['entries'][number], { kind: 'tool' }>;
 
@@ -413,7 +414,11 @@ describe('結果文字：即時與重播同一串（#439）', () => {
   ];
 
   /** 日誌寫一對成功的 `tool/call`／`tool/result`；基座的 frame 要不要跟由參數排。 */
-  async function play(base: 'none' | 'late', content: unknown = BODY) {
+  async function play(
+    base: 'none' | 'late',
+    content: unknown = BODY,
+    toolText?: { maxBytes: number },
+  ) {
     const record = () => {
       const log = pump.sessionLog;
       log.append('tool/call', { callId: 'c1', name: 'echo', arguments: '{"message":"嗨"}' });
@@ -447,7 +452,13 @@ describe('結果文字：即時與重播同一串（#439）', () => {
       getState: async () => ({ values: {} }),
       updateState: async () => ({}),
     };
-    const pump = new ThreadPump(agent as unknown as PumpAgent, 'text');
+    const pump = new ThreadPump(
+      agent as unknown as PumpAgent,
+      'text',
+      undefined,
+      undefined,
+      toolText,
+    );
     const frames: Event[] = [];
     const line = new AbortController();
     const draining = (async () => {
@@ -481,9 +492,35 @@ describe('結果文字：即時與重播同一串（#439）', () => {
   it('**重播抽出來的是同一串**：同一份日誌，兩條路的卡上文字相等', async () => {
     const { frames, events } = await play('late');
     const live = toolEntries(frames)[0]?.text;
-    const replayed = toolEntries(historyFrames(events))[0]?.text;
+    const replayed = toolEntries(historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES))[0]?.text;
     expect(live).toBe(BODY);
     expect(replayed).toBe(live);
+  });
+
+  /**
+   * **上限是設定來的，而且兩條路吃同一份**（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）。
+   *
+   * 這一條跟上面那條同一個主題的第二半：不只「抽字的規則」要共用，**截字的上限**也要——
+   * 兩邊各讀各的設定的話，同一張卡會「即時一個樣、重新整理另一個樣」，而那是這整個 describe
+   * 存在的理由。
+   *
+   * **最後那一行是對照組**：同一份日誌在預設上限底下一個字都不截，所以上面的差別只可能來自
+   * 那個參數，不是因為內容本來就長到會被某個寫死的數字截掉。
+   */
+  it('上限從設定來：即時與重播截在同一個位置', async () => {
+    const long = 'x'.repeat(2_000);
+    const small = 300;
+    const { frames, events } = await play('late', long, { maxBytes: small });
+
+    const live = toolEntries(frames)[0]?.text;
+    expect(live).toBeDefined();
+    expect(Buffer.byteLength(live!, 'utf8')).toBeLessThanOrEqual(small);
+    expect(live).toContain('沒有送出來');
+
+    const replayed = toolEntries(historyFrames(events, small))[0]?.text;
+    expect(replayed).toBe(live);
+
+    expect(toolEntries(historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES))[0]?.text).toBe(long);
   });
 
   /**
@@ -494,7 +531,7 @@ describe('結果文字：即時與重播同一串（#439）', () => {
   it('多塊的內容：兩條路都不給文字，不是一邊給一邊不給', async () => {
     const { frames, events } = await play('late', TWO_BLOCKS);
     const live = toolEntries(frames)[0];
-    const replayed = toolEntries(historyFrames(events))[0];
+    const replayed = toolEntries(historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES))[0];
     expect(live).toMatchObject({ status: 'done' });
     expect(live?.text).toBeUndefined();
     expect(replayed?.text).toBeUndefined();

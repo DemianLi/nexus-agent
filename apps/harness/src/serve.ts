@@ -66,6 +66,7 @@ import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js'
 import { browserSessionPlugin } from './settings/browser-session.js';
 import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { startupSetting } from './settings/startup.js';
+import { toolTextPlugin } from './settings/tool-text.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
 import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
@@ -299,6 +300,9 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // 落盤的批次窗口（#529）。**同樣是 server 的性質**：`sessionStore` 一台伺服器一份，而窗口
   // 講的是那一顆 store 的寫入節奏——下面每一條 thread 各自接上去的協調器都吃這同一個數字。
   const persistenceWindow = startupSetting(plugins, sessionPersistencePlugin);
+  // 一段工具結果文字放上線的上限（#538）。**同樣是 server 的性質**：兩個消費點（即時的
+  // `ThreadPump`、重播的 `historyPage`）都住在 `createWireHandler` 的閉包底下，一個 server 一次。
+  const toolTextLimits = startupSetting(plugins, toolTextPlugin);
   const auth = new BrowserAuth(
     await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)),
     browserSession.maxAgeDays,
@@ -327,6 +331,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   const handler = createWireHandler({
     auth,
     deliverableLimits,
+    toolTextLimits,
     // 一頁歷史撐破軟上限時講一聲（#479）。只有這一件事會走到它。
     warn: (message) => {
       serverLog(message);
