@@ -30,11 +30,18 @@
  *
  * 我們沒有 spill 這個能力，日誌又刻意保著搬移前的全文，所以只能截在**放上線**這一刻：
  *
- * - 形狀照 dsh（head/tail 各半），**數值由清單上 `tool-text` 那一列講**
- *   （[#538](https://github.com/DemianLi/nexus-agent/issues/538)）——預設 50000 一樣照 dsh 的
- *   `maxInlineBytes`，但它現在是 schema 的預設值，不是寫死在這裡的常數。**「可設定」這件事
- *   本身沒有偏離**：dsh 那側它本來就是條目的一格；**寫死才是偏離**，而這一刀把它收掉了；
- * - 但**通知裡沒有位址**可指（沒有 spill 檔），只能說被截掉了；
+ * - **數值由清單上 `tool-text` 那一列講**（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）——
+ *   預設 50000 一樣照 dsh `spill-policy` 的 `maxInlineBytes`，但它現在是 schema 的預設值，不是
+ *   寫死在這裡的常數。**「可設定」這件事本身沒有偏離**：dsh 那側它本來就是條目的一格；
+ *   **寫死才是偏離**，而 #538 把它收掉了。頭尾各半的形狀照 dsh
+ *   （`spill-policy/src/index.ts:96-103`，`Math.ceil`／`Math.floor` 分頭尾）；
+ * - 但**通知的位置跟 dsh 不一樣**：dsh 的 `TextRetainer({ kind: 'headTail' })` 在兩段之間
+ *   **不插任何東西**，通知接在整段預覽的**尾巴**（`spill-policy/src/index.ts:170` 的
+ *   `previewText + '\n\n' + notice`）。把說明插在**中間**的是 dsh 的另一顆 plugin——
+ *   `compaction-tool-result-pruner` 的 `PRUNE_MARKER`（`src/config.ts:7`），而那顆的單位是
+ *   code point 不是 byte。**我們等於各取一半**：位元組上限與頭尾取自 `spill-policy`，
+ *   中間那句說明取自 pruner。查證見 [#539](https://github.com/DemianLi/nexus-agent/pull/539)；
+ * - **通知裡也沒有位址**可指（沒有 spill 檔），只能說被截掉了；
  * - **不學 dsh 的 `read` 例外**：那個例外成立在模型面（`read` 自己已經有上限），我們截在傳輸層，
  *   放行就等於讓一次 2000 行的 `read` 整份上線；
  * - **子代理不另開一條 arm**：dsh 的子呼叫走另一個只縮日誌副本的分支，我們一視同仁。
