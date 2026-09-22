@@ -17,7 +17,7 @@
  * **零憑證、零外部連線**：模型是出貨清單裡的假模型，session log 落在暫存目錄。
  */
 
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -29,6 +29,8 @@ import { serveClient } from '../fixtures.js';
 import { loadDefaultPlugins } from '../plugin-config.js';
 import { runServe } from '../serve.js';
 import type { RunningServe } from '../serve.js';
+import { sessionPersistencePlugin } from '@nexus/core';
+
 import { browserSessionPlugin, DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS } from './browser-session.js';
 import {
   deliverableFilesPlugin,
@@ -87,6 +89,28 @@ async function driveTurn(server: RunningServe, threadId: string): Promise<void> 
   await events.return?.(undefined);
 }
 
+/**
+ * 那個 `--session-log` 根底下所有 `.jsonl` 的事件行數合計。
+ *
+ * **只數 `.jsonl`**：`.lock`（租約）與 `.header.json`（表頭）在第一顆事件之前就存在了，
+ * 數進去的話兩臂都非零，這條測試會永遠綠。實測過：窗口還沒到期時目錄裡只有 `.lock`。
+ */
+async function countPersistedEvents(root: string): Promise<number> {
+  let total = 0;
+  async function walk(dir: string): Promise<void> {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) await walk(path);
+      else if (entry.name.endsWith('.jsonl')) {
+        const text = await readFile(path, 'utf8');
+        total += text.split('\n').filter((line) => line !== '').length;
+      }
+    }
+  }
+  await walk(root);
+  return total;
+}
+
 describe('設定覆寫在真的 serve 上生效（#529）', () => {
   it('cookie 有效期：帶 patch 的那台是 1 天，不帶的是預設 30 天', async () => {
     const bare = await start();
@@ -129,6 +153,34 @@ describe('設定覆寫在真的 serve 上生效（#529）', () => {
     expect(patchedTitle).not.toBe(bareTitle);
   });
 
+  it('落盤窗口：帶 patch 的那台等 300 毫秒還沒寫，不帶的早就寫完了', async () => {
+    // **這一條量的是時序，不是回傳值**，所以兩臂各要一個乾淨的根：判準是「這個目錄裡有沒有
+    // 事件」。同一個根會讓第一臂寫的東西變成第二臂的假陽性。
+    //
+    // **窗口從第一顆事件開始算，不是從這一輪結束開始算**（協調器的檔頭：第一顆待處理事件開窗、
+    // 後續事件不重置截止時間）。所以安全邊際是 3000 減掉 `driveTurn` 自己花的時間再減 300
+    // ——實測一輪的事件在 50 毫秒內就落盤完畢，邊際約十倍。
+    const bareRoot = await mkdtemp(join(tmpdir(), 'nexus-window-bare-'));
+    const bare = await start(['--session-log', bareRoot]);
+    await driveTurn(bare, 'alpha');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const bareEvents = await countPersistedEvents(bareRoot);
+    await stop(bare);
+    // 前提：預設窗口（10 毫秒）底下這段等待**綽綽有餘**。沒有這一行，下面那句「另一臂是 0」
+    // 可能只是因為根本沒有人在寫。
+    expect(bareEvents).toBeGreaterThan(0);
+
+    const patchedRoot = await mkdtemp(join(tmpdir(), 'nexus-window-patched-'));
+    const patched = await start(['--session-log', patchedRoot, '--patch', OVERRIDE_PATCH]);
+    await driveTurn(patched, 'alpha');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const patchedEvents = await countPersistedEvents(patchedRoot);
+    // **讀完才收。** `close()` 會 dispose 每一份協調器，而 dispose 排空——收掉之後再讀，
+    // 兩臂都會是滿的，這條測試就廢了。
+    await stop(patched);
+    expect(patchedEvents).toBe(0);
+  });
+
   it('把只講設定的那一列關掉：載入期就失敗，不是一行警告', async () => {
     await expect(start(['--patch', DISABLED_PATCH])).rejects.toThrow(/thread-title/u);
   });
@@ -156,7 +208,7 @@ describe('startupSetting', () => {
     ).toThrow(/thread-title/u);
   });
 
-  it('出貨清單上真的讀得到那三列——不是只有手搭的清單走得通', async () => {
+  it('出貨清單上真的讀得到那四列——不是只有手搭的清單走得通', async () => {
     const plugins = await loadDefaultPlugins({ env: {} });
     expect(startupSetting(plugins, threadTitlePlugin).maxBytes).toBe(40);
     expect(startupSetting(plugins, browserSessionPlugin).maxAgeDays).toBe(30);
@@ -167,5 +219,45 @@ describe('startupSetting', () => {
       maxFileBytes: 33554432,
       maxLines: 5000,
     });
+    // 字面值，理由同上一段：10 同時是出貨那一列、schema 的預設、以及協調器自己的退路。
+    expect(startupSetting(plugins, sessionPersistencePlugin).windowMs).toBe(10);
+  });
+
+  it('CLI 那條也解出那一列，而且真的傳給落盤——結構性的，因為沒有行為觀察點', async () => {
+    // **這一條是退路，不是首選。** CLI 那一跳量不到行為：`runCli` 回來之前一定會
+    // `persistence.dispose()`（`cli.ts:1455`、`:1468`），而 dispose 排空——跑完再看檔案，
+    // 不管窗口是 10 還是 3000，兩臂都是滿的。同 #536 `serve.ts → handler` 那一跳的處境。
+    //
+    // 所以這裡釘的是原始碼：那兩行在不在。突變驗過——任一行拿掉這條就紅。
+    const source = await readFile(new URL('../cli.ts', import.meta.url), 'utf8');
+    // 掃空也會綠的防呆：先證明這個檔真的讀得到、而且那個呼叫真的在裡面。
+    const callAt = source.indexOf('attachSessionPersistence(sessions, sessionStore, {');
+    expect(callAt).toBeGreaterThan(0);
+    // **釘的是那個賦值，不只是那次呼叫。** 只比對 `startupSetting(plugins, …)` 在不在的話，
+    // 一個「照樣呼叫、但把結果丟掉、改用 schema 預設」的改動照樣綠——而那正好會讓清單上
+    // 那一列對 CLI 這條路靜靜失效。
+    expect(source).toContain(
+      'persistenceWindow = startupSetting(plugins, sessionPersistencePlugin)',
+    );
+    const call = source.slice(callAt);
+    expect(call.slice(0, call.indexOf('});'))).toContain('windowMs: persistenceWindow.windowMs');
+  });
+
+  it('落盤窗口超過計時器收得住的上限：載入期就失敗', () => {
+    // **這個方向的壞值長得像「把落盤調得很懶」，實際上是窗口消失**——`setTimeout` 對超出 32
+    // 位元的延遲立刻觸發，於是每一顆事件各寫一次。所以它必須在載入期就紅，不能等到執行期
+    // 靜靜變成最勤的那一種。
+    expect(() =>
+      startupSetting(
+        [
+          {
+            plugin: sessionPersistencePlugin,
+            id: 'session-persistence',
+            config: { windowMs: 2_147_483_648 },
+          },
+        ],
+        sessionPersistencePlugin,
+      ),
+    ).toThrow(/session-persistence/u);
   });
 });

@@ -40,9 +40,12 @@ import { createCommandExecutor } from '@nexus/plugin-commands';
 import { createAskUserPlugin } from '@nexus/plugin-ask-user';
 import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { startupSetting } from './settings/startup.js';
 import {
   attachSessionPersistence,
   createHostServicesPlugin,
+  sessionPersistencePlugin,
+  type SessionPersistenceConfig,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   SessionRegistry,
@@ -1259,6 +1262,9 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // （測試、將來 serve 的續接）會撞上自己沒放的鎖。
   let built: Awaited<ReturnType<typeof createCliAgent>>;
   let restored: Awaited<ReturnType<typeof restoreConversation>> | undefined;
+  // **落盤的批次窗口，同樣從清單解**（#529）。宣告在 try 外面是因為消費點在 try 外面
+  // （落盤接在三個 attach 之後），而清單本身只在 try 裡面——同 `built` 的理由與寫法。
+  let persistenceWindow: SessionPersistenceConfig;
   try {
     // **先認它屬於哪個目錄**（見 `resume-guards.ts`）。排在沙箱那道檢查前面：
     // 目錄不對的話，日誌裡記的是哪一格都不該拿來判。讀回來還沒寫過任何一筆，檔案原封不動；
@@ -1289,6 +1295,9 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       env: options.env ?? process.env,
       ...(invocation.patches !== undefined && { patches: invocation.patches }),
     });
+    // **起動期解一次**：落盤那一行在 try 外面，而這份清單只活在 try 裡面。解在這裡也讓
+    // 「那一列的值不合法」跟清單上其他列的毛病落在同一個時刻——跑起來之前。
+    persistenceWindow = startupSetting(plugins, sessionPersistencePlugin);
 
     // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
     built = await createCliAgent(
@@ -1340,6 +1349,8 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       ? undefined
       : attachSessionPersistence(sessions, sessionStore, {
           cwd: options.cwd ?? process.cwd(),
+          // 批次窗口：上面在 try 裡從清單解出來的那一份。
+          windowMs: persistenceWindow.windowMs,
           // **錨（#504）取的是組裝真的用的那一個**，不是在這裡再算一次：`createCliAgent`
           // 回著它正是為了這個。沒給 `--workspace` 就不寫那一格。
           ...(workspaceRoot !== undefined && { workspaceRoot }),
