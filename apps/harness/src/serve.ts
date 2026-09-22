@@ -44,7 +44,11 @@ import {
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { listStoredThreads } from './session-list.js';
-import { attachSessionPersistence, SessionNotFoundError } from '@nexus/core';
+import {
+  attachSessionPersistence,
+  sessionPersistencePlugin,
+  SessionNotFoundError,
+} from '@nexus/core';
 import { assertSameCwd, assertSameWorkspaceRoot } from './resume-guards.js';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
 import { LIVE_MODEL_ID } from './live-model.js';
@@ -292,6 +296,9 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // 交付檔那三個上限（#529）。**它們是 server 的性質，不是一條 thread 的性質**——兩條交付路由
   // 住在 `createWireHandler` 的閉包裡，一個 server 一次，所以值在這裡解、往下傳一份。
   const deliverableLimits = startupSetting(plugins, deliverableFilesPlugin);
+  // 落盤的批次窗口（#529）。**同樣是 server 的性質**：`sessionStore` 一台伺服器一份，而窗口
+  // 講的是那一顆 store 的寫入節奏——下面每一條 thread 各自接上去的協調器都吃這同一個數字。
+  const persistenceWindow = startupSetting(plugins, sessionPersistencePlugin);
   const auth = new BrowserAuth(
     await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)),
     browserSession.maxAgeDays,
@@ -476,6 +483,8 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
               attachPersistence: (sessions: SessionRegistry) => {
                 const persistence = attachSessionPersistence(sessions, sessionStore, {
                   cwd,
+                  // 批次窗口：起動期解出來的那一份（`runServe` 頂上那一行），一台伺服器一個節奏。
+                  windowMs: persistenceWindow.windowMs,
                   // 錨（#504）：同 CLI，取的是這一次組裝真的用的那一個（上面從 `built`
                   // destructure 出來的）。沒給 `--workspace` 就不寫那一格。
                   ...(workspaceRoot !== undefined && { workspaceRoot }),

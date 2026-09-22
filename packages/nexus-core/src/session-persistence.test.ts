@@ -257,6 +257,49 @@ describe('接在註冊表上', () => {
   });
 });
 
+describe('批次窗口一路轉發', () => {
+  /**
+   * **這是 {@link attachSessionPersistence} 自己的契約，不是呼叫端的。**
+   * `apps/harness` 那兩個消費點有自己的驗收（`settings/startup.test.ts`），但工廠「收了就要
+   * 轉發給每一份協調器」這件事該在這裡紅——突變驗過：拿掉轉發那一行，這一條就是紅的。
+   *
+   * **兩臂，不是只驗慢的那一臂**：只看「設大了就不寫」的話，一個根本沒在寫的工廠也會綠。
+   */
+  function drive(options: { readonly windowMs?: number }): {
+    stored: ReturnType<typeof fakeStored>;
+    persistence: ReturnType<typeof attachSessionPersistence>;
+  } {
+    const sessions = new SessionRegistry('root-window');
+    const stored = fakeStored();
+    const store: SessionStore = {
+      create() {
+        return stored;
+      },
+      resume() {
+        return Promise.reject(new Error('這一條不續接'));
+      },
+    };
+    const persistence = attachSessionPersistence(sessions, store, options);
+    sessions.root.append('turn/start', { kind: 'message', text: '一' });
+    return { stored, persistence };
+  }
+
+  it('給了大窗口就還沒寫；沒給就用預設的十毫秒，早就寫完了', async () => {
+    const fast = drive({});
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    // 前提：預設窗口底下這段等待綽綽有餘。沒有這一行，下面那句可能只是「這個工廠不寫東西」。
+    expect(fast.stored.written.length).toBeGreaterThan(0);
+    await fast.persistence.dispose();
+
+    const slow = drive({ windowMs: 5_000 });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(slow.stored.written).toEqual([]);
+    // 而且它不是**永遠**不寫：dispose 排空之後那一筆就在了。
+    await slow.persistence.dispose();
+    expect(slow.stored.written.length).toBeGreaterThan(0);
+  });
+});
+
 describe('續接：只寫還沒存的後綴', () => {
   /**
    * [#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A。seed 那幾筆是從把手讀回來

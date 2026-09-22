@@ -8,6 +8,11 @@
 # **`config` 是整份替換，不是逐格合併**，所以 `thread-title` 這一列沒有重述 `maxWords`：
 # 它回到 schema 的預設值。那正是這裡要的——順帶證明沒重述的那一格不會變成 `undefined`。
 #
+# **`session-persistence` 的 3000 非得遠大於 10 不可，而且要遠大於測試的等待時間。** 它的
+# schema 預設、出貨那一列的值、以及協調器自己的退路是同一個 10，三個來源重合，所以拿 10 去
+# 驗量不出東西。3000 讓兩臂分得開：預設那臂在 50 毫秒內就落盤（實測），這一臂等 300 毫秒還
+# 是空的——要假綠得等滿三秒。讀它的是 `startup.test.ts` 那條兩臂測試。
+#
 # **`recursion-limit` 的 40 非得不是 100 不可。** 它的 schema 預設與組裝點的內建預設是同一個
 # 數字，所以拿 100 去驗「出貨那一列真的在講話」量不出東西——兩個來源重合的時候，量到的值對
 # 兩邊都成立。40 讓它們分得開。讀它的是 `agent-factory.test.ts` 那條整路測試。
@@ -20,3 +25,6 @@
 - id: recursion-limit
   config:
     limit: 40
+- id: session-persistence
+  config:
+    windowMs: 3000

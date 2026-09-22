@@ -51,6 +51,8 @@ import {
   PROTECTED_ENTRY_NAMES,
   PROTECTED_ENTRY_REASONS,
 } from './plugin-config.js';
+import { DEFAULT_PERSISTENCE_WINDOW_MS } from '@nexus/core';
+
 import { DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS } from './settings/browser-session.js';
 import {
   DEFAULT_DELIVERABLE_MAX_FILE_BYTES,
@@ -87,15 +89,16 @@ function writePrivate(root: string, name: string, content: string): string {
 describe('出貨的 cordis.yml', () => {
   it('每一列都載得起來，而且每一顆都是真的 plugin', async () => {
     const fromYaml = await loadPluginConfig();
-    // 37 = 7 個功能 ＋ 6 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門）
+    // 38 = 7 個功能 ＋ 7 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
+    // 外加 #529 的 `session-persistence`——它是 core 那一段裡唯一消費點在起動期的）
     // ＋ **4 個 harness 自己的設定條目**（#529）＋ 20 個配套入口。**數目寫在這裡是為了擋
     // 「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個空 installer
     // 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
     //
     // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
     // `loadPluginConfig`，所以那四列要真的經由 `apps/harness/package.json` 的 `imports`
-    // 解析、import、而且長得像一顆 plugin，才數得到 37。拿掉那個 `imports` 區塊，這裡當場紅。
-    expect(fromYaml).toHaveLength(37);
+    // 解析、import、而且長得像一顆 plugin，才數得到 38。拿掉那個 `imports` 區塊，這裡當場紅。
+    expect(fromYaml).toHaveLength(38);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -175,6 +178,11 @@ describe('出貨的 cordis.yml', () => {
     // 它的 `apply` 不是空的，三態的解析由 `agent-factory.test.ts` 那組釘著。
     expect(byId.get('recursion-limit')).toEqual({ limit: DEFAULT_RECURSION_LIMIT });
 
+    // **落盤窗口住在 `@nexus/core`，不是 `#settings/…`**（#529）：值的家在那個套件裡，而
+    // `@nexus/core/*` 本來就解得到，所以這一列沒有載體偏離。它排在 core 那一段是因為擁有者
+    // 是 core；它的消費點卻在起動期，那條不對稱寫在 `session-persistence.ts` 的檔頭上。
+    expect(byId.get('session-persistence')).toEqual({ windowMs: DEFAULT_PERSISTENCE_WINDOW_MS });
+
     const withConfig = [...byId].filter(([, config]) => config !== undefined).map(([id]) => id);
     expect(withConfig).toEqual([
       'todo',
@@ -182,6 +190,7 @@ describe('出貨的 cordis.yml', () => {
       'repeat-reminder',
       'tool-result-pruner',
       'summarization',
+      'session-persistence',
       'thread-title',
       'browser-session',
       'deliverable-files',
@@ -612,15 +621,21 @@ describe('保護名單', () => {
    * 改掉那個來源兩邊會一起動。** 這一條因此自己列出名字：少掉任何一列都是行為變了，要在這裡紅。
    */
   it('這幾列必須在保護名單上', () => {
-    for (const name of [
+    const expected = [
       '@nexus/core/approval-gate',
+      '@nexus/core/session-persistence',
       '#settings/thread-title',
       '#settings/browser-session',
       '#settings/deliverable-files',
       '#settings/recursion-limit',
-    ]) {
+    ];
+    for (const name of expected) {
       expect(PROTECTED_ENTRY_NAMES.has(name), name).toBe(true);
     }
+    // **兩個方向都要釘。** 上面那個迴圈只擋「某一列被移出名單」；少了這一行，往名單裡偷偷
+    // 加一列不會有任何東西紅——而多保護一列跟少保護一列一樣是行為變了，那一列的 `disabled`
+    // 會從「真的關掉」變成「當場拋」。
+    expect(PROTECTED_ENTRY_NAMES.size).toBe(expected.length);
   });
 
   /**

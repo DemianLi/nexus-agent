@@ -147,6 +147,12 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
       '三個值於是回到 schema 的預設，行為一個位元組都不變，只會讓這份設定讀起來像關掉了什麼。',
   ],
   [
+    '@nexus/core/session-persistence',
+    '這一列不裝任何東西，只講會話日誌落盤的批次窗口（毫秒）。關掉它不會讓落盤不再批次' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，窗口於是回到 schema 的預設，' +
+      '節奏一毫秒都不變，只會讓這份設定讀起來像關掉了什麼。',
+  ],
+  [
     '#settings/recursion-limit',
     '這一列不裝任何東西，只講 agent 迴圈的 super-step 上限。關掉它確實會讓那個服務消失，' +
       '但組裝點接著就落回內建的 100——**護欄還在**，關掉的只是「這台機器上它是多少」這句話。' +
