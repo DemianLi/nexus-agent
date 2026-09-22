@@ -79,7 +79,10 @@ export interface RunBenchmarkOptions {
   /** 附加的 system prompt。省略即不加。 */
   readonly systemPrompt?: string;
   /**
-   * agent 迴圈的上限。省略即組裝點的預設（`DEFAULT_RECURSION_LIMIT`）。
+   * agent 迴圈的上限。省略即組裝點的三態——這一層的 {@link plugins} 裡有 `recursion-limit`
+   * 那一列就用它的，沒有那一列才是 `DEFAULT_RECURSION_LIMIT`（#529）。**基準測試那條路永遠
+   * 明著傳**（`compare.ts` 的 `options.recursionLimit ?? EVAL_RECURSION_LIMIT`），所以它恆走
+   * 第一態，不會因為誰往清單裡加了那一列而改變。
    *
    * 這一層收得下它，是因為**基準任務要的上限比互動用的緊**：最長的一題期望 3 次工具
    * 呼叫（約 8 個 super-step），而互動 session 可能真的需要一長串。

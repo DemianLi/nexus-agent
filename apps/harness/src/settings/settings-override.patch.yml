@@ -1,10 +1,17 @@
-# 把 harness 自己那兩列的設定改掉（#529 的驗收：「在設定裡覆寫會生效」）。
+# 把 harness 自己那三列的設定改掉（#529 的驗收：「在設定裡覆寫會生效」）。
 #
 # **`config` 是整份替換，不是逐格合併**，所以 `thread-title` 這一列沒有重述 `maxWords`：
 # 它回到 schema 的預設值。那正是這裡要的——順帶證明沒重述的那一格不會變成 `undefined`。
+#
+# **`recursion-limit` 的 40 非得不是 100 不可。** 它的 schema 預設與組裝點的內建預設是同一個
+# 數字，所以拿 100 去驗「出貨那一列真的在講話」量不出東西——兩個來源重合的時候，量到的值對
+# 兩邊都成立。40 讓它們分得開。讀它的是 `agent-factory.test.ts` 那條整路測試。
 - id: thread-title
   config:
     maxBytes: 6
 - id: browser-session
   config:
     maxAgeDays: 1
+- id: recursion-limit
+  config:
+    limit: 40

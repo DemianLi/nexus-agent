@@ -4,9 +4,11 @@ import { loadPlugins, SessionRegistry } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
-import { createNexusAgent, DEFAULT_RECURSION_LIMIT } from './agent-factory.js';
+import { createNexusAgent } from './agent-factory.js';
+import { loadDefaultPlugins } from './plugin-config.js';
 import type { NexusAgentHandle } from './agent-factory.js';
 import { LoopingChatModel } from './looping-model.js';
+import { DEFAULT_RECURSION_LIMIT, recursionLimitPlugin } from './settings/recursion-limit.js';
 import {
   createMountPlugin,
   createNotePlugin,
@@ -412,6 +414,96 @@ describe('迴圈上限', () => {
       await dispose();
     }
     expect(model.calls).toBe(3);
+  });
+
+  /**
+   * 三態：**明著傳的 > 條目提供的服務 > 內建預設**（[#529](https://github.com/DemianLi/nexus-agent/issues/529)
+   * 的第二刀）。
+   *
+   * **三個值刻意互不相同**（旗標 30／條目 50／預設 100）：任何兩格同值，那兩態就分不開，
+   * 而分不開的測試在解析順序寫反的時候照樣綠。
+   *
+   * **觀察點是錯誤訊息裡的那個數字，不是 `model.calls`。** 後者還要換算每輪幾格，而那個換算
+   * 本身是別條測試的被測物；這裡要量的只有「哪一格贏」。
+   */
+  describe('迴圈上限的三態', () => {
+    const limitFrom = async (
+      options: Partial<Parameters<typeof createNexusAgent>[0]>,
+    ): Promise<string> => {
+      const { agent, dispose } = await createNexusAgent({
+        model: new LoopingChatModel(),
+        plugins: [createEchoPlugin()],
+        repeatReminder: false,
+        ...options,
+      } as Parameters<typeof createNexusAgent>[0]);
+      try {
+        await agent.invoke(toAgentInvocation('一直跑'));
+      } catch (error) {
+        return (error as Error).message;
+      } finally {
+        await dispose();
+      }
+      throw new Error('沒有撞到上限，這條測試的前提不成立');
+    };
+
+    it('條目講了就用條目的', async () => {
+      const message = await limitFrom({
+        plugins: [createEchoPlugin(), { plugin: recursionLimitPlugin, config: { limit: 50 } }],
+      });
+      expect(message).toMatch(/Recursion limit of 50/u);
+    });
+
+    it('明著傳的贏過條目——CLI 的 `--recursion-limit` 走的就是這一條', async () => {
+      const message = await limitFrom({
+        plugins: [createEchoPlugin(), { plugin: recursionLimitPlugin, config: { limit: 50 } }],
+        recursionLimit: 30,
+      });
+      expect(message).toMatch(/Recursion limit of 30/u);
+    });
+
+    /**
+     * **斷言寫字面的 100，不是 `DEFAULT_RECURSION_LIMIT`。** 生產端與斷言端讀同一個常數的話，
+     * 把那個常數改掉兩邊會一起動，這條測試就永遠綠——量的變成「兩處讀的是同一個變數」而不是
+     * 「沒人講的時候是 100」。
+     */
+    it('清單上沒有那一列就是內建預設', async () => {
+      const message = await limitFrom({ plugins: [createEchoPlugin()] });
+      expect(message).toMatch(/Recursion limit of 100/u);
+    });
+
+    /**
+     * 「有那一列、但沒寫 `config:`」與「連那一列都沒有」是**兩個不同的來源、同一個答案**：
+     * 前者走 schema 的 `.default()`，後者走組裝點的 `??`。兩條都要在，因為把其中一邊改壞
+     * 不會讓另一邊紅。
+     */
+    it('有那一列但沒寫 config 也是同一個預設', async () => {
+      const message = await limitFrom({
+        plugins: [createEchoPlugin(), { plugin: recursionLimitPlugin }],
+      });
+      expect(message).toMatch(/Recursion limit of 100/u);
+    });
+
+    /**
+     * **整條路，而且是這一組裡唯一一條走真的出貨清單的。**
+     *
+     * 上面四條都用手搭的 plugin 清單，所以它們證得出「服務被讀到」，證不出**出貨的
+     * `cordis.yml` 上那一列真的會產生那個服務**——那條線要經過 YAML 解析、`imports` 映射、
+     * 動態 `import()`、schema 驗證、`apply`。
+     *
+     * **而那條線用預設值量不出來**：那一列寫的 `limit: 100`、schema 的 `.default()`、以及組裝點
+     * 的 `??` 全都是 100，三個來源重合，所以「整列消失」與「整列生效」在 100 底下長得一模一樣。
+     * 這裡因此走 `--patch` 把它改成 **40**——那個數字只有經過整條線才到得了組裝點。
+     *
+     * 不傳 `env`：harness home 由 `test-home.setup.ts` 指到暫存目錄，**不碰真的
+     * `~/.nexus-agent`**；自己傳一份 `env` 會把那道安全網繞過去。
+     */
+    it('整條路：patch 改掉出貨清單那一列，組裝點當場拿到新的值', async () => {
+      const plugins = await loadDefaultPlugins({
+        patches: ['src/settings/settings-override.patch.yml'],
+      });
+      const message = await limitFrom({ plugins });
+      expect(message).toMatch(/Recursion limit of 40/u);
+    });
   });
 
   /**
