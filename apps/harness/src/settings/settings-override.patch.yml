@@ -1,0 +1,10 @@
+# 把 harness 自己那兩列的設定改掉（#529 的驗收：「在設定裡覆寫會生效」）。
+#
+# **`config` 是整份替換，不是逐格合併**，所以 `thread-title` 這一列沒有重述 `maxWords`：
+# 它回到 schema 的預設值。那正是這裡要的——順帶證明沒重述的那一格不會變成 `undefined`。
+- id: thread-title
+  config:
+    maxBytes: 6
+- id: browser-session
+  config:
+    maxAgeDays: 1

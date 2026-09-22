@@ -191,6 +191,42 @@
 - id: approval-gate
   name: '@nexus/core/approval-gate'
 
+# ── harness 自己的設定 ────────────────────────────────────────────────────────
+#
+# 這幾列跟上面那段 core 的 middleware 設定同一個用途——**不裝功能，只講設定**——但差在
+# **消費者跑的時刻**（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）：core 那幾列的
+# 消費者是 `foldRegistry`，手上有註冊表；這幾列的消費者跑在**任何 agent 出生之前**（冷讀
+# 清單、`BrowserAuth` 的建構子），那一刻註冊表還不存在。所以它們的 `apply` 是空的，值由
+# `src/settings/startup.ts` 的 `startupSetting` 在起動期解一次、往下傳一份。
+#
+# **`name` 是 `#settings/…` 而不是一個套件名**，那是一條登記過的偏離：dsh 的每個可調值都由一個
+# 套件擁有，而 `apps/harness` **解不到自己**（條目走 `import(entry.name)`，`@nexus/harness` 沒有
+# 連進自己的 `node_modules`，實測是 `Cannot find package`）。退到 Node 的 `imports` 欄位，映射
+# 寫在 `apps/harness/package.json` 裡看得見。逐條理由在 `src/settings/thread-title.ts` 的檔頭。
+#
+# **這兩列關不掉**（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`）：它們不裝任何東西，關掉
+# 不會讓標題不再被裁切、也不會讓 cookie 不再過期，只會讓人以為自己關掉了什麼。
+
+# 執行緒列表上標題的兩個上限（#302）。值照 dsh base 的 `session-title`
+# （`packages/bundle/base/cordis.patch.yml:55-60`，`ddefc45`：`fallbackMaxWords: 5`、
+# `fallbackMaxBytes: 40`），**數字一模一樣**。
+#
+# 兩格全部寫出來，理由同上面那三列：patch 是整份替換 `config`，照著改的人手上要有完整的一份
+# 可以抄；預設值本身寫在 schema 裡，不是寫在這裡。40 個位元組是 13 個中文字——中文沒有空白，
+# 詞數那一格咬不到。
+- id: thread-title
+  name: '#settings/thread-title'
+  config:
+    maxWords: 5
+    maxBytes: 40
+
+# 瀏覽器 cookie 的絕對有效期（#424）。dsh 那側是 plugin 設定 `cookieMaxAgeDays`，預設同樣是 30
+# ——這一列補上的正是 `browser-auth.ts` 原本登記的那條偏離（「寫死 30 天，不能設定」）。
+- id: browser-session
+  name: '#settings/browser-session'
+  config:
+    maxAgeDays: 30
+
 # ── 配套入口 ──────────────────────────────────────────────────────────────────
 #
 # 二十個全進，不是只有 `@nexus/core`（#107 拍板）。理由三條：

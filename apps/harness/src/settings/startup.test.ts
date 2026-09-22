@@ -1,0 +1,149 @@
+/**
+ * **「在設定裡覆寫會生效」的驗收**——[#529](https://github.com/DemianLi/nexus-agent/issues/529)
+ * 第一刀，[#457](https://github.com/DemianLi/nexus-agent/issues/457) 的兩個值。
+ *
+ * 這一組**不驗那兩個數字本身**（那是 `browser-auth.test.ts` 與 `serve-session-list.test.ts` 的事），
+ * 只驗**那條線通不通**：出貨清單 → `--patch` → `startupSetting` → 真的 serve 上的行為。
+ *
+ * **為什麼要有它**：起動期那兩格沒有服務可讀，值是解出來之後**用參數往下傳**的
+ * （`settings/startup.ts` 的檔頭）。一條用參數傳的線天生沒有觀察點——把 `serve.ts` 那兩個
+ * `startupSetting(...)` 換回寫死的常數，除了這一組以外全樹不會有任何東西紅，而部署寫在 patch
+ * 裡的值會安靜地沒有作用。所以這裡的每一條都是**兩臂**：同一台 serve，只差有沒有那份 patch。
+ *
+ * **零憑證、零外部連線**：模型是出貨清單裡的假模型，session log 落在暫存目錄。
+ */
+
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { appendHumanTurn, emptyConversation, reduceConversation } from '@nexus/wire';
+import type { ConversationState } from '@nexus/wire';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { serveClient } from '../fixtures.js';
+import { loadDefaultPlugins } from '../plugin-config.js';
+import { runServe } from '../serve.js';
+import type { RunningServe } from '../serve.js';
+import { browserSessionPlugin, DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS } from './browser-session.js';
+import { startupSetting } from './startup.js';
+import { DEFAULT_THREAD_TITLE_MAX_WORDS, threadTitlePlugin } from './thread-title.js';
+
+const OVERRIDE_PATCH = 'src/settings/settings-override.patch.yml';
+const DISABLED_PATCH = 'src/settings/settings-disabled.patch.yml';
+/** 夠長，裁到 6 個位元組一定看得出來。 */
+const PROMPT = 'abcdefghij 這一句話當標題。';
+
+let running: RunningServe | undefined;
+
+afterEach(async () => {
+  await running?.close();
+  running = undefined;
+});
+
+async function start(extra: readonly string[] = []): Promise<RunningServe> {
+  running = (await runServe({
+    argv: ['--port', '0', ...extra],
+    log: () => undefined,
+    env: {},
+  })) as RunningServe;
+  return running;
+}
+
+async function stop(server: RunningServe): Promise<void> {
+  await server.close();
+  running = undefined;
+}
+
+/** 換 token，回原始的 `set-cookie`（`exchangeServeToken` 只回名字=值，這裡要 `Max-Age`）。 */
+async function rawSetCookie(server: RunningServe): Promise<string> {
+  const response = await fetch(server.authenticatedUrl, { redirect: 'manual' });
+  const setCookie = response.headers.get('set-cookie');
+  if (setCookie === null) throw new Error(`token 交換失敗：${response.status}`);
+  return setCookie;
+}
+
+/** 跑完一整輪，讓那份日誌有第一句話可以當標題。同 `serve-session-list.test.ts` 那一份。 */
+async function driveTurn(server: RunningServe, threadId: string): Promise<void> {
+  const client = await serveClient(server);
+  const events = await client.openEvents(threadId);
+  await client.runStart(threadId, PROMPT);
+  let state: ConversationState = appendHumanTurn(emptyConversation(), PROMPT);
+  while (state.status === 'running') {
+    const next = await events.next();
+    if (next.done === true) break;
+    state = reduceConversation(state, next.value);
+  }
+  await events.return?.(undefined);
+}
+
+describe('設定覆寫在真的 serve 上生效（#529）', () => {
+  it('cookie 有效期：帶 patch 的那台是 1 天，不帶的是預設 30 天', async () => {
+    const bare = await start();
+    const bareCookie = await rawSetCookie(bare);
+    await stop(bare);
+    // 前提：對照組真的是 schema 的預設值換算來的。沒有這一行，下面那句可能只是「兩台不一樣」。
+    expect(bareCookie).toContain(
+      `Max-Age=${String(DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS * 24 * 60 * 60)}`,
+    );
+
+    const patched = await start(['--patch', OVERRIDE_PATCH]);
+    expect(await rawSetCookie(patched)).toContain('Max-Age=86400');
+  });
+
+  it('標題上限：帶 patch 的那台裁到 6 個位元組，不帶的是完整的第一句話', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-settings-'));
+
+    // **寫的那一台先收掉再列。** 落盤是排空的（`DEFAULT_PERSISTENCE_WINDOW_MS`），同一台 server
+    // 上跑完一輪就馬上列，機器忙的時候讀到的是還沒寫進去的空標題——量過：單跑綠、整包紅。
+    // 關掉那一台才是「那一輪真的落地了」的判準，同 `serve-session-list.test.ts`。
+    const writer = await start(['--session-log', root]);
+    await driveTurn(writer, 'alpha');
+    await stop(writer);
+
+    const bare = await start(['--session-log', root]);
+    const bareList = await (await serveClient(bare)).listThreads();
+    await stop(bare);
+    if (bareList.kind !== 'ok') throw new Error('列不出來');
+    const bareTitle = bareList.result.items[0]?.title ?? '';
+    // 前提：預設上限（40 位元組）底下這句話是**完整**的。不然兩臂的差別證不了是 patch 造成的。
+    expect(bareTitle).toBe(PROMPT);
+
+    const patched = await start(['--session-log', root, '--patch', OVERRIDE_PATCH]);
+    const patchedList = await (await serveClient(patched)).listThreads();
+    if (patchedList.kind !== 'ok') throw new Error('列不出來');
+    const patchedTitle = patchedList.result.items[0]?.title ?? '';
+    // **同一份日誌**（同一個 `--session-log` 根、同一條 thread，第二台一個位元組都沒寫），
+    // 所以兩臂的差別只可能來自那份 patch。
+    expect(Buffer.byteLength(patchedTitle, 'utf8')).toBeLessThanOrEqual(6);
+    expect(patchedTitle).not.toBe(bareTitle);
+  });
+
+  it('把只講設定的那一列關掉：載入期就失敗，不是一行警告', async () => {
+    await expect(start(['--patch', DISABLED_PATCH])).rejects.toThrow(/thread-title/u);
+  });
+});
+
+describe('startupSetting', () => {
+  it('清單上沒有那一列：回 schema 的預設值', () => {
+    expect(startupSetting([], threadTitlePlugin).maxWords).toBe(DEFAULT_THREAD_TITLE_MAX_WORDS);
+    expect(startupSetting([], browserSessionPlugin).maxAgeDays).toBe(
+      DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS,
+    );
+  });
+
+  it('那一列的 config 不合法：當場拋，訊息指名是哪一列', () => {
+    expect(() =>
+      startupSetting(
+        [{ plugin: threadTitlePlugin, id: 'thread-title', config: { maxBytes: -1 } }],
+        threadTitlePlugin,
+      ),
+    ).toThrow(/thread-title/u);
+  });
+
+  it('出貨清單上真的讀得到那兩列——不是只有手搭的清單走得通', async () => {
+    const plugins = await loadDefaultPlugins({ env: {} });
+    expect(startupSetting(plugins, threadTitlePlugin).maxBytes).toBe(40);
+    expect(startupSetting(plugins, browserSessionPlugin).maxAgeDays).toBe(30);
+  });
+});
