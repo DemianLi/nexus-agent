@@ -9,7 +9,9 @@
  *    `readDeliverableBytes`）。走那條路下載一張 PNG 是壞的而且沒有徵兆，所以這裡的斷言是
  *    `toEqual` 整串位元組，不是長度、不是「有內容」。
  * 2. **錨的分界是 `seq < storedCount`，不是 thread 活不活著**：同一條活著的 thread，線以上的
- *    讀得到、線以下的拒。只驗「活著就讀得到」的測試對這個分岔是瞎的。
+ *    讀得到；線以下的要看那份日誌的 header 有沒有記工作區根——記了就讀得到、沒記才拒
+ *    （[#519](https://github.com/DemianLi/nexus-agent/issues/519)）。只驗「活著就讀得到」的
+ *    測試對這個分岔是瞎的。
  * 3. **符號連結拒**：`virtualMode` 的圍堵是 lexical 的，擋不到它。
  * 4. **四種拒絕各有各的狀態碼**：壓成同一個的話前端分不出該畫什麼，而畫面上看不出來。
  * 5. **上限是拒絕不是截斷**。
@@ -70,7 +72,9 @@ interface Outcome {
  * @param files - 工作區裡先擺好的檔，值是 `string` 就照 UTF-8 寫，是 `Uint8Array` 就照位元組寫。
  * @param declared - 模型宣告的那幾個路徑。
  * @param options - `workspace` 為否時不交 `workspaceRoot`（沒給 `--workspace` 的組裝）；
- *   `seed` 讓這條 thread 看起來是續接回來的，用來把分界線推上去。
+ *   `seed` 讓這條 thread 看起來是續接回來的，用來把分界線推上去；`resumedRoot` 是接回來那份
+ *   header 記的工作區根（`'same'` 就是這一次這個根，`'other'` 是另一個目錄），缺席代表那份
+ *   header 沒記那一格（[#519](https://github.com/DemianLi/nexus-agent/issues/519)）。
  * @returns 那一輪的結果。
  */
 async function present(
@@ -79,6 +83,7 @@ async function present(
   options: {
     workspace?: boolean;
     seed?: readonly SessionEvent[];
+    resumedRoot?: 'same' | 'other';
     setup?: (root: string) => Promise<void>;
   } = {},
 ): Promise<Outcome> {
@@ -128,6 +133,10 @@ async function present(
       },
       ...(workspace && { workspaceRoot: root }),
       ...(options.seed !== undefined && { rootSeed: options.seed }),
+      ...(options.resumedRoot !== undefined && {
+        resumedWorkspaceRoot:
+          options.resumedRoot === 'same' ? root : join(root, '..', '別的工作區'),
+      }),
     }),
   });
   const client = createWireClient({
@@ -149,7 +158,11 @@ async function present(
     await new Promise((resolve) => setImmediate(resolve));
     await events.return?.(undefined);
     if (sessions === undefined) throw new Error('attachSession 沒被叫到');
-    const at = sessions.root.events.findIndex((event) => event.type === 'deliverables/presented');
+    // **取最後一顆，不是第一顆**：帶 `seed` 的那幾條測試裡，seed 自己就有一顆交付落在 `seq 0`，
+    // 而這個欄位要講的是**這一輪自己**宣告的那一顆。沒帶 seed 時全程只有一顆，兩種取法一樣。
+    const at = sessions.root.events.findLastIndex(
+      (event) => event.type === 'deliverables/presented',
+    );
     return {
       seq: at,
       root,
@@ -330,15 +343,103 @@ describe('錨', () => {
     } finally {
       await outcome.close();
     }
-    // 同一份日誌，這一次整段當成「上一個行程寫的」接回來。**agent 照樣建得起來、thread 照樣活著**，
-    // 分界只看 seq。
+    // 同一份日誌，這一次整段當成「上一個行程寫的」接回來，而且那份 header **沒記**工作區根
+    // （13 以前的日誌都是這樣）。**agent 照樣建得起來、thread 照樣活著**，分界只看 seq。
     const seeded = await present({ 'a.md': 'one\n' }, ['a.md'], {
       seed: await seedWithDeliverable(),
     });
     try {
       const refused = await seeded.get(filePath('seq=0&index=0'));
       expect(refused.status).toBe(404);
-      expect(await refused.text()).toContain('工作區根');
+      expect(await refused.text()).toContain('header 沒記工作區根');
+    } finally {
+      await seeded.close();
+    }
+  });
+
+  /**
+   * [#519](https://github.com/DemianLi/nexus-agent/issues/519) 的驗收句：**同一份 seed，只差
+   * header 有沒有記那一格**——沒記照舊 404（上面那條），記了就讀得到。兩條合起來才證得出
+   * 判準是那一格，不是「線以下」本身。
+   */
+  it('線以下的事件，header 記著同一個根：讀得到，而且內容是對的那一份', async () => {
+    const seeded = await present({ 'a.md': 'one\n' }, ['a.md'], {
+      seed: await seedWithDeliverable(),
+      resumedRoot: 'same',
+    });
+    try {
+      const response = await seeded.get(filePath('seq=0&index=0'));
+      expect(response.status).toBe(200);
+      const page = (await response.json()) as DeliverableFilePage;
+      expect(page.path).toBe('a.md');
+      expect(page.text).toBe('one');
+      // 下載那條走同一個前半，所以它也跟著開了。
+      expect((await seeded.get(downloadPath('seq=0&index=0'))).status).toBe(200);
+    } finally {
+      await seeded.close();
+    }
+  });
+
+  /**
+   * **這一道今天永遠不會響**：`assertSameWorkspaceRoot` 在續接那一刻就擋下了不等的情形，所以
+   * 產品路徑上 `resumedWorkspaceRoot` 與 `workspaceRoot` 只要都有值就相等。留著它是為了讓那個
+   * 保證**有觀察點**——守衛哪天鬆掉、或 `serve.ts` 的轉交被換成別的值，這裡當場 404，而不是
+   * 靜靜去另一個工作區讀同名檔。拿掉這三行，這條測試是唯一會紅的東西。
+   */
+  it('線以下的事件，header 記的是別的根：拒，而且訊息指名兩個根', async () => {
+    const seeded = await present({ 'a.md': 'one\n' }, ['a.md'], {
+      seed: await seedWithDeliverable(),
+      resumedRoot: 'other',
+    });
+    try {
+      const refused = await seeded.get(filePath('seq=0&index=0'));
+      expect(refused.status).toBe(404);
+      const text = await refused.text();
+      expect(text).toContain('別的工作區');
+      expect(text).toContain(seeded.root);
+    } finally {
+      await seeded.close();
+    }
+  });
+
+  /**
+   * **`resume-guards.ts` 四格表第二列的理由不准被這一刀弄壞。** 那一列（header 記了、這一次
+   * 沒給 `--workspace`）放行，靠的正是「沒有根的時候每一次交付讀檔都拒」。記了根也一樣拒。
+   */
+  it('header 記著根、但這台 server 這一次沒給 --workspace：照樣拒', async () => {
+    const seeded = await present({ 'a.md': 'one\n' }, ['a.md'], {
+      seed: await seedWithDeliverable(),
+      resumedRoot: 'same',
+      workspace: false,
+    });
+    try {
+      const refused = await seeded.get(filePath('seq=0&index=0'));
+      expect(refused.status).toBe(404);
+      expect(await refused.text()).toContain('--workspace');
+    } finally {
+      await seeded.close();
+    }
+  });
+
+  /**
+   * **同一條 seeded thread 上，線的兩側**（原本在 `locateDeliverable` 上量的那個 off-by-one，
+   * 判準搬到 `locateRequested` 之後跟著搬過來）。
+   *
+   * 兩個方向要分開講，因為只有一個是靜默的：
+   *
+   * - 把線以下判成以上 ⟹ **靜默錯檔**。seed 長度是 1，所以上面那條測試裡的 `seq 0` 就是
+   *   `storedCount - 1`，少算一格的實作會讓它通過而那條測試紅——那個方向已經有人守著。
+   * - 把線以上判成以下 ⟹ 讀不到自己這一輪剛交付的檔。**這一條守的是它**：拒絕的依據要是
+   *   `seq`，不是「這條 thread 是接回來的」。
+   */
+  it('同一條 seeded thread，線以上那顆讀得到——拒的依據是 seq，不是「接回來的」', async () => {
+    const seed = await seedWithDeliverable();
+    const seeded = await present({ 'a.md': 'one\n' }, ['a.md'], { seed });
+    try {
+      // 前提：這一輪自己那顆交付真的在線以上。不然下面那句證的是別的事。
+      expect(seeded.seq).toBeGreaterThanOrEqual(seed.length);
+      expect((await seeded.get(filePath(`seq=${seeded.seq}&index=0`))).status).toBe(200);
+      expect((await seeded.get(filePath(`seq=${seed.length - 1}&index=0`))).status).toBe(404);
     } finally {
       await seeded.close();
     }
@@ -455,6 +556,10 @@ describe('真的 serve 上，錨從組裝點傳到路由', () => {
   });
 });
 
+/**
+ * `locateDeliverable` 只剩形狀檢查——**錨錨不錨得住是 `locateRequested` 的事**，證它的測試
+ * 在上面那一組「錨」（[#519](https://github.com/DemianLi/nexus-agent/issues/519)）。
+ */
 describe('locateDeliverable', () => {
   const event = (seq: number, paths: readonly string[]): SessionEvent =>
     ({
@@ -464,15 +569,19 @@ describe('locateDeliverable', () => {
       data: { callId: 'c', files: paths.map((path) => ({ path })) },
     }) as unknown as SessionEvent;
 
-  it('線正好在 storedCount 上：等於它的那一顆通過，小一的那一顆拒', () => {
+  it('那個 seq 上是交付宣告，就把原路徑字串交出來', () => {
     const events = [event(0, ['a.md']), event(1, ['b.md'])];
-    expect(locateDeliverable(events, 1, 1, 0)).toEqual({ kind: 'ok', value: 'b.md' });
-    const refused = locateDeliverable(events, 1, 0, 0);
-    expect(refused).toMatchObject({ kind: 'refused', reason: 'no-anchor' });
+    expect(locateDeliverable(events, 0, 0)).toEqual({ kind: 'ok', value: 'a.md' });
+    expect(locateDeliverable(events, 1, 0)).toEqual({ kind: 'ok', value: 'b.md' });
   });
 
-  it('沒續接時 storedCount 是 0，第一顆就通過', () => {
-    expect(locateDeliverable([event(0, ['a.md'])], 0, 0, 0)).toEqual({ kind: 'ok', value: 'a.md' });
+  it('那個 seq 上沒有事件、或它不是交付宣告：not-found', () => {
+    const other = { type: 'run/started', seq: 0, time: 0, data: {} } as unknown as SessionEvent;
+    expect(locateDeliverable([other], 0, 0)).toMatchObject({
+      kind: 'refused',
+      reason: 'not-found',
+    });
+    expect(locateDeliverable([], 0, 0)).toMatchObject({ kind: 'refused', reason: 'not-found' });
   });
 });
 

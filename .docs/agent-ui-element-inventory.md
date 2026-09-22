@@ -19,7 +19,8 @@
 | --- | --- | --- |
 | 清單怎麼排 | 照 nexus 的 UI 概念分 8 區、36 項；每項標 wire 上有沒有資料（沒資料的元件先做只是空殼） | §2 |
 | 現在就能做的 | 純前端：殼層、手機抽屜、主題、toast；wire 已有資料：會話列表、訊息流（human／ai／tool）、核准、提問、狀態、停止、回饋、slash 命令 | §2 的 P0 |
-| wire 還沒有的 | reasoning、連線狀態、todo、goal、plan mode、context 用量、佇列、子代理血緣、交付檔案 | §2 的 P1 |
+| wire 還沒有的 | reasoning、連線狀態、todo、goal、plan mode、context 用量、佇列、子代理對話檢視、交付檔案 | §2 的 P1 |
+| ↑ 這一列 2026-09-22 已複查 | 交付檔案那一項已經做完；「子代理血緣」是這一列的筆誤（血緣＝第 15 列，本來就是 P0，P1 的是第 16 列的唯讀檢視）；其餘七項逐項的現況見 §2.0 | §2.0 |
 | **最大的一個設計分歧** | dsh 的核准與提問都是 **composer takeover**（取代輸入框），不是插在對話裡的卡；nexus 現在是卡片列在畫面上（`App.tsx:319–333`） | §2.4 |
 | Libraries.dev 能拿什麼 | **動效 token 整組可以拿**（時長、曲線、位移、縮放、模糊）；**效果套件** `thinking-orbs`、`border-beam` 是 MIT npm 套件、peer 只要 React、有 reduced-motion 與 light/dark 自動偵測，可以直接裝 | §3 |
 | Libraries.dev 不能照搬的 | **只有暗色**（`html[data-theme="dark"]` 寫死）、色票是 hex 不是 shadcn 的 oklch token、標題字 **Saans** 沒附授權、疑為商用字型 | §3.4 |
@@ -46,6 +47,43 @@
 - **市面**：AI Elements（AIE）與 shadcn 官方（sc）的對應元件；— 表示沒有。
 - **動效**：建議掛的 Libraries.dev 動效，屬於**提案**，見 §3.3。
 
+### 2.0 P1 的協定面複查（2026-09-22，develop `0fb893c`）
+
+這份清單是 2026-09-17 寫的，欄位裡的 P1 只回答「`packages/nexus-wire/src` 的匯出型別有沒有這個資料」。
+那一格會把兩種成本差一個量級的缺口壓成同一個字，所以這次複查把它拆成三層分開查：
+
+1. **源頭**：會話日誌有沒有這種事件、有沒有人真的 `log.append`、出廠 `apps/harness/cordis.yml` 有沒有裝那顆 plugin。
+2. **投影**：pump 與歷史路由有沒有把它合成線上的 wire 事件。`custom` 事件（`method:'custom'`、`data:{name,payload}`）
+   是現成載體，交付（#441）與改動（#443）各走過一次，所以這一層是「有沒有人寫那段合成」，不是「協定表達不出來」。
+3. **消費**：`apps/web` 畫不畫。
+
+| 項 | 源頭（日誌） | 投影（wire） | 消費（web） |
+| --- | --- | --- | --- |
+| reasoning | 串流上有，不經日誌 | **到了折疊器但被丟掉**：`conversation.ts:679` 遇到非 `text-delta` 就 `return state`；`AiEntry` 無欄位 | 無 |
+| 連線狀態 | — | 無（`client.ts`／`sse.ts` 沒有這個概念） | **已有簡版**：`use-conversation.ts:187` |
+| todo | **有**：`todo/write`，`plugin-todo/index.ts:256`，出廠有裝 | 零 | 無（`App.tsx:41` 自己登記了這句） |
+| goal | **有**：`goal/change`，`plugin-goal/service.ts:565`，出廠有裝 | 零 | 無（命令面走 slash 通） |
+| plan mode | **有**：`plan/mode`，`plugin-plan-mode/index.ts:295`／`:405`，出廠有裝 | 零 | 無（`/plan` 走 slash 通） |
+| context 用量 | **有**：`model/usage`，`core/model-usage.ts:161`，出廠有裝 | 零 | 無 |
+| 佇列 | — | — | 無（`composer.tsx` 裡沒有） |
+| 子代理對話檢視 | 有（血緣已是 P0） | 血緣已有 `Attribution` | 血緣已畫，唯讀檢視沒有 |
+| 附件 | 下行交付**已做完**；上行（人傳檔給模型）源頭全無 | 下行有 | 下行有四張卡 |
+
+**四項的資料今天已經躺在日誌裡**（todo、goal、plan mode、context 用量），缺的只有投影那一段與畫面。
+
+**reasoning 比它那一列看起來便宜一個量級**：其餘各項都要「pump 合成新事件 ＋ 歷史路由那一份 ＋ web 新元件」，
+它兩樣都不用 —— 要的是 `AiEntry` 一個欄位、放行那條分支、web 一個摺疊區塊。已開
+[#527](https://github.com/DemianLi/nexus-agent/issues/527)。
+
+**context 用量今天沒有分母**：`model/usage` 只有三個計數不帶上限（`session-log.ts:292`）；基座那側
+`summarization.ts:54` 記著 `contextWindow` 三個欄位「三個都是 0」；唯一知道上限的時刻是撞牆那一刻
+（`live-model.ts:152-174` 從供應商回的負 `max_tokens` 反解）。所以進度條畫不出來，只畫得出用掉多少。
+已開 [#528](https://github.com/DemianLi/nexus-agent/issues/528)。
+
+**沒有實跑過 serve**：上面「源頭有」是從出廠條目與 `log.append` 的呼叫點推的，當排期依據夠，當驗收證據不夠。
+
+§4 的 research 一列（「wire 要補哪些 P1 資料」）問的就是這件事；那一列當時沒有被開成卡，這一節就是它的答案。
+
 ### 2.1 殼層與版面
 
 | # | 元件 | wire | dsh | 市面 | 動效 | 備註 |
@@ -53,7 +91,7 @@
 | 1 | App 殼（三欄：會話列表／對話／右側欄） | —（純前端） | `ui-layout`（`AppFrame`、`SIDEBAR_AUTO_COLLAPSE = 1024`） | sc `sidebar`（手機 Sheet） | 卡片縮放 `--resize-dur 300ms` | RWD 主載體 |
 | 2 | 手機抽屜與頂部列 | —（純前端） | `ui-layout` 的 `narrowExpanded` | sc `sheet`、`drawer` | 下拉 open 250ms／close 150ms、scale 0.97 | 1024 以下 |
 | 3 | 主題切換（light／dark／system） | —（純前端） | `ui-theme`（`--dsw-*` token、`ThemeRuntime`） | shadcn `.dark` | — | 見 §3.4 分歧 |
-| 4 | 連線狀態指示 | P1（`nexus-wire` 的 `client.ts`／`sse.ts` 沒有連線狀態；`WireChannel` 只是頻道名） | `ui-primitives/ConnectionIndicator` | — | `thinking-orbs` `connecting` | |
+| 4 | 連線狀態指示 | P1（`nexus-wire` 的 `client.ts`／`sse.ts` 沒有連線狀態；`WireChannel` 只是頻道名）**——2026-09-22 複查：這句仍然成立，但畫面上已有前端自推的簡版（`use-conversation.ts:187` 的 `connected`／`connectionError`，`StatusLine` 收）** | `ui-primitives/ConnectionIndicator` | — | `thinking-orbs` `connecting` | |
 | 5 | 右側欄（檔案、預覽、終端） | P1 | `ui-sidebar-right`、`ui-sidebar-files`、`ui-sidebar-documentpreview`、`ui-sidebar-terminal` | AIE `file-tree`、`terminal` | 側欄滑入 | 目前 nexus 沒有這一面 |
 
 ### 2.2 會話
@@ -71,14 +109,14 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | 10 | 使用者訊息 | P0（`HumanEntry`） | `ui-chat/MessageItem`、`ui-primitives/user-text` | sc `message`、`bubble`；AIE `message` | 送出時 slide-up 8px＋fade | |
 | 11 | 助理訊息（markdown、串流中、被停止） | P0（`AiEntry`，含 `stopped`） | `ui-chat/AssistantMarkdown`、`AssistantNodeView` | AIE `message`（streamdown） | 字元 shimmer（`Solving....` 那種） | |
-| 12 | 推理區塊 | P1（`AiEntry` 沒有 reasoning 欄位，只有 `text`／`streaming`／`attribution`／`error`／`stopped`；`conversation.ts:496` 註解 reasoning 的 delta「這一版不呈現」） | `ui-chat/ReasoningRow` | AIE `reasoning`、`chain-of-thought` | `thinking-orbs` `composing`（20px） | |
+| 12 | 推理區塊 | P1（`AiEntry` 沒有 reasoning 欄位，只有 `text`／`streaming`／`attribution`／`error`／`stopped`；`conversation.ts:679` 註解 reasoning 的 delta「這一版不呈現」（2026-09-22 複查：原記 `:496`，行號已漂）） | `ui-chat/ReasoningRow` | AIE `reasoning`、`chain-of-thought` | `thinking-orbs` `composing`（20px） | |
 | 13 | 工具呼叫卡（四種狀態） | P0（`ToolEntry.status`） | `ui-tool/ToolCallTree`、`toolviews/` | AIE `tool` | 執行中 `thinking-orbs` `working` | 狀態映射見選型筆記 §3.1 |
 | 14 | 工具專屬呈現（讀檔、搜尋、終端、網頁、diff、JSON） | P0（`ToolEntry.input`／`text`） | `ui-primitives/ReadBlock`、`SearchBlock`、`TerminalBlock`、`WebBlock`、`DiffBlock`、`JsonTree` | AIE `code-block`、`terminal`、`schema-display`、`stack-trace` | 展開 `--resize-dur` | dsh 是「按工具名換呈現」的 slot |
-| 15 | 子代理歸屬標示 | P0（`Attribution`） | `ui-subagent/SubagentHeaderLineage` | AIE `agent` | — | nexus「未歸屬」要照樣顯示 |
+| 15 | 子代理歸屬標示 | P0（`Attribution`）**——2026-09-22 已實作：`tool-card.tsx:52` 的 `AttributionBadge` ＋ transcript 縮排** | `ui-subagent/SubagentHeaderLineage` | AIE `agent` | — | nexus「未歸屬」要照樣顯示 |
 | 16 | 子代理對話檢視（唯讀 composer） | P1 | `ui-subagent/SubagentReadOnlyComposer` | — | — | |
 | 17 | 回合分隔與用量 | P1 | `ui-chat/TurnUsagePanel`、`StatsPills`、`TurnTailNodeView` | AIE `context` | 數字滾動 | |
 | 18 | 壓縮／系統注入列 | P1 | `ui-chat/CompactionItem`、`ContextInjectionRow`、`SystemPromptRow` | AIE `checkpoint` | — | |
-| 19 | 交付檔案列 | P1 | `ui-deliverables`（`ProducedFiles`，有 `@container` 斷點） | AIE `artifact`、`attachments` | — | |
+| 19 | 交付檔案列 | ~~P1~~ **P0（2026-09-22 已做完）** | `ui-deliverables`（`ProducedFiles`，有 `@container` 斷點） | AIE `artifact`、`attachments` | — | |
 | 20 | 附件（輸入與訊息中的圖） | P1 | `ui-attachment` | sc `attachment`；AIE `attachments` | — | |
 
 ### 2.4 人在迴圈裡
