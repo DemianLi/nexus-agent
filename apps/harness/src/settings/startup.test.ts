@@ -233,7 +233,12 @@ describe('startupSetting', () => {
     // 掃空也會綠的防呆：先證明這個檔真的讀得到、而且那個呼叫真的在裡面。
     const callAt = source.indexOf('attachSessionPersistence(sessions, sessionStore, {');
     expect(callAt).toBeGreaterThan(0);
-    expect(source).toContain('startupSetting(plugins, sessionPersistencePlugin)');
+    // **釘的是那個賦值，不只是那次呼叫。** 只比對 `startupSetting(plugins, …)` 在不在的話，
+    // 一個「照樣呼叫、但把結果丟掉、改用 schema 預設」的改動照樣綠——而那正好會讓清單上
+    // 那一列對 CLI 這條路靜靜失效。
+    expect(source).toContain(
+      'persistenceWindow = startupSetting(plugins, sessionPersistencePlugin)',
+    );
     const call = source.slice(callAt);
     expect(call.slice(0, call.indexOf('});'))).toContain('windowMs: persistenceWindow.windowMs');
   });
