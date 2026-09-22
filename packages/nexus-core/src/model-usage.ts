@@ -58,6 +58,7 @@
 
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import type { NexusPlugin } from './plugin.js';
 import type { SessionLookup } from './registry.js';
 
 /** middleware 的名字。名字不撞基座任何一個，所以它是 novel entry。 */
@@ -165,3 +166,58 @@ export function createModelUsageRecorder(sessions: {
     },
   }) as unknown as AgentMiddleware;
 }
+
+/**
+ * 這個條目的 plugin 名。
+ *
+ * **承重的常數**：{@link ./fold.ts | foldRegistry} 拿它去問
+ * {@link ./registry.ts | DisabledEntryView}，所以它是「這一顆被明著關掉了」的唯一鍵。
+ * 刻意不是條目的 `id`——id 是使用者的 patch 改得動的字串
+ * （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+ *
+ * **取名沒有跟 dsh 的套件名走，而那是刻意的。** 它那側最接近的是 `llm/token-meter`，
+ * 但那個套件做的是輪級彙總（`deriveTurnTokenUsage`，一道純折疊），而我們這一顆做的是
+ * 逐次呼叫的記錄——檔頭第一段講的就是兩邊對不上的那一格。借它的名字會讓設定檔裡出現
+ * 一個指著別的東西的詞。
+ */
+export const MODEL_USAGE_PLUGIN_NAME = 'model-usage';
+
+/**
+ * 用量記錄器的**設定條目**（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+ *
+ * **它一顆服務都不註冊，`apply` 是空的**，形狀同
+ * {@link ./observation.ts | observationPolicyPlugin}：這一顆**沒有設定**——
+ * {@link createModelUsageRecorder} 只收一個 `sessions` 通道，沒有任何數字或開關可以調。
+ * 所以它只有三態而不是四態，「條目在場」與「這次組裝沒有經過部署設定層」的正確答案都是
+ * 「照預設開著」。要分的只有**有沒有被明著關掉**，而那件事 `disabledEntries` 已經記著了。
+ *
+ * **因此這一列不可以帶 `config`**：`parseEntryConfig` 對「沒有 Config schema 卻給了
+ * config」是當場拋，不是默默吞掉（見 {@link ./plugin.ts | parseEntryConfig}）。
+ *
+ * **關掉它之後不見的是日誌裡的 `model/usage`**——檔頭第一段講的那本帳。**今天樹上沒有
+ * 任何一處在加總它**，所以關掉它不會有任何東西當場變少，而那正是這個代價非寫下來不可的
+ * 理由：沒有人會紅。數過（2026-09-22）：
+ *
+ * - `apps/harness/src/eval/runner.ts` 的用量是它**自己從 `usage_metadata` 加的**，而且
+ *   那條路連 `attachSession` 都不接（它的檔頭寫明「這條路沒有消費者」，還配了
+ *   `session-absence.test.ts` 當絆索）。**評估那邊的數字跟這一顆無關。**
+ * - `apps/harness/src/eval/session-scan.ts` 只把它列在「這一版認得的事件種類」裡，不算它。
+ * - `deriveSessionStats` 的 `steps` 數的是 `model/start`／`model/end`，不是這一顆。
+ *
+ * 所以不見的是落盤日誌裡那本逐次呼叫的帳。這件事也寫在 `docs/operations.md` 的表上，
+ * 因為從這個條目本身看不出來。
+ *
+ * **偏離登記**同 {@link ./repeat-reminder.ts | repeatReminderPlugin}：載體是
+ * `@nexus/core` 的子路徑而不是獨立套件；而這一顆更前面還有一條**檔頭本來就登記過**的
+ * 偏離（dsh 沒有獨立的用量事件，它掛在 `assistant/message` 上）。條目這一層不新增偏離，
+ * 建構與排位仍由 fold 決定——位置是承重的，見 {@link ./fold.ts | foldMiddleware} 講
+ * 「用量記錄器排在其餘 plugin middleware 之前」那一段。
+ */
+export const modelUsagePlugin: NexusPlugin = {
+  name: MODEL_USAGE_PLUGIN_NAME,
+  apply() {
+    // 空的，而且是承重的空：見上面的檔頭。這一顆唯一的作用是「在場、可以被 disabled」。
+  },
+};
+
+export default modelUsagePlugin;

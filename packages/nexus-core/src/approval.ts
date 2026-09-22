@@ -23,7 +23,7 @@ import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import type { NamedEntry } from './entries.js';
 import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
-import { formatOrigin } from './plugin.js';
+import { formatOrigin, type NexusPlugin } from './plugin.js';
 import { toolRefusal } from './tool-events.js';
 
 /** 核准閘門 middleware 的名字。錯誤訊息與排序斷言用得到。 */
@@ -278,3 +278,53 @@ export function createApprovalGateMiddleware(
     },
   });
 }
+
+/**
+ * 這個條目的 plugin 名。
+ *
+ * **它跟另外五顆 core 條目的鍵不同型**：那幾顆的名字是拿去問
+ * {@link ./registry.ts | DisabledEntryView} 的（「這一顆被關掉了嗎」），這一顆**沒有人
+ * 會去問**——它關不掉，載入器在條目驗證那一刻就擋下來了
+ * （`apps/harness/src/plugin-config.ts` 的保護名單）。這個常數的用途只有一個：讓
+ * `cordis.yml` 那一列的 `name` 與這個模組對得上。
+ */
+export const APPROVAL_GATE_PLUGIN_NAME = 'approval-gate';
+
+/**
+ * 核准閘門的**設定條目**（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
+ *
+ * **它一顆服務都不註冊、`apply` 是空的，而且它是這幾顆裡唯一關不掉的。** 這一列在場有
+ * 兩個各自獨立的理由，兩個都不是「掛上一個功能」：
+ *
+ * 1. **讓 `disabled: true` 變成失敗，而不是一句讀起來像成功的話。** 這一列不存在的時候，
+ *    一條 `- id: approval-gate` ＋ `disabled: true` 的 patch 走的是
+ *    {@link ../../../apps/harness/src/plugin-config.ts | applyEntryPatches} 的「找不到 id」
+ *    那條——**警告一行、然後跳過**。量過（2026-09-22）：`exit 0`、stderr 剛好一行、
+ *    `--dump-config` 的輸出跟完全沒帶那份 patch **逐字相同**。核准其實照樣開著（
+ *    {@link ./fold.ts | foldApprovalGate} 無條件建閘門），失敗的方向是安全的那一邊，
+ *    但**讀起來像成功關掉了**。這個部署是完全內網、多人共用主機
+ *    （[#387](https://github.com/DemianLi/nexus-agent/issues/387)），那個誤會的代價由別人付。
+ *    id 存在之後，同一條 patch 會在載入期當場拋。
+ * 2. **讓核准在 `--dump-config` 裡看得見。** 同一次量測的另一半：那份 dump 從頭到尾
+ *    沒有任何一列跟核准有關，所以一個想確認「這台機器上核准是開的嗎」的維運者，
+ *    在 dump 裡分不出來。`cordis.yml` 的檔頭正是叫人用 `--dump-config` 看「這台機器上
+ *    實際長什麼樣」。
+ *
+ * **關不掉是結論不是傾向。** 今天樹上沒有任何一條路能把閘門從 stack 裡拿掉：CLI 與
+ * serve 沒有對應的旗標，`approvals` 只在組裝點傳，而
+ * {@link ./fold.ts | foldApprovalGate} 是無條件建的；
+ * {@link ./fold.ts | ApprovalPolicy.enabled} 的 `false` 也不是拿掉它，是讓需要核准的
+ * 工具確定性地回一則 `status: 'error'` 的 ToolMessage（fail-closed）。所以替這一列留一個
+ * 「真的要關就這樣寫」的後門，會是**新增一個今天不存在的能力**，不是保留現況。
+ *
+ * **因此這一列不可以帶 `config`**：沒有 Config schema 卻給了 config 是當場拋
+ * （見 {@link ./plugin.ts | parseEntryConfig}）。
+ */
+export const approvalGatePlugin: NexusPlugin = {
+  name: APPROVAL_GATE_PLUGIN_NAME,
+  apply() {
+    // 空的，而且是承重的空：見上面的檔頭。這一顆唯一的作用是「在場、而且關不掉」。
+  },
+};
+
+export default approvalGatePlugin;
