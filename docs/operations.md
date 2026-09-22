@@ -196,7 +196,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `repeatReminder` 時，以那句話為準；而手搭 plugin 清單（沒有這幾列）的組裝拿到的是內建
   預設，不是「什麼都沒掛」。
 
-今天有六列：
+今天有八列：
 
 | id | 管什麼 | 有 `config` 嗎 | 關得掉嗎 |
 | --- | --- | --- | --- |
@@ -206,6 +206,16 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `observation-policy` | 先讀後改：沒讀過的檔不准改 | **沒有** | 關得掉 |
 | `model-usage` | 每一次模型呼叫的 token 帳目記進會話日誌 | **沒有** | 關得掉 |
 | `approval-gate` | 核准閘門 | **沒有** | **關不掉** |
+| `thread-title` | 執行緒列表上標題的兩個上限 | 有（兩格） | **關不掉** |
+| `browser-session` | 瀏覽器 cookie 的絕對有效期 | 有（一格） | **關不掉** |
+
+**最後兩列跟前六列差在消費者跑的時刻**（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）：
+前六列的消費者是組裝期的 `foldRegistry`，這兩列的消費者跑在**任何 agent 出生之前**（serve 的冷讀
+清單、瀏覽器會話的建構子），所以它們的 `apply` 是空的，值在起動期解一次。兩件跟著來的事：
+
+- **它們只在 `serve` 上有作用**，CLI 一列都不讀。它們出現在同一份清單上，是因為清單只有一份。
+- **它們關不掉**，理由跟核准閘門同形但不同源：它們**不裝任何東西**，關掉不會讓標題不再被裁切、
+  也不會讓 cookie 不再過期，只會讓你以為關掉了什麼。寫 `disabled: true` 是啟動失敗。
 
 `observation-policy`、`model-usage`、`approval-gate` 那三列**不可以加 `config:`**——它們沒有
 設定，載入器對「這顆 plugin 沒有 Config schema 卻給了 config」是當場拋。前兩列列在這裡的唯一
@@ -238,6 +248,10 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 剪刀，而且上下文溢出時基座那條緊急摘要也一起沒有。它的 `config` 那四格是**整顆換**的
 （給了 `truncateArgs` 就要把它底下兩格都寫出來），而 `trigger` 那兩個數字的來歷寫在
 `DEFAULT_SUMMARIZATION` 的檔頭上——**換模型要重量一次**。
+
+**`thread-title` 與 `browser-session` 的 `config` 同樣是整份替換。** 沒重述的欄位回到 schema 的
+預設值，不是保留原本那一列寫的值——例如只寫 `maxBytes` 的話，`maxWords` 拿到的是預設的 5。
+兩個值的預設（`5`／`40`、`30` 天）都照 dsh 的產品組裝。
 
 ### 看這台機器上疊出來的是什麼
 

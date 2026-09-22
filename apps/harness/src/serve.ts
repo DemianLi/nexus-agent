@@ -44,7 +44,6 @@ import {
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { listStoredThreads } from './session-list.js';
-import type { ThreadTitleLimits } from './session-list.js';
 import { attachSessionPersistence, SessionNotFoundError } from '@nexus/core';
 import { assertSameCwd, assertSameWorkspaceRoot } from './resume-guards.js';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
@@ -60,22 +59,14 @@ import type { WireHandler } from './wire-handler.js';
 import { startWireServer } from './wire-server.js';
 import type { WireServer } from './wire-server.js';
 import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js';
+import { browserSessionPlugin } from './settings/browser-session.js';
+import { startupSetting } from './settings/startup.js';
+import { threadTitlePlugin } from './settings/thread-title.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
 import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
 
 /** 預設 port。挑一個不常撞的，`--port` 蓋得掉。 */
 export const DEFAULT_PORT = 8787;
-
-/**
- * 列表上標題的兩個上限（[#302](https://github.com/DemianLi/nexus-agent/issues/302)）。值照 dsh 的產品組裝
- * （`packages/bundle/base/cordis.patch.yml` 的 `session-title`：`fallbackMaxWords: 5`、`fallbackMaxBytes: 40`，
- * SHA `c291e79`）。
- *
- * **寫在這裡是因為沒有別的地方寫**：dsh 放在 plugin 設定，我們的設定機制是
- * [#46](https://github.com/DemianLi/nexus-agent/issues/46)。`listStoredThreads` 不給預設值，所以這是整棵樹上
- * 唯一講這兩個數字的地方。40 個位元組是 13 個中文字——中文沒有空白，詞數那一格咬不到。
- */
-export const THREAD_TITLE_LIMITS: ThreadTitleLimits = { maxWords: 5, maxBytes: 40 };
 
 export interface ServeInvocation {
   readonly live: boolean;
@@ -284,15 +275,24 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // **瀏覽器會話的密鑰也在這裡讀**（#424），同一條理由：權限過寬、記錄壞掉，都該在 server 還沒
   // 起來的時候就講。每次啟動只讀這一次，之後在記憶體裡驗。
   const env = options.env ?? process.env;
-  const auth = new BrowserAuth(await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)));
-  const webDist = options.webDist ?? resolveWebDist();
-
   // **清單只有一個來源：出貨的 `cordis.yml` 加上使用者那兩層**（#454、#455），與 CLI 同一條
   // 路：同一個函式、同一個 home 層、同一組 `--patch`。
+  //
+  // **它排在瀏覽器會話之前，那是承重的**（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）：
+  // cookie 的有效期由清單上 `#settings/browser-session` 那一列講，密鑰讀出來的那一刻就要有它。
   const plugins: readonly PluginEntry[] = await loadDefaultPlugins({
     env,
     ...(invocation.patches !== undefined && { patches: invocation.patches }),
   });
+  // **起動期解一次、往下傳一份**：這兩顆的消費者都跑在任何 agent 出生之前，那時還沒有註冊表
+  // 可以讀服務。理由與偏離登記見 `settings/startup.ts` 的檔頭。
+  const browserSession = startupSetting(plugins, browserSessionPlugin);
+  const threadTitle = startupSetting(plugins, threadTitlePlugin);
+  const auth = new BrowserAuth(
+    await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)),
+    browserSession.maxAgeDays,
+  );
+  const webDist = options.webDist ?? resolveWebDist();
 
   // **會話根按目錄分，一個專案一格**——照 dsh 的 `projectDir(root, cwd)`
   // （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 拍板的第 3 件）。一條
@@ -324,8 +324,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     ...(sessionStore === undefined
       ? {}
       : {
-          listThreads: () =>
-            listStoredThreads(sessionStore.directory, { cwd, title: THREAD_TITLE_LIMITS }),
+          listThreads: () => listStoredThreads(sessionStore.directory, { cwd, title: threadTitle }),
         }),
     // 一個 thread 一個 agent——各自的 checkpointer、各自的虛擬檔案系統。
     createAgent: async (threadId: string) => {

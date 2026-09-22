@@ -154,7 +154,7 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是 echo ＋ 工作區指令 ＋ 計劃模式 ＋ goal ＋ todo ＋ feedback ＋ present ＋ 二十個配套入口', async () => {
+  it('預設清單是七顆功能 ＋ 六列 core 設定 ＋ 兩列 harness 設定 ＋ 二十個配套入口', async () => {
     // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
     // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
     // 讓計劃模式進來，理由寫在 `apps/harness/cordis.yml` 的註解上（命令沒進預設清單就等於
@@ -209,6 +209,19 @@ describe('一次性模式', () => {
       'observation-policy',
       'model-usage',
       'approval-gate',
+      // **這兩顆跟上面那六顆同類、差在消費者跑的時刻**
+      // （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）：上面那幾列的消費者是
+      // `foldRegistry`，手上有註冊表；這兩列的消費者跑在**任何 agent 出生之前**（serve 的冷讀
+      // 清單、`BrowserAuth` 的建構子），所以 `apply` 也是空的，值由 `settings/startup.ts` 的
+      // `startupSetting` 在起動期解一次。
+      //
+      // **它們同樣在 `PROTECTED_ENTRY_NAMES` 上**，理由跟核准閘門同形但不同源：它們不裝任何
+      // 東西，關掉不會讓標題不再被裁切、也不會讓 cookie 不再過期，只會讓人以為關掉了什麼。
+      //
+      // **CLI 一個都不讀它們**——這兩個值的消費者都在 serve 那一側。它們出現在這份清單上，是
+      // 因為清單只有一份（#454），不是因為 CLI 用得到。
+      'thread-title',
+      'browser-session',
     ]);
     // 二十個配套入口裡有 `@nexus/plugin-workspace-changes` 的，**那個功能本身不在這份清單裡**：它要工作區的根，
     // 只由 serve 經 `createCliAgent` 掛（#443），同 dsh 只在 web-app bundle 掛。

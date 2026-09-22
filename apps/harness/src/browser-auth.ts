@@ -23,9 +23,11 @@
  *
  * ## 偏離（照 AGENTS.md 的偏離規則登記）
  *
- * - **有效期寫死 30 天，不能設定。** dsh 是 plugin 設定 `cookieMaxAgeDays`（預設 30）。我們沒有
- *   plugin 設定機制（[#46](https://github.com/DemianLi/nexus-agent/issues/46)），前例同 `serve.ts` 的
- *   `THREAD_TITLE_LIMITS`：值照 dsh 的預設，寫在這裡是因為沒有別的地方寫。
+ * - ~~**有效期寫死 30 天，不能設定。**~~ **這一條沒了**
+ *   （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）：有效期現在由
+ *   `#settings/browser-session` 那一列講，預設仍是 dsh 的 30。剩下的偏離只在**載體**上
+ *   ——dsh 的擁有者是一個套件，我們退到 package-internal specifier，理由逐條在
+ *   [`./settings/thread-title.ts`](./settings/thread-title.ts) 的檔頭。
  * - **不自動開瀏覽器。** dsh 的 `dsh-web-app` 印出並打開一次帶 token 的網址（SSH 底下只印）。我們本來
  *   就沒有開瀏覽器這一段；而在多人主機上，負責開瀏覽器的子行程會把網址放在命令列參數裡，別的
  *   使用者用 `ps` 就看得到 token。
@@ -35,8 +37,7 @@
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
-/** 瀏覽器 cookie 的絕對有效期（天）。見檔頭「偏離」第一條。 */
-export const BROWSER_SESSION_MAX_AGE_DAYS = 30;
+import { DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS } from './settings/browser-session.js';
 
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1000;
 const TOKEN_BYTES = 32;
@@ -184,12 +185,14 @@ export class BrowserAuth {
 
   /**
    * @param secret - 32 bytes 的簽章密鑰。
-   * @param maxAgeDays - cookie 的絕對有效期（天）；只有測試會給預設以外的值。
+   * @param maxAgeDays - cookie 的絕對有效期（天）。**產品路徑上由 `serve.ts` 明著傳**，值來自
+   *   `#settings/browser-session` 那一列；省略是給手搭的測試用的，拿到的是同一個 schema 的預設值
+   *   （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
    * @throws 有效期換算成毫秒後超出安全整數範圍。
    */
   constructor(
     private readonly secret: Buffer,
-    maxAgeDays: number = BROWSER_SESSION_MAX_AGE_DAYS,
+    maxAgeDays: number = DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS,
   ) {
     this.launchToken = encodeBase64Url(randomBytes(TOKEN_BYTES));
     this.maxAgeMilliseconds = maxAgeDays * DAY_MILLISECONDS;

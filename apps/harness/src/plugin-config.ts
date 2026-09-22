@@ -112,9 +112,18 @@ export type ConfigEntry = z.infer<typeof entrySchema>;
  * plugin，而且把它從兩個插入點拿掉的突變量到 **126 條紅**。沒有條目，就沒有「關得掉」
  * 這個問題要擋。
  *
+ * **名單上另外那兩列是只講設定的條目**（`#settings/thread-title`、`#settings/browser-session`，
+ * [#529](https://github.com/DemianLi/nexus-agent/issues/529)）。理由跟核准閘門同形但不同源：
+ * 它們**不裝任何東西**，所以「關掉」對它們沒有意義——關掉不會讓標題不再被裁切、也不會讓
+ * cookie 不再過期，只會讓部署以為自己關掉了什麼。名單擋的正是那個誤會。
+ *
  * @see {@link assertNotProtected}
  */
-export const PROTECTED_ENTRY_NAMES: ReadonlySet<string> = new Set(['@nexus/core/approval-gate']);
+export const PROTECTED_ENTRY_NAMES: ReadonlySet<string> = new Set([
+  '@nexus/core/approval-gate',
+  '#settings/thread-title',
+  '#settings/browser-session',
+]);
 
 /**
  * 一列 patch。

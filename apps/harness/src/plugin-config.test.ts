@@ -50,6 +50,11 @@ import {
   assertPrivateFile,
   PROTECTED_ENTRY_NAMES,
 } from './plugin-config.js';
+import { DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS } from './settings/browser-session.js';
+import {
+  DEFAULT_THREAD_TITLE_MAX_BYTES,
+  DEFAULT_THREAD_TITLE_MAX_WORDS,
+} from './settings/thread-title.js';
 
 const temporary: string[] = [];
 
@@ -75,11 +80,15 @@ function writePrivate(root: string, name: string, content: string): string {
 describe('出貨的 cordis.yml', () => {
   it('每一列都載得起來，而且每一顆都是真的 plugin', async () => {
     const fromYaml = await loadPluginConfig();
-    // 33 = 7 個功能 ＋ 6 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門）
-    // ＋ 20 個配套入口。**數目寫在這裡是為了擋「靜靜少一列」**：底下那些測試各自只看得到
-    // 自己關心的那幾列，少掉一個空 installer 不會有人紅。確切該有哪些配套入口由
-    // `invariant-companions.test.ts` 對帳（#489）。
-    expect(fromYaml).toHaveLength(33);
+    // 35 = 7 個功能 ＋ 6 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門）
+    // ＋ **2 個 harness 自己的設定條目**（#529）＋ 20 個配套入口。**數目寫在這裡是為了擋
+    // 「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個空 installer
+    // 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
+    //
+    // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
+    // `loadPluginConfig`，所以那兩列要真的經由 `apps/harness/package.json` 的 `imports`
+    // 解析、import、而且長得像一顆 plugin，才數得到 35。拿掉那個 `imports` 區塊，這裡當場紅。
+    expect(fromYaml).toHaveLength(35);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -140,6 +149,16 @@ describe('出貨的 cordis.yml', () => {
     // **`observation-policy` 不在這張名單上，而那是承重的不對稱**（#456）：那一顆沒有設定、
     // 也沒有 Config schema，所以替它加一行 `config:` 會在載入期拋。它進到這棵樹裡的唯一
     // 意義是「關得掉」，關掉的行為由 `observation-policy-entry` 那組測試守著。
+    // harness 自己那兩列（#529）：跟上面那幾列同一個用途（只講設定），差別是消費者跑在
+    // 任何 agent 出生之前，所以 `apply` 是空的、值由 `startupSetting` 在起動期讀。
+    expect(byId.get('thread-title')).toEqual({
+      maxWords: DEFAULT_THREAD_TITLE_MAX_WORDS,
+      maxBytes: DEFAULT_THREAD_TITLE_MAX_BYTES,
+    });
+    expect(byId.get('browser-session')).toEqual({
+      maxAgeDays: DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS,
+    });
+
     const withConfig = [...byId].filter(([, config]) => config !== undefined).map(([id]) => id);
     expect(withConfig).toEqual([
       'todo',
@@ -147,6 +166,8 @@ describe('出貨的 cordis.yml', () => {
       'repeat-reminder',
       'tool-result-pruner',
       'summarization',
+      'thread-title',
+      'browser-session',
     ]);
   });
 
