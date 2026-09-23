@@ -31,6 +31,8 @@
  * 這個 join 就可以退休——`subagent-cause` 那條測試會是第一個發現的人。
  */
 
+import { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
+import type { WireContextMeasure, WireContextPressure } from './context-pressure.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
 import type { WirePresentedFile } from './deliverables.js';
 import { WORKSPACE_CHANGES } from './workspace-changes.js';
@@ -346,12 +348,25 @@ export interface ConversationState {
   readonly subagents: Readonly<Record<string, { readonly name: string; readonly callId: string }>>;
   /** 目前這一輪從 `entries` 的哪一格開始，見 {@link AiEntry.turnTail}。 */
   readonly turnStart: number;
+  /**
+   * 這條對話現在多大、離自動摘要還有多遠（#528）。**一顆都還沒收到就是 `null`**。只算 root；兩格各自是最新
+   * 那一筆，規則見 `context-pressure.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
+   */
+  readonly contextPressure: WireContextPressure | null;
 }
 
 const ROOT: Attribution = { kind: 'root' };
 
 export function emptyConversation(): ConversationState {
-  return { entries: [], status: 'idle', pendings: [], lastSeq: -1, subagents: {}, turnStart: 0 };
+  return {
+    entries: [],
+    status: 'idle',
+    pendings: [],
+    lastSeq: -1,
+    subagents: {},
+    turnStart: 0,
+    contextPressure: null,
+  };
 }
 
 /**
@@ -557,13 +572,15 @@ function isPresentedFile(value: unknown): value is WirePresentedFile {
 }
 
 /**
- * `custom` frame。**只認 {@link DELIVERABLES_PRESENTED} 與 {@link WORKSPACE_CHANGES}**，其他名字、形狀不對的
- * 一律略過：這個 channel 上的東西由 pump 從日誌合成，認不得的不猜。
+ * `custom` frame。**只認 {@link DELIVERABLES_PRESENTED}、{@link WORKSPACE_CHANGES}、{@link MODEL_USAGE} 與
+ * {@link CONTEXT_MEASURE}**，其他名字、形狀不對的一律略過：這個 channel 上的東西由 pump 從日誌合成，認不得的不猜。
  */
 function reduceCustom(state: ConversationState, data: unknown): ConversationState {
   const { name, payload } = (data ?? {}) as { name?: unknown; payload?: unknown };
   if (typeof payload !== 'object' || payload === null) return state;
   if (name === WORKSPACE_CHANGES) return reduceWorkspaceChanges(state, payload);
+  if (name === MODEL_USAGE) return reduceModelUsage(state, payload);
+  if (name === CONTEXT_MEASURE) return reduceContextMeasure(state, payload);
   if (name !== DELIVERABLES_PRESENTED) return state;
   const { callId, seq, files } = payload as { callId?: unknown; seq?: unknown; files?: unknown };
   if (
@@ -588,6 +605,42 @@ function reduceCustom(state: ConversationState, data: unknown): ConversationStat
  */
 function isSeq(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** 一個數量：非負安全整數。同 `@nexus/core` 的 `readModelUsage` 驗 `model/usage` 的那條。 */
+function isCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** `model/usage` 的 `payload`：只換 `inputTokens` 那一格，`measure` 照舊。 */
+function reduceModelUsage(state: ConversationState, payload: object): ConversationState {
+  const { inputTokens } = payload as { inputTokens?: unknown };
+  if (!isCount(inputTokens)) return state;
+  return { ...state, contextPressure: { ...state.contextPressure, inputTokens } };
+}
+
+/**
+ * `context/measure` 的 `payload`：只換 `measure` 那一格。**任何一格不對就整顆不收**，不收一半——門檻少一道的
+ * 話，環會量錯那一道，而且看起來正常。
+ */
+function reduceContextMeasure(state: ConversationState, payload: object): ConversationState {
+  const { approxTokens, messageCount, thresholds } = payload as {
+    approxTokens?: unknown;
+    messageCount?: unknown;
+    thresholds?: unknown;
+  };
+  // 空陣列也不收：`measure` 在就保證至少一道門檻，web 不必處理「有量測、沒分母」。摘要的設定本來就不准空陣列。
+  if (!isCount(approxTokens) || !isCount(messageCount) || !Array.isArray(thresholds)) return state;
+  if (thresholds.length === 0) return state;
+  const parsed: WireContextMeasure['thresholds'][number][] = [];
+  for (const threshold of thresholds as unknown[]) {
+    const { type, value } = (threshold ?? {}) as { type?: unknown; value?: unknown };
+    if (type !== 'messages' && type !== 'tokens') return state;
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return state;
+    parsed.push({ type, value });
+  }
+  const measure: WireContextMeasure = { approxTokens, messageCount, thresholds: parsed };
+  return { ...state, contextPressure: { ...state.contextPressure, measure } };
 }
 
 /** `workspace/changes` 的 `payload`：`seq` 要是非負整數，同一個 `seq` 只長一格。 */

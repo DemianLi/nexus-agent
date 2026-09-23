@@ -118,12 +118,13 @@ describe('模型工具走真的 pump', () => {
       await pump.submit({ kind: 'message', text: '幫我把整條升級流程做完' });
       // 先確認裝置真的停在核准點——不然下面那一輪證不到 resume 這件事。被停住的那次呼叫
       // 留下一顆沒配對的 `tool/call`，落在中斷之前（#264：中斷不是落定）；叫出它的那次模型
-      // 呼叫在它前面留一對起訖（#266），夾著它的回覆（#305）。
+      // 呼叫在它前面留一對起訖（#266），夾著它的回覆（#305），摘要器在起訖外層記一筆量測（#528）。
       expect(pump.sessionLog.events.map((event) => event.type)).toEqual([
         'turn/start',
         'model/start',
         'assistant/message',
         'model/end',
+        'context/measure',
         'tool/call',
         'interrupt/raised',
         'turn/end',
@@ -135,8 +136,8 @@ describe('模型工具走真的 pump', () => {
         response: { decisions: [{ type: 'approve' }] },
       });
 
-      // 恢復那一輪的起點真的是 `resume`，不是又一顆 `message`。它緊接在上面那六顆之後。
-      expect(pump.sessionLog.events[7]?.data).toEqual({ kind: 'resume' });
+      // 恢復那一輪的起點真的是 `resume`，不是又一顆 `message`。它緊接在上面那八顆之後。
+      expect(pump.sessionLog.events[8]?.data).toEqual({ kind: 'resume' });
       const changes = pump.sessionLog.events.filter((event) => event.type === 'goal/change');
       expect(changes).toHaveLength(1);
       expect(changes[0]?.data).toMatchObject({
