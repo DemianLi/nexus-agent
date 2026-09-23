@@ -81,6 +81,8 @@ export type {
   WireSummaryThreshold,
 } from './context-pressure.js';
 export { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
+export type { TodosPayload, WireTodoItem } from './todos.js';
+export { TODOS } from './todos.js';
 export {
   FEEDBACK_METHODS,
   HISTORY_PAGE_MAX_BYTES,

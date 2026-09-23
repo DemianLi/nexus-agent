@@ -21,11 +21,13 @@
  * | `workspace/changes` | `custom` frame，`data` 同即時（{@link workspaceChangesData}）；它指到的摘要可能已經不在 |
  * | `model/usage` ／ `context/measure` | 用量表（#528）：**一頁各一顆，是到這一頁結尾為止最新的那一筆**，`data` 同即時（{@link modelUsageData}、{@link contextMeasureData}） |
  *
+ * | `todo/write` ／ `turn/start` | 待辦清單（#575）：**一頁一顆，是這一頁結尾時的清單**，是 `null` 就不送；`data` 同即時（{@link todosData}） |
+ *
  * 用量表那兩種不是逐顆轉：web 只留最新那一筆，逐顆轉只會多出一串馬上被蓋掉的 frame。「到這一頁結尾為止」包括這一頁
  * 開頭之前的——最後一輪在第一次模型呼叫之前就失敗的話，這一頁自己沒有那兩種事件，而即時的畫面上用量表還在。見
  * {@link historyPage}。
  *
- * 其餘的（壓縮、外掛注入的 `user/message`、模型起訖、命令、模式、目標、todo、回饋）即時的畫面也不畫，這裡也不畫。
+ * 其餘的（壓縮、外掛注入的 `user/message`、模型起訖、命令、模式、目標、回饋）即時的畫面也不畫，這裡也不畫。
  * **壓縮不畫是偏離**：dsh 的畫面由那顆 `user/message {surfaceOp: replace}` 把被壓掉的那一段換成摘要；我們沒有
  * surface 那一軸，即時的畫面從來沒換過，歷史跟著即時。
  *
@@ -38,6 +40,7 @@ import type {
   DeliverablesPresentedPayload,
   Event,
   ModelUsagePayload,
+  TodosPayload,
   ThreadHistoryQuery,
   ThreadHistoryResult,
   WireContextMeasure,
@@ -49,6 +52,7 @@ import {
   HISTORY_PAGE_MAX_BYTES,
   HISTORY_PAGE_MESSAGES,
   MODEL_USAGE,
+  TODOS,
   WORKSPACE_CHANGES,
 } from '@nexus/wire';
 import type { LoggedMessage, SessionEvent, SessionEventMap, UnreplayableReason } from '@nexus/core';
@@ -206,6 +210,36 @@ export function contextMeasureData(measure: SessionEventMap['context/measure']):
   };
 }
 
+/**
+ * root 的待辦清單在線上的 `custom` 事件 `data`（[#575](https://github.com/DemianLi/nexus-agent/issues/575)）：投影的
+ * 整個值。即時與這裡共用，同 {@link deliverablesData}。規則見 `@nexus/wire` 的 `todos.ts`。
+ *
+ * @param todos - 整份清單，或 `null`（一輪剛開始）。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `TodosPayload`。
+ */
+export function todosData(todos: SessionEventMap['todo/write']['todos'] | null): {
+  readonly name: typeof TODOS;
+  readonly payload: TodosPayload;
+} {
+  return {
+    name: TODOS,
+    payload: {
+      todos: todos === null ? null : todos.map(({ content, status }) => ({ content, status })),
+    },
+  };
+}
+
+/**
+ * 這一顆會不會把待辦清單清成 `null`：開新的一輪，也就是不是 `resume` 的 `turn/start`（照 dsh 的 `todos` 投影）。
+ * 「一輪開始」為什麼不含 `resume` 見 `@nexus/wire` 的 `todos.ts`。即時（pump）與這裡共用這一條。
+ *
+ * @param event - root 日誌的一顆事件。
+ * @returns 會清空就是 `true`。
+ */
+export function isTodosReset(event: SessionEvent): boolean {
+  return event.type === 'turn/start' && event.data.kind !== 'resume';
+}
+
 /** 用量表那兩種事件。見檔頭。 */
 type PressureEvent = Extract<SessionEvent, { type: 'model/usage' | 'context/measure' }>;
 
@@ -334,6 +368,14 @@ export function historyFrames(
   /** 這一輪記了 `tool/call`、還沒有 `tool/result` 的：callId → 工具名。 */
   const unsettled = new Map<string, string>();
   const last = events.at(-1);
+  /**
+   * 這一段結尾時的待辦清單（#575）。**從 `null` 起算不用往前補**：一頁一定從 seq 0 或一顆不是 `resume` 的
+   * `turn/start` 開始（`historyPage` 在輪邊界上切），而那一顆本來就會把它清成 `null`。
+   */
+  let todos: {
+    readonly time: number;
+    readonly list: SessionEventMap['todo/write']['todos'];
+  } | null = null;
 
   const close = (time: number, data: Record<string, unknown>) => {
     frames.push(lifecycle(time, data));
@@ -344,6 +386,8 @@ export function historyFrames(
   };
 
   for (const event of events) {
+    if (isTodosReset(event)) todos = null;
+    else if (event.type === 'todo/write') todos = { time: event.time, list: event.data.todos };
     switch (event.type) {
       case 'turn/start':
         if (suspended && event.data.kind === 'resume') {
@@ -455,6 +499,7 @@ export function historyFrames(
   }
   // 用量表：這一段裡各自最新的那一顆，放在最後——web 只留最新那一筆，放哪裡都一樣，放最後讀起來就是「到結尾為止」。
   frames.push(...latestPressureEvents(events).map(pressureFrame));
+  if (todos !== null) frames.push(frame('custom', todos.time, todosData(todos.list)));
   return frames;
 }
 
