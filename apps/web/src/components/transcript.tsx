@@ -187,6 +187,17 @@ function Entry({
     return <ToolCard entry={entry} beam={beam} {...(answer === undefined ? {} : { answer })} />;
   }
 
+  if (
+    entry.text === '' &&
+    !entry.streaming &&
+    entry.stopped !== true &&
+    entry.error === undefined
+  ) {
+    // 只想、只呼叫工具的那幾步會留下一則正文空的回覆，#562 之後重新整理也會有。講完了、沒被打斷、
+    // 沒出錯，就沒有東西可畫；畫出來是一顆空泡泡。推理由 #527 的 web 那一半接。
+    return null;
+  }
+
   const indented = entry.attribution.kind !== 'root';
   return (
     <Message
