@@ -151,6 +151,12 @@ jobs:
         if: steps.ts.outputs.found == 'true'
         run: pnpm -r run typecheck
 
+      # 基座的 grep 有 rg 就走 rg、沒有就走只比檔名的退路，兩條的行為不同；runner 映像沒預裝 rg，
+      # 不裝的話 CI 只驗得到退路。contained-backend-grep.test.ts 的 rg 那組找不到 rg 會紅，不會跳過。
+      - name: 安裝 ripgrep
+        if: steps.ts.outputs.found == 'true'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep
+
       - name: Test
         if: steps.ts.outputs.found == 'true'
         run: pnpm -r run test
