@@ -89,7 +89,7 @@ describe('模型知不知道自己在哪一格', () => {
     // **指名是重點**：「在工作區之內」對模型不是一個位址。但指名要用工具收的那一種位址。
     expect(prompt).toContain('`/` 就是工作區根');
     // **翻面的絆索**：這一條原本斷言 prompt 裡**有**主機路徑，把缺陷寫成了規格。第 2 階段 live
-    // 量到用到檔案工具的 30 輪裡有 24 輪照著那個字串傳主機路徑，工具全都落空。macOS 的 tmpdir 還有一個
+    // 量到用到檔案工具的 30 輪裡有 23 輪照著那個字串傳主機路徑，工具全都落空。macOS 的 tmpdir 還有一個
     // `/private` 前綴的別名，兩種寫法都不能出現。
     expect(prompt).not.toContain(root);
     expect(prompt).not.toContain(await realpath(root));
