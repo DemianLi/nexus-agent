@@ -53,8 +53,15 @@
 import { createHash } from 'node:crypto';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { realpath } from 'node:fs/promises';
-import { FilesystemBackend } from 'deepagents';
-import type { DeleteResult, EditResult, FileUploadResponse, WriteResult } from 'deepagents';
+import { applyGrepMaxCount, FilesystemBackend } from 'deepagents';
+import type {
+  DeleteResult,
+  EditResult,
+  FileUploadResponse,
+  GrepResult,
+  WriteResult,
+} from 'deepagents';
+import micromatch from 'micromatch';
 
 import { noteSandboxDenial } from '@nexus/core';
 import type {
@@ -76,9 +83,24 @@ function denied<T extends { error: string }>(result: T): T {
 }
 
 /**
+ * 帶目錄的 glob 的最後一段，拿來交給基座先比檔名（見 {@link ContainedFilesystemBackend.grep}）。
+ * 大括號跨了 `/` 的時候（`{logs/a.log,src/b.ts}`），最後一段只是半個選項，拿它比檔名會漏掉
+ * 其他選項，所以回 `null`。最後一段是空的（`logs/`）或 `**` 都不必特別處理：前者等於不帶 glob，
+ * 後者拿來比檔名本來就什麼都對得上。
+ *
+ * @param anchored - 已去掉開頭 `/` 的 glob。
+ * @returns 最後一段，或 `null`。
+ */
+function lastSegmentOf(anchored: string): string | null {
+  if (/\{[^}]*\/[^}]*\}/.test(anchored)) return null;
+  return anchored.slice(anchored.lastIndexOf('/') + 1) || null;
+}
+
+/**
  * 圍堵的強度。名字照抄 dsh 的三個 mode（`references/deepseek-harness/packages/fs/fs-sandbox/README.md`）。
  *
- * `read-only` 只擋得住**變更**——讀不經過這裡（`read` / `grep` / `glob` 沒被覆寫）。dsh 也是
+ * `read-only` 只擋得住**變更**——讀不經過這裡（`read` / `glob` 沒被覆寫；`grep` 的覆寫只修
+ * glob 的錨點，不加任何 fence，見 {@link ContainedFilesystemBackend.grep}）。dsh 也是
  * 這樣：它的 fence 同樣只掛在兩個 mutation 上，「read-only」講的是這個 backend 不改東西，
  * 不是「這個 agent 看不到東西」。看不看得到歸 `permissions`。
  *
@@ -326,6 +348,55 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       (result, index) =>
         result ?? { path: files[index]?.[0] ?? '', error: 'permission_denied' as const },
     );
+  }
+
+  /**
+   * 搜尋檔案內容。**帶目錄的 glob 一律對工作區根錨定**，跟 dsh 一樣。
+   *
+   * **基座的缺陷**：`ripgrepSearch()` 啟動 `rg` 時沒指定 `cwd`，搜尋路徑又是主機上的絕對路徑，
+   * 而 rg 會把帶 `/` 的 glob 錨定在行程的工作目錄上。harness 的工作目錄不是工作區根，所以
+   * `glob: "logs/app.log"`、`glob: "/logs/app.log"` 都會**不報錯、回 0 筆**。沒有 rg 時走的退路
+   * （`literalSearch()`）只拿檔名比對 glob，帶目錄的 glob 同樣永遠對不上。一次 live 量測裡，
+   * 模型那一輪共打了 20 次工具呼叫，其中 9 次 grep 全部回 0 筆，花了 154 秒。不帶 `/` 的 glob（`*.ts`）兩條路
+   * 都對得上，不受影響。
+   *
+   * **偏離登記**（AGENTS.md「技術實現標準」）：
+   * - dsh 的做法（`packages/fs/tool-fs-search/src/grep.ts` 與 `search-core.ts`）：`rg` 在 session
+   *   的工作目錄裡執行，glob 原樣以 `--glob=` 傳下去，所以帶目錄的 glob 對根錨定。
+   * - 表達不出來的原因：`ripgrepSearch()` 與 `literalSearch()` 在型別上是 `private`，
+   *   `FilesystemBackend` 也沒有指定 `rg` 工作目錄的選項，這一層換不到那個 `cwd`。
+   * - 退到的做法：只在 glob 帶 `/` 時介入。交給基座的是 glob 的最後一段（`logs/app.log` →
+   *   `app.log`），兩條路都拿它比檔名，回來的是一個超集；再拿完整的 glob 對「相對於工作區根」
+   *   的路徑精確過濾，語意等同 rg 在根上執行。大括號跨了 `/` 時沒有可靠的最後一段，改成
+   *   不帶 glob 交給基座，一樣在這裡過濾。
+   * - 回頭點：`contained-backend.test.ts` 對裸 `FilesystemBackend` 斷言今天回 0 筆。基座修好
+   *   那天它會紅，這個覆寫就該拿掉。
+   *
+   * `maxCount` 在過濾之後才套用，否則過濾前的截斷會丟掉本來對得上的結果；截斷時照基座的
+   * 形狀設 `truncated`，工具層據此補上截斷提示。
+   *
+   * @param pattern - 要找的字面字串。
+   * @param dirPath - 從哪個虛擬路徑開始找。
+   * @param glob - 篩選檔案的 glob；帶 `/` 時對工作區根錨定。
+   * @param maxCount - 最多回幾筆。
+   * @returns 基座的搜尋結果；帶目錄的 glob 已按工作區根過濾。
+   */
+  override async grep(
+    pattern: string,
+    dirPath?: string,
+    glob?: string | null,
+    maxCount?: number | null,
+  ): Promise<GrepResult> {
+    if (glob === undefined || glob === null || !glob.includes('/')) {
+      return super.grep(pattern, dirPath, glob, maxCount);
+    }
+    const anchored = glob.replace(/^\/+/, '');
+    const result = await super.grep(pattern, dirPath, lastSegmentOf(anchored), null);
+    if (result.matches === undefined) return result;
+    const matches = result.matches.filter((match) =>
+      micromatch.isMatch(match.path.replace(/^\/+/, ''), anchored, { dot: true }),
+    );
+    return applyGrepMaxCount({ result: { ...result, matches }, maxCount: maxCount ?? null });
   }
 
   /**
