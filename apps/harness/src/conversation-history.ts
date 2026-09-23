@@ -498,6 +498,10 @@ function weigh(
  * 每輪 10 次滿版讀）差的都是 **24 bytes，固定值、而且是高估**。高估的方向是安全的：拿它當判準只會讓頁
  * 略小，不會讓真的送出去的超過上限。
  *
+ * **#528 之後那個「固定 24」不成立了，方向仍是高估**：用量表的 frame 每一段各送一份（那一段最新的兩顆），
+ * 整頁只送一份，所以段數越多多估越多——每段最多兩顆、各一兩百位元組，量級跟 24 同一檔。反方向的那兩顆
+ * （從切點之前補的，見 {@link historyPage}）不在這裡秤，由呼叫端加進撐破上限的判斷。
+ *
  * @param window - `throughSeq` 以內的日誌。
  * @param messageCut - 則數上限算出來的切點，已經退到輪邊界。
  * @param end - 這一頁的結束位置（不含）。
@@ -588,12 +592,14 @@ export function historyPage(
   const tail = end === events.length ? awaitingInput : undefined;
   const fitted = fitBytes(window, cut, end, toolTextMaxBytes, tail);
   cut = fitted.cut;
-  // 軟上限撐破了。**沒有人講的話這件事在線上完全看不見**——回應照樣是 200、畫面照樣對。
-  if (fitted.bytes > HISTORY_PAGE_MAX_BYTES) onOversize?.(fitted.bytes);
-
   // 用量表要「到這一頁結尾為止」最新的那一筆（見檔頭）：切點之前各自最新的那一顆補在最前面，`historyFrames` 只送
-  // 最新的，這一頁自己有的就輪不到它。**秤重沒算這兩顆**（上面的 `fitBytes`）：最多兩顆、各一兩百位元組。
+  // 最新的，這一頁自己有的就輪不到它。**切點不為它們讓位**（最多兩顆、各一兩百位元組），但撐破上限的判斷要算進去
+  // ——那是低估的方向，正好是會讓送出去的超過上限的那一邊。
   const carried = latestPressureEvents(window.slice(0, cut));
+  const bytes = fitted.bytes + (carried.length === 0 ? 0 : weigh(carried, toolTextMaxBytes));
+  // 軟上限撐破了。**沒有人講的話這件事在線上完全看不見**——回應照樣是 200、畫面照樣對。
+  if (bytes > HISTORY_PAGE_MAX_BYTES) onOversize?.(bytes);
+
   const replay = replayConversation(events);
   return {
     // **三種原因都是舊格式**：回覆、結果內容、摘要本文都是格式 9 才開始記的（#305），缺哪一樣都只可能出自 9 以前

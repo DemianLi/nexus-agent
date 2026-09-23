@@ -480,7 +480,7 @@ function withContextMeasure(
  * system 是 `SystemMessage` 才算、工具定義非空才算，一律交給同一個 `countTokensApproximately`。
  *
  * 跟 {@link isUnderCompactionPressure} 不同：那個只量訊息、刻意少估；這個要跟判準一模一樣，差的正是
- * system 與工具那一截。基座改了這個算法時這裡不會紅，紅的是 `context-measure.test.ts` 那條門檻夾擠。
+ * system 與工具那一截。基座改了這個算法時這裡不會紅，紅的是 `apps/harness/src/context-pressure.test.ts` 那條門檻夾擠。
  *
  * @param request - 摘要器交給下一層的那份請求。
  * @returns 估算的 token 數與訊息則數。

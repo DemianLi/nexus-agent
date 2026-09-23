@@ -151,8 +151,14 @@ import type { SessionEvent } from './session-log.js';
  * 12 以前的檔直接讀，但這一次「舊檔怎麼讀」跟前幾次不同：**沒有那一格是常態，不是異常**
  * ——每一份 13 以前的日誌都缺它，而且續接**不回填**。所以續接的守衛對「沒記」放行，
  * 跟 `cwd` 那一格的「沒記就拒」相反，四格表在 `apps/harness/src/resume-guards.ts`。
+ *
+ * ## 14：`context/measure`
+ *
+ * 摘要器量到的每一次模型呼叫：離自動摘要還有多遠（[#528](https://github.com/DemianLi/nexus-agent/issues/528)，
+ * web 的用量表讀它）。v13 的檔直接讀：那時候沒有這一層，一顆都沒有就是當時的樣子——用量表要等接回來之後的第一次
+ * 模型呼叫才畫得出來（它看的是 `measure`；舊檔裡的 `model/usage` 照樣送上線）。升版理由同 11。
  */
-export const SESSION_LOG_FORMAT_VERSION = 13;
+export const SESSION_LOG_FORMAT_VERSION = 14;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。
