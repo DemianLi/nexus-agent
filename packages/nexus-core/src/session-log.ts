@@ -133,6 +133,9 @@ import type { ToolErrorInfo } from './tool-events.js';
  * 本體裡寫**：本體只記下這次要交付什麼，等同一份日誌上配對的 `tool/result` 落定成功，才排到下一個
  * tick 寫。照 dsh 的 `ctx.on('tools/result')`——被外層改判成錯誤的結果不發布交付。所以它永遠落在
  * 配對的 `tool/result` **之後**。見 [#441](https://github.com/DemianLi/nexus-agent/issues/441)。
+ *
+ * `context/measure` 走 `compaction/summary` 那條（摘要器外面包的一層，fold 逐個 agent 建），也寫得進
+ * subagent 那份；web 只讀 root 那份。見 [#528](https://github.com/DemianLi/nexus-agent/issues/528)。
  */
 export type SessionEventType =
   | 'turn/start'
@@ -149,6 +152,7 @@ export type SessionEventType =
   | 'assistant/message'
   | 'user/message'
   | 'compaction/summary'
+  | 'context/measure'
   | 'sandbox/mode'
   | 'plan/mode'
   | 'tool/call'
@@ -410,6 +414,29 @@ export interface SessionEventMap {
     readonly filePath: string | null;
     /** 換上去的那則摘要訊息。 */
     readonly summary?: LoggedMessage;
+  };
+  /**
+   * 摘要器量到的一次模型呼叫：**那份請求離自動摘要還有多遠**（[#528](https://github.com/DemianLi/nexus-agent/issues/528)）。
+   *
+   * 量的是摘要器交給下一層的那份請求——沒摘要時是截過參數的那串，摘要了就是 `[摘要, ...留下的]`——
+   * 算法照基座判準的 `countTotalTokens`。所以 `approxTokens` 與 `messageCount` 跟決定要不要摘要的那兩個數
+   * 同源，`thresholds` 是那次呼叫實際生效的門檻（patch 改過就是改過的）。細節與偏離見
+   * `summarization.ts` 的 `withContextMeasure`。
+   *
+   * 下一層正常回來才記，一次一筆；拋錯的那次不記。**停止閘門擋下的那一次也記**：摘要器排在它外層，閘門回的
+   * 合成收尾對摘要器來說是正常回來——量的是判準看過的那份請求，數字照樣成立。摘要關掉時沒有這顆事件。
+   * **這一筆只有數字與門檻**，不含訊息內容。
+   */
+  'context/measure': {
+    /** 估算的 token 數：system、訊息、工具定義，四個字元算一個，同基座的判準。 */
+    readonly approxTokens: number;
+    /** 訊息則數，同 `messages` 那道門檻比的數。 */
+    readonly messageCount: number;
+    /** 那次呼叫生效的觸發門檻，並聯，任一成立就摘要。 */
+    readonly thresholds: readonly {
+      readonly type: 'messages' | 'tokens';
+      readonly value: number;
+    }[];
   };
   /**
    * 這個會話的**檔案效果政策**現在是哪一格。**每一筆帶整個值**，不是差異。

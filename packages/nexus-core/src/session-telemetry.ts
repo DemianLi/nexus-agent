@@ -150,6 +150,7 @@ const RELEASES_FEEDBACK_ONLY_CAPTURE = {
   'assistant/message': false,
   'user/message': false,
   'compaction/summary': false,
+  'context/measure': false,
   'sandbox/mode': false,
   'plan/mode': false,
   'tool/call': false,

@@ -207,13 +207,17 @@ describe('有一輪在跑', () => {
       expect(subagents).toHaveLength(1);
       expect(resultsOf(subagents[0] ?? [])).toEqual([abortedResult(TOOL_ABORTED)]);
       // **子代理那一層「正常收尾」不在它的日誌上多記一步**：擋下的那次模型呼叫在起訖紀錄器
-      // 外面就回了，所以只有真的叫過的那一對，夾著那一次的回覆（#305）。
+      // 外面就回了，所以只有真的叫過的那一對，夾著那一次的回覆（#305）。**量測有兩筆**（#528）：
+      // 摘要器在停止閘門的外層，它交下去的那份請求被閘門擋下、回了合成的收尾，對它來說是正常回來，
+      // 所以照記——量的是判準看過的那份，數字照樣成立。
       expect(typesOf(subagents[0] ?? [])).toEqual([
         'model/start',
         'assistant/message',
         'model/end',
+        'context/measure',
         'tool/call',
         'tool/result',
+        'context/measure',
       ]);
       expect(resultsOf(run.root())).toEqual([abortedResult(TOOL_ABORTED)]);
       // root 一次、子代理一次，之後兩邊都沒再叫——腳本只寫了兩輪，多叫一次就拋。

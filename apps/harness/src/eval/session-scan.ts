@@ -113,6 +113,7 @@ const KNOWN_EVENT_TYPES: Readonly<Record<SessionEventType, true>> = {
   'assistant/message': true,
   'user/message': true,
   'compaction/summary': true,
+  'context/measure': true,
   'sandbox/mode': true,
   'plan/mode': true,
   'tool/call': true,

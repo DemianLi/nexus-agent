@@ -66,7 +66,7 @@
 import type { BaseMessage } from '@langchain/core/messages';
 import { createSummarizationMiddleware } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
-import { countTokensApproximately } from 'langchain';
+import { countTokensApproximately, SystemMessage } from 'langchain';
 import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
 import { toLoggedMessage } from './logged-message.js';
@@ -313,8 +313,12 @@ export function createSummarizer(
     },
   }) as unknown as AgentMiddleware;
   // 兩層各管一個方向，刻意不合成一層：剪刀改請求、日誌讀回傳，合起來寫會讓兩個獨立的
-  // 失敗模式共用一個 try。順序無所謂——它們碰的不是同一樣東西。
-  const logged = sessions === undefined ? base : withCompactionLog(base, sessions);
+  // 失敗模式共用一個 try。順序無所謂——它們碰的不是同一樣東西。量測那層同理：它讀的是
+  // 基座交下去的請求，不是進來的那份，也不碰回傳值。
+  const logged =
+    sessions === undefined
+      ? base
+      : withContextMeasure(withCompactionLog(base, sessions), sessions, settings.trigger);
   if (pruning === false) return logged;
   return withToolResultPruning(
     logged,
@@ -394,6 +398,109 @@ function withCompactionLog(
       return response;
     },
   } as AgentMiddleware;
+}
+
+/**
+ * 把「這份請求離自動摘要還有多遠」記進這次呼叫所屬的那一份會話日誌
+ * （[#528](https://github.com/DemianLi/nexus-agent/issues/528)，web 的用量表讀它）。
+ *
+ * ## 量的是交下去的那份，不是進來的那份
+ *
+ * 基座的 `wrapModelCall` 最後一定是 `handler({ ...request, messages })`：沒摘要時是截過參數的那串，
+ * 摘要了是 `[摘要, ...留下的]`（`dist/langsmith-zm0ILQsV.js:3220`、`:3163`；另外三處是退路，同一個形狀）。所以這裡把**傳給基座的
+ * `handler`** 包一層，量它收到的那份——那正是判準剛量過的東西：沒摘要時 `approxTokens` 就是基座的
+ * `tokensForSummary`、`messageCount` 就是它拿去比 `messages` 門檻的那個長度；摘要了，數字當場掉下來。
+ * 量進來的 `request` 的話，摘要那一輪會記下摘要**之前**的大小，環要等下一次呼叫才掉。
+ *
+ * 算法見 {@link measureRequest}。**不乘基座那個自己會調的倍率**（`tokenEstimationMultiplier`）：它在
+ * closure 裡、沒有匯出，而且只有撞過一次窗口上限才會離開 1——那時畫面已經先報錯了（#528 的 Q4）。
+ *
+ * ## 與 dsh 的偏離（AGENTS.md 的規則，兩條）
+ *
+ * 1. **分子：照的是「跟壓縮判準同源」**。dsh 的 `contextPressure.projectedTokens` 是供應商報的用量當錨、
+ *    再加估算的增量，而它的壓縮讀的 `measure()` 也是這一套——顯示與判準本來就是同一個數。我們表達不出來的
+ *    是**錨**：判準是基座的純估算（`countTotalTokens`），改不動。退到照基座的估算法算，於是同源這一條照舊
+ *    成立。供應商報的數字另外走 `model/usage`，只拿來顯示「目前多大」，不拿來算比例。
+ * 2. **載體：一顆事件**。dsh 不記這種事件，壓力是從 `request/header` 與 surface 投影出來的。我們的日誌不記
+ *    system、工具定義與請求標頭（檔頭那條「不記訊息內容」），重建不出摘要器眼中的那份請求，所以退到一顆
+ *    只帶量測結果的事件，同 `model/usage` 那條偏離。**分母也不同**：dsh 除的是模型窗口，我們除的是摘要
+ *    門檻，理由見 #528 的 grilling（Q2）。
+ *
+ * ## 它不准拋
+ *
+ * 同 {@link withCompactionLog}：量不出來、記不進去都吃掉，而且量測在 `handler` 之前、記錄在它之後，
+ * **`handler` 本身拋的錯原樣往外傳**——那是基座的緊急摘要要接的。
+ *
+ * **記的時刻是「下一層正常回來」，不是「模型真的被叫到」**：拋錯的那次不記；停止閘門（`turnCancel`）擋下的
+ * 那一次照記——基座把摘要器排在預設那一段，它在閘門外層，閘門回的合成收尾對它來說就是正常回來。那一筆量的
+ * 仍是判準看過的那份請求，數字照樣成立，所以不去分辨。`turn-cancel.test.ts` 的委派那條釘著這件事。
+ *
+ * @param base - 摘要器（已經包過 {@link withCompactionLog} 的也行，它原樣轉交 `handler`）。
+ * @param sessions - 註冊表的 `sessions` 通道。
+ * @param trigger - 這個摘要器生效的門檻，原樣記進每一筆。
+ * @returns 同名、同狀態、多一層量測的 middleware。
+ */
+function withContextMeasure(
+  base: AgentMiddleware,
+  sessions: { forCall(config: unknown): SessionLookup },
+  trigger: readonly SummarizationThreshold[],
+): AgentMiddleware {
+  const inner = base.wrapModelCall?.bind(base);
+  /* v8 ignore next -- 同 withCompactionLog。 */
+  if (inner === undefined) return base;
+  const thresholds = trigger.map(({ type, value }) => ({ type, value }));
+  return {
+    ...base,
+    wrapModelCall: (request, handler) =>
+      inner(request, async (sent) => {
+        let measured: ReturnType<typeof measureRequest> | undefined;
+        try {
+          measured = measureRequest(sent);
+        } catch {
+          // 量不出來就不記，不能反過來擋住這次呼叫。
+        }
+        const response = await handler(sent);
+        if (measured === undefined) return response;
+        try {
+          const found = sessions.forCall({
+            configurable: (request as { runtime?: { configurable?: unknown } }).runtime
+              ?.configurable,
+          });
+          if (found.kind === 'ok') found.log.append('context/measure', { ...measured, thresholds });
+        } catch {
+          // 記不進去不能反過來把摘要器殺掉。見 withCompactionLog。
+        }
+        return response;
+      }),
+  } as AgentMiddleware;
+}
+
+/**
+ * 一份請求在摘要器眼中多大。**抄基座的 `countTotalTokens`**（`dist/langsmith-zm0ILQsV.js:2920`），它沒有匯出：
+ * system 是 `SystemMessage` 才算、工具定義非空才算，一律交給同一個 `countTokensApproximately`。
+ *
+ * 跟 {@link isUnderCompactionPressure} 不同：那個只量訊息、刻意少估；這個要跟判準一模一樣，差的正是
+ * system 與工具那一截。基座改了這個算法時這裡不會紅，紅的是 `context-measure.test.ts` 那條門檻夾擠。
+ *
+ * @param request - 摘要器交給下一層的那份請求。
+ * @returns 估算的 token 數與訊息則數。
+ */
+export function measureRequest(request: {
+  readonly messages?: readonly BaseMessage[];
+  readonly systemMessage?: unknown;
+  readonly tools?: unknown;
+}): { readonly approxTokens: number; readonly messageCount: number } {
+  const messages = [...(request.messages ?? [])];
+  const system = request.systemMessage;
+  const counted =
+    system !== undefined && system !== null && SystemMessage.isInstance(system)
+      ? [system, ...messages]
+      : messages;
+  const tools =
+    Array.isArray(request.tools) && request.tools.length > 0
+      ? (request.tools as Record<string, unknown>[])
+      : null;
+  return { approxTokens: countTokensApproximately(counted, tools), messageCount: messages.length };
 }
 
 /**

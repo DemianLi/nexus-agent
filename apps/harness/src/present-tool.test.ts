@@ -24,8 +24,10 @@ import { createHostServicesPlugin } from '@nexus/core';
 import { PRESENT_NO_WORKSPACE_MESSAGE, PRESENT_TOOL_NAME } from '@nexus/plugin-present';
 import type { DeliverablesPresentedPayload, Event } from '@nexus/wire';
 import {
+  CONTEXT_MEASURE,
   createWireClient,
   DELIVERABLES_PRESENTED,
+  MODEL_USAGE,
   emptyConversation,
   reduceAll,
 } from '@nexus/wire';
@@ -178,11 +180,15 @@ async function run(
   }
 }
 
-/** 一串 frame 裡的交付那幾顆的 `data`。 */
+/**
+ * 一串 frame 裡的交付那幾顆的 `data`。**按名字篩**：同一個 channel 上還有用量表的那兩種（#528），每次模型呼叫
+ * 都有。
+ */
 function deliveriesIn(frames: readonly Event[]): unknown[] {
   return frames
     .filter((frame) => frame.method === 'custom')
-    .map((frame) => frame.params.data as { name?: string; payload?: unknown });
+    .map((frame) => frame.params.data as { name?: string; payload?: unknown })
+    .filter((data) => data.name === DELIVERABLES_PRESENTED);
 }
 
 /** 某顆工具那張卡的 `tool_call_id`（第一張）。 */
@@ -282,7 +288,11 @@ describe('present 在真的圖上', () => {
     // 落在那張 `present` 工具卡之後；拿掉這一格，剩下的畫面（包括決定評分按鈕位置的輪尾）跟沒有這顆
     // frame 時一模一樣。
     const without = (frames: readonly Event[]) =>
-      frames.filter((frame) => frame.method !== 'custom');
+      frames.filter(
+        (frame) =>
+          frame.method !== 'custom' ||
+          (frame.params.data as { name?: unknown }).name !== DELIVERABLES_PRESENTED,
+      );
     const folded = [outcome.live, outcome.history].map((frames) => {
       const state = reduceAll(emptyConversation(), frames);
       const at = state.entries.findIndex((entry) => entry.kind === 'deliverables');
@@ -378,6 +388,14 @@ describe('present 在真的圖上', () => {
     );
     // 前提：那顆工具真的跑了。
     expectSucceeded(outcome.live, 'custom_writer');
-    expect(outcome.live.filter((frame) => frame.method === 'custom')).toEqual([]);
+    // 線上的 `custom` 只剩 pump 從日誌合成的那幾種（這一段只有用量表的），工具寫的那一顆一個字都沒上來。
+    const custom = outcome.live.filter((frame) => frame.method === 'custom');
+    expect(custom.length).toBeGreaterThan(0);
+    for (const frame of custom) {
+      expect([MODEL_USAGE, CONTEXT_MEASURE]).toContain(
+        (frame.params.data as { name?: unknown }).name,
+      );
+    }
+    expect(JSON.stringify(custom)).not.toContain('不該上線');
   });
 });
