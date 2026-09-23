@@ -239,10 +239,10 @@ describe('子代理的沙箱模式', () => {
       const rootPrompts = run.model.prompts.filter((prompt) => !isSubagentPrompt(prompt));
       expect(subagentPrompts).toHaveLength(2);
       for (const prompt of subagentPrompts) {
-        expect(systemOf(prompt)).toContain(sandboxPolicySentence('read-only', root));
+        expect(systemOf(prompt)).toContain(sandboxPolicySentence('read-only'));
       }
       expect(systemOf(rootPrompts.at(-1) ?? [])).toContain(
-        sandboxPolicySentence('workspace-write', root),
+        sandboxPolicySentence('workspace-write'),
       );
     } finally {
       await run.close();
