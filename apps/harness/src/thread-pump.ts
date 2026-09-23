@@ -77,7 +77,9 @@ import { channelOfMethod, eventId } from '@nexus/wire';
 import {
   contextMeasureData,
   deliverablesData,
+  isTodosReset,
   modelUsageData,
+  todosData,
   workspaceChangesData,
 } from './conversation-history.js';
 import { driveGoalRound } from './goal-driver.js';
@@ -1292,6 +1294,12 @@ export class ThreadPump {
       this.#presentCustom(modelUsageData(event.data));
     } else if (event.type === 'context/measure' && entry.address.kind === 'root') {
       this.#presentCustom(contextMeasureData(event.data));
+    } else if (event.type === 'todo/write' && entry.address.kind === 'root') {
+      // 待辦清單（#575）：只收 root 的，同 dsh 的 `todos` 投影；子代理各寫各的那一份，不進面板。
+      this.#presentCustom(todosData(event.data.todos));
+    } else if (entry.address.kind === 'root' && isTodosReset(event)) {
+      // 開新的一輪：清單回到 `null`。每一輪都送，不管之前有沒有清單——pump 不記投影的狀態。
+      this.#presentCustom(todosData(null));
     }
   }
 

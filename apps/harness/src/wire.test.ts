@@ -2,7 +2,7 @@ import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { Event } from '@nexus/wire';
-import { commandPath, createWireClient, streamPath } from '@nexus/wire';
+import { commandPath, createWireClient, streamPath, TODOS } from '@nexus/wire';
 import { createDeepAgent, StateBackend } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -232,7 +232,12 @@ describe('線的兩端對得起來', () => {
       ),
     );
     const methods = new Set(frames.map((frame) => frame.method));
-    expect([...methods].sort()).toEqual(['lifecycle', 'messages', 'tools']);
+    expect([...methods].sort()).toEqual(['custom', 'lifecycle', 'messages', 'tools']);
+    // `custom` 在白名單裡，這一段上來的只有 pump 從日誌合成的那一種：開新一輪時清空待辦清單（#575）。圖自己往
+    // `custom` 寫的不上線，見 `present-tool.test.ts` 的「圖自己發的 custom frame 不上線」。
+    expect(
+      frames.filter((frame) => isMethod(frame, 'custom')).map((frame) => frame.params.data),
+    ).toEqual([{ name: TODOS, payload: { todos: null } }]);
 
     // **對照組**：沒有這一段的話，「白名單有效」與「基座根本沒發過那些」長得一樣。
     const control = buildAgent(ONE_CALL);
