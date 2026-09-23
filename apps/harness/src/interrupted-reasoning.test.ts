@@ -18,7 +18,7 @@ import { AIMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
 import { tool } from '@langchain/core/tools';
-import { loggedMessageId } from '@nexus/core';
+import { loggedMessageId, replayConversation } from '@nexus/core';
 import type { PluginEntry, SessionEventMap } from '@nexus/core';
 import type { ConversationState, Event } from '@nexus/wire';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
@@ -224,6 +224,20 @@ describe('按了停止的那則，推理在重新整理之後還在（#561）', 
       ]);
       expect(aiView(run.history())).toEqual(live);
 
+      // 從日誌還原（重啟之後走的那條）：還原得出來，最後一則跟寫進對話的那則一樣只有推理。
+      const state0 = await run.agent.getState({
+        configurable: { thread_id: 'interrupted-reasoning' },
+      });
+      const written = (state0.values as { messages: unknown[] }).messages ?? [];
+      const replay = replayConversation(run.pump.sessions.root.events);
+      expect(replay.kind).toBe('replayed');
+      const replayed = replay.kind === 'replayed' ? replay.messages : [];
+      expect(replayed).toHaveLength(written.length);
+      expect((replayed.at(-1) as AIMessage).content).toEqual([
+        { type: 'reasoning', reasoning: shown },
+      ]);
+      expect((written.at(-1) as AIMessage).content).toEqual((replayed.at(-1) as AIMessage).content);
+
       // 下一輪：那則以 `content: []` 送出去（`ChatOpenAI` 丟推理區塊），這一輪照常收尾。
       await run.pump.submit({ kind: 'message', text: '繼續' });
       expect(run.upstream.assistants[1]).toEqual([{ role: 'assistant', content: [] }]);
@@ -316,6 +330,10 @@ describe('按了停止的那則，推理在重新整理之後還在（#561）', 
       expect(run.upstream.sent[0]).toBeLessThan(22);
 
       expect(run.interrupted).toEqual([]);
+      // 已知差異：即時那則在按下停止的當下已經畫出來了（只有空白），重新整理之後就沒有了。照 dsh 的
+      // trim 做，代價就是這一則；它什麼都看不到，差的只是一個空泡泡。
+      expect(aiView(run.frames)).toHaveLength(1);
+      expect(aiView(run.history())).toEqual([]);
       const state = await run.agent.getState({
         configurable: { thread_id: 'interrupted-reasoning' },
       });
