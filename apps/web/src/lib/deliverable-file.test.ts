@@ -53,7 +53,7 @@ describe('交付檔的讀取', () => {
     [400, 'invalid'],
     [404, 'missing'],
     [413, 'too-large'],
-    [422, 'binary'],
+    [422, 'not-text'],
     [500, 'error'],
   ])('%i 對到 %s', async (status, expected) => {
     const { store } = storeWith(() => new Response('nope', { status }));
@@ -81,11 +81,14 @@ describe('交付檔的讀取', () => {
     await load(store);
     expect(doFetch).toHaveBeenCalledTimes(2);
 
+    // 413 在 store 裡面先縮 `limit`、再改走位元組窗口（#555），所以第一次讀不只發一次；要釘的是**讀完之後
+    // 再叫一次不會再發**。
     for (const status of [400, 404, 413, 422]) {
       const each = storeWith(() => new Response('', { status }));
       await load(each.store);
+      const sent = (each.doFetch as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
       each.store.load(1, 0, 0);
-      expect(each.doFetch).toHaveBeenCalledTimes(1);
+      expect(each.doFetch).toHaveBeenCalledTimes(sent);
     }
   });
 

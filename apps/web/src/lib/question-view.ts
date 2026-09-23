@@ -147,7 +147,8 @@ export type QuestionAnswer = AnswerEntry['answers'][number];
  *
  * 形狀檢查照 dsh `ask-question-row.tsx` 的 `answerEntries`（`ddefc45`）：**對不上就整份不要**，不挑能用的那幾筆。
  *
- * **一定要真的 `JSON.parse`**：文字超過 50000 bytes 時 harness 取頭尾各半、中間放一行說明
+ * **一定要真的 `JSON.parse`**：文字超過上限（`#settings/tool-text` 那一列的 `maxBytes`，預設 50000，
+ * [#541](https://github.com/DemianLi/nexus-agent/issues/541)）時 harness 取頭尾各半、中間放一行說明
  * （`apps/harness/src/tool-result-text.ts`），截過的那一份**開頭 `{"answers":[`、結尾 `]}` 都還在**，
  * 用頭尾字元判斷會把它當成完整的 JSON。
  */

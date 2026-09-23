@@ -26,6 +26,27 @@
  *    的 enum 的事，照 dsh 的分工。
  * 3. **`workspace-write` 那一句要指名可寫根。** 「在工作區之內」對模型不是一個位址。
  *
+ * ## 登記：可寫根用工具的位址空間指名，不給主機路徑
+ *
+ * dsh 那一句給的是主機上的絕對路徑（`JSON.stringify(policy.workspaceRoot)`，
+ * `references/deepseek-harness/packages/sandbox/sandbox-policy/src/index.ts:47`，SHA `ddefc45`）。
+ * 在 dsh 這句成立，是因為它的檔案工具收的就是主機路徑。**我們的收的不是**：
+ * `ContainedFilesystemBackend` 的圍堵靠基座 `FilesystemBackend` 的 `virtualMode: true`
+ * （`apps/harness/src/contained-backend.ts`），在那個位址空間裡 `/` 就是工作區根。
+ * 主機路徑傳進去會被當成根底下的一條子路徑。所以照抄那個字串，等於給了模型一個工具收不下的位址。
+ * 第 2 階段 live 量到的後果：用到檔案工具的 30 輪裡，23 輪照著那個字串用了主機絕對路徑。
+ * 工具回「找不到」，模型接著反覆 `ls`、回頭問人、寫到巢狀路徑。
+ *
+ * 所以只照抄「指名可寫根」這條紀律，位址改用工具收的那一種：`/`，並附一個例子。
+ * 句子裡不留主機路徑，括號裡也不放。那個字串就是把模型帶偏的東西。
+ *
+ * **沒選的另一條路**：讓 backend 也收「主機根＋子路徑」，先剝掉前綴再交給基座，這樣就能維持 dsh 的形狀。
+ * 沒選它，是因為那等於改圍堵的路徑解析：fence 判準、`workspace-changes` 的路徑正規化
+ * （`packages/nexus-plugin-workspace-changes/src/paths.ts`）都假設虛擬路徑。為了一句提示詞
+ * 去動擋寫入的那一層，換錯的代價比說錯一句話大。
+ * 給人看的 `/sandbox` 輸出照舊報主機路徑：命令不進模型（`@nexus/core` 的 `commands.ts`），
+ * 而人要的正是磁碟上的位址。
+ *
  * ## 這個 plugin 只在真的有圍堵時才掛
  *
  * dsh 的 `ctx.fs.sandboxMode` 在沒掛圍堵 backend 時是 `undefined`，於是升級欄位不宣告、
@@ -68,11 +89,12 @@ const DELEGATION_TOOL_NAME = 'task';
 /**
  * 一格模式對模型講的那一段話。
  *
+ * **不收可寫根的主機路徑**：`workspace-write` 那一句用工具的位址空間指名它（`/`），理由見模組註解的登記。
+ *
  * @param mode - 這一刻的圍堵強度。
- * @param rootDir - 可寫根的絕對路徑；`workspace-write` 那一句要指名它。
  * @returns 接到 system prompt 後面的那段話。
  */
-export function sandboxPolicySentence(mode: SandboxMode, rootDir: string): string {
+export function sandboxPolicySentence(mode: SandboxMode): string {
   switch (mode) {
     case 'read-only':
       return (
@@ -81,8 +103,9 @@ export function sandboxPolicySentence(mode: SandboxMode, rootDir: string): strin
       );
     case 'workspace-write':
       return (
-        `目前的檔案政策：workspace-write。檔案工具只改得動 ${JSON.stringify(rootDir)} 之下的東西；` +
-        '那個範圍之內的變更直接放行，不會另外問人。範圍之外的會被擋下來。'
+        '目前的檔案政策：workspace-write。檔案工具的路徑一律從 `/` 寫起，`/` 就是工作區根' +
+        '（例如 `/src/index.ts`、`/notes/todo.md`）；工作區根之下的變更直接放行，不會另外問人。' +
+        '不要把磁碟上的絕對路徑傳給檔案工具，那會被當成工作區根底下的一條子路徑。'
       );
     case 'danger-full-access':
       return '目前的檔案政策：danger-full-access。這道圍堵不限制檔案變更。';
@@ -112,7 +135,7 @@ export const SANDBOX_POLICY_SERVICE = 'sandboxPolicy';
 export interface SandboxPolicyService {
   /** 這次組裝那一格。 */
   readonly controller: SandboxModeController;
-  /** 可寫根的絕對路徑。 */
+  /** 可寫根在主機上的絕對路徑。只用在 `/sandbox` 報給人看；講給模型聽的那句不用它，理由見模組註解的登記。 */
   readonly rootDir: string;
 }
 
@@ -175,7 +198,7 @@ export const sandboxPolicyPlugin: NexusPlugin = {
             // 子代理也走這裡（#327），而且講的是**委派那一格**：子代理整個跑在 `task` 的 handler 裡、在下面那顆
             // `wrapToolCall` 包的 ALS 之內，`controller.source` 先讀快照。同 dsh 讀子代理自己 session 上那顆
             // `sandbox/mode { source: 'delegation' }`。
-            const sentence = sandboxPolicySentence(resolveMode(), rootDir);
+            const sentence = sandboxPolicySentence(resolveMode());
             // 兩條路是同一件事的兩個入口，照抄 plan-mode 那段註解：`systemMessage` 在的
             // 時候接在它後面，不在的時候由 `systemPrompt` 這個字串欄位承接。基座兩個都讀，
             // 給錯那一個等於沒講。
