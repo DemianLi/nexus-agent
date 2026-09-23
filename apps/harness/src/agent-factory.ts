@@ -107,14 +107,18 @@ export interface CreateNexusAgentOptions {
    */
   readonly baseToolNames?: readonly string[];
   /**
-   * 「先讀後改」策略的開關。省略即開著（照 dsh，那邊是預設載入的插件）。
+   * 「先讀後改」策略的開關。省略即開著（照 dsh，那邊是預設載入的插件）——**除非**清單上
+   * `@nexus/core/observation-policy` 那一列標了 `disabled: true`，三態見 `@nexus/core` 的
+   * `FoldOptions.observationPolicy`（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
    *
    * `false` 是明著接受盲改——一個只寫新檔、從不編輯既有檔的批次流程用得到它。
    * 形狀與理由見 `@nexus/core` 的 `observation.ts`。
    */
   readonly observationPolicy?: boolean;
   /**
-   * 每一次模型呼叫的 token 帳目要不要記進會話日誌。省略即開著。
+   * 每一次模型呼叫的 token 帳目要不要記進會話日誌。省略即開著——**除非**清單上
+   * `@nexus/core/model-usage` 那一列標了 `disabled: true`，三態見 `@nexus/core` 的
+   * `FoldOptions.modelUsage`（#456）。
    *
    * `false` 之後落盤日誌裡不會有 `model/usage`。**評估那條路的數字不受影響**——
    * `eval/runner.ts` 是自己從 `usage_metadata` 加的，而且它不接 `attachSession`。
@@ -128,8 +132,10 @@ export interface CreateNexusAgentOptions {
   /** 核准政策的 session 開關。省略即「這個 session 有人在」。 */
   readonly approvals?: ApprovalPolicy;
   /**
-   * 摘要的門檻與去向。省略即 `DEFAULT_SUMMARIZATION`，給物件就逐格淺合併上去，
-   * `false` 是真的關掉：沒有摘要、沒有歷史 offload，也沒有工具結果剪刀（#446）。
+   * 摘要的門檻與去向。給物件就逐格淺合併到 `DEFAULT_SUMMARIZATION` 上，`false` 是真的
+   * 關掉：沒有摘要、沒有歷史 offload，也沒有工具結果剪刀（#446）。**省略時由清單上
+   * `@nexus/core/summarization` 那一列決定**，手搭清單（沒有那一列）才是內建預設；四態見
+   * `@nexus/core` 的 `FoldOptions.summarization`（#456）。
    *
    * **這一格存在是因為基座沒有這個參數。** `createSummarizationMiddleware({ backend })`
    * 被無條件寫死進 root 與每個 subagent 的 stack，`CreateDeepAgentParams` 上一個
@@ -144,16 +150,21 @@ export interface CreateNexusAgentOptions {
    */
   readonly summarization?: Partial<SummarizationSettings> | false;
   /**
-   * 摘要器外面那把工具結果剪刀的預算。省略即 `DEFAULT_TOOL_RESULT_PRUNE`（dsh 的
-   * 8192／4096／1024），給物件就逐格淺合併上去，`false` 是摘要照跑、只是不先剪。
+   * 摘要器外面那把工具結果剪刀的預算。給物件就逐格淺合併到 `DEFAULT_TOOL_RESULT_PRUNE`
+   * （dsh 的 8192／4096／1024）上，`false` 是摘要照跑、只是不先剪。**省略時由清單上
+   * `@nexus/core/tool-result-pruner` 那一列決定**，手搭清單（沒有那一列）才是內建預設；
+   * 四態見 `@nexus/core` 的 `FoldOptions.toolResultPruning`（#456）。CLI 與 serve 走的就是
+   * 那一列——部署在 patch 裡改它。
    *
-   * 照 dsh 只在摘要開著時有作用；給了物件照樣在組裝時驗。CLI 與 serve 還沒有入口，
-   * 等設定層（#46）。形狀見 `@nexus/core` 的 `tool-result-pruner.ts`。
+   * 照 dsh 只在摘要開著時有作用；給了物件照樣在組裝時驗。形狀見 `@nexus/core` 的
+   * `tool-result-pruner.ts`。
    */
   readonly toolResultPruning?: Partial<ToolResultPruneConfig> | false;
   /**
-   * 重複工具呼叫的提醒門檻與射程。省略即 `DEFAULT_REPEAT_REMINDER`（門檻 3／5／8），
-   * 給物件就逐格淺合併上去，`false` 是明著不要。
+   * 重複工具呼叫的提醒門檻與射程。給物件就逐格淺合併到 `DEFAULT_REPEAT_REMINDER`
+   * （門檻 3／5／8）上，`false` 是明著不要。**省略時由清單上 `@nexus/core/repeat-reminder`
+   * 那一列決定**，手搭清單（沒有那一列）才是內建預設；四態見 `@nexus/core` 的
+   * `FoldOptions.repeatReminder`（#456）。
    *
    * **這一格存在是因為基座沒有這種 middleware。** 模型以同參數重複呼叫同一個工具時，
    * 今天唯一會讓它停下來的是 {@link DEFAULT_RECURSION_LIMIT}，而那個上限不分辨「在

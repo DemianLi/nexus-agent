@@ -238,8 +238,13 @@ export interface FoldOptions {
    */
   toolResultPruning?: Partial<ToolResultPruneConfig> | false;
   /**
-   * 重複工具呼叫的提醒門檻與射程。省略即 {@link DEFAULT_REPEAT_REMINDER}，給物件就
-   * 逐格淺合併上去，`false` 是明著不要。
+   * 重複工具呼叫的提醒門檻與射程。給物件就逐格淺合併到 {@link DEFAULT_REPEAT_REMINDER}
+   * 上，`false` 是明著不要。
+   *
+   * **省略時不一定是預設值**：那時改由部署設定層的 `@nexus/core/repeat-reminder` 條目決定，
+   * 四態的順序見 {@link repeatReminderDisposition}
+   * （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。手搭 plugin 清單、
+   * 沒有經過設定檔的組裝拿到的還是內建預設。
    *
    * `false` 之後**真的沒有**——基座沒有這種 middleware，`recursionLimit` 是唯一會讓
    * 打轉停下來的東西，而它不分辨在進展還是在打轉。
