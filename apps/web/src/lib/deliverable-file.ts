@@ -23,6 +23,12 @@
  * `@nexus/wire` 匯出；抄一份過來就是跨領域複製一個沒有絆索的常數。路由不給 `limit` 時用的就是
  * 那個上限，而翻頁只需要回應裡的 `lines`。
  *
+ * **送一個我們自己的數字也不行**（[#543](https://github.com/DemianLi/nexus-agent/issues/543) 考慮過
+ * `limit=1000`，收回了）：[#536](https://github.com/DemianLi/nexus-agent/issues/536) 之後 `maxLines`
+ * 是設定條目、可以是任何正整數，而路由對 `limit > maxLines` 回 400 —— 有人把它設得比我們送的小，
+ * **每一個預覽都會變成「座標不對」**，講錯原因而且全壞。省下的也不多：預覽畫面外不 layout 之後，
+ * 一段多大已經不決定畫面成本（一次追加 5000 行 ASCII 總共 27–37ms，見 `deliverable-preview.tsx`）。
+ *
  * @module
  */
 
