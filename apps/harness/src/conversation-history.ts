@@ -13,7 +13,7 @@
  * | --- | --- |
  * | `turn/start`（`message`） | 人打的字（`message-start` `role: "human"`） |
  * | `turn/start`（任何一種） | `lifecycle running` |
- * | `assistant/message` | 模型的回覆；`interrupted` 的那則不收尾，由那一輪的中止標成「已停止」 |
+ * | `assistant/message` | 模型的回覆，連同推理（#527）；`interrupted` 的那則不收尾，由那一輪的中止標成「已停止」 |
  * | `tool/call` ／ `tool/result` | 工具卡開、收；那則結果的文字成功失敗都帶（成功是輸出、失敗是紅字，[#439](https://github.com/DemianLi/nexus-agent/issues/439)） |
  * | `turn/end` ／ `turn/failed` | 那一輪收掉（中止、失敗、完成）；沒結果的卡照即時那條規則收成失敗 |
  * | `session/end-seed` | 上一個行程停在一輪中間的話，那一輪在這裡收掉 |
@@ -59,7 +59,7 @@ const LEGACY_REASONS: ReadonlySet<UnreplayableReason> = new Set([
 /** 參數不合規時拋的錯。wire 那側據它回 `invalid_argument`，不是 `unknown_error`。 */
 export class HistoryQueryError extends Error {}
 
-/** 一則訊息的文字：字串照原樣，區塊只取 `text` 那幾塊（推理不畫，同即時）。 */
+/** 一則訊息的文字：字串照原樣，區塊只取 `text` 那幾塊（推理另走 {@link reasoningOf}）。 */
 function textOf(message: LoggedMessage | undefined): string {
   const content: unknown = message?.data.content;
   if (typeof content === 'string') return content;
@@ -68,6 +68,29 @@ function textOf(message: LoggedMessage | undefined): string {
     .map((block: unknown) => {
       const typed = block as { type?: unknown; text?: unknown } | null;
       return typed?.type === 'text' && typeof typed.text === 'string' ? typed.text : '';
+    })
+    .join('');
+}
+
+/**
+ * 一則訊息的推理（[#527](https://github.com/DemianLi/nexus-agent/issues/527)）：content 陣列裡 `reasoning`
+ * 那幾塊，照順序接起來。
+ *
+ * **只讀 content 區塊，不讀 `additional_kwargs.reasoning_content`**：即時那條看得到的是串流翻出來的
+ * `reasoning-delta`，而串流那條落盤時推理就在 content 裡（標準區塊，`output_version: v1`）。非串流的
+ * 那條（CLI 的 `_generate`）把推理放在 `additional_kwargs`，而那種日誌即時那條本來就沒畫過——
+ * 讀了它，重新整理會比即時多出東西。`fromLoggedMessage` 還原後的 `contentBlocks` 也不會把
+ * `additional_kwargs` 那一格翻成區塊（實測），所以兩條路本來就分得開。
+ */
+function reasoningOf(message: LoggedMessage | undefined): string {
+  const content: unknown = message?.data.content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((block: unknown) => {
+      const typed = block as { type?: unknown; reasoning?: unknown } | null;
+      return typed?.type === 'reasoning' && typeof typed.reasoning === 'string'
+        ? typed.reasoning
+        : '';
     })
     .join('');
 }
@@ -149,6 +172,9 @@ function lifecycle(time: number, data: Record<string, unknown>): Event {
  * **回覆的形狀同即時**（[#382](https://github.com/DemianLi/nexus-agent/issues/382)）：entry 的 key 放
  * `run_id`（`history-<seq>`），`message-start` 的 `id` 放日誌記的訊息 id——畫面據它評分，同即時那則的
  * `id`。日誌沒記 id 的就不帶，那則評不了。人那一則照舊只帶 `id`：它不是評分的目標。
+ *
+ * **推理（[#527](https://github.com/DemianLi/nexus-agent/issues/527)）也是同即時的形狀**：一顆
+ * `reasoning-delta`，欄位叫 `reasoning`，不是 `text`。有推理才送，送在正文之前。
  */
 function message(
   time: number,
@@ -157,6 +183,7 @@ function message(
   text: string,
   open = false,
   messageId?: string,
+  reasoning = '',
 ): Event[] {
   const ids = role === 'ai' ? { run_id: key } : { id: key };
   return [
@@ -166,6 +193,16 @@ function message(
       ...ids,
       ...(messageId !== undefined && { id: messageId }),
     }),
+    ...(reasoning === ''
+      ? []
+      : [
+          frame('messages', time, {
+            event: 'content-block-delta',
+            index: 1,
+            delta: { type: 'reasoning-delta', reasoning },
+            ...ids,
+          }),
+        ]),
     frame('messages', time, {
       event: 'content-block-delta',
       index: 0,
@@ -247,8 +284,10 @@ export function historyFrames(
         break;
       case 'assistant/message': {
         const text = textOf(event.data.message);
-        // 只帶工具呼叫的那一次沒有字可畫。即時的畫面那時會長一則空的，歷史不跟著長。
-        if (text !== '') {
+        const reasoning = reasoningOf(event.data.message);
+        // 只帶工具呼叫的那一次沒有字可畫。即時的畫面那時會長一則空的，歷史不跟著長。**只有推理的那一次
+        // 有東西可畫**（#527）：模型只想、只呼叫工具的那幾步，即時那則帶著推理，歷史也要有。
+        if (text !== '' || reasoning !== '') {
           frames.push(
             ...message(
               event.time,
@@ -257,6 +296,7 @@ export function historyFrames(
               text,
               event.data.interrupted,
               loggedMessageId(event.data.message),
+              reasoning,
             ),
           );
         }

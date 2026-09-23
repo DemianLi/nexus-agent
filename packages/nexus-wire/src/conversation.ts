@@ -52,6 +52,18 @@ export interface AiEntry {
   readonly kind: 'ai';
   readonly id: string;
   readonly text: string;
+  /**
+   * 模型的推理（[#527](https://github.com/DemianLi/nexus-agent/issues/527)），沒有就不給。收的是
+   * `reasoning-delta`，歷史由 harness 從日誌那則的 `reasoning` 區塊投成同一種 delta，所以重新整理之後還在。
+   *
+   * **一則裡的推理攤平成一串，同 {@link AiEntry.text}**。dsh 的助手節點按 `index` 留一串區塊、照順序畫
+   * （`ui-chat` 的 `conversation-nodes/assistant.ts`，`ddefc45`），這裡丟掉了區塊的順序與個數——偏離，
+   * 2026-09-23 拍板。代價今天是零：我們唯一的 adapter（OpenAI completions）一則最多產一塊推理。線上
+   * 與日誌都還留著按 `index` 的區塊，哪天要照 dsh 改成區塊清單，來源都在。
+   *
+   * **只有推理、正文是空的那則也是一則**：模型只想、只呼叫工具的那幾步就是這樣。
+   */
+  readonly reasoning?: string;
   /** 還在吐字。`message-finish` 之後為 false。 */
   readonly streaming: boolean;
   readonly attribution: Attribution;
@@ -635,7 +647,8 @@ interface MessageData {
   readonly role?: string;
   readonly id?: string;
   readonly run_id?: string;
-  readonly delta?: { readonly type?: string; readonly text?: string };
+  /** `text-delta` 帶 `text`，`reasoning-delta` 帶 `reasoning`（`@langchain/core` 的 `ContentBlockDelta`）。 */
+  readonly delta?: { readonly type?: string; readonly text?: string; readonly reasoning?: string };
   readonly message?: string;
 }
 
@@ -675,8 +688,21 @@ function reduceMessage(
       return { ...state, entries: [...state.entries, entry] };
     }
     case 'content-block-delta': {
+      if (data.delta?.type === 'reasoning-delta') {
+        // **正面比對**：推理簽章走的是 `block-delta`（`fields.type: 'reasoning'`），寫成「不是 text 就收」
+        // 會把它一起收進來。工具參數同樣走 `block-delta`，而工具有自己的 `tools` channel。
+        const reasoning = data.delta.reasoning ?? '';
+        return {
+          ...state,
+          entries: replace(state.entries, id, (entry) =>
+            entry.kind === 'ai'
+              ? { ...entry, reasoning: (entry.reasoning ?? '') + reasoning }
+              : entry,
+          ),
+        };
+      }
       if (data.delta?.type !== 'text-delta') {
-        // reasoning 與工具參數的 delta 這一版不呈現；工具走 `tools` channel。
+        // 其餘的 delta（工具參數、推理簽章）不呈現；工具走 `tools` channel。
         return state;
       }
       const text = data.delta.text ?? '';

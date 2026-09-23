@@ -118,6 +118,61 @@ describe('折疊器', () => {
     expect(aiEntries(replayed)).toEqual(aiEntries(state));
   });
 
+  it('推理（#527）：只收 `reasoning-delta`，推理簽章與工具參數的 `block-delta` 都不進來', () => {
+    seq = 0;
+    const delta = (value: Record<string, unknown>) =>
+      frame('messages', [], {
+        event: 'content-block-delta',
+        index: 1,
+        delta: value,
+        run_id: 'r',
+      });
+    const state = reduceAll(emptyConversation(), [
+      frame('messages', [], { event: 'message-start', id: 'run-r', run_id: 'r' }),
+      delta({ type: 'reasoning-delta', reasoning: '我在' }),
+      // 形狀照 `@langchain/core` 在線上實際送的（#527 量過）：簽章與工具參數都走 `block-delta`。
+      delta({ type: 'block-delta', fields: { type: 'reasoning', signature: '簽章' } }),
+      delta({ type: 'block-delta', fields: { type: 'tool_call_chunk', args: '{"a"' } }),
+      delta({ type: 'reasoning-delta', reasoning: '想' }),
+      frame('messages', [], {
+        event: 'content-block-delta',
+        index: 0,
+        delta: { type: 'text-delta', text: '答案' },
+        run_id: 'r',
+      }),
+      frame('messages', [], { event: 'message-finish', reason: 'stop', run_id: 'r' }),
+    ]);
+    expect(state.entries).toMatchObject([{ kind: 'ai', text: '答案', reasoning: '我在想' }]);
+    // 沒有推理的那則不帶這一格，不是空字串：畫面據「有沒有」決定畫不畫摺疊區塊。**這一句才守得住
+    // 「正面比對」**：簽章與工具參數都沒有 `reasoning` 欄位，放寬成「不是 text 就收」的話上面那則照樣是
+    // 「我在想」，只有這一則會多長出一格空字串。
+    // 逐顆照順序建：`frame` 建的當下就編 `seq`，插隊的那幾顆會讓後面的被當成退回去的丟掉。
+    const plain = reduceAll(emptyConversation(), [
+      frame('messages', [], { event: 'message-start', id: 'run-p', run_id: 'p' }),
+      frame('messages', [], {
+        event: 'content-block-delta',
+        index: 0,
+        delta: { type: 'text-delta', text: '嗨' },
+        run_id: 'p',
+      }),
+      frame('messages', [], {
+        event: 'content-block-delta',
+        index: 1,
+        delta: { type: 'block-delta', fields: { type: 'tool_call_chunk', args: '{}' } },
+        run_id: 'p',
+      }),
+      frame('messages', [], {
+        event: 'content-block-delta',
+        index: 2,
+        delta: { type: 'block-delta', fields: { type: 'reasoning', signature: '簽章' } },
+        run_id: 'p',
+      }),
+      frame('messages', [], { event: 'message-finish', reason: 'stop', run_id: 'p' }),
+    ]);
+    expect(plain.entries).toMatchObject([{ kind: 'ai', text: '嗨' }]);
+    expect(plain.entries[0]).not.toHaveProperty('reasoning');
+  });
+
   it('工具的參數原樣留著，不在這一層猜它的形狀', () => {
     seq = 0;
     const state = reduceAll(emptyConversation(), [
