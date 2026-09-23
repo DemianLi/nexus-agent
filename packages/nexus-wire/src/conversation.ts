@@ -84,7 +84,11 @@ export interface AiEntry {
   readonly messageId?: string;
   /**
    * 這一輪收尾的那一則：一輪結束時，那一輪裡最後一則有文字的 root 回覆。評分按鈕放在它上面，同 dsh 的
-   * `TurnTailNodeView` 取收尾節點（`ddefc45`）。**續接不切輪**：停在核准點不是收尾，續接之後算的是整輪。
+   * `TurnTailNodeView` 取收尾節點（`ddefc45`）。
+   *
+   * **「有文字」是正文去掉空白之後還有字，推理不算**（[#572](https://github.com/DemianLi/nexus-agent/issues/572)），
+   * 同 dsh `conversation-nodes/turn-tail.ts` 的 `hasText`。模型呼叫工具之前常先吐一段 `"\n\n"`；web 把這種
+   * 正文當成空的、整則不畫，收尾落在它上面的話，這一輪的讚踩就跟著不見。**續接不切輪**：停在核准點不是收尾，續接之後算的是整輪。
    * 判法見 {@link reduceConversation}，即時與歷史走同一條。
    */
   readonly turnTail?: true;
@@ -370,7 +374,7 @@ function isTailCandidate(entry: ConversationEntry): boolean {
   return (
     entry.kind === 'ai' &&
     entry.attribution.kind === 'root' &&
-    entry.text !== '' &&
+    entry.text.trim() !== '' &&
     !entry.streaming
   );
 }
