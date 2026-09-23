@@ -509,6 +509,21 @@ describe('insert 進來的模組檔也要只有自己動得了（#542）', () =>
     expect(loaded[0]?.plugin.name).toBe('m-team.ts');
   });
 
+  it('檢查不了的一律拒絕：上層目錄進不去，不能當成檢查過了', async () => {
+    const root = privateDirectory();
+    const locked = join(root, 'locked');
+    mkdirSync(locked);
+    moduleFile(locked, 'team.ts');
+    chmodSync(locked, 0o000);
+    try {
+      await expect(loadWith(root, './locked/team.ts')).rejects.toThrow(
+        /^條目 "team"（file:[^）]+）：檢查不了 plugin 模組 .*EACCES/,
+      );
+    } finally {
+      chmodSync(locked, 0o700);
+    }
+  });
+
   it('模組檔不存在：照舊說那一列載不起來，不是一個裸的 ENOENT', async () => {
     const root = privateDirectory();
     const rejected = loadWith(root, './沒這個檔.ts');

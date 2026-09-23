@@ -19,8 +19,8 @@
  *
  * ## 權限檢查只管使用者那兩層
  *
- * {@link assertPrivateFile} 跑在 home 那一層與 `--patch` 上，**不跑在出貨的 `cordis.yml`
- * 上**。這不是漏掉：信任邊界劃在安裝目錄上——`cordis.yml` 跟著 `apps/harness/` 一起來，
+ * {@link assertPrivateFile} 跑在 home 那一層與 `--patch` 上，以及它們 `insert` 進來、指到檔案的
+ * 模組上（{@link resolveEntryModule}，#542），**不跑在出貨的 `cordis.yml` 上**。這不是漏掉：信任邊界劃在安裝目錄上——`cordis.yml` 跟著 `apps/harness/` 一起來，
  * 別人動得了它就等於別人動得了整棵樹的原始碼，那時候檢查一個檔的模式位沒有任何意義。
  * 使用者那兩層不一樣：它們住在 home 底下，是安裝之後才出現、而且**預期會被編輯**的東西。
  *
@@ -661,22 +661,30 @@ export async function resolveEntryModule(entry: ConfigEntry): Promise<PluginEntr
 }
 
 /**
- * 指到檔案的那一列，它的模組檔只有自己動得了。**檔案找不到就不檢查**，交給 `import` 講原本那句「載不起來」
- * ——不然使用者看到的是一個裸的 `ENOENT`，而不是哪一列寫錯了。
+ * 指到檔案的那一列，它的模組檔只有自己動得了。
+ *
+ * **只有「檔案不在」放過**（`ENOENT`、路徑中間有一段不是目錄的 `ENOTDIR`），交給 `import` 講原本那句
+ * 「載不起來」——不然使用者看到的是一個裸的 `ENOENT`，而不是哪一列寫錯了。其餘的解析失敗（讀不到上層目錄、
+ * 連結繞圈、URL 不是本機路徑）一律拒絕：檢查不了的東西不能當成檢查過了。
  */
 function assertPrivateModule(entry: ConfigEntry): void {
+  const reject = (reason: string): never => {
+    throw new PluginConfigError(`條目 ${describeEntry(entry)}：${reason}`);
+  };
   let path: string;
   try {
     path = realpathSync(fileURLToPath(entry.name));
-  } catch {
-    return;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return;
+    return reject(
+      `檢查不了 plugin 模組 ${entry.name} 的權限（${String(error)}），拒絕啟動。${PLUGIN_MODULE_ROLE.why}`,
+    );
   }
   try {
     assertPrivateFile(path, PLUGIN_MODULE_ROLE);
   } catch (error) {
-    throw new PluginConfigError(
-      `條目 ${describeEntry(entry)}：${error instanceof Error ? error.message : String(error)}`,
-    );
+    reject(error instanceof Error ? error.message : String(error));
   }
 }
 
