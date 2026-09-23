@@ -208,7 +208,7 @@ const Page = memo(function Page({ page }: { page: DeliverableFilePage }) {
             <div
               key={number}
               data-line={number}
-              className="before:text-muted-foreground flex px-4 tabular-nums before:w-(--gutter) before:shrink-0 before:pr-3 before:text-right before:content-[attr(data-line)]"
+              className="before:text-muted-foreground flex px-4 tabular-nums before:w-[calc(var(--gutter)+0.75rem)] before:shrink-0 before:pr-3 before:text-right before:whitespace-nowrap before:content-[attr(data-line)]"
             >
               {/* 行尾的換行讓複製出來的文字一行一行的，同 dsh；行號在 `::before`，不會被複製。 */}
               {`${text}\n`}
@@ -300,8 +300,11 @@ function PreviewBody({
   const lastLine = last.offset + last.lines;
   if (lastLine === 0) return <Status>這個檔是空的</Status>;
 
-  // 行號欄的寬度跟著讀到的最後一行長：一千行的檔不需要留七位數的空白。
-  const gutter = { '--gutter': `${String(lastLine).length + 1}ch` } as CSSProperties;
+  // 行號欄的寬度跟著讀到的最後一行長：一千行的檔不需要留七位數的空白。`--gutter` 只是數字本身的寬度，
+  // 右邊的 `pr-3` 另外加在 `::before` 的寬度上 —— 以前寫成「位數 + 1ch」，那 1ch（`text-xs` 約 7px）比 `pr-3`
+  // 的 12px 窄，最大位數的行號放不下，換行時被 `overflow-wrap:anywhere` 折成兩行，每行變兩倍高。
+  // `::before` 另外設 `nowrap`，寬度再算錯也只會溢出，不會折行。
+  const gutter = { '--gutter': `${String(lastLine).length}ch` } as CSSProperties;
   return (
     <>
       <div
