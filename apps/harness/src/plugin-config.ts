@@ -457,6 +457,28 @@ function assertNotProtected(entry: ConfigEntry, label: string, position: number)
 }
 
 /**
+ * {@link assertPrivateFile} 在檢查哪一種檔：錯誤訊息要講得出是哪一個被拒、為什麼要緊。
+ */
+export interface PrivateFileRole {
+  /** 訊息開頭怎麼稱呼它。 */
+  readonly subject: string;
+  /** 它被別人改掉的後果，接在「拒絕啟動。」之後。 */
+  readonly why: string;
+}
+
+/** patch 檔：它決定這個行程載入哪些模組。 */
+export const PATCH_FILE_ROLE: PrivateFileRole = {
+  subject: 'patch 檔',
+  why: '這個檔案改得動 plugin 清單，包括把核准關掉。',
+};
+
+/** `insert` 進來、指到檔案的模組（[#542](https://github.com/DemianLi/nexus-agent/issues/542)）。 */
+export const PLUGIN_MODULE_ROLE: PrivateFileRole = {
+  subject: 'plugin 模組',
+  why: '這個模組會以你的身分在 harness 行程裡執行，比核准閘門、沙箱、圍堵都早。',
+};
+
+/**
  * 這個檔案只有目前使用者動得了。
  *
  * **判準照 dsh 的 `hasProtectedAncestors`**（`packages/spill/spill-local/src/cleanup.ts:86`）：
@@ -470,6 +492,10 @@ function assertNotProtected(entry: ConfigEntry, label: string, position: number)
  * 直接 import，相對路徑還錨在 patch 檔自己旁邊。別人寫得動那個檔，就是別人替你決定跑
  * 什麼程式碼。偏離的是「用在哪」，不是判準本身。
  *
+ * **同一條理由也蓋住被 import 的那個模組檔**（[#542](https://github.com/DemianLi/nexus-agent/issues/542)），
+ * 所以 {@link resolveEntryModule} 對指到檔案的條目也跑這一條——射程往前推一跳，登記不變。dsh 在這條路上
+ * 什麼都不檢查（`packages/boot/app-boot/src/index.ts:519` 的 `Include.import` 只做 specifier 解析）。
+ *
  * **這句理由改過一次，而改的是理由不是結論**（#456 第四刀）：原本寫的是「patch 檔停得掉
  * 核准」。那件事現在擋住了——`approval-gate` 那一列在 {@link PROTECTED_ENTRY_NAMES} 上，
  * `disabled: true` 當場拋。但這條檢查該留，射程反而比原本那句寬：patch 檔照樣改得動其餘
@@ -482,9 +508,10 @@ function assertNotProtected(entry: ConfigEntry, label: string, position: number)
  * 一條看起來有在擋、其實在亂擋的規則。我們的部署是 Linux 與 macOS。
  *
  * @param path - 要檢查的檔案路徑。
+ * @param role - 它是哪一種檔，只影響錯誤訊息。
  * @throws {PluginConfigError} 檔案或它的某個祖先別人動得了；訊息指名是哪一個。
  */
-export function assertPrivateFile(path: string): void {
+export function assertPrivateFile(path: string, role: PrivateFileRole = PATCH_FILE_ROLE): void {
   /* v8 ignore next -- Windows 沒有 geteuid，POSIX 的測試走下面那條。 */
   if (process.geteuid === undefined) return;
   const uid = process.geteuid();
@@ -493,14 +520,14 @@ export function assertPrivateFile(path: string): void {
   const stats = lstatSync(resolved);
   if (stats.uid !== uid) {
     throw new PluginConfigError(
-      `${resolved} 不屬於目前的使用者（uid ${String(stats.uid)} ≠ ${String(uid)}），拒絕啟動。` +
-        '這個檔案改得動 plugin 清單，包括把核准關掉。',
+      `${role.subject} ${resolved} 不屬於目前的使用者（uid ${String(stats.uid)} ≠ ${String(uid)}），` +
+        `拒絕啟動。${role.why}`,
     );
   }
   if ((stats.mode & 0o022) !== 0) {
     throw new PluginConfigError(
-      `${resolved} 群組或其他人可寫（mode ${formatMode(stats.mode)}），拒絕啟動。` +
-        '這個檔案改得動 plugin 清單，包括把核准關掉。',
+      `${role.subject} ${resolved} 群組或其他人可寫（mode ${formatMode(stats.mode)}），拒絕啟動。` +
+        role.why,
     );
   }
 
@@ -514,14 +541,15 @@ export function assertPrivateFile(path: string): void {
     const sticky = (parentStats.mode & 0o1000) !== 0;
     if (writableByOthers && !sticky) {
       throw new PluginConfigError(
-        `${resolved} 的上層目錄 ${parent} 群組或其他人可寫（mode ${formatMode(parentStats.mode)}），` +
-          '拒絕啟動——別人換得掉底下的檔案。',
+        `${role.subject} ${resolved} 的上層目錄 ${parent} 群組或其他人可寫` +
+          `（mode ${formatMode(parentStats.mode)}），拒絕啟動——別人換得掉底下的檔案。${role.why}`,
       );
     }
     /* v8 ignore next 6 -- 要一個 sticky 目錄底下有別人擁有的祖先，測試造不出來。 */
     if (writableByOthers && childStats.uid !== uid) {
       throw new PluginConfigError(
-        `${resolved} 的上層目錄 ${parent} 是 sticky 的，但 ${child} 不屬於目前的使用者，拒絕啟動。`,
+        `${role.subject} ${resolved} 的上層目錄 ${parent} 是 sticky 的，但 ${child} 不屬於目前的` +
+          `使用者，拒絕啟動。${role.why}`,
       );
     }
     child = parent;
@@ -593,11 +621,22 @@ export function shippedConfigPath(): string {
  * （[#493](https://github.com/DemianLi/nexus-agent/pull/493) 讓二十個配套入口都有了 default
  * export）。兩種形狀都接得住，是因為退路本來就是標準的一部分。
  *
+ * **指到檔案的條目，import 之前先過 {@link assertPrivateFile}**（[#542](https://github.com/DemianLi/nexus-agent/issues/542)）。
+ * 判別式是 `file:` 開頭：出貨清單的 `name` 全是裸 specifier，patch 裡只有 `insert` 生得出新 `name`，而
+ * {@link anchorInsertedNames} 把 `./`、`../`、絕對路徑都轉成了 `file:`；直接寫 `file:///…` 的原樣也是。
+ * 裸 specifier（`@nexus/*`、`#settings/*`、`node_modules`）不在射程內，理由同出貨的 `cordis.yml`：它們錨在
+ * 安裝樹上，別人動得了那裡就等於動得了整棵樹的原始碼。
+ *
+ * **射程只到那一個檔**：模組自己再 import 的旁邊檔案不逐一檢查。祖先鏈擋得住別人換掉那個目錄裡的檔，擋不住
+ * 旁邊一個 `0664` 的檔被改內容；要逐檔檢查得掛 loader hook，那是另一張卡的事。所以放 plugin 的目錄要整個
+ * 私有（`docs/operations.md`）。
+ *
  * @param entry - 驗過的一列。
  * @returns 可以放進 `loadPlugins` 的條目。
- * @throws {PluginConfigError} 模組載不起來，或它匯出的東西不是一顆 plugin。
+ * @throws {PluginConfigError} 模組檔別人動得了、模組載不起來，或它匯出的東西不是一顆 plugin。
  */
 export async function resolveEntryModule(entry: ConfigEntry): Promise<PluginEntry> {
+  if (entry.name.startsWith('file:')) assertPrivateModule(entry);
   let module: Record<string, unknown>;
   try {
     module = (await import(entry.name)) as Record<string, unknown>;
@@ -619,6 +658,26 @@ export async function resolveEntryModule(entry: ConfigEntry): Promise<PluginEntr
     ...(entry.disabled === undefined ? {} : { disabled: entry.disabled }),
     ...(entry.config === undefined ? {} : { config: entry.config }),
   };
+}
+
+/**
+ * 指到檔案的那一列，它的模組檔只有自己動得了。**檔案找不到就不檢查**，交給 `import` 講原本那句「載不起來」
+ * ——不然使用者看到的是一個裸的 `ENOENT`，而不是哪一列寫錯了。
+ */
+function assertPrivateModule(entry: ConfigEntry): void {
+  let path: string;
+  try {
+    path = realpathSync(fileURLToPath(entry.name));
+  } catch {
+    return;
+  }
+  try {
+    assertPrivateFile(path, PLUGIN_MODULE_ROLE);
+  } catch (error) {
+    throw new PluginConfigError(
+      `條目 ${describeEntry(entry)}：${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 
 /** 組裝一次要讀的東西。 */

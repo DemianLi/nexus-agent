@@ -22,9 +22,18 @@
  * @see [#454](https://github.com/DemianLi/nexus-agent/issues/454)
  */
 
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -429,6 +438,84 @@ describe('權限', () => {
     chmodSync(path, 0o666);
     expect(() => loadOptionalPatches(path)).toThrow(PluginConfigError);
     expect(() => loadOverlayPatches(path)).toThrow(PluginConfigError);
+  });
+
+  it('patch 檔被拒時，訊息說的是 patch 檔，不是模組', () => {
+    const root = privateDirectory();
+    const path = writePrivate(root, 'cordis.patch.yml', '[]\n');
+    chmodSync(path, 0o666);
+    expect(() => loadOverlayPatches(path)).toThrow(/^patch 檔 .*改得動 plugin 清單/);
+  });
+});
+
+describe('insert 進來的模組檔也要只有自己動得了（#542）', () => {
+  /** 一顆會匯出 plugin 的模組，模式位照給的設。 */
+  function moduleFile(dir: string, name: string, mode = 0o600): string {
+    const path = join(dir, name);
+    writeFileSync(path, `export default { name: 'm-${name}', apply() {} };\n`);
+    chmodSync(path, mode);
+    return path;
+  }
+
+  /** 私有目錄裡一份只插這一列的 patch，載下去。 */
+  function loadWith(root: string, name: string) {
+    const shipped = writePrivate(root, 'cordis.yml', '[]\n');
+    const patch = writePrivate(root, 'p.yml', `- insert:\n    - id: team\n      name: '${name}'\n`);
+    return loadPluginConfig({ shipped, overlays: [patch], warn: () => {} });
+  }
+
+  it('(a) 模組放在群組可寫的共用目錄：拒絕，指名模組、它的上層目錄與那一列', async () => {
+    const root = privateDirectory();
+    const shared = join(root, 'shared');
+    mkdirSync(shared);
+    chmodSync(shared, 0o775);
+    const module = moduleFile(shared, 'team.ts');
+    const rejected = loadWith(root, module);
+    await expect(rejected).rejects.toThrow(PluginConfigError);
+    await expect(rejected).rejects.toThrow(/^條目 "team"（file:[^）]+）：plugin 模組 /);
+    await expect(rejected).rejects.toThrow(
+      `plugin 模組 ${realpathSync(module)} 的上層目錄 ${realpathSync(shared)} 群組或其他人可寫`,
+    );
+    await expect(rejected).rejects.toThrow('以你的身分在 harness 行程裡執行');
+  });
+
+  it('(b) 模組檔自己群組可寫（umask 002 的機器上就是這樣）：拒絕', async () => {
+    const root = privateDirectory();
+    moduleFile(root, 'team.ts', 0o664);
+    await expect(loadWith(root, './team.ts')).rejects.toThrow(/plugin 模組 .*群組或其他人可寫/);
+  });
+
+  it('patch 裡直接寫 file:// 的也檢查', async () => {
+    const root = privateDirectory();
+    const module = moduleFile(root, 'team.ts', 0o664);
+    await expect(loadWith(root, pathToFileURL(module).href)).rejects.toThrow(
+      /plugin 模組 .*群組或其他人可寫/,
+    );
+  });
+
+  it('符號連結檢查的是它指到的那個檔', async () => {
+    const root = privateDirectory();
+    const target = moduleFile(root, 'real.ts', 0o664);
+    symlinkSync(target, join(root, 'link.ts'));
+    await expect(loadWith(root, './link.ts')).rejects.toThrow(
+      `plugin 模組 ${realpathSync(target)} 群組或其他人可寫`,
+    );
+  });
+
+  it('私有的模組照常載得起來', async () => {
+    const root = privateDirectory();
+    moduleFile(root, 'team.ts');
+    const loaded = await loadWith(root, './team.ts');
+    expect(loaded[0]?.plugin.name).toBe('m-team.ts');
+  });
+
+  it('模組檔不存在：照舊說那一列載不起來，不是一個裸的 ENOENT', async () => {
+    const root = privateDirectory();
+    const rejected = loadWith(root, './沒這個檔.ts');
+    await expect(rejected).rejects.toThrow(PluginConfigError);
+    await expect(rejected).rejects.toThrow(
+      /^條目 "team"（file:[^）]+） 載不起來：Cannot find module/,
+    );
   });
 });
 
