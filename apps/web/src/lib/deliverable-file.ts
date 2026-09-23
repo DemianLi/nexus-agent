@@ -10,7 +10,7 @@
  * | 400 | `'invalid'` —— 座標或翻頁參數不對，**這是 bug 不是使用者狀態** | 否 |
  * | 404 | `'missing'` —— 錨不住、檔不在、不是一般檔 | 否 |
  * | 413 | `'too-large'` —— 超過上限。**上限是拒絕不是截斷**，所以不能假裝畫出了全部 | 否 |
- * | 422 | `'binary'` —— 含 NUL，不是文字 | 否 |
+ * | 422 | `'not-text'` —— 不是文字：含 NUL、或不是 UTF-8。**可能讀到一半才出現**（server 串流分頁，只判它讀到的那一頁，#552） | 否 |
  * | 其他／斷線／形狀不對 | `'error'` | 是 |
  *
  * **只有 `'error'` 給重試。** 隔壁把非 404 的失敗全收進可重試的 `'error'`，那一套搬過來的話
@@ -19,9 +19,10 @@
  * **`version` 是唯一有比較契約的欄位**：不解析它，只比它——同值即同一份內容。翻頁時用它擋掉
  * 「兩個版本的頁混在同一份畫面上」，那會畫出一份從來不存在的檔。
  *
- * **不送 `limit`。** 每頁幾行的上限（`DELIVERABLE_MAX_LINES`）住在 `apps/harness` 裡、沒有從
- * `@nexus/wire` 匯出；抄一份過來就是跨領域複製一個沒有絆索的常數。路由不給 `limit` 時用的就是
- * 那個上限，而翻頁只需要回應裡的 `lines`。
+ * **不送 `limit`。** 每頁幾行的上限是 `#settings/deliverable-files` 那一列的 `maxLines`，
+ * 預設值 `DEFAULT_DELIVERABLE_MAX_LINES` 住在 `apps/harness/src/settings/deliverable-files.ts`、沒有從
+ * `@nexus/wire` 匯出——而且部署可以改掉它，所以抄一份過來連「對」都說不上。路由不給 `limit` 時用的就是
+ * 那一列的值，而翻頁只需要回應裡的 `lines`。
  *
  * **送一個我們自己的數字也不行**（[#543](https://github.com/DemianLi/nexus-agent/issues/543) 考慮過
  * `limit=1000`，收回了）：[#536](https://github.com/DemianLi/nexus-agent/issues/536) 之後 `maxLines`
@@ -36,7 +37,7 @@ import type { DeliverableFilePage } from '@nexus/wire';
 import { deliverableFilePath } from '@nexus/wire';
 
 /** 讀不到的幾種結局；每一個對應一個不同的畫面，見檔頭那張表。 */
-export type DeliverableFileFailure = 'invalid' | 'missing' | 'too-large' | 'binary' | 'error';
+export type DeliverableFileFailure = 'invalid' | 'missing' | 'too-large' | 'not-text' | 'error';
 
 /** 一頁的狀態。`'loading'` ＝還在讀。 */
 export type DeliverableFileState = DeliverableFilePage | DeliverableFileFailure | 'loading';
@@ -86,7 +87,7 @@ function failureOf(status: number): DeliverableFileFailure {
   if (status === 400) return 'invalid';
   if (status === 404) return 'missing';
   if (status === 413) return 'too-large';
-  if (status === 422) return 'binary';
+  if (status === 422) return 'not-text';
   return 'error';
 }
 

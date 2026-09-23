@@ -17,7 +17,7 @@ vi.mock('sonner', () => ({ toast: toastSpy }));
 /**
  * 下載鈕（#452 web 第三刀）：卡片那一列一顆，預覽面裡讀不到的那幾格一顆。
  *
- * **哪幾格有鈕是承重的**：`'binary'` 與 `'too-large'` 有，`'missing'` 與 `'invalid'` 沒有——那兩種
+ * **哪幾格有鈕是承重的**：`'not-text'` 與 `'too-large'` 有，`'missing'` 與 `'invalid'` 沒有——那兩種
  * 下載也救不了，給一顆按了一定失敗的鈕比不給更糟。位元組本身的驗收在 `lib/deliverable-download.test.ts`。
  */
 
@@ -171,7 +171,7 @@ describe('預覽面裡的下載鈕', () => {
   }
 
   it.each([
-    [422, '二進位檔，沒辦法預覽'],
+    [422, '不是文字檔，沒辦法預覽'],
     [413, '檔案太大，沒辦法在這裡預覽'],
   ])('%i 那一格有下載鈕，按了真的去下載', async (status, said) => {
     const { doFetch } = await openPreviewWith(status);
@@ -194,7 +194,7 @@ describe('預覽面裡的下載鈕', () => {
   it('沒給 downloader 時那一格只剩一句話，仍然講得出發生什麼事', async () => {
     await openPreviewWith(422, { withDownload: false });
     const sheet = within(await screen.findByRole('dialog'));
-    expect(sheet.getByText('二進位檔，沒辦法預覽')).toBeTruthy();
+    expect(sheet.getByText('不是文字檔，沒辦法預覽')).toBeTruthy();
     expect(sheet.queryByRole('button', { name: /下載這個檔/ })).toBeNull();
   });
 

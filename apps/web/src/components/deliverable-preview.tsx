@@ -29,13 +29,17 @@
  *
  * ## 讀不到的幾種
  *
- * 各自有話講（見 {@link DeliverableFileState}）：座標不對是 bug、錨不住是正常的、太大是拒絕不是截斷、二進位要
+ * 各自有話講（見 {@link DeliverableFileState}）：座標不對是 bug、錨不住是正常的、太大是拒絕不是截斷、不是文字要
  * 改走下載。發生在第一段就佔滿整個面；發生在後面，已經讀到的照畫，失敗接在最後。**只有真的讀壞了才給重試，
  * 而且不自動重試** —— 自動重試會對著一個永遠不會成功的錯誤一直打。
  *
- * **兩格有下載鈕**：`'binary'` 是它本來就該去的地方，`'too-large'` 則是因為預覽的 413 有兩個成因（整檔超過
- * 32 MiB，或這一頁超過 2 MiB），下載只吃前者。**那顆鈕不保證成功**：整檔真的超過上限時它會再撞一次 413，而
- * 下載的 413 是終局。那句話由 {@link DownloadAction} 自己講，這裡不預測。
+ * **兩格有下載鈕**：`'not-text'` 是它本來就該去的地方；`'too-large'` 則是因為預覽的 413 只剩「這一頁超過頁的
+ * 位元組上限（預設 2 MiB）」一個成因（[#552](https://github.com/DemianLi/nexus-agent/issues/552) 之後預覽串流
+ * 分頁，整檔沒有上限），而下載吃的是另一道整檔上限（`maxFileBytes`，預設 32 MiB）。**那顆鈕不保證成功**：整檔
+ * 超過那道上限時它會撞 413，而下載的 413 是終局。那句話由 {@link DownloadAction} 自己講，這裡不預測。
+ *
+ * **`'not-text'` 可能讀到一半才出現**：server 只判它讀到的那一頁（NUL 只掃當頁，UTF-8 讀到哪判到哪），所以前面
+ * 幾段畫得出來、後面某一段才被拒。那時話要講「接下來這一段」，跟 `'too-large'` 同一個道理。
  */
 
 import type { DeliverableFilePage } from '@nexus/wire';
@@ -162,10 +166,11 @@ function Failure({
           {download}
         </Status>
       );
-    case 'binary':
+    case 'not-text':
+      // 不只二進位：Big5 之類不是 UTF-8 的文字檔也落在這裡，所以不說「二進位」。
       return (
         <Status>
-          二進位檔，沒辦法預覽
+          {midway ? '接下來這一段不是文字，沒辦法預覽' : '不是文字檔，沒辦法預覽'}
           {download}
         </Status>
       );

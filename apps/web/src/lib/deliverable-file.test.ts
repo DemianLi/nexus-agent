@@ -53,7 +53,7 @@ describe('交付檔的讀取', () => {
     [400, 'invalid'],
     [404, 'missing'],
     [413, 'too-large'],
-    [422, 'binary'],
+    [422, 'not-text'],
     [500, 'error'],
   ])('%i 對到 %s', async (status, expected) => {
     const { store } = storeWith(() => new Response('nope', { status }));

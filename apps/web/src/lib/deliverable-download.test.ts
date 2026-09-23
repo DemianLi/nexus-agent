@@ -141,8 +141,8 @@ describe('交付檔的下載', () => {
     expect(clicked).toHaveLength(0);
   });
 
-  it('422 是可重試的 error，不是 binary——下載那條不看內容（#452）', async () => {
-    // 預覽那條用 422 講「含 NUL，改走下載」。下載這條**不會**回它：二進位正是它存在的理由。
+  it('422 是可重試的 error，不是 not-text——下載那條不看內容（#452）', async () => {
+    // 預覽那條用 422 講「不是文字，改走下載」。下載這條**不會**回它：二進位正是它存在的理由。
     // 真收到就代表我們對協定的理解錯了，那該當「再試一次」，不是一句斬釘截鐵的終局。
     const { downloader } = downloaderWith(() => new Response('', { status: 422 }));
     expect(await downloader.download(FILE)).toBe('error');
