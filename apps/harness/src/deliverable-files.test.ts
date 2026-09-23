@@ -28,8 +28,13 @@ import type { SessionEvent, SessionRegistry } from '@nexus/core';
 import { createHostServicesPlugin } from '@nexus/core';
 import { PRESENT_TOOL_NAME } from '@nexus/plugin-present';
 import { createSandboxPolicyPlugin, SandboxModeController } from '@nexus/plugin-sandbox-policy';
-import type { DeliverableFilePage } from '@nexus/wire';
-import { createWireClient, deliverableDownloadPath, deliverableFilePath } from '@nexus/wire';
+import type { DeliverableFileBytes, DeliverableFilePage } from '@nexus/wire';
+import {
+  createWireClient,
+  deliverableBytesPath,
+  deliverableDownloadPath,
+  deliverableFilePath,
+} from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
@@ -702,3 +707,153 @@ async function seedWithDeliverable(): Promise<readonly SessionEvent[]> {
     } as unknown as SessionEvent,
   ];
 }
+
+function bytesPath(query: string): string {
+  return `${deliverableBytesPath(THREAD_ID)}?${query}`;
+}
+
+/**
+ * **位元組窗口**（#544 的 B，照 dsh 的 `readBytes`）。它存在是為了文字頁讀不動的那種檔：一行本身
+ * 就超過頁的位元組上限，按行切永遠是 413。頁的拒絕不動，讀不動的改用窗口一段一段讀。
+ */
+describe('位元組窗口', () => {
+  const small = (maxBytes: number): DeliverableFilesConfig =>
+    deliverableFilesConfigSchema.parse({ maxBytes });
+
+  async function windowOf(outcome: Outcome, query: string): Promise<DeliverableFileBytes> {
+    const response = await outcome.get(bytesPath(`seq=${outcome.seq}&index=0&${query}`));
+    expect(response.status).toBe(200);
+    return (await response.json()) as DeliverableFileBytes;
+  }
+
+  it('單行超過頁上限的檔：文字頁永遠 413，窗口一段一段接得回整份——連切在字中間的中文也是', async () => {
+    // 一行 206 個位元組，頁上限 64：按行切一定 413。中文三個位元組一個字，窗口邊界一定會切在字中間。
+    const line = `${'x'.repeat(200)}中文\n`;
+    const outcome = await present({ 'min.json': line }, ['min.json'], { limits: small(64) });
+    try {
+      const page = await outcome.get(filePath(`seq=${outcome.seq}&index=0&limit=1`));
+      expect(page.status).toBe(413);
+
+      const decoder = new TextDecoder('utf-8', { fatal: true });
+      let text = '';
+      let offset = 0;
+      let windows = 0;
+      for (;;) {
+        const window = await windowOf(outcome, `offset=${String(offset)}`);
+        const bytes = Buffer.from(window.data, 'base64');
+        expect(window.offset).toBe(offset);
+        expect(bytes.length).toBeLessThanOrEqual(64);
+        text += decoder.decode(bytes, { stream: !window.eof });
+        windows += 1;
+        if (window.eof) break;
+        // 不是最後一個窗口就一定是滿的——否則呼叫端分不出「讀完了」與「讀少了」。
+        expect(bytes.length).toBe(64);
+        offset += bytes.length;
+      }
+      expect(text).toBe(line);
+      expect(windows).toBe(Math.ceil(Buffer.byteLength(line) / 64));
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('不解碼、不擋二進位：NUL 照給，位元組跟磁碟上一模一樣', async () => {
+    const bytes = new Uint8Array([0, 1, 2, 255, 254]);
+    const outcome = await present({ 'b.bin': bytes }, ['b.bin']);
+    try {
+      // 對照組：同一個檔的文字頁是 422。
+      expect((await outcome.get(filePath(`seq=${outcome.seq}&index=0`))).status).toBe(422);
+      const window = await windowOf(outcome, '');
+      expect([...Buffer.from(window.data, 'base64')]).toEqual([...bytes]);
+      expect(window).toMatchObject({ path: 'b.bin', bytes: 5, offset: 0, eof: true });
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('沒給 length 就是頁的位元組上限，同 dsh', async () => {
+    const outcome = await present({ 'a.md': 'abcdefghijklmnopqrst' }, ['a.md'], {
+      limits: small(8),
+    });
+    try {
+      const window = await windowOf(outcome, '');
+      expect(Buffer.from(window.data, 'base64').toString('utf8')).toBe('abcdefgh');
+      expect(window.eof).toBe(false);
+      const last = await windowOf(outcome, 'offset=16');
+      expect(Buffer.from(last.data, 'base64').toString('utf8')).toBe('qrst');
+      expect(last.eof).toBe(true);
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('offset 在檔尾或之後：空的窗口，eof 是真的', async () => {
+    const outcome = await present({ 'a.md': 'abc' }, ['a.md']);
+    try {
+      for (const offset of ['3', '1000']) {
+        const window = await windowOf(outcome, `offset=${offset}`);
+        expect(window).toMatchObject({ data: '', eof: true });
+      }
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('length 超過頁上限是 413，不是給到上限為止；正好等於上限的過', async () => {
+    const outcome = await present({ 'a.md': 'abc' }, ['a.md'], { limits: small(8) });
+    try {
+      const refused = await outcome.get(bytesPath(`seq=${outcome.seq}&index=0&length=9`));
+      expect(refused.status).toBe(413);
+      expect(await refused.text()).toContain('超過 8 的上限');
+      expect((await outcome.get(bytesPath(`seq=${outcome.seq}&index=0&length=8`))).status).toBe(
+        200,
+      );
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('窗口參數先驗、再找檔，照 dsh 的順序：座標沒有檔，length 太大照樣是 413', async () => {
+    const outcome = await present({ 'a.md': 'abc' }, ['a.md'], { limits: small(8) });
+    try {
+      // 對照組：同一個不存在的座標、合格的窗口，是 404。
+      const missing = await outcome.get(bytesPath(`seq=${outcome.seq}&index=99`));
+      expect(missing.status).toBe(404);
+      const tooLarge = await outcome.get(bytesPath(`seq=${outcome.seq}&index=99&length=9`));
+      expect(tooLarge.status).toBe(413);
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('length 是 0、或參數不是非負整數：400', async () => {
+    const outcome = await present({ 'a.md': 'abc' }, ['a.md']);
+    try {
+      for (const query of ['length=0', 'offset=-1', 'offset=abc', 'length=1.5']) {
+        const response = await outcome.get(bytesPath(`seq=${outcome.seq}&index=0&${query}`));
+        expect(response.status, query).toBe(400);
+      }
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('跟預覽、下載走同一道錨與閘門：沒給 --workspace 是 404，沒帶 content-type 是 415', async () => {
+    const bare = await present({ 'a.md': 'abc' }, ['a.md'], { workspace: false });
+    try {
+      const response = await bare.get(bytesPath(`seq=${bare.seq}&index=0`));
+      expect(response.status).toBe(404);
+      // 404 有好幾種成因；這一條要的是「沒有錨」那一種。
+      expect(await response.text()).toContain('沒給 --workspace');
+    } finally {
+      await bare.close();
+    }
+    const outcome = await present({ 'a.md': 'abc' }, ['a.md']);
+    try {
+      const noHeader = await outcome.get(bytesPath(`seq=${outcome.seq}&index=0`), { headers: {} });
+      expect(noHeader.status).toBe(415);
+    } finally {
+      await outcome.close();
+    }
+  });
+});

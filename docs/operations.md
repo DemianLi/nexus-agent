@@ -290,6 +290,8 @@ dsh 的產品組裝；**`session-persistence` 的 `10` 毫秒沒有 dsh 的對�
 與壓縮兩格，它的批次是呼叫端傳一整批而不是計時器攢批，所以這個旋鈕是我們自己的，形狀抄的是
 同一份清單上 core 那幾列；**`deliverable-files` 的 `maxLines` 是雙用的**——它同時是「不給 `limit` 查詢參數時
 每頁幾行」與「給了就不准超過幾行」，所以改那一格會同時動到兩個行為（dsh 同形）。
+**`maxBytes` 也是雙用的**：一頁文字的上限，同時是位元組窗口（`deliverables/bytes`）`length` 的預設與
+上限（[#544](https://github.com/DemianLi/nexus-agent/issues/544)，dsh 同形）。
 `recursion-limit` 的 `100`
 **沒有 dsh 的對應物**（dsh 不跑 LangGraph），它是對著一次實測跑掉的執行校準出來的，換算成幾輪
 模型呼叫取決於這一次掛了哪些 middleware——預設組裝是 33 輪，再給 `--workspace` 是 32 輪。逐段

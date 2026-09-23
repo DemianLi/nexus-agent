@@ -59,6 +59,10 @@ export const DELIVERABLE_FILES_PLUGIN_NAME = 'deliverable-files';
  * 一頁文字的位元組上限，照 dsh 的 `maxBytes`（2 MiB）。
  *
  * **超標是拒絕，不是切短**——dsh 的理由逐字：「a silently cut page reads as the whole page」。
+ *
+ * **它是雙用的，同 dsh**（「Inclusive byte cap on one page's text and on one byte window」）：也是
+ * 位元組窗口路由 `length` 的預設與上限（[#544](https://github.com/DemianLi/nexus-agent/issues/544)，
+ * `deliverable-window.ts`）。改這一格會同時動到兩條路由。
  */
 export const DEFAULT_DELIVERABLE_MAX_PAGE_BYTES = 2 * 1024 * 1024;
 
