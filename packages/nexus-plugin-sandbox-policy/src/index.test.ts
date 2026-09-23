@@ -19,13 +19,13 @@ import { SandboxModeController } from './sandbox-mode.js';
 
 describe('政策那句話本身', () => {
   it('三格各有各的話，沒有一格漏掉', () => {
-    expect(sandboxPolicySentence('read-only', '/w')).toContain('read-only');
-    expect(sandboxPolicySentence('workspace-write', '/w')).toContain('"/w"');
-    expect(sandboxPolicySentence('danger-full-access', '/w')).toContain('不限制');
+    expect(sandboxPolicySentence('read-only')).toContain('read-only');
+    expect(sandboxPolicySentence('workspace-write')).toContain('`/` 就是工作區根');
+    expect(sandboxPolicySentence('danger-full-access')).toContain('不限制');
   });
 
   it('read-only 那句叫模型照升級指引做，但不在提示句裡講模式名', () => {
-    const sentence = sandboxPolicySentence('read-only', '/w');
+    const sentence = sandboxPolicySentence('read-only');
     expect(sentence).toContain('升級指引');
     expect(sentence).not.toContain('workspace-write');
     expect(sentence).not.toContain('danger-full-access');
