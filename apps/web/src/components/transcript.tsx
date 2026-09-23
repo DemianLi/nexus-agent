@@ -9,6 +9,8 @@
  *
  * 交付也不在原位畫：同一輪 `present` 成功交付的檔案收攏成一張卡，放在這一輪尾端（`transcriptItems`，#441）。
  *
+ * 模型的推理畫在它那則回覆的泡泡上方，預設收合（`ReasoningRow`，#527）。
+ *
  * 模型與工具都可能來自 subagent，
  * 而**歸屬是折疊器 join 出來的**——線上沒有 subagent 的名字，只有 namespace 樹
  * （見 `@nexus/wire` 的 `conversation.ts`）。join 不起來的時候它說「未歸屬」，
@@ -34,6 +36,7 @@ import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { ChangesCard } from '@/components/changes-card';
 import { DeliverablesCard } from '@/components/deliverables-card';
 import { MarkdownText } from '@/components/markdown-text';
+import { ReasoningRow } from '@/components/reasoning-row';
 import { AttributionBadge, ToolCard } from '@/components/tool-card';
 import { Button } from '@/components/ui/button';
 import { Message, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message';
@@ -51,6 +54,7 @@ import type { DeliverableFileStore } from '@/lib/deliverable-file';
 import { transcriptItems } from '@/lib/deliverables-view';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
 import { pairAnswers } from '@/lib/question-view';
+import { reasoningRunning, visibleReasoning } from '@/lib/reasoning-view';
 
 /**
  * 評分按鈕要的東西（[#278](https://github.com/DemianLi/nexus-agent/issues/278)、
@@ -187,18 +191,24 @@ function Entry({
     return <ToolCard entry={entry} beam={beam} {...(answer === undefined ? {} : { answer })} />;
   }
 
+  const reasoning = visibleReasoning(entry);
+  // 正文只有空白也算空：模型呼叫工具前常先吐一段 `"\n\n"`，畫出來是一顆空泡泡（#527 驗收時量到）。
+  const hasText = entry.text.trim() !== '';
   if (
-    entry.text === '' &&
+    !hasText &&
+    reasoning === undefined &&
     !entry.streaming &&
     entry.stopped !== true &&
     entry.error === undefined
   ) {
-    // 只想、只呼叫工具的那幾步會留下一則正文空的回覆，#562 之後重新整理也會有。講完了、沒被打斷、
-    // 沒出錯，就沒有東西可畫；畫出來是一顆空泡泡。推理由 #527 的 web 那一半接。
+    // 講完了、沒正文、沒推理、沒被打斷、沒出錯，沒有東西可畫；畫出來是一顆空泡泡（#565）。
     return null;
   }
 
   const indented = entry.attribution.kind !== 'root';
+  // **有推理時，正文空就不畫泡泡**（#527）：只想、只呼叫工具的那幾步只剩推理列；串流中也一樣，推理列在長，
+  // 就是模型在動的訊號，不必再疊一顆帶游標的空泡泡。沒有推理的照舊。
+  const bubble = hasText || reasoning === undefined;
   return (
     <Message
       align="start"
@@ -211,16 +221,23 @@ function Entry({
             <AttributionBadge attribution={entry.attribution} />
           </MessageHeader>
         )}
-        <Bubble variant="ghost">
-          <BubbleContent className="text-body">
-            <MarkdownText
-              text={entry.text}
-              streaming={entry.streaming}
-              // 串流中只有游標在閃；狀態由狀態列講，這裡不唸（§8）。
-              {...(entry.streaming ? { caret: <span className="stream-caret" aria-hidden /> } : {})}
-            />
-          </BubbleContent>
-        </Bubble>
+        {reasoning !== undefined && (
+          <ReasoningRow text={reasoning} running={reasoningRunning(entry)} />
+        )}
+        {bubble && (
+          <Bubble variant="ghost">
+            <BubbleContent className="text-body">
+              <MarkdownText
+                text={entry.text}
+                streaming={entry.streaming}
+                // 串流中只有游標在閃；狀態由狀態列講，這裡不唸（§8）。
+                {...(entry.streaming
+                  ? { caret: <span className="stream-caret" aria-hidden /> }
+                  : {})}
+              />
+            </BubbleContent>
+          </Bubble>
+        )}
         {/* 講到一半被人按了停止（#276）。不是失敗，所以不用紅字。 */}
         {entry.stopped === true && <MessageFooter className="px-0">（已停止）</MessageFooter>}
         {entry.error !== undefined && <p className="text-destructive text-xs">{entry.error}</p>}
