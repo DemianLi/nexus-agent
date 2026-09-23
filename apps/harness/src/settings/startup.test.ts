@@ -38,6 +38,7 @@ import {
   DEFAULT_DELIVERABLE_MAX_LINES,
   DEFAULT_DELIVERABLE_MAX_PAGE_BYTES,
 } from './deliverable-files.js';
+import { liveModelPlugin } from './live-model.js';
 import { startupSetting } from './startup.js';
 import { toolTextPlugin } from './tool-text.js';
 import { DEFAULT_THREAD_TITLE_MAX_WORDS, threadTitlePlugin } from './thread-title.js';
@@ -209,7 +210,7 @@ describe('startupSetting', () => {
     ).toThrow(/thread-title/u);
   });
 
-  it('出貨清單上真的讀得到那四列——不是只有手搭的清單走得通', async () => {
+  it('出貨清單上真的讀得到那五列——不是只有手搭的清單走得通', async () => {
     const plugins = await loadDefaultPlugins({ env: {} });
     expect(startupSetting(plugins, threadTitlePlugin).maxBytes).toBe(40);
     expect(startupSetting(plugins, browserSessionPlugin).maxAgeDays).toBe(30);
@@ -222,6 +223,14 @@ describe('startupSetting', () => {
     });
     // 字面值，理由同上一段：10 同時是出貨那一列、schema 的預設、以及協調器自己的退路。
     expect(startupSetting(plugins, sessionPersistencePlugin).windowMs).toBe(10);
+    // 字面值，理由同上：出貨那一列、schema 預設、`live-model.ts` 的常數是同一組數字（#545）。
+    expect(startupSetting(plugins, liveModelPlugin)).toEqual({
+      baseUrl: 'https://integrate.api.nvidia.com/v1',
+      modelId: 'nvidia/nemotron-3-super-120b-a12b',
+      maxOutputTokens: 16384,
+      timeoutMs: 90000,
+      maxRetries: 6,
+    });
   });
 
   it('CLI 那條也解出那一列，而且真的傳給落盤——結構性的，因為沒有行為觀察點', async () => {

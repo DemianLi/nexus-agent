@@ -65,7 +65,7 @@
  * - **光看 `/models` 或看名字都會踩空**，一定要真的送一個帶 `tools` 的請求。
  * - **一次探測會誤判**，所以每個失敗都要重探三次。2026-09-04 那輪裡兩個首輪失敗的
  *   （`llama-11b` 的 `500`、`lightning-30b` 的逾時）補探 3/3 全過，而四個逾時的重探仍然全逾時。
- * - **`max_tokens` 要送 `LIVE_MAX_OUTPUT_TOKENS`（16384）而不是 512。** `createLiveModel`
+ * - **`max_tokens` 要送 `DEFAULT_LIVE_MAX_OUTPUT_TOKENS`（16384）而不是 512。** `createLiveModel`
  *   恆定送出那個數字，輸出上限比它小的模型每一次呼叫都會失敗，而 512 的入場探測看不出來。
  *
  * **這份集合綁在帳號上，也綁在時間上** —— 同一把 key 三輪就掉了 5 個可用的，所以報告裡的
@@ -130,7 +130,7 @@ export const SCORER_CONTROL: MeasuredModel = {
  * 前四個是 2026-09-04 為 [#165](https://github.com/DemianLi/nexus-agent/issues/165) 跑的
  * 決選（四個候選 × 七題 × 3 次取樣 = 84 次執行，零 `throttled`、零 `rejected`）。
  * **那一輪的品質沒有打平** —— 難題上的參數正確性是 `0.98` 對 `0.92`–`0.93` —— 所以
- * `LIVE_MODEL_ID` 是選出來的，不是「回得出 `tool_calls` 就用」。
+ * `DEFAULT_LIVE_MODEL_ID` 是選出來的，不是「回得出 `tool_calls` 就用」。
  */
 export const MEASURED_MODELS: readonly MeasuredModel[] = [
   {
@@ -144,7 +144,7 @@ export const MEASURED_MODELS: readonly MeasuredModel[] = [
     label: 'super',
     modelId: 'nvidia/nemotron-3-super-120b-a12b',
     measuredOn: '2026-09-04',
-    note: '難題參數 0.98、多叫 0.29、10661 token、8.0 秒，21/21。現在的 LIVE_MODEL_ID。',
+    note: '難題參數 0.98、多叫 0.29、10661 token、8.0 秒，21/21。現在的 DEFAULT_LIVE_MODEL_ID。',
   },
   {
     label: 'lightning-30b',

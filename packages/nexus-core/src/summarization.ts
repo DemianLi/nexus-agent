@@ -152,7 +152,7 @@ export interface SummarizationSettings {
  * `node_modules/.pnpm/` 零命中），所以那一句寫的是「未經實測」。
  *
  * **現在兩顆都量到了，而它們差五倍以上**（[#165](https://github.com/DemianLi/nexus-agent/issues/165)，
- * 做法見 `apps/harness/src/live-model.ts` 的 `LIVE_MODEL_ID` 檔頭）：
+ * 做法見 `apps/harness/src/live-model.ts` 的 `DEFAULT_LIVE_MODEL_ID` 檔頭）：
  *
  * | 模型 | 量到的窗口 | `100_000` 佔它 |
  * | --- | --- | --- |
@@ -161,7 +161,7 @@ export interface SummarizationSettings {
  *
  * **值不改，但理由換了。** 它不再是「假設 128k 取八成」，而是「量過的最小那一顆是
  * 131,007，而 100,000 塞得進去」。塞得進去的餘裕有多少要扣掉輸出：那條路恆定送
- * `LIVE_MAX_OUTPUT_TOKENS = 16_384`，所以最小那一顆的**輸入**上限其實是 114,623，
+ * `DEFAULT_LIVE_MAX_OUTPUT_TOKENS = 16_384`，所以最小那一顆的**輸入**上限其實是 114,623，
  * 而 100,000 離它只有 **14,623** 的餘裕。這是量過的最緊的一格，不是全部——**窗口是逐顆
  * 的性質，不是端點的性質**，同一個端點上這兩顆差五倍。換模型要重量一次。
  *

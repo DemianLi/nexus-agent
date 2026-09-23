@@ -11,6 +11,7 @@ import {
   type HarnessProfileEffects,
 } from './harness-profile.js';
 import { createLiveModel, LIVE_API_KEY_ENV } from './live-model.js';
+import { liveModelConfigSchema } from './settings/live-model.js';
 import { ScriptedChatModel } from './scripted-model.js';
 
 /** 內建 Codex profile 的後綴裡最不像會被順手改掉的一句。 */
@@ -170,7 +171,9 @@ describe('宣告檢查', () => {
     // **絆索的方向是反的**：今天過得了，是因為 `@langchain/openai` 把型號存在 `model` 而
     // 不是 `model_name` / `modelName`。哪天它補齊那些欄位，這一條會紅——那正是我們要知道
     // 的那一刻，而不是等到生產上的 agent 多出一組沒人宣告的工具。
-    expect(() => assertHarnessProfileDeclared(createLiveModel())).not.toThrow();
+    expect(() =>
+      assertHarnessProfileDeclared(createLiveModel(liveModelConfigSchema.parse({}))),
+    ).not.toThrow();
   });
 
   it('沒宣告卻有東西：擋下來，並且訊息可以直接貼回去', () => {
