@@ -19,6 +19,11 @@
  * | `session/end-seed` | 上一個行程停在一輪中間的話，那一輪在這裡收掉 |
  * | `deliverables/presented` | `custom` frame，`data` 同即時（{@link deliverablesData}） |
  * | `workspace/changes` | `custom` frame，`data` 同即時（{@link workspaceChangesData}）；它指到的摘要可能已經不在 |
+ * | `model/usage` ／ `context/measure` | 用量表（#528）：**一頁各一顆，是到這一頁結尾為止最新的那一筆**，`data` 同即時（{@link modelUsageData}、{@link contextMeasureData}） |
+ *
+ * 用量表那兩種不是逐顆轉：web 只留最新那一筆，逐顆轉只會多出一串馬上被蓋掉的 frame。「到這一頁結尾為止」包括這一頁
+ * 開頭之前的——最後一輪在第一次模型呼叫之前就失敗的話，這一頁自己沒有那兩種事件，而即時的畫面上用量表還在。見
+ * {@link historyPage}。
  *
  * 其餘的（壓縮、外掛注入的 `user/message`、模型起訖、命令、模式、目標、todo、回饋）即時的畫面也不畫，這裡也不畫。
  * **壓縮不畫是偏離**：dsh 的畫面由那顆 `user/message {surfaceOp: replace}` 把被壓掉的那一段換成摘要；我們沒有
@@ -32,14 +37,18 @@
 import type {
   DeliverablesPresentedPayload,
   Event,
+  ModelUsagePayload,
   ThreadHistoryQuery,
   ThreadHistoryResult,
+  WireContextMeasure,
   WorkspaceChangesPayload,
 } from '@nexus/wire';
 import {
+  CONTEXT_MEASURE,
   DELIVERABLES_PRESENTED,
   HISTORY_PAGE_MAX_BYTES,
   HISTORY_PAGE_MESSAGES,
+  MODEL_USAGE,
   WORKSPACE_CHANGES,
 } from '@nexus/wire';
 import type { LoggedMessage, SessionEvent, SessionEventMap, UnreplayableReason } from '@nexus/core';
@@ -160,6 +169,75 @@ export function workspaceChangesData(seq: number): {
   readonly payload: WorkspaceChangesPayload;
 } {
   return { name: WORKSPACE_CHANGES, payload: { seq } };
+}
+
+/**
+ * root 一次模型呼叫報回的用量在線上的 `custom` 事件 `data`（[#528](https://github.com/DemianLi/nexus-agent/issues/528)）。
+ * 即時與這裡共用，同 {@link deliverablesData}。**只送 `inputTokens`**：用量表只顯示「目前多大」，
+ * 累計燒了多少是 #574 的事。
+ *
+ * @param usage - 日誌裡那一顆 `model/usage` 的酬載。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `ModelUsagePayload`。
+ */
+export function modelUsageData(usage: SessionEventMap['model/usage']): {
+  readonly name: typeof MODEL_USAGE;
+  readonly payload: ModelUsagePayload;
+} {
+  return { name: MODEL_USAGE, payload: { inputTokens: usage.inputTokens } };
+}
+
+/**
+ * 摘要器量到的 root 一次模型呼叫在線上的 `custom` 事件 `data`（#528）。即時與這裡共用，同 {@link deliverablesData}。
+ *
+ * @param measure - 日誌裡那一顆 `context/measure` 的酬載。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `WireContextMeasure`。
+ */
+export function contextMeasureData(measure: SessionEventMap['context/measure']): {
+  readonly name: typeof CONTEXT_MEASURE;
+  readonly payload: WireContextMeasure;
+} {
+  return {
+    name: CONTEXT_MEASURE,
+    payload: {
+      approxTokens: measure.approxTokens,
+      messageCount: measure.messageCount,
+      thresholds: measure.thresholds.map(({ type, value }) => ({ type, value })),
+    },
+  };
+}
+
+/** 用量表那兩種事件。見檔頭。 */
+type PressureEvent = Extract<SessionEvent, { type: 'model/usage' | 'context/measure' }>;
+
+/**
+ * 一段日誌裡兩種用量表事件各自最新的那一顆，照日誌的順序。
+ *
+ * @param events - 要找的那一段。
+ * @returns 零到兩顆。
+ */
+function latestPressureEvents(events: readonly SessionEvent[]): PressureEvent[] {
+  let usage: PressureEvent | undefined;
+  let measure: PressureEvent | undefined;
+  for (
+    let at = events.length - 1;
+    at >= 0 && (usage === undefined || measure === undefined);
+    at -= 1
+  ) {
+    const event = events[at]!;
+    if (event.type === 'model/usage') usage ??= event;
+    else if (event.type === 'context/measure') measure ??= event;
+  }
+  return [usage, measure]
+    .filter((event): event is PressureEvent => event !== undefined)
+    .sort((a, b) => a.seq - b.seq);
+}
+
+function pressureFrame(event: PressureEvent): Event {
+  return frame(
+    'custom',
+    event.time,
+    event.type === 'model/usage' ? modelUsageData(event.data) : contextMeasureData(event.data),
+  );
 }
 
 function lifecycle(time: number, data: Record<string, unknown>): Event {
@@ -375,6 +453,8 @@ export function historyFrames(
       // 不收：那一輪在 server 上還停在那裡，畫面停在忙著，「停止」就是收回那幾顆（#265 的 Q7）。
     }
   }
+  // 用量表：這一段裡各自最新的那一顆，放在最後——web 只留最新那一筆，放哪裡都一樣，放最後讀起來就是「到結尾為止」。
+  frames.push(...latestPressureEvents(events).map(pressureFrame));
   return frames;
 }
 
@@ -417,6 +497,10 @@ function weigh(
  * 不完全相等——`historyFrames` 是有狀態的走訪器。實測三種跨量級的形狀（25 輪純對話／每輪 3 次小讀／
  * 每輪 10 次滿版讀）差的都是 **24 bytes，固定值、而且是高估**。高估的方向是安全的：拿它當判準只會讓頁
  * 略小，不會讓真的送出去的超過上限。
+ *
+ * **#528 之後那個「固定 24」不成立了，方向仍是高估**：用量表的 frame 每一段各送一份（那一段最新的兩顆），
+ * 整頁只送一份，所以段數越多多估越多——每段最多兩顆、各一兩百位元組，量級跟 24 同一檔。反方向的那兩顆
+ * （從切點之前補的，見 {@link historyPage}）不在這裡秤，由呼叫端加進撐破上限的判斷。
  *
  * @param window - `throughSeq` 以內的日誌。
  * @param messageCut - 則數上限算出來的切點，已經退到輪邊界。
@@ -508,8 +592,13 @@ export function historyPage(
   const tail = end === events.length ? awaitingInput : undefined;
   const fitted = fitBytes(window, cut, end, toolTextMaxBytes, tail);
   cut = fitted.cut;
+  // 用量表要「到這一頁結尾為止」最新的那一筆（見檔頭）：切點之前各自最新的那一顆補在最前面，`historyFrames` 只送
+  // 最新的，這一頁自己有的就輪不到它。**切點不為它們讓位**（最多兩顆、各一兩百位元組），但撐破上限的判斷要算進去
+  // ——那是低估的方向，正好是會讓送出去的超過上限的那一邊。
+  const carried = latestPressureEvents(window.slice(0, cut));
+  const bytes = fitted.bytes + (carried.length === 0 ? 0 : weigh(carried, toolTextMaxBytes));
   // 軟上限撐破了。**沒有人講的話這件事在線上完全看不見**——回應照樣是 200、畫面照樣對。
-  if (fitted.bytes > HISTORY_PAGE_MAX_BYTES) onOversize?.(fitted.bytes);
+  if (bytes > HISTORY_PAGE_MAX_BYTES) onOversize?.(bytes);
 
   const replay = replayConversation(events);
   return {
@@ -517,7 +606,7 @@ export function historyPage(
     // 寫的那一段；哪一種先被撞到看的是日誌的順序（格式 8 的一輪，沒內容的結果落在收尾之前）。只認「沒有回覆」的話，
     // 真的 v8 日誌會被判成不是舊格式。切點對不上不算：畫面上不缺東西。
     events: historyFrames(
-      window.slice(cut, end),
+      [...carried, ...window.slice(cut, end)],
       toolTextMaxBytes,
       end === events.length ? awaitingInput : undefined,
     ),

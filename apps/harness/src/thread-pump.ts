@@ -74,7 +74,12 @@ import {
 import type { Event, WireChannel } from '@nexus/wire';
 import { channelOfMethod, eventId } from '@nexus/wire';
 
-import { deliverablesData, workspaceChangesData } from './conversation-history.js';
+import {
+  contextMeasureData,
+  deliverablesData,
+  modelUsageData,
+  workspaceChangesData,
+} from './conversation-history.js';
 import { driveGoalRound } from './goal-driver.js';
 import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
 import { toolResultText } from './tool-result-text.js';
@@ -1282,6 +1287,11 @@ export class ThreadPump {
       this.#presentDeliverables(event.data, event.seq);
     } else if (event.type === 'workspace/changes' && entry.address.kind === 'root') {
       this.#presentCustom(workspaceChangesData(event.seq));
+    } else if (event.type === 'model/usage' && entry.address.kind === 'root') {
+      // 用量表（#528）：只收 root 的，同 dsh 的 `contextPressure`；子代理的呼叫不算進主對話的大小。
+      this.#presentCustom(modelUsageData(event.data));
+    } else if (event.type === 'context/measure' && entry.address.kind === 'root') {
+      this.#presentCustom(contextMeasureData(event.data));
     }
   }
 

@@ -194,9 +194,11 @@ export const MODEL_USAGE_PLUGIN_NAME = 'model-usage';
  * **因此這一列不可以帶 `config`**：`parseEntryConfig` 對「沒有 Config schema 卻給了
  * config」是當場拋，不是默默吞掉（見 {@link ./plugin.ts | parseEntryConfig}）。
  *
- * **關掉它之後不見的是日誌裡的 `model/usage`**——檔頭第一段講的那本帳。**今天樹上沒有
- * 任何一處在加總它**，所以關掉它不會有任何東西當場變少，而那正是這個代價非寫下來不可的
- * 理由：沒有人會紅。數過（2026-09-22）：
+ * **關掉它之後不見的是日誌裡的 `model/usage`**——檔頭第一段講的那本帳——**連帶 web 用量表
+ * 的「目前大小」那一行**：pump 與歷史路由把 root 最新那一筆的 `inputTokens` 送上線
+ * （[#528](https://github.com/DemianLi/nexus-agent/issues/528)）。那是**讀最新一筆**，不是加總；
+ * 環與比例讀的是摘要器的 `context/measure`，不受這一顆影響。**加總它的仍然沒有**，而關掉它
+ * 沒有任何東西會紅——那正是這個代價非寫下來不可的理由。數過（2026-09-22，#528 之後再對過）：
  *
  * - `apps/harness/src/eval/runner.ts` 的用量是它**自己從 `usage_metadata` 加的**，而且
  *   那條路連 `attachSession` 都不接（它的檔頭寫明「這條路沒有消費者」，還配了
@@ -204,7 +206,7 @@ export const MODEL_USAGE_PLUGIN_NAME = 'model-usage';
  * - `apps/harness/src/eval/session-scan.ts` 只把它列在「這一版認得的事件種類」裡，不算它。
  * - `deriveSessionStats` 的 `steps` 數的是 `model/start`／`model/end`，不是這一顆。
  *
- * 所以不見的是落盤日誌裡那本逐次呼叫的帳。這件事也寫在 `docs/operations.md` 的表上，
+ * 所以不見的是落盤日誌裡那本逐次呼叫的帳與用量表的那一行。這件事也寫在 `docs/operations.md` 的表上，
  * 因為從這個條目本身看不出來。
  *
  * **偏離登記**同 {@link ./repeat-reminder.ts | repeatReminderPlugin}：載體是

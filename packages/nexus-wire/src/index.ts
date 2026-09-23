@@ -74,6 +74,13 @@ export type {
   WorkspaceFileDiff,
 } from './workspace-changes.js';
 export { changesDiffPath, changesSummaryPath, WORKSPACE_CHANGES } from './workspace-changes.js';
+export type {
+  ModelUsagePayload,
+  WireContextMeasure,
+  WireContextPressure,
+  WireSummaryThreshold,
+} from './context-pressure.js';
+export { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 export {
   FEEDBACK_METHODS,
   HISTORY_PAGE_MAX_BYTES,
