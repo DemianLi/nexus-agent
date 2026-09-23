@@ -83,6 +83,27 @@ export interface DeliverableFilePage extends DeliverableFileStat {
 }
 
 /**
+ * 位元組窗口路由的結果：一個檔從 `offset` 起的一段**原始位元組**
+ * （[#544](https://github.com/DemianLi/nexus-agent/issues/544)）。照 dsh 的 `WorkspaceFileBytes`
+ * （`packages/api/workspace-files/src/types.ts:72-83`，`ddefc45`），欄位一格不差。
+ *
+ * **不解碼、不擋二進位**（dsh：「raw bytes, no text decoding and no binary rejection」）。它存在是為了
+ * 那種文字頁讀不動的檔——一行本身就超過頁的位元組上限，按行切永遠是 413。**窗口切在哪個位元組
+ * 由呼叫端決定**，所以 UTF-8 字元可能被切在兩個窗口之間；接起來解碼（`TextDecoder` 的
+ * `stream: true`）是呼叫端的事，這裡不替它對齊。
+ *
+ * **窗口的上限也是拒絕，不是截斷**：要的 `length` 超過頁的位元組上限就是 413，同 dsh。
+ */
+export interface DeliverableFileBytes extends DeliverableFileStat {
+  /** 這個窗口從第幾個位元組起，0 起算，就是請求的那個數。 */
+  readonly offset: number;
+  /** 窗口裡的位元組，base64。`offset` 在檔尾或之後時是空字串。 */
+  readonly data: string;
+  /** 這個窗口含檔案的最後一個位元組。 */
+  readonly eof: boolean;
+}
+
+/**
  * 預覽一個宣告過的交付檔，`GET`，帶 `?seq=&index=`，選配 `?offset=&limit=`。
  *
  * **只收座標，不收路徑**，照 dsh 的 `handlePresentOpen`——路徑遍歷在形狀上就不可能發生。
@@ -90,7 +111,9 @@ export interface DeliverableFilePage extends DeliverableFileStat {
  *
  * 錯誤協定照隔壁 `changes` 兩條（裸 status ＋純文字 ＋`cache-control: no-store`），而狀態碼**要分得出
  * 前端該做什麼**：400 座標不對；404 這台 server 錨不住這顆座標、或檔不在、或不是一般檔；
- * 413 超過上限；**422 含 NUL 位元組**（＝不是文字，前端改提供下載）。
+ * 413 **這一頁**超過頁的位元組上限（整檔沒有上限，串流分頁，
+ * [#544](https://github.com/DemianLi/nexus-agent/issues/544)）；**422 不是文字**——這一頁含 NUL 位元組、
+ * 或讀到不是 UTF-8 的位元組，照 dsh（前端改提供下載）。
  *
  * **不是 415**：那個碼這條線上已經在講「請求沒帶 `content-type: application/json`」，壓在一起
  * 前端就分不出「我忘了帶 header」與「這個檔是二進位」。
@@ -122,4 +145,23 @@ export function deliverableFilePath(threadId: string): string {
  */
 export function deliverableDownloadPath(threadId: string): string {
   return `/threads/${encodeURIComponent(threadId)}/deliverables/download`;
+}
+
+/**
+ * 讀一個宣告過的交付檔的一個**位元組窗口**，`GET`，帶 `?seq=&index=`，選配 `?offset=&length=`
+ * （位元組，`offset` 預設 0、`length` 預設且最多是頁的位元組上限）。回的是
+ * {@link DeliverableFileBytes}。照 dsh 的 `readBytes`。
+ *
+ * **回 JSON 帶 base64，同 dsh；不學下載那條回原始位元組。** 下載那條的偏離理由是「base64 讓每一份
+ * 下載多三分之一」，而一個窗口最多兩 MiB，那個理由在這裡不成立；窗口還要帶 `version`、`bytes`、
+ * `eof` 給呼叫端接續，放在同一份 JSON 裡比拆進 header 直接。
+ *
+ * 錯誤協定同預覽：400 參數不對（含 `length` 為 0）；404 錨不住、檔不在、不是一般檔；413 `length`
+ * 超過上限。**沒有 422**——窗口不解碼。同樣要帶 `content-type: application/json`。
+ *
+ * @param threadId - thread id，就是 root 會話的 id。
+ * @returns 路徑。
+ */
+export function deliverableBytesPath(threadId: string): string {
+  return `/threads/${encodeURIComponent(threadId)}/deliverables/bytes`;
 }

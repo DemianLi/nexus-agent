@@ -23,6 +23,12 @@
  * `@nexus/wire` 匯出；抄一份過來就是跨領域複製一個沒有絆索的常數。路由不給 `limit` 時用的就是
  * 那個上限，而翻頁只需要回應裡的 `lines`。
  *
+ * **送一個我們自己的數字也不行**（[#543](https://github.com/DemianLi/nexus-agent/issues/543) 考慮過
+ * `limit=1000`，收回了）：[#536](https://github.com/DemianLi/nexus-agent/issues/536) 之後 `maxLines`
+ * 是設定條目、可以是任何正整數，而路由對 `limit > maxLines` 回 400 —— 有人把它設得比我們送的小，
+ * **每一個預覽都會變成「座標不對」**，講錯原因而且全壞。省下的也不多：預覽畫面外不 layout 之後，
+ * 一段多大已經不決定畫面成本（一次追加 5000 行 ASCII 總共 27–37ms，見 `deliverable-preview.tsx`）。
+ *
  * @module
  */
 
@@ -46,6 +52,14 @@ export interface DeliverableFileStore {
   /** 讀一次：還沒讀過、或上次讀壞了才發。讀到了、正在讀、或是四種終局就不發。 */
   load(seq: number, index: number, offset: number): void;
   subscribe(listener: () => void): () => void;
+  /**
+   * 每發布一次就加一（[#543](https://github.com/DemianLi/nexus-agent/issues/543)）。
+   *
+   * 接續瀏覽要看的是**一整條鏈**（第 0 段、接著的那段、再接著的……），不是單一頁；讓元件拿它當
+   * `useSyncExternalStore` 的快照，再從 {@link read} 把鏈走出來。**直接回一個陣列當快照不行**：
+   * 每次呼叫都是新陣列，React 會判定快照一直在變而重畫到死。
+   */
+  revision(): number;
 }
 
 /**
@@ -89,8 +103,10 @@ export function createDeliverableFileStore({
   const listeners = new Set<() => void>();
   /** **頁是快取的單位**，所以鍵含 `offset`；隔壁只有 `(seq, index)` 是因為它一次讀完。 */
   const key = (seq: number, index: number, offset: number) => `${seq}:${index}:${offset}`;
+  let revision = 0;
   const publish = (at: string, state: DeliverableFileState) => {
     states.set(at, state);
+    revision += 1;
     for (const listener of listeners) listener();
   };
   const base = baseUrl.replace(/\/+$/, '');
@@ -143,5 +159,6 @@ export function createDeliverableFileStore({
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    revision: () => revision,
   };
 }

@@ -50,6 +50,7 @@ import {
   THREADS_PATH,
   changesDiffPath,
   changesSummaryPath,
+  deliverableBytesPath,
   deliverableDownloadPath,
   deliverableFilePath,
   encodeSseFrame,
@@ -87,6 +88,7 @@ import {
   readDeliverableBytes,
   readDeliverablePage,
 } from './deliverable-files.js';
+import { readDeliverableWindow, resolveDeliverableWindow } from './deliverable-window.js';
 import {
   deliverableFilesConfigSchema,
   type DeliverableFilesConfig,
@@ -339,6 +341,7 @@ function parsePath(
   | { readonly kind: 'changes-diff'; readonly threadId: string }
   | { readonly kind: 'deliverable-file'; readonly threadId: string }
   | { readonly kind: 'deliverable-download'; readonly threadId: string }
+  | { readonly kind: 'deliverable-bytes'; readonly threadId: string }
   | { readonly kind: 'command'; readonly threadId: string; readonly method: string }
   | undefined {
   const segments = pathname.split('/').filter((segment) => segment !== '');
@@ -361,6 +364,7 @@ function parsePath(
     if (pathname === deliverableDownloadPath(threadId)) {
       return { kind: 'deliverable-download', threadId };
     }
+    if (pathname === deliverableBytesPath(threadId)) return { kind: 'deliverable-bytes', threadId };
   }
   if (segments.length === 4 && segments[2] === 'commands' && segments[3] !== undefined) {
     return { kind: 'command', threadId, method: segments[3] };
@@ -409,7 +413,7 @@ const DELIVERABLE_STATUS: Readonly<Record<DeliverableRefusal, number>> = {
   'not-text': 422,
 };
 
-/** 交付兩條路由的拒絕：協定同 `changes`，裸 status ＋純文字 ＋不快取。 */
+/** 交付那幾條路由的拒絕：協定同 `changes`，裸 status ＋純文字 ＋不快取。 */
 function deliverableRefused(result: {
   readonly reason: DeliverableRefusal;
   readonly message: string;
@@ -1349,6 +1353,41 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     });
   }
 
+  /**
+   * `GET /threads/:id/deliverables/bytes?seq=&index=&offset=&length=`
+   * （[#544](https://github.com/DemianLi/nexus-agent/issues/544)）：一個宣告過的交付檔的**位元組窗口**，
+   * 照 dsh 的 `readBytes`。理由見 `deliverable-window.ts` 的檔頭；契約見 `@nexus/wire` 的
+   * `deliverableBytesPath`。
+   *
+   * **窗口參數先驗、再找檔**，照 dsh 的順序：參數本身不合格的請求，不該先讓它知道那個座標上有沒有檔。
+   */
+  async function handleDeliverableBytes(
+    threadId: string,
+    search: URLSearchParams,
+  ): Promise<Response> {
+    const offset = coordinate(search.get('offset') ?? '0');
+    // 沒給 `length` 就是頁的位元組上限，同 dsh 的 `resolveWindow`。
+    const length = coordinate(search.get('length') ?? String(deliverableLimits.maxBytes));
+    if (offset === undefined || length === undefined) {
+      return new Response('交付檔的位元組窗口參數不對。', {
+        status: 400,
+        headers: { 'cache-control': 'no-store' },
+      });
+    }
+    const window = resolveDeliverableWindow(offset, length, deliverableLimits);
+    if (window.kind === 'refused') return deliverableRefused(window);
+    const found = await locateRequested(threadId, search);
+    if (found.kind === 'refused') return deliverableRefused(found);
+    const bytes = await readDeliverableWindow(found.value, window.value);
+    if (bytes.kind === 'refused') return deliverableRefused(bytes);
+    return new Response(JSON.stringify(bytes.value), {
+      headers: {
+        'content-type': `${JSON_MEDIA_TYPE}; charset=utf-8`,
+        'cache-control': 'no-store',
+      },
+    });
+  }
+
   function firstHumanText(input: unknown): string | undefined {
     const messages = (input as { messages?: unknown })?.messages;
     if (!Array.isArray(messages)) {
@@ -1393,14 +1432,21 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
         return handleHistory(route.threadId, searchParams);
       }
-      if (route?.kind === 'deliverable-file' || route?.kind === 'deliverable-download') {
+      if (
+        route?.kind === 'deliverable-file' ||
+        route?.kind === 'deliverable-download' ||
+        route?.kind === 'deliverable-bytes'
+      ) {
         if (request.method !== 'GET') return new Response('not found', { status: 404 });
         // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。**下載也不例外**，見
         // `@nexus/wire` 的 `deliverableDownloadPath`。
         if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
-        return route.kind === 'deliverable-file'
-          ? handleDeliverableFile(route.threadId, searchParams)
-          : handleDeliverableDownload(route.threadId, searchParams);
+        if (route.kind === 'deliverable-file')
+          return handleDeliverableFile(route.threadId, searchParams);
+        if (route.kind === 'deliverable-bytes') {
+          return handleDeliverableBytes(route.threadId, searchParams);
+        }
+        return handleDeliverableDownload(route.threadId, searchParams);
       }
       if (route?.kind === 'changes-summary' || route?.kind === 'changes-diff') {
         if (request.method !== 'GET') return new Response('not found', { status: 404 });
