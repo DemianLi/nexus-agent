@@ -46,6 +46,14 @@ export interface DeliverableFileStore {
   /** 讀一次：還沒讀過、或上次讀壞了才發。讀到了、正在讀、或是四種終局就不發。 */
   load(seq: number, index: number, offset: number): void;
   subscribe(listener: () => void): () => void;
+  /**
+   * 每發布一次就加一（[#543](https://github.com/DemianLi/nexus-agent/issues/543)）。
+   *
+   * 接續瀏覽要看的是**一整條鏈**（第 0 段、接著的那段、再接著的……），不是單一頁；讓元件拿它當
+   * `useSyncExternalStore` 的快照，再從 {@link read} 把鏈走出來。**直接回一個陣列當快照不行**：
+   * 每次呼叫都是新陣列，React 會判定快照一直在變而重畫到死。
+   */
+  revision(): number;
 }
 
 /**
@@ -89,8 +97,10 @@ export function createDeliverableFileStore({
   const listeners = new Set<() => void>();
   /** **頁是快取的單位**，所以鍵含 `offset`；隔壁只有 `(seq, index)` 是因為它一次讀完。 */
   const key = (seq: number, index: number, offset: number) => `${seq}:${index}:${offset}`;
+  let revision = 0;
   const publish = (at: string, state: DeliverableFileState) => {
     states.set(at, state);
+    revision += 1;
     for (const listener of listeners) listener();
   };
   const base = baseUrl.replace(/\/+$/, '');
@@ -143,5 +153,6 @@ export function createDeliverableFileStore({
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    revision: () => revision,
   };
 }
