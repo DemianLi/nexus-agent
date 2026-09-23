@@ -349,3 +349,122 @@ describe('交付檔案的工具卡（#441 第一刀）', () => {
     expect(await axeViolations(container)).toEqual([]);
   });
 });
+
+describe('待辦清單的工具卡（#575）', () => {
+  const todo = tool({
+    name: 'todo_write',
+    input: JSON.stringify({
+      todos: [
+        { content: '讀規格', status: 'completed' },
+        { content: '寫測試', status: 'in_progress' },
+        { content: '跑突變', status: 'in_progress' },
+        { content: '開 PR', status: 'pending' },
+      ],
+    }),
+  });
+
+  it('收著講「完成數/總數 · 進行中那一項」，其餘同時進行的另起一格；展開逐項列快照，不畫參數原文', () => {
+    render(<ToolCard entry={todo} beam={false} />);
+    const card = screen.getByTestId('tool-entry');
+    const trigger = within(card).getByRole('button', { name: /更新待辦/ });
+    expect(trigger.textContent).toContain('1/4 完成 · 寫測試');
+    // 「+1」不接在會被截斷的那一格裡：窄的時候最先被截掉的就是它。
+    const extra = within(trigger).getByTestId('todo-extra');
+    expect(extra.textContent).toBe('+1，另有 1 項進行中');
+    expect(extra.previousElementSibling?.classList.contains('truncate')).toBe(true);
+    expect(extra.classList.contains('shrink-0')).toBe(true);
+    expect(extra.classList.contains('truncate')).toBe(false);
+    // 吃掉剩下寬度的是外層，不是會截斷的那格：放在那格上，「+N」會被推到最右邊的狀態字旁邊（真 Chrome 量到過）。
+    expect(extra.parentElement?.classList.contains('flex-1')).toBe(true);
+    expect(extra.previousElementSibling?.classList.contains('flex-1')).toBe(false);
+    fireEvent.click(trigger);
+    expect(
+      within(card)
+        .getAllByTestId('todo-item')
+        .map((row) => [row.getAttribute('data-status'), row.textContent]),
+    ).toEqual([
+      ['completed', '已完成：讀規格'],
+      ['in_progress', '進行中：寫測試'],
+      ['in_progress', '進行中：跑突變'],
+      ['pending', '待處理：開 PR'],
+    ]);
+    expect(card.textContent).not.toContain('"todos"');
+  });
+
+  it('只有一項在進行：沒有「+N」那一格', () => {
+    render(
+      <ToolCard
+        entry={tool({
+          name: 'todo_write',
+          input: JSON.stringify({ todos: [{ content: '寫測試', status: 'in_progress' }] }),
+        })}
+        beam={false}
+      />,
+    );
+    expect(screen.queryByTestId('todo-extra')).toBeNull();
+  });
+
+  it('清空清單：收著與展開都講清單是空的', () => {
+    render(<ToolCard entry={tool({ name: 'todo_write', input: '{"todos":[]}' })} beam={false} />);
+    const trigger = screen.getByRole('button', { name: /更新待辦/ });
+    expect(trigger.textContent).toContain('清單是空的');
+    fireEvent.click(trigger);
+    expect(screen.getByText('清單是空的。')).toBeTruthy();
+    expect(screen.queryAllByTestId('todo-item')).toHaveLength(0);
+  });
+
+  it('參數還是半截（串流中）：退回通用卡，原文照樣看得到', () => {
+    render(
+      <ToolCard
+        entry={tool({ name: 'todo_write', input: '{"todos":[{"content":"讀', status: 'running' })}
+        beam
+      />,
+    );
+    const card = screen.getByTestId('tool-entry');
+    fireEvent.click(within(card).getByRole('button', { name: /更新待辦/ }));
+    expect(within(card).queryAllByTestId('todo-item')).toHaveLength(0);
+    expect(document.querySelector('.md-code pre')?.textContent).toContain('"content"');
+  });
+
+  it('被工具本體拒絕（內容重複）：照一般失敗畫，收著是錯誤的第一行', () => {
+    render(
+      <ToolCard
+        entry={tool({
+          name: 'todo_write',
+          input: JSON.stringify({
+            todos: [
+              { content: '讀規格', status: 'in_progress' },
+              { content: '讀規格', status: 'in_progress' },
+            ],
+          }),
+          status: 'failed',
+          error: 'Error: invalid todos: duplicate content "讀規格"',
+        })}
+        beam={false}
+      />,
+    );
+    const trigger = screen.getByRole('button', { name: /更新待辦/ });
+    expect(trigger.textContent).toContain('duplicate content');
+    expect(within(trigger).getByText('失敗')).toBeTruthy();
+    // 被拒時「+N」不畫：收著那一格講的是錯誤，不是清單。
+    expect(within(trigger).queryByTestId('todo-extra')).toBeNull();
+  });
+
+  it('子代理寫的：同一張卡，帶歸屬', () => {
+    render(
+      <ToolCard
+        entry={{ ...todo, attribution: { kind: 'subagent', name: 'researcher', callId: 'task-1' } }}
+        beam={false}
+      />,
+    );
+    const trigger = screen.getByRole('button', { name: /更新待辦/ });
+    expect(trigger.textContent).toContain('1/4 完成 · 寫測試');
+    expect(trigger.textContent).toContain('子代理 researcher');
+  });
+
+  it('展開的待辦卡過 axe', async () => {
+    const { container } = render(<ToolCard entry={todo} beam={false} />);
+    fireEvent.click(screen.getByRole('button', { name: /更新待辦/ }));
+    expect(await axeViolations(container)).toEqual([]);
+  });
+});
