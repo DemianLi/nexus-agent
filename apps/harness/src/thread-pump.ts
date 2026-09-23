@@ -490,6 +490,8 @@ interface CurrentRun {
   readonly controller: AbortController;
   /** root 那則回覆到目前為止的文字。`message-finish` 之後清空——講完的那則已經在 checkpoint 裡了。 */
   partial: string;
+  /** 同 {@link partial}，是那則回覆到目前為止的推理（#561）。 */
+  reasoning: string;
   /** root 有一則回覆講到一半。 */
   replyOpen: boolean;
   /** root 那顆收尾的 `lifecycle` 已經標成中止送上線了。日誌照它收尾，畫面與日誌才對得上。 */
@@ -501,18 +503,21 @@ function trackRootReply(current: CurrentRun, raw: RawProtocolEvent): void {
   if (raw.method !== 'messages' || raw.params.namespace.length > 1) return;
   const data = raw.params.data as {
     event?: string;
-    delta?: { type?: string; text?: string };
+    delta?: { type?: string; text?: string; reasoning?: string };
   } | null;
   switch (data?.event) {
     case 'message-start':
       current.partial = '';
+      current.reasoning = '';
       current.replyOpen = true;
       return;
     case 'content-block-delta':
       if (data.delta?.type === 'text-delta') current.partial += data.delta.text ?? '';
+      if (data.delta?.type === 'reasoning-delta') current.reasoning += data.delta.reasoning ?? '';
       return;
     case 'message-finish':
       current.partial = '';
+      current.reasoning = '';
       current.replyOpen = false;
       return;
     default:
@@ -1011,6 +1016,7 @@ export class ThreadPump {
     const current: CurrentRun = {
       controller: new AbortController(),
       partial: '',
+      reasoning: '',
       replyOpen: false,
       stopped: false,
     };
@@ -1070,6 +1076,14 @@ export class ThreadPump {
    * 模型講到一半被切斷：把使用者看到的那半段寫回對話，帶 {@link INTERRUPTED_REPLY_MARKER}
    * （#265 的 Q11）。一個字都沒送出就不寫——同 dsh，沒有看得見的內容就不算一則回覆。
    *
+   * **推理也是看得見的內容**（#561），照 dsh 跟正文一起留（`packages/core/agent-loop/src/agent.ts:404`
+   * 取 `packages/llm/llm/src/assembler.ts:169` 的 `interruptedBlocks`，`ddefc45`）：逐塊判，只有空白的
+   * 那塊不留，一塊都不剩就整則不寫。所以停在推理階段的那則也會留下來，只是正文是空的。
+   * - 它送回模型時是 `{"role":"assistant","content":[]}`：`ChatOpenAI` 會丟掉推理區塊。NVIDIA 閘道收這種
+   *   訊息，#561 用真的 `ChatOpenAI` 量過。
+   * - 一則裡的推理攤平成一塊、排在正文前面，同 `@nexus/wire` 的 `AiEntry.reasoning`（#527 登記過的偏離）。
+   * - 沒有推理時 content 照舊是字串。
+   *
    * **寫不進去不能把這一輪變成失敗**：人按了停止是事實，留不下半段只是少了一則訊息。
    *
    * **日誌同時記一顆 `assistant/message {interrupted: true}`**（#305），照 dsh 被中止時把已送出的
@@ -1077,9 +1091,17 @@ export class ThreadPump {
    * 一側照樣拿得到這半段。它落在被切斷那次呼叫的 `model/end` 之後——寫入點看到的是拋錯，不是回覆。
    */
   async #keepInterruptedReply(current: CurrentRun): Promise<void> {
-    if (!current.replyOpen || current.partial === '') return;
+    const reasoning = current.reasoning.trim() === '' ? '' : current.reasoning;
+    const text = current.partial.trim() === '' ? '' : current.partial;
+    if (!current.replyOpen || (reasoning === '' && text === '')) return;
     const reply = new AIMessage({
-      content: current.partial,
+      content:
+        reasoning === ''
+          ? text
+          : [
+              { type: 'reasoning', reasoning },
+              ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+            ],
       additional_kwargs: { [INTERRUPTED_REPLY_MARKER]: true },
     });
     try {
