@@ -271,14 +271,27 @@ describe('預覽', () => {
       }
     });
 
-    it('整檔上限也從設定來：比檔案小就拒，而且講得出是幾', async () => {
+    /**
+     * **翻面過的絆索**（#544）：原本這一條斷言的是**預覽**回 413。預覽改成串流、整檔不設上限之後
+     * （照 dsh：「The file itself has no size cap: a caller pages through it」），那一格只剩下載在讀
+     * ——同 dsh 的 `readAll`。所以兩臂都要釘：同一個上限底下，預覽讀得到、下載拒。
+     */
+    it('整檔上限只管下載：預覽照樣讀得到，下載拒而且講得出是幾', async () => {
       const outcome = await present({ 'a.md': twenty }, ['a.md'], {
         limits: deliverableFilesConfigSchema.parse({ maxFileBytes: 10 }),
       });
       try {
-        const refused = await outcome.get(filePath(`seq=${outcome.seq}&index=0`));
-        expect(refused.status).toBe(413);
-        expect(await refused.text()).toContain('超過 10 的上限');
+        const preview = await outcome.get(filePath(`seq=${outcome.seq}&index=0`));
+        expect(preview.status).toBe(200);
+        const page = (await preview.json()) as DeliverableFilePage;
+        // 前提：檔案真的比上限大，不然上面那個 200 什麼都沒證明。
+        expect(page.bytes).toBeGreaterThan(10);
+        expect(page.lines).toBe(20);
+        expect(page.eof).toBe(true);
+
+        const download = await outcome.get(downloadPath(`seq=${outcome.seq}&index=0`));
+        expect(download.status).toBe(413);
+        expect(await download.text()).toContain('超過 10 的上限');
       } finally {
         await outcome.close();
       }
@@ -397,6 +410,130 @@ describe('預覽', () => {
     } finally {
       await outcome.close();
     }
+  });
+
+  /**
+   * **串流切頁**（#544）。底下幾條的檔案都比 `createReadStream` 一片的 64 KiB 大，行、字元、
+   * NUL 都刻意放在片與片的邊界兩側——只用小檔的話，整份一片就讀完，串流那幾條路一條都沒被問到。
+   */
+  describe('串流切頁', () => {
+    /** 200 000 個位元組的一行，跨好幾片。 */
+    const long = 'y'.repeat(200_000);
+
+    it('讀到這一頁就停：頁後 200 KB 才出現的 NUL 不會讓第一頁讀不到', async () => {
+      // 整檔讀進來再掃 NUL 的舊寫法，這一條是 422。
+      const outcome = await present({ 'a.md': `first\n${long}\n\u0000\n` }, ['a.md']);
+      try {
+        const response = await outcome.get(filePath(`seq=${outcome.seq}&index=0&limit=1`));
+        expect(response.status).toBe(200);
+        const page = (await response.json()) as DeliverableFilePage;
+        expect(page.text).toBe('first');
+        expect(page.eof).toBe(false);
+      } finally {
+        await outcome.close();
+      }
+    });
+
+    /**
+     * **行為變了，而且是照標準變的**：NUL 只掃這一頁，照 dsh（「the NUL scan runs on the page
+     * itself」）。從前整檔掃，前段那一頁也回 422。
+     */
+    it('NUL 只掃這一頁：前段讀得到，有 NUL 的那一頁才 422', async () => {
+      const outcome = await present({ 'a.md': 'a\nb\n\u0000\n' }, ['a.md']);
+      try {
+        const before = await outcome.get(filePath(`seq=${outcome.seq}&index=0&limit=2`));
+        expect(before.status).toBe(200);
+        expect(((await before.json()) as DeliverableFilePage).text).toBe('a\nb');
+        const at = await outcome.get(filePath(`seq=${outcome.seq}&index=0&offset=2&limit=1`));
+        expect(at.status).toBe(422);
+      } finally {
+        await outcome.close();
+      }
+    });
+
+    it('不是 UTF-8 就是 422，照 dsh 的 streamText——即使沒有 NUL', async () => {
+      const bytes = new Uint8Array([...new TextEncoder().encode('hello\n'), 0xff, 0xfe, 0x0a]);
+      const outcome = await present({ 'latin.txt': bytes }, ['latin.txt']);
+      try {
+        const response = await outcome.get(filePath(`seq=${outcome.seq}&index=0`));
+        expect(response.status).toBe(422);
+        expect(await response.text()).toContain('不是 UTF-8');
+      } finally {
+        await outcome.close();
+      }
+    });
+
+    it('頁前那一條長行只數不留：它自己超過頁上限，後面那一行照樣讀得到', async () => {
+      const outcome = await present({ 'a.md': `${long}\nok\n` }, ['a.md'], {
+        limits: deliverableFilesConfigSchema.parse({ maxBytes: 64 }),
+      });
+      try {
+        const after = await outcome.get(filePath(`seq=${outcome.seq}&index=0&offset=1&limit=1`));
+        expect(after.status).toBe(200);
+        const page = (await after.json()) as DeliverableFilePage;
+        expect(page.text).toBe('ok');
+        expect(page.eof).toBe(true);
+        // 對照組：要的就是那一條長行，那就是拒——頁的上限仍然是拒絕，不是截斷。
+        const itself = await outcome.get(filePath(`seq=${outcome.seq}&index=0&offset=0&limit=1`));
+        expect(itself.status).toBe(413);
+      } finally {
+        await outcome.close();
+      }
+    });
+
+    it('多位元組字元切在兩片之間也解得對', async () => {
+      // 150 000 個位元組；65 536 不是 3 的倍數，所以第一片的邊界一定切在某個字的中間。
+      const han = '中'.repeat(50_000);
+      const outcome = await present({ 'han.md': `${han}\n` }, ['han.md']);
+      try {
+        const page = (await (
+          await outcome.get(filePath(`seq=${outcome.seq}&index=0`))
+        ).json()) as DeliverableFilePage;
+        expect(page.text).toBe(han);
+        expect(page.lines).toBe(1);
+      } finally {
+        await outcome.close();
+      }
+    });
+
+    it('翻到最後一頁：兩萬行、兩百多 KB，最後十行是對的，eof 只在那一頁', async () => {
+      const text = `${Array.from({ length: 20_000 }, (_, at) => `line ${String(at)}`).join('\n')}\n`;
+      const outcome = await present({ 'a.md': text }, ['a.md']);
+      try {
+        const last = (await (
+          await outcome.get(filePath(`seq=${outcome.seq}&index=0&offset=19990&limit=10`))
+        ).json()) as DeliverableFilePage;
+        expect(last.text.split('\n')).toEqual(
+          Array.from({ length: 10 }, (_, at) => `line ${String(19_990 + at)}`),
+        );
+        expect(last.eof).toBe(true);
+        const before = (await (
+          await outcome.get(filePath(`seq=${outcome.seq}&index=0&offset=19980&limit=10`))
+        ).json()) as DeliverableFilePage;
+        expect(before.eof).toBe(false);
+      } finally {
+        await outcome.close();
+      }
+    });
+
+    it('空檔是零行，照 dsh；開頭的 BOM 照舊吃掉', async () => {
+      const outcome = await present({ 'empty.md': '', 'bom.md': '\uFEFFhi\n' }, [
+        'empty.md',
+        'bom.md',
+      ]);
+      try {
+        const empty = (await (
+          await outcome.get(filePath(`seq=${outcome.seq}&index=0`))
+        ).json()) as DeliverableFilePage;
+        expect(empty).toMatchObject({ text: '', lines: 0, eof: true });
+        const bom = (await (
+          await outcome.get(filePath(`seq=${outcome.seq}&index=1`))
+        ).json()) as DeliverableFilePage;
+        expect(bom.text).toBe('hi');
+      } finally {
+        await outcome.close();
+      }
+    });
   });
 });
 

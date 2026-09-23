@@ -66,7 +66,10 @@ export const DELIVERABLE_FILES_PLUGIN_NAME = 'deliverable-files';
  */
 export const DEFAULT_DELIVERABLE_MAX_PAGE_BYTES = 2 * 1024 * 1024;
 
-/** 整檔讀取的上限，照 dsh 的 `maxFileBytes`（32 MiB）。下載與預覽都吃它（見消費者檔頭偏離 1）。 */
+/**
+ * 整檔讀取的上限，照 dsh 的 `maxFileBytes`（32 MiB）。**只有下載吃它**，同 dsh 的 `readAll`；預覽
+ * 串流分頁，整檔沒有上限（[#544](https://github.com/DemianLi/nexus-agent/issues/544)）。
+ */
 export const DEFAULT_DELIVERABLE_MAX_FILE_BYTES = 32 * 1024 * 1024;
 
 /** 一頁的預設與最大行數，照 dsh 的 `maxLines`（5000）。要更多是拒絕，不是給到上限為止。 */
