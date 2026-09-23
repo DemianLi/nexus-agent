@@ -282,6 +282,19 @@ describe('接續瀏覽（#543）', () => {
     expect(screen.getByTestId('preview-text').textContent).toBe('line-1\nline-2\n');
   });
 
+  it('行號欄放得下最大位數再加上右邊距，而且行號不折行', async () => {
+    // jsdom 不排版，這裡只釘寬度的算法；行高本身在 headless Chrome 量（見 .docs/large-text-rendering-survey.md）。
+    // 以前是「位數 + 1ch」扣掉 pr-3：最大位數的行號放不下，換行時被折成兩行，一行變兩倍高。
+    mount(() => json(numbered(0, 1234, true)));
+    open();
+    await screen.findByText('line-1234');
+    expect(screen.getByTestId('preview-text').style.getPropertyValue('--gutter')).toBe('4ch');
+    const line = document.querySelector('[data-line="1234"]')!;
+    expect(line.className).toContain('before:w-[calc(var(--gutter)+0.75rem)]');
+    expect(line.className).toContain('before:pr-3');
+    expect(line.className).toContain('before:whitespace-nowrap');
+  });
+
   it('預設自動換行，按一下切成橫向捲動', async () => {
     mount(() => json(PAGE));
     open();
