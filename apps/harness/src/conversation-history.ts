@@ -46,6 +46,8 @@ import type { LoggedMessage, SessionEvent, SessionEventMap, UnreplayableReason }
 import { loggedMessageId, replayConversation } from '@nexus/core';
 
 import { toolResultText } from './tool-result-text.js';
+import { toolTextConfigSchema } from './settings/tool-text.js';
+import type { ToolTextConfig } from './settings/tool-text.js';
 
 /** 推不回模型的原因裡，說的是「這份日誌是格式 9 以前寫的」的那幾種。見 {@link historyPage}。 */
 const LEGACY_REASONS: ReadonlySet<UnreplayableReason> = new Set([
@@ -203,6 +205,7 @@ export interface AwaitingInput {
  */
 export function historyFrames(
   events: readonly SessionEvent[],
+  toolTextMaxBytes: number,
   awaitingInput?: AwaitingInput,
 ): Event[] {
   const frames: Event[] = [];
@@ -274,7 +277,7 @@ export function historyFrames(
         unsettled.delete(event.data.callId);
         // **成功也帶文字**（#439）：抽字的規則與即時那條共用（`tool-result-text.ts`），
         // 兩邊各寫一份的話，同一張卡會「即時一個樣、重新整理另一個樣」。
-        const text = toolResultText(event.data.message);
+        const text = toolResultText(event.data.message, toolTextMaxBytes);
         // 格式 9 以前沒有 `message`：失敗的那張只剩錯誤碼可講，碼也沒有就交給折疊器說「未指名的錯誤」。
         const reason = text ?? (event.data.isError ? event.data.error?.code : undefined);
         frames.push(
@@ -342,8 +345,15 @@ function checkIndex(name: string, value: number | undefined, minimum: number): v
 }
 
 /** 一段折出來的 frame 在線上有多重。判準是**序列化之後**的位元組，見 {@link fitBytes}。 */
-function weigh(segment: readonly SessionEvent[], awaitingInput?: AwaitingInput): number {
-  return Buffer.byteLength(JSON.stringify(historyFrames(segment, awaitingInput)), 'utf8');
+function weigh(
+  segment: readonly SessionEvent[],
+  toolTextMaxBytes: number,
+  awaitingInput?: AwaitingInput,
+): number {
+  return Buffer.byteLength(
+    JSON.stringify(historyFrames(segment, toolTextMaxBytes, awaitingInput)),
+    'utf8',
+  );
 }
 
 /**
@@ -379,6 +389,7 @@ function fitBytes(
   window: readonly SessionEvent[],
   messageCut: number,
   end: number,
+  toolTextMaxBytes: number,
   awaitingInput?: AwaitingInput,
 ): { readonly cut: number; readonly bytes: number } {
   const starts: number[] = [];
@@ -387,17 +398,20 @@ function fitBytes(
   }
   // 窗口裡一個輪邊界都沒有（整段是個片段）：沒有推得動的地方。
   if (starts.length === 0) {
-    return { cut: messageCut, bytes: weigh(window.slice(messageCut, end), awaitingInput) };
+    return {
+      cut: messageCut,
+      bytes: weigh(window.slice(messageCut, end), toolTextMaxBytes, awaitingInput),
+    };
   }
 
   // **最後那一整輪無條件收下**，而且是在迴圈外收的——「一頁至少一整輪」就住在這兩行裡，不是迴圈裡一個
   // 可以被拿掉的條件。往回延伸的那幾段才問上限。
   const lastStart = starts[starts.length - 1]!;
   let cut = lastStart;
-  let bytes = weigh(window.slice(lastStart, end), awaitingInput);
+  let bytes = weigh(window.slice(lastStart, end), toolTextMaxBytes, awaitingInput);
   for (let i = starts.length - 2; i >= 0; i -= 1) {
     const from = starts[i]!;
-    const size = weigh(window.slice(from, starts[i + 1]!));
+    const size = weigh(window.slice(from, starts[i + 1]!), toolTextMaxBytes);
     if (bytes + size > HISTORY_PAGE_MAX_BYTES) break;
     bytes += size;
     cut = from;
@@ -420,7 +434,12 @@ export function historyPage(
   query: ThreadHistoryQuery = {},
   awaitingInput?: AwaitingInput,
   onOversize?: (bytes: number) => void,
+  toolText?: ToolTextConfig,
 ): ThreadHistoryResult {
+  // **這是這條路上唯一的退路**：呼叫端沒講就用 schema 的預設，同 `createWireHandler` 對
+  // `deliverableLimits` 的做法（#536）。底下每一層都是必填轉發，所以「忘了傳」不會變成
+  // 一個安靜的預設值。
+  const toolTextMaxBytes = (toolText ?? toolTextConfigSchema.parse({})).maxBytes;
   const maxMessages = query.maxMessages ?? HISTORY_PAGE_MESSAGES;
   checkIndex('maxMessages', maxMessages, 1);
   checkIndex('beforeSeq', query.beforeSeq, 0);
@@ -447,7 +466,7 @@ export function historyPage(
   // **`awaitingInput` 只作用在最後一頁**，而它會多出 `tool-suspended` 那幾顆 frame。秤重時要用真的那一份，
   // 否則最後一段會被低估，而低估的方向正好是「真的送出去的比上限大」。
   const tail = end === events.length ? awaitingInput : undefined;
-  const fitted = fitBytes(window, cut, end, tail);
+  const fitted = fitBytes(window, cut, end, toolTextMaxBytes, tail);
   cut = fitted.cut;
   // 軟上限撐破了。**沒有人講的話這件事在線上完全看不見**——回應照樣是 200、畫面照樣對。
   if (fitted.bytes > HISTORY_PAGE_MAX_BYTES) onOversize?.(fitted.bytes);
@@ -459,6 +478,7 @@ export function historyPage(
     // 真的 v8 日誌會被判成不是舊格式。切點對不上不算：畫面上不缺東西。
     events: historyFrames(
       window.slice(cut, end),
+      toolTextMaxBytes,
       end === events.length ? awaitingInput : undefined,
     ),
     firstSeq: cut,

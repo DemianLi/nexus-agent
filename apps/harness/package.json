@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "main": "src/index.ts",
+  "imports": {
+    "#settings/*": "./src/settings/*.ts"
+  },
   "scripts": {
     "build": "tsc --noEmit",
     "cli": "tsx src/cli.ts",

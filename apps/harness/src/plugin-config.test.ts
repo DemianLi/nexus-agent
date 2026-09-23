@@ -49,7 +49,22 @@ import {
   validateEntries,
   assertPrivateFile,
   PROTECTED_ENTRY_NAMES,
+  PROTECTED_ENTRY_REASONS,
 } from './plugin-config.js';
+import { DEFAULT_PERSISTENCE_WINDOW_MS } from '@nexus/core';
+
+import { DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS } from './settings/browser-session.js';
+import {
+  DEFAULT_DELIVERABLE_MAX_FILE_BYTES,
+  DEFAULT_DELIVERABLE_MAX_LINES,
+  DEFAULT_DELIVERABLE_MAX_PAGE_BYTES,
+} from './settings/deliverable-files.js';
+import { DEFAULT_RECURSION_LIMIT } from './settings/recursion-limit.js';
+import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
+import {
+  DEFAULT_THREAD_TITLE_MAX_BYTES,
+  DEFAULT_THREAD_TITLE_MAX_WORDS,
+} from './settings/thread-title.js';
 
 const temporary: string[] = [];
 
@@ -75,11 +90,16 @@ function writePrivate(root: string, name: string, content: string): string {
 describe('出貨的 cordis.yml', () => {
   it('每一列都載得起來，而且每一顆都是真的 plugin', async () => {
     const fromYaml = await loadPluginConfig();
-    // 33 = 7 個功能 ＋ 6 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門）
-    // ＋ 20 個配套入口。**數目寫在這裡是為了擋「靜靜少一列」**：底下那些測試各自只看得到
-    // 自己關心的那幾列，少掉一個空 installer 不會有人紅。確切該有哪些配套入口由
-    // `invariant-companions.test.ts` 對帳（#489）。
-    expect(fromYaml).toHaveLength(33);
+    // 39 = 7 個功能 ＋ 7 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
+    // 外加 #529 的 `session-persistence`——它是 core 那一段裡唯一消費點在起動期的）
+    // ＋ **5 個 harness 自己的設定條目**（#529、#538）＋ 20 個配套入口。**數目寫在這裡是為了擋
+    // 「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個空 installer
+    // 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
+    //
+    // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
+    // `loadPluginConfig`，所以那四列要真的經由 `apps/harness/package.json` 的 `imports`
+    // 解析、import、而且長得像一顆 plugin，才數得到 39。拿掉那個 `imports` 區塊，這裡當場紅。
+    expect(fromYaml).toHaveLength(39);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -140,6 +160,33 @@ describe('出貨的 cordis.yml', () => {
     // **`observation-policy` 不在這張名單上，而那是承重的不對稱**（#456）：那一顆沒有設定、
     // 也沒有 Config schema，所以替它加一行 `config:` 會在載入期拋。它進到這棵樹裡的唯一
     // 意義是「關得掉」，關掉的行為由 `observation-policy-entry` 那組測試守著。
+    // harness 自己那四列（#529）：跟上面那幾列同一個用途（只講設定），擁有者住在 `apps/harness`。
+    // 前三列的消費者跑在任何 agent 出生之前，所以 `apply` 是空的、值由 `startupSetting` 在起動期
+    // 讀；`recursion-limit` 的消費者在組裝期，所以它跟上面那幾列一樣走服務。
+    expect(byId.get('thread-title')).toEqual({
+      maxWords: DEFAULT_THREAD_TITLE_MAX_WORDS,
+      maxBytes: DEFAULT_THREAD_TITLE_MAX_BYTES,
+    });
+    expect(byId.get('browser-session')).toEqual({
+      maxAgeDays: DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS,
+    });
+    expect(byId.get('deliverable-files')).toEqual({
+      maxBytes: DEFAULT_DELIVERABLE_MAX_PAGE_BYTES,
+      maxFileBytes: DEFAULT_DELIVERABLE_MAX_FILE_BYTES,
+      maxLines: DEFAULT_DELIVERABLE_MAX_LINES,
+    });
+    // **每則工具結果文字的上限**（#538）。出貨那一行的值必須就是 schema 的預設，同上面幾列。
+    expect(byId.get('tool-text')).toEqual({ maxBytes: DEFAULT_TOOL_TEXT_MAX_BYTES });
+
+    // `recursion-limit` 是這五列裡唯一走服務的（消費點在組裝期，註冊表在手上）——
+    // 它的 `apply` 不是空的，三態的解析由 `agent-factory.test.ts` 那組釘著。
+    expect(byId.get('recursion-limit')).toEqual({ limit: DEFAULT_RECURSION_LIMIT });
+
+    // **落盤窗口住在 `@nexus/core`，不是 `#settings/…`**（#529）：值的家在那個套件裡，而
+    // `@nexus/core/*` 本來就解得到，所以這一列沒有載體偏離。它排在 core 那一段是因為擁有者
+    // 是 core；它的消費點卻在起動期，那條不對稱寫在 `session-persistence.ts` 的檔頭上。
+    expect(byId.get('session-persistence')).toEqual({ windowMs: DEFAULT_PERSISTENCE_WINDOW_MS });
+
     const withConfig = [...byId].filter(([, config]) => config !== undefined).map(([id]) => id);
     expect(withConfig).toEqual([
       'todo',
@@ -147,6 +194,12 @@ describe('出貨的 cordis.yml', () => {
       'repeat-reminder',
       'tool-result-pruner',
       'summarization',
+      'session-persistence',
+      'thread-title',
+      'browser-session',
+      'deliverable-files',
+      'tool-text',
+      'recursion-limit',
     ]);
   });
 
@@ -537,6 +590,102 @@ describe('保護名單', () => {
     expect(() => composeEntries({ shipped, overlays: [overlay], warn: () => {} })).toThrow(
       PluginConfigError,
     );
+  });
+
+  /**
+   * **訊息逐列不同，而且不會串台。**
+   *
+   * 從前這裡是一個 `Set` ＋ 一段共用的訊息，而那段訊息逐字在講核准閘門。名單在 #529 長到四列
+   * 之後，關掉 `#settings/thread-title` 的人會拿到一整段關於核准與多人共用主機的說明——對他那
+   * 一列完全是錯的。**現有的測試抓不到它**：它們斷言的是 `/關不掉/`，而那四個字每一列都有。
+   *
+   * 所以這一條釘的是訊息的**內容**：指名自己那一列的理由，而且**不提別列的**。
+   */
+  it('訊息逐列不同——關掉設定條目不會收到一段講核准閘門的話', () => {
+    const root = privateDirectory();
+    const shipped = writePrivate(
+      root,
+      'cordis.yml',
+      "- id: echo\n  name: '@nexus/plugin-echo'\n" +
+        "- id: thread-title\n  name: '#settings/thread-title'\n",
+    );
+    const overlay = writePrivate(root, 'o.yml', '- id: thread-title\n  disabled: true\n');
+    const compose = (): unknown => composeEntries({ shipped, overlays: [overlay], warn: () => {} });
+
+    expect(compose).toThrow(/關不掉/u);
+    expect(compose).toThrow(/標題/u);
+    // **這一條才是這個缺陷的絆索**：共用那段文字的話它必紅。
+    expect(compose).not.toThrow(/核准/u);
+  });
+
+  /**
+   * **哪幾列必須在名單上——這份清單刻意寫死，不從 `PROTECTED_ENTRY_NAMES` 導出。**
+   *
+   * 底下那條表驅動的測試遍歷名單自己，所以「某一列被移出名單」對它是隱形的（實測：把
+   * `#settings/deliverable-files` 刪掉，那一條照樣綠）。**斷言端與生產端讀同一個來源時，
+   * 改掉那個來源兩邊會一起動。** 這一條因此自己列出名字：少掉任何一列都是行為變了，要在這裡紅。
+   */
+  it('這幾列必須在保護名單上', () => {
+    const expected = [
+      '@nexus/core/approval-gate',
+      '@nexus/core/session-persistence',
+      '#settings/thread-title',
+      '#settings/browser-session',
+      '#settings/deliverable-files',
+      '#settings/tool-text',
+      '#settings/recursion-limit',
+    ];
+    for (const name of expected) {
+      expect(PROTECTED_ENTRY_NAMES.has(name), name).toBe(true);
+    }
+    // **兩個方向都要釘。** 上面那個迴圈只擋「某一列被移出名單」；少了這一行，往名單裡偷偷
+    // 加一列不會有任何東西紅——而多保護一列跟少保護一列一樣是行為變了，那一列的 `disabled`
+    // 會從「真的關掉」變成「當場拋」。
+    expect(PROTECTED_ENTRY_NAMES.size).toBe(expected.length);
+  });
+
+  /**
+   * **整份名單掃一遍，不是只挑一列驗。**
+   *
+   * 從前這組只驗 `approval-gate` 那一列真的關不掉。名單後來長到四列
+   * （[#529](https://github.com/DemianLi/nexus-agent/issues/529) 的三刀各加一列），而**新加的
+   * 三列一條都沒有**——「它在名單上」與「它真的擋得住」之間沒有任何測試。逐列補會再漏下一次，
+   * 所以這裡走表：**加一列就自動涵蓋**。
+   *
+   * **但它只證得了「名單上的擋得住」，證不了「某一列在名單上」**——遍歷的是名單自己，一列被移出去
+   * 迴圈就不檢查它。實測過：把 `#settings/deliverable-files` 從表上刪掉，這一條照樣綠。所以那一半
+   * 由上面那條**寫死清單**的測試守，兩條缺一不可。
+   */
+  it('名單上每一列都真的關不掉，而 `disabled: false` 與沒寫都放行', () => {
+    // 前提：名單非空，否則下面整段是空轉。精確的成員由上面那條守。
+    expect(PROTECTED_ENTRY_NAMES.size).toBeGreaterThan(0);
+    for (const name of PROTECTED_ENTRY_NAMES) {
+      const disabled = (): unknown => validateEntries([{ id: 'x', name, disabled: true }], '測試');
+      expect(disabled, name).toThrow(PluginConfigError);
+      expect(disabled, name).toThrow(/關不掉/u);
+      // **擋的是「關掉」，不是「提到這一列」**——同 `approval-gate` 那條的理由。
+      expect(
+        () => validateEntries([{ id: 'x', name, disabled: false }], '測試'),
+        name,
+      ).not.toThrow();
+      expect(() => validateEntries([{ id: 'x', name }], '測試'), name).not.toThrow();
+    }
+  });
+
+  /**
+   * **每一列的理由都是自己的。**
+   *
+   * `PROTECTED_ENTRY_REASONS` 的型別逼人寫一段文字，但逼不了那段文字是對的——複製隔壁那一列的
+   * 理由照樣編得過，而那正是這份名單從前的實際狀態（四列共用一段講核准閘門的話）。
+   *
+   * **比的是理由本身，不是完整訊息。** 第一版比完整訊息，而那是假綠：訊息裡嵌著
+   * `"<列名>"`，所以就算理由整段抄隔壁，兩則訊息照樣不同。實測過——把
+   * `#settings/deliverable-files` 的理由換成 `#settings/thread-title` 的，比訊息的那一版全綠。
+   */
+  it('每一列的理由都不一樣——沒有人借用另一列的', () => {
+    const reasons = [...PROTECTED_ENTRY_REASONS.values()];
+    expect(reasons).toHaveLength(PROTECTED_ENTRY_NAMES.size);
+    expect(new Set(reasons).size).toBe(reasons.length);
   });
 
   it('**`--dump-config` 那條也拋**——檢查搬離 `validateEntries` 就會紅', () => {

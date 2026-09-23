@@ -40,9 +40,12 @@ import { createCommandExecutor } from '@nexus/plugin-commands';
 import { createAskUserPlugin } from '@nexus/plugin-ask-user';
 import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { startupSetting } from './settings/startup.js';
 import {
   attachSessionPersistence,
   createHostServicesPlugin,
+  sessionPersistencePlugin,
+  type SessionPersistenceConfig,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   SessionRegistry,
@@ -154,13 +157,18 @@ export interface CliInvocation {
    */
   readonly maxGoalRounds?: number;
   /**
-   * 這一次呼叫的 agent 迴圈上限，單位是 LangGraph 的 super-step。省略即
-   * `DEFAULT_RECURSION_LIMIT`（[#362](https://github.com/DemianLi/nexus-agent/issues/362)）。
+   * 這一次呼叫的 agent 迴圈上限，單位是 LangGraph 的 super-step。
+   *
+   * **省略不等於內建預設**（[#362](https://github.com/DemianLi/nexus-agent/issues/362)／
+   * [#529](https://github.com/DemianLi/nexus-agent/issues/529)）：省略之後由組裝點的三態決定
+   * ——plugin 清單上 `recursion-limit` 那一列講了就用它的，連那一列都沒有才是
+   * `DEFAULT_RECURSION_LIMIT`。**這個旗標在場時永遠贏過那一列**，跟 #456 那三列同一條規則。
    *
    * **產品預設不動，這一格是給呼叫端明著傳的。** 100 是「跑掉了」的界線，對一般任務是對的
    * 校準；需要更長的呼叫端（Proteus 的 adapter）自己傳一個大的，那時那個數字出現在呼叫端
    * 的指令裡而不是沒有人設過。照 dsh 的房規：會隨部署變的選擇要改得動，一個 `DEFAULT_*`
-   * 常數不算 configurability（`tool-ralph` 的 `maxRounds` 就是 Config）。
+   * 常數不算 configurability（`tool-ralph` 的 `maxRounds` 就是 Config）——**那條房規現在由
+   * `recursion-limit` 那一列滿足**，這個旗標是疊在它上面的一層。
    *
    * **它換算成幾個模型輪取決於組裝**：`模型輪數 = floor((recursionLimit − 1) / 每輪格數)`，
    * 每多一個帶 `beforeModel` 的 middleware 每輪就多一格。預設組裝是三格，所以 `500` ≈ 166 輪；
@@ -1254,6 +1262,9 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // （測試、將來 serve 的續接）會撞上自己沒放的鎖。
   let built: Awaited<ReturnType<typeof createCliAgent>>;
   let restored: Awaited<ReturnType<typeof restoreConversation>> | undefined;
+  // **落盤的批次窗口，同樣從清單解**（#529）。宣告在 try 外面是因為消費點在 try 外面
+  // （落盤接在三個 attach 之後），而清單本身只在 try 裡面——同 `built` 的理由與寫法。
+  let persistenceWindow: SessionPersistenceConfig;
   try {
     // **先認它屬於哪個目錄**（見 `resume-guards.ts`）。排在沙箱那道檢查前面：
     // 目錄不對的話，日誌裡記的是哪一格都不該拿來判。讀回來還沒寫過任何一筆，檔案原封不動；
@@ -1284,6 +1295,9 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       env: options.env ?? process.env,
       ...(invocation.patches !== undefined && { patches: invocation.patches }),
     });
+    // **起動期解一次**：落盤那一行在 try 外面，而這份清單只活在 try 裡面。解在這裡也讓
+    // 「那一列的值不合法」跟清單上其他列的毛病落在同一個時刻——跑起來之前。
+    persistenceWindow = startupSetting(plugins, sessionPersistencePlugin);
 
     // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
     built = await createCliAgent(
@@ -1335,6 +1349,8 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       ? undefined
       : attachSessionPersistence(sessions, sessionStore, {
           cwd: options.cwd ?? process.cwd(),
+          // 批次窗口：上面在 try 裡從清單解出來的那一份。
+          windowMs: persistenceWindow.windowMs,
           // **錨（#504）取的是組裝真的用的那一個**，不是在這裡再算一次：`createCliAgent`
           // 回著它正是為了這個。沒給 `--workspace` 就不寫那一格。
           ...(workspaceRoot !== undefined && { workspaceRoot }),

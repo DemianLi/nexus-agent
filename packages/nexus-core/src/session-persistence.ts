@@ -27,6 +27,10 @@
  * @module
  */
 
+import { z } from 'zod';
+
+import type { NexusPlugin } from './plugin.js';
+import type { PluginRegistry } from './registry.js';
 import type { SessionEvent, SessionLog } from './session-log.js';
 import { SESSION_LOG_FORMAT_VERSION } from './session-store.js';
 import type { SessionStore, StoredSession, StoredSessionHeader } from './session-store.js';
@@ -240,6 +244,13 @@ export function attachSessionPersistence(
     readonly workspaceRoot?: string;
     readonly warn?: (message: string) => void;
     readonly resumedRoot?: { readonly stored: StoredSession; readonly storedCount: number };
+    /**
+     * 批次窗口，毫秒。省略即 {@link DEFAULT_PERSISTENCE_WINDOW_MS}。
+     *
+     * **一路轉發給每一份協調器**——這個行程裡的每一條會話（root 與 subagent）共用同一個
+     * 節奏。那是刻意的：窗口描述的是**這一台機器的落盤代價**，不是某一條會話的性質。
+     */
+    readonly windowMs?: number;
   } = {},
 ): { flush(): Promise<void>; dispose(): Promise<void> } {
   const coordinators: SessionPersistenceCoordinator[] = [];
@@ -262,6 +273,7 @@ export function attachSessionPersistence(
         stored: resumed?.stored ?? store.create(header),
         ...(resumed !== undefined && { storedCount: resumed.storedCount }),
         ...(options.warn !== undefined && { warn: options.warn }),
+        ...(options.windowMs !== undefined && { windowMs: options.windowMs }),
       }),
     );
   });
@@ -277,3 +289,90 @@ export function attachSessionPersistence(
     },
   };
 }
+
+/**
+ * `setTimeout` 收得住的最大延遲。
+ *
+ * **超過它不是「窗口更長」，是窗口消失**：Node 對超出 32 位元的延遲印一行警告然後**立刻**
+ * 觸發，於是 `windowMs: 1e10` 的實際行為跟 `windowMs: 0` 一樣——每一顆事件各寫一次。
+ * 這個方向的壞值最貴，因為它長得像「我把落盤調得很懶」而實際上是最勤的那一種，所以擋在
+ * schema 上，載入期就失敗。
+ *
+ * 同 `@nexus/plugin-telemetry-otel` 對 `shutdownTimeoutMillis` 的檢查，也同 dsh
+ * （`packages/util/timeout/src/index.ts:25` 的 `MAX_TIMER_DELAY_MS`，`ddefc45`）。
+ */
+export const MAX_PERSISTENCE_WINDOW_MS = 2_147_483_647;
+
+/**
+ * 這個條目的 plugin 名。
+ *
+ * 刻意不是條目的 `id`——id 是使用者的 patch 改得動的字串，同
+ * {@link ./tool-result-pruner.ts | TOOL_RESULT_PRUNER_PLUGIN_NAME}。
+ */
+export const SESSION_PERSISTENCE_PLUGIN_NAME = 'session-persistence';
+
+/**
+ * 條目收的設定。一格，`strictObject`：多寫一個欄位是打錯字，不是擴充點。
+ *
+ * **下限是 0 而不是 1**：`windowMs: 0` 是「不批次，每一顆事件各寫一次」，一個講得出來的
+ * 部署選擇（同 dsh `settings-file` 的 `debounceMs`，它的 `z.number().min(0)` 與專門測零值
+ * 的那條 spec）。上限見 {@link MAX_PERSISTENCE_WINDOW_MS}。
+ */
+export const sessionPersistenceConfigSchema = z.strictObject({
+  /** 見 {@link DEFAULT_PERSISTENCE_WINDOW_MS}。 */
+  windowMs: z
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_PERSISTENCE_WINDOW_MS)
+    .default(DEFAULT_PERSISTENCE_WINDOW_MS),
+});
+
+/** {@link sessionPersistenceConfigSchema} 驗完的形狀。 */
+export type SessionPersistenceConfig = z.infer<typeof sessionPersistenceConfigSchema>;
+
+/**
+ * 落盤批次窗口的**設定條目**（[#457](https://github.com/DemianLi/nexus-agent/issues/457)／
+ * [#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
+ *
+ * **這一顆不裝功能，只講設定**，`apply` 是空的、也不註冊服務。
+ *
+ * ## 為什麼是空的 `apply`
+ *
+ * 同一份出貨清單上，`@nexus/core` 那幾列（#456）的消費者是 `foldRegistry`，**註冊表就在
+ * 手上**，所以它們的 `apply` 提供一顆服務、fold 去讀。這一列做不到那件事：它的兩個消費點
+ * 是 `cli.ts` 與 `serve.ts` 裡呼叫 {@link attachSessionPersistence} 的那兩行，跑在
+ * `createCliAgent` **回來之後**——而那個函式一格註冊表都沒有回傳。
+ *
+ * 更硬的理由是**壽命**：窗口描述的是那一顆 `SessionStore` 的寫入節奏，而 store 在 serve 上
+ * 是**整台伺服器一份**；註冊表在 serve 上是**一條 thread 一份**。拿 per-thread 的服務去供
+ * per-process 的資源，第二條 thread 進來那天就對不上了。
+ *
+ * 所以值由 `apps/harness` 的 `startupSetting` 在起動期解一次、往下傳一份——形狀上仍是
+ * 「值從一個地方來」，機制上不是服務。那條退讓登記在 #529 上，射程是 `startupSetting`
+ * 的呼叫者。
+ *
+ * ## 與 dsh 的關係
+ *
+ * **dsh 對這個值沒有意見。** 它的 `@deepseek-ai/dsh-session-persistence-jsonl` 只收兩格
+ * （`root`、`compression`，`packages/session/session-persistence-jsonl/src/index.ts:236-239`，
+ * `ddefc45`），沒有批次窗口——因為 dsh 的批次是**呼叫端傳一整批**
+ * （`packages/session/session-persistence/src/handle.ts:86-94`：「Append a contiguous batch」），
+ * 不是我們這種計時器攢批。所以這一列的形狀抄的是同一份清單上 core 那幾列，不是抄 dsh 的
+ * 某一列；這不是「表達不出來」的偏離，是標準沒有這個旋鈕。
+ *
+ * ## 這一列關不掉
+ *
+ * `disabled: true` 在載入期當場拋（`apps/harness` 的 `PROTECTED_ENTRY_REASONS`）。理由同
+ * 起動期那幾列：`startupSetting` 把關掉的那一列當成沒有那一列，於是回到 schema 的預設值
+ * ——落盤照樣批次、照樣是 10 毫秒，只有讀設定的人以為自己關掉了什麼。
+ */
+export const sessionPersistencePlugin: NexusPlugin<SessionPersistenceConfig> = {
+  name: SESSION_PERSISTENCE_PLUGIN_NAME,
+  Config: sessionPersistenceConfigSchema,
+  apply: (_registry: PluginRegistry, _config: SessionPersistenceConfig): void => {
+    // 空的，見檔頭：組裝期沒有消費者，發一顆服務只會讓人以為有人在讀。
+  },
+};
+
+export default sessionPersistencePlugin;

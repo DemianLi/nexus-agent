@@ -45,18 +45,7 @@ import type { SessionEvent } from '@nexus/core';
 import { virtualPathOf } from '@nexus/plugin-present';
 import type { DeliverableFilePage, DeliverableFileStat } from '@nexus/wire';
 
-/**
- * 一頁文字的位元組上限，照 dsh 的 `maxBytes`（2 MiB）。
- *
- * **超標是拒絕，不是切短**——dsh 的理由逐字：「a silently cut page reads as the whole page」。
- */
-export const DELIVERABLE_MAX_PAGE_BYTES = 2 * 1024 * 1024;
-
-/** 整檔讀取的上限，照 dsh 的 `maxFileBytes`（32 MiB）。下載與預覽都吃它（見檔頭偏離 1）。 */
-export const DELIVERABLE_MAX_FILE_BYTES = 32 * 1024 * 1024;
-
-/** 一頁的預設與最大行數，照 dsh 的 `maxLines`（5000）。要更多是拒絕，不是給到上限為止。 */
-export const DELIVERABLE_MAX_LINES = 5000;
+import type { DeliverableFilesConfig } from './settings/deliverable-files.js';
 
 /** 文字不會帶的那個位元組；它在就代表這個檔不是文字。照 dsh 的 `NUL`。 */
 const NUL = String.fromCharCode(0);
@@ -227,16 +216,20 @@ export async function locateDeliverableFile(
  * 決議給的**理由**：錨由這條路由自己挑，不是從 `threadFor` 繼承來的。偏離的是載體，不是紀律。
  *
  * @param located - 已經通過閘門的檔。
+ * @param limits - 這台 server 的三個上限，起動期從 `#settings/deliverable-files` 那一列解出來
+ *   （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。**這裡只讀不挑**：挑在
+ *   `serve.ts`，因為上限是 server 的性質而這個模組一條 thread 都不認得。
  * @returns 原始位元組，或拒絕。
  */
 export async function readDeliverableBytes(
   located: LocatedDeliverable,
+  limits: DeliverableFilesConfig,
 ): Promise<DeliverableResult<Uint8Array>> {
-  if (located.stat.bytes > DELIVERABLE_MAX_FILE_BYTES) {
+  if (located.stat.bytes > limits.maxFileBytes) {
     return refuse(
       'too-large',
       `讀不到：${located.stat.path} 有 ${located.stat.bytes} 位元組，超過 ` +
-        `${DELIVERABLE_MAX_FILE_BYTES} 的上限。上限是拒絕，不是截斷。`,
+        `${limits.maxFileBytes} 的上限。上限是拒絕，不是截斷。`,
     );
   }
   // **上限綁在讀本身，不是只綁在前面那次 stat 上。** 只看 stat 的話，兩次之間長大的檔就整份
@@ -249,13 +242,13 @@ export async function readDeliverableBytes(
     return refuse('not-found', `讀不到：${located.stat.path} 不在了。`);
   }
   try {
-    const room = Math.min(located.stat.bytes, DELIVERABLE_MAX_FILE_BYTES) + 1;
+    const room = Math.min(located.stat.bytes, limits.maxFileBytes) + 1;
     const buffer = Buffer.alloc(room);
     const { bytesRead } = await handle.read(buffer, 0, room, 0);
-    if (bytesRead > DELIVERABLE_MAX_FILE_BYTES) {
+    if (bytesRead > limits.maxFileBytes) {
       return refuse(
         'too-large',
-        `讀不到：${located.stat.path} 讀的時候已經超過 ${DELIVERABLE_MAX_FILE_BYTES} 的上限。`,
+        `讀不到：${located.stat.path} 讀的時候已經超過 ${limits.maxFileBytes} 的上限。`,
       );
     }
     return { kind: 'ok', value: buffer.subarray(0, bytesRead) };
@@ -267,23 +260,31 @@ export async function readDeliverableBytes(
 /**
  * 切一頁文字出來。
  *
- * `offset` 是行偏移（0 起算），`limit` 是這一頁最多幾行。**要超過 {@link DELIVERABLE_MAX_LINES}
- * 是拒絕**，不是給到上限為止——同 dsh 的 `maxLines`（「a request asking for more is refused」）。
+ * `offset` 是行偏移（0 起算），`limit` 是這一頁最多幾行。**要超過 `limits.maxLines` 是拒絕**，
+ * 不是給到上限為止——同 dsh 的 `maxLines`（「a request asking for more is refused」）。
+ *
+ * **`limits.maxLines` 是雙用的**：這裡當「不准超過」的上限，而「呼叫端沒給 `limit` 時用什麼」
+ * 是同一個數字，那一半在 `wire-handler.ts` 的 `handleDeliverableFile`。dsh 一樣
+ * （`workspace-files/src/index.ts:371-373`，兩處讀同一個 `this.config.maxLines`）。**兩處必須
+ * 一起吃到設定值**：只接一處的話兩個方向都會壞——設定高於這裡寫死的上限，不帶 `limit` 的請求
+ * 全部 400；設定低於那邊寫死的預設，一樣。
  *
  * @param located - 已經通過閘門的檔。
+ * @param limits - 這台 server 的三個上限，見 {@link readDeliverableBytes}。
  * @param offset - 從第幾行起。
  * @param limit - 最多幾行。
  * @returns 一頁，或拒絕。
  */
 export async function readDeliverablePage(
   located: LocatedDeliverable,
+  limits: DeliverableFilesConfig,
   offset: number,
   limit: number,
 ): Promise<DeliverableResult<DeliverableFilePage>> {
-  if (limit > DELIVERABLE_MAX_LINES) {
-    return refuse('bad-request', `limit 最多 ${DELIVERABLE_MAX_LINES} 行，收到 ${limit}。`);
+  if (limit > limits.maxLines) {
+    return refuse('bad-request', `limit 最多 ${limits.maxLines} 行，收到 ${limit}。`);
   }
-  const bytes = await readDeliverableBytes(located);
+  const bytes = await readDeliverableBytes(located, limits);
   if (bytes.kind === 'refused') return bytes;
   const text = new TextDecoder().decode(bytes.value);
   // **整份掃一次 NUL**，不是只掃這一頁：一個檔是不是文字是它自己的性質，不是某一頁的性質。
@@ -298,11 +299,11 @@ export async function readDeliverablePage(
   const page = all.slice(offset, offset + limit);
   const pageText = page.join('\n');
   const pageBytes = new TextEncoder().encode(pageText).length;
-  if (pageBytes > DELIVERABLE_MAX_PAGE_BYTES) {
+  if (pageBytes > limits.maxBytes) {
     return refuse(
       'too-large',
       `讀不到：${located.stat.path} 的這一頁有 ${pageBytes} 位元組，超過 ` +
-        `${DELIVERABLE_MAX_PAGE_BYTES} 的上限。上限是拒絕，不是截斷——切短的一頁看起來就是整頁。`,
+        `${limits.maxBytes} 的上限。上限是拒絕，不是截斷——切短的一頁看起來就是整頁。`,
     );
   }
   return {

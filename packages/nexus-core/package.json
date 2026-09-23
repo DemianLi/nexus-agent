@@ -11,6 +11,7 @@
     "./model-usage": "./src/model-usage.ts",
     "./observation-policy": "./src/observation.ts",
     "./repeat-reminder": "./src/repeat-reminder.ts",
+    "./session-persistence": "./src/session-persistence.ts",
     "./summarization": "./src/summarization.ts",
     "./tool-result-pruner": "./src/tool-result-pruner.ts",
     "./src/*": "./src/*",

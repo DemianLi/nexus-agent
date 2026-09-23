@@ -6,7 +6,8 @@
 
 import { createHmac } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BROWSER_SESSION_MAX_AGE_DAYS, BrowserAuth } from './browser-auth.js';
+import { BrowserAuth } from './browser-auth.js';
+import { DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS } from './settings/browser-session.js';
 
 const SECRET = Buffer.alloc(32, 3);
 const AUTHORITY = '127.0.0.1:3080';
@@ -75,7 +76,10 @@ describe('BrowserAuth', () => {
     );
     expect(setCookie).not.toContain('Secure');
     expect(setCookie).not.toContain('Domain');
-    expect(BROWSER_SESSION_MAX_AGE_DAYS * 24 * 60 * 60).toBe(2592000);
+    // 那個 `Max-Age` 就是預設值換算來的。**常數搬家了**（#529：它現在是
+    // `#settings/browser-session` 那一列 schema 的預設值），這一行跟著改讀新的出處——
+    // 數字本身沒有變。
+    expect(DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS * 24 * 60 * 60).toBe(2592000);
 
     expect(first.isAuthenticated(headers(AUTHORITY, login.cookie))).toBe(true);
     expect(first.isAuthenticated(new Headers())).toBe(false);

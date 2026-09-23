@@ -359,10 +359,17 @@ export {
   SessionFormatUnsupportedError,
 } from './session-store.js';
 
-export type { SessionPersistenceCoordinatorOptions } from './session-persistence.js';
+export type {
+  SessionPersistenceConfig,
+  SessionPersistenceCoordinatorOptions,
+} from './session-persistence.js';
 export {
   attachSessionPersistence,
   DEFAULT_PERSISTENCE_WINDOW_MS,
+  MAX_PERSISTENCE_WINDOW_MS,
+  SESSION_PERSISTENCE_PLUGIN_NAME,
+  sessionPersistenceConfigSchema,
+  sessionPersistencePlugin,
   SessionPersistenceCoordinator,
 } from './session-persistence.js';
 

@@ -94,9 +94,13 @@
 - id: present
   name: '@nexus/plugin-present'
 
-# ── core 的 middleware 設定 ───────────────────────────────────────────────────
+# ── core 的設定 ──────────────────────────────────────────────────────────────
 #
-# 這幾列**不裝功能，只講設定**（#456）。middleware 本身由 `foldRegistry` 建與排位——位置
+# 這幾列**不裝功能，只講設定**。**它們內部分兩層，分界同 harness 那一段——消費點跑的時刻**：
+# 前六列（到 `approval-gate` 為止）是**組裝期**（#456），消費者是 `foldRegistry`，註冊表就在
+# 手上；最後一列 `session-persistence` 是**起動期**（#529），理由寫在它自己那一段上。
+#
+# 組裝期那六列：middleware 本身由 `foldRegistry` 建與排位——位置
 # 是承重的（有四條測試釘著）、而且有一顆必須逐個 agent 各建一份，這兩件事
 # `registry.middleware.use()` 都表達不出來。所以帶設定的條目，`apply` 只做一件事：把驗過的
 # 設定提供成一個服務，fold 從那裡讀；**沒有設定的那一顆連服務都不註冊**（照 dsh 的
@@ -106,8 +110,8 @@
 # **關掉它就是 `disabled: true`**，語意照 dsh：條目不掛，那一顆 middleware 真的不在 stack
 # 裡。要改設定就在 patch 檔裡重寫這一列的 `config`——整份替換，沒重述的欄位回到預設值。
 #
-# **最後那一列是例外，而且是明著的例外**：核准閘門關不掉，`disabled: true` 在載入期當場
-# 拋。理由寫在它自己那一段上。
+# **組裝期那六列的最後一列是例外，而且是明著的例外**：核准閘門關不掉，`disabled: true` 在
+# 載入期當場拋。理由寫在它自己那一段上。
 
 # 連續重複同參數呼叫同一個工具時提醒模型（#147）。門檻與參數預覽字數照 dsh base 的
 # `repeat-tool-reminder`（`packages/bundle/base/cordis.patch.yml:441`，`ddefc45`）；
@@ -190,6 +194,124 @@
 # `config:` 同上，不可以加。
 - id: approval-gate
   name: '@nexus/core/approval-gate'
+
+# 會話日誌落盤的批次窗口，毫秒（#457／#529）。**這一列跟上面六列不同層**：上面六列的消費者
+# 是 `foldRegistry`（組裝期，註冊表在手上），這一列的消費者是 `cli.ts` 與 `serve.ts` 裡呼叫
+# `attachSessionPersistence` 的那兩行——跑在 `createCliAgent` 回來之後，而那個函式一格註冊表
+# 都沒有回傳。更硬的理由是壽命：窗口講的是那一顆 `SessionStore` 的寫入節奏，而 store 在 serve
+# 上是**整台伺服器一份**、註冊表是**一條 thread 一份**。所以這一列的 `apply` 是空的，值由
+# `startupSetting` 在起動期解一次往下傳，同上面 harness 那三列的機制。
+#
+# **dsh 對這個值沒有意見**：它的 `session-persistence-jsonl` 只收 `root` 與 `compression`
+# （`packages/session/session-persistence-jsonl/src/index.ts:236-239`，`ddefc45`），因為 dsh 的
+# 批次是呼叫端傳一整批，不是計時器攢批。所以這一列的形狀抄的是上面那六列，不是抄 dsh 的某一
+# 列——這不是「表達不出來」的偏離，是標準沒有這個旋鈕。
+#
+# **這一列關不掉**（理由同起動期那三列）：`startupSetting` 把關掉的那一列當成沒有那一列，於是
+# 回到 schema 的預設值——落盤照樣批次、照樣 10 毫秒，只有讀設定的人以為自己關掉了什麼。
+#
+# **0 是合法值**，意思是不批次、每一顆事件各寫一次；上限是 `setTimeout` 收得住的
+# 2 147 483 647，超過它的值會讓計時器**立刻**觸發（等於窗口消失），所以擋在 schema 上。
+- id: session-persistence
+  name: '@nexus/core/session-persistence'
+  config:
+    windowMs: 10
+
+# ── harness 自己的設定 ────────────────────────────────────────────────────────
+#
+# 這幾列跟上面那段 core 的 middleware 設定同一個用途——**不裝功能，只講設定**——但擁有者住在
+# `apps/harness`（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
+#
+# **它們內部又分兩層，分界是消費點跑的時刻**：
+#
+# - **起動期**（`thread-title`、`browser-session`、`deliverable-files`、`tool-text`）：消費者是 `serve.ts` 的
+#   冷讀清單、`BrowserAuth` 的建構子、以及 `createWireHandler` 閉包裡的兩條交付路由，全都跑在
+#   **任何 agent 出生之前**，那一刻註冊表還不存在。所以這幾列的 `apply` 是空的，值由
+#   `src/settings/startup.ts` 的 `startupSetting` 在起動期解一次、往下傳一份——形狀上仍是
+#   「值從一個地方來」，機制上不是服務，那條退讓登記在 #529 上。
+# - **組裝期**（`recursion-limit`）：消費者是 `agent-factory.ts`，跑在 `loadPlugins` 之後，
+#   **註冊表就在手上**。所以這一列跟上面 core 那三列完全同形——`apply` 把驗過的值提供成一個
+#   服務，消費點去讀服務。這一層做得到的事，不該跟著上一層退。
+#
+# **`name` 是 `#settings/…` 而不是一個套件名**，那是一條登記過的偏離，五列共用：dsh 的每個可調值
+# 都由一個套件擁有，而 `apps/harness` **解不到自己**（條目走 `import(entry.name)`，`@nexus/harness`
+# 沒有連進自己的 `node_modules`，實測是 `Cannot find package`）。退到 Node 的 `imports` 欄位，映射
+# 寫在 `apps/harness/package.json` 裡看得見。逐條理由在 `src/settings/thread-title.ts` 的檔頭。
+#
+# **這五列關不掉**（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`），但理由分兩種。起動期那四列是
+# 「關掉沒有意義」：它們不裝任何東西，關掉不會讓標題不再被裁切、cookie 不再過期、交付檔不再有
+# 上限——`startupSetting` 把關掉的那一列當成沒有那一列，於是回到 schema 的預設值。
+# `recursion-limit` 硬一級——關掉它在機制上確實會讓服務消失、於是落回內建的 100，**看起來像關掉了
+# 護欄，實際上護欄還在**。兩種都只會讓人以為自己關掉了什麼。
+
+# 執行緒列表上標題的兩個上限（#302）。值照 dsh base 的 `session-title`
+# （`packages/bundle/base/cordis.patch.yml:55-60`，`ddefc45`：`fallbackMaxWords: 5`、
+# `fallbackMaxBytes: 40`），**數字一模一樣**。
+#
+# 兩格全部寫出來，理由同上面那三列：patch 是整份替換 `config`，照著改的人手上要有完整的一份
+# 可以抄；預設值本身寫在 schema 裡，不是寫在這裡。40 個位元組是 13 個中文字——中文沒有空白，
+# 詞數那一格咬不到。
+- id: thread-title
+  name: '#settings/thread-title'
+  config:
+    maxWords: 5
+    maxBytes: 40
+
+# 瀏覽器 cookie 的絕對有效期（#424）。dsh 那側是 plugin 設定 `cookieMaxAgeDays`，預設同樣是 30
+# ——這一列補上的正是 `browser-auth.ts` 原本登記的那條偏離（「寫死 30 天，不能設定」）。
+- id: browser-session
+  name: '#settings/browser-session'
+  config:
+    maxAgeDays: 30
+
+# 交付檔的三個上限（#452／#457）。**形狀與數值都沒有偏離**：dsh 的
+# `@deepseek-ai/dsh-api-workspace-files` 就是一顆 plugin 三格（`packages/api/workspace-files/
+# src/index.ts:185-189`，`ddefc45`），三個預設值逐字相同——2 MiB、32 MiB、5000。欄位名照它。
+#
+# **`maxLines` 是雙用的**：沒給 `limit` 查詢參數時用它當預設，給了就不准超過它。dsh 一樣
+# （`index.ts:371-373` 兩處讀同一個 `this.config.maxLines`）。所以改這一格會同時動到兩個行為。
+#
+# 三格全部寫出來，理由同上面那幾列：patch 是整份替換 `config`。
+- id: deliverable-files
+  name: '#settings/deliverable-files'
+  config:
+    maxBytes: 2097152
+    maxFileBytes: 33554432
+    maxLines: 5000
+
+# agent 迴圈的 super-step 上限（#457／#529）。**dsh 對這個值沒有意見**——它不跑 LangGraph，
+# `recursionLimit` 在 `bundle/*` 的 patches 與 `core/agent-loop` 全樹零命中（`ddefc45`）。所以這一列
+# 的形狀抄的是上面 core 那三列，不是抄 dsh 的某一列。
+#
+# **100 不是模型輪數**：換算是 `模型輪數 = floor((limit − 1) / 每輪格數)`，而每輪幾格取決於這一次
+# 掛了哪些 middleware（預設組裝三格＝33 輪，再給 `--workspace` 是 32 輪）。那正是這個值歸 harness
+# 而不是歸 `@nexus/core` 的理由：core 不知道組裝長什麼樣。逐段實測見
+# `src/settings/recursion-limit.ts` 的檔頭。
+#
+# **CLI 的 `--recursion-limit` 仍然贏過這一列**，走的是 #456 那三列既有的第一態（明著傳給組裝點
+# 的參數 > 條目的服務 > 內建預設），不是一條新機制。
+# 一段工具結果文字放上線的位元組上限（#538／#457）。**「可設定」這件事本身沒有偏離，寫死才有**：
+# dsh 那側它本來就是條目的一格（`spill-policy` 的 `maxInlineBytes: 50000`，
+# `packages/bundle/base/cordis.patch.yml:393-396`，`ddefc45`，**數字一模一樣**），所以這一刀是把一條
+# 既存的偏離收掉。**截在哪一層**那條偏離仍然登記在 `src/tool-result-text.ts` 的檔頭上——dsh 截在
+# 模型面、超標存成 spill 檔、通知裡帶得出檔案位址；我們沒有 spill 能力，只能截在放上線那一刻。
+#
+# 欄位名沒照 dsh 的 `maxInlineBytes`：那個名字描述的是 dsh 的二分（inline 還是進 spill 檔），而我們
+# 超過就是截斷，沒有「另一半去哪裡」這回事。
+#
+# **改這一格會讓一條跨套件的比例失效，而且沒有任何東西會紅。** `@nexus/wire` 的
+# `HISTORY_PAGE_MAX_BYTES = 4_000_000` 是 `80 × 50000`，那個關係一直由 `apps/harness` 的一條測試釘著；
+# 這一列讓它**只在 schema 的預設值底下成立**。那是 #538 三選一裡明著選的第三條（2026-09-23 拍板），
+# 逐條理由見 `src/settings/tool-text.ts` 的檔頭。
+- id: tool-text
+  name: '#settings/tool-text'
+  config:
+    maxBytes: 50000
+
+- id: recursion-limit
+  name: '#settings/recursion-limit'
+  config:
+    limit: 100
 
 # ── 配套入口 ──────────────────────────────────────────────────────────────────
 #

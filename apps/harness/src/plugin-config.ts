@@ -112,9 +112,64 @@ export type ConfigEntry = z.infer<typeof entrySchema>;
  * plugin，而且把它從兩個插入點拿掉的突變量到 **126 條紅**。沒有條目，就沒有「關得掉」
  * 這個問題要擋。
  *
+ * **名單上另外四列是只講設定的條目**（`#settings/*`，
+ * [#529](https://github.com/DemianLi/nexus-agent/issues/529)）。理由跟核准閘門同形但不同源：
+ * 它們**不裝任何東西**，所以「關掉」對它們沒有意義。名單擋的正是那個誤會。
+ *
+ * **理由跟名字綁在同一張表上，不共用一段文字。** 從前這裡是一個 `Set`、訊息只有一段，而那段
+ * 逐字在講核准閘門——名單長出第二種列之後，關掉 `#settings/thread-title` 的人會拿到一整段關於核准
+ * 與多人共用主機的說明，那對他那一列完全是錯的（實測）。改成表之後，**加一列就必須寫它自己的
+ * 理由**，漏寫是 typecheck 紅，不是一段安靜的錯話。
+ *
  * @see {@link assertNotProtected}
  */
-export const PROTECTED_ENTRY_NAMES: ReadonlySet<string> = new Set(['@nexus/core/approval-gate']);
+export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
+  [
+    '@nexus/core/approval-gate',
+    '核准閘門不是一顆掛不掛隨人的 plugin：它由組裝時無條件建起來，' +
+      '今天沒有任何設定關得掉它。這一行如果安靜地被跳過，讀的人會以為核准已經關了' +
+      '——實際上照樣會問，而這台機器是多人共用的。',
+  ],
+  [
+    '#settings/thread-title',
+    '這一列不裝任何東西，只講執行緒列表上標題的兩個上限。關掉它不會讓標題不再被裁切' +
+      '——裁切由讀清單那一側無條件做——只會讓這份設定讀起來像關掉了什麼。',
+  ],
+  [
+    '#settings/browser-session',
+    '這一列不裝任何東西，只講瀏覽器 cookie 的絕對有效期。關掉它不會讓 cookie 不再過期' +
+      '——過期由 `BrowserAuth` 無條件做——只會讓這份設定讀起來像關掉了什麼。',
+  ],
+  [
+    '#settings/deliverable-files',
+    '這一列不裝任何東西，只講交付檔的三個上限（一頁的位元組、整檔的位元組、一頁的行數）。' +
+      '關掉它不會讓交付檔不再有上限——`startupSetting` 把關掉的那一列當成沒有那一列，' +
+      '三個值於是回到 schema 的預設，行為一個位元組都不變，只會讓這份設定讀起來像關掉了什麼。',
+  ],
+  [
+    '@nexus/core/session-persistence',
+    '這一列不裝任何東西，只講會話日誌落盤的批次窗口（毫秒）。關掉它不會讓落盤不再批次' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，窗口於是回到 schema 的預設，' +
+      '節奏一毫秒都不變，只會讓這份設定讀起來像關掉了什麼。',
+  ],
+  [
+    '#settings/tool-text',
+    '這一列不裝任何東西，只講一段工具結果文字放上線的位元組上限。關掉它不會讓工具結果不再被截' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，上限於是回到 schema 的預設，' +
+      '送出去的位元組一個都不變，只會讓這份設定讀起來像關掉了什麼。',
+  ],
+  [
+    '#settings/recursion-limit',
+    '這一列不裝任何東西，只講 agent 迴圈的 super-step 上限。關掉它確實會讓那個服務消失，' +
+      '但組裝點接著就落回內建的 100——**護欄還在**，關掉的只是「這台機器上它是多少」這句話。' +
+      '讀起來卻像把迴圈上限解除了，而基座自己那層是一萬。',
+  ],
+]);
+
+/**
+ * 關不掉的那幾列。見 {@link PROTECTED_ENTRY_REASONS}——**這份名單從那張表導出**，所以兩者不會漂移。
+ */
+export const PROTECTED_ENTRY_NAMES: ReadonlySet<string> = new Set(PROTECTED_ENTRY_REASONS.keys());
 
 /**
  * 一列 patch。
@@ -385,13 +440,12 @@ export function validateEntries(
  */
 function assertNotProtected(entry: ConfigEntry, label: string, position: number): void {
   if (entry.disabled !== true) return;
-  if (!PROTECTED_ENTRY_NAMES.has(entry.name)) return;
+  const reason = PROTECTED_ENTRY_REASONS.get(entry.name);
+  if (reason === undefined) return;
   throw new PluginConfigError(
     `${label} 疊完之後第 ${String(position + 1)} 列把 ${JSON.stringify(entry.name)} ` +
       '標成了 `disabled: true`，而這一列關不掉。' +
-      '核准閘門不是一顆掛不掛隨人的 plugin：它由組裝時無條件建起來，' +
-      '今天沒有任何設定關得掉它。這一行如果安靜地被跳過，讀的人會以為核准已經關了' +
-      '——實際上照樣會問，而這台機器是多人共用的。' +
+      reason +
       '把這一列的 `disabled` 拿掉（或寫成 `false`）再啟動。',
   );
 }

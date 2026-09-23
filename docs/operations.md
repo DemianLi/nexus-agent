@@ -103,8 +103,12 @@ web 那端把 thread id 記在瀏覽器裡，重新整理之後接的是同一�
 **agent 迴圈的上限是組裝點設的不是基座設的。** `createDeepAgent` 自己把 `recursionLimit` 設成 `1e4`
 （等於沒有上限），所以 `createNexusAgent` 蓋成 100。預設組裝每一輪模型呼叫佔三格，所以那是約 33 輪；
 每多一個 `beforeModel` 的 middleware 每輪就多一格。CLI、`serve`、eval 都吃這個值；這條擋的是
-「跑掉了」，不是「複雜任務」。真的需要更長的呼叫端自己傳——程式裡是 `recursionLimit`，CLI 是
-`--recursion-limit <n>`（`serve` 沒有這個旗標）。
+「跑掉了」，不是「複雜任務」。
+
+**要改它有三條路，由贏的順序排**：程式裡直接傳 `recursionLimit`；CLI 打 `--recursion-limit <n>`
+（`serve` 沒有這個旗標）；或在 plugin 清單裡改 `recursion-limit` 那一列的 `config.limit`——**那條
+兩邊都吃，是 `serve` 唯一調得動它的辦法**（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
+上面兩條任一個在場都贏過清單，清單再贏過內建的 100。那一列見〈plugin 清單〉。
 
 **一次性模式撞到這條上限時退出碼是 `2`**，其他失敗是 `1`，所以包它的腳本分得出「護欄切掉了」與
 「壞掉了」；REPL 裡撞到只印一行，不退出。
@@ -196,7 +200,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `repeatReminder` 時，以那句話為準；而手搭 plugin 清單（沒有這幾列）的組裝拿到的是內建
   預設，不是「什麼都沒掛」。
 
-今天有六列：
+今天有十二列：
 
 | id | 管什麼 | 有 `config` 嗎 | 關得掉嗎 |
 | --- | --- | --- | --- |
@@ -206,6 +210,46 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `observation-policy` | 先讀後改：沒讀過的檔不准改 | **沒有** | 關得掉 |
 | `model-usage` | 每一次模型呼叫的 token 帳目記進會話日誌 | **沒有** | 關得掉 |
 | `approval-gate` | 核准閘門 | **沒有** | **關不掉** |
+| `session-persistence` | 會話日誌落盤的批次窗口（毫秒） | 有（一格） | **關不掉** |
+| `thread-title` | 執行緒列表上標題的兩個上限 | 有（兩格） | **關不掉** |
+| `browser-session` | 瀏覽器 cookie 的絕對有效期 | 有（一格） | **關不掉** |
+| `deliverable-files` | 交付檔的三個上限（一頁位元組／整檔位元組／一頁行數） | 有（三格） | **關不掉** |
+| `tool-text` | 一段工具結果文字放上線的位元組上限 | 有（一格） | **關不掉** |
+| `recursion-limit` | agent 迴圈的 super-step 上限 | 有（一格） | **關不掉** |
+
+**最後六列都是「不裝功能、只講設定」的那一型，但擁有者分兩邊**：`session-persistence` 住在
+`@nexus/core`（值的家在那個套件裡），其餘五列住在 `apps/harness`
+（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
+**更要緊的分界是消費點跑的時刻**：
+
+- **`session-persistence`、`thread-title`、`browser-session`、`deliverable-files`、`tool-text`
+  跑在註冊表存在之前**，所以 `apply` 是空的、值在起動期解一次往下傳。消費點分別是 serve 的冷讀
+  清單、瀏覽器會話的建構子、兩條交付路由、以及工具結果文字那兩條（即時的 `ThreadPump` 與重播的
+  `historyPage`，都在 `createWireHandler` 的閉包底下），**只在 `serve` 上有作用**；
+  **`session-persistence` 是這一層裡唯一兩條路都讀的**——`cli.ts` 與 `serve.ts` 各自在接落盤時
+  讀它。
+- **`recursion-limit` 相反，它的消費點在組裝期**（`agent-factory`），跟前六列同一個位置，所以它
+  跟前六列完全同形（`apply` 提供一顆服務、組裝點去讀）。**CLI 的 `--recursion-limit` 仍然贏過
+  這一列**——程式路徑上直接傳的參數贏過這份清單，那條規則對它照樣適用。
+
+**這六列都關不掉**，但理由分兩種。起動期那五列是「關掉沒有意義」：它們**不裝任何東西**，關掉
+不會讓標題不再被裁切、cookie 不再過期、交付檔不再有上限、落盤不再批次、工具結果不再被截——那一列
+被當成沒有那一列，值回到 schema 的預設，行為一個位元組都不變。`recursion-limit` 硬一級
+——關掉它確實會讓那顆服務消失，但組裝點接著落回內建的 100，**護欄還在**，讀起來卻像把迴圈上限
+解除了（基座自己那層是一萬）。兩種都只會讓你以為關掉了什麼。寫 `disabled: true` 是啟動失敗，
+**訊息會指名你那一列自己的理由**，不是一段通用的話。
+
+**改 `tool-text` 的 `maxBytes` 會讓一條跨套件的比例失效，而且沒有任何東西會擋你。**
+`@nexus/wire` 的一頁歷史上限是 4 MB，那個數字是「80 × 每則 50000」算出來的——讀作「一頁最多裝
+80 則滿版工具結果」。那個關係由 `apps/harness` 的一條測試釘著，但**它只釘得住出廠那一份**：你在
+patch 裡把 `maxBytes` 改小，一頁能裝的滿版結果就變多，4 MB 那個上限相對變鬆；改大則相反。兩邊都
+不會有任何錯誤訊息。這是明著接受的代價（[#538](https://github.com/DemianLi/nexus-agent/issues/538)
+三選一的第三條）——另外兩條要把協定常數變成設定、或讓 wire 反過來收 harness 注入的值，都在動協定層
+的形狀。**實務上的建議：動這一格時，一頁歷史的大小上限要自己重算一次。**
+
+**`session-persistence` 的 `windowMs` 有兩個方向的邊界**：`0` 合法，意思是不批次、每一顆事件各
+寫一次；上限是 `setTimeout` 收得住的 2 147 483 647，**超過它的值會讓計時器立刻觸發**（等於窗口
+消失，也就是最勤的那一種，不是最懶的），所以那種值在載入期就失敗，不會靜靜跑起來。
 
 `observation-policy`、`model-usage`、`approval-gate` 那三列**不可以加 `config:`**——它們沒有
 設定，載入器對「這顆 plugin 沒有 Config schema 卻給了 config」是當場拋。前兩列列在這裡的唯一
@@ -238,6 +282,18 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 剪刀，而且上下文溢出時基座那條緊急摘要也一起沒有。它的 `config` 那四格是**整顆換**的
 （給了 `truncateArgs` 就要把它底下兩格都寫出來），而 `trigger` 那兩個數字的來歷寫在
 `DEFAULT_SUMMARIZATION` 的檔頭上——**換模型要重量一次**。
+
+**最後六列的 `config` 同樣是整份替換。** 沒重述的欄位回到 schema 的預設值，不是保留原本那一列
+寫的值——例如 `thread-title` 只寫 `maxBytes` 的話，`maxWords` 拿到的是預設的 5。`thread-title`、
+`browser-session` 與 `deliverable-files` 的預設（`5`／`40`、`30` 天、2 MiB／32 MiB／5000 行）都照
+dsh 的產品組裝；**`session-persistence` 的 `10` 毫秒沒有 dsh 的對應物**——dsh 的落盤後端只收根目錄
+與壓縮兩格，它的批次是呼叫端傳一整批而不是計時器攢批，所以這個旋鈕是我們自己的，形狀抄的是
+同一份清單上 core 那幾列；**`deliverable-files` 的 `maxLines` 是雙用的**——它同時是「不給 `limit` 查詢參數時
+每頁幾行」與「給了就不准超過幾行」，所以改那一格會同時動到兩個行為（dsh 同形）。
+`recursion-limit` 的 `100`
+**沒有 dsh 的對應物**（dsh 不跑 LangGraph），它是對著一次實測跑掉的執行校準出來的，換算成幾輪
+模型呼叫取決於這一次掛了哪些 middleware——預設組裝是 33 輪，再給 `--workspace` 是 32 輪。逐段
+實測見 `apps/harness/src/settings/recursion-limit.ts` 的檔頭。
 
 ### 看這台機器上疊出來的是什麼
 
