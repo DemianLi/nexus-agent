@@ -20,24 +20,31 @@
  * 上一個行程宣告的路徑，讀到的會是另一個工作區裡的同名檔，而畫面上跟讀對了一模一樣。**不猜、
  * 直接拒**不是新發明：`assertSameCwd` 對 `header.cwd === undefined` 的處置就是拒絕。
  *
+ * ## 預覽照 dsh 串流，整檔沒有大小上限
+ *
+ * dsh 的檔案本身沒有大小上限（`Config.maxBytes` 的檔頭：「The file itself has no size cap: a caller
+ * pages through it」），因為它的 `read` 從 `streamText` 切頁，讀到頁尾之後的第一個字元就停。預覽
+ * 照做（[#544](https://github.com/DemianLi/nexus-agent/issues/544)），見 {@link readDeliverablePage}。
+ * **`maxFileBytes` 只管下載**，同 dsh 的 `readAll`。
+ *
+ * 從前這裡登記過一條偏離：「整檔讀進來再切頁，所以超過 `maxFileBytes` 的文字檔預覽不了」。那條
+ * 偏離的理由是實作選擇，不是基礎建設表達不出來，#544 把它收掉了。
+ *
  * ## 與 dsh 的偏離
  *
- * 1. **預覽也吃 `maxFileBytes`。** dsh 的檔案本身沒有大小上限（`Config.maxBytes` 的檔頭：「The file
- *    itself has no size cap: a caller pages through it」），因為它 `streamText` 串流。我們這條路
- *    整檔讀進來再切頁，所以超過 `maxFileBytes` 的文字檔預覽不了，回 413。頁的上限照 dsh：
- *    **拒絕，不截斷**。
- * 2. **不回 `absolutePath`**，理由見 `@nexus/wire` 的 `DeliverableFileStat`。
- * 3. **`/conversation_history` 那層 overlay 不在這條路上**（`agent-factory.ts` 的 `foldRegistry`）：
+ * 1. **不回 `absolutePath`**，理由見 `@nexus/wire` 的 `DeliverableFileStat`。
+ * 2. **`/conversation_history` 那層 overlay 不在這條路上**（`agent-factory.ts` 的 `foldRegistry`）：
  *    模型宣告當下走的是折過的 backend，那一層會把 `/conversation_history` 底下的路徑導到別的地方；
  *    這條路直接解到工作區裡的同名檔。實務上 `present` 宣告的是工作區裡的產出，不是那層 overlay
  *    的內容，但這是一條真的分岔，登記在此。
- * 4. **不經基座的檔案 backend 讀**（#452 決議字面寫「自己建一個唯讀 backend」）：理由是量出來的
+ * 3. **不經基座的檔案 backend 讀**（#452 決議字面寫「自己建一個唯讀 backend」）：理由是量出來的
  *    ——基座那支會弄壞二進位檔，逐字見 {@link readDeliverableBytes}。偏離的是載體，決議給的紀律
  *    （錨由這條路由自己挑）原封不動。
  *
  * @module
  */
 
+import { createReadStream } from 'node:fs';
 import { lstat, open, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 
@@ -194,7 +201,8 @@ export async function locateDeliverableFile(
 }
 
 /**
- * 讀整份位元組，**吃整檔上限**。
+ * 讀整份位元組，**吃整檔上限**。只有下載走這裡，同 dsh 的 `readAll`；預覽串流，見
+ * {@link readDeliverablePage}。
  *
  * ## 為什麼不經基座的 `readRaw`
  *
@@ -257,8 +265,107 @@ export async function readDeliverableBytes(
   }
 }
 
+/** 一頁超過位元組上限時丟出來，在 {@link readDeliverablePage} 裡翻成拒絕。 */
+class PageTooLarge extends Error {}
+
+/** 讀到不是 UTF-8 的位元組時丟出來，在 {@link readDeliverablePage} 裡翻成 `not-text`。 */
+class NotUtf8 extends Error {}
+
 /**
- * 切一頁文字出來。
+ * 把檔案串流成 UTF-8 文字，**碰到不是 UTF-8 的位元組就停**，照 dsh 的 `streamText`（「decodes and
+ * rejects non-UTF-8 as it goes」）。
+ *
+ * 用 `TextDecoder` 而不是 `createReadStream` 的 `encoding`：後者把壞位元組換成 U+FFFD、不會拒；
+ * 而且 `TextDecoder` 預設吃掉開頭的 BOM，跟這條路從前整檔解碼時一樣。多位元組字元切在兩片之間
+ * 由 `stream: true` 接住。
+ *
+ * 呼叫端提早收手時（`for await` 的 `return`），底下那個串流跟著關掉，檔案其餘部分不讀。
+ *
+ * @param path - 已經通過閘門的那條絕對路徑。
+ * @throws {NotUtf8} 讀到的位元組不是 UTF-8。
+ */
+async function* streamUtf8(path: string): AsyncGenerator<string> {
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const decode = (chunk?: Buffer): string => {
+    try {
+      return chunk === undefined ? decoder.decode() : decoder.decode(chunk, { stream: true });
+    } catch {
+      throw new NotUtf8();
+    }
+  };
+  for await (const chunk of createReadStream(path)) yield decode(chunk as Buffer);
+  const tail = decode();
+  if (tail.length > 0) yield tail;
+}
+
+/** 從串流切出來的一頁，還沒掃 NUL。 */
+interface CutPage {
+  readonly text: string;
+  readonly lines: number;
+  readonly eof: boolean;
+}
+
+/**
+ * 從解碼過的串流切出第 `offset` 到 `offset + limit - 1` 行（0 起算），**讀到頁尾之後的第一個字元
+ * 就停**，檔案其餘部分不讀。照 dsh `workspace-files` 的 `cutPage`（`src/index.ts:103-158`，`ddefc45`），
+ * 差在 dsh 的行號 1 起算、我們 0 起算。
+ *
+ * **記憶體有兩道界限，兩道都是 dsh 的**：頁之前的行只數不留；頁內的位元組一超過 `maxBytes`
+ * 就當場丟出，不是先攢完再比——所以一條巨大的長行也撐不大記憶體。這台機器是多人共用的。
+ *
+ * **最後一行後面的換行不算一行**：串流結束時手上沒有半行，就不補一行空的。
+ *
+ * @param chunks - 解碼過的文字片段，見 {@link streamUtf8}。
+ * @param offset - 從第幾行起，0 起算。
+ * @param limit - 最多幾行。
+ * @param maxBytes - 一頁的位元組上限，含行與行之間的換行。
+ * @returns 那一頁。
+ * @throws {PageTooLarge} 這一頁超過 `maxBytes`。
+ */
+async function cutPage(
+  chunks: AsyncIterable<string>,
+  offset: number,
+  limit: number,
+  maxBytes: number,
+): Promise<CutPage> {
+  const last = offset + limit - 1;
+  const lines: string[] = [];
+  let current = '';
+  let bytes = 0;
+  let lineNumber = 0;
+  const admit = (size: number): void => {
+    bytes += size;
+    if (bytes > maxBytes) throw new PageTooLarge();
+  };
+  const complete = (): void => {
+    if (lines.length > 0) admit(1);
+    lines.push(current);
+    current = '';
+  };
+  for await (const chunk of chunks) {
+    let position = 0;
+    while (position < chunk.length) {
+      // 手上還有一個字元、而它已經在頁之後：這一頁不是最後一頁。
+      if (lineNumber > last) return { text: lines.join('\n'), lines: lines.length, eof: false };
+      const newline = chunk.indexOf('\n', position);
+      const segment = newline === -1 ? chunk.slice(position) : chunk.slice(position, newline);
+      if (lineNumber >= offset) {
+        admit(Buffer.byteLength(segment, 'utf8'));
+        current += segment;
+      }
+      if (newline === -1) break;
+      if (lineNumber >= offset) complete();
+      lineNumber += 1;
+      position = newline + 1;
+    }
+  }
+  // 走到這裡時手上只可能是頁內的半行：頁前的行沒留，頁後的字元在上面就回了。
+  if (current.length > 0) complete();
+  return { text: lines.join('\n'), lines: lines.length, eof: true };
+}
+
+/**
+ * 切一頁文字出來，**串流讀、只讀到這一頁為止**（#544）。
  *
  * `offset` 是行偏移（0 起算），`limit` 是這一頁最多幾行。**要超過 `limits.maxLines` 是拒絕**，
  * 不是給到上限為止——同 dsh 的 `maxLines`（「a request asking for more is refused」）。
@@ -269,8 +376,17 @@ export async function readDeliverableBytes(
  * 一起吃到設定值**：只接一處的話兩個方向都會壞——設定高於這裡寫死的上限，不帶 `limit` 的請求
  * 全部 400；設定低於那邊寫死的預設，一樣。
  *
+ * **整檔沒有大小上限**，`limits.maxFileBytes` 不在這條路上（見檔頭）。**頁的上限照 dsh：拒絕，
+ * 不截斷**——「a silently cut page reads as the whole page」。
+ *
+ * **不是 UTF-8 就是 `not-text`**，照 dsh；讀到哪裡判到哪裡，同下一段 NUL 的道理。
+ *
+ * **NUL 只掃這一頁**，照 dsh（「the NUL scan runs on the page itself」）。串流讀看不到還沒讀的部分，
+ * 所以一個後段才出現 NUL 的檔，前面的頁讀得到、有 NUL 的那一頁才回 `not-text`。從前整檔讀進來時
+ * 是整份掃，那個「第 0 頁說是文字、第 3 頁才說不是」的不一致因此是**照標準接受的**，不是疏漏。
+ *
  * @param located - 已經通過閘門的檔。
- * @param limits - 這台 server 的三個上限，見 {@link readDeliverableBytes}。
+ * @param limits - 這台 server 的三個上限，起動期從 `#settings/deliverable-files` 那一列解出來。
  * @param offset - 從第幾行起。
  * @param limit - 最多幾行。
  * @returns 一頁，或拒絕。
@@ -284,36 +400,29 @@ export async function readDeliverablePage(
   if (limit > limits.maxLines) {
     return refuse('bad-request', `limit 最多 ${limits.maxLines} 行，收到 ${limit}。`);
   }
-  const bytes = await readDeliverableBytes(located, limits);
-  if (bytes.kind === 'refused') return bytes;
-  const text = new TextDecoder().decode(bytes.value);
-  // **整份掃一次 NUL**，不是只掃這一頁：一個檔是不是文字是它自己的性質，不是某一頁的性質。
-  // dsh 掃的是頁，因為它串流、看不到還沒讀的部分；我們整檔都在手上，掃整份才不會讓第 0 頁
-  // 說「是文字」、第 3 頁才說「不是」。
-  if (text.includes(NUL)) {
-    return refuse('not-text', `讀不到：${located.stat.path} 含 NUL 位元組，不是 UTF-8 文字。`);
+  let page: CutPage;
+  try {
+    // 提早 return 會讓 `for await` 呼叫迭代器的 `return`，串流隨之關掉，檔案其餘部分不讀。
+    page = await cutPage(streamUtf8(located.target), offset, limit, limits.maxBytes);
+  } catch (error) {
+    if (error instanceof PageTooLarge) {
+      return refuse(
+        'too-large',
+        `讀不到：${located.stat.path} 從第 ${offset} 行起的這一頁超過 ${limits.maxBytes} 的上限。` +
+          '上限是拒絕，不是截斷——切短的一頁看起來就是整頁。',
+      );
+    }
+    if (error instanceof NotUtf8) {
+      return refuse('not-text', `讀不到：${located.stat.path} 不是 UTF-8 文字。`);
+    }
+    // 閘門與開檔之間檔案不見了、或換了形狀。
+    return refuse('not-found', `讀不到：${located.stat.path} 不在了。`);
   }
-  const all = text.split('\n');
-  // 最後一行後面的換行不算一行。
-  if (all.length > 1 && all[all.length - 1] === '') all.pop();
-  const page = all.slice(offset, offset + limit);
-  const pageText = page.join('\n');
-  const pageBytes = new TextEncoder().encode(pageText).length;
-  if (pageBytes > limits.maxBytes) {
-    return refuse(
-      'too-large',
-      `讀不到：${located.stat.path} 的這一頁有 ${pageBytes} 位元組，超過 ` +
-        `${limits.maxBytes} 的上限。上限是拒絕，不是截斷——切短的一頁看起來就是整頁。`,
-    );
+  if (page.text.includes(NUL)) {
+    return refuse('not-text', `讀不到：${located.stat.path} 含 NUL 位元組，不是 UTF-8 文字。`);
   }
   return {
     kind: 'ok',
-    value: {
-      ...located.stat,
-      offset,
-      text: pageText,
-      lines: page.length,
-      eof: offset + page.length >= all.length,
-    },
+    value: { ...located.stat, offset, text: page.text, lines: page.lines, eof: page.eof },
   };
 }
