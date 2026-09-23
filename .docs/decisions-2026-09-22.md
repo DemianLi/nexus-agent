@@ -197,6 +197,9 @@ Q15 把它的重開條件定成「由證據觸發，不由新工具觸發」。�
 - **plugin 目錄權限**：`plugin-config.ts:527`／`:548` 顯示 `assertPrivateFile` **只跑在 patch 檔上，
   不跑在它指到的模組上**。共用主機上，plugin 自己的目錄要同一套 0700/0600 紀律，
   **今天沒有任何東西會檢查**。
+  **已開卡 [#542](https://github.com/DemianLi/nexus-agent/issues/542)**（2026-09-23）。上面的行號對的是本檔的對照版本
+  `81902a7`，卡裡的對的是 `0b9820d`。這條跟 Jev 直接相關：Q5 定的載體（repo 外的 plugin、patch `insert`）
+  走的正是這條沒檢查的路。
 - **外送面**：dev 模式下對話會多一個外部接收方（NVIDIA ＋ 美西的 TypeSafe）。
 - **供應商風險**：Jev 一週大、閉源、單一供應商、早期存取。`LIVE_MODEL_ID` 的檔頭記著
   `gpt-oss-120b` 是**被下架逼著重選**的——上游斷過一次。
