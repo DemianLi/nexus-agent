@@ -196,7 +196,8 @@ describe('答案配到哪一張提問卡', () => {
     });
 
     it('截過的結果文字解不開——而且頭尾看起來還是完整的 JSON', () => {
-      // harness 超過 50000 bytes 時取頭尾各半、中間放一行說明（`apps/harness/src/tool-result-text.ts`）。
+      // harness 超過上限（`#settings/tool-text` 那一列的 `maxBytes`，預設 50000）時取頭尾各半、中間放一行說明
+      // （`apps/harness/src/tool-result-text.ts`）。這裡的長度與上限無關，只要形狀是截過的。
       const truncated = `${text.slice(0, 14)}\n…（中間 40000 個位元組沒有送出來，全文在會話日誌裡）\n${text.slice(-14)}`;
       // 粗略的頭尾檢查會放行，所以判準只能是真的 parse。
       expect(truncated.startsWith('{') && truncated.endsWith('}')).toBe(true);

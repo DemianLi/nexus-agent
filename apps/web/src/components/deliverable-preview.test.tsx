@@ -155,7 +155,7 @@ describe('交付檔預覽', () => {
     [400, '讀不到這個檔：座標不對'],
     [404, '這個檔已經讀不到了'],
     [413, '檔案太大，沒辦法在這裡預覽'],
-    [422, '二進位檔，沒辦法預覽'],
+    [422, '不是文字檔，沒辦法預覽'],
   ])('%i 畫的是「%s」，而且沒有重試鈕', async (status, said) => {
     mount(() => new Response('', { status }));
     open();
@@ -249,16 +249,24 @@ describe('接續瀏覽（#543）', () => {
     expect(offsetOf(requestedUrl(doFetch, 2))).toBe(3);
   });
 
-  it('後面那段太大：話講成「接下來這一段」，不是整個檔', async () => {
-    mount((url) =>
-      offsetOf(url) === 0 ? json(numbered(0, 3, false)) : new Response('', { status: 413 }),
-    );
-    open();
-    await screen.findByText('line-3');
-    nearBottom();
-    expect(await screen.findByText('接下來這一段太大，沒辦法在這裡預覽')).toBeTruthy();
-    expect(screen.queryByText('檔案太大，沒辦法在這裡預覽')).toBeNull();
-  });
+  // 422 也會讀到一半才出現（#552：server 只判它讀到的那一頁），所以跟 413 一樣要有「接下來」的講法。
+  it.each([
+    [413, '接下來這一段太大，沒辦法在這裡預覽', '檔案太大，沒辦法在這裡預覽'],
+    [422, '接下來這一段不是文字，沒辦法預覽', '不是文字檔，沒辦法預覽'],
+  ])(
+    '後面那段回 %i：話講成「接下來這一段」，不是整個檔；前面讀到的照畫',
+    async (status, midway, whole) => {
+      mount((url) =>
+        offsetOf(url) === 0 ? json(numbered(0, 3, false)) : new Response('', { status }),
+      );
+      open();
+      await screen.findByText('line-3');
+      nearBottom();
+      expect(await screen.findByText(midway)).toBeTruthy();
+      expect(screen.queryByText(whole)).toBeNull();
+      expect(screen.getByText('line-3')).toBeTruthy();
+    },
+  );
 
   it(`每 ${BLOCK_LINES} 行一塊 content-visibility 邊界，**不是一段一塊**`, async () => {
     // 一段一塊的話，「打開預覽」那一段正好在畫面裡，照付全額 —— 量到 1634ms，等於沒加。

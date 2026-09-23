@@ -204,6 +204,7 @@ v0.5.10 的預覽（#548）有一個版面 bug：**行號的位數跟最後一�
   [#544](https://github.com/DemianLi/nexus-agent/issues/544)（`apps/harness`）。server 那側已由 #552（串流分頁，
   整檔不再有大小上限）與 #553（位元組窗口）做完；web 要接的部分在
   [#555](https://github.com/DemianLi/nexus-agent/issues/555)。
-- 長行的畫面成本、捲軸跳動、讀到一半才出現的 422 —— [#555](https://github.com/DemianLi/nexus-agent/issues/555)。
+- 長行的畫面成本、捲軸跳動 —— [#555](https://github.com/DemianLi/nexus-agent/issues/555)（第二張 PR；設計定案在
+  那張卡的留言裡）。讀到一半才出現的 422 的講法由它的第一張 PR 補上。
 - 工作區是乾淨 git repo 時，輪進行中出現的未追蹤檔沒進 `workspace/changes` 摘要，只有 `write_file` 寫的
   那個進了。沒排除「快照根本沒跑」這個解釋。記在 #544 最後，沒開卡。
