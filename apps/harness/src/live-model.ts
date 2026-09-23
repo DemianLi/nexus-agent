@@ -2,6 +2,8 @@ import { resolve } from 'node:path';
 import { ContextOverflowError } from '@langchain/core/errors';
 import { ChatOpenAI } from '@langchain/openai';
 
+import type { LiveModelConfig } from './settings/live-model.js';
+
 /**
  * Phase 0 的真實供應商接線（issue #31）。
  *
@@ -9,8 +11,14 @@ import { ChatOpenAI } from '@langchain/openai';
  * （`@langchain/nvidia-ai-endpoints` 只有 Python 版），所以用 `@langchain/openai`
  * 指過去。這裡驗的是接線 —— tool call 的參數回得來、streaming 的事件形狀對得上 ——
  * 不是模型品質；供應商比較在 Phase 2 與 Phase 5（見開發計劃第 7 節決策點 2）。
+ *
+ * ## 這個檔裡的 `DEFAULT_LIVE_*` 都只是**預設值**
+ *
+ * 五個連線值由清單上 `live-model` 那一列講（[#545](https://github.com/DemianLi/nexus-agent/issues/545)，
+ * `settings/live-model.ts`），這裡的常數是那一列的 schema 預設。**測量與理由留在各常數的檔頭**——
+ * 部署要改其中一個之前，該讀的就是那一段。
  */
-export const LIVE_BASE_URL = 'https://integrate.api.nvidia.com/v1';
+export const DEFAULT_LIVE_BASE_URL = 'https://integrate.api.nvidia.com/v1';
 
 /**
  * NVIDIA 閘道上的預設模型 id。
@@ -24,7 +32,7 @@ export const LIVE_BASE_URL = 'https://integrate.api.nvidia.com/v1';
  * 重選照原本的方法走兩步。**第一步是盤點**（方法在 [`eval/tiers.ts`](./eval/tiers.ts) 檔頭）：
  * `GET /models` 列 **81** 個，逐一送一個帶 `tools` 的請求，回得出 `finish_reason: tool_calls`
  * 的只有 **9** 個（前一輪是 16 個，四個舊成員現在三次探測全逾時）。這一輪多加一道**免費的
- * 硬門檻**：吃不吃得下 {@link LIVE_MAX_OUTPUT_TOKENS} —— 我們每一次呼叫都送它，輸出上限比它
+ * 硬門檻**：吃不吃得下 {@link DEFAULT_LIVE_MAX_OUTPUT_TOKENS} —— 我們每一次呼叫都送它，輸出上限比它
  * 小的模型會**每一次**都失敗，而入場探測用的 512 看不出這件事。
  *
  * **第二步是決選四個跑基準任務**（七題 × 3 次 = 84 次執行，零限流、零 `rejected`）：
@@ -66,10 +74,13 @@ export const LIVE_BASE_URL = 'https://integrate.api.nvidia.com/v1';
  * `survey.ts` 的候選清單，也沒有自己去接第二個端點。完整盤點見
  * [`.docs/model-inventory.md`](../../../.docs/model-inventory.md)。
  *
- * 這是**預設**的 id：`cli:live` / `serve:live` / `spike:live` 三條路走這個常數，
- * eval 的尺寸比較則把各道階梯的 id 逐一傳進 {@link createLiveModel}。
+ * 這是**預設**的 id：`cli:live` / `serve:live` 走 `live-model` 那一列（出貨值與它相同），
+ * `spike:live` 直接吃 schema 預設，eval 的尺寸比較則把各道階梯的 id 逐一傳進 {@link createLiveModel}。
+ *
+ * **換它之前**：這顆是拿「吃不吃得下 {@link DEFAULT_LIVE_MAX_OUTPUT_TOKENS}」當淘汰門檻選出來的，
+ * 兩個是綁著的（`settings/live-model.ts` 的檔頭）。
  */
-export const LIVE_MODEL_ID = 'nvidia/nemotron-3-super-120b-a12b';
+export const DEFAULT_LIVE_MODEL_ID = 'nvidia/nemotron-3-super-120b-a12b';
 
 /** 環境變數名。刻意不叫 `OPENAI_API_KEY`（`@langchain/openai` 的預設），免得這把 key 是誰的變模糊。 */
 export const LIVE_API_KEY_ENV = 'NVIDIA_API_KEY';
@@ -82,7 +93,7 @@ export const LIVE_API_KEY_ENV = 'NVIDIA_API_KEY';
  * 而不是「那一格失敗」。90 秒是量出來的：實測最慢的成功回應是 43 秒
  * （`meta/muse-glimmer-30b`），掛住的那兩個在 90 秒仍是零位元組。
  */
-export const LIVE_TIMEOUT_MS = 90_000;
+export const DEFAULT_LIVE_TIMEOUT_MS = 90_000;
 
 /**
  * 被端點限流時，最多重試幾次。
@@ -106,7 +117,7 @@ export const LIVE_TIMEOUT_MS = 90_000;
  * `callWithRetries` 裡。所以這裡只釘得住次數，釘不住每次等多久；要對齊 dsh 的有界退避
  * 得自己包一層 caller，那是更大的一張工。
  */
-export const LIVE_MAX_RETRIES = 6;
+export const DEFAULT_LIVE_MAX_RETRIES = 6;
 
 /**
  * 端點限流（HTTP 429）的判定。
@@ -146,8 +157,9 @@ export function isRetryableRateLimit(error: unknown): boolean {
  *
  * **它是正數，而那是 {@link isDerivedContextOverflow} 唯一的前提。** 抽成常數不是為了
  * 好改，是為了讓那個前提在型別旁邊看得見：改成會產生負值或零的東西，那個判別式當場失效。
+ * 可以設定之後（#545），守住這個前提的是 `live-model` 那一列 schema 的下限 1。
  */
-export const LIVE_MAX_OUTPUT_TOKENS = 16_384;
+export const DEFAULT_LIVE_MAX_OUTPUT_TOKENS = 16_384;
 
 /** `(parameter=max_tokens, value=-46771)`／`got -46771` 裡那個數字。 */
 const DERIVED_VALUE = /\(parameter=max_tokens,\s*value=(-?\d+)\)|got\s+(-?\d+)/;
@@ -176,7 +188,7 @@ const DERIVED_VALUE = /\(parameter=max_tokens,\s*value=(-?\d+)\)|got\s+(-?\d+)/;
  *
  * ## 它對**預設模型**是備而不用的，而那不是拔掉它的理由
  *
- * 2026-09-04 換掉預設之後（見 {@link LIVE_MODEL_ID}），這條路在預設模型上**逼不出來** ——
+ * 2026-09-04 換掉預設之後（見 {@link DEFAULT_LIVE_MODEL_ID}），這條路在預設模型上**逼不出來** ——
  * `nvidia/nemotron-3-super-120b-a12b` 吃到 700,045 token 都還是 `200`。留著是因為它守的不是
  * 預設那一條路：eval 把 `openai/gpt-oss-20b` 逐一傳進 {@link createLiveModel}，而那一顆
  * **131,007 就滿了**，滿了就是這個 body。**換一顆預設就換一個窗口**，而這個判別式跟預設是誰無關。
@@ -203,7 +215,8 @@ const DERIVED_VALUE = /\(parameter=max_tokens,\s*value=(-?\d+)\)|got\s+(-?\d+)/;
  *
  * 實測：短提示詞 ＋ `max_tokens: -46771`（一個真正的 client bug）回的 body 與真的溢出
  * **逐位元組相同**——單看 body 是**不可分辨**的。分得開的是請求那一側：
- * {@link createLiveModel} 建的 client **恆定送 {@link LIVE_MAX_OUTPUT_TOKENS}（正數）**，
+ * {@link createLiveModel} 建的 client **恆定送一個正數的 `maxOutputTokens`**（預設
+ * {@link DEFAULT_LIVE_MAX_OUTPUT_TOKENS}，可設定之後由 schema 的下限 1 保證仍是正數），
  * 所以從這個 client 收到的負值只可能是伺服器自己算出來的。
  *
  * **前提由工廠保證，判別式就掛在工廠上**——這也是它不放進 `@nexus/core` 的理由：那裡沒有
@@ -532,11 +545,13 @@ export function withInbandStreamErrors(baseFetch: typeof fetch = fetch): typeof 
  * key **只從環境變數讀**，缺少時直接失敗，沒有預設值也不 fallback
  * （[docs/standards.md](../../../docs/standards.md) 的秘密處理規則）。
  *
- * @param modelId - 要指到哪個模型。省略即 {@link LIVE_MODEL_ID}；尺寸比較把各道階梯的
- *   id 逐一傳進來（見 [`eval/tiers.ts`](./eval/tiers.ts)）。**除了這個參數，取樣設定、
- *   逾時、金鑰來源完全相同** —— 否則比的不是模型是設定。
+ * @param config - 五個連線值（`settings/live-model.ts`）。**必填，沒有預設參數**（#545）：
+ *   一個預設參數會讓「呼叫端忘了傳」跟「設定就是這個」長得一模一樣。產品路徑（CLI、serve）
+ *   傳起動期從清單解出來的那一份；eval 與 spike 手上沒有清單，在自己的入口用 schema 預設，
+ *   eval 只換 `modelId`（見 [`eval/tiers.ts`](./eval/tiers.ts)）——**除了模型 id，取樣設定、
+ *   逾時、金鑰來源完全相同**，否則比的不是模型是設定。
  */
-export function createLiveModel(modelId: string = LIVE_MODEL_ID): ChatOpenAI {
+export function createLiveModel(config: LiveModelConfig): ChatOpenAI {
   const apiKey = process.env[LIVE_API_KEY_ENV];
   if (!apiKey) {
     throw new Error(
@@ -548,14 +563,14 @@ export function createLiveModel(modelId: string = LIVE_MODEL_ID): ChatOpenAI {
 
   return new ChatOpenAI({
     apiKey,
-    model: modelId,
+    model: config.modelId,
     // `fetch` 是 #516 那一層：串流內回報的錯誤翻成 HTTP 錯誤回應，才進得了重試射程。
-    configuration: { baseURL: LIVE_BASE_URL, fetch: withInbandStreamErrors() },
+    configuration: { baseURL: config.baseUrl, fetch: withInbandStreamErrors() },
     temperature: 1,
     topP: 0.95,
-    maxTokens: LIVE_MAX_OUTPUT_TOKENS,
-    timeout: LIVE_TIMEOUT_MS,
-    maxRetries: LIVE_MAX_RETRIES,
+    maxTokens: config.maxOutputTokens,
+    timeout: config.timeoutMs,
+    maxRetries: config.maxRetries,
     onFailedAttempt: classifyFailedAttempt,
   });
 }
@@ -568,7 +583,7 @@ export function createLiveModel(modelId: string = LIVE_MODEL_ID): ChatOpenAI {
  * {@link STATUS_NO_RETRY} 是 `@langchain/core` 那份的複本，成員是
  * `400/401/402/403/404/405/406/407/409/413` —— **`410` 不在裡面**。所以一顆下架的模型
  * 今天會走到 {@link retryDecision} 最後那個 `return 'retry'`，被重試滿
- * {@link LIVE_MAX_RETRIES} 次。**實測 2026-09-04：`openai/gpt-oss-120b` 的 410 花了
+ * {@link DEFAULT_LIVE_MAX_RETRIES} 次。**實測 2026-09-04：`openai/gpt-oss-120b` 的 410 花了
  * 106.7 秒才浮出來**，而它第一次回應就已經確定了。
  *
  * ## 這裡沒有破「認碼不解析訊息」那條規矩
@@ -601,7 +616,7 @@ export function modelGoneMessage(error: unknown): string | undefined {
         : '端點沒有給 detail —— 只說了 410。';
     return (
       `模型已下架（HTTP 410），重試無效：${said} ` +
-      '換掉 LIVE_MODEL_ID（apps/harness/src/live-model.ts）；' +
+      '在設定裡換掉 `live-model` 那一列的 `modelId`（出貨值在 apps/harness/cordis.yml）；' +
       '重新盤點端點上叫得動哪些模型的方法，在 src/eval/tiers.ts 的檔頭。'
     );
   }

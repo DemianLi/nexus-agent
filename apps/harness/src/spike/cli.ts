@@ -1,6 +1,6 @@
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { loadLiveEnvIfNeeded, LIVE_MODEL_ID } from '../live-model.js';
+import { loadLiveEnvIfNeeded, DEFAULT_LIVE_MODEL_ID } from '../live-model.js';
 import { createLiveSpikeAgent, createSpikeAgent } from './spike-agent.js';
 
 /**
@@ -26,7 +26,7 @@ async function main(): Promise<void> {
 
   const { agent } = live ? await createLiveSpikeAgent() : await createSpikeAgent();
 
-  console.log(`模型：${live ? LIVE_MODEL_ID : '假模型（ScriptedChatModel）'}`);
+  console.log(`模型：${live ? DEFAULT_LIVE_MODEL_ID : '假模型（ScriptedChatModel）'}`);
   console.log(`> ${prompt}\n`);
 
   let files: Record<string, unknown> = {};

@@ -40,6 +40,7 @@ import { LoopingChatModel } from './looping-model.js';
 import { DEFAULT_RECURSION_LIMIT } from './settings/recursion-limit.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { createLiveModel, LIVE_API_KEY_ENV } from './live-model.js';
+import { liveModelConfigSchema } from './settings/live-model.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 
@@ -569,7 +570,7 @@ describe('read-only 的逃生口：摘要器的 backend 是獨立的一格', () 
  *
  * 調研見 [#142](https://github.com/DemianLi/nexus-agent/issues/142)。基座只有兩組預設
  * （`computeSummarizationDefaults`）：模型的 `profile.maxInputTokens` 是數字就用比例，
- * 否則退到固定值。**我們的模型退到固定值** —— `LIVE_MODEL_ID` 是 `openai/gpt-oss-120b`，
+ * 否則退到固定值。**我們的模型退到固定值** —— `DEFAULT_LIVE_MODEL_ID` 是 `openai/gpt-oss-120b`，
  * 而這個字串在整個 `node_modules/.pnpm/` 裡零命中，沒有任何 profile 表認得它。
  *
  * 缺了那個數字之後，兩個讀它的地方各自決定怎麼退，而且退向相反：
@@ -868,7 +869,9 @@ describe('正式路徑上的門檻是我們選的', () => {
     const savedKey = process.env[LIVE_API_KEY_ENV];
     process.env[LIVE_API_KEY_ENV] = 'test-key-not-used';
     try {
-      const defaults = computeSummarizationDefaults(createLiveModel());
+      const defaults = computeSummarizationDefaults(
+        createLiveModel(liveModelConfigSchema.parse({})),
+      );
       // 比例形式的話這裡是 'fraction'。
       expect(defaults.trigger.type).toBe('tokens');
       expect(defaults.keep.type).toBe('messages');

@@ -19,7 +19,8 @@
  * **這裡不設 `LANGSMITH_TRACING`，也不要在跑它的 shell 裡設。** 這支跑的是真的 agent，
  * 基準任務的題目與工具參數會跟著 trace 一起出境（見 `eval.test.ts` 檔頭量到的第二個寄件人）。
  */
-import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MAX_RETRIES } from '../live-model.js';
+import { createLiveModel, loadLiveEnvIfNeeded, DEFAULT_LIVE_MAX_RETRIES } from '../live-model.js';
+import { liveModelConfigSchema } from '../settings/live-model.js';
 import {
   compareTiers,
   summarize,
@@ -130,7 +131,9 @@ async function runAll(
   cases: readonly BenchmarkCase[],
 ): Promise<void> {
   const reports = await compareTiers(models, {
-    createModel: (modelId) => createLiveModel(modelId),
+    // **只換模型 id**（#545）：其餘四格是 schema 預設，不跟任何一台部署的設定走——量的是出貨
+    // 那一組設定底下的模型。見 `settings/live-model.ts` 的「eval 不跟這一列走」。
+    createModel: (modelId) => createLiveModel(liveModelConfigSchema.parse({ modelId })),
     samples,
     cases,
     onOutcome: printOutcome,
@@ -175,7 +178,7 @@ async function main(argv: readonly string[]): Promise<void> {
   }
   if (throttledHits > 0) {
     console.log(
-      `\n注意：有 ${throttledHits} 次執行在重試 ${LIVE_MAX_RETRIES} 次之後仍然被限流（throttled）。` +
+      `\n注意：有 ${throttledHits} 次執行在重試 ${DEFAULT_LIVE_MAX_RETRIES} 次之後仍然被限流（throttled）。` +
         `**那是我們打太快，不是模型的問題** —— 它跟端點的 4xx 一樣不進平均，但要做的事是` +
         `跑慢一點或調高重試次數，不是換 id。實測這個端點約 120k 的每分鐘 token 配額，` +
         `觸發後十幾秒就恢復。`,
