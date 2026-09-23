@@ -90,7 +90,9 @@ export interface DeliverableFilePage extends DeliverableFileStat {
  *
  * 錯誤協定照隔壁 `changes` 兩條（裸 status ＋純文字 ＋`cache-control: no-store`），而狀態碼**要分得出
  * 前端該做什麼**：400 座標不對；404 這台 server 錨不住這顆座標、或檔不在、或不是一般檔；
- * 413 超過上限；**422 含 NUL 位元組**（＝不是文字，前端改提供下載）。
+ * 413 **這一頁**超過頁的位元組上限（整檔沒有上限，串流分頁，
+ * [#544](https://github.com/DemianLi/nexus-agent/issues/544)）；**422 不是文字**——這一頁含 NUL 位元組、
+ * 或讀到不是 UTF-8 的位元組，照 dsh（前端改提供下載）。
  *
  * **不是 415**：那個碼這條線上已經在講「請求沒帶 `content-type: application/json`」，壓在一起
  * 前端就分不出「我忘了帶 header」與「這個檔是二進位」。
