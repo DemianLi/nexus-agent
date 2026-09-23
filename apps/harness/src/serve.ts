@@ -6,10 +6,10 @@
  *
  * **組裝完全沿用 CLI 的那一份**（`createCliAgent`）：同一份預設 plugin 清單、同一個
  * `--live` 開關、同一個 `--workspace`。理由是這裡沒有新的組裝決定要做——「web 要跑
- * 哪些 plugin」與「CLI 要跑哪些 plugin」是同一個問題，而它的答案等**外部**設定機制
- * 才有地方講（[#46](https://github.com/DemianLi/nexus-agent/issues/46)；
- * [#104](https://github.com/DemianLi/nexus-agent/issues/104) 給的 `id` 與 `disabled`
- * 都寫在清單的程式碼裡，換不了「跑哪一份清單」這件事）。
+ * 哪些 plugin」與「CLI 要跑哪些 plugin」是同一個問題，而它的答案住在同一份清單上：出貨的
+ * `cordis.yml`，疊上 `$NEXUS_AGENT_HOME/cordis.patch.yml` 與 `--patch`
+ * （[#454](https://github.com/DemianLi/nexus-agent/issues/454)、
+ * [#455](https://github.com/DemianLi/nexus-agent/issues/455)）。
  *
  * **一個 thread 一個 agent，關掉 server 時一起清。** `createNexusAgent` 回的
  * `dispose` 在這裡才真的有意義——MCP plugin 底下是 stdio 子行程，而這是一個長命的
@@ -51,7 +51,7 @@ import {
 } from '@nexus/core';
 import { assertSameCwd, assertSameWorkspaceRoot } from './resume-guards.js';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
-import { LIVE_MODEL_ID } from './live-model.js';
+import { DEFAULT_LIVE_MODEL_ID } from './live-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import type { SandboxMode } from './contained-backend.js';
 import { BrowserAuth } from './browser-auth.js';
@@ -65,6 +65,7 @@ import type { WireServer } from './wire-server.js';
 import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js';
 import { browserSessionPlugin } from './settings/browser-session.js';
 import { deliverableFilesPlugin } from './settings/deliverable-files.js';
+import { liveModelPlugin } from './settings/live-model.js';
 import { startupSetting } from './settings/startup.js';
 import { toolTextPlugin } from './settings/tool-text.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
@@ -94,7 +95,7 @@ const USAGE = `用法：
   pnpm --filter @nexus/harness run serve [選項]
 
 選項：
-  --live               換成真實供應商（${LIVE_MODEL_ID}），需要 API key
+  --live               換成真實供應商（預設 ${DEFAULT_LIVE_MODEL_ID}），需要 API key
   --patch <file>       把這個 patch 檔疊在出貨的 cordis.yml 上（可以給多次，後面的蓋前面的）
                        另一層是 $NEXUS_AGENT_HOME/cordis.patch.yml，它排在 --patch 之前
   --dump-config        把三層疊完的 plugin 設定印出來就退出（不開 server、不載 plugin）
@@ -303,6 +304,10 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // 一段工具結果文字放上線的上限（#538）。**同樣是 server 的性質**：兩個消費點（即時的
   // `ThreadPump`、重播的 `historyPage`）都住在 `createWireHandler` 的閉包底下，一個 server 一次。
   const toolTextLimits = startupSetting(plugins, toolTextPlugin);
+  // 真實供應商的五個連線值（#545）。**model 是一條 thread 一顆**（下面每次 `createCliAgent` 各建
+  // 一顆），但設定是 server 的性質：解在這裡，設定寫壞的話在 server 起來之前就失敗，而不是等到
+  // 第一條 thread；啟動時印的模型名也從這一份來。
+  const liveModel = startupSetting(plugins, liveModelPlugin);
   const auth = new BrowserAuth(
     await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)),
     browserSession.maxAgeDays,
@@ -396,7 +401,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
           resumedSandbox === undefined ? invocation : { ...invocation, sandbox: resumedSandbox };
         // 每一輪改了哪些檔（#443）：只有 serve 開，見 `createCliAgent` 那一格。
         built = await createCliAgent(
-          { ...effective, workspaceChanges: true },
+          { ...effective, workspaceChanges: true, liveModel },
           plugins,
           options.cwd,
         );
@@ -530,7 +535,8 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // 只印這一次，別處不重複。
   const authenticatedUrl = auth.authenticatedUrl(server.url);
   log(`nexus-agent 在 ${authenticatedUrl}`);
-  log(`模型：${invocation.live ? LIVE_MODEL_ID : '假模型（ScriptedChatModel）'}`);
+  // 印的是這一次真的用的那一個（#545），不是預設值。
+  log(`模型：${invocation.live ? liveModel.modelId : '假模型（ScriptedChatModel）'}`);
   log(`plugin：${plugins.map((entry) => entry.plugin.name).join('、') || '（空）'}`);
   log(
     existsSync(join(webDist, 'index.html'))

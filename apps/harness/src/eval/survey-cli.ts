@@ -16,7 +16,8 @@
  * 題目與工具參數會跟著 trace 出境。
  */
 
-import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MAX_RETRIES } from '../live-model.js';
+import { createLiveModel, loadLiveEnvIfNeeded, DEFAULT_LIVE_MAX_RETRIES } from '../live-model.js';
+import { liveModelConfigSchema } from '../settings/live-model.js';
 import { parseCases, parseModels, parseSamples } from './cli-args.js';
 import {
   compareTiers,
@@ -160,7 +161,9 @@ async function main(argv: readonly string[]): Promise<void> {
   console.log('\n───── 逐次執行 ─────');
 
   const reports = await compareTiers<SurveyModel>(models, {
-    createModel: (modelId) => createLiveModel(modelId),
+    // **只換模型 id**（#545）：其餘四格是 schema 預設，不跟任何一台部署的設定走——量的是出貨
+    // 那一組設定底下的模型。見 `settings/live-model.ts` 的「eval 不跟這一列走」。
+    createModel: (modelId) => createLiveModel(liveModelConfigSchema.parse({ modelId })),
     samples,
     cases,
     onOutcome: printOutcome,
@@ -181,7 +184,7 @@ async function main(argv: readonly string[]): Promise<void> {
   }
   if (throttledHits > 0) {
     console.log(
-      `\n注意：有 ${throttledHits} 次執行在重試 ${LIVE_MAX_RETRIES} 次之後仍然被限流（throttled）。` +
+      `\n注意：有 ${throttledHits} 次執行在重試 ${DEFAULT_LIVE_MAX_RETRIES} 次之後仍然被限流（throttled）。` +
         `**那不是分數，是沒有資料** —— 先看每一列的 n，被限流多的那幾列 n 會很小，` +
         `而小 n 的 1.00 跟大 n 的 1.00 不是同一個東西。\n` +
         `  2026-08-29 那一輪量到的是：47 次 throttled 全部集中在 3 個候選（其餘 11 個零），` +

@@ -112,8 +112,8 @@ export type ConfigEntry = z.infer<typeof entrySchema>;
  * plugin，而且把它從兩個插入點拿掉的突變量到 **126 條紅**。沒有條目，就沒有「關得掉」
  * 這個問題要擋。
  *
- * **名單上另外四列是只講設定的條目**（`#settings/*`，
- * [#529](https://github.com/DemianLi/nexus-agent/issues/529)）。理由跟核准閘門同形但不同源：
+ * **名單上另外七列是只講設定的條目**——六列 `#settings/*` 加上 `@nexus/core/session-persistence`
+ * （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。理由跟核准閘門同形但不同源：
  * 它們**不裝任何東西**，所以「關掉」對它們沒有意義。名單擋的正是那個誤會。
  *
  * **理由跟名字綁在同一張表上，不共用一段文字。** 從前這裡是一個 `Set`、訊息只有一段，而那段
@@ -157,6 +157,12 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
     '這一列不裝任何東西，只講一段工具結果文字放上線的位元組上限。關掉它不會讓工具結果不再被截' +
       '——`startupSetting` 把關掉的那一列當成沒有那一列，上限於是回到 schema 的預設，' +
       '送出去的位元組一個都不變，只會讓這份設定讀起來像關掉了什麼。',
+  ],
+  [
+    '#settings/live-model',
+    '這一列不裝任何東西，只講真實供應商的五個連線值（端點、模型 id、輸出上限、逾時、重試次數）。' +
+      '關掉它不會讓 `--live` 不再有這些值——`startupSetting` 把關掉的那一列當成沒有那一列，' +
+      '五個值於是回到 schema 的預設，連的還是同一個端點、同一顆模型，只會讓這份設定讀起來像關掉了什麼。',
   ],
   [
     '#settings/recursion-limit',

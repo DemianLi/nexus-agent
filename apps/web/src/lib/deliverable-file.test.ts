@@ -134,6 +134,16 @@ describe('交付檔的讀取', () => {
     expect(store.read(1, 0, 0)).toMatchObject({ version: 'v1', offset: 0 });
   });
 
+  it('revision 每發布一次就加一，讀過的不再發所以不動（#543）', async () => {
+    const { store } = storeWith(() => json(PAGE));
+    const before = store.revision();
+    await load(store);
+    // 兩次發布：'loading'，然後那一頁。
+    expect(store.revision()).toBe(before + 2);
+    store.load(1, 0, 0);
+    expect(store.revision()).toBe(before + 2);
+  });
+
   it('別的檔的頁不受 version 汰換影響', async () => {
     let version = 'v1';
     const { store } = storeWith(() => json({ ...PAGE, version }));

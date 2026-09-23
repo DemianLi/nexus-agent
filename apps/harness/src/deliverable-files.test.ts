@@ -28,8 +28,13 @@ import type { SessionEvent, SessionRegistry } from '@nexus/core';
 import { createHostServicesPlugin } from '@nexus/core';
 import { PRESENT_TOOL_NAME } from '@nexus/plugin-present';
 import { createSandboxPolicyPlugin, SandboxModeController } from '@nexus/plugin-sandbox-policy';
-import type { DeliverableFilePage } from '@nexus/wire';
-import { createWireClient, deliverableDownloadPath, deliverableFilePath } from '@nexus/wire';
+import type { DeliverableFileBytes, DeliverableFilePage } from '@nexus/wire';
+import {
+  createWireClient,
+  deliverableBytesPath,
+  deliverableDownloadPath,
+  deliverableFilePath,
+} from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
@@ -266,14 +271,27 @@ describe('預覽', () => {
       }
     });
 
-    it('整檔上限也從設定來：比檔案小就拒，而且講得出是幾', async () => {
+    /**
+     * **翻面過的絆索**（#544）：原本這一條斷言的是**預覽**回 413。預覽改成串流、整檔不設上限之後
+     * （照 dsh：「The file itself has no size cap: a caller pages through it」），那一格只剩下載在讀
+     * ——同 dsh 的 `readAll`。所以兩臂都要釘：同一個上限底下，預覽讀得到、下載拒。
+     */
+    it('整檔上限只管下載：預覽照樣讀得到，下載拒而且講得出是幾', async () => {
       const outcome = await present({ 'a.md': twenty }, ['a.md'], {
         limits: deliverableFilesConfigSchema.parse({ maxFileBytes: 10 }),
       });
       try {
-        const refused = await outcome.get(filePath(`seq=${outcome.seq}&index=0`));
-        expect(refused.status).toBe(413);
-        expect(await refused.text()).toContain('超過 10 的上限');
+        const preview = await outcome.get(filePath(`seq=${outcome.seq}&index=0`));
+        expect(preview.status).toBe(200);
+        const page = (await preview.json()) as DeliverableFilePage;
+        // 前提：檔案真的比上限大，不然上面那個 200 什麼都沒證明。
+        expect(page.bytes).toBeGreaterThan(10);
+        expect(page.lines).toBe(20);
+        expect(page.eof).toBe(true);
+
+        const download = await outcome.get(downloadPath(`seq=${outcome.seq}&index=0`));
+        expect(download.status).toBe(413);
+        expect(await download.text()).toContain('超過 10 的上限');
       } finally {
         await outcome.close();
       }
@@ -392,6 +410,130 @@ describe('預覽', () => {
     } finally {
       await outcome.close();
     }
+  });
+
+  /**
+   * **串流切頁**（#544）。底下幾條的檔案都比 `createReadStream` 一片的 64 KiB 大，行、字元、
+   * NUL 都刻意放在片與片的邊界兩側——只用小檔的話，整份一片就讀完，串流那幾條路一條都沒被問到。
+   */
+  describe('串流切頁', () => {
+    /** 200 000 個位元組的一行，跨好幾片。 */
+    const long = 'y'.repeat(200_000);
+
+    it('讀到這一頁就停：頁後 200 KB 才出現的 NUL 不會讓第一頁讀不到', async () => {
+      // 整檔讀進來再掃 NUL 的舊寫法，這一條是 422。
+      const outcome = await present({ 'a.md': `first\n${long}\n\u0000\n` }, ['a.md']);
+      try {
+        const response = await outcome.get(filePath(`seq=${outcome.seq}&index=0&limit=1`));
+        expect(response.status).toBe(200);
+        const page = (await response.json()) as DeliverableFilePage;
+        expect(page.text).toBe('first');
+        expect(page.eof).toBe(false);
+      } finally {
+        await outcome.close();
+      }
+    });
+
+    /**
+     * **行為變了，而且是照標準變的**：NUL 只掃這一頁，照 dsh（「the NUL scan runs on the page
+     * itself」）。從前整檔掃，前段那一頁也回 422。
+     */
+    it('NUL 只掃這一頁：前段讀得到，有 NUL 的那一頁才 422', async () => {
+      const outcome = await present({ 'a.md': 'a\nb\n\u0000\n' }, ['a.md']);
+      try {
+        const before = await outcome.get(filePath(`seq=${outcome.seq}&index=0&limit=2`));
+        expect(before.status).toBe(200);
+        expect(((await before.json()) as DeliverableFilePage).text).toBe('a\nb');
+        const at = await outcome.get(filePath(`seq=${outcome.seq}&index=0&offset=2&limit=1`));
+        expect(at.status).toBe(422);
+      } finally {
+        await outcome.close();
+      }
+    });
+
+    it('不是 UTF-8 就是 422，照 dsh 的 streamText——即使沒有 NUL', async () => {
+      const bytes = new Uint8Array([...new TextEncoder().encode('hello\n'), 0xff, 0xfe, 0x0a]);
+      const outcome = await present({ 'latin.txt': bytes }, ['latin.txt']);
+      try {
+        const response = await outcome.get(filePath(`seq=${outcome.seq}&index=0`));
+        expect(response.status).toBe(422);
+        expect(await response.text()).toContain('不是 UTF-8');
+      } finally {
+        await outcome.close();
+      }
+    });
+
+    it('頁前那一條長行只數不留：它自己超過頁上限，後面那一行照樣讀得到', async () => {
+      const outcome = await present({ 'a.md': `${long}\nok\n` }, ['a.md'], {
+        limits: deliverableFilesConfigSchema.parse({ maxBytes: 64 }),
+      });
+      try {
+        const after = await outcome.get(filePath(`seq=${outcome.seq}&index=0&offset=1&limit=1`));
+        expect(after.status).toBe(200);
+        const page = (await after.json()) as DeliverableFilePage;
+        expect(page.text).toBe('ok');
+        expect(page.eof).toBe(true);
+        // 對照組：要的就是那一條長行，那就是拒——頁的上限仍然是拒絕，不是截斷。
+        const itself = await outcome.get(filePath(`seq=${outcome.seq}&index=0&offset=0&limit=1`));
+        expect(itself.status).toBe(413);
+      } finally {
+        await outcome.close();
+      }
+    });
+
+    it('多位元組字元切在兩片之間也解得對', async () => {
+      // 150 000 個位元組；65 536 不是 3 的倍數，所以第一片的邊界一定切在某個字的中間。
+      const han = '中'.repeat(50_000);
+      const outcome = await present({ 'han.md': `${han}\n` }, ['han.md']);
+      try {
+        const page = (await (
+          await outcome.get(filePath(`seq=${outcome.seq}&index=0`))
+        ).json()) as DeliverableFilePage;
+        expect(page.text).toBe(han);
+        expect(page.lines).toBe(1);
+      } finally {
+        await outcome.close();
+      }
+    });
+
+    it('翻到最後一頁：兩萬行、兩百多 KB，最後十行是對的，eof 只在那一頁', async () => {
+      const text = `${Array.from({ length: 20_000 }, (_, at) => `line ${String(at)}`).join('\n')}\n`;
+      const outcome = await present({ 'a.md': text }, ['a.md']);
+      try {
+        const last = (await (
+          await outcome.get(filePath(`seq=${outcome.seq}&index=0&offset=19990&limit=10`))
+        ).json()) as DeliverableFilePage;
+        expect(last.text.split('\n')).toEqual(
+          Array.from({ length: 10 }, (_, at) => `line ${String(19_990 + at)}`),
+        );
+        expect(last.eof).toBe(true);
+        const before = (await (
+          await outcome.get(filePath(`seq=${outcome.seq}&index=0&offset=19980&limit=10`))
+        ).json()) as DeliverableFilePage;
+        expect(before.eof).toBe(false);
+      } finally {
+        await outcome.close();
+      }
+    });
+
+    it('空檔是零行，照 dsh；開頭的 BOM 照舊吃掉', async () => {
+      const outcome = await present({ 'empty.md': '', 'bom.md': '\uFEFFhi\n' }, [
+        'empty.md',
+        'bom.md',
+      ]);
+      try {
+        const empty = (await (
+          await outcome.get(filePath(`seq=${outcome.seq}&index=0`))
+        ).json()) as DeliverableFilePage;
+        expect(empty).toMatchObject({ text: '', lines: 0, eof: true });
+        const bom = (await (
+          await outcome.get(filePath(`seq=${outcome.seq}&index=1`))
+        ).json()) as DeliverableFilePage;
+        expect(bom.text).toBe('hi');
+      } finally {
+        await outcome.close();
+      }
+    });
   });
 });
 
@@ -702,3 +844,153 @@ async function seedWithDeliverable(): Promise<readonly SessionEvent[]> {
     } as unknown as SessionEvent,
   ];
 }
+
+function bytesPath(query: string): string {
+  return `${deliverableBytesPath(THREAD_ID)}?${query}`;
+}
+
+/**
+ * **位元組窗口**（#544 的 B，照 dsh 的 `readBytes`）。它存在是為了文字頁讀不動的那種檔：一行本身
+ * 就超過頁的位元組上限，按行切永遠是 413。頁的拒絕不動，讀不動的改用窗口一段一段讀。
+ */
+describe('位元組窗口', () => {
+  const small = (maxBytes: number): DeliverableFilesConfig =>
+    deliverableFilesConfigSchema.parse({ maxBytes });
+
+  async function windowOf(outcome: Outcome, query: string): Promise<DeliverableFileBytes> {
+    const response = await outcome.get(bytesPath(`seq=${outcome.seq}&index=0&${query}`));
+    expect(response.status).toBe(200);
+    return (await response.json()) as DeliverableFileBytes;
+  }
+
+  it('單行超過頁上限的檔：文字頁永遠 413，窗口一段一段接得回整份——連切在字中間的中文也是', async () => {
+    // 一行 206 個位元組，頁上限 64：按行切一定 413。中文三個位元組一個字，窗口邊界一定會切在字中間。
+    const line = `${'x'.repeat(200)}中文\n`;
+    const outcome = await present({ 'min.json': line }, ['min.json'], { limits: small(64) });
+    try {
+      const page = await outcome.get(filePath(`seq=${outcome.seq}&index=0&limit=1`));
+      expect(page.status).toBe(413);
+
+      const decoder = new TextDecoder('utf-8', { fatal: true });
+      let text = '';
+      let offset = 0;
+      let windows = 0;
+      for (;;) {
+        const window = await windowOf(outcome, `offset=${String(offset)}`);
+        const bytes = Buffer.from(window.data, 'base64');
+        expect(window.offset).toBe(offset);
+        expect(bytes.length).toBeLessThanOrEqual(64);
+        text += decoder.decode(bytes, { stream: !window.eof });
+        windows += 1;
+        if (window.eof) break;
+        // 不是最後一個窗口就一定是滿的——否則呼叫端分不出「讀完了」與「讀少了」。
+        expect(bytes.length).toBe(64);
+        offset += bytes.length;
+      }
+      expect(text).toBe(line);
+      expect(windows).toBe(Math.ceil(Buffer.byteLength(line) / 64));
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('不解碼、不擋二進位：NUL 照給，位元組跟磁碟上一模一樣', async () => {
+    const bytes = new Uint8Array([0, 1, 2, 255, 254]);
+    const outcome = await present({ 'b.bin': bytes }, ['b.bin']);
+    try {
+      // 對照組：同一個檔的文字頁是 422。
+      expect((await outcome.get(filePath(`seq=${outcome.seq}&index=0`))).status).toBe(422);
+      const window = await windowOf(outcome, '');
+      expect([...Buffer.from(window.data, 'base64')]).toEqual([...bytes]);
+      expect(window).toMatchObject({ path: 'b.bin', bytes: 5, offset: 0, eof: true });
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('沒給 length 就是頁的位元組上限，同 dsh', async () => {
+    const outcome = await present({ 'a.md': 'abcdefghijklmnopqrst' }, ['a.md'], {
+      limits: small(8),
+    });
+    try {
+      const window = await windowOf(outcome, '');
+      expect(Buffer.from(window.data, 'base64').toString('utf8')).toBe('abcdefgh');
+      expect(window.eof).toBe(false);
+      const last = await windowOf(outcome, 'offset=16');
+      expect(Buffer.from(last.data, 'base64').toString('utf8')).toBe('qrst');
+      expect(last.eof).toBe(true);
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('offset 在檔尾或之後：空的窗口，eof 是真的', async () => {
+    const outcome = await present({ 'a.md': 'abc' }, ['a.md']);
+    try {
+      for (const offset of ['3', '1000']) {
+        const window = await windowOf(outcome, `offset=${offset}`);
+        expect(window).toMatchObject({ data: '', eof: true });
+      }
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('length 超過頁上限是 413，不是給到上限為止；正好等於上限的過', async () => {
+    const outcome = await present({ 'a.md': 'abc' }, ['a.md'], { limits: small(8) });
+    try {
+      const refused = await outcome.get(bytesPath(`seq=${outcome.seq}&index=0&length=9`));
+      expect(refused.status).toBe(413);
+      expect(await refused.text()).toContain('超過 8 的上限');
+      expect((await outcome.get(bytesPath(`seq=${outcome.seq}&index=0&length=8`))).status).toBe(
+        200,
+      );
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('窗口參數先驗、再找檔，照 dsh 的順序：座標沒有檔，length 太大照樣是 413', async () => {
+    const outcome = await present({ 'a.md': 'abc' }, ['a.md'], { limits: small(8) });
+    try {
+      // 對照組：同一個不存在的座標、合格的窗口，是 404。
+      const missing = await outcome.get(bytesPath(`seq=${outcome.seq}&index=99`));
+      expect(missing.status).toBe(404);
+      const tooLarge = await outcome.get(bytesPath(`seq=${outcome.seq}&index=99&length=9`));
+      expect(tooLarge.status).toBe(413);
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('length 是 0、或參數不是非負整數：400', async () => {
+    const outcome = await present({ 'a.md': 'abc' }, ['a.md']);
+    try {
+      for (const query of ['length=0', 'offset=-1', 'offset=abc', 'length=1.5']) {
+        const response = await outcome.get(bytesPath(`seq=${outcome.seq}&index=0&${query}`));
+        expect(response.status, query).toBe(400);
+      }
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('跟預覽、下載走同一道錨與閘門：沒給 --workspace 是 404，沒帶 content-type 是 415', async () => {
+    const bare = await present({ 'a.md': 'abc' }, ['a.md'], { workspace: false });
+    try {
+      const response = await bare.get(bytesPath(`seq=${bare.seq}&index=0`));
+      expect(response.status).toBe(404);
+      // 404 有好幾種成因；這一條要的是「沒有錨」那一種。
+      expect(await response.text()).toContain('沒給 --workspace');
+    } finally {
+      await bare.close();
+    }
+    const outcome = await present({ 'a.md': 'abc' }, ['a.md']);
+    try {
+      const noHeader = await outcome.get(bytesPath(`seq=${outcome.seq}&index=0`), { headers: {} });
+      expect(noHeader.status).toBe(415);
+    } finally {
+      await outcome.close();
+    }
+  });
+});
