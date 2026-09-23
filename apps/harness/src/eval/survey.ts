@@ -61,7 +61,7 @@
  *
  * **但不改不等於不說，所以這一段寫在這裡而不是只寫在報告裡。** 直接跑
  * `eval:survey`（不帶 `--models`）今天的代價是：那四個逾時的每一次執行都會被重試滿
- * `LIVE_MAX_RETRIES` 次、每次撐到 `LIVE_TIMEOUT_MS`（見 `live-model.ts`），**四個候選 × 七題 × 取樣次數，
+ * `DEFAULT_LIVE_MAX_RETRIES` 次、每次撐到 `DEFAULT_LIVE_TIMEOUT_MS`（見 `live-model.ts`），**四個候選 × 七題 × 取樣次數，
  * 全部是純等待**。**逾時不在 `retryDecision` 的放棄清單裡** —— 那跟 #165 剛修掉的 410
  * 是同一類缺陷（永久性的失敗被當成瞬時的重試），只是還沒有人動它。要跑就先用
  * `--models` 排掉這五個。

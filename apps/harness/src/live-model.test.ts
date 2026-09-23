@@ -5,11 +5,11 @@ import { ContextOverflowError } from '@langchain/core/errors';
 import { ChatOpenAI, wrapOpenAIClientError } from '@langchain/openai';
 import {
   LIVE_API_KEY_ENV,
-  LIVE_BASE_URL,
-  LIVE_MAX_OUTPUT_TOKENS,
-  LIVE_MAX_RETRIES,
-  LIVE_MODEL_ID,
-  LIVE_TIMEOUT_MS,
+  DEFAULT_LIVE_BASE_URL,
+  DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
+  DEFAULT_LIVE_MAX_RETRIES,
+  DEFAULT_LIVE_MODEL_ID,
+  DEFAULT_LIVE_TIMEOUT_MS,
   classifyFailedAttempt,
   createLiveModel,
   isDerivedContextOverflow,
@@ -18,6 +18,10 @@ import {
   withInbandStreamErrors,
 } from './live-model.js';
 import { MEASURED_MODELS } from './eval/tiers.js';
+import { liveModelConfigSchema } from './settings/live-model.js';
+
+/** schema 預設的那一組（#545）。`createLiveModel` 沒有預設參數，要建預設那顆就明著傳這個。 */
+const DEFAULTS = liveModelConfigSchema.parse({});
 
 /**
  * 這組測試不打真實 API，也不需要任何 key —— CI 不放模型 secret（issue #31）。
@@ -36,13 +40,13 @@ describe('真實供應商的 key 處理', () => {
   });
 
   it('缺少環境變數時直接失敗，訊息指名缺哪一個', () => {
-    expect(() => createLiveModel()).toThrow(LIVE_API_KEY_ENV);
+    expect(() => createLiveModel(DEFAULTS)).toThrow(LIVE_API_KEY_ENV);
   });
 
   it('不 fallback 到 OPENAI_API_KEY', () => {
     process.env.OPENAI_API_KEY = 'sk-should-not-be-used';
     try {
-      expect(() => createLiveModel()).toThrow(LIVE_API_KEY_ENV);
+      expect(() => createLiveModel(DEFAULTS)).toThrow(LIVE_API_KEY_ENV);
     } finally {
       delete process.env.OPENAI_API_KEY;
     }
@@ -50,23 +54,23 @@ describe('真實供應商的 key 處理', () => {
 
   it('有 key 時組出指向 NVIDIA 端點的 model', () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
-    const model = createLiveModel();
-    expect(model.model).toBe(LIVE_MODEL_ID);
-    expect(model.clientConfig.baseURL).toBe(LIVE_BASE_URL);
+    const model = createLiveModel(DEFAULTS);
+    expect(model.model).toBe(DEFAULT_LIVE_MODEL_ID);
+    expect(model.clientConfig.baseURL).toBe(DEFAULT_LIVE_BASE_URL);
   });
 
-  it('沒給 modelId 時仍是預設的那個 —— cli:live / serve:live / spike:live 走這條', () => {
+  it('schema 預設組出來的是預設的那個 id —— spike:live 走這條', () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
-    expect(createLiveModel().model).toBe(LIVE_MODEL_ID);
+    expect(createLiveModel(DEFAULTS).model).toBe(DEFAULT_LIVE_MODEL_ID);
   });
 
   it('modelId 傳得進去，eval:compare 才換得動模型', () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
     for (const tier of MEASURED_MODELS) {
-      const model = createLiveModel(tier.modelId);
+      const model = createLiveModel({ ...DEFAULTS, modelId: tier.modelId });
       expect(model.model).toBe(tier.modelId);
       // **換掉的只有 model。** 端點與取樣設定跟著變的話，比出來的差異就不只是模型。
-      expect(model.clientConfig.baseURL).toBe(LIVE_BASE_URL);
+      expect(model.clientConfig.baseURL).toBe(DEFAULT_LIVE_BASE_URL);
       expect(model.temperature).toBe(1);
       expect(model.topP).toBe(0.95);
     }
@@ -81,13 +85,15 @@ describe('真實供應商的 key 處理', () => {
     // **2026-09-05 換過載體。** 原本比的是 `ALL_MODELS_UNDER_TEST`（兩道尺寸階梯加判準對照），
     // 而階梯在 #167 收掉了。階梯一直只是這條斷言順手的載體 —— 它要的是「量過的模型」，
     // 那正是 `MEASURED_MODELS`。載體換了，擋的東西一個字都沒變。
-    expect(MEASURED_MODELS.map((model) => model.modelId)).toContain(LIVE_MODEL_ID);
+    expect(MEASURED_MODELS.map((model) => model.modelId)).toContain(DEFAULT_LIVE_MODEL_ID);
   });
 
   it('逾時有上限 —— #57 的失敗模式是永遠不回來，沒有上限就是整輪比較沒有結果', () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
-    expect(createLiveModel().timeout).toBe(LIVE_TIMEOUT_MS);
-    expect(createLiveModel(MEASURED_MODELS[0]?.modelId).timeout).toBe(LIVE_TIMEOUT_MS);
+    expect(createLiveModel(DEFAULTS).timeout).toBe(DEFAULT_LIVE_TIMEOUT_MS);
+    expect(createLiveModel({ ...DEFAULTS, modelId: MEASURED_MODELS[0]!.modelId }).timeout).toBe(
+      DEFAULT_LIVE_TIMEOUT_MS,
+    );
   });
 
   /**
@@ -99,12 +105,12 @@ describe('真實供應商的 key 處理', () => {
    */
   it('重試設定到得了 AsyncCaller —— 不是只寫在建構參數裡', () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
-    const { caller } = createLiveModel() as unknown as {
+    const { caller } = createLiveModel(DEFAULTS) as unknown as {
       caller: { maxRetries: number; onFailedAttempt: (error: unknown) => void };
     };
 
-    expect(caller.maxRetries).toBe(LIVE_MAX_RETRIES);
-    expect(LIVE_MAX_RETRIES).toBeGreaterThan(0);
+    expect(caller.maxRetries).toBe(DEFAULT_LIVE_MAX_RETRIES);
+    expect(DEFAULT_LIVE_MAX_RETRIES).toBeGreaterThan(0);
 
     // 裝上去的必須是**我們的**那個：對限流不拋（＝重試），對 4xx 拋（＝放棄）。
     // 只斷言 `typeof === 'function'` 的話，裝到基座的預設也會是綠的。
@@ -210,7 +216,7 @@ describe('把導出來的負 max_tokens 認成上下文溢出', () => {
   /**
    * **承重條：正的數字不是溢出。**
    *
-   * 一顆輸出上限比我們送的 `LIVE_MAX_OUTPUT_TOKENS` 小的模型會抱怨同一個 `param`，
+   * 一顆輸出上限比我們送的 `DEFAULT_LIVE_MAX_OUTPUT_TOKENS` 小的模型會抱怨同一個 `param`，
    * 而那件事**壓縮救不回來**——誤判成溢出的下場是壓一次、再送、再失敗。
    */
   it('抱怨的是正的 max_tokens 就不算溢出', () => {
@@ -252,7 +258,7 @@ describe('把導出來的負 max_tokens 認成上下文溢出', () => {
   });
 
   it('我們送出去的輸出上限是正數——判別式的前提', () => {
-    expect(LIVE_MAX_OUTPUT_TOKENS).toBeGreaterThan(0);
+    expect(DEFAULT_LIVE_MAX_OUTPUT_TOKENS).toBeGreaterThan(0);
   });
 });
 
@@ -325,8 +331,8 @@ describe('假端點回那個 400，到我們手上是 ContextOverflowError', () 
       apiKey: 'fake-key-for-loopback',
       model: 'openai/gpt-oss-20b',
       configuration: { baseURL },
-      maxTokens: LIVE_MAX_OUTPUT_TOKENS,
-      maxRetries: LIVE_MAX_RETRIES,
+      maxTokens: DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
+      maxRetries: DEFAULT_LIVE_MAX_RETRIES,
       ...(onFailedAttempt !== undefined && { onFailedAttempt }),
     });
   }
@@ -380,7 +386,8 @@ describe('模型下架（410）', () => {
 
     expect(message).toContain('2026-09-03T08:00:00Z');
     expect(message).toContain('openai/gpt-oss-120b');
-    expect(message).toContain('LIVE_MODEL_ID');
+    // 指到**設定**，不是常數（#545）：部署換模型要改的是那一列，不是原始碼。
+    expect(message).toContain('`live-model` 那一列的 `modelId`');
   });
 
   /**
@@ -395,7 +402,8 @@ describe('模型下架（410）', () => {
     );
 
     expect(message).toContain('410');
-    expect(message).toContain('LIVE_MODEL_ID');
+    // 指到**設定**，不是常數（#545）：部署換模型要改的是那一列，不是原始碼。
+    expect(message).toContain('`live-model` 那一列的 `modelId`');
   });
 
   it('不是 410 的一律不認', () => {
@@ -439,10 +447,10 @@ describe('模型下架（410）', () => {
  * **整條鏈走一遍：下架的模型只打一次，不是重試到底。**
  *
  * 量的是**送出去幾次請求**，不是錯誤長什麼樣——「快」才是這一段的產出，而它只有在
- * 請求數上看得見。真打量到的成本是 **106.7 秒**（2026-09-04，`LIVE_MAX_RETRIES` 6 次，
+ * 請求數上看得見。真打量到的成本是 **106.7 秒**（2026-09-04，`DEFAULT_LIVE_MAX_RETRIES` 6 次，
  * 退避 1／2／4／8／16／32 秒）。
  *
- * **這裡用 `maxRetries: 2` 而不是 {@link LIVE_MAX_RETRIES}**：對照組要真的等完退避才數得到
+ * **這裡用 `maxRetries: 2` 而不是 {@link DEFAULT_LIVE_MAX_RETRIES}**：對照組要真的等完退避才數得到
  * 重試次數，6 次是 63 秒，那個代價不該由每次 `pnpm test` 付。2 次是 3 秒，而它證的是同一件
  * 事（有沒有重試），不是同一個數字。
  *
@@ -476,7 +484,7 @@ describe('假端點回那個 410，我們只打一次就放棄', () => {
       apiKey: 'fake-key-for-loopback',
       model: 'openai/gpt-oss-120b',
       configuration: { baseURL },
-      maxTokens: LIVE_MAX_OUTPUT_TOKENS,
+      maxTokens: DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
       maxRetries: RETRIES,
       ...(onFailedAttempt !== undefined && { onFailedAttempt }),
     });
@@ -559,7 +567,7 @@ describe('串流內回報的錯誤（#516）', () => {
       id: 'chatcmpl-1',
       object: 'chat.completion.chunk',
       created: 1_790_000_000,
-      model: LIVE_MODEL_ID,
+      model: DEFAULT_LIVE_MODEL_ID,
       choices: [{ index: 0, delta, finish_reason: finish, logprobs: null }],
     })}\n\n`;
   }
@@ -657,9 +665,9 @@ describe('串流內回報的錯誤（#516）', () => {
   function modelAgainstStream(wrapped: boolean, timeoutMs?: number, retries = RETRIES): ChatOpenAI {
     return new ChatOpenAI({
       apiKey: 'fake-key-for-loopback',
-      model: LIVE_MODEL_ID,
+      model: DEFAULT_LIVE_MODEL_ID,
       configuration: { baseURL, ...(wrapped && { fetch: withInbandStreamErrors() }) },
-      maxTokens: LIVE_MAX_OUTPUT_TOKENS,
+      maxTokens: DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
       maxRetries: retries,
       ...(timeoutMs !== undefined && { timeout: timeoutMs }),
       onFailedAttempt: classifyFailedAttempt,
@@ -800,7 +808,7 @@ describe('串流內回報的錯誤（#516）', () => {
    * 這條是為了一個**看起來很合理但實測不成立**的顧慮而存在的。嗅探迴圈是在 fetch
    * **裡面** await `read()` 的，所以掛住的連線會變成從 `configuration.fetch` 逃出去的
    * 東西，落進 {@link retryDecision} —— 推論上，這一層把「逾時」從重試射程外搬進了射程內，
-   * 於是 {@link LIVE_TIMEOUT_MS} 的止血變成「逾時 × 重試次數」。
+   * 於是 {@link DEFAULT_LIVE_TIMEOUT_MS} 的止血變成「逾時 × 重試次數」。
    *
    * **實測說不是**：兩側的請求數相同，而且**都**是 `retries + 1`。SDK 的逾時本來就是掛在
    * 整個請求上（`APIConnectionTimeoutError` 的 `name` 不是 `AbortError`、沒有 status，
@@ -861,10 +869,10 @@ describe('createLiveModel 真的掛上了那一層（#516）', () => {
         ),
       )) as typeof fetch;
 
-    const wired = createLiveModel().clientConfig.fetch;
+    const wired = createLiveModel(DEFAULTS).clientConfig.fetch;
     expect(wired).toBeDefined();
 
-    const response = await wired!(`${LIVE_BASE_URL}/chat/completions`, { method: 'POST' });
+    const response = await wired!(`${DEFAULT_LIVE_BASE_URL}/chat/completions`, { method: 'POST' });
     expect(response.status).toBe(503);
     expect(await response.text()).toContain('Service temporarily overloaded');
   });

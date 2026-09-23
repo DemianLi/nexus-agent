@@ -6,6 +6,7 @@ import { createNexusAgent } from '../agent-factory.js';
 import { ScriptedChatModel } from '../scripted-model.js';
 import type { ScriptedTurn } from '../scripted-model.js';
 import { createLiveModel } from '../live-model.js';
+import { liveModelConfigSchema } from '../settings/live-model.js';
 
 /** spike 的自訂工具：只把輸入回聲成一句話，用來證明工具真的被基座呼叫到。 */
 export const recordFinding = tool(({ topic, detail }) => `已記錄「${topic}」：${detail}`, {
@@ -120,6 +121,7 @@ export async function createSpikeAgent(options: SpikeAgentOptions = {}) {
  * **不進 CI** —— 它需要 API key 而且會花錢。缺少 key 時 `createLiveModel` 直接失敗。
  */
 export async function createLiveSpikeAgent() {
-  const model = createLiveModel();
+  // 手上沒有條目清單，吃 schema 預設（#545）。
+  const model = createLiveModel(liveModelConfigSchema.parse({}));
   return { agent: await buildAgent(model), model };
 }

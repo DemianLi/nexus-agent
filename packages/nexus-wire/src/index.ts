@@ -54,12 +54,14 @@ export type {
   WireFeedbackRating,
 } from './protocol.js';
 export type {
+  DeliverableFileBytes,
   DeliverableFilePage,
   DeliverableFileStat,
   DeliverablesPresentedPayload,
   WirePresentedFile,
 } from './deliverables.js';
 export {
+  deliverableBytesPath,
   deliverableDownloadPath,
   deliverableFilePath,
   DELIVERABLES_PRESENTED,

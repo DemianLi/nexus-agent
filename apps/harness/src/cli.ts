@@ -40,6 +40,8 @@ import { createCommandExecutor } from '@nexus/plugin-commands';
 import { createAskUserPlugin } from '@nexus/plugin-ask-user';
 import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { liveModelPlugin } from './settings/live-model.js';
+import type { LiveModelConfig } from './settings/live-model.js';
 import { startupSetting } from './settings/startup.js';
 import {
   attachSessionPersistence,
@@ -72,7 +74,7 @@ import {
   SandboxModeController,
 } from '@nexus/plugin-sandbox-policy';
 import type { SandboxMode } from './contained-backend.js';
-import { createLiveModel, loadLiveEnvIfNeeded, LIVE_MODEL_ID } from './live-model.js';
+import { createLiveModel, loadLiveEnvIfNeeded, DEFAULT_LIVE_MODEL_ID } from './live-model.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js';
 import { toAgentInvocation } from './messages.js';
@@ -206,7 +208,7 @@ export const USAGE = `用法：cli [選項] [要說的話...]
   不給話就進 REPL；給了就跑一輪、印出結果、退出。
 
 選項：
-  --live               換成真實供應商（${LIVE_MODEL_ID}），需要 API key
+  --live               換成真實供應商（預設 ${DEFAULT_LIVE_MODEL_ID}），需要 API key
   --patch <file>       把這個 patch 檔疊在出貨的 cordis.yml 上（可以給多次，後面的蓋前面的）
                        另一層是 $NEXUS_AGENT_HOME/cordis.patch.yml，它排在 --patch 之前
   --workspace <dir>    在真實磁碟的這個目錄上跑，變更被圍堵在它之下
@@ -620,13 +622,14 @@ export function transcriptLine(node: string, message: BaseMessage): string | und
  * 依這次呼叫建 model。
  *
  * @param live - 是否用真實供應商。
+ * @param liveModel - 真實供應商的五個連線值，清單上 `live-model` 那一列（#545）。
  * @returns 可以交給組裝點的 model。
  * @throws `--live` 但環境變數裡沒有 key——訊息指名缺哪一個，不 fallback。
  */
-function createCliModel(live: boolean): BaseChatModel {
+function createCliModel(live: boolean, liveModel: LiveModelConfig): BaseChatModel {
   if (!live) return new ScriptedChatModel({ turns: CLI_SCRIPT });
   loadLiveEnvIfNeeded();
-  return createLiveModel();
+  return createLiveModel(liveModel);
 }
 
 type NexusAgent = NexusAgentHandle['agent'];
@@ -673,6 +676,18 @@ export async function createCliAgent(
      * web-app bundle 掛，CLI 沒有人讀摘要。沒給 `--workspace` 時開了也不掛——那正是 dsh 的「不合格」。
      */
     readonly workspaceChanges?: boolean;
+    /**
+     * 真實供應商的五個連線值（[#545](https://github.com/DemianLi/nexus-agent/issues/545)）。
+     * 兩條產品路徑都傳：CLI 與 serve 在起動期從同一份清單解一次（serve 的這個函式一條 thread
+     * 跑一次，只解在這裡的話設定寫壞要等到第一條 thread 才炸；起動期那一次也是啟動時印模型名
+     * 的來源）。省略時從 `plugins` 解，給手上只有清單的呼叫端（測試、嵌入方）。
+     *
+     * **傳與不傳拿到的值一樣**——同一份清單、同一支 `startupSetting`。所以這一格的作用是
+     * **不解第二次**，不是改變值；突變量過（2026-09-23）：拿掉 serve 傳下來的那一格，全樹照樣綠。
+     * 「寫壞的設定在起動期就炸」由 serve 起動期那一次解析負責，那一條有測試
+     * （`settings/live-model.test.ts`）。
+     */
+    readonly liveModel?: LiveModelConfig;
   },
   plugins: readonly PluginEntry[],
   cwd: string = process.cwd(),
@@ -711,7 +726,10 @@ export async function createCliAgent(
    */
   workspaceRoot: string | undefined;
 }> {
-  const model = createCliModel(invocation.live);
+  const model = createCliModel(
+    invocation.live,
+    invocation.liveModel ?? startupSetting(plugins, liveModelPlugin),
+  );
   // **channel 在這裡算一次，兩個消費者共用。** 核准閘門由 `foldRegistry` 自己算
   // （同一個 `deriveApprovalChannel`），`ask_user_question` 拿的是這一份——兩邊分岔的
   // 樣子是「核准擋得下來、問答還掛在那裡」，而那不會有任何測試紅。
@@ -1265,6 +1283,8 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // **落盤的批次窗口，同樣從清單解**（#529）。宣告在 try 外面是因為消費點在 try 外面
   // （落盤接在三個 attach 之後），而清單本身只在 try 裡面——同 `built` 的理由與寫法。
   let persistenceWindow: SessionPersistenceConfig;
+  // 真實供應商的連線值（#545），宣告在外面的理由同上：印模型名那一行在 try 外面。
+  let liveModel: LiveModelConfig;
   try {
     // **先認它屬於哪個目錄**（見 `resume-guards.ts`）。排在沙箱那道檢查前面：
     // 目錄不對的話，日誌裡記的是哪一格都不該拿來判。讀回來還沒寫過任何一筆，檔案原封不動；
@@ -1298,10 +1318,11 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     // **起動期解一次**：落盤那一行在 try 外面，而這份清單只活在 try 裡面。解在這裡也讓
     // 「那一列的值不合法」跟清單上其他列的毛病落在同一個時刻——跑起來之前。
     persistenceWindow = startupSetting(plugins, sessionPersistencePlugin);
+    liveModel = startupSetting(plugins, liveModelPlugin);
 
     // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
     built = await createCliAgent(
-      effective,
+      { ...effective, liveModel },
       plugins,
       options.cwd,
       (error) =>
@@ -1373,7 +1394,9 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // 所以分兩條：跑壞了就先保住原本的錯誤（與 `agent-factory.ts` 同一條規則），跑成功了
   // 清理失敗就要讓人知道——沒收乾淨代表可能有子行程還活著。
   try {
-    printer.log(`模型：${invocation.live ? LIVE_MODEL_ID : '假模型（ScriptedChatModel）'}`);
+    // **印的是這一次真的用的那一個**（#545），不是預設值——部署在 patch 裡換了模型的話，印預設
+    // 就是一句謊話。
+    printer.log(`模型：${invocation.live ? liveModel.modelId : '假模型（ScriptedChatModel）'}`);
     printer.log(
       invocation.workspace === undefined
         ? '檔案系統：虛擬（不碰磁碟）'

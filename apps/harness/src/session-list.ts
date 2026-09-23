@@ -38,9 +38,9 @@
  * 人打的字＝`turn/start` 的 `kind: 'message'`；`goal` 那一種是機器排的，對到 dsh 那一側 `source.kind`
  * 不是 `user` 的 `user/message`，不算。
  *
- * **兩個上限都是必填參數，沒有預設值**——照 dsh「所有上限都是必填項」。dsh 放在 plugin 設定裡，我們沒有
- * 設定機制（[#46](https://github.com/DemianLi/nexus-agent/issues/46)），所以退到呼叫端明著給，值只在
- * `serve.ts` 寫一次。
+ * **兩個上限都是必填參數，沒有預設值**——照 dsh「所有上限都是必填項」。值由清單上
+ * `#settings/thread-title` 那一列講（[#531](https://github.com/DemianLi/nexus-agent/pull/531)），
+ * `serve.ts` 在起動期解一次、往下傳進來。
  *
  * @module
  */
