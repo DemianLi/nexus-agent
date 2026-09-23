@@ -56,6 +56,37 @@ function reply(
   ];
 }
 
+/**
+ * 帶推理的一則，講完了。**照順序逐顆建**：frame 的 seq 在建的當下編，插隊的那顆會讓後面的被當成 seq 退回去丟掉，
+ * 那則就停在「還在吐字」——本來就不是收尾，測試會綠得不對。
+ */
+function reasoned(id: string, reasoning: string, text: string): Event[] {
+  const start = frame('messages', ROOT, { event: 'message-start', id: `run-${id}`, run_id: id });
+  const thought = frame('messages', ROOT, {
+    event: 'content-block-delta',
+    index: 1,
+    delta: { type: 'reasoning-delta', reasoning },
+    run_id: id,
+  });
+  const said = frame('messages', ROOT, {
+    event: 'content-block-delta',
+    index: 0,
+    delta: { type: 'text-delta', text },
+    run_id: id,
+  });
+  const done = frame('messages', ROOT, { event: 'message-finish', reason: 'stop', run_id: id });
+  return [start, thought, said, done];
+}
+
+/** 前提：那幾則真的講完了、推理與正文都收進來了——不然不標收尾是因為還在吐字。 */
+function settled(state: ConversationState) {
+  return state.entries.flatMap((entry) =>
+    entry.kind === 'ai'
+      ? [{ id: entry.id, text: entry.text, reasoning: entry.reasoning, streaming: entry.streaming }]
+      : [],
+  );
+}
+
 function approval(): Event {
   return frame('input.requested', ['tools:a'], {
     interrupt_id: 'int-1',
@@ -140,6 +171,53 @@ describe('每一輪收尾時的最後一則 root 回覆', () => {
       ...events([running(), ...reply('a', '要動手了。'), approval(), completed(), stopped()]),
     ]);
     expect(tailIds(withdrawn)).toEqual(['a']);
+  });
+
+  it('正文只有空白的那則不是收尾，收尾落在前面最近一則有字的（#572，同 dsh 的 hasText）', () => {
+    const state = walk([
+      human('跑。'),
+      ...events([running(), ...reply('a', '收工。'), ...reply('b', '\n\n'), completed()]),
+    ]);
+    expect(settled(state).map(({ text, streaming }) => ({ text, streaming }))).toEqual([
+      { text: '收工。', streaming: false },
+      { text: '\n\n', streaming: false },
+    ]);
+    expect(tailIds(state)).toEqual(['a']);
+  });
+
+  it('只有推理的那則不是收尾：推理不算有文字（#572，同 dsh 的 hasText）', () => {
+    const state = walk([
+      human('跑。'),
+      ...events([
+        running(),
+        ...reply('a', '收工。'),
+        ...reasoned('b', '再想想', ''),
+        ...reasoned('c', '還在想', ' \n'),
+        completed(),
+      ]),
+    ]);
+    expect(settled(state)).toEqual([
+      { id: 'a', text: '收工。', reasoning: undefined, streaming: false },
+      { id: 'b', text: '', reasoning: '再想想', streaming: false },
+      { id: 'c', text: ' \n', reasoning: '還在想', streaming: false },
+    ]);
+    expect(tailIds(state)).toEqual(['a']);
+  });
+
+  it('整輪只有空白與推理：這一輪沒有收尾，也不拿前一輪那則充數', () => {
+    const state = walk([
+      human('一。'),
+      ...events([running(), ...reply('a', '第一輪。'), completed()]),
+      human('二。'),
+      ...events([running(), ...reasoned('b', '想', '\n\n'), completed()]),
+    ]);
+    expect(settled(state).at(-1)).toEqual({
+      id: 'b',
+      text: '\n\n',
+      reasoning: '想',
+      streaming: false,
+    });
+    expect(tailIds(state)).toEqual(['a']);
   });
 
   it('整輪只有工具的不標，也不會拿前一輪那則充數；子代理那幾則不標', () => {

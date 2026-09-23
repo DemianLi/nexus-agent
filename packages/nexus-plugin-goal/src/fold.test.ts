@@ -494,6 +494,8 @@ describe('什麼推得動 roundsStarted', () => {
     // 工具呼叫成功之後的紀錄，一輪裡要幾顆有幾顆，同 `tool/result`。
     // `workspace/changes`（[#443](https://github.com/DemianLi/nexus-agent/issues/443)）：不推。它是一輪收尾時的
     // 改動紀錄，不是一輪的開始。
+    // `context/measure`（[#528](https://github.com/DemianLi/nexus-agent/issues/528)）：不推。摘要器每次模型呼叫
+    // 記一顆，理由同 `model/usage`。
     const KNOWN = [
       'turn/start',
       'turn/end',
@@ -519,6 +521,7 @@ describe('什麼推得動 roundsStarted', () => {
       'feedback/record',
       'deliverables/presented',
       'workspace/changes',
+      'context/measure',
     ] as const;
     KNOWN satisfies readonly SessionEventType[];
     // 反過來這一條才是絆索：多一種而沒有列進來，`Exhaustive` 就變成 `never`。

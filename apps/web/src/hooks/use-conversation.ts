@@ -32,6 +32,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createAgentClient } from '@/lib/agent';
 import { FEEDBACK_COMMAND_LINE, FEEDBACK_COPY } from '@/lib/feedback';
+import { FramePublisher, publicationOf } from '@/lib/frame-publisher';
+import type { Publication } from '@/lib/frame-publisher';
 import { RatingsController } from '@/lib/feedback-ratings';
 import type { RatingsView } from '@/lib/feedback-ratings';
 
@@ -162,10 +164,16 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const threadId = useMemo(() => options.threadId ?? crypto.randomUUID(), [options.threadId]);
 
   const [state, setState] = useState<ConversationState>(emptyConversation);
+  // 串流的逐字片段按動畫幀合併交給 React（`FramePublisher`，#527 Q8）。它手上的那份永遠是最新的。
+  const [publisher] = useState(() => new FramePublisher(state, setState));
+  useEffect(() => () => publisher.cancel(), [publisher]);
   /** 所有改對話狀態的地方都走這裡。 */
-  const advance = useCallback((step: (previous: ConversationState) => ConversationState) => {
-    setState(step);
-  }, []);
+  const advance = useCallback(
+    (step: (previous: ConversationState) => ConversationState, publication?: Publication) => {
+      publisher.apply(step, publication);
+    },
+    [publisher],
+  );
   const [ratingsView, setRatingsView] = useState<RatingsView>(() => ({
     status: 'cold',
     items: new Map(),
@@ -199,9 +207,6 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   historyRef.current = history;
   const clientRef = useRef(client);
   clientRef.current = client;
-  // 送出的那一刻要讀的是**當下**的 pending，不是這次 render 閉包起來的那份。
-  const stateRef = useRef(state);
-  stateRef.current = state;
   const dialogRef = useRef(feedbackDialog);
   dialogRef.current = feedbackDialog;
 
@@ -245,7 +250,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
           if (cancelled) {
             return;
           }
-          advance((previous) => reduceConversation(previous, event));
+          advance((previous) => reduceConversation(previous, event), publicationOf(event));
         }
       } catch (error) {
         if (!cancelled) {
@@ -328,7 +333,8 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
 
   const respond = useCallback(
     async (interruptId: string, decision: string) => {
-      const pending = stateRef.current.pendings.find(
+      // 送出的那一刻要讀的是**當下**的 pending：不是這次 render 閉包起來的那份，也不是 React 手上可能落後幾幀的那份。
+      const pending = publisher.current.pendings.find(
         (candidate) => candidate.interruptId === interruptId,
       );
       // 問答那一顆不收——它的送出形狀是 `{answers:[…]}`，送 `{decisions:[…]}` 過去
@@ -352,7 +358,8 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
 
   const answer = useCallback(
     async (interruptId: string, answers: AnswerEntry['answers']) => {
-      const pending = stateRef.current.pendings.find(
+      // 送出的那一刻要讀的是**當下**的 pending：不是這次 render 閉包起來的那份，也不是 React 手上可能落後幾幀的那份。
+      const pending = publisher.current.pendings.find(
         (candidate) => candidate.interruptId === interruptId,
       );
       if (pending === undefined || pending.kind !== 'question') {
