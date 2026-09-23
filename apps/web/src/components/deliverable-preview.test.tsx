@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BLOCK_LINES, linesOf, loadedChain } from '@/components/deliverable-preview';
 import { DeliverablesCard } from '@/components/deliverables-card';
 import { createDeliverableFileStore } from '@/lib/deliverable-file';
+import type { DeliverableFileState, DeliverableLongLine } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import { axeViolations } from '@/test/axe';
 
@@ -256,8 +257,11 @@ describe('接續瀏覽（#543）', () => {
   ])(
     '後面那段回 %i：話講成「接下來這一段」，不是整個檔；前面讀到的照畫',
     async (status, midway, whole) => {
+      // 只有第 0 段讀得到；其他每一個請求（含 413 之後改走的位元組窗口）都回同一個碼。
       mount((url) =>
-        offsetOf(url) === 0 ? json(numbered(0, 3, false)) : new Response('', { status }),
+        offsetOf(url) === 0 && url.includes('/deliverables/file')
+          ? json(numbered(0, 3, false))
+          : new Response('', { status }),
       );
       open();
       await screen.findByText('line-3');
@@ -280,7 +284,10 @@ describe('接續瀏覽（#543）', () => {
       BLOCK_LINES,
       5,
     ]);
-    for (const block of blocks) expect(block.className).toContain('[content-visibility:auto]');
+    // `content-visibility` 與估計尺寸在 `styles/preview.css`（jsdom 不載 CSS）；塊帶的是它要的兩個數。
+    expect(
+      blocks.map((block) => (block as HTMLElement).style.getPropertyValue('--block-lines')),
+    ).toEqual([String(BLOCK_LINES), String(BLOCK_LINES), '5']);
   });
 
   it('行號不在文字裡（畫在 ::before），複製出來的是原文', async () => {
@@ -316,6 +323,106 @@ describe('接續瀏覽（#543）', () => {
   });
 });
 
+describe('長行（#555）', () => {
+  it('超過門檻的行切成幾段；文字接起來就是原行，行尾的換行只有一個', async () => {
+    const line = 'word '.repeat(2000);
+    mount(() => json({ ...PAGE, text: `short\n${line}`, lines: 2, eof: true }));
+    open();
+    await screen.findByText('short');
+    const row = document.querySelector('[data-line="2"]')!;
+    const segments = row.querySelectorAll('[data-preview-segment]');
+    expect(segments.length).toBeGreaterThan(1);
+    expect(row.textContent).toBe(`${line}\n`);
+    for (const segment of segments) {
+      expect((segment as HTMLElement).style.getPropertyValue('--cols')).not.toBe('');
+    }
+  });
+
+  it('切換換行時，有長行的塊重掛（丟掉記住的尺寸），一般的塊不動', async () => {
+    const short = Array.from({ length: BLOCK_LINES }, (_, i) => `row-${i + 1}`);
+    const text = [...short, 'word '.repeat(2000)].join('\n');
+    mount(() => json({ ...PAGE, text, lines: BLOCK_LINES + 1, eof: true }));
+    open();
+    await screen.findByText('row-1');
+    const [plain, long] = [...document.querySelectorAll('[data-preview-block]')];
+    fireEvent.click(screen.getByRole('button', { name: '自動換行' }));
+    const [plainAfter, longAfter] = [...document.querySelectorAll('[data-preview-block]')];
+    expect(plainAfter).toBe(plain);
+    expect(longAfter).not.toBe(long);
+    expect(longAfter!.textContent).toBe(long!.textContent);
+  });
+
+  it('不超過門檻的行不切', async () => {
+    mount(() => json({ ...PAGE, text: 'x'.repeat(4000), lines: 1, eof: true }));
+    open();
+    await vi.waitFor(() => expect(document.querySelector('[data-line="1"]')).not.toBeNull());
+    expect(document.querySelector('[data-preview-segment]')).toBeNull();
+  });
+
+  /** 第 0 行就是一條超過頁上限的行：文字頁一律 413，位元組窗口每次給 `size` 個位元組。 */
+  function mountLongFirstLine(total: number, size: number) {
+    const bytes = new TextEncoder().encode('L'.repeat(total));
+    return mount((url) => {
+      const query = new URL(url, 'http://x').searchParams;
+      if (!url.includes('/deliverables/bytes')) return new Response('', { status: 413 });
+      const offset = Number(query.get('offset'));
+      const slice = bytes.subarray(offset, offset + size);
+      return json({
+        path: FILE.path,
+        version: 'v1',
+        bytes: bytes.length,
+        offset,
+        data: btoa(String.fromCharCode(...slice)),
+        eof: offset + size >= bytes.length,
+      });
+    });
+  }
+
+  const windowsRead = (doFetch: typeof globalThis.fetch) =>
+    (doFetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) =>
+      String(url).includes('/deliverables/bytes'),
+    ).length;
+
+  it('第 0 行是長行：只讀第一個窗口，**捲到接近底才讀下一個**，不會一口氣讀完', async () => {
+    const { doFetch } = mountLongFirstLine(5000, 1000);
+    open();
+    await vi.waitFor(() => expect(document.querySelector('[data-line="1"]')).not.toBeNull());
+    await act(async () => {});
+    expect(windowsRead(doFetch)).toBe(1);
+    nearBottom();
+    await vi.waitFor(() => expect(windowsRead(doFetch)).toBe(2));
+    await act(async () => {});
+    expect(windowsRead(doFetch)).toBe(2);
+    expect(document.querySelector('[data-line="1"]')!.textContent).toBe('L'.repeat(2000));
+  });
+
+  it('讀下一個窗口時講的是「這一行的下一段」', async () => {
+    let release: (() => void) | undefined;
+    const bytes = 'L'.repeat(3000);
+    const doFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (!url.includes('/deliverables/bytes')) return new Response('', { status: 413 });
+      const offset = Number(new URL(url, 'http://x').searchParams.get('offset'));
+      if (offset > 0) await new Promise<void>((resolve) => (release = resolve));
+      return json({
+        path: FILE.path,
+        version: 'v1',
+        bytes: bytes.length,
+        offset,
+        data: btoa(bytes.slice(offset, offset + 1000)),
+        eof: offset + 1000 >= bytes.length,
+      });
+    }) as unknown as typeof globalThis.fetch;
+    const store = createDeliverableFileStore({ threadId: 't1', baseUrl: '', fetch: doFetch });
+    render(<DeliverablesCard files={[FILE]} preview={store} />);
+    open();
+    await vi.waitFor(() => expect(document.querySelector('[data-line="1"]')).not.toBeNull());
+    nearBottom();
+    expect(await screen.findByText('正在讀取這一行的下一段…')).toBeTruthy();
+    await act(async () => release?.());
+  });
+});
+
 describe('linesOf', () => {
   it('路由的 text 結尾沒有換行，切出來剛好 lines 行', () => {
     expect(linesOf({ ...PAGE, text: 'a\nb', lines: 2 })).toEqual(['a', 'b']);
@@ -329,7 +436,7 @@ describe('linesOf', () => {
 });
 
 describe('loadedChain', () => {
-  function storeOf(pages: Record<number, DeliverableFilePage | 'loading'>) {
+  function storeOf(pages: Record<number, DeliverableFileState>) {
     return {
       read: (_seq: number, _index: number, offset: number) => pages[offset],
       load: () => {},
@@ -344,13 +451,55 @@ describe('loadedChain', () => {
       1,
       0,
     );
-    expect(chain.pages.map((page) => page.offset)).toEqual([0, 3]);
+    expect(chain.entries.map((page) => page.offset)).toEqual([0, 3]);
     expect(chain.tail).toEqual({ kind: 'next', offset: 5 });
   });
 
   it('正在讀的那一格停住', () => {
     const chain = loadedChain(storeOf({ 0: numbered(0, 3, false), 3: 'loading' }), 1, 0);
-    expect(chain.tail).toEqual({ kind: 'loading', offset: 3 });
+    expect(chain.tail).toEqual({ kind: 'loading', offset: 3, window: false });
+  });
+
+  const long = (offset: number, rest: Partial<DeliverableLongLine>): DeliverableLongLine => ({
+    kind: 'long-line',
+    version: 'v1',
+    offset,
+    start: 0,
+    text: 'xyz',
+    bytes: 3,
+    done: false,
+    eof: false,
+    ...rest,
+  });
+
+  it('長行還沒讀完：畫出讀到的部分，尾巴是它自己的下一個窗口（#555）', () => {
+    const at = (state: DeliverableLongLine) =>
+      loadedChain(storeOf({ 0: numbered(0, 3, false), 3: state }), 1, 0);
+    expect(at(long(3, {})).entries.map((entry) => entry.offset)).toEqual([0, 3]);
+    expect(at(long(3, {})).tail).toEqual({ kind: 'next', offset: 3 });
+    expect(at(long(3, { next: 'loading' })).tail).toEqual({
+      kind: 'loading',
+      offset: 3,
+      window: true,
+    });
+    expect(at(long(3, { next: 'not-text' })).tail).toEqual({
+      kind: 'failed',
+      offset: 3,
+      state: 'not-text',
+    });
+  });
+
+  it('長行讀完了佔一行，往下一行走；讀到檔尾就是檔尾', () => {
+    const done = long(3, { done: true });
+    const chain = loadedChain(
+      storeOf({ 0: numbered(0, 3, false), 3: done, 4: numbered(4, 1, true) }),
+      1,
+      0,
+    );
+    expect(chain.entries.map((entry) => entry.offset)).toEqual([0, 3, 4]);
+    expect(chain.tail).toEqual({ kind: 'end' });
+    const last = loadedChain(storeOf({ 0: long(0, { done: true, eof: true }) }), 1, 0);
+    expect(last.tail).toEqual({ kind: 'end' });
   });
 
   it('lines 是 0 卻沒到檔尾：當成檔尾，不會原地打轉', () => {

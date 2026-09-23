@@ -1,0 +1,51 @@
+/*
+ * 交付檔預覽的畫面上限（#543、#555），見 `components/deliverable-preview.tsx`。
+ *
+ * 寫在這裡而不是 className：估計尺寸要看換不換行，而換行只掛在容器上（`data-preview-wrap`）——這樣切換換行時
+ * 不重畫幾萬個節點，也不必把容器寬度放進 React state。
+ *
+ * **估計尺寸寫錯的話整條宣告會被靜靜丟掉**，而沒有估計尺寸的段是 0×0、全部擠在畫面裡，一個都跳不掉
+ * （實測 1000 字一段卡 3.4 秒）。驗收腳本會讀一個被跳過的段的 computed 值，斷言它不是 0。
+ *
+ * `--cpr`（一列放得下幾欄）由元件量了掛在容器上；量到之前用 100。`--cols` 是欄數（全形算 2，見 `columnsOf`）。
+ */
+
+@layer components {
+  /* 20 行一塊。不換行時每行剛好一列。
+     **`auto` 寫不寫都一樣**：`content-visibility: auto` 的元素，Chrome 算出來的 `contain-intrinsic-size` 一律帶
+     `auto`（2026-09-23 實測），畫過一次就記住那個尺寸。換不換行一變、記住的尺寸就錯，所以有長行的塊由元件在
+     切換時重掛（`PerMode`，新節點沒有記住的尺寸）。這裡照實寫出 `auto`。 */
+  [data-preview-block] {
+    content-visibility: auto;
+    contain-intrinsic-block-size: auto calc(var(--block-lines) * 20px);
+  }
+  [data-preview-wrap] [data-preview-block] {
+    contain-intrinsic-block-size: auto
+      max(calc(var(--block-lines) * 20px), calc(var(--block-cols) / var(--cpr, 100) * 20px));
+  }
+
+  /* 長行的一段：inline-block（區塊的段複製時每段之間會多一個換行）。一段在兩個模式下的尺寸差幾十倍，記住的
+     尺寸只在同一個模式裡有用——切換時整條長行重掛，見上。 */
+  [data-preview-segment] {
+    display: inline-block;
+    vertical-align: top;
+    content-visibility: auto;
+    contain-intrinsic-size: auto calc(var(--cols) * 1ch) auto 20px;
+  }
+  [data-preview-wrap] [data-preview-segment] {
+    width: 100%;
+    contain-intrinsic-block-size: auto calc(round(up, var(--cols) / var(--cpr, 100), 1) * 20px);
+  }
+
+  /* 不換行時一列最寬 2²⁵ px，超過 100 萬字的行每 100 萬字折一列。斷列用產生的 `\A`：它不在 DOM 裡，
+     複製時不會多出換行（`<br>` 或區塊都會）。續列開頭的 `↪` 也是產生的，同樣不會被複製；它畫在文字欄的
+     開頭而不是行號欄，因為段是 `content-visibility`，自帶的 paint containment 會把畫到段外面的東西裁掉。 */
+  [data-preview-row] + [data-preview-row]::before {
+    content: '\A↪ ';
+    white-space: pre;
+    color: var(--color-muted-foreground);
+  }
+  [data-preview-wrap] [data-preview-row] + [data-preview-row]::before {
+    content: none;
+  }
+}
