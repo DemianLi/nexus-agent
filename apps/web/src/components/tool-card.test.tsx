@@ -374,6 +374,9 @@ describe('待辦清單的工具卡（#575）', () => {
     expect(extra.previousElementSibling?.classList.contains('truncate')).toBe(true);
     expect(extra.classList.contains('shrink-0')).toBe(true);
     expect(extra.classList.contains('truncate')).toBe(false);
+    // 吃掉剩下寬度的是外層，不是會截斷的那格：放在那格上，「+N」會被推到最右邊的狀態字旁邊（真 Chrome 量到過）。
+    expect(extra.parentElement?.classList.contains('flex-1')).toBe(true);
+    expect(extra.previousElementSibling?.classList.contains('flex-1')).toBe(false);
     fireEvent.click(trigger);
     expect(
       within(card)
