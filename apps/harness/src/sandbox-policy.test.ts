@@ -4,7 +4,7 @@
  * 三條斷言的目標各不同，別把它們併成一條：
  *
  * 1. **正面**：掛了 `--workspace` 的**組裝**（不是手搭的 middleware）真的把那句話送進
- *    system prompt。手搭一個 middleware 去驗它會加字串，驗到的是 `concat` 會不會動，
+ *    system prompt，而且那句話給的位址是檔案工具收得下的那一種（`/`），不是主機路徑。手搭一個 middleware 去驗它會加字串，驗到的是 `concat` 會不會動，
  *    不是「這條產品路徑上有沒有人講」。
  * 2. **負面**：沒有 `--workspace` 的組裝**一個字都不能講**。這一條守的是說謊——那種
  *    組裝底下整道 fence 不在路徑上，講「目前是 workspace-write」會讓模型以為根外被擋著。
@@ -12,7 +12,7 @@
  *    模式會靜靜地停在建構當下那一格，而**拒絕訊息還會照樣印出新的那個名字**。
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
@@ -82,12 +82,29 @@ describe('模型知不知道自己在哪一格', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('掛了 --workspace 的組裝會講，而且指名可寫根', async () => {
+  it('掛了 --workspace 的組裝會講，而且用工具收的位址指名可寫根：`/`，不給主機路徑', async () => {
     const prompt = await promptOf({ workspace: root }, root);
 
     expect(prompt).toContain('目前的檔案政策：workspace-write');
-    // **指名那個路徑是重點**：「在工作區之內」對模型不是一個位址。
-    expect(prompt).toContain(JSON.stringify(root));
+    // **指名是重點**：「在工作區之內」對模型不是一個位址。但指名要用工具收的那一種位址。
+    expect(prompt).toContain('`/` 就是工作區根');
+    // **翻面的絆索**：這一條原本斷言 prompt 裡**有**主機路徑，把缺陷寫成了規格。第 2 階段 live
+    // 量到用到檔案工具的 30 輪裡有 24 輪照著那個字串傳主機路徑，工具全都落空。macOS 的 tmpdir 還有一個
+    // `/private` 前綴的別名，兩種寫法都不能出現。
+    expect(prompt).not.toContain(root);
+    expect(prompt).not.toContain(await realpath(root));
+  });
+
+  it('句子教的位址，backend 真的收：`/` 開頭落在可寫根，主機路徑落成巢狀', async () => {
+    // **把提示句綁在 backend 的位址空間上**。哪天圍堵不再走 `virtualMode`、改收主機路徑，
+    // 這一條會紅，提醒提示句也要跟著換回主機路徑（dsh 的形狀）。
+    const backend = new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' });
+
+    expect((await backend.write('/src/taught.ts', '一')).error).toBeUndefined();
+    expect(await readFile(join(root, 'src', 'taught.ts'), 'utf8')).toBe('一');
+
+    await backend.write(join(root, 'host.txt'), '二');
+    await expect(readFile(join(root, 'host.txt'), 'utf8')).rejects.toThrow('ENOENT');
   });
 
   it('--sandbox read-only 講的是 read-only 那一段，而且叫模型不要先拒絕', async () => {
