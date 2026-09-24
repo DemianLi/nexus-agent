@@ -94,6 +94,9 @@ async function runUntilThrow(
   error: unknown,
   throwOnCall: number,
   invocations: number,
+  trigger: { type: 'tokens' | 'messages'; value: number }[] = [
+    { type: 'tokens', value: 1_000_000 },
+  ],
 ): Promise<{
   rejected: unknown;
   calls: number;
@@ -108,7 +111,7 @@ async function runUntilThrow(
     checkpointer: new MemorySaver(),
     plugins: [],
     summarization: {
-      trigger: [{ type: 'tokens', value: 1_000_000 }],
+      trigger,
       keep: { type: 'messages', value: 2 },
     },
   });
@@ -176,6 +179,27 @@ describe('供應商回上下文溢出', () => {
     expect(steps).toBe(5);
     // 模型本身被叫了六次：三次正常、溢出一次、摘要一次、重試一次。差的那一次就是摘要。
     expect(calls - steps).toBe(1);
+  });
+
+  /**
+   * **預算觸發的摘要只算一步**（[#588](https://github.com/DemianLi/nexus-agent/issues/588)）：`tokens` 門檻超過時，
+   * 摘要器那一層拋一顆合成的 `ContextOverflowError` 讓基座走同一條緊急摘要——但拋在內層 `handler` 之前，起訖
+   * 紀錄器根本沒被叫到。跟上一條相反：那條的溢出是真的送出去、失敗了的請求。
+   *
+   * 門檻壓到 1，第 2 次起每一次都超過（第 1 次只有一則，切不出東西）。模型不拋。
+   */
+  it('預算觸發的摘要不多算一步：步數等於呼叫次數，多出來的都是產摘要的那幾次', async () => {
+    const { rejected, calls, events } = await runUntilThrow(null, 0, 4, [
+      { type: 'tokens', value: 1 },
+    ]);
+
+    expect(rejected).toBeNull();
+    const summaries = events.filter((event) => event.type === 'compaction/summary').length;
+    // 前提：第 2、3、4 次都真的摘要了。
+    expect(summaries).toBe(3);
+    const { steps } = deriveSessionStats(events);
+    expect(steps).toBe(4);
+    expect(calls - steps).toBe(summaries);
   });
 
   /**

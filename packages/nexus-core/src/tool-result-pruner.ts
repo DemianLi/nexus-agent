@@ -332,13 +332,20 @@ export function resolveToolResultPruneConfig(
  * 達標才 `pruneSession()`），那是摘要那一側的知識；這個檔只管怎麼剪。
  *
  * @param base - 基座那顆摘要器。
- * @param underPressure - 這次請求的訊息與 state 到了壓縮門檻沒有。
+ * @param underPressure - 這次請求到了壓縮門檻沒有。收的是整份請求：`tokens` 門檻要估 system 與工具定義那一截
+ *   （[#588](https://github.com/DemianLi/nexus-agent/issues/588)）。
  * @param config - 預算，來自 {@link resolveToolResultPruneConfig}。
  * @returns 同名、同狀態、外面多一層前處理的 middleware。
  */
 export function withToolResultPruning(
   base: AgentMiddleware,
-  underPressure: (messages: readonly BaseMessage[], state: unknown) => boolean,
+  underPressure: (request: {
+    readonly messages?: readonly BaseMessage[];
+    readonly state?: unknown;
+    readonly systemMessage?: unknown;
+    readonly tools?: unknown;
+    readonly model?: unknown;
+  }) => boolean,
   config: ToolResultPruneConfig,
 ): AgentMiddleware {
   const inner = base.wrapModelCall?.bind(base);
@@ -348,7 +355,7 @@ export function withToolResultPruning(
     ...base,
     wrapModelCall: async (request, handler) => {
       const messages = request.messages ?? [];
-      if (!underPressure(messages, request.state)) return inner(request, handler);
+      if (!underPressure(request)) return inner(request, handler);
       const { prunedCount, messages: pruned } = pruneToolResults(messages, config);
       if (prunedCount === 0) return inner(request, handler);
       return inner({ ...request, messages: [...pruned] }, handler);

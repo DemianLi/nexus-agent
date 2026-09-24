@@ -268,6 +268,13 @@ export {
   summarizationConfigSchema,
   summarizationPlugin,
 } from './summarization.js';
+export type { EstimatedRequest, TokenEstimate } from './token-estimate.js';
+export {
+  defaultTokenAnchorBook,
+  estimateAnchoredTokens,
+  estimateRequestTokens,
+  TokenAnchorBook,
+} from './token-estimate.js';
 export type {
   ToolResultPruneConfig,
   ToolResultPruneResult,
