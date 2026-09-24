@@ -188,6 +188,13 @@ export {
   recordBackendOutcomes,
 } from './fs-tool-errors.js';
 
+export {
+  continuationFooter,
+  createReadContinuationMiddleware,
+  READ_CONTINUATION_MIDDLEWARE_NAME,
+  recordReadExtent,
+} from './read-continuation.js';
+
 export type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
 export {
   createInvalidArgumentsCarrier,
