@@ -204,6 +204,95 @@ describe('內容比例', () => {
   });
 });
 
+describe('學到的比例（c̄）：自己算不出比例時借行程裡最近學到的', () => {
+  /** 讓帳學到 `ratio`：一條 thread 的第一次 E=1000 實數 1000，第二次 E=2000 實數 1000＋1000×ratio。 */
+  function learn(book: TokenAnchorBook, ratio: number, prefix = 'l'): void {
+    const first = answered(`${prefix}1`, 1_000);
+    book.record(first, request([new HumanMessage('q')]), 1_000, 'estimate');
+    book.record(
+      answered(`${prefix}2`, 1_000 + 1_000 * ratio),
+      request([new HumanMessage('q'), first, new HumanMessage('再問')]),
+      2_000,
+      'anchor',
+    );
+  }
+
+  it('錨定的那次回來就學；單錨的 thread 借它', () => {
+    const book = new TokenAnchorBook();
+    learn(book, 1.2);
+    expect(book.learnedRatio('m-1')).toBeCloseTo(1.2);
+    expect(book.learnedRatio('m-2')).toBeUndefined();
+
+    const b1 = answered('b1', 2_000);
+    book.record(b1, request([new HumanMessage('另一條')]), 1_500, 'anchor');
+    const now = request([new HumanMessage('另一條'), b1, new HumanMessage(CHINESE)]);
+    expect(estimateAnchoredTokens(now, book).tokens).toBe(
+      Math.round(2_000 + (estimateRequestTokens(now) - 1_500) * 1.2),
+    );
+  });
+
+  it('自己算得出比例就用自己的', () => {
+    const book = new TokenAnchorBook();
+    learn(book, 2);
+    const a1 = answered('a1', 2_000);
+    const a2 = answered('a2', 5_000);
+    book.record(a1, request([new HumanMessage('q')]), 1_000, 'estimate');
+    book.record(a2, request([new HumanMessage('q')]), 3_000, 'estimate');
+    const now = request([
+      new HumanMessage('q'),
+      a1,
+      new ToolMessage({ content: 'x', tool_call_id: 'c' }),
+      a2,
+      new HumanMessage(CHINESE),
+    ]);
+    expect(estimateAnchoredTokens(now, book).tokens).toBe(
+      Math.round(5_000 + (estimateRequestTokens(now) - 3_000) * 1.5),
+    );
+  });
+
+  it('借錨的第一次乘學到的比例，回來時也從那一對學', () => {
+    const book = new TokenAnchorBook();
+    const firstThread = request([new HumanMessage('短')]);
+    const firstE = estimateRequestTokens(firstThread);
+    book.record(answered('t1', 6_000), firstThread, firstE, 'estimate');
+
+    const second = request([new HumanMessage(CHINESE)]);
+    const secondE = estimateRequestTokens(second);
+    expect(secondE - firstE).toBeGreaterThanOrEqual(500);
+    const secondTruth = Math.round(6_000 + (secondE - firstE) * 1.3);
+    book.record(answered('t2', secondTruth), second, secondE, 'borrowed');
+    expect(book.learnedRatio('m-1')).toBeCloseTo(1.3, 2);
+
+    const third = request([new HumanMessage(CHINESE + CHINESE)]);
+    expect(estimateAnchoredTokens(third, book).tokens).toBe(
+      Math.round(6_000 + (estimateRequestTokens(third) - firstE) * book.learnedRatio('m-1')!),
+    );
+  });
+
+  it('學不出來（兩點太近或實數沒增加）就留著上一次的', () => {
+    const book = new TokenAnchorBook();
+    learn(book, 1.2);
+    const near = answered('n1', 1_000);
+    book.record(near, request([new HumanMessage('q')]), 1_000, 'estimate');
+    book.record(
+      answered('n2', 9_000),
+      request([new HumanMessage('q'), near, new HumanMessage('再問')]),
+      1_400,
+      'anchor',
+    );
+    expect(book.learnedRatio('m-1')).toBeCloseTo(1.2);
+    const shrunk = answered('s1', 9_000);
+    book.record(shrunk, request([new HumanMessage('q')]), 1_000, 'estimate');
+    book.record(
+      answered('s2', 4_000),
+      request([new HumanMessage('q'), shrunk, new HumanMessage('再問')]),
+      5_000,
+      'anchor',
+    );
+    expect(book.learnedRatio('m-1')).toBeCloseTo(1.2);
+  });
+});
+
 describe('第一次：借別條 thread 的第一次', () => {
   it('同模型、同工具組的第一次記成借錨的來源，別條 thread 的第一次借它', () => {
     const book = new TokenAnchorBook();

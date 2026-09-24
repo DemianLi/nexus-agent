@@ -12,11 +12,19 @@
  * 有錨（這串訊息裡最後一則帶實數的 AI 訊息 a）：
  *   est = T(a) ＋ (E(req) − E(送出 a 的那份請求)) × c
  *   c   = (T(a) − T(f)) ÷ (E(送出 a 的那份) − E(送出 f 的那份))，f ＝ 這串裡最早那則帶實數的 AI 訊息
- *         只有兩格都在帳上、估算增加量 ≥ 500、實數增加量 > 0 才算；否則 1
+ *         只有兩格都在帳上、估算增加量 ≥ 500、實數增加量 > 0 才算；否則 c̄
  * 沒錨（這條 thread 的第一次）：
- *   est = T(ref) ＋ (E(req) − E(ref))，ref ＝ 同一個行程裡同模型、同工具組的別條 thread 的第一次
+ *   est = T(ref) ＋ (E(req) − E(ref)) × c̄，ref ＝ 同一個行程裡同模型、同工具組的別條 thread 的第一次
  * 連 ref 都沒有（行程剛起來）：est = E(req)——demian 拍板接受的例外
+ *
+ * c̄ ＝ 同一個行程、同模型最近一次學到的內容比例，還沒學到就是 1。每次呼叫回來都學一次，條件同 c：
+ *   錨定的那次學 (T − T(f)) ÷ (E − E(送出 f 的那份))；借錨的那次學 (T − T(ref)) ÷ (E − E(ref))
  * ```
+ *
+ * **c̄ 補的是單錨的那一次**：一條 thread 的第二次只有一則錨，自己的比例算不出來。#588 驗收時 nemotron 的第二次
+ * 讀進一份兩萬多字的中文檔（佔整份 body 的 73%），比例用 1 就少估 10.1%；借行程的比例是 −5.7%，借錨的第一次
+ * 最大也從 6.9% 降到 1.8%。代價是上一條 thread 的內容跟這一次不像時會借錯方向——nemotron 在這批素材上的比例
+ * 落在 1.07～1.16，錯借的上限大約是「0.1 × 增量佔比」。
  *
  * 「送出 a 的那份請求」的 E 由 {@link TokenAnchorBook} 在那次呼叫回來時記下，以 AI 訊息的 id 為鍵。帳上沒有（行程
  * 重開、續接）時退到這串訊息裡 a 之前的那一段——摘要、剪刀與參數截斷在兩邊一樣就抵消，不一樣時差的是「這一次
@@ -40,7 +48,7 @@
  * 1. **估算器**：dsh 是固定密度「4 個字元一個 token」（`estimate.ts`）。中文一個字在 o200k 大約是 0.9 個 token，
  *    所以讀一份中文檔時增量只估到三分之一。換成 o200k。
  * 2. **內容比例**：dsh 的增量不乘任何東西。nemotron 的 tokenizer 在內容上比 o200k 多約 16%，大的增量一來就超過
- *    10%。dsh 沒有這一格；比例從這條 thread 自己的兩次實數學。
+ *    10%。dsh 沒有這一格；比例從這條 thread 自己的兩次實數學，學不到就借行程裡最近學到的。
  *
  * 另外 dsh 只在「用量 ≥ 那次的估算」時才採用錨（保守的那一邊），我們一律採用：目標是雙向 10%，不是只防少估。
  *
@@ -224,6 +232,27 @@ function sameModel(reported: string | undefined, current: string | undefined): b
   return reported === undefined || current === undefined || reported === current;
 }
 
+/** 這串訊息裡帶實數、模型對得上的 AI 訊息：最後一則（錨）與最早一則。都沒有就是 −1。 */
+function anchorsIn(
+  messages: readonly BaseMessage[],
+  current: string | undefined,
+): { readonly last: number; readonly first: number } {
+  let last = -1;
+  let first = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const reported = reportedInput(messages[index]!);
+    if (reported === undefined || !sameModel(reported.model, current)) continue;
+    if (last < 0) last = index;
+    first = index;
+  }
+  return { last, first };
+}
+
+/** 兩個點之間的內容比例：估算增加量 ≥ 500、實數增加量 > 0 才算得出來。 */
+function contentRatio(grown: number, span: number): number | undefined {
+  return span >= MIN_RATIO_SPAN && grown > 0 ? grown / span : undefined;
+}
+
 /** 借錨用的鍵：模型＋工具組。**不含 system**：它逐條 thread 可能不同，差的那一截由 E 的增量吸收。 */
 function firstCallKey(request: EstimatedRequest): string {
   // LangChain 的工具叫 `name`，已經是 OpenAI 形狀的叫 `function.name`。
@@ -247,7 +276,8 @@ export interface TokenEstimate {
 }
 
 /**
- * 錨定估算要的那本帳：每一則 AI 訊息是從多大（E）的請求生出來的，與每一組「模型＋工具」的第一次。
+ * 錨定估算要的那本帳：每一則 AI 訊息是從多大（E）的請求生出來的、每一組「模型＋工具」的第一次，與每個模型最近
+ * 一次學到的內容比例。
  *
  * **一個行程一本**（{@link defaultTokenAnchorBook}）：serve 一條 thread 建一個 agent，借錨要跨 thread 才借得到。
  * 鍵是 AI 訊息的 id，跨 agent 共用不會撞。
@@ -255,14 +285,21 @@ export interface TokenEstimate {
 export class TokenAnchorBook {
   readonly #sent = new Map<string, number>();
   readonly #firstCalls = new Map<string, { readonly tokens: number; readonly estimated: number }>();
+  readonly #ratios = new Map<string, number>();
 
   /**
-   * 整本清空。**給測試用**：同一個測試檔裡的組裝共用行程那一本，不清的話後一條會借到前一條的第一次，數字隨
-   * 執行順序變。
+   * 整本清空。**給測試用**：同一個測試檔裡的組裝共用行程那一本，不清的話後一條會借到前一條的第一次與比例，數字
+   * 隨執行順序變。
    */
   clear(): void {
     this.#sent.clear();
     this.#firstCalls.clear();
+    this.#ratios.clear();
+  }
+
+  /** 這個模型最近一次學到的內容比例（c̄）。還沒學到就是 `undefined`。 */
+  learnedRatio(model: string | undefined): number | undefined {
+    return this.#ratios.get(model ?? '');
   }
 
   /** 送出 id 那則 AI 訊息的請求，E 是多少。 */
@@ -276,7 +313,8 @@ export class TokenAnchorBook {
   }
 
   /**
-   * 一次呼叫回來了：記下它的 E；它是一條 thread 的第一次的話，也記成借錨的來源（同一組只記第一個）。
+   * 一次呼叫回來了：記下它的 E，從它與它的參考點學一次內容比例；它是一條 thread 的第一次的話，也記成借錨的來源
+   * （同一組只記第一個）。
    *
    * @param response - 下一層回來的東西；不是帶 id 的 AI 訊息就不記。
    * @param sent - 送出去的那份請求。
@@ -301,12 +339,39 @@ export class TokenAnchorBook {
         if (oldest !== undefined) this.#sent.delete(oldest);
       }
     }
-    if (basis === 'anchor') return;
     const reported = reportedInput(message);
-    if (reported === undefined || !sameModel(reported.model, modelNameOf(sent.model))) return;
+    const current = modelNameOf(sent.model);
+    if (reported === undefined || !sameModel(reported.model, current)) return;
+    this.#learn(current, reported.tokens, sent, estimated, basis);
+    if (basis === 'anchor') return;
     const key = firstCallKey(sent);
     if (!this.#firstCalls.has(key))
       this.#firstCalls.set(key, { tokens: reported.tokens, estimated });
+  }
+
+  /**
+   * 學一次內容比例：錨定的那次對這串裡最早那則錨，借錨的那次對借來的那一次。純估算的那次沒有參考點，不學。
+   * 學不出來（兩點太近、實數沒增加）就留著上一次學到的。
+   */
+  #learn(
+    model: string | undefined,
+    tokens: number,
+    sent: EstimatedRequest,
+    estimated: number,
+    basis: TokenEstimate['basis'],
+  ): void {
+    let ratio: number | undefined;
+    if (basis === 'anchor') {
+      const messages = sent.messages ?? [];
+      const earliest = messages[anchorsIn(messages, model).first];
+      const earliestSent = this.sentEstimate(earliest?.id);
+      if (earliest !== undefined && earliestSent !== undefined)
+        ratio = contentRatio(tokens - reportedInput(earliest)!.tokens, estimated - earliestSent);
+    } else if (basis === 'borrowed') {
+      const ref = this.firstCall(sent);
+      if (ref !== undefined) ratio = contentRatio(tokens - ref.tokens, estimated - ref.estimated);
+    }
+    if (ratio !== undefined) this.#ratios.set(model ?? '', ratio);
   }
 }
 
@@ -327,31 +392,22 @@ export function estimateAnchoredTokens(
   const messages = request.messages ?? [];
   const estimated = estimateRequestTokens(request);
   const current = modelNameOf(request.model);
-  let last = -1;
-  let first = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const reported = reportedInput(messages[index]!);
-    if (reported === undefined || !sameModel(reported.model, current)) continue;
-    if (last < 0) last = index;
-    first = index;
-  }
+  const learned = book.learnedRatio(current) ?? 1;
+  const { last, first } = anchorsIn(messages, current);
   if (last >= 0) {
     const anchor = messages[last]!;
     const tokens = reportedInput(anchor)!.tokens;
     const before =
       book.sentEstimate(anchor.id) ??
       estimateRequestTokens({ ...request, messages: messages.slice(0, last) });
-    let ratio = 1;
+    let ratio: number | undefined;
     const earliest = messages[first]!;
     const earliestSent = first < last ? book.sentEstimate(earliest.id) : undefined;
     const lastSent = book.sentEstimate(anchor.id);
-    if (earliestSent !== undefined && lastSent !== undefined) {
-      const span = lastSent - earliestSent;
-      const grown = tokens - reportedInput(earliest)!.tokens;
-      if (span >= MIN_RATIO_SPAN && grown > 0) ratio = grown / span;
-    }
+    if (earliestSent !== undefined && lastSent !== undefined)
+      ratio = contentRatio(tokens - reportedInput(earliest)!.tokens, lastSent - earliestSent);
     return {
-      tokens: Math.round(tokens + (estimated - before) * ratio),
+      tokens: Math.round(tokens + (estimated - before) * (ratio ?? learned)),
       basis: 'anchor',
       estimated,
     };
@@ -359,7 +415,7 @@ export function estimateAnchoredTokens(
   const borrowed = book.firstCall(request);
   if (borrowed !== undefined)
     return {
-      tokens: Math.round(borrowed.tokens + (estimated - borrowed.estimated)),
+      tokens: Math.round(borrowed.tokens + (estimated - borrowed.estimated) * learned),
       basis: 'borrowed',
       estimated,
     };
