@@ -279,6 +279,11 @@ function ConversationView({
               {...(conversation.slashNotice === undefined
                 ? {}
                 : { slashNotice: conversation.slashNotice })}
+              {...(conversation.reconnecting === undefined
+                ? {}
+                : { reconnecting: conversation.reconnecting })}
+              recovered={conversation.recovered}
+              onReconnect={conversation.reconnectNow}
             />
             {/* 不掛 `role="status"`：那一格歸 `StatusLine`，這一句是背景，不是現況。 */}
             {notice !== undefined && <p className="text-muted-foreground text-xs">{notice}</p>}

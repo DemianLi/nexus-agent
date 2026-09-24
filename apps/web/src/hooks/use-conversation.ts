@@ -36,6 +36,7 @@ import { FramePublisher, publicationOf } from '@/lib/frame-publisher';
 import type { Publication } from '@/lib/frame-publisher';
 import { RatingsController } from '@/lib/feedback-ratings';
 import type { RatingsView } from '@/lib/feedback-ratings';
+import { RECOVERED_NOTICE_MS, reconnectDelay } from '@/lib/reconnect';
 
 /** 回饋對話框開給誰：一則回覆（按了讚或踩），或整個會話（只打了 `/feedback`）。 */
 export type FeedbackTarget =
@@ -74,9 +75,20 @@ export interface Conversation {
   readonly historyError?: string;
   /** 往前翻一頁，接在最前面。沒有更早的、或正在拿時什麼都不做。 */
   loadEarlier(): Promise<void>;
-  /** 下行開好了沒。**開好之前不能送**——這條線沒有重播，早送的那一輪會看不到。 */
+  /** 下行開好了沒。**開好之前不能送**——這條線沒有重播，早送的那一輪會看不到。斷了就翻回 `false`。 */
   readonly connected: boolean;
+  /** 上一次開線失敗、或下行斷掉的原因。接回來就清掉。串流自己正常收掉時沒有原因可講，這一格不在。 */
   readonly connectionError?: string;
+  /**
+   * 下行斷了（或第一次就沒開成），正在自動重接（[#593](https://github.com/DemianLi/nexus-agent/issues/593)）。
+   * `wasConnected` 分得出「連上過、中斷了」與「從沒連上」；`offline` 是瀏覽器說沒有網路，這時不排重試，
+   * 回到線上才從頭算。
+   */
+  readonly reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
+  /** 剛重新接上：狀態列短暫講一句，{@link RECOVERED_NOTICE_MS} 後收掉。 */
+  readonly recovered: boolean;
+  /** 不等退避，立刻重接一次，退避從頭算。沒在重接時什麼都不做。 */
+  reconnectNow(): void;
   /**
    * 上一個上行指令被拒的原因。
    *
@@ -194,6 +206,21 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const [feedbackDialog, setFeedbackDialog] = useState<FeedbackDialogState | undefined>(undefined);
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState<string | undefined>(undefined);
+  const [reconnecting, setReconnecting] = useState<Conversation['reconnecting']>(undefined);
+  const [recovered, setRecovered] = useState(false);
+  /** 每加一就重開一次下行（#593）：自動重試與「立刻重連」都走這一格。 */
+  const [generation, setGeneration] = useState(0);
+  /**
+   * 重接的帳。**放 ref 不放 state**：計時器與 `online` 事件在 effect 外面讀寫它，不需要為它重畫。
+   * `attempt` 是連續第幾次重試（接上就歸零）；`lost` 是下行現在斷著；`everConnected` 分「中斷」與「從沒連上」。
+   */
+  const retry = useRef<{
+    attempt: number;
+    lost: boolean;
+    everConnected: boolean;
+    timer?: ReturnType<typeof setTimeout>;
+    recoveredTimer?: ReturnType<typeof setTimeout>;
+  }>({ attempt: 0, lost: false, everConnected: false });
   const [commandError, setCommandError] = useState<string | undefined>(undefined);
   const [slashCommands, setSlashCommands] = useState<readonly SlashDescriptor[]>([]);
   const [slashError, setSlashError] = useState<string | undefined>(undefined);
@@ -210,9 +237,71 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const dialogRef = useRef(feedbackDialog);
   dialogRef.current = feedbackDialog;
 
+  /** 排下一次重試。瀏覽器說離線就不排，等 `online`（照 dsh 的 `setNetworkAvailable`）。 */
+  const scheduleRetry = useCallback(() => {
+    const book = retry.current;
+    clearTimeout(book.timer);
+    book.timer = undefined;
+    const offline = typeof navigator !== 'undefined' && !navigator.onLine;
+    setReconnecting({ wasConnected: book.everConnected, offline });
+    if (offline) return;
+    book.attempt += 1;
+    book.timer = setTimeout(() => {
+      book.timer = undefined;
+      setGeneration((current) => current + 1);
+    }, reconnectDelay(book.attempt));
+  }, []);
+
+  const reconnectNow = useCallback(() => {
+    const book = retry.current;
+    if (!book.lost) return;
+    clearTimeout(book.timer);
+    book.timer = undefined;
+    book.attempt = 0;
+    setGeneration((current) => current + 1);
+  }, []);
+
+  // 網路回來時退避從頭算，離開時停掉排著的那一次（同 dsh：`online` 後照樣先等第 1 次的退避，不是當場接）。
+  useEffect(() => {
+    const onOnline = () => {
+      if (!retry.current.lost) return;
+      retry.current.attempt = 0;
+      scheduleRetry();
+    };
+    const onOffline = () => {
+      if (!retry.current.lost) return;
+      scheduleRetry();
+    };
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, [scheduleRetry]);
+
+  // 卸載（換 thread 時整個 view 重掛）就把兩個計時器收掉：不能對已經離開的 thread 重接。
+  useEffect(() => {
+    const book = retry.current;
+    return () => {
+      clearTimeout(book.timer);
+      clearTimeout(book.recoveredTimer);
+    };
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
+    /** 這條下行斷了：翻回沒連上、講原因、排下一次（#593）。串流正常收掉也算——server 不會無故收線。 */
+    const lose = (reason: string | undefined) => {
+      const book = retry.current;
+      book.lost = true;
+      clearTimeout(book.recoveredTimer);
+      setRecovered(false);
+      setConnected(false);
+      setConnectionError(reason);
+      scheduleRetry();
+    };
 
     void (async () => {
       try {
@@ -227,14 +316,32 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         if (cancelled) {
           return;
         }
+        // **從空的重折，不接在現有的後面**（#593）：重接時傳輸 seq 可能從 0 重算（serve 重開過），折疊器又丟掉
+        // `seq <= lastSeq` 的 frame，沿用舊的那份的話，新來的會全被當成重複。重接等於重新打開這一頁，只存在
+        // 本地的東西（例如「已核准：X」）跟重新整理一樣不在了。第一次開線時現有的那份本來就是空的。
         if (page.kind === 'ok') {
           const { events: frames, ...cursor } = page.result;
-          advance((previous) => reduceAll(previous, frames));
+          advance(() => reduceAll(emptyConversation(), frames));
           setHistory({ ...cursor, loading: false });
+          setHistoryError(undefined);
         } else {
+          advance(() => emptyConversation());
+          setHistory(undefined);
           setHistoryError(page.message);
         }
+        const book = retry.current;
+        const wasLost = book.lost && book.everConnected;
+        book.lost = false;
+        book.attempt = 0;
+        book.everConnected = true;
         setConnected(true);
+        setConnectionError(undefined);
+        setReconnecting(undefined);
+        if (wasLost) {
+          setRecovered(true);
+          clearTimeout(book.recoveredTimer);
+          book.recoveredTimer = setTimeout(() => setRecovered(false), RECOVERED_NOTICE_MS);
+        }
         // **抓清單排在開線之後**，跟送話同一條規則：這條線沒有重播，所有的上行都等
         // 下行開好。清單本身不需要重播，但兩套順序規則比一套容易記錯。
         const listed = await client.slashList(threadId);
@@ -252,9 +359,10 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
           }
           advance((previous) => reduceConversation(previous, event), publicationOf(event));
         }
+        if (!cancelled) lose(undefined);
       } catch (error) {
         if (!cancelled) {
-          setConnectionError(error instanceof Error ? error.message : String(error));
+          lose(error instanceof Error ? error.message : String(error));
         }
       }
     })();
@@ -265,7 +373,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       controller.abort();
       setConnected(false);
     };
-  }, [client, threadId, advance]);
+  }, [client, threadId, advance, generation, scheduleRetry]);
 
   /** 收下上行的回條：被拒就說出來，成功就把上一次的抱怨收掉。 */
   const note = useCallback((result: UplinkResult) => {
@@ -486,6 +594,9 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   return {
     state,
     connected,
+    recovered,
+    reconnectNow,
+    ...(reconnecting === undefined ? {} : { reconnecting }),
     loadEarlier,
     ...(history === undefined
       ? {}
