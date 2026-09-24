@@ -9,7 +9,9 @@
  * 慢到按得到停止。判準是兩條路折出同一份：即時的 frame 與 `historyFrames` 從日誌導出來的。
  *
  * **下一輪一定要送得出去**：只有推理的那則送回模型時是 `content: []`（`ChatOpenAI` 丟推理區塊）。這裡驗
- * 的是我們送得出去、假端點記到的正是那個形狀；真端點收不收是 #561 另外量的（NVIDIA 閘道收）。
+ * 的是我們送得出去、假端點記到的正是那個形狀；真端點收不收是 #561 另外量的（NVIDIA 閘道收，#592 另量
+ * gpt-oss-20b 也收）。這裡用的是裸的 `ChatOpenAI`，記到的是 LangChain 自己送的形狀；產品路徑的
+ * `createLiveModel` 會在送出前照 dsh 把這則整則拿掉（`live-model.ts` 的 `withEmptyAssistantContent`）。
  */
 
 import { createServer } from 'node:http';
