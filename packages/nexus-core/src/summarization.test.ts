@@ -171,6 +171,69 @@ describe('壓力閘門接在有效串上（接線）', () => {
 });
 
 /**
+ * **生摘要的那次呼叫帶「不上線」的標記，交下去的是本尊**（[#584](https://github.com/DemianLi/nexus-agent/issues/584)）。
+ *
+ * 即時與重新整理對得上的那條驗收在 `apps/harness/src/context-pressure.test.ts`，走的是產品路徑。那條驗不到「換回本尊」：
+ * 主模型那次先經過 `bindTools`，拿到的是新實例，替身的 `invoke` 本來就碰不到它。換回本尊防的是下一層直接
+ * `invoke`、不先 `bindTools` 的那條路，所以釘在這裡：直接叫 `wrapModelCall`，看交下去的是哪一顆。
+ */
+describe('生摘要的那次呼叫不上線（接線）', () => {
+  function fakeModel() {
+    const calls: { tags: unknown }[] = [];
+    return {
+      calls,
+      // 基座只讀 `profile`、只呼叫 `invoke`。
+      model: {
+        profile: {},
+        invoke: async (_input: unknown, config?: { tags?: unknown }) => {
+          calls.push({ tags: config?.tags });
+          return { text: '這是摘要。' };
+        },
+      },
+    };
+  }
+
+  async function modelHandedDown(trigger: readonly SummarizationThreshold[], model: object) {
+    const middleware = createSummarizer({ write: async (path: string) => ({ path }) } as never, {
+      ...DEFAULT_SUMMARIZATION,
+      trigger,
+      keep: { type: 'messages', value: 2 },
+    });
+    let handed: unknown;
+    await middleware.wrapModelCall?.(
+      {
+        messages: longHistory(10),
+        state: {},
+        model,
+        systemMessage: new SystemMessage('系統。'),
+        tools: [],
+      } as never,
+      ((request: { model: unknown }) => {
+        handed = request.model;
+        return new AIMessage('好。');
+      }) as never,
+    );
+    return handed;
+  }
+
+  it('摘要了：生摘要那次帶 nostream，交下去的是本尊', async () => {
+    const { model, calls } = fakeModel();
+    const handed = await modelHandedDown([{ type: 'messages', value: 6 }], model);
+    // 前提：真的摘要了，本尊的 `invoke` 被叫了一次。
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.tags).toEqual(['nostream']);
+    expect(handed).toBe(model);
+  });
+
+  it('沒摘要：交下去的也是本尊，一次都沒叫', async () => {
+    const { model, calls } = fakeModel();
+    const handed = await modelHandedDown([{ type: 'messages', value: 1_000 }], model);
+    expect(calls).toEqual([]);
+    expect(handed).toBe(model);
+  });
+});
+
+/**
  * **從摘要器的回傳值認出「這一輪真的壓縮了」。**
  *
  * 這是 `compaction/summary`（[#143](https://github.com/DemianLi/nexus-agent/issues/143)）

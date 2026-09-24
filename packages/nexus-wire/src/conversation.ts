@@ -34,6 +34,8 @@
 import { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 import type { WireContextMeasure, WireContextPressure } from './context-pressure.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
+import { TODOS } from './todos.js';
+import type { WireTodoItem } from './todos.js';
 import type { WirePresentedFile } from './deliverables.js';
 import { WORKSPACE_CHANGES } from './workspace-changes.js';
 import type { Event } from './protocol.js';
@@ -353,6 +355,11 @@ export interface ConversationState {
    * 那一筆，規則見 `context-pressure.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
    */
   readonly contextPressure: WireContextPressure | null;
+  /**
+   * 模型的待辦清單（#575）：root 最後一次寫的整份，**一輪開始時回到 `null`**，一輪結束時保留。規則與「一輪開始」
+   * 為什麼不含 `resume` 見 `todos.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
+   */
+  readonly todos: readonly WireTodoItem[] | null;
 }
 
 const ROOT: Attribution = { kind: 'root' };
@@ -366,6 +373,7 @@ export function emptyConversation(): ConversationState {
     subagents: {},
     turnStart: 0,
     contextPressure: null,
+    todos: null,
   };
 }
 
@@ -572,8 +580,9 @@ function isPresentedFile(value: unknown): value is WirePresentedFile {
 }
 
 /**
- * `custom` frame。**只認 {@link DELIVERABLES_PRESENTED}、{@link WORKSPACE_CHANGES}、{@link MODEL_USAGE} 與
- * {@link CONTEXT_MEASURE}**，其他名字、形狀不對的一律略過：這個 channel 上的東西由 pump 從日誌合成，認不得的不猜。
+ * `custom` frame。**只認 {@link DELIVERABLES_PRESENTED}、{@link WORKSPACE_CHANGES}、{@link MODEL_USAGE}、
+ * {@link CONTEXT_MEASURE} 與 {@link TODOS}**，其他名字、形狀不對的一律略過：這個 channel 上的東西由 pump 從日誌
+ * 合成，認不得的不猜。
  */
 function reduceCustom(state: ConversationState, data: unknown): ConversationState {
   const { name, payload } = (data ?? {}) as { name?: unknown; payload?: unknown };
@@ -581,6 +590,7 @@ function reduceCustom(state: ConversationState, data: unknown): ConversationStat
   if (name === WORKSPACE_CHANGES) return reduceWorkspaceChanges(state, payload);
   if (name === MODEL_USAGE) return reduceModelUsage(state, payload);
   if (name === CONTEXT_MEASURE) return reduceContextMeasure(state, payload);
+  if (name === TODOS) return reduceTodos(state, payload);
   if (name !== DELIVERABLES_PRESENTED) return state;
   const { callId, seq, files } = payload as { callId?: unknown; seq?: unknown; files?: unknown };
   if (
@@ -641,6 +651,27 @@ function reduceContextMeasure(state: ConversationState, payload: object): Conver
   }
   const measure: WireContextMeasure = { approxTokens, messageCount, thresholds: parsed };
   return { ...state, contextPressure: { ...state.contextPressure, measure } };
+}
+
+/** 清單裡的一項長得對不對：同 dsh 的 `todosProjectionSchema`。 */
+function isTodoItem(value: unknown): value is WireTodoItem {
+  if (typeof value !== 'object' || value === null) return false;
+  const { content, status } = value as { content?: unknown; status?: unknown };
+  return (
+    typeof content === 'string' &&
+    (status === 'pending' || status === 'in_progress' || status === 'completed')
+  );
+}
+
+/**
+ * `todos` 的 `payload`：投影的整個值，**整份換掉**。`null` 是「一輪剛開始、還沒寫過」。任何一項不對就整顆不收，
+ * 不收一半——少一項的清單會把進度算錯，而且看起來正常。
+ */
+function reduceTodos(state: ConversationState, payload: object): ConversationState {
+  const { todos } = payload as { todos?: unknown };
+  if (todos === null) return { ...state, todos: null };
+  if (!Array.isArray(todos) || !todos.every(isTodoItem)) return state;
+  return { ...state, todos: todos.map(({ content, status }) => ({ content, status })) };
 }
 
 /** `workspace/changes` 的 `payload`：`seq` 要是非負整數，同一個 `seq` 只長一格。 */

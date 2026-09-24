@@ -13,6 +13,10 @@
  *   `AnswerEntry`。兩份都讀不到、或配不起來就只列題目，收著那一行退回「已回答 N 題」。參數原文不畫：它就是這幾題。
  * - **`present`**（#441 第一刀）：收著講檔名，展開逐個列檔名、完整路徑、說明，不畫參數原文。只講這顆呼叫說了什麼；
  *   交付成不成立看狀態，交付卡片是第二刀。判法在 `lib/present-view.ts`。
+ * - **`todo_write`**（#575）：收著講「2/5 完成 · 進行中的那一項」，同時進行的其餘幾項另起一格「+N」，不接在會被
+ *   截斷的字後面（照 dsh `planSummary`）；展開逐項列那一次寫入的快照，不畫參數原文，不做跟前一次的差異。參數解不開
+ *   或有一項壞掉就退回參數原文，不畫半套。判法在 `lib/todo-view.ts`；清單跟輸入框上方的面板共用（`todo-list.tsx`），
+ *   這裡是快照，所以進行中那一項不閃。
  */
 
 import type { AnswerEntry, Attribution, QuestionItem, ToolEntry } from '@nexus/wire';
@@ -21,6 +25,7 @@ import { useState } from 'react';
 
 import { AgentOrb } from '@/components/agent-orb';
 import { CodeBlock } from '@/components/markdown/code-block';
+import { TodoList } from '@/components/todo-list';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
@@ -36,6 +41,7 @@ import {
 import type { QuestionAnswer } from '@/lib/question-view';
 import { basename, PRESENT, presentedFilesOf, presentSummary } from '@/lib/present-view';
 import type { PresentedFile } from '@/lib/present-view';
+import { TODO_WRITE, todosOf, todoSummary } from '@/lib/todo-view';
 import { classifyTool, firstLine, toolInputBody, toolSummary, toolTitle } from '@/lib/tool-view';
 
 export const TOOL_STATUS_LABEL = {
@@ -160,6 +166,8 @@ export function ToolCard({
   const paired =
     questions === undefined || given === undefined ? undefined : pairQuestions(questions, given);
   const presented = entry.name === PRESENT ? presentedFilesOf(entry.input) : undefined;
+  const todos = entry.name === TODO_WRITE ? todosOf(entry.input) : undefined;
+  const todoLine = todos === undefined ? undefined : todoSummary(todos);
   const failed = entry.status === 'failed' && !stopped;
   const answered = entry.status === 'done';
   return (
@@ -183,19 +191,32 @@ export function ToolCard({
         </span>
         <span className="text-ui shrink-0 font-medium">{toolTitle(entry.name)}</span>
         <code className="text-muted-foreground shrink-0 font-mono text-xs">{entry.name}</code>
-        <span
-          className={`min-w-0 flex-1 truncate text-xs ${failed ? 'text-destructive' : 'text-muted-foreground'}`}
-        >
-          {/* 失敗時這一格換成錯誤的第一行（照 dsh `errorSummary`）：收著也看得到為什麼。 */}
-          {stopped
-            ? STOPPED_QUESTION_TEXT
-            : failed && entry.error !== undefined
-              ? firstLine(entry.error)
-              : questions !== undefined
-                ? questionSummary(questions, answered, given)
-                : presented !== undefined
-                  ? presentSummary(presented)
-                  : toolSummary(entry.name, entry.input)}
+        {/* 外層吃掉剩下的寬度，裡面那格才截斷：「+N」要貼在摘要後面，不是被推到最右邊的狀態字旁邊。 */}
+        <span className="flex min-w-0 flex-1 gap-1.5 text-xs">
+          <span
+            className={`min-w-0 truncate ${failed ? 'text-destructive' : 'text-muted-foreground'}`}
+          >
+            {/* 失敗時這一格換成錯誤的第一行（照 dsh `errorSummary`）：收著也看得到為什麼。 */}
+            {stopped
+              ? STOPPED_QUESTION_TEXT
+              : failed && entry.error !== undefined
+                ? firstLine(entry.error)
+                : questions !== undefined
+                  ? questionSummary(questions, answered, given)
+                  : presented !== undefined
+                    ? presentSummary(presented)
+                    : todoLine !== undefined
+                      ? todoLine.text
+                      : toolSummary(entry.name, entry.input)}
+          </span>
+          {todoLine !== undefined &&
+            todoLine.extra > 0 &&
+            !(failed && entry.error !== undefined) && (
+              <span className="text-muted-foreground shrink-0" data-testid="todo-extra">
+                <span aria-hidden>+{todoLine.extra}</span>
+                <span className="sr-only">，另有 {todoLine.extra} 項進行中</span>
+              </span>
+            )}
         </span>
         <span className="hidden sm:inline-flex">
           <AttributionBadge attribution={entry.attribution} />
@@ -229,6 +250,8 @@ export function ToolCard({
             </>
           ) : presented !== undefined && presented.length > 0 ? (
             <PresentedFileList files={presented} />
+          ) : todos !== undefined ? (
+            <TodoList todos={todos} />
           ) : body === undefined ? (
             <p className="text-muted-foreground px-3 py-2 text-xs">沒有參數。</p>
           ) : (

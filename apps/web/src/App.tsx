@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { AppSidebar } from '@/components/app-sidebar';
 import { ApprovalCard } from '@/components/approval-card';
 import { Composer } from '@/components/composer';
+import { ContextMeter } from '@/components/context-meter';
 import { EmptyHero } from '@/components/empty-hero';
 import { FeedbackDialog } from '@/components/feedback-dialog';
 import { PendingSwap } from '@/components/pending-swap';
@@ -13,6 +14,7 @@ import { FEEDBACK_COMMAND_LINE } from '@/lib/feedback';
 import { QuestionPanel } from '@/components/question-panel';
 import { StatusLine } from '@/components/status-line';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { TodoPanel } from '@/components/todo-panel';
 import { Transcript, useFreshItems } from '@/components/transcript';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/sonner';
@@ -38,8 +40,8 @@ import type { ThreadChoice } from '@/lib/remembered-thread';
  * （[#306](https://github.com/DemianLi/nexus-agent/issues/306)）——所以「接得回來」看畫面就知道，不用這一句講。
  * **最後一句是出口**：不講的話，重新整理之後只會一直回到同一條 thread 上。
  *
- * **不講 todo**：沒有人讀 `todo/write` 重建它（`@nexus/plugin-todo` 沒有投影），模型是從對話裡那幾次
- * `todo_write` 記得它的——對話回來了它就在，不是另外回來的一樣東西。
+ * **不講 todo**：待辦清單自己畫在輸入框上方（`TodoPanel`，#575），harness 從日誌的 `todo/write` 投影出來，回來了
+ * 看得到；最後一輪之後又開了新的一輪就是沒有，照 dsh 的投影。模型則是從對話裡那幾次 `todo_write` 記得它的。
  */
 export const RESUMED_THREAD_NOTICE =
   '接著上一次的 thread。伺服器開著 --session-log、或還沒重開過的話，之前的對話重播在底下，模型也記得，' +
@@ -327,6 +329,8 @@ function ConversationView({
         )}
 
         <div className="mx-auto w-full max-w-2xl shrink-0 px-6 pt-2 pb-6">
+          {/* 換手區外面：底下換成核准或提問面板時照樣看得到，焦點搬移也不算它（#575 Q1）。 */}
+          <TodoPanel todos={conversation.state.todos} status={conversation.state.status} />
           <PendingSwap
             pendings={pendings}
             composerRef={composerRef}
@@ -413,6 +417,13 @@ function ConversationView({
                 stoppable={conversation.state.status === 'running'}
                 stopDisabled={!conversation.connected}
                 onStop={() => void conversation.cancel()}
+                meter={
+                  // 有待決時輸入框被面板換掉（藏起來、不卸載），點開的明細要跟著關（#528）。
+                  <ContextMeter
+                    pressure={conversation.state.contextPressure}
+                    hidden={pendings.length > 0}
+                  />
+                }
               />
             }
           />

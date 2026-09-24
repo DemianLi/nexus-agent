@@ -40,10 +40,13 @@
  *
  * ## 與 dsh 的偏離，三條
  *
- * 1. **沒有 `todos` 投影。** dsh 註冊一個 `ctx.sessionProjections` 單元（`turn/start` 清空、
- *    `todo/write` 換成最新、`turn/end` 保留），UI 從那裡讀。**我們沒有投影註冊表**——那是
- *    `@nexus/core` 的 `sessions.ts` 已經標過的同一條偏離（「後半還沒有」），不是這張卡新
- *    造的。今天讀清單的路是日誌本身與遙測。
+ * 1. **`todos` 投影不由這個套件註冊。** dsh 由 plugin 自己往 `ctx.sessionProjections` 註冊一個單元
+ *    （`turn/start` 清空、`todo/write` 換成最新、`turn/end` 保留），UI 從那裡讀。**我們沒有投影註冊表**——
+ *    那是 `@nexus/core` 的 `sessions.ts` 已經標過的同一條偏離（「後半還沒有」）。所以同一套規則寫在
+ *    消費者那一側（[#575](https://github.com/DemianLi/nexus-agent/issues/575)）：harness 的 pump 與歷史路由把
+ *    root 的 `todo/write` 與開新一輪的 `turn/start` 合成 `custom` frame，`@nexus/wire` 折成
+ *    `ConversationState.todos`，同交付（#441）、改動（#443）、用量（#528）。偏的是載體，規則照抄；唯一的
+ *    對應是「一輪開始」不含 `resume`，理由見 `@nexus/wire` 的 `todos.ts`。
  * 2. **沒有 `output.schema` 與 `presentCall` 的卡片。** dsh 的工具回結構化結果並自己渲染；
  *    我們的工具回一句字串（LangChain 的 `tool()` 形狀）。模型看到的那句話逐字照抄 dsh 的
  *    `Updated todo list: … pending, … in progress, … completed.`

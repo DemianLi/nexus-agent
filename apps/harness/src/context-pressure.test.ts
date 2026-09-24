@@ -43,13 +43,19 @@ type Reply =
  */
 async function fakeOpenAi(script: readonly Reply[] = []) {
   let requests = 0;
+  /** 每一次請求是不是串流、有沒有帶工具——摘要那一次沒有工具。 */
+  const seen: { readonly stream: boolean; readonly tools: boolean }[] = [];
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', () => {
       const index = requests;
       requests += 1;
-      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { stream?: boolean };
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+        stream?: boolean;
+        tools?: unknown;
+      };
+      seen.push({ stream: body.stream === true, tools: Array.isArray(body.tools) });
       const reply = script[index] ?? { text: 'ok' };
       if ('status' in reply) {
         res.writeHead(reply.status, { 'content-type': 'application/json' });
@@ -116,6 +122,7 @@ async function fakeOpenAi(script: readonly Reply[] = []) {
   return {
     baseURL: `http://127.0.0.1:${port}/v1`,
     requests: () => requests,
+    seen,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }
@@ -182,6 +189,7 @@ async function converse(
     return {
       frames,
       failures,
+      requests: upstream.seen,
       root: pump.sessionLog.events,
       subagents: pump.sessions
         .list()
@@ -338,5 +346,34 @@ describe('即時與重新整理拿到同一份，只算 root', () => {
     expect(own.some((event) => event.type === 'model/usage')).toBe(false);
     expect(own.some((event) => event.type === 'context/measure')).toBe(false);
     expect(pressureOf(last.events)).toEqual(live);
+  }, 30000);
+});
+
+describe('生摘要的那次模型呼叫不上線（#584）', () => {
+  const SUMMARY = '（摘要）前面聊了幾件事。';
+  const aiTexts = (frames: readonly Event[]) =>
+    reduceAll(emptyConversation(), frames).entries.flatMap((entry) =>
+      entry.kind === 'ai' ? [entry.text] : [],
+    );
+
+  it('摘要那一輪即時與重新整理一樣，摘要本身不在任何一顆 frame 裡', async () => {
+    const { frames, root, requests } = await converse(TURNS, {
+      summarization: summarizeAt([{ type: 'messages', value: 3 }]),
+      script: [{ text: '第一輪回話' }, { text: SUMMARY }, { text: '第二輪回話' }],
+    });
+    // 前提：第二次請求是摘要（沒帶工具），而且是串流的——不串流的話它本來就不會逐段上線。
+    expect(requests).toEqual([
+      { stream: true, tools: true },
+      { stream: true, tools: false },
+      { stream: true, tools: true },
+    ]);
+    const summaries = eventsOf(root, 'compaction/summary');
+    expect(summaries).toHaveLength(1);
+    expect(JSON.stringify(summaries[0]!.summary)).toContain(SUMMARY);
+
+    // 摘要之後那一輪真正的回話照常即時上線。
+    expect(aiTexts(frames)).toEqual(['第一輪回話', '第二輪回話']);
+    expect(aiTexts(historyPage(root).events)).toEqual(aiTexts(frames));
+    expect(JSON.stringify(frames)).not.toContain(SUMMARY);
   }, 30000);
 });
