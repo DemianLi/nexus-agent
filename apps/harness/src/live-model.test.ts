@@ -15,7 +15,9 @@ import {
   isDerivedContextOverflow,
   modelGoneMessage,
   retryDecision,
+  StreamIdleTimeoutError,
   withInbandStreamErrors,
+  withStreamIdleTimeout,
 } from './live-model.js';
 import { MEASURED_MODELS } from './eval/tiers.js';
 import { liveModelConfigSchema } from './settings/live-model.js';
@@ -813,7 +815,8 @@ describe('串流內回報的錯誤（#516）', () => {
    * **實測說不是**：兩側的請求數相同，而且**都**是 `retries + 1`。SDK 的逾時本來就是掛在
    * 整個請求上（`APIConnectionTimeoutError` 的 `name` 不是 `AbortError`、沒有 status，
    * 所以 {@link retryDecision} 本來就判它重試）。**這個乘法在這一刀之前就存在**，不是
-   * 這一層帶來的；要不要壓掉它是另一張卡。
+   * 這一層帶來的。#521 查過之後照 dsh 保留（dsh 的 `TIMEOUT` 也在預設可重試碼裡），見
+   * {@link DEFAULT_LIVE_TIMEOUT_MS}。
    *
    * 這條的價值就是把那件事釘住：哪天兩側分岔了，那才是這一層動到了掛住的連線。
    *
@@ -875,5 +878,284 @@ describe('createLiveModel 真的掛上了那一層（#516）', () => {
     const response = await wired!(`${DEFAULT_LIVE_BASE_URL}/chat/completions`, { method: 'POST' });
     expect(response.status).toBe(503);
     expect(await response.text()).toContain('Service temporarily overloaded');
+  });
+});
+
+/**
+ * **串流吐了內容之後停住**（[#521](https://github.com/DemianLi/nexus-agent/issues/521)）。
+ *
+ * SDK 的 `timeout` 在 `fetch` 回來時就清掉，所以第一則事件之後什麼都不管；修之前 serve 上那一輪會
+ * 一直等到有人按停止。這一組釘住 {@link withStreamIdleTimeout} 的五件事：
+ *
+ * | 格 | 接上之後 | 釘住的是 |
+ * | --- | --- | --- |
+ * | 吐一段就停（`midstall`） | 拋 {@link StreamIdleTimeoutError}、打 1 次 | 缺口補上了、中段不重試 |
+ * | 同一格不接（對照組） | 掛到外面的時限 | 缺口是真的，不是這一組量錯 |
+ * | 段與段隔 200ms、總長超過逾時（`slowdrip`） | 完整讀完 | 是**閒置**逾時，不是整條串流一個總時限 |
+ * | 開了線不吐位元組（`stalled`） | 兩側請求數相同 | 第一則事件之前照舊歸 SDK 管、照舊重試 |
+ * | 讀到一半使用者中止 | 兩側結果相同、不是逾時 | 中止沒被報成逾時 |
+ *
+ * **零憑證、零外部連線**：loopback 上的假 SSE 伺服器。
+ */
+describe('串流閒置逾時（#521）', () => {
+  const IDLE_MS = 300;
+
+  type Cell = 'midstall' | 'slowdrip' | 'stalled';
+
+  function sseChunk(delta: Record<string, unknown>, finish: string | null = null): string {
+    return `data: ${JSON.stringify({
+      id: 'chatcmpl-1',
+      object: 'chat.completion.chunk',
+      created: 1_790_000_000,
+      model: DEFAULT_LIVE_MODEL_ID,
+      choices: [{ index: 0, delta, finish_reason: finish, logprobs: null }],
+    })}\n\n`;
+  }
+
+  const DRIP = ['交付', '物已', '備妥', '，請', '查收'];
+
+  let server: Server;
+  let baseURL: string;
+  let hits = 0;
+  let cell: Cell = 'midstall';
+
+  beforeEach(async () => {
+    hits = 0;
+    server = createServer((request, response) => {
+      hits += 1;
+      request.resume();
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      const send = (text: string): void => void response.write(text);
+      if (cell === 'stalled') return;
+      send(sseChunk({ role: 'assistant', content: '' }));
+      if (cell === 'midstall') {
+        send(sseChunk({ content: '交付' }));
+        return;
+      }
+      // slowdrip：每段隔 200ms，比閒置逾時短，但總長（約 1 秒）比它長得多。
+      DRIP.forEach((piece, index) => {
+        setTimeout(
+          () => {
+            send(sseChunk({ content: piece }));
+            if (index === DRIP.length - 1) {
+              send(sseChunk({}, 'stop'));
+              response.end('data: [DONE]\n\n');
+            }
+          },
+          200 * (index + 1),
+        );
+      });
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('拿不到 loopback 埠');
+    baseURL = `http://127.0.0.1:${address.port}/v1`;
+  });
+
+  afterEach(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((done) => server.close(() => done()));
+  });
+
+  /** `createLiveModel` 那兩層 fetch 的疊法；`watched` 為假時只剩 #516 那層（今天的行為）。 */
+  function model(watched: boolean, retries = 0): ChatOpenAI {
+    const inner = withInbandStreamErrors();
+    return new ChatOpenAI({
+      apiKey: 'fake-key-for-loopback',
+      model: DEFAULT_LIVE_MODEL_ID,
+      configuration: { baseURL, fetch: watched ? withStreamIdleTimeout(IDLE_MS, inner) : inner },
+      timeout: IDLE_MS,
+      maxRetries: retries,
+      onFailedAttempt: classifyFailedAttempt,
+    });
+  }
+
+  interface Run {
+    readonly outcome: 'completed' | 'threw' | 'hung';
+    readonly requests: number;
+    readonly chunks: number;
+    readonly text: string;
+    readonly elapsedMs: number;
+    readonly error?: unknown;
+  }
+
+  /** 讀完一條串流；過了 `capMs` 還沒結束就判成 `hung`（對照組要量得到「掛住」）。 */
+  async function run(
+    which: Cell,
+    watched: boolean,
+    options: { retries?: number; capMs?: number; abortAfterFirst?: boolean } = {},
+  ): Promise<Run> {
+    cell = which;
+    hits = 0;
+    let chunks = 0;
+    let text = '';
+    const started = Date.now();
+    const controller = new AbortController();
+    const reading = (async (): Promise<Omit<Run, 'requests' | 'elapsedMs'>> => {
+      try {
+        const stream = await model(watched, options.retries).stream('present report.md', {
+          signal: controller.signal,
+        });
+        for await (const part of stream) {
+          chunks += 1;
+          if (typeof part.content === 'string') text += part.content;
+          if (options.abortAfterFirst === true && text !== '') controller.abort();
+        }
+        return { outcome: 'completed', chunks, text };
+      } catch (error: unknown) {
+        return { outcome: 'threw', chunks, text, error };
+      }
+    })();
+    const cap = new Promise<Omit<Run, 'requests' | 'elapsedMs'>>((resolve) => {
+      setTimeout(() => resolve({ outcome: 'hung', chunks, text }), options.capMs ?? 3_000);
+    });
+    const result = await Promise.race([reading, cap]);
+    return { ...result, requests: hits, elapsedMs: Date.now() - started };
+  }
+
+  it('吐一段就停：接上之後拋閒置逾時、只打一次', async () => {
+    const after = await run('midstall', true, { retries: 2 });
+
+    expect(after.outcome).toBe('threw');
+    expect(after.error).toBeInstanceOf(StreamIdleTimeoutError);
+    // **前提**：收到過內容，才是「中段停住」而不是「連線失敗」（同 #516 `truncated` 那條）。
+    expect(after.text).toBe('交付');
+    expect(after.requests).toBe(1);
+    expect(after.elapsedMs).toBeLessThan(2_000);
+  }, 10_000);
+
+  it('對照組：同一格不接這一層，就掛著', async () => {
+    const before = await run('midstall', false, { capMs: 1_500 });
+
+    expect(before.outcome).toBe('hung');
+    expect(before.text).toBe('交付');
+  }, 10_000);
+
+  it('段與段隔得比逾時短、總長比逾時長：完整讀完 —— 是閒置逾時，不是總時限', async () => {
+    const after = await run('slowdrip', true);
+
+    expect(after.outcome).toBe('completed');
+    expect(after.text).toBe(DRIP.join(''));
+    expect(after.elapsedMs).toBeGreaterThan(IDLE_MS * 2);
+  }, 10_000);
+
+  it('開了線不吐位元組：兩側請求數相同 —— 第一則事件之前照舊歸 SDK 管、照舊重試', async () => {
+    const after = await run('stalled', true, { retries: 1 });
+    const before = await run('stalled', false, { retries: 1 });
+
+    expect(after.outcome).toBe('threw');
+    expect(before.outcome).toBe('threw');
+    expect(after.error).not.toBeInstanceOf(StreamIdleTimeoutError);
+    expect(after.requests).toBe(before.requests);
+    expect(after.requests).toBe(2);
+  }, 30_000);
+
+  it('讀到一半使用者中止：兩側結果相同，不會被報成逾時', async () => {
+    const after = await run('slowdrip', true, { abortAfterFirst: true });
+    const before = await run('slowdrip', false, { abortAfterFirst: true });
+
+    expect(after.outcome).toBe(before.outcome);
+    expect(after.outcome).not.toBe('hung');
+    expect(after.error).not.toBeInstanceOf(StreamIdleTimeoutError);
+    expect(after.text).toBe(before.text);
+  }, 10_000);
+});
+
+/** 計時器在三種收尾都要清掉：留一顆 90 秒的計時器，serve 就掛著一個沒人要的 closure。 */
+describe('閒置計時器的收尾（#521）', () => {
+  const timers = (): number =>
+    process.getActiveResourcesInfo().filter((kind) => kind === 'Timeout').length;
+
+  function sse(parts: readonly string[], end: boolean): typeof fetch {
+    return (() =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              for (const part of parts) controller.enqueue(new TextEncoder().encode(part));
+              if (end) controller.close();
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        ),
+      )) as typeof fetch;
+  }
+
+  it('讀完：不留計時器', async () => {
+    const before = timers();
+    const response = await withStreamIdleTimeout(60_000, sse(['data: 1\n\n'], true))('x');
+    await response.text();
+    expect(timers()).toBe(before);
+  });
+
+  it('下游取消：不留計時器，底下那條也被取消', async () => {
+    const before = timers();
+    const response = await withStreamIdleTimeout(60_000, sse(['data: 1\n\n'], false))('x');
+    const reader = response.body!.getReader();
+    await reader.read();
+    const pending = reader.read();
+    await reader.cancel('不要了');
+    await pending;
+    expect(timers()).toBe(before);
+  });
+
+  it('逾時：拋閒置逾時，不留計時器', async () => {
+    const before = timers();
+    const response = await withStreamIdleTimeout(50, sse(['data: 1\n\n'], false))('x');
+    const reader = response.body!.getReader();
+    await reader.read();
+    await expect(reader.read()).rejects.toBeInstanceOf(StreamIdleTimeoutError);
+    expect(timers()).toBe(before);
+  });
+
+  it('非 SSE 的回應原樣放行', async () => {
+    const plain = new Response('{}', {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+    const response = await withStreamIdleTimeout(50, (() =>
+      Promise.resolve(plain)) as typeof fetch)('x');
+    expect(response).toBe(plain);
+  });
+});
+
+/** 工廠建出來的 client 真的帶著閒置計時，而且用的是設定裡的 `timeoutMs`。 */
+describe('createLiveModel 真的掛上了閒置逾時（#521）', () => {
+  const original = process.env[LIVE_API_KEY_ENV];
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    if (original === undefined) delete process.env[LIVE_API_KEY_ENV];
+    else process.env[LIVE_API_KEY_ENV] = original;
+  });
+
+  it('吐一則事件就停：用 config.timeoutMs 逾時', async () => {
+    process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
+    // 底層 fetch 是工廠建出來那一刻的全域 fetch，所以先換掉再建工廠。
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('data: {"choices":[]}\n\n'));
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        ),
+      )) as typeof fetch;
+
+    const wired = createLiveModel({ ...DEFAULTS, timeoutMs: 80 }).clientConfig.fetch;
+    const response = await wired!(`${DEFAULT_LIVE_BASE_URL}/chat/completions`, { method: 'POST' });
+    const reader = response.body!.getReader();
+    await reader.read();
+    const started = Date.now();
+    const error = await reader.read().then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+    expect(error).toBeInstanceOf(StreamIdleTimeoutError);
+    expect((error as StreamIdleTimeoutError).timeoutMs).toBe(80);
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 });
