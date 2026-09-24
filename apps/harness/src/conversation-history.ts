@@ -190,8 +190,8 @@ export function workspaceChangesData(seq: number): {
 
 /**
  * root 一次模型呼叫報回的用量在線上的 `custom` 事件 `data`（[#528](https://github.com/DemianLi/nexus-agent/issues/528)）。
- * 即時與這裡共用，同 {@link deliverablesData}。**只送 `inputTokens`**：用量表只顯示「目前多大」，
- * 累計燒了多少是 #574 的事。
+ * 即時與這裡共用，同 {@link deliverablesData}。**只送 `inputTokens`**：用量表只顯示「目前多大」；
+ * 累計燒了多少另外走 {@link tokenUsageData}（#574）。
  *
  * @param usage - 日誌裡那一顆 `model/usage` 的酬載。
  * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `ModelUsagePayload`。

@@ -8,9 +8,14 @@
  * ## 載體退到哪裡
  *
  * - **沒有投影註冊表。** dsh 把單元註冊到 `session-projection`，由它交給 web 的統計列。我們
- *   沒有那個註冊表，也沒有那個畫面；**今天的讀者是離線掃描**
- *   （[#268](https://github.com/DemianLi/nexus-agent/issues/268) 的步數欄），它自己把事件
- *   餵過 {@link deriveSessionStats}。形狀照單元寫，哪天有了註冊表可以原樣登記。
+ *   沒有那個註冊表，讀者各自把事件餵過單元：
+ *   - **web 的統計**（[#574](https://github.com/DemianLi/nexus-agent/issues/574)）：pump 逐顆套、歷史每頁從
+ *     日誌開頭折一次，都經 `apps/harness/src/conversation-history.ts` 的 `SessionTotals`，以 `sessionStats`
+ *     這個 `custom` frame 上線（`@nexus/wire` 的 `session-totals.ts`）。
+ *   - **離線掃描**（[#268](https://github.com/DemianLi/nexus-agent/issues/268) 的步數欄），經
+ *     {@link deriveSessionStats}。
+ *
+ *   形狀照單元寫，哪天有了註冊表可以原樣登記。
  * - **步是模型呼叫，不是 dsh 的步。** 邊界是 `model/start`／`model/end`（見
  *   {@link ./model-calls.ts}），只包模型那一段、工具落在外面。**顆數對得上**——一步恰好一次
  *   模型請求——所以 `steps` 照 dsh 的意思數；`llmMs` 也同義：dsh 量 `step/start` →

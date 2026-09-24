@@ -20,8 +20,12 @@
  * ## 數字是逐份日誌的
  *
  * subagent 的模型呼叫記進它自己那份（`model-usage.ts` 的 `forCall`），所以 **root 那份的總帳不含子代理**——#574
- * 定案要的正是這個，同 dsh：子代理是另一個會話，`tokenUsage` 只折自己那份。生摘要的那次呼叫不經過
- * `wrapModelCall`，任何一份都沒有它的帳。
+ * 定案要的正是這個，同 dsh：子代理是另一個會話，`tokenUsage` 只折自己那份。
+ *
+ * **生摘要的那次也不在任何一份裡**，同 dsh（它記在 `compaction/summary.usage`、不進 `tokenUsage`）：基座在自己的
+ * `wrapModelCall` 裡直接 `request.model.invoke` 生摘要（`summarization.ts` 的 `withQuietSummaryCall` 那段說明），
+ * 不經過 `handler`，而記帳只記 `handler` 回來的那一顆。實測在 `apps/harness/src/context-pressure.test.ts` 的
+ * 「會話總帳不含生摘要的那一次」。
  *
  * @module
  */

@@ -391,3 +391,30 @@ describe('生摘要的那次模型呼叫不上線（#584）', () => {
     expect(JSON.stringify(frames)).not.toContain(SUMMARY);
   }, 30000);
 });
+
+describe('會話總帳不含生摘要的那一次（#574）', () => {
+  /**
+   * 基座在自己的 `wrapModelCall` 裡直接 `request.model.invoke` 生摘要，不經過 `handler`，而 `model/usage` 只記
+   * `handler` 回來的那一顆（`model-usage.ts`）。讀程式碼得出的結論，這裡打一次：假端點每次請求報的數都不同，摘要那次
+   * 報的那個數不能出現在任何一條路上。
+   */
+  it('摘要那次的請求有打出去，它報的用量不在 root 日誌、即時、歷史的總帳裡', async () => {
+    const run = await converse(TURNS, {
+      summarization: summarizeAt([{ type: 'messages', value: 3 }]),
+    });
+    // 前提：真的摘要了——三次請求裡恰好一次不帶工具，日誌記了一顆摘要。
+    expect(run.requests).toHaveLength(3);
+    const summaryAt = run.requests.findIndex((request) => !request.tools);
+    expect(run.requests.filter((request) => !request.tools)).toHaveLength(1);
+    expect(eventsOf(run.root, 'compaction/summary')).toHaveLength(1);
+
+    const inputs = eventsOf(run.root, 'model/usage').map((usage) => usage.inputTokens);
+    expect(inputs).toHaveLength(2);
+    expect(inputs).not.toContain(1000 + summaryAt);
+    const expected = { inputTokens: inputs[0]! + inputs[1]!, outputTokens: 2 };
+    expect(reduceAll(emptyConversation(), run.frames).tokenUsage).toEqual(expected);
+    expect(reduceAll(emptyConversation(), historyPage(run.root).events).tokenUsage).toEqual(
+      expected,
+    );
+  }, 30000);
+});
