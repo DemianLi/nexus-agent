@@ -23,6 +23,8 @@
  *
  * | `todo/write` ／ `turn/start` | 待辦清單（#575）：**一頁一顆，是這一頁結尾時的清單**，是 `null` 就不送；`data` 同即時（{@link todosData}） |
  *
+ * | `model/usage` ／ 輪、模型、工具的起訖 | token 總帳與會話統計（#574）：**一頁各一顆，是從日誌開頭折到這一頁結尾的值**，還是初值就不送；`data` 同即時（{@link SessionTotals}） |
+ *
  * 用量表那兩種不是逐顆轉：web 只留最新那一筆，逐顆轉只會多出一串馬上被蓋掉的 frame。「到這一頁結尾為止」包括這一頁
  * 開頭之前的——最後一輪在第一次模型呼叫之前就失敗的話，這一頁自己沒有那兩種事件，而即時的畫面上用量表還在。見
  * {@link historyPage}。
@@ -41,6 +43,8 @@ import type {
   Event,
   ModelUsagePayload,
   TodosPayload,
+  WireSessionStats,
+  WireTokenUsage,
   ThreadHistoryQuery,
   ThreadHistoryResult,
   WireContextMeasure,
@@ -52,11 +56,20 @@ import {
   HISTORY_PAGE_MAX_BYTES,
   HISTORY_PAGE_MESSAGES,
   MODEL_USAGE,
+  SESSION_STATS,
   TODOS,
+  TOKEN_USAGE,
   WORKSPACE_CHANGES,
 } from '@nexus/wire';
-import type { LoggedMessage, SessionEvent, SessionEventMap, UnreplayableReason } from '@nexus/core';
-import { loggedMessageId, replayConversation } from '@nexus/core';
+import type {
+  LoggedMessage,
+  SessionEvent,
+  SessionEventMap,
+  SessionStatsState,
+  TokenUsageTotals,
+  UnreplayableReason,
+} from '@nexus/core';
+import { loggedMessageId, replayConversation, sessionStatsUnit, tokenUsageUnit } from '@nexus/core';
 
 import { toolResultText } from './tool-result-text.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
@@ -238,6 +251,101 @@ export function todosData(todos: SessionEventMap['todo/write']['todos'] | null):
  */
 export function isTodosReset(event: SessionEvent): boolean {
   return event.type === 'turn/start' && event.data.kind !== 'resume';
+}
+
+/** 一顆 `custom` frame 的 `data`。 */
+type CustomData = { readonly name: string; readonly payload: unknown };
+
+/**
+ * 會話累計的兩個投影（[#574](https://github.com/DemianLi/nexus-agent/issues/574)）：token 總帳與會話統計，從 root
+ * 日誌的開頭折起。規則見 `@nexus/wire` 的 `session-totals.ts`，折疊本身在 `@nexus/core`。
+ *
+ * 即時（pump）與歷史共用這一個，所以「什麼時候送」只寫一次：**值跟上一次交出去的不一樣才交**，而上一次交出去的
+ * 從初值（全部 0）算起——值還是初值就一顆都不交，兩邊都一樣。**比的是值不是狀態**：會話統計的狀態在
+ * `model/start`、`tool/call` 也會換新物件，那時四格一格都沒動。
+ */
+export class SessionTotals {
+  #usage: TokenUsageTotals = tokenUsageUnit.init();
+  #stats: SessionStatsState = sessionStatsUnit.init();
+  #sentUsage: WireTokenUsage = tokenUsageUnit.view(this.#usage);
+  #sentStats: WireSessionStats = sessionStatsUnit.view(this.#stats);
+
+  /**
+   * 套一顆，回傳這一顆讓哪幾個值變了（零到兩顆 `data`），並記成「已經交出去」。
+   *
+   * @param event - root 日誌的下一顆。
+   */
+  apply(event: SessionEvent): CustomData[] {
+    this.seed([event]);
+    return this.flush();
+  }
+
+  /**
+   * 只折不交。之後叫一次 {@link flush} 就是「到這裡為止」的值：歷史頁拿它送；pump 帶著上一個行程留下的 seed 起來時
+   * 拿它丟掉——那一段的值由歷史的最後一頁送，即時只送之後的變化。
+   *
+   * @param events - 要折進來的那一段。
+   */
+  seed(events: Iterable<SessionEvent>): void {
+    for (const event of events) {
+      this.#usage = tokenUsageUnit.apply(this.#usage, event);
+      this.#stats = sessionStatsUnit.apply(this.#stats, event);
+    }
+  }
+
+  /** 跟上一次交出去的不一樣的那幾個值，交出去之後記下來。 */
+  flush(): CustomData[] {
+    const out: CustomData[] = [];
+    const usage = tokenUsageUnit.view(this.#usage);
+    if (
+      usage.inputTokens !== this.#sentUsage.inputTokens ||
+      usage.outputTokens !== this.#sentUsage.outputTokens
+    ) {
+      this.#sentUsage = usage;
+      out.push(tokenUsageData(usage));
+    }
+    const stats = sessionStatsUnit.view(this.#stats);
+    if (
+      stats.turns !== this.#sentStats.turns ||
+      stats.steps !== this.#sentStats.steps ||
+      stats.llmMs !== this.#sentStats.llmMs ||
+      stats.toolMs !== this.#sentStats.toolMs
+    ) {
+      this.#sentStats = stats;
+      out.push(sessionStatsData(stats));
+    }
+    return out;
+  }
+}
+
+/**
+ * root 日誌的 token 總帳在線上的 `custom` 事件 `data`（#574）。
+ *
+ * @param usage - 折出來的總帳。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `WireTokenUsage`。
+ */
+export function tokenUsageData(usage: TokenUsageTotals): {
+  readonly name: typeof TOKEN_USAGE;
+  readonly payload: WireTokenUsage;
+} {
+  return {
+    name: TOKEN_USAGE,
+    payload: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens },
+  };
+}
+
+/**
+ * root 日誌的會話統計在線上的 `custom` 事件 `data`（#574）。
+ *
+ * @param stats - 折出來的統計。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `WireSessionStats`。
+ */
+export function sessionStatsData(stats: WireSessionStats): {
+  readonly name: typeof SESSION_STATS;
+  readonly payload: WireSessionStats;
+} {
+  const { turns, steps, llmMs, toolMs } = stats;
+  return { name: SESSION_STATS, payload: { turns, steps, llmMs, toolMs } };
 }
 
 /** 用量表那兩種事件。見檔頭。 */
@@ -642,7 +750,15 @@ export function historyPage(
   // 最新的，這一頁自己有的就輪不到它。**切點不為它們讓位**（最多兩顆、各一兩百位元組），但撐破上限的判斷要算進去
   // ——那是低估的方向，正好是會讓送出去的超過上限的那一邊。
   const carried = latestPressureEvents(window.slice(0, cut));
-  const bytes = fitted.bytes + (carried.length === 0 ? 0 : weigh(carried, toolTextMaxBytes));
+  // 會話累計（#574）：從日誌開頭折到這一頁結尾，跟用量表一樣不為它們讓位、但算進上限的判斷。
+  const totals = new SessionTotals();
+  totals.seed(window.slice(0, end));
+  const lastTime = window[end - 1]?.time ?? 0;
+  const totalsFrames = totals.flush().map((data) => frame('custom', lastTime, data));
+  const bytes =
+    fitted.bytes +
+    (carried.length === 0 ? 0 : weigh(carried, toolTextMaxBytes)) +
+    (totalsFrames.length === 0 ? 0 : Buffer.byteLength(JSON.stringify(totalsFrames), 'utf8'));
   // 軟上限撐破了。**沒有人講的話這件事在線上完全看不見**——回應照樣是 200、畫面照樣對。
   if (bytes > HISTORY_PAGE_MAX_BYTES) onOversize?.(bytes);
 
@@ -651,11 +767,14 @@ export function historyPage(
     // **三種原因都是舊格式**：回覆、結果內容、摘要本文都是格式 9 才開始記的（#305），缺哪一樣都只可能出自 9 以前
     // 寫的那一段；哪一種先被撞到看的是日誌的順序（格式 8 的一輪，沒內容的結果落在收尾之前）。只認「沒有回覆」的話，
     // 真的 v8 日誌會被判成不是舊格式。切點對不上不算：畫面上不缺東西。
-    events: historyFrames(
-      [...carried, ...window.slice(cut, end)],
-      toolTextMaxBytes,
-      end === events.length ? awaitingInput : undefined,
-    ),
+    events: [
+      ...historyFrames(
+        [...carried, ...window.slice(cut, end)],
+        toolTextMaxBytes,
+        end === events.length ? awaitingInput : undefined,
+      ),
+      ...totalsFrames,
+    ],
     firstSeq: cut,
     throughSeq,
     hasMore: window.slice(0, cut).some(isMessage),

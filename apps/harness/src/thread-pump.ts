@@ -79,6 +79,7 @@ import {
   deliverablesData,
   isTodosReset,
   modelUsageData,
+  SessionTotals,
   todosData,
   workspaceChangesData,
 } from './conversation-history.js';
@@ -641,6 +642,11 @@ export class ThreadPump {
   readonly #bodyStarted = new Set<string>();
   /** 收掉日誌的訂閱：註冊表那一層，與每一份日誌那一層。 */
   readonly #unobserveLogs: () => void;
+  /**
+   * root 日誌的會話累計（[#574](https://github.com/DemianLi/nexus-agent/issues/574)）：token 總帳與會話統計，從日誌
+   * 開頭折起。**這是 pump 唯一記著的投影狀態**——用量表、待辦清單一顆事件就算得出值，這兩個是累計的。
+   */
+  readonly #totals = new SessionTotals();
   /** 一個 thread 一次只跑一個 run；後到的 submit 排隊，不平行跑。 */
   #tail: Promise<void> = Promise.resolve();
   /**
@@ -688,6 +694,12 @@ export class ThreadPump {
     // 這個回呼跑在寫日誌那一層的堆疊上，而註冊表不接訂閱者的例外——`subscribe` 本身不會拋。
     const unsubscribes: (() => void)[] = [];
     const unobserve = this.#sessions.observe((entry) => {
+      if (entry.address.kind === 'root') {
+        // 上一個行程留下的那一段（seed）先折進來、不送：那一段的值由歷史的最後一頁送。漏折它的話，重開之後送出去的
+        // 總帳只剩這個行程叫的那幾次。**跟訂閱在同一個同步段裡**，中間沒有空檔讓一顆事件兩邊都沒算到或兩邊都算到。
+        this.#totals.seed(entry.log.events);
+        this.#totals.flush();
+      }
       unsubscribes.push(entry.log.subscribe((event) => this.#noteLogEvent(entry, event)));
     });
     this.#unobserveLogs = () => {
@@ -1283,6 +1295,10 @@ export class ThreadPump {
    * （日誌的重入防護會拋），拋了也只換來一行 warn、判定就丟了。所以只動幾張表與下行的佇列。
    */
   #noteLogEvent(entry: SessionEntry, event: SessionEvent): void {
+    // 會話累計（#574）：只收 root 的，同 dsh 的 `tokenUsage`／`sessionStats`；子代理是另一份日誌。值變了才送。
+    if (entry.address.kind === 'root') {
+      for (const data of this.#totals.apply(event)) this.#presentCustom(data);
+    }
     if (event.type === 'tool/call') this.#openCard(entry.address, event.data);
     else if (event.type === 'tool/result') this.#noteVerdict(event);
     else if (event.type === 'deliverables/presented' && entry.address.kind === 'root') {
@@ -1298,7 +1314,7 @@ export class ThreadPump {
       // 待辦清單（#575）：只收 root 的，同 dsh 的 `todos` 投影；子代理各寫各的那一份，不進面板。
       this.#presentCustom(todosData(event.data.todos));
     } else if (entry.address.kind === 'root' && isTodosReset(event)) {
-      // 開新的一輪：清單回到 `null`。每一輪都送，不管之前有沒有清單——pump 不記投影的狀態。
+      // 開新的一輪：清單回到 `null`。每一輪都送，不管之前有沒有清單——pump 不記清單的狀態。
       this.#presentCustom(todosData(null));
     }
   }

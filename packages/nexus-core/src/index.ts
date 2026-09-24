@@ -222,6 +222,8 @@ export {
 } from './turn-cancel.js';
 export type { SessionStats, SessionStatsState } from './session-stats.js';
 export { deriveSessionStats, sessionStatsUnit } from './session-stats.js';
+export type { TokenUsageTotals } from './token-usage.js';
+export { deriveTokenUsage, tokenUsageUnit } from './token-usage.js';
 export type { ModelUsage } from './model-usage.js';
 export {
   createModelUsageRecorder,
