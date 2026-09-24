@@ -6,7 +6,7 @@
  * - 第一次訊號開始優雅收尾，收完強制結束——掛著的控制代碼不該讓行程賴著不走。
  * - **收尾進行中再來一次訊號就當場結束。** 那是使用者的「我不等了」，也是 dsh 的政策；
  *   代價是收尾沒做完的那一截會丟，所以耐久不能只靠收尾，要靠一輪之中的檢查點
- *   （`@nexus/core` 的 `durabilityCheckpointPlugin`）。
+ *   （`@nexus/core` 的 `sessionCheckpointPlugin`）。
  * - 收尾有上限（{@link PROCESS_SHUTDOWN_TIMEOUT_MS}），到了就強制結束：一個卡住的
  *   `dispose` 不能讓 Ctrl-C 失效。
  * - 收尾本身失敗也強制結束，用同一個碼。
