@@ -28,7 +28,9 @@ import {
   createWireClient,
   DELIVERABLES_PRESENTED,
   MODEL_USAGE,
+  SESSION_STATS,
   TODOS,
+  TOKEN_USAGE,
   emptyConversation,
   reduceAll,
 } from '@nexus/wire';
@@ -389,12 +391,12 @@ describe('present 在真的圖上', () => {
     );
     // 前提：那顆工具真的跑了。
     expectSucceeded(outcome.live, 'custom_writer');
-    // 線上的 `custom` 只剩 pump 從日誌合成的那幾種（這一段是用量表的與開輪時清空的待辦清單），工具寫的那一顆
+    // 線上的 `custom` 只剩 pump 從日誌合成的那幾種（這一段是用量表的、開輪時清空的待辦清單與會話累計），工具寫的那一顆
     // 一個字都沒上來。
     const custom = outcome.live.filter((frame) => frame.method === 'custom');
     expect(custom.length).toBeGreaterThan(0);
     for (const frame of custom) {
-      expect([MODEL_USAGE, CONTEXT_MEASURE, TODOS]).toContain(
+      expect([MODEL_USAGE, CONTEXT_MEASURE, TODOS, TOKEN_USAGE, SESSION_STATS]).toContain(
         (frame.params.data as { name?: unknown }).name,
       );
     }

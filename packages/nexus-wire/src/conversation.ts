@@ -34,6 +34,8 @@
 import { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 import type { WireContextMeasure, WireContextPressure } from './context-pressure.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
+import { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
+import type { WireSessionStats, WireTokenUsage } from './session-totals.js';
 import { TODOS } from './todos.js';
 import type { WireTodoItem } from './todos.js';
 import type { WirePresentedFile } from './deliverables.js';
@@ -360,6 +362,17 @@ export interface ConversationState {
    * 為什麼不含 `resume` 見 `todos.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
    */
   readonly todos: readonly WireTodoItem[] | null;
+  /**
+   * 這條對話累計燒了多少 token（#574）：root 日誌每一次模型呼叫的帳加起來，**整份日誌的**，不是畫面上看得到的那幾輪。
+   * 一顆都還沒收到就是 `null`；總量是兩格相加。規則見 `session-totals.ts`。它是「現在」的事，所以
+   * {@link prependEntries} 不動它。
+   */
+  readonly tokenUsage: WireTokenUsage | null;
+  /**
+   * 這條對話的輪數、模型呼叫次數、模型與工具的耗時（#574），**整份 root 日誌的**。一顆都還沒收到就是 `null`。規則見
+   * `session-totals.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
+   */
+  readonly sessionStats: WireSessionStats | null;
 }
 
 const ROOT: Attribution = { kind: 'root' };
@@ -374,6 +387,8 @@ export function emptyConversation(): ConversationState {
     turnStart: 0,
     contextPressure: null,
     todos: null,
+    tokenUsage: null,
+    sessionStats: null,
   };
 }
 
@@ -581,7 +596,7 @@ function isPresentedFile(value: unknown): value is WirePresentedFile {
 
 /**
  * `custom` frame。**只認 {@link DELIVERABLES_PRESENTED}、{@link WORKSPACE_CHANGES}、{@link MODEL_USAGE}、
- * {@link CONTEXT_MEASURE} 與 {@link TODOS}**，其他名字、形狀不對的一律略過：這個 channel 上的東西由 pump 從日誌
+ * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link TOKEN_USAGE} 與 {@link SESSION_STATS}**，其他名字、形狀不對的一律略過：這個 channel 上的東西由 pump 從日誌
  * 合成，認不得的不猜。
  */
 function reduceCustom(state: ConversationState, data: unknown): ConversationState {
@@ -591,6 +606,8 @@ function reduceCustom(state: ConversationState, data: unknown): ConversationStat
   if (name === MODEL_USAGE) return reduceModelUsage(state, payload);
   if (name === CONTEXT_MEASURE) return reduceContextMeasure(state, payload);
   if (name === TODOS) return reduceTodos(state, payload);
+  if (name === TOKEN_USAGE) return reduceTokenUsage(state, payload);
+  if (name === SESSION_STATS) return reduceSessionStats(state, payload);
   if (name !== DELIVERABLES_PRESENTED) return state;
   const { callId, seq, files } = payload as { callId?: unknown; seq?: unknown; files?: unknown };
   if (
@@ -672,6 +689,26 @@ function reduceTodos(state: ConversationState, payload: object): ConversationSta
   if (todos === null) return { ...state, todos: null };
   if (!Array.isArray(todos) || !todos.every(isTodoItem)) return state;
   return { ...state, todos: todos.map(({ content, status }) => ({ content, status })) };
+}
+
+/**
+ * `tokenUsage` 的 `payload`：投影的整個值，**整顆換掉**。任何一格不對就整顆不收，不收一半——只換輸入不換輸出的話，
+ * 總量會是兩個不同時刻的數字加起來，而且看起來正常。
+ */
+function reduceTokenUsage(state: ConversationState, payload: object): ConversationState {
+  const { inputTokens, outputTokens } = payload as {
+    inputTokens?: unknown;
+    outputTokens?: unknown;
+  };
+  if (!isCount(inputTokens) || !isCount(outputTokens)) return state;
+  return { ...state, tokenUsage: { inputTokens, outputTokens } };
+}
+
+/** `sessionStats` 的 `payload`：投影的整個值，**整顆換掉**。任何一格不對就整顆不收，理由同 {@link reduceTokenUsage}。 */
+function reduceSessionStats(state: ConversationState, payload: object): ConversationState {
+  const { turns, steps, llmMs, toolMs } = payload as Record<string, unknown>;
+  if (!isCount(turns) || !isCount(steps) || !isCount(llmMs) || !isCount(toolMs)) return state;
+  return { ...state, sessionStats: { turns, steps, llmMs, toolMs } };
 }
 
 /** `workspace/changes` 的 `payload`：`seq` 要是非負整數，同一個 `seq` 只長一格。 */

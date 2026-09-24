@@ -83,6 +83,8 @@ export type {
 export { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 export type { TodosPayload, WireTodoItem } from './todos.js';
 export { TODOS } from './todos.js';
+export type { WireSessionStats, WireTokenUsage } from './session-totals.js';
+export { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
 export {
   FEEDBACK_METHODS,
   HISTORY_PAGE_MAX_BYTES,

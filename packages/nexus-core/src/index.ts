@@ -188,6 +188,13 @@ export {
   recordBackendOutcomes,
 } from './fs-tool-errors.js';
 
+export {
+  continuationFooter,
+  createReadContinuationMiddleware,
+  READ_CONTINUATION_MIDDLEWARE_NAME,
+  recordReadExtent,
+} from './read-continuation.js';
+
 export type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
 export {
   createInvalidArgumentsCarrier,
@@ -222,6 +229,8 @@ export {
 } from './turn-cancel.js';
 export type { SessionStats, SessionStatsState } from './session-stats.js';
 export { deriveSessionStats, sessionStatsUnit } from './session-stats.js';
+export type { TokenUsageTotals } from './token-usage.js';
+export { deriveTokenUsage, tokenUsageUnit } from './token-usage.js';
 export type { ModelUsage } from './model-usage.js';
 export {
   createModelUsageRecorder,
@@ -230,6 +239,13 @@ export {
   modelUsagePlugin,
   readModelUsage,
 } from './model-usage.js';
+export type { CheckpointSessions } from './session-checkpoint-policy.js';
+export {
+  createSessionCheckpointMiddleware,
+  SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+  SESSION_CHECKPOINT_PLUGIN_NAME,
+  sessionCheckpointPlugin,
+} from './session-checkpoint-policy.js';
 export type {
   RepeatReminderConfig,
   RepeatReminderMark,
@@ -394,7 +410,12 @@ export type { SessionInstaller, SessionRunnerOptions, SessionSubject } from './s
 export { createSessionRunner } from './sessions.js';
 export type { SessionAddress } from './session-address.js';
 export { sessionAddressKey, toolCallSessionAddress } from './session-address.js';
-export type { SessionEntry, SessionObserver, SessionRegistryOptions } from './session-registry.js';
+export type {
+  SessionEntry,
+  SessionFlusher,
+  SessionObserver,
+  SessionRegistryOptions,
+} from './session-registry.js';
 export { SessionRegistry } from './session-registry.js';
 
 // 配套入口（`./invariant`）刻意**不從主入口再匯出**，形狀照 dsh：那邊每個 package 的

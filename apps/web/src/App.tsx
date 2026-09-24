@@ -12,6 +12,7 @@ import { FeedbackDialog } from '@/components/feedback-dialog';
 import { PendingSwap } from '@/components/pending-swap';
 import { FEEDBACK_COMMAND_LINE } from '@/lib/feedback';
 import { QuestionPanel } from '@/components/question-panel';
+import { SessionUsage } from '@/components/session-usage';
 import { StatusLine } from '@/components/status-line';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { TodoPanel } from '@/components/todo-panel';
@@ -259,6 +260,11 @@ function ConversationView({
           {/* 觸控目標 44px，1024 以上回到 36（§9）。 */}
           <SidebarTrigger className="size-11 rounded-full lg:size-9" />
           <h1 className="min-w-0 flex-1 truncate text-sm font-medium">nexus-agent</h1>
+          {/* #574：這條對話累計燒了多少（root 日誌的總帳，不是畫面加總）。 */}
+          <SessionUsage
+            tokenUsage={conversation.state.tokenUsage}
+            sessionStats={conversation.state.sessionStats}
+          />
           <ThemeToggle className="size-11 rounded-full lg:size-9" />
         </header>
 
@@ -279,6 +285,11 @@ function ConversationView({
               {...(conversation.slashNotice === undefined
                 ? {}
                 : { slashNotice: conversation.slashNotice })}
+              {...(conversation.reconnecting === undefined
+                ? {}
+                : { reconnecting: conversation.reconnecting })}
+              recovered={conversation.recovered}
+              onReconnect={conversation.reconnectNow}
             />
             {/* 不掛 `role="status"`：那一格歸 `StatusLine`，這一句是背景，不是現況。 */}
             {notice !== undefined && <p className="text-muted-foreground text-xs">{notice}</p>}

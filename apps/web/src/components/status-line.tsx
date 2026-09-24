@@ -6,12 +6,27 @@
  *
  * **全站唯一的 `role="status"`**（§8）：待決、串流、失敗都由它唸。執行中配 working orb 與 shimmer（§7），
  * orb 旁已有同義文字所以 `aria-hidden`；reduced-motion 下兩者都停在一格，字照樣在。
+ *
+ * **連線也由這一行講**（[#593](https://github.com/DemianLi/nexus-agent/issues/593)）：下行斷了寫在這裡，旁邊一顆
+ * 「立刻重連」；接回來短暫寫「已重新連線」。dsh 另有一顆 `ConnectionIndicator`，掛在設定列，我們沒有設定列，
+ * 所以放進既有的狀態列（UI 形狀，不是執行語意）。按鈕放在 live region 外面，免得每次重唸都唸到它。
  */
 
 import type { ConversationState } from '@nexus/wire';
 
 import { AgentOrb } from '@/components/agent-orb';
+import { Button } from '@/components/ui/button';
 import { pendingLabel } from '@/lib/pending-label';
+
+/** 斷線那一行怎麼講。 */
+function lostText(
+  reconnecting: { readonly wasConnected: boolean; readonly offline: boolean },
+  connectionError: string | undefined,
+): string {
+  if (reconnecting.offline) return '網路離線：恢復之後會自動重新連線';
+  if (reconnecting.wasConnected) return '連線中斷，正在重新連線…';
+  return `連不上 agent${connectionError === undefined ? '' : `：${connectionError}`}。正在重試…`;
+}
 
 export function StatusLine({
   state,
@@ -20,14 +35,43 @@ export function StatusLine({
   commandError,
   slashError,
   slashNotice,
+  reconnecting,
+  recovered = false,
+  onReconnect,
 }: {
   state: ConversationState;
   connected: boolean;
   connectionError?: string;
+  /** 下行斷了、正在自動重接（見 `useConversation` 的 `reconnecting`）。 */
+  reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
+  /** 剛重新接上。 */
+  recovered?: boolean;
+  /** 「立刻重連」。 */
+  onReconnect?: () => void;
   commandError?: string;
   slashError?: string;
   slashNotice?: string;
 }) {
+  if (reconnecting !== undefined) {
+    return (
+      <div className="flex items-center gap-2">
+        <p className="text-warning text-sm" role="status">
+          {lostText(reconnecting, connectionError)}
+        </p>
+        {onReconnect !== undefined && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-11 shrink-0 rounded-full lg:h-8"
+            onClick={onReconnect}
+          >
+            立刻重連
+          </Button>
+        )}
+      </div>
+    );
+  }
   if (connectionError !== undefined) {
     return (
       <p className="text-destructive text-sm" role="status">
@@ -90,6 +134,14 @@ export function StatusLine({
       <p className="text-muted-foreground flex items-center gap-1.5 text-sm" role="status">
         <AgentOrb state="working" size={20} decorative />
         <span className="text-shimmer">執行中…</span>
+      </p>
+    );
+  }
+  if (recovered) {
+    // 只蓋掉最後這一格（就緒／已停止）：接回來時要是正在跑、停在核准點或失敗了，人要看的是那個。
+    return (
+      <p className="text-muted-foreground text-sm" role="status">
+        已重新連線
       </p>
     );
   }

@@ -193,10 +193,14 @@ describe('同名取代是唯一的縫', () => {
         // 這一條就是「表達不出來」的證據，見 `model-calls.ts` 的偏離那一節。
         'nexusModelCallEvents',
         'nexusModelUsage',
+        // 耐久檢查點（#599）：緊貼用量記錄器內側。
+        'nexusSessionCheckpoint',
         // 輸出 schema 校驗（#252）：fold 打底，每一個 plugin middleware 的內側。
         'nexusToolOutputSchema',
         // 檔案工具的失敗標成錯誤（#293）：有 backend 就有，貼著工具本體。
         'nexusFsToolErrors',
+        // 讀檔結果最後補上讀到哪（#594）：有 backend 就有，同一個理由貼著工具本體。
+        'nexusReadContinuation',
         // 解不開的工具參數（#281）：`wrapToolCall` 在核准與每個 plugin 的內側、改寫在每個
         // `wrapModelCall` 的內側，所以排在 plugin middleware 之後、綁訊號那顆之前。
         'nexusInvalidToolArgs',

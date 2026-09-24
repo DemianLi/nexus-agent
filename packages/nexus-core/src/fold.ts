@@ -27,6 +27,7 @@ import { deriveApprovalChannel } from './approval.js';
 import { createContainmentMiddleware } from './containment.js';
 import { createOutputSchemaMiddleware } from './output-schema.js';
 import { createFsToolErrorsMiddleware, recordBackendOutcomes } from './fs-tool-errors.js';
+import { createReadContinuationMiddleware, recordReadExtent } from './read-continuation.js';
 import {
   createInvalidArgumentsCarrier,
   createInvalidToolArgsMiddleware,
@@ -39,6 +40,10 @@ import type { PluginOrigin } from './plugin.js';
 import type { MiddlewareRegistration, PluginRegistry, RootOnlyRefusal } from './registry.js';
 import { createModelCallRecorder } from './model-calls.js';
 import { createModelUsageRecorder, MODEL_USAGE_PLUGIN_NAME } from './model-usage.js';
+import {
+  createSessionCheckpointMiddleware,
+  SESSION_CHECKPOINT_PLUGIN_NAME,
+} from './session-checkpoint-policy.js';
 import { createTurnCancelGuard, createTurnCancelModelSignal } from './turn-cancel.js';
 import {
   REPEAT_REMINDER_PLUGIN_NAME,
@@ -400,6 +405,9 @@ export function foldRegistry(
   const modelUsage = foldModelUsage(registry, options);
   // 同上，無狀態、一份走遍。位置緊貼用量記錄器，理由見 {@link ./model-calls.ts}。
   const modelCalls = createModelCallRecorder(registry.sessions);
+  // 耐久檢查點（#599）：同上，無狀態、一份走遍 root 與每個子代理。位置緊貼用量記錄器內側，
+  // 理由見 {@link foldMiddleware}。
+  const sessionCheckpoint = foldSessionCheckpoint(registry);
   // **backend 提前折**：策略要的版本 token 得從工具實際讀寫的那一個取，所以它不能等到
   // 下面才算。摘要器刻意拿的是兜底那個，兩者的差別見各自的文件。
   const backend = foldBackend(registry, options.defaultBackend);
@@ -407,6 +415,9 @@ export function foldRegistry(
   // 檔案工具的失敗標成錯誤（#293）：只在有 backend 時掛——包的是交給基座的那一份，策略手上
   // 那一個是同一個實例，見 {@link ./fs-tool-errors.ts}。無狀態，一份走遍 root 與每個 subagent。
   const fsToolErrors = backend === undefined ? undefined : createFsToolErrorsMiddleware();
+  // 讀檔結果最後補上讀到哪（#594）：同上，只在有 backend 時掛、包的是交給基座的那一份，無狀態、
+  // 一份走遍 root 與每個 subagent。見 {@link ./read-continuation.ts}。
+  const readContinuation = backend === undefined ? undefined : createReadContinuationMiddleware();
   // **plugin middleware 在這裡就攤平，只攤一次**：要 backend 的那一種（`useWithBackend`，#388）
   // 建出來的實例得走遍 root 與每個子代理，這裡各算一次的話兩邊拿到的會是兩份。
   const plugins = pluginMiddleware(registry, backend);
@@ -428,8 +439,10 @@ export function foldRegistry(
       repeatReminder,
       modelUsage,
       modelCalls,
+      sessionCheckpoint,
       outputSchema,
       fsToolErrors,
+      readContinuation,
       invalidToolArgs,
     }),
     middleware: foldMiddleware(
@@ -443,14 +456,17 @@ export function foldRegistry(
       repeatReminder,
       modelUsage,
       modelCalls,
+      sessionCheckpoint,
       outputSchema,
       fsToolErrors,
+      readContinuation,
       invalidToolArgs,
     ),
   };
 
   if (permissions.length > 0) params.permissions = permissions;
-  if (backend !== undefined) params.backend = recordBackendOutcomes(backend);
+  // 兩層都轉交同一個實例；讀到哪那一層在內側，失敗記錄看到的是它切回去之後的那份。
+  if (backend !== undefined) params.backend = recordBackendOutcomes(recordReadExtent(backend));
 
   const skills = registry.skills.sources();
   if (skills.length > 0) params.skills = skills;
@@ -737,8 +753,10 @@ function foldMiddleware(
   repeatReminder: AgentMiddleware | undefined,
   modelUsage: AgentMiddleware | undefined,
   modelCalls: AgentMiddleware,
+  sessionCheckpoint: AgentMiddleware | undefined,
   outputSchema: AgentMiddleware,
   fsToolErrors: AgentMiddleware | undefined,
+  readContinuation: AgentMiddleware | undefined,
   invalidToolArgs: AgentMiddleware,
 ): AgentMiddleware[] {
   return [
@@ -755,6 +773,10 @@ function foldMiddleware(
     // 一步——同 dsh 的 `llm/retry` 在一步之內。摘要器不管排哪都在它外面，見 `model-calls.ts`。
     modelCalls,
     ...(modelUsage === undefined ? [] : [modelUsage]),
+    // 耐久檢查點排在起訖紀錄器內側：排空時 `model/start` 已經記下，同 dsh「記好的請求前綴」；
+    // 在其餘 plugin middleware 外側：一個自己重試模型的 plugin 重試幾次都只排空一次，同一步只算一次。
+    // 工具那一側，`tool/call` 由最外層的圍堵記，這裡一定看得到它。見 {@link ./session-checkpoint-policy.ts}。
+    ...(sessionCheckpoint === undefined ? [] : [sessionCheckpoint]),
     ...plugins.rest,
     // 輸出校驗在每一個 plugin middleware 的內側：看到的是工具原本的輸出，不是外層改過的版本
     // （dsh 在 `tools/post-execute` 之前驗）。解不開參數的那顆在它更內側，換上的樁回的是錯誤，
@@ -764,6 +786,9 @@ function foldMiddleware(
     // 它們讀到的都是改過的狀態。解不開參數的樁不叫 backend，排在它裡面沒有東西可記。
     // 見 {@link ./fs-tool-errors.ts}。
     ...(fsToolErrors === undefined ? [] : [fsToolErrors]),
+    // 讀檔結果最後補上讀到哪：同一個時刻、同一個理由貼著工具本體。在失敗記錄的內側，它只補成功的，
+    // 兩者不相干；外面每一顆（含圍堵寫進日誌的那一則）看到的都是補過的。見 {@link ./read-continuation.ts}。
+    ...(readContinuation === undefined ? [] : [readContinuation]),
     // 解不開的參數：`wrapToolCall` 在核准與每個 plugin 的內側（dsh 執行時才驗參數），改寫在每個
     // `wrapModelCall` 的內側（外面看到的都是改寫過的那則）。見 {@link ./invalid-tool-args.ts}。
     invalidToolArgs,
@@ -1056,6 +1081,22 @@ function foldModelUsage(
 }
 
 /**
+ * 耐久檢查點（#599）：**兩態**——條目被明著關掉就不要，否則掛著。組裝點沒有旗標：它沒有
+ * 要調的東西，而「這次組裝不接持久化」本來就讓它什麼都不做（沒有排空者，`flush` 立刻
+ * resolve）。
+ *
+ * 回一份實例，同 {@link foldModelUsage}：closure 裡沒有狀態。見
+ * {@link ./session-checkpoint-policy.ts | createSessionCheckpointMiddleware}。
+ *
+ * @param registry - 已經跑完 `loadPlugins()` 的 registry。
+ * @returns 一份可以掛在任意多個 agent 上的 middleware，或 `undefined`。
+ */
+function foldSessionCheckpoint(registry: PluginRegistry): AgentMiddleware | undefined {
+  if (registry.disabledEntries.has(SESSION_CHECKPOINT_PLUGIN_NAME)) return undefined;
+  return createSessionCheckpointMiddleware(registry.sessions);
+}
+
+/**
  * 這次組裝的剪刀預算——**四態，依序問**，同
  * {@link repeatReminderDisposition}。第 3 態（條目被明著關掉）落在 `false`，不是
  * `undefined`：消費端的形狀是 `ToolResultPruneConfig | false`，`false` 才是「不剪」。
@@ -1215,8 +1256,10 @@ function foldSubAgents(
     repeatReminder: AgentMiddleware | undefined;
     modelUsage: AgentMiddleware | undefined;
     modelCalls: AgentMiddleware;
+    sessionCheckpoint: AgentMiddleware | undefined;
     outputSchema: AgentMiddleware;
     fsToolErrors: AgentMiddleware | undefined;
+    readContinuation: AgentMiddleware | undefined;
     invalidToolArgs: AgentMiddleware;
   },
 ): SubAgent[] {
@@ -1322,6 +1365,8 @@ function foldSubAgents(
         // 模型呼叫的起訖同用量記錄器那條理由打底、共用一份，位置同 root。
         context.modelCalls,
         ...(context.modelUsage === undefined ? [] : [context.modelUsage]),
+        // 耐久檢查點同 root 的位置、共用一份：子代理的模型呼叫排空的是子代理那一份日誌。
+        ...(context.sessionCheckpoint === undefined ? [] : [context.sessionCheckpoint]),
         // 其餘 plugin 的，同 root 的位置（#327）。排在 `spec.middleware` 外層：plugin 打底、子代理自帶的在內側，
         // 同 `tools` 那條「全域 → 自帶」的軸線。
         ...context.plugins.rest,
@@ -1331,6 +1376,8 @@ function foldSubAgents(
         // 檔案工具的失敗標成錯誤，同 root 的位置；共用一份，它無狀態。subagent 的檔案工具由基座
         // 用 root 那一份 `backend` 建，所以記錄的那一層在它們身上一樣在。
         ...(context.fsToolErrors === undefined ? [] : [context.fsToolErrors]),
+        // 讀檔結果最後補上讀到哪，同 root 的位置；共用一份，它無狀態。
+        ...(context.readContinuation === undefined ? [] : [context.readContinuation]),
         // 解不開的參數排在 subagent 自帶的那些內側，同 root（#269 的 Q7：root 與子代理同一顆）。
         context.invalidToolArgs,
         // 最內層替模型綁中止訊號，排在 subagent 自帶的那些後面，同 root。

@@ -111,3 +111,57 @@ describe('SessionRegistry', () => {
     expect(() => sessions.open(WORKER)).toThrow(/接不上/u);
   });
 });
+
+describe('耐久檢查點的入口（#599）', () => {
+  it('一位排空者都沒有：立刻 resolve，回 false', async () => {
+    const sessions = new SessionRegistry('root-1');
+    expect(await sessions.flush(sessions.root)).toBe(false);
+  });
+
+  it('每一位排空者都被問到同一份，全部排完才 resolve', async () => {
+    const sessions = new SessionRegistry('root-1');
+    const worker = sessions.open(WORKER);
+    const asked: string[] = [];
+    let release!: () => void;
+    const slow = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    sessions.onFlush(async (log) => {
+      asked.push(`a:${log.sessionId}`);
+      await slow;
+    });
+    sessions.onFlush((log) => {
+      asked.push(`b:${log.sessionId}`);
+      return Promise.resolve();
+    });
+    let settled = false;
+    const pending = sessions.flush(worker).then((participated) => {
+      settled = true;
+      return participated;
+    });
+    await Promise.resolve();
+    expect(asked).toEqual(['a:root-1/tools:worker-1', 'b:root-1/tools:worker-1']);
+    expect(settled).toBe(false);
+    release();
+    expect(await pending).toBe(true);
+  });
+
+  it('排空者拒絕就往外拋，不接', async () => {
+    const sessions = new SessionRegistry('root-1');
+    sessions.onFlush(() => Promise.reject(new Error('磁碟滿了')));
+    await expect(sessions.flush(sessions.root)).rejects.toThrow('磁碟滿了');
+  });
+
+  it('退訂之後不再被問，退訂冪等', async () => {
+    const sessions = new SessionRegistry('root-1');
+    let asked = 0;
+    const off = sessions.onFlush(() => {
+      asked += 1;
+      return Promise.resolve();
+    });
+    off();
+    off();
+    expect(await sessions.flush(sessions.root)).toBe(false);
+    expect(asked).toBe(0);
+  });
+});
