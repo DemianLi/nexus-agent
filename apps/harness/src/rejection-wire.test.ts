@@ -230,8 +230,9 @@ describe('核准的兩個方向在下行上長什麼樣', () => {
     //
     // 前兩顆是基座的。**第三顆若有，是 pump 補發的同 id 更正**（`#noteVerdict`，#296）：日誌的判定
     // 晚於基座那顆 `tool-finished` 到 pump 時，原樣帶回它的 namespace 再發一次。兩種先後 pump 都處理；
-    // #599 的檢查點在工具本體之前多一層 `async`，圍堵記 `tool/result` 晚了幾個 microtask，這份組裝
-    // 因此固定落在「判定晚到」那一邊。丟掉基座 frame 的 pump 連更正都不會發，所以這一條照樣擋得住。
+    // #599 的檢查點在工具本體之前多一層 `async`，圍堵記 `tool/result` 晚了幾個 microtask，產品路徑上
+    // root 的工具呼叫多半落在「判定晚到」那一邊（普通一輪兩次 echo 實測兩顆都是），這份組裝也是。
+    // 丟掉基座 frame 的 pump 連更正都不會發，所以這一條照樣擋得住。
     const base = toolEvents(session, 'base');
     expect(base.slice(0, 2)).toEqual(['tool-started', 'tool-finished']);
     expect(base.slice(2).every((event) => event === 'tool-finished')).toBe(true);
