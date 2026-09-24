@@ -284,6 +284,11 @@ function assertThreshold(threshold: SummarizationThreshold, where: string): void
  * 它的人拿得到——一顆排在它後面的新名字 middleware 看到的是更內層，看不到它的回傳。
  * 見 {@link withCompactionLog}。
  *
+ * ## 生摘要的那次模型呼叫不上線
+ *
+ * 最內層還有一層 {@link withQuietSummaryCall}：摘要本身不是誰講的話，不該即時畫成一則 AI 訊息
+ * （[#584](https://github.com/DemianLi/nexus-agent/issues/584)）。
+ *
  * @param backend - 歷史寫去哪。
  * @param settings - 補滿的設定，來自 {@link resolveSummarizationSettings}。
  * @param sessions - 註冊表的 `sessions` 通道，用來問「這次壓縮該記進哪一份日誌」。
@@ -312,13 +317,15 @@ export function createSummarizer(
       }),
     },
   }) as unknown as AgentMiddleware;
+  // 貼著基座包：外面幾層看到的 `request.model` 與交下去的都是原本那顆，不會碰到替身。
+  const quiet = withQuietSummaryCall(base);
   // 兩層各管一個方向，刻意不合成一層：剪刀改請求、日誌讀回傳，合起來寫會讓兩個獨立的
   // 失敗模式共用一個 try。順序無所謂——它們碰的不是同一樣東西。量測那層同理：它讀的是
   // 基座交下去的請求，不是進來的那份，也不碰回傳值。
   const logged =
     sessions === undefined
-      ? base
-      : withContextMeasure(withCompactionLog(base, sessions), sessions, settings.trigger);
+      ? quiet
+      : withContextMeasure(withCompactionLog(quiet, sessions), sessions, settings.trigger);
   if (pruning === false) return logged;
   return withToolResultPruning(
     logged,
@@ -326,6 +333,92 @@ export function createSummarizer(
       isUnderCompactionPressure(effectiveMessages(messages, state), settings.trigger),
     pruning,
   );
+}
+
+/**
+ * LangGraph 的 messages handler 認得的「這次呼叫不要串上線」標記。
+ *
+ * v3 用的 `pregel/messages-v2.js` 與舊的 `pregel/messages.js` 都在 `handleChatModelStart` 查它（另一個認得的是
+ * `langsmith:nostream`）：帶著它的那次呼叫不進 `metadatas`，之後的 `message-start`／逐段片段／`message-finish`
+ * 全部不送。
+ */
+const SUMMARY_CALL_TAG = 'nostream';
+
+/**
+ * 讓生摘要的那次模型呼叫不上線（[#584](https://github.com/DemianLi/nexus-agent/issues/584)）。
+ *
+ * ## 病
+ *
+ * 基座在 `wrapModelCall` 裡用 `request.model.invoke([摘要提示])` 生摘要，沒帶 config
+ * （`dist/langsmith-zm0ILQsV.js:3084`）。那次呼叫繼承圖的 callback，LangGraph 的 messages handler 就把它當成一則
+ * root 的 AI 訊息送上線——而且是**串流**的：pump 走 v3 時基座裝了串流 handler，`invoke` 也被導去走
+ * `_streamResponseChunks`。它跟主模型那次同一個節點、同一個 namespace，線上的 frame 分不出來；歷史則從日誌折，
+ * 那一則根本不在，於是即時多一則、重新整理就沒了。
+ *
+ * ## 做法
+ *
+ * 交給基座的 `request.model` 換成一個替身：只攔 `invoke`，補上 {@link SUMMARY_CALL_TAG}，其餘一律照讀本尊
+ * （基座還會讀它的 `profile`）。基座對那顆模型只呼叫 `invoke` 這一個方法，而那正是生摘要的地方。
+ * 基座把請求交下去時（`handler({ ...request, messages })`），再把替身換回本尊——主模型那次照常上線。
+ *
+ * **不用 `withConfig`**：`ChatOpenAI` 覆寫了它，重建實例時會弄丟 `signal`；換成核心的 `RunnableBinding` 則丟掉
+ * `profile`。替身兩樣都不碰。
+ *
+ * tags 只蓋掉從父層繼承的那一格 `tags`，callbacks 照樣從父層來（`ensureConfig`），父層 callback manager 上的可繼承
+ * tags 也還在，所以那次呼叫照樣被計量、照樣歸在同一份日誌。
+ *
+ * ## 與 dsh 的偏離（AGENTS.md 的規則）
+ *
+ * dsh 的摘要走 `ctx.llm.stream`（`purpose: 'compaction'`），在自己那一層組 chunk
+ * （`packages/compaction/compaction-basic/src/summarizer.ts`，`46a7f68`），本來就不經過對話紀錄的串流。我們的
+ * 摘要呼叫長在基座的 middleware 裡、跟主模型共用一條 callback 鏈，表達不出「另起一條不上線的呼叫」。
+ * 退到最接近的：同一次呼叫，貼一個串流層認得的標記。結果一樣：摘要文字不進對話，只以 `compaction/summary`
+ * 那一顆存在。
+ *
+ * @param base - 基座那顆摘要器。
+ * @returns 同名、同狀態、生摘要那次不上線的 middleware。
+ */
+function withQuietSummaryCall(base: AgentMiddleware): AgentMiddleware {
+  const inner = base.wrapModelCall?.bind(base);
+  /* v8 ignore next -- 同 withCompactionLog。 */
+  if (inner === undefined) return base;
+  return {
+    ...base,
+    wrapModelCall: (request, handler) => {
+      const model = request.model;
+      // 基座自己有退路（`getChatModel()`），沒有模型可換就原樣交給它。
+      /* v8 ignore next */
+      if (model === undefined) return inner(request, handler);
+      const quiet = quietInvoke(model);
+      return inner({ ...request, model: quiet }, (sent) =>
+        handler(sent.model === quiet ? { ...sent, model } : sent),
+      );
+    },
+  } as AgentMiddleware;
+}
+
+/**
+ * 一顆只有 `invoke` 會補上 {@link SUMMARY_CALL_TAG} 的替身。
+ *
+ * 其餘屬性照讀本尊。`Reflect.get` 不給 receiver，所以 getter 以本尊為 `this`，碰到私有欄位也不會因為 `this` 是
+ * Proxy 而拋；`invoke` 也綁在本尊上。**經替身叫的其他方法 `this` 仍是替身**——今天基座對它只讀 `profile`、只叫
+ * `invoke`，交下去之前又換回本尊，所以碰不到那種呼叫。
+ *
+ * @param model - 本尊。
+ * @returns 替身。
+ */
+function quietInvoke<T extends object>(model: T): T {
+  return new Proxy(model, {
+    get(target, key) {
+      if (key !== 'invoke') return Reflect.get(target, key) as unknown;
+      const invoke = (target as { invoke(input: unknown, config?: unknown): unknown }).invoke;
+      return (input: unknown, config?: { tags?: readonly string[] }) =>
+        invoke.call(target, input, {
+          ...config,
+          tags: [...(config?.tags ?? []), SUMMARY_CALL_TAG],
+        });
+    },
+  });
 }
 
 /**
