@@ -636,9 +636,8 @@ export function withStreamIdleTimeout(
           timer = undefined;
         }
       },
+      // 計時器只在 pull 裡活著：這時候取消，等著的那次 read 會回 done，由 pull 的 finally 清掉。
       cancel(reason) {
-        clearTimeout(timer);
-        timer = undefined;
         return reader.cancel(reason);
       },
     });

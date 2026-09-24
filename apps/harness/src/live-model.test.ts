@@ -1066,7 +1066,11 @@ describe('閒置計時器的收尾（#521）', () => {
   const timers = (): number =>
     process.getActiveResourcesInfo().filter((kind) => kind === 'Timeout').length;
 
+  /** 底下那條被取消時收到的理由。 */
+  let cancelledWith: unknown;
+
   function sse(parts: readonly string[], end: boolean): typeof fetch {
+    cancelledWith = undefined;
     return (() =>
       Promise.resolve(
         new Response(
@@ -1074,6 +1078,9 @@ describe('閒置計時器的收尾（#521）', () => {
             start(controller) {
               for (const part of parts) controller.enqueue(new TextEncoder().encode(part));
               if (end) controller.close();
+            },
+            cancel(reason) {
+              cancelledWith = reason;
             },
           }),
           { status: 200, headers: { 'content-type': 'text/event-stream' } },
@@ -1097,6 +1104,7 @@ describe('閒置計時器的收尾（#521）', () => {
     await reader.cancel('不要了');
     await pending;
     expect(timers()).toBe(before);
+    expect(cancelledWith).toBe('不要了');
   });
 
   it('逾時：拋閒置逾時，不留計時器', async () => {
@@ -1106,6 +1114,8 @@ describe('閒置計時器的收尾（#521）', () => {
     await reader.read();
     await expect(reader.read()).rejects.toBeInstanceOf(StreamIdleTimeoutError);
     expect(timers()).toBe(before);
+    // 底下那條要放掉。經過 `ChatOpenAI` 時 SDK 自己也會中止請求，直接讀這個 fetch 的就只剩這一道。
+    expect(cancelledWith).toBeInstanceOf(StreamIdleTimeoutError);
   });
 
   it('非 SSE 的回應原樣放行', async () => {
