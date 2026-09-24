@@ -71,6 +71,22 @@ describe('E：o200k 的純估算', () => {
     );
   });
 
+  it('content 裡那份 tool_call 區塊不算：工具呼叫只從 tool_calls 算一次', () => {
+    const call = {
+      id: 'c',
+      name: 'write_file',
+      args: { content: '一大段要寫進檔案的中文。'.repeat(50) },
+    };
+    const withBlock = new AIMessage({
+      content: [{ type: 'tool_call', ...call }] as never,
+      tool_calls: [call],
+    });
+    const plain = new AIMessage({ content: '', tool_calls: [call] });
+    expect(estimateRequestTokens({ messages: [withBlock] })).toBe(
+      estimateRequestTokens({ messages: [plain] }),
+    );
+  });
+
   it('特殊 token 的字串當一般文字，不拋', () => {
     expect(() =>
       estimateRequestTokens({ messages: [new HumanMessage('a <|endoftext|> b')] }),

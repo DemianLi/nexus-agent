@@ -106,9 +106,21 @@ const perMessage = new WeakMap<object, number>();
 const perTool = new WeakMap<object, number>();
 
 /**
- * 內容裡模型看得到的文字。**推理區塊不算**：`ChatOpenAI` 送回模型時丟掉它（見 `langchain-reasoning-block-roundtrip`
- * 那條記憶），算進來會高估。其他認不得的區塊照 JSON 算，同 dsh 的 `estimateStructuralBlock`。
+ * 不算進內容的區塊。
+ *
+ * - **推理**：`ChatOpenAI` 送回模型時丟掉它（`@langchain/openai` 不回傳推理區塊），算進來會高估。
+ * - **工具呼叫**：AI 訊息的 `content` 裡還有一份 `tool_call` 區塊，跟 `tool_calls` 欄位是同一個東西；送上線的只有
+ *   後者（`content` 是 `null`）。兩份都算就是算兩次——#588 驗收時一則帶三千字參數的 `write_file` 因此估多了 27%。
  */
+const UNSENT_BLOCKS = new Set([
+  'reasoning',
+  'thinking',
+  'tool_call',
+  'tool_call_chunk',
+  'invalid_tool_call',
+]);
+
+/** 內容裡模型看得到的文字。認不得的區塊照 JSON 算，同 dsh 的 `estimateStructuralBlock`。 */
 function contentText(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -117,7 +129,7 @@ function contentText(content: unknown): string {
     if (typeof block === 'string') text += block;
     else if (block !== null && typeof block === 'object') {
       const { type, text: blockText } = block as { type?: unknown; text?: unknown };
-      if (type === 'reasoning' || type === 'thinking') continue;
+      if (typeof type === 'string' && UNSENT_BLOCKS.has(type)) continue;
       text += typeof blockText === 'string' ? blockText : JSON.stringify(block);
     }
   }
