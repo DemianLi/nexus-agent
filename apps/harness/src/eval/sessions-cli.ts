@@ -21,13 +21,13 @@ import {
 const USAGE = `用法：eval:sessions <scan|draft> <目錄...>
 
   scan <目錄...>   往下找每一份會話日誌，逐份報出步數、最長的重複呼叫串、工具錯誤依種類各幾次，
-                   並標出疑似打轉的那幾份。目錄可以是 --session-log 給的會話根、CLI 的一個
+                   並標出疑似打轉的那幾份。目錄可以是會話根（預設 ~/.nexus-agent/sessions）、CLI 的一個
                    run 目錄，或 serve 底下 projectKey 那一格。只讀，不動任何檔。
   draft <目錄...>  從同樣的目錄撈出該補進題庫的那幾輪——被點踩、被取消、跑壞（turn/failed）、
                    疑似打轉——命中幾種多的排前面，逐輪印成 dataset.ts 的 BenchmarkCase 殼：
                    prompt 填好、expected 留給人填，底下附那一輪實際的工具呼叫當參考。只讀，不寫檔。
 
-例（目錄是當初給 cli 或 serve 的 --session-log；pnpm --filter 會切進 apps/harness，
+例（目錄是 cli 或 serve 啟動時「會話日誌：」那一行印的；pnpm --filter 會切進 apps/harness，
     所以相對路徑以那裡為準，同 cli 與 serve）：
   pnpm --filter @nexus/harness eval:sessions scan <會話根>
   pnpm --filter @nexus/harness eval:sessions draft <會話根>`;

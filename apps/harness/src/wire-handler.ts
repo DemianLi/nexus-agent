@@ -194,8 +194,10 @@ export interface ThreadAgent {
    *
    * **這一條與上面三條不同層**：那三個的答案來自 `createCliAgent`（掛了什麼 plugin
    * 決定有沒有遙測後端、有沒有配套入口、有沒有參與者），而落盤與 plugin 清單無關
-   * ——它的答案來自**呼叫方式**（`serve.ts` 有沒有收到 `--session-log`）。所以組裝點
-   * 是 `runServe` 自己的閉包，不是 `createCliAgent` 的回傳值。
+   * ——它的答案來自**呼叫方式**（`serve.ts` 的日誌根：`--session-log`，沒給就是 harness home
+   * 底下的 `sessions`，#444）。所以組裝點是 `runServe` 自己的閉包，不是 `createCliAgent` 的回傳值。
+   *
+   * **選配是給這個 handler 的其他組裝用的**（wire 測試那些手搭的）：`serve` 從 #444 起一律給。
    *
    * **一個行程一個 store，一條 thread 一次接線。** store 落在會話根按專案分的那一格，整個
    * 行程共用；每條 thread 的 root session id 就是它的 `threadId`，所以那一格底下一條
@@ -262,8 +264,8 @@ export interface WireHandlerOptions {
    * 讀以前落盤的 thread（`GET /threads`，[#302](https://github.com/DemianLi/nexus-agent/issues/302)），選配。
    *
    * **缺席就是「沒有落盤」**，那時列表回 `not_supported` 而不是空清單——同 `ThreadAgent.attachPersistence`
-   * 用缺席表達「沒開落盤」的規矩。答案來自呼叫方式（serve 有沒有收到 `--session-log`），所以跟落盤一樣
-   * 住在組裝點。
+   * 用缺席表達「沒開落盤」的規矩。答案來自呼叫方式（serve 的日誌根），所以跟落盤一樣住在組裝點；
+   * `serve` 從 #444 起一律給，缺席的只剩手搭的組裝。
    *
    * **它不准碰 {@link createAgent}**：列表照 dsh 是冷讀，一條 thread 都不為它啟動。`running` 那一格由這個
    * handler 從手上活著的 thread 補，不從檔案猜。
@@ -1081,7 +1083,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         errorResponse(
           null,
           'not_supported',
-          '這台 server 的會話日誌只在記憶體裡（serve 沒給 --session-log），以前的 thread 列不出來',
+          '這台 server 的會話日誌只在記憶體裡（組裝時沒接落盤），以前的 thread 列不出來',
         ),
       );
     }
@@ -1110,8 +1112,8 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
    * session，而 web 拿歷史之前已經開了下行、這條 thread 本來就建起來了。
    *
    * **讀的是記憶體裡那份 root 日誌，不讀檔**：它含上一個行程留下的 seed（`SessionLog` 建構時接上），也含這個
-   * 行程寫的、還沒落盤的那幾筆——讀檔的話那幾筆的 frame 可能早就送出去了，兩邊都沒有。順帶的：沒開
-   * `--session-log` 的 server 上，同一個行程裡切回去也有歷史。
+   * 行程寫的、還沒落盤的那幾筆——讀檔的話那幾筆的 frame 可能早就送出去了，兩邊都沒有。順帶的：沒接
+   * 落盤的組裝上，同一個行程裡切回去也有歷史。
    */
   async function handleHistory(threadId: string, search: URLSearchParams): Promise<Response> {
     const query: ThreadHistoryQuery = {};

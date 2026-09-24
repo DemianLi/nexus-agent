@@ -170,11 +170,39 @@ describe('GET /threads', () => {
     }
   });
 
-  it('沒給 --session-log：講「列不出來」，不是一份空清單', async () => {
-    const server = await start(undefined);
-    const listed = await list(server);
-    expect(listed.kind).toBe('rejected');
-    expect(listed.kind === 'rejected' && listed.message).toContain('--session-log');
+  /**
+   * **翻面來的**（#444）：以前沒給旗標就只在記憶體裡、列表講「列不出來」。預設落盤之後，零設定的
+   * serve 重開也列得出上一次的 thread——web 那端看到的差別就是這一條。
+   */
+  it('沒給 --session-log：預設落在 harness home，重開之後照樣列得出來', async () => {
+    const first = await start(undefined);
+    await driveTurn(first, 'alpha', '零設定那條');
+    await stop(first);
+
+    const second = await start(undefined);
+    const listed = await list(second);
+    expect(listed.kind === 'ok' && listed.result.items.map((item) => item.threadId)).toEqual([
+      'alpha',
+    ]);
+  });
+
+  it('組裝時沒接落盤（手搭的 handler）：講「列不出來」，不是一份空清單', async () => {
+    const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
+      createAgent: async () => {
+        throw new Error('列表不該建 agent');
+      },
+    });
+    const wireFetch: typeof globalThis.fetch = async (input, init) =>
+      handler.handle(loopbackRequest(input as string, init));
+    const client = createWireClient({ baseUrl: 'http://wire.test', fetch: wireFetch });
+    try {
+      const listed = await client.listThreads();
+      expect(listed.kind).toBe('rejected');
+      expect(listed.kind === 'rejected' && listed.message).toContain('沒接落盤');
+    } finally {
+      await handler.close();
+    }
   });
 
   it('還沒有任何 thread：一份空清單', async () => {
