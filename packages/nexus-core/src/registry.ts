@@ -744,6 +744,18 @@ export interface SessionRegistrationPoint {
    */
   forCall(config: unknown): SessionLookup;
   /**
+   * **耐久檢查點**：把 {@link forCall} 交出去的那一份日誌排空到耐久
+   * （[#599](https://github.com/DemianLi/nexus-agent/issues/599)）。這是 dsh 的
+   * `ctx.sessions.flush(session)` 在 plugin 手上的那一面，見 {@link SessionRegistry.flush}。
+   *
+   * 問的是每一張綁上來的註冊表：排空者只認得自己那幾份，認不得的直接 resolve，所以不必先
+   * 挑出是哪一張——`forCall` 挑不出來的時候（多於一張）也不會漏排。一張都沒綁就立刻 resolve。
+   *
+   * @param log - `forCall` 回的那一份。
+   * @throws 任一位排空者的失敗（同 {@link SessionRegistry.flush}，不接）。
+   */
+  flush(log: SessionLog): Promise<void>;
+  /**
    * 把一張會話註冊表綁上來。**組裝點的一步，不是 plugin 的**。
    *
    * **綁第二張不拋。** 「剛好一份」是一個假設而不是一條保證——`attachSession` 是組裝點
@@ -1190,6 +1202,9 @@ export function createRegistry(): InternalPluginRegistry {
       // `open` 而不是 `get`：subagent 的日誌在第一次有人要寫的時候才出生，理由見
       // `SessionRegistry` 的偏離第 1 條。訂閱者在這一行之內就裝好了。
       return { kind: 'ok', address, log: sessions!.open(address) };
+    },
+    async flush(log) {
+      await Promise.all([...boundSessions].map((sessions) => sessions.flush(log)));
     },
     bind(sessions) {
       boundSessions.add(sessions);

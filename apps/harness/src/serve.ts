@@ -56,6 +56,7 @@ import type { PumpAgent } from './thread-pump.js';
 import type { SandboxMode } from './contained-backend.js';
 import { BrowserAuth } from './browser-auth.js';
 import { loadOrCreateBrowserSessionSecret } from './browser-session-secret.js';
+import { createProcessShutdown } from './process-shutdown.js';
 import { HARNESS_HOME_ENV, resolveHarnessHome } from './harness-home.js';
 import { createWebStaticHandler } from './web-static.js';
 import { createWireHandler } from './wire-handler.js';
@@ -573,14 +574,25 @@ async function main(): Promise<void> {
     if (running === undefined) {
       return;
     }
-    // Ctrl-C 要走完 dispose：子行程與檔案控制代碼都掛在那裡。
-    const stop = () => {
-      void running.close().then(() => {
-        process.exitCode = 0;
-      });
-    };
-    process.once('SIGINT', stop);
-    process.once('SIGTERM', stop);
+    // Ctrl-C 要走完 dispose：子行程與檔案控制代碼都掛在那裡。**第二次訊號當場結束**、
+    // 收尾有上限，照 dsh（`process-shutdown.ts`，#599）。所以用 `on` 不用 `once`：`once`
+    // 用掉之後第二次落回預設動作，是同一個結果但不是政策。
+    const shutdown = createProcessShutdown(async () => {
+      try {
+        await running.close();
+      } catch (error) {
+        // 控制器在收尾失敗時只強制結束、不講原因；會話日誌寫不下去是這裡最該聽見的那種。
+        console.error(error instanceof Error ? error.message : String(error));
+        throw error;
+      }
+    });
+    // SIGTERM 是監管者的一般停止要求，回 0；SIGINT 是使用者中斷，回 130（同 dsh 的 `profile-boot.ts`）。
+    process.on('SIGTERM', () => {
+      shutdown.interrupt(0);
+    });
+    process.on('SIGINT', () => {
+      shutdown.interrupt(130);
+    });
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
