@@ -5,6 +5,7 @@ import type {
   ThreadListResult,
   WireClient,
 } from '@nexus/wire';
+import { TODOS } from '@nexus/wire';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -1414,5 +1415,38 @@ describe('新對話重用空白會話', () => {
 
     expect(fake.opened).toEqual(['上一條', '講過話的那條']);
     expect(stored()).toBe('講過話的那條');
+  });
+});
+
+describe('待辦清單面板（#575）', () => {
+  it('停下來等核准時清單照樣在：畫在換手區外面、上面', async () => {
+    seq = 0;
+    const { client } = fakeClient([
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      frame('custom', [], {
+        name: TODOS,
+        payload: {
+          todos: [
+            { content: '讀規格', status: 'completed' },
+            { content: '改設定檔', status: 'in_progress' },
+          ],
+        },
+      }),
+      approvalFrame([{ name: 'write_file', allowed: ['approve', 'reject'] }]),
+    ]);
+    render(<App client={client} />);
+
+    const approval = await screen.findByTestId('approval-card');
+    const panel = screen.getByTestId('todo-panel');
+    expect(within(panel).getByRole('button').getAttribute('aria-label')).toBe(
+      '待辦清單：1/2 完成 · 改設定檔',
+    );
+    // 換手區（`PendingSwap` 的 zone）搬焦點時只看自己裡面；清單在它外面、排在它前面。
+    const zone = approval.closest('.motion-swap')?.parentElement;
+    expect(zone).toBeTruthy();
+    expect(zone?.contains(panel)).toBe(false);
+    expect(
+      panel.compareDocumentPosition(zone as Node) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 });

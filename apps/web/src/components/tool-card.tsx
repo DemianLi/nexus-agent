@@ -15,15 +15,17 @@
  *   交付成不成立看狀態，交付卡片是第二刀。判法在 `lib/present-view.ts`。
  * - **`todo_write`**（#575）：收著講「2/5 完成 · 進行中的那一項」，同時進行的其餘幾項另起一格「+N」，不接在會被
  *   截斷的字後面（照 dsh `planSummary`）；展開逐項列那一次寫入的快照，不畫參數原文，不做跟前一次的差異。參數解不開
- *   或有一項壞掉就退回參數原文，不畫半套。判法在 `lib/todo-view.ts`。
+ *   或有一項壞掉就退回參數原文，不畫半套。判法在 `lib/todo-view.ts`；清單跟輸入框上方的面板共用（`todo-list.tsx`），
+ *   這裡是快照，所以進行中那一項不閃。
  */
 
 import type { AnswerEntry, Attribution, QuestionItem, ToolEntry } from '@nexus/wire';
-import { Check, ChevronDown, Circle, CircleDot, Hand, X } from 'lucide-react';
+import { Check, ChevronDown, Hand, X } from 'lucide-react';
 import { useState } from 'react';
 
 import { AgentOrb } from '@/components/agent-orb';
 import { CodeBlock } from '@/components/markdown/code-block';
+import { TodoList } from '@/components/todo-list';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
@@ -39,8 +41,7 @@ import {
 import type { QuestionAnswer } from '@/lib/question-view';
 import { basename, PRESENT, presentedFilesOf, presentSummary } from '@/lib/present-view';
 import type { PresentedFile } from '@/lib/present-view';
-import { TODO_STATUS_LABEL, TODO_WRITE, todosOf, todoSummary } from '@/lib/todo-view';
-import type { TodoItem } from '@/lib/todo-view';
+import { TODO_WRITE, todosOf, todoSummary } from '@/lib/todo-view';
 import { classifyTool, firstLine, toolInputBody, toolSummary, toolTitle } from '@/lib/tool-view';
 
 export const TOOL_STATUS_LABEL = {
@@ -132,42 +133,6 @@ function PresentedFileList({ files }: { files: readonly PresentedFile[] }) {
           {file.description !== undefined && (
             <span className="text-muted-foreground text-xs">{file.description}</span>
           )}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function TodoStatusIcon({ status }: { status: TodoItem['status'] }) {
-  // **進行中不動**：這是那一次寫入的快照，歷史裡的「進行中」不代表現在還在跑。
-  if (status === 'completed')
-    return <Check aria-hidden className="text-muted-foreground mt-0.5 size-4 shrink-0" />;
-  if (status === 'in_progress')
-    return <CircleDot aria-hidden className="text-brand mt-0.5 size-4 shrink-0" />;
-  return <Circle aria-hidden className="text-muted-foreground mt-0.5 size-4 shrink-0" />;
-}
-
-/** 那一次寫入的清單照模型給的順序列出來；完成的變淡。圖示不唸，狀態靠前面那幾個字。 */
-function TodoList({ todos }: { todos: readonly TodoItem[] }) {
-  if (todos.length === 0) {
-    return <p className="text-muted-foreground px-3 py-2 text-xs">清單是空的。</p>;
-  }
-  return (
-    <ul className="bg-stage shadow-stage flex flex-col gap-2 rounded-xl p-3 text-sm">
-      {todos.map((todo, index) => (
-        <li
-          key={`${index}:${todo.content}`}
-          className="flex min-w-0 items-start gap-2"
-          data-testid="todo-item"
-          data-status={todo.status}
-        >
-          <TodoStatusIcon status={todo.status} />
-          <span
-            className={`min-w-0 break-words ${todo.status === 'completed' ? 'text-muted-foreground' : ''}`}
-          >
-            <span className="sr-only">{TODO_STATUS_LABEL[todo.status]}：</span>
-            {todo.content}
-          </span>
         </li>
       ))}
     </ul>

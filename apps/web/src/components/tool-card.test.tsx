@@ -389,6 +389,8 @@ describe('待辦清單的工具卡（#575）', () => {
       ['pending', '待處理：開 PR'],
     ]);
     expect(card.textContent).not.toContain('"todos"');
+    // 快照不閃：歷史裡的「進行中」不代表現在還在跑（面板那一份才看這一輪在不在跑）。
+    expect(card.querySelector('.text-shimmer')).toBeNull();
   });
 
   it('只有一項在進行：沒有「+N」那一格', () => {
