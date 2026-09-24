@@ -4,7 +4,8 @@
  *
  * **只讀呼叫參數**，照 dsh 的 `TodoRow`（`packages/client/ui-tool/src/client/tool/toolviews/todo-row.tsx`，`46a7f68`）：
  * 參數是整份清單，`{ todos: [{ content, status }] }`，所以一顆呼叫的參數就是那一刻的快照。**不做跟前一次的差異**
- * （dsh 有；#575 grilling Q3 決定先不做）。「現在的清單」是另一件事，那是輸入框上方的面板，資料走 harness 的投影。
+ * （dsh 有；#575 grilling Q3 決定先不做）。「現在的清單」是另一件事，那是輸入框上方的面板（`todo-panel.tsx`），
+ * 資料走 harness 的投影（`ConversationState.todos`）；兩邊共用這裡的摘要。
  *
  * @module
  */
@@ -68,6 +69,17 @@ export function todoSummary(todos: readonly TodoItem[]): TodoSummary {
   return first === undefined
     ? { text: counts, extra: 0 }
     : { text: `${counts} · ${first.content}`, extra: active.length - 1 };
+}
+
+/**
+ * 輸入框上方那個面板的觸發按鈕名稱（#575 grilling Q6）：「待辦清單：」接收著那一行，「+N」寫成一句話。
+ *
+ * **畫面上那串字原樣出現在名稱裡**：`aria-label` 會蓋掉按鈕裡的所有內容，所以工具卡那種 sr-only 補句在這裡
+ * 不作用，「+N」要直接寫進來；而用語音控制的人照畫面上的字唸得出這顆按鈕。
+ */
+export function todoPanelLabel(summary: TodoSummary): string {
+  const extra = summary.extra > 0 ? `，另有 ${summary.extra} 項進行中` : '';
+  return `待辦清單：${summary.text}${extra}`;
 }
 
 /** 每一種狀態的字：清單裡的圖示 `aria-hidden`，報讀靠這幾個字。 */
