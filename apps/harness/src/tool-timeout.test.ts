@@ -195,12 +195,18 @@ describe('工具超時', () => {
     expect(message?.status).toBe('success');
   }, 20000);
 
+  /** 預算的計時器比 `Date.now()` 量到的早響多少毫秒還算正常。理由見用到它的那一條。 */
+  const TIMER_EARLY_SLACK_MS = 20;
+
   it('對照組四之二：核准後真的超時了，回報的數字不含人想的那 700ms', async () => {
     const message = await runGated(sleeper('gated-slow', 500, 200), 700);
     const text = String(message?.content);
     expect(text).toContain('工具 gated-slow 超時');
     const elapsed = Number(/等了 (\d+)ms/.exec(text)?.[1]);
-    expect(elapsed).toBeGreaterThanOrEqual(200);
+    // **下限容許提早幾毫秒**：預算的計時器（`AbortSignal.timeout`）照 libuv 那一輪事件迴圈開始時快取的時間起算，
+    // 而這個數字是圍堵用 `Date.now()` 量的。機器忙的時候，同一輪裡計時器武裝之前做過的事越多，它就越早響——
+    // 全樹平行跑時量到過 199ms（2026-09-24）。下限只在確認「真的等到了預算附近」，不是這一條要釘的東西。
+    expect(elapsed).toBeGreaterThanOrEqual(200 - TIMER_EARLY_SLACK_MS);
     // **上限是這一條的全部價值**：人想了 700ms、工具本體 500ms。計時器沒有跟著節點重跑
     // 的話，這個數字會是 1200 以上。
     expect(elapsed).toBeLessThan(700);
