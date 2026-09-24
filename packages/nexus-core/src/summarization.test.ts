@@ -19,6 +19,7 @@ import {
   readSummarizationEvent,
 } from './summarization.js';
 import type { SummarizationThreshold } from './summarization.js';
+import { estimateRequestTokens, TokenAnchorBook } from './token-estimate.js';
 import { TOOL_RESULT_PRUNE_MARKER } from './tool-result-pruner.js';
 
 /** 一串長到任何門檻都會成立的原始訊息。 */
@@ -63,19 +64,26 @@ describe('摘要器眼中的訊息串', () => {
 describe('壓力閘門', () => {
   const BY_MESSAGES: SummarizationThreshold[] = [{ type: 'messages', value: 6 }];
   const BY_TOKENS: SummarizationThreshold[] = [{ type: 'tokens', value: 5_000 }];
+  /** 一段 o200k 大約八千 token 的中文。 */
+  const BIG_TEXT = '壓力閘門要量的是摘要器眼中的那一串。'.repeat(800);
+  const pressure = (
+    messages: readonly BaseMessage[],
+    trigger: readonly SummarizationThreshold[],
+    state?: unknown,
+  ) => isUnderCompactionPressure({ messages, state }, trigger, new TokenAnchorBook());
 
   it('門檻陣列並聯，任何一道成立就算壓力到了', () => {
-    expect(isUnderCompactionPressure(longHistory(6), BY_MESSAGES)).toBe(true);
-    expect(isUnderCompactionPressure(longHistory(5), BY_MESSAGES)).toBe(false);
-    expect(
-      isUnderCompactionPressure(longHistory(5), [...BY_MESSAGES, { type: 'tokens', value: 1 }]),
-    ).toBe(true);
+    expect(pressure(longHistory(6), BY_MESSAGES)).toBe(true);
+    expect(pressure(longHistory(5), BY_MESSAGES)).toBe(false);
+    expect(pressure(longHistory(5), [...BY_MESSAGES, { type: 'tokens', value: 1 }])).toBe(true);
   });
 
-  it('token 那道用的是訊息內容的量', () => {
-    const big = [new ToolMessage({ content: 'X'.repeat(40_000), tool_call_id: 'c1' })];
-    expect(isUnderCompactionPressure(big, BY_TOKENS)).toBe(true);
-    expect(isUnderCompactionPressure([new HumanMessage('短')], BY_TOKENS)).toBe(false);
+  it('token 那道用的是錨定估算，沒錨時就是 o200k 的純估算', () => {
+    const big = [new ToolMessage({ content: BIG_TEXT, tool_call_id: 'c1' })];
+    // 前提：那段真的超過門檻，短的那句真的沒有。
+    expect(estimateRequestTokens({ messages: big })).toBeGreaterThan(5_000);
+    expect(pressure(big, BY_TOKENS)).toBe(true);
+    expect(pressure([new HumanMessage('短')], BY_TOKENS)).toBe(false);
   });
 
   /**
@@ -87,18 +95,18 @@ describe('壓力閘門', () => {
     const messages = [...longHistory(9), new ToolMessage({ content: '收到', tool_call_id: 'c1' })];
     const state = { _summarizationEvent: { summaryMessage: SUMMARY, cutoffIndex: 9 } };
 
-    expect(isUnderCompactionPressure(messages, BY_MESSAGES)).toBe(true);
-    expect(isUnderCompactionPressure(effectiveMessages(messages, state), BY_MESSAGES)).toBe(false);
+    expect(pressure(messages, BY_MESSAGES)).toBe(true);
+    expect(pressure(messages, BY_MESSAGES, state)).toBe(false);
   });
 
   it('摘要之後但有效串真的很大時，壓力照樣算到', () => {
     const messages = [
       ...longHistory(9),
-      new ToolMessage({ content: 'X'.repeat(40_000), tool_call_id: 'c1' }),
+      new ToolMessage({ content: BIG_TEXT, tool_call_id: 'c1' }),
     ];
     const state = { _summarizationEvent: { summaryMessage: SUMMARY, cutoffIndex: 9 } };
 
-    expect(isUnderCompactionPressure(effectiveMessages(messages, state), BY_TOKENS)).toBe(true);
+    expect(pressure(messages, BY_TOKENS, state)).toBe(true);
   });
 });
 
@@ -290,5 +298,179 @@ describe('認出壓縮發生過', () => {
     expect(
       readSummarizationEvent({ update: { _summarizationEvent: { cutoffIndex: 5, filePath: 7 } } }),
     ).toEqual({ cutoffIndex: 5, filePath: null });
+  });
+});
+
+/**
+ * **`tokens` 門檻由錨定估算比，超過就借基座的溢出恢復路徑摘要**（[#588](https://github.com/DemianLi/nexus-agent/issues/588)）。
+ *
+ * 走真的 `createSummarizationMiddleware`：這一層靠的是基座那條 `catch` 真的認得我們拋的那顆、而且只在它接得住的
+ * 地方拋，用替身驗不到。
+ */
+describe('tokens 門檻（接線）', () => {
+  /** o200k 大約三千 token 的中文。 */
+  const BIG = '這一段很長，要讓估算越過門檻。'.repeat(300);
+
+  function fakeModel() {
+    const invokes: unknown[] = [];
+    return {
+      invokes,
+      model: {
+        profile: {},
+        invoke: async (_input: unknown, config?: { tags?: unknown }) => {
+          invokes.push(config?.tags);
+          return { text: '這是摘要。' };
+        },
+      },
+    };
+  }
+
+  async function run(options: {
+    trigger: readonly SummarizationThreshold[];
+    keep?: number;
+    messages: readonly BaseMessage[];
+    pruning?: false;
+    book?: TokenAnchorBook;
+    reply?: (sent: readonly BaseMessage[]) => AIMessage;
+  }) {
+    const { model, invokes } = fakeModel();
+    const middleware = createSummarizer(
+      { write: async (path: string) => ({ path }) } as never,
+      {
+        ...DEFAULT_SUMMARIZATION,
+        trigger: options.trigger,
+        keep: { type: 'messages', value: options.keep ?? 20 },
+      },
+      undefined,
+      options.pruning,
+      options.book ?? new TokenAnchorBook(),
+    );
+    const sent: { messages: readonly BaseMessage[]; model: unknown }[] = [];
+    const result = await middleware.wrapModelCall?.(
+      { messages: options.messages, state: {}, model, systemMessage: SYSTEM, tools: [] } as never,
+      ((request: { messages: readonly BaseMessage[]; model: unknown }) => {
+        sent.push(request);
+        return options.reply?.(request.messages) ?? new AIMessage('好。');
+      }) as never,
+    );
+    return { sent, invokes, model, result };
+  }
+
+  const SYSTEM = new SystemMessage('系統。');
+  const history = (last: BaseMessage) => [
+    new HumanMessage(BIG),
+    new AIMessage('一'),
+    new HumanMessage('二'),
+    new AIMessage('三'),
+    new HumanMessage('四'),
+    new AIMessage('五'),
+    last,
+  ];
+
+  it('超過預算：摘要剛好一次，送出去的是摘要過的那串，而且只送一次', async () => {
+    const { sent, invokes, result } = await run({
+      trigger: [{ type: 'tokens', value: 2_000 }],
+      keep: 2,
+      messages: history(new HumanMessage('短問題')),
+      pruning: false,
+    });
+    expect(invokes).toHaveLength(1);
+    expect(sent).toHaveLength(1);
+    expect(String(sent[0]!.messages[0]!.content)).toContain('這是摘要。');
+    expect(sent[0]!.messages).toHaveLength(3);
+    expect(readSummarizationEvent(result)).toBeDefined();
+  });
+
+  it('預算觸發的那次摘要照樣不上線，交下去的是本尊', async () => {
+    const { sent, invokes, model } = await run({
+      trigger: [{ type: 'tokens', value: 2_000 }],
+      keep: 2,
+      messages: history(new HumanMessage('短問題')),
+      pruning: false,
+    });
+    expect(invokes).toEqual([['nostream']]);
+    expect(sent[0]!.model).toBe(model);
+  });
+
+  it('沒超過：不摘要，原串交下去', async () => {
+    const messages = history(new HumanMessage('短問題')).slice(1);
+    const { sent, invokes } = await run({
+      trigger: [{ type: 'tokens', value: 2_000 }],
+      keep: 2,
+      messages,
+      pruning: false,
+    });
+    expect(invokes).toEqual([]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.messages).toHaveLength(messages.length);
+  });
+
+  /** 基座走 `messages` 那條路、又切不出東西時，`handler` 沒有 `try`——拋了就是整輪失敗。 */
+  it('messages 門檻成立、則數不夠切：超過預算也不拋，原串交下去', async () => {
+    const messages = history(new HumanMessage('短問題'));
+    const { sent, invokes } = await run({
+      trigger: [
+        { type: 'tokens', value: 2_000 },
+        { type: 'messages', value: 3 },
+      ],
+      keep: 20,
+      messages,
+      pruning: false,
+    });
+    expect(invokes).toEqual([]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.messages).toHaveLength(messages.length);
+  });
+
+  it('摘要完還是超過：放行，不摘第二次', async () => {
+    const { sent, invokes } = await run({
+      trigger: [{ type: 'tokens', value: 2_000 }],
+      keep: 2,
+      messages: history(new HumanMessage(BIG)),
+      pruning: false,
+    });
+    expect(invokes).toHaveLength(1);
+    expect(sent).toHaveLength(1);
+    expect(String(sent[0]!.messages.at(-1)!.content)).toBe(BIG);
+  });
+
+  /**
+   * **剪刀不來回震盪。** 剪刀估的是沒剪的那一份、錨在上一次**送出去**（剪過）的那份上：上一次剪過，被剪掉的
+   * 那一截會出現在增量裡，這一次照樣判成有壓力。錨在「這串訊息裡錨之前那段」的話，剪掉的那一截兩邊抵消，
+   * 第二次會判成沒壓力、原封送出去。
+   */
+  it('連續兩次都超過：兩次都剪', async () => {
+    const book = new TokenAnchorBook();
+    const huge = '工具結果很大，剪刀要剪它。'.repeat(2_000);
+    const first = [
+      new HumanMessage('讀檔'),
+      new AIMessage({ content: '', tool_calls: [{ id: 'c1', name: 'read_file', args: {} }] }),
+      new ToolMessage({ content: huge, tool_call_id: 'c1' }),
+    ];
+    // 前提：沒剪之前遠超過門檻，剪過之後在門檻下。
+    expect(estimateRequestTokens({ messages: first, systemMessage: SYSTEM })).toBeGreaterThan(
+      10_000,
+    );
+    const reply = (id: string) => (sent: readonly BaseMessage[]) =>
+      new AIMessage({
+        id,
+        content: '好。',
+        usage_metadata: {
+          input_tokens: estimateRequestTokens({ messages: sent, systemMessage: SYSTEM }),
+          output_tokens: 1,
+          total_tokens: 1,
+        },
+      });
+    const trigger: SummarizationThreshold[] = [{ type: 'tokens', value: 10_000 }];
+    const one = await run({ trigger, messages: first, book, reply: reply('r1') });
+    expect(String(one.sent[0]!.messages[2]!.content)).toContain(TOOL_RESULT_PRUNE_MARKER);
+    expect(
+      estimateRequestTokens({ messages: one.sent[0]!.messages, systemMessage: SYSTEM }),
+    ).toBeLessThan(10_000);
+
+    const second = [...first, reply('r1')(one.sent[0]!.messages), new HumanMessage('再問一次')];
+    const two = await run({ trigger, messages: second, book, reply: reply('r2') });
+    expect(String(two.sent[0]!.messages[2]!.content)).toContain(TOOL_RESULT_PRUNE_MARKER);
+    expect(two.invokes).toEqual([]);
   });
 });

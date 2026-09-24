@@ -63,15 +63,17 @@
  *   模型解得出 `maxInputTokens` 的那天要紅。
  */
 
+import { ContextOverflowError } from '@langchain/core/errors';
 import type { BaseMessage } from '@langchain/core/messages';
 import { createSummarizationMiddleware } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
-import { countTokensApproximately, SystemMessage } from 'langchain';
 import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
 import { toLoggedMessage } from './logged-message.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry, SessionLookup } from './registry.js';
+import { defaultTokenAnchorBook, estimateAnchoredTokens } from './token-estimate.js';
+import type { EstimatedRequest, TokenAnchorBook } from './token-estimate.js';
 import { DEFAULT_TOOL_RESULT_PRUNE, withToolResultPruning } from './tool-result-pruner.js';
 import type { ToolResultPruneConfig } from './tool-result-pruner.js';
 
@@ -289,6 +291,12 @@ function assertThreshold(threshold: SummarizationThreshold, where: string): void
  * 最內層還有一層 {@link withQuietSummaryCall}：摘要本身不是誰講的話，不該即時畫成一則 AI 訊息
  * （[#584](https://github.com/DemianLi/nexus-agent/issues/584)）。
  *
+ * ## `tokens` 門檻不交給基座
+ *
+ * 基座只拿到 `messages` 那幾道。`tokens` 那幾道由 {@link withTokenBudget} 用錨定估算
+ * （{@link ./token-estimate.ts}）比，理由與做法見那裡（[#588](https://github.com/DemianLi/nexus-agent/issues/588)）。
+ * 剪刀的「壓力到了沒」也讀同一套估算。
+ *
  * @param backend - 歷史寫去哪。
  * @param settings - 補滿的設定，來自 {@link resolveSummarizationSettings}。
  * @param sessions - 註冊表的 `sessions` 通道，用來問「這次壓縮該記進哪一份日誌」。
@@ -296,6 +304,7 @@ function assertThreshold(threshold: SummarizationThreshold, where: string): void
  *   會話註冊表，它們不該為此拿到一個例外。同 {@link ./model-usage.ts} 的 `not-attached`。
  * @param pruning - 包在外面的那把剪刀的預算，來自 `resolveToolResultPruneConfig`；
  *   `false` 就不包（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）。
+ * @param book - 錨定估算的帳。省略即行程共用的那本；測試要隔離才傳。
  * @returns 可以直接放進 `middleware` 的 middleware。
  */
 export function createSummarizer(
@@ -303,10 +312,14 @@ export function createSummarizer(
   settings: SummarizationSettings,
   sessions?: { forCall(config: unknown): SessionLookup },
   pruning: ToolResultPruneConfig | false = DEFAULT_TOOL_RESULT_PRUNE,
+  book: TokenAnchorBook = defaultTokenAnchorBook,
 ): AgentMiddleware {
   const base = createSummarizationMiddleware({
     backend,
-    trigger: settings.trigger.map((threshold) => ({ ...threshold })),
+    // 只交 `messages` 那幾道，`tokens` 由 withTokenBudget 比。一道都沒有時是空陣列：基座逐條試，一條都不成立。
+    trigger: settings.trigger
+      .filter((threshold) => threshold.type === 'messages')
+      .map((threshold) => ({ ...threshold })),
     keep: { ...settings.keep },
     historyPathPrefix: settings.historyPathPrefix,
     truncateArgsSettings: {
@@ -320,17 +333,14 @@ export function createSummarizer(
   // 貼著基座包：外面幾層看到的 `request.model` 與交下去的都是原本那顆，不會碰到替身。
   const quiet = withQuietSummaryCall(base);
   // 兩層各管一個方向，刻意不合成一層：剪刀改請求、日誌讀回傳，合起來寫會讓兩個獨立的
-  // 失敗模式共用一個 try。順序無所謂——它們碰的不是同一樣東西。量測那層同理：它讀的是
-  // 基座交下去的請求，不是進來的那份，也不碰回傳值。
-  const logged =
-    sessions === undefined
-      ? quiet
-      : withContextMeasure(withCompactionLog(quiet, sessions), sessions, settings.trigger);
-  if (pruning === false) return logged;
+  // 失敗模式共用一個 try。順序無所謂——它們碰的不是同一樣東西。預算那層讀的是基座交下去的
+  // 請求，不是進來的那份，也不碰回傳值。
+  const logged = sessions === undefined ? quiet : withCompactionLog(quiet, sessions);
+  const budgeted = withTokenBudget(logged, settings.trigger, book, sessions);
+  if (pruning === false) return budgeted;
   return withToolResultPruning(
-    logged,
-    (messages, state) =>
-      isUnderCompactionPressure(effectiveMessages(messages, state), settings.trigger),
+    budgeted,
+    (request) => isUnderCompactionPressure(request, settings.trigger, book),
     pruning,
   );
 }
@@ -494,106 +504,119 @@ function withCompactionLog(
 }
 
 /**
- * 把「這份請求離自動摘要還有多遠」記進這次呼叫所屬的那一份會話日誌
- * （[#528](https://github.com/DemianLi/nexus-agent/issues/528)，web 的用量表讀它）。
+ * `tokens` 門檻由這一層比，比的是**錨定估算**（{@link ./token-estimate.ts}），順手把比過的那個數記進日誌
+ * （`context/measure`，web 的用量表讀它，[#528](https://github.com/DemianLi/nexus-agent/issues/528)）。
+ * [#588](https://github.com/DemianLi/nexus-agent/issues/588)。
  *
- * ## 量的是交下去的那份，不是進來的那份
+ * ## 比的是交下去的那份
  *
- * 基座的 `wrapModelCall` 最後一定是 `handler({ ...request, messages })`：沒摘要時是截過參數的那串，
- * 摘要了是 `[摘要, ...留下的]`（`dist/langsmith-zm0ILQsV.js:3220`、`:3163`；另外三處是退路，同一個形狀）。所以這裡把**傳給基座的
- * `handler`** 包一層，量它收到的那份——那正是判準剛量過的東西：沒摘要時 `approxTokens` 就是基座的
- * `tokensForSummary`、`messageCount` 就是它拿去比 `messages` 門檻的那個長度；摘要了，數字當場掉下來。
- * 量進來的 `request` 的話，摘要那一輪會記下摘要**之前**的大小，環要等下一次呼叫才掉。
+ * 基座的 `wrapModelCall` 最後一定是 `handler({ ...request, messages })`：剪刀剪過、參數截過、摘要了的話是
+ * `[摘要, ...留下的]`（`dist/langsmith-zm0ILQsV.js:3220`、`:3163`）。所以這裡包的是**傳給基座的 `handler`**，
+ * 估它收到的那份——**就是要送上線的那份**，錨上的實數也是同一個階段的東西，兩邊同一把尺。記進日誌的正是這次
+ * 比過的那個數，所以用量表的環與摘要時機是同一個數：環到 100% 就是這一層觸發摘要。
  *
- * 算法見 {@link measureRequest}。**不乘基座那個自己會調的倍率**（`tokenEstimationMultiplier`）：它在
- * closure 裡、沒有匯出，而且只有撞過一次窗口上限才會離開 1——那時畫面已經先報錯了（#528 的 Q4）。
+ * ## 超過就借基座的溢出恢復路徑摘要
  *
- * ## 與 dsh 的偏離（AGENTS.md 的規則，兩條）
+ * 基座的判準寫死在 `countTotalTokens`（純估算），沒有縫注入別的數。但它在「不摘要」那條路上把
+ * `handler` 包在 `try` 裡，接到 `ContextOverflowError` 就走緊急摘要：摘要、再叫一次 `handler`
+ * （`:3219-3229`）。所以超過預算時這裡**拋一顆合成的 `ContextOverflowError`**，由基座自己摘要——保留、切點、
+ * 寫歷史、回 `_summarizationEvent` 全是基座原本那套。摘要完再叫進來的那一次照常放行。
  *
- * 1. **分子：照的是「跟壓縮判準同源」**。dsh 的 `contextPressure.projectedTokens` 是供應商報的用量當錨、
- *    再加估算的增量，而它的壓縮讀的 `measure()` 也是這一套——顯示與判準本來就是同一個數。我們表達不出來的
- *    是**錨**：判準是基座的純估算（`countTotalTokens`），改不動。退到照基座的估算法算，於是同源這一條照舊
- *    成立。供應商報的數字另外走 `model/usage`，只拿來顯示「目前多大」，不拿來算比例。
- * 2. **載體：一顆事件**。dsh 不記這種事件，壓力是從 `request/header` 與 surface 投影出來的。我們的日誌不記
- *    system、工具定義與請求標頭（檔頭那條「不記訊息內容」），重建不出摘要器眼中的那份請求，所以退到一顆
- *    只帶量測結果的事件，同 `model/usage` 那條偏離。**分母也不同**：dsh 除的是模型窗口，我們除的是摘要
- *    門檻，理由見 #528 的 grilling（Q2）。
+ * **只在基座會接的地方拋**，其他三條路上的 `handler` 沒有 `try`，拋了就是整輪失敗：
  *
- * ## 它不准拋
+ * - 摘要器眼中那串是空的（`:3197` 直接交下去）——不拋。
+ * - 有一道 `messages` 門檻成立（基座走 `performSummarization`，`cutoffIndex <= 0` 那條直接交下去，`:3137`）——不拋。
+ *   這裡照抄 `shouldSummarize` 的 `messages` 判準；截參數不改則數，所以用摘要器眼中那串的長度就對得上。
+ * - 已經拋過一次（摘要完、或切不出東西又交下來的那一次）——不拋。一次呼叫最多一次。
  *
- * 同 {@link withCompactionLog}：量不出來、記不進去都吃掉，而且量測在 `handler` 之前、記錄在它之後，
- * **`handler` 本身拋的錯原樣往外傳**——那是基座的緊急摘要要接的。
+ * **不數成一步**：拋在內層 `handler` 之前，`model-calls.ts` 那顆在更內層，根本沒被叫到；日誌上只有摘要完
+ * 送出去的那一對起訖。真的溢出（供應商回的）照舊算兩步。
  *
- * **記的時刻是「下一層正常回來」，不是「模型真的被叫到」**：拋錯的那次不記；停止閘門（`turnCancel`）擋下的
- * 那一次照記——基座把摘要器排在預設那一段，它在閘門外層，閘門回的合成收尾對它來說就是正常回來。那一筆量的
- * 仍是判準看過的那份請求，數字照樣成立，所以不去分辨。`turn-cancel.test.ts` 的委派那條釘著這件事。
+ * ## 與 dsh 的偏離（AGENTS.md 的規則）
  *
- * @param base - 摘要器（已經包過 {@link withCompactionLog} 的也行，它原樣轉交 `handler`）。
- * @param sessions - 註冊表的 `sessions` 通道。
- * @param trigger - 這個摘要器生效的門檻，原樣記進每一筆。
- * @returns 同名、同狀態、多一層量測的 middleware。
+ * 1. **分子：錨照 dsh，估算器與內容比例不照**，見 {@link ./token-estimate.ts} 的檔頭。dsh 的壓縮與
+ *    `contextPressure` 讀同一個 `measure()`，顯示與判準本來就同一個數；我們這一層就是那個「同一個」。
+ * 2. **觸發借基座的溢出恢復路徑**：基座的判準表達不出錨（沒有注入點），能改變它決定的唯一入口是那條 `catch`。
+ *    **絆索**：模型哪天解得出 `profile.maxInputTokens`，那條 `catch` 會拿合成的這顆去調 `tokenEstimationMultiplier`、
+ *    也可能走 `compactToolResults`——`summarization.test.ts` 那條「解得出就要紅」的絆索也管這件事。
+ * 3. **載體：一顆事件**。dsh 不記這種事件，壓力從 `request/header` 與 surface 投影。我們的日誌不記 system、工具
+ *    定義與請求標頭，重建不出這份請求，所以退到只帶量測結果的一顆，同 `model/usage` 那條偏離。**分母也不同**：
+ *    dsh 除的是模型窗口，我們除的是摘要門檻（#528 grilling Q2）。
+ *
+ * ## 量與記都不准拋
+ *
+ * 估不出來就不比、不記，退回基座自己的 `messages` 門檻；記不進去吃掉，同 {@link withCompactionLog}。**`handler`
+ * 本身拋的錯原樣往外傳**——那是基座的緊急摘要要接的。
+ *
+ * **記的時刻是「下一層正常回來」**：拋錯的那次不記；停止閘門（`turnCancel`）擋下的那一次照記——閘門在更內層，
+ * 它回的合成收尾對這裡就是正常回來。`turn-cancel.test.ts` 的委派那條釘著這件事。
+ *
+ * @param base - 摘要器（包過 {@link withCompactionLog} 的也行，它原樣轉交 `handler`）。
+ * @param trigger - 全部門檻；比的是 `tokens` 那幾道，`messages` 那幾道用來判斷基座走哪條路。原樣記進每一筆。
+ * @param book - 錨定估算的帳。
+ * @param sessions - 註冊表的 `sessions` 通道。省略即不記，照樣比。
+ * @returns 同名、同狀態、多一層預算的 middleware。
  */
-function withContextMeasure(
+function withTokenBudget(
   base: AgentMiddleware,
-  sessions: { forCall(config: unknown): SessionLookup },
   trigger: readonly SummarizationThreshold[],
+  book: TokenAnchorBook,
+  sessions?: { forCall(config: unknown): SessionLookup },
 ): AgentMiddleware {
   const inner = base.wrapModelCall?.bind(base);
   /* v8 ignore next -- 同 withCompactionLog。 */
   if (inner === undefined) return base;
   const thresholds = trigger.map(({ type, value }) => ({ type, value }));
+  const budgets = trigger.filter((t) => t.type === 'tokens').map((t) => t.value);
+  const budget = budgets.length === 0 ? undefined : Math.min(...budgets);
+  const byMessages = trigger.filter((t) => t.type === 'messages').map((t) => t.value);
   return {
     ...base,
-    wrapModelCall: (request, handler) =>
-      inner(request, async (sent) => {
-        let measured: ReturnType<typeof measureRequest> | undefined;
+    wrapModelCall: (request, handler) => {
+      const view = effectiveMessages(request.messages ?? [], request.state);
+      const baseWillCatch = view.length > 0 && !byMessages.some((value) => view.length >= value);
+      let thrown = false;
+      return inner(request, async (sent) => {
+        let estimate: ReturnType<typeof estimateAnchoredTokens> | undefined;
         try {
-          measured = measureRequest(sent);
+          estimate = estimateAnchoredTokens(sent, book);
         } catch {
-          // 量不出來就不記，不能反過來擋住這次呼叫。
+          // 估不出來就不比、不記，不能反過來擋住這次呼叫。
+        }
+        if (estimate !== undefined && budget !== undefined && baseWillCatch && !thrown) {
+          if (estimate.tokens >= budget) {
+            thrown = true;
+            throw new ContextOverflowError(
+              `摘要預算：這份請求估計 ${estimate.tokens} token，到了 ${budget} 的門檻。`,
+            );
+          }
         }
         const response = await handler(sent);
-        if (measured === undefined) return response;
+        if (estimate === undefined) return response;
+        try {
+          book.record(response, sent, estimate.estimated, estimate.basis);
+        } catch {
+          // 記帳失敗只是下一次少一個錨。
+        }
+        if (sessions === undefined) return response;
         try {
           const found = sessions.forCall({
             configurable: (request as { runtime?: { configurable?: unknown } }).runtime
               ?.configurable,
           });
-          if (found.kind === 'ok') found.log.append('context/measure', { ...measured, thresholds });
+          if (found.kind === 'ok')
+            found.log.append('context/measure', {
+              approxTokens: estimate.tokens,
+              messageCount: (sent.messages ?? []).length,
+              thresholds,
+            });
         } catch {
           // 記不進去不能反過來把摘要器殺掉。見 withCompactionLog。
         }
         return response;
-      }),
+      });
+    },
   } as AgentMiddleware;
-}
-
-/**
- * 一份請求在摘要器眼中多大。**抄基座的 `countTotalTokens`**（`dist/langsmith-zm0ILQsV.js:2920`），它沒有匯出：
- * system 是 `SystemMessage` 才算、工具定義非空才算，一律交給同一個 `countTokensApproximately`。
- *
- * 跟 {@link isUnderCompactionPressure} 不同：那個只量訊息、刻意少估；這個要跟判準一模一樣，差的正是
- * system 與工具那一截。基座改了這個算法時這裡不會紅，紅的是 `apps/harness/src/context-pressure.test.ts` 那條門檻夾擠。
- *
- * @param request - 摘要器交給下一層的那份請求。
- * @returns 估算的 token 數與訊息則數。
- */
-export function measureRequest(request: {
-  readonly messages?: readonly BaseMessage[];
-  readonly systemMessage?: unknown;
-  readonly tools?: unknown;
-}): { readonly approxTokens: number; readonly messageCount: number } {
-  const messages = [...(request.messages ?? [])];
-  const system = request.systemMessage;
-  const counted =
-    system !== undefined && system !== null && SystemMessage.isInstance(system)
-      ? [system, ...messages]
-      : messages;
-  const tools =
-    Array.isArray(request.tools) && request.tools.length > 0
-      ? (request.tools as Record<string, unknown>[])
-      : null;
-  return { approxTokens: countTokensApproximately(counted, tools), messageCount: messages.length };
 }
 
 /**
@@ -678,30 +701,34 @@ export function effectiveMessages(
  * 壓力到了沒。
  *
  * dsh 那側「低于压力的对话绝不被碰」是**呼叫端**的性質——`compaction-basic` 壓力達標才
- * `pruneSession()`。我們的對應就是「基座摘要器這一輪會不會觸發」，所以這裡照抄它
- * `shouldSummarize` 的判準：門檻陣列並聯，任何一道成立就算壓力到了。
+ * `pruneSession()`。我們的對應就是「摘要器這一輪會不會觸發」，所以這裡跟摘要判準用同一套：`messages` 門檻照抄
+ * 基座的 `shouldSummarize`，`tokens` 門檻讀 {@link withTokenBudget} 那個錨定估算（[#588](https://github.com/DemianLi/nexus-agent/issues/588)）。
  *
- * **這個量測允許不準。** 因果鏈是「我們決定要不要試著剪 → 剪 → **基座自己重新計量**、
- * 由它決定要不要摘要」，權威永遠是基座那次重算。所以這裡不必去補 `systemMessage` 與
- * `tools` 的額外開銷，寧可略估得小一點（少剪一次，不會剪錯）。
+ * **估的是還沒剪的那一份**：剪刀在最外層，看到的是原串，錨上的實數是上一次**送出去**（剪過、截過）的那份。
+ * 上一次剪過、這一次沒剪的話，被剪掉的那一截會出現在增量裡——所以這裡的數一定不小於摘要器那一層比的數，
+ * 上一次剪過不會讓這一次誤判成沒壓力、下一次又剪（來回震盪）。差的是還沒截的工具參數那一截，有界，而且
+ * 只會讓剪刀早一點動，不會讓摘要早一點發生。
  *
- * 但**允許不準不等於允許量錯東西**：要量的是 {@link effectiveMessages}，不是原串。
+ * 要量的是 {@link effectiveMessages}，不是原串：摘要過之後原串只長不縮，照原串量門檻會從第一次摘要起永遠成立。
  *
- * `countTokensApproximately` 是 `langchain` 的公開匯出，**基座的 `countTotalTokens` 底下
- * 叫的就是它**，不是我們另外估一套。
- *
- * @param messages - 摘要器眼中的那一串（{@link effectiveMessages} 的輸出）。
+ * @param request - 剪刀收到的那份請求。
  * @param trigger - 我們配的那組門檻。
+ * @param book - 錨定估算的帳。
  * @returns 任何一道門檻成立就 `true`。
  */
 export function isUnderCompactionPressure(
-  messages: readonly BaseMessage[],
+  request: EstimatedRequest & { readonly state?: unknown },
   trigger: readonly SummarizationThreshold[],
+  book: TokenAnchorBook = defaultTokenAnchorBook,
 ): boolean {
+  const messages = effectiveMessages(request.messages ?? [], request.state);
+  let tokens: number | undefined;
   for (const threshold of trigger) {
     if (threshold.type === 'messages' && messages.length >= threshold.value) return true;
-    if (threshold.type === 'tokens' && countTokensApproximately([...messages]) >= threshold.value)
-      return true;
+    if (threshold.type === 'tokens') {
+      tokens ??= estimateAnchoredTokens({ ...request, messages }, book).tokens;
+      if (tokens >= threshold.value) return true;
+    }
   }
   return false;
 }

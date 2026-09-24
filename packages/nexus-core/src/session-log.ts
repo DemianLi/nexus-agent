@@ -418,17 +418,21 @@ export interface SessionEventMap {
   /**
    * 摘要器量到的一次模型呼叫：**那份請求離自動摘要還有多遠**（[#528](https://github.com/DemianLi/nexus-agent/issues/528)）。
    *
-   * 量的是摘要器交給下一層的那份請求——沒摘要時是截過參數的那串，摘要了就是 `[摘要, ...留下的]`——
-   * 算法照基座判準的 `countTotalTokens`。所以 `approxTokens` 與 `messageCount` 跟決定要不要摘要的那兩個數
-   * 同源，`thresholds` 是那次呼叫實際生效的門檻（patch 改過就是改過的）。細節與偏離見
-   * `summarization.ts` 的 `withContextMeasure`。
+   * 量的是摘要器交給下一層的那份請求——沒摘要時是截過參數的那串，摘要了就是 `[摘要, ...留下的]`。
+   * `approxTokens` 就是 `tokens` 門檻拿來比的那個數，`messageCount` 就是 `messages` 門檻比的那個長度，
+   * `thresholds` 是那次呼叫實際生效的門檻（patch 改過就是改過的）。細節與偏離見 `summarization.ts` 的
+   * `withTokenBudget`。
+   *
+   * **`approxTokens` 的算法換過一次，形狀沒換**（[#588](https://github.com/DemianLi/nexus-agent/issues/588)）：
+   * 之前是「四個字元一個」的純估算，之後是錨在供應商實數上的估算。讀的一方只拿它顯示與比門檻，兩種都讀得懂，
+   * 所以沒有升日誌格式版本。
    *
    * 下一層正常回來才記，一次一筆；拋錯的那次不記。**停止閘門擋下的那一次也記**：摘要器排在它外層，閘門回的
    * 合成收尾對摘要器來說是正常回來——量的是判準看過的那份請求，數字照樣成立。摘要關掉時沒有這顆事件。
    * **這一筆只有數字與門檻**，不含訊息內容。
    */
   'context/measure': {
-    /** 估算的 token 數：system、訊息、工具定義，四個字元算一個，同基座的判準。 */
+    /** 估算的 token 數：錨在上一次供應商報的實數上、只估增量，見 `token-estimate.ts`。 */
     readonly approxTokens: number;
     /** 訊息則數，同 `messages` 那道門檻比的數。 */
     readonly messageCount: number;

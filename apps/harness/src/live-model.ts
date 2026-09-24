@@ -92,6 +92,15 @@ export const LIVE_API_KEY_ENV = 'NVIDIA_API_KEY';
  * 而尺寸比較是一連串請求 —— 沒有上限的話，中間掛住一次換來的是整輪比較沒有結果，
  * 而不是「那一格失敗」。90 秒是量出來的：實測最慢的成功回應是 43 秒
  * （`meta/muse-glimmer-30b`），掛住的那兩個在 90 秒仍是零位元組。
+ *
+ * **在串流上它管兩段**（[#521](https://github.com/DemianLi/nexus-agent/issues/521)）：連線到第一則事件
+ * 由 SDK 的計時器管、在重試射程內；第一則事件之後每一段的閒置由 {@link withStreamIdleTimeout} 管、
+ * 不重試。同 dsh 只有一個 `streamIdleTimeoutMs`（預設 300 秒）。
+ *
+ * **最壞情況是它乘上重試次數**：開了線卻不吐位元組，每一次都等滿，90 秒 × (6 + 1) = 630 秒，再加上
+ * 退避的 63–126 秒（`settings/live-model.ts` 的偏離二）。**這是 dsh 的形狀，不是缺陷**：dsh 的
+ * `TIMEOUT` 在預設可重試碼裡（`llm/src/retry-policy.ts:18`），5 次重試 × 300 秒閒置 ≈ 30 分鐘。
+ * #521 查過之後照 dsh 保留逾時重試——一次偶發的慢本來就該重試。
  */
 export const DEFAULT_LIVE_TIMEOUT_MS = 90_000;
 
@@ -454,13 +463,15 @@ function inbandStatus(envelope: Record<string, unknown>): number {
  * - 吐了內容之後中段才出錯（第 2 則以後的事件是 error）。
  * - 串流中途斷掉（`ERR_INCOMPLETE_CHUNKED_ENCODING`）。
  *
- * 這兩類今天的行為不變：當場失敗、零重試。要涵蓋它們得買下第三層，那是另一張卡。
+ * 這兩類今天的行為不變：當場失敗、零重試。要涵蓋它們得買下第三層，那是另一張卡。吐了內容之後
+ * **停住**（不是斷掉）也在射程外，那一類由外層的 {@link withStreamIdleTimeout} 接成逾時，同樣不重試。
  *
  * **掛住的連線也不歸這一層管，而那是量出來的不是推的。** 嗅探迴圈在 fetch 裡面 await
  * `read()`，所以「開了線卻不吐位元組」看起來會從重試射程外被搬進射程內。實測兩側的請求數
- * 相同（`live-model.test.ts` 的「開了線卻不吐位元組」那條）：SDK 的逾時本來就掛在整個請求
- * 上，{@link retryDecision} 本來就判它重試。那個「逾時 × 重試次數」的乘法在這一刀之前
- * 就存在。
+ * 相同（`live-model.test.ts` 的「開了線卻不吐位元組」那條）：SDK 的計時器從請求開始一直計到
+ * fetch 回來，嗅探在 fetch 裡面，所以兩側都被它蓋到；{@link retryDecision} 本來就判它重試。
+ * 那個「逾時 × 重試次數」的乘法在這一刀之前就存在，#521 查過是 dsh 的形狀，見
+ * {@link DEFAULT_LIVE_TIMEOUT_MS}。
  *
  * ## 這**不**保證 live 跑得完
  *
@@ -540,6 +551,105 @@ export function withInbandStreamErrors(baseFetch: typeof fetch = fetch): typeof 
 }
 
 /**
+ * 串流吐了內容之後停住：{@link withStreamIdleTimeout} 等不到下一段位元組。
+ *
+ * **名字刻意不是 `AbortError`**：openai SDK 的串流迭代器碰到 `AbortError` 會當成正常結束直接
+ * `return`（`openai@7.5.0` 的 `core/streaming.js:87-90`）——畫面上會是一段被截斷、卻沒有任何錯誤
+ * 的回覆。
+ */
+export class StreamIdleTimeoutError extends Error {
+  override readonly name = 'StreamIdleTimeoutError';
+
+  /** @param timeoutMs - 等了多久。 */
+  constructor(readonly timeoutMs: number) {
+    super(
+      `串流閒置逾時：模型吐出內容之後 ${timeoutMs} 毫秒沒有再送任何東西。` +
+        '已經送到畫面上的部分作廢不了，所以這一次不重試。',
+    );
+  }
+}
+
+/**
+ * 串流的閒置逾時：**第一則事件之後**，每等一段位元組就重新計時（[#521](https://github.com/DemianLi/nexus-agent/issues/521)）。
+ *
+ * ## 為什麼要這一層：SDK 的 `timeout` 管不到串流的中段
+ *
+ * openai SDK 的計時器在 `fetch` 回來時就清掉（`openai@7.5.0` 的 `client.js:694`，`finally`
+ * 裡的 `clearTimeout`）。{@link withInbandStreamErrors} 在 `fetch` 裡讀完第一則事件才回，所以
+ * `timeoutMs` 管的是「連線到第一則事件」；之後**什麼都不管**。實測：loopback 端點吐一段內容就停住，
+ * `timeout` 300 毫秒的串流過了 3 秒還掛著，掛不掛 {@link withInbandStreamErrors} 都一樣；非串流那條
+ * （CLI 的 `invoke`）303 毫秒就逾時，因為 SDK 讀整份 body 時計時器還在。所以 serve 上供應商吐一半
+ * 停住，那一輪會一直等到有人按停止。
+ *
+ * ## 照 dsh：一個閒置逾時，每段重新計時
+ *
+ * dsh 的 adapter 用 `idleWatchdog`（`packages/util/timeout/src/index.ts:126`，`46a7f68`）：每次
+ * `next()` 重新計時，時間到就是 `TIMEOUT`（`llm-pi-ai/src/adapter.ts:355`、`:414-415`），預設
+ * `streamIdleTimeoutMs` 300 秒。這裡照做，值沿用同一個 `timeoutMs`（demian 拍板，90 秒）：一個旋鈕
+ * 同時管「到第一則事件」與「段與段之間」，同 dsh 只有一個 `streamIdleTimeoutMs`。
+ *
+ * **只在有人讀的時候計時**：`pull` 才計時，下游讀得慢不算上游閒置——同 dsh 只在 `next()` 裡計時。
+ *
+ * ## 偏離登記
+ *
+ * 1. **中段逾時不重試**。dsh 的 `TIMEOUT` 在預設可重試碼裡（`llm/src/retry-policy.ts:18`），由步級
+ *    掛點重試整條串流。我們退掉的理由跟 {@link withInbandStreamErrors} 的第三層同一個：沒有載體宣告
+ *    「已經送到畫面上的字作廢」。所以這裡拋 {@link StreamIdleTimeoutError}，跟串流中途斷掉走同一條路：
+ *    當場失敗、只打一次。**第一則事件之前的逾時照舊重試**（SDK 的計時器，在重試射程內）。
+ * 2. **位元組級，不是 chunk 級**。dsh 等的是解析好的一個 chunk；我們在 `fetch` 這一層只看得到位元組，
+ *    所以 SSE 的 keep-alive 註解行（`: ping`）也會重新計時。供應商要是只送 keep-alive 不送內容，這一層
+ *    擋不到。退到位元組級是因為這是手上最靠近 adapter 的一格（同 {@link withInbandStreamErrors}）。
+ *
+ * @param timeoutMs - 閒置多久算逾時。
+ * @param baseFetch - 底層的 fetch。產品路徑是 {@link withInbandStreamErrors}；測試換掉它。
+ * @returns 一個 fetch：非 SSE、非 2xx、沒有 body 的回應原樣放行，其餘把 body 包上閒置計時。
+ */
+export function withStreamIdleTimeout(
+  timeoutMs: number,
+  baseFetch: typeof fetch = fetch,
+): typeof fetch {
+  return async (input, init) => {
+    const response = await baseFetch(input, init);
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!response.ok || response.body === null || !contentType.includes('text/event-stream')) {
+      return response;
+    }
+
+    // 當場鎖住 reader，理由同 withInbandStreamErrors。
+    const reader = response.body.getReader();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const watched = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const idle = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new StreamIdleTimeoutError(timeoutMs)), timeoutMs);
+        });
+        try {
+          const next = await Promise.race([reader.read(), idle]);
+          if (next.done) controller.close();
+          else controller.enqueue(next.value);
+        } catch (error: unknown) {
+          // 逾時要把底下那條連線放掉；其他錯誤（含使用者中止的 AbortError）原樣往下交，行為同今天。
+          if (error instanceof StreamIdleTimeoutError) void reader.cancel(error).catch(() => {});
+          controller.error(error);
+        } finally {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+      },
+      // 計時器只在 pull 裡活著：這時候取消，等著的那次 read 會回 done，由 pull 的 finally 清掉。
+      cancel(reason) {
+        return reader.cancel(reason);
+      },
+    });
+    return new Response(watched, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  };
+}
+
+/**
  * 真實供應商的 model。
  *
  * key **只從環境變數讀**，缺少時直接失敗，沒有預設值也不 fallback
@@ -564,8 +674,12 @@ export function createLiveModel(config: LiveModelConfig): ChatOpenAI {
   return new ChatOpenAI({
     apiKey,
     model: config.modelId,
-    // `fetch` 是 #516 那一層：串流內回報的錯誤翻成 HTTP 錯誤回應，才進得了重試射程。
-    configuration: { baseURL: config.baseUrl, fetch: withInbandStreamErrors() },
+    // `fetch` 疊兩層：內層是 #516（串流內回報的錯誤翻成 HTTP 錯誤回應，才進得了重試射程），
+    // 外層是 #521（第一則事件之後的閒置逾時）。外層收到的是內層嗅完第一則事件的那份回應。
+    configuration: {
+      baseURL: config.baseUrl,
+      fetch: withStreamIdleTimeout(config.timeoutMs, withInbandStreamErrors()),
+    },
     temperature: 1,
     topP: 0.95,
     maxTokens: config.maxOutputTokens,
