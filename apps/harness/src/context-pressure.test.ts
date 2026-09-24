@@ -39,9 +39,13 @@ type Reply =
  * 本機的 OpenAI 相容端點。串流與非串流都接（摘要那一次模型呼叫不一定串流）。**每一次的 `prompt_tokens` 都不同**
  * （`1000 + 第幾次`），所以上線的是哪一次呼叫的用量，一眼分得出來。
  *
+ * `sized` 換成**跟 body 大小成正比**的數（一個字元一個，中文大約就是這個密度）：門檻比的是錨在實數上的估算（#588），實數跟內容
+ * 無關的話，第二次呼叫會錨在一個比第一次的純估算還小的數上，夾擠的前提不成立。
+ *
  * @param script - 第幾次請求回什麼；超出的一律回「ok」。
+ * @param sized - `prompt_tokens` 跟著 body 大小走。
  */
-async function fakeOpenAi(script: readonly Reply[] = []) {
+async function fakeOpenAi(script: readonly Reply[] = [], sized = false) {
   let requests = 0;
   /** 每一次請求是不是串流、有沒有帶工具——摘要那一次沒有工具。 */
   const seen: { readonly stream: boolean; readonly tools: boolean }[] = [];
@@ -51,7 +55,8 @@ async function fakeOpenAi(script: readonly Reply[] = []) {
     req.on('end', () => {
       const index = requests;
       requests += 1;
-      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      const body = JSON.parse(raw) as {
         stream?: boolean;
         tools?: unknown;
       };
@@ -63,9 +68,9 @@ async function fakeOpenAi(script: readonly Reply[] = []) {
         return;
       }
       const usage = {
-        prompt_tokens: 1000 + index,
+        prompt_tokens: sized ? raw.length : 1000 + index,
         completion_tokens: 1,
-        total_tokens: 1001 + index,
+        total_tokens: (sized ? raw.length : 1000 + index) + 1,
       };
       const toolCalls =
         'call' in reply
@@ -152,9 +157,10 @@ async function converse(
     readonly script?: readonly Reply[];
     readonly plugins?: PluginEntry[];
     readonly summarization?: CreateNexusAgentOptions['summarization'];
+    readonly sized?: boolean;
   } = {},
 ) {
-  const upstream = await fakeOpenAi(options.script);
+  const upstream = await fakeOpenAi(options.script, options.sized);
   const built = await createNexusAgent({
     model: new ChatOpenAI({
       model: 'fake',
@@ -234,6 +240,7 @@ function summarizeAt(trigger: { type: 'tokens' | 'messages'; value: number }[]) 
 describe('分子跟摘要判準同源：門檻夾擠', () => {
   it('tokens 與 messages 兩道都在量到的那個數上翻轉，摘要那次記下的數字當場掉下來', async () => {
     const baseline = await converse(TURNS, {
+      sized: true,
       summarization: summarizeAt([
         { type: 'tokens', value: NEVER },
         { type: 'messages', value: NEVER },
@@ -250,8 +257,12 @@ describe('分子跟摘要判準同源：門檻夾擠', () => {
     expect(M).toBe(3);
     // 前提：同一段對話量兩次是同一個數，夾擠才有意義。
     const again = eventsOf(
-      (await converse(TURNS, { summarization: summarizeAt([{ type: 'tokens', value: NEVER }]) }))
-        .root,
+      (
+        await converse(TURNS, {
+          sized: true,
+          summarization: summarizeAt([{ type: 'tokens', value: NEVER }]),
+        })
+      ).root,
       'context/measure',
     );
     expect(again[1]!.approxTokens).toBe(A);
@@ -259,7 +270,10 @@ describe('分子跟摘要判準同源：門檻夾擠', () => {
     expect(measured[0]!.approxTokens).toBeLessThan(A);
 
     const run = async (trigger: { type: 'tokens' | 'messages'; value: number }) => {
-      const { root } = await converse(TURNS, { summarization: summarizeAt([trigger]) });
+      const { root } = await converse(TURNS, {
+        sized: true,
+        summarization: summarizeAt([trigger]),
+      });
       return {
         summarized: eventsOf(root, 'compaction/summary').length,
         second: eventsOf(root, 'context/measure')[1]!,
@@ -271,8 +285,8 @@ describe('分子跟摘要判準同源：門檻夾擠', () => {
     expect(atA.summarized).toBe(1);
     expect(aboveA.summarized).toBe(0);
     expect(aboveA.second).toMatchObject({ approxTokens: A, messageCount: M });
-    // 摘要那一次：量的是交下去的 [摘要, 第二句]，不是進來的那三則。第一句約 875 token（3500 字 ÷ 4），換成的摘要
-    // 只有十幾個；system 與工具定義那兩千多個照舊在，所以掉的是那一截，不是掉到零。
+    // 摘要那一次：量的是交下去的 [摘要, 第二句]，不是進來的那三則。第一句是 3500 字的中文，換成的摘要只有十幾個
+    // token；system 與工具定義那幾千個照舊在，所以掉的是那一截，不是掉到零。
     expect(atA.second.messageCount).toBe(2);
     expect(atA.second.approxTokens).toBeLessThan(A - 500);
 

@@ -861,6 +861,10 @@ describe('正式路徑上的門檻是我們選的', () => {
    * 寫死的 `tokens: 100_000` 開始說謊（它建立在「窗口至少 128k」這個**未經實測**的假設上）。
    * 所以那不是一個該靜靜通過的變化。
    *
+   * **第三個後果**（[#588](https://github.com/DemianLi/nexus-agent/issues/588)）：`tokens` 門檻超過時我們拋一顆合成的
+   * `ContextOverflowError` 借基座的緊急摘要。基座那條 `catch` 在解得出 `maxInputTokens` 時會拿它去調
+   * `tokenEstimationMultiplier`，也可能改走 `compactToolResults`——兩件都不是我們要的。
+   *
    * 手法照 [`harness-profile.test.ts`](./harness-profile.test.ts) 那條「真實 live model
    * 過得了這道檢查」：塞一把假 key 進環境變數、只建模型不發任何請求。**刻意不是
    * `it.skipIf(缺 key)`**——缺 key 就跳過的絆索永遠不紅。
@@ -1380,8 +1384,16 @@ describe('一般長對話不會退化成逐輪重摘', () => {
  * `return handler(...)`——**摘要本來就不會呼叫模型**，那樣的綠是假的。
  */
 describe('壓縮前先剪掉過大的工具結果', () => {
-  /** 一則工具結果：超過剪刀的 8,192，但**低於基座 eviction 的 80,000**。 */
-  const BULK = 'X'.repeat(40_000);
+  /**
+   * 一則工具結果：超過剪刀的 8,192，但**低於基座 eviction 的 80,000**。
+   *
+   * **是一般的英文句子，不是一整排 `X`**：門檻比的是 o200k 的錨定估算（#588），一般英文大約 4 個字元一個
+   * token，下面幾條的門檻都是照「4 萬字元約 1 萬 token」算的。一整排同一個字元在 o200k 裡壓得極小（4 萬個
+   * `X` 只有約 2,500 個 token），壓力根本到不了。
+   */
+  const BULK = 'The quick brown fox jumps over the lazy dog near the river bank. '
+    .repeat(700)
+    .slice(0, 40_000);
 
   /** 一個參數是空的、結果很大的工具。體積全在結果上，剪刀才有事做。 */
   function bulkPlugin(payload: string, subagent = false): PluginEntry {
@@ -1458,8 +1470,8 @@ describe('壓縮前先剪掉過大的工具結果', () => {
     expect(pruned.length).toBeGreaterThan(0);
 
     const text = String(pruned[0]!.content);
-    expect(text.startsWith('X'.repeat(DEFAULT_TOOL_RESULT_PRUNE.headChars))).toBe(true);
-    expect(text.endsWith('X'.repeat(DEFAULT_TOOL_RESULT_PRUNE.tailChars))).toBe(true);
+    expect(text.startsWith(BULK.slice(0, DEFAULT_TOOL_RESULT_PRUNE.headChars))).toBe(true);
+    expect(text.endsWith(BULK.slice(-DEFAULT_TOOL_RESULT_PRUNE.tailChars))).toBe(true);
     expect(codePointLength(text)).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_PRUNE.thresholdChars);
     // 呼叫的身分不准變——變了模型就對不回那次呼叫。
     expect(pruned[0]!.tool_call_id).toBeTruthy();

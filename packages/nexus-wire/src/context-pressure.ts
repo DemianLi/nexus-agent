@@ -18,9 +18,10 @@
  *
  * 1. **分母是摘要門檻，不是模型窗口**（#528 的 grilling Q2）：我們的摘要只能用絕對值門檻、跟窗口脫鉤，照抄
  *    窗口會讓環停在約 14% 時較早的訊息就被摘要掉。門檻有幾道就送幾道，web 取最近的那道算比例。
- * 2. **比例的分子是估算值**，跟基座的摘要判準同一套算法（`@nexus/core` 的 `measureRequest`）；供應商報的
- *    `inputTokens` 只拿來顯示「目前多大」。dsh 的分子是供應商用量當錨再加估算的增量，理由見
- *    `summarization.ts` 的 `withContextMeasure`。
+ * 2. **比例的分子是摘要判準拿來比的那個數**：錨在上一次供應商報的實數上、只估增量（`@nexus/core` 的
+ *    `token-estimate.ts`，[#588](https://github.com/DemianLi/nexus-agent/issues/588)）。錨照 dsh；估算器與內容比例
+ *    不照，理由見那個檔頭。供應商報的 `inputTokens` 另外顯示「目前多大」，兩個數除了行程剛起來的第一次，實測差
+ *    在 10% 以內（#586）。
  *
  * **web 要畫的條件是 `measure` 在**，不是 `contextPressure` 不是 `null`：摘要關掉時沒有 `measure`，
  * 但 `model/usage` 照樣會來，那時只有 `inputTokens`。反過來，`model-usage` 條目被關掉時只有 `measure`。
@@ -49,7 +50,7 @@ export interface WireSummaryThreshold {
 
 /** {@link CONTEXT_MEASURE} 的 `payload`，也是 {@link WireContextPressure.measure}。 */
 export interface WireContextMeasure {
-  /** 估算的 token 數，四個字元算一個。跟門檻同源，**算比例用這個**。 */
+  /** 估算的 token 數：錨在供應商上一次報的實數上、只估增量（#588）。就是門檻拿來比的那個數，**算比例用這個**。 */
   readonly approxTokens: number;
   /** 訊息則數。摘要之後會掉下來。 */
   readonly messageCount: number;
