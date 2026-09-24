@@ -205,9 +205,11 @@ describe('第一次：借別條 thread 的第一次', () => {
   it('只記第一個；錨定的那幾次不記', () => {
     const book = new TokenAnchorBook();
     const thread = request([new HumanMessage('短')]);
+    // 錨定的那次不是任何一條 thread 的第一次：帳上是空的時候記了它，也不能變成借錨的來源。
+    book.record(answered('t0', 9_000), thread, 100, 'anchor');
+    expect(book.firstCall(thread)).toBeUndefined();
     book.record(answered('t1', 6_000), thread, 100, 'estimate');
     book.record(answered('t2', 9_000), thread, 100, 'borrowed');
-    book.record(answered('t3', 9_000), thread, 100, 'anchor');
     expect(book.firstCall(thread)).toEqual({ tokens: 6_000, estimated: 100 });
   });
 
