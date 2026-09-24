@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import { ContextOverflowError } from '@langchain/core/errors';
+import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { ChatOpenAI, wrapOpenAIClientError } from '@langchain/openai';
 import {
   LIVE_API_KEY_ENV,
@@ -14,8 +15,10 @@ import {
   createLiveModel,
   isDerivedContextOverflow,
   modelGoneMessage,
+  normalizeEmptyAssistantContent,
   retryDecision,
   StreamIdleTimeoutError,
+  withEmptyAssistantContent,
   withInbandStreamErrors,
   withStreamIdleTimeout,
 } from './live-model.js';
@@ -1167,5 +1170,186 @@ describe('createLiveModel 真的掛上了閒置逾時（#521）', () => {
     expect(error).toBeInstanceOf(StreamIdleTimeoutError);
     expect((error as StreamIdleTimeoutError).timeoutMs).toBe(80);
     expect(Date.now() - started).toBeLessThan(2_000);
+  });
+});
+
+describe('空的助手內容照 dsh 送（#592）', () => {
+  const call = { id: 'call-1', type: 'function', function: { name: 'noop', arguments: '{}' } };
+
+  it('有工具呼叫、內容是空陣列：換成 null，其餘欄位原樣', () => {
+    const messages = [
+      { role: 'user', content: '一' },
+      { role: 'assistant', content: [], tool_calls: [call], name: 'a' },
+    ];
+    expect(normalizeEmptyAssistantContent(messages)).toEqual([
+      { role: 'user', content: '一' },
+      { role: 'assistant', content: null, tool_calls: [call], name: 'a' },
+    ]);
+  });
+
+  it('沒有工具呼叫、內容是空陣列：整則不送', () => {
+    const messages = [
+      { role: 'user', content: '一' },
+      { role: 'assistant', content: [] },
+      { role: 'user', content: '二' },
+    ];
+    expect(normalizeEmptyAssistantContent(messages)).toEqual([
+      { role: 'user', content: '一' },
+      { role: 'user', content: '二' },
+    ]);
+  });
+
+  it('只有空白的文字段也算空（同 pi-ai 的 trim）', () => {
+    const messages = [
+      { role: 'assistant', content: [{ type: 'text', text: ' \n' }], tool_calls: [call] },
+    ];
+    expect(normalizeEmptyAssistantContent(messages)).toEqual([
+      { role: 'assistant', content: null, tool_calls: [call] },
+    ]);
+  });
+
+  it('不動的：有字的陣列、字串、null、別的角色的空陣列——一則都沒換時回原本那個陣列', () => {
+    const messages = [
+      { role: 'assistant', content: [{ type: 'text', text: '好。' }] },
+      { role: 'assistant', content: '', tool_calls: [call] },
+      { role: 'assistant', content: null, tool_calls: [call] },
+      { role: 'assistant', content: [{ type: 'image_url', image_url: { url: 'x' } }] },
+      { role: 'user', content: [] },
+      { role: 'tool', content: [], tool_call_id: 'call-1' },
+    ];
+    expect(normalizeEmptyAssistantContent(messages)).toBe(messages);
+  });
+
+  /** 記下底層收到的每一次呼叫。 */
+  function recording() {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const base = ((input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: input instanceof Request ? input.url : String(input), init });
+      return Promise.resolve(new Response('{}', { status: 200 }));
+    }) as typeof fetch;
+    return { calls, base };
+  }
+
+  const EMPTY = JSON.stringify({
+    model: 'm',
+    messages: [{ role: 'assistant', content: [], tool_calls: [call] }],
+  });
+
+  it('只改 /chat/completions 的 POST，而且只換 messages', async () => {
+    const { calls, base } = recording();
+    const wrapped = withEmptyAssistantContent(base);
+    const init = { method: 'POST', body: EMPTY, headers: { 'x-a': '1' } };
+    await wrapped('http://h/v1/chat/completions', init);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.init!.headers).toEqual({ 'x-a': '1' });
+    expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({
+      model: 'm',
+      messages: [{ role: 'assistant', content: null, tool_calls: [call] }],
+    });
+  });
+
+  it('其餘原樣交下去：同一個 init 物件', async () => {
+    const { calls, base } = recording();
+    const wrapped = withEmptyAssistantContent(base);
+    const cases: [string, RequestInit | undefined][] = [
+      ['http://h/v1/chat/completions', { method: 'GET' }],
+      ['http://h/v1/models', { method: 'POST', body: EMPTY }],
+      ['http://h/v1/chat/completions', { method: 'POST', body: '不是 JSON' }],
+      ['http://h/v1/chat/completions', { method: 'POST', body: JSON.stringify({ messages: 1 }) }],
+      [
+        'http://h/v1/chat/completions',
+        { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: '一' }] }) },
+      ],
+      ['http://h/v1/chat/completions', undefined],
+    ];
+    for (const [url, init] of cases) await wrapped(url, init);
+    expect(calls.map((c) => c.init)).toEqual(cases.map(([, init]) => init));
+    for (const [index, [, init]] of cases.entries()) expect(calls[index]!.init).toBe(init);
+  });
+
+  describe('經過 createLiveModel：產品路徑上會送出 [] 的兩個來源', () => {
+    const original = process.env[LIVE_API_KEY_ENV];
+    const originalFetch = globalThis.fetch;
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+      if (original === undefined) delete process.env[LIVE_API_KEY_ENV];
+      else process.env[LIVE_API_KEY_ENV] = original;
+    });
+
+    /** 換掉全域 fetch 再建工廠，回傳每一次請求裡原樣的助手訊息。 */
+    function wiredModel() {
+      process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
+      const sent: unknown[][] = [];
+      globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(init!.body as string) as { messages: { role: string }[] };
+        sent.push(body.messages.filter((message) => message.role === 'assistant'));
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: `c${sent.length}`,
+              object: 'chat.completion',
+              created: 0,
+              model: 'm',
+              choices: [
+                {
+                  index: 0,
+                  finish_reason: 'stop',
+                  message: { role: 'assistant', content: '好。' },
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        );
+      }) as typeof fetch;
+      return { model: createLiveModel({ ...DEFAULTS, maxRetries: 0 }), sent };
+    }
+
+    it('truncateArgs 重建的推理＋工具呼叫那則：送 null，不送 []', async () => {
+      const { model, sent } = wiredModel();
+      // 照 deepagents@1.13.1 的 truncateArgs：只帶 content、tool_calls、additional_kwargs，
+      // response_metadata（含 output_version: 'v1'）丟了，所以走 @langchain/openai 的舊路。
+      const streamed = new AIMessage({
+        content: [
+          { type: 'reasoning', reasoning: '先想' },
+          { type: 'tool_call', id: 'call-1', name: 'noop', args: {} },
+        ],
+        tool_calls: [{ id: 'call-1', name: 'noop', args: {} }],
+        response_metadata: { output_version: 'v1' },
+      });
+      const rebuilt = new AIMessage({
+        content: streamed.content,
+        tool_calls: streamed.tool_calls,
+        additional_kwargs: streamed.additional_kwargs,
+      });
+      await model.invoke([
+        new HumanMessage('一'),
+        rebuilt,
+        new ToolMessage({ content: '做完了', tool_call_id: 'call-1' }),
+        new HumanMessage('二'),
+      ]);
+      expect(sent).toEqual([
+        [
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              { id: 'call-1', type: 'function', function: { name: 'noop', arguments: '{}' } },
+            ],
+          },
+        ],
+      ]);
+    });
+
+    it('按停止時只收到推理的那則（#561）：整則不送', async () => {
+      const { model, sent } = wiredModel();
+      const interrupted = new AIMessage({
+        content: [{ type: 'reasoning', reasoning: '先想' }],
+        response_metadata: { output_version: 'v1' },
+      });
+      await model.invoke([new HumanMessage('一'), interrupted, new HumanMessage('二')]);
+      expect(sent).toEqual([[]]);
+    });
   });
 });

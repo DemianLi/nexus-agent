@@ -649,6 +649,131 @@ export function withStreamIdleTimeout(
   };
 }
 
+/** 一則助手訊息在請求 body 裡的樣子，只看這一層要讀的幾格。 */
+interface WireAssistant {
+  role: 'assistant';
+  content?: unknown;
+  tool_calls?: unknown;
+}
+
+/**
+ * 這則助手訊息的 content 是不是**一個字都沒有的陣列**：沒有任何一段非空白的文字。
+ *
+ * 只認陣列。字串（CLI 那條送的 `""`）與 `null`（`@langchain/openai` 標準轉換那條送的）兩個模型都收，
+ * 不動。空白算空，同 pi-ai 的 `.filter((block) => block.text.trim().length > 0)`。
+ */
+function isEmptyContentArray(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  return !content.some((part: unknown) => {
+    if (typeof part !== 'object' || part === null) return true;
+    const { type, text } = part as { type?: unknown; text?: unknown };
+    if (type !== 'text') return true;
+    return typeof text === 'string' && text.trim().length > 0;
+  });
+}
+
+/**
+ * 把請求裡**內容是空陣列**的助手訊息換成 dsh 的送法
+ * （[#592](https://github.com/DemianLi/nexus-agent/issues/592)）：有工具呼叫的送 `content: null`，
+ * 沒有工具呼叫的整則不送。
+ *
+ * @param messages - 請求 body 的 `messages`。
+ * @returns 換過的訊息串；一則都沒換時是**原本那個陣列**。
+ */
+export function normalizeEmptyAssistantContent(messages: readonly unknown[]): readonly unknown[] {
+  let changed = false;
+  const next: unknown[] = [];
+  for (const message of messages) {
+    const assistant = message as WireAssistant;
+    if (
+      typeof message !== 'object' ||
+      message === null ||
+      assistant.role !== 'assistant' ||
+      !isEmptyContentArray(assistant.content)
+    ) {
+      next.push(message);
+      continue;
+    }
+    changed = true;
+    const hasToolCalls = Array.isArray(assistant.tool_calls) && assistant.tool_calls.length > 0;
+    if (hasToolCalls) next.push({ ...assistant, content: null });
+  }
+  return changed ? next : messages;
+}
+
+/**
+ * 送出前把**內容是空陣列**的助手訊息換掉——gpt-oss-20b 收到 `content: []` 會回 400
+ * （[#592](https://github.com/DemianLi/nexus-agent/issues/592)）。
+ *
+ * ## 誰會送出 `[]`
+ *
+ * `@langchain/openai` 1.5.10 的 `convertMessagesToCompletionsMessageParams` 有兩條路
+ * （`dist/converters/completions.js:571`）：帶 `response_metadata.output_version === 'v1'` 的走標準
+ * 轉換，沒有文字、有工具呼叫時送 `null`；其餘走舊路，把推理與工具呼叫區塊濾掉、剩下的陣列原樣送，
+ * 沒有文字就是 `[]`。產品路徑上掉進 `[]` 的有兩個（本機假端點實測，正常串流、日誌還原、CLI 都不會）：
+ *
+ * 1. deepagents 的 `truncateArgs`（`deepagents@1.13.1`）重建舊訊息時丟了 `response_metadata`，
+ *    推理＋工具呼叫的那則送成 `[]`＋`tool_calls`。**這個會壞。**
+ * 2. 按停止時只收到推理的那則（#561），送成 `[]`、沒有工具呼叫。**今天不會壞**，照 dsh 一起收掉。
+ *
+ * ## 真端點量到的（2026-09-25，NVIDIA 閘道，非串流，各 1 次）
+ *
+ * | 助手訊息 | gpt-oss-20b | nemotron-3-super |
+ * | --- | --- | --- |
+ * | `[]`＋`tool_calls` | **400**（`content.0 Input should be a valid dictionary`） | 200 |
+ * | `null`＋`tool_calls` | 200 | 200 |
+ * | `""`＋`tool_calls` | 200 | 200 |
+ * | `[]`、沒有 `tool_calls` | 200 | 200（第一輪一次 500，重打 3/3 是 200） |
+ * | 整則不送 | 200 | 200 |
+ *
+ * 所以壞的只有第一格。gpt-oss 那幾格常常 60 秒等不到標頭，等到 240 秒才拿到上表的結果——是閘道慢，
+ * 不是拒收（連「整則不送」這種完全合法的請求也一樣慢）。
+ *
+ * ## 照 dsh
+ *
+ * dsh 的 chat-completions 由 pi-ai 組請求（`@earendil-works/pi-ai@0.85.1`，dsh `477b4f4` 的
+ * `packages/llm/llm-pi-ai/package.json`），`dist/api/openai-completions.js` 的 `convertMessages`：
+ * 助手文字為空時 content 是 `null`（`:959-961`，NVIDIA 端點偵測出的 `requiresAssistantAfterToolResult`
+ * 是 `false`，`:1285`）；沒有 content 也沒有工具呼叫的整則略過（`:1050-1060`）。這裡照做。
+ *
+ * ## 偏離登記
+ *
+ * 1. **改在 `fetch` 這一層，不在組請求那一步。** dsh 在序列化裡就送對；`@langchain/openai` 的轉換
+ *    函式沒有可設定的地方，所以退到手上最靠近它的一格：送出前的 body（同
+ *    {@link withInbandStreamErrors} 退到 `fetch` 的理由）。
+ * 2. **只換空的那種。** pi-ai 還把非空的文字接成一條字串送（它的註解說陣列會讓 NVIDIA NIM 上的
+ *    DeepSeek V3.2 照抄區塊結構）。那會改掉每一則有字的助手訊息的送法，兩個模型都要重量，不在這張。
+ *
+ * @param baseFetch - 底層的 fetch。預設全域那個；測試用它換掉。
+ * @returns 一個 fetch：`/chat/completions` 的 POST、body 是 JSON 字串時換掉空的助手內容，其餘原樣。
+ */
+export function withEmptyAssistantContent(baseFetch: typeof fetch = fetch): typeof fetch {
+  return async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (
+      init?.method !== 'POST' ||
+      typeof init.body !== 'string' ||
+      !new URL(url).pathname.endsWith('/chat/completions')
+    ) {
+      return baseFetch(input, init);
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(init.body);
+    } catch {
+      return baseFetch(input, init);
+    }
+    const messages = (body as { messages?: unknown } | null)?.messages;
+    if (!Array.isArray(messages)) return baseFetch(input, init);
+    const normalized = normalizeEmptyAssistantContent(messages);
+    if (normalized === messages) return baseFetch(input, init);
+    return baseFetch(input, {
+      ...init,
+      body: JSON.stringify({ ...(body as object), messages: normalized }),
+    });
+  };
+}
+
 /**
  * 真實供應商的 model。
  *
@@ -674,11 +799,15 @@ export function createLiveModel(config: LiveModelConfig): ChatOpenAI {
   return new ChatOpenAI({
     apiKey,
     model: config.modelId,
-    // `fetch` 疊兩層：內層是 #516（串流內回報的錯誤翻成 HTTP 錯誤回應，才進得了重試射程），
-    // 外層是 #521（第一則事件之後的閒置逾時）。外層收到的是內層嗅完第一則事件的那份回應。
+    // `fetch` 疊三層：最內層是 #592（送出前換掉空的助手內容），中間是 #516（串流內回報的錯誤
+    // 翻成 HTTP 錯誤回應，才進得了重試射程），外層是 #521（第一則事件之後的閒置逾時）。外層收到的
+    // 是中間那層嗅完第一則事件的那份回應。
     configuration: {
       baseURL: config.baseUrl,
-      fetch: withStreamIdleTimeout(config.timeoutMs, withInbandStreamErrors()),
+      fetch: withStreamIdleTimeout(
+        config.timeoutMs,
+        withInbandStreamErrors(withEmptyAssistantContent()),
+      ),
     },
     temperature: 1,
     topP: 0.95,
