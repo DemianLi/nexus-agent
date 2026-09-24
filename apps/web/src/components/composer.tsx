@@ -14,7 +14,7 @@
 
 import { ArrowUp, Square } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { KeyboardEvent, RefObject } from 'react';
+import type { KeyboardEvent, ReactNode, RefObject } from 'react';
 import type { SlashDescriptor } from '@nexus/wire';
 
 import { Button } from '@/components/ui/button';
@@ -53,6 +53,7 @@ export function Composer({
   stopDisabled,
   onStop,
   textareaRef,
+  meter,
 }: {
   readonly draft: string;
   readonly onDraftChange: (draft: string) => void;
@@ -71,6 +72,8 @@ export function Composer({
   readonly stopDisabled: boolean;
   readonly onStop: () => void;
   readonly textareaRef?: RefObject<HTMLTextAreaElement | null>;
+  /** 底列「Enter 送出」旁邊的用量表（#528）；資料由呼叫端接，這裡只管放哪。 */
+  readonly meter?: ReactNode;
 }) {
   const ownRef = useRef<HTMLTextAreaElement>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
@@ -207,6 +210,7 @@ export function Composer({
           />
           <InputGroupAddon align="block-end" className="px-2 pb-2">
             <InputGroupText className="pl-2 text-xs">Enter 送出</InputGroupText>
+            {meter}
             <div className="ml-auto flex items-center gap-2">
               {stoppable && (
                 <Button
@@ -240,11 +244,17 @@ export function Composer({
         align="start"
         className="w-(--radix-popover-trigger-width) p-1"
         aria-label="命令選單"
-        // 焦點一直留在輸入框：打開、關掉都不搬；點輸入框本身不算點外面。
+        // 焦點一直留在輸入框：打開、關掉都不搬；點輸入框本身不算點外面。**底列另一顆浮層的按鈕算外面**（用量表，
+        // #528）：它也在輸入框裡，不收的話兩個浮層疊在同一個位置（真 Chrome 量過）。
         onOpenAutoFocus={(event) => event.preventDefault()}
         onCloseAutoFocus={(event) => event.preventDefault()}
         onInteractOutside={(event) => {
-          if (event.target instanceof Node && anchorRef.current?.contains(event.target)) {
+          const target = event.target;
+          if (
+            target instanceof Element &&
+            anchorRef.current?.contains(target) &&
+            target.closest('[data-slot="popover-trigger"]') === null
+          ) {
             event.preventDefault();
           }
         }}

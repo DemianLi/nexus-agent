@@ -5,7 +5,7 @@ import type {
   ThreadListResult,
   WireClient,
 } from '@nexus/wire';
-import { TODOS } from '@nexus/wire';
+import { CONTEXT_MEASURE, MODEL_USAGE, TODOS } from '@nexus/wire';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -1448,5 +1448,60 @@ describe('待辦清單面板（#575）', () => {
     expect(
       panel.compareDocumentPosition(zone as Node) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+});
+
+describe('用量表（#528）', () => {
+  const pressureFrames = () => [
+    frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+    frame('custom', [], { name: MODEL_USAGE, payload: { inputTokens: 4321 } }),
+    frame('custom', [], {
+      name: CONTEXT_MEASURE,
+      payload: {
+        approxTokens: 5,
+        messageCount: 3,
+        thresholds: [
+          { type: 'tokens', value: 10 },
+          { type: 'messages', value: 4 },
+        ],
+      },
+    }),
+  ];
+
+  it('畫在輸入框底列「Enter 送出」旁邊，數字來自線上', async () => {
+    seq = 0;
+    const { client } = fakeClient(pressureFrames());
+    render(<App client={client} />);
+
+    const meter = await screen.findByTestId('context-meter');
+    expect(meter.getAttribute('aria-label')).toBe('對話用量：約 75%，點開看明細');
+    expect(meter.previousElementSibling?.textContent).toBe('Enter 送出');
+    fireEvent.click(meter);
+    expect(screen.getByTestId('context-meter-input').textContent).toBe('4,321 token');
+  });
+
+  it('點開明細之後底下換成核准面板：明細跟著關，不浮在面板上', async () => {
+    seq = 0;
+    const { client } = fakeClient([]);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const frames = pressureFrames();
+    const approval = approvalFrame([{ name: 'write_file', allowed: ['approve', 'reject'] }]);
+    client.openEvents = async () =>
+      (async function* stream() {
+        yield* frames;
+        await gate;
+        yield approval;
+        await new Promise(() => undefined);
+      })();
+    render(<App client={client} />);
+
+    fireEvent.click(await screen.findByTestId('context-meter'));
+    expect(screen.getByRole('dialog', { name: '對話用量明細' })).toBeTruthy();
+    release();
+    await screen.findByTestId('approval-card');
+    expect(screen.queryByRole('dialog', { name: '對話用量明細' })).toBeNull();
   });
 });

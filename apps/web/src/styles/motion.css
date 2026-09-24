@@ -44,7 +44,7 @@
  * ── 動效模式清單 ──
  * 浮層彈出、對話框、側滑抽屜：registry 的 animate-in／out（index.css 的 @theme 已改成開 250／關 150），
  *   各元件只調縮放、位移與個別時長。
- * 換內容、上下題、進場、展開收合、按壓、resize、持續狀態：下面這些。
+ * 換內容、上下題、進場、展開收合、進度、按壓、resize、持續狀態：下面這些。
  *
  * 新增或刪掉 @keyframes 時，同一個 PR 更新 `scripts/check-built-css.mjs` 的允許清單（它量建置出來的 CSS）。
  *
@@ -150,6 +150,11 @@
 .motion-resize[data-resizing] {
   overflow: hidden;
   transition: height var(--resize-dur) var(--resize-ease);
+}
+
+/* 進度：用量環的弧長（#528），250 smooth-out。只動 stroke-dashoffset，一次性的過渡，不是持續動畫。 */
+.motion-progress {
+  transition: stroke-dashoffset var(--duration-fast) var(--ease-smooth-out);
 }
 
 /* 按壓：只給實心主按鈕與送出鍵，scale .96、120ms。其他按鈕只換底色。 */
@@ -404,6 +409,7 @@
   }
 
   :root:root .motion-resize[data-resizing],
+  :root:root .motion-progress,
   :root:root [data-slot='sidebar-gap'],
   :root:root [data-slot='sidebar-container'],
   :root:root [data-slot='message-scroller-button'],
