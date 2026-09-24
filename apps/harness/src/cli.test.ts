@@ -154,7 +154,7 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是七顆功能 ＋ 七列 core 設定 ＋ 六列 harness 設定 ＋ 二十個配套入口', async () => {
+  it('預設清單是七顆功能 ＋ 八列 core 設定 ＋ 六列 harness 設定 ＋ 二十個配套入口', async () => {
     // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
     // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
     // 讓計劃模式進來，理由寫在 `apps/harness/cordis.yml` 的註解上（命令沒進預設清單就等於
@@ -191,12 +191,14 @@ describe('一次性模式', () => {
       'todo',
       'feedback',
       'present',
-      // **底下這七顆不是第八到第十四個例外**，它們跟上面七個不同類：不多一顆工具、不多一
+      // **底下這八顆不是第八到第十五個例外**，它們跟上面七個不同類：不多一顆工具、不多一
       // 個命令、不改 prompt。它們只把 core 那幾顆 middleware 的設定從程式碼搬到部署設定裡
       // （[#456](https://github.com/DemianLi/nexus-agent/issues/456)），middleware 本身
       // 一直都在。它們在這份清單上的作用是**讓 `disabled: true` 指得著**。
+      // `session-checkpoint-policy` 是後來的（#599），它的 middleware 跟著條目一起進來，但同樣是
+      // fold 建、fold 排位，條目只負責「關得掉」。
       //
-      // `observation-policy` 與 `model-usage` 還少一格：它們連設定都沒有，`apply` 是空的，
+      // `observation-policy`、`model-usage` 與 `session-checkpoint-policy` 還少一格：它們連設定都沒有，`apply` 是空的，
       // 所以在這裡的作用**只剩**那一件——照 dsh 的 `fs-observation-policy`
       // （it registers no service）。
       //
@@ -208,14 +210,15 @@ describe('一次性模式', () => {
       'summarization',
       'observation-policy',
       'model-usage',
+      'session-checkpoint-policy',
       'approval-gate',
-      // **`session-persistence` 跟上面六顆同段不同層**（#529）：擁有者一樣是 `@nexus/core`，
+      // **`session-persistence` 跟上面七顆同段不同層**（#529）：擁有者一樣是 `@nexus/core`，
       // 但它的消費點是 `cli.ts` 與 `serve.ts` 裡呼叫 `attachSessionPersistence` 的那兩行，
       // 跑在組裝回來之後——那裡一格註冊表都沒有，所以它的 `apply` 是空的、值走
       // `startupSetting`。它跟 `approval-gate` 一樣關不掉，理由卻是相反的那一種：關掉它
       // 不會有任何行為改變，只會讓讀設定的人以為自己改了落盤的節奏。
       'session-persistence',
-      // **這六顆跟上面那六顆同類——不裝功能、只講設定——但擁有者住在 `apps/harness`**
+      // **這六顆跟上面那七顆同類——不裝功能、只講設定——但擁有者住在 `apps/harness`**
       // （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。它們內部又分兩層，
       // 分界是消費點跑的時刻。
       //

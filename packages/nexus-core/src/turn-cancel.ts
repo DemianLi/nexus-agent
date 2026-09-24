@@ -220,6 +220,35 @@ function signalOfRequest(request: unknown): AbortSignal | undefined {
 }
 
 /**
+ * 這次工具呼叫的中止訊號是不是已經舉起來了。
+ *
+ * @param request - `wrapToolCall` 拿到的 request。
+ * @returns 已中止就是 `true`；這一輪沒有人放訊號也是 `false`。
+ */
+export function toolCallAborted(request: unknown): boolean {
+  return signalOfRequest(request)?.aborted === true;
+}
+
+/**
+ * 還沒動手就被中止的那次工具呼叫的結果（dsh 的 `TOOL_ABORTED_BEFORE_DISPATCH`）。
+ *
+ * 外層的 guard 用它；耐久檢查點排空之後再問一次中止時也用它
+ * （{@link ./session-checkpoint-policy.ts}，照 dsh 的 `abortedBeforeDispatchResult`）。
+ *
+ * @param request - `wrapToolCall` 拿到的 request。
+ * @returns 標成錯誤、帶 `AbortError` 碼的那則工具結果。
+ */
+export function abortedBeforeDispatch(request: {
+  readonly toolCall: { readonly id?: string; readonly name: string };
+}): ToolMessage {
+  return toolRefusal(TOOL_ABORTED_BEFORE_DISPATCH_REASON, {
+    callId: request.toolCall.id ?? '',
+    name: request.toolCall.name,
+    error: { name: 'AbortError', code: TOOL_ABORTED_BEFORE_DISPATCH },
+  });
+}
+
+/**
  * 外層那顆：擋工具與中止之後的模型呼叫。位置見檔頭「為什麼是兩顆」。
  *
  * **無狀態，一份實例走遍 root 與每個子代理**：訊號每次從那一次呼叫的 `configurable` 現讀。
@@ -236,8 +265,7 @@ export function createTurnCancelGuard(): AgentMiddleware {
       const name = request.toolCall.name;
       const aborted = (content: string, code: string) =>
         toolRefusal(content, { callId, name, error: { name: 'AbortError', code } });
-      if (signal.aborted)
-        return aborted(TOOL_ABORTED_BEFORE_DISPATCH_REASON, TOOL_ABORTED_BEFORE_DISPATCH);
+      if (signal.aborted) return abortedBeforeDispatch(request);
       let result: Awaited<ReturnType<typeof handler>>;
       try {
         result = await handler(request);

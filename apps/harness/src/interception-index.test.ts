@@ -221,6 +221,8 @@ const INDEX: readonly InterceptionRow[] = [
       'packages/nexus-core/src/output-schema.ts',
       // 檔案工具的失敗標成錯誤（#293）：dsh 在工具本體裡拋，我們貼著本體換狀態。
       'packages/nexus-core/src/fs-tool-errors.ts',
+      // 耐久檢查點（#599）：dsh 的 `session-checkpoint-policy` 本來就掛在這一格，頂層呼叫動手之前排空。
+      'packages/nexus-core/src/session-checkpoint-policy.ts',
     ],
     permissionDelta:
       '**這一格與第 4、7 格在我們這側是同一種機制的三個陣列位置**，dsh 那三格是三種權限' +
@@ -249,7 +251,7 @@ const INDEX: readonly InterceptionRow[] = [
 const EXPECTED_ROWS = 5;
 
 /** 佔用位址的總數（列可能共用檔案，第 6 與第 7 格就共用 `output-schema.ts`）。 */
-const EXPECTED_SITES = 11;
+const EXPECTED_SITES = 12;
 
 /**
  * 第 2 列的承重事實：全樹的產品程式碼裡，`beforeAgent:` 的實作**恰好就是這一列列出的那些**。

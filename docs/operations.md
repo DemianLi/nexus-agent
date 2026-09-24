@@ -45,6 +45,16 @@ CLI 每一次啟動各自一個 run 目錄，一份會話一個 `.jsonl` 加一�
 日誌記哪幾種事件見 `session-log.ts` 的聯集。格式 9 起它記的是整段對話：人打的字、模型的回覆、
 工具呼叫與它的結果、外掛塞進對話的話、壓縮的摘要。要留 live 跑的證據，留 JSONL 就夠了。
 
+**停 `serve` 按一次 Ctrl-C 就好**（[#599](https://github.com/DemianLi/nexus-agent/issues/599)）。第一次
+訊號會把每一條 thread 的日誌排空、關檔之後才結束（退出碼 130；`SIGTERM` 是 0）；收尾最多等 5 秒，
+到了就強制結束。**收尾中再按一次是「我不等了」**，當場結束，沒排空的那一截會丟——一輪之中已經有
+檢查點把使用者那句話與之前每一步先寫下去（`session-checkpoint-policy`，見下面 core 那幾顆），所以
+最多丟最後一步的尾巴。用腳本或監管程式停它時，送一次訊號、等它自己結束，不要連送。
+
+**日誌寫不下去時，下一個模型或工具呼叫就不做了**（同上，#599）。以前是背景寫入被拒就 warn 一行、
+暫停自動寫入、這一輪照跑，等到收尾才響亮地失敗；現在檢查點排空被拒時：模型不被叫，這一輪以失敗
+收尾；工具不動手，圍堵把它收成一則錯誤結果交給模型。同 dsh：寧可不做，也不要做出一段沒有紀錄的事。
+
 ## 接著上一次跑下去
 
 CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、往同一個檔續寫；serve 不用旗標——
@@ -209,7 +219,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `repeatReminder` 時，以那句話為準；而手搭 plugin 清單（沒有這幾列）的組裝拿到的是內建
   預設，不是「什麼都沒掛」。
 
-今天有十三列：
+今天有十四列：
 
 | id | 管什麼 | 有 `config` 嗎 | 關得掉嗎 |
 | --- | --- | --- | --- |
@@ -218,6 +228,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `summarization` | 壓力達標時把舊訊息摘要成一則，歷史 offload 到 backend | 有（四格） | 關得掉 |
 | `observation-policy` | 先讀後改：沒讀過的檔不准改 | **沒有** | 關得掉 |
 | `model-usage` | 每一次模型呼叫的 token 帳目記進會話日誌 | **沒有** | 關得掉 |
+| `session-checkpoint-policy` | 模型請求與頂層工具動手之前，先把會話日誌排空到磁碟 | **沒有** | 關得掉 |
 | `approval-gate` | 核准閘門 | **沒有** | **關不掉** |
 | `session-persistence` | 會話日誌落盤的批次窗口（毫秒） | 有（一格） | **關不掉** |
 | `thread-title` | 執行緒列表上標題的兩個上限 | 有（兩格） | **關不掉** |
@@ -238,8 +249,8 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `ThreadPump` 與重播的 `historyPage`，都在 `createWireHandler` 的閉包底下），**只在 `serve` 上有
   作用**；**`session-persistence` 與 `live-model` 兩條路都讀**——前者 `cli.ts` 與 `serve.ts` 各自在接
   落盤時讀，後者各自在起動期解一次、交給組裝去建 model（只有 `--live` 用得到）。
-- **`recursion-limit` 相反，它的消費點在組裝期**（`agent-factory`），跟前六列同一個位置，所以它
-  跟前六列完全同形（`apply` 提供一顆服務、組裝點去讀）。**CLI 的 `--recursion-limit` 仍然贏過
+- **`recursion-limit` 相反，它的消費點在組裝期**（`agent-factory`），跟前七列同一個位置，所以它
+  跟前七列完全同形（`apply` 提供一顆服務、組裝點去讀）。**CLI 的 `--recursion-limit` 仍然贏過
   這一列**——程式路徑上直接傳的參數贏過這份清單，那條規則對它照樣適用。
 
 **這七列都關不掉**，但理由分兩種。起動期那六列是「關掉沒有意義」：它們**不裝任何東西**，關掉
@@ -277,9 +288,9 @@ patch 裡把 `maxBytes` 改小，一頁能裝的滿版結果就變多，4 MB 那
 - **key 不在這一列**：仍然只從 `NVIDIA_API_KEY` 讀。
 - **`eval` 與 `spike` 不跟這一列走**：它們量的是出貨預設那一組設定底下的模型。
 
-`observation-policy`、`model-usage`、`approval-gate` 那三列**不可以加 `config:`**——它們沒有
-設定，載入器對「這顆 plugin 沒有 Config schema 卻給了 config」是當場拋。前兩列列在這裡的唯一
-意義就是讓 `disabled: true` 指得著；最後那一列相反，見本節最後。
+`observation-policy`、`model-usage`、`session-checkpoint-policy`、`approval-gate` 那四列**不可以加
+`config:`**——它們沒有設定，載入器對「這顆 plugin 沒有 Config schema 卻給了 config」是當場拋。前三列
+列在這裡的唯一意義就是讓 `disabled: true` 指得著；最後那一列相反，見本節最後。
 
 **關掉 `observation-policy` 等於這個組裝接受盲改**，不是省一點開銷：模型可以對一個沒讀過的
 檔直接 `edit_file`。只有「只寫新檔、從不編輯」那種批次流程才該關它。
@@ -292,11 +303,16 @@ patch 裡把 `maxBytes` 改小，一頁能裝的滿版結果就變多，4 MB 那
 加總 `model/usage` 的仍然沒有——基準測試那條路的用量數字是它自己從模型回報的 `usage_metadata`
 加的，跟這一列無關。這些代價只有從這裡讀得到，沒有人會替你紅。
 
+**關掉 `session-checkpoint-policy` 之後，會話日誌只在批次窗口到期與收尾時落地**（#599）。正常收尾
+一樣完整；但收尾被打斷（收尾中再按一次 Ctrl-C、`kill -9`、當機）時，丟的可能是整輪，而不只是
+最後一步的尾巴——腳本模型與行程裡的第一條 thread 上，實測就緒那一刻整輪都還只在記憶體裡。沒開
+`--session-log` 時這一列什麼都不做。
+
 **關掉 `summarization` 之後，web 的用量表整個不畫**：它的分母就是這一列的觸發門檻（`trigger`
 有幾道就量幾道，patch 改過就用改過的值），摘要不掛就沒有門檻、也沒有量測（`context/measure`）。
 
-**`approval-gate` 關不掉，寫了 `disabled: true` 是啟動失敗。** 這一列跟上面五列不同型：上面
-五列的 `disabled` 真的會讓那一顆 middleware 不在 stack 裡，這一列的 `disabled` 是一個錯誤，
+**`approval-gate` 關不掉，寫了 `disabled: true` 是啟動失敗。** 這一列跟上面六列不同型：上面
+六列的 `disabled` 真的會讓那一顆 middleware 不在 stack 裡，這一列的 `disabled` 是一個錯誤，
 `--dump-config` 也一樣擋（檢查住在條目驗證那一步，兩條路共用）。
 
 理由是它不存在的時候那條 patch 的下場：`- id: approval-gate` ＋ `disabled: true` 只會在 stderr

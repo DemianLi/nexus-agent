@@ -11,7 +11,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { SessionLog } from './session-log.js';
 import { SessionRegistry } from './session-registry.js';
-import { attachSessionPersistence, SessionPersistenceCoordinator } from './session-persistence.js';
+import {
+  attachSessionPersistence,
+  MAX_PERSISTENCE_WINDOW_MS,
+  SessionPersistenceCoordinator,
+} from './session-persistence.js';
 import { SESSION_LOG_FORMAT_VERSION } from './session-store.js';
 import type { SessionEvent } from './session-log.js';
 import type { SessionStore, StoredSession, StoredSessionHeader } from './session-store.js';
@@ -394,5 +398,63 @@ describe('續接：只寫還沒存的後綴', () => {
     expect(
       () => new SessionPersistenceCoordinator({ log, stored: fakeStored(), storedCount: 1 }),
     ).toThrow(/已存筆數 1 對不上日誌長度 0/);
+  });
+});
+
+describe('註冊表上的排空者（#599）', () => {
+  function assemble() {
+    const sessions = new SessionRegistry('root-1');
+    const handles = new Map<string, ReturnType<typeof fakeStored>>();
+    const store: SessionStore = {
+      create(header) {
+        const stored = fakeStored();
+        handles.set(header.id, stored);
+        return stored;
+      },
+      resume: () => Promise.reject(new Error('這一條不續接')),
+    };
+    // 窗口開到上限：這裡看得到的寫入只可能來自排空者。
+    const persistence = attachSessionPersistence(sessions, store, {
+      windowMs: MAX_PERSISTENCE_WINDOW_MS,
+    });
+    return { sessions, handles, persistence };
+  }
+
+  it('`sessions.flush(log)` 只排空那一份，別份照舊等窗口', async () => {
+    const { sessions, handles } = assemble();
+    const child = sessions.open({ kind: 'subagent', runId: 'r9' });
+    child.append('todo/write', { todos: [] });
+    sessions.root.append('turn/start', { kind: 'message', text: 'p' });
+
+    expect(await sessions.flush(child)).toBe(true);
+    expect(handles.get('root-1/r9')!.written).toHaveLength(1);
+    expect(handles.get('root-1/r9')!.flushes).toBe(1);
+    expect(handles.get('root-1')!.written).toHaveLength(0);
+    expect(handles.get('root-1')!.flushes).toBe(0);
+  });
+
+  it('寫入被拒時，排空者響亮地拒絕——同顯式 flush', async () => {
+    const { sessions, handles } = assemble();
+    sessions.root.append('turn/start', { kind: 'message', text: 'p' });
+    handles.get('root-1')!.fail = new Error('磁碟滿了');
+    await expect(sessions.flush(sessions.root)).rejects.toThrow('磁碟滿了');
+  });
+
+  it('收掉之後排空者退下：不再碰已經關掉的把手', async () => {
+    const { sessions, handles, persistence } = assemble();
+    sessions.root.append('turn/start', { kind: 'message', text: 'p' });
+    await persistence.dispose();
+    const root = handles.get('root-1')!;
+    const flushes = root.flushes;
+    expect(await sessions.flush(sessions.root)).toBe(false);
+    expect(root.flushes).toBe(flushes);
+  });
+
+  it('不是這一組接上的日誌就不理', async () => {
+    const { sessions } = assemble();
+    const stranger = new SessionLog('elsewhere');
+    stranger.append('turn/start', { kind: 'message', text: 'p' });
+    // 有一位排空者（所以是 true），它不認得這一份，什麼都不做、也不拋。
+    expect(await sessions.flush(stranger)).toBe(true);
   });
 });

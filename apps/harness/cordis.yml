@@ -97,10 +97,10 @@
 # ── core 的設定 ──────────────────────────────────────────────────────────────
 #
 # 這幾列**不裝功能，只講設定**。**它們內部分兩層，分界同 harness 那一段——消費點跑的時刻**：
-# 前六列（到 `approval-gate` 為止）是**組裝期**（#456），消費者是 `foldRegistry`，註冊表就在
+# 前七列（到 `approval-gate` 為止）是**組裝期**（#456），消費者是 `foldRegistry`，註冊表就在
 # 手上；最後一列 `session-persistence` 是**起動期**（#529），理由寫在它自己那一段上。
 #
-# 組裝期那六列：middleware 本身由 `foldRegistry` 建與排位——位置
+# 組裝期那七列：middleware 本身由 `foldRegistry` 建與排位——位置
 # 是承重的（有四條測試釘著）、而且有一顆必須逐個 agent 各建一份，這兩件事
 # `registry.middleware.use()` 都表達不出來。所以帶設定的條目，`apply` 只做一件事：把驗過的
 # 設定提供成一個服務，fold 從那裡讀；**沒有設定的那一顆連服務都不註冊**（照 dsh 的
@@ -110,7 +110,7 @@
 # **關掉它就是 `disabled: true`**，語意照 dsh：條目不掛，那一顆 middleware 真的不在 stack
 # 裡。要改設定就在 patch 檔裡重寫這一列的 `config`——整份替換，沒重述的欄位回到預設值。
 #
-# **組裝期那六列的最後一列是例外，而且是明著的例外**：核准閘門關不掉，`disabled: true` 在
+# **組裝期那七列的最後一列是例外，而且是明著的例外**：核准閘門關不掉，`disabled: true` 在
 # 載入期當場拋。理由寫在它自己那一段上。
 
 # 連續重複同參數呼叫同一個工具時提醒模型（#147）。門檻與參數預覽字數照 dsh base 的
@@ -179,10 +179,20 @@
 - id: model-usage
   name: '@nexus/core/model-usage'
 
+# 一輪之中的耐久檢查點（#599）：模型請求之前、頂層工具動手之前，先把那次呼叫所屬的會話日誌
+# 排空到耐久。照 dsh base 的 `session-checkpoint-policy`（`packages/bundle/base/cordis.patch.yml:412`，
+# `477b4f4`）。**這一列同樣沒有 `config:`**，理由同上兩列。
+#
+# **關掉它之後**，日誌只在批次窗口到期與收尾時落地：正常收尾照樣完整，但收尾被打斷（收尾中
+# 再按一次 Ctrl-C、`kill -9`、當機）時丟的可能是整輪，而不只是最後一步的尾巴。沒開
+# `--session-log` 時它什麼都不做。
+- id: session-checkpoint-policy
+  name: '@nexus/core/session-checkpoint-policy'
+
 # 核准閘門（#111）。**這一列關不掉**：寫 `disabled: true` 會在載入期當場拋，`--dump-config`
 # 也一樣擋——檢查住在 `validateEntries` 裡，兩條路共用它。
 #
-# 它跟上面五列都不同型：上面五列的 `disabled` 是真的會讓那一顆不在 stack 裡，這一列的
+# 它跟上面六列都不同型：上面六列的 `disabled` 是真的會讓那一顆不在 stack 裡，這一列的
 # `disabled` 是一個錯誤。閘門由 `foldRegistry` 無條件建，今天沒有任何設定關得掉它，
 # 而這一列不存在的時候 `- id: approval-gate` ＋ `disabled: true` 只會警告一行然後跳過
 # ——讀起來像成功關掉了，實際上核准照樣在問。量過（2026-09-22）：exit 0、stderr 一行、
@@ -195,7 +205,7 @@
 - id: approval-gate
   name: '@nexus/core/approval-gate'
 
-# 會話日誌落盤的批次窗口，毫秒（#457／#529）。**這一列跟上面六列不同層**：上面六列的消費者
+# 會話日誌落盤的批次窗口，毫秒（#457／#529）。**這一列跟上面七列不同層**：上面七列的消費者
 # 是 `foldRegistry`（組裝期，註冊表在手上），這一列的消費者是 `cli.ts` 與 `serve.ts` 裡呼叫
 # `attachSessionPersistence` 的那兩行——跑在 `createCliAgent` 回來之後，而那個函式一格註冊表
 # 都沒有回傳。更硬的理由是壽命：窗口講的是那一顆 `SessionStore` 的寫入節奏，而 store 在 serve
@@ -204,7 +214,7 @@
 #
 # **dsh 對這個值沒有意見**：它的 `session-persistence-jsonl` 只收 `root` 與 `compression`
 # （`packages/session/session-persistence-jsonl/src/index.ts:236-239`，`ddefc45`），因為 dsh 的
-# 批次是呼叫端傳一整批，不是計時器攢批。所以這一列的形狀抄的是上面那六列，不是抄 dsh 的某一
+# 批次是呼叫端傳一整批，不是計時器攢批。所以這一列的形狀抄的是上面那七列，不是抄 dsh 的某一
 # 列——這不是「表達不出來」的偏離，是標準沒有這個旋鈕。
 #
 # **這一列關不掉**（理由同起動期那三列）：`startupSetting` 把關掉的那一列當成沒有那一列，於是

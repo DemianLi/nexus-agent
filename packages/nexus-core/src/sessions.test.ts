@@ -310,3 +310,40 @@ describe('forCall', () => {
     expect(registry.sessions.forCall(atRoot)).toEqual({ kind: 'not-attached' });
   });
 });
+
+/** 註冊點上的耐久檢查點入口（#599）：plugin 手上那一面，後面是綁上來的註冊表。 */
+describe('sessions.flush', () => {
+  it('沒綁註冊表：立刻 resolve', async () => {
+    await expect(createRegistry().sessions.flush(new SessionLog('x'))).resolves.toBeUndefined();
+  });
+
+  it('綁了：交給那一張註冊表的排空者', async () => {
+    const registry = createRegistry();
+    const sessions = new SessionRegistry('t');
+    registry.sessions.bind(sessions);
+    const asked: string[] = [];
+    sessions.onFlush((log) => {
+      asked.push(log.sessionId);
+      return Promise.resolve();
+    });
+    await registry.sessions.flush(sessions.root);
+    expect(asked).toEqual(['t']);
+  });
+
+  it('綁了兩張（forCall 挑不出來的那種）：每一張都問到，不漏排', async () => {
+    const registry = createRegistry();
+    const first = new SessionRegistry('t1');
+    const second = new SessionRegistry('t2');
+    registry.sessions.bind(first);
+    registry.sessions.bind(second);
+    const asked: string[] = [];
+    for (const sessions of [first, second]) {
+      sessions.onFlush((log) => {
+        asked.push(`${sessions.root.sessionId}:${log.sessionId}`);
+        return Promise.resolve();
+      });
+    }
+    await registry.sessions.flush(first.root);
+    expect(asked).toEqual(['t1:t1', 't2:t1']);
+  });
+});
