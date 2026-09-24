@@ -74,8 +74,8 @@ export function todoSummary(todos: readonly TodoItem[]): TodoSummary {
 /**
  * 輸入框上方那個面板的觸發按鈕名稱（#575 grilling Q6）：「待辦清單：」接收著那一行，「+N」寫成一句話。
  *
- * **畫面上那串字原樣出現在名稱裡**：`aria-label` 會蓋掉按鈕裡的所有內容，所以工具卡那種 sr-only 補句在這裡
- * 不作用，「+N」要直接寫進來；而用語音控制的人照畫面上的字唸得出這顆按鈕。
+ * **摘要那串字原樣出現在名稱裡**，用語音控制的人照畫面上的字唸得出這顆按鈕。「+N」不照字面放：`aria-label` 會蓋掉
+ * 按鈕裡的所有內容，工具卡那種 sr-only 補句在這裡不作用，所以寫成「，另有 N 項進行中」接在後面。
  */
 export function todoPanelLabel(summary: TodoSummary): string {
   const extra = summary.extra > 0 ? `，另有 ${summary.extra} 項進行中` : '';
