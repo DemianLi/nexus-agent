@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { AppSidebar } from '@/components/app-sidebar';
 import { ApprovalCard } from '@/components/approval-card';
 import { Composer } from '@/components/composer';
+import { ContextMeter } from '@/components/context-meter';
 import { EmptyHero } from '@/components/empty-hero';
 import { FeedbackDialog } from '@/components/feedback-dialog';
 import { PendingSwap } from '@/components/pending-swap';
@@ -416,6 +417,13 @@ function ConversationView({
                 stoppable={conversation.state.status === 'running'}
                 stopDisabled={!conversation.connected}
                 onStop={() => void conversation.cancel()}
+                meter={
+                  // 有待決時輸入框被面板換掉（藏起來、不卸載），點開的明細要跟著關（#528）。
+                  <ContextMeter
+                    pressure={conversation.state.contextPressure}
+                    hidden={pendings.length > 0}
+                  />
+                }
               />
             }
           />
