@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import { ContextOverflowError } from '@langchain/core/errors';
@@ -1066,8 +1066,47 @@ describe('串流閒置逾時（#521）', () => {
 
 /** 計時器在三種收尾都要清掉：留一顆 90 秒的計時器，serve 就掛著一個沒人要的 closure。 */
 describe('閒置計時器的收尾（#521）', () => {
-  const timers = (): number =>
-    process.getActiveResourcesInfo().filter((kind) => kind === 'Timeout').length;
+  /**
+   * 這條測試期間建出來、還沒清掉也還沒觸發的計時器。**只數這段期間建的**：數整個行程的
+   * `getActiveResourcesInfo()` 會被前面幾條測試留下的計時器干擾——它們剛好在這裡到期，數字
+   * 就少一個，跟被測的這一層無關。
+   */
+  const live = new Set<unknown>();
+  let created = 0;
+
+  beforeEach(() => {
+    live.clear();
+    created = 0;
+    const realSet = globalThis.setTimeout;
+    const realClear = globalThis.clearTimeout;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      callback: (...args: unknown[]) => void,
+      ms?: number,
+      ...args: unknown[]
+    ) => {
+      const id = realSet(() => {
+        live.delete(id);
+        callback(...args);
+      }, ms);
+      live.add(id);
+      created += 1;
+      return id;
+    }) as typeof setTimeout);
+    vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((id?: unknown) => {
+      live.delete(id);
+      realClear(id as Parameters<typeof clearTimeout>[0]);
+    }) as typeof clearTimeout);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** 量具有接上：這一層真的建過計時器，「一顆都沒留」才有意義。 */
+  function expectNoneLeft(): void {
+    expect(created).toBeGreaterThan(0);
+    expect(live.size).toBe(0);
+  }
 
   /** 底下那條被取消時收到的理由。 */
   let cancelledWith: unknown;
@@ -1092,31 +1131,28 @@ describe('閒置計時器的收尾（#521）', () => {
   }
 
   it('讀完：不留計時器', async () => {
-    const before = timers();
     const response = await withStreamIdleTimeout(60_000, sse(['data: 1\n\n'], true))('x');
     await response.text();
-    expect(timers()).toBe(before);
+    expectNoneLeft();
   });
 
   it('下游取消：不留計時器，底下那條也被取消', async () => {
-    const before = timers();
     const response = await withStreamIdleTimeout(60_000, sse(['data: 1\n\n'], false))('x');
     const reader = response.body!.getReader();
     await reader.read();
     const pending = reader.read();
     await reader.cancel('不要了');
     await pending;
-    expect(timers()).toBe(before);
+    expectNoneLeft();
     expect(cancelledWith).toBe('不要了');
   });
 
   it('逾時：拋閒置逾時，不留計時器', async () => {
-    const before = timers();
     const response = await withStreamIdleTimeout(50, sse(['data: 1\n\n'], false))('x');
     const reader = response.body!.getReader();
     await reader.read();
     await expect(reader.read()).rejects.toBeInstanceOf(StreamIdleTimeoutError);
-    expect(timers()).toBe(before);
+    expectNoneLeft();
     // 底下那條要放掉。經過 `ChatOpenAI` 時 SDK 自己也會中止請求，直接讀這個 fetch 的就只剩這一道。
     expect(cancelledWith).toBeInstanceOf(StreamIdleTimeoutError);
   });
