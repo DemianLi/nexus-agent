@@ -1,5 +1,5 @@
 import type { Event, WireClient } from '@nexus/wire';
-import { act, cleanup, renderHook } from '@testing-library/react';
+import { act, cleanup, configure, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useConversation } from '@/hooks/use-conversation';
@@ -77,6 +77,7 @@ function scriptedClient() {
     client,
     openEvents,
     line: (index: number) => lines[index]!,
+    latest: () => lines[lines.length - 1]!,
     setFailOpen: (message: string | undefined) => (failOpen = message),
   };
 }
@@ -104,26 +105,32 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('useConversation 斷線與重接（#593）', () => {
+// `main.tsx` 開著 StrictMode：dev 模式先掛上、卸載、再掛上。卸載時收計時器的那個 effect 不能讓之後的重接失效。
+describe.each([false, true])('useConversation 斷線與重接的主線（StrictMode：%s）', (strict) => {
+  beforeEach(() => configure({ reactStrictMode: strict }));
+  afterEach(() => configure({ reactStrictMode: false }));
+
   it('下行出錯：翻回沒連上、講原因，照退避重接，接回來短暫報「已重新連線」', async () => {
-    const { client, openEvents, line } = scriptedClient();
+    const { client, openEvents, latest } = scriptedClient();
     const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
     await tick();
     expect(result.current.connected).toBe(true);
     expect(result.current.reconnecting).toBeUndefined();
+    // StrictMode 下先開的那一條已經被收掉，動的一律是最新那一條；開線次數也從這裡算起。
+    const opened = openEvents.mock.calls.length;
 
-    line(0).fail('network error');
+    latest().fail('network error');
     await tick();
     expect(result.current.connected).toBe(false);
     expect(result.current.connectionError).toBe('network error');
     expect(result.current.reconnecting).toEqual({ wasConnected: true, offline: false });
-    expect(openEvents).toHaveBeenCalledTimes(1);
+    expect(openEvents).toHaveBeenCalledTimes(opened);
 
     // 第 1 次重試等 250ms（上限 500 的一半）。
     await tick(249);
-    expect(openEvents).toHaveBeenCalledTimes(1);
+    expect(openEvents).toHaveBeenCalledTimes(opened);
     await tick(1);
-    expect(openEvents).toHaveBeenCalledTimes(2);
+    expect(openEvents).toHaveBeenCalledTimes(opened + 1);
     expect(result.current.connected).toBe(true);
     expect(result.current.connectionError).toBeUndefined();
     expect(result.current.reconnecting).toBeUndefined();
@@ -132,7 +139,9 @@ describe('useConversation 斷線與重接（#593）', () => {
     await tick(RECOVERED_NOTICE_MS);
     expect(result.current.recovered).toBe(false);
   });
+});
 
+describe('useConversation 斷線與重接（#593）', () => {
   it('下行正常收掉也算斷線（server 不會無故收線）', async () => {
     const { client, line } = scriptedClient();
     const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
