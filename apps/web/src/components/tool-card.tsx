@@ -1,5 +1,5 @@
 /**
- * 工具卡（規格 §4.2 列 13／14，#406）：收合時一行（狀態、標題、工具名、摘要、歸屬、狀態字），展開看參數與錯誤。
+ * 工具卡（規格 §4.2 列 13／14，#406）：收合時一行（狀態、標題、工具名、摘要、歸屬、狀態字），展開看參數、結果、diff 與錯誤（哪個工具畫哪幾樣見下面 #601 那條）。
  * 直接吃 `ToolEntry.status` 的四格；分類與摘要在 `lib/tool-view.ts`。
  *
  * - **浮起來**（`shadow-material`），展開的內容放內層 stage（§5）。
@@ -17,15 +17,20 @@
  *   截斷的字後面（照 dsh `planSummary`）；展開逐項列那一次寫入的快照，不畫參數原文，不做跟前一次的差異。參數解不開
  *   或有一項壞掉就退回參數原文，不畫半套。判法在 `lib/todo-view.ts`；清單跟輸入框上方的面板共用（`todo-list.tsx`），
  *   這裡是快照，所以進行中那一項不閃。
+ * - **結果與 diff**（#601）：其他工具展開後畫結果文字（`ToolEntry.text`）；`ls`、`read_file`、`glob`、`grep`、`write_file`、
+ *   `edit_file` 只畫結果、不畫參數（照 dsh）。`write_file` 畫整檔新增的 diff、`edit_file` 執行中（含停在核准點）畫
+ *   `old_string` → `new_string` 的 diff，收著那一行接 `+N −M`，失敗時不接。判法在 `lib/tool-diff.ts`、`lib/tool-output.ts`。
  */
 
 import type { AnswerEntry, Attribution, QuestionItem, ToolEntry } from '@nexus/wire';
 import { Check, ChevronDown, Hand, X } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { AgentOrb } from '@/components/agent-orb';
+import { Counts } from '@/components/change-counts';
 import { CodeBlock } from '@/components/markdown/code-block';
 import { TodoList } from '@/components/todo-list';
+import { ToolDiff, ToolOutputBlock } from '@/components/tool-result';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
@@ -42,6 +47,8 @@ import type { QuestionAnswer } from '@/lib/question-view';
 import { basename, PRESENT, presentedFilesOf, presentSummary } from '@/lib/present-view';
 import type { PresentedFile } from '@/lib/present-view';
 import { TODO_WRITE, todosOf, todoSummary } from '@/lib/todo-view';
+import { toolDiffView } from '@/lib/tool-diff';
+import { showsInput, toolOutput } from '@/lib/tool-output';
 import { classifyTool, firstLine, toolInputBody, toolSummary, toolTitle } from '@/lib/tool-view';
 
 export const TOOL_STATUS_LABEL = {
@@ -170,6 +177,11 @@ export function ToolCard({
   const todoLine = todos === undefined ? undefined : todoSummary(todos);
   const failed = entry.status === 'failed' && !stopped;
   const answered = entry.status === 'done';
+  const { name, status, input } = entry;
+  // 參數一長（整檔的 write）比較就不便宜，串流中每一格都會重畫，所以只在這三格變了才重算。
+  const diffView = useMemo(() => toolDiffView({ name, status, input }), [name, status, input]);
+  const output = toolOutput(entry);
+  const inputShown = showsInput(entry.name);
   return (
     <Collapsible
       open={open}
@@ -217,6 +229,9 @@ export function ToolCard({
                 <span className="sr-only">，另有 {todoLine.extra} 項進行中</span>
               </span>
             )}
+          {diffView !== undefined && (
+            <Counts added={diffView.totals.added} deleted={diffView.totals.removed} />
+          )}
         </span>
         <span className="hidden sm:inline-flex">
           <AttributionBadge attribution={entry.attribution} />
@@ -252,10 +267,27 @@ export function ToolCard({
             <PresentedFileList files={presented} />
           ) : todos !== undefined ? (
             <TodoList todos={todos} />
-          ) : body === undefined ? (
-            <p className="text-muted-foreground px-3 py-2 text-xs">沒有參數。</p>
+          ) : diffView !== undefined ? (
+            <ToolDiff path={diffView.diff.path} hunks={diffView.hunks} />
           ) : (
-            <CodeBlock code={body.text} lang={body.lang} streaming={entry.status === 'running'} />
+            <>
+              {inputShown &&
+                (body === undefined ? (
+                  <p className="text-muted-foreground px-3 py-2 text-xs">沒有參數。</p>
+                ) : (
+                  <CodeBlock
+                    code={body.text}
+                    lang={body.lang}
+                    streaming={entry.status === 'running'}
+                  />
+                ))}
+              {output !== undefined && <ToolOutputBlock output={output} />}
+              {!inputShown && output === undefined && entry.error === undefined && (
+                <p className="text-muted-foreground px-3 py-2 text-xs">
+                  {entry.status === 'running' ? '還沒有結果。' : '沒有結果文字。'}
+                </p>
+              )}
+            </>
           )}
           {entry.error !== undefined && !stopped && (
             <pre className="bg-stage shadow-stage text-destructive rounded-xl p-3 font-mono text-xs whitespace-pre-wrap">

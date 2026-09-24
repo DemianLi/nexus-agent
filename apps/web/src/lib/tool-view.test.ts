@@ -116,3 +116,34 @@ describe('摘要與展開內容', () => {
     expect(toolInputBody('echo', '')).toBeUndefined();
   });
 });
+
+/**
+ * **`execute` 的絆索**（#601）：基座只在 backend 帶 shell 時才註冊 `execute`（deepagents 1.13.1 的 `isSandboxBackend`：
+ * 有 `execute` 方法而且 `id` 非空）。今天 harness 只建這三種 backend，沒有一種帶 shell——`CompositeBackend` 的 `id`
+ * 只在預設 backend 是 sandbox 時才轉出來，`ContainedFilesystemBackend` 繼承的是沒有 shell 的 `FilesystemBackend`。
+ * 這裡紅了表示有新的 backend 進來：確認它會不會讓 `execute` 上線，會的話先補終端卡（dsh `terminal-card-model.ts`）。
+ */
+describe('execute 還沒上線', () => {
+  const harnessSources = sources(HARNESS.pathname);
+
+  it('harness 只建沒有 shell 的 backend', () => {
+    const constructed = new Set(
+      harnessSources.flatMap((file) =>
+        [...readFileSync(file, 'utf8').matchAll(/new (\w*Backend)\(/g)].map((match) => match[1]),
+      ),
+    );
+    expect([...constructed].sort()).toEqual([
+      'CompositeBackend',
+      'ContainedFilesystemBackend',
+      'StateBackend',
+    ]);
+  });
+
+  it('ContainedFilesystemBackend 沒有自己長出 execute', () => {
+    const file = harnessSources.find((path) => path.endsWith('contained-backend.ts'));
+    expect(file).toBeDefined();
+    const source = readFileSync(file ?? '', 'utf8');
+    expect(source).toContain('class ContainedFilesystemBackend extends FilesystemBackend');
+    expect(source).not.toMatch(/\bexecute\s*\(/);
+  });
+});
