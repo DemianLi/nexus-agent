@@ -1,5 +1,6 @@
 import type { WireContextPressure } from '@nexus/wire';
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { contextMeterLabel, contextMeterView, percentText } from '@/lib/context-meter-view';
@@ -24,10 +25,13 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 export function ContextMeter({
   pressure,
   hidden = false,
+  extra,
 }: {
   readonly pressure: WireContextPressure | null;
   /** 輸入框現在被換掉了。 */
   readonly hidden?: boolean;
+  /** PROTOTYPE #574 變體 B：明細底下多接的段落。 */
+  readonly extra?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   if (hidden && open) setOpen(false);
@@ -63,7 +67,7 @@ export function ContextMeter({
         side="top"
         align="start"
         aria-label="對話用量明細"
-        className="w-64 space-y-3 text-sm"
+        className={`${extra === undefined ? 'w-64' : 'w-72'} space-y-3 text-sm`}
       >
         {view.inputTokens !== undefined && (
           <div>
@@ -92,6 +96,7 @@ export function ContextMeter({
         <p className="text-muted-foreground text-xs">
           到了任何一道門檻，較早的訊息會被摘要成一段。比例是估算的。
         </p>
+        {extra}
       </PopoverContent>
     </Popover>
   );

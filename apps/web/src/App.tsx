@@ -21,6 +21,15 @@ import { Toaster } from '@/components/ui/sonner';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useConversation } from '@/hooks/use-conversation';
+import {
+  ProtoSwitcher,
+  STUB_PRESSURE,
+  VariantAPills,
+  VariantBExtra,
+  VariantCHeader,
+  VariantDLine,
+  useProto,
+} from '@/prototype/session-usage-574';
 import { useThemePreference } from '@/hooks/use-theme-preference';
 import { agentBaseUrl, createAgentClient } from '@/lib/agent';
 import { createChangesStores } from '@/lib/changes-diff';
@@ -244,6 +253,7 @@ function ConversationView({
     line.trim() !== '' &&
     (!busy || line.trim() === FEEDBACK_COMMAND_LINE);
   const canSend = canSendLine(draft);
+  const proto = useProto();
 
   return (
     <>
@@ -259,6 +269,7 @@ function ConversationView({
           {/* 觸控目標 44px，1024 以上回到 36（§9）。 */}
           <SidebarTrigger className="size-11 rounded-full lg:size-9" />
           <h1 className="min-w-0 flex-1 truncate text-sm font-medium">nexus-agent</h1>
+          {proto.variant === 'C' && <VariantCHeader time={proto.time} />}
           <ThemeToggle className="size-11 rounded-full lg:size-9" />
         </header>
 
@@ -280,6 +291,7 @@ function ConversationView({
                 ? {}
                 : { slashNotice: conversation.slashNotice })}
             />
+            {proto.variant === 'D' && <VariantDLine time={proto.time} />}
             {/* 不掛 `role="status"`：那一格歸 `StatusLine`，這一句是背景，不是現況。 */}
             {notice !== undefined && <p className="text-muted-foreground text-xs">{notice}</p>}
             {conversation.history?.legacy === true && (
@@ -419,16 +431,23 @@ function ConversationView({
                 onStop={() => void conversation.cancel()}
                 meter={
                   // 有待決時輸入框被面板換掉（藏起來、不卸載），點開的明細要跟著關（#528）。
-                  <ContextMeter
-                    pressure={conversation.state.contextPressure}
-                    hidden={pendings.length > 0}
-                  />
+                  <>
+                    <ContextMeter
+                      pressure={
+                        proto.variant === null ? conversation.state.contextPressure : STUB_PRESSURE
+                      }
+                      hidden={pendings.length > 0}
+                      {...(proto.variant === 'B' ? { extra: <VariantBExtra time={proto.time} /> } : {})}
+                    />
+                    {proto.variant === 'A' && <VariantAPills time={proto.time} />}
+                  </>
                 }
               />
             }
           />
         </div>
       </SidebarInset>
+      {proto.variant !== null && <ProtoSwitcher variant={proto.variant} time={proto.time} />}
 
       {feedbackDialog !== undefined && (
         <FeedbackDialog
