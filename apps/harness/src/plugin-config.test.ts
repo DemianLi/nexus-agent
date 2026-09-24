@@ -100,16 +100,17 @@ function writePrivate(root: string, name: string, content: string): string {
 describe('出貨的 cordis.yml', () => {
   it('每一列都載得起來，而且每一顆都是真的 plugin', async () => {
     const fromYaml = await loadPluginConfig();
-    // 40 = 7 個功能 ＋ 7 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
-    // 外加 #529 的 `session-persistence`——它是 core 那一段裡唯一消費點在起動期的）
+    // 41 = 7 個功能 ＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
+    // 外加 #529 的 `session-persistence`——它是 core 那一段裡唯一消費點在起動期的——與 #599 的
+    // `session-checkpoint-policy`）
     // ＋ **6 個 harness 自己的設定條目**（#529、#538、#545）＋ 20 個配套入口。**數目寫在這裡是為了擋
     // 「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個空 installer
     // 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
     //
     // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
     // `loadPluginConfig`，所以那六列要真的經由 `apps/harness/package.json` 的 `imports`
-    // 解析、import、而且長得像一顆 plugin，才數得到 40。拿掉那個 `imports` 區塊，這裡當場紅。
-    expect(fromYaml).toHaveLength(40);
+    // 解析、import、而且長得像一顆 plugin，才數得到 41。拿掉那個 `imports` 區塊，這裡當場紅。
+    expect(fromYaml).toHaveLength(41);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 

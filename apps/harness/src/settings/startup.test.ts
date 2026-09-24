@@ -45,6 +45,8 @@ import { DEFAULT_THREAD_TITLE_MAX_WORDS, threadTitlePlugin } from './thread-titl
 
 const OVERRIDE_PATCH = 'src/settings/settings-override.patch.yml';
 const DISABLED_PATCH = 'src/settings/settings-disabled.patch.yml';
+/** 關掉耐久檢查點（#599），只給「落盤窗口」那條用，理由在夾具檔頭。 */
+const CHECKPOINT_OFF_PATCH = 'src/settings/checkpoint-off.patch.yml';
 /** 夠長，裁到 6 個位元組一定看得出來。 */
 const PROMPT = 'abcdefghij 這一句話當標題。';
 
@@ -163,7 +165,9 @@ describe('設定覆寫在真的 serve 上生效（#529）', () => {
     // 後續事件不重置截止時間）。所以安全邊際是 3000 減掉 `driveTurn` 自己花的時間再減 300
     // ——實測一輪的事件在 50 毫秒內就落盤完畢，邊際約十倍。
     const bareRoot = await mkdtemp(join(tmpdir(), 'nexus-window-bare-'));
-    const bare = await start(['--session-log', bareRoot]);
+    //
+    // **兩臂都關掉檢查點**（#599）：它在模型請求之前就排空，開著的話帶 patch 那臂一樣早就寫了。
+    const bare = await start(['--session-log', bareRoot, '--patch', CHECKPOINT_OFF_PATCH]);
     await driveTurn(bare, 'alpha');
     await new Promise((resolve) => setTimeout(resolve, 300));
     const bareEvents = await countPersistedEvents(bareRoot);
@@ -173,7 +177,14 @@ describe('設定覆寫在真的 serve 上生效（#529）', () => {
     expect(bareEvents).toBeGreaterThan(0);
 
     const patchedRoot = await mkdtemp(join(tmpdir(), 'nexus-window-patched-'));
-    const patched = await start(['--session-log', patchedRoot, '--patch', OVERRIDE_PATCH]);
+    const patched = await start([
+      '--session-log',
+      patchedRoot,
+      '--patch',
+      CHECKPOINT_OFF_PATCH,
+      '--patch',
+      OVERRIDE_PATCH,
+    ]);
     await driveTurn(patched, 'alpha');
     await new Promise((resolve) => setTimeout(resolve, 300));
     const patchedEvents = await countPersistedEvents(patchedRoot);

@@ -120,11 +120,13 @@ describe('serve 收到 SIGINT', () => {
     expect(events.at(-1)?.type).toBe('turn/end');
 
     // 重開：同一個目錄、同一條 thread，歷史裡有那句話與回覆。
-    restarted = await runServe({
+    const again = await runServe({
       argv: ['--port', '0', '--session-log', root],
       log: () => undefined,
     });
-    const page = await (await serveClient(restarted)).threadHistory('alpha');
+    if (again === undefined) throw new Error('重開沒有起來');
+    restarted = again;
+    const page = await (await serveClient(again)).threadHistory('alpha');
     if (page.kind !== 'ok') throw new Error(`歷史拿不到：${page.message}`);
     const entries = reduceAll(emptyConversation(), page.result.events).entries.map(line);
     expect(entries[0]).toBe('human:把這句話回聲一次。');

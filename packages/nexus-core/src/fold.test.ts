@@ -1875,9 +1875,7 @@ describe('耐久檢查點打底', () => {
 
   function present(params: Parameters<typeof middlewareNames>[0] & { subagents: SubAgent[] }) {
     const has = (stack: readonly unknown[]) =>
-      stack
-        .map((mw) => (mw as { name: string }).name)
-        .includes(SESSION_CHECKPOINT_MIDDLEWARE_NAME);
+      stack.map((mw) => (mw as { name: string }).name).includes(SESSION_CHECKPOINT_MIDDLEWARE_NAME);
     return {
       inRoot: has(params.middleware),
       inSubagents: params.subagents.map((subagent) => has(subagent.middleware ?? [])),
