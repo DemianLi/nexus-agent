@@ -39,6 +39,8 @@ import {
 } from '@/components/ui/sheet';
 import type { ChangesDiffState, ChangesDiffStore } from '@/lib/changes-diff';
 import {
+  DIFF_SIGN as SIGN,
+  DIFF_TONE as TONE,
   MAX_RENDERED_LINES,
   hunkHeader,
   hunkRows,
@@ -49,18 +51,6 @@ import {
 import { cn } from '@/lib/utils';
 
 type TextDiff = Extract<WorkspaceFileDiff, { kind: 'text' }>;
-
-/**
- * 一列 diff 的底色。正文維持前景色，只有 `+`／`-` 上色（{@link SIGN}）：底色 8% 時符號在亮暗兩邊都還有 4.5:1
- * （colorjs.io 對 `tokens.generated.css` 重算，亮 4.60／暗 4.82 起跳）；12% 的綠字、紅字在亮色只剩 4.3–4.4。
- */
-const TONE = {
-  add: 'bg-success/8',
-  del: 'bg-destructive/8',
-  context: '',
-} as const;
-
-const SIGN = { add: 'text-success', del: 'text-destructive', context: '' } as const;
 
 const NUMBER = 'text-muted-foreground pr-2 text-right select-none';
 

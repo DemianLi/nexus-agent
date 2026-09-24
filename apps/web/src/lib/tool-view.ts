@@ -4,9 +4,12 @@
  * 七類 variant、一張「工具名 → variant」的表、查不到就是 `others`、摘要從參數挑一個欄位。
  * **表的內容照 nexus 實際的工具名**（deepagents 基座＋各 plugin 匯出的 `*_TOOL_NAME`），不是 dsh 的。
  *
- * **這一份只管參數，不管輸出**：結果文字現在有了（`ToolEntry.text`，[#439](https://github.com/DemianLi/nexus-agent/issues/439)
- * 之後 harness 從會話日誌的 `tool/result` 抽，即時與重播同一串），但**只有 `ask_user_question` 在用**
- * （`lib/question-view.ts` 解 `{answers}` 逐題配）。其他工具要不要畫輸出是另一個決定，#439 沒有做。
+ * **這一份只管參數，不管輸出**：結果文字（`ToolEntry.text`）怎麼畫在 `lib/tool-output.ts`，寫檔／改檔的 diff 在
+ * `lib/tool-diff.ts`（[#601](https://github.com/DemianLi/nexus-agent/issues/601)）。
+ *
+ * **`execute` 還沒有終端卡**：dsh 有（`terminal-card-model.ts`，解析結果結尾的 exit code），但今天產品路徑上的
+ * backend 都沒有 shell，基座不註冊 `execute`（`apps/harness/src/base-tools.ts`）。sandbox backend 註冊它的那天要補
+ * 終端卡；`tool-view.test.ts` 有一條讀 harness 用哪些 backend 的絆索，會在那時紅。
  *
  * 新增工具時在 {@link TOOL_VARIANTS}（或 {@link TOOL_TITLES}）加一列；`tool-view.test.ts` 列著每一個實際工具名，
  * 漏了會紅。
