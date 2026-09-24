@@ -13,6 +13,18 @@
 
 import type { WorkspaceDiffHunk } from '@nexus/wire';
 
+/**
+ * 一列 diff 的底色（審查頁與工具卡共用）。正文維持前景色，只有 `+`／`-` 上色（{@link DIFF_SIGN}）：底色 8% 時符號在亮暗兩邊都還有 4.5:1
+ * （colorjs.io 對 `tokens.generated.css` 重算，亮 4.60／暗 4.82 起跳）；12% 的綠字、紅字在亮色只剩 4.3–4.4。
+ */
+export const DIFF_TONE = {
+  add: 'bg-success/8',
+  del: 'bg-destructive/8',
+  context: '',
+} as const;
+
+export const DIFF_SIGN = { add: 'text-success', del: 'text-destructive', context: '' } as const;
+
 /** 畫到這麼多行就停（dsh `MAX_RENDERED_LINES`）。 */
 export const MAX_RENDERED_LINES = 5000;
 

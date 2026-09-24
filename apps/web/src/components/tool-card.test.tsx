@@ -38,19 +38,17 @@ describe('工具卡', () => {
   });
 
   it('收著一行：分類的標題、工具名、參數摘要；展開看排好的參數', () => {
-    render(<ToolCard entry={tool()} beam={false} />);
-    const trigger = screen.getByRole('button', { name: /讀取/ });
-    expect(trigger.textContent).toContain('read_file');
-    expect(trigger.textContent).toContain('src/App.tsx');
+    render(<ToolCard entry={tool({ name: 'echo', input: '{"message":"嗨"}' })} beam={false} />);
+    const trigger = screen.getByRole('button', { name: /回聲/ });
+    expect(trigger.textContent).toContain('echo');
+    expect(trigger.textContent).toContain('嗨');
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
     // 參數高亮後被切成一段一段的 span，改看整塊程式碼的字。
     expect(document.querySelector('.md-code')).toBeNull();
 
     fireEvent.click(trigger);
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
-    expect(document.querySelector('.md-code pre')?.textContent).toContain(
-      '"file_path": "src/App.tsx"',
-    );
+    expect(document.querySelector('.md-code pre')?.textContent).toContain('"message": "嗨"');
   });
 
   it('失敗時收著那一行就是錯誤的第一行，展開看全文', () => {
@@ -467,6 +465,252 @@ describe('待辦清單的工具卡（#575）', () => {
   it('展開的待辦卡過 axe', async () => {
     const { container } = render(<ToolCard entry={todo} beam={false} />);
     fireEvent.click(screen.getByRole('button', { name: /更新待辦/ }));
+    expect(await axeViolations(container)).toEqual([]);
+  });
+});
+
+/** #601：通用卡畫結果、單檔工具只畫結果、寫檔／改檔畫 diff。規則在 `lib/tool-output.ts`、`lib/tool-diff.ts`。 */
+describe('工具卡的結果與 diff', () => {
+  const lines = (count: number) =>
+    Array.from({ length: count }, (_, index) => `第 ${index + 1} 行`).join('\n');
+
+  function expand(name: RegExp) {
+    fireEvent.click(screen.getByRole('button', { name }));
+  }
+
+  it('通用卡：參數、結果都畫', () => {
+    render(
+      <ToolCard
+        entry={tool({ name: 'echo', input: '{"message":"嗨"}', text: 'echo: 嗨' })}
+        beam={false}
+      />,
+    );
+    expand(/回聲/);
+    expect(document.querySelector('.md-code pre')?.textContent).toContain('"message": "嗨"');
+    const output = screen.getByTestId('tool-output');
+    expect(output.textContent).toContain('結果');
+    expect(within(output).getByLabelText('工具結果').textContent).toBe('echo: 嗨');
+  });
+
+  it.each(['ls', 'read_file', 'glob', 'grep', 'write_file', 'edit_file'])(
+    '%s 展開只畫結果，不畫參數',
+    (name) => {
+      render(
+        <ToolCard
+          entry={tool({ name, input: '{"file_path":"a.ts","pattern":"x"}', text: '結果文字' })}
+          beam={false}
+        />,
+      );
+      fireEvent.click(screen.getByRole('button', { expanded: false }));
+      expect(document.querySelector('.md-code')).toBeNull();
+      expect(screen.getByLabelText('工具結果').textContent).toBe('結果文字');
+    },
+  );
+
+  it.each(['run_javascript', 'task', 'mcp__github__create_issue'])('%s 參數、結果都畫', (name) => {
+    render(
+      <ToolCard
+        entry={tool({ name, input: '{"code":"1+1","description":"算"}', text: '2' })}
+        beam={false}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(document.querySelector('.md-code')).not.toBeNull();
+    expect(screen.getByLabelText('工具結果').textContent).toBe('2');
+  });
+
+  it('沒有結果文字就不畫空的結果區塊', () => {
+    render(<ToolCard entry={tool({ name: 'echo', input: '{"message":"嗨"}' })} beam={false} />);
+    expand(/回聲/);
+    expect(screen.queryByTestId('tool-output')).toBeNull();
+    expect(document.querySelector('.md-code')).not.toBeNull();
+  });
+
+  it('只畫結果的工具還沒有結果時講一聲', () => {
+    render(<ToolCard entry={tool({ status: 'running' })} beam={false} />);
+    expand(/讀取/);
+    expect(screen.queryByTestId('tool-output')).toBeNull();
+    expect(screen.getByText('還沒有結果。')).toBeTruthy();
+  });
+
+  it('失敗時紅字照舊，同一串字不畫第二次', () => {
+    const error = 'Error: File not found: a.ts';
+    render(
+      <ToolCard
+        entry={tool({ name: 'echo', status: 'failed', text: error, error })}
+        beam={false}
+      />,
+    );
+    expand(/回聲/);
+    expect(screen.queryByTestId('tool-output')).toBeNull();
+    expect(screen.getAllByText(error, { selector: 'pre' })).toHaveLength(1);
+  });
+
+  it('超過 200 行：畫頭尾各 100 行，中間一行講沒畫幾行；200 行不切', () => {
+    const { unmount } = render(
+      <ToolCard entry={tool({ name: 'echo', text: lines(200) })} beam={false} />,
+    );
+    expand(/回聲/);
+    expect(screen.queryByTestId('tool-output-omitted')).toBeNull();
+    expect(screen.getByLabelText('工具結果').textContent).toBe(lines(200));
+    unmount();
+
+    render(<ToolCard entry={tool({ name: 'echo', text: lines(201) })} beam={false} />);
+    expand(/回聲/);
+    expect(screen.getByTestId('tool-output-omitted').textContent).toBe('⋯ 中間 1 行沒畫 ⋯');
+    const text = screen.getByLabelText('工具結果').textContent ?? '';
+    expect(text.startsWith('第 1 行\n')).toBe(true);
+    expect(text).not.toContain('第 101 行\n');
+    expect(text).toContain('第 100 行\n');
+    expect(text.endsWith('第 201 行')).toBe(true);
+  });
+
+  it('幾千行的結果展開後畫出來的行數不超過上限', () => {
+    render(<ToolCard entry={tool({ name: 'echo', text: lines(5000) })} beam={false} />);
+    expand(/回聲/);
+    const text = screen.getByLabelText('工具結果').textContent ?? '';
+    // 頭 100、尾 100，加中間那一行說明。
+    expect(text.split('\n')).toHaveLength(201);
+    expect(screen.getByTestId('tool-output-omitted').textContent).toBe('⋯ 中間 4800 行沒畫 ⋯');
+  });
+
+  describe('write_file', () => {
+    const write = tool({
+      name: 'write_file',
+      input: JSON.stringify({ file_path: '/notes.md', content: `${lines(12)}\n` }),
+      text: 'Successfully wrote to /notes.md',
+    });
+
+    it('收著那一行接 +N −0', () => {
+      render(<ToolCard entry={write} beam={false} />);
+      const trigger = screen.getByRole('button', { name: /寫入檔案/ });
+      expect(trigger.textContent).toContain('+12');
+      expect(trigger.textContent).toContain('−0');
+      expect(within(trigger).getByText('新增 12 行，')).toBeTruthy();
+    });
+
+    it('展開是整檔新增的 diff，對話裡只留 9 列，中間可以展開', () => {
+      render(<ToolCard entry={write} beam={false} />);
+      expand(/寫入檔案/);
+      const diff = screen.getByTestId('tool-diff');
+      const rows = () => diff.querySelectorAll('[data-diff-line]');
+      expect(rows()).toHaveLength(9);
+      expect(rows()[0]?.textContent).toBe('/notes.md');
+      expect(rows()[1]?.getAttribute('data-diff-line')).toBe('add');
+      expect(rows()[1]?.textContent).toBe('+第 1 行');
+      expect(rows()[8]?.textContent).toBe('+第 12 行');
+      expect(screen.queryByTestId('tool-output')).toBeNull();
+
+      const toggle = screen.getByTestId('tool-diff-toggle');
+      expect(toggle.textContent).toBe('展開其餘 4 行');
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      fireEvent.click(toggle);
+      expect(rows()).toHaveLength(13);
+      expect(toggle.textContent).toBe('收起');
+    });
+
+    it('執行中也畫', () => {
+      render(<ToolCard entry={{ ...write, status: 'running', text: undefined }} beam={false} />);
+      expand(/寫入檔案/);
+      expect(screen.getByTestId('tool-diff')).toBeTruthy();
+    });
+
+    it('失敗時退回通用卡：沒有 diff、沒有 +N −M、紅字', () => {
+      const error = 'Error: permission denied';
+      render(<ToolCard entry={{ ...write, status: 'failed', text: error, error }} beam={false} />);
+      const trigger = screen.getByRole('button', { name: /寫入檔案/ });
+      expect(trigger.textContent).not.toContain('+12');
+      fireEvent.click(trigger);
+      expect(screen.queryByTestId('tool-diff')).toBeNull();
+      expect(screen.getAllByText(error, { selector: 'pre' })).toHaveLength(1);
+    });
+
+    it('參數欄位不對時退回通用卡，不畫半套', () => {
+      render(
+        <ToolCard
+          entry={{ ...write, input: JSON.stringify({ file_path: '/notes.md', content: 42 }) }}
+          beam={false}
+        />,
+      );
+      const trigger = screen.getByRole('button', { name: /寫入檔案/ });
+      expect(trigger.textContent).not.toMatch(/\+\d/);
+      fireEvent.click(trigger);
+      expect(screen.queryByTestId('tool-diff')).toBeNull();
+      expect(screen.getByLabelText('工具結果').textContent).toBe('Successfully wrote to /notes.md');
+    });
+  });
+
+  describe('edit_file', () => {
+    const edit = tool({
+      name: 'edit_file',
+      input: JSON.stringify({
+        file_path: '/a.ts',
+        old_string: 'const a = 1;',
+        new_string: 'const a = 2;',
+      }),
+      status: 'running',
+    });
+
+    it('執行中（包括停在核准點）畫 old_string → new_string，收著接 +1 −1', () => {
+      render(<ToolCard entry={edit} beam={false} />);
+      const trigger = screen.getByRole('button', { name: /編輯檔案/ });
+      expect(trigger.textContent).toContain('+1');
+      expect(trigger.textContent).toContain('−1');
+      fireEvent.click(trigger);
+      const rows = screen.getByTestId('tool-diff').querySelectorAll('[data-diff-line]');
+      expect([...rows].map((row) => row.getAttribute('data-diff-line'))).toEqual([
+        'path',
+        'del',
+        'add',
+      ]);
+      expect(rows[1]?.textContent).toBe('-const a = 1;');
+      expect(rows[2]?.textContent).toBe('+const a = 2;');
+    });
+
+    it('結束之後退回通用卡的結果', () => {
+      render(
+        <ToolCard
+          entry={{
+            ...edit,
+            status: 'done',
+            text: "Successfully replaced 1 instance(s) of the string in '/a.ts'",
+          }}
+          beam={false}
+        />,
+      );
+      const trigger = screen.getByRole('button', { name: /編輯檔案/ });
+      expect(trigger.textContent).not.toContain('+1');
+      fireEvent.click(trigger);
+      expect(screen.queryByTestId('tool-diff')).toBeNull();
+      expect(screen.getByLabelText('工具結果').textContent).toContain('Successfully replaced');
+    });
+
+    it('失敗時紅字', () => {
+      const error = 'Error: String not found in file';
+      render(<ToolCard entry={{ ...edit, status: 'failed', text: error, error }} beam={false} />);
+      const trigger = screen.getByRole('button', { name: /編輯檔案/ });
+      expect(trigger.textContent).toContain(error);
+      fireEvent.click(trigger);
+      expect(screen.queryByTestId('tool-diff')).toBeNull();
+    });
+  });
+
+  it('展開的 diff 與結果過 axe', async () => {
+    const { container } = render(
+      <>
+        <ToolCard
+          entry={tool({
+            name: 'write_file',
+            input: JSON.stringify({ file_path: '/n.md', content: lines(20) }),
+          })}
+          beam={false}
+        />
+        <ToolCard entry={tool({ id: 'tool-2', name: 'echo', text: lines(300) })} beam={false} />
+      </>,
+    );
+    for (const trigger of screen.getAllByRole('button', { expanded: false })) {
+      fireEvent.click(trigger);
+    }
     expect(await axeViolations(container)).toEqual([]);
   });
 });
