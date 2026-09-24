@@ -239,6 +239,13 @@ export {
   modelUsagePlugin,
   readModelUsage,
 } from './model-usage.js';
+export type { CheckpointSessions } from './session-checkpoint-policy.js';
+export {
+  createSessionCheckpointMiddleware,
+  SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+  SESSION_CHECKPOINT_PLUGIN_NAME,
+  sessionCheckpointPlugin,
+} from './session-checkpoint-policy.js';
 export type {
   RepeatReminderConfig,
   RepeatReminderMark,
@@ -403,7 +410,12 @@ export type { SessionInstaller, SessionRunnerOptions, SessionSubject } from './s
 export { createSessionRunner } from './sessions.js';
 export type { SessionAddress } from './session-address.js';
 export { sessionAddressKey, toolCallSessionAddress } from './session-address.js';
-export type { SessionEntry, SessionObserver, SessionRegistryOptions } from './session-registry.js';
+export type {
+  SessionEntry,
+  SessionFlusher,
+  SessionObserver,
+  SessionRegistryOptions,
+} from './session-registry.js';
 export { SessionRegistry } from './session-registry.js';
 
 // 配套入口（`./invariant`）刻意**不從主入口再匯出**，形狀照 dsh：那邊每個 package 的

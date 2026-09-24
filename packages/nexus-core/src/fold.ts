@@ -40,6 +40,10 @@ import type { PluginOrigin } from './plugin.js';
 import type { MiddlewareRegistration, PluginRegistry, RootOnlyRefusal } from './registry.js';
 import { createModelCallRecorder } from './model-calls.js';
 import { createModelUsageRecorder, MODEL_USAGE_PLUGIN_NAME } from './model-usage.js';
+import {
+  createSessionCheckpointMiddleware,
+  SESSION_CHECKPOINT_PLUGIN_NAME,
+} from './session-checkpoint-policy.js';
 import { createTurnCancelGuard, createTurnCancelModelSignal } from './turn-cancel.js';
 import {
   REPEAT_REMINDER_PLUGIN_NAME,
@@ -401,6 +405,9 @@ export function foldRegistry(
   const modelUsage = foldModelUsage(registry, options);
   // 同上，無狀態、一份走遍。位置緊貼用量記錄器，理由見 {@link ./model-calls.ts}。
   const modelCalls = createModelCallRecorder(registry.sessions);
+  // 耐久檢查點（#599）：同上，無狀態、一份走遍 root 與每個子代理。位置緊貼用量記錄器內側，
+  // 理由見 {@link foldMiddleware}。
+  const sessionCheckpoint = foldSessionCheckpoint(registry);
   // **backend 提前折**：策略要的版本 token 得從工具實際讀寫的那一個取，所以它不能等到
   // 下面才算。摘要器刻意拿的是兜底那個，兩者的差別見各自的文件。
   const backend = foldBackend(registry, options.defaultBackend);
@@ -432,6 +439,7 @@ export function foldRegistry(
       repeatReminder,
       modelUsage,
       modelCalls,
+      sessionCheckpoint,
       outputSchema,
       fsToolErrors,
       readContinuation,
@@ -448,6 +456,7 @@ export function foldRegistry(
       repeatReminder,
       modelUsage,
       modelCalls,
+      sessionCheckpoint,
       outputSchema,
       fsToolErrors,
       readContinuation,
@@ -744,6 +753,7 @@ function foldMiddleware(
   repeatReminder: AgentMiddleware | undefined,
   modelUsage: AgentMiddleware | undefined,
   modelCalls: AgentMiddleware,
+  sessionCheckpoint: AgentMiddleware | undefined,
   outputSchema: AgentMiddleware,
   fsToolErrors: AgentMiddleware | undefined,
   readContinuation: AgentMiddleware | undefined,
@@ -763,6 +773,10 @@ function foldMiddleware(
     // 一步——同 dsh 的 `llm/retry` 在一步之內。摘要器不管排哪都在它外面，見 `model-calls.ts`。
     modelCalls,
     ...(modelUsage === undefined ? [] : [modelUsage]),
+    // 耐久檢查點排在起訖紀錄器內側：排空時 `model/start` 已經記下，同 dsh「記好的請求前綴」；
+    // 在其餘 plugin middleware 外側：一個自己重試模型的 plugin 重試幾次都只排空一次，同一步只算一次。
+    // 工具那一側，`tool/call` 由最外層的圍堵記，這裡一定看得到它。見 {@link ./session-checkpoint-policy.ts}。
+    ...(sessionCheckpoint === undefined ? [] : [sessionCheckpoint]),
     ...plugins.rest,
     // 輸出校驗在每一個 plugin middleware 的內側：看到的是工具原本的輸出，不是外層改過的版本
     // （dsh 在 `tools/post-execute` 之前驗）。解不開參數的那顆在它更內側，換上的樁回的是錯誤，
@@ -1067,6 +1081,22 @@ function foldModelUsage(
 }
 
 /**
+ * 耐久檢查點（#599）：**兩態**——條目被明著關掉就不要，否則掛著。組裝點沒有旗標：它沒有
+ * 要調的東西，而「這次組裝不接持久化」本來就讓它什麼都不做（沒有排空者，`flush` 立刻
+ * resolve）。
+ *
+ * 回一份實例，同 {@link foldModelUsage}：closure 裡沒有狀態。見
+ * {@link ./session-checkpoint-policy.ts | createSessionCheckpointMiddleware}。
+ *
+ * @param registry - 已經跑完 `loadPlugins()` 的 registry。
+ * @returns 一份可以掛在任意多個 agent 上的 middleware，或 `undefined`。
+ */
+function foldSessionCheckpoint(registry: PluginRegistry): AgentMiddleware | undefined {
+  if (registry.disabledEntries.has(SESSION_CHECKPOINT_PLUGIN_NAME)) return undefined;
+  return createSessionCheckpointMiddleware(registry.sessions);
+}
+
+/**
  * 這次組裝的剪刀預算——**四態，依序問**，同
  * {@link repeatReminderDisposition}。第 3 態（條目被明著關掉）落在 `false`，不是
  * `undefined`：消費端的形狀是 `ToolResultPruneConfig | false`，`false` 才是「不剪」。
@@ -1226,6 +1256,7 @@ function foldSubAgents(
     repeatReminder: AgentMiddleware | undefined;
     modelUsage: AgentMiddleware | undefined;
     modelCalls: AgentMiddleware;
+    sessionCheckpoint: AgentMiddleware | undefined;
     outputSchema: AgentMiddleware;
     fsToolErrors: AgentMiddleware | undefined;
     readContinuation: AgentMiddleware | undefined;
@@ -1334,6 +1365,8 @@ function foldSubAgents(
         // 模型呼叫的起訖同用量記錄器那條理由打底、共用一份，位置同 root。
         context.modelCalls,
         ...(context.modelUsage === undefined ? [] : [context.modelUsage]),
+        // 耐久檢查點同 root 的位置、共用一份：子代理的模型呼叫排空的是子代理那一份日誌。
+        ...(context.sessionCheckpoint === undefined ? [] : [context.sessionCheckpoint]),
         // 其餘 plugin 的，同 root 的位置（#327）。排在 `spec.middleware` 外層：plugin 打底、子代理自帶的在內側，
         // 同 `tools` 那條「全域 → 自帶」的軸線。
         ...context.plugins.rest,

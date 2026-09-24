@@ -63,6 +63,13 @@ export interface SessionEntry {
 /** 一位訂閱者。**每一份會話叫一次**，包含訂閱當下已經在的那些。 */
 export type SessionObserver = (entry: SessionEntry) => void;
 
+/**
+ * 一位排空者：被問到某一份日誌時，把它排空到耐久（[#599](https://github.com/DemianLi/nexus-agent/issues/599)）。
+ *
+ * 不認得那一份就直接 resolve——同 dsh 的 `session/flush` listener 按 session id 找自己的寫把手。
+ */
+export type SessionFlusher = (log: SessionLog) => Promise<void>;
+
 /** 建一張註冊表要的東西。 */
 export interface SessionRegistryOptions {
   /**
@@ -96,6 +103,7 @@ export class SessionRegistry {
   /** 以 {@link sessionAddressKey} 為鍵，插入序（root 永遠第一個）。 */
   readonly #entries = new Map<string, SessionEntry>();
   readonly #observers = new Set<SessionObserver>();
+  readonly #flushers = new Set<SessionFlusher>();
 
   /**
    * @param rootSessionId - root 會話的 id。subagent 的 id 由它加上 `runId` 推出來。
@@ -172,6 +180,42 @@ export class SessionRegistry {
       active = false;
       this.#observers.delete(observer);
     };
+  }
+
+  /**
+   * 登記一位排空者。持久化接上時登記（`attachSessionPersistence`），收掉時退。
+   *
+   * @param flusher - 被問到某一份日誌時把它排空。
+   * @returns 退訂。冪等。
+   */
+  onFlush(flusher: SessionFlusher): () => void {
+    this.#flushers.add(flusher);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      this.#flushers.delete(flusher);
+    };
+  }
+
+  /**
+   * **耐久檢查點**：把這一份日誌交給每一位排空者，全部排完才 resolve。
+   *
+   * 照 dsh 的 `ctx.sessions.flush(session)`：**擁有日誌的是註冊表，所以 flush 的入口在
+   * 這裡**，後端只是登記在上面的監聽者——呼叫的人（檢查點、goal driver）不必知道後端是誰、
+   * 有沒有。一位都沒有是常態（沒開 `--session-log`、測試的組裝），那時立刻 resolve。
+   *
+   * 排空者拋錯就往外拋，**不接**：dsh 的檢查點在模型與工具這兩個有副作用的邊界上是
+   * fail-closed，flush 被拒時下游不動手。
+   *
+   * @param log - 要排空的那一份。
+   * @returns 有沒有任何一位排空者參與（同 dsh `flush` 回的那個布林）。
+   * @throws 任一位排空者的失敗。
+   */
+  async flush(log: SessionLog): Promise<boolean> {
+    const flushers = [...this.#flushers];
+    await Promise.all(flushers.map((flusher) => flusher(log)));
+    return flushers.length > 0;
   }
 
   /** 開一份並登記，不通知任何人（通知的時機歸 {@link open}）。 */

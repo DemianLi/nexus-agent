@@ -26,6 +26,10 @@ import {
 } from './turn-cancel.js';
 import { MODEL_USAGE_MIDDLEWARE_NAME, modelUsagePlugin } from './model-usage.js';
 import {
+  SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+  sessionCheckpointPlugin,
+} from './session-checkpoint-policy.js';
+import {
   DEFAULT_REPEAT_REMINDER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   repeatReminderPlugin,
@@ -166,6 +170,7 @@ describe('middleware 註冊點', () => {
       SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
+      SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       'b',
       'c',
@@ -189,6 +194,7 @@ describe('middleware 註冊點', () => {
       SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
+      SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       'c',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
@@ -212,6 +218,7 @@ describe('middleware 註冊點', () => {
       SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
+      SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
@@ -252,6 +259,7 @@ describe('middleware 註冊點', () => {
         SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
         MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
         MODEL_USAGE_MIDDLEWARE_NAME,
+        SESSION_CHECKPOINT_MIDDLEWARE_NAME,
         'late',
         // plugin 打底、子代理自帶的在內側。
         ...(subagent.name === 'releaser' ? ['subagent-own'] : []),
@@ -364,6 +372,7 @@ describe('「先讀後改」策略打底', () => {
       SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
+      SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       // 有 backend 就有：檔案工具的失敗標成錯誤，貼著工具本體（#293）。
@@ -396,6 +405,7 @@ describe('「先讀後改」策略打底', () => {
       SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
+      SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'subagent-own',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
@@ -622,6 +632,7 @@ describe('approvals 註冊點', () => {
       SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
+      SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
@@ -649,6 +660,7 @@ describe('approvals 註冊點', () => {
       SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
+      SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'subagent-own',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
@@ -671,6 +683,7 @@ describe('approvals 註冊點', () => {
       SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
+      SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
@@ -1238,6 +1251,7 @@ describe('摘要器打底', () => {
       SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
+      SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
@@ -1270,6 +1284,7 @@ describe('摘要器打底', () => {
       SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
+      SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'subagent-own',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
@@ -1409,6 +1424,7 @@ describe('提醒器打底', () => {
       REPEAT_REMINDER_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
+      SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
@@ -1442,6 +1458,7 @@ describe('提醒器打底', () => {
       SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
+      SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'subagent-own',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
@@ -1847,6 +1864,63 @@ describe('用量記錄器的條目', () => {
   it('它不收 config——給了會在載入期拋', async () => {
     await expect(
       loadPlugins([{ plugin: modelUsagePlugin, config: { anything: 1 } } as PluginEntry]),
+    ).rejects.toThrow(/不收 config/);
+  });
+});
+
+/** 耐久檢查點（#599）：兩態，同用量記錄器少了組裝點旗標那一態。 */
+describe('耐久檢查點打底', () => {
+  /** 同用量記錄器那組：一個宣告的 subagent，外加基座自己補的 general-purpose。 */
+  async function foldBare(plugins: PluginEntry[]) {
+    const { registry } = await loadPlugins([
+      fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('one'))),
+      ...plugins,
+    ]);
+    return foldRegistry(registry, { summarization: false, observationPolicy: false });
+  }
+
+  function present(params: Parameters<typeof middlewareNames>[0] & { subagents: SubAgent[] }) {
+    const has = (stack: readonly unknown[]) =>
+      stack.map((mw) => (mw as { name: string }).name).includes(SESSION_CHECKPOINT_MIDDLEWARE_NAME);
+    return {
+      inRoot: has(params.middleware),
+      inSubagents: params.subagents.map((subagent) => has(subagent.middleware ?? [])),
+      subagentNames: params.subagents.map((subagent) => subagent.name),
+    };
+  }
+
+  it('條目不在清單上時照樣掛著——root、subagent、general-purpose 三疊都有', async () => {
+    const seen = present(await foldBare([]));
+    expect(seen.subagentNames).toContain(GENERAL_PURPOSE_SUBAGENT.name);
+    expect(seen.inRoot).toBe(true);
+    expect(seen.inSubagents).toEqual([true, true]);
+  });
+
+  it('`disabled: true` 就真的沒有——三疊都沒有', async () => {
+    const seen = present(await foldBare([{ plugin: sessionCheckpointPlugin, disabled: true }]));
+    expect(seen.inRoot).toBe(false);
+    expect(seen.inSubagents).toEqual([false, false]);
+  });
+
+  it('關掉它不會動到隔壁——起訖與用量照樣在', async () => {
+    const params = await foldBare([{ plugin: sessionCheckpointPlugin, disabled: true }]);
+    expect(middlewareNames(params)).not.toContain(SESSION_CHECKPOINT_MIDDLEWARE_NAME);
+    expect(middlewareNames(params)).toContain(MODEL_CALL_EVENTS_MIDDLEWARE_NAME);
+    expect(middlewareNames(params)).toContain(MODEL_USAGE_MIDDLEWARE_NAME);
+  });
+
+  it('關掉用量記錄器不會動到它', async () => {
+    const params = await foldBare([{ plugin: modelUsagePlugin, disabled: true }]);
+    expect(middlewareNames(params)).toContain(SESSION_CHECKPOINT_MIDDLEWARE_NAME);
+  });
+
+  it('它一顆服務都不註冊，也不收 config', async () => {
+    const { registry } = await loadPlugins([{ plugin: sessionCheckpointPlugin }]);
+    expect(registry.services.names()).toEqual([]);
+    const off = await loadPlugins([{ plugin: sessionCheckpointPlugin, disabled: true }]);
+    expect(off.registry.disabledEntries.names()).toEqual(['session-checkpoint-policy']);
+    await expect(
+      loadPlugins([{ plugin: sessionCheckpointPlugin, config: { anything: 1 } } as PluginEntry]),
     ).rejects.toThrow(/不收 config/);
   });
 });

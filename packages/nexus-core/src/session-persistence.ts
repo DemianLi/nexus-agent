@@ -234,7 +234,11 @@ export class SessionPersistenceCoordinator {
  *   接回來之後 header 的 `version` 會升到這一版（那是 `jsonl-session-store.ts` 覆寫的），
  *   但**不會**長出這一格。同一個 run 目錄裡因此可能「root 沒有、subagent 有」——subagent
  *   那些日誌是這個行程新生的，它們的根就是這一次的根，所以那是對的，不要改成回填。
- * @returns `flush()` 把每一份都排空（響亮）；`dispose()` 退訂並收掉每一份（響亮）。
+ *
+ *   **接上的同時在註冊表登記一位排空者**（{@link SessionRegistry.onFlush}，#599）：
+ *   `sessions.flush(log)` 只排空那一份，給一輪之中的耐久檢查點用
+ *   （{@link ./session-checkpoint-policy.ts | sessionCheckpointPlugin}）。
+ * @returns `flush()` 把每一份都排空（響亮）；`dispose()` 退訂、退掉排空者並收掉每一份（響亮）。
  */
 export function attachSessionPersistence(
   sessions: SessionRegistry,
@@ -254,6 +258,8 @@ export function attachSessionPersistence(
   } = {},
 ): { flush(): Promise<void>; dispose(): Promise<void> } {
   const coordinators: SessionPersistenceCoordinator[] = [];
+  /** 同一批協調器，按日誌找——耐久檢查點問的是「這一份」，不是全部（#599）。 */
+  const byLog = new Map<SessionLog, SessionPersistenceCoordinator>();
   const unobserve = sessions.observe(({ address, log }) => {
     const header: StoredSessionHeader = {
       version: SESSION_LOG_FORMAT_VERSION,
@@ -267,15 +273,20 @@ export function attachSessionPersistence(
       ...(address.kind === 'subagent' && { parentSession: sessions.root.sessionId }),
     };
     const resumed = address.kind === 'root' ? options.resumedRoot : undefined;
-    coordinators.push(
-      new SessionPersistenceCoordinator({
-        log,
-        stored: resumed?.stored ?? store.create(header),
-        ...(resumed !== undefined && { storedCount: resumed.storedCount }),
-        ...(options.warn !== undefined && { warn: options.warn }),
-        ...(options.windowMs !== undefined && { windowMs: options.windowMs }),
-      }),
-    );
+    const coordinator = new SessionPersistenceCoordinator({
+      log,
+      stored: resumed?.stored ?? store.create(header),
+      ...(resumed !== undefined && { storedCount: resumed.storedCount }),
+      ...(options.warn !== undefined && { warn: options.warn }),
+      ...(options.windowMs !== undefined && { windowMs: options.windowMs }),
+    });
+    coordinators.push(coordinator);
+    byLog.set(log, coordinator);
+  });
+  // **耐久檢查點的後端那一側**（#599）：同 dsh 的 jsonl 後端在 `session/flush` 上掛 listener、
+  // 按 session 找自己的寫把手。不是這一組接上的日誌就不理——那一份不歸這裡寫。
+  const unflush = sessions.onFlush(async (log) => {
+    await byLog.get(log)?.flush();
   });
   return {
     async flush() {
@@ -283,9 +294,11 @@ export function attachSessionPersistence(
     },
     async dispose() {
       unobserve();
+      unflush();
       // 倒著收，同 `agent-factory.ts` 收 runner 的順序。
       for (const coordinator of [...coordinators].reverse()) await coordinator.dispose();
       coordinators.length = 0;
+      byLog.clear();
     },
   };
 }
