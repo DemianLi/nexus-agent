@@ -50,7 +50,7 @@ export interface WireSummaryThreshold {
 
 /** {@link CONTEXT_MEASURE} 的 `payload`，也是 {@link WireContextPressure.measure}。 */
 export interface WireContextMeasure {
-  /** 估算的 token 數，四個字元算一個。跟門檻同源，**算比例用這個**。 */
+  /** 估算的 token 數：錨在供應商上一次報的實數上、只估增量（#588）。就是門檻拿來比的那個數，**算比例用這個**。 */
   readonly approxTokens: number;
   /** 訊息則數。摘要之後會掉下來。 */
   readonly messageCount: number;
