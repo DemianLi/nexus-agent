@@ -52,9 +52,18 @@
  *
  * ## 偏離三：逾時語意不同，所以欄位名不照抄
  *
- * dsh 的 `streamIdleTimeoutMs` 是串流**閒置**逾時。我們的 `timeoutMs` 是 `ChatOpenAI` 的
- * `timeout`，交給 openai SDK 的 `setTimeout(abort, ms)`（`openai@7.5.0` 的 `client.js`，
- * `fetchWithTimeout`），是**整個請求**的逾時。上限照 dsh 的 `MAX_TIMER_DELAY_MS`
+ * dsh 的 `streamIdleTimeoutMs` 是串流**閒置**逾時，每一段重新計時。我們的 `timeoutMs` 同一個值管兩段
+ * （[#521](https://github.com/DemianLi/nexus-agent/issues/521)）：
+ *
+ * - **連線到第一則事件**：`ChatOpenAI` 的 `timeout`，交給 openai SDK 的 `setTimeout(abort, ms)`
+ *   （`openai@7.5.0` 的 `client.js`，`fetchWithTimeout`）。計時器在 fetch 回來時清掉，而 #516 那層
+ *   在 fetch 裡讀完第一則事件才回。這一段在重試射程內。
+ * - **第一則事件之後，段與段之間**：`live-model.ts` 的 `withStreamIdleTimeout`，每一段重新計時，
+ *   時間到不重試（已經送到畫面上的字作廢不了）。
+ *
+ * 非串流（CLI 的 `invoke`）那條，SDK 讀整份 body 時計時器還在，所以是整個請求的逾時。
+ * 名字不照抄 `streamIdleTimeoutMs`，因為第一段語意仍不同：它從請求開始算到第一則事件，中間收到
+ * 位元組（例如標頭）也不重新計時，dsh 則每一段都重新計時。上限照 dsh 的 `MAX_TIMER_DELAY_MS`
  * （`packages/util/timeout/src/index.ts:25`），理由相同：超過 2 147 483 647 的延遲 Node 會當成
  * 1 毫秒，「調得很寬」會變成「立刻逾時」。
  *
