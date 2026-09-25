@@ -241,7 +241,7 @@ describe('對話流裡的工具卡', () => {
       // harness 超過上限（`#settings/tool-text` 那一列的 `maxBytes`，預設 50000）時取頭尾各半（`apps/harness/src/tool-result-text.ts`）：
       // 開頭 `{"answers":[`、結尾 `]}` 都還在，所以只看頭尾字元會把它當成完整的 JSON。
       const whole = answersText(ANSWERS);
-      const truncated = `${whole.slice(0, 14)}\n…（中間 40000 個位元組沒有送出來，全文在會話日誌裡）\n${whole.slice(-14)}`;
+      const truncated = `${whole.slice(0, 14)}\n…（中間 40000 個位元組沒有送出來）\n${whole.slice(-14)}`;
       expect(truncated.startsWith('{')).toBe(true);
       expect(truncated.endsWith('}')).toBe(true);
 
