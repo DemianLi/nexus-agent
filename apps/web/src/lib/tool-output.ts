@@ -12,6 +12,8 @@
  *   （`tool-result-text.ts`）是 harness 的字，不在這裡管。
  * - **單檔工具與搜尋只畫結果**（dsh `GenericToolCard` 的 `singleFile`，以及 read／search 有專屬卡的那幾個）：
  *   參數就是收著那一行的路徑或樣式，展開再畫一次 JSON 沒有資訊量。其他工具參數、結果都畫。
+ *   結果帶 `meta` 時，讀檔、搜尋、改檔由專屬卡取代這一段（#625，`lib/tool-result-card.ts`、`lib/tool-diff.ts`）；
+ *   這裡管的是沒有 `meta` 的那些：失敗、舊日誌、超過上限、grep 的非 content 模式。
  *
  * @module
  */
