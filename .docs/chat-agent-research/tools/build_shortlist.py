@@ -16,7 +16,10 @@
   - 節點內不重複；跨節點重複的一定要有仲裁結果
   - 子領域名稱是 topics.json 裡定義的
   - 入選理由不空白、不過短、同一節點內不重複
-  - 範圍證據（evidence）逐字出自該論文的 arXiv 摘要
+警告（不擋）：
+  - 範圍證據（evidence）不是逐字出自該論文的 arXiv 摘要。W1b 的篩選 agent 大多貼標題或轉述，
+    這條擋下 155 筆；最終名單改由人工逐節點複核（.cache/work/review-overlay.py），
+    精讀階段的 value_verdict 與 check_notes.py 是第二道防線，所以這裡只提示
 數字（引用數、年份、venue）一律從候選池取，不採用 agent 回傳的任何數字。
 """
 
@@ -114,7 +117,7 @@ def main():
                 # 範圍證據必須逐字出自這篇的摘要：逼篩選者真的讀過摘要，也讓人工複核時一眼看得出它屬不屬於本節點
                 ev = ax._norm_anchor(p["evidence"])
                 if len(ev.split()) < 6 or ev not in ax._norm_anchor(e.get("abstract") or ""):
-                    errors.append("%s %s：evidence 不在摘要裡或過短（%s）" % (k, p["id"], p["evidence"][:50]))
+                    warnings.append("%s %s：evidence 不在摘要裡或過短（%s）" % (k, p["id"], p["evidence"][:50]))
         main_list, reserve_list = ordered[:MAIN_TARGET], ordered[MAIN_TARGET:]
         for i, p in enumerate(main_list):
             p["rank"] = i + 1
