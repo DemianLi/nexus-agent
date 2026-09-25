@@ -245,6 +245,15 @@ describe('線的兩端對得起來', () => {
       { name: TODOS, payload: { todos: null } },
       { name: INBOX, payload: { items: [], claimed: { id: runId, text: '記一筆。' } } },
     ]);
+    // 領走那一顆比這一輪模型與工具的任何 frame 都早：畫面據它畫人的泡泡，泡泡要在回覆之前。
+    const claimedAt = frames.findIndex(
+      (frame) =>
+        isMethod(frame, 'custom') &&
+        (frame.params.data as { payload?: { claimed?: unknown } }).payload?.claimed !== undefined,
+    );
+    const firstRunFrame = frames.findIndex((frame) => !isMethod(frame, 'custom'));
+    expect(claimedAt).toBeGreaterThanOrEqual(0);
+    expect(claimedAt).toBeLessThan(firstRunFrame);
 
     // **對照組**：沒有這一段的話，「白名單有效」與「基座根本沒發過那些」長得一樣。
     const control = buildAgent(ONE_CALL);
