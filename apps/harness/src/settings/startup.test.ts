@@ -131,32 +131,39 @@ describe('設定覆寫在真的 serve 上生效（#529）', () => {
     expect(await rawSetCookie(patched)).toContain('Max-Age=86400');
   });
 
-  it('標題上限：帶 patch 的那台裁到 6 個位元組，不帶的是完整的第一句話', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'nexus-settings-'));
-
+  it('標題上限：帶 patch 的那台寫進日誌的標題裁到 6 個位元組，不帶的是完整的第一句話', async () => {
     // **寫的那一台先收掉再列。** 落盤是排空的（`DEFAULT_PERSISTENCE_WINDOW_MS`），同一台 server
     // 上跑完一輪就馬上列，機器忙的時候讀到的是還沒寫進去的空標題——量過：單跑綠、整包紅。
     // 關掉那一台才是「那一輪真的落地了」的判準，同 `serve-session-list.test.ts`。
-    const writer = await start(['--session-log', root]);
-    await driveTurn(writer, 'alpha');
-    await stop(writer);
+    async function write(root: string, args: readonly string[]): Promise<void> {
+      const writer = await start(['--session-log', root, ...args]);
+      await driveTurn(writer, 'alpha');
+      await stop(writer);
+    }
+    async function listedTitle(root: string, args: readonly string[]): Promise<string> {
+      const reader = await start(['--session-log', root, ...args]);
+      const list = await (await serveClient(reader)).listThreads();
+      await stop(reader);
+      if (list.kind !== 'ok') throw new Error('列不出來');
+      return list.result.items[0]?.title ?? '';
+    }
 
-    const bare = await start(['--session-log', root]);
-    const bareList = await (await serveClient(bare)).listThreads();
-    await stop(bare);
-    if (bareList.kind !== 'ok') throw new Error('列不出來');
-    const bareTitle = bareList.result.items[0]?.title ?? '';
+    // 標題在第一句開跑時就寫進日誌（#647），截的是**寫的那一台**的上限：兩臂各寫各的，只差那份 patch。
+    const bareRoot = await mkdtemp(join(tmpdir(), 'nexus-settings-bare-'));
+    await write(bareRoot, []);
+    const bareTitle = await listedTitle(bareRoot, []);
     // 前提：預設上限（40 位元組）底下這句話是**完整**的。不然兩臂的差別證不了是 patch 造成的。
     expect(bareTitle).toBe(PROMPT);
 
-    const patched = await start(['--session-log', root, '--patch', OVERRIDE_PATCH]);
-    const patchedList = await (await serveClient(patched)).listThreads();
-    if (patchedList.kind !== 'ok') throw new Error('列不出來');
-    const patchedTitle = patchedList.result.items[0]?.title ?? '';
-    // **同一份日誌**（同一個 `--session-log` 根、同一條 thread，第二台一個位元組都沒寫），
-    // 所以兩臂的差別只可能來自那份 patch。
+    const patchedRoot = await mkdtemp(join(tmpdir(), 'nexus-settings-patched-'));
+    await write(patchedRoot, ['--patch', OVERRIDE_PATCH]);
+    const patchedTitle = await listedTitle(patchedRoot, ['--patch', OVERRIDE_PATCH]);
     expect(Buffer.byteLength(patchedTitle, 'utf8')).toBeLessThanOrEqual(6);
     expect(patchedTitle).not.toBe(bareTitle);
+
+    // **記下的標題不會被讀的那一台重截**：latest-wins，同 dsh 的 `title` 投影。帶 patch 的那台列不帶 patch
+    // 寫的日誌，拿到的仍是完整的那句。上限只管還沒有標題的舊日誌（當場推的那一支，見 `session-title.ts`）。
+    expect(await listedTitle(bareRoot, ['--patch', OVERRIDE_PATCH])).toBe(PROMPT);
   });
 
   it('落盤窗口：帶 patch 的那台等 300 毫秒還沒寫，不帶的早就寫完了', async () => {

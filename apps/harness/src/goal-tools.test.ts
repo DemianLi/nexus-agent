@@ -119,11 +119,13 @@ describe('模型工具走真的 pump', () => {
       // 先確認裝置真的停在核准點——不然下面那一輪證不到 resume 這件事。被停住的那次呼叫
       // 留下一顆沒配對的 `tool/call`，落在中斷之前（#264：中斷不是落定）；叫出它的那次模型
       // 呼叫在它前面留一對起訖（#266），夾著它的回覆（#305），摘要器在起訖外層記一筆量測（#528）。人送出的話先進
-      // 送出佇列（#637），所以 `turn/start` 前後各夾一顆 `inbox/spliced`。
+      // 送出佇列（#637），所以 `turn/start` 前後各夾一顆 `inbox/spliced`。第一句開跑時寫一顆退回標題（#647），在領走之後、
+      // 模型之前。
       expect(pump.sessionLog.events.map((event) => event.type)).toEqual([
         'inbox/spliced',
         'turn/start',
         'inbox/spliced',
+        'session/title',
         'model/start',
         'assistant/message',
         'model/end',
@@ -139,8 +141,8 @@ describe('模型工具走真的 pump', () => {
         response: { decisions: [{ type: 'approve' }] },
       });
 
-      // 恢復那一輪的起點真的是 `resume`，不是又一顆 `message`。它緊接在上面那十顆之後。
-      expect(pump.sessionLog.events[10]?.data).toEqual({ kind: 'resume' });
+      // 恢復那一輪的起點真的是 `resume`，不是又一顆 `message`。它緊接在上面那十一顆之後。
+      expect(pump.sessionLog.events[11]?.data).toEqual({ kind: 'resume' });
       const changes = pump.sessionLog.events.filter((event) => event.type === 'goal/change');
       expect(changes).toHaveLength(1);
       expect(changes[0]?.data).toMatchObject({
