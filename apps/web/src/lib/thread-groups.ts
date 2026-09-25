@@ -1,5 +1,5 @@
 /**
- * 以前的會話怎麼分組、怎麼搜（inventory 列 6；決定見卡片）。
+ * 以前的會話怎麼分組、怎麼搜（inventory 列 6；決定見 [#610](https://github.com/DemianLi/nexus-agent/issues/610)）。
  *
  * - **按時間分組**：今天、昨天、過去 7 天、更早，分界是瀏覽器當地的日曆日。dsh 按工作區分組，但一台 serve 只對一個專案
  *   （`projectKey(cwd)`），照它分只會有一組；UI 的形狀以 shadcn 為基底，不必照 dsh（AGENTS.md「技術實現標準」）。
