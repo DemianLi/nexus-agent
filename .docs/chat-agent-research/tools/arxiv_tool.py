@@ -53,6 +53,9 @@ NEW_ID = re.compile(r"^\d{4}\.\d{4,5}(v\d+)?$")
 OLD_ID = re.compile(r"^[a-z\-]+(\.[A-Z]{2})?/\d{7}(v\d+)?$")
 ID_IN_TEXT = re.compile(r"(?<![\d.])(\d{4}\.\d{4,5})(v\d+)?(?![\d])")
 
+# 錨點落在全文 20% 之後才算「深處」：摘要與引言通常在前 15% 左右
+DEEP_POS = 0.2
+
 ATOM = "{http://www.w3.org/2005/Atom}"
 ARXIV = "{http://arxiv.org/schemas/atom}"
 
@@ -546,7 +549,8 @@ def cmd_anchors(a):
             out.append({"anchor": s, "verdict": "empty"})
             continue
         if n in hay:
-            out.append({"anchor": s, "verdict": "exact"})
+            # pos：錨點在全文中的相對位置（0＝開頭）。只落在摘要與引言的錨點驗證不了方法與實驗的主張
+            out.append({"anchor": s, "verdict": "exact", "pos": round(hay.index(n) / max(1, len(hay)), 3)})
             continue
         sm = difflib.SequenceMatcher(None, hay, n, autojunk=False)
         m = sm.find_longest_match(0, len(hay), 0, len(n))
@@ -559,7 +563,8 @@ def cmd_anchors(a):
                 "nearest": hay[max(0, m.a - 40) : m.a + m.size + 40] if cover >= 0.3 else None,
             }
         )
-    return {"id": cid, "results": out, "pass": sum(r["verdict"] == "exact" for r in out), "total": len(out)}
+    deep = sum(1 for r in out if r["verdict"] == "exact" and r.get("pos", 0) >= DEEP_POS)
+    return {"id": cid, "results": out, "pass": sum(r["verdict"] == "exact" for r in out), "deep": deep, "total": len(out)}
 
 
 # ---------------------------------------------------------------- 入口
