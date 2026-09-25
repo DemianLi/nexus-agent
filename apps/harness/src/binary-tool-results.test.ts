@@ -27,7 +27,11 @@ import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
 import { createFilesystemMiddleware } from 'deepagents';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createNexusAgent } from './agent-factory.js';
+import {
+  CONVERSATION_HISTORY_PREFIX,
+  createNexusAgent,
+  TOOL_RESULT_STASH_PREFIX,
+} from './agent-factory.js';
 import { TextOnlyStateBackend } from './binary-read.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { ThreadPump } from './thread-pump.js';
@@ -282,35 +286,47 @@ async function twoTurns(
 }
 
 describe('真的組裝：沒掛工作區（state 裡的虛擬 FS）', () => {
-  it('模型寫進一張 PNG 再讀：兩輪照常收尾，讀到的是 dsh 那句錯誤', async () => {
-    const { events, requests } = await twoTurns(
-      [
-        {
-          call: {
-            name: 'write_file',
-            args: { file_path: '/dot.png', content: PNG.toString('base64') },
+  // 墊底那一格與兩個路由格都是 `TextOnlyStateBackend`。路由格的錯誤裡是 `CompositeBackend` 剝掉前綴之後的路徑，
+  // 跟基座自己在路由格回的 `File '…' not found` 同一個樣子。
+  it.each([
+    { path: '/dot.png', shown: '/dot.png' },
+    { path: `${TOOL_RESULT_STASH_PREFIX}/dot.png`, shown: '/dot.png' },
+    { path: `${CONVERSATION_HISTORY_PREFIX}/dot.png`, shown: '/dot.png' },
+  ])(
+    '模型寫進 $path 再讀：兩輪照常收尾，讀到的是 dsh 那句錯誤',
+    async ({ path, shown }) => {
+      const { events, requests } = await twoTurns(
+        [
+          {
+            call: {
+              name: 'write_file',
+              args: { file_path: path, content: PNG.toString('base64') },
+            },
           },
-        },
-        { call: { name: 'read_file', args: { file_path: '/dot.png' } } },
-        { text: '那是一張圖，我讀不了。' },
-        { text: '好的。' },
-      ],
-      undefined,
-      'binary-read-state',
-    );
-    const outcomes = events
-      .filter((event) => event.type === 'turn/end' || event.type === 'turn/failed')
-      .map((event) => event.type);
-    expect(outcomes).toEqual(['turn/end', 'turn/end']);
-    expect(requests.map((request) => request.rejected)).toEqual([false, false, false, false]);
+          { call: { name: 'read_file', args: { file_path: path } } },
+          { text: '那是一張圖，我讀不了。' },
+          { text: '好的。' },
+        ],
+        undefined,
+        'binary-read-state',
+      );
+      const outcomes = events
+        .filter((event) => event.type === 'turn/end' || event.type === 'turn/failed')
+        .map((event) => event.type);
+      expect(outcomes).toEqual(['turn/end', 'turn/end']);
+      expect(requests.map((request) => request.rejected)).toEqual([false, false, false, false]);
 
-    const seen = requests[2]?.messages.filter((message) => message.role === 'tool').at(-1);
-    expect(seen?.content).toEqual([
-      { type: 'text', text: 'Error: cannot read "/dot.png": binary file' },
-    ]);
-    const results = events.filter((event) => event.type === 'tool/result');
-    expect(results.at(-1)?.data).toMatchObject({ isError: true });
-  }, 20000);
+      const tools = requests[2]?.messages.filter((message) => message.role === 'tool');
+      // 寫入那一步真的寫進去了，不然讀的那一步是「找不到」，驗不到判準。
+      expect(JSON.stringify(tools?.at(0)?.content)).not.toMatch(/Error/);
+      expect(tools?.at(-1)?.content).toEqual([
+        { type: 'text', text: `Error: cannot read "${shown}": binary file` },
+      ]);
+      const results = events.filter((event) => event.type === 'tool/result');
+      expect(results.at(-1)?.data).toMatchObject({ isError: true });
+    },
+    20000,
+  );
 });
 
 describe('真的組裝：讀到圖片的那一輪與下一輪', () => {
