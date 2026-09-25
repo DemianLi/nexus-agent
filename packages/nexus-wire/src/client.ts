@@ -24,6 +24,7 @@ import type {
   FeedbackRecordCommand,
   FeedbackRecordResult,
   InputRespondOne,
+  QueueUpdateCommand,
   RpcMethod,
   RunCancelCommand,
   SlashCommand,
@@ -39,6 +40,7 @@ import type {
   WireErrorResponse,
 } from './protocol.js';
 import {
+  QUEUE_UPDATE_METHOD,
   RUN_CANCEL_METHOD,
   THREADS_PATH,
   WIRE_CHANNELS,
@@ -142,6 +144,13 @@ export interface WireClient {
    * `aborted: true`）。沒有 run 在跑、也沒有等核准時，server 照樣受理、什麼都不做。
    */
   runCancel(threadId: string): Promise<UplinkResult>;
+  /**
+   * 改或刪送出佇列裡排著的一件（`queue.update`，[#637](https://github.com/DemianLi/nexus-agent/issues/637)）。
+   *
+   * **回的是受理回條**——佇列變成什麼樣走下行的 `inbox` 推送。那一件已經開跑、被刪了（可能是別的分頁）或從沒有過，
+   * 回 `queue_item_not_found`；改成空白回 `invalid_argument`。
+   */
+  queueUpdate(threadId: string, params: QueueUpdateCommand['params']): Promise<UplinkResult>;
   /** 評一則回覆（`feedback.put`，[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。 */
   feedbackPut(
     threadId: string,
@@ -301,7 +310,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
   async function sendCommand(
     threadId: string,
     method: RpcMethod,
-    command: Command | SlashCommand | RunCancelCommand | FeedbackCommand,
+    command: Command | SlashCommand | RunCancelCommand | QueueUpdateCommand | FeedbackCommand,
   ): Promise<UplinkResult> {
     // 路徑與封包各講一次 method，server 端不合就拒——照 dsh 的端點慣例
     // （`packages/api/gateway/src/index.ts:134`，`<namespace>/<method>`）。
@@ -377,6 +386,14 @@ export function createWireClient(options: WireClientOptions): WireClient {
       return sendCommand(threadId, RUN_CANCEL_METHOD, {
         id: nextCommandId++,
         method: RUN_CANCEL_METHOD,
+      });
+    },
+
+    async queueUpdate(threadId, params) {
+      return sendCommand(threadId, QUEUE_UPDATE_METHOD, {
+        id: nextCommandId++,
+        method: QUEUE_UPDATE_METHOD,
+        params,
       });
     },
 

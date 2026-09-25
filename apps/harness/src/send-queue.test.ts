@@ -837,8 +837,8 @@ describe('wire', () => {
       handler.handle(loopbackRequest(input as string, init));
     const client = createWireClient({ baseUrl: 'http://queue.test', fetch });
     let nextId = 1;
-    /** `queue.update`：client 還沒有這個方法（web 的 QueueDock 那張才加），直接打路徑。 */
-    const queueUpdate = async (thread: string, params: unknown) => {
+    /** 直接打 `queue.update` 的路徑：client 的型別送不出畸形的封包（`steer`、缺 `item_id`），伺服器那一側要自己擋。 */
+    const rawQueueUpdate = async (thread: string, params: unknown) => {
       const response = await fetch(
         `http://queue.test/threads/${thread}/commands/${QUEUE_UPDATE_METHOD}`,
         {
@@ -849,7 +849,7 @@ describe('wire', () => {
       );
       return (await response.json()) as Record<string, unknown>;
     };
-    return { client, queueUpdate, log: () => pumpLog?.() ?? [] };
+    return { client, rawQueueUpdate, log: () => pumpLog?.() ?? [] };
   }
 
   it('run.start 回的 run_id 就是那一件的 id；停在核准點時也收', async () => {
@@ -872,7 +872,7 @@ describe('wire', () => {
   });
 
   it('queue.update：改、刪回受理；不在隊裡回 queue_item_not_found；空白回 invalid_argument；steer 回 not_supported', async () => {
-    const { client, queueUpdate, log } = wire(scriptedAgent([{ interrupt: 'i1' }]));
+    const { client, rawQueueUpdate, log } = wire(scriptedAgent([{ interrupt: 'i1' }]));
     const thread = 'queue-update';
     await client.runStart(thread, '第一句');
     await until(() => log().some((event) => event.type === 'turn/end'));
@@ -880,27 +880,31 @@ describe('wire', () => {
     const id = (queued as { result: { run_id: string } }).result.run_id;
 
     expect(
-      await queueUpdate(thread, { item_id: id, action: { kind: 'edit', text: '改過' } }),
+      await client.queueUpdate(thread, { item_id: id, action: { kind: 'edit', text: '改過' } }),
     ).toEqual({ type: 'success', id: expect.any(Number), result: { accepted: true } });
     expect(
-      await queueUpdate(thread, { item_id: id, action: { kind: 'edit', text: '  ' } }),
+      await client.queueUpdate(thread, { item_id: id, action: { kind: 'edit', text: '  ' } }),
     ).toMatchObject({ type: 'error', error: 'invalid_argument' });
-    expect(await queueUpdate(thread, { item_id: id, action: { kind: 'steer' } })).toMatchObject({
+    expect(await rawQueueUpdate(thread, { item_id: id, action: { kind: 'steer' } })).toMatchObject({
       type: 'error',
       error: 'not_supported',
     });
-    expect(await queueUpdate(thread, { item_id: id, action: { kind: 'remove' } })).toMatchObject({
+    expect(
+      await client.queueUpdate(thread, { item_id: id, action: { kind: 'remove' } }),
+    ).toMatchObject({
       type: 'success',
       result: { accepted: true },
     });
-    expect(await queueUpdate(thread, { item_id: id, action: { kind: 'remove' } })).toMatchObject({
+    expect(
+      await client.queueUpdate(thread, { item_id: id, action: { kind: 'remove' } }),
+    ).toMatchObject({
       type: 'error',
       error: 'queue_item_not_found',
     });
     expect(
-      await queueUpdate(thread, { item_id: 'nope', action: { kind: 'edit', text: 'x' } }),
+      await client.queueUpdate(thread, { item_id: 'nope', action: { kind: 'edit', text: 'x' } }),
     ).toMatchObject({ type: 'error', error: 'queue_item_not_found' });
-    expect(await queueUpdate(thread, { action: { kind: 'remove' } })).toMatchObject({
+    expect(await rawQueueUpdate(thread, { action: { kind: 'remove' } })).toMatchObject({
       type: 'error',
       error: 'invalid_argument',
     });
@@ -917,9 +921,7 @@ describe('wire', () => {
 
   it('run.cancel 之後排著的停住；GET 不到的 thread 上改刪回 queue_item_not_found', async () => {
     const hold = gate();
-    const { client, queueUpdate, log } = wire(
-      scriptedAgent([{ hold: hold.opened, abortable: true }]),
-    );
+    const { client, log } = wire(scriptedAgent([{ hold: hold.opened, abortable: true }]));
     const thread = 'queue-cancel';
     await client.runStart(thread, 'A');
     await until(() => log().some((event) => event.type === 'turn/start'));
@@ -935,7 +937,7 @@ describe('wire', () => {
       'end:aborted',
     ]);
     expect(
-      await queueUpdate('never-opened', { item_id: 'x', action: { kind: 'remove' } }),
+      await client.queueUpdate('never-opened', { item_id: 'x', action: { kind: 'remove' } }),
     ).toMatchObject({ type: 'error', error: 'queue_item_not_found' });
   });
 });

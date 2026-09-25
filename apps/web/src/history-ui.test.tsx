@@ -155,6 +155,7 @@ function fakeClient(
     },
     inputRespond: async () => ({ type: 'success', id: 2, result: {} }),
     runCancel: async () => ({ type: 'success', id: 3, result: { accepted: true } }),
+    queueUpdate: async () => ({ type: 'success', id: 4, result: { accepted: true } }),
     slashList: async () => ({ kind: 'ok', commands: [] }),
     slashRun: async () => ({ kind: 'unknown' }),
     feedbackPut: rejected,

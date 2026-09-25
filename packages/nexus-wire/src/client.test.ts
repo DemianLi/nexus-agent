@@ -74,6 +74,27 @@ describe('瀏覽器端的 client', () => {
     expect(result).toMatchObject({ type: 'success', result: { accepted: true } });
   });
 
+  it('改刪送出佇列走同一條 RPC family：路徑與封包各講一次 queue.update，params 原樣帶上', async () => {
+    const { calls, client } = stub(() => Response.json(successResponse(1, { accepted: true })));
+    const result = await client.queueUpdate('t 1', {
+      item_id: 'r1',
+      action: { kind: 'edit', text: '改過' },
+    });
+    await client.queueUpdate('t 1', { item_id: 'r2', action: { kind: 'remove' } });
+    expect(calls[0]?.url).toBe('http://agent.test/threads/t%201/commands/queue.update');
+    expect(calls[0]?.body).toEqual({
+      id: 1,
+      method: 'queue.update',
+      params: { item_id: 'r1', action: { kind: 'edit', text: '改過' } },
+    });
+    expect(calls[1]?.body).toEqual({
+      id: 2,
+      method: 'queue.update',
+      params: { item_id: 'r2', action: { kind: 'remove' } },
+    });
+    expect(result).toMatchObject({ type: 'success', result: { accepted: true } });
+  });
+
   it('下行預設訂全部放行的 channel，回來的是解好的封包', async () => {
     const { calls, client } = stub(() => sseResponse([FRAME]));
     const events = await client.openEvents('t2');
