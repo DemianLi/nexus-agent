@@ -26,6 +26,14 @@
  *
  * **寫入延到微任務**：訂閱者的回呼裡不能再 `append`（`SessionLog` 的重入防護），同 dsh 的 `defer`。
  *
+ * ## 在那一輪的 context 之外跑
+ *
+ * `model/start` 的訂閱者跑在主模型呼叫的呼叫堆疊上，也就在 LangChain 的 AsyncLocalStorage 裡——那裡帶著這一輪的
+ * callbacks。直接在那裡叫標題模型的話，它會繼承這一輪的設定：被當成串流呼叫、事件漏進這條 thread 的 `messages`
+ * 頻道（畫面上多一則回覆），而且回來的東西照串流解。實測過（serve 的產品路徑，#650）。所以標題呼叫綁在
+ * **接上的那一刻**的 context 上跑（`AsyncResource.bind`），那一刻不在任何一輪裡。dsh 沒有這層環境狀態，
+ * 它的標題呼叫本來就是獨立的一次請求。
+ *
  * ## 用量不計進會話統計
  *
  * 同 dsh：`session-stats` 只折 `step/*`、`assistant/*`、`tool/*`、`turn/end`，標題呼叫一顆都不產生。這一次呼叫不經
@@ -33,6 +41,8 @@
  *
  * @module
  */
+
+import { AsyncResource } from 'node:async_hooks';
 
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
@@ -235,6 +245,9 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
       }
     };
 
+    // 綁在接上這一刻的 context，見檔頭「在那一輪的 context 之外跑」。
+    const runOutsideTurn = AsyncResource.bind((message: TitleSourceMessage) => run(message));
+
     const unsubscribe = log.subscribe((event) => {
       if (closed) return;
       const text = eligibleText(event);
@@ -250,7 +263,7 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
         const message = pending;
         pending = undefined;
         // 回呼裡不能 append，延到微任務（同 dsh 的 `defer`）。
-        running = Promise.resolve().then(() => (closed ? undefined : run(message)));
+        running = Promise.resolve().then(() => (closed ? undefined : runOutsideTurn(message)));
       }
     });
 
