@@ -194,6 +194,12 @@ export {
   READ_CONTINUATION_MIDDLEWARE_NAME,
   recordReadExtent,
 } from './read-continuation.js';
+export type {
+  DiffResultMeta,
+  FileDiff,
+  ReadResultMeta,
+  SearchResultMeta,
+} from './tool-result-meta.js';
 export type { MaxTokensCarrier } from './max-tokens.js';
 export {
   createMaxTokensCarrier,

@@ -537,3 +537,211 @@ describe('結果文字：即時與重播同一串（#439）', () => {
     expect(replayed?.text).toBeUndefined();
   });
 });
+
+/**
+ * 給專屬卡的 `meta`：**即時與重播是同一份**（[#617](https://github.com/DemianLi/nexus-agent/issues/617)
+ * 驗收 5、6）。
+ *
+ * 同上一組的理由：截的規則兩條路共用（`tool-result-text.ts` 的 `capToolResultMeta`），各寫一份的話
+ * 同一張卡會「即時一個樣、重新整理另一個樣」。
+ */
+describe('meta：即時與重播同一份（#617）', () => {
+  const META = {
+    path: '/a.ts',
+    offset: 1,
+    lines: [{ number: 1, text: 'const a = 1;' }],
+    totalLines: 1,
+    lang: 'ts',
+  };
+
+  /** 兩塊文字：抽字的規則對它不給文字，所以卡上的 `message` 兩邊都沒有、只差 `meta`。 */
+  const TWO_BLOCKS = [
+    { type: 'text', text: '第一塊' },
+    { type: 'text', text: '第二塊' },
+  ];
+
+  function frame(method: string, namespace: string[], data: unknown) {
+    return { type: 'event' as const, seq: 0, method, params: { namespace, timestamp: 0, data } };
+  }
+
+  /**
+   * 日誌寫一對 `tool/call`／`tool/result`（帶 `meta`），基座的 frame 何時跟由參數排：
+   *
+   * - `none`：基座一顆都沒發，pump 自己收卡。
+   * - `first`：基座那一對**先**轉發出去，日誌的判定之後才到——走補發更正那條。
+   */
+  async function play(
+    base: 'none' | 'first',
+    {
+      content = '讀好了' as unknown,
+      meta = META as unknown,
+      isError = false,
+      toolText,
+    }: {
+      content?: unknown;
+      /** `'absent'`：這一格整個不放（`undefined` 會被預設值吃掉，日誌也不收 `undefined`）。 */
+      meta?: unknown;
+      isError?: boolean;
+      toolText?: { maxBytes: number };
+    } = {},
+  ) {
+    const record = () => {
+      const log = pump.sessionLog;
+      log.append('tool/call', { callId: 'c1', name: 'read_file', arguments: '{}' });
+      log.append('tool/result', {
+        callId: 'c1',
+        isError,
+        message: toLoggedMessage(
+          new ToolMessage({ content: content as string, tool_call_id: 'c1', name: 'read_file' }),
+        ),
+        ...(meta === 'absent' ? {} : { meta }),
+      });
+    };
+    async function* stream() {
+      if (base === 'first') {
+        yield frame('tools', ['tools:x'], {
+          event: 'tool-started',
+          tool_call_id: 'c1',
+          tool_name: 'read_file',
+          input: '{}',
+        });
+        yield frame('tools', ['tools:x'], {
+          event: 'tool-finished',
+          tool_call_id: 'c1',
+          output: { status: 'success', content: TWO_BLOCKS },
+        });
+      }
+      record();
+      yield frame('lifecycle', [], { event: 'completed', graph_name: 'root' });
+    }
+    const agent = {
+      streamEvents: async () => stream(),
+      getState: async () => ({ values: {} }),
+      updateState: async () => ({}),
+    };
+    const pump = new ThreadPump(
+      agent as unknown as PumpAgent,
+      'meta',
+      undefined,
+      undefined,
+      toolText,
+    );
+    const frames: Event[] = [];
+    const line = new AbortController();
+    const draining = (async () => {
+      for await (const next of pump.subscribe(['tools', 'lifecycle'], line.signal))
+        frames.push(next);
+    })();
+    await pump.submit({ kind: 'message', text: '讀' });
+    await until(() => frames.some(isRootDone));
+    line.abort();
+    await draining;
+    return { frames, events: pump.sessionLog.events };
+  }
+
+  it('基座一顆都沒發：pump 合成的那顆收卡帶 meta，重播出同一份', async () => {
+    const { frames, events } = await play('none');
+    expect(toolEntries(frames)).toMatchObject([{ status: 'done', meta: META }]);
+    expect(toolEntries(historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES))[0]?.meta).toEqual(META);
+  });
+
+  it('**更正幀只差 meta 也要送**：基座那顆先轉發了，日誌那則抽不出文字，兩邊只差這一格', async () => {
+    const { frames, events } = await play('first', { content: TWO_BLOCKS });
+    const finishes = frames.filter(
+      (next) =>
+        next.method === 'tools' &&
+        (next.params.data as { event?: unknown }).event === 'tool-finished',
+    );
+    // 基座那顆、再加一顆同 id 的更正。
+    expect(finishes).toHaveLength(2);
+    expect(finishes[1]?.params.data).toMatchObject({ tool_call_id: 'c1', meta: META });
+    expect(toolEntries(frames)).toMatchObject([{ status: 'done', meta: META }]);
+    expect(toolEntries(frames)[0]?.text).toBeUndefined();
+    expect(toolEntries(historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES))[0]?.meta).toEqual(META);
+  });
+
+  it('失敗的不帶，兩條路都是', async () => {
+    const { frames, events } = await play('none', { isError: true });
+    expect(toolEntries(frames)[0]).toMatchObject({ status: 'failed' });
+    expect(toolEntries(frames)[0]?.meta).toBeUndefined();
+    expect(
+      toolEntries(historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES))[0]?.meta,
+    ).toBeUndefined();
+  });
+
+  it('格式 16 以前的日誌（沒有 meta 這一格）：卡照收、沒有 meta', async () => {
+    const { frames, events } = await play('none', { meta: 'absent' });
+    expect(toolEntries(frames)).toMatchObject([{ status: 'done', text: '讀好了' }]);
+    expect(toolEntries(frames)[0]?.meta).toBeUndefined();
+    const replayed = historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES).find(
+      (next) =>
+        next.method === 'tools' &&
+        (next.params.data as { event?: unknown }).event === 'tool-finished',
+    );
+    expect(replayed?.params.data).not.toHaveProperty('meta');
+  });
+
+  describe('上限同文字，從設定來', () => {
+    const SMALL = 400;
+    const SEARCH = {
+      shape: 'matches',
+      files: Array.from({ length: 10 }, (_, i) => ({
+        path: `/f${i}.ts`,
+        matches: [{ lineNumber: 1, line: 'x'.repeat(60) }],
+      })),
+      truncated: false,
+      total: 10,
+    };
+
+    it('搜尋超過：從尾巴整組砍、truncated、total 不動、至少留一項；兩條路一樣', async () => {
+      const { frames, events } = await play('none', {
+        meta: SEARCH,
+        toolText: { maxBytes: SMALL },
+      });
+      const live = toolEntries(frames)[0]?.meta as typeof SEARCH;
+      expect(Buffer.byteLength(JSON.stringify(live), 'utf8')).toBeLessThanOrEqual(SMALL);
+      expect(live.truncated).toBe(true);
+      expect(live.total).toBe(10);
+      expect(live.files.length).toBeGreaterThan(0);
+      expect(live.files.length).toBeLessThan(10);
+      expect(live.files).toEqual(SEARCH.files.slice(0, live.files.length));
+      expect(toolEntries(historyFrames(events, SMALL))[0]?.meta).toEqual(live);
+      // 對照組：同一份日誌在預設上限底下原樣上線。
+      expect(toolEntries(historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES))[0]?.meta).toEqual(
+        SEARCH,
+      );
+    });
+
+    it('一項自己就超過的搜尋照樣留那一項，不給一張空卡', async () => {
+      const one = {
+        ...SEARCH,
+        files: [SEARCH.files[0], SEARCH.files[1]].map((file) => ({
+          ...file,
+          matches: [{ lineNumber: 1, line: 'y'.repeat(SMALL) }],
+        })),
+        total: 2,
+      };
+      const { frames } = await play('none', { meta: one, toolText: { maxBytes: SMALL } });
+      expect(toolEntries(frames)[0]?.meta).toMatchObject({
+        truncated: true,
+        total: 2,
+        files: [one.files[0]],
+      });
+    });
+
+    it('讀檔與 diff 超過：整格不給；兩條路一樣', async () => {
+      const read = { ...META, lines: [{ number: 1, text: 'z'.repeat(SMALL) }] };
+      const { frames, events } = await play('none', { meta: read, toolText: { maxBytes: SMALL } });
+      expect(toolEntries(frames)[0]).toMatchObject({ status: 'done', text: '讀好了' });
+      expect(toolEntries(frames)[0]?.meta).toBeUndefined();
+      expect(toolEntries(historyFrames(events, SMALL))[0]?.meta).toBeUndefined();
+      expect(toolEntries(historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES))[0]?.meta).toEqual(
+        read,
+      );
+
+      const diff = { diffs: [{ path: '/a.ts', oldText: null, newText: 'z'.repeat(SMALL) }] };
+      const edited = await play('none', { meta: diff, toolText: { maxBytes: SMALL } });
+      expect(toolEntries(edited.frames)[0]?.meta).toBeUndefined();
+    });
+  });
+});

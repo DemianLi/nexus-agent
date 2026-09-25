@@ -96,6 +96,7 @@ import {
   UNKNOWN_TOOL,
 } from './tool-events.js';
 import type { ToolErrorInfo, ToolOutcome } from './tool-events.js';
+import { runInToolMetaSlot } from './tool-result-meta.js';
 
 /** 圍堵 middleware 的名字。錯誤訊息與排序斷言用得到。 */
 export const CONTAINMENT_MIDDLEWARE_NAME = 'nexusToolFailureContainment';
@@ -261,11 +262,15 @@ interface RecordableRequest {
   readonly runtime?: { readonly configurable?: unknown };
 }
 
-/** 記 `tool/result` 用的函式：結果、模型收到的那則，以及跟著結果塞進對話的那幾則。 */
+/**
+ * 記 `tool/result` 用的函式：結果、模型收到的那則、跟著結果塞進對話的那幾則，以及給畫面的
+ * `meta`（`tool-result-meta.ts`；失敗的不帶，`undefined` 就是沒有）。
+ */
 type SettleToolCall = (
   outcome: ToolOutcome,
   message: ToolMessage | undefined,
   injected: readonly HumanMessage[],
+  meta?: unknown,
 ) => void;
 
 /**
@@ -302,7 +307,7 @@ function recordToolCall(
     // 參數序列化不動或日誌不收：這一對整個不記，見上面。
     return undefined;
   }
-  return (outcome, message, injected) => {
+  return (outcome, message, injected, meta) => {
     try {
       log.append('tool/result', {
         callId,
@@ -310,6 +315,8 @@ function recordToolCall(
         // 沒碼、沒訊息的時候整個不放 key：`snapshotJsonValue` 對 `undefined` 是當場拋的。
         ...(outcome.isError && outcome.error !== undefined ? { error: outcome.error } : {}),
         ...(message === undefined ? {} : { message: toLoggedMessage(message) }),
+        // 失敗的呼叫不帶，同 dsh：client 對失敗一律走 generic，不看 meta。
+        ...(outcome.isError || meta === undefined ? {} : { meta }),
       });
     } catch {
       // 同 `tool/call`：日誌寫不進去不影響這次呼叫的結果。
@@ -374,7 +381,13 @@ export function createContainmentMiddleware(
         if (callId !== undefined) invalidArguments?.forget(callId);
       };
       try {
-        const result = await handler(request);
+        // 槽在這一層開：產生者（backend 那層的 Proxy、讀檔的 middleware）都在內層，
+        // 寫進來的東西由這裡交給 `tool/result`。見 `tool-result-meta.ts`。
+        const { result, meta } = await runInToolMetaSlot(
+          request.toolCall.name,
+          request.toolCall.args,
+          () => handler(request),
+        );
         if (settle !== undefined) {
           const outcome = readToolOutcome(result, request.toolCall.id ?? '');
           // **未知工具從結構上認**：基座找不到那顆工具時 `request.tool` 是 `undefined`，
@@ -385,6 +398,7 @@ export function createContainmentMiddleware(
               : outcome,
             readToolResultMessage(result, request.toolCall.id ?? ''),
             readInjectedMessages(result),
+            meta,
           );
         }
         forget();

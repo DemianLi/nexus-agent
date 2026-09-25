@@ -241,6 +241,52 @@ describe('折疊器', () => {
     expect(entry.error).toBeUndefined();
   });
 
+  it('`tool-finished` 的 meta 原樣進條目；同一個 id 再開一次時跟 `text` 一起清掉，失敗的不留（#617）', () => {
+    seq = 0;
+    const meta = { shape: 'paths', paths: ['/a.md'], truncated: false, total: 1 };
+    const started = {
+      event: 'tool-started',
+      tool_call_id: 'call_1_0',
+      tool_name: 'glob',
+      input: '{}',
+    };
+    // frame 照送達順序建：`seq` 在建的時候發，倒著建的那顆會被當成舊幀丟掉。
+    const done = reduceAll(emptyConversation(), [
+      frame('tools', ['tools:a'], started),
+      frame('tools', ['tools:a'], {
+        event: 'tool-finished',
+        tool_call_id: 'call_1_0',
+        message: '/a.md',
+        meta,
+      }),
+    ]);
+    const entry = done.entries[0];
+    if (entry?.kind !== 'tool') throw new Error('沒有工具條目');
+    expect(entry.meta).toEqual(meta);
+
+    const restarted = reduceAll(done, [frame('tools', ['tools:a'], started)]);
+    const again = restarted.entries[0];
+    if (again?.kind !== 'tool') throw new Error('沒有工具條目');
+    expect(again.status).toBe('running');
+    expect(again.text).toBeUndefined();
+    expect(again.meta).toBeUndefined();
+
+    // 同一個 id 的更正幀把它改判成失敗：meta 跟著拿掉，不留成功那一顆的。
+    const failed = reduceAll(done, [
+      frame('tools', ['tools:a'], {
+        event: 'tool-finished',
+        tool_call_id: 'call_1_0',
+        failed: true,
+        message: '被擋下',
+        meta,
+      }),
+    ]);
+    const last = failed.entries[0];
+    if (last?.kind !== 'tool') throw new Error('沒有工具條目');
+    expect(last.status).toBe('failed');
+    expect(last.meta).toBeUndefined();
+  });
+
   it('**收尾了不等於成功了**：帶 `failed` 的 `tool-finished` 是失敗不是完成', () => {
     seq = 0;
     const state = reduceAll(emptyConversation(), [
