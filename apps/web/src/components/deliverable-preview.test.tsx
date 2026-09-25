@@ -8,7 +8,7 @@ import { createDeliverableFileStore } from '@/lib/deliverable-file';
 import type { DeliverableFileState, DeliverableLongLine } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import { axeViolations } from '@/test/axe';
-import { WithRightSidebar } from '@/test/right-sidebar';
+import { memoryStorage, WithRightSidebar } from '@/test/right-sidebar';
 
 /**
  * 交付檔的預覽（#452 web 第二刀；#543 改成接續瀏覽）：從卡片上的座標開 `Sheet`，一段一段往下接。
@@ -58,6 +58,8 @@ function nearBottom() {
 beforeEach(() => {
   ManualObserver.live = [];
   vi.stubGlobal('IntersectionObserver', ManualObserver);
+  // 右側欄的版面記在 localStorage，每個測試換一份新的（見 changes-review.test.tsx）。
+  vi.stubGlobal('localStorage', memoryStorage());
 });
 
 afterEach(() => {

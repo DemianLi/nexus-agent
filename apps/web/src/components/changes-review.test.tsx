@@ -1,18 +1,26 @@
 import type { WorkspaceChangesSummary, WorkspaceFileDiff } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ChangesCard } from '@/components/changes-card';
 import { createChangesStores } from '@/lib/changes-diff';
 import { MAX_RENDERED_LINES } from '@/lib/diff-rows';
 import { axeViolations } from '@/test/axe';
 import { stubCmdkLayout } from '@/test/cmdk';
-import { WithRightSidebar } from '@/test/right-sidebar';
+import { memoryStorage, WithRightSidebar } from '@/test/right-sidebar';
 
 /**
  * 審查頁（#443 web 第二刀）：點卡片的標頭或一列，在右側欄打開這一輪的分頁（#640），看那個檔在這一輪的比較。
  * jsdom 沒有 `matchMedia`，畫的是停靠那一種。
  */
+
+/**
+ * 右側欄把版面記在 `localStorage`：每個測試換一份新的，不然上一個測試開的分頁會留到下一個。Node 25 自帶的那份
+ * 寫不進去，本機看不出來；CI 的 Node 22 用 jsdom 的，寫得進去。
+ */
+beforeEach(() => {
+  vi.stubGlobal('localStorage', memoryStorage());
+});
 
 afterEach(() => {
   cleanup();

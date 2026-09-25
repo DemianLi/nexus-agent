@@ -6,7 +6,7 @@ import { createDeliverableDownloader } from '@/lib/deliverable-download';
 import { createDeliverableFileStore } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import { axeViolations } from '@/test/axe';
-import { WithRightSidebar } from '@/test/right-sidebar';
+import { memoryStorage, WithRightSidebar } from '@/test/right-sidebar';
 
 const toastSpy = vi.hoisted(() => {
   const spy = vi.fn() as ReturnType<typeof vi.fn> & { error: ReturnType<typeof vi.fn> };
@@ -27,6 +27,8 @@ const FILE: LocatedFile = { path: 'out/report.pdf', seq: 11, index: 0 };
 let serial = 0;
 
 beforeEach(() => {
+  // 右側欄的版面記在 localStorage，每個測試換一份新的（見 changes-review.test.tsx）。
+  vi.stubGlobal('localStorage', memoryStorage());
   URL.createObjectURL = vi.fn(() => {
     serial += 1;
     return `blob:fake/${serial}`;
@@ -38,6 +40,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   toastSpy.mockReset();
   toastSpy.error.mockReset();
 });
