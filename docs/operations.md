@@ -253,7 +253,8 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `live-model` | `--live` 時真實供應商的連線值（端點／模型 id／輸出上限／逾時／重試次數） | 有（五格） | **關不掉** |
 | `recursion-limit` | agent 迴圈的 super-step 上限 | 有（一格） | **關不掉** |
 
-**最後七列都是「不裝功能、只講設定」的那一型，但擁有者分兩邊**：`session-persistence` 住在
+**最後七列裡，六列是「不裝功能、只講設定」的那一型；`session-persistence` 例外，它代表落盤本身**
+（[#612](https://github.com/DemianLi/nexus-agent/issues/612)，關掉就不落盤）。**七列的擁有者分兩邊**：`session-persistence` 住在
 `@nexus/core`（值的家在那個套件裡），其餘六列住在 `apps/harness`
 （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
 **更要緊的分界是消費點跑的時刻**：
