@@ -7,7 +7,13 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { emptyConversation, prependEntries, reduceAll } from './conversation.js';
+import {
+  appendHumanTurn,
+  emptyConversation,
+  prependEntries,
+  reduceAll,
+  reduceConversation,
+} from './conversation.js';
 import { INBOX } from './inbox.js';
 import type { Event } from './protocol.js';
 
@@ -123,6 +129,55 @@ describe('inbox', () => {
     expect(state.entries.map((entry) => entry.kind)).toEqual(['human', 'ai']);
     expect(state.entries[1]).toMatchObject({ text: '讀完了', turnTail: true });
     expect(state.status).toBe('idle');
+  });
+
+  describe('過渡期：送出當下畫過的那則被認領，不畫第二次', () => {
+    const claim = (id: string, text: string) => inboxFrame({ items: [], claimed: { id, text } });
+
+    it('送出當下畫的那則標著還沒認領', () => {
+      expect(appendHumanTurn(emptyConversation(), '嗨').entries).toEqual([
+        { kind: 'human', id: 'human-0', text: '嗨', pendingClaim: true },
+      ]);
+    });
+
+    it('claimed 認領它：換成 inbox 的 id 與開跑用的文字，只剩一則；同一顆再到不變', () => {
+      const sent = appendHumanTurn(emptyConversation(), '先讀設定');
+      const claimed = reduceConversation(sent, claim(first.id, '先讀設定（改過）'));
+      expect(claimed.entries).toEqual([
+        { kind: 'human', id: `inbox:${first.id}`, text: '先讀設定（改過）' },
+      ]);
+      expect(claimed.status).toBe('running');
+      expect(reduceConversation(claimed, claim(first.id, '先讀設定（改過）')).entries).toEqual(
+        claimed.entries,
+      );
+    });
+
+    it('認領過了，下一件 claimed 就另畫一則', () => {
+      const sent = appendHumanTurn(emptyConversation(), 'A');
+      const state = reduceAll(sent, [claim(first.id, 'A'), claim(second.id, 'B')]);
+      expect(state.entries.map((entry) => entry.id)).toEqual([
+        `inbox:${first.id}`,
+        `inbox:${second.id}`,
+      ]);
+    });
+
+    it('只認領最後那一則：更早留下來、還標著的那則不動', () => {
+      const failed = appendHumanTurn(emptyConversation(), '送出失敗的那句');
+      const sent = appendHumanTurn({ ...failed, status: 'idle' }, '這一句');
+      const state = reduceConversation(sent, claim(first.id, '這一句'));
+      expect(state.entries).toEqual([
+        { kind: 'human', id: 'human-0', text: '送出失敗的那句', pendingClaim: true },
+        { kind: 'human', id: `inbox:${first.id}`, text: '這一句' },
+      ]);
+    });
+
+    it('歷史重播的人話不算：沒標著，claimed 另畫一則', () => {
+      const replayed = reduceAll(emptyConversation(), [
+        frame('messages', { event: 'message-start', role: 'human', id: 'run-h', run_id: 'h' }),
+      ]);
+      const state = reduceConversation(replayed, claim(first.id, 'A'));
+      expect(state.entries.map((entry) => entry.id)).toEqual(['h', `inbox:${first.id}`]);
+    });
   });
 
   it('往前翻頁不動它：那是「現在」的事', () => {

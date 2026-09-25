@@ -54,6 +54,11 @@ export interface HumanEntry {
   readonly kind: 'human';
   readonly id: string;
   readonly text: string;
+  /**
+   * {@link appendHumanTurn} 在送出當下畫的、還沒被 `inbox` 的 `claimed` 認領的那一則。**過渡期才有**：web 改成等
+   * `claimed` 才畫（#645）之後，這一格與認領那一支一起刪，見 {@link reduceInbox}。
+   */
+  readonly pendingClaim?: true;
 }
 
 export interface AiEntry {
@@ -426,11 +431,16 @@ export function emptyConversation(): ConversationState {
  * **線上不會回聲它**：`run.start` 的 input 不會變成下行的 frame，而 `input` channel
  * 上只有核准請求。所以送出的那一刻由這裡補，不是等它回來。
  *
- * 送出佇列（#637）之後人的話另有一條路：`inbox` frame 的 `claimed`，開跑那一刻才畫，見 {@link reduceInbox}。兩條都
- * 用的話同一句會畫兩次，所以畫面只能挑一條。
+ * 送出佇列（#637）之後人的話另有一條路：`inbox` frame 的 `claimed`，開跑那一刻才畫，見 {@link reduceInbox}。過渡期
+ * 兩條並存：這裡畫的那則標 {@link HumanEntry.pendingClaim}，`claimed` 到了認領它，不另畫一則。
  */
 export function appendHumanTurn(state: ConversationState, text: string): ConversationState {
-  const entry: HumanEntry = { kind: 'human', id: `human-${state.entries.length}`, text };
+  const entry: HumanEntry = {
+    kind: 'human',
+    id: `human-${state.entries.length}`,
+    text,
+    pendingClaim: true,
+  };
   return trackTurn(state, { ...state, entries: [...state.entries, entry], status: 'running' });
 }
 
@@ -765,6 +775,13 @@ function isQueuedInput(value: unknown): value is WireQueuedInput {
  * - **id 是 `inbox:<項目 id>`**，跟 {@link appendHumanTurn} 的 `human-<n>` 與歷史重播的 `run_id` 分得開；同一顆
  *   `claimed` 再到一次不畫第二次。
  * - **`status` 不在這裡轉**：開跑由接著到的 `lifecycle` 說，理由同 `claimed` 的先後保證（見 `inbox.ts`）。
+ * - **過渡期的認領**：web 今天在送出當下就 {@link appendHumanTurn}（#645 會改成等 `claimed`）。最後一則還標著
+ *   {@link HumanEntry.pendingClaim} 的人話在的話，`claimed` **認領它**——換成上面那個 id 與文字——而不是另畫一則，不然
+ *   同一句會畫兩次。只認領最後那一則，不往前找。
+ *   - 別的分頁或 CLI 排著的先開跑時，認領走的是這一頁剛送出的那則：送出那一瞬間的字會換成先開跑那一件的，接著的
+ *     `claimed` 再依序長出來，最後的順序與文字都對。
+ *   - 送出失敗留下來的那則也還標著，會被下一顆 `claimed` 認領走。過渡期接受。
+ *   - #645 合了之後 web 不再呼叫 {@link appendHumanTurn}，這一支走不到，跟它一起刪。
  */
 function reduceInbox(state: ConversationState, payload: object): ConversationState {
   const { items, claimed } = payload as { items?: unknown; claimed?: unknown };
@@ -779,7 +796,13 @@ function reduceInbox(state: ConversationState, payload: object): ConversationSta
   if (human === undefined || state.entries.some((entry) => entry.id === human.id)) {
     return { ...state, inbox };
   }
-  return { ...state, inbox, entries: [...state.entries, human] };
+  const local = state.entries.findLastIndex(
+    (entry) => entry.kind === 'human' && entry.pendingClaim === true,
+  );
+  if (local < 0) return { ...state, inbox, entries: [...state.entries, human] };
+  const entries = [...state.entries];
+  entries[local] = human;
+  return { ...state, inbox, entries };
 }
 
 /** `workspace/changes` 的 `payload`：`seq` 要是非負整數，同一個 `seq` 只長一格。 */
