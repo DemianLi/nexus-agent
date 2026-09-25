@@ -65,7 +65,7 @@ describe('inbox', () => {
     );
     expect(state.inbox).toEqual([second]);
     expect(state.entries).toEqual([
-      { kind: 'human', id: `inbox:${first.id}`, text: '先讀設定（改過）' },
+      { kind: 'human', id: `inbox:${first.id}`, text: '先讀設定（改過）', inboxId: first.id },
     ]);
     expect(state.status).toBe('idle');
   });
@@ -140,11 +140,11 @@ describe('inbox', () => {
       ]);
     });
 
-    it('claimed 認領它：換成 inbox 的 id 與開跑用的文字，只剩一則；同一顆再到不變', () => {
+    it('claimed 認領它：換成開跑用的文字、id 不換（畫面拿它當 key），只剩一則；同一顆再到不變', () => {
       const sent = appendHumanTurn(emptyConversation(), '先讀設定');
       const claimed = reduceConversation(sent, claim(first.id, '先讀設定（改過）'));
       expect(claimed.entries).toEqual([
-        { kind: 'human', id: `inbox:${first.id}`, text: '先讀設定（改過）' },
+        { kind: 'human', id: 'human-0', text: '先讀設定（改過）', inboxId: first.id },
       ]);
       expect(claimed.status).toBe('running');
       expect(reduceConversation(claimed, claim(first.id, '先讀設定（改過）')).entries).toEqual(
@@ -155,10 +155,7 @@ describe('inbox', () => {
     it('認領過了，下一件 claimed 就另畫一則', () => {
       const sent = appendHumanTurn(emptyConversation(), 'A');
       const state = reduceAll(sent, [claim(first.id, 'A'), claim(second.id, 'B')]);
-      expect(state.entries.map((entry) => entry.id)).toEqual([
-        `inbox:${first.id}`,
-        `inbox:${second.id}`,
-      ]);
+      expect(state.entries.map((entry) => entry.id)).toEqual(['human-0', `inbox:${second.id}`]);
     });
 
     it('只認領最後那一則：更早留下來、還標著的那則不動', () => {
@@ -167,7 +164,7 @@ describe('inbox', () => {
       const state = reduceConversation(sent, claim(first.id, '這一句'));
       expect(state.entries).toEqual([
         { kind: 'human', id: 'human-0', text: '送出失敗的那句', pendingClaim: true },
-        { kind: 'human', id: `inbox:${first.id}`, text: '這一句' },
+        { kind: 'human', id: 'human-1', text: '這一句', inboxId: first.id },
       ]);
     });
 

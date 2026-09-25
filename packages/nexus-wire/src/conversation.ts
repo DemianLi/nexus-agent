@@ -59,6 +59,11 @@ export interface HumanEntry {
    * `claimed` 才畫（#645）之後，這一格與認領那一支一起刪，見 {@link reduceInbox}。
    */
   readonly pendingClaim?: true;
+  /**
+   * 這一則是送出佇列的哪一件開跑時畫的（`inbox` 的 `claimed.id`）。同一顆 `claimed` 再到一次靠它認出來，不畫第二次。
+   * 歷史重播的人話沒有這一格。
+   */
+  readonly inboxId?: string;
 }
 
 export interface AiEntry {
@@ -772,12 +777,12 @@ function isQueuedInput(value: unknown): value is WireQueuedInput {
  *
  * 帶 `claimed` 的那一顆是某一件剛被領走開跑：多折一則人的話，文字用開跑用的那份（改過的就是改過的）。
  *
- * - **id 是 `inbox:<項目 id>`**，跟 {@link appendHumanTurn} 的 `human-<n>` 與歷史重播的 `run_id` 分得開；同一顆
- *   `claimed` 再到一次不畫第二次。
+ * - **id 是 `inbox:<項目 id>`**，跟 {@link appendHumanTurn} 的 `human-<n>` 與歷史重播的 `run_id` 分得開；帶
+ *   {@link HumanEntry.inboxId}，同一顆 `claimed` 再到一次靠它認出來，不畫第二次。
  * - **`status` 不在這裡轉**：開跑由接著到的 `lifecycle` 說，理由同 `claimed` 的先後保證（見 `inbox.ts`）。
  * - **過渡期的認領**：web 今天在送出當下就 {@link appendHumanTurn}（#645 會改成等 `claimed`）。最後一則還標著
- *   {@link HumanEntry.pendingClaim} 的人話在的話，`claimed` **認領它**——換成上面那個 id 與文字——而不是另畫一則，不然
- *   同一句會畫兩次。只認領最後那一則，不往前找。
+ *   {@link HumanEntry.pendingClaim} 的人話在的話，`claimed` **認領它**——換成開跑用的文字、帶上 `inboxId`，**id 不換**
+ *   （畫面拿它當 key）——而不是另畫一則，不然同一句會畫兩次。只認領最後那一則，不往前找。
  *   - 別的分頁或 CLI 排著的先開跑時，認領走的是這一頁剛送出的那則：送出那一瞬間的字會換成先開跑那一件的，接著的
  *     `claimed` 再依序長出來，最後的順序與文字都對。
  *   - 送出失敗留下來的那則也還標著，會被下一顆 `claimed` 認領走。過渡期接受。
@@ -790,10 +795,13 @@ function reduceInbox(state: ConversationState, payload: object): ConversationSta
   if (claimed !== undefined) {
     const { id, text } = (claimed ?? {}) as { id?: unknown; text?: unknown };
     if (typeof id !== 'string' || typeof text !== 'string') return state;
-    human = { kind: 'human', id: `inbox:${id}`, text };
+    human = { kind: 'human', id: `inbox:${id}`, text, inboxId: id };
   }
   const inbox = items.map(({ id, text }) => ({ id, text, source: { kind: 'user' as const } }));
-  if (human === undefined || state.entries.some((entry) => entry.id === human.id)) {
+  if (
+    human === undefined ||
+    state.entries.some((entry) => entry.kind === 'human' && entry.inboxId === human.inboxId)
+  ) {
     return { ...state, inbox };
   }
   const local = state.entries.findLastIndex(
@@ -801,7 +809,8 @@ function reduceInbox(state: ConversationState, payload: object): ConversationSta
   );
   if (local < 0) return { ...state, inbox, entries: [...state.entries, human] };
   const entries = [...state.entries];
-  entries[local] = human;
+  // **id 不換**：畫面拿 id 當列的 key，換掉的話那顆泡泡會重新掛上、進場動畫再播一次。
+  entries[local] = { ...human, id: state.entries[local]!.id };
   return { ...state, inbox, entries };
 }
 
