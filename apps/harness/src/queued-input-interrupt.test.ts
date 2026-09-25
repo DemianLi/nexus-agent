@@ -307,6 +307,24 @@ describe('真的組裝：排著的第二句撞上第一輪的核准點', () => {
       await run.close();
     }
   }, 20000);
+  it('收線時還沒停住、之後才撞上核准點：排著的那句照樣收掉', async () => {
+    const run = await assemble();
+    try {
+      const first = run.pump.submit({ kind: 'message', text: '第一句' });
+      await until(() => run.probe.slowStarted === 1);
+      const second = run.pump.submit({ kind: 'message', text: '第二句' });
+      // 收線的這一刻中斷還沒掛上，第二句還排得到。
+      expect(run.pump.awaitingInput).toBe(false);
+      run.pump.close();
+      await first;
+      expect(run.pump.awaitingInput).toBe(true);
+      await expect(second).rejects.toThrow('這條 thread 已經收掉了');
+      expect(run.pump.running).toBe(false);
+      expect(run.marks()).toEqual(['start:message:第一句', 'end']);
+    } finally {
+      await run.close();
+    }
+  }, 20000);
 });
 
 /** 假的 agent 吐得出來的原始封包。 */

@@ -925,6 +925,14 @@ export class ThreadPump {
     if (this.#busy) return;
     const index = this.#nextIndex();
     if (index < 0) {
+      if (this.#closed) {
+        // **收線之後還停著的收掉**（#629）：停在核准點、又沒有答覆排著，它們永遠等不到開跑。不收的話
+        // 送出它們的 promise 永遠掛著，`running` 也永遠是真的。
+        for (const job of this.#queue.splice(0)) {
+          this.#inFlight -= 1;
+          job.reject(new Error('這條 thread 已經收掉了'));
+        }
+      }
       for (const wake of this.#idleWaiters.splice(0)) wake();
       return;
     }
@@ -1076,15 +1084,9 @@ export class ThreadPump {
   close(): void {
     this.#closed = true;
     this.#unobserveLogs();
-    // **停住的那幾件收掉**（#629）：停在核准點、又沒有答覆排著，它們永遠等不到開跑。不收的話
-    // 送出它們的 promise 永遠掛著，`running` 也永遠是真的。
-    if (this.#nextIndex() < 0) {
-      for (const job of this.#queue.splice(0)) {
-        this.#inFlight -= 1;
-        job.reject(new Error('這條 thread 已經收掉了'));
-      }
-      for (const wake of this.#idleWaiters.splice(0)) wake();
-    }
+    // 停住的那幾件由 `#next` 收掉（#629）。**不在這裡收**：這一刻還在跑的那一輪可能之後才撞上
+    // 核准點，那時排著的才變成停住的——只在這裡看一次會漏掉它們。
+    this.#kick();
     for (const subscriber of this.#subscribers) {
       subscriber.done = true;
       subscriber.wake?.();
