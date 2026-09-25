@@ -146,11 +146,12 @@ describe('工具結果帶結構化 meta', () => {
       expect(first.offset).toBe(1);
       expect(first.totalLines).toBe(250);
       expect(first.lang).toBe('ts');
-      expect(first.lines).toHaveLength(100);
+      // 沒給 `limit`：一頁 2000 行（#602），250 行一次讀完。
+      expect(first.lines).toHaveLength(250);
       expect(first.lines.map((line) => line.number)).toEqual(
-        Array.from({ length: 100 }, (_, i) => i + 1),
+        Array.from({ length: 250 }, (_, i) => i + 1),
       );
-      expect(first.lines[99]).toEqual({ number: 100, text: 'line 100' });
+      expect(first.lines[249]).toEqual({ number: 250, text: 'line 250' });
       expect(logged[1]?.meta).toEqual({
         path: '/app.ts',
         offset: 101,
