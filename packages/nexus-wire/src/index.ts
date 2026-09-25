@@ -30,6 +30,8 @@ export type {
   FeedbackTargetNotFound,
   FeedbackVersionConflict,
   InputRespondOne,
+  QueueUpdateAction,
+  QueueUpdateCommand,
   RpcMethod,
   RunCancelCommand,
   RunStartParams,
@@ -52,6 +54,8 @@ export type {
   WireFeedbackCategory,
   WireFeedbackItem,
   WireFeedbackRating,
+  WireErrorCode,
+  WireErrorResponse,
 } from './protocol.js';
 export type {
   DeliverableFileBytes,
@@ -82,6 +86,8 @@ export type {
 } from './context-pressure.js';
 export { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 export type { TodosPayload, WireTodoItem } from './todos.js';
+export type { InboxPayload, WireQueuedInput } from './inbox.js';
+export { INBOX } from './inbox.js';
 export { TODOS } from './todos.js';
 export type { WireSessionStats, WireTokenUsage } from './session-totals.js';
 export { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
@@ -91,6 +97,9 @@ export {
   HISTORY_PAGE_MESSAGES,
   historyPath,
   isFeedbackMethod,
+  isQueueUpdateMethod,
+  QUEUE_ITEM_NOT_FOUND,
+  QUEUE_UPDATE_METHOD,
   RUN_CANCEL_METHOD,
   SLASH_METHODS,
   THREADS_PATH,

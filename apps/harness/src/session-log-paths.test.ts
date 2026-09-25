@@ -61,15 +61,18 @@ function seqsOf(log: SessionLog): number[] {
   return log.events.map((event) => event.seq);
 }
 
+// 人送出的話一律先進送出佇列（#637）：一輪前面一顆送進來、`turn/start` 之後一顆領走。
+const QUEUED_TURN = ['inbox/spliced', 'turn/start', 'inbox/spliced'] as const;
+
 describe('會話事件日誌：web 那條路', () => {
   it('一輪跑完寫下 turn/start 與 turn/end，seq 連續', async () => {
     const pump = new ThreadPump(buildPumpAgent(PLAIN_TURNS), 'web-1');
 
     await pump.submit({ kind: 'message', text: '嗨' });
 
-    expect(pump.sessionLog.events.map((event) => event.type)).toEqual(['turn/start', 'turn/end']);
-    expect(seqsOf(pump.sessionLog)).toEqual([0, 1]);
-    expect(pump.sessionLog.events[0]?.data).toEqual({ kind: 'message', text: '嗨' });
+    expect(pump.sessionLog.events.map((event) => event.type)).toEqual([...QUEUED_TURN, 'turn/end']);
+    expect(seqsOf(pump.sessionLog)).toEqual([0, 1, 2, 3]);
+    expect(pump.sessionLog.events[1]?.data).toEqual({ kind: 'message', text: '嗨' });
     expect(pump.sessionLog.sessionId).toBe('web-1');
   });
 
@@ -79,9 +82,9 @@ describe('會話事件日誌：web 那條路', () => {
     await pump.submit({ kind: 'message', text: '記一筆' });
 
     const types = pump.sessionLog.events.map((event) => event.type);
-    expect(types).toEqual(['turn/start', 'interrupt/raised', 'turn/end']);
-    expect(seqsOf(pump.sessionLog)).toEqual([0, 1, 2]);
-    const raised = pump.sessionLog.events[1]?.data as { interruptId: string };
+    expect(types).toEqual([...QUEUED_TURN, 'interrupt/raised', 'turn/end']);
+    expect(seqsOf(pump.sessionLog)).toEqual([0, 1, 2, 3, 4]);
+    const raised = pump.sessionLog.events[3]?.data as { interruptId: string };
     expect(raised.interruptId).toBe(pump.pendings[0]?.interruptId ?? '(沒有掛著的中斷)');
   });
 
@@ -95,15 +98,16 @@ describe('會話事件日誌：web 那條路', () => {
       response: { decisions: [{ type: 'approve' }] },
     });
 
+    // resume 不走佇列：它答的是掛著的中斷，不是一句新的話。
     expect(pump.sessionLog.events.map((event) => event.type)).toEqual([
-      'turn/start',
+      ...QUEUED_TURN,
       'interrupt/raised',
       'turn/end',
       'turn/start',
       'turn/end',
     ]);
-    expect(seqsOf(pump.sessionLog)).toEqual([0, 1, 2, 3, 4]);
-    expect(pump.sessionLog.events[3]?.data).toEqual({ kind: 'resume' });
+    expect(seqsOf(pump.sessionLog)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(pump.sessionLog.events[5]?.data).toEqual({ kind: 'resume' });
   });
 
   it('跑壞了記 turn/failed，而且錯誤照樣往外拋', async () => {
@@ -118,10 +122,10 @@ describe('會話事件日誌：web 那條路', () => {
     await expect(pump.submit({ kind: 'message', text: '嗨' })).rejects.toThrow('模型不見了');
 
     expect(pump.sessionLog.events.map((event) => event.type)).toEqual([
-      'turn/start',
+      ...QUEUED_TURN,
       'turn/failed',
     ]);
-    expect(pump.sessionLog.events[1]?.data).toEqual({ message: '模型不見了' });
+    expect(pump.sessionLog.events[3]?.data).toEqual({ message: '模型不見了' });
   });
 });
 

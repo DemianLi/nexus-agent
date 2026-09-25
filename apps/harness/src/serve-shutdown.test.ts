@@ -116,7 +116,8 @@ describe('serve 收到 SIGINT', () => {
     expect(await server.exited).toEqual({ code: 130, signal: null });
     const events = await threadLog(root, 'alpha');
     expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
-    expect(events[0]?.type).toBe('turn/start');
+    // 人送出的話先進送出佇列（#637）：第一顆是送進來的那一顆，緊接著開跑。
+    expect(events.slice(0, 2).map((event) => event.type)).toEqual(['inbox/spliced', 'turn/start']);
     expect(events.at(-1)?.type).toBe('turn/end');
 
     // 重開：同一個目錄、同一條 thread，歷史裡有那句話與回覆。
@@ -144,11 +145,13 @@ describe('serve 收到 SIGINT', () => {
 
     expect(await server.exited).toEqual({ code: 130, signal: null });
     // 第二次可能早於排空、也可能晚於，兩種順序下這一句都要成立：那句話在模型被叫之前就被
-    // 檢查點寫下去了。沒有檢查點時這裡會偶發地連檔案都沒有（#599 實測 4 次 1 次）。
+    // 檢查點寫下去了。沒有檢查點時這裡會偶發地連檔案都沒有（#599 實測 4 次 1 次）。送出佇列（#637）之後
+    // 它在送進來的當下就落在第一顆 `inbox/spliced` 裡，比開跑的 `turn/start` 還早；就算只來得及寫下這一顆，
+    // 重開之後它也停在佇列裡，不會丟。
     const events = await threadLog(root, 'beta');
     expect(events[0]).toMatchObject({
-      type: 'turn/start',
-      data: { text: '把這句話回聲一次。' },
+      type: 'inbox/spliced',
+      data: { inserted: [{ text: '把這句話回聲一次。' }] },
     });
   }, 90_000);
 });

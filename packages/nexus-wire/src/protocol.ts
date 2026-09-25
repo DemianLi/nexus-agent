@@ -140,6 +140,57 @@ export function isRunCancelMethod(value: unknown): value is typeof RUN_CANCEL_ME
 }
 
 /**
+ * 改或刪送出佇列裡排著的一件（[#637](https://github.com/DemianLi/nexus-agent/issues/637)）。佇列本身的形狀見
+ * `inbox.ts`。
+ *
+ * 照 dsh 的 `session.updateQueue({ sessionId, itemId, action })` → `{ accepted: true }`
+ * （`packages/api/session-controller/src/commands.ts:432-504`，`477b4f4`）。**thread 在路徑上**，同
+ * {@link RUN_CANCEL_METHOD}，所以 params 裡沒有 `sessionId` 那一格。
+ *
+ * - `edit`：換掉文字，id 與位置不變。只收文字，空白回 `invalid_argument`（dsh 回 `gateway/bad-request`）。
+ * - `remove`：拿掉，它不會跑。
+ * - 已經不在隊裡（開跑了、被刪了、從沒有過）：回 {@link QUEUE_ITEM_NOT_FOUND}，同 dsh 的
+ *   `session/queue-item-not-found`。
+ * - dsh 的第三種 `steer`（插話）這一版沒有，回 `not_supported`（#637 的 Q3）。
+ *
+ * **這是我們加在自己 wire 上的命令**，理由同 {@link RUN_CANCEL_METHOD}：`@langchain/protocol@0.0.18` 的 `Command`
+ * 沒有佇列類的 method。**任何時候都收**：跑著、停在核准點、按了停止之後都能改能刪。
+ */
+export const QUEUE_UPDATE_METHOD = 'queue.update';
+
+export type QueueUpdateAction =
+  { readonly kind: 'edit'; readonly text: string } | { readonly kind: 'remove' };
+
+export interface QueueUpdateCommand {
+  readonly id: number;
+  readonly method: typeof QUEUE_UPDATE_METHOD;
+  readonly params: {
+    /** 那一件的 id：送出它的 `run.start` 回的 `run_id`。 */
+    readonly item_id: string;
+    readonly action: QueueUpdateAction;
+  };
+}
+
+export function isQueueUpdateMethod(value: unknown): value is typeof QUEUE_UPDATE_METHOD {
+  return value === QUEUE_UPDATE_METHOD;
+}
+
+/**
+ * 那一件已經不在送出佇列裡。
+ *
+ * **不在協定的 `ErrorCode` 裡**（`@langchain/protocol@0.0.18` 只有十個碼，沒有佇列類），所以錯誤碼在這一層擴充成
+ * {@link WireErrorCode}，同 {@link QUEUE_UPDATE_METHOD} 是我們自己的命令。最近的 `no_such_run` 講的是 run，一件被領走
+ * 開跑的輸入在我們這裡正好就有一個 run，拿它會讓「已經開跑」與「沒有這個 run」讀起來是同一件事。
+ */
+export const QUEUE_ITEM_NOT_FOUND = 'queue_item_not_found';
+
+/** 這條線上的錯誤碼：協定的那十個，加上我們自己的命令用到的。 */
+export type WireErrorCode = ErrorCode | typeof QUEUE_ITEM_NOT_FOUND;
+
+/** 協定的 `ErrorResponse`，錯誤碼換成 {@link WireErrorCode}。 */
+export type WireErrorResponse = Omit<ErrorResponse, 'error'> & { error: WireErrorCode };
+
+/**
  * 評分與評語（[#278](https://github.com/DemianLi/nexus-agent/issues/278)、
  * [#382](https://github.com/DemianLi/nexus-agent/issues/382)）。
  *
@@ -273,13 +324,19 @@ export type FeedbackRecordResult = {
 };
 
 /** `/threads/:id/commands/:method` 這條 RPC family 收得下的全部 method。 */
-export type RpcMethod = UplinkMethod | SlashMethod | typeof RUN_CANCEL_METHOD | FeedbackMethod;
+export type RpcMethod =
+  | UplinkMethod
+  | SlashMethod
+  | typeof RUN_CANCEL_METHOD
+  | typeof QUEUE_UPDATE_METHOD
+  | FeedbackMethod;
 
 export function isRpcMethod(value: unknown): value is RpcMethod {
   return (
     isUplinkMethod(value) ||
     isSlashMethod(value) ||
     isRunCancelMethod(value) ||
+    isQueueUpdateMethod(value) ||
     isFeedbackMethod(value)
   );
 }
@@ -527,7 +584,11 @@ export function eventId(threadId: string, seq: number): string {
   return `${threadId}:${seq}`;
 }
 
-export function errorResponse(id: number | null, error: ErrorCode, message: string): ErrorResponse {
+export function errorResponse(
+  id: number | null,
+  error: WireErrorCode,
+  message: string,
+): WireErrorResponse {
   return { type: 'error', id, error, message };
 }
 

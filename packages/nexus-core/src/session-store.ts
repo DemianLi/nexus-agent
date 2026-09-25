@@ -176,8 +176,16 @@ import type { SessionEvent } from './session-log.js';
  *
  * 升版照新增詞彙的慣例（同 11、12、14），不是 15 那種非升不可：15 讀到這一格只是不畫專屬卡，重建出來的
  * 對話不差一個字。
+ *
+ * ## 17：`inbox/spliced`
+ *
+ * 送出佇列（[#637](https://github.com/DemianLi/nexus-agent/issues/637)）：人送出、還沒開跑的那幾句存在 server 上，由
+ * 這一顆折出來。v16 的檔直接讀：那時候送出的話不排進日誌，一顆都沒有就是當時的樣子，接回來的佇列是空的。
+ *
+ * **非升不可**：16 接回一份 17 的日誌時認不得這一顆，停住的那幾件從它眼裡消失——續寫下去之後，一台 17 再接回來
+ * 時它們又冒出來、而且排在 16 那段時間送出並跑完的話前面。同 13 那條門檻：靜靜略過會左右重建的內容就是一次讀錯。
  */
-export const SESSION_LOG_FORMAT_VERSION = 16;
+export const SESSION_LOG_FORMAT_VERSION = 17;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。

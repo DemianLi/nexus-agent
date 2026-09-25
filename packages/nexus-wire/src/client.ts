@@ -14,7 +14,6 @@ import { decodeSseStream } from './sse.js';
 import type {
   Command,
   CommandResponse,
-  ErrorResponse,
   Event,
   FeedbackCommand,
   FeedbackDeleteCommand,
@@ -37,6 +36,7 @@ import type {
   ThreadListResult,
   ThreadSummary,
   WireChannel,
+  WireErrorResponse,
 } from './protocol.js';
 import {
   RUN_CANCEL_METHOD,
@@ -76,7 +76,7 @@ export interface OpenEventsOptions {
  * **agent-protocol 自己的字**（見 `commandPath` 的說明），那個不動；但這個別名是我們
  * 自己取的，讓路給同名而語意不同的那一個。
  */
-export type UplinkResult = CommandResponse | ErrorResponse;
+export type UplinkResult = CommandResponse | WireErrorResponse;
 
 /**
  * `slash.list` 的結果。
