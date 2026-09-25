@@ -1243,6 +1243,97 @@ describe('以前的會話', () => {
 
     await waitFor(() => expect(list.textContent).toContain('這個專案還沒有以前的會話'));
     expect(within(list).queryAllByRole('button')).toHaveLength(0);
+    // 沒有列就沒有東西可搜。
+    expect(within(list).queryByRole('searchbox')).toBeNull();
+  });
+
+  /** 分組、搜尋、狀態點（inventory 列 6）：分界與比對規則在 `lib/thread-groups.test.ts`，這裡驗畫出來的。 */
+  describe('分組、搜尋、狀態點', () => {
+    const DAY = 86_400_000;
+    function recent(): ThreadListResult {
+      const now = Date.now();
+      return {
+        unreadable: 0,
+        items: [
+          { threadId: 't1', updatedAt: now, running: true, blank: false, title: '幫我改登入頁' },
+          {
+            threadId: 't2',
+            updatedAt: now - 3 * DAY,
+            running: false,
+            blank: false,
+            title: '讀規格',
+          },
+          {
+            threadId: 't3',
+            updatedAt: now - 40 * DAY,
+            running: false,
+            blank: false,
+            title: '登入流程的測試',
+          },
+        ],
+      };
+    }
+
+    async function rendered(): Promise<HTMLElement> {
+      seq = 0;
+      const fake = fakeClient([]);
+      render(<App client={listing(fake, async () => ({ kind: 'ok', result: recent() }))} />);
+      const list = await openList();
+      await waitFor(() => expect(within(list).getAllByRole('button')).toHaveLength(3));
+      return list;
+    }
+
+    const rowNames = (list: HTMLElement) =>
+      within(list)
+        .getAllByRole('button')
+        .map((row) => row.textContent ?? '');
+
+    it('按今天、過去 7 天、更早分組，每組有名字；沒有列的「昨天」不出現', async () => {
+      const list = await rendered();
+      expect(within(list).getByRole('group', { name: '今天' }).textContent).toContain(
+        '幫我改登入頁',
+      );
+      expect(within(list).getByRole('group', { name: '過去 7 天' }).textContent).toContain(
+        '讀規格',
+      );
+      expect(within(list).getByRole('group', { name: '更早' }).textContent).toContain(
+        '登入流程的測試',
+      );
+      expect(within(list).queryByRole('group', { name: '昨天' })).toBeNull();
+    });
+
+    it('跑著的那一列有一顆點，報讀器唸「執行中」', async () => {
+      const list = await rendered();
+      const running = within(list).getByRole('button', { name: /幫我改登入頁/ });
+      expect(within(running).getByTestId('thread-running').textContent).toBe('執行中');
+      expect(within(list).getAllByTestId('thread-running')).toHaveLength(1);
+    });
+
+    it('搜標題只留對得上的列，分組照樣在；Esc 清掉', async () => {
+      const list = await rendered();
+      const search = within(list).getByRole('searchbox', { name: '搜尋以前的會話' });
+      fireEvent.change(search, { target: { value: '登入' } });
+      expect(rowNames(list)).toHaveLength(2);
+      expect(within(list).queryByRole('group', { name: '過去 7 天' })).toBeNull();
+      expect(within(list).getByRole('group', { name: '更早' })).toBeTruthy();
+
+      fireEvent.keyDown(search, { key: 'Escape' });
+      expect((search as HTMLInputElement).value).toBe('');
+      expect(rowNames(list)).toHaveLength(3);
+    });
+
+    it('搜不到時講一聲，不說「還沒有」', async () => {
+      const list = await rendered();
+      fireEvent.change(within(list).getByRole('searchbox'), { target: { value: '部署' } });
+      expect(within(list).queryAllByRole('button')).toHaveLength(0);
+      expect(within(list).getByRole('status').textContent).toBe('沒有標題含「部署」的會話。');
+      expect(list.textContent).not.toContain('還沒有以前的會話');
+    });
+
+    it('過 axe', async () => {
+      await rendered();
+      expect(await axeViolations(document.body)).toEqual([]);
+    });
   });
 });
 
