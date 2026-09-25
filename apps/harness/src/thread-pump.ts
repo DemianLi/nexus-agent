@@ -87,7 +87,7 @@ import {
 } from './conversation-history.js';
 import { driveGoalRound } from './goal-driver.js';
 import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
-import { toolResultText } from './tool-result-text.js';
+import { capToolResultMeta, toolResultText } from './tool-result-text.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
 
@@ -397,10 +397,14 @@ function failureTextOf(output: unknown): string | undefined {
   return typeof content === 'string' ? content : '未指名的錯誤';
 }
 
-/** 日誌對一次呼叫的判定（#296）：失敗與否，與失敗時模型看到的那一句。 */
+/**
+ * 日誌對一次呼叫的判定（#296）：失敗與否、模型看到的那一句，與給畫面的 `meta`（#617，已照上限截過；
+ * 失敗的不帶）。
+ */
 interface ToolVerdict {
   readonly failed: boolean;
   readonly text: string | undefined;
+  readonly meta?: unknown;
 }
 
 /** 已經轉發出去、還在等日誌判定的那顆 `tool-finished`。更正時原樣帶回它的 namespace 與 data。 */
@@ -420,9 +424,14 @@ function applyVerdict(
   data: Record<string, unknown>,
   verdict: ToolVerdict,
 ): Record<string, unknown> {
-  const { failed: _failed, message: bodyText, ...rest } = data;
+  const { failed: _failed, message: bodyText, meta: _meta, ...rest } = data;
   if (!verdict.failed) {
-    return verdict.text === undefined ? rest : { ...rest, message: verdict.text };
+    return {
+      ...rest,
+      ...(verdict.text === undefined ? {} : { message: verdict.text }),
+      // `meta` 同 dsh 的 `SessionWireEvent.data.meta`：原封不動交給 client 的卡片模型驗。
+      ...(verdict.meta === undefined ? {} : { meta: verdict.meta }),
+    };
   }
   return {
     ...rest,
@@ -1449,13 +1458,15 @@ export class ThreadPump {
    */
   #noteVerdict(event: SessionEvent<'tool/result'>): void {
     if (this.#current === undefined) return;
-    const { callId, isError, message } = event.data;
+    const { callId, isError, message, meta } = event.data;
+    const capped = isError ? undefined : capToolResultMeta(meta, this.#toolTextMaxBytes);
     const verdict: ToolVerdict = {
       failed: isError,
       // **成功也帶文字**（#439）：dsh 的工具卡文字就是這一則的內容，`isError` 是另一個旗標。
       // 抽字的規則與重播那一條共用（`tool-result-text.ts`），兩邊不共用的話同一張卡會「即時
-      // 一個樣、重新整理另一個樣」。
+      // 一個樣、重新整理另一個樣」。meta 的上限同理。
       text: toolResultText(message, this.#toolTextMaxBytes),
+      ...(capped === undefined ? {} : { meta: capped }),
     };
     const forwarded = this.#forwardedFinishes.get(callId);
     if (forwarded === undefined) {
@@ -1467,7 +1478,12 @@ export class ThreadPump {
     this.#openCards.delete(callId);
     this.#forwardedFinishes.delete(callId);
     const settled = applyVerdict(forwarded.data, verdict);
-    if (settled.failed === forwarded.data.failed && settled.message === forwarded.data.message) {
+    // **meta 也要比**（#617）：基座那顆從來不帶 meta，只差這一格的時候不補發，卡就永遠拿不到它。
+    if (
+      settled.failed === forwarded.data.failed &&
+      settled.message === forwarded.data.message &&
+      settled.meta === forwarded.data.meta
+    ) {
       return;
     }
     // 同一個 `tool_call_id` 的第二顆 `tool-finished`：折疊器照 id 換掉那一格，帶著原本的 `output`。

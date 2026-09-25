@@ -148,6 +148,15 @@ export interface ToolEntry {
    */
   readonly text?: string;
   readonly error?: string;
+  /**
+   * 給專屬卡畫的**結構化結果**（[#617](https://github.com/DemianLi/nexus-agent/issues/617)）：讀檔讀到
+   * 哪幾行、搜尋命中什麼、改檔改了哪幾段。照 dsh 的 `tool/result.meta`，**對這一層不透明**——形狀歸
+   * 工具，由畫面那一側的卡片模型自己驗，驗不過就走 generic。
+   *
+   * 只有成功的才有；模型看不到它。太大的由 harness 截過或整格拿掉（上限同 {@link ToolEntry.text}）。
+   * 格式 16 以前的日誌接回來沒有這一格。
+   */
+  readonly meta?: unknown;
   readonly attribution: Attribution;
 }
 
@@ -882,6 +891,8 @@ interface ToolData {
   readonly message?: string;
   /** `tool-finished` 專用：那則 ToolMessage 自己說它失敗了。由 pump 分類，見它的檔頭。 */
   readonly failed?: boolean;
+  /** `tool-finished` 專用：給專屬卡的結構化結果（#617），見 {@link ToolEntry.meta}。 */
+  readonly meta?: unknown;
 }
 
 /** `task` 的參數裡才有 subagent 的名字，而它是一段 JSON 字串。 */
@@ -927,14 +938,14 @@ function reduceTool(
     // **同一個 `tool_call_id` 會來第二次**：人回答了中斷之後圖從 tools 節點重跑，基座
     // 再發一顆 `tool-started`（實測）。無條件 append 的話，畫面上同一顆呼叫長出兩個條目
     // ——而 `id` 是一樣的，所以連「哪一個是真的」都分不出來。第二次是**同一次呼叫的續行**，
-    // 更新那一格；`error` 要一起清掉，不然中斷那段留下的字會跟著新狀態一起顯示。
+    // 更新那一格；`error` 要一起清掉，不然中斷那段留下的字會跟著新狀態一起顯示。`text`、`meta` 同理。
     if (state.entries.some((existing) => existing.id === id)) {
       return {
         ...state,
         subagents,
         entries: replace(state.entries, id, (existing) =>
           existing.kind === 'tool'
-            ? { ...existing, status: 'running', error: undefined, text: undefined }
+            ? { ...existing, status: 'running', error: undefined, text: undefined, meta: undefined }
             : existing,
         ),
       };
@@ -962,6 +973,8 @@ function reduceTool(
               ...entry,
               status: failed ? 'failed' : 'done',
               text: data.message,
+              // 同 `text`：照這一顆換掉。pump 的更正幀只差 meta 時也會來（#617）。
+              meta: failed ? undefined : data.meta,
               ...(failed ? { error: data.message ?? '未指名的錯誤' } : {}),
             }
           : entry,

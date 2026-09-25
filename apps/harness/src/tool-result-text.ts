@@ -49,7 +49,7 @@
  * @module
  */
 
-import type { LoggedMessage } from '@nexus/core';
+import type { LoggedMessage, SearchResultMeta } from '@nexus/core';
 
 /** 中間被截掉那一段的說明。長度只隨位數變，所以預留時用上界算。 */
 function notice(dropped: number): string {
@@ -126,4 +126,42 @@ export function toolResultText(
   const only = content[0] as { type?: unknown; text?: unknown } | null;
   if (only?.type !== 'text' || typeof only.text !== 'string') return undefined;
   return capToolText(only.text, maxBytes);
+}
+
+/** 序列化之後的位元組數。 */
+function metaBytes(meta: unknown): number {
+  return Buffer.byteLength(JSON.stringify(meta), 'utf8');
+}
+
+/**
+ * 一格 `tool/result.meta` 放上線之前的上限（[#617](https://github.com/DemianLi/nexus-agent/issues/617)
+ * 決定 2：**上限等於工具文字的上限**，同一個 `maxBytes`）。即時與重播共用，理由同 {@link toolResultText}。
+ *
+ * - **搜尋照 dsh 的 `capMetaBytes`**（`fs/tool-fs-search/src/presentation.ts:107-117`）：從尾巴整組砍，
+ *   標 `truncated`，`total` 不動，至少留一項——一項自己就超過的也留著，不讓一張空卡蓋掉真的結果。
+ * - **其餘（讀檔、diff）超過就整格不給**：dsh 這兩種沒有上限；我們的歷史頁是照每張卡的最大值算的，
+ *   一次大改寫的 diff 會讓一頁失控（偏離）。web 照 dsh 退：write 用參數算 diff，其他走 generic。
+ *
+ * @param meta - 日誌裡那一份。
+ * @param maxBytes - 上限（位元組）。
+ * @returns 放得下的那一份；放不下就 `undefined`。
+ */
+export function capToolResultMeta(meta: unknown, maxBytes: number): unknown {
+  if (meta === undefined || metaBytes(meta) <= maxBytes) return meta;
+  const search = meta as { readonly shape?: unknown };
+  if (search.shape === 'matches') {
+    const whole = meta as Extract<SearchResultMeta, { shape: 'matches' }>;
+    const files = [...whole.files];
+    while (files.length > 1 && metaBytes({ ...whole, files, truncated: true }) > maxBytes)
+      files.pop();
+    return { ...whole, files, truncated: true };
+  }
+  if (search.shape === 'paths') {
+    const whole = meta as Extract<SearchResultMeta, { shape: 'paths' }>;
+    const paths = [...whole.paths];
+    while (paths.length > 1 && metaBytes({ ...whole, paths, truncated: true }) > maxBytes)
+      paths.pop();
+    return { ...whole, paths, truncated: true };
+  }
+  return undefined;
 }

@@ -296,11 +296,14 @@ describe('GET /threads/:id/history 的載體與協定層', () => {
  *
  * `historyPage` 那一層的判斷由 `conversation-history.test.ts` 釘著；這裡釘的是**接線**：route 有沒有
  * 把回呼接到 `createWireHandler` 的 `warn` 上。兩條線任何一條斷掉，那件事就完全看不見——回應照樣 200、
- * 畫面照樣對。用 `rootSeed` 直接餵一份超標的日誌，不必讓假模型真的讀 85 次檔。
+ * 畫面照樣對。用 `rootSeed` 直接餵一份超標的日誌，不必讓假模型真的讀 170 次檔。
  */
 describe('一頁撐破位元組上限時，server 講一聲', () => {
-  /** 幾則滿版工具結果才撐得破一頁。85 × 50000 = 4.25 MB > 4 MB。 */
-  const OVERSIZED_CALLS = 85;
+  /**
+   * 幾則滿版工具結果才撐得破一頁。170 × 50000 = 8.5 MB > 8 MB。seed 只帶文字、不帶 `meta`，所以要的
+   * 則數是頁上限算法（每張卡文字加 meta，#617）的兩倍。
+   */
+  const OVERSIZED_CALLS = 170;
 
   function oversizedSeed(): SessionEvent[] {
     const ids = Array.from({ length: OVERSIZED_CALLS }, (_, i) => `c${i}`);
@@ -352,13 +355,13 @@ describe('一頁撐破位元組上限時，server 講一聲', () => {
   /**
    * **這條的前提是 schema 的預設值，而 #538 之後那個值改得動。**
    *
-   * 每則上限可設定了（`tool-text` 那一列），所以「85 則滿版會超過一頁上限」只在預設值
+   * 每則上限可設定了（`tool-text` 那一列），所以「170 則滿版會超過一頁上限」只在預設值
    * 底下成立——部署把它調小，這個 seed 就不再超標，這條測試會變成一條什麼都沒測的綠燈。
    * 那正是 #538 三選一裡第三條明著接受的代價。
    *
    * 所以前提寫成顯性斷言：**預設值哪天小到讓這個 seed 不再超標，這裡當場紅**，而不是靜靜空轉。
    */
-  it('前提：預設上限底下，85 則滿版確實撐得破一頁', () => {
+  it('前提：預設上限底下，170 則滿版確實撐得破一頁', () => {
     expect(OVERSIZED_CALLS * DEFAULT_TOOL_TEXT_MAX_BYTES).toBeGreaterThan(HISTORY_PAGE_MAX_BYTES);
   });
 

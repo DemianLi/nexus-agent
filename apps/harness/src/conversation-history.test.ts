@@ -779,7 +779,8 @@ describe('一頁的位元組上限', () => {
    * 防線自己的量測：`fitBytes` 裡那個參數被拿掉的話，這裡會紅。
    */
   it('最後一輪停在核准點時，秤到的不小於真的送出去的', () => {
-    const settled = Array.from({ length: 85 }, (_, i) => `s${i}`);
+    // 170 則滿版文字 ≈ 8.5 MB，撐得破一頁（上限算的是每張卡文字加 meta，#617）。
+    const settled = Array.from({ length: 170 }, (_, i) => `s${i}`);
     const pending = Array.from({ length: 60 }, (_, i) => `p${i}`);
     const body = 'x'.repeat(DEFAULT_TOOL_TEXT_MAX_BYTES);
     const events = log(
@@ -817,7 +818,8 @@ describe('一頁的位元組上限', () => {
    *
    * 所以這一條比的是 `DEFAULT_TOOL_TEXT_MAX_BYTES`，**名字本身就是射程宣告**：它釘的是出廠那一份。
    */
-  it('頁上限就是 80 則滿版工具結果——在 schema 的預設上限底下', () => {
-    expect(HISTORY_PAGE_MAX_BYTES).toBe(80 * DEFAULT_TOOL_TEXT_MAX_BYTES);
+  it('頁上限就是 80 張滿版工具卡（文字加 meta，兩者上限相同）——在 schema 的預設上限底下', () => {
+    // meta 的上限就是文字的上限（#617 決定 2），所以一張滿版卡是兩份 `maxBytes`。
+    expect(HISTORY_PAGE_MAX_BYTES).toBe(80 * (DEFAULT_TOOL_TEXT_MAX_BYTES * 2));
   });
 });
