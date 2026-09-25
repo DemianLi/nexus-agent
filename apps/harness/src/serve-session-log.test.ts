@@ -16,7 +16,7 @@
  */
 
 import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   appendHumanTurn,
@@ -28,6 +28,7 @@ import {
 import type { ConversationState } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
+import { HARNESS_HOME_ENV } from './harness-home.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
@@ -191,7 +192,16 @@ describe('serve 的 --session-log', () => {
     }
   });
 
-  it('沒給旗標就什麼都不落盤，而且畫面上講得出來', async () => {
+  /**
+   * **翻面來的**（#444）：以前這裡守「沒給旗標就什麼都不落盤」。照 dsh 改成預設落在 harness home
+   * 底下的 `sessions` 之後，同一個位置改守「沒給就寫進那裡，畫面上講得出那一格」。
+   *
+   * `env: {}` 沒有 `NEXUS_AGENT_HOME`，所以走的是 `~/.nexus-agent` 那條退路——`HOME` 由
+   * `test-home.setup.ts` 逐條換成暫存目錄，這裡當場再確認一次。
+   */
+  it('沒給旗標就寫進 harness home 底下的 sessions，畫面上講得出那一格', async () => {
+    expect(homedir().startsWith(tmpdir())).toBe(true);
+    const root = join(homedir(), '.nexus-agent', 'sessions');
     const lines: string[] = [];
     running = await runServe({
       argv: ['--port', '0'],
@@ -199,8 +209,37 @@ describe('serve 的 --session-log', () => {
       env: {},
     });
     await driveTurn(running as RunningServe, 'delta');
-    expect(lines.join('\n')).toContain('會話日誌：只在記憶體裡');
-    expect(lines.join('\n')).toContain('--session-log');
+    await (running as RunningServe).close();
+    running = undefined;
+
+    expect(lines.join('\n')).toContain(`會話日誌：${projectDirOf(root)}`);
+    expect(lines.join('\n')).not.toContain('只在記憶體裡');
+    const runDir = await onlyProjectDir(root);
+    expect(readEvents(await readFile(join(runDir, 'delta.jsonl'), 'utf8')).length).toBeGreaterThan(
+      0,
+    );
+  });
+
+  it('NEXUS_AGENT_HOME 給了就落在它底下', async () => {
+    const home = await tmp('nexus-serve-home-');
+    const lines: string[] = [];
+    running = await runServe({
+      argv: ['--port', '0'],
+      log: (line) => lines.push(line),
+      env: { [HARNESS_HOME_ENV]: home },
+    });
+    expect(lines.join('\n')).toContain(`會話日誌：${projectDirOf(join(home, 'sessions'))}`);
+  });
+
+  it('預設的根落在 --workspace 底下時起不來，訊息講得出怎麼繞', async () => {
+    const workspace = await tmp('nexus-serve-ws-');
+    await expect(
+      runServe({
+        argv: ['--port', '0', '--workspace', workspace],
+        log: () => undefined,
+        env: { [HARNESS_HOME_ENV]: join(workspace, 'home') },
+      }),
+    ).rejects.toThrow(/預設的會話日誌目錄.*不能在 --workspace 底下.*--session-log/su);
   });
 
   it('給了旗標就把落腳處印出來', async () => {

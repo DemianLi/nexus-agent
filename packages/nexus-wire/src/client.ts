@@ -104,7 +104,7 @@ export type FeedbackOutcome<T> =
   | { readonly kind: 'rejected'; readonly message: string };
 
 /**
- * `GET /threads` 的結果。`rejected` 是這台 server 列不了（例如沒開 `--session-log`），**不是空清單**，
+ * `GET /threads` 的結果。`rejected` 是這台 server 列不了（例如組裝時沒接落盤），**不是空清單**，
  * 理由見 {@link ThreadListResponse}。
  */
 export type ThreadListOutcome =
