@@ -5,7 +5,8 @@
  * **表的內容照 nexus 實際的工具名**（deepagents 基座＋各 plugin 匯出的 `*_TOOL_NAME`），不是 dsh 的。
  *
  * **這一份只管參數，不管輸出**：結果文字（`ToolEntry.text`）怎麼畫在 `lib/tool-output.ts`，寫檔／改檔的 diff 在
- * `lib/tool-diff.ts`（[#601](https://github.com/DemianLi/nexus-agent/issues/601)）。
+ * `lib/tool-diff.ts`（[#601](https://github.com/DemianLi/nexus-agent/issues/601)），讀檔卡與搜尋卡在
+ * `lib/tool-result-card.ts`（[#625](https://github.com/DemianLi/nexus-agent/issues/625)）。
  *
  * **`execute` 還沒有終端卡**：dsh 有（`terminal-card-model.ts`，解析結果結尾的 exit code），但今天產品路徑上的
  * backend 都沒有 shell，基座不註冊 `execute`（`apps/harness/src/base-tools.ts`）。sandbox backend 註冊它的那天要補

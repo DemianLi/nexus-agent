@@ -18,8 +18,11 @@
  *   或有一項壞掉就退回參數原文，不畫半套。判法在 `lib/todo-view.ts`；清單跟輸入框上方的面板共用（`todo-list.tsx`），
  *   這裡是快照，所以進行中那一項不閃。
  * - **結果與 diff**（#601）：其他工具展開後畫結果文字（`ToolEntry.text`）；`ls`、`read_file`、`glob`、`grep`、`write_file`、
- *   `edit_file` 只畫結果、不畫參數（照 dsh）。`write_file` 畫整檔新增的 diff、`edit_file` 執行中（含停在核准點）畫
- *   `old_string` → `new_string` 的 diff，收著那一行接 `+N −M`，失敗時不接。判法在 `lib/tool-diff.ts`、`lib/tool-output.ts`。
+ *   `edit_file` 只畫結果、不畫參數（照 dsh）。`write_file`、`edit_file` 畫 diff，收著那一行接 `+N −M`，失敗時不接：
+ *   執行中（含停在核准點）從參數算，成功之後畫結果 `meta` 裡實際套用的那幾段；沒有 `meta` 時 write 退回參數算的整檔
+ *   新增、edit 退回結果文字（#625）。判法在 `lib/tool-diff.ts`、`lib/tool-output.ts`。
+ * - **讀檔卡與搜尋卡**（#625）：`read_file`、`grep`、`glob` 成功而且結果帶 `meta` 時，畫帶行號的檔案檢視、分檔的
+ *   命中或路徑清單，取代結果文字；`meta` 缺席或形狀不對就照舊畫結果文字。判法在 `lib/tool-result-card.ts`。
  */
 
 import type { AnswerEntry, Attribution, QuestionItem, ToolEntry } from '@nexus/wire';
@@ -30,7 +33,7 @@ import { AgentOrb } from '@/components/agent-orb';
 import { Counts } from '@/components/change-counts';
 import { CodeBlock } from '@/components/markdown/code-block';
 import { TodoList } from '@/components/todo-list';
-import { ToolDiff, ToolOutputBlock } from '@/components/tool-result';
+import { ToolDiff, ToolOutputBlock, ToolRead, ToolSearch } from '@/components/tool-result';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
@@ -48,6 +51,7 @@ import { basename, PRESENT, presentedFilesOf, presentSummary } from '@/lib/prese
 import type { PresentedFile } from '@/lib/present-view';
 import { TODO_WRITE, todosOf, todoSummary } from '@/lib/todo-view';
 import { toolDiffView } from '@/lib/tool-diff';
+import { readCardOf, searchCardOf } from '@/lib/tool-result-card';
 import { showsInput, toolOutput } from '@/lib/tool-output';
 import { classifyTool, firstLine, toolInputBody, toolSummary, toolTitle } from '@/lib/tool-view';
 
@@ -177,9 +181,21 @@ export function ToolCard({
   const todoLine = todos === undefined ? undefined : todoSummary(todos);
   const failed = entry.status === 'failed' && !stopped;
   const answered = entry.status === 'done';
-  const { name, status, input } = entry;
-  // 參數一長（整檔的 write）比較就不便宜，串流中每一格都會重畫，所以只在這三格變了才重算。
-  const diffView = useMemo(() => toolDiffView({ name, status, input }), [name, status, input]);
+  const { name, status, input, meta } = entry;
+  // 參數一長（整檔的 write）比較就不便宜，串流中每一格都會重畫，所以只在這幾格變了才重算。**`meta` 要算進去**：
+  // 即時路徑先來沒 `meta` 的完成、再來同 id 帶 `meta` 的更正幀，status 早就是 done，只有它變（#625）。
+  const diffView = useMemo(
+    () => toolDiffView({ name, status, input, meta }),
+    [name, status, input, meta],
+  );
+  const readCard = useMemo(
+    () => readCardOf({ name, status, input, meta }),
+    [name, status, input, meta],
+  );
+  const searchCard = useMemo(
+    () => searchCardOf({ name, status, input, meta }),
+    [name, status, input, meta],
+  );
   const output = toolOutput(entry);
   const inputShown = showsInput(entry.name);
   return (
@@ -202,7 +218,10 @@ export function ToolCard({
           )}
         </span>
         <span className="text-ui shrink-0 font-medium">{toolTitle(entry.name)}</span>
-        <code className="text-muted-foreground shrink-0 font-mono text-xs">{entry.name}</code>
+        {/* 手機寬度讓給摘要：標題已經講了是哪一類，工具名是給熟的人對照的；不讓的話改檔卡的路徑只剩「/…」（#625 實機）。 */}
+        <code className="text-muted-foreground hidden shrink-0 font-mono text-xs sm:inline">
+          {entry.name}
+        </code>
         {/* 外層吃掉剩下的寬度，裡面那格才截斷：「+N」要貼在摘要後面，不是被推到最右邊的狀態字旁邊。 */}
         <span className="flex min-w-0 flex-1 gap-1.5 text-xs">
           <span
@@ -268,7 +287,11 @@ export function ToolCard({
           ) : todos !== undefined ? (
             <TodoList todos={todos} />
           ) : diffView !== undefined ? (
-            <ToolDiff path={diffView.diff.path} hunks={diffView.hunks} />
+            <ToolDiff fragments={diffView.fragments} />
+          ) : readCard !== undefined ? (
+            <ToolRead card={readCard} />
+          ) : searchCard !== undefined ? (
+            <ToolSearch card={searchCard} />
           ) : (
             <>
               {inputShown &&
