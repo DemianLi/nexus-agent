@@ -13,7 +13,8 @@
  *   的 `turn/start`／`turn/end` 順序與模型在第二句那一輪讀到的訊息。
  * - **假的 agent**：只有它排得出兩種先後——第一輪還在收尾時答覆就送進來（排在第二句後面），以及答覆
  *   那一輪跑著時又送一句（要排在停住的那幾句後面）。
- * - **wire**：跑著時 `run.start` 收件、停在核准點後再 `input.respond`。
+ * - **wire**：跑著時 `run.start` 收件、停在核准點後再 `input.respond`。停在核准點時送的那句在
+ *   `send-queue.test.ts`（#637 起上行照收）。
  *
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
@@ -218,20 +219,27 @@ describe('真的組裝：排著的第二句撞上第一輪的核准點', () => {
     }
   }, 20000);
 
-  it('收回（按停止）：第二句在收回那一輪收掉之後才跑，模型讀到的是收回的原句', async () => {
+  it('收回（按停止）：第二句停住（#637 的 Q2）；下一次送出才跑，模型讀到的是收回的原句', async () => {
     const run = await assemble([
       SCRIPT[0]!,
       SCRIPT[1]!,
       { content: '第二句的回覆。' },
+      { content: '第三句的回覆。' },
       { content: '備用。' },
     ]);
     try {
       const { second } = await run.stopWithQueued();
       expect(run.pump.cancel()).toBe('withdrawn');
-      await second;
       await run.pump.whenIdle();
 
       expect(run.probe.danger).toBe(0);
+      expect(run.marks()).toEqual(['start:message:第一句', 'end', 'start:resume', 'end']);
+      expect(run.pump.running).toBe(false);
+      expect(run.pump.awaitingInput).toBe(false);
+
+      const third = run.pump.submit({ kind: 'message', text: '第三句' });
+      await Promise.all([second, third]);
+      await run.pump.whenIdle();
       expect(run.marks()).toEqual([
         'start:message:第一句',
         'end',
@@ -239,12 +247,13 @@ describe('真的組裝：排著的第二句撞上第一輪的核准點', () => {
         'end',
         'start:message:第二句',
         'end',
+        'start:message:第三句',
+        'end',
       ]);
       const seen = promptText(run.model, 2);
       expect(seen).toContain('第二句');
       expect(seen).toContain(TOOL_ABORTED_BEFORE_DISPATCH_TEXT);
       expect(seen).not.toContain(ANOTHER_MESSAGE);
-      expect(run.pump.awaitingInput).toBe(false);
     } finally {
       await run.close();
     }
@@ -420,7 +429,7 @@ describe('送達的先後：假的 agent 排', () => {
     );
     try {
       await pump.submit({ kind: 'message', text: 'A' });
-      // 停在核准點時，上行擋著 `run.start`；B、C 是跑著時就收下的那種，這裡直接排。
+      // 停在核准點時送的 B、C：上行照收（#637 的 Q4），pump 停住它們等答完。
       const parked = [
         pump.submit({ kind: 'message', text: 'B' }),
         pump.submit({ kind: 'message', text: 'C' }),

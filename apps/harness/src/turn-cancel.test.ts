@@ -228,27 +228,42 @@ describe('有一輪在跑', () => {
     }
   });
 
-  it('排在後面的那一句不動：停完接著跑', async () => {
+  it('排在後面的那一句停住：停完不接著跑，下一次送出才照 FIFO 跑（#637 的 Q2，翻過 #265 的 Q6）', async () => {
     const probe: Probe = { started: 0, settled: 0 };
     const run = await assemble(
       [
         { content: '動手寫。', toolCalls: [{ name: 'slow_write', args: {} }] },
         { content: '第二句收到。' },
+        { content: '第三句收到。' },
       ],
       [toolsPlugin(probe)],
     );
     try {
       const first = run.pump.submit({ kind: 'message', text: '寫檔' });
-      const second = run.pump.submit({ kind: 'message', text: '第二句' });
+      void run.pump.submit({ kind: 'message', text: '第二句' });
       await until(() => probe.started === 1);
       run.pump.cancel();
       await first;
-      await second;
-      const ends = run
+      await run.pump.whenIdle();
+      const ends = () =>
+        run
+          .root()
+          .filter((event) => event.type === 'turn/end')
+          .map((event) => event.data);
+      // 照 dsh 的 `keepInbox`：保留但停住（`agent-loop/tests/cancel.spec.ts:192-216`，`477b4f4`）。
+      expect(ends()).toEqual([ABORTED_END]);
+      expect(run.pump.running).toBe(false);
+      expect(run.pump.inbox.map((item) => item.text)).toEqual(['第二句']);
+
+      await run.pump.submit({ kind: 'message', text: '第三句' });
+      await run.pump.whenIdle();
+      expect(ends()).toEqual([ABORTED_END, {}, {}]);
+      const texts = run
         .root()
-        .filter((event) => event.type === 'turn/end')
-        .map((event) => event.data);
-      expect(ends).toEqual([ABORTED_END, {}]);
+        .flatMap((event) =>
+          event.type === 'turn/start' && event.data.kind === 'message' ? [event.data.text] : [],
+        );
+      expect(texts).toEqual(['寫檔', '第二句', '第三句']);
     } finally {
       await run.close();
     }
