@@ -18,7 +18,12 @@
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ToolMessage } from '@langchain/core/messages';
+import type { BaseMessage } from '@langchain/core/messages';
+import { MemorySaver } from '@langchain/langgraph';
+import { SessionRegistry } from '@nexus/core';
 import { createQuickJsPlugin, RUN_JAVASCRIPT_TOOL_NAME } from '@nexus/plugin-quickjs';
+import type { QuickJsPluginOptions } from '@nexus/plugin-quickjs';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -67,31 +72,122 @@ describe('run_javascript 在 agent 迴圈裡', () => {
 
   // 資源上限透過組裝點傳得進去的證據。少了這一條，`timeoutMs` 就只是 plugin 單測裡的
   // 一個參數，沒人知道它在真的組裝裡還在不在。
-  it('逾時在真的迴圈裡也擋得住，而且擋下來的是一句話不是一個 exception', async () => {
-    const model = new ScriptedChatModel({
-      turns: [
-        {
-          content: '',
-          toolCalls: [{ name: RUN_JAVASCRIPT_TOOL_NAME, args: { code: 'while (true) {}' } }],
-        },
-        { content: '跑太久了。' },
-      ],
-    });
+  it('逾時在真的迴圈裡也擋得住，而且那一輪接得下去', async () => {
+    const { tool, logged, last } = await runOne({ code: 'while (true) {}' }, { timeoutMs: 200 });
 
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      plugins: [createQuickJsPlugin({ timeoutMs: 200 })],
-    });
-
-    try {
-      const result = await agent.invoke(toAgentInvocation('跑一個無限迴圈。'));
-      const denial = result.messages.find((message) => message.getType() === 'tool');
-
-      // 迴圈沒有被 exception 打斷——模型收到的是一則工具訊息，還接得下去。
-      expect(denial?.text).toContain('執行超過 200 毫秒');
-      expect(result.messages.at(-1)?.text).toBe('跑太久了。');
-    } finally {
-      await dispose();
-    }
+    expect(tool?.text).toContain('執行超過 200 毫秒');
+    expect(logged).toEqual([true]);
+    // 迴圈沒有被 exception 打斷——模型收到的是一則工具訊息，還接得下去。
+    expect(last).toBe('收工。');
   });
 });
+
+/**
+ * **程式失敗是工具失敗**（[#615](https://github.com/DemianLi/nexus-agent/issues/615)，照 dsh
+ * `run_code` 的 `CodeRunFailedError`）：工具拋、圍堵接。以前回一句 `錯誤：…` 的字串，模型、
+ * 會話日誌、web 的工具卡三處都記成成功。
+ *
+ * 走真的組裝、接上會話日誌（`attachSession`，沒接的話圍堵不記日誌），看三處：模型收到的
+ * ToolMessage 是 `status: 'error'`、文字帶得出失敗種類與原因；日誌那顆 `tool/result` 是
+ * `isError: true`；那一輪照常收尾。
+ */
+describe('run_javascript 失敗時回報成工具錯誤', () => {
+  it.each([
+    [
+      '程式拋例外',
+      'throw new TypeError("壞了")',
+      {},
+      'code run failed (exception): TypeError: 壞了',
+    ],
+    [
+      '回傳的 promise 被 reject',
+      'Promise.reject(new RangeError("拒絕了"))',
+      {},
+      'code run failed (exception): RangeError: 拒絕了',
+    ],
+    [
+      '逾時中斷',
+      'while (true) {}',
+      { timeoutMs: 200 },
+      'code run failed (timeout): 執行超過 200 毫秒的上限，已中斷。',
+    ],
+    [
+      '回傳一個永遠不會完成的 promise（demian 2026-09-25 拍板算失敗）',
+      'new Promise(() => {})',
+      {},
+      'code run failed (timeout): 回傳了一個永遠不會完成的 promise',
+    ],
+  ] as const)('%s', async (_label, code, options, expected) => {
+    const { tool, logged, errors, last } = await runOne({ code }, options);
+
+    expect(tool?.status).toBe('error');
+    // 圍堵的前綴只有一層：工具自己不再帶 `錯誤：`。
+    expect(tool?.text).toContain(`工具 ${RUN_JAVASCRIPT_TOOL_NAME} 執行失敗：${expected}`);
+    expect(tool?.text).not.toContain('錯誤：');
+    expect(logged).toEqual([true]);
+    // 碼照 dsh 跟著進日誌：`CodeRunFailedError` 是 `HarnessError`，圍堵記它的 `{ name, code }`。
+    expect(errors).toEqual([{ name: 'CodeRunFailedError', code: 'CODE_RUN_FAILED' }]);
+    expect(last).toBe('收工。');
+  });
+
+  it.each([
+    ['回傳值照舊', '1 + 1', '2'],
+    ['沒有回傳值照舊', 'const x = 1;', '（沒有回傳值）'],
+    ['async 照舊拿得到值', '(async () => 41 + 1)()', '42'],
+  ])('成功的不變：%s', async (_label, code, expected) => {
+    const { tool, logged, errors } = await runOne({ code }, {});
+
+    expect(tool?.status).not.toBe('error');
+    expect(tool?.text).toBe(expected);
+    expect(logged).toEqual([false]);
+    expect(errors).toEqual([]);
+  });
+});
+
+/**
+ * 在真的組裝、接上會話日誌的情況下叫一次 `run_javascript`。
+ *
+ * @returns 模型收到的那則工具訊息、root 日誌上每顆 `tool/result` 的 `isError`、最後一則訊息的文字。
+ */
+async function runOne(
+  args: { readonly code: string },
+  options: QuickJsPluginOptions,
+): Promise<{
+  tool: ToolMessage | undefined;
+  logged: boolean[];
+  errors: unknown[];
+  last: string | undefined;
+}> {
+  const { agent, attachSession, dispose } = await createNexusAgent({
+    model: new ScriptedChatModel({
+      turns: [
+        { content: '', toolCalls: [{ name: RUN_JAVASCRIPT_TOOL_NAME, args }] },
+        { content: '收工。' },
+      ],
+    }),
+    checkpointer: new MemorySaver(),
+    plugins: [createQuickJsPlugin(options)],
+  });
+  const sessions = new SessionRegistry('quickjs');
+  const detach = attachSession(sessions);
+  let messages: BaseMessage[];
+  try {
+    ({ messages } = (await agent.invoke(toAgentInvocation('跑。'), {
+      configurable: { thread_id: 'quickjs' },
+    })) as { messages: BaseMessage[] });
+  } finally {
+    detach();
+    await dispose();
+  }
+  const rootLog = sessions.list().find((entry) => entry.address.kind === 'root');
+  return {
+    tool: messages.find((message): message is ToolMessage => ToolMessage.isInstance(message)),
+    logged: (rootLog?.log.events ?? []).flatMap((event) =>
+      event.type === 'tool/result' ? [event.data.isError] : [],
+    ),
+    errors: (rootLog?.log.events ?? []).flatMap((event) =>
+      event.type === 'tool/result' && event.data.error !== undefined ? [event.data.error] : [],
+    ),
+    last: messages.at(-1)?.text,
+  };
+}

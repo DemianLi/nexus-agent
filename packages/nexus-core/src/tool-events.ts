@@ -10,7 +10,9 @@
  * 字串逐字對過 `references/deepseek-harness`（SHA `c291e7961a515f6d7af9304e7fd1d257929aef26`）。
  * **一般拋錯與核准被拒沒有碼**：dsh 的 `errorInfo` 只替帶碼的 `HarnessError` 填這一格
  * （`packages/core/tools/src/index.ts:635-641`），其餘的錯誤結果不帶 `error`。所以「沒碼」是
- * 照抄，不是漏分類。
+ * 照抄，不是漏分類。**拋出 {@link HarnessError} 的有碼**，同 dsh：`{ name, code }` 原樣進
+ * `tool/result`（`477b4f4` 的 `index.ts:661-668`；[#615](https://github.com/DemianLi/nexus-agent/issues/615)
+ * 之前我們沒有這個基底類別，第一個用它的是 `@nexus/plugin-quickjs` 的 `CodeRunFailedError`）。
  *
  * ## 碼怎麼從內層走到外層
  *
@@ -29,6 +31,29 @@
 
 import { HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { isCommand } from '@langchain/langgraph';
+
+/**
+ * 帶穩定分類碼的錯誤基底，照 dsh 的 `HarnessError`（`packages/llm/llm/src/error.ts:13-22`，`477b4f4`）：
+ * `code` 給程式分流用，跟給人讀的 `message` 分開；`name` 預設是子類別的建構子名。
+ *
+ * **工具拋它的時候碼會進會話日誌**：圍堵的 `classifyThrownToolError` 把它記成 `{ name, code }`，
+ * 同 dsh 執行管線的 `errorInfo`。其餘的拋錯照舊沒有碼。
+ */
+export class HarnessError extends Error {
+  /** 穩定的機器可讀分類碼。分流看這一格，不要解析 `message`。 */
+  readonly code: string;
+
+  /**
+   * @param message - 給人讀的訊息。
+   * @param code - 分類碼。
+   * @param options - 標準的 `ErrorOptions`（`cause`）。
+   */
+  constructor(message: string, code: string, options?: ErrorOptions) {
+    super(message, options);
+    this.code = code;
+    this.name = new.target.name;
+  }
+}
 
 /** 一次失敗的結果是哪一種。照 dsh 的 `ToolErrorInfo`：`name` 是錯誤類別名，`code` 是分類碼。 */
 export interface ToolErrorInfo {
