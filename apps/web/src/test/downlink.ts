@@ -51,15 +51,24 @@ export function fakeDownlink() {
     for (const listener of listeners.get(threadId) ?? []) listener(events);
   }
 
-  function customFrame(name: string, payload: unknown): Event {
+  function pushedFrame(method: string, id: string, data: unknown): Event {
     const current = seq++;
     return {
       type: 'event',
       seq: current,
-      event_id: `${name}:${current}`,
-      method: 'custom',
-      params: { namespace: [], timestamp: 0, data: { name, payload } },
+      event_id: `${id}:${current}`,
+      method,
+      params: { namespace: [], timestamp: 0, data },
     } as Event;
+  }
+
+  function customFrame(name: string, payload: unknown): Event {
+    return pushedFrame('custom', name, { name, payload });
+  }
+
+  /** root 那一輪的生命週期（開跑／收尾）。 */
+  function lifecycleFrame(event: 'running' | 'completed'): Event {
+    return pushedFrame('lifecycle', 'lifecycle', { event, graph_name: 'root' });
   }
 
   function inboxFrame(payload: InboxPayload): Event {
@@ -111,5 +120,5 @@ export function fakeDownlink() {
     return { type: 'success', id: 4, result: { accepted: true } };
   }
 
-  return { open, push, accept, update, inboxFrame, titleFrame };
+  return { open, push, accept, update, inboxFrame, titleFrame, lifecycleFrame };
 }

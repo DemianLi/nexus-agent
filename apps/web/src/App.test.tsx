@@ -1742,7 +1742,12 @@ describe('會話標題（#655）', () => {
     expect(current.textContent).toContain('目前這條');
     expect(list.textContent).not.toContain(BLANK_THREAD_LABEL);
 
-    // #650：模型產生的標題晚一點再推一顆，照樣換；搜尋吃得到新標題。
+    // #650：模型產生的標題可能在這一輪收完、閒著的時候才推來，照樣換；搜尋吃得到新標題。
+    fake.downlink.push(fake.opened[0]!, [
+      fake.downlink.lifecycleFrame('running'),
+      fake.downlink.lifecycleFrame('completed'),
+    ]);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('就緒'));
     fake.downlink.push(fake.opened[0]!, [fake.downlink.titleFrame('修好登入頁的錯誤')]);
     await waitFor(() => expect(heading().textContent).toBe('修好登入頁的錯誤'));
     expect(document.title).toBe('修好登入頁的錯誤 — nexus-agent');
