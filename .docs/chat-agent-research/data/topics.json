@@ -1,0 +1,154 @@
+{
+  "date": "2026-09-26",
+  "topics": [
+    {
+      "key": "T1",
+      "nn": "01",
+      "slug": "goal-intent",
+      "name": "Goal Alignment & Intent Detection（目標對齊與意圖偵測）",
+      "scope_in": "對話 agent 如何判斷使用者要什麼：意圖分類與偵測（含聯合 intent/slot、out-of-scope／OOD 意圖、few-shot／zero-shot 意圖）、LLM 時代的意圖理解與依意圖路由、模糊與不完整指令下的澄清提問（何時問、問什麼）、使用者真實目標的推斷與偏好引出。",
+      "scope_out": "AI 價值對齊（RLHF／Constitutional AI 這類「對齊人類價值」）只有在直接處理「對齊某位使用者當下的目標」時才收；一般的文本分類不收。",
+      "subareas": [
+        { "name": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖", "quota": 7 },
+        { "name": "LLM 時代的意圖理解、zero-shot 意圖與意圖路由", "quota": 5 },
+        { "name": "模糊指令與澄清提問", "quota": 7 },
+        { "name": "使用者目標推斷與偏好引出", "quota": 5 }
+      ]
+    },
+    {
+      "key": "T2",
+      "nn": "02",
+      "slug": "dialogue-state-tracking",
+      "name": "Multi-Turn State Tracking / DST（多輪狀態追蹤）",
+      "scope_in": "多輪對話中狀態的表示、更新與維護：傳統任務型對話的 DST 與其資料集（MultiWOZ、SGD 等）、LLM 時代的 zero/few-shot DST、LLM agent 在長多輪互動中的狀態維護（對話記憶管理、多輪表現退化、指令在多輪中的保持）。",
+      "scope_out": "與對話狀態無關的長期個人化記憶、一般 RAG 不收；純 NLU 單輪標註屬 T1。",
+      "subareas": [
+        { "name": "傳統任務型對話 DST 與資料集", "quota": 9 },
+        { "name": "LLM 時代的 zero/few-shot DST", "quota": 7 },
+        { "name": "LLM agent 的多輪狀態維護、對話記憶與多輪退化", "quota": 8 }
+      ]
+    },
+    {
+      "key": "T3",
+      "nn": "03",
+      "slug": "agent-observation",
+      "name": "Agent Observation（觀測：感知與可觀測性）",
+      "scope_in": "兩塊按配額切開（使用者拍板：計入的 20 篇中約 12 篇感知、8 篇可觀測性）。(a) 感知／觀測空間：agent 如何接收與表徵環境回饋 —— ReAct 式 Observation、工具回傳結果的格式與壓縮、網頁／GUI 觀測（accessibility tree、截圖、set-of-mark）、長觀測的截斷與摘要、agent-computer interface 對表現的影響、grounding。(b) 可觀測性／監控：如何觀測 agent —— 執行期監控、行為記錄、異常與失敗偵測、安全監控（含 CoT／行動監控）。",
+      "scope_out": "純電腦視覺的感知模型、與 agent 無關的傳統軟體 APM 不收；軌跡的資料化與失敗歸因屬 T4。",
+      "subareas": [
+        { "name": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）", "quota": 14 },
+        { "name": "可觀測性／監控（執行期監控、異常偵測、安全監控）", "quota": 10 }
+      ]
+    },
+    {
+      "key": "T4",
+      "nn": "04",
+      "slug": "agent-trajectory",
+      "name": "Agent Trace / Trajectory（軌跡）",
+      "scope_in": "把 agent 的一次執行當成資料物件：軌跡的格式、收集與合成（用於訓練或分析的 agent trajectory 資料集）、軌跡分析與失敗分類／歸因（哪一步、哪個 agent 出錯）、軌跡層級與步驟層級的評估與 process reward。",
+      "scope_out": "以 benchmark 整體設計為主的論文屬 T7；分數的定義與聚合屬 T8；即時監控屬 T3(b)。",
+      "subareas": [
+        { "name": "軌跡的格式、收集與合成（含以軌跡訓練 agent）", "quota": 8 },
+        { "name": "軌跡分析、失敗分類與歸因", "quota": 8 },
+        { "name": "軌跡／步驟層級評估與 process reward", "quota": 8 }
+      ]
+    },
+    {
+      "key": "T5",
+      "nn": "05",
+      "slug": "self-correction-reflection",
+      "name": "Self-Correction & Reflection（自我修正與反思）",
+      "scope_in": "agent 或 LLM 發現並修正自己錯誤的機制：內在自我修正與口語反思（含「LLM 其實不能自我修正」這類批判性研究）、借外部回饋或工具的修正（驗證器、執行結果、檢索）、以訓練得到的自我修正能力與 critique 模型、搜尋與回溯式修正。",
+      "scope_out": "一般的 chain-of-thought 提示、與修正無關的 RLHF 不收。",
+      "subareas": [
+        { "name": "內在自我修正與口語反思（含批判性研究）", "quota": 8 },
+        { "name": "外部回饋／工具輔助的修正", "quota": 8 },
+        { "name": "訓練得到的自我修正、critique 模型與搜尋回溯", "quota": 8 }
+      ]
+    },
+    {
+      "key": "T6",
+      "nn": "06",
+      "slug": "user-simulator-feedback",
+      "name": "User Simulator & User Feedback Loop（使用者模擬器與回饋迴路）",
+      "scope_in": "模擬使用者與利用使用者回饋：經典 agenda-based 與神經使用者模擬器（任務型對話 RL 的訓練對手）、LLM 使用者模擬器（用於評估與訓練 agent，含逼真度與偏差研究）、使用者回饋迴路（從部署中的顯式／隱式回饋學習、使用者滿意度估計）。",
+      "scope_out": "以 benchmark 為主、使用者模擬只是其中一環的論文，除非它對模擬器本身有獨立貢獻，否則屬 T7；一般 RLHF 偏好資料收集不收。",
+      "subareas": [
+        { "name": "經典與神經使用者模擬器", "quota": 6 },
+        { "name": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）", "quota": 10 },
+        { "name": "使用者回饋迴路與滿意度估計", "quota": 8 }
+      ]
+    },
+    {
+      "key": "T7",
+      "nn": "07",
+      "slug": "agent-evaluation",
+      "name": "Agent Evaluation / Eval（評估方法）",
+      "scope_in": "怎麼評：agent 基準與評估環境的設計（可執行環境、工具／網頁／作業系統／軟體工程任務）、多輪對話與互動式評估、LLM-as-a-judge／agent-as-a-judge 與評估本身的可靠性（偏差、資料污染、可重現性、人評協定）。",
+      "scope_out": "分數怎麼定義與聚合屬 T8；軌跡的步驟級評分屬 T4。",
+      "subareas": [
+        { "name": "agent 基準與評估環境設計", "quota": 10 },
+        { "name": "多輪對話與互動式評估", "quota": 6 },
+        { "name": "LLM/agent-as-judge 與評估可靠性", "quota": 8 }
+      ]
+    },
+    {
+      "key": "T8",
+      "nn": "08",
+      "slug": "task-completion-score",
+      "name": "Task Completion Score（任務完成分數）",
+      "scope_in": "分數怎麼定義與聚合：任務成功的判準（終態比對、目標達成、inform/success）、多次試驗的可靠性度量（pass@k、pass^k、一致性、變異與誤差棒）、部分分數與過程度量（progress rate、子目標完成、獎勵模型打分）、成本／效率／使用者滿意度等多目標分數。",
+      "scope_out": "benchmark 環境本身的設計屬 T7；只提出新環境、沒有討論分數定義的論文不收。",
+      "subareas": [
+        { "name": "任務成功的判準", "quota": 7 },
+        { "name": "多次試驗的可靠性度量與統計嚴謹性", "quota": 7 },
+        { "name": "部分分數與過程度量", "quota": 6 },
+        { "name": "成本、效率與使用者滿意度等多目標分數", "quota": 4 }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "key": "E1",
+      "label": "External Input",
+      "from": "T6",
+      "to": "T1",
+      "meaning": "使用者模擬器（或真實使用者）的輸入進入目標對齊"
+    },
+    {
+      "key": "E2",
+      "label": "State Adjustments",
+      "from": "T5",
+      "to": "T2",
+      "meaning": "反思修正的結果回寫對話狀態"
+    },
+    {
+      "key": "E3",
+      "label": "Anomalies Detected",
+      "from": "T4",
+      "to": "T5",
+      "meaning": "軌跡中偵測到異常時觸發自我修正"
+    },
+    {
+      "key": "E4",
+      "label": "Nominal Path",
+      "from": "T4",
+      "to": "T6",
+      "meaning": "正常路徑繼續與使用者（模擬器）互動"
+    },
+    {
+      "key": "E5",
+      "label": "Correction Logs",
+      "from": "T5",
+      "to": "T7",
+      "meaning": "修正紀錄回流評估"
+    },
+    {
+      "key": "E6",
+      "label": "Interaction Logs",
+      "from": "T6",
+      "to": "T7",
+      "meaning": "互動紀錄回流評估"
+    }
+  ]
+}
