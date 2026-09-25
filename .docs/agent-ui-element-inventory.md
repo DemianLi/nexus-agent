@@ -17,7 +17,7 @@
 
 | 問題 | 結論 | 在 |
 | --- | --- | --- |
-| 清單怎麼排 | 照 nexus 的 UI 概念分 8 區、36 項；每項標 wire 上有沒有資料（沒資料的元件先做只是空殼） | §2 |
+| 清單怎麼排 | 照 nexus 的 UI 概念分 8 區、37 項（第 37 項是 2026-09-25 從第 9 項拆出來的）；每項標 wire 上有沒有資料（沒資料的元件先做只是空殼） | §2 |
 | 現在就能做的 | 純前端：殼層、手機抽屜、主題、toast；wire 已有資料：會話列表、訊息流（human／ai／tool）、核准、提問、狀態、停止、回饋、slash 命令 | §2 的 P0 |
 | wire 還沒有的 | reasoning、連線狀態、todo、goal、plan mode、context 用量、佇列、子代理對話檢視、交付檔案 | §2 的 P1 |
 | ↑ 這一列 2026-09-22 已複查 | 交付檔案那一項已經做完；「子代理血緣」是這一列的筆誤（血緣＝第 15 列，本來就是 P0，P1 的是第 16 列的唯讀檢視）；其餘七項逐項的現況見 §2.0 | §2.0 |
@@ -101,7 +101,8 @@
 | 6 | 會話列表（分組、搜尋、狀態點） | P0（`ThreadSummary`、`ThreadListResult`） | `ui-sidebar`（multi-level tree、search、grouping、state dots）、`ui-primitives/StateDot` | — | 列表 stagger 40ms | 現有 `thread-list.tsx` |
 | 7 | 新對話／空白狀態 hero | P0 | `ui-conversation/.../EmptyHero`、`HeroShell` | AIE `suggestion` | `thinking-orbs` `breathing` | |
 | 8 | 會話標頭（標題、工作目錄、背景工作） | P1 | `ui-jobs`、`ui-open-in-app`、`ui-schedule` | — | — | |
-| 9 | 歷史分頁載入（往回捲） | P0（`ThreadHistoryQuery`） | `ui-chat/TurnNavigator` | sc `message-scroller` | skeleton | #306 已做讀取 |
+| 9 | 歷史分頁載入（往回捲） | P0（`ThreadHistoryQuery`） | `ui-chat/ChatView`（`loadOlderAnchored`：一顆按鈕、自己記錨點） | sc `message-scroller` | —（**不做骨架**：跟真的內容不一樣高，換掉那一下又要補位置；規格 §7 也把載入歷史列在不動的那一類） | #306 做了讀取與按鈕；2026-09-25 補完（`earlier-pager.tsx`）：捲到頂端附近而且有往上的意圖才自動換一頁，按鈕留著；讀取中「讀取中…」；失敗畫在按鈕旁、改「再試一次」、不自動重試；讀完報讀接上幾則。輪次側軌拆成第 37 項 |
+| 37 | 輪次導覽側軌（每輪一格，點到還沒載入的輪先翻到那裡） | P1（wire 沒有整條對話的輪次索引） | `ui-chat/TurnNavigator` | — | — | 2026-09-25 從第 9 項拆出來；要 harness 先補索引，有需要再開卡 |
 
 ### 2.3 訊息流
 
