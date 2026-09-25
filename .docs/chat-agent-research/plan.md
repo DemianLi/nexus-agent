@@ -62,7 +62,9 @@
 1. **主節點是這個節點**。同一篇論文只會被指派給一個主節點、只精讀一次；別的節點可以引用它，但不計入別的節點的 20 篇。所以 8 × 20 是 **160 篇不重複**的論文。
 2. **讀到全文**（`level=full`，來源是 arXiv HTML 或 ar5iv）。只拿得到摘要的不計。
 3. **精讀後沒有被判成低價值**。讀了才發現是水論文的，如實標出，不計。
-4. **錨點驗證通過**：筆記裡每個關鍵數字與主張都附一小段原文錨點，由 `arxiv_tool.py anchors` 對快取全文做字串比對，至少 3 個 exact。
+4. **錨點驗證通過**：筆記裡每個關鍵數字與主張都附一小段原文錨點，由 `arxiv_tool.py anchors` 對快取全文做字串比對，至少 3 個 exact，**而且其中至少 2 個落在全文 20% 之後**。試跑時閱讀 agent 的錨點全取自摘要與引言，那樣驗不到方法與實驗的主張，所以加了深處的門檻。
+
+計數由 [`tools/check_notes.py`](tools/check_notes.py) 重跑錨點比對算出，不採用閱讀 agent 自己回報的數字。
 
 湊不滿 20 就先讀候補；**候補讀完還是不足，如實報缺口，不降標準填數字**。
 
@@ -73,6 +75,8 @@
 | 階段 | 做什麼 | agent 數（估） |
 | --- | --- | --- |
 | **W1 發現與篩選** | 每個節點 3 路並行找候選（綜述 snowball、arXiv 關鍵字、商用採納），每路都先過 ID 閘門；再 1 個篩選 agent 查引用數、依標準排出 24 主選加 6 候補；最後做跨節點去重，由 1 個仲裁 agent 決定共用論文的主節點 | 8×3 + 8 + 1 ≈ **33** |
+| **W1b 重新篩選** | W1 的篩選 agent 轉抄的數字不可信、寫在 prompt 裡的規則沒人擋，所以改成程式建候選池（[`tools/pool.py`](tools/pool.py)）算數字與硬旗標，agent 只做範圍判斷，另有反方 agent 挑錯 | 8 篩選 + 8 反方 + 1 仲裁 |
+| **人工複核** | W1b 的結果過 [`tools/build_shortlist.py`](tools/build_shortlist.py) 閘門仍有系統性問題（仲裁判錯節點、高引用但離題的論文混入、經典漏收），由我逐節點審查，每篇的歸屬與理由寫在 [`tools/review_overlay.py`](tools/review_overlay.py) | 0 |
 | **W2 精讀** | 一篇一個 agent（全文 40–80k tokens，一個 agent 塞多篇會擠爆 context）。讀全文、寫結構化筆記、交錨點；主選讀完不足 20 再讀候補 | 8×24 + 候補 ≈ **200–240** |
 | **W3 綜合與驗證** | 每節點一章；對抗式查核每章的主張是否有筆記支持；能用程式驗的主張寫程式驗；最後一份跨節點綜合，處理 6 條邊；再由一個 completeness critic 問「缺了什麼」 | 8 + 8 + 1 + 1 ≈ **20–30** |
 
@@ -91,11 +95,15 @@
 ├── chapters/NN-<slug>.md   每節點一章（W3）
 ├── data/
 │   ├── topics.json         8 個節點與 6 條邊的定義
-│   ├── candidates/         每節點全部候選與篩選決定（W1）
-│   └── shortlist.json      去重後的最終名單：主選與候補（W1）
+│   ├── pool/               每節點的候選池：來源、S2 數字、旗標（W1b）
+│   ├── candidates/         每節點全部候選與篩選決定
+│   ├── w1b-result.json     W1b 篩選 agent 的原始結果
+│   ├── review-final.json   人工複核後交給閘門的最終輸入
+│   ├── shortlist.json      去重後的最終名單：主選與候補
+│   └── reading-status.json 每篇精讀的計數結果（W2，check_notes.py 產出）
 ├── notes/<arxiv-id>.json   每篇精讀筆記（W2）
 ├── verify/                 驗證程式碼（W3）
-├── tools/arxiv_tool.py     arXiv／S2 工具
+├── tools/                  arxiv_tool.py（arXiv／S2）、pool.py、build_shortlist.py、review_overlay.py、check_notes.py
 └── .cache/                 全文、API 快取與錨點原文（不進版控）
 ```
 
