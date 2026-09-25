@@ -951,3 +951,25 @@ describe('讀檔卡與搜尋卡（#625）', () => {
     expect(await axeViolations(container)).toEqual([]);
   });
 });
+
+describe('讀檔卡收著時不畫內容（#625）', () => {
+  it('收著的卡沒有讀檔卡：高亮會走過 meta 的每一行，只在展開時才付', () => {
+    render(
+      <ToolCard
+        entry={tool({
+          meta: {
+            path: '/a.ts',
+            offset: 1,
+            lines: [{ number: 1, text: 'const a = 1;' }],
+            totalLines: 1,
+            lang: 'ts',
+          },
+        })}
+        beam={false}
+      />,
+    );
+    expect(screen.queryByTestId('tool-read')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /讀取/ }));
+    expect(screen.getByTestId('tool-read')).toBeTruthy();
+  });
+});
