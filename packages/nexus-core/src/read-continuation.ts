@@ -55,7 +55,10 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { ToolMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import { readLangHintForPath } from './code-language.js';
 import { resolveToolName } from './containment.js';
+import { putToolResultMeta } from './tool-result-meta.js';
+import type { ReadResultMeta } from './tool-result-meta.js';
 
 /** 這個 middleware 的名字。排序斷言用得到。 */
 export const READ_CONTINUATION_MIDDLEWARE_NAME = 'nexusReadContinuation';
@@ -82,6 +85,8 @@ interface ReadExtent {
 /** 一次工具呼叫裡記下的東西。`extent` 沒有 ＝ 這一次沒有讀到文字內容。 */
 interface CallRecord {
   extent?: ReadExtent;
+  /** 交給工具的那幾行，原文（給 meta，見 {@link readResultMeta}）。跟 `extent` 同時寫。 */
+  lines?: readonly string[];
 }
 
 /** 正在跑的那一次 `read_file`。每次呼叫各 `run` 一份，平行的兩次不共用。 */
@@ -122,7 +127,9 @@ async function readWithExtent(
   if (result.content === EMPTY_CONTENT_WARNING) return result;
   const rest = result.content.split('\n');
   const remaining = countLines(rest);
-  record.extent = { offset, shown: Math.min(limit, remaining), total: offset + remaining };
+  const shown = Math.min(limit, remaining);
+  record.extent = { offset, shown, total: offset + remaining };
+  record.lines = rest.slice(0, shown);
   return { ...result, content: rest.slice(0, limit).join('\n') };
 }
 
@@ -187,6 +194,44 @@ export function continuationFooter(extent: ReadExtent, text: string): string {
     : `(End of file - total ${extent.total} lines)`;
 }
 
+/**
+ * 讀檔的 meta（[#617](https://github.com/DemianLi/nexus-agent/issues/617)），形狀同 dsh 的 `FsReadMeta`。
+ *
+ * **只放模型完整看到的那幾行**，判法同 {@link continuationFooter}：基座因為大小截斷時，最後看得到的
+ * 那一行可能只顯示了一半，它與它之後的都不放。一行都沒有完整顯示的話整格不給——畫一張空卡比 generic
+ * 更會讓人讀錯。
+ *
+ * @param path - 模型給的路徑。
+ * @param extent - backend 讀到的範圍。
+ * @param lines - 交給工具的那幾行。
+ * @param text - 模型收到的文字（接 footer 之前）。
+ * @returns meta；一行都沒有完整顯示就 `undefined`。
+ */
+export function readResultMeta(
+  path: string,
+  extent: ReadExtent,
+  lines: readonly string[],
+  text: string,
+): ReadResultMeta | undefined {
+  let count = extent.shown;
+  if (text.includes(BASE_TRUNCATION_MARK)) {
+    const visible = lastVisibleLine(text) ?? extent.offset + 1;
+    count = Math.max(0, visible - 1 - extent.offset);
+    if (count === 0) return undefined;
+  }
+  const lang = readLangHintForPath(path);
+  return {
+    path,
+    offset: extent.offset + 1,
+    lines: lines.slice(0, count).map((line, index) => ({
+      number: extent.offset + 1 + index,
+      text: line,
+    })),
+    totalLines: extent.total,
+    ...(lang === undefined ? {} : { lang }),
+  };
+}
+
 /** 把一行接在文字結果最後：字串直接接，文字塊陣列接在最後一個文字塊上。其餘原樣。 */
 function appendFooter(
   content: ToolMessage['content'],
@@ -220,8 +265,18 @@ export function createReadContinuationMiddleware(): AgentMiddleware {
       if (extent === undefined || !ToolMessage.isInstance(result) || result.status === 'error') {
         return result;
       }
-      const content = appendFooter(result.content, (text) => continuationFooter(extent, text));
+      let shownText: string | undefined;
+      const content = appendFooter(result.content, (text) => {
+        shownText = text;
+        return continuationFooter(extent, text);
+      });
       if (content === undefined) return result;
+      const path = (request.toolCall.args as { readonly file_path?: unknown } | undefined)
+        ?.file_path;
+      if (typeof path === 'string' && shownText !== undefined && record.lines !== undefined) {
+        const meta = readResultMeta(path, extent, record.lines, shownText);
+        if (meta !== undefined) putToolResultMeta(READ_TOOL, meta);
+      }
       // 只換內容，其餘每一格原樣帶過去（id、狀態、別的 middleware 記在訊息上的東西）。
       return new ToolMessage({
         content,

@@ -28,6 +28,7 @@ import { createContainmentMiddleware } from './containment.js';
 import { createOutputSchemaMiddleware } from './output-schema.js';
 import { createFsToolErrorsMiddleware, recordBackendOutcomes } from './fs-tool-errors.js';
 import { createReadContinuationMiddleware, recordReadExtent } from './read-continuation.js';
+import { recordToolResultMeta } from './tool-result-meta.js';
 import {
   createInvalidArgumentsCarrier,
   createInvalidToolArgsMiddleware,
@@ -471,8 +472,16 @@ export function foldRegistry(
   };
 
   if (permissions.length > 0) params.permissions = permissions;
-  // 兩層都轉交同一個實例；讀到哪那一層在內側，失敗記錄看到的是它切回去之後的那份。
-  if (backend !== undefined) params.backend = recordBackendOutcomes(recordReadExtent(backend));
+  // 三層都轉交同一個實例；讀到哪那一層在內側，失敗記錄看到的是它切回去之後的那份。
+  // **抓 meta 的那層在最內側**：改檔之前讀原檔那一次不能經過失敗記錄——新建時「讀不到」會被記成
+  // 一次 backend 失敗，把成功的寫入改判成失敗。見 {@link ./tool-result-meta.ts}。
+  if (backend !== undefined) {
+    params.backend = recordBackendOutcomes(
+      recordReadExtent(
+        recordToolResultMeta(backend, { search: searchMetaAllowed(registry, permissions) }),
+      ),
+    );
+  }
 
   const skills = registry.skills.sources();
   if (skills.length > 0) params.skills = skills;
@@ -527,6 +536,25 @@ function assertScopesHaveSubAgents(registry: PluginRegistry): void {
  * 分成「宇宙」與「可見集合」兩件事是照 dsh 的 `ToolProviderResult.knownNames`：
  * 設定裡列到一個此處不可見、但別處確實存在的名字，是合法的，不是打錯字。
  */
+/**
+ * 搜尋（`grep`／`glob`）的 meta 開不開：**root 與每個 subagent 都沒有 `permissions` 規則才開。**
+ *
+ * 基座的搜尋工具拿到 backend 的結果之後還會照 `permissions` 濾一次，而抓 meta 的那一層看到的是濾之前的
+ * 那份——照樣放進 meta，模型看不到的路徑就會出現在畫面上。比對規則是基座沒匯出的 `filterByPermissions`，
+ * 自己重寫一份寫錯的代價是外洩，所以在組裝期整類關掉，同 dsh 在工具自己那一層產生 meta 的保證
+ * （它的 meta 由濾過的結果算）。**今天產品碼沒有人註冊規則**，出貨的組裝一律開著。
+ */
+function searchMetaAllowed(
+  registry: PluginRegistry,
+  permissions: readonly FilesystemPermission[],
+): boolean {
+  if (permissions.length > 0) return false;
+  for (const [, entry] of registry.subagents.entries()) {
+    if ((entry.value.permissions ?? []).length > 0) return false;
+  }
+  return true;
+}
+
 function knownToolNames(
   registry: PluginRegistry,
   baseToolNames: readonly string[] | undefined,

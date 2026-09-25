@@ -576,6 +576,14 @@ export interface SessionEventMap {
     readonly isError: boolean;
     readonly error?: ToolErrorInfo;
     readonly message?: LoggedMessage;
+    /**
+     * 給畫面的結構化結果：讀檔讀到哪幾行、搜尋命中什麼、改檔改了哪幾段（格式 16 起，
+     * [#617](https://github.com/DemianLi/nexus-agent/issues/617)）。形狀同 dsh，逐工具列在 `tool-result-meta.ts`。
+     *
+     * **模型看不到它**，同 dsh（surface 投影只回 `message`）：推模型歷史的一側不讀這一格。失敗的呼叫
+     * 不帶。**這裡存完整的一份**，上線那一刻才截，同 `message` 的文字。
+     */
+    readonly meta?: unknown;
   };
   /**
    * 一則回覆的評分新建或改了，**帶修改之後的完整值**。後寫覆蓋先寫，被 `feedback/message-delete`
