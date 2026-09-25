@@ -21,13 +21,15 @@ import { ChatOpenAI } from '@langchain/openai';
 import { SessionRegistry, SUBAGENT_MAX_TOKENS_REASON } from '@nexus/core';
 import type { InvariantError, PluginEntry, SessionEvent } from '@nexus/core';
 import { createCoreInvariantPlugin } from '@nexus/core/invariant';
-import type { AiEntry, Event } from '@nexus/wire';
+import type { AiEntry, ConversationState, Event } from '@nexus/wire';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
 import { runTurn } from './cli.js';
+import { historyFrames } from './conversation-history.js';
 import { withEmptyAssistantContent } from './live-model.js';
+import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 
@@ -311,43 +313,72 @@ describe('CLI（非串流）', () => {
   });
 });
 
+/** web 那條：真的 pump、訂 `messages`／`tools`／`lifecycle`，同瀏覽器那一端。 */
+async function assembleWeb(replies: readonly Reply[], bodies: string[]) {
+  const upstream = await fakeOpenAi(replies);
+  const violations: InvariantError[] = [];
+  const built = await createNexusAgent({
+    model: openAi(upstream.baseURL),
+    checkpointer: new MemorySaver(),
+    plugins: [echoPlugin(bodies), createCoreInvariantPlugin()],
+    onInvariantViolation: (error) => violations.push(error),
+  });
+  const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'max-tokens-web');
+  const detach = built.attachSession(pump.sessions);
+  const unwatch = built.attachInvariants(pump.sessions);
+  if (unwatch === undefined) throw new Error('不變量沒接上：配套入口是空的');
+  const frames: Event[] = [];
+  const line = new AbortController();
+  const stream = pump.subscribe(['messages', 'tools', 'lifecycle'], line.signal);
+  const draining = (async () => {
+    for await (const frame of stream) frames.push(frame);
+  })();
+  return {
+    upstream,
+    pump,
+    frames,
+    close: async () => {
+      line.abort();
+      await draining;
+      unwatch();
+      detach();
+      await built.dispose();
+      await upstream.close();
+      expect(violations.map((error) => error.message)).toEqual([]);
+    },
+  };
+}
+
+/** 每一則回覆的字與截斷標記。 */
+function marks(state: ConversationState): [string, boolean][] {
+  return state.entries
+    .filter((entry): entry is AiEntry => entry.kind === 'ai')
+    .map((entry) => [entry.text, entry.maxTokens ?? false]);
+}
+
 describe('web（pump、v3 串流）', () => {
   it('收尾 frame 帶 maxTokens、最後一則 root 回覆標上；turn/end 帶 max-tokens；本體零次', async () => {
     const bodies: string[] = [];
-    const upstream = await fakeOpenAi([
-      {
-        text: '我先查兩個地方。',
-        calls: [
-          { id: 'call_ok', name: 'echo', arguments: '{"text":"a"}' },
-          { id: 'call_cut', name: 'echo', arguments: CUT_ARGS },
-        ],
-        finish: 'length',
-      },
-      { text: '好。' },
-    ]);
-    const violations: InvariantError[] = [];
-    const built = await createNexusAgent({
-      model: openAi(upstream.baseURL),
-      checkpointer: new MemorySaver(),
-      plugins: [echoPlugin(bodies), createCoreInvariantPlugin()],
-      onInvariantViolation: (error) => violations.push(error),
-    });
-    const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'max-tokens-web');
-    const detach = built.attachSession(pump.sessions);
-    const unwatch = built.attachInvariants(pump.sessions);
-    if (unwatch === undefined) throw new Error('不變量沒接上：配套入口是空的');
-    const frames: Event[] = [];
-    const line = new AbortController();
-    const stream = pump.subscribe(['messages', 'tools', 'lifecycle'], line.signal);
-    const draining = (async () => {
-      for await (const frame of stream) frames.push(frame);
-    })();
+    const run = await assembleWeb(
+      [
+        {
+          text: '我先查兩個地方。',
+          calls: [
+            { id: 'call_ok', name: 'echo', arguments: '{"text":"a"}' },
+            { id: 'call_cut', name: 'echo', arguments: CUT_ARGS },
+          ],
+          finish: 'length',
+        },
+        { text: '好。' },
+      ],
+      bodies,
+    );
     try {
-      await pump.submit({ kind: 'message', text: '查一下' });
+      await run.pump.submit({ kind: 'message', text: '查一下' });
       // 前提：走的是 v3 串流那條。
-      expect(upstream.requests.map((request) => request.stream)).toEqual([true]);
+      expect(run.upstream.requests.map((request) => request.stream)).toEqual([true]);
       expect(bodies).toEqual([]);
-      const root = pump.sessions.root.events;
+      const root = run.pump.sessions.root.events;
       expect(toolEventTypes(root)).toEqual([]);
       expect(turnEnds(root)).toEqual([{ reason: { kind: 'max-tokens' } }]);
       const logged = root.find((event) => event.type === 'assistant/message');
@@ -357,7 +388,7 @@ describe('web（pump、v3 串流）', () => {
           .response_metadata?.finish_reason,
       ).toBe('length');
 
-      const closing = frames.filter(
+      const closing = run.frames.filter(
         (frame) =>
           frame.method === 'lifecycle' &&
           (frame.params.data as { graph_name?: string }).graph_name === 'root' &&
@@ -367,22 +398,49 @@ describe('web（pump、v3 串流）', () => {
       expect(
         closing.map((frame) => (frame.params.data as { maxTokens?: boolean }).maxTokens),
       ).toEqual([true]);
-      const state = frames.reduce(reduceConversation, emptyConversation());
+      const state = run.frames.reduce(reduceConversation, emptyConversation());
       expect(state.status).toBe('idle');
-      const replies = state.entries.filter((entry): entry is AiEntry => entry.kind === 'ai');
-      expect(replies.map((entry) => entry.maxTokens)).toEqual([true]);
+      expect(marks(state)).toEqual([['我先查兩個地方。', true]]);
 
-      await pump.submit({ kind: 'message', text: '再一句' });
-      expect(turnEnds(pump.sessions.root.events)).toEqual([{ reason: { kind: 'max-tokens' } }, {}]);
-      expect(roles(upstream.requests[1])).toEqual(['system', 'user', 'assistant', 'user']);
-      expect(violations.map((error) => error.message)).toEqual([]);
+      await run.pump.submit({ kind: 'message', text: '再一句' });
+      expect(turnEnds(run.pump.sessions.root.events)).toEqual([
+        { reason: { kind: 'max-tokens' } },
+        {},
+      ]);
+      expect(roles(run.upstream.requests[1])).toEqual(['system', 'user', 'assistant', 'user']);
     } finally {
-      line.abort();
-      await draining;
-      unwatch();
-      detach();
-      await built.dispose();
-      await upstream.close();
+      await run.close();
+    }
+  });
+
+  /**
+   * 一個字都沒吐、只在寫參數時被切斷：即時那條為它長一則空的，**重新整理之後的歷史也要標在同一則**
+   * ——歷史平常略過沒字的回覆，略過的話標記會落到別處或無處可標。下一輪那則整則不送，同 CLI。
+   */
+  it('沒吐字的那一則：即時與重新整理之後標在同一則；下一輪整則不送', async () => {
+    const run = await assembleWeb(
+      [
+        { calls: [{ id: 'call_cut', name: 'echo', arguments: CUT_ARGS }], finish: 'length' },
+        { text: '好。' },
+      ],
+      [],
+    );
+    try {
+      await run.pump.submit({ kind: 'message', text: '查一下' });
+      const live = marks(run.frames.reduce(reduceConversation, emptyConversation()));
+      const replayed = marks(
+        historyFrames(run.pump.sessions.root.events, DEFAULT_TOOL_TEXT_MAX_BYTES).reduce(
+          reduceConversation,
+          emptyConversation(),
+        ),
+      );
+      expect(live).toEqual([['', true]]);
+      expect(replayed).toEqual(live);
+
+      await run.pump.submit({ kind: 'message', text: '再一句' });
+      expect(roles(run.upstream.requests[1])).toEqual(['system', 'user', 'user']);
+    } finally {
+      await run.close();
     }
   });
 });

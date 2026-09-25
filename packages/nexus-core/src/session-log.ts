@@ -332,7 +332,8 @@ export interface SessionEventMap {
    * 呼叫收尾時一顆，不逐字寫。**寫在配對的 `model/end` 之前**，所以順序同 dsh——回覆在前，它派發的
    * `tool/call` 在後。記的是 {@link ./invalid-tool-args.ts} 改寫過的那則（那顆在它內側）：解不開的呼叫
    * 在這裡是 `args: {}`，原字串在配對的 `tool/call.arguments`——同一次呼叫兩處不同，但這一則才是之後
-   * 回送給供應商的那則。
+   * 回送給供應商的那則。撞到輸出上限的那則也是清過呼叫之後的樣子（{@link ./max-tokens.ts}，排得更內側）：
+   * 沒有 `tool_calls`，`response_metadata.finish_reason` 原樣留著。
    *
    * ## `interrupted`
    *

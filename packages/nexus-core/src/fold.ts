@@ -796,7 +796,7 @@ function foldMiddleware(
     // 讀檔結果最後補上讀到哪：同一個時刻、同一個理由貼著工具本體。在失敗記錄的內側，它只補成功的，
     // 兩者不相干；外面每一顆（含圍堵寫進日誌的那一則）看到的都是補過的。見 {@link ./read-continuation.ts}。
     ...(readContinuation === undefined ? [] : [readContinuation]),
-    // 解不開的參數：`wrapToolCall` 在核准與每個 plugin 的內側（dsh 執行時才驗參數），改寫在每個
+    // 解不開的參數：`wrapToolCall` 在核准與每個 plugin 的內側（dsh 執行時才驗參數），改寫在其餘
     // `wrapModelCall` 的內側（外面看到的都是改寫過的那則）。見 {@link ./invalid-tool-args.ts}。
     invalidToolArgs,
     // 撞到輸出上限：清工具呼叫排在修補的內側（被切斷的那顆不會先被修成 `{}` 參數），外面每一顆看到的
