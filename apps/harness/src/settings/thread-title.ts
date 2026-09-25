@@ -1,12 +1,16 @@
 /**
- * 列表上標題兩個上限的**設定條目**（[#457](https://github.com/DemianLi/nexus-agent/issues/457)／
- * [#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
+ * 會話標題兩個上限的**設定條目**（[#457](https://github.com/DemianLi/nexus-agent/issues/457)／
+ * [#529](https://github.com/DemianLi/nexus-agent/issues/529)）。規則見 `../session-title.ts`。
  *
  * **這一顆不裝功能，只講設定**——同 `@nexus/core/tool-result-pruner` 那一列（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
- * 差別在消費者跑的時刻：剪刀的消費者是 `foldRegistry`，拿得到註冊表；**這兩個數字的消費者是
+ * 差別在消費者跑的時刻：剪刀的消費者是 `foldRegistry`，拿得到註冊表；**這兩個數字的第一個消費者是
  * `serve.ts` 的冷讀清單**（`listStoredThreads`），它一條 thread 都不啟動，所以那一刻沒有 agent、
  * 沒有註冊表、也沒有 `ThreadAgent`。值因此由 {@link ../settings/startup.ts | startupSetting} 在起動期
  * 從已解析的條目讀出來，`apply` 是空的。
+ *
+ * 另外三個消費者（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）跑在 agent 出生之後：web 的 pump 與
+ * CLI 的 `runTurn` 寫退回標題，歷史路由替舊日誌推標題。**它們吃的是同一份起動期的值**，不另外從註冊表讀：同一個
+ * 數字有兩條來路的話，列表推的與日誌寫的就可能不一樣。
  *
  * ## 與 dsh 的偏離
  *

@@ -294,8 +294,9 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     env,
     ...(invocation.patches !== undefined && { patches: invocation.patches }),
   });
-  // **起動期解一次、往下傳一份**：這兩顆的消費者都跑在任何 agent 出生之前，那時還沒有註冊表
-  // 可以讀服務。理由與偏離登記見 `settings/startup.ts` 的檔頭。
+  // **起動期解一次、往下傳一份**：這兩顆都有消費者跑在任何 agent 出生之前（冷讀清單、`BrowserAuth`），那時
+  // 還沒有註冊表可以讀服務。標題那兩個數字也往下傳給寫標題的 pump（#647），同一份值。理由與偏離登記見
+  // `settings/startup.ts` 的檔頭。
   const browserSession = startupSetting(plugins, browserSessionPlugin);
   const threadTitle = startupSetting(plugins, threadTitlePlugin);
   // 交付檔那三個上限（#529）。**它們是 server 的性質，不是一條 thread 的性質**——兩條交付路由
@@ -348,6 +349,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     auth,
     deliverableLimits,
     toolTextLimits,
+    threadTitleLimits: threadTitle,
     // 一頁歷史撐破軟上限時講一聲（#479）。只有這一件事會走到它。
     warn: (message) => {
       serverLog(message);

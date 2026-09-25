@@ -241,7 +241,8 @@
 #
 # - **起動期**（`thread-title`、`browser-session`、`deliverable-files`、`tool-text`、`live-model`）：消費者是
 #   `serve.ts` 的冷讀清單、`BrowserAuth` 的建構子、`createWireHandler` 閉包裡的兩條交付路由，以及交給
-#   組裝的那顆 model——全都在**任何 agent 出生之前**就要有值，那一刻註冊表還不存在。所以這幾列的 `apply` 是空的，值由
+#   組裝的那顆 model——全都在**任何 agent 出生之前**就要有值，那一刻註冊表還不存在。`thread-title` 另外還給
+#   寫退回標題的 pump 與 CLI（#647），吃的是同一份起動期的值。所以這幾列的 `apply` 是空的，值由
 #   `src/settings/startup.ts` 的 `startupSetting` 在起動期解一次、往下傳一份——形狀上仍是
 #   「值從一個地方來」，機制上不是服務，那條退讓登記在 #529 上。
 # - **組裝期**（`recursion-limit`）：消費者是 `agent-factory.ts`，跑在 `loadPlugins` 之後，
@@ -259,7 +260,7 @@
 # `recursion-limit` 硬一級——關掉它在機制上確實會讓服務消失、於是落回內建的 100，**看起來像關掉了
 # 護欄，實際上護欄還在**。兩種都只會讓人以為自己關掉了什麼。
 
-# 執行緒列表上標題的兩個上限（#302）。值照 dsh base 的 `session-title`
+# 會話標題的兩個上限（#302、#647）：列表、畫面標頭與日誌裡的退回標題都照它截。值照 dsh base 的 `session-title`
 # （`packages/bundle/base/cordis.patch.yml:55-60`，`ddefc45`：`fallbackMaxWords: 5`、
 # `fallbackMaxBytes: 40`），**數字一模一樣**。
 #

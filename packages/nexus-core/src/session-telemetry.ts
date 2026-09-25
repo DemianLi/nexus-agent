@@ -161,6 +161,7 @@ const RELEASES_FEEDBACK_ONLY_CAPTURE = {
   'deliverables/presented': false,
   'workspace/changes': false,
   'inbox/spliced': false,
+  'session/title': false,
   'session/end-seed': false,
 } as const satisfies Record<SessionEventType, boolean>;
 

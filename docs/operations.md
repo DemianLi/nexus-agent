@@ -246,7 +246,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `session-checkpoint-policy` | 模型請求與頂層工具動手之前，先把會話日誌排空到磁碟 | **沒有** | 關得掉 |
 | `approval-gate` | 核准閘門 | **沒有** | **關不掉** |
 | `session-persistence` | 會話日誌落盤本身，以及它的批次窗口（毫秒） | 有（一格） | 關得掉（＝不落盤） |
-| `thread-title` | 執行緒列表上標題的兩個上限 | 有（兩格） | **關不掉** |
+| `thread-title` | 會話標題的兩個上限（列表、畫面標頭、日誌裡的退回標題） | 有（兩格） | **關不掉** |
 | `browser-session` | 瀏覽器 cookie 的絕對有效期 | 有（一格） | **關不掉** |
 | `deliverable-files` | 交付檔的三個上限（一頁位元組／整檔位元組（只管下載）／一頁行數） | 有（三格） | **關不掉** |
 | `tool-text` | 一段工具結果文字放上線的位元組上限 | 有（一格） | **關不掉** |
@@ -260,11 +260,13 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 **更要緊的分界是消費點跑的時刻**：
 
 - **`session-persistence`、`thread-title`、`browser-session`、`deliverable-files`、`tool-text`、
-  `live-model` 跑在註冊表存在之前**，所以 `apply` 是空的、值在起動期解一次往下傳。中間四列的消費點
-  分別是 serve 的冷讀清單、瀏覽器會話的建構子、兩條交付路由、以及工具結果文字那兩條（即時的
-  `ThreadPump` 與重播的 `historyPage`，都在 `createWireHandler` 的閉包底下），**只在 `serve` 上有
-  作用**；**`session-persistence` 與 `live-model` 兩條路都讀**——前者 `cli.ts` 與 `serve.ts` 各自在接
-  落盤時讀，後者各自在起動期解一次、交給組裝去建 model（只有 `--live` 用得到）。
+  `live-model` 跑在註冊表存在之前**，所以 `apply` 是空的、值在起動期解一次往下傳。`browser-session`、
+  `deliverable-files`、`tool-text` 的消費點分別是瀏覽器會話的建構子、兩條交付路由、以及工具結果文字那兩條
+  （即時的 `ThreadPump` 與重播的 `historyPage`，都在 `createWireHandler` 的閉包底下），**只在 `serve` 上有
+  作用**；**`session-persistence`、`thread-title` 與 `live-model` 兩條路都讀**——`session-persistence` 由
+  `cli.ts` 與 `serve.ts` 各自在接落盤時讀；`thread-title` 在 serve 上給冷讀清單、pump 與歷史，在 CLI 上給
+  寫退回標題的 `runTurn`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）；`live-model` 各自在起動期
+  解一次、交給組裝去建 model（只有 `--live` 用得到）。
 - **`recursion-limit` 相反，它的消費點在組裝期**（`agent-factory`），跟前七列同一個位置，所以它
   跟前七列完全同形（`apply` 提供一顆服務、組裝點去讀）。**CLI 的 `--recursion-limit` 仍然贏過
   這一列**——程式路徑上直接傳的參數贏過這份清單，那條規則對它照樣適用。

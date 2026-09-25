@@ -30,6 +30,7 @@ import {
   INBOX,
   MODEL_USAGE,
   SESSION_STATS,
+  TITLE,
   TODOS,
   TOKEN_USAGE,
   emptyConversation,
@@ -392,14 +393,20 @@ describe('present 在真的圖上', () => {
     );
     // 前提：那顆工具真的跑了。
     expectSucceeded(outcome.live, 'custom_writer');
-    // 線上的 `custom` 只剩 pump 從日誌合成的那幾種（這一段是用量表的、開輪時清空的待辦清單、會話累計與送出佇列），
-    // 工具寫的那一顆一個字都沒上來。
+    // 線上的 `custom` 只剩 pump 從日誌合成的那幾種（這一段是用量表的、開輪時清空的待辦清單、會話累計、送出佇列與
+    // 第一句開跑時的標題），工具寫的那一顆一個字都沒上來。
     const custom = outcome.live.filter((frame) => frame.method === 'custom');
     expect(custom.length).toBeGreaterThan(0);
     for (const frame of custom) {
-      expect([MODEL_USAGE, CONTEXT_MEASURE, TODOS, TOKEN_USAGE, SESSION_STATS, INBOX]).toContain(
-        (frame.params.data as { name?: unknown }).name,
-      );
+      expect([
+        MODEL_USAGE,
+        CONTEXT_MEASURE,
+        TODOS,
+        TOKEN_USAGE,
+        SESSION_STATS,
+        INBOX,
+        TITLE,
+      ]).toContain((frame.params.data as { name?: unknown }).name);
     }
     expect(JSON.stringify(custom)).not.toContain('不該上線');
   });

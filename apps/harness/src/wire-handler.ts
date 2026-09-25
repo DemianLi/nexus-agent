@@ -95,6 +95,8 @@ import {
   deliverableFilesConfigSchema,
   type DeliverableFilesConfig,
 } from './settings/deliverable-files.js';
+import type { ThreadTitleLimits } from './session-title.js';
+import { threadTitleConfigSchema } from './settings/thread-title.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
 import type { GoalDriverPort } from './goal-driver.js';
@@ -302,6 +304,11 @@ export interface WireHandlerOptions {
    * `historyPage(...)`。省略即 schema 的預設。
    */
   readonly toolTextLimits?: ToolTextConfig;
+  /**
+   * 退回標題的兩個上限（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）。消費點與 {@link toolTextLimits}
+   * 一樣是這個閉包底下的兩個：即時那條（pump 寫標題），重播那條（18 以前的日誌當場推）。省略即 schema 的預設。
+   */
+  readonly threadTitleLimits?: ThreadTitleLimits;
   /**
    * 這台 server 講話的地方，選配（[#479](https://github.com/DemianLi/nexus-agent/issues/479)）。
    *
@@ -613,6 +620,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
   // **解一次、兩個消費點共用同一份**：即時與重播對同一則結果要截得一模一樣，不然同一張卡會
   // 「即時一個樣、重新整理另一個樣」——那正是 `tool-result-text.ts` 存在的理由。
   const toolTextLimits: ToolTextConfig = options.toolTextLimits ?? toolTextConfigSchema.parse({});
+  // 同上：兩個消費點共用同一份，寫的標題與推的標題才會一字不差。
+  const threadTitleLimits: ThreadTitleLimits =
+    options.threadTitleLimits ?? threadTitleConfigSchema.parse({});
   /**
    * **存的是 promise 不是狀態**，而且是同步就存進去的。
    *
@@ -663,6 +673,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           driver,
           threadAgent.rootSeed,
           toolTextLimits,
+          threadTitleLimits,
         );
         late.log = pump.sessionLog;
         const detachTelemetry = threadAgent.attachTelemetry?.(pump.sessions);
@@ -1183,6 +1194,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
               `單獨一輪就超標，不從輪中間切（#479）。`,
           ),
         toolTextLimits,
+        threadTitleLimits,
       );
     } catch (error: unknown) {
       if (error instanceof HistoryQueryError) {

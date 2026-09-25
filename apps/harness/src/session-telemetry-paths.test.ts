@@ -126,11 +126,13 @@ describe('遙測接線：CLI 那條路', () => {
       await dispose();
     }
 
+    // 第一句跑完多一顆退回標題（#647），跟別的事件一樣鏡像出去。
     expect(ledgerOf(sink).map((record) => record.attributes['event.type'])).toEqual([
       'turn/start',
+      'session/title',
       'turn/end',
     ]);
-    expect(ledgerOf(sink).map((record) => record.attributes['event.seq'])).toEqual([0, 1]);
+    expect(ledgerOf(sink).map((record) => record.attributes['event.seq'])).toEqual([0, 1, 2]);
     expect(ledgerOf(sink).every((record) => record.attributes['session.id'] === 'cli')).toBe(true);
   });
 
@@ -221,7 +223,11 @@ describe('遙測接線：CLI 那條路', () => {
     }
 
     // agent loop 毫髮無傷，日誌照樣完整；出口那側一筆都沒有（fail-closed）。
-    expect(sessionLog.events.map((event) => event.type)).toEqual(['turn/start', 'turn/end']);
+    expect(sessionLog.events.map((event) => event.type)).toEqual([
+      'turn/start',
+      'session/title',
+      'turn/end',
+    ]);
     expect(sink.records).toHaveLength(0);
   });
 });
@@ -256,12 +262,14 @@ describe('遙測接線：web 那條路', () => {
       'web-telemetry',
       'web-telemetry',
       'web-telemetry',
+      'web-telemetry',
     ]);
-    // 人送出的話先進送出佇列（#637）：一輪前面送進來一顆、`turn/start` 之後領走一顆。
+    // 人送出的話先進送出佇列（#637）：一輪前面送進來一顆、`turn/start` 之後領走一顆。第一句領走之後寫退回標題（#647）。
     expect(ledgerOf(sink).map((record) => record.attributes['event.type'])).toEqual([
       'inbox/spliced',
       'turn/start',
       'inbox/spliced',
+      'session/title',
       'turn/end',
     ]);
     expect(sink.shutdowns.count).toBe(1);
@@ -331,21 +339,22 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
       feedback!.record(sessionLog, { text: '回答錯了' });
       expect(ledgerOf(sink).map((record) => record.attributes['event.type'])).toEqual([
         'turn/start',
+        'session/title',
         'turn/end',
         'feedback/record',
       ]);
 
       await runTurn(agent, '再一次', silent, sessionLog);
-      expect(seqs()).toEqual([0, 1, 2]);
+      expect(seqs()).toEqual([0, 1, 2, 3]);
 
-      // 第二顆只送上次交到之後的那段——上界不對的話，這裡會重送 0–2。3–5 是第二輪與補上的那則回覆。
+      // 第二顆只送上次交到之後的那段——上界不對的話，這裡會重送 0–3。4–6 是第二輪與補上的那則回覆。
       const put = feedback!.put(sessionLog, {
         messageId: ratableReply(sessionLog),
         rating: 'negative',
         ifVersion: null,
       });
       expect(put.ok).toBe(true);
-      expect(seqs()).toEqual([0, 1, 2, 3, 4, 5, 6]);
+      expect(seqs()).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
     } finally {
       await dispose();
     }
@@ -433,6 +442,7 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
       'inbox/spliced',
       'turn/start',
       'inbox/spliced',
+      'session/title',
       'turn/end',
       'feedback/record',
     ]);
