@@ -3,6 +3,7 @@ import type {
   SlashDescriptor,
   SlashRunOutcome,
   ThreadListResult,
+  UplinkResult,
   WireClient,
 } from '@nexus/wire';
 import { CONTEXT_MEASURE, MODEL_USAGE, TODOS } from '@nexus/wire';
@@ -22,6 +23,7 @@ import { STOPPED_QUESTION_TEXT, WITHDRAWN_TOOL_REASON } from '@/lib/question-vie
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
 import { axeViolations } from '@/test/axe';
 import { stubCmdkLayout } from '@/test/cmdk';
+import { fakeDownlink } from '@/test/downlink';
 
 /**
  * 一份活在記憶體裡的 `Storage`。
@@ -143,6 +145,7 @@ function fakeClient(
   const slashed: string[] = [];
   const opened: string[] = [];
   const cancels: string[] = [];
+  const downlink = fakeDownlink();
   const client: WireClient = {
     slashList: async () => ({ kind: 'ok', commands: slash.commands ?? [] }),
     slashRun: async (_threadId, line) => {
@@ -151,16 +154,12 @@ function fakeClient(
     },
     openEvents: async (threadId) => {
       opened.push(threadId);
-      return (async function* stream() {
-        for (const event of events) {
-          yield event;
-        }
-        await new Promise(() => undefined);
-      })();
+      return downlink.open(threadId, events);
     },
-    runStart: async (_threadId, text) => {
+    // 收下就照伺服器的順序推「排著」與「領走」，人的話由後者畫（#645）。
+    runStart: async (threadId, text) => {
       sent.push(text);
-      return { type: 'success', id: 1, result: {} };
+      return { type: 'success', id: 1, result: { run_id: downlink.accept(threadId, text) } };
     },
     inputRespond: async (_threadId, params) => {
       responded.push(params);
@@ -174,7 +173,7 @@ function fakeClient(
     ...UNWIRED_QUEUE,
     ...UNWIRED_THREAD_LIST,
   };
-  return { client, sent, responded, slashed, opened, cancels };
+  return { client, sent, responded, slashed, opened, cancels, downlink };
 }
 
 /** 一顆核准請求。逐筆詞彙照基座的形狀給——`reviewConfigs` 與 `actionRequests` 平行。 */
@@ -247,19 +246,76 @@ describe('對話介面', () => {
     expect(await axeViolations(container)).toEqual([]);
   });
 
-  it('送出之前先把使用者那句話放上去——線上不會回聲它', async () => {
+  /**
+   * 人的話**等開跑才畫**（#645）：伺服器收下就進送出佇列，領走開跑那一顆 `inbox` 帶 `claimed`，泡泡由它畫——跑著時
+   * 送的那句才不會插進正在跑的那一輪中間。送出當下什麼都不畫。
+   */
+  it('人的話等開跑才畫：送出當下不畫，伺服器領走那一顆到了才畫', async () => {
     seq = 0;
-    const { client, sent } = fakeClient([
-      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
-    ]);
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    let accepted: (() => void) | undefined;
+    const client: WireClient = {
+      ...fake.client,
+      runStart: async (threadId, text) => {
+        fake.sent.push(text);
+        accepted = () => void fake.downlink.accept(threadId, text);
+        return { type: 'success', id: 1, result: { run_id: 'held' } };
+      },
+    };
     render(<App client={client} />);
 
     await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
     fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '記一筆。' } });
     fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(fake.sent).toEqual(['記一筆。']));
+    expect(screen.queryByText('記一筆。')).toBeNull();
 
+    accepted?.();
     await waitFor(() => expect(screen.getByText('記一筆。')).toBeTruthy());
-    expect(sent).toEqual(['記一筆。']);
+    // 閒著時收下與領走緊接著到：佇列一次都不畫（Q5）。
+    expect(screen.queryByTestId('queue-dock')).toBeNull();
+  });
+
+  it('跑著時純文字送得出去、排進佇列；開跑那一刻才出現在對話裡。斜線命令照舊送不出去', async () => {
+    seq = 0;
+    stubCmdkLayout();
+    const fake = fakeClient([frame('lifecycle', [], { event: 'running', graph_name: 'root' })], {
+      commands: [{ name: 'plan', description: '計劃模式' }],
+    });
+    const client: WireClient = {
+      ...fake.client,
+      runStart: async (threadId, text) => {
+        fake.sent.push(text);
+        return {
+          type: 'success',
+          id: 1,
+          result: { run_id: fake.downlink.accept(threadId, text, false) },
+        };
+      },
+    };
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
+    const input = screen.getByLabelText('要說的話');
+    const sendButton = () => screen.getByRole('button', { name: '送出' }) as HTMLButtonElement;
+
+    fireEvent.change(input, { target: { value: '/plan' } });
+    expect(sendButton().disabled).toBe(true);
+    fireEvent.change(input, { target: { value: '/feedback' } });
+    expect(sendButton().disabled).toBe(false);
+
+    fireEvent.change(input, { target: { value: '下一句' } });
+    expect(sendButton().disabled).toBe(false);
+    fireEvent.click(sendButton());
+
+    const dock = await screen.findByTestId('queue-dock');
+    expect(within(dock).getByText('下一句')).toBeTruthy();
+    expect(screen.getAllByText('下一句')).toHaveLength(1);
+
+    fake.downlink.push(fake.opened[0]!, [
+      fake.downlink.inboxFrame({ items: [], claimed: { id: 'run-1', text: '下一句' } }),
+    ]);
+    await waitFor(() => expect(screen.queryByTestId('queue-dock')).toBeNull());
+    expect(screen.getAllByText('下一句')).toHaveLength(1);
   });
 
   it('連不上就說連不上，不是一片空白', async () => {
@@ -606,38 +662,64 @@ describe('停止（#276）', () => {
 });
 
 describe('上行被拒絕的時候', () => {
-  it('說出來，而不是靜靜吞掉——那是 200 ＋ error 封包', async () => {
-    seq = 0;
-    const client: WireClient = {
-      openEvents: async () =>
-        (async function* stream() {
-          yield frame('lifecycle', [], { event: 'completed', graph_name: 'root' });
-          await new Promise(() => undefined);
-        })(),
-      runStart: async () => ({
+  /**
+   * 一句話伺服器沒收下（#645 Q4）：跳 toast、草稿放回去。**不寫頂端的紅字**：那一行講的是這條線的狀態，一句話
+   * 沒送出去是這一句的事，而且放回去的草稿就在眼前。
+   */
+  it.each([
+    [
+      '回錯誤封包（200 ＋ error）',
+      async (): Promise<UplinkResult> => ({
         type: 'error',
         id: 1,
         error: 'invalid_argument',
-        message: '這條 thread 停在核准點：先用 input.respond 回答它，再說下一句話',
+        message: '這條 thread 收不了',
       }),
-      inputRespond: async () => ({ type: 'success', id: 2, result: {} }),
-      runCancel: async () => ({ type: 'success', id: 3, result: { accepted: true } }),
-      slashList: async () => ({ kind: 'ok', commands: [] }),
-      slashRun: async () => ({ kind: 'unknown' }),
-      ...UNWIRED_FEEDBACK,
-      ...UNWIRED_QUEUE,
-      ...UNWIRED_THREAD_LIST,
-    };
-    render(<App client={client} />);
+      '這條 thread 收不了',
+    ],
+    [
+      '這一趟就斷了',
+      async (): Promise<UplinkResult> => {
+        throw new Error('fetch failed');
+      },
+      'fetch failed',
+    ],
+  ])('送出沒收下：跳 toast、草稿放回去，頂端不寫紅字（%s）', async (_case, runStart, message) => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    render(<App client={{ ...fake.client, runStart }} />);
 
     await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
-    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '一句話' } });
+    const input = screen.getByLabelText('要說的話') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '一句話' } });
     fireEvent.click(screen.getByRole('button', { name: '送出' }));
 
-    await waitFor(() =>
-      expect(screen.getByRole('status').textContent).toContain('這個動作沒送出去'),
-    );
-    expect(screen.getByRole('status').textContent).toContain('停在核准點');
+    // sonner 的 toast 是全域的、跨測試留著：斷言這一條才有的說明，不斷言共用的標題。
+    expect(await screen.findByText(message)).toBeTruthy();
+    await waitFor(() => expect(input.value).toBe('一句話'));
+    expect(screen.getByRole('status').textContent).not.toContain('沒送出去');
+    expect(screen.queryByTestId('queue-dock')).toBeNull();
+  });
+
+  it('草稿放回去時不蓋掉已經開始打的下一句', async () => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    let reject: (result: UplinkResult) => void = () => undefined;
+    const runStart = () =>
+      new Promise<UplinkResult>((resolve) => {
+        reject = resolve;
+      });
+    render(<App client={{ ...fake.client, runStart }} />);
+
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    const input = screen.getByLabelText('要說的話') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '第一句' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    fireEvent.change(input, { target: { value: '第二句' } });
+    reject({ type: 'error', id: 1, error: 'invalid_argument', message: '第一句收不了' });
+
+    expect(await screen.findByText('第一句收不了')).toBeTruthy();
+    expect(input.value).toBe('第二句');
   });
 });
 
@@ -952,36 +1034,37 @@ describe('記住這條 thread', () => {
 
   /**
    * serve 還開著，重新整理之後接回一條停在核准點的 thread。**核准卡補不回來**：歷史重播得出那幾張工具卡
-   * （#306），但中斷的酬載只在當初發出去的那一顆 frame 上。這一條的假 client 連歷史都是空的，送出框也就沒鎖，
-   * 送出去被擋回來——畫面上的出口是「新對話」。
+   * （#306），但中斷的酬載只在當初發出去的那一顆 frame 上。這一條的假 client 連歷史都是空的，送出框也就沒鎖。
+   * #637 之前伺服器把這時送的話擋回來；現在照收、排著等那一輪收尾（#645），所以它出現在送出佇列裡，刪得掉。
    */
-  it('接回一條停在核准點的 thread：拒絕照樣說出來，新對話走得出去', async () => {
+  it('接回一條停在核准點的 thread：送出去的話排進佇列，看得到也刪得掉', async () => {
     seq = 0;
     remember('停著的那條');
     const fake = fakeClient([]);
-    const opened = fake.opened;
     const client: WireClient = {
       ...fake.client,
-      runStart: async (threadId) =>
-        threadId === '停著的那條'
-          ? {
-              type: 'error',
-              id: 1,
-              error: 'invalid_argument',
-              message: '這條 thread 停在核准點：先用 input.respond 回答它，再說下一句話',
-            }
-          : { type: 'success', id: 1, result: {} },
+      // 那一輪還沒收尾：收下、不領走。
+      runStart: async (threadId, text) => ({
+        type: 'success',
+        id: 1,
+        result: { run_id: fake.downlink.accept(threadId, text, false) },
+      }),
+      queueUpdate: async (threadId, params) => fake.downlink.update(threadId, params),
     };
     render(<App client={client} />);
     await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
     fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '一句話' } });
     fireEvent.click(screen.getByRole('button', { name: '送出' }));
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('停在核准點'));
 
-    fireEvent.click(screen.getByRole('button', { name: '新對話' }));
+    const dock = await screen.findByTestId('queue-dock');
+    expect(within(dock).getByText('一句話')).toBeTruthy();
+    // 還沒開跑：對話裡沒有這一句。
+    expect(
+      screen.queryByText('一句話', { selector: '[data-slot="message-scroller-item"] *' }),
+    ).toBeNull();
 
-    await waitFor(() => expect(opened).toHaveLength(2));
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('就緒'));
+    fireEvent.click(within(dock).getByRole('button', { name: '刪除：一句話' }));
+    await waitFor(() => expect(screen.queryByTestId('queue-dock')).toBeNull());
   });
 
   it('跑著的時候「新對話」也按得動——它不看忙不忙', async () => {
