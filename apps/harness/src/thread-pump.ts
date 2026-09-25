@@ -22,7 +22,9 @@
  *    （`patchToolCallsMiddleware.before_agent` 補掉懸空的工具呼叫），那個等著核准的工具
  *    **既沒執行也沒被拒絕**，而且**不會再發第二顆 `input.requested`**——核准請求就這樣
  *    蒸發了，下行上一顆 frame 都看不出來。所以 pump 記著還掛著的那些中斷
- *    （{@link ThreadPump.awaitingInput}），讓上行那一側擋得下來。
+ *    （{@link ThreadPump.awaitingInput}），讓上行那一側擋得下來；上行擋不到的那種——跑著時收下、
+ *    輪到時才撞上核准點——由 pump 自己停住，等中斷答完才跑
+ *    （[#629](https://github.com/DemianLi/nexus-agent/issues/629)）。
  *
  * ## 工具卡從日誌開、以日誌收（[#296](https://github.com/DemianLi/nexus-agent/issues/296)、[#297](https://github.com/DemianLi/nexus-agent/issues/297)）
  *
@@ -226,6 +228,20 @@ interface Subscriber {
   readonly queue: Event[];
   wake?: () => void;
   done: boolean;
+}
+
+/**
+ * 排著、還沒開跑的一件事（[#629](https://github.com/DemianLi/nexus-agent/issues/629)）。
+ *
+ * 分兩種，照 dsh：**答覆**（`resume` 與收回）屬於停在核准點的那一輪，**開新一輪的**（說話、續行）是收件匣
+ * 裡的東西，只在一輪開始時領（`packages/core/agent-loop/src/agent.ts:296-330` 的 `turn()`，`477b4f4`）。
+ */
+interface QueuedJob {
+  /** 是答覆：停在核准點時照樣跑，而且排在開新一輪的前面。 */
+  readonly answers: boolean;
+  readonly run: () => Promise<void>;
+  readonly resolve: () => void;
+  readonly reject: (error: unknown) => void;
 }
 
 /** 掛在這條 thread 上、還沒被回答的其中一顆中斷。 */
@@ -667,10 +683,19 @@ export class ThreadPump {
    * 開頭折起。**這是 pump 唯一記著的投影狀態**——用量表、待辦清單一顆事件就算得出值，這兩個是累計的。
    */
   readonly #totals = new SessionTotals();
-  /** 一個 thread 一次只跑一個 run；後到的 submit 排隊，不平行跑。 */
-  #tail: Promise<void> = Promise.resolve();
   /**
-   * 還沒抽完的 run 有幾段——**排隊的也算**。
+   * 排著、還沒開跑的事。**一個 thread 一次只跑一件**；後到的排隊，不平行跑。
+   *
+   * 挑下一件的規則在 {@link ThreadPump.#nextIndex}：答覆先跑；還有中斷掛著、又沒有答覆排著的時候，
+   * 開新一輪的停住（#629）。
+   */
+  readonly #queue: QueuedJob[] = [];
+  /** 有一件正在跑（一輪 run，或一次收回）。 */
+  #busy = false;
+  /** 等「沒有可跑的、也沒在跑」的人，見 {@link ThreadPump.whenIdle}。 */
+  readonly #idleWaiters: (() => void)[] = [];
+  /**
+   * 還沒抽完的 run 有幾段——**排隊的也算，停住的也算**。
    *
    * 這個計數存在的理由在 {@link ThreadPump.running}：上行的回應是收件回條，
    * 「已經收下但還沒開跑」與「正在跑」對發派斜線命令的那一側是同一件事。
@@ -768,7 +793,8 @@ export class ThreadPump {
   }
 
   /**
-   * 這條 thread 上有沒有 run 還沒跑完——**排隊中的也算**。
+   * 這條 thread 上有沒有 run 還沒跑完——**排隊中的也算**，停在核准點而等著的那幾句也算（#629）。
+   * 所以停在核准點時它可以跟 {@link ThreadPump.awaitingInput} 同時為真。
    *
    * 給上行那一側擋斜線命令用（[#123](https://github.com/DemianLi/nexus-agent/issues/123)）。
    * 與 {@link ThreadPump.awaitingInput} 各擋一種：那個是「停在核准點」，這個是「還在飛」。
@@ -833,8 +859,11 @@ export class ThreadPump {
   /**
    * 送一件事進去，排在目前那一輪後面跑。
    *
-   * 回傳的 promise 在**這一段** run 抽完時 resolve（跑完或停在核准點都算）。
-   * 上行的 handler 不等它——那是收件回條，不是「跑完了」。
+   * **說話與續行在停在核准點時不開跑**（[#629](https://github.com/DemianLi/nexus-agent/issues/629)）：
+   * 它們留在隊裡，等中斷被回答或收回、那一輪收掉之後才照 FIFO 跑。答覆（`resume`）排在它們前面。
+   *
+   * 回傳的 promise 在**這一段** run 抽完時 resolve（跑完或停在核准點都算）；停住的那段要等它真的
+   * 跑完。收線時還停著的會 reject。上行的 handler 不等它——那是收件回條，不是「跑完了」。
    */
   submit(input: PumpInput): Promise<void> {
     if (this.#closed) {
@@ -844,14 +873,14 @@ export class ThreadPump {
     // 核准的第二次會通過上行的校驗、送出第二次 resume，而那時已經沒有中斷可以回答。
     //
     // **只收掉被答的那一顆。** 同一輪的其他中斷還等著人，整個清掉的話回答它們會被
-    // 判成 `no_such_interrupt`。說話與續行那兩種本來就要求一顆都沒掛著（上行擋著），
-    // 走到這裡代表狀態已經不對，清空是止血。
+    // 判成 `no_such_interrupt`。
+    //
+    // 說話與續行**不碰**掛著的中斷：它們停在隊裡等（#629）。以前這裡整個清掉當止血，那等於
+    // 讓繞過上行那道擋的呼叫端把中斷靜靜丟掉——正是這張卡要修的事換一扇門進來。
     if (input.kind === 'resume') {
       this.#pending.delete(input.interruptId);
-    } else {
-      this.#pending.clear();
     }
-    return this.#schedule(() => this.#runOnce(input));
+    return this.#schedule(() => this.#runOnce(input), input.kind === 'resume');
   }
 
   /**
@@ -859,28 +888,83 @@ export class ThreadPump {
    *
    * 收回走同一條序列，是因為它也要讀寫 checkpoint、也要寫一輪日誌——跟一輪 run 並行的話，
    * 兩邊的 `turn/start`／`turn/end` 會交錯，不變量會把它讀成寫錯了。
+   *
+   * @param answers - 是不是答覆（`resume`、收回），見 {@link QueuedJob.answers}。
    */
-  #schedule(job: () => Promise<void>): Promise<void> {
+  #schedule(run: () => Promise<void>, answers: boolean): Promise<void> {
     // **同步就加一**：上行回的是收件回條，緊接著到的 `slash.run` 必須看得到「在飛」。
     this.#inFlight += 1;
-    const next = this.#tail.then(job);
-    // 排隊用的鏈不能因為某一輪炸掉就整條斷掉；減一兩條路都要走到。
+    const done = new Promise<void>((resolve, reject) => {
+      this.#queue.push({ answers, run, resolve, reject });
+    });
+    // **不在這裡同步開跑**：`turn/start` 記在真正開跑的那一刻（`#runOnce`），不是收下的那一刻。
+    this.#kick();
+    return done;
+  }
+
+  /** 下一個 microtask 看看有沒有能跑的。 */
+  #kick(): void {
+    void Promise.resolve().then(() => this.#next());
+  }
+
+  /**
+   * 下一件能跑的在隊裡哪一格；沒有就是 -1。
+   *
+   * **答覆先跑**：它屬於停在核准點的那一輪，連比它早排進來的說話也要讓它（第一輪還在收尾時就答了，
+   * 答覆排在第二句後面）。**還有中斷掛著、又沒有答覆排著的時候，開新一輪的停住**——照 dsh，收件匣只在
+   * 一輪開始時領，而那一輪還沒結束（#629）。其餘照 FIFO。
+   */
+  #nextIndex(): number {
+    const answer = this.#queue.findIndex((job) => job.answers);
+    if (answer >= 0) return answer;
+    if (this.#pending.size > 0) return -1;
+    return this.#queue.length > 0 ? 0 : -1;
+  }
+
+  #next(): void {
+    if (this.#busy) return;
+    const index = this.#nextIndex();
+    if (index < 0) {
+      if (this.#closed) {
+        // **收線之後還停著的收掉**（#629）：停在核准點、又沒有答覆排著，它們永遠等不到開跑。不收的話
+        // 送出它們的 promise 永遠掛著，`running` 也永遠是真的。
+        for (const job of this.#queue.splice(0)) {
+          this.#inFlight -= 1;
+          job.reject(new Error('這條 thread 已經收掉了'));
+        }
+      }
+      for (const wake of this.#idleWaiters.splice(0)) wake();
+      return;
+    }
+    const [job] = this.#queue.splice(index, 1) as [QueuedJob];
+    this.#busy = true;
+    // 一件跑壞不能讓後面的斷掉；減一兩條路都要走到。
     //
-    // **排程掛在這裡，而且在減一之後**：`#driveGoalRound` 靠 `#inFlight === 0` 判斷
+    // **減一與排程在呼叫端接到結果之前**：`#driveGoalRound` 靠 `#inFlight === 0` 判斷
     // 「沒有人在排隊」，減一之前問的話它永遠看得到自己。跑壞的那一條也走到這裡，
     // 但決策函式會看到日誌上那顆 `turn/failed` 而回 `turn-failed`——**續行不重試**；
     // 被中止的那一條同理，看到 `turn/end` 帶 aborted 而回 `turn-aborted`。
-    const settled = () => {
+    const settle = (finish: () => void) => {
+      this.#busy = false;
       this.#inFlight -= 1;
       this.#driveGoalRound();
+      finish();
+      this.#kick();
     };
-    this.#tail = next.then(settled, settled);
-    return next;
+    job.run().then(
+      () => settle(job.resolve),
+      (error: unknown) => settle(() => job.reject(error)),
+    );
   }
 
-  /** 等目前排隊的都跑完。測試用。 */
-  async whenIdle(): Promise<void> {
-    await this.#tail;
+  /**
+   * 等到沒有能跑的、也沒在跑的。測試用。
+   *
+   * **停住的不算**（#629）：停在核准點、後面有說話排著的 thread 是閒著的——它在等人。
+   */
+  whenIdle(): Promise<void> {
+    if (!this.#busy && this.#nextIndex() < 0) return Promise.resolve();
+    return new Promise((resolve) => this.#idleWaiters.push(resolve));
   }
 
   /**
@@ -894,7 +978,8 @@ export class ThreadPump {
    * - **停在核准點**：收回——排一次 {@link ThreadPump.#withdraw}（#265 的 Q7／Q15）。
    * - **閒著**：什麼都不做，同 dsh「閒著時中止不影響之後的事」。
    *
-   * **排在後面的輸入不動**：停完就接著跑（#265 的 Q6，同 dsh web 的 `keepInbox`）。
+   * **排在後面的輸入不動**：停完就接著跑（#265 的 Q6，同 dsh web 的 `keepInbox`）。停在核准點時
+   * 停住的那幾句也一樣：收回那一輪收掉之後照 FIFO 跑（#629）。
    *
    * @returns 這一次落在哪一種。線上只回受理，這個給測試看。
    */
@@ -908,7 +993,7 @@ export class ThreadPump {
       // **同步就清**，同 `submit`：收下的那一刻就不再掛著，緊接著到的 `run.start` 不會被
       // 「停在核准點」擋回去——它排在這次收回後面。
       this.#pending.clear();
-      void this.#schedule(() => this.#withdraw()).catch(() => {
+      void this.#schedule(() => this.#withdraw(), true).catch(() => {
         // 失敗已經進了日誌（`turn/failed`），這個 promise 沒有別人在等。
       });
       return 'withdrawn';
@@ -999,6 +1084,9 @@ export class ThreadPump {
   close(): void {
     this.#closed = true;
     this.#unobserveLogs();
+    // 停住的那幾件由 `#next` 收掉（#629）。**不在這裡收**：這一刻還在跑的那一輪可能之後才撞上
+    // 核准點，那時排著的才變成停住的——只在這裡看一次會漏掉它們。
+    this.#kick();
     for (const subscriber of this.#subscribers) {
       subscriber.done = true;
       subscriber.wake?.();
@@ -1009,16 +1097,16 @@ export class ThreadPump {
    * 一輪落定之後，問排程器要不要再排一輪。
    *
    * **不 await**：它自己就會把排出來的那一輪丟回 {@link ThreadPump.submit}，而那條路
-   * 跑完又會回到這裡。整串續行因此是一條由 `#tail` 序列化的鏈，不是一個遞迴呼叫堆。
+   * 跑完又會回到這裡。整串續行因此是一條由 `#queue` 序列化的鏈，不是一個遞迴呼叫堆。
    */
   #driveGoalRound(): void {
     const driver = this.#driver;
     if (driver === undefined || this.#closed) return;
     // **有人在排隊就讓行**，而且送出去之前還會再問一次（下面那一句）。
     //
-    // **這兩道今天量不出行為差異，而且那件事要講清楚**：`#tail` 已經把所有輸入序列化
+    // **這兩道今天量不出行為差異，而且那件事要講清楚**：`#queue` 已經把所有輸入序列化
     // 了，所以排程器排出來的那一輪一定接在人那一筆後面——它搶不了先。留著它們是因為
-    // 它們擋的是**多算一次**（連 `flush()` 都省下來），而且 `#tail` 那個保證一旦鬆動，
+    // 它們擋的是**多算一次**（連 `flush()` 都省下來），而且 `#queue` 那個保證一旦鬆動，
     // 這兩句就是唯一擋得住的東西。**不要把它們讀成有測試釘住的因果。**
     if (this.#inFlight > 0) return;
     void (async () => {
