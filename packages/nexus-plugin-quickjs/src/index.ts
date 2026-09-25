@@ -43,6 +43,7 @@
  */
 
 import { tool } from '@langchain/core/tools';
+import { HarnessError } from '@nexus/core';
 import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
 import { getQuickJS, shouldInterruptAfterDeadline } from 'quickjs-emscripten';
 import type { QuickJSContext, QuickJSHandle } from 'quickjs-emscripten';
@@ -59,6 +60,45 @@ export const QUICKJS_CAPABILITY = 'quickjs';
  * 指令，一個 eval 一段沒有外界的 JavaScript。
  */
 export const RUN_JAVASCRIPT_TOOL_NAME = 'run_javascript';
+
+/**
+ * 程式本身失敗時分成哪幾種，詞彙照 dsh 的 `PtcRunFailure.kind`
+ * （`packages/ptc-runtime/ptc-runtime/src/types.ts:134`，`477b4f4`）。這裡只用得到其中兩個：
+ *
+ * - `exception`：程式拋出來的，或它回傳的 promise 被 reject。記憶體、堆疊上限也走這一條——
+ *   QuickJS 把它們報成 VM 裡的 `InternalError`／`RangeError`，跟程式自己拋的沒有兩樣。
+ * - `timeout`：撞到 {@link QuickJsPluginOptions.timeoutMs} 被中斷；以及回傳一個永遠不會完成的
+ *   promise（見 {@link runInVm}）。
+ */
+export type CodeRunFailureKind = 'exception' | 'timeout';
+
+/**
+ * `run_javascript` 的程式本身失敗時拋的東西，照 dsh 的 `CodeRunFailedError`
+ * （`packages/core/tools/src/ptc.ts:165-180`，`477b4f4`）：**拋，不回字串**。同 dsh 繼承
+ * {@link HarnessError}，所以碼 `CODE_RUN_FAILED` 跟著進會話日誌那顆 `tool/result` 的 `error`。
+ *
+ * 接住它的是 `@nexus/core` 的圍堵（dsh 那側是註冊表的執行管線）：模型拿到 `status: 'error'` 的
+ * ToolMessage、文字帶得出失敗種類與原因，會話日誌的 `tool/result` 是 `isError: true`，web 的
+ * 工具卡因此是失敗狀態。以前回一句 `錯誤：…` 的字串，三處都記成成功
+ * （[#615](https://github.com/DemianLi/nexus-agent/issues/615)）。
+ *
+ * 訊息的形狀照 dsh 的 `code run failed (<kind>): <message>`（`ptc.ts:721`）。dsh 後面還接擷取到的
+ * 輸出與沙箱資訊，這裡兩樣都沒有：VM 裡沒有 `console`，也沒有行程沙箱。
+ */
+export class CodeRunFailedError extends HarnessError {
+  /** 失敗種類。 */
+  readonly kind: CodeRunFailureKind;
+
+  /**
+   * @param kind - 失敗種類。
+   * @param message - 原因，不含前綴。
+   */
+  constructor(kind: CodeRunFailureKind, message: string) {
+    super(`code run failed (${kind}): ${message}`, 'CODE_RUN_FAILED');
+    this.name = 'CodeRunFailedError';
+    this.kind = kind;
+  }
+}
 
 /** 一次求值的預設時間上限。 */
 export const DEFAULT_TIMEOUT_MS = 1_000;
@@ -155,7 +195,8 @@ interface VmLimits {
 }
 
 /**
- * 在一個現建現拆的 VM 裡求值，把結果或錯誤翻成一句給模型看的字串。
+ * 在一個現建現拆的 VM 裡求值，把結果翻成一句給模型看的字串；**程式失敗時拋
+ * {@link CodeRunFailedError}**。
  *
  * **每次呼叫一個新 runtime**，不是共用一個。理由是隔離：共用的話前一次呼叫留在 global
  * 上的東西下一次看得到，而且記憶體上限會變成跨呼叫累計的——第五次呼叫因為第一次配置的
@@ -179,16 +220,14 @@ function runInVm(
     const context = runtime.newContext();
     try {
       const result = context.evalCode(code);
-      if (result.error)
-        return consume(context, result.error, (detail) => formatError(detail, limits));
+      if (result.error) return consume(context, result.error, (detail) => fail(detail, limits));
 
       // **求值完要把微任務佇列跑完**，否則 `async` 函式與 promise 鏈全部停在 pending，
       // 模型拿到的是「沒完成」而不是答案。QuickJS 裡沒有計時器也沒有 IO，所以佇列裡只會
       // 有純計算的 microtask——跑得完的一定跑得完，跑不完的（等外界的）本來就永遠等不到。
       // 這一步同樣受 interrupt handler 管，所以它不是逾時的漏洞。
       const pending = runtime.executePendingJobs();
-      if (pending.error)
-        return consume(context, pending.error, (detail) => formatError(detail, limits));
+      if (pending.error) return consume(context, pending.error, (detail) => fail(detail, limits));
 
       return formatResult(context, result.value, limits);
     } finally {
@@ -220,13 +259,18 @@ function formatResult(context: QuickJSContext, handle: QuickJSHandle, limits: Vm
 
   try {
     // 微任務佇列已經跑完了還是 pending，代表它在等一個 VM 裡不存在的東西（計時器、IO）。
-    // 這是永遠不會變的狀態，講清楚比讓模型再等一次好。
+    // 這是永遠不會變的狀態，**算失敗**（demian 2026-09-25 拍板，#615）：dsh 的 `run_code` 等不到
+    // 結果會一直等到經過時間的預算用完，收在 `timeout`。這裡當場就判得出來，所以不等，
+    // 種類照 dsh 的結局記 `timeout`，原因講清楚不是跑太久。
     if (state.type === 'pending') {
-      return '（回傳了一個永遠不會完成的 promise——VM 裡沒有計時器也沒有 IO）';
+      throw new CodeRunFailedError(
+        'timeout',
+        '回傳了一個永遠不會完成的 promise——VM 裡沒有計時器也沒有 IO，等到上限也不會有結果',
+      );
     }
-    // 被 reject 的 promise 走跟 throw 一樣的措辭——對模型來說兩者是同一件事。
+    // 被 reject 的 promise 走跟 throw 同一條——對模型來說兩者是同一件事。
     if (state.type === 'rejected') {
-      return consume(context, state.error, (detail) => formatError(detail, limits));
+      return consume(context, state.error, (detail) => fail(detail, limits));
     }
     return consume(context, state.value, formatValue);
   } finally {
@@ -253,22 +297,25 @@ function consume(
 }
 
 /**
- * 把 VM 丟出來的錯誤翻成一句話。
+ * 把 VM 丟出來的錯誤翻成 {@link CodeRunFailedError} 拋出去。
  *
  * 中斷是唯一被特別點名的一種：QuickJS 把它報成 `InternalError: interrupted`，而那句話
- * 沒告訴模型「是你的程式跑太久」還是「引擎壞了」。其餘的原樣轉述——`ReferenceError:
- * require is not defined` 這種訊息本身就是模型需要的答案。
+ * 沒告訴模型「是你的程式跑太久」還是「引擎壞了」，所以記成 `timeout` 並講出上限。其餘的
+ * 原樣轉述——`ReferenceError: require is not defined` 這種訊息本身就是模型需要的答案。
+ *
+ * **不帶 `錯誤：` 前綴**：圍堵會在前面接 `工具 run_javascript 執行失敗：`，再帶一層的話模型
+ * 讀到的是兩層前綴。
  */
-function formatError(detail: unknown, limits: VmLimits): string {
+function fail(detail: unknown, limits: VmLimits): never {
   const asRecord =
     typeof detail === 'object' && detail !== null ? (detail as Record<string, unknown>) : {};
   const name = typeof asRecord.name === 'string' ? asRecord.name : '';
   const message = typeof asRecord.message === 'string' ? asRecord.message : String(detail);
 
   if (name === 'InternalError' && message === 'interrupted') {
-    return `錯誤：執行超過 ${limits.timeoutMs} 毫秒的上限，已中斷。`;
+    throw new CodeRunFailedError('timeout', `執行超過 ${limits.timeoutMs} 毫秒的上限，已中斷。`);
   }
-  return `錯誤：${name === '' ? message : `${name}: ${message}`}`;
+  throw new CodeRunFailedError('exception', name === '' ? message : `${name}: ${message}`);
 }
 
 /**
@@ -283,7 +330,7 @@ function formatValue(value: unknown): string {
   try {
     return JSON.stringify(value) ?? String(value);
   } catch {
-    // 迴圈參照之類 JSON 表達不出來的東西。回傳值本身不是錯誤，所以不走 formatError。
+    // 迴圈參照之類 JSON 表達不出來的東西。回傳值本身不是錯誤，所以不走 fail。
     return String(value);
   }
 }

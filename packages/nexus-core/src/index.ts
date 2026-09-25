@@ -151,6 +151,7 @@ export {
 
 export type { ToolErrorInfo, ToolOutcome } from './tool-events.js';
 export {
+  HarnessError,
   INVALID_ARGS,
   INVALID_TOOL_OUTPUT,
   markToolError,

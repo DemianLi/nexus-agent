@@ -67,7 +67,13 @@ interrupt handler。所以 `timeoutMs` 是「最多塞住多久」，不是「�
 
 **非同步的程式碼跑得完，但等不到外界。** 求值之後會把微任務佇列跑完
 （`executePendingJobs()`），所以 `async` 函式與 promise 鏈拿得到值。跑完還是 pending 的
-promise 代表它在等一個 VM 裡不存在的東西，那是永遠不會變的狀態，工具會照實說。
+promise 代表它在等一個 VM 裡不存在的東西，那是永遠不會變的狀態，算失敗（見下一段）。
+
+**程式失敗是工具失敗。** 程式拋例外、回傳的 promise 被 reject、逾時中斷、回傳一個永遠不會
+完成的 promise，工具都拋 `CodeRunFailedError`（`code: 'CODE_RUN_FAILED'`，照 dsh `run_code`
+的同名錯誤），訊息是 `code run failed (<kind>): <原因>`，`kind` 是 `exception` 或 `timeout`。
+接住它的是 `@nexus/core` 的圍堵：模型拿到 `status: 'error'` 的工具訊息、會話日誌記
+`isError: true`，web 的工具卡是失敗狀態（[#615](https://github.com/DemianLi/nexus-agent/issues/615)）。
 
 ## 為什麼是 custom tool，不是 sandbox backend
 

@@ -17,6 +17,7 @@ import type { StructuredTool } from '@langchain/core/tools';
 import { loadPlugins } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import {
+  CodeRunFailedError,
   createQuickJsPlugin,
   DEFAULT_MAX_STACK_SIZE_BYTES,
   DEFAULT_MEMORY_LIMIT_BYTES,
@@ -36,6 +37,25 @@ async function runTool(options: QuickJsPluginOptions, code: string): Promise<str
   return String(await (entry.value as StructuredTool).invoke({ code }));
 }
 
+/**
+ * 同 {@link runTool}，但這段程式**該失敗**：回傳工具拋出來的 {@link CodeRunFailedError}。
+ * 沒拋、或拋的不是它，這裡就讓測試紅。
+ */
+async function runFailing(
+  options: QuickJsPluginOptions,
+  code: string,
+): Promise<CodeRunFailedError> {
+  const error: unknown = await runTool(options, code).then(
+    (value) => {
+      throw new Error(`預期失敗，卻回了：${value}`);
+    },
+    (thrown: unknown) => thrown,
+  );
+  if (!(error instanceof CodeRunFailedError)) throw error;
+  expect(error.code).toBe('CODE_RUN_FAILED');
+  return error;
+}
+
 describe('正常的路', () => {
   it('求值一段 JavaScript，回傳最後一個運算式的值', async () => {
     expect(await runTool({}, '1 + 1')).toBe('2');
@@ -47,8 +67,12 @@ describe('正常的路', () => {
     expect(await runTool({}, 'const x = 1;')).toBe('（沒有回傳值）');
   });
 
-  it('VM 裡丟出來的錯誤原樣轉述給模型', async () => {
-    expect(await runTool({}, 'throw new TypeError("壞了")')).toContain('TypeError: 壞了');
+  // #615：以前回一句 `錯誤：TypeError: 壞了` 的字串，工具算成功。翻面之後守的是「拋、而且
+  // 文字帶得出原因」——模型讀得到原因才能自己修，這一半沒有變。
+  it('VM 裡丟出來的錯誤：拋 CodeRunFailedError，原因原樣帶著，沒有 `錯誤：` 前綴', async () => {
+    const error = await runFailing({}, 'throw new TypeError("壞了")');
+    expect(error.kind).toBe('exception');
+    expect(error.message).toBe('code run failed (exception): TypeError: 壞了');
   });
 
   // 每次呼叫一個新 runtime 的行為證據。共用的話第二次看得到第一次留下的 global。
@@ -69,7 +93,8 @@ describe('能力邊界——VM 裡沒有外界', () => {
   // 沒掛 module loader，所以 `import` 連解析都過不了。這一條與上面那組不同軸：上面問
   // 「這個全域在不在」，這一條問「模組系統通不通」。
   it('import 進不來——沒有 module loader', async () => {
-    expect(await runTool({}, 'import("node:fs")')).toContain("could not load module 'node:fs'");
+    const error = await runFailing({}, 'import("node:fs")');
+    expect(error.message).toContain("could not load module 'node:fs'");
   });
 });
 
@@ -84,18 +109,21 @@ describe('非同步', () => {
     expect(await runTool({}, '(async () => { const a = await 1; return a + 41; })()')).toBe('42');
   });
 
-  // 被 reject 的 promise 對模型來說跟 throw 是同一件事，措辭因此刻意相同。原樣把
+  // 被 reject 的 promise 對模型來說跟 throw 是同一件事，所以走同一條。原樣把
   // `dump()` 攤出來的 `{type:"rejected",…}` JSON 出去的話，失敗會長得像成功。
-  it('被 reject 的 promise 讀起來就是錯誤', async () => {
-    expect(await runTool({}, 'Promise.reject(new Error("拒絕了"))')).toBe('錯誤：Error: 拒絕了');
+  it('被 reject 的 promise 跟 throw 一樣是失敗', async () => {
+    const error = await runFailing({}, 'Promise.reject(new Error("拒絕了"))');
+    expect(error.kind).toBe('exception');
+    expect(error.message).toBe('code run failed (exception): Error: 拒絕了');
   });
 
   // 等得到的都等到了還是 pending，代表它在等一個 VM 裡不存在的東西。這是永遠不會變的
-  // 狀態，不是「再等一下就好」——所以不能讓它讀起來像個值。
-  it('等不到的 promise 講清楚它等不到', async () => {
-    const result = await runTool({}, 'new Promise(() => {})');
-
-    expect(result).toContain('永遠不會完成');
+  // 狀態，不是「再等一下就好」。#615 之前它算成功、回一句話；demian 拍板照 dsh 的結局算失敗
+  // （dsh 等到預算用完，收在 `timeout`）。
+  it('等不到的 promise 是失敗，種類是 timeout，原因講清楚它等不到', async () => {
+    const error = await runFailing({}, 'new Promise(() => {})');
+    expect(error.kind).toBe('timeout');
+    expect(error.message).toContain('永遠不會完成');
   });
 
   // 「這是不是 promise」問的是引擎（`getPromiseState`），不是 dump 出來的形狀。基座的
@@ -116,9 +144,10 @@ describe('資源邊界——只有設定的那麼強', () => {
   // 所以攔得準；配置大塊記憶體那種昂貴操作攔不準，見 README 的邊界說明與底下那條。
   it('無限迴圈被中斷，不是讓測試逾時', async () => {
     const started = Date.now();
-    const result = await runTool({ timeoutMs: 200 }, 'while (true) {}');
+    const error = await runFailing({ timeoutMs: 200 }, 'while (true) {}');
 
-    expect(result).toContain('執行超過 200 毫秒');
+    expect(error.kind).toBe('timeout');
+    expect(error.message).toContain('執行超過 200 毫秒');
     // 上限是「最多塞住多久」。放寬到 10 倍是給 CI 的排程噪音留的餘裕——這一條要證明的是
     // 「有沒有被擋下來」，不是中斷的精度。
     expect(Date.now() - started).toBeLessThan(2_000);
@@ -132,12 +161,12 @@ describe('資源邊界——只有設定的那麼強', () => {
     // 本地 2.1 秒、CI runner 上 5.03 秒——撞爆 vitest 預設的 5000ms testTimeout，gate 紅了
     // （CI #88）。倍增只要幾十步就到，本地量到 18ms。慢測試不是「調高 timeout」的理由，
     // 是測試寫法的問題。
-    const result = await runTool(
+    const error = await runFailing(
       { memoryLimitBytes: 1024 * 1024, timeoutMs: 10_000 },
       'let 越長越大 = [0]; for (;;) 越長越大 = 越長越大.concat(越長越大);',
     );
 
-    expect(result).toContain('out of memory');
+    expect(error.message).toContain('out of memory');
   });
 
   // 上限真的是我們設的那個在起作用，而不是撞到 QuickJS 自己的什麼天花板：同一段程式，
@@ -146,11 +175,11 @@ describe('資源邊界——只有設定的那麼強', () => {
   it('上限放大，撐得比較久', async () => {
     const code = 'let 越長越大 = [0]; for (;;) 越長越大 = 越長越大.concat(越長越大);';
     const 小的 = Date.now();
-    await runTool({ memoryLimitBytes: 1024 * 1024, timeoutMs: 10_000 }, code);
+    await runFailing({ memoryLimitBytes: 1024 * 1024, timeoutMs: 10_000 }, code);
     const 小的耗時 = Date.now() - 小的;
 
     const 大的 = Date.now();
-    await runTool({ memoryLimitBytes: 32 * 1024 * 1024, timeoutMs: 10_000 }, code);
+    await runFailing({ memoryLimitBytes: 32 * 1024 * 1024, timeoutMs: 10_000 }, code);
     const 大的耗時 = Date.now() - 大的;
 
     expect(大的耗時).toBeGreaterThan(小的耗時);
@@ -167,25 +196,25 @@ describe('資源邊界——只有設定的那麼強', () => {
   // 耗盡，本地量到 6.7 秒而且時間取決於機器有多少記憶體，那種測試進不了 gate。
   it('逾時攔不住瘋狂配置記憶體的程式——那是記憶體上限的工作', async () => {
     const started = Date.now();
-    const result = await runTool(
+    const error = await runFailing(
       { memoryLimitBytes: 32 * 1024 * 1024, timeoutMs: 50 },
       'let 越長越大 = [0]; for (;;) 越長越大 = 越長越大.concat(越長越大);',
     );
     const 實際耗時 = Date.now() - started;
 
     // 收場的是記憶體上限，不是逾時——訊息本身就是證據。
-    expect(result).toContain('out of memory');
+    expect(error.message).toContain('out of memory');
     // 而且它跑得比逾時久得多。攔得住的話這條會紅，那代表 README 該改的是另一邊。
     expect(實際耗時).toBeGreaterThan(50);
   });
 
   it('無窮遞迴撞的是堆疊上限，不是記憶體上限', async () => {
-    const result = await runTool(
+    const error = await runFailing(
       { maxStackSizeBytes: 64 * 1024, timeoutMs: 10_000 },
       'function 遞迴() { return 遞迴(); } 遞迴()',
     );
 
-    expect(result).toContain('stack overflow');
+    expect(error.message).toContain('stack overflow');
   });
 });
 
