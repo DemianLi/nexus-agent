@@ -582,6 +582,9 @@ export interface SessionEventMap {
      *
      * **模型看不到它**，同 dsh（surface 投影只回 `message`）：推模型歷史的一側不讀這一格。失敗的呼叫
      * 不帶。**這裡存完整的一份**，上線那一刻才截，同 `message` 的文字。
+     *
+     * ⚠️ **讀到的行、搜尋命中的行、改檔前後的片段都原樣在裡面**，跟著整顆事件進本機日誌、也進遙測
+     * （協調器把整份 `data` 當 body 送，同 dsh 的 `coordinator.ts:189`，`477b4f4`）。沒有另外的上限。
      */
     readonly meta?: unknown;
   };
