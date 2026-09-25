@@ -24,6 +24,9 @@
  * （{@link ensureFallbackTitle}）。pump 那條是「領走開跑」的那一刻，不是送出的那一刻：送出佇列（#637）之後這兩個時刻
  * 分開了，而 dsh 的 `user/message` 也是開跑時才落。
  *
+ * **寫不進去只講一聲，那一輪照跑**，同 dsh `onUserMessage` 的 catch。叫的人各自包一層：寫在那一輪自己的 try 裡面，
+ * 拋出來的東西就算漏接也不會留下一顆沒有結尾的 `turn/start`。
+ *
  * **對 dsh 的偏離：同步寫，不延到微任務。** dsh 的 `onUserMessage` 跑在 `session/event` 的訂閱者裡，那裡不能重入寫日誌，
  * 所以 `defer` 到下一個微任務、再重查一次「還活著、還沒有標題」。我們寫的位置不是訂閱者，是寫 `turn/start` 的那一段
  * 程式自己，沒有那個成因；同步寫也就不需要 dsh 那一層「延後期間被別人搶先」的重查。
@@ -68,7 +71,7 @@ function assertPositiveInteger(name: string, value: number): void {
 
 /**
  * 兩個上限都是正整數，否則拋。**寫的人在起動期就叫它**：到了寫標題的那一刻已經在一輪裡面，那時才發現設定是壞的，
- * 賠上的是那一輪。
+ * 只剩一行 warn，而且每一輪都一樣、標題永遠寫不出來。
  *
  * @throws 任一個不是正整數。
  */

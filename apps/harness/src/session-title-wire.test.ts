@@ -13,13 +13,25 @@ import { MemorySaver } from '@langchain/langgraph';
 import { SessionLog } from '@nexus/core';
 import type { GoalId, SessionEvent } from '@nexus/core';
 import type { Event, TitlePayload } from '@nexus/wire';
-import { emptyConversation, historyPath, INBOX, reduceAll, TITLE } from '@nexus/wire';
+import {
+  createWireClient,
+  emptyConversation,
+  historyPath,
+  INBOX,
+  reduceAll,
+  TITLE,
+} from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
-import { runCli } from './cli.js';
+import { createCliAgent, runCli, runTurn } from './cli.js';
 import { historyPage } from './conversation-history.js';
-import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
+import {
+  emptyCommandPoint,
+  loopbackRequest,
+  shippedPlugins,
+  TEST_BROWSER_AUTH,
+} from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
@@ -51,11 +63,32 @@ function isTitlePush(frame: Event): boolean {
   return titlePushes([frame]).length > 0;
 }
 
+/** 讓這份日誌寫不進 `session/title`，其餘照寫：模擬「標題那一筆寫不進去」。 */
+function breakTitleWrites(log: SessionLog): void {
+  const append = log.append.bind(log);
+  log.append = ((type: Parameters<SessionLog['append']>[0], data: never) => {
+    if (type === 'session/title') throw new Error('磁碟滿了');
+    return append(type, data);
+  }) as SessionLog['append'];
+}
+
 /** 一條真的組裝的 thread，加一條訂了全部 channel 的下行。沒接落盤：日誌只在記憶體裡。 */
-async function openReal(replies: readonly string[], seed?: readonly SessionEvent[]) {
+async function openReal(
+  replies: readonly string[],
+  seed?: readonly SessionEvent[],
+  warn?: (message: string) => void,
+) {
   const model = new ScriptedChatModel({ turns: replies.map((content) => ({ content })) });
   const built = await createNexusAgent({ model, checkpointer: new MemorySaver(), plugins: [] });
-  const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'title-real', undefined, seed);
+  const pump = new ThreadPump(
+    built.agent as unknown as PumpAgent,
+    'title-real',
+    undefined,
+    seed,
+    undefined,
+    undefined,
+    warn,
+  );
   const detach = built.attachSession(pump.sessions);
   const frames: Event[] = [];
   const line = new AbortController();
@@ -153,6 +186,89 @@ describe('web 那條：開跑時寫一次、推一顆', () => {
     } finally {
       await thread.close();
     }
+  }, 20000);
+});
+
+describe('寫不進去只講一聲，那一輪照跑（同 dsh `onUserMessage` 的 catch）', () => {
+  it('pump：warn 一行，那一輪照常收尾，模型照樣回', async () => {
+    const warnings: string[] = [];
+    const thread = await openReal(['第一個回覆。'], undefined, (message) => warnings.push(message));
+    try {
+      breakTitleWrites(thread.pump.sessionLog);
+      await thread.pump.submit({ kind: 'message', text: FIRST });
+      await thread.pump.whenIdle();
+
+      const types = thread.pump.sessionLog.events.map((event) => event.type);
+      expect(types).not.toContain('session/title');
+      expect(types).not.toContain('turn/failed');
+      expect(types.at(-1)).toBe('turn/end');
+      expect(thread.model.prompts).toHaveLength(1);
+      expect(titlePushes(thread.frames)).toEqual([]);
+      expect(warnings).toEqual([
+        '[標題] thread title-real 的退回標題寫不進去：Error: 磁碟滿了',
+      ]);
+    } finally {
+      await thread.close();
+    }
+  }, 20000);
+
+  it('serve：createWireHandler 拿到的 warn 一路傳到 pump', async () => {
+    const warnings: string[] = [];
+    const model = new ScriptedChatModel({ turns: [{ content: '回覆。' }] });
+    const built = await createNexusAgent({ model, checkpointer: new MemorySaver(), plugins: [] });
+    let rootLog: SessionLog | undefined;
+    const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
+      warn: (message) => warnings.push(message),
+      createAgent: async () => ({
+        agent: built.agent as unknown as PumpAgent,
+        commands: emptyCommandPoint(),
+        dispose: async () => built.dispose(),
+        attachSession: (sessions) => {
+          rootLog = sessions.root;
+          breakTitleWrites(sessions.root);
+          return () => {};
+        },
+      }),
+    });
+    try {
+      const client = createWireClient({
+        baseUrl: 'http://title.test',
+        fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
+      });
+      expect((await client.runStart('title-serve', FIRST)).type).toBe('success');
+      const deadline = Date.now() + 10000;
+      while (rootLog?.events.at(-1)?.type !== 'turn/end' && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(rootLog?.events.at(-1)?.type).toBe('turn/end');
+      expect(warnings).toEqual([
+        '[標題] thread title-serve 的退回標題寫不進去：Error: 磁碟滿了',
+      ]);
+    } finally {
+      await handler.close();
+    }
+  }, 20000);
+
+  it('CLI：printer.error 一行，那一輪照常收尾', async () => {
+    const { agent, dispose, sessionLog } = await createCliAgent(
+      { live: false },
+      await shippedPlugins(),
+    );
+    const errors: string[] = [];
+    try {
+      breakTitleWrites(sessionLog);
+      await runTurn(
+        agent,
+        FIRST,
+        { log: () => undefined, error: (message) => void errors.push(message) },
+        sessionLog,
+      );
+    } finally {
+      await dispose();
+    }
+    expect(sessionLog.events.map((event) => event.type)).toEqual(['turn/start', 'turn/end']);
+    expect(errors).toEqual(['[標題] 退回標題寫不進去：Error: 磁碟滿了']);
   }, 20000);
 });
 

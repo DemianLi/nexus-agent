@@ -164,7 +164,7 @@ describe('會話事件日誌：CLI 那條路', () => {
 
     await expect(runTurn(exploding, '嗨', silent, log)).rejects.toThrow('串流開不起來');
 
-    // 標題寫在 try 裡面、串流之前，所以它先落，失敗照樣收成 `turn/failed`（#647）。
+    // 標題寫在 try 裡面、串流之前，所以它先落；串流的失敗照樣收成 `turn/failed`（#647）。
     expect(log.events.map((event) => event.type)).toEqual([
       'turn/start',
       'session/title',

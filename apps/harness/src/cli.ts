@@ -1027,10 +1027,15 @@ export async function runTurn(
         },
   );
   try {
-    // 退回標題（#647），同 web 的 pump：人打的字那一種才寫，還沒有標題才寫。**在 try 裡面**，拋了就收成 `turn/failed`，
-    // 不留一顆沒有結尾的 `turn/start`。CLI 的日誌今天沒有讀標題的人（serve 的列表讀不到 run 目錄），寫它是照 dsh：
-    // 退回標題在 `base` bundle 裡，每一種組裝都有。
-    if (typeof input === 'string') ensureFallbackTitle(sessionLog, titleLimits);
+    // 退回標題（#647），同 web 的 pump：人打的字那一種才寫，還沒有標題才寫，寫不進去只講一聲、這一輪照跑。CLI 的日誌
+    // 今天沒有讀標題的人（serve 的列表讀不到 run 目錄），寫它是照 dsh：退回標題在 `base` bundle 裡，每一種組裝都有。
+    if (typeof input === 'string') {
+      try {
+        ensureFallbackTitle(sessionLog, titleLimits);
+      } catch (error: unknown) {
+        printer.error(`[標題] 退回標題寫不進去：${String(error)}`);
+      }
+    }
     for await (const [mode, payload] of await agent.stream(toAgentInvocation(text), {
       streamMode: ['updates', 'values'],
       configurable: { thread_id: THREAD_ID },

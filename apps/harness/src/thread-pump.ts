@@ -643,6 +643,8 @@ export class ThreadPump {
   readonly #toolTextMaxBytes: number;
   /** 退回標題的兩個上限（#647），建構時驗過。 */
   readonly #titleLimits: ThreadTitleLimits;
+  /** 這台 server 講話的地方，見建構子的 `warn`。 */
+  readonly #warn: ((message: string) => void) | undefined;
   readonly #subscribers = new Set<Subscriber>();
   readonly #sessions: SessionRegistry;
   /**
@@ -771,7 +773,9 @@ export class ThreadPump {
    *   值由 `serve.ts` 在起動期從清單解出來、經 `createWireHandler` 傳進來。**省略即 schema 的
    *   預設**——這條路上有二十九個測試呼叫點，全部改成必填買不到任何東西：它們量的不是上限。
    * @param titleLimits - 退回標題的兩個上限（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）。來路與
-   *   「省略即 schema 的預設」同 `toolText`。**在這裡驗**：寫標題的那一刻已經在一輪裡面，那時才拋賠上的是那一輪。
+   *   「省略即 schema 的預設」同 `toolText`。**在這裡驗**：寫標題的那一刻已經在一輪裡面，那時才拋只剩一行 warn，標題永遠寫不出來。
+   * @param warn - 這台 server 講話的地方（`createWireHandler` 的 `warn`）。今天只有退回標題寫不進去時會走到它。
+   *   **省略即不講**，同 `createWireHandler`。
    * @throws `titleLimits` 不是兩個正整數。
    */
   constructor(
@@ -781,12 +785,14 @@ export class ThreadPump {
     rootSeed?: readonly SessionEvent[],
     toolText?: ToolTextConfig,
     titleLimits?: ThreadTitleLimits,
+    warn?: (message: string) => void,
   ) {
     this.#agent = agent;
     this.#threadId = threadId;
     this.#toolTextMaxBytes = (toolText ?? toolTextConfigSchema.parse({})).maxBytes;
     this.#titleLimits = titleLimits ?? threadTitleConfigSchema.parse({});
     assertThreadTitleLimits(this.#titleLimits);
+    this.#warn = warn;
     this.#sessions = new SessionRegistry(threadId, rootSeed === undefined ? {} : { rootSeed });
     this.#driver = driver;
     // 訂閱**註冊表**，不是只訂 root：子代理的日誌後來才開，`observe` 會補上每一份（#296）。
@@ -1341,9 +1347,15 @@ export class ThreadPump {
     this.#current = current;
     try {
       // 退回標題（#647）：這條會話還沒有標題就從第一則合格的人話推一個。**在領走之後**，所以是開跑的那一刻、用開跑的
-      // 那份文字，同 dsh 的 `user/message` 開跑時才落。**在 try 裡面**：它拋的話（上限已在建構時驗過，剩下的只有日誌本身
-      // 寫不進去）這一輪收成 `turn/failed`，不會留下一顆沒有結尾的 `turn/start`。
-      if (input.kind === 'message') ensureFallbackTitle(this.#sessions.root, this.#titleLimits);
+      // 那份文字，同 dsh 的 `user/message` 開跑時才落。**寫不進去只講一聲，這一輪照跑**，同 dsh `onUserMessage` 的
+      // catch：標題是附帶的，不值得賠上使用者那一輪。自己包一層、又放在外層 try 裡面，兩件都保住。
+      if (input.kind === 'message') {
+        try {
+          ensureFallbackTitle(this.#sessions.root, this.#titleLimits);
+        } catch (error: unknown) {
+          this.#warn?.(`[標題] thread ${this.#threadId} 的退回標題寫不進去：${String(error)}`);
+        }
+      }
       // **取串流這一步也在 try 裡面。** 它自己就會拋（模型建不起來、憑證不對），
       // 而擺在外面的話那種失敗會留下一顆沒有結尾的 `turn/start` ——
       // 日誌上看起來像跑到一半消失，跟真的跑到一半消失分不出來。
