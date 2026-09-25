@@ -107,6 +107,18 @@ const UNWIRED_FEEDBACK: Pick<
 };
 
 /**
+ * 送出佇列的改與刪同一條理由：這一檔的測試不碰它，碰到就是測試寫錯了，所以回拒絕。
+ */
+const UNWIRED_QUEUE: Pick<WireClient, 'queueUpdate'> = {
+  queueUpdate: async () => ({
+    type: 'error',
+    id: 0,
+    error: 'not_supported',
+    message: '這一檔沒有接送出佇列',
+  }),
+};
+
+/**
  * 「以前的會話」同一條理由：要清單的測試自己換掉這一格。**歷史回一份空的、不是拒絕**：每一條 thread 開起來都會
  * 拿歷史，拒絕的話畫面上多一行「拿不回來」，跟這一條測試要驗的東西無關。要歷史的測試自己換掉。
  */
@@ -159,6 +171,7 @@ function fakeClient(
       return { type: 'success', id: 3, result: { accepted: true } };
     },
     ...UNWIRED_FEEDBACK,
+    ...UNWIRED_QUEUE,
     ...UNWIRED_THREAD_LIST,
   };
   return { client, sent, responded, slashed, opened, cancels };
@@ -260,6 +273,7 @@ describe('對話介面', () => {
       slashList: async () => ({ kind: 'ok', commands: [] }),
       slashRun: async () => ({ kind: 'unknown' }),
       ...UNWIRED_FEEDBACK,
+      ...UNWIRED_QUEUE,
       ...UNWIRED_THREAD_LIST,
     };
     render(<App client={client} />);
@@ -611,6 +625,7 @@ describe('上行被拒絕的時候', () => {
       slashList: async () => ({ kind: 'ok', commands: [] }),
       slashRun: async () => ({ kind: 'unknown' }),
       ...UNWIRED_FEEDBACK,
+      ...UNWIRED_QUEUE,
       ...UNWIRED_THREAD_LIST,
     };
     render(<App client={client} />);
