@@ -22,7 +22,6 @@
 
 import { ArrowDown, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
 
 import type {
   AnswerEntry,
@@ -35,6 +34,8 @@ import type {
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { ChangesCard } from '@/components/changes-card';
 import { DeliverablesCard } from '@/components/deliverables-card';
+import { EarlierPager, earlierLoadedNotice, useEarlierAutoLoad } from '@/components/earlier-pager';
+import type { EarlierHistory } from '@/components/earlier-pager';
 import { MarkdownText } from '@/components/markdown-text';
 import { ReasoningRow } from '@/components/reasoning-row';
 import { AttributionBadge, ToolCard } from '@/components/tool-card';
@@ -301,7 +302,7 @@ export function Transcript({
   state,
   isFresh,
   feedback,
-  before,
+  earlier,
   changes,
   deliverableFiles,
   deliverableDownload,
@@ -310,8 +311,8 @@ export function Transcript({
   /** 哪幾則是這一次看著它長出來的（`useFreshItems`，在常駐的元件裡算）。 */
   isFresh: (id: string) => boolean;
   feedback?: TranscriptFeedback;
-  /** 列表最上面的東西（「載入更早的訊息」）。 */
-  before?: ReactNode;
+  /** 往前翻（`earlier-pager.tsx`）。沒給就沒有按鈕、也不自動載入。 */
+  earlier?: EarlierHistory;
   /** 改動的摘要與比較從哪裡讀（#443）。沒給就不畫改動卡。 */
   changes?: ChangesStores;
   /**
@@ -360,16 +361,18 @@ export function Transcript({
     };
   });
   const announced = useFinishedReply(state.entries, isFresh);
+  const autoLoad = useEarlierAutoLoad(earlier);
 
   return (
     <MessageScrollerProvider autoScroll>
       <MessageScroller className="min-h-0 flex-1">
-        <MessageScrollerViewport aria-label="對話訊息" preserveScrollOnPrepend>
+        <MessageScrollerViewport aria-label="對話訊息" preserveScrollOnPrepend {...autoLoad}>
+          {/* 在 content 外面，prepend 保位才動得了手（見 `earlier-pager.tsx`）。 */}
+          {earlier?.hasMore === true && <EarlierPager earlier={earlier} />}
           <MessageScrollerContent
             aria-live="off"
             className="mx-auto w-full max-w-2xl gap-4 px-6 pt-4 pb-10"
           >
-            {before}
             {items.map((item) => (
               <MessageScrollerItem
                 key={item.id}
@@ -389,6 +392,10 @@ export function Transcript({
       </MessageScroller>
       <p aria-live="polite" className="sr-only">
         {announced}
+      </p>
+      {/* 另一格：跟「回覆完成」那一句分開，互不蓋掉。按鈕翻到底收掉之後這一格還在，最後一頁也唸得到。 */}
+      <p aria-live="polite" className="sr-only" data-testid="earlier-notice">
+        {earlierLoadedNotice(earlier?.loaded)}
       </p>
     </MessageScrollerProvider>
   );

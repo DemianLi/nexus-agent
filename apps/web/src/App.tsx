@@ -66,9 +66,6 @@ export const SWITCHED_THREAD_NOTICE =
 export const LEGACY_THREAD_NOTICE =
   '這條會話是舊格式：模型的回覆沒有保存，底下只有你打的字與工具卡；模型也不記得之前的對話，從空的開始。';
 
-/** 往前翻那顆按鈕。 */
-export const LOAD_EARLIER_LABEL = '載入更早的對話';
-
 const ORIGIN_NOTICE: Readonly<Record<ThreadChoice['origin'], string | undefined>> = {
   fresh: undefined,
   recalled: RESUMED_THREAD_NOTICE,
@@ -322,20 +319,14 @@ function ConversationView({
               onSeed: conversation.seedRatings,
               onRate: (messageId, rating) => void conversation.rate(messageId, rating),
             }}
-            before={
-              conversation.history?.hasMore === true && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="self-center"
-                  disabled={conversation.history.loading}
-                  onClick={() => void conversation.loadEarlier()}
-                >
-                  {LOAD_EARLIER_LABEL}
-                </Button>
-              )
-            }
+            {...(conversation.history === undefined
+              ? {}
+              : {
+                  earlier: {
+                    ...conversation.history,
+                    onLoad: () => void conversation.loadEarlier(),
+                  },
+                })}
           />
         )}
 

@@ -65,13 +65,20 @@ export interface HistoryView {
   readonly legacy: boolean;
   /** 正在拿更早的那一頁。 */
   readonly loading: boolean;
+  /**
+   * 上一次往前翻拿不到的原因。**跟 {@link Conversation.historyError} 分開**：那一格是第一頁讀不到、畫在上方；
+   * 這一格畫在按鈕旁邊，有它就不自動載入（`earlier-pager.tsx`）。再按一次就清掉。
+   */
+  readonly error?: string;
+  /** 最近一次往前翻接上了幾則（人打的字與模型的回覆各算一則，同 wire 一頁的單位），報讀用。 */
+  readonly loaded?: number;
 }
 
 export interface Conversation {
   readonly state: ConversationState;
   /** 歷史拿到了沒、還有沒有更早的。**拿到之前是 `undefined`**，拿不到時看 {@link historyError}。 */
   readonly history?: HistoryView;
-  /** 歷史拿不回來的原因。對話照樣接得下去，只是之前說過的話不在畫面上。 */
+  /** 第一頁歷史拿不回來的原因。對話照樣接得下去，只是之前說過的話不在畫面上。往前翻的失敗在 {@link HistoryView.error}。 */
   readonly historyError?: string;
   /** 往前翻一頁，接在最前面。沒有更早的、或正在拿時什麼都不做。 */
   loadEarlier(): Promise<void>;
@@ -493,7 +500,10 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const loadEarlier = useCallback(async () => {
     const current = historyRef.current;
     if (current === undefined || !current.hasMore || current.loading) return;
-    setHistory({ ...current, loading: true });
+    // 上一次的錯誤與報讀在按下去的當下清掉：按鈕換成「讀取中…」，旁邊那一句不留著。報讀那一格先清空再寫，
+    // 連續兩頁都是 50 則時第二次才唸得到（文字沒變的話 DOM 不動，polite 區不會再唸）。
+    const { error: _previousError, loaded: _previousLoaded, ...rest } = current;
+    setHistory({ ...rest, loading: true });
     let page;
     try {
       page = await clientRef.current.threadHistory(threadId, {
@@ -501,24 +511,27 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         throughSeq: current.throughSeq,
       });
     } catch (error) {
-      setHistory({ ...current, loading: false });
-      setHistoryError(error instanceof Error ? error.message : String(error));
+      setHistory({
+        ...rest,
+        loading: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
       return;
     }
     if (page.kind === 'rejected') {
-      setHistory({ ...current, loading: false });
-      setHistoryError(page.message);
+      setHistory({ ...rest, loading: false, error: page.message });
       return;
     }
     // 更早那一頁自己從空的折，再接在前面：折進現在這一份的話，它的收尾會把現在的狀態蓋掉。
     const earlier = reduceAll(emptyConversation(), page.result.events);
     advance((previous) => prependEntries(previous, earlier));
-    setHistoryError(undefined);
     setHistory({
-      ...current,
+      ...rest,
       firstSeq: page.result.firstSeq,
       hasMore: page.result.hasMore,
       loading: false,
+      loaded: earlier.entries.filter((entry) => entry.kind === 'human' || entry.kind === 'ai')
+        .length,
     });
   }, [threadId, advance]);
 
@@ -601,7 +614,13 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     ...(history === undefined
       ? {}
       : {
-          history: { hasMore: history.hasMore, legacy: history.legacy, loading: history.loading },
+          history: {
+            hasMore: history.hasMore,
+            legacy: history.legacy,
+            loading: history.loading,
+            ...(history.error === undefined ? {} : { error: history.error }),
+            ...(history.loaded === undefined ? {} : { loaded: history.loaded }),
+          },
         }),
     ...(historyError === undefined ? {} : { historyError }),
     slashCommands,

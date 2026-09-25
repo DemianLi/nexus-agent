@@ -2,7 +2,13 @@ import type { Event, ThreadHistoryQuery, ThreadHistoryResult, WireClient } from 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { App, LEGACY_THREAD_NOTICE, LOAD_EARLIER_LABEL } from '@/App';
+import { App, LEGACY_THREAD_NOTICE } from '@/App';
+import {
+  EARLIER_EDGE_PX,
+  LOAD_EARLIER_LABEL,
+  LOADING_EARLIER_LABEL,
+  RETRY_EARLIER_LABEL,
+} from '@/components/earlier-pager';
 
 /**
  * 切回以前的 thread，畫面照日誌重播（[#306](https://github.com/DemianLi/nexus-agent/issues/306) 的畫面那一刀）。
@@ -263,6 +269,177 @@ describe('畫面照日誌重播', () => {
     expect(queries[1]).toEqual({ beforeSeq: 10, throughSeq: 20 });
     expect(transcript()[0]).toBe('最早那句');
     expect(screen.queryByRole('button', { name: LOAD_EARLIER_LABEL })).toBeNull();
+  });
+});
+
+/**
+ * 往前翻補完（inventory 列 9）：自動載入的意圖閘門、讀取中、失敗分流、讀完報讀。
+ *
+ * **位置保不保得住不在這裡驗**——jsdom 沒有版面。那在真的 Chrome 裡量（PR 內文）；這裡只驗邏輯。
+ */
+describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
+  function viewport(): HTMLElement {
+    return screen.getByRole('region', { name: '對話訊息' });
+  }
+
+  /** jsdom 的 `scrollTop` 不會動，直接蓋一個值。 */
+  function at(element: HTMLElement, scrollTop: number): HTMLElement {
+    Object.defineProperty(element, 'scrollTop', {
+      configurable: true,
+      writable: true,
+      value: scrollTop,
+    });
+    return element;
+  }
+
+  /** 第一頁、第二頁（還有更早的）、第三頁；記下往前翻問了幾次。 */
+  function threePages(): { readonly client: WireClient; readonly earlierCalls: () => number } {
+    let calls = 0;
+    const { client } = fakeClient(async (_threadId, query) => {
+      if (query?.beforeSeq === undefined) {
+        return {
+          kind: 'ok',
+          result: page(turn(20, '後來那句', '後來的回覆'), { firstSeq: 20, hasMore: true }),
+        };
+      }
+      calls += 1;
+      return query.beforeSeq === 20
+        ? {
+            kind: 'ok',
+            result: page(turn(10, '中間那句', '中間的回覆'), { firstSeq: 10, hasMore: true }),
+          }
+        : {
+            kind: 'ok',
+            result: page(turn(0, '最早那句', '最早的回覆'), { firstSeq: 0, hasMore: false }),
+          };
+    });
+    return { client, earlierCalls: () => calls };
+  }
+
+  it('在頂端附近只捲動不算；往下的滾輪、離頂端太遠也不算；往上的滾輪才換一頁，一次意圖只換一頁', async () => {
+    const { client, earlierCalls } = threePages();
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByText('後來的回覆')).toBeTruthy());
+
+    // 剛打開、程式捲動：停在頂端附近也不換。
+    fireEvent.scroll(at(viewport(), 100));
+    fireEvent.wheel(at(viewport(), 100), { deltaY: 100 });
+    fireEvent.wheel(at(viewport(), EARLIER_EDGE_PX + 1), { deltaY: -100 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(earlierCalls()).toBe(0);
+
+    fireEvent.wheel(at(viewport(), 100), { deltaY: -100 });
+    await waitFor(() => expect(screen.getByText('中間的回覆')).toBeTruthy());
+    expect(earlierCalls()).toBe(1);
+
+    // 意圖用掉了：接上之後還停在頂端附近，捲動事件也不再換下一頁。
+    fireEvent.scroll(at(viewport(), 100));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(earlierCalls()).toBe(1);
+
+    // 新的意圖換下一頁；鍵盤與手指往下拖也算往上。
+    fireEvent.keyDown(at(viewport(), 0), { key: 'PageUp' });
+    await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
+    expect(earlierCalls()).toBe(2);
+    const order = transcript();
+    expect(order[0]).toBe('最早那句');
+    expect(order.indexOf('最早的回覆')).toBeLessThan(order.indexOf('中間那句'));
+  });
+
+  it('手指往下拖（內容往上捲）才算意圖，往上拖不算', async () => {
+    const { client, earlierCalls } = threePages();
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByText('後來的回覆')).toBeTruthy());
+
+    fireEvent.touchStart(at(viewport(), 0), { touches: [{ clientY: 300 }] });
+    fireEvent.touchMove(viewport(), { touches: [{ clientY: 250 }] });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(earlierCalls()).toBe(0);
+
+    fireEvent.touchMove(viewport(), { touches: [{ clientY: 320 }] });
+    await waitFor(() => expect(screen.getByText('中間的回覆')).toBeTruthy());
+    expect(earlierCalls()).toBe(1);
+  });
+
+  it('讀取中按鈕換字並停用；讀完另一格報讀接上幾則，回覆完成那一格不被蓋掉', async () => {
+    let release: (() => void) | undefined;
+    const { client } = fakeClient(async (_threadId, query) => {
+      if (query?.beforeSeq === undefined) {
+        return {
+          kind: 'ok',
+          result: page(turn(10, '後來那句', '後來的回覆'), { firstSeq: 10, hasMore: true }),
+        };
+      }
+      await new Promise<void>((resolve) => (release = resolve));
+      return { kind: 'ok', result: page(turn(0, '最早那句', '最早的回覆')) };
+    });
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByText('後來的回覆')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: LOAD_EARLIER_LABEL }));
+    const loading = await screen.findByRole('button', { name: LOADING_EARLIER_LABEL });
+    expect((loading as HTMLButtonElement).disabled).toBe(true);
+
+    release?.();
+    await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
+    // 一頁一輪：人打的一句＋模型的一則回覆（工具卡不算，同 wire 一頁的單位）。
+    expect(screen.getByTestId('earlier-notice').textContent).toBe('載入了較早的 2 則。');
+    // 「回覆完成」那一格（第一個 polite 區）不被蓋掉。
+    expect(document.querySelector('[aria-live="polite"]')?.textContent).not.toMatch(/載入了/);
+  });
+
+  it('連續兩頁接上一樣多則：報讀那一格讀取中先清空，第二次也唸得到', async () => {
+    const { client } = threePages();
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByText('後來的回覆')).toBeTruthy());
+    const notice = (): string | null => screen.getByTestId('earlier-notice').textContent;
+
+    fireEvent.click(screen.getByRole('button', { name: LOAD_EARLIER_LABEL }));
+    await waitFor(() => expect(screen.getByText('中間的回覆')).toBeTruthy());
+    expect(notice()).toBe('載入了較早的 2 則。');
+
+    const seen: (string | null)[] = [];
+    const region = screen.getByTestId('earlier-notice');
+    const observer = new MutationObserver(() => seen.push(region.textContent));
+    observer.observe(region, { childList: true, characterData: true, subtree: true });
+    fireEvent.click(screen.getByRole('button', { name: LOAD_EARLIER_LABEL }));
+    await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
+    observer.disconnect();
+    expect(seen).toContain('');
+    expect(notice()).toBe('載入了較早的 2 則。');
+  });
+
+  it('失敗：錯誤畫在按鈕旁、上方那一行不出現、之後往上捲不自動重試；按「再試一次」成功就清掉', async () => {
+    let calls = 0;
+    const { client } = fakeClient(async (_threadId, query) => {
+      if (query?.beforeSeq === undefined) {
+        return {
+          kind: 'ok',
+          result: page(turn(10, '後來那句', '後來的回覆'), { firstSeq: 10, hasMore: true }),
+        };
+      }
+      calls += 1;
+      return calls === 1
+        ? { kind: 'rejected', message: '日誌讀到一半斷了' }
+        : { kind: 'ok', result: page(turn(0, '最早那句', '最早的回覆')) };
+    });
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByText('後來的回覆')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: LOAD_EARLIER_LABEL }));
+    await screen.findByRole('button', { name: RETRY_EARLIER_LABEL });
+    expect(within(viewport()).getByText('讀不到更早的對話：日誌讀到一半斷了')).toBeTruthy();
+    expect(screen.queryByText(/之前說過的話拿不回來/)).toBeNull();
+
+    fireEvent.wheel(at(viewport(), 0), { deltaY: -100 });
+    fireEvent.scroll(viewport());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(calls).toBe(1);
+
+    fireEvent.click(screen.getByRole('button', { name: RETRY_EARLIER_LABEL }));
+    await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
+    expect(calls).toBe(2);
+    expect(screen.queryByText(/讀不到更早的對話/)).toBeNull();
   });
 });
 
