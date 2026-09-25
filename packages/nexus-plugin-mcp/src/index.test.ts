@@ -11,6 +11,7 @@
  */
 
 import { fileURLToPath } from 'node:url';
+import type { ToolMessage } from '@langchain/core/messages';
 import { loadPlugins } from '@nexus/core';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -139,6 +140,7 @@ describe('接上一台真的 MCP server', () => {
       expect([...registry.tools.effective().keys()]).toEqual([
         'mcp__fixture__fetch_release_note',
         expect.stringMatching(/^mcp__fixture__legacy_ping_[0-9a-f]{12}$/),
+        'mcp__fixture__snapshot',
       ]);
       expect(registry.capabilities.has(MCP_CAPABILITY)).toBe(true);
     } finally {
@@ -159,6 +161,28 @@ describe('接上一台真的 MCP server', () => {
       );
       const pong = await registry.tools.resolve(renamed ?? '')?.value.invoke({});
       expect(String(pong)).toContain('pong');
+    } finally {
+      await dispose();
+    }
+  });
+
+  // 模型那一側的工具訊息只收文字（#642：NVIDIA 對 `role: tool` 帶圖回 400，`image_url` 也一樣）。照 dsh 的
+  // `mcp-client`（`src/tools.ts:376-435`，`477b4f4`）：收不下的圖換成一段說明，其餘原樣、順序不變。**換在工具本體
+  // 裡**，所以日誌、state、續接與 web 的工具卡拿到的是同一份。
+  it('回圖的工具：圖換成說明文字，前後的文字與順序原樣', async () => {
+    const { registry, dispose } = await loadPlugins([fixturePlugin()]);
+    try {
+      const message = (await registry.tools.resolve('mcp__fixture__snapshot')?.value.invoke({
+        type: 'tool_call',
+        id: 'call_snapshot',
+        name: 'mcp__fixture__snapshot',
+        args: {},
+      })) as ToolMessage;
+      expect(message.content).toEqual([
+        { type: 'text', text: '畫面之前' },
+        { type: 'text', text: '[image unavailable: image/png; no attachment store is mounted]' },
+        { type: 'text', text: '畫面之後' },
+      ]);
     } finally {
       await dispose();
     }

@@ -36,4 +36,21 @@ server.registerTool(
   () => ({ content: [{ type: 'text', text: 'pong' }] }),
 );
 
+/** 一張 1×1 的 PNG，base64。`snapshot` 回它。 */
+export const SNAPSHOT_PNG =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+// 文字夾著一張圖。模型那一側收不下圖（#642），這一支驗圖被換成說明、兩段文字與順序原樣。
+server.registerTool(
+  'snapshot',
+  { description: '回一張截圖，前後各一句說明。', inputSchema: {} },
+  () => ({
+    content: [
+      { type: 'text', text: '畫面之前' },
+      { type: 'image', data: SNAPSHOT_PNG, mimeType: 'image/png' },
+      { type: 'text', text: '畫面之後' },
+    ],
+  }),
+);
+
 await server.connect(new StdioServerTransport());
