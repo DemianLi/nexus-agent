@@ -40,13 +40,14 @@
  * `disabled: true` 在載入期當場拋。理由同起動期那幾列：關掉它不會讓工具結果不再被截，
  * `startupSetting` 把關掉的那一列當成沒有那一列，值回到 schema 的預設，行為一個位元組都不變。
  *
- * ## 80 倍那條比例只保證到預設值為止
+ * ## 一頁歷史的那條比例只保證到預設值為止
  *
- * `@nexus/wire` 的 `HISTORY_PAGE_MAX_BYTES = 8_000_000` 是 `80 × (50000 ＋ 50000)`——一張卡是結果文字加
- * 給專屬卡的 `meta`，兩者的上限都是這一格（[#617](https://github.com/DemianLi/nexus-agent/issues/617)）——而 wire 不能往上
- * import harness，所以那個關係一直由 `apps/harness` 的一條測試逐字釘著。**這一列讓那個關係
- * 只在 schema 預設下成立**：部署在 patch 裡改掉 {@link DEFAULT_TOOL_TEXT_MAX_BYTES}
- * 之後，80 倍不再成立，而且沒有任何東西會紅。
+ * `@nexus/wire` 的 `HISTORY_PAGE_MAX_BYTES = 8_000_000` 是照每張工具卡的最壞值算的：一張卡是結果文字加
+ * 給專屬卡的 `meta`，文字的上限是這一格，`meta` 的上限是這一格（搜尋、diff，[#617](https://github.com/DemianLi/nexus-agent/issues/617)）
+ * 或它的兩倍（讀檔，[#630](https://github.com/DemianLi/nexus-agent/issues/630)），所以一頁裝得下 80 張
+ * 滿版搜尋卡、約 53 張滿版讀檔卡。wire 不能往上 import harness，所以那個關係一直由 `apps/harness` 的一條
+ * 測試逐字釘著。**這一列讓那個關係只在 schema 預設下成立**：部署在 patch 裡改掉
+ * {@link DEFAULT_TOOL_TEXT_MAX_BYTES} 之後，一頁能裝幾張卡跟著變，而且沒有任何東西會紅。
  *
  * 那是 #538 三選一裡**明著選的第三條**（2026-09-23 拍板），不是漏掉的：另外兩條分別要把協定
  * 常數變成設定、或讓 wire 反過來收 harness 注入的值，兩條都在動協定層的形狀。dsh 那側沒有
