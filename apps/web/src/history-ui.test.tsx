@@ -382,12 +382,31 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
 
     release?.();
     await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
-    const polite = [...document.querySelectorAll('[aria-live="polite"]')].map(
-      (node) => node.textContent,
-    );
     // 一頁一輪：人打的一句＋模型的一則回覆（工具卡不算，同 wire 一頁的單位）。
-    expect(polite).toContain('載入了較早的 2 則。');
-    expect(polite[0]).not.toMatch(/載入了/);
+    expect(screen.getByTestId('earlier-notice').textContent).toBe('載入了較早的 2 則。');
+    // 「回覆完成」那一格（第一個 polite 區）不被蓋掉。
+    expect(document.querySelector('[aria-live="polite"]')?.textContent).not.toMatch(/載入了/);
+  });
+
+  it('連續兩頁接上一樣多則：報讀那一格讀取中先清空，第二次也唸得到', async () => {
+    const { client } = threePages();
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByText('後來的回覆')).toBeTruthy());
+    const notice = (): string | null => screen.getByTestId('earlier-notice').textContent;
+
+    fireEvent.click(screen.getByRole('button', { name: LOAD_EARLIER_LABEL }));
+    await waitFor(() => expect(screen.getByText('中間的回覆')).toBeTruthy());
+    expect(notice()).toBe('載入了較早的 2 則。');
+
+    const seen: (string | null)[] = [];
+    const region = screen.getByTestId('earlier-notice');
+    const observer = new MutationObserver(() => seen.push(region.textContent));
+    observer.observe(region, { childList: true, characterData: true, subtree: true });
+    fireEvent.click(screen.getByRole('button', { name: LOAD_EARLIER_LABEL }));
+    await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
+    observer.disconnect();
+    expect(seen).toContain('');
+    expect(notice()).toBe('載入了較早的 2 則。');
   });
 
   it('失敗：錯誤畫在按鈕旁、上方那一行不出現、之後往上捲不自動重試；按「再試一次」成功就清掉', async () => {

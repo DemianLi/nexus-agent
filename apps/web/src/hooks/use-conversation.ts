@@ -500,8 +500,9 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const loadEarlier = useCallback(async () => {
     const current = historyRef.current;
     if (current === undefined || !current.hasMore || current.loading) return;
-    // 上一次的錯誤在按下去的當下清掉：按鈕換成「讀取中…」，旁邊那一句不留著。
-    const { error: _previousError, ...rest } = current;
+    // 上一次的錯誤與報讀在按下去的當下清掉：按鈕換成「讀取中…」，旁邊那一句不留著。報讀那一格先清空再寫，
+    // 連續兩頁都是 50 則時第二次才唸得到（文字沒變的話 DOM 不動，polite 區不會再唸）。
+    const { error: _previousError, loaded: _previousLoaded, ...rest } = current;
     setHistory({ ...rest, loading: true });
     let page;
     try {

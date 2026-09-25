@@ -394,7 +394,7 @@ export function Transcript({
         {announced}
       </p>
       {/* 另一格：跟「回覆完成」那一句分開，互不蓋掉。按鈕翻到底收掉之後這一格還在，最後一頁也唸得到。 */}
-      <p aria-live="polite" className="sr-only">
+      <p aria-live="polite" className="sr-only" data-testid="earlier-notice">
         {earlierLoadedNotice(earlier?.loaded)}
       </p>
     </MessageScrollerProvider>
