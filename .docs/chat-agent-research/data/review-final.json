@@ -980,12 +980,6 @@
       "key": "T6",
       "main": [
         {
-          "id": "1607.00070",
-          "subarea": "經典與神經使用者模擬器",
-          "reason": "使用 encoder-decoder RNN 學習使用者對話行為的經典方法，為任務型對話 RL 訓練奠定基礎",
-          "evidence": "This paper introduces a data-driven user simulator based on an encoder-decoder recurrent neural network"
-        },
-        {
           "id": "1612.05688",
           "subarea": "經典與神經使用者模擬器",
           "reason": "公開可用的任務完成對話使用者模擬框架，支援 RL 訓練與線上評估",
@@ -1132,12 +1126,6 @@
           "evidence": ""
         },
         {
-          "id": "2411.10109",
-          "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
-          "reason": "人工複核：以訪談自述建構千人模擬代理並量測與真人回答的一致性",
-          "evidence": ""
-        },
-        {
           "id": "2212.07769",
           "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
           "reason": "LLM 選擇性澄清模糊問題的框架，用特權資訊模擬使用者自動評估多輪澄清",
@@ -1166,6 +1154,18 @@
           "subarea": "使用者回饋迴路與滿意度估計",
           "reason": "從隱式使用者反饋學習改進 NLU，無監督挖掘監督信號，Amazon 生產系統驗證",
           "evidence": "by leveraging implicit user feedback, with an insight that user interaction data and dialog context have rich information embedded"
+        },
+        {
+          "id": "1607.00070",
+          "subarea": "經典與神經使用者模擬器",
+          "reason": "人工複核：seq2seq 使用者模擬的早期代表作；預抓確認沒有 HTML 全文，降為最後的候補",
+          "evidence": "This paper introduces a data-driven user simulator based on an encoder-decoder recurrent neural network"
+        },
+        {
+          "id": "2411.10109",
+          "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+          "reason": "人工複核：以訪談自述建構千人模擬代理並量測與真人回答的一致性；預抓確認沒有 HTML 全文",
+          "evidence": ""
         }
       ],
       "shortfall": "",

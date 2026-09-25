@@ -2840,24 +2840,6 @@
       "name": "User Simulator & User Feedback Loop（使用者模擬器與回饋迴路）",
       "main": [
         {
-          "id": "1607.00070",
-          "subarea": "經典與神經使用者模擬器",
-          "reason": "使用 encoder-decoder RNN 學習使用者對話行為的經典方法，為任務型對話 RL 訓練奠定基礎",
-          "evidence": "This paper introduces a data-driven user simulator based on an encoder-decoder recurrent neural network",
-          "from": "main",
-          "title": "A Sequence-to-Sequence Model for User Simulation in Spoken Dialogue Systems",
-          "year": 2016,
-          "citations": 128,
-          "influential": 9,
-          "cites_per_year": 11.4,
-          "venue": "Interspeech",
-          "top_venue": true,
-          "flags": [],
-          "adoption_evidence": null,
-          "arxiv_comment": "Accepted for publication at Interspeech 2016",
-          "rank": 1
-        },
-        {
           "id": "1612.05688",
           "subarea": "經典與神經使用者模擬器",
           "reason": "公開可用的任務完成對話使用者模擬框架，支援 RL 訓練與線上評估",
@@ -2873,7 +2855,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": "14 pages, 2 Figures",
-          "rank": 2
+          "rank": 1
         },
         {
           "id": "1805.06966",
@@ -2891,7 +2873,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": "Accepted to SIGDIAL 2018",
-          "rank": 3
+          "rank": 2
         },
         {
           "id": "2107.11904",
@@ -2909,7 +2891,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": "Accepted by ACL-IJCNLP 2021",
-          "rank": 4
+          "rank": 3
         },
         {
           "id": "2204.00763",
@@ -2927,7 +2909,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": null,
-          "rank": 5
+          "rank": 4
         },
         {
           "id": "2208.10817",
@@ -2945,7 +2927,7 @@
           "flags": [],
           "adoption_evidence": "https://github.com/ConvLab/ConvLab-3 —— ConvLab-3 實現 GenTUS 生成式模擬",
           "arxiv_comment": "Accepted as a long paper to SIGDial 2022",
-          "rank": 6
+          "rank": 5
         },
         {
           "id": "2506.07982",
@@ -2963,7 +2945,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": null,
-          "rank": 7
+          "rank": 6
         },
         {
           "id": "2310.11667",
@@ -2981,7 +2963,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": "Preprint, 43 pages. The first two authors contribute equally",
-          "rank": 8
+          "rank": 7
         },
         {
           "id": "2601.17087",
@@ -2999,7 +2981,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": null,
-          "rank": 9
+          "rank": 8
         },
         {
           "id": "2306.00774",
@@ -3017,7 +2999,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": null,
-          "rank": 10
+          "rank": 9
         },
         {
           "id": "2309.13233",
@@ -3035,7 +3017,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": "13 pages",
-          "rank": 11
+          "rank": 10
         },
         {
           "id": "2403.16416",
@@ -3053,7 +3035,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": null,
-          "rank": 12
+          "rank": 11
         },
         {
           "id": "2209.06899",
@@ -3071,7 +3053,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": null,
-          "rank": 13
+          "rank": 12
         },
         {
           "id": "2208.10264",
@@ -3089,7 +3071,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": "Accepted for oral presentation at International Conference on Machine Learning (ICML) 2023",
-          "rank": 14
+          "rank": 13
         },
         {
           "id": "2306.02552",
@@ -3107,7 +3089,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": "28 pages, 9 figures",
-          "rank": 15
+          "rank": 14
         },
         {
           "id": "2510.06552",
@@ -3125,7 +3107,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": "Accepted at ICLR 2026",
-          "rank": 16
+          "rank": 15
         },
         {
           "id": "1901.05415",
@@ -3143,7 +3125,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": "ACL 2019",
-          "rank": 17
+          "rank": 16
         },
         {
           "id": "1804.06512",
@@ -3161,7 +3143,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": "To appear in NAACL 2018 as a long paper",
-          "rank": 18
+          "rank": 17
         },
         {
           "id": "2404.15269",
@@ -3179,7 +3161,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": null,
-          "rank": 19
+          "rank": 18
         },
         {
           "id": "2208.03188",
@@ -3197,7 +3179,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": null,
-          "rank": 20
+          "rank": 19
         },
         {
           "id": "1605.07669",
@@ -3215,7 +3197,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": "Accepted as a long paper in ACL 2016",
-          "rank": 21
+          "rank": 20
         },
         {
           "id": "2105.03748",
@@ -3233,7 +3215,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": "Proceedings of the 44th International ACM SIGIR Conference on Research and Development in Information Retrieval (SIGIR '21), 2021",
-          "rank": 22
+          "rank": 21
         },
         {
           "id": "2208.03270",
@@ -3251,7 +3233,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": null,
-          "rank": 23
+          "rank": 22
         },
         {
           "id": "1911.02557",
@@ -3269,10 +3251,8 @@
           "flags": [],
           "adoption_evidence": "https://www.amazon.science/publications/query-rewriting-using-markov-chain-collaborative-filtering —— Amazon 反饋自學習",
           "arxiv_comment": "8 pages, 2 figures",
-          "rank": 24
-        }
-      ],
-      "reserve": [
+          "rank": 23
+        },
         {
           "id": "2305.13112",
           "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
@@ -3289,26 +3269,10 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": "Accepted by EMNLP 2023",
-          "rank": 1
-        },
-        {
-          "id": "2411.10109",
-          "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
-          "reason": "人工複核：以訪談自述建構千人模擬代理並量測與真人回答的一致性",
-          "evidence": "",
-          "from": "reserve",
-          "title": "LLM Agents Grounded in Self-Reports Enable General-Purpose Simulation of Individuals",
-          "year": 2024,
-          "citations": 319,
-          "influential": 25,
-          "cites_per_year": 98.2,
-          "venue": null,
-          "top_venue": false,
-          "flags": [],
-          "adoption_evidence": null,
-          "arxiv_comment": null,
-          "rank": 2
-        },
+          "rank": 24
+        }
+      ],
+      "reserve": [
         {
           "id": "2212.07769",
           "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
@@ -3325,7 +3289,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": null,
-          "rank": 3
+          "rank": 1
         },
         {
           "id": "2202.02912",
@@ -3343,7 +3307,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": "Accepted by WWW 2022 (The Web Conference)",
-          "rank": 4
+          "rank": 2
         },
         {
           "id": "2403.12388",
@@ -3361,7 +3325,7 @@
           "flags": [],
           "adoption_evidence": "https://www.microsoft.com/en-us/research/blog/learning-from-interaction-with-microsoft-copilot-web/ —— Microsoft Copilot 用戶滿意度估計",
           "arxiv_comment": null,
-          "rank": 5
+          "rank": 3
         },
         {
           "id": "2210.15893",
@@ -3379,7 +3343,7 @@
           "flags": [],
           "adoption_evidence": null,
           "arxiv_comment": null,
-          "rank": 6
+          "rank": 4
         },
         {
           "id": "2010.12251",
@@ -3397,6 +3361,42 @@
           "flags": [],
           "adoption_evidence": "https://www.amazon.science/publications/a-scalable-framework-for-learning-from-implicit-user-feedback-to-improve-natural-language-understanding-in-large-scale-conversational-ai-systems —— Amazon 隱式反饋框架",
           "arxiv_comment": "EMNLP 2021",
+          "rank": 5
+        },
+        {
+          "id": "1607.00070",
+          "subarea": "經典與神經使用者模擬器",
+          "reason": "人工複核：seq2seq 使用者模擬的早期代表作；預抓確認沒有 HTML 全文，降為最後的候補",
+          "evidence": "This paper introduces a data-driven user simulator based on an encoder-decoder recurrent neural network",
+          "from": "reserve",
+          "title": "A Sequence-to-Sequence Model for User Simulation in Spoken Dialogue Systems",
+          "year": 2016,
+          "citations": 128,
+          "influential": 9,
+          "cites_per_year": 11.4,
+          "venue": "Interspeech",
+          "top_venue": true,
+          "flags": [],
+          "adoption_evidence": null,
+          "arxiv_comment": "Accepted for publication at Interspeech 2016",
+          "rank": 6
+        },
+        {
+          "id": "2411.10109",
+          "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+          "reason": "人工複核：以訪談自述建構千人模擬代理並量測與真人回答的一致性；預抓確認沒有 HTML 全文",
+          "evidence": "",
+          "from": "reserve",
+          "title": "LLM Agents Grounded in Self-Reports Enable General-Purpose Simulation of Individuals",
+          "year": 2024,
+          "citations": 319,
+          "influential": 25,
+          "cites_per_year": 98.2,
+          "venue": null,
+          "top_venue": false,
+          "flags": [],
+          "adoption_evidence": null,
+          "arxiv_comment": null,
           "rank": 7
         }
       ],
