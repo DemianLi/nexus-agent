@@ -1,13 +1,16 @@
 import type { ThreadListResult, ThreadSummary, WireClient } from '@nexus/wire';
 import { useEffect, useId, useState } from 'react';
+import type { ReactNode } from 'react';
 
 import {
   SidebarGroup,
   SidebarGroupLabel,
+  SidebarInput,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/components/ui/sidebar';
+import { BUCKET_LABEL, filterThreads, groupThreads } from '@/lib/thread-groups';
 
 /**
  * 以前的會話——[#302](https://github.com/DemianLi/nexus-agent/issues/302)。照 dsh 的 `session/list`：
@@ -21,6 +24,10 @@ import {
  * 的——「新對話」會拿它們來重用（`lib/new-conversation.ts`）。目前這條要落了盤才在清單上，還沒落盤的不列。
  *
  * **沒有標題的另一種原因照講**（`ThreadSummary.title` 的說明）：有輪次、但全是目標排的。
+ *
+ * **分組、搜尋、狀態點**（inventory 列 6）：按今天／昨天／過去 7 天／更早分組、標題搜尋，規則在 `lib/thread-groups.ts`。
+ * 正在跑的那一列在標題旁一顆點，旁邊有給報讀器的「執行中」。點跟清單一樣是打開那一刻的快照：dsh 的即時狀態與
+ * 「跑完了還沒看」的提醒點靠伺服器推會話狀態，我們還沒有那條路。
  */
 
 /** 目前這條還是空白。照 dsh 的 `session.new`（「新会话」），不帶時間。 */
@@ -78,10 +85,12 @@ export function ThreadList({
     };
   }, [client]);
 
+  const [query, setQuery] = useState('');
   const visible =
     listing.kind === 'ok'
       ? listing.result.items.filter((item) => !item.blank || item.threadId === currentThreadId)
       : [];
+  const matched = filterThreads(visible, query);
 
   return (
     <SidebarGroup role="group" aria-labelledby={labelId} className="text-sm">
@@ -99,33 +108,33 @@ export function ThreadList({
           {visible.length === 0 ? (
             <p className="text-muted-foreground px-2">這個專案還沒有以前的會話。</p>
           ) : (
-            <SidebarMenu>
-              {visible.map((item) => {
-                const current = item.threadId === currentThreadId;
-                return (
-                  <SidebarMenuItem key={item.threadId}>
-                    {/* 觸控目標 44px，1024 以上回到 36（§9）。 */}
-                    <SidebarMenuButton
-                      type="button"
-                      isActive={current}
-                      disabled={current}
-                      onClick={() => onPick(item.threadId)}
-                      className="h-auto min-h-11 flex-col items-start gap-0.5 lg:min-h-9"
-                    >
-                      <span className="w-full truncate">{labelOf(item)}</span>
-                      <span className="text-muted-foreground text-xs">
-                        {[
-                          ...(current ? ['目前這條'] : []),
-                          ...(item.running ? ['執行中'] : []),
-                          // 空白的那一列不帶時間（dsh `Rows.tsx`）：它的時間是建立時間，不是誰說過話。
-                          ...(item.blank ? [] : [formatTime(item.updatedAt)]),
-                        ].join(' · ')}
-                      </span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
+            <>
+              <SidebarInput
+                type="search"
+                aria-label="搜尋以前的會話"
+                placeholder="搜尋標題"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape' && query !== '') {
+                    event.preventDefault();
+                    setQuery('');
+                  }
+                }}
+                className="mb-1 h-11 lg:h-8"
+              />
+              {matched.length === 0 ? (
+                <p className="text-muted-foreground px-2" role="status">
+                  沒有標題含「{query.trim()}」的會話。
+                </p>
+              ) : (
+                <ThreadGroupList
+                  items={matched}
+                  currentThreadId={currentThreadId}
+                  onPick={onPick}
+                />
+              )}
+            </>
           )}
           {listing.result.unreadable > 0 && (
             <p className="text-muted-foreground px-2 text-xs">
@@ -135,5 +144,96 @@ export function ThreadList({
         </>
       )}
     </SidebarGroup>
+  );
+}
+
+/** 分好組的清單：空白那一列在最前面、不帶組名，之後每組一個標題。 */
+function ThreadGroupList({
+  items,
+  currentThreadId,
+  onPick,
+}: {
+  readonly items: readonly ThreadSummary[];
+  readonly currentThreadId: string;
+  readonly onPick: (threadId: string) => void;
+}) {
+  const { blank, groups } = groupThreads(items, Date.now());
+  const row = (item: ThreadSummary) => (
+    <ThreadRow
+      key={item.threadId}
+      item={item}
+      current={item.threadId === currentThreadId}
+      onPick={onPick}
+    />
+  );
+  return (
+    <>
+      {blank.length > 0 && <SidebarMenu>{blank.map(row)}</SidebarMenu>}
+      {groups.map(({ bucket, items: members }) => (
+        <BucketGroup key={bucket} label={BUCKET_LABEL[bucket]}>
+          {members.map(row)}
+        </BucketGroup>
+      ))}
+    </>
+  );
+}
+
+function BucketGroup({
+  label,
+  children,
+}: {
+  readonly label: string;
+  readonly children: ReactNode;
+}) {
+  const labelId = useId();
+  return (
+    <div role="group" aria-labelledby={labelId} className="mt-2" data-testid="thread-bucket">
+      <div id={labelId} className="text-muted-foreground px-2 pb-1 text-xs font-medium">
+        {label}
+      </div>
+      <SidebarMenu>{children}</SidebarMenu>
+    </div>
+  );
+}
+
+function ThreadRow({
+  item,
+  current,
+  onPick,
+}: {
+  readonly item: ThreadSummary;
+  readonly current: boolean;
+  readonly onPick: (threadId: string) => void;
+}) {
+  return (
+    <SidebarMenuItem>
+      {/* 觸控目標 44px，1024 以上回到 36（§9）。 */}
+      <SidebarMenuButton
+        type="button"
+        isActive={current}
+        disabled={current}
+        onClick={() => onPick(item.threadId)}
+        className="h-auto min-h-11 flex-col items-start gap-0.5 lg:min-h-9"
+      >
+        <span className="flex w-full min-w-0 items-center gap-2">
+          <span className="min-w-0 flex-1 truncate">{labelOf(item)}</span>
+          {item.running && (
+            <span className="flex shrink-0 items-center" data-testid="thread-running">
+              <span aria-hidden className="bg-brand size-2 rounded-full" />
+              <span className="sr-only">執行中</span>
+            </span>
+          )}
+        </span>
+        {(current || !item.blank) && (
+          <span className="text-muted-foreground text-xs">
+            {[
+              ...(current ? ['目前這條'] : []),
+              // 空白的那一列不帶時間（dsh `Rows.tsx`）：它的時間是建立時間，不是誰說過話。
+              ...(item.blank ? [] : [formatTime(item.updatedAt)]),
+            ].join(' · ')}
+          </span>
+        )}
+      </SidebarMenuButton>
+    </SidebarMenuItem>
   );
 }
