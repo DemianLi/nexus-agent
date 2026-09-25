@@ -124,7 +124,12 @@ describe('grep', () => {
     // backend 照列檔順序交：ext4 上 b 可以排在 a 前面。只在 macOS 跑的話這個順序碰巧已經排好，看不出來。
     const backend = recordToolResultMeta(
       {
-        grep: async () => ({
+        grep: async (
+          _pattern: string,
+          _path: string,
+          _glob: string | null,
+          _max: number | null,
+        ) => ({
           matches: [
             { path: '/b.txt', line: 3, text: 'b3' },
             { path: '/a.txt', line: 9, text: 'a9' },
