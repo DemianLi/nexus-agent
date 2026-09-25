@@ -11,7 +11,12 @@ import type { LoggedMessage } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
-import { capToolText, toolResultText } from './tool-result-text.js';
+import {
+  capToolResultMeta,
+  capToolText,
+  READ_META_MAX_BYTES_FACTOR,
+  toolResultText,
+} from './tool-result-text.js';
 
 /**
  * 這一組釘的是**規則**，不是那個數字，所以每一條都明著傳預設值
@@ -139,5 +144,47 @@ describe('上限', () => {
     const capped = toolResultText(logged(`${HALF}藍鯨${HALF}`), CAP);
     expect(capped).toBeDefined();
     expect(Buffer.byteLength(capped!, 'utf8')).toBeLessThanOrEqual(CAP);
+  });
+});
+
+/**
+ * 讀檔 meta 的上限是文字上限的兩倍（[#630](https://github.com/DemianLi/nexus-agent/issues/630)）。
+ * 產品路徑上的效果（真的讀檔、即時與重播）在 `tool-card-from-log.test.ts`；這一組釘比較式的邊界。
+ */
+describe('讀檔 meta 的上限', () => {
+  const bytes = (meta: unknown) => Buffer.byteLength(JSON.stringify(meta), 'utf8');
+
+  /** JSON 剛好 `target` 位元組的讀檔 meta：用 ASCII 墊那一行。 */
+  function readMetaOf(target: number) {
+    const bare = { path: '/a.txt', offset: 1, lines: [{ number: 1, text: '' }], totalLines: 1 };
+    const meta = { ...bare, lines: [{ number: 1, text: 'x'.repeat(target - bytes(bare)) }] };
+    expect(bytes(meta)).toBe(target);
+    return meta;
+  }
+
+  it('剛好等於兩倍上限：照給；多一個位元組：整格不給', () => {
+    const limit = READ_META_MAX_BYTES_FACTOR * CAP;
+    const atLimit = readMetaOf(limit);
+    expect(capToolResultMeta(atLimit, CAP)).toBe(atLimit);
+    expect(capToolResultMeta(readMetaOf(limit + 1), CAP)).toBeUndefined();
+  });
+
+  it('上限是乘數：跟著傳進來的文字上限走', () => {
+    const meta = readMetaOf(3_000);
+    expect(capToolResultMeta(meta, 1_500)).toBe(meta);
+    expect(capToolResultMeta(meta, 1_499)).toBeUndefined();
+  });
+
+  it('搜尋與 diff 不跟著放寬：一倍的上限', () => {
+    const diff = { diffs: [{ path: '/a.ts', oldText: null, newText: 'x'.repeat(CAP) }] };
+    expect(bytes(diff)).toBeLessThan(2 * CAP);
+    expect(capToolResultMeta(diff, CAP)).toBeUndefined();
+    const search = {
+      shape: 'paths',
+      paths: ['/a', 'x'.repeat(CAP)],
+      truncated: false,
+      total: 2,
+    };
+    expect(capToolResultMeta(search, CAP)).toEqual({ ...search, paths: ['/a'], truncated: true });
   });
 });

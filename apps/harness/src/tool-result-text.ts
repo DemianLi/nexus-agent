@@ -136,20 +136,47 @@ function metaBytes(meta: unknown): number {
 }
 
 /**
- * 一格 `tool/result.meta` 放上線之前的上限（[#617](https://github.com/DemianLi/nexus-agent/issues/617)
- * 決定 2：**上限等於工具文字的上限**，同一個 `maxBytes`）。即時與重播共用，理由同 {@link toolResultText}。
+ * 讀檔 meta 的上限是工具文字上限的幾倍（[#630](https://github.com/DemianLi/nexus-agent/issues/630)）。
  *
+ * 是乘數不是另一個寫死的值：部署在 patch 裡改 `tool-text` 的 `maxBytes`，讀檔 meta 的上限跟著變。
+ * 歷史分頁的上限照一張卡的最壞值算，改這個數要一起看 `@nexus/wire` 的 `HISTORY_PAGE_MAX_BYTES`
+ * （`conversation-history.test.ts` 的絆索會紅）。
+ */
+export const READ_META_MAX_BYTES_FACTOR = 2;
+
+/**
+ * 是不是讀檔的 meta（`@nexus/core` 的 `ReadResultMeta`，同 dsh 的 `FsReadMeta`）。
+ *
+ * 生產者只有五處：`read_file` 寫這個形狀，`grep`／`glob` 寫帶 `shape` 的搜尋，`write_file`／`edit_file`
+ * 寫帶 `diffs` 的改檔。只有讀檔帶 `lines` 陣列與 `totalLines`。
+ */
+function isReadMeta(meta: unknown): boolean {
+  const read = meta as { readonly lines?: unknown; readonly totalLines?: unknown } | null;
+  return Array.isArray(read?.lines) && typeof read.totalLines === 'number';
+}
+
+/**
+ * 一格 `tool/result.meta` 放上線之前的上限。即時與重播共用，理由同 {@link toolResultText}。
+ *
+ * - **搜尋與 diff 的上限等於工具文字的上限**，同一個 `maxBytes`
+ *   （[#617](https://github.com/DemianLi/nexus-agent/issues/617) 決定 2）。
+ * - **讀檔是 {@link READ_META_MAX_BYTES_FACTOR} 倍**（[#630](https://github.com/DemianLi/nexus-agent/issues/630)）：
+ *   #602 把一頁放大到 dsh 的 2000 行之後，每行 `{"number":N,"text":"…"}` 的外殼約 25 位元組，短行的大檔
+ *   文字沒被截、meta 卻超過一倍的上限。兩倍裝得下一整頁 2000 行短行。
  * - **搜尋照 dsh 的 `capMetaBytes`**（`fs/tool-fs-search/src/presentation.ts:107-117`）：從尾巴整組砍，
  *   標 `truncated`，`total` 不動，至少留一項——一項自己就超過的也留著，不讓一張空卡蓋掉真的結果。
- * - **其餘（讀檔、diff）超過就整格不給**：dsh 這兩種沒有上限；我們的歷史頁是照每張卡的最大值算的，
+ * - **讀檔與 diff 超過就整格不給**：dsh 這兩種沒有上限；我們的歷史頁是照每張卡的最大值算的，
  *   一次大改寫的 diff 會讓一頁失控（偏離）。web 照 dsh 退：write 用參數算 diff，其他走 generic。
  *
  * @param meta - 日誌裡那一份。
- * @param maxBytes - 上限（位元組）。
+ * @param maxBytes - 工具文字的上限（位元組）；讀檔 meta 用它的 {@link READ_META_MAX_BYTES_FACTOR} 倍。
  * @returns 放得下的那一份；放不下就 `undefined`。
  */
 export function capToolResultMeta(meta: unknown, maxBytes: number): unknown {
-  if (meta === undefined || metaBytes(meta) <= maxBytes) return meta;
+  if (meta === undefined) return meta;
+  const bytes = metaBytes(meta);
+  if (bytes <= maxBytes) return meta;
+  if (isReadMeta(meta)) return bytes <= READ_META_MAX_BYTES_FACTOR * maxBytes ? meta : undefined;
   const search = meta as { readonly shape?: unknown };
   if (search.shape === 'matches') {
     const whole = meta as Extract<SearchResultMeta, { shape: 'matches' }>;

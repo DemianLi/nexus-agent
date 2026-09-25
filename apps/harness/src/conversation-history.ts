@@ -562,7 +562,7 @@ export function historyFrames(
         const text = toolResultText(event.data.message, toolTextMaxBytes);
         // 格式 9 以前沒有 `message`：失敗的那張只剩錯誤碼可講，碼也沒有就交給折疊器說「未指名的錯誤」。
         const reason = text ?? (event.data.isError ? event.data.error?.code : undefined);
-        // meta 同即時那條（`ThreadPump.#noteVerdict`）：失敗的不帶，上限同文字。格式 16 以前沒有這一格。
+        // meta 同即時那條（`ThreadPump.#noteVerdict`）：失敗的不帶，上限照 `capToolResultMeta`。格式 16 以前沒有這一格。
         const meta = event.data.isError
           ? undefined
           : capToolResultMeta(event.data.meta, toolTextMaxBytes);

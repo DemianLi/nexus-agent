@@ -153,7 +153,8 @@ export interface ToolEntry {
    * 哪幾行、搜尋命中什麼、改檔改了哪幾段。照 dsh 的 `tool/result.meta`，**對這一層不透明**——形狀歸
    * 工具，由畫面那一側的卡片模型自己驗，驗不過就走 generic。
    *
-   * 只有成功的才有；模型看不到它。太大的由 harness 截過或整格拿掉（上限同 {@link ToolEntry.text}）。
+   * 只有成功的才有；模型看不到它。太大的由 harness 截過或整格拿掉：搜尋與改檔的上限同
+   * {@link ToolEntry.text}，讀檔是它的兩倍（[#630](https://github.com/DemianLi/nexus-agent/issues/630)）。
    * 格式 16 以前的日誌接回來沒有這一格。
    */
   readonly meta?: unknown;

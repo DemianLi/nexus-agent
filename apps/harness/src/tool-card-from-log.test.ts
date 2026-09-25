@@ -681,7 +681,7 @@ describe('meta：即時與重播同一份（#617）', () => {
     expect(replayed?.params.data).not.toHaveProperty('meta');
   });
 
-  describe('上限同文字，從設定來', () => {
+  describe('上限從設定來：搜尋與 diff 同文字，讀檔兩倍（#630）', () => {
     const SMALL = 400;
     const SEARCH = {
       shape: 'matches',
@@ -729,19 +729,140 @@ describe('meta：即時與重播同一份（#617）', () => {
       });
     });
 
-    it('讀檔與 diff 超過：整格不給；兩條路一樣', async () => {
+    const bytes = (meta: unknown) => Buffer.byteLength(JSON.stringify(meta), 'utf8');
+
+    it('讀檔超過一倍、不超過兩倍：照給；兩條路一樣', async () => {
       const read = { ...META, lines: [{ number: 1, text: 'z'.repeat(SMALL) }] };
+      expect(bytes(read)).toBeGreaterThan(SMALL);
+      expect(bytes(read)).toBeLessThanOrEqual(2 * SMALL);
+      const { frames, events } = await play('none', { meta: read, toolText: { maxBytes: SMALL } });
+      expect(toolEntries(frames)[0]).toMatchObject({ status: 'done', meta: read });
+      expect(toolEntries(historyFrames(events, SMALL))[0]?.meta).toEqual(read);
+    });
+
+    it('讀檔超過兩倍：整格不給；兩條路一樣', async () => {
+      const read = { ...META, lines: [{ number: 1, text: 'z'.repeat(2 * SMALL) }] };
+      expect(bytes(read)).toBeGreaterThan(2 * SMALL);
       const { frames, events } = await play('none', { meta: read, toolText: { maxBytes: SMALL } });
       expect(toolEntries(frames)[0]).toMatchObject({ status: 'done', text: '讀好了' });
       expect(toolEntries(frames)[0]?.meta).toBeUndefined();
       expect(toolEntries(historyFrames(events, SMALL))[0]?.meta).toBeUndefined();
+      // 對照組：同一份日誌在預設上限底下原樣上線。
       expect(toolEntries(historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES))[0]?.meta).toEqual(
         read,
       );
+    });
 
+    it('diff 超過一倍：整格不給，不跟著讀檔放寬；兩條路一樣', async () => {
       const diff = { diffs: [{ path: '/a.ts', oldText: null, newText: 'z'.repeat(SMALL) }] };
-      const edited = await play('none', { meta: diff, toolText: { maxBytes: SMALL } });
-      expect(toolEntries(edited.frames)[0]?.meta).toBeUndefined();
+      // 落在讀檔會放行的那一段，才分得出 diff 有沒有被當成讀檔。
+      expect(bytes(diff)).toBeGreaterThan(SMALL);
+      expect(bytes(diff)).toBeLessThanOrEqual(2 * SMALL);
+      const { frames, events } = await play('none', { meta: diff, toolText: { maxBytes: SMALL } });
+      expect(toolEntries(frames)[0]?.meta).toBeUndefined();
+      expect(toolEntries(historyFrames(events, SMALL))[0]?.meta).toBeUndefined();
     });
   });
+});
+
+/**
+ * **讀檔 meta 的兩倍上限，量在真的讀檔上**（[#630](https://github.com/DemianLi/nexus-agent/issues/630)）。
+ *
+ * meta 由真的組裝、真的基座 `read_file` 產生，一頁照 #602 是 2000 行、50 KiB，上限用 `tool-text` 的預設值。
+ * 兩個檔的 meta 各落在一段：短行的大檔落在一倍與兩倍之間（#628 探針量到被丟掉的那種），tab 縮排的
+ * 2000 行超過兩倍。每個檔都先斷言它真的落在那一段——少了這一句，檔的形狀一變，這組就不再問它要問的事。
+ */
+describe('產品路徑：讀檔 meta 的上限是文字的兩倍（#630）', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'nexus-read-meta-cap-'));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const bytes = (meta: unknown) => Buffer.byteLength(JSON.stringify(meta), 'utf8');
+
+  it('短行 2000 行帶得到 meta，超過兩倍的整格不給；即時與重播逐格一樣', async () => {
+    // `line N`：一頁 2000 行，文字沒撞 50 KiB，meta 的外殼讓它超過一倍上限。
+    await writeFile(
+      join(root, 'short.txt'),
+      `${Array.from({ length: 2000 }, (_, i) => `line ${i + 1}`).join('\n')}\n`,
+    );
+    // tab 縮排的 2000 行（Go 那種）：每行 24 位元組，一頁照樣 2000 行。tab 在 JSON 裡跳脫成兩個位元組，
+    // 加上每行約 26 位元組的外殼，meta 超過兩倍上限。**不跳脫的 ASCII 最多剛好擦過兩倍**：一頁要同時
+    // 頂滿 2000 行與 50 KiB 才到約 100.2 KB（2026-09-25 量），行寬一致的檔兩者頂不滿，停在 99 KB 左右。
+    await writeFile(
+      join(root, 'wide.txt'),
+      `${Array.from({ length: 2000 }, () => `${'\t'.repeat(4)}${'x'.repeat(20)}`).join('\n')}\n`,
+    );
+
+    const built = await createNexusAgent({
+      model: new ScriptedChatModel({
+        turns: [
+          {
+            content: '',
+            toolCalls: [
+              { name: 'read_file', args: { file_path: '/short.txt', offset: 0 } },
+              { name: 'read_file', args: { file_path: '/wide.txt', offset: 0 } },
+            ],
+          },
+          { content: '收工。' },
+        ],
+      }),
+      checkpointer: new MemorySaver(),
+      plugins: [],
+      backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
+    });
+    const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'read-meta-cap');
+    const detach = built.attachSession(pump.sessions);
+    const frames: Event[] = [];
+    const line = new AbortController();
+    const draining = (async () => {
+      for await (const frame of pump.subscribe(['tools', 'lifecycle'], line.signal))
+        frames.push(frame);
+    })();
+    try {
+      await pump.submit({ kind: 'message', text: '讀兩個檔' });
+      await until(() => frames.some(isRootDone));
+
+      // 日誌記的是全份：先確定兩份各落在要問的那一段。
+      const logged = pump.sessionLog.events
+        .filter((event) => event.type === 'tool/result')
+        .map((event) => (event.data as { meta?: { path: string; lines: unknown[] } }).meta);
+      const short = logged.find((meta) => meta?.path === '/short.txt');
+      const wide = logged.find((meta) => meta?.path === '/wide.txt');
+      expect(short?.lines).toHaveLength(2000);
+      expect(bytes(short)).toBeGreaterThan(DEFAULT_TOOL_TEXT_MAX_BYTES);
+      expect(bytes(short)).toBeLessThanOrEqual(2 * DEFAULT_TOOL_TEXT_MAX_BYTES);
+      expect(wide?.lines).toHaveLength(2000);
+      expect(bytes(wide)).toBeGreaterThan(2 * DEFAULT_TOOL_TEXT_MAX_BYTES);
+
+      const live = toolEntries(frames);
+      expect(live.map((card) => [card.name, card.status])).toEqual([
+        ['read_file', 'done'],
+        ['read_file', 'done'],
+      ]);
+      const byPath = (cards: ToolEntry[], path: string) =>
+        cards.find((card) => card.input.includes(path));
+      expect(byPath(live, 'short.txt')?.meta).toEqual(short);
+      expect(byPath(live, 'wide.txt')?.meta).toBeUndefined();
+      // 文字照舊：meta 丟掉不影響結果文字。
+      expect(byPath(live, 'wide.txt')?.text).toBeDefined();
+
+      const replayed = toolEntries(
+        historyFrames(pump.sessionLog.events, DEFAULT_TOOL_TEXT_MAX_BYTES),
+      );
+      expect(replayed.map((card) => [card.meta, card.text])).toEqual(
+        live.map((card) => [card.meta, card.text]),
+      );
+    } finally {
+      line.abort();
+      await draining;
+      detach();
+      await built.dispose();
+    }
+  }, 20000);
 });
