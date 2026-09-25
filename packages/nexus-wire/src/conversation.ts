@@ -34,6 +34,8 @@
 import { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 import type { WireContextMeasure, WireContextPressure } from './context-pressure.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
+import { INBOX } from './inbox.js';
+import type { WireQueuedInput } from './inbox.js';
 import { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
 import type { WireSessionStats, WireTokenUsage } from './session-totals.js';
 import { TODOS } from './todos.js';
@@ -392,6 +394,12 @@ export interface ConversationState {
    * `session-totals.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
    */
   readonly sessionStats: WireSessionStats | null;
+  /**
+   * 送出佇列（#637）：人送出、還沒開跑的那幾句，照開跑的先後。後到的 `inbox` frame 整份換掉，**沒收到過就是空的**
+   * ——佇列從日誌開頭折起，不會在一輪開頭清空，所以沒有「還沒寫過」與「空」之分。規則見 `inbox.ts`。它是「現在」的事，
+   * 所以 {@link prependEntries} 不動它。
+   */
+  readonly inbox: readonly WireQueuedInput[];
 }
 
 const ROOT: Attribution = { kind: 'root' };
@@ -408,6 +416,7 @@ export function emptyConversation(): ConversationState {
     todos: null,
     tokenUsage: null,
     sessionStats: null,
+    inbox: [],
   };
 }
 
@@ -416,6 +425,9 @@ export function emptyConversation(): ConversationState {
  *
  * **線上不會回聲它**：`run.start` 的 input 不會變成下行的 frame，而 `input` channel
  * 上只有核准請求。所以送出的那一刻由這裡補，不是等它回來。
+ *
+ * 送出佇列（#637）之後人的話另有一條路：`inbox` frame 的 `claimed`，開跑那一刻才畫，見 {@link reduceInbox}。兩條都
+ * 用的話同一句會畫兩次，所以畫面只能挑一條。
  */
 export function appendHumanTurn(state: ConversationState, text: string): ConversationState {
   const entry: HumanEntry = { kind: 'human', id: `human-${state.entries.length}`, text };
@@ -615,8 +627,8 @@ function isPresentedFile(value: unknown): value is WirePresentedFile {
 
 /**
  * `custom` frame。**只認 {@link DELIVERABLES_PRESENTED}、{@link WORKSPACE_CHANGES}、{@link MODEL_USAGE}、
- * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link TOKEN_USAGE} 與 {@link SESSION_STATS}**，其他名字、形狀不對的一律略過：這個 channel 上的東西由 pump 從日誌
- * 合成，認不得的不猜。
+ * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link TOKEN_USAGE}、{@link SESSION_STATS} 與 {@link INBOX}**，其他名字、形狀
+ * 不對的一律略過：這個 channel 上的東西由 pump 從日誌合成，認不得的不猜。
  */
 function reduceCustom(state: ConversationState, data: unknown): ConversationState {
   const { name, payload } = (data ?? {}) as { name?: unknown; payload?: unknown };
@@ -627,6 +639,7 @@ function reduceCustom(state: ConversationState, data: unknown): ConversationStat
   if (name === TODOS) return reduceTodos(state, payload);
   if (name === TOKEN_USAGE) return reduceTokenUsage(state, payload);
   if (name === SESSION_STATS) return reduceSessionStats(state, payload);
+  if (name === INBOX) return reduceInbox(state, payload);
   if (name !== DELIVERABLES_PRESENTED) return state;
   const { callId, seq, files } = payload as { callId?: unknown; seq?: unknown; files?: unknown };
   if (
@@ -728,6 +741,45 @@ function reduceSessionStats(state: ConversationState, payload: object): Conversa
   const { turns, steps, llmMs, toolMs } = payload as Record<string, unknown>;
   if (!isCount(turns) || !isCount(steps) || !isCount(llmMs) || !isCount(toolMs)) return state;
   return { ...state, sessionStats: { turns, steps, llmMs, toolMs } };
+}
+
+/** 排著的一件長得對不對：`@nexus/core` 的 `QueuedInput`，這一版 `source` 只有人。 */
+function isQueuedInput(value: unknown): value is WireQueuedInput {
+  if (typeof value !== 'object' || value === null) return false;
+  const { id, text, source } = value as { id?: unknown; text?: unknown; source?: unknown };
+  return (
+    typeof id === 'string' &&
+    typeof text === 'string' &&
+    typeof source === 'object' &&
+    source !== null &&
+    (source as { kind?: unknown }).kind === 'user'
+  );
+}
+
+/**
+ * `inbox` 的 `payload`：清單**整份換掉**。任何一件不對、`claimed` 不對，就整顆不收，不收一半——少一件的清單分不出是
+ * 開跑了還是被刪了，而且看起來正常。
+ *
+ * 帶 `claimed` 的那一顆是某一件剛被領走開跑：多折一則人的話，文字用開跑用的那份（改過的就是改過的）。
+ *
+ * - **id 是 `inbox:<項目 id>`**，跟 {@link appendHumanTurn} 的 `human-<n>` 與歷史重播的 `run_id` 分得開；同一顆
+ *   `claimed` 再到一次不畫第二次。
+ * - **`status` 不在這裡轉**：開跑由接著到的 `lifecycle` 說，理由同 `claimed` 的先後保證（見 `inbox.ts`）。
+ */
+function reduceInbox(state: ConversationState, payload: object): ConversationState {
+  const { items, claimed } = payload as { items?: unknown; claimed?: unknown };
+  if (!Array.isArray(items) || !items.every(isQueuedInput)) return state;
+  let human: HumanEntry | undefined;
+  if (claimed !== undefined) {
+    const { id, text } = (claimed ?? {}) as { id?: unknown; text?: unknown };
+    if (typeof id !== 'string' || typeof text !== 'string') return state;
+    human = { kind: 'human', id: `inbox:${id}`, text };
+  }
+  const inbox = items.map(({ id, text }) => ({ id, text, source: { kind: 'user' as const } }));
+  if (human === undefined || state.entries.some((entry) => entry.id === human.id)) {
+    return { ...state, inbox };
+  }
+  return { ...state, inbox, entries: [...state.entries, human] };
 }
 
 /** `workspace/changes` 的 `payload`：`seq` 要是非負整數，同一個 `seq` 只長一格。 */
