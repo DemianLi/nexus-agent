@@ -220,15 +220,30 @@ def cmd_search(a):
     return rows
 
 
+# arXiv 對停用詞條件（例如 ti:"for"）一律回 0 筆，AND 起來整個查詢就空了。
+# 標題裡只要有介系詞的論文（TripPy、SimpleTOD、OmniParser…）都會因此被當成「不存在」。
+STOPWORDS = set(
+    "a an the and or of for to in on at by with from via into onto as is are be can not no its it our we you "
+    "how what when why which who do does towards toward using use based through over under than vs versus".split()
+)
+
+
 def cmd_find_title(a):
-    words = [w for w in norm_title(a.title).split() if len(w) > 2][:12]
+    norm = norm_title(a.title).split()
+    words = [w for w in norm if len(w) > 1 and w not in STOPWORDS]
     if not words:
-        return {"query": a.title, "best": None}
-    q = " AND ".join('ti:"%s"' % w for w in words)
-    rows = [r for r in arxiv_query({"search_query": q, "max_results": 10}) if "error" not in r]
-    if not rows:  # 標題裡有 arXiv 不收的字（希臘字母等）時，退到少一點的詞
-        q = " AND ".join('ti:"%s"' % w for w in words[:5])
-        rows = [r for r in arxiv_query({"search_query": q, "max_results": 10}) if "error" not in r]
+        return {"query": a.title, "best": None, "verdict": "notfound"}
+    queries = [" AND ".join('ti:"%s"' % w for w in words[:8])]
+    queries.append('ti:"%s"' % " ".join(norm[:7]))  # 片語查詢：停用詞在片語裡沒問題
+    queries.append(" AND ".join('ti:"%s"' % w for w in words[:4]))
+    rows, seen = [], set()
+    for q in queries:
+        for r in arxiv_query({"search_query": q, "max_results": 10}):
+            if "error" not in r and r["id"] not in seen:
+                seen.add(r["id"])
+                rows.append(r)
+        if any(title_sim(a.title, r["title"]) >= 0.9 for r in rows):
+            break
     scored = sorted(((title_sim(a.title, r["title"]), r) for r in rows), key=lambda x: -x[0])
     best = scored[0] if scored else None
     return {
