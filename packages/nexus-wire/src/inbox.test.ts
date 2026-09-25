@@ -85,7 +85,8 @@ describe('inbox', () => {
       { items: [null] },
       { items: [{ ...first, text: 1 }] },
       { items: [{ id: 'run-c', text: '目標續行' }] },
-      { items: [{ ...first, source: { kind: 'goal' } }] },
+      // 用另一件的 id：拿 `first` 改的話，正規化之後跟原本那份長得一樣，比不出有沒有收。
+      { items: [{ ...second, source: { kind: 'goal' } }] },
       { items: [], claimed: null },
       { items: [], claimed: { id: first.id } },
       { items: [], claimed: { id: 1, text: first.text } },
