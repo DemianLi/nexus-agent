@@ -473,8 +473,7 @@ export function foldRegistry(
 
   if (permissions.length > 0) params.permissions = permissions;
   // 三層都轉交同一個實例；讀到哪那一層在內側，失敗記錄看到的是它切回去之後的那份。
-  // **抓 meta 的那層在最內側**：改檔之前讀原檔那一次不能經過失敗記錄——新建時「讀不到」會被記成
-  // 一次 backend 失敗，把成功的寫入改判成失敗。見 {@link ./tool-result-meta.ts}。
+  // 抓 meta 的那層在最內側，看到的是 backend 原本交出的結果，見 {@link ./tool-result-meta.ts}。
   if (backend !== undefined) {
     params.backend = recordBackendOutcomes(
       recordReadExtent(

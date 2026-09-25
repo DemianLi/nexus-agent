@@ -227,13 +227,6 @@ async function readText(
   return 'absent';
 }
 
-/** `edit` 回來的 `filesUpdate` 裡那個檔改之後的全文（`StateBackend` 給這一格；落磁碟的不給）。 */
-function textFromFilesUpdate(result: unknown, path: string): string | undefined {
-  const update = (result as { readonly filesUpdate?: unknown } | undefined)?.filesUpdate;
-  if (typeof update !== 'object' || update === null) return undefined;
-  return textOf((update as Record<string, unknown>)[path]);
-}
-
 /** backend 方法回傳的形狀，只取這裡用得到的。 */
 interface BackendResultLike {
   readonly error?: unknown;
@@ -253,9 +246,10 @@ export interface RecordToolResultMetaOptions {
 /**
  * 把 backend 包一層，在 `grep`／`glob`／`write_file`／`edit_file` 那一次呼叫裡抓下 meta。
  *
- * **必須包在最內層**（直接包 fold 折出來的 backend）：`write` 之前那一次讀原檔，要讀的是原物件，
- * 不能經過 `recordBackendOutcomes`——新建檔案時那次讀會「讀不到」，被記成一次 backend 失敗的話，
- * fs-tool-errors 會把一次成功的寫入改判成失敗。
+ * **包在最內層**（直接包 fold 折出來的 backend），看到的是 backend 原本交出的結果。改檔之前讀原檔用的是
+ * `readRaw`，**不在 `recordBackendOutcomes` 追蹤的方法裡**（它只追各工具的主方法，`fs-tool-errors.ts`
+ * 的 `FS_TOOL_PRIMARY_METHOD`），所以新建時那一次「讀不到」不會被記成這次呼叫的失敗——這一點跟包在哪一層
+ * 無關（突變實測過：把這層換到最外側，測試全綠）。
  *
  * **轉交的是同一個實例**，同 `recordReadExtent`：方法以原物件為 `this` 呼叫，其餘屬性原樣讀出。
  *
@@ -385,15 +379,13 @@ function withEditMeta(backend: AnyBackendProtocol, method: (...args: unknown[]) 
     const before = await readText(backend, path);
     const result = (await method(...args)) as BackendResultLike;
     if (result.error !== undefined || typeof before !== 'object') return result;
-    // 改之後的全文**不自己重算**（`$` 樣式、`replace_all` 的語意跟基座對不齊就是錯的 diff）：`StateBackend`
-    // 在 `filesUpdate` 裡給；落磁碟的已經寫下去了，再讀一次。
-    let after = textFromFilesUpdate(result, path);
-    if (after === undefined) {
-      const reread = await readText(backend, path);
-      if (typeof reread !== 'object') return result;
-      after = reread.text;
-    }
-    putToolResultMeta('edit_file', { diffs: computeHunkDiffs(path, before.text, after) });
+    // 改之後的全文**不自己重算**（`$` 樣式、`replace_all` 的語意跟基座對不齊就是錯的 diff），改完再讀一次。
+    // 落磁碟的已經寫下去了；`StateBackend`（我們建的都是 zero-arg 那種）把更新送進同一步的 state，它的
+    // `files` 讀的是含這一步寫入的新值（`read("files", true)`）。只有 legacy 那種（建構時給 `runtime`）才
+    // 把全文放在回傳的 `filesUpdate` 裡而讀不到新值——那種組裝上沒有人建，所以這裡不讀那一格。
+    const after = await readText(backend, path);
+    if (typeof after !== 'object') return result;
+    putToolResultMeta('edit_file', { diffs: computeHunkDiffs(path, before.text, after.text) });
     return result;
   };
 }

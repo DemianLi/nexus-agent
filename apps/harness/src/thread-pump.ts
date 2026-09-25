@@ -1459,7 +1459,8 @@ export class ThreadPump {
   #noteVerdict(event: SessionEvent<'tool/result'>): void {
     if (this.#current === undefined) return;
     const { callId, isError, message, meta } = event.data;
-    const capped = isError ? undefined : capToolResultMeta(meta, this.#toolTextMaxBytes);
+    // 失敗的不帶由 `applyVerdict` 管（它只在成功那一支放 meta），這裡不再判一次。
+    const capped = capToolResultMeta(meta, this.#toolTextMaxBytes);
     const verdict: ToolVerdict = {
       failed: isError,
       // **成功也帶文字**（#439）：dsh 的工具卡文字就是這一則的內容，`isError` 是另一個旗標。
