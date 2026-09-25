@@ -7,8 +7,12 @@ import { createChangesStores } from '@/lib/changes-diff';
 import { MAX_RENDERED_LINES } from '@/lib/diff-rows';
 import { axeViolations } from '@/test/axe';
 import { stubCmdkLayout } from '@/test/cmdk';
+import { WithRightSidebar } from '@/test/right-sidebar';
 
-/** 審查頁（#443 web 第二刀）：點卡片的標頭或一列打開 Sheet，看那個檔在這一輪的比較。 */
+/**
+ * 審查頁（#443 web 第二刀）：點卡片的標頭或一列，在右側欄打開這一輪的分頁（#640），看那個檔在這一輪的比較。
+ * jsdom 沒有 `matchMedia`，畫的是停靠那一種。
+ */
 
 afterEach(() => {
   cleanup();
@@ -62,7 +66,11 @@ async function renderCard(
     return diffs(index, asked.filter((at) => at === index).length);
   }) as unknown as typeof globalThis.fetch;
   const changes = createChangesStores({ threadId: 't', baseUrl: 'http://h', fetch });
-  render(<ChangesCard seq={7} changes={changes} />);
+  render(
+    <WithRightSidebar sources={{ changes }}>
+      <ChangesCard seq={7} changes={changes} />
+    </WithRightSidebar>,
+  );
   await act(async () => {});
   return { asked };
 }
@@ -84,8 +92,11 @@ describe('打開審查頁', () => {
   it('點標頭：從第一個檔打開', async () => {
     const { asked } = await renderCard(() => json(textDiff())());
     await click(screen.getByRole('button', { name: /5 個檔案有改動/ }));
-    const sheet = screen.getByRole('dialog', { name: '這一輪的改動' });
-    expect(within(sheet).getByTestId('review-file').textContent).toBe('src/f0.ts');
+    // 分頁標題光靠摘要算：第一個檔名＋總數（#640 決定 11）。
+    const tab = screen.getByRole('tab', { name: '改動 · f0.ts 等 5 個' });
+    expect(tab.getAttribute('aria-selected')).toBe('true');
+    const panel = screen.getByRole('tabpanel', { name: '改動 · f0.ts 等 5 個' });
+    expect(within(panel).getByTestId('review-file').textContent).toBe('src/f0.ts');
     expect(asked).toEqual([0]);
   });
 
@@ -95,14 +106,13 @@ describe('打開審查頁', () => {
     );
     await click(rows()[1]!);
     expect(screen.getByTestId('review-file').textContent).toBe('src/f1.ts');
-    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
-    await act(async () => {});
-    expect(screen.queryByRole('dialog')).toBeNull();
 
+    // 同一輪再點別的檔：還是同一個分頁，換成那個檔（#640 決定 8）。
     await click(screen.getByRole('button', { name: /顯示全部 5 個/ }));
     await click(rows()[4]!);
     expect(screen.getByTestId('review-file').textContent).toBe('src/f4.ts');
     expect(asked).toEqual([1, 4]);
+    expect(screen.getAllByRole('tab')).toHaveLength(1);
   });
 
   it('選檔器換檔：讀那個檔的比較', async () => {
@@ -148,8 +158,6 @@ describe('比較', () => {
     expect(texts(left)).toEqual(['3keep', '4old one', '5old two']);
     expect(texts(right)).toEqual(['3keep', '4new one', '']);
 
-    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
-    await act(async () => {});
     await click(rows()[1]!);
     expect(screen.getByRole('button', { name: '左右對照' }).getAttribute('aria-pressed')).toBe(
       'true',
@@ -203,15 +211,15 @@ describe('讀不到的時候', () => {
   ])('%s：講為什麼不畫', async (_name, diff, text) => {
     await renderCard(() => json(diff)());
     await click(rows()[0]!);
-    expect(screen.getByRole('dialog').textContent).toContain(text);
+    expect(screen.getByRole('tabpanel').textContent).toContain(text);
   });
 
   it('404：講讀不到了，沒有重試', async () => {
     await renderCard(() => new Response('gone', { status: 404 }));
     await click(rows()[0]!);
-    const sheet = screen.getByRole('dialog');
-    expect(sheet.textContent).toContain('這一輪的改動已經讀不到了');
-    expect(within(sheet).queryByRole('button', { name: '重試' })).toBeNull();
+    const panel = screen.getByRole('tabpanel');
+    expect(panel.textContent).toContain('這一輪的改動已經讀不到了');
+    expect(within(panel).queryByRole('button', { name: '重試' })).toBeNull();
   });
 
   it('讀壞了：按重試再讀一次，讀到就畫', async () => {
@@ -219,7 +227,7 @@ describe('讀不到的時候', () => {
       attempt === 1 ? new Response('boom', { status: 500 }) : json(textDiff())(),
     );
     await click(rows()[0]!);
-    expect(screen.getByRole('dialog').textContent).toContain('沒辦法讀取改動');
+    expect(screen.getByRole('tabpanel').textContent).toContain('沒辦法讀取改動');
     await click(screen.getByRole('button', { name: '重試' }));
     expect(screen.getByTestId('review-body').querySelectorAll('[data-diff-line]')).toHaveLength(4);
     expect(asked).toEqual([0, 0]);
@@ -228,7 +236,7 @@ describe('讀不到的時候', () => {
   it('還在讀：報讀器聽得到', async () => {
     await renderCard(() => new Promise<Response>(() => {}));
     await click(rows()[0]!);
-    expect(within(screen.getByRole('dialog')).getByRole('status').textContent).toBe(
+    expect(within(screen.getByRole('tabpanel')).getByRole('status').textContent).toBe(
       '正在讀取改動…',
     );
   });
@@ -291,7 +299,7 @@ describe('git 快照帶來的新值（#467）', () => {
     expect(rows()[0]!.textContent).not.toContain('檔案過大');
 
     await click(rows()[0]!);
-    expect(screen.getByRole('dialog').textContent).toContain('檔案過大，沒辦法顯示改動');
+    expect(screen.getByRole('tabpanel').textContent).toContain('檔案過大，沒辦法顯示改動');
   });
 });
 

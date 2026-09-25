@@ -14,6 +14,7 @@ import { createChangesStores } from '@/lib/changes-diff';
 import { createDeliverableDownloader } from '@/lib/deliverable-download';
 import { createDeliverableFileStore } from '@/lib/deliverable-file';
 import { transcriptItems } from '@/lib/deliverables-view';
+import { WithRightSidebar } from '@/test/right-sidebar';
 
 /**
  * 交付卡片歸到它那一輪的尾端（#441 第二刀）。狀態從真的 frame 用 `reduceAll` 折出來，折疊器怎麼放那一格在
@@ -187,13 +188,16 @@ describe('交付卡片歸到輪尾', () => {
       throw new Error('這條測試不該發請求');
     }) as unknown as typeof globalThis.fetch;
     const wiring = { threadId: 't1', baseUrl: '', fetch: doFetch };
+    const download = createDeliverableDownloader(wiring);
     render(
-      <Transcript
-        state={state}
-        isFresh={() => false}
-        deliverableFiles={createDeliverableFileStore(wiring)}
-        deliverableDownload={createDeliverableDownloader(wiring)}
-      />,
+      <WithRightSidebar
+        sources={{
+          deliverableFiles: createDeliverableFileStore(wiring),
+          deliverableDownload: download,
+        }}
+      >
+        <Transcript state={state} isFresh={() => false} deliverableDownload={download} />
+      </WithRightSidebar>,
     );
     const card = screen.getByRole('region', { name: '這一輪交付的檔案，共 1 個' });
     expect(within(card).getByRole('button', { name: '預覽：out/report.pdf' })).toBeTruthy();

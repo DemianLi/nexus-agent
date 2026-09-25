@@ -12,6 +12,11 @@ import { FeedbackDialog } from '@/components/feedback-dialog';
 import { PendingSwap } from '@/components/pending-swap';
 import { FEEDBACK_COMMAND_LINE } from '@/lib/feedback';
 import { QuestionPanel } from '@/components/question-panel';
+import {
+  RightSidebarPanel,
+  RightSidebarProvider,
+  RightSidebarToggle,
+} from '@/components/right-sidebar';
 import { SessionUsage } from '@/components/session-usage';
 import { StatusLine } from '@/components/status-line';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -245,9 +250,14 @@ function ConversationView({
     line.trim() !== '' &&
     (!busy || line.trim() === FEEDBACK_COMMAND_LINE);
   const canSend = canSendLine(draft);
+  // 右側欄讀的跟卡片同一批 store（#640）：分頁與卡片看到的是同一份快取。
+  const sidebarSources = useMemo(
+    () => ({ changes, deliverableFiles, deliverableDownload }),
+    [changes, deliverableFiles, deliverableDownload],
+  );
 
   return (
-    <>
+    <RightSidebarProvider threadId={threadId} sources={sidebarSources}>
       <AppSidebar
         client={client}
         currentThreadId={threadId}
@@ -255,7 +265,8 @@ function ConversationView({
         onPick={onSwitch}
       />
       {/* `SidebarInset` 就是 `<main>`。 */}
-      <SidebarInset className="flex h-svh min-w-0 flex-col">
+      {/* 基準寬 480：右側欄打開時會話區至少留這麼多，視窗再窄才輪到它讓（#640，見 `right-sidebar.tsx`）。 */}
+      <SidebarInset className="flex h-svh min-w-0 flex-col" style={{ flexBasis: 480 }}>
         <header className="flex h-14 shrink-0 items-center gap-2 border-b px-2">
           {/* 觸控目標 44px，1024 以上回到 36（§9）。 */}
           <SidebarTrigger className="size-11 rounded-full lg:size-9" />
@@ -266,6 +277,8 @@ function ConversationView({
             sessionStats={conversation.state.sessionStats}
           />
           <ThemeToggle className="size-11 rounded-full lg:size-9" />
+          {/* 會話區右上角（#640 決定 2）；會話標頭做好之後搬進去。 */}
+          <RightSidebarToggle className="size-11 rounded-full lg:size-9" />
         </header>
 
         <div className="mx-auto w-full max-w-2xl shrink-0 px-6 pt-4">
@@ -313,7 +326,6 @@ function ConversationView({
             state={conversation.state}
             isFresh={isFresh}
             changes={changes}
-            deliverableFiles={deliverableFiles}
             deliverableDownload={deliverableDownload}
             feedback={{
               ratings: conversation.ratings,
@@ -434,6 +446,7 @@ function ConversationView({
           />
         </div>
       </SidebarInset>
+      <RightSidebarPanel />
 
       {feedbackDialog !== undefined && (
         <FeedbackDialog
@@ -446,6 +459,6 @@ function ConversationView({
           onDismiss={conversation.dismissFeedback}
         />
       )}
-    </>
+    </RightSidebarProvider>
   );
 }

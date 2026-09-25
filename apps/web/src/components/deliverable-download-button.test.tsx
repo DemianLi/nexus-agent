@@ -6,6 +6,7 @@ import { createDeliverableDownloader } from '@/lib/deliverable-download';
 import { createDeliverableFileStore } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import { axeViolations } from '@/test/axe';
+import { WithRightSidebar } from '@/test/right-sidebar';
 
 const toastSpy = vi.hoisted(() => {
   const spy = vi.fn() as ReturnType<typeof vi.fn> & { error: ReturnType<typeof vi.fn> };
@@ -59,12 +60,16 @@ function mount(
     respond(String(input)),
   ) as unknown as typeof globalThis.fetch;
   const wiring = { threadId: 't1', baseUrl: '', fetch: doFetch };
+  const download = withDownload ? createDeliverableDownloader(wiring) : undefined;
   render(
-    <DeliverablesCard
-      files={[FILE]}
-      preview={createDeliverableFileStore(wiring)}
-      download={withDownload ? createDeliverableDownloader(wiring) : undefined}
-    />,
+    <WithRightSidebar
+      sources={{
+        deliverableFiles: createDeliverableFileStore(wiring),
+        deliverableDownload: download,
+      }}
+    >
+      <DeliverablesCard files={[FILE]} download={download} />
+    </WithRightSidebar>,
   );
   return { doFetch };
 }
@@ -175,7 +180,7 @@ describe('預覽面裡的下載鈕', () => {
     [413, '檔案太大，沒辦法在這裡預覽'],
   ])('%i 那一格有下載鈕，按了真的去下載', async (status, said) => {
     const { doFetch } = await openPreviewWith(status);
-    const sheet = within(await screen.findByRole('dialog'));
+    const sheet = within(await screen.findByRole('tabpanel'));
     expect(sheet.getByText(said)).toBeTruthy();
     fireEvent.click(sheet.getByRole('button', { name: /下載這個檔/ }));
     await waitFor(() => expect(downloadCalls(doFetch)).toHaveLength(1));
@@ -186,21 +191,21 @@ describe('預覽面裡的下載鈕', () => {
     [400, '讀不到這個檔：座標不對'],
   ])('%i 那一格沒有下載鈕——下載也救不了它', async (status, said) => {
     await openPreviewWith(status);
-    const sheet = within(await screen.findByRole('dialog'));
+    const sheet = within(await screen.findByRole('tabpanel'));
     expect(sheet.getByText(said)).toBeTruthy();
     expect(sheet.queryByRole('button', { name: /下載這個檔/ })).toBeNull();
   });
 
   it('沒給 downloader 時那一格只剩一句話，仍然講得出發生什麼事', async () => {
     await openPreviewWith(422, { withDownload: false });
-    const sheet = within(await screen.findByRole('dialog'));
+    const sheet = within(await screen.findByRole('tabpanel'));
     expect(sheet.getByText('不是文字檔，沒辦法預覽')).toBeTruthy();
     expect(sheet.queryByRole('button', { name: /下載這個檔/ })).toBeNull();
   });
 
   it('axe：帶下載鈕的那一格沒有違規', async () => {
     await openPreviewWith(422);
-    await screen.findByRole('dialog');
+    await screen.findByRole('tabpanel');
     expect(await axeViolations(document.body)).toEqual([]);
   });
 });
