@@ -204,9 +204,7 @@ describe('寫不進去只講一聲，那一輪照跑（同 dsh `onUserMessage` �
       expect(types.at(-1)).toBe('turn/end');
       expect(thread.model.prompts).toHaveLength(1);
       expect(titlePushes(thread.frames)).toEqual([]);
-      expect(warnings).toEqual([
-        '[標題] thread title-real 的退回標題寫不進去：Error: 磁碟滿了',
-      ]);
+      expect(warnings).toEqual(['[標題] thread title-real 的退回標題寫不進去：Error: 磁碟滿了']);
     } finally {
       await thread.close();
     }
@@ -242,9 +240,7 @@ describe('寫不進去只講一聲，那一輪照跑（同 dsh `onUserMessage` �
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       expect(rootLog?.events.at(-1)?.type).toBe('turn/end');
-      expect(warnings).toEqual([
-        '[標題] thread title-serve 的退回標題寫不進去：Error: 磁碟滿了',
-      ]);
+      expect(warnings).toEqual(['[標題] thread title-serve 的退回標題寫不進去：Error: 磁碟滿了']);
     } finally {
       await handler.close();
     }
