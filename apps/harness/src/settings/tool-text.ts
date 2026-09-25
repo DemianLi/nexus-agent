@@ -42,7 +42,8 @@
  *
  * ## 80 倍那條比例只保證到預設值為止
  *
- * `@nexus/wire` 的 `HISTORY_PAGE_MAX_BYTES = 4_000_000` 是 `80 × 50000`，而 wire 不能往上
+ * `@nexus/wire` 的 `HISTORY_PAGE_MAX_BYTES = 8_000_000` 是 `80 × (50000 ＋ 50000)`——一張卡是結果文字加
+ * 給專屬卡的 `meta`，兩者的上限都是這一格（[#617](https://github.com/DemianLi/nexus-agent/issues/617)）——而 wire 不能往上
  * import harness，所以那個關係一直由 `apps/harness` 的一條測試逐字釘著。**這一列讓那個關係
  * 只在 schema 預設下成立**：部署在 patch 裡改掉 {@link DEFAULT_TOOL_TEXT_MAX_BYTES}
  * 之後，80 倍不再成立，而且沒有任何東西會紅。
@@ -56,7 +57,7 @@
  *
  * **可設定之後仍然守得住的**（#538 的驗收下限）：`serve-history.test.ts` 那條產品路徑的
  * warn——「超標的一頁走過 route 會 warn」——照樣證明得了。**但它的前提確實是預設值**：那個
- * seed 造 85 則滿版結果，`85 × 50000` 才撐得破 4 MB，部署把上限調小之後同一個 seed 就不再
+ * seed 造 170 則滿版結果，`170 × 50000` 才撐得破 8 MB，部署把上限調小之後同一個 seed 就不再
  * 超標。所以那條測試旁邊多了一條**顯性的前提斷言**：預設值哪天小到讓 seed 不再超標，它會
  * 當場紅，而不是靜靜變成一條什麼都沒測的綠燈。
  *

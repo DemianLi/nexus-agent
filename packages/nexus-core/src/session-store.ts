@@ -167,8 +167,17 @@ import type { SessionEvent } from './session-log.js';
  *
  * v14 的檔直接讀：沒有這一種就是那時候沒記——**不是沒撞到**。那時候的 `assistant/message` 已經帶著
  * `response_metadata.finish_reason`，要數舊檔的截斷得從那一格推，不能讀 `turn/end`。
+ *
+ * ## 16：`tool/result` 帶 `meta`
+ *
+ * 讀檔、搜尋、改檔的結構化結果，給 web 的專屬卡畫（[#617](https://github.com/DemianLi/nexus-agent/issues/617)），
+ * 同 dsh 的 `tool/result.meta`（`packages/core/session/src/types.ts:363-385`，`477b4f4`）。模型看不到它，推模型
+ * 歷史的一側不讀。v15 的檔直接讀：沒有這一格就是那時候沒記，接回來的卡走 generic。
+ *
+ * 升版照新增詞彙的慣例（同 11、12、14），不是 15 那種非升不可：15 讀到這一格只是不畫專屬卡，重建出來的
+ * 對話不差一個字。
  */
-export const SESSION_LOG_FORMAT_VERSION = 15;
+export const SESSION_LOG_FORMAT_VERSION = 16;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。

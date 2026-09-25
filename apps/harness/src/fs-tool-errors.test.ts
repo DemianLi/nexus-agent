@@ -112,7 +112,10 @@ describe('檔案工具的失敗在日誌上記成錯誤', () => {
     const { results, messages } = await run('workspace-write', [
       { name: 'write_file', args: { file_path: '/a.txt', content: '一' } },
     ]);
-    expect(results).toEqual([{ callId: expect.any(String), isError: false }]);
+    // 新建帶 `meta`（#617）：它讀原檔的那一次發生在失敗記錄的內側，不會把這次記成失敗。
+    expect(results).toEqual([
+      { callId: expect.any(String), isError: false, meta: { operation: 'create', diffs: [] } },
+    ]);
     expect(messages[0]?.status).not.toBe('error');
     expect(await readdir(root)).toEqual(['a.txt']);
   }, 20000);
@@ -141,7 +144,7 @@ describe('檔案工具的失敗在日誌上記成錯誤', () => {
     ]);
     expect(results).toEqual([
       { callId: expect.any(String), isError: true },
-      { callId: expect.any(String), isError: false },
+      { callId: expect.any(String), isError: false, meta: { operation: 'create', diffs: [] } },
     ]);
     expect(await readdir(root)).toEqual(['new.txt']);
   }, 20000);

@@ -433,12 +433,15 @@ export const HISTORY_PAGE_MESSAGES = 50;
  *
  * ## 這個數字怎麼來的
  *
- * `4_000_000` ＝ **80 × 每則工具結果的 50000 bytes 上限**，讀作「一頁最多裝 80 則滿版工具結果」。
- * 80 這個倍數對著量測挑：典型的一頁是 0.20 MiB 量級，離這裡有 19 倍餘裕，所以正常瀏覽一次都不會被切
- * （切了只會讓分頁變碎，對所有人都變差）；而上面那兩個病態形狀會落回單位數 MiB。
+ * `8_000_000` ＝ **80 × 每張工具卡的上限**，讀作「一頁最多裝 80 張滿版工具卡」。一張卡的上限是結果文字
+ * 50000 bytes 加上給專屬卡的 `meta` 50000 bytes——`meta` 的上限就是文字的上限
+ * （[#617](https://github.com/DemianLi/nexus-agent/issues/617) 決定 2；在那之前一張卡只有文字，這個數字是
+ * `4_000_000`）。80 這個倍數對著量測挑：典型的一頁是 0.20 MiB 量級（量的時候還沒有 `meta`，讀檔的 `meta`
+ * 大約跟文字一樣大，所以現在大約是兩倍），離這裡仍有一個量級的餘裕，所以正常瀏覽一次都不會被切（切了只會
+ * 讓分頁變碎，對所有人都變差）；而上面那兩個病態形狀會落回單位數 MiB 的兩倍。
  *
  * **與那個 50000 的關係由 `apps/harness` 的絆索釘著**（每則上限住在 app 裡，wire 不能往上 import，
- * 所以這裡只能寫字面值）：那條測試逐字比對 `80 × DEFAULT_TOOL_TEXT_MAX_BYTES`。同一個做法見
+ * 所以這裡只能寫字面值）：那條測試逐字比對 `80 × (DEFAULT_TOOL_TEXT_MAX_BYTES × 2)`。同一個做法見
  * `conversation.ts:927` 那條。
  *
  * **但它只釘得住出廠那一份**（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）：每則上限
@@ -447,7 +450,7 @@ export const HISTORY_PAGE_MESSAGES = 50;
  * 的事，所以它刻意沒跟著變成設定。
  *
  * 那是 #538 三選一裡明著選的第三條（2026-09-23 拍板），代價寫在這裡而不是只寫在 harness 那側，是因為
- * **讀到這個數字的人會在這裡問它憑什麼是 4 MB**。dsh 那側沒有先例可抄：它的歷史分頁按則數算
+ * **讀到這個數字的人會在這裡問它憑什麼是 8 MB**。dsh 那側沒有先例可抄：它的歷史分頁按則數算
  * （`packages/api/session-controller/src/history.ts:38`），組頁路徑上一個位元組預算都沒有，兩個值
  * 沒有共同單位可以做比例——這個耦合是我們自己長出來的。
  *
@@ -455,7 +458,7 @@ export const HISTORY_PAGE_MESSAGES = 50;
  *
  * 見 {@link ThreadHistoryResult.events}：切點只落在輪邊界上，所以單獨一輪就超標時那一頁就是超標。
  */
-export const HISTORY_PAGE_MAX_BYTES = 4_000_000;
+export const HISTORY_PAGE_MAX_BYTES = 8_000_000;
 
 /**
  * 拿一頁歷史的參數。三格都省略就是最後一頁。
