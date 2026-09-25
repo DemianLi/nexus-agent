@@ -188,7 +188,7 @@ describe('工具結果帶結構化 meta', () => {
     }, 20000);
   });
 
-  it('grep：依檔案分組、照第一次出現的順序；total 是交出來的筆數', async () => {
+  it('grep：依檔案分組、檔案照路徑排序（同模型看到的文字）；total 是命中筆數', async () => {
     await writeFile(join(root, 'b.txt'), 'needle one\nhay\nneedle two\n');
     await writeFile(join(root, 'a.txt'), 'hay\nneedle three\n');
     const { messages, logged } = await run([
@@ -203,10 +203,12 @@ describe('工具結果帶結構化 meta', () => {
     expect(meta.shape).toBe('matches');
     expect(meta.truncated).toBe(false);
     expect(meta.total).toBe(3);
-    // 順序照 backend 交出來的第一次出現，跟模型看到的文字同序。
+    // 檔案照路徑排序，跟模型看到的文字同序。b 先寫、a 後寫，列檔順序照檔案系統而定；
+    // 不照交出來的順序排的那一版在 Linux CI 上紅過（#619 之後），這裡把兩份的順序都釘死。
     const text = textOf(messages[0]);
     const order = meta.files.map((file) => file.path);
-    expect([...order].sort((x, y) => text.indexOf(x) - text.indexOf(y))).toEqual(order);
+    expect(order).toEqual(['/a.txt', '/b.txt']);
+    expect(text.indexOf('/a.txt')).toBeLessThan(text.indexOf('/b.txt'));
     expect(Object.fromEntries(meta.files.map((file) => [file.path, file.matches]))).toEqual({
       '/b.txt': [
         { lineNumber: 1, line: 'needle one' },

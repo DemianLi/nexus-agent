@@ -119,6 +119,49 @@ describe('槽', () => {
   });
 });
 
+describe('grep', () => {
+  it('檔案照路徑排序、同檔內照 backend 的順序：跟基座 `formatGrepResults` 排出來的文字同序，不看列檔順序', async () => {
+    // backend 照列檔順序交：ext4 上 b 可以排在 a 前面。只在 macOS 跑的話這個順序碰巧已經排好，看不出來。
+    const backend = recordToolResultMeta(
+      {
+        grep: async () => ({
+          matches: [
+            { path: '/b.txt', line: 3, text: 'b3' },
+            { path: '/a.txt', line: 9, text: 'a9' },
+            { path: '/b.txt', line: 1, text: 'b1' },
+            { path: '/a.txt', line: 2, text: 'a2' },
+          ],
+        }),
+      },
+      { search: true },
+    );
+    const { meta } = await runInToolMetaSlot('grep', { pattern: 'x' }, () =>
+      backend.grep('x', '/', null, null),
+    );
+    expect(meta).toEqual({
+      shape: 'matches',
+      files: [
+        {
+          path: '/a.txt',
+          matches: [
+            { lineNumber: 9, line: 'a9' },
+            { lineNumber: 2, line: 'a2' },
+          ],
+        },
+        {
+          path: '/b.txt',
+          matches: [
+            { lineNumber: 3, line: 'b3' },
+            { lineNumber: 1, line: 'b1' },
+          ],
+        },
+      ],
+      truncated: false,
+      total: 4,
+    });
+  });
+});
+
 describe('圍堵把槽裡的東西寫進 `tool/result`', () => {
   /** 一顆會把事件記進 `log` 的圍堵的 `wrapToolCall`。 */
   function recorder(log: SessionLog) {
