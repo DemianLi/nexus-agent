@@ -157,8 +157,18 @@ import type { SessionEvent } from './session-log.js';
  * 摘要器量到的每一次模型呼叫：離自動摘要還有多遠（[#528](https://github.com/DemianLi/nexus-agent/issues/528)，
  * web 的用量表讀它）。v13 的檔直接讀：那時候沒有這一層，一顆都沒有就是當時的樣子——用量表要等接回來之後的第一次
  * 模型呼叫才畫得出來（它看的是 `measure`；舊檔裡的 `model/usage` 照樣送上線）。升版理由同 11。
+ *
+ * ## 15：`turn/end` 的 `reason` 多一種 `max-tokens`
+ *
+ * root 的回覆撞到輸出上限的那一輪以 `reason: {kind:'max-tokens'}` 收尾（[#433](https://github.com/DemianLi/nexus-agent/issues/433)）。
+ * **非升不可**：14 讀到它會當成正常結束——14 的 goal 續行只認得 `aborted`，於是在一輪撞到上限之後照樣
+ * 排下一輪，而 15 在那一刻收回了續行授權。同 dsh 那條門檻（「no longer handle a new log with full semantic
+ * correctness」，`packages/core/session/src/types.ts:74-85`，`477b4f4`）。
+ *
+ * v14 的檔直接讀：沒有這一種就是那時候沒記——**不是沒撞到**。那時候的 `assistant/message` 已經帶著
+ * `response_metadata.finish_reason`，要數舊檔的截斷得從那一格推，不能讀 `turn/end`。
  */
-export const SESSION_LOG_FORMAT_VERSION = 14;
+export const SESSION_LOG_FORMAT_VERSION = 15;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。

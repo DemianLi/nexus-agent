@@ -659,8 +659,8 @@ interface WireAssistant {
 /**
  * 這則助手訊息的 content 是不是**一個字都沒有的陣列**：沒有任何一段非空白的文字。
  *
- * 只認陣列。字串（CLI 那條送的 `""`）與 `null`（`@langchain/openai` 標準轉換那條送的）兩個模型都收，
- * 不動。空白算空，同 pi-ai 的 `.filter((block) => block.text.trim().length > 0)`。
+ * 有工具呼叫時只認陣列。字串（CLI 那條送的 `""`）與 `null`（`@langchain/openai` 標準轉換那條送的）
+ * 配工具呼叫兩個模型都收，不動。空白算空，同 pi-ai 的 `.filter((block) => block.text.trim().length > 0)`。
  */
 function isEmptyContentArray(content: unknown): boolean {
   if (!Array.isArray(content)) return false;
@@ -673,9 +673,23 @@ function isEmptyContentArray(content: unknown): boolean {
 }
 
 /**
- * 把請求裡**內容是空陣列**的助手訊息換成 dsh 的送法
- * （[#592](https://github.com/DemianLi/nexus-agent/issues/592)）：有工具呼叫的送 `content: null`，
- * 沒有工具呼叫的整則不送。
+ * 這則助手訊息的 content 是不是一個字都沒有，**不分形狀**：`null`、缺席、空白字串、{@link isEmptyContentArray}。
+ * 沒有工具呼叫的那一種用它判：什麼都沒有的一則，照 dsh 整則不送。
+ */
+function isEmptyContent(content: unknown): boolean {
+  if (content === null || content === undefined) return true;
+  if (typeof content === 'string') return content.trim() === '';
+  return isEmptyContentArray(content);
+}
+
+/**
+ * 把請求裡**沒有內容**的助手訊息換成 dsh 的送法
+ * （[#592](https://github.com/DemianLi/nexus-agent/issues/592)）：有工具呼叫、內容是空陣列的送
+ * `content: null`；沒有工具呼叫、內容是空的（任何形狀）整則不送。
+ *
+ * 後者的第二個來源是撞到輸出上限（[#433](https://github.com/DemianLi/nexus-agent/issues/433)）：那一則的工具
+ * 呼叫被清掉，只剩推理或什麼都沒有。CLI 那條送的是 `""`、web 那條是空陣列或 `null`，所以這一種不分形狀——
+ * 同 dsh 的 `surface.ts:142-147`（`477b4f4`）與 pi-ai 的「沒有 content 也沒有工具呼叫的整則略過」。
  *
  * @param messages - 請求 body 的 `messages`。
  * @returns 換過的訊息串；一則都沒換時是**原本那個陣列**。
@@ -685,17 +699,18 @@ export function normalizeEmptyAssistantContent(messages: readonly unknown[]): re
   const next: unknown[] = [];
   for (const message of messages) {
     const assistant = message as WireAssistant;
+    if (typeof message !== 'object' || message === null || assistant.role !== 'assistant') {
+      next.push(message);
+      continue;
+    }
+    const hasToolCalls = Array.isArray(assistant.tool_calls) && assistant.tool_calls.length > 0;
     if (
-      typeof message !== 'object' ||
-      message === null ||
-      assistant.role !== 'assistant' ||
-      !isEmptyContentArray(assistant.content)
+      hasToolCalls ? !isEmptyContentArray(assistant.content) : !isEmptyContent(assistant.content)
     ) {
       next.push(message);
       continue;
     }
     changed = true;
-    const hasToolCalls = Array.isArray(assistant.tool_calls) && assistant.tool_calls.length > 0;
     if (hasToolCalls) next.push({ ...assistant, content: null });
   }
   return changed ? next : messages;

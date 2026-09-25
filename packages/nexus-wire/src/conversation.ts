@@ -98,6 +98,15 @@ export interface AiEntry {
    * 判法見 {@link reduceConversation}，即時與歷史走同一條。
    */
   readonly turnTail?: true;
+  /**
+   * 這一輪撞到了模型的輸出上限（[#433](https://github.com/DemianLi/nexus-agent/issues/433)）：標在那一輪**最後一則
+   * root 回覆**上，有沒有字都標。讀的是 root 那顆收尾 `lifecycle` 上 pump 補的 `maxTokens`，同 {@link AiEntry.stopped}
+   * 讀 `aborted`。**一輪一格，不是一則一格**：日誌的 `turn/end` 是 sticky 的，前面某一步撞到、後面收掉也算。
+   *
+   * dsh 在收尾那則助手與輪尾之間畫一個提示節點（`ui-chat` 的 `conversation-nodes/turn-max-tokens.ts`，`477b4f4`）；
+   * 畫法歸畫面那一側，這裡只帶資料。
+   */
+  readonly maxTokens?: true;
 }
 
 export interface ToolEntry {
@@ -980,6 +989,29 @@ interface LifecycleData {
   readonly error?: string;
   /** 人按了停止。pump 在 root 那顆收尾的 frame 上補的，見 {@link ConversationStatus}。 */
   readonly aborted?: boolean;
+  /** 這一輪撞到了輸出上限。同 `aborted` 由 pump 補，見 {@link AiEntry.maxTokens}。 */
+  readonly maxTokens?: boolean;
+}
+
+/**
+ * 這一輪最後一則 root 回覆標上 {@link AiEntry.maxTokens}。一則 root 回覆都沒有就原樣。
+ *
+ * @param entries - 目前的條目。
+ * @param turnStart - 這一輪從哪一格開始。
+ * @returns 標過的條目。
+ */
+function markMaxTokens(
+  entries: readonly ConversationEntry[],
+  turnStart: number,
+): readonly ConversationEntry[] {
+  for (let at = entries.length - 1; at >= turnStart; at -= 1) {
+    const entry = entries[at];
+    if (entry?.kind !== 'ai' || entry.attribution.kind !== 'root') continue;
+    const next = [...entries];
+    next[at] = { ...entry, maxTokens: true };
+    return next;
+  }
+  return entries;
 }
 
 /** 一輪收掉時還沒有結果的那次呼叫，卡上的紅字。 */
@@ -1055,9 +1087,13 @@ function reduceLifecycle(
   if (data.event === 'completed') {
     // **中斷時 root 照樣發 completed**，所以停在核准點的那一輪不能被它翻成 idle，卡也不收——
     // 那一輪還沒關，卡還在等人。
-    return state.status === 'awaiting-input'
-      ? state
-      : { ...state, status: 'idle', entries: settleUnfinishedTools(state.entries) };
+    if (state.status === 'awaiting-input') return state;
+    const settled = settleUnfinishedTools(state.entries);
+    return {
+      ...state,
+      status: 'idle',
+      entries: data.maxTokens === true ? markMaxTokens(settled, state.turnStart) : settled,
+    };
   }
   return state;
 }

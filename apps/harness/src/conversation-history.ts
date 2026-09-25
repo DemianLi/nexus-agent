@@ -574,6 +574,9 @@ export function historyFrames(
       case 'turn/end':
         if (event.data.reason?.kind === 'aborted') {
           close(event.time, { event: 'failed', aborted: true });
+        } else if (event.data.reason?.kind === 'max-tokens') {
+          // 撞到輸出上限（#433）：同即時那條，pump 在收尾 frame 上補 `maxTokens`。
+          close(event.time, { event: 'completed', maxTokens: true });
         } else if (interrupted) {
           turnOpen = false;
           suspended = true;
