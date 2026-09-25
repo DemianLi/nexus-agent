@@ -389,15 +389,22 @@ def cmd_meta(a):
 
 
 class _Text(html.parser.HTMLParser):
-    """把 arXiv / ar5iv 的 LaTeXML HTML 轉成可讀的純文字。數學取 alttext。"""
+    """把 arXiv / ar5iv 的 LaTeXML HTML 轉成可讀的純文字。數學取 alttext。
 
-    SKIP = {"script", "style", "nav", "header", "footer", "button", "svg", "noscript"}
+    svg 不能整個跳過：LaTeXML 把 tcolorbox 之類的彩色框畫成 ltx_picture，框裡的文字（常是數字，
+    例如「win rate of 72%」的 72%）放在 svg 的 foreignObject 裡。只收 foreignObject 與 svg <text>
+    的文字，其餘繪圖標記忽略。
+    """
+
+    SKIP = {"script", "style", "nav", "header", "footer", "button", "noscript"}
+    SVG_TEXT = {"foreignobject", "text"}
     BLOCK = {"p", "div", "section", "article", "li", "tr", "table", "figure", "figcaption", "blockquote", "br", "dd", "dt"}
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.out, self.skip, self.math, self.sections = [], 0, 0, []
         self.heading = None
+        self.svg, self.svg_text = 0, 0  # svg 深度；其中可收文字的 foreignObject／text 深度
 
     def handle_starttag(self, tag, attrs):
         d = dict(attrs)
@@ -407,6 +414,16 @@ class _Text(html.parser.HTMLParser):
             return
         if self.skip:
             return
+        if tag == "svg":
+            self.svg += 1
+            self.out.append(" ")
+            return
+        if self.svg:
+            if tag in self.SVG_TEXT:
+                self.svg_text += 1
+                self.out.append(" ")
+            if not self.svg_text:
+                return
         if tag == "math":
             alt = d.get("alttext")
             if alt:
@@ -433,6 +450,16 @@ class _Text(html.parser.HTMLParser):
             return
         if self.skip:
             return
+        if tag == "svg":
+            self.svg = max(0, self.svg - 1)
+            self.out.append(" ")
+            return
+        if self.svg:
+            if tag in self.SVG_TEXT:
+                self.svg_text = max(0, self.svg_text - 1)
+                self.out.append(" ")
+            if not self.svg_text:
+                return
         if tag == "math":
             self.math = max(0, self.math - 1)
             return
@@ -448,8 +475,10 @@ class _Text(html.parser.HTMLParser):
             self.out.append("\n")
 
     def handle_data(self, data):
-        if self.skip or self.math:
+        if self.skip or self.math or (self.svg and not self.svg_text):
             return
+        if self.svg:
+            data = data.replace("\n", " ")  # 框內原始碼的換行不是段落，壓掉才接得回原句
         if self.heading is not None:
             self.heading[2].append(data)
         else:
