@@ -53,7 +53,7 @@
  *
  * 每次模型呼叫與每次頂層工具呼叫多一次排空，而我們的排空帶一次 `datasync`
  * （{@link ./session-persistence.ts | SessionPersistenceCoordinator.flush}）。dsh 那側每一批
- * append 都 fsync，量級相同。沒接持久化時（沒開 `--session-log`、測試的組裝）排空者一位都沒有，
+ * append 都 fsync，量級相同。沒接持久化時（手搭的組裝、多數測試）排空者一位都沒有，
  * 立刻 resolve。
  *
  * @module

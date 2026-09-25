@@ -57,6 +57,12 @@ import {
   type SessionLog,
 } from '@nexus/core';
 import { createJsonlSessionStore, openJsonlSessionStore } from './jsonl-session-store.js';
+import {
+  HARNESS_HOME_DIR_NAME,
+  HARNESS_HOME_ENV,
+  HARNESS_SESSIONS_DIR_NAME,
+  harnessSessionsDir,
+} from './harness-home.js';
 import { assertSameCwd, assertSameWorkspaceRoot } from './resume-guards.js';
 import { DEFAULT_MAX_GOAL_ROUNDS, GOALS_SERVICE } from '@nexus/plugin-goal';
 import type { GoalServices } from '@nexus/plugin-goal';
@@ -110,15 +116,17 @@ export interface CliInvocation {
    */
   readonly sandbox?: SandboxMode;
   /**
-   * 會話日誌落盤的根目錄。給了就把這一次的每一份日誌寫進它底下的一個 run 目錄，
-   * 省略即**不落盤**（同 `fold.ts` 的 checkpointer：「缺席」就是關掉）。
+   * 會話日誌落盤的根目錄，**換位置用**。這一次的每一份日誌寫進它底下的一個 run 目錄；
+   * 省略即 harness home 底下的 `sessions`（{@link harnessSessionsDir}）。
    *
-   * **沒有預設值是刻意的。** 日誌裡有使用者打的每一句話，預設往家目錄寫是一個
-   * 應該由人做的決定，不是一個順手的預設（[#172](https://github.com/DemianLi/nexus-agent/issues/172)）。
+   * **預設落盤照 dsh**（[#444](https://github.com/DemianLi/nexus-agent/issues/444)，2026-09-19
+   * 拍板）：dsh base 出廠就把會話寫進 `$DSH_HOME/sessions`。這裡以前是「預設不落盤，往家目錄寫
+   * 由人決定」（[#172](https://github.com/DemianLi/nexus-agent/issues/172)），那是政策，不是偏離
+   * 規則要的「表達不出來」，所以改掉。目錄 `0700`、檔 `0600` 照舊。
    */
   readonly sessionLog?: string;
   /**
-   * 續接一個既有的 run 目錄——上一次 `--session-log` 寫出來的那一個
+   * 續接一個既有的 run 目錄——上一次 CLI 寫出來的那一個（預設在 harness home 的 `sessions` 底下）
    * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
    *
    * **回來的是日誌上推得出來的**：沙箱模式、目標（授權打回 `disarmed`，要人 `/goal resume`）、
@@ -218,9 +226,10 @@ export const USAGE = `用法：cli [選項] [要說的話...]
                        （省略即虛擬檔案系統，完全不碰磁碟）
   --sandbox <mode>     圍堵強度：read-only｜workspace-write｜danger-full-access
                        預設 workspace-write（可寫根之內放行）；要配 --workspace
-  --session-log <dir>  把會話日誌寫進這個目錄底下（省略即不落盤）
+  --session-log <dir>  把會話日誌改寫到這個目錄底下
+                       （預設 $NEXUS_AGENT_HOME/sessions，沒設就是 ~/.nexus-agent/sessions）
                        它不能在 --workspace 底下：日誌是基礎建設，不是 agent 的工作區
-  --resume <run 目錄>  接著上一次 --session-log 寫出來的那個 run 目錄跑下去：
+  --resume <run 目錄>  接著上一次寫出來的那個 run 目錄跑下去：
                        沙箱模式、目標、計劃模式與對話照日誌回來
                        （虛擬檔案系統、工具結果暫存與會話歷史檔不回來）
                        要在上一次的同一個目錄底下接（日誌記著它屬於哪個目錄）
@@ -420,26 +429,42 @@ function parsePositiveInteger(flag: string, raw: string | undefined): number | u
 }
 
 /**
- * 把 `--session-log` 解析成絕對路徑，順便擋掉它落在 `--workspace` 底下的情形。
+ * 解析會話日誌的根：`--session-log` 給了就是它，沒給就是 harness home 底下的 `sessions`
+ * （{@link harnessSessionsDir}，[#444](https://github.com/DemianLi/nexus-agent/issues/444)）。
+ * 兩種都擋掉落在 `--workspace` 底下的情形。
  *
  * **這道檢查就是 [#170](https://github.com/DemianLi/nexus-agent/issues/170) 那條線的第二次應用**：
  * `fold.ts:252` 寫著「歷史是基礎建設，不是 agent 的工作區」。日誌寫進可寫根底下的話，
  * 模型自己一個 `read_file` 就讀得到整份對話史，而且會把自己的日誌當成工作檔改掉。
+ *
+ * **預設值也要過這道檢查**：`--workspace ~`，或把 `NEXUS_AGENT_HOME` 指進工作區，預設的根就
+ * 落在可寫根裡——跟指錯 `--session-log` 是同一個下場，只是使用者一個旗標都沒給。所以錯誤訊息
+ * 點名的是路徑從哪來，並講出兩條出路。
  *
  * **純字串前綴比對，不 canonicalize**——同 `ContainedFilesystemBackend` 的取捨與同一個
  * 已知缺口（symlink 繞得過）。這裡擋的是順手指到工作區裡，不是惡意。
  *
  * @param invocation - 解析出來的呼叫。
  * @param cwd - 相對路徑的解析基準。
- * @returns 絕對路徑，或沒給 `--session-log` 時的 `undefined`。
+ * @param env - 決定 harness home 落在哪（同 {@link resolveHarnessHome}）。
+ * @returns 絕對路徑。
  * @throws 它落在 `--workspace` 底下。
  */
 export function resolveSessionLogDir(
   invocation: Pick<CliInvocation, 'sessionLog' | 'workspace'>,
   cwd: string,
-): string | undefined {
-  if (invocation.sessionLog === undefined) return undefined;
-  return outsideWorkspace(invocation.sessionLog, invocation.workspace, cwd, '--session-log');
+  env: Readonly<Record<string, string | undefined>>,
+): string {
+  if (invocation.sessionLog !== undefined) {
+    return outsideWorkspace(invocation.sessionLog, invocation.workspace, cwd, '--session-log');
+  }
+  return outsideWorkspace(
+    harnessSessionsDir(env),
+    invocation.workspace,
+    cwd,
+    `預設的會話日誌目錄（${HARNESS_HOME_ENV} 或 ~/${HARNESS_HOME_DIR_NAME} 底下的 ${HARNESS_SESSIONS_DIR_NAME}）`,
+    `用 --session-log 指到工作區外面，或把 ${HARNESS_HOME_ENV} 設到工作區外面。`,
+  );
 }
 
 /**
@@ -483,15 +508,17 @@ function outsideWorkspace(
   path: string,
   workspacePath: string | undefined,
   cwd: string,
-  flag: string,
+  subject: string,
+  remedy = '',
 ): string {
   const directory = resolve(cwd, path);
   const workspace = resolveWorkspaceRoot(workspacePath, cwd);
   if (workspace === undefined) return directory;
   if (directory === workspace || directory.startsWith(`${workspace}${sep}`)) {
     throw new Error(
-      `${flag} 不能在 --workspace 底下（${directory} 在 ${workspace} 之內）。` +
-        `會話日誌是基礎建設，不是 agent 的工作區——寫在可寫根裡，模型讀得到也改得動整份對話史。`,
+      `${subject} 不能在 --workspace 底下（${directory} 在 ${workspace} 之內）。` +
+        `會話日誌是基礎建設，不是 agent 的工作區——寫在可寫根裡，模型讀得到也改得動整份對話史。` +
+        remedy,
     );
   }
   return directory;
@@ -1260,19 +1287,28 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     return;
   }
 
-  // **在載 plugin、建 agent 之前解析**：一個指錯地方的 `--session-log` 該在什麼都還沒
-  // 起來的時候就講，而不是等到第一筆事件寫不進去。
-  const sessionLogDir = resolveSessionLogDir(invocation, options.cwd ?? process.cwd());
   // **續接也在建 agent 之前讀**：沙箱模式的起始那一格與 root 日誌的 seed 都是組裝時就要給的
   // 東西，而讀不到（沒有那個目錄、版本太新、壞檔）也該在什麼都還沒起來的時候就講。
   const resumeDir = resolveResumeDir(invocation, options.cwd ?? process.cwd());
   // 後端講話（例如這個平台拿不到寫租約）走 `Printer`，前綴同協調器那條 `[會話日誌]`。
   const sessionLogWarn = (message: string): void => printer.error(`[會話日誌] ${message}`);
-  const resumeStore =
+  // **一次呼叫只有一個寫入目的地**：續接就寫回那個 run 目錄；否則在日誌根底下開一個新的
+  // （#444：沒給 `--session-log` 就是 harness home 底下的 `sessions`）。**根在載 plugin、建
+  // agent 之前解析**：一個指錯地方的根該在什麼都還沒起來的時候就講，而不是等到第一筆事件
+  // 寫不進去。續接那條不解析根——那時根本不寫那裡，拿它擋人（例如 `--workspace ~`）是誤擋。
+  // 兩個工廠都是惰性的：第一次寫入之前不碰磁碟。
+  const sessionStore =
     resumeDir === undefined
-      ? undefined
+      ? createJsonlSessionStore({
+          rootDir: resolveSessionLogDir(
+            invocation,
+            options.cwd ?? process.cwd(),
+            options.env ?? process.env,
+          ),
+          warn: sessionLogWarn,
+        })
       : openJsonlSessionStore({ directory: resumeDir, warn: sessionLogWarn });
-  const resumed = resumeStore === undefined ? undefined : await resumeStore.resume(THREAD_ID);
+  const resumed = resumeDir === undefined ? undefined : await sessionStore.resume(THREAD_ID);
   // 模式從日誌來；那一次跑沒有 fence（一顆 `sandbox/mode` 都沒有）就照常從預設起算。
   // `--sandbox` 在這條路上已經被 `parseCliArgs` 擋掉，所以這裡不會蓋掉任何人給的值。
   const resumedSandbox = resumed === undefined ? undefined : recordedSandboxMode(resumed.events);
@@ -1367,32 +1403,24 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // **接在最後，而且是四個裡唯一一個出口。** 前三個是觀察者，落盤不改變任何人看得到
   // 什麼，所以順序在功能上沒有差別；排在最後是為了讓讀的人看到的因果跟實際一致——
   // 先被檢查、被參與者看過，才寫下去。
-  const sessionStore =
-    resumeStore ??
-    (sessionLogDir === undefined
-      ? undefined
-      : createJsonlSessionStore({ rootDir: sessionLogDir, warn: sessionLogWarn }));
-  const persistence =
-    sessionStore === undefined
-      ? undefined
-      : attachSessionPersistence(sessions, sessionStore, {
-          cwd: options.cwd ?? process.cwd(),
-          // 批次窗口：上面在 try 裡從清單解出來的那一份。
-          windowMs: persistenceWindow.windowMs,
-          // **錨（#504）取的是組裝真的用的那一個**，不是在這裡再算一次：`createCliAgent`
-          // 回著它正是為了這個。沒給 `--workspace` 就不寫那一格。
-          ...(workspaceRoot !== undefined && { workspaceRoot }),
-          // 續接：root 那一份往原檔續寫，只寫還沒存的後綴（第一筆就是 `session/end-seed`）。
-          ...(resumed !== undefined && {
-            resumedRoot: { stored: resumed.stored, storedCount: resumed.events.length },
-          }),
-          // **背景寫入被拒只有這一行看得見**（協調器自己吞掉，響亮的那次歸 `flush`）。
-          // 走 `printer.error` 而不是 `console.warn`，理由同不變量那條：前綴是唯一分得出
-          // 誰在講話的東西。
-          warn: (message) => {
-            printer.error(`[會話日誌] ${message}`);
-          },
-        });
+  const persistence = attachSessionPersistence(sessions, sessionStore, {
+    cwd: options.cwd ?? process.cwd(),
+    // 批次窗口：上面在 try 裡從清單解出來的那一份。
+    windowMs: persistenceWindow.windowMs,
+    // **錨（#504）取的是組裝真的用的那一個**，不是在這裡再算一次：`createCliAgent`
+    // 回著它正是為了這個。沒給 `--workspace` 就不寫那一格。
+    ...(workspaceRoot !== undefined && { workspaceRoot }),
+    // 續接：root 那一份往原檔續寫，只寫還沒存的後綴（第一筆就是 `session/end-seed`）。
+    ...(resumed !== undefined && {
+      resumedRoot: { stored: resumed.stored, storedCount: resumed.events.length },
+    }),
+    // **背景寫入被拒只有這一行看得見**（協調器自己吞掉，響亮的那次歸 `flush`）。
+    // 走 `printer.error` 而不是 `console.warn`，理由同不變量那條：前綴是唯一分得出
+    // 誰在講話的東西。
+    warn: (message) => {
+      printer.error(`[會話日誌] ${message}`);
+    },
+  });
 
   // 一輪跑壞了也要收——資源的所有權跟這一次呼叫綁在一起，不跟它成不成功綁在一起。
   //
@@ -1429,13 +1457,11 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     // 本機磁碟上。三個分開講，因為三個各自開關——而且日誌裡有使用者打的每一句話，
     // 「有沒有在寫、寫去哪」不該要讀文件才知道。
     printer.log(
-      sessionStore === undefined
-        ? '會話日誌：只在記憶體裡（行程結束就沒了；--session-log <dir> 可以落盤）'
-        : restored === undefined
-          ? `會話日誌：${sessionStore.directory}`
-          : // **照實講回來的是什麼**（#251 的最後一段）：對話回不回得來看推的結果（#306），
-            // 推不出來時講原因。回不來的也講——不講的話，一個讀暫存路徑讀到 ENOENT 的模型看起來像壞了。
-            `會話日誌：${sessionStore.directory}（續接：沙箱模式、計劃模式與目標照日誌回來；` +
+      restored === undefined
+        ? `會話日誌：${sessionStore.directory}`
+        : // **照實講回來的是什麼**（#251 的最後一段）：對話回不回得來看推的結果（#306），
+          // 推不出來時講原因。回不來的也講——不講的話，一個讀暫存路徑讀到 ENOENT 的模型看起來像壞了。
+          `會話日誌：${sessionStore.directory}（續接：沙箱模式、計劃模式與目標照日誌回來；` +
             `${formatConversationRestore(restored)}；` +
             `${invocation.workspace === undefined ? '虛擬檔案系統、' : ''}工具結果暫存與會話歷史檔沒有回來）`,
     );
@@ -1457,7 +1483,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       ? goalDriverPort(
           goals,
           () => sessionLog,
-          async () => void (await persistence?.flush()),
+          async () => void (await persistence.flush()),
           (message) => printer.error(message),
         )
       : undefined;
@@ -1482,7 +1508,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   } catch (error) {
     // 跑壞了也要盡量把已經記下來的事件寫下去——**但不能讓它蓋掉原本的錯誤**，
     // 同下面那條「先保住原本的錯誤」的規則。
-    await persistence?.dispose().catch(() => {});
+    await persistence.dispose().catch(() => {});
     await dispose().catch(() => {});
     throw error;
   }
@@ -1495,7 +1521,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // （也實測過）。留著這個順序的理由是 plugin 的 disposer 一跑，後端就可能被它的擁有者
   // 收掉，而那時還在飛的寫入就沒有人接了——今天的後端是我們自己 `new` 的，所以碰不到；
   // 哪天後端由 plugin 提供，順序就會開始有意義。**別把它讀成一條驗過的因果。**
-  await persistence?.dispose();
+  await persistence.dispose();
   await dispose();
 }
 

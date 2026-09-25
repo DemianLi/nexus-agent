@@ -11,13 +11,14 @@
  * 立下的那條線（`fold.ts:252`：「歷史是基礎建設，不是 agent 的工作區」）的第二次應用。
  */
 
-import { mkdtemp, readdir, readFile, mkdir } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdtemp, readdir, readFile, mkdir, stat } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 
 import { runCli, resolveSessionLogDir } from './cli.js';
+import { HARNESS_HOME_ENV } from './harness-home.js';
 import { createJsonlSessionStore } from './jsonl-session-store.js';
 import { SESSION_LOG_FORMAT_VERSION, SessionAlreadyOwnedError } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
@@ -120,15 +121,92 @@ describe('--session-log 給了', () => {
   });
 });
 
+/** 這條測試的 harness home（`test-home.setup.ts` 逐條換）。當場確認它不是真的那一份。 */
+function testHarnessHome(): string {
+  const home = process.env[HARNESS_HOME_ENV];
+  expect(home).toBeDefined();
+  expect(home).not.toBe(join(homedir(), '.nexus-agent'));
+  expect(home!.startsWith(tmpdir())).toBe(true);
+  return home!;
+}
+
+/** 權限的低九位。 */
+async function modeOf(path: string): Promise<number> {
+  return (await stat(path)).mode & 0o777;
+}
+
+/**
+ * 預設落盤（[#444](https://github.com/DemianLi/nexus-agent/issues/444)）。**這一組是翻面來的**：
+ * 以前這裡守的是「沒給就一個位元組都不寫」，拍板照 dsh 改成預設寫進 harness home 之後，同一個位置
+ * 改守「沒給就寫進 home，而且只寫那裡」。
+ */
 describe('--session-log 沒給', () => {
-  it('什麼都不寫，而且披露明說只在記憶體裡', async () => {
+  it('寫進 harness home 底下的 sessions，披露講得出那個位置，cwd 裡什麼都沒有', async () => {
+    const home = testHarnessHome();
     const cwd = await tmp('nexus-cwd-');
     const printed = await runOnce(['把這句話回聲一次。'], cwd);
-    expect(printed).toContain('會話日誌：只在記憶體裡');
-    expect(printed).not.toContain('會話日誌：/');
-    // **「缺席就是關掉」要驗到磁碟上**，不能只驗那一行字——印對了但照樣偷偷寫，
-    // 這一條才是唯一擋得住的。
+
+    const root = join(home, 'sessions');
+    const runDir = await onlyRunDir(root);
+    expect(await readdir(runDir)).toEqual(expect.arrayContaining(['cli.header.json', 'cli.jsonl']));
+    expect(printed).toContain(`會話日誌：${runDir}`);
+    expect(printed).not.toContain('只在記憶體裡');
+    // 預設的位置是 home，不是跑的地方。
     expect(await readdir(cwd)).toEqual([]);
+  });
+
+  it('home 是這一次才建的話，一路都是 0700，檔是 0600', async () => {
+    const home = testHarnessHome();
+    // **前提**：這條測試的 home 還不存在，所以是落盤那一下建的（多人共用主機上，這一路的權限是承重的）。
+    await expect(stat(home)).rejects.toThrow();
+    await runOnce(['把這句話回聲一次。']);
+
+    const root = join(home, 'sessions');
+    const runDir = await onlyRunDir(root);
+    for (const dir of [home, root, runDir]) expect(await modeOf(dir)).toBe(0o700);
+    expect(await modeOf(join(runDir, 'cli.jsonl'))).toBe(0o600);
+    expect(await modeOf(join(runDir, 'cli.header.json'))).toBe(0o600);
+  });
+
+  it('給了 --session-log 就只寫那裡，home 底下一個目錄都不開', async () => {
+    const home = testHarnessHome();
+    const root = await tmp('nexus-log-');
+    await runOnce(['--session-log', root, '把這句話回聲一次。']);
+    await onlyRunDir(root);
+    await expect(stat(join(home, 'sessions'))).rejects.toThrow();
+  });
+
+  it('預設值指到 --workspace 底下時當場拒絕，訊息講得出路徑從哪來、怎麼繞', async () => {
+    const workspace = await tmp('nexus-ws-');
+    const env = { [HARNESS_HOME_ENV]: join(workspace, 'home') };
+    expect(() => resolveSessionLogDir({ workspace }, '/', env)).toThrow(
+      /預設的會話日誌目錄（NEXUS_AGENT_HOME .*不能在 --workspace 底下.*用 --session-log 指到工作區外面/su,
+    );
+    // --session-log 蓋過預設：它指到外面就放行，預設那一格根本不看。
+    expect(resolveSessionLogDir({ sessionLog: '/elsewhere', workspace }, '/', env)).toBe(
+      '/elsewhere',
+    );
+  });
+
+  it('端到端：預設的根落在 --workspace 底下時，什麼都還沒建就拒絕', async () => {
+    const workspace = await tmp('nexus-ws-');
+    process.env[HARNESS_HOME_ENV] = join(workspace, 'home');
+    await expect(runOnce(['--workspace', workspace, '嗨'])).rejects.toThrow(
+      /預設的會話日誌目錄.*不能在 --workspace 底下/su,
+    );
+    expect(await readdir(workspace)).toEqual([]);
+  });
+
+  it('--resume 不看預設的根：它落在 --workspace 底下也照樣接得回來', async () => {
+    const workspace = await tmp('nexus-ws-');
+    const root = await tmp('nexus-log-');
+    await runOnce(['--workspace', workspace, '--session-log', root, '第一次。']);
+    const runDir = await onlyRunDir(root);
+    // 預設的根這時落在工作區裡；續接寫回的是 runDir，不寫那裡，所以不該被擋。
+    process.env[HARNESS_HOME_ENV] = join(workspace, 'home');
+    const printed = await runOnce(['--workspace', workspace, '--resume', runDir, '第二次。']);
+    expect(printed).toContain(`會話日誌：${runDir}`);
+    expect(await readdir(workspace)).not.toContain('home');
   });
 });
 
@@ -144,7 +222,7 @@ describe('日誌不落在 agent 的工作區裡', () => {
   });
 
   it('工作區本身也算在底下', () => {
-    expect(() => resolveSessionLogDir({ sessionLog: '/w', workspace: '/w' }, '/')).toThrow(
+    expect(() => resolveSessionLogDir({ sessionLog: '/w', workspace: '/w' }, '/', {})).toThrow(
       /不能在 --workspace 底下/,
     );
   });
@@ -163,7 +241,7 @@ describe('日誌不落在 agent 的工作區裡', () => {
   });
 
   it('沒有 --workspace 時不擋——沒有圍籬就沒有「在裡面」', () => {
-    expect(resolveSessionLogDir({ sessionLog: 'logs' }, '/base')).toBe('/base/logs');
+    expect(resolveSessionLogDir({ sessionLog: 'logs' }, '/base', {})).toBe('/base/logs');
   });
 });
 

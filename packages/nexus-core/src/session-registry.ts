@@ -203,7 +203,7 @@ export class SessionRegistry {
    *
    * 照 dsh 的 `ctx.sessions.flush(session)`：**擁有日誌的是註冊表，所以 flush 的入口在
    * 這裡**，後端只是登記在上面的監聽者——呼叫的人（檢查點、goal driver）不必知道後端是誰、
-   * 有沒有。一位都沒有是常態（沒開 `--session-log`、測試的組裝），那時立刻 resolve。
+   * 有沒有。一位都沒有時（手搭的組裝、多數測試）立刻 resolve。
    *
    * 排空者拋錯就往外拋，**不接**：dsh 的檢查點在模型與工具這兩個有副作用的邊界上是
    * fail-closed，flush 被拒時下游不動手。

@@ -184,8 +184,8 @@
 # `477b4f4`）。**這一列同樣沒有 `config:`**，理由同上兩列。
 #
 # **關掉它之後**，日誌只在批次窗口到期與收尾時落地：正常收尾照樣完整，但收尾被打斷（收尾中
-# 再按一次 Ctrl-C、`kill -9`、當機）時丟的可能是整輪，而不只是最後一步的尾巴。沒開
-# `--session-log` 時它什麼都不做。
+# 再按一次 Ctrl-C、`kill -9`、當機）時丟的可能是整輪，而不只是最後一步的尾巴。沒接落盤的
+# 組裝上它什麼都不做（CLI 與 serve 從 #444 起一律落盤，只剩手搭的組裝沒接）。
 - id: session-checkpoint-policy
   name: '@nexus/core/session-checkpoint-policy'
 

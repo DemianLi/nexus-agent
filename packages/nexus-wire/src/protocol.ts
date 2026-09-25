@@ -378,7 +378,7 @@ export interface ThreadListResult {
 
 /**
  * `GET /threads` 的回應。錯誤分層同上行：載體層是 HTTP status，協定層是 200 ＋ error 封包——這台 server
- * 沒開 `--session-log` 時是後者，**不是一份空清單**：那兩件事在畫面上要分得出來。
+ * 沒接落盤時是後者，**不是一份空清單**：那兩件事在畫面上要分得出來。
  */
 export type ThreadListResponse =
   { readonly type: 'success'; readonly result: ThreadListResult } | ErrorResponse;

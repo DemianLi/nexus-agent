@@ -20,7 +20,7 @@
 | 迴圈衛生的兩個 guard | **收完**（行為都有，載體與設想不同） | §五第 2 條 |
 | 生命週期鉤子面（我們自己的 plugin 用） | **收完**——面不必另建，就是 #190 的九格 | §五第 3 條 (a) |
 | 執行外部 `hooks.json` 引擎 | **不做**（2026-09-16，#360）——dsh 六個出廠 bundle 一個都沒掛；三條重開條件 | §五第 3 條 (b) |
-| 持久化：會話日誌 | **收完**（#172／#174，`--session-log <dir>`）；**2026-09-19 拍板改成照 dsh 預設落盤**到 `~/.nexus-agent/sessions`（[#444](https://github.com/DemianLi/nexus-agent/issues/444)，未落地） | §五第 4 條；[`decisions-2026-09-19.md`](decisions-2026-09-19.md) 第 9 題 |
+| 持久化：會話日誌 | **收完**（#172／#174）；**照 dsh 預設落盤**到 `~/.nexus-agent/sessions`（2026-09-19 拍板，[#444](https://github.com/DemianLi/nexus-agent/issues/444)），`--session-log <dir>` 改成換位置 | §五第 4 條；[`decisions-2026-09-19.md`](decisions-2026-09-19.md) 第 9 題 |
 | 持久化：checkpointer／storage 兩軸 | **判過不做**——零消費者（#155） | §五第 4 條、§三第 40 列 |
 | Context 注入插件 | **判為不是缺口**（#215），降到第 7 條 | §五第 5 條 |
 | subagent 的其他後端 | **認帳不做**，那條窄由 `registry.test.ts` 的欄位絆索釘著 | §五第 6 條 |
@@ -244,7 +244,7 @@ Proteus 定義了「一個 harness 可以被量」的三個前提，對著我們
 | 前提 | 我們 |
 | --- | --- |
 | 無頭入口（一個 episode 跑得起來、跑得完） | ✅ `apps/harness/src/cli.ts`、`serve.ts` |
-| 可讀的執行軌跡（`read_trace` 從 harness 自己的日誌解析） | ⚠️ 落盤有了（[#172](https://github.com/DemianLi/nexus-agent/issues/172)、[#174](https://github.com/DemianLi/nexus-agent/issues/174)：`session-log.ts` 十種事件，CLI 與 `serve` 的 `--session-log <dir>` 寫成 jsonl）。**剩下的落差在 adapter 那側，不在我們這側**——見下 |
+| 可讀的執行軌跡（`read_trace` 從 harness 自己的日誌解析） | ⚠️ 落盤有了（[#172](https://github.com/DemianLi/nexus-agent/issues/172)、[#174](https://github.com/DemianLi/nexus-agent/issues/174)：`session-log.ts` 十種事件，CLI 與 `serve` 寫成 jsonl，**2026-09-25 起預設就寫**在 `~/.nexus-agent/sessions`，[#444](https://github.com/DemianLi/nexus-agent/issues/444)；`--session-log <dir>` 換位置）。**剩下的落差在 adapter 那側，不在我們這側**——見下 |
 | 具名的可編輯 surface | ⚠️ memory／skills 目錄是；plugin 清單是程式碼；`goal`／`todo` 在會話日誌裡 |
 
 **2026-09-05 更新：這兩個 ⚠️ 曾經指向同一件事（持久化），現在不是了。**
@@ -257,7 +257,7 @@ Proteus 定義了「一個 harness 可以被量」的三個前提，對著我們
 - **它 mid-run 就在讀**（`:397-402` 的 `stop_check` 輪詢決定要不要停容器），所以「行程結束才 flush」不夠。我們的寫入是固定窗口到期就寫（`session-persistence.ts` 的 `#schedule()`），這條對得上。
 - `docs/ADAPTERS.md:112-115`：`read_trace` 是**唯一**的行為通道，而且明文「解析 harness 自己的日誌，不要為了測量往 harness 裡加儀器」。
 
-**所以這一列是 ⚠️ 而不是 ✅，代價落在寫 adapter 的人身上，不是落在這棵樹上**：他要明著傳 `--session-log`，而且 run 目錄的命名（`<ISO 時間戳>-<uuid8>/<檔名基底>.jsonl`，基底是 session id 的百分號編碼）要餵得進他的 glob。**這不是缺口，是一份給未來那張卡的規格。**
+**所以這一列是 ⚠️ 而不是 ✅，代價落在寫 adapter 的人身上，不是落在這棵樹上**：~~他要明著傳 `--session-log`~~（**2026-09-25 起不用**：預設就落在 `$NEXUS_AGENT_HOME/sessions`，[#444](https://github.com/DemianLi/nexus-agent/issues/444)；他要認得的是那個根），而且 run 目錄的命名（`<ISO 時間戳>-<uuid8>/<檔名基底>.jsonl`，基底是 session id 的百分號編碼）要餵得進他的 glob。**這不是缺口，是一份給未來那張卡的規格。**
 
 第三列（具名的可編輯 surface）沒有變，而它現在是三個前提裡唯一還缺東西的那個——這也是 §五第 4 條的排序理由不再成立的原因，見該節。
 
@@ -372,9 +372,9 @@ Proteus 定義了「一個 harness 可以被量」的三個前提，對著我們
 
 **2026-09-05：會話日誌那一軸已經做完**（[#172](https://github.com/DemianLi/nexus-agent/issues/172)、[#174](https://github.com/DemianLi/nexus-agent/issues/174)），下面留的是原文與逐條的現況。
 
-**2026-09-19 拍板兩件，都照 dsh**（[`decisions-2026-09-19.md`](decisions-2026-09-19.md) 第 7、9 題）：會話日誌改成預設落盤到 `~/.nexus-agent/sessions`（[#444](https://github.com/DemianLi/nexus-agent/issues/444)）；在模型請求與工具呼叫前 flush 日誌（[#447](https://github.com/DemianLi/nexus-agent/issues/447)）。兩張都還沒落地；#444 落地後，下面與 §4.5、第 7 條 Proteus 那項「要明著傳 `--session-log`」的說法要一起改。
+**2026-09-19 拍板兩件，都照 dsh**（[`decisions-2026-09-19.md`](decisions-2026-09-19.md) 第 7、9 題）：會話日誌改成預設落盤到 `~/.nexus-agent/sessions`（[#444](https://github.com/DemianLi/nexus-agent/issues/444)）；在模型請求與工具呼叫前 flush 日誌（[#447](https://github.com/DemianLi/nexus-agent/issues/447)）。~~兩張都還沒落地~~ **2026-09-25：兩張都落地了**——#447 由 [#604](https://github.com/DemianLi/nexus-agent/pull/604) 做掉（`session-checkpoint-policy`），#444 隨預設落盤那張 PR；下面、§4.5 與第 7 條 Proteus 那項「要明著傳 `--session-log`」的說法已一起改。
 
-**缺什麼**：~~會話日誌在行程內~~（已落盤：CLI 與 `serve` 的 `--session-log <dir>`，JSONL，`jsonl-session-store.ts`）、checkpointer 仍是 `MemorySaver`、仍沒有 storage。行程一結束，todo、goal 與摘要事件仍然消失——**它們住在 graph state 裡，不在會話日誌裡**，所以那兩軸的缺席還是真的。
+**缺什麼**：~~會話日誌在行程內~~（已落盤：CLI 與 `serve` 預設寫進 `~/.nexus-agent/sessions`，`--session-log <dir>` 換位置，JSONL，`jsonl-session-store.ts`）、checkpointer 仍是 `MemorySaver`、仍沒有 storage。行程一結束，todo、goal 與摘要事件仍然消失——**它們住在 graph state 裡，不在會話日誌裡**，所以那兩軸的缺席還是真的。
 
 **為什麼需要**：三個獨立的理由指向它，**而 2026-09-05 三個都已經消耗掉了**。(a) dsh `session/` 那組的 persistence seam（jsonl／sqlite）是它整個資料平面的地基——照著做了；(b) #143 要留痕、#138 給了 subagent 各自的日誌——subagent 各自一個檔，懶建的沒寫過就沒有檔；(c) §4.5 的前提之二——已滿足，剩下的在 adapter 那側。**剩下兩軸（checkpointer／storage）今天零消費者**，[#155](https://github.com/DemianLi/nexus-agent/issues/155) 判過，理由記在 [#146](https://github.com/DemianLi/nexus-agent/issues/146) 的 Decisions 與 `.docs/development-plan.md` 決策 4 的補記。
 
@@ -452,7 +452,7 @@ dsh 有 in-process／fork／spawn／acp／claude-code／codex 六種委派後端
   - **照第 7 條的慣例不掛絆索**——`interception-index.test.ts` 第 4 列已經有一條翻得了面的（`SessionEventType` 不含 `| 'approval/`，那兩顆事件落地那天它會紅）。這裡寫**重開條件，任一成立就重開**：(1) **出現第二個提問者**——樹上有第二處產生 `{ kind: 'ask' }`，而它拿不到 `tools/pre-execute` 那個時刻（例如執行開始之後才決定要升級），那時共享的應答者 seam 才在解決一個真的問題；(2) **有人要從日誌回答「某次工具為什麼沒跑」而答不出來**——今天 `interrupt/raised` 只帶 `interruptId`，而 `deny`／`policy-never`／`no-channel` 三條路連那一顆都沒有。
 - **核准線那組絆索守的是基座的舊機制**：**2026-09-08 從 §六第 1 條窄化出來的**（[#226](https://github.com/DemianLi/nexus-agent/pull/226)）——那一條原本寫「Phase 5 沒有逐條核」，問句判為不成立（見 §六第 1 條），剩下來的是這一樣。形狀是「能力不在產品路徑上」的鏡像：**守錯了對象，不是測壞了**，基座那三條行為多半還真。`apps/harness/src/hitl-wire.test.ts` 檔頭寫明「三條是**基座行為的絆索**，紅了代表基座改了主意而不是我們寫壞了」，所以它直接 `createDeepAgent({ interruptOn })`（`:66`）是**刻意的**，不是漏改；但 [#112](https://github.com/DemianLi/nexus-agent/pull/112) 把產品路徑換成 `wrapToolCall` 上的閘門時**沒有動這個檔**（它動的是 `interrupt.test.ts` +207、`agent-factory.test.ts`、`cli.test.ts`、`approval.fixture.ts`、`summarization.test.ts` 與 core 那一整組），三條的地位因此沒有跟著重估：(1) **絆索 2「混合批次在下行上與全拒絕一模一樣，被核准的那筆連一顆 frame 都沒有」（`:252`）守的行為 #112 明說「不存在了」**，它還綠著是因為自己用 `interruptOn` 建 agent，繞過了我們的閘門；(2) ~~**`:226` 的行內註解「中斷發生在 `afterModel`，tools node 從沒跑」對產品路徑不成立**~~ → **2026-09-09 收掉了**：那段註解原本還跟著一句「產品路徑下行長什麼樣沒有量過」，量了——**產品路徑一樣是零顆 `tools` frame，成因不同**（tools node 有跑，是閘門在 `handler(request)` 之前就短路，連 `tool-started` 都沒有），證據與核准的對照組在 `apps/harness/src/rejection-wire.test.ts`；註解已改成講這件事。**2026-09-14 [#297](https://github.com/DemianLi/nexus-agent/issues/297) 之後**：基座照舊零顆，但卡改從會話日誌的 `tool/call` 開、`tool/result` 收，被拒的那顆在 web 上是一張失敗的卡；那份檔案的絆索已翻面。**這一條的其餘部分照舊**：本檔仍然用 `interruptOn` 建 agent，守的仍然是基座；(3) **絆索 1 驗的 n>1，折疊器在產品路徑上收到的每顆 frame 恆為 1**——**而那不是因為暫停只帶一顆中斷**（2026-09-08 實跑量到同一輪兩顆：`serve:live` ＋ `approval.fixture.ts`，會話日誌一輪兩顆 `interrupt/raised`；`interrupt.test.ts:227` 也釘著 `__interrupt__` 長度 2），**是因為 `apps/harness/src/thread-pump.ts` 對每一顆中斷各發一顆 `input.requested`**，而每顆的 `actionRequests` 由 `packages/nexus-core/src/approval.ts` 的閘門寫死長度 1。折疊器為 n>1 寫的三樣（取交集、一致性檢查、長度不符擋下）因此只有測試餵得到。**不排的理由**：刪掉會一起賠掉「基座改主意時會紅」，而重寫成產品路徑的形狀要先有東西餵得進去——今天沒有。**照第 7 條的慣例不掛絆索，改為明著寫重開條件，任一成立就重開**：(1) **一顆 `input.requested` 的 `actionRequests` 長度 > 1**——要嘛閘門改成整批問（今天是逐次），要嘛 pump 改成把同一輪的中斷併成一顆 frame，要嘛「核准的應答者掛點與審計事件」那一列講的「第二個提問者」出現且它整批發。**「同一輪有兩顆中斷」不算**，那個 2026-09-08 就量到了，而它不會讓折疊器看到 n>1；(2) **有人要斷言 `input.requested` 前後的 frame 順序**——新機制的代價是「同一批裡排在被擋工具前面的那些，在人被問到時已經跑完了」，而折疊器對 `tools` frame 是到達順序 append（`packages/nexus-wire/src/conversation.ts` 的 `tool-started`／`tool-finished` 兩支，沒有相對於 pending 的正規化），所以 `tool-started` 可以排在 `input.requested` **前面**，舊的 `afterModel` 中斷產不出這個順序。#124 那次實跑沒有觸發它（`exit_plan_mode` 是單顆）。
 
-- **Proteus 的測量軸**：不是我們的缺口，是「能不能被它量」。~~三個前提裡缺的那個就是第 4 條~~——**2026-09-05 起不是了**：持久化那一格已經落地（#172／#174），三個前提裡剩下的是**具名的可編輯 surface**（§4.5 第三列）。開地圖的條件因此已經滿足，內容仍是：定義 surface、匯出軌跡、寫 adapter，而「匯出軌跡」那一項現在是**寫 adapter 的人明著傳 `--session-log` 並認得 run 目錄的命名**，不是我們這側再補東西。
+- **Proteus 的測量軸**：不是我們的缺口，是「能不能被它量」。~~三個前提裡缺的那個就是第 4 條~~——**2026-09-05 起不是了**：持久化那一格已經落地（#172／#174），三個前提裡剩下的是**具名的可編輯 surface**（§4.5 第三列）。開地圖的條件因此已經滿足，內容仍是：定義 surface、匯出軌跡、寫 adapter，而「匯出軌跡」那一項現在是**寫 adapter 的人認得日誌根（2026-09-25 起預設 `$NEXUS_AGENT_HOME/sessions`，不必再明著傳 `--session-log`，#444）與 run 目錄的命名**，不是我們這側再補東西。
 
 ## 六、沒查清楚的
 
