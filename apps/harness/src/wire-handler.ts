@@ -899,6 +899,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         // **基座這時不會擋，它會靜靜地把中斷丟掉**：新的一輪照跑，那個等著核准的工具
         // 既沒執行也沒被拒絕，而且不會再發第二顆 `input.requested`（實測）。靜靜照做
         // 等於讓一道核准閘門無聲消失，所以這裡明著回錯——同 `since` 那條的理由。
+        //
+        // 這一道只看得到**收件那一刻**。跑著時收下、輪到時才撞上核准點的那一句，由 pump
+        // 自己停住，等中斷答完才跑（#629，`ThreadPump.#nextIndex`）。
         return json(
           errorResponse(
             command.id,
