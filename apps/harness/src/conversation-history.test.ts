@@ -21,6 +21,7 @@ import { describe, expect, it } from 'vitest';
 import type { AwaitingInput } from './conversation-history.js';
 import { HistoryQueryError, historyFrames, historyPage } from './conversation-history.js';
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
+import { READ_META_MAX_BYTES_FACTOR } from './tool-result-text.js';
 
 type Draft = Pick<SessionEvent, 'type' | 'data'>;
 
@@ -803,13 +804,21 @@ describe('一頁的位元組上限', () => {
   });
 
   /**
-   * **兩個常數的關係要有人釘**：`HISTORY_PAGE_MAX_BYTES` 住在 `@nexus/wire`、每則上限住在這個 app，
-   * wire 不能往上 import，所以那邊只寫得出字面值。這條在唯一同時相依兩邊的地方比對它們——頁上限
-   * 哪天動了而預設的每則上限沒跟著動，這裡會紅。同一個做法見 `@nexus/wire` 的 `conversation.ts:927`。
+   * **幾個常數的關係要有人釘**：`HISTORY_PAGE_MAX_BYTES` 住在 `@nexus/wire`、每則上限與讀檔 meta 的倍數
+   * 住在這個 app，wire 不能往上 import，所以那邊只寫得出字面值。這條在唯一同時相依兩邊的地方把三個值
+   * 一起釘死——任何一個動了，這裡會紅，逼人回頭重讀 `protocol.ts` 那段推算。同一個做法見 `@nexus/wire`
+   * 的 `conversation.ts:927`。
    *
-   * ## 它現在只保證到 schema 的預設值為止（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）
+   * ## 最壞的一張卡是讀檔（[#630](https://github.com/DemianLi/nexus-agent/issues/630)）
    *
-   * 每則上限變成一列條目的 `config` 之後，**部署在 patch 裡改掉它，這個比例就不再成立，而且沒有
+   * 文字上限 `maxBytes`，讀檔 meta 的上限是它的 {@link READ_META_MAX_BYTES_FACTOR} 倍，所以一張讀檔卡
+   * 最壞是 `maxBytes × 3`＝150,000，一頁約裝 53 張。搜尋與 diff 的 meta 仍是一倍，那兩種卡最壞 100,000，
+   * 一頁 80 張——8 MB 當初就是照它們挑的（#617）。8 MB 沒跟著改（demian 2026-09-25 拍板）：這個上限
+   * 本來就是軟的，切點只落在輪邊界上。
+   *
+   * ## 它只保證到 schema 的預設值為止（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）
+   *
+   * 每則上限變成一列條目的 `config` 之後，**部署在 patch 裡改掉它，這些比例就不再成立，而且沒有
    * 任何東西會紅**——配對的另一半是協定常數，在 #457 的射程外，而且 wire 結構上 import 不到 harness。
    *
    * 那是 #538 三選一裡**明著選的第三條**（2026-09-23 拍板），不是漏掉的。另外兩條分別要把協定常數
@@ -818,8 +827,15 @@ describe('一頁的位元組上限', () => {
    *
    * 所以這一條比的是 `DEFAULT_TOOL_TEXT_MAX_BYTES`，**名字本身就是射程宣告**：它釘的是出廠那一份。
    */
-  it('頁上限就是 80 張滿版工具卡（文字加 meta，兩者上限相同）——在 schema 的預設上限底下', () => {
-    // meta 的上限就是文字的上限（#617 決定 2），所以一張滿版卡是兩份 `maxBytes`。
-    expect(HISTORY_PAGE_MAX_BYTES).toBe(80 * (DEFAULT_TOOL_TEXT_MAX_BYTES * 2));
+  it('頁上限裝得下 53 張最壞的讀檔卡、80 張搜尋或 diff 卡——在 schema 的預設上限底下', () => {
+    expect({
+      page: HISTORY_PAGE_MAX_BYTES,
+      text: DEFAULT_TOOL_TEXT_MAX_BYTES,
+      readMetaFactor: READ_META_MAX_BYTES_FACTOR,
+    }).toEqual({ page: 8_000_000, text: 50_000, readMetaFactor: 2 });
+    const readCard = DEFAULT_TOOL_TEXT_MAX_BYTES * (1 + READ_META_MAX_BYTES_FACTOR);
+    const otherCard = DEFAULT_TOOL_TEXT_MAX_BYTES * 2;
+    expect(Math.floor(HISTORY_PAGE_MAX_BYTES / readCard)).toBe(53);
+    expect(HISTORY_PAGE_MAX_BYTES).toBe(80 * otherCard);
   });
 });
