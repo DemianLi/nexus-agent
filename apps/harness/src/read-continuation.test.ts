@@ -9,6 +9,9 @@
  * 「基座自己截斷」那一條同時是**上游絆索**：它認的是基座 `READ_FILE_TRUNCATION_MSG` 的開頭，
  * 基座換了措辭，這一條會紅。
  *
+ * 一頁多大照 dsh（[#602](https://github.com/DemianLi/nexus-agent/issues/602)）：預設 2000 行、50 KiB。
+ * 模型收到的說明量在 `read-limits-openai.test.ts`。
+ *
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
 
@@ -101,20 +104,21 @@ describe('讀檔結果最後補上讀到哪', () => {
   }
 
   it('沒讀完：模型拿到下一頁的 offset，照它讀的第一行剛好接上；日誌記的是同一份', async () => {
-    await writeFile(join(root, 'app.log'), numbered(250));
+    await writeFile(join(root, 'app.log'), numbered(4500));
     const { messages, logged } = await run([
       { name: 'read_file', args: { file_path: '/app.log' } },
-      { name: 'read_file', args: { file_path: '/app.log', offset: 100 } },
-      { name: 'read_file', args: { file_path: '/app.log', offset: 200 } },
+      { name: 'read_file', args: { file_path: '/app.log', offset: 2000 } },
+      { name: 'read_file', args: { file_path: '/app.log', offset: 4000 } },
     ]);
     const [first, second, third] = messages.map(textOf);
+    // 沒給 `limit`：一頁 2000 行，同 dsh。
     expect(first).toMatch(
-      / {3}100\tline 100\n\n\(Showing lines 1-100 of 250\. Use offset=100 to continue\.\)$/,
+      / {2}2000\tline 2000\n\n\(Showing lines 1-2000 of 4500\. Use offset=2000 to continue\.\)$/,
     );
-    expect(second?.split('\n')[0]).toBe('   101\tline 101');
-    expect(second).toMatch(/\(Showing lines 101-200 of 250\. Use offset=200 to continue\.\)$/);
-    expect(third).toMatch(/ {3}250\tline 250\n\n\(End of file - total 250 lines\)$/);
-    expect(logged[0]).toContain('Use offset=100 to continue.');
+    expect(second?.split('\n')[0]).toBe('  2001\tline 2001');
+    expect(second).toMatch(/\(Showing lines 2001-4000 of 4500\. Use offset=4000 to continue\.\)$/);
+    expect(third).toMatch(/ {2}4500\tline 4500\n\n\(End of file - total 4500 lines\)$/);
+    expect(logged[0]).toContain('Use offset=2000 to continue.');
   }, 20000);
 
   it('反例：一頁讀得完的檔只寫檔尾，不叫模型翻頁', async () => {
@@ -131,33 +135,59 @@ describe('讀檔結果最後補上讀到哪', () => {
     expect(textOf(messages[0])).not.toContain('End of file');
   }, 20000);
 
-  it('基座自己截斷（上游絆索）：寫 Output capped，下一頁從最後那一行重讀', async () => {
-    // 100 行、每行 1000 字元：格式化後超過基座的 80,000 字元上限。
+  it('位元組上限：選到的行累計超過 50 KiB 就停在前一行，照提示翻頁接得上', async () => {
+    // 100 行、每行 1002–1004 位元組：前 51 行累計 51,194（含換行），第 52 行放不下。
     const long = Array.from({ length: 100 }, (_, i) => `${i + 1}:${'x'.repeat(1000)}`).join('\n');
     await writeFile(join(root, 'wide.txt'), long);
-    const { messages } = await run([{ name: 'read_file', args: { file_path: '/wide.txt' } }]);
-    const text = textOf(messages[0]);
-    expect(text).toContain('[Output was truncated due to size limits.');
-    const footer =
-      /\(Output capped\. Showing lines 1-(\d+)\. Use offset=(\d+) to continue\.\)$/.exec(text);
-    expect(footer).not.toBeNull();
-    // 完整顯示到第 B 行，下一頁的 offset（0 起算）是 B，也就是從第 B+1 行重讀。
-    expect(footer?.[1]).toBe(footer?.[2]);
-    const shown = Number(footer?.[1]);
-    expect(text).toContain(`\t${shown}:`);
-    expect(shown).toBeLessThan(100);
+    const { messages } = await run([
+      { name: 'read_file', args: { file_path: '/wide.txt' } },
+      { name: 'read_file', args: { file_path: '/wide.txt', offset: 51 } },
+    ]);
+    const [first, second] = messages.map(textOf);
+    expect(first).not.toContain('[Output was truncated due to size limits.');
+    expect(first).toMatch(
+      /\t51:x+\n\n\(Output capped\. Showing lines 1-51\. Use offset=51 to continue\.\)$/,
+    );
+    expect(second?.split('\n')[0]).toMatch(/^ {4}52\t52:x+$/);
+    // 剩下 49 行約 49 KB，一頁放得下。
+    expect(second).toMatch(/\t100:x+\n\n\(End of file - total 100 lines\)$/);
+  }, 20000);
+
+  it('limit 超過 2000：dsh 的原句，是工具錯誤', async () => {
+    await writeFile(join(root, 'small.txt'), numbered(3));
+    const { messages, logged } = await run([
+      { name: 'read_file', args: { file_path: '/small.txt', limit: 2001 } },
+    ]);
+    expect(messages[0]?.status).toBe('error');
+    expect(textOf(messages[0])).toContain('limit must be less than or equal to 2000');
+    expect(textOf(messages[0])).not.toContain('line 1');
+    expect(logged[0]).toContain('limit must be less than or equal to 2000');
+  }, 20000);
+
+  it('基座自己截斷（上游絆索）：第一行自己就超過上限時落到這條，寫 Output capped', async () => {
+    // 第一行 90,000 字元：超過 50 KiB，照樣給它（偏離二），格式化後超過基座的 80,000 字元上限。
+    await writeFile(join(root, 'wide.txt'), `${'x'.repeat(90_000)}\nsecond\n`);
+    const { messages } = await run([
+      { name: 'read_file', args: { file_path: '/wide.txt' } },
+      { name: 'read_file', args: { file_path: '/wide.txt', offset: 1 } },
+    ]);
+    const [first, second] = messages.map(textOf);
+    expect(first).toContain('[Output was truncated due to size limits.');
+    // 第一行就沒顯示完：重讀只會再截一次，所以跳過它。
+    expect(first).toMatch(/\(Output capped\. Use offset=1 to continue\.\)$/);
+    expect(second).toBe('     2\tsecond\n\n(End of file - total 2 lines)');
   }, 20000);
 
   it('沒給 --workspace（基座的 StateBackend）一樣補', async () => {
     const { messages } = await run(
       [
-        { name: 'write_file', args: { file_path: '/notes.txt', content: numbered(150) } },
+        { name: 'write_file', args: { file_path: '/notes.txt', content: numbered(2100) } },
         { name: 'read_file', args: { file_path: '/notes.txt' } },
       ],
       false,
     );
     expect(textOf(messages[1])).toMatch(
-      /\(Showing lines 1-100 of 150\. Use offset=100 to continue\.\)$/,
+      /\(Showing lines 1-2000 of 2100\. Use offset=2000 to continue\.\)$/,
     );
   }, 20000);
 });
