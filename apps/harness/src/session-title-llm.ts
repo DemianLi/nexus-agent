@@ -98,22 +98,6 @@ export function frameTitleMessages(messages: readonly TitleSourceMessage[]): str
   return `Generate the session title from this JSON array of human messages:\n${JSON.stringify(messages)}`;
 }
 
-/** 回覆裡的文字，只收文字區塊；推理區塊略過，同 dsh 的 `BlockAssembler` 只取 `text`。 */
-function replyText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter(
-      (block): block is { type: 'text'; text: string } =>
-        typeof block === 'object' &&
-        block !== null &&
-        (block as { type?: unknown }).type === 'text' &&
-        typeof (block as { text?: unknown }).text === 'string',
-    )
-    .map((block) => block.text)
-    .join(' ');
-}
-
 /** {@link generateThreadTitle} 要的東西。 */
 export interface GenerateThreadTitleRequest {
   readonly model: TitleModel;
@@ -176,7 +160,8 @@ export async function generateThreadTitle(
     throw new Error(`標題模型沒有正常收尾：finish_reason 是 ${String(finish)}`);
   }
   if ((reply.tool_calls?.length ?? 0) > 0) throw new Error('標題模型要求呼叫工具，只收文字');
-  const title = normalizeThreadTitle(replyText(reply.content), request.maxTitleBytes);
+  // `text` 只串文字區塊、推理區塊不算，同 dsh 的 `BlockAssembler` 只取 `text`。
+  const title = normalizeThreadTitle(reply.text, request.maxTitleBytes);
   if (title === '') throw new Error('標題模型沒有產生文字');
   return { title, messageSeqs };
 }
@@ -259,7 +244,7 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
         if (eligible.length === 1 && !titled) pending = { seq: event.seq, text };
         return;
       }
-      if (event.type === 'model/start' && pending !== undefined && event.seq > pending.seq) {
+      if (event.type === 'model/start' && pending !== undefined) {
         const message = pending;
         pending = undefined;
         // 回呼裡不能 append，延到微任務（同 dsh 的 `defer`）。
@@ -269,7 +254,6 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
 
     return async () => {
       closed = true;
-      pending = undefined;
       unsubscribe();
       controller.abort();
       await running;
