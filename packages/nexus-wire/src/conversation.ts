@@ -38,6 +38,7 @@ import { INBOX } from './inbox.js';
 import type { WireQueuedInput } from './inbox.js';
 import { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
 import type { WireSessionStats, WireTokenUsage } from './session-totals.js';
+import { TITLE } from './title.js';
 import { TODOS } from './todos.js';
 import type { WireTodoItem } from './todos.js';
 import type { WirePresentedFile } from './deliverables.js';
@@ -410,6 +411,11 @@ export interface ConversationState {
    * 所以 {@link prependEntries} 不動它。
    */
   readonly inbox: readonly WireQueuedInput[];
+  /**
+   * 這條會話現在叫什麼（#647）：最後一顆 `title` frame 的。**還沒收到過就是 `null`**，同 dsh 投影的初值。規則見
+   * `title.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
+   */
+  readonly title: string | null;
 }
 
 const ROOT: Attribution = { kind: 'root' };
@@ -427,6 +433,7 @@ export function emptyConversation(): ConversationState {
     tokenUsage: null,
     sessionStats: null,
     inbox: [],
+    title: null,
   };
 }
 
@@ -642,7 +649,7 @@ function isPresentedFile(value: unknown): value is WirePresentedFile {
 
 /**
  * `custom` frame。**只認 {@link DELIVERABLES_PRESENTED}、{@link WORKSPACE_CHANGES}、{@link MODEL_USAGE}、
- * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link TOKEN_USAGE}、{@link SESSION_STATS} 與 {@link INBOX}**，其他名字、形狀
+ * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link TOKEN_USAGE}、{@link SESSION_STATS}、{@link INBOX} 與 {@link TITLE}**，其他名字、形狀
  * 不對的一律略過：這個 channel 上的東西由 pump 從日誌合成，認不得的不猜。
  */
 function reduceCustom(state: ConversationState, data: unknown): ConversationState {
@@ -655,6 +662,7 @@ function reduceCustom(state: ConversationState, data: unknown): ConversationStat
   if (name === TOKEN_USAGE) return reduceTokenUsage(state, payload);
   if (name === SESSION_STATS) return reduceSessionStats(state, payload);
   if (name === INBOX) return reduceInbox(state, payload);
+  if (name === TITLE) return reduceTitle(state, payload);
   if (name !== DELIVERABLES_PRESENTED) return state;
   const { callId, seq, files } = payload as { callId?: unknown; seq?: unknown; files?: unknown };
   if (
@@ -715,6 +723,15 @@ function reduceContextMeasure(state: ConversationState, payload: object): Conver
   }
   const measure: WireContextMeasure = { approxTokens, messageCount, thresholds: parsed };
   return { ...state, contextPressure: { ...state.contextPressure, measure } };
+}
+
+/**
+ * `title` 的 `payload`：換成這一個。不是非空字串就不收，同 dsh 投影的 `z.string().min(1)`。
+ */
+function reduceTitle(state: ConversationState, payload: object): ConversationState {
+  const { title } = payload as { title?: unknown };
+  if (typeof title !== 'string' || title === '') return state;
+  return { ...state, title };
 }
 
 /** 清單裡的一項長得對不對：同 dsh 的 `todosProjectionSchema`。 */

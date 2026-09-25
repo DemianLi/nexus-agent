@@ -61,8 +61,9 @@ function seqsOf(log: SessionLog): number[] {
   return log.events.map((event) => event.seq);
 }
 
-// 人送出的話一律先進送出佇列（#637）：一輪前面一顆送進來、`turn/start` 之後一顆領走。
-const QUEUED_TURN = ['inbox/spliced', 'turn/start', 'inbox/spliced'] as const;
+// 人送出的話一律先進送出佇列（#637）：一輪前面一顆送進來、`turn/start` 之後一顆領走。這一檔每條都是第一句，所以領走之後
+// 還有一顆退回標題（#647）。
+const QUEUED_TURN = ['inbox/spliced', 'turn/start', 'inbox/spliced', 'session/title'] as const;
 
 describe('會話事件日誌：web 那條路', () => {
   it('一輪跑完寫下 turn/start 與 turn/end，seq 連續', async () => {
@@ -71,7 +72,7 @@ describe('會話事件日誌：web 那條路', () => {
     await pump.submit({ kind: 'message', text: '嗨' });
 
     expect(pump.sessionLog.events.map((event) => event.type)).toEqual([...QUEUED_TURN, 'turn/end']);
-    expect(seqsOf(pump.sessionLog)).toEqual([0, 1, 2, 3]);
+    expect(seqsOf(pump.sessionLog)).toEqual([0, 1, 2, 3, 4]);
     expect(pump.sessionLog.events[1]?.data).toEqual({ kind: 'message', text: '嗨' });
     expect(pump.sessionLog.sessionId).toBe('web-1');
   });
@@ -83,8 +84,8 @@ describe('會話事件日誌：web 那條路', () => {
 
     const types = pump.sessionLog.events.map((event) => event.type);
     expect(types).toEqual([...QUEUED_TURN, 'interrupt/raised', 'turn/end']);
-    expect(seqsOf(pump.sessionLog)).toEqual([0, 1, 2, 3, 4]);
-    const raised = pump.sessionLog.events[3]?.data as { interruptId: string };
+    expect(seqsOf(pump.sessionLog)).toEqual([0, 1, 2, 3, 4, 5]);
+    const raised = pump.sessionLog.events[4]?.data as { interruptId: string };
     expect(raised.interruptId).toBe(pump.pendings[0]?.interruptId ?? '(沒有掛著的中斷)');
   });
 
@@ -106,8 +107,8 @@ describe('會話事件日誌：web 那條路', () => {
       'turn/start',
       'turn/end',
     ]);
-    expect(seqsOf(pump.sessionLog)).toEqual([0, 1, 2, 3, 4, 5, 6]);
-    expect(pump.sessionLog.events[5]?.data).toEqual({ kind: 'resume' });
+    expect(seqsOf(pump.sessionLog)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(pump.sessionLog.events[6]?.data).toEqual({ kind: 'resume' });
   });
 
   it('跑壞了記 turn/failed，而且錯誤照樣往外拋', async () => {
@@ -125,7 +126,7 @@ describe('會話事件日誌：web 那條路', () => {
       ...QUEUED_TURN,
       'turn/failed',
     ]);
-    expect(pump.sessionLog.events[3]?.data).toEqual({ message: '模型不見了' });
+    expect(pump.sessionLog.events[4]?.data).toEqual({ message: '模型不見了' });
   });
 });
 
@@ -142,14 +143,16 @@ describe('會話事件日誌：CLI 那條路', () => {
       await dispose();
     }
 
+    // 退回標題只在第一句寫一次（#647）。
     expect(sessionLog.events.map((event) => event.type)).toEqual([
       'turn/start',
+      'session/title',
       'turn/end',
       'turn/start',
       'turn/end',
     ]);
-    expect(seqsOf(sessionLog)).toEqual([0, 1, 2, 3]);
-    expect(sessionLog.events[2]?.data).toEqual({ kind: 'message', text: '第二句' });
+    expect(seqsOf(sessionLog)).toEqual([0, 1, 2, 3, 4]);
+    expect(sessionLog.events[3]?.data).toEqual({ kind: 'message', text: '第二句' });
     expect(sessionLog.sessionId).toBe('cli');
   });
 
@@ -161,6 +164,11 @@ describe('會話事件日誌：CLI 那條路', () => {
 
     await expect(runTurn(exploding, '嗨', silent, log)).rejects.toThrow('串流開不起來');
 
-    expect(log.events.map((event) => event.type)).toEqual(['turn/start', 'turn/failed']);
+    // 標題寫在 try 裡面、串流之前，所以它先落；串流的失敗照樣收成 `turn/failed`（#647）。
+    expect(log.events.map((event) => event.type)).toEqual([
+      'turn/start',
+      'session/title',
+      'turn/failed',
+    ]);
   });
 });

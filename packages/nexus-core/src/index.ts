@@ -369,6 +369,7 @@ export type {
   SessionLogListener,
   SessionLogOptions,
   SessionLogView,
+  SessionTitleSource,
   TurnEndReason,
 } from './session-log.js';
 export { currentTurnStart, hasUnansweredInterrupt, SessionLog } from './session-log.js';

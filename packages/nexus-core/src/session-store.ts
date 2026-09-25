@@ -184,8 +184,16 @@ import type { SessionEvent } from './session-log.js';
  *
  * **非升不可**：16 接回一份 17 的日誌時認不得這一顆，停住的那幾件從它眼裡消失——續寫下去之後，一台 17 再接回來
  * 時它們又冒出來、而且排在 16 那段時間送出並跑完的話前面。同 13 那條門檻：靜靜略過會左右重建的內容就是一次讀錯。
+ *
+ * ## 18：`session/title`
+ *
+ * 這條會話叫什麼（[#647](https://github.com/DemianLi/nexus-agent/issues/647)），web 的 header 與列表讀它。v17 的檔直接讀：
+ * 那時候沒有這一顆，讀的人照 v17 的做法從第一則人打的字推（列表與歷史都是）。
+ *
+ * 升版照新增詞彙的慣例（同 11、12、14、16），不是 17 那種非升不可：這一版只有 `fallback` 一種，17 自己推出來的
+ * 標題一字不差。
  */
-export const SESSION_LOG_FORMAT_VERSION = 17;
+export const SESSION_LOG_FORMAT_VERSION = 18;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。

@@ -86,7 +86,12 @@ describe('不變量接線：CLI 那條路', () => {
       await dispose();
     }
 
-    expect(sessionLog.events.map((event) => event.type)).toEqual(['turn/start', 'turn/end']);
+    // 第一句跑完多一顆退回標題（#647），出貨的配套入口對它一條違規都不報。
+    expect(sessionLog.events.map((event) => event.type)).toEqual([
+      'turn/start',
+      'session/title',
+      'turn/end',
+    ]);
     expect(violations).toEqual([]);
   });
 
@@ -111,6 +116,7 @@ describe('不變量接線：CLI 那條路', () => {
 
     expect(violations).toEqual([
       'invariant violated by "@nexus/noisy": 看到 turn/start',
+      'invariant violated by "@nexus/noisy": 看到 session/title',
       'invariant violated by "@nexus/noisy": 看到 turn/end',
     ]);
   });

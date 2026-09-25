@@ -43,6 +43,9 @@ import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { liveModelPlugin } from './settings/live-model.js';
 import type { LiveModelConfig } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
+import { threadTitleConfigSchema, threadTitlePlugin } from './settings/thread-title.js';
+import { ensureFallbackTitle } from './session-title.js';
+import type { ThreadTitleLimits } from './session-title.js';
 import {
   attachSessionPersistence,
   createHostServicesPlugin,
@@ -996,12 +999,15 @@ function printInterrupt(update: unknown, printer: Printer): void {
  * @param input - 使用者說的那句話，或**排程器排的一輪續行**。
  * @param printer - 輸出去處。
  * @param sessionLog - 這條 REPL 的事件日誌。
+ * @param titleLimits - 退回標題的兩個上限（[#647](https://github.com/DemianLi/nexus-agent/issues/647)），由 `main`
+ *   在起動期從清單解出來。**省略即 schema 的預設**，理由同 `ThreadPump` 的 `toolText`：測試呼叫點量的不是它。
  */
 export async function runTurn(
   agent: NexusAgent,
   input: string | GoalRoundRequest,
   printer: Printer,
   sessionLog: SessionLog,
+  titleLimits: ThreadTitleLimits = threadTitleConfigSchema.parse({}),
 ): Promise<void> {
   let files: Record<string, unknown> = {};
 
@@ -1021,6 +1027,15 @@ export async function runTurn(
         },
   );
   try {
+    // 退回標題（#647），同 web 的 pump：人打的字那一種才寫，還沒有標題才寫，寫不進去只講一聲、這一輪照跑。CLI 的日誌
+    // 今天沒有讀標題的人（serve 的列表讀不到 run 目錄），寫它是照 dsh：退回標題在 `base` bundle 裡，每一種組裝都有。
+    if (typeof input === 'string') {
+      try {
+        ensureFallbackTitle(sessionLog, titleLimits);
+      } catch (error: unknown) {
+        printer.error(`[標題] 退回標題寫不進去：${String(error)}`);
+      }
+    }
     for await (const [mode, payload] of await agent.stream(toAgentInvocation(text), {
       streamMode: ['updates', 'values'],
       configurable: { thread_id: THREAD_ID },
@@ -1230,6 +1245,7 @@ function assertNoReplNameCollision(commands: Pick<CommandRegistrationPoint, 'fin
  * @param commands - plugin 註冊的命令。`find` 給執行器派發，`list` 給 `/help` 列清單。
  *   **執行器在這裡建，一個 REPL 一個**——
  *   `@nexus/plugin-commands` 的配套入口就是靠「一次一個」這件事在檢查配對的。
+ * @param titleLimits - 見 {@link runTurn}。
  */
 export async function runRepl(
   agent: NexusAgent,
@@ -1239,6 +1255,7 @@ export async function runRepl(
   commands: Pick<CommandRegistrationPoint, 'find' | 'list'>,
   driver?: GoalDriverPort,
   roundCap?: number,
+  titleLimits?: ThreadTitleLimits,
 ): Promise<void> {
   assertNoReplNameCollision(commands);
   const executor = createCommandExecutor({ commands, sessionLog });
@@ -1263,7 +1280,7 @@ export async function runRepl(
         const execution = await executor.execute(text, new AbortController().signal);
         if (execution === undefined) {
           // 語法不符或名字不認得——**照原樣送給模型**，跟這行改動之前一模一樣。
-          await runTurn(agent, text, printer, sessionLog);
+          await runTurn(agent, text, printer, sessionLog, titleLimits);
         } else if (execution.result.text !== undefined) {
           const write = execution.result.kind === 'error' ? printer.error : printer.log;
           write(execution.result.text);
@@ -1349,6 +1366,8 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   const persistenceWindow = startupSetting(plugins, sessionPersistencePlugin);
   // 真實供應商的連線值（#545）。
   const liveModel = startupSetting(plugins, liveModelPlugin);
+  // 退回標題的兩個上限（#647）。`startupSetting` 照 schema 驗過，寫壞的話在跑起來之前就拋。
+  const threadTitle = startupSetting(plugins, threadTitlePlugin);
 
   // **續接也在建 agent 之前讀**：沙箱模式的起始那一格與 root 日誌的 seed 都是組裝時就要給的
   // 東西，而讀不到（沒有那個目錄、版本太新、壞檔）也該在什麼都還沒起來的時候就講。
@@ -1553,7 +1572,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
 
     if (invocation.prompt !== undefined) {
       printer.log(`> ${invocation.prompt}\n`);
-      await runTurn(agent, invocation.prompt, printer, sessionLog);
+      await runTurn(agent, invocation.prompt, printer, sessionLog, threadTitle);
       if (driver !== undefined)
         await driveGoalRounds(agent, printer, sessionLog, driver, invocation.maxGoalRounds);
     } else {
@@ -1566,6 +1585,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
         commands,
         driver,
         invocation.maxGoalRounds,
+        threadTitle,
       );
     }
   } catch (error) {

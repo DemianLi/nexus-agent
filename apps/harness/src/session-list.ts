@@ -30,17 +30,9 @@
  *
  * ## 標題
  *
- * 照 dsh `session-title` 的內建回退（`packages/session/session-title/src/normalize.ts`）：第一則人打的字，
- * 去掉控制字元與方向控制字元、空白收成一格，取前 `maxWords` 個詞、再截到 `maxBytes` 個 UTF-8 位元組。
- * **方向控制字元那一條不是裝飾**：標題是使用者的原文，畫在瀏覽器的清單上，dsh 明說它們會讓顯示出來的標題
- * 騙人。**詞數對中文不起作用**（沒有空白，一整句就是一個詞），真正咬得住的是位元組上限。
- *
- * 人打的字＝`turn/start` 的 `kind: 'message'`；`goal` 那一種是機器排的，對到 dsh 那一側 `source.kind`
- * 不是 `user` 的 `user/message`，不算。
- *
- * **兩個上限都是必填參數，沒有預設值**——照 dsh「所有上限都是必填項」。值由清單上
- * `#settings/thread-title` 那一列講（[#531](https://github.com/DemianLi/nexus-agent/pull/531)），
- * `serve.ts` 在起動期解一次、往下傳進來。
+ * 最後一顆 `session/title`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)），同 dsh 列表讀的 `title` 投影
+ * （latest-wins）。**一顆都沒有才照規則推**：18 以前的日誌，或第一句還沒開跑。規則與偏離見 `session-title.ts`。
+ * dsh 的冷列讀持久化的投影快取，我們沒有那一層，讀的是日誌本身：**多篩一種字樣**，同樣只解析那幾行。
  *
  * @module
  */
@@ -50,13 +42,8 @@ import { join } from 'node:path';
 import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import type { ThreadSummary } from '@nexus/wire';
 
-/** 標題的兩個上限。見檔頭「標題」。 */
-export interface ThreadTitleLimits {
-  /** 取前幾個以空白分開的詞。 */
-  readonly maxWords: number;
-  /** UTF-8 位元組上限，不會切在一個字的中間。 */
-  readonly maxBytes: number;
-}
+import { assertThreadTitleLimits, fallbackThreadTitle } from './session-title.js';
+import type { ThreadTitleLimits } from './session-title.js';
 
 /** 從磁碟讀得出來的那一列：線上那一列少掉 `running`（它來自活著的 agent）。 */
 export type StoredThreadSummary = Omit<ThreadSummary, 'running'>;
@@ -66,61 +53,6 @@ export interface StoredThreadList {
   readonly items: readonly StoredThreadSummary[];
   /** header 讀不懂或版本比這一版新而沒列的份數。 */
   readonly unreadable: number;
-}
-
-/* eslint-disable no-control-regex -- 以下五條要擋的正是控制字元 */
-/** Operating-system-command 跳脫序列，含沒收尾的。以下五條逐字抄 dsh `normalize.ts`。 */
-const OSC_SEQUENCE = /(?:\u001B\]|\u009D)(?:(?!\u0007|\u001B\\)[\s\S])*(?:\u0007|\u001B\\|$)/gu;
-/** CSI 跳脫序列，例如 SGR 顏色碼。 */
-const CSI_SEQUENCE = /(?:\u001B\[|\u009B)[0-?]*[ -/]*[@-~]/gu;
-/** 其餘兩位元組的 ESC 序列。 */
-const ESC_SEQUENCE = /\u001B[@-_]/gu;
-/** 空白以外的 C0／C1 控制字元。 */
-const CONTROL_CHARACTER = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/gu;
-/** 會讓顯示出來的標題騙人的方向控制與不可見字元。 */
-const DIRECTIONAL_CONTROL = /[\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF]/gu;
-/* eslint-enable no-control-regex */
-
-function assertPositiveInteger(name: string, value: number): void {
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error(`${name} 要是正整數，收到 ${String(value)}`);
-  }
-}
-
-function cleanTitleText(input: string): string {
-  return input
-    .replace(OSC_SEQUENCE, '')
-    .replace(CSI_SEQUENCE, '')
-    .replace(ESC_SEQUENCE, '')
-    .replace(CONTROL_CHARACTER, '')
-    .replace(DIRECTIONAL_CONTROL, '')
-    .replace(/\s+/gu, ' ')
-    .trim();
-}
-
-function truncateUtf8(input: string, maxBytes: number): string {
-  if (Buffer.byteLength(input, 'utf8') <= maxBytes) return input;
-  let used = 0;
-  let output = '';
-  for (const character of input) {
-    const bytes = Buffer.byteLength(character, 'utf8');
-    if (used + bytes > maxBytes) break;
-    output += character;
-    used += bytes;
-  }
-  return output;
-}
-
-/**
- * 第一則人打的字變成標題。同 dsh 的 `fallbackSessionTitle`。
- *
- * @returns 標題；清完或截完是空的就是空字串。
- */
-export function fallbackThreadTitle(input: string, limits: ThreadTitleLimits): string {
-  assertPositiveInteger('maxWords', limits.maxWords);
-  assertPositiveInteger('maxBytes', limits.maxBytes);
-  const words = cleanTitleText(input).split(' ').filter(Boolean).slice(0, limits.maxWords);
-  return truncateUtf8(words.join(' '), limits.maxBytes).trimEnd();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -173,10 +105,11 @@ interface PromptScan {
 }
 
 const TURN_START = 'turn/start';
+const SESSION_TITLE = 'session/title';
 
 /**
- * 逐行掃一份日誌，只解析帶 `turn/start` 字樣的行。**字樣只是篩子**：解析之後照樣比 `type`，所以一個工具參數
- * 裡提到這幾個字的行不會被當成一輪。
+ * 逐行掃一份日誌，只解析帶 `turn/start` 或 `session/title` 字樣的行。**字樣只是篩子**：解析之後照樣比 `type`，所以一個
+ * 工具參數裡提到這幾個字的行不會被當成一輪，也不會被當成標題。
  *
  * 解析不動的行略過：最後一行寫到一半是當掉的常態（`parseJsonlSessionBody` 也不算它），中間壞掉的見檔頭。
  * 只有 header 沒有日誌是「還沒寫第一筆就當了」，讀成空白。
@@ -190,32 +123,41 @@ async function scanPrompts(file: string, limits: ThreadTitleLimits): Promise<Pro
     throw error;
   }
   let blank = true;
-  let title: string | undefined;
+  /** 最後一顆 `session/title` 的。 */
+  let logged: string | undefined;
+  /** 第一則合格的人話推出來的，一顆 `session/title` 都沒有時才用。 */
+  let derived: string | undefined;
   let lastPromptAt: number | undefined;
   try {
     for await (const line of handle.readLines({ encoding: 'utf8' })) {
-      if (!line.includes(TURN_START)) continue;
+      if (!line.includes(TURN_START) && !line.includes(SESSION_TITLE)) continue;
       let event: unknown;
       try {
         event = JSON.parse(line);
       } catch {
         continue;
       }
-      if (!isRecord(event) || event['type'] !== TURN_START) continue;
-      blank = false;
+      if (!isRecord(event)) continue;
       const data = event['data'];
+      if (event['type'] === SESSION_TITLE) {
+        if (isRecord(data) && typeof data['title'] === 'string') logged = data['title'];
+        continue;
+      }
+      if (event['type'] !== TURN_START) continue;
+      blank = false;
       if (!isRecord(data) || data['kind'] !== 'message' || typeof data['text'] !== 'string') {
         continue;
       }
       if (typeof event['time'] === 'number') lastPromptAt = event['time'];
-      if (title === undefined) {
-        const derived = fallbackThreadTitle(data['text'], limits);
-        if (derived !== '') title = derived;
+      if (derived === undefined) {
+        const title = fallbackThreadTitle(data['text'], limits);
+        if (title !== '') derived = title;
       }
     }
   } finally {
     await handle.close().catch(() => undefined);
   }
+  const title = logged ?? derived;
   return {
     blank,
     ...(title !== undefined && { title }),
@@ -239,8 +181,7 @@ export async function listStoredThreads(
   options: { readonly cwd: string; readonly title: ThreadTitleLimits },
 ): Promise<StoredThreadList> {
   // 先驗，不等到第一則人打的字：一份空的目錄不該讓錯的設定看起來是對的。
-  assertPositiveInteger('maxWords', options.title.maxWords);
-  assertPositiveInteger('maxBytes', options.title.maxBytes);
+  assertThreadTitleLimits(options.title);
   let names: string[];
   try {
     names = await readdir(directory);

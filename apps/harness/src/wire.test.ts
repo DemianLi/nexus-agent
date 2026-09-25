@@ -2,7 +2,7 @@ import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { Event } from '@nexus/wire';
-import { commandPath, createWireClient, INBOX, streamPath, TODOS } from '@nexus/wire';
+import { commandPath, createWireClient, INBOX, streamPath, TITLE, TODOS } from '@nexus/wire';
 import { createDeepAgent, StateBackend } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -233,9 +233,9 @@ describe('線的兩端對得起來', () => {
     );
     const methods = new Set(frames.map((frame) => frame.method));
     expect([...methods].sort()).toEqual(['custom', 'lifecycle', 'messages', 'tools']);
-    // `custom` 在白名單裡，這一段上來的只有 pump 從日誌合成的那兩種：送出佇列（送進來一顆、開跑時領走一顆，#637）
-    // 與開新一輪時清空待辦清單（#575）。清空待辦由 `turn/start` 當場觸發，所以排在領走前面。圖自己往 `custom` 寫的不上線，見 `present-tool.test.ts` 的「圖自己發的
-    // custom frame 不上線」。
+    // `custom` 在白名單裡，這一段上來的只有 pump 從日誌合成的那三種：送出佇列（送進來一顆、開跑時領走一顆，#637）、
+    // 開新一輪時清空待辦清單（#575）與第一句的標題（#647）。清空待辦由 `turn/start` 當場觸發，所以排在領走前面。
+    // 圖自己往 `custom` 寫的不上線，見 `present-tool.test.ts` 的「圖自己發的 custom frame 不上線」。
     const runId = (started as { result: { run_id: string } }).result.run_id;
     const sentence = { id: runId, text: '記一筆。', source: { kind: 'user' } };
     expect(
@@ -244,6 +244,8 @@ describe('線的兩端對得起來', () => {
       { name: INBOX, payload: { items: [sentence] } },
       { name: TODOS, payload: { todos: null } },
       { name: INBOX, payload: { items: [], claimed: { id: runId, text: '記一筆。' } } },
+      // 第一句開跑：領走之後寫退回標題、當場推一顆（#647），也比這一輪模型與工具的 frame 早。
+      { name: TITLE, payload: { title: '記一筆。' } },
     ]);
     // 領走那一顆比這一輪模型與工具的任何 frame 都早：畫面據它畫人的泡泡，泡泡要在回覆之前。
     const claimedAt = frames.findIndex(

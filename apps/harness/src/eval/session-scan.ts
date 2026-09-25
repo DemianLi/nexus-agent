@@ -124,6 +124,7 @@ const KNOWN_EVENT_TYPES: Readonly<Record<SessionEventType, true>> = {
   'deliverables/presented': true,
   'workspace/changes': true,
   'inbox/spliced': true,
+  'session/title': true,
   'session/end-seed': true,
 };
 

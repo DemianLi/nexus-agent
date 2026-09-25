@@ -141,6 +141,10 @@ import type { ToolErrorInfo } from './tool-events.js';
  * `inbox/spliced` 是**只有一條路產得出來的第二種**（第一種是 `feedback/message-*`）：寫的是 web 的 pump，CLI 的 REPL
  * 一行一輪、沒有排隊。它記的是人送出、還沒開跑的那幾句，只寫 root 那一份。**它不進模型**：開跑那一刻的文字由
  * `turn/start` 帶，推模型歷史的一側不讀它。見 [#637](https://github.com/DemianLi/nexus-agent/issues/637)。
+ *
+ * `session/title` 兩個寫者各走一條舊路：web 的 pump 與 CLI 的 `runTurn`，都在自己寫下 `turn/start {kind:'message'}`
+ * 的那一段裡接著寫（`apps/harness/src/session-title.ts`），只寫 root 那一份。**它不進模型**：推模型歷史的一側
+ * 不讀它，同 dsh 的「log-only」。見 [#647](https://github.com/DemianLi/nexus-agent/issues/647)。
  */
 export type SessionEventType =
   | 'turn/start'
@@ -168,6 +172,7 @@ export type SessionEventType =
   | 'deliverables/presented'
   | 'workspace/changes'
   | 'inbox/spliced'
+  | 'session/title'
   | 'session/end-seed';
 
 /**
@@ -187,6 +192,9 @@ export type SessionEventType =
 export type TurnEndReason =
   | { readonly kind: 'aborted'; readonly cause: { readonly kind: 'user' } }
   | { readonly kind: 'max-tokens' };
+
+/** 一個標題是誰給的。見 `SessionEventMap['session/title']`。 */
+export type SessionTitleSource = { readonly kind: 'fallback' };
 
 /** 每一種事件帶什麼。 */
 export interface SessionEventMap {
@@ -669,6 +677,22 @@ export interface SessionEventMap {
    * - **改、刪**：任何時候（排著的那一件還沒被領走就行）。
    */
   'inbox/spliced': InboxSplice;
+  /**
+   * 這條會話現在叫什麼（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）。**latest-wins**：讀的人拿最後
+   * 一顆。
+   *
+   * 照 dsh 的 `session/title`（`packages/session/session-title/src/types.ts`，`477b4f4`）：
+   *
+   * - `messageSeqs` 是推出這個標題用到的那幾則人話。dsh 指的是 `user/message`，我們對到的是
+   *   `turn/start {kind:'message'}`——人打的字在我們的日誌上只在那裡。
+   * - `source` 這一版只有 `fallback`：第一則合格的人話照規則截出來的。dsh 另有 `provider`（LLM 取的）與
+   *   `user`（改名，會釘住），有了生產者再加成員，同 {@link TurnEndReason}。
+   */
+  'session/title': {
+    readonly title: string;
+    readonly messageSeqs: readonly number[];
+    readonly source: SessionTitleSource;
+  };
   /**
    * 一段 seed 的結尾——這一顆之前的事件是上一個行程寫的，這個行程一顆都沒寫
    * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
