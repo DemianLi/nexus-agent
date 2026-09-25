@@ -21,7 +21,13 @@ import { MemorySaver } from '@langchain/langgraph';
 import { goalId, SessionLog } from '@nexus/core';
 import type { InboxSplice, PluginEntry, SessionEvent } from '@nexus/core';
 import type { Event, InboxPayload } from '@nexus/wire';
-import { createWireClient, INBOX, QUEUE_UPDATE_METHOD } from '@nexus/wire';
+import {
+  createWireClient,
+  emptyConversation,
+  INBOX,
+  QUEUE_UPDATE_METHOD,
+  reduceAll,
+} from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -273,6 +279,17 @@ describe('送出與領走', () => {
         'b',
         'c',
       ]);
+
+      // web 的折疊器拿真的線折：每一件開跑時各畫一則人的話，照開跑的先後，清單最後是空的。
+      const folded = reduceAll(emptyConversation(), run.frames);
+      expect(
+        folded.entries.filter((entry) => entry.kind === 'human').map(({ id, text }) => [id, text]),
+      ).toEqual([
+        ['inbox:a', 'A'],
+        ['inbox:b', 'B'],
+        ['inbox:c', 'C'],
+      ]);
+      expect(folded.inbox).toEqual([]);
     } finally {
       await run.close();
     }
@@ -697,6 +714,11 @@ describe('歷史帶的是目前的清單', () => {
       const pushed = inboxPushes(page.events);
       expect(pushed).toEqual([{ items: inboxPushes(run.frames).at(-1)!.items }]);
       expect(pushed[0]!.items.map((item) => item.id)).toEqual(['b', 'c']);
+
+      // 折起來：清單是停住的那兩件；人的話由重播的那一輪畫，不會多出一則 `inbox:` 的。
+      const folded = reduceAll(emptyConversation(), page.events);
+      expect(folded.inbox.map((item) => item.id)).toEqual(['b', 'c']);
+      expect(folded.entries.some((entry) => entry.id.startsWith('inbox:'))).toBe(false);
     } finally {
       await run.close();
     }

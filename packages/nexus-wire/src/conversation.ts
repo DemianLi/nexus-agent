@@ -34,6 +34,8 @@
 import { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 import type { WireContextMeasure, WireContextPressure } from './context-pressure.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
+import { INBOX } from './inbox.js';
+import type { WireQueuedInput } from './inbox.js';
 import { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
 import type { WireSessionStats, WireTokenUsage } from './session-totals.js';
 import { TODOS } from './todos.js';
@@ -52,6 +54,16 @@ export interface HumanEntry {
   readonly kind: 'human';
   readonly id: string;
   readonly text: string;
+  /**
+   * {@link appendHumanTurn} 在送出當下畫的、還沒被 `inbox` 的 `claimed` 認領的那一則。**過渡期才有**：web 改成等
+   * `claimed` 才畫（#645）之後，這一格與認領那一支一起刪，見 {@link reduceInbox}。
+   */
+  readonly pendingClaim?: true;
+  /**
+   * 這一則是送出佇列的哪一件開跑時畫的（`inbox` 的 `claimed.id`）。同一顆 `claimed` 再到一次靠它認出來，不畫第二次。
+   * 歷史重播的人話沒有這一格。
+   */
+  readonly inboxId?: string;
 }
 
 export interface AiEntry {
@@ -392,6 +404,12 @@ export interface ConversationState {
    * `session-totals.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
    */
   readonly sessionStats: WireSessionStats | null;
+  /**
+   * 送出佇列（#637）：人送出、還沒開跑的那幾句，照開跑的先後。後到的 `inbox` frame 整份換掉，**沒收到過就是空的**
+   * ——佇列從日誌開頭折起，不會在一輪開頭清空，所以沒有「還沒寫過」與「空」之分。規則見 `inbox.ts`。它是「現在」的事，
+   * 所以 {@link prependEntries} 不動它。
+   */
+  readonly inbox: readonly WireQueuedInput[];
 }
 
 const ROOT: Attribution = { kind: 'root' };
@@ -408,6 +426,7 @@ export function emptyConversation(): ConversationState {
     todos: null,
     tokenUsage: null,
     sessionStats: null,
+    inbox: [],
   };
 }
 
@@ -416,9 +435,17 @@ export function emptyConversation(): ConversationState {
  *
  * **線上不會回聲它**：`run.start` 的 input 不會變成下行的 frame，而 `input` channel
  * 上只有核准請求。所以送出的那一刻由這裡補，不是等它回來。
+ *
+ * 送出佇列（#637）之後人的話另有一條路：`inbox` frame 的 `claimed`，開跑那一刻才畫，見 {@link reduceInbox}。過渡期
+ * 兩條並存：這裡畫的那則標 {@link HumanEntry.pendingClaim}，`claimed` 到了認領它，不另畫一則。
  */
 export function appendHumanTurn(state: ConversationState, text: string): ConversationState {
-  const entry: HumanEntry = { kind: 'human', id: `human-${state.entries.length}`, text };
+  const entry: HumanEntry = {
+    kind: 'human',
+    id: `human-${state.entries.length}`,
+    text,
+    pendingClaim: true,
+  };
   return trackTurn(state, { ...state, entries: [...state.entries, entry], status: 'running' });
 }
 
@@ -615,8 +642,8 @@ function isPresentedFile(value: unknown): value is WirePresentedFile {
 
 /**
  * `custom` frame。**只認 {@link DELIVERABLES_PRESENTED}、{@link WORKSPACE_CHANGES}、{@link MODEL_USAGE}、
- * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link TOKEN_USAGE} 與 {@link SESSION_STATS}**，其他名字、形狀不對的一律略過：這個 channel 上的東西由 pump 從日誌
- * 合成，認不得的不猜。
+ * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link TOKEN_USAGE}、{@link SESSION_STATS} 與 {@link INBOX}**，其他名字、形狀
+ * 不對的一律略過：這個 channel 上的東西由 pump 從日誌合成，認不得的不猜。
  */
 function reduceCustom(state: ConversationState, data: unknown): ConversationState {
   const { name, payload } = (data ?? {}) as { name?: unknown; payload?: unknown };
@@ -627,6 +654,7 @@ function reduceCustom(state: ConversationState, data: unknown): ConversationStat
   if (name === TODOS) return reduceTodos(state, payload);
   if (name === TOKEN_USAGE) return reduceTokenUsage(state, payload);
   if (name === SESSION_STATS) return reduceSessionStats(state, payload);
+  if (name === INBOX) return reduceInbox(state, payload);
   if (name !== DELIVERABLES_PRESENTED) return state;
   const { callId, seq, files } = payload as { callId?: unknown; seq?: unknown; files?: unknown };
   if (
@@ -728,6 +756,62 @@ function reduceSessionStats(state: ConversationState, payload: object): Conversa
   const { turns, steps, llmMs, toolMs } = payload as Record<string, unknown>;
   if (!isCount(turns) || !isCount(steps) || !isCount(llmMs) || !isCount(toolMs)) return state;
   return { ...state, sessionStats: { turns, steps, llmMs, toolMs } };
+}
+
+/** 排著的一件長得對不對：`@nexus/core` 的 `QueuedInput`，這一版 `source` 只有人。 */
+function isQueuedInput(value: unknown): value is WireQueuedInput {
+  if (typeof value !== 'object' || value === null) return false;
+  const { id, text, source } = value as { id?: unknown; text?: unknown; source?: unknown };
+  return (
+    typeof id === 'string' &&
+    typeof text === 'string' &&
+    typeof source === 'object' &&
+    source !== null &&
+    (source as { kind?: unknown }).kind === 'user'
+  );
+}
+
+/**
+ * `inbox` 的 `payload`：清單**整份換掉**。任何一件不對、`claimed` 不對，就整顆不收，不收一半——少一件的清單分不出是
+ * 開跑了還是被刪了，而且看起來正常。
+ *
+ * 帶 `claimed` 的那一顆是某一件剛被領走開跑：多折一則人的話，文字用開跑用的那份（改過的就是改過的）。
+ *
+ * - **id 是 `inbox:<項目 id>`**，跟 {@link appendHumanTurn} 的 `human-<n>` 與歷史重播的 `run_id` 分得開；帶
+ *   {@link HumanEntry.inboxId}，同一顆 `claimed` 再到一次靠它認出來，不畫第二次。
+ * - **`status` 不在這裡轉**：開跑由接著到的 `lifecycle` 說，理由同 `claimed` 的先後保證（見 `inbox.ts`）。
+ * - **過渡期的認領**：web 今天在送出當下就 {@link appendHumanTurn}（#645 會改成等 `claimed`）。最後一則還標著
+ *   {@link HumanEntry.pendingClaim} 的人話在的話，`claimed` **認領它**——換成開跑用的文字、帶上 `inboxId`，**id 不換**
+ *   （畫面拿它當 key）——而不是另畫一則，不然同一句會畫兩次。只認領最後那一則，不往前找。
+ *   - 別的分頁或 CLI 排著的先開跑時，認領走的是這一頁剛送出的那則：送出那一瞬間的字會換成先開跑那一件的，接著的
+ *     `claimed` 再依序長出來，最後的順序與文字都對。
+ *   - 送出失敗留下來的那則也還標著，會被下一顆 `claimed` 認領走。過渡期接受。
+ *   - #645 合了之後 web 不再呼叫 {@link appendHumanTurn}，這一支走不到，跟它一起刪。
+ */
+function reduceInbox(state: ConversationState, payload: object): ConversationState {
+  const { items, claimed } = payload as { items?: unknown; claimed?: unknown };
+  if (!Array.isArray(items) || !items.every(isQueuedInput)) return state;
+  let human: HumanEntry | undefined;
+  if (claimed !== undefined) {
+    const { id, text } = (claimed ?? {}) as { id?: unknown; text?: unknown };
+    if (typeof id !== 'string' || typeof text !== 'string') return state;
+    human = { kind: 'human', id: `inbox:${id}`, text, inboxId: id };
+  }
+  const inbox = items.map(({ id, text }) => ({ id, text, source: { kind: 'user' as const } }));
+  if (
+    human === undefined ||
+    state.entries.some((entry) => entry.kind === 'human' && entry.inboxId === human.inboxId)
+  ) {
+    return { ...state, inbox };
+  }
+  const local = state.entries.findLastIndex(
+    (entry) => entry.kind === 'human' && entry.pendingClaim === true,
+  );
+  if (local < 0) return { ...state, inbox, entries: [...state.entries, human] };
+  const entries = [...state.entries];
+  // **id 不換**：畫面拿 id 當列的 key，換掉的話那顆泡泡會重新掛上、進場動畫再播一次。
+  entries[local] = { ...human, id: state.entries[local]!.id };
+  return { ...state, inbox, entries };
 }
 
 /** `workspace/changes` 的 `payload`：`seq` 要是非負整數，同一個 `seq` 只長一格。 */
