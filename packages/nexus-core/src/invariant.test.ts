@@ -336,3 +336,63 @@ describe('在 `session/end-seed` 重設', () => {
     expect(violations).toHaveLength(1);
   });
 });
+
+describe('送出佇列（#637）', () => {
+  const item = (id: string) => ({ id, text: id, source: { kind: 'user' as const } });
+
+  it('合規的插、領、改、刪不吵；停在核准點時插進來的也不吵', () => {
+    const log = new SessionLog('s');
+    const violations = watch(log);
+    log.append('inbox/spliced', { target: 'next-turn', start: 0, inserted: [item('a')] });
+    log.append('turn/start', { kind: 'message', text: 'a' });
+    log.append('inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [] });
+    log.append('interrupt/raised', { interruptId: 'i1' });
+    log.append('turn/end', {});
+    log.append('inbox/spliced', { target: 'next-turn', start: 0, inserted: [item('b')] });
+    log.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      removedCount: 1,
+      inserted: [item('b')],
+      outcome: 'canceled',
+    });
+    log.append('turn/start', { kind: 'resume' });
+    log.append('turn/end', {});
+    log.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      removedCount: 1,
+      inserted: [],
+      outcome: 'canceled',
+    });
+    expect(violations).toEqual([]);
+  });
+
+  it('領一件不存在的、插一件同 id 的：各抓一次', () => {
+    const log = new SessionLog('s');
+    const violations = watch(log);
+    log.append('inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [] });
+    log.append('inbox/spliced', { target: 'next-turn', start: 0, inserted: [item('a')] });
+    log.append('inbox/spliced', { target: 'next-turn', start: 1, inserted: [item('a')] });
+    expect(violations.map((violation) => violation.message)).toEqual([
+      expect.stringContaining('inbox/spliced（seq 0）不合規'),
+      expect.stringContaining('inbox/spliced（seq 2）不合規'),
+    ]);
+  });
+
+  it('跨 session/end-seed 不重設：重啟之後領上一個行程排的那件不是違規', () => {
+    const first = new SessionLog('s');
+    first.append('inbox/spliced', { target: 'next-turn', start: 0, inserted: [item('a')] });
+    const resumed = new SessionLog('s', { seed: first.events });
+    const violations = watch(resumed);
+    resumed.append('turn/start', { kind: 'message', text: 'a' });
+    resumed.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      removedCount: 1,
+      inserted: [],
+    });
+    resumed.append('turn/end', {});
+    expect(violations).toEqual([]);
+  });
+});

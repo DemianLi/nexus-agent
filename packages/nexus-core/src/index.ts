@@ -66,6 +66,8 @@ export { GOAL_CHANGE_VERSION, goalId } from './goal.js';
 export type { TodoItem, TodoStatus } from './todo.js';
 export type { PresentedFile } from './deliverables.js';
 export { TODO_STATUSES } from './todo.js';
+export type { InboxSplice, InboxTarget, QueuedInput, QueuedInputSource } from './inbox.js';
+export { foldInbox, spliceInbox } from './inbox.js';
 
 export type {
   SandboxDenial,
