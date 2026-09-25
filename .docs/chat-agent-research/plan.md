@@ -77,10 +77,12 @@
 | **W1 發現與篩選** | 每個節點 3 路並行找候選（綜述 snowball、arXiv 關鍵字、商用採納），每路都先過 ID 閘門；再 1 個篩選 agent 查引用數、依標準排出 24 主選加 6 候補；最後做跨節點去重，由 1 個仲裁 agent 決定共用論文的主節點 | 8×3 + 8 + 1 ≈ **33** |
 | **W1b 重新篩選** | W1 的篩選 agent 轉抄的數字不可信、寫在 prompt 裡的規則沒人擋，所以改成程式建候選池（[`tools/pool.py`](tools/pool.py)）算數字與硬旗標，agent 只做範圍判斷，另有反方 agent 挑錯 | 8 篩選 + 8 反方 + 1 仲裁 |
 | **人工複核** | W1b 的結果過 [`tools/build_shortlist.py`](tools/build_shortlist.py) 閘門仍有系統性問題（仲裁判錯節點、高引用但離題的論文混入、經典漏收），由我逐節點審查，每篇的歸屬與理由寫在 [`tools/review_overlay.py`](tools/review_overlay.py) | 0 |
-| **W2 精讀** | 一篇一個 agent（全文 40–80k tokens，一個 agent 塞多篇會擠爆 context）。讀全文、寫結構化筆記、交錨點；主選讀完不足 20 再讀候補 | 8×24 + 候補 ≈ **200–240** |
-| **W3 綜合與驗證** | 每節點一章；對抗式查核每章的主張是否有筆記支持；能用程式驗的主張寫程式驗；最後一份跨節點綜合，處理 6 條邊；再由一個 completeness critic 問「缺了什麼」 | 8 + 8 + 1 + 1 ≈ **20–30** |
+| **W2 精讀** | 一篇一個 agent（全文 40–80k tokens，一個 agent 塞多篇會擠爆 context）。讀全文、寫結構化筆記、交錨點；主選讀完不足 20 再讀候補。實際跑完每個節點計入 22–24 篇，候補沒有動用 | 實際 **186**（另有試跑 9） |
+| **W3 綜合與驗證** | 一個節點的筆記約 30 萬字元，一個 agent 讀不完，所以每節點先分組（每組 ≤ 8 篇）寫段落草稿，再由一個 agent 組成一章；接著並行做兩件事：查核員先跑 [`tools/check_chapter.py`](tools/check_chapter.py) 把句子裡找不到出處的數字全部列出來，再做對抗式查核，另一個 agent 挑主張寫程式驗證；然後修訂、修訂後再跑一次數字比對、每章一個 critic。六條邊各一個 agent 分類哪些論文真的處理了那條資料流。最後寫 README，再由一個全域 critic 找跨章矛盾與漏收 | 32 草稿 + 8×5 + 6 邊 + 2 ≈ **80** |
 
-合計約 **260–300 個 agent**。成本大頭在 W2。模型全部沿用 session 預設，搜尋、解析這類機械性步驟用低 effort。
+合計約 **320 個 agent**。成本大頭在 W2。全域設定讓子代理預設跑 Haiku，W1 與 W1b 都是在這個預設下跑的；它們的轉抄數字與理由裡有捏造，可能與此有關，但沒有做過對照，無法確定。W2 起每個 agent 都明確指定 Opus。
+
+**程式算得出來的就不交給 agent**：計數（`check_notes.py`）、文獻表的標記與一句話、商用採納摘要（只收附 URL 的證據）、各子領域計入篇數、每條邊由哪些筆記標了，都由程式從筆記與 `reading-status.json` 產生，agent 只寫需要判斷的部分。
 
 **helper 的角色**：S2、arXiv API、HTML 全文這三種請求全部走 `tools/arxiv_tool.py`。每個主機一次只有一個請求（檔案鎖），請求之間有最小間隔（arXiv API 3 秒），429 時指數退避，結果按 ID 快取。幾十個 agent 同時跑也不會把 arXiv 或 S2 打爆。
 
@@ -103,7 +105,7 @@
 │   └── reading-status.json 每篇精讀的計數結果（W2，check_notes.py 產出）
 ├── notes/<arxiv-id>.json   每篇精讀筆記（W2）
 ├── verify/                 驗證程式碼（W3）
-├── tools/                  arxiv_tool.py（arXiv／S2）、pool.py、build_shortlist.py、review_overlay.py、check_notes.py
+├── tools/                  arxiv_tool.py（arXiv／S2）、pool.py、build_shortlist.py、review_overlay.py、check_notes.py、check_chapter.py
 └── .cache/                 全文、API 快取與錨點原文（不進版控）
 ```
 
@@ -111,6 +113,8 @@
 
 ## 誠實標記
 
-每章的文獻表都標讀到的層級：✅ 全文精讀並通過錨點驗證 ／ 📖 全文但錨點未全過 ／ ❌ 只有摘要。只有 ✅ 計入 20 篇。
+每章的文獻表都標讀到的層級：✅ 全文精讀並通過錨點驗證，計入本節點 ／ 📖 讀完全文但不計入（精讀後判為低價值，或錨點未達門檻，原因寫在表裡）／ ❌ 只有摘要。只有 ✅ 計入 20 篇。
+
+筆記的 `limitations_stated` 是論文自述的限制；`limitations_observed` 是精讀 agent 自己的分析，有些是它依論文表格或公開資料重算出來的。後者沒有經過同儕審查，章節引用時一律標明是精讀時的分析，並優先拿去做程式驗證。
 
 每支 workflow 跑完就 commit 一次，讓成果持續落地。
