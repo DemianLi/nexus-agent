@@ -118,13 +118,15 @@ describe('run_javascript 失敗時回報成工具錯誤', () => {
       'code run failed (timeout): 回傳了一個永遠不會完成的 promise',
     ],
   ] as const)('%s', async (_label, code, options, expected) => {
-    const { tool, logged, last } = await runOne({ code }, options);
+    const { tool, logged, errors, last } = await runOne({ code }, options);
 
     expect(tool?.status).toBe('error');
     // 圍堵的前綴只有一層：工具自己不再帶 `錯誤：`。
     expect(tool?.text).toContain(`工具 ${RUN_JAVASCRIPT_TOOL_NAME} 執行失敗：${expected}`);
     expect(tool?.text).not.toContain('錯誤：');
     expect(logged).toEqual([true]);
+    // 碼照 dsh 跟著進日誌：`CodeRunFailedError` 是 `HarnessError`，圍堵記它的 `{ name, code }`。
+    expect(errors).toEqual([{ name: 'CodeRunFailedError', code: 'CODE_RUN_FAILED' }]);
     expect(last).toBe('收工。');
   });
 
@@ -133,11 +135,12 @@ describe('run_javascript 失敗時回報成工具錯誤', () => {
     ['沒有回傳值照舊', 'const x = 1;', '（沒有回傳值）'],
     ['async 照舊拿得到值', '(async () => 41 + 1)()', '42'],
   ])('成功的不變：%s', async (_label, code, expected) => {
-    const { tool, logged } = await runOne({ code }, {});
+    const { tool, logged, errors } = await runOne({ code }, {});
 
     expect(tool?.status).not.toBe('error');
     expect(tool?.text).toBe(expected);
     expect(logged).toEqual([false]);
+    expect(errors).toEqual([]);
   });
 });
 
@@ -149,7 +152,12 @@ describe('run_javascript 失敗時回報成工具錯誤', () => {
 async function runOne(
   args: { readonly code: string },
   options: QuickJsPluginOptions,
-): Promise<{ tool: ToolMessage | undefined; logged: boolean[]; last: string | undefined }> {
+): Promise<{
+  tool: ToolMessage | undefined;
+  logged: boolean[];
+  errors: unknown[];
+  last: string | undefined;
+}> {
   const { agent, attachSession, dispose } = await createNexusAgent({
     model: new ScriptedChatModel({
       turns: [
@@ -176,6 +184,9 @@ async function runOne(
     tool: messages.find((message): message is ToolMessage => ToolMessage.isInstance(message)),
     logged: (rootLog?.log.events ?? []).flatMap((event) =>
       event.type === 'tool/result' ? [event.data.isError] : [],
+    ),
+    errors: (rootLog?.log.events ?? []).flatMap((event) =>
+      event.type === 'tool/result' && event.data.error !== undefined ? [event.data.error] : [],
     ),
     last: messages.at(-1)?.text,
   };

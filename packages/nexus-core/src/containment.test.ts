@@ -23,7 +23,7 @@ import { fromLoggedMessage } from './logged-message.js';
 import type { SessionLookup } from './registry.js';
 import { SessionLog } from './session-log.js';
 import type { SessionEventMap } from './session-log.js';
-import { INVALID_TOOL_OUTPUT, markToolError } from './tool-events.js';
+import { HarnessError, INVALID_TOOL_OUTPUT, markToolError } from './tool-events.js';
 
 /** middleware 的 `wrapToolCall` 拿出來直接呼叫用的形狀。 */
 type Wrapper = (
@@ -359,6 +359,27 @@ describe('工具事件', () => {
     });
     // 名字叫 Error 的一般錯誤不能被當成參數不合——認的是品牌不是 name。
     expect(classifyThrownToolError(new Error('Error'))).toBeUndefined();
+  });
+
+  it('拋出 HarnessError → 它自己的 `{ name, code }`，同 dsh 的 `errorInfo`（#615）', () => {
+    class ProbeFailedError extends HarnessError {
+      constructor() {
+        super('壞了', 'PROBE_FAILED');
+      }
+    }
+    expect(classifyThrownToolError(new ProbeFailedError())).toEqual({
+      name: 'ProbeFailedError',
+      code: 'PROBE_FAILED',
+    });
+    // 被 middleware 包過也認得。
+    expect(classifyThrownToolError(MiddlewareError.wrap(new ProbeFailedError(), 'outer'))).toEqual({
+      name: 'ProbeFailedError',
+      code: 'PROBE_FAILED',
+    });
+    // 認的是品牌：自己帶一格 `code` 的一般錯誤（例如 Node 的 `ENOENT`）照舊沒有碼，同 dsh。
+    expect(
+      classifyThrownToolError(Object.assign(new Error('沒有'), { code: 'ENOENT' })),
+    ).toBeUndefined();
   });
 
   it('內層標過碼的錯誤訊息 → 帶那個碼', async () => {

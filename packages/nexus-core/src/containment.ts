@@ -86,6 +86,7 @@ import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
 import { toLoggedMessage } from './logged-message.js';
 import type { SessionLookup } from './registry.js';
 import {
+  HarnessError,
   INVALID_ARGS,
   readInjectedMessages,
   readToolOutcome,
@@ -223,7 +224,7 @@ export function resolveToolName(request: {
 /**
  * 拋出來的那顆錯是哪一種，照 dsh 的碼；**認不出來的回 `undefined`**。
  *
- * 一般拋錯不給碼是照抄，見 `tool-events.ts` 檔頭。三種認得出來的：
+ * 一般拋錯不給碼是照抄，見 `tool-events.ts` 檔頭。認得出來的：
  *
  * - `TimeoutError` → `TOOL_TIMEOUT`（dsh `guard/timeout-policy` 的 `ToolTimeoutError`）；
  * - `AbortError` → `ABORTED`——使用者取消，**不是**超時，理由見 {@link isToolTimeout}；
@@ -232,7 +233,10 @@ export function resolveToolName(request: {
  *   而那顆錯的 `name` 就是 `"Error"`（實測），**只認得出品牌**。中途每經過一層 middleware
  *   可能再包一層 `MiddlewareError`，所以先沿 `.cause` 走到底——同基座自己的
  *   `#handleError`（`:139-145`）。**這不是 `INVALID_ARGS` 唯一的來處**：JSON 都不合格的那顆
- *   不經過這裡，由 `invalid-tool-args.ts` 的樁回訊息時自己標碼。
+ *   不經過這裡，由 `invalid-tool-args.ts` 的樁回訊息時自己標碼；
+ * - 工具拋出 {@link HarnessError} → 它自己的 `{ name, code }`，同 dsh 的 `errorInfo`
+ *   （`packages/core/tools/src/index.ts:661-668`，`477b4f4`），例如 `run_javascript` 的
+ *   `CODE_RUN_FAILED`（#615）。
  *
  * @param error - `catch` 到的東西。
  * @returns 它的碼，或 `undefined`。
@@ -245,6 +249,7 @@ export function classifyThrownToolError(error: unknown): ToolErrorInfo | undefin
     return { name: 'AbortError', code: TOOL_ABORTED };
   }
   if (ToolInvocationError.isInstance(root)) return { name: 'ToolArgsError', code: INVALID_ARGS };
+  if (root instanceof HarnessError) return { name: root.name, code: root.code };
   return undefined;
 }
 

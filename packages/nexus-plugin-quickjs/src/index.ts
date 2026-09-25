@@ -43,6 +43,7 @@
  */
 
 import { tool } from '@langchain/core/tools';
+import { HarnessError } from '@nexus/core';
 import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
 import { getQuickJS, shouldInterruptAfterDeadline } from 'quickjs-emscripten';
 import type { QuickJSContext, QuickJSHandle } from 'quickjs-emscripten';
@@ -73,7 +74,8 @@ export type CodeRunFailureKind = 'exception' | 'timeout';
 
 /**
  * `run_javascript` 的程式本身失敗時拋的東西，照 dsh 的 `CodeRunFailedError`
- * （`packages/core/tools/src/ptc.ts:165-180`，`477b4f4`）：**拋，不回字串**。
+ * （`packages/core/tools/src/ptc.ts:165-180`，`477b4f4`）：**拋，不回字串**。同 dsh 繼承
+ * {@link HarnessError}，所以碼 `CODE_RUN_FAILED` 跟著進會話日誌那顆 `tool/result` 的 `error`。
  *
  * 接住它的是 `@nexus/core` 的圍堵（dsh 那側是註冊表的執行管線）：模型拿到 `status: 'error'` 的
  * ToolMessage、文字帶得出失敗種類與原因，會話日誌的 `tool/result` 是 `isError: true`，web 的
@@ -83,9 +85,7 @@ export type CodeRunFailureKind = 'exception' | 'timeout';
  * 訊息的形狀照 dsh 的 `code run failed (<kind>): <message>`（`ptc.ts:721`）。dsh 後面還接擷取到的
  * 輸出與沙箱資訊，這裡兩樣都沒有：VM 裡沒有 `console`，也沒有行程沙箱。
  */
-export class CodeRunFailedError extends Error {
-  /** 穩定的機器可讀代碼，同 dsh。 */
-  readonly code = 'CODE_RUN_FAILED' as const;
+export class CodeRunFailedError extends HarnessError {
   /** 失敗種類。 */
   readonly kind: CodeRunFailureKind;
 
@@ -94,7 +94,7 @@ export class CodeRunFailedError extends Error {
    * @param message - 原因，不含前綴。
    */
   constructor(kind: CodeRunFailureKind, message: string) {
-    super(`code run failed (${kind}): ${message}`);
+    super(`code run failed (${kind}): ${message}`, 'CODE_RUN_FAILED');
     this.name = 'CodeRunFailedError';
     this.kind = kind;
   }
