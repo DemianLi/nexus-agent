@@ -13,15 +13,17 @@ import { MemorySaver } from '@langchain/langgraph';
 import { SessionLog } from '@nexus/core';
 import type { GoalId, SessionEvent } from '@nexus/core';
 import type { Event, TitlePayload } from '@nexus/wire';
-import { emptyConversation, INBOX, reduceAll, TITLE } from '@nexus/wire';
+import { emptyConversation, historyPath, INBOX, reduceAll, TITLE } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import { runCli } from './cli.js';
 import { historyPage } from './conversation-history.js';
+import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
+import { createWireHandler } from './wire-handler.js';
 
 /** 超過 40 個位元組，所以標題是截過的、跟這句話本身不一樣。 */
 const FIRST = '請幫我把登入頁面的錯誤訊息改成中文並補上測試';
@@ -194,6 +196,15 @@ describe('歷史：只在最新一頁帶目前的標題', () => {
   });
 });
 
+/** CLI 那一次 run 目錄裡的日誌。 */
+async function cliEvents(root: string): Promise<SessionEvent[]> {
+  const [runDir] = await readdir(root);
+  return (await readFile(join(root, runDir!, 'cli.jsonl'), 'utf8'))
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as SessionEvent);
+}
+
 describe('CLI 那條', () => {
   it('跑一輪，那份日誌也有這一顆；上限是清單上那一列的值，不是預設', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-title-log-'));
@@ -206,14 +217,73 @@ describe('CLI 那條', () => {
       output: new PassThrough(),
       printer: { log: () => undefined, error: () => undefined },
     });
-    const [runDir] = await readdir(root);
-    const events = (await readFile(join(root, runDir!, 'cli.jsonl'), 'utf8'))
-      .split('\n')
-      .filter((line) => line.length > 0)
-      .map((line) => JSON.parse(line) as SessionEvent);
+    const events = await cliEvents(root);
     const start = events.find((event) => event.type === 'turn/start')!;
     expect(titleEvents(events).map((event) => event.data)).toEqual([
       { title: '請幫我', messageSeqs: [start.seq], source: { kind: 'fallback' } },
     ]);
+  }, 20000);
+});
+
+describe('上限從組裝一路傳到用的那一刻', () => {
+  it('pump 建構時就驗：上限壞了當場拋，不等到第一句開跑', () => {
+    const idle = {} as PumpAgent;
+    expect(
+      () =>
+        new ThreadPump(idle, 't', undefined, undefined, undefined, { maxWords: 0, maxBytes: 40 }),
+    ).toThrow(/maxWords/);
+  });
+
+  it('serve 的歷史路由：舊日誌當場推的標題照 createWireHandler 拿到的上限截', async () => {
+    const old = new SessionLog('old');
+    old.append('turn/start', { kind: 'message', text: FIRST });
+    old.append('turn/end', {});
+    const idle = {} as PumpAgent;
+
+    async function historyTitle(limits?: { maxWords: number; maxBytes: number }) {
+      const handler = createWireHandler({
+        auth: TEST_BROWSER_AUTH,
+        ...(limits !== undefined && { threadTitleLimits: limits }),
+        createAgent: async () => ({
+          agent: idle,
+          commands: emptyCommandPoint(),
+          dispose: async () => undefined,
+          rootSeed: old.events,
+        }),
+      });
+      try {
+        const response = await handler.handle(
+          loopbackRequest(`http://wire.test${historyPath('old')}`, {
+            method: 'GET',
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+        expect(response.status).toBe(200);
+        const body = (await response.json()) as { result: { events: Event[] } };
+        return titlePushes(body.result.events);
+      } finally {
+        await handler.close();
+      }
+    }
+
+    expect(await historyTitle()).toEqual([{ title: FIRST_TITLE }]);
+    expect(await historyTitle({ maxWords: 5, maxBytes: 9 })).toEqual([{ title: '請幫我' }]);
+  });
+
+  it('CLI 的 REPL 那條也吃清單上的值', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-title-repl-'));
+    const patchDir = await mkdtemp(join(tmpdir(), 'nexus-title-patch-'));
+    const patch = join(patchDir, 'title.patch.yml');
+    await writeFile(patch, '- id: thread-title\n  config:\n    maxWords: 5\n    maxBytes: 9\n');
+    const input = new PassThrough();
+    const running = runCli({
+      argv: ['--session-log', root, '--patch', patch],
+      input,
+      output: new PassThrough(),
+      printer: { log: () => undefined, error: () => undefined },
+    });
+    input.end(`${FIRST}\n`);
+    await running;
+    expect(titleEvents(await cliEvents(root)).map((event) => event.data.title)).toEqual(['請幫我']);
   }, 20000);
 });

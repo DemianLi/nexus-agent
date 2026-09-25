@@ -44,7 +44,7 @@ import { liveModelPlugin } from './settings/live-model.js';
 import type { LiveModelConfig } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { threadTitleConfigSchema, threadTitlePlugin } from './settings/thread-title.js';
-import { assertThreadTitleLimits, ensureFallbackTitle } from './session-title.js';
+import { ensureFallbackTitle } from './session-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
 import {
   attachSessionPersistence,
@@ -1361,9 +1361,8 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   const persistenceWindow = startupSetting(plugins, sessionPersistencePlugin);
   // 真實供應商的連線值（#545）。
   const liveModel = startupSetting(plugins, liveModelPlugin);
-  // 退回標題的兩個上限（#647）。驗在這裡，不等到第一句話：設定寫壞的話在跑起來之前就講。
+  // 退回標題的兩個上限（#647）。`startupSetting` 照 schema 驗過，寫壞的話在跑起來之前就拋。
   const threadTitle = startupSetting(plugins, threadTitlePlugin);
-  assertThreadTitleLimits(threadTitle);
 
   // **續接也在建 agent 之前讀**：沙箱模式的起始那一格與 root 日誌的 seed 都是組裝時就要給的
   // 東西，而讀不到（沒有那個目錄、版本太新、壞檔）也該在什麼都還沒起來的時候就講。
