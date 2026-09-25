@@ -18,6 +18,7 @@
 import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   appendHumanTurn,
   createWireClient,
@@ -28,6 +29,7 @@ import {
 import type { ConversationState } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
+import { SESSION_LOG_OFF_DISCLOSURE } from './cli.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
@@ -269,6 +271,87 @@ describe('serve 的 --session-log', () => {
     await expect(
       runServe({ argv: ['--port', '0', '--session-log', '  '], log: () => undefined, env: {} }),
     ).rejects.toThrow('--session-log 要給一個目錄路徑');
+  });
+});
+
+/** 把落盤那一列關掉的夾具（#612）。 */
+const PERSISTENCE_OFF_PATCH = fileURLToPath(
+  new URL('./settings/persistence-off.patch.yml', import.meta.url),
+);
+
+/**
+ * 清單把落盤關掉（[#612](https://github.com/DemianLi/nexus-agent/issues/612)），serve 那一半。照 dsh
+ * 不掛 `session-persistence-jsonl`：一條 thread 都不寫、列表列不出來、以前寫過的也不接回來。
+ */
+describe('serve：清單把落盤關掉', () => {
+  it('跑完一輪 sessions 底下什麼都沒有，畫面講只在記憶體裡，列表回列不出來', async () => {
+    expect(homedir().startsWith(tmpdir())).toBe(true);
+    const lines: string[] = [];
+    const server = (await runServe({
+      argv: ['--port', '0', '--patch', PERSISTENCE_OFF_PATCH],
+      log: (line) => lines.push(line),
+      env: {},
+    })) as RunningServe;
+    running = server;
+    await driveTurn(server, 'delta');
+    const listed = await (await serveClient(server)).listThreads();
+    await server.close();
+    running = undefined;
+
+    expect(lines.join('\n')).toContain(SESSION_LOG_OFF_DISCLOSURE);
+    expect(listed.kind).toBe('rejected');
+    expect(listed.kind === 'rejected' && listed.message).toContain('session-persistence');
+    // home 會有（瀏覽器會話的密鑰住在那裡），**`sessions` 不會**。
+    await expect(readdir(join(homedir(), '.nexus-agent', 'sessions'))).rejects.toThrow();
+  });
+
+  it('以前寫過的 thread 不接回來，那個檔一個位元組都沒動', async () => {
+    // **兩台都用預設的根**——同一個家、同一格。第一台用 `--session-log` 的話，第二台根本不看那裡，
+    // 落盤沒關也碰不到那個檔，這一條就永遠綠。
+    const first = (await runServe({
+      argv: ['--port', '0'],
+      log: () => undefined,
+      env: {},
+    })) as RunningServe;
+    running = first;
+    await driveTurn(first, 'echo');
+    await first.close();
+    const path = join(projectDirOf(join(homedir(), '.nexus-agent', 'sessions')), 'echo.jsonl');
+    const before = await readFile(path, 'utf8');
+
+    const second = (await runServe({
+      argv: ['--port', '0', '--patch', PERSISTENCE_OFF_PATCH],
+      log: () => undefined,
+      env: {},
+    })) as RunningServe;
+    running = second;
+    await driveTurn(second, 'echo');
+    await second.close();
+    running = undefined;
+    expect(await readFile(path, 'utf8')).toBe(before);
+  });
+
+  it('--session-log 跟它矛盾：起不來', async () => {
+    const root = join(await tmp('nexus-serve-log-'), 'not-yet');
+    await expect(
+      runServe({
+        argv: ['--port', '0', '--patch', PERSISTENCE_OFF_PATCH, '--session-log', root],
+        log: () => undefined,
+        env: {},
+      }),
+    ).rejects.toThrow(/--session-log 跟設定矛盾.*session-persistence/su);
+    await expect(readdir(root)).rejects.toThrow();
+  });
+
+  it('預設的根落在 --workspace 底下也起得來：關掉的時候根本不解析它', async () => {
+    const workspace = await tmp('nexus-serve-ws-');
+    const lines: string[] = [];
+    running = await runServe({
+      argv: ['--port', '0', '--patch', PERSISTENCE_OFF_PATCH, '--workspace', workspace],
+      log: (line) => lines.push(line),
+      env: { [HARNESS_HOME_ENV]: join(workspace, 'home') },
+    });
+    expect(lines.join('\n')).toContain(SESSION_LOG_OFF_DISCLOSURE);
   });
 });
 

@@ -96,9 +96,11 @@
 
 # ── core 的設定 ──────────────────────────────────────────────────────────────
 #
-# 這幾列**不裝功能，只講設定**。**它們內部分兩層，分界同 harness 那一段——消費點跑的時刻**：
+# 這幾列**不裝功能，只講設定**（最後一列 `session-persistence` 例外：它代表落盤本身，#612）。
+# **它們內部分兩層，分界同 harness 那一段——消費點跑的時刻**：
 # 前七列（到 `approval-gate` 為止）是**組裝期**（#456），消費者是 `foldRegistry`，註冊表就在
-# 手上；最後一列 `session-persistence` 是**起動期**（#529），理由寫在它自己那一段上。
+# 手上；最後一列 `session-persistence` 是**起動期**（#529），而且它代表落盤本身、關得掉（#612），
+# 理由寫在它自己那一段上。
 #
 # 組裝期那七列：middleware 本身由 `foldRegistry` 建與排位——位置
 # 是承重的（有四條測試釘著）、而且有一顆必須逐個 agent 各建一份，這兩件事
@@ -205,20 +207,23 @@
 - id: approval-gate
   name: '@nexus/core/approval-gate'
 
-# 會話日誌落盤的批次窗口，毫秒（#457／#529）。**這一列跟上面七列不同層**：上面七列的消費者
-# 是 `foldRegistry`（組裝期，註冊表在手上），這一列的消費者是 `cli.ts` 與 `serve.ts` 裡呼叫
-# `attachSessionPersistence` 的那兩行——跑在 `createCliAgent` 回來之後，而那個函式一格註冊表
-# 都沒有回傳。更硬的理由是壽命：窗口講的是那一顆 `SessionStore` 的寫入節奏，而 store 在 serve
-# 上是**整台伺服器一份**、註冊表是**一條 thread 一份**。所以這一列的 `apply` 是空的，值由
-# `startupSetting` 在起動期解一次往下傳，同上面 harness 那三列的機制。
+# **會話日誌落盤本身**，以及它的批次窗口（毫秒，#457／#529）。**這一列代表落盤**（#612），照 dsh
+# base 的 `session-persistence-jsonl`（`packages/bundle/base/cordis.patch.yml:130-133`，`477b4f4`）：
+# 掛著就寫（CLI 與 serve 都寫，預設在 `$NEXUS_AGENT_HOME/sessions`，#444），**`disabled: true` 就是
+# 一個位元組都不寫**——兩個入口只在記憶體裡、啟動時照實講，serve 的 thread 列表回「列不出來」，
+# 而 `--resume` 與 `--session-log` 跟它矛盾，給了就當場拋（照 dsh：headless 的 `--session-id`
+# 沒有持久化服務就拋）。寫去哪裡不歸這一列管，歸 `--session-log`／`NEXUS_AGENT_HOME`。
 #
-# **dsh 對這個值沒有意見**：它的 `session-persistence-jsonl` 只收 `root` 與 `compression`
+# **這一列跟上面七列不同層**：上面七列的消費者是 `foldRegistry`（組裝期，註冊表在手上），這一列的
+# 消費者是 `cli.ts` 與 `serve.ts` 起動期的那幾行——跑在 `createCliAgent` 之前（開不開、寫去哪都要在
+# 建 agent 之前定），而那個函式一格註冊表都沒有回傳。更硬的理由是壽命：窗口講的是那一顆
+# `SessionStore` 的寫入節奏，而 store 在 serve 上是**整台伺服器一份**、註冊表是**一條 thread 一份**。
+# 所以這一列的 `apply` 是空的，值由 `startupSetting` 在起動期解一次往下傳、開關由
+# `startupEntryMounted` 問，同下面 harness 那幾列的機制。
+#
+# **窗口是 dsh 沒有的旋鈕**：它的 `session-persistence-jsonl` 只收 `root` 與 `compression`
 # （`packages/session/session-persistence-jsonl/src/index.ts:236-239`，`ddefc45`），因為 dsh 的
-# 批次是呼叫端傳一整批，不是計時器攢批。所以這一列的形狀抄的是上面那七列，不是抄 dsh 的某一
-# 列——這不是「表達不出來」的偏離，是標準沒有這個旋鈕。
-#
-# **這一列關不掉**（理由同起動期那三列）：`startupSetting` 把關掉的那一列當成沒有那一列，於是
-# 回到 schema 的預設值——落盤照樣批次、照樣 10 毫秒，只有讀設定的人以為自己關掉了什麼。
+# 批次是呼叫端傳一整批，不是計時器攢批。這不是「表達不出來」的偏離，是標準沒有這個旋鈕。
 #
 # **0 是合法值**，意思是不批次、每一顆事件各寫一次；上限是 `setTimeout` 收得住的
 # 2 147 483 647，超過它的值會讓計時器**立刻**觸發（等於窗口消失），所以擋在 schema 上。
