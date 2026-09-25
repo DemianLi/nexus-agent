@@ -37,7 +37,7 @@ export function newConversationTarget(
 }
 
 /**
- * 讀清單。**讀不出來不是錯誤，是退路**：沒開 `--session-log` 的 server 一定回 rejected，而「新對話」是停在
+ * 讀清單。**讀不出來不是錯誤，是退路**：關掉落盤的 server（清單上 `session-persistence` 那一列，#613）一定回 rejected，而「新對話」是停在
  * 核准點的 thread 唯一的出口，不能因為清單讀不到就走不出去。清單讀不出來的原因由「以前的會話」那一格講。
  */
 export async function readThreadListing(

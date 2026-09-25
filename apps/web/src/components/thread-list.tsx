@@ -96,7 +96,8 @@ export function ThreadList({
     <SidebarGroup role="group" aria-labelledby={labelId} className="text-sm">
       <SidebarGroupLabel id={labelId}>以前的會話</SidebarGroupLabel>
       {listing.kind === 'loading' && <p className="text-muted-foreground px-2">讀取中…</p>}
-      {/* 列不出來與「沒有」是兩件事：沒開 --session-log 的 server 走這一格，原因照 server 講的印。 */}
+      {/* 列不出來與「沒有」是兩件事：關掉落盤的 server（清單上 `session-persistence` 那一列，#613）走這一格，原因照 server 講的印。
+          前綴留著，其他失敗（例如讀取拋錯）也走這一格；server 的訊息自己也寫「列不出來」時會重複一次，措辭歸 server 那側（#620）。 */}
       {listing.kind === 'failed' && (
         <p className="text-destructive px-2">列不出來：{listing.message}</p>
       )}

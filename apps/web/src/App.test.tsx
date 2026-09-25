@@ -1186,9 +1186,10 @@ describe('以前的會話', () => {
       'server 列不了',
       async () => ({
         kind: 'rejected' as const,
-        message: '會話日誌只在記憶體裡（serve 沒給 --session-log）',
+        message:
+          '這台 server 的會話日誌只在記憶體裡（沒接落盤：清單上 session-persistence 那一列關掉了），以前的 thread 列不出來',
       }),
-      '--session-log',
+      'session-persistence',
     ],
     [
       '讀取拋錯',
