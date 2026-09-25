@@ -6,14 +6,16 @@
  * 還在讀、404（serve 重開後重播的那一格）、讀壞了都不畫，同 dsh。
  *
  * 點標頭從第一個檔打開這一輪的審查頁，點一列就打開那一列的檔（同 dsh；審查頁見 `changes-review.tsx`）。
+ * 審查頁住在右側欄，一輪一個分頁（#640）；**沒有右側欄時標頭與列都不能點**，不給一顆按了沒反應的鈕。
  * 不做 `changes.open`（在 Host 上開檔，#443 決議 1）。
  */
 
 import { ChevronDown, ChevronUp, FileDiff } from 'lucide-react';
 import { useEffect, useState, useSyncExternalStore } from 'react';
+import type { ReactNode } from 'react';
 
 import { Counts, FileCounts } from '@/components/change-counts';
-import { ChangesReview } from '@/components/changes-review';
+import { useRightSidebar } from '@/components/right-sidebar';
 import { Button } from '@/components/ui/button';
 import type { ChangesStores } from '@/lib/changes-diff';
 
@@ -29,8 +31,7 @@ export function ChangesCard({ seq, changes }: { seq: number; changes: ChangesSto
   const state = useSyncExternalStore(store.subscribe, () => store.read(seq));
   useEffect(() => store.load(seq), [store, seq]);
   const [expanded, setExpanded] = useState(false);
-  // 審查頁開著的時候是它看的那個檔在 `files` 裡的位置；關著時留著上次的，關掉的動畫才不會跳檔。
-  const [review, setReview] = useState({ open: false, index: 0 });
+  const sidebar = useRightSidebar();
 
   if (typeof state !== 'object' || state.files.length === 0) return null;
   const { files, total, added, deleted } = state;
@@ -38,7 +39,8 @@ export function ChangesCard({ seq, changes }: { seq: number; changes: ChangesSto
   const listed = files.map((file, index) => ({ file, index }));
   const rows = foldable && !expanded ? listed.slice(0, COLLAPSED_ROWS) : listed;
   const unlisted = total - files.length;
-  const openAt = (index: number) => setReview({ open: true, index });
+  const openAt =
+    sidebar === undefined ? undefined : (index: number) => sidebar.openChanges(seq, index);
 
   return (
     <section
@@ -46,28 +48,24 @@ export function ChangesCard({ seq, changes }: { seq: number; changes: ChangesSto
       className="bg-stage shadow-stage flex flex-col rounded-xl p-1"
       data-testid="changes"
     >
-      <button
-        type="button"
-        aria-haspopup="dialog"
-        className={`${PRESSABLE} flex items-center gap-3 px-3 pt-2 pb-2`}
-        onClick={() => openAt(0)}
+      <Pressable
+        onPress={openAt === undefined ? undefined : () => openAt(0)}
+        className="flex items-center gap-3 px-3 pt-2 pb-2"
       >
         <FileDiff className="text-muted-foreground size-5 shrink-0" aria-hidden />
         <span className="min-w-0 flex-1 font-medium">{`${total} 個檔案有改動`}</span>
         <Counts added={added} deleted={deleted} />
-      </button>
+      </Pressable>
       <ul className="flex flex-col px-1 pb-1">
         {rows.map(({ file, index }) => (
           <li key={file.display} data-testid="changed-file">
-            <button
-              type="button"
-              aria-haspopup="dialog"
-              className={`${PRESSABLE} flex w-full items-baseline gap-3 px-2 py-1.5`}
-              onClick={() => openAt(index)}
+            <Pressable
+              onPress={openAt === undefined ? undefined : () => openAt(index)}
+              className="flex w-full items-baseline gap-3 px-2 py-1.5"
             >
               <span className="min-w-0 flex-1 font-mono text-xs break-all">{file.display}</span>
               <FileCounts file={file} />
-            </button>
+            </Pressable>
           </li>
         ))}
       </ul>
@@ -91,15 +89,24 @@ export function ChangesCard({ seq, changes }: { seq: number; changes: ChangesSto
           )}
         </div>
       )}
-      <ChangesReview
-        open={review.open}
-        onOpenChange={(open) => setReview((value) => ({ ...value, open }))}
-        seq={seq}
-        summary={state}
-        index={review.index}
-        onSelect={(index) => setReview({ open: true, index })}
-        diff={changes.diff}
-      />
     </section>
+  );
+}
+
+/** 有右側欄就是一顆鈕，沒有就只是一格排版。 */
+function Pressable({
+  onPress,
+  className,
+  children,
+}: {
+  onPress: (() => void) | undefined;
+  className: string;
+  children: ReactNode;
+}) {
+  if (onPress === undefined) return <div className={className}>{children}</div>;
+  return (
+    <button type="button" className={`${PRESSABLE} ${className}`} onClick={onPress}>
+      {children}
+    </button>
   );
 }

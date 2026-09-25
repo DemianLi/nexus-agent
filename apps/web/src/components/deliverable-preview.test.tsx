@@ -8,6 +8,7 @@ import { createDeliverableFileStore } from '@/lib/deliverable-file';
 import type { DeliverableFileState, DeliverableLongLine } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import { axeViolations } from '@/test/axe';
+import { memoryStorage, WithRightSidebar } from '@/test/right-sidebar';
 
 /**
  * 交付檔的預覽（#452 web 第二刀；#543 改成接續瀏覽）：從卡片上的座標開 `Sheet`，一段一段往下接。
@@ -57,6 +58,8 @@ function nearBottom() {
 beforeEach(() => {
   ManualObserver.live = [];
   vi.stubGlobal('IntersectionObserver', ManualObserver);
+  // 右側欄的版面記在 localStorage，每個測試換一份新的（見 changes-review.test.tsx）。
+  vi.stubGlobal('localStorage', memoryStorage());
 });
 
 afterEach(() => {
@@ -88,7 +91,11 @@ function mount(respond: (url: string) => Response, files: readonly LocatedFile[]
     respond(String(input)),
   ) as unknown as typeof globalThis.fetch;
   const store = createDeliverableFileStore({ threadId: 't1', baseUrl: '', fetch: doFetch });
-  render(<DeliverablesCard files={files} preview={store} />);
+  render(
+    <WithRightSidebar sources={{ deliverableFiles: store }}>
+      <DeliverablesCard files={files} />
+    </WithRightSidebar>,
+  );
   return { doFetch, store };
 }
 
@@ -123,7 +130,7 @@ function shownLineNumbers(): number[] {
 }
 
 describe('交付檔預覽', () => {
-  it('沒給 store 就沒有預覽鈕（卡片其餘照畫）', () => {
+  it('沒有右側欄就沒有預覽鈕（卡片其餘照畫）', () => {
     render(<DeliverablesCard files={[FILE]} />);
     expect(screen.queryByRole('button', { name: /^預覽：/ })).toBeNull();
     // 複製路徑不需要讀檔，所以它還在。
@@ -137,8 +144,9 @@ describe('交付檔預覽', () => {
     const url = requestedUrl(doFetch, 0);
     expect(url).toContain('seq=11');
     expect(url).toContain('index=0');
-    // **在預覽面裡面找**：卡片那一列也印著同一個路徑，整頁找會撞到兩個。
-    expect(within(screen.getByRole('dialog')).getByText('out/report.md')).toBeTruthy();
+    // **在預覽分頁裡面找**：卡片那一列也印著同一個路徑，整頁找會撞到兩個。分頁的標題是檔名。
+    expect(within(screen.getByRole('tabpanel')).getByText('out/report.md')).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'report.md' })).toBeTruthy();
   });
 
   it('座標取自那一列，不是列表位置（#452）', async () => {
@@ -414,7 +422,11 @@ describe('長行（#555）', () => {
       });
     }) as unknown as typeof globalThis.fetch;
     const store = createDeliverableFileStore({ threadId: 't1', baseUrl: '', fetch: doFetch });
-    render(<DeliverablesCard files={[FILE]} preview={store} />);
+    render(
+      <WithRightSidebar sources={{ deliverableFiles: store }}>
+        <DeliverablesCard files={[FILE]} />
+      </WithRightSidebar>,
+    );
     open();
     await vi.waitFor(() => expect(document.querySelector('[data-line="1"]')).not.toBeNull());
     nearBottom();

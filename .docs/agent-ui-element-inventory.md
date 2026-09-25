@@ -21,7 +21,7 @@
 | 現在就能做的 | 純前端：殼層、手機抽屜、主題、toast；wire 已有資料：會話列表、訊息流（human／ai／tool）、核准、提問、狀態、停止、回饋、slash 命令 | §2 的 P0 |
 | wire 還沒有的 | reasoning、連線狀態、todo、goal、plan mode、context 用量、佇列、子代理對話檢視、交付檔案 | §2 的 P1 |
 | ↑ 這一列 2026-09-22 已複查 | 交付檔案那一項已經做完；「子代理血緣」是這一列的筆誤（血緣＝第 15 列，本來就是 P0，P1 的是第 16 列的唯讀檢視）；其餘七項逐項的現況見 §2.0 | §2.0 |
-| 2026-09-25 現況 | 做完 16、做了一部分 5、缺的那塊是刻意不做 3、沒做 13；沒有一件是 web 自己就能做的：沒做的都要 harness 先投影、先開一條路，或是整塊新功能 | §2.0.1 |
+| 2026-09-25 現況 | 做完 18、做了一部分 4、缺的那塊是刻意不做 3、沒做 12（含同一天 #640 做掉的右側欄）；盤點時寫「沒有一件是 web 自己就能做的」錯了一項：右側欄的內容早就有了，只是放在 Sheet。其餘沒做的都要 harness 先投影、先開一條路，或是整塊新功能 | §2.0.1 |
 | **最大的一個設計分歧** | dsh 的核准與提問都是 **composer takeover**（取代輸入框），不是插在對話裡的卡；nexus 現在是卡片列在畫面上（`App.tsx:319–333`） | §2.4 |
 | Libraries.dev 能拿什麼 | **動效 token 整組可以拿**（時長、曲線、位移、縮放、模糊）；**效果套件** `thinking-orbs`、`border-beam` 是 MIT npm 套件、peer 只要 React、有 reduced-motion 與 light/dark 自動偵測，可以直接裝 | §3 |
 | Libraries.dev 不能照搬的 | **只有暗色**（`html[data-theme="dark"]` 寫死）、色票是 hex 不是 shadcn 的 oklch token、標題字 **Saans** 沒附授權、疑為商用字型 | §3.4 |
@@ -91,26 +91,26 @@
 
 | 狀態 | 項 |
 | --- | --- |
-| 做完了（16） | 2 手機抽屜、3 主題、4 連線狀態（#593）、9 歷史分頁（#618）、10 使用者訊息、11 助理訊息、12 推理（#527）、13 工具卡四態、19 交付檔、26 輸入框、27 slash 選單、31 狀態列、32 todo（#575）、34 用量表（#528）、35 讚踩與回饋、36 toast |
-| 做了一部分（5） | 1 App 殼（沒有右側欄）、6 會話列表（缺的要 harness：#631–#633）、14 按工具換呈現（終端、網頁沒有生產者；讀圖沒查）、15 子代理標示（重新整理後歷史只讀 root 那份）、21 核准（拒絕送不出理由） |
+| 做完了（18） | 1 App 殼（#640 補上右側欄）、2 手機抽屜、3 主題、4 連線狀態（#593）、9 歷史分頁（#618）、10 使用者訊息、11 助理訊息、12 推理（#527）、13 工具卡四態、19 交付檔、26 輸入框、27 slash 選單、31 狀態列、32 todo（#575）、34 用量表（#528）、35 讚踩與回饋、36 toast、5 右側欄（#640） |
+| 做了一部分（4） | 6 會話列表（缺的要 harness：#631–#633）、14 按工具換呈現（終端、網頁沒有生產者；讀圖會讓那一輪 400，harness 修在 #642）、15 子代理標示（重新整理後歷史只讀 root 那份）、21 核准（拒絕送不出理由） |
 | 做了、缺的那塊是刻意不做（3） | 7 空白 hero 的建議按鈕（原型那排是假資料）、22 決定紀錄只存在本地（#220）、23 提問的「放棄整組」（❌ 就是停止這一輪，§2.4） |
-| 沒做（13） | 5 右側欄、8 會話標頭、16 子代理檢視、17 逐輪用量、18 壓縮列、20 附件、24 計劃審核、25 權限模式、28 `@` 引用、29 送出佇列、30 模型選擇、33 目標列、37 輪次側軌 |
+| 沒做（12） | 8 會話標頭、16 子代理檢視、17 逐輪用量、18 壓縮列、20 附件、24 計劃審核、25 權限模式、28 `@` 引用、29 送出佇列、30 模型選擇、33 目標列、37 輪次側軌 |
 
 沒做的按誰先動分三類：
 
 - **等 harness 先投影**（日誌有、線上沒有）：18、24、33 已請 dev-harness 排，順序計劃模式 → 壓縮列 → 目標列；29 等伺服器端佇列（先修 #629）；17 要逐次的輸入與輸出；25 是 `sandbox/mode`；37 要整條對話的輪次索引。
 - **要先開一條路**：8 標頭的標題只在開了會話日誌時隨列表送，要每種情況都有得另開一條拿當前標題的路。
-- **整塊新功能**（三層都沒有，先 grilling）：5、16、20、28、30。
+- **整塊新功能**（三層都沒有，先 grilling）：16、20、28、30。5 右側欄原本也歸在這裡，是錯的：dsh 右側欄的兩種主要內容（改動比對 #443、交付預覽 #452）早就做了、放在 Sheet，前端自己就做得了，同一天由 #640 做掉。
 
 ### 2.1 殼層與版面
 
 | # | 元件 | wire | dsh | 市面 | 動效 | 備註 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | App 殼（三欄：會話列表／對話／右側欄） | —（純前端） | `ui-layout`（`AppFrame`、`SIDEBAR_AUTO_COLLAPSE = 1024`） | sc `sidebar`（手機 Sheet） | 卡片縮放 `--resize-dur 300ms` | RWD 主載體 |
+| 1 | App 殼（三欄：會話列表／對話／右側欄） | —（純前端） | `ui-layout`（`AppFrame`、`SIDEBAR_AUTO_COLLAPSE = 1024`） | sc `sidebar`（手機 Sheet） | 卡片縮放 `--resize-dur 300ms` | RWD 主載體；2026-09-25 #640 補上右側欄（1024 以上停靠、以下全螢幕覆蓋），殼層三欄齊了 |
 | 2 | 手機抽屜與頂部列 | —（純前端） | `ui-layout` 的 `narrowExpanded` | sc `sheet`、`drawer` | 下拉 open 250ms／close 150ms、scale 0.97 | 1024 以下 |
 | 3 | 主題切換（light／dark／system） | —（純前端） | `ui-theme`（`--dsw-*` token、`ThemeRuntime`） | shadcn `.dark` | — | 見 §3.4 分歧 |
 | 4 | 連線狀態指示 | P1（`nexus-wire` 的 `client.ts`／`sse.ts` 沒有連線狀態；`WireChannel` 只是頻道名）**——2026-09-22 複查：這句仍然成立，但畫面上已有前端自推的簡版（`use-conversation.ts:187` 的 `connected`／`connectionError`，`StatusLine` 收）** | `ui-primitives/ConnectionIndicator` | — | `thinking-orbs` `connecting` | 2026-09-25 #593（PR #597）：察覺斷線、照 dsh 退避自動重連，接回時整份重建 |
-| 5 | 右側欄（檔案、預覽、終端） | P1 | `ui-sidebar-right`、`ui-sidebar-files`、`ui-sidebar-documentpreview`、`ui-sidebar-terminal` | AIE `file-tree`、`terminal` | 側欄滑入 | 目前 nexus 沒有這一面 |
+| 5 | 右側欄（檔案、預覽、終端） | P1 | `ui-sidebar-right`、`ui-sidebar-files`、`ui-sidebar-documentpreview`、`ui-sidebar-terminal` | AIE `file-tree`、`terminal` | 側欄滑入 | 2026-09-25 #640 做了：一格停靠＋分頁，住著改動比對（#443）與交付預覽（#452），兩者之前放在 Sheet；分格、浮窗、拖放、引導頁不做，檔案樹、終端要 harness 先有列檔等路 |
 
 ### 2.2 會話
 
@@ -130,7 +130,7 @@
 | 11 | 助理訊息（markdown、串流中、被停止） | P0（`AiEntry`，含 `stopped`） | `ui-chat/AssistantMarkdown`、`AssistantNodeView` | AIE `message`（streamdown） | 字元 shimmer（`Solving....` 那種） | |
 | 12 | 推理區塊 | P1（`AiEntry` 沒有 reasoning 欄位，只有 `text`／`streaming`／`attribution`／`error`／`stopped`；`conversation.ts:679` 註解 reasoning 的 delta「這一版不呈現」（2026-09-22 複查：原記 `:496`，行號已漂）） | `ui-chat/ReasoningRow` | AIE `reasoning`、`chain-of-thought` | `thinking-orbs` `composing`（20px） | #527 已做完：推理段落送上線並畫成摺疊區塊 |
 | 13 | 工具呼叫卡（四種狀態） | P0（`ToolEntry.status`） | `ui-tool/ToolCallTree`、`toolviews/` | AIE `tool` | 執行中 `thinking-orbs` `working` | 狀態映射見選型筆記 §3.1 |
-| 14 | 工具專屬呈現（讀檔、搜尋、終端、網頁、diff、JSON） | P0（`ToolEntry.input`／`text`／`meta`） | `ui-primitives/ReadBlock`、`SearchBlock`、`TerminalBlock`、`WebBlock`、`DiffBlock`、`JsonTree` | AIE `code-block`、`terminal`、`schema-display`、`stack-trace` | 展開 `--resize-dur` | dsh 是「按工具名換呈現」的 slot。#601 做了 diff（執行中從參數算）與通用卡的結果文字；2026-09-25 #625 讀結果的 `meta`（harness #619）：讀檔卡（行號＋整段高亮）、搜尋卡（分檔的命中、路徑清單，截斷時「顯示 X／共 N」）、改檔完成後畫實際套用的 diff。終端（產品路徑上沒有 `execute`）、網頁、JSON 樹還沒有；出廠沒有抓網頁的工具（MCP 接進來的工具名不固定，走通用卡），網頁卡目前沒有生產者；`run_javascript` 走通用卡的 `code` 類（參數處高亮那段程式、下面接結果），dsh 的 `run_code` 也是走通用列的 `code` 變體、沒有專屬卡（`tool-call-model.ts:64`、`:222`，`ToolRow.tsx:294`，clone `6b1808f`），兩邊一樣；dsh 的 `JsonTree` 只用在 trajectory 檢視器，不在工具卡；dsh 的讀圖卡（`read_image`）我們有沒有對應物沒查。#602（PR #628）之後讀檔一頁可到 2000 行，meta 超過上限就整格不給、退回通用卡（第一次讀約 4%）；#630 把讀檔 meta 的上限放寬到 100,000 位元組，語料（nexus 587 檔、dsh 5567 檔）上一個都不再掉，跳脫字元多的內容（tab 縮排、大量引號）仍可能掉 |
+| 14 | 工具專屬呈現（讀檔、搜尋、終端、網頁、diff、JSON） | P0（`ToolEntry.input`／`text`／`meta`） | `ui-primitives/ReadBlock`、`SearchBlock`、`TerminalBlock`、`WebBlock`、`DiffBlock`、`JsonTree` | AIE `code-block`、`terminal`、`schema-display`、`stack-trace` | 展開 `--resize-dur` | dsh 是「按工具名換呈現」的 slot。#601 做了 diff（執行中從參數算）與通用卡的結果文字；2026-09-25 #625 讀結果的 `meta`（harness #619）：讀檔卡（行號＋整段高亮）、搜尋卡（分檔的命中、路徑清單，截斷時「顯示 X／共 N」）、改檔完成後畫實際套用的 diff。終端（產品路徑上沒有 `execute`）、網頁、JSON 樹還沒有；出廠沒有抓網頁的工具（MCP 接進來的工具名不固定，走通用卡），網頁卡目前沒有生產者；`run_javascript` 走通用卡的 `code` 類（參數處高亮那段程式、下面接結果），dsh 的 `run_code` 也是走通用列的 `code` 變體、沒有專屬卡（`tool-call-model.ts:64`、`:222`，`ToolRow.tsx:294`，clone `6b1808f`），兩邊一樣；dsh 的 `JsonTree` 只用在 trajectory 檢視器，不在工具卡；讀圖（2026-09-25 查過，dev-harness 用真端點驗）：deepagents 的 `read_file` 讀圖片回一顆 `{type:'image',…}`，`@langchain/openai` 原樣塞進 `role: tool`，NVIDIA 端點回 400（tool 訊息只收文字，換成 `image_url` 塊也是同一個 400，MCP 工具回圖同樣會中），那則訊息又已進了歷史，之後每一輪都失敗（實測：讀到圖的那一輪與下一輪都是 `turn/failed`；沒給 `--workspace` 時模型先 `write_file` 一張 base64 圖再讀，也會讓 thread 之後都失敗；已經壞掉的舊 thread 重新載入會把圖原樣重放，救不回來）；dsh 的一般 `read` 碰到二進位直接拒絕、圖片另走要附件儲存的 `read_image`，所以 harness 照 dsh 在三個地方擋（#642：寫到磁碟的 backend 和沒給 `--workspace` 時用的虛擬 FS 都讓 `read_file` 拒絕二進位檔，回 `Error: cannot read "<path>": binary file`，`isError` 為 true；MCP 回的圖換成一段文字說明），web 走現有的錯誤卡就好，不用另做讀圖卡。#602（PR #628）之後讀檔一頁可到 2000 行，meta 超過上限就整格不給、退回通用卡（第一次讀約 4%）；#630 把讀檔 meta 的上限放寬到 100,000 位元組，語料（nexus 587 檔、dsh 5567 檔）上一個都不再掉，跳脫字元多的內容（tab 縮排、大量引號）仍可能掉 |
 | 15 | 子代理歸屬標示 | P0（`Attribution`）**——2026-09-22 已實作：`tool-card.tsx:52` 的 `AttributionBadge` ＋ transcript 縮排** | `ui-subagent/SubagentHeaderLineage` | AIE `agent` | — | nexus「未歸屬」要照樣顯示 |
 | 16 | 子代理對話檢視（唯讀 composer） | P1 | `ui-subagent/SubagentReadOnlyComposer` | — | — | |
 | 17 | 回合分隔與用量 | P1 | `ui-chat/TurnUsagePanel`、`StatsPills`、`TurnTailNodeView` | AIE `context` | 數字滾動 | #574（PR #600）在頂列畫整條對話累計的 token 與時間，那是總帳；逐輪的用量還沒有，要線上逐次帶輸入與輸出，跟總帳是兩份投影 |

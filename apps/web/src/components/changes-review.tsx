@@ -4,7 +4,10 @@
  *
  * 面向照 dsh `ReviewTab`（`packages/client/ui-deliverables/src/client/ReviewTab.tsx`，`ddefc45`）：選檔器、單欄或左右對照、
  * 自動換行或橫向捲動，最多畫 {@link MAX_RENDERED_LINES} 行；新建、刪掉、兩側相同、逐行比較逾時、被截斷都講一聲。
- * dsh 放在右側欄，我們沒有右側欄，所以放在 shadcn `Sheet`：桌面從右側滑出，手機全螢幕（#443 決議 3）。
+ * 跟 dsh 一樣住在右側欄，一輪一個分頁（[#640](https://github.com/DemianLi/nexus-agent/issues/640)，外殼見
+ * `right-sidebar.tsx`）；#443 當時沒有右側欄，放在 `Sheet` 裡。
+ *
+ * **摘要由分頁自己讀**：重新整理後分頁只帶得回 `(seq, index)`，卡片不一定在畫面上（歷史分頁還沒載入到那一輪）。
  *
  * **dsh 有、這裡沒有的兩顆鈕**：
  * - 用 Host 的預設程式開檔（`changes.open`）：#443 決議 1 不做，Host 是多人共用的遠端主機。
@@ -30,14 +33,7 @@ import {
   CommandList,
 } from '@/components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet';
-import type { ChangesDiffState, ChangesDiffStore } from '@/lib/changes-diff';
+import type { ChangesDiffState, ChangesDiffStore, ChangesStores } from '@/lib/changes-diff';
 import {
   DIFF_SIGN as SIGN,
   DIFF_TONE as TONE,
@@ -54,75 +50,85 @@ type TextDiff = Extract<WorkspaceFileDiff, { kind: 'text' }>;
 
 const NUMBER = 'text-muted-foreground pr-2 text-right select-none';
 
-export function ChangesReview({
-  open,
-  onOpenChange,
+export function ChangesReviewTab({
+  seq,
+  index,
+  onSelect,
+  changes,
+}: {
+  readonly seq: number;
+  /** 要看的檔在摘要 `files` 裡的位置。 */
+  readonly index: number;
+  readonly onSelect: (index: number) => void;
+  readonly changes: ChangesStores;
+}) {
+  const { summary: store } = changes;
+  const summary = useSyncExternalStore(store.subscribe, () => store.read(seq));
+  useEffect(() => store.load(seq), [store, seq]);
+
+  if (summary === undefined || summary === 'loading') return <Status busy>正在讀取改動…</Status>;
+  if (summary === 'missing' || summary.files.length === 0)
+    return <Status>這一輪的改動已經讀不到了</Status>;
+  return (
+    <ReviewBody seq={seq} summary={summary} index={index} onSelect={onSelect} diff={changes.diff} />
+  );
+}
+
+function ReviewBody({
   seq,
   summary,
   index,
   onSelect,
   diff,
 }: {
-  readonly open: boolean;
-  readonly onOpenChange: (open: boolean) => void;
   readonly seq: number;
   readonly summary: WorkspaceChangesSummary;
-  /** 要看的檔在 `summary.files` 裡的位置。 */
   readonly index: number;
   readonly onSelect: (index: number) => void;
   readonly diff: ChangesDiffStore;
 }) {
-  // 跟著這一輪的審查走：換檔、關掉再開都留著（dsh 一個分頁一份）。
+  // 跟著這個分頁走：換檔、切到別的分頁再回來都留著（dsh 一個分頁一份）；關掉分頁就沒了。
   const [split, setSplit] = useState(false);
   const [wrap, setWrap] = useState(false);
   const file = summary.files[index] ?? summary.files[0];
   const at = file === summary.files[index] ? index : 0;
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        side="right"
-        className="w-full gap-0 sm:w-[min(90vw,60rem)] sm:max-w-none"
-        data-testid="changes-review"
-      >
-        <SheetHeader className="pr-12">
-          <SheetTitle>這一輪的改動</SheetTitle>
-          <SheetDescription className="flex flex-wrap items-center gap-x-3">
-            {`${summary.total} 個檔案有改動`}
-            <Counts added={summary.added} deleted={summary.deleted} />
-          </SheetDescription>
-        </SheetHeader>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 pb-3">
-          <FilePicker summary={summary} index={at} onSelect={onSelect} />
-          {file !== undefined && <FileCounts file={file} />}
-          <div className="ml-auto flex gap-1">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-pressed={split}
-              onClick={() => setSplit((value) => !value)}
-            >
-              <Columns2 />
-              左右對照
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-pressed={wrap}
-              onClick={() => setWrap((value) => !value)}
-            >
-              <WrapText />
-              自動換行
-            </Button>
-          </div>
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="changes-review">
+      <p className="text-muted-foreground flex flex-wrap items-center gap-x-3 px-4 pt-3 pb-2 text-sm">
+        {`${summary.total} 個檔案有改動`}
+        <Counts added={summary.added} deleted={summary.deleted} />
+      </p>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 pb-3">
+        <FilePicker summary={summary} index={at} onSelect={onSelect} />
+        {file !== undefined && <FileCounts file={file} />}
+        <div className="ml-auto flex gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-pressed={split}
+            onClick={() => setSplit((value) => !value)}
+          >
+            <Columns2 />
+            左右對照
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-pressed={wrap}
+            onClick={() => setWrap((value) => !value)}
+          >
+            <WrapText />
+            自動換行
+          </Button>
         </div>
-        {open && file !== undefined && (
-          <FileBody seq={seq} index={at} diff={diff} split={split} wrap={wrap} />
-        )}
-      </SheetContent>
-    </Sheet>
+      </div>
+      {file !== undefined && (
+        <FileBody seq={seq} index={at} diff={diff} split={split} wrap={wrap} />
+      )}
+    </div>
   );
 }
 

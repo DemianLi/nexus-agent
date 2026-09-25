@@ -3,7 +3,8 @@
  * [#543](https://github.com/DemianLi/nexus-agent/issues/543) 改成接續瀏覽）：拿卡片上那組 `(seq, index)`
  * 座標去讀檔，一段一段往下接。
  *
- * 外殼跟隔壁的改動審查同一個（`Sheet`：桌面從右側滑出、手機全螢幕，#443 決議 3）。
+ * 住在右側欄，一個檔一個分頁（[#640](https://github.com/DemianLi/nexus-agent/issues/640)，外殼見 `right-sidebar.tsx`）；
+ * #452 當時沒有右側欄，放在 `Sheet` 裡。
  *
  * ## 接續，不是換頁
  *
@@ -72,13 +73,6 @@ import type { CSSProperties, ReactNode, RefObject } from 'react';
 
 import { DownloadAction } from '@/components/deliverable-download-button';
 import { Button } from '@/components/ui/button';
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet';
 import type { DeliverableDownloader } from '@/lib/deliverable-download';
 import type {
   DeliverableFileEntry,
@@ -90,7 +84,6 @@ import type {
 import { isLongLine, isPage } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import { LONG_LINE_CHARS, columnsOf, layoutOf } from '@/lib/line-segments';
-import { basename } from '@/lib/present-view';
 import { cn } from '@/lib/utils';
 
 /**
@@ -523,64 +516,47 @@ function PreviewBody({
   );
 }
 
-export function DeliverablePreview({
+export function DeliverablePreviewTab({
   file,
   store,
   downloader,
-  open,
-  onOpenChange,
 }: {
-  file: LocatedFile | undefined;
+  file: LocatedFile;
   store: DeliverableFileStore;
   /** 沒給就不畫下載鈕——讀不到的那幾格仍然講得出發生了什麼事。 */
-  downloader?: DeliverableDownloader;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+  downloader?: DeliverableDownloader | undefined;
 }) {
   // **預設換行**，同 dsh 文字預覽的 `wrap`（由讀的人關掉）。隔壁改動審查預設不換行 —— 那是比較兩側，這裡是讀。
+  // 跟著這個分頁走：切到別的分頁再回來還在，關掉分頁就沒了。
   const [wrap, setWrap] = useState(true);
   const scroller = useRef<HTMLDivElement>(null);
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-2xl">
-        <SheetHeader className="pr-12">
-          <SheetTitle className="truncate">
-            {file === undefined ? '預覽' : basename(file.path)}
-          </SheetTitle>
-          <SheetDescription className="font-mono text-xs break-all">
-            {file?.path ?? ''}
-          </SheetDescription>
-        </SheetHeader>
-        <div className="flex items-center justify-end border-b px-4 pb-3">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            aria-pressed={wrap}
-            onClick={() => setWrap((value) => !value)}
-          >
-            <WrapText />
-            自動換行
-          </Button>
-        </div>
-        {/* 換一個檔就整個重掛：捲動位置回到頂端。`(seq, index)` 是座標，不是列表位置。 */}
-        <div
-          key={file === undefined ? '' : `${file.seq}:${file.index}`}
-          ref={scroller}
-          className="min-h-0 flex-1 overflow-auto"
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="deliverable-preview">
+      <div className="flex items-center gap-3 border-b px-4 py-2">
+        <p className="text-muted-foreground min-w-0 flex-1 font-mono text-xs break-all">
+          {file.path}
+        </p>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-pressed={wrap}
+          onClick={() => setWrap((value) => !value)}
         >
-          {file !== undefined && (
-            <PreviewBody
-              file={file}
-              store={store}
-              downloader={downloader}
-              scroller={scroller}
-              wrap={wrap}
-            />
-          )}
-        </div>
-      </SheetContent>
-    </Sheet>
+          <WrapText />
+          自動換行
+        </Button>
+      </div>
+      <div ref={scroller} className="min-h-0 flex-1 overflow-auto">
+        <PreviewBody
+          file={file}
+          store={store}
+          downloader={downloader}
+          scroller={scroller}
+          wrap={wrap}
+        />
+      </div>
+    </div>
   );
 }

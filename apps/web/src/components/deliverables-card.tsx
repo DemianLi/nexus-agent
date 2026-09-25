@@ -10,9 +10,9 @@
  * 連進來，在 Host 上開啟使用者看不到，而且等於讓瀏覽器驅動伺服器開程式。
  *
  * **每個檔案帶著讀檔路由的座標**（{@link LocatedFile}，[#452](https://github.com/DemianLi/nexus-agent/issues/452)）：
- * 第一刀接線，第二刀拿那組 `(seq, index)` 開預覽（{@link DeliverablePreview}），第三刀是下載
- * （{@link DownloadIconButton}）。三顆動作鈕**各自獨立可選**：`preview` 與 `download` 哪個沒給就不畫哪顆，
- * 複製路徑一直都在——它不需要讀檔。
+ * 第一刀接線，第二刀拿那組 `(seq, index)` 開預覽（`deliverable-preview.tsx`；#640 起在右側欄開成一個分頁），
+ * 第三刀是下載（{@link DownloadIconButton}）。三顆動作鈕**各自獨立可選**：沒有右側欄（或它沒有讀檔的 store）
+ * 就不畫預覽鈕，`download` 沒給就不畫下載鈕，複製路徑一直都在——它不需要讀檔。
  */
 
 import { Check, ChevronDown, ChevronUp, Copy, Eye, FileText } from 'lucide-react';
@@ -20,11 +20,10 @@ import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { DownloadIconButton } from '@/components/deliverable-download-button';
-import { DeliverablePreview } from '@/components/deliverable-preview';
+import { useRightSidebar } from '@/components/right-sidebar';
 import { Button } from '@/components/ui/button';
 import { copyText } from '@/lib/clipboard';
 import type { DeliverableDownloader } from '@/lib/deliverable-download';
-import type { DeliverableFileStore } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import { basename } from '@/lib/present-view';
 
@@ -77,17 +76,14 @@ function CopyPathButton({ path }: { path: string }) {
 
 export function DeliverablesCard({
   files,
-  preview,
   download,
 }: {
   files: readonly LocatedFile[];
-  /** 沒給就不畫預覽鈕——卡片其餘的部分（含複製路徑）不需要它。 */
-  preview?: DeliverableFileStore;
-  /** 沒給就不畫下載鈕，預覽面裡讀不到的那幾格也不畫。 */
-  download?: DeliverableDownloader;
+  /** 沒給就不畫下載鈕。 */
+  download?: DeliverableDownloader | undefined;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [showing, setShowing] = useState<LocatedFile | undefined>(undefined);
+  const preview = useRightSidebar()?.openDeliverable;
   if (files.length === 0) return null;
   const collapsible = files.length > COLLAPSED_COUNT;
   const shown = collapsible && !expanded ? files.slice(0, COLLAPSED_COUNT) : files;
@@ -95,10 +91,11 @@ export function DeliverablesCard({
   return (
     <section
       aria-label={`這一輪交付的檔案，共 ${files.length} 個`}
-      className="flex flex-col gap-2"
+      className="@container flex flex-col gap-2"
       data-testid="deliverables"
     >
-      <ul className="grid gap-2 sm:grid-cols-2">
+      {/* 兩欄看的是會話區多寬，不是視窗多寬：右側欄打開時寬視窗裡的會話區可能只剩 480（#640）。 */}
+      <ul className="grid gap-2 @xl:grid-cols-2">
         {shown.map((file) => (
           <li
             // **用座標當 key，不用列表位置**：同一輪可能宣告兩次同一個路徑，而 `(seq, index)` 本來就唯一
@@ -123,7 +120,7 @@ export function DeliverablesCard({
                 className="size-8 shrink-0"
                 title={`預覽：${file.path}`}
                 aria-label={`預覽：${file.path}`}
-                onClick={() => setShowing(file)}
+                onClick={() => preview(file)}
               >
                 <Eye />
               </Button>
@@ -145,17 +142,6 @@ export function DeliverablesCard({
           {expanded ? '收起' : `顯示全部 ${files.length} 個`}
           {expanded ? <ChevronUp /> : <ChevronDown />}
         </Button>
-      )}
-      {preview !== undefined && (
-        <DeliverablePreview
-          file={showing}
-          store={preview}
-          downloader={download}
-          open={showing !== undefined}
-          onOpenChange={(open) => {
-            if (!open) setShowing(undefined);
-          }}
-        />
       )}
     </section>
   );
