@@ -369,6 +369,8 @@ export type {
   SessionLogListener,
   SessionLogOptions,
   SessionLogView,
+  SessionTitleLlmMessage,
+  SessionTitleModelIdentity,
   SessionTitleSource,
   TurnEndReason,
 } from './session-log.js';

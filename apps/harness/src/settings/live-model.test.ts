@@ -30,6 +30,7 @@ import {
   DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
   DEFAULT_LIVE_MAX_RETRIES,
   DEFAULT_LIVE_MODEL_ID,
+  DEFAULT_LIVE_THINKING_OFF_BODY,
   DEFAULT_LIVE_TIMEOUT_MS,
   LIVE_API_KEY_ENV,
   createLiveModel,
@@ -49,23 +50,40 @@ import { startupSetting } from './startup.js';
 /** 一把明顯是假的 key。每一條產品路徑測試都斷言請求帶的是它。 */
 const FAKE_KEY = 'nvapi-fake-for-loopback-only';
 
-/** 覆寫用的那一組，五格都跟預設不同。`baseUrl` 在測試裡換成 loopback 的位址。 */
+/** 覆寫用的那一組，六格都跟預設不同。`baseUrl` 在測試裡換成 loopback 的位址。 */
 const OVERRIDE: Omit<LiveModelConfig, 'baseUrl'> = {
   modelId: 'nexus-test/override-model',
   maxOutputTokens: 1234,
   timeoutMs: 4321,
   maxRetries: 2,
+  thinkingOffBody: { chat_template_kwargs: { enable_thinking: false, nexus_override: true } },
 };
 
+/** 主模型身上讀得回的那幾格：五個連線值。`thinkingOffBody` 只到標題那顆，由請求本身驗。 */
+function connectionOf(config: LiveModelConfig): Omit<LiveModelConfig, 'thinkingOffBody'> {
+  const { thinkingOffBody: _unused, ...connection } = config;
+  return connection;
+}
+
 describe('live-model 的 schema', () => {
-  it('空的 config 解出來就是 live-model.ts 那五個預設值', () => {
+  it('空的 config 解出來就是 live-model.ts 那六個預設值', () => {
     expect(liveModelConfigSchema.parse({})).toEqual({
       baseUrl: DEFAULT_LIVE_BASE_URL,
       modelId: DEFAULT_LIVE_MODEL_ID,
       maxOutputTokens: DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
       timeoutMs: DEFAULT_LIVE_TIMEOUT_MS,
       maxRetries: DEFAULT_LIVE_MAX_RETRIES,
+      thinkingOffBody: DEFAULT_LIVE_THINKING_OFF_BODY,
     });
+  });
+
+  it('關推理那一格的預設值是 #650 量過的那一種寫法', () => {
+    // 字面值，不是讀常數：常數改掉的話兩邊一起動，這一條就量不到它。
+    expect(liveModelConfigSchema.parse({}).thinkingOffBody).toEqual({
+      chat_template_kwargs: { enable_thinking: false },
+    });
+    // 空物件是「這顆模型不必關」：合法。
+    expect(liveModelConfigSchema.parse({ thinkingOffBody: {} }).thinkingOffBody).toEqual({});
   });
 
   it.each([
@@ -132,7 +150,7 @@ describe('createLiveModel 的接線', () => {
     vi.unstubAllEnvs();
   });
 
-  it('五格都照傳進來的那一份建，不是照常數', () => {
+  it('五個連線值都照傳進來的那一份建，不是照常數', () => {
     const config: LiveModelConfig = { ...OVERRIDE, baseUrl: 'http://127.0.0.1:9/v1' };
     const model = createLiveModel(config);
     // `maxRetries` 不是公開屬性，它被拿去建 `AsyncCaller`——問那個 caller，理由同
@@ -145,7 +163,19 @@ describe('createLiveModel 的接線', () => {
       maxOutputTokens: model.maxTokens,
       timeoutMs: model.timeout,
       maxRetries: caller.maxRetries,
-    }).toEqual(config);
+    }).toEqual(connectionOf(config));
+  });
+
+  it('關推理那一格只給標題用途的那一顆（#650）', () => {
+    const config: LiveModelConfig = { ...OVERRIDE, baseUrl: 'http://127.0.0.1:9/v1' };
+
+    // 沒給的時候 `ChatOpenAI` 自己補成空物件。
+    expect(createLiveModel(config).modelKwargs).toEqual({});
+    expect(createLiveModel(config, 'session-title').modelKwargs).toEqual(OVERRIDE.thinkingOffBody);
+    // 空物件是「這顆模型不必關」：標題那顆也不帶任何東西。
+    expect(
+      createLiveModel({ ...config, thinkingOffBody: {} }, 'session-title').modelKwargs,
+    ).toEqual({});
   });
 });
 
@@ -155,6 +185,10 @@ interface SeenRequest {
   readonly authorization: string | undefined;
   readonly model: unknown;
   readonly maxTokens: unknown;
+  /** 關推理那一格；主請求不該有。 */
+  readonly chatTemplateKwargs: unknown;
+  /** 標題請求（#650）：系統提示是標題那一段。它什麼時候打進來看時序，所以另外判。 */
+  readonly title: boolean;
 }
 
 /**
@@ -179,12 +213,20 @@ async function startFakeEndpoint(): Promise<{
         model?: unknown;
         max_tokens?: unknown;
         stream?: unknown;
+        chat_template_kwargs?: unknown;
+        messages?: readonly { role?: unknown; content?: unknown }[];
       };
+      const system = body.messages?.[0];
       seen.push({
         path: request.url,
         authorization: request.headers.authorization,
         model: body.model,
         maxTokens: body.max_tokens,
+        chatTemplateKwargs: body.chat_template_kwargs,
+        title:
+          system?.role === 'system' &&
+          typeof system.content === 'string' &&
+          system.content.startsWith('Create a concise title'),
       });
       next += 1;
       const id = `chatcmpl-fake-${String(next)}`;
@@ -239,6 +281,7 @@ async function writeOverridePatch(baseUrl: string): Promise<string> {
       `    maxOutputTokens: ${String(OVERRIDE.maxOutputTokens)}`,
       `    timeoutMs: ${String(OVERRIDE.timeoutMs)}`,
       `    maxRetries: ${String(OVERRIDE.maxRetries)}`,
+      `    thinkingOffBody: ${JSON.stringify(OVERRIDE.thinkingOffBody)}`,
       '',
     ].join('\n'),
     'utf8',
@@ -246,16 +289,34 @@ async function writeOverridePatch(baseUrl: string): Promise<string> {
   return path;
 }
 
-/** 每一條打進來的請求都帶著覆寫值與那把假 key。 */
+/**
+ * 每一條打進來的請求都帶著覆寫值與那把假 key。
+ *
+ * **標題請求（#650）另外判**：它的輸出上限是標題那一列的，而且帶關推理那一格。它打不打得進來看時序（主回覆先
+ * 收完的話它會在收尾時被中止），所以這裡只驗「進來了就對」；一定進來的那一條在 `session-title-llm.test.ts`。
+ */
 function expectOverrideOnEveryRequest(seen: readonly SeenRequest[]): void {
-  // 前提：真的有請求打進來。少了這一行，零個請求會讓下面的迴圈空轉成綠。
-  expect(seen.length).toBeGreaterThan(0);
-  for (const request of seen) {
+  const main = seen.filter((request) => !request.title);
+  // 前提：真的有主請求打進來。少了這一行，零個請求會讓下面的迴圈空轉成綠。
+  expect(main.length).toBeGreaterThan(0);
+  for (const request of main) {
     expect(request).toEqual({
       path: '/v1/chat/completions',
       authorization: `Bearer ${FAKE_KEY}`,
       model: OVERRIDE.modelId,
       maxTokens: OVERRIDE.maxOutputTokens,
+      chatTemplateKwargs: undefined,
+      title: false,
+    });
+  }
+  for (const request of seen.filter((each) => each.title)) {
+    expect(request).toEqual({
+      path: '/v1/chat/completions',
+      authorization: `Bearer ${FAKE_KEY}`,
+      model: OVERRIDE.modelId,
+      maxTokens: 64,
+      chatTemplateKwargs: OVERRIDE.thinkingOffBody.chat_template_kwargs,
+      title: true,
     });
   }
 }
@@ -337,10 +398,12 @@ describe('createCliAgent 拿到的是哪一份', () => {
     vi.unstubAllEnvs();
   });
 
-  /** 從組好的 agent 身上讀回那五格。 */
-  function readBack(model: unknown): LiveModelConfig {
+  /** 從組好的 agent 身上讀回那五個連線值。主模型不帶關推理那一格，見 {@link connectionOf}。 */
+  function readBack(model: unknown): Omit<LiveModelConfig, 'thinkingOffBody'> {
     const live = model as ChatOpenAI;
     const { caller } = model as unknown as { caller: { maxRetries: number } };
+    // 沒給的時候 `ChatOpenAI` 自己補成空物件。
+    expect(live.modelKwargs).toEqual({});
     return {
       baseUrl: live.clientConfig.baseURL ?? '',
       modelId: live.model,
@@ -358,7 +421,7 @@ describe('createCliAgent 拿到的是哪一份', () => {
     });
     const built = await createCliAgent({ live: true }, plugins);
     try {
-      expect(readBack(built.model)).toEqual({ ...OVERRIDE, baseUrl });
+      expect(readBack(built.model)).toEqual(connectionOf({ ...OVERRIDE, baseUrl }));
       // 前提：清單上那一列真的是覆寫值——不然上面那句可能只是「跟某個東西相等」。
       expect(startupSetting(plugins, liveModelPlugin)).toEqual({ ...OVERRIDE, baseUrl });
     } finally {
@@ -373,7 +436,7 @@ describe('createCliAgent 拿到的是哪一份', () => {
     try {
       // 清單上是出貨值，所以讀回覆寫值只可能是傳進來的那一份。
       expect(startupSetting(plugins, liveModelPlugin).modelId).toBe(DEFAULT_LIVE_MODEL_ID);
-      expect(readBack(built.model)).toEqual(passed);
+      expect(readBack(built.model)).toEqual(connectionOf(passed));
     } finally {
       await built.dispose();
     }

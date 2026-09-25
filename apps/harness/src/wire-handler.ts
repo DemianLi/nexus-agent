@@ -96,6 +96,7 @@ import {
   type DeliverableFilesConfig,
 } from './settings/deliverable-files.js';
 import type { ThreadTitleLimits } from './session-title.js';
+import type { AttachSessionTitleLlm } from './session-title-llm.js';
 import { threadTitleConfigSchema } from './settings/thread-title.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
@@ -217,6 +218,13 @@ export interface ThreadAgent {
   attachPersistence?(
     sessions: SessionRegistry,
   ): { flush(): Promise<void>; dispose(): Promise<void> } | undefined;
+  /**
+   * 把 LLM 標題接到這條 thread 的 root 日誌上（[#650](https://github.com/DemianLi/nexus-agent/issues/650)），選配。
+   * 沒帶 `--live`、或清單把 `thread-title-llm` 那一列關掉，`createCliAgent` 就不給，那時只有退回標題。
+   *
+   * 它跟其他四條一樣住在組裝點：模型與設定是 `createCliAgent` 那一次組裝的，日誌是 pump 建的。
+   */
+  readonly attachTitle?: AttachSessionTitleLlm;
   /**
    * 組出續行排程器要問域的四件事。**沒開 `--goal-driver` 就整個不給**，那時這條 thread
    * 一輪都不會自己排。
@@ -692,6 +700,10 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         // **沒開落盤時 `flush` 就整個缺席**，而不是一個假裝成功的 no-op：`late.flush?.()`
         // 的缺席語意就是「這條路上沒有耐久檢查點」，同 `attachPersistence` 自己的規矩。
         late.flush = persistence === undefined ? undefined : () => persistence.flush();
+        // **LLM 標題接在落盤之後**，同 `cli.ts`：它寫的兩顆照常落地。只接 root，子代理的日誌不排。
+        const detachTitle = threadAgent.attachTitle?.(pump.sessionLog, (message) =>
+          options.warn?.(`[標題] thread ${threadId} ${message}`),
+        );
         const state: ThreadState = {
           pump,
           commands: threadAgent.commands,
@@ -710,6 +722,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           resumedWorkspaceRoot: threadAgent.resumedWorkspaceRoot,
           slashInFlight: false,
           dispose: async () => {
+            // **標題最先拆**：它在任何一輪之外寫日誌，拆掉會中止還在跑的那一次，之後回來的寫不進去
+            // （同 dsh 的會話拆卸）。排在參與者前面，理由同下一條：寫得動日誌的先停手。
+            await detachTitle?.();
             // **參與者先收，比不變量還早**：它是唯一寫得動日誌的那一個，先讓它停手，
             // 檢查才還在看著它最後那幾筆。反過來收的話，關機途中寫進去的東西沒人檢。
             detachSession?.();

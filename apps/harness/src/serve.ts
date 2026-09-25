@@ -446,6 +446,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         workspaceChanges,
         goals,
         workspaceRoot,
+        attachTitle,
       } = built;
       // **遙測披露印在這裡而不是啟動時，因為啟動的那一刻答案不存在**：`createAgent` 是
       // lazy 的（`wire-handler.ts` 的 `pumpFor` 第一次收到請求才呼叫），plugin 沒跑過
@@ -486,6 +487,8 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         attachTelemetry,
         attachInvariants,
         attachSession,
+        // LLM 標題（#650）：沒帶 `--live` 或那一列關掉就缺席，只剩退回標題。
+        ...(attachTitle !== undefined && { attachTitle }),
         // **落盤的答案不在 `createCliAgent` 的回傳值裡**，它來自呼叫方式而不是 plugin
         // 清單，所以在這個閉包裡接（見 `wire-handler.ts` 的 `attachPersistence`）。
         // **旗標決定給不給，不是給一個關著的**：`goalDriver` 缺席就是「這條 thread 不

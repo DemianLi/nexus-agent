@@ -14,7 +14,7 @@ import type { LiveModelConfig } from './settings/live-model.js';
  *
  * ## 這個檔裡的 `DEFAULT_LIVE_*` 都只是**預設值**
  *
- * 五個連線值由清單上 `live-model` 那一列講（[#545](https://github.com/DemianLi/nexus-agent/issues/545)，
+ * 六個連線值由清單上 `live-model` 那一列講（[#545](https://github.com/DemianLi/nexus-agent/issues/545)，
  * `settings/live-model.ts`），這裡的常數是那一列的 schema 預設。**測量與理由留在各常數的檔頭**——
  * 部署要改其中一個之前，該讀的就是那一段。
  */
@@ -169,6 +169,27 @@ export function isRetryableRateLimit(error: unknown): boolean {
  * 可以設定之後（#545），守住這個前提的是 `live-model` 那一列 schema 的下限 1。
  */
 export const DEFAULT_LIVE_MAX_OUTPUT_TOKENS = 16_384;
+
+/**
+ * 要關掉推理時加進請求 body 的東西（[#650](https://github.com/DemianLi/nexus-agent/issues/650)），只有 `session-title` 這個
+ * 用途會帶。寫法照 {@link DEFAULT_LIVE_MODEL_ID} 在 build.nvidia.com 的 model card（「Reasoning OFF」那段）。
+ *
+ * ## 這是量出來的
+ *
+ * 2026-09-26，預設模型、NVIDIA 閘道、非串流，送 dsh 逐字的標題請求（`maxOutputTokens: 64`），三句輸入各兩次：
+ *
+ * - **不帶**：0/6。全部 `finish_reason: length`、64 個 token 用滿，推理 157～293 字，而且整段也出現在正文裡。
+ * - **帶這一份**：6/6。全部 `stop`、推理 0、輸出 2～23 個 token。
+ * - model card 另一個寫法 `low_effort: true`：3/5，有兩次照樣吃光。
+ *
+ * ## 它跟 `modelId` 是綁著的
+ *
+ * 關推理的寫法是各家模型自己的（chat template 的參數），不是 OpenAI 協定的一部分。**換模型時要一起換**：新模型
+ * 不認得這一格的話，可能回 400，也可能照樣推理；兩種都讓標題一律失敗，而退回標題會把失敗蓋住。
+ */
+export const DEFAULT_LIVE_THINKING_OFF_BODY: Readonly<Record<string, unknown>> = Object.freeze({
+  chat_template_kwargs: Object.freeze({ enable_thinking: false }),
+});
 
 /** `(parameter=max_tokens, value=-46771)`／`got -46771` 裡那個數字。 */
 const DERIVED_VALUE = /\(parameter=max_tokens,\s*value=(-?\d+)\)|got\s+(-?\d+)/;
@@ -802,18 +823,30 @@ export function withEmptyAssistantContent(baseFetch: typeof fetch = fetch): type
 }
 
 /**
+ * 一次模型呼叫的用途。照 dsh `GenerateOptions.purpose`（`packages/llm/llm/src/types.ts:547-552`，`477b4f4`）：
+ * 「adapters may map the purpose to … purpose-specific generation policy」，一般的對話請求不帶。
+ *
+ * - `session-title`：標題（#650）。帶上 `thinkingOffBody`，同 dsh 的 DeepSeek adapter 對這個用途關掉思考
+ *   （`packages/llm/llm-deepseek/src/serialize.ts:146`）。
+ *
+ * dsh 另有 `compaction`，我們的摘要走另一條路，沒有這一格的消費者。
+ */
+export type LiveModelPurpose = 'session-title';
+
+/**
  * 真實供應商的 model。
  *
  * key **只從環境變數讀**，缺少時直接失敗，沒有預設值也不 fallback
  * （[docs/standards.md](../../../docs/standards.md) 的秘密處理規則）。
  *
- * @param config - 五個連線值（`settings/live-model.ts`）。**必填，沒有預設參數**（#545）：
+ * @param config - 六個連線值（`settings/live-model.ts`）。**必填，沒有預設參數**（#545）：
  *   一個預設參數會讓「呼叫端忘了傳」跟「設定就是這個」長得一模一樣。產品路徑（CLI、serve）
  *   傳起動期從清單解出來的那一份；eval 與 spike 手上沒有清單，在自己的入口用 schema 預設，
  *   eval 只換 `modelId`（見 [`eval/tiers.ts`](./eval/tiers.ts)）——**除了模型 id，取樣設定、
  *   逾時、金鑰來源完全相同**，否則比的不是模型是設定。
+ * @param purpose - 這一顆拿來做什麼，見 {@link LiveModelPurpose}。一般的對話請求不帶。
  */
-export function createLiveModel(config: LiveModelConfig): ChatOpenAI {
+export function createLiveModel(config: LiveModelConfig, purpose?: LiveModelPurpose): ChatOpenAI {
   const apiKey = process.env[LIVE_API_KEY_ENV];
   if (!apiKey) {
     throw new Error(
@@ -842,6 +875,12 @@ export function createLiveModel(config: LiveModelConfig): ChatOpenAI {
     timeout: config.timeoutMs,
     maxRetries: config.maxRetries,
     onFailedAttempt: classifyFailedAttempt,
+    // 用途專屬的請求內容，見 {@link LiveModelPurpose}。**要在建構時給**：建好之後才設 `modelKwargs` 不會進請求
+    // （#650 實測，前兩輪的參數就是這樣沒送出去的）。
+    ...(purpose === 'session-title' &&
+      Object.keys(config.thinkingOffBody).length > 0 && {
+        modelKwargs: structuredClone(config.thinkingOffBody),
+      }),
   });
 }
 

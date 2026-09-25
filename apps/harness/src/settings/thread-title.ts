@@ -51,13 +51,27 @@ export const DEFAULT_THREAD_TITLE_MAX_WORDS = 5;
 /** 標題最多幾個 UTF-8 位元組。照 dsh 的 `fallbackMaxBytes`；40 個位元組是 13 個中文字。 */
 export const DEFAULT_THREAD_TITLE_MAX_BYTES = 40;
 
-/** 兩個上限。`strictObject`：多寫一個欄位是打錯字，不是擴充點。 */
-export const threadTitleConfigSchema = z.strictObject({
-  /** 見 {@link DEFAULT_THREAD_TITLE_MAX_WORDS}。 */
-  maxWords: z.number().int().positive().default(DEFAULT_THREAD_TITLE_MAX_WORDS),
-  /** 見 {@link DEFAULT_THREAD_TITLE_MAX_BYTES}。 */
-  maxBytes: z.number().int().positive().default(DEFAULT_THREAD_TITLE_MAX_BYTES),
-});
+/**
+ * 任何來源的標題最多幾個 UTF-8 位元組（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。照 dsh `session-title` 的
+ * `maxTitleBytes`：模型產生的標題照它正規化；退回標題的 {@link DEFAULT_THREAD_TITLE_MAX_BYTES} 不得超過它。
+ */
+export const DEFAULT_THREAD_TITLE_MAX_TITLE_BYTES = 80;
+
+/** 三個上限。`strictObject`：多寫一個欄位是打錯字，不是擴充點。 */
+export const threadTitleConfigSchema = z
+  .strictObject({
+    /** 見 {@link DEFAULT_THREAD_TITLE_MAX_WORDS}。 */
+    maxWords: z.number().int().positive().default(DEFAULT_THREAD_TITLE_MAX_WORDS),
+    /** 見 {@link DEFAULT_THREAD_TITLE_MAX_BYTES}。 */
+    maxBytes: z.number().int().positive().default(DEFAULT_THREAD_TITLE_MAX_BYTES),
+    /** 見 {@link DEFAULT_THREAD_TITLE_MAX_TITLE_BYTES}。 */
+    maxTitleBytes: z.number().int().positive().default(DEFAULT_THREAD_TITLE_MAX_TITLE_BYTES),
+  })
+  // 照 dsh：`fallbackMaxBytes` 不得超過 `maxTitleBytes`。
+  .refine((config) => config.maxBytes <= config.maxTitleBytes, {
+    message: 'maxBytes 不能大於 maxTitleBytes',
+    path: ['maxBytes'],
+  });
 
 /** 驗過的設定。 */
 export type ThreadTitleConfig = z.infer<typeof threadTitleConfigSchema>;

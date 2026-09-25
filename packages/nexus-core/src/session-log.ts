@@ -145,6 +145,10 @@ import type { ToolErrorInfo } from './tool-events.js';
  * `session/title` 兩個寫者各走一條舊路：web 的 pump 與 CLI 的 `runTurn`，都在自己寫下 `turn/start {kind:'message'}`
  * 的那一段裡接著寫（`apps/harness/src/session-title.ts`），只寫 root 那一份。**它不進模型**：推模型歷史的一側
  * 不讀它，同 dsh 的「log-only」。見 [#647](https://github.com/DemianLi/nexus-agent/issues/647)。
+ *
+ * `session/title` 另有第三個寫者、`session/title-llm-request` 只有它一個：LLM 標題（[#650](https://github.com/DemianLi/nexus-agent/issues/650)，
+ * `apps/harness/src/session-title-llm.ts`）。它是 root 日誌的訂閱者，在背景跑，**寫在一輪之外**——主回覆不等它。
+ * 兩顆都不進模型。
  */
 export type SessionEventType =
   | 'turn/start'
@@ -173,6 +177,7 @@ export type SessionEventType =
   | 'workspace/changes'
   | 'inbox/spliced'
   | 'session/title'
+  | 'session/title-llm-request'
   | 'session/end-seed';
 
 /**
@@ -193,8 +198,35 @@ export type TurnEndReason =
   | { readonly kind: 'aborted'; readonly cause: { readonly kind: 'user' } }
   | { readonly kind: 'max-tokens' };
 
-/** 一個標題是誰給的。見 `SessionEventMap['session/title']`。 */
-export type SessionTitleSource = { readonly kind: 'fallback' };
+/** 產生標題的那一次模型呼叫走的路由。照 dsh 的 `SessionTitleModelIdentity`。 */
+export interface SessionTitleModelIdentity {
+  /** 端點。dsh 是註冊過的 provider 名；我們只有一條 OpenAI 相容的連線，它的身分就是端點的根。 */
+  readonly provider: string;
+  /** 模型 id。 */
+  readonly model: string;
+}
+
+/**
+ * 一個標題是誰給的。見 `SessionEventMap['session/title']`。
+ *
+ * - `fallback`：第一則合格的人話照規則截出來的（#647）。
+ * - `provider`：模型依第一則合格的人話產生的（#650）。`provider` 是產生器的身分，`model` 是那一次走的路由。
+ *
+ * dsh 另有 `user`（改名，會釘住），歸 #633，有了生產者再加。
+ */
+export type SessionTitleSource =
+  | { readonly kind: 'fallback' }
+  | {
+      readonly kind: 'provider';
+      readonly provider: string;
+      readonly model?: SessionTitleModelIdentity;
+    };
+
+/** 送給標題模型的一則訊息。只有文字，所以只存字串。 */
+export interface SessionTitleLlmMessage {
+  readonly role: 'user';
+  readonly content: string;
+}
 
 /** 每一種事件帶什麼。 */
 export interface SessionEventMap {
@@ -685,13 +717,28 @@ export interface SessionEventMap {
    *
    * - `messageSeqs` 是推出這個標題用到的那幾則人話。dsh 指的是 `user/message`，我們對到的是
    *   `turn/start {kind:'message'}`——人打的字在我們的日誌上只在那裡。
-   * - `source` 這一版只有 `fallback`：第一則合格的人話照規則截出來的。dsh 另有 `provider`（LLM 取的）與
-   *   `user`（改名，會釘住），有了生產者再加成員，同 {@link TurnEndReason}。
+   * - `source` 見 {@link SessionTitleSource}。dsh 另有 `user`（改名，會釘住），有了生產者再加成員，同
+   *   {@link TurnEndReason}。
    */
   'session/title': {
     readonly title: string;
     readonly messageSeqs: readonly number[];
     readonly source: SessionTitleSource;
+  };
+  /**
+   * 一次標題模型呼叫**送出之前**記下它送了什麼（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。
+   *
+   * 照 dsh 的 `session/title-llm-request`（`packages/session/session-title-llm/src/index.ts`，`477b4f4`）：系統提示、
+   * 訊息、輸出上限都是**真的送出去的那一份**，路由是那一次解析出來的。模型後來失敗了，這一顆照樣留著。
+   * `messageSeqs` 同 `session/title`，指到 `turn/start {kind:'message'}`。
+   */
+  'session/title-llm-request': {
+    readonly titleProvider: string;
+    readonly messageSeqs: readonly number[];
+    readonly route: SessionTitleModelIdentity;
+    readonly system: string;
+    readonly messages: readonly SessionTitleLlmMessage[];
+    readonly maxTokens: number;
   };
   /**
    * 一段 seed 的結尾——這一顆之前的事件是上一個行程寫的，這個行程一顆都沒寫
