@@ -254,9 +254,14 @@ describe('遙測接線：web 那條路', () => {
     expect(ledgerOf(sink).map((record) => record.attributes['session.id'])).toEqual([
       'web-telemetry',
       'web-telemetry',
+      'web-telemetry',
+      'web-telemetry',
     ]);
+    // 人送出的話先進送出佇列（#637）：一輪前面送進來一顆、`turn/start` 之後領走一顆。
     expect(ledgerOf(sink).map((record) => record.attributes['event.type'])).toEqual([
+      'inbox/spliced',
       'turn/start',
+      'inbox/spliced',
       'turn/end',
     ]);
     expect(sink.shutdowns.count).toBe(1);
@@ -425,7 +430,9 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
     await handler.close();
 
     expect(ledgerOf(sink).map((record) => record.attributes['event.type'])).toEqual([
+      'inbox/spliced',
       'turn/start',
+      'inbox/spliced',
       'turn/end',
       'feedback/record',
     ]);

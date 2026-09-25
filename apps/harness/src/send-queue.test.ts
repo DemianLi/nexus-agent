@@ -114,6 +114,11 @@ function interruptFrame(id: string) {
   };
 }
 
+/** 送出之後沒人等的那幾件：收線時還排著的話它們會 reject，接住它們（產品路徑上的呼叫端也都接）。 */
+function queued(submitted: Promise<void>): void {
+  submitted.catch(() => undefined);
+}
+
 function gate() {
   let open!: () => void;
   const opened = new Promise<void>((resolve) => (open = resolve));
@@ -348,6 +353,8 @@ describe('改與刪', () => {
         inserted: [],
         outcome: 'canceled',
       });
+      // 下行是非同步抽的：等它把刪之後那一顆送到。
+      await until(() => inboxPushes(run.frames).length === 5);
       expect(inboxPushes(run.frames).at(-1)).toEqual({
         items: [{ id: 'c', text: 'C', source: { kind: 'user' } }],
       });
@@ -393,8 +400,8 @@ describe('按停止之後：排著的停住，下一次送出才喚醒', () => {
     try {
       const first = run.pump.submit({ kind: 'message', text: 'A', id: 'a' });
       await until(() => run.marks().includes('start:message:A'));
-      void run.pump.submit({ kind: 'message', text: 'B', id: 'b' });
-      void run.pump.submit({ kind: 'message', text: 'C', id: 'c' });
+      queued(run.pump.submit({ kind: 'message', text: 'B', id: 'b' }));
+      queued(run.pump.submit({ kind: 'message', text: 'C', id: 'c' }));
 
       expect(run.pump.cancel()).toBe('run');
       await first;
@@ -439,8 +446,8 @@ describe('按停止之後：排著的停住，下一次送出才喚醒', () => {
     try {
       const first = run.pump.submit({ kind: 'message', text: 'A', id: 'a' });
       await until(() => run.marks().includes('start:message:A'));
-      void run.pump.submit({ kind: 'message', text: 'B', id: 'b' });
-      void run.pump.submit({ kind: 'message', text: 'C', id: 'c' });
+      queued(run.pump.submit({ kind: 'message', text: 'B', id: 'b' }));
+      queued(run.pump.submit({ kind: 'message', text: 'C', id: 'c' }));
       run.pump.cancel();
       await first;
       await run.pump.whenIdle();
@@ -467,7 +474,7 @@ describe('按停止之後：排著的停住，下一次送出才喚醒', () => {
     try {
       const first = run.pump.submit({ kind: 'message', text: 'A', id: 'a' });
       await until(() => run.marks().includes('start:message:A'));
-      void run.pump.submit({ kind: 'message', text: 'B', id: 'b' });
+      queued(run.pump.submit({ kind: 'message', text: 'B', id: 'b' }));
       expect(run.pump.cancel()).toBe('run');
       // 那一輪還在跑（假 agent 不看訊號，等門）：這時送的一句就是「下一次送出」。
       const late = run.pump.submit({ kind: 'message', text: 'C', id: 'c' });
@@ -520,7 +527,7 @@ describe('按停止之後：排著的停住，下一次送出才喚醒', () => {
       await run.pump.submit({ kind: 'message', text: 'A', id: 'a' });
       expect(run.pump.awaitingInput).toBe(true);
       // 停在核准點時也收（#637 的 Q4）：排著、停住等核准。
-      void run.pump.submit({ kind: 'message', text: 'B', id: 'b' });
+      queued(run.pump.submit({ kind: 'message', text: 'B', id: 'b' }));
       expect(run.pump.running).toBe(true);
 
       expect(run.pump.cancel()).toBe('withdrawn');
@@ -643,8 +650,8 @@ describe('歷史帶的是目前的清單', () => {
     try {
       const first = run.pump.submit({ kind: 'message', text: 'A', id: 'a' });
       await until(() => run.marks().includes('start:message:A'));
-      void run.pump.submit({ kind: 'message', text: 'B', id: 'b' });
-      void run.pump.submit({ kind: 'message', text: 'C', id: 'c' });
+      queued(run.pump.submit({ kind: 'message', text: 'B', id: 'b' }));
+      queued(run.pump.submit({ kind: 'message', text: 'C', id: 'c' }));
       run.pump.cancel();
       hold.open();
       await first;
@@ -789,7 +796,7 @@ describe('wire', () => {
       }),
     });
     opened.push(handler);
-    const fetch = async (input: RequestInfo | URL, init?: RequestInit) =>
+    const fetch = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
       handler.handle(loopbackRequest(input as string, init));
     const client = createWireClient({ baseUrl: 'http://queue.test', fetch });
     let nextId = 1;

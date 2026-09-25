@@ -2,7 +2,7 @@ import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { Event } from '@nexus/wire';
-import { commandPath, createWireClient, streamPath, TODOS } from '@nexus/wire';
+import { commandPath, createWireClient, INBOX, streamPath, TODOS } from '@nexus/wire';
 import { createDeepAgent, StateBackend } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -222,7 +222,7 @@ describe('線的兩端對得起來', () => {
     const { agent } = buildAgent(ONE_CALL);
     const { client } = connect(agent);
     const events = await client.openEvents('t2');
-    await client.runStart('t2', '記一筆。');
+    const started = await client.runStart('t2', '記一筆。');
     const frames = await collectUntil(events, (collected) =>
       collected.some(
         (frame) =>
@@ -233,11 +233,18 @@ describe('線的兩端對得起來', () => {
     );
     const methods = new Set(frames.map((frame) => frame.method));
     expect([...methods].sort()).toEqual(['custom', 'lifecycle', 'messages', 'tools']);
-    // `custom` 在白名單裡，這一段上來的只有 pump 從日誌合成的那一種：開新一輪時清空待辦清單（#575）。圖自己往
-    // `custom` 寫的不上線，見 `present-tool.test.ts` 的「圖自己發的 custom frame 不上線」。
+    // `custom` 在白名單裡，這一段上來的只有 pump 從日誌合成的那兩種：送出佇列（送進來一顆、開跑時領走一顆，#637）
+    // 與開新一輪時清空待辦清單（#575）。清空待辦由 `turn/start` 當場觸發，所以排在領走前面。圖自己往 `custom` 寫的不上線，見 `present-tool.test.ts` 的「圖自己發的
+    // custom frame 不上線」。
+    const runId = (started as { result: { run_id: string } }).result.run_id;
+    const sentence = { id: runId, text: '記一筆。', source: { kind: 'user' } };
     expect(
       frames.filter((frame) => isMethod(frame, 'custom')).map((frame) => frame.params.data),
-    ).toEqual([{ name: TODOS, payload: { todos: null } }]);
+    ).toEqual([
+      { name: INBOX, payload: { items: [sentence] } },
+      { name: TODOS, payload: { todos: null } },
+      { name: INBOX, payload: { items: [], claimed: { id: runId, text: '記一筆。' } } },
+    ]);
 
     // **對照組**：沒有這一段的話，「白名單有效」與「基座根本沒發過那些」長得一樣。
     const control = buildAgent(ONE_CALL);
