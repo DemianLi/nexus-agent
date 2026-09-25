@@ -1,0 +1,126 @@
+{
+  "id": "1907.07421",
+  "title": "SUMBT: Slot-Utterance Matching for Universal and Scalable Belief Tracking",
+  "topic": "T2",
+  "subarea": "傳統任務型對話 DST 與資料集",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把 domain-slot 名稱當成閱讀理解的「問題」：用 BERT 編碼當回合的系統與使用者語句，以 slot 名稱的 BERT 向量對語句做 multi-head attention，把結果送進每個 slot 各自一條的 RNN 跨回合累積，最後在凍結的 BERT 向量空間中，用距離從本體候選值裡挑出最近的一個。單一模型處理所有 slot，在 WOZ 2.0 得到 joint goal accuracy 0.910，在 MultiWOZ 得到 0.424。",
+  "problem": "任務型對話系統每回合都要估計各 slot 的值分布（belief tracking／DST），對話策略依此決定下一步，所以 DST 的準確度直接影響整個系統。當時的神經 DST 有兩種擴充性問題。一是每個 domain 或 slot 各自建模（GLAD、StateNet、Goel et al.），slot 數增加時模型也跟著增加，彼此學不到共通知識。二是輸出層綁定候選值清單（Ramadan et al.、GCE），本體一改就得重新訓練。作者引述個人助理服務每週新增數百個 skill 的報告，主張實務上需要一個不隨 domain、slot 數增長，又能直接加入新 slot 與新值的「通用」追蹤器。",
+  "core_idea": "借用機器閱讀理解的形式：把 domain-slot-type（例如「restaurant – price range」）的文字當作問題，到當回合的系統／使用者語句裡找答案。slot 名稱與候選值都用同一顆凍結的預訓練 BERT 從字面編碼，模型本身不含任何依賴 slot 或值的參數：注意力的 query 是 slot 向量，輸出是一個要靠近目標值 BERT 向量的向量，分類則是非參數式的距離比較。因此一個模型可以服務所有 slot，新的 slot 或值只要把文字送進凍結編碼器就能接上。",
+  "method": {
+    "任務與輸入輸出": "輸入：第 t 回合的系統語句 x_sys_t 與使用者語句 x_usr_t（只有當回合這一對，不直接輸入更早的語句或上一回合的狀態）、要追蹤的 domain-slot-type s 的文字，以及本體中 s 的候選值集合 C_s。輸出：每個 s 在第 t 回合的值分布 p(v_t | x_sys_≤t, x_usr_≤t, s)，取 argmax 作為狀態。候選值包含字面值 \"none\"；dontcare 在程式碼中轉成字面值 \"do not care\"。只追蹤 informable slot，不處理 requestable slot。",
+    "語句編碼（§2.1、Eq 1）": "把 [CLS] x_sys [SEP] x_usr [SEP] 送進預訓練 BERT-base，取最後一層每個 token 的向量組成 U_t。這顆 BERT 以 Eq 7 的損失微調。",
+    "slot 與值編碼（§2.1、Eq 2）": "另一顆預訓練 BERT（BERT_sv）對 slot 文字 x_s（domain 與 slot 字詞組成的片語，例如「restaurant – price range」）和每個候選值文字 x_v 各自編碼，取 [CLS] 輸出得到 q_s 與 y_v（768 維）。BERT_sv 全程凍結，所以向量可以一次算好存成查表；新的 slot 或值只需要再做一次前向計算。",
+    "Slot-utterance matching（§2.2、Eq 3）": "以 q_s 為 query、U_t 為 key 與 value，做 multi-head attention（Vaswani et al. 的 scaled dot-product，Q、K、V 各有線性投影再接輸出投影），得到當回合與 slot s 相關的語境向量 h_t^s（768 維）。頭數在 {4, 8} 中搜尋。論文寫 BERT 與注意力的隱藏維度是 784，BERT-base 實為 768，應是誤植。",
+    "Belief tracker（§2.3、Eq 4–5）": "每個 slot 沿回合各跑一條 RNN（所有 slot 共用同一組參數）：d_t^s = RNN(d_{t-1}^s, h_t^s)，單層 GRU 或 LSTM，隱藏維度在 {100, 200, 300} 中搜尋；輸出經 LayerNorm 得到 ŷ_t^s，理由是 BERT 的輸出本身也經過 LayerNorm。跨回合的資訊只靠這個隱藏狀態攜帶。",
+    "距離分類與訓練目標（§2.4、Eq 6–7）": "p(v | ...) = exp(−d(ŷ_t^s, y_v)) / Σ_{v'∈C_s} exp(−d(ŷ_t^s, y_{v'}))，d 為 Euclidean 距離或負 cosine。形式上類似 Matching Networks，但距離是在凍結的 BERT 空間中量，而不是可訓練的空間。損失是對所有 slot s 與所有回合 t 的負對數概似加總；所有 slot 一起訓練，作者認為這讓模型學到跨 slot 的共通關係。推論時對每個 slot 取距離最近的候選值。",
+    "訓練與超參數（§3.3）": "論文只給搜尋空間：Adam，學習率先線性 warm-up 再線性下降；warm-up 比例 {0.01, 0.05, 0.1}，總 epoch {300, 500}，學習率 {1e-5, 5e-5}；驗證損失連續 20 個 epoch 沒有改善就提前停止。每個設定跑 20 個隨機種子，報 joint goal accuracy 的平均與標準差。論文沒寫最後選用哪一組。",
+    "程式碼中有、論文沒寫的細節（https://github.com/SKTBrain/SUMBT，code/BeliefTrackerSlotQueryMultiSlot.py、code/main-multislot.py）": "(1) RNN 輸出先經 dropout 與一層 Linear(hidden_dim→768)，再接 LayerNorm；沒有這層投影，100–300 維的 RNN 輸出無法和 768 維的值向量比距離。(2) RNN 初始隱藏狀態預設不是零，而是把第一回合的 attended 向量經 Linear＋ReLU＋Dropout 轉換而來；加 --zero_init_rnn 才改用零。(3) 注意力的 dropout 設為 0。(4) slot 與值向量在訓練前由凍結的 BERT_sv 算好，存成 freeze=True 的 nn.Embedding 查表。(5) 本體每個 slot 都附加字面值 \"none\"；WOZ 2.0 另加 \"do not care\"。(6) 每回合的語句對截斷到 max_seq_length 個 WordPiece（預設 64），每段對話補齊到 max_turn_length 回合（預設 22），補齊回合的標籤設為 −1，由 CrossEntropyLoss 的 ignore_index 排除。(7) batch 以對話為單位。README 給的 MultiWOZ 指令是：GRU、hidden_dim 300、Euclidean 距離、學習率 1e-4、warm-up 0.1、300 epoch、patience 15、train_batch_size 3（段對話）、max_label_length 32。",
+    "基線（§3.2）": "(1) BERT+RNN：BERT 輸出彙總向量，接 RNN，再接依候選值清單而定的線性層與 softmax。(2) BERT+RNN+Ontology：在 (1) 之上加本體編碼器，照 Ramadan et al. 的做法把本體與語句的編碼逐元素相乘來比對。這兩個都有綁定候選值的線性輸出層，本體一改就要重訓。(3) Slot-dependent SUMBT：架構與 SUMBT 相同，但每個 slot 分開訓練一個模型。另外列出前人在各自論文中報的數字：NBT-DNN、BT-CNN、GLAD、GCE、StateNetPSI。",
+    "資料（§3.1）": "WOZ 2.0：取自 neural-belief-tracker 儲存庫，單一 restaurant 領域，追蹤 area、food、price range 三個 slot。MultiWOZ：README 註明是 2.0 版，共 7 個領域 35 個 slot；作者先做了拼字修正等清理，並公開前處理後的資料。"
+  },
+  "assumptions": [
+    "slot 的值會出現在當回合的系統或使用者語句中；作者在引言明說這個前提。",
+    "每個 slot 的所有候選值都能事先列在本體 C_s 裡；推論時是在封閉集合中做分類，不會生出本體外的值。",
+    "凍結的 BERT [CLS] 向量空間裡，語意相近的值彼此接近，而且這些向量彼此分得夠開，可以直接當作分類的固定目標。",
+    "slot 名稱的字面片語（「domain – slot」）足以表達這個 slot 要找什麼，不需要額外的描述或範例。",
+    "跨回合的狀態可以隱式放在每個 slot 的 RNN 隱藏狀態裡，不需要把上一回合的 belief state 或更早的語句明確輸入。",
+    "不同 domain、slot 之間共享參數會帶來正向遷移，而不是互相干擾。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "WOZ 2.0（單一 restaurant 領域、3 個 informable slot）",
+      "MultiWOZ 2.0（7 個領域 35 個 slot，經作者拼字清理）"
+    ],
+    "metrics": [
+      "joint goal accuracy（每回合所有 slot 都預測正確才算對），報 20 個隨機種子的平均與標準差",
+      "注意力權重的質性視覺化（Figure 2，一段 WOZ 2.0 對話的前三回合）"
+    ],
+    "baselines": [
+      "NBT-DNN（Mrkšić et al. 2017，數字取自原論文）",
+      "BT-CNN（Ramadan et al. 2018）",
+      "GLAD（Zhong et al. 2018）",
+      "GCE（Nouri and Hosseini-Asl 2018）",
+      "StateNetPSI（Ren et al. 2018）",
+      "MultiWOZ benchmark baseline（Ramadan et al. 2018，數字取自資料集網站）",
+      "BERT+RNN（作者自建）",
+      "BERT+RNN+Ontology（作者自建）",
+      "Slot-dependent SUMBT（作者自建，每個 slot 分開訓練）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在 WOZ 2.0 上，所有 slot 共用一個模型的 SUMBT 明顯優於三個 BERT 基線，包括架構完全相同、只是每個 slot 分開訓練的版本。作者把這個差距歸因於跨 slot 共享知識。",
+      "numbers": "slot-independent SUMBT 0.910 (±0.010)；slot-dependent SUMBT 0.891 (±0.010)、BERT+RNN 0.892 (±0.011)、BERT+RNN+Ontology 0.893 (±0.013)；皆為 20 個種子的平均±標準差",
+      "section": "§4.1、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "只要用 BERT 當語句編碼器，三個基線就已超過所有先前模型；三個基線彼此沒有顯著差異。",
+      "numbers": "三個 BERT 基線 0.891–0.893；先前模型 StateNetPSI 0.889、GCE 0.885、GLAD 0.881、BT-CNN 0.855、NBT-DNN 0.844",
+      "section": "§4.1、Table 1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "在 MultiWOZ 上，SUMBT 的 joint goal accuracy 比論文列出的先前模型高約 7 點，作者據此宣稱達到 state-of-the-art。",
+      "numbers": "SUMBT 0.4240 (±0.0187)；GCE 0.3558、GLAD 0.3557、benchmark baseline 0.2583",
+      "section": "§4.1、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "注意力會落在和 slot 語意相關的字詞上，即使字面上和標籤值不同；該 slot 沒有值（標籤為 none）時，注意力落在 [CLS] 或 [SEP]。",
+      "numbers": "質性例子：第一回合 price range 標籤為 moderate，注意力集中在「reasonably priced」；無量化指標",
+      "section": "§4.2、Figure 2",
+      "anchor_idx": 4
+    }
+  ],
+  "limitations_stated": [
+    "方法假設要找的值存在於當回合的語句中（§1）。",
+    "本體更新時 SUMBT 能否持續學到新知識還沒驗證，列為未來工作（§5）。"
+  ],
+  "limitations_observed": [
+    "標題的「universal and scalable」沒有任何實驗支撐：沒有留出 slot、留出值、新領域或零樣本的實驗。§2.1「把新 slot 送進凍結編碼器就能擴充」只是架構上的論證，實際效果未知。同期的 TRADE（arXiv:1905.08743）就做了留一領域零樣本。",
+    "「可加入新值」只在本體層面成立：推論是在 C_s 裡做封閉集合分類，本體外的值（新的餐廳名、任意時間）不可能被預測出來。MultiWOZ 裡名稱、時間這類開放值，必須事先窮舉成候選清單。",
+    "狀態是隱式的：每回合只看當回合的 sys/usr 語句對，跨回合資訊全靠每個 slot 一條 100–300 維的 RNN 隱藏狀態攜帶。狀態不能被檢查，也不能被外部修正後再往下接；很早就提到、之後沒再提的值，要靠 RNN 一直記住。論文沒有按回合數或對話長度分析錯誤，也沒有處理使用者中途改口的例子。",
+    "MultiWOZ 的比較條件不一致：作者先修正拼字再訓練與評估（§3.1），但 GLAD、GCE 與 benchmark baseline 的數字取自其他論文或資料集網站，不是在作者清理後的同一份資料上得到的。SUMBT 追蹤 7 個領域 35 個 slot，包含 bus 與 hospital（程式碼另外算了排除這兩個領域的 joint，論文只報 7 領域的數字）；許多同期工作（如 TRADE）只用 5 個領域 30 個 slot。42.4 對 35.6 的差距裡混有前處理與 slot 集合的差異。",
+    "MultiWOZ 上沒有消融：WOZ 2.0 上三個 BERT 基線（0.891–0.893）已經超過所有先前模型（最佳 0.889），表示大部分提升來自 BERT。但 MultiWOZ 上沒有 BERT+RNN 之類的對照，分不出 42.4 裡有多少來自 slot-utterance matching、多少只是換成 BERT。",
+    "統計比較不對等：先前模型的數字是引用原論文的單次結果，SUMBT 是 20 個種子的平均。§4.1 說「significantly outperformed」，但沒有做任何檢定。論文內部 0.910 對 0.891 的差距約 1.9 點，標準差約 0.010，大概不只是種子變異；但和先前模型的比較只能算參考。",
+    "SOTA 主張要打折：TRADE（arXiv:1905.08743）比本文早約兩個月上 arXiv（2019-05-21 對 2019-07-17），在 MultiWOZ 2.0 報 joint 48.62，本文沒有提到。兩篇都是 ACL 2019 的同期論文，投稿時 TRADE 可能還看不到，所以這不算疏失。兩者的 slot 集合也不同（30 對 35），不能直接判定高下。但讀者要知道，本文宣稱的 MultiWOZ state-of-the-art 在它公開時已有更高的數字。",
+    "重現資訊不足：論文只列超參數搜尋空間，沒報最後選用的組合；RNN 輸出如何對上 768 維的值向量沒寫（程式碼裡有一層 Linear 投影）；RNN 初始狀態取自第一回合的注意力向量，論文也沒提；BERT 與注意力的維度寫成 784，應為 768。",
+    "程式碼與論文的數字不一致：README 以學習率 1e-4（不在論文的 {1e-5, 5e-5} 搜尋空間內）與 patience 15（論文為 20），在 MultiWOZ 2.0 上報 joint 0.48806（hidden 300）與 0.49064（hidden 600）。評估程式碼會同時算三種 joint：7 領域、排除 bus 與 hospital 的 5 領域、只看 restaurant。README 的欄位只寫「Joint acc.」，沒說是 7 領域還是 5 領域；若是 7 領域，就比論文的 0.4240 高約 6.5 點。README 沒有說明差距的原因，也沒標種子數，看起來是單次結果。引用 SUMBT 的 MultiWOZ 數字時，要註明是論文值還是程式碼值。",
+    "評估程式碼有重現風險：joint accuracy 寫成 sum(torch.sum(accuracy, 1) / slot_dim)，依賴舊版 PyTorch 對整數張量的地板除法。requirements.txt 只釘 pytorch-pretrained-bert==0.6.1，沒釘 torch（README 只寫 pytorch >= 1.0）。PyTorch 1.6 對整數張量用 / 會直接報錯；1.7 起改成真除法，這一行就會靜默變成每回合 slot 準確率的平均，而不再是 joint accuracy，數字會虛高。這不代表論文當時的數字有誤。",
+    "評估面向很窄：只報 joint goal accuracy。沒有 slot accuracy，沒有逐 slot 或逐回合的錯誤分析，也沒有 WOZ 2.0 慣例上會報的 requestable slot 準確率；引言把 requestable slot 算進對話狀態，模型卻沒處理。注意力分析只有一段對話前三回合的挑選例子。",
+    "第三方實測偏低，而且排名會翻轉：ConvLab-2（arXiv:2002.04793）README 用它自己的 evaluate.py 在 MultiWOZ 上評估，SUMBT 的 joint accuracy 是 0.30，TRADE 是 0.40。但在同一份 README 的端到端評估中（DST 直接讀語句，接 RulePolicy 與 TemplateNLG，再和使用者模擬器互動），SUMBT 的 complete／success／book rate 是 34.5／29.4／62.4，反而高於 TRADE 的 32.4／20.1／34.7；兩者都遠低於 BERTNLU+RuleDST 管線的 81.3% 成功率。可見換一套前處理與評估管線後，論文的數字不一定守得住；而 joint accuracy 的高低也預測不了任務完成的高低。這一點直接關係到 T7／T8 的指標選擇。"
+  ],
+  "framework_role": "T2 裡傳統本體式 DST 的代表作之一。狀態表示是「每個 slot 在本體候選值上的分布」，更新方式是每個 slot 一條 RNN，沿回合只吃當回合的語句。它有兩個概念至今仍常見：一是用 slot 名稱的文字當查詢，從語句中取出相關片段；二是用單一共享模型、在固定語意空間裡以距離做非參數分類，讓模型大小不隨 slot 數增加。前者在概念上接近後來以 slot 描述驅動的 schema 式 DST（本文並未做到或主張這一點）。對本框架而言，它主要是對照組：狀態藏在 RNN 隱藏狀態裡、只能從本體中挑值，所以無法接受外部修正（E2 的回寫），也無法表達本體外的使用者目標。這正好說明 LLM agent 的長多輪狀態維護需要顯式、可檢查、可改寫的狀態表示。和同一子領域的 TRADE 相比，本文沒有零樣本與開放值；不過 ConvLab-2 的端到端評估顯示，它接上管線後的任務成功率反而較高。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據（商用採納）。論文沒有提到任何部署或產品。作者群來自 SK T-Brain（SK telecom），但搜尋沒有找到 SK telecom 官方文件或產品頁說明 SUMBT 用在 NUGU 或其他服務。可查證的只有學術工具鏈整合：ConvLab-2 的 README 把 SUMBT 列為內建 DST 之一，並附上模組與端到端評估數字（https://github.com/thu-coai/ConvLab-2）。這屬於學術基礎建設，不算商用採納。官方程式碼 https://github.com/SKTBrain/SUMBT 採 MIT 授權，README 未提及生產用途。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/SKTBrain/SUMBT",
+    "data": "公開：WOZ 2.0 取自 neural-belief-tracker 儲存庫，MultiWOZ 2.0 取自劍橋對話組網站，作者也公開了清理後的 MultiWOZ 前處理結果。注意：README 在 MultiWOZ 2.0 上的數字（joint 0.488–0.491）與論文（0.424）不一致，所用超參數也在論文的搜尋空間之外；評估程式碼的 joint accuracy 算式在 PyTorch 1.7 以後會改變語意，重現時要釘舊版 torch，或把 / 改成 //。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它是 BERT 時代本體式 DST 的經典基線，slot 當查詢、共享模型加距離分類的設計有參考價值；但擴充性主張沒有實驗驗證，MultiWOZ 比較條件不一致，而同子領域的 TRADE 另外示範了零樣本與開放值，所以不是 T2 必讀。",
+  "related": [
+    "1810.00278",
+    "1805.09655",
+    "1812.00899",
+    "1807.06517",
+    "1810.09587",
+    "1606.03777",
+    "1810.04805",
+    "1811.12891",
+    "1606.04080",
+    "1611.01603",
+    "1604.04562"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

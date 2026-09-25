@@ -1,0 +1,149 @@
+{
+  "id": "1612.05688",
+  "title": "A User Simulator for Task-Completion Dialogues",
+  "topic": "T6",
+  "subarea": "經典與神經使用者模擬器",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "公開電影購票領域的規則式、dialog-act 層級 agenda-based 使用者模擬器（TC-Bot），附 error model、模板加 seq2seq 的混合 NLG、joint LSTM NLU 與模擬器自判成敗，供 RL 對話策略在同一環境下訓練與比較。",
+  "problem": "任務型對話的策略若用強化學習訓練，需要大量與環境互動，現成的靜態對話語料無法直接拿來用。每個任務又需要各自的標註語料，蒐集與標註需要領域知識，成本高、耗時長；直接和真人從零開始學則樣本需求太大，不切實際。社群因此普遍用模擬使用者當訓練對手，但作者指出，當時沒有標準的建法，也沒有公認的評估指標，各篇論文的模擬器互不相同，演算法之間難以比較。這篇的目標是提供一個公開、可插拔的模擬框架，讓不同 agent 在同一個使用者模擬器上比較。",
+  "core_idea": "結合規則式與模型式兩條路線。對話行為層用 Schatzmann 與 Young 的 agenda-based 模擬：每場對話先抽一個使用者目標（限制條件加上想問的 slot），再用規則依 agent 上一個動作決定下一個使用者動作，確保使用者行為始終圍繞同一個目標、前後一致。語言層則用 seq2seq NLG（加模板）把 dialog act 轉成自然語言，NLU 雜訊可用 error model 模擬，也可以直接接上真的 LSTM NLU。對話結束時，由模擬器依「是否回答了使用者所有問題、是否訂對票、是否在輪數上限內」給出二元成敗，作為 RL 的獎勵來源與評估依據。",
+  "method": {
+    "資料與領域（§2）": "電影購票領域。對話由 Amazon Mechanical Turk 蒐集，用內部 schema 標註：11 個 intent（inform、request、confirm_question、confirm_answer 等）、29 個 slot（moviename、starttime、theater、numberofpeople 等），共 280 段對話，平均約 11 輪。slot 分成 informable（使用者用來限制搜尋）與 requestable（使用者向 agent 詢問值）兩類，例如 numberofpeople 不可能是 requestable。",
+    "使用者目標（§3.1）": "目標 G 由兩部分組成：inform_slots 是使用者的限制條件，request_slots 是使用者不知道、想從 agent 問到的 slot。為了更貼近真實，slot 分成 Required（moviename、theater、starttime、date、numberofpeople）與 Optional；ticket 是預設 slot，一定出現在 request_slots。目標的抽取有兩種機制：(1) 取第一個使用者句（不含問候句）中出現的所有 slot，已知與未知都算；(2) 取所有使用者句中第一次出現的 slot，聚合成一個目標。抽出的目標存成目標庫檔案，每場對話隨機抽一個（公開程式碼是有放回的 random.choice）。",
+    "第一個使用者動作（§3.2）": "只處理使用者主導的對話。第一句通常是 request，至少帶一個 informable slot；若目標裡有 moviename，就一定出現在第一句。公開程式碼的做法是：從目標的 inform_slots 隨機挑一個已知 slot（再強制加上 moviename）；從 request_slots（排除 ticket）隨機挑一個當請求，沒有就請求 ticket；目標中其餘的 slot 放進待辦清單 rest_slots。",
+    "使用者狀態與 agenda（§3.2）": "使用者狀態 s_u 拆成 agenda A 與目標 G，G 又分成限制 C 與請求 R。第 t 步依目前狀態 s_{u,t} 與 agent 上一個動作 a_{m,t-1} 產生 a_{u,t}，再更新狀態。論文沿用 Schatzmann 的描述，把 agenda 說成類似堆疊的 push／pop 操作；但公開程式碼的 agenda 其實是一個 rest_slots 清單，每次用 random.choice 隨機挑下一個要講的 slot，沒有堆疊順序（見 limitations_observed）。",
+    "依 agent 動作的回應規則（附錄 A.2 的 next 函式；細節取自公開程式碼 usersim_rule.py）": "先檢查輪數：超過 max_turn 直接判失敗並 closing。否則把上一輪講過的 inform_slots 併入 history_slots，再依 agent 的 intent 分派。(a) request(slot)：slot 屬於目標限制，就 inform 該值；slot 屬於目標請求而且已被回答過，就用 history 的值 inform；slot 屬於目標請求但尚未回答，就反問 request，同時一次 inform 所有剩下的限制；都不是，就回答 slot=「I do not care」。(b) inform（非 taskcomplete）：agent 給的值和目標一致，就把該 slot 從待辦移除，再提出下一個待辦請求或隨機講一個剩下的限制；不一致則重新 inform 正確值（程式碼留有 TODO，作者沒決定該不該 deny）。(c) multiple_choice：從選項中挑。(d) confirm_answer：從待辦中隨機挑一個 inform 或 request，待辦清空就 thanks。(e) inform(taskcomplete)：逐一檢查目標的每個限制是否都出現在 agent 動作中、而且值相同，任一不符就 deny 並記錄 constraint check 失敗，全部相符就 thanks。(f) agent 說 thanks 時結束對話並判定成敗；agent 說 closing 時直接結束。每輪最後呼叫 corrupt() 加雜訊，再經 NLG 附上自然語言。",
+    "Error model（§3.2，引用 Schatzmann 等 2007）": "在不接 NLU、直接用 dialog act 訓練或測試時使用，模擬 NLU 錯誤與雜訊通道。有兩個通道：intent 層與 slot 層。slot 層有三種錯誤：slot 被刪除（NLU 沒認出）、slot 名對但值錯（例如斷詞錯）、slot 與值都錯。接上真的 NLU 時不需要 error model，因為 NLU 本身就會引入雜訊。公開程式碼的參數：--intent_err_prob、--slot_err_prob（CLI 預設各 0.05）、--slot_err_mode（0 只換值；1 三種錯誤各約 1/3；2 換 slot；3 刪 slot）。intent 雜訊是從 act 集合中隨機換一個。",
+    "成敗判定（§3.3）": "對話有三種狀態：no_outcome_yet、success、failure。agent 尚未發出 inform(taskcomplete)、而且沒超過輪數上限時，維持 no_outcome_yet。success 的條件是：回答了使用者所有 requestable slot，並在輪數上限內訂到正確的票。其餘一律是 failure，例如超過輪數上限、訂錯票。特例是使用者的限制在資料庫裡根本無法滿足、agent 也正確告知訂不到票：作者選擇算作 failure，理由是沒有票被訂出。公開程式碼 response_thanks 的判定是，下列任一成立就是 failure：尚有未完成的請求或待辦（排除 ticket）；history 中出現 NO_VALUE_MATCH；history 裡的值與目標限制不符；constraint check 失敗。",
+    "NLU（§3.4）": "採用 Hakkani-Tür 等 2016 的單一 LSTM 模型，同時做 intent 預測與 slot filling。標籤集是 IOB slot tag 與 intent tag 的串接：每句結尾加一個 <EOS> token，監督標籤是 intent，前面每個詞的標籤是 IOB tag，所以序列最後的隱藏狀態可以當成整句的語意表示來預測 intent。訓練資料是標註語料中所有 (dialog act, utterance) 對。",
+    "NLG（§3.5）": "採混合式。若該 dialog act 在預先定義的規則模板中，就用模板；否則用 seq2seq 模型（輸入 dialog act，LSTM 解碼器產生帶 slot placeholder 的句子，再做後處理，把 placeholder 換成實際值）。解碼用 beam search，論文寫 beam size 3（公開程式碼的 dialog_config.nlg_beam_size 設為 10，載入模型時會覆寫）。改用混合式的原因是標註資料太少，純模型式 NLG 泛化不好，會替策略訓練引入大量雜訊。",
+    "Agent 介面與基線（附錄 A.1）": "所有 agent 繼承 Agent 類別，只需實作 initialize_episode 與 state_to_action（狀態映射到動作）。內建五個規則 agent：InformAgent（逐一 inform 所有 slot）、RequestAllAgent（逐一 request 所有 slot）、RandomAgent（每輪隨機 request）、EchoAgent（回應使用者上一句要問的 slot）、RequestBasicsAgent（依序 request moviename、starttime、city、date、theater、numberofpeople，最後發出 inform(taskcomplete)，再說 thanks）。另有 command-line agent，讓人類扮演 agent，可以打自然語言或 dialog act。系統會列出資料庫中可用的值；人輸入資料庫沒有的值時，state tracker 會強制換成資料庫中的建議值。模擬器同樣繼承 UserSimulator 類別，實作 initialize_episode 與 next。",
+    "RL agent 與訓練流程（附錄 A.1、附錄 B）": "RL agent 是 DQN，用 ε-greedy，搭配 target network。Warm start 階段先用簡單的規則策略跑對話，填滿 experience replay buffer。之後每個 simulation epoch 模擬 N 場對話，把 (s_t, a_t, r_t, s_{t+1}) 放進 buffer，依 batch size 與 buffer 大小更新目前的 DQN 多次；每個 epoch 結束時，把 target network 換成目前的網路（每個 epoch 只換一次）。Buffer 的清空策略：agent 的成功率達到 success_rate_threshold = 0.30 之前，只累積、不清空；達標之後，每個 epoch 估計目前 agent 的成功率，若比先前好（論文寫的是比 target network 好，公開程式碼比的是歷來最佳成功率），就清空 buffer，用目前 agent 的經驗重新填滿。",
+    "公開程式碼補充的實作細節（論文沒寫；取自 MiuLab/TC-Bot）": "DQN 是單一隱藏層的 MLP（ReLU），gamma 預設 0.9。README 的訓練指令參數：dqn_hidden_size 80、experience_replay_pool_size 1000、batch_size 16、simulation_epoch_size 100、warm_start_epochs 120、max_turn 40、episodes 500。狀態向量由以下幾塊串接：使用者動作 intent 的 one-hot、使用者 inform／request 的 slot 詞袋、agent 上一個動作的 intent 與 slot、目前已填的 slot、輪數（純量與 one-hot）、KB 查詢結果（每個 slot 的符合筆數除以 100，以及是否大於 0）。動作空間是 dialog_config.feasible_actions：confirm_question、confirm_answer、thanks、deny 4 個，加上 20 個 inform(slot) 與 19 個 request(slot)，共 43 個。DQN 只選「intent 加 slot」，實際的值由 state tracker 從 KB 填入。獎勵函式 reward_function：失敗 −max_turn，成功 +2·max_turn，其餘每輪 −1。dialog_config 中另有 SUCCESS_REWARD=50 等常數，但儲存庫全部 32 個 .py 都沒有引用它們。",
+    "評估指標與上限（§4、附錄 B）": "指標有三個：success rate（又稱 task completion rate，主要報告這個）、average reward、average turns。作者認為三者高度相關：好的策略應該成功率高、平均獎勵高、平均輪數少。學習曲線圖另外畫出一條最佳上限，定義是 agent 資料庫中可達成的使用者目標數除以目標總數。",
+    "第二個任務：KB-InfoBot（§4、附錄 C.2）": "KB-InfoBot（Dhingra 等，1609.00777）用的是本模擬器的簡化版：只有 request 與 inform 兩個 intent、6 個 slot，知識庫取自 IMDB；agent 在對話結尾列出 KB posterior 的前 5 名。該任務的實驗結果在 1609.00777，本文只列出範例對話。"
+  },
+  "assumptions": [
+    "從 280 段 MTurk 對話的使用者句中抽出的目標（第一句的 slot，或各 slot 首次出現時的聚合），足以代表真實使用者的目標分佈。",
+    "使用者在對話中不會改變目標，而且一定由使用者主導開場；知道片名時會在第一句講出來。",
+    "手寫的回應規則（依 agent 的 intent 分派）足以產生一致、合理、夠多樣的使用者行為，讓 RL agent 探索策略空間。",
+    "以隨機刪除或替換 intent／slot 的 error model，可以近似真實 NLU 錯誤的分佈；接上真的 LSTM NLU 時，NLU 本身的錯誤就夠代表真實雜訊。",
+    "二元的成敗（問題都回答了、票訂對了、沒超過輪數上限）是評估對話品質的合適獎勵與指標；限制不可滿足時算失敗，作者假設這不太影響演算法之間的比較。",
+    "在模擬器上學到的策略，可以當作起點，之後部署給真人時再繼續用 RL 線上改進（論文沒有驗證）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "電影購票任務（movie-ticket booking）：本文模擬器搭配電影資料庫與目標庫，agent 要訂到滿足限制的票",
+      "電影查詢任務 KB-InfoBot（movie seeking）：簡化版模擬器（2 個 intent、6 個 slot），知識庫取自 IMDB；實驗結果在 1609.00777"
+    ],
+    "metrics": [
+      "success rate（task completion rate，主要指標）",
+      "average reward",
+      "average turns",
+      "最佳上限：資料庫中可達成的使用者目標比例"
+    ],
+    "baselines": [
+      "規則式 agent（用來初始化 replay buffer 的簡單規則策略，是 Figure 1、2 中的綠線）",
+      "附錄 A.1 的五個規則 agent：InformAgent、RequestAllAgent、RandomAgent、EchoAgent、RequestBasicsAgent（只是框架內建，論文沒有報告它們的成績）",
+      "KB-InfoBot 任務中的 SimpleRL-SoftKB 與 End2End-RL agent（來自 1609.00777，本文只列範例對話）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "模擬器所依據的標註語料規模很小：電影購票領域用自有 schema 標註的 MTurk 對話，使用者目標庫、NLU 與 NLG 都從這份語料來。",
+      "numbers": "280 段對話、11 個 intent、29 個 slot，平均約 11 輪",
+      "section": "§2 Data",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "在 dialog-act 層級訓練時，用 error model 模擬 NLU 雜訊：分 intent 層與 slot 層兩個通道，slot 層有刪除、值錯、slot 與值都錯三種；接真的 NLU 時就不用。",
+      "numbers": "2 個雜訊通道、3 種 slot 層錯誤；論文沒有給錯誤機率的建議值",
+      "section": "§3.2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "成功的定義是：在輪數上限內回答使用者所有 requestable slot，並訂到正確的票，其餘一律算失敗（包括限制無法滿足、agent 正確告知無票的情況）。Table 1 的範例說明這個判準會懲罰漏答：規則 agent 訂了票，但沒回答使用者問的 starttime 與 theater，因此被判失敗；RL agent 在同一個目標下成功。",
+      "numbers": "三種對話狀態（no_outcome_yet／success／failure）；Table 1 右欄：規則 agent 失敗、RL agent 成功（只是質性範例，沒有統計）",
+      "section": "§3.3、附錄 C.1 Table 1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "因為標註資料太少，純模型式 NLG 泛化不好，所以採混合式：有模板就用模板，否則用 seq2seq LSTM 產生帶 placeholder 的句子，再填入值。",
+      "numbers": "beam size 3（論文數字；公開程式碼設為 10）",
+      "section": "§3.5",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "DQN 訓練的技巧：先用規則策略的經驗 warm start 填滿 replay buffer；成功率到達門檻之前不清空 buffer，之後只要目前 agent 表現更好，就清空並用自己的經驗重新填滿。target network 每個 simulation epoch 只更新一次。",
+      "numbers": "success_rate_threshold = 0.30",
+      "section": "附錄 B",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "加上 NLU 與 NLG 做端到端訓練時，RL agent 要花更長的時間才能適應 NLU／NLG 帶來的錯誤與雜訊。",
+      "numbers": "正文沒有報數字，只有 Figure 1（不含 NLU／NLG）與 Figure 2（含 NLU／NLG）兩張學習曲線；快取全文讀不出曲線數值，收斂所需的 epoch 數與最終成功率都無法引用",
+      "section": "附錄 B、Figure 1、Figure 2",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "學習曲線上的最佳上限，定義為 agent 資料庫中可達成的使用者目標占全部目標的比例。因為限制不可滿足時一律算失敗，成功率本來就達不到 1。",
+      "numbers": "論文沒有給上限的數值；TC-Bot README 寫明 movie_kb.1k 搭配 user_goals_first_turn_template.part.movie.v1 的上限是 0.9765（README 的數字，不是論文的）",
+      "section": "Figure 1、2 圖說；MiuLab/TC-Bot README",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "同一個模擬器的簡化版被用來訓練 KB-InfoBot；在簡化模擬器裡，critic_rating 的值常常出錯，所以學到的策略都傾向重複詢問這個 slot。",
+      "numbers": "2 個 intent、6 個 slot、IMDB 知識庫；Table 2 每段對話結尾列出 KB posterior 前 5 名（只是範例，沒有統計）",
+      "section": "§4、附錄 C.2 Table 2",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "規則式使用者模擬需要針對應用的領域知識來手寫規則，通常很耗時。",
+    "沒有模擬使用者在對話中改變目標；作者把它列為讓對話更複雜、更真實的改進方向。",
+    "如何評估使用者模擬器仍是懸而未決的問題，沒有公認的指標，也沒有標準的建法（§1.2）。",
+    "模型式使用者模擬器需要大量標註資料，而且模型有不確定性：RL agent 可能學會利用模擬器的錯誤或漏洞，把實際上失敗的對話做成「成功」，讓策略品質被高估（§5）。",
+    "標註資料有限，純模型式 NLG 泛化不好，會替策略訓練帶入大量雜訊，所以只能改用混合式。",
+    "限制在資料庫中無法滿足、agent 也正確告知無票時，一律算失敗。作者承認這點可以爭論，但認為對演算法比較影響不大。",
+    "只處理使用者主導的對話。",
+    "加入 NLU 與 NLG 後，RL agent 要花更長的時間才能適應其中的錯誤與雜訊。"
+  ],
+  "limitations_observed": [
+    "論文完全沒有評估模擬器本身。§1.2 說好的模擬器應該用「與真人行為的相關性」來衡量，但全文沒有任何逼真度量測：沒有拿模擬對話和那 280 段真人對話比較 act 分佈、對話長度或 slot 出現順序，沒有人工評估，也沒有和其他模擬器（例如 bi-gram、El Asri 等的 seq2seq 模擬器 1607.00070）做對照。唯一的實驗結果是兩張學習曲線，正文沒有報任何數字。§5 說他們「證明了」規則式模擬可以安全地訓練 RL agent，但論文沒有任何真人測試，也沒有量模擬到真人的轉移落差，這個結論沒有實驗支撐。",
+    "裁判和對手是同一套規則。成敗由 usersim_rule 裡的 response_thanks 與 constraint check 判定，產生使用者行為的也是這些規則；公開程式碼預設 learning_phase=all，也就是用同一個模擬器、同一份目標庫訓練、選模和報成功率（train／test 切分到 2017-03 的提交才加入）。RL agent 學到的是對這套規則的最佳回應。例如使用者對目標以外的 slot 一律回答「I do not care」，於是多問不會引發任何負面反應，代價只有每輪 −1 的獎勵。§5 警告模型式模擬器會被 RL 鑽漏洞、讓成功率虛高，同樣的風險對規則式模擬器一樣成立，論文卻只把它歸給模型式。",
+    "論文的描述和公開程式碼有多處對不上，只看論文無法重現。(1) 論文說 agenda 是類似堆疊的 push／pop；程式碼的 rest_slots 是清單，用 random.choice 隨機挑下一個 slot，沒有堆疊的優先順序，所以 Schatzmann agenda 模型中「依序處理」的一致性保證並不存在。(2) NLG 的 beam size 論文寫 3，程式碼 nlg_beam_size 設為 10，載入模型時會覆寫。(3) Buffer 清空的比較對象，論文說是 target network，程式碼比的是歷來最佳成功率。(4) average reward 是三個指標之一，但論文沒有定義獎勵函式，要去程式碼才找得到（失敗 −max_turn、成功 +2·max_turn、每輪 −1）；dialog_config 裡另有沒被使用的 SUCCESS_REWARD=50，更容易讓人誤引。",
+    "Error model 在公開程式碼中比論文描述的弱。README 標題寫「with simulated noise in NLU」的那組訓練指令，實際傳的是 --slot_err_prob 0.00 與 --intent_err_prob 0.00，照文件跑等於沒有雜訊；這組是不是 Figure 1 的設定無法確定。slot_err_mode 預設 0，只換值。mode 1 的第二個分支與 mode 2 會把隨機 slot 寫進動作字典的最外層，而不是 inform_slots；輸出時只複製 inform_slots，所以「slot 與值都錯」這種錯誤實際上退化成刪除 slot。論文列出的三種 slot 錯誤，在程式碼中實際只有兩種有效。",
+    "加噪的位置也值得注意（依程式碼推論，沒有實跑）。corrupt() 改的是模擬器自己的 state，被加噪的值下一輪會併入 history_slots，而成功判定正好拿 history_slots 和目標比對。等於模擬器「以為自己講了錯的值」，agent 要重新 request 該 slot（使用者會從目標回答正確值），或 inform 正確值覆寫，才救得回來。這讓 error model 不只影響 agent 的輸入，也同時改變了裁判的依據。",
+    "目標分佈和成功率指標混在一起。目標只從 280 段對話的使用者句抽取，README 推薦的 part.movie.v1 子集還要求目標含 moviename；ticket 一定會被請求；沒有目標改變。限制不可滿足時一律算失敗，所以成功率同時反映 agent 的策略與 KB 的覆蓋率（README 給的上限 0.9765）。作者說這不太影響演算法比較，但沒有提出佐證，例如兩種計法下排名是否一致。",
+    "選模方式會高估表現。公開程式碼每個 epoch 在同一個模擬器上跑 simulation_epoch_size 場（README 是 100 場，目標有放回抽樣），取歷來最高的成功率保存最佳模型。這是在訓練環境上對多次小樣本估計取最大值，本來就向上偏；100 場的二項抽樣誤差約為 1.5 到 5 個百分點（成功率越接近 0.5 越大），單次模擬評估分辨不出這個幅度內的差異。",
+    "對 LLM 時代的 T6 而言，這套模擬器的外推有限：它運作在 dialog-act 層級，規則綁定電影領域，自然語言只來自模板與一個用 280 段對話訓練的 seq2seq。能搬用的是它的介面契約（目標由 inform／request 組成、依 agent 動作分派回應、模擬器在結尾判定成敗），不是它的逼真度；論文也沒有任何證據說明它的逼真度如何。"
+  ],
+  "framework_role": "這篇是 T6「經典與神經使用者模擬器」子領域中，被最多後續 RL 對話研究拿來當訓練對手的公開規則式模擬器之一（TC-Bot）。它把 T6 的基本契約具體化：抽使用者目標（限制加請求），由 agenda 規則依 agent 動作產生下一步，經 error model 或 NLG 注入雜訊，最後由模擬器依目標判定成敗。這個成敗判準同時就是 T8 的任務完成分數（success rate、average reward、average turns），框架中的 T6 → T7 → T8 在這裡由同一個元件完成。概念源頭是 Schatzmann 的 agenda 模型，本文的貢獻在於工程化與公開；它提供了一個可重用的介面範本，但沒有逼真度證據，不能當作「模擬器可信」的依據。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "每場對話由模擬器從目標庫抽出目標，再產生使用者主導的第一句（通常是 request，帶至少一個限制 slot），之後每輪依 agent 上一個動作產生回應。這些使用者動作可以直接以 dialog act 形式交給 agent（經 error model 在 intent 與 slot 層加噪），也可以經 NLG 轉成自然語言，再由 joint LSTM NLU 做 intent 預測與 slot filling。這正是「模擬使用者的輸入進入意圖偵測與目標對齊」的資料流，error model 則是刻意讓這條流帶有 NLU 雜訊。"
+    },
+    {
+      "edge": "E6",
+      "how": "每場互動結束時，由模擬器自己依目標判定 success 或 failure，轉成獎勵（程式碼：成功 +2·max_turn、失敗 −max_turn、每輪 −1），彙總成 success rate、average reward、average turns。這些互動結果同時餵給評估（學習曲線、選最佳模型）與訓練（決定 replay buffer 是否清空重填）。論文沒有把互動紀錄交給獨立的評估者：產生行為的規則與判定成敗的規則是同一套，這是這條邊在本文中的主要弱點。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文沒有提到任何產品或部署，只說在模擬器上訓練的 agent 之後「可以」部署給真人繼續學習，並沒有實際做。公開儲存庫 https://github.com/MiuLab/TC-Bot（論文中的 MiuLab/UserSimulator 連結會轉到這裡；MIT 授權，約 800 星、288 fork，最後一次提交在 2023-05）是研究用程式碼。SLT 2018 的 Microsoft Dialogue Challenge（https://github.com/xiul-msr/e2e_dialog_challenge）引用本文，沿用同一套命令列介面，並擴充到餐廳與計程車領域；這屬於研究社群的共同評測，是學術影響力，不算商用採納。Semantic Scholar 記錄 187 次引用、24 次 influential citation，同樣只是學術影響力。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/MiuLab/TC-Bot（MIT；Python 2、numpy 自寫的 DQN／LSTM；包含規則模擬器、error model、NLU／NLG 預訓練模型、規則 agent、DQN agent 與訓練指令。論文與程式碼有多處不一致，見 limitations_observed）",
+    "data": "部分公開。儲存庫的 src/deep_dialog/data 內有電影 KB（movie_kb.1k、movie_kb.v2）、使用者目標庫（first-turn 與 all-turns 版本）、NLG 模板 dia_act_nl_pairs.v6.json、intent 與 slot 清單。論文所說的 280 段原始標註對話本身，沒有在這次檢查的資料目錄中看到；後來 Microsoft Dialogue Challenge 另外釋出了三個領域的標註資料。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它是被大量沿用的公開 agenda-based 模擬器參考實作（TC-Bot），把「目標＋規則回應＋error model＋模擬器判成敗」這套契約具體化，對理解經典 RL 對話訓練環境很有用。但論文本身是工具說明，沒有評估模擬器的逼真度、沒有與真人對照、沒有報數字，概念源頭是 Schatzmann 的 agenda 模型，程式碼與論文也有多處不符，所以有參考價值，但不算 T6 必讀。",
+  "related": ["1607.00070", "1609.00777", "1608.05081", "1606.01269", "1606.02689"],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

@@ -1,0 +1,146 @@
+{
+  "id": "2403.12881",
+  "title": "Agent-FLAN: Designing Data and Methods of Effective Agent Tuning for Large Language Models",
+  "topic": "T4",
+  "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把 ReAct／JSON 格式的 agent 軌跡改寫成多輪對話，按「推理、檢索、理解、指令遵循」四種能力拆開逐輪重新配比，再補上「何時不該呼叫工具」的負樣本，用這份重組過的軌跡語料微調 Llama2 成為 agent。",
+  "problem": "開源 LLM 當 agent 時遠不如 GPT-4 這類 API 模型，而既有的 agent tuning（AgentTuning、FireAct、ToolLLM）直接拿 ReAct（Thought-Action-ActionInput）加 JSON 參數的軌跡做 SFT。作者認為這有三個問題：(1) 軌跡把「格式遵循」和「推理」糾纏在一起，偏離預訓練的自然對話分佈，模型很快就把固定格式背起來，推理卻學不到；(2) agent 需要的各項能力學習速度不同，整包餵進去配比不當；(3) 既有方法忽略 agent 幻覺：沒給工具時硬套 ReAct 格式回答，或被誘導去呼叫不存在的工具。這直接決定「一份 agent 軌跡資料該以什麼格式、什麼組成拿去訓練」。",
+  "core_idea": "軌跡的『序列化格式』與『組成』本身就是訓練訊號的一部分：把結構化的 ReAct 軌跡攤平成模型熟悉的多輪聊天（每個 Thought、工具名、參數都變成一輪 assistant 回覆，只對 assistant 輪計算 loss），就能把每一步按能力標籤分開，依各能力的 loss 收斂速度調整比例、大幅減少 token；再用負樣本明確教模型『什麼時候不要當 agent』來壓低幻覺。",
+  "method": {
+    "input_data": "AgentInstruct（6 個任務：OS 195、Database 538、Knowledge Graph 300、WebShop 351、ALFWorld 336、Mind2Web 116）加 ToolBench 22,867 筆，合計 24,703 筆軌跡（Table 6）。過濾規則：只留符合 Thought-Action-ActionInput 格式者、刪除 AgentInstruct 中的 few-shot 範例；ToolBench 只留有 FinalAnswer 的樣本，並剔除以 DFSDT 重試提示開頭（「這不是你第一次嘗試此任務」那類）的樣本；ToolBench 實際只用了約全集的 10%。",
+    "step1_align_to_chat": "把每條 ReAct 軌跡改寫成多輪對話：用多輪 user/assistant 對話取代 Thought-Action-ActionInput 樣板；再把 JSON 參數拆開，在中間插入若干『引導語句』（elicit statements，放在非 assistant 端）逐項引出參數。loss 只加在 assistant 輪，所以這些格式化的引導語不會被模型背起來。另外保留約 10% 原始 ReAct 格式資料、90% 對話格式，並額外造約 2,000 筆指令遵循資料（要求模型以 ReAct 或 JSON 格式作答），用來保住按指定格式輸出的能力。",
+    "step2_capability_decomposition": "把改寫後每一個 assistant 輪標成四種能力之一：reasoning（每步的 Thought 品質）、retrieval（選哪個函式名稱）、understanding（被選函式的參數填寫）、instruction following（格式產生）。先用等權混合（各能力資料與原始相同）做消融：一次把某一類減半，看 T-Eval 與 HotpotQA 的變化（Table 2）。最終配比 reasoning:retrieval:understanding = 1:0.25:0.75（附錄 A），token 數從等權的 37.3M 降到 18.1M。論文沒有寫清楚權重具體怎麼落實（丟樣本還是遮 loss）；公開資料集每一輪帶有布林的 loss 欄位，推測是以逐輪 loss 遮罩實作（此為推測）。",
+    "step3_negative_samples": "依『有沒有給工具 × 使用者問題需不需要工具』切成四種情境（Figure 6）：(a) 無工具＋一般對話、(b) 有工具＋一般對話、(c) 無工具＋看似需要工具的請求、(d) 有工具＋需要工具。既有語料幾乎只有 (a)(d)。構造法（附錄 C）：從 ToolBench 抽 761 筆使用者問題，讓 gpt-3.5-turbo 在不提供任何工具資訊的情況下直接回覆，得到 (c)；再隨機對其中一半在 system prompt 附上無關工具，得到 (b)。目標是教模型『不只學怎麼用工具，也學什麼時候該用』。",
+    "training": "沿用 AgentTuning 的混合訓練：ShareGPT 一般對話與 agent 語料 1:1 混合。基底 Llama2-7B/13B/70B，採 Llama2-chat 對話格式，全參數微調 1 epoch；learning rate 2e-5、warmup LR 4e-6、cosine schedule；batch size 32/32/128；GPU 16/32/128（Table 5）。",
+    "agent_h_benchmark": "從 glaive-function-calling-v2 挑出 1,845 筆作為 out-of-domain 驗證集，只判斷模型輸出是『一般回覆』還是『函式呼叫』。兩類關鍵字偵測：ReAct 格式幻覺（例如出現 Thought:、Action:）與一般格式幻覺（例如 I will use、I need to call）。當 ground truth 應為一般回覆而輸出含上述關鍵字即算一次幻覺。H_ReAct、H_General = 各自幻覺數 ÷ ground truth 為一般回覆的樣本數；H_Score = 0.5 ×((1 − H_ReAct) + (1 − H_General))（論文式 (1) 誤把兩項都寫成 H_ReAct，但 Table 3 的數字符合兩項平均）。",
+    "reimplementation_notes": "要重做需要：(1) ReAct→多輪對話的改寫模板與引導語句（Figure 5 只示意，全文沒有完整模板，需看 GitHub 的轉換程式或直接用公開資料）；(2) 逐輪能力標籤與 loss 遮罩；(3) 負樣本的 gpt-3.5-turbo 生成提示（論文未給）；(4) Held-In 綜合分數的計算方式論文沒有定義，需回查 AgentTuning 的評測設定。"
+  },
+  "assumptions": [
+    "LLM 預訓練分佈接近自然對話，把軌跡改寫成聊天格式可降低分佈偏移；格式 token 的 loss 很快降低代表模型在背格式、而非學推理。",
+    "各能力子集的 loss 曲線下降速度可以當作『學習難易度』，並用來決定資料配比。",
+    "AgentInstruct 與 ToolBench 裡由 GPT-4／GPT-3.5 產生的軌跡足夠正確，值得模仿（沒有步驟層級的正確性過濾，只做格式與 FinalAnswer 過濾）。",
+    "agent 幻覺可以化約為單一回覆層級的二元判斷（該不該呼叫工具），並以關鍵字比對偵測。",
+    "gpt-3.5-turbo 在沒有工具時產生的婉拒式回覆是合適的負樣本目標行為。",
+    "底層模型使用可逐輪遮 loss 的聊天模板（Llama2-chat），且只對 assistant 輪計算 loss。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Held-In：AgentInstruct 的 ALFWorld、WebShop、Mind2Web、Knowledge Graph、OS、Database 與 ToolBench（Table 1 只給一個綜合數字）",
+      "Held-Out：HotpotQA、SciWorld、WebArena、T-Eval、Agent-H（作者自建）",
+      "一般能力：MMLU、GSM8K、HumanEval"
+    ],
+    "metrics": [
+      "各 benchmark 自身的分數（T-Eval 為整體分、HotpotQA 等為任務成功率類分數）",
+      "Agent-H：H_ReAct↓、H_General↓、H_Score↑",
+      "Overall：經核算等於五個 Held-Out 欄位（含 Agent-H）的算術平均，Held-In 不計入",
+      "資料規模與模型規模的 scaling 曲線（Figure 7、8，只有圖）"
+    ],
+    "baselines": [
+      "GPT-3.5、GPT-4",
+      "Llama2-7B（未微調）",
+      "FireAct-7B",
+      "AgentLM-7B（AgentTuning 官方權重）",
+      "AgentTuning*（作者以相同資料量重新實作）",
+      "ReAct 格式直接微調（Table 2 基線）",
+      "Agent-FLAN w/o NS（拿掉負樣本）",
+      "只用 general data 微調（Table 4）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "Agent-FLAN（Llama2-7B）在 Held-Out 綜合分數上贏過作者重新實作的 AgentTuning 約 3.5 分；Held-In 只小幅領先。",
+      "numbers": "Overall 41.7 vs AgentTuning* 38.2 vs AgentLM-7B 31.7 vs Llama2-7B 27.2（GPT-4 為 55.1）；HotpotQA 28.5 vs 25.4、SciWorld 20.0 vs 16.8、WebArena 4.68 vs 2.71、T-Eval 66.0 vs 61.8、Agent-H 89.1 vs 84.5；Held-In 2.01 vs 1.89",
+      "section": "Abstract、§4、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "先導觀察一：以 ReAct 格式資料訓練時，格式部分的 loss 很快降到很低，內容部分的 loss 仍居高不下，被解讀為模型過擬合格式、沒學到推理。",
+      "numbers": "兩類 loss 的對比為 0.54 vs 0.04（Figure 2；原文未明示哪個數對應哪一類，依上下文應為內容 loss 0.54、格式 loss 0.04）",
+      "section": "§3 Observation 1、Figure 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "把 ReAct 軌跡改寫成聊天格式（Align-Chat）比直接用 ReAct 格式微調穩定提升。",
+      "numbers": "T-Eval 61.8→64.9（+3.1）、HotpotQA 25.4→27.9（+2.5）；但訓練 token 從 19.2M 增為 37.3M",
+      "section": "§4.1、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "能力消融：把 reasoning 或 understanding 子集減半會掉分，把 retrieval 或 instruction following 減半幾乎沒影響甚至變好，與各能力 loss 下降速度一致。",
+      "numbers": "減半 reasoning：T-Eval 64.9→63.8、HotpotQA 27.9→27.4；減半 understanding：T-Eval 64.6、HotpotQA 28.1；減半 retrieval：65.3／29.0；減半 instruction following：65.9／27.5",
+      "section": "§4.2、Table 2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "依能力加權後的混合只用不到一半的 token，反而得到最好的 T-Eval 與接近最好的 HotpotQA。",
+      "numbers": "權重 reasoning:retrieval:understanding = 1:0.25:0.75；All (Weighted) 18.1M tokens、T-Eval 66.3、HotpotQA 28.5，對比等權 All 37.3M tokens、64.9、27.9",
+      "section": "附錄 A、Table 2",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "負樣本學習明顯降低 agent 幻覺，T-Eval 幾乎不受影響。",
+      "numbers": "H_Score：Llama2-7B 78.7、AgentTuning 83.9、Agent-FLAN w/o NS 84.5、Agent-FLAN 89.1；H_ReAct 15.6→9.9、H_General 13.5→11.9；T-Eval 66.3→66.0",
+      "section": "§4.3、Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "資料規模：只用 25% 的 Agent-FLAN 資料就拿到大部分增益，之後邊際效益遞減；作者據此主張多樣性與品質比量更重要。模型規模 7B→13B→70B 持續提升且未見飽和。",
+      "numbers": "文中只有 Figure 7、8 的曲線，未給具體數值",
+      "section": "§5.1.1、§5.1.2、Figure 7、Figure 8",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "加入 agent 語料對一般能力沒有傷害、甚至小幅提升。",
+      "numbers": "相對只用 general data：7B MMLU −0.3、GSM8K +0.2、HumanEval +0.4；13B +1.1／+0.4／+0.6；70B +0.5／+0.1／+0.8",
+      "section": "§5.2、Table 4",
+      "anchor_idx": 6
+    }
+  ],
+  "limitations_stated": [
+    "訓練與驗證資料只涵蓋部分 agent 任務，還有許多互動情境沒測到。",
+    "為了資料品質只從 ToolBench 取約 20,000 筆有效樣本（約全集 10%），沒有充分利用。"
+  ],
+  "limitations_observed": [
+    "Agent-H 是單邊指標：只在 ground truth 為一般回覆的樣本上計算幻覺，完全不懲罰『該呼叫工具卻不呼叫』。一個永遠不呼叫工具的模型可以拿滿分，而負樣本正是在教模型少呼叫工具，所以 89.1 vs 84.5 的改善有一部分是指標構造本身送的；拿掉負樣本時 T-Eval 反而是 66.3 > 66.0，正好是過度婉拒可能出現的方向。關鍵字比對（I will use、I need to call）也很粗糙，一般對話裡出現這些字就會誤判，換成其他工具呼叫格式則會漏判。",
+    "Table 3 與 Table 1 的數字對不起來：依 Table 3 的 H_ReAct 15.6、H_General 13.5 算，w/o NS 的 H_Score 應為 85.45，表中卻是 84.5；AgentTuning 在 Table 3 是 83.9，Table 1 的 AgentTuning* Agent-H 卻是 84.5。其他列（Llama2-7B 78.65、Agent-FLAN 89.1）都算得回來，所以負樣本的實際效果可能只有約 3.65 分而非 4.6 分；式 (1) 本身也有筆誤（兩項都寫成 H_ReAct）。",
+    "『贏 3.5%』的 Overall 經核算是五個 Held-Out 欄位的平均，且包含作者自建、只有 Agent-FLAN 做過針對性訓練的 Agent-H；扣掉 Agent-H 後，四項平均為 29.8 vs 26.7，差距縮為約 3.1。Held-In 只有 2.01 vs 1.89，WebArena 的絕對值 4.68 vs 2.71 極低；全部是單次結果，沒有報告種子數或變異，這種量級的差距是否顯著無從判斷。",
+    "Align-Chat 對 ReAct 的比較有混淆變因：token 數幾乎翻倍（19.2M→37.3M，來自引導語句與額外的指令遵循資料），+3.1／+2.5 無法全部歸因於格式對齊。能力配比也是直接在 T-Eval 與 HotpotQA 這兩個 held-out 集上挑的，沒有獨立的開發集，對 held-out 有選擇偏差；而且『減半 understanding 會掉分』只在 T-Eval 成立，HotpotQA 反而從 27.9 升到 28.1。",
+    "先導觀察二把各能力子集的 loss 高低解讀成『學習速度』，但格式 token、函式名稱本來就是低熵、容易預測的 token，loss 低不等於學得快，也不等於不需要更多資料；1:0.25:0.75 這組權重怎麼從曲線推出來，論文沒有交代。公開資料集的檔名（toolbench_tflan_60p_r10r5u7、toolbench_instruct_j1s1_3k）看起來像另一組比例與 3k 筆指令資料，和論文寫的 1:0.25:0.75、2,000 筆可能不一致（僅由檔名推測，未驗證）。",
+    "訓練資料 92.6% 是 ToolBench（22,867／24,703），AgentInstruct 六個任務合計只有 1,836 筆，結論其實主要反映 API 呼叫型軌跡；軌跡品質只靠格式與 FinalAnswer 過濾，沒有步驟層級的正確性檢查，錯誤步驟也會被一起模仿。",
+    "負樣本構造偏容易：(b) 是『隨機附上無關工具』，工具與問題明顯不相干，沒有涵蓋『看起來相關但不該用』的困難情境；(c) 的目標回覆全是 gpt-3.5-turbo 的『我沒有即時資料』式婉拒，等於教模型一種固定的拒答句型。另外 761 筆 query 來自 ToolBench，而 Agent-H 取自 glaive，雖說是 out-of-domain，兩者都是 function-calling 單輪問答，分佈差距有限。",
+    "Table 4 的一般能力差異都在 ±1.1 以內且沒有變異估計，7B 的 MMLU 還是 −0.3，『帶來額外好處』的說法證據很弱；『general data』基線的組成也沒交代。",
+    "對 T4 而言，這篇只把軌跡當成 SFT 語料來重新格式化與重新配比；沒有軌跡層級或步驟層級的評估、沒有失敗歸因、沒有 process reward。它的『失敗分類』只有格式幻覺與動作幻覺兩類，而且是在單一回覆上判定，不是在整條軌跡上定位哪一步出錯。所謂『多輪對話』也只是把 agent 與環境的互動改寫成對話，使用者端並不是真人或使用者模擬器。"
+  ],
+  "framework_role": "屬於 T4 的『軌跡格式與以軌跡訓練 agent』子領域：提供證據說明軌跡的序列化格式（ReAct／JSON vs 多輪聊天、逐輪遮 loss）與組成（按能力配比、加入負樣本）會實質影響訓練出來的 agent。它的逐步能力標籤（Thought＝reasoning、工具名＝retrieval、參數＝understanding、格式＝instruction following）也可以借來當軌跡步驟的標註結構，作為之後做步驟層級錯誤分類的起點，不過論文本身沒有這樣用。負樣本的四象限（有無工具 × 需不需要工具）和 T1 的『這句話要不要觸發工具』意圖判斷相關；Agent-H 則是 T7 的一個窄範圍評估工具。它不處理軌跡分析、歸因或 process reward。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "InternLM2 Technical Report §4.4 Tool-Augmented LLMs 明寫：為了引出 InternLM2 的 agent 能力，把 agent 語料對齊到聊天領域，並沿語言模型的基本能力拆開做細粒度訓練，做法如 Agent-FLAN 所述。InternLM2-Chat 是公開釋出的開源權重模型系列，此為其官方技術報告（https://arxiv.org/abs/2403.17297，已透過 arxiv_tool 取全文，於第 4.4 節確認）。",
+      "作者釋出 Agent-FLAN-7B 模型與 Agent-FLAN 資料集（Apache 2.0）：https://huggingface.co/internlm/Agent-FLAN-7b 、https://huggingface.co/datasets/internlm/Agent-FLAN ；GitHub README 標示此論文為 ACL 2024 Findings（https://github.com/InternLM/Agent-FLAN）。這屬於可重現性，不算外部採納。"
+    ],
+    "assessment": "有一條可查證的產品級採納：同一實驗室（Shanghai AI Lab）在公開釋出的 InternLM2-Chat 系列的 agent 訓練中採用了 Agent-FLAN 的資料設計。但採納者就是作者自己的機構，技術報告也沒有單獨量化 Agent-FLAN 對 InternLM2 agent 表現的貢獻；除此之外未見外部公司或產品採用的證據。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/InternLM/Agent-FLAN",
+    "data": "公開。Hugging Face internlm/Agent-FLAN（Apache 2.0），7 個 jsonl：agent_instruct_react、agent_instruct_tflan、toolbench_instruct_j1s1_3k、toolbench_negative、toolbench_react_10p、toolbench_tflan_60p_r10r5u7、toolbench_tflan_cot_30p；每一輪有 role、content，部分檔案另帶布林 loss 欄位（因欄位不一致，HF 線上 viewer 無法產生預覽，2026-09-26 查）。模型權重 internlm/Agent-FLAN-7b 也已公開。負樣本的 gpt-3.5-turbo 生成提示與 Held-In 綜合分數的算法論文未給。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它是少數直接實驗『軌跡要用什麼格式、什麼組成拿去訓練 agent』的工作，並被 InternLM2 實際採用，對 T4 的軌跡格式與合成子領域有參考價值；但增益幅度小、無變異估計、幻覺改善靠作者自建的單邊指標，而且完全不碰軌跡分析、歸因與 process reward，不到 T4 必讀。",
+  "related": [
+    "2310.12823",
+    "2307.16789",
+    "2310.05915",
+    "2312.14033",
+    "2210.03629",
+    "2301.13688",
+    "2308.03688",
+    "2307.13854"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

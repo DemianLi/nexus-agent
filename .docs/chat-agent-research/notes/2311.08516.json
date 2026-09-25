@@ -1,0 +1,198 @@
+{
+  "id": "2311.08516",
+  "title": "LLMs cannot find reasoning errors, but can correct them given the error location",
+  "topic": "T5",
+  "subarea": "內在自我修正與口語反思（含批判性研究）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把自我修正拆成「找錯」與「改錯」兩段分開量：發布 2,186 條標註首個邏輯錯誤步的 CoT 軌跡資料集 BIG-Bench Mistake，顯示五個主流 LLM 找出錯誤位置的整體準確率最高只有 52.87（GPT-4），而把正確錯誤位置交給 PaLM 2、以「回溯到錯誤步重抽」修正時，原本答錯的軌跡能救回 18–44%，據此主張推理自我修正的瓶頸在找錯而非改錯。",
+  "problem": "Huang et al.（2310.01798）等工作指出，沒有外部回饋時 LLM 在推理任務上自我修正常把對的改錯、整體變差；Reflexion、RCI 的增益也來自以正確答案當停止訊號。但既有研究把自我修正當成單一流程，無法分辨失敗是因為「找不到錯在哪」還是「知道錯在哪也改不好」。兩者指向完全不同的投資方向：前者要做驗證器／錯誤定位器，後者要改修正提示或訓練修正能力。此外，當時公開的步驟級錯誤標註資料只有 PRM800K（奧賽數學、生成器為數學專門微調模型），缺少跨任務、由一般 API 模型產生的推理錯誤資料。",
+  "core_idea": "用 CoT 把任何任務變成找錯任務：把推理切成編號步驟，以「首個邏輯錯誤所在步（或無錯）」當多類標籤。(1) 在客觀、無歧義、非專家也能高度一致標註的任務上，單獨量 LLM 的找錯能力；(2) 把找錯與改錯隔開——直接把 oracle 錯誤位置餵給一個不含任何回饋文字的極簡回溯程序，量「知道錯在哪」之後的修正效果，並以隨機位置對照排除「只是多抽一次」的效應；(3) 用模擬分類器量出回溯要划算所需的最低找錯準確率，再以跨任務資料微調的小模型示範找錯能用標準機器學習改善。結論：推理自我修正的主要瓶頸是錯誤定位，改寫本身相對穩健。",
+  "method": {
+    "資料集 BIG-Bench Mistake：任務": "BIG-bench 的五個英文任務：word sorting、tracking shuffled objects、logical deduction、multistep arithmetic、Dyck languages。選擇理由：PaLM 2 在這些任務表現差、容易產生錯誤；錯誤不歧義、標註主觀性低；判斷對錯不需專業知識。",
+    "資料集：軌跡生成（§2、Appendix A.1）": [
+      "生成模型 PaLM 2 Unicorn，3-shot CoT，temperature=0。",
+      "提示詞改自 BIG-Bench Hard 的 CoT 提示，改了四處：範例拆成約一句一步；每步加上「Thought N:」標記（仿 ReAct）以便用步號指涉；logical deduction 原提示的問號記號不一致，改成文字描述物件；multistep arithmetic 把一個範例改成較長的算式，以涵蓋 BIG-bench 原始的多種長度。",
+      "逐步生成：以換行字元當 stop token，每次呼叫只生一步，程式自動在前面補「Thought N:」；以 regex (?<=[Tt]he answer is).*$ 偵測到答案就停止。",
+      "最終答案以 exact match 判定對錯。提示詞與範例放在 GitHub repo。"
+    ],
+    "資料集：取樣與標籤定義（§2、§2.1、Table 2）": [
+      "前四個任務各抽 300 條：255 條最終答案錯（85%）＋45 條答對（15%）。刻意偏斜是為了在有限人力下最大化含錯步驟數，同時保留答對但可能含邏輯錯、以及靠近軌跡尾端的正確步驟。",
+      "Dyck languages 收 986 條（482 答對／504 答錯），另抽 592 條子集（88／504）讓比例接近其他任務。合計 2,186 條。",
+      "標籤 mistake location：首個邏輯錯誤所在步的整數 N，或「無錯」。只標第一個錯誤，後續錯誤可能是它的連帶結果，一律忽略。",
+      "兩種正確性分開命名：correct_ans／incorrect_ans 指最終答案對錯；correct_mis／incorrect_mis 指軌跡有無邏輯錯誤。答對的軌跡也可能含邏輯錯。"
+    ],
+    "資料集：人工標註（§2.1.1、Appendix B、D）": [
+      "前四個任務由非專家標註者依標註準則逐步做二元判斷（仿 Lightman et al. 的做法）；遇到第一個錯步即可送出、之後的步驟跳過（介面按鈕自動停用），以免「推論正確但前提已錯」的歧義。",
+      "介面顯示題目與目標答案，並提醒答對的軌跡也可能有錯；點一個字可在軌跡與題目中高亮同一個字。",
+      "每條至少 3 人標註，有分歧取多數；Krippendorff's α：word sorting 0.979、tracking 0.998、logical deduction 0.996、multistep arithmetic 0.984。",
+      "multistep arithmetic 發現 BBH 原範例的第一步本身就錯、所有軌跡都共用這一步，因此給標註者看之前先刪掉。"
+    ],
+    "資料集：Dyck 自動標註（§2.1.2）": "依提示範例的格式用演算法產生標準步驟，以 pattern matching 判斷模型每一步是否符合同一格式；符合則逐步比對，符號不一致即判錯。另處理最後兩步被合併、符號有無加引號等邊界情況。程式碼公開。",
+    "找錯評估（§3、Appendix A.2）": {
+      "模型": "GPT-4-Turbo、GPT-4、GPT-3.5-Turbo、Gemini Pro、PaLM 2 Unicorn。全部 3-shot、OpenAI chat completion 格式、temperature=0、無 stop token。因成本與用量上限，GPT-4-Turbo 沒跑 CoT step-level，Gemini Pro 只跑 direct trace-level；部分 Dyck 結果只在 45／255 的子集上跑。",
+      "三種提示法": [
+        "direct trace-level：整條軌跡一次輸入，要求輸出錯誤步編號或「No」。每條軌跡 1 次呼叫。",
+        "direct step-level：每一步各呼叫一次，輸入為截至（含）目標步的部分軌跡，不帶先前各步的判斷結果，輸出 Yes/No；以第一個 No 的位置當預測，後面的判斷忽略。",
+        "CoT step-level：同上，但每一步先生成一段檢查推理再給 Yes/No；成本最高。"
+      ],
+      "指標": "mistake location accuracy：預測位置與標籤完全相同，或正確判定「無錯」才算對。Appendix E 另拆成 correct_mis 與 incorrect_mis 兩組分別報告。",
+      "找錯當正確性代理（§3.3）": "把「預測軌跡有錯」視為預測最終答案錯，對 correct_ans 與 incorrect_ans 當正類各算 F1，再依標籤出現頻率加權平均；全部猜答錯的 naive 基準為 78。"
+    },
+    "回溯修正（§4、Figure 2）": {
+      "步驟": [
+        "(a) 模型以 temperature=0 產生初始 CoT 軌跡。",
+        "(b) 取得錯誤位置：§4 用 oracle 標籤，§5 用分類器或模擬分類器。",
+        "(c) 若無錯就保留原軌跡；若第 N 步有錯，用同一份提示＋第 1 到 N-1 步的前綴（不含第 N 步），以 temperature=1 重新生成第 N 步。",
+        "(d) 實驗中 (c) 常重抽出與原步相同的內容，所以重複 (c) 直到得到不同的步，或達上限 8 次；實作上一次同時生成 8 個候選、只挑一個用來回溯（挑選規則與 8 個全與原步相同時的處理方式，論文未說明）。",
+        "(e) 以新步取代原第 N 步，再以 temperature=0 續寫其餘步驟直到得出答案。"
+      ],
+      "設計要點": "刻意做成極簡基準：不加任何回饋或提示文字（模型不會被告知哪一步錯），不生成大量候選。修正者與原生成者同為 PaLM 2 Unicorn，以檢驗「自我」修正。回溯套用在所有標註有錯的軌跡上，包括最終答案正確但含邏輯錯者。",
+      "對照組": "random location：每條軌跡隨機選一個位置（也可能選到「無錯」而不回溯），再照同樣流程回溯。",
+      "指標": "Δaccuracy✓：原本 correct_ans 的軌跡在回溯後答案正確率的絕對變化（只可能下降）；Δaccuracy✗：原本 incorrect_ans 的軌跡（可能上升）。分開報告，避免被 85/15 的偏斜比例扭曲。"
+    },
+    "最低找錯準確率模擬（§5.1、Figure 3）": "模擬準確率 X% 的分類器：X% 的軌跡使用資料集的正確位置；其餘 (100−X)% 依資料集中錯誤位置的分布隨機抽一個位置，並保證不等於正確位置。對每個 X 跑回溯，畫出 Δaccuracy✓ 與 Δaccuracy✗ 隨 X 變化的曲線。",
+    "錯誤定位分類器（§5.2、Appendix C）": [
+      "骨幹：PaLM 2 Otter（遠小於 Unicorn）。訓練成二元分類器：給定任務、先前步驟與目標步，判斷目標步是否正確。",
+      "leave-one-task-out：用其他 4 個任務訓練、在留出的任務上評估，共訓練 5 個模型。",
+      "超參數：最多 20k steps、batch size 32、learning rate 1e-5、linear ramp＋cosine decay；挑驗證結果最佳的 checkpoint（實際落在 6,800–10,000 步，Table 8）。驗證集從哪裡切出，論文未說明。",
+      "因資料少，把首錯步之後的步驟也當成「錯」放進訓練（未經人工標註）。",
+      "評估指標同 §3 的 mistake location accuracy，對照 PaLM 2 Unicorn 3-shot direct trace-level 的分數。"
+    ],
+    "重做要備妥的元件": "逐步生成的 CoT 驅動器（換行 stop、Thought N 前綴、答案 regex）；三種找錯提示模板（repo 有）；exact-match 答案判定；回溯器（截斷前綴、temperature=1 一次抽 8 挑一個與原步不同者、temperature=0 續寫）；隨機位置與模擬分類器的取樣器；依原始答案對錯分組的 Δaccuracy 統計；可微調的小型分類器骨幹（PaLM 2 Otter 不對外開放，需換成開源模型）。"
+  },
+  "assumptions": [
+    "所選任務的推理步驟客觀、無歧義，「首個邏輯錯誤」有唯一明確的位置；非專家的高一致性（α≥0.979）被當成「這是簡單題」的證據。",
+    "推理可以用換行切成一句一步的離散步驟，且只有第一個錯誤要緊，後續錯誤都是它的連帶結果。",
+    "從錯誤步前的前綴以 temperature=1 重抽該步、再續寫，是衡量「給定錯誤位置後的修正能力」的合理代理。",
+    "用其他模型在 PaLM 2 產生的軌跡上找錯，可以代表自我修正流程中的找錯瓶頸（作者在註腳承認跨模型評估與自我評估可能不同）。",
+    "模擬分類器的錯誤位置分布與資料集錯誤位置分布相同、與題目難度無關（§5.1）。",
+    "最終答案的 exact match 足以判定下游任務的對錯。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "BIG-Bench Mistake（本文發布，2,186 條；涵蓋 word sorting、tracking shuffled objects、logical deduction、multistep arithmetic、Dyck languages）"
+    ],
+    "metrics": [
+      "mistake location accuracy（exact match，另拆 correct_mis／incorrect_mis）",
+      "以找錯結果預測最終答案對錯的加權平均 F1",
+      "Δaccuracy✓（原本答對者）與 Δaccuracy✗（原本答錯者）的答案正確率絕對變化",
+      "Krippendorff's α（標註者一致性）"
+    ],
+    "baselines": [
+      "五個 LLM × 三種找錯提示法互相比較",
+      "全部猜答錯的 naive 基準（加權 F1 = 78）",
+      "random location 回溯",
+      "不同準確率的模擬分類器（§5.1）",
+      "PaLM 2 Unicorn 3-shot 找錯 vs 微調的 PaLM 2 Otter 分類器（§5.2）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "發布 BIG-Bench Mistake：由 PaLM 2 Unicorn 產生、標註首個邏輯錯誤步的 CoT 軌跡，作者稱是第一個超出數學範圍的此類資料集；非專家標註者之間一致性極高。",
+      "numbers": "共 2,186 條（前四任務各 300 條、Dyck 986 條，另有 592 條比例對齊子集）；平均步數 word sorting 11.7、tracking 5.4、logical deduction 8.3、multistep arithmetic 5.0、Dyck 24.5；Krippendorff's α 0.979–0.998。",
+      "section": "§2、Table 2、Table 3、Table 4",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "五個模型都難以找出錯誤位置，即使在人類無需專業就能高度一致判斷的簡單任務上；表現也高度依任務而異。",
+      "numbers": "整體最佳為 GPT-4 direct step-level 52.87；GPT-4-Turbo 最高 48.33；PaLM 2 Unicorn 17.09／23.67／24.65（trace／step／CoT step）；GPT-3.5-Turbo 10.44–14.78；Gemini Pro 16.14（只有 trace-level）。單任務最高是 GPT-4 CoT step-level 在 tracking shuffled objects 的 90.67，但同設定在 logical deduction 只有 10.33。",
+      "section": "§3.1、Table 4",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "三種提示法有取捨：從 trace-level 到 CoT step-level，生成呼叫越多，模型越容易至少判出一個錯，於是無錯軌跡的準確率明顯下降、有錯軌跡的準確率上升；overall 分數偏向 step-level 部分是因為資料集中有錯軌跡占多數。",
+      "numbers": "無錯軌跡（correct_mis）準確率，trace→step→CoT step：GPT-4 word sorting 88.24→82.35→58.82、Dyck 98.41→78.57→13.79、logical deduction 100→100→0；GPT-3.5-Turbo tracking 67.50→0.00→0.00。有錯軌跡：GPT-4 tracking 59.14→62.69→92.31。",
+      "section": "§3.2、Figure 1、Appendix E Table 9",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "作者結論：拿提示詞式找錯來判斷最終答案對錯是差的策略，與 Huang et al. 指出 Reflexion／RCI 的增益只來自 oracle 正確性資訊一致。",
+      "numbers": "naive 全猜錯基準的加權 F1 = 78。GPT-3.5-Turbo direct trace-level 只有 3.76–46.57，PaLM 2 Unicorn 13.42–78.29；最高是 GPT-4 CoT step-level 在 tracking 的 95.03。（筆者逐格數：GPT-4 有 10／15 格、GPT-4-Turbo 有 6／10 格高於 78，見 limitations_observed。）",
+      "section": "§3.3、Table 5",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "給定 oracle 錯誤位置時，PaLM 2 以回溯修正自己的軌跡，五個任務都是救回的比弄壞的多，且增益明顯大於隨機位置回溯。作者據此推論自我修正的主要瓶頸是找錯而非改錯。",
+      "numbers": "oracle 位置 Δaccuracy✓／Δaccuracy✗：word sorting −11.11／+23.53、tracking −6.67／+43.92、logical deduction −11.43／+36.86、multistep arithmetic −0.00／+18.04、Dyck −6.82／+18.06。random 位置：−15.56／+11.76、−6.67／+20.39、−13.33／+21.57、−8.89／+10.59、−15.91／+5.16。",
+      "section": "§4.1、§4.2、Table 6",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "回溯的淨效益取決於原始準確率：原始準確率高時，即使用 oracle 位置，答對但含邏輯錯的軌跡被改錯的損失也可能蓋過增益。",
+      "numbers": "以 tracking shuffled objects 的比率推算：原始 50% → 68.6%；原始 99% → 92.8%。",
+      "section": "§4.2",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "回溯不需要完美的錯誤定位：以模擬分類器掃描準確率，Δaccuracy✓ 的損失約在 65% 開始持平；多數任務大約在 60–70% 的定位準確率時，增益就已大過損失。",
+      "numbers": "門檻約 60–70%（只見於 Figure 3 曲線，正文無逐點數字；正文原句寫成「Δaccuracy✓ 大於 Δaccuracy✗」，依上下文應指增益超過損失）。",
+      "section": "§5.1、Figure 3",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "以其他四個任務的資料微調的小模型（PaLM 2 Otter），在留出任務上的找錯準確率有 4／5 個任務勝過 3-shot 提示 PaLM 2 Unicorn；但仍未達 §5.1 的有效回溯門檻，作者認為需要更多資料。",
+      "numbers": "Otter vs Unicorn：word sorting 22.33 vs 11.67（+11.66）、tracking 37.67 vs 18.00（+19.67）、logical deduction 6.00 vs 6.67（−0.67）、multistep arithmetic 26.00 vs 22.00（+4.00）、Dyck 33.57 vs 10.98（+22.59）。",
+      "section": "§5.2、Table 7",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "資料集的任務是人工、不貼近真實應用的；為了降低歧義與主觀性才這樣選，回溯在更真實情境下是否有效仍待驗證。",
+    "沒有在 BIG-Bench 原始資料上完整跑回溯，只在為了節省標註人力而偏斜抽樣的子集上報告；本文定位為概念驗證。",
+    "資料偏斜且每個任務只有 45 條答對軌跡，回溯的整體效益（受原始準確率影響）需要更完整的評估；把錯誤位置納入修正迴圈的更精巧方法留待未來。",
+    "軌跡由 PaLM 2 Unicorn 產生並依答案對錯抽樣，用 PaLM 2 自己找錯可能有偏；跨模型評估與自我評估的差異需要後續研究。",
+    "重抽上限 8 次沒有調過；訓練出的分類器未達回溯有效的門檻，可能需要更多資料；模型大小與效能的取捨、以及修正後又出錯時的迭代回溯都未研究。",
+    "因成本與用量上限，GPT-4-Turbo 與 Gemini Pro 的部分結果缺漏。"
+  ],
+  "limitations_observed": [
+    "§4 的「修正」其實是重抽，不是模型理解錯誤後的改寫：流程只是把軌跡截斷到錯誤步之前、以 temperature=1 重抽該步（最多 8 次、挑一個不同的）再用 temperature=0 續寫，全程沒有任何回饋文字，模型也不知道哪一步錯了。所以標題的「給定錯誤位置就能改正」量到的是「從正確前綴重新取樣的多樣性」，並不支持「LLM 讀了錯誤提示就會改」這種 critique 驅動修正的推論；要驗證後者，需要『把第 N 步有錯明寫進提示』的對照組，論文沒做。",
+    "對照組不足以撐起「增益來自位置資訊」的完整說法：沒有同等算力的基準（例如整條軌跡以 temperature=1 抽 8 次再多數決，或 self-consistency）；而隨機位置基準在結構上偏弱——抽到真錯誤『之後』的步時，錯誤仍留在前綴中，幾乎不可能修好。作者在 §4.2 已承認步數越多、隨機基準越難猜中位置；這裡補的是『猜在錯誤之後就結構上修不好』這一層，它可能是 Dyck（平均 24.5 步）隨機基準 Δ✗ 只有 +5.16 的原因之一，但論文沒有依隨機位置在錯誤前或後拆開報告，無法驗證。",
+    "摘要稱「不用 ground-truth 標籤、不用領域內訓練資料也能取得錯誤位置資訊」，但 §5.2 訓練出的 Otter 分類器從沒接回回溯跑端到端：它的定位準確率（6.00–37.67）全部低於 §5.1 模擬出的 60–70% 門檻，論文也沒有報告用它回溯後的下游準確率。能下的結論只有「微調小模型的找錯準確率比 few-shot 大模型高」，不是「能用它改善自我修正」。",
+    "§5.1 的模擬分類器假設不實際：錯誤位置依資料集分布隨機抽、與題目難度無關，而且刻意排除正確位置；真實分類器的錯通常集中在難題、而且常是差一兩步的近誤。反過來，exact-match 指標對『比真錯誤更早的位置』給零分，但對回溯而言提早回滾其實仍可能修好。兩個方向都讓 60–70% 這個門檻只能當成此模擬設定下的數字，無法直接拿來規格化真實偵測器。",
+    "§3.3 的結論對 GPT-4 家族是過度概括：Table 5 中 GPT-4 有 10／15 格、GPT-4-Turbo 有 6／10 格高於全猜錯基準 78（例如 GPT-4 CoT step tracking 95.03、GPT-4-Turbo direct trace word sorting 87.73），真正普遍低於基準的是 GPT-3.5-Turbo、Gemini Pro 與 PaLM 2。較精確的說法是「只有較強的模型能稍微勝過 naive 基準，而且依任務與提示法波動很大」。",
+    "樣本量小且全為單次執行：Δaccuracy✓ 的分母每任務只有 45 條（Dyck 88 條），一條軌跡就等於約 2.2 個百分點；由 Table 2 可推得 logical deduction 只有 6 條無錯軌跡，Appendix E 那一列的 0／33.33／50／100 都建立在 n=6 上，Figure 1 的取捨有一部分是被這種小樣本撐出來的。回溯用 temperature=1 取樣，卻沒有多種子或信賴區間。另外 Table 6 的 logical deduction oracle Δaccuracy✓ −11.43 無法被 45 整除（對應 4／35），分母未說明。",
+    "「自我修正」的兩半沒有在同一個模型上閉環：找錯實驗多半是其他模型（GPT-4、Gemini 等）檢查 PaLM 2 的軌跡，修正實驗只用 PaLM 2 Unicorn 一個模型；而且軌跡是依 PaLM 2 答錯與否抽樣的。因此「LLM 不能找到自己的錯、但能改自己的錯」這句話，嚴格說只在 PaLM 2 的修正端有證據，找錯端是跨模型證據。",
+    "重做缺口：8 個同時生成的候選中『只挑一個』的規則未說明（第一個與原步不同者？隨機？）；8 個都與原步相同時如何處理未說明；分類器挑『驗證最佳』checkpoint 的驗證集來源未說明，若取自留出任務則有洩漏疑慮。repo 只公開資料、提示詞、標註準則與 Dyck 自動標註程式，回溯與分類器訓練程式未公開，PaLM 2 Unicorn／Otter 也無法取得。",
+    "外推到 agent 有結構性落差：本文的步驟是一句話的推理、首錯步唯一且可由非專家判定、重放前綴沒有副作用。agent 軌跡的步驟是工具呼叫，錯誤常延遲顯現、歸因不唯一，而且回滾到某一步未必能撤銷已執行的外部動作；回溯＋重抽這個修正器在 agent 情境下需要可重放、無副作用的前綴，這個前提本文沒有討論。",
+    "結論有時效性：受測的是 2023 年的非推理型模型。後續的 ProcessBench（2412.06559）用同樣的「最早錯誤步」協定在數學題上量到 o1-mini 平均 F1 87.9、QwQ-32B-Preview 71.5、GPT-4o 61.9，推理型模型當 critic 已明顯強很多；本文 Table 4 裡 GPT-4 CoT step-level 在 tracking 也達 90.67。因此「LLM 找不到推理錯誤」應讀成『當時的 few-shot 提示模型在這組任務上找不到』。另外本文沒有與同期的步驟檢查方法（SelfCheck 2308.00436）或以 PRM800K 訓練的步驟驗證器比較找錯能力。"
+  ],
+  "framework_role": "T5 內在自我修正批判研究的核心之一，應與 2310.01798 並讀：Huang et al. 說明『沒有外部訊號時自我修正無效』，本篇進一步指出失效點在『偵測』而非『修正』。對框架的設計含義：(1) T5 應拆成偵測器與修正器兩個元件分別設計、分別評估，不要讓同一個 LLM 用 few-shot 自評同時決定『要不要修、修哪裡』；偵測器應是專門訓練的小型分類器、步驟驗證器或外部可驗證訊號，而且要輸出『位置』而不只是『有錯』。(2) 修正器可以很簡單：回滾到錯誤步之前重抽該步並續寫，不需要長篇反思文字，前提是前綴可重放。(3) 偵測準確率有門檻（本文模擬約 60–70% 的步級定位），低於門檻的偵測器可能帶來負效益。(4) 淨效益取決於基線準確率：高準確率場景下，連 oracle 位置都可能把『答案對、步驟有瑕疵』的軌跡改錯，因此觸發修正前要考慮值不值得動。對 T4／T7 的附帶價值：BIG-Bench Mistake 的「首錯步或無錯」標註協定，可直接當成軌跡步級異常偵測器的評估格式。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "本文的回溯流程就是「在軌跡中定位到異常步 → 從該步觸發修正」：錯誤位置（oracle、隨機或模擬分類器）決定要從哪一步回滾重抽。§3 量化了由 LLM 自己偵測時定位準確率太低（整體最高 52.87），§5.1 量化了偵測準確率與修正淨效益的關係（約 60–70% 才轉正），§4 的隨機位置對照顯示觸發位置錯了增益就大幅縮水。對框架的含義：E3 送給 T5 的訊號品質是整條修正路徑的瓶頸，而且訊號要帶步級位置，不只是一個『有異常』的旗標。"
+    },
+    {
+      "edge": "E5",
+      "how": "§4 把修正結果依原始答案對錯分組記錄：Δaccuracy✓ 追蹤『對→錯』、Δaccuracy✗ 追蹤『錯→對』，並與隨機位置對照；§4.2 再用這兩個比率推算不同基線準確率下的淨效益（50%→68.6%、99%→92.8%）。這示範了修正紀錄回流評估時該留的欄位：修正前後結果、原始是否正確、觸發位置與其來源（oracle／隨機／分類器），以及據此算出的淨效益，而不是只報修正後的總準確率。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有描述任何部署或產品；論文 repo（https://github.com/WHGTyen/BIG-Bench-Mistake，Apache-2.0）只公開資料集、提示詞、標註準則與 Dyck 自動標註程式，未提及產品採用。本次 WebSearch 額度已用盡，無法廣泛查詢官方文件或產品頁，這一欄的查證範圍因此只到論文與 repo 本身。Semantic Scholar 記錄的 venue 為 ACL 年會（Annual Meeting of the Association for Computational Linguistics）、約 95 次引用（8 次 influential）；發表於 ACL Findings 則依本篇的人工複核入選理由。兩者都屬學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/WHGTyen/BIG-Bench-Mistake",
+    "data": "公開：BIG-Bench Mistake 五個任務的 JSONL、生成與找錯提示詞、標註準則與 Dyck 自動標註程式，Apache-2.0；回溯與分類器訓練程式未公開。但生成與修正用的 PaLM 2 Unicorn、分類器骨幹 PaLM 2 Otter 都無法取得，找錯實驗所用的 GPT-4／GPT-3.5 快照多已下架，回溯與分類器結果只能以其他模型近似重做。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "把自我修正拆成找錯與改錯分開量、指出瓶頸在錯誤定位，並提供跨任務的首錯步標註資料集，直接決定 T5 偵測器與修正器該如何分工；但修正端的證據是單一模型、小樣本的重抽實驗，不能當成已可部署的方法。",
+  "related": [
+    "2310.01798",
+    "2305.20050",
+    "2303.11366",
+    "2303.17491",
+    "2303.17651",
+    "2308.00436",
+    "2308.03188",
+    "2304.01904",
+    "2206.05802",
+    "2210.03629"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

@@ -1,0 +1,183 @@
+{
+  "id": "2308.04592",
+  "title": "Shepherd: A Critic for Language Model Generation",
+  "topic": "T5",
+  "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Meta AI 用約 8K 筆「問題–答案–批評」三元組（Stack Exchange／Reddit 社群回覆經關鍵字與票數過濾，外加 1,317 筆付費專家標註）微調 LLaMA-7B，得到專門替任意 LLM 答案寫自然語言 critique 的 Shepherd，並以 GPT-4 與人工兩兩比較宣稱與 ChatGPT 打平；但全文只評 critique 本身，沒有驗證回饋能否讓生成器真的改對。",
+  "problem": "LLM 常產生錯誤、不可靠或不連貫的輸出，要讓模型持續批評並修正自己的生成，需要一個能在廣泛領域指出具體錯誤（事實、邏輯、連貫性、對齊）並提出可操作修改建議的 critic。既有做法不是靠提示詞讓大模型自評（Self-Refine 類），就是用 ChatGPT 蒸餾出的自我回饋資料微調（SelFee），後者在數學、推理等複雜任務上只給籠統回饋。作者要回答的是：一個小模型（7B）能否靠高品質的批評資料，學成跨領域、可獨立部署的 critique 模型。",
+  "core_idea": "critique 能力主要來自資料品質而非規模：把社群問答網站上「對答案的回覆」視為天然的批評，用關鍵字、編輯紀錄與投票分數過濾出兩類有效 critique（答案大致正確並給改進建議／答案有錯並明確指出），再補上付費專家針對推理與摘要任務候選答案逐錯誤類型撰寫的批評，混合後微調 LLaMA-7B。評估面另提出一套先判「批評的對錯判斷是否正確」、再看「建議是否可操作」的 1–7 分準則，並主張用 GPT-4 評 critique 時應採兩兩比較而非獨立 Likert 評分。",
+  "method": {
+    "輸入輸出": "輸入是一個問題（或 instruction＋input）與待批評的答案；輸出是一段自然語言 feedback，內容包含對答案正確與否的判斷、錯誤位置與理由、修正建議。訓練與推論都用同一模板，以「### {欄位名}」分隔欄位，例如 ### Question / ### Answer / ### Feedback（評估 AlpacaFarm 類資料時為 ### Instruction / ### Input / ### Response / ### Feedback，見 Table 12）。模型只產生 feedback，不產生改寫後的答案。",
+    "社群批評資料（§2.1）": [
+      "來源：Stack Exchange 173 個英文問答社群，以及 Pushshift Reddit 中 16 個偏正式問答的 subreddit（r/AskAcademia、r/AskAnthropology、r/AskBaking、r/askcarguys、r/AskCulinary、r/AskDocs、r/AskEngineers、r/AskHistorians、r/AskHR、r/askphilosophy、r/AskPhysics、r/askscience、r/AskScienceFiction、r/AskSocialScience、r/AskVet、r/explainlikeimfive）。",
+      "結構對應：貼文標題＋副標題＝問題；頂層留言＝答案；對頂層留言的回覆＝critique。每個物件都帶社群分數（upvote 減 downvote），分別稱 question／answer／critique score。",
+      "有效 critique 的兩種情形：Case #1 答案大致正確、critique 提出進一步改進建議；Case #2 答案有錯、critique 明確指出。",
+      "過濾一（關鍵字）：Case #1 保留含同意語的回覆（如 agree、indeed、absolutely、you're right、that's right 等）；Case #2 保留含反對語的回覆（如 wrong、incorrect、disagree、can't agree、beg to differ 等），完整清單見論文註腳 5。",
+      "過濾二（編輯紀錄）：若答題者在 critique 之後修改了自己的答案，也收為 critique，代表這則批評引發了實際修改。",
+      "過濾三（票數）：Case #1 去掉 answer score 低於 10 且 critique score 低於 2 的資料（原文的「且／或」邏輯不清，重做時要自己決定）；Case #2 只留 critique score 高於 answer score、且 critique score 大於 2 的資料。",
+      "其他過濾：每篇貼文只留 critique score 最高的一筆；用 alt-profanity-check 去除粗話（原文寫成刪掉分數低於 0.8 者，方向看起來寫反了，照字面做會把乾淨的留言刪掉）；去掉含 URL、圖片、影片的資料；去掉對原問題追問、而不是評論答案的留言。",
+      "社群資料最終筆數文中沒有單獨報告，只在 §5.1 說總訓練資料約 8K。"
+    ],
+    "人工標註資料（§2.2、Appendix A）": [
+      "任務來源：8 個需要多步推理的資料集（Entailment Bank、Proofwriter、GSM8K、PIQA、CosmosQA、ECQA、e-SNLI、Adversarial NLI；NLI 類只留 entailment／contradiction 標籤，去掉 neutral）＋2 個摘要資料集（GPT-3 summarization、DeFacto），另從 SIQA、BoolQ、ARC、RACE、HellaSwag、Natural Questions、WinoGrande、TriviaQA 各補一兩題；一律只用 train split。",
+      "每題給標註者三樣東西：context、正確輸出、候選輸出。正確輸出多為資料集的 gold；GPT-3 summarization 取人評最喜歡的摘要當正確、最不喜歡的當候選。PIQA、CosmosQA、DeFacto 原本就有錯誤候選；其餘資料集用 LLaMA-65B 或 LIMA-30B 以 zero-shot 或 few-shot 產生逐步推理當候選（模板見 Table 8），並人工抽查品質。",
+      "標註流程：委外給 RWS Moravia 的專家審稿人（非群眾外包），每題一人標、附人工品質檢核，每題報價 8 美元。標註者先從錯誤分類（Arithmetic、Coherence and deduction〔含漏步驟〕、Consistency with context、Veracity、Redundancy、Commonsense、No error，Table 9）勾選錯誤類型，再逐類寫批評：指出錯誤位置（必要時引用原文）、說明為何錯、說明怎麼改；只評候選輸出、不可直接貼正解；即使沒錯也要寫出「沒有錯誤」的批評；可略過標點等小錯但要抓出修掉後答案就大致正確的關鍵錯誤。另有四個旗標：情境太複雜、不當內容、候選輸出無法理解、正確輸出本身有錯。",
+      "後處理：刪掉被標「正確輸出有錯」與「情境太複雜」的題目；刪掉 Redundancy 與 Consistency with context 兩類的批評（作者判定沒有幫助）；同一題有多類錯誤時，用 Firstly／Secondly／Besides 等連接詞把各類批評接成一段。最後得到 1,317 筆，分佈為 GSM8K 431、PIQA 246、Proofwriter 162、CosmosQA 143、ECQA 118、ANLI 68、e-SNLI 65、DeFacto 29、GPT-3 summarization 26、Entailment Bank 11（Table 10）。"
+    ],
+    "訓練（§3）": {
+      "基底": "LLaMA-7B，看起來是全參數微調（文中沒有提 LoRA 等）。",
+      "最佳化": "AdamW，β1=0.9、β2=0.95、weight decay 0.1；learning rate 1e-5、2000 warmup steps；batch size 64；最大序列長度 2048；共 3,000 steps。",
+      "選 checkpoint": "每 50 steps 存一次；先在 20 題 held-out 上人工檢視回饋是否能指出錯誤或提出建設性建議，挑出 3 個最好的 checkpoint，再用 §4.3 的 GPT-4 評估協定從中選最佳。",
+      "資料混合": "全部社群資料＋人工資料（Figure 7 的消融以 +0.1K／+0.6K／+1.3K 人工資料比較）。"
+    },
+    "評估協定（§4、Figure 4／5）": {
+      "1–7 Likert 準則（改寫要點）": "先判斷 feedback 對答案的正誤判斷是否正確：判斷錯的只能給 1–3 分（1＝亂碼或重述答案；2＝把對的說成錯或錯的說成對；3＝對正誤含糊其詞，或自己跑去回答問題而不評答案）；判斷對的給 4–7 分（4＝只有正確判斷；5＝答案錯時確認有錯但漏掉重要錯誤，答案對時確認正確但建議用處不大；6＝答案錯時指出最重要的錯誤，答案對時確認正確並給有用建議；7＝答案錯時清楚點出最重要錯誤並給非常可操作的建議，答案對時確認正確並給非常有用的建議）。GPT-4 以此為 system message、要求輸出開頭先給分數；此指令是作者對照人工判斷手動調出來的（Appendix B.1）。",
+      "兩兩比較": "同一問答對給兩則 feedback，問哪一則較能指出關鍵錯誤或提出建設性建議，選項為 1 明顯較好、2 明顯較好、兩者都沒有明顯較好。",
+      "評審": "GPT-4-0613；人工評估時同一問答對的各模型 feedback 並排給評審，要求比較後各給 1–7 分。",
+      "評估集": "AlpacaFarm、FairEval、CosmosQA、OBQA、PIQA、TruthfulQA 各從 validation／test 抽 50 題（另各抽 20 題做消融），外加自建的 CritiqueEval：52 題 2022/06–2023/06 的高票 Reddit 問題，並收集每題最高票與最低票答案，用來避開資料污染（作者說 ChatGPT 資料到 2021/09、Shepherd 訓練資料到 2021/12）。合計 352 筆。"
+    },
+    "論文沒交代、重做時要自己補": [
+      "loss 是否只算 feedback 段的 token、訓練幾個 epoch、社群與人工資料的混合比例。",
+      "推論時的解碼設定（溫度、長度上限）。",
+      "baseline（Alpaca、SelFee、ChatGPT）是用什麼提示詞產生 critique；ChatGPT 的模型快照日期。",
+      "六個公開評估集裡被批評的答案由誰產生（只有 CritiqueEval 講明取最高與最低票答案，但 52 題卻只算 52 筆，兩個答案怎麼用沒有說清楚）。",
+      "win rate 如何處理「兩者都沒有明顯較好」：從 CritiqueEval 人工勝率 68.3%≈35.5/52、66.3%≈34.5/52 反推，平手應是記 0.5 勝（這是本筆記的推論，論文沒寫）。",
+      "人工評估每筆有幾位評審、評審間一致性。"
+    ]
+  },
+  "assumptions": [
+    "社群投票分數與同意／反對關鍵字可以當作 critique 正確性的代理指標（高票＝社群認可＝批評正確）。",
+    "評估資料所附的 gold 答案是正確的，標註者對照 gold 就能寫出好的批評；推論時 Shepherd 沒有 gold 可看，仍假設它學到的是找錯能力而非比對能力。",
+    "好的 critique 等於「正誤判斷正確＋指出關鍵錯誤＋可操作建議」，而這樣的 critique 會讓下游修正變好（後半沒有驗證）。",
+    "GPT-4 在兩兩比較模式下的偏好與人類一致，足以作為主要自動評估與選 checkpoint 的依據。",
+    "7B 模型的知識足以判斷跨領域答案的事實正確性；critique 的品質上限不被 critic 本身的知識所限制。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "AlpacaFarm（50）",
+      "FairEval（50）",
+      "CosmosQA（50；§4.1 正文寫成 CommonsenseQA，表格為 CosmosQA）",
+      "OBQA（50）",
+      "PIQA（50）",
+      "TruthfulQA（50）",
+      "CritiqueEval（自建，52 題 2022/06–2023/06 Reddit 問題）",
+      "消融：每個資料集另抽 20 題；Figure 7 的資料量消融只在 CritiqueEval 上做"
+    ],
+    "metrics": [
+      "兩兩比較 win rate（GPT-4-0613 評與人工評；平手處理未說明）",
+      "1–7 Likert 分數（GPT-4 獨立評分；人工並排比較後評分）",
+      "人工 Likert 分數分佈（Figure 6：1–2 分＝判斷錯誤，7 分＝判斷正確且建議很有用）"
+    ],
+    "baselines": [
+      "Alpaca-7B",
+      "SelFee-7B（LLaMA-7B 以 178K 筆 ChatGPT 產生的回饋與改寫資料微調；與評估集有重疊：AlpacaFarm 33/50、TruthfulQA 6/50、OBQA 1/50、PIQA 1/50）",
+      "ChatGPT（GPT-3.5 Turbo）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "以 GPT-4 兩兩比較，Shepherd 的平均勝率對 Alpaca、SelFee、ChatGPT 都過半，是摘要「53–87%」的出處；但對 ChatGPT 的逐資料集結果有輸有贏。",
+      "numbers": "平均 win rate：對 Alpaca 87.0%、對 SelFee 53.0%、對 ChatGPT 56.0%。對 ChatGPT 逐資料集：AlpacaFarm 55、FairEval 65、CosmosQA 47、OBQA 47、PIQA 66、TruthfulQA 48、CritiqueEval 61.5。",
+      "section": "§5.1、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "人工兩兩比較中，Shepherd 明顯勝過 Alpaca 與 SelFee，對 ChatGPT 平均約打平；在四個公開集上輸給 ChatGPT。",
+      "numbers": "平均 win rate：對 Alpaca 72.4%（逐欄平均其實是 75.1%）、對 SelFee 59.7%、對 ChatGPT 49.6%。對 ChatGPT：AlpacaFarm 38、FairEval 59、CosmosQA 39、OBQA 49、PIQA 43、TruthfulQA 52、CritiqueEval 66.3。",
+      "section": "§5.1、Table 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "在避開資料污染的 CritiqueEval 上，Shepherd 在兩種評審下都勝過 ChatGPT，作者拿來當泛化能力的證據。",
+      "numbers": "對 ChatGPT win rate：GPT-4 61.5%、人工 66.3%；人工 Likert 4.65 對 4.04（Table 5）；GPT-4 Likert 則是 5.44 對 6.00，反而輸（Table 6）。",
+      "section": "§5.1、Table 3–6",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "人工 Likert 分數分佈：Alpaca 多半給錯誤判斷（2 分），SelFee 多半含糊或直接答題（3 分），ChatGPT 多半判斷正確（4 分）；Shepherd 比 ChatGPT 多出更多 7 分，但也多出更多判斷錯誤的 2 分。",
+      "numbers": "只有 Figure 6 的長條圖，正文沒有給確切比例。人工 Likert 平均（Table 5 的 Avg 欄）：Alpaca 2.91、SelFee 3.84、ChatGPT 4.59、Shepherd 4.41。但依逐欄重算為 2.82、3.60、4.31、4.55，Shepherd 與 ChatGPT 的高低正好顛倒。",
+      "section": "§5.2、§5.3、Figure 6、Table 5",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "GPT-4 獨立打 Likert 分數會普遍偏高、偏好特定格式、模型間差距被壓縮；作者因此建議評 critique 時用兩兩比較。",
+      "numbers": "Alpaca 的平均分：GPT-4 評 4.69、人工評 2.91。GPT-4 Likert 平均：SelFee 5.49、ChatGPT 6.25、Shepherd 5.37，ChatGPT 在 7 個資料集全部高於 Shepherd。",
+      "section": "§5.3、Table 5、Table 6",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "資料品質比數量重要：在全部社群資料之外加入越多人工標註資料，CritiqueEval 上的 GPT-4 評分越好；Shepherd 只用約 8K 筆訓練，SelFee 用 178K 筆。",
+      "numbers": "人工資料 +0.1K／+0.6K／+1.3K 三個點（Figure 7，只有圖、沒有確切數字，而且是跨多個指令平均的 GPT-4 評分）；訓練資料約 8K 對 178K。",
+      "section": "§5.4、§5.1、Figure 7",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "GPT-4 當評審有知識障礙與判斷失誤：即使附上正解，也會替判斷錯誤的 feedback 打高分；遇到只有 Shepherd 指出錯誤的例子時，反而給 Shepherd 最低分。",
+      "numbers": "Table 13：答案 22、正解 15，一則說答案正確的 feedback 仍被 GPT-4 打 5 分。Table 14：GPT-4 給 SelFee 6 分、ChatGPT 4 分、Shepherd 2 分。",
+      "section": "§5.3「Limitation of GPT-4 evaluation」、Table 13、Table 14",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "訓練配方很輕量：7B 模型、約 8K 筆資料、3,000 steps 就能訓出與 ChatGPT 相當的 critic，作者據此主張高品質批評資料的價值（配方細節見 method）。",
+      "numbers": "LLaMA-7B；lr 1e-5；warmup 2000；batch 64；序列長度 2048；3,000 steps；每 50 steps 存 checkpoint；人工資料 1,317 筆、每筆 8 美元。",
+      "section": "§3、§2.2",
+      "anchor_idx": 0
+    }
+  ],
+  "limitations_stated": [
+    "評估規模受限於財力，需要更多標註者與更廣泛多樣的任務，才能做更細緻的分析（Limitations）。",
+    "GPT-4 獨立打 Likert 分數不可信：普遍給高分、偏好特定格式（例如 SelFee 那種籠統的「多加例子」建議）、模型間差距太小（§5.3）。",
+    "GPT-4 評估不穩定也不準確：即使附上正解，仍認不出 feedback 的判斷錯誤（Table 13）；有知識障礙，會懲罰唯一指出錯誤的模型（Table 14）。",
+    "人工評估需要深厚的領域知識，即使邀請專家並允許上網查資料仍然困難（§4.4、Table 2）。",
+    "Shepherd 比 ChatGPT 更常給出判斷錯誤的 feedback（2 分較多）（§5.2）。",
+    "社群資料比人工資料更有資訊量也更多樣，但偏向非正式口吻（§1）。",
+    "SelFee 的訓練資料與評估集有重疊（AlpacaFarm 33/50 等），這一點對 baseline 有利（§4.2）。"
+  ],
+  "limitations_observed": [
+    "修正迴路沒有接上：全文只評 critique 本身的品質，從沒把 Shepherd 的回饋交給生成模型改寫、再量改寫後的正確率。結論說 Shepherd 能提升生成品質、減少幻覺，文中沒有任何實驗支撐。對 T5 而言，它只證明了「發現錯誤」的前半段，「修正」的後半段完全沒量。",
+    "Table 5（人工 Likert）的 Avg 欄與逐欄數字互相矛盾：依逐欄重算，Shepherd 是 4.55、ChatGPT 是 4.31，Alpaca 2.82、SelFee 3.60；表上卻寫 4.41、4.59、2.91、3.84，Shepherd 與 ChatGPT 的高低整個顛倒。caption 說 ChatGPT 在公開資料集普遍較好，但逐欄看 Shepherd 在 6 個公開集中贏了 5 個，只輸 AlpacaFarm。另外 Table 4 對 Alpaca 的平均寫 72.4，逐欄平均是 75.1。人工評估是全文最可信的證據，偏偏它的彙總數字不可靠。",
+    "評審設定是挑過的：GPT-4 Likert（Table 6）顯示 ChatGPT 在 7 個資料集全部高於 Shepherd（平均 6.25 對 5.37），作者以該設定不可信為由改採 GPT-4 兩兩比較，摘要的「53–87%」與「略勝 ChatGPT」也都來自兩兩比較。更麻煩的是 checkpoint 就是用同一套 GPT-4 協定選出來的，等於對評審本身做了模型選擇；在人工兩兩比較中，Shepherd 對 ChatGPT 只有 49.6%。",
+    "樣本太小，也沒做顯著性檢定：每個公開集只有 50 題，CritiqueEval 52 題。勝率在 50% 附近時，標準誤約 ±7 個百分點，所以逐資料集的 47 對 53、55 對 48 都落在雜訊內。沒有報告評審間一致性，每筆有幾位人工評審也沒說。§4.4 一下寫 crowd workers、一下寫 expert annotators，前後不一。",
+    "分布重疊讓部分比較不公平：PIQA 與 CosmosQA 同時出現在人工訓練資料（train split）與評估集（validation／test），對 Shepherd 是同分布，對 baseline 不是。PIQA 在 GPT-4 評審下勝 ChatGPT 66%，是對 ChatGPT 那一列的最高值，但人工評審只有 43%。CritiqueEval 也來自 Pushshift Reddit，與社群訓練資料同源、同格式，所謂「沒見過」只是時間切分；Shepherd 在這裡的優勢可能來自熟悉 Reddit 問答加批評回覆的文風，而不是泛化能力。",
+    "作者拿來展示的範例本身有問題：Table 7 的青蛙題，答案與 OBQA 正解一致（吃昆蟲），Shepherd 卻判它不準確，還給出「有些蛙類是草食、主要吃植物、水果與蔬菜」這種自己產生的事實錯誤，並整段重寫答案。Table 14 被作者說成「只有 Shepherd 指出錯誤」，但 Shepherd 的輸出讀起來像是用第一人稱重述提問，沒有明確指出錯在哪裡；依它自己的準則，可能只該給 3 分（含糊）。critic 自己也會幻覺，而這篇沒有量它的錯報率。",
+    "沒有把找錯能力當成分類問題來量：人工資料明明有 gold，卻沒報告 Shepherd 判斷答案對錯的 precision／recall。拿 critic 當修正觸發器時，最要緊的正是錯報率；Figure 6 顯示 Shepherd 的 2 分比 ChatGPT 多，代表錯報或漏報更多，會觸發多餘的改寫，甚至把對的改錯。",
+    "社群資料的過濾偏向立場，而非正確性：Case #1 用 agree、indeed、you're right 這類附和詞篩選，會教模型在答案大致正確時附和；投票分數反映的是受歡迎程度，不是正確性。Case #1 的「且／或」條件與 profanity 門檻方向，照字面都會做錯。社群資料也沒釋出，這些過濾決定的效果無從檢驗。",
+    "baseline 範圍窄：沒有和 Saunders et al.（2206.05802）那類專門訓練的 critique 模型比，也沒有拿 GPT-4 當 critic 做上限；所有 baseline 產生 critique 用的提示詞都沒有公開，ChatGPT 的表現可能受提示詞影響，而不是能力上限。"
+  ],
+  "framework_role": "T5 裡「訓練得到的 critique 模型」的早期代表：一個小型、可獨立部署的 critic，輸入（問題，答案）、輸出自然語言批評，內容包含正誤判斷、錯誤位置與修正建議。在框架中，它可以當 generate→critique→refine 迴路裡的 critic 元件，外部 critic 與生成器解耦，可以用小模型去批評大模型的輸出。它的 1–7 準則把「判斷對不對」和「建議有沒有用」分成兩層，可直接拿來評 T5 產生的修正紀錄（E5）。另外，它證明了 LLM 評審在獨立打分時會系統性偏高，這對 T7 的評審設計有參考價值。限制也很明確：輸入是單輪問答，不是 agent 軌跡；論文沒有示範修正；判錯率比 ChatGPT 高。拿它當 E3 的異常閘門，會觸發多餘的修正，而本文沒有提供可以校準這個門檻的資料。",
+  "edges": [
+    {
+      "edge": "E5",
+      "how": "論文實際做的事情，就是評估 critic 的輸出：它把每一則 critique（等同一筆修正紀錄裡的「批評」部分）交給 GPT-4 與人工評審，用兩層準則打分（先判正誤判斷是否正確、定出 1–3 或 4–7 的區間，再依是否指出關鍵錯誤、建議是否可操作細分），也做兩兩比較與分數分佈分析。它同時量出評審端的偏差：GPT-4 獨立打分時普遍偏高（Alpaca 4.69 對人工 2.91），而且有知識障礙，所以建議改用兩兩比較。對框架的含義是，修正紀錄回流評估時至少要帶上被批評的答案與 gold（或可驗證的依據），評估端才能先判「批評的判斷對不對」；只看批評的文字流暢度會被格式誤導。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有描述任何部署。查證範圍：官方 GitHub repo facebookresearch/Shepherd（以 gh API 確認已封存、最後推送 2023-08-10；只有人工標註資料與一支資料處理 notebook，沒有模型權重）；Hugging Face API 以 facebook 為作者搜尋，查無官方 Shepherd 模型。HF 上有社群重製，例如 reciprocate/shepherd-13b（以 StableBeluga-13B 在 Shepherd 資料上微調）、philschmid/shepherd-2-7b-hf-adapters 與資料鏡像 philschmid/meta-shepherd-human-data，都屬個人或社群帳號，不算採納。本次 WebSearch 額度已用完，沒有再搜尋廠商產品文件，所以「未見」只涵蓋上述來源。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "部分公開。官方 repo（https://github.com/facebookresearch/Shepherd，已封存，資料採 CC-BY-NC 4.0）只釋出人工標註資料：原始資料 human_data_raw.jsonl，以及處理後的訓練檔 human_data_for_model.jsonl（實際數過為 1,317 行，欄位 id／dataset／question／answer／feedback），外加處理用的 notebook。約 8K 筆總訓練資料中占多數的社群批評資料（Stack Exchange／Reddit）、CritiqueEval 評估集、模型權重、訓練與評估程式碼都沒有釋出。HF 上的非官方重製（reciprocate/shepherd-13b 等）只用了人工資料，不等同原模型。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "作為「小型專訓 critic＋社群批評資料＋評 critique 的兩層準則」的早期代表，值得 T5 參考；但它沒有接上修正迴路，人工評估表的彙總數字自相矛盾，評估樣本也小，同子領域的 Saunders et al.（2206.05802）在方法與實證上都更扎實，所以不列為必讀。",
+  "related": [
+    "2206.05802",
+    "2303.17651",
+    "2305.11738",
+    "2211.00053",
+    "2210.11610",
+    "2302.12813",
+    "2305.17926",
+    "2305.14387",
+    "2303.16634",
+    "2302.04166"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

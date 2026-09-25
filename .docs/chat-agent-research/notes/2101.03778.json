@@ -1,0 +1,159 @@
+{
+  "id": "2101.03778",
+  "title": "Revisiting Mahalanobis Distance for Transformer-Based Out-of-Domain Detection",
+  "topic": "T1",
+  "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "在 CLINC150、ROSTD、SNIPS 三個意圖資料集上系統比較不需 OOD 訓練資料的 OOD 意圖偵測法，發現「只用 ID 意圖微調的 Transformer（RoBERTa）表示＋Mahalanobis 距離」全面勝過 MSP、Likelihood Ratio 與 CNN/LSTM 基線（CLINC150 AUROC 98.4、FPR@95 6.8），並以嵌入空間幾何（類別中心近乎等長、兩兩近乎正交、ID 資料落在低維子空間）解釋為何有效。",
+  "problem": "意圖分類器只認得標註過的有限意圖，使用者講出系統不支援的請求時，分類器仍會硬塞一個意圖，讓對話 agent 做出錯誤動作。需要一個「拒答／判為 OOD」機制。實務上蒐集 OOD 語句很困難（使用者用詞與風格變化大、OOD 空間無邊界），所以作者聚焦在只用 ID 資料訓練的無監督 OOD 偵測；而當時 Transformer 已是意圖分類主力，但它在 OOD 意圖偵測上該配哪種評分函式、跟舊方法差多少，缺乏系統性比較，最佳實務也沒有定論。",
+  "core_idea": "不另外設計 OOD 模型，而是把 OOD 偵測當成「分類器訓練完之後的事後評分」：先用 ID 意圖標籤正常微調 Transformer，再把它當嵌入器，對每個意圖算類別中心、對全部 ID 資料算一個共用共變異數矩陣，測試語句到最近類別中心的 Mahalanobis 距離就是 OOD 分數，超過門檻即拒絕。作者主張有效的原因是：微調後的 Transformer 會把各意圖壓成緊密、彼此分離的群，ID 資料近似落在 N 維（N＝意圖數）子空間；OOD 語句則在剩下的低變異主成分方向上有大分量，而 Mahalanobis 距離以變異數倒數加權，正好放大這些方向。",
+  "method": {
+    "task_formulation": "給定 ID 訓練集 D_ID＝{(x_i, y_i)}，y 屬於 N 個已知意圖。評分函式 d(x) 把語句映成實數，決策規則為 d(x) ≥ θ 則拒絕（判 OOD），否則接受並交給意圖分類（Eq. 1）。訓練階段不使用任何 OOD 語句；OOD 只用於評估（但見 limitations_observed 關於模型挑選的說明）。單輪語句層級，不含對話脈絡。",
+    "step1_finetune": "以標準流程把預訓練 Transformer 微調成 ID 意圖分類器（cross-entropy）。比較的編碼器：BERT-base、BERT-large、RoBERTa-base、RoBERTa-large、DistilBERT、DistilRoBERTa。實作使用 PyTorch、PyTorch Lightning、Hugging Face Transformers。同一個微調後的模型同時提供 softmax（給 MSP）與嵌入（給 Mahalanobis）。",
+    "step2_fit": "用微調後模型取出所有 ID 訓練語句的向量 ψ(x)（論文沒寫取哪一層、用 [CLS] 或平均池化）。對每個意圖 c 算類別中心 μ_c＝該類 ψ(x) 平均；共用（tied）共變異數 Σ＝(1/N_total) Σ_c Σ_{x∈c} (ψ(x)−μ_c)(ψ(x)−μ_c)^T，也就是先各自減掉所屬類別中心、再合併估一個矩陣（沿用 Lee et al. 2018 的形式）。",
+    "step3_score": "測試時 d(x)＝min_c (ψ(x)−μ_c)^T Σ^{-1} (ψ(x)−μ_c)（Eq. 4），取到最近意圖中心的 Mahalanobis 距離；d(x) ≥ θ 則拒絕。論文沒交代 Σ 的反矩陣怎麼算（有無 shrinkage 或偽逆），也沒給部署時 θ 的挑法。",
+    "variants": "(a) PCA 等價式（Eq. 5，依 Kamoi & Kobayashi 2020）：對「減去類別中心後」的 ID 資料做 PCA，d＝min_c Σ_i y_i(ψ(x)−μ_c)^2 / λ_i，λ_i 是第 i 主成分的解釋變異數；(b) marginal Mahalanobis（Eq. 6）：不用類別資訊，只用全部 ID 資料的單一中心 μ，評分時不需標籤、資料需求較少；(c) partial 版本（Eq. 7 為 partial marginal）：總和從第 N 個主成分（N＝意圖數）開始，只看 ID 子空間之外的低變異方向；(d) 以 Euclidean 距離作對照。",
+    "baselines": "MSP：d＝1−max_y p_y(x)，可加測試時 softmax 溫度 τ（ODIN 式）。LLR（Gangal et al. 2019，當時對話資料 SOTA）：兩個以 GloVe 為輸入的 LSTM 語言模型，L 用 ID 資料訓練，背景模型 L_bg 用加了均勻雜訊的 ID 資料訓練（雜訊機率 0.5 最佳），d＝−log(L(x)/L_bg(x))。另有 bag-of-words＋MSP、GloVe＋CNN（架構同 Zheng et al. 2020）與 GloVe＋LSTM 分類器配 MSP；CNN 也當嵌入器配 Mahalanobis。表中另引 Liu et al. 2020 的 BERT-base SNGP 數字（非自行重跑）。",
+    "hyperparameters": "論文只說依 ID 意圖分類的驗證集調參、每個結果是 10 次執行的平均。官方程式碼 README 補充：Transformer 學習率網格 {1e-5, 2e-5, 3e-5, 5e-5}、batch size {16, 32}；LLR 學習率 {1e-3, 5e-4, 1e-4, 5e-5, 1e-5}、主 LSTM 隱藏維度 {256, 300, 512}、背景 LSTM {64, 128, 256, 512}、L2 係數 {1e-4 … 100}、輸入與輸出 dropout {0, 0.3, 0.5}；並寫明以 AUPR_OOD 挑選最佳模型。epoch 數、dropout、溫度 τ 的實際取值論文未給。",
+    "data": "CLINC150：150 個 ID 意圖，train 15K、val ID 3K、val OOD 0.1K、test ID 4.5K、test OOD 1K；OOD 是現有意圖不支援的動作。ROSTD：Schuster et al. 2018 多語任務型對話資料的英文部分，加上 Gangal et al. 2019 補的 OOD 語句；12 類（ROSTD-COARSE 為 3 類），train 30K、val 4K＋1.5K OOD、test 8.6K＋3K OOD；OOD 多是主觀、資訊不足或情緒化的語句。SNIPS：7 個意圖，照 Lin & Xu 2019 隨機把意圖切成 ID／OOD，ID 約佔 75% 資料，對多次切分取平均（切分次數未寫）；train 13K、val 0.7K、test 0.7K。",
+    "metrics": "AUROC（隨機一對 ID/OOD 中 ID 分數較低的機率）；AUPR_OOD（以 OOD 為正類，適合不平衡資料）；FPR@95：門檻取 TPR ≤ 0.95 的上確界時的假陽性率，分別報以 OOD 為正類（FPR@95_OOD）與以 ID 為正類（FPR@95_ID）兩種。前兩者與門檻無關。",
+    "analysis_protocol": "Table 3：比較微調後 RoBERTa 與 CNN 嵌入空間的三個統計量——類別中心兩兩 cosine、類別中心的 L2 長度、ID 實例與所屬中心的 cosine。Fig. 3：把 CLINC150 測試語句依 Eq. 5 拆成各主成分的項，按解釋變異數排序畫熱圖，比較 ID/OOD 在第 150 個成分之後的差異（對照未微調 RoBERTa 與 CNN）。Fig. 2：模型大小與蒸餾的影響。Fig. 4：各 Mahalanobis 變體對 Euclidean。Fig. 5：CLINC150 上逐步減少訓練資料比例時各分數的表現。",
+    "reimplementation_notes": "照做的最小配方：(1) 用 ID 意圖微調 RoBERTa（lr 2e-5 左右、batch 16/32）；(2) 對訓練集取句向量，算每類平均與共用共變異數；(3) 建議自行加 shrinkage 或用 sklearn 的 LedoitWolf/EmpiricalCovariance 求逆以免奇異；(4) 以 min_c Mahalanobis 為分數；(5) 門檻用留出的 ID 驗證集設定（例如讓 95% ID 被接受），若有少量 OOD 驗證語句再微調門檻。第 (3)(5) 步是論文沒寫、需自行決定的部分。"
+  },
+  "assumptions": [
+    "ID 意圖集合固定且每個意圖有足夠標註語句，才能微調編碼器並估出類別中心與 d×d（768 或 1024 維）的共用共變異數；CLINC150 每類約 100 句。",
+    "各意圖在嵌入空間中近似為共用同一個共變異數的高斯分布（tied covariance，類似 LDA 的生成假設）。",
+    "OOD 語句會在 ID 子空間之外的低變異主成分上有明顯分量；語意上貼近某個 ID 意圖的 near-OOD 會違反這個前提（作者的錯誤分析也證實）。",
+    "嵌入空間的良好幾何是 ID 監督微調「順便」造成的；作者自承若嵌入器同時當分類器並過擬合，幾何可能被破壞。",
+    "部署時能用某種校準資料決定門檻 θ；論文的主要指標都與門檻無關或用 oracle 的 TPR 95% 門檻。",
+    "只處理單輪語句，不考慮對話上下文或多輪累積的意圖。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "CLINC150（150 意圖＋out-of-scope 語句）",
+      "ROSTD（12 類）與 ROSTD-COARSE（3 類）",
+      "SNIPS（7 意圖隨機切成 ID 約 75%／OOD，多次切分平均）"
+    ],
+    "metrics": [
+      "AUROC",
+      "AUPR_OOD",
+      "FPR@95_OOD（OOD 為正類）",
+      "FPR@95_ID（ID 為正類）",
+      "嵌入幾何統計：類別中心兩兩 cosine、中心 L2 長度、實例與中心 cosine（Table 3）"
+    ],
+    "baselines": [
+      "Bag-of-words＋MSP",
+      "GloVe＋LSTM＋MSP",
+      "GloVe＋CNN＋MSP／＋Mahalanobis",
+      "Likelihood Ratio（LSTM 語言模型＋雜訊背景模型，Gangal et al. 2019）",
+      "RoBERTa＋MSP（含溫度縮放）",
+      "BERT-base＋SNGP（數字引自 Liu et al. 2020）",
+      "Mahalanobis 變體：marginal、partial、partial marginal，以及 Euclidean 距離"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "RoBERTa＋Mahalanobis 在四個設定上都是最佳，包括勝過同一個 RoBERTa 配 MSP；優勢在較難的 CLINC150 最明顯。CLINC150 上 BERT-base＋Mahalanobis 也略高於引用的 BERT-base SNGP。",
+      "numbers": "AUROC／AUPR_OOD／FPR@95_OOD／FPR@95_ID（10 次平均）：CLINC150 RoBERTa Maha 98.4／94.5／6.8／7.3 對 RoBERTa MSP 97.1／91.2／11.6／12.5；BERT-base Maha 97.3±0.1／88.6±1.0 對 SNGP 96.9±1.0／88.0±1.0。ROSTD 99.8／99.5／0.5／1.0 對 MSP 99.3／98.2／2.2／1.8。ROSTD-coarse 99.8／99.6／0.2／0.7。SNIPS 97.6±1.9／92.9±5.4／12.3±10.3／11.2±10.5 對 MSP 95.3／85.7／25.5±22.3／18.2",
+      "section": "§Out-of-Domain Detection, Table 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "Mahalanobis 的效果取決於嵌入品質：CNN＋Mahalanobis 在 ROSTD 表現不錯，但在 SNIPS 大幅退步，甚至不如 CNN＋MSP，說明單純用 cross-entropy 微調不保證得到適合距離法的嵌入。",
+      "numbers": "ROSTD：CNN Maha AUROC 98.1、FPR@95_OOD 7.6 對 CNN MSP 95.2、22.2；SNIPS：CNN Maha AUROC 87.1±9.4、FPR@95_OOD 49.3±33.6 對 CNN MSP 93.7±2.3、24.4±9.1",
+      "section": "§Out-of-Domain Detection, Table 2",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "先前對話資料上的 SOTA（LLR）只在 ROSTD 有競爭力，在 CLINC150 與 SNIPS 表現差；作者歸因於背景語言模型仍會學到語意，且因詞彙量大導致訓練變異很高。",
+      "numbers": "LLR AUROC／FPR@95_OOD：ROSTD 97.7／12.3、CLINC150 91.4／37.0、SNIPS 83.5±5.2／65.1±16.0",
+      "section": "§Out-of-Domain Detection, Table 2",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "主要錯誤來自語意相近的 ID/OOD（例如 CLINC150 只支援「傳簡訊」，「讀朋友的簡訊」會被誤收）與標註錯誤；SNIPS 的高變異來自切分：語意相近的兩個意圖被分到 ID 與 OOD 兩側時（如 SearchScreenEvent 對 SearchCreativeWork），指標會明顯下降。",
+      "numbers": "SNIPS 上 RoBERTa Maha 的 FPR@95_OOD 為 12.3±10.3（CLINC150 為 6.8±0.8）；錯誤分析為定性舉例，無數字",
+      "section": "§Semantically close ID and OOD classes are often confused",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "較大模型在 CLINC150 較好（ROSTD 差距小但仍存在）；RoBERTa 優於 BERT，作者歸因於更大更多樣的預訓練資料；蒸餾版本配 Mahalanobis 幾乎不掉分，MSP 則會受影響，因此 Mahalanobis 對蒸餾較穩健。",
+      "numbers": "僅見於 Fig. 2 的圖表，快取文字版沒有具體數值",
+      "section": "§Is bigger model better?, §Diverse pre-training data improves OOD detection, Fig. 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "微調後 RoBERTa 的類別中心兩兩近乎正交、長度幾乎相同（像落在球面上），CNN 則不然；ID 實例都緊貼所屬中心。作者據此認為 ID 資料近似落在 N 維子空間。",
+      "numbers": "中心兩兩 cosine（RoBERTa／CNN）：CLINC150 0±0.08／0.35±0.11，ROSTD −0.05±0.13／0.24±0.09，SNIPS −0.16±0.12／0.15±0.02；中心長度 CLINC150 19.75±0.23／23.07±1.38；實例與中心 cosine CLINC150 0.96±0.11／0.92±0.08（SNIPS 只列一次切分）",
+      "section": "§Features of embeddings space, Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "依解釋變異數拆解 Mahalanobis 各項後，微調後 RoBERTa 的 OOD 語句在第 150 個主成分之後的項明顯較大，ID 語句則沒有；未微調的 RoBERTa 與 CNN 都看不到這種分離——這是「微調很關鍵」的主要證據。",
+      "numbers": "Fig. 3 熱圖（CLINC150 測試集，切分點為第 150 成分）；無數值",
+      "section": "§Features of embeddings space, Fig. 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "所有 Mahalanobis 變體都大幅勝過 Euclidean 距離；各變體之間差異小，但 partial 與 marginal 版本在訓練資料變少時較穩定，marginal 受資料縮減影響最小。",
+      "numbers": "Fig. 4、Fig. 5（CLINC150 訓練資料比例對 OOD 表現）；快取文字版沒有具體數值",
+      "section": "§Comparison of other distances, Fig. 4, Fig. 5",
+      "anchor_idx": 4
+    }
+  ],
+  "limitations_stated": [
+    "Mahalanobis 分數依賴嵌入空間的幾何；若嵌入器同時當分類模型並過擬合，幾何可能被破壞。",
+    "最大的挑戰是語意相近、一個是 ID 一個是 OOD 的語句，例如系統只支援兩個相關動作中的一個。",
+    "意圖分類準確率與 OOD 偵測之間的取捨尚未研究，留待未來。",
+    "以 cross-entropy 微調的 CNN 不一定產生有資訊量的嵌入，CNN＋Mahalanobis 在較難資料集上嚴重退步。",
+    "LLR 不易應用：背景模型在雜訊輸入下仍會學到語意，且因詞彙量大訓練變異很高。",
+    "SNIPS 的指標變異大，取決於 ID/OOD 的切分方式；CLINC150 有標註錯誤，ROSTD 的訓練與測試集有詞彙落差。"
+  ],
+  "limitations_observed": [
+    "「不需要 OOD 資料」的說法只對訓練成立，對模型挑選不成立：官方程式碼 README 寫明以 AUPR_OOD 挑最佳模型，而 Table 1 的 val OOD 在 CLINC150 只有約 100 句、ROSTD 1.5K；論文正文卻只說依 ID 分類驗證集調參。用 OOD 標籤挑超參數會讓表中數字偏樂觀，也讓與「完全無 OOD 監督」方法的比較不完全對等；SNIPS 沒有 val OOD，它的挑選方式更不清楚。",
+    "Table 2 只寫「RoBERTa」，沒標是 base 還是 large，也沒列 BERT＋MSP、Distil 系列的數字；模型大小與蒸餾的結論只在 Fig. 2 以圖呈現，拿不到數值，外人無法確認 SOTA 數字是哪個設定、也無法量化「蒸餾不掉分」的幅度。",
+    "與 SNGP 的比較是引用 Liu et al. 2020 的數字而非同條件重跑，且差距落在標準差內：AUROC 97.3±0.1 對 96.9±1.0、AUPR_OOD 88.6±1.0 對 88.0±1.0，說「勝過」證據不足。",
+    "ROSTD 與 ROSTD-coarse 已接近天花板：RoBERTa＋MSP AUROC 已有 99.3／99.2，連 bag-of-words＋MSP 在 ROSTD-coarse 都有 98.0；ROSTD 的 OOD 多是主觀或情緒化語句，屬風格明顯不同的 far-OOD。因此真正有鑑別力的只有 CLINC150 與 SNIPS，而 near-OOD（作者自己指出是最大難題）在三個基準中佔比很低，整體數字對實際產品會偏樂觀。",
+    "SNIPS 的 ID 只有約 5 個意圖（依 ID 約佔 75% 資料推算，論文未明寫）、測試 0.7K，變異極大：RoBERTa Maha 的 FPR@95_OOD 12.3±10.3 對 MSP 25.5±22.3，兩者區間大幅重疊；切分次數也沒寫，SNIPS 上的「Maha 勝 MSP」統計上站不太住。",
+    "作者把中心兩兩 cosine≈0 解讀為「互相正交」，但更貼切的解釋是 neural collapse（Papyan et al. 2020, arXiv:2008.08186）：C 類中心趨向 simplex ETF，平均 cosine 應為 −1/(C−1)。CLINC150（C=150）預測約 −0.007，與 0 分不開；ROSTD（C=12）預測約 −0.09，觀測 −0.05；SNIPS（推算約 5 個 ID 類）預測約 −0.25，觀測 −0.16——小 C 時負值正是 simplex 而非正交的特徵。此外 Table 3 中 CNN 在 ROSTD 的實例–中心 cosine 為 0.96±0.44，平均 0.96 配上 0.44 的標準差在 [−1,1] 範圍內相當可疑，可能是誤植；SNIPS 只列一次切分。",
+    "「微調很關鍵」缺少數值證據：未微調 Transformer＋Mahalanobis 的表現只出現在 Fig. 3 熱圖，Table 2 沒有對應列。這對 LLM 時代尤其重要——若直接拿凍結的通用嵌入（例如 embedding API）配 Mahalanobis 做意圖路由的 OOD 閘門，論文的證據反而暗示效果可能不好。",
+    "沒有報 ID 意圖分類準確率，也沒有端到端指標（例如開 OOD 閘門後的整體意圖正確率）；FPR@95_ID 只部分反映拒錯 ID 的代價。門檻 θ 的部署挑法完全沒談，主要指標都是與門檻無關或 oracle 門檻。",
+    "共用共變異數是 768/1024 維的矩陣，論文沒說怎麼求逆、有無正則化；Fig. 5 的低資料實驗只有圖且下限不明。新增意圖時每類只有個位數樣本的 few-shot 情境（對 agent 冷啟動最常見）完全沒測，此時 Σ 容易奇異。",
+    "只看單輪、固定意圖集合；多輪對話中依賴上下文的 OOD（例如指代前文、話題漂移）與意圖集合會隨工具增減而變動的 LLM agent 設定，都不在實驗範圍內。"
+  ],
+  "framework_role": "T1 的「支援範圍外拒答閘門」：意圖分類之後，用一個事後、不需 OOD 資料的分數判斷使用者請求是否落在 agent 支援的目標集合內，落在外面就不硬分到某個意圖，而是轉交後備處理（拒答、澄清提問或轉人工）。它提供可直接實作的工程配方（ID 微調編碼器＋類別中心＋共用共變異數＋最小 Mahalanobis 距離），也給出這條閘門的已知盲點：語意貼近已支援意圖的請求最容易被誤收——這正是 T1 澄清提問該接手的地方。對 LLM agent 而言，可把「類別中心」換成各工具／路由目的地的範例嵌入中心，但論文的 Fig. 3 提醒未經任務微調的嵌入可能分不開 ID/OOD。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "偵測器作用在 E1 流入 T1 的每一則使用者語句上：先算出到各已支援意圖中心的最小 Mahalanobis 距離，超過門檻就拒絕，不讓它進入意圖路由。實驗只用離線、單輪的真實使用者語料（CLINC150、ROSTD、SNIPS），沒有使用者模擬器，也沒有多輪互動或閉環回饋。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有提到任何部署或產品；以 WebSearch 查「Mahalanobis＋out-of-scope intent＋production／chatbot」只找到學術論文，沒有官方產品文件、model card 或官方部落格說明採用此方法。Semantic Scholar 顯示 108 次引用（12 次 influential），屬學術影響力，不計入採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/huawei-noah/noah-research/tree/master/Maha_OOD",
+    "data": "公開：CLINC150 來自 clinc/oos-eval，ROSTD 與 SNIPS 依官方 README 取自 LR_GC_OOD 儲存庫（SNIPS 需跑提供的前處理腳本）。README 提供超參數網格與執行指令。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "把「ID 微調 Transformer＋Mahalanobis」確立為 OOD 意圖偵測的強基線並附程式碼，對 T1 的拒答閘門很實用；但方法是移植 Lee et al. 2018、幾個主要分析只有圖或定性、ROSTD 近天花板、模型挑選用了 OOD 標籤，且僅限單輪固定意圖集合，屬有價值的參考而非必讀。",
+  "related": [
+    "1807.03888",
+    "1912.12800",
+    "1610.02136",
+    "1706.02690",
+    "1909.02027",
+    "1906.00434",
+    "2003.00402",
+    "2006.10108",
+    "2004.06100",
+    "1810.13327"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

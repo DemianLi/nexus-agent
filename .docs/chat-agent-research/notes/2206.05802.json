@@ -1,0 +1,202 @@
+{
+  "id": "2206.05802",
+  "title": "Self-critiquing models for assisting human evaluators",
+  "topic": "T5",
+  "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "OpenAI 用監督式微調讓同一個模型聯合學會寫主題式摘要、判斷答案有無缺陷、寫自然語言 critique、評 critique 是否有用、依 critique 改寫答案；實驗顯示模型 critique 能讓人類多找出約 50% 的缺陷，大模型能用自我 critique 改善自己的輸出，並提出 GDC gap 來量測模型「知道但說不出」的缺陷。",
+  "problem": "RLHF 等人類回饋訓練法的前提是人類能評估模型輸出，但對程式碼正確性、事實真偽這類難以評估的任務，人類評估者會漏看、甚至被看似合理但有系統性缺陷的輸出誤導（scalable oversight 問題）。若模型能產生「自己知道有缺陷」的輸出卻無法把缺陷講給人聽，就無法當可靠的評估助手。本文要驗證：用自然語言 critique 當作輔助，能否讓人類評估得更完整；以及模型的 critique 能力是否隨規模跟上其生成與判別能力。",
+  "core_idea": "把評估拆成比基礎任務更容易驗證的子任務：找出缺陷（critique）比避免缺陷容易，而驗證一條 critique 是否成立又比從頭評估答案容易（類比 P ⊆ NP、Σ2P 對應 2 步 recursive reward modeling）。於是把基礎任務、答案判別（critiqueability）、critique 生成、critique 判別（helpfulness）、條件式改寫（conditional refinement）與直接改寫（direct refinement）放進同一模型聯合訓練，使 critic 與 generator 沒有能力落差；再以 best-of-N 比較「生成 G／判別 D／critique C」三種能力，定義 GD、GC、CD gap，其中 CD gap 代表模型能察覺但無法以 critique 講清楚的缺陷。",
+  "method": {
+    "任務定義（Q=問題，A=答案，C=critique）": [
+      "Base：Q→A，主題式摘要（針對文章某一面向寫 2–10 句摘要；若文章沒提到該主題，答案為空）。",
+      "Critiqueability：Q,A→Yes/No，答案是否有任何缺陷。",
+      "Critique：Q,A→C，寫一條自然語言 critique；即使答案完美也「強迫」輸出一條，是否該 critique 另由 critiqueability 分數決定。",
+      "Helpfulness：Q,A,C→Yes/No，這條 critique 是否成立且有幫助。",
+      "Conditional refinement：Q,A,C→A'，產生回應該 critique 的新答案。",
+      "Direct refinement：Q,A→A'，不看 critique 直接改進答案。",
+      "輔助任務：由文章產生一組問題、答案佐證（corroboration）、擷取支持答案或問題的文章引文等，也放進訓練集。"
+    ],
+    "資料蒐集（多輪自舉）": [
+      "問題一律由人類寫；第 1 輪只蒐集基礎任務示範並訓練模型；第 2 輪在模型答案上蒐集 critiqueability、critique 與 refinement 示範；第 3 輪在模型 critique 上蒐集 helpfulness 標註；每輪結束都用目前所有資料重新聯合訓練。",
+      "critique 標註規範：依重要性遞減列出多條 critique，每條只講一件事、要具體（避免「可以更好」這種泛泛之詞），並標嚴重度 Minor／Medium／Major／Critical（每級約為前一級兩倍嚴重）與類別 Coverage／Accuracy／Coherence／Other。",
+      "critiqueability 標籤是隱含取得：原答案無任何 critique 才算 uncritiqueable；Likert 低於 7 分時強制要寫 critique。refinement 與 critique 一起蒐集，每條 critique 對應一次累進式改寫，最後一版視為 uncritiqueable、之前各版視為 critiqueable；太差的答案標記為整個重寫。",
+      "helpfulness 蒐集：每個模型答案產生 8–16 條模型 critique 讓標註者判斷；若全都無用，再問是否存在有用的 critique，並可自寫新 critique。",
+      "另蒐集「刻意誤導」答案：同一標註者故意寫出有難以察覺缺陷（難找的 accuracy 缺陷或容易忽略的 coverage 缺陷）的答案，並附上預期應被找到的 intended critique（通常一條）。",
+      "標註者品質控管：約 5% 任務由 10 位標註者共同標註以看一致率，並看其示範被他人 critique 的機率。",
+      "規模（Table 4，主題式摘要 train/test）：base 6,235/770、critiqueability 31,279/3,983、critique 15,277/1,944、helpfulness 41,724/5,096、refinement 14,323/1,823；另有早期問答與一般摘要資料（base 43,285/5,250 等）一併留在訓練集。資料來自 2,000 多篇短篇故事、Wikipedia 與新聞，6,000 多個主題問題；訓練文章多在 2,048 token（GPT-2 tokenizer）以內。"
+    ],
+    "輸入格式": "固定欄位順序為：文章 → 問題 → 答案 → critiqueability → critique → helpfulness → refinement。critique 任務在答案後接一句詢問「此答案有沒有 critique，有就寫一條」，模型先輸出 Yes/No 再輸出 critique，因此 critique 樣本與 critiqueability=Yes 樣本合併為同一筆；direct refinement 由 critiqueability 直接跳到 refinement；conditional refinement 與 helpfulness 省略 critiqueability 欄；模型回應前後各加一個 end-of-text token。作者在 RACE 上試過調換順序，影響不大。",
+    "訓練": [
+      "基底：5 個 GPT-3 風格 decoder-only 預訓練模型（預訓練資料不同、彼此不可直接比較）。",
+      "目標：behavioral cloning／SFT，只對人類示範的 token 計算 loss（例如 critique 任務遮掉文章、主題與被批評的答案）。",
+      "超參數：只訓練 1 個 epoch，只調學習率，其餘沿用接近預訓練的設定；所有任務樣本打散混合訓練。",
+      "資料增強：50% 的 conditional refinement 樣本轉成 direct refinement；50% 的 corroboration quotes 轉成 question quotes。",
+      "「模型規模」以 SFT 驗證損失（nats/token）衡量，不是參數量。"
+    ],
+    "推論期分數": "critiqueability score 與 helpfulness score 都直接由 logits 算 Pr[Yes]/(Pr[Yes]+Pr[No])。critiqueability 可當「要不要 critique／要不要採用改寫」的閘門，helpfulness 可在事後篩 critique。",
+    "人類輔助實驗（§3）": [
+      "每個題目準備三種答案：最佳模型隨機溫度（0–1，每 0.1 一格）取樣的答案、標註者誠實寫的答案、同一標註者刻意誤導的答案；每個答案分別給一位無輔助、一位有輔助的標註者（共 6 種條件，且標註者先前未讀過該文章）。",
+      "輔助條件：以溫度 0.0、0.1、0.2、0.3、0.4、0.5、0.6、1.0 各取 1 條 critique，去重後依 helpfulness 分數排序、連同分數顯示；標註者可一鍵「採用」並再編輯。",
+      "使用較長文章（2,048–3,840 token）放大輔助效果；不限時，要求至少 90% 的情況下涵蓋所有可能 critique；同時收 1–7 Likert、每條 critique 的嚴重度與類別。",
+      "誤導答案的作者事後檢查其他標註者是否找到 intended critique，並獨立判斷新 critique 是否成立。",
+      "早期消融（App E.3）：顯示 4 條 vs 8 條 critique；8 條找到較多但沒有加速。"
+    ],
+    "自我 critique 與改寫實驗（§4.2–4.3）": [
+      "自我 critique：同一模型、同一隨機溫度先產生答案再 critique 自己，由人類判斷 helpfulness，分別看全部答案與只看人類找得到缺陷的答案。",
+      "conditional refinement：取 N 條 critique，用模型自己的 helpfulness 分數挑最佳一條（best-of-N），再依它改寫。",
+      "direct refinement：取 N 個改寫，用 critiqueability 分數挑最佳。",
+      "非強迫版本：一律要求改寫，但用模型的 critiqueability 分數比較改寫與原答案，改寫沒比較好就保留原答案；另有強迫改寫版本。",
+      "對照：原始 best-of-1、從頭重抽 8 個答案用 critiqueability 挑最佳（算力約略對齊）；全部取樣溫度 T=0.5；評估為人類判斷相對於原答案的 win rate。"
+    ],
+    "GDC gap 量測（§5）": [
+      "G：生成器單一樣本的平均品質；D：生成器 best-of-N 並以 critiqueability 判別器挑選；C：對每個答案產生 critique，由人類（或合成任務的 oracle）判斷 critique 是否成立與嚴重度，挑「最嚴重有效 critique 最輕」的答案，等於把 critique 當判別器。",
+      "主要用 N=2；品質指標有 Likert、uncritiqueability（合成任務即 accuracy）、對生成器樣本的 win rate（G 恆為 0.5，D 與 C 上限 1−1/(2N)；二元結果時 win rate＝(1+acc−acc_G)/2）。",
+      "主題式摘要：答案用隨機非零溫度、critique 用同溫度；合成任務：答案 T=1、critique T=0。",
+      "附錄變體：C_m 用 helpfulness 分數取代人類；C_8／C_h8／C_m8 分別是 best-of-8 critique 給人看、8 條全給人看、完全不經人類。"
+    ],
+    "合成任務": "Addition（兩個 6 位數相加，critique 指出錯的位數與正確值）、3-SAT（critique 指出一條未滿足子句）、Alphabetize（18 個字排序，critique 指出缺字、多字或相鄰錯序）、RACE（兩題選擇題，critique 指出錯題與正解）。各任務用手寫 oracle 產生 base、critiqueability、critique、helpfulness 標籤；第 1 輪訓練 100,000 筆 base 示範，第 2 輪加入 100,000 筆 critiqueability（一半答案錯）與 50,000 筆 critique 示範，答案用第 1 輪模型以溫度 0 取樣；不訓練 helpfulness，只用 oracle 評估。"
+  },
+  "assumptions": [
+    "驗證一條 critique 比直接評估基礎任務容易（評估比生成容易）；作者承認有些任務不成立。",
+    "generator 與 critic 為同一個聯合訓練的模型，因此 generator「知道」的缺陷 critic 也知道。",
+    "人類標註者的 critique、helpfulness 與 critiqueability 標籤可當作近似 ground truth，錯誤主要是隨機雜訊而非系統性偏差。",
+    "缺陷能以自然語言說清楚（articulable），且不同標註者的偏好可調和，不是純主觀任務。",
+    "模型規模要夠大：自我改寫在小模型上沒有效果甚至變差。",
+    "能取得多輪、大量的人類示範與判斷資料（數萬筆 critique 與 helpfulness 標註）。",
+    "critiqueability 被定義成「是否存在任何 critique」，Likert 未滿 7 分即視為有缺陷。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "自建主題式摘要資料集（短篇故事、Wikipedia、新聞文章；6,000 多個主題問題；輔助實驗用 2,048–3,840 token 的長文章）",
+      "自建誤導答案資料集（刻意誤導答案＋intended critiques）",
+      "合成任務：Addition、3-SAT、Alphabetize、RACE（取自 RACE 閱讀理解資料集）"
+    ],
+    "metrics": [
+      "每個答案找到的 critique 數、被找到 critique 的答案比例、1–7 Likert 分數",
+      "intended critique 被找到的比例、critique 成立比例（由誤導答案作者判斷）、有效且新穎的 critique 數",
+      "人類判斷的 critique helpfulness 比例（含「明確有幫助」子集）",
+      "改寫相對原答案的 win rate",
+      "uncritiqueability（合成任務即 accuracy）",
+      "GD／GC／CD gap（以 best-of-N 的 win rate、Likert、uncritiqueability 差值表示）",
+      "App D：在誠實與誤導答案配對中選對誠實答案的 accuracy",
+      "標註耗時（分鐘）"
+    ],
+    "baselines": [
+      "無輔助的人類標註者",
+      "InstructGPT 風格模型（同一預訓練模型）zero-shot 與 few-shot 寫 critique",
+      "人類寫的 critique",
+      "原始 best-of-1 答案、best-of-8 重抽答案（依 critiqueability 挑選）",
+      "direct refinement 及其 best-of-N 版本",
+      "critiqueability 判別器（D）對照 helpfulness 型 critique 判別（C_m，2 步 debate 的代理）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "模型 critique 輔助讓人類在三種答案來源上都找到更多缺陷，被採用的模型 critique 數量與無輔助時自己找到的數量相當，而且輔助後答案被評得更差。",
+      "numbers": "整體約多找 50% critique（§1.2、Fig 1）；模型答案：找到 critique 的答案比例 54%→78%，平均 Likert 5.6→4.9（Fig 23）；被採用的模型 critique 只有 15.3% 再經人類編輯（§3.3）。",
+      "section": "§1.2、§3.3、Fig 1、Fig 23",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "在刻意誤導答案上，輔助讓標註者更常找到出題者預期的缺陷，而 critique 成立比例沒有明顯下降，排除了「只是多接受了無效 critique」的疑慮。",
+      "numbers": "找到 intended critique：45±5% vs 27±5%；critique 成立比例 71%（輔助）vs 73%（無輔助）；有效 critique 數 0.96±0.09 vs 0.62±0.07；有效且新穎 0.24±0.06 vs 0.18±0.05。",
+      "section": "§3.3.1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "較大模型的自我 critique 被人類判定為有幫助的比例更高，即使不篩選「人類也找得到缺陷」的答案也成立；InstructGPT zero/few-shot 已能寫出相當有幫助的 critique，但本文模型仍明顯不如人類 critique。",
+      "numbers": "具體比例僅以圖呈現（Fig 3、5、7）；規模軸為 SFT 驗證損失（nats/token），不是參數量。",
+      "section": "§4.1、§4.2、Fig 3、Fig 5、Fig 7",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "較大模型的答案也更難被 critique，但其自我 critique 能力進步得比答案變難更快。",
+      "numbers": "較強模型的輸出被判為有缺陷的頻率比最小模型少約 20%；uncritiqueable 比例由最差模型不到 15% 升到最佳模型超過 30%（Fig 4）。",
+      "section": "§4.2、Fig 4、Fig 6",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "critique 對改寫有幫助，但只有在 critique 經 helpfulness 分數 best-of-N 挑選後，conditional refinement 才勝過 direct refinement；在算力對齊下並不一定划算，best-of-8 direct refinement 可能反而更強。",
+      "numbers": "win rate 數值僅以圖呈現（Fig 12–14），作者自稱結果有雜訊；全部 T=0.5。",
+      "section": "§4.3.1、Fig 12、Fig 13、Fig 14",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "自我改寫能力受規模限制：兩種改寫在大模型上都明顯勝過原答案，小模型幾乎沒有效果；強迫改寫時小模型的 conditional refinement 特別差。",
+      "numbers": "僅以圖呈現（Fig 9、10、11）。",
+      "section": "§4.3.1、Fig 9、Fig 10、Fig 11",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "GD 與 GC gap 大致為正，但主題式摘要的 CD gap 為正且不隨規模縮小，代表模型能判別出來的缺陷有一部分無法化為 critique；合成任務上 gap 的方向因任務而異。",
+      "numbers": "CD gap：主題式摘要與 3-SAT 為正，Addition 與 RACE 為負（§5.3）；RACE 的 critique 接近 oracle 表現。具體 gap 值僅以圖呈現（Fig 15、16）。",
+      "section": "§5.3、Fig 15、Fig 16",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "以「helpfulness 分數最高的 critique」判別誠實或誤導答案（2 步 debate 的簡化代理），隨 N 增加而進步，但始終不如直接用 critiqueability 判別器，且看起來會收斂在較差的水準。",
+      "numbers": "僅以圖呈現（Fig 21）；使用最大模型、critique 溫度 0.5。",
+      "section": "App D、Fig 21",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "缺乏 ground truth：主題式摘要沒有客觀的答案或 critique 驗證流程；標註者可能過度相信模型或出錯，部分輔助找到的 critique 很瑣碎，critique 比較與答案比較的一致率都只有約 75%，誤導性的 critique 與正確的 critique 可能無法區分。",
+    "假設推理可被說出：無法處理模型說不出問題所在的情況，CD gap 可能長期存在。",
+    "假設偏好可調和：主觀任務可能根本不存在 uncritiqueable 的輸出。",
+    "評估不一定比生成容易（例如氣候變遷與經濟問題互相依賴）。",
+    "任務難度不足：主題式摘要對人類不算難（約十分鐘內完成），輔助的加速有限，結果在更難任務上未必能重現。",
+    "模型優化不足：只用 SFT、沒有 RL，因此模型不太會寫出標註者自己寫不出的 critique。",
+    "設置難以重現：需要大模型、大量人類資料與多輪訓練。",
+    "監督資料中較大模型的答案被 critique 得較多，可能影響規模趨勢（作者認為影響小）；也不知道若以 RL 同時訓練答案與 critique 模型，正向趨勢是否還在。",
+    "改寫結果有雜訊，控制算力後 critique 改寫未必有競爭力。",
+    "C 的定義讓模型能用人類或 oracle 驗證來「試」低信心 critique，等於多了對 ground truth 的搜尋，D 沒有這項優勢；helpfulness 模型可能偏好瑣碎而非嚴重的 critique。"
+  ],
+  "limitations_observed": [
+    "規模結論的自變數不乾淨：5 個預訓練模型的預訓練資料不同、參數量未公開，只用「在同一份含 critique 資料的 SFT 驗證損失」排序；而這個損失本身就受 critique 與 helpfulness 資料影響，等於用結果變數的近親當自變數，而且整條趨勢只有 5 個點。",
+    "合成任務的規模比較有混淆：第 2 輪每個尺寸的模型都在「自己第 1 輪答案」組成的資料上訓練（作者也說資料性質各不相同），錯誤分布隨尺寸改變，critique 難度也跟著變，因此 Fig 8、16 的趨勢無法單純歸因於規模。",
+    "文中自相矛盾：§5.3 說 CD gap 為負的是 Addition 與 RACE（3-SAT 為正），App C.3.1 回顧時卻寫成 Addition、Alphabetize、RACE；Alphabetize 的方向無法從文字確定。",
+    "「多找 50% critique」這個主打數字的增量主要來自 minor 與 coverage 類 critique（Fig 2），而且輔助條件下仍有約 29% 的 critique 被判為不成立（71% 成立）；比較有意義的 intended critique 結果（45% vs 27%）樣本是每題通常只有一條 intended critique，而且由寫誤導答案的同一人判斷，判斷者本身並非獨立。",
+    "「有效且新穎」的 critique 只從 0.18±0.05 增加到 0.24±0.06，兩者差距（0.06）與合併標準誤（約 0.08）相當，以文中 z=1 的誤差棒來看並不顯著；也就是說輔助主要是讓人更常採用模型也寫得出的 critique，而不是挖出人類原本想不到的新缺陷，這與作者自述「用模型讓標註者更仔細」一致，但削弱了 scalable oversight 的論證。",
+    "critique 模型是用同一批標註者的資料訓練，輔助實驗又由同一批標註者評估，模型學到的是模仿這群人的 critique 風格；Fig 1 的效果可能部分來自風格一致，而不是模型揭露了新資訊。",
+    "App E.3 的消融（無輔助 0.74 → 8 條 1.31，約 +77%）與主實驗的約 +50% 是不同時期、不同設置，不能拿來互相支持或直接比較。",
+    "helpfulness 分數同時被當作 best-of-N 選 critique 的依據、輔助介面排序依據與 C_m 判別器，但文中沒有報告其校準或與人類標籤的一致率；App F 的隨機樣本可見明顯不一致，例如 Table 11 一條分數 0.886 的 critique 被人類判為無用，而另一條 0.414 的卻被判為有用；Table 8 幾乎同義的「應提到 Transitioners」critique 分數都在 0.7 以上，人類標籤卻有真有假。",
+    "非強迫改寫由模型自己的 critiqueability 分數決定是否採用改寫，這個自我評估閘門本身的錯誤率沒有單獨量測；因此改寫的淨效益混合了改寫能力與自我判別能力，無法拆開。",
+    "改寫只做單步、單輪，沒有迭代、沒有外部工具或執行回饋；所有改寫與 GDC 的數值只以圖呈現、沒有數值表，而且各實驗溫度設定不同（輔助 8 個固定溫度、自我 critique 隨機溫度、改寫 T=0.5、合成任務答案 T=1 critique T=0），跨節比較困難。",
+    "外推到 agent 自我修正的距離很大：任務是單輪、2,048 token 內的主題式摘要，缺陷以 coverage 為主；沒有多輪對話、工具呼叫或軌跡。後續 Huang et al.（2310.01798）發現未經訓練的內在自我修正在推理任務上常讓表現變差；本文的正面改寫結果仰賴專門訓練的 critique、helpfulness 頭與 best-of-N 篩選，屬於「有訓練過的自我評估器」，不能當作「LLM 能自行修正」的證據。",
+    "只用 SFT 而無 RL，critique 的上限被標註者能力框住；因此本文對 CD gap 能否縮小的結論，對 RL 訓練的 critic（例如後續 OpenAI CriticGPT 路線）只有參考價值。"
+  ],
+  "framework_role": "在 T5 中屬於「訓練得到的 critique 模型」原型：提供一套可直接拆成元件的自我修正管線——critiqueability 分數當觸發閘門（要不要修）、critique 生成當錯誤定位、helpfulness 分數當 critique 過濾器、conditional refinement 當修正執行、再用 critiqueability 決定是否採用修正。它同時給出兩個對 T5 設計很關鍵的經驗界線：自我改寫只有大模型才有效，以及在算力對齊下「先 critique 再改」不一定勝過直接重抽或直接改寫。GDC gap 則提供了衡量「critic 能否把判別器察覺的問題說出來」的方法，也可延伸到 T7 當作評估 critic 品質的指標。",
+  "edges": [
+    {
+      "edge": "E5",
+      "how": "模型產生的 critique（修正紀錄）直接回流到評估：§3 把每個答案的 8 條模型 critique 依 helpfulness 排序後交給人類評估者，提升找到缺陷的數量與評分嚴格度；§5 則把 critique 本身當判別器（C、C_m），以 best-of-N 的品質差量測 critic 對評估訊號的貢獻（GC、CD gap）。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文只描述 OpenAI 內部研究用的標註實驗與公開資料集，沒有宣稱本文模型部署到產品或正式標註流程。OpenAI 後續 CriticGPT（arXiv 2407.00215）延續這條路線，但屬於學術延伸，不計入採納；嘗試開啟 OpenAI 官方部落格頁面以查證後續是否導入標註流程時回傳 HTTP 403，未能確認。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "公開。訓練資料六個檔（base、critiques、helpfulness 各 train/test）位於 https://openaipublic.blob.core.windows.net/critiques/dataset/ ，輔助實驗資料集（含誤導答案與 intended critiques）位於 https://openaipublic.blob.core.windows.net/critiques/assistance.jsonl.gz ；2026-09-26 實測皆回 HTTP 200。模型權重與 5 個預訓練基底模型皆未公開，因此規模實驗無法重現，只能用公開資料在其他模型上重做 SFT。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是「訓練 critique 模型」這個子領域的原型：六任務聯合 SFT 的配方（critiqueability 閘門、helpfulness 過濾、conditional refinement）可直接拆成 T5 元件，而「自我改寫只在大模型有效、算力對齊下不一定贏過重抽」與「CD gap 不隨規模縮小」這兩個經驗界線，是設計自我修正迴路時必須知道的。",
+  "related": [
+    "1805.00899",
+    "1811.07871",
+    "1810.08575",
+    "2204.14146",
+    "2203.02155",
+    "2109.10862",
+    "2201.11903"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 4,
+    "total": 8
+  }
+}

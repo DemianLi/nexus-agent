@@ -1,0 +1,161 @@
+{
+  "id": "2504.10458",
+  "title": "GUI-R1 : A Generalist R1-Style Vision-Language Action Model For GUI Agents",
+  "topic": "T3",
+  "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把 DeepSeek-R1 式的規則獎勵強化學習（GRPO）搬到純截圖的 GUI agent：定義跨 Windows／Linux／macOS／Android／網頁的統一動作空間與可驗證獎勵（動作類型、點擊是否落在目標框內、輸入文字 F1），用 Qwen2.5-VL-7B 取樣篩出 3K 筆「不太難也不太簡單」的資料訓練 Qwen2.5-VL-3B／7B，在 grounding、low-level、high-level 三類共八個離線基準上勝過同資料的 SFT 與先前的 OS-Atlas、UI-R1。",
+  "problem": "以截圖為唯一觀測的 GUI agent（不依賴 HTML 或 accessibility tree）當時幾乎都靠監督式微調（SFT）訓練，作者認為這條路有兩個問題：一是要大量資料（OS-Atlas 用了約 13M 筆 grounding 資料），二是對沒看過的介面泛化差、看不太懂截圖，尤其在只給高層目標、沒有逐步指示的 high-level 任務上。同時期 R1 式規則獎勵 RL 在數學、程式與部分視覺任務上已證明「少量資料、可驗證獎勵」就能有效提升，也已有 UI-R1 把它用在 low-level grounding，但還沒有人把它用在需要依歷史與高層目標推斷下一步的 high-level GUI 任務，也還沒有能跨平台共用的獎勵設計。",
+  "core_idea": "把 GUI 動作預測當成一個輸出可以用規則驗證的問題：先把各平台的動作收斂到同一組原子動作（complete、close/delete、press_home、click、press_back、type、select、scroll、enter），每個輸出拆成動作類型、點擊座標、輸入文字三個欄位，各自有可程式化判斷對錯的規則（類型完全相符、點落在 GT 框內、文字 F1 過門檻），再加上要求 <think>…</think><answer>…</answer> 的格式獎勵。這讓不同平台、不同粒度的資料可以混在一起做 GRPO，而且同一個獎勵函式還能拿來篩資料：用較強的模型對每筆取樣 10 次，只留下有時對、有時錯的題目，使 GRPO 的組內優勢不會因全對或全錯而歸零。觀測本身沿用「單張目前截圖＋文字化的動作歷史」，沒有另外設計。",
+  "method": {
+    "問題形式化（§3.1）": "輸入是高層任務 Q、目前介面截圖 I（單張）、執行歷史 H（文字形式的先前動作）；模型對同一輸入取樣 N 個回應 O={o_1..o_N}，每個回應含動作類型 o^act、輸入文字 o^text、點擊點 o^point。每個回應用統一動作空間獎勵函式打分 r_i，GRPO 以組內標準化計算優勢 A_i=(r_i−mean(r))/std(r)，並在 KL 限制下更新策略。沒有 critic、沒有價值模型，也沒有與環境互動：每一步都是從靜態資料集取出的單步樣本。",
+    "提示詞與輸出格式（§3.2）": "訓練與推論用同一段提示：告訴模型「你是 GUI-R1」，在這張截圖中要繼續執行 task，動作歷史是 history；要求從九個動作中選一個、若是點擊則給整數座標、需要時給輸入文字；推理寫在 <think> 標籤、答案寫在 <answer> 標籤，答案形如 [{'action': ..., 'point': [x, y], 'input_text': ...}]，沒有文字時填預設字串 'no input text'。grounding 任務用另一版提示，動作只允許 click，其餘相同（仍帶 history 欄位）。座標是整數像素，論文沒有說明是原圖還是縮放後影像的座標系。",
+    "獎勵（§3.2，論文版本）": {
+      "格式獎勵 R_f": "檢查輸出是否符合 think/answer 結構與答案欄位的語法與語意有效性。",
+      "動作類型獎勵 R_act": "預測類型與 GT 完全相同得 1，否則 0。",
+      "點擊獎勵 R_point": "預測點落在 GT bounding box [x1,y1,x2,y2] 內得 1，否則 0。",
+      "文字獎勵 R_text": "預測文字與 GT 的「semantic F1」大於 0.5 得 1，否則 0（F1 的具體算法論文沒寫）。",
+      "組合": "R_acc=R_act+R_point+R_text；最終 R_o=α·R_f+β·R_acc，主實驗 α=0.2、β=0.8（由 Table 4 的最佳組合推知）。論文沒有說明動作不是 click 時 R_point 如何計分。"
+    },
+    "獎勵（官方程式碼 verl/utils/reward_score/r1gui.py，我於 2026-09 讀 GitHub main 分支所見，與論文敘述不同）": {
+      "準確度是閘門式的 0/1，不是三項相加": "類型不對直接 0；類型對且 GT 是 click 時，GT 若是四值框就看點是否嚴格落在框內，若是兩值點就看歐氏距離是否小於 140 像素；GT 是 type／select／scroll 時看文字 F1 是否 ≥0.5；其他動作（complete、press_back 等）類型對就給 1。",
+      "文字 F1 是詞集合 F1": "小寫、以空白切詞取集合算 precision／recall；若兩邊各只有一個詞，一方是另一方的子字串就直接給 1。不是語意相似度。",
+      "格式獎勵": "用正規表示式要求整段輸出完全符合 <think>…</think><answer>…</answer>，answer 內容以 Python eval 解析成 list of dict，須含 action、point、input_text 三鍵，point 兩值須為 int；type／select／open_app 的文字不可是預設值；scroll 的文字必須是 left／right／up／down 之一（等於把捲動方向放在 input_text 欄）。程式碼裡出現論文動作表沒有的 open_app。",
+      "總分": "0.8×accuracy＋0.2×format，與論文 α=0.2、β=0.8 一致。"
+    },
+    "訓練資料（§3.3）": {
+      "蒐集": "從 FineWeb、UIBert、AMEX、RICOSCA 以及 SeeClick 與 OS-Atlas 的部分預訓練資料，取得約 14M 筆 grounding 與 low-level 資料；另從 OS-Atlas 的指令資料取約 30K 筆 high-level 資料（論文沒說是哪幾個子資料集）。",
+      "篩選": "用 Qwen2.5-VL-7B 對每筆取樣 10 個回應，以上述規則獎勵估計正確率，刪掉正確率為 0 或 1 的題目，剩 140K 筆 low-level 與 1.5K 筆 high-level；再從 low-level 隨機抽 1.5K 與全部 high-level 合成 3K 筆的 GUI-R1-3K。Figure 3 給出影像類別、動作類別與難度分布（只有圖）。"
+    },
+    "訓練設定（§4.1）": "底模 Qwen2.5-VL-3B／7B。RFT 用 EasyR1 框架訓練 9 個 epoch；SFT 對照組用 LLaMA-Factory 在同一份 GUI-R1-3K 上訓練 1 個 epoch（避免過擬合）。8×A100-80G。影像最大像素數 1,048,576，解析度 ablation 加倍到 2,097,152（§4.3）。GRPO 的學習率、組大小、KL 係數、batch size 論文都沒寫。",
+    "官方腳本的超參數（repo examples/，論文未寫，我讀程式碼所得，不保證等於論文實際跑的設定）": "examples/config.yaml：AdamW、lr 1e-6、weight decay 1e-2、無 warmup；KL 以 loss 形式、low_var_kl、係數 1e-2；rollout n=5、temperature 1.0；rollout_batch_size 512、actor global_batch_size 128；視覺塔不凍結；驗證時 temperature 0.5、n=1；config 預設 total_episodes 15。3B 腳本覆寫 max_pixels=1,258,291（不是論文寫的 1,048,576）、max_prompt_length 2048、max_response_length 1024、8 GPU。",
+    "推論與評估（§4.1）": "所有方法在論文宣稱的「同一個零樣本提示」下評測，只用各基準的測試集。指標沿用 OS-Atlas：Type（動作類型完全相符率）、Grounding（下游任務中的點擊正確率）、SR（步級成功率：動作與參數都對）。Table 2、3 的 Overall 是把 Type、GR、SR 各欄直接平均；Table 1 的 ScreenSpot／ScreenSpot-Pro 平均是各格等權平均（我由表中數字反算確認）。評估全部是離線、逐步、給定真實歷史的設定，沒有線上互動環境。"
+  },
+  "assumptions": [
+    "單張目前截圖加上文字化的先前動作，就足以決定下一步；不需要歷史畫面、HTML 或 accessibility tree",
+    "每一步的正確動作是唯一的，可以用與單一 GT 比對的規則獎勵判斷（沒有替代路徑）",
+    "「點落在 GT 框內」與「文字 F1 過門檻」足以代表動作真的有效",
+    "各平台的動作可以無損地收斂到九個原子動作",
+    "用 Qwen2.5-VL-7B 估出的難度（10 次取樣的正確率）也適用於篩選 3B 模型的訓練資料",
+    "離線步級正確率（在給定真實歷史下）能反映線上多步執行的表現",
+    "底模 Qwen2.5-VL 已具備相當的 GUI grounding 能力，RL 只需少量資料就能把它引出來"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "ScreenSpot（表中只列 Web 與 Desktop 的 Text／Icon 四欄）",
+      "ScreenSpot-Pro（Dev、Creative、CAD、Scientific、Office、OS 六類 × Text／Icon）",
+      "GUI-Act-Web、OmniAct-Web、OmniAct-Desktop、AndroidControl-Low（low-level 任務）",
+      "AndroidControl-High、GUI-Odyssey（high-level 任務）"
+    ],
+    "metrics": [
+      "Type：動作類型完全相符率",
+      "Grounding／GR：點擊落點正確率",
+      "SR：步級成功率（動作與參數都對）",
+      "Overall：各欄等權平均（混合 Type、GR、SR）",
+      "訓練曲線：accuracy reward、format reward、PG loss、平均回應長度（Figure 4、5，只有圖）"
+    ],
+    "baselines": [
+      "SFT 類：SeeClick、OS-Atlas-4B／7B、ShowUI-2B、CogAgent-18B、Aria-GUI、UGround-7B、Claude（computer use）、在 GUI-R1-3K 上 SFT 的 QwenVL2.5-3B*／7B*",
+      "零樣本：QwenVL-7B、GPT-4o、QwenVL2.5-3B／7B",
+      "RFT：UI-R1-3B（同期工作，只做 low-level）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "只用 3K 筆資料的 GUI-R1 在三類任務上都勝過用約 13M 筆資料 SFT 的 OS-Atlas-7B",
+      "numbers": "high-level Overall：GUI-R1-3B 49.75、GUI-R1-7B 56.13、OS-Atlas-7B 44.88。low-level Overall：80.88／83.30 對 70.07。ScreenSpot-Pro 等權平均（我由 Table 1 反算）：GUI-R1-3B 25.23、GUI-R1-7B 28.6、OS-Atlas-7B 16.58；ScreenSpot 四欄平均 80.08／83.1 對 79.88。摘要寫 0.02%（3K 對 13M），§4.2 卻寫 0.2%（3K 對 14M），實際比例約 0.02%",
+      "section": "Abstract、§4.2、Table 1–3",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "在同一份 3K 資料上，RFT 的 grounding 提升明顯大於 SFT，3B 規模尤其明顯",
+      "numbers": "3B：ScreenSpot 80.08 對 SFT 63.55（作者稱 +26.3%；由表反算 SFT 應是 63.35），ScreenSpot-Pro 25.23 對 13.80（+82.8%），零樣本底模分別是 52.35 與 12.17（反算）。7B：ScreenSpot-Pro 28.6 對 SFT 18.44、底模 17.33（反算）",
+      "section": "§4.2、Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "RFT 大幅提升 3B 模型的 low-level 任務表現，並比同為 RFT 的 UI-R1-3B 高約 10 分；7B 的增幅小得多",
+      "numbers": "Overall：QwenVL2.5-3B 55.65 → GUI-R1-3B 80.88；UI-R1-3B 70.85；3B SFT 65.79；GPT-4o 54.46。7B：底模 79.05、SFT 80.09、GUI-R1-7B 83.30。例外：AndroidControl-Low 的 GR 在 7B 是底模 87.08 高於 GUI-R1-7B 84.02；3B 的 AndroidControl-Low SR 64.41 低於 UI-R1-3B 的 66.44",
+      "section": "§4.2、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "在 high-level 任務上，GUI-R1-3B 勝過 UI-R1-3B 與 GPT-4o，GUI-Odyssey 的步級成功率領先幅度最大",
+      "numbers": "Overall：GUI-R1-3B 49.75、UI-R1-3B 46.35（+3.4）、GPT-4o 28.69（+21.06）。GUI-Odyssey SR：41.33 對 UI-R1 32.49（相對 +27.2%）。GUI-R1-7B：Overall 56.13、AndroidControl-High SR 51.67、GUI-Odyssey SR 38.79（低於 3B 的 41.33）。7B 底模零樣本 50.53、7B SFT 50.97",
+      "section": "§4.2、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "把輸入影像解析度加倍，RFT 收斂更快、上限更高；作者歸因於 GUI 截圖解析度高、UI 元素小，解析度高才看得清楚",
+      "numbers": "最大像素數 1,048,576 → 2,097,152；只有 Figure 4 的訓練曲線，沒有給基準分數",
+      "section": "§4.3、Figure 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "用 7B 模型取樣篩掉全對或全錯的題目，得到的 3K 資料訓練時幾步就拿到高獎勵；未篩選的資料收斂慢、上限明顯較低",
+      "numbers": "14M＋30K → 篩後 140K low-level＋1.5K high-level → 抽成 3K；每筆取樣 10 次。收斂差異只有 Figure 4 曲線",
+      "section": "§3.3、§4.3、Figure 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "降低格式獎勵的權重、提高準確度獎勵的權重，high-level 表現一致變好；作者解釋是格式獎勵早早就收斂",
+      "numbers": "(α,β)=(0.2,0.8)：Overall 49.75；(0.5,0.5)：47.72；(0.8,0.2)：46.48。差異主要在 GUI-Odyssey（SR 41.33／35.66／32.49），AndroidControl-High 三組幾乎相同（SR 46.55／46.62／45.44）",
+      "section": "§4.3、Table 4",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "訓練中沒有出現 R1 式的「aha moment」：格式獎勵早期就收斂，平均回應長度先降後升；作者推測是單圖、非互動的訓練方式讓模型無法回頭追溯錯誤動作",
+      "numbers": "只有 Figure 5 的曲線，沒有數值",
+      "section": "§4.4、Figure 5",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "訓練是單張影像、非互動環境，模型無法自行追溯先前的錯誤動作，因此沒有出現「aha moment」；作者認為互動環境中的多圖 high-level 任務是後續方向（§4.4）",
+    "目前不支援多 agent 協作，也沒有穩健的錯誤修正策略，列為未來工作（§5）",
+    "效果依賴資料篩選與影像解析度：未篩選資料收斂慢、上限低，解析度低時小元素看不清（§4.3）"
+  ],
+  "limitations_observed": [
+    "獎勵係數 ablation 的其中一列看起來是複製錯誤。Table 4 中 (α,β)=(0.8,0.2) 那一列的六個數字（57.85／55.70／45.44／52.16／34.46／32.49）與 Table 3 的 UI-R1-3B 那一列逐位相同，而且它的 Overall 寫 46.48，但這六個數字的平均其實是 46.35（正是 UI-R1-3B 的 Overall）。六個兩位小數同時巧合的機率可以忽略，所以「降低格式權重帶來一致提升」這個結論只剩兩個可信的點（49.75 對 47.72），而且差異幾乎全來自 GUI-Odyssey，AndroidControl-High 三組 SR 只差 1 分左右，也沒有報多次種子。",
+    "論文寫的獎勵與官方程式碼不同。§3.2 寫 R_acc=R_act+R_point+R_text（0–3 分、有部分分數），並用「semantic F1>0.5」；repo 的 r1gui.py 是閘門式 0/1（類型錯直接 0，只檢查該動作需要的那一個參數），F1 是詞集合 F1、門檻 ≥0.5，且在 GT 只有一個點時改用 140 像素半徑判定。照論文重做會得到給分形狀不同的獎勵：類型對、座標錯的回應在論文版有 1 分，在程式碼版是 0 分，GRPO 的組內優勢分布因此不同。腳本裡的 max_pixels=1,258,291 也與論文的 1,048,576 不符。無法確定論文的數字是用哪一版跑出來的。",
+    "「所有實驗都在同一個零樣本提示下進行」與事實不符。我對照 OS-Atlas 原論文（2410.23218）Table 5：Table 3 的 GPT-4o、OS-Atlas-4B、OS-Atlas-7B 三列共 18 個數字與 OS-Atlas 的 zero-shot OOD 結果逐位相同；Table 2 的 AndroidControl-Low 欄（例如 OS-Atlas-7B 73.00／73.37／50.94、GPT-4o 74.33／38.67／28.39）與 OS-Atlas-7B 的 GUI-Act-Web 86.95／75.61（OS-Atlas Table 4）也相同。也就是這些基線是直接引用，用的是 OS-Atlas 自己的提示與設定，不是本文的提示。Table 1 的 SeeClick ScreenSpot 四欄（55.7／32.5／72.2／30.0）也與 SeeClick 原論文相同。UI-R1 等其餘列是否重跑，論文沒交代；能確定同條件的只有本文自己訓練的 Qwen2.5-VL 系列（零樣本、SFT、RFT）。",
+    "「超越 OS-Atlas」大半是底模換代的功勞，不是 RFT。OS-Atlas-7B 的底模是 Qwen2-VL，本文用 Qwen2.5-VL；而 Qwen2.5-VL-7B 零樣本就已經 low-level Overall 79.05（OS-Atlas-7B 70.07）、high-level 50.53（44.88）。拿同一底模比較，RFT 在 7B 的淨增益只有 low-level +4.25、high-level +5.6；對同資料 SFT 只有 +3.2 與 +5.16。GUI-R1-3B 的 high-level Overall 49.75 甚至低於零樣本的 Qwen2.5-VL-7B（50.53）。「0.02% 資料」的說法也忽略了篩選成本：3K 是從約 14M 筆資料、每筆用 7B 模型取樣 10 次篩出來的，而且本文 §4.2 自己把比例寫成 0.2%、把 13M 寫成 14M。",
+    "high-level 的「SOTA」只和零樣本的 OS-Atlas 比。OS-Atlas 為了保留 OOD 評測，零樣本版只用 AMEX、AITZ、Mind2Web 三個 agent 資料集訓練；它在 AndroidControl／GUI-Odyssey 上微調後的 SR 是 71.17／61.98（OS-Atlas Table 5），遠高於 GUI-R1-7B 的 51.67／38.79。本文的 1.5K high-level 資料取自「OS-Atlas 的指令資料」，但沒說是哪幾個子資料集；若含 AndroidControl 或 GUI-Odyssey 的訓練集，Table 3 就不是 OOD 比較，拿去對零樣本的 OS-Atlas 不公平。§4.2 關於 OOD 泛化的主張因此證據不足。",
+    "評估完全是離線、逐步、餵真實歷史的設定。沒有任何線上基準（AndroidWorld、OSWorld、WebArena 之類）的 episode 成功率，所以錯誤累積、偏離後能不能回到正軌都沒量到；「real-world」「generalist」的說法沒有端到端證據。GUI-R1-7B 在 GUI-Odyssey 的 SR（38.79）低於 3B（41.33），作者沒有討論，也沒有報變異或多次種子，無法判斷差距是否在雜訊內。",
+    "表格的彙總方式讓數字不能直接和其他論文比。ScreenSpot 內文說涵蓋行動、桌面、網頁，但 Table 1 只列 Web 與 Desktop 四欄，80.08 是這四欄的等權平均；ScreenSpot-Pro 的 25.23 是 12 格等權平均，不是官方按樣本數加權的 overall。3B SFT 的 ScreenSpot 由表反算是 63.35，文中寫 63.55。Table 2、3 的 Overall 把 Type、GR、SR 混在一起平均，Type 準確率通常偏高，會把分數往上拉。",
+    "對 T3 感知而言，這篇對觀測表徵本身幾乎沒有實驗。觀測固定為單張截圖加文字動作歷史，沒有比較 accessibility tree、set-of-mark、歷史截圖或歷史長度；唯一與觀測直接相關的解析度 ablation 只有訓練曲線，沒有基準分數，也沒有報加倍解析度的推論成本。grounding 的提升可以歸因到「RL 加上點在框內的獎勵」，但無法告訴我們觀測該怎麼設計。",
+    "參考文獻有明顯錯誤，顯示校對不足：[19] MetaSpatial 與 [17] Code-R1 標成同一個 arXiv ID 2503.18470；§4.2 把 GUI-Act-Web 引成 [29]（那是 ScreenSpot-Pro）；「OS-Otlas」拼錯多次。"
+  ],
+  "framework_role": "在 T3(a) 感知／觀測空間中，這篇屬於「純截圖觀測下的 grounding 與動作預測」這一支，貢獻落在訓練方法而不是觀測表徵：它示範了只要觀測到動作的對應可以用規則驗證（點是否落在元素框內、類型是否相符），就能用少量資料的 GRPO 顯著改善 grounding，尤其在 ScreenSpot-Pro 這類高解析度、小元素的專業介面上。對框架可取用的有三點：(1) 統一動作空間加上欄位級可驗證獎勵的設計，可以當 agent-computer interface 的輸出規格範本；(2) 解析度 ablation 提醒「觀測保真度」直接影響小元素的感知；(3) 用獎勵函式對資料取樣估難度再篩選的做法。但它不研究觀測該怎麼表徵、壓縮或截斷，評估也只有離線步級準確率，不涉及 T3(b) 的執行期監控、失敗偵測或安全監控。它的主要貢獻其實更接近 GUI agent 的訓練方法（RFT）與 T7 的步級評估指標，而不是 T3 的核心問題。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文沒有提到任何部署或產品；官方 GitHub（Apache-2.0）與 Hugging Face 的模型（ritzzai/GUI-R1）及資料集（ritzzai/GUI-R1，MIT）頁面都只是研究釋出，沒有產品或業界採用的說明。被後續 GUI RL 論文當基線屬於學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/ritzz-ai/GUI-R1",
+    "data": "公開。repo README 列出 GUI-R1-3K 資料集於 2025-04-17 釋出、權重與訓練／推論／評估程式於 2025-04-18 釋出，之後又加了從 OS-Atlas 預訓練資料篩出的 800K RL 資料；資料在 https://huggingface.co/datasets/ritzzai/GUI-R1（MIT，含 train／test 兩個 split），模型在 https://huggingface.co/ritzzai/GUI-R1。訓練程式是 EasyR1／verl 的改版，GRPO 超參數只能從 examples/config.yaml 與腳本讀到，且與論文敘述有出入（見 method 與 limitations_observed）。以上是我讀 repo 頁面、腳本與 r1gui.py 所得，沒有實際執行。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它是最早把 R1 式規則獎勵 RL 推到 high-level GUI 任務的代表作，「點在框內」式可驗證獎勵加難度篩選對 grounding 有實證的幫助，值得了解；但主要貢獻是訓練方法而非觀測表徵，實驗有基線照抄卻宣稱同提示、Table 4 疑似複製錯列、論文與程式碼獎勵不一致、只有離線評估等問題，對 T3 並非必讀。",
+  "related": [
+    "2410.23218",
+    "2503.21620",
+    "2501.12326",
+    "2401.10935",
+    "2502.13923",
+    "2501.12948",
+    "2402.03300",
+    "2410.05243",
+    "2406.03679",
+    "2406.08451",
+    "2406.11317",
+    "2503.01785"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

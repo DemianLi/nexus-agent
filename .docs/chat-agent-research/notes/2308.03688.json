@@ -1,0 +1,176 @@
+{
+  "id": "2308.03688",
+  "title": "AgentBench: Evaluating LLMs as Agents",
+  "topic": "T7",
+  "subarea": "agent 基準與評估環境設計",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 AgentBench：把作業系統、資料庫、知識圖譜、數位卡牌、情境猜謎、ALFWorld、WebShop、Mind2Web 共 8 個可執行的多輪互動環境，統一成「環境扮演 user、LLM 扮演 agent」的對話式評估協定與 HTTP 化工具組，以 CoT＋greedy 評測 29 個 LLM，並用結局分類（CLE／IF／IA／TLE／Complete）拆解 agent 的失敗原因。",
+  "problem": "2023 年中 LLM agent 應用（AutoGPT、BabyAGI 等）大量出現，但沒有系統化、跨情境的 agent 能力基準。既有做法各有缺口：文字冒險遊戲的動作空間封閉而離散，而且偏重常識；多模態模擬器（遊戲、GUI、室內場景）離 LLM 的實際用途遠，純文字模型也無法直接受測；多數 agent 基準只有單一環境，看不出模型在不同應用情境下的整體表現。工程面上，每個資料集各自附一套評估程式，只能同機執行、一次評一個 agent 對一個 task，難以對大量模型做可比較的評測。作者要回答的是：現有 LLM 在真實可執行的互動環境裡到底能不能當 agent、商用與開源模型差多少、失敗主要卡在哪裡。",
+  "core_idea": "把 LLM-as-Agent 的評估形式化成 POMDP，並把所有環境都包成同一種兩角色對話：環境（第一則是任務指令，其後是觀測回饋）扮演 user，受測 LLM 扮演 agent，每輪在同一則回應裡輸出 Thought＋Action，由環境以可執行、可自動判定的方式給分（腳本 exit code、資料表 hash、答案集合 F1、遊戲勝率、reward 函數、關鍵點命中率）。刻意只用最陽春的 CoT（不重試、不反思、不搜尋），量的是「最便宜、最常見的部署方式」下模型本身的 agent 能力；8 個環境分屬 code、game、web 三種 grounding，避免單一專長模型佔便宜。總分 OA 以「所有受測模型在該環境平均分的倒數」當固定權重，把難度不同的環境拉到同一尺度；再用結局分類把失敗拆成格式錯、動作錯、回合耗盡等可行動的原因。",
+  "method": {
+    "形式化與對話協定": "評估視為 POMDP (S, A, T, R, U, O)：狀態空間、動作空間、轉移函數、reward 函數、任務指令空間、觀測空間；受測 LLM 記為 M。所有環境一律只有 user 與 agent 兩個角色交替發言，user 的第一則是任務指令，其後都是環境回饋。互動軌跡記錄成對話歷史 (u0, a0, …, uk, ak)，推論時餵入 (u0, a0, …, uk)。",
+    "對話歷史截斷": "上限 3500 token。各模型 tokenizer 不同，所以統一用粗估：長度 n 的單字算 ⌈n/6⌉ 個 token，每個非空白符號算 1 個 token。永遠保留 u0，找最小的 r 使 (u0, a_r, u_{r+1}, …, u_k) 的 token 數不超過 3500，丟掉中間的 2r 則訊息，並在 u0 後面附一行「[NOTICE] 2r messages are omitted.」告知已省略。chat 模型直接以多輪對話格式餵入；只支援補全的模型（例如 text-davinci-003）則在每則訊息前加「USER:」或「AGENT:」，最後補一個「AGENT:」讓模型續寫。",
+    "提示與解碼": "沿用 ReAct 的 Thought＋Action 格式，但兩者放在同一輪輸出。任務指令內通常附一個簡單的 CoT 示範（多數環境 1-shot，WB 為 3-shot）。所有任務 temperature＝0（greedy），不做多次嘗試、self-consistency、反思或搜尋。",
+    "結局分類（finish reason）": "每個樣本的結束原因歸入五類：Complete（正常結束，不論答對與否）；Context Limit Exceeded（歷史超過模型最大 context，只出現在 2,048 context 的 text-davinci-002／003）；Invalid Format（沒照格式指示輸出）；Invalid Action（格式正確，但動作不在動作空間內或參數錯誤）；Task Limit Exceeded（達到回合上限仍未解，或連續多輪重複輸出）。作者把 IF／IA 歸因於指令遵循差，把 TLE 歸因於多輪推理與決策能力弱。",
+    "總分 OA": "各環境分數量級差很大（Weight-1：OS 10.8、DB 13.0、KG 13.9、DCG 12.0、LTP 3.5、HH 13.0、WS 30.7、WB 11.6），直接平均會被 WS 這類高分環境主導。做法：Weight-1 是當時 27 個受測模型在該環境的平均分（claude-3、glm-4 是權重算定後才加評的）；OA＝Σ(該環境分數 ÷ Weight-1)／8。權重固定下來，之後的新模型沿用。我用 gpt-4 那一列驗算得 4.007，與 Table 3 的 4.01 一致；gpt-3.5-turbo 算得 2.32，也一致。",
+    "資料規模與切分": "每個環境分 Dev／Test，Dev 共 269 題、Test 共 1,014 題，推論呼叫約 3k／11k 次，作者說與 MMLU 相當。Test 題數：OS 144、DB 300、KG 150、DCG 20、LTP 50、HH 50、WS 200、WB 100。每題預估互動回合：OS 8、DB 5、KG 15、DCG 30、LTP 25、HH 35、WS 5、WB 10。附錄描述的是來源題庫（KG 前 500 題、WS 前 500 條指令、HH 134 題、WB 912 題），論文沒有說明 Test 是怎麼從題庫抽出來的。",
+    "OS（作業系統）": "每題包含：自然語言指令、Docker 映像（例如 local-os/default）、可選的初始化腳本（互動前以 docker exec 執行）、可選的啟動腳本（開 shell 後、互動前執行）、檢查管線、可選的參考解腳本（只給單元測試用）。題型有兩種：QA（最後須提交答案）與 Operation（修改檔案或使用者狀態，由檢查管線驗證系統狀態）。題目來源一半是人工：從 Stack Overflow 抓 6000 個 bash／shell 標籤的問答，依讚數排序，由 8 位程式背景的標註者挑出有難度的題目，各自寫題目描述、初始化／啟動腳本與檢查管線，再交叉驗證，每題約 2 小時；另一半主要是 gpt-4 生成的 QA 題，經單元測試篩選（初始化腳本 exit code 須為 0，參考解跑完須被檢查管線判為正確）。共 144 題。動作有兩種：bash（執行一段指令）與 commit（answer(...) 提交答案，或 finish 宣告完成）；輸出過長會被截斷並告知模型；禁止需要互動輸入的指令；回合上限預設 8。判定：檢查管線是一串腳本 f1…fn，f_k 以模型答案 o0 及前面各腳本的輸出為參數，全部 exit 0 才算正確。指標為 SR。",
+    "DB（資料庫）": "題目取自 WikiSQL、WikiTableQuestions、SQA、HybridQA、FeTaQA。用 gpt-3.5-turbo 擴增：依表頭與原始列產生 10 列新資料；依表名、表頭與 SQL 範例再產生 5 條 SQL；逐條改寫問句但不改語意。藉此補出原資料沒有的 INSERT 與 UPDATE 題，擴增題須經單元測試腳本篩選。最後 300 題，分 select／insert／update 三類。每題含指令、表資訊（表名與欄名）、表內容、正解（select 為文字答案；insert／update 為正確修改後整張表的 hash）。流程：依表內容產生初始化 SQL，在 Docker 內起 MySQL；agent 每輪只能執行一條寫成單行的 SQL（放在 markdown 的 sql 區塊，只執行第一個區塊），結果原樣回傳；以「Action: Answer」加「Final Answer: [...]」提交；輸出不符任何規定格式就立即判失敗。判定：select 題不計順序但須完全相符，單一數值接受等價寫法（5、5.0、+5）；insert／update 比對表的 hash。指標為三類 SR 的 macro 平均。",
+    "KG（知識圖譜）": "從 Freebase 上的 KBQA 資料集（GrailQA、ComplexWebQuestions、GraphQuestions）取題，把 KBQA 改成工具學習：利用既有 S-expression 標註推出最佳工具呼叫序列，只保留至少需要 5 次工具呼叫的題目（共 1,663 題），並直接給出題目的主題實體（省掉 entity linking）。以 Virtuoso 架設 Freebase，再包成 7 個 API：get_relations、get_neighbors、intersection、get_attributes、argmax、argmin、count。工具結果以變數 #0、#1… 表示實體集合，最後以「Final Answer: #id」作答；上限 15 個動作。zero-shot 時模型幾乎產不出有意義的輸出，因此提示附一個完整的示範軌跡。指標：答案集合 F1 為主，另報答案集合 Exact Match 與 Executability（動作序列執行後有產出任何答案就記 1）。",
+    "DCG（數位卡牌）": "採 Aquawar（2021 年清華 agent 競賽的簡化數位卡牌遊戲），雙方各 4 條魚，從 10 種魚中選出；每條 400 HP、200 攻擊力，各有一個主動技與一個被動技，技能刻意重疊以隱藏身分。每輪先猜對方一條存活魚的身分（猜中則對方全體受傷，prompt 寫每條 50 點），再指定一條魚普攻（傷害為攻擊力一半）或放主動技；被動技條件成立時自動觸發；結束時存活魚多者勝。分兩個 stage：stage 1 拿掉猜身分機制，stage 2 保留，兩者取平均。對手是規則式 baseline（論文列了隨機動作，與「能 AOE 就 AOE、能一擊斃命就斃、否則主動技、最後普攻」的貪婪策略兩種，但沒寫主表對局各用哪一種）。agent 以 JSON 輸出動作（pick_fish、action、target_position；猜身分時為 guess_type、target_position），每次有 5 次機會輸出合法格式，否則直接判負。reward＝0.7×勝率＋0.3×傷害率（總傷害÷總血量）。附錄另提供依戰力比 ρ＝Power(H)／Power(F) 生成指定難度對局的方法，Power(T)＝(ΣHP·ΣATK)／#T；主表用的是固定對局。",
+    "LTP（情境猜謎，海龜湯）": "每題有 story 與 truth，分 easy／medium／hard／expert 四級。受測 LLM 當解謎者，每輪只能問一個可用 yes／no／irrelevant 回答的問題，不得用 why 直接追問，自認猜到時宣告劇情；回合上限例如 25。主持人由 gpt-3.5-turbo 擔任：先用一段多輪 prompt 讓它複述 story 重點、truth 重點與 8 條規則，之後只回答 yes／no／irrelevant，並在解謎者走偏時偶爾給提示。truth 事先由 gpt-3.5-turbo 拆成數個關鍵點（answer_keys）。判定管線共四段 prompt：答 yes 的問題改寫成一句陳述句；答 no 的問題改寫成反義陳述句；把累積的推論合併成一句；再問「句 2 是否包含句 1 的全部資訊」（yes／no），逐一比對關鍵點，命中的關鍵點與相關推論隨即刪除，避免重複計分。指標：Game Progress（命中關鍵點的比例，主指標）、Single Game Accuracy、Round Efficiency、Query Relevance。",
+    "HH（ALFWorld 家務）": "取 ALFWorld out-of-distribution 評估集中 134 題可解題，分六類（pick and place、pick clean then place、pick heat then place、pick cool then place、look at obj、pick two obj）。沿用 ReAct repo 的示範與 prompt，每類挑一條訓練集中簡單且完整的成功軌跡當 1-shot。輸出格式為「THOUGHT: …」加「ACTION: …」，或只有 ACTION；每輪列出可用動作，環境回覆「Nothing happened」代表上一個動作無效。輸出格式不合法時，用 BLEU 找出最相近的合法動作代為執行。連續 3 次輸出完全相同即判失敗（因重複）；達到動作上限也判失敗。指標為 SR。",
+    "WS（WebShop）": "使用 WebShop 的模擬電商（約 100 萬件從 amazon.com 抓來的商品、12,087 條人寫指令），取前 500 條指令為題庫（Test 為 200 題）。動作只有 search[keywords] 與 click[value]（value 必須在可點選清單內）；1-shot 示範；直到點下「Buy Now」或超過回合上限為止。指標沿用 WebShop 原本的 reward：(屬性交集數＋選項交集數＋價格是否在預算內)÷(目標屬性數＋目標選項數＋1)×r_type，r_type 依所選商品與目標商品標題的文字相符程度取 0、0.1、0.5 或 1。",
+    "WB（Mind2Web 網頁瀏覽）": "使用 Mind2Web 的 Cross-Domain 測試集（73 個網站、912 題）。每步先以微調過的小型語言模型（DeBERTa 類）對 HTML 元素排序取 top-k 候選，再把下一步改寫成選擇題（A 固定是 None of the above），並要求給出 Click／Type／Select Option 與對應的值；3-shot CoT 示範。指標：Element Accuracy、Action F1、Step SR（元素與操作都正確才算該步成功，為主指標）；Task SR 因最強模型也只有個位數百分比，沒有當主指標。候選數在正文前後出現「5 個」與「top-10」兩種說法，示範裡只有 4 個選項。",
+    "評估工具組（toolkit）": "Task Server（一個 task controller 加多個 task worker，每個 worker 在隔離的 Docker 環境內）、Agent Server（任何以 HTTP 暴露的模型服務）與 Evaluation Client 三者解耦，以 HTTP 溝通，可分散部署在不同機器；可同時評多組 agent×task 組合；中斷後可續跑。Evaluation Client 用 Edmonds–Karp 最大流分配樣本：建圖 S→A_k（容量為 agent k 的 worker 數）、A_{x_k}→T_{y_k}（容量為該組待評樣本數 s_k）、T_k→D（容量為 task k 的 worker 數）；跑最大流後依每條 A→T 邊的流量分派樣本並扣除容量；每完成一筆，就把連到 S 或 D 的邊容量加 1；並定期重跑演算法，把新空出的資源納入。",
+    "失敗分析方法": "TLE 分析：先把 TLE 軌跡截到總 token 不超過 3500 的最長前綴（排除歷史截斷策略的影響），再計算 P(n,t)：最後 n 輪內存在兩則 agent 回應 Rouge-L ≥ t 的 TLE 軌跡比例。看最後 n 輪而不是只看最後兩輪，是為了抓到模型在數個狀態之間循環的情況（例如進房、開抽屜、關抽屜、離開）。另外統計完成軌跡的回合數與 token 數分布，並以 HH、DB 的個案做規劃一致性與自我修正的質性分析。"
+  },
+  "assumptions": [
+    "環境回饋可以用純文字完整呈現；HTML、資料表、KG 查詢結果經過截斷或候選篩選後，仍保有解題所需資訊。",
+    "自動判定（腳本 exit code、資料表 hash、答案集合 F1、WebShop reward、gpt-3.5-turbo 主持與關鍵點比對）與人的判斷一致；LTP 部分作者自己的人評已顯示這點並不完全成立。",
+    "每個模型每個環境只以 greedy 跑一次，其結果足以代表模型能力，排名對抽樣雜訊不敏感。",
+    "最陽春的 CoT prompting 是公平的共同起點：同一份 prompt 下各模型的格式遵循差異，被視為能力差異，而不是 prompt 與模型對齊方式相不相容的問題。",
+    "以當時 27 個受測模型的平均分當權重是合理的難度正規化，而且這組權重對之後的新模型仍然適用。",
+    "由 gpt-4 生成（OS 約半數題目）或 gpt-3.5-turbo 擴增（DB）的題目，不會系統性偏袒這兩個同時受測的模型。",
+    "由公開資料集改造成的環境（WebShop、ALFWorld、Mind2Web、KBQA、WikiSQL 等）沒有嚴重的訓練資料污染。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "OS：Ubuntu Docker 中的互動式 bash，144 題（新建）",
+      "DB：Docker 中的 MySQL，300 題，select／insert／update（新建，題源為 WikiSQL、WikiTableQuestions、SQA、HybridQA、FeTaQA）",
+      "KG：Freebase（Virtuoso）＋7 個查詢工具，150 題（改寫自 GrailQA、ComplexWebQuestions、GraphQuestions）",
+      "DCG：Aquawar 數位卡牌對戰，20 局（新建）",
+      "LTP：情境猜謎，gpt-3.5-turbo 主持，50 題（新建）",
+      "HH：ALFWorld，50 題",
+      "WS：WebShop，200 題",
+      "WB：Mind2Web Cross-Domain，100 題"
+    ],
+    "metrics": [
+      "OS、HH：Success Rate",
+      "DB：三類 SR 的 macro 平均",
+      "KG：答案集合 F1（另有 Exact Match、Executability）",
+      "DCG：reward＝0.7×勝率＋0.3×傷害率",
+      "LTP：Game Progress（另有 Single Game Accuracy、Round Efficiency、Query Relevance）",
+      "WS：WebShop 屬性比對 reward",
+      "WB：Step SR（另有 Element Accuracy、Action F1）",
+      "OA：以 Weight-1 倒數加權的跨環境平均",
+      "結局分類比例：Complete／CLE／IF／IA／TLE",
+      "TLE 重複比例 P(n,t)（Rouge-L）"
+    ],
+    "baselines": [
+      "API 模型 10 個：gpt-4-0613、gpt-3.5-turbo-0613、text-davinci-003、text-davinci-002、claude-3 opus、claude-2、claude v1.3、claude-instant v1.1、chat-bison-001、glm-4",
+      "開源模型 19 個（≤70B）：llama-2-70b／13b／7b chat、codellama-34b／13b／7b instruct、vicuna-33b v1.3、vicuna-13b／7b v1.5、guanaco-65b／33b、wizardlm-30b v1.0、wizardlm-13b、openchat-13b v3.2、koala-13b、oasst-12b sft-4、dolly-12b v2、chatglm-6b v1.1、codegeex2-6b",
+      "DCG 環境內的規則式對手（隨機、貪婪）；這是環境的一部分，不是方法比較基準",
+      "沒有與其他基準或評估框架的實驗對照；同期的 InterCode 只在相關工作中以文字比較"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "gpt-4 是最強的 agent，8 個環境中 6 個第一，在 HH 已接近實用；但沒有模型全面領先，DB 與 WS 的第一名是其他模型。",
+      "numbers": "gpt-4 OA 4.01；HH 78.0、DCG 74.5、KG 58.8、OS 42.4、WB 29.0、LTP 16.6。DB 由 claude-3 的 51.7 最高（gpt-4 32.0），WS 由 gpt-3.5-turbo 的 64.1 最高（gpt-4 61.1）。第二、三名為 claude-3 OA 3.11、glm-4 OA 2.89。",
+      "section": "§4.2、Table 3",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "商用 API 模型與 70B 以下開源模型之間差距巨大；開源模型在 KG、DCG、HH 等需要長程決策的環境常接近零分。",
+      "numbers": "API 平均 OA 2.32、開源平均 0.51；所有 API 模型 OA 都高於 1.00。開源最佳為 codellama-34b 的 0.96，仍遠低於 gpt-3.5-turbo 的 2.32。llama-2-70b：HH 2.0、LTP 0.0、KG 8.0。",
+      "section": "§4.2、Table 3、Figure 3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "跨模型平均來看，最主要的失敗原因是 Task Limit Exceeded（回合耗盡）；另外 DB、DCG 以格式錯誤為主，HH 以無效動作為主。",
+      "numbers": "Table 4（29 個模型平均）：TLE 在 LTP 82.5%、KG 67.9%、WB 35.0%、WS 27.8%、OS 23.9%、HH 22.1%；Invalid Format 在 DB 53.3%、DCG 38.5%、WS 17.2%；Invalid Action 在 HH 64.1%、DCG 10.2%、WB 8.4%；Complete 比例最低的是 HH 13.1%、LTP 14.0%。",
+      "section": "§4.3、Table 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "code 訓練的效果兩面：在流程固定、有範本可循的 WS 明顯有利，在需要臨場策略的 DCG 反而較差；作者另稱在 OS 也較差，但同尺寸對照的方向並不一致。",
+      "numbers": "WS：codellama-34b 52.1 對 llama-2-70b 5.6；codellama-13b 43.8 對 llama-2-13b 25.3；codellama-7b 25.2 對 llama-2-7b 11.6。DCG：codellama-13b 0.0 對 llama-2-13b 26.4；codellama-7b 0.0 對 llama-2-7b 6.9。OS：codellama-13b 3.5 對 llama-2-13b 4.2，但 codellama-7b 4.9 反而高於 llama-2-7b 4.2。",
+      "section": "§4.3、附錄 J.2.5、Table 3、Figure 10",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "同一基底模型下，用 ShareGPT（gpt-4／gpt-3.5-turbo 產生）資料對齊的 vicuna-13b 勝過官方對齊的 llama-2-13b，並與大三倍的 codellama-34b 相當；llama-2-13b 與 llama-2-70b 幾乎打平。",
+      "numbers": "OA：vicuna-13b 0.93、llama-2-13b 0.77、codellama-34b 0.96；llama-2-70b 0.78（作者重跑後結果不變）。",
+      "section": "§4.3、Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "LTP 以 gpt-3.5-turbo 自動主持與判分，和人評相比偏寬鬆，對開源模型更明顯；作者宣稱 Game Progress 與 Round Efficiency 與人評相當。",
+      "numbers": "論文只給方向、沒有數字：自動評估的 SGA、QR 高於人評；GP、RE 與人評「相當」的說法同樣沒有附上一致率或人評樣本數。",
+      "section": "附錄 F.2",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "開源模型的格式錯誤與無效動作比例明顯高於商用模型，作者據此認為指令遵循是開源模型落後的主因之一；個案顯示連 gpt-4 在 DB 也會漏掉規定的 Action 標籤。",
+      "numbers": "Table 6：API 模型 Complete 61.5%、CLE 3.0%、IF 6.0%、IA 4.6%、TLE 24.9%；開源模型 Complete 39.1%、CLE 0.0%、IF 10.4%、IA 13.6%、TLE 36.9%。",
+      "section": "附錄 J.2.1、Table 6",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "TLE 的主因是模型重複先前的內容而陷入迴圈；完成的任務多半在少數回合與 3000 token 內結束。",
+      "numbers": "超過 90% 的 TLE 軌跡在最後 10 輪內有兩則回應 Rouge-L ≥ 0.8；TLE 軌跡平均 25.5 輪。完成軌跡的回合數中位數 6、平均 7.95（中間 50% 為 4–9 輪）；token 中位數 1850、平均 2220.1（中間 50% 為 761–2709）。",
+      "section": "附錄 J.2.3、J.2.4、Figure 8、Figure 9",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "開源模型只評 70B 以下（算力限制）。",
+    "只用最陽春的 CoT，不含反思、搜尋、集成等較強策略；作者說明這是刻意選擇，代表最便宜也最常見的部署方式。",
+    "LTP 的自動評估比人評寬鬆，對開源模型尤甚；作者計畫另外訓練專用的主持模型。",
+    "WB 的 Task SR 太低（最強模型也只有個位數），只能報 Step SR；GPT-3.5 的結果因 top-k 與 prompt 不同，和 Mind2Web 原論文有出入。",
+    "各模型 tokenizer 不同，截斷只能用粗估的 token 數。",
+    "text-davinci-002／003 受 2,048 context 限制，會出現 Context Limit Exceeded。",
+    "llama-2-13b 與 llama-2-70b 表現相近的原因只提出推測（預訓練 token 不足，或指令遵循對齊不足）。",
+    "即使最強的 gpt-4 也還稱不上實用的 agent。"
+  ],
+  "limitations_observed": [
+    "OA 的加權有很大的槓桿不對稱：權重是平均分的倒數，LTP 的 Weight-1 只有 3.5、WS 是 30.7，所以 LTP 每 1 分約值 0.036 OA，WS 每 1 分只值約 0.004 OA，差約 8.8 倍。被放大最多的 LTP，正好是由 gpt-3.5-turbo 主持與判分、作者自己在 F.2 承認偏寬鬆的環境，Test 又只有 50 題；裁判偏差與抽樣雜訊都被放大最多。",
+    "LTP 的裁判有自我偏好風險：gpt-3.5-turbo 同時是受測模型（LTP 10.5 分）、主持人、關鍵點拆解者與命中比對裁判。F.2 的人評驗證沒有報任何一致率或樣本數，看不出偏差有多大，也沒有換裁判模型的對照。",
+    "附錄 C.4 的「資料擴增不引入偏差」站不住：快取 HTML 版的 Table 5 中，gpt-4 original 三欄都是 0.32，剛好等於它的 DB 總分 32.0，不像分類型分數；正文說 gpt-4 在 UPDATE 較弱，表上 new 列卻是 UPDATE 0.66 高於 INSERT 0.27；gpt-3.5-turbo 的 UPDATE 從 0.66 跳到 0.92；重標樣本數沒寫。更根本的是，OS 約半數題目由 gpt-4 生成、DB 由 gpt-3.5-turbo 擴增，而兩者都是受測模型，自我偏好沒有被對照實驗排除。",
+    "各環境對格式錯誤的處理政策不一致，IF／IA 比例因此不能跨環境比較：DB 一不符格式就立即判失敗；DCG 給 5 次機會，之後才判負；HH 在格式不合法時用 BLEU 把輸出改成最相近的合法動作代為執行，所以 Table 4 的 HH Invalid Format 恰好是 0.0，錯誤全被推到 Invalid Action（64.1%）；WS 的 prompt 則寫明無效動作只是不執行、互動繼續。Table 4、Table 6 的 IF／IA 分布，以及 J.2.1「指令遵循是開源模型落後主因」的結論，有一部分反映的是每個環境自己的救援政策，而不只是模型能力。",
+    "「code 訓練傷害 OS」在同尺寸對照下證據不成立：13b 組 codellama 3.5 對 llama-2 4.2，在 144 題裡約只差 1 題；7b 組方向相反（codellama-7b 4.9 高於 llama-2-7b 4.2）；34b 對 70b 尺寸不同，不能當對照。相較之下，WS 有利、DCG 不利在 7b 與 13b 兩組方向一致，較站得住。",
+    "WB 其實不是互動式評估：Mind2Web 用的是標註當下的頁面快照，逐步對照 reference 動作評分，agent 選錯不會改變下一步的觀測，Step SR 量的是單步選擇題準確度，而不是任務完成。候選數在正文寫成 5，又寫 top-10，示範只有 4 個選項，設定前後不一致。把它和 OS、DB 這類真正閉環的環境一起放進 OA，量的東西並不相同。",
+    "格式脆弱性混進了能力分數：DB 的 Invalid Format 平均高達 53.3%，而 DB 規定格式不符就立即判失敗，所以 DB 分數有很大一部分在量格式遵循。claude-2 在 WB 得 0.0，舊版 claude v1.3 卻有 25.0，較像解析或 prompt 相容問題而不是能力倒退，論文沒有分析，也沒有做 prompt 敏感度實驗。",
+    "訓練配方的比較有混淆：codellama 對 llama-2 同時差在 code 繼續預訓練，以及 instruct 與 chat（RLHF）兩種對齊方式；vicuna-13b v1.5 對 llama-2-13b-chat 同時差在 SFT 資料來源與 RLHF 流程。所以「code 訓練是雙面刃」「高品質對齊資料有幫助」都只是相關性觀察，沒有控制變因的消融。13b 與 70b 打平歸因於預訓練不足，則完全是推測。",
+    "沒有統計不確定性：每個模型每個環境只用 greedy 跑一次，沒有變異數或信賴區間。DCG 的 Test 只有 20 局，LTP、HH 各 50 題（HH 每 1 題就是 2 個百分點），OA 相近的名次（claude-2 2.49 對 claude 2.44、codellama-34b 0.96 對 vicuna-13b 0.93）很可能落在雜訊範圍內，但正文仍據此下結論。",
+    "排行榜的可重現性會隨 API 下架而失效：主表的 gpt-4-0613、gpt-3.5-turbo-0613、text-davinci-002／003、claude v1.3、claude-2、chat-bison-001 多已停用，無法重跑驗證。OA 權重又綁在這批模型的平均分上，之後的強模型沿用舊權重時，當年的難度正規化已不代表現況，低分母環境（LTP）的放大效應只會更嚴重。",
+    "沒有做資料污染檢查：WebShop、ALFWorld、Mind2Web、WikiSQL、GrailQA 等都是 2023 年前已公開的資料集，HH 的示範更直接取自公開的 ReAct repo；對於訓練資料不透明的 API 模型，商用與開源的差距有多少來自污染，論文沒有討論。",
+    "TLE 重複分析的門檻沒有驗證，推論也有循環成分：Rouge-L ≥ 0.8 用在「go to cabinet N」這類高度模板化的動作文字上本來就容易偏高，沒有人工抽查確認是無意義迴圈；而且 TLE 的定義本身就包含「多輪重複輸出」，再用重複去解釋 TLE 是部分同義反覆。",
+    "細節多處不一致，影響照著重做：§2 說有五類結束原因卻只列四類加 Complete；Table 1 的 wizardlm-13b 標 v1.0，Table 3 標 v1.2；Test 從題庫抽樣的方式（KG 500→150、WS 500→200、HH 134→50、WB 912→100）沒有說明；DCG 主表對局用哪種對手也沒寫。"
+  ],
+  "framework_role": "主節點 T7，子領域「agent 基準與評估環境設計」屬實：核心貢獻是可執行、可自動判定的多環境互動評估協定（統一的 user／agent 對話、歷史截斷、Thought＋Action 格式）與評估工具組（Docker 隔離、HTTP 解耦、最大流排程、可續跑），是 2023 年 agent 基準的代表作之一。對框架其他節點：(1) 給 T8 一套具體的任務完成分數範本——每個環境一種可執行判定（腳本 exit code、資料表 hash、答案集合 F1、reward 函數、關鍵點命中比例），以及跨環境加權合成 OA 的做法（連同它的槓桿缺陷）；(2) 結局分類 CLE／IF／IA／TLE／Complete 與以 Rouge-L 偵測重複迴圈，可直接當 T4 軌跡的異常標籤與偵測器；(3) LTP 由 gpt-3.5-turbo 扮演的主持人，同時是對話對手與裁判，是 T6 模擬對手與 LLM-as-a-judge 綁在一起的早期例子，也示範了這種綁法的偏差（比人評寬鬆）；(4) 刻意排除反思等策略，所以對 T5 只有附錄 J.2.6 的質性個案，沒有量化。",
+  "edges": [
+    {
+      "edge": "E6",
+      "how": "所有環境都以 user 角色回饋觀測，完整互動紀錄 (u0, a0, …, uk, ak) 被保存並回流評估：(a) 每條軌跡依結束原因歸為 CLE／IF／IA／TLE／Complete，得出 Table 4、Table 6 的失敗分布；(b) TLE 軌跡再以 Rouge-L 計算最後 n 輪的重複比例 P(n,t)；(c) LTP 中由 gpt-3.5-turbo 模擬的主持人與解謎者之間的問答紀錄，經陳述句改寫、合併、關鍵點比對四段 prompt，直接算出 Game Progress。其中只有 LTP 的對手是 LLM 模擬的對話角色，其餘環境的 user 是確定性的程式環境。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。實際開啟確認過的頁面：官方 repo（https://github.com/THUDM/AgentBench，Apache-2.0）列出 v0.1／v0.2、VisualAgentBench（2024-08-13）與接上 AgentRL 的 AgentBench FC（2025-10-10）等版本，WebFetch 摘要未顯示任何產品或廠商官方報告採用的內容；另外開啟了同單位的 AgentLM-70B model card（https://huggingface.co/THUDM/agentlm-70b）與 GLM-4 README（https://github.com/THUDM/GLM-4），WebFetch 摘要同樣未顯示 AgentBench 相關內容（摘要由小模型產生，不能當成確定的否定證據）。本次 WebSearch 額度已用盡，無法再廣泛搜尋其他廠商的 model card 或官方部落格，所以不排除有尚未查到的採用證據。被後續論文大量引用、當作 agent 能力基準，屬學術影響力，不計入。另外，本研究的 GPU 與 API 費用由智譜 AI 支付，同單位（清華／智譜）後續模型若回報 AgentBench，應視為作者關係方。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/THUDM/AgentBench",
+    "data": "論文宣稱所有資料集、環境與評估套件皆已公開，含 Dev／Test 兩個 split；OS、DB 等環境需要 Docker 映像（mysql:8、ubuntu、local-os/*），KG 需自行以 Virtuoso 架設 Freebase。不過主表評的閉源 API 版本多已停用，排行榜無法完整重跑；repo 目前的主版本已換成 function calling 版（AgentBench FC），重現論文數字要切回 v0.2 分支。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "最早把 OS、DB、KG、遊戲、網頁等 8 種可執行互動環境統一成同一套對話式評估協定與工具組、並以結局分類量化 agent 失敗型態的基準之一，T7 談 agent 基準設計繞不過；但總分加權、LLM 主持判分與缺乏統計不確定性都有明顯缺陷，要連同這些缺陷一起讀。",
+  "related": [
+    "2210.03629",
+    "2306.06070",
+    "2207.01206",
+    "2010.03768",
+    "2306.14898",
+    "2303.11366",
+    "2211.09110",
+    "2303.17491",
+    "2107.03374"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 4,
+    "total": 8
+  }
+}

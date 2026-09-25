@@ -1,0 +1,167 @@
+{
+  "id": "2309.10691",
+  "title": "MINT: Evaluating LLMs in Multi-turn Interaction with Tools and Language Feedback",
+  "topic": "T7",
+  "subarea": "多輪對話與互動式評估",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把 8 個既有資料集（推理、程式碼生成、ALFWorld 決策）篩成 586 題需要多輪才解得開的子集，讓受測 LLM 以 Python 程式碼當工具、在最多 5 輪內解題，並用 GPT-4 模擬使用者的自然語言回饋，分開量測「每多一輪工具互動的增益」與「語言回饋的增益」，也反過來量測各 LLM 當回饋提供者的能力。",
+  "problem": "2023 年的 LLM 評估多半是單輪輸入輸出，忽略使用者、LLM、工具三方之間的多輪互動，也忽略使用者的自然語言回饋；但實際使用中多輪很常見（作者引 ShareGPT 94k 筆對話，約 73% 超過一輪）。多輪評估又貴（每題要多次推論，HotpotQA 全集跑 5 輪至少 37K 次呼叫），先前工作（ReAct、Reflexion）各自隨機抽測試子集，彼此難以公平比較；真人回饋則難重現、成本高（每則約 96 秒，約 90 美元／100 則）。需要一個可重現、便宜、同時涵蓋工具與語言回饋的多輪互動基準，讓開源社群在沒有大量真實使用者的情況下也能量多輪能力。",
+  "core_idea": "把互動拆成三個逐步加複雜度的設定並各自定義指標：(1) 懶惰使用者：只在第一次答錯時回一句二元訊號；(2) 懶惰使用者＋工具：在互動上限 k=1..5 下量成功率 SR_k，用迴歸斜率當「每多一輪的增益」Δ_tools；(3) 資訊豐富的使用者：由 GPT-4 讀完整軌跡寫自然語言回饋，以 Δ_feedback＝SR_5（有回饋）−SR_5（無回饋）當「利用回饋的能力」。把受測模型固定、改換回饋提供者，同一框架就能評估「給回饋」的能力。資料面用 gpt-3.5-turbo-0613 篩掉兩輪內可解的題目、再分層抽樣，把 29,307 題壓成 586 題，讓每個模型的評估成本約 100 美元。",
+  "method": {
+    "輸入與輸出": "每題給受測 LLM 一段系統提示（F.4.1 模板）：角色說明、<thought>／<execute>／<solution> 三種標籤的用法、「你有 {max_total_steps} 次機會與環境互動或提出解答，只能提出解答 {max_propose_solution} 次」、工具描述、一則 in-context 範例、任務本文。每輪模型先寫思考，再二擇一：用 <execute> 包住 Python 程式碼（送進 Python 直譯器執行，stdout 或錯誤訊息當作 observation 回傳），或用 <solution> 包住答案。",
+    "工具": "程式碼生成只有 Python 直譯器本身；推理題在直譯器中預先匯入 wikipedia_search(query)；ALFWorld 把 11 個環境動作包成 Python 函式（put、goto、take_from、open_receptacle、toggle、close_receptacle、clean、heat、cool、use、look），函式回傳環境的文字觀測。以程式碼當統一工具介面沿用 CodeAct（2402.01030）。",
+    "互動迴圈與終止": "預設 k=5 總步數、最多 2 次提出解答。提出解答時環境拿 ground truth 判對錯，第一次答錯回「Your answer is wrong.」；結束條件為答對、用完 2 次提出機會、或到第 k 輪。每輪 observation 後附上剩餘步數與剩餘提出次數的提醒，最後一輪再加一句要求本輪必須提出解答。解析不到 <execute> 或 <solution> 標籤時，回傳 F.2 的固定格式錯誤訊息，該輪照樣算用掉。",
+    "語言回饋模擬（F.4.2）": "回饋者是 gpt-4-0613。提示內容：你是評估並回饋助手表現的專家；一則含回饋的 in-context 範例；工具描述；到目前為止的完整軌跡 {trajectory}；一個「正確解答（請勿洩漏給助手）」欄位，預設填 NOT GIVEN（回饋者看不到 ground truth）；最後要求像老師一樣給簡潔、有建設性、不直接給答案的回饋。預設是 dense：每一輪 observation 之後都插入一段 Expert feedback，範例中常以 This is GOOD／This is BAD 開頭再說明理由。",
+    "In-context 範例": "全部 1-shot，分有回饋與無回饋兩版（無回饋版刪掉所有 Expert feedback 段落）。程式碼題用一則 MBPP 範例（HumanEval 共用、稍改格式），推理題用一則手工範例（查李白生年再算二重積分），ALFWorld 依 ReAct 的做法為每個子類型各做一則。base 與 chat 模型共用同一套標準化提示。",
+    "資料集建構（§2.2、附錄 D）": "① 從 GSM8K、HotpotQA（只取前 500 筆）、MATH、MMLU、TheoremQA、HumanEval、MBPP、ALFWorld 的測試集收 29,307 題，推理題統一格式為「Task: 題目＋輸出格式要求」。② 去掉選項少於 4 個的選擇題。③ MATH 與 MMLU 每個類別各抽 N 題（MATH N=100、MMLU N=20）用 gpt-3.5-turbo-0613 跑，平均互動輪數低於門檻（MATH 3.5、MMLU 2.5）的類別整類丟掉。④ 剩下的全部用 gpt-3.5-turbo-0613 在 k=5、無回饋下跑，丟掉 2 輪內完成的題目。⑤ 依「資料集 × gpt-3.5 是否解出」分 16 層分層抽樣，保留比例 ALFWorld 1、MBPP 與 HumanEval 0.5、GSM8K／HotpotQA／TheoremQA 0.2、MMLU 0.1、MATH 0.05，最終 586 題（推理 316、程式碼 136、決策 134）。",
+    "指標": "SR_k：互動上限為 k 時的成功率，跨任務 micro-average，每個 k 都從頭重跑。Δ_tools：對 k∈{1,…,5} 做最小平方迴歸 SR_k ≈ b·k + a 取斜率 b，並附 R²，作者明說只是粗估。Δ_feedback：k=5 時有 GPT-4 回饋與無回饋的 SR 差。評估回饋提供者時固定受測模型為 gpt-3.5-turbo-0613、換 7 個回饋模型比 Δ_feedback。各子任務沿用原資料集的判分（程式碼跑測試、ALFWorld 看環境是否完成、推理比對答案）。",
+    "人評協定（附錄 B）": "使用 Potato 標註介面。從 8 個受測模型中每個任務隨機抽 2 條軌跡，去掉第一輪就成功的，得 113 條。每條隨機截在某一輪、刪掉之後的內容，交給兩位標註者（各負責一半）寫一輪回饋。另兩位標註者比較人寫與 GPT-4 回饋，在 helpfulness 與 human-like 兩個維度三選一（其中一方較好，或一樣好）。另外把兩種回饋分別接給 gpt-3.5 繼續解題，比較後續 SR。",
+    "消融（附錄 C）": "固定 gpt-3.5 受測、GPT-4 回饋，改變：(a) 回饋是否以 ground truth 為條件（w/ GT 對比預設 w/o GT）；(b) 文字回饋對比二元回饋（只給 good／bad）；(c) dense（每輪都回饋）對比 sparse（只在提出解答時回饋，作者指出這等同 Reflexion 的設定）。",
+    "成本與其他設定": "k 上限 5 是依 4,096 token 上下文長度決定。每個模型約需 3M prompt token 與 100K completion token，以 gpt-4-0613 當時的價格約 100 美元，作者估計約為雇用真人標註的 7%。本文沒有寫明解碼溫度等取樣超參數，要看程式碼庫。"
+  },
+  "assumptions": [
+    "任務屬於「難解但易驗證」：使用者雖然不會解，但能判斷最終答案對錯；MINT 直接拿 ground truth 充當這個使用者的判斷。",
+    "不看 ground truth 的 GPT-4 回饋能代表一位懂行、有耐心的人類使用者，而且品質穩定到可以當作固定的回饋來源。",
+    "用 gpt-3.5-turbo-0613 篩出「需要多輪」的題目，對其他模型也同樣代表「需要多輪」。",
+    "5 輪、4,096 token 的預算足以區分模型的多輪互動能力，且 SR_k 對 k 大致線性，斜率有意義。",
+    "以 Python 程式碼加固定標籤當統一工具介面，不會對特定模型家族造成系統性不利；格式遵循被視為多輪能力的一部分。",
+    "每個設定只跑一次的成功率就足以比較模型，不需要重複取樣的變異估計。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MINT（586 題）：GSM8K 48、HotpotQA 43、MATH 100、MMLU 76、TheoremQA 49（推理 316）；HumanEval 45、MBPP 91（程式碼 136）；ALFWorld 134（決策）",
+      "§3.6 人評子集：113 條互動軌跡"
+    ],
+    "metrics": [
+      "SR_k（k=1..5，micro-average）",
+      "Δ_tools（SR_k 對 k 的最小平方迴歸斜率，附 R²）",
+      "Δ_feedback = SR_5（有回饋）− SR_5（無回饋）",
+      "回饋提供者的 Δ_feedback（固定受測模型為 gpt-3.5）",
+      "格式失敗輪數／總輪數（Tab. A.7）、跳脫底線與 [PYTHON] 標籤出現比例（Tab. A.9、A.10）",
+      "人評：helpfulness 與 human-like 的三選一比例；人寫與 GPT-4 回饋接續解題後的 SR"
+    ],
+    "baselines": [
+      "閉源：gpt-3.5-turbo-0613、claude-instant-1（v1.2）、claude-2（v2.0）、chat-bison-001；gpt-4-0613 只報 k=5",
+      "開源 16 個：LLaMA-2 7B/13B/70B（base 與 chat/RLHF）、CodeLLaMA 7B/13B/34B（base 與 instruct/SIFT）、Lemur-v1-70B（base 與 chat/SIFT）、Vicuna-v1.5 7B/13B（SIFT）",
+      "回饋提供者 7 個：gpt-4-0613、claude-instant-1、gpt-3.5-turbo-16k-0613、CodeLlama-34b（base、instruct）、Llama-2-70b（base、chat）",
+      "對照設定：無語言回饋的懶惰使用者；人寫回饋（§3.6）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "所有受測模型都能從工具互動與 GPT-4 語言回饋中獲益（GPT-4 自己給自己回饋除外）。",
+      "numbers": "每多一輪工具互動的斜率 +1.1 至 +8.2 個百分點（Tab. 2）；語言回饋的 micro Δ_feedback 開源 +1.7 至 +17.2、閉源 +6.5 至 +15.2（Tab. 3）；gpt-4-0613 自評為 −0.7。",
+      "section": "§1、§3.2 Tab. 2、§3.3 Tab. 3",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "單輪表現好不代表多輪表現好：claude-2 在 k=1 遙遙領先，但 claude-instant-1 從 k=3 起反超。",
+      "numbers": "SR_1：claude-2 26.4 對 claude-instant-1 12.1；SR_5：39.9 對 45.9；斜率 +3.1 對 +8.0。gpt-3.5 斜率 +8.2（R² 0.96），SR_1 只有 2.7。",
+      "section": "§1、§3.2 Tab. 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "在多數受測模型上，SIFT 與 RLHF 讓多輪表現變差；例外是用 ShareGPT 多輪對話微調的 Vicuna-7B 與 Lemur-70B。",
+      "numbers": "CodeLLaMA-34B SIFT 比 base 少 11.1（有回饋時少 15.4）；LLaMA-2-70B RLHF 比 base 少 8.5（有回饋 8.7）；LLaMA-2 系列 RLHF 讓 Δ_tools 下降 0.7 至 2.6、SR_5 下降 2.4 至 8.5。",
+      "section": "§1、§3.2、§3.3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "給回饋的能力與解題能力可能是正交的。",
+      "numbers": "固定 gpt-3.5 受測：gpt-4 當回饋者 +15.2；gpt-3.5-turbo-16k 當回饋者反而 −10.4；Llama-2-70b-chat −14.0；解題 SR_5 比 gpt-3.5 低 19.1 的 CodeLlama-34b-Instruct 仍能帶來 +3.2。",
+      "section": "§3.4 Tab. 4（正文誤引為 Tab. 5）",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "GPT-4 模擬的回饋在人評與下游效果上接近人寫回饋。",
+      "numbers": "helpfulness：GPT-4 較好 54.9%、一樣 36.3%、人寫較好 8.8%（合計 91.2% 不輸人）；human-like：一樣 69.9%、GPT-4 較像 22.1%、人寫較像 8.0%；接續解題的 SR：人寫 32.7% 對 GPT-4 33.6%。",
+      "section": "§3.6 Tab. 5、附錄 B",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "多輪任務能暴露模型的失敗模式：格式不遵循，以及疑似來自訓練資料偽影的異常輸出。",
+      "numbers": "CodeLLaMA-34B-Instruct 在程式碼任務 100% 輸出 [PYTHON] 標籤；Vicuna-13B 含跳脫底線的輸出比例在推理／決策／程式碼為 38.61／86.57／90.44%；ShareGPT 94,145 筆中約 15%（14,110 筆）含跳脫底線；格式失敗超過 20% 的有 CodeLlama-7B base（2.71/4.66 輪）、chat-bison-001（2.32/4.16）、LLaMA-2-7B RLHF（0.83/4.06）。",
+      "section": "§3.5、附錄 E、Tab. A.7、A.9、A.10",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "讓回饋者看到 ground truth 對推理與程式碼有幫助，但對決策任務反而有害。",
+      "numbers": "相對無回饋：w/ GT 推理 +16.87、程式碼 +18.38、決策 −8.95、平均 +11.36；預設 w/o GT 為推理 +13.44、程式碼 +9.56、決策 +24.63、平均 +15.09；加入 GT 使決策少了 33.58。",
+      "section": "附錄 C.1.1 Tab. A.6",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "二元回饋與只在提出解答時給的 sparse 回饋仍有正向效果，但遠不如每輪的文字回饋。",
+      "numbers": "二元回饋平均 +2.71（決策 +5.97），比文字回饋少 12.38；sparse 平均 +4.07，比 dense 少 11.02；兩者在程式碼子集都只有 +0.74。",
+      "section": "附錄 C.1.1–C.1.2 Tab. A.6",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "GPT-4 模擬的回饋未必涵蓋真人使用者所有可能的回應，也不一定適合需要細緻人類價值判斷的任務（例如政策制定）。",
+    "只研究 in-context 的多輪互動，沒有探討直接用語言回饋訓練或改進模型。",
+    "指標只看結果、不評估互動過程品質；例如反覆猜答案拿高分的模型應該被扣分。",
+    "沒有涵蓋更廣的工具與真實場景，例如網頁瀏覽、作業系統。",
+    "SR_k 對 k 未必線性，迴歸斜率只能當作粗估。",
+    "難以斷言 RLHF 普遍傷害模型表現，留待後續研究。",
+    "決策任務以 ground truth 為條件的回饋表現變差，作者推測是模型動作偏離 ground truth 軌跡時會混淆回饋模型。"
+  ],
+  "limitations_observed": [
+    "「RLHF 傷害多輪能力」的結論幾乎全部來自 ALFWorld。把 Tab. 3 各子任務以題數加權（推理 316、決策 134、程式碼 136）拆開：LLaMA-2-70B RLHF 比 base 少的 8.5 點中，約 8.55 點來自決策（59.0→21.6），推理反而是 RLHF 較好（18.7→20.2）；13B 更極端，決策 50.0→3.7、推理 3.5→19.6。所以量到的比較像「chat 模型在這套程式碼化的 ALFWorld 動作格式上崩掉」，而不是一般的多輪能力退化；而且 70B RLHF 在 Tab. A.7、A.9、A.10 裡根本沒有列出，格式因素無從排除。",
+    "CodeLLaMA-34B「SIFT 傷害 11.1 點」裡，約 3.8 點來自程式碼子集（18.4→2.2），而該子集 100% 輸出 [PYTHON] 標籤、被嚴格的標籤解析器判成格式錯誤。這量到的是提示格式相容性，摘要卻概括成 SIFT 普遍傷害多輪能力，外推過度。",
+    "選題對 gpt-3.5 有對抗式偏差：篩掉的是 gpt-3.5 兩輪內解得開的題，分層也依 gpt-3.5 是否解出，所以 gpt-3.5 的 SR_1 只有 2.7。偏偏 gpt-3.5 又是 §3.4 回饋提供者實驗、附錄 C 全部消融、§3.6 下游比較唯一的受測模型；其他模型的「需要多輪」也跟 gpt-3.5 的弱點綁在一起。另外篩選時已排除 gpt-3.5 在 k=5 下 2 輪內解出的題，它在 k=2 設定仍有 16.9% 成功率；這可能是重跑不穩定，也可能是提示中的預算數字讓模型提早提交，論文沒有分辨。",
+    "沒有任何變異估計或信賴區間。多給預算照理不該變差，實際上 Vicuna-7B 從 15.4（k=4）掉到 12.6（k=5）、CodeLLaMA-7B base 從 7.2 掉到 4.3、chat-bison-001 從 15.9（k=2）掉到 13.0（k=4）。這可能是取樣雜訊，也可能是每個 k 各自重跑、提示中的預算數字改變了模型行為；論文沒有重複執行來分辨，而這個約 3 點的量級，與許多被當成結論的差異相當（例如 RLHF 讓 Δ_tools 少 0.7～2.6）。附錄 C 程式碼子集的 +0.74，正好是 136 題中的 1 題。",
+    "隨機猜測沒有擋乾淨：只去掉選項少於 4 個的選擇題，但模型有 2 次提出解答的機會、答錯還會被告知，4 選項題隨機猜的成功率就有 50%。MMLU 的 76 題（TheoremQA 也有選項題）仍在集中，作者雖承認反覆猜測應扣分，指標卻沒有處理。",
+    "人評的統計解讀偏寬：「92% 難以區分」是把「一樣像人」69.9% 與「GPT-4 比較像人」22.1% 加總，但後者其實是分得出來的。113 條軌跡的人寫回饋每則只有一位標註者，比較者之間的一致性（如 κ）沒有報告；下游 SR 32.7% 對 33.6% 在 113 題上約差 1 題，也沒有顯著性檢定。",
+    "模擬回饋本身會出錯，但論文沒有量。附錄 F.3 的範例中，不看 ground truth 的 GPT-4 對錯誤的中間結果 −5.0 回 This is GOOD 並建議提交，直接把模型推向錯答。Δ_feedback 只是淨值，把「回饋有用」與「回饋誤導」混在同一個數字裡。",
+    "這裡的「使用者」其實是握有 ground truth 的神諭：提出解答時由 ground truth 判對錯。這對有測試的程式碼、有標準答案的數學成立，對客服、寫作這類開放式任務不成立；語言回饋設定也保留了這個二元訊號，所以 Δ_feedback 量的是 GPT-4 文字在神諭對錯訊號之上的邊際價值。",
+    "「多輪」只到 5 輪、4,096 token，是 2023 年上下文長度下的產物，拿 SR_k 斜率外推到今天動輒數十輪的 agent 軌跡很有限。來源資料集（GSM8K、HumanEval、MBPP 等）都是公開測試集，論文沒有做資料污染分析。",
+    "總分採 micro-average，ALFWorld 佔 23%，而且 Δ_feedback 的差異集中在決策任務（例如 CodeLLaMA-7B base 決策 +41.0、程式碼 +0.0），總分與排名大幅受 ALFWorld 左右，但論文沒有報告 macro-average 或排名穩定性。"
+  ],
+  "framework_role": "主節點 T7，屬於「多輪對話與互動式評估」的代表性協定：把互動預算 k 與回饋來源當成可控的自變數，用 SR_k 曲線、Δ_tools、Δ_feedback 把「能不能從互動中變好」與單輪能力分開量；把受測模型固定、換回饋者，又能評估回饋者本身。對其他節點：它的 GPT-4 回饋者是 T6 使用者模擬器的一種具體實作，附錄 C 的消融（文字或二元、dense 或 sparse、是否看 ground truth）與 §3.6 的人評，是設計 T6 時可以直接引用的證據；它量的是受測模型利用外部回饋修正的能力，屬於 T5 的外部回饋版本，不是自主反思；SR_k 可以看成 T8 任務完成分數在不同互動預算下的版本；§3.5 從互動軌跡抓格式失敗與訓練資料偽影，是 T4 軌跡分析支援評估的例子。它不處理 T1 與 T2：任務一開始就明確給定，沒有模糊意圖要對齊，也沒有需要追蹤的對話狀態。Δ_feedback 只量修正後的最終結果，不讀修正紀錄本身，因此不算 E5。",
+  "edges": [
+    {
+      "edge": "E6",
+      "how": "評估以互動軌跡為單位：SR_k 由每條軌跡最後的成敗算出，Δ_feedback 比較有無模擬使用者兩組軌跡的成功率；§3.5 與附錄 E 直接掃描全部軌跡，統計格式失敗輪數（Tab. A.7）、跳脫底線與 [PYTHON] 標籤比例（Tab. A.9、A.10），用來解釋分數異常並追溯到 ShareGPT 與 CodeLLaMA 的訓練資料；§3.6 的人評也是從互動軌跡抽樣、截斷後讓人寫回饋。作者並公開所有受測模型的輸出軌跡。"
+    },
+    {
+      "edge": "E4",
+      "how": "每一輪之後，把到目前為止的完整軌跡填進 F.4.2 模板的 {trajectory} 欄位交給 GPT-4 模擬使用者，由它產生下一段回饋，互動才繼續；sparse 消融則只在模型提出解答時才把軌跡送給模擬器。MINT 不區分正常與異常路徑，每一輪都走這條流。"
+    },
+    {
+      "edge": "E3",
+      "how": "軌跡中的異常由迴圈外部偵測並觸發修正：Python 直譯器回傳的錯誤訊息（如語法錯誤）、解析不到標籤時的固定格式錯誤訊息（F.2）、提出解答答錯時的「Your answer is wrong.」，以及 GPT-4 回饋中的 This is BAD，都在下一輪促使模型改程式碼或答案；附錄 E.1 的 Vicuna 軌跡則是同一個語法錯誤連收四次仍改不掉的失敗例子。偵測者是環境與模擬使用者，不是模型自己的反思。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "OpenHands（All Hands AI 維護的開源 agent 平台）的評估目錄曾內建 MINT 評估 harness（evaluation/benchmarks/mint），README 寫明評的是 MINT 的數學與程式碼子集（MATH、MMLU、TheoremQA、HumanEval、MBPP），且只支援 CodeActAgent，資料取自 Hugging Face 上的 ryanhoangt/xingyaoww-mint-bench。來源：https://github.com/OpenHands/OpenHands/tree/471d272c7c5d258fb5ce213b95e818772f304cac/evaluation/benchmarks/mint",
+      "該目錄已於 2026-02-01 隨整個 evaluation 目錄移除（commit afa0417，PR #12666「Remove evaluation directory and benchmarking dependencies」）。來源：https://github.com/OpenHands/OpenHands/commit/afa0417608ebb6170452db333cdb4fc7eb1ff15d"
+    ],
+    "assessment": "只找到一項可查證的業界使用：OpenHands 的評估 harness 曾納入 MINT 的數學與程式碼子集（沒有 ALFWorld），但 OpenHands 與本文第一作者 Xingyao Wang 同屬 All Hands AI（該目錄 2025-10 的 commit 共同作者信箱為 all-hands 網域），屬於作者自家延伸，而且已在 2026-02 移除，採納強度弱。沒有找到第三方模型廠商在官方 model card 或技術報告中報告 MINT 分數的證據；本次 WebSearch 額度已用罄，這一項沒能再廣泛搜尋，只能算「未見證據」而不是「確定沒有」。學術影響力很大（ICLR 2024；Semantic Scholar 引用 377、influential 17），但那不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/xingyaoww/mint-bench（Apache-2.0；專案頁 https://xingyaoww.github.io/mint-bench）",
+    "data": "公開。586 題放在官方程式碼庫的 data 目錄，另有第三方上傳的 Hugging Face 版本（ryanhoangt/xingyaoww-mint-bench）；作者表示已公開全部提示詞與所有受測模型的輸出軌跡。評估要執行模型產生的程式碼，官方建議用 Docker 沙箱。回饋模擬器固定在 gpt-4-0613 快照，部分受測閉源模型（如 PaLM API 的 chat-bison-001）已停止服務，原樣重現有困難。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是多輪互動式評估的奠基協定之一（ICLR 2024、引用 377）：把互動預算與回饋來源變成可控變數、用人評檢驗 LLM 模擬回饋，並把回饋者本身也納入評估，T6→T7 的評估設計可以直接借用；但統計嚴謹度不足，引用它的 SIFT／RLHF 結論時要一併看本筆記的批判。",
+  "related": [
+    "2402.01030",
+    "2303.11366",
+    "2308.03688",
+    "2306.14898",
+    "2212.09746",
+    "2010.03768",
+    "2305.10314",
+    "2210.03629",
+    "2305.11738",
+    "2307.13854"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 6,
+    "total": 8
+  }
+}

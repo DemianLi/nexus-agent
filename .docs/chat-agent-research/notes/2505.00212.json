@@ -1,0 +1,163 @@
+{
+  "id": "2505.00212",
+  "title": "Which Agent Causes Task Failures and When? On Automated Failure Attribution of LLM Multi-Agent Systems",
+  "topic": "T4",
+  "subarea": "軌跡分析、失敗分類與歸因",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把「多 agent 系統失敗時，是哪個 agent、在哪一步造成的」定義成自動失敗歸因任務，釋出 Who&When 資料集：184 條失敗軌跡，逐條標註負責 agent、關鍵錯誤步驟與理由。論文比較 all-at-once、step-by-step、binary search 三種 LLM 判讀法，最好的成績也只有 agent-level 53.5%、step-level 14.2%。",
+  "problem": "多 agent 系統開發的日常是「跑 benchmark → 人工讀 log 找出哪個元件害任務失敗 → 修改」，其中失敗歸因全靠人工：要讀很長的對話紀錄、追每個 agent 的推理，還要回頭查網頁或工具結果，才能判斷錯在誰。DevAI 這類更細的 benchmark 只是多給幾個指標，並沒有回答「該改哪個元件」。論文主張評估應該直接接到歸因，並用 LLM-as-a-judge 取代人工診斷。三位標註者標完 184 條軌跡共花了 84 個工時，可見人工成本很高。",
+  "core_idea": "在回合制多 agent 協定下，把一次執行視為軌跡 τ=(s0,a0,…,sT)。「關鍵錯誤」(i,t) 用反事實定義：只把 agent i 在第 t 步的動作換成正確動作（之前的步驟不動、之後的步驟跟著修正），系統就會從失敗翻成成功。任務目標是找出最早的關鍵錯誤 (i*,t*)，也就是 who 與 when。論文先建人工標註的基準，再比較三種讓 LLM 讀軌跡的方式，差別在每次給 LLM 看多少 context（全部、逐步累加、每次砍半），藉此揭露「看得廣有利於判斷 agent、看得細有利於判斷步驟」的取捨。",
+  "method": {
+    "形式化": "系統 M=<N,S,A,P,φ>，φ(t) 是第 t 步唯一行動的 agent；Z(τ)=1 表示失敗。對失敗軌跡做介入 I_(i,t) 得到 τ^(i,t)；若 Z(τ^(i,t))=0，則 Δ_(i,t)=1。在所有 Δ=1 的 (i,t) 中取 t 最小者為 (i*,t*)。注意：論文沒有真的執行這個介入，標籤是人工判斷出來的（見 limitations_observed）。",
+    "資料集建構": {
+      "algorithm-generated（126 條）": "用 AG2 的 CaptainAgent，為 GAIA 與 AssistantBench validation set 的每題自動組一支專屬團隊（agent 名稱、系統提示詞、工具），迭代最佳化配置，上限 10 輪。只保留最終配置與其執行紀錄，而且只收最後仍失敗的題。所有 agent 與 CaptainAgent 都用 GPT-4o（Azure 2024-08-01-preview）。GAIA 98 條、AssistantBench 28 條；每條 1–4 個 agent、5–10 步。",
+      "hand-crafted（58 條）": "Magentic-One（Orchestrator、WebSurfer、FileSurfer、Assistant、ComputerTerminal）跑 AssistantBench validation set（28 條失敗）加上隨機抽的 30 題 GAIA，上限 30 輪，agent 的思考不計入輪數，所以 log 長達 5–130 步。",
+      "單筆格式（公開 JSON）": "history（每個元素有 content、role 或 name）、question、ground_truth、mistake_agent、mistake_step、mistake_reason、question_ID、level。mistake_step 是 history 的 0-based 索引，我實測 58 筆 hand-crafted 中有 56 筆與該索引的發言者一致；hand-crafted 的 history[0] 是 human 的提問。algorithm-generated 另外附系統資訊。",
+      "標註流程": "三位 AI agent 專家、三輪。Round I：把 log 平均分給三人，照統一準則（App F、Fig 10）標出單一負責 agent、錯誤步驟與自然語言理由，並自評「確定／不確定」。Round II：不確定的部分集體討論到每個人都被說服，不採多數決。Round III：互相交叉檢查別人的標註，有出入就再討論、重標。三人各花 30.9、30.2、23.2 小時，不確定比例 15–30%。"
+    },
+    "三種歸因法（皆為 zero-shot prompting，主實驗用 GPT-4o）": {
+      "All-at-once": "呼叫一次。輸入 query、可選的 ground truth、完整 log；輸出 Agent Name、Step Number、Reason for Mistake。提示詞要點：(1) 找出應對錯誤答案直接負責的 agent，沒有明顯錯誤也要硬選一個；(2) 回報該 agent『第一次犯錯』的步驟，並用四則發言的範例定義步驟編號（第三則發言是 step 2，也就是 0-based）；(3) 要求給出理由。公開程式碼把 log 串成『agent: content』逐行文字，不附步驟編號。輸入 token 成本 C+n·T_l。",
+      "Step-by-step": "for i=0..n-1：給 query（可選 GT）與第 0..i 步的 log（公開程式碼格式為『Step i - agent: content』），問『最近這一步的動作是否含有會妨礙解題的錯誤』，要求回答 Yes/No 加理由，並附一句『避免過度批評』。遇到第一個 Yes 就停，回傳 step=i、agent=第 i 步的發言者；全部都是 No 則沒有預測。成本 i*·C+T_l·i*(i*+1)/2，最壞情況 i*=n。",
+      "Binary search": "區間 [start,end]，mid=start+(end-start)//2。問 LLM 錯誤比較可能在 upper half（start..mid）還是 lower half（mid+1..end），只准回答這兩個字串、不要求理由（作者刻意把它做成單純的分類）。遞迴到只剩一步，agent 取該步的發言者。公開程式碼遇到含糊回答會隨機選一半。一定會輸出某一步，沒有『無錯誤』的出口。約 ceil(log2 n) 次呼叫。",
+      "Hybrid（§4.7）": "先用 all-at-once 預測 agent，再用 step-by-step 只在該 agent 的步驟上判斷錯誤步驟。"
+    },
+    "實驗設定": "兩種情境：With GT（提示詞多一行『The Answer for the problem is: {ground_truth}』）與 Without GT，主表數字是兩種情境的平均。指標：Agent-Level Accuracy、Step-Level Accuracy（完全命中），以及 Step-Level Accuracy with Tolerance（±k 步內都算對）。多模型比較（Llama、Qwen、GPT 系列）、context 長度分析、容忍度分析、hybrid 與推理模型（o1、DeepSeek R1）都只在 58 條 hand-crafted 上做。o1 的原提示詞被 OpenAI 政策擋下，改寫後才跑。消融實驗拿掉『說明理由』的要求。",
+    "超參數與實作細節": "推論用各模型的官方預設值；公開程式碼 max_tokens=1024。評分腳本用 regex 抓『Agent Name:\\s*([\\w_]+)』與『Step Number:\\s*(\\d+)』，分母是資料夾內全部檔案（解析失敗算錯）。重做時要統一步驟編號：提示詞範例是 0-based，Algorithm 1、2 寫成 l1..ln。"
+  },
+  "assumptions": [
+    "回合制協定：每一步只有一個 agent 行動，所以『步驟』和『負責 agent』可以一一對應。",
+    "每條失敗軌跡存在唯一可指認的最早關鍵錯誤，而且人讀 log 就能判斷反事實修正後會不會成功（實際上沒有做重放驗證）。",
+    "已知這條軌跡是失敗的（Z=1）。Without GT 情境只拿掉正確答案，提示詞仍然告訴 judge 這是『wrong solution』。",
+    "LLM 能從純文字 log 讀出 agent 的行為對錯；網頁、檔案等外部證據沒有另外提供給 judge。",
+    "三位專家討論出的共識標籤等同於 ground truth。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Who&When（本文提出）：126 條 algorithm-generated（CaptainAgent，題目來自 GAIA 與 AssistantBench）＋ 58 條 hand-crafted（Magentic-One），共 184 條"
+    ],
+    "metrics": [
+      "Agent-Level Accuracy",
+      "Step-Level Accuracy（完全命中）",
+      "Step-Level Accuracy with Tolerance（±1 到 ±5）",
+      "輸入 token 數（成本）"
+    ],
+    "baselines": [
+      "Random（論文沒有定義抽樣方式）",
+      "All-at-once、Step-by-step、Binary search 三法互比，外加 hybrid",
+      "判讀模型：GPT-4o（主）、GPT 系列、Llama 系列、Qwen 系列、OpenAI o1、DeepSeek R1"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "最好的方法離實用還很遠：agent-level 最好的是 all-at-once，step-level 最好的是 step-by-step。摘要裡的兩個數字分別來自兩種不同的方法。",
+      "numbers": "agent-level 53.5%（all-at-once 四格的不加權平均）；step-level 14.2%（step-by-step 四格的不加權平均）",
+      "section": "Abstract、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "人工失敗歸因成本高，而且帶主觀性",
+      "numbers": "三位標註者各花 30.9、30.2、23.2 工時；第二輪不確定比例 15–30%",
+      "section": "§3.3、Fig 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "兩種指標呈現相反的取捨：all-at-once 的 agent-level 最高，但 step-level 最差，平均甚至低於 random；step-by-step 則在 4 格中有 3 格的 step-level 最好",
+      "numbers": "GPT-4o，順序為 alg-gen 有 GT／hand 有 GT／alg-gen 無 GT／hand 無 GT。All-at-once agent 54.33/55.17/51.12/53.44、step 12.50/5.26/13.53/3.51；Step-by-step agent 35.20/34.48/26.02/32.75、step 25.51/7.02/15.31/8.77；Binary search agent 44.13/51.72/30.11/36.21、step 23.98/6.90/16.59/6.90；Random agent 29.10/12.00、step 19.06/4.16",
+      "section": "§4.3、Table 1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "log 越長，兩種準確率都下降，step-level 對長度更敏感，其中 step-by-step 掉得最明顯；在最長的一級三種方法都趨近 0%",
+      "numbers": "hand-crafted 依步數分成 5 級：5–17、19–29、31–49、51–91、93–130 步（只有圖，沒有逐格數字）",
+      "section": "§4.4、Fig 4、Fig 5",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "放寬步驟容忍度後，all-at-once 反超 step-by-step；需要精確定位（±0、±1）時 step-by-step 才佔優",
+      "numbers": "hand-crafted，順序為 All-at-once/Step-by-step/Binary：±1 12.07/14.66/13.79；±3 30.17/18.10/22.41；±5 43.10/33.62/36.21",
+      "section": "§4.5、Table 2",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "hybrid（all-at-once 定 agent，再用 step-by-step 定步驟）的 step-level 最高，但 token 成本也最高",
+      "numbers": "hand-crafted：hybrid agent 57.02、step 12.28、149,177 tokens；all-at-once 57.02/4.39/17,106；step-by-step 35.96/7.90/87,720；binary 43.97/6.90/34,659",
+      "section": "§4.7、Table 3",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "換成推理模型不一定比較好：R1 在 4 格中輸 GPT-4o 3 格，o1 也沒有全面勝出",
+      "numbers": "hand-crafted，順序為 GPT-4o/o1/R1。All-at-once agent 54.31/41.38/56.90、step 4.39/10.34/3.45；Step-by-step agent 33.62/36.21/32.76、step 7.90/13.79/6.90",
+      "section": "§4.8、Table 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "要求 judge 說明理由（顯式推理提示）有明顯幫助，拿掉後準確率下滑",
+      "numbers": "algorithm-generated：all-at-once 的 agent-level 下降 7.4%；step-by-step 的 step-level 下降 4.4%",
+      "section": "App B.1、Fig 7",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "任務本身很難：最好的方法 step-level 只有 14.2%，有些方法低於 random；換成 o1、R1 也達不到實用。",
+    "log 越長表現越差，在最長的一級三種方法的 step-level 都趨近 0%。",
+    "單一實例的歸因結果不理想，作者建議改看資料集層級的統計（Fig 6：預測出最常犯錯的 agent 與真值一致）。",
+    "各方法各有代價：step-by-step 的成本隨錯誤位置平方成長，hybrid 要依序跑兩個方法，成本最高。",
+    "人工標註困難而且帶主觀性：不確定比例 15–30%，標註者之間起初有分歧，要討論才能收斂。",
+    "Magentic-One 的 GAIA log 太長難以標註，所以只抽 30 題；多模型實驗因成本只做 hand-crafted 子集。",
+    "o1 的原始提示詞被 OpenAI 政策擋下，只能小幅改寫後再跑。",
+    "影響聲明：能修改外部環境（例如執行程式碼）的系統可能造成非預期後果。"
+  ],
+  "limitations_observed": [
+    "【瑣碎基準就能追上或贏過這些方法】我用公開 repo 的 Who&When 標註重算。hand-crafted 的 58 條中，一律猜 WebSurfer 的 agent-level 在現行版本是 56.9%（33 條），照論文當時的標籤是 53.4%（31 條，後來有兩筆 Websurfer 改成 WebSurfer），和 all-at-once 在 Table 1 的 55.17/53.44、Table 4 的 54.31 相當。algorithm-generated 的 126 條標籤從 2025-04-30 起就沒改過，其中 34 條的 mistake_step=1，一律猜第 1 步就有 26.98% 的 step-level，高於表中任何方法（最高是 step-by-step 有 GT 的 25.51）。直接取第 1 步的發言者當負責 agent，agent-level 有 42.86%，高於 step-by-step（35.20/26.02），也不輸 binary search（44.13/30.11）。多數類常數基準用到了測試集的標籤分佈，量的是「只靠先驗能拿幾分」，本身不是可部署的方法。但論文只和 random 比，就推論出「所有方法都優於 random，所以需要 LLM」，這個結論撐不住這類基準。",
+    "【Random 列疑似錯置或未定義】我用公開資料重算均勻隨機：alg-gen 的 agent-level（在 log 內出現的 agent 中均勻抽）是 29.10，hand-crafted 的 step-level 是 4.16，兩格都與 Table 1 一致。但 alg-gen 的均勻隨機 step-level 算出來是 12.0，Table 1 寫 19.06；而 12.0 正好是 Table 1 的 hand-crafted agent-level random 值。hand-crafted 每條 log 只出現 1–5 個 agent（有 30 條只有 2 個），均勻隨機的 agent-level 應該遠高於 12%：若只在 log 內出現的 agent 中抽約 42%，若在固定 5 個 agent 中抽則是 20%。『all-at-once 的 step-level 低於 random』這個結論，正是建立在 19.06 這一格上。",
+    "【正文敘述與自家表格矛盾】§4.3 說有 GT 時，三種方法在所有情況、所有指標都比沒有 GT 好，但 Table 1 有反例：all-at-once 在 alg-gen 的 step-level 是 12.50（有 GT）對 13.53（無 GT），step-by-step 在 hand-crafted 的 step-level 是 7.02 對 8.77，binary search 在 hand-crafted 兩者都是 6.90。",
+    "【Table 3 與 Table 1、Table 4 對不上，hybrid 的勝利有一半是平手】Table 1、Table 4 算得出 hand-crafted 的 all-at-once agent-level 是 54.31、step-by-step 是 33.62，Table 3 卻分別寫 57.02 與 35.96。同一張表的 step-level 與 binary search 則和 Table 1 一致，看起來是不同批次的結果混在一起。另外，hybrid 本來就直接沿用 all-at-once 的 agent 預測，agent-level 必然與它相同（都是 57.02），所以『兩個指標都最高』中的 agent-level 其實是平手。hybrid 的 149,177 tokens 還高於兩法相加（17,106+87,720=104,826），論文沒有解釋多出來的部分。",
+    "【評分腳本用子字串比對】公開 repo 的 Automated_FA/evaluate.py 用 `actual_step in pred['predicted_step']` 與 `actual_agent in pred['predicted_agent']` 比對，兩邊都是字串，所以這是子字串比對，不是完全相等。例如真值 4、預測 14 或 24，都會被算成命中（GitHub issue #14 於 2026-06-02 提出，未見維護者回覆）。hand-crafted 有 28 條標籤是個位數，而 log 最長 130 步，step-level 可能被高估。無法確認論文的數字是不是用這支腳本算的。",
+    "【all-at-once 的 step-level 劣勢有混淆因素】公開程式碼中，all-at-once 與 binary search 把 log 串成『agent: content』，不附步驟編號，模型只能自己去數一條最長 130 則、內容多行的 log；step-by-step 則每行都有『Step i』標記。論文把 all-at-once 的步驟定位差歸因於長 context 檢索困難（needle-in-a-haystack），卻沒有控制『有沒有給編號』這個變因。我推測只要替每一步加上編號，all-at-once 的 step-level 就可能明顯改善。",
+    "【公開程式碼重現不了兩種情境】公開的 utils.py 每種方法都把『The Answer for the problem is: {ground_truth}』寫死在提示詞裡，沒有 Without-GT 的開關。而初版資料中 hand-crafted 的 58 個 JSON 用的鍵是 groundtruth（2025-06-21 才改成 ground_truth），程式讀 ground_truth 讀不到，就會默默塞入空字串。所以照 2025-04-30 釋出的程式與資料跑，hand-crafted 的『有 GT』實際上等於沒有 GT。",
+    "【三種不同的『錯誤步驟』定義】§2 的目標是最早的關鍵錯誤（argmin t）；§3.3 說標註者要從多個錯誤中挑最嚴重的；all-at-once 的提示詞問的是負責 agent『第一次犯錯』的步驟。三者在多錯誤軌跡上可能指向不同步驟，而每條軌跡只有一個標籤，所以預測到另一個同樣具關鍵性的錯誤也會被判錯。反事實定義 Δ 從未透過重放介入驗證，標籤純粹是人工判斷；除了不確定比例，也沒有報告 Cohen's κ 之類的一致度。",
+    "【不是異常偵測，只是事後診斷】資料集只收失敗軌跡。Without GT 的提示詞仍然說這是『wrong solution』，step-by-step 也從沒在成功的軌跡上跑過，所以誤報率未知。要把它拿去當執行期的異常偵測器（觸發自我修正），最關鍵的誤報率這一項完全沒有被量測。",
+    "【樣本小、沒有信賴區間、只跑一次】hand-crafted 只有 58 條，每條約佔 1.7 個百分點。o1 的 step-level 從 4.39 升到 10.34，大約只差 3–4 條，卻被拿來支撐多模型一致、推理模型無益等結論；既沒有重複執行，也沒有報告 temperature，o1 用的還是改寫過的提示詞，和其他模型不是同一條件。容忍度實驗也缺隨機對照。我照論文當時的標籤算了 hand-crafted 的均勻隨機：±2 為 16.05、±3 為 21.77、±5 為 31.70。step-by-step 在 ±3 只有 18.10，低於隨機（約差 2 條）；±2 的 16.38 與 binary search ±3 的 22.41 都只和隨機持平；只有 all-at-once 在各容忍度明顯高於隨機。",
+    "【「127 個系統」的多樣性被高估】其中 126 個是同一個產生器（CaptainAgent 加 GPT-4o）為每題各產生一次的團隊，每個系統只貢獻一條 log，最長 10 步；剩下 1 個是 Magentic-One。題目全部來自 GAIA 與 AssistantBench 的資訊搜尋題，沒有以軟體開發為目標的任務，也沒有多輪的人機對話。hand-crafted 的標籤高度集中：WebSurfer 33、Orchestrator 18、Assistant 4、FileSurfer 3。",
+    "【benchmark 沒有版本標記，論文當時有標籤超出 log 範圍】論文 v3（2025-06-02）之後，hand-crafted 的標籤又改過：34.json 從步驟 8 改成 4（該 log 只有 5 則），53.json 從 51 改成 24（只有 28 則），54.json 從 24 改成 15（只有 19 則）。也就是說，論文實驗時有 3/58 條的步驟標籤指到 log 結尾之後，任何方法都不可能在 step-level 命中。另外 2025-11 還把兩筆 Websurfer 改成 WebSurfer，大小寫不同，在區分大小寫的評分腳本裡，除非模型剛好也寫成 Websurfer，否則算不中。這些修改都沒有打 tag，後續論文拿 Who&When 比較時，可能用的是不同版本的標籤。"
+  ],
+  "framework_role": "T4 子領域「失敗分類與歸因」的奠基工作。它把 agent 的一次執行當成可標註的資料物件：以 history 串列（role 或 name 加 content，0-based 步驟索引）為軌跡格式，標籤是 mistake_agent、mistake_step、mistake_reason，並用反事實定義什麼叫『關鍵錯誤步驟』。它也提供 who 與 when 兩個層級的準確率指標，以及三個可以直接套用的 LLM judge 基線。對框架來說，它回答的是「T4 在軌跡上指出哪一步、哪個 agent 出錯」，等於 E3 偵測端的一個候選實作與評測基準。不過它只處理已知失敗的軌跡，也沒有量誤報率，要當執行期的異常觸發器，還需要補上成功軌跡上的誤報率量測。它也是 T7 評估結果與系統改進之間的橋梁：作者主張評估要接到歸因，資料集層級的統計（Fig 6）比單一實例的歸因可靠。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "三種方法的輸出（負責 agent、錯誤步驟、自然語言理由）正是 E3 要從 T4 送往 T5 的「偵測到的異常」，作者也把 Without-GT 情境定位成一種 self-reflection。但論文只實作偵測這一半：歸因是在已知失敗的完整 log 上離線、事後執行，沒有接到任何修正迴路，也沒有在成功軌跡上測誤報率。step-by-step 是逐步判斷、遇到錯就停，形式上最接近線上觸發器，可是在實驗裡並沒有這樣用。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "AG2 官方原始碼 ag2/eval/scorers/attribution.py（Apache-2.0，AG2ai, Inc.）內建 failure_attribution scorer，模組說明自稱回答「Who&When-style question」，輸出 decisive_step 與 responsible_agent。官方文件 website/docs/user-guide/evaluation/scorers.mdx 把它列為六個 prebuilt scorer 之一。來源：https://github.com/ag2ai/ag2/blob/57e02372a2542c677bbc3b348f615b7aa9f1d67a/ag2/eval/scorers/attribution.py 、https://github.com/ag2ai/ag2/blob/57e02372a2542c677bbc3b348f615b7aa9f1d67a/website/docs/user-guide/evaluation/scorers.mdx"
+    ],
+    "assessment": "只有作者所屬組織的開源框架有概念層級的整合，算是弱證據。論文作者 Qingyun Wu 掛名 AG2AI, Inc.，而 AG2 的 failure_attribution 目前只支援單一 agent：先用確定性偵測器（crash、tool error、沒有答案），再加一次 LLM 判讀帶編號的軌跡，形式接近 all-at-once，但會先在軌跡前加上步驟編號。responsible_agent 只是保留給多 agent 的延伸點，實作的也不是論文的三種方法之一。AG2 的 PR #3277（mi4afa，拿 Who&When 格式訓練 probe）在 2026-09-22 仍是 draft、未合併，不計入。我用 WebSearch 查過 Who&When 搭配 Galileo、Arize、Patronus、Langfuse、Datadog，沒找到第三方廠商的官方文件或產品頁採用。Semantic Scholar 顯示 164 次引用（influential 39）、ICML 2025 spotlight，這些屬於學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/ag2ai/Agents_Failure_Attribution（MIT；另有 mingyin1/Agents_Failure_Attribution 鏡像）",
+    "data": "公開：repo 的 Who&When/ 資料夾（Algorithm-Generated 126 個、Hand-Crafted 58 個 JSON），README 另指向 Hugging Face 的 Kevin355/Who_and_When。論文發表後標籤改過幾次，而且沒有打版本 tag；評分腳本用的是子字串比對；程式碼沒有 Without-GT 開關。見 limitations_observed。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它定義了 who 與 when 失敗歸因任務，也提供了事實上的標準 benchmark，後續歸因工作都拿它比較，是 T4 歸因子領域的必讀。不過數字要搭配瑣碎基準、random 列與評分腳本的問題一起讀。",
+  "related": [
+    "2411.04468",
+    "2405.19425",
+    "2410.10934",
+    "2412.06559",
+    "2312.08935",
+    "2305.20050",
+    "2308.08155",
+    "2311.12983",
+    "2407.15711",
+    "2303.11366",
+    "2306.05685",
+    "2411.15594"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

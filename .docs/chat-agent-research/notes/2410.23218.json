@@ -1,0 +1,177 @@
+{
+  "id": "2410.23218",
+  "title": "OS-ATLAS: A Foundation Action Model for Generalist GUI Agents",
+  "topic": "T3",
+  "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "建立跨 Windows、macOS、Linux、Android 與網頁的 GUI grounding 資料自動合成管線（網頁用 HTML、桌面與行動用 accessibility tree 產生標籤），收集約 224 萬張截圖、1358 萬個元素做 grounding 預訓練，再用統一動作空間做多資料集動作微調，得到只看截圖就能輸出座標與動作的開源基礎動作模型 OS-Atlas（4B／7B），並附帶重新標註的 ScreenSpot-V2。",
+  "problem": "當時的 GUI agent 大多依賴 GPT-4o、Gemini 等閉源 VLM；開源 VLM 在 GUI grounding（把自然語言指令轉成螢幕上可執行的座標）與分布外（OOD）情境明顯落後，實務上很少人願意用。作者把原因歸成兩點：(1) VLM 很少用 GUI 截圖預訓練，既有 grounding 語料以網頁為主、行動次之，幾乎沒有桌面，而且不少沒開源或規模小；(2) 既有 agent 資料集格式各異，同一個動作在不同平台名稱不同（行動裝置的 tap 與桌面的 click、press_home 與 home、type 與 input），混在一起訓練會互相衝突、拉低表現。背後的觀測選擇是：HTML 與 accessibility tree 冗長、有雜訊、實務上常常拿不到，作者主張只看截圖（資訊完整的觀測媒介），但這樣一來 agent 的瓶頸就落在 grounding。",
+  "core_idea": "把 GUI agent 從「看到畫面」到「做出動作」拆成兩層，分別規模化。底層是 grounding：輸入截圖加上元素描述或指令，輸出座標；用自動合成的大規模跨平台資料預訓練，得到 OS-Atlas-Base。上層是動作預測：輸入截圖、任務指令與動作歷史，輸出想法、動作類型與參數；用統一動作空間把各資料集的動作正規化成 3 個跨平台基本動作加上各平台自訂動作，再做多工模仿學習，得到 OS-Atlas。模型有三種用法：grounding 模式（外接 GPT-4o 等 planner，只負責出座標）、action 模式（零樣本直接當 agent）、agent 模式（在目標任務上再微調）。資料面的關鍵是：訓練時用 HTML 與 accessibility tree 當標籤來源，推論時只給截圖。",
+  "method": {
+    "整體流程（§3.1、Figure 2）": "兩個連續階段。階段一 GUI grounding 預訓練，產物是 OS-Atlas-Base；階段二在 OS-Atlas-Base 上做動作微調，產物是 OS-Atlas。4B 版以 InternVL2-4B 為骨幹，7B 版以 Qwen2-VL-7B-Instruct 為骨幹。",
+    "階段一：grounding 預訓練（§3.1、附錄 F）": "訓練樣本是（截圖、元素的 referring expression 或指令、元素座標）三元組，座標可以是點或框，模型從截圖與文字預測座標；座標以文字 token 輸出，損失函數論文沒明寫，照骨幹原生格式推斷應是一般的生成式 cross-entropy。資料格式照 SeeClick：每筆 REG 樣本改寫成三種任務，分別是點 grounding、框 grounding、OCR（給位置讀出文字）；每種任務用 30 個 GPT 生成的提示模板包裝。為了加速訓練，把 15 筆樣本併進同一段多輪對話，開頭從 100 個預先定義的前綴提示中選一個。",
+    "網頁資料（§3.2）": "從 FineWeb（CommonCrawl 清洗去重後的英文資料）取最新的 URL，爬約 400 萬個網頁。從 HTML 抽出所有可見、可點擊的元素（按鈕、捲軸、搜尋框、超連結、帶 title 的 SVG），用 HTML 屬性得到 referring expression 與座標。與 SeeClick 只處理頁面上半部不同，這裡把整頁渲染後切成多張 1920×1080 的截圖。去掉 404 等錯誤頁後有 370 萬張截圖、3700 萬個元素；人工抽查發現大量低品質樣本，再用規則過濾渲染不完整、元素分布異常（例如全擠在畫面底部）的頁面，並把每頁元素上限設為 10 個以增加多樣性，最後剩 160 萬張、770 萬個元素。規則的具體門檻沒有公開。",
+    "桌面與行動資料（§3.2）": "Android 用 AndroidEnv 建模擬環境，Linux 用 OSWorld 的虛擬機；Windows 與 macOS 難以虛擬化，資料合成平台直接部署在實體機器上。標籤來自 accessibility tree：Ubuntu 用 pyatspi、Windows 用 pywinauto、macOS 用 ApplicationServices。為了改變系統狀態、拿到新畫面，從 accessibility tree 取樣動作模擬人的操作，探索策略有深度優先搜尋與隨機漫步兩種。過濾流程與網頁類似。探索步數、終止條件沒有交代。",
+    "指令 grounding（IG）資料（§3.2）": "REG 以外，另外用 GPT-4o 把既有軌跡資料集轉成 IG 資料：給 GPT-4o 高層任務指令、動作前後兩張截圖，並用 Set-of-Mark 在截圖上標出被操作的元素，要它分析畫面變化、寫出這一步的子指令。標註對象是 Mind2Web、AMEX、AITZ 的訓練集（正文說四個但只列三個）。再加上公開的 AndroidControl 與 Wave-UI 兩個 IG 資料集；Wave-UI 中來自 ScreenSpot、Mind2Web、OmniAct 的條目被移除，以避免評測污染。GPT-4o 標註用的提示全文沒有公開。",
+    "語料組成（Table 7）": "合計 13,582,210 個元素、2,240,717 張截圖。REG：FineWeb 網頁 7,779,922／1,617,179；Windows 1,079,707／51,726；Linux 41,540／1,186；macOS 13,326／1,339；自採 Android（Pixel6）104,598／21,745；公開的 SeeClick（網頁與行動）3,303,479／364,760、AMEX 1,097,691／99,939、UIbert 16,660／5,682。IG：Mind2Web 標註 5,943、AITZ 標註 10,463、AMEX 標註 5,745、AndroidControl 47,658、Wave-UI 65,478（截圖 7,357）。",
+    "骨幹與座標格式（§4.1、附錄 F）": "4B：InternVL2-4B 用 Dynamic Aspect Ratio Matching 處理高解析度，max_dynamic_patch 設為 6，也就是縮放後最多切成 6 塊 448×448 的圖塊，再加一張全圖縮圖提供全域資訊；座標正規化到 [0,1000] 的相對值，框寫成 <box>[[x1,y1,x2,y2]]</box>，點寫成 <point>[[x,y]]</point>，這四個標記當特殊 token（附錄 F 原文把框的第四個值誤植為 x2）。7B：Qwen2-VL 可以把任意解析度映射成動態數量的視覺 token，訓練與推論都把 max_pixels 設為 1024×1024，作者說這在 grounding 表現與成本之間效果最好；框沿用 Qwen2-VL 原生格式 <|box_start|>(x1,y1),(x2,y2)<|box_end|>，同樣當特殊 token。",
+    "階段二：動作微調（§3.1、§5.1、§5.4）": "輸入是（截圖、任務指令、動作歷史）三元組，輸出是（想法、動作類型、動作參數，例如座標）三元組，做多工模仿學習。OS-Atlas 只用 AMEX（行動）、AITZ（行動）、Mind2Web（網頁）三個 agent 資料集訓練，其餘留給 OOD 評測；OS-Atlas-Pro 則用全部 7 個資料集（再加上 AndroidControl、GUI-Odyssey、GUI-Act、OmniAct）做多工微調。除了 AITZ 本身附有 chain-of-action-thought 標註之外，其他資料集的想法欄位從哪裡來，論文沒有交代。",
+    "統一動作空間（§3.3、Table 6、Table 9）": "系統提示先說明模型是跨桌面、行動與網頁的基礎動作模型，負責兩類任務：grounding（依描述找元素）與 executable language grounding（依任務指令決定可執行動作），並要求只輸出指定格式的動作。基本動作 3 個、所有平台共用：CLICK <point>[[x,y]]</point>、TYPE [文字]、SCROLL [UP/DOWN/LEFT/RIGHT]。自訂動作依資料集與平台而定，例如 open_app、drag、LONG_PRESS、PRESS_BACK，讓使用者為新環境擴充動作。各評測基準的動作數（基本＋自訂）：GUI-Act-Web 3+2、OmniAct 3+11、AndroidControl 3+5、GUI-Odyssey 3+6。正規化後，全部資料的動作類型從 17 種降到 10 種。",
+    "三種使用模式（Figure 1、§4.3、§5.1）": "grounding 模式：GPT-4o 等 planner 先產生逐步計畫與每一步的動作，其中的座標改由 OS-Atlas-Base 產生；在 ScreenSpot 上，planner 把原指令改寫成更詳細的子指令再交給 grounding 模型。action 模式：OS-Atlas 零樣本直接在沒見過的任務、網域、app 上逐步預測動作。agent 模式：在下游任務上再做監督微調。",
+    "評估指標（§4.1、§5.1、附錄 E）": "ScreenSpot 用 grounding accuracy（預測點落在 GT 框內就算對），另外在分析裡用 IoU。agent 任務三個指標：Type（動作類型完全比對）、Grounding（點擊類動作的座標正確率）、SR（步驟成功率，動作類型與參數都要對）。附錄 E 的判定：點擊類座標與 GT 點的距離在螢幕寬度 14% 以內就算對（沿用 GUI-Odyssey 的作法，因為測試資料不一定有 GT 框）；TYPE、OPEN_APP 等文字類動作，預測文字與 GT 的 F1 大於 0.5 就算對；SCROLL 的方向要完全一致；PRESS_BACK 等其他動作要完全一致。評估都在子任務（單步）層級，給定任務指令、目前截圖與動作歷史（若資料集有提供）。OmniAct 在 OOD 設定只評每個例子的第一個動作，在 SFT 設定評全部動作。GUI-Odyssey 的四個測試切分（Random／Task／Device／App）取宏平均。",
+    "論文沒給的東西": "learning rate、epoch 數、batch size、GPU 型號與訓練算力、預訓練與微調各跑多少步都沒有交代；零樣本 GPT-4o 基線用什麼提示、有沒有給 SoM 或 accessibility tree 也沒說明；OSWorld 實驗用哪個版本、多少任務、每題幾步上限也沒寫。要照著重做，這些都得從官方 repo 或自己補。"
+  },
+  "assumptions": [
+    "截圖本身就包含做決策所需的資訊，推論時不需要 HTML 或 accessibility tree",
+    "HTML 屬性與 accessibility tree 給出的元素描述與座標夠準，可以當大規模 grounding 標籤，即使作者自己也批評 accessibility tree 有雜訊",
+    "各平台 GUI 遵循相似的設計原則，所以跨平台預訓練能提升沒見過的介面上的 grounding",
+    "混合資料集時傷害表現的主因是動作名稱衝突，而名稱不同的動作可以由人判定為語意等價後合併",
+    "GPT-4o 看動作前後截圖加 SoM 標記寫出的子指令是正確的",
+    "給定正確動作歷史的單步離線指標（Type／Grounding／SR）能反映 agent 的實際能力",
+    "planner 與 grounder 可以分開：強的語言模型負責規劃，專用模型負責把步驟指令對應到座標",
+    "Qwen2-VL 在 1024×1024 像素上限、InternVL2 最多 6 塊 448×448 圖塊的解析度下，仍看得清小圖示"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "ScreenSpot（行動、桌面、網頁；Text 與 Icon/Widget 兩類）",
+      "ScreenSpot-V2（本文重新標註的版本，題數不變）",
+      "OSWorld（線上互動環境，grounding 模式，按 app 分 10 個網域）",
+      "AndroidControl-Low／High（行動，各 7,708 個測試樣本，有動作歷史）",
+      "GUI-Odyssey（行動跨 app，Random／Task／Device／App 四個切分宏平均）",
+      "GUI-Act-Web（網頁，1,410 個測試樣本）",
+      "OmniAct-Web（1,427）與 OmniAct-Desktop（Windows，594）"
+    ],
+    "metrics": [
+      "ScreenSpot grounding accuracy（點落在 GT 框內）",
+      "IoU（資料擴增與消融分析）",
+      "OSWorld 任務成功率",
+      "Type（動作類型完全比對）",
+      "Grounding（點擊座標在 GT 點 14% 螢幕寬度內）",
+      "SR（步驟成功率，文字參數以 F1>0.5 判對）"
+    ],
+    "baselines": [
+      "Fuyu",
+      "CogAgent",
+      "SeeClick",
+      "InternVL-2-4B（原始與微調）",
+      "Qwen2-VL-7B（原始與微調）",
+      "UGround-7B（同期）",
+      "GPT-4o（當 planner 以及零樣本 agent）",
+      "GPT-4o＋SoM（OSWorld）",
+      "人類（OSWorld）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "自動合成管線產出當時最大的開源跨平台 grounding 語料，涵蓋 5 種平台，並補上過去語料幾乎沒有的桌面資料",
+      "numbers": "Table 7 合計 13,582,210 個元素、2,240,717 張截圖（摘要與 §3.1 寫「超過 230 萬張」，與表的合計不符；Table 1 的 1.9M＋285K＋54K 也約 224 萬）。自採的部分：FineWeb 網頁 7,779,922 個元素／1,617,179 張；Windows 1,079,707／51,726；Linux 41,540／1,186；macOS 13,326／1,339；Android 104,598／21,745。IG 資料合計約 13.5 萬筆。對照 SeeClick 公開 3.3M 元素、GUICourse 10.7M、CogAgent 70M（未開源）",
+      "section": "§3.1、§3.2、Table 1、Table 7",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "grounding 預訓練讓 OS-Atlas-Base-7B 在 ScreenSpot 有無 planner 兩種設定都取得最高平均；但 4B 版輸給同期的 UGround-7B，「兩種設定都大幅領先」只對 7B 成立",
+      "numbers": "無 planner 平均：OS-Atlas-Base-7B 82.47、UGround-7B 73.30、OS-Atlas-Base-4B 70.13、SeeClick 53.40、CogAgent 47.40、原始 Qwen2-VL-7B 42.89、原始 InternVL-2-4B 4.32。GPT-4o 當 planner：7B 85.14、UGround-7B 81.40、4B 76.81、SeeClick 62.89；此設定下 7B 的 Desktop Text 90.21 仍低於 UGround 92.80。ScreenSpot-V2（無 planner／有 planner）：7B 84.12／87.11、4B 71.86／79.09、SeeClick 55.09／63.60，表中沒有 UGround",
+      "section": "§4.2、Table 2、附錄 C Table 8",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "消融顯示 referring expression 資料幾乎就足以訓練出強的 grounding 模型，而且比 IG 資料容易擴增；只用網頁資料預訓練無法遷移到桌面與行動平台。資料量越大，IoU 與網頁網域的提升越明顯",
+      "numbers": "只以 Figure 3、Figure 4 呈現，正文沒有數值；這些分析都只在 InternVL-2-4B 上做（作者說受限於 GPU）",
+      "section": "§4.2、Figure 3、Figure 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "grounding 模式下，把 GPT-4o agent 產生的座標換成 OS-Atlas-Base 的輸出，OSWorld 成功率明顯高於換成 SeeClick 或用 SoM，但仍遠低於人類",
+      "numbers": "平均成功率：GPT-4o＋OS-Atlas-Base-7B 14.63、＋OS-Atlas-Base-4B 11.65、＋SeeClick 9.21、GPT-4o 只看截圖 5.03、GPT-4o＋SoM 4.59、人類 72.36。7B 的分項如 OS 25.00、Calc 4.26、Workflow 8.91",
+      "section": "§4.3、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "零樣本 OOD 設定下，OS-Atlas-7B 在六個資料集的 SR 都高於 GPT-4o；但「六個全勝」只對 7B 的 SR 成立，4B 與部分子指標有反例",
+      "numbers": "SR（OS-Atlas-7B 對 GPT-4o）：GUI-Act-Web 57.02 對 41.84、OmniAct-Web 59.15 對 34.06、OmniAct-Desktop 56.73 對 50.67、AndroidControl-Low 50.94 對 28.39、AndroidControl-High 29.83 對 21.17、GUI-Odyssey 26.96 對 5.36。反例：OS-Atlas-4B 的 OmniAct-Web SR 22.99、OmniAct-Desktop SR 26.94 都低於 GPT-4o；7B 的 OmniAct-Desktop Grounding 62.87 略低於 GPT-4o 的 63.25；7B 的 Type 在 AndroidControl-Low（73.00 對 74.33）與 High（57.44 對 63.06）都輸 GPT-4o",
+      "section": "§5.2、Table 4、Table 5",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "監督微調設定下，從 OS-Atlas-Base 出發微調勝過從原始骨幹微調；4B 在網頁與桌面增益很大，7B 的增益除 OmniAct-Web 外都很小",
+      "numbers": "SR，OS-Atlas-7B 對原始 Qwen2-VL-7B：GUI-Act-Web 82.70 對 82.27、OmniAct-Web 93.56 對 78.58、OmniAct-Desktop 94.05 對 91.77、AndroidControl-Low 85.22 對 82.56、AndroidControl-High 71.17 對 69.72、GUI-Odyssey 61.98 對 60.23。OS-Atlas-4B 對原始 InternVL-2-4B：GUI-Act-Web 81.06 對 36.17、OmniAct-Web 73.91 對 24.39、OmniAct-Desktop 84.78 對 29.80，但 AndroidControl-Low 80.64 對 80.10、High 67.54 對 66.72。SeeClick 微調後 GUI-Act-Web SR 72.34",
+      "section": "§5.2、Table 4、Table 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "拿掉 grounding 預訓練、直接從原始 VLM 做動作微調，零樣本 OOD 表現明顯下降，桌面與網頁掉最多",
+      "numbers": "只有 Figure 5，正文沒有數值；作者的解釋是動作微調資料中網頁只有約 7k 筆、桌面 0 筆，所以這兩個平台最依賴預訓練",
+      "section": "§5.3、Figure 5",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "統一動作空間消除動作名稱衝突；拿掉它（各資料集改用各自 SOTA 模型的動作設計）零樣本表現下降",
+      "numbers": "唯一給出的數字是動作類型從 17 種降到 10 種（解掉 tap／click、press_home／home、type／input 等衝突）；表現下降的幅度只畫在 Figure 5，正文沒有數值",
+      "section": "§5.3、Figure 5",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "即使換上 OS-Atlas-Base 當 grounding 模組，GPT-4o agent 在 OSWorld 仍遠落後人類（§4.3、Table 3）",
+    "grounding accuracy 抓不到細粒度錯誤，資料擴增的效果在 accuracy 上相關性偏弱，需要更難的基準與更好的指標（§4.2）",
+    "agent 基準很少，桌面尤其缺，所以只用三個資料集做動作微調、把其餘留作 OOD 評測（§5.1）",
+    "分析與消融只用 InternVL-2-4B，原因是 GPU 不夠（§4.2）",
+    "Windows 與 macOS 難以虛擬化，只能在實體機器上蒐集；各平台要分別建基礎設施，資料品質與相容性難以一致（§3.2）",
+    "自動爬取的網頁資料有大量低品質樣本，必須靠規則過濾（§3.2）",
+    "AndroidControl 訓練集的截圖用在預訓練，但作者仍把它歸為 OOD，理由是它有多個與訓練集不同的 OOD 切分（附錄 D）",
+    "OmniAct 只提供第一張截圖、沒有動態環境，所以 OOD 設定只評每例第一個動作（附錄 D）",
+    "ScreenSpot 約 11.32% 的樣本標註有誤，因此重新標註為 ScreenSpot-V2（§4.1、附錄 C）",
+    "不同來源的資料直接混合做多工微調，會因動作空間衝突而傷害表現（§3.3）"
+  ],
+  "limitations_observed": [
+    "OSWorld 表漏掉了最該比的觀測設定。Table 3 的 GPT-4o 只看截圖 5.03、GPT-4o＋SoM 4.59，連分項 OS 8.33、Workflow 5.58 與 3.60 都和 OSWorld 原論文（2404.07972）主表同值，推測是直接引用而非重跑（本文沒說明）。但同一張 OSWorld 主表裡，GPT-4o 以 accessibility tree 為觀測是 11.36、截圖加 accessibility tree 是 11.21，本文沒有列。放在一起看，OS-Atlas-Base-4B 的 11.65 只跟純 accessibility tree 打平，7B 的 14.63 也只多約 3 個百分點。引言主張截圖優於 HTML／accessibility tree，但對 T3 最關鍵的「觀測表徵」對照恰好沒做。此外 Table 3 按 app 切分，原表按 OS／Office／Daily／Professional／Workflow 切分，本文也沒交代 OSWorld 版本與任務數。",
+    "AndroidControl 的「零樣本」成分比作者承認的更少。附錄 D 只說用了 AndroidControl 訓練集的截圖，但 Table 7 列的是 47,658 筆 AndroidControl IG 資料，也就是除了截圖之外還帶有指令與座標標籤。Table 7 只標為公開 IG 資料，沒說指令是哪一層；若如 IG 的定義是步驟層級指令，它就與 AndroidControl-Low 的輸入（含步驟層級的低階指令）同分布，等於預訓練很可能已經看過「低階指令對應座標」的配對。零樣本 SR 50.94 對 GPT-4o 28.39 的差距有多少來自這裡，無從分辨。",
+    "零樣本比較缺了原始骨幹這一列。Table 4／5 的零樣本設定只有 GPT-4o 與 OS-Atlas，沒有原始 Qwen2-VL-7B；Qwen2-VL 本身就用 GUI 資料訓練過（ScreenSpot 42.89）。w/o pre-training 消融只在 4B 上做，而且只有圖。所以 7B 零樣本贏 GPT-4o 的部分，有多少來自 Qwen2-VL 自身、多少來自 OS-Atlas 的預訓練語料，論文沒有拆開。GPT-4o 基線的提示與輸入也沒交代；讓 GPT-4o 直接輸出座標本來就是它的弱項，這個基線偏軟。",
+    "agent 任務的座標判準很寬。附錄 E 規定點在 GT 點 14% 螢幕寬度內就算對，在 1920 寬的螢幕上約 269 像素、1080 寬的手機上約 151 像素，比 ScreenSpot 的「落在框內」寬鬆許多；TYPE 類動作文字 F1 大於 0.5 就算對。Table 4／5 的 Grounding 與 SR 都在這個判準下量，不能跟 ScreenSpot accuracy 對照，在小圖示密集排列的介面上可能高估正確率。",
+    "7B 在 SFT 設定相對原始 Qwen2-VL-7B 的 SR 增益，除了 OmniAct-Web（93.56 對 78.58，+14.98）之外，其餘五項都在 3 點以內（0.4 到 2.7：GUI-Act-Web 82.70 對 82.27、OmniAct-Desktop 94.05 對 91.77、AndroidControl-Low 85.22 對 82.56、AndroidControl-High 71.17 對 69.72、GUI-Odyssey 61.98 對 60.23）。論文沒有報多次種子或信賴區間，這些小差距能不能稱為 SOTA 無法判斷。4B 的大幅增益可能主要反映 InternVL-2-4B 原本幾乎不懂 GUI（ScreenSpot 只有 4.32），不能直接當成這份語料的邊際價值。",
+    "「跨平台桌面」實際上以 Windows 為主。桌面截圖共 54,251 張，其中 Windows 佔 51,726（約 95%），Linux 只有 1,186、macOS 只有 1,339。元素數上，FineWeb 網頁 7.78M 加上 SeeClick（網頁與行動混合）3.30M 約佔全部的 82%。ScreenSpot 桌面 Icon 仍是 7B 最弱的一格（62.86），對 macOS 與 Linux 的外推證據很薄。",
+    "動作空間消融混了變因。w/o unified action 是讓每個資料集改用各自 SOTA 模型的動作格式，不只是名稱不同，參數格式與提示也跟著變，所以 Figure 5 的下降不能全部歸因於名稱衝突。17 種合併成 10 種也是人工判定語意等價，對名字相近但不等價的動作（例如行動裝置的 long press 與桌面的右鍵）沒有討論。",
+    "標籤來源與觀測主張互相拉扯。引言批評 accessibility tree 冗長、有雜訊、不易取得，但桌面與行動的 grounding 標籤正是從 accessibility tree 抽的，網頁標籤則來自 HTML 屬性。accessibility tree 沒暴露的元素（canvas、自繪控制項、缺無障礙標註的圖示）不會進訓練資料，模型學到的是「有無障礙標註的元素」的分布；accessibility tree 標籤本身的錯誤率論文沒有量化。",
+    "論文內部數字不一致：摘要與 §3.1 寫超過 230 萬張截圖，Table 7 合計只有 2,240,717 張；§3.2 說用 GPT-4o 標註了「四個」軌跡資料集，只列出 Mind2Web、AMEX、AITZ 三個。",
+    "開源宣稱找不到對應的程式。貢獻 1 說已釋出多平台 grounding 資料合成工具組，但我在 2026-09-26 查了三處都沒找到：(1) 用 gh api 讀 OS-Copilot/OS-Atlas 的完整檔案樹，只有 eval 腳本（android_control、guiact_web、odyssey、omniact）、eval 資料、兩個模型 README 與海報，沒有資料合成工具，也沒有訓練程式；(2) 用 gh repo list 列出 OS-Copilot 組織的全部 13 個公開 repo，沒有看起來是這個工具組的 repo；(3) 專案首頁 osatlas.github.io 提到工具組，但沒有給連結。",
+    "OS-Atlas-Pro 用全部 7 個資料集微調，包含之後評測的 AndroidControl、GUI-Odyssey、GUI-Act、OmniAct 的訓練集，所以 Figure 6 已經不是 OOD，而且只有圖、沒有數字。",
+    "除了 OSWorld 之外，評估都是給定正確動作歷史的單步離線評估，錯誤不會累積；action 模式與 agent 模式都沒有線上多步評估，OSWorld 只測了 grounding 模式。OmniAct 在 OOD 設定只評第一步，所以「零樣本桌面 agent」實際上量的是單步 grounding 加動作類型。"
+  ],
+  "framework_role": "在 T3(a) 感知／觀測空間中，這篇代表「純截圖觀測＋專用 grounding 模型」這條路線的規模化版本，並把 agent 拆成 planner（決定下一步做什麼，在語言層）與 grounder（把步驟指令對應到螢幕座標，在感知層）。對框架有四點用處。(1) 感知元件可以模組化替換、單獨量測：OSWorld 實驗只換 grounding 模組，就把 GPT-4o agent 從 5.03 拉到 14.63。(2) 資料策略是「結構化觀測當老師、原始觀測當輸入」：訓練時用 HTML 與 accessibility tree 自動產生標籤，推論時只給像素。(3) 統一動作空間是 ACI 動作側的設計：把跨環境的同義動作正規化，並保留可擴充的自訂動作；對要同時接多種工具或環境的 agent，這是降低動作詞彙衝突的具體做法。(4) 評估分三層：ScreenSpot 元件級、步驟級 Type／Grounding／SR、OSWorld 線上成功率，數字從八成多一路掉到一成多，提醒元件指標不能直接當任務完成度（也和 T7、T8 相關）。對以對話為主的框架，能直接帶走的是模組化與分層評估的思路，不是模型本身；這篇不涉及 T3(b) 的可觀測性與監控。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "ByteDance 的 UI-TARS-1.5-7B 官方 Hugging Face model card，在「Grounding Capability Evaluation」表把 ScreenSpot-V2 列為評測項目，連結指向本文 arXiv 2410.23218；報告 UI-TARS-1.5 94.2、OpenAI CUA 87.9、Claude 3.7 87.6、先前 SOTA 91.6（我直接讀了 README 原文第 54 行確認）。性質是業界模型發布時沿用本文提出的評測基準，不是 OS-Atlas 模型本身被部署。來源：https://huggingface.co/ByteDance-Seed/UI-TARS-1.5-7B"
+    ],
+    "assessment": "未見 OS-Atlas 模型本身被商用產品部署的證據。權重（OS-Atlas-Base-4B／7B、OS-Atlas-Pro）與資料以 Apache-2.0 釋出在 Hugging Face，這屬於開源釋出，不算採納。Voxel51 FiftyOne 文件站雖有 OS-Atlas-Base-7B 頁面，但頁面自己註明是社群維護的遠端外掛、不是官方整合，所以不計入。可查證的業界採用只有 ScreenSpot-V2 這個評測：ByteDance UI-TARS-1.5 的 model card 拿它和 OpenAI CUA、Claude 3.7 並列比較。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/OS-Copilot/OS-Atlas",
+    "data": "官方 repo（Apache-2.0）README 連到 Hugging Face 的模型集合、OS-Atlas-data 與 ScreenSpot-v2 資料集。我用 gh api 讀了 repo 的檔案樹：只有 eval 腳本與 eval 資料（AndroidControl、GUI-Act、GUI-Odyssey、OmniAct 的測試 jsonl）以及模型 README，沒有資料合成工具組與訓練程式；OS-Copilot 組織的其他 repo 與專案首頁 osatlas.github.io 也沒有工具組的連結（2026-09-26 查），所以論文宣稱已釋出的工具組目前找不到。OS-Atlas-data 頁面（WebFetch 摘要，沒有逐檔核對）標示 Apache-2.0、約 816 GB，子集有 AMEX、UIBert、Widget Captioning 與 RICOSCA、Android world 資料、Windows／Linux／macOS、SeeClick 網頁資料、FineWeb 爬取資料；其中 Widget Captioning 與 RICOSCA 不在論文 Table 7。訓練超參數論文沒給。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "相較 SeeClick，它多出跨平台（實際以 Windows 為主）的資料規模、統一動作空間、OSWorld 上 planner＋grounder 拆分的線上證據，以及被 ByteDance UI-TARS-1.5 model card 採用的 ScreenSpot-V2，撐起評價的是後兩者（只換 grounding 模組就把 GPT-4o agent 從 5.03 拉到 14.63，以及業界沿用的評測基準）；但截圖與 accessibility tree 的觀測對照沒有實驗支撐，OOD 宣稱也被 AndroidControl 資料重疊與寬鬆判準削弱，對 T3 是有價值的代表作，不是必讀。",
+  "related": [
+    "2401.10935",
+    "2410.05243",
+    "2404.07972",
+    "2312.08914",
+    "2401.01614",
+    "2310.11441",
+    "2408.00203",
+    "2406.03679",
+    "2406.08451",
+    "2402.17553",
+    "2407.17490",
+    "2306.06070",
+    "2409.12191",
+    "2406.11317",
+    "2404.05719"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

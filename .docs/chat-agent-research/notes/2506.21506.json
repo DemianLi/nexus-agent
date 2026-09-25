@@ -1,0 +1,152 @@
+{
+  "id": "2506.21506",
+  "title": "Mind2Web 2: Evaluating Agentic Search with Agent-as-a-Judge",
+  "topic": "T8",
+  "subarea": "任務成功的判準",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "建立 130 題長程、時變、要求附引用的網路搜尋任務，替每題寫一支「rubric 樹＋LLM 擷取／驗證」的 judge-agent 腳本；葉節點做二元判定，再用 critical 閘門加 non-critical 平均的遞迴規則聚合成根分數。根分數等於 1 算成功，根分數的平均算部分完成度。以此評測 10 個 agentic search 系統與人類，並用人評量出 judge 的葉節點正確率為 99.03%。",
+  "problem": "Deep Research 類系統產出的答案動輒數百到數千字、內容隨時間變動（庫存、價格、日期），而且要附來源。既有 benchmark 為了能自動評分，多半只收答案固定、時間不變的題目（常是一個字串，如 BrowseComp、GAIA、AssistantBench），偏離真實使用者的需求分佈；少數收時變任務的（Online-Mind2Web、WebVoyager、Mind2Web-Live）又只有 10 步以內的短任務，用 LLM-as-a-Judge 或規則判定。問題在於：一個 agent 花上一小時、跨數十個網站、做數百個動作後交出的長答案，要怎麼自動又可靠地判定「任務完成了沒有、完成了幾成、內容是否真有來源支撐」。這直接決定了任務成功分數能不能用在長程、開放式的任務上。",
+  "core_idea": "利用生成與驗證的不對稱：答案怎麼寫、何時查，因系統而異，但每題「要什麼」事先可知，所以能為每題寫一棵 rubric 樹，把評估拆成可逐條二元驗證的葉節點（答案是否滿足條件、陳述是否被引用網頁支撐）。聚合規則是 gate-then-average：critical 節點只當閘門，任一不過則父節點為 0；閘門都過了才平均 non-critical 子節點；sequential 節點前段失敗時短路後段。每題的 rubric 由一支 Python judge agent 執行，由 LLM Extractor 抽結構化欄位、LLM Verifier 做二元判定，腳本本身先由 LLM 生成、自我除錯，再經兩階段人工修正。任務成功定義為根分數等於 1，部分完成度就是根分數本身。",
+  "method": {
+    "任務與輸入輸出": "130 題：10 題公開 dev（任務與腳本都公開），120 題私有 test（論文發表時只公開任務描述）；6 大領域、24 個子領域。任務是單輪的，所有條件都寫在題目裡，不允許反問。受測系統輸出一段附 URL 引用的自然語言答案。Judge 的輸入是任務描述、答案全文（含 URL），以及評估前預先快取的網頁文字與截圖；輸出是 rubric 樹上每個節點的分數與根分數 s(root)∈[0,1]。Rubric 規模（Table 2a）：葉節點平均 34（最少 3、最多 357），總節點平均 50（4–603），深度平均 4（2–6）。",
+    "rubric 樹的節點種類": "每個節點帶一個 critical 旗標，內部節點分成 parallel 與 sequential 兩種。葉節點一律是 0/1 判定，實作上有三類。(a) custom node：純 Python 的決定性檢查，例如某個擷取欄位是否存在、非空。(b) simple_verify：由 LLM 以邏輯或常識判斷一句陳述，例如「擷取到的 commit ID 與 ground truth 相同」，可附 additional_instruction 放寬格式差異（日期寫法、名字縮寫）。(c) verify_by_url：由 LLM 看快取網頁的文字與截圖，判斷陳述是否被該頁支撐；給多個 URL 時，只要有一個支撐就算過（§4.4 明說的假設）。少數節點可改用外部 API（Google Maps 的距離與地理編碼、arXiv API）或固定的 ground truth。",
+    "分數聚合公式（§3.3）": "節點 v 的子節點分成 critical K(v) 與 non-critical N(v)。(1) 任一 u∈K(v) 的 s(u)<1，則 s(v)=0。(2) 所有 critical 都等於 1 且 N(v) 非空，則 s(v) 為 N(v) 分數的算術平均。(3) 其他情況，也就是只有 critical 子節點且全部過關，s(v)=1。Critical 分數不進平均，只負責讓平均有意義。Sequential 節點：前面的子節點失敗時，後面的子節點短路不評。論文正文沒有寫 sequential 的算分公式；從附錄 G 腳本推斷（根節點用 AggregationStrategy.SEQUENTIAL，子節點刻意設為 non-critical，註解寫「允許 sequential 部分分數」），被短路的後段記 0，父節點照常平均，這一點屬於推論。",
+    "rubric 設計原則（App D.1）": "(1) 只有在「部分完成對使用者真的有用、代表漸進進展」時才給部分分。例如「找出同時滿足多個條件的項目」，只滿足一部分條件對使用者沒有價值，就不給部分分，改用 critical 串接。(2) 凡是能合理要求附 URL 來源的陳述，其出處驗證節點一律設為 critical，缺來源或來源不支撐，整個項目就歸零。",
+    "固定分母的做法（附錄 G 腳本）": "題目要求 N 個項目（例如 5 位作者）時，把擷取結果截到前 N 個，不足的補空物件，每個位置都生成一個 non-critical 的項目節點。項目節點底下，「欄位存在」與「名字符合 ground truth」設為 critical，「個人頁 URL 有提供」設為 non-critical。空位會在存在性檢查就失敗而得 0。這樣分母固定為 N：少列不會因為平均拉高分數，多列也不會加分。",
+    "Extractor 與 Verifier（App D.2，底層模型都是 o4-mini）": "Extractor 依 pydantic 模板從答案抽結構化欄位（項目名、價格、URL 等），提示要點如下。只抽答案裡明寫的資訊，不增、不刪、不捏造。缺值回 null。會一併收到任務描述當背景，可用常識輔助，但結果必須來自答案原文。URL 只抽答案裡實際出現的，忽略格式錯誤的，缺協定就補 http://。Verifier 有兩份提示。simple 版對一句陳述給 Correct／Incorrect 的二元判定，附明確推理。URL 版提供網頁文字（過長則截斷）與截圖，要求判定「被支撐／不被支撐」並附推理：文字裡找不到時要看截圖；名字大小寫或小拼寫差異可以模糊比對，但最終要以網頁上的明確證據為主；網頁不相關、無效或打不開，一律判不支撐。評估時預設開啟短路：被 critical 失敗或 sequential 前段失敗擋住的節點直接跳過，以省時間與 API 費用；做人評比對時關閉短路，讓所有葉節點都被評到。",
+    "judge 腳本的生產流程（App D.3–D.4）": "(1) 先寫一套可重用的 Python 工具包：rubric 樹管理、計分、Extractor、Verifier。(2) 用 Claude-3.7-Sonnet 生成初版腳本，輸入包括任務描述、benchmark 目標、rubric 設計原則、評估策略、工具包 API 說明，以及常見錯誤與提示。(3) 以系統回饋自我除錯：預設拿 OpenAI Deep Research 的答案去餵 Extractor，所有驗證 stub 成回傳 True，實際執行腳本，把錯誤訊息回灌給模型修正，直到沒有 runtime error。(4) 自我反思：依明確的 checklist 做多輪自我審查，看正確性、邏輯一致、rubric 完整度與被忽略的邊界情況。(5) 人工第一階段：受過訓練的標註者逐支檢查 rubric 的正確性、完整度與可行性；sequential 與 parallel 交錯的複雜 rubric 常要手改。(6) 人工第二階段：每題從隨機六個受測系統各抽一份真實答案跑評估，標註者只修 critical 的錯誤或遺漏，避免對特定答案過擬合；其餘答案保留作 held-out。另外做了一個 GUI，用來同時檢視答案、快取頁面、rubric 與評估結果。",
+    "網頁預快取（App E.2）": "評估前彙整所有答案裡的唯一 URL，用 Playwright 抓文字與截圖，PDF 另行處理。有些網站擋自動化存取，由人工用工具一鍵打開、手動完成人機驗證後替換快取。用意是讓時變任務以「答案產生時」的頁面狀態為準，並讓評估穩定、可重跑。",
+    "受測系統與設定（§4.1、App E.1）": "共 10 個系統：ChatGPT Search、Perplexity Pro Search、OpenAI Operator、HF Open Deep Research（底層 o3，唯一開源）、Claude Research、Grok DeepSearch、Perplexity Deep Research、Gemini Deep Research、Grok DeeperSearch、OpenAI Deep Research。HF 以外都是在 web UI 手動收集答案，時間為 2025 年 4–6 月；無法歸因來源或表現太弱的系統事先排除。統一的系統提示要點：不要反問，所有條件都已在題目中；必須實際上網搜尋，用來源支撐每個主張；每條資訊都附連結。Operator 另外要求列表中的每個項目各附一個能直接證實它的唯一 URL；Gemini 另外要求即使題目指定了某些連結，其餘資訊也要附來源。",
+    "最終指標（§3.3、§4.1）": "Partial Completion：所有任務根分數的平均。Success Rate：根分數等於 1 的任務比例。每個系統每題獨立跑 3 次，報三次的平均與標準差。Pass@3：三次中至少一次根分數為 1 的任務比例。另外報平均完成時間（取系統自報；沒有自報的就人工計時，但只計 Subset-30）與平均答案字數，當作使用者體驗的參考。",
+    "任務收集（§3.2、App C、H.1）": "分提案、精修、驗證三階段，參與者都是資工背景的學生或從業者。收題條件：人類至少要花 5 分鐘；排除影片、非英文、需要登入、答案變動太快（如匯率）、無法驗證的全域限定詞（「最便宜」「列出全部」「top-k」），以及需要跨多頁合併驗證的歸因、要點擊展開或捲動才載入的內容。每題至少兩位驗證者各自完整做過一次並核可才收錄；另以人工加 LLM 做歧義檢查。",
+    "人類基準（§3.5、App E.3、H.2）": "Subset-30 是從測試集隨機抽的 30 題。7 位受試者，每題由 3 人各做一次。30 分鐘內仍找不到解題路線可以放棄；找到路線、但執行超過 1 小時也可以放棄。禁用 AI 工具，用 Chrome 外掛記錄時間與造訪的網頁，並全程錄影。受試者要先做兩題試作，合格才進正式研究。",
+    "錯誤分析（§4.3、App F、H.3）": "在 Subset-30 上，對 5 個系統（ChatGPT Search、Perplexity Pro Search、HF Open DR、OpenAI DR、Operator）與人類各隨機抽一份答案，人工依流程圖標 7 類錯誤：Info Not Found、Partial Missing、Criteria Violation、Invalid Attribution、Missing Attribution、Retrieval Error、Synthesis Error。幻覺率定義為出現 Invalid Attribution 或 Unsupported Answer（Retrieval／Synthesis）的任務比例。",
+    "judge 可靠性的人評協定（§4.4、App D.5、H.4）": "隨機抽 15 題，每題取 2 份來自不同系統的 held-out 答案，抽樣時排除全失敗的答案。評估者 1 位：沒參與過 judge 開發，但參與過錯誤分析。Phase 1 用三級量表（Strongly Agree／Agree with Reservations／Disagree）評整棵 rubric，並寫理由。Phase 2 拿到葉節點分數全部設成 TODO 的 JSON，逐一填 0 或 1，等於親自扮演 Verifier；再由腳本比對 judge 的結果，產生 mismatch 報告。最後由一位有經驗的 judge 開發者逐條和評估者討論不一致處，確認哪些是人為錯誤。"
+  },
+  "assumptions": [
+    "生成與驗證不對稱：答案形式雖然各異，但每題要什麼事先可知，能寫成 task-specific 的 rubric 樹，而且每個葉節點都能化成二元判定。",
+    "評估只看最終答案與引用的網頁，不看過程軌跡；關鍵資訊都能歸因到單一網頁（作者明列為前提）。",
+    "引用網頁的內容本身真實可信，不評估來源的可信度；多個來源時，只要一個支撐就算過。",
+    "評估前抓的快取頁面，能代表答案產生當時的網頁狀態；這是時變任務能公平評分的前提。",
+    "o4-mini 當 Extractor 與 Verifier，擷取與二元驗證都夠可靠，葉節點的錯誤少到不影響聚合結果。",
+    "critical／non-critical 由 rubric 作者依「部分完成對使用者有沒有用」來判斷，並假設不同作者會做出相近的判斷。",
+    "任務是單輪的，所有需求都寫在題目裡，受測系統不需要也不被允許反問。",
+    "跑 3 次足以描述系統輸出的變異。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Mind2Web 2（130 題；10 題公開 dev、120 題私有 test；主結果都在 test 上）",
+      "Subset-30（test 中隨機 30 題，用於人類基準、人工計時與錯誤分析）",
+      "Judge 人評子集（15 題 × 2 份 held-out 答案，共 720 次葉節點驗證）"
+    ],
+    "metrics": [
+      "Partial Completion（根分數平均）",
+      "Success Rate（根分數等於 1 的比例；三次平均 ± 標準差）",
+      "Pass@3（三次中至少一次成功）",
+      "平均完成時間（分鐘）",
+      "平均答案字數",
+      "7 類錯誤的任務占比與幻覺率（Subset-30）",
+      "Judge 葉節點正確率（對照人評）與 rubric 層級同意度"
+    ],
+    "baselines": [
+      "搜尋增強 LLM：ChatGPT Search、Perplexity Pro Search",
+      "Web agent：OpenAI Operator",
+      "Deep Research 類：HF Open Deep Research（o3）、Claude Research、Grok DeepSearch、Grok DeeperSearch、Perplexity Deep Research、Gemini Deep Research、OpenAI Deep Research",
+      "人類（Subset-30，每題 3 人）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "Judge agent 與人評在葉節點層級幾乎一致。720 次驗證中有 35 筆不一致，經確認其中 27 筆是人類評估者的錯誤。其餘 8 筆為：Verifier 過嚴或過鬆 3 筆，關鍵資訊藏在網頁摺疊區塊、自動抓取拿不到 4 筆，多來源互相矛盾 1 筆。排除人為錯誤與來源矛盾後，真正的 Verifier 錯誤是 7/720。Rubric 層級上，評估者同意全部 15 棵 rubric，其中 2 棵對部分分數的寬嚴提出小建議。",
+      "numbers": "35/720 不一致；27 筆人為錯誤；7/720 judge 錯誤 → 正確率 99.03%；rubric 同意 15/15（2 棵有保留）",
+      "section": "§4.4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "最好的系統是 OpenAI Deep Research，但成功率仍遠低於人類。以 Partial Completion 與 Success Rate 換算，約為人類的 68% 與 52%，也就是作者說的「50–70%」；耗時則不到人類的一半。",
+      "numbers": "OpenAI DR：PC 0.54±0.04、SR 0.28±0.04、Pass@3 0.40、8.40 分鐘、559 字。人類（Subset-30）：PC 0.79±0.01、SR 0.54±0.07、Pass@3 0.83、18.40 分鐘、186 字。最弱的 ChatGPT Search：PC 0.26、SR 0.06。",
+      "section": "§4.2、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "所有系統的部分完成度都遠高於完全成功率：系統往往做對一部分，卻很少把所有 critical 條件一次湊齊。這是區分「部分分」與「成功」兩個指標的實證理由。",
+      "numbers": "Gemini DR PC 0.45 對 SR 0.18；Perplexity DR 0.42 對 0.15；Claude Research 0.32 對 0.10；ChatGPT Search 0.26 對 0.06；OpenAI DR 0.54 對 0.28",
+      "section": "§4.2、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "多次試驗與較長的推論時間都能提高成功機率。每個系統的 Pass@3 都高於單次 SR；同一家族中跑得較久的版本 PC 較高。",
+      "numbers": "SR→Pass@3：Grok DeepSearch 0.18→0.36、Grok DeeperSearch 0.27→0.40、OpenAI DR 0.28→0.40、Gemini DR 0.18→0.30。同家族：Grok DeepSearch 2.58 分鐘 PC 0.40 對 DeeperSearch 5.72 分鐘 PC 0.52；Perplexity Pro Search 不到 1 分鐘 PC 0.28 對 Perplexity DR 5.67 分鐘 PC 0.42",
+      "section": "§4.2、Figure 3、Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "答案較長並不代表任務完成得較好：寫成長篇報告的系統，分數不比答案精簡的系統高。",
+      "numbers": "Gemini DR 平均 3,357 字、PC 0.45；Grok DeepSearch 1,428 字、PC 0.40；OpenAI DR 559 字、PC 0.54",
+      "section": "§4.2、Table 3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "在明確時變的任務上（相對日期、價格等），多數系統表現較差；擅長直接操作即時網站的 Operator 與人類，在這個子集上持平或較好。作者據此主張要把網頁瀏覽整合進 agentic search。",
+      "numbers": "57 題明確時變；各系統的分數只畫在 Figure 4，正文沒有給數字",
+      "section": "§4.2、Figure 4",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "幻覺在所有系統都很普遍。最好的系統仍有近四分之一的任務出現無效或不支撐的引用，其他系統至少一半。人類沒有捏造 URL，也沒有漏項；人類的主要錯誤是 Criteria Violation。",
+      "numbers": "幻覺率：OpenAI DR 23%（Subset-30，每系統每題一份答案，約 7/30）；其餘系統 ≥50%",
+      "section": "§4.3、App F.2、Figure 5",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "任務涵蓋有限：排除了模糊或高度主觀的查詢，以及影片、非英文網站、需要登入的網站、答案變動極快的任務。",
+    "歸因採 URL 制，前提是引用網頁的內容真實可信，不評估來源可信度；並假設關鍵資訊能歸因到單一網頁。",
+    "擷取與驗證依賴 LLM（o4-mini），可能出錯；作者以多階段人工驗證與人評來緩解。",
+    "受測系統幾乎都是閉源黑箱，無法分析行為差異的成因，也無法估算 token 成本，只能用時間與字數當效率的代理指標。",
+    "網頁中摺疊或動態載入的內容，自動抓取拿不到，會造成歸因誤判（人評扣除人為錯誤後的 8 筆不一致中占 4 筆，也就是 7 筆 judge 錯誤中的 4 筆）。",
+    "網站會變動，任務的難度與可解性可能隨時間改變，需要長期維護與替換任務（App C.4）。",
+    "rubric 式評估若被大量拿去當 RL 獎勵，可能對 benchmark 過擬合並放大 rubric 本身的偏差；因此保留私有測試集，也不公開腳本生成管線（App B）。",
+    "sequential 目前只支援「前段失敗則短路後段」這一種邏輯，其他相依形式留給未來（§3.3 註腳）。"
+  ],
+  "limitations_observed": [
+    "99.03% 是葉節點層級的正確率，論文沒有報任務層級（根分數或 Success Rate）的人機一致率，而 T8 真正要用的是後者。平均每題約 34 個葉節點，若葉節點錯誤獨立、錯率 1%，粗估約 29% 的題目至少錯一個葉節點（1−0.99^34）。錯的若落在 critical 路徑上，就會直接翻轉成功與否。作者拿這個數字和 Online-Mind2Web 自動評審「通常低於 90%」相比，但後者判的是整題成敗（Table 1 列為短任務、LLM-as-a-Judge），粒度很可能不同，不宜直接比較。",
+    "Judge 人評的樣本偏小題，裁決也不獨立。720 次驗證分給 30 份答案，平均每份只有 24 個葉節點，低於全集平均 34，也遠低於最大的 357；抽樣時又排除了全失敗的答案。評估者只有 1 位，沒有評估者間一致度。35 筆不一致中有 27 筆被判為「人為錯誤」，裁決者是 judge 開發方自己的人，有球員兼裁判之嫌，確認偏誤可能讓 99% 偏高。",
+    "「達到人類 50–70%」拿不同題目集相比：agent 的數字來自 120 題 test，人類的只來自 Subset-30。換算方式是 0.54/0.79≈68%、0.28/0.54≈52%，論文沒有報 agent 在 Subset-30 上的分數。人類的 Pass@3 是三個不同的人各做一次，agent 的 Pass@3 是同一系統重跑三次，兩者語意不同，並列在同一欄容易誤讀。人類「花兩倍時間」的比較也有落差：人類找到路線後超過 1 小時可以放棄，而部分系統的時間只在 Subset-30 上人工計時。",
+    "多次試驗的可靠性度量不完整。已經跑了 3 次，卻只報平均、標準差與 Pass@3，沒有報 pass^3（三次都成功），而後者才是使用者在意的穩定度；從 Table 3 也推不出來。± 是三次之間的標準差，不是以題目為單位的信賴區間。Grok DeeperSearch 對 OpenAI DR 的 PC 是 0.52±0.02 對 0.54±0.04、SR 是 0.27 對 0.28，都在誤差內，但論文仍把 OpenAI DR 稱為最佳，沒有做顯著性檢定。",
+    "Judge 的產生與調校過程可能偏向特定系統。自我除錯時預設拿 OpenAI Deep Research 的答案餵 Extractor，第二階段人工修正也用受測系統的真實答案調腳本；人評用的 held-out 答案來自同一批系統，所以沒有測到 judge 對新答案風格（新系統、新格式）的泛化。Judge 用的是 OpenAI 的 o4-mini，評的是 OpenAI 自家系統，排名第一的也正是它，論文沒有檢查自我偏好，也沒有換 judge 模型做敏感度分析。",
+    "Partial Completion 的聚合設計會失真。Critical 節點不進平均，所以「閘門全過、non-critical 全錯」和「卡在第一道閘門」一樣是 0 分，漸進進展反而看不出來。同一層的子節點不論子樹大小或難度一律等權。跨題平均時，4 個節點的 rubric 和 603 個節點的 rubric 權重也相同。Critical 與否由 rubric 作者依「對使用者有沒有用」主觀決定；人評裡就有 2 棵 rubric 被建議調整部分分數的寬嚴，可見這個判斷並不穩定，但論文沒有量測它對排名的敏感度。",
+    "測試集隔離的前提在發表後就失效了。官方 README 記載 2025/10/23 起 dev 與 test 的評估腳本全部公開（https://raw.githubusercontent.com/OSU-NLP-Group/Mind2Web-2/main/README.md）。論文 App B 以「避免資料污染、避免被拿去當 RL 獎勵」為由保留私有測試集，這個理由從那天起不再成立，之後在該 benchmark 上的高分要考慮被刻意針對的可能。Hugging Face 資料集頁也提到 2025-10 把寫死的時間範圍改成相對時間，任務定義已經改動，新的分數不宜與論文的 Table 3 直接比較。",
+    "收題規則與結論有張力。收題時排除了要點擊、展開或捲動才看得到的動態內容（因為 judge 驗不了），但作者又用時變任務的結果主張「即時網站互動很重要」。真正需要重度互動的任務在收題時就被系統性排除，所以 benchmark 很可能低估了瀏覽能力的差距。時變子集的結論只有 Figure 4 的圖，沒有數字、沒有檢定，也沒有控制題目難度等混淆因素。",
+    "錯誤分析與幻覺率的樣本很小：每個系統每題只抽一份答案，30 題中 OpenAI DR 的 23% 約是 7 題，信賴區間很寬；「其他系統 ≥50%」也沒有逐一給數字。",
+    "放到對話完成框架外推時要小心：受測系統的系統提示明確禁止反問，任務也是單輪的，所以這套判準沒有處理多輪澄清、使用者中途改需求、對話狀態等情境；評分只看最終答案，不看軌跡，也就無法把分數歸因到過程中的哪一步。"
+  ],
+  "framework_role": "T8 的核心參考：給出開放式、長答案任務的「成功判準」與部分分數的完整定義。成功是 rubric 樹根分數等於 1，部分完成度就是根分數本身；聚合採 gate-then-average 遞迴規則，加上 sequential 短路；多次試驗用平均±標準差與 Pass@3；時間與字數作為效率旁證。對本框架可以直接借用的做法有：把 T1 對齊出的使用者目標拆成 rubric 樹；硬性約束（預算、必要欄位、必須附來源）設為 critical 閘門，可部分完成的子目標設為 non-critical；用固定分母防止少列項目拉高平均；用短路節省評審費用。它同時是 T7 的 agent-as-a-judge 實作範例：LLM 生成腳本、人工兩階段修正，再以人評量葉節點正確率。它不涵蓋多輪對話、使用者回饋與軌跡層級的評分，這些要靠其他節點的文獻補。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有記載部署或產品用途。官方頁面（https://osu-nlp-group.github.io/Mind2Web-2/）與 repo 只記載 NeurIPS 2025 Datasets & Benchmarks Track 接受、開放 leaderboard 投稿，以及 Amazon AGI 的共同作者與贊助、Hugging Face 與 Grok 團隊協助跑評測。這些屬於學術 benchmark 的參與，不算產品或商用採納。本次 WebSearch 額度已用完，沒能進一步搜尋有沒有廠商在官方 model card 中回報 Mind2Web 2 分數，因此不做推測。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/OSU-NLP-Group/Mind2Web-2（MIT；含評估工具包、run_eval.py、網頁快取工具；論文說腳本生成管線不公開）",
+    "data": "任務與評估腳本放在 Hugging Face osunlp/Mind2Web-2（CC-BY-4.0，下載前要同意分享聯絡資訊）。README 記載 2025/07/14 公開 dev 集腳本，2025/10/23 起 dev 與 test 的評估腳本全部公開。受測系統多為閉源 web UI，答案收集於 2025 年 4–6 月，加上網頁會變動，論文的 Table 3 無法原樣重現；judge 依賴 OpenAI API（o4-mini）。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它把「長程、開放式、時變答案的任務算不算成功」做成可執行的判準：rubric 樹、critical 閘門加平均、sequential 短路、固定分母、以根分數等於 1 定義成功，程式碼公開，並有人評量過 judge 正確率，正是 T8「任務成功的判準」子領域的必讀範例；但任務層級一致率與 pass^k 的缺口要自己補。",
+  "related": [
+    "2410.10934",
+    "2504.01848",
+    "2504.12516",
+    "2504.01382",
+    "2407.15711",
+    "2406.12373",
+    "2503.07919",
+    "2501.07572"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

@@ -1,0 +1,167 @@
+{
+  "id": "2502.06193",
+  "title": "Can LLMs Replace Human Evaluators? An Empirical Study of LLM-as-a-Judge in Software Engineering",
+  "topic": "T7",
+  "subarea": "LLM/agent-as-judge 與評估可靠性",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "在程式碼翻譯、程式碼生成、程式碼摘要三個 SE 任務上，各取 50 題、每題 3 個開源 code LLM 的回應共 450 筆，由兩位評審打分後，拿 5 種傳統指標、2 種 embedding 法、2 種機率法、3 種 output-based 設定（含 G-Eval、BatchEval）與 2 個評估專用微調模型去跟人評算相關；結論是 judge 的可靠性高度依任務而定（翻譯接近人類、生成與傳統指標打平、摘要全面輸給傳統指標），成對比較則準確率低、對調位置後判決大量翻轉。",
+  "problem": "SE 任務的產出評估卡在兩頭：Pass@k 要有完整單元測試與執行環境，也評不了可讀性等非功能面向與文字類任務（摘要、code review）；BLEU、CodeBLEU 等只看詞彙重疊、需要參考答案，結果可疑。NLP 界流行用 LLM 當評審（LLM-as-a-judge），宣稱比傳統指標更接近人類且不需參考答案，但既有的後設評估 benchmark 以 NLP 為主，程式題少且簡單，所以沒人知道這些 judge 在真實、較難的 SE 指令與回應上到底跟人類對得多準。這決定了能不能用 judge 取代人評來挑模型、做大規模評估。",
+  "core_idea": "不提新方法，而是做一份受控的後設評估：自建一個有人工分數的 SE 資料集（每個輸入輸出型態各一個任務：Code→Code 翻譯、Text→Code 生成、Code→Text 摘要），再把 LLM-as-a-judge 依所用的 LLM 特徵分成 embedding-based、probability-based、output-based（再細分無策略、推論策略、評估專用 SFT）三類，全部對同一批回應打分，以 Spearman/Pearson/Kendall 相關衡量個別評分與人評的一致性、以 Accuracy 與位置對調後的 Agreement 衡量成對比較，並比較各類方法彼此的相關與分數分布，藉此回答「哪一類 judge、在哪個任務上能取代人評」。",
+  "method": {
+    "任務與原始資料": "程式碼翻譯取 CodeTransOcean 的 MultilingualTrans 子集（Rosetta Code，8 種語言，測試集平均 491 token）；程式碼摘要取 CodeXGLUE code-to-text（CodeSearchNet 過濾版，以 docstring 當參考摘要）；程式碼生成取 ComplexCodeEval（GitHub 專案程式碼，附函式相依、時間戳記、單元測試）。只用測試集；語言限 Java、Python、C、C++（配合評審專長）；以 tiktoken o200k_base 計長度，濾掉過長的指令與參考答案（論文寫指令／回應／判決為 1536／1536／1024 token；重現套件程式註解則寫 code-code 1536+1536+1024、text-code 1024+2048+1024、code-text 2048+1024+1024，總上下文 4096）。每任務抽 50 題，共 150 題（程式註解說依語言群按比例抽）。",
+    "資料修補": "預實驗發現 CodeXGLUE 很多參考摘要是錯的，改成要求參考摘要至少 15 token、重新抽題並逐題人工檢查。ComplexCodeEval 只給相依的名稱，模型寫不出可解讀的程式碼、人評無從評起，所以改抽相依數 ≤5 的題目，並用 GPT-4o（2024-08-06）從參考答案抽出函式簽名、為每個相依產生一句說明，再人工確認說明沒有洩漏參考答案的其他資訊。",
+    "受評回應產生": "12 個 code LLM（7 個家族）：CodeLlama-Instruct 7/13/34B、DeepSeek-Coder 1.3/6.7/33B、MagiCoder-S-DS 6.7B、Codestral-v0.1 22B、DeepSeek-Coder-V2-Lite 16B、CodeGeeX4-ALL 9.4B、Qwen2.5-Coder 1.5/7B，用 vLLM 在 4×A100-40GB 上跑。每題隨機挑 3 個模型各回一次得 A、B、C；最多生成 3072 token。提供的上下文：翻譯與摘要給原始程式碼，生成給簽名、描述、相依說明。每任務 150 筆回應，全部 450 筆。",
+    "人評協定": "每任務設計兩個面向：一個看回應與指令的對齊（例如摘要的 Consistency with Code、翻譯的 Consistency with Source），一個看回應本身品質（例如翻譯的 Readability & Idiomatic Usage、摘要的 Readability），每個面向都寫了 1–5 每一級的文字準則（5＝近乎完美、4/3＝有小／大問題但仍有意義、2/1＝實際上無用）。兩位熟悉這些語言的評審對 450 筆都打分；評審看得到指令、參考答案與回應，先給兩個面向分數，再給一個整體分（不必等於兩面向平均）。最終人評分數＝兩位評審整體分的平均。評審間一致性（翻譯／生成／摘要）：Spearman 83.07／75.42／74.20、Pearson 85.86／79.70／73.74、Kendall 72.26／63.40／62.57。重現套件顯示人評表單是中文版（0_human_proc.py 的 template_cn、intro_cn）。",
+    "成對比較資料": "每題由 A、B、C 組 (A,B)、(A,C)、(B,C) 三對，再加上對調順序的 (B,A)、(C,A)、(C,B)，每任務 300 對、共 900 對。人評標準答案：兩回應最終人評分數差的絕對值 <0.5 判平手（此門檻讓每任務約三分之一為平手），否則分數高者勝。",
+    "傳統指標": "BLEU（1–4-gram 修正精確率＋長度懲罰）、ROUGE-L（LCS 的 F1）、METEOR（F3＋碎片懲罰）、ChrF++（字元 6-gram 與詞 2-gram 的 F2 平均）、CrystalBLEU（先移除語料中最常見的 n-gram 再算 BLEU，語料用該任務測試集的所有指令與參考答案）。前四者用 Hugging Face Evaluate，最後一個用 CrystalBLEU 套件；可替換 tokenizer 的一律換成 tiktoken o200k_base。都只用回應與參考答案，不用指令。",
+    "Embedding 類": "以 UniXcoder 當編碼器（可同時處理程式碼與文字）。BERTScore：回應與參考的逐 token 餘弦相似，IDF 加權，取 F1。MoverScore：以 IDF 加權的 n-gram 表示建成本矩陣，算 Word Mover's Distance 的最小成本流。",
+    "機率類": "用 OpenAI davinci-002（因為較新的 OpenAI 模型只回傳新生成 token 的機率、不回傳 prompt token 的機率）。GPTScore：論文寫的是 log p(tgt|src,a)，但官方程式碼用 log p(tgt|ref,a) 與 log p(ref|tgt,a) 的調和平均，本文折衷為兩個條件都加上 src，即 log p(tgt|ref,src,a) 與 log p(ref|tgt,src,a) 的調和平均；a 為與人評相同的評估面向。FFLM：免參考，融合先驗 P(tgt)、後驗 P(tgt|src)、前綴機率 P(tgt|tgt:src)（把 tgt 接在 src 前），並給高 loss token 較大權重。",
+    "Output-based 類（除特別註明皆用 GPT-4o）": "提示只放指令 src、回應 tgt 與評估面向（與人評相同的準則），不放參考答案；成對比較則兩個回應都放進提示。Vanilla：greedy（temperature 0），先逐面向分析與打分再給整體分；模型為本地 DeepSeek-Coder-V2-Lite，以及 API 的 DeepSeek-V2.5 與 GPT-4o；成對時先逐面向比較再下判決。重現套件的翻譯 Vanilla 提示：系統提示為資深軟體開發者；要求只評譯文、不評原始碼品質、忽略譯文周圍的說明或註解；列出兩個面向的 1–5 準則；每個面向先簡述優缺點再給分，最後以『Overall: X/5』格式給整體分（可為平均或整體判斷）。G-Eval：先讓 LLM 產生評估步驟並嵌入提示，再以 temperature 1.0 取樣 20 次、平均分數；照原作法要求先輸出分數、生成上限 20 token，沒有分數的判決丟掉；成對時把勝／負／平手記為 1／−1／0 取平均，絕對值 <0.7 判平手（同樣是讓約三分之一為平手調出來的）。BatchEval：多輪批次評分，每輪把所有回應分批、同一批內刻意混合不同分數的回應讓模型學到較不偏的分數分布；temperature 0.2、batch size 10、5 輪。",
+    "評估專用 SFT 組": "Auto-J（13B，基底 Llama2-13B-Chat）與 Prometheus-v2-BGB-8x7B（基底 Mixtral-8x7B-Instruct），各自與其基底模型用同一個預設模板、本地 greedy（temperature 0）。Auto-J 模板沒有放面向的位置，所以 Auto-J 與 Llama2 不給面向；重現套件中此模板要求寫批評後以『[[rating]]』給 1–10 分。Prometheus 模板則是 Feedback＋[RESULT] 1–5 分，附上面向準則與整體分。",
+    "判決擷取": "只取最終判決（分數或成對結果），丟棄解釋。G-Eval 用其官方程式碼擷取；其餘以正規表示式比對『Overall: X』『[[X]]』等（X 為非負分數）或『First』『Second』『Draw』。找不到有效判決、或分數大於 10 視為無效，個別評分給 −1 分、成對判為平手，當作懲罰。",
+    "後設評估": "個別評分：每個方法的分數與最終人評分數算 Spearman ρ、Pearson R、Kendall τ（皆 ×100），並檢查 p<0.05。成對比較：Accuracy（與人評標籤一致的比例，三分類，隨機猜為 33.33）與 Agreement（同一對回應對調位置後判決是否相同）。RQ2 另算：各類方法與傳統指標、其他類、同類方法間的最大 Spearman（ρconv、ρother、ρinner），output-based 依模型大小分 Small（<50B：SFT 組與 DSC2-Lite）與 Large（>100B：DeepSeek-V2.5、GPT-4o 及以其為底的 G-Eval、BatchEval）比組內組間相關；所有分數縮放到 [0,1] 後用 KDE 畫分布，看是否單峰、峰值高度與位置。",
+    "照著重做的步驟": "(1) 從三個資料集測試集依語言與長度過濾、各抽 50 題並修補參考與相依說明；(2) 每題隨機選 3 個 code LLM 生成回應；(3) 兩位評審依兩面向＋整體分打 1–5 分，取整體分平均；(4) 由分數差 <0.5 規則衍生 900 對成對標籤；(5) 跑上述 14 種自動方法（個別評分）與 7 種 output-based 設定（成對）；(6) 擷取判決、無效者給懲罰值；(7) 算 ρ/R/τ、Accuracy、Agreement、類別間相關與 KDE 分布。提示詞、準則、分數與程式碼都在重現套件。"
+  },
+  "assumptions": [
+    "兩位評審整體分的平均可當作標準答案，且評審間一致性（Pearson 73.74–85.86）足以作為『人類水準』的上限參照。",
+    "與人評分數的相關係數（ρ、R、τ）足以代表 judge 的可靠性；分數尺度不同（1–5、1–10、[0,1]、對數機率）不影響以排序或線性相關比較。",
+    "每任務 50 題 × 3 個回應、限四種語言、限長度、再經人工修補的樣本，能代表『真實 SE 情境』。",
+    "人與 LLM 使用相同的評估面向與準則即可相比；即使人評看得到參考答案而 output-based judge 看不到。",
+    "成對比較的標準答案可由個別分數差與固定門檻（0.5）推導，不需另外請人做成對判斷。",
+    "受評模型（≤34B 的開源 code LLM）產生的回應品質分布，足以代表 judge 在實務上會遇到的對象。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "CodeTransOcean MultilingualTrans（程式碼翻譯，50 題、150 筆回應、300 對）",
+      "ComplexCodeEval（程式碼生成，50 題、150 筆回應、300 對；相依說明經 GPT-4o 補寫）",
+      "CodeXGLUE code-to-text（程式碼摘要，50 題、150 筆回應、300 對）",
+      "本文自建的人評後設評估集：450 筆（指令、回應、人評分數）與 900 個成對比較"
+    ],
+    "metrics": [
+      "Spearman ρ、Pearson R、Kendall τ（與人評分數，×100，檢查 p<0.05）",
+      "成對比較 Accuracy（三分類：前者勝／後者勝／平手）",
+      "位置對調 Agreement（同一對回應交換順序後判決是否一致）",
+      "類別間最大 Spearman：ρconv、ρother、ρinner；Large/Small 模型組的 ρmin、ρmax",
+      "分數分布（縮放到 [0,1] 後的 KDE、平均與變異數）"
+    ],
+    "baselines": [
+      "傳統指標：BLEU、ROUGE-L、METEOR、ChrF++、CrystalBLEU",
+      "Embedding 類：BERTScore、MoverScore（UniXcoder 編碼器）",
+      "機率類：GPTScore、FFLM（davinci-002）",
+      "Output-based Vanilla：DeepSeek-Coder-V2-Lite、DeepSeek-V2.5、GPT-4o",
+      "Output-based 推論策略：G-Eval、BatchEval（GPT-4o）",
+      "評估專用 SFT：Auto-J 對照基底 Llama2-13B-Chat、Prometheus-v2-BGB-8x7B 對照基底 Mixtral-8x7B-Instruct",
+      "參照：兩位評審之間的一致性；成對比較的隨機猜測（33.33）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "程式碼翻譯上，以大型通用 LLM 做 output-based 評分最接近人評，遠勝所有傳統指標；作者稱為接近人類水準。",
+      "numbers": "BatchEval ρ73.67／R81.32／τ59.80；GPT-4o Vanilla R79.11；G-Eval R77.14；DeepSeek-V2.5 R70.27。最佳傳統指標 ChrF++ 只有 R34.23、ρ31.30。兩位評審之間 R85.86。",
+      "section": "§5.1、Table 3、摘要",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "程式碼生成上，LLM judge 只和傳統指標打平；只有 DeepSeek-V2.5 在 Pearson 與 Kendall 上略勝最佳傳統指標 METEOR，GPT-4o Vanilla 反而輸。作者認為因為 ComplexCodeEval 重在正確呼叫專案相依，詞彙層級比對參考答案就有訊號，而 LLM 不懂這些相依。",
+      "numbers": "DeepSeek-V2.5 ρ66.39／R68.51／τ54.74；METEOR ρ67.11／R65.55／τ49.66；ChrF++ R64.92；GPT-4o Vanilla R57.02；G-Eval R63.05；BatchEval R63.04。",
+      "section": "§5.1、Table 3、Finding 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "程式碼摘要上，所有 LLM judge 全面輸給傳統指標，多個方法甚至與人評負相關；作者歸因於受評 LLM 常逐步解釋程式碼而非精簡摘要，judge 抓不出這個問題。",
+      "numbers": "LLM 類最佳為 G-Eval R26.19；ROUGE-L ρ48.45／R47.01、ChrF++ R44.65；GPTScore R−15.04、DSC2-Lite R−17.47、Prometheus R−17.14、Llama2 R−15.81。",
+      "section": "§5.1、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "在 GPT-4o 上加推論策略（G-Eval 的多次取樣、BatchEval 的批次多輪）對個別評分只帶來很小的相關提升，且增加成本；greedy 單次推論配大模型就是可行方案。",
+      "numbers": "相對 GPT-4o Vanilla 的最大 ΔR：翻譯 +2.21（BatchEval）、生成 +6.03（G-Eval）、摘要 +3.04（G-Eval）。",
+      "section": "§5.1、Finding 2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "為 NLP 評估微調的 judge（Auto-J、Prometheus 2）在 SE 任務上表現差，雖多數情況勝過其基底模型，但遠不及大型通用模型；作者推測原因是參數量小與 NLP 訓練資料缺乏困難的 SE 題目。",
+      "numbers": "Auto-J R14.43／38.92／−4.92；Prometheus R39.25／40.33／−17.14（翻譯／生成／摘要）。相對基底的提升為 R +5.18 到 +16.03 點（論文寫成百分比）；但摘要上 Prometheus（−17.14）比基底 Mixtral（−8.98）更差。",
+      "section": "§5.1、Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "同類方法彼此高度相關、跨類低相關；只有 embedding 類與傳統指標相似。使用大模型的 output-based 方法即使模型與策略不同也彼此高度一致，小模型則連彼此都不一致，而且分數分布最像人評（峰值落在 0.6–0.8）。",
+      "numbers": "Large-Large ρ：翻譯 83.04–90.64、生成 68.63–88.25、摘要 31.50–79.43；Small-Small ρmax 24.25／27.44／23.44；Small-Large ρmax 48.92／37.84／48.21。Embedding 類 ρconv 81.45／79.78／57.07；各類 ρother 皆 <50。",
+      "section": "§5.2、Table 4、Table 5、Fig. 2、Finding 3–4",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "成對比較普遍不可靠：準確率低，而準確率最高的方法在對調兩個回應的位置後大多改判（Agreement 遠低於隨機的 33.33）；最一致的 SFT 方法準確率幾近隨機。推論策略在成對比較上的幫助比個別評分大，但沒解決不一致。作者因此建議現階段優先用個別評分。",
+      "numbers": "最佳 Accuracy：翻譯 BatchEval 65.33、G-Eval 64.67；生成 G-Eval 54.67；摘要 Prometheus 42.00。Agreement：GPT-4o 13.33／13.33／16.00、DeepSeek-V2.5 10.67／16.67／16.67、G-Eval 17.33／15.33、BatchEval 21.33／24.00（翻譯／生成）；Llama2 Agreement 78.67 但 Accuracy 36.00。BatchEval 相對 GPT-4o 在翻譯 Accuracy +8，對比個別評分 ρ 只 +3。",
+      "section": "§5.3、Table 6、Finding 5",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "個案顯示冗長偏誤：GPT-4o 把一段逐步列出識別字與內部流程、違反『精簡摘要功能』要求的摘要評為滿分；另一個翻譯個案中 GPT-4o 正確抓到譯文沒保留自訂種子亂數的原意（給 3/5），但漏看亂數範圍差 1 的細節。",
+      "numbers": "摘要個案 5/5（人評理想摘要只需一句）；翻譯個案 3/5。",
+      "section": "§6.1、Fig. 3",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "目前沒有 SE 專用的多任務人類偏好訓練集，所以無法測試在 SE 資料上微調的 judge；評估專用 SFT 模型的弱勢可能來自參數量（13B、47B）以及 NLP 訓練與 SE 推論之間的落差。",
+    "G-Eval 為了取分數要求先輸出分數，削弱 CoT 的作用，若要完整解釋則推論成本大增；BatchEval 的多輪批次評分增加 token 用量與成本。",
+    "Embedding 與機率類需要模型內部狀態，多數前沿 API 不提供，限制可用的模型；機率類只能用 davinci-002，因為之後的 OpenAI 模型不回傳 prompt token 機率。",
+    "摘要任務的失敗反映任務定義與 LLM 詮釋的落差：CodeXGLUE 期待 docstring 式精簡摘要，LLM 受冗長偏誤影響預設給詳細解釋。",
+    "非 SFT 方法跨任務用同一種提示格式與推論策略，沒有任務特化，也沒用到程式碼特有的結構。",
+    "LLM judge 只依預先定義的準則、且是單一實例；人類評審會比較多份回應找共通優缺點，也會討論達成共識。",
+    "資料本身有問題而需修補：CodeXGLUE 很多參考摘要是錯的；ComplexCodeEval 只有相依名稱，需用 GPT-4o 補說明並限縮到 ≤5 個相依。",
+    "GPTScore 論文敘述與官方程式碼的計分方式不一致，本文自行折衷。"
+  ],
+  "limitations_observed": [
+    "資訊不對等混淆了主要比較：人評看得到參考答案，傳統指標與 embedding 類也用參考答案，唯獨 output-based judge 只拿指令、回應與面向。摘要任務的參考答案是精簡 docstring，評審很可能拿它當尺去扣冗長回應的分，而 judge 沒有這把尺；因此『LLM judge 在摘要上全面輸給傳統指標』混了『有沒有參考答案』與『judge 能力』兩個因素，文中沒有做『把參考答案給 GPT-4o』的消融來分開。",
+    "摘要任務的人評分數全距受限，會壓低所有方法的相關：我從重現套件的 test-0-human.jsonl 算出摘要的人評平均 3.91、標準差 0.72、最低 2.25、沒有任何一筆 ≤2；翻譯與生成的標準差是 1.08 與 1.14、各有 19 與 20 筆 ≤2。作者只把摘要的失敗歸因於冗長偏誤，沒提這個統計上的原因；連最好的傳統指標也只有 R47 也符合這個解釋。",
+    "『接近人類』的比較基準偏袒 judge：judge 是對兩位評審的平均分數算相關，人類參照卻是兩位評審彼此的相關（R85.86／79.70／73.74）；對兩人平均算相關天生比對單一評審高，公平比法應該是 judge 對單一評審、或留一法。即使照論文的計算方式，生成任務 DeepSeek-V2.5 的 R68.51 也比人際 R79.70 低 11 點，稱近人類並不成立。",
+    "樣本小、不獨立，且沒有方法間的顯著性檢定：每任務 150 筆來自 50 題（同題 3 筆共享指令），n=150、R≈0.8 的 95% 信賴區間約 ±0.06，BatchEval 81.32、GPT-4o 79.11、G-Eval 77.14 的差距都在誤差內；論文只檢查每個係數對 0 的 p 值，所以『推論策略只帶來邊際改善』更準確的說法是『這個樣本量測不出差異』。",
+    "文字與表格互相矛盾：§5.3 說程式碼生成上連最好的方法也難達 50 Accuracy，但 Table 6 的 G-Eval 為 54.67、BatchEval 為 52.67。另外摘要任務的成對比較最佳是小型 SFT 模型 Prometheus（42.00），與『大模型最好』的結論相反，文中沒有討論。",
+    "摘要（abstract）的敘事挑了比較對象：宣稱 output-based 在生成上勝過 ChrF++（R64.92），但生成任務最好的傳統指標是 METEOR（ρ67.11、R65.55），Spearman 上 METEOR 甚至高於最好的 LLM judge（DeepSeek-V2.5 ρ66.39）。SFT 相對基底的提升寫成『5.18% 到 16.03%』，其實是 R 的絕對點數，而且挑的是有進步的格子，摘要上 Prometheus 反而退步 8 點。",
+    "類別層級的結論外推過度：機率類只用了 davinci-002 一個舊模型、embedding 類只用 UniXcoder 一個編碼器，就斷言整類在 SE 評估上『不實用』；能回傳 logprob 的開源大模型（例如 70B 級）根本沒測。SFT 組也只測兩個 2023–2024 年的 NLP judge，而 Auto-J 的模板用 1–10 分又不給評估面向，等於少了人評有的準則，並不是公平條件下的比較。",
+    "無效判決給 −1 分會製造離群值：小模型格式錯誤時分數被設為 −1，對 Pearson 影響特別大；論文沒回報各方法的無效比例，所以 SFT 組與 DSC2-Lite 的負相關（如摘要 −17.47）有多少來自解析失敗、多少來自判斷能力，無從得知。",
+    "成對比較的門檻在測試資料上調過：人評標籤的平手門檻 0.5 與 G-Eval 的平手門檻 0.7 都是『讓約三分之一成為平手』調出來的，等於看過標籤分布；Vanilla 與 SFT 沒有這種校準。因此 RQ3 裡推論策略『提升較大』（BatchEval +8 Accuracy）有一部分可能來自平手率校準，而不是策略本身。",
+    "『個別評分優於成對比較』的建議缺同尺度對照：沒把各方法的個別分數用同樣 0.5 差距規則轉成成對標籤、再算 Accuracy 來比；也沒回報位置偏差偏向哪一側。GPT-4o 的 Agreement 13.33 遠低於隨機，表示對調後系統性改判，這是可用『兩種順序各判一次再合併』緩解的已知問題（本文自己引用了 Split and Merge），卻沒有實測緩解後的結果。",
+    "評審與受評的關係沒控制：DeepSeek-Coder-V2-Lite 同時是受評模型（Table 1）與 Vanilla judge，有自我偏好的可能；GPT-4o 參與了生成任務的資料建構（抽簽名、寫相依說明）又是主要 judge。受評回應全來自 ≤34B 的開源 code LLM，而最佳 judge 是 >100B 的前沿模型，屬『強評弱』；當受評對象與 judge 同級（評前沿 agent 時的常態），結論不一定成立。",
+    "協定細節與重現套件不一致：論文說最終分數是兩位評審整體分的平均、準則是 1–5 整數，但 test-0-human.jsonl 中翻譯／生成／摘要各有 72／73／89 筆（共 150）落在 .25 或 .75，表示單一評審的整體分可給半分，論文沒有交代；長度上限在程式註解中依任務不同，與論文統一寫的 1536／1536／1024 不符；人評表單是中文，judge 提示是英文。",
+    "只評單輪、單一產出物：沒有多輪對話、工具呼叫、執行軌跡或互動式評估，也沒用執行結果（例如單元測試）當第三方參照來檢驗人評本身；對 agent 評估的直接外推有限。"
+  ],
+  "framework_role": "屬於 T7 的『judge 可靠性驗證』一類參考：示範在把 LLM judge 用到新任務前，先建一個小型雙人評分集（每任務 150 筆、面向分＋整體分），以 ρ/R/τ 對照人際一致性與傳統指標，再用位置對調量成對判決的一致性、看分數分布是否像人評。可直接轉成本框架 T7 的檢查清單：judge 可信度依任務而定，不能一套提示跨任務套用；成對比較有嚴重位置偏差，要雙向判；小心冗長偏誤；大模型 judge 之間高度一致不等於正確（摘要上 Large-Large 最高仍有 ρ79.43，卻都與人評脫節）。若 T8 的任務完成分數要由 LLM judge 給，這篇提供的是『先校準再信任』的協定，而不是現成評分器。本篇只評單輪程式碼與文字產出，不涉及 agent 軌跡、多輪對話、使用者模擬器或修正紀錄，因此沒有任何一條邊真的被處理。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "論文本身沒有宣稱任何部署或產品採用；只釋出重現套件 https://github.com/BackOnTruck/llm-judge-empirical（README 標明為 ISSTA 2025 論文配套，未標授權，最後推送 2024-12-20）。這是研究資源，不算採納。",
+      "本次未能以 WebSearch 查產品端採用（本工作階段的搜尋額度已用盡），沒有經打開確認的官方文件、產品頁或 model card 可列。"
+    ],
+    "assessment": "未見證據。Semantic Scholar 顯示約 151 次引用（influential 11），發表於 Proc. ACM Softw. Eng.（ISSTA 2025），但這是學術影響力，不是商用採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/BackOnTruck/llm-judge-empirical",
+    "data": "公開：重現套件內有三個任務的受評回應（test-D/E-responded.jsonl）、人評最終分數（test-0-human.jsonl，只有兩位評審的平均，未見個別評審的原始分數與面向分數）、每個自動方法的個別評分與成對比較輸出、各方法的提示詞與評分準則（config.py 的 CRITERIA、vanilla_prompt.py 等）與相關係數計算腳本。README 未標授權。重跑需付費的 GPT-4o、DeepSeek-V2.5 API，以及已屬舊版 completion 介面的 davinci-002。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "是少數在 SE 任務上以雙人評分做 LLM-as-a-judge 後設評估的研究，任務相依、位置偏差與冗長偏誤的發現可直接轉成 T7 的 judge 校準檢查；但只評單輪程式碼產出、樣本小，且人評與 judge 之間有參考答案的資訊不對等，對 agent 與多輪評估不是必讀。",
+  "related": [
+    "2306.05685",
+    "2303.16634",
+    "2401.00437",
+    "2310.05470",
+    "2405.01535",
+    "2302.04166",
+    "2310.01432",
+    "2310.10076",
+    "2403.09032",
+    "2401.15963",
+    "2402.01383",
+    "2409.10280"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

@@ -1,0 +1,159 @@
+{
+  "id": "2309.11495",
+  "title": "Chain-of-Verification Reduces Hallucination in Large Language Models",
+  "topic": "T5",
+  "subarea": "內在自我修正與口語反思（含批判性研究）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 Chain-of-Verification（CoVe）：同一個 LLM 先寫草稿、再替草稿中的事實規劃驗證問題、在看不到草稿的獨立脈絡中逐題回答，最後依答案改寫，不借任何外部工具就降低清單題、閉卷 QA 與傳記長文的事實幻覺。",
+  "problem": "LLM 在罕見（torso／tail）事實上會產生看似合理但錯誤的內容（幻覺），長文生成因 exposure bias 更嚴重；既有對策多半要重新訓練或依賴檢索等外部工具。作者要問的是：只靠同一個模型的「審議」（先查核再改寫），能否在推論期把幻覺降下來、又不犧牲太多正確內容。這對所有需要事實正確性的對話 agent 都重要，因為最終回答通常是長文、而使用者無法逐條查證。",
+  "core_idea": "兩個觀察撐起整個方法：(1) 模型在長文裡答錯的事實，若拆成單一、短小的問題單獨問，常常答得對（Wikidata 上清單實體只有約 17% 正確，但逐一用驗證問題問，約 70% 答對）；(2) 若驗證時模型還看得到自己的草稿，會傾向照抄草稿中的幻覺。因此 CoVe 把「規劃驗證問題」與「回答驗證問題」拆開，並讓回答步驟在不含草稿的脈絡中執行（2-step／factored），最後再把一致的事實留下、不一致的丟掉或修正。",
+  "method": {
+    "整體設定": "只用一個基底 LLM，四個步驟都是對同一模型下不同的 few-shot 提示；不使用檢索、搜尋或其他工具。主實驗基底模型為 Llama 65B（非指令微調），全部用 greedy decoding，各步驟都是 3-shot。",
+    "步驟 1 產生基準回答": "照一般 few-shot 提示由左至右生成，無任何技巧；這一步的輸出同時就是實驗的 baseline（與最終回答直接比較）。傳記任務的提示是『Tell me a bio of <entity>』。",
+    "步驟 2 規劃驗證問題": "輸入為原始問題＋基準回答，few-shot 示範由（回答, 驗證問題）對組成，要求模型對回答中每個事實性主張各產生一個驗證問題；問題不套模板、措辭自由，不必貼近原文（例：把『某戰爭發生於 1846–1848』轉成『這場戰爭何時開始與結束？』）。清單類任務的示範讓問題以逗號分隔清單輸出，方便後續切分。傳記任務因脈絡過長，先把草稿切成句子（passage），每句單獨規劃，每一行輸出為『<句中事實>, <驗證問題>』，一句可能有多個事實。",
+    "步驟 3 執行驗證（四種變體）": {
+      "joint": "規劃與回答合併成一個提示：示範中驗證問題後面直接接答案。只需一次呼叫，但答案會以草稿為條件，容易重複草稿中的幻覺。",
+      "2-step": "規劃（條件於草稿）與回答分成兩個提示；回答提示的脈絡只含驗證問題清單，不含草稿，因此無法直接照抄。",
+      "factored": "把步驟 2 產生的問題清單解析成個別問題，每題一個獨立提示（3-shot 的『Q: 驗證問題 / A: 答案』格式）；既不看草稿，也不看其他問題的答案，可平行批次執行，也能容納更多問題。",
+      "factor+revise": "在 factored 之後多一個顯式交叉比對步驟：每一題一個『cross-check』提示，輸入為原句中的事實＋該題的 Q/A（提示中把 Q/A 說成來自『另一個來源』），few-shot 示範輸出三種標籤之一：CONSISTENT（附一致的事實）、INCONSISTENT、PARTIALLY CONSISTENT（附一致的部分）。之後把一致的事實拼接起來重生回答。只在傳記長文任務上評估。"
+    },
+    "步驟 4 產生最終驗證後回答": "few-shot 提示的脈絡包含原草稿（傳記任務按句切）、以及步驟 3 的所有驗證 Q/A 對，並告訴模型這些 Q/A 來自『另一個來源』；要求模型只根據兩個來源一致的事實合成新答案。若用 factor+revise，再把交叉比對的一致性標籤一併放入。",
+    "驗證問題形式的消融（Table 4，Wiki-Category）": "(a) 規則式問題：對清單中每個元素 X 用固定模板問『X 是否回答了這個問題』；(b) 模型產生的是非題：把事實寫進問題、要求回答是或否；(c) 模型產生的開放式問題（主實驗預設，預期答案是事實本身）。分別搭配 joint 與 factored 執行。",
+    "對照組設定": "Llama 2 70B Chat 以 zero-shot 與 zero-shot＋『Let's think step by step』（CoT）評估；清單類任務額外加一句要求只列答案、以逗號分隔，並用現成的 NER 模型抽出答案做後處理。傳記任務另外引用 Min et al.（FactScore 論文）報告的 InstructGPT、ChatGPT、PerplexityAI 數字。",
+    "重做時必須自己補的部分": "附錄 §8 只給傳記任務的提示模板，且所有示範都是 <person>、<passage about person>、Verification Question 之類的佔位符；各任務、各步驟實際使用的 3-shot 示範內容沒有公開，重做者必須自己撰寫。論文也沒有公開程式碼、呼叫次數或 token 用量。",
+    "呼叫次數的規模（論文未量測，依方法推算形狀）": "joint＝基準 1 次＋規劃兼回答 1 次＋最終 1 次；2-step 多 1 次；factored 每個驗證問題 1 次；傳記任務規劃與最終改寫都按句執行，factor+revise 再對每個問題多 1 次交叉比對。因此成本隨草稿中的事實數線性成長，傳記任務最貴。"
+  },
+  "assumptions": [
+    "基底模型在適當提示下能自己規劃並執行驗證，並把驗證結果整合進改寫（作者在 §3 明說這是關鍵假設）。",
+    "同一模型對單一、短小事實問題的正確率明顯高於它在長文或清單中陳述同一事實的正確率（知識存在於權重中，只是長文生成時沒被正確取出）。",
+    "驗證答案的錯誤與草稿的錯誤不高度相關；前提是回答驗證問題時看不到草稿，否則會複製同一個幻覺。",
+    "評估指標以精確率為主（precision、FactScore），刪掉不確定的主張會被獎勵；方法的收益有相當部分建立在這個評估取向上。",
+    "每個任務都有人寫好的 few-shot 示範（Llama 65B 不是指令微調模型），而且草稿的格式（逗號分隔清單、逐句傳記）便於切分成可獨立驗證的單位。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Wikidata 清單題：用 Wikidata API 自動產生的『哪些 [職業] 出生於 [城市]』問題，56 題，每題約 600 個 gold 實體",
+      "Wiki-Category list：從 QUEST（Malaviya et al. 2023）取不需邏輯運算的類別，前面加『Name some』，55 題，每題約 8 個答案",
+      "MultiSpanQA（閉卷、只取事實型、每個 span 最多 3 token）：418 題",
+      "傳記長文生成：Min et al. 2023 的 FactScore 傳記基準（實體數量論文未說明）"
+    ],
+    "metrics": [
+      "清單題：micro-averaged precision，另報每題平均正確（Pos.）與錯誤／幻覺（Neg.）實體數",
+      "MultiSpanQA：F1、precision、recall",
+      "傳記：FactScore（以 Instruct-Llama『Retrieve → LM + NP』自動事實查核），另報平均事實數；Figure 2 依 head／torso／tail 事實頻率拆開"
+    ],
+    "baselines": [
+      "Llama 65B few-shot（即 CoVe 步驟 1，主要基準）",
+      "Llama 2 70B Chat zero-shot",
+      "Llama 2 70B Chat zero-shot CoT",
+      "InstructGPT、ChatGPT（zero-shot）與 PerplexityAI（檢索式），數字引自 Min et al. 2023，只用於傳記任務",
+      "規則式驗證問題與是非題驗證問題（Table 4 的內部消融）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "CoVe 大幅提高清單題的精確率，主要來自幻覺實體大量減少，但正確實體也跟著變少。",
+      "numbers": "Wikidata（Llama 65B）：precision 0.17（few-shot）→0.29（joint）／0.36（two-step）／0.32（factored）；Neg. 2.95→0.68、Pos. 0.59→0.38（two-step）。Wiki-Category：precision 0.12→0.15（joint）／0.21（two-step）／0.22（factored）。",
+      "section": "§4.3、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "閉卷 MultiSpanQA 上 CoVe 同時提升 precision 與 recall，F1 提升約 23%。",
+      "numbers": "F1 0.39→0.46（joint）→0.48（factored）；precision 0.40→0.50、recall 0.38→0.46（factored）。",
+      "section": "§4.3、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "傳記長文上，加入顯式交叉比對的 factor+revise 帶來最大增益；平均事實數只小幅下降。",
+      "numbers": "FactScore：few-shot 55.9 → joint 60.8 → factored 63.7 → factor+revise 71.4（相對基準 +28%）；平均事實數 16.6→12.3。",
+      "section": "§4.3、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "在做過 factored 與 joint 對照的四個任務上，factored 一律勝過 joint，支持『驗證答案不應看得到草稿』的假設；但在 Wikidata 上 two-step 比 factored 更好。",
+      "numbers": "factored vs joint：Wikidata 0.32 vs 0.29、Wiki-Category 0.22 vs 0.15、MultiSpanQA F1 0.48 vs 0.46、FactScore 63.7 vs 60.8；Wikidata two-step 0.36 為最佳。",
+      "section": "§4.3、Table 1–3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "指令微調與 CoT 都沒有降低幻覺：Llama 2 70B Chat 在所有任務上輸給 few-shot 的 Llama 65B，加 CoT 通常更差。",
+      "numbers": "Wikidata precision：Chat zero-shot 0.12、CoT 0.08、Llama 65B few-shot 0.17；MultiSpanQA F1：0.20／0.17／0.39；FactScore：41.3／41.1／55.9。",
+      "section": "§4.3、Table 1–3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "套上 CoVe 的 Llama 65B 在傳記 FactScore 上超過 InstructGPT、ChatGPT 與檢索式的 PerplexityAI；但在非常罕見的事實上 PerplexityAI 仍勝過 CoVe（CoVe 只在較常見的事實上領先）。",
+      "numbers": "FactScore：CoVe factor+revise 71.4；InstructGPT 41.1、ChatGPT 58.7、PerplexityAI 61.6（後三者引自 Min et al.）。head／torso／tail 的分組數字只在 Figure 2 圖中，正文未列。",
+      "section": "§4.3、Table 3、Figure 2",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "短形式的驗證問題比長文或清單中的同一事實答得更準，這是 CoVe 能運作的根據。",
+      "numbers": "Wikidata：few-shot 基準的清單實體約 17% 正確，但逐一以驗證問題查詢時約 70% 答對（正文只給概數，未說明怎麼判定『答對』）。",
+      "section": "§4.3（Shortform verification questions 段）",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "由模型產生的開放式驗證問題勝過規則式模板問題；是非題只在 factored 下比開放式差，在 joint 下兩者持平。附錄的 ChatGPT 截圖顯示模型傾向同意是非題中陳述的事實，不論對錯。",
+      "numbers": "Wiki-Category precision（joint／factored）：規則式 0.13／0.16；模型產生的是非題 0.15／0.19；模型產生的開放式問題 0.15／0.22。",
+      "section": "§4.3、Table 4、§9 Figure 8",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "CoVe 只是降低、不能完全消除幻覺，仍可能產生錯誤或誤導資訊。",
+    "只處理直接陳述的事實錯誤；推理步驟錯誤、意見中的幻覺等其他形式未涵蓋。",
+    "產生更多 token（驗證過程），計算成本增加，類似 CoT；但若展示給使用者可提升可解釋性。",
+    "改善上限受限於模型本身的能力，特別是『知道自己知道什麼』的能力；沒有探索結合檢索等外部工具（作者視為明顯的延伸方向）。"
+  ],
+  "limitations_observed": [
+    "Table 1 有兩格內部不一致：micro-averaged precision 應等於 Pos.／(Pos.＋Neg.)，Wikidata 全部六列與 Wiki-Category 其中四列都吻合，但 Wiki-Category 的 two-step（0.50／(0.50＋0.52) ≈ 0.49，表中寫 0.21）與 factored（0.52／(0.52＋1.52) ≈ 0.25，表中寫 0.22）對不上。因此 Wiki-Category 這兩列的 Pos.／Neg. 欄不能拿來佐證『召回沒有下降』，至少有一欄是錯的（讀的是 arXiv v2；ACL Findings 2024 版未核對）。",
+    "清單題只報精確率：Wikidata 每題約 600 個 gold 實體，召回率本來就接近零，而 CoVe（two-step）把平均輸出長度從 3.54 個實體砍到 1.06 個，正確實體從 0.59 掉到 0.38（少了約 36%）。一個『只保留模型最有把握的一個答案』的簡單過濾器可能也能拿到類似的精確率，論文沒有做這種 abstention 基準，也沒有報 recall 或任何兼顧數量的指標。",
+    "FactScore 同樣是精確率型指標，而 factor+revise 在設計上就是把被判為 INCONSISTENT 的事實丟掉；平均事實數 16.6→12.3。作者用來說明長度不影響 FactScore 的截斷實驗做在 Llama 2 70B Chat 上（截到前 10 句，41.3→42.7），而且是依位置截斷；CoVe 卻是依把握程度選擇性刪除，被刪的多半是不確定或 tail 事實。位置截斷回答不了『按信心刪除會不會灌高精確率』這個混淆，論文也沒有在 CoVe 本身或 few-shot 基準上排除增益來自刪掉較難事實的可能。",
+    "與 ChatGPT／PerplexityAI 的比較引用的是 Min et al. 的數字，但論文沒說明傳記實體清單有多少、是否與 Min et al. 完全相同；兩邊的平均事實數差距大（CoVe 12.3 vs ChatGPT 34.7、PerplexityAI 40.8），若產出較少事實時被刪的是較沒把握的事實，精確率型指標可能對產出較少的一方有利，這個比較因此不是同條件的對決。",
+    "統計強度不足：Wikidata 56 題、Wiki-Category 55 題，greedy decoding 單次執行，沒有信賴區間或顯著性檢定；Table 4 中 0.13 vs 0.15、0.19 vs 0.22、Table 1 中 0.21 vs 0.22 這類差距在 55 題規模下很可能在雜訊範圍內，但都被當成結論使用。",
+    "變體覆蓋不一致：two-step 只在兩個清單任務做、factor+revise 只在傳記任務做、MultiSpanQA 只有 joint 與 factored。『factor+revise 帶來最大增益』與『two-step 在 Wikidata 最佳』都無法跨任務比較，無從判斷顯式交叉比對在清單或 QA 任務上是否也有效。",
+    "沒有做成本對等的比較：factored 與 factor+revise 的呼叫次數隨事實數線性成長（傳記任務按句、按事實各一次），但論文不報呼叫次數或 token 數，也沒有與同等運算量的 self-consistency 多樣本投票、SelfCheckGPT 或 Self-Refine 等同類方法對照；related work 提到了這些方法，實驗卻只和 zero-shot／CoT 比。",
+    "CoVe 本身從未在指令微調模型上量化評估：Llama 2 70B Chat 只當作不套 CoVe 的對照，ChatGPT 只有附錄截圖的個案。『CoVe 對現代聊天模型仍有效』是外推；同時 Chat 模型對照組還被 NER 後處理與不同提示格式干擾，『指令微調會增加幻覺』的結論也混雜了格式因素。",
+    "核心證據『約 17% vs 約 70%』只有概數，沒有交代驗證答案如何判定正確、是否有人工標註、分母是哪些實體；而且這個數字量的是驗證答案的正確率，不是最終保留下來的實體有多少正確，與方法最終效果之間還隔著步驟 4 的整合品質。",
+    "對 T5 的意義要小心解讀：CoVe 是內在（無外部回饋）的自我修正卻有效，看似與『LLM 不能自我修正推理』一類結論衝突；但 CoVe 的收益發生在事實回憶任務、靠的是換一組原子化且脈絡隔離的問題重新取出知識，並以獎勵刪除主張的精確率指標計分。它的『對改錯』對應物就是被刪掉的正確內容（Wikidata 正確實體少 36%），論文沒有把這個代價當成主要結果呈現。",
+    "最終步驟把驗證答案包裝成『來自另一個來源』，這個框定本身可能影響模型要不要採信驗證答案，但沒有消融；草稿切句也只在傳記任務因脈絡長度才做，不同任務的前處理差異沒有被分開評估。"
+  ],
+  "framework_role": "T5 內在自我修正的代表方法：在單輪回答送出前，由同一模型把草稿拆成可驗證的原子事實、在隔離脈絡中重新作答、再依一致性改寫。它提供了三個可直接搬進框架的設計：(1) 驗證問題由模型產生、開放式優於是非題與規則模板；(2) 驗證答案必須在看不到原草稿的脈絡中產生，避免複製錯誤；(3) 顯式的逐事實一致性判定（CONSISTENT／INCONSISTENT／PARTIALLY CONSISTENT）。但它在框架中是『無條件、每次都跑』的單輪後處理：沒有由軌跡異常觸發（不涉及 E3），也不回寫多輪對話狀態（不涉及 E2），修正範圍限於事實型錯誤，不處理工具呼叫或推理步驟的錯誤。",
+  "edges": [
+    {
+      "edge": "E5",
+      "how": "只在狹義上成立：§4.3 的分析直接評估修正流程的中間產物，拿驗證答案的正確率（約 70%）對比草稿中同一批實體的正確率（約 17%），並用 Pos./Neg. 拆解說明修正刪掉了多少幻覺、誤刪了多少正確內容，這是把修正過程的紀錄回流到評估。但 factor+revise 產生的逐事實一致性標籤並沒有被記錄或評估，主表的前後比較本身只是一般的方法評估。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有描述任何部署或產品；搜尋 AWS、Microsoft、Google、LangChain 等官方文件與部落格都沒有找到明確採用 CoVe 的來源。Anthropic 官方的降低幻覺指南（https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-hallucinations）列有『生成後逐條找引文驗證、找不到就撤回』等相近做法，但沒有提到或引用 CoVe，不算採納。learnprompting、PromptHub、Ultralytics 詞彙表、KDnuggets 等屬教學或內容網站，不列為證據。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "底層資料集公開（Wikidata、QUEST、MultiSpanQA、FactScore 傳記基準），但論文沒有釋出自動產生的 56 題 Wikidata 問題、55 題 Wiki-Category 子集與 418 題 MultiSpanQA 子集，也沒說明傳記實體數；各任務的 few-shot 示範內容未公開（附錄只有佔位符模板）。未找到官方程式碼，GitHub 上只有非官方實作。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "CoVe 是內在自我修正中最常被引用與模仿的具體方法，提出『脈絡隔離的原子化驗證』與『逐事實一致性判定』兩個可直接重用的設計，也是理解『自我修正何時有效』必須對照的正面案例；實驗統計薄弱與精確率取向的問題要一併讀進去。",
+  "related": [
+    "2303.17651",
+    "2303.08896",
+    "2305.13281",
+    "2305.14251",
+    "2307.11768",
+    "2307.03987",
+    "2305.13534",
+    "2305.03268",
+    "2307.13528",
+    "2302.12813",
+    "2212.09561",
+    "2305.11694"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

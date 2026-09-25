@@ -1,0 +1,141 @@
+{
+  "id": "2404.06411",
+  "title": "AgentQuest: A Modular Benchmark Framework to Measure Progress and Improve LLM Agents",
+  "topic": "T8",
+  "subarea": "部分分數與過程度量",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出一個把 agent 與 benchmark 隔開的 driver 介面，並在其上定義兩個跨 benchmark 的過程指標：以里程碑命中比例衡量的 progress rate，與以動作相似度衡量的 repetition rate，再用它們在四個小型 benchmark 上診斷並改善 LangChain＋GPT-4 agent。",
+  "problem": "既有 agent benchmark 多半只給二元的 success rate（外加平均耗時），無法回答「是完全失敗還是解了一半」「是否總在同一步卡住」「多給步數會不會解出來」這類除錯問題；而且每個 benchmark 各有一套介面，換 agent 架構或換 benchmark 都要重寫整合程式碼。對要逐元件（記憶、工具、提示）改 agent 的開發者來說，只有終態成敗的分數幾乎沒有指引作用。",
+  "core_idea": "在 agent 與環境之間插一層統一的 driver，讓度量函式能讀到環境的隱藏狀態；把最終解拆成一組里程碑（隱藏狀態的子集），以命中比例當作逐步的部分分數（progress rate，|M|=1 時退化成 success rate），再配一個衡量「是否在重複相似動作」的 repetition rate；兩條曲線隨步數的互動型態（進度停滯＋重複上升、進度仍升＋重複低、進度低＋重複低）對應不同的失敗成因，可直接指引架構修改。",
+  "method": {
+    "interface": "三個類別：Observation（必填 output：描述環境狀態的字串；done：布林，任務是否已完成）、Action（必填 action_value：agent 直接輸出的字串，可自訂選填屬性）、Driver（reset() 初始化環境並回傳第一個 Observation；step(Action) 解析 action_value、改變環境狀態並一律回傳 Observation；另有 benchmark 專屬的 state 屬性，暴露第 t 步的隱藏狀態供度量使用）。",
+    "loop": "obs = driver.reset()；當 obs.done 為假：guess = agent(obs.output) → Action(action_value=guess) → 存入 actions 串列 → obs = driver.step(action) → progress.append(get_progress(driver.state, milestones)) → repetitions.append(get_repetitions(actions, θ))。迴圈結束後 PR_t = progress_t / |M|，RR_t = repetitions_t / (T−1)，T 為該回合總步數。",
+    "progress_rate": "定義里程碑集合 M ⊆ S（S 為環境隱藏狀態集合），由評分函式 f 對 M 內的狀態打分，得到 PR_t ∈ [0,1]。M 越接近 S 粒度越細；|M|=1 時等同 success rate。PR 依 benchmark 可能隨執行下降（例如 Mastermind 的 state 是『當前這次猜測』，get_progress 只數這次猜測中位置正確的數字，不是歷史最佳）。里程碑可人工標註，或在 get_progress 內部計算。各 benchmark 的里程碑：Mastermind＝密碼的每一位數字（4 個）；Lateral Thinking Puzzles＝謎題的關鍵要點（判定方式論文未寫）；ALFWorld＝一條動作序列；Sudoku＝正確填入的數字總數；GAIA（附錄 B.3）＝GAIA 題目自帶的人工標註步驟。",
+    "repetition_rate": "維護至第 t−1 步為止的『獨特動作』集合 A_{t−1}；以相似度函式 g 比較當前動作 a_t 與集合內每個動作，只要有一個 g(a_t, a) ≥ θ_a 就算重複，否則把 a_t 加入集合。RR_t = (t − |A_t|) / (T − 1)，即累計重複次數除以總步數減一（分母是最終的 T，不是 t）。θ_a ∈ [0,1]，越高越嚴格。Mastermind 用 Levenshtein ratio 當 g，範例 θ_a=1.0（完全相同才算）；自由文字動作建議改用 BLEU、ROUGE 或 BERTScore。範例：動作 [1234, 2143, 1234, 5618] → 1 次重複 → RR = 1/3 ≈ 0.33。",
+    "new_metric_template": "新指標寫成一個 Python 函式，輸入可取 Driver.state（隱藏狀態）、Observation.output（觀測）、Action.action_value（動作），以及外部資料（里程碑、動作歷史）。",
+    "experiment_setup": "參考架構：LangChain 現成的 chat agent，LLM 為 GPT-4。四個 benchmark：Mastermind 與 Sudoku 由作者從零實作；ALFWorld 與 Lateral Thinking Puzzles 沿用 AgentBench 的實作。每個 benchmark 跑 15 個實例，最大步數 60；報告 SR、平均 Steps、PR60、RR60。作者明言限縮實例數是為了示範框架與控制 API 成本。未揭露：各 benchmark 實際使用的 θ_a 與 g（Mastermind 以外）、提示詞、取樣溫度、每個實例跑幾次（看起來是一次）、回合提前結束後 PR/RR 曲線怎麼補值。",
+    "interventions": "Mastermind：加一個記憶元件，把過去的猜測存進本地 buffer，若 agent 輸出的動作已在 buffer 中就再提示它給一個新的（本質是精確比對的拒絕重試迴圈）；另把實例數由 15 擴到 60 驗證。ALFWorld：把最大步數由 60 放寬到 120，同樣再以 60 個實例驗證。",
+    "other_architectures": "附錄 B 示範插拔式整合：ReAct 以一個什麼都不做的 ProxyTool 接住 agent 的 tool_input，轉交給 driver.step，並把 (agent_choice, obs.output) 附加到 intermediate_steps 回饋給 agent；OpenAI Assistant（OpenAIAssistantRunnable）同樣用 ProxyTool，把 driver 回傳的觀測當 tool_outputs 連同 run_id、thread_id 送回；GAIA 的 GaiaDriver 把 action_value 以『tool:input』格式拆開，查表呼叫本地工具（OnlineSearch、WebContentParser、FinalAnswerRetriever）並把工具輸出包成 Observation。附錄 B 只有程式碼骨架，沒有任何實驗數字。"
+  },
+  "assumptions": [
+    "評估方能讀到環境的隱藏狀態（driver.state），也就是白箱或可檢測狀態的環境；純黑箱的線上服務無法直接套用。",
+    "任務的最終解可以事先拆成一組里程碑，且到達這些里程碑代表更接近目標；這隱含存在一條（或少數幾條）參考路徑。",
+    "評分函式 f、里程碑集合 M、相似度函式 g 與門檻 θ_a 都由開發者依 benchmark 手工設計，且這些選擇合理。",
+    "動作是字串，字串相似度能區分『無效的重複』與『策略性的微調』；重複到底是好是壞仍需人依任務判讀。",
+    "每個 benchmark 少量實例（15 個）、單一模型、單次執行，就足以給開發者方向性的除錯訊號。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Mastermind（作者新建，猜 4 位數密碼）",
+      "Lateral Thinking Puzzles（沿用 AgentBench 實作）",
+      "ALFWorld（沿用 AgentBench 實作）",
+      "Sudoku（作者新建，9x9）",
+      "GAIA（僅附錄 B.3 的整合示範，無數字）"
+    ],
+    "metrics": [
+      "Success Rate (SR)",
+      "Steps（平均步數，成敗混算）",
+      "Progress Rate PR_t（報告 PR60，ALFWorld 延長版為 PR120）",
+      "Repetition Rate RR_t（報告 RR60，ALFWorld 延長版為 RR120）"
+    ],
+    "baselines": [
+      "LangChain chat agent＋GPT-4（原始架構，與加記憶或放寬步數後的版本比較）",
+      "ReAct、OpenAI Assistant（僅附錄示範整合，無比較數字）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "progress rate 以『把最終解拆成 agent 必須到達的一串隱藏狀態』來定義里程碑；里程碑只有一個時就退化成 success rate，里程碑越多部分分數越細。",
+      "numbers": "Mastermind 範例：密碼 5618、當前猜測 2318 → 命中 2 個里程碑 → PR = 2/4 = 0.5",
+      "section": "§3.2、§3.3",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "repetition rate 是累計重複動作數除以總步數減一；重複與否由相似度函式 g 與門檻 θ_a 決定。",
+      "numbers": "動作 [1234, 2143, 1234, 5618]、θ_a=1.0 → 1 次重複 → RR = 1/3 ≈ 0.33",
+      "section": "§3.2、§3.3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "在 Mastermind 上，兩條曲線揭露了失敗成因：前段 agent 在探索、進度上升，之後開始反覆輸出相同動作，進度停滯。",
+      "numbers": "前 22 步 RR < 5%、PR22 約 55%；到第 60 步 RR60 = 30%、PR 停在 55%（內文與 Figure 2(a)；Table 3 則記 PR60 = 0.62、RR60 = 0.32）",
+      "section": "§4、Figure 2(a)、Figure 3(a)",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "依診斷加上『已猜過就重新提示』的記憶元件後，Mastermind 成功率上升，重複完全消失。",
+      "numbers": "15 個實例：SR 0.47 → 0.60、PR60 0.62 → 0.73、RR60 0.32 → 0.00、Steps 41.87 → 39.73",
+      "section": "§4、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "擴大到 60 個 Mastermind 實例，記憶元件的改善仍然存在（引言所稱的約 20% 是百分點）。",
+      "numbers": "SR 43%（原架構）→ 62%（加記憶），+19 個百分點",
+      "section": "§4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "Lateral Thinking Puzzles 中重複是 agent 的推理策略：對同一問題做小幅變化的提問反而推進了進度，所以高 RR 不一定代表失敗。",
+      "numbers": "SR 0.20、PR60 0.46、RR20 約 30%、RR60 0.81、Steps 52.00",
+      "section": "§4、Table 3、Figure 2(b)、Figure 3(b)",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "ALFWorld 在 60 步時 RR 很低、PR 仍在緩慢上升，作者據此推斷瓶頸是步數預算，放寬到 120 步後成功率與進度都上升。",
+      "numbers": "15 個實例：SR 0.86 → 0.93、PR60 0.74 → PR120 0.80、RR60 0.06 → RR120 0.07、Steps 21.00 → 25.86；60 個實例：SR 83%（60 步上限）→ 87%（120 步上限）",
+      "section": "§4、Table 3、Appendix A",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "Sudoku 的低成功率同時伴隨低進度：PR 在很少步數內就停在 8%，之後重複率緩慢上升卻完全沒有進度，顯示該 agent 根本不會解這類題目。",
+      "numbers": "SR 0.00、PR60 0.08、RR60 0.22、Steps 59.67",
+      "section": "Appendix A、Figure 4(b)、Table 3",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "實驗目的只是示範框架如何使用，不是對 agent 架構做完整評估或比較。",
+    "每個 benchmark 只跑 15 個實例，原因是 API 成本高、大規模測試會影響重現性。",
+    "重複不一定是缺點，要依 benchmark 判讀（例如走迷宮本來就需要重複往同方向走）。",
+    "progress rate 依 benchmark 可能在執行中下降。",
+    "評分函式、里程碑與相似度函式都需要使用者依 benchmark 自行定義。"
+  ],
+  "limitations_observed": [
+    "Table 3 的 ALFWorld 數字自相矛盾：SR 0.86 卻 PR60 只有 0.74（延長版 SR 0.93、PR120 0.80 也一樣）。若成功回合的 PR 為 1，全體平均 PR 不可能低於 SR。最可能的解釋是以『一條參考動作序列』當里程碑時，agent 走別條路成功就拿不滿里程碑，也就是這裡的 PR 綁定單一參考路徑，不是對成功單調的部分分數；另一種可能是提前成功的回合在第 60 步前停止後，平均時沒有把 PR 補成 1。不論哪一種，作者都沒有討論。這對 T8 很關鍵：拿 PR 當 partial credit 時，必須先保證『成功 ⇒ PR=1』。",
+    "Mastermind 的數字前後不一：內文與 Figure 2(a) 說 PR 停在 55%、RR60 = 30%，Table 3 卻是 PR60 = 0.62、RR60 = 0.32。而且 Mastermind 的 PR_t 量的是『當前這次猜測』而非歷史最佳。Table 3 的 Steps 41.87 是 15 個回合的全體平均（SR 0.47 即 7 成功、8 失敗）；若失敗回合都跑滿 60 步，成功回合約 21 步就結束。結束後到第 60 步之間 PR/RR 怎麼補值（沿用最後一值？補 1？）論文沒說，平均曲線的意義因此不明。",
+    "RR_t 的分母是最終總步數 T−1 而非 t−1，所以中間步的 RR_t 不是『到該步為止的重複比例』，且不同長度的回合（提前成功者 T 較小）放在同一條平均曲線裡並不可比。",
+    "除了 Mastermind 範例的 θ_a=1.0 以外，實驗實際使用的 θ_a 與 LTP、ALFWorld、Sudoku 的相似度函式都沒有報告；LTP 的 RR60 = 0.81 對 g 與 θ_a 極度敏感，無法重現，也無法判斷『重複是策略』這個結論是否只是門檻設太寬。",
+    "LTP 的里程碑『謎題關鍵要點』怎麼判定命中沒有說明。AgentBench 的 LTP 實作由 LLM 擔任主持人回答與判定（這是我依 AgentBench 設計的推斷，本文未寫），若 PR 也仰賴 LLM 判定，則 PR 的信度未經任何驗證。",
+    "統計力不足：每個 benchmark 15 個實例、單一模型（GPT-4）、單一 agent、看起來每題只跑一次，沒有誤差棒、重複試驗或顯著性檢定。ALFWorld 0.86 → 0.93 只是 15 題中多成功 1 題；60 題版的 83% → 87% 也只差 2 到 3 題。摘要宣稱兩個指標能『可靠地』追蹤進度，但全文沒有任何信度或效度驗證（例如與人工評分的相關、跨 θ_a 的穩定度、PR 對最終成功的預測力）。",
+    "Mastermind 的記憶修正本身就是『精確比對、重複就拒絕重問』的迴圈；在 θ_a=1.0 下 RR60 = 0 是機制強制出來的結果，不是 agent 學會探索的獨立證據，指標與修正幾乎同義反覆。重新提示是否計入步數、平均重問幾次也沒報告，Steps 的比較因此不乾淨。",
+    "Sudoku 的 SR 為 0 但平均 Steps 為 59.67，代表有回合在 60 步前就結束卻沒有成功，原因（done 判定、解析錯誤或中止）未交代；Steps 欄把成功與失敗回合混在一起平均，也不是有意義的效率指標。",
+    "早於本文約兩個半月的 AgentBoard（arXiv:2401.13178，2024-01-24，NeurIPS 2024）已提出以子目標為基礎的 progress rate，本文既未引用也未比較；『新指標』的新穎性應打折。",
+    "文中程式碼片段有多處不一致：匯入 get_repetition 卻呼叫 get_repetitions；§3.1 呼叫 get_repetitions 只傳一個參數，但 §3.3 的定義需要 THETA_A；附錄 B.1 內文說跑 ALFWorld，程式碼卻是 MasterMindDriver。照論文片段直接重做會出錯，要以 GitHub 程式碼為準。",
+    "附錄 B 的 ReAct、OpenAI Assistant 與 GAIA 只有整合程式碼骨架、沒有任何數字，『可跨架構、可用於 open-ended 環境』的主張沒有實證；GAIA 的里程碑直接借用題目的人工標註步驟，同樣有單一參考路徑的問題。",
+    "框架完全沒有處理成本、延遲或 token 用量，也沒有多次試驗的一致性度量（pass@k、pass^k 之類），在 T8 的多目標分數與可靠性面向上沒有貢獻。"
+  ],
+  "framework_role": "T8『部分分數與過程度量』的一個輕量參考實作：給出里程碑式 progress rate（|M|=1 時退化為 SR，里程碑越細越接近逐步部分分數）與 repetition rate（過程行為度量）的最小定義與 Python API，並示範用兩條曲線的互動型態做失敗歸因（進度停滯＋重複上升＝卡在迴圈；進度仍升＋重複低＝步數預算不夠；進度低＋重複低＝能力不足）。其 driver 層把環境隱藏狀態暴露給度量函式，也可視為 T4 軌跡上的一個觀測插槽。借用時要特別處理它暴露出的缺陷：以參考路徑當里程碑可能出現 PR < SR，T8 若拿 PR 當部分分數，需改成對成功單調（成功即滿分、或以『任一可行路徑的最佳命中』計分）並配上多次試驗與誤差估計。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "Mastermind 案例中，開發者離線讀軌跡上的 PR/RR 曲線，發現『重複動作＋進度停滯』這個異常，進而在 agent 裡加一個執行期檢查：輸出的猜測若已在過往 buffer 中，就重新提示 agent 換一個（拒絕重試式的自我修正）。注意線上的觸發條件是精確字串比對，不是 RR 本身；RR 只用在離線診斷與事後驗證（RR60 由 0.32 降到 0）。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身只提供 GitHub 開源碼（https://github.com/nec-research/agentquest）與 demo 影片，沒有描述任何部署或產品採用；作者雖來自 NEC Laboratories Europe，但文中沒有提到 NEC 內部使用。本次 WebSearch 額度已用盡，未能再做線上查證。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/nec-research/agentquest",
+    "data": "Mastermind 與 Sudoku 由作者實作（依論文所述，在 repo 中）；ALFWorld 與 LTP 沿用 AgentBench 的公開實作。但實驗所用的 15 個實例如何選取、θ_a 與相似度函式、提示詞、執行軌跡都未在論文中公開。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "里程碑式 progress rate 與 repetition rate 的定義和 driver API 對 T8 部分分數有直接參考價值，但實驗只有每個 benchmark 15 題、單一 GPT-4 agent、無誤差棒，Table 3 出現 PR 低於 SR 的自相矛盾，且更早提出的 AgentBoard progress rate 未被引用，因此不算必讀。",
+  "related": ["2308.03688", "2311.12983", "2210.03629", "2010.03768", "2305.13455", "2304.03442"],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

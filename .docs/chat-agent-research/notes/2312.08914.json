@@ -1,0 +1,163 @@
+{
+  "id": "2312.08914",
+  "title": "CogAgent: A Visual Language Model for GUI Agents",
+  "topic": "T3",
+  "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "在 CogVLM-17B 上加一條低成本的高解析度 cross-attention 分支（1120×1120），並用 OCR、grounding 與 40 萬張網頁截圖的 DOM 對應資料做持續預訓練，得到 18B 的 CogAgent。它以截圖作為 GUI 觀測，在 Mind2Web（step SR 58.2）與 AITW（76.88）上勝過吃 HTML 或 OCR 文字的 LLM 基準。",
+  "problem": "GUI agent 的觀測該用什麼表徵？純語言 agent 只能吃 HTML、DOM 或 OCR 轉出來的文字，但很多應用沒有標準 API；圖示、圖片、空間關係很難用文字傳達；網頁裡的 canvas、iframe 也解析不出功能。Android 的 View Hierarchy 常常品質差或根本不存在。改用截圖當觀測時，有兩個障礙：(1) 當時的 VLM 多在 224 或 490 解析度預訓練，看不清 GUI 上的小字與小圖示，而直接把 1120×1120 截圖切成 14×14 patch 會產生 6,400 個視覺 token，decoder self-attention 的成本隨 token 數平方成長；(2) LAION 這類預訓練資料以自然影像為主，GUI 影像的分布不同，模型缺少讀字、元素定位與網頁結構的能力。",
+  "core_idea": "把高解析度感知從主 decoder 的序列中拿出來：保留原 VLM 的低解析度路徑（224×224、256 個 token 進 decoder 序列），另外加一個小型高解析度影像編碼器（1120×1120，EVA2-CLIP-L，0.30B），它的 6,400 個特徵不進入 decoder 序列，而是在每一層 decoder 以小 hidden size 的 cross-attention 讀取，當成低解析度特徵的殘差補充。依據是觀察到「224 足以表達物件與版面、但字看不清」，而且以文字為主的模型本來就只需要較小的 hidden size。能力方面，用三類持續預訓練資料補齊：讀字（合成渲染、自然影像 OCR、學術文件）、自然影像 grounding，以及 GUI grounding。GUI grounding 用 Playwright 渲染 Common Crawl 網頁，建成「框→DOM 元素 HTML」（REG）與「DOM 元素→框」（REC）兩種任務。最後用人工標註截圖加上 GPT-4 轉寫的 Mind2Web／AITW 資料做多任務對齊，讓模型只看截圖就能輸出計畫、下一步動作與座標。",
+  "method": {
+    "整體架構": "基底為 CogVLM-17B：低解析度編碼器 EVA2-CLIP-E（4.4B，輸入 224×224，patch 14×14，得 256 個 token），經 MLP adapter 投影到 decoder 空間；decoder 是 Vicuna-1.5-7B 加上 CogVLM 的 visual expert（32 層、hidden 4,096、32 heads，head 維度 128）。總參數約 18B（CogAgent repo 說明為 11B 視覺參數加 7B 語言參數）。輸入影像同時縮放成 1120×1120 與 224×224，平行送進兩個編碼器，得到 X_hi 與 X_lo。decoder 序列只含 X_lo 與文字 token；X_hi 只透過 cross-attention 被讀取。",
+    "高解析度 cross-module": {
+      "編碼器": "EVA2-CLIP-L 的視覺編碼器（0.30B），輸入 1120×1120、patch 14×14，得 L_hi = 6,400 個特徵。",
+      "每層計算": "第 i 層 decoder 先做原本的帶 visual expert 的 self-attention：X'_i = MSA(LayerNorm(X_in_i)) + X_in_i；接著加一段 cross-attention：X_out_i = MCA(LayerNorm(X'_i), X_hi) + X'_i。Q 由 X'_i 乘 W_Q（D_dec×D_cross）取得，K、V 由 X_hi 乘 W_K、W_V（D_hi×D_cross）取得。每一層都有自己的一組 W_Q、W_K、W_V。殘差設計讓高解析度資訊成為低解析度特徵的補充，可沿用既有的低解析度預訓練權重。論文沒寫 cross-attention 輸出如何投回 D_dec，重做時要自己補一個輸出投影。",
+      "尺寸": "cross-attention hidden size 1,024，32 heads，每 head 維度 32（decoder 為 32 heads×128）。",
+      "複雜度": "attention 成本從 O((L_hi+L_T)^2·H_dec·d_dec) 降到 O((L_lo+L_T)·L_hi·H_cross·d_cross + (L_lo+L_T)^2·H_dec·d_dec)。代入 L_hi=6400、L_lo=256，加速比下界是 (6400+L_T)/(256+L_T)；附錄推導出預訓練時 L_T<512 可得逾 25 倍，但這只算 attention 項，不含編碼器與投影成本。"
+    },
+    "預訓練資料": {
+      "讀字": "(1) 合成渲染 80M：拿語言預訓練語料的文字，以不同字型、大小、顏色、方向渲染在 LAION-2B 背景圖上（類似 Donut 的 Synthetic Document Generator）；(2) 自然影像 OCR 18M：從 COYO 與 LAION-2B 取圖，用 PaddleOCR 抽出文字與框，丟掉沒有文字框的圖，並加較強的旋轉、翻轉增強；(3) 學術文件 9M：照 Nougat 的做法，從 arXiv 的 LaTeX 原始碼建立含文字、公式、表格的影像-文字對。(1)(3) 套用 Nougat 的增強。",
+      "自然影像 grounding": "沿用 CogVLM 的 40M 張 grounding 資料（取自 LAION-115M，caption 中的名詞片語綁定框）。框格式為 [[x0,y0,x1,y1]]，座標正規化到 000–999；一個名詞片語對應多個物件時，框之間用分號分隔。",
+      "GUI grounding（CCS400K）": "從最新的 Common Crawl 抽 URL，用 Playwright 擷取 40 萬張網頁截圖，同時收集所有可見 DOM 元素與其渲染框，產生 1.4 億組 REC／REG 問答對。REG 是給截圖上的區域、輸出該 DOM 元素的 HTML；REC 是給 DOM 元素、輸出框。渲染解析度從常見裝置解析度清單中隨機選，以降低過擬合；DOM 屬性照 Pix2Struct 的方式清掉冗餘，避免 HTML 過長。",
+      "通用圖文": "另加入清理過的 LAION-2B 與 COYO-700M（去掉壞連結、NSFW、雜訊 caption 與政治偏誤）。"
+    },
+    "預訓練排程": "共 60,000 iterations，batch 4,608，lr 2e-5，warmup 500 步，cosine 衰減，weight decay 0.05，dropout 0.1，Adam ε=1e-5、β=(0.9, 0.95)。前 20,000 步只訓練新加的 cross-module（646M 參數，佔 3.5%），之後 40,000 步再解凍 CogVLM 的 visual expert。採課程學習：先訓練較容易的讀字資料（合成渲染、自然影像 OCR）與 captioning，再依序加入學術文件、grounding 與網頁資料。作者說這樣收斂較快、訓練較穩。",
+    "多任務微調與對齊": {
+      "設定": "解凍全部參數，10,000 iterations，batch 1,024，lr 2e-5，warmup 500。",
+      "人工標註": "十多位標註者，分兩階段。第一階段各自挑 app 或網站，每個至少截 20 張與主要功能相關的畫面，每張標五個不同類型的按鈕名稱、三個可點區域（文字框、搜尋框、可點圖片、超連結等）、兩個需從畫面讀字的問題、一個具體的操作需求。第二階段為第一階段的問題與操作補上 grounding 框，答案寫成自然語言並夾 [[x0,y0,x1,y1]] 座標，總數逾 2,000 張截圖。",
+      "代理資料轉寫": "把 Mind2Web 與 AITW 的（任務、動作序列、截圖）用 GPT-4 轉成問答格式。提示詞結構：設定 GPT-4 扮演操作電腦的機器人；給最終任務、已做過的動作清單（格式為「[元素類型] 元素文字 → 操作」）；另外私下告訴它後續的正確動作，但要求它假裝是自己推導出來的。要它輸出 JSON，含 plan（從目前畫面出發的多步高階計畫，不含已做動作、不能提到目前畫面上沒有的元素）、action（下一步具體動作的自然語言描述，含位置）、operation（「[元素類型] 元素 → 操作 at the box {x_left, y_left, width, height}」，座標是 0–1 的比例）。並禁止提到 svg、div 這類只存在於 HTML 的元素。",
+      "其他": "混入多個公開 VQA 資料集。"
+    },
+    "GUI 代理推論介面": {
+      "Mind2Web": "輸入是任務描述、目前網頁截圖、先前動作（文字）；照 Deng et al. 的設定，先從 top-k 候選元素（k=10 或 50，由 Mind2Web 原本以 HTML 為基礎的候選生成模型產生）中選目標元素，再預測操作（Click、Type 加值、Select 加值）。元素與操作都對才算該步正確。在 train set 微調後，於 cross-task、cross-website、cross-domain 三個 out-of-domain 子集評估。論文沒說明候選集怎麼呈現給看截圖的模型。",
+      "AITW": "輸入是目標、歷史動作、目前截圖；輸出動作類型，tap、swipe、type 還要輸出位置、方向或輸入文字。五個子集一起微調成單一模型，GoogleApps 因為大其他子集 10–100 倍，降採樣到 10%。",
+      "歷史表示": "過去只以文字動作序列表示；模型一次只吃一張截圖（作者承認不能處理多張影像）。"
+    },
+    "消融設定": "VQA 消融：四個資料集一起微調 3,000 iterations、batch 1,280，報 generalist 分數。Mind2Web 消融：微調 2,400 iterations、batch 128、top-10 候選。消融的訓練量比主實驗少，所以數字不能直接和主表比。"
+  },
+  "assumptions": [
+    "GUI 是給人看的，所以只要 VLM 的視覺理解接近人類，只看截圖的 agent 就能和人一樣有效；不需要 DOM 或 accessibility tree",
+    "224 解析度足以表達物件與版面，缺的主要是文字細節；文字特徵用小 hidden size 就能抓到，所以高解析度分支可以做小",
+    "高解析度資訊能以殘差 cross-attention 的形式補充在低解析度特徵上，不必重訓原本的 decoder 序列表示",
+    "由 Common Crawl 網頁渲染的 DOM-框對應，能遷移到手機 app 與桌面軟體這類沒有 DOM 的介面",
+    "GPT-4 在看得到正確後續動作的情況下寫出的 plan，可以當成不知道未來時應有的推理來教模型",
+    "離線逐步比對（下一步動作是否與標註相同）能代表 agent 的實際能力；歷史只需文字動作、不需要過去的畫面"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Mind2Web（137 個真實網站、31 個領域、逾 2,000 個開放式任務；cross-task／cross-website／cross-domain 三個測試子集）",
+      "Android in the Wild（AITW；715k episodes、30k 指令、Android 10–13、8 種裝置；GoogleApps、Install、WebShopping、General、Single 五子集）",
+      "通用 VQA：VQAv2（test-dev）、OK-VQA（val）",
+      "文字密集 VQA：TextVQA、OCR-VQA、ST-VQA、ChartQA、InfoVQA、DocVQA",
+      "零樣本：MM-Vet、POPE（adversarial 子集）"
+    ],
+    "metrics": [
+      "Mind2Web step success rate（step SR）：目標元素與操作都與標註相同才算對",
+      "AITW action matching score（照 Rawles et al. 的比對標準）",
+      "VQA Score（VQAv2、OK-VQA、TextVQA、ChartQA）、EM（OCR-VQA）、ANLS（ST-VQA、InfoVQA、DocVQA）",
+      "MM-Vet 的 GPT-4 評分、POPE 的 F1",
+      "消融另報前向 FLOPs、每次迭代訓練時間（A800、batch 8）"
+    ],
+    "baselines": [
+      "Mind2Web（HTML 表徵）：GPT-3.5 few-shot、GPT-4 few-shot（top-10 候選）、Flan-T5-XL（MindAct）、作者自行微調的 LLaMA2-7B 與 LLaMA2-70B（與 Deng et al. 相同的 HTML 清理）",
+      "Mind2Web（影像表徵）：Qwen-VL、CogVLM",
+      "AITW（OCR 加 icon 的文字表徵）：GPT-3.5 few-shot、各子集分別微調的 LLaMA2-7B（兩者數字取自 Zhan & Zhang）",
+      "AITW（影像表徵）：Auto-UI unified",
+      "VQA：Pix2Struct、BLIP-2、PaLI-X-55B、CogVLM、UReader、Qwen-VL、LLaVA-1.5、Fuyu-8B 等"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "Mind2Web 上，以截圖為輸入的 CogAgent 在三個 out-of-domain 子集都高於吃清理後 HTML 的微調 LLaMA2-70B，也遠高於其他以影像為輸入的 VLM",
+      "numbers": "step SR：CogAgent 在 cross-task／cross-website／cross-domain 分別為 62.3／54.0／59.4，overall 58.2；LLaMA2-70B 為 55.8／51.6／55.7，overall 54.4；GPT-4 few-shot 30.9（top-10）；CogVLM 23.9；Qwen-VL 10.2。論文寫的領先 11.6%、4.7%、6.6% 是相對幅度，絕對差距是 6.5、2.4、3.7 個百分點",
+      "section": "§3.2、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "AITW 上，CogAgent 的整體 matching score 高於以影像為輸入的 Auto-UI，且大幅高於吃 OCR 加 icon 文字的語言模型",
+      "numbers": "overall 76.88 對 Auto-UI 74.27（+2.61），對 LLaMA2-7B 28.40、GPT-3.5 7.72。分子集：GoogleApp +3.58、Install +1.97、WebShop +1.47、Single +8.91、General −2.86（65.38 對 68.24）",
+      "section": "§3.3、Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "高解析度 cross-module 讓運算量隨 patch 數約略線性成長；若改用原架構直接吃高解析度，FLOPs 會高出十倍以上。1120 的 CogAgent 前向 FLOPs 也低於 490 的原架構",
+      "numbers": "Figure 3：解析度 1120 時，原架構 FLOPs 超過 cross-module 的 10 倍。Table 5：原架構 490 為 29.14 TFLOPs、每迭代 6.43 秒；cross-module 756 為 10.08 TFLOPs、3.57 秒；cross-module 1120 為 12.56 TFLOPs、5.17 秒",
+      "section": "§4.1、Figure 3、Table 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "解析度對讀字類任務幫助大；對 Mind2Web 則是從 224 升到 490／756 有幫助，之後趨於平緩。Mind2Web 的最大一段提升出現在加入 GUI 與 grounding 預訓練資料之後（只在 224+1120 設定下測過）",
+      "numbers": "Table 5：Mind2Web 原架構 224 為 34.6、原架構 490 為 40.7、cross 756 為 40.7、cross 1120 為 41.4；DocVQA 原架構 224 為 28.6、490 為 57.6、cross 1120 為 74.1。Table 6（cross 1120）：加入 GUI 與 grounding 資料後，Mind2Web 從 41.4 升到 54.2（top-10、短訓練設定）。cross 756 與原架構 490 的 Mind2Web 同為 40.7，但 TFLOPs 為 10.08 對 29.14",
+      "section": "§4.1–4.2、Table 5、Table 6",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "AITW 上被判錯的回應中，有相當比例其實是另一條正確路徑，說明逐步比對單一標註路徑的指標會低估 agent",
+      "numbers": "抽樣人工複核的不一致案例中 42% 是替代的正確做法（正文寫逾 40%）；樣本只說是「數百例」",
+      "section": "§3.3、附錄 §4、Figure 4",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "以 GUI 為重點的訓練沒有犧牲通用視覺能力，反而在多數文字密集 VQA 與零樣本評測上超過 generalist 對手",
+      "numbers": "MM-Vet 52.8（LLaVA-1.5 為 36.3，+16.5），POPE-adversarial 85.9；TextVQA 76.1、DocVQA 81.6、ST-VQA 80.5、ChartQA 68.4、InfoVQA 44.5、VQAv2 83.7",
+      "section": "§3.1、Table 1、Table 2",
+      "anchor_idx": 2
+    }
+  ],
+  "limitations_stated": [
+    "輸出座標不夠精確（§5）",
+    "無法處理多張影像，因此無法把過去的畫面放進輸入（§5）",
+    "失敗案例分四類：動作預測錯誤、座標預測錯誤、GUI 觀測錯誤、幻覺（附錄 §7，只有 Figure 9 的案例，沒有比例）",
+    "AITW 的任務常有多條可行路徑，逐步比對單一標註會把正確的替代做法判錯；作者建議未來改在虛擬環境中評估整串動作後的任務完成度（附錄 §4）",
+    "消融因預算限制，訓練迭代數比主實驗少（§4）",
+    "是 VLM 型 GUI agent 的初步探索（§5）"
+  ],
+  "limitations_observed": [
+    "「只用截圖」的主張在 Mind2Web 上不成立：附錄 §2.3 說 CogAgent 也是從 top-k 候選元素中選一個，候選由 Deng et al. 的候選生成模型提供。依 Mind2Web 論文（2306.06070），那個候選生成器是對 HTML／DOM 元素排序的（這一點出自 Mind2Web，不是 CogAgent 自己寫的）。所以它的實際觀測是「截圖加上由 HTML 產生的候選集」，而且 CogAgent 沒說候選集怎麼呈現給看截圖的模型。以此當作「影像觀測勝過 HTML 觀測」的證據並不乾淨。",
+    "和 LLaMA2-70B 的對比混了至少三個變數，不能歸因到觀測模態：(1) CogAgent 預訓練時看過 1.4 億組網頁 DOM↔框的 REC/REG 資料，等於已學過 HTML 結構；(2) 微調資料用 GPT-4 轉成 plan/action/operation 格式，LLaMA2 基準沒有這一步；(3) 模型本身是 18B 且有 11B 視覺參數。論文沒做「同一模型、同樣訓練資料、只換觀測表徵」的對照。",
+    "Table 3 的 overall 欄有內部不一致：其他列的 overall 都等於三個子集的算術平均（例如 LLaMA2-70B 平均 54.37、表列 54.4；GPT-4 30.9），但 CogVLM 三子集 37.1/23.4/26.3 的平均是 28.9，表列 23.9；CogAgent 62.3/54.0/59.4 的平均是 58.57，表列 58.2。無法從論文判斷哪個數字才對。",
+    "Table 3 把 top-10 候選的 GPT-4 和 top-50 候選的其他方法放在同一張表；而 §4 消融用 top-10。所以 Table 6 的 54.2 與 Table 3 的 58.2 不能直接比，也看不出候選數對 CogAgent 的影響。",
+    "解析度與資料的貢獻分不開：Table 5 中 Mind2Web 從原架構 224 的 34.6 升到 490 的 40.7、cross 756 的 40.7、cross 1120 的 41.4，也就是解析度在 490／756 左右就飽和；DocVQA 則持續上升（28.6→57.6→74.1）。Table 6 加入 GUI 與 grounding 資料讓 Mind2Web 再 +12.8（41.4→54.2），但這組資料只在 224+1120 設定下測過，沒有低解析度加同樣資料的對照，所以無法斷言「提升來自資料而非解析度」，資料的效益可能依賴高解析度。就代理任務而言，架構能直接證明的好處是效率：用約 1/3 的 TFLOPs 達到與 490 原架構相同的 Mind2Web 40.7。",
+    "效率敘述與表格對不上：§4.1 說 756 的 cross-module 只要 490 原架構一半的運算量、且效能明顯較好。但 TFLOPs 是 10.08 對 29.14（約 1/3），只有訓練時間 3.57 對 6.43 接近一半；效能上 OCRVQA 反而略低（74.2 對 74.5），Mind2Web 持平（40.7）。附錄的逾 25 倍加速只算 attention 項，不含兩個編碼器與投影成本，不能當成端到端加速。",
+    "Table 5 與 Table 6 的 490 基準列互相矛盾：Table 5 的說明寫所有列都以 Caption+OCR 預訓練，但它 490 列的 STVQA／OCRVQA／DocVQA（68.1／74.5／57.6）與 Table 6 的「只有 Caption」490 列相同，Mind2Web 的 40.7 卻與 Table 6 的 Caption+OCR 490 列相同（該列 VQA 為 72.5／75.0／59.8）。影響有二：DocVQA 從 490 到 cross 1120 的提升，對 Cap-only 基準是 +16.5，對 Cap+OCR 基準只有 +14.3（59.8→74.1）；若以 Cap+OCR 490 為基準，cross 756 是 STVQA +1.1、OCRVQA −0.8、DocVQA +2.5、Mind2Web ±0，「效能明顯較好」的說法更站不住。",
+    "AITW 的 +2.61 大半來自 Single 子集（+8.91），General 子集反而輸 Auto-UI 2.86 分；GoogleApps 降採樣到 10% 是 CogAgent 的設定，論文沒說 Auto-UI 的訓練資料是否相同。",
+    "42% 的「替代正確」數字：只說抽了數百例，沒有抽樣數、標註者人數或一致性；而且只重審了 CogAgent 的錯誤，沒有對 Auto-UI 做同樣的複核。這個數字可以說明指標有問題，但不能拿來推論 CogAgent 的真實優勢更大。",
+    "座標慣例前後不一：預訓練與人工標註用 [[x0,y0,x1,y1]]、000–999 的整數；Mind2Web 的 GPT-4 轉寫用 {x_left, y_left, width, height}、0–1 的比例。論文沒說兩種格式怎麼統一，是重做時的缺口。",
+    "Mind2Web 的網頁截圖多是整頁長圖，論文沒說怎麼裁切或縮放成 1120×1120；若直接縮放，長寬比失真會讓小元素更難辨識，這正是高解析度分支要解決的問題，卻沒有交代。",
+    "GPT-4 寫 plan 時看得到未來的正確動作，雖然要它假裝不知道，但 plan 仍帶有事後知識；模型學到的推理在推論時沒有這份資訊，可能造成訓練與推論分布不一致。論文沒有消融 plan 的作用。",
+    "所有 GUI 評估都是離線逐步預測：給定標註的歷史動作，只預測下一步。沒有線上執行、沒有錯誤累積、沒有任務層級的成功率；歷史也只有文字動作、沒有過去畫面。所有結果都是單次執行，沒有變異數。",
+    "Table 2 的 LLM 欄把 CogAgent 標成 Vicuna-7B，和 7B、13B 的對手並列；但 CogAgent 另有 11B 視覺參數，總量約 18B，這樣的並列會誇大比較的公平性。"
+  ],
+  "framework_role": "這篇屬於 T3(a) 感知／觀測空間，是「以截圖為唯一 GUI 觀測」這條路線的代表作與常用參照點。它直接回答觀測表徵的三個問題：(1) 模態：截圖對上 HTML、OCR 文字、View Hierarchy，作者主張截圖適用於沒有結構化表徵的介面（AITW 的手機 app 大多沒有可用的 View Hierarchy）；(2) 解析度與成本：用 cross-attention 旁路讓 6,400 個高解析度 patch 不進 decoder 序列，是「長觀測壓縮」在視覺上的一種做法；(3) grounding：輸出 000–999 正規化框，並用 DOM↔框的 REC/REG 任務教模型把像素對回介面元素。但它的主要貢獻是模型與資料，不是觀測設計規範；消融顯示代理任務對解析度的需求在 490／756 左右就飽和，高解析度架構在代理任務上能證明的主要是效率，最大一段提升出現在加入 GUI grounding 資料之後（但沒有分開測），而且 Mind2Web 的觀測其實混了 HTML 候選集。用在框架中時，它適合當「像素觀測能做到哪裡、代價多少」的基準，不適合當成「截圖優於結構化觀測」的證據。對 T3(b) 可觀測性沒有貢獻：失敗分類只有案例圖，沒有監控或偵測機制。對 T7／T8 有附帶價值：42% 替代正確路徑的觀察，說明逐步比對單一標註的指標會低估完成度，佐證應改以環境狀態判定任務完成。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "CogAgent 官方 GitHub README（repo 已由 THUDM 移到 zai-org）說明 CogAgent-9B-20241220 這一版已用在智譜 AI 的 GLM-PC 產品；README 同時說明這一版以 GLM-4V-9B 為基底。來源：https://github.com/zai-org/CogAgent",
+      "Hugging Face 官方 model card（THUDM/cogagent-9b-20241220）有相同的 GLM-PC 產品應用說明與 GLM-4V-9B 基底說明，並引用本論文。來源：https://huggingface.co/THUDM/cogagent-9b-20241220"
+    ],
+    "assessment": "CogAgent 這條模型線有可查證的商用採納：作者所屬公司智譜 AI 的 GLM-PC（電腦操作 agent 產品）使用 CogAgent-9B-20241220。但產品用的是 2024 年 12 月的新版，基底是 GLM-4V-9B，不是本論文的 CogVLM-17B 加高解析度 cross-module 架構；README 沒提 cross-module 是否沿用。因此「以截圖為觀測的 GUI VLM agent」這個方向與模型名稱確實有產品落地，但本論文提出的具體架構是否進入產品，未見證據。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/THUDM/CogVLM（論文 18B 版的程式碼與權重入口）；新版 CogAgent-9B-20241220 見 https://github.com/zai-org/CogAgent",
+    "data": "評測資料集（Mind2Web、AITW、各 VQA 基準）都公開；預訓練的讀字與 grounding 資料都是由公開資料集衍生的，建構方法有寫。但 CCS400K（40 萬張網頁截圖與 1.4 億組 REC/REG）、逾 2,000 張人工標註截圖、GPT-4 轉寫的 Mind2Web／AITW 微調資料，論文都沒說有沒有公開，要自己重建。提示詞只給 Mind2Web 轉寫用的一個範例，AITW 轉寫的提示詞沒有給。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它是截圖型 GUI agent 的代表作，有 GLM-PC 的產品血緣，也是「像素觀測對結構化觀測」的常用參照；但標題主張被 HTML 候選集、DOM 預訓練與 GPT-4 轉寫格式混淆，消融中解析度對代理任務在 490／756 就飽和、資料與解析度的貢獻又沒分開測，觀測設計上能直接帶走的結論不多，所以列有價值但非必讀。",
+  "related": [
+    "2311.03079",
+    "2306.06070",
+    "2307.10088",
+    "2309.11436",
+    "2308.12966",
+    "2309.11419",
+    "2310.12823",
+    "2308.13418",
+    "2303.15389"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

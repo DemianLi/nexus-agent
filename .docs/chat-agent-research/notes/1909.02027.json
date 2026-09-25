@@ -1,0 +1,149 @@
+{
+  "id": "1909.02027",
+  "title": "An Evaluation Dataset for Intent Classification and Out-of-Scope Prediction",
+  "topic": "T1",
+  "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Clinc 釋出 150 個意圖、10 個領域、另附 1,200 筆刻意收集的 out-of-scope 查詢的群眾外包資料集（後來通稱 CLINC150），並用 oos-train、oos-threshold、oos-binary 三種基線方案評估 7 種分類器與平台，顯示 in-scope 準確率可達 96% 以上，但 out-of-scope recall 最好也只有 66%。",
+  "problem": "任務導向對話系統只支援固定的意圖集合，但使用者不清楚系統能力，必然會說出落在所有意圖之外的話（out-of-scope, OOS）。若系統把 OOS 誤判成某個 in-scope 意圖，就會執行錯誤動作或給出牛頭不對馬嘴的回應；正確偵出 OOS 則能改走 fallback，並提供未來擴充意圖的線索。當時公開的意圖分類資料集（Snips 7 類、TREC、Braun et al. 的小型集合、Liu et al. 2019）都假設每筆查詢必屬某個標籤，意圖數少或每類樣本數不受控，而且沒有能評估 OOS 的樣本；以其他資料集或排除類別當 OOD 的做法（Hendrycks & Gimpel）產生的 OOD 與 in-distribution 差異過大，不像真實使用者。因此缺少一個意圖數夠多、每類資料量貼近產品開發預算、並附風格相近 OOS 查詢的評估基準。",
+  "core_idea": "用與 in-scope 相同的群眾外包流程另外收集 OOS 查詢，使 OOS 在風格上（短、口語、指令或問句）與 in-scope 無法用表面特徵區分，逼模型真的判斷「這是不是系統會做的事」；再固定每類 100 筆訓練資料並設計資料少、資料不平衡、OOS 較多三種變體，以 in-scope 準確率與 OOS recall 兩個分開的指標，量化現有分類器在拒識上的缺口。",
+  "method": {
+    "資料收集（in-scope）": "先用 scoping 群眾外包任務（Amazon Mechanical Turk），請工作者假設自己有 Alexa、Siri、Google Assistant 之類的智慧裝置，就指定主題領域寫出 5 句會問裝置的話；作者人工把這些產出分群定義成意圖。每個意圖再以 Kang et al. (2018) 的 rephrase（給一句原句，寫 5 種說法）與 scenario（給一段情境，寫 5 種問法或指令）兩種任務擴充資料。每個任務付 0.20 美元。最終 10 個領域各 15 個意圖、共 150 個：banking、credit cards、kitchen & dining、home、auto & commute、travel、utility、work、small talk、meta（完整意圖清單與每意圖 3 筆範例在補充材料）。",
+    "資料收集（OOS）": "兩個來源：(a) 工作者的失誤——原本為 150 個意圖之一寫的查詢，實際上不屬於任何意圖；(b) 以 Quora、Wikipedia 等處的主題為提示，另開與 scoping、scenario 同格式的任務，但每個任務只要求 2 句而非 5 句。每個提示最多貢獻 4 筆查詢以保多樣性。需熟悉全部 in-scope 意圖的專家逐筆確認，以 OOS 為目標的提示只有約 69% 真的產出 OOS。",
+    "前處理": "所有 token 轉小寫、去掉句末標點；重複查詢移除並補收替換。",
+    "切分": "每個意圖 100 train／20 validation／30 test；OOS 共 1,200 筆，100 train／100 validation／1,000 test。總計 23,700 筆（in-scope 22,500）。為避免同一工作者的相似句同時落在 train 與 test，in-scope 依工作者切分（同一工作者的所有查詢只進一個 split）；OOS 則改依任務提示切分。test 集在各變體間共用：4,500 in-scope＋1,000 OOS。",
+    "資料集變體": "Full（每意圖 100 筆訓練、OOS 訓練 100 筆）；Small（每意圖 50 筆）；Imbalanced（各意圖分配 25、50、75 或 100 筆，文中未列哪個意圖拿多少）；OOS+（OOS 訓練 250 筆，其餘同 Full）。",
+    "分類器": "SVM（one-hot bag-of-words、線性核、C=1）；MLP（輸入為 Universal Sentence Encoder 句向量，tanh 隱藏層＋softmax 輸出，隱藏維度 Full 用 400、其他變體 100–300 維）；FastText（n-gram 嵌入平均的淺層網路，dim、word_ngrams、loss 依變體不同）；CNN（GloVe 初始化、可微調的詞向量，150–200 個 filter，dropout 0.2–0.6，batch 16）；BERT（bert-large-uncased 微調，learning rate 4e-5（undersample 二元分類器用 2e-5）、warmup 0.1、batch 32、5 epochs）；平台：Google DialogFlow、Rasa NLU（spacy-sklearn pipeline）。依補充材料，所有模型的超參數都以 grid search 在每個資料變體上各自挑選，最終值列在 GitHub 儲存庫的 hyperparameters.csv（上列數字即取自該檔）。各模型 oos-threshold 實際採用的門檻值，正文、補充材料與 hyperparameters.csv 都沒有列出。",
+    "OOS 預測方案": {
+      "oos-train": "把 OOS 訓練資料當成第 151 個意圖，一起訓練多類分類器；預測到第 151 類即判為 OOS。",
+      "oos-threshold": "對分類器的最高類別機率設門檻，低於門檻判 OOS。分類器應是只用 150 個意圖訓練——正文沒有明說，這是依 Table 2 下半 OOS+ 欄留空（多出的 OOS 訓練資料對此方案沒有用處）推斷。門檻取在驗證集上（把 OOS 當成自己一類）整體準確率最高的值。適用於任何會輸出機率的模型，不需要 OOS 訓練集。",
+      "oos-binary": "兩階段：先用二元分類器判 in-scope／OOS，判為 in-scope 再交給 150 類分類器。只在 OOS+ 上做。為緩解 15,000 對 250 的類別不平衡，比較兩種策略：(1) under：in-scope 均勻抽 1,000 筆（對 250 筆 OOS）訓練二元分類器；(2) wiki aug：在 250 筆 OOS 之外補 14,750 句 Wikipedia 句子當 OOS（補充材料 Table 13 的例子都是百科式的直述句，同樣轉小寫、去句末標點）。wiki aug 對 DialogFlow 與 Rasa 資料量過大，未跑。"
+    },
+    "指標": "(1) 150 個 in-scope 意圖的準確率；(2) OOS 查詢的 recall。只看 OOS recall 的理由是：OOS 被判成 in-scope 會給出完全錯誤的回應，而把 in-scope 判成 OOS 只會觸發 fallback 請使用者重試或說明系統範圍，代價較低。in-scope 查詢被判成 OOS 在 in-scope 準確率裡是否算成錯誤，正文未明說。不報 OOS precision、F1 或與門檻無關的 AUROC。",
+    "重做要點": "資料取自 GitHub clinc/oos-eval 的 data/ 目錄：data_full.json、data_small.json、data_imbalanced.json、data_oos_plus.json 對應四個變體，binary_undersample.json 與 binary_wiki_aug.json 對應 oos-binary 的兩種策略，all_wiki_sents.txt 為擴充用的 Wikipedia 句子，domains.json 為領域與意圖對照；超參數照 hyperparameters.csv。每種分類器 × 每種變體 × 每種 OOS 方案各訓練一次；oos-threshold 在 validation（3,000 in-scope＋100 OOS）上掃門檻，取準確率最高者；在共用的 test 上報兩個指標。"
+  },
+  "assumptions": [
+    "OOS 查詢與 in-scope 查詢來自相同的群眾外包流程，就能代表真實使用者在只部分了解系統能力時會說的話；群眾工作者的想像可以代表產品真實流量。",
+    "每個意圖 100 筆訓練資料貼近預算有限團隊實際能收集的量。",
+    "單輪、去掉大小寫與句末標點的短查詢足以代表意圖分類的輸入；對話上下文不影響某句話是否 in-scope。",
+    "把 OOS 誤判為 in-scope 的代價遠高於把 in-scope 誤判為 OOS，因此只量 OOS recall 即可，fallback 的代價可以忽略。",
+    "150 個意圖之間與意圖和 OOS 之間的邊界在人工標註時可以明確判定（作者用專家逐筆確認維持）。",
+    "依工作者（in-scope）或依提示（OOS）切分，足以避免訓練與測試分布過於相似。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "本文資料集（後來通稱 CLINC150）的四個變體：Full、Small、Imbalanced、OOS+；test 共用 4,500 in-scope＋1,000 OOS"
+    ],
+    "metrics": ["In-scope accuracy（150 個意圖）", "Out-of-scope recall"],
+    "baselines": [
+      "SVM（bag-of-words）",
+      "MLP（USE 句向量）",
+      "FastText",
+      "CNN（GloVe）",
+      "BERT（微調）",
+      "Google DialogFlow",
+      "Rasa NLU（spacy-sklearn）",
+      "OOS 方案：oos-train、oos-threshold、oos-binary（under／wiki aug）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "資料集含 23,700 筆短查詢：150 個意圖、10 個領域的 22,500 筆 in-scope，加上 1,200 筆 OOS；在作者比較的短查詢意圖資料集中，是唯一同時具備聊天風格、大量意圖、受控訓練量與專門收集之 OOS 的一個。",
+      "numbers": "每意圖 100/20/30（train/val/test）；OOS 100/100/1,000；對照 Snips 7 類、Liu et al. (2019) 54 類且每類 24 到 5,981 筆不等、TREC-50 50 類但無 OOS",
+      "section": "§2, Table 4",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "BERT 在所有資料條件下 in-scope 準確率都最高，資料減半或不平衡時幾乎不掉；但『即使資料受限仍在 96% 以上』只在 oos-train 下完全成立，oos-threshold 的 Imbalanced 是 95.9。",
+      "numbers": "oos-train：BERT 96.9（Full）／96.4（Small）／96.3（Imbal）／96.7（OOS+），次佳 MLP 93.5／91.5／92.5／94.1；oos-threshold：BERT 96.2／96.2／95.9",
+      "section": "§1, §4.1, Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "所有方法的 OOS recall 都遠低於 in-scope 準確率；即使給到 250 筆 OOS 訓練資料，最佳也只有 66%，而且最佳者是 Rasa 而非 BERT。",
+      "numbers": "oos-train Full：BERT 40.3、MLP 47.4、Rasa 45.3、DialogFlow 14.0、FastText 9.7；OOS+：Rasa 66.0、BERT 59.2、MLP 53.9、DialogFlow 28.5",
+      "section": "§1, §4.1, Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "OOS 資料難收：需熟悉所有意圖的專家逐筆把關，以 OOS 為目標的提示中只有約七成真的產出 OOS 查詢。",
+      "numbers": "約 69% 的產出屬 OOS；最終 1,200 筆 OOS",
+      "section": "§2.2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "在 oos-train 下，減少 in-scope 訓練量（Small、Imbalanced）反而多半提升 OOS recall，作者據此推論提高 OOS 訓練資料的相對比例有助拒識；直接把 OOS 訓練量加到 250 筆（OOS+）後所有模型的 OOS recall 都明顯上升。",
+      "numbers": "FastText 9.7→23.2（Small）→32.2（OOS+）；Rasa 45.3→55.0→66.0；BERT 40.3→40.9→59.2；例外：MLP 在 Imbalanced 降到 35.6",
+      "section": "§4.1, Table 2",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "oos-threshold 的 in-scope 準確率與 oos-train 相當，在 Full 上多數模型 OOS recall 更高（BERT 最好），但在資料受限的變體上非常不穩，部分模型幾乎完全失去拒識能力。",
+      "numbers": "Full OOS recall：BERT 52.3（oos-train 40.3）、MLP 49.1、Rasa 31.2、CNN 30.9、FastText 28.3；Small／Imbal：Rasa 1.0／0.0、SVM 13.0／0.0、FastText 6.0／33.2、MLP 32.4／13.3；BERT 維持 58.9／52.8",
+      "section": "§4.2, Table 2",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "oos-binary（兩階段）在 OOS+ 上：undersampling 讓 in-scope 準確率全面下降；以 Wikipedia 句子擴充 OOS 可讓 in-scope 回升，但 OOS recall 仍偏弱，且對表現最好的 MLP 與 BERT 反而下降。",
+      "numbers": "under→wiki aug：BERT in-scope 94.4→96.0、OOS 46.5→40.4；MLP 90.1→92.9、52.8→32.4；CNN 89.8→90.1、25.6→39.7；SVM 88.4→89.3、32.2→37.7；FastText 88.1→87.0、22.7→31.4；DialogFlow（under）84.7／37.3、Rasa（under）87.5／37.7",
+      "section": "§4.3, Table 3",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "所有被評估的方法在 OOS 偵測上都表現不佳，現有模型只在已知類別上可用。",
+    "提升 OOS 表現最直接的方式是增加 OOS 訓練資料，但這種資料昂貴、難以產生，需要熟悉全部 in-scope 意圖的專家把關。",
+    "oos-train 與 oos-binary 都需要為各系統另外細心整理 OOS 訓練集。",
+    "oos-threshold 在資料受限時結果不穩定，FastText 與 Rasa 尤其明顯。",
+    "wiki aug 的資料量對 DialogFlow 與 Rasa 太大，無法評估。"
+  ],
+  "limitations_observed": [
+    "§4.3 的文字說 Wikipedia 擴充同時改善 in-scope 與 OOS 表現，但 Table 3 顯示這只對 FastText、SVM、CNN 成立；表現最好的 MLP（52.8→32.4）與 BERT（46.5→40.4）OOS recall 都下降。Wikipedia 句子與使用者查詢風格差很多，強模型可能學到『不像查詢就是 OOS』的風格捷徑，這恰好違反本文自己的前提（OOS 應與 in-scope 風格相近）。",
+    "引言宣稱 BERT 在資料受限或不平衡時 in-scope 準確率都在 96% 以上，但 Table 2 的 oos-threshold Imbalanced 為 95.9，此說法只在 oos-train 下完全成立。",
+    "oos-threshold 的門檻依驗證集上 151 類整體準確率挑選，而驗證集是 3,000 筆 in-scope 對 100 筆 OOS（約 3%），選門檻的目標幾乎由 in-scope 準確率決定，自然偏向低門檻、少拒識；Rasa 在 Small／Imbalanced 的 1.0／0.0 與 SVM Imbalanced 的 0.0 很可能是這個選取準則的產物，不一定代表模型本身沒有拒識訊號。論文把它歸為方法『不穩定』，沒有拆開這兩種成因。",
+    "只在單一操作點上報 in-scope 準確率與 OOS recall，沒有 OOS precision、F1、AUROC 或 FPR@TPR 之類與門檻無關的指標，也沒有權衡曲線；因此 oos-train、oos-threshold、oos-binary 之間的優劣其實混著『各自選了哪個操作點』，比較並不公平。in-scope 查詢被判成 OOS 是否算進 in-scope 準確率的錯誤，正文也未明說。",
+    "每個設定只跑一次、沒有種子變異與信賴區間。以 1,000 筆 OOS test 估計 recall，95% 信賴區間約正負 3 個百分點；Table 2 中許多名次差距（例如 oos-train Full 的 MLP 47.4 對 Rasa 45.3）在雜訊範圍內。",
+    "§4.1 把 Small／Imbalanced 下 OOS recall 上升歸因於 OOS 相對比例提高，但這兩個變體同時改變了 in-scope 總量與類別分布，沒有只改 OOS 比例的對照實驗；而且 MLP Imbalanced（47.4→35.6）與 BERT Small（40.3→40.9）並不符合這個趨勢。",
+    "論文聲稱 OOS 查詢常與 in-scope 主題相近，但沒有量化主題距離或比例。補充材料列出的 45 筆 OOS 樣本裡確實有少數貼近既有領域（例如詢問透支保護、關閉儲蓄帳戶、改航班座位），但大多是百科、體育、娛樂等 10 個領域之外的問題。後續 arXiv:2106.04564 另從 CLINC 與 BANKING77 建出 in-domain OOS（ID-OOS）評估，並顯示預訓練 Transformer 對這類樣本特別脆弱，表示本資料集的 OOS 組成偏向領域外，沒有系統性涵蓋同領域近鄰 OOS 這個更難的情況。",
+    "超參數以 grid search 在每個資料變體上各自重選（hyperparameters.csv：例如 FastText 的 dim 在 Full／Small／Imbalanced／OOS+ 分別是 100／200／400／50，MLP 隱藏層 400／200／200／200），因此『Small、Imbalanced、OOS+ 相對 Full 的 OOS recall 變化』同時混入了超參數改變的效果，進一步削弱 §4.1 的比例解讀。oos-threshold 的實際門檻值則沒有公開，無法完全重現 Table 2 下半；hyperparameters.csv 中 CNN 的卷積層 activation 記為 softmax，看起來像筆誤，照檔重做可能得到不同結果。DialogFlow 等商用平台的結果也會隨平台版本變動，無法重現。",
+    "資料全為單輪、小寫、去除句末標點的查詢，沒有對話上下文；在多輪 agent 裡，一句話是否 in-scope 常取決於先前狀態（例如回答澄清問題的短語），本基準無法評估這種情況。OOS test 比例（1,000／5,500，約 18%）也是人為設定，與實際產品流量的 OOS 比例無關，OOS recall 無法直接換算成使用者感受到的錯誤率。",
+    "指標設計假設 fallback 代價低，但對需要完成任務的 agent 而言，把 in-scope 請求誤拒同樣會直接降低任務完成率；本文沒有分析 oos-threshold 與 oos-binary 在提高拒識時損失多少 in-scope 請求（例如 undersampling 讓 DialogFlow in-scope 掉到 84.7）。"
+  ],
+  "framework_role": "T1 的基準與問題定義：把『意圖偵測必須包含拒識選項』正式化成可量測的任務，提供 150 類意圖＋風格相近的 OOS 評估集、每類 100 筆的受控訓練量，以及 in-scope 準確率／OOS recall 兩個分開的指標。它給出的三種 OOS 方案（多一類、機率門檻、兩階段二元閘門）正是依意圖路由時『接不接這個請求、要不要走 fallback 或澄清』這道閘門的最早基線。對 LLM 時代的意圖路由，它仍是檢驗路由器能否拒絕範圍外請求的常用測試集，但只涵蓋單輪、靜態輸入。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "本文建構並評估的正是進入 T1 的外部輸入分布：以群眾工作者充當代理使用者，刻意收集『對系統能力只有部分認知』時會說出的 in-scope 與 OOS 查詢，再量測分類器接受或拒絕這批輸入的表現。輸入是靜態、單輪的資料集，沒有使用者模擬器迴圈或多輪互動。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "資料集收錄於 Google 官方 TensorFlow Datasets 目錄（clinc_oos，版本 0.1.0，splits 為 train 15,000／train_oos 100／validation 3,000／validation_oos 100／test 4,500／test_oos 1,000）：https://www.tensorflow.org/datasets/catalog/clinc_oos",
+      "Hugging Face Hub 上由 clinc 組織發布的官方資料集頁，含 small、imbalanced、plus 三個設定：https://huggingface.co/datasets/clinc/clinc_oos",
+      "原始碼與資料的官方儲存庫，授權為 Creative Commons Attribution 3.0 Unported：https://github.com/clinc/oos-eval"
+    ],
+    "assessment": "商用採納：未見證據。上述三項都是資料集的散佈管道（TFDS、Hugging Face、GitHub），屬學術與開發基礎建設，不是產品部署。論文作者來自 Clinc, Inc.，但文中沒有說 Clinc 的產品使用這份資料或這些 OOS 方案；論文拿 DialogFlow 與 Rasa 當受測基線，也不代表這兩個平台採納了本文。其影響力主要是學術面（Semantic Scholar 約 683 次引用、113 次 influential citation），並已成為 OOS 意圖偵測事實上的標準基準。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "公開，CC BY 3.0（GitHub clinc/oos-eval 的 LICENSE）；data/ 目錄含四個變體（full、small、imbalanced、oos_plus）、oos-binary 的 undersample 與 wiki_aug 訓練檔、Wikipedia 句子檔與領域對照表，TFDS 與 Hugging Face 另有鏡像。儲存庫另附 supplementary.pdf 與逐變體的 hyperparameters.csv，但沒有訓練或評估程式碼，也沒有 oos-threshold 的門檻值。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它定義了 OOS 意圖偵測的問題設定、依工作者切分的資料切法與 in-scope 準確率／OOS recall 雙指標，是 T1『OOD 意圖』子領域事實上的標準基準；方法本身只是弱基線，價值在基準而非演算法。",
+  "related": [
+    "1610.02136",
+    "1805.10190",
+    "1903.05566",
+    "1906.00434",
+    "1908.07898",
+    "1810.04805",
+    "1803.11175",
+    "1607.01759"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

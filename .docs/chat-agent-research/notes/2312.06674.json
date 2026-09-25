@@ -1,0 +1,159 @@
+{
+  "id": "2312.06674",
+  "title": "Llama Guard: LLM-based Input-Output Safeguard for Human-AI Conversations",
+  "topic": "T3",
+  "subarea": "可觀測性／監控（執行期監控、異常偵測、安全監控）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把 Llama2-7b 指令微調成對話的輸入／輸出安全分類器：政策（類別與描述）是提示詞的一部分，對使用者訊息與 agent 回覆分別判定，輸出 safe／unsafe 加違反類別，並能以零樣本、少樣本或再微調換成別的政策。",
+  "problem": "生成式 AI 產品需要在每一輪即時檢查模型的輸入與輸出，擋下違規內容與越獄嘗試。現成的內容審核工具（Perspective API、OpenAI Moderation API、Azure Content Safety）拿來當 LLM 對話護欄有四個缺口：不區分使用者與 AI 兩種角色的風險（一方索取、一方提供，是兩種任務）；政策固定，無法換成新的政策；只有 API，無法依使用情境微調；骨幹是小型 transformer，能力不如 LLM。因此需要一個可自架、可換政策、可微調、以 LLM 為骨幹的護欄分類器。",
+  "core_idea": "把安全分類改寫成指令遵循任務。每筆輸入包含四樣東西：編號的違規類別與文字準則（政策）、要評估的是使用者的 prompt 還是 agent 的 response、對話本身、輸出格式。模型只依提示詞裡列出的類別判定，所以換政策只要換提示詞；同一個模型靠指令措辭區分 prompt 分類與 response 分類（作者宣稱是第一個把兩者拆成兩個任務的工作）；第一個輸出 token 是 safe 或 unsafe，其機率直接當分類分數，因此同一個生成式模型可以當成有連續分數的分類器用。",
+  "method": {
+    "輸入格式（§3.1、Figure 1）": "四段式 Llama Guard prompt：任務指令（指定評估 User 或 Agent 的訊息）→ 違規類別清單（每類有編號，並以文字描述該類中什麼算安全、什麼算不安全；模型只考慮列出的類別）→ 對話（單輪或多輪，User／Agent 交替）→ 輸出格式說明。Figure 1 是圖片，全文快取中沒有逐字模板；公開的 model card（Hugging Face meta-llama/LlamaGuard-7b）與 AWS 範例顯示實際模板用 BEGIN/END UNSAFE CONTENT CATEGORIES 與 BEGIN/END CONVERSATION 標記包住類別與對話，並要求第一行只能是 safe 或 unsafe、若為 unsafe 則第二行列出違反的類別。重做時以 model card 的模板為準。",
+    "輸出與分數（§3.1）": "第一個 token 為 safe 或 unsafe（兩者在 SentencePiece 詞表中都是單一 token）；若為 unsafe，換行後列出違反類別的代號，格式為字母 O 加上從 1 起算的類別索引（例如 O3）。分類分數＝第一個 token 為 unsafe 的機率，同一個格式同時支援二元與多標籤分類。1-vs-all：提示詞只放一個類別，只生成一個 token，就得到該類別的二元判定與分數。",
+    "安全分類體系（§2.1）": "六類：Violence & Hate、Sexual Content、Guns & Illegal Weapons、Regulated or Controlled Substances、Suicide & Self Harm、Criminal Planning。Criminal Planning 是殘餘類，只有不落入其他五類時才用。Self Harm 的準則特別嚴：使用者表達或暗示自傷意圖時，回覆只要不是提供健康資源連結，即使語氣完全支持也算不安全。AWS 範例中的編號為 O1 Violence and Hate、O2 Sexual Content、O3 Criminal Planning、O4 Guns and Illegal Weapons、O5 Regulated or Controlled Substances、O6 Self-Harm。作者明言這只是示範用的樣本分類體系，不求涵蓋所有風險。",
+    "資料收集（§3.3、Table 1）": "取 Anthropic 的 harmlessness 人類偏好資料（Ganguli et al., 2022）每段對話的第一個人類 prompt，丟掉助理回覆與其餘輪次，得到單輪 prompt 集；用 Meta 內部的 Llama checkpoint 對每個 prompt 生成回覆，刻意混合順從與拒絕兩種；由內部紅隊依 §2 的分類體系標四個欄位：prompt 類別、response 類別、prompt 標籤（safe／unsafe）、response 標籤；標註時同步清掉輸入或輸出格式壞掉的樣本。最終 13,997 筆 prompt–response 對。prompt 側：Safe 7,228、Criminal Planning 3,915、Violence & Hate 1,750、Regulated Substances 566、Sexual 283、Guns 166、Self-Harm 89；response 側：Safe 6,550、CP 4,292、VH 1,909、RCS 581、SC 347、GIW 222、SH 96。隨機 3:1 切成微調集與評估集。",
+    "訓練（§3.4）": "骨幹 Llama2-7b（選最小尺寸是為了降低推論與部署成本）。單機 8×A100 80GB，batch size 2，序列長度 4096，model parallelism 1，learning rate 2×10⁻⁶，500 steps，約等於訓練集一個 epoch。目標是標準指令微調的語言模型損失（目標輸出為 safe／unsafe 與類別行）。每筆資料如何拆成 prompt 分類與 response 分類兩個任務、最佳化器、warmup、損失是否只算在輸出段，論文都未揭露。",
+    "資料擴增（§3.4）": [
+      "隨機刪掉若干個「該例沒有違反」的類別，讓模型習慣只看到部分政策。",
+      "刪掉該例所有被違反的類別，同時把標籤改成 safe，教模型「提示詞沒列的類別不算違規」。",
+      "在不同訓練樣本間打亂類別編號，並同步改寫目標輸出，避免模型記住固定的編號與格式。",
+      "三種擴增各占多少比例未揭露。"
+    ],
+    "政策調適（§3.2、§4.5）": "零樣本：推論時把目標政策的類別名稱（可再加描述）放進提示詞。少樣本：再加每類 2–4 個 in-context 範例，混合不安全樣本與作為 hard negative 的安全樣本，不做訓練。微調：在目標資料集上再微調（ToxicChat 訓練集的 10%、20%、50%、100%），並以同樣設定微調原始 Llama2-7b 當對照。少樣本範例從哪裡抽、是否與測試集重疊，論文未說明；公開釋出的權重不含 ToxicChat 微調。",
+    "評估協定（§4.1、§4.3）": "指標一律 AUPRC（沿用 Markov et al., 2023）。對輸出多類別分數的 API，整體二元分數取所有正類分數的最大值（Eq. 1），不檢查類別是否與標準答案對得上。Llama Guard 的分類別分數用 1-vs-all（其他類別的正例也當負例）；基線在 off-policy 時改用 1-vs-benign（丟掉其他類別的正例，只以 benign 當負例），作者自承這會移除 hard negatives、讓基線分數偏樂觀。在 ToxicChat 與 OpenAI Mod 上，預設把對方的類別與簡短描述放進提示詞。Azure 只回 0–6 的整數嚴重度，閾值在 1–6 間挑讓該資料集 average precision 最高者；Azure 與 GPT-4 沒有機率分數，只在附錄 B 以閾值 0.5 比 precision／recall／F1。GPT-4 以零樣本提示詞做審核，提示詞內容未揭露。"
+  },
+  "assumptions": [
+    "政策可以用短短的類別名稱加文字描述表達清楚，而且模型真的只依提示詞列出的類別判定（資料擴增就是為了讓這件事成立，但沒有消融驗證）。",
+    "第一個 token 為 unsafe 的機率是有意義的連續分數，可以據此在部署時挑閾值。",
+    "使用者側與 agent 側的風險差異只靠指令措辭就能區分，不需要兩個模型。",
+    "單輪、英文、由內部 Llama 生成的回覆，足以代表部署時會遇到的對話分佈。",
+    "內部紅隊的標註品質足夠且與政策準則一致（論文沒有報告標註者一致性）。",
+    "要保護的只有文字對話內容；工具呼叫、程式碼執行等 agent 行動不在分類體系內。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "內部測試集（13,997 筆紅隊標註資料的 1/4 隨機切分；prompt 與 response 兩種分類）",
+      "OpenAI Moderation Evaluation Dataset（1,680 個 prompt，只有 prompt 分類）",
+      "ToxicChat（約 10k 筆真實使用者–AI 互動，只評 prompt 分類；另用其訓練集做微調調適實驗）"
+    ],
+    "metrics": [
+      "AUPRC（主指標；整體二元與分類別 1-vs-all／1-vs-benign）",
+      "Precision／Recall／F1（閾值 0.5，附錄 B，用於沒有機率分數的基線）"
+    ],
+    "baselines": [
+      "OpenAI Moderation API",
+      "Perspective API",
+      "Azure AI Content Safety API（僅附錄 B）",
+      "GPT-4 零樣本審核（僅附錄 B）",
+      "原始 Llama2-7b 以同樣設定在 ToxicChat 上微調（§4.5.2 的調適對照）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在自家政策、自家測試集上，prompt 與 response 分類都大幅勝過兩個商用 API",
+      "numbers": "AUPRC prompt／response：Llama Guard 0.945／0.953；OpenAI Mod API 0.764／0.769；Perspective API 0.728／0.699",
+      "section": "§4.4、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "分類別差距在對手沒有對應類別的項目上最大；Llama Guard 自己最弱的是 Sexual Content",
+      "numbers": "AUPRC（prompt／response）：Guns & Illegal Weapons 0.798／0.716 vs OpenAI 0.035／0.060；Regulated Substances 0.944／0.922 vs 0.085／0.067；Criminal Planning 0.927／0.933 vs 0.596／0.625；Sexual Content 0.692／0.787 vs 0.231／0.258",
+      "section": "§4.4、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "在 OpenAI Moderation 資料集上，零樣本（只放入對方的類別與描述）接近但沒有超過 OpenAI 自家 API；完全不換政策也只差一點",
+      "numbers": "AUPRC：OpenAI Mod API 0.856；Llama Guard 零樣本 0.847；不調適 0.837；Perspective API 0.787",
+      "section": "§4.4、§4.5.1、Table 2、Table 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "提示詞中每類再加 2–4 個範例（少樣本）後，在 OpenAI 自家資料集上超過 OpenAI Mod API",
+      "numbers": "少樣本 AUPRC 0.872 vs OpenAI Mod API 0.856",
+      "section": "§4.5.1、Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "在沒有任何模型訓練過的 ToxicChat 上，零樣本 Llama Guard 分數最高但絕對值偏低；未經微調的 Llama2-7b 零樣本輸出格式錯誤，被直接記為 0",
+      "numbers": "AUPRC：Llama Guard 0.626；OpenAI Mod API 0.588；Perspective API 0.532；Llama2-7b 零樣本記為 0",
+      "section": "§4.4、§4.5.2、Table 2",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "以 Llama Guard 為起點再微調到新政策，比從原始 Llama2-7b 起步省資料",
+      "numbers": "只用 20% ToxicChat 訓練資料即與用 100% 訓練的 Llama2-7b 相當，同資料量時更好；具體 AUPRC 只畫在 Figure 3，正文沒有數字",
+      "section": "§4.5.2、Figure 3",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "以固定閾值 0.5 比較時，Llama Guard 在自家測試集的整體 F1 高於所有基線（含零樣本 GPT-4）；GPT-4 召回高但精確率低",
+      "numbers": "prompt 整體 P/R/F1：Llama Guard 0.880/0.864/0.872；GPT-4 0.717/0.947/0.816；Azure 0.788/0.515/0.623；OpenAI 0.874/0.250/0.389；Perspective 0.817/0.219/0.346。response 整體：Llama Guard 0.900/0.867/0.884；GPT-4 0.813/0.788/0.801；Azure 0.749/0.564/0.644。GPT-4 在 prompt 側 Self-Harm 的精確率只有 0.039",
+      "section": "附錄 B、Table 5、Table 6",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "常識受限於訓練與預訓練資料，遇到訓練資料以外的知識可能判錯。",
+    "微調資料全是英文、預訓練資料也大多是英文，不保證其他語言的表現。",
+    "不宣稱標註完整涵蓋政策，可能有表現不佳的情況。",
+    "模型可以被當成一般聊天模型使用；因為缺乏聊天用途的安全微調，可能產生不安全內容。已請外部紅隊測試，未發現超出 Llama2-7b 本身的額外風險。",
+    "身為 LLM，可能受 prompt injection 攻擊而被改變或繞過原本用途。",
+    "跨政策比較本質上難以公平；off-policy 時基線用 1-vs-benign 會移除 hard negatives，分數偏樂觀。",
+    "在 OpenAI Mod 上的分類別表現低於整體二元表現，因為兩邊分類體系對不齊（Llama Guard 不區分 Hate 與 Violence，也沒有 Sexual/Minors、Harassment、Violence/Graphic 的準則）。"
+  ],
+  "limitations_observed": [
+    "自家測試集的 0.945／0.953 是同分佈結果：訓練與測試是同一批 13,997 筆資料的隨機 3:1 切分，prompt 來自同一個 Anthropic 資料集、response 來自同一個內部 Llama checkpoint、標註者是同一個紅隊。對手 API 用的是自己的固定政策，所以 Table 2／3 的大差距主要反映「政策是否對齊」，不是分類能力；Guns 的 0.035、Regulated Substances 的 0.085 幾乎等於對方根本沒有這個類別。",
+    "response 分類是論文宣稱最新穎的部分，卻完全沒有外部驗證：OpenAI Mod 與 ToxicChat 都只評 prompt 分類，response 分類只在自家同分佈測試集上量。也沒有消融說明「同一模型用不同指令區分 prompt／response」比共用一個分類任務好多少。",
+    "宣稱支援多輪對話，但訓練資料只取 Anthropic HH 的第一個人類訊息、丟掉其餘輪次，所有評估也都是單輪；多輪情境（例如把越獄意圖分散在好幾輪）完全沒量。對 agent 觀測而言，這是逐輪的內容分類器，不是軌跡監控。",
+    "摘要說在 OpenAI Mod 上「符合或超越」現有工具，但零樣本 0.847 仍低於 0.856；而且放入對方類別相對不調適只多 0.010（0.837→0.847），顯示在這裡「以提示詞換政策」的效果其實很小。少樣本的 2–4 個範例從哪裡來、是否與測試集重疊都沒說明，0.872 的勝出無法排除資料洩漏。",
+    "Llama2-7b 零樣本直接記為 AUPRC 0 是稻草人基線：既然分數是讀第一個 token 的機率，大可比較 safe／unsafe 兩個 token 的 logit 取得連續分數，不需要它生成格式正確的輸出。",
+    "樣本量小且沒有信賴區間：Self-Harm 全資料只有 89 個 prompt、96 個 response，1/4 測試集約 22–24 筆；Guns 約 42／55 筆。Table 3 的分類別 AUPRC（例如 Self-Harm response 0.943）變異可能很大，但沒有 bootstrap 或多種子結果。",
+    "訓練設定對不起來：batch size 2 × 500 steps＝1,000 條序列，卻說約等於一個 epoch（訓練集約 10.5K 筆，若 prompt 與 response 各算一個任務則約 21K）。除非 batch 是每張卡、另有 packing 或梯度累積，否則數字不合，論文未說明，重做時無法確定實際看過的樣本數。",
+    "沒有任何對抗評估：引言把防越獄列為動機，限制也承認可能被 prompt injection，但沒有量越獄 prompt 或針對護欄本身的攻擊；ToxicChat 雖含越獄樣本，也沒有拆開報告。",
+    "沒有報告延遲與成本：每輪要多跑兩次 7B 推論（輸入檢查與輸出檢查），也沒有討論串流輸出（response 分類要等整段回覆完成）。這些是線上監控能不能部署的關鍵數字。",
+    "附錄 B 的比較不對等：GPT-4 的審核提示詞未公開；Azure 的閾值是在測試集上挑 AP 最高者（等於用測試資料調參）；固定閾值 0.5 對 Llama Guard 是否校準良好也沒有檢查（沒有 calibration 分析）。",
+    "資料擴增（刪類別、改標籤、打亂編號）是「只依提示詞列出的類別判定」這個賣點的關鍵，但沒有任何消融或「只給部分政策」的測試證明它有效。",
+    "分類體系只涵蓋文字內容危害；agent 的工具呼叫、程式碼執行、資料外洩、越權操作等行動風險都不在類別內。拿來監控 agent 行動需要自訂類別，而論文沒有證據顯示零樣本換到這類政策會有效（它的零樣本調適只在另一個內容審核資料集上測過）。"
+  ],
+  "framework_role": "T3 (b) 可觀測性／監控裡「執行期安全監控」的代表元件：掛在每一輪對話輸入與輸出上的分類器。它觀測對話內容（使用者訊息與 agent 回覆），產出可解析的結構化訊號（safe／unsafe、違反類別代號、第一個 token 的連續分數），可以直接寫進行為記錄或當告警來源。它提供的設計模式——政策當輸入、依角色分開判定、以第一個 token 機率當分數、以 1-vs-all 取分類別分數——可以移植到監控 agent 其他面向的分類器。但它只看文字內容、逐輪判定、不看工具呼叫與整條軌跡，只覆蓋安全監控的一小塊，不是 agent 行為或異常偵測的通解；與 (a) 感知無關。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "prompt 分類任務正好掛在這條流上：使用者（或模擬器）的訊息進入 agent 之前，先由 Llama Guard 依提示詞中的政策判定 safe／unsafe 與違反類別。論文只定義判定本身，擋下、拒答或改寫等後續處置不在論文範圍；實驗中的使用者輸入來自 Anthropic HH 的紅隊 prompt、OpenAI Mod 與 ToxicChat 的真實使用者 prompt。"
+    },
+    {
+      "edge": "E3",
+      "how": "response 分類提供這條邊的偵測端：對 agent 的回覆逐輪判定是否違反政策並給出類別，可以當作「軌跡中偵測到異常」的訊號。但論文沒有把判定接到任何修正機制，實驗也只有單輪，所以只涵蓋偵測，不涵蓋觸發自我修正。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "論文本身：公開 Llama2-7b 微調後的權重，程式碼與下載流程在 PurpleLlama 的 Llama-Guard 目錄（https://github.com/meta-llama/PurpleLlama/tree/main/Llama-Guard），模型卡在 Hugging Face（https://huggingface.co/meta-llama/LlamaGuard-7b）。這是釋出，不是部署證據。",
+      "NVIDIA NeMo Guardrails 官方文件提供 Llama Guard 的內建整合：以 llama guard check input 與 llama guard check output 兩個 rail 流程檢查使用者輸入與 bot 回覆，範例模型為 meta-llama/LlamaGuard-7b、以 vLLM 自架，文件稱相較 self-check 方法審核表現顯著提升。https://docs.nvidia.com/nemo/guardrails/configure-guardrails/guardrail-catalog/third-party/llama-guard",
+      "AWS Machine Learning Blog（2023-12-20）宣布 Llama Guard 上架 Amazon SageMaker JumpStart，定位為 LLM 部署的輸入輸出防護，範例提示詞使用 O1–O6 六類與 safe／unsafe 輸出格式。https://aws.amazon.com/blogs/machine-learning/llama-guard-is-now-available-in-amazon-sagemaker-jumpstart"
+    ],
+    "assessment": "有可查證的採納：NVIDIA NeMo Guardrails 把這個 7B 模型做成內建的輸入輸出護欄，AWS SageMaker JumpStart 在論文發表後兩週內把它上架為託管模型，兩者都把它當現成的安全監控元件提供。不過這些是平台「提供可用元件」的證據，不是特定終端產品在線上使用並報告成效的證據，實際部署規模沒有公開數字。後繼的 Llama Guard 2／3 是不同模型，不計入本篇。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/meta-llama/PurpleLlama/tree/main/Llama-Guard",
+    "data": "訓練與內部測試資料（13,997 筆紅隊標註）未公開；只公開模型權重（需同意 Llama 2 社群授權）。評估用的公開基準 OpenAI Moderation Evaluation Dataset 與 ToxicChat 可取得；GPT-4 基線的提示詞與少樣本範例未公開。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "執行期輸入輸出安全分類器的事實標準，NeMo Guardrails 與 SageMaker JumpStart 都直接提供；政策即提示詞、依角色分開判定、首 token 機率當分數的設計可以直接移植，但評估偏同分佈、只涵蓋逐輪文字內容，不涵蓋 agent 行動與軌跡。",
+  "related": [
+    "2208.03274",
+    "2310.17389",
+    "2209.07858",
+    "2307.09288",
+    "2202.11176",
+    "1908.06083",
+    "2107.03451",
+    "2109.01652"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

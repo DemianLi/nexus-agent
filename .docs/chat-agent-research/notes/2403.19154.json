@@ -5,149 +5,161 @@
   "subarea": "模糊指令與澄清提問",
   "read_level": "full",
   "source": "arxiv-html",
-  "one_liner": "讓 7B 模型跟一個持有隱藏 persona 的 LLM 使用者模擬器反覆對話，用「對話能讓基底模型多大機率說出 GPT-4 依 persona 寫的標準答案」挑出最好的提問，再以 STaR 式 expert iteration 監督式微調，教模型問出能引出偏好的澄清問題並據此給出個人化回答。",
-  "problem": "使用者下指令時常省略關鍵偏好（task ambiguity）：同一句「給我一份義大利麵食譜」對素食者與拿坡里菜迷是不同任務。直接回答只能給泛用解；用提示詞叫閉源模型提問不易控制提問策略、常問出無關問題，而 RLHF 類對齊還被觀察到會壓抑模型追問的行為。先前的引出方法不是限制在固定特徵的成對比較（OPEN/BOED），就是依賴專有模型產生離線對話（Hong et al.）。作者要解決的是：能否不靠人工標註的提問示範，讓開放權重模型自己學會問出有用的澄清問題，並且真的把問到的資訊用在回答上。",
-  "core_idea": "把「提問好不好」定義成可計算的獎勵：一段模擬對話的價值 = 初始模型 Q_BASE 在「任務 + 該對話」條件下，對 Oracle（看得到完整 persona 的 GPT-4）所寫標準答案的 log 機率。對每組任務×persona 取樣多段對話、只留獎勵最高的一段做 SFT（STaR 的 expert iteration），並把上一輪模型在這段對話後的貪婪回答一起接進訓練序列，當作回答分佈的正則化，避免模型只會一直問、忘了回答。",
+  "one_liner": "讓 Mistral-7B 和握有隱藏 persona 的 LLM 使用者模擬器對話。以「引出的資訊能讓 GPT-4 寫的個人化 gold 回應機率變多高」當提問獎勵，用 STaR 式 expert iteration 反覆 SFT，教模型問出更有用的澄清問題，並以自己產生的回應做正則化，讓它問完還記得作答。",
+  "problem": "使用者下指令時常把關鍵偏好留在心裡沒說（task ambiguity），同一句「給我義大利麵食譜」對不同人是不同任務。模型不問就只能給泛用答案，在醫療、教育等高風險領域後果更大。既有做法有三類：一是提示閉源模型提問（GATE），提問策略難以控制，常問出無關問題；二是結合 BOED 的方法，只能問固定特徵上的成對比較；三是離線 RL（Hong et al.），需要專家模型事先產生對話。作者還引 Shaikh et al. 指出 RLHF 反而會壓抑模型追問的傾向。本文要回答：能否不靠人工標註的提問示範，讓一個開源小模型透過自我改進學會問出有用的澄清問題。",
+  "core_idea": "把「好問題」定義為「問完之後，最終回應更容易命中該使用者的理想答案」。做法是在合成環境裡讓 Questioner 對 Roleplayer 提問，Roleplayer 看得到 persona，Questioner 看不到。每組 (task, persona) 模擬多段對話，以凍結的初始模型 Q_BASE 給 Oracle（GPT-4，看得到 persona）所寫 gold 回應打出的 log-prob 當分數，只留最高分那段。接著照 STaR／expert iteration，每輪都從 Q_BASE 重新 SFT。為避免模型只會問不會答，SFT 目標同時接上前一輪模型在該段對話後自己產生的 greedy 回應，作者稱之為 response regularization。",
   "method": {
-    "roles": "Questioner Q（被訓練的策略，mistral-7b-instruct，即 Q_BASE）；Roleplayer R（固定的使用者模擬器，mixtral-8x7b-instruct，提示中給完整 persona，Questioner 看不到 persona）；Oracle O（GPT-4，gpt-4-0613，同時看 persona 與任務，產生 gold response）。",
-    "data": "任務：取開源資料集 instruct-human-assistant-prompt 前 550 則對話的「人類提問」（不取助理回覆），切成訓練 T_A=250、T_B=250、測試 50；例如酒配牛排、找工作資源、量子計算入門。Persona：以 PRODIGy 資料集中人工挑出、濾掉暴力與不當內容的 21 則 persona 為樣本池，每次隨機抽 2 則當 few-shot 讓 GPT-4 生成新 persona，共 110 則，切成 U_A=50、U_B=50、測試 10；persona 是第一人稱或第三人稱的一段敘事小傳（職業、家庭、嗜好、情緒創傷等）。Gold response：把 persona 放在前、任務在後、不給對話歷史，提示 GPT-4 寫出針對該 persona 的個人化回答。合計 250×50 + 250×50 + 50×10 = 25,500 組 任務–persona–gold 三元組。",
-    "objective": "最大化 Σ_i Σ_j E_{s_ij} log p_{Q_BASE}(g_ij | t_i, s_ij)，其中 s_ij = [q_1, h_1, …, q_k, h_k]，q 由 Q 依任務與歷史取樣，h 由 R 依 persona、任務與歷史取樣。注意計分用的是固定的 Q_BASE，不是當前策略。",
-    "algorithm": [
-      "外迴圈 η = 1…N，N=3。每輪在任務切分 T_A/T_B 與 persona 切分 U_A/U_B 之間交替，確保產生新資料的任務與 persona 不是當前模型訓練時看過的。",
-      "對每組 (t_i, u_j) 用上一輪模型 Q_{η-1} 與固定的 R 模擬 10 段對話；每段最多 K=3 輪（一輪 = Questioner 問一次、Roleplayer 答一次），終止輪數在 1..K 上均勻取樣，讓各長度的對話數量大致相同、避免過度擬合單一長度。",
-      "對 10 段對話各算 log p_{Q_BASE}(g_ij | t_i, s_ij)，只保留最高的 1 段（top-k，k=1）作為 s*_ij。",
-      "回答正則化：用 Q_{η-1} 在 (t_i, s*_ij) 條件下以溫度 τ=0 貪婪產生回答 r_ij；這是把 KL(p_{Q_{η-1}}(r|t,s) || p_{Q_η}(r|t,s)) 近似成「把上一輪的貪婪回答接在對話後面一起訓練」。",
-      "每輪都從 Q_BASE 重新做監督式微調（不是接續上一輪權重），訓練序列 = 任務 + s*_ij + r_ij；Roleplayer 的回答 h 從 loss 中遮罩，只學提問與最終回答，不學模仿使用者。",
-      "估算規模（依論文數字推算）：每輪 250 任務 × 50 persona = 12,500 組，每組 10 段模擬 → 約 125,000 段對話，挑出 12,500 段進訓練。"
+    "資料建構（§4、附錄 A.2–A.4）": [
+      "任務：取 HF 上 instruct-human-assistant-prompt 資料集的前 550 段對話，只用人類提問、丟掉助理回答，切成 T_A 250、T_B 250、測試 50。都是日常建議類提問，例如準備面試、推薦一本書、學西班牙文的線上課程。",
+      "Persona：從 PRODIGy 資料集人工挑出 21 個去除暴力與不雅內容的 persona 當示例，每次隨機抽 2 個，few-shot 提示 GPT-4 生成新 persona（Figure 8–9，要求十句內、像故事角色那樣有趣且出人意料），共 110 個，切成 U_A 50、U_B 50、測試 10。",
+      "Gold 回應：用 gpt-4-0613 當 Oracle，輸入 persona 加任務、不給對話歷史，要求直接對使用者說話、只在相關時帶入背景、十句內、清楚回答原問題（Figure 10–11）。共得 25,500 組 task–persona–gold 三元組（250×50＋250×50＋50×10）。"
     ],
-    "evaluation_protocol": "測試集 50 任務 × 10 persona。(a) Gold log 機率：四個條件——負對照 log p_{Q_BASE}(g|t)、正對照 log p_{Q_BASE}(g|u,t)（直接給 persona）、Q-Experimental log p_{Q_BASE}(g|t, s)（Q_η 問、R 依正確 persona 答）、Q-Random（R 依另一個隨機測試 persona 答，用來分離「persona 專屬資訊」與「一般性資訊」）。要模型給最終答案時，把任務原文再貼一次在對話尾端，逼它回答而不是再問。每個點 = 10 段對話 × 500 組 = 5,000 筆。(b) 勝率：Q_η 以 τ=0.9 取樣一段對話、再以 τ=0 產生回答，與初始模型的回答比較；GPT-4 在給定任務與 persona 下選出較合適者（沿用 DPO 論文的評估協定），隨機化兩者順序以抵銷位置偏誤；每點約 300 筆比較，GPT-4 內容過濾擋掉 1–2%。",
-    "prompts": "Persona 生成、gold response、Roleplayer、Questioner 引出提示、勝率評審、Questioner 產生回答等提示詞都在附錄 Figure 8–17，但在 HTML 版本中是圖片，快取全文只有標題沒有內容；從 §A.5 範例可見 Questioner 的 system 提示會給出使用者名字（例如「A user named Zara has approached you with a request for help」），且模型輸出曾複述「提出能揭露背景、偏好、興趣與期望答案型態的開放式問題」這類指示。",
-    "unspecified": "學習率、epoch 數、訓練時對話取樣溫度、最大生成長度等微調超參數沒有寫在論文正文或附錄文字中，只能到程式碼庫找。"
+    "角色與模型（§5）": {
+      "Questioner（被訓練的策略）": "mistral-7b-instruct（repo 設定為 Mistral-7B-Instruct-v0.2）",
+      "Roleplayer（使用者模擬器）": "論文寫 mixtral-8x7b-instruct。提示詞見 Figure 12–13：以第一人稱扮演 persona、絕不替 Questioner 回答原問題、每次回答不超過 3 句。",
+      "Oracle": "GPT-4（gpt-4-0613），只負責寫 gold 回應",
+      "評審": "GPT-4，用於 win rate"
+    },
+    "目標函數（§3 Eq.1）": "最大化 Σ_i Σ_j E_s[ log p_{Q_BASE}(g_ij | t_i, s_ij) ]。s_ij 是 Questioner 的問題 q 與 Roleplayer 的回答 h 交錯而成的對話。注意評分模型固定是 Q_BASE，不是當輪的 Q_η。",
+    "單輪迭代步驟（Algorithm 1）": [
+      "1. 模擬：對目前這一輪所用 split 的每組 (t_i, u_j) 用 Q_{η-1} 與固定的 R 模擬 10 段對話。每段對話的終止輪數在 1 到 K=3 之間均勻抽樣，由外部決定，讓訓練資料的對話長度大致均勻。Questioner 每一輪都在 Figure 14 的 elicitation 提示詞下產生問題：強制每次只能是一個開放式、不超過 3 句的偏好探詢問題，禁止直接作答，還寫了罰 2000 美元與綁架小貓之類的威脅句。",
+      "2. 篩選：對 10 段對話各算 log p_{Q_BASE}(g_ij | t_i, s_ij)，保留最高的 1 段 s*_ij（top-k，k=1）。",
+      "3. 回應正則化：以 Q_{η-1} 在溫度 τ=0 下、條件於 (t_i, s*_ij) 產生回應 r_ij，接在對話尾端。論文把這一步寫成限制回應分佈的 KL 項 KL(p_{Q_{η-1}}(r|t,s) || p_{Q_η}(r|t,s))，實作上就是拿前一輪的 greedy 輸出做 SFT。",
+      "4. 訓練：每一輪都從 Q_BASE 重新做 SFT，不是接續 Q_{η-1}。訓練資料是 (t_i, s*_ij, r_ij)，Roleplayer 的回答 h 從 loss 中遮掉（mask），只學提問與作答，不學模仿使用者。",
+      "5. 共做 N=3 輪（η=1..3）。每輪在 task split 與 persona split 之間交替（repo 腳本依序是 A、B、A），確保每輪產生新資料時用到的 task 與 persona 沒在上一輪訓練時出現過。"
+    ],
+    "推論／評估時的提示": "作答提示（Figure 17）的形式是「My name is {name}. {t_i} {s_ij} {t_i}」，也就是在對話結尾重貼一次原任務，強迫模型作答、不再提問。log-prob 評估的 Q-Experimental 與 Q-Random 也同樣重貼任務。",
+    "關鍵超參數（論文）": "迭代 N=3；每組 (t,u) 模擬 10 段對話；最多 K=3 輪；top-1 篩選；正則化回應用 τ=0；win rate 評估時對話以 τ=0.9 取樣、回應以 τ=0 產生。",
+    "補充細節（出自 repo 設定，論文未載）": [
+      "SFT 超參數（experiments/star-gate/sft/train/conf）：全參數 SFT，repo 未見 LoRA；learning_rate 2e-5、num_train_epochs 1、per_device_train_batch_size 4、gradient_accumulation_steps 16、lr_scheduler cosine、warmup_ratio 0.1、bf16、model_max_length 1024、validation_split 0.05、seed 42。有效 batch 為 4×16×GPU 數，GPU 數不明。",
+      "模擬取樣（simulate-conversations/conf）：Questioner 的第一個問題以 temperature 0.9、top_p 0.9、num_return_sequences 10 取樣，後續每輪只取 1 個。所以 10 段對話是從第一個問題分岔出來的。max_new_tokens 700。repo 中唯一的 human_model 設定（m0.yaml）為 greedy（temperature 0），但這份設定的模型與論文不符，實際執行用的 M0 也沒提交，所以無法確認 Roleplayer 實際的解碼參數。",
+      "在 generate-qa.py 裡，輪數是從 [1, MAX_TURNS] 均勻抽樣的整數，MAX_TURNS=3。"
+    ]
   },
   "assumptions": [
-    "Oracle（GPT-4）依完整 persona 寫的 gold response 代表「理想的個人化回答」，所以提高它在 Q_BASE 下的 log 機率就代表問到了有用資訊。",
-    "Q_BASE 的 log 機率是對話資訊量的好代理：能讓固定基底模型更可能說出 gold 的對話，也會讓微調後的模型寫出更好的回答。",
-    "Roleplayer 持有完整 persona 且會合作、誠實、詳盡地回答提問；使用者知道並能說清楚自己的偏好。",
-    "每個任務都值得個人化、都值得先問再答（訓練與評估都強制至少一輪提問，終止點由外部均勻抽樣決定）。",
-    "GPT-4 作為評審的偏好能代表人類使用者的偏好。",
-    "以上一輪模型的貪婪回答做 SFT，足以近似對回答分佈的 KL 正則化。"
+    "Oracle（GPT-4）看到完整 persona 寫出的回應，就是該使用者的「理想答案」；而 Q_BASE 給這份 gold 的 log-prob 越高，代表引出的資訊越有用。也就是 log-prob 是提問效用的有效代理。",
+    "LLM Roleplayer 能忠實、合作地扮演隱藏 persona：問什麼答什麼，不會拒答、不會說謊，也不會把整份 persona 倒出來而讓提問品質變得無關緊要。",
+    "每個任務都值得先問，差別只在問什麼。輪數由外部給定，模型不需要判斷任務是否真的模糊。",
+    "合成 persona 與日常建議類任務的分佈，足以代表真實使用者的偏好結構。",
+    "每輪從 Q_BASE 重新 SFT，並對前一輪 greedy 回應做自蒸餾，足以防止回應能力退化。"
   ],
   "evaluation": {
     "benchmarks": [
-      "自建合成資料：instruct-human-assistant-prompt 前 550 則人類提問 × GPT-4 依 PRODIGy persona 生成的 110 則 persona，共 25,500 組三元組；測試集 50 任務 × 10 persona"
+      "自建合成資料：測試 split 為 50 個任務（instruct-human-assistant-prompt）×10 個 GPT-4 生成 persona，共 500 組",
+      "log-prob 評估：每組 10 段模擬對話，共 5000 筆"
     ],
     "metrics": [
-      "Gold response 在 Q_BASE 下的 log 機率（負對照、正對照、Q-Experimental、Q-Random 四條件）",
-      "GPT-4 成對評審勝率（對初始模型，平均 ± SEM）"
+      "Gold log-probability：log p_{Q_BASE}(g_ij | 條件)，比較四種條件。Negative Control 只給任務；Positive Control 給 persona 加任務；Q-Experimental 給任務加 Q_η 引出的對話；Q-Random 用另一位測試 persona 回答的對話，用來區分 persona 特有資訊和一般性資訊。",
+      "Win rate：以 Q_η 的回應對 Q_BASE 的回應，由 GPT-4 在看得到完整 persona 的情況下，判斷哪個「較貼合使用者背景與偏好」（Figure 15–16，先寫 100 字內逐步比較再選 A／B）。沿用 Rafailov et al.（DPO）的評估協定，並隨機化兩則回應的順序。GPT-4 內容過濾擋掉 1–2% 的請求。"
     ],
     "baselines": [
-      "初始模型 Q_BASE（mistral-7b-instruct，同樣以提示詞先提問再回答）",
-      "Q-Random（Roleplayer 依錯誤 persona 回答）",
-      "消融：STaR-GATE w/o Regularization（只訓練提問）、STaR-GATE w/ Gold Response（改用 gold response 當回答目標）、Response Model（Q_BASE 在 Q_η 問出的對話上作答）",
-      "Roleplayer 替換：mistral-7b-instruct、gemma-7b-instruct；Self-Oracle：llama3-8b-instruct 同時擔任 Oracle、Questioner、Roleplayer"
+      "初始模型 Q_BASE（mistral-7b-instruct，一樣在強制提問的提示詞下提問後作答）",
+      "消融：STaR-GATE w/o Regularization（只在問題上 SFT）",
+      "消融：STaR-GATE w/ Gold Response（改用 gold 回應當 SFT 的回應目標）",
+      "消融：Response Model（由 Q_BASE 在 Q_η 引出的對話上作答）",
+      "泛化：換 Roleplayer（mistral-7b-instruct、gemma-7b-instruct）",
+      "探索：Self-Oracle（llama3-8b-instruct 同時擔任 Oracle、Questioner 與 Roleplayer）"
     ]
   },
   "key_results": [
     {
-      "claim": "完整的 STaR-GATE 經過兩輪自我改進後，回答對初始模型的 GPT-4 勝率達到最高值，且勝率隨迭代上升。",
-      "numbers": "兩輪後勝率 72%（每點約 300 筆比較、±SEM）；此數字在快取的 HTML 全文中因行內數學遺失而空白，數值取自 arXiv API 摘要與史丹佛 CICL 網站上的較早版本 PDF",
-      "section": "摘要、§5 Win Rates、Figure 3a",
+      "claim": "STaR-GATE 的回應對初始模型的 win rate 隨迭代上升，第二輪達到峰值。",
+      "numbers": "最高 72%（第 2 輪）；每個資料點約 293–300 次比較，誤差棒為 ±SEM",
+      "section": "§5 Win Rates、Figure 3a（正文誤標為 Figure 3b）",
       "anchor_idx": 0
     },
     {
-      "claim": "在 Q-Experimental 條件下，gold response 的 log 機率隨迭代持續上升，代表微調後的提問引出了更多與 gold 相關的資訊。",
-      "numbers": "論文只以圖呈現趨勢，文字未給數值；每個資料點 = 10 段對話 × 10 persona × 50 任務 = 5,000 筆，因此誤差棒很小",
-      "section": "§5 Gold Log-probabilities、Figure 4a、Figure 6",
+      "claim": "Q-Experimental 條件下，gold 回應的 log-prob 隨迭代上升；Q-Random（換成別人的 persona 回答）也同步上升，只是絕對值低很多。作者把兩者的差距歸因於 persona 特有的資訊。",
+      "numbers": "文中未給數值，只有圖（每點 5000 筆，誤差棒很小）",
+      "section": "§5 Gold Log-probabilities、Figure 4a、附錄 A.1 Figure 6",
       "anchor_idx": 1
     },
     {
-      "claim": "Q-Random（Roleplayer 依錯誤 persona 作答）的 log 機率也隨迭代上升但明顯較低；作者把 Q-Experimental 高出 Q-Random 的部分歸因於 persona 專屬資訊，也承認隨機 persona 與正確 persona 並非完全無關。",
-      "numbers": "文字未給數值，只有趨勢描述",
-      "section": "§5 Gold Log-probabilities、Figure 4a",
+      "claim": "拿掉回應正則化、只在問題上 SFT 時，win rate 隨迭代下降，模型忘了怎麼作答，只會繼續提問（附錄 A.5 有例子）。它的 gold log-prob 也略低於完整方法。",
+      "numbers": "文中未給數值，只有圖（Figure 3a、4b）",
+      "section": "§6 Training Ablations、Figure 3a、Figure 4b、§A.5",
       "anchor_idx": 2
     },
     {
-      "claim": "換成訓練時沒見過的 Roleplayer，STaR-GATE 仍有正向勝率，但低於用訓練時的 mixtral-8x7b 作 Roleplayer。",
-      "numbers": "mistral-7b-instruct 作 Roleplayer：兩輪後 65%；gemma-7b-instruct：一輪後峰值 62%（快取全文數值空白，取自史丹佛 CICL 網站較早版本 PDF，該段文字與 v3 相同）",
-      "section": "§6 Roleplayer Robustness、Figure 3b",
+      "claim": "改用 gold 回應當 SFT 目標時，gold log-prob 略高，但 win rate 先降後收斂到平手。作者歸因於模型學到 gold 裡有、對話中卻沒引出的 persona 細節，因而產生幻覺（附錄例子中虛構出寵物蟒蛇與作家身分）。",
+      "numbers": "win rate 最後收斂到 50%",
+      "section": "§6 Training Ablations、Figure 3a、Figure 5a、§A.5",
       "anchor_idx": 3
     },
     {
-      "claim": "拿掉回答正則化（只用挑出的提問做 SFT）會讓勝率隨迭代下降，模型學會一直追問而不再給答案；其 log 機率也略低於完整方法。",
-      "numbers": "文字未給具體勝率，只描述下降趨勢；§A.5 範例中該模型在應該作答時又丟出一串問題",
-      "section": "§6 Training Ablations、Figure 3a、Figure 4b、§A.5",
+      "claim": "Questioner 只跟 mixtral 訓練過，換 Roleplayer 後仍然勝過初始模型，但幅度較小：換成 mistral-7b-instruct 的情況。",
+      "numbers": "第 2 輪 win rate 65%（mixtral 為 72%）",
+      "section": "§6 Roleplayer Robustness、Figure 3b",
       "anchor_idx": 4
     },
     {
-      "claim": "改用 gold response 當回答訓練目標，log 機率略高，但勝率先降後收斂到平手，原因是模型學到回答中出現對話沒問到的 persona 細節（幻覺）。",
-      "numbers": "勝率收斂到 50%（快取全文數值空白，取自史丹佛 CICL 網站較早版本 PDF）；§A.5 範例中模型捏造了「你是作家」「寵物蟒蛇 Nimbus」",
-      "section": "§6 Training Ablations、Figure 3a、Figure 5a、§A.5",
+      "claim": "換成 gemma-7b-instruct 當 Roleplayer 時，win rate 在第一輪就達到峰值，之後沒有再升。",
+      "numbers": "峰值 62%（第 1 輪）",
+      "section": "§6 Roleplayer Robustness、Figure 3b",
       "anchor_idx": 5
     },
     {
-      "claim": "若讓未微調的 Q_BASE 在 STaR-GATE 問出的對話上作答，勝率只小幅上升且第三輪回到平手；作者認為初始模型沒被訓練去利用對話歷史，所以提問變好本身帶來的收益有限。",
-      "numbers": "兩輪後最高 57%，第三輪回到 50%（57% 取自史丹佛 CICL 網站較早版本 PDF；50% 在快取全文中可見）",
+      "claim": "讓未訓練的 Q_BASE 在 Q_η 引出的對話上作答，勝率只小幅上升，第三輪就回到平手。作者據此認為，「會用引出的資訊作答」也需要訓練，不只是問得好。",
+      "numbers": "第 2 輪最高 57%，第 3 輪回到 50%",
       "section": "§6 Response Model、Figure 5b",
       "anchor_idx": 6
     },
     {
-      "claim": "探索性實驗：以 llama3-8b-instruct 同時擔任 Oracle、Questioner、Roleplayer，一輪微調後對初始模型仍有正向勝率；作者據此認為 Questioner 夠強時可不依賴 GPT-4 這類更強的 Oracle。",
-      "numbers": "兩個勝率數字（全 llama3 自我 Oracle、以及 llama3 當 Questioner/Roleplayer 但 GPT-4 當 Oracle 的對照）在快取的 v3 全文中都是空白；可取得的非 arXiv 副本是沒有這段的較早版本，因此無法查證，不填數值",
-      "section": "§6 Self-Oracle（僅 v3）",
+      "claim": "探索性實驗：Oracle、Questioner、Roleplayer 全用 llama3-8b-instruct，一輪 SFT 後的表現與用 GPT-4 當 Oracle 相近，作者據此認為不一定需要更強的 oracle。",
+      "numbers": "Self-Oracle 一輪後 65%；同設定改用 GPT-4 當 Oracle 為 66%",
+      "section": "§6 Self-Oracle",
       "anchor_idx": 7
     }
   ],
   "limitations_stated": [
-    "依賴 gold response（等同標籤）且由更強的外部模型產生，因此不能算完整的 self-play／自我改進；以更強的 Questioner 充當 self-oracle 只做了探索性分析。",
-    "只依 gold response 篩選對話，沒有直接監督提問本身；直接監督提問可能問得更精準。",
-    "換成 mistral-7b 或 gemma-7b 當 Roleplayer 時勝率下降；訓練時只用了 mixtral 一種 Roleplayer，應在訓練中納入多種 Roleplayer 以提升穩健性。",
-    "只用了 expert iteration，其他最佳化方式（例如搭配變異數縮減的 REINFORCE）留待未來。",
-    "最明顯的進步發生在第一輪，多輪迭代的計算成本高於單次微調。",
-    "沒有對資料集大小做消融，也沒有在其他領域評估微調是否影響模型其他能力。"
+    "依賴外部 gold 回應（標籤），所以不算完整的 self-play 或自我改進；目前靠更強的 GPT-4 提供 oracle 資訊。",
+    "把訓練時的 Roleplayer mixtral 換成 mistral-7b 或 gemma-7b，win rate 就下降。訓練只用了單一 Roleplayer，應在訓練中納入多個 Roleplayer 以提升穩健性。",
+    "只用 expert iteration 最佳化目標函數，沒有試 REINFORCE 加變異數縮減等替代方法；也沒有直接監督問題本身。",
+    "最大改善出現在第一輪之後，多輪迭代的計算成本高於單次微調，需要設法減少迭代次數。",
+    "沒有消融資料集大小，也沒有評估微調是否影響其他領域的表現。"
   ],
   "limitations_observed": [
-    "獎勵與評審同源：gold response 由 GPT-4 看完整 persona 寫成，勝率也由 GPT-4 在看得到 persona 的情況下評判；§A.4 的 gold 範例大量點名 persona 細節（航海、神祕信件），評審可能偏好「提到越多 persona 細節的回答」，72% 勝率量到的可能部分是風格對齊 GPT-4，而不是回答對使用者更有用。全文沒有任何人類評估。",
-    "Roleplayer 過度合作：它拿著完整 persona，對每個問題都用好幾句流暢、具體的敘述逐項回答（§A.5 三段範例皆如此），甚至會自行補出 persona 裡沒有的細節（Q_BASE 範例中它說自己應徵私人機構、要帶團隊、期待使用先進望遠鏡，Zara 的 persona 並未提到這些），讓「引出的資訊」與 gold 依據的 persona 不一定一致。真實使用者回答簡短、常不清楚自己要什麼，提問品質的收益在真實互動中可能被高估；§6 換成較弱 Roleplayer 勝率就從 72% 掉到 65%／62%，顯示結果對模擬器能力相當敏感。",
-    "沒有處理「何時問」：訓練與評估都強制至少一輪提問，停止點由外部在 1..3 輪均勻抽樣，最後靠把任務原文再貼一次逼模型回答；模型從未學會判斷「這個請求需不需要澄清」「問夠了沒」。像「最近 AI 有什麼進展」這類任務也被當成需要個人化，過度提問的代價（使用者耐心、延遲）完全沒被量測。對 T1 的「何時問」這一半，這篇沒有貢獻。",
-    "收益歸因不清：Response Model 消融中，讓 Q_BASE 在 STaR-GATE 問出的對話上作答只到 57% 且第三輪回到 50%；Q-Random 的 log 機率也跟著上升。兩者合起來顯示 72% 中有相當部分來自「學會利用對話歷史寫個人化回答」以及問出一般性資訊，而不是問出 persona 專屬的好問題；論文標題與摘要把功勞歸給「問得更好」，證據沒有那麼強。",
-    "代理目標與被訓練模型脫鉤：挑選對話的分數永遠用固定的 Q_BASE 計算，而實際作答的是微調後的 Q_η，log 機率上升不保證 Q_η 的回答品質上升。§6 的兩個消融正好顯示 log 機率與勝率分岔：w/ Gold Response 的 log 機率略高、勝率卻收斂到 50%；w/o Regularization 的 log 機率只略低、勝率卻隨迭代下降。gold log 機率作為回答品質的代理並不可靠，論文卻把它當主要訓練目標與第一個評估指標。",
-    "計分模型定義前後不一：§5 明定評估用的 log 機率是 log p_{Q_BASE}(g | t, s)，也就是固定的初始模型在打分；但 §6 預期 w/ Gold Response 會有較高 log 機率，理由是「Questioner 直接學會產生 gold response」——這個理由只有在用微調後的模型打分時才成立。Figure 4、5a 到底是哪個模型在打分，論文沒有交代清楚，連帶讓 log 機率曲線的解讀變得不確定。",
-    "所謂 KL 正則化其實只是把上一輪的貪婪回答當 SFT 目標，並沒有真的計算或約束 KL；而且回答來自上一輪（已微調過）模型，多輪後可能累積漂移，論文沒有量測回答分佈實際偏移多少。",
-    "統計設計偏弱：測試集只有 10 個 persona、50 個任務；約 300 筆勝率比較共用這 10 個 persona，彼此不獨立，但 SEM 按獨立樣本計算，誤差棒可能被低估。另外文中說每種對話長度約 166 組、每點平均 300 筆，兩個數字的關係沒交代清楚（166×3 ≈ 500 而非 300）。",
-    "在測試集上挑最佳迭代：N=3 輪，但主結果報告的是測試集上的最高點（第二輪 72%），沒有另設驗證集選輪數；§7 又說最明顯的進步在第一輪，與報告第二輪峰值的敘事不完全一致。",
-    "唯一的外部基準是同一個 7B 模型的提示版；沒有與 GATE 式提示強模型、Hong et al. 的離線 RL、或以 DPO 訓練提問等方法比較，無法判斷 STaR-GATE 相對其他訓練方法的優劣。",
-    "寫作細節不一致：§6 把訓練用 Roleplayer 寫成 mistral-8x7b-instruct、§7 寫成 mixtral-7x8b-instruct，實際應為 mixtral-8x7b-instruct；§5 主勝率引用 Figure 3b，但圖說中 3b 是 Roleplayer 一般化結果。",
-    "Persona 是 GPT-4 生成的戲劇化小傳（喪母、瓶中信、秘密政府機構），分佈遠離真實使用者的偏好結構；評估也只在同一分佈內，沒有檢驗對真實使用者或其他任務類型的外推。"
+    "只處理「問什麼」，完全沒處理「何時問、何時停」。訓練時輪數在 1–3 均勻抽樣、由外部決定；elicitation 提示詞（Figure 14）強制每一輪都必須是開放式問題；作答時又重貼一次任務強迫模型作答。所以模型從沒學過判斷一個請求是否真的模糊、該不該問、問夠了沒。這正是 T1「何時問」那一半，本文沒有提供任何證據。",
+    "Q-Random 的 log-prob 也隨迭代同步上升（§5、Figure 4a），代表相當一部分增益來自與個別 persona 無關的一般性資訊，例如讓對話更長、帶出通用背景。作者說 Q-Experimental 多出來的部分是 persona 特有資訊，但正文沒給任何數值，無法判斷 persona 特有資訊到底佔增益多少。",
+    "評估有同源偏誤：gold 回應由 GPT-4 寫，評審也是 GPT-4。評審看得到完整 persona，判準是「較貼合背景與偏好」，而不是正確性或有用性。log-prob 獎勵本身也會獎勵模仿 GPT-4 的風格，例如 gold 常以「Hello Zara」開頭並點名 persona 細節。72% 反映的是「更像 GPT-4 式個人化」，未必是「使用者更滿意」。全文沒有任何人工評估。",
+    "Baseline 只有自己的初始模型，而且這個初始模型同樣被強迫提問。win rate 沒有「完全不問、直接作答」的對照，也沒和 GATE 式提示強模型、Hong et al. 的離線 RL 或 DPO 類方法比較，所以無法得知 STaR-GATE 在方法光譜上的相對位置。多問幾輪對使用者造成的負擔（輪數、回答成本）也完全沒量。",
+    "數字與敘述有多處對不上。正文說 win rate 見 Figure 3b，但主結果在 3a。win rate 說每個資料點是 300 個值的平均，但測試集是 500 組、每種輪長約 166 組，兩組數字兜不起來。Roleplayer 名稱也有 mistral-8x7b、mixtral-7x8b 等筆誤。",
+    "增益集中在前兩輪。§7 說第 1 輪之後改善最大，72% 出現在第 2 輪，第 3 輪沒有再上升；gemma 當 Roleplayer 時第 1 輪就到頂，Response Model 消融在第 3 輪回到 50%。三輪 expert iteration 的邊際效益有限，但論文仍以 N=3 當標準設定，沒討論停止準則。",
+    "只跑單一訓練 seed（repo 設定 seed 42），誤差棒的 SEM 是跨 prompt 算的，不是跨訓練 run。因此 65% 對 66%（Self-Oracle 對 GPT-4 Oracle）、62% 對 65%（gemma 對 mistral 當 Roleplayer）這類差距，都在未知的 run 間變異範圍內，不宜解讀為有意義的差異。",
+    "論文把回應正則化寫成 KL 項，實作只是對前一輪 greedy 輸出做 SFT（自蒸餾），沒有量測或約束實際的 KL。而且每輪都從 Q_BASE 重訓，目標卻是 Q_{η-1} 的輸出，等於一條逐輪傳遞的自蒸餾鏈：回應分佈的偏移會一輪輪往下傳，沒有任何項在約束它。第 3 輪 win rate 沒有再上升，是否與這條鏈有關，論文沒有分析。",
+    "模擬環境對提問者非常友善。persona 被刻意寫成「有複雜情節的故事角色」，資訊密度高且人為；Roleplayer 握有完整 persona，提示詞（Figure 13）要求它有問必答，從不拒答、不含糊、也不會說「我不知道」。repo 唯一的 human_model 設定甚至是 greedy 解碼，但這份設定是否就是實際使用的無法確認。任務是沒有標準答案的日常建議，模糊只是「可以更個人化」，而不是缺了資訊就做不下去。這些條件都讓結論很難外推到真實使用者或有明確成敗的任務型對話。",
+    "Self-Oracle 只做一輪，沒交代評審與 Roleplayer 的設定是否相同，也沒有迭代曲線，屬於單點觀察，不足以支撐「不需要更強 oracle」這個結論。",
+    "可重現性有落差：公開 repo 主實驗唯一提交的 human_model 設定（simulate-conversations/conf/human_model/m0.yaml）指向 Mistral-7B-Instruct-v0.2；執行腳本呼叫的 human_model=M0 不在 repo 裡；論文則說 Roleplayer 是 mixtral-8x7b-instruct。另外 QA_PROMPT_IDX: 13 顯示存在多版 Questioner 提示詞，無法確認 Figure 14 就是實際使用的那一版。"
   ],
-  "framework_role": "T1 中「模糊指令與澄清提問」的代表性訓練型方法：示範如何把「問什麼」轉成可自動計分的獎勵（引出的資訊能否讓模型更接近 persona 條件下的理想答案），並用模擬使用者迴圈做自我改進。它同時是 T1 與 T6 的交界案例：以持有隱藏 persona 的 LLM Roleplayer 當使用者模擬器，產生訓練與評估所需的互動。消融結果提供兩個可直接搬到 agent 設計的教訓：只訓練提問會讓模型忘了回答（永遠追問）；拿看過完整資訊的標準答案當回答目標會讓模型捏造使用者沒說過的細節。它不處理「何時該問」的決策與意圖分類，這部分要找其他論文補。",
+  "framework_role": "T1 子領域「模糊指令與澄清提問」中，「以訓練教模型問什麼」這條路線的早期代表作。它把澄清提問形式化為偏好引出，用下游回應品質（gold 回應的 log-prob）當提問的代理獎勵，並指出兩個設計教訓：只訓練提問會讓模型忘了作答，所以要有回應正則化；直接用 oracle 答案當目標會讓模型幻覺出沒引出的使用者細節。對框架來說，它提供了「使用者真實目標推斷」的一種訓練訊號設計，也示範了 T6 使用者模擬器如何成為 T1 的訓練資料來源。它不涵蓋意圖分類、OOD 偵測或依意圖路由，也完全沒處理「何時該問、何時該停」，這一塊要由其他論文補齊。",
   "edges": [
     {
       "edge": "E1",
-      "how": "方法的核心就是這條資料流：Roleplayer（使用者模擬器，持有 Questioner 看不到的 persona）對澄清問題的回答，被接進對話歷史，成為 Questioner 推斷使用者真實偏好、產生個人化回答的輸入；評估中還以 Q-Random（模擬器依錯誤 persona 回答）操弄這份輸入的內容，量它對目標對齊的影響，並替換不同的 Roleplayer 模型檢驗 Questioner 對輸入來源的穩健性。"
+      "how": "Roleplayer 是握有隱藏 persona 的 LLM 使用者模擬器，它對澄清問題的回答是 Questioner 推斷使用者偏好的唯一資訊來源。訓練與評估都透過這條「模擬器輸入進入目標對齊」的資料流。§6 還換用 mistral-7b、gemma-7b 當模擬器，量測 T1 策略對輸入來源的敏感度。"
     },
     {
       "edge": "E6",
-      "how": "模擬對話紀錄被逐段評分：以 gold response 在 Q_BASE 下的 log 機率給每段互動打分，並在測試集上用同一指標與 GPT-4 勝率評估各迭代。需注意這份評分的主要用途是回流訓練（挑 top-1 對話做 SFT），是評估兼獎勵的閉環，不是獨立的離線評估流程。"
+      "how": "每組 (task, persona) 產生的 10 段模擬互動紀錄，會被 Q_BASE 以 gold 回應的 log-prob 評分，取最高分的一段回流成下一輪的訓練資料。測試時則同樣以互動紀錄計算 log-prob，並由 GPT-4 評審 win rate。互動紀錄回流評估，並由評估決定訓練資料，形成閉環。"
     }
   ],
   "adoption": {
     "evidence": [],
-    "assessment": "未見證據。論文本身沒有提到任何部署或產品使用；WebSearch 查到的只有 arXiv、論文彙整站、作者自己的程式碼庫與 Hugging Face 模型釋出（作者自己的研究成果釋出，不算採納），沒有任何官方產品頁、官方文件或官方部落格說明採用 STaR-GATE。Semantic Scholar 顯示 123 次引用、9 次 influential citation，屬學術影響力，不算採納。"
+    "assessment": "未見證據。論文沒有提到部署或產品。作者公開了 MIT 授權的程式碼（https://github.com/scandukuri/assistant-gate），README 也提到 Hugging Face 上的 checkpoint scandukuri/mistral-stargate，但這兩者屬於可重現性的研究釋出，不算商用採納。WebSearch 也沒有查到任何官方產品頁、model card 或官方部落格說明有採用此方法。後續論文（例如 CollabLLM、Modeling Future Conversation Turns）的引用與比較屬於學術影響力，不計入採納。"
   },
   "reproducibility": {
     "code": "https://github.com/scandukuri/assistant-gate",
-    "data": "部分公開。任務來自公開的 instruct-human-assistant-prompt 資料集，persona 種子來自 PRODIGy；程式碼庫不直接包含生成的 persona、gold response 與模擬對話，README 指向一份 Google Drive 上的最終輸出檔。作者另在 Hugging Face 釋出兩輪迭代後的主實驗 checkpoint：https://huggingface.co/scandukuri/mistral-stargate（MIT）。重新生成需要 GPT-4（gpt-4-0613）API。所有提示詞在論文中只以圖片形式呈現（Figure 8–17）；微調超參數未寫在論文文字中。"
+    "data": "部分公開。repo（MIT）收有各階段的 Hydra 設定與腳本；README 說最終產出（persona、gold 回應、模擬對話等）放在 Google Drive 連結，並在 Hugging Face 釋出 checkpoint scandukuri/mistral-stargate。任務來源 instruct-human-assistant-prompt 是公開資料集。要注意 repo 的 Roleplayer 設定與論文描述不一致（見 limitations_observed），而 GPT-4（gpt-4-0613）已難以取得，重新生成 gold 回應無法完全重現。"
   },
-  "value_verdict": "high",
-  "verdict_reason": "它是「訓練模型問出有用澄清問題」這條路線中方法完整、程式碼與模型都公開的早期代表作，獎勵設計與兩個消融（只訓練提問就忘了回答、用標準答案當目標就捏造細節）對設計 T1 澄清行為有直接參考價值；但評估全靠 GPT-4、只比初始模型、且完全不處理何時該問，讀時要把結論打折。",
+  "value_verdict": "medium",
+  "verdict_reason": "它是用自我改進訓練模型「問什麼」的早期代表作（S2 顯示 123 次引用、9 次 influential），獎勵設計與回應正則化的教訓值得借用；但完全沒處理「何時問」，評估也只有合成 persona、GPT-4 同源評審，baseline 只有自己的初始模型，所以對 T1 不算必讀。",
   "related": [
-    "2310.11589",
     "2203.14465",
+    "2310.11589",
+    "2212.10711",
     "2403.05534",
+    "2311.09144",
     "2311.05584",
     "2312.12009",
-    "2311.09144",
-    "2212.10711",
     "1805.04655",
     "2109.05794"
   ],

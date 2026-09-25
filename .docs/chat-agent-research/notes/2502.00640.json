@@ -1,0 +1,201 @@
+{
+  "id": "2502.00640",
+  "title": "CollabLLM: From Passive Responders to Active Collaborators",
+  "topic": "T1",
+  "subarea": "使用者目標推斷與偏好引出",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把每一輪回應的獎勵改成「用 GPT-4o-mini 使用者模擬器往後模擬 w 輪對話、以整段對話的任務成功＋token 效率＋LLM judge 互動性評分取期望」的 Multiturn-aware Reward（MR），再以 SFT／DPO／PPO 微調 Llama-3.1-8B-Instruct，讓模型學會在使用者目標隱藏且描述模糊時主動澄清、引出偏好；在三個自建多輪模擬任務、Abg-CoQA 零樣本遷移與 201 人 MTurk 寫作研究上勝過原始模型與提示工程版本。",
+  "problem": "RLHF 等主流微調只對「下一輪回應」給獎勵，逐輪最佳化不等於整段對話達成使用者的最終目標：面對模糊或開放式請求，模型傾向直接給一個看似完整的答案（自行假設需求），而不是先問清楚，使用者只好事後一再修正，導致效率低、滿意度差。真實使用者常在對話開始時說不清自己要什麼，甚至自己也還沒想清楚；對話 agent 若要做到目標對齊，必須能在多輪互動中推斷並引出使用者隱藏的長期意圖。既有做法要嘛靠提示詞（行為僵硬、容易過度提問），要嘛只訓練「問澄清問題」這單一動作，或在整段對話層級給事後獎勵（MTPO 類，逐輪歸因粗糙），都沒有直接估計「這一輪回應對後續對話結果的影響」。",
+  "core_idea": "一輪回應好不好，要看它把接下來的對話帶到哪裡。對每個候選回應 m_j，以帶著隱藏目標 g 的 LLM 使用者模擬器往後模擬數輪（forward sampling），用對話層級的獎勵 R*（任務外在指標＋效率與互動性等內在指標）評整段結果，取期望值當作這一輪的獎勵（MR）。這等於用模擬 rollout 做逐輪的 Monte Carlo 價值估計；作者把它包裝成「介入單一回應、估計對未來軌跡的因果效應」。一個澄清問題在當輪可能拿零分（還沒給答案），但若它讓後兩輪得到正確解，MR 就會把功勞算回它身上，於是模型在沒有任何「何時該問」標註的情況下，自己學到在目標不明時主動澄清與建議。",
+  "method": {
+    "問題設定（§2）": "使用者有隱藏目標 g；對話為 K 輪，每輪 t_j＝{u_j（使用者輸入）, m_j（模型回應）}。模型只看歷史 t^h_j＝t_{1:j-1}∪{u_j} 產生 m_j。整體目標是對話層級的 R*(t_{1:K}|g)，同時涵蓋任務成功與使用者成本（例如花費時間）。",
+    "Multiturn-aware Reward（§3.1，式 1）": "MR(m_j | t^h_j, g)＝E_{t^f_j ~ P(t_{j+1:K} | t_{1:j})} R*(t_{1:j} ∪ t^f_j | g)。實作上：對某個候選回應，把它接到歷史後，交給使用者模擬器與助理模型輪流往後生成最多 w 輪（window size），重複取樣 3 條未來軌跡（sample size＝3），各自算 R* 後取平均。w＝0 時退化成只評當輪回應的即時獎勵。",
+    "對話層級獎勵 R*（§3.1.1，式 2–4）": {
+      "組合": "R*(t|g) ≈ R_ext(t,g) ＋ R_int(t)。",
+      "R_ext（外在、任務相關）": "S(Extract(t), y_g)：從對話抽出最終解答（文件、程式碼、數學答案），與參考解 y_g 比對。三個任務分別用 BLEU（文件對原始 Medium 文章）、BigCodeBench 單元測試的 Pass Rate、LLM judge 判定的數學答案正確率。Extract(t) 的具體實作（例如文件任務如何從多輪對話組出最終文件）文中未說明。",
+      "R_int（內在、使用者體驗）": "−min[λ·TokenCount(t), 1] ＋ R_LLM(t)。第一項懲罰使用者要讀與寫的 token 總量，上限 1；λ 在 MediumDocEdit-Chat 設 1e-4、BigCodeBench-Chat 與 MATH-Chat 設 5e-4（文件長度變異大，λ 太大會直接撞到上限）。第二項 R_LLM 由 LLM judge 給 0–1 分，評互動性／投入程度；訓練時用哪個模型當這個 judge，文中未說明。",
+      "可插拔": "B.3 強調獎勵類型與 MR 的 forward sampling 設計彼此獨立，可以換成其他獎勵訊號，再經 forward sampling 評估長期影響。"
+    },
+    "使用者模擬器（§3.1.2、§4、Appendix D.1）": {
+      "模型": "GPT-4o-mini（訓練時的 forward sampling 與評估環境都用它）。作者試過開源模型扮演使用者，常常「混淆」而開始替使用者解題，所以沒採用（B.2）。",
+      "輸入": "任務描述（助理看不到）、完整請求或參考目標（助理看不到，例如完整題目或參考答案；MediumDocEdit-Chat 是把原文摘要成目標問題）、目前的對話歷史。",
+      "行為指引（轉述）": "維持人類使用者角色與一致的個性；刻意省力，早期只給模糊或不完整的需求，讓 AI 主動來問；依使用者知識程度反應，知識不足時可能沒發現錯誤；偶爾打錯字或給錯資訊；主動提到個人偏好或限制；聚焦目標、把離題的對話拉回來。",
+      "輸出": "JSON 三欄：current_answer（摘要 AI 目前的解）、thought（使用者視角的思考：是否已滿意、卡在哪、AI 是否問了問題等）、response（實際回覆）。認為目標已達成或 AI 幫不上忙時，回覆一個預定的終止訊號字串結束對話。"
+    },
+    "離線合成資料（§3.2、Appendix B.1、Figure 8、Table 5）": {
+      "生成者": "助理用 GPT-4o、使用者模擬器用 GPT-4o-mini。",
+      "流程": [
+        "給定使用者當輪訊息，取樣多個候選助理回應（每輪取樣幾個文中未說明）。",
+        "對每個候選計算 MR（w＝2、3 條未來軌跡）。",
+        "依 MR 排序：排名高者為 chosen、低者為 rejected；SFT 收 chosen 回應，DPO 收 chosen／rejected 配對。",
+        "把 chosen 回應其 forward window 裡的第一輪（模擬使用者的下一句）接到 prompt 後面，作為下一輪的起點，逐輪延伸直到對話結束。"
+      ],
+      "規模": "三個任務各 500 段訓練對話；總輪數 2,303／2,627／2,527，平均 4.61／5.25／5.05 輪。chosen／rejected 的 MR 平均±標準差：Medium 0.312±0.104 對 0.246±0.113；BigCodeBench 0.494±0.621 對 0.207±0.763；MATH 0.863±0.524 對 0.547±0.502。",
+      "切分": "§4 說分別抽 100 篇 Medium 文章、600 題 BigCodeBench、200 題 MATH level-5，Table 5 則是各 500 段訓練對話；兩者的對應關係與 train／test 切分方式，文中未明確說明。"
+    },
+    "模型訓練（§4、Appendix B.2、Table 6）": {
+      "基底": "Llama-3.1-8B-Instruct＋LoRA（rank 32、α 16、dropout 0.1、不訓 bias）。",
+      "四個變體": "離線：SFT 與 Offline DPO，用上述合成資料訓練。線上：PPO 接在 SFT 之後、Online DPO 接在 Offline DPO 之後；線上階段由正在訓練的模型自己參與協作模擬（產生候選與後續助理輪），即時算 MR 當作 PPO 獎勵或 DPO 偏好。PPO 的 value model、KL 係數等細節文中未說明。",
+      "超參數": "SFT：lr 1e-5、batch 64、3 epoch。Offline DPO：lr 5e-6、batch 64、8 epoch。Online DPO：lr 5e-6、batch 32、1 epoch。PPO：lr 2e-6、batch 64、5 epoch。三個任務共用 w＝2、sample size＝3。",
+      "成本（Table 7，MediumDocEdit-Chat，每條 forward sample）": "w＝1／2／3 時，模擬器花費 0.00174／0.00439／0.00685 美元，policy 耗時 7.41／15.84／21.72 秒。"
+    },
+    "評估協定（§4、§5.3、§6、Appendix D–F）": {
+      "模擬評估": "GPT-4o-mini 模擬使用者與待測模型對話到結束（評估時的最大輪數文中未說明），再算任務指標、每段對話的平均 token 數，以及 Claude-3.5-Sonnet 評的互動性 ITR。",
+      "ITR judge（D.4）": "給整段對話，要 judge 在 C～A 之間給浮點分數，並附高／中／低互動的範例；Table 1 用 A＝3、B＝2、C＝1，再以 S'＝2(S−2.5) 重縮放（作者說所有方法原始分數都高於 2.5）；新版程式碼改用 A＝1、B＝0.5、C＝0，不再重縮放。",
+      "Helpfulness judge（D.5）": "消融用的即時獎勵：給使用者意圖、歷史與待評回應，以 0、0.2、…、1.0 六級評分，看意圖對齊、有用性與清楚程度。",
+      "Proactive Base（D.2）": "同一個 Llama-3.1-8B-Instruct 加上長提示：要求準確理解意圖、需求缺細節時先問、問具體的後續問題、著眼長期目標、精簡並提供選擇題式選項、至少互動三輪；輸出 JSON（current_problem、thought、response）。",
+      "D.3 系統提示": "附錄另列一份鼓勵主動澄清與簡潔的系統提示，但沒交代它套在哪個模型或哪個實驗上。",
+      "Abg-CoQA 零樣本（§5.3、Appendix E）": "用只在 BigCodeBench-Chat 上以 Online DPO 訓練的模型，以「請幫我回答關於下面故事的問題」模板輸入故事與問題；把回應歸成「提澄清問題」或「直接回答」兩類，分別在模糊／非模糊題上算動作正確率，再算 macro accuracy 與 macro F1。回應如何被歸類（人工或 LLM）文中未說明，也沒評回答內容是否正確。",
+      "使用者研究（§6、Appendix F）": "MTurk 201 人，隨機分到 Base、Proactive Base、CollabLLM 之一（匿名）；文件類型隨機為部落格文章、創意寫作或個人陳述，參與者先選主題並簡答幾個相關問題（模擬「只有粗略想法」），再至少對話 8 輪；每 3 輪給一次互動評分，結束後評最終文件品質與整體互動（1–10 分），並記錄總時長。每段對話付 10 美元，平均 28.4 分鐘。",
+      "安全評估（Appendix C）": "以 Azure AI Evaluation SDK 的 AdversarialSimulator 產生對抗查詢，四類傷害（暴力、性、自傷、仇恨）各取 20 題共 80 題，對 Base 與 CollabLLM 的回應各跑四個傷害評估器（0–7 分）。"
+    }
+  },
+  "assumptions": [
+    "LLM 使用者模擬器（GPT-4o-mini）的反應分佈夠接近真實使用者，在模擬器上學到的「何時問、問什麼」能遷移到真人。",
+    "使用者目標 g 可以用一個參考解 y_g 表達，而且能從對話中抽出最終產物並自動評分（BLEU、單元測試、答案比對）；目標會中途改變的開放任務不在這個假設內。",
+    "往後模擬 w＝2 輪、3 條樣本就足以估計一個回應的長期價值；截斷後的部分對話也能被 R* 合理評分。",
+    "LLM judge 給的互動性分數是使用者體驗的合理代理，而且與任務成功、token 成本簡單相加就能平衡三者。",
+    "使用者的閱讀與輸入成本大致與 token 數成正比。",
+    "基底模型已做過安全對齊，協作式微調不會把它破壞掉（Appendix C 只驗了 80 題）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MediumDocEdit-Chat（自建：100 篇 Medium 文章摘要成目標，協作寫文件）",
+      "BigCodeBench-Chat（自建：從 BigCodeBench 抽 600 題，多輪程式協作）",
+      "MATH-Chat（自建：從 MATH 抽 200 題 level-5，多輪解題）",
+      "Abg-CoQA（零樣本遷移，模糊／非模糊問題的澄清判斷）",
+      "MTurk 真人寫作研究（201 人，部落格／創意寫作／個人陳述）",
+      "Azure AI Evaluation SDK 對抗查詢（80 題，安全性）"
+    ],
+    "metrics": [
+      "BLEU（對原始文章）",
+      "Pass Rate（PR，BigCodeBench 單元測試）",
+      "ACC（數學答案正確率，LLM judge 判定，judge 模型文中未說明）",
+      "#Tokens（每段對話平均 token 數，越低越好）",
+      "ITR（Claude-3.5-Sonnet 評互動性，重縮放後上限 1）",
+      "Abg-CoQA 動作正確率（模糊題提問率、非模糊題直接回答率）、Macro Accuracy、Macro F1",
+      "真人評分：最終文件品質、整體互動、每 3 輪互動評分（1–10），以及總花費時間",
+      "傷害分數（0–7）與安全評估的 pass rate"
+    ],
+    "baselines": [
+      "Base：Llama-3.1-8B-Instruct",
+      "Proactive Base：Llama-3.1-8B-Instruct＋鼓勵澄清與追問的提示詞（D.2）",
+      "CollabLLM 四個變體互比：SFT、PPO、Offline DPO、Online DPO",
+      "消融：Helpfulness 即時獎勵、只用外在獎勵、外在＋內在（w＝0）、只用內在獎勵，以及 MR 在 w＝1、2、3",
+      "Abg-CoQA 另比 GPT-4o",
+      "STaR-GATE、ACT、MTPO、ClarifyGPT 只出現在 Table 4 的定性比較，沒有實跑"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "Online DPO 版 CollabLLM 相對最強基準 Proactive Base，三個模擬任務平均任務表現提高 18.5%、對話效率提高 13.3%、互動性提高 46.3%。",
+      "numbers": "任務指標相對提升：BLEU 5.14%、PR 18.2%、ACC 32.0%；token 減少 8.25%／13.2%／18.3%；ITR 提升 48.3%／54.3%／36.4%。注意 MATH 的 36.4% 實際是對 Base（0.44）算的，對 Proactive Base（0.46）應為 30.4%，見 limitations_observed。",
+      "section": "§5、Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "絕對數字上，CollabLLM 在三個任務都提升任務指標、降低 token、大幅拉高 ITR，但任務指標的絕對值仍低。",
+      "numbers": "MediumDocEdit-Chat：BLEU 32.2→36.8、tokens 2.49k→2.00k、ITR 0.46→0.92（Base→Online DPO）。BigCodeBench-Chat：PR 9.3→13.0、ITR 0.22→0.52。MATH-Chat：ACC 11.0→16.5、tokens 3.40k→2.37k、ITR 0.44→0.60。PPO 在 BLEU（38.5）與 PR（14.0）上比 Online DPO 高。",
+      "section": "§5、Table 1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "只評當輪的即時獎勵（helpfulness、外在、外在＋內在）都不如往後模擬的 MR；w 在 1–3 之間越大大致越好，w＝2 被選為效益與成本的平衡點。",
+      "numbers": "Figure 4 與 Figure 9 的數值在快取全文中只有圖說；B.3 文字給的數字：只用外在獎勵在 w＝1 時 BLEU 0.377，但 ITR 較差、回應較長；只用內在獎勵在 w＝1 時 ITR 0.74，但 BLEU 較低；只用 helpfulness 會讓 token 數明顯增加。",
+      "section": "§5.1、Figure 4、Appendix B.3、Figure 9",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "只在程式任務上訓練的 CollabLLM 零樣本遷移到 Abg-CoQA：在模糊題上提問率大幅高於 GPT-4o 與原始 Llama，macro accuracy 最高，但在非模糊題上多問了不少。",
+      "numbers": "模糊題動作正確率 52.84%（Llama 16.26%、GPT-4o 15.44%）；非模糊題 72.32%（Llama 90.40%、GPT-4o 95.60%）；Macro Accuracy 62.58%（53.33%、55.52%）；Macro F1 55.08%（53.31%、GPT-4o 56.62%）。",
+      "section": "§5.3、Table 2",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "201 人的 MTurk 寫作研究中，CollabLLM 讓使用者花的時間比 Base 少 10.4%、比 Proactive Base 少 15.6%，文件品質與投入度評分也較高；Base 在第 6–9 輪評分下滑，CollabLLM 與 Proactive Base 則隨輪數上升。",
+      "numbers": "CollabLLM 文件品質平均 8.50；91.4% 評為 good（8–9 分）、56.9% 評為 very good（9–10 分），Base 為 88.5% 與 39.3%；63.8% 覺得高度投入（Base 42.6%）。",
+      "section": "§6、Figure 7",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "摘要與引言報告使用者滿意度提高 17.6%、時間節省 10.4%。",
+      "numbers": "滿意度 +17.6%、時間 −10.4%（對 Base）；17.6% 在 §6 正文沒有對應的分組數字可以核對。",
+      "section": "Abstract、§1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "MR 需要的模擬成本在每條 forward sample 層級很低，作者認為多輪訓練在財務上可行。",
+      "numbers": "MediumDocEdit-Chat 每條 forward sample 的模擬器花費：w＝1 為 0.00174 美元、w＝2 為 0.00439 美元、w＝3 為 0.00685 美元；policy 耗時 7.41／15.84／21.72 秒。",
+      "section": "Appendix B.2、Table 7",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "協作式微調沒有讓安全性變差。",
+      "numbers": "四類傷害平均分：CollabLLM 0.95／0.94／1.00／0.99，Llama 0.88／0.96／0.89／1.01（0–7 分）；320 次評估各只有 1 次不安全，pass rate 同為 99.7%。",
+      "section": "Appendix C、Table 8",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "完整 Monte Carlo 往後模擬到對話結束太貴，只好用 window size w 截斷（§3.1.2）。",
+    "開源模型扮演使用者時常混淆角色、開始替使用者解題，所以只能用 GPT-4o-mini 當模擬器；作者指出缺乏從真實使用者行為學到的使用者模型（Appendix B.2）。",
+    "模擬使用者與真人有落差：真人句子更短、更破碎、常有文法錯誤，會中途改變方向、帶入具體個人細節、情緒表達更直接；模擬器則較完整、制式、可預測（Appendix F.2、Table 9）。",
+    "真人回饋指出 CollabLLM 有時內容平淡、缺乏最新資訊、要使用者多花力氣才能個人化，也會要求使用者重複已經提供的資訊（§6、Table 3）。",
+    "Abg-CoQA 上的 Macro F1 仍不如 GPT-4o，還有改進空間（§5.3）。",
+    "更貼近使用者意圖可能被惡意使用者利用；作者以安全評估說明沒有變差，但沒有另做安全對齊（Impact Statement、Appendix C）。"
+  ],
+  "limitations_observed": [
+    "ITR 的相對提升大多是重縮放造出來的。D.4 寫明原始分數落在 1–3，Table 1 報的是 S'＝2(S−2.5)。換回原始尺度：MediumDocEdit-Chat 的 Proactive Base 0.62→2.81、Online DPO 0.92→2.96，只差約 5.3%，論文卻報 48.3%；BigCodeBench-Chat 約 3.4%（報 54.3%），MATH-Chat 約 2.6%。作者說權重的絕對值不影響結論，這只對排序成立，對「46.3% 更有互動性」這種百分比不成立。",
+    "Table 1 的 Rel. Improv. 有一格算錯基準：圖說說是 Online DPO 對 Proactive Base，但 MATH-Chat 的 ITR 36.4% 等於 0.60／0.44（對 Base）；對 Proactive Base（0.46）應為 30.4%，三任務平均 ITR 提升因此是約 44.4% 而不是 46.3%。其他八格驗算都對得上 Proactive Base。",
+    "Abg-CoQA 的敘述與數字不符：非模糊題的正確率從 Llama 的 90.40% 掉到 72.32%，也就是對清楚的問題有 27.68% 會多問一句，文中卻說「維持高正確率」。把數字換成條件提問率，CollabLLM 在模糊題的提問率 52.84%、非模糊題 27.68%，差距 25.2 個百分點（GPT-4o 11.0、Llama 6.7），確實比較能分辨模糊，但大部分增益來自整體提問門檻降低。Macro F1 55.08% 仍低於 GPT-4o 的 56.62%，而且只評「問或答」的動作，沒評回答或問題本身的品質。",
+    "環境本身就在獎勵提問。模擬器提示詞明令「早期給模糊、不完整的需求，讓 AI 來問」，而訓練時的 forward sampling 與評估用的是同一個 GPT-4o-mini 模擬器與同一份提示詞；模型學到的可能是這個模擬器的習性，而不是一般使用者何時需要被問。訓練獎勵裡的 R_LLM 與評估指標 ITR 量的又是同一件事（互動性），ITR 大幅上升有一部分是直接最佳化評估指標的結果。",
+    "任務指標的絕對值很低、而且沒有變異數：BigCodeBench-Chat 的 PR 從 9.3 到 13.0、MATH-Chat 的 ACC 從 11.0 到 16.5。若 MATH 評估集就是那 200 題，對 Base 的 +5.5 個百分點約等於 11 題、對 Proactive Base 的 +4.0 約等於 8 題；全文沒有報 seed、重複次數、信賴區間或顯著性檢定。",
+    "標題數字挑的是 Online DPO，但 PPO 在 BLEU（38.5 對 36.8）與 PR（14.0 對 13.0）上更好；四個變體沒有一個在所有指標上都最佳，「哪個訓練法最好」其實沒有結論。",
+    "對照組太弱：實跑的基準只有原始 Llama 與提示詞版 Proactive Base。STaR-GATE、ACT（Chen et al. 2024）、MTPO 等同類訓練法只在 Table 4 打勾比較，沒有實驗；Table 1 也沒列 GPT-4o，而離線訓練資料正是 GPT-4o 當助理生成的，所以 SFT 等變體的增益與「蒸餾 GPT-4o」混在一起，缺少「GPT-4o 資料但不經 MR 篩選」的對照。消融（Figure 4、B.3）也只在 MediumDocEdit-Chat 一個任務上做。",
+    "MR 的偏好標籤可能很吵：每個候選只抽 3 條未來軌跡，Table 5 在 BigCodeBench-Chat 上 chosen 0.494±0.621、rejected 0.207±0.763，標準差比兩者平均差（0.287）還大，DPO 配對中有相當比例可能是雜訊；論文沒有分析 sample size 對標籤穩定度的影響（只掃了 w）。",
+    "「長期」其實只看 2 輪：訓練資料平均 4.6–5.3 輪，w＝2 的窗口多半到不了對話結束，R_ext 是對截斷後抽出的中間產物評分；Extract(t) 怎麼從未完成的對話抽出最終文件也沒交代。",
+    "MediumDocEdit-Chat 以 BLEU 比對原始文章，而模擬器手上握著這篇文章的摘要；這個任務本質上是「把模擬器腦中的隱藏文章問出來」，天生偏袒多問的策略，BLEU 也不等於文件好壞。",
+    "使用者研究的報告不完整：201 人分三組，每組約 67 人，沒有顯著性檢定；「8–9 分」與「9–10 分」兩個區間在 9 分重疊，比例無法直接解讀；只測寫作一種任務；摘要的「滿意度 +17.6%」在 §6 找不到可以核對的分組平均。",
+    "因果推論的包裝偏強：式 5 所謂 front-door adjustment 推到最後只是條件期望，實際上就是用模擬器做 Monte Carlo rollout 估計逐輪的 Q 值；與 MTPO 等「觀察式」方法的差別在於有模擬器可以對同一個歷史重抽多條未來，而這個「介入效果」的可信度完全取決於模擬器是否逼真。",
+    "就 T1 而言，模型從不顯式表示使用者的意圖或目標：沒有意圖標籤、沒有目標狀態，也沒有「推斷出的目標是否正確」的指標；意圖推斷只以「行為」（問了沒、最後任務成不成功）間接呈現，工程上無法拿它來做意圖路由或 OOD 偵測。"
+  ],
+  "framework_role": "T1 的「使用者目標推斷與偏好引出」在訓練端的代表作：它不做意圖分類，而是把「隱藏目標 g＋模糊的初始請求」當成問題設定，用往後模擬的獎勵讓 policy 自己學會何時澄清、問什麼、何時直接給答案（Abg-CoQA 那一節就是對「何時問」的直接測試）。對框架有三個可直接借用的元件：(1) MR 的逐輪信用分配，可以當作評估「這一輪澄清值不值得」的離線判準；(2) 附錄 D.1 的帶隱藏目標使用者模擬器提示，是 T6 的現成範本；(3) R*＝任務成功＋token 成本＋LLM judge 互動性的組合，是 T8 任務完成分數的一種寫法。它提供的是讓模型更會引出意圖的訓練方法，不是一個在推論時可以插拔的意圖偵測模組。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "訓練與評估的輸入都來自帶著隱藏目標 g 的 GPT-4o-mini 使用者模擬器（任務描述與參考目標對助理不可見，且被要求一開始只給模糊需求），模型必須從這些不完整的輸入推斷 g；§6 則換成 201 位真人 MTurk 使用者當輸入來源，驗證在模擬器上學到的目標引出行為能不能轉移。"
+    },
+    {
+      "edge": "E6",
+      "how": "每個候選回應後面的模擬互動紀錄（forward sampled 對話）都被送去算 R*：從對話抽出產物跑任務指標、數 token、交給 LLM judge 評互動性，得到的 MR 直接變成 DPO 的 chosen／rejected 配對或 PPO 的獎勵；評估階段同樣從完整的模擬互動紀錄算 BLEU／PR／ACC、token 與 ITR，真人研究則每 3 輪收一次評分並記錄時長。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文沒有寫任何產品部署；Microsoft Research 部落格（https://www.microsoft.com/en-us/research/blog/collabllm-teaching-llms-to-collaborate-with-users/，2025-07-15）只介紹研究內容，沒有提到任何產品整合。GitHub（https://github.com/Wuyxin/collabllm，MIT 授權，另有 https://github.com/microsoft/CollabLLM）與 Hugging Face 組織（https://huggingface.co/collabllm，3 個模型、6 個資料集）是開源釋出，ICML 2025 Outstanding Paper 屬學術影響力，都不算商用採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/Wuyxin/collabllm（MIT；另有 https://github.com/microsoft/CollabLLM）",
+    "data": "Hugging Face 的 collabllm 組織公開了三個任務的合成多輪訓練資料（collabllm-multiturn-medium、-bigcodebench、-math-hard 及其 -large 版本）與三個微調後模型（CollabLLM-writing／code／math-Llama-3.1-8B-Instruct）。Impact Statement 說會釋出真人研究資料，但要先再做一輪人工 PII 檢查；本次沒有查到真人研究資料已公開。模擬器與 judge 依賴 GPT-4o-mini、GPT-4o、Claude-3.5-Sonnet 等商用 API，逐字重現會受模型版本變動影響。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是少數把「使用者目標隱藏、請求模糊」寫成訓練目標，讓模型靠往後模擬的獎勵自己學會何時澄清、如何引出偏好的方法（ICML 2025 Outstanding Paper，程式碼、模型與資料全開），T1 的偏好引出子領域必讀；但讀的時候要自行打折：ITR 的百分比被重縮放放大，Abg-CoQA 在非模糊題過度提問，而且對照組只有提示詞基準。",
+  "related": [
+    "2403.19154",
+    "2406.00222",
+    "2405.14655",
+    "2310.10996",
+    "2311.09469",
+    "2311.02737",
+    "2405.15784",
+    "2305.13626",
+    "2402.03719",
+    "2406.15877"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

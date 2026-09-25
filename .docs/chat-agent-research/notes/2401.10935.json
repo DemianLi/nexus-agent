@@ -1,0 +1,167 @@
+{
+  "id": "2401.10935",
+  "title": "SeeClick: Harnessing GUI Grounding for Advanced Visual GUI Agents",
+  "topic": "T3",
+  "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "以 Qwen-VL 為底，在約 100 萬筆從網頁 HTML 與行動介面資料集自動整理出的 GUI 定位資料上做持續預訓練，得到只看截圖、直接輸出正規化點擊座標的視覺 GUI agent SeeClick；同時建立跨 iOS、Android、macOS、Windows、網頁的 GUI grounding 基準 ScreenSpot，並在 MiniWob、AITW、Mind2Web 上顯示 grounding 變好時下游 agent 表現跟著變好。",
+  "problem": "當時的 GUI agent 多半把結構化文字（網頁 HTML／DOM、Android view hierarchy）當觀測，作者指出三個問題：(1) iOS 與桌面應用常常根本拿不到這類結構化資料；(2) 結構化文字冗長，佔用 LLM context 效率很差，卻又丟掉版面、圖片與圖示資訊；(3) 各平台格式不同，每個任務都要另外設計觀測與動作空間。改用截圖可以跨平台統一，但作者的前期研究發現，視覺 agent 的關鍵瓶頸是 GUI grounding，也就是依自然語言指令在截圖上找到正確元素位置的能力。通用 LVLM 在自然影像上有 grounding 能力，GUI 截圖卻是文字密集、圖示小而多，現有模型（含 GPT-4V）在 GUI 上幾乎定位不到。此外，當時缺少跨平台、貼近真實使用的 GUI grounding 評測，既有研究大多只用 2017 年蒐集的 Android RICO 資料。",
+  "core_idea": "把觀測收斂成「只有目前截圖」，把動作收斂成「在正規化座標上點擊，加上打字」，並把 agent 能力中的感知部分拆成一個可以單獨訓練、單獨量測的子能力：GUI grounding。做法分四步：(1) 用語言生成的形式輸出座標，數字直接當成一般文字，不另設座標詞彙，訓練目標是給截圖 s 與元素描述 x 預測位置 y；(2) 從網頁 HTML 自動抽出「顯示可見文字的元素」與「帶 title 屬性的元素」，組成大量（指令、位置）配對，再加上行動介面資料與通用視覺語言資料做持續預訓練；(3) 建 ScreenSpot，只量 grounding；(4) 在各 agent 任務上微調，檢查 grounding 的提升是否轉成任務成功率的提升。",
+  "method": {
+    "基底模型": "Qwen-VL-Chat（9.6B），輸入影像解析度 448×448，本身已有自然影像 grounding 能力。",
+    "grounding 形式化（§3.1、§A.1）": "輸入是介面截圖 s 與元素的文字描述 x，輸出元素位置 y，也就是學 p(y|s,x)。位置有兩種表示：點 (x,y) 或框 (left, top, right, down)，每個值都是 [0,1] 之間、兩位小數的比例（相對影像寬或高），以純文字輸出。不採用 Pix2Seq 式的 1000 個座標特殊 token，也沒有任何前後處理。查詢提示的形式是「在這個 UI 裡，想做 <instruction> 應該點哪裡」，目標輸出寫成 click (0.49, 0.40) 這樣的字串，損失就是一般的 cross-entropy。每個 GUI 任務各寫 30 個提示模板混用，模板全文論文沒有列出。",
+    "預訓練任務（Table 6，合計約 1M 筆）": {
+      "網頁（約 30 萬頁，取自最新 Common Crawl）": "每頁擷取兩類元素：(1) 顯示可見文字的元素，指令就是那段文字；(2) 帶 title 屬性的元素（滑鼠停留時會出現說明文字），指令就是 title 內容，這一類能涵蓋圖示型元素。除了 grounding（text_2_point 271K、text_2_bbox 54K），也放入反方向、類似 OCR 的任務：給座標預測文字（point_2_text 54K、bbox_2_text 54K）。",
+      "行動介面": "widget captioning 訓練集（約 2 萬張截圖、4 萬個 widget、10 萬筆描述）反轉成 grounding：描述當指令、widget 當目標；再加上 RICO 自動蒐集的元素與指令以增加多樣性。text_2_point 274K、text_2_bbox 56K，另有 UI summarization（Screen2Words）48K、widget captioning 42K，用來強化整體介面理解。",
+      "通用資料": "LLaVA 的 instruction-following 資料 145K（對話、細節描述、複雜推理），用來保住自然影像上的通用能力。",
+      "點與框的比例": "前期實驗發現預測點略優於預測框，作者推測是 UI 元素大小差異很大，因此提高點資料的比例；ScreenSpot 評估也採用點預測。"
+    },
+    "訓練設定（§3.3、§A.2）": "在上述資料上持續預訓練約 10k steps（約 1 個 epoch）。視覺編碼器解凍梯度，LLM 用 LoRA 微調（§3.3 寫成兩者都用 LoRA，§A.2 寫成視覺編碼器解凍加 LoRA，說法略有出入）。AdamW、cosine annealing，初始學習率 3e-5，global batch size 64，8 張 A100 約 24 小時。LoRA rank 等細節論文沒有給。",
+    "ScreenSpot 基準（§4、§B）": "600 多張截圖、1200 多條指令，涵蓋 iOS、Android、macOS、Windows 與網頁；網頁取自 WebArena 的開發、購物、論壇、工具類站台。元素分為 Text 與 Icon/Widget 兩類，作者刻意放入大量圖示與 widget。由 4 位資工碩博士生標註：在日常使用中截圖，用 bounding box 框出常用的可點擊區域，再為每個元素寫英文指令，並移除個人資訊。指標是 click accuracy：預測點落在 GT 框內的樣本比例。基線用各自官方推薦的提示方式（CogAgent 從官方提示集合隨機挑含 with grounding 的提示；輸出是框時取框中心當預測點；GPT-4V 照 Yang et al. 2023b 的方式讓它輸出位置）。",
+    "agent 形式化（§C.1）": "每一步輸入是任務指令、目前截圖、前 k=4 個動作（以文字表示），輸出下一個動作；不提供歷史截圖。動作沿用 AITW 的 action_type 編號：click(x,y)=4（座標為 [0,1] 比例）、type(\"text\")=3、select(\"value\")=2（Mind2Web 的下拉選單）、swipe 上／下／左／右＝1/0/8/9、PRESS BACK=5、PRESS HOME=6、PRESS ENTER=7，另有 TASK COMPLETE 與 TASK IMPOSSIBLE 兩個終止狀態。每一步使用的提示詞在論文中是圖片，文字快取取不到原文。訓練與測試資料都按步切開。",
+    "下游微調與評估設定（§5.2、§C）": {
+      "MiniWob": "用 Synapse（Zheng et al. 2023）的 LLM 策略，每類任務 rollout 50 條成功 episode，共 2.8K episode 當訓練資料。每類任務用 50 個隨機種子測試，最多 30 個動作，超過或做錯都算失敗。先對種子平均，再對任務平均。因為各論文的任務集合不同，分成與文字方法重疊的 45 類、與視覺方法重疊的 35 類兩組比較；基線分數取自各論文自報的逐任務分數。",
+      "AITW": "作者認為原本依 episode 切分會過擬合（測試指令在訓練出現過，且每條指令平均有 20 條相似軌跡），改成依指令切分：General/Install/GoogleApps/Single/WebShopping 各取 545/688/306/700/700 條指令，每條只留一條軌跡，每個子集 80% 訓練、20% 測試，另從原始資料取 5×100 條 episode 當驗證集。主指標是 screen-wise action matching score（動作類型與值都要對），另算 ClickAcc（參考與預測都是點擊時的正確率）。",
+      "Mind2Web": "原本是給文字 agent 的資料，作者從 raw dump 解析出每步截圖與目標元素框。原始觀測是整頁長截圖（例如 1920×12000），對不在頁首的目標，在其周圍隨機裁成 1920×1080。Ele.Acc 以預測點是否落在目標框內判定，Op.F1 與 Step SR 照原論文定義。",
+      "unified 版": "另把三個任務的訓練資料合併訓練一個模型，與分別訓練的版本比較（Table 5）。",
+      "未揭露": "下游微調的學習率、步數、是否沿用 LoRA 等，正文與附錄都沒有給。"
+    }
+  },
+  "assumptions": [
+    "截圖本身包含完成任務所需的全部資訊，不需要 DOM、accessibility tree 等不可見的屬性",
+    "從網頁 HTML 的可見文字與 title 屬性自動生成的指令，足以代表真實使用者描述元素的方式",
+    "從網頁與 Android 學到的 grounding 能遷移到訓練資料裡完全沒有的 iOS 與桌面介面",
+    "448×448 的輸入解析度與兩位小數的座標精度，足以點中目標元素",
+    "決定下一步只需要目前截圖加上前 4 個動作的文字描述，不需要歷史畫面",
+    "grounding 可以與規劃分開看待，grounding 的提升會轉成下游任務表現的提升",
+    "每個下游任務都有可用的訓練資料可供微調（作者自承開源 LVLM 還做不到零樣本多步任務）"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "ScreenSpot（本文提出；600 多張截圖、1200 多條指令；iOS、Android、macOS、Windows、網頁；Text 與 Icon/Widget 兩類）",
+      "MiniWob（共 55 類任務；分別與文字方法比 45 類、與視覺方法比 35 類）",
+      "AITW（作者自訂的依指令切分；附錄另報原始切分）",
+      "Mind2Web（Cross-Task、Cross-Website、Cross-Domain；改為截圖輸入）"
+    ],
+    "metrics": [
+      "ScreenSpot click accuracy：預測點落在 GT 框內的比例",
+      "MiniWob success rate：每類任務 50 個種子平均後，再對任務平均",
+      "AITW screen-wise action matching score（動作類型與值都要對）與 ClickAcc（參考與預測皆為點擊時的正確率）",
+      "Mind2Web Ele.Acc（視覺方法以點是否落在目標框內判定）、Op.F1（操作的 token-level F1）、Step SR（元素與操作都對）",
+      "grounding 與下游表現的關係：多個預訓練 checkpoint 在 ScreenSpot 與三個下游任務上的提升幅度（Figure 6）"
+    ],
+    "baselines": [
+      "ScreenSpot：MiniGPT-v2（7B）、Qwen-VL（9.6B）、GPT-4V、Fuyu（8B）、CogAgent（18B）",
+      "MiniWob：CC-Net (SL)、WebN-T5、MM-WebN-T5、WebGUM（2.8K 與 347K 兩種資料量）、Pix2Act、用同一份 2.8K 微調的 Qwen-VL",
+      "AITW：ChatGPT-CoT、PaLM2-CoT、GPT-4V、用同一份資料微調的 Qwen-VL；原始切分另比 Auto-UI、CogAgent",
+      "Mind2Web：MindAct、MindAct (gen)、GPT-3.5-Turbo、GPT-4（多選 QA、3 個示範）、Qwen-VL"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "GUI grounding 預訓練讓 SeeClick 在 ScreenSpot 取得最高平均，參數量比 CogAgent 小；通用 LVLM（含 GPT-4V）在 GUI 上幾乎定位不到",
+      "numbers": "平均 click accuracy：SeeClick 53.4%、CogAgent 47.4%、Fuyu 19.5%、GPT-4V 16.2%、MiniGPT-v2 5.7%、Qwen-VL 5.2%。SeeClick 分項：Mobile Text 78.0%／Icon 52.0%、Desktop Text 72.2%／Icon 30.0%、Web Text 55.7%／Icon 32.5%。CogAgent 在 Desktop Text（74.2%）與 Web Text（70.4%）勝過 SeeClick。SeeClick 的底模 Qwen-VL 只有 5.2%，預訓練後提升約 48pp",
+      "section": "§5.1、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "所有模型定位圖示／widget 都明顯比定位文字困難，這是 ScreenSpot 刻意凸顯的難點",
+      "numbers": "SeeClick Text 對 Icon：Mobile 78.0% 對 52.0%、Desktop 72.2% 對 30.0%、Web 55.7% 對 32.5%。CogAgent：67.0 對 24.0、74.2 對 20.0、70.4 對 28.6。Fuyu 的 Icon 只有 1.3%／3.6%／4.4%，Text 卻有 41.0%／33.0%／33.9%",
+      "section": "§5.1、Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "在 MiniWob 上，純截圖的 SeeClick 以很少的資料勝過同資料量的 HTML＋截圖方法與大資料量的視覺方法；相對底模 Qwen-VL 提升近 20pp",
+      "numbers": "45 類任務：SeeClick 73.6%（僅影像、2.8K）、WebGUM 65.5%（HTML＋影像、2.8K）、WebGUM 86.1%（347K）、MM-WebN-T5 63.4%、WebN-T5 55.2%、CC-Net 35.6%。35 類任務：SeeClick 67.0%、Pix2Act 64.6%（1.3M，SeeClick 用量不到其 0.3%）、Qwen-VL 48.4%（同 2.8K）、CC-Net 23.4%。55 類平均：SeeClick 0.712、Qwen-VL 0.564",
+      "section": "§5.2.1、Table 2、Table 8",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "在作者自訂的 AITW 依指令切分上，SeeClick 整體分數與點擊正確率都高於 Qwen-VL 與 API 型 LLM",
+      "numbers": "Overall：SeeClick 59.3、Qwen-VL 54.3、GPT-4V 50.5、PaLM2-CoT 39.6、ChatGPT-CoT 7.7。ClickAcc：SeeClick 66.4 對 Qwen-VL 57.4（+9pp）。但 Single 子集 SeeClick 63.5 低於 Qwen-VL 64.7 與 GPT-4V 72.8",
+      "section": "§5.2.2、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "在 Mind2Web 上，grounding 預訓練讓 Ele.Acc 與 Step SR 相對 Qwen-VL 接近翻倍，但純截圖仍明顯落後以 HTML 為輸入的方法",
+      "numbers": "Step SR（Cross-Task／Website／Domain）：SeeClick 25.5／16.4／20.8，Qwen-VL 13.3／9.2／12.0，MindAct 52.0／38.9／39.6，GPT-4 36.2／30.1／26.4。Ele.Acc：SeeClick 28.3／21.4／23.2，MindAct 55.1／42.0／42.1。Op.F1 反而是視覺方法較高（SeeClick 87.0／80.6／84.8，MindAct 75.7／65.2／66.5），作者解釋是 HTML 方法的候選生成會濾掉約 20% 的正解元素",
+      "section": "§5.2.3、Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "多個預訓練 checkpoint 的 ScreenSpot 提升與三個下游任務的提升同向變化，作者據此主張 grounding 是視覺 agent 的關鍵",
+      "numbers": "只有 Figure 6 的圖，沒有給 checkpoint 數量、相關係數或數值表",
+      "section": "§5.2.4、Figure 6",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "ScreenSpot 上的錯誤多半是落在目標框附近的近失誤，模型大致認得目標，差在細粒度定位",
+      "numbers": "只有 Figure 9 的預測點到目標中心距離分布，沒有給數值",
+      "section": "§B.4、Figure 9",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "在 AITW 原始切分上，SeeClick 與 CogAgent 相當，但沒有勝出；作者認為原始切分過擬合嚴重，換框架或加大模型都難再進步",
+      "numbers": "Overall：CogAgent 76.9、SeeClick 76.2、Auto-UI 74.3。Single 子集 CogAgent 93.5，SeeClick 與 Auto-UI 都是 84.6",
+      "section": "§C.3、Table 7",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "動作空間主要只有點擊與打字，不含拖曳、雙擊等較複雜的動作（Limitations）",
+    "受限於開源 LVLM 的能力，要在手機與電腦上執行多步任務，仍必須用各 agent 任務的資料微調（Limitations）",
+    "桌面與網頁的文字定位不如 CogAgent，作者歸因於解析度較低與訓練資料少得多（§5.1）",
+    "在 Mind2Web 上仍明顯落後以 HTML 為輸入的 SOTA，因為直接預測座標比從 HTML 候選中挑選難得多；真實網站的 grounding 還有很大改進空間（§5.2.3）",
+    "三個任務合併訓練的 unified 模型略為退步，作者推測是不同 GUI 的介面差異太大（§5.2.5、Table 5）",
+    "錯誤多為落在目標附近的近失誤，細粒度定位仍待改進（§B.4）",
+    "AITW 原始切分有嚴重過擬合風險，所以改用依指令切分（§5.2.2、§C.3）",
+    "倫理面：介面上可能有個人或敏感資訊、真實環境中可能誤操作造成傷害、不同使用族群或介面設計下的表現偏誤（Ethical considerations）"
+  ],
+  "limitations_observed": [
+    "Mind2Web 的裁切等於洩漏目標位置。對不在頁首的目標，作者在目標周圍隨機裁出 1920×1080 的畫面，保證目標一定可見，agent 完全不必決定要不要捲動、也不必在長頁面中搜尋。HTML 方法看的是整頁（候選生成仍會濾掉約 20% 正解）。所以 SeeClick 的 Ele.Acc 28.3／21.4／23.2 是在「目標必定在畫面內」的寬鬆條件下量到的，實際部署要自己捲動時會更低；Table 4 與 MindAct 的比較也不是同一種觀測條件。",
+    "AITW 的主表把不同切分的數字放在一起。依指令切分是作者自訂的，但 ChatGPT-CoT、PaLM2-CoT、GPT-4V 的分數引自各自原論文（PaLM2-CoT 只有 overall 39.6，其餘欄位空白），論文沒有說有在新切分上重跑。真正受控的比較只有 Qwen-VL 對 SeeClick（54.3 對 59.3）。測試集約是 2,939 條指令的 20%（約 590 條），沒有報多次重跑或信賴區間。換到原始切分，SeeClick 76.2 還略低於 CogAgent 76.9，Single 子集 84.6 對 93.5 差更多，所以「表現最佳」只在自訂切分上成立。",
+    "MiniWob「同樣 2.8K 資料勝過 WebGUM」只是筆數相同，資料並不相同。SeeClick 的 2.8K 是 Synapse 的 LLM 策略跑出來、只保留成功的 episode，品質經過篩選；WebGUM 的 2.8K 是它自己的資料子集。對 Pix2Act 的優勢只有 2.4pp（67.0 對 64.6，35 類任務），而且基線分數是拿各論文自報的逐任務分數重算平均，種子與評估設定不一定一致。",
+    "grounding 預訓練在部分 MiniWob 任務上反而明顯退步，作者只說 SeeClick 在「多數任務」較好，沒有討論。Table 8 兩者都用同一份 2.8K 微調：find-word 從 Qwen-VL 的 1.0 掉到 0.10，grid-coordinate 0.96→0.52，identify-shape 1.0→0.68，read-table 0.90→0.72，copy-paste 與 copy-paste-2 都是 0.96→0.80，simple-arithmetic 0.92→0.78。這些多半是閱讀與推理類任務，暗示大量座標資料的持續預訓練可能侵蝕了讀字或推理能力（也可能只是變異，但論文沒報變異）。「grounding 越好，agent 就越好」並不是逐任務都成立。",
+    "「grounding 與 agent 表現正相關」的證據很薄。§5.2.4 只拿同一次預訓練的「幾個」checkpoint 畫圖，沒說幾個，也沒給相關係數。較後面的 checkpoint 同時看過更多類 OCR、UI 摘要、widget captioning 資料，無法把 grounding 的效果和其他 GUI 預訓練的效果分開；缺一組「拿掉 grounding 任務、保留其他 GUI 資料」的 ablation。這只能算相關，不能當成因果。",
+    "ScreenSpot 的基線比較把「輸出介面」和「感知能力」混在一起。GPT-4V 被要求直接輸出座標，16.2% 主要反映它不擅長輸出數字座標；同期的 SeeAct（2401.01614）指出，GPT-4V 的瓶頸在 grounding 這一步，改成從 HTML 候選元素的文字選項中挑選時，表現比要它自己定位好得多。SeeClick 則是用與訓練同分布的提示格式受測。所以 Table 1 只能說明「直接吐座標」這種介面下的差距，不能推論 GPT-4V 看不懂介面。",
+    "座標表示本身有量化上限，作者沒有點出來。座標只取兩位小數，在 1920 寬的螢幕上一格約 19 像素、1080 高約 11 像素；輸入又縮到 448×448（寬度縮約 4.3 倍）。桌面常見 16–24 像素的小圖示理論上就很難點中，這和 Desktop Icon 只有 30.0%、以及 §B.4 的近失誤分布一致。作者把原因歸於「細粒度定位待改進」，但一部分其實是表示法的量化誤差，加訓練資料未必能解決。",
+    "作者把網頁文字定位輸給 CogAgent 歸因於「解析度低、資料少」，但資料少的解釋站不住：網頁正是 SeeClick 最大的訓練來源（text_2_point 271K），Web Text 卻只有 55.7%，低於它自己的 Mobile Text 78.0%，也低於 CogAgent 的 70.4%。解析度（Qwen-VL 448 對 CogAgent 的高解析度分支）比較可能是主因。此外，訓練指令直接取自元素的可見文字或 title 屬性，文字類指令大多等於「在畫面上找這串字」，接近 OCR 比對，涵蓋不到「回上一頁」這類功能性描述。",
+    "ScreenSpot 本身規模小、標註來源窄：只有 4 位資工研究生依自己的日常使用截圖並撰寫指令，沒有報標註者間一致性；網頁部分來自 WebArena 的自架站台，只有開發、購物、論壇、工具四類。每個平台與元素類型的分格樣本數不大，格間差幾個百分點可能落在雜訊內。",
+    "觀測設計沒有歷史畫面，只給前 4 個動作的文字，也沒有對 k 做 ablation。需要比對前後畫面才能判斷的情況（確認上一步是否生效、偵測彈窗、發現點錯）完全沒有測到；AITW 的 TASK COMPLETE 判斷同樣只能靠單張截圖。"
+  ],
+  "framework_role": "這篇在 T3(a) 感知／觀測空間中代表「純截圖觀測」這一端：放棄 HTML、accessibility tree 等結構化觀測，讓 agent 只看像素、用正規化座標行動，並指出這種觀測空間的核心瓶頸是 grounding（把語言指令對應到畫面位置）。對框架有用的是兩點。第一，它把觀測品質拆成可以獨立量測的子能力：ScreenSpot 用 click accuracy 單獨量感知，與端到端任務成功率分開，是 T3 與 T7 之間「元件級評估」的範例。第二，它的結果和後續 SeeAct、Set-of-Mark 一類工作放在一起看，說明觀測表徵（截圖直出座標、截圖加候選元素、HTML）直接決定 agent 的上限：在 Mind2Web 上，純截圖的 Step SR 只有 HTML 方法的一半左右。對以對話為主、不直接操作 GUI 的 agent，直接可用的部分有限，但「觀測表徵要能單獨量測，別只看最終成功率」這條原則可以轉用到工具回傳結果的呈現設計。論文不涉及 T3(b) 的執行期監控、異常偵測或安全監控。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "阿里巴巴 Qwen2.5-VL-7B-Instruct 的官方 Hugging Face model card，在 Agent benchmark 區塊把 ScreenSpot 列為評測項目（84.7），並與 ScreenSpot Pro（29.0）分開列。性質是業界模型發布時沿用本文提出的基準當評測指標，不是 SeeClick 模型本身被部署。來源：https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct",
+      "Microsoft Research 官方文章〈OmniParser for pure vision-based GUI agent〉（2024-10-08）以 ScreenSpot 評估 OmniParser 對 GPT-4V 的改善。性質偏研究用途，只當旁證。來源：https://www.microsoft.com/en-us/research/articles/omniparser-for-pure-vision-based-gui-agent/"
+    ],
+    "assessment": "SeeClick 模型本身未見商用部署證據。它提出的 ScreenSpot 基準有可查證的業界沿用：Qwen2.5-VL 的官方 model card 用它報 GUI grounding 分數，Microsoft Research 的 OmniParser 文章也用它評估。所以採納屬於「評測基準被業界採用」，不是方法或模型進入產品。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/njucckevin/SeeClick",
+    "data": "repo（Apache-2.0）提供 Hugging Face 上的模型權重（cckevinn/SeeClick）、ScreenSpot 基準、從 Common Crawl 整理的網頁 grounding 預訓練資料、預訓練與 ScreenSpot 評估程式、三個下游任務的微調程式。論文說 AITW 依指令切分的 train/val/test 會開源；MiniWob 訓練資料來自 Synapse 的 rollout；Mind2Web 截圖由原始 raw dump 解析。每步 agent 提示詞與 30 個預訓練模板在論文裡沒有全文，要看 repo；下游微調的超參數論文沒給。以上 repo 內容是我讀 GitHub 頁面說明所得，沒有逐檔核對。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它把 GUI grounding 定義成純截圖觀測的核心瓶頸，並提出後來成為業界標準評測的 ScreenSpot（Qwen2.5-VL model card 也沿用），是 T3 感知子領域中 GUI 觀測與 grounding 這條線的必讀起點；不過方法新意主要在資料工程，實驗比較有 Mind2Web 裁切、AITW 基線切分不一致等瑕疵，數字要打折看。",
+  "related": [
+    "2308.12966",
+    "2312.08914",
+    "2306.00245",
+    "2306.06070",
+    "2307.10088",
+    "2305.11854",
+    "2401.01614",
+    "2306.07863",
+    "2307.13854",
+    "2311.07562",
+    "2309.11436",
+    "2010.04295"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

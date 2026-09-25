@@ -1,0 +1,176 @@
+{
+  "id": "2310.05915",
+  "title": "FireAct: Toward Language Agent Fine-tuning",
+  "topic": "T4",
+  "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "用 GPT-4 few-shot 產生 HotpotQA 等 QA 任務的 ReAct／CoT／Reflexion 軌跡，只留答對的，統一轉成 ReAct 的 Thought–Action–Observation 格式，拿來 SFT 較小的模型（GPT-3.5、Llama-2、CodeLlama）；再系統比較資料量、基座模型、方法混料與任務混料的影響。",
+  "problem": "2023 年的語言 agent 幾乎都是對現成 LM 做 few-shot prompting。但這些 LM 不是為了產生動作、自我評估這類 agent 用途訓練的，few-shot 能提供的學習訊號有限，所以小模型當 agent 表現差、也不穩健；進階的 agent 只有 GPT-4 撐得起，成本、延遲、可控性與可重現性都成問題。以 agent 軌跡微調 LM 的研究在當時很少，只有 WebGPT、Toolformer、ReAct 附帶的 PaLM 實驗等零星結果，而且只看單一模型家族的規模效應，沒有人系統回答「用什麼軌跡、多少軌跡、混哪些方法與任務、微調哪個基座」。",
+  "core_idea": "把 agent 的執行軌跡當成蒸餾資料：由強模型（GPT-4）在多個任務上、用多種提示方法產生解題軌跡，依最終答案篩出成功的軌跡，再把不同方法的輸出統一成同一種 ReAct 軌跡格式（CoT 變成單輪、Reflexion 是中途插入反思的長軌跡），混在一起微調小模型。推論時不給 few-shot 範例，模型靠訓練資料的多樣性，自己決定這一題要一輪直答、多輪搜尋，還是中途反思換策略。作者主張，資料的多樣性（方法與任務）是提升表現、穩健性與泛化的關鍵。",
+  "method": {
+    "任務與資料切分": "HotpotQA：訓練集隨機取 2,000 題當軌跡生成的題庫，評估用 dev（共 7,405 題）隨機 500 題。Bamboogle：125 題多跳問題，只當測試集（泛化用）。StrategyQA（是非題）與 MMLU（四選一）：在 §7 多任務實驗中同時當訓練來源與測試集，評估題數論文未說明。",
+    "工具與動作空間": "唯一的工具是 Google 搜尋：透過 SerpAPI，依序回傳 answer box、answer snippet、highlight words、first result snippet 中第一個存在的項目，讓觀測保持簡短。動作只有兩種：search[查詢]、finish[答案]。回合上限 11 步，超過就強制結束。",
+    "軌跡格式": "純文字的 ReAct 軌跡：題目之後重複「Thought（自由推理）→ Action（search[...] 或 finish[...]）→ Observation（工具回傳）」，finish 之後的觀測是「Episode finished, reward = 1」。三種方法都轉成這個格式：(1) ReAct 原樣保留；(2) CoT 轉成單輪 ReAct，thought 放整段推理，action 直接 finish[答案]、不呼叫工具；(3) Reflexion 大致照 ReAct，但在第 6 輪與第 10 輪固定插入一段反思 thought，讓過長的軌跡換策略（例如從搜電影改搜導演）。IO 提示的輸出也出現在附錄 Table 10 的混料組合裡，正文沒有交代怎麼轉成 ReAct 格式。",
+    "軌跡生成（老師）": "老師是 GPT-4（ChatCompletion，2023 年 7–9 月），用各資料集的 few-shot 範例提示（附錄 C：HotpotQA／MMLU／StrategyQA 各有 IO、CoT、ReAct 三組，ReAct 的系統說明定義 search 與 finish 兩種動作，並提醒 snippet 不一定含答案、可能要換查詢）。ReAct 是從 2,000 題題庫中取得 500 條成功軌跡；CoT 與 Reflexion 各先生成 500 條，再篩出成功或符合條件的部分。只保留成功的軌跡，判準應是最終答案答對，但論文沒有明寫是 EM 還是其他標準。B.2 另提到生成時有 human-in-the-loop 驗證，但沒說驗證什麼、刷掉多少筆。",
+    "各實驗的訓練資料組成": {
+      "§5 單任務單方法": "500 條成功的 GPT-4 ReAct 軌跡（HotpotQA）。資料量掃描 n ∈ {100, 200, 500, 1000}。",
+      "§6 單任務多方法": "在 500 條 ReAct 之上，加入 187 條成功的 CoT（轉成單輪）與 47 條含第 6／10 輪反思的長 Reflexion 軌跡；兩種方法各由 GPT-4 先產生 500 條再篩選。",
+      "§7 多任務": "HotpotQA（500 ReAct＋277 CoT）、StrategyQA（388 ReAct＋380 CoT）、MMLU（456 ReAct＋469 CoT），全部是 GPT-4 成功軌跡。「Multi-task」只用三個任務的 ReAct（1,344 條），「+CoT」再加三個任務的 CoT（總計 2,470 條）。注意 HotpotQA 的 CoT 數在 §6 是 187，在 §7 是 277，論文沒有解釋差異。"
+    },
+    "訓練": {
+      "GPT-3.5": "GPT-3.5-Turbo-0613，用 OpenAI fine-tuning API，3 epoch；每次實驗約 10 美元。",
+      "Llama-2／CodeLlama": "Llama-2-Chat（7B、13B）與 CodeLlama-Instruct（7B、13B、34B），LoRA＋int8 量化，30 epoch，learning rate 3e-4，batch size 16。LoRA 的 rank／alpha 論文未說明。7B／13B 可在單張 RTX 4090（24GB）上訓練（Llama-2-7B 約 5.4 例／秒），34B 用單張 RTX 6000 Ada（48GB）。對照的全參數微調 Llama-2-7B 用 4×A100-80GB。",
+      "訓練目標": "標準的自回歸 SFT（以軌跡文字做 next-token 預測）。附錄 A.7 比較了「遮掉 observation token 的 loss」與不遮；從 Table 13 不遮那一欄剛好等於 Table 2 的 Llama-2 FireAct 數字推得，主實驗預設是觀測 token 也算進 loss，也就是順便學「世界模型」。這一點是由數字對應推得，論文沒有明說。",
+      "tokenizer": "CodeLlama 用自己的 tokenizer 比用 Llama tokenizer 略好（A.6）。"
+    },
+    "推論與評估": "微調後的模型推論時不給 few-shot 範例（實際輸入模板論文未說明；repo 提供 alpaca 與 gpt 兩種資料格式）。溫度：GPT-3.5 為 0；Llama／CodeLlama 為 0.6，評估時同樣用 int8。主要指標是答案 EM，A.8 另報 F1；標準誤用二項分布公式計算，每個設定只跑一次。穩健性測試：推論時搜尋 API 有 0.5 的機率改成回傳「None」，或回傳從先前所有實驗與試次中隨機抽出的一則搜尋結果。",
+    "分析工具": "(1) 每條軌跡的 ReAct 輪數平均 μ 與標準差 σ，用來看混料如何改變方法選擇；(2) random method choice：每題隨機挑一種方法的 EM，當下界；(3) oracle method choice：每題挑表現最好的方法，當上界；(4) Figure 5 的定性個案，對照只用 ReAct 微調與混料微調的軌跡。",
+    "論文未說明、重做時要自己決定的": [
+      "成功軌跡的判準（EM、F1 或人工）與 human-in-the-loop 驗證的具體內容",
+      "LoRA rank／alpha／target modules",
+      "推論時的輸入模板與停止條件（除了 11 步上限）",
+      "Reflexion 生成時是否用到正確答案作為回饋，以及第 6／10 輪反思的提示詞",
+      "IO 軌跡如何轉成 ReAct 格式（Table 10 有用到）",
+      "資料量掃描到 n=1000 時，這批成功軌跡是從同一個 2,000 題題庫取得還是另外生成"
+    ]
+  },
+  "assumptions": [
+    "強老師模型（GPT-4）能在訓練題上解出足夠比例的題目，而且它的成功軌跡就是值得模仿的好行為",
+    "最終答案答對足以代表整條軌跡的品質；過程中的推理錯誤、不必要的搜尋不需要另外過濾",
+    "要混的方法都能表達成單一自回歸的 ReAct 上下文；多提示、多角色、多上下文的 agent 不在射程內（作者自己承認）",
+    "訓練與測試時的工具（SerpAPI 的 Google 搜尋）行為一致且穩定；觀測分佈不因時間改變",
+    "下游任務已知、而且能用老師模型大量收集資料；作者把微調定位在任務已知的 exploitation 階段",
+    "答案 EM 能反映 agent 的能力；軌跡層級只看輪數，不評估中間步驟的品質"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "HotpotQA（dev 隨機 500 題）",
+      "Bamboogle（125 題，只當泛化測試）",
+      "StrategyQA（題數未說明）",
+      "MMLU（57 個子任務；題數未明寫，所有 EM 都是 0.2 的倍數，與 500 題相符）"
+    ],
+    "metrics": [
+      "答案 EM（主要指標）",
+      "F1（只出現在 A.8 的 epoch 曲線）",
+      "EM 的標準誤 σ_M（二項公式）",
+      "每次試次的推論成本（美元）與時間（秒）",
+      "工具輸出雜訊下的 EM（None／Random 兩種）與相對下降幅度",
+      "每條軌跡的 ReAct 輪數平均 μ 與標準差 σ",
+      "訓練吞吐（例／秒）與模型檔大小（LoRA 38MB 對全參數 14GB）"
+    ],
+    "baselines": [
+      "GPT-4、GPT-3.5 的 IO／CoT／ReAct few-shot prompting",
+      "Llama-2-7B／13B、CodeLlama-7B／13B／34B 的 few-shot ReAct prompting",
+      "只用 ReAct 軌跡微調（單方法）對照多方法混料",
+      "只用 HotpotQA 微調對照多任務微調",
+      "random method choice（下界）與 oracle method choice（上界）",
+      "LoRA 對照全參數微調；遮掉觀測 loss 對照不遮；CodeLlama tokenizer 對照 Llama tokenizer"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在 HotpotQA 上，用 500 條 GPT-4 ReAct 軌跡微調，六個基座模型的 EM 全部高於 few-shot ReAct prompting；越弱的模型相對增幅越大。微調後的 Llama-2-13B 超過 GPT-3.5 所有提示方法，但微調後最強的 GPT-3.5 仍低於老師 GPT-4 的 CoT／ReAct prompting",
+      "numbers": "Llama-2-7B 14.8→26.2（+77%）；Llama-2-13B 21.2→34.4（+62%）；CodeLlama-7B 17.4→27.8；CodeLlama-13B 20.8→29.0；CodeLlama-34B 22.2→27.8（+25%）；GPT-3.5 31.4→39.2（+25%）。GPT-3.5 prompting 最佳為 ReAct 31.4；GPT-4 CoT 45.0、ReAct 42.0",
+      "section": "Abstract、§5.1、Table 1、Table 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "微調後推論不需要 few-shot 範例，上下文變短，所以每次試次的時間與成本都下降，即使微調模型每 token 的單價較貴",
+      "numbers": "GPT-3.5 每次試次 9.0 秒→2.7 秒（−70%）；成本 2.6×10⁻³→2.2×10⁻³ 美元，微調模型單價約為 8 倍。引言寫「快 4 倍」，按表格其實約 3.3 倍",
+      "section": "§5.1、Table 3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "工具輸出有雜訊時，微調過的 agent 退化幅度明顯比 prompting 小；作者推測是因為訓練軌跡裡本來就有 GPT-4 應付無效搜尋的示範",
+      "numbers": "搜尋回傳 None（機率 0.5）：ReAct 31.4→20.8（−33.8%），FireAct 39.2→33.6（−14.2%）；回傳隨機結果：ReAct →22.6（−28.0%），FireAct →37.2（−5.1%）。多方法版本為 36.4／38.4",
+      "section": "§5.2、Table 3、A.2 Table 9",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "資料量的效應因基座而異：GPT-3.5 很省樣本，Llama 系列在少量軌跡下連 ReAct 格式都學不會，到 500 條才「湧現」出非零分數；給夠多資料後，開源小模型可追上用少量資料微調的 GPT-3.5",
+      "numbers": "n ∈ {100, 200, 500, 1000}；GPT-3.5 在 100 條時 EM 約 35，200 條以後增益很小；Llama 在 100／200 條時學不會格式；Llama-2-13B 用 1,000 條約等於 GPT-3.5 用 100 條",
+      "section": "§5.3、Figure 3（正文誤寫為 Figure 4）",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "在 GPT-3.5 上混入 CoT 軌跡會提高 EM、縮短軌跡，混入 Reflexion 則降低 EM、拉長軌跡，代表混料會把方法選擇往不同方向推；隨機挑方法遠低於任何混料版本，逐題挑最佳方法的 oracle 則高很多。最佳混料組合依基座而異",
+      "numbers": "ReAct 39.4（μ 3.2 輪）；ReAct+CoT 41.0（2.7 輪）；ReAct+Reflexion 38.8（3.8 輪）；三者全混 40.0（3.0 輪，σ 4.8）；random 32.4；oracle 52.0。CoT 混料對 GPT-3.5 與 Llama-2 有幫助、對 CodeLlama 有害；三方法全混在 CodeLlama-7B／13B 最差、34B 最好",
+      "section": "§6、Table 4、Figure 4、A.3 Table 10",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "加入 StrategyQA／MMLU 軌跡做多任務微調，HotpotQA／Bamboogle 大致持平；再混入 CoT 則四個任務都上升。但所有微調 agent 在 MMLU 上都輸給單純的 IO prompting",
+      "numbers": "GPT-3.5 Multi-task：HotpotQA 39.2、StrategyQA 55.5、Bamboogle 43.2、MMLU 63.2；+CoT：39.6、72.9、50.4、65.8；只用 HotpotQA 微調：39.2／Bamboogle 44.0；MMLU 的 IO prompting 68.6",
+      "section": "§7、Table 5、A.1 Table 8",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "Llama-2-7B 全參數微調比 LoRA 好，但 LoRA 便宜得多，因此多數實驗用 LoRA",
+      "numbers": "單任務：全參數 30.2 對 LoRA 26.2（+15.3%）；多任務：30.0 對 27.0；模型檔 14GB 對 38MB；LoRA 單張 RTX 4090 每秒 5.4 例，全參數需 4×A100-80GB（每秒 19.7 例）",
+      "section": "§5.3、A.5 Table 11、B.3 Table 15",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "訓練時要不要遮掉 observation token 的 loss（即要不要順便學世界模型），沒有一致的影響；同一組設定在不同規模的模型上方向相反",
+      "numbers": "7B（遮／不遮）：ReAct 26.0／26.2、ReAct+CoT 24.0／22.2、ReAct+Reflexion 25.2／24.8、全混 26.0／24.8；13B：ReAct 34.6／34.4、ReAct+CoT 24.8／30.2、ReAct+Reflexion 30.6／30.6、全混 27.2／31.0（表的列名寫 CodeLlama、標題寫 Llama-2）",
+      "section": "A.7、Table 13",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "只做 QA 一類任務、只有 Google 搜尋一個工具；更多 API、網頁、實體世界等環境留給後續（§8）",
+    "只涵蓋 ReAct、CoT、Reflexion 這三種維持單一自回歸軌跡上下文的方法；多提示、多角色、多上下文的 agent 怎麼微調，以及怎麼在複雜系統中結合 prompting 與微調，尚未探討（§8）",
+    "多任務實驗只有三個 QA 任務，能微調的最強模型只到 GPT-3.5；大規模多任務微調要先有更合適、更多樣的 agent benchmark（§8）",
+    "「何時該用工具、何時該反思」遠未解決：prompting 型 agent 容易過度使用工具、偏離成功模式時救不回來，FireAct 只改善了一部分（§8）",
+    "方法混料的效果依基座而異、不一定越混越好；逐題選方法仍有很大空間（oracle 52.0 對實際約 40），需要更系統的網格搜尋或用軌跡統計設定混料比例（§6）",
+    "微調後的 GPT-3.5 仍不及 GPT-4 的 CoT／ReAct prompting（§5.1）",
+    "只用 HotpotQA 微調很難泛化到題型不同的 StrategyQA 與 MMLU（§5.2、A.9）；MMLU 上所有 agent 方法都輸給 IO，可能是題目太簡單或選項被記住（§7）",
+    "成本與時間的比較會隨平行化實作等條件改變（§5.1）"
+  ],
+  "limitations_observed": [
+    "Bamboogle 的標準誤是用 n=500 算的，但 Bamboogle 只有 125 題：Table 8 裡 44.0 對應 2.22、7.2 對應 1.16，正好是 500 題的二項標準誤，而所有 Bamboogle EM 都是 0.8（1/125）的倍數。按 125 題重算，標準誤約 4.4，兩者差的標準誤約 6。§5.2 用 44.0 對 40.8 論證「微調有泛化優勢」，差距 3.2 連半個標準差都不到；§7 的 44.0 對 43.2 對 50.4 也一樣撐不起結論。",
+    "HotpotQA 上多數「方法混料」與「多任務」的結論落在雜訊內：500 題、EM 約 40 時，單一設定的標準誤約 2.2，兩個獨立設定相減的標準誤約 3.1。ReAct+CoT 41.0 對 ReAct 39.4（差 1.6）、三方法全混 40.0、多任務 39.2 對 39.2 都無法區分；「微調 Llama-2-13B 34.4 勝過 GPT-3.5 ReAct 31.4」也只約一個標準差。論文沒有做配對檢定，也沒有報告多次取樣或多個 seed；Llama 系列用溫度 0.6 解碼，取樣變異沒有反映在二項標準誤裡。",
+    "論文內部數字互相矛盾，削弱結果的可信度：同一個「GPT-3.5 只用 ReAct 微調」設定，Table 2 寫 39.2、Table 4／10 寫 39.4；引言說推論快 4 倍，Table 3 的 9.0→2.7 秒只有約 3.3 倍；HotpotQA 的 CoT 軌跡數在 §6 是 187、在 §7 是 277；Llama-2-13B 的增幅寫 +13.1，實際是 34.4−21.2=13.2。圖表標號也多處錯置：§6 把 Table 4 叫 Table 5、§5.3 把資料量的 Figure 3 叫 Figure 4、A.8 把 Figure 7 叫 Table 7、A.4 把 ReAct+Reflexion 誤寫成 ReAct+CoT、Table 13 標題寫 Llama-2 但列名是 CodeLlama（而不遮觀測欄的數字等於 Table 2 的 Llama-2）。",
+    "附錄 Table 10 出現正文沒交代的 IO 軌跡混料，最佳組合其實是 ReAct+IO+Reflexion 41.2，高於正文強調的 ReAct+CoT 41.0；表中還有單方法「Reflexion（微調）39.8」，但 Reflexion 軌跡只有 47 條，這個模型怎麼訓練的沒有說明。正文「CoT 對 HotpotQA 特別有幫助」的敘事，和附錄數字並不完全一致。",
+    "資料收集只看結果：只用最終答案篩選成功軌跡，推理錯但碰巧答對的軌跡會被留下，失敗軌跡整批丟掉，也沒有任何步驟層級的品質檢查（例如多餘搜尋、thought 與 observation 不一致）。B.2 的 human-in-the-loop 驗證沒說做了什麼、刷掉多少。資料還偏向 GPT-4 解得出來的題目，對「難題怎麼救」幾乎沒有示範。",
+    "Reflexion 的實作和原版不同：原版是失敗後依外部回饋反思，這裡是在第 6、10 輪固定插入反思，觸發條件是軌跡長度，不是偵測到異常。只有 47 條（約占多方法資料的 6%），量化上 ReAct+Reflexion 38.8 反而比 ReAct 差、軌跡更長；「反思能讓策略轉向」的證據只有 Figure 5 的一個個案。",
+    "「微調勝過 prompting」混入了蒸餾的效果：學生學的是 GPT-4 的軌跡，對照組卻是學生自己的 few-shot prompting。論文沒有對照「把同樣的 500 條軌跡當檢索式範例」或 many-shot prompting，所以分不出增益來自「微調」本身，還是來自老師的知識。微調後的 GPT-3.5（39.2）仍低於老師 GPT-4 ReAct（42.0），也顯示上限被老師綁住。",
+    "附錄 C 的 few-shot 提示詞本身格式不一致：HotpotQA ReAct 的 Milhouse 範例少了 Action 行；MMLU ReAct 的 Sedna 範例少了 search[...] 與 Observation 標籤，觀測直接接在 Action 後面；StrategyQA 的 IO 範例把 Rede Globo 那題重複一次；還有一處寫成「Observation 1」。對一篇主張「統一軌跡格式」的論文，老師提示詞的格式雜訊可能直接滲進訓練資料，也可能讓較弱模型的 prompting 基準吃虧，放大微調的相對增幅。",
+    "超參數與評估設定有疑點：A.8 顯示 EM 到 4 epoch 以後仍在上升，GPT-3.5 卻只訓練 3 epoch，而且 epoch 的選擇沒有說明是否用了 held-out 集；StrategyQA 的 55.5、72.9 不是 0.2 的倍數，不可能來自 500 題，評估題數卻沒寫。A.9 顯示只用 HotpotQA 微調的 Llama-2-7B 加 few-shot ReAct 後，StrategyQA 從 59.0 掉到 52.0，這個 7 分的負遷移在正文只用一句「在 StrategyQA 上退步」帶過，沒有給數字。",
+    "成本比較只算每次推論，沒有攤提 GPT-4 產生軌跡與微調本身的費用；而 Table 3 的成本是 2023 年 GPT-3.5 的價格，推論成本的結論會隨定價改變。軌跡層級的評估也只有輪數 μ／σ，沒有衡量工具呼叫是否多餘、thought 是否忠實，對 T4 關心的軌跡品質著墨不多。"
+  ],
+  "framework_role": "T4 裡「以軌跡訓練 agent」這條線的早期代表作兼基準：它把一次 agent 執行存成純文字的 Thought–Action–Observation 序列，示範了最簡單的一套軌跡資料管線——強模型 few-shot 產生 → 依最終答案篩選 → 不同推理方法統一成同一格式 → SFT 小模型。對框架有用的是幾個可以直接拿來當設計預設的經驗：軌跡格式要能容納單輪直答與多輪工具呼叫；混入哪些方法的軌跡，會改變學生的輪數分佈與方法選擇（可以用 μ／σ 監看）；7B 級模型大約要數百條軌跡才學得會格式；觀測 token 要不要算 loss 沒有定論。它沒有處理 T4 的另一半：失敗軌跡的分類與歸因、步驟層級評估、process reward。它丟掉失敗軌跡，只用結果 EM 當品質訊號，正好是後續步驟層級工作要補的缺口。它的場景是單輪 QA 加單一搜尋工具，沒有多輪使用者互動，要搬到對話完成框架，得自己把使用者回合納入軌跡格式。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "只有部分涉及：多方法資料裡的 Reflexion 軌跡，會在 ReAct 迴圈進行到第 6、10 輪時插入反思 thought，讓陷入重複無效搜尋的長軌跡換策略（Figure 5 b2：把時間限定詞從「利比亞內戰期間」改成「他執政期間」）。模型微調後會在同一條軌跡內自行觸發反思。但觸發條件是固定的輪數，而不是從軌跡偵測到的異常；推論時也沒有獨立的異常偵測器，偵測與修正都隱含在同一個模型的下一個 token 裡。要真正接上 E3，得另外加軌跡監看（例如偵測重複查詢、空觀測）來觸發修正。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有提到任何部署或產品。專案頁（https://fireact-agent.github.io）只連到 GitHub repo（https://github.com/anchen1011/FireAct，MIT 授權，含 alpaca／gpt 兩種格式的軌跡資料與訓練腳本）與 Hugging Face checkpoint（https://huggingface.co/forestai/fireact_llama_2_7b，MIT，查詢當下的月下載數 15），這些屬於可重現性。用 WebSearch 查「FireAct」搭配 production／product documentation 等詞，找到的只有後續論文（例如 arXiv 2510.00482 延伸到特定領域的 agent 蒸餾）與 ubiai.tools 上的教學文章，前者是學術影響力，後者不是產品整合，都不算採納。Semantic Scholar 顯示 260 次引用（influential 23），屬學術影響力。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/anchen1011/FireAct",
+    "data": "公開。repo 的 data/ 目錄含轉成 alpaca 與 gpt 格式的微調軌跡，Hugging Face（forestai）上有 Llama-2／CodeLlama 的微調 checkpoint，皆為 MIT 授權。但要重跑還有幾個障礙：老師 GPT-4 與學生 GPT-3.5-Turbo-0613 都是會改版或下架的閉源 API 快照；工具依賴 SerpAPI 的即時 Google 結果，觀測會隨時間改變；LoRA rank、推論模板、human-in-the-loop 驗證標準等細節論文沒寫（repo README 的範例參數有 micro_batch_size 8、num_epochs 30、cutoff_len 512，是否就是論文用的設定沒有明說）。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它是「把 agent 軌跡蒸餾成訓練資料」最早的系統性研究之一，格式統一、依結果篩選、方法混料會改變輪數分佈這幾個教訓值得知道；但只做 QA 加單一搜尋工具，多方法與多任務的差距多半落在一個標準誤內，內部數字也有多處矛盾，而且完全沒碰失敗軌跡與步驟層級品質，當基準讀一遍即可，不是 T4 必讀。",
+  "related": [
+    "2210.03629",
+    "2303.11366",
+    "2201.11903",
+    "2302.04761",
+    "2305.15334",
+    "2307.16789",
+    "2112.09332",
+    "2210.03350",
+    "2301.13688"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 6,
+    "total": 8
+  }
+}

@@ -1,91 +1,39 @@
 {
   "topics": {
     "T1": {
-      "counted": 1,
+      "counted": 22,
       "papers": [
         {
           "id": "1609.01454",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T1",
+          "title": "Attention-Based Recurrent Neural Network Models for Joint Intent Detection and Slot Filling",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "1902.10909",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T1",
+          "title": "BERT for Joint Intent Classification and Slot Filling",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "1909.02027",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
-        },
-        {
-          "id": "2003.04807",
-          "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
-        },
-        {
-          "id": "1809.00385",
-          "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
-        },
-        {
-          "id": "2101.03778",
-          "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
-        },
-        {
-          "id": "2008.06239",
-          "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
-        },
-        {
-          "id": "2304.04256",
-          "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
-        },
-        {
-          "id": "2310.10176",
-          "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
-        },
-        {
-          "id": "2305.07157",
-          "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
-        },
-        {
-          "id": "2010.05256",
-          "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
-        },
-        {
-          "id": "1907.06554",
-          "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
-        },
-        {
-          "id": "2305.13626",
-          "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
-        },
-        {
-          "id": "2403.19154",
-          "tier": "main",
           "topic": "T1",
-          "title": "STaR-GATE: Teaching Language Models to Ask Clarifying Questions",
+          "title": "An Evaluation Dataset for Intent Classification and Out-of-Scope Prediction",
           "read_level": "full",
           "value_verdict": "high",
           "anchors_exact": 8,
@@ -95,64 +43,277 @@
           "problems": []
         },
         {
+          "id": "2003.04807",
+          "tier": "main",
+          "topic": "T1",
+          "title": "Efficient Intent Detection with Dual Sentence Encoders",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
+        },
+        {
+          "id": "1809.00385",
+          "tier": "main",
+          "topic": "T1",
+          "title": "Zero-shot User Intent Detection via Capsule Neural Networks",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
+        },
+        {
+          "id": "2101.03778",
+          "tier": "main",
+          "topic": "T1",
+          "title": "Revisiting Mahalanobis Distance for Transformer-Based Out-of-Domain Detection",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
+        },
+        {
+          "id": "2008.06239",
+          "tier": "main",
+          "topic": "T1",
+          "title": "Language Models as Few-Shot Learner for Task-Oriented Dialogue Systems",
+          "read_level": "full",
+          "value_verdict": "low",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": false,
+          "problems": []
+        },
+        {
+          "id": "2304.04256",
+          "tier": "main",
+          "topic": "T1",
+          "title": "A Preliminary Evaluation of ChatGPT for Zero-shot Dialogue Understanding",
+          "read_level": "full",
+          "value_verdict": "low",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": false,
+          "problems": []
+        },
+        {
+          "id": "2310.10176",
+          "tier": "main",
+          "topic": "T1",
+          "title": "Large Language Models Meet Open-World Intent Discovery and Recognition: An Evaluation of ChatGPT",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
+        },
+        {
+          "id": "2305.07157",
+          "tier": "main",
+          "topic": "T1",
+          "title": "Exploring Zero and Few-shot Techniques for Intent Classification",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
+        },
+        {
+          "id": "2010.05256",
+          "tier": "main",
+          "topic": "T1",
+          "title": "Few-shot Learning for Multi-label Intent Detection",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
+        },
+        {
+          "id": "1907.06554",
+          "tier": "main",
+          "topic": "T1",
+          "title": "Asking Clarifying Questions in Open-Domain Information-Seeking Conversations",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
+        },
+        {
+          "id": "2305.13626",
+          "tier": "main",
+          "topic": "T1",
+          "title": "Prompting and Evaluating Large Language Models for Proactive Dialogues: Clarification, Target-guided, and Non-collaboration",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
+        },
+        {
+          "id": "2403.19154",
+          "tier": "main",
+          "topic": "T1",
+          "title": "STaR-GATE: Teaching Language Models to Ask Clarifying Questions",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
+        },
+        {
           "id": "2311.09469",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T1",
+          "title": "Clarify When Necessary: Resolving Ambiguity Through Interaction with LMs",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 6,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2410.13788",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T1",
+          "title": "Modeling Future Conversation Turns to Teach LLMs to Ask Clarifying Questions",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 10,
+          "anchors_total": 10,
+          "anchors_deep": 10,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "1805.04655",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T1",
+          "title": "Learning to Ask Good Questions: Ranking Clarification Questions using Neural Expected Value of Perfect Information",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2009.11352",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T1",
+          "title": "ConvAI3: Generating Clarifying Questions for Open-Domain Dialogue Systems (ClariQ)",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2310.11589",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T1",
+          "title": "Eliciting Human Preferences with Language Models",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2311.05584",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T1",
+          "title": "Zero-Shot Goal-Directed Dialogue via RL on Imagined Conversations",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2502.00640",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T1",
+          "title": "CollabLLM: From Passive Responders to Active Collaborators",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2402.09205",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T1",
+          "title": "Tell Me More! Towards Implicit User Intention Understanding of Language Model Driven Agents",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2410.12361",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T1",
+          "title": "Proactive Agent: Shifting LLM Agents from Reactive Responses to Active Assistance",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "1810.07942",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T1",
+          "title": "Semantic Parsing for Task Oriented Dialog using Hierarchical Representations",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "1909.03862",
@@ -217,31 +378,59 @@
       ]
     },
     "T2": {
-      "counted": 1,
+      "counted": 23,
       "papers": [
         {
           "id": "1810.00278",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "MultiWOZ -- A Large-Scale Multi-Domain Wizard-of-Oz Dataset for Task-Oriented Dialogue Modelling",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "1909.05855",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "Towards Scalable Multi-domain Conversational Agents: The Schema-Guided Dialogue Dataset",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "1606.03777",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "Neural Belief Tracker: Data-Driven Dialogue State Tracking",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "1805.09655",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "Global-Locally Self-Attentive Dialogue State Tracker",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "1905.08743",
@@ -259,116 +448,249 @@
         {
           "id": "1907.07421",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "SUMBT: Slot-Utterance Matching for Universal and Scalable Belief Tracking",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2005.02877",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "TripPy: A Triple Copy Strategy for Value Independent Neural Dialog State Tracking",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2005.00796",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "A Simple Language Model for Task-Oriented Dialogue",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2007.12720",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "MultiWOZ 2.2 : A Dialogue Dataset with Additional Annotation Corrections and State Tracking Baselines",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2109.07506",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "Dialogue State Tracking with a Language Model using Schema-Driven Prompting",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2105.04222",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "Leveraging Slot Descriptions for Zero-Shot Cross-Domain Dialogue State Tracking",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2201.08904",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "Description-Driven Task-Oriented Dialog Modeling",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2203.08568",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "In-Context Learning for Few-Shot Dialogue State Tracking",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2402.10466",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "Large Language Models as Zero-shot Dialogue State Tracker through Function Calling",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2004.06871",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "TOD-BERT: Pre-trained Natural Language Understanding for Task-Oriented Dialogue",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2109.04655",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "Zero-Shot Dialogue State Tracking via Cross-Task Transfer",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2310.08560",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "MemGPT: Towards LLMs as Operating Systems",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2505.06120",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "LLMs Get Lost In Multi-Turn Conversation",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2510.07777",
           "tier": "main",
+          "topic": "T2",
+          "title": "Drift No More? Context Equilibria in Multi-Turn LLM Interactions",
+          "read_level": "full",
+          "value_verdict": "low",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": []
         },
         {
           "id": "2503.08026",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "In Prospect and Retrospect: Reflective Memory Management for Long-term Personalized Dialogue Agents",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2512.12818",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "Hindsight is 20/20: Building Agent Memory that Retains, Recalls, and Reflects",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2504.19413",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2304.03442",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "Generative Agents: Interactive Simulacra of Human Behavior",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2305.10250",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T2",
+          "title": "MemoryBank: Enhancing Large Language Models with Long-Term Memory",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2308.15022",
@@ -415,7 +737,7 @@
       ]
     },
     "T3": {
-      "counted": 1,
+      "counted": 22,
       "papers": [
         {
           "id": "2405.15793",
@@ -426,147 +748,308 @@
           "value_verdict": "high",
           "anchors_exact": 8,
           "anchors_total": 8,
-          "anchors_deep": 2,
+          "anchors_deep": 4,
           "counted": true,
           "problems": []
         },
         {
           "id": "2312.08914",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "CogAgent: A Visual Language Model for GUI Agents",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2401.10935",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "SeeClick: Harnessing GUI Grounding for Advanced Visual GUI Agents",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2401.01614",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "GPT-4V(ision) is a Generalist Web Agent, if Grounded",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2410.05243",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "Navigating the Digital World as Humans Do: Universal Visual Grounding for GUI Agents",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2408.00203",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "OmniParser for Pure Vision Based GUI Agent",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2404.05719",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "Ferret-UI: Grounded Mobile UI Understanding with Multimodal LLMs",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2310.11441",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "Set-of-Mark Prompting Unleashes Extraordinary Visual Grounding in GPT-4V",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2504.10458",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "GUI-R1 : A Generalist R1-Style Vision-Language Action Model For GUI Agents",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2502.13130",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "Magma: A Foundation Model for Multimodal AI Agents",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2410.16464",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "Beyond Browsing: API-Based Web Agents",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 5,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2501.12326",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "UI-TARS: Pioneering Automated GUI Interaction with Native Agents",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2307.12856",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "A Real-World WebAgent with Planning, Long Context Understanding, and Program Synthesis",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2410.23218",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "OS-ATLAS: A Foundation Action Model for Generalist GUI Agents",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2503.11926",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "Monitoring Reasoning Models for Misbehavior and the Risks of Promoting Obfuscation",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2309.15817",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "Identifying the Risks of LM Agents with an LM-Emulated Sandbox",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 3,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2507.11473",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "Chain of Thought Monitorability: A New and Fragile Opportunity for AI Safety",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2401.10019",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "R-Judge: Benchmarking Safety Risk Awareness for LLM Agents",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2312.06942",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "AI Control: Improving Safety Despite Intentional Subversion",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2305.04388",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "Language Models Don't Always Say What They Think: Unfaithful Explanations in Chain-of-Thought Prompting",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 4,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2407.20859",
           "tier": "main",
+          "topic": "T3",
+          "title": "Breaking Agents: Compromising Autonomous LLM Agents Through Malfunction Amplification",
+          "read_level": "full",
+          "value_verdict": "low",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": []
         },
         {
           "id": "2301.13379",
           "tier": "main",
+          "topic": "T3",
+          "title": "Faithful Chain-of-Thought Reasoning",
+          "read_level": "full",
+          "value_verdict": "low",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": []
         },
         {
           "id": "2312.06674",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "Llama Guard: LLM-based Input-Output Safeguard for Human-AI Conversations",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2506.15740",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "SHADE-Arena: Evaluating Sabotage and Monitoring in LLM Agents",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 4,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2209.08199",
@@ -613,55 +1096,111 @@
       ]
     },
     "T4": {
-      "counted": 1,
+      "counted": 24,
       "papers": [
         {
           "id": "2210.03629",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "ReAct: Synergizing Reasoning and Acting in Language Models",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2310.12823",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "AgentTuning: Enabling Generalized Agent Abilities for LLMs",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2310.05915",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "FireAct: Toward Language Agent Fine-tuning",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 6,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2403.12881",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "Agent-FLAN: Designing Data and Methods of Effective Agent Tuning for Large Language Models",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2403.02502",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "Trial and Error: Exploration-Based Trajectory Optimization for LLM Agents",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2412.09605",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "AgentTrek: Agent Trajectory Synthesis via Guiding Replay with Web Tutorials",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2412.19723",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "OS-Genesis: Automating GUI Agent Trajectory Construction via Reverse Task Synthesis",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2412.21139",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "Training Software Engineering Agents and Verifiers with SWE-Gym",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2503.13657",
@@ -679,92 +1218,197 @@
         {
           "id": "2412.06559",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "ProcessBench: Identifying Process Errors in Mathematical Reasoning",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2505.00212",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "Which Agent Causes Task Failures and When? On Automated Failure Attribution of LLM Multi-Agent Systems",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2509.25370",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "Where LLM Agents Fail and How They can Learn From Failures",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 5,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2509.03312",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "AgenTracer: Who Is Inducing Failure in the LLM Agentic Systems?",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2505.08638",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "TRAIL: Trace Reasoning and Agentic Issue Localization",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2506.18824",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "Understanding Software Engineering Agents: A Study of Thought-Action-Result Trajectories",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2211.14275",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "Solving math word problems with process- and outcome-based feedback",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2305.20050",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "Let's Verify Step by Step",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2312.08935",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "Math-Shepherd: Verify and Reinforce LLMs Step-by-step without Human Annotations",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2410.08146",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "Rewarding Progress: Scaling Automated Process Verifiers for LLM Reasoning",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2404.06474",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "Autonomous Evaluation and Refinement of Digital Agents",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2501.07301",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "The Lessons of Developing Process Reward Models in Mathematical Reasoning",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2502.10325",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "Process Reward Models for LLM Agents: Practical Framework and Directions",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2504.08942",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "AgentRewardBench: Evaluating Automatic Evaluations of Web Agent Trajectories",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2406.06592",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "Improve Mathematical Reasoning in Language Models by Automated Process Supervision",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2110.14168",
@@ -805,19 +1449,33 @@
       ]
     },
     "T5": {
-      "counted": 1,
+      "counted": 23,
       "papers": [
         {
           "id": "2303.17651",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "Self-Refine: Iterative Refinement with Self-Feedback",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 3,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2303.11366",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "Reflexion: Language Agents with Verbal Reinforcement Learning",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2310.01798",
@@ -835,128 +1493,275 @@
         {
           "id": "2309.11495",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "Chain-of-Verification Reduces Hallucination in Large Language Models",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2406.01297",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "When Can LLMs Actually Correct Their Own Mistakes? A Critical Survey of Self-Correction of LLMs",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2302.07459",
           "tier": "main",
+          "topic": "T5",
+          "title": "The Capacity for Moral Self-Correction in Large Language Models",
+          "read_level": "full",
+          "value_verdict": "low",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": []
         },
         {
           "id": "2405.14092",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "Large Language Models Can Self-Correct with Key Condition Verification",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2311.08516",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "LLMs cannot find reasoning errors, but can correct them given the error location",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2304.05128",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "Teaching Large Language Models to Self-Debug",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 3,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2305.11738",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "CRITIC: Large Language Models Can Self-Correct with Tool-Interactive Critiquing",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 3,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2303.17491",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "Language Models can Solve Computer Tasks",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2308.13724",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "ISR-LLM: Iterative Self-Refined Large Language Model for Long-Horizon Sequential Task Planning",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2404.17140",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "Small Language Models Need Strong Verifiers to Self-Correct Reasoning",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2210.08726",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "RARR: Researching and Revising What Language Models Say, Using Language Models",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2305.14325",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "Improving Factuality and Reasoning in Language Models through Multiagent Debate",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2308.03188",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "Automatically Correcting Large Language Models: Surveying the landscape of diverse self-correction strategies",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2409.12917",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "Training Language Models to Self-Correct via Reinforcement Learning",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2407.18219",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "Recursive Introspection: Teaching Language Model Agents How to Self-Improve",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2206.05802",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "Self-critiquing models for assisting human evaluators",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 4,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2310.04406",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "Language Agent Tree Search Unifies Reasoning Acting and Planning in Language Models",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 6,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2407.00215",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "LLM Critics Help Catch LLM Bugs",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 6,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2211.00053",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "Generating Sequences by Learning to Self-Correct",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2212.08073",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "Constitutional AI: Harmlessness from AI Feedback",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2308.04592",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "Shepherd: A Critic for Language Model Generation",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2401.07301",
@@ -991,67 +1796,137 @@
       ]
     },
     "T6": {
-      "counted": 1,
+      "counted": 23,
       "papers": [
         {
           "id": "1612.05688",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "A User Simulator for Task-Completion Dialogues",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "1805.06966",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "Neural User Simulation for Corpus-based Policy Optimisation for Spoken Dialogue Systems",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2107.11904",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "Transferable Dialogue Systems and User Simulators",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2204.00763",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "Metaphorical User Simulators for Evaluating Task-oriented Dialogue Systems",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2208.10817",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "GenTUS: Simulating User Behaviour and Language in Task-oriented Dialogues with Generative Transformers",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2506.07982",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "$τ^2$-Bench: Evaluating Conversational Agents in a Dual-Control Environment",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2310.11667",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "SOTOPIA: Interactive Evaluation for Social Intelligence in Language Agents",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2601.17087",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "Lost in Simulation: LLM-Simulated Users are Unreliable Proxies for Human Users in Agentic Evaluations",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2306.00774",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "In-Context Learning User Simulators for Task-Oriented Dialog Systems",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2309.13233",
           "tier": "main",
+          "topic": "T6",
+          "title": "User Simulation with Large Language Models for Evaluating Task-Oriented Dialogue",
+          "read_level": "full",
+          "value_verdict": "low",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": []
         },
         {
           "id": "2403.16416",
@@ -1069,80 +1944,171 @@
         {
           "id": "2209.06899",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "Out of One, Many: Using Language Models to Simulate Human Samples",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2208.10264",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "Using Large Language Models to Simulate Multiple Humans and Replicate Human Subject Studies",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2306.02552",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "User Behavior Simulation with Large Language Model based Agents",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2510.06552",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "Flipping the Dialogue: Training and Evaluating User Language Models",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "1901.05415",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "Learning from Dialogue after Deployment: Feed Yourself, Chatbot!",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "1804.06512",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "Dialogue Learning with Human Teaching and Feedback in End-to-End Trainable Task-Oriented Dialogue Systems",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2404.15269",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "Aligning LLM Agents by Learning Latent Preference from User Edits",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2208.03188",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "BlenderBot 3: a deployed conversational agent that continually learns to responsibly engage",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "1605.07669",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "On-line Active Reward Learning for Policy Optimisation in Spoken Dialogue Systems",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2105.03748",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "Simulating User Satisfaction for the Evaluation of Task-oriented Dialogue Systems",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 6,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2208.03270",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "Learning New Skills after Deployment: Improving open-domain internet-driven dialogue with human feedback",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "1911.02557",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "Feedback-Based Self-Learning in Large-Scale Conversational AI Agents",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2305.13112",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T6",
+          "title": "Rethinking the Evaluation for Conversational Recommendation in the Era of Large Language Models",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2212.07769",
@@ -1189,43 +2155,85 @@
       ]
     },
     "T7": {
-      "counted": 1,
+      "counted": 24,
       "papers": [
         {
           "id": "2306.05685",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2303.16634",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "G-Eval: NLG Evaluation using GPT-4 with Better Human Alignment",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2305.17926",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "Large Language Models are not Fair Evaluators",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2404.04475",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "Length-Controlled AlpacaEval: A Simple Way to Debias Automatic Evaluators",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2305.14387",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "AlpacaFarm: A Simulation Framework for Methods that Learn from Human Feedback",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2411.16594",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "From Generation to Judgment: Opportunities and Challenges of LLM-as-a-judge",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 4,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2410.10934",
@@ -1236,111 +2244,230 @@
           "value_verdict": "high",
           "anchors_exact": 8,
           "anchors_total": 8,
-          "anchors_deep": 6,
+          "anchors_deep": 4,
           "counted": true,
           "problems": []
         },
         {
           "id": "2502.06193",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "Can LLMs Replace Human Evaluators? An Empirical Study of LLM-as-a-Judge in Software Engineering",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2310.06770",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "SWE-bench: Can Language Models Resolve Real-World GitHub Issues?",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 5,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2307.16789",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "ToolLLM: Facilitating Large Language Models to Master 16000+ Real-world APIs",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2307.13854",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "WebArena: A Realistic Web Environment for Building Autonomous Agents",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2404.07972",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "OSWorld: Benchmarking Multimodal Agents for Open-Ended Tasks in Real Computer Environments",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2306.06070",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "Mind2Web: Towards a Generalist Agent for the Web",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2308.03688",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "AgentBench: Evaluating LLMs as Agents",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 4,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2311.12983",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "GAIA: a benchmark for General AI Assistants",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 6,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2207.01206",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "WebShop: Towards Scalable Real-World Web Interaction with Grounded Language Agents",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2509.16941",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "SWE-Bench Pro: Can AI Agents Solve Long-Horizon Software Engineering Tasks?",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2601.11868",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "Terminal-Bench: Benchmarking Agents on Hard, Realistic Tasks in Command Line Interfaces",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2403.04132",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "Chatbot Arena: An Open Platform for Evaluating LLMs by Human Preference",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 6,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "1603.08023",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "How NOT To Evaluate Your Dialogue System: An Empirical Study of Unsupervised Evaluation Metrics for Dialogue Response Generation",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2402.17753",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "Evaluating Very Long-Term Conversational Memory of LLM Agents",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2410.10813",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2309.10691",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "MINT: Evaluating LLMs in Multi-turn Interaction with Tools and Language Feedback",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 6,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2402.14762",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "MT-Bench-101: A Fine-Grained Benchmark for Evaluating Large Language Models in Multi-Turn Dialogues",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2407.18901",
@@ -1375,19 +2502,33 @@
       ]
     },
     "T8": {
-      "counted": 2,
+      "counted": 24,
       "papers": [
         {
           "id": "2010.02840",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "Semantic Evaluation for Text-to-SQL with Distilled Test Suites",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2106.05555",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "Shades of BLEU, Flavours of Success: The Case of MultiWOZ",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2406.12045",
@@ -1405,104 +2546,223 @@
         {
           "id": "2506.21506",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "Mind2Web 2: Evaluating Agentic Search with Agent-as-a-Judge",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2507.02825",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "Establishing Best Practices for Building Rigorous Agentic Benchmarks",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2502.03461",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "Do Large Language Model Benchmarks Test Reliability?",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2107.03374",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "Evaluating Large Language Models Trained on Code",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 3,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "1709.06560",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "Deep Reinforcement Learning that Matters",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2108.13264",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "Deep Reinforcement Learning at the Edge of the Statistical Precipice",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2411.00640",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "Adding Error Bars to Evals: A Statistical Approach to Language Model Evaluations",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2103.03098",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "Accounting for Variance in Machine Learning Benchmarks",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2602.16666",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "Towards a Science of AI Agent Reliability",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 6,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "1909.03004",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "Show Your Work: Improved Reporting of Experimental Results",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2401.13178",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "AgentBoard: An Analytical Evaluation Board of Multi-turn LLM Agents",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2408.04682",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "ToolSandbox: A Stateful, Conversational, Interactive Evaluation Benchmark for LLM Tool Use Capabilities",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 6,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2406.12373",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "WebCanvas: Benchmarking Web Agents in Online Environments",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2203.07540",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "ScienceWorld: Is your Agent Smarter than a 5th Grader?",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2412.14161",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "TheAgentCompany: Benchmarking LLM Agents on Consequential Real World Tasks",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2407.01502",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "AI Agents That Matter",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 6,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2510.11977",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "Holistic Agent Leaderboard: The Missing Infrastructure for AI Agent Evaluation",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 5,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2211.09110",
@@ -1520,20 +2780,41 @@
         {
           "id": "2504.13359",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "Cost-of-Pass: An Economic Framework for Evaluating Language Models",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2010.06595",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "With Little Power Comes Great Responsibility",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2404.06411",
           "tier": "main",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "AgentQuest: A Modular Benchmark Framework to Measure Progress and Improve LLM Agents",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2406.10229",

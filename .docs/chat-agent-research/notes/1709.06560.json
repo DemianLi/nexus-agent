@@ -1,0 +1,161 @@
+{
+  "id": "1709.06560",
+  "title": "Deep Reinforcement Learning that Matters",
+  "topic": "T8",
+  "subarea": "多次試驗的可靠性度量與統計嚴謹性",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "以 TRPO、PPO、DDPG、ACKTR 在 MuJoCo 連續控制任務上的受控實驗，逐一量出超參數、網路架構、reward scale、random seed、環境選擇與程式碼實作對報告分數的影響。結果顯示光換 seed 就能得到統計上不同的學習曲線，因此主張以多 seed、信賴區間、顯著性檢定與 power analysis 取代「平均或最高 return」這類單點報告。",
+  "problem": "深度 RL 論文普遍只報平均 return 或最高 return，trial 數常少於 5，甚至只挑表現最好的 top-N 次；超參數與實作細節也常不交代。環境本身與學習過程都有隨機性（權重初始化、探索雜訊），不同論文替同一個 baseline 報出的數字差距很大（例如 TRPO 在 Hopper 上，rllab benchmark 報的平均 return 約 1183，其他論文報的最高平均 return 則落在 2486 到 3668.8；各家連報告的指標都不一樣，見 Table 5），所以讀者無法判斷新方法宣稱的進步是真的，還是雜訊與挑選造成的。這件事的重要性在於：若分數本身不可重現、不可比較，後續研究會把力氣浪費在追逐假的進步。",
+  "core_idea": "把「報告一個分數」當成一個需要控制變因的統計估計問題。作者先用受控實驗證明變異來源夠大：每次只改一個因素（外在的有超參數與 codebase，內在的有 seed 與環境），同一設定跑 5 個 seed。接著借用 A/B testing 與監督式學習的統計工具，示範怎麼報告：以 bootstrap 求平均與 95% 信賴區間；以 2-sample t-test、Kolmogorov-Smirnov test、bootstrap 百分比差判斷兩個演算法的差距是否顯著；以 bootstrap power analysis 判斷 trial 數夠不夠。另外主張除了 return 也要展示策略實際的行為，因為分數可能只反映局部最佳解而不是完成任務。",
+  "method": {
+    "受測演算法與實作": "四個 model-free policy gradient 方法：TRPO、PPO、DDPG、ACKTR。除了比較 codebase 的實驗之外，一律使用 OpenAI Baselines 的實作。比較 codebase 時，TRPO 用 Baselines、原始 TRPO 程式碼（modular_rl）、rllab 的 TensorFlow 版；DDPG 用 rllab（Theano）、rllabplusplus（Q-Prop 附帶的 DDPG）、Baselines。rllab TF 版的 TRPO 只提供線性 baseline，因此該組沒有做 value network 實驗，Leaky ReLU 也沒放進 codebase 實驗。",
+    "環境與訓練長度": "OpenAI Gym 的 MuJoCo 任務。主要實驗用 Hopper-v1（動態不穩定）與 HalfCheetah-v1（動態穩定），環境實驗另加 Walker2d-v1、Swimmer-v1。每個設定訓練 2M timesteps。",
+    "試驗與報告方式": "每個設定跑 5 個 trial，各用一個預設的 random seed，所有實驗共用同一組 seed。圖表一律畫跨 seed 的平均與 standard error。表格中的「最終表現」定義為訓練 2M 樣本後，最後 100 條軌跡的平均 return，再取 5 個 trial 的平均 ± standard error。",
+    "DDPG 評估方式的修改": "Baselines 原本的 DDPG 評估只在訓練後跑一段不完整的軌跡，一條完整軌跡會跨越好幾個不同的策略，較接近 online 觀點。作者改成每個 epoch 結束時，以當下的 target policy 評估 10 條完整軌跡，對齊 policy optimization 觀點。",
+    "預設超參數": {
+      "DDPG": "policy (64, relu, 64, relu, tanh)；Q network (64, relu, 64, relu, linear)；observation 以 running mean 正規化；actor LR 1e-4、critic LR 1e-3；reward scale 1.0；O-U noise 0.2；soft target τ=0.01；γ=0.995；batch 128；critic L2 1e-2。",
+      "PPO": "policy (64, tanh, 64, tanh, linear) 外加 std 變數；value (64, tanh, 64, tanh, linear)；timesteps per batch 2048；clip 0.2；entropy 0.0；每輪 10 個 optimizer epoch、step size 3e-4、minibatch 64；γ=0.995、GAE λ=0.97；learning rate 固定不排程。",
+      "TRPO": "網路同 PPO；timesteps per batch 5000；max KL 0.01；conjugate gradient 20 次迭代、CG damping 0.1；value function 5 次迭代、VF batch 64、VF step size 1e-3；entropy 0.0；γ=0.995、GAE λ=0.97。",
+      "ACKTR": "policy (64, tanh, 64, tanh, linear) 外加 std 變數；value (64, elu, 64, elu, linear)；timesteps per batch 2500；desired KL 0.002；γ=0.995、GAE λ=0.97。"
+    },
+    "實驗一：網路架構與activation function": "一次只改一個超參數，其餘維持預設。policy 與 value 網路分開測。架構有三種，都是文獻常見的 MLP：(64,64)、(100,50,25)、(400,300)。activation function有 tanh、ReLU、Leaky ReLU 三種，ACKTR 以 ELU 取代 Leaky ReLU。另外量了更新時的 KL divergence 作為診斷。",
+    "實驗二：reward scale": "只做 DDPG。訓練時把 reward 乘上一個常數 σ̂（文獻常用 0.1），比較有無 layer normalization。確切的 σ̂ 取值清單只畫在 Figure 3、20、21 中，正文未列。",
+    "實驗三：random seed": "同一組超參數跑 10 個 trial，只有 seed 不同。把 10 個 trial 分成兩組各 5 個，分別取平均畫學習曲線，再對兩組做 2-sample t-test。依 Figure 5 的說明，t 值是對整條訓練曲線取平均。附錄對 TRPO 與 DDPG 都做了這個實驗。",
+    "實驗四：環境": "用預設超參數，把四個演算法跑在四個環境上，比較排名是否一致，並以影片檢查學到的策略實際在做什麼。",
+    "實驗五：codebase": "固定超參數，比較同一演算法不同實作的最終表現與學習曲線。附錄的 Figure 35 中，rllab 與原始 TRPO 程式碼改用每批 20k 樣本。",
+    "統計報告工具": {
+      "bootstrap 信賴區間": "用 Facebook 的 bootstrapped 套件，對 5 個 trial 的最終 return 做 10k 次有放回重抽，以 pivotal method 求平均與 95% 信賴區間（Table 3、Table 13）。",
+      "顯著性檢定": "兩兩比較演算法，每個演算法取 5 個 trial 的平均 return，排序後分別做 scipy 的 ttest_ind（2-sample t-test）與 ks_2samp（KS test）。另外以 bootstrap A/B 比較求出百分比差與 95% 信賴區間（Table 9–12）。",
+      "bootstrap power analysis": "把樣本整體乘以 1.25，也就是 25% 的 lift，這是 A/B testing 的慣例。接著跑大量 bootstrap 模擬，統計不顯著、正向顯著、負向顯著三類結果各占多少比例（Table 14）。若不顯著的比例高，就要加跑 trial。論文沒有交代模擬次數，也沒說每次模擬用哪個檢定判斷顯著。"
+    }
+  },
+  "assumptions": [
+    "不同 seed 得到的最終 return 可視為同一個「演算法 × 環境」表現分布的獨立同分布樣本，5 個樣本就足以估出有意義的變異。",
+    "一次只改一個超參數，就能看出該超參數的影響。作者自己也指出超參數之間彼此牽動，這個前提只是近似。",
+    "累積 return 能代表任務表現。Swimmer 的例子已顯示這個前提會失效，作者因此補上「要看策略實際行為」的建議。",
+    "t-test 的常態假設，以及 bootstrap「樣本足以代表母體」的假設，在每組 n=5 時仍大致成立。",
+    "MuJoCo v1 的四個環境加上 2M timesteps，能代表連續控制 benchmark 的一般情況。",
+    "seed 同時控制環境隨機性與學習隨機性（權重初始化、探索雜訊）。論文沒有把這兩種來源拆開。"
+  ],
+  "evaluation": {
+    "benchmarks": ["OpenAI Gym MuJoCo：Hopper-v1、HalfCheetah-v1、Walker2d-v1、Swimmer-v1"],
+    "metrics": [
+      "最終平均 return（訓練 2M 樣本後最後 100 條軌跡的平均）± standard error（5 個 seed）",
+      "bootstrap 平均與 95% 信賴區間（10k 次重抽、pivotal method）",
+      "2-sample t-test（t、p）",
+      "Kolmogorov-Smirnov test（KS、p）",
+      "bootstrap 百分比差與 95% 信賴區間（A/B 比較）",
+      "bootstrap power analysis（25% lift 下不顯著、正向顯著、負向顯著的比例）",
+      "文獻回顧中的 average return 與 max average return",
+      "更新的 KL divergence（診斷架構影響用）"
+    ],
+    "baselines": [
+      "TRPO（OpenAI Baselines、原始 modular_rl、rllab TF）",
+      "PPO（OpenAI Baselines）",
+      "DDPG（OpenAI Baselines、rllab Theano、rllabplusplus）",
+      "ACKTR（OpenAI Baselines）",
+      "文獻中 rllab benchmarking、Q-Prop、IPG、Param Noise 報告的 baseline 數字（Table 4–8）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "超參數完全相同、只換 random seed 時，10 個 trial 隨機分成兩組各 5 個，平均出來的學習曲線在統計上就已不同。這代表 5 個 trial 的平均本身就可能誤導，挑 top-N 或只跑少於 5 次更不可靠。文獻回顧中確實有論文報 top-5、top-2／top-3，或只跑 3 次。",
+      "numbers": "TRPO、HalfCheetah-v1：t=-9.0916、p=0.0016（對整條訓練曲線取平均的 2-sample t-test）。文獻 trial 數（Table 7）有 top-5、3–9、3、5、top-2／top-3 等。",
+      "section": "§Random Seeds and Trials、Figure 5、Figure 24–25、Table 7",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "只改 policy 網路的大小或activation function，最終表現就可能從正常學習掉到完全學不會。這些影響在不同演算法、不同環境之間並不一致。",
+      "numbers": "PPO policy 從 (64,64) 改成 (400,300) 時，Hopper 從 2790±62 掉到 61±33，HalfCheetah 從 2201±323 掉到 -1180±444（Table 1）。PPO 大網路更新的 KL divergence 平均是 (64,64) 的 33.52 倍。",
+      "section": "§Network Architecture、Table 1、Table 2、footnote 4",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "DDPG 的 reward scale 影響很大，但方向在不同環境與不同取值間並不一致；有無 layer normalization 也會改變這個影響。",
+      "numbers": "HalfCheetah-v1 上 σ̂ 低於 0.01 時 DDPG 學不起來（Figure 3）。附錄指出 σ̂=10 或 1 通常表現較好，極小的 σ̂ 在所有環境都有害（Figure 20–21）。",
+      "section": "§Reward Scale、Figure 3、附錄 Reward Scaling Parameter in DDPG",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "環境選擇會決定排名：沒有任何演算法在四個環境都最好，而且各環境的信賴區間寬度差很多。只報有利的環境（例如 DDPG 只報 HalfCheetah）就是不公平的比較。",
+      "numbers": "bootstrap 平均（95% CI）：HalfCheetah 上 DDPG 為 5037（3664, 6574），TRPO 為 1254.5（999, 1464）；Hopper 上 DDPG 為 1632（607, 2370），TRPO 為 2965（2854, 3076）；Swimmer 上 TRPO 為 214（141, 287），DDPG 為 31（21, 46）。TRPO 與 PPO 的區間最窄。",
+      "section": "§Environments、§Reporting Evaluation Metrics、Table 3、Table 13",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "return 上升不代表任務完成。Swimmer 上存在一個局部最佳解：策略捲起身體亂拍，並沒有真的游泳，學習曲線卻顯示最佳化成功。因此除了報 return，也要展示策略實際的行為。",
+      "numbers": "該局部最佳解對應的 return 約為 130。DDPG 在 Hopper 上則收斂到「活到最大步數 1000 就好」的局部最佳解。",
+      "section": "§Environments、Figure 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "同一演算法、同一組超參數，換一個 codebase，最終表現就可能差好幾倍。這些實作差異通常不會寫進論文。",
+      "numbers": "TRPO、HalfCheetah、policy (64,64)：原始程式碼 1939±140，rllab 834±317，Baselines 205±256（Table 1）。DDPG、HalfCheetah、(64,64)：三個實作分別為 4198±606、2771±535、1573±385。",
+      "section": "§Codebases、Table 1、Table 2、Figure 6、Figure 34–35",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "平均分數較高不等於顯著較好：信賴區間重疊時，t-test、KS test 與 bootstrap 百分比差都判為不顯著。",
+      "numbers": "Walker2d-v1，ACKTR 對 DDPG：t=1.03、p=0.334；KS=0.40、p=0.697；bootstrap 百分比差 44.47%（-80.62%, 111.72%）。",
+      "section": "§Reporting Evaluation Metrics（Significance）、Table 11",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "bootstrap power analysis 可以指出哪些設定的 5 個 trial 不夠：穩定的設定只要 5 次就能偵測到 25% 的提升，不穩定的設定則大多偵測不到。",
+      "numbers": "25% lift 下的模擬結果（不顯著／正向顯著／負向顯著）：TRPO Hopper、PPO Hopper、TRPO Walker2d 都是 0%／100%／0%；DDPG HalfCheetah 為 100%／0%／0%；PPO HalfCheetah 為 61.07%／10.50%／28.43%（Table 14）。",
+      "section": "§Reporting Evaluation Metrics（Power Analysis）、附錄 Significance、Table 14",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "只研究連續控制中的 policy gradient 方法，沒有涵蓋 value-based 或離散動作的設定。",
+    "無法給出建議的 trial 數。power analysis 只能提供大概的方向，這是一個待解的開放問題。",
+    "監督式學習中那些經過修正的顯著性檢定（例如 corrected resampled t-test），其資料假設在 RL 不一定成立；本文採用的指標也未必最適合 RL，需要後續研究。",
+    "reward rescaling 的影響跨環境不一致，需要更有原則的做法（例如 adaptive rescaling），不應逐環境手調。",
+    "附錄指出 bootstrap 樣本太小時，得到的結果不夠明確。",
+    "rllab TF 版只有線性 value baseline，所以省略了 value network 的實驗；codebase 實驗也沒有放 Leaky ReLU。"
+  ],
+  "limitations_observed": [
+    "KS test 在 n=5 對 n=5 時只能取離散值：D 只會是 0.2 的倍數，p 值只會是 0.004、0.036、0.209、0.697 其中之一。Table 9–12 的所有 KS 結果都落在這幾個值上，最小可能的 p 就是 0.004。以這麼粗的解析度來判斷顯著，在方法上說服力很弱。",
+    "bootstrap 百分比差的結論會因比較方向而反轉。Table 9 HalfCheetah 中，DDPG 對 ACKTR 的 CI 是 (-32.27%, 122.99%)，含 0；反過來 ACKTR 對 DDPG 是 (-75.42%, -15.19%)，不含 0，同一對演算法因此得出相反的顯著性判斷。Table 12 Swimmer 中，TRPO 對 DDPG 的 KS=1.00，表示兩組 trial 完全分開，百分比差的 CI 卻是 (-73.29%, 869.24%)，包含負值。作者在正文說顯著性結果「大致符合預期」，這些格子直接與此相左。問題可能出在：以比值為統計量、樣本只有 5 個、又用 pivotal method，在偏態下會產生不合理的界限。",
+    "Table 14 模擬的是正向 25% lift。若「負向顯著」指的是 lift 之後反而顯著較差（論文沒有定義比較方向），那麼好幾格的這個比例都不小：PPO HalfCheetah 28.43%、DDPG Hopper 29.10%、ACKTR Walker2d 29.93%。這表示在 n=5 下，這套 power analysis 本身的雜訊就很大，很難拿來決定要跑幾次 trial。論文也沒有交代模擬次數，或每次模擬用哪個檢定判斷顯著，照著做重現不出來。",
+    "Figure 5 的 t=-9.0916、p=0.0016 若是 df=8 的單一檢定，數字對不上：這麼大的 t 值對應的 p 應小很多。caption 說明它是對整條訓練曲線取平均。對各時間點的 t 值與 p 值取平均並不是有效的檢定，而且各時間點彼此高度相關，所以這個「統計上不同」的強度無法照字面解讀。",
+    "同一個 baseline 在不同表格的數字對不上。同樣是 Baselines TRPO、HalfCheetah、預設設定：Table 1 的 (64,64) tanh 欄為 205±256，Table 3 的 bootstrap 平均為 1254.5，Table 6 的 average return 為 1045.6，而且 Table 6 的 max average return 竟與 average 同為 1045.6。論文沒有交代 Table 3、Table 6 的評估時點與設定。一篇主張把細節交代清楚的論文，自己的數字卻無法互相核對。",
+    "附錄 Batch Size in TRPO 只用原始 TRPO 程式碼與 Baselines 做了 batch 實驗，結論是 batch 1024 最好、越大越差。但 Figure 35 的 codebase 比較中，原始 TRPO 程式碼卻改用每批 20k 樣本，並稱這是「在第二組實驗中最佳化過的」，與附錄結論互相矛盾。rllab 同樣改用 20k，但附錄沒有測過 rllab 的 batch，無從對照。這讓 codebase 比較多了一個沒有固定住的變因。",
+    "Table 9–12 在每個環境做 6 組兩兩比較，4 個環境共 24 組，每組又跑 3 種檢定。論文既沒有宣告顯著水準，也沒有做 multiple comparison 修正，卻逐格解讀顯著與否。這正是論文自己警告的那種「看起來顯著」的風險。",
+    "評估觀點可能混用（條件式）。DDPG 被改成每個 epoch 結束時評估 10 條完整軌跡；PPO、TRPO、ACKTR 則以「最後 100 條軌跡」報告，論文沒有說明那是不是帶探索雜訊的訓練 rollout。如果是，Table 3 的跨演算法比較就混用了作者在 §Reporting 自己區分的 online 觀點與 policy optimization 觀點。",
+    "外推到 T8 有限制。本文的分數是連續的累積 return，LLM agent 的任務完成多半是二元或比例分數，這類分數需要 binomial 專用的工具（例如比例的信賴區間、pass@k、pass^k）。KS test 在只有兩個取值的資料上幾乎沒有意義，t-test 則要在 trial 數夠多時才大致可用。另外，本文的 seed 同時綁住環境與學習的隨機性；agent 評估則需要把模型取樣、使用者模擬器、環境狀態三種變異來源拆開，本文沒有提供這種分解。",
+    "trial 數只有 5，還用 standard error 當誤差棒。在這麼小的樣本下，SE 會低估不確定性，圖上看起來「不重疊」的誤差棒不能當作顯著的證據。更好的做法是直接畫 95% CI 或每個 seed 的散布點，同子領域後來的 2108.13264 正是往這個方向修正。"
+  ],
+  "framework_role": "在 T8 裡，這篇是「多次試驗可靠性」這條線的問題源頭。它用 seed 分組實驗證明單次分數與少量 trial 的平均都不可信，並提出以信賴區間、顯著性檢定、power analysis 報告分數。對應到對話 agent 的任務完成分數，可以這樣轉譯：seed 對應同一題的重複 trial；只報 top-N 或最高 return，就像拿 best-of-k 冒充典型表現；Swimmer 約 130 分的局部最佳解說明代理分數可能與真正的任務完成脫鉤，這也是 T8 需要終態比對或目標達成判準、而不能只看累積獎勵的論據。它的限制是只處理連續 return、不處理二元成功率，而且統計工具在小樣本下有瑕疵。因此它適合當「為什麼要報變異與誤差棒」的依據，具體的計分與聚合方法要另外取材。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有描述任何部署或產品。作者釋出的 repo 是研究用程式碼，不算採納。NeurIPS 官方 Paper Checklist 第 7 題（https://neurips.cc/public/guides/PaperChecklist）要求報告 error bars、信賴區間或顯著性檢定，但沒有引用本文，因此無法視為本文被採納的證據。 查證受限：本次 WebSearch 額度已用盡（200/200），只以 WebFetch 查了 NeurIPS Paper Checklist 與作者 repo，因此採納查證不完整；「未見證據」是在這個條件下得出的結論。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/Breakend/DeepReinforcementLearningThatMatters（論文所附 https://git.io/vFHnf 導向此處；內含修改過的 OpenAI Baselines、rllab／rllabplusplus／modular_rl 的執行腳本，以及 bootstrap、t-test、KS test 的顯著性檢定工具；rllab 完整程式碼未收錄）",
+    "data": "只用公開的 Gym MuJoCo v1 環境（當時需要 MuJoCo 授權，v1 版本已被淘汰），沒有另外建資料集。未確認是否公開了原始實驗結果（各 seed 的 return 紀錄）。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它用 seed 分組實驗把「單次或挑最好幾次的分數不可信」講得最有說服力，是 T8 多次試驗可靠性這條線的問題源頭。但它提供的小樣本統計工具（n=5 的 bootstrap 百分比差、KS、對時間點取平均的 p 值）有可從表格直接驗證的瑕疵，指標也是連續 return 而非任務成功；可直接採用的方法論已由同子領域的 2108.13264 取代，因此有價值但不是必讀。",
+  "related": [
+    "1509.02971",
+    "1707.06347",
+    "1708.05144",
+    "1709.06009",
+    "1606.01540",
+    "1611.02247",
+    "1706.00387",
+    "1706.01905",
+    "1703.02660",
+    "1206.4656",
+    "1204.2235"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

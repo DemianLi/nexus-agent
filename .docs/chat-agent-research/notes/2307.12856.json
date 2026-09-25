@@ -1,0 +1,171 @@
+{
+  "id": "2307.12856",
+  "title": "A Real-World WebAgent with Planning, Long Context Understanding, and Program Synthesis",
+  "topic": "T3",
+  "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 WebAgent：以自行預訓練的 HTML-T5（local-global attention 加上長 span 去噪）在每一步讀完 7K–14K token 的真實網頁 HTML，同時預測下一個子指令並抽出與任務相關的 data-ref snippet，再交給 Flan-U-PaLM 寫成 Selenium Python 程式執行；三個真實網站的成功率從單一 LLM 的 10–20% 提升到 65–80%。",
+  "problem": "真實網站 agent 有三個障礙：(1) 沒有預先定義的動作空間；(2) HTML 觀測太長，模擬器平均約 0.5K token，真實網站即使去掉 script/meta 也有 7K–14K token，超過多數 LLM 的 context，直接整份餵入成本過高；(3) 通用 LLM 缺乏 HTML 樹狀結構的歸納偏置。放在 T3 來看，核心問題是：環境觀測遠大於模型能看的範圍時，如何依當下任務把觀測壓縮成可行動的片段，並且讓負責理解觀測的模型懂 HTML 結構。",
+  "core_idea": "把「讀觀測」與「產生行動」拆給兩個模型。領域專家 HTML-T5 讀完整的長 HTML，同一次解碼輸出下一個子指令（closed-loop 計劃）與相關元素的 data-ref（抽取式摘要）；大模型只看壓縮後的 snippet 與子指令來寫程式。HTML-T5 以 local-global attention 貼合 HTML 樹狀結構，以只用長 span 的去噪目標學 HTML 語法，再用腳本自動產生的「自我經驗」資料對齊特定真實網站，免去逐步人工標註。",
+  "method": {
+    "觀測前處理（Figure 2）": "去掉無關標籤（例如 <script>、<meta>），保留必要屬性（id、type、value）。元素帶有 data-ref 屬性當參照 ID，程式碼例子用 CSS selector [data-ref=\"175\"] 定位元素；但 data-ref 怎麼注入每個元素、編號規則為何，論文未揭露。",
+    "整體迴圈（§3 Workflow、附錄 D）": "使用者指令 → HTML-T5 先產生「go to <URL>」子指令 → Flan-U-PaLM 生成導航程式並執行 → 取出新頁面的 raw HTML，連同使用者指令、先前的子指令歷史一起輸入 HTML-T5 → HTML-T5 輸出下一個子指令與相關的 data-ref → 以 data-ref 取回 HTML snippet → Flan-U-PaLM 以子指令加 snippet 生成 Python 程式，交給 Selenium WebDriver 執行 → 重複，直到預測出結束子指令或達到最大迭代次數（上限值未揭露）。每一步只看當前頁面，不保留舊頁面的觀測。",
+    "HTML-T5 的輸入輸出（§3.2）": "輸入＝任務指令（例：在 real estate 網站找紐約 2 房 2+ 衛、租金上限 7500 的房子）＋子指令歷史（go to real estate website, type in new york into search, click on search, click on price, click on max rent）＋當前頁的 raw HTML；輸出＝下一個子指令（例：type in 7500 into max rent）＋用來取回 snippet 的 data-ref 屬性。計劃與摘要是同一個模型、同一次輸出。",
+    "snippet 展開規則": "真實網站流程中，data-ref 如何展開成 snippet（取多大的子樹、多個 data-ref 如何合併、超過 context 如何處理）正文未揭露。唯一寫明的規則在附錄 E（WebSRC）：從預測的元素往上兩層（XPath）取子樹；超過 Flan-U-PaLM 的 context 就縮到 parent 元素；還超過就截掉尾端；Table 類任務因為抽取會丟掉表頭與列的關係，直接截斷整份 HTML。重做時不能假設真實網站流程用的是同一套。",
+    "HTML-T5 架構（§3.1、附錄 C）": "以 LongT5 的實作為底。encoder 用 local attention（radius r=127）加 transient global attention（block size k=16：每個 block 的 token 表示彙總並正規化成全域記憶，讓每個 token 能看到窗外）；decoder 用 dense attention。設計直覺：葉節點元素靠 local attention 處理，內部節點被壓進 global memory，符合 HTML 的階層結構。尺寸 Base 220M、Large 770M、XL 3B。",
+    "預訓練（§3.1、附錄 C、H.1）": {
+      "語料": "CommonCrawl 100 個 WARC 檔（2019 年 4 月），去掉非 Unicode 與純英數文件，只抽出帶 for 屬性的 <label> 元素周圍的子樹（聚焦與輸入元素綁定的互動區域），得 3.41M 筆；長度平均 1020 token、90 百分位 4566、最大 7627（Table 5）。Table 7：改用未抽子樹的 Raw 語料，real-estate 離線規劃從 82.46 降到 80.56、MiniWoB 從 57.0% 降到 56.7%。",
+      "目標": "UL2 式的 mixture of span denoising，但只用長 span：平均 span 長 μ∈{8,64}，span 長度從以 μ 為平均的高斯分佈抽，遮蔽比例 15%。理由是 μ=3 只會遮到 </、id=、\"> 這類低資訊片段，長 span 才會遮到 <form class=\" 或 type=\"submit\"> 這種有語意的區塊。",
+      "超參數": "輸入長 4096、輸出長 910、batch 128、100K iterations；SentencePiece 32K（C4 詞表）；T5X＋SeqIO；Cloud TPU-v3（32 GiB HBM、128 cores）。",
+      "初始化": "先用以 PEGASUS 目標（長段落中重要句子的遮蔽預測）預訓練過的權重，再做 HTML 去噪。Table 7：不用 PEGASUS 初始化時 real-estate 離線規劃掉到 67.11、MiniWoB 掉到 49.1%，是所有消融中影響最大的一項。"
+    },
+    "下游微調": "context window 16K token（另註者除外）。學習率、步數、優化器等微調超參數未揭露。",
+    "自我經驗監督（§3.2）": [
+      "指令模板：帶佔位符的模板（例：map 網站「從 <start> 到 <goal> 用第 <n-th> 個 <transportation> 選項」），從預先定義的鍵值對隨機填值取樣指令。",
+      "腳本化規劃：規則式 parser 把指令拆成子指令序列，以 regular expression 從 HTML 取回對應的 data-ref。",
+      "prompted 程式合成：每一步把子指令與 snippet 給 Flan-U-PaLM 生成程式，以 Selenium WebDriver 執行並錄下 episode。",
+      "過濾：沒有完整的自動成功判定，只用環境回饋濾掉明顯失敗——程式執行錯誤、retriever 錯誤、URL 前綴明顯錯誤。",
+      "以存活的 episode 微調 HTML-T5；三個網站分別收 260（real-estate）、230（social-media）、410（map）條。"
+    ],
+    "程式合成（§3.3、附錄 K）": "Flan-U-PaLM 540B few-shot；示例是通用操作（勾選 checkbox、在輸入框打字、點選選項、捲動等），子指令以註解寫在程式裡；以 find_element(By.CSS_SELECTOR, [data-ref=...]) 搭配 clear/send_keys/submit/click 操作，捲動用 execute_script。完整 few-shot prompt 論文未揭露。附錄 K：換成 gpt-3.5-turbo 在 map 網站表現相同，Flan-PaLM-62B 較差，Flan-PaLM-8B 寫不出可用程式。",
+    "基線設定（§4.1）": "沒有 LM 規劃模組時，由 prompted Flan-U-PaLM 一次規劃完（open-loop）；沒有 LM 摘要模組時，用 regex retrieval 從 raw HTML 取 snippet。+P＝微調 HTML-T5 做規劃＋regex 摘要；+S＝open-loop 規劃＋HTML-T5 摘要。+S 裡 HTML-T5 摘要器如何接上 open-loop 的計劃，論文未揭露。",
+    "評估協定（§4.1、附錄 A、F）": "每個網站 20 條自然語言指令（附錄 F 全列），在人工監督下跑真實網站並限制每秒請求數，網站已匿名。score＝指令中指定屬性被滿足的比例（例：5 個屬性滿足 3 個得 60），score 100 才算 success。錯誤分三類：programming（程式不符合子指令或 snippet）、planning（子指令與使用者指令衝突）、summarization（沒抽到相關 snippet）。"
+  },
+  "assumptions": [
+    "網頁上可行動的資訊能用 DOM 元素（data-ref）定位並抽取，不需要視覺渲染；整個系統只看 HTML、不看截圖。",
+    "每一步只看當前頁面的 HTML 加上子指令歷史，就足以決定下一步。",
+    "目標網站的指令能用有限的模板與規則式 parser 拆解，所以能用腳本自動產生訓練資料；每換一個網站就要重寫模板與 parser。",
+    "用環境回饋（執行錯誤、retriever 錯誤、URL 前綴）濾掉明顯失敗後，剩下的示範噪音不致傷害微調。",
+    "存在程式合成能力足夠的 generalist LLM，能把子指令加 snippet 轉成可執行的 Selenium 程式。",
+    "評估期間網站內容與版面穩定，且人工能判定每個屬性是否被滿足。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "三個匿名真實網站：real-estate（約 20 步、至少 2 頁）、social-media（約 10 步、至少 4 頁）、map（最容易），各 20 條指令",
+      "MiniWoB++（56 個任務，每任務 100 個評估 episode；12K 或 347K 示範微調）",
+      "Mind2Web（Cross-Task／Cross-Website／Cross-Domain，沿用 MindAct 的快取候選）",
+      "WebSRC dev set（KV／Comparison／Table 三類網站）",
+      "real-estate 離線規劃（130 條示範、9:1 切分）",
+      "Description Generation（Gur et al. 2022）",
+      "Flan-LongT5 的健全性檢查：CoT 基準、MMLU、BBH、六個長文摘要資料集"
+    ],
+    "metrics": [
+      "success rate、score（指令屬性覆蓋率）、三類錯誤比例",
+      "MiniWoB++ 平均 success rate",
+      "Mind2Web：Element Accuracy、Operation F1、Step Success Rate、Success Rate",
+      "WebSRC：EM、F1",
+      "離線規劃：per-step exact match accuracy",
+      "Description Generation：Accuracy、BLEU、ROUGE-1"
+    ],
+    "baselines": [
+      "單一 Flan-U-PaLM（open-loop 規劃＋regex 摘要）、Flan-U-PaLM+P、Flan-U-PaLM+S",
+      "WebN-T5-XL、CC-Net、LongT5 與 Flan-LongT5（Base／Large／XL）、Flan-T5-XL／XXL、Synapse（GPT-3.5）",
+      "MindAct（Flan-T5-XL、GPT-4）",
+      "T-PLM／H-PLM／V-PLM、MarkupLM-Large、TIE-Large",
+      "LaMDA-1B、T5-Large／XL",
+      "程式合成模組替換：Flan-PaLM-8B、Flan-PaLM-62B、gpt-3.5-turbo"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "真實網站的 HTML 觀測遠長於模擬器，已超出多數 LLM 的 context，這是整篇設計的出發點",
+      "numbers": "模擬器平均約 0.5K token；真實網站在去掉 script/meta 後仍有 7K–14K token，約 15 倍",
+      "section": "Figure 2、§1、§2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "規劃與摘要都交給微調過的 HTML-T5 時，真實網站成功率遠高於單一 LLM 或只換一個模組",
+      "numbers": "success／score：WebAgent 在 real-estate 65／87.6、social-media 70／85.8、map 80／93.8；單一 Flan-U-PaLM 10／55.3、20／25.0、10／51.3；+P 50／79.5、20／38.3、30／73.8；+S 0／45.7、25／62.1、15／46.3",
+      "section": "§4.1、Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "自我經驗監督壓低了 programming 與 summarization 錯誤，WebAgent 剩下的失敗以 planning 為主",
+      "numbers": "WebAgent 錯誤比例（real-estate／social-media／map）：planning 70／50／50、programming 20／33／25、summarization 10／17／25；單一 Flan-U-PaLM 在 social-media 的失敗 88% 屬 programming；+S 在 map 的失敗 100% 屬 planning",
+      "section": "§4.1 Error Analysis、Table 1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "微調後的 HTML-T5-XL 在 Mind2Web 三種泛化設定的所有指標都勝過 MindAct（Flan-T5-XL、GPT-4）與 Synapse",
+      "numbers": "Ele.Acc／Op.F1／Step SR／SR：Cross-Task 60.6／81.7／57.8／10.3 對 MindAct-Flan-T5-XL 55.1／75.7／52.0／5.2、MindAct-GPT-4 41.6／60.6／36.2／2.0；Cross-Website 47.6／71.9／42.9／5.6 對 42.0／65.2／38.9／5.1；Cross-Domain 50.2／74.9／48.3／5.1 對 42.1／66.5／39.6／2.9",
+      "section": "§4.2、Table 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "MiniWoB++ 上 HTML 去噪預訓練在各尺寸都優於同架構的 LongT5 與 instruction-tuned 版本，並超過前作 WebN-T5",
+      "numbers": "12K 示範：HTML-T5-XL 67.1% 對 WebN-T5-XL 48.4%、LongT5-XL 60.4%、Flan-LongT5-XL 61.1%；相對 LongT5 在 Base／Large／XL 各 +3.2／+4.5／+6.7；347K 示範：HTML-T5-XL 85.6% 對 Flan-T5-XXL 79.0%、Flan-T5-XL 75.5%；同表 Synapse（GPT-3.5）為 99.2%",
+      "section": "§4.2、Table 3、附錄 J",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "local-global attention 是處理長 HTML 觀測的關鍵，只用長 span 的去噪組合最好",
+      "numbers": "Base、MiniWoB 12K，L=2048／4096：dense（Flan-T5）34.0／35.3%、local only 43.4／44.0%、local+global 53.1／53.6%。span 組合（real-estate 離線規劃／MiniWoB）：無去噪 78.07／53.8%、μ∈{3,8,64}+Prefix 80.56／55.2%、μ∈{8,64} 82.46／57.0%、μ∈{8,64,96} 81.29／53.6%",
+      "section": "§4.2、Table 2",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "在 WebSRC 上，HTML-T5 抽 snippet 再交給 Flan-U-PaLM 回答，大幅補回 generalist 的 context 限制，但抽取式 snippet 對 KV 與 Table 這類需要結構的網站仍吃虧",
+      "numbers": "EM／F1：Flan-U-PaLM 40.01／47.56、HTML-T5-XL 74.73／78.73、WebAgent 75.50／85.75、WebAgent（oracle snippet）76.91／86.64、TIE-Large 81.66／86.24、MarkupLM-Large 74.43／80.54",
+      "section": "附錄 E、Table 6、Figure 7",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "程式合成模組可替換為任何程式能力足夠的 generalist，但模型太小就寫不出可執行程式",
+      "numbers": "map 網站 20 條指令：Flan-U-PaLM-540B 與 gpt-3.5-turbo 同為 80% success／93.8 score；Flan-PaLM-62B 60%／86.3（程式合成不準）；Flan-PaLM-8B 無法產生可用程式",
+      "section": "附錄 K、Figure 9",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "多個 LLM 串接的模組化做法帶來額外的計算成本與延遲（§5）。",
+    "規劃仍是主要瓶頸：長程規劃要一致且不累積誤差，需要更能自適應拆解指令的 planner（§4.1、§5）。",
+    "要在整個網際網路上泛化，需要大規模蒐集示範並對齊更大的專家模型（§5）。",
+    "540B 的程式合成模型很難吸收生成程式的錯誤回饋，把回饋納入程式合成留作未來工作（§5）。",
+    "真實世界評估成本高，需要少人工介入的自動化評估（§5）。",
+    "真實網站實驗須在人工監督下限速執行，網站已匿名化；系統有 prompt injection 與資安濫用風險（附錄 A、Ethics Statement）。",
+    "generalist LLM 仍不擅長辨識表格等結構化資料（附錄 E）；Flan-LongT5-XL 可能受 XL 尺寸訓練不穩影響（附錄 I）。"
+  ],
+  "limitations_observed": [
+    "觀測壓縮本身的貢獻沒有被乾淨隔離。Table 1 缺少「generalist 直接看截斷後 raw HTML」的對照組，所有基線都先經過 regex 或 HTML-T5 抽取。唯一只加上 HTML-T5 摘要器的 +S，相對單一 Flan-U-PaLM 三站漲跌不一：real-estate 兩項都變差（success 0 對 10、score 45.7 對 55.3）；map 的 success 升（15 對 10）但 score 降（46.3 對 51.3）；只有 social-media 兩項都變好（25／62.1 對 20／25.0）。可見抽取式壓縮一離開 closed-loop 計劃，就看不出穩定的貢獻；「計劃與摘要要耦合」的結論站得住，但不能把成效直接歸給壓縮。",
+    "真實網站評估的樣本極小，而且沒有變異數。每站 20 條指令，成功率刻度是 5%，只跑一次，網站匿名化也無法重跑。錯誤比例的分母更小：real-estate 成功 65% 只剩 7 次失敗，Table 1 的 20／70／10 換不成 7 的整數份（1.4／4.9／0.7 次）；social-media（6 次）與 map（4 次）則可整除。表格的計數單位可能是錯誤次數而不是 episode，正文卻寫「70% of failure episodes」，兩者對不上。",
+    "真實網站評估落在訓練模板的分佈內。§3.2 的 map 模板（從 <start> 到 <goal>、用第 <n-th> 個 <transportation>）和附錄 F 的 map 測試指令句型完全相同（例：San Jose 到 Mountain View、第 2 個 Cycling）；real-estate 與 social-media 的測試指令也高度模板化。HTML-T5 等於在同一個模板空間蒸餾規則式 parser 加 regex，對新句型與新網站的泛化只剩 Mind2Web 可以撐。",
+    "教師本身沒有當基線。HTML-T5 的訓練標籤來自規則 parser 加 regex retrieval，但論文沒報告「規則 parser＋regex＋Flan-U-PaLM」這個教師在 20 條測試指令上的成功率，看不出 HTML-T5 是超越教師，還是只把教師變成可以部署的模型。Sum ✗ 基線用的 regex 就是教師那一套，這點更凸顯少了這組對照。",
+    "Mind2Web 的結果測不到 HTML-T5 的觀測壓縮。Table 4 沿用 MindAct 快取的候選生成（先由 ranker 篩出候選元素），並改用 direct QA 格式（MindAct 原本是 multi-choice QA）。漲幅混進了格式差異，而 HTML-T5 自己的 data-ref 抽取從沒在這個基準上測過；T3 最在意的「長觀測摘要」能否跨網站泛化，其實沒有證據。",
+    "離線規劃的測試集極小。H.2 只用 real-estate 的 130 條示範、10% 當測試（約 13 條示範）。尺寸之間的差距落在雜訊範圍：HTML-T5 從 Large 到 XL 只多 0.29，LongT5-Large 82.89 反而高於 LongT5-XL 81.29。「HTML 去噪能穩定隨規模放大」的說法證據很薄。",
+    "只用 HTML、不看畫面。附錄 E 顯示抽取式 snippet 會破壞表格結構，作者只好對 Table 類任務改回整份截斷；靠版面、canvas 或動態渲染呈現的資訊（例如 map 的地圖本身）系統看不到，map 任務的成功判定也只依指令列出的屬性是否滿足。",
+    "數字與交叉引用有不一致：Table 3 的 HTML-T5-XL（12K）是 67.1%，附錄 J Table 12 的同一欄平均卻是 0.655（同表其他三欄都與 Table 3 對得上）；H.1 引用了不存在的 Section 2.1。雖然像筆誤，仍降低表格數字的可信度。",
+    "「MiniWoB++ 超越前作 18.7%」只在監督式微調模型之間成立：同一張表上，Synapse（GPT-3.5 in-context）已達 99.2%，HTML-T5-XL 用 347K 示範也只有 85.6%。"
+  ],
+  "framework_role": "在 T3 感知子領域，這篇是「長網頁觀測的任務條件式壓縮」代表作。它把觀測處理做成可訓練的專家模組：讀全長 HTML、輸出 data-ref、再取回 snippet，讓 generalist 的 context 只裝可行動的片段；也示範了貼合結構的 encoder（local-global attention）與結構化語料預訓練，對長結構化觀測有實質增益（Table 2）。對其他節點的旁及貢獻：子指令歷史加上當前 HTML 的 closed-loop 規劃，可視為 T2／T4 的極簡狀態表示；programming／planning／summarization 三類錯誤歸因可供 T7 參考，其中 summarization error 直接對應「觀測壓縮失敗」。用環境回饋（執行錯誤、URL 前綴）濾掉失敗的自我經驗是離線的訓練資料清洗，不是執行期監控，也不會觸發自我修正，所以不算框架的任何一條邊。對 T3(b) 可觀測性沒有貢獻。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有部署或產品描述，只在 Ethics Statement 展望未來可能出現的電腦與手機助理工具。Hugging Face 的論文頁（https://huggingface.co/papers/2307.12856）與共同第一作者 Hiroki Furuta 的個人頁（https://frt03.github.io/）都只列論文連結，沒有 HTML-T5 權重或程式碼。ICLR 2024 oral 屬學術影響力，不計入採納。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "MiniWoB++、Mind2Web、WebSRC、Description Generation 是公開基準；預訓練用的 CommonCrawl WARC 原始檔公開，但處理後的 3.41M 筆語料、HTML-T5 權重、三個網站的自我經驗示範（260／230／410 條）都沒有釋出。真實網站已匿名化，無法重跑；Flan-U-PaLM 540B 不公開，但附錄 K 顯示換成 gpt-3.5-turbo 在 map 網站結果相同。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "是長 HTML 觀測任務條件式壓縮與結構化 encoder 的代表作，架構消融扎實；但壓縮本身的貢獻沒有被隔離（+S 在 real-estate 反而變差），真實網站評估只有每站 20 條且落在訓練模板分佈內，Mind2Web 又借用別人的候選篩選，權重也沒釋出，因此有參考價值但不是 T3 必讀。",
+  "related": [
+    "2306.06070",
+    "2210.03945",
+    "2305.11854",
+    "2303.17491",
+    "2306.07863",
+    "2112.07916",
+    "2205.05131",
+    "2004.08483",
+    "2110.08518",
+    "2101.09465",
+    "2207.01206",
+    "2210.03629"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

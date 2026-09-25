@@ -1,0 +1,173 @@
+{
+  "id": "2402.10466",
+  "title": "Large Language Models as Zero-shot Dialogue State Tracker through Function Calling",
+  "topic": "T2",
+  "subarea": "LLM 時代的 zero/few-shot DST",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "FnCTOD 把任務型對話每個領域的 schema 轉成一個函式規格，把 DST 改寫成「助理回覆前先呼叫該領域函式、以 slot 為參數」的 function calling，並拆成「先選函式、再填參數」兩步；在 MultiWOZ 2.1 上讓 GPT-4 的零樣本 Average JGA 達 62.59，讓 7B／13B 開源模型靠 5 筆示範追平或超越先前的 ChatGPT／Codex 提示法，另外用 7,200 段非 MultiWOZ 對話做 LoRA 微調，讓 LLaMA2-13B-Chat 追上 ChatGPT。",
+  "problem": "先前的 LLM 零樣本 DST 提示法（IC-DST、Heck et al.、InstructTODS、Hudeček & Dušek）把 DST 當成獨立任務：丟進整段對話和冗長指令，要求輸出領域特定格式（SQL、slot 清單等），只有 Codex／ChatGPT 這類強模型做得起來，較小的模型幾乎失效；而且這種設計跟 chat-tuned 模型本來擅長的「產生下一句助理回覆」脫節，無法在同一次輸出中同時產生狀態與回覆。另一條路線是小模型的跨領域遷移（TRADE、T5DST、D3ST 等），仍需要標註格式相同的其他領域資料，零樣本表現偏低。對實際的任務型對話系統來說，每新增一個領域就要收集與標註資料的成本很高，所以需要一種能直接套在現成 chat 模型上、不犧牲一般對話能力、又能零樣本加入新領域的狀態追蹤形式。",
+  "core_idea": "狀態就是函式呼叫的參數。每個領域 D_j 對應一個函式 F_j，該領域的 slot 是參數；每一輪的助理輸出由一段函式呼叫（以特殊標記包住的 JSON）加上自然語言回覆組成，DST 因此變成 chat-tuned 模型熟悉的 chat completion 的一部分，而不是另一個結構化輸出任務。先前輪次的函式呼叫也留在對話歷史的助理訊息裡，讓累積的狀態以對話內容的形式延續，同時兼作當輪的格式示範。為了縮短提示，把生成拆成兩步：先只給各函式的簡短描述、選出本輪的領域；再只放入被選函式的完整規格，生成參數與回覆。",
+  "method": {
+    "問題形式化（§3.2、§4）": "對話脈絡 C_t={A_1,U_1,…,A_t,U_t}；狀態 S 是跨領域的 (slot, value) 集合，S_{D_j} 表示領域 D_j 已追蹤的 slot。每個領域 D_j 建模成一個函式 F_j，每一輪的 DST 等於選出正確的 F_j 並生成其參數 S_{D_j}。輸出格式為 <function_call> {函式名與 JSON 參數} </function_call>，後面接回覆。程式碼中 MultiWOZ 五個領域對應的函式名是 find_book_hotel、find_book_train、find_attraction、find_book_restaurant、book_taxi。",
+    "Schema 轉函式規格（§4、A.4、Figure 7）": "依 ChatGPT function calling 的 JSON 格式，把每個領域的 schema 轉成函式規格：函式名、描述、參數（型別、描述，類別型 slot 附可選值 enum）。另做一個把 JSON 翻成自然語言描述的版本；Figure 5 顯示兩者表現相近。",
+    "系統提示（A.4）": "模板為「一句任務型助理的角色指令＋<FUNCTIONS>{函式規格}</FUNCTIONS>＋<EXAMPLES>{示範對話}</EXAMPLES>」，示範段只用在沒做過 function calling 微調的開源模型。程式碼倉庫 facebookresearch/FnCTOD 的 main 分支（2026-09-26 查看；倉庫已於 2025-03-31 封存）的 src/utils.py 與 src/multiwoz/inference.py 另外顯示兩件附錄沒寫的事：角色指令每次從 8 個以上的改寫版本中 random.choice 抽一句，而推論路徑（inference.py 與它匯入的 chatbots、src 模組）沒有設定亂數 seed，repo 裡只有微調資料建構與微調腳本設了 seed；指令後面還固定附上三句注意事項（不要自行假設要填入的參數值、使用者請求有歧義就請對方澄清、只用使用者明確提供或確認的值）。",
+    "兩步分解（§4 Function Call Decomposition、Figure 2）": [
+      "第一步 Function Selection：系統提示只列各函式的簡短描述，要求模型只輸出本輪領域，用 <domain></domain> 包住。",
+      "第二步 Argument Generation：系統提示只放被選函式的完整規格（開源模型再加該領域的示範），生成函式參數，再生成回覆。程式碼在這一步以 function_call={\"name\": 選定的函式} 強制模型呼叫那個函式。",
+      "不分解的對照組：一次放入全部五個函式的完整規格，讓模型在同一次生成中決定函式名與參數。"
+    ],
+    "對話歷史格式（§4 Dialogue Prompt Format、§5.4、A.4）": "各模型套自己訓練時的 chat template（依 FastChat）。歷史中每一則助理訊息除了回覆，還附上該輪的函式呼叫（論文的 w/ prev 設定）。依程式碼倉庫 facebookresearch/FnCTOD 的 main 分支（2026-09-26 查看；倉庫已於 2025-03-31 封存）：歷史中的助理回覆用資料集裡保留實際值的原始 gold 回覆（程式中的 nodelx_resp，未去詞彙化），附上的函式呼叫則是模型前幾輪自己的預測（bspn_dict_gen），不是 gold 狀態，所以沒有 teacher forcing；在兩步分解模式下，每一則歷史助理訊息附上的是「本輪被選中的領域」在那一輪時的累積狀態。",
+    "狀態累積規則（程式碼 src/multiwoz/inference.py；論文正文沒寫）": [
+      "每段對話的狀態 user_goal 從空字典開始。",
+      "每一輪只更新被選中的那一個領域；函式呼叫解析失敗時，本輪參數視為空。",
+      "參數逐一去空白、轉小寫；只接受該函式 schema 內的 slot，有 enum 的 slot 值必須落在 enum 內，否則丟棄。",
+      "只新增或覆寫，不會刪除既有 slot；累積後的 user_goal 就是該輪的預測狀態，用來算 JGA。"
+    ],
+    "In-context 示範（§4、§5.1）": "開源模型預設 5-shot（Figure 6 另測 0–5 筆）。論文說每個領域的示範是人工挑選的。公開程式碼中示範由 load_examples 從 MultiWOZ 的訓練集產生：examples.json 沒有進版控，檔案不存在時由 retrieve_demo 依 belief state 與 dialog act 的覆蓋率挑 5 段、每段最多 6 輪。兩種說法是否指同一批示範無法確認，但示範都來自目標資料集的訓練集。",
+    "微調 FnCTOD-LLaMA2-13B（§4 Prompt-based Fine-tuning、A.2、Table 7、Table 9）": {
+      "基底": "LLaMA-2-13b-chat（HuggingFace 檢查點）。",
+      "資料": "WOZ、CamRest676、MSR-E2E、TaskMaster、SGD 五個語料，排除標註品質差的領域後留 36 個（SGD 26、TaskMaster 5、MSR-E2E 3、CamRest676 1、WOZ 1）；只從各語料的訓練集抽樣，每個領域隨機 200 段，共 7,200 段；完全排除 MultiWOZ。",
+      "格式": "轉成上述對話提示格式，系統提示放入該段對話中所有被呼叫過的函式規格（不分解、不放示範）。",
+      "目標": "loss 只算助理輸出中的函式呼叫部分，不訓練回覆生成（理由是 LLM 本來就會寫回覆，而且資料中的函式呼叫樣本少）。",
+      "超參數": "LoRA r=16、alpha=16、dropout 0.05，只作用在 q_proj 與 v_proj；batch size 8、1 epoch、learning rate 3e-4、cosine 排程、weight decay 0.01、cutoff_len 4096；4 張 A6000 48GB。"
+    },
+    "推論設定（§5.1、A.1）": "ChatGPT 用 gpt-3.5-turbo-1106 與 gpt-4-1106-preview（兩者都有原生 function calling）；ChatGPT 與 FnCTOD-LLaMA2-13B 不放示範（零示範提示），其他開源模型 5-shot。temperature 0.3、top_p 0.2、max_tokens 128，每筆測試只推論一次；在 8 張 A6000 48GB 的叢集上執行。",
+    "評估（§5.1、§5.3、A.1）": "零樣本 DST 用 MultiWOZ 2.1 測試集 1,000 段對話、5 個領域（attraction、hotel、restaurant、taxi、train）。JGA 是「該輪所有 slot 值都預測正確」的輪數比例；報告各領域 JGA 與 slot F1、五個領域 JGA 的巨觀平均（Average JGA），以及多領域的 Overall JGA。端到端評估依 Hudeček & Dušek 的設定用 MultiWOZ 2.2 的去詞彙化（delexicalized）回覆：DST 用 JGA（輪層級），回覆用 Success（對話層級：對話結束時是否提到符合使用者目標的實體並提供所有被要求的資訊），附錄另報 Inform；不使用 dialog act。",
+    "給框架工程師的重做要點": "把 T2 的每一組狀態槽位寫成一個工具（函式）的 JSON schema；每一輪先用只含工具簡述的提示選出要更新的工具，再只帶那個工具的完整 schema 產生參數；把前幾輪的工具呼叫留在對話歷史中；程式端做參數正規化與 enum 驗證後合併進累積狀態。論文的合併規則只增不刪、每輪只動一個領域；要處理撤回條件或同一輪跨領域的修改，得自己補刪除語意與多工具呼叫。"
+  },
+  "assumptions": [
+    "任務可以用事先定義好的 schema 表示成有限個函式與參數，一個領域對應一個函式。",
+    "每一輪使用者只推進一個領域：分解模式下每輪只選一個函式，同一輪跨兩個領域的更新只能反映其中一個。",
+    "狀態只增不刪：函式呼叫中沒出現的參數就沿用舊值，沒有明確的刪除機制（依公開程式碼）。",
+    "chat-tuned 模型能遵守「在助理輸出中產生函式呼叫」的格式；沒做過 function calling 訓練的模型需要領域內的示範才能穩定輸出。",
+    "領域選擇（第一步）的準確率夠高，兩步串接的誤差可以接受。",
+    "DST 評估時歷史中的系統回覆可以用資料集的 gold 回覆，狀態則由模型自己累積；這是 MultiWOZ DST 評估的慣例，不代表真實互動中回覆也是模型自己產生的情況。",
+    "MultiWOZ 2.1 的標註與 JGA 能代表 DST 品質；作者自己也承認標註有雜訊。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MultiWOZ 2.1 測試集（1,000 段對話、5 個領域）：零樣本 DST 主實驗",
+      "MultiWOZ 2.2（去詞彙化（delexicalized）回覆）：零樣本端到端 TOD（DST＋回覆生成）"
+    ],
+    "metrics": [
+      "各領域 JGA 與 slot F1",
+      "Average JGA（五個領域 JGA 的巨觀平均）",
+      "Overall JGA（多領域）",
+      "Success、Inform（端到端，對話層級）",
+      "Function selection 準確率（FS Acc.）",
+      "效率：token 數、本機推論時間、GPT-3.5 API 費用"
+    ],
+    "baselines": [
+      "跨領域遷移（leave-one-domain-out 訓練）：TRADE、MA-DST、TransferQA、T5DST、D3ST",
+      "先前的提示法：IC-DST（Codex，作者註明需要 in-domain 資料訓練檢索器，不算嚴格零樣本）、Heck et al.（GPT-3.5）、InstructTODS（GPT-3.5／GPT-4）",
+      "端到端：Hudeček & Dušek 報告的 ChatGPT 結果",
+      "本方法套用在不同模型上：GPT-3.5、GPT-4、Zephyr-7B-Beta、Vicuna-7B／13B-v1.5、Baichuan2-13B-Chat、LLaMA2-7B／13B／70B-Chat、FnCTOD-LLaMA2-13B",
+      "消融：分解與不分解、oracle 與預測領域、JSON 與自然語言規格、歷史中有無函式呼叫、0–5 筆示範、每領域 100–400 筆微調資料",
+      "註：所有 baseline 數字都直接引自各自的論文，沒有重跑（Table 2 說明）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "套用 FnCTOD 的 GPT-4 刷新零樣本 DST 最佳紀錄，GPT-3.5 也比先前用同一系列模型的提示法好。",
+      "numbers": "Average JGA：GPT-4 62.59（Overall 38.71），比 IC-DST（Codex）56.96 高 5.63 個百分點，比 InstructTODS（GPT-4）48.16 高 14.43 個百分點；GPT-3.5 61.31（Overall 38.56），比 Heck et al.（GPT-3.5）56.44 高 4.87 個百分點（Heck et al. 的 Overall 為 31.50）。",
+      "section": "§5.2、Table 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "7B／13B 開源 chat 模型搭配 5 筆示範，追平或超越先前只在 ChatGPT／Codex 上有效的提示法。",
+      "numbers": "Average JGA：Zephyr-7B-Beta 57.68、Baichuan2-13B-Chat 56.56、Vicuna-13B 55.41、LLaMA2-70B-Chat 52.36、LLaMA2-7B-Chat 43.44；對照 IC-DST（Codex）56.96、Heck et al.（GPT-3.5）56.44。",
+      "section": "§5.2、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "只用 7,200 段非 MultiWOZ 對話微調的 FnCTOD-LLaMA2-13B，不放示範就接近 ChatGPT，遠高於其基底模型。",
+      "numbers": "FnCTOD-LLaMA2-13B：Average JGA 59.54、Overall 37.67；基底 LLaMA2-13B-Chat（5-shot）49.28、25.68；GPT-3.5 為 61.31、38.56。",
+      "section": "§5.2、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "端到端（DST＋回覆）評估中，作者宣稱除 LLaMA2-7B-Chat 外，套用本方法的開源模型都勝過 Hudeček & Dušek 的 ChatGPT 結果，微調模型也保有產生有用回覆的能力；對照表格，這個說法只在 JGA 上大致成立，Success 則高低不一。",
+      "numbers": "MultiWOZ 2.2 的 JGA／Success：ChatGPT（Hudeček & Dušek）27.0／44.0；FnCTOD-LLaMA2-13B 37.9／44.4；Zephyr-7B-Beta 32.3／57.5；Baichuan2-13B-Chat 33.0／45.7；Vicuna-13B 33.8／23.1；Vicuna-7B 29.4／37.7；LLaMA2-13B-Chat 25.8／27.7；LLaMA2-7B-Chat 16.7／24.9。",
+      "section": "§5.3、Table 3、Table 10",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "兩步分解同時提升準確率與效率。",
+      "numbers": "GPT-3.5：Overall JGA 30.16→38.56（train 領域 49.91→67.29），API 費用 13.32→8.97 美元；FnCTOD-LLaMA2-13B：Overall JGA 21.04→37.67，token 數 23.57M→13.01M，單張 A6000 推論時間 12.53→9.44 小時。",
+      "section": "§5.4、Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "第一步的領域選擇準確率普遍很高，改用 oracle 領域對多數模型只帶來小幅提升。",
+      "numbers": "FS Acc. 介於 88.62（GPT-4）與 95.54（GPT-3.5）之間；oracle 領域下的 Overall JGA：GPT-4 38.71→44.44，GPT-3.5 38.56→38.32，其餘開源模型提升 0.3–2.4 個百分點。",
+      "section": "§5.4、Table 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "在歷史助理訊息中保留先前的函式呼叫有助於 DST；函式規格用 JSON 或自然語言表現相近；示範從 0 筆增加到 5 筆時多數模型與領域持續進步。",
+      "numbers": "只以 Figure 5 與 Figure 6 圖示呈現，內文沒有具體數字。",
+      "section": "§5.4、Figure 5、Figure 6",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "微調資料並非越多越好，每個領域 200 筆時 Average JGA 最高。",
+      "numbers": "每領域 100／200／300／400 筆（36 個領域）對應 Average JGA 55.94／59.54／58.50／56.18。",
+      "section": "§5.4、Table 6",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "目前的準確率可能仍不足以實際部署這類零樣本系統，期待基底 LLM 的理解與生成能力進步後再提升。",
+    "回覆評估沿用去詞彙化（delexicalized）回覆與 Success：這種設定可以用不自然的回覆刷分，也與 LLM 的訓練資料不一致；作者呼籲發展能評估完整自然語言回覆的方式。",
+    "只處理 DST 與回覆生成，尚未擴展到 LangChain 那類更複雜的任務與情境。",
+    "兩步串接時，領域預測錯誤會影響整體表現；提高領域預測準確率可以再改善（§5.4）。",
+    "超過 5 筆示範可能超出部分模型 4,096 token 的 context 長度（§5.4）。",
+    "每個領域超過 200 筆微調資料時表現下降，作者推測是對訓練領域過擬合（§5.4）。",
+    "MultiWOZ 標註可能有雜訊（§5.4）。"
+  ],
+  "limitations_observed": [
+    "開源模型 5-shot 的示範來自 MultiWOZ 訓練集：論文說每個領域的示範是人工挑選的，公開程式碼的 load_examples 則以 MultiWOZ 訓練集為來源，兩種說法的示範都來自目標資料集。等於提示中放了目標領域的標註對話。作者在註腳以「需要 in-domain 資料訓練檢索器、不算嚴格零樣本」替 IC-DST 打折，同一標準套到自己的開源模型也不成立，Table 2 裡開源 7B／13B「零樣本 DST 超越 SOTA」實際上是 in-domain few-shot 的結果。",
+    "微調模型的「零樣本」對資料集成立、對領域不成立。Table 9 的訓練資料包含 SGD 的 Hotels_1–3、Restaurants_1、RideSharing_1／2（repo 的 SGD schema 描述為叫計程車服務）、Travel_1（描述為觀光景點資料庫）、Buses_1／2，以及 CamRest676、WOZ、MSR-E2E 的 Restaurant／Taxi，MultiWOZ 五個領域都有近似領域在訓練資料中（train 只能對到 Buses，是較遠的近似）。TRADE、T5DST、D3ST 等 baseline 則是 leave-one-domain-out，完全沒看過目標領域。論文說自己的設定「更實際也更有挑戰性」，但就目標領域的曝光程度而言反而較寬鬆，兩者不能直接比。",
+    "「SOTA」的參照點前後不一：5.6 是 GPT-4 的 62.59 減掉 IC-DST（Codex）的 56.96；但說 Baichuan2-13B-Chat「超越先前 SOTA」時，它的 56.56 其實低於 IC-DST 的 56.96，只高於 Heck et al. 的 56.44。另外，摘要與內文的 4.8%、14%、5.6% 都是百分點差，不是相對提升。",
+    "標題數字用的是 Average JGA（五個領域 JGA 的巨觀平均）；更嚴格的多領域 Overall JGA 最好也只有 38.71（GPT-4），而且 baseline 中只有 Heck et al. 報了 Overall（31.50），IC-DST、InstructTODS 與五個遷移法都沒有，Overall 上的比較基礎很薄。GPT-4 與 GPT-3.5 的 Overall 幾乎一樣（38.71 vs 38.56），暗示瓶頸可能在方法形式（每輪只選一個領域、只增不刪）或標註雜訊，而不是模型能力，論文沒有分析。",
+    "所有 baseline 數字都直接引自原論文：Heck et al.（arXiv 2306）與 InstructTODS（arXiv 2310）都早於本文用的 1106 版快照，各自用自己的提示，而 1106 版已經做過原生 function calling 訓練；IC-DST 用的則是 Codex。GPT-3.5 的 +4.8 與 GPT-4 的 +14 同時混入了模型快照更新的效果，沒有在同一個快照上重跑先前的提示法做對照。",
+    "表格之間的數字對不上：oracle 領域下的 Overall JGA，Table 5 與 Table 11 在 GPT-4 是 44.44 vs 44.70、FnCTOD-LLaMA2-13B 是 37.93 vs 38.70、LLaMA2-13B-Chat 是 26.56 vs 29.56；端到端的 Success，Table 3 與 Table 10 在 Zephyr 是 57.5 vs 57.40、FnCTOD 是 44.4 vs 44.50。差距不大，但顯示各表不是同一批輸出。",
+    "「預測領域與 oracle 大致相當」對 GPT-4 不成立：GPT-4 的領域選擇準確率最低（88.62），改用 oracle 領域後 Overall JGA 從 38.71 升到 44.44（+5.73），是所有模型中差距最大的，代表 GPT-4 的新紀錄有相當部分受第一步限制。GPT-3.5 改用 oracle 反而降 0.24，與作者「標註有雜訊」的解釋一致，但在 temperature 0.3、單次推論的設定下，分不出這是雜訊還是取樣波動，論文也沒有量化。",
+    "Table 6 的「每領域 200 筆最佳」是在 MultiWOZ 測試集上比出來的，沒有獨立的驗證集，等於用測試集選超參數；100 到 400 筆之間最多只差 3.6 分，而且都是單次訓練、單次推論、沒有變異數，200 筆是否真的最好無從判斷，「過擬合」的解釋也只是推測。",
+    "「保留對話能力」沒有直接證據：loss 只算函式呼叫、LoRA 只動 q_proj／v_proj，機制上說得通，但論文沒有任何通用對話評測（例如 MT-Bench、AlpacaEval），唯一佐證是 MultiWOZ 2.2 去詞彙化（delexicalized）回覆的 Success（44.4），而作者自己也承認這個指標可以被刷分。",
+    "§5.3 說除 LLaMA2-7B-Chat 以外的開源模型都勝過 ChatGPT 的端到端結果，但 Table 3 中 LLaMA2-13B-Chat 的 JGA 25.8 與 Success 27.7 都低於 ChatGPT 的 27.0／44.0；Success 方面 Vicuna-7B（37.7）、Vicuna-13B（23.1）也都低於 44.0，這句話只在大部分模型的 JGA 上成立。",
+    "端到端的 Success 與 JGA 走勢不一致：Zephyr 的 JGA 32.3 卻有 57.5 的 Success，Vicuna-13B 的 JGA 33.8 只有 23.1 的 Success。ChatGPT 基準（27.0／44.0）來自另一篇論文的提示與模型快照，本文沒有用自己的方法跑 GPT-3.5／4 的端到端，所以「FnCTOD 在端到端的優勢更明顯」缺少同一模型的對照。",
+    "狀態更新規則有結構上的上限（依公開程式碼）：每輪只選一個領域、slot 只增不刪、enum 以外的值直接丟棄。使用者同一輪修改兩個領域，或撤回先前的條件（例如不需要訂位了），這套表示都無法正確反映。MultiWOZ 這類情境少，JGA 看不出來，但放到長多輪的 agent 互動就會浮現。",
+    "單次推論、temperature 0.3，角色指令又從多個改寫版本隨機抽取，而推論路徑找不到 seed 設定，所有結果都沒有變異數或顯著性檢定；像 GPT-4 與 GPT-3.5 在 Average JGA 上 1.3 分的差距，在這種設定下無法區分。",
+    "只在 MultiWOZ 上評估（5 個領域，全是劍橋的旅遊資訊）。只用了 SGD 的訓練集做微調，卻沒有在 SGD 測試集（含未見服務）上評估，缺少第二個零樣本基準來驗證跨資料集的泛化；結論能否外推到非旅遊、schema 更大的領域未知。"
+  ],
+  "framework_role": "T2 的核心參考之一，代表 LLM 時代 DST 的一種表示法：狀態就是工具呼叫的參數，而且以工具呼叫的形式留在對話歷史中一路帶著走。對框架有三點直接意義：(1) 把 T2 的狀態槽位寫成函式 schema，agent 原本的 tool-calling 通道就能兼做狀態追蹤，狀態也自然出現在軌跡中，方便 T4 觀測與 T7 逐輪評估；(2) 「先選工具、再只帶該工具完整 schema 填參數」的兩步分解，是在工具或領域很多時控制提示長度的具體做法，Table 4 量到了省下的 token 與費用；(3) 公開程式碼的合併規則（只增不刪、enum 驗證、每輪單一領域）是框架必須自己補強的地方：刪除語意、同輪跨領域更新、錯誤狀態的修正入口。但它評估的是離線 MultiWOZ 上逐輪的 DST（歷史回覆用 gold），不涉及長多輪 agent 的記憶管理、多輪表現退化或指令保持，也沒有處理狀態的事後修正。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有提到任何部署或產品；作者多數來自 Meta AI，但未見 Meta 官方產品文件或部落格說明採用此方法。微調權重放在作者個人的 HuggingFace 帳號（Zekunli/FncTOD-Llama-13b，API 顯示下載數 14），屬於可重現性，不算採納。Semantic Scholar 顯示的 59 次引用、12 次 influential citation，以及後續論文的引用與延伸，都是學術影響力。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/facebookresearch/FnCTOD",
+    "data": "MultiWOZ 2.1／2.2 與五個微調語料（WOZ、CamRest676、MSR-E2E、TaskMaster、SGD）都公開，repo 附前處理與提示組裝腳本（scripts/、src/ 各資料集目錄，2026-09-26 查看；repo 已於 2025-03-31 封存、唯讀）。微調後的權重在 https://huggingface.co/Zekunli/FncTOD-Llama-13b（2024-01-06 上傳）。重現時要注意：示範的 examples.json 沒有進版控，程式會自動從 MultiWOZ 訓練集挑選，可能與論文所說的人工挑選不同；角色指令隨機抽選，推論路徑找不到 seed 設定；ChatGPT 結果綁定 gpt-3.5-turbo-1106 與 gpt-4-1106-preview 兩個 2023 年 11 月的快照，重跑前須確認是否仍可呼叫。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "機制面是 T2 在 LLM 時代必讀的一篇：它把 DST 改寫成 function calling，讓狀態以工具呼叫參數的形式存在對話歷史中，並給出兩步分解與可重現的程式碼，最貼近現代 agent 用工具通道承載狀態的做法；數字面則要打折：開源模型用了 in-domain 示範、微調資料與目標領域重疊、baseline 跨快照直接引用、超參數在測試集上挑，這些歸在限制，不影響它作為表示法參考的價值。",
+  "related": [
+    "2306.01386",
+    "2304.06556",
+    "2310.08885",
+    "2203.08568",
+    "2201.08904",
+    "2109.04655",
+    "1905.08743",
+    "2007.12720",
+    "2305.09067"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

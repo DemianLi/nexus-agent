@@ -1,0 +1,196 @@
+{
+  "id": "2501.12326",
+  "title": "UI-TARS: Pioneering Automated GUI Interaction with Native Agents",
+  "topic": "T3",
+  "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "ByteDance 以 Qwen2-VL 為基底，持續訓練約 50B token，做出只看螢幕截圖、直接輸出 thought 與正規化座標動作的端到端 GUI agent 模型 UI-TARS（2B/7B/72B）。訓練內容包括五類 GUI 感知資料、跨平台統一動作空間、thought 標註、線上軌跡自舉、reflection tuning 與 DPO。在 OSWorld、AndroidWorld 等 10 多個感知、grounding、agent 基準上取得當時最佳或接近最佳的成績。",
+  "problem": "過去的 GUI agent 多半靠 HTML、DOM、accessibility tree 這類結構化文字當觀測。這類觀測冗長，各平台不一致，還需要系統層權限，換一個環境就難以沿用。另一路是把 GPT-4o 這類商用模型包進模組化框架，靠專家寫的提示詞、外部 parser 與 grounding 模組拼起來，任一模組出錯整條管線就垮，也不會從新經驗更新參數。改成端到端的原生 agent 模型，又會碰到三個難處：GUI 截圖資訊密度高、元素極小（1920×1080 畫面裡的 10×10 圖示）；需要精確座標；能把感知、推理、記憶、動作串在一起的多步軌跡資料極度稀缺。這篇要回答的是：能不能只靠截圖當觀測，用資料驅動的方式把這些能力都訓練進單一 VLM。",
+  "core_idea": "觀測空間只留截圖，把「看懂 GUI」當成可以大規模監督的訓練目標，而不是交給外部 parser 或 SoM 前處理。具體做法是用解析工具從網站、App、作業系統抽出元素 metadata，合成元素描述、dense caption、前後兩張截圖的狀態轉移描述、QA、SoM 標記五類資料。動作端則把各平台動作統一成一組原子動作，座標輸出成相對於螢幕的正規化點。每步動作前先產生一段 System-2 風格的 thought，thought 以 ActRe 標註後再用 bootstrapping 校正。資料瓶頸靠線上自舉補足：在數百台虛擬機上讓模型自己跑，經規則、VLM 評分、人工複核過濾後回灌訓練。再用人工標出的錯誤步與修正步，做 reflection SFT 與 DPO，讓模型學會從自己的錯誤中恢復。",
+  "method": {
+    "問題形式化與觀測介面": "第 n 步的輸入包含三部分：任務 instruction；最近 N 張截圖（實驗一律 N=5）；從第 1 步起的完整 thought/action 文字歷史，作為短期記憶。更早的截圖丟掉，只留文字。輸出先是 thought t_n，再是 action a_n，條件機率為 P(t_n, a_n | instruction, t_1, a_1, …, (o_{n-i}, t_{n-i}, a_{n-i})_{i=1..N}, o_n)。作者說砍截圖是為了塞進約 32k 的序列長度。觀測 o_i 只有裝置截圖，沒有 DOM、a11y tree，也沒有外掛 OCR 或偵測器。",
+    "統一動作空間（Table 1）": {
+      "共用": "Click(x,y)、Drag(x1,y1,x2,y2)、Scroll(x,y,direction)、Type(content)、Wait()、Finished()、CallUser()",
+      "桌面專屬": "Hotkey(key)、LeftDouble(x,y)、RightSingle(x,y)",
+      "行動裝置專屬": "LongPress(x,y)、PressBack()、PressHome()、PressEnter()",
+      "終止動作": "Finished() 表示任務完成；CallUser() 在需要使用者介入時使用，例如登入、驗證。",
+      "座標": "輸出相對於螢幕寬高正規化的座標。訓練用的目標點取元素 bounding box 四角的平均，也就是中心點。"
+    },
+    "感知資料（§4.2）": {
+      "截圖蒐集": "用專門的解析工具，在渲染網站、App、作業系統畫面時同步抽出每個元素的類型、深度、bounding box 與文字內容，存成（screenshot, element box, element metadata）。蒐集方式是自動爬取加人工協助探索，涵蓋首頁，也涵蓋要重複互動才進得去的深層頁面。建構順序由下而上，先處理單一元素，再擴到整頁。",
+      "元素描述": "從 metadata 出發，由 VLM 合成四個面向的描述：元素類型（如 Windows control type）、外觀（形狀、顏色、文字、樣式）、相對其他元素的位置、功能與可能的互動方式。訓練時給截圖，要模型列舉所有可見元素並逐一描述。",
+      "Dense captioning": "先取得每個元素的描述，再替缺少 metadata 的內嵌圖片另外產生 caption，最後由 VLM 整合成一段保留版面結構的詳細描述。訓練時只給圖片，要模型輸出這段描述，目標是減少幻覺。",
+      "State transition captioning": "輸入兩張連續截圖，要模型描述兩者的視覺差異與可能原因，並判斷中間有沒有發生滑鼠或鍵盤動作。資料刻意混入非互動造成的變化，例如動畫、畫面刷新、背景更新，讓模型分得出使用者動作的效果與無關變動。",
+      "QA": "合成的問答資料，涵蓋介面理解、圖片解讀、元素辨識與關係推理。",
+      "Set-of-Mark": "依解析出的元素座標，在截圖上畫出形狀、顏色、大小各異的標記，並與 dense caption、QA 結合，例如要模型描述某個被標記的元素。重點是這只是訓練資料的一種形式；推論時的觀測仍是原始截圖，不做 SoM 前處理。"
+    },
+    "Grounding 資料（§4.3）": "每張截圖配上從 metadata 產生的元素描述，要模型輸出正規化的中心點座標。自家資料之外，還整合 SeeClick、GUIAct、MultiUI、Rico-SCA、WidgetCaption、MUG、Rico Icon、CLAY、UIBERT、OmniACT、AutoGUI、OS-ATLAS 等開源資料，統一成同一套動作格式。依 Table 2，開源部分為 web 14.8M 個元素（平均每張圖 6.7 個）、mobile 2.5M（4.6）、desktop 1.1M（6.2）。自家資料每張圖平均 7.5 個元素，總數沒有公開。",
+    "多步動作軌跡（§4.3）": "自家資料用專門的標註工具在 PC 環境錄製：先寫初始指令，由標註者審稿，再由標註者實際執行，最後做品質過濾。開源資料包括 MM-Mind2Web、GUIAct、AITW、AITZ、AndroidControl、GUI-Odyssey、AMEX，全部轉成統一動作空間。依 Table 2，web 6.4k 條（平均 7.1 步），mobile 145k 條（9.6 步），desktop 開源 0 條。自家軌跡平均 14.9 步，條數沒有公開。",
+    "推理資料": {
+      "GUI 教學文": "從 MINT 與 OmniCorpus 兩個圖文交錯語料篩選。(1) 用人工挑選的高品質教學文當正例、隨機樣本當負例，訓練 fastText 分類器做粗篩；(2) 用 LLM 剔除偽陽性，粗篩與細篩反覆多輪以提高召回；(3) 以 URL 與 LSH 去重，清掉廣告與殘餘雜訊；(4) 用 LLM 改寫全部文字。最後得到約 6M 篇，每篇平均 510 個文字 token、3.3 張圖。",
+      "Thought 標註第一階段（ActRe）": "把每條軌跡拆成單步。對第 n 步，把 instruction、先前的 (o, t, a)、目前截圖 o_n 與正解動作 a_n 一起給 VLM，要它生成 t_n。之前生成的 t 會回填進後續步驟的上下文。提示詞引導 VLM 展現五種推理模式：任務分解、長期一致性（回頭對照整體目標）、里程碑辨識、試誤、反思。",
+      "Thought 標註第二階段（bootstrapping）": "作者指出 ActRe 事先知道正解，產出的 thought 可能只是替動作找理由，兩者沒有因果關係。因此改用早期 checkpoint UI-TARS_early，在不給正解的條件下取樣最多 max-try 組 (t̂, â)，只保留 â 等於 a_n 的那組 thought。thought 有中英雙語版本；訓練時也混入不含 thought 的原始軌跡。"
+    },
+    "線上軌跡自舉（§4.5）": "指令集 I_n 由人工與模型生成的任務混合而成。第 n 輪用模型 M_n 在目標環境（如虛擬 PC）執行 I_n，得到原始軌跡 T_raw,n，再依序過濾：(1) 規則型 reward，刪掉明顯異常的軌跡，例如不改變環境的冗餘動作；(2) VLM 為剩下的軌跡打品質分，低於門檻就刪；(3) 部分軌跡交人工複核，標出第一個錯誤步，刪掉其後所有動作，只保留有效前綴。接著 M_{n+1} = FineTune(M_n, T_filtered,n)，並由標註者依結果改寫或擴充指令，得到 I_{n+1}。整個流程在數百台虛擬 PC 上跑多輪。",
+    "Reflection tuning": "對模型自己跑出的線上軌跡，標註者找出出錯的第 τ 步，標上正確的 t*_τ 與 a*_τ，構成 error correction 配對：T- 以錯誤步結尾，T+ 以修正步結尾。接著讓標註者以「錯誤已經發生」為前提，續標第 τ+1 步：t*_{τ+1} 要承認前一步的錯誤並補救，a*_{τ+1} 要把進度拉回正軌，構成 post-reflection 配對。論文的例子是：本來要把網頁加入書籤，卻誤點了關閉，下一步就該重開剛關掉的網頁。SFT 只用 T+，而且只對修正步（t*_τ, a*_τ）與（t*_{τ+1}, a*_{τ+1}）計算 loss，錯誤步不進 loss。",
+    "Agent DPO": "狀態 s_τ 是 instruction 加上到第 τ-1 步為止的 (o, t, a) 歷史。偏好對為修正動作 a'_τ 優於原始錯誤動作 a_τ。套用標準 DPO loss，以 SFT 模型 π_SFT 為 reference，β 為超參數，但論文沒給 β 值。",
+    "三階段訓練（§4.6）": "骨幹為 Qwen2-VL，做 2B、7B、72B 三個尺寸，總資料約 50B token。(1) 持續預訓練：用 reflection 以外的全部資料，learning rate 固定。(2) Annealing：挑感知、grounding、動作軌跡、reflection 資料中的高品質子集，得到 UI-TARS-SFT。(3) DPO：用線上自舉資料中標註的 reflective pairs，得到 UI-TARS-DPO。只有 OSWorld 同時報 SFT 與 DPO 兩版，其餘基準只報 SFT。",
+    "推論與評測設定": "N=5。System-1（不產生 thought）與 System-2（先產生 thought）是同一個模型，推論時靠提示詞切換。OSWorld 用 screenshot-only 模式，步數上限 15 或 50，分數取 3 次平均；模型呼叫 CallUser 或最後沒輸出 Finish 的軌跡，一律視為判定該題 infeasible。System-1 對 System-2 的比較用 Best-of-N（N=1、16、64），AndroidControl 與 GUI Odyssey 各隨機抽 1,000 筆。",
+    "論文未給、重做時要自己決定": "各階段的 learning rate、batch、步數與資料配比；DPO 的 β；bootstrapping 的 max-try；線上自舉的輪數與虛擬機數量；VLM 評分用哪個模型、門檻多少、人工複核的比例；ActRe 與推論時的完整提示詞；thought 與 action 輸出的確切文字格式；輸入截圖的解析度與影像 token 數；自家截圖、grounding、軌跡資料的總量。附錄 A、B 只有案例圖與資料範例圖的圖說，沒有提示詞、超參數或指標定義。"
+  },
+  "assumptions": [
+    "完成任務需要的資訊都看得到：螢幕截圖足以表達介面狀態，不需要 DOM 或 a11y tree 裡的隱藏屬性（例如不可見的 label、元素狀態）。",
+    "各平台語意相同的動作可以對應到同一組原子動作，而且正規化相對座標可以跨解析度與長寬比沿用。",
+    "只留最近 5 張截圖、更早的步驟只留文字 thought/action，不會丟掉決策需要的觀測資訊。",
+    "解析工具抽出的元素類型、bounding box、文字是可信的標註；由 VLM 依這些 metadata 合成的描述與 caption 品質夠好、幻覺夠少。",
+    "Bootstrapping 取樣時，動作與正解相符的那組 thought 就是「因果上正確」的推理。實際上動作猜對，但理由錯了的 thought 也會被選中。",
+    "規則、VLM 評分、部分人工複核三道過濾，足以擋掉壞軌跡；同時要有大量虛擬機與標註人力可用。",
+    "標註者模擬的 post-reflection 補救步驟，接近模型實際部署時會遇到的錯誤分佈。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "VisualWebBench",
+      "WebSRC",
+      "ScreenQA-short",
+      "ScreenSpot",
+      "ScreenSpot v2",
+      "ScreenSpot-Pro",
+      "Multimodal Mind2Web（cross-task／cross-website／cross-domain）",
+      "AndroidControl（Low／High）",
+      "GUI Odyssey",
+      "OSWorld（369 題，screenshot-only，15／50 步）",
+      "AndroidWorld（116 題，20 個 App）"
+    ],
+    "metrics": [
+      "感知基準：各基準自己的分數（選擇題用 accuracy，caption 與 OCR 類用 ROUGE-L；論文只給總分，沒逐項列指標）",
+      "Grounding：預測點落在目標元素框內的比例，分 Text 與 Icon/Widget",
+      "Mind2Web：Ele.Acc、Op.F1、Step SR",
+      "AndroidControl／GUI Odyssey：動作類型正確率（Type）、Grounding 正確率、Step SR（照 OS-Atlas 的設定）",
+      "OSWorld／AndroidWorld：任務成功率（OSWorld 取 3 次平均）",
+      "System-1 對 System-2：Best-of-N（N=1／16／64）的 step success rate"
+    ],
+    "baselines": [
+      "商用模型：GPT-4o、GPT-4、GPT-4V、Claude-3.5-Sonnet、Claude Computer Use、Gemini-1.5-Pro、Gemini-2.0（Project Mariner）、Qwen-VL-Max",
+      "框架組合：GPT-4／GPT-4o 當 planner，搭配 SeeClick、UGround、Aria-UI、OmniParser、OS-Atlas、Aguvis 做 grounding",
+      "開源 GUI 模型：CogAgent、CogAgent-9B-20241220、SeeClick、ShowUI-2B、OS-Atlas-4B／7B、UGround-7B／UGround-V1-7B、Aguvis-7B／72B、Aria-UI、InternVL-2-4B、UIX-Qwen2-7B",
+      "骨幹對照：QwenVL-7B、Qwen2-VL-7B"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "GUI 感知基準上，UI-TARS 在三個基準各有一個尺寸拿到最高分，而且高於 GPT-4o、Claude-3.5-Sonnet。但最高分不是每個基準都由最大的 72B 拿到。",
+      "numbers": "VisualWebBench：72B 82.8，GPT-4o 78.5，Claude-3.5 78.2。WebSRC：7B 93.6，72B 89.3，Qwen-VL-Max 91.1，Claude-3.5 90.4。ScreenQA-short：72B 88.6，7B 87.7，Qwen2-VL-7B 84.9。另外，2B 在 VisualWebBench 只有 72.9，低於 Qwen2-VL-7B 的 73.3。",
+      "section": "§5.1、Table 3",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "高解析度專業軟體的 grounding（ScreenSpot-Pro）上大幅領先，但 icon 類 grounding 仍然很弱；作者另外觀察到提高輸入影像解析度會明顯提升分數",
+      "numbers": "平均分：72B 38.1，7B 35.7，2B 27.7。對照組：UGround-V1-7B 31.1，OS-Atlas-7B 18.9，Claude Computer Use 17.1，GPT-4o 0.8。72B 的 Text 平均 50.9，Icon 平均只有 17.5。解析度帶來的提升沒有給數字。",
+      "section": "§5.2、Table 4",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "ScreenSpot v1 與 v2 上，7B 表現最好，72B 沒有更好。在 ScreenSpot-Pro 上，模型放大則有明顯提升。作者據此認為 v1、v2 已經不足以區分大模型的 grounding 能力。",
+      "numbers": "ScreenSpot v1：7B 89.5，72B 88.4，Aguvis-72B 89.2，OS-Atlas-7B 82.5。ScreenSpot v2：7B 91.6，72B 90.3，OS-Atlas-7B（搭 GPT-4o planner）87.1，OS-Atlas-7B（單獨）84.1。",
+      "section": "§5.2、Table 5、Table 6",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "離線多步基準上超過既有 agent 模型。Claude Computer Use 在 web 上表現強，但在行動裝置上幾乎失效。",
+      "numbers": "Mind2Web Step SR（cross-task／website／domain）：72B 為 68.6／63.5／62.1，Aguvis-72B 為 64.0／56.5／58.2，Claude 為 53.5／47.7／56.4。AndroidControl-Low SR：72B 91.3，OS-Atlas-7B 85.2。AndroidControl-High SR：74.7 對 71.2。GUI Odyssey SR：88.6 對 62.0。Claude 在 AndroidControl-Low、High 與 GUI Odyssey 的 SR 分別只有 19.4、12.5、3.1，grounding 欄都列 0.0。",
+      "section": "§5.3、Table 7、Table 8",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "OSWorld（只給截圖）上，UI-TARS 在 15 步預算下超過 Claude Computer Use，接近 Claude 用 50 步的成績；放寬到 50 步後創下當時的 SOTA。分數取 3 次平均，用來降低網路與環境波動的影響。",
+      "numbers": "15 步：72B-DPO 22.7，7B-DPO 18.7，Claude 14.9。50 步：72B-DPO 24.6，Claude 22.0。框架組合中最高的是 GPT-4o 搭 Aguvis-72B，17.0；GPT-4o 搭 Aria-UI 為 15.2。沒有提供 3 次之間的變異數。",
+      "section": "§5.4、Table 9",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "DPO（納入錯誤動作當負樣本）提升了 OSWorld 分數，但 7B 的增益很小；DPO 只在 OSWorld 上評測",
+      "numbers": "15 步設定下，7B 從 SFT 17.7 到 DPO 18.7（+1.0），72B 從 18.8 到 22.7（+3.9）。AndroidWorld 與其他基準都沒有報 DPO 版。",
+      "section": "§5.4、Table 9",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "在 AndroidWorld 上贏過最好的框架組合與 agent 模型。線上任務中 72B 與 7B 的差距，比離線任務大；作者據此主張只看離線基準會錯估模型在動態環境中的能力。",
+      "numbers": "AndroidWorld：72B-SFT 46.6，7B-SFT 33.0。對照組：GPT-4o 搭 Aria-UI 44.8，GPT-4o（SoM）34.5，Claude Computer Use 27.9，Aguvis-72B 26.1。72B 與 7B 的差距，線上 AndroidWorld 是 +13.6，OSWorld DPO 是 +4.0，但 OSWorld SFT 只有 +1.1；離線 AndroidControl-High 是 +2.2，Mind2Web cross-task Step SR 是 +1.5。",
+      "section": "§5.4、Table 8、Table 9",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "System-2（先寫 thought）與 System-1（直接出動作）的比較：in-domain 且只取樣一次（Bo1）時，System-2 略差；取樣數增加到 N=16、64 時，System-2 反超。在沒有對應訓練資料的 AndroidWorld 上，Bo1 時 System-2 明顯較好。",
+      "numbers": "論文只用 Figure 8 呈現，正文沒有數值。in-domain 的三個基準是 Mind2Web、AndroidControl（抽 1,000 筆）、GUI Odyssey（抽 1,000 筆）；OOD 在 AndroidWorld 上比較 7B 與 72B。",
+      "section": "§5.5、Figure 8",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "原生 agent 模型仍然仰賴人類專家的資料標註與訓練指導，還沒達到作者規劃的下一階段：主動提出任務、自我給獎勵的終身學習。",
+    "在 in-domain 基準上只取樣一次時，System-2 推理比 System-1 略差。原因是會產生不相關或錯誤的推理步，例如提到畫面上不存在的物件，也就是幻覺，需要多次取樣才能補回來。作者建議未來改用 reinforced fine-tuning，讓模型單次就能給出正確動作。",
+    "ActRe 式標註是先知道正解再生成 thought，thought 可能只是表面上與動作吻合，兩者沒有因果關係；這是改用 bootstrapping 的理由。",
+    "離線資料集幾乎都是沒有錯誤的理想軌跡，模型因此學不到從錯誤中恢復；這是做 reflection tuning 的理由。",
+    "ScreenSpot v1、v2 可能已不足以反映較大模型的 grounding 能力；只靠離線基準評估，可能抓不準模型在即時動態環境中的能力。",
+    "只把最近 N 張截圖放進輸入，是為了配合約 32k token 的上下文預算所做的折衷。"
+  ],
+  "limitations_observed": [
+    "觀測空間沒有受控消融。論文的核心主張是純截圖比 HTML 或 a11y tree 好，卻沒有拿同一個模型在截圖、a11y tree、截圖加 SoM 三種觀測下各跑一次做對照。Table 9 的基線觀測模態也混在一起：GPT-4o 在 AndroidWorld 用 SoM，框架組合則是 GPT-4o 當 planner 再配 grounding 模型。因此「純視覺較好」這件事沒有被獨立驗證，差距同樣可以歸因於訓練資料量或骨幹不同。對 T3 來說，這是最大的缺口。",
+    "五類感知資料對 agent 任務成功率各有多少貢獻，完全沒有消融。§5.1 只證明感知基準分數上升，沒有移除 state transition captioning、SoM 或 dense caption 後去看 OSWorld、AndroidWorld 的變化，所以無法判斷哪一類感知訓練真的轉成了任務完成。",
+    "觀測歷史的截斷策略沒有消融：只留最近 5 張截圖、thought/action 文字全留。論文沒比較 N=1、3、10，也沒比較拿掉 thought 歷史的版本。自家軌跡平均 14.9 步，OSWorld 預算又放到 50 步，這個設計對長任務的影響不明。",
+    "觀測壓縮最關鍵的超參數沒有報：作者提到在 ScreenSpot-Pro 上提高輸入解析度會顯著提升分數，但既沒給數字，也沒說主實驗用的截圖解析度與影像 token 數，別人無法判斷效能與成本的取捨。",
+    "OSWorld 的計分規則可能灌分。只要模型呼叫 CallUser 或結尾沒輸出 Finish，都當成判定 infeasible，而 OSWorld 本來就有 infeasible 題，所以沒做完的軌跡可能在這些題上拿分。論文沒有把 feasible 與 infeasible 題分開報，也沒給 3 次平均的變異數。7B 的 DPO 增益只有 +1.0 分，369 題中約 3 到 4 題，憑這個數字寫成「DPO significantly improves」證據偏弱。",
+    "摘要與正文的 SOTA 敘述有選擇性。ScreenSpot v1 上，72B 的 88.4 低於 Aguvis-72B 的 89.2。WebSRC 上，72B 的 89.3 低於自家 7B 的 93.6，也低於 Qwen-VL-Max 的 91.1。正文說在 AndroidControl 與 GUI Odyssey 都「絕對提升 25」，實際只有 GUI Odyssey 成立（88.6 對 62.0）；AndroidControl-High 只多 3.5，Low 只多 6.1。",
+    "比較條件不對等。UI-TARS 在 Mind2Web、AndroidControl、GUI Odyssey 的訓練集上訓練過，§5.5 自己也稱之為 in-domain；GPT-4o 與 Claude 則是零樣本。Claude 在 mobile 的 grounding 欄全列 0.0，比較像評測設定不接受它的輸出格式，不像能力真的是零。用這組數字推出「Claude 的 GUI 能力沒有遷移到 mobile」並不穩健。",
+    "把 AndroidWorld 稱為 OOD，說法偏強。訓練資料包含 AITW、AITZ、AndroidControl、GUI-Odyssey、AMEX 等大量 Android 軌跡，App 與操作分佈高度重疊，只是沒有 AndroidWorld 本身的訓練資料。以此說明 System-2 在 OOD 較好，外推要打折。",
+    "System-1 與 System-2 其實是同一個混合訓練的模型（有 thought 與無 thought 的軌跡都訓練過），推論時只用提示詞切換，不是分別訓練的兩個模型。結果只有圖，沒有數值與信賴區間，所以「thought 有害或有益」的結論會混入提示詞切換本身的效應。",
+    "評測集與訓練指令的重疊沒有說明。附錄 A 的 VS Code 安裝 autoDocstring 案例，指令與 OSWorld 官方 repo（xlang-ai/OSWorld 的 evaluation_examples/examples/vs_code）裡的題目逐字相同，我已查證，可見那是評測題的執行示例。線上自舉則在數百台虛擬 PC 上，用人工與模型生成的指令反覆訓練，論文沒說這批指令有沒有排除 OSWorld 題目或近似題，無法排除資料洩漏。",
+    "文件本身有幾處錯誤。正文說統一動作空間在 Table 2，實際在 Table 1；說 AndroidControl 與 GUI Odyssey 的結果在 Table 7，實際在 Table 8；Table 9 圖說寫「步數上限 15」，表內卻有 50 步的結果。",
+    "論文沒碰 T3(b) 的可觀測性。軌跡過濾（規則、VLM 評分、人工標錯誤步）只用在訓練資料，執行期沒有任何監控、異常偵測或安全監控機制。CallUser 是模型自己決定求助，也不是外部監控。整合方的官方文件另有旁證：Midscene.js 舊版選模型文件（v0.midscenejs.com/choose-a-model）提醒，UI-TARS 的 assertion 表現弱、action planning 不穩定，每次執行可能走不同路徑，這代表部署端仍需要外部的觀測與驗證。"
+  ],
+  "framework_role": "T3(a) 感知方向中「純截圖觀測」路線的代表作，也是開源的基準點。它提供的具體設計選項有四個。(1) 觀測表徵：只用截圖，捨棄 DOM 與 a11y tree，把 SoM 從推論期的前處理改成訓練資料的一種形式。(2) 觀測歷史壓縮：最近 5 張截圖加上全部文字 thought/action，以符合 32k 的預算。(3) 感知當作訓練目標：尤其是 state transition captioning，把「動作是否生效、畫面變了什麼」變成模型本身學得到的訊號，這正是 T4 的軌跡異常偵測與 T5 的自我修正需要的觀測輸入。(4) 動作介面：跨平台原子動作加上正規化座標，並設有 Finished 與 CallUser 兩個終止動作。它也延伸到 T4（多層軌跡過濾）與 T5（reflection tuning、DPO），但兩者都發生在訓練期。在 T3(b) 可觀測性上沒有貢獻。外推到純文字的 chat agent 時，截圖本身用不上；可以借鏡的是觀測歷史的截斷方式、把「前後狀態差」當成觀測，以及用 CallUser 表示需要人介入的動作設計。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "線上自舉對模型自己產生的軌跡做異常偵測：規則型 reward 刪掉明顯異常的軌跡（如不改變環境的冗餘動作），VLM 評分刪掉低分軌跡，人工標出第一個錯誤步並截斷。接著把偵測到的錯誤步轉成 error correction 與 post-reflection 兩種配對，交給 reflection SFT（只對修正步算 loss）與 DPO（修正動作優於錯誤動作），讓模型學會在 thought 裡承認錯誤並補救。要注意這條資料流是訓練期的離線管線：異常是在事後標出，再透過更新參數變成模型的反思能力；執行期並沒有「偵測到異常就觸發修正」的外部迴路。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "論文附有開源 repo（Apache-2.0）。README 列出後續版本：2025-04-16 發布 UI-TARS-1.5 並開源 UI-TARS-1.5-7B，2025-09-04 發布 UI-TARS-2。來源：https://github.com/bytedance/UI-TARS",
+      "Hugging Face 官方 model card ByteDance-Seed/UI-TARS-72B-DPO 存在，引用本論文，說明以 Qwen2-VL 為基底、授權 Apache-2.0，並提供 vLLM 等部署方式。卡片上沒有提到任何產品。來源：https://huggingface.co/ByteDance-Seed/UI-TARS-72B-DPO",
+      "ByteDance 官方的 UI-TARS-desktop 是以 UI-TARS 模型為核心的桌面 GUI agent 應用，位於 bytedance GitHub 組織下。其設定文件把「Hugging Face for UI-TARS-1.0」「Hugging Face for UI-TARS-1.5」與「VolcEngine Ark for Doubao-1.5-UI-TARS」（模型名 doubao-1.5-ui-tars-250328）列為 VLM provider。來源：https://github.com/bytedance/UI-TARS-desktop/blob/main/docs/setting.md",
+      "Midscene.js 官方文件把 UI-TARS 列為支援的模型族：vlm-ui-tars 對應 1.0 版，也就是本論文發布的模型線；vlm-ui-tars-doubao-1.5 對應部署在火山引擎方舟的 1.5 版，端點為 ark.cn-beijing.volces.com/api/v3。來源：https://midscenejs.com/model-common-config"
+    ],
+    "assessment": "有可查證的採納，但要分清版本。本論文的 1.0 版（2B、7B、72B 的 SFT／DPO）以開源權重釋出，被 ByteDance 官方的 UI-TARS-desktop 與 Midscene.js 列為可選模型，屬於開源工具層的整合。商用託管服務是火山引擎方舟上的 doubao-1.5-ui-tars，那是後續的 1.5 版，不是本論文的模型本身。火山引擎的官方文件頁（volcengine.com/docs/82379/1584296）是前端渲染，我用 WebFetch 打不開內文，所以這一條以上面兩份官方整合文件給出的方舟端點與模型名為準。結論是：「純截圖觀測、統一動作空間、thought 先於 action」這條模型線已進入商用託管與官方工具；本論文的 72B-DPO 本身有沒有用在產品上，未見證據。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/bytedance/UI-TARS（推論、部署與 OSWorld 推論腳本）；權重見 Hugging Face 的 ByteDance-Seed 組織，例如 https://huggingface.co/ByteDance-Seed/UI-TARS-72B-DPO",
+    "data": "評測基準全部公開。訓練資料沒有公開，包括自家截圖與元素 metadata、五類感知合成資料、自家標註軌跡、約 6M 篇 GUI 教學文、thought 標註、線上自舉軌跡、reflection 配對。論文也沒給提示詞、learning rate、DPO β、資料量與配比等超參數，附錄只有圖。權重可以直接下載使用，但訓練流程無法照論文重現。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是 T3(a)「純截圖觀測、端到端 GUI agent」路線被廣泛採用的開源代表作，觀測介面、歷史截斷、state transition 感知訓練與動作空間的設計可以直接參考，後續版本也有官方工具與商用託管。但它缺少受控的觀測模態消融，「純視覺優於結構化觀測」要搭配其他論文一起判讀。",
+  "related": [
+    "2404.07972",
+    "2405.14573",
+    "2412.04454",
+    "2410.23218",
+    "2410.05243",
+    "2401.10935",
+    "2312.08914",
+    "2408.00203",
+    "2310.11441",
+    "2412.16256",
+    "2401.01614",
+    "2306.06070",
+    "2210.03629",
+    "2403.14589",
+    "2305.18290"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

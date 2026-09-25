@@ -1,0 +1,146 @@
+{
+  "id": "2004.06871",
+  "title": "TOD-BERT: Pre-trained Natural Language Understanding for Task-Oriented Dialogue",
+  "topic": "T2",
+  "subarea": "LLM 時代的 zero/few-shot DST",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Wu 等人（Salesforce Research，EMNLP 2020）把九個人對人、多輪的任務型對話資料集（約 10 萬通對話、139 萬句、60 多個領域）合併，從 BERT-base 繼續預訓練：加入 [USR]／[SYS] 說話者標記做 MLM，並以批次內負樣本的 response contrastive loss 模擬回應選擇，得到 TOD-BERT；在意圖辨識、MultiWOZ 2.1 的 DST、對話行為預測與回應選擇四個下游任務上勝過 BERT，而在只拿 1%～25% 標註資料微調時差距更大（MWOZ 2.1 joint goal：全量 48.0 對 BERT 45.6；5% 資料 28.6 對 19.6）。",
+  "problem": "BERT、GPT-2 等通用預訓練模型的語料是維基百科與書籍，與對話的語言型態差距大；已有的對話預訓練（DialoGPT、ConveRT、PLATO）又幾乎都用 Reddit／Twitter 的閒聊資料，句子短、雜訊多、沒有明確目標。任務型對話則有明確的使用者目標、系統信念狀態與資料庫，且每個資料集都小而分散（標註昂貴），導致意圖辨識、DST、對話行為預測等元件在新領域常面臨標註不足。作者要驗證的假設是：用任務型對話語料做自監督預訓練，能得到比現有預訓練模型更適合任務型下游任務的表示，並在少量標註時減輕資料稀缺。作者明說目標不是在每個任務刷 SOTA，而是證明這個編碼器能直接替換既有模型裡的 BERT。",
+  "core_idea": "不改架構、只改語料與目標：(1) 把九個公開任務型對話資料集統一格式後當成預訓練語料；(2) 在每句前加 [USR] 或 [SYS] 特殊標記，把整通對話攤平成一條序列，讓 MLM 學到說話者角色與對話互動模式；(3) 以雙編碼器的 response contrastive loss 取代 BERT 的 NSP：隨機切點把對話分成「上下文」與「下一句系統回應」，同一批次中其他對話的回應當負樣本，讓 [CLS] 表示學到對話順序與回應相似度。下游一律只在 [CLS] 上加最簡單的線性頭或相似度頭微調，好讓 BERT 與 TOD-BERT 的比較只反映表示本身的差異。",
+  "method": {
+    "pretraining_corpus": "九個英文、人對人、多輪的任務型對話資料集，共 100,707 通對話、1,388,152 句、60 多個領域（Table 1）：MetaLWOZ（37,884 通，47 領域）、Schema／SGD（22,825 通，17 領域）、Taskmaster（13,215 通，6 領域，平均 22.9 輪）、MWOZ（10,420 通，7 領域）、MSR-E2E（10,087 通，3 領域）、SMD（3,031 通）、Frames（1,369 通）、WOZ（1,200 通）、CamRest676（676 通）。作者說 MWOZ 的測試集對話不放進預訓練（§5），但 Table 1 的 MWOZ 通數 10,420 正好等於 8420＋1000＋1000，與此說法對不上；驗證集是否排除也沒交代。",
+    "input_format": "對一通對話 D={S1,U1,…,Sn,Un}，每句系統話前面加 [SYS]、每句使用者話前面加 [USR]，全部串成一條平坦序列「[SYS] S1 [USR] U1 …」，搭配標準的位置嵌入與 segment 嵌入；[USR]、[SYS] 是新增到詞表的兩個特殊 token。最大長度 512。",
+    "backbone": "從 BERT-base uncased 初始化（12 層、12 個注意力頭、隱藏維度 768），繼續預訓練。",
+    "objective_mlm": "標準 MLM：隨機選 token 換成 [MASK]，以交叉熵預測被遮住的 token（L_mlm = −Σ log P(x_m)）。與原版 BERT 不同，遮罩在每個批次動態產生，而不是事先存好。遮罩比例論文沒寫。",
+    "objective_rcl": "Response contrastive loss：抽一批 b 通對話，每通在隨機回合 t 切開，上下文為 {S1,U1,…,St,Ut}，正回應為 S_{t+1}；用同一個 TOD-BERT 分別編碼所有上下文與所有回應，取 [CLS] 得到 C、R ∈ R^{b×768}；M = row-wise Softmax(C Rᵀ) ∈ R^{b×b}，L_rcl = −Σ_i log M_{i,i}（批次中其他對話的回應都是負樣本）。作者說批次越大、下游回應選擇越好，也試過 local sampling 等負樣本策略但沒有顯著差異。",
+    "training_hyperparameters": "總損失 = L_mlm + L_rcl（等權相加）；AdamW；學習率逐步遞減、不做 warm-up；所有層與注意力權重 dropout 0.1；GELU；mini-batch 32 條序列、每條最長 512 token；以留出開發集的 perplexity 做 early stopping；兩張 NVIDIA Tesla V100。兩個版本：TOD-BERT-mlm（只有 MLM）與 TOD-BERT-jnt（MLM＋RCL）。",
+    "downstream_heads": {
+      "intent_recognition": "輸入單句 U，取 [CLS]，P_int = Softmax(W1·F(U))，W1 ∈ R^{I×768}，交叉熵。OOS 的 out-of-scope 當成第 151 類處理（不是信心門檻法）。",
+      "dialogue_state_tracking": "picklist 式多類分類：輸入對話歷史 X，對每個 (domain, slot) 對 j 有一個專屬投影層 G_j（層數＝slot 對數，MWOZ 2.1 為 30），把 F(X) 投影後與每個候選值 v_i^j 的表示 F(v_i^j) 算 cosine 相似度，對該 slot 所有候選值做 softmax 得到機率分布；候選值表示先用預訓練模型編碼後在訓練中固定不動；損失為所有 slot 對的交叉熵加總。每一回合都從完整歷史重新預測整個狀態，沒有顯式的狀態沿用或更新機制。由於 MWOZ 原始 ontology 不完整（有標註值不在 ontology 裡），作者從「所有標註過的值」重建 ontology；是否包含測試集出現的值論文沒說。",
+      "dialogue_act_prediction": "多標籤分類：輸入對話歷史，A = Sigmoid(W2·F(X)) ∈ R^N，二元交叉熵，A_i > 0.5 視為觸發。MWOZ 去掉領域前綴（taxi-inform → inform），行為數從 31 降為 13；DSTC2、GSIM 依 Paul et al.（1907.03020）映射到通用對話行為，分別為 19 與 13 類。",
+      "response_selection": "雙編碼器：r_i = cosine(F(X), F(Y_i))；上下文 X 截到最近 256 token；訓練時從語料隨機抽系統回應當負樣本；微調與評估的批次大小一律 25。",
+      "baseline_pooling": "GPT-2、DialoGPT 以隱藏狀態的平均池化當輸出表示（作者說比只取最後一個 token 好）。"
+    },
+    "fine_tuning_protocol": "所有參數一起更新，梯度裁剪 1.0，所有模型用相同超參數；few-shot 以隨機抽樣模擬：意圖任務每類抽 1 或 10 句，DST 抽 1%／5%／10%／25% 訓練資料（1% 約 84 通對話），DA 與回應選擇抽 1%／10%；few-shot 每個設定至少跑 3 個隨機種子，報平均與標準差；全量資料設定未報變異或執行次數。",
+    "evaluation_protocol_details": "線性探測：凍結預訓練模型，只訓練一層感知器，做 MWOZ 領域分類、OOS 意圖、MWOZ 對話行為。回應選擇用 k-of-100：每 100 筆組一個批次，其他 99 筆的回應當負樣本，報 1-of-100 與 3-of-100，推論時 5 個種子取平均。視覺化用 tSNE，並用 K-means（K=10、20）對 MWOZ 測試集系統回應的表示分群，算與領域標籤的 NMI。",
+    "unspecified_for_reimplementation": "論文沒交代、重做時必須自己決定：MLM 遮罩比例；預訓練的學習率數值、衰減方式與總步數；微調的學習率、epoch 數與停止條件；DST 與 DA 的歷史截斷長度（256 只講了回應選擇）；early stopping 用的開發集由哪些資料組成；RCL 預訓練時的批次大小（只說受硬體限制）。官方 repo 的預訓練腳本 run_tod_lm_pretraining.sh 固定傳入 per_gpu_train_batch_size=8、save_steps=2500 等參數（出自 repo，非論文），其餘由變數帶入，學習率與遮罩比例沿用程式預設，未逐一核對。",
+    "reimplementation_checklist": "(1) 下載九個資料集並統一成 (speaker, utterance) 序列，排除 MWOZ 測試集；(2) 在 BERT-base uncased 詞表加入 [USR]、[SYS]，每句前綴後攤平，截到 512；(3) 每步同時算動態遮罩的 MLM 與批次內負樣本的 RCL，兩者相加，AdamW、dropout 0.1、無 warm-up，用開發集 perplexity 早停；(4) 下游只在 [CLS] 上加線性頭或 cosine 相似度頭微調，梯度裁剪 1.0；(5) DST 先建完整 ontology，每個 slot 一個投影層，對固定的值表示做 cosine＋softmax；(6) few-shot 至少 3 個種子。"
+  },
+  "assumptions": [
+    "任務型對話的語言型態與通用文本、閒聊都不同，因此在任務型語料上繼續預訓練能帶來超過通用 BERT 的增益。",
+    "九個資料集的 [SYS]／[USR] 角色可以直接對齊；MetaLWOZ、Taskmaster 的自寫對話等不同蒐集方式，不會在攤平後引入有害的分布差異。",
+    "批次內其他對話的回應可以當負樣本；即使偶爾是語意上可接受的回應（假負例），對比目標仍能學到有用的 [CLS] 表示。",
+    "DST 可以寫成封閉 ontology 上的分類：每個 slot 的所有可能值都能事先列出，且值的表示可以用預訓練模型一次算好後固定。",
+    "每一回合都能從截斷到 512 token 的完整對話歷史重新預測整個狀態，不需要顯式的狀態沿用。",
+    "「少量標註」可以用隨機抽取訓練集的一部分來模擬，而預訓練時看過未標註的同一批對話文字不影響 few-shot 結論的解讀。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "OOS（Larson et al. 2019，1909.02027）：151 類意圖（150 個 in-scope＋1 個 out-of-scope），15,100／3,100／5,500；不在預訓練語料內",
+      "MultiWOZ 2.1（MWOZ）：8,420／1,000／1,000 通，測試集 30 個 (domain, slot) 對；用於 DST、DA、回應選擇、線性探測；訓練集文字在預訓練語料內",
+      "DSTC2（Henderson et al. 2014）：人機對話，1,612／506／1,117 通；DA（19 類通用行為）與回應選擇；對話不在預訓練語料內，但 WOZ、CamRest676 與它共用同一套 ontology",
+      "GSIM（Shah et al. 2018，M2M 自對弈＋群眾改寫，電影＋餐廳兩領域合併）：1,500／469／1,039 通；DA（13 類）與回應選擇；不在預訓練語料內"
+    ],
+    "metrics": [
+      "意圖：整體、in-scope、out-of-scope 準確率與 out-of-scope recall",
+      "DST：joint goal accuracy、slot accuracy",
+      "DA：micro-F1、macro-F1",
+      "回應選擇：1-of-100、3-of-100 準確率",
+      "線性探測：領域分類準確率、意圖準確率、DA micro-F1",
+      "表示分群：K-means 與領域標籤的 NMI"
+    ],
+    "baselines": [
+      "BERT-base uncased（主要對照）",
+      "GPT-2、DialoGPT（平均池化）",
+      "意圖：FastText、SVM、CNN（數字引自 Larson et al. 2019）",
+      "DST 參考值（Table 5 打星號，但圖說未定義星號、§6.3 只說列為參考，論文未說明是重跑還是引用；TRADE 自己的論文報的是 MultiWOZ 2.0 的 48.62，這裡的 45.6 是 2.1 的數字）：DSTReader、HyST、ZSDST、TRADE（1905.08743）",
+      "DA：以詞袋嵌入的 MLP、雙向 GRU 的 RNN"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "MWOZ 2.1 全量資料的 DST 上，TOD-BERT-jnt 的 joint goal accuracy 比 BERT 高 2.4 點，也高於列為參考的 TRADE、ZSDST 等追蹤器；但與 GPT-2 只差 1.8 點，slot accuracy 幾乎沒差。",
+      "numbers": "Joint Acc：BERT 45.6、GPT-2 46.2、DialoGPT 45.2、TOD-BERT-mlm 47.7、TOD-BERT-jnt 48.0；參考值（打星號，Table 5 未定義星號、論文未說明數字來源）TRADE 45.6、ZSDST 43.4、HyST 38.1、DSTReader 36.4。Slot Acc：BERT 96.6、GPT-2 96.6、jnt 96.9",
+      "section": "§6.3, Table 5",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "少量標註的 DST 上，TOD-BERT 兩個版本在 1%、5%、10%、25% 資料下都勝過 BERT，差距在 5%～10% 資料時最大；只用 MLM 的版本在 1% 與 10% 時反而比加了 RCL 的版本好。",
+      "numbers": "Joint Acc（BERT／mlm／jnt，平均 ± 標準差略）：1%（約 84 通）6.4／9.9／8.0；5% 19.6／28.1／28.6；10% 32.9／39.5／37.0；25% 40.8／44.0／44.3",
+      "section": "§6.3, Table 5",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "OOS 意圖辨識上 TOD-BERT-jnt 全量資料的整體與 in-scope 準確率最高，1-shot 時比 BERT 的整體準確率高 13.2 點、in-scope 高 16.3 點；但 1-shot 時所有模型的 out-of-scope recall 都接近零。",
+      "numbers": "全量：整體 BERT 84.9／mlm 85.9／jnt 86.6；in-scope 95.8／96.1／96.2；out-of-scope recall 35.6／46.3／43.6。1-shot：整體 29.3／38.9／42.5；in-scope 35.7／47.4／52.0；out-of-scope recall 0.4／0.5／0.1。10-shot：整體 75.5／76.6／77.3",
+      "section": "§6.2, Table 2",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "回應選擇是增益最大的任務：MWOZ 全量資料下 TOD-BERT-jnt 的 1-of-100 比 BERT 高 18.3 點；在 DSTC2、GSIM 的少量資料設定優勢更明顯。但 jnt 的預訓練目標與這個任務同形，且預訓練看過 MWOZ 訓練集。",
+      "numbers": "MWOZ 全量 1-of-100／3-of-100：BERT 47.5／75.5、GPT-2 47.5／75.4、jnt 65.8／87.0。DSTC2 1% 資料 1-of-100：BERT 3.7、jnt 37.5；GSIM 1%：4.0 對 12.5。GSIM 全量：BERT 13.4、GPT-2 39.1、jnt 41.0",
+      "section": "§6.5, Table 6",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "對話行為預測上，TOD-BERT 在 1% 資料時對 BERT 有明顯增益，全量資料時差距很小；10% 資料已接近全量表現。",
+      "numbers": "MWOZ 1% 資料 micro／macro-F1：BERT 84.0／66.7、mlm 87.5／73.3（+3.5／+6.6）、jnt 86.9／72.4；GSIM 1%：BERT 67.3／26.9、mlm 82.7／35.7。MWOZ 全量：BERT 91.4／79.7、jnt 91.7／80.6",
+      "section": "§6.4, Table 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "凍結編碼器只訓練一層感知器的線性探測中，TOD-BERT-jnt 在三項探測都最高，作者據此主張其表示本身就帶有最多任務型對話資訊；TOD-BERT-mlm 在意圖與 DA 探測上反而不如 BERT 或 GPT-2。",
+      "numbers": "MWOZ 領域準確率：BERT 60.5、GPT-2 63.5、mlm 63.9、jnt 68.7；OOS 意圖準確率：BERT 71.1、GPT-2 74.7、mlm 70.7、jnt 77.8；MWOZ DA micro-F1：BERT 85.3、GPT-2 85.7、mlm 83.5、jnt 86.2",
+      "section": "§6.1, Table 3",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "作者明說目標不是在每個下游任務拿 SOTA，而是證明 TOD-BERT 能取代 BERT；因此刻意不在預訓練模型上疊額外元件，各任務只用最簡單的頭。",
+    "回應選擇的 MWOZ few-shot 不報 TOD-BERT-jnt，理由是完整的 MWOZ 訓練集已在預訓練階段用於 response contrastive learning，直接比較不公平（§6.5）。",
+    "回應選擇的結果對批次大小敏感（批次越大越難），因此所有模型固定用 25；RCL 預訓練的批次大小受硬體限制（§3.2、§6.5）。",
+    "隨機負樣本不保證是真的負例，1-of-100 只是有用但不完美的評估訊號（§4、§6.5）。",
+    "MWOZ 原始 ontology 不完整，DST 實驗改用作者自建、涵蓋所有標註值的 ontology（§6.3）。"
+  ],
+  "limitations_observed": [
+    "與子領域錯位：本文不是 LLM 時代、也不是 zero-shot。這裡的 few-shot 是「抽 1%～25% 標註資料＋整個 BERT 微調」，意圖任務則是每類 1／10 筆；全文沒有 zero-shot、沒有跨領域 DST（不像同一作者群的 TRADE 做了 zero-shot 領域轉移），也沒有任何提示或 in-context 學習。放在「LLM 時代的 zero/few-shot DST」只能當 LLM 之前的低資源 DST 對照點。",
+    "DST 的比較不對等：TOD-BERT 的 DST 是封閉 picklist 分類，而且 ontology 是作者從「所有標註過的值」重建的；論文沒說是否包含測試集才出現的值。Table 5 打星號的 TRADE（開放詞彙生成式，可產生 ontology 外的值）、ZSDST、HyST、DSTReader 數字來源論文沒說明（圖說未定義星號；TRADE 原論文報的是 MultiWOZ 2.0 的 48.62，並非這裡的 2.1 數字 45.6），也不是在本文的 ontology 與設定下重跑。因此「48.0 勝過 TRADE 45.6」不能解讀成同條件下的優勢；真正同條件的只有 BERT／GPT-2／DialoGPT 三列。",
+    "MWOZ 上的 few-shot 並非乾淨的低資源設定：MWOZ 訓練集的對話文字（未標註）已進預訓練語料，作者只替回應選擇排除了 jnt 的 MWOZ few-shot，但 DST 的 1%～25%（Table 5）與 DA 的 1%／10%（Table 4）結果同樣是在「模型已經讀過全部訓練對話文字」下量的。這是未標註曝光而非標籤洩漏，但會高估一個真正新領域只有 84 通標註對話時的增益。此外 Table 1 的 MWOZ 為 10,420 通，正好是 train＋dev＋test 的總和，與「不含測試集」的文字說法對不上，論文沒解釋。",
+    "「沒見過的評估資料」並不等於沒見過的領域：作者強調 DSTC2 不在預訓練語料內，但 §3.1 自己寫到 WOZ 與 CamRest676 沿用 DSTC2 的蒐集流程與同一套 ontology，兩者都在預訓練語料裡；GSIM 的電影、餐廳領域也與 MSR-E2E（§3.1：電影購票、餐廳訂位、計程車）重疊。DSTC2／GSIM 上 DA 與回應選擇的少量資料增益（例如 DSTC2 1% 回應選擇 3.7 → 37.5）有一部分可能來自領域重疊，而不只是「任務型對話」這個語言型態。",
+    "增益來源無法歸因：沒有 [USR]／[SYS] 標記的消融，也沒有「BERT 在非對話語料上繼續預訓練相同步數」的對照組，所以分不出增益來自對話結構設計、領域詞彙，還是只是多訓練了一段。全量資料的差距又很小，而且全量設定未報變異或執行次數：DST joint 48.0 對 BERT 45.6、對 GPT-2 46.2；MWOZ DA micro-F1 91.7 對 91.4。",
+    "作者的文字主張與表格有出入。§6.4 說全量資料下 TOD-BERT「不論資料集或指標」都較好，但 Table 4 的 DSTC2 全量：DialoGPT macro-F1 42.1 高於 jnt 41.3，micro-F1 兩者都是 93.8；TOD-BERT-mlm 為 90.9／39.9，低於 BERT 的 92.3／40.1。引言說 response contrastive learning 有益，但 DST 上 mlm 在 1% 與 10% 資料時勝過 jnt（9.9 對 8.0、39.5 對 37.0），OOS 全量的 out-of-scope recall 也是 mlm 46.3 高於 jnt 43.6，10-shot 時 BERT 的 out-of-scope recall 16.5 反而最高。RCL 的好處主要只在回應選擇與線性探測上成立。",
+    "少量資料實驗的變異有未解釋之處：OOS 1-shot 時 TOD-BERT-jnt 的整體準確率標準差只有 ±0.1%，而 BERT 是 ±3.4%、mlm 是 ±6.3%；每類只抽一句、三個種子卻幾乎不變，論文沒說明是否每個模型用同一組抽樣或種子數是否不同。1-shot 的 out-of-scope recall 全在 0.5% 以下，等於完全不會拒答，把 out-of-scope 當第 151 類的設計在少量資料時失效，作者沒討論。",
+    "回應選擇的大幅增益與預訓練目標同形：TOD-BERT-jnt 的 RCL 就是批次內負樣本的雙編碼器排序，與 k-of-100 評估幾乎是同一件事，而且 MWOZ 全量比較（65.8 對 47.5）中 jnt 已在預訓練看過 MWOZ 訓練集的回應配對。作者只排除了 few-shot 那格，全量那格仍拿來當主要賣點。GPT-2／DialoGPT 用平均池化加 cosine，並非為這個任務設計的表示，DialoGPT 在 GSIM 上只有 16.5，基線本身可能被低估。",
+    "對 T2 的狀態維護幾乎沒有著墨：DST 頭每一回合從截斷後的完整歷史重新分類整個狀態，沒有狀態沿用、更新或修正的機制；預訓練最長 512 token，而 Taskmaster 平均 22.9 輪、SGD 20.3 輪，長對話的早期資訊會被截掉，論文沒量測對話長度或回合位置對 joint goal 的影響。1% 資料時 joint goal 只有 6%～10%，絕對水準離可用很遠，「few-shot 較強」是相對 BERT 而言。"
+  ],
+  "framework_role": "本文同時落在 T1 與 T2：它提供一個任務型對話專用的預訓練編碼器，下游四個任務中意圖辨識（含 out-of-scope）屬 T1，DST 屬 T2，對話行為預測與回應選擇則偏向對話策略與生成。對 T2 真正拿得到的是兩樣東西：(1) MWOZ 2.1 上「標註資料量對 joint goal accuracy」的曲線（1%／5%／10%／25%／全量，BERT 對 TOD-BERT），說明在同一個 picklist 分類頭下，換成對話預訓練的編碼器能把低資源 DST 往上推 3～9 點，全量只多 2.4 點；(2) 「每回合從完整歷史重新分類整個狀態」這種 DST 形式的一個簡潔、可重現的強基線。它屬於 LLM 之前以「對話領域繼續預訓練＋少量標註微調」處理資料稀缺的路線，是理解後來 LLM 以 in-context 學習做 zero/few-shot DST 時所取代的對象，而不是 LLM 時代 zero/few-shot DST 本身。不涉及反思、軌跡、使用者模擬或評估回流。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文只說 TOD-BERT 易於部署並會開源，沒有描述任何產品或生產部署。查過：官方 GitHub repo（https://github.com/jasonwu0731/ToD-BERT，BSD-2-Clause）沒有提到生產使用；Hugging Face 上的 TODBERT/TOD-BERT-JNT-V1（https://huggingface.co/TODBERT/TOD-BERT-JNT-V1）標示「No model card」、未列授權，也沒有使用組織的資訊；Salesforce 官方部落格介紹其任務型對話評估框架 BotSIM 的文章（https://www.salesforce.com/blog/botsim/）沒有提到 TOD-BERT，其中使用的是 T5 釋義模型與意圖／NER 模型。作者隸屬 Salesforce Research 不構成採納證據；被後續論文當作編碼器比較或延伸屬學術影響力（Semantic Scholar 約 357 次引用、59 次 influential），不計入採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/jasonwu0731/ToD-BERT（BSD-2-Clause；含九個資料集的處理程式、預訓練與四個下游任務的微調腳本）。預訓練權重已放上 Hugging Face：TODBERT/TOD-BERT-MLM-V1、TODBERT/TOD-BERT-JNT-V1，另有 README 所列的 TODBERT/TOD-DistilBERT-JNT-V1（論文未提，未核對）；JNT-V1 頁面顯示近一個月約 478 次下載（2026-09 查詢，僅代表可取得性）。",
+    "data": "預訓練與評估用的資料集全部是公開資料集（MetaLWOZ、SGD、Taskmaster、MultiWOZ、MSR-E2E、SMD、Frames、WOZ、CamRest676；評估另用 OOS、DSTC2、GSIM），需各自下載後以 repo 的處理程式統一格式。作者自建的 MWOZ 2.1 完整 ontology 論文未單獨釋出說明，是否包含在 repo 內未核對。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "影響力高（EMNLP 2020、約 357 次引用）且提供 MWOZ 2.1 上可重現的「標註量對 joint goal」曲線，是 LLM 之前以對話預訓練處理低資源 DST 的代表；但主要貢獻是橫跨四個任務的通用任務型對話編碼器，DST 只佔四分之一、全量增益僅 2.4 點且無 zero-shot，與「LLM 時代 zero/few-shot DST」子領域錯位，非 T2 必讀。",
+  "related": [
+    "1810.04805",
+    "1905.08743",
+    "1911.03688",
+    "1906.01543",
+    "1911.00536",
+    "1810.00278",
+    "1909.05855",
+    "1909.02027",
+    "1907.05774",
+    "1907.03020"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

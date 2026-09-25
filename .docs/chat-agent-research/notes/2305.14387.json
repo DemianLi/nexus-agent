@@ -1,0 +1,164 @@
+{
+  "id": "2305.14387",
+  "title": "AlpacaFarm: A Simulation Framework for Methods that Learn from Human Feedback",
+  "topic": "T7",
+  "subarea": "LLM/agent-as-judge 與評估可靠性",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "用 13 個 API LLM 標註者組成的「標註者池＋25% 標籤翻轉」模擬人類成對偏好，搭配 805 題 win-rate 評估協定與六種 LPF 參考實作，並以真人回饋重訓同一批方法，驗證模擬器上得到的方法排名能轉移到人類（Spearman 0.98）。",
+  "problem": "從人類回饋學習（RLHF 等）的研究有三個門檻：人工成對標註昂貴（本文實測一次性 $3000 標 10k 對、每評一個模型 $242）、開放式指令跟隨缺乏可重複且可信的自動評估、各方法缺乏經過驗證的參考實作。只用逐例一致率檢驗 LLM 標註者並不夠：若模擬回饋的雜訊結構與人類不同，在模擬中得到的方法結論（例如能最佳化多久）會與真人資料相反。",
+  "core_idea": "把「LLM 當標註者」從單一 judge 升級為可驗證的模擬器：(1) 模擬的目標不只是平均偏好，而是同時匹配人類的一致率、標註者間／標註者內變異與風格偏好；(2) 驗證以「方法層級排名是否與真人管線一致」為主，而非逐例一致率；(3) 評估端用同一套模擬標註者對參考模型 Davinci003 算 win-rate，並用真實使用者互動（Alpaca Demo）驗證評估題集的代表性。",
+  "method": {
+    "資料切分": "取 Alpaca 52k (x,y)：SFT 10k（訓練起點 SFT 10k）、PREF 10k 指令（收成對偏好）、unlabeled 20k（PPO 等用）、validation 2k；其餘 10k 保留。所有 LPF 方法都從 LLaMA 7B 在 SFT 10k 上微調的模型出發；成對樣本由 SFT 10k 以 temperature 1.0 在 PREF 指令上取樣兩個回答。",
+    "模擬評估標註者 p_sim^eval": "13 個標註者組成的池：5 個 GPT-4、4 個 ChatGPT、4 個 Davinci003；同一模型的標註者差在提示詞（不同數量的 in-context 範例、批次大小、輸出格式 JSON 或純文字），其中兩個 GPT-4 標註者被明確要求偏好長／短回答；全部以 temperature 1.0、top_p 1.0 取樣，讓取樣本身帶來變異。每次標註從池中隨機挑一個標註者；兩個輸出的先後順序每次隨機（因為模擬標註者偏好第一個）；有 input 與無 input 的指令各一版提示詞；GPT-4 採批次標註（上限 5 組，實測到 20 也不太掉效能），批次格式的 in-context 範例要把每個欄位編號。ChatGPT 難以解析時兩招：對「Neither／Both」等 token 加負 logit bias、對目標 token 加正 bias（與 CoT 不相容），或要求輸出含簡短解釋字串與布林欄位的 JSON。完整提示詞在 GitHub repo。",
+    "模擬訓練標註者 p_sim^ann": "p_sim^eval 與獨立 Bernoulli(0.5) 各半混合，等效於 25% 機率翻轉標籤（模擬標註者內不一致）；因此只需真正標一半資料，每 1000 筆約 $6。25% 是在 {0, 17.5, 25, 35}% 中能在 best-of-n 上引發過度最佳化的最小比例（附錄 E.1）。",
+    "對照組 p_sim^GPT-4": "單一 GPT-4 提示詞（池中之一，批次 5），temperature 0，決定性、低變異。",
+    "評估協定": "805 條指令 = self-instruct 測試集 252 + OASST 188 + Anthropic helpful 129 + Vicuna 80 + Koala 156，組合比例以不公開的 Alpaca Demo 真實互動為參照。指標為對 Davinci003 的 win-rate（受評模型被偏好的比例），評估時用 p_sim^eval（不加翻轉雜訊，因均勻雜訊不改排名）。受評模型以 temperature 0.7、最多 300 tokens 取樣；best-of-n 從 SFT 10k 以 temperature 1.0 取樣再重排；ChatGPT 與 GPT-4 以系統提示要求縮短回答以與 7B 模型長度可比。",
+    "評估題集的外部驗證": "人工從 Alpaca Demo 挑 200 條不含個資、有害內容、也不是在問聊天機器人本身的指令；用 11 個系統在兩個題集上分別算模擬 win-rate，看兩者相關。",
+    "真人標註協定": "Amazon Mechanical Turk；以 25 題資格測驗（題目由作者們多數同意的成對偏好組成）從 34 人中選出與作者一致率 >70% 的 16 人；時薪中位數 $21；標註中持續比對每人與 GPT-4 的一致率，剔除一名約 50% 的離群者。介面允許選「略好」（約 18%），實驗中二值化。一致率與變異分析用到同一題的多筆人類標註（3–4 筆）取多數決。",
+    "標註者品質量測": "一致率：與 3 名人類多數決的一致比例，人類基準是 held-out 人類對其餘人的多數決。bias：4 個模擬標註的多數決與 4 個人類標註多數決之間的誤差；variance：held-out 一筆標註與其餘 3 筆多數決之間的誤差。另計長回答與含列表回答被偏好的比例。",
+    "LPF 參考方法": "直接用成對資料：Binary FeedME（只對被選中的回答續做 SFT）、Binary reward conditioning（被選／未選各加正／負控制 token 做 SFT，推論時條件於正 token）、DPO（β=0.1、1 epoch、batch 64、lr 線性 warmup 3% 到 1e-5 再線性衰減）。先訓 surrogate reward model：從 SFT 初始化的分類器，以 Bradley–Terry 對數概似訓練。用 reward model 的方法：best-of-n（預設 n=1024，實測最佳約 16）、expert iteration（單輪：在 20k unlabeled 上做 best-of-16 再 SFT）、PPO、Quark（只訓最高 reward 分箱、每次 rollout 後清空樣本池、拿掉熵懲罰；KL 0.05、lr 3e-6、390 步）。",
+    "PPO 細節": "以 openai/lm-human-preferences 為基礎；advantage 在整批 rollout 上正規化（而非每個 minibatch，後者在小 minibatch 下不穩）；value model 從 reward model 初始化；每步 512 個 rollout、2 個 epoch、每次 256；峰值 lr 1e-5 衰減到 0；梯度 L2 範數裁切 1；unlabeled 集跑 10 輪共 390 步；GAE λ=γ=1；固定 KL 係數，人類回饋用 0.02、模擬回饋用 0.002；效果在 40–80 步就達峰，需早停。",
+    "端到端驗證流程": "每個方法 M 在 p_sim^ann 上訓練並調參，用 p_sim^eval 對 Davinci003 評 win-rate（M_sim）；同一批方法中的一部分以模擬中找到的超參數範圍改用真人偏好重訓，再由真人評 win-rate（M_human）；加上 GPT-4、ChatGPT、Davinci001、LLaMA 7B、SFT 52k（即 Alpaca 7B）等不需訓練的系統兩邊都評；比較兩邊排名的 Spearman 與 R²。過度最佳化實驗：增加 PPO 步數、best-of-n 與 expert iteration 的 n，畫 surrogate reward 平均值對 win-rate 的曲線。",
+    "成本": "單一 8×A100：多數方法訓練 <2 小時；best-of-16 在 20k 上取樣約 4 小時；DPO 1 epoch 在 4×A100 上 <3 小時。"
+  },
+  "assumptions": [
+    "存在比受訓模型強得多的 oracle API LLM，可近似人類成對偏好",
+    "模擬器要保真的是方法之間的相對排名，而非絕對 win-rate；均勻翻轉雜訊是無偏的，不改變隱含的 reward function 與排名",
+    "人類回饋可化約為單輪指令上的二元成對比較（「略好」被二值化）",
+    "十幾名經資格篩選的 MTurk 工作者的多數決能代表「人類偏好」",
+    "五個公開評估集的組合能代表真實使用者互動，而 200 條 Alpaca Demo 指令是真實互動的合理代理",
+    "對單一參考模型 Davinci003 的 win-rate 在不同系統間可比較",
+    "人類的過度最佳化主要來自標註變異（作者自己標為假說）"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "AlpacaFarm 評估集 805 條指令（self-instruct、OASST、Anthropic helpful、Vicuna、Koala 組合）",
+      "Alpaca Demo 真實使用者指令 200 條（不公開，僅用於驗證評估集）",
+      "PREF split 10k 指令上的真人與模擬成對偏好"
+    ],
+    "metrics": [
+      "對 Davinci003 的 win-rate（附標準誤）",
+      "模擬標註者與人類 3 人多數決的一致率",
+      "標註者 bias／variance（對多數決的誤差）",
+      "方法排名的 Spearman 相關與 R²（模擬 vs 真人管線；評估集 vs Alpaca Demo）",
+      "每 1000 筆標註成本",
+      "surrogate reward 對 win-rate 曲線（過度最佳化）",
+      "偏好較長回答／含列表回答的比例、平均輸出字元數"
+    ],
+    "baselines": [
+      "MTurk 真人標註者（一致率、變異、成本的基準）",
+      "單一 GPT-4 提示詞標註者 p_sim^GPT-4 與池中各單一標註者",
+      "LPF 方法：Binary FeedME、Binary reward conditioning、DPO、best-of-n、expert iteration、PPO、Quark",
+      "未訓練的參考系統：GPT-4、ChatGPT、Davinci001、LLaMA 7B、SFT 52k（Alpaca 7B）、SFT 10k"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在 11 個系統上，模擬器（模擬回饋訓練＋模擬評估）與真人管線（真人回饋訓練＋真人評估）的方法排名高度一致，只有兩處相鄰排名互換",
+      "numbers": "Spearman 0.98；互換一：真人 SFT 10k 44.3% > SFT 52k 40.7%，模擬 36.7% < 39.2%；互換二：真人 PPO 55.1% > ChatGPT 52.9%，模擬 46.8% < 61.4%",
+      "section": "§4.2、Figure 3、Table 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "去掉非本文訓練、兩邊只差在評估者的灰點後，相關性明顯下降",
+      "numbers": "R²=0.83、Spearman 0.94（對照全部點的 0.98）",
+      "section": "Figure 3 說明",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "評估用的模擬標註者池與人類多數決的一致率接近 held-out 人類，且便宜得多；最佳單一 GPT-4 提示詞一致率更高但不被採用",
+      "numbers": "p_sim^eval 65% vs held-out 人類 66%；每 1000 筆 $300 → $12（25×）；最佳單一 GPT-4 提示 68%",
+      "section": "§4.3、Figure 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "標註者池與加雜訊的訓練標註者，其變異度與人類相近；單一 GPT-4 標註者變異過低",
+      "numbers": "variance：p_sim^eval 0.26、p_sim^ann 0.43、人類 0.35、單一 GPT-4 0.1；bias：p_sim^eval 0.38、訓練標註者 0.35、最佳 GPT-4 標註者 0.33",
+      "section": "§4.3、附錄 C.2 Figure 7",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "真人偏好與 AlpacaFarm 偏好都在 reward 最佳化到某點後出現 win-rate 下降（過度最佳化）；單一 GPT-4 回饋完全不出現，會誤導出「可以最佳化更久」且 best-of-1024 遠勝 PPO 的錯誤結論；消融顯示翻轉雜訊是主要成因",
+      "numbers": "定性曲線（Figure 5）；雜訊比例 0%／17.5% 無明顯過度最佳化，25% 起出現，約隨比例單調增強（Figure 12、13）",
+      "section": "§4.3、Figure 5、附錄 E.1",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "AlpacaFarm 評估集上的模擬 win-rate 與 200 條真實 Alpaca Demo 指令上的 win-rate 高度相關，可作為簡單真實互動的代理",
+      "numbers": "11 個系統，r²=0.97",
+      "section": "§4.4、Figure 6",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "保真與效能的取捨：在保真模擬器（含雜訊）上訓練的 PPO 直接拿給人評反而不如 SFT 起點；改用單一低變異 GPT-4 標註訓練則可直接部署，但仍落後真人回饋",
+      "numbers": "人評 win-rate：PPO_human 55%、Best-of-16_human 51%、PPO_sim^GPT-4 50%、SFT 10k 44%、PPO_sim^ann 43%",
+      "section": "§5.3、Table 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "模擬標註者與人類有相近的風格偏好（偏好長回答與含列表），LPF 訓練使輸出明顯變長",
+      "numbers": "偏好較長回答：人類 62%、模擬 64%；偏好含列表：人類 69%、模擬 63%；SFT 10k 平均 278 字元，Best-of-16 約 570、PPO 約 637（模擬）／683（真人 40 步）",
+      "section": "附錄 C.2 Figure 9、§5.2、Table 6–7",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "驗證用指令（含 Alpaca Demo）都相對簡單且只有單輪",
+    "所有微調模型都從 LLaMA 7B 出發",
+    "真人驗證只來自少數 crowdworkers，未必代表更廣的人類偏好，且有偏好長回答等偏差",
+    "成對比較即使由人類做，也無法深入說明兩模型差在哪裡",
+    "假設能取得遠強於受訓模型的 oracle LLM；開發最前沿模型時不成立",
+    "模擬回饋與真人回饋下的合適超參數不同，例如 surrogate reward 尺度不同導致 PPO 的 KL 係數範圍不同",
+    "模擬標註者有其特有偏差：偏好提示中先出現的輸出、偏好與自己同一模型的輸出；已用隨機順序與共用訓練資料控制，但可能還有未發現的偏差",
+    "ChatGPT 當標註者對提示格式敏感、常產生無法解析的回答",
+    "越保真的模擬器（越會過度最佳化）訓出的模型越差，直接部署應改用單一一致的標註者",
+    "LPF 後輸出變長但仍有幻覺，不清楚是否真的改善事實性與知識等更關鍵的面向"
+  ],
+  "limitations_observed": [
+    "Spearman 0.98 主要由能力跨度極大的未訓練系統撐起（LLaMA 7B 模擬 11.3%／真人 6.5% 到 GPT-4 79.0%／69.8%）。把這些點拿掉後剩下的 Spearman 0.94，可以反推只建立在 6 個點上：n=6、一次相鄰互換時 ρ=1−6·2/(6·35)=0.943，剛好吻合；同樣地 11 點兩次相鄰互換得 0.982，也吻合 0.98。n=6 時只要再多一次相鄰互換就掉到 0.886，統計上很脆弱。其中 SFT 10k／52k 沒有用任何回饋，兩邊只差在評估者；真正「模擬回饋訓練 vs 真人回饋重訓」的 LPF 方法只有 PPO、best-of-n、expert iteration、Binary FeedME 四個，DPO、Quark、Binary reward conditioning 沒有真人端結果。",
+    "評估協定有自我偏好污染：13 個標註者裡有 5 個 GPT-4、4 個 ChatGPT、4 個 Davinci003，參考模型是 Davinci003，受評系統又含 GPT-4 與 ChatGPT。Table 2 中 GPT-4 模擬比真人高 9.2 個百分點（79.0 vs 69.8）、ChatGPT 高 8.5（61.4 vs 52.9），而本文訓練的 LLaMA 系模型在模擬下多半比真人低（SFT 10k −7.6、PPO −8.3、best-of-1024 −5.7）。PPO／ChatGPT 的排名錯置正出現在這裡。作者承認有同模型偏好，但評估協定沒有對同家族系統做任何校正，win-rate 用來比較跨家族系統時會系統性偏移。",
+    "25% 翻轉率是「在 {0, 17.5, 25, 35}% 中能引發過度最佳化的最小比例」（附錄 E.1），等於用要重現的現象去校準模擬器，再拿「能重現過度最佳化」當驗證證據，有循環論證之嫌。而且消融只在 best-of-n 上做，沒有用 PPO 驗；人類的標註者內不一致率本身沒被量出來當校準目標，variance 指標把標註者間與標註者內的變異混在一起。",
+    "§2.2 宣稱可在模擬器上分析「演算法與超參數」再轉移，但附錄 B.1 的最佳 KL 係數相差 10 倍（真人 0.02、模擬 0.002），PPO 也要在兩邊各自早停，而 PPO_sim^ann 直接給人評只有 43%，低於 SFT 起點的 44%。實際能轉移的只有粗粒度的方法排名，不包括超參數或模型本身；拿它當 agent 訓練前的「沙盒調參」需要另外驗證。",
+    "長度混淆沒有在評估協定內處理：人類與模擬標註者都偏好長回答（62%／64%），LPF 讓輸出從約 278 字元增加到約 570–860 字元（Table 6–7），而同一套偏見同時是訓練訊號與評估尺規。兩邊排名一致，可能只代表「兩邊都獎勵變長」，不代表方法真的更好；PPO 勝過 ChatGPT 本身就是對 ChatGPT 加長度上限造成的（作者承認）。附錄 E.3 的 Berlin 例子中，PPO_sim 捏造了「Tubal 與 Jabal 部落」與「Berlinium」等明顯幻覺，但這類長回答在此評估中不會被扣分。",
+    "評估集的外部效度只用 200 條 Alpaca Demo 指令、11 個系統驗證，r²=0.97 同樣靠系統能力的巨大跨度撐起，沒有報告只看 LPF 方法這個窄區間時的相關；Demo 資料不公開，他人無法重驗。win-rate 標準誤約 ±1.7 個百分點，而多數相鄰 LPF 方法只差 2–5 個百分點，評估集對相近方法的鑑別力有限。",
+    "文中數字互相矛盾，引用時要分清楚：成本倍率在摘要與 §3.2 是 50×（以只需標一半的 p_sim^ann 每 1000 筆 $6 計），引言是 45×，§4.3 評估用的 p_sim^eval 則是 25×（$300→$12）；真人標註者 §4.1 是 16 人（後又剔除 1 人），§7 卻寫 13 人；人類 variance 同時出現 0.35 與 0.34；GPT-4 的長度上限 Table 2 註解寫 1000 字元、附錄 A 寫 500 字元（附錄 A 還把兩個 chat 模型寫成 ChatGPT 與 Davinci003）；§5.2 的「637 tokens」對照 Table 7 應為字元；best-of-n 的雜訊比例正文寫 17%、圖說寫 17.5%。",
+    "與 T7 的距離：只處理單輪指令、沒有工具、環境或多輪互動；模擬的是「成對偏好標註者」而非與 agent 互動的使用者。65% 的逐例一致率本身不高（人類彼此也只有 66%），因此它證明的是「LLM judge 可達到人類間一致的水準」，不是「LLM judge 可靠」；外推到 agent 軌跡評估時，judge 的位置偏差、自我偏好與長度偏好都需要重新量測。"
+  ],
+  "framework_role": "T7 中「LLM-as-judge 可靠性怎麼驗證」的方法論來源之一：主張 judge 要用系統層級排名是否與真人一致來驗證，而不是只看逐例一致率；提出以 bias／variance 分解評估 judge；指出 judge 的變異度會改變下游結論（低變異的單一 GPT-4 會掩蓋過度最佳化）；並實測 judge 的位置偏差、自我偏好與長度／列表偏好。它也是 AlpacaEval 805 題評估集與「對參考模型 win-rate」協定的出處。對 T6 有旁支啟示：模擬回饋者（或使用者模擬器）必須重現人類的變異，而不只是平均偏好，否則在模擬中得到的方法結論會失真；但本文模擬的是標註者而非對話使用者。",
+  "edges": [
+    {
+      "edge": "E6",
+      "how": "以 Alpaca Demo 上的真實使用者互動紀錄作為評估設計的依據：先用它決定公開評估集的組合方式，再人工篩出 200 條真實指令，比較 11 個系統在真實互動與 805 題評估集上的模擬 win-rate（r²=0.97），用互動紀錄驗證評估集的代表性。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "AlpacaEval 官方 README 說明其資料集是 AlpacaFarm 評估集的簡化版（把 instruction 與 input 合併、參考輸出較長），並說明 AlpacaEval 的評估除了欄位合併外與 AlpacaFarm 相同。來源：https://github.com/tatsu-lab/alpaca_eval",
+      "Hugging Face H4 的官方 model card（zephyr-7b-beta）在評估表中列出 AlpacaEval win-rate 90.60%。來源：https://huggingface.co/HuggingFaceH4/zephyr-7b-beta",
+      "Allen Institute for AI 的官方 model card（tulu-2-dpo-70b）在評估表中列出「AlpacaEval (win rate %)」95.1。來源：https://huggingface.co/allenai/tulu-2-dpo-70b"
+    ],
+    "assessment": "被採納的是評估題集與「對參考模型的 win-rate」協定，而且是透過其後繼 AlpacaEval：Hugging Face 與 AI2 在官方模型發布中用它報分。這些 model card 用的是 AlpacaEval 自己的標註者設定，不一定是本文的 13 標註者池。模擬器本體（模擬回饋訓練、25% 雜訊、參考實作）未見產品或部署的採用證據。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/tatsu-lab/alpaca_farm",
+    "data": "論文稱 AlpacaFarm 全部元件公開，包含模擬標註者提示詞、805 題評估集與人類偏好資料（附錄 D 另稱會釋出含「略好」的細粒度標籤）；用來驗證評估集的 200 條 Alpaca Demo 指令因使用條款不公開。模擬標註依賴 OpenAI API 的 GPT-4（0314 世代）、ChatGPT、Davinci003，其中 Davinci003 等舊模型已被 OpenAI 停用，要完全重現模擬結果有困難。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它提出以系統層級排名驗證 judge、用 bias／variance 分解評估 judge，也揭示 judge 變異會改變結論，是 AlpacaEval 評估集的出處；但主要貢獻是 RLHF 研究用的模擬器，只涵蓋單輪指令、不涉及 agent，而 judge 可靠性的核心證據只建立在約 6 個自訓系統上，因此非 T7 必讀。",
+  "related": [
+    "2306.05685",
+    "2305.01937",
+    "2303.16634",
+    "2210.10760",
+    "2203.02155",
+    "2204.05862",
+    "2212.08073",
+    "2305.18290"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

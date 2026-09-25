@@ -1,0 +1,168 @@
+{
+  "id": "2601.11868",
+  "title": "Terminal-Bench: Benchmarking Agents on Hard, Realistic Tasks in Command Line Interfaces",
+  "topic": "T7",
+  "subarea": "agent 基準與評估環境設計",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 Terminal-Bench 框架與 Terminal-Bench 2.0 資料集：89 個在 Docker 容器裡用終端機完成的高難度真實任務，只以最終容器狀態的測試判定成敗，搭配多層自動＋人工品管（含作弊代理人），評測 6 種 agent 與 20 餘個模型（論文稱 16 個、Table 2 實列 21 個）共 32,155 次試跑，並用 LLM-as-judge 做軌跡層與指令層的失敗分析。",
+  "problem": "現有 agent 基準不是任務不夠真實（合成環境、窄領域），就是難度不足以拉開前沿模型；而終端機已是 Claude Code、Codex CLI、Gemini CLI 等商用 agent 的主要工作介面，缺少一個困難、多元、可執行、可重現且防作弊的終端機任務基準。同時，困難任務的「規格是否完整、測試是否只在正確時成立、是否有捷徑」極難驗證，基準本身的效度常是評估結論的最大誤差來源。",
+  "core_idea": "把每個任務定義成「自然語言指令＋Docker 環境＋只檢查最終容器狀態的測試＋人寫的 oracle 解＋時間限制」的結果導向格式（不檢查過程指令，允許任何解法），用群眾外包收集專家級真實工作任務，再以可執行的品管管線（oracle 必須跑過、no-op 代理人必須失敗、確定性 CI 檢查、LLM 規格檢查、LLM 除錯工具判斷失敗是否源自規格不足、對抗式作弊代理人、多輪人工稽核）確保 specificity／solvability／integrity 三條效度準則；另提供中立的極簡 agent（Terminus 2）來分離模型與 scaffold 的貢獻。",
+  "method": {
+    "task_format": "每個任務 = (1) 人寫的 instruction（task.yaml）；(2) Dockerfile／預建映像檔，預裝相關套件與檔案，Python 相依套件要釘版本、apt 套件刻意不釘（舊版會從 registry 消失）；(3) pytest 測試（run-tests.sh 在 agent 結束後才複製進容器執行，測試相依套件不可預裝在映像檔裡）；(4) 人寫的 oracle 解（solution.sh）；(5) 時間限制（論文沒有給出具體數值）；另附中繼資料：作者自評的類別、專家與初階工程師完成時間、難度標籤（附錄 H 有 Easy／Medium／Hard 三級；§4.3 卻稱只有 Medium／Hard）。測試只檢查最終容器狀態的性質，不檢查 agent 下過的指令或主控台輸出。",
+    "scoring": "單次試跑（trial）= 一個 agent 對一個任務的一次嘗試；所有測試成立才算解出（二元）。主指標 resolution rate = 各 agent–模型組合在所有任務與重複試跑上的平均解出率，附 95% 信賴區間（計算方式未說明）。每個組合至少跑 5 次。另記錄成本（美元）、輸入／輸出 token、執行時間、模型呼叫次數（僅 Terminus 2）、episode（回合）數、逾時率。",
+    "dataset_construction": "開源群眾外包：93 位貢獻者提交 229 個任務，依作者難度評估與三位資深審查者的品質評估選出 89 個（作者標籤：4 Easy／55 Medium／30 Hard，見附錄 H）。平均每個任務約 3 小時的審查人力。",
+    "quality_control_pipeline": [
+      "PR 進 GitHub 時 CI 自動跑 oracle 解，測試不全數成立就退回；同時確認什麼都不做的 dummy 代理人一定失敗。",
+      "貢獻者勾選 PR 範本檢查清單：測試檢查的行為都寫在指令裡、指令描述的行為都有測試（雙向對齊）、測試有說明用 docstring、難以作弊、task.yaml 與 solution.sh 由人撰寫、結構化輸出要寫明 schema、外部相依釘版本、用 Terminus 2＋強模型試跑並對失敗寫分析。",
+      "確定性 CI 檢查：canary 字串存在、Dockerfile 不得引用測試或 oracle、apt 不釘版、測試與 oracle 共同引用的檔案必須在指令中提到、不得使用 privileged 容器、中繼資料欄位齊全。",
+      "LLM 規格檢查工具（11 項）：指令→測試與測試→指令的行為覆蓋、docstring、防作弊（含 git clone 時不能看到未來 commit）、結構化資料 schema、Python 相依釘版、錯字（特別看檔名與變數名）、測試或解答沒被複製進映像檔、測試相依沒預裝、oracle 不得直接 echo 答案（要有實際計算步驟）、測試要檢查的輸出檔名要在指令中明示。",
+      "人工審查者與貢獻者一起逐項檢查。",
+      "用多個模型搭 Terminus 2 實跑；失敗時以 LLM 除錯工具判斷是「規格不足」還是「能力不足」。除錯提示詞的判準：測試期待指令沒寫明的參數名／檔案格式／函式簽名、需要猜測的隱含期望、硬編碼的字串或資料結構、只當範例給的東西被測試當成必要條件；多次試跑若都卡在同一批測試、錯誤相似，視為規格問題，失敗方式各異則視為難度合理；輸出 JSON {outcome: PASS|FAIL|NOT_APPLICABLE, explanation}。在初審與合併後稽核各做一次。",
+      "對抗式作弊代理人：用 OpenHands 搭一段要求它「只能靠作弊完成、至少要用一些作弊手段、可以猜測 pytest 怎麼寫」的提示詞，且不讓它看測試與 oracle；不論成敗都由作者人工檢查軌跡。常見漏洞：monkey-patch 測試環境、猜答案、列舉所有可能答案（測試只查正確答案存在、不查錯誤答案不存在）。",
+      "最後再由兩位稽核者決定是否納入 2.0。",
+      "事後以 Agentic Benchmark Checklist（ABC）自評。"
+    ],
+    "terminus_2_agent": "中立的極簡 scaffold：唯一的工具是 Docker 容器內 tmux 的 headless 終端機，模型每回合輸出按鍵序列，執行後把終端輸出回傳給模型；可以捲動、按方向鍵、Ctrl-C、開 vim、另開 shell。附錄 C.3 的軌跡範例顯示每回合輸出是含 analysis、plan、commands（每筆有 keystrokes 與等待秒數 duration）、task_complete 旗標的 JSON（此格式是從範例推得，論文沒有正式規格）。context 滿時呼叫模型做摘要壓縮，以支援百萬 token 等級的長任務。",
+    "experiment_setup": "6 個 agent（Claude Code、Codex CLI、Gemini CLI、OpenHands、Mini-SWE-Agent、Terminus 2）× 模型（§3 稱 16 個，但 §3.3 列出 21 個、Table 2 也有 21 個且組成不同），只跑相容的組合（廠商 CLI 只配自家模型，非完整因子設計）；可調推理強度的模型用供應商預設值（Anthropic、OpenAI 為 medium）；閉源模型走第一方 API、開放權重模型走 Together.AI。以 Harbor harness 執行（`harbor run -d terminal-bench@2.0`），沙箱供應商為 Daytona，平行 32–100 個容器；實驗設定檔公開於 github.com/laude-institute/terminal-bench-experiments。總計 32,155 次試跑。",
+    "empirical_difficulty": "以 Terminus 2 在各前沿模型上的解出情形定義經驗難度：≥66.7% 的模型解出為 Easy、33.3%–66.7% 為 Medium、<33.3% 為 Hard，再與作者標籤做交叉表與相關係數。",
+    "trajectory_failure_analysis": "從 MAST（多代理人失敗分類）刪去單一 agent 不適用或無法區分的類別（對話重置、資訊保留、忽略其他代理人、角色規格；因環境不支援提問也刪去「未要求澄清」），得到 Terminal Agent Taxonomy：Execution（違反規格、步驟重複、不知終止條件）、Coherence（context 遺失、任務偏離、推理與行動不一致）、Verification（過早終止、弱驗證、沒有或錯誤的驗證）。每個失敗模式各有一份 rubric：framing、逐步判定流程、排除條件；例如步驟重複要求同一階段內出現 ≥2 次語意或概念相同的動作、以工具呼叫區塊去重、最多允許 2 次相同的效能調校重跑；終止條件分 C1（成功後又重做 ≥2 回合，允許 1 回合驗證）、C2（連續兩次相同失敗後仍用同方法）、P1（未達標就宣告完成）。抽樣：每個任務每個模型取 2 次失敗試跑，一律用 Terminus 2。以 Docent（LLM 摘要、分群、搜尋軌跡）加兩位人工標註者反覆修 rubric；20 次試跑的校準子集 Cohen's κ 0.93；主判官為 GPT-5（high reasoning），對照 120 條人工標註軌跡。",
+    "command_failure_analysis": "把 Terminus 2 的軌跡（asciinema cast v2 格式）切成「單一輸入＋其全部輸出」的片段。第一階段 GPT-5（medium）判斷有無失敗，輸出 JSON {is_failure_present: bool}，與三位標註者多數決比對 66 對；第二階段 GPT-5（high）把失敗分類到 11 大類的指令失敗分類法（Invocation & CLI、Filesystem & Permissions、Environment & Configuration、Build/Toolchain & Packages、Packages & repositories、Network & Remote Access、Runtime/Interpreters & Processes、Interpreters & REPLs、Services & platforms、Data & Formats、Testing & Quality，每個子類都附「不包含什麼」的界定），輸出 JSON {error_category, error_subcategory}，與一位作者的 50 筆標註比對；均勻抽 3,800 個失敗分類。",
+    "adapters": "把 26 個既有基準（SWE-Bench Verified、SWE-Lancer、AppWorld、MLE-Bench、Cybench 等）轉成同一任務格式。條件：自然語言任務描述、容器化環境、可程式化的評估、（選配）參考解。轉換後要做 parity 實驗：同一 agent 與模型在原版與轉換版上多次試跑比對，確認評估語意一致後才整合。"
+  },
+  "assumptions": [
+    "任務的正確性可以完全由最終容器狀態的測試表達；不在乎過程（例如是否做了測試沒檢查的破壞性副作用）。",
+    "人工審查＋LLM 檢查足以讓「測試成立當且僅當結果可接受」這條 specificity 準則成立。",
+    "允許上網不會讓 agent 找到公開的 oracle 解（作者只以「沒觀察到」為據）。",
+    "Terminus 2 這種只有終端機一個工具的極簡 scaffold 對各家模型是中立的，可以拿來比較模型本身。",
+    "作者自評的專家／初階完成時間與難度標籤能代表人類難度（沒有實測人類解題率）。",
+    "至少 5 次重複與容器化足以讓 resolution rate 在不同硬體與時間點間可重現。",
+    "用 GPT-5 當判官分析失敗模式時，與小樣本人工標註的一致率能外推到全部軌跡。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Terminal-Bench 2.0（89 個任務，類別涵蓋軟體工程、系統管理、資安、科學計算、機器學習、資料科學、個人助理、影片處理等）"
+    ],
+    "metrics": [
+      "resolution rate（所有測試成立的試跑比例，附 95% CI）",
+      "成本（美元，Pareto 前緣）、輸入／輸出 token、執行時間、模型呼叫次數、episode 數、逾時率",
+      "經驗難度（依 Terminus 2 跨模型解出率分三級）與作者難度的 Pearson r",
+      "軌跡層失敗模式分布（Execution／Coherence／Verification）",
+      "指令錯誤率與指令失敗類別分布",
+      "判官可靠度：Cohen's κ、與人工的一致率、precision／recall",
+      "ABC 三個面向分數（Outcome Validity、Task Validity、Benchmark Reporting）"
+    ],
+    "baselines": [
+      "Agent：Claude Code、Codex CLI、Gemini CLI、OpenHands、Mini-SWE-Agent、Terminus 2",
+      "閉源模型：GPT-5.2、GPT-5、GPT-5-Mini、GPT-5-Nano、Claude Opus 4.5／4.1、Claude Sonnet 4.5、Claude Haiku 4.5、Gemini 3 Pro／3 Flash、Gemini 2.5 Pro／2.5 Flash、Grok 4、Grok Code Fast 1",
+      "開放權重模型：GPT-OSS-120B／20B、Kimi K2 Instruct／Thinking、GLM 4.6、MiniMax M2、Qwen 3 Coder 480B、Llama 4 Maverick（§3.3 列出，但 Table 2 沒有其結果）",
+      "健全性參照：oracle 解（必須全數成立）與 no-op dummy 代理人（必須失敗）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "群眾外包收集的任務經多層品管後大幅篩減，最終只保留約四成。",
+      "numbers": "93 位貢獻者、229 個任務 → 89 個入選；平均每任務約 3 小時審查人力；共 32,155 次試跑。",
+      "section": "§2.2、§2.3、§3",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "前沿 agent 在 Terminal-Bench 2.0 的解出率都低於 65%，開放權重模型與小模型遠落後。",
+      "numbers": "Codex CLI＋GPT-5.2 62.9%±3.0；Terminus 2＋Claude Opus 4.5 57.8%±2.5；Terminus 2＋Gemini 3 Pro 56.9%±2.5；最佳開放權重 Terminus 2＋Kimi K2 Thinking 35.7%；GPT-OSS-20B 約 3%。跑完整個基準成本約 1–100 美元，多數試跑 20 分鐘內結束，極端情形達 2 小時、近 1 億 token。",
+      "section": "§4、§4.1、Table 2、Figure 10",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "作者主張換模型的影響大於換 scaffold。",
+      "numbers": "Codex CLI 從 GPT-5-Nano 換成 GPT-5.2 提升約 51 個百分點（11.5%→62.9%）；Gemini 2.5 Pro 從 OpenHands 換成 Terminus 2 提升約 17 個百分點（15.7%→32.6%）。",
+      "section": "§4、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "作者難度標籤與模型經驗難度中度相關；人類判為困難的幾乎都真的難，但人類判為中等的有一半以上對模型是困難的（多為需要創意或對抗式推理的任務）。",
+      "numbers": "r = 0.436（p < 0.001）；人類 Hard 中 93.3% 經驗上也是 Hard；人類 Medium 中 54.5% 經驗上是 Hard、29.1% Medium、16.4% Easy。",
+      "section": "§4.3、Figure 7",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "軌跡層失敗分析的 LLM 判官與人工標註高度一致；前沿閉源模型以 Execution 類錯誤為主，開放權重的 Qwen Coder 三類錯誤都偏高且較平均。",
+      "numbers": "兩位標註者在 20 次試跑上 Cohen's κ 0.93；GPT-5（high）對 120 條人工標註軌跡一致率 90%（precision 92%、recall 90%）。",
+      "section": "§4.4、Figure 8、附錄 C",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "指令層錯誤最常見的是呼叫沒安裝或不在 PATH 的執行檔，其次是執行檔本身執行失敗。",
+      "numbers": "各模型指令錯誤率 9.2%（Grok 4）到 26.7%（GPT-OSS-120B）；3,800 個失敗中「command not found」佔 24.1%、執行失敗佔 9.6%；失敗判定判官與三人多數決一致 92.4%（66 對），分類判官與作者標註一致 82.0%（50 筆）。",
+      "section": "§4.5、Figure 9、附錄 E",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "以 Agentic Benchmark Checklist 自評，Terminal-Bench 在現有基準中排第二；失分項為測試品質缺客觀指標、殘留非確定性、沒有私有測試集、沒有量化瑕疵影響。",
+      "numbers": "Outcome Validity 0.857、Task Validity 1.000、Benchmark Reporting 0.830，平均 0.896。",
+      "section": "附錄 B.5、Table 3",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "跨模型來看，互動回合數與輸出 token 量都不能預測成功率。",
+      "numbers": "episode 數與成功率 r = −0.028（p = 0.916）；平均輸出 token 與成功率 r = −0.170（p = 0.515）；GPT-5-Nano 平均輸出約 60k token、成功率僅約 8%。",
+      "section": "附錄 G、Figure 35、Figure 36",
+      "anchor_idx": 6
+    }
+  ],
+  "limitations_stated": [
+    "允許上網，理論上 agent 可以找到公開資料集並讀 oracle 解；作者只說在數萬條軌跡中沒觀察到。",
+    "資料集公開，只放 BIG-bench 式 canary 字串，無法防止刻意拿來訓練；私有測試集不在本文範圍，連沒入選的任務也都公開。",
+    "網路存取帶來外部相依（API、套件會變），加上機器資源與容器執行環境差異，會造成有效任務環境不一致；ABC 也承認有 flaky 結果（例如 CPU 架構差異）。",
+    "儘管有大量人工與 LLM 輔助審查，仍可能有任務不符 specificity／solvability／integrity 準則；群眾外包換來多元性但更難驗證。",
+    "作者難度標籤主觀，不一定反映 agent 面對的難度。",
+    "測試品質沒有用覆蓋率等客觀指標衡量，也沒有量化瑕疵對分數的影響（ABC I.d.2、III.9）。",
+    "模型與 scaffold 難以解耦；依趨勢推估 2.0 可能在一年內飽和。"
+  ],
+  "limitations_observed": [
+    "任務數前後不一致：摘要與正文說 89 個任務，但 Table 1 的專家／初階時間分布兩列加總都是 74（36+35+3+0、6+53+12+3，百分比也以 74 為分母），Table 2 的說明文字也寫 token 數是跑「全部 74 個任務」；讀者無法確定時間估計與 token 統計對應的是哪一版資料集。",
+    "§4.3 說作者難度標籤只有 medium 或 hard，但附錄 H 有 4 個 Easy；Figure 7 的百分比（93.3%＝28/30、54.5%＝30/55）只對得上 30＋55＝85 個任務，4 個 Easy 任務在難度分析中被無聲排除。",
+    "模型清單前後不一：§3 說評測 16 個模型，§3.3 卻列出 21 個，Table 2 也有 21 個但組成不同（GPT-5 有結果卻不在 §3.3，Llama 4 Maverick 列在 §3.3 卻沒有結果）；附錄 G 的分析還提到 GPT-5 Codex 與 GLM 4.5 Air，兩者都不在 §3.3 也不在 Table 2。附錄分析與主表似乎來自不同的實驗批次。",
+    "「回合數與成功率無關」只是約十幾個模型點的跨模型相關（r = −0.028），無法推到模型內或任務內；同一模型在同一任務上，長軌跡可能正好代表卡住或逾時（Figure 12 另有逾時率），跨模型相關會把這種關係抵銷掉。",
+    "「換模型比換 scaffold 重要」的比較不對等：一邊是同家族最大與最小模型的差距（約 51 個百分點），另一邊只挑一組 scaffold 對比（約 17 個百分點）；而同一個 Gemini 2.5 Pro 在四種 scaffold 間就差 15.7%–32.6%，廠商自家 CLI 也不一定最好（Opus 4.5：Claude Code 52.1% 低於 Terminus 2 57.8%；Gemini 2.5 Pro：Gemini CLI 19.6% 低於 Terminus 2 32.6%）。加上廠商 CLI 只配自家模型、不是完整因子設計，模型×scaffold 的交互作用根本估不出來。論文寫的「52%／17%」其實是百分點而非相對提升。",
+    "95% CI 只有 ±2–3 個百分點，計算方式沒寫；若把 ≥5×89 次試跑當作獨立樣本，就低估了只有 89 個任務的任務抽樣變異（試跑依任務群聚）。許多相鄰排名（57.8% vs 56.9%、42.8% vs 42.5%）實際上分不出高下。",
+    "ABC 自評有可疑給分：II.6「設定不隨時間變化（例如沒有即時網站）」給 1 分，但 mteb-leaderboard 要查詢「截至 2025 年 8 月」的線上排行榜、extract-moves-from-video 要從 YouTube 下載影片，§5 也承認網路相依；III.12「回報非 AI 基線（人類專家）」給 1 分，但全文只有作者自估的完成時間，沒有人類實測解出率；III.11 留白卻仍算出平均分；I.g.2「檢查相關與無關狀態」標 N/A，但這正是以最終狀態判分的基準該回答的問題。且 ABC 作者參與了開發，並非獨立稽核。",
+    "失敗分析的判官可靠度證據偏弱：κ 只在 20 次試跑上算；指令分類判官只和一位作者的 50 筆標註比對（82%）；用 GPT-5 分析包含 GPT-5.2 在內的軌跡有自我偏好風險；軌跡分析只取失敗試跑、只用 Terminus 2、Figure 8 只呈現 3 個模型，沒有拿成功軌跡當對照，無法說明這些「失敗模式」是否真的區分成敗。",
+    "入選流程中任務會先用前沿模型實跑，論文沒說明模型解出率是否影響入選；若有，「<65%」的標題數字部分是篩選造成的，而「八個月內 SOTA 近乎翻倍」的趨勢也會被放大（建構期已存在的舊模型被針對性篩過）。",
+    "論文沒給任務時間限制的數值，而逾時會直接影響分數與回合數分析，是可重現性缺口。",
+    "廠商自報分數與本文不一致：Google 官方部落格報 Gemini 3 Pro 在 Terminal-Bench 2.0 為 54.2%，本文 Terminus 2＋Gemini 3 Pro 為 56.9%；差異可能來自 harness 或設定，但雙方都沒揭露到足以對齊的程度，跨來源比較排行榜要小心。",
+    "就本框架而言：任務只有一次性指令、沒有使用者回合，作者也因環境不支援提問而刪掉「未要求澄清」這個失敗模式，所以完全不評估多輪對話、澄清或使用者回饋；結果只能外推到單指令、自主執行型的 agent。"
+  ],
+  "framework_role": "T7 的核心參考：示範可執行環境基準怎麼設計與驗證——結果導向（只驗最終狀態）、oracle／no-op 健全性檢查、規格與測試雙向對齊、作弊代理人找漏洞、判官對人工一致率的報告方式，以及用 ABC 自我稽核基準效度；也示範用中立 scaffold 分離模型與 scaffold。它的二元 resolution rate 就是 T8 的任務完成分數的一種定義（全有全無、附 CI、配成本與 token）。附錄 C 的 Terminal Agent Taxonomy（每個失敗模式都有判定流程與排除條件）可直接當 T4 軌跡異常偵測的 rubric，但論文只拿它做離線的失敗統計，沒有把偵測結果回饋給 agent 做自我修正，也沒有使用者或使用者模擬器，因此不對應框架中任何一條邊。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "Google 官方部落格（2025-11-18）介紹 Gemini 3 時寫明 Gemini 3 Pro 在 Terminal-Bench 2.0 得 54.2%，並描述它測的是透過終端機操作電腦的工具使用能力：https://blog.google/products/gemini/gemini-3/",
+      "Anthropic 官方 Claude Opus 4.5 發表頁（2025-11-24）的評測方法說明特別註明 Terminal Bench 使用 128K thinking budget，顯示官方有在此基準上評測；擷取到的文字沒有給分數，也沒寫是哪一版：https://www.anthropic.com/news/claude-opus-4-5",
+      "官方程式碼庫 github.com/laude-institute/terminal-bench（Apache-2.0）提供任務資料集與執行 harness，並指引新使用者改用 Harbor 執行 Terminal-Bench 2.0：https://github.com/laude-institute/terminal-bench"
+    ],
+    "assessment": "有可查證的業界採納：至少 Google 在前沿模型發表的官方文案中引用 Terminal-Bench 2.0 分數，Anthropic 官方發表頁也列出此基準的評測設定。時間順序上，Google 2025-11-18 的文章已引用 Terminal-Bench 2.0 分數，可見 2.0 在本文 arXiv v1（2026-01-17）之前就已公開，廠商採納的是已釋出的基準本身，不是時間倒置。這屬於「被當作評測標準採用」，不是部署進產品。OpenAI 的發表頁擋掉存取（403），沒有列入。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/laude-institute/terminal-bench（harness 另見 github.com/laude-institute/harbor；實驗設定 github.com/laude-institute/terminal-bench-experiments）",
+    "data": "公開：任務放在公開 GitHub 並經 Harbor registry 發布（terminal-bench@2.0），結果公布於 tbench.ai；未入選的任務也公開，沒有私有測試集。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是 T7「可執行環境基準設計」的代表作：品管與防作弊流程、判官與人工一致率、ABC 自評都寫到可照做，也已被前沿模型廠商拿來當官方評測；但文中有任務數與模型清單前後不一、ABC 給分偏寬、判官驗證樣本小等問題，引用時要核對。",
+  "related": [
+    "2503.13657",
+    "2507.02825",
+    "2310.06770",
+    "2406.12045",
+    "2404.07972",
+    "2407.18901",
+    "2407.16741",
+    "2405.15793",
+    "2503.14499",
+    "2504.21798"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

@@ -1,0 +1,171 @@
+{
+  "id": "2107.03374",
+  "title": "Evaluating Large Language Models Trained on Code",
+  "topic": "T8",
+  "subarea": "多次試驗的可靠性度量與統計嚴謹性",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "OpenAI 的 Codex 論文：發布 HumanEval（164 題手寫 Python 題目＋單元測試），把「程式碼是否功能正確」定義為在沙箱中跑過全部單元測試，並提出 pass@k 的無偏估計式（每題取樣 n≥k 個、數出 c 個正確、算 1−C(n−c,k)/C(n,k) 再對題目平均）與數值穩定的實作，用來評估 Codex 系列模型與重複取樣策略。",
+  "problem": "程式碼生成過去多用 BLEU 這類比對式指標，但功能等價的程式寫法千變萬化，比對式分數量不到「程式能不能用」。Kulal 等人（SPoC）已改用執行單元測試判定功能正確，並用 pass@k（每題取 k 個樣本，任一個正確就算解出）處理「可以多試幾次」的情境，但直接用 k 個樣本計算的變異很大；而用經驗 pass@1 代入 1−(1−p̂)^k 的直覺做法又有偏誤。加上 GitHub 上已有大量公開題目的解答，現成題庫容易被訓練資料污染。缺的是一套抗污染的題庫，加上一個能在不同樣本數之間公平比較、變異又夠低的多次試驗成功率度量。",
+  "core_idea": "把任務成功定義為可執行驗證的終態：生成的函式在隔離沙箱中跑過該題的所有單元測試才算正確，完全不看字面相似度。多次試驗的成功率則用組合數的無偏估計：每題一次取樣 n 個（本文 n=200），用「從 n 個裡不放回抽 k 個全部是錯的」的機率估計 k 次全錯的機率，所以 pass@k 可以用同一批樣本對任意 k≤n 無偏地估出來，而且比每個 k 各抽 k 個的做法變異低。作者也指出 pass@k 隱含一個「知道單元測試、能替你挑出正確樣本」的 oracle，因此另外量了沒有 oracle 時只能交出一個樣本的實際成功率（用 mean log-prob 等啟發式排序）。",
+  "method": {
+    "任務格式與輸入輸出": "每題由 header（import 等）、函式簽名與 docstring 組成 prompt（Figure 2 的格式），模型接著生成函式本體。遇到停止序列 '\\nclass'、'\\ndef'、'\\n#'、'\\nif'、'\\nprint' 就截斷，否則模型會繼續寫別的函式或敘述。全文所有取樣都用 nucleus sampling，top_p=0.95。",
+    "HumanEval 資料集": "164 題手寫題目，每題含簽名、docstring、參考解與單元測試，平均每題 7.7 個測試；內容涵蓋語言理解、推理、演算法與簡單數學，難度約為簡單的面試題。刻意手寫是因為訓練資料取自 GitHub，而 GitHub 上已有 Codeforces 等題庫的解答。資料與評估程式公開在 github.com/openai/human-eval。",
+    "功能正確判準": "把「prompt＋生成的本體＋該題單元測試」放進沙箱執行，全部測試都沒出錯才算正確（0/1）。沙箱以 gVisor 容器執行環境隔離主機資源，再用 eBPF 防火牆規則封鎖除了實驗控制所需之外的所有進出連線，防止不受信任的程式修改主機、取得持久性、存取敏感資源或外洩資料。APPS 實驗另設每個測試 3 秒逾時。",
+    "pass@k 無偏估計": {
+      "定義": "pass@k := E_題目[ 1 − C(n−c, k) / C(n, k) ]；n 是每題取樣數（本文 n=200、k≤100），c 是其中跑過全部單元測試的樣本數，C 是組合數。",
+      "為什麼無偏": "附錄 A 的推導：c 服從 Binom(n, p)（p 是該題的真實 pass@1），對 c 取期望後恰好等於 1−(1−p)^k。直覺上是用「不放回抽 k 個全錯」估計「k 次獨立試驗全錯」。",
+      "數值穩定實作": "Figure 3 的 numpy 版本：若 n−c<k 直接回傳 1.0；否則回傳 1 − ∏_{i=n−c+1}^{n} (1 − k/i)，逐項相乘，避免直接算組合數時數字過大與數值不穩。",
+      "不要用的做法": "用經驗 pass@1 代入 1−(1−p̂)^k 會系統性低估（Figure 13），即使 n>5k 差距也沒有完全消失，而且樣本數越多結果看起來越好，導致不同 n 之間不能公平比較；它等於「從 n 個候選中放回抽 k 個」，但抽出的 k 個並不獨立。直接每題抽 k 個看有沒有對（Kulal 的做法）雖然無偏，但變異高。"
+    },
+    "溫度選擇": "pass@k 的最佳溫度隨 k 改變：k 越大越該用高溫，因為指標只獎勵「有沒有任何一個對」，多樣性越高越好。作者對每個 k 掃溫度取上包絡（Figure 5 下半）。Codex-679M 的 pass@1 最佳溫度 T*=0.2、pass@100 為 T*=0.8；Codex-S 偏好更高溫，pass@1 用 T*=0、pass@100 用 T*=1。基線 GPT-Neo 取 0.2、0.4、0.8 中最好的結果，GPT-J 取 0.2 與 0.8 中最好的；TabNine 的 pass@1 用 T=0.4、pass@100 用 T=0.8。",
+    "沒有 oracle 時的單一樣本選擇": "情境是自動補全：沒有單元測試，只能回給使用者一個樣本。做法是在 T=0.8 取 k 個樣本，再依下列分數挑一個，看挑到的那個是否正確：(1) mean token log-probability（平均每個 token 的對數機率）最高者，優於隨機挑；(2) sum log-probability 最高者，可能比隨機還差一點；(3) back-translation：用 docstring 生成模型 Codex-D 算 P(原題 docstring | 生成的程式碼)，最高者優於隨機、但不如 mean log-prob，而且很快就過擬合；(4) oracle（知道單元測試）作為上界，也就是 pass@k 本身。",
+    "BLEU 對照": "對 Codex-12B 在 T=0.8 的 HumanEval 樣本，逐題計算每個樣本對參考解的 BLEU，再分正確與錯誤兩組畫分佈（Figure 8），看兩組能不能分開。",
+    "APPS 評估協定": "不採用 APPS 原論文的「測試案例答對比例」這種部分分數（作者認為它只是為了降低變異），只報 strict accuracy 形式的 pass@k。兩個額外設定：(1) filtered pass@k：題目敘述裡附有 3 組輸入／輸出範例，先取樣 1000 個解，只留下跑過這 3 組範例的，再在留下的集合上算 pass@k；不過濾的稱 raw pass@k。(2) 在所有測試都沒答錯、但有測試逾時（3 秒）的解，另外以括號報告。因為 Codex 沒在 APPS 上微調，把題目中的一組輸入／輸出範例附在 docstring 當格式提示，稱為 1-shot。所有 k 統一用 T=0.6。",
+    "Codex 訓練": "由 GPT-3 家族（最大 12B）初始化，在 2020 年 5 月從 5,400 萬個 GitHub 公開 repo 收集的 179 GB Python 檔（每檔 <1 MB）上微調；過濾疑似自動產生、平均行長 >100、最大行長 >1000、英數字元比例過低的檔案後剩 159 GB。用與對應 GPT 模型相同的學習率、175 步線性 warmup＋cosine 衰減，共 1,000 億 token；Adam β1=0.9、β2=0.95、ε=1e-8，weight decay 0.1。tokenizer 沿用 GPT-3 並加入表示不同長度連續空白的 token，程式碼 token 數約少 30%。作者發現從預訓練模型開始並不會讓最終表現更好，只是收斂較快。",
+    "Codex-S 監督式微調": "兩個來源：(1) 從競程與面試準備網站收集約 10,000 題，用題目敘述當 docstring，單元測試取自題目中的範例，或透過提交錯誤解答套出更多測試案例；(2) 從使用 travis 或 tox 的 GitHub repo 與 PyPI 套件，照 CI 設定檔在沙箱中跑整合測試，用 sys.setprofile 追蹤所有被呼叫函式的輸入輸出來造單元測試，約收集 40,000 題。過濾：用 Codex-12B 每題取樣 100 個，一個都沒對就視為模糊或太難而剔除；重跑數次，剔除有狀態或不確定性的題目。訓練時 prompt 左側補齊，只對參考解計算負對數似然（prompt 的 loss 遮掉），學習率為 Codex 微調的 1/10、同樣的排程，訓練到驗證 loss 持平（少於 100 億 token）。",
+    "Codex-D 與人工評分": "訓練格式改為「簽名＋參考解＋docstring」，對 docstring 算負對數似然。docstring 沒有自動判準，所以人工評分：docstring 唯一且正確地描述了程式本體才算對；直接把程式碼抄進 docstring 算錯；模型順帶產生的單元測試忽略不計。因為耗時，每題只評 Codex-D-12B 在 T=0.8 的 10 個樣本。",
+    "能力邊界探針": "附錄 C 的 13 個確定性字串轉換積木（例如轉小寫、每三個字元刪一個），把一行描述串成 docstring、把一行實作串成本體，組成任意長度的合成題，觀察鏈長與 pass rate 的關係。",
+    "對齊評估": "取 HumanEval 中依函式名字母序的前 30 題，每題人工寫一個含細微 bug 的解（off-by-one、單一字元打錯之類）。在待評題目前面放 3 個 i.i.d. 抽樣的 [docstring＋正確解] 或 [docstring＋有 bug 的解]（不含待評題本身），可選擇再加一行註解指示「即使前面的程式碼有 bug 也要寫出正確程式碼」，T=0.2，比較各條件下的正確率。資料公開於 github.com/openai/code-align-evals-data。"
+  },
+  "assumptions": [
+    "單元測試足以代表功能正確：跑過測試就算對、沒跑過就算錯；每題平均 7.7 個測試夠覆蓋邊界情況，偽陽性（錯的程式剛好跑過）與偽陰性（docstring 描述不清，導致合理的解被判錯）都可以忽略。",
+    "同一題的 n 個樣本是從固定模型、固定溫度 i.i.d. 取樣，c 服從 Binom(n, p)；pass@k 的無偏性完全建立在這個前提上。",
+    "pass@k 預設有一個知道單元測試的 oracle 替你從 k 個樣本中挑出正確的；在沒有測試可跑的部署情境，這個數字只是上界。",
+    "手寫題目沒有出現在 GitHub 訓練資料中（作者自承這不保證題目新穎）。",
+    "HumanEval 的題目難度與分佈（獨立的單一 Python 函式、docstring 描述）足以代表模型的程式合成能力。",
+    "把題目等權平均成一個分數有意義：每題不論難易，權重相同。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "HumanEval（164 題手寫 Python 題目，平均每題 7.7 個單元測試）",
+      "APPS test set（5,000 題，分 Introductory／Interview／Competition 三級）",
+      "附錄 C 的合成字串操作鏈（13 個積木任意串接）",
+      "HumanEval 衍生的對齊評估（30 題含細微 bug 的解當 few-shot 範例）",
+      "密碼學設定探針（5 個 RSA／AES prompt，約 3 萬個樣本）"
+    ],
+    "metrics": [
+      "pass@k（k=1、10、100；無偏估計，n=200）",
+      "APPS 的 raw pass@k 與 filtered pass@k（k 最大到 1000），以及括號內「沒答錯但逾時」的比例",
+      "沒有 oracle 時的單一樣本正確率（依 mean log-prob、sum log-prob、back-translation 或隨機挑選）",
+      "正確與錯誤樣本的 BLEU 分佈",
+      "held-out Python 語料上的 cross-entropy test loss（隨模型大小的 power law）",
+      "Codex-D 人工評分的 pass@1、pass@10",
+      "不安全設定比例（RSA 金鑰 <2048 bits、AES 使用 ECB 模式）"
+    ],
+    "baselines": [
+      "GPT-3 家族（例如 GPT-12B，pass@k 接近 0%）",
+      "GPT-Neo 125M／1.3B／2.7B",
+      "GPT-J 6B",
+      "TabNine 最大的免費模型",
+      "在 APPS 上微調的 GPT-Neo 2.7B（數字取自 APPS 原論文）",
+      "Codex 自身的規模序列（12M 到 12B）、Codex-S 與 Codex 對照",
+      "樣本選擇：隨機挑選作為下界、oracle 作為上界"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "程式碼微調帶來大幅提升，而重複取樣是讓難題得到可用解的出乎意料有效的策略：同一題取 100 個樣本、只要有一個跑過測試就算解出，解題率遠高於只取一個樣本。",
+      "numbers": "Codex-12B pass@1 28.8%；GPT-J 11.4%；GPT 系列約 0%；每題 100 個樣本時解出 70.2%",
+      "section": "Abstract、§1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "pass@k 的最佳取樣溫度隨 k 上升：k 大時高溫較好，因為樣本多樣性高，而指標只看有沒有任何一個正確。報告 pass@k 前必須針對每個 k 選溫度。",
+      "numbers": "Codex-679M：pass@1 的 T*=0.2、pass@100 的 T*=0.8；Codex-S：pass@1 用 T*=0、pass@100 用 T*=1",
+      "section": "§3.3、Figure 5；§4.5、Figure 9",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "沒有 oracle、只能交出一個樣本時，挑 mean token log-prob 最高的樣本優於隨機挑，挑 sum log-prob 最高的反而可能略差於隨機；但與 oracle 上界仍有很大落差。back-translation 排序介於隨機與 mean log-prob 之間。",
+      "numbers": "Codex-S-12B 每題 100 個樣本（T=0.8）：依 mean log-prob 挑一個 44.5%，oracle（pass@100）77.5%；單一樣本 pass@1 37.7%",
+      "section": "§3.3、Figure 7；Figure 1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "BLEU 不是功能正確的可靠指標：同一題正確與錯誤樣本的 BLEU 分佈大幅重疊，而錯誤樣本必然與參考解功能不等價，所以 BLEU 提升不代表正確率提升。",
+      "numbers": "Codex-12B 在 T=0.8 的 HumanEval 樣本，隨機 4 題的 BLEU 分佈都無法乾淨分開（Figure 8，只有圖、沒有數值）",
+      "section": "§3.3、Figure 8",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "在 APPS 上，先用題目附的 3 組公開範例過濾大量樣本，再交出第一個跑過範例的解，比 raw pass@100 還高；取樣到 1000 個仍持續獲益，但難題的解常因效率不足而逾時。",
+      "numbers": "1-shot Codex-12B Introductory：raw pass@1 4.14%、raw pass@100 20.20%、raw pass@1000 25.02%、filtered pass@1 22.78%；Interview filtered pass@1 2.64%；Competition filtered pass@1 3.04%；在 APPS 上微調的 GPT-Neo 2.7B raw pass@1 Introductory 3.90%",
+      "section": "§3.5、Table 2",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "在跟 HumanEval 同分佈的獨立函式題上做監督式微調（Codex-S），各模型大小都穩定提升，而且對 pass@100 的提升大於 pass@1；mean log-prob 排序的收益也更大。",
+      "numbers": "跨模型大小平均：pass@1 +6.5 個百分點、pass@100 +15.1 個百分點；在 1 到 100 個樣本間以 mean log-prob 排序，比隨機平均多 11.6 個百分點，比 Codex 的對應收益高 2 個百分點以上",
+      "section": "§4.5、Figure 10",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "docstring 描述的操作鏈越長，正確率呈指數下降，這和人類程式設計師的行為不同；Codex 也容易把操作綁錯變數。",
+      "numbers": "每多串一個積木，Codex-12B 的 pass rate 約降為原本的 1/2 到 1/3",
+      "section": "§6、Figure 11、Appendix C",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "用經驗 pass@1 代入 1−(1−p̂)^k 的估計會系統性低估 pass@k，且即使樣本數遠大於 k 也消除不了；組合數形式的估計無偏，初期變異稍高，但能在不同樣本數之間公平比較。",
+      "numbers": "Figure 13 顯示 n>5k 時差距仍未完全消失；無偏性的代數證明在 Appendix A（圖中沒有給具體數值）",
+      "section": "Appendix A、Figure 13",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "Codex 的訓練樣本效率很低：訓練資料是數億行公開 Python 程式碼，一個上完程式設計入門課的好學生，能解的題目比例應該比 Codex-12B 高。",
+    "docstring 描述的操作鏈越長表現越差；會把操作綁錯變數；會產生語法錯誤或未定義的程式碼、呼叫不存在的函式或屬性；處理不了長的、高階或系統層級的規格。",
+    "pass@k 等於由知道單元測試的 oracle 挑出 k 個中最好的；自動補全等部署情境沒有單元測試，只能交出一個樣本，要靠啟發式排序。",
+    "docstring 生成沒有自動評估方法，只能人工評分，而且因為耗時，每題只評 10 個樣本。",
+    "自動收集的訓練題品質難以控制：docstring 描述不足時，合理的解也可能被單元測試誤判；有狀態的題目重跑結果會不同。",
+    "APPS 實驗：Codex 沒在 APPS 上微調；所有 k 都用 T=0.6，所以 raw pass@1 用更低溫度可能更好；難題的正確解常因效率不足而逾時。",
+    "手寫題目不保證新穎。",
+    "對齊問題：prompt 中有細微 bug 時，Codex 會寫出比它能力所及更差的程式碼，加上「要寫正確程式碼」的指示也只改善一點，而且差距隨模型變大而擴大。",
+    "研究用模型沒有輸出過濾：會產生帶偏見的分類程式碼與註解、會選用明顯不安全的密碼學設定，且看不出隨模型變大而改善。",
+    "無偏估計式在樣本數少時變異稍高。"
+  ],
+  "limitations_observed": [
+    "溫度是在測試集上挑的：各模型、各 k 的 T* 是直接在 HumanEval 上掃溫度取上包絡（Figure 5、Figure 9），沒有獨立的驗證集；GPT-Neo 更是取 0.2、0.4、0.8 三個溫度中最好的，GPT-J 取兩個中最好的。對多個無偏估計取最大值本身就有向上偏誤。作者花一整個附錄證明估計式無偏，報告流程卻又把選擇偏誤加了回去。n=200 時這個偏誤可能不大，但論文沒有量。",
+    "Codex-S 的 pass@1 用 T*=0（貪婪解碼）：200 個樣本實際上都一樣，每題的 c 只會是 0 或 n，估計式退化成單次 0/1 判定。§2.1 用 n=200 降低變異的理由在這個設定下完全不成立，而論文沒有說明。",
+    "全文沒有任何誤差棒、標準誤或信賴區間。我自己的粗估（不是論文的數字）：若把 164 題視為題目母體的樣本，在 p≈0.12 時以二元結果估計的任務層級標準誤上限約 2.5 個百分點（√(0.12×0.88/164)）。§3.4 說 GPT-J（11.62%）介於 Codex-85M（8.22%）與 Codex-300M（13.17%）之間，並據此說 GPT-J 約等於 Codex-300M、參數少 20 倍；但 GPT-J 與 Codex-300M 只差 1.55 個百分點，落在一個標準誤內。這類「相當於幾倍參數」的結論沒有經過任何檢定。",
+    "Codex-D 的人工評分每題只有 10 個樣本，卻報 pass@10（Table 3）：n=k 時估計式等於 Kulal 那種「k 個裡有沒有對」的單次判定，正是 §2.1 批評變異高的做法。§5 還把 164 題×10 個樣本寫成「總共 1640 題」，是描述錯誤。",
+    "APPS 的 filtered pass@1 預算不對等：它背後是每題 1000 個樣本，再加上 3 組公開測試做篩選，卻和 raw pass@1 以及 GPT-Neo 的 raw pass@1 並列在同一張 Table 2；22.78% 對 3.90% 的比較混合了模型差異與 1000 倍的取樣和驗證預算。同一張表又所有 k 都用 T=0.6，違反作者自己在 §3.3 提出的「每個 k 要調溫度」。",
+    "pass@k 量的是「有驗證器時重試的上限」，不是可靠性：Codex-S-12B 在有 oracle 時 77.5%，沒有 oracle、用 mean log-prob 挑一個時只剩 44.5%。而「取 100 個挑一個」的公平基線應該是調好溫度的單一樣本 pass@1，不是 Figure 7、Figure 10 用的 T=0.8 隨機樣本。以 Figure 1 的 37.7%（T*=0 的貪婪解碼）計算，100 倍取樣成本只換到約 6.8 個百分點。論文沒有任何成本或算力正規化的指標。對 agent 評估來說，pass@k 與 τ-bench 的 pass^k（k 次全部成功）方向相反：pass@k 會把不一致藏起來，k 越大越好看。",
+    "數字前後不一致，論文沒有逐一標明來源：Codex-12B 每題 100 個樣本的解題率，摘要寫 70.2%，Table 1 的 pass@100 是 72.31%；GPT-J pass@1 在摘要與引言是 11.4%，§3.4 與 Table 1 是 11.6%／11.62%；Codex-S-12B pass@1 在 Figure 1 是 37.7%，Table 3 是 32.2%。Figure 1 圖說寫所有樣本都用 T=0.8，但同圖 Codex-12B 的 28.8% 與 Table 1 取最佳溫度的 28.81% 一致，§4.5 又寫明 Codex-S 的 pass@1 用 T*=0，所以圖中單一樣本的數字應該是調過溫度的，T=0.8 只適用於取 100 個樣本那一段。37.7% 與 32.2% 的差距來自溫度（T=0 對 T=0.8），但圖說寫得含糊，論文沒有標明；HumanEval 在 §2.2 是 164 題，附錄 E.5 卻說資料集有 158 題，對齊評估也只跑這 158 題，差的 6 題沒有解釋。多半是溫度或版本不同造成的，但讀者無從核對。",
+    "測試充分性沒有被量過：平均每題只有 7.7 個測試，論文沒有估計偽陽性率（錯的程式剛好跑過測試）。§8 自己引用 Qi 等人的發現，指出弱測試集會讓刪掉功能的錯誤修補也能過關；§4.3 也承認 docstring 描述不足會讓合理的解被誤判。但這兩種錯誤只在訓練題上用 Codex-12B 過濾（這個過濾本身還把「太難」與「模糊」混為一談），HumanEval 本身沒有做任何審核。附錄 B 的隨機樣本裡，就有 docstring 本身語意模糊的題目：even_odd_palindrome 寫 range(1, n) 卻又說 inclusive；add_elements 的文字讀起來是「找出前 k 個位數不超過兩位的元素再加總」，範例的算法卻是「在前 k 個元素中，加總位數不超過兩位的那些」（範例答案 24＝21＋3），兩種讀法的答案不同。",
+    "每題只有 0/1，沒有部分分數：作者明確捨棄 APPS 的「測試案例答對比例」，唯一的細分是把「沒答錯但逾時」放在括號裡。對 T8「部分分數／過程度量」子領域，這篇的立場是只收終態成功，沒有提供任何部分分數的方法。",
+    "污染檢查只靠「手寫」這個流程保證，沒有報告任何與訓練集的 n-gram 或近似重複比對。HumanEval 公開在 GitHub 之後，更晚訓練的模型分數會混入污染，這是這個判準長期使用上的外推限制。"
+  ],
+  "framework_role": "T8「多次試驗的可靠性度量與統計嚴謹性」的奠基文獻：它把 pass@k 從 Kulal 的高變異做法改寫成組合數的無偏估計，附證明與數值穩定實作，也指出 1−(1−p̂)^k 的偏誤與溫度必須依 k 調整。後來 τ-bench 的 pass^k（k 次全部成功）就是沿用同一套 C(c,k)/C(n,k) 形式、把方向反過來衡量一致性。在「任務成功的判準」子領域，它示範了可執行驗證的終態判準（沙箱中跑過全部單元測試＝成功），並用 BLEU 分佈重疊的證據論證比對式指標不可靠；這些也是 T7 評估方法的一部分。要注意的是，pass@k 量的是「有 oracle 驗證、可重試」時的上限，本身不是可靠性度量；作者用 oracle 對 mean log-prob 挑選（77.5% 對 44.5%）的落差量了這個差距。框架用它時應與 pass^k、單一樣本成功率並列報告。論文其餘大半篇幅（模型訓練、Codex-S／Codex-D、§7 與附錄 E–H 的社會影響）不屬於 T8。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "論文自述：摘要與 §1 寫明，另一個 production 版本的 Codex 驅動 GitHub Copilot，本文模型的後代也驅動 OpenAI API 的 Codex 模型。這是模型的採納，不是 pass@k 或 HumanEval 評估方法的採納。來源：本論文 Abstract、§1。",
+      "OpenAI 官方的 simple-evals repo 收錄 HumanEval 並標注出處為本論文（arXiv 2107.03374）；README 說明開源這個函式庫，是為了讓隨最新模型公布的準確率數字透明，結果表列出 gpt-4-turbo、gpt-4o、gpt-4.1、o1、o3、o4-mini 等模型的 HumanEval 分數。README 也註明此 repo 已不再為新模型更新，且沒寫明 HumanEval 的計分細節（取樣數、k 值）。來源：https://github.com/openai/simple-evals",
+      "Meta 官方的 Llama 3 model card 在 instruction-tuned 模型的基準表列出「HumanEval (0-shot)」：Llama 3 8B 62.2、70B 81.7；同 repo 的 eval_details.md 說明 HumanEval 沿用 Llama 1、Llama 2 的設定，指標為 pass@1。來源：https://github.com/meta-llama/llama3/blob/main/MODEL_CARD.md 、https://github.com/meta-llama/llama3/blob/main/eval_details.md"
+    ],
+    "assessment": "有可查證的業界採納：OpenAI 與 Meta 在官方模型發布資料中，拿 HumanEval 當作發版評估的一項，等於把「執行單元測試判定功能正確」的判準用在產品發布上。其中 OpenAI 的 simple-evals 報告 HumanEval 分數，但沒有載明計分方式；Meta 則明寫 pass@1。本文最核心的 k>1 無偏估計，在查到的官方頁面上未見明確使用。未見證據顯示 pass@k 被用在線上產品監控。Copilot 採用的是模型本身，不是評估方法。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/openai/human-eval",
+    "data": "HumanEval 題目、單元測試與評估程式（含 pass@k 估計式）公開；對齊評估資料公開於 https://github.com/openai/code-align-evals-data。Codex／Codex-S／Codex-D 權重、159 GB 訓練資料、Codex-S 的約 5 萬題訓練題與沙箱實作都沒有公開，所以模型結果無法重現，只能用同一套題庫與估計式評估別的模型。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "§2.1、Figure 3 與附錄 A 的 pass@k 無偏估計式、推導與數值穩定實作，已是多次試驗成功率的事實標準，也是 pass^k 的直接前身，是 T8「多次試驗的可靠性度量」子領域的必讀；但只有這幾節加上 §3.3 的溫度與 oracle 分析屬於 T8，大半篇幅在講模型訓練與社會影響。",
+  "related": [
+    "1906.04908",
+    "2105.09938",
+    "2009.10297",
+    "2102.04664",
+    "2006.03511",
+    "2101.11149",
+    "2005.14165",
+    "1909.09436"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 3,
+    "total": 8
+  }
+}

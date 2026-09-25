@@ -1,0 +1,208 @@
+{
+  "id": "2410.05243",
+  "title": "Navigating the Digital World as Humans Do: Universal Visual Grounding for GUI Agents",
+  "topic": "T3",
+  "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "主張 GUI agent 只看截圖、直接做像素級操作。作者從 Common Crawl 網頁合成約 1,000 萬個元素的指稱表達式（RE），微調改造過的 LLaVA，得到通用視覺 grounding 模型 UGround；接在 GPT-4／GPT-4o planner 後面組成 SeeAct-V，在六個 benchmark 上與依賴 HTML／a11y tree 的 agent 打平或勝出。",
+  "problem": "現有 GUI agent 的觀測大多依賴 HTML 或 accessibility tree，就算用了截圖也和文字表徵併用；動作則多半是從候選元素清單或 Set-of-Mark 標號裡挑一個。作者指出文字表徵有三個問題：（1）有雜訊、也不完整。完整 HTML 充滿無關內容；a11y tree 靠開發者自願標註，引用 WebAIM 2024 的調查，前 100 萬個網站首頁有 95.9% 存在無障礙錯誤，平均每頁 56.8 個。（2）成本高。HTML 編碼可能比對應的截圖多耗到 10 倍 token，在桌面與行動環境取得 a11y tree 本身也慢，而長時程任務每一步都要付這個成本。（3）要先有候選清單，就得另外依賴 HTML 或物件／文字偵測模型。純視覺路線的主要瓶頸在 grounding，也就是把 planner 的文字計劃對到螢幕上的精確位置。作者列出三個要求：準確（一次定位錯誤就可能讓整個任務卡死）、跨平台泛化、能插進不同的 MLLM。既有的 SeeClick、CogAgent 三項都做不到。",
+  "core_idea": "把 agent 的觀測縮成跟人類一樣，只有截圖；把 agent 拆成兩段（SeeAct-V）：planner MLLM 產生文字計劃與目標元素的自然語言描述，再由專用的 grounding 模型把描述對成截圖上的像素座標。兩段之間的契約就是這串描述文字。作者主張，通用 grounder 的訓練配方可以很簡單。資料面利用網頁同時具有 HTML 與渲染畫面的雙重表徵，拿到元素與 bbox 的精確對應，再用規則加 LLM 大量合成視覺、位置、功能三類 RE。模型面把 LLaVA 改成支援高解析度、動態長寬比，直接輸出絕對像素座標。作者並假設，只用 web 資料訓練的 grounder 也能泛化到桌面與行動 UI。",
+  "method": {
+    "SeeAct-V 每一步的資料流": [
+      "輸入：任務指令（文字）、當前截圖、先前動作的文字歷史。不給 HTML、a11y tree、SoM 標號，也不給候選元素清單。",
+      "planner（實驗用 gpt-4-turbo-2024-04-09 與 gpt-4o-2024-05-13）輸出動作類型、目標元素的自然語言描述，以及必要的值（要輸入的文字、要選的選項）。",
+      "grounder 吃（截圖, 元素描述），輸出一組像素座標；執行器在該座標上執行 click、type 等像素級動作。每次 Type 之前都固定先自動插入一個 Click。",
+      "作者把模組化列為設計主張（附錄 B）：環境的特殊語意（冷門圖示、行話）交給可以單獨微調的 grounding 模組吸收，主模型保持通用；替換 planner 或 grounder 都不必針對下游 benchmark 重新微調；固定 planner 之後，也能單獨比較不同 grounder 的效果。"
+    ],
+    "planner 提示詞結構（附錄 H，只描述結構）": [
+      "Multimodal-Mind2Web：system role 要模型模仿人類，逐步瀏覽網頁；每步先用 3 句說明推理，再以三行格式輸出 ACTION（CLICK／TYPE／SELECT／SCROLL DOWN 四選一，不准輸出 None）、ELEMENT 描述、VALUE。元素描述要包含身分、類型、上面的文字，限 30 字以內；畫面上有外觀相同的元素時，要寫出位置加以區分。規則要求目標元素必須完整可見，只看到一部分就要先 SCROLL DOWN。",
+      "AndroidControl：沿用 M3A 的提示詞，動作是 JSON 格式，包括 status（successful／infeasible）、click、long_press、type_text、scroll、navigate_home、navigate_back、open_app、wait。element 欄位要求一句話、30 字以內、足以唯一定位。輸出格式是 Reason 加 Action。分 high-level（只給高層目標）與 low-level（再加上該步的低層指令）兩種提示。",
+      "OmniACT：照 DetACT 的提示詞與依任務相似度檢索 5 個 in-context 範例的做法，產生 PyAutoGUI 腳本；差別在 click、dragTo、moveTo 等函式的參數改成元素描述，不再是座標。腳本產生後，再用 grounder 把描述換成座標、填回腳本。",
+      "ScreenSpot agent setting：給任務與截圖，要 planner 寫出目標元素的描述（單句、30 字以內，遇到相同元素時寫位置），只輸出描述本身。"
+    ],
+    "grounder 的輸入輸出": "固定用同一個問句模板，詢問截圖中對應某段描述的元素像素座標。答案以自然語言字串自迴歸解碼，格式像 (1344, 1344)，是不正規化的絕對像素座標；訓練目標是元素 bbox 的中心點。評測時，座標落在目標 bbox 內就算對。",
+    "原始 UGround 模型（可照做的是這一套）": [
+      "以 LLaVA-NeXT 7B 的架構自建，從頭照 LLaVA-1.5 的流程訓練。",
+      "影像編碼器用 CLIP-ViT-L-14@224px，訓練時凍結；選 224px 是為了讓 AnyRes 切片更有彈性。",
+      "AnyRes：影像切成 224px 的格子，最多 36 格，最大解析度為 1344×1344（橫向）或 896×2016（直向）。只依寬度縮放、底部補白，保持原始長寬比，座標與這個設計相容。作者實測 AnyRes 對沒看過的解析度無法泛化，所以超出訓練範圍的影像要先依寬度縮到範圍內。",
+      "拿掉 AnyRes 慣用的低解析度全域影像融合模組：224px 太小，給不了有用的全域脈絡，實測還略微傷害表現。",
+      "語言骨幹用 Vicuna-1.5-7b-16k，以 16K context 容納很長的視覺 token 序列。"
+    ],
+    "訓練": [
+      "第一階段：完全照 LLaVA-1.5 做預訓練與指令微調，但指令微調時把 grounding 資料的座標從正規化改成絕對座標，並改用修改過的 AnyRes。這一階段在一台 4×A100 上約 50 小時，global batch 128（使用梯度累積）。",
+      "第二階段：用 GUI grounding 資料訓練。112 張 H100 約 6 小時，global batch 448。",
+      "兩階段都用 LoRA，device batch size 4。同一張截圖上的多個元素打包成一筆樣本，以加快訓練。",
+      "UGround-V1-2B／7B／72B 改以 Qwen2-VL 為底，只說明用了同一份資料配方，論文沒有交代它們的訓練超參數，無法照做。"
+    ],
+    "Web-Hybrid 資料合成（主資料，約 9M 元素、773K 截圖、約 700K URL）": [
+      "取樣：從 Common Crawl CC-MAIN-2023-50 隨機抽樣，依 URL 樣式濾掉非網頁檔，依 Common Crawl 的語言標籤只留英文頁面。",
+      "渲染：用 Playwright 載入並截圖，同時收集元素的 metadata（bbox、tag、inner_text、alt 等顯著 HTML 屬性）。模擬垂直捲動，擷取頁面不同位置；影像尺寸隨機挑選，約三分之一用手機長寬比，觸發部分網站的 mobile 版；長網頁每頁最多隨機取 3 個 viewport 大小的區塊。",
+      "元素分類：依 tag 分成互動元素（a、input、select 等）與純文字元素（p、h1、h2 等）。只為互動元素產生 RE，純文字元素當作描述的素材。",
+      "文字元素判定：用 EasyOCR 讀出 bbox 內的文字，與 inner_text 的相似度超過 0.7 就視為文字元素，跳過 MLLM 合成，避免產生「以連結文字標示的灰色連結」這類無用資料；同一頁上文字完全相同的文字元素全部濾掉，避免歧義。",
+      "MLLM 描述：把元素的 bbox 區域裁成小圖，連同顯著的 HTML 屬性一起交給 LLaVA-NeXT-13B。提示詞要求以肉眼可見的外觀為主來描述元素，HTML 只當參考，而且要提防屬性不準確。LLaVA 的輸出偏長，再交給 Llama-3-8B-Instruct 濃縮成一句簡短的 RE。作者觀察到，輸入裁切後的小圖，比在整張圖上框出元素再描述，幻覺更少。",
+      "主描述子：從 HTML 屬性（inner-text、title、alt、aria-label 等）或 MLLM 描述中隨機挑一個。",
+      "位置 RE（人工規則）：標出各方向的鄰居元素（可以有多個）、最近的上層 h1／h2／h3 標題、絕對位置（中央、頂端、左上角等）。相對位置的鄰居從 500 像素內隨機挑選；實測發現永遠挑最近的並不是最好的做法。部分相對描述會隨機改寫成「next to」「between」這類常用說法。",
+      "情境 RE：checkbox、radio button 假設一定有對應的 label，HTML 裡有就直接用，否則取同一列（必要時改取同一欄）最近的元素當 label；input 與 select 也照這個方式處理；再依標題的階層（主要是 h1–h3）產生「在某某區段之下」這類描述。",
+      "組合：主描述子，加上隨機決定要不要附的絕對位置，再加 0 到 2 個相對或情境描述；radio button 這類元素一定帶上 label。",
+      "取樣配額：每頁最多取 100 個元素，優先選有 accessibility label 或 MLLM 註記的元素；純文字元素的數量上限是這兩類元素總數的 3 倍（下限為 10 與可用總數兩者取小）；出現超過 1,000 次的 a11y label 降採樣到 1,000 次，例如 Next 從 13K 次降到 1K 次。",
+      "最終分布（附錄 E 的 Table E.1 至 E.3）：tag 為 a 的佔 69.0%、img 15.4%、button 6.8%、input 5.3%；使用的屬性中 inner-text 43.6%、title 20.0%、alt 12.3%、aria-label 11.3%，MLLM 合成的 RE 佔 11.2%；相對位置 RE 23.5%、情境 RE 8.4%、絕對位置 RE 3.1%。"
+    ],
+    "補充資料": [
+      "Web-Direct（408K 元素）：用 GPT-4o 直接生成 RE。只畫紅框時幻覺很多，改成紅框再加一支指向元素的紅色箭頭後，幻覺大幅減少；另外先問元素是否可見，再要描述，以 JSON 輸出，順便濾掉爬取錯誤與被遮住的元素。提示詞分成自由描述與功能描述兩種。",
+      "GUIAct（web-single，140K）：濾掉沒有座標或屬於多步操作的步驟；Instruction 與 Action 兩種表述都拿來用，所以每個元素會以兩種說法各出現一次。",
+      "AndroidControl 訓練集（47K）：只留下帶座標的動作。",
+      "Widget Caption（41K）：每個元素從功能描述中隨機取兩個。",
+      "UIBert（16K）直接使用；AITZ（8K）使用每一步動作的註記。",
+      "合計約 10M 元素、1.3M 截圖，其中約 90% 來自 Web-Hybrid；訓練資料完全不含桌面 UI。"
+    ],
+    "評測時的觀測與動作空間調整": [
+      "Multimodal-Mind2Web：全頁截圖可能高達 1280×10000，因此切成 1280×1000 的區塊；agent 判斷沒有有效動作或主動選擇捲動時，就換到下一塊。約 80% 的目標元素落在第一塊。",
+      "Mind2Web-Live：動作空間加入 Scroll_Up／Scroll_Down；移除 Fill_Form 與 Fill_Search（原本靠額外的判斷模型讀 HTML，決定要不要按 Enter），改成由 agent 自行組合 Type 與 Press_Enter；停用走 API 的 Select，選項一律用點擊處理。",
+      "AndroidWorld：以 M3A agent 為底，在規劃與反思兩個階段都拿掉 SoM 圖與 a11y 元素清單，並把以元素為單位的動作改成像素動作。ReAct 式推理與 self-reflection 都是 M3A 原本就有的設計。",
+      "AndroidControl：評分時，把 grounder 輸出的座標對應到包含該座標的最小可見元素。",
+      "OmniACT：作者修正了公開評測腳本裡的基本錯誤（檔案路徑錯誤、距離計算錯誤）。"
+    ]
+  },
+  "assumptions": [
+    "截圖包含完成任務所需的資訊。作者在引言主張視覺渲染在設計上本來就資訊完整；截圖外或隱藏的狀態，假設能靠捲動、點開來取得。",
+    "planner 能寫出足以唯一定位目標元素的自然語言描述，而且 planning 與 grounding 可以乾淨地拆成兩段，中間只靠一串描述文字溝通。",
+    "各平台的 GUI 設計足夠相似，只用 web 合成資料訓練的 grounder，可以泛化到桌面與行動 UI。",
+    "HTML 屬性（alt、aria-label、title 等）雖然不完整，大致仍可信，可以當 RE 的來源；MLLM 描述裁切後的元素小圖時，幻覺夠少。",
+    "點在元素 bbox 的中心就是正確的操作點；評測時，點落在 bbox 內就等於操作了該元素。",
+    "目標螢幕的解析度落在訓練範圍內，或縮放到範圍內之後，小元素仍然看得清楚。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "ScreenSpot（1,272 條單步指令，涵蓋 mobile、desktop、web；分 standard setting 與由 planner 生成 RE 的 agent setting）",
+      "Multimodal-Mind2Web（測試集 1,013 個任務、100 多個網站；Cross-Task／Cross-Website／Cross-Domain 三個 split）",
+      "AndroidControl（測試集隨機 500 步；high-level 與 low-level 兩種設定）",
+      "OmniACT（9,802 個任務、38 個桌面應用程式與 27 個網站，輸出 PyAutoGUI 腳本）",
+      "Mind2Web-Live（WebCanvas 的測試集，在真實網站上線上評測）",
+      "AndroidWorld（116 個任務、20 個 App，在 Android 模擬器上線上評測，依裝置最終狀態判定）"
+    ],
+    "metrics": [
+      "grounding accuracy（預測的點落在目標 bbox 內）",
+      "element accuracy（Multimodal-Mind2Web，不含 operation 分數）",
+      "step accuracy（AndroidControl，動作、元素、參數全對才算）",
+      "action score（OmniACT，參數錯誤會扣分）",
+      "completion rate（Mind2Web-Live，以 key node 完成比例計）",
+      "task success rate（Mind2Web-Live、AndroidWorld）"
+    ],
+    "baselines": [
+      "直接讓 GPT-4、GPT-4o 輸出座標做 grounding",
+      "CogAgent（18B）",
+      "SeeClick（Qwen-VL）",
+      "SeeAct 的 Choice（從過濾後的 HTML 元素中挑選）與 SoM",
+      "M3A（text-only 版，以及截圖加 SoM 加文字元素清單的版本）",
+      "DetACT（OCR、圖示比對、顏色偵測抽出元素）",
+      "WebCanvas 的 text-only 基線 agent",
+      "UGround-Qwen（控制變因用：與 SeeClick 同骨幹，只換訓練資料）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "ScreenSpot 上，UGround 在所有平台與設定都大幅領先既有的 grounding 模型。agent setting 由 planner 生成 RE，差距比 standard setting 更大。",
+      "numbers": "standard 平均：原始 UGround 73.3，SeeClick 53.4、CogAgent 47.4、GPT-4o 18.3（約 +20）。agent setting 以 GPT-4o 為 planner：UGround 81.4 vs SeeClick 52.3（約 +29）；以 GPT-4 為 planner：75.6 vs 48.8。後續的 Qwen2-VL 版本在 standard 上：V1-2B 77.7、V1-7B 86.3、V1-72B 89.4。",
+      "section": "§3.1, Table 2, Table 3",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "訓練資料完全不含桌面截圖，UGround 在桌面 UI 上仍然表現強，圖示／widget 類的進步尤其明顯。",
+      "numbers": "standard setting 的 Desktop（原始 UGround 對 SeeClick）：Text 82.5 vs 72.2，Icon/Widget 63.6 vs 30.0。",
+      "section": "§3.1, Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "離線 agent 評測中，只看截圖的 SeeAct-V 加 UGround，在網頁、行動、桌面三個 benchmark 都贏過使用額外文字輸入的 SOTA 方法，也一致贏過換成 SeeClick 當 grounder 的版本。",
+      "numbers": "Multimodal-Mind2Web 平均 element accuracy：GPT-4o 配 UGround 46.8、GPT-4 配 UGround 44.8，對上 GPT-4 Choice（image+text）42.3、SoM 25.6（SoM 只在每個 split 30 個任務的子集上跑）、GPT-4o 配 SeeClick 32.9；V1-7B 49.1。AndroidControl step accuracy（high／low）：GPT-4o 配 UGround 48.4／62.4，對上 text-only GPT-4 Choice 42.1／55.0；V1-2B 50.0／65.0、V1-7B 49.8／66.2。OmniACT action score：GPT-4o 配 UGround 32.8，對上 DetACT（image+text）17.0、DetACT（text）11.6、GPT-4o 配 SeeClick 29.6；V1-7B 34.0。",
+      "section": "§3.2, Table 4, Table 5, Table 6",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "線上 agent 評測中，SeeAct-V 加 UGround 在 AndroidWorld 上與 text-only 的 M3A 打平或略高，並明顯高於 SoM 版 M3A；在 Mind2Web-Live 上 completion rate 較高，task success rate 則有高有低。",
+      "numbers": "AndroidWorld SR：GPT-4 配 UGround 31.0、GPT-4o 配 UGround 32.8、GPT-4o 配 V1-7B 44.0，對上 M3A text（GPT-4）30.6、SoM 25.4。Mind2Web-Live CR／SR：GPT-4 配 UGround 50.7／23.1、GPT-4o 配 UGround 50.8／19.2，對上 text-only GPT-4 44.3／21.1、GPT-4o 47.6／22.1。",
+      "section": "§3.3, Table 7, Table 8",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "人工錯誤分析：在所有 benchmark 上，失敗的主因都是 planning error，最常見的是 planner 把錯的元素描述得很正確，其次是描述不存在的元素，或描述太籠統、無法唯一定位。grounding error 主要出現在 ScreenSpot-Mobile 與 ScreenSpot-Desktop，原因是長尾圖示的特殊語意（例如用風格化錢字號代表 Zelle）。",
+      "numbers": "ScreenSpot（agent setting，GPT-4o）、AndroidControl、Multimodal-Mind2Web 的每個 split 各隨機抽 60 個失敗案例；各類錯誤的比例只畫在 Figure 4，快取文字裡沒有具體數字。",
+      "section": "§3.4, Figure 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "Web-Hybrid 是效果的主要來源：只用其他資料訓練，通常不如只用 Web-Hybrid；兩者合併最好。資料量的效益在 100K 張截圖後遞減。",
+      "numbers": "ScreenSpot agent setting（GPT-4o）平均：只用 Web-Hybrid 76.9、只用其他資料 73.4、全部 81.4；Desktop Icon/Widget 分別是 61.4／46.4／67.9。只用 50K 張截圖（約 600K 個元素）就比 SeeClick 高出 10 分以上，而 SeeClick 的訓練量約是 400K 張截圖、3M 個元素。",
+      "section": "§3.5, Table 9, Figure 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "控制變因的比較顯示，資料與模型設計各自都有顯著貢獻。",
+      "numbers": "ScreenSpot agent setting 平均：Qwen-VL-Chat 原始模型 14.5；SeeClick（Qwen-VL 加 SeeClick 全部資料）52.3；UGround-Qwen（Qwen-VL 只加 Web-Hybrid）62.4，比 SeeClick 高 10.1；UGround（本文架構加 Web-Hybrid）76.9，比 UGround-Qwen 再高 14.5。",
+      "section": "附錄 C.1, Table C.1",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "動態解析度與長寬比比固定的正方形解析度好；一味拉高固定解析度，效益有限，甚至會回落。",
+      "numbers": "ScreenSpot agent setting 平均：固定 448×448 為 72.2、896×896 為 73.8、1344×1344 為 73.2，動態解析度 76.9。在 16:9 的桌面與網頁畫面上，約用固定 1344 版本三分之二的 token，就能達到相當或更好的成績。固定 1344 在 Mobile Text 上反而掉到 79.9（動態為 89.0）。",
+      "section": "附錄 C.2, Table C.2",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "UGround 用大規模合成資料訓練，網頁元素重複度高，資料效率還有改善空間（例如更好的分組與去重）。",
+    "長尾元素沒有解決：行動與桌面 UI 上有許多語意特殊的圖示，訓練集不可能全部涵蓋；作者認為這需要額外的文件或針對性的探索才學得到。",
+    "訓練資料不含桌面 UI，限制了桌面上的表現；桌面訓練資料本身也稀缺。",
+    "UGround 依賴外部 planner，不能單獨當 GUI agent 使用。",
+    "Mind2Web-Live 停用 API Select 之後，有些下拉選單只靠 Click 很難操作；作者為了維持 vision-only 的前提，接受這個代價（附錄 G.5）。",
+    "AnyRes 無法泛化到沒看過的解析度，必須把影像縮到訓練時的解析度範圍內（附錄 F.2）。",
+    "planning error 仍是主要失敗來源，grounding 以外的瓶頸在 planner 本身（§3.4）。"
+  ],
+  "limitations_observed": [
+    "「線上評測打平或更好」的說法，不符合自己的 Table 7：在 Mind2Web-Live 上，GPT-4o 配 UGround 的 SR 是 19.2，低於 text-only GPT-4o 的 22.1。只有 CR 較高（50.8 vs 47.6），代表完成的 key node 較多、做完整個任務的比例卻較低。純視覺觀測在這個 benchmark 上沒有全面勝出。",
+    "AndroidWorld 的「打平」幾乎沒有統計意義：GPT-4 配 UGround 31.0 對上 text-only 30.6，總共 116 題，差 0.4 分等於不到一題，沒有重複執行，也沒有信賴區間。32.8 與 44.0 用的是 GPT-4o planner，基線用的是 GPT-4-turbo，planner 本身就是混淆變因。",
+    "基線數字都直接抄自原論文，沒有重跑，而且使用的 GPT endpoint 不同（附錄 G.1）：本文用 gpt-4-turbo-2024-04-09 與 gpt-4o-2024-05-13，Multimodal-Mind2Web 的基線用 gpt-4-1106-vision-preview，OmniACT 的基線用 gpt-4-0613，Mind2Web-Live 的基線用 gpt-4-0125-preview。Multimodal-Mind2Web 的 SoM 基線只在每個 split 30 個任務上跑，和 1,013 個任務的結果不能直接比。",
+    "OmniACT 的比較不對稱：作者修正了公開評測腳本的路徑與距離計算錯誤，基線 DetACT 的 17.0 卻是沿用原論文、以舊腳本算出的數字。32.8 對 17.0 的差距裡，有多少來自腳本修正，無從分辨。",
+    "AndroidControl 的 grounder 並非 zero-shot：UGround 的訓練資料包含 AndroidControl 訓練集的 47K 筆標註（Table 1），測試卻是同一資料集的 test split，對照的 M3A text-only 則是 zero-shot。Table 5 的領先有一部分可能來自同分布的訓練資料。",
+    "vision-only 只成立在 agent 端，評測端不是：AndroidControl 評分時，要把座標對應到包含它的最小可見元素（附錄 G.3），靠的仍是 UI 結構。這一步等於給了點擊位置容錯，和真實環境直接點像素的行為不完全相同。",
+    "引言用延遲與 token 成本當動機（HTML 最多多 10 倍 token、取得 a11y tree 很慢），全文卻沒有量任何端到端延遲或成本。SeeAct-V 每一步要呼叫 planner 與 grounder 兩次模型，grounder 最多還要吃 36 片影像、16K context。成本的論點沒有實證。",
+    "grounder 的進步到 agent 層級就被 planner 卡住：AndroidControl high-level 設定下，V1-2B 是 50.0、V1-7B 是 49.8，更大的 grounder 沒有帶來提升；ScreenSpot agent setting 下，V1-7B 84.0 對 V1-72B 84.5 也幾乎持平，而 standard setting 仍有 86.3 對 89.4 的差距。這和 §3.4「planning error 是主因」一致，也表示觀測層的準確度到了某個程度後，瓶頸就換成 planner 的理解。",
+    "「視覺渲染資訊完整」的前提被自己的調整推翻：Multimodal-Mind2Web 必須把全頁截圖切塊、模擬捲動；Mind2Web-Live 要另外加入捲動動作，下拉選單也無法只靠 Click 操作。disabled 狀態、下拉選單的選項、捲出畫面的內容，截圖本來就看不到，文字表徵反而有。",
+    "沒有做資料汙染檢查：Web-Hybrid 取自 Common Crawl CC-MAIN-2023-50，ScreenSpot-Web 與 Mind2Web 系列使用的網站可能與之重疊，作者沒有報告任何去重或比對。",
+    "錯誤分析規模小、也不嚴謹：每個 split 只抽 60 個失敗案例，由人工分類，沒有標註者一致性，比例只畫在圖上。正文把錯誤分布誤寫成 Figure 5（實際是 Figure 4），§3.2 也把 Table 5 誤寫成 Table 6。",
+    "消融只跑一次、沒有變異數，部分效果很小：拿掉位置 RE，agent setting 從 76.9 降到 76.0，只差 0.9；Table 9 的 Mobile Text 上，只用其他資料（92.3）反而高於只用 Web-Hybrid（89.0）。「只用 web 就能泛化」在行動端的文字元素上並不成立。",
+    "每一步只看單張截圖、單步定位，沒有處理動畫、彈出視窗、需要跨畫面記憶的狀態。這些觀測問題是線上任務的常見失敗點，本文的評測沒有拆出來看。"
+  ],
+  "framework_role": "屬於 T3 的 (a) 感知／觀測空間。這篇回答的是：GUI 環境的回饋該用哪種表徵進入 agent。它把觀測空間縮到只剩截圖，並在六個 benchmark 上做跨平台的「截圖 only」對「HTML／a11y tree／SoM」對照，是目前涵蓋面最廣的觀測模態實證之一。它同時提出一種 ACI 切法：planner 的輸出介面是自然語言的元素描述，再由專用的 grounding 模組轉成座標，把精確定位從主模型卸下。對框架可以借用三點：（1）觀測模態選擇的實證基準：截圖單獨使用時，大致能與文字表徵打平，但線上的 SR 並未全面勝出，所以把 a11y tree 整個拿掉不是沒有代價；（2）感知與決策解耦的介面契約：描述字串要短（30 字內），而且要能唯一定位，這個契約可以類比為工具回傳結果的結構化規格；（3）失敗歸因的兩分法（planning error 對 grounding error），可以當作觀測層事後分析的分類軸。本文不涉及 (b) 可觀測性／監控：錯誤分析是事後的人工分類，不是執行期的偵測。對以文字對話為主的 agent，直接用得上的是介面設計原則；UGround 模型本身，只有在 agent 具備 GUI 操作工具時才派得上用場。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "Orby AI 透過 GlobeNewswire 發佈的官方新聞稿〈Orby Launches ActIO the First Agentic AI Foundation Model to Set New Industry-Leading Performance Benchmarks〉寫明，Orby 與 OSU 合著了這篇論文，並稱 UGround 這項技術已原生整合進 Orby 的 ActIO 基礎 LAM，模型也已在 HuggingFace 開源。需要注意三點：Orby 是本文的共同作者兼資助方，這是自我宣稱；頁面的 dateline 是 2024-08-07，早於 arXiv v1（2410，2024 年 10 月），頁面上卻沒有任何更新註記，日期有矛盾；沒有獨立來源佐證實際部署。來源：https://www.globenewswire.com/news-release/2024/08/07/2925911/0/en/Orby-Launches-ActIO-the-First-Agentic-AI-Foundation-Model-to-Set-New-Industry-Leading-Performance-Benchmarks.html"
+    ],
+    "assessment": "唯一可查證的採納證據，是共同作者公司 Orby 的官方新聞稿，宣稱 UGround 已整合進其 ActIO 產品；那是利害關係人的自我宣稱，日期也和論文時間線對不上，未見獨立第三方的部署證據。Simular 的 Agent-S 官方 README 查過，grounding 模型只列 UI-TARS，沒有 UGround，所以不計入。後續論文拿 UGround 當基準或 grounding 模組，屬於學術影響力，不算採納。HuggingFace 上的開源權重代表可取得，不代表有人部署。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/OSU-NLP-Group/UGround（MIT 授權；README 列有訓練與推論程式碼，以及 ScreenSpot、Multimodal-Mind2Web、OmniACT、AndroidControl 的離線評測程式碼；線上評測只連到外部 repo）",
+    "data": "README 說明 UGround-V1 系列（Initial／Qwen2-VL）的訓練資料已發佈在 HuggingFace 的 osunlp/UGround-V1-Data，另有 bounding-box 版本；完整的 10M 元素是否全部釋出，README 沒有明說。模型權重：osunlp/UGround-V1-2B、7B、72B，另有最初版本。論文本身寫明資料只供研究、非商業使用。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "在 T3 感知的 GUI 觀測這一塊，它提供涵蓋最廣的跨平台證據，說明只用截圖大致能與 HTML／a11y tree 打平（不是全面勝出），並給出 planner 與 grounder 解耦的 ACI 設計和 planning／grounding 失敗兩分法；價值在觀測模態選擇與介面切法，不在「贏過文字 agent」這個結論本身。",
+  "related": [
+    "2401.01614",
+    "2401.10935",
+    "2312.08914",
+    "2306.06070",
+    "2310.11441",
+    "2402.17553",
+    "2406.03679",
+    "2406.12373",
+    "2405.14573",
+    "2408.00203"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

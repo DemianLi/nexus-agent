@@ -1,0 +1,186 @@
+{
+  "id": "2401.01614",
+  "title": "GPT-4V(ision) is a Generalist Web Agent, if Grounded",
+  "topic": "T3",
+  "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 SeeAct：讓 GPT-4V 只看截圖產生下一步的文字計劃，再比較三種把計劃對應到 HTML 元素的 grounding 觀測形式，發現 ranker 候選的 HTML 文字多選題最好、SoM 式框加編號在網頁截圖上大量幻覺，而標題的 51.1% 線上成功率是由人代為 grounding 與執行的上限數字。",
+  "problem": "既有 web agent（MindAct、WebAgent 等）幾乎都只吃原始 HTML，而 HTML 雜訊多、資訊密度低，也缺少嵌入圖片等只有渲染後才看得到的語意。GPT-4V 這類 LMM 能看懂截圖，問題是能不能把看懂的東西轉成精確的瀏覽器事件（點哪個元素、做什麼操作）。這決定網頁或 GUI agent 的觀測空間該怎麼設計：給截圖、給 HTML，還是兩者並用，以及在截圖上加標記是否有效。另外，只用快取網頁做離線評估，可能嚴重低估能走多條路徑的 agent。",
+  "core_idea": "把一步動作拆成兩段。(1) Action Generation：LMM 只看截圖、任務與先前動作，用自然語言寫出下一步要對哪個元素做什麼。(2) Action Grounding：把那段描述轉成可執行的三元組（元素 e、操作 o、值 v）。o 與 v 用字串解析就能拿到，真正難的是 element grounding。作者比較三種 grounding 觀測形式：只靠模型描述的元素屬性去搜 DOM、給 ranker 選出的候選元素 HTML 文字做多選題、在截圖上疊候選元素的框與編號（類似 SoM），再用人工 oracle grounding 當上限。核心主張是網頁有「HTML 元素與其視覺渲染一一對應」這個自然影像沒有的性質，最好的 grounding 應該同時利用 HTML 與視覺。",
+  "method": {
+    "問題形式化": "給定網站 S 與任務 T，每一步的策略是 a_t = π(s_t, T, {a_1..a_{t-1}})。觀測 s_t = {HTML 文件 h_t, 截圖 i_t}，執行 a_t 後得到 s_{t+1}。動作是三元組 (e, o, v)：e 是目標元素，o ∈ {Click, Type, Select}（Mind2Web 把 Hover 與 Press Enter 併進 Click），v 是 Type 要輸入的文字或 Select 要選的選項。LLM 或 LMM 先產生文字描述 ã = (ẽ, õ, ṽ)，再由 grounding 轉成 a。",
+    "Action Generation（第一輪對話）": {
+      "輸入": "只有目前視窗的截圖、任務文字、先前動作的文字紀錄。刻意不給 HTML。",
+      "提示詞結構（App D Table 6，轉述）": [
+        "system role：扮演一步一步瀏覽網頁的人類，能看到截圖並知道自己先前的動作；可以點擊、選選項、打字（類比 Playwright 的 click()、select_option()、type()）；一次只做一個操作。",
+        "user turn：填入任務與 Previous Actions，附上截圖，要求依序做四步分析：(1) 判斷目前是什麼頁面；(2) 對照截圖逐一分析先前動作的意圖，特別是最後一步；(3) 仔細檢查截圖每一區的狀態，確認哪些已設定或完成。提示詞明說文字歷史可能沒記下某些動作的效果，所以要以截圖為準；(4) 依分析、人類瀏覽習慣與網頁設計邏輯決定下一步，寫出目標元素、它的詳細位置與操作。",
+        "兩條規則：只能發出在目前觀測下有效的動作；一次只發一個動作。"
+      ],
+      "輸出": "一段自然語言推理，加上下一步的元素、位置、操作描述。"
+    },
+    "Grounding 方法一：Element Attributes（SeeActAttribute）": {
+      "提示詞改動（Table 7）": "第一輪另外要求描述目標元素與鄰近元素的相對位置、它的文字或視覺內容；若有相似元素，要寫到足以區分。",
+      "輸出格式": "五行固定格式：ELEMENT（詳細描述）、ELEMENT TYPE ∈ {BUTTON, TEXTBOX, SELECTBOX, LINK}、ELEMENT TEXT（照截圖原樣抄，不准編造）、ACTION ∈ {CLICK, TYPE, SELECT}、VALUE（TYPE 填要輸入的字，SELECT 填選項，CLICK 填 None）。",
+      "定位": "用元素文字與類型在 DOM 上做啟發式搜尋。唯一命中就直接選；多個命中時再問模型一次選哪一個。不提供候選清單。"
+    },
+    "Grounding 方法二：Textual Choices（SeeActChoice）": {
+      "候選": "沿用 MindAct 的 DeBERTa-base cross-encoder ranker（在 Mind2Web 訓練集上訓練）對頁面所有元素排序，取 top-50。",
+      "分組": "top-50 切成每組 17 個選項（約 3 組）送模型推論。論文沒寫清楚跨組怎麼合併；對照組 MindAct 是每組 5 個、反覆淘汰直到剩一個或全部被丟掉。",
+      "第二輪對話（Table 8，轉述）": "先複述目標元素、位置與操作；接著出一題多選題，每個選項是一個候選元素的 HTML 文字表示，要求對照截圖逐一找出每個選項在頁面上的位置並判斷是否相符。多個相符時重新檢視後選最可能的；都不符就選「以上皆非」。",
+      "輸出格式": "三行：ELEMENT（選項字母）、ACTION、VALUE。"
+    },
+    "Grounding 方法三：Image Annotation（SeeActAnnotation，SoM 式）": {
+      "標註": "對 ranker 選出的每個候選元素，依 DOM bbox 在截圖上畫紅框，框的左下角加黑底白字編號。用 Supervision 函式庫，並用標籤指派演算法避免標籤互相重疊。注意這不是原版 SoM 那種以影像分割產生的區域。",
+      "第二輪對話（Table 9，轉述）": "先複述目標；再重新檢查截圖，看目標是否有紅框與左下角編號。有就回答編號；沒有就不准編造，輸出 NA。",
+      "輸出格式": "三行：ELEMENT（編號或 NA）、ACTION、VALUE。",
+      "標記設計（App B Table 5 消融，split 未註明）": "比較數字、單一字母、兩個字母三種標籤，各放框的左下角或下方中央兩個位置。數字加左下角最好（Ele. Acc 27.0、Step SR 24.3），字母類 Step SR 在 17.2–22.4。若把加了標記的截圖也拿去做 action generation（Number*），Step SR 反而從 24.3 降到 22.3，所以正式設定是：第一輪用乾淨截圖，只有 grounding 那一輪看標記圖。"
+    },
+    "Oracle Action Grounding（SeeActOracle）": "請人工標註者讀模型的動作描述，判斷它想對哪個元素做什麼，用來近似「只要描述裡講到就算對」的 grounding 上限。",
+    "被比較的系統與超參數": {
+      "SeeAct 的 LMM": "gpt-4-vision-preview（三種 grounding 都跑）；Gemini Pro Vision 與 LLaVA-1.5 只跑表現最好的 Choices。Gemini Pro Vision 只支援單輪對話，所以把兩輪併成一輪。",
+      "MindAct 兩階段": "同一個 ranker 取 top-50，再把 action generation 寫成多選題（含 None），每組 5 個反覆淘汰。SFT：FLAN-T5-XL，以及 BLIP-2-T5-XL（凍結 CLIP ViT-L/14 視覺編碼器，影像解析度 2,048；語言模型用在 Mind2Web 上微調過的 FLAN-T5 初始化，只微調 LLM 與 bridge）。ICL：gpt-3.5-turbo-0613 與 gpt-4-turbo-1106-preview，3-shot，示範例沿用 MindAct。",
+      "Pixel-level grounding": "CogAgent（cogagent-chat-hf，未在 Mind2Web 上微調）直接輸出座標，ICL。",
+      "未揭露": "temperature、取樣次數、每步最大 token 等解碼設定論文都沒寫。"
+    },
+    "資料": "Multimodal-Mind2Web：把 Mind2Web 每份 HTML 對齊到原始 dump 裡的截圖，並人工確認元素可見、渲染正確。Train 1,009 題；測試集 Cross-Task 177 題、Cross-Website 142 題、Cross-Domain 694 題。每頁平均 4,172–4,653 個視覺 token，對比 91k–129k 個 HTML token、494–612 個元素（Table 1）。",
+    "離線評估": "沿用 Mind2Web 指標：Ele. Acc（元素是否正確）、Op. F1（操作與值的 token-level F1）、Step SR（元素與操作都對才算這一步成功），三者都對任務做 macro 平均；SR（每一步都對才算整題成功）因為太嚴，離線只當參考。GPT-3.5、GPT-4、Oracle 與 Table 3 的 grounding 比較只在每個 split 各抽 30 題的子集上跑；其餘在全測試集上跑。",
+    "線上評估工具": {
+      "實作": "用 Playwright 載入活網站，取得互動元素的文字表示，把預測的 (e, o, v) 轉成瀏覽器事件執行。MindAct 沿用 Mind2Web 的網頁處理與選項產生腳本。",
+      "SeeActOracle 線上設定": "人依模型意圖手動執行動作；動作歷史由模型自己在額外一輪對話裡摘要成 Element / Operation / Value 格式；只用目前視窗的截圖（避免整頁長截圖），因此允許模型要求捲動。",
+      "SeeActChoice 線上設定": "同樣 ranker top-50、分三組；另外開放 PRESS ENTER（確認）與 TERMINATE（結束）。",
+      "操作規則": "限非登入任務；登入、最後送出與其他可能有害的動作一律禁止；人在每一步監看，並判定任務是否完成；網頁跳出的廣告由人手動關掉。",
+      "樣本": "三個 split 共 90 題（每個 split 30 題，與離線子集相同）。時效性任務改寫（例如更新航班日期），因網站改版而失效的題目從同一 split 重抽。"
+    }
+  },
+  "assumptions": [
+    "網頁的 HTML 元素與渲染後的視覺元素有已知的一一對應，而且拿得到 DOM 與 bbox。純截圖的桌面或手機 GUI 沒有這個前提。",
+    "ranker 的 top-50 候選有涵蓋正確元素；Choices 與 Annotation 兩條路線的上限都被這個召回率封頂。",
+    "只看目前視窗的截圖加上文字形式的動作歷史，就足以判斷頁面狀態與下一步。",
+    "人工 oracle 能無偏地讀出模型的「意圖」，因此可以當成 grounding 的上限。",
+    "一步只做一個 Click、Type 或 Select，任務由一串這種原子動作組成。",
+    "GPT-4V 的能力代表 LMM 整體；換成其他 LMM，整條管線是否還成立沒有保證。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Multimodal-Mind2Web（作者清理後的 Mind2Web，含 Cross-Task / Cross-Website / Cross-Domain 三個測試 split）",
+      "線上活網站評估：從三個 split 抽 90 題，用自製 Playwright 工具在真實網站上跑"
+    ],
+    "metrics": [
+      "Element Accuracy（Ele. Acc）",
+      "Operation F1（Op. F1）",
+      "Step Success Rate（Step SR）",
+      "Whole-task Success Rate：Offline0（不容許任何錯步）、Offline1（容許錯一步）、Online（人判定）"
+    ],
+    "baselines": [
+      "MindAct-FLAN-T5-XL（SFT）",
+      "MindAct-BLIP-2-T5-XL（SFT，多模態）",
+      "MindAct-GPT-3.5（gpt-3.5-turbo-0613，3-shot ICL）",
+      "MindAct-GPT-4（gpt-4-turbo-1106-preview，3-shot ICL）",
+      "CogAgent（cogagent-chat-hf，pixel-level 座標 grounding）",
+      "SeeAct 換骨幹：LLaVA-1.5、Gemini Pro Vision",
+      "SeeActOracle（人工 grounding 上限）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "同一個網頁用截圖表徵，比用原始 HTML 省非常多 token，這是作者主張用視覺當主要觀測的理由（但比較方式有問題，見 limitations_observed）",
+      "numbers": "Figure 1 的頁面有 423 個 HTML 元素，用 GPT-2 tokenizer 要 186,490 個文字 token，用 GPT-4V 的視覺 token 只要 1,445 個。Table 1 各 split 平均：視覺 token 4,172–4,653，HTML token 91,163–128,827，元素 494–612 個",
+      "section": "§1、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "只要 grounding 由人代做，GPT-4V 的計劃品質在離線評估上大幅領先所有方法，而且在沒看過的網站與領域上領先更多",
+      "numbers": "SeeActOracle 的 Step SR：Cross-Task 61.9、Cross-Website 65.0、Cross-Domain 62.1；Ele. Acc 66.4 / 69.5 / 72.8。對第二名的領先是 8.4 / 23.9 / 23.2 個百分點（這是 oracle 子集減 FLAN-T5-XL 全集 53.5 / 41.1 / 38.9）",
+      "section": "§4.1、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "三種 grounding 觀測形式中，給候選元素 HTML 文字做多選題最好；SoM 式框加編號與屬性搜尋都遠遜，而且全都離 oracle 很遠",
+      "numbers": "每 split 30 題子集的 Step SR（Cross-Task / Cross-Website / Cross-Domain）：Attribute 16.1 / 12.1 / 19.0；Annotation 20.3 / 13.9 / 23.7；Choice 39.1 / 32.7 / 42.0；Oracle 61.9 / 65.0 / 62.1。Choice 與 Oracle 差 22.8 / 32.3 / 20.1。全集上 SeeActChoice（GPT-4V）Step SR 40.2 / 32.4 / 36.8，與 SFT 的 FLAN-T5-XL（53.5 / 41.1 / 38.9）相比，Cross-Task 仍落後，Cross-Domain 接近",
+      "section": "§4.1、Table 2、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "同樣用 Choices grounding，看得到截圖的 GPT-4V 勝過只看 HTML 的 GPT-4；但多模態的小模型 BLIP-2-T5 並沒有勝過純文字的 FLAN-T5",
+      "numbers": "Step SR 差距 +6.8 / +5.7 / +12.3 個百分點。這是子集對子集：SeeActChoice 39.1 / 32.7 / 42.0 對 GPT-4* 32.3 / 27.0 / 29.7。BLIP-2-T5-XL 的 Step SR 47.0 / 37.0 / 38.9，對 FLAN-T5-XL 53.5 / 41.1 / 38.9",
+      "section": "§4.1、Table 2、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "線上整題成功率遠高於離線 Offline0，作者歸因於同一任務有多條可行路徑，而離線參考軌跡只收一條；GPT-4 離線 Step SR 比 FLAN-T5 差，線上卻比較好",
+      "numbers": "90 題的整題成功率（Offline0 / Offline1 / Online）：FLAN-T5-XL 4.4 / 24.4 / 8.9；GPT-4 1.1 / 12.2 / 13.3；SeeActChoice 3.3 / 12.2 / 37.8；SeeActOracle 13.3 / 27.8 / 51.1。換算成題數：Oracle 46/90、Choice 34/90、GPT-4 12/90、FLAN-T5 8/90",
+      "section": "§4.2、Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "SoM 式標註在網頁截圖上失敗的主因是視覺幻覺與空間關係判讀錯誤，不是計劃錯",
+      "numbers": "隨機抽 100 筆「動作描述正確但 grounding 錯」的預測：54% 是目標其實沒被框（應回答 NA），模型卻捏造一個框與編號；46% 是模型認得目標，但把相鄰元素的編號配給它",
+      "section": "§4.3、App E（Figure 10–13）",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "任務越長成功率越低，而且 oracle 與 Choice 的差距隨步數擴大，作者解讀為 grounding 錯誤會往後連鎖",
+      "numbers": "依標註動作數分組：Easy 1–4 步 37 題、Medium 5–9 步 35 題、Hard 10–18 步 18 題；四種方法的成功率都隨步數下降。各組的確切數字只在 Figure 3 圖中，快取文字取不到",
+      "section": "§4.3、Figure 3",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "純文字候選的弱點是分不開 HTML 完全相同的元素，這時模型傾向選第一個看起來相符的選項",
+      "numbers": "質性案例：頁面上有三個 HTML 完全相同的「Schedule」按鈕，SeeActChoice 無從區分（Figure 16）；沒有量化比例",
+      "section": "App G、Figure 16",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "grounding 仍是主要瓶頸：最好的策略與 oracle 仍有明顯差距（§1 引言條列寫 20–30%，結論寫 20–25%）。",
+    "SoM 式的影像標註在語意與空間關係複雜的網頁截圖上會嚴重幻覺，原因是 GPT-4V 看不清影像細節、判讀不了相對位置。",
+    "屬性搜尋受限於啟發式定位：很多元素沒有文字，或文字其實屬於鄰近的另一個元素。",
+    "文字候選分不開相同或相似的元素，而網頁上這種元素很常見。",
+    "離線評估只收一條參考路徑，會低估整題成功率；線上評估才比較能反映真實能力。",
+    "BLIP-2-T5 沒贏過 FLAN-T5，可能因為 CLIP 視覺編碼器看不清細節、沒針對網頁截圖訓練，且部分訓練截圖可能有渲染錯誤。",
+    "SFT 在訓練時看過的網站上仍有優勢；只做單一網站時 SFT 仍具競爭力。",
+    "web agent 可能產生有害動作（隱私、金融交易、表單送出），線上實驗限非登入任務，並在執行前人工確認每個動作的安全性。"
+  ],
+  "limitations_observed": [
+    "子集與全集數字混用。§4.1 說 oracle 領先第二名 8.4 / 23.9 / 23.2 個百分點，但那是 oracle 在每 split 30 題子集上的 Step SR 減掉 FLAN-T5-XL 在全測試集上的 Step SR，兩邊不是同一批題目。同一個 SeeActChoice，子集與全集的 Step SR 在 Cross-Domain 就差 5.2 個百分點（42.0 對 36.8），和「GPT-4V 勝 GPT-4」在 Cross-Website 的 5.7 個百分點同一量級。所以 LMM 勝 LLM 的差距有一部分可能落在抽樣雜訊裡；全文沒有信賴區間，也沒有重複執行。",
+    "線上結果樣本很小，而且有大量人工介入。51.1% 是 46/90，37.8% 是 34/90，粗估 95% 信賴區間約 ±10 個百分點。另外：pop-up 由人關掉，成功由人判定，失效題會重抽，登入與最後送出一律禁止。禁止送出時「完成」怎麼認定、判定者是否知道是哪個系統，論文都沒說。SeeActOracle 的線上數字是人代為 grounding 並執行的，標題的「if grounded」其實是「如果有人幫它點」，不能當成自主 agent 的成功率引用。",
+    "token 效率的比較是稻草人。一邊用 GPT-2 tokenizer 算整份原始 HTML，另一邊用 OpenAI 視覺 token 計價公式，兩種計量不同；而且作者自己的最佳路線 SeeActChoice 並沒有丟掉 HTML，它仍要餵 ranker 選出的 50 個候選的 HTML 文字。所以實際對手應該是「截圖加上 top-50 候選文字」對上「top-50 候選文字」，不是對上 186k token 的整份 HTML。",
+    "「SoM 對網頁無效」只證明到本文這個變體。它的框來自 ranker 候選的 DOM bbox，不是原版 SoM 的分割區域；每張圖只標一組 17 個候選，正確元素最多出現在其中一組（前提是 ranker 有召回），其餘各組的正確答案都是 NA；而 54% 的錯誤正好出在「應回答 NA 卻捏造編號」。等於把 ranker 召回與分組設計造成的難度，算到了影像標註頭上。Table 5 的標記消融只試了 3 種標籤 × 2 個位置，也沒註明用哪個 split。",
+    "Choices 的上限被 DeBERTa ranker 的 top-50 召回率封頂，本文卻沒報這個召回率，也沒報 grounding 錯誤中有多少是正確元素根本不在候選裡。再者，這個 ranker 是在 Mind2Web 訓練集上 SFT 的，所以「ICL 在新網站與新領域上泛化較好」的結論，其實混入了一個 SFT 元件在跨領域上的表現。",
+    "「LMM 勝 LLM」混淆了模型與觀測模態。GPT-4V（gpt-4-vision-preview）與 GPT-4（gpt-4-turbo-1106-preview）是不同模型；兩者的 prompt 也不同，SeeAct 先做一輪自由推理再答多選，MindAct-GPT-4 是 3-shot 直接答多選。沒有「同一個 GPT-4V、拿掉截圖只給 HTML」或「生成時也給 HTML」的消融，所以截圖本身的貢獻沒有被隔離出來。",
+    "Oracle 由人工讀「意圖」，會對含糊描述做善意解讀，這個上限可能被墊高；論文沒報標註者間一致性，也沒說每步由幾位標註者判定。",
+    "整條管線高度綁定 GPT-4V。同樣的 Choices 設定下，LLaVA-1.5 的 Step SR 只有 8.1 / 7.5 / 8.5，Gemini Pro Vision 19.6 / 15.4 / 18.0，都低於 SFT 的 FLAN-T5-XL。而 gpt-4-vision-preview 已在 2024-12-06 停用（OpenAI deprecations 頁面：https://developers.openai.com/api/docs/deprecations），溫度等解碼設定也沒揭露，主要數字已無法原樣重現。",
+    "差距的陳述前後不一，也跟表格不完全吻合：§1 引言條列說 20–30%，§6 結論說 20–25%（摘要只說差距很大），但 Table 3 的 Choice 與 Oracle 在 Cross-Website 差 32.3 個百分點，超出兩種說法；線上的差距則只有 13.3 個百分點（37.8 對 51.1）。",
+    "App B 的 Number* 結果（Step SR 從 24.3 降到 22.3）顯示，把標記疊在規劃用的截圖上會干擾規劃；這對觀測設計是有用的訊號，但只有單次執行、差 2 個百分點，作者也沒有追下去。",
+    "提示詞明白承認文字動作歷史會漏記狀態（App F Figure 15：網站自動填的日期、沒有文字的按鈕），所以要模型從截圖重新推斷；但只有目前視窗的截圖，視窗外的狀態仍會遺失，而這種歷史失真造成多少錯誤沒有量化。"
+  ],
+  "framework_role": "屬於 T3(a) 感知／觀測空間，是網頁與 GUI 觀測表徵的基準型研究。它在「計劃只看截圖」固定的前提下，受控比較了 grounding 時要給模型什麼觀測：屬性搜尋、候選元素的 HTML 文字、截圖上的框與編號、人工上限。可帶走的設計結論有四條。(1) 把「要做什麼」與「對哪個元素做」拆成兩段，grounding 是主要瓶頸。(2) 混合觀測（截圖加上候選元素的文字表示，並附「以上皆非」選項）勝過單靠視覺標記。(3) 標記只放在 grounding 那一輪，不要污染規劃用的截圖（App B 單次執行、只差 2 個百分點，訊號弱）。(4) 文字動作歷史是有損的，需要讓模型從最新觀測重新確認狀態。次要關聯是 T7：它示範離線參考軌跡會因多路徑而低估成功率，線上評估差距可達數倍。但它的線上評估靠人判定、樣本只有 90 題，只能當警訊，不能當方法。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。作者自己釋出了 repo、pip 套件 seeact 與 Chrome extension（https://github.com/OSU-NLP-Group/SeeAct），但 README 自述為 research/experimental 性質，屬於作者自身的研究釋出，不是第三方商用採納。WebSearch 也沒有查到官方產品文件或 model card 採用它的紀錄。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/OSU-NLP-Group/SeeAct",
+    "data": "Multimodal-Mind2Web 已公開於 Hugging Face（osunlp/Multimodal-Mind2Web）；repo 以 OPEN RAIL 授權釋出程式碼與資料。但 GPT-4V 預覽版已停用、解碼設定未揭露，線上評估又依賴當時的活網站與人工判定，主要數字無法原樣重現。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是少數在固定規劃觀測下、受控比較網頁 grounding 觀測形式（HTML 候選文字、SoM 式標記、屬性搜尋、人工上限）並做錯誤分析的工作，直接回答 T3(a) 的觀測表徵問題，也是後續 GUI grounding 研究的共同起點；子集混用與人工介入要打折看。",
+  "related": [
+    "2306.06070",
+    "2310.11441",
+    "2312.08914",
+    "2401.10935",
+    "2401.13649",
+    "2305.11854",
+    "2306.00245",
+    "2307.12856",
+    "2311.07562"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

@@ -1,0 +1,174 @@
+{
+  "id": "2602.16666",
+  "title": "Towards a Science of AI Agent Reliability",
+  "topic": "T8",
+  "subarea": "多次試驗的可靠性度量與統計嚴謹性",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "借鏡安全關鍵工程，把 agent 可靠性拆成一致性、穩健性、可預測性、安全性四個維度共 12 個可計算指標（資料來自 K=5 次重跑、擾動後重跑、事後自評信心與 LLM judge），用 GAIA 與 τ-bench 評測 15 個模型，發現 24 個月的能力進步只換來小幅的可靠性提升。",
+  "problem": "主流 agent 評估只報單次執行的平均成功率，有四件事看不出來：(1) 同樣準確率下，是固定一批題目穩定失敗，還是每題隨機失敗；(2) 格式小錯與刪除資料這類嚴重後果的差別；(3) 對換句話說、工具故障、介面格式變動的敏感度；(4) agent 能不能知道自己可能會失敗。實際部署事故（Replit 刪除正式資料庫、OpenAI Operator 未經確認就購買、NYC 政府聊天機器人給出違法建議）都顯示基準分數與部署可靠性之間有落差。所以需要一套跟準確率分開量、可重複計算的可靠性剖面，讓部署決策（例如從沙盒試點升到正式環境）有具體門檻可用。",
+  "core_idea": "整理航空、核能、汽車、流程控制等產業的認證實務，歸納出四個反覆出現的可靠性維度，再逐一轉成 agent 可算的指標：\n- consistency：同條件重跑時，結果、動作路徑、資源用量是否一致。\n- robustness：注入故障、改環境格式、改寫提示詞之後，準確率還剩原本的幾成。\n- predictability：事後自評信心的 calibration、discrimination 與 Brier。\n- safety：違規頻率乘上發生違規時的嚴重度。\n前三個維度等權平均成總分 R。safety 刻意不進平均，理由是它屬於尾端現象，平均會把罕見的災難性失敗稀釋掉，所以改為另列、當硬約束看。論文把這套定位成可量測的「工作性操作化」，不是重新定義古典可靠度。",
+  "method": {
+    "輸入輸出": "輸入是一個 agent（模型＋scaffold）、一組具二元成敗判準的任務，以及以下紀錄：\n- 每題 K 次重複執行的紀錄：成敗、動作序列、資源用量（成本、時間、API 呼叫、token）。\n- 三種擾動條件下重跑的成敗。\n- 每次執行結束後的自評信心。\n- LLM judge 對完整軌跡給的違規與嚴重度判定。\n輸出是 12 個介於 [0,1]、越高越好的子指標，加上四個維度分數與總分 R。",
+    "一致性指標": {
+      "C_out": "每題 t 跑 K 次得到 y_{t,k}∈{0,1}，先算 p̂_t 為 K 次的平均。單題一致性 (2p̂_t−1)^2 就是 1 減去「有偏樣本變異數除以 Bernoulli 最大變異 0.25」。對 T 題取平均。K=5 時，單題只可能取 1、0.36、0.04 三個值。",
+      "C_traj^d": "把每次執行的動作序列轉成動作類型的頻率分佈，對同一題任兩次執行算 Jensen-Shannon divergence，對 C(K,2) 對與 T 題取平均後，用 1 減。",
+      "C_traj^s": "對同一題任兩次執行的動作序列算 Levenshtein 距離，除以兩者中較長的序列長度做正規化，對所有配對與題目取平均後，用 1 減。C_traj 取 C_traj^d 與 C_traj^s 的平均，避免軌跡類指標因為子項較多而主導一致性維度。",
+      "C_res": "對每一種資源 r，算該題 K 次執行間的變異係數 CV_r=σ_r/μ_r，對資源種類取平均後做 exp(−平均 CV) 轉換。附錄 C.1.1 說只取成功的執行，Table 2 沒寫這個條件；跨題怎麼聚合也沒寫。"
+    },
+    "穩健性指標": "三個指標都是擾動後準確率除以基線準確率 Acc_0，再截在 1 以下。\n- R_fault = min(Acc_fault/Acc_0, 1)，擾動是注入 API 或工具故障。\n- R_env = min(Acc_pert/Acc_0, 1)，擾動是改變環境格式（Eq.3 寫成 R_struct）。\n- R_prompt = min(Acc_para/Acc_0, 1)，擾動是語意等價的指令改寫。",
+    "可預測性指標": "每個任務先取得自評信心 c_i 與成敗 y_i。\n- P_cal = 1 − ECE：依信心分成 B 個箱，以箱內樣本比例加權「箱平均信心與箱準確率的差」，B 值文中沒給。\n- P_AUROC：在所有（成功，失敗）配對中，成功那一方信心嚴格較高的比例。\n- P_brier = 1 − mean((c_i − y_i)^2)。",
+    "安全性指標": "先定義約束集合，由 LLM judge 找出每題的違規集合 v_i。\n- S_comp：沒有任何違規的任務比例。\n- S_harm = 1 − E[w_i | v_i 非空]，其中 w_i 是該題所有違規中最高的嚴重度權重（low=0.25、med=0.5、high=1.0）。只對有違規的題目取平均，所以 S_harm 衡量「多嚴重」，跟「多頻繁」分開。",
+    "聚合規則": "- R_Con = (C_out + C_traj + C_res)/3\n- R_Pred 只取 P_brier，因為 Brier 是同時衡量 calibration 與 discrimination 的 proper scoring rule\n- R_Rob = (R_fault + R_env + R_prompt)/3\n- R_Saf = 1 − (1−S_comp)(1−S_harm)，依 Kaplan & Garrick 的風險＝機率×嚴重度\n- 總分 R = (R_Con + R_Pred + R_Rob)/3，不含 safety，safety 另列當硬約束\n作者說明：創意型應用可以把 trajectory consistency 排除；不同部署情境可以改權重。",
+    "基準與判準": "- GAIA：validation split 共 165 題，分 Level 1–3，用正規化後的 exact match 判定成敗。\n- τ-bench：只用 airline 領域。原 50 題中 Cuadron et al. 認定 24 題有錯，所以只用驗證過的 26 題；成功判準是最終資料庫狀態與目標狀態一致。另拿完整題組做對照（Fig 6）。",
+    "模型與 scaffold": "- 15 個模型，發布時間從 2024-03 到 2026-05。\n- τ-bench 用 tool-calling scaffold，由它呈現工具定義並解析結構化工具呼叫。\n- GAIA 用 HAL generalist agent 的 ReAct 迴圈，可用網頁瀏覽、程式碼執行、檔案工具。\n- 全部經 HAL harness 執行，以 Weave 記錄成本與軌跡；OpenAI 模型走 Chat Completions API。",
+    "超參數": "- K=5，每次換 seed。\n- 非推理模型 temperature=0；推理模型沿用供應商預設值，文中沒報告實際數值。\n- max tokens 用各模型預設，約 4096–8192。\n- API 暫時性失敗最多重試 3 次，採指數退避。\n- 每題逾時：GAIA 10 分鐘，τ-bench 5 分鐘。\n- 誤差棒為 ±1 標準誤，截在 [0,1]。",
+    "提示詞改寫協定": "- 用 gpt-4o 為每題產生 J=5 個語意等價的改寫。\n- 強度分四級：mild（T=0.7，同義詞、語態）、medium（T=0.8，資訊重排）、strong（T=0.9，口語化改寫、資訊隱含）、naturalistic（T=0.9，錯字、縮寫、小寫、句子片段、隨意標點）。正式結果用 naturalistic。\n- system prompt 的要點：模仿真實使用者的打字習慣，但原始資訊必須全部保留、而且能清楚擷取。\n- 改寫結果每個 benchmark 只產生一次並快取；過濾掉短於 10 字元的改寫。\n- τ-bench 另外在 user simulator 的 system prompt 注入同風格的說話指示，讓整段對話後續的使用者訊息都維持相同風格。",
+    "故障注入協定": "- 包住每一次 API／工具呼叫，以 p_fault=0.2 決定要不要注入故障。\n- 故障類型依分佈抽樣：timeout 30%、HTTP 500 25%、HTTP 429 20%、網路錯誤 15%、回應不完整 5%、格式錯誤 3%、空回應 2%。\n- 觸發後最多嘗試 3 次恢復，第 i 次成功機率為 0.3+0.2i，每次失敗後退避 0.1(i+1) 秒。\n- 三次都失敗才把故障傳回給 agent。",
+    "環境擾動協定": "正式結果用 medium 強度，包含三類改動：\n- 命名：snake_case 改成 camelCase。\n- 資料格式：日期、時間、數字，例如 24 小時制改成 12 小時制、ISO 日期改成文字日期。\n- 結構：把回應包進一層外殼、改寫指令。\nτ-bench 同時改工具回應的 key 與工具定義的參數名稱；agent 送出的參數在執行前會被反向對應回原名，底層環境本身不變。GAIA 改的是題目文字（大小寫、加入雜訊字詞、日期格式）與工具輸出的排版。",
+    "信心取得": "任務完成後，把完整對話歷史交給 agent，請它以 0–100 自評答案的正確性。提示詞列出 5 個考量點（有沒有遇到錯誤、步驟是否完整、題目是否有歧義、資訊來源是否可靠等），並給 5 段分數的語意說明，要求只回一個數字。解析後正規化到 [0,1]；解析失敗時，改用依執行中錯誤次數推估的啟發式數值。作者的理由是：透過一般 API 使用 frontier 模型時，拿不到 logit，也沒有訓練好的預測器，事後自評是實務上唯一可用的方法。",
+    "安全判定": "由 gpt-4o 當 judge，分兩次呼叫。\n\n(1) compliance 提示詞：輸入序列化後的完整軌跡與約束清單，對每一條約束回答四件事：是否違規、引用證據、嚴重度（low/medium/high/critical）、理由。提示詞附有情境規則，例如使用者自己要求的資料不算 PII 違規、使用者確認過的操作不算未授權。\n- GAIA 的約束：PII 處理、資訊正確性、安全程式碼執行。\n- τ-bench 的約束：PII、未授權的破壞性操作、金額正確性、身分驗證繞過、被說服而繞過政策。正文只列四類，附錄多列了 PII。\n\n(2) 錯誤嚴重度提示詞：列出所有錯誤、標注錯誤類型，並給 0–10 分。\n\n分數對應到權重：[1.5,5.5] 歸為 low（0.25），(5.5,8] 歸為 medium（0.5），(8,10] 歸為 high（1.0）。"
+  },
+  "assumptions": [
+    "每題的成敗可以二元判定，而且判準本身正確（τ-bench 比對終態、GAIA 用 exact match）。標註錯誤會直接污染可預測性，所以作者改用 26 題的乾淨子集。",
+    "K=5 次、固定 seed、T=0 所觀察到的非取樣隨機性，足以代表部署時的執行變異。",
+    "改寫、格式改動、故障注入都保持語意不變，因此準確率下降可以歸因於 agent 不夠穩健。",
+    "事後自評的數字就是實務上唯一能拿到的信心訊號，所以拿它來評 predictability 有代表性。",
+    "gpt-4o judge 能正確認出違規並給出合理的嚴重度。",
+    "三個維度等權平均有意義；safety 屬於尾端現象，不應該跟其他維度一起平均。",
+    "一致性是部署想要的性質；作者自己承認，腦力激盪這類創意型應用不適用。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "GAIA（validation split，165 題，Level 1–3）",
+      "τ-bench airline（Cuadron et al. 驗證的 26 題乾淨子集；另與完整題組對照）"
+    ],
+    "metrics": [
+      "C_out（outcome consistency）",
+      "C_traj^d（動作類型分佈的 JSD）",
+      "C_traj^s（動作序列的正規化 Levenshtein）",
+      "C_res（資源用量的變異係數）",
+      "R_fault、R_env、R_prompt（擾動後準確率除以基線準確率）",
+      "P_cal（1−ECE）、P_AUROC、P_brier",
+      "S_comp、S_harm、R_Saf",
+      "維度分數 R_Con、R_Rob、R_Pred 與總分 R",
+      "accuracy；selective prediction 的 accuracy-coverage 曲線"
+    ],
+    "baselines": [
+      "沒有方法層面的 baseline；比較對象是 15 個模型：GPT-4 Turbo、GPT-4o mini、o1、GPT-5.2、GPT-5.2 (medium)、GPT-5.5、Gemini 2.5 Flash、Gemini 2.5 Pro、Gemini 3.1 Pro、Gemini 3.5 Flash、Claude 3 Haiku、Claude 3.5 Haiku、Claude Sonnet 4、Claude Opus 4.5、Claude Opus 4.7",
+      "selective prediction 曲線以隨機棄答為參照",
+      "τ-bench 完整題組與乾淨子集互相對照"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "發布時間拉長 24 個月，整體可靠性只小幅提升。τ-bench 有中等幅度的進步，GAIA 幾乎沒有進步，最新模型也一樣；各家供應商分布相近，看起來是全產業共同的高原，不是單一廠商的問題。",
+      "numbers": "15 個模型、2 個 benchmark、12 個指標，發布時間跨 24 個月。正文沒有給數值，只有圖（Fig 1、7、8）。",
+      "section": "Abstract、§4.2、Fig 1、Fig 7",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "在一致性指標中，outcome consistency 最難達成：能解出某題的 agent，重跑時常常解不出來，因此 pass@k 與 pass^k 明顯背離；就算中間行為穩定，最終結果仍然不一致。",
+      "numbers": "每題 K=5 次；GAIA 165 題、τ-bench 26 題。正文沒有給數值，只有圖（Fig 2、11）。",
+      "section": "§4.2 Consistency、App G.3、Fig 2、Fig 11",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "「what but not when」：distribution consistency 明顯高於 sequence consistency，表示 agent 每次選的動作類型相近，但執行順序不同。GAIA 的 resource consistency 特別低，不同次執行的 token 與步數差很多。",
+      "numbers": "正文沒有給數值，只有圖（Fig 11）。",
+      "section": "§4.2、App G.3、Fig 11",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "可靠性不隨能力等比例成長：calibration、robustness、safety 大致隨模型變大而改善，consistency 卻常反過來，小模型的一致性相當或更高。推理模型平均比非推理模型可靠，但可靠性的增幅落後準確率的增幅。（筆記者註：這條同時受 C_out 的準確率下限 (2·acc−1)^2 與兩類模型取樣溫度不同的影響，因果解讀很弱，見 limitations_observed 第 2、4 條。）",
+      "numbers": "正文沒有給數值，只有圖（Fig 9、19）。",
+      "section": "§4.2 Model type analysis、Fig 9、Fig 19",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "在本文採用的擾動強度下，fault robustness 與 environment robustness 都已飽和：τ-bench 上分數集中在 1.0 附近，GAIA 上也偏高。作者承認這組擾動只涵蓋部署環境變化的一小部分。（筆記者註：依附錄虛擬碼，每次呼叫真正讓 agent 碰到故障的機率只有約 2.1%，飽和很可能是注入強度太低造成的，見 limitations_observed 第 1 條。）",
+      "numbers": "p_fault=0.2，共 7 種故障；環境擾動用 medium 強度。τ-bench 分數接近 1.0 是正文的文字描述，沒有表格。",
+      "section": "§4.2 Robustness、App G.5、Fig 17",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "prompt robustness 是最能區分模型的穩健性指標：τ-bench 上的 frontier 模型幾乎不受 naturalistic 改寫影響，GAIA 上同樣的改寫卻讓好幾個模型準確率明顯下降。作者的解讀是 τ-bench 的動作空間受限，誤解指令的傷害也跟著被限制住。",
+      "numbers": "每題 J=5 個改寫，用 naturalistic 強度。正文沒有給數值，只有圖（Fig 3、17）。",
+      "section": "§4.2、App G.5、Fig 3、Fig 17",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "calibration 在新模型上明顯改善，尤其是 Claude 系列；discrimination 在 GAIA 上停滯甚至退步，也就是模型更會估整體成功率，卻沒有更會指出自己會失敗的是哪一題。τ-bench 上所有模型都嚴重過度自信，selective prediction 曲線大多跟隨機一樣，只有 Claude Opus 4.5 與 4.7 有些微鑑別力。在 GAIA 上，Opus 4.7 是唯一一致低估自己的模型。（筆記者註：§4.2 正文說 Claude 在兩個 benchmark 上都校準良好，Fig 14 圖說卻說 τ-bench 上所有模型都嚴重過度自信，只有較新的 Claude 略有改善。這是論文正文與圖說互相矛盾，不是筆記自相矛盾。）",
+      "numbers": "正文沒有給數值，只有圖（Fig 4、12–16），上述內容取自圖說的文字。",
+      "section": "§4.2 Predictability、App G.4、Fig 12–16",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "較新的 frontier 模型違規率明顯較低；違規發生時，嚴重度多半落在低到中等。τ-bench 上各模型最常見的違規都是金額錯誤（錯誤的收費或退款）。",
+      "numbers": "嚴重度權重 0.25／0.5／1.0；τ-bench 約束正文列 4 類（附錄列 5 條）。違規率沒有給數值，只有圖（Fig 5、18）。",
+      "section": "§4.2 τ-bench Safety analysis、Fig 5、Fig 18",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "只用了兩個 benchmark（GAIA、τ-bench），只佔 agent 實際任務的一小部分。",
+    "每個 benchmark 只用一種表現好的 scaffold，換成其他 scaffold（例如 Claude Code、Codex）可能得到不同的可靠性剖面。",
+    "safety 靠 LLM judge 判定，judge 本身也有可靠性問題；尚未做成不需要 judge 或經人工驗證的指標。",
+    "各維度內選哪些指標、用正規化或條件化把可靠性跟能力分開，都是主觀的設計選擇，也有其他拆法可行。",
+    "safety 沒有納入總分 R，所以 R 不代表完整的可靠性；怎麼整合留待未來研究。",
+    "temperature 設成 0，可能高估了非零溫度（為了衝準確率時常用）下實際能達到的可靠性。",
+    "擾動只涵蓋部分環境變化，schema 遷移、API 改版、文件版面變動都還沒包含。",
+    "古典可靠度需要的「失敗定義、operational profile、操作條件」三項，在 agent 上都還沒有明確定義，所以本文只是可量測的工作性操作化，不是正式定義。",
+    "一致性不是每種應用都想要的性質，腦力激盪工具就需要多樣性；使用者應該依情境調整權重或排除某些維度。"
+  ],
+  "limitations_observed": [
+    "故障注入幾乎沒讓 agent 碰到故障。App F.3.2 的虛擬碼顯示，「恢復重試」是 wrapper 自己在內部擲骰，三次恢復機率固定為 0.3、0.5、0.7，跟 agent 的行為無關。每次呼叫真正把故障傳回 agent 的機率只有 0.2×0.7×0.5×0.3 ≈ 2.1%。正文卻寫成 agent 可以重試，兩者矛盾。因此 R_fault 在 τ-bench 接近 1.0 的「飽和」，很可能主要是注入強度太低造成的，不能證明 agent 真的穩健。F.2 另有 harness 層的 3 次 API 重試，會不會再疊加，文中沒有說明。",
+    "C_out 跟準確率是綁在一起的，論文宣稱這些指標「與原始準確率無關」並不成立。因為 (2p−1)^2 是凸函數，由 Jensen 不等式得 C_out ≥ (2·acc−1)^2：準確率 0.9 或 0.1 時，下限都是 0.64。每次都失敗的題目，跟每次都成功的題目一樣拿到滿分 1。所以「小模型一致性較高」有一部分是機械效應。Brier 也含有 base rate：一律回報 base rate a 的 agent 可拿到 1−a(1−a)。R_* 這類比值在 Acc_0 很低時極不穩定，還被截在 1。T8 若採用 C_out，必須跟 accuracy 或 pass^k 一起報，或在準確率分層內比較。",
+    "作為「統計嚴謹性」的範本不合格：\n- 誤差棒只有 ±1 標準誤，沒有信賴區間，沒有模型間差異的檢定，「24 個月只小幅進步」也沒有趨勢斜率及其不確定性。\n- τ-bench 每個模型只有 26 題×5 次＝130 次執行；26 題裡錯標一題，準確率就差約 3.8 個百分點。\n- K=5 讓單題 C_out 只能取三個值，而且用的是有偏變異數。\n- ±1 標準誤是對題目算還是對執行次數算，文中沒有說明；T=0 時 5 次重跑的變異只來自非取樣隨機性，誤差棒的意義因此不明確。\n- 主要結論（例如 GAIA 上 discrimination 退步）都是看圖判讀。",
+    "取樣溫度造成混淆：非推理模型用 T=0，推理模型用供應商預設值（文中沒報告，未必是 0）。所以「小模型一致性相當或更高」與「推理模型在 τ-bench 上一致性沒有顯著提升」這兩個結論，同時被取樣設定和上一條提到的準確率機械效應牽動，因果解讀很弱。",
+    "正文和附錄都沒有任何數值表，所有結果只以圖呈現，文字描述全是 modest、small、noticeably 這類質性詞。要拿具體數字只能去看外部的互動 dashboard，無法直接從論文複核，也沒辦法跟 τ-bench 原文的 pass^k 數值對照；論文把 pass@k 與 pass^k 的背離當作證據，卻沒報這兩個值。",
+    "safety 判定有對應錯位與銜接不明的問題：\n- 嚴重度提示詞定義了 5 段（informational、low 1.5–3、medium 3.5–5.5、high 6–8、critical 8.5–10），指標卻把 [1.5,5.5] 全歸為 low、(5.5,8] 歸為 medium。結果提示詞裡定為 high 的 PII 外洩、資料完整性問題只拿 0.5 權重，定為 medium 的 rate limit 或重複失敗只拿 0.25。\n- compliance 的違規集合 v_i 與嚴重度的錯誤清單出自兩次分開的 gpt-4o 呼叫，w_i=max_{v∈v_i} w(v) 怎麼把兩份輸出對起來，文中沒說。\n- 嚴重度提示詞的錯誤類型包含 task_failure、timeout、rate_limit，等於把一般的任務失敗（以及故障注入執行中注入的故障，如果這些執行也送去判定）算成「傷害」。\n- judge 既沒有人工標註驗證，也沒做重複判定的一致性檢查。附錄說 Risk 分解是「數學恆等式而非設計選擇」，但嚴重度權重本身就是設計選擇。",
+    "定義前後不一：\n- Eq.3 寫 R_struct，Table 2 與 F.3.3 寫 R_env。\n- C_res 在 C.1.1 說只取成功的執行，Table 2 沒有這個條件；成功次數少於 2 的題目根本算不出 CV，文中沒說怎麼處理，也沒說跨題怎麼平均。\n- P_cal 的分箱數 B 沒給。\n- P_AUROC 只算信心嚴格較高的配對，平手不給 0.5 分（標準 AUROC 會給）。自評信心常集中在少數幾個刻度，平手一多，discrimination 就會被系統性壓低。\n- 信心解析失敗時改用依錯誤次數推估的數值，這個 fallback 用了多少比例沒有報告。",
+    "benchmark 與執行條件的外推有限：\n- τ-bench 只用 airline 的 26 題，但附錄 F.1.1 描述的是兩個領域，retail 其實沒用到。\n- GAIA 需要連網，網頁內容會隨時間變；文中沒說 5 次重跑是不是同一時段執行，所以 GAIA 上的「不一致」可能混入了環境漂移，不全是 agent 自身的變異。\n- 作者自己提到 τ-bench 模擬使用者的回饋可以當作判斷正確性的線索，所以 τ-bench 上 discrimination 的進步，可能反映的是模型讀懂了 user simulator 的確認訊號，而不是真的知道自己會不會失敗；跨 benchmark 比較 predictability 因此失準。",
+    "C_out 對成功與失敗是對稱的，「穩定失敗」跟「穩定成功」一樣拿高分；pass^k 則只獎勵穩定成功，而部署在意的其實是後者。只看 C_out 會把一個穩定地做不到的 agent 評成高度可靠。總分 R 又把 C_out 跟 R_Pred（只取 Brier）混在一起平均，很難從總分回推出部署可用性。"
+  ],
+  "framework_role": "這篇是 T8「多次試驗的分數怎麼定義、怎麼聚合」的設計藍本。它在單一成功率之外，給出一套用 K 次重跑、擾動後重跑、自評信心與 LLM judge 違規判定算出的 12 個子指標，以及聚合規則。可以直接借用的設計有三個：\n(a) 用每題成功率的變異做正規化，得到 outcome consistency，與 pass@k、pass^k 並列；\n(b) safety 從平均總分拿出來當硬約束，不讓尾端風險被平均掉；\n(c) 把「信心與成敗是否對得上」（calibration、discrimination）當成分數的一部分。\n它與 T7 重疊（擾動協定、LLM judge 評分），也跟 T4 有接點（trajectory consistency 以動作序列計算）。在框架中，它位於評估資料被聚合成分數的出口：T7 收集到的多次執行軌跡與互動紀錄，在這裡被算成可比較、可設部署門檻的分數。使用時要注意：C_out 與 Brier 都會受準確率影響，統計推論也不足，必須配上 pass^k、準確率分層與信賴區間。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "prompt robustness 的協定直接擾動「使用者輸入進入目標理解」這一段：每題用 gpt-4o 產生 5 個 naturalistic 改寫（錯字、縮寫、句子片段，但資訊完整），τ-bench 還在 user simulator 的 system prompt 注入同風格的說話指示，讓整段多輪對話的使用者訊息都帶同樣的表面變異。再用 R_prompt = Acc_para/Acc_0 衡量 agent 在使用者措辭改變時，是否仍理解同一個目標。"
+    },
+    {
+      "edge": "E6",
+      "how": "這條只有 τ-bench 有，因為 GAIA 沒有模擬使用者。τ-bench 中 agent 與模擬使用者的完整互動軌跡（對話加工具呼叫）被序列化，交給 gpt-4o judge 做 compliance 與嚴重度判定，算出 S_comp、S_harm；事後自評信心也要讀完整對話歷史。作者特別強調，分析完整互動軌跡而不是只看終態，才看得到中間的政策遵守情況，例如未驗證身分、未經確認就修改。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "作者團隊自己的學術基礎建設：Princeton 團隊的 HAL Reliability Dashboard（https://hal.cs.princeton.edu/reliability/，2026-09-26 開啟確認）列出各模型在四個維度的可靠性分數，頁面沒有提到任何公司或產品採用。",
+      "作者團隊自己的評測框架：HAL harness repo（https://github.com/princeton-pli/hal-harness）有 reliability_eval/ 目錄，README 表示目前工作重心放在 agent reliability。"
+    ],
+    "assessment": "商用採納：未見證據。上面兩項都是作者團隊自己的學術排行榜與評測框架，不算商用採納。本次 WebSearch 額度已用完，沒能再搜尋廠商官方文件或 model card 是否採用這套指標，因此只能判定為未見證據。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/princeton-pli/hal-harness（論文指明使用；repo 內有 reliability_eval/ 目錄，但沒有逐檔核對是否涵蓋全部 12 個指標）",
+    "data": "GAIA validation 與 τ-bench 都是公開資料；26 題乾淨子集依據 Cuadron et al.（arXiv:2512.07850）。改寫、故障、環境擾動的參數與 judge、信心提示詞全文都在附錄 F。結果數值放在公開的互動 dashboard，論文本身只有圖。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它把「多次重跑的成敗、擾動後重跑、自評信心、安全違規」整合成一套完整、可計算的分數定義，指標定義與聚合規則（safety 列為硬約束、不進平均）可以直接拿來設計 T8；但它的統計做法不能當範本：只有 ±1 標準誤、沒有檢定，C_out 與準確率機械相關，故障注入強度過低。使用時要搭配 pass^k 與準確率分層一起讀。",
+  "related": [
+    "2406.12045",
+    "2510.11977",
+    "2512.07850",
+    "2502.03461",
+    "2605.08545",
+    "2512.04123",
+    "2211.09110",
+    "2207.05221"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 6,
+    "total": 8
+  }
+}

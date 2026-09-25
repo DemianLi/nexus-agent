@@ -1,0 +1,190 @@
+{
+  "id": "2404.17140",
+  "title": "Small Language Models Need Strong Verifiers to Self-Correct Reasoning",
+  "topic": "T5",
+  "subarea": "外部回饋／工具輔助的修正",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 SCORE：讓 ≤13B 的小模型用自己答對的解當提示，替自己答錯的解寫逐步 critique，經規則與改寫過濾後微調成「critique＋修正」一次產出的 refiner；把自我修正拆成 (Self-)Verify 與 Self-Refine 分開量測，發現 refiner 確實變強，但只有搭配 GPT-4 或 oracle 驗證器才有明顯增益，自己訓練的驗證器幾乎帶不動任何修正。",
+  "problem": "能有效自我修正的多半是超大、閉源、只能經 API 使用的模型；既有讓小模型學會自我修正的做法（Yu et al. 2023b、An et al. 2023、Han et al. 2024）都靠從更強模型蒸餾 critique 資料，作者認為這在高風險領域有安全疑慮，也讓人看不清小模型本身的修正能力從何而來。同時，前人把「判斷要不要改」和「怎麼改」混在一個模型裡訓練，無法分辨失敗出在哪一段。作者要回答：小模型需要多少來自強模型的指導，才能學會在推理任務上自我修正？這對任何要在本地小模型上做修正迴圈的系統都是前置問題。",
+  "core_idea": "兩個拆分加一個資料技巧。(1) 自我修正＝(Self-)Verify＋Self-Refine：先由驗證器（模型自己、GPT-4 或正確答案標籤）判斷初始解對不對，判錯才交給 refiner，兩個模組可以各自替換，因此能單獨掃描驗證器強度對最終準確率的影響。(2) Self-Refine＝Critique＋Correction：refiner 一次產出「指出第一個錯誤步驟的 critique」再接「修正後的解」。(3) 資料來自小模型自己：對同一題取樣多個解，拿答對的解當提示讓模型逆推出答錯解的逐步 critique（類似 rejection sampling fine-tuning 的自舉），過濾後微調同一個模型；推論時不給提示。作者用附錄 B 的貝氏推導主張「看著正解寫出的 critique」就是最能引導出正解的 critique。",
+  "method": {
+    "輸入輸出": "推論時輸入一道推理題 q。流程：以 8-shot CoT 提示讓未微調的基礎模型產生初始解 s（格式為「Step 1: … Step n: The answer is X. [END]」）→ 驗證器判斷 s 是否錯誤 → 若判錯，SCORE refiner 以 (q, s) 為輸入，一次產出「critique（只到第一個錯誤步驟）＋修正後的完整解」→ 取修正解的最終答案；若判對，直接採用 s。修正只做 1 輪。",
+    "Stage 1：產生與過濾 critique": [
+      "1. 取樣：對訓練集每題以 8-shot CoT 提示（Appendix A）從基礎模型取樣 N=10 個解；只用最終答案是否等於標準答案來標記對錯。每個基礎模型、每個任務分開收集。",
+      "2. 配對：同一題的錯解集合與正解集合做笛卡兒積，得到所有 (錯解, 正解) 對；每對只取樣 1 則 critique。沒有任何正解的題目不會產生資料。",
+      "3. 產生 critique：用 2-shot critique 提示，把錯解標為 Answer 1 (Incorrect)、正解標為 Answer 2 (Correct)，要求逐步檢查 Answer 1、以 Answer 2 為參考。輸出格式要求先逐字抄回每一步，再寫「Feedback: This step is correct.」或「Feedback: This is incorrect. Because …」；最後一步的 feedback 必須寫出從正解取得的正確最終答案，並以 [END] 結尾。",
+      "4. 規則過濾（任一不符即丟）：(a)「Step {i}:」與「Feedback:」出現次數相同；(b) 每一步都逐字抄自原錯解；(c) 最後一步的 feedback 給出正確答案。",
+      "5. 改寫過濾：用 2-shot correction 提示，把「帶 feedback 的錯解」交給基礎模型，接一句要求依 feedback 修正推理、以數字作答並以 [END] 結尾；改寫後最終答案不正確的 critique 丟掉。保留下來的 critique 與這次改寫出的修正解一起成為訓練資料。",
+      "6. 資料量（Table 1）：LLaMA-2-13B-chat 在 GSM8K 從 56,843 則原始 critique 經規則過濾剩 36,337（63.9%）、再經改寫過濾剩 14,499（25.5%）；CSQA 42,705→36,436→24,511（57.4%）。Gemma-7B-it 在 GSM8K 52,669→17,209→4,623（8.8%）；CSQA 40,604→35,929→12,972（31.9%）。"
+    ],
+    "Stage 2：微調 refiner": [
+      "輸入為 (q, 初始錯解)，不含正解提示、不含 few-shot 範例；目標為「截斷後的 critique＋修正解」，一次生成。",
+      "critique 只保留到第一個被標為錯誤的步驟的 feedback（收集時是逐步全寫，以便過濾）；理由是推論時沒有正解提示，一次找出並改完所有錯誤太難。",
+      "cross-entropy loss，輸入 token 遮罩不計 loss。",
+      "LLaMA-Factory＋LoRA：rank 32、learning rate 2e-5、3 epochs、batch size 32。推論 greedy decoding（temperature 0）、最大長度 2,048。全部實驗可在 4 張 A40（48GB）上完成。"
+    ],
+    "驗證器（三種強度）": [
+      "Self-verifier（弱，照 Cobbe et al. 2021 的 outcome verifier）：與基礎模型同架構，在最後一層最後一個 token 的表示上接二元分類頭；輸入模板為「Question: {q} \\n Solution: {s} \\n Is this solution correct?」；標籤是 Stage 1 取樣解的最終答案對錯；因正負類不平衡，依類別比例重新加權 loss。推論時輸出「初始解錯誤」的機率，超過門檻才觸發 refiner；門檻在 dev set 上選讓準確率最高的值後固定。",
+      "GPT-4 驗證器（強）：4-shot 提示 gpt-4，要求回答 **correct** 或 **incorrect** 並說明理由（Appendix A）。refiner 只拿到這 1 個位元的觸發訊號，不會看到 GPT-4 的說明。",
+      "Oracle 驗證器（上限）：直接用標準答案判斷初始解對錯。",
+      "對照：prompted verifier＋prompted refiner（Self-Refine 式，Madaan et al. 2023）；多選題另有 random refiner（隨機改選一個與初始答案不同的選項，照 Huang et al. 2023b）。"
+    ],
+    "延伸變體": [
+      "與 RFT 疊加（Appendix C）：把初始解產生器換成 rejection sampling fine-tuned 模型，並從 RFT 模型重新取樣 10 個解來收集 critique，讓 refiner 學較難的錯誤。Table 5 顯示驗證器由 RFT 模型初始化、refiner 由基礎模型初始化稍好。",
+      "與 oversample-then-rerank 疊加（Appendix D）：每題以 temperature 0.9 取樣 k=10 個解，self-verifier 給每個解的正確機率，以驗證器加權投票選答案；正確機率低於門檻 C 的解交給 SCORE refiner 各 greedy 改寫一次，改寫解改用它自己的驗證器機率參與加權投票。C 同樣在 dev set 上調。",
+      "資料量掃描（§5.4）：以 25%–75% 的 14,499 筆 LLaMA GSM8K 資料微調；只有搭配強驗證器時增益隨資料量上升，約 10k 筆（75%）以後持平；搭配弱驗證器則一開始就持平。"
+    ],
+    "論文沒交代、照做時要自己決定的": [
+      "GSM8K dev set 怎麼從訓練集切出（Table 3、Table 5、門檻調整都用它）；論文沒寫，官方 repo 的 data/gsm8k_nl/ 附有 dev_shuf.jsonl 可直接沿用。",
+      "Stage 1 取樣 N=10 時的溫度（0.9 只出現在 Appendix D 的 rerank 實驗）；repo README 的 critique 生成與改寫過濾指令帶 --greedy，看起來 critique 是 greedy 產生的。",
+      "驗證器微調的超參數：論文沒寫；repo README 的指令為 LoRA rank 32、alpha 64、learning rate 1e-5、batch size 32、3 epochs。",
+      "refiner 微調與推論時的輸入模板（需看官方程式碼）。",
+      "gpt-4 的模型快照版本；verifier F1 以哪一類為正類。"
+    ]
+  },
+  "assumptions": [
+    "任務有可自動比對的最終答案（數字或選項），才能不經人工就標記取樣解的對錯；但這仍使用了資料集原有的標準答案。",
+    "基礎模型在 10 次取樣內對相當比例的題目至少答對一次，否則配不出 (錯解, 正解) 對。",
+    "推理可以寫成「Step i:」逐步格式，且基礎模型能穩定遵守格式，規則過濾才有東西可留（Gemma 在 GSM8K 規則過濾後只剩 32.7%）。",
+    "基礎模型有足夠的指令遵循能力，給對的 critique 就能改寫出正確答案，改寫過濾才有意義。",
+    "推論時有一個足夠強的驗證器（GPT-4 或近似 oracle）可用來決定何時修正；論文的主要增益全建立在這個前提上。",
+    "有 dev set 可調觸發門檻。",
+    "一輪修正就夠，且錯誤集中在單一「第一個錯誤步驟」。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "GSM8K（完整測試集；訓練資料也只來自 GSM8K 訓練集）",
+      "MATH 子集：181 題 Level 1、代數／計數與機率／prealgebra／數論、答案為數字且題目無 LaTeX（照 Hosseini et al. 2024），作為 GSM8K 訓練模型的遷移評估",
+      "CommonsenseQA（原 dev set 當測試集；訓練資料只來自 CSQA 訓練集）",
+      "QASC、RiddleSense（原 dev set，CSQA 訓練模型的遷移評估）"
+    ],
+    "metrics": [
+      "最終答案準確率（修正後）與相對初始解的差值",
+      "驗證器 F1（未說明正類）",
+      "Freq.：驗證器決定修正的比例（佔測試集）",
+      "Contrib.：修正嘗試中最後得到正確答案的比例",
+      "驗證器＋refiner 的混淆矩陣（Figure 3，GSM8K，LLaMA）",
+      "推論延遲倍數（Appendix E）"
+    ],
+    "baselines": [
+      "基礎模型 few-shot CoT 的初始解（無修正）",
+      "prompted verifier＋prompted refiner（Self-Refine 式自我修正）",
+      "prompted refiner 搭配 oracle 驗證器",
+      "random refiner（多選題）",
+      "RFT 模型的初始解；RFT＋各種驗證器（self、gpt-3.5-turbo、gpt-3.5-turbo SC@10、gpt-4、oracle）",
+      "oversample-then-rerank（k=10、驗證器加權投票）",
+      "消融：critique 寫全部步驟 vs 只寫第一個錯誤步驟；critique 與修正一次生成 vs 分兩個模組"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "搭配 GPT-4 驗證器時，SCORE refiner 在兩個模型、五個資料集上都高於初始解；引言的「平均 14.6%」是 10 格相對增益的平均，不是百分點。其中 Gemma 的 GSM8K→MATH 子集一格的相對增益就有 44.6%，去掉這格後其餘 9 格平均約 11.2%（自行依 Table 6 驗算）。",
+      "numbers": "相對增益平均 14.6%。絕對增益：LLaMA-2-13B-chat 在 GSM8K／MATH 子集／CSQA／QASC／RiddleSense 為 +4.2／+2.7／+2.7／+2.2／+9.7（平均 +4.3）；Gemma-7B-it 為 +6.2／+12.1／+7.8／+7.8／+7.8（平均 +8.3，§5.1 亦寫 +8.3）。MATH 子集只有 181 題，+12.1 約等於 22 題。",
+      "section": "§1、§5.1、Figure 2、Table 6",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "不經訓練的 prompting 式自我修正（prompted verifier＋prompted refiner，Self-Refine 做法）在小模型上沒有幫助，常常讓準確率下降，呼應 Huang et al. 2023b「LLM 還不能自我修正推理」。",
+      "numbers": "LLaMA：GSM8K −0.3、MATH 子集 ±0.0、CSQA −7.5、QASC −2.6、RiddleSense −2.4；Gemma：±0.0、+1.1、−1.8、+0.1、−1.8。prompted verifier 的 F1 只有 20.0–61.0。",
+      "section": "§5.1 finding 1、Table 6",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "同一個 SCORE refiner，最終準確率隨驗證器強度大幅變動：自己訓練的 self-verifier 幾乎沒有增益，GPT-4 有中等增益，oracle 最高。作者據此主張瓶頸在驗證器而不在 refiner。不過以 oracle 列的 Freq. 與 Contrib. 換算，驗證器完美時 refiner 在 GSM8K 也只修好約 14%–17% 的錯題，refiner 本身同樣是大瓶頸。",
+      "numbers": "self-verifier＋SCORE 的 10 格增益介於 −0.3 到 +0.4；gpt-4＋SCORE 介於 +2.2 到 +12.1；oracle＋SCORE 介於 +7.7 到 +18.8。GSM8K 修正頻率：LLaMA gpt-4 63.3% vs oracle 62.8%，self 19.0%；oracle 列 Contrib. 為 14.0%（LLaMA）與 17.4%（Gemma），與 8.8／62.8、11.1／63.7 的換算一致。CSQA 的 self-verifier 只觸發 3.0%（LLaMA）與 0.6%（Gemma）。",
+      "section": "§5.1 finding 3、§5.2、Table 2、Table 6、Figure 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "refiner 的修正能力能遷移到沒訓練過的資料集，驗證器則遷移得較差。",
+      "numbers": "gpt-4 驗證器下，GSM8K 訓練的 Gemma 在 MATH 子集 27.1→39.2（+12.1）；CSQA 訓練的模型在 QASC、RiddleSense 為 +2.2～+9.7。self-verifier F1：LLaMA GSM8K 51.1→MATH 子集 36.0；CSQA 47.1→RiddleSense 42.1；Gemma GSM8K 56.8→MATH 子集 49.5。self-verifier 在所有遷移集上的增益都在 −0.3 到 +0.2 之間。",
+      "section": "§5.1 finding 4、Table 6",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "消融：critique 只寫第一個錯誤步驟、而且 critique 與修正一次生成，是最好的組合；分成兩個模組（先 critique 再修正）既慢又較差。但差距主要出現在 oracle 準確率，實際最終準確率的差距只有零點幾，而且是單次實驗。",
+      "numbers": "GSM8K dev、LLaMA-2-13B-chat，初始解 39.4。只寫第一錯誤步＋一次生成：最終 40.2／oracle 49.5；全部步驟＋一次生成：39.6／46.4；只寫第一錯誤步＋兩階段：39.4／43.6；全部步驟＋兩階段：39.9／47.0。",
+      "section": "§5.3、Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "SCORE 可疊在 RFT 之上。同一張表也顯示，中等強度、沒有門檻的驗證器比完全不修正更糟：gpt-3.5-turbo 當驗證器讓準確率大跌，驗證器 F1 與最終增益也不是單調關係。",
+      "numbers": "GSM8K 測試集、LLaMA：few-shot 37.2 → RFT 42.7。以 RFT 解為起點：self-verifier F1 47.3 → 42.8（+0.1）；gpt-3.5-turbo F1 59.7 → 31.5（−11.2）；gpt-3.5-turbo SC@10 F1 63.6 → 38.1（−4.6）；gpt-4 F1 89.2 → 46.3（+3.6）；oracle → 51.4（+8.7）。文表不一致：Appendix C 內文說 gpt-4＋SCORE 從 42.7 提升到 45.1，Table 4 卻是 46.3。",
+      "section": "Appendix C、Table 4",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "與 oversample-then-rerank 疊加時，即使只用弱的 self-verifier，加權投票前先修正低信心解，Table 7 的四格中有三格小幅增益（內文只報其中兩格）；作者把它解釋為多個解的驗證結果聚合後，弱驗證器等於變強了。第四格 LLaMA 在 MATH 子集上反而下降，內文沒提。",
+      "numbers": "k=10、temperature 0.9、驗證器加權投票。LLaMA GSM8K 44.3→46.0（+1.7）；Gemma GSM8K 39.5→41.1（+1.6，只在表中）；Gemma MATH 子集 34.3→35.9（+1.6）；LLaMA MATH 子集 30.9→29.8（−1.1，內文未提）。對照：只取 1 個解時 SCORE＋self-verifier 只有 +0.3／+0.4，單純取樣 10 個解重排就有 +3.2～+7.2。",
+      "section": "Appendix D、Table 7",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "推論成本：驗證器只做分類、refiner 只在判錯時呼叫，所以三模型管線的延遲不到三倍；取樣 10 個解重排的延遲高得多。這組數字是全在本機跑的 self-verifier 設定，真正有增益的 GPT-4 驗證器設定沒有量延遲與 API 成本。",
+      "numbers": "相對基礎模型：LLaMA-2-13B-chat ×1.3、Gemma-7B-it ×1.4；oversample-then-rerank（10 個解）×4.5。",
+      "section": "Appendix E",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "用小模型大量產生合成資料需要大量 GPU 運算，雖然擺脫了對閉源 API 的依賴，但兩者的成本效益沒有比較。",
+    "推論時加入驗證器與 refiner 會增加延遲（Appendix E）。",
+    "弱的 self-verifier 決定何時修正時，自我修正幾乎無效；推理驗證能力是內在自我修正的主要障礙，需要後續研究。",
+    "只做 1 輪修正，多輪迭代留待未來。",
+    "驗證器的跨資料集遷移比 refiner 差。"
+  ],
+  "limitations_observed": [
+    "摘要的「最少的強模型輸入」在實務上不成立：所有有意義的增益都要在推論時對每一題呼叫 GPT-4（或直接用標準答案）。雖然 refiner 只拿到 GPT-4 的 1 個位元判斷、沒拿到說明，但 GPT-4 本身就能直接解這些題，部署時等於用強模型的每題推論換小模型的幾個百分點；論文沒有比較「直接讓 GPT-4 作答」或計算這個設定的成本與延遲，gpt-4 的快照版本也沒寫。",
+    "「平均 14.6%」是相對增益，而且被 181 題 MATH 子集上 Gemma 那一格（相對 44.6%、約 22 題）拉高；去掉它，其餘 9 格平均約 11.2%。絕對值上 LLaMA 平均只 +4.3 個百分點，MATH 子集的樣本數也不足以支撐跨格比較。",
+    "「瓶頸在驗證器而不在 refiner」的說法過強。oracle 驗證器下，GSM8K 的錯題只有約 14%（LLaMA）到 17%（Gemma）被修好（Table 2 的 Contrib. 與 Table 6 的增益可互相換算）；論文只在固定 refiner 下掃描驗證器，沒有在固定驗證器下掃描 refiner 強度（只比了 prompted vs SCORE），不足以支撐「refiner 不是瓶頸」。",
+    "Table 4 顯示 gpt-3.5-turbo 當驗證器讓準確率 −11.2、加上 SC@10 仍 −4.6，而 F1 更低的 self-verifier 卻是 +0.1。可見 F1 與最終增益不是單調關係，誤報的代價才是關鍵：self-verifier 的門檻在 dev set 上針對準確率調過，行為保守（CSQA 只觸發 3.0%／0.6%）；gpt-3.5-turbo 與 SC@10 的設定（有沒有門檻、SC@10 怎麼聚合）論文完全沒描述，無法判斷它們傷害準確率的原因。論文把 F1 當主要驗證器指標，卻沒說明正類是哪一類，也沒有分開報 precision 與 recall（只有 Figure 3 一組混淆矩陣）。",
+    "改寫過濾看起來部分是在測「抄答案」：完整 critique 的最後一步已寫出正確最終答案，基礎模型只要照抄就能讓改寫「答對」，因此這道過濾擋不住中間步驟錯誤的 critique。另外，訓練目標裡的修正解是在完整 critique 條件下產生的，但訓練時 critique 被截到第一個錯誤步驟，輸入與目標之間有資訊落差，模型可能學到沒有依據的跳步。",
+    "資料覆蓋有系統性偏差：10 次取樣都答錯的題目配不出 (錯解, 正解) 對，完全不進訓練資料，所以 refiner 從沒學過模型最弱的那些題；而標記取樣解對錯本身就使用了資料集的人工標準答案，與「不用人工標註」的說法有張力。",
+    "Appendix B 的「證明」只是啟發式：Eq.(1) 應是對 c 求和的邊際化，而不是單一 c 的乘積；以提示詞得到的 M(c|q,s⁻,s⁺) 也不保證等於模型自身分布下的貝氏後驗；實作上每對只取樣一則 critique，並不是 argmax。",
+    "消融與初始化實驗都是單次執行、沒有變異數或信賴區間：Table 3 的最終準確率差距只有 0.2–0.8 點，Table 5 所有組合落在 45.0–45.3，卻據此下設計結論；GSM8K dev set 的切法也沒交代。",
+    "文與表不一致、報告有選擇性：Appendix C 內文寫 45.1、Table 4 是 46.3；Appendix D 內文只報兩個正增益（LLaMA GSM8K +1.7、Gemma MATH 子集 +1.6），沒提 Table 7 裡 Gemma GSM8K 的 +1.6，也沒提 LLaMA 在 MATH 子集上 30.9→29.8 的下降。",
+    "多選題上，oracle 增益有相當部分可能來自「知道原答案錯」這 1 個位元本身，但程度因模型而異：LLaMA 的 prompted refiner 搭配 oracle 在 CSQA 就有 +14.0，SCORE 只再多 +2.5（86.2 vs 83.7）；Gemma 則是 74.5 vs 85.4，SCORE 多了 +10.9。用來排除「隨機猜」的 random refiner 數字只在 Figure 2 圖中，Table 6 沒列，無法從文字核對。",
+    "沒有和論文自己點名的蒸餾式小模型自我修正方法（Yu et al. 2023b、An et al. 2023、Han et al. 2024）做實證比較，「不蒸餾也能學會」的代價（比蒸餾差多少）不清楚。",
+    "只評估單一最終答案的數學與常識問答，一輪修正；沒有開放式生成、多輪對話或 agent 軌跡。即使算上 ×4.5 對 ×1.3 的延遲差，單純取樣 10 個解重排的增益（+3.2～+7.2）仍遠高於單解＋SCORE＋self-verifier（+0.3／+0.4）；對只能用本地小模型的系統，SCORE 不是成本效益最高的第一步。"
+  ],
+  "framework_role": "T5 中「外部回饋觸發修正」的一份負面兼正面證據。它把自我修正拆成「何時修正」（驗證器／觸發閘門）與「怎麼修正」（refiner），並用同一個 refiner 掃描三種驗證器強度，得出對框架最實用的幾條設計原則：(1) 小模型的內在自我驗證幾乎觸發不了有效修正，T5 的觸發訊號應來自外部（更強的評審模型、執行結果、標準答案或規則檢查），這與 2310.01798 的結論一致；(2) 觸發閘門的誤報成本要當成一級指標：中等強度的閘門（gpt-3.5-turbo）可能比不修正更糟，閘門的 F1 高低也不保證修正有淨增益，最好像 self-verifier 那樣在 dev set 上以最終準確率調門檻；(3) refiner 可以用自己的成功／失敗樣本自舉訓練（用正解當提示逆推 critique），而且修正能力比驗證能力更能遷移；(4) 修正紀錄至少要保留觸發頻率、修正後對錯、以及「對改錯／錯改對」的混淆矩陣，才看得出淨效果。它的限制是場景只有單題、單答案、單輪，不直接涵蓋多輪對話狀態或 agent 軌跡。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "論文的核心變因就是「偵測到異常才觸發修正」這道閘門：驗證器判定初始解錯誤（self-verifier 的錯誤機率超過 dev set 調出的門檻，或 GPT-4／oracle 判 incorrect）才呼叫 refiner，判對則直接放行。實驗系統性地替換這個異常偵測器並量它的影響（Table 2 的 Freq.、Table 4 的 gpt-3.5 反例、Figure 3 的混淆矩陣）。要注意這裡的「軌跡」只是一條單題 CoT 解，而不是多步 agent 軌跡；異常判定也是整條解的結果層級（outcome verifier），不是步驟層級。"
+    },
+    {
+      "edge": "E5",
+      "how": "論文用每一次修正嘗試的紀錄（驗證器是否觸發、修正前後答案對錯）計算 Freq.（觸發頻率）與 Contrib.（觸發後得到正確答案的比例），並畫出驗證器＋refiner 的混淆矩陣，區分「錯改對」與「對改錯」，以此評估修正行為而不只看最終準確率（§5.2、Table 2、Figure 3）。這是把修正紀錄回流到評估的具體做法，但只是離線分析，沒有在系統內形成持續的紀錄管線。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有描述任何部署或產品；作者單位包含 LG AI Research（也是資助方），但資助不等於採納。官方 repo（https://github.com/yunx-z/SCORE）頁面標示為 ACL 2024 Findings，內容是研究用的重現腳本，未見部署說明。本次因網路搜尋額度用盡，沒有完成產品或官方文件的搜尋，所以這裡的「未見」是指未搜到，不代表搜過之後確認沒有。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/yunx-z/SCORE",
+    "data": "benchmarks（GSM8K、MATH、CommonsenseQA、QASC、RiddleSense）都是公開資料集。官方 repo 的 README 自稱含 code and data（標示為 ACL 2024 Findings），但 data/ 目錄只有各任務的提示詞檔、GSM8K 的 train／dev／test 切分（dev_shuf.jsonl 等）與 MATH 子集測試題；README 與目錄中未見生成的 critique 微調資料或訓練好的 checkpoint 連結，只提供從取樣、critique 生成、過濾到微調的重現腳本；GitHub API 顯示未設定授權。基礎模型（LLaMA-2-13B-chat、Gemma-7B-it）公開可取得；GPT-4 驗證器依賴閉源 API 且未指明快照，GPT-4 設定的結果無法完全重現。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "把 Verify 與 Refine 拆開掃描驗證器強度、並顯示中等強度的驗證器會傷害準確率，對 T5 的觸發閘門設計有實用價值；但主要增益全靠推論時的 GPT-4 或 oracle，核心結論與 2310.01798 大幅重疊，數字上還有文表不一致與相對增益的包裝，屬有價值但非必讀。",
+  "related": [
+    "2310.01798",
+    "2303.17651",
+    "2110.14168",
+    "2310.13522",
+    "2310.20689",
+    "2401.07301",
+    "2402.06457",
+    "2308.01825",
+    "2305.20050",
+    "2206.05802",
+    "2304.01904"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}
