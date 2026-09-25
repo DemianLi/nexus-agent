@@ -19,7 +19,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { SessionLog } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import type { Event, TitlePayload } from '@nexus/wire';
-import { TITLE } from '@nexus/wire';
+import { emptyConversation, reduceAll, TITLE } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCliAgent, runCli } from './cli.js';
@@ -199,8 +199,9 @@ describe('送出去的是什麼、寫了什麼', () => {
     const detach = small(log, () => undefined);
     log.append('turn/start', { kind: 'message', text: FIRST });
     log.append('model/start', {});
-    await until(() => titleEvents(log.events).length === 1);
-    expect(titleEvents(log.events).map((event) => event.data.title)).toEqual(['標題']);
+    // 前一顆是開跑前補寫的退回標題（3 個位元組：「請」）。
+    await until(() => titleEvents(log.events).length === 2);
+    expect(titleEvents(log.events).map((event) => event.data.title)).toEqual(['請', '標題']);
     await detach();
   });
 
@@ -288,6 +289,25 @@ describe('什麼時候排', () => {
     expect(requestEvents(t.log.events).map((event) => event.data.messageSeqs)).toEqual([
       [start.seq],
     ]);
+    await t.detach();
+  });
+
+  it('退回標題那一次沒寫成：開跑前先補寫，順序照樣是退回、請求、模型', async () => {
+    const t = attached(() => stopReply());
+    // 不叫 `ensureFallbackTitle`：模擬 `turn/start` 那一段寫標題失敗（那時只 warn）。
+    const start = t.log.append('turn/start', { kind: 'message', text: FIRST });
+    t.log.append('model/start', {});
+    await until(() => titleEvents(t.log.events).length === 2);
+    expect(
+      t.log.events
+        .map((event) => event.type)
+        .filter((type) => type === 'session/title' || type === 'session/title-llm-request'),
+    ).toEqual(['session/title', 'session/title-llm-request', 'session/title']);
+    expect(titleEvents(t.log.events)[0]?.data).toEqual({
+      title: FIRST_FALLBACK,
+      messageSeqs: [start.seq],
+      source: { kind: 'fallback' },
+    });
     await t.detach();
   });
 
@@ -488,12 +508,16 @@ interface SeenBody {
 /**
  * OpenAI 相容的假端點。主請求一律回「好」（串流與非串流都會）；標題請求照 `titleMode` 回標題或卡住不回。
  *
+ * `late`：標題回應扣住，等呼叫端 `release()` 才回——用來讓模型標題落在那一輪收完之後。
+ *
  * **主請求先等標題請求進來才回**（最多 5 秒；`absent` 不等，那時本來就不該有標題請求）：兩個請求幾乎同時發，主回覆先收完的話，一次性的 CLI 會在標題請求
  * 送出之前就把它中止，量到的是「沒送」而不是我們要的那件事。
  */
-async function startFakeEndpoint(titleMode: 'reply' | 'hang' | 'absent') {
+async function startFakeEndpoint(titleMode: 'reply' | 'hang' | 'absent' | 'late') {
   const seen: SeenBody[] = [];
   let titleClosed = false;
+  let release: () => void = () => undefined;
+  const released = new Promise<void>((resolve) => (release = resolve));
   let titleArrived: () => void = () => undefined;
   const titleSeen = new Promise<void>((resolve) => (titleArrived = resolve));
   if (titleMode === 'absent') titleArrived();
@@ -531,23 +555,27 @@ async function startFakeEndpoint(titleMode: 'reply' | 'hang' | 'absent') {
           response.on('close', () => void (titleClosed = true));
           return;
         }
-        response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(
-          JSON.stringify({
-            id,
-            object: 'chat.completion',
-            created: 1_790_000_000,
-            model,
-            choices: [
-              {
-                index: 0,
-                message: { role: 'assistant', content: MODEL_TITLE },
-                finish_reason: 'stop',
-              },
-            ],
-            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-          }),
-        );
+        const reply = (): void => {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              id,
+              object: 'chat.completion',
+              created: 1_790_000_000,
+              model,
+              choices: [
+                {
+                  index: 0,
+                  message: { role: 'assistant', content: MODEL_TITLE },
+                  finish_reason: 'stop',
+                },
+              ],
+              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+            }),
+          );
+        };
+        if (titleMode === 'late') void released.then(reply);
+        else reply();
         return;
       }
       void Promise.race([titleSeen, new Promise((resolve) => setTimeout(resolve, 5000))]).then(
@@ -596,6 +624,7 @@ async function startFakeEndpoint(titleMode: 'reply' | 'hang' | 'absent') {
     baseUrl: `http://127.0.0.1:${String(port)}/v1`,
     seen,
     titleClosed: () => titleClosed,
+    release,
   };
 }
 
@@ -632,6 +661,32 @@ async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
+describe('那一列寫壞了：起動期就拒絕，不等到第一條 thread', () => {
+  const BAD = '- id: thread-title-llm\n  config:\n    timeoutMs: 0\n';
+
+  it('serve：起不來，訊息指名那一列——沒帶 --live 也一樣', async () => {
+    await expect(
+      runServe({
+        argv: ['--port', '0', '--patch', await writePatch(BAD)],
+        log: () => undefined,
+        env: {},
+      }),
+    ).rejects.toThrow(/thread-title-llm/u);
+  });
+
+  it('CLI：跑起來之前就拋', async () => {
+    await expect(
+      runCli({
+        argv: ['--patch', await writePatch(BAD), FIRST],
+        input: new PassThrough(),
+        output: new PassThrough(),
+        printer: { log: () => undefined, error: () => undefined },
+        env: {},
+      }),
+    ).rejects.toThrow(/thread-title-llm/u);
+  });
+});
+
 describe('產品路徑：serve --live', () => {
   let fake: Awaited<ReturnType<typeof startFakeEndpoint>> | undefined;
   let running: RunningServe | undefined;
@@ -647,7 +702,7 @@ describe('產品路徑：serve --live', () => {
     vi.unstubAllEnvs();
   });
 
-  async function openThread(titleMode: 'reply' | 'hang', threadId: string) {
+  async function openThread(titleMode: 'reply' | 'hang' | 'late', threadId: string) {
     fake = await startFakeEndpoint(titleMode);
     running = (await runServe({
       argv: ['--port', '0', '--live', '--patch', await writePatch(liveModelPatch(fake.baseUrl))],
@@ -672,6 +727,19 @@ describe('產品路徑：serve --live', () => {
     await client.runStart('title-llm-serve', FIRST);
     await until(() => titlePushes(frames).length === 2);
     expect(titlePushes(frames)).toEqual([{ title: FIRST_FALLBACK }, { title: MODEL_TITLE }]);
+
+    // 列表冷讀落盤的檔，取最後一顆 `session/title`：中間夾著的 `session/title-llm-request` 不算（#649 的讀法不用改）。
+    let listed: string | undefined;
+    for (const deadline = Date.now() + 5000; Date.now() < deadline;) {
+      const outcome = await client.listThreads();
+      listed =
+        outcome.kind === 'ok'
+          ? outcome.result.items.find((item) => item.threadId === 'title-llm-serve')?.title
+          : undefined;
+      if (listed === MODEL_TITLE) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(listed).toBe(MODEL_TITLE);
 
     await client.runStart('title-llm-serve', '再改一下按鈕');
     await until(() => fake!.seen.filter((body) => !body.title).length === 2);
@@ -706,6 +774,36 @@ describe('產品路徑：serve --live', () => {
       ),
     ).toEqual([]);
     expect(messageStarts(frames)).toBe(main.length);
+  }, 30000);
+
+  it('模型標題在那一輪收完之後才到：閒著的 thread 照推、照折，不變量不報錯', async () => {
+    const errors = vi.spyOn(console, 'error');
+    const { client, frames } = await openThread('late', 'title-llm-late');
+    await client.runStart('title-llm-late', FIRST);
+    await until(() => rootCompletions(frames) === 1);
+    expect(rootCompletions(frames)).toBe(1);
+    expect(titlePushes(frames)).toEqual([{ title: FIRST_FALLBACK }]);
+
+    fake!.release();
+    await until(() => titlePushes(frames).length === 2);
+    expect(titlePushes(frames)).toEqual([{ title: FIRST_FALLBACK }, { title: MODEL_TITLE }]);
+    // 模型標題那一顆落在 root 收完之後。
+    const completedAt = frames.findIndex((frame) => {
+      const data = frame.params.data as { event?: unknown; graph_name?: unknown } | null;
+      return (
+        frame.method === 'lifecycle' && data?.event === 'completed' && data.graph_name === 'root'
+      );
+    });
+    const lastTitleAt = frames.map((frame) => titlePushes([frame]).length > 0).lastIndexOf(true);
+    expect(lastTitleAt).toBeGreaterThan(completedAt);
+    expect(reduceAll(emptyConversation(), frames).title).toBe(MODEL_TITLE);
+    // 一輪之外寫的 `session/title-llm-request` 與 `session/title` 沒讓不變量 runner 報錯（serve 走它的預設 console.error）。
+    expect(
+      errors.mock.calls
+        .map((call) => call.map(String).join(' '))
+        .filter((line) => /invariant/u.test(line)),
+    ).toEqual([]);
+    errors.mockRestore();
   }, 30000);
 
   it('標題請求卡住：主回覆照常收尾；關掉 server 時那次請求在 fetch 層被中止', async () => {

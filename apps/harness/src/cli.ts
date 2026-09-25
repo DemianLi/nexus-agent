@@ -44,7 +44,9 @@ import { liveModelPlugin } from './settings/live-model.js';
 import type { LiveModelConfig } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { threadTitleConfigSchema, threadTitlePlugin } from './settings/thread-title.js';
+import type { ThreadTitleConfig } from './settings/thread-title.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
+import type { ThreadTitleLlmConfig } from './settings/thread-title-llm.js';
 import { ensureFallbackTitle } from './session-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
 import { createSessionTitleLlm } from './session-title-llm.js';
@@ -772,6 +774,13 @@ export async function createCliAgent(
      * （`settings/live-model.test.ts`）。
      */
     readonly liveModel?: LiveModelConfig;
+    /**
+     * LLM 標題那一列與標題上限（[#650](https://github.com/DemianLi/nexus-agent/issues/650)），理由同 {@link liveModel}：
+     * 兩條產品路徑在起動期解一次往下傳，serve 上那一列寫壞了就在 server 起來之前失敗，而不是等到第一條 thread。
+     * 省略時從 `plugins` 解。**掛不掛不在這兩格**：那一列關掉時照樣由 `startupEntryMounted` 判。
+     */
+    readonly threadTitleLlm?: ThreadTitleLlmConfig;
+    readonly threadTitle?: ThreadTitleConfig;
   },
   plugins: readonly PluginEntry[],
   cwd: string = process.cwd(),
@@ -826,7 +835,11 @@ export async function createCliAgent(
   // （`live-model.ts` 的 `LiveModelPurpose`）。這一行排在 `createCliModel` 之後：`.env` 在那裡才載入。
   const attachTitle =
     invocation.live && startupEntryMounted(plugins, threadTitleLlmPlugin)
-      ? titleLlmFor(liveModel, plugins)
+      ? titleLlmFor(
+          liveModel,
+          invocation.threadTitleLlm ?? startupSetting(plugins, threadTitleLlmPlugin),
+          invocation.threadTitle ?? startupSetting(plugins, threadTitlePlugin),
+        )
       : undefined;
   // **channel 在這裡算一次，兩個消費者共用。** 核准閘門由 `foldRegistry` 自己算
   // （同一個 `deriveApprovalChannel`），`ask_user_question` 拿的是這一份——兩邊分岔的
@@ -942,11 +955,12 @@ export async function createCliAgent(
 /**
  * 這一次組裝的 LLM 標題。路由就是 `live-model` 那一列（一個組裝一條連線），記進 `session/title-llm-request` 與
  * provider 標題的 `model`。
- *
- * @throws 標題列或 LLM 標題列的設定不合法。
  */
-function titleLlmFor(liveModel: LiveModelConfig, plugins: readonly PluginEntry[]) {
-  const config = startupSetting(plugins, threadTitleLlmPlugin);
+function titleLlmFor(
+  liveModel: LiveModelConfig,
+  config: ThreadTitleLlmConfig,
+  limits: ThreadTitleConfig,
+): AttachSessionTitleLlm {
   return createSessionTitleLlm({
     model: createLiveModel(
       { ...liveModel, maxOutputTokens: config.maxOutputTokens },
@@ -954,7 +968,7 @@ function titleLlmFor(liveModel: LiveModelConfig, plugins: readonly PluginEntry[]
     ),
     route: { provider: liveModel.baseUrl, model: liveModel.modelId },
     config,
-    limits: startupSetting(plugins, threadTitlePlugin),
+    limits,
   });
 }
 
@@ -1405,6 +1419,8 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   const liveModel = startupSetting(plugins, liveModelPlugin);
   // 退回標題的兩個上限（#647）。`startupSetting` 照 schema 驗過，寫壞的話在跑起來之前就拋。
   const threadTitle = startupSetting(plugins, threadTitlePlugin);
+  // LLM 標題那一列（#650），同上：沒帶 `--live` 也解，寫壞的設定不因為這一次用不到就放過。
+  const threadTitleLlm = startupSetting(plugins, threadTitleLlmPlugin);
 
   // **續接也在建 agent 之前讀**：沙箱模式的起始那一格與 root 日誌的 seed 都是組裝時就要給的
   // 東西，而讀不到（沒有那個目錄、版本太新、壞檔）也該在什麼都還沒起來的時候就講。
@@ -1475,7 +1491,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     }
     // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
     built = await createCliAgent(
-      { ...effective, liveModel },
+      { ...effective, liveModel, threadTitle, threadTitleLlm },
       plugins,
       options.cwd,
       (error) =>

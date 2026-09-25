@@ -72,6 +72,7 @@ import { liveModelPlugin } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { toolTextPlugin } from './settings/tool-text.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
+import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
 import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
 
@@ -320,6 +321,9 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // 一顆），但設定是 server 的性質：解在這裡，設定寫壞的話在 server 起來之前就失敗，而不是等到
   // 第一條 thread；啟動時印的模型名也從這一份來。
   const liveModel = startupSetting(plugins, liveModelPlugin);
+  // LLM 標題那一列（#650），理由同上：標題模型一條 thread 一顆，設定是 server 的性質。沒帶 `--live` 也解——
+  // 寫壞的設定不因為這一次用不到就放過，同 `live-model` 那一列。
+  const threadTitleLlm = startupSetting(plugins, threadTitleLlmPlugin);
   const auth = new BrowserAuth(
     await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)),
     browserSession.maxAgeDays,
@@ -414,7 +418,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
           resumedSandbox === undefined ? invocation : { ...invocation, sandbox: resumedSandbox };
         // 每一輪改了哪些檔（#443）：只有 serve 開，見 `createCliAgent` 那一格。
         built = await createCliAgent(
-          { ...effective, workspaceChanges: true, liveModel },
+          { ...effective, workspaceChanges: true, liveModel, threadTitle, threadTitleLlm },
           plugins,
           options.cwd,
         );

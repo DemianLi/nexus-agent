@@ -20,7 +20,7 @@
  *
  * ## 寫什麼
  *
- * 送出前先記一顆 `session/title-llm-request`（真的送出去的系統提示、訊息、輸出上限），成功後追加一顆
+ * 開跑前先確保退回標題已落地（dsh 的 `ensureFallback`），送出前先記一顆 `session/title-llm-request`（真的送出去的系統提示、訊息、輸出上限），成功後追加一顆
  * `session/title {source: {kind:'provider'}}`，由既有的推送與列表讀到（latest-wins）。**兩顆都寫在一輪之外**，
  * 不開一輪、不進模型。失敗只講一聲，退回標題留著，不重試（dsh 的重試要靠顯式 `refresh()`，歸 #633）。
  *
@@ -53,7 +53,7 @@ import type {
   SessionTitleModelIdentity,
 } from '@nexus/core';
 
-import { fallbackThreadTitle, normalizeThreadTitle } from './session-title.js';
+import { ensureFallbackTitle, fallbackThreadTitle, normalizeThreadTitle } from './session-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
 import { THREAD_TITLE_LLM_PLUGIN_NAME } from './settings/thread-title-llm.js';
 import type { ThreadTitleLlmConfig } from './settings/thread-title-llm.js';
@@ -209,6 +209,9 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
 
     const run = async (message: TitleSourceMessage): Promise<void> => {
       try {
+        // 先確保退回標題已落地，同 dsh `runProvider` 的 `ensureFallback`。平常它在 `turn/start` 那一段已經寫了，這裡是
+        // no-op；只有那一次寫失敗時才補。補不進去就跟模型失敗一樣講一聲、不送。
+        ensureFallbackTitle(log, options.limits);
         const result = await generateThreadTitle({
           model: options.model,
           route: options.route,
