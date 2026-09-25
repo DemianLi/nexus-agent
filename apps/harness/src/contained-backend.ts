@@ -52,18 +52,21 @@
 
 import { createHash } from 'node:crypto';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { realpath } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open, realpath } from 'node:fs/promises';
 import { applyGrepMaxCount, FilesystemBackend } from 'deepagents';
 import type {
   DeleteResult,
   EditResult,
   FileUploadResponse,
   GrepResult,
+  ReadResult,
   WriteResult,
 } from 'deepagents';
 import micromatch from 'micromatch';
 
 import { noteSandboxDenial } from '@nexus/core';
+import { notTextReason, refuseNonText } from './binary-read.js';
 import type {
   SandboxDenial,
   SandboxGrantLedger,
@@ -259,6 +262,48 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     const mode = options.mode ?? 'workspace-write';
     this.resolveMode = typeof mode === 'function' ? mode : (): SandboxMode => mode;
     this.grants = options.grants;
+  }
+
+  /**
+   * 讀檔：二進位檔照 dsh 拒絕（{@link refuseNonText}，判準與偏離見 `binary-read.ts`），其餘原樣交給基座。
+   *
+   * **判在基座讀完之後**：不存在、是符號連結、超出根目錄，照舊由基座回它自己的錯。文字那一支基座已經用有損的 UTF-8
+   * 解掉了（非法位元組變成 U+FFFD，分不出原本就是 U+FFFD），所以另外讀一次原始位元組來判；非文字那一支位元組就在
+   * 手上。
+   *
+   * @param filePath - 虛擬路徑。
+   * @param offset - 從第幾行起（0 起算），交給基座。
+   * @param limit - 最多幾行，交給基座。
+   * @returns 基座的結果，或二進位檔的錯誤結果。
+   */
+  override async read(filePath: string, offset?: number, limit?: number): Promise<ReadResult> {
+    const result = await super.read(filePath, offset, limit);
+    if (result.error !== undefined) return result;
+    if (result.content instanceof Uint8Array) return refuseNonText(filePath, result.content);
+    let reason: string | undefined;
+    try {
+      reason = notTextReason(await this.rawBytes(filePath));
+    } catch (error: unknown) {
+      return { error: `Error reading file '${filePath}': ${(error as Error).message}` };
+    }
+    return reason === undefined ? result : { error: `cannot read "${filePath}": ${reason}` };
+  }
+
+  /**
+   * 一個檔的原始位元組。路徑照基座虛擬模式的 `resolvePath` 拼（`cwd` 底下字面拼接，它在 TS 上是 private），開檔照基座
+   * 帶 `O_NOFOLLOW`——判的要是基座剛讀的那一個檔。
+   */
+  private async rawBytes(filePath: string): Promise<Uint8Array> {
+    const virtualPath = filePath.startsWith('/') ? filePath : `/${filePath}`;
+    const handle = await open(
+      resolve(this.cwd, virtualPath.slice(1)),
+      constants.O_RDONLY | constants.O_NOFOLLOW,
+    );
+    try {
+      return await handle.readFile();
+    } finally {
+      await handle.close();
+    }
   }
 
   /**
