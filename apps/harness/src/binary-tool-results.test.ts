@@ -5,10 +5,12 @@
  * 原樣塞進 `role: tool`，而 NVIDIA 的端點對 `role: tool` 只收字串或文字塊，回 400。帶圖的那則工具結果已經在叫模型
  * 之前進了 state，所以**同一條 thread 之後每一輪都 400**。
  *
- * 兩層各驗一次：
+ * 兩層各驗：
  *
  * - **後端的判準**：照 dsh 的 `readWholeText`（`packages/fs/fs-local/src/fsio.ts:386-399`，`477b4f4`）看內容——前 8KB
- *   有 NUL 就是 `binary file`，不是合法 UTF-8 就是 `invalid UTF-8 text`。
+ *   有 NUL 就是 `binary file`，不是合法 UTF-8 就是 `invalid UTF-8 text`。兩種 backend 各驗：落磁碟的
+ *   `ContainedFilesystemBackend`，與沒給 `--workspace` 時墊底的 `TextOnlyStateBackend`（模型 `write_file` 一張
+ *   base64 的 PNG 再讀，同樣中毒，實測）。
  * - **真的組裝打真的轉換器**：對手方是本機的假 Chat Completions 端點，照真端點的規則回 400（原文見 {@link REJECTED}），
  *   走 serve 那條（`ThreadPump`，串流）連跑兩輪。`ScriptedChatModel` 驗不到這一層：它不經過轉換器，看不到
  *   `isDataContentBlock` 放行了什麼。
@@ -26,6 +28,7 @@ import { ChatOpenAI } from '@langchain/openai';
 import { createFilesystemMiddleware } from 'deepagents';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
+import { TextOnlyStateBackend } from './binary-read.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
@@ -96,6 +99,55 @@ describe('後端照 dsh 看內容判二進位', () => {
     const readFile = middleware.tools?.find((tool) => tool.name === 'read_file');
     const output: unknown = await readFile?.invoke({ file_path: '/dot.png' });
     expect(output).toEqual([{ type: 'text', text: 'Error: cannot read "/dot.png": binary file' }]);
+  });
+});
+
+describe('沒掛工作區的虛擬 FS 一樣拒絕', () => {
+  /** 餵一份 state 的 legacy 建構：只為了不經 graph 直接讀。產品路徑是零參數建構。 */
+  function stateWith(files: Record<string, unknown>): TextOnlyStateBackend {
+    return new TextOnlyStateBackend({ state: { files } } as never);
+  }
+  const at = '2026-09-25T00:00:00.000Z';
+
+  it('位元組、checkpoint 往返後的普通物件都拒；不是合法 UTF-8 的講 invalid UTF-8 text', () => {
+    const backend = stateWith({
+      '/dot.png': {
+        content: new Uint8Array(PNG),
+        mimeType: 'image/png',
+        created_at: at,
+        modified_at: at,
+      },
+      '/round.png': {
+        content: Object.fromEntries([...PNG].map((byte, index) => [index, byte])),
+        mimeType: 'image/png',
+        created_at: at,
+        modified_at: at,
+      },
+      '/latin1.pdf': {
+        content: new Uint8Array([0x63, 0x61, 0x66, 0xe9]),
+        mimeType: 'application/pdf',
+        created_at: at,
+        modified_at: at,
+      },
+    });
+    expect(backend.read('/dot.png')).toEqual({ error: 'cannot read "/dot.png": binary file' });
+    expect(backend.read('/round.png')).toEqual({ error: 'cannot read "/round.png": binary file' });
+    expect(backend.read('/latin1.pdf')).toEqual({
+      error: 'cannot read "/latin1.pdf": invalid UTF-8 text',
+    });
+  });
+
+  it('文字檔與不存在的檔照基座', () => {
+    const backend = stateWith({
+      '/note.md': {
+        content: '第一行\n第二行',
+        mimeType: 'text/markdown',
+        created_at: at,
+        modified_at: at,
+      },
+    });
+    expect(backend.read('/note.md')).toMatchObject({ content: '第一行\n第二行' });
+    expect(backend.read('/nope.png')).toEqual({ error: "File '/nope.png' not found" });
   });
 });
 
@@ -177,6 +229,70 @@ async function strictOpenAi(steps: readonly Step[]) {
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }
+
+/** 跑兩輪、收掉資源，回日誌事件。 */
+async function twoTurns(
+  steps: readonly Step[],
+  backendOption: ContainedFilesystemBackend | undefined,
+  label: string,
+) {
+  const upstream = await strictOpenAi(steps);
+  const built = await createNexusAgent({
+    model: new ChatOpenAI({
+      model: 'fake',
+      apiKey: 'sk-loopback',
+      maxRetries: 0,
+      configuration: { baseURL: upstream.baseURL },
+    }),
+    ...(backendOption !== undefined && { backend: backendOption }),
+    checkpointer: new MemorySaver(),
+    plugins: [],
+  });
+  const pump = new ThreadPump(built.agent as unknown as PumpAgent, label);
+  const detach = built.attachSession(pump.sessions);
+  try {
+    await pump.submit({ kind: 'message', text: '看一下 /dot.png。' }).catch(() => {});
+    // **第二輪是主角**：帶圖的工具結果若留在歷史裡，這一輪一樣被拒。
+    await pump.submit({ kind: 'message', text: '那算了。' }).catch(() => {});
+    return { events: pump.sessions.root.events, requests: upstream.requests };
+  } finally {
+    detach();
+    await built.dispose();
+    await upstream.close();
+  }
+}
+
+describe('真的組裝：沒掛工作區（state 裡的虛擬 FS）', () => {
+  it('模型寫進一張 PNG 再讀：兩輪照常收尾，讀到的是 dsh 那句錯誤', async () => {
+    const { events, requests } = await twoTurns(
+      [
+        {
+          call: {
+            name: 'write_file',
+            args: { file_path: '/dot.png', content: PNG.toString('base64') },
+          },
+        },
+        { call: { name: 'read_file', args: { file_path: '/dot.png' } } },
+        { text: '那是一張圖，我讀不了。' },
+        { text: '好的。' },
+      ],
+      undefined,
+      'binary-read-state',
+    );
+    const outcomes = events
+      .filter((event) => event.type === 'turn/end' || event.type === 'turn/failed')
+      .map((event) => event.type);
+    expect(outcomes).toEqual(['turn/end', 'turn/end']);
+    expect(requests.map((request) => request.rejected)).toEqual([false, false, false, false]);
+
+    const seen = requests[2]?.messages.filter((message) => message.role === 'tool').at(-1);
+    expect(seen?.content).toEqual([
+      { type: 'text', text: 'Error: cannot read "/dot.png": binary file' },
+    ]);
+    const results = events.filter((event) => event.type === 'tool/result');
+    expect(results.at(-1)?.data).toMatchObject({ isError: true });
+  }, 20000);
+});
 
 describe('真的組裝：讀到圖片的那一輪與下一輪', () => {
   it('兩輪都照常收尾，模型讀到的是 dsh 那句錯誤；那一次在日誌上是工具錯誤', async () => {
