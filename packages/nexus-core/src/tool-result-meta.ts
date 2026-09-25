@@ -330,7 +330,10 @@ function withGrepMeta(method: (...args: unknown[]) => unknown) {
     const truncated = result.truncated === true;
     const meta: SearchResultMeta = {
       shape: 'matches',
-      files: Array.from(byFile, ([path, matches]) => ({ path, matches })),
+      // **檔案照路徑排序**，跟模型看到的文字同序：基座的 `formatGrepResults` 用 `Object.keys(...).sort()` 排檔名
+      // （`dist/langsmith-zm0ILQsV.js:410-425`），backend 交出來的是列檔順序——APFS 大致照檔名、ext4 不是，
+      // 照交出來的順序放的話只有在 Linux 上才看得出兩份分岔。同一檔內的命中照 backend 的順序，同文字。
+      files: [...byFile.keys()].sort().map((path) => ({ path, matches: byFile.get(path) ?? [] })),
       truncated,
       // **`total` 是截之前的數**，同 dsh 的 `retained.seen`：backend 照 `max_count` 截過才回，所以截了的
       // 那一次再不封頂叫一次來數。不多花掃描：基座的每一顆 backend 都是全掃之後才截前 N 筆
