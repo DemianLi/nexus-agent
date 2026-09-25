@@ -14,10 +14,11 @@
 import { mkdtemp, readdir, readFile, mkdir, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 
-import { runCli, resolveSessionLogDir } from './cli.js';
+import { runCli, resolveSessionLogDir, SESSION_LOG_OFF_DISCLOSURE } from './cli.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { createJsonlSessionStore } from './jsonl-session-store.js';
 import { SESSION_LOG_FORMAT_VERSION, SessionAlreadyOwnedError } from '@nexus/core';
@@ -207,6 +208,69 @@ describe('--session-log 沒給', () => {
     const printed = await runOnce(['--workspace', workspace, '--resume', runDir, '第二次。']);
     expect(printed).toContain(`會話日誌：${runDir}`);
     expect(await readdir(workspace)).not.toContain('home');
+  });
+});
+
+/** 把落盤那一列關掉的夾具（#612）。絕對路徑：`runCli` 的 `cwd` 是暫存目錄，不是這個套件。 */
+const PERSISTENCE_OFF_PATCH = fileURLToPath(
+  new URL('./settings/persistence-off.patch.yml', import.meta.url),
+);
+
+/**
+ * 清單把落盤關掉（[#612](https://github.com/DemianLi/nexus-agent/issues/612)）。**這一組是 #444
+ * 翻面前那條「沒給就一個位元組都不寫」的形狀**，觸發條件從「沒給旗標」換成「那一列 `disabled: true`」
+ * ——照 dsh：不掛 `session-persistence-jsonl` 就是不落盤。
+ */
+describe('清單把落盤關掉', () => {
+  it('一個位元組都不寫：home 不建、cwd 是空的，披露講只在記憶體裡與是哪一列', async () => {
+    const home = testHarnessHome();
+    const cwd = await tmp('nexus-cwd-');
+    const printed = await runOnce(['--patch', PERSISTENCE_OFF_PATCH, '把這句話回聲一次。'], cwd);
+
+    expect(printed).toContain(SESSION_LOG_OFF_DISCLOSURE);
+    expect(printed).toContain('session-persistence');
+    // 前提：這一跑真的跑完了（回聲出現），不是在落盤之前就停了。
+    expect(printed).toContain('把這句話回聲一次。');
+    // **home 整個不存在**——連 `sessions` 目錄都沒建，才叫一個位元組都不寫。
+    await expect(stat(home)).rejects.toThrow();
+    expect(await readdir(cwd)).toEqual([]);
+  });
+
+  it('預設的根落在 --workspace 底下也不擋：關掉的時候根本不解析它', async () => {
+    const workspace = await tmp('nexus-ws-');
+    process.env[HARNESS_HOME_ENV] = join(workspace, 'home');
+    const printed = await runOnce([
+      '--patch',
+      PERSISTENCE_OFF_PATCH,
+      '--workspace',
+      workspace,
+      '把這句話回聲一次。',
+    ]);
+    expect(printed).toContain(SESSION_LOG_OFF_DISCLOSURE);
+    expect(await readdir(workspace)).not.toContain('home');
+  });
+
+  it('--resume 當場拒絕，點名那一列；那個 run 目錄一個位元組都沒動', async () => {
+    const root = await tmp('nexus-log-');
+    await runOnce(['--session-log', root, '第一次。']);
+    const runDir = await onlyRunDir(root);
+    const before = await readFile(join(runDir, 'cli.jsonl'), 'utf8');
+
+    await expect(
+      runOnce(['--patch', PERSISTENCE_OFF_PATCH, '--resume', runDir, '第二次。']),
+    ).rejects.toThrow(/--resume 接不起來.*session-persistence.*disabled/su);
+    expect(await readFile(join(runDir, 'cli.jsonl'), 'utf8')).toBe(before);
+    // 租約也沒拿：拿了沒放的話，下一次正常的續接會撞上它。
+    const printed = await runOnce(['--resume', runDir, '第三次。']);
+    expect(printed).toContain(`會話日誌：${runDir}`);
+  });
+
+  it('--session-log 當場拒絕，那個目錄沒被建出來', async () => {
+    const root = join(await tmp('nexus-log-'), 'not-yet');
+    await expect(
+      runOnce(['--patch', PERSISTENCE_OFF_PATCH, '--session-log', root, '嗨']),
+    ).rejects.toThrow(/--session-log 跟設定矛盾.*session-persistence/su);
+    await expect(stat(root)).rejects.toThrow();
   });
 });
 

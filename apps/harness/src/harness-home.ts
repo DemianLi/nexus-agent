@@ -49,7 +49,8 @@ export const HARNESS_SESSIONS_DIR_NAME = 'sessions';
  *
  * **照 dsh**：base 與 sdk-minimal 出廠就掛 `session-persistence-jsonl`，根是
  * `dshHomePath('sessions')`（`packages/bundle/base/cordis.patch.yml:130-133`、`477b4f4`）。
- * 這裡只換 home 的名字。`--session-log` 給了就換成那個位置。
+ * 這裡只換 home 的名字。`--session-log` 給了就換成那個位置；清單上 `session-persistence` 那一列
+ * 關掉（#612，同 dsh 不掛那一列）就一個字都不寫，這個路徑也不解析。
  *
  * @param env - 同 {@link resolveHarnessHome}。
  * @returns `<harness home>/sessions` 的絕對路徑。只解析，不建目錄——建目錄的是第一次寫入

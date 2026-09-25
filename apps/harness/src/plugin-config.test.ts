@@ -735,7 +735,6 @@ describe('保護名單', () => {
   it('這幾列必須在保護名單上', () => {
     const expected = [
       '@nexus/core/approval-gate',
-      '@nexus/core/session-persistence',
       '#settings/thread-title',
       '#settings/browser-session',
       '#settings/deliverable-files',
@@ -750,6 +749,22 @@ describe('保護名單', () => {
     // 加一列不會有任何東西紅——而多保護一列跟少保護一列一樣是行為變了，那一列的 `disabled`
     // 會從「真的關掉」變成「當場拋」。
     expect(PROTECTED_ENTRY_NAMES.size).toBe(expected.length);
+  });
+
+  /**
+   * **落盤那一列關得掉**（[#612](https://github.com/DemianLi/nexus-agent/issues/612)）。它曾經在
+   * 名單上（只講批次窗口時，關掉只會回到預設）；#444 讓落盤預設開著之後，它代表落盤本身，照 dsh
+   * 的 `session-persistence-jsonl`：`disabled: true` 就是不落盤。上面那條寫死的清單已經不含它，
+   * 這一條是翻面後的正面斷言——哪天有人把它加回名單，這裡紅。
+   */
+  it('`@nexus/core/session-persistence` 寫 `disabled: true` 放行', () => {
+    expect(PROTECTED_ENTRY_NAMES.has('@nexus/core/session-persistence')).toBe(false);
+    expect(() =>
+      validateEntries(
+        [{ id: 'session-persistence', name: '@nexus/core/session-persistence', disabled: true }],
+        '測試',
+      ),
+    ).not.toThrow();
   });
 
   /**

@@ -34,12 +34,14 @@ import type {
   SessionStore,
 } from '@nexus/core';
 import {
+  assertPersistenceFlags,
   createCliAgent,
   parseSandboxMode,
   formatGoalDriverDisclosure,
   goalDriverPort,
   resolveSessionLogDir,
   resolveWorkspaceRoot,
+  SESSION_LOG_OFF_DISCLOSURE,
 } from './cli.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
@@ -67,7 +69,7 @@ import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js'
 import { browserSessionPlugin } from './settings/browser-session.js';
 import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { liveModelPlugin } from './settings/live-model.js';
-import { startupSetting } from './settings/startup.js';
+import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { toolTextPlugin } from './settings/tool-text.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
@@ -106,6 +108,7 @@ const USAGE = `用法：
                        預設 workspace-write（可寫根之內放行）；要配 --workspace
   --session-log <dir>  把會話日誌改寫到這個目錄
                        （預設 $NEXUS_AGENT_HOME/sessions，沒設就是 ~/.nexus-agent/sessions）
+                       要完全不落盤，在 patch 裡把 session-persistence 那一列寫成 disabled: true
   --port <n>           監聽的 port，預設 ${DEFAULT_PORT}
   --goal-driver        一個 active 的目標沒達成時自己再開一輪（預設關）
                        上限是那個目標自己的 max_goal_rounds
@@ -277,15 +280,11 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     return undefined;
   }
 
-  // **在載 plugin、開 server 之前解析**，同 `cli.ts` 那條的理由：一個指錯地方的日誌根
-  // 該在什麼都還沒起來的時候就講。同一個函式，所以「日誌不能落在 `--workspace` 底下」
-  // 那條檢查兩個入口共用一份，預設值（harness home 底下的 `sessions`，#444）也是同一份。
   const cwd = options.cwd ?? process.cwd();
   // **瀏覽器會話的密鑰也從這一份 env 解 home**（#424）：日誌根與密鑰落在同一個 home 底下。
+  // 密鑰在下面讀：權限過寬、記錄壞掉，都該在 server 還沒起來的時候就講。每次啟動只讀這一次，
+  // 之後在記憶體裡驗。
   const env = options.env ?? process.env;
-  const sessionLogDir = resolveSessionLogDir(invocation, cwd, env);
-  // 密鑰在下面讀，同一條理由：權限過寬、記錄壞掉，都該在 server 還沒起來的時候就講。每次啟動
-  // 只讀這一次，之後在記憶體裡驗。
   // **清單只有一個來源：出貨的 `cordis.yml` 加上使用者那兩層**（#454、#455），與 CLI 同一條
   // 路：同一個函式、同一個 home 層、同一組 `--patch`。
   //
@@ -305,6 +304,14 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // 落盤的批次窗口（#529）。**同樣是 server 的性質**：`sessionStore` 一台伺服器一份，而窗口
   // 講的是那一顆 store 的寫入節奏——下面每一條 thread 各自接上去的協調器都吃這同一個數字。
   const persistenceWindow = startupSetting(plugins, sessionPersistencePlugin);
+  // **落盤掛不掛也由清單講**（#612，照 dsh 的 `session-persistence-jsonl` 那一列）。關掉的話
+  // 下面一個 store 都不建、日誌根也不解析，`--session-log` 跟它矛盾就當場拋——同 CLI 那一份檢查。
+  const persistenceMounted = startupEntryMounted(plugins, sessionPersistencePlugin);
+  assertPersistenceFlags(invocation, persistenceMounted);
+  // **在開 server 之前解析**，同 `cli.ts` 那條的理由：一個指錯地方的日誌根該在什麼都還沒起來的
+  // 時候就講。同一個函式，所以「日誌不能落在 `--workspace` 底下」那條檢查兩個入口共用一份，預設值
+  // （harness home 底下的 `sessions`，#444）也是同一份。
+  const sessionLogDir = persistenceMounted ? resolveSessionLogDir(invocation, cwd, env) : undefined;
   // 一段工具結果文字放上線的上限（#538）。**同樣是 server 的性質**：兩個消費點（即時的
   // `ThreadPump`、重播的 `historyPage`）都住在 `createWireHandler` 的閉包底下，一個 server 一次。
   const toolTextLimits = startupSetting(plugins, toolTextPlugin);
@@ -325,13 +332,16 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // 地方會每次都撞；serve 的 root 是 thread id，本來就全域唯一。subagent 那幾份的 id 是
   // `<thread>/<LangGraph task id>`，而 task id 由當下那顆 checkpoint 的 id 算出來
   // （`uuid5(…, checkpoint.id)`，checkpoint id 是帶時間與亂數的 `uuid6`），跨行程不會重複。
-  const sessionStore = openJsonlSessionStore({
-    directory: join(sessionLogDir, projectKey(cwd)),
-    // 後端講話（例如這個平台拿不到寫租約）走伺服器日誌，前綴同協調器那條。
-    warn: (message) => {
-      log(`[會話日誌] ${message}`);
-    },
-  });
+  const sessionStore =
+    sessionLogDir === undefined
+      ? undefined
+      : openJsonlSessionStore({
+          directory: join(sessionLogDir, projectKey(cwd)),
+          // 後端講話（例如這個平台拿不到寫租約）走伺服器日誌，前綴同協調器那條。
+          warn: (message) => {
+            log(`[會話日誌] ${message}`);
+          },
+        });
 
   let telemetryDisclosed = false;
   const handler = createWireHandler({
@@ -343,14 +353,19 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
       serverLog(message);
     },
     // **冷讀那一格**（#302）：讀的是續接那條路寫進去的同一格，只列切得過去的——`cwd` 就是續接時
-    // `assertSameCwd` 比的那一個。
-    listThreads: () => listStoredThreads(sessionStore.directory, { cwd, title: threadTitle }),
+    // `assertSameCwd` 比的那一個。落盤關掉（#612）就整個不給，列表那時講「列不出來」而不是「沒有」。
+    ...(sessionStore === undefined
+      ? {}
+      : {
+          listThreads: () => listStoredThreads(sessionStore.directory, { cwd, title: threadTitle }),
+        }),
     // 一個 thread 一個 agent——各自的 checkpointer、各自的虛擬檔案系統。
     createAgent: async (threadId: string) => {
       // **以前寫過就接回來**（照 dsh：碰到一個已存的 session id 就 resume，不另開）。續接在讀
       // 之前就拿了寫租約，要到落盤接上之後才歸協調器收；這中間拋錯要先放掉，不然
       // `wire-handler.ts` 說好的「下一次請求重試」會撞上自己上一次留下的租約。
-      const resumed = await resumeThread(sessionStore, threadId);
+      const resumed =
+        sessionStore === undefined ? undefined : await resumeThread(sessionStore, threadId);
       let handedOff = false;
       const release = async (): Promise<void> => {
         if (handedOff) return;
@@ -483,29 +498,34 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
                 }),
             }
           : {}),
-        attachPersistence: (sessions: SessionRegistry) => {
-          const persistence = attachSessionPersistence(sessions, sessionStore, {
-            cwd,
-            // 批次窗口：起動期解出來的那一份（`runServe` 頂上那一行），一台伺服器一個節奏。
-            windowMs: persistenceWindow.windowMs,
-            // 錨（#504）：同 CLI，取的是這一次組裝真的用的那一個（上面從 `built`
-            // destructure 出來的）。沒給 `--workspace` 就不寫那一格。
-            ...(workspaceRoot !== undefined && { workspaceRoot }),
-            // 續接：root 那一份往原檔續寫，只寫還沒存的後綴（第一筆就是 `session/end-seed`）。
-            ...(resumed !== undefined && {
-              resumedRoot: { stored: resumed.stored, storedCount: resumed.events.length },
+        // 落盤關掉（#612）就不給：日誌只在註冊表的記憶體裡，同 CLI 那一支。
+        ...(sessionStore === undefined
+          ? {}
+          : {
+              attachPersistence: (sessions: SessionRegistry) => {
+                const persistence = attachSessionPersistence(sessions, sessionStore, {
+                  cwd,
+                  // 批次窗口：起動期解出來的那一份（`runServe` 頂上那一行），一台伺服器一個節奏。
+                  windowMs: persistenceWindow.windowMs,
+                  // 錨（#504）：同 CLI，取的是這一次組裝真的用的那一個（上面從 `built`
+                  // destructure 出來的）。沒給 `--workspace` 就不寫那一格。
+                  ...(workspaceRoot !== undefined && { workspaceRoot }),
+                  // 續接：root 那一份往原檔續寫，只寫還沒存的後綴（第一筆就是 `session/end-seed`）。
+                  ...(resumed !== undefined && {
+                    resumedRoot: { stored: resumed.stored, storedCount: resumed.events.length },
+                  }),
+                  // CLI 那條走 `Printer` 是為了前綴分得出誰在講話；這裡沒有那個問題，
+                  // 伺服器日誌本來就沒有跟誰搶終端機（同不變量那條的理由）。
+                  warn: (message) => {
+                    log(`[會話日誌] ${message}`);
+                  },
+                });
+                // **協調器真的接上之後**，續接那個把手才歸它收（它的 `dispose` 會關）。先設的話，這一步
+                // 拋錯時旗標已經說「交出去了」，`release()` 變成 no-op，租約留到行程結束。
+                handedOff = true;
+                return persistence;
+              },
             }),
-            // CLI 那條走 `Printer` 是為了前綴分得出誰在講話；這裡沒有那個問題，
-            // 伺服器日誌本來就沒有跟誰搶終端機（同不變量那條的理由）。
-            warn: (message) => {
-              log(`[會話日誌] ${message}`);
-            },
-          });
-          // **協調器真的接上之後**，續接那個把手才歸它收（它的 `dispose` 會關）。先設的話，這一步
-          // 拋錯時旗標已經說「交出去了」，`release()` 變成 no-op，租約留到行程結束。
-          handedOff = true;
-          return persistence;
-        },
       };
     },
   });
@@ -536,8 +556,10 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
       : `網頁：${webDist}（還沒 build——先跑 pnpm build，不然開網址只會看到 404）`,
   );
   // **披露，不是設定。** 每一條 thread 的對話都會寫上磁碟（#444 起預設就寫），寫去哪裡
-  // 不該要讀文件才知道。
-  log(`會話日誌：${sessionStore.directory}`);
+  // 不該要讀文件才知道；清單把落盤關掉（#612）時，講的是「只在記憶體裡」與是哪一列關的。
+  log(
+    sessionStore === undefined ? SESSION_LOG_OFF_DISCLOSURE : `會話日誌：${sessionStore.directory}`,
+  );
   // 同一條規矩底下的另一行：**這一輪結束之後還會不會有下一輪**。這台 server 上它是
   // per-thread 的行為，但旗標是整個 process 的，所以講在這裡。
   log(formatGoalDriverDisclosure(invocation.goalDriver));

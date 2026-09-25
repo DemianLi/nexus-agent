@@ -193,11 +193,12 @@ export interface ThreadAgent {
    * 把這個 thread 的**每一份**會話日誌接上落盤，選配。
    *
    * **這一條與上面三條不同層**：那三個的答案來自 `createCliAgent`（掛了什麼 plugin
-   * 決定有沒有遙測後端、有沒有配套入口、有沒有參與者），而落盤與 plugin 清單無關
-   * ——它的答案來自**呼叫方式**（`serve.ts` 的日誌根：`--session-log`，沒給就是 harness home
-   * 底下的 `sessions`，#444）。所以組裝點是 `runServe` 自己的閉包，不是 `createCliAgent` 的回傳值。
+   * 決定有沒有遙測後端、有沒有配套入口、有沒有參與者），而落盤是**一台 server 一份**的答案
+   * ——開不開由清單上 `session-persistence` 那一列講（#612，`runServe` 起動期解一次），寫去哪裡
+   * 由**呼叫方式**講（`serve.ts` 的日誌根：`--session-log`，沒給就是 harness home 底下的
+   * `sessions`，#444）。所以組裝點是 `runServe` 自己的閉包，不是 `createCliAgent` 的回傳值。
    *
-   * **選配是給這個 handler 的其他組裝用的**（wire 測試那些手搭的）：`serve` 從 #444 起一律給。
+   * **選配**：`serve` 只在清單把那一列關掉時不給；另外就是這個 handler 的其他組裝（wire 測試那些手搭的）。
    *
    * **一個行程一個 store，一條 thread 一次接線。** store 落在會話根按專案分的那一格，整個
    * 行程共用；每條 thread 的 root session id 就是它的 `threadId`，所以那一格底下一條
@@ -265,7 +266,7 @@ export interface WireHandlerOptions {
    *
    * **缺席就是「沒有落盤」**，那時列表回 `not_supported` 而不是空清單——同 `ThreadAgent.attachPersistence`
    * 用缺席表達「沒開落盤」的規矩。答案來自呼叫方式（serve 的日誌根），所以跟落盤一樣住在組裝點；
-   * `serve` 從 #444 起一律給，缺席的只剩手搭的組裝。
+   * `serve` 只在清單把落盤那一列關掉時不給（#612；#444 起預設就給），另外就是手搭的組裝。
    *
    * **它不准碰 {@link createAgent}**：列表照 dsh 是冷讀，一條 thread 都不為它啟動。`running` 那一格由這個
    * handler 從手上活著的 thread 補，不從檔案猜。
@@ -1083,7 +1084,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         errorResponse(
           null,
           'not_supported',
-          '這台 server 的會話日誌只在記憶體裡（組裝時沒接落盤），以前的 thread 列不出來',
+          '這台 server 的會話日誌只在記憶體裡（沒接落盤：清單上 session-persistence 那一列關掉了），以前的 thread 列不出來',
         ),
       );
     }

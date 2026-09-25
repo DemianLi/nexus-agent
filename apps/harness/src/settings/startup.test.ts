@@ -39,7 +39,7 @@ import {
   DEFAULT_DELIVERABLE_MAX_PAGE_BYTES,
 } from './deliverable-files.js';
 import { liveModelPlugin } from './live-model.js';
-import { startupSetting } from './startup.js';
+import { startupEntryMounted, startupSetting } from './startup.js';
 import { toolTextPlugin } from './tool-text.js';
 import { DEFAULT_THREAD_TITLE_MAX_WORDS, threadTitlePlugin } from './thread-title.js';
 
@@ -47,6 +47,8 @@ const OVERRIDE_PATCH = 'src/settings/settings-override.patch.yml';
 const DISABLED_PATCH = 'src/settings/settings-disabled.patch.yml';
 /** 關掉耐久檢查點（#599），只給「落盤窗口」那條用，理由在夾具檔頭。 */
 const CHECKPOINT_OFF_PATCH = 'src/settings/checkpoint-off.patch.yml';
+/** 關掉落盤本身（#612）。 */
+const PERSISTENCE_OFF_PATCH = 'src/settings/persistence-off.patch.yml';
 /** 夠長，裁到 6 個位元組一定看得出來。 */
 const PROMPT = 'abcdefghij 這一句話當標題。';
 
@@ -196,6 +198,37 @@ describe('設定覆寫在真的 serve 上生效（#529）', () => {
 
   it('把只講設定的那一列關掉：載入期就失敗，不是一行警告', async () => {
     await expect(start(['--patch', DISABLED_PATCH])).rejects.toThrow(/thread-title/u);
+  });
+});
+
+/**
+ * 落盤那一列掛了沒（[#612](https://github.com/DemianLi/nexus-agent/issues/612)）。**它跟
+ * `startupSetting` 對「關掉」的答案刻意相反**：那一支把關掉當成沒講、回預設值，這一支把關掉當成
+ * 沒掛。拿錯一支，關掉就讀成「開著」。
+ */
+describe('startupEntryMounted', () => {
+  it('掛著：true；關掉：false；沒有那一列：照 dsh 算沒掛', () => {
+    const entry = { plugin: sessionPersistencePlugin, id: 'session-persistence' };
+    expect(startupEntryMounted([entry], sessionPersistencePlugin)).toBe(true);
+    expect(startupEntryMounted([{ ...entry, disabled: false }], sessionPersistencePlugin)).toBe(
+      true,
+    );
+    expect(startupEntryMounted([{ ...entry, disabled: true }], sessionPersistencePlugin)).toBe(
+      false,
+    );
+    expect(startupEntryMounted([], sessionPersistencePlugin)).toBe(false);
+    // 對照：同一份關掉的清單，`startupSetting` 照樣回得出窗口——所以它判不了開關。
+    expect(startupSetting([{ ...entry, disabled: true }], sessionPersistencePlugin).windowMs).toBe(
+      10,
+    );
+  });
+
+  it('出貨清單上掛著；疊上關掉的夾具就沒掛', async () => {
+    expect(
+      startupEntryMounted(await loadDefaultPlugins({ env: {} }), sessionPersistencePlugin),
+    ).toBe(true);
+    const off = await loadDefaultPlugins({ env: {}, patches: [PERSISTENCE_OFF_PATCH] });
+    expect(startupEntryMounted(off, sessionPersistencePlugin)).toBe(false);
   });
 });
 
