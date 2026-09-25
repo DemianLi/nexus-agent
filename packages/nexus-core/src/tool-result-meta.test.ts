@@ -64,9 +64,11 @@ function fakeBackend(existing?: string) {
 
 describe('槽', () => {
   it('只認自己那顆工具：別顆工具在自己的呼叫裡寫檔，不帶 write_file 的 meta', async () => {
-    const { backend } = fakeBackend();
+    const { backend, calls } = fakeBackend();
     const other = await runInToolMetaSlot('submit_record', {}, () => backend.write('/x', 'y'));
     expect(other.meta).toBeUndefined();
+    // 連原檔都不讀：那一次讀是 write_file 自己的事，別顆工具的呼叫不該多一次 I/O。
+    expect(calls.readRaw).toBe(0);
     const own = await runInToolMetaSlot('write_file', {}, () => backend.write('/x', 'y'));
     expect(own.meta).toEqual({ operation: 'create', diffs: [] });
   });
