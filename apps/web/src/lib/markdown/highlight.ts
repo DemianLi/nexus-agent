@@ -8,7 +8,7 @@
  *   通知重畫。
  * - 不認得的語言：純文字（仍是等寬），不報錯。
  *
- * 跟 dsh 的差別：沒搬 `highlightLines`（它服務的是有行號的檔案檢視，nexus 沒有這個面）。
+ * - **帶行號的檔案檢視**（讀檔卡，#625）：{@link highlightLines} 整段一起高亮、按行交回，跨行的註解與字串才不會斷。
  *
  * @module
  */
@@ -264,6 +264,27 @@ function lineSpans(line: ThemedToken[]): HighlightSpan[] {
     pendingWhitespace = '';
   }
   return spans;
+}
+
+/**
+ * 整段一起高亮，一行一筆交回（dsh `highlightLines`，`477b4f4` 的 `markdown/highlight.ts:585`）：帶行號的檔案檢視每行
+ * 自己一列，拿不到 {@link highlightToHtml} 那一整棵 `<pre>`。`undefined` 表示畫純文字（不認得的語言，或 lazy 文法還在載）。
+ *
+ * 跟 dsh 的差別：段照 {@link lineSpans} 收（空白併進下一段、保留粗斜體），跟 fence 那一臂畫出來的一樣；dsh 只留顏色。
+ * 結尾的換行 shiki 會多切出一行空行，那一行丟掉，行數才跟呼叫端自己的陣列對得上。
+ */
+export function highlightLines(
+  code: string,
+  lang: string | undefined,
+): HighlightSpan[][] | undefined {
+  const resolved = resolveLang(lang);
+  if (resolved === undefined) return undefined;
+  if (!ensureGrammar(resolved)) return undefined;
+  const tokens = highlighter().codeToTokensBase(code, { lang: resolved, theme: 'css-variables' });
+  const last = tokens.at(-1);
+  const lines =
+    tokens.length > 1 && last !== undefined && last.length === 0 ? tokens.slice(0, -1) : tokens;
+  return lines.map(lineSpans);
 }
 
 /** {@link StreamingHighlightSession.updateFrame} 交給保留式 renderer 的一次更新。 */

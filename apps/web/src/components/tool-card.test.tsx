@@ -609,6 +609,32 @@ describe('工具卡的結果與 diff', () => {
       expect(toggle.textContent).toBe('收起');
     });
 
+    it('覆寫舊檔（meta 帶 diffs）：畫跟舊檔比的 diff，不是整檔新增', () => {
+      const meta = {
+        operation: 'update',
+        diffs: [{ path: '/notes.md', oldText: '第 1 行\n舊的\n', newText: '第 1 行\n新的\n' }],
+      };
+      render(<ToolCard entry={{ ...write, meta }} beam={false} />);
+      const trigger = screen.getByRole('button', { name: /寫入檔案/ });
+      expect(trigger.textContent).toContain('+1');
+      expect(trigger.textContent).toContain('−1');
+      fireEvent.click(trigger);
+      const rows = screen.getByTestId('tool-diff').querySelectorAll('[data-diff-line]');
+      expect([...rows].map((row) => row.textContent)).toEqual([
+        '/notes.md',
+        ' 第 1 行',
+        '-舊的',
+        '+新的',
+      ]);
+    });
+
+    it('新建（meta 的 diffs 是空的）：照舊畫參數算的整檔新增', () => {
+      render(
+        <ToolCard entry={{ ...write, meta: { operation: 'create', diffs: [] } }} beam={false} />,
+      );
+      expect(screen.getByRole('button', { name: /寫入檔案/ }).textContent).toContain('+12');
+    });
+
     it('執行中也畫', () => {
       render(<ToolCard entry={{ ...write, status: 'running', text: undefined }} beam={false} />);
       expand(/寫入檔案/);
@@ -667,22 +693,61 @@ describe('工具卡的結果與 diff', () => {
       expect(rows[2]?.textContent).toBe('+const a = 2;');
     });
 
-    it('結束之後退回通用卡的結果', () => {
-      render(
-        <ToolCard
-          entry={{
-            ...edit,
-            status: 'done',
-            text: "Successfully replaced 1 instance(s) of the string in '/a.ts'",
-          }}
-          beam={false}
-        />,
-      );
+    const replaced = "Successfully replaced 2 instance(s) of the string in '/a.ts'";
+    /** harness 的 `DiffResultMeta`：`replace_all` 改了兩處，各帶上下文。 */
+    const applied = {
+      diffs: [
+        { path: '/a.ts', oldText: 'x\nconst a = 1;\ny\n', newText: 'x\nconst a = 2;\ny\n' },
+        { path: '/a.ts', oldText: 'p\nconst a = 1;\nq\n', newText: 'p\nconst a = 2;\nq\n' },
+      ],
+    };
+
+    it('結束之後沒有 meta（格式 16 以前的日誌、超過上限）：退回通用卡的結果', () => {
+      render(<ToolCard entry={{ ...edit, status: 'done', text: replaced }} beam={false} />);
       const trigger = screen.getByRole('button', { name: /編輯檔案/ });
       expect(trigger.textContent).not.toContain('+1');
       fireEvent.click(trigger);
       expect(screen.queryByTestId('tool-diff')).toBeNull();
       expect(screen.getByLabelText('工具結果').textContent).toContain('Successfully replaced');
+    });
+
+    it('結束之後有 meta：畫實際套用的每一段，收著接合計的 +2 −2', () => {
+      render(
+        <ToolCard
+          entry={{ ...edit, status: 'done', text: replaced, meta: applied }}
+          beam={false}
+        />,
+      );
+      const trigger = screen.getByRole('button', { name: /編輯檔案/ });
+      expect(trigger.textContent).toContain('+2');
+      expect(trigger.textContent).toContain('−2');
+      fireEvent.click(trigger);
+      // 10 列超過對話裡的 9 列，中間那一列（兩段之間的 ⋯）收著；展開看全部。
+      fireEvent.click(screen.getByTestId('tool-diff-toggle'));
+      const rows = screen.getByTestId('tool-diff').querySelectorAll('[data-diff-line]');
+      expect([...rows].map((row) => row.getAttribute('data-diff-line'))).toEqual([
+        'path',
+        'context',
+        'del',
+        'add',
+        'context',
+        'gap',
+        'context',
+        'del',
+        'add',
+        'context',
+      ]);
+      expect(screen.queryByTestId('tool-output')).toBeNull();
+    });
+
+    it('更正幀補上 meta：同一張卡從通用卡換成 diff', () => {
+      const done = { ...edit, status: 'done' as const, text: replaced };
+      const view = render(<ToolCard entry={done} beam={false} />);
+      fireEvent.click(screen.getByRole('button', { name: /編輯檔案/ }));
+      expect(screen.queryByTestId('tool-diff')).toBeNull();
+      view.rerender(<ToolCard entry={{ ...done, meta: applied }} beam={false} />);
+      expect(screen.getByTestId('tool-diff')).toBeTruthy();
+      expect(screen.queryByTestId('tool-output')).toBeNull();
     });
 
     it('失敗時紅字', () => {
@@ -706,6 +771,178 @@ describe('工具卡的結果與 diff', () => {
           beam={false}
         />
         <ToolCard entry={tool({ id: 'tool-2', name: 'echo', text: lines(300) })} beam={false} />
+      </>,
+    );
+    for (const trigger of screen.getAllByRole('button', { expanded: false })) {
+      fireEvent.click(trigger);
+    }
+    expect(await axeViolations(container)).toEqual([]);
+  });
+});
+
+describe('讀檔卡與搜尋卡（#625）', () => {
+  function expand(name: RegExp) {
+    fireEvent.click(screen.getByRole('button', { name }));
+  }
+  const readLines = (from: number, count: number) =>
+    Array.from({ length: count }, (_, at) => ({
+      number: from + at,
+      text: `const v${from + at} = 0;`,
+    }));
+  const read = (lines: { number: number; text: string }[], totalLines: number) =>
+    tool({
+      input: JSON.stringify({ file_path: '/src/a.ts', offset: (lines[0]?.number ?? 1) - 1 }),
+      text: '（deepagents 格式的結果文字）',
+      meta: { path: '/src/a.ts', offset: lines[0]?.number ?? 1, lines, totalLines, lang: 'ts' },
+    });
+
+  it('讀檔：行號從 meta 取，標頭講讀到哪裡與語言，不畫結果文字', () => {
+    render(<ToolCard entry={read(readLines(21, 3), 90)} beam={false} />);
+    expand(/讀取/);
+    const card = screen.getByTestId('tool-read');
+    expect(within(card).getByText('/src/a.ts')).toBeTruthy();
+    expect(within(card).getByTestId('tool-read-window').textContent).toBe('第 21–23 行，共 90 行');
+    expect(within(card).getByText('ts')).toBeTruthy();
+    const numbers = [...card.querySelectorAll('[data-read-line]')].map((row) =>
+      row.getAttribute('data-read-line'),
+    );
+    expect(numbers).toEqual(['21', '22', '23']);
+    expect(screen.queryByTestId('tool-output')).toBeNull();
+  });
+
+  it('讀檔：有上色（ts 是開機就載的文法）', () => {
+    render(<ToolCard entry={read(readLines(1, 1), 1)} beam={false} />);
+    expand(/讀取/);
+    const row = screen.getByTestId('tool-read').querySelector('[data-read-line="1"]');
+    expect(row?.querySelectorAll('span[style]').length).toBeGreaterThan(1);
+  });
+
+  it('讀檔：超過 8 行只畫頭 4 尾 4，中間可以展開', () => {
+    render(<ToolCard entry={read(readLines(1, 20), 20)} beam={false} />);
+    expand(/讀取/);
+    const card = screen.getByTestId('tool-read');
+    const numbers = () =>
+      [...card.querySelectorAll('[data-read-line]')].map((row) =>
+        row.getAttribute('data-read-line'),
+      );
+    expect(numbers()).toEqual(['1', '2', '3', '4', '17', '18', '19', '20']);
+    expect(screen.queryByTestId('tool-read-window')).toBeNull();
+    const toggle = screen.getByTestId('tool-read-toggle');
+    expect(toggle.textContent).toBe('展開其餘 12 行');
+    fireEvent.click(toggle);
+    expect(numbers()).toHaveLength(20);
+    expect(toggle.textContent).toBe('收起');
+  });
+
+  it('讀檔：更正幀補上 meta，同一張卡從結果文字換成讀檔卡', () => {
+    const settled = read(readLines(1, 2), 2);
+    const { meta: _meta, ...bare } = settled;
+    const view = render(<ToolCard entry={bare} beam={false} />);
+    expand(/讀取/);
+    expect(screen.getByTestId('tool-output')).toBeTruthy();
+    view.rerender(<ToolCard entry={settled} beam={false} />);
+    expect(screen.getByTestId('tool-read')).toBeTruthy();
+    expect(screen.queryByTestId('tool-output')).toBeNull();
+  });
+
+  const grep = (meta: unknown) =>
+    tool({
+      name: 'grep',
+      input: JSON.stringify({ pattern: 'foo', glob: null }),
+      text: '（deepagents 格式的結果文字）',
+      meta,
+    });
+  const files = (counts: number[]) =>
+    counts.map((count, file) => ({
+      path: `/src/f${file}.ts`,
+      matches: Array.from({ length: count }, (_, at) => ({
+        lineNumber: at + 1,
+        line: `foo(${at + 1})`,
+      })),
+    }));
+
+  it('grep：檔案標題列＋帶行號的命中，截斷時標頭寫「顯示 X／共 N」', () => {
+    render(
+      <ToolCard
+        entry={grep({ shape: 'matches', files: files([1, 2]), truncated: true, total: 50 })}
+        beam={false}
+      />,
+    );
+    expand(/搜尋/);
+    const card = screen.getByTestId('tool-search');
+    expect(within(card).getByText('顯示 3／共 50 處符合 · 2 個檔案')).toBeTruthy();
+    const rows = [...card.querySelectorAll('[data-search-row]')].map(
+      (row) => `${row.getAttribute('data-search-row')}:${row.textContent}`,
+    );
+    expect(rows).toEqual([
+      'file:/src/f0.ts1',
+      'match:1: foo(1)',
+      'file:/src/f1.ts2',
+      'match:1: foo(1)',
+      'match:2: foo(2)',
+    ]);
+    expect(screen.queryByTestId('tool-output')).toBeNull();
+  });
+
+  it('grep：超過 8 列收在中間，尾段補回檔案標題', () => {
+    render(
+      <ToolCard
+        entry={grep({ shape: 'matches', files: files([3, 6]), truncated: false, total: 9 })}
+        beam={false}
+      />,
+    );
+    expand(/搜尋/);
+    const card = screen.getByTestId('tool-search');
+    const rows = () => [...card.querySelectorAll('[data-search-row]')];
+    expect(rows()).toHaveLength(8);
+    expect(rows()[4]?.textContent).toBe('/src/f1.ts6');
+    expect(screen.getByTestId('tool-search-toggle').textContent).toBe('展開其餘 3 列');
+    fireEvent.click(screen.getByTestId('tool-search-toggle'));
+    expect(rows()).toHaveLength(11);
+  });
+
+  it('glob：一列一個路徑；更正幀補上 meta 時換卡', () => {
+    const settled = tool({
+      name: 'glob',
+      input: JSON.stringify({ pattern: '**/*.ts' }),
+      text: '/src/a.ts\n/src/b.ts',
+      meta: { shape: 'paths', paths: ['/src/a.ts', '/src/b.ts'], truncated: false, total: 2 },
+    });
+    const { meta: _meta, ...bare } = settled;
+    const view = render(<ToolCard entry={bare} beam={false} />);
+    expand(/搜尋|尋找/);
+    expect(screen.getByTestId('tool-output')).toBeTruthy();
+    view.rerender(<ToolCard entry={settled} beam={false} />);
+    const card = screen.getByTestId('tool-search');
+    expect(within(card).getByText('2 個路徑')).toBeTruthy();
+    expect(
+      [...card.querySelectorAll('[data-search-row="path"]')].map((row) => row.textContent),
+    ).toEqual(['/src/a.ts', '/src/b.ts']);
+  });
+
+  it('meta 形狀不對：照舊畫結果文字，不畫半套', () => {
+    render(
+      <ToolCard
+        entry={grep({ shape: 'matches', files: 'x', truncated: false, total: 1 })}
+        beam={false}
+      />,
+    );
+    expand(/搜尋/);
+    expect(screen.queryByTestId('tool-search')).toBeNull();
+    expect(screen.getByTestId('tool-output')).toBeTruthy();
+  });
+
+  it('展開的讀檔卡與搜尋卡過 axe', async () => {
+    const { container } = render(
+      <>
+        <ToolCard entry={read(readLines(1, 20), 40)} beam={false} />
+        <ToolCard
+          entry={{
+            ...grep({ shape: 'matches', files: files([3, 6]), truncated: true, total: 40 }),
+            id: 'tool-2',
+          }}
+          beam={false}
+        />
       </>,
     );
     for (const trigger of screen.getAllByRole('button', { expanded: false })) {
