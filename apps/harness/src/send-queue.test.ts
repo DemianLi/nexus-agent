@@ -18,7 +18,7 @@
 
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import { SessionLog } from '@nexus/core';
+import { goalId, SessionLog } from '@nexus/core';
 import type { InboxSplice, PluginEntry, SessionEvent } from '@nexus/core';
 import type { Event, InboxPayload } from '@nexus/wire';
 import { createWireClient, INBOX, QUEUE_UPDATE_METHOD } from '@nexus/wire';
@@ -435,6 +435,43 @@ describe('按停止之後：排著的停住，下一次送出才喚醒', () => {
       ]);
       expect(run.pump.inbox).toEqual([]);
       expect(run.pump.running).toBe(false);
+    } finally {
+      await run.close();
+    }
+  });
+
+  /**
+   * 排程器今天排不出這一格：續行只在 `running` 為假時送，送了就當場開跑，排不到別人後面。所以直接對 `submit` 送
+   * ——它是公開的入口，#638 讓續行走佇列之後這一格就是產品路徑。
+   */
+  it('排著的續行那一輪在停止落定時丟掉，不停住：喚醒之後不跑一份過期的輪次', async () => {
+    const hold = gate();
+    const run = open(scriptedAgent([{ hold: hold.opened, abortable: true }]));
+    try {
+      const first = run.pump.submit({ kind: 'message', text: 'A', id: 'a' });
+      await until(() => run.marks().includes('start:message:A'));
+      const round = run.pump.submit({
+        kind: 'goal',
+        text: '續行',
+        goalId: goalId('goal-1'),
+        revision: 1,
+        round: 1,
+      });
+      queued(run.pump.submit({ kind: 'message', text: 'B', id: 'b' }));
+
+      expect(run.pump.cancel()).toBe('run');
+      await first;
+      // 送出它的 promise 就此有結果，不是掛到下一次送出。
+      await round;
+      expect(run.pump.running).toBe(false);
+
+      await run.pump.submit({ kind: 'message', text: 'C', id: 'c' });
+      await run.pump.whenIdle();
+      expect(run.marks().filter((mark) => mark.startsWith('start:'))).toEqual([
+        'start:message:A',
+        'start:message:B',
+        'start:message:C',
+      ]);
     } finally {
       await run.close();
     }
