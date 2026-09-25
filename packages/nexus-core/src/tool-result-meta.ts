@@ -290,6 +290,19 @@ interface GrepMatchLike {
   readonly text?: unknown;
 }
 
+/** 同一組 grep 參數不封頂再叫一次，回命中總數；叫不動就退回截過的那個數。 */
+async function countAll(
+  method: (...args: unknown[]) => unknown,
+  args: readonly unknown[],
+  fallback: number,
+): Promise<number> {
+  const [pattern, path, glob] = args;
+  const full = (await method(pattern, path, glob, null)) as BackendResultLike & {
+    readonly matches?: readonly unknown[];
+  };
+  return full.error === undefined && Array.isArray(full.matches) ? full.matches.length : fallback;
+}
+
 function withGrepMeta(method: (...args: unknown[]) => unknown) {
   return async (...args: unknown[]): Promise<unknown> => {
     const result = (await method(...args)) as BackendResultLike & {
@@ -314,13 +327,17 @@ function withGrepMeta(method: (...args: unknown[]) => unknown) {
       if (group === undefined) byFile.set(match.path, [entry]);
       else group.push(entry);
     }
+    const truncated = result.truncated === true;
     const meta: SearchResultMeta = {
       shape: 'matches',
       files: Array.from(byFile, ([path, matches]) => ({ path, matches })),
-      // **`total` 只能是交出來的筆數**：backend 照 `max_count` 截過才回，截之前有幾筆它不講。dsh 的
-      // `total` 是截之前的數；截了的時候兩者不同，`truncated` 說得出來，數字說不出來（偏離，見 PR）。
-      truncated: result.truncated === true,
-      total: result.matches.length,
+      truncated,
+      // **`total` 是截之前的數**，同 dsh 的 `retained.seen`：backend 照 `max_count` 截過才回，所以截了的
+      // 那一次再不封頂叫一次來數。不多花掃描：基座的每一顆 backend 都是全掃之後才截前 N 筆
+      // （`applyGrepMaxCount`），ripgrep 本身沒帶上限。**模型那一份不動**，第二次的結果只拿來數。
+      total: truncated
+        ? await countAll(method, args, result.matches.length)
+        : result.matches.length,
     };
     putToolResultMeta('grep', meta);
     return result;

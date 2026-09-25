@@ -216,12 +216,29 @@ describe('工具結果帶結構化 meta', () => {
     });
   }, 20000);
 
-  it('grep 撞到 max_count：truncated，total 是截過的筆數（偏離，backend 不講截之前有幾筆）', async () => {
+  it('grep 撞到 max_count：files 是模型看到的那幾筆、truncated，total 是截之前的數（同 dsh）；模型那一份不變', async () => {
     await writeFile(join(root, 'many.txt'), 'needle\n'.repeat(5));
-    const { logged } = await run([
+    const { messages, logged } = await run([
       { name: 'grep', args: { pattern: 'needle', path: '/', max_count: 2 } },
     ]);
-    expect(logged[0]?.meta).toMatchObject({ shape: 'matches', truncated: true, total: 2 });
+    expect(logged[0]?.meta).toEqual({
+      shape: 'matches',
+      files: [
+        {
+          path: '/many.txt',
+          matches: [
+            { lineNumber: 1, line: 'needle' },
+            { lineNumber: 2, line: 'needle' },
+          ],
+        },
+      ],
+      truncated: true,
+      total: 5,
+    });
+    // 模型看到兩筆與基座的截斷提示——數總數的那一次沒有漏進模型那一份。
+    const text = textOf(messages[0]);
+    expect(text.match(/needle/g)).toHaveLength(2);
+    expect(text).toContain('the search stopped early because it hit the maximum match count');
   }, 20000);
 
   it('grep 沒命中也帶，同 dsh：files 是空的、total 是 0', async () => {
