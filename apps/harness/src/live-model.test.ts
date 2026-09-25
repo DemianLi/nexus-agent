@@ -1244,6 +1244,27 @@ describe('空的助手內容照 dsh 送（#592）', () => {
     ]);
   });
 
+  /**
+   * 撞到輸出上限的那一則清掉工具呼叫之後什麼都不剩（#433）：CLI 那條送 `""`、web 那條可能是 `null`，
+   * **不分形狀**整則不送，同 dsh 的 `surface.ts:142-147`。
+   */
+  it.each([
+    ['空字串', ''],
+    ['只有空白的字串', ' \n'],
+    ['null', null],
+    ['缺席', undefined],
+  ])('沒有工具呼叫、內容是%s：整則不送', (_label, content) => {
+    const messages = [
+      { role: 'user', content: '一' },
+      { role: 'assistant', ...(content === undefined ? {} : { content }) },
+      { role: 'user', content: '二' },
+    ];
+    expect(normalizeEmptyAssistantContent(messages)).toEqual([
+      { role: 'user', content: '一' },
+      { role: 'user', content: '二' },
+    ]);
+  });
+
   it('不動的：有字的陣列、字串、null、別的角色的空陣列——一則都沒換時回原本那個陣列', () => {
     const messages = [
       { role: 'assistant', content: [{ type: 'text', text: '好。' }] },

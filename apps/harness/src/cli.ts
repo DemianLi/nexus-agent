@@ -48,10 +48,12 @@ import {
   createHostServicesPlugin,
   sessionPersistencePlugin,
   type SessionPersistenceConfig,
+  MAX_TOKENS_TURN_END,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   SessionRegistry,
   deriveApprovalChannel,
+  turnReachedMaxTokens,
   type SessionLog,
 } from '@nexus/core';
 import { createJsonlSessionStore, openJsonlSessionStore } from './jsonl-session-store.js';
@@ -1001,7 +1003,11 @@ export async function runTurn(
     });
     throw error;
   }
-  sessionLog.append('turn/end', {});
+  // 撞到輸出上限的那一輪帶原因收尾（#433），判準讀的是這一輪記下的回覆，見 `@nexus/core` 的 `max-tokens.ts`。
+  sessionLog.append(
+    'turn/end',
+    turnReachedMaxTokens(sessionLog.events) ? { reason: MAX_TOKENS_TURN_END } : {},
+  );
 
   const paths = Object.keys(files);
   if (paths.length > 0) {

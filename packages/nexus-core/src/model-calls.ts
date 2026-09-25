@@ -44,7 +44,7 @@
  * `handler(request)` 回來的就是那一則完整的 AIMessage，web 與 CLI 兩條路都是——所以
  * `assistant/message` 寫在這裡，在 `model/end` 之前，順序同 dsh。這一格看到的是**進 graph state 的
  * 那一則**：外層只剩改請求不改回覆的那幾顆（摘要器、計劃模式的提示詞、基座那幾顆），改寫解不開
- * 參數的那顆在內側。
+ * 參數的那顆與清掉截斷回覆裡呼叫的那顆（{@link ./max-tokens.ts}）都在內側。
  *
  * **拋錯的呼叫不記**：那次沒有回覆可記（dsh 那一次記的是 `assistant/attempt`，我們沒有，見
  * `session-log.ts`）。子代理那一層被中止時回的空訊息也不記——它是 {@link ./turn-cancel.ts} 合成來

@@ -188,6 +188,25 @@ export {
   recordBackendOutcomes,
 } from './fs-tool-errors.js';
 
+export {
+  continuationFooter,
+  createReadContinuationMiddleware,
+  READ_CONTINUATION_MIDDLEWARE_NAME,
+  recordReadExtent,
+} from './read-continuation.js';
+export type { MaxTokensCarrier } from './max-tokens.js';
+export {
+  createMaxTokensCarrier,
+  createMaxTokensMiddleware,
+  dropToolCalls,
+  isMaxTokensFinish,
+  MAX_TOKENS_MIDDLEWARE_NAME,
+  MAX_TOKENS_TURN_END,
+  SUBAGENT_MAX_TOKENS_REASON,
+  subagentMaxTokensResult,
+  turnReachedMaxTokens,
+} from './max-tokens.js';
+
 export type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
 export {
   createInvalidArgumentsCarrier,
@@ -402,7 +421,11 @@ export { assertInvariantSelection, createInvariantRunner, InvariantError } from 
 export type { SessionInstaller, SessionRunnerOptions, SessionSubject } from './sessions.js';
 export { createSessionRunner } from './sessions.js';
 export type { SessionAddress } from './session-address.js';
-export { sessionAddressKey, toolCallSessionAddress } from './session-address.js';
+export {
+  sessionAddressKey,
+  spawnedSubagentRunId,
+  toolCallSessionAddress,
+} from './session-address.js';
 export type {
   SessionEntry,
   SessionFlusher,

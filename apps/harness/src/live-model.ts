@@ -659,8 +659,8 @@ interface WireAssistant {
 /**
  * 這則助手訊息的 content 是不是**一個字都沒有的陣列**：沒有任何一段非空白的文字。
  *
- * 只認陣列。字串（CLI 那條送的 `""`）與 `null`（`@langchain/openai` 標準轉換那條送的）兩個模型都收，
- * 不動。空白算空，同 pi-ai 的 `.filter((block) => block.text.trim().length > 0)`。
+ * 有工具呼叫時只認陣列。字串（CLI 那條送的 `""`）與 `null`（`@langchain/openai` 標準轉換那條送的）
+ * 配工具呼叫兩個模型都收，不動。空白算空，同 pi-ai 的 `.filter((block) => block.text.trim().length > 0)`。
  */
 function isEmptyContentArray(content: unknown): boolean {
   if (!Array.isArray(content)) return false;
@@ -673,9 +673,23 @@ function isEmptyContentArray(content: unknown): boolean {
 }
 
 /**
- * 把請求裡**內容是空陣列**的助手訊息換成 dsh 的送法
- * （[#592](https://github.com/DemianLi/nexus-agent/issues/592)）：有工具呼叫的送 `content: null`，
- * 沒有工具呼叫的整則不送。
+ * 這則助手訊息的 content 是不是一個字都沒有，**不分形狀**：`null`、缺席、空白字串、{@link isEmptyContentArray}。
+ * 沒有工具呼叫的那一種用它判：什麼都沒有的一則，照 dsh 整則不送。
+ */
+function isEmptyContent(content: unknown): boolean {
+  if (content === null || content === undefined) return true;
+  if (typeof content === 'string') return content.trim() === '';
+  return isEmptyContentArray(content);
+}
+
+/**
+ * 把請求裡**沒有內容**的助手訊息換成 dsh 的送法
+ * （[#592](https://github.com/DemianLi/nexus-agent/issues/592)）：有工具呼叫、內容是空陣列的送
+ * `content: null`；沒有工具呼叫、內容是空的（任何形狀）整則不送。
+ *
+ * 後者的第二個來源是撞到輸出上限（[#433](https://github.com/DemianLi/nexus-agent/issues/433)）：那一則的工具
+ * 呼叫被清掉，只剩推理或什麼都沒有。CLI 那條送的是 `""`、web 那條是空陣列或 `null`，所以這一種不分形狀——
+ * 同 dsh 的 `surface.ts:142-147`（`477b4f4`）與 pi-ai 的「沒有 content 也沒有工具呼叫的整則略過」。
  *
  * @param messages - 請求 body 的 `messages`。
  * @returns 換過的訊息串；一則都沒換時是**原本那個陣列**。
@@ -685,25 +699,27 @@ export function normalizeEmptyAssistantContent(messages: readonly unknown[]): re
   const next: unknown[] = [];
   for (const message of messages) {
     const assistant = message as WireAssistant;
+    if (typeof message !== 'object' || message === null || assistant.role !== 'assistant') {
+      next.push(message);
+      continue;
+    }
+    const hasToolCalls = Array.isArray(assistant.tool_calls) && assistant.tool_calls.length > 0;
     if (
-      typeof message !== 'object' ||
-      message === null ||
-      assistant.role !== 'assistant' ||
-      !isEmptyContentArray(assistant.content)
+      hasToolCalls ? !isEmptyContentArray(assistant.content) : !isEmptyContent(assistant.content)
     ) {
       next.push(message);
       continue;
     }
     changed = true;
-    const hasToolCalls = Array.isArray(assistant.tool_calls) && assistant.tool_calls.length > 0;
     if (hasToolCalls) next.push({ ...assistant, content: null });
   }
   return changed ? next : messages;
 }
 
 /**
- * 送出前把**內容是空陣列**的助手訊息換掉——gpt-oss-20b 收到 `content: []` 會回 400
- * （[#592](https://github.com/DemianLi/nexus-agent/issues/592)）。
+ * 送出前把**沒有內容**的助手訊息換掉——gpt-oss-20b 收到 `content: []`＋`tool_calls` 會回 400
+ * （[#592](https://github.com/DemianLi/nexus-agent/issues/592)）；沒有工具呼叫、什麼都沒有的那則照 dsh
+ * 整則不送（[#433](https://github.com/DemianLi/nexus-agent/issues/433) 放寬到每一種形狀）。
  *
  * ## 誰會送出 `[]`
  *
@@ -715,6 +731,13 @@ export function normalizeEmptyAssistantContent(messages: readonly unknown[]): re
  * 1. deepagents 的 `truncateArgs`（`deepagents@1.13.1`）重建舊訊息時丟了 `response_metadata`，
  *    推理＋工具呼叫的那則送成 `[]`＋`tool_calls`。**這個會壞。**
  * 2. 按停止時只收到推理的那則（#561），送成 `[]`、沒有工具呼叫。**今天不會壞**，照 dsh 一起收掉。
+ *
+ * ## 誰會送出空字串或 `null`、又沒有工具呼叫
+ *
+ * 撞到輸出上限的那則（#433）：`@nexus/core` 的 `max-tokens.ts` 清掉它的呼叫之後，只寫了參數、沒吐字的
+ * 那種什麼都不剩——CLI 那條送 `""`，web 那條送空陣列或 `null`。**不分形狀整則不送**。這也收掉了別的
+ * 來源的同一種形狀（例如只有推理的最終回覆），同 dsh 不分來源：沒有內容也沒有呼叫的就不是一則。
+ * 這一種兩個模型都沒有量過（上表只量了 `[]`），照 dsh 做。
  *
  * ## 真端點量到的（2026-09-25，NVIDIA 閘道，非串流，各 1 次）
  *
@@ -745,7 +768,7 @@ export function normalizeEmptyAssistantContent(messages: readonly unknown[]): re
  * 1. **改在 `fetch` 這一層，不在組請求那一步。** dsh 在序列化裡就送對；`@langchain/openai` 的轉換
  *    函式沒有可設定的地方，所以退到手上最靠近它的一格：送出前的 body（同
  *    {@link withInbandStreamErrors} 退到 `fetch` 的理由）。
- * 2. **只換空的那種。** pi-ai 還把非空的文字接成一條字串送（它的註解說陣列會讓 NVIDIA NIM 上的
+ * 2. **只換空的那種**（有工具呼叫的只換空陣列，沒有的不分形狀）。pi-ai 還把非空的文字接成一條字串送（它的註解說陣列會讓 NVIDIA NIM 上的
  *    DeepSeek V3.2 照抄區塊結構）。那會改掉每一則有字的助手訊息的送法，兩個模型都要重量，不在這張。
  *
  * @param baseFetch - 底層的 fetch。預設全域那個；測試用它換掉。

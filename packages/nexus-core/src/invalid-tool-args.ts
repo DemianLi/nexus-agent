@@ -43,11 +43,13 @@
  * 原字串從同一條串流上模型那一段學來。不在這裡換，理由寫在 `wrapToolCall` 那一行。從日誌開的那一顆
  * 本來就是原字串（圍堵記的就是它）。
  *
- * ### 位置：每一層的最內側
+ * ### 位置：幾乎是每一層的最內側
  *
  * 排在 `turnCancelModelSignal` 之前（那一顆只有 `wrapModelCall`，而且只綁訊號）。核准閘門與 plugin
- * 的 middleware 都在它外面，對到 dsh「先 `tools/pre-execute`，執行時才驗參數」；而改寫排在所有
- * `wrapModelCall` 的最內側，外面每一顆看到的都是改寫過的那則。外面那些看到的參數是 `{}`——
+ * 的 middleware 都在它外面，對到 dsh「先 `tools/pre-execute`，執行時才驗參數」；而改寫排在其餘
+ * `wrapModelCall` 的內側，外面每一顆看到的都是改寫過的那則。**比它更內側的只有 {@link ./max-tokens.ts}**
+ * （[#433](https://github.com/DemianLi/nexus-agent/issues/433)）：撞到輸出上限的那則先被清掉所有呼叫，
+ * 被切斷的那一顆到不了這裡，不會被當成參數不合格。外面那些看到的參數是 `{}`——
  * dsh 那側它們看到的是原字串，兩者都沒有任何欄位，觀測政策這類按路徑判斷的因此原樣放行。
  * 時刻是 `tools/execute`，佔用者的索引見 `apps/harness/src/interception-index.test.ts`。
  *
@@ -229,7 +231,7 @@ function refusingStub(name: string): unknown {
  * 造這顆 middleware。
  *
  * @param carrier - 這份組裝的載體，同一份也交給圍堵與核准閘門。
- * @returns 要排在每一層最內側的 middleware。
+ * @returns 要排在每一層內側（`nexusMaxTokens` 之外）的 middleware。
  */
 export function createInvalidToolArgsMiddleware(carrier: InvalidArgumentsCarrier): AgentMiddleware {
   return createMiddleware({
