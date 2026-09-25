@@ -69,7 +69,13 @@ import type {
   TokenUsageTotals,
   UnreplayableReason,
 } from '@nexus/core';
-import { loggedMessageId, replayConversation, sessionStatsUnit, tokenUsageUnit } from '@nexus/core';
+import {
+  isMaxTokensFinish,
+  loggedMessageId,
+  replayConversation,
+  sessionStatsUnit,
+  tokenUsageUnit,
+} from '@nexus/core';
 
 import { toolResultText } from './tool-result-text.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
@@ -516,8 +522,14 @@ export function historyFrames(
         const text = textOf(event.data.message);
         const reasoning = reasoningOf(event.data.message);
         // 只帶工具呼叫的那一次沒有字可畫。即時的畫面那時會長一則空的，歷史不跟著長。**只有推理的那一次
-        // 有東西可畫**（#527）：模型只想、只呼叫工具的那幾步，即時那則帶著推理，歷史也要有。
-        if (text !== '' || reasoning !== '') {
+        // 有東西可畫**（#527）：模型只想、只呼叫工具的那幾步，即時那則帶著推理，歷史也要有。**撞到輸出上限
+        // 的那一次也長**（#433），空的也長：這一輪的截斷標在最後一則 root 回覆上，即時那則就是它，歷史略過
+        // 的話標記會落到前一步有字的那則上、或無處可標。
+        if (
+          text !== '' ||
+          reasoning !== '' ||
+          isMaxTokensFinish(event.data.message.data.response_metadata)
+        ) {
           frames.push(
             ...message(
               event.time,
@@ -574,6 +586,9 @@ export function historyFrames(
       case 'turn/end':
         if (event.data.reason?.kind === 'aborted') {
           close(event.time, { event: 'failed', aborted: true });
+        } else if (event.data.reason?.kind === 'max-tokens') {
+          // 撞到輸出上限（#433）：同即時那條，pump 在收尾 frame 上補 `maxTokens`。
+          close(event.time, { event: 'completed', maxTokens: true });
         } else if (interrupted) {
           turnOpen = false;
           suspended = true;

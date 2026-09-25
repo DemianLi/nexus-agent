@@ -121,6 +121,13 @@ export type GoalDriverIdleReason =
    * 停在核准點時按停止的那一種（收回）也落在這裡：收回寫的是一輪 `resume` 帶 aborted 收尾。
    */
   | 'turn-aborted'
+  /**
+   * 上一輪**撞到了模型的輸出上限**（`turn/end` 帶 `reason.kind: 'max-tokens'`，
+   * [#433](https://github.com/DemianLi/nexus-agent/issues/433)）。不只這一次不排：{@link driveGoalRound} 還會
+   * 收回續行授權，要續行得走一次有人授權的 `resume`——同 dsh 的 `goal-round-driver` 看到 max-tokens 就
+   * `disarm`（`packages/goal/goal-round-driver/src/index.ts:329-331`，`477b4f4`）。
+   */
+  | 'turn-max-tokens'
   /** 停在核准點，中斷還掛著。 */
   | 'interrupt-pending'
   /** 沒有目前的目標。 */
@@ -153,7 +160,9 @@ function turnClosed(events: readonly SessionEvent[]): GoalDriverIdleReason | und
     if (event?.type === 'turn/end') {
       // **被中止的那一輪也以 `turn/end` 收尾**（#276）。少了這一句，人按了停止之後續行照樣排
       // 下一輪，而沒有任何測試會紅——跟 `turn-failed` 那格同一個理由。
-      return event.data.reason?.kind === 'aborted' ? 'turn-aborted' : undefined;
+      const kind = event.data.reason?.kind;
+      if (kind === 'aborted') return 'turn-aborted';
+      return kind === 'max-tokens' ? 'turn-max-tokens' : undefined;
     }
     if (event?.type === 'turn/failed') return 'turn-failed';
   }
@@ -234,7 +243,7 @@ export interface GoalDriverPort {
   goal(): GoalView | undefined;
   /** 記一顆 blocker。 */
   block(ref: GoalRef, reason: GoalBlockReason): void;
-  /** 收回續行授權，**不動耐久的相位**。耐久檢查點失敗時用。 */
+  /** 收回續行授權，**不動耐久的相位**。耐久檢查點失敗、上一輪撞到輸出上限時用。 */
   disarm(): void;
   /** 排隊前的耐久檢查點。沒有落盤時是 no-op。 */
   flush(): Promise<void>;
@@ -259,6 +268,11 @@ export interface GoalDriverPort {
  * 重試的話，一份寫不下去的日誌會配上一個照樣往前跑的模型——而日誌正是之後要用來重建
  * 「它到底做了什麼」的那份東西。
  *
+ * ## 上一輪撞到輸出上限也是停用
+ *
+ * 同 dsh（#433）：模型一輪寫不完，自動再排一輪多半再撞一次，要人看過再決定。只收回授權、不動相位，
+ * 跟上面那一條同一個動作。
+ *
  * @param readEvents - 讀當下的事件；**每次呼叫都要重讀**，不是一份快照。
  * @param port - 域那一側的四件事。
  * @param roundCap - 操作的人這一次呼叫給的輪數上限。**兩次決定都帶著它，但今天那是形式
@@ -273,7 +287,18 @@ export async function driveGoalRound(
   roundCap?: number,
 ): Promise<GoalRoundRequest | undefined> {
   const first = decideGoalRound(readEvents(), port.goal(), roundCap);
-  if (first.kind === 'idle') return undefined;
+  if (first.kind === 'idle') {
+    // 撞到輸出上限：照 dsh 只在授權還在時收回（`goal-round-driver/src/index.ts:117-124`）。收回之後再問一次
+    // 就是 `disarmed`，所以這一句冪等。
+    if (first.reason === 'turn-max-tokens' && port.goal()?.activation === 'armed') {
+      try {
+        port.disarm();
+      } catch (error: unknown) {
+        port.warn(`撞到輸出上限之後停用續行失敗：${errorText(error)}`);
+      }
+    }
+    return undefined;
+  }
   if (first.kind === 'block') {
     try {
       port.block(first.ref, first.reason);

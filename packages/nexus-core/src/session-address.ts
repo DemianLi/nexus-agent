@@ -111,6 +111,21 @@ export function toolCallSessionAddress(config: unknown): SessionAddress | undefi
 }
 
 /**
+ * 一次工具呼叫**派出去的子代理**會帶著的 `runId`：就是這次呼叫自己的整串命名空間。
+ *
+ * 同一張表的另一面：子代理那兩列去掉最後一段，剩下的正是父圖裡那次 `task` 呼叫的
+ * `checkpoint_ns`。所以父圖那一側（`task` 的 `wrapToolCall`）與子代理那一側（它的模型呼叫經
+ * {@link toolCallSessionAddress} 算出的 `runId`）拿到的是同一個值，兩邊不必互相通知就對得上。
+ * 解析照規矩只在這個檔裡。
+ *
+ * @param config - 同 {@link toolCallSessionAddress}。
+ * @returns 那個 `runId`；這次呼叫不在圖裡時是 `undefined`。
+ */
+export function spawnedSubagentRunId(config: unknown): string | undefined {
+  return checkpointNamespace(config);
+}
+
+/**
  * 身分的字串鍵，拿來當 Map 的 key。
  *
  * **前綴不能省。** 沒有 `subagent:` 的話，一個 `runId` 剛好等於 `'root'` 的 subagent 會撞上

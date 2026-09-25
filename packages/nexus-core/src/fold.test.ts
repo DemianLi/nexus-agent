@@ -15,6 +15,7 @@ import { CONTAINMENT_MIDDLEWARE_NAME } from './containment.js';
 import { FS_TOOL_ERRORS_MIDDLEWARE_NAME } from './fs-tool-errors.js';
 import { READ_CONTINUATION_MIDDLEWARE_NAME } from './read-continuation.js';
 import { INVALID_TOOL_ARGS_MIDDLEWARE_NAME } from './invalid-tool-args.js';
+import { MAX_TOKENS_MIDDLEWARE_NAME } from './max-tokens.js';
 import { OBSERVATION_POLICY_MIDDLEWARE_NAME, observationPolicyPlugin } from './observation.js';
 import { OUTPUT_SCHEMA_MIDDLEWARE_NAME } from './output-schema.js';
 import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
@@ -176,6 +177,7 @@ describe('middleware 註冊點', () => {
       'c',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -199,6 +201,7 @@ describe('middleware 註冊點', () => {
       'c',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -222,6 +225,7 @@ describe('middleware 註冊點', () => {
       'a',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -265,6 +269,7 @@ describe('middleware 註冊點', () => {
         ...(subagent.name === 'releaser' ? ['subagent-own'] : []),
         OUTPUT_SCHEMA_MIDDLEWARE_NAME,
         INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+        MAX_TOKENS_MIDDLEWARE_NAME,
         TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
       ]);
       expect(list[names.indexOf('early')]).toBe(early);
@@ -379,6 +384,7 @@ describe('「先讀後改」策略打底', () => {
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -411,6 +417,7 @@ describe('「先讀後改」策略打底', () => {
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -636,6 +643,7 @@ describe('approvals 註冊點', () => {
       'a',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -664,6 +672,7 @@ describe('approvals 註冊點', () => {
       'subagent-own',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -686,6 +695,7 @@ describe('approvals 註冊點', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -1257,6 +1267,7 @@ describe('摘要器打底', () => {
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -1290,6 +1301,7 @@ describe('摘要器打底', () => {
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -1430,6 +1442,7 @@ describe('提醒器打底', () => {
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -1462,6 +1475,7 @@ describe('提醒器打底', () => {
       'subagent-own',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
