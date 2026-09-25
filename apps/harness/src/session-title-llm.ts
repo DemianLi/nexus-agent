@@ -222,7 +222,11 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
         log.append('session/title', {
           title: result.title,
           messageSeqs: result.messageSeqs,
-          source: { kind: 'provider', provider: THREAD_TITLE_LLM_PLUGIN_NAME, model: options.route },
+          source: {
+            kind: 'provider',
+            provider: THREAD_TITLE_LLM_PLUGIN_NAME,
+            model: options.route,
+          },
         });
       } catch (error: unknown) {
         if (closed) return;

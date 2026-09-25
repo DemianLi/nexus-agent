@@ -948,7 +948,10 @@ export async function createCliAgent(
 function titleLlmFor(liveModel: LiveModelConfig, plugins: readonly PluginEntry[]) {
   const config = startupSetting(plugins, threadTitleLlmPlugin);
   return createSessionTitleLlm({
-    model: createLiveModel({ ...liveModel, maxOutputTokens: config.maxOutputTokens }, 'session-title'),
+    model: createLiveModel(
+      { ...liveModel, maxOutputTokens: config.maxOutputTokens },
+      'session-title',
+    ),
     route: { provider: liveModel.baseUrl, model: liveModel.modelId },
     config,
     limits: startupSetting(plugins, threadTitlePlugin),

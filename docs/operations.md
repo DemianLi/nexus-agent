@@ -234,7 +234,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `repeatReminder` 時，以那句話為準；而手搭 plugin 清單（沒有這幾列）的組裝拿到的是內建
   預設，不是「什麼都沒掛」。
 
-今天有十四列：
+今天有十五列：
 
 | id | 管什麼 | 有 `config` 嗎 | 關得掉嗎 |
 | --- | --- | --- | --- |
@@ -246,34 +246,37 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `session-checkpoint-policy` | 模型請求與頂層工具動手之前，先把會話日誌排空到磁碟 | **沒有** | 關得掉 |
 | `approval-gate` | 核准閘門 | **沒有** | **關不掉** |
 | `session-persistence` | 會話日誌落盤本身，以及它的批次窗口（毫秒） | 有（一格） | 關得掉（＝不落盤） |
-| `thread-title` | 會話標題的兩個上限（列表、畫面標頭、日誌裡的退回標題） | 有（兩格） | **關不掉** |
+| `thread-title` | 會話標題的三個上限（退回標題的詞數與位元組，以及任何來源的標題的位元組） | 有（三格） | **關不掉** |
+| `thread-title-llm` | `--live` 時由模型依第一句話產生會話標題 | 有（五格） | 關得掉（＝只剩退回標題） |
 | `browser-session` | 瀏覽器 cookie 的絕對有效期 | 有（一格） | **關不掉** |
 | `deliverable-files` | 交付檔的三個上限（一頁位元組／整檔位元組（只管下載）／一頁行數） | 有（三格） | **關不掉** |
 | `tool-text` | 一段工具結果文字放上線的位元組上限 | 有（一格） | **關不掉** |
-| `live-model` | `--live` 時真實供應商的連線值（端點／模型 id／輸出上限／逾時／重試次數） | 有（五格） | **關不掉** |
+| `live-model` | `--live` 時真實供應商的連線值（端點／模型 id／輸出上限／逾時／重試次數），加上標題呼叫關推理的參數 | 有（六格） | **關不掉** |
 | `recursion-limit` | agent 迴圈的 super-step 上限 | 有（一格） | **關不掉** |
 
-**最後七列裡，六列是「不裝功能、只講設定」的那一型；`session-persistence` 例外，它代表落盤本身**
-（[#612](https://github.com/DemianLi/nexus-agent/issues/612)，關掉就不落盤）。**七列的擁有者分兩邊**：`session-persistence` 住在
-`@nexus/core`（值的家在那個套件裡），其餘六列住在 `apps/harness`
+**最後八列裡，七列是「不裝功能、只講設定」的那一型；`session-persistence` 例外，它代表落盤本身**
+（[#612](https://github.com/DemianLi/nexus-agent/issues/612)，關掉就不落盤）。**八列的擁有者分兩邊**：`session-persistence` 住在
+`@nexus/core`（值的家在那個套件裡），其餘七列住在 `apps/harness`
 （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
 **更要緊的分界是消費點跑的時刻**：
 
-- **`session-persistence`、`thread-title`、`browser-session`、`deliverable-files`、`tool-text`、
-  `live-model` 跑在註冊表存在之前**，所以 `apply` 是空的、值在起動期解一次往下傳。`browser-session`、
+- **`session-persistence`、`thread-title`、`thread-title-llm`、`browser-session`、`deliverable-files`、
+  `tool-text`、`live-model` 跑在註冊表存在之前**，所以 `apply` 是空的、值在起動期解一次往下傳。`browser-session`、
   `deliverable-files`、`tool-text` 的消費點分別是瀏覽器會話的建構子、兩條交付路由、以及工具結果文字那兩條
   （即時的 `ThreadPump` 與重播的 `historyPage`，都在 `createWireHandler` 的閉包底下），**只在 `serve` 上有
   作用**；**`session-persistence`、`thread-title` 與 `live-model` 兩條路都讀**——`session-persistence` 由
   `cli.ts` 與 `serve.ts` 各自在接落盤時讀；`thread-title` 在 serve 上給冷讀清單、pump 與歷史，在 CLI 上給
   寫退回標題的 `runTurn`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）；`live-model` 各自在起動期
-  解一次、交給組裝去建 model（只有 `--live` 用得到）。
+  解一次、交給組裝去建 model（只有 `--live` 用得到）；`thread-title-llm` 跟它一起在建 model 的那一刻讀，
+  另建一顆標題用的（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。
 - **`recursion-limit` 相反，它的消費點在組裝期**（`agent-factory`），跟前七列同一個位置，所以它
   跟前七列完全同形（`apply` 提供一顆服務、組裝點去讀）。**CLI 的 `--recursion-limit` 仍然贏過
   這一列**——程式路徑上直接傳的參數贏過這份清單，那條規則對它照樣適用。
 
-**`session-persistence` 是這七列裡唯一關得掉的**（[#612](https://github.com/DemianLi/nexus-agent/issues/612)）：
-它代表落盤本身，關掉就是不落盤（見上面「會話日誌」一節）；它曾經也關不掉，那時它只講批次窗口、
+**這八列裡關得掉的有兩列。** `session-persistence`（[#612](https://github.com/DemianLi/nexus-agent/issues/612)）
+代表落盤本身，關掉就是不落盤（見上面「會話日誌」一節）；它曾經也關不掉，那時它只講批次窗口、
 關掉只會回到預設，而 #444 讓落盤預設開著之後，「想停掉日誌的人第一個試的就是這一格」。
+`thread-title-llm` 關掉就真的沒有模型產生的標題，只剩從第一句話截出來的退回標題（見下面那一段）。
 
 **其餘六列關不掉**，但理由分兩種。起動期那五列是「關掉沒有意義」：它們**不裝任何東西**，關掉
 不會讓標題不再被裁切、cookie 不再過期、交付檔不再有上限、工具結果不再被截、
@@ -298,7 +301,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 寫一次；上限是 `setTimeout` 收得住的 2 147 483 647，**超過它的值會讓計時器立刻觸發**（等於窗口
 消失，也就是最勤的那一種，不是最懶的），所以那種值在載入期就失敗，不會靜靜跑起來。
 
-**`live-model` 的五格**（[#545](https://github.com/DemianLi/nexus-agent/issues/545)）只在 `--live` 時才用；
+**`live-model` 的六格**（[#545](https://github.com/DemianLi/nexus-agent/issues/545)）只在 `--live` 時才用；
 出貨值是原本寫死的那幾個，每個數字怎麼量出來的寫在 `apps/harness/src/live-model.ts` 各常數的檔頭，
 **改之前先讀那一段**。幾件會咬人的事：
 
@@ -310,8 +313,26 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `timeoutMs` 在串流上管兩段：連線到第一則事件（逾時會重試），以及之後每一段之間的閒置（逾時不重試，
   因為已經送到畫面上的字作廢不了）。上限是 2 147 483 647（同 `windowMs` 的理由）。**最壞情況是它乘上
   重試次數**：開了線卻一個位元組都不吐時，每一次都等滿，預設 90 秒 × 7 次，再加退避。
+- **`thinkingOffBody` 也跟 `modelId` 綁著**（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）：它是標題
+  呼叫加進請求 body 的那幾格，用來關掉推理，主請求不帶。出貨那顆模型不關推理的話，標題那 64 個輸出 token
+  全被推理吃光，一個標題都回不出來（實測 0/6；關掉之後 6/6）。換一顆不認得 `chat_template_kwargs` 的模型時，
+  寫 `{}`，或另外量它自己的寫法——不認得的參數可能讓標題請求整個 400，也可能靜靜沒效果。
 - **key 不在這一列**：仍然只從 `NVIDIA_API_KEY` 讀。
 - **`eval` 與 `spike` 不跟這一列走**：它們量的是出貨預設那一組設定底下的模型。
+
+**`thread-title-llm`**（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）只在 `--live` 時才跑：每條新
+thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，另外打一次標題請求，回來的標題蓋過退回標題
+（列表、畫面標頭、歷史都讀最後一顆）。續接回來的舊 thread、第二句以後、子代理都不打。幾件要知道的事：
+
+- **每條新 thread 多一次請求**，走 `live-model` 那一列的端點、模型與 key，輸出上限是這一列的
+  `maxOutputTokens`（64）。這次呼叫**不計進會話統計，也不寫 `model/usage`**（同 dsh），所以用量表上看不到它。
+- **重試次數沿用 `live-model` 的 `maxRetries`**，但整段有這一列的 `timeoutMs`（60 秒）封頂，所以最壞是等滿
+  60 秒。
+- **失敗只講一聲**：serve 記進伺服器日誌、CLI 印在 stderr，前綴都是 `[標題]`，退回標題留著，不重試。
+  `finish_reason` 不是 `stop`（例如推理吃光上限）、要求呼叫工具、正規化後是空的、輸入超過 `maxInputBytes`，
+  都算失敗。
+- **CLI 一次性的呼叫多半等不到它**：主回覆收完行程就收尾，還沒回來的標題請求會被中止（不講話），只留退回標題。
+- 送出去的系統提示與訊息原文記在日誌的 `session/title-llm-request`，想知道模型看到什麼去讀那一顆。
 
 `observation-policy`、`model-usage`、`session-checkpoint-policy`、`approval-gate` 那四列**不可以加
 `config:`**——它們沒有設定，載入器對「這顆 plugin 沒有 Config schema 卻給了 config」是當場拋。前三列
@@ -354,10 +375,10 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 （給了 `truncateArgs` 就要把它底下兩格都寫出來），而 `trigger` 那兩個數字的來歷寫在
 `DEFAULT_SUMMARIZATION` 的檔頭上——**換模型要重量一次**。
 
-**最後七列的 `config` 同樣是整份替換。** 沒重述的欄位回到 schema 的預設值，不是保留原本那一列
+**最後八列的 `config` 同樣是整份替換。** 沒重述的欄位回到 schema 的預設值，不是保留原本那一列
 寫的值——例如 `thread-title` 只寫 `maxBytes` 的話，`maxWords` 拿到的是預設的 5。`thread-title`、
-`browser-session` 與 `deliverable-files` 的預設（`5`／`40`、`30` 天、2 MiB／32 MiB／5000 行）都照
-dsh 的產品組裝；**`session-persistence` 的 `10` 毫秒沒有 dsh 的對應物**——dsh 的落盤後端只收根目錄
+`thread-title-llm`、`browser-session` 與 `deliverable-files` 的預設（`5`／`40`／`80`；`5` 詞／`10` 字／4096 位元組／
+64 token／60 秒；`30` 天；2 MiB／32 MiB／5000 行）都照 dsh 的產品組裝；**`session-persistence` 的 `10` 毫秒沒有 dsh 的對應物**——dsh 的落盤後端只收根目錄
 與壓縮兩格，它的批次是呼叫端傳一整批而不是計時器攢批，所以這個旋鈕是我們自己的，形狀抄的是
 同一份清單上 core 那幾列；**`deliverable-files` 的 `maxLines` 是雙用的**——它同時是「不給 `limit` 查詢參數時
 每頁幾行」與「給了就不准超過幾行」，所以改那一格會同時動到兩個行為（dsh 同形）。

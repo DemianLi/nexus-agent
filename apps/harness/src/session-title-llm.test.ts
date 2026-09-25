@@ -60,7 +60,9 @@ function titleEvents(events: readonly SessionEvent[]): SessionEvent<'session/tit
   );
 }
 
-function requestEvents(events: readonly SessionEvent[]): SessionEvent<'session/title-llm-request'>[] {
+function requestEvents(
+  events: readonly SessionEvent[],
+): SessionEvent<'session/title-llm-request'>[] {
   return events.filter(
     (event): event is SessionEvent<'session/title-llm-request'> =>
       event.type === 'session/title-llm-request',
@@ -102,9 +104,7 @@ function fakeTitleModel(reply: (call: FakeCall) => Promise<AIMessage>): {
 }
 
 function stopReply(content: AIMessage['content'] = MODEL_TITLE): Promise<AIMessage> {
-  return Promise.resolve(
-    new AIMessage({ content, response_metadata: { finish_reason: 'stop' } }),
-  );
+  return Promise.resolve(new AIMessage({ content, response_metadata: { finish_reason: 'stop' } }));
 }
 
 /** 等 signal 被中止才拋：模擬一次不回來的呼叫。 */
@@ -245,7 +245,11 @@ describe('什麼時候排', () => {
 
   it('第一句進來時已經有標題就不排（同 dsh `get(session) === undefined`）', async () => {
     const t = attached(() => stopReply());
-    t.log.append('session/title', { title: '先有的', messageSeqs: [], source: { kind: 'fallback' } });
+    t.log.append('session/title', {
+      title: '先有的',
+      messageSeqs: [],
+      source: { kind: 'fallback' },
+    });
     t.startTurn(FIRST);
     await settle();
     expect(t.calls).toHaveLength(0);
@@ -394,7 +398,9 @@ describe('拆掉', () => {
   });
 
   it('模型不理中止、拆掉之後才回來：等它收尾，而且寫不進去', async () => {
-    const t = attached(() => new Promise((resolve) => setTimeout(() => void resolve(stopReply()), 30)));
+    const t = attached(
+      () => new Promise((resolve) => setTimeout(() => void resolve(stopReply()), 30)),
+    );
     t.startTurn(FIRST);
     await until(() => t.calls.length === 1);
     await t.detach();
@@ -462,9 +468,13 @@ async function writePatch(content: string): Promise<string> {
 
 /** `live-model` 那一列指向假端點；不重試，免得一次失敗變成好幾次請求。 */
 function liveModelPatch(baseUrl: string): string {
-  return ['- id: live-model', '  config:', `    baseUrl: '${baseUrl}'`, '    maxRetries: 0', ''].join(
-    '\n',
-  );
+  return [
+    '- id: live-model',
+    '  config:',
+    `    baseUrl: '${baseUrl}'`,
+    '    maxRetries: 0',
+    '',
+  ].join('\n');
 }
 
 interface SeenBody {
@@ -551,7 +561,11 @@ async function startFakeEndpoint(titleMode: 'reply' | 'hang' | 'absent') {
                 created: 1_790_000_000,
                 model,
                 choices: [
-                  { index: 0, message: { role: 'assistant', content: '好' }, finish_reason: 'stop' },
+                  {
+                    index: 0,
+                    message: { role: 'assistant', content: '好' },
+                    finish_reason: 'stop',
+                  },
                 ],
                 usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
               }),
@@ -589,7 +603,9 @@ async function startFakeEndpoint(titleMode: 'reply' | 'hang' | 'absent') {
 function rootCompletions(frames: readonly Event[]): number {
   return frames.filter((frame) => {
     const data = frame.params.data as { event?: unknown; graph_name?: unknown } | null;
-    return frame.method === 'lifecycle' && data?.event === 'completed' && data.graph_name === 'root';
+    return (
+      frame.method === 'lifecycle' && data?.event === 'completed' && data.graph_name === 'root'
+    );
   }).length;
 }
 
@@ -685,7 +701,9 @@ describe('產品路徑：serve --live', () => {
     expect(titlePushes(frames)).toHaveLength(2);
     // 畫面那一側：標題呼叫的事件沒有漏進這條 thread 的 `messages`——每一顆 `message-start` 都是主回覆。
     expect(
-      frames.filter((frame) => frame.method === 'messages' && JSON.stringify(frame).includes(MODEL_TITLE)),
+      frames.filter(
+        (frame) => frame.method === 'messages' && JSON.stringify(frame).includes(MODEL_TITLE),
+      ),
     ).toEqual([]);
     expect(messageStarts(frames)).toBe(main.length);
   }, 30000);
@@ -697,7 +715,9 @@ describe('產品路徑：serve --live', () => {
     await until(() =>
       frames.some((frame) => frame.method === 'messages' && JSON.stringify(frame).includes('好')),
     );
-    expect(frames.some((frame) => frame.method === 'messages' && JSON.stringify(frame).includes('好'))).toBe(true);
+    expect(
+      frames.some((frame) => frame.method === 'messages' && JSON.stringify(frame).includes('好')),
+    ).toBe(true);
     expect(titlePushes(frames)).toEqual([{ title: FIRST_FALLBACK }]);
     expect(fake!.titleClosed()).toBe(false);
 
