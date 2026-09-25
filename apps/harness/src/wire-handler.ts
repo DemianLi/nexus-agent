@@ -56,8 +56,10 @@ import {
   encodeSseFrame,
   errorResponse,
   isFeedbackMethod,
+  isQueueUpdateMethod,
   isRpcMethod,
   isRunCancelMethod,
+  QUEUE_ITEM_NOT_FOUND,
   isSlashMethod,
   isWireChannel,
   successResponse,
@@ -98,7 +100,7 @@ import type { ToolTextConfig } from './settings/tool-text.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import { isTrustedWireRequest } from './request-trust.js';
 import type { StoredThreadList } from './session-list.js';
-import type { PumpAgent } from './thread-pump.js';
+import type { PumpAgent, QueueAction } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
 
 /**
@@ -871,6 +873,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     if (isSlashMethod(method)) {
       return handleSlash(thread, method, envelope.id, body, signal);
     }
+    if (isQueueUpdateMethod(method)) {
+      return handleQueueUpdate(thread.pump, envelope.id, body);
+    }
 
     // **窄到上行那兩支**：路徑已經是 `UPLINK_METHODS` 之一（`isRpcMethod` 減掉斜線那兩支與
     // `run.cancel`），
@@ -895,28 +900,18 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           ),
         );
       }
-      if (pump.awaitingInput) {
-        // **基座這時不會擋，它會靜靜地把中斷丟掉**：新的一輪照跑，那個等著核准的工具
-        // 既沒執行也沒被拒絕，而且不會再發第二顆 `input.requested`（實測）。靜靜照做
-        // 等於讓一道核准閘門無聲消失，所以這裡明著回錯——同 `since` 那條的理由。
-        //
-        // 這一道只看得到**收件那一刻**。跑著時收下、輪到時才撞上核准點的那一句，由 pump
-        // 自己停住，等中斷答完才跑（#629，`ThreadPump.#nextIndex`）。
-        return json(
-          errorResponse(
-            command.id,
-            'invalid_argument',
-            '這條 thread 停在核准點：先用 input.respond 回答它，再說下一句話',
-          ),
-        );
-      }
+      // **停在核准點時照收**（#637 的 Q4，同 dsh）：以前這裡回錯，因為基座會照跑新的一輪、把中斷靜靜丟掉。
+      // 現在收下的這句進送出佇列，由 pump 停住，等中斷答完、那一輪收掉才跑（#629，`ThreadPump.#nextIndex`）。
       const text = firstHumanText(params.input);
       if (text === undefined) {
         return json(
           errorResponse(command.id, 'invalid_argument', 'run.start 的 input 沒有可用的訊息'),
         );
       }
-      return json(successResponse(command.id, { run_id: start(pump, { kind: 'message', text }) }));
+      // **`run_id` 就是這一件在送出佇列裡的 id**：畫面據它對上自己送出的那一句（推送裡的 `claimed.id`）。
+      const runId = crypto.randomUUID();
+      start(pump, { kind: 'message', text, id: runId });
+      return json(successResponse(command.id, { run_id: runId }));
     }
 
     const params = command.params;
@@ -1075,6 +1070,47 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
   function start(pump: ThreadPump, input: Parameters<ThreadPump['submit']>[0]): string {
     void pump.submit(input).catch(() => undefined);
     return crypto.randomUUID();
+  }
+
+  /**
+   * 改或刪送出佇列裡排著的一件（`queue.update`，[#637](https://github.com/DemianLi/nexus-agent/issues/637)）。
+   *
+   * **經 `threadFor`**，不學 `run.cancel` 那種「沒建過就當沒有」：dsh 的 `updateQueue` 會把冷的 agent 接回來
+   * （`resolveAgent`），而重啟之後停住的佇列就在一條還沒建的 thread 上——不接回來的話它改不動。**也不看
+   * `slashInFlight` 與 `awaitingInput`**：跑著、停在核准點、停住時都能改能刪。
+   */
+  function handleQueueUpdate(pump: ThreadPump, id: number, body: unknown): Response {
+    const params = (body as { params?: unknown }).params as
+      { item_id?: unknown; action?: { kind?: unknown; text?: unknown } | null } | null | undefined;
+    if (typeof params?.item_id !== 'string') {
+      return json(errorResponse(id, 'invalid_argument', 'queue.update 缺 item_id'));
+    }
+    const kind = params.action?.kind;
+    if (kind === 'steer') {
+      // dsh 的第三種：插話。另開一張（#637 的 Q3），明著說不支援，不靜靜吞掉。
+      return json(errorResponse(id, 'not_supported', '這一版的 queue.update 不支援 steer'));
+    }
+    let action: QueueAction;
+    if (kind === 'remove') {
+      action = { kind: 'remove' };
+    } else if (kind === 'edit') {
+      const text = params.action?.text;
+      // 同 dsh 的 `hasPromptContent`：只有空白不算一句話。
+      if (typeof text !== 'string' || text.trim() === '') {
+        return json(errorResponse(id, 'invalid_argument', 'queue.update 的 edit 要有非空白的文字'));
+      }
+      action = { kind: 'edit', text };
+    } else {
+      return json(
+        errorResponse(id, 'invalid_argument', 'queue.update 的 action 要是 edit 或 remove'),
+      );
+    }
+    if (pump.updateQueue(params.item_id, action) === 'not-found') {
+      return json(
+        errorResponse(id, QUEUE_ITEM_NOT_FOUND, `"${params.item_id}" 已經不在送出佇列裡`),
+      );
+    }
+    return json(successResponse(id, { accepted: true }));
   }
 
   /**

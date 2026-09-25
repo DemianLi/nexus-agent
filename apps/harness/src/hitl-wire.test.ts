@@ -291,20 +291,20 @@ describe('核准之後，經過線', () => {
   });
 });
 
-describe('上行擋下三種會靜靜壞掉的送法', () => {
-  it('停在核准點時送新話：明著回錯，中斷還掛著', async () => {
+describe('上行擋下兩種會靜靜壞掉的送法（停在核准點時送新話從 #637 起改成收下）', () => {
+  it('停在核准點時送新話：照 dsh 收下、排著，中斷還掛著；答完才跑它（#637 的 Q4）', async () => {
     const { agent, calls } = build(ONE, { alpha: BOTH_FULL.alpha });
     const session = await open(agent, 'h6', '動手');
     await until(session, (state) => state.status === 'awaiting-input');
 
-    // 基座這時不會擋：它會照跑一輪、把中斷丟掉，那個工具既沒執行也沒被拒絕，
-    // 而且不會再問第二次。所以擋在上行。
+    // 以前這裡回錯：基座會照跑一輪、把中斷丟掉。現在收下的那句由 pump 停住，等中斷答完才跑
+    // （#629），所以上行不必再擋。
     const response = await session.client.runStart('h6', '不管它，我再說一句');
-    expect(response.type).toBe('error');
+    expect(response.type).toBe('success');
 
-    // 擋下來之後那顆中斷還在，核准照樣跑得動——不是把 thread 弄死換來的安全。
+    // 收下之後那顆中斷還在，核准照樣跑得動；那句話排在核准那一輪後面。
     await decide(session, 'h6', 'approve');
-    await until(session, settled(2));
+    await until(session, settled(3));
     expect(calls).toEqual(['alpha']);
     await session.close();
   });

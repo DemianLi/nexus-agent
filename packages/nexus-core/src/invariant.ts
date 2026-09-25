@@ -31,9 +31,15 @@
  * 「一個行程的生命週期之內」，不是整份檔案——不重設的話，resume 之後第一顆 `turn/start`
  * 必然報「上一輪還開著」，而那一輪這個行程根本沒碰過。
  *
+ * **送出佇列（`inbox/spliced`，[#637](https://github.com/DemianLi/nexus-agent/issues/637)）是例外，它不重設**：
+ * 佇列本來就跨行程活著（重啟之後接回來、停住），所以一顆合規與否要對著從檔頭折起的清單判。檢的是 dsh 折疊那一側
+ * 會拋的兩件：範圍超出、id 重複（`packages/core/agent-loop/src/inbox.ts` 的 `inboxProjectionDefinition`，`477b4f4`）。
+ *
  * @module
  */
 
+import { spliceInbox } from './inbox.js';
+import type { QueuedInput } from './inbox.js';
 import type { InvariantInstaller } from './invariants.js';
 import type { NexusPlugin, PluginEntry } from './plugin.js';
 
@@ -67,9 +73,21 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
    * 裡哪天有了並行的模型呼叫也不會誤報。
    */
   let openModelCalls = 0;
+  /** 從檔頭折起的送出佇列。**跨 `session/end-seed` 不重設**，見檔頭。 */
+  let inbox: readonly QueuedInput[] = [];
 
   subject.observe((event) => {
     switch (event.type) {
+      case 'inbox/spliced': {
+        try {
+          inbox = spliceInbox(inbox, event.data);
+        } catch (error: unknown) {
+          fail(
+            `inbox/spliced（seq ${event.seq}）不合規：${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        break;
+      }
       case 'model/start': {
         openModelCalls += 1;
         break;

@@ -25,6 +25,8 @@
  *
  * | `model/usage` ／ 輪、模型、工具的起訖 | token 總帳與會話統計（#574）：**一頁各一顆，是從日誌開頭折到這一頁結尾的值**，還是初值就不送；`data` 同即時（{@link SessionTotals}） |
  *
+ * | `inbox/spliced` | 送出佇列（#637）：**只在最新一頁送一顆，是到 `throughSeq` 為止目前的清單**（空的也送），窗口裡一顆變動都沒有就不送；`data` 同即時（{@link inboxData}），不帶 `claimed` |
+ *
  * 用量表那兩種不是逐顆轉：web 只留最新那一筆，逐顆轉只會多出一串馬上被蓋掉的 frame。「到這一頁結尾為止」包括這一頁
  * 開頭之前的——最後一輪在第一次模型呼叫之前就失敗的話，這一頁自己沒有那兩種事件，而即時的畫面上用量表還在。見
  * {@link historyPage}。
@@ -41,6 +43,7 @@
 import type {
   DeliverablesPresentedPayload,
   Event,
+  InboxPayload,
   ModelUsagePayload,
   TodosPayload,
   WireSessionStats,
@@ -55,6 +58,7 @@ import {
   DELIVERABLES_PRESENTED,
   HISTORY_PAGE_MAX_BYTES,
   HISTORY_PAGE_MESSAGES,
+  INBOX,
   MODEL_USAGE,
   SESSION_STATS,
   TODOS,
@@ -63,6 +67,7 @@ import {
 } from '@nexus/wire';
 import type {
   LoggedMessage,
+  QueuedInput,
   SessionEvent,
   SessionEventMap,
   SessionStatsState,
@@ -70,6 +75,7 @@ import type {
   UnreplayableReason,
 } from '@nexus/core';
 import {
+  foldInbox,
   isMaxTokensFinish,
   loggedMessageId,
   replayConversation,
@@ -244,6 +250,27 @@ export function todosData(todos: SessionEventMap['todo/write']['todos'] | null):
     name: TODOS,
     payload: {
       todos: todos === null ? null : todos.map(({ content, status }) => ({ content, status })),
+    },
+  };
+}
+
+/**
+ * 送出佇列在線上的 `custom` 事件 `data`（[#637](https://github.com/DemianLi/nexus-agent/issues/637)）：整份清單，領走那一次
+ * 多帶 `claimed`。即時與這裡共用，規則見 `@nexus/wire` 的 `inbox.ts`。
+ *
+ * @param items - 整份清單。
+ * @param claimed - 這一次是因為這一件被領走開跑。歷史不帶。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `InboxPayload`。
+ */
+export function inboxData(
+  items: readonly QueuedInput[],
+  claimed?: { readonly id: string; readonly text: string },
+): { readonly name: typeof INBOX; readonly payload: InboxPayload } {
+  return {
+    name: INBOX,
+    payload: {
+      items: items.map(({ id, text, source }) => ({ id, text, source: { kind: source.kind } })),
+      ...(claimed === undefined ? {} : { claimed: { id: claimed.id, text: claimed.text } }),
     },
   };
 }
@@ -775,10 +802,18 @@ export function historyPage(
   totals.seed(window.slice(0, end));
   const lastTime = window[end - 1]?.time ?? 0;
   const totalsFrames = totals.flush().map((data) => frame('custom', lastTime, data));
+  // 送出佇列（#637）：**只在最新一頁**，而且是到 `throughSeq` 為止**目前的**清單，不是這一頁結尾的——佇列不會在一輪
+  // 開頭清空，前幾頁插進來、還沒領走的只看本頁會漏掉。較舊的頁不帶：畫面往上捲時才抓它們，那時即時的推送早就換過
+  // 清單，帶的話會把新的蓋回舊的。空的也送（即時清空時推的就是空的），一顆變動都沒有就不送。
+  const inboxFrames =
+    end === window.length && window.some((event) => event.type === 'inbox/spliced')
+      ? [frame('custom', lastTime, inboxData(foldInbox(window)))]
+      : [];
+  const tailFrames = [...totalsFrames, ...inboxFrames];
   const bytes =
     fitted.bytes +
     (carried.length === 0 ? 0 : weigh(carried, toolTextMaxBytes)) +
-    (totalsFrames.length === 0 ? 0 : Buffer.byteLength(JSON.stringify(totalsFrames), 'utf8'));
+    (tailFrames.length === 0 ? 0 : Buffer.byteLength(JSON.stringify(tailFrames), 'utf8'));
   // 軟上限撐破了。**沒有人講的話這件事在線上完全看不見**——回應照樣是 200、畫面照樣對。
   if (bytes > HISTORY_PAGE_MAX_BYTES) onOversize?.(bytes);
 
@@ -793,7 +828,7 @@ export function historyPage(
         toolTextMaxBytes,
         end === events.length ? awaitingInput : undefined,
       ),
-      ...totalsFrames,
+      ...tailFrames,
     ],
     firstSeq: cut,
     throughSeq,

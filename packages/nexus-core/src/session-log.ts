@@ -38,6 +38,7 @@
 
 import type { FeedbackRecord, MessageFeedbackDelete, MessageFeedbackPut } from './feedback.js';
 import type { GoalChangeMeta, GoalId } from './goal.js';
+import type { InboxSplice } from './inbox.js';
 import type { PresentedFile } from './deliverables.js';
 import type { LoggedMessage } from './logged-message.js';
 import type { TodoItem } from './todo.js';
@@ -136,6 +137,10 @@ import type { ToolErrorInfo } from './tool-events.js';
  *
  * `context/measure` 走 `compaction/summary` 那條（摘要器外面包的一層，fold 逐個 agent 建），也寫得進
  * subagent 那份；web 只讀 root 那份。見 [#528](https://github.com/DemianLi/nexus-agent/issues/528)。
+ *
+ * `inbox/spliced` 是**只有一條路產得出來的第二種**（第一種是 `feedback/message-*`）：寫的是 web 的 pump，CLI 的 REPL
+ * 一行一輪、沒有排隊。它記的是人送出、還沒開跑的那幾句，只寫 root 那一份。**它不進模型**：開跑那一刻的文字由
+ * `turn/start` 帶，推模型歷史的一側不讀它。見 [#637](https://github.com/DemianLi/nexus-agent/issues/637)。
  */
 export type SessionEventType =
   | 'turn/start'
@@ -162,6 +167,7 @@ export type SessionEventType =
   | 'feedback/record'
   | 'deliverables/presented'
   | 'workspace/changes'
+  | 'inbox/spliced'
   | 'session/end-seed';
 
 /**
@@ -649,6 +655,20 @@ export interface SessionEventMap {
    * 資料是空的，所以進遙測也沒有東西外洩——檔名與內容都不在日誌上。
    */
   'workspace/changes': Record<string, never>;
+  /**
+   * 送出佇列的一次變動（[#637](https://github.com/DemianLi/nexus-agent/issues/637)）：送進來、領走、改、刪。
+   * 形狀與折疊見 {@link ./inbox.ts}。
+   *
+   * 照 dsh 的 `agent/inbox/spliced`（`packages/core/agent/src/types.ts:96-102`，`477b4f4`），名字少了 `agent/`：
+   * 我們的日誌只有一種寫者的命名空間。落點有三種：
+   *
+   * - **送進來**：收下 `run.start` 的那一刻。閒著時也一樣，所以一輪前面多一顆；停在核准點時收下的那句落在
+   *   `interrupt/raised` 之後、`resume` 的 `turn/start` 之前。
+   * - **領走**：一輪開始時，**落在那一輪的 `turn/start` 之後**，同 dsh 的 `turn()` 先寫 `turn/start`、`preStep`
+   *   才領。所以它不會落在輪與輪之間，切頁不受影響。
+   * - **改、刪**：任何時候（排著的那一件還沒被領走就行）。
+   */
+  'inbox/spliced': InboxSplice;
   /**
    * 一段 seed 的結尾——這一顆之前的事件是上一個行程寫的，這個行程一顆都沒寫
    * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
