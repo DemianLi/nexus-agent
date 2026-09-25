@@ -218,7 +218,10 @@ export function ToolCard({
           )}
         </span>
         <span className="text-ui shrink-0 font-medium">{toolTitle(entry.name)}</span>
-        <code className="text-muted-foreground shrink-0 font-mono text-xs">{entry.name}</code>
+        {/* 手機寬度讓給摘要：標題已經講了是哪一類，工具名是給熟的人對照的；不讓的話改檔卡的路徑只剩「/…」（#625 實機）。 */}
+        <code className="text-muted-foreground hidden shrink-0 font-mono text-xs sm:inline">
+          {entry.name}
+        </code>
         {/* 外層吃掉剩下的寬度，裡面那格才截斷：「+N」要貼在摘要後面，不是被推到最右邊的狀態字旁邊。 */}
         <span className="flex min-w-0 flex-1 gap-1.5 text-xs">
           <span
