@@ -84,6 +84,13 @@ describe('後端照 dsh 看內容判二進位', () => {
     expect(typeof result.content).toBe('string');
   });
 
+  it('偏離：副檔名判成非文字、內容卻是合法文字，一樣拒成 binary file（dsh 照讀）', async () => {
+    await writeFile(join(root, 'fake.png'), 'just text\n');
+    expect(await backend().read('/fake.png')).toEqual({
+      error: 'cannot read "/fake.png": binary file',
+    });
+  });
+
   it('UTF-8 的中文與 SVG 照讀，內容一字不差', async () => {
     await writeFile(join(root, 'note.md'), '第一行\n第二行\n');
     await writeFile(join(root, 'icon.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>\n');
@@ -135,6 +142,18 @@ describe('沒掛工作區的虛擬 FS 一樣拒絕', () => {
     expect(backend.read('/latin1.pdf')).toEqual({
       error: 'cannot read "/latin1.pdf": invalid UTF-8 text',
     });
+  });
+
+  it('偏離：非文字副檔名裡是合法文字，一樣拒成 binary file', () => {
+    const backend = stateWith({
+      '/fake.png': {
+        content: new TextEncoder().encode('just text'),
+        mimeType: 'image/png',
+        created_at: at,
+        modified_at: at,
+      },
+    });
+    expect(backend.read('/fake.png')).toEqual({ error: 'cannot read "/fake.png": binary file' });
   });
 
   it('文字檔與不存在的檔照基座', () => {
