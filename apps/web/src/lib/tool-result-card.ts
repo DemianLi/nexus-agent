@@ -192,7 +192,13 @@ function shownCount(card: SearchCard): number {
 export function searchSummary(card: SearchCard): string {
   const shown = shownCount(card);
   if (shown === 0 && !card.truncated) return '沒有符合的結果';
-  const count = card.truncated ? `顯示 ${shown}／共 ${card.total}` : `${shown}`;
+  // glob 被截時 harness 數不出截之前有幾筆，`total` 就是交出來的筆數（`tool-result-meta.ts` 的 `withGlobMeta`）；
+  // 那時寫「顯示 50／共 50」像是全列了，改寫「顯示前 50」。
+  const count = !card.truncated
+    ? `${shown}`
+    : card.total > shown
+      ? `顯示 ${shown}／共 ${card.total}`
+      : `顯示前 ${shown}`;
   return card.kind === 'paths'
     ? `${count} 個路徑`
     : `${count} 處符合 · ${card.files.length} 個檔案`;

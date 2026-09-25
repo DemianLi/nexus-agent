@@ -209,6 +209,12 @@ describe('searchSummary', () => {
     );
   });
 
+  it('截了但數不出截之前有幾筆（glob 的 total 就是交出來的筆數）：寫「顯示前 N」，不寫「共 N」', () => {
+    expect(searchSummary({ kind: 'paths', paths: ['/a', '/b'], truncated: true, total: 2 })).toBe(
+      '顯示前 2 個路徑',
+    );
+  });
+
   it('沒有結果', () => {
     expect(searchSummary({ kind: 'paths', paths: [], truncated: false, total: 0 })).toBe(
       '沒有符合的結果',
