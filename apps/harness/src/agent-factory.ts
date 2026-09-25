@@ -66,9 +66,10 @@ import {
   type SummarizationSettings,
   type ToolResultPruneConfig,
 } from '@nexus/core';
-import { CompositeBackend, createDeepAgent, StateBackend } from 'deepagents';
+import { CompositeBackend, createDeepAgent } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
+import { TextOnlyStateBackend } from './binary-read.js';
 import { assertHarnessProfileDeclared } from './harness-profile.js';
 import type { HarnessProfileEffects } from './harness-profile.js';
 import { DEFAULT_RECURSION_LIMIT, RECURSION_LIMIT_SERVICE } from './settings/recursion-limit.js';
@@ -295,7 +296,7 @@ export type NexusAgentHandle = Awaited<ReturnType<typeof createNexusAgent>>;
 export const TOOL_RESULT_STASH_PREFIX = '/large_tool_results';
 
 /**
- * 把工具結果暫存那一格路由到獨立的 {@link StateBackend}，不讓它落在 agent 的工作區上。
+ * 把工具結果暫存那一格路由到獨立的 {@link TextOnlyStateBackend}，不讓它落在 agent 的工作區上。
  *
  * ## 它修的是一個會丟資料的缺陷（[#170](https://github.com/DemianLi/nexus-agent/issues/170)）
  *
@@ -345,7 +346,9 @@ function withToolResultStash(backend: AnyBackendProtocol): AnyBackendProtocol {
   // `ls` 列出 `/large_tool_result// (directory)`、`grep` 回 No matches（實測）。代價同歷史那一格：
   // 預設組裝裡 state 的 `files` 是共用的，模型在根目錄看得到 `/call_<id>.txt`——斜線之前也看得到，
   // 只是形狀是 `//call_<id>.txt`（`tool-result-stash.test.ts` 的 state 那條記著）。
-  return new CompositeBackend(backend, { [`${TOOL_RESULT_STASH_PREFIX}/`]: new StateBackend() });
+  return new CompositeBackend(backend, {
+    [`${TOOL_RESULT_STASH_PREFIX}/`]: new TextOnlyStateBackend(),
+  });
 }
 
 /**
@@ -361,7 +364,7 @@ function withToolResultStash(backend: AnyBackendProtocol): AnyBackendProtocol {
 export const CONVERSATION_HISTORY_PREFIX = '/conversation_history';
 
 /**
- * 把會話歷史那一格路由到獨立的 {@link StateBackend}，不讓它落在 agent 的工作區上
+ * 把會話歷史那一格路由到獨立的 {@link TextOnlyStateBackend}，不讓它落在 agent 的工作區上
  * （[#348](https://github.com/DemianLi/nexus-agent/issues/348)）。
  *
  * ## 缺的是什麼
@@ -409,7 +412,9 @@ function withConversationHistory(backend: AnyBackendProtocol): AnyBackendProtoco
   // 目錄本身、`key.substring(prefix.length)` 剝前綴，兩個都假設鍵以 `/` 結尾。少了它，寫進去
   // 的鍵變成 `//session_x.md`，照確切路徑 `read_file` 仍讀得到（兩邊同樣錯），但在這個目錄底下
   // `ls`／`grep` 都對不上（實測 `grep` 回 No matches）。
-  return new CompositeBackend(backend, { [`${CONVERSATION_HISTORY_PREFIX}/`]: new StateBackend() });
+  return new CompositeBackend(backend, {
+    [`${CONVERSATION_HISTORY_PREFIX}/`]: new TextOnlyStateBackend(),
+  });
 }
 
 /**
@@ -456,7 +461,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
 
     const params = foldRegistry(registry, {
       defaultBackend: withConversationHistory(
-        withToolResultStash(options.backend ?? new StateBackend()),
+        // 墊底的虛擬 FS 讀到二進位檔照 dsh 拒絕（#642），路由那兩格同一種。
+        withToolResultStash(options.backend ?? new TextOnlyStateBackend()),
       ),
       toolOrder: options.toolOrder,
       baseToolNames: options.baseToolNames ?? BASE_TOOL_NAMES,

@@ -135,7 +135,7 @@ describe('execute 還沒上線', () => {
     expect([...constructed].sort()).toEqual([
       'CompositeBackend',
       'ContainedFilesystemBackend',
-      'StateBackend',
+      'TextOnlyStateBackend',
     ]);
   });
 

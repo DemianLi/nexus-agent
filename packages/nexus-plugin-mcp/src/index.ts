@@ -24,6 +24,7 @@ import type { Connection } from '@langchain/mcp-adapters';
 import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
 import { z } from 'zod';
 import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
+import { projectNonText } from './project-content.js';
 
 export { publicToolName, SERVER_NAME_PATTERN } from './names.js';
 
@@ -129,6 +130,12 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
       additionalToolNamePrefix: '',
       throwOnLoadError: true,
       onConnectionError: 'throw',
+      // 圖片、音訊這些非文字塊換成文字說明（#642）：模型那一側的工具訊息只收文字。換在工具本體裡，
+      // 所以 state、日誌、還原、畫面看到的都是換過的那一份。
+      afterToolCall: ({ result: [content, artifacts] }) => {
+        const projected = projectNonText(content);
+        return projected === undefined ? undefined : { result: [projected, artifacts] };
+      },
     });
 
     try {
