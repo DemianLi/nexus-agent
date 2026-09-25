@@ -223,6 +223,19 @@ describe('日誌 → 畫面', () => {
     expect(state.status).toBe('stopped');
   });
 
+  /** 同即時那條（#433）：pump 在收尾 frame 上補 `maxTokens`，重播照日誌的 `turn/end` 補同一格。 */
+  it('撞到輸出上限：那一輪最後一則回覆標上，狀態是就緒', () => {
+    const state = screen(
+      log(human('寫'), reply('寫到'), {
+        type: 'turn/end',
+        data: { reason: { kind: 'max-tokens' } },
+      }),
+    );
+    expect(state.status).toBe('idle');
+    const replies = state.entries.filter((entry) => entry.kind === 'ai');
+    expect(replies.map((entry) => entry.kind === 'ai' && entry.maxTokens)).toEqual([true]);
+  });
+
   it('一輪失敗：狀態是失敗，下一輪跑完就回到就緒', () => {
     const failed = log(human('跑'), { type: 'turn/failed', data: { message: '供應商掛了' } });
     expect(screen(failed).status).toBe('failed');

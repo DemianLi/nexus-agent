@@ -225,6 +225,8 @@ const INDEX: readonly InterceptionRow[] = [
       'packages/nexus-core/src/session-checkpoint-policy.ts',
       // 讀檔結果最後補上讀到哪（#594）：dsh 在 `read` 本體裡寫，我們貼著本體補。
       'packages/nexus-core/src/read-continuation.ts',
+      // 子代理撞到輸出上限（#433）：dsh 在前景 `task` 本體裡拋，我們貼著本體換掉結果。
+      'packages/nexus-core/src/max-tokens.ts',
     ],
     permissionDelta:
       '**這一格與第 4、7 格在我們這側是同一種機制的三個陣列位置**，dsh 那三格是三種權限' +
@@ -253,7 +255,7 @@ const INDEX: readonly InterceptionRow[] = [
 const EXPECTED_ROWS = 5;
 
 /** 佔用位址的總數（列可能共用檔案，第 6 與第 7 格就共用 `output-schema.ts`）。 */
-const EXPECTED_SITES = 13;
+const EXPECTED_SITES = 14;
 
 /**
  * 第 2 列的承重事實：全樹的產品程式碼裡，`beforeAgent:` 的實作**恰好就是這一列列出的那些**。

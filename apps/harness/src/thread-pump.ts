@@ -54,6 +54,7 @@ import { Command } from '@langchain/langgraph';
 import {
   INTERRUPTED_REPLY_MARKER,
   isTurnCancelled,
+  MAX_TOKENS_TURN_END,
   SessionRegistry,
   TOOL_ABORTED,
   TOOL_ABORTED_BEFORE_DISPATCH,
@@ -64,6 +65,7 @@ import {
   toolRefusal,
   TURN_CANCEL_CONFIG_KEY,
   toLoggedMessage,
+  turnReachedMaxTokens,
   type SessionAddress,
   type SessionEntry,
   type SessionEvent,
@@ -504,6 +506,8 @@ interface CurrentRun {
   replyOpen: boolean;
   /** root 那顆收尾的 `lifecycle` 已經標成中止送上線了。日誌照它收尾，畫面與日誌才對得上。 */
   stopped: boolean;
+  /** 同 {@link stopped}，標的是撞到輸出上限（#433）。 */
+  maxTokens: boolean;
 }
 
 /** root 那一層的訊息片段（子代理的 namespace 至少兩段，見 `@nexus/wire` 的 `attribute`）。 */
@@ -534,6 +538,13 @@ function trackRootReply(current: CurrentRun, raw: RawProtocolEvent): void {
 }
 
 /** root 那一層「這一輪結束了」的那顆 `lifecycle`：完成與失敗都算。 */
+/** root 那一層正常收尾的 `lifecycle`。失敗的那一顆不算：拋錯記的是 `turn/failed`。 */
+function isRootCompleted(raw: RawProtocolEvent): boolean {
+  return (
+    isRootTerminal(raw) && (raw.params.data as { event?: unknown } | null)?.event === 'completed'
+  );
+}
+
 function isRootTerminal(raw: RawProtocolEvent): boolean {
   if (raw.method !== 'lifecycle' || raw.params.namespace.length > 0) return false;
   const data = raw.params.data as { event?: unknown; graph_name?: unknown } | null;
@@ -1038,6 +1049,7 @@ export class ThreadPump {
       reasoning: '',
       replyOpen: false,
       stopped: false,
+      maxTokens: false,
     };
     this.#current = current;
     try {
@@ -1064,7 +1076,14 @@ export class ThreadPump {
       // 跑完與停在核准點都算收工——停在核准點時前面會有一顆 `interrupt/raised`。
       // **中止照上線那顆收尾 frame 判**，不是照訊號：訊號在收尾 frame 送出之後才觸發的話，
       // 畫面上是「完成」，日誌也該是。
-      this.#sessions.root.append('turn/end', current.stopped ? { reason: ABORTED_BY_USER } : {});
+      this.#sessions.root.append(
+        'turn/end',
+        current.stopped
+          ? { reason: ABORTED_BY_USER }
+          : current.maxTokens
+            ? { reason: MAX_TOKENS_TURN_END }
+            : {},
+      );
     } catch (error) {
       // **認的是中止訊號已經觸發**，不是錯誤長什麼樣：被切斷的模型請求拋什麼要看供應商與抽法，
       // 而 `TurnCancelledError` 是我們自己的類別（沿 `MiddlewareError` 拆到底再認），兩個都不比對
@@ -1187,6 +1206,27 @@ export class ThreadPump {
           namespace: raw.params.namespace,
           timestamp: raw.params.timestamp,
           data: { ...(raw.params.data as object), aborted: true },
+        },
+      } as Event);
+      return;
+    }
+
+    if (
+      current !== undefined &&
+      isRootCompleted(raw) &&
+      this.#pending.size === 0 &&
+      turnReachedMaxTokens(this.#sessions.root.events)
+    ) {
+      // **撞到輸出上限（#433）一樣只加分類**，理由同上面那一格：協定的 `AgentStatus` 沒有這一種。判準讀的是
+      // 這一輪記下的回覆——`assistant/message` 在模型呼叫的 middleware 裡寫，早於這顆收尾 frame。中止先判，
+      // 蓋過它，同 dsh（`agent-loop/src/agent.ts:349-355`）。停在核准點的那一次不標：那一輪還沒收。
+      current.maxTokens = true;
+      yield this.#seal({
+        method: raw.method,
+        params: {
+          namespace: raw.params.namespace,
+          timestamp: raw.params.timestamp,
+          data: { ...(raw.params.data as object), maxTokens: true },
         },
       } as Event);
       return;

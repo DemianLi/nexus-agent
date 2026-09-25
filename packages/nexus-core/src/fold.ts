@@ -33,6 +33,7 @@ import {
   createInvalidToolArgsMiddleware,
 } from './invalid-tool-args.js';
 import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
+import { createMaxTokensCarrier, createMaxTokensMiddleware } from './max-tokens.js';
 import { createObservationPolicy, OBSERVATION_POLICY_PLUGIN_NAME } from './observation.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
@@ -373,6 +374,9 @@ export function foldRegistry(
   // 為什麼共用而不逐個建，見 {@link ./invalid-tool-args.ts}。
   const invalidArguments = createInvalidArgumentsCarrier();
   const invalidToolArgs = createInvalidToolArgsMiddleware(invalidArguments);
+  // **撞到輸出上限（#433）也是一份載體、一顆實例走遍 root 與每個子代理**：子代理的模型呼叫記、
+  // 父圖的 `task` 取，得看到同一份。見 {@link ./max-tokens.ts}。
+  const maxTokens = createMaxTokensMiddleware(createMaxTokensCarrier());
   // **輸出校驗也是一份走遍**：無狀態，schema 每次從那一顆工具實例現查（#252）。它是性質不是
   // 功能，理由同圍堵，見 {@link ./output-schema.ts}。
   const outputSchema = createOutputSchemaMiddleware((tool) => registry.tools.outputSchemaOf(tool));
@@ -444,6 +448,7 @@ export function foldRegistry(
       fsToolErrors,
       readContinuation,
       invalidToolArgs,
+      maxTokens,
     }),
     middleware: foldMiddleware(
       plugins,
@@ -461,6 +466,7 @@ export function foldRegistry(
       fsToolErrors,
       readContinuation,
       invalidToolArgs,
+      maxTokens,
     ),
   };
 
@@ -758,6 +764,7 @@ function foldMiddleware(
   fsToolErrors: AgentMiddleware | undefined,
   readContinuation: AgentMiddleware | undefined,
   invalidToolArgs: AgentMiddleware,
+  maxTokens: AgentMiddleware,
 ): AgentMiddleware[] {
   return [
     containment,
@@ -789,9 +796,12 @@ function foldMiddleware(
     // 讀檔結果最後補上讀到哪：同一個時刻、同一個理由貼著工具本體。在失敗記錄的內側，它只補成功的，
     // 兩者不相干；外面每一顆（含圍堵寫進日誌的那一則）看到的都是補過的。見 {@link ./read-continuation.ts}。
     ...(readContinuation === undefined ? [] : [readContinuation]),
-    // 解不開的參數：`wrapToolCall` 在核准與每個 plugin 的內側（dsh 執行時才驗參數），改寫在每個
+    // 解不開的參數：`wrapToolCall` 在核准與每個 plugin 的內側（dsh 執行時才驗參數），改寫在其餘
     // `wrapModelCall` 的內側（外面看到的都是改寫過的那則）。見 {@link ./invalid-tool-args.ts}。
     invalidToolArgs,
+    // 撞到輸出上限：清工具呼叫排在修補的內側（被切斷的那顆不會先被修成 `{}` 參數），外面每一顆看到的
+    // 都是清過的；`task` 的結果在圍堵與每個 plugin 的內側換。見 {@link ./max-tokens.ts}。
+    maxTokens,
     // 最內層：只替模型綁中止訊號，外面每一顆看到的都是原本的模型。見 {@link ./turn-cancel.ts}。
     turnCancelModelSignal,
   ];
@@ -1261,6 +1271,7 @@ function foldSubAgents(
     fsToolErrors: AgentMiddleware | undefined;
     readContinuation: AgentMiddleware | undefined;
     invalidToolArgs: AgentMiddleware;
+    maxTokens: AgentMiddleware;
   },
 ): SubAgent[] {
   // 自帶的 tools 先配上來源：它們沒走 registry 那條路，來源只有這裡知道。
@@ -1380,6 +1391,8 @@ function foldSubAgents(
         ...(context.readContinuation === undefined ? [] : [context.readContinuation]),
         // 解不開的參數排在 subagent 自帶的那些內側，同 root（#269 的 Q7：root 與子代理同一顆）。
         context.invalidToolArgs,
+        // 撞到輸出上限，同 root 的位置；共用一份，子代理的截斷要記進同一份載體給父圖的 `task` 讀。
+        context.maxTokens,
         // 最內層替模型綁中止訊號，排在 subagent 自帶的那些後面，同 root。
         context.turnCancelModelSignal,
       ],

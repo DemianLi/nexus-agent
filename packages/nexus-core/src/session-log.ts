@@ -165,15 +165,22 @@ export type SessionEventType =
   | 'session/end-seed';
 
 /**
- * 一輪為什麼沒有正常結束。今天只有一種：被人中止。
+ * 一輪為什麼沒有正常結束。兩種：
  *
- * 原因只放 `user`：dsh 的 `parent`／`hook`／`disposed` 在我們這側沒有生產者——子代理的日誌沒有
- * `turn/end`，用不到 `parent`。有了生產者再加成員。
+ * - **`aborted`**：被人中止。原因只放 `user`：dsh 的 `parent`／`hook`／`disposed` 在我們這側沒有
+ *   生產者——子代理的日誌沒有 `turn/end`，用不到 `parent`。有了生產者再加成員。
+ * - **`max-tokens`**：這一輪裡**至少一次** root 的模型回覆撞到輸出上限
+ *   （[#433](https://github.com/DemianLi/nexus-agent/issues/433)）。照 dsh 的 `'max-tokens'`
+ *   （`packages/core/session/src/types.ts:213-214`，`477b4f4`）：「at least one step reached its
+ *   output-token ceiling」，後面的步正常收也不降級（sticky，`agent-loop/src/agent.ts:332-337`）。
+ *   判法見 {@link ./max-tokens.ts}。中止蓋過它（`agent.ts:349-355`）。
+ *
+ * dsh 另有 `completed`、`blocked`、`error`、`interrupted`、`forked`：正常結束在我們這側是不放
+ * `reason`，拋錯是另一顆 `turn/failed`，其餘沒有生產者。
  */
-export type TurnEndReason = {
-  readonly kind: 'aborted';
-  readonly cause: { readonly kind: 'user' };
-};
+export type TurnEndReason =
+  | { readonly kind: 'aborted'; readonly cause: { readonly kind: 'user' } }
+  | { readonly kind: 'max-tokens' };
 
 /** 每一種事件帶什麼。 */
 export interface SessionEventMap {
@@ -217,7 +224,10 @@ export interface SessionEventMap {
    * 內層那一格叫 `cause` 不叫 dsh 的 `reason`：外層已經叫 `reason`，兩層同名讀起來會混
    * （[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q5）。
    *
-   * **讀它判「這一輪收了、可以接著排」的人要看這一格**：中止之後 goal 不續行（`goal-driver.ts`）。
+   * **撞到輸出上限的那一輪一樣帶 `reason`**（`max-tokens`，#433），見 {@link TurnEndReason}。
+   *
+   * **讀它判「這一輪收了、可以接著排」的人要看這一格**：中止之後 goal 不續行、撞到上限之後
+   * goal 收回續行授權（`goal-driver.ts`）。
    */
   'turn/end': { readonly reason?: TurnEndReason };
   /** 一輪拋錯結束。只留訊息，堆疊不進日誌。 */
@@ -322,7 +332,8 @@ export interface SessionEventMap {
    * 呼叫收尾時一顆，不逐字寫。**寫在配對的 `model/end` 之前**，所以順序同 dsh——回覆在前，它派發的
    * `tool/call` 在後。記的是 {@link ./invalid-tool-args.ts} 改寫過的那則（那顆在它內側）：解不開的呼叫
    * 在這裡是 `args: {}`，原字串在配對的 `tool/call.arguments`——同一次呼叫兩處不同，但這一則才是之後
-   * 回送給供應商的那則。
+   * 回送給供應商的那則。撞到輸出上限的那則也是清過呼叫之後的樣子（{@link ./max-tokens.ts}，排得更內側）：
+   * 沒有 `tool_calls`，`response_metadata.finish_reason` 原樣留著。
    *
    * ## `interrupted`
    *

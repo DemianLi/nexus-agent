@@ -697,3 +697,45 @@ describe('核准請求', () => {
     expect(state.pendings).toHaveLength(1);
   });
 });
+
+/**
+ * 撞到輸出上限（#433）：pump 在 root 收尾的 `completed` 上補 `maxTokens`，折疊器標在**這一輪最後一則
+ * root 回覆**上。子代理的、上一輪的都不標。
+ */
+describe('撞到輸出上限', () => {
+  function twoTurns(closing: Record<string, unknown>) {
+    return reduceAll(emptyConversation(), [
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      ...text('a', ['model_request:1'], '第一輪'),
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      ...text('b', ['model_request:2'], '寫到'),
+      ...text('c', ['tools:t', 'model_request:3'], '子代理'),
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root', ...closing }),
+    ]);
+  }
+
+  function marks(state: ConversationState) {
+    return state.entries.flatMap((entry) =>
+      entry.kind === 'ai' ? [[entry.text, entry.maxTokens ?? false]] : [],
+    );
+  }
+
+  it('標在這一輪最後一則 root 回覆上；狀態照常回到 idle', () => {
+    const state = twoTurns({ maxTokens: true });
+    expect(state.status).toBe('idle');
+    expect(marks(state)).toEqual([
+      ['第一輪', false],
+      ['寫到', true],
+      ['子代理', false],
+    ]);
+  });
+
+  it('對照：沒帶 maxTokens 一則都不標', () => {
+    expect(marks(twoTurns({}))).toEqual([
+      ['第一輪', false],
+      ['寫到', false],
+      ['子代理', false],
+    ]);
+  });
+});
