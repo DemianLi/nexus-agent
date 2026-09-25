@@ -1705,6 +1705,11 @@ describe('會話標題（#655）', () => {
     ],
   };
 
+  // 從空字串起算：預期寫「nexus-agent」的斷言才不會因為上一條留下的值而白白成立。
+  beforeEach(() => {
+    document.title = '';
+  });
+
   afterEach(() => {
     document.title = 'nexus-agent';
   });
@@ -1722,7 +1727,7 @@ describe('會話標題（#655）', () => {
     );
 
     await waitFor(() => expect(heading().textContent).toBe(BLANK_THREAD_LABEL));
-    expect(document.title).toBe('nexus-agent');
+    await waitFor(() => expect(document.title).toBe('nexus-agent'));
     const list = await screen.findByRole('group', { name: '以前的會話' });
     await waitFor(() =>
       expect(
@@ -1737,7 +1742,8 @@ describe('會話標題（#655）', () => {
 
     await waitFor(() => expect(heading().textContent).toBe('幫我修登入'));
     expect(heading().getAttribute('title')).toBe('幫我修登入');
-    expect(document.title).toBe('幫我修登入 — nexus-agent');
+    // 分頁標題在 effect 裡設，比標頭晚一拍。
+    await waitFor(() => expect(document.title).toBe('幫我修登入 — nexus-agent'));
     const current = within(list).getByRole('button', { name: /幫我修登入/ });
     expect(current.textContent).toContain('目前這條');
     expect(list.textContent).not.toContain(BLANK_THREAD_LABEL);
@@ -1750,7 +1756,7 @@ describe('會話標題（#655）', () => {
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('就緒'));
     fake.downlink.push(fake.opened[0]!, [fake.downlink.titleFrame('修好登入頁的錯誤')]);
     await waitFor(() => expect(heading().textContent).toBe('修好登入頁的錯誤'));
-    expect(document.title).toBe('修好登入頁的錯誤 — nexus-agent');
+    await waitFor(() => expect(document.title).toBe('修好登入頁的錯誤 — nexus-agent'));
     fireEvent.change(within(list).getByRole('searchbox', { name: '搜尋以前的會話' }), {
       target: { value: '錯誤' },
     });
@@ -1767,7 +1773,7 @@ describe('會話標題（#655）', () => {
     ]);
     render(<App client={client} />);
     await waitFor(() => expect(heading().textContent).toBe('舊的那條'));
-    expect(document.title).toBe('舊的那條 — nexus-agent');
+    await waitFor(() => expect(document.title).toBe('舊的那條 — nexus-agent'));
   });
 
   it('有輪次但沒有標題（目標排的）：跟列表講同一句', async () => {
@@ -1778,7 +1784,7 @@ describe('會話標題（#655）', () => {
     ]);
     render(<App client={client} />);
     await waitFor(() => expect(heading().textContent).toBe(UNTITLED_THREAD_LABEL));
-    expect(document.title).toBe('nexus-agent');
+    await waitFor(() => expect(document.title).toBe('nexus-agent'));
   });
 
   it('卸掉時分頁標題還原成產品名', async () => {
