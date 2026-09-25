@@ -53,7 +53,10 @@ describe('readThreadListing', () => {
   it('被拒絕或拋錯：都是 undefined，不往外拋——「新對話」照樣走得出去', async () => {
     expect(
       await readThreadListing({
-        listThreads: async () => ({ kind: 'rejected', message: '沒給 --session-log' }),
+        listThreads: async () => ({
+          kind: 'rejected',
+          message: '會話日誌只在記憶體裡（session-persistence 那一列關掉了）',
+        }),
       }),
     ).toBeUndefined();
     expect(

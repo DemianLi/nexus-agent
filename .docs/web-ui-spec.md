@@ -206,6 +206,7 @@
 - 面板出現不另開 live region，由狀態列（`role="status"`）唸；面板名稱＝報讀內容，例如「等待核准：edit_file（1／2）」「有 3 個問題要你回答（2／2）」。
 - 換題：進度條 `aria-live` 關掉，legend 前放 sr-only「第 2 題，共 3 題」。
 - AI 回覆：`role="log"` 設 `aria-live="off"`，串流不逐字唸，結束時把全文丟進 polite 區唸一次。
+- 往前翻讀完：另一格 polite 唸「載入了較早的 N 則。」（N＝人打的字與模型的回覆，同 wire 一頁的單位），**不唸接上來的內容**，也不跟上一條共用一格（2026-09-25，inventory 列 9）。
 - 工具卡狀態變化不唸；orb 旁已有同義文字時 `aria-hidden`。
 - ❌ 的名稱「停止這一輪，不回答這些問題」（`aria-label` 與 tooltip 同一句），不加確認。
 - **英文報讀字串全換中文**（Messages、Scroll to end、Question X of Y、Toggle Sidebar、Close、Sidebar、sonner 的 Notifications）。

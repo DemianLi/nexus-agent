@@ -41,7 +41,9 @@
  *   `compaction-tool-result-pruner` 的 `PRUNE_MARKER`（`src/config.ts:7`），而那顆的單位是
  *   code point 不是 byte。**我們等於各取一半**：位元組上限與頭尾取自 `spill-policy`，
  *   中間那句說明取自 pruner。查證見 [#539](https://github.com/DemianLi/nexus-agent/pull/539)；
- * - **通知裡也沒有位址**可指（沒有 spill 檔），只能說被截掉了；
+ * - **通知裡也沒有位址**可指（沒有 spill 檔），只能說被截掉了。也**不說全文在哪**：中間那句照 pruner 的
+ *   `PRUNE_MARKER` 只講被截掉，而會話日誌自
+ *   [#613](https://github.com/DemianLi/nexus-agent/issues/613) 起可以不落盤，「全文在會話日誌裡」那時不成立；
  * - **不學 dsh 的 `read` 例外**：那個例外成立在模型面（`read` 自己已經有上限），我們截在傳輸層，
  *   放行就等於讓一次 2000 行的 `read` 整份上線；
  * - **子代理不另開一條 arm**：dsh 的子呼叫走另一個只縮日誌副本的分支，我們一視同仁。
@@ -53,7 +55,7 @@ import type { LoggedMessage, SearchResultMeta } from '@nexus/core';
 
 /** 中間被截掉那一段的說明。長度只隨位數變，所以預留時用上界算。 */
 function notice(dropped: number): string {
-  return `\n…（中間 ${dropped} 個位元組沒有送出來，全文在會話日誌裡）\n`;
+  return `\n…（中間 ${dropped} 個位元組沒有送出來）\n`;
 }
 
 /** 從頭取到不超過 `max` 個位元組，不切斷字元。 */

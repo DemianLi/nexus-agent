@@ -89,6 +89,12 @@ describe('上限', () => {
     expect(capped).not.toContain('藍鯨');
   });
 
+  it('說明只講被截掉，**不說全文在哪**：會話日誌可以不落盤（#613），網頁上也打不開它', () => {
+    const capped = capToolText(`${HALF}${HALF}`, CAP);
+    expect(capped).toContain('沒有送出來');
+    expect(capped).not.toContain('日誌');
+  });
+
   /**
    * **不切斷字元**：頭尾都取到「再多一個字就超過」為止。切一半的話，那個位元組在 JSON
    * 上就是一個替換字元，web 拿去 `JSON.parse` 的工具（提問卡）會整個解不開。

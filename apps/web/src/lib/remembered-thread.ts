@@ -9,8 +9,8 @@
  * 換來一個白畫面。
  *
  * **和 dsh 不同的一處**：dsh 的 id 由伺服器發、選取對著伺服器的清單驗。我們從
- * [#302](https://github.com/DemianLi/nexus-agent/issues/302) 起有清單（`GET /threads`），但只在開了
- * `--session-log` 的 server 上有，所以**記住的這一條不拿它驗**：id 是這一端自己生的，伺服器碰到一個以前寫過的
+ * [#302](https://github.com/DemianLi/nexus-agent/issues/302) 起有清單（`GET /threads`），但只在會話日誌落盤的 server 上有
+ * （預設落盤，#607；部署設定可以關掉，#613），所以**記住的這一條不拿它驗**：id 是這一端自己生的，伺服器碰到一個以前寫過的
  * id 就接回來、沒見過就新開，而這一端**分不出**是哪一種——`recalled` 只說「這個 id 是從上一次讀回來的」，
  * 畫面上的話要照這個分寸講。從清單點的那一條分得出來，所以它是另一種（`listed`）。
  *

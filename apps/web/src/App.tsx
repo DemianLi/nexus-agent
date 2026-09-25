@@ -35,9 +35,12 @@ import type { ThreadChoice } from '@/lib/remembered-thread';
 /**
  * 接回上一次那條 thread 時講的話。
  *
- * **條件句不是客氣**：這一端分不出伺服器是接回來還是新開的（見 `remembered-thread.ts`）——
- * serve 沒開 `--session-log` 時，重開過的 server 上同一個 id 就是一條新的，畫面與模型都從空的開始；沒重開過的話
- * 兩者都在（日誌與 `MemorySaver` 都還在記憶體裡）。之前說過的話畫在底下，是從日誌重播的
+ * **條件句不是客氣**：這一端分不出伺服器是接回來還是新開的（見 `remembered-thread.ts`）。會話日誌預設落盤
+ * （#607），但部署設定可以把清單上 `session-persistence` 那一列關掉（#613），那時日誌只在記憶體裡，重開過的
+ * server 上同一個 id 就是一條新的，畫面與模型都從空的開始；落盤開著但換了 `NEXUS_AGENT_HOME` 或 cwd 再重開，
+ * 也一樣找不到。沒重開過的話兩者都在（日誌與 `MemorySaver` 都還在記憶體裡）。
+ * **條件講白話**（#620）：看這一句的人不一定知道部署設定長怎樣；要查的話，server 起動時印的那一行與列不出清單的
+ * 錯誤都會點名那一列。之前說過的話畫在底下，是從日誌重播的
  * （[#306](https://github.com/DemianLi/nexus-agent/issues/306)）——所以「接得回來」看畫面就知道，不用這一句講。
  * **最後一句是出口**：不講的話，重新整理之後只會一直回到同一條 thread 上。
  *
@@ -45,13 +48,13 @@ import type { ThreadChoice } from '@/lib/remembered-thread';
  * 看得到；最後一輪之後又開了新的一輪就是沒有，照 dsh 的投影。模型則是從對話裡那幾次 `todo_write` 記得它的。
  */
 export const RESUMED_THREAD_NOTICE =
-  '接著上一次的 thread。伺服器開著 --session-log、或還沒重開過的話，之前的對話重播在底下，模型也記得，' +
+  '接著上一次的 thread。伺服器有把會話存到磁碟（預設會存）、或還沒重開過的話，之前的對話重播在底下，模型也記得，' +
   '模式、目標與計劃模式跟著回來。不想接就按「新對話」。';
 
 /**
  * 從「以前的會話」點過去時講的話（[#302](https://github.com/DemianLi/nexus-agent/issues/302)）。
  *
- * **跟上一句不同，這一句不用條件句**：清單只在開了 --session-log 的 server 上有，而且只列切得過去的，所以
+ * **跟上一句不同，這一句不用條件句**：清單只在會話日誌落盤的 server 上有（預設就落盤，#607；清單上 `session-persistence` 那一列關掉時列不出來，#613），而且只列切得過去的，所以
  * 「日誌上的東西回來了」是確定的。畫面照日誌重播、模型照日誌推回（[#306](https://github.com/DemianLi/nexus-agent/issues/306)）；
  * 舊格式那一種推不回模型，畫面上另有一句 {@link LEGACY_THREAD_NOTICE} 講，所以這一句不再帶例外。todo 不另外講，
  * 理由同上一句。
@@ -65,9 +68,6 @@ export const SWITCHED_THREAD_NOTICE =
  */
 export const LEGACY_THREAD_NOTICE =
   '這條會話是舊格式：模型的回覆沒有保存，底下只有你打的字與工具卡；模型也不記得之前的對話，從空的開始。';
-
-/** 往前翻那顆按鈕。 */
-export const LOAD_EARLIER_LABEL = '載入更早的對話';
 
 const ORIGIN_NOTICE: Readonly<Record<ThreadChoice['origin'], string | undefined>> = {
   fresh: undefined,
@@ -322,20 +322,14 @@ function ConversationView({
               onSeed: conversation.seedRatings,
               onRate: (messageId, rating) => void conversation.rate(messageId, rating),
             }}
-            before={
-              conversation.history?.hasMore === true && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="self-center"
-                  disabled={conversation.history.loading}
-                  onClick={() => void conversation.loadEarlier()}
-                >
-                  {LOAD_EARLIER_LABEL}
-                </Button>
-              )
-            }
+            {...(conversation.history === undefined
+              ? {}
+              : {
+                  earlier: {
+                    ...conversation.history,
+                    onLoad: () => void conversation.loadEarlier(),
+                  },
+                })}
           />
         )}
 
