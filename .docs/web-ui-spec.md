@@ -40,7 +40,7 @@
 
 **明確不做**（實作時最容易誤做的；完整清單見地圖 Out of scope）：
 
-- **P1 元件**：reasoning、連線狀態、todo、goal、plan mode、context 用量、佇列、子代理血緣、附件——都要先補 harness／wire。
+- **P1 元件**：reasoning、連線狀態、todo、goal、plan mode、context 用量、佇列、子代理血緣、附件——都要先補 harness／wire。其中佇列 2026-09-26 由 [#645](https://github.com/DemianLi/nexus-agent/issues/645) 做了（伺服器端的送出佇列，#637），形狀見 §4.2 第 29 列。
 - **320px 與 1920px 以上的驗收**：只驗三個寬度（§9）。
 - **Libraries.dev 的視覺複刻**、暗色專用：走風格參考，保留亮暗兩套。
 - **nexus 沒有的產品面**：設定頁、工作區挑選、dock 分割版面、右側欄裡的檔案樹與終端、語音、生圖特效。右側欄本身 2026-09-25 由 [#640](https://github.com/DemianLi/nexus-agent/issues/640) 做了（一格停靠＋分頁，形狀見 §9），這一句原本把整個右側欄列在這裡，是 #372 那一輪的範圍。
@@ -86,6 +86,7 @@
 | 23 | 提問 | shadcn `questionnaire`（`radix-vega`）＋§4.3 的補件 | `question-card.tsx` 被取代 |
 | 26 | 輸入框 | shadcn `input-group`＋`textarea` | 在 `App.tsx` |
 | 27 | slash 選單 | shadcn `command` | 在 `App.tsx` |
+| 29 | 送出佇列 | 自建，shadcn `collapsible`＋`button`＋`textarea`；行為照 dsh `QueueDock`（一件直接畫、兩件以上收合、就地改與刪、沒有插話）；新項目撐過 200ms 才畫、只淡入淡出不 stagger；放在待辦面板下、換手區外，停在核准點時照樣看得到 | `queue-dock.tsx` |
 | 31 | 狀態列 | 自建（shimmer、orb 見 §7） | `status-line.tsx` 留 |
 | 35 | 讚踩＋回饋框 | 框換 shadcn `dialog`，表單邏輯留；讚踩按鈕留在 `transcript.tsx` | `feedback-dialog.tsx` 換外殼 |
 | 36 | Toast | shadcn `sonner`，**改成收 `theme` prop、拿掉 `next-themes`** | — |

@@ -10,6 +10,7 @@ import type {
   AnswerEntry,
   ConversationState,
   SlashDescriptor,
+  QueueUpdateAction,
   SlashRunOutcome,
   UplinkResult,
   WireClient,
@@ -21,9 +22,9 @@ import {
   answerResponse,
   appendAnswers,
   appendDecision,
-  appendHumanTurn,
   emptyConversation,
   prependEntries,
+  QUEUE_ITEM_NOT_FOUND,
   reduceAll,
   reduceConversation,
   uniformDecisions,
@@ -58,6 +59,17 @@ export interface UseConversationOptions {
 }
 
 /** 畫面上那段歷史的現況（#306）。 */
+/** 一句話伺服器沒收下（#645 Q4）。 */
+export interface SendRejected {
+  readonly message: string;
+}
+
+/** 佇列的改或刪沒收下。`gone` 是那一件已經不在隊裡：多半是剛開跑了，也可能是別的分頁刪的。 */
+export interface QueueUpdateRejected {
+  readonly gone: boolean;
+  readonly message: string;
+}
+
 export interface HistoryView {
   /** 更早還有看得見的東西，「載入更早的對話」按得動。 */
   readonly hasMore: boolean;
@@ -129,8 +141,17 @@ export interface Conversation {
    * 認不得的命令在這裡是錯誤，不像 CLI 那樣照原樣送給模型——瀏覽器這個發派面手上
    * 就有清單，說「不認得」比把一行斜線丟給模型有用
    * （[#123](https://github.com/DemianLi/nexus-agent/issues/123)）。
+   *
+   * **一句話送出去不畫任何東西**（#645）：伺服器收下就進送出佇列，開跑那一刻才由 `inbox` 的 `claimed` 畫人的泡泡。
+   * 伺服器沒收下（回錯誤或這一趟就斷了）時回 {@link SendRejected}，呼叫端把草稿放回去並說出原因；斜線命令與
+   * `/feedback` 各自報自己的結果，一律回 `undefined`。
    */
-  send(text: string): Promise<void>;
+  send(text: string): Promise<SendRejected | undefined>;
+  /**
+   * 改或刪送出佇列裡的一件（`queue.update`，#637）。**只回有沒有收下**：清單的新樣子走下行的 `inbox`，
+   * 不拿回條改本地的東西。
+   */
+  updateQueue(itemId: string, action: QueueUpdateAction): Promise<QueueUpdateRejected | undefined>;
   /**
    * 回答**指名的那一顆**核准請求。
    *
@@ -387,7 +408,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     setCommandError(result.type === 'error' ? result.message : undefined);
   }, []);
 
-  /** 斜線命令那一半。**不 `appendHumanTurn`**——命令不進模型，也就不進 transcript。 */
+  /** 斜線命令那一半。命令不進模型，也就不進 transcript。 */
   const runSlash = useCallback(
     async (line: string) => {
       setSlashError(undefined);
@@ -420,10 +441,10 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   );
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string): Promise<SendRejected | undefined> => {
       const trimmed = text.trim();
       if (trimmed === '') {
-        return;
+        return undefined;
       }
       if (trimmed === FEEDBACK_COMMAND_LINE) {
         // **只打 `/feedback` 開對話框**，照 dsh 的 `/feedback` 裝飾：送出的是 `feedback.record`，
@@ -431,19 +452,39 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         setSlashError(undefined);
         setSlashNotice(undefined);
         setFeedbackDialog({ target: { kind: 'session' }, submitting: false });
-        return;
+        return undefined;
       }
       if (trimmed.startsWith('/')) {
         await runSlash(trimmed);
-        return;
+        return undefined;
       }
       setSlashError(undefined);
       setSlashNotice(undefined);
-      // 線上不會回聲使用者這句話，所以送出的那一刻自己補進去。
-      advance((previous) => appendHumanTurn(previous, trimmed));
-      note(await clientRef.current.runStart(threadId, trimmed));
+      let result: UplinkResult;
+      try {
+        result = await clientRef.current.runStart(threadId, trimmed);
+      } catch (error) {
+        return { message: error instanceof Error ? error.message : String(error) };
+      }
+      if (result.type === 'error') return { message: result.message };
+      setCommandError(undefined);
+      return undefined;
     },
-    [threadId, note, runSlash, advance],
+    [threadId, runSlash],
+  );
+
+  const updateQueue = useCallback(
+    async (itemId: string, action: QueueUpdateAction): Promise<QueueUpdateRejected | undefined> => {
+      let result: UplinkResult;
+      try {
+        result = await clientRef.current.queueUpdate(threadId, { item_id: itemId, action });
+      } catch (error) {
+        return { gone: false, message: error instanceof Error ? error.message : String(error) };
+      }
+      if (result.type !== 'error') return undefined;
+      return { gone: result.error === QUEUE_ITEM_NOT_FOUND, message: result.message };
+    },
+    [threadId],
   );
 
   const respond = useCallback(
@@ -625,6 +666,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     ...(historyError === undefined ? {} : { historyError }),
     slashCommands,
     send,
+    updateQueue,
     respond,
     answer,
     cancel,

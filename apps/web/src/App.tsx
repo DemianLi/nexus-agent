@@ -1,6 +1,6 @@
 import type { WireClient } from '@nexus/wire';
 import { X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { AppSidebar } from '@/components/app-sidebar';
@@ -10,6 +10,7 @@ import { ContextMeter } from '@/components/context-meter';
 import { EmptyHero } from '@/components/empty-hero';
 import { FeedbackDialog } from '@/components/feedback-dialog';
 import { PendingSwap } from '@/components/pending-swap';
+import { QueueDock } from '@/components/queue-dock';
 import { FEEDBACK_COMMAND_LINE } from '@/lib/feedback';
 import { QuestionPanel } from '@/components/question-panel';
 import {
@@ -34,6 +35,7 @@ import { createDeliverableDownloader } from '@/lib/deliverable-download';
 import { createDeliverableFileStore } from '@/lib/deliverable-file';
 import { newConversationTarget, readThreadListing } from '@/lib/new-conversation';
 import { STOPPED_QUESTION_TEXT, stoppedOnQuestion } from '@/lib/question-view';
+import { canRunSlash, canSendText } from '@/lib/queue-view';
 import { recallThread, rememberThread } from '@/lib/remembered-thread';
 import type { ThreadChoice } from '@/lib/remembered-thread';
 
@@ -235,21 +237,25 @@ function ConversationView({
     conversation.connected,
   );
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  // **`awaiting-input` 也算忙**。少了它，等核准時送得出下一句話——而基座那時會把
-  // 中斷靜靜丟掉：那個工具既沒執行也沒被拒絕，也不會再問第二次（實測）。
-  //
-  // **沒有例外。** 原本一顆按鈕都長不出來的核准請求（交集是空的）會把送出框放開（`stuck`），讓人至少講得出原因；
-  // 但送出去會撞上伺服器那句「這條 thread 停在核准點」（`wire-handler.ts`），那本來就是假出口。現在那種面板自己
-  // 帶「停止這一輪」（#408，#376 第 12 條），而輸入框在面板底下看不見，放開它也沒人按得到。
-  const busy =
-    conversation.state.status === 'running' || conversation.state.status === 'awaiting-input';
-  // **只打 `/feedback` 跑著也送得出去**：它不起一輪，只開回饋對話框，而那個框送的 `feedback.record`
-  // 任何時候都收（#267 的 Q10）。
+  // **送出分兩道閘**（#645 Q2）。純文字跑著也送得出去：伺服器收下就排進送出佇列，開跑時才畫人的話。停在核准點時
+  // 輸入框被面板換掉（Q3、§4.3），那道閘照樣擋。斜線命令一輪沒收尾時照舊擋——伺服器那側也擋——只打 `/feedback`
+  // 例外：它不起一輪，只開回饋對話框，而那個框送的 `feedback.record` 任何時候都收（#267 的 Q10）。
+  const status = conversation.state.status;
   const canSendLine = (line: string) =>
-    conversation.connected &&
-    line.trim() !== '' &&
-    (!busy || line.trim() === FEEDBACK_COMMAND_LINE);
+    line.trim().startsWith('/')
+      ? canRunSlash(conversation.connected, status, line, FEEDBACK_COMMAND_LINE)
+      : canSendText(conversation.connected, status, line);
   const canSend = canSendLine(draft);
+  // 佇列裡焦點要去的那一列不在了：輸入框看得到就交給它，被面板換掉時交給面板（同 `PendingSwap` 的落點）。
+  const focusBelowQueue = useCallback(() => {
+    const composer = composerRef.current;
+    if (composer !== null && composer.closest('[inert]') === null) {
+      composer.focus();
+      return;
+    }
+    const panel = document.querySelector<HTMLElement>('[data-slot="pending-panel"]');
+    (panel?.querySelector<HTMLElement>('[data-pending-focus]') ?? panel)?.focus();
+  }, []);
   // 右側欄讀的跟卡片同一批 store（#640）：分頁與卡片看到的是同一份快取。
   const sidebarSources = useMemo(
     () => ({ changes, deliverableFiles, deliverableDownload }),
@@ -348,6 +354,14 @@ function ConversationView({
         <div className="mx-auto w-full max-w-2xl shrink-0 px-6 pt-2 pb-6">
           {/* 換手區外面：底下換成核准或提問面板時照樣看得到，焦點搬移也不算它（#575 Q1）。 */}
           <TodoPanel todos={conversation.state.todos} status={conversation.state.status} />
+          {/* 也在換手區外面：停在核准點時排著的照樣看得到、改得到（#645 Q3、Q7）。 */}
+          <QueueDock
+            items={conversation.state.inbox}
+            status={conversation.state.status}
+            connected={conversation.connected}
+            onUpdate={conversation.updateQueue}
+            onFocusFallback={focusBelowQueue}
+          />
           <PendingSwap
             pendings={pendings}
             composerRef={composerRef}
@@ -416,11 +430,16 @@ function ConversationView({
                   }
                   const text = draft;
                   setDraft('');
-                  void conversation.send(text);
+                  void conversation.send(text).then((rejected) => {
+                    if (rejected === undefined) return;
+                    // 沒收下（#645 Q4）：草稿放回去——人已經開始打下一句的話不蓋掉——並說出原因。
+                    setDraft((current) => (current === '' ? text : current));
+                    toast.error('這一句沒送出去', { description: rejected.message });
+                  });
                 }}
                 commands={conversation.slashCommands}
                 decorated={DECORATED_COMMANDS}
-                // 從 `/` 選單直接執行不帶參數的命令：跟送出同一道閘（跑著時只有 `/feedback` 過得去）。
+                // 從 `/` 選單直接執行不帶參數的命令：走斜線那一道閘（跑著時只有 `/feedback` 過得去）。
                 onRunCommand={(line) => {
                   if (!canSendLine(line)) {
                     return false;
