@@ -411,7 +411,7 @@ export const THREADS_PATH = '/threads';
 /**
  * 列表上的一列。形狀照 dsh 的 `SessionSummary`，少掉的幾格：`parentSessionId`／`origin`（subagent 不列）、
  * `cwd`（只列這台 server 那個目錄的）、`projections`（我們沒有投影快取）。多的一格是 `title`：dsh 的標題走
- * 另一個 method，我們只有內建回退那一種來源，跟著列表一起給。
+ * 另一個 method，我們跟著列表一起給。
  */
 export interface ThreadSummary {
   readonly threadId: string;
@@ -421,7 +421,10 @@ export interface ThreadSummary {
   readonly running: boolean;
   /** 還沒有任何一輪，同 dsh 的 `blank`。 */
   readonly blank: boolean;
-  /** 第一則人打的字的開頭。**缺席不等於空白**：只有目標排的輪次的 thread 不是空白，但沒有人打過字。 */
+  /**
+   * 日誌上最後一顆 `session/title` 的文字（latest-wins：模型產生的會蓋過先到的退回標題）；一顆都沒有才從第一則人打的字
+   * 推。**缺席不等於空白**：只有目標排的輪次的 thread 不是空白，但沒有人打過字。
+   */
   readonly title?: string;
 }
 
