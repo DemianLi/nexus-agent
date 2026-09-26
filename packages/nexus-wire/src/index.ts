@@ -79,6 +79,12 @@ export type {
 } from './workspace-changes.js';
 export { changesDiffPath, changesSummaryPath, WORKSPACE_CHANGES } from './workspace-changes.js';
 export type {
+  FileReferenceCandidate,
+  FileReferenceListResponse,
+  FileReferenceListResult,
+} from './file-references.js';
+export { fileReferencesPath } from './file-references.js';
+export type {
   ModelUsagePayload,
   WireContextMeasure,
   WireContextPressure,
@@ -160,6 +166,7 @@ export {
 
 export type {
   FeedbackOutcome,
+  FileReferenceListOutcome,
   OpenEventsOptions,
   SlashListOutcome,
   SlashRunOutcome,
