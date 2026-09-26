@@ -17,7 +17,8 @@ export { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/lib/thread-title';
 
 /**
  * 以前的會話——[#302](https://github.com/DemianLi/nexus-agent/issues/302)。照 dsh 的 `session/list`：
- * 由新到舊、正在跑的有標記，每一列是第一則人打的字的開頭。
+ * 由新到舊、正在跑的有標記，每一列寫這條會話的標題：模型產生的那一個，還沒產生時是第一則人打的字的開頭
+ * （伺服器那側的規則，見 `lib/thread-title.ts`）。
  *
  * **掛上來才讀、每次打開都重讀**：清單會變（別的分頁剛講過話、剛開了一條），而讀一次是冷的——server 那側
  * 一條 agent 都不為它建。
