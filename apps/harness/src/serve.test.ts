@@ -5,7 +5,12 @@ import {
 } from '@nexus/plugin-goal';
 import { PLAN_COMMAND_NAME, PLAN_ENTERED_MESSAGE } from '@nexus/plugin-plan-mode';
 
-import { appendDecision, emptyConversation, reduceConversation, uniformDecisions } from '@nexus/wire';
+import {
+  appendDecision,
+  emptyConversation,
+  reduceConversation,
+  uniformDecisions,
+} from '@nexus/wire';
 import type { ConversationState } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 import { documentedFixture } from './documented-fixture.js';

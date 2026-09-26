@@ -16,7 +16,14 @@ import { THREADS_PATH, createWireClient } from '@nexus/wire';
 import type { ThreadListOutcome } from '@nexus/wire';
 import type { SessionEvent } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { exchangeServeToken, fetchWithCookie, foldTurn, loopbackRequest, serveClient, TEST_BROWSER_AUTH } from './fixtures.js';
+import {
+  exchangeServeToken,
+  fetchWithCookie,
+  foldTurn,
+  loopbackRequest,
+  serveClient,
+  TEST_BROWSER_AUTH,
+} from './fixtures.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';

@@ -21,7 +21,14 @@ import { toLoggedMessage } from '@nexus/core';
 
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
-import { exchangeServeToken, fetchWithCookie, foldTurn, loopbackRequest, serveClient, TEST_BROWSER_AUTH } from './fixtures.js';
+import {
+  exchangeServeToken,
+  fetchWithCookie,
+  foldTurn,
+  loopbackRequest,
+  serveClient,
+  TEST_BROWSER_AUTH,
+} from './fixtures.js';
 import { HISTORY_PAGE_MAX_BYTES } from '@nexus/wire';
 
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
