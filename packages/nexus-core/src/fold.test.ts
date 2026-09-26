@@ -235,7 +235,7 @@ describe('middleware 註冊點', () => {
    * 照 dsh：子代理併入父代理同一份組合，同樣的 plugin 物件。
    *
    * 名字全列：只驗「在不在」的話，`prepend` 的排到閘門內側也會綠——而它排在閘門外側是承重的（計劃模式要在
-   * `policy-never` 之前擋掉模式外的 `exit_plan_mode`）。**假 middleware 的名字不撞基座**，所以這裡釘不到
+   * 任何會問人的閘門之前擋掉模式外的 `exit_plan_mode`）。**假 middleware 的名字不撞基座**，所以這裡釘不到
    * 「撞名的會被原地取代、位置不再決定層次」那一格；那一格寫在 `foldSubAgents` 的註解裡。
    */
   it('每個子代理也拿到 plugin 的 middleware：同 root 的分區、同一個實例', async () => {

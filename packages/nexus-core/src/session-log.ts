@@ -92,8 +92,9 @@ import type { ToolErrorInfo } from './tool-events.js';
  * 都帶 seed 開日誌。
  *
  * `plan/mode` 沒有帶來新的生產者，兩個寫者各走一條舊路：`/plan` 走 `goal/change` 那條
- * （經 `registry.sessions` 接到 root 那一份的 plugin），`exit_plan_mode` 走 `todo/write` 那條
- * （模型工具問 `forCall`）。「兩條路都產得出來嗎」答得出來——命令面與工具清單兩條路共用。
+ * （經 `registry.sessions` 接到 root 那一份的 plugin），`exit_plan_mode` 的同意走 `todo/write` 那條
+ * （問 `forCall`）——只是寫的那一刻從工具本體挪到下一次模型呼叫前的 middleware（#652，照 dsh 在
+ * pre-step 提交）。「兩條路都產得出來嗎」答得出來——命令面與工具清單兩條路共用。
  *
  * `tool/call`／`tool/result` 生產者同第四種（fold 自己建的 middleware），而且就是**圍堵那一顆**
  * （{@link ./containment.ts | createContainmentMiddleware}）：只有第 0 格同時看得到內層拋出的
@@ -539,7 +540,8 @@ export interface SessionEventMap {
    *
    * 照 dsh 的 `plan/mode`（`packages/plan/plan-mode/src/index.ts`，`d347e70`）：`{ active }`。
    * 寫者兩個，都只寫 **root** 那一份：`/plan` 的 handler（人）與 `exit_plan_mode`（模型，
-   * 計劃獲准之後）。折疊它的是 `@nexus/plugin-plan-mode` 自己。
+   * 計劃獲准之後；照 dsh 排到下一步請求組起來之前才寫，[#652](https://github.com/DemianLi/nexus-agent/issues/652)）。
+   * 折疊它的是 `@nexus/plugin-plan-mode` 自己。
    *
    * **它是第一顆要熬過 `session/end-seed` 的狀態。** 那顆標記之前的開頭屬於上一個生命週期，
    * 讀「當前這一段」的人要在那裡重設；這一顆相反——跨重啟留得住正是它搬進日誌的理由，所以

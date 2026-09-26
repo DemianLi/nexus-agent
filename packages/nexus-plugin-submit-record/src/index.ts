@@ -235,18 +235,20 @@ function createSubmitRecordTool(backend: AnyBackendProtocol | undefined) {
  *
  * ## 兩樣東西為什麼在同一個 plugin 裡
  *
- * 形狀照 `@nexus/plugin-plan-mode`：它也是自己註冊 `exit_plan_mode`、自己註冊一個只認
- * `exit_plan_mode` 的 `approvals.gate()`。**「這個工具要人看過」是這個工具的性質**，拆到
+ * 形狀照當時的 `@nexus/plugin-plan-mode`：它那時也是自己註冊 `exit_plan_mode`、自己註冊一個只認
+ * `exit_plan_mode` 的 `approvals.gate()`（[#652](https://github.com/DemianLi/nexus-agent/issues/652) 照 dsh
+ * 改走提問通道，那位閘門已經拿掉）。**「這個工具要人看過」是這個工具的性質**，拆到
  * 別的組裝點去掛的失敗方式是「工具在、閘門沒掛」——而那條路上模型會直接把檔案寫出去，
  * 一張卡都不會出現。
  *
  * **這是新增一個閘門，不是打開一個開關**（#231 第 6 項）：`approvals` 的 waterfall
  * **鏈底是 `allow`**——沒人管的工具一律放行。這一刀之前生產程式碼裡只有一個註冊者
  * （plan-mode，只管 `exit_plan_mode`），**這一刀之後是兩個**，而承重的那一半仍然是鏈底：
- * 掛上這個 plugin 之前，`submit_record` 這個名字沒有任何人會攔。
+ * 掛上這個 plugin 之前，`submit_record` 這個名字沒有任何人會攔。（#652 之後 plan-mode 那位拿掉了，
+ * 同一格今天是沙箱升級那位，`@nexus/plugin-sandbox-policy` 的 `sandbox-escalation.ts`。）
  *
- * **兩個註冊者不會互相影響**：waterfall 依註冊順序跑，plan-mode 那位對非
- * `exit_plan_mode` 一律 `next()`，這位對非 `submit_record` 一律 `next()`。「只認自己那個
+ * **幾個註冊者不會互相影響**：waterfall 依註冊順序跑，每一位對不是自己那個名字的一律 `next()`，
+ * 這位對非 `submit_record` 一律 `next()`。「只認自己那個
  * 名字」的否定面各自有測試（見 `index.test.ts` 最後一段）——少了它，一個把所有工具都攔
  * 下來的閘門一條測試都不會紅。
  *
