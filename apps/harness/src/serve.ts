@@ -72,6 +72,7 @@ import { liveModelPlugin } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { toolTextPlugin } from './settings/tool-text.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
+import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
 import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
 
@@ -320,6 +321,9 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // 一顆），但設定是 server 的性質：解在這裡，設定寫壞的話在 server 起來之前就失敗，而不是等到
   // 第一條 thread；啟動時印的模型名也從這一份來。
   const liveModel = startupSetting(plugins, liveModelPlugin);
+  // LLM 標題那一列（#650），理由同上：標題模型一條 thread 一顆，設定是 server 的性質。沒帶 `--live` 也解——
+  // 寫壞的設定不因為這一次用不到就放過，同 `live-model` 那一列。
+  const threadTitleLlm = startupSetting(plugins, threadTitleLlmPlugin);
   const auth = new BrowserAuth(
     await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)),
     browserSession.maxAgeDays,
@@ -414,7 +418,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
           resumedSandbox === undefined ? invocation : { ...invocation, sandbox: resumedSandbox };
         // 每一輪改了哪些檔（#443）：只有 serve 開，見 `createCliAgent` 那一格。
         built = await createCliAgent(
-          { ...effective, workspaceChanges: true, liveModel },
+          { ...effective, workspaceChanges: true, liveModel, threadTitle, threadTitleLlm },
           plugins,
           options.cwd,
         );
@@ -446,6 +450,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         workspaceChanges,
         goals,
         workspaceRoot,
+        attachTitle,
       } = built;
       // **遙測披露印在這裡而不是啟動時，因為啟動的那一刻答案不存在**：`createAgent` 是
       // lazy 的（`wire-handler.ts` 的 `pumpFor` 第一次收到請求才呼叫），plugin 沒跑過
@@ -486,6 +491,8 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         attachTelemetry,
         attachInvariants,
         attachSession,
+        // LLM 標題（#650）：沒帶 `--live` 或那一列關掉就缺席，只剩退回標題。
+        ...(attachTitle !== undefined && { attachTitle }),
         // **落盤的答案不在 `createCliAgent` 的回傳值裡**，它來自呼叫方式而不是 plugin
         // 清單，所以在這個閉包裡接（見 `wire-handler.ts` 的 `attachPersistence`）。
         // **旗標決定給不給，不是給一個關著的**：`goalDriver` 缺席就是「這條 thread 不

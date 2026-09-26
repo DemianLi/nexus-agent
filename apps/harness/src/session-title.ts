@@ -116,6 +116,18 @@ export function fallbackThreadTitle(input: string, limits: ThreadTitleLimits): s
   return truncateUtf8(words.join(' '), limits.maxBytes).trimEnd();
 }
 
+/**
+ * 任何來源的標題正規化：清掉控制字元、空白收成一格、截到 `maxBytes` 個 UTF-8 位元組。同 dsh 的
+ * `normalizeSessionTitle`。跟 {@link fallbackThreadTitle} 差在沒有詞數上限——模型產生的標題（#650）走這一支。
+ *
+ * @returns 標題；清完或截完是空的就是空字串。
+ * @throws `maxBytes` 不是正整數。
+ */
+export function normalizeThreadTitle(input: string, maxBytes: number): string {
+  assertPositiveInteger('maxBytes', maxBytes);
+  return truncateUtf8(cleanTitleText(input), maxBytes).trimEnd();
+}
+
 /** 第一則合格的人話推出來的標題，與那一顆 `turn/start` 的 `seq`。一則都沒有是 `undefined`。 */
 function firstFallback(
   events: readonly SessionEvent[],

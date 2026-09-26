@@ -192,8 +192,17 @@ import type { SessionEvent } from './session-log.js';
  *
  * 升版照新增詞彙的慣例（同 11、12、14、16），不是 17 那種非升不可：這一版只有 `fallback` 一種，17 自己推出來的
  * 標題一字不差。
+ *
+ * ## 19：LLM 標題
+ *
+ * `session/title` 的 `source` 多一種 `provider`（模型產生的），加一顆只進日誌的 `session/title-llm-request`
+ * （[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。v18 的檔直接讀：那時候沒有模型產生的標題，一顆都沒有就是
+ * 當時的樣子。
+ *
+ * 升版照新增詞彙的慣例（同 18），不是非升不可：18 讀到 `provider` 的標題照樣拿最後一顆，一字不差；讀到
+ * `session/title-llm-request` 只是不認得一種它本來就不用的事件。
  */
-export const SESSION_LOG_FORMAT_VERSION = 18;
+export const SESSION_LOG_FORMAT_VERSION = 19;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。
