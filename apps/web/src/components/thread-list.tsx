@@ -11,6 +11,9 @@ import {
   SidebarMenuItem,
 } from '@/components/ui/sidebar';
 import { BUCKET_LABEL, filterThreads, groupThreads } from '@/lib/thread-groups';
+import { threadLabel, withCurrentTitle } from '@/lib/thread-title';
+
+export { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/lib/thread-title';
 
 /**
  * 以前的會話——[#302](https://github.com/DemianLi/nexus-agent/issues/302)。照 dsh 的 `session/list`：
@@ -30,19 +33,13 @@ import { BUCKET_LABEL, filterThreads, groupThreads } from '@/lib/thread-groups';
  * 「跑完了還沒看」的提醒點靠伺服器推會話狀態，我們還沒有那條路。
  */
 
-/** 目前這條還是空白。照 dsh 的 `session.new`（「新会话」），不帶時間。 */
-export const BLANK_THREAD_LABEL = '新會話';
-/** 有輪次，但沒有人打過字——全是目標排的。 */
-export const UNTITLED_THREAD_LABEL = '（沒有人打過字：只有目標排的輪次）';
-
 type Listing =
   | { readonly kind: 'loading' }
   | { readonly kind: 'ok'; readonly result: ThreadListResult }
   | { readonly kind: 'failed'; readonly message: string };
 
 function labelOf(item: ThreadSummary): string {
-  if (item.title !== undefined) return item.title;
-  return item.blank ? BLANK_THREAD_LABEL : UNTITLED_THREAD_LABEL;
+  return threadLabel(item.title, item.blank);
 }
 
 function formatTime(updatedAt: number): string {
@@ -52,10 +49,13 @@ function formatTime(updatedAt: number): string {
 export function ThreadList({
   client,
   currentThreadId,
+  currentTitle,
   onPick,
 }: {
   readonly client: WireClient;
   readonly currentThreadId: string;
+  /** 目前這條即時推來的標題（`ConversationState.title`）：蓋過快照裡的那一列（#655 的 Q3）。 */
+  readonly currentTitle: string | null;
   readonly onPick: (threadId: string) => void;
 }) {
   const [listing, setListing] = useState<Listing>({ kind: 'loading' });
@@ -88,7 +88,9 @@ export function ThreadList({
   const [query, setQuery] = useState('');
   const visible =
     listing.kind === 'ok'
-      ? listing.result.items.filter((item) => !item.blank || item.threadId === currentThreadId)
+      ? withCurrentTitle(listing.result.items, currentThreadId, currentTitle).filter(
+          (item) => !item.blank || item.threadId === currentThreadId,
+        )
       : [];
   const matched = filterThreads(visible, query);
 

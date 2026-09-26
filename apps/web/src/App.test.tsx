@@ -6,7 +6,7 @@ import type {
   UplinkResult,
   WireClient,
 } from '@nexus/wire';
-import { CONTEXT_MEASURE, MODEL_USAGE, TODOS } from '@nexus/wire';
+import { CONTEXT_MEASURE, MODEL_USAGE, TITLE, TODOS } from '@nexus/wire';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -1693,5 +1693,108 @@ describe('用量表（#528）', () => {
     release();
     await screen.findByTestId('approval-card');
     expect(screen.queryByRole('dialog', { name: '對話用量明細' })).toBeNull();
+  });
+});
+
+describe('會話標題（#655）', () => {
+  const LISTED: ThreadListResult = {
+    unreadable: 0,
+    items: [
+      { threadId: '空白那條', updatedAt: 2_000, running: false, blank: true },
+      { threadId: '別條', updatedAt: 1_000, running: false, blank: false, title: '別條的標題' },
+    ],
+  };
+
+  // 從空字串起算：預期寫「nexus-agent」的斷言才不會因為上一條留下的值而白白成立。
+  beforeEach(() => {
+    document.title = '';
+  });
+
+  afterEach(() => {
+    document.title = 'nexus-agent';
+  });
+
+  const heading = () => screen.getByRole('heading', { level: 1 });
+
+  it('空白會話寫「新會話」；第一句開跑推來標題後，標頭、分頁標題、側欄目前這一列一起換，後到的標題取代先到的', async () => {
+    seq = 0;
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '空白那條' }));
+    const fake = fakeClient([]);
+    render(
+      <App
+        client={{ ...fake.client, listThreads: async () => ({ kind: 'ok', result: LISTED }) }}
+      />,
+    );
+
+    await waitFor(() => expect(heading().textContent).toBe(BLANK_THREAD_LABEL));
+    await waitFor(() => expect(document.title).toBe('nexus-agent'));
+    const list = await screen.findByRole('group', { name: '以前的會話' });
+    await waitFor(() =>
+      expect(
+        within(list).getByRole('button', { name: new RegExp(BLANK_THREAD_LABEL) }),
+      ).toBeTruthy(),
+    );
+
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '幫我修登入' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(screen.getByText('幫我修登入')).toBeTruthy());
+    fake.downlink.push(fake.opened[0]!, [fake.downlink.titleFrame('幫我修登入')]);
+
+    await waitFor(() => expect(heading().textContent).toBe('幫我修登入'));
+    expect(heading().getAttribute('title')).toBe('幫我修登入');
+    // 分頁標題在 effect 裡設，比標頭晚一拍。
+    await waitFor(() => expect(document.title).toBe('幫我修登入 — nexus-agent'));
+    const current = within(list).getByRole('button', { name: /幫我修登入/ });
+    expect(current.textContent).toContain('目前這條');
+    expect(list.textContent).not.toContain(BLANK_THREAD_LABEL);
+
+    // #650：模型產生的標題可能在這一輪收完、閒著的時候才推來，照樣換；搜尋吃得到新標題。
+    fake.downlink.push(fake.opened[0]!, [
+      fake.downlink.lifecycleFrame('running'),
+      fake.downlink.lifecycleFrame('completed'),
+    ]);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('就緒'));
+    fake.downlink.push(fake.opened[0]!, [fake.downlink.titleFrame('修好登入頁的錯誤')]);
+    await waitFor(() => expect(heading().textContent).toBe('修好登入頁的錯誤'));
+    await waitFor(() => expect(document.title).toBe('修好登入頁的錯誤 — nexus-agent'));
+    fireEvent.change(within(list).getByRole('searchbox', { name: '搜尋以前的會話' }), {
+      target: { value: '錯誤' },
+    });
+    await waitFor(() => expect(within(list).getAllByRole('button')).toHaveLength(1));
+    expect(within(list).getByRole('button').textContent).toContain('修好登入頁的錯誤');
+  });
+
+  it('接回一條有標題的：從歷史就讀得到', async () => {
+    seq = 0;
+    const { client } = fakeClient([
+      frame('custom', [], { name: TITLE, payload: { title: '舊的那條' } }),
+      ...textFrames('root-1', ['model_request:a'], '好。'),
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+    ]);
+    render(<App client={client} />);
+    await waitFor(() => expect(heading().textContent).toBe('舊的那條'));
+    await waitFor(() => expect(document.title).toBe('舊的那條 — nexus-agent'));
+  });
+
+  it('有輪次但沒有標題（目標排的）：跟列表講同一句', async () => {
+    seq = 0;
+    const { client } = fakeClient([
+      ...textFrames('root-1', ['model_request:a'], '目標排的一輪。'),
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+    ]);
+    render(<App client={client} />);
+    await waitFor(() => expect(heading().textContent).toBe(UNTITLED_THREAD_LABEL));
+    await waitFor(() => expect(document.title).toBe('nexus-agent'));
+  });
+
+  it('卸掉時分頁標題還原成產品名', async () => {
+    seq = 0;
+    const { client } = fakeClient([
+      frame('custom', [], { name: TITLE, payload: { title: '要走的那條' } }),
+    ]);
+    const { unmount } = render(<App client={client} />);
+    await waitFor(() => expect(document.title).toBe('要走的那條 — nexus-agent'));
+    unmount();
+    expect(document.title).toBe('nexus-agent');
   });
 });
