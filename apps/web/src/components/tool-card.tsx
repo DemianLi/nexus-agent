@@ -21,6 +21,8 @@
  *   `edit_file` 只畫結果、不畫參數（照 dsh）。`write_file`、`edit_file` 畫 diff，收著那一行接 `+N −M`，失敗時不接：
  *   執行中（含停在核准點）從參數算，成功之後畫結果 `meta` 裡實際套用的那幾段；沒有 `meta` 時 write 退回參數算的整檔
  *   新增、edit 退回結果文字（#625）。判法在 `lib/tool-diff.ts`、`lib/tool-output.ts`。
+ * - **子代理撞到輸出上限的 `task`**（#608）：紅字那一句給模型看的英文換成中文講，寫到一半的那段照結果畫（同一套行數
+ *   上限）。認不出來就照舊畫原文。判法在 `lib/max-tokens-view.ts`。
  * - **讀檔卡與搜尋卡**（#625）：`read_file`、`grep`、`glob` 成功而且結果帶 `meta` 時，畫帶行號的檔案檢視、分檔的
  *   命中或路徑清單，取代結果文字；`meta` 缺席或形狀不對就照舊畫結果文字。判法在 `lib/tool-result-card.ts`。
  */
@@ -52,7 +54,12 @@ import type { PresentedFile } from '@/lib/present-view';
 import { TODO_WRITE, todosOf, todoSummary } from '@/lib/todo-view';
 import { toolDiffView } from '@/lib/tool-diff';
 import { readCardOf, searchCardOf } from '@/lib/tool-result-card';
-import { showsInput, toolOutput } from '@/lib/tool-output';
+import {
+  SUBAGENT_MAX_TOKENS_TEXT,
+  SUBAGENT_PARTIAL_TEXT,
+  subagentMaxTokensOf,
+} from '@/lib/max-tokens-view';
+import { outputOf, showsInput, toolOutput } from '@/lib/tool-output';
 import { classifyTool, firstLine, toolInputBody, toolSummary, toolTitle } from '@/lib/tool-view';
 
 export const TOOL_STATUS_LABEL = {
@@ -197,6 +204,7 @@ export function ToolCard({
     [name, status, input, meta],
   );
   const output = toolOutput(entry);
+  const truncated = subagentMaxTokensOf(entry);
   const inputShown = showsInput(entry.name);
   return (
     <Collapsible
@@ -231,7 +239,9 @@ export function ToolCard({
             {stopped
               ? STOPPED_QUESTION_TEXT
               : failed && entry.error !== undefined
-                ? firstLine(entry.error)
+                ? truncated !== undefined
+                  ? SUBAGENT_MAX_TOKENS_TEXT
+                  : firstLine(entry.error)
                 : questions !== undefined
                   ? questionSummary(questions, answered, given)
                   : presented !== undefined
@@ -312,10 +322,23 @@ export function ToolCard({
               )}
             </>
           )}
-          {entry.error !== undefined && !stopped && (
-            <pre className="bg-stage shadow-stage text-destructive rounded-xl p-3 font-mono text-xs whitespace-pre-wrap">
-              {entry.error}
-            </pre>
+          {truncated !== undefined ? (
+            <>
+              <p className="bg-stage shadow-stage text-destructive rounded-xl p-3 text-xs">
+                {SUBAGENT_MAX_TOKENS_TEXT}
+                {truncated.partial.trim() !== '' && SUBAGENT_PARTIAL_TEXT}
+              </p>
+              {truncated.partial.trim() !== '' && (
+                <ToolOutputBlock output={outputOf(truncated.partial)} />
+              )}
+            </>
+          ) : (
+            entry.error !== undefined &&
+            !stopped && (
+              <pre className="bg-stage shadow-stage text-destructive rounded-xl p-3 font-mono text-xs whitespace-pre-wrap">
+                {entry.error}
+              </pre>
+            )
           )}
         </div>
       </CollapsibleContent>
