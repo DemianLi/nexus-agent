@@ -31,7 +31,6 @@ import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry } from '@nexus/core';
 import type { ConversationState, Event, WireClient } from '@nexus/wire';
 import {
-  appendHumanTurn,
   createWireClient,
   emptyConversation,
   reduceConversation,
@@ -139,7 +138,7 @@ async function open(threadId: string, tools: readonly string[]): Promise<Session
     client,
     events,
     frames: [],
-    state: appendHumanTurn(emptyConversation(), '動手'),
+    state: emptyConversation(),
     close: () => handler.close(),
   };
 }

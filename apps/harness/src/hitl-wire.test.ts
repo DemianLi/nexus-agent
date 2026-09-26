@@ -3,7 +3,6 @@ import { MemorySaver } from '@langchain/langgraph';
 import type { ConversationState, Event, WireClient } from '@nexus/wire';
 import {
   appendDecision,
-  appendHumanTurn,
   createWireClient,
   emptyConversation,
   reduceConversation,
@@ -109,7 +108,7 @@ async function open(agent: PumpAgent, threadId: string, text: string): Promise<S
     client,
     events,
     frames: [],
-    state: appendHumanTurn(emptyConversation(), text),
+    state: emptyConversation(),
     close: () => handler.close(),
   };
 }

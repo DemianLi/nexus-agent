@@ -56,11 +56,6 @@ export interface HumanEntry {
   readonly id: string;
   readonly text: string;
   /**
-   * {@link appendHumanTurn} 在送出當下畫的、還沒被 `inbox` 的 `claimed` 認領的那一則。**過渡期才有**：web 改成等
-   * `claimed` 才畫（#645）之後，這一格與認領那一支一起刪，見 {@link reduceInbox}。
-   */
-  readonly pendingClaim?: true;
-  /**
    * 這一則是送出佇列的哪一件開跑時畫的（`inbox` 的 `claimed.id`）。同一顆 `claimed` 再到一次靠它認出來，不畫第二次。
    * 歷史重播的人話沒有這一格。
    */
@@ -183,7 +178,7 @@ export interface ToolEntry {
  * ——但卡說的是「這顆沒執行、模型看到了什麼」，**不說人按了什麼**：同一張失敗的卡也可能來自
  * 規則直接擋、或沒有核准管道。我們沒有 dsh 的 `approval/asked`／`approval/decided`
  * （[#220](https://github.com/DemianLi/nexus-agent/issues/220) 認帳不做），所以決定要跟
- * {@link appendHumanTurn} 一樣在送出的那一刻自己寫進來，與那張卡並存——那不是裝飾，是唯一的紀錄。
+ * 所以決定要在送出的那一刻自己寫進來，與那張卡並存——那不是裝飾，是唯一的紀錄。
  */
 export interface DecisionEntry {
   readonly kind: 'decision';
@@ -459,25 +454,6 @@ export function emptyConversation(): ConversationState {
   };
 }
 
-/**
- * 把使用者剛送出去的那句話放進來。
- *
- * **線上不會回聲它**：`run.start` 的 input 不會變成下行的 frame，而 `input` channel
- * 上只有核准請求。所以送出的那一刻由這裡補，不是等它回來。
- *
- * 送出佇列（#637）之後人的話另有一條路：`inbox` frame 的 `claimed`，開跑那一刻才畫，見 {@link reduceInbox}。過渡期
- * 兩條並存：這裡畫的那則標 {@link HumanEntry.pendingClaim}，`claimed` 到了認領它，不另畫一則。
- */
-export function appendHumanTurn(state: ConversationState, text: string): ConversationState {
-  const entry: HumanEntry = {
-    kind: 'human',
-    id: `human-${state.entries.length}`,
-    text,
-    pendingClaim: true,
-  };
-  return trackTurn(state, { ...state, entries: [...state.entries, entry], status: 'running' });
-}
-
 /** 一輪在跑或停下來等人：還沒收尾。 */
 function isTurnActive(status: ConversationStatus): boolean {
   return status === 'running' || status === 'awaiting-input';
@@ -522,7 +498,7 @@ function trackTurn(previous: ConversationState, next: ConversationState): Conver
 /**
  * 把人剛按下去的那個決定放進來，並把核准請求收掉。
  *
- * 跟 {@link appendHumanTurn} 同一個理由：**線上不回聲**。被拒的那顆呼叫下行上有一張失敗的卡，
+ * **線上不回聲決定**，所以由這裡在按下去的那一刻補。被拒的那顆呼叫下行上有一張失敗的卡，
  * 但「是人按了拒絕」只有這一則說得出來，見 {@link DecisionEntry}。
  *
  * 認不得那顆 `interruptId` 時原樣回傳：重複按下去的第二次不該憑空長出一則紀錄。
@@ -816,16 +792,10 @@ function isQueuedInput(value: unknown): value is WireQueuedInput {
  *
  * 帶 `claimed` 的那一顆是某一件剛被領走開跑：多折一則人的話，文字用開跑用的那份（改過的就是改過的）。
  *
- * - **id 是 `inbox:<項目 id>`**，跟 {@link appendHumanTurn} 的 `human-<n>` 與歷史重播的 `run_id` 分得開；帶
+ * - **一律接在最後**：畫面不在送出當下先畫（#645），所以這一則就是人話在即時畫面上唯一的來處，沒有別的可以認領。
+ * - **id 是 `inbox:<項目 id>`**，跟歷史重播的人話（`message-start` 的 `run_id`）分得開；帶
  *   {@link HumanEntry.inboxId}，同一顆 `claimed` 再到一次靠它認出來，不畫第二次。
  * - **`status` 不在這裡轉**：開跑由接著到的 `lifecycle` 說，理由同 `claimed` 的先後保證（見 `inbox.ts`）。
- * - **過渡期的認領**：web 今天在送出當下就 {@link appendHumanTurn}（#645 會改成等 `claimed`）。最後一則還標著
- *   {@link HumanEntry.pendingClaim} 的人話在的話，`claimed` **認領它**——換成開跑用的文字、帶上 `inboxId`，**id 不換**
- *   （畫面拿它當 key）——而不是另畫一則，不然同一句會畫兩次。只認領最後那一則，不往前找。
- *   - 別的分頁或 CLI 排著的先開跑時，認領走的是這一頁剛送出的那則：送出那一瞬間的字會換成先開跑那一件的，接著的
- *     `claimed` 再依序長出來，最後的順序與文字都對。
- *   - 送出失敗留下來的那則也還標著，會被下一顆 `claimed` 認領走。過渡期接受。
- *   - #645 合了之後 web 不再呼叫 {@link appendHumanTurn}，這一支走不到，跟它一起刪。
  */
 function reduceInbox(state: ConversationState, payload: object): ConversationState {
   const { items, claimed } = payload as { items?: unknown; claimed?: unknown };
@@ -843,14 +813,7 @@ function reduceInbox(state: ConversationState, payload: object): ConversationSta
   ) {
     return { ...state, inbox };
   }
-  const local = state.entries.findLastIndex(
-    (entry) => entry.kind === 'human' && entry.pendingClaim === true,
-  );
-  if (local < 0) return { ...state, inbox, entries: [...state.entries, human] };
-  const entries = [...state.entries];
-  // **id 不換**：畫面拿 id 當列的 key，換掉的話那顆泡泡會重新掛上、進場動畫再播一次。
-  entries[local] = { ...human, id: state.entries[local]!.id };
-  return { ...state, inbox, entries };
+  return { ...state, inbox, entries: [...state.entries, human] };
 }
 
 /** `workspace/changes` 的 `payload`：`seq` 要是非負整數，同一個 `seq` 只長一格。 */
@@ -910,7 +873,7 @@ function replace(
 
 interface MessageData {
   readonly event: string;
-  /** `message-start` 的作者。**`human` 只有歷史送**：線上不回聲人打的字，見 {@link appendHumanTurn}。 */
+  /** `message-start` 的作者。**`human` 只有歷史送**：即時的人話走 `inbox` 的 `claimed`，見 {@link reduceInbox}。 */
   readonly role?: string;
   readonly id?: string;
   readonly run_id?: string;
@@ -940,7 +903,7 @@ function reduceMessage(
     case 'message-start': {
       if (data.role === 'human') {
         // **歷史才會送這一種**（`GET /threads/:id/history`，#306）：協定留給「整則重播的人話」的格。
-        // `status` 不動——這一句已經說過了，不是剛送出去的那一句（那一句走 `appendHumanTurn`）。
+        // `status` 不動——這一句已經說過了，不是剛開跑的那一句（那一句走 `inbox` 的 `claimed`）。
         const entry: HumanEntry = { kind: 'human', id, text: '' };
         return { ...state, entries: [...state.entries, entry] };
       }

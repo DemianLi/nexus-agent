@@ -19,14 +19,7 @@ import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  appendHumanTurn,
-  createWireClient,
-  deliverableFilePath,
-  emptyConversation,
-  reduceConversation,
-} from '@nexus/wire';
-import type { ConversationState } from '@nexus/wire';
+import { createWireClient, deliverableFilePath } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { SESSION_LOG_OFF_DISCLOSURE } from './cli.js';
@@ -35,7 +28,7 @@ import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
-import { exchangeServeToken, fetchWithCookie, serveClient } from './fixtures.js';
+import { exchangeServeToken, fetchWithCookie, foldTurn, serveClient } from './fixtures.js';
 
 let running: RunningServe | undefined;
 
@@ -70,12 +63,7 @@ async function driveTurn(server: RunningServe, threadId: string): Promise<void> 
   const events = await client.openEvents(threadId);
   const prompt = '把這句話回聲一次。';
   await client.runStart(threadId, prompt);
-  let state: ConversationState = appendHumanTurn(emptyConversation(), prompt);
-  while (state.status === 'running') {
-    const next = await events.next();
-    if (next.done === true) break;
-    state = reduceConversation(state, next.value);
-  }
+  await foldTurn(events);
   await events.return?.(undefined);
 }
 
