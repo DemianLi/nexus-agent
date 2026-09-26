@@ -75,7 +75,7 @@ export function fakeDownlink() {
     return customFrame(INBOX, payload);
   }
 
-  /** 會話標題（#649）：伺服器在第一句人話開跑時推，#650 之後模型產生的標題會再推一顆。 */
+  /** 會話標題（#649）：伺服器在第一句人話開跑時推一顆，模型產生標題（#650）後再推一顆，後到的取代先到的。 */
   function titleFrame(title: string): Event {
     return customFrame(TITLE, { title });
   }
