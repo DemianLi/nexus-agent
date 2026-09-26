@@ -343,6 +343,8 @@ async function resolveDisplayDirectory(
     try {
       const status = await lstat(current);
       signal.throwIfAborted();
+      // `lstat` 不跟隨連結，連結的 `isDirectory()` 本來就是 `false`，所以前半句是多餘的：突變量過，拿掉它測試全綠。
+      // 照 dsh 逐字留著，它把「連結一律拒」寫明在這一行，不靠讀的人知道 `lstat` 的語意。
       if (status.isSymbolicLink() || !status.isDirectory()) return undefined;
     } catch {
       signal.throwIfAborted();

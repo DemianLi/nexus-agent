@@ -190,6 +190,18 @@ describe('WorkspaceFileSearch（照 dsh）', () => {
     ]);
   });
 
+  it('資料夾加的 25 分只在子序列那一級改得動順序', async () => {
+    const root = await workspace();
+    await mkdir(join(root, 'qxxz'));
+    await writeFile(join(root, 'qxz'), 'file');
+    const files = search(root);
+    // 檔案的間隔比資料夾少一格（399 對 398），加分讓資料夾排上來（423）。
+    expect(await files.list('qz', new AbortController().signal)).toEqual([
+      { path: 'qxxz', kind: 'directory' },
+      { path: 'qxz', kind: 'file' },
+    ]);
+  });
+
   it('失效之後舊的索引照答，替代品建好再換上', async () => {
     const root = await workspace();
     const files = search(root);
