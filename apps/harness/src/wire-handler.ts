@@ -32,6 +32,7 @@
 import type {
   Command,
   EventStreamRequest,
+  FileReferenceListResponse,
   SlashDescriptor,
   SlashListResult,
   SlashMethod,
@@ -55,6 +56,7 @@ import {
   deliverableFilePath,
   encodeSseFrame,
   errorResponse,
+  fileReferencesPath,
   isFeedbackMethod,
   isQueueUpdateMethod,
   isRpcMethod,
@@ -91,6 +93,7 @@ import {
   readDeliverablePage,
 } from './deliverable-files.js';
 import { readDeliverableWindow, resolveDeliverableWindow } from './deliverable-window.js';
+import { listFileReferences, WorkspaceFileSearch } from './file-references.js';
 import {
   deliverableFilesConfigSchema,
   type DeliverableFilesConfig,
@@ -351,15 +354,16 @@ function json(body: unknown, status = 200): Response {
 }
 
 /**
- * `/threads/:id/stream`、`/threads/:id/history`、`/threads/:id/changes/{summary,diff}`、
- * `/threads/:id/deliverables/{file,download}` 或 `/threads/:id/commands/:method`，
- * 都不是就 undefined。
+ * `/threads/:id/stream`、`/threads/:id/history`、`/threads/:id/file-references`、
+ * `/threads/:id/changes/{summary,diff}`、`/threads/:id/deliverables/{file,download}` 或
+ * `/threads/:id/commands/:method`，都不是就 undefined。
  */
 function parsePath(
   pathname: string,
 ):
   | { readonly kind: 'stream'; readonly threadId: string }
   | { readonly kind: 'history'; readonly threadId: string }
+  | { readonly kind: 'file-references'; readonly threadId: string }
   | { readonly kind: 'changes-summary'; readonly threadId: string }
   | { readonly kind: 'changes-diff'; readonly threadId: string }
   | { readonly kind: 'deliverable-file'; readonly threadId: string }
@@ -377,6 +381,9 @@ function parsePath(
   }
   if (segments.length === 3 && segments[2] === 'history') {
     return { kind: 'history', threadId };
+  }
+  if (segments.length === 3 && pathname === fileReferencesPath(threadId)) {
+    return { kind: 'file-references', threadId };
   }
   if (segments.length === 4 && segments[2] === 'changes') {
     if (pathname === changesSummaryPath(threadId)) return { kind: 'changes-summary', threadId };
@@ -504,6 +511,14 @@ interface ThreadState {
    * 見 {@link ThreadAgent.resumedWorkspaceRoot}。
    */
   readonly resumedWorkspaceRoot: string | undefined;
+  /**
+   * `@` 引用的列檔索引（[#651](https://github.com/DemianLi/nexus-agent/issues/651)），**沒給 `--workspace` 就是
+   * `undefined`**，那時列檔回「不提供」、不碰磁碟。
+   *
+   * **一條 thread 一份，只聽 root 日誌的 `tool/result`**：dsh 是一個 agent 一份、各聽各的。子代理寫的檔，要等父那顆
+   * `task` 的 `tool/result` 落在 root 日誌上才過期——dsh 那邊父 agent 的索引也是等到那一刻，所以逐格等價。
+   */
+  readonly fileSearch: WorkspaceFileSearch | undefined;
   /**
    * 有沒有一次 `slash.run` 還沒回來。
    *
@@ -704,6 +719,16 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         const detachTitle = threadAgent.attachTitle?.(pump.sessionLog, (message) =>
           options.warn?.(`[標題] thread ${threadId} ${message}`),
         );
+        // **列檔索引跟 pump 同一刻建**：它要聽的是這條 thread 的 root 日誌，而那份日誌在這裡誕生。
+        const fileSearch =
+          threadAgent.workspaceRoot === undefined
+            ? undefined
+            : new WorkspaceFileSearch(threadAgent.workspaceRoot);
+        const unsubscribeFileSearch = fileSearch
+          ? pump.sessionLog.subscribe((event) => {
+              if (event.type === 'tool/result') fileSearch.invalidate();
+            })
+          : undefined;
         const state: ThreadState = {
           pump,
           commands: threadAgent.commands,
@@ -720,11 +745,16 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           storedCount: threadAgent.rootSeed?.length ?? 0,
           workspaceRoot: threadAgent.workspaceRoot,
           resumedWorkspaceRoot: threadAgent.resumedWorkspaceRoot,
+          fileSearch,
           slashInFlight: false,
           dispose: async () => {
             // **標題最先拆**：它在任何一輪之外寫日誌，拆掉會中止還在跑的那一次，之後回來的寫不進去
             // （同 dsh 的會話拆卸）。排在參與者前面，理由同下一條：寫得動日誌的先停手。
             await detachTitle?.();
+            // **列檔索引接著收**，同 dsh 在 `agent/disposed` 上收它：中止還在背景跑的走訪，之後的查詢回空。它不寫日誌，
+            // 所以排在寫得動日誌的那幾個之間哪裡都不改變誰看到什麼。
+            unsubscribeFileSearch?.();
+            fileSearch?.dispose();
             // **參與者先收，比不變量還早**：它是唯一寫得動日誌的那一個，先讓它停手，
             // 檢查才還在看著它最後那幾筆。反過來收的話，關機途中寫進去的東西沒人檢。
             detachSession?.();
@@ -1226,6 +1256,43 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
   }
 
   /**
+   * `GET /threads/:id/file-references?query=`（[#651](https://github.com/DemianLi/nexus-agent/issues/651)）：`@` 後面那一段的候選。
+   * 契約見 `@nexus/wire` 的 `file-references.ts`，查法與圍堵見 `file-references.ts`。
+   *
+   * **經 `threadFor`，同 `slash.list`**：打 `@` 多半發生在第一句之前，所以沒開過的 thread 要為它建起來，而不是像
+   * `changes` 那樣回 404。也同 `slash.list` **不看「還在跑」與核准點**：它只讀，沒有東西可以跟誰賽跑。
+   *
+   * **取消與失敗分開**：請求被取消（web 每打一個字就取消上一次）時照樣拋出去，由載體收掉，同 `changes/diff`；
+   * 其他失敗（例如工作區根讀不到，索引照 dsh 不落定成空的）回協定層的錯誤封包。
+   */
+  async function handleFileReferences(
+    threadId: string,
+    search: URLSearchParams,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    const thread = await threadOrError(threadId, null);
+    if (thread instanceof Response) return thread;
+    let response: FileReferenceListResponse;
+    if (thread.fileSearch === undefined) {
+      response = { type: 'success', result: { available: false } };
+    } else {
+      try {
+        const candidates = await listFileReferences(
+          thread.fileSearch,
+          search.get('query') ?? '',
+          signal,
+        );
+        response = { type: 'success', result: { available: true, candidates } };
+      } catch (error: unknown) {
+        signal.throwIfAborted();
+        const reason = error instanceof Error ? error.message : String(error);
+        return changesResponse(errorResponse(null, 'unknown_error', `列不出檔案：${reason}`));
+      }
+    }
+    return changesResponse(response);
+  }
+
+  /**
    * `GET /threads/:id/changes/summary?seq=`（[#443](https://github.com/DemianLi/nexus-agent/issues/443)），照 dsh 的
    * `handleChangesSummary`：400 座標不對，404 這台 server 不再服務這份摘要。
    *
@@ -1504,6 +1571,12 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
         if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
         return handleHistory(route.threadId, searchParams);
+      }
+      if (route?.kind === 'file-references') {
+        if (request.method !== 'GET') return new Response('not found', { status: 404 });
+        // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
+        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+        return handleFileReferences(route.threadId, searchParams, request.signal);
       }
       if (
         route?.kind === 'deliverable-file' ||
