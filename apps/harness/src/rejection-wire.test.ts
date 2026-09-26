@@ -22,7 +22,6 @@ import type { PluginEntry } from '@nexus/core';
 import type { ConversationState, Event, ToolEntry, WireClient } from '@nexus/wire';
 import {
   appendDecision,
-  appendHumanTurn,
   createWireClient,
   emptyConversation,
   reduceConversation,
@@ -121,7 +120,7 @@ async function open(threadId: string): Promise<Session> {
     client,
     events,
     frames: [],
-    state: appendHumanTurn(emptyConversation(), '動手'),
+    state: emptyConversation(),
     close: () => handler.close(),
   };
 }

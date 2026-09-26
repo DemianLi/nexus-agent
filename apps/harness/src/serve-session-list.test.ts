@@ -12,19 +12,14 @@
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  THREADS_PATH,
-  appendHumanTurn,
-  createWireClient,
-  emptyConversation,
-  reduceConversation,
-} from '@nexus/wire';
-import type { ConversationState, ThreadListOutcome } from '@nexus/wire';
+import { THREADS_PATH, createWireClient } from '@nexus/wire';
+import type { ThreadListOutcome } from '@nexus/wire';
 import type { SessionEvent } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   exchangeServeToken,
   fetchWithCookie,
+  foldTurn,
   loopbackRequest,
   serveClient,
   TEST_BROWSER_AUTH,
@@ -66,12 +61,7 @@ async function driveTurn(server: RunningServe, threadId: string, prompt: string)
   const client = await serveClient(server);
   const events = await client.openEvents(threadId);
   await client.runStart(threadId, prompt);
-  let state: ConversationState = appendHumanTurn(emptyConversation(), prompt);
-  while (state.status === 'running') {
-    const next = await events.next();
-    if (next.done === true) break;
-    state = reduceConversation(state, next.value);
-  }
+  await foldTurn(events);
   await events.return?.(undefined);
 }
 

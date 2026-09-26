@@ -9,6 +9,7 @@
   - 模組、介面、深度、接縫、adapter、刪除測試。**介面**不只是型別，還包括呼叫者必須知道的不變量、順序、錯誤模式、設定與效能。**深度**看的是槓桿，不看行數。
   - 一個 adapter 的接縫是假想接縫，兩個才是真接縫。
 - **技術標準**：每條發現都對照 dsh 在同一處的形狀。建議照 dsh；偏離時寫明 deepagents 或 LangChain 表達不出什麼。
+- **追蹤欄**：盤點合併後，同一天（2026-09-26）替中級發現開了專卡，追蹤欄與各條的「既有追蹤」已補上卡號。發現本文仍以基準 `70357bb` 為準。卡是對之後的 develop 重核過再寫的，有幾張的主軸或建議跟本文不同，例如 #664、#667、#668、#670，動工時以卡為準。
 - 這份是七層盤點（[`seven-layer-inventory-2026-09-26.md`](seven-layer-inventory-2026-09-26.md)）的姊妹篇。前一次相關的盤點是 [`srp-audit-2026-09-19.md`](srp-audit-2026-09-19.md)，它量的是單一職責；這次量的是模組之間的介面。
 
 ## 結論
@@ -51,27 +52,33 @@
    - plugins-interaction-r2-03：serve 上打 `/goal` 或 `/goal resume` 之後，一輪都不排。驗證者另外發現，續接回來的 CLI 會話也排不出第 1 輪；而 `docs/operations.md:78` 正好教人續接後打 `/goal resume`。
    - core-mw-model-01：goal 續行輪會把重複提醒的計數清零，dsh 只在 `source.kind` 是 `user` 時才清零。結果在續行時打轉，模型永遠拿不到提醒。
 
-   goal driver 今天在 CLI 與 serve 都預設關，所以零設定路徑還碰不到這三條。但 **#445（serve 預設開，已拍板）一落地，三條都會進產品路徑**。建議在 #445 或 #638 動工前一起處理，或寫進它們的驗收。
+   goal driver 今天在 CLI 與 serve 都預設關，所以零設定路徑還碰不到這三條。但 **#445（serve 預設開，已拍板）一落地，三條都會進產品路徑**。建議在 #445 或 #638 動工前一起處理，或寫進它們的驗收。已開卡：#660、#661、#662，三張都設成擋住 #445。
 
 **沒有專卡的中級發現**有 9 條：N2、F5、wire-r2-02、plugins-interaction-r2-02、r2-03、hcr-r2-01、hcr-r2-03、hcr-r2-05、core-mw-model-01。
 - hcr-r2-03 的母題是 #46。
 - plugins-interaction-r2-02、r2-03 與 core-mw-model-01 跟 #445、#638 相鄰，但兩張卡的內文都沒寫到這三件事。
 - wire-r2-01 只有工具名那一塊可以接 #442。
 
+**之後已全部開卡**，連同只有部分追蹤的 wire-r2-01：
+- 續行三條：plugins-interaction-r2-02 → #660、r2-03 → #661、core-mw-model-01 → #662，都設成擋住 #445。
+- N2 → #664、F5 → #665、wire-r2-01 → #666、wire-r2-02 → #667。
+- hcr-r2-01 → #668、hcr-r2-03 → #669、hcr-r2-05 → #670。
+- 開 #666 時另外查到 web 的工具表漏了基座的 `delete`，單獨開成 #672。
+
 ### 中級一覽
 
 | ID | 發現 | 形狀 | 歸屬 | 追蹤 |
 | --- | --- | --- | --- | --- |
-| core-plugin-system-r2-N2 | root 與子代理的 middleware 堆疊在 fold.ts 手寫兩份，子代理漏一格不會有測試紅 | 缺接縫（兩種變體寫死） | dev-harness | 無 |
-| core-session-F5 | SessionStore 的「沒有 list」前提已過期：serve 的列表繞過介面自己讀檔 | 隱性耦合（無相依邊） | dev-harness | 無（#631–#633 會擴大讀方） |
-| wire-seam-r2-01 | web 測試以相對路徑讀 core／plugin／harness 原始碼，補 wire 沒承載的詞彙 | 隱性耦合（無相依邊） | 兩邊 | 部分（工具名可接 #442） |
-| wire-seam-r2-02 | 停止的提問卡靠錯誤文字結尾判斷，日誌裡的錯誤碼在上線投影時被丟掉 | 介面外的事實（順序／狀態／設定／錯誤模式） | 兩邊 | 無 |
-| plugins-interaction-r2-02 | 中止或失敗之後續行授權沒有收回，人再說一句話後排程器會自動接回續行 | 介面外的事實（順序／狀態／設定／錯誤模式） | dev-harness | 無（相鄰 #445、#638） |
-| plugins-interaction-r2-03 | 排程器的觸發點由兩個入口各自寫死，serve 上 /goal 建立或 resume 之後一輪都不排 | 缺接縫（兩種變體寫死） | dev-harness | 無（相鄰 #445、#638） |
-| hcr-r2-01 | 會話接線的四步與收線順序由兩個入口各寫一次，型別還把必接的那一步標成選配 | 介面外的事實（順序／狀態／設定／錯誤模式） | dev-harness | 無 |
-| hcr-r2-03 | 五顆由程式碼掛的協作者不在出貨清單：清單不是唯一來源，dump 看不到，patch 動不了 | 缺接縫（兩種變體寫死） | dev-harness | 無（母題 #46） |
-| hcr-r2-05 | 組裝根的模型接縫只開在 HTTP 層，要腳本化回合的測試改為手抄組裝根 | 測試越過介面 | dev-harness | 無 |
-| core-mw-model-01 | 提醒器的清零判準是 core 裡一張寫死的記號白名單，而且在 goal 續行輪上跟 dsh 相反 | 缺接縫（兩種變體寫死） | dev-harness | 無（相鄰 #445、#638） |
+| core-plugin-system-r2-N2 | root 與子代理的 middleware 堆疊在 fold.ts 手寫兩份，子代理漏一格不會有測試紅 | 缺接縫（兩種變體寫死） | dev-harness | #664 |
+| core-session-F5 | SessionStore 的「沒有 list」前提已過期：serve 的列表繞過介面自己讀檔 | 隱性耦合（無相依邊） | dev-harness | #665（#631–#633 會擴大讀方） |
+| wire-seam-r2-01 | web 測試以相對路徑讀 core／plugin／harness 原始碼，補 wire 沒承載的詞彙 | 隱性耦合（無相依邊） | 兩邊 | #666（工具名那一塊接 #442）；另開 #672 |
+| wire-seam-r2-02 | 停止的提問卡靠錯誤文字結尾判斷，日誌裡的錯誤碼在上線投影時被丟掉 | 介面外的事實（順序／狀態／設定／錯誤模式） | 兩邊 | #667 |
+| plugins-interaction-r2-02 | 中止或失敗之後續行授權沒有收回，人再說一句話後排程器會自動接回續行 | 介面外的事實（順序／狀態／設定／錯誤模式） | dev-harness | #660（擋住 #445） |
+| plugins-interaction-r2-03 | 排程器的觸發點由兩個入口各自寫死，serve 上 /goal 建立或 resume 之後一輪都不排 | 缺接縫（兩種變體寫死） | dev-harness | #661（擋住 #445） |
+| hcr-r2-01 | 會話接線的四步與收線順序由兩個入口各寫一次，型別還把必接的那一步標成選配 | 介面外的事實（順序／狀態／設定／錯誤模式） | dev-harness | #668 |
+| hcr-r2-03 | 五顆由程式碼掛的協作者不在出貨清單：清單不是唯一來源，dump 看不到，patch 動不了 | 缺接縫（兩種變體寫死） | dev-harness | #669（母題 #46） |
+| hcr-r2-05 | 組裝根的模型接縫只開在 HTTP 層，要腳本化回合的測試改為手抄組裝根 | 測試越過介面 | dev-harness | #670 |
+| core-mw-model-01 | 提醒器的清零判準是 core 裡一張寫死的記號白名單，而且在 goal 續行輪上跟 dsh 相反 | 缺接縫（兩種變體寫死） | dev-harness | #662（擋住 #445） |
 
 已被追蹤的兩條中級：core-session-F1（#507）、plugins-capability-r2-08（#440，本條補上了 #440 驗收二要的量測結果）。
 
@@ -87,7 +94,7 @@
 - **dsh 的形狀**：dsh 的子代理不另組一份：child-agent.ts:205 以 composeFrom(childCtx, parent.ctx) 併入父代理保留的同一版組合（agent-preset-registry：Join a child to the exact revision retained by its parent），註冊視圖也沿 scope 鏈往下繼承。子代理的差異是在同一份組合上用 scope 覆寫，不是另寫一份清單。　`dsh:packages/subagent/subagent/src/child-agent.ts:205`、`dsh:packages/preset/agent-preset-registry/src/index.ts:268`、`dsh:packages/preset/agent-preset-registry/src/index.ts:273`
 - **建議**：在 fold 內用一張有序的槽位表當唯一來源。每一列寫明： - 名字； - root 取什麼（實例或工廠）； - 子代理取什麼（同一顆、另一顆、逐個建、不給）。 表上另外標出子代理專屬的插入點（委派聲明、spec.middleware）。root 與子代理的陣列都從這張表導出。 測試也跟著改：對表斷言「子代理＝root 依表投影」，再對每個槽位跑一條通用的「每一疊都有（除非表上寫不給）」，取代兩份各自手寫的全名單期望值。
 - **偏離說明**：dsh 靠 composeFrom 讓子代理直接繼承父代理的組合。deepagents 表達不出這件事：SubAgentBase.middleware 只接在子代理自己的預設 stack 之後，root 的 middleware 參數一個都不繼承（fold.ts:1233 引 deepagents@1.13.1 的 d.ts）。所以每一顆都得逐個注。最接近的做法是在 fold 內從同一張表導出兩份陣列，而不是手寫兩份。
-- **既有追蹤**：沒有追蹤卡。#327（已關）把 plugin middleware 攤進子代理時，對 plugin 分區做了「只切一次」，core 的槽位沒有跟進。
+- **既有追蹤**：專卡 #664（盤點後開）。盤點當時：沒有追蹤卡。#327（已關）把 plugin middleware 攤進子代理時，對 plugin 分區做了「只切一次」，core 的槽位沒有跟進。
 - **證據**：`packages/nexus-core/src/fold.ts:778`、`packages/nexus-core/src/fold.ts:1291`、`packages/nexus-core/src/fold.ts:1398`、`packages/nexus-core/src/fold.ts:1403`、`packages/nexus-core/src/fold.ts:1385`
 - **否定搜尋**：git grep -n 'foldMiddleware(' -- packages apps：只有 fold.ts:454 的呼叫與 :778 的定義，沒有第二條導出路徑；在 fold.test.ts 搜「params.middleware … subagent」與「toEqual(params.middleware」：0 筆，沒有斷言子代理堆疊由 root 導出；跨疊比對只有 :1347、:2013 為個別 middleware 寫的 stacks 輔助
 - **驗證意見**：判 confirmed，保留這一條。它與 coupling-core-middleware-tools 的 core-mw-01 是同一件事，建議 core-mw-01 判 duplicate-of core-plugin-system-r2-N2。 一、耦合是真的。 - root 那份是 foldMiddleware，16 個位置參數（fold.ts:778）；子代理那份是 foldSubAgents，20 欄 context 加一份手寫陣列（:1291、:1388 起）。我逐格比對過，今天兩份順序是對齊的。 - fold.test.ts:161 的 root 全名單與 :241 的子代理全名單是兩份各自手寫的期望值。新增一格只補 root 時，root 測試紅、改期望值即可；子代理測試因為實作與期望都沒動，照樣綠。 - 檔內自己承認漏注是靜默的（:1385「沒有人會紅」、:1235「默默地讓 subagent 失去核准」）。 - 有一個細節要修正標題：「子代理漏一格不會有測試紅」只對**新增**的槽位成立。拿掉既有的一格，:241 會紅；
@@ -99,7 +106,7 @@
 - **說明**：session-store.ts 的檔頭寫「沒有 stat／list，讀回只有一個 resume」「要列的那天再加」，理由是列的只有產品路徑外的離線掃描。這個前提在 #302 已經不成立：serve.ts 以 listStoredThreads(sessionStore.directory, …) 在產品路徑上列會話，靠的是 JsonlSessionStore 在介面外多開的 directory；session-list.ts 自己宣告 HEADER_SUFFIX／LOG_SUFFIX、自己寬鬆解析 header，eval/session-scan.ts 又宣告一份，adapter 本身則用字面量拼檔名。09-19 盤點把「會話續接／列表／租約」記為「有」，沒有注意到它繞過了介面。#631（按內容搜尋）、#632（清單即時狀態）、#633（釘選、封存、改名存伺服器端）都會再加讀方。檔名分岔會被 session-list.test（走真 adapter）與 serve-session-list.test 抓到，所以是中。
 - **dsh 的形狀**：dsh 的 SessionPersistence 有 abstract stat 與 abstract list；session-query 經由 persistence.list 列，session-controller 的列表 API 走 sessionQuery.listSessions，不自己讀檔。　`dsh:packages/session/session-persistence/src/index.ts:201`、`dsh:packages/session/session-persistence/src/index.ts:194`、`dsh:packages/session-query/session-query/src/corpus.ts:262`
 - **建議**：讓 SessionStore 長出 list（與 stat），回傳 header 摘要；檔名與 header 解析收回 jsonl-session-store 裡；session-list 改成在 list 的結果上加標題與 cwd 過濾，session-scan 也走同一個 list。版本比這一版新的條目怎麼處理（列表計入 unreadable、掃描照讀）可以用 list 的選項表達。sandbox-mode.test.ts 的 KNOWN = ['create','resume'] 會照設計紅，那時要一起更新 session-store.ts 的檔頭。
-- **既有追蹤**：無直接追蹤；#631、#632、#633（皆 OPEN）會擴大讀方。
+- **既有追蹤**：專卡 #665（盤點後開）。盤點當時：無直接追蹤；#631、#632、#633（皆 OPEN）會擴大讀方。
 - **證據**：`packages/nexus-core/src/session-store.ts:20`、`packages/nexus-core/src/session-store.ts:24`、`packages/nexus-core/src/session-store.ts:25`、`apps/harness/src/session-list.ts:2`、`apps/harness/src/serve.ts:360`
 - **否定搜尋**：git grep -n -E "implements SessionStore([^A-Za-z_]|$)|: SessionStore = |as SessionStore|SessionStore \{" -- packages apps；git grep -n -F ".header.json" -- packages apps ':!*.test.ts'；git grep -n -F "sessionStore.directory" -- apps packages
 - **驗證意見**：成立。SessionStore 檔頭的前提是「沒有 stat／list，要列的那天再加；離線掃描在產品路徑外」，這個觸發條件在 #302 已經發生：serve.ts 以 listStoredThreads(sessionStore.directory, …) 在產品路徑上列會話，靠的是 JsonlSessionStore 在介面外多開的 directory。檔名規則有三份：session-list 與 session-scan 各宣告一次 HEADER_SUFFIX，adapter 本身用字面量。#302 的卡片只決定照 session-scan 的做法唯讀走目錄，沒有決定「不擴介面」，所以沒有對應的決議。`gh issue list --search "SessionStore list"` 找不到追蹤卡；#631、#632、#633 的內文也沒提 SessionStore。基準之後的 2b8d886（#649）讓 session-list 再多讀 session/title，繞過介面的讀方又多一種。
@@ -112,7 +119,7 @@
 - **dsh 的形狀**：dsh 的 UI 以宣告過的型別子路徑相依拿 domain 詞彙：ui-conversation 的 TodoPanel `import type { TodoItem } from '@deepseek-ai/dsh-tool-todo/client'`，它的 package.json 宣告了 dsh-tool-todo，tool-todo 匯出 `./client` 子路徑；ui-deliverables 的 changes.ts 從 dsh-workspace-changes 的 `./types` 子路徑拿型別。工具名那一塊，dsh 的 UI（tool-call-model.ts 的 TOOL_VARIANTS）同樣是手寫字面值、沒有覆蓋檢查；dsh 的工具目錄則是開機讀已註冊的 schema 生成，不解析原始碼。　`dsh:packages/client/ui-conversation/src/client/skeleton/TodoPanel.tsx:8`、`dsh:packages/client/ui-conversation/package.json:80`、`dsh:packages/todo/tool-todo/package.json:25`
 - **建議**：分三刀。(1) 詞彙照 dsh：web 的 TodoStatus 改成 `WireTodoItem['status']`（web 已相依 wire，不用新增邊），刪掉讀 TODO_STATUSES 的絆索，並把 harness 的 todosData 那條改成兩個方向都釘。工具名、理由碼這類「值」，照 dsh 的話是讓 core／plugin 開一個瀏覽器可用的 `./client` 或 `./types` 子路徑，web 在 package.json 宣告相依後 import；這跟 harness-composition-root-05 替 @nexus/core 加 exports 是同一個方向，不衝突——dsh 的子路徑本來就是給 UI 的窄入口，不是把整個 src 攤開。(2) 工具名的覆蓋檢查改讀 #442 要產的工具目錄（開機生成），不再用正則掃原始碼。(3) execute／backend 那兩條絆索搬到 apps/harness，web 那側只留「execute 還沒有終端卡」這件 web 自己的事；
 - **偏離說明**：若選擇沿用樹上既有慣例（wire 重新宣告 core 的值、鏡像斷言放 harness），而不照 dsh 的型別子路徑相依，這是我們的選擇，不是 deepagents／LangChain JS／LangGraph JS 表達不出來：pnpm workspace＋package.json exports 子路徑＋`import type` 完全表達得出 dsh 的形狀。要在決議或 PR 內文標明偏離與理由（例如 core 的值常數沒有瀏覽器安全的入口）。
-- **既有追蹤**：工具名那一塊可接 #442（OPEN，gh 讀回：照 dsh 產工具 schema 目錄＋新鮮度 gate，驗收寫明經真正的註冊路徑載入、不手寫 schema）。其餘三件（理由字串、todo 狀態、backend 絆索）沒找到現成的卡。
+- **既有追蹤**：專卡 #666（盤點後開；delete 那一列另開 #672）。盤點當時：工具名那一塊可接 #442（OPEN，gh 讀回：照 dsh 產工具 schema 目錄＋新鮮度 gate，驗收寫明經真正的註冊路徑載入、不手寫 schema）。其餘三件（理由字串、todo 狀態、backend 絆索）沒找到現成的卡。
 - **證據**：`apps/web/package.json:19`、`apps/web/src/lib/question-view.test.ts:45`、`apps/web/src/lib/todo-view.test.ts:11`、`apps/web/src/lib/todo-view.test.ts:21`、`apps/web/src/lib/tool-view.test.ts:15`
 - **否定搜尋**：git grep -n "\.\./\.\./\.\./" -- apps/web/src apps/web/tests apps/web/*.ts（只有三支 lib/*-view.test.ts 讀別套件）；git grep -n -l "readFileSync\|readdirSync\|node:fs\|from 'fs'" -- apps/web；git grep -n "?raw\|import.meta.glob\|import(\s*['`]\.\./" -- apps/web/src（零命中：沒有別的形狀讀原始碼）；git grep -n "from '@nexus/\(core\|harness\|plugin\)" -- apps/web（零命中：沒有相依邊）（另有 3 條）
 - **驗證意見**：耦合屬實，代價也付過了：web 測試用相對路徑讀 core／plugin／harness 原始碼，而 #644（harness 的修補）就是為了 tool-view.test.ts:138 那一行，動用 AGENTS.md 的跨套件例外去改 apps/web（gh pr view 644 內文自述）；快照後 #648 又由 dev-ui 補了姊妹絆索。「會被抓到但增加改動成本」成立，維持中。判 weakened 有四個理由。(1) 值耦合在 dsh 同樣存在：dsh 產品 UI 的工具名（TOOL_VARIANTS）與錯誤碼（'ASK_ABORTED'）都是手寫字面值，沒有任何覆蓋檢查；我方多了會紅的絆索，只有工具名那條會漏。(2) 兩處過頭。第一，node 探針實測 `= 'foo' as const` 仍會命中正則；會漏的是型別註記 `: string =`、雙引號、模板字串，以及不叫 *TOOL_NAME* 的常數。
@@ -124,7 +131,7 @@
 - **說明**：pump 的 #withdraw 把 `code: TOOL_ABORTED | TOOL_ABORTED_BEFORE_DISPATCH` 寫進日誌，但上線的 #closeCard 只帶 `{ failed, text }`：ToolVerdict 只有 failed／text／meta，wire 的 tool-finished 折疊只把 data.message 放進 ToolEntry.error，conversation.ts 沒有任何 code 欄位。web 於是用 `entry.error?.endsWith(WITHDRAWN_TOOL_REASON)` 判 stopped，再靠 F1 那條讀 turn-cancel.ts 的絆索維持字串一致。歷史投影又在日誌缺 text 時把 code 當成錯誤文字的退路塞進同一格（`text ?? error?.code`），那時格子裡是 'ABORTED_BEFORE_DISPATCH'，endsWith 比的卻是理由句——同一格有時是人讀的句子、有時是機器碼。改理由的措辭（例如為了讓模型讀得懂而調整 turn-cancel 的句子）會讓 web 的停止判斷失效，只有剛好跑到那條原始碼絆索才會紅。
 - **dsh 的形狀**：dsh 的 agent-loop 收回未派發的工具時寫 `info: { name: 'AbortError', code: TOOL_ABORTED_BEFORE_DISPATCH }`。UI 看碼不看字：tool-call-model.ts 以 `block.error?.code === 'interrupted'` 判 stopped；ask-question-row.tsx 讀 `block.error?.code`，把 'ASK_ABORTED' 判成 stopped。UI 那側的碼是手寫字面值，沒有對 domain 常數的鏡像檢查。　`dsh:packages/core/agent-loop/src/tool-calls.ts:257`、`dsh:packages/client/ui-tool/src/client/tool/models/tool-call-model.ts:289`、`dsh:packages/client/ui-tool/src/client/tool/toolviews/ask-question-row.tsx:148`
 - **建議**：照 dsh 讓碼跨過線。(1) ToolVerdict 加 `code?`，#withdraw 與其他失敗出口把日誌的 code 一併放上 tool-finished frame（照 aborted 的先例放在 lifecycle data）。(2) wire 的 ToolEntry 加 `errorCode?: string`，折疊器照抄；歷史投影讓 code 與 text 各放各的格，不再把 code 當 text 的退路。(3) wire 重新宣告 web 要比的碼，harness 以完全相等檢查鏡像 core 的常數（樹上慣例）。(4) web 的 isStoppedQuestion 改比碼，刪掉讀 turn-cancel.ts 的絆索。這是新增選填欄位，拆得開：先合 harness＋wire，再合 web。
-- **既有追蹤**：沒找到現成的卡。#434（OPEN，gh 讀回）講的是模型失敗在日誌帶分類碼，不是工具結果的碼跨線。
+- **既有追蹤**：專卡 #667（盤點後開）。盤點當時：沒找到現成的卡。#434（OPEN，gh 讀回）講的是模型失敗在日誌帶分類碼，不是工具結果的碼跨線。
 - **證據**：`packages/nexus-core/src/tool-events.ts:75`、`apps/harness/src/thread-pump.ts:1124`、`apps/harness/src/thread-pump.ts:1144`、`apps/harness/src/thread-pump.ts:442`、`apps/harness/src/conversation-history.ts:591`
 - **否定搜尋**：rtk proxy grep -n "\bcode\b" packages/nexus-wire/src/conversation.ts（零命中：折疊器與 ToolEntry 都沒有碼）；dsh: git grep -n "info?.code\|info\.code\|error?.info" -- packages/client（空：dsh 的 UI 讀的是轉換後的 block.error.code，不直接讀 info）
 - **驗證意見**：獨立重推成立：日誌有 TOOL_ABORTED_BEFORE_DISPATCH，上線的 ToolVerdict 只帶 failed／text／meta，web 只好以 endsWith 比理由句。question-view.ts 自己寫明是因為沒有碼才比字，PR #428 內文也列為已知限制，沒有卡追蹤（gh issue list 搜 errorCode、isStoppedQuestion、錯誤碼 wire 都沒有對應的卡；#434 是模型失敗碼）。question-view.test 只釘 core 的常數，不釘 pump 實際送什麼：pump 若改送別的理由，web 會靜默退成一般失敗卡，所以中成立。dsh 那側核過：事件的 data.error（含 code）原樣進 client 的工具節點（ui-chat conversation-nodes/tool.ts:76）；提問中斷由領域端產出 ASK_ABORTED，UI 比碼。另外，dsh 的 'interrupted' 是 client 替沒結果的卡合成的，對應我方折疊器的 UNFINISHED_TOOL_TEXT。有三處更正。
@@ -137,7 +144,7 @@
 - **dsh 的形狀**：dsh 的 goal-round-driver 在 agent/error 時 disarm；turn/end 帶 aborted 時，若被中止的正是它自己排的那一輪（attempt 的 phase 為 claimed 或 admitted）就標 cancelled，下一個 agent/status idle 看到 cancelled、而且目標仍是同一修訂的 active＋armed，就 pause 目標（pause 失敗再退回 disarm）；被中止的不是它的那一輪時直接 disarm。兩條路都不會在下一句人話之後自動接回。README 明寫「Cancellation never auto-restarts a round」，而且撞到輸出上限、flush 失敗也都停。　`dsh:packages/goal/goal-round-driver/src/index.ts:246`、`dsh:packages/goal/goal-round-driver/src/index.ts:333`、`dsh:packages/goal/goal-round-driver/src/index.ts:334`
 - **建議**：照 dsh：driveGoalRound 看到 turn-aborted 或 turn-failed 時，比照 turn-max-tokens，在授權仍是 armed 時呼叫 port.disarm()。disarm 是行程內的，不動耐久的相位與修訂號（service.ts 的 JSDoc），所以跟 #265 Q8「中止之後不自動續行，目標狀態不動」相容，這一格不必偏離。goal-driver.test.ts 那條「被人中止的那一輪不收回」要翻面成驗收句（中止後人再說一句，續行不接回），'turn-aborted' 註解裡「同 dsh」的說法要改掉。
 - **偏離說明**：dsh 在「被中止的是自己排的那一輪」時會暫停目標（改耐久相位）；#265 Q8 拍板「目標狀態不動」，那一格是決議過的偏離，應補登記在 goal-driver.ts。disarm 那一格沒有表達不出來的理由，不該偏離。
-- **既有追蹤**：#638（開）的「動工前要查」列了「跟 #265 Q8（中止之後不自動續行、目標狀態不動）怎麼對上」；#265 已關（Q8 決議）。goal-driver 在 CLI 與 serve 都預設關；#445（開，已拍板）讓 serve 預設開，落地後這會變成 serve 的預設行為。
+- **既有追蹤**：專卡 #660（盤點後開，擋住 #445）。盤點當時：#638（開）的「動工前要查」列了「跟 #265 Q8（中止之後不自動續行、目標狀態不動）怎麼對上」；#265 已關（Q8 決議）。goal-driver 在 CLI 與 serve 都預設關；#445（開，已拍板）讓 serve 預設開，落地後這會變成 serve 的預設行為。
 - **證據**：`apps/harness/src/goal-driver.ts:164`、`apps/harness/src/goal-driver.ts:293`、`apps/harness/src/goal-driver.ts:120`、`apps/harness/src/goal-driver.test.ts:311`、`packages/nexus-plugin-goal/src/service.ts:443`
 - **否定搜尋**：git grep -n -E "aborted|turn/failed|max-tokens" -- packages/nexus-plugin-goal/src ':!*.test.ts'；git grep -n -E "disarm\(|#activation =|'disarmed'" -- apps packages ':!*.test.ts' ':!*.md'（disarm() 的呼叫點只有 goal-driver.ts:295 與 :315；#activation 的其他賦值都在 goal/change 的 commit）
 - **驗證意見**：推翻不了。driveGoalRound 只在 turn-max-tokens 時 disarm；turn-aborted 與 turn-failed 只回 undefined。GoalService 的授權只在 goal/change、max-tokens、flush 失敗時變 disarmed。所以中止或拋錯之後，人只要再送一句話，那一輪正常收工，decideGoalRound 就會看到最後一輪正常結束、目標 active 而且仍是 armed，於是照排。serve 走 pump 的 settle，CLI 走 REPL 每一行之後，兩條路都一樣。goal-driver.test.ts:311 把「中止不收回」釘成規格。goal-driver-cli.test.ts:177 只驗了緊接著再問一次，停住靠的是日誌最後一輪還是 turn/failed。dsh_shape 核過：agent/error 時 disarm；
@@ -150,7 +157,7 @@
 - **dsh 的形狀**：dsh 只有一個持有者：goal-round-driver 這顆 plugin 自己訂閱 goal/changed（goal 服務每一次 commit 都發，含 create 與 resume）與 agent/status，在 agent 閒著時 requestDrive；readyToDrive 的條件是 fiber 還活著、沒在停、agent 是同一個且 idle、收件匣沒有競爭的輸入，沒有「這個行程得先跑過一輪」這一條。所以 dsh 的 `/goal <目標>` 或 `/goal resume` 在 agent 閒著時立刻排第 1 輪。　`dsh:packages/goal/goal-round-driver/src/index.ts:282`、`dsh:packages/goal/goal/src/index.ts:625`、`dsh:packages/goal/goal/src/index.ts:608`
 - **建議**：把「何時問排程器」收進一個兩條入口共用的地方，觸發集合照 dsh：目標變更之後、以及 agent 閒著時。serve 側至少要在斜線命令執行完、或 root 日誌出現 goal/change 時補問一次（pump 已經在觀察 root 日誌）；'no-turn' 的語意要重看——它是「就緒判準從 turn/start…turn/end 推」的產物，dsh 看的是 agent status。#638 會重做 serve 那條路，這一格應併進 #638 的範圍，#445 的驗收也該多一句「/goal 建立或 resume 之後會開始續行」。
 - **偏離說明**：排程器落在 apps/harness 是登記過的載體偏離（#180：PluginRegistry 沒有排得出一輪的通道），那一筆仍然成立；但觸發集合是紀律不是載體，不在那筆偏離的射程內，沒有表達不出來的理由。
-- **既有追蹤**：#180（已關，載體偏離）；#638（開，會重做 serve 路徑，內文沒提命令之後的觸發）；#445（開，驗收只寫「一個沒達成的 active goal 會自己再開一輪」）。
+- **既有追蹤**：專卡 #661（盤點後開，擋住 #445）。盤點當時：#180（已關，載體偏離）；#638（開，會重做 serve 路徑，內文沒提命令之後的觸發）；#445（開，驗收只寫「一個沒達成的 active goal 會自己再開一輪」）。
 - **證據**：`apps/harness/src/thread-pump.ts:1035`、`apps/harness/src/thread-pump.ts:1633`、`apps/harness/src/wire-handler.ts:1024`、`apps/harness/src/cli.ts:1271`、`apps/harness/src/goal-driver.ts:157`
 - **否定搜尋**：git grep -n -E "#driveGoalRound\(\)|driveGoalRound\(" -- apps/harness/src/thread-pump.ts apps/harness/src/wire-handler.ts；git grep -n "noteLogEvent" -- apps/harness/src/thread-pump.ts ＋ sed -n 1617,1680p 逐種列出事件分支；git grep -n -E "goal resume|/goal |命令也算一次機會|命令之後|slash|executor" -- apps/harness/src/goal-driver-pump.test.ts（零命中）；git grep -n -E "goal resume|/goal |命令也算一次機會" -- apps/harness/src/goal-driver-cli.test.ts（只命中 :429 patch 拿掉 /goal 那一案）
 - **驗證意見**：推翻不了，而且比原文更廣。serve 側唯一問排程器的地方是 thread-pump.ts:1035 的 settle。handleSlash 直接叫執行器，不碰 pump。pump 沒有觀察 goal/change：在 thread-pump.ts、wire-handler.ts、serve.ts 三檔 git grep goal/change，只命中 wire-handler.ts:181 一行註解。所以 web 上打 /goal 或 /goal resume 之後一輪都不排，要等人再說一句。新發現：currentTurnStart 在 session/end-seed 停住（session-log.ts:1002），所以續接回來的會話在這個行程的第一輪之前一律是 no-turn。docs/operations.md:78 教人續接後打 /goal resume，而這時 CLI 的 /goal resume 也排不出第 1 輪。cli.ts:1271「命令也算一次機會」在新開的 REPL 與續接的 REPL 上都不成立，不只 serve 缺。兩條路的測試都沒有走「命令之後續行」。
@@ -163,7 +170,7 @@
 - **dsh 的形狀**：dsh 的配套自己訂閱會話。不變量配套先 `for (const session of ctx.sessions.list()) seedSession(session)` 掃既有會話，再 `ctx.on('session/created', …)` 接之後出生的；遙測協調器建構時自己註冊 session/created、session/event 等監聽，並掃 ctx.sessions.list()。組裝根沒有接線義務，所以也不會有兩份順序。　`dsh:packages/core/session/src/invariant.ts:227`、`dsh:packages/core/session/src/invariant.ts:229`、`dsh:packages/session/session-telemetry/src/coordinator.ts:63`
 - **建議**：朝 dsh 的方向，把「接好一份會話註冊表」收成一個入口。handle 提供單一的 `attachSessions(sessions, { persistence? })`，內部固定遙測→不變量→參與者→落盤的順序，回傳一個照相反順序收線的 detach；cli.ts 與 wire-handler.ts 都改呼叫它。ThreadAgent 上把它改成必填，手搭的 wire 測試改用一個共用的測試建構器來提供。要做到 dsh 那樣由配套自己訂閱，前提是 SessionRegistry 在組裝前就存在，而 serve 的 pump 目前在組裝後才建它，所以這一步先不做。
 - **偏離說明**：不需要偏離登記：單一接線入口在我方基礎建設上表達得出來。日後若要做到「配套自己訂閱、組裝根零義務」卻做不到，要登記，理由是 SessionRegistry 的建立時刻。
-- **既有追蹤**：和 wire-seam-03（ThreadAgent 的 attach* 順序）是同一個接縫；本條講的是組裝根那一側：兩個入口各自重寫同一套順序。記憶「wire 測試組裝要接 attachSession」記過一次因漏接而假綠。沒有開卡。
+- **既有追蹤**：專卡 #668（盤點後開）。盤點當時：和 wire-seam-03（ThreadAgent 的 attach* 順序）是同一個接縫；本條講的是組裝根那一側：兩個入口各自重寫同一套順序。記憶「wire 測試組裝要接 attachSession」記過一次因漏接而假綠。沒有開卡。
 - **證據**：`apps/harness/src/cli.ts:1443`、`apps/harness/src/cli.ts:1450`、`apps/harness/src/cli.ts:1446`、`apps/harness/src/cli.ts:1457`、`apps/harness/src/wire-handler.ts:668`
 - **否定搜尋**：git grep -n "attachTelemetry\|attachInvariants\|attachSession\b\|attachSession(\|attachSessionPersistence" -- 'apps/**/*.ts' ':!*.test.ts' （產品程式碼的接線點只有 cli.ts 的 runCli、serve.ts 的轉交與 wire-handler.ts 的 pumpFor）
 - **驗證意見**：拆成兩半判：順序那一半被推翻，漏轉交那一半比原文講的更重，所以嚴重度留 中。【順序那一半被推翻】原文把「遙測→不變量→參與者→落盤」寫成承重的順序，主要依據是 cli.ts:1447 的註解。但四個消費者接上時都會先處理既有事件：SessionRegistry.observe 對新訂閱者掃過既有日誌（session-registry.ts:175）；不變量 runner 建立時重播 log.events（invariants.ts:282）；live 遙測建構時 captureNow 補送（session-telemetry-coordinator.ts:81）；落盤協調器補寫還沒存的前綴（session-persistence.ts:107）。所以參與者排在不變量前面，安裝期寫的那一筆照樣會在重播時被檢查到，cli.ts:1447 的「反過來會漏檢」不成立。session-participants.test.ts:113 那條 runCli 測試證得了「有接」，證不了順序。
@@ -176,7 +183,7 @@
 - **dsh 的形狀**：dsh 明文「Every model-facing tool belongs to a preset, `ask_user_question` included」，web 組裝的全域工具層是空的。出廠 profile 裡 tool-ask-user 只出現在 web-app 的 standard、ptc、cordis 三個 preset，minimal 沒有；workspace-changes 是 web-app bundle 裡的一列。條件寫在 plugin 內，不在組裝根：workspace-changes 用 eligible() 判「子代理或沒有 cwd 就不記」，tool-str-replace-editor 用 `ctx.fs.sandboxMode === undefined ? undefined : ctx.get('sandboxPolicy')`。　`dsh:apps/cli/tests/web-agent-presets.e2e.ts:212`、`dsh:packages/bundle/web-app/presets/standard.patch.yml:132`、`dsh:packages/bundle/web-app/cordis.patch.yml:334`
 - **建議**：分三格做。(a) ask-user、submit-record 直接改成 cordis.yml 的列：它們有 default export，也沒有掛載條件；要不要設成受保護列另外決定。(b) sandbox-policy 把「沒有 fence 就不貢獻」搬進 plugin：services.use 改成 services.get，缺 sandboxPolicy 服務時什麼都不做，照 dsh tool-str-replace-editor 的寫法，這樣它也能是一列。(c) workspace-changes 的根改從 host 服務取（同 sandboxPolicy.rootDir）；「只有 serve」則照 dsh 把 web-app 疊在 base 上的形狀，給 serve 一層自己的出貨 overlay。host-services 留在程式碼，它本來就是組裝點交出協作者的那個條目。做完之後，cordis.yml 的「唯一來源」與 dump 那兩句才成立；在那之前，至少先把這兩句改成實情。
 - **偏離說明**：(a)(b) 表達得出來，不需要登記。(c) 的「只有 serve」如果不做 serve 專屬 overlay、繼續留在程式碼，就要登記偏離：我方是一份 cordis.yml 給兩個入口，dsh 是 web-app bundle 疊在 base 上。留在程式碼不是因為基礎建設表達不出來（serve 可以多疊一層），要照實寫成刻意選擇。README 的「patch 也關不掉」目前沒有對 dsh 的偏離登記，要嘛照 (a) 做，要嘛補登記。
-- **既有追蹤**：母題是 #46（開，地圖：照 dsh 建部署設定層；決議 09-19 第 12 題「組合是資料」）。README 把「開箱就有、patch 關不掉」寫成刻意，但沒有偏離登記；沒有專卡。
+- **既有追蹤**：專卡 #669（盤點後開）。盤點當時：母題是 #46（開，地圖：照 dsh 建部署設定層；決議 09-19 第 12 題「組合是資料」）。README 把「開箱就有、patch 關不掉」寫成刻意，但沒有偏離登記；沒有專卡。
 - **證據**：`apps/harness/src/cli.ts:881`、`apps/harness/src/cli.ts:882`、`apps/harness/src/cli.ts:886`、`apps/harness/src/cli.ts:887`、`packages/nexus-plugin-ask-user/src/index.ts:255`
 - **否定搜尋**：/usr/bin/grep -n "ask-user\|submit-record\|sandbox-policy\|workspace-changes\|host-services\|組裝點" apps/harness/cordis.yml （只命中 *-invariant 列與註解，沒有功能列）；（dsh）git grep -n "dsh-tool-ask-user" -- '*.yml' '*.yaml' '*.ts' '*.mts' '*.js' '*.json' | grep -v "package.json\|README\|pnpm-lock" （出廠 profile 只有 web-app 的 standard／ptc／cordis 三個 preset；其餘是測試快照、工具目錄產生器與 tsconfig 路徑）；git grep -n "export default" -- packages/nexus-plugin-ask-user/src/index.ts packages/nexus-plugin-submit-record/src/index.ts packages/nexus-plugin-sandbox-policy/src/index.ts packages/nexus-plugin-workspace-changes/src/i
 - **驗證意見**：逐條核實，都成立：cordis.yml:3 與 :17 的兩句宣稱，對程式碼掛的那幾顆不成立，因為 renderDefaultConfigDump 只渲染設定檔那幾層（plugin-config.ts:927）；ask-user 與 submit-record 已有 default export（:255、:281）；README.md:33 把「關不掉」寫成刻意，是 PR #503 加的，PR 內文沒有提到偏離登記；#454 的 triage（issue 內文）寫過「ask-user、submit-record、sandbox-policy 在 #459 之後才能進 YAML」，#459 關了之後沒有人回頭做；submit-record-mounts.test.ts:17 給的掛在程式碼的理由（要拿這次呼叫的 backend）在 #459 之後已不成立。dsh 核過：e2e :212 明文每個模型看得到的工具都屬於某個 preset；
@@ -189,7 +196,7 @@
 - **dsh 的形狀**：dsh 的 e2e「Boot the shipped Web composition, minus the rows that would bind a port」，並明寫「Everything that decides an agent's capabilities is the real thing, including both shipped presets」。測試走真的出廠組裝，只用 patch 關掉有副作用的列，不手抄組裝。　`dsh:apps/cli/tests/web-agent-presets.e2e.ts:58`、`dsh:apps/cli/tests/web-agent-presets.e2e.ts:60`
 - **建議**：在組裝根上開一個 in-process 的模型接縫：選填的 model 參數，或把模型當成 host 服務由組裝點提供。這樣 ScriptedChatModel 就能直接交給 createCliAgent（或 hcr-r2-04 的組裝模組），8 個手搭測試改走它，只替換模型與 workspace；需要「不掛某一顆」的測試改用 patch 停用那一列，照 dsh bootWeb 的形狀。HTTP 那條接縫保留給要量真實 ChatOpenAI 轉換的測試，那正是它現在的用途。hcr-r2-03 做完之後收益最大：協作者變成資料列，測試用 patch 就能改組合。
 - **偏離說明**：不需要偏離登記。in-process 的模型接縫在我方表達得出來。
-- **既有追蹤**：記憶「驗收要量交付物不要量相似品」是同一類教訓。沒有卡，SRP 盤點裡也沒有。
+- **既有追蹤**：專卡 #670（盤點後開）。盤點當時：記憶「驗收要量交付物不要量相似品」是同一類教訓。沒有卡，SRP 盤點裡也沒有。
 - **證據**：`apps/harness/src/cli.ts:708`、`apps/harness/src/sandbox-escalation.test.ts:119`、`apps/harness/src/subagent-sandbox.test.ts:150`、`apps/harness/src/submit-record-sandbox.test.ts:78`、`apps/harness/src/sandbox-escalation.test.ts:153`
 - **否定搜尋**：git grep -ln "createHostServicesPlugin" -- 'apps/harness/src/*.test.ts' （8 檔：deliverable-files、present-tool、sandbox-escalation、sandbox-mode、subagent-sandbox、submit-record-sandbox、submit-record-wire、workspace-changes）；for f in <上述 8 檔>; do grep -c 'ScriptedChatModel\|FakeChatModel\|fakeModel\|turns:' $f; grep -c 'createServer' $f; grep -c 'createCliAgent\|runCli(' $f; done （8 檔都用腳本模型、都沒起假端點；deliverable-files、sandbox-escalation、sandbox；for f in $(git grep -l "chat/completions\|createServer\|baseURL\|NEXUS_LIVE\|OPENAI_BASE_URL\|live: true\|--live" -- 'apps/harness/src/*.test.ts' 'apps/harness/src/**/*.test.ts'); do grep -c 'createCliAgent\|runCli(' $f;；git grep -n "照 \`cli.ts\` 的接法" -- 'apps/harness/src/*.test.ts'
 - **驗證意見**：獨立重數過：createHostServicesPlugin 出現在 8 個測試檔，全都用 ScriptedChatModel、都沒起假端點。其中 4 檔也呼叫 createCliAgent，但只量結構（例如 workspace-changes.test.ts:463／483 只看掛不掛、是不是同一份）。樹上還有一個原文沒引的現成實例：deliverable-files.test.ts:305-308 寫明，因為 CLI_SCRIPT 換不掉，serve 那條交付接線在產品路徑上觀察不到；實測刪掉 serve.ts 的 deliverableLimits 那一行，全套照樣綠，事後只能補結構性檢查。這就是「改一處會無聲弄壞另一處」的實例，所以 中 站得住。dsh_shape 屬實但不完整。
@@ -202,7 +209,7 @@
 - **dsh 的形狀**：dsh 每則訊息都帶 source，而 MessageSourceMap 是可宣告合併的聯集：每個生產者在自己的模組宣告自己的 kind，agent-instructions、repeat-tool-reminder、goal 各有一種。提醒器在 agent/pre-step 只看這一步新領走的訊息（claimed），其中有 source.kind === 'user' 才刪掉這個 agent 的鏈。goal-round-driver 的續行訊息帶 { kind: 'goal', … }，不清零。讀者端沒有任何白名單，新生產者不必改提醒器。　`dsh:packages/guard/repeat-tool-reminder/src/index.ts:237`、`dsh:packages/goal/goal-round-driver/src/index.ts:178`、`dsh:packages/core/agent-loop/src/agent.ts:277`
 - **建議**：照 dsh 把判準翻成「由生產者宣告來源、讀者只認 user」： 1. 圖內的合成 HumanMessage 在 additional_kwargs 帶一格通用來源，形狀對齊日誌 user/message 已有的 source，由生產者自己蓋。isSynthetic 改成「有來源且 kind 不是 user」；GOAL_WRAPUP_MARKER 的讀取拿掉，記號回到 plugin-goal 或併進通用來源。 2. goal 續行輪的頭蓋上 goal 來源，thread-pump、CLI 的 toAgentInvocation 路徑、conversation-replay 三處同批改，否則 resume 之後又分岔。 3. session-scan 改成只在 turn/start{kind:'message'} 清零，並把 session-scan.test.ts「續行輪次的頭也清零」那條絆索翻面。 自然落點是 #638（續行走送出佇列）或 #445 之前。
 - **偏離說明**：沒有可引的「表達不出來」。LangChain 的 HumanMessage 沒有 source 欄位，但 additional_kwargs 表達得出來，今天的兩顆記號就放在那裡。所以現狀是未登記的偏離：檔頭主張續行輪清零「是對的」，沒有引 dsh。
-- **既有追蹤**：未見追蹤（issue 標題、已合併 PR、.docs 與 docs 否定掃描見 negative_greps）。相關：#445（開著，serve 預設開續行，開了之後分岔進零設定路徑）、#638（開著，續行走送出佇列，修正的自然落點）、#147（已關，提醒器本身）。
+- **既有追蹤**：專卡 #662（盤點後開，擋住 #445）。盤點當時：未見追蹤（issue 標題、已合併 PR、.docs 與 docs 否定掃描見 negative_greps）。相關：#445（開著，serve 預設開續行，開了之後分岔進零設定路徑）、#638（開著，續行走送出佇列，修正的自然落點）、#147（已關，提醒器本身）。
 - **證據**：`packages/nexus-core/src/repeat-reminder.ts:326`、`packages/nexus-core/src/repeat-reminder.ts:377`、`packages/nexus-core/src/repeat-reminder.ts:111`、`packages/nexus-core/src/repeat-reminder.ts:319`、`packages/nexus-core/src/repeat-reminder.ts:108`
 - **否定搜尋**：python3 掃 scratchpad/issues.json 標題：/清零|提醒|source\.kind|GOAL_WRAPUP|isSynthetic|repeat/ → 只有 #147；python3 掃 scratchpad/prs-merged.json：/清零|提醒|source\.kind|GOAL_WRAPUP|isSynthetic|TokenAnchorBook|錨定|repeat/ → 只有 #157、#512、#513（提醒器本身與其設定）與 #589／#568（錨定，無關清零）；grep -rn -E "清零|source\.kind|isSynthetic|GOAL_WRAPUP|repeat-tool-reminder|提醒器" .docs/*.md docs/*.md → 只有功能盤點列，沒有追蹤續行輪清零的條目；git grep -n -E "new HumanMessage\(|HumanMessage\.fromJSON|role: ?'user'|type: ?'human'" -- 'packages/*/src/*.ts' 'apps/harness/src/*.ts' 'apps/harness/src/**/*.ts'（排除 .test.ts）→ 生產者只有 messages.ts、thread-pump.ts、conversat（另有 1 條）
 - **驗證意見**：我自己重推一次，結論成立，兩半分開判。 （一）白名單那半。isSynthetic 只認 REPEAT_REMINDER_MARKER 與 GOAL_WRAPUP_MARKER，白名單外的 HumanMessage 一律清零。plugin-agent-instructions 的第三顆記號不在白名單上。我讀了它的注入時刻：beforeAgent，每次 invoke 一次，而且只在有效串裡沒有基線時才注入，所以一定緊接在輪頭之後，今天無害。基座 deepagents@1.13.1 的合成 HumanMessage 也逐一查過：lc_evicted_to 是 beforeAgent 原地換掉最後一則（同 id），摘要訊息 lc_source:summarization 只出現在有效串、不進 state.messages，都不在輪中。未來有插件在輪中注入 HumanMessage 時，鏈會被無聲清零，沒有測試會紅。 finder 的 deviation_note 要更正。
@@ -314,6 +321,7 @@
 - **呼叫者必須知道、介面沒表達的事**：ask-user 要正確 fail-closed，必須同時滿足三件型別上看不到的事：組裝點用與核准閘門相同的兩格輸入另算一次 channel；經 host-services 提供；host-services 排在 ask-user 之前（因為它在 apply 當下就讀）。缺任何一件，ask-user 退到 { kind: 'human' }，也就是 fail-open。退路本身寫在 ask-user 的 JSDoc 裡，但改動會發生的地方（cli.ts 的組裝、host-services.ts）看不到它；
 - **dsh 的形狀**：dsh 的 tool-ask-user inject ['tools', 'userQuestions']，是硬相依；UserQuestionService.ask() 走 user-questions/request 的 waterfall，沒有提供者接手時預設回 UserQuestionError 'NO_PROVIDER'——沒人可答是拒絕，不是假設有人。　`dsh:packages/interaction/tool-ask-user/src/index.ts:14`、`dsh:packages/interaction/user-questions/src/index.ts:131`
 - **建議**：照 dsh 讓缺席成為 fail-closed：ask-user 改成 services.use（硬相依，缺件在載入時當場拋），或 get 不到時退到 { kind: 'no-channel' } 而不是 human；讀取挪進工具 handler（#459 的原設計），順序就不再承重。更根本的是 channel 只算一次：讓核准閘門也讀同一個服務，不要 fold 與 cli.ts 各算一次。
+- **追蹤**：ask-user 那一半已併進 #669，當作第 1 步（盤點後開卡時併入）。其餘幾點沒有卡。
 - **證據**：`packages/nexus-plugin-ask-user/src/index.ts:185`、`packages/nexus-plugin-ask-user/src/index.ts:178`、`packages/nexus-plugin-ask-user/src/index.ts:180`
 - **併入 hcr-r2-02 獨有的四點**（驗證者建議）：
   - `submit-record` 同樣在 apply 當下軟讀 backend，排錯時會無聲退回基座預設。
@@ -493,7 +501,7 @@
 ### 併入別條的重複（3）
 
 - hcr-r2-02　組裝點協作者的順序約束：偏離已登記，但失敗模式與讀取時刻都寫錯了 → plugins-interaction-r2-04
-- core-mw-01　root 與子代理的 middleware 清單各寫一份，沒有共同來源 → core-plugin-system-r2-N2
+- core-mw-01　root 與子代理的 middleware 清單各寫一份，沒有共同來源 → core-plugin-system-r2-N2（#664）
 - core-mw-03　基座檔案工具名在 core 四個模組各寫一份，名字的主人在 harness → plugins-capability-r2-04
 
 ## 模組深淺與刪除測試

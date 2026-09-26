@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { appendHumanTurn, emptyConversation, prependEntries, reduceAll } from './conversation.js';
+import { emptyConversation, prependEntries, reduceAll } from './conversation.js';
 import type { ConversationState } from './conversation.js';
+import { INBOX } from './inbox.js';
 import type { Event } from './protocol.js';
 import { changesDiffPath, changesSummaryPath, WORKSPACE_CHANGES } from './workspace-changes.js';
 
@@ -26,6 +27,10 @@ function frame(method: string, namespace: readonly string[], data: unknown): Eve
 }
 
 const running = () => frame('lifecycle', [], { event: 'running', graph_name: 'root' });
+
+/** 人說一句話：線上是 `inbox` 帶 `claimed` 的那一顆，接著才是 root 的 `running`。 */
+const said = (text: string): Event =>
+  frame('custom', [], { name: INBOX, payload: { items: [], claimed: { id: `q-${seq}`, text } } });
 const completed = () => frame('lifecycle', [], { event: 'completed', graph_name: 'root' });
 const changes = (payload: unknown) => frame('custom', [], { name: WORKSPACE_CHANGES, payload });
 
@@ -108,7 +113,8 @@ describe('workspace/changes', () => {
   });
 
   it('不動狀態、不當輪尾：輪尾照樣標在最後一則有文字的回覆上', () => {
-    const state = reduceAll(appendHumanTurn(emptyConversation(), '改檔。'), [
+    const state = reduceAll(emptyConversation(), [
+      said('改檔。'),
       running(),
       ...reply('r1', '先寫。'),
       ...tool('c1'),
