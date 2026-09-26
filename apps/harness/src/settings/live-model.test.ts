@@ -19,12 +19,10 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import type { ChatOpenAI } from '@langchain/openai';
-import { appendHumanTurn, emptyConversation, reduceConversation } from '@nexus/wire';
-import type { ConversationState } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCliAgent, runCli } from '../cli.js';
-import { serveClient } from '../fixtures.js';
+import { foldTurn, serveClient } from '../fixtures.js';
 import {
   DEFAULT_LIVE_BASE_URL,
   DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
@@ -368,12 +366,7 @@ describe('在設定裡覆寫會生效——產品路徑（#545）', () => {
     const events = await client.openEvents(threadId);
     const prompt = '說一句話。';
     await client.runStart(threadId, prompt);
-    let state: ConversationState = appendHumanTurn(emptyConversation(), prompt);
-    while (state.status === 'running') {
-      const next = await events.next();
-      if (next.done === true) break;
-      state = reduceConversation(state, next.value);
-    }
+    await foldTurn(events);
     await events.return?.(undefined);
 
     expectOverrideOnEveryRequest(fake.seen);
