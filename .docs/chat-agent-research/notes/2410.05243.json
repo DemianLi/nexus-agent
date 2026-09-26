@@ -21,7 +21,7 @@
       "OmniACT：照 DetACT 的提示詞與依任務相似度檢索 5 個 in-context 範例的做法，產生 PyAutoGUI 腳本；差別在 click、dragTo、moveTo 等函式的參數改成元素描述，不再是座標。腳本產生後，再用 grounder 把描述換成座標、填回腳本。",
       "ScreenSpot agent setting：給任務與截圖，要 planner 寫出目標元素的描述（單句、30 字以內，遇到相同元素時寫位置），只輸出描述本身。"
     ],
-    "grounder 的輸入輸出": "固定用同一個問句模板，詢問截圖中對應某段描述的元素像素座標。答案以自然語言字串自迴歸解碼，格式像 (1344, 1344)，是不正規化的絕對像素座標；訓練目標是元素 bbox 的中心點。評測時，座標落在目標 bbox 內就算對。",
+    "grounder 的輸入輸出": "固定用同一個問句模板，詢問截圖中對應某段描述的元素像素座標。答案以自然語言字串自迴歸解碼，格式像 (1344, 1344)，是不正規化的絕對像素座標；訓練目標是元素 bbox 的中心點。評估時，座標落在目標 bbox 內就算對。",
     "原始 UGround 模型（可照做的是這一套）": [
       "以 LLaVA-NeXT 7B 的架構自建，從頭照 LLaVA-1.5 的流程訓練。",
       "影像編碼器用 CLIP-ViT-L-14@224px，訓練時凍結；選 224px 是為了讓 AnyRes 切片更有彈性。",
@@ -56,12 +56,12 @@
       "UIBert（16K）直接使用；AITZ（8K）使用每一步動作的註記。",
       "合計約 10M 元素、1.3M 截圖，其中約 90% 來自 Web-Hybrid；訓練資料完全不含桌面 UI。"
     ],
-    "評測時的觀測與動作空間調整": [
+    "評估時的觀測與動作空間調整": [
       "Multimodal-Mind2Web：全頁截圖可能高達 1280×10000，因此切成 1280×1000 的區塊；agent 判斷沒有有效動作或主動選擇捲動時，就換到下一塊。約 80% 的目標元素落在第一塊。",
       "Mind2Web-Live：動作空間加入 Scroll_Up／Scroll_Down；移除 Fill_Form 與 Fill_Search（原本靠額外的判斷模型讀 HTML，決定要不要按 Enter），改成由 agent 自行組合 Type 與 Press_Enter；停用走 API 的 Select，選項一律用點擊處理。",
       "AndroidWorld：以 M3A agent 為底，在規劃與反思兩個階段都拿掉 SoM 圖與 a11y 元素清單，並把以元素為單位的動作改成像素動作。ReAct 式推理與 self-reflection 都是 M3A 原本就有的設計。",
       "AndroidControl：評分時，把 grounder 輸出的座標對應到包含該座標的最小可見元素。",
-      "OmniACT：作者修正了公開評測腳本裡的基本錯誤（檔案路徑錯誤、距離計算錯誤）。"
+      "OmniACT：作者修正了公開評估腳本裡的基本錯誤（檔案路徑錯誤、距離計算錯誤）。"
     ]
   },
   "assumptions": [
@@ -69,7 +69,7 @@
     "planner 能寫出足以唯一定位目標元素的自然語言描述，而且 planning 與 grounding 可以乾淨地拆成兩段，中間只靠一串描述文字溝通。",
     "各平台的 GUI 設計足夠相似，只用 web 合成資料訓練的 grounder，可以泛化到桌面與行動 UI。",
     "HTML 屬性（alt、aria-label、title 等）雖然不完整，大致仍可信，可以當 RE 的來源；MLLM 描述裁切後的元素小圖時，幻覺夠少。",
-    "點在元素 bbox 的中心就是正確的操作點；評測時，點落在 bbox 內就等於操作了該元素。",
+    "點在元素 bbox 的中心就是正確的操作點；評估時，點落在 bbox 內就等於操作了該元素。",
     "目標螢幕的解析度落在訓練範圍內，或縮放到範圍內之後，小元素仍然看得清楚。"
   ],
   "evaluation": {
@@ -78,8 +78,8 @@
       "Multimodal-Mind2Web（測試集 1,013 個任務、100 多個網站；Cross-Task／Cross-Website／Cross-Domain 三個 split）",
       "AndroidControl（測試集隨機 500 步；high-level 與 low-level 兩種設定）",
       "OmniACT（9,802 個任務、38 個桌面應用程式與 27 個網站，輸出 PyAutoGUI 腳本）",
-      "Mind2Web-Live（WebCanvas 的測試集，在真實網站上線上評測）",
-      "AndroidWorld（116 個任務、20 個 App，在 Android 模擬器上線上評測，依裝置最終狀態判定）"
+      "Mind2Web-Live（WebCanvas 的測試集，在真實網站上線上評估）",
+      "AndroidWorld（116 個任務、20 個 App，在 Android 模擬器上線上評估，依裝置最終狀態判定）"
     ],
     "metrics": [
       "grounding accuracy（預測的點落在目標 bbox 內）",
@@ -114,13 +114,13 @@
       "anchor_idx": 1
     },
     {
-      "claim": "離線 agent 評測中，只看截圖的 SeeAct-V 加 UGround，在網頁、行動、桌面三個 benchmark 都贏過使用額外文字輸入的 SOTA 方法，也一致贏過換成 SeeClick 當 grounder 的版本。",
+      "claim": "離線 agent 評估中，只看截圖的 SeeAct-V 加 UGround，在網頁、行動、桌面三個 benchmark 都贏過使用額外文字輸入的 SOTA 方法，也一致贏過換成 SeeClick 當 grounder 的版本。",
       "numbers": "Multimodal-Mind2Web 平均 element accuracy：GPT-4o 配 UGround 46.8、GPT-4 配 UGround 44.8，對上 GPT-4 Choice（image+text）42.3、SoM 25.6（SoM 只在每個 split 30 個任務的子集上跑）、GPT-4o 配 SeeClick 32.9；V1-7B 49.1。AndroidControl step accuracy（high／low）：GPT-4o 配 UGround 48.4／62.4，對上 text-only GPT-4 Choice 42.1／55.0；V1-2B 50.0／65.0、V1-7B 49.8／66.2。OmniACT action score：GPT-4o 配 UGround 32.8，對上 DetACT（image+text）17.0、DetACT（text）11.6、GPT-4o 配 SeeClick 29.6；V1-7B 34.0。",
       "section": "§3.2, Table 4, Table 5, Table 6",
       "anchor_idx": 2
     },
     {
-      "claim": "線上 agent 評測中，SeeAct-V 加 UGround 在 AndroidWorld 上與 text-only 的 M3A 打平或略高，並明顯高於 SoM 版 M3A；在 Mind2Web-Live 上 completion rate 較高，task success rate 則有高有低。",
+      "claim": "線上 agent 評估中，SeeAct-V 加 UGround 在 AndroidWorld 上與 text-only 的 M3A 打平或略高，並明顯高於 SoM 版 M3A；在 Mind2Web-Live 上 completion rate 較高，task success rate 則有高有低。",
       "numbers": "AndroidWorld SR：GPT-4 配 UGround 31.0、GPT-4o 配 UGround 32.8、GPT-4o 配 V1-7B 44.0，對上 M3A text（GPT-4）30.6、SoM 25.4。Mind2Web-Live CR／SR：GPT-4 配 UGround 50.7／23.1、GPT-4o 配 UGround 50.8／19.2，對上 text-only GPT-4 44.3／21.1、GPT-4o 47.6／22.1。",
       "section": "§3.3, Table 7, Table 8",
       "anchor_idx": 3
@@ -160,19 +160,19 @@
     "planning error 仍是主要失敗來源，grounding 以外的瓶頸在 planner 本身（§3.4）。"
   ],
   "limitations_observed": [
-    "「線上評測打平或更好」的說法，不符合自己的 Table 7：在 Mind2Web-Live 上，GPT-4o 配 UGround 的 SR 是 19.2，低於 text-only GPT-4o 的 22.1。只有 CR 較高（50.8 vs 47.6），代表完成的 key node 較多、做完整個任務的比例卻較低。純視覺觀測在這個 benchmark 上沒有全面勝出。",
+    "「線上評估打平或更好」的說法，不符合自己的 Table 7：在 Mind2Web-Live 上，GPT-4o 配 UGround 的 SR 是 19.2，低於 text-only GPT-4o 的 22.1。只有 CR 較高（50.8 vs 47.6），代表完成的 key node 較多、做完整個任務的比例卻較低。純視覺觀測在這個 benchmark 上沒有全面勝出。",
     "AndroidWorld 的「打平」幾乎沒有統計意義：GPT-4 配 UGround 31.0 對上 text-only 30.6，總共 116 題，差 0.4 分等於不到一題，沒有重複執行，也沒有信賴區間。32.8 與 44.0 用的是 GPT-4o planner，基線用的是 GPT-4-turbo，planner 本身就是混淆變因。",
     "基線數字都直接抄自原論文，沒有重跑，而且使用的 GPT endpoint 不同（附錄 G.1）：本文用 gpt-4-turbo-2024-04-09 與 gpt-4o-2024-05-13，Multimodal-Mind2Web 的基線用 gpt-4-1106-vision-preview，OmniACT 的基線用 gpt-4-0613，Mind2Web-Live 的基線用 gpt-4-0125-preview。Multimodal-Mind2Web 的 SoM 基線只在每個 split 30 個任務上跑，和 1,013 個任務的結果不能直接比。",
-    "OmniACT 的比較不對稱：作者修正了公開評測腳本的路徑與距離計算錯誤，基線 DetACT 的 17.0 卻是沿用原論文、以舊腳本算出的數字。32.8 對 17.0 的差距裡，有多少來自腳本修正，無從分辨。",
+    "OmniACT 的比較不對稱：作者修正了公開評估腳本的路徑與距離計算錯誤，基線 DetACT 的 17.0 卻是沿用原論文、以舊腳本算出的數字。32.8 對 17.0 的差距裡，有多少來自腳本修正，無從分辨。",
     "AndroidControl 的 grounder 並非 zero-shot：UGround 的訓練資料包含 AndroidControl 訓練集的 47K 筆標註（Table 1），測試卻是同一資料集的 test split，對照的 M3A text-only 則是 zero-shot。Table 5 的領先有一部分可能來自同分布的訓練資料。",
-    "vision-only 只成立在 agent 端，評測端不是：AndroidControl 評分時，要把座標對應到包含它的最小可見元素（附錄 G.3），靠的仍是 UI 結構。這一步等於給了點擊位置容錯，和真實環境直接點像素的行為不完全相同。",
+    "vision-only 只成立在 agent 端，評估端不是：AndroidControl 評分時，要把座標對應到包含它的最小可見元素（附錄 G.3），靠的仍是 UI 結構。這一步等於給了點擊位置容錯，和真實環境直接點像素的行為不完全相同。",
     "引言用延遲與 token 成本當動機（HTML 最多多 10 倍 token、取得 a11y tree 很慢），全文卻沒有量任何端到端延遲或成本。SeeAct-V 每一步要呼叫 planner 與 grounder 兩次模型，grounder 最多還要吃 36 片影像、16K context。成本的論點沒有實證。",
     "grounder 的進步到 agent 層級就被 planner 卡住：AndroidControl high-level 設定下，V1-2B 是 50.0、V1-7B 是 49.8，更大的 grounder 沒有帶來提升；ScreenSpot agent setting 下，V1-7B 84.0 對 V1-72B 84.5 也幾乎持平，而 standard setting 仍有 86.3 對 89.4 的差距。這和 §3.4「planning error 是主因」一致，也表示觀測層的準確度到了某個程度後，瓶頸就換成 planner 的理解。",
     "「視覺渲染資訊完整」的前提被自己的調整推翻：Multimodal-Mind2Web 必須把全頁截圖切塊、模擬捲動；Mind2Web-Live 要另外加入捲動動作，下拉選單也無法只靠 Click 操作。disabled 狀態、下拉選單的選項、捲出畫面的內容，截圖本來就看不到，文字表徵反而有。",
     "沒有做資料汙染檢查：Web-Hybrid 取自 Common Crawl CC-MAIN-2023-50，ScreenSpot-Web 與 Mind2Web 系列使用的網站可能與之重疊，作者沒有報告任何去重或比對。",
     "錯誤分析規模小、也不嚴謹：每個 split 只抽 60 個失敗案例，由人工分類，沒有標註者一致性，比例只畫在圖上。正文把錯誤分布誤寫成 Figure 5（實際是 Figure 4），§3.2 也把 Table 5 誤寫成 Table 6。",
     "消融只跑一次、沒有變異數，部分效果很小：拿掉位置 RE，agent setting 從 76.9 降到 76.0，只差 0.9；Table 9 的 Mobile Text 上，只用其他資料（92.3）反而高於只用 Web-Hybrid（89.0）。「只用 web 就能泛化」在行動端的文字元素上並不成立。",
-    "每一步只看單張截圖、單步定位，沒有處理動畫、彈出視窗、需要跨畫面記憶的狀態。這些觀測問題是線上任務的常見失敗點，本文的評測沒有拆出來看。"
+    "每一步只看單張截圖、單步定位，沒有處理動畫、彈出視窗、需要跨畫面記憶的狀態。這些觀測問題是線上任務的常見失敗點，本文的評估沒有拆出來看。"
   ],
   "framework_role": "屬於 T3 的 (a) 感知／觀測空間。這篇回答的是：GUI 環境的回饋該用哪種表徵進入 agent。它把觀測空間縮到只剩截圖，並在六個 benchmark 上做跨平台的「截圖 only」對「HTML／a11y tree／SoM」對照，是目前涵蓋面最廣的觀測模態實證之一。它同時提出一種 ACI 切法：planner 的輸出介面是自然語言的元素描述，再由專用的 grounding 模組轉成座標，把精確定位從主模型卸下。對框架可以借用三點：（1）觀測模態選擇的實證基準：截圖單獨使用時，大致能與文字表徵打平，但線上的 SR 並未全面勝出，所以把 a11y tree 整個拿掉不是沒有代價；（2）感知與決策解耦的介面契約：描述字串要短（30 字內），而且要能唯一定位，這個契約可以類比為工具回傳結果的結構化規格；（3）失敗歸因的兩分法（planning error 對 grounding error），可以當作觀測層事後分析的分類軸。本文不涉及 (b) 可觀測性／監控：錯誤分析是事後的人工分類，不是執行期的偵測。對以文字對話為主的 agent，直接用得上的是介面設計原則；UGround 模型本身，只有在 agent 具備 GUI 操作工具時才派得上用場。",
   "edges": [],
@@ -183,7 +183,7 @@
     "assessment": "唯一可查證的採納證據，是共同作者公司 Orby 的官方新聞稿，宣稱 UGround 已整合進其 ActIO 產品；那是利害關係人的自我宣稱，日期也和論文時間線對不上，未見獨立第三方的部署證據。Simular 的 Agent-S 官方 README 查過，grounding 模型只列 UI-TARS，沒有 UGround，所以不計入。後續論文拿 UGround 當基準或 grounding 模組，屬於學術影響力，不算採納。HuggingFace 上的開源權重代表可取得，不代表有人部署。"
   },
   "reproducibility": {
-    "code": "https://github.com/OSU-NLP-Group/UGround（MIT 授權；README 列有訓練與推論程式碼，以及 ScreenSpot、Multimodal-Mind2Web、OmniACT、AndroidControl 的離線評測程式碼；線上評測只連到外部 repo）",
+    "code": "https://github.com/OSU-NLP-Group/UGround（MIT 授權；README 列有訓練與推論程式碼，以及 ScreenSpot、Multimodal-Mind2Web、OmniACT、AndroidControl 的離線評估程式碼；線上評估只連到外部 repo）",
     "data": "README 說明 UGround-V1 系列（Initial／Qwen2-VL）的訓練資料已發佈在 HuggingFace 的 osunlp/UGround-V1-Data，另有 bounding-box 版本；完整的 10M 元素是否全部釋出，README 沒有明說。模型權重：osunlp/UGround-V1-2B、7B、72B，另有最初版本。論文本身寫明資料只供研究、非商業使用。"
   },
   "value_verdict": "high",

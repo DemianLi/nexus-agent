@@ -158,7 +158,7 @@
   "edges": [],
   "adoption": {
     "evidence": [],
-    "assessment": "未見證據。論文本身沒有提到任何部署或產品。要特別說明：本次 session 的 WebSearch 配額已用盡（200/200），沒有做任何網路查證，這裡的結論是「沒能查」，不是「查了沒有」。實際檢查過的只有論文本文，以及作者的 FairEval repo（https://github.com/i-Eval/FairEval，147 顆星、沒有 LICENSE），後者屬於研究釋出，不算採納。業界評測工具常見的「交換順序再評一次」也不能直接算到本篇頭上，因為同名單的 MT-Bench（2306.05685）也處理位置偏差、也採用交換順序，無法從做法本身判斷出處。Semantic Scholar 顯示本篇收錄於 ACL，有 1304 次引用、78 次 influential，屬於學術影響力，不計入採納。"
+    "assessment": "未見證據。論文本身沒有提到任何部署或產品。要特別說明：本次 session 的 WebSearch 配額已用盡（200/200），沒有做任何網路查證，這裡的結論是「沒能查」，不是「查了沒有」。實際檢查過的只有論文本文，以及作者的 FairEval repo（https://github.com/i-Eval/FairEval，147 顆星、沒有 LICENSE），後者屬於研究釋出，不算採納。業界評估工具常見的「交換順序再評一次」也不能直接算到本篇頭上，因為同名單的 MT-Bench（2306.05685）也處理位置偏差、也採用交換順序，無法從做法本身判斷出處。Semantic Scholar 顯示本篇收錄於 ACL，有 1304 次引用、78 次 influential，屬於學術影響力，不計入採納。"
   },
   "reproducibility": {
     "code": "https://github.com/i-Eval/FairEval",

@@ -123,7 +123,7 @@
     "「第一個系統化標註的失敗軌跡資料集」這個宣稱過寬：Who&When（2505.00212，2025 年 5 月）已公開逐步標註「哪個 agent、哪一步」的失敗歸因資料，MAST（2503.13657）也有標註過的多 agent 軌跡；本文的「第一」只在單 agent＋模組層級上成立，而且沒有在 Who&When 上做比較，看不出方法能否推廣到多 agent。",
     "Stage 2 提示詞寫死了「第 1–3 步通常不要標」這種啟發式，可能正是在迎合人工標註分布（失敗集中在 6–15 步），會讓真正在開頭就錯的任務（例如附錄 Figure 22 的 WebShop 第 1 步 constraint ignorance）被系統性低估；論文沒有消融這條規則。"
   ],
-  "framework_role": "T4 子領域「軌跡分析、失敗分類與歸因」的單 agent 代表作，和多 agent 的 Who&When、MAST 互補。對框架有三樣可直接拿來用的東西：(1) 一套模組化的失敗標籤集（5 模組 17 類），可當 T4 軌跡異常事件的類型欄位；(2) 步驟×模組層級、附根因與回饋的標註資料集，可當我們 T4 歸因器的離線評測集；(3) 兩段式 LLM 偵錯器的輸出格式（critical_step、critical_module、error_type、root_cause、evidence、correction_guidance、cascading_effects），正好是 T4 交給 T5 的異常事件載荷。從關鍵步帶回饋重跑的部分落在 T5，屬於事後（任務已判定失敗後）的修正，不是執行中途的線上偵測。",
+  "framework_role": "T4 子領域「軌跡分析、失敗分類與歸因」的單 agent 代表作，和多 agent 的 Who&When、MAST 互補。對框架有三樣可直接拿來用的東西：(1) 一套模組化的失敗標籤集（5 模組 17 類），可當 T4 軌跡異常事件的類型欄位；(2) 步驟×模組層級、附根因與回饋的標註資料集，可當我們 T4 歸因器的離線評估集；(3) 兩段式 LLM 偵錯器的輸出格式（critical_step、critical_module、error_type、root_cause、evidence、correction_guidance、cascading_effects），正好是 T4 交給 T5 的異常事件載荷。從關鍵步帶回饋重跑的部分落在 T5，屬於事後（任務已判定失敗後）的修正，不是執行中途的線上偵測。",
   "edges": [
     {
       "edge": "E3",

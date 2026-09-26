@@ -122,7 +122,7 @@
     "【「127 個系統」的多樣性被高估】其中 126 個是同一個產生器（CaptainAgent 加 GPT-4o）為每題各產生一次的團隊，每個系統只貢獻一條 log，最長 10 步；剩下 1 個是 Magentic-One。題目全部來自 GAIA 與 AssistantBench 的資訊搜尋題，沒有以軟體開發為目標的任務，也沒有多輪的人機對話。hand-crafted 的標籤高度集中：WebSurfer 33、Orchestrator 18、Assistant 4、FileSurfer 3。",
     "【benchmark 沒有版本標記，論文當時有標籤超出 log 範圍】論文 v3（2025-06-02）之後，hand-crafted 的標籤又改過：34.json 從步驟 8 改成 4（該 log 只有 5 則），53.json 從 51 改成 24（只有 28 則），54.json 從 24 改成 15（只有 19 則）。也就是說，論文實驗時有 3/58 條的步驟標籤指到 log 結尾之後，任何方法都不可能在 step-level 命中。另外 2025-11 還把兩筆 Websurfer 改成 WebSurfer，大小寫不同，在區分大小寫的評分腳本裡，除非模型剛好也寫成 Websurfer，否則算不中。這些修改都沒有打 tag，後續論文拿 Who&When 比較時，可能用的是不同版本的標籤。"
   ],
-  "framework_role": "T4 子領域「失敗分類與歸因」的奠基工作。它把 agent 的一次執行當成可標註的資料物件：以 history 串列（role 或 name 加 content，0-based 步驟索引）為軌跡格式，標籤是 mistake_agent、mistake_step、mistake_reason，並用反事實定義什麼叫『關鍵錯誤步驟』。它也提供 who 與 when 兩個層級的準確率指標，以及三個可以直接套用的 LLM judge 基線。對框架來說，它回答的是「T4 在軌跡上指出哪一步、哪個 agent 出錯」，等於 E3 偵測端的一個候選實作與評測基準。不過它只處理已知失敗的軌跡，也沒有量誤報率，要當執行期的異常觸發器，還需要補上成功軌跡上的誤報率量測。它也是 T7 評估結果與系統改進之間的橋梁：作者主張評估要接到歸因，資料集層級的統計（Fig 6）比單一實例的歸因可靠。",
+  "framework_role": "T4 子領域「失敗分類與歸因」的奠基工作。它把 agent 的一次執行當成可標註的資料物件：以 history 串列（role 或 name 加 content，0-based 步驟索引）為軌跡格式，標籤是 mistake_agent、mistake_step、mistake_reason，並用反事實定義什麼叫『關鍵錯誤步驟』。它也提供 who 與 when 兩個層級的準確率指標，以及三個可以直接套用的 LLM judge 基線。對框架來說，它回答的是「T4 在軌跡上指出哪一步、哪個 agent 出錯」，等於 E3 偵測端的一個候選實作與評估基準。不過它只處理已知失敗的軌跡，也沒有量誤報率，要當執行期的異常觸發器，還需要補上成功軌跡上的誤報率量測。它也是 T7 評估結果與系統改進之間的橋梁：作者主張評估要接到歸因，資料集層級的統計（Fig 6）比單一實例的歸因可靠。",
   "edges": [
     {
       "edge": "E3",

@@ -167,7 +167,7 @@
       "Supermemory 研究頁（評估報告標示 2026 年 5 月）以 LongMemEval-S 的 500 題、六類題型報告 Recall@20（含彙總）97%。來源：https://supermemory.ai/research",
       "官方 repo 以 MIT 授權釋出程式碼與評估腳本（src/evaluation/evaluate_qa.py 用 gpt-4o 當 judge），資料放在 HuggingFace xiaowu0162/longmemeval-cleaned；README 記載 2025/02 被 ICLR 2025 接受、2025/09 資料清理、2026/05 釋出 LongMemEval-V2。來源：https://github.com/xiaowu0162/LongMemEval"
     ],
-    "assessment": "有可查證的商用採納：至少三家商用 agent 記憶產品（Zep、Mastra、Supermemory）在官方部落格或研究頁以 LongMemEval（S 設定）作為對外評估基準，Mastra 並直接沿用論文的 judge 協定；不過這些都是廠商自報、資料版本與設定不一，不是獨立評測。論文提出的記憶設計（事實擴充 key、時間感知查詢擴充）則未見產品採用的證據。"
+    "assessment": "有可查證的商用採納：至少三家商用 agent 記憶產品（Zep、Mastra、Supermemory）在官方部落格或研究頁以 LongMemEval（S 設定）作為對外評估基準，Mastra 並直接沿用論文的 judge 協定；不過這些都是廠商自報、資料版本與設定不一，不是獨立評估。論文提出的記憶設計（事實擴充 key、時間感知查詢擴充）則未見產品採用的證據。"
   },
   "reproducibility": {
     "code": "https://github.com/xiaowu0162/LongMemEval",

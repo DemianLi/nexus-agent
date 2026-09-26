@@ -36,7 +36,7 @@
     "Reflection tuning": "對模型自己跑出的線上軌跡，標註者找出出錯的第 τ 步，標上正確的 t*_τ 與 a*_τ，構成 error correction 配對：T- 以錯誤步結尾，T+ 以修正步結尾。接著讓標註者以「錯誤已經發生」為前提，續標第 τ+1 步：t*_{τ+1} 要承認前一步的錯誤並補救，a*_{τ+1} 要把進度拉回正軌，構成 post-reflection 配對。論文的例子是：本來要把網頁加入書籤，卻誤點了關閉，下一步就該重開剛關掉的網頁。SFT 只用 T+，而且只對修正步（t*_τ, a*_τ）與（t*_{τ+1}, a*_{τ+1}）計算 loss，錯誤步不進 loss。",
     "Agent DPO": "狀態 s_τ 是 instruction 加上到第 τ-1 步為止的 (o, t, a) 歷史。偏好對為修正動作 a'_τ 優於原始錯誤動作 a_τ。套用標準 DPO loss，以 SFT 模型 π_SFT 為 reference，β 為超參數，但論文沒給 β 值。",
     "三階段訓練（§4.6）": "骨幹為 Qwen2-VL，做 2B、7B、72B 三個尺寸，總資料約 50B token。(1) 持續預訓練：用 reflection 以外的全部資料，learning rate 固定。(2) Annealing：挑感知、grounding、動作軌跡、reflection 資料中的高品質子集，得到 UI-TARS-SFT。(3) DPO：用線上自舉資料中標註的 reflective pairs，得到 UI-TARS-DPO。只有 OSWorld 同時報 SFT 與 DPO 兩版，其餘基準只報 SFT。",
-    "推論與評測設定": "N=5。System-1（不產生 thought）與 System-2（先產生 thought）是同一個模型，推論時靠提示詞切換。OSWorld 用 screenshot-only 模式，步數上限 15 或 50，分數取 3 次平均；模型呼叫 CallUser 或最後沒輸出 Finish 的軌跡，一律視為判定該題 infeasible。System-1 對 System-2 的比較用 Best-of-N（N=1、16、64），AndroidControl 與 GUI Odyssey 各隨機抽 1,000 筆。",
+    "推論與評估設定": "N=5。System-1（不產生 thought）與 System-2（先產生 thought）是同一個模型，推論時靠提示詞切換。OSWorld 用 screenshot-only 模式，步數上限 15 或 50，分數取 3 次平均；模型呼叫 CallUser 或最後沒輸出 Finish 的軌跡，一律視為判定該題 infeasible。System-1 對 System-2 的比較用 Best-of-N（N=1、16、64），AndroidControl 與 GUI Odyssey 各隨機抽 1,000 筆。",
     "論文未給、重做時要自己決定": "各階段的 learning rate、batch、步數與資料配比；DPO 的 β；bootstrapping 的 max-try；線上自舉的輪數與虛擬機數量；VLM 評分用哪個模型、門檻多少、人工複核的比例；ActRe 與推論時的完整提示詞；thought 與 action 輸出的確切文字格式；輸入截圖的解析度與影像 token 數；自家截圖、grounding、軌跡資料的總量。附錄 A、B 只有案例圖與資料範例圖的圖說，沒有提示詞、超參數或指標定義。"
   },
   "assumptions": [
@@ -109,7 +109,7 @@
       "anchor_idx": 4
     },
     {
-      "claim": "DPO（納入錯誤動作當負樣本）提升了 OSWorld 分數，但 7B 的增益很小；DPO 只在 OSWorld 上評測",
+      "claim": "DPO（納入錯誤動作當負樣本）提升了 OSWorld 分數，但 7B 的增益很小；DPO 只在 OSWorld 上評估",
       "numbers": "15 步設定下，7B 從 SFT 17.7 到 DPO 18.7（+1.0），72B 從 18.8 到 22.7（+3.9）。AndroidWorld 與其他基準都沒有報 DPO 版。",
       "section": "§5.4、Table 9",
       "anchor_idx": 5
@@ -142,10 +142,10 @@
     "觀測壓縮最關鍵的超參數沒有報：作者提到在 ScreenSpot-Pro 上提高輸入解析度會顯著提升分數，但既沒給數字，也沒說主實驗用的截圖解析度與影像 token 數，別人無法判斷效能與成本的取捨。",
     "OSWorld 的計分規則可能灌分。只要模型呼叫 CallUser 或結尾沒輸出 Finish，都當成判定 infeasible，而 OSWorld 本來就有 infeasible 題，所以沒做完的軌跡可能在這些題上拿分。論文沒有把 feasible 與 infeasible 題分開報，也沒給 3 次平均的變異數。7B 的 DPO 增益只有 +1.0 分，369 題中約 3 到 4 題，憑這個數字寫成「DPO significantly improves」證據偏弱。",
     "摘要與正文的 SOTA 敘述有選擇性。ScreenSpot v1 上，72B 的 88.4 低於 Aguvis-72B 的 89.2。WebSRC 上，72B 的 89.3 低於自家 7B 的 93.6，也低於 Qwen-VL-Max 的 91.1。正文說在 AndroidControl 與 GUI Odyssey 都「絕對提升 25」，實際只有 GUI Odyssey 成立（88.6 對 62.0）；AndroidControl-High 只多 3.5，Low 只多 6.1。",
-    "比較條件不對等。UI-TARS 在 Mind2Web、AndroidControl、GUI Odyssey 的訓練集上訓練過，§5.5 自己也稱之為 in-domain；GPT-4o 與 Claude 則是零樣本。Claude 在 mobile 的 grounding 欄全列 0.0，比較像評測設定不接受它的輸出格式，不像能力真的是零。用這組數字推出「Claude 的 GUI 能力沒有遷移到 mobile」並不穩健。",
+    "比較條件不對等。UI-TARS 在 Mind2Web、AndroidControl、GUI Odyssey 的訓練集上訓練過，§5.5 自己也稱之為 in-domain；GPT-4o 與 Claude 則是零樣本。Claude 在 mobile 的 grounding 欄全列 0.0，比較像評估設定不接受它的輸出格式，不像能力真的是零。用這組數字推出「Claude 的 GUI 能力沒有遷移到 mobile」並不穩健。",
     "把 AndroidWorld 稱為 OOD，說法偏強。訓練資料包含 AITW、AITZ、AndroidControl、GUI-Odyssey、AMEX 等大量 Android 軌跡，App 與操作分佈高度重疊，只是沒有 AndroidWorld 本身的訓練資料。以此說明 System-2 在 OOD 較好，外推要打折。",
     "System-1 與 System-2 其實是同一個混合訓練的模型（有 thought 與無 thought 的軌跡都訓練過），推論時只用提示詞切換，不是分別訓練的兩個模型。結果只有圖，沒有數值與信賴區間，所以「thought 有害或有益」的結論會混入提示詞切換本身的效應。",
-    "評測集與訓練指令的重疊沒有說明。附錄 A 的 VS Code 安裝 autoDocstring 案例，指令與 OSWorld 官方 repo（xlang-ai/OSWorld 的 evaluation_examples/examples/vs_code）裡的題目逐字相同，我已查證，可見那是評測題的執行示例。線上自舉則在數百台虛擬 PC 上，用人工與模型生成的指令反覆訓練，論文沒說這批指令有沒有排除 OSWorld 題目或近似題，無法排除資料洩漏。",
+    "評估集與訓練指令的重疊沒有說明。附錄 A 的 VS Code 安裝 autoDocstring 案例，指令與 OSWorld 官方 repo（xlang-ai/OSWorld 的 evaluation_examples/examples/vs_code）裡的題目逐字相同，我已查證，可見那是評估題的執行示例。線上自舉則在數百台虛擬 PC 上，用人工與模型生成的指令反覆訓練，論文沒說這批指令有沒有排除 OSWorld 題目或近似題，無法排除資料洩漏。",
     "文件本身有幾處錯誤。正文說統一動作空間在 Table 2，實際在 Table 1；說 AndroidControl 與 GUI Odyssey 的結果在 Table 7，實際在 Table 8；Table 9 圖說寫「步數上限 15」，表內卻有 50 步的結果。",
     "論文沒碰 T3(b) 的可觀測性。軌跡過濾（規則、VLM 評分、人工標錯誤步）只用在訓練資料，執行期沒有任何監控、異常偵測或安全監控機制。CallUser 是模型自己決定求助，也不是外部監控。整合方的官方文件另有旁證：Midscene.js 舊版選模型文件（v0.midscenejs.com/choose-a-model）提醒，UI-TARS 的 assertion 表現弱、action planning 不穩定，每次執行可能走不同路徑，這代表部署端仍需要外部的觀測與驗證。"
   ],
@@ -167,7 +167,7 @@
   },
   "reproducibility": {
     "code": "https://github.com/bytedance/UI-TARS（推論、部署與 OSWorld 推論腳本）；權重見 Hugging Face 的 ByteDance-Seed 組織，例如 https://huggingface.co/ByteDance-Seed/UI-TARS-72B-DPO",
-    "data": "評測基準全部公開。訓練資料沒有公開，包括自家截圖與元素 metadata、五類感知合成資料、自家標註軌跡、約 6M 篇 GUI 教學文、thought 標註、線上自舉軌跡、reflection 配對。論文也沒給提示詞、learning rate、DPO β、資料量與配比等超參數，附錄只有圖。權重可以直接下載使用，但訓練流程無法照論文重現。"
+    "data": "評估基準全部公開。訓練資料沒有公開，包括自家截圖與元素 metadata、五類感知合成資料、自家標註軌跡、約 6M 篇 GUI 教學文、thought 標註、線上自舉軌跡、reflection 配對。論文也沒給提示詞、learning rate、DPO β、資料量與配比等超參數，附錄只有圖。權重可以直接下載使用，但訓練流程無法照論文重現。"
   },
   "value_verdict": "high",
   "verdict_reason": "它是 T3(a)「純截圖觀測、端到端 GUI agent」路線被廣泛採用的開源代表作，觀測介面、歷史截斷、state transition 感知訓練與動作空間的設計可以直接參考，後續版本也有官方工具與商用託管。但它缺少受控的觀測模態消融，「純視覺優於結構化觀測」要搭配其他論文一起判讀。",

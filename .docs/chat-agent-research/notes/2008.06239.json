@@ -5,7 +5,7 @@
   "subarea": "LLM 時代的意圖理解、zero-shot 意圖與意圖路由",
   "read_level": "full",
   "source": "arxiv-html",
-  "one_liner": "用 GPT-2（117M／762M／1.54B）不更新任何參數、只在輸入前綴塞入少量範例（priming／in-context learning）的方式，對任務導向對話的四個模組 —— NLU（意圖分類＋slot filling）、DST、對話行為偵測與 NLG —— 做可行性評測，並與 fine-tune 基線比較。",
+  "one_liner": "用 GPT-2（117M／762M／1.54B）不更新任何參數、只在輸入前綴塞入少量範例（priming／in-context learning）的方式，對任務導向對話的四個模組 —— NLU（意圖分類＋slot filling）、DST、對話行為偵測與 NLG —— 做可行性評估，並與 fine-tune 基線比較。",
   "problem": "任務導向對話系統的 NLU、DST、對話策略、NLG 各自需要標註資料，其中對話策略標註甚至要語言學專家，成本高；既有的少樣本做法（TOD-BERT、SC-GPT、Coach 等）都要對每個任務 fine-tune 一組參數。作者想知道：GPT-3 論文提出的「只靠範例 priming、不更新參數」能不能讓一個模型同時做完這四種任務，以及在公開可取得的 GPT-2 規模下效果如何。這是 LLM 時代「用提示做意圖偵測」最早的一批實證之一。",
   "core_idea": "把每個對話子任務改寫成「輸入 → 輸出」的文字續寫格式，讓語言模型從前綴裡的幾個範例推出規律，再續寫查詢句的答案。為了讓小模型做得動，分類題一律拆成逐類的二元判斷（每類一個前綴、輸出 True／False），slot 題拆成逐 slot 的值填空（輸出值或 None），生成題則直接給「對話行為 → 句子」配對。",
   "method": {

@@ -14,8 +14,8 @@
     "Trace-of-Mark 動作規劃（§3.2.2、Eq.3、Alg.2、§4.2.2）": "只用在影片與機器人資料（UI 是離散截圖序列，不套 ToM，Table 1）。步驟：(1) 依資料集原有的分段標註切段，再用 PySceneDetect 切成鏡頭一致的短片段；(2) 用 CLIP 影像與文字編碼器算片段與敘述的 cosine 相似度，低於 0.25 的丟掉；(3) 在第 t 幀放 s×s 等距格點（s=15，共 225 點），用 CoTracker 追出每點未來的軌跡與遮擋標記；(4) 若偵測到全域運動（門檻 η=2），對每個未來幀以目前與未來標記位置估 3×3 homography，把未來點轉回第 t 幀座標系，去掉相機移動；(5) 以相鄰時間步的平均位移量分前景（≥ε=2）與背景軌跡；(6) 隨機取 k∈[1, min(5, 前景數)]，前景做 k 群、背景做 2k 群 K-Means，每群隨機取一個以上的點；(7) 在第一幀畫 SoM。訓練目標變成「action : mark : trace_{t+1:t+l}」，也就是除了選標記，還要預測所選標記未來 l 幀的位置序列。作者主張這比預測下一幀省 token、能看得更遠。",
     "UI 觀測的候選框來源（§4.2.1、App. B.1.1、B.2.1、B.2.5）": {
       "預訓練": "網頁用 HTML／DOM 抽出的框；SeeClick 手機截圖原本每張只有一組（文字、框），另外從 RICO 與 OCR 工具補框，再加上 Android view hierarchy 的框。Vision2UI 只取 content 不為空的框，依元素類型抽樣畫標記：h1、h2、a、button、option、nav 的權重 0.5，其他 0.1，input 一律畫（因為輸入欄位對互動很重要）。",
-      "ScreenSpot 零樣本評測": "用 OmniParser 官方程式碼的預設設定提出候選區域，只用框、不用它的 local semantics（圖示功能描述），疊上數字標記後要模型選一個。",
-      "Mind2Web 微調與評測": "用 Mind2Web 原本以 DeBERTa-v3-base 訓練的候選排序器（作者轉述 recall@50 約 85%），取前 30 名候選畫成標記；截圖以正解框為中心裁切，寬度同原頁、高度上限 1344。",
+      "ScreenSpot 零樣本評估": "用 OmniParser 官方程式碼的預設設定提出候選區域，只用框、不用它的 local semantics（圖示功能描述），疊上數字標記後要模型選一個。",
+      "Mind2Web 微調與評估": "用 Mind2Web 原本以 DeBERTa-v3-base 訓練的候選排序器（作者轉述 recall@50 約 85%），取前 30 名候選畫成標記；截圖以正解框為中心裁切，寬度同原頁、高度上限 1344。",
       "AITW": "用資料集原有、由 OCR 與 IconNet 偵測出的框。"
     },
     "UI 預訓練任務（App. B.1.1、Table 10）": "SeeClick 網頁：text_2_point 271K、text_2_bbox 54K、point_2_text 54K、bbox_2_text 54K；SeeClick 手機：text_2_point 274K、text_2_bbox 56K、UI summarization 48K、widget captioning 42K；Vision2UI：input_2_point 980K、input_2_bbox 982K、text_2_point 794K、text_2_bbox 774K、point_2_text 199K、bbox_2_text 193K。同一頁的四種 grounding／描述子任務按 [0.4, 0.4, 0.1, 0.1] 權重只抽一種，input 的兩種子任務等機率抽一種，同頁抽到的子任務合併成一筆樣本。合計 Magma-PT-UI 約 2.8M。",
@@ -31,7 +31,7 @@
     "影片敘述與鏡頭片段的 CLIP 相似度 ≥ 0.25 時，文字足以當作該片段的任務描述",
     "從機器人與人類影片學到的空間與時序能力，能遷移到 UI grounding，反之亦然",
     "座標正規化後量化成 256 個 bin，精度足以點中 UI 元素與控制機器手臂",
-    "離線、單步的評測（Mind2Web step SR、AITW 動作比對）能反映 agent 的實際導航能力"
+    "離線、單步的評估（Mind2Web step SR、AITW 動作比對）能反映 agent 的實際導航能力"
   ],
   "evaluation": {
     "benchmarks": [
@@ -117,7 +117,7 @@
     "即使把所有輸出統一成語言 token，不同任務之間仍有明顯衝突（§3.1）",
     "預訓練資料還能加入更多指令資料與影片，本文只示範方法，擴大規模留待之後（§4.1）",
     "受限於運算資源，多幀預訓練最多只用 4 幀（§5.3）",
-    "SpatialEval 是在官方評測流程釋出前自行用選項比對評估，之後版本會更新（Table 6 註腳）",
+    "SpatialEval 是在官方評估流程釋出前自行用選項比對評估，之後版本會更新（Table 6 註腳）",
     "教學影片中的人物身分與活動分布不能代表全球人口與社會多樣性，可能帶有社會、性別、種族偏誤（Social Impacts and Limitations）",
     "模型只設計給受控的網頁 UI、Android 模擬器與機器手臂場景，不應廣泛套用到其他任務；做 UI 導航時要有人在迴路中掌控每一個動作，實際執行動作的子模組要確保不會產生非預期後果（Responsible AI）",
     "有心人可以用特定資料微調，把它當成惡意自動化 UI 操作的基底（Responsible AI）"
@@ -125,11 +125,11 @@
   "limitations_observed": [
     "ScreenSpot 的主要比較對象是 OmniParser 最弱的版本。Table 2 的 GPT-4V＋OmniParser 那一列（92.7/49.4、64.9/26.3、77.3/39.7）逐欄對上 OmniParser 論文（2408.00203）Table 2 的「w.o. LS, w. GD」，也就是不加圖示功能描述、而且用原始 Grounding DINO 當偵測器的組態，平均 58.38。同一張表裡 OmniParser 最完整的「w. LS + ID」平均是 73.0，比 Magma 零樣本的 61.4 高約 12 分。逐欄看，Magma 在 Mobile Text（60.4 對 92.7）與 Web Text（69.1 對 77.3）都輸，只在 Icon 與 Desktop 欄勝出。另外，Magma 自己的候選框來自 OmniParser 官方程式碼的預設設定；如果那個預設是 OmniParser 微調過的可互動區域偵測器（ID），兩邊拿到的候選框品質本身就不一樣。所以「比 GPT-4V＋OmniParser 好很多」的說法要打很大的折扣。",
     "Mind2Web 的 Table 4 把 Magma 標成只用影像輸入，但它的候選標記來自 Mind2Web 用 DeBERTa 讀 HTML 做出的候選排序（前 30 名），DOM 資訊其實是透過候選集合進到觀測裡的。對照組 SeeClick、Qwen-VL、CogAgent 則是直接從像素回歸座標、沒有候選集合。Ele.Acc 57.2 對 21.4 這種差距，混了兩件事：觀測空間不同（候選標記 vs. 開放座標）與模型本身的差異，論文沒有把兩者拆開。另外，截圖是以正解框為中心裁切的，保證目標一定在畫面內；候選排序器作者轉述為 recall@50 約 85%，只取前 30 名時 recall 更低，這構成 Ele.Acc 的上限，論文也沒報告正解不在候選裡的比例。",
-    "Table 3 最關鍵的一格（VWB-Act-G 25.2 → 71.8）無法區分「用 SoM 訓練」與「評測時有外部候選框可選」這兩個效果。無 SoM 的版本在評測時要直接輸出座標，有 SoM 的版本在評測時拿到 OmniParser 的框（Table 2 註腳說所有相關評測都用 OmniParser），等於測試時多了一個偵測器幫忙。缺少的對照是：無 SoM 訓練但評測時給標記，以及有 SoM 訓練但評測時不給標記。ToM 又不套用在 UI 資料上（Table 1），所以論文把 UI 上的進步歸功於「SoM 與 ToM」，也沒有 SoM-only 的消融支撐。",
+    "Table 3 最關鍵的一格（VWB-Act-G 25.2 → 71.8）無法區分「用 SoM 訓練」與「評估時有外部候選框可選」這兩個效果。無 SoM 的版本在評估時要直接輸出座標，有 SoM 的版本在評估時拿到 OmniParser 的框（Table 2 註腳說所有相關評估都用 OmniParser），等於測試時多了一個偵測器幫忙。缺少的對照是：無 SoM 訓練但評估時給標記，以及有 SoM 訓練但評估時不給標記。ToM 又不套用在 UI 資料上（Table 1），所以論文把 UI 上的進步歸功於「SoM 與 ToM」，也沒有 SoM-only 的消融支撐。",
     "作者說直接混合 UI 與機器人資料「對兩類任務都有害」，但 Table 3 的 VWB-Ele-G 由 UI-only 的 68.5 升到 ACT 的 89.1，是明顯的反例；結論只對 ScreenSpot、VWB-Act-G 與機器人指標成立。Table 6 也不單調：Maze Nav. 的完整模型 36.5 低於不含影片也不含 SoM／ToM 的 Act w/o（44.8），VSR 的 Full w/o（58.1）也低於 Act w/o（62.8）。內文說在空間推理上與 CogVLM 相當，但 Table 6 根本沒有 CogVLM 那一列；BLINK 41.0 距 GPT-4o 的 60.0 也還很遠。",
     "資料數字前後不一致：§4.3 說用了 OXE 的 970K 條軌跡、9.4M 筆三元組；App. B.1.3 說同樣 9.4M 筆三元組來自 23 個資料集的 326K 條軌跡；§3.2 又說 OXE 約 1M 條軌跡、22 個環境。真實機器人實驗在 §5.1.2 說是 4 個任務一起微調、每個約 50 條，App. B.2.2 卻列成 3 個微調任務加 1 個未見任務。",
     "統計強度不足：真實機器人每任務 10 次、LIBERO 每套件 100 次，兩者的數字只畫在 Fig. 9、Fig. 10，內文沒有數值；AITW 測試集約是 2,939 條指令的 20%（約 590 條）；全文沒有信賴區間、重跑次數或種子數。",
-    "UI 導航全部是離線、單步評測（Mind2Web step SR、AITW 動作比對），沒有線上互動環境、也沒有完整軌跡的任務成功率；App. C.1 只給兩個成功的手機範例（東京天氣、安裝 Instagram），沒有任何 UI 失敗案例分析。以 T3 的角度來看，也缺少同一模型在不同觀測格式（accessibility tree 文字、純截圖、截圖加標記、兩者並用）之間的直接比較；Alg.1 為了避免標記重疊而設計，卻沒量化標記密度或重疊對錯誤率的影響；整張高解析度編碼（最高約 2000 像素、最多 4 塊）的推論成本與延遲也沒報告。",
+    "UI 導航全部是離線、單步評估（Mind2Web step SR、AITW 動作比對），沒有線上互動環境、也沒有完整軌跡的任務成功率；App. C.1 只給兩個成功的手機範例（東京天氣、安裝 Instagram），沒有任何 UI 失敗案例分析。以 T3 的角度來看，也缺少同一模型在不同觀測格式（accessibility tree 文字、純截圖、截圖加標記、兩者並用）之間的直接比較；Alg.1 為了避免標記重疊而設計，卻沒量化標記密度或重疊對錯誤率的影響；整張高解析度編碼（最高約 2000 像素、最多 4 塊）的推論成本與延遲也沒報告。",
     "ToM 的可靠度驗證只量「軌跡點 1 秒後還在同一個人工框內」（precision 0.89），這量到的是追蹤的一致性，不是「前景軌跡等於任務驅動的動作」這個關鍵假設；ε=2、η=2、s=15 等門檻也沒有敏感度分析。",
     "Responsible AI 段要求人類掌控每一個 UI 動作，但模型沒有輸出信心分數、拒答或異常訊號，論文也沒有提供任何執行期監控機制；在 T3(b) 可觀測性這一面沒有貢獻。"
   ],
@@ -146,7 +146,7 @@
   },
   "reproducibility": {
     "code": "https://github.com/microsoft/Magma",
-    "data": "論文說模型與程式碼公開、真實機器人軌跡也會釋出（App. B.2.2）。依 GitHub README（我讀的是頁面說明，沒有逐檔核對），釋出內容包含：Hugging Face 權重 microsoft/Magma-8B、推論程式碼、訓練程式碼與在 Magma-820K 上的訓練範例，以及 Magma-820K、Magma-Video-ToM、Magma-OXE-ToM、Magma-Mind2Web-SoM、Magma-AITW-SoM 等處理過的資料集；評測走 lmms-eval 與 SimplerEnv。完整 39M 筆預訓練資料是否全部釋出、UI 導航的提示詞全文，論文都沒有交代。"
+    "data": "論文說模型與程式碼公開、真實機器人軌跡也會釋出（App. B.2.2）。依 GitHub README（我讀的是頁面說明，沒有逐檔核對），釋出內容包含：Hugging Face 權重 microsoft/Magma-8B、推論程式碼、訓練程式碼與在 Magma-820K 上的訓練範例，以及 Magma-820K、Magma-Video-ToM、Magma-OXE-ToM、Magma-Mind2Web-SoM、Magma-AITW-SoM 等處理過的資料集；評估走 lmms-eval 與 SimplerEnv。完整 39M 筆預訓練資料是否全部釋出、UI 導航的提示詞全文，論文都沒有交代。"
   },
   "value_verdict": "medium",
   "verdict_reason": "它提供了「用 SoM 標記的觀測直接訓練策略模型」這個 GUI 觀測表徵的資料點，數字亮眼、也有開源權重與商用雲端上架；但主要貢獻是橫跨機器人的 VLA 預訓練配方，T3 相關的證據又把外部候選框的效果與訓練效果混在一起，ScreenSpot 還是跟 OmniParser 最弱的版本比。觀測表徵這條線，SoM（2310.11441）與 OmniParser（2408.00203）更直接。",

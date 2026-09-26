@@ -5,8 +5,8 @@
   "subarea": "agent 基準與評估環境設計",
   "read_level": "full",
   "source": "arxiv-html",
-  "one_liner": "提出 AgentBench：把作業系統、資料庫、知識圖譜、數位卡牌、情境猜謎、ALFWorld、WebShop、Mind2Web 共 8 個可執行的多輪互動環境，統一成「環境扮演 user、LLM 扮演 agent」的對話式評估協定與 HTTP 化工具組，以 CoT＋greedy 評測 29 個 LLM，並用結局分類（CLE／IF／IA／TLE／Complete）拆解 agent 的失敗原因。",
-  "problem": "2023 年中 LLM agent 應用（AutoGPT、BabyAGI 等）大量出現，但沒有系統化、跨情境的 agent 能力基準。既有做法各有缺口：文字冒險遊戲的動作空間封閉而離散，而且偏重常識；多模態模擬器（遊戲、GUI、室內場景）離 LLM 的實際用途遠，純文字模型也無法直接受測；多數 agent 基準只有單一環境，看不出模型在不同應用情境下的整體表現。工程面上，每個資料集各自附一套評估程式，只能同機執行、一次評一個 agent 對一個 task，難以對大量模型做可比較的評測。作者要回答的是：現有 LLM 在真實可執行的互動環境裡到底能不能當 agent、商用與開源模型差多少、失敗主要卡在哪裡。",
+  "one_liner": "提出 AgentBench：把作業系統、資料庫、知識圖譜、數位卡牌、情境猜謎、ALFWorld、WebShop、Mind2Web 共 8 個可執行的多輪互動環境，統一成「環境扮演 user、LLM 扮演 agent」的對話式評估協定與 HTTP 化工具組，以 CoT＋greedy 評估 29 個 LLM，並用結局分類（CLE／IF／IA／TLE／Complete）拆解 agent 的失敗原因。",
+  "problem": "2023 年中 LLM agent 應用（AutoGPT、BabyAGI 等）大量出現，但沒有系統化、跨情境的 agent 能力基準。既有做法各有缺口：文字冒險遊戲的動作空間封閉而離散，而且偏重常識；多模態模擬器（遊戲、GUI、室內場景）離 LLM 的實際用途遠，純文字模型也無法直接受測；多數 agent 基準只有單一環境，看不出模型在不同應用情境下的整體表現。工程面上，每個資料集各自附一套評估程式，只能同機執行、一次評一個 agent 對一個 task，難以對大量模型做可比較的評估。作者要回答的是：現有 LLM 在真實可執行的互動環境裡到底能不能當 agent、商用與開源模型差多少、失敗主要卡在哪裡。",
   "core_idea": "把 LLM-as-Agent 的評估形式化成 POMDP，並把所有環境都包成同一種兩角色對話：環境（第一則是任務指令，其後是觀測回饋）扮演 user，受測 LLM 扮演 agent，每輪在同一則回應裡輸出 Thought＋Action，由環境以可執行、可自動判定的方式給分（腳本 exit code、資料表 hash、答案集合 F1、遊戲勝率、reward 函數、關鍵點命中率）。刻意只用最陽春的 CoT（不重試、不反思、不搜尋），量的是「最便宜、最常見的部署方式」下模型本身的 agent 能力；8 個環境分屬 code、game、web 三種 grounding，避免單一專長模型佔便宜。總分 OA 以「所有受測模型在該環境平均分的倒數」當固定權重，把難度不同的環境拉到同一尺度；再用結局分類把失敗拆成格式錯、動作錯、回合耗盡等可行動的原因。",
   "method": {
     "形式化與對話協定": "評估視為 POMDP (S, A, T, R, U, O)：狀態空間、動作空間、轉移函數、reward 函數、任務指令空間、觀測空間；受測 LLM 記為 M。所有環境一律只有 user 與 agent 兩個角色交替發言，user 的第一則是任務指令，其後都是環境回饋。互動軌跡記錄成對話歷史 (u0, a0, …, uk, ak)，推論時餵入 (u0, a0, …, uk)。",

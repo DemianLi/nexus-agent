@@ -5,7 +5,7 @@
   "subarea": "部分分數與過程度量",
   "read_level": "full",
   "source": "arxiv-html",
-  "one_liner": "自架一間模擬軟體公司（GitLab、ownCloud、Plane、RocketChat，加上由 LLM 扮演的同事），用 175 個職場任務評測 LLM agent；計分方式是「加權 checkpoint 的進度比例占一半、全部完成再加一半」的部分分數，另外並列成功率、步數與 API 成本。",
+  "one_liner": "自架一間模擬軟體公司（GitLab、ownCloud、Plane、RocketChat，加上由 LLM 扮演的同事），用 175 個職場任務評估 LLM agent；計分方式是「加權 checkpoint 的進度比例占一半、全部完成再加一半」的部分分數，另外並列成功率、步數與 API 成本。",
   "problem": "要回答「agent 能加速或自動化多少職場工作」，產業導入與勞動政策都需要這個答案，但現有 benchmark 回答不了。它們有的與真實工作無關（MiniWob++），有的只涵蓋單一職能（SWE-bench）；幾乎都不測與同事溝通（τ-bench 只測客服情境）；大多只給二元成敗；也有的依賴第三方託管平台（WorkArena、CRMArena）或沒有執行環境（Mind2Web），無法長期重現。長程任務若只看二元成功率，多數模型都接近 0 分，分不出能力差異，也看不出進展。",
   "core_idea": "每個長程任務拆成人工設計、各有點數的 checkpoint，由程式化 evaluator 逐項給分。evaluator 多半是檢查環境終態或軌跡的確定性 Python 函式，非結構化產出才退回以 LLM 評分。任務分數把「已得點數占比」與「是否全部完成」各算一半：部分進度線性給分，任務完成時分數會明顯跳升。步數與成本另外列為效率指標。",
   "method": {
@@ -132,7 +132,7 @@
     "data": "公開。論文說程式碼、資料、環境與實驗都隨 https://the-agent-company.com 釋出，並提供打包好整個環境的 VM 映像；任務、checkpoint 與 evaluator 都在 repo 裡。但要重現分數，得付費呼叫 Claude-3-5-Sonnet-20241022 來擔任 NPC 與 judge；這個模型版本日後若下架，NPC 與 judge 的行為就無法原樣重現。"
   },
   "value_verdict": "high",
-  "verdict_reason": "checkpoint 加權進度搭配 50% 完成獎勵，是 agent 評測中最具代表性的部分分數設計；公式、配分範例與「結果優先」的覆寫規則都能直接借用。不過計分部分只有一頁，缺少權重消融、重複試驗與 judge 一致率，閱讀時要搭配本筆記的批判。",
+  "verdict_reason": "checkpoint 加權進度搭配 50% 完成獎勵，是 agent 評估中最具代表性的部分分數設計；公式、配分範例與「結果優先」的覆寫規則都能直接借用。不過計分部分只有一頁，缺少權重消融、重複試驗與 judge 一致率，閱讀時要搭配本筆記的批判。",
   "related": [
     "2406.12045",
     "2307.13854",

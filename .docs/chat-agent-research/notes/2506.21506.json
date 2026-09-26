@@ -5,7 +5,7 @@
   "subarea": "任務成功的判準",
   "read_level": "full",
   "source": "arxiv-html",
-  "one_liner": "建立 130 題長程、時變、要求附引用的網路搜尋任務，替每題寫一支「rubric 樹＋LLM 擷取／驗證」的 judge-agent 腳本；葉節點做二元判定，再用 critical 閘門加 non-critical 平均的遞迴規則聚合成根分數。根分數等於 1 算成功，根分數的平均算部分完成度。以此評測 10 個 agentic search 系統與人類，並用人評量出 judge 的葉節點正確率為 99.03%。",
+  "one_liner": "建立 130 題長程、時變、要求附引用的網路搜尋任務，替每題寫一支「rubric 樹＋LLM 擷取／驗證」的 judge-agent 腳本；葉節點做二元判定，再用 critical 閘門加 non-critical 平均的遞迴規則聚合成根分數。根分數等於 1 算成功，根分數的平均算部分完成度。以此評估 10 個 agentic search 系統與人類，並用人評量出 judge 的葉節點正確率為 99.03%。",
   "problem": "Deep Research 類系統產出的答案動輒數百到數千字、內容隨時間變動（庫存、價格、日期），而且要附來源。既有 benchmark 為了能自動評分，多半只收答案固定、時間不變的題目（常是一個字串，如 BrowseComp、GAIA、AssistantBench），偏離真實使用者的需求分佈；少數收時變任務的（Online-Mind2Web、WebVoyager、Mind2Web-Live）又只有 10 步以內的短任務，用 LLM-as-a-Judge 或規則判定。問題在於：一個 agent 花上一小時、跨數十個網站、做數百個動作後交出的長答案，要怎麼自動又可靠地判定「任務完成了沒有、完成了幾成、內容是否真有來源支撐」。這直接決定了任務成功分數能不能用在長程、開放式的任務上。",
   "core_idea": "利用生成與驗證的不對稱：答案怎麼寫、何時查，因系統而異，但每題「要什麼」事先可知，所以能為每題寫一棵 rubric 樹，把評估拆成可逐條二元驗證的葉節點（答案是否滿足條件、陳述是否被引用網頁支撐）。聚合規則是 gate-then-average：critical 節點只當閘門，任一不過則父節點為 0；閘門都過了才平均 non-critical 子節點；sequential 節點前段失敗時短路後段。每題的 rubric 由一支 Python judge agent 執行，由 LLM Extractor 抽結構化欄位、LLM Verifier 做二元判定，腳本本身先由 LLM 生成、自我除錯，再經兩階段人工修正。任務成功定義為根分數等於 1，部分完成度就是根分數本身。",
   "method": {
@@ -126,7 +126,7 @@
   "edges": [],
   "adoption": {
     "evidence": [],
-    "assessment": "未見證據。論文本身沒有記載部署或產品用途。官方頁面（https://osu-nlp-group.github.io/Mind2Web-2/）與 repo 只記載 NeurIPS 2025 Datasets & Benchmarks Track 接受、開放 leaderboard 投稿，以及 Amazon AGI 的共同作者與贊助、Hugging Face 與 Grok 團隊協助跑評測。這些屬於學術 benchmark 的參與，不算產品或商用採納。本次 WebSearch 額度已用完，沒能進一步搜尋有沒有廠商在官方 model card 中回報 Mind2Web 2 分數，因此不做推測。"
+    "assessment": "未見證據。論文本身沒有記載部署或產品用途。官方頁面（https://osu-nlp-group.github.io/Mind2Web-2/）與 repo 只記載 NeurIPS 2025 Datasets & Benchmarks Track 接受、開放 leaderboard 投稿，以及 Amazon AGI 的共同作者與贊助、Hugging Face 與 Grok 團隊協助跑評估。這些屬於學術 benchmark 的參與，不算產品或商用採納。本次 WebSearch 額度已用完，沒能進一步搜尋有沒有廠商在官方 model card 中回報 Mind2Web 2 分數，因此不做推測。"
   },
   "reproducibility": {
     "code": "https://github.com/OSU-NLP-Group/Mind2Web-2（MIT；含評估工具包、run_eval.py、網頁快取工具；論文說腳本生成管線不公開）",

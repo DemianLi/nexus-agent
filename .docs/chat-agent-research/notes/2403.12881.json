@@ -15,7 +15,7 @@
     "step3_negative_samples": "依『有沒有給工具 × 使用者問題需不需要工具』切成四種情境（Figure 6）：(a) 無工具＋一般對話、(b) 有工具＋一般對話、(c) 無工具＋看似需要工具的請求、(d) 有工具＋需要工具。既有語料幾乎只有 (a)(d)。構造法（附錄 C）：從 ToolBench 抽 761 筆使用者問題，讓 gpt-3.5-turbo 在不提供任何工具資訊的情況下直接回覆，得到 (c)；再隨機對其中一半在 system prompt 附上無關工具，得到 (b)。目標是教模型『不只學怎麼用工具，也學什麼時候該用』。",
     "training": "沿用 AgentTuning 的混合訓練：ShareGPT 一般對話與 agent 語料 1:1 混合。基底 Llama2-7B/13B/70B，採 Llama2-chat 對話格式，全參數微調 1 epoch；learning rate 2e-5、warmup LR 4e-6、cosine schedule；batch size 32/32/128；GPU 16/32/128（Table 5）。",
     "agent_h_benchmark": "從 glaive-function-calling-v2 挑出 1,845 筆作為 out-of-domain 驗證集，只判斷模型輸出是『一般回覆』還是『函式呼叫』。兩類關鍵字偵測：ReAct 格式幻覺（例如出現 Thought:、Action:）與一般格式幻覺（例如 I will use、I need to call）。當 ground truth 應為一般回覆而輸出含上述關鍵字即算一次幻覺。H_ReAct、H_General = 各自幻覺數 ÷ ground truth 為一般回覆的樣本數；H_Score = 0.5 ×((1 − H_ReAct) + (1 − H_General))（論文式 (1) 誤把兩項都寫成 H_ReAct，但 Table 3 的數字符合兩項平均）。",
-    "reimplementation_notes": "要重做需要：(1) ReAct→多輪對話的改寫模板與引導語句（Figure 5 只示意，全文沒有完整模板，需看 GitHub 的轉換程式或直接用公開資料）；(2) 逐輪能力標籤與 loss 遮罩；(3) 負樣本的 gpt-3.5-turbo 生成提示（論文未給）；(4) Held-In 綜合分數的計算方式論文沒有定義，需回查 AgentTuning 的評測設定。"
+    "reimplementation_notes": "要重做需要：(1) ReAct→多輪對話的改寫模板與引導語句（Figure 5 只示意，全文沒有完整模板，需看 GitHub 的轉換程式或直接用公開資料）；(2) 逐輪能力標籤與 loss 遮罩；(3) 負樣本的 gpt-3.5-turbo 生成提示（論文未給）；(4) Held-In 綜合分數的計算方式論文沒有定義，需回查 AgentTuning 的評估設定。"
   },
   "assumptions": [
     "LLM 預訓練分佈接近自然對話，把軌跡改寫成聊天格式可降低分佈偏移；格式 token 的 loss 很快降低代表模型在背格式、而非學推理。",

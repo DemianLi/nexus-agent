@@ -5,7 +5,7 @@
   "subarea": "agent 基準與評估環境設計",
   "read_level": "full",
   "source": "arxiv-html",
-  "one_liner": "提出 Terminal-Bench 框架與 Terminal-Bench 2.0 資料集：89 個在 Docker 容器裡用終端機完成的高難度真實任務，只以最終容器狀態的測試判定成敗，搭配多層自動＋人工品管（含作弊代理人），評測 6 種 agent 與 20 餘個模型（論文稱 16 個、Table 2 實列 21 個）共 32,155 次試跑，並用 LLM-as-judge 做軌跡層與指令層的失敗分析。",
+  "one_liner": "提出 Terminal-Bench 框架與 Terminal-Bench 2.0 資料集：89 個在 Docker 容器裡用終端機完成的高難度真實任務，只以最終容器狀態的測試判定成敗，搭配多層自動＋人工品管（含作弊代理人），評估 6 種 agent 與 20 餘個模型（論文稱 16 個、Table 2 實列 21 個）共 32,155 次試跑，並用 LLM-as-judge 做軌跡層與指令層的失敗分析。",
   "problem": "現有 agent 基準不是任務不夠真實（合成環境、窄領域），就是難度不足以拉開前沿模型；而終端機已是 Claude Code、Codex CLI、Gemini CLI 等商用 agent 的主要工作介面，缺少一個困難、多元、可執行、可重現且防作弊的終端機任務基準。同時，困難任務的「規格是否完整、測試是否只在正確時成立、是否有捷徑」極難驗證，基準本身的效度常是評估結論的最大誤差來源。",
   "core_idea": "把每個任務定義成「自然語言指令＋Docker 環境＋只檢查最終容器狀態的測試＋人寫的 oracle 解＋時間限制」的結果導向格式（不檢查過程指令，允許任何解法），用群眾外包收集專家級真實工作任務，再以可執行的品管管線（oracle 必須跑過、no-op 代理人必須失敗、確定性 CI 檢查、LLM 規格檢查、LLM 除錯工具判斷失敗是否源自規格不足、對抗式作弊代理人、多輪人工稽核）確保 specificity／solvability／integrity 三條效度準則；另提供中立的極簡 agent（Terminus 2）來分離模型與 scaffold 的貢獻。",
   "method": {
@@ -121,7 +121,7 @@
   "limitations_observed": [
     "任務數前後不一致：摘要與正文說 89 個任務，但 Table 1 的專家／初階時間分布兩列加總都是 74（36+35+3+0、6+53+12+3，百分比也以 74 為分母），Table 2 的說明文字也寫 token 數是跑「全部 74 個任務」；讀者無法確定時間估計與 token 統計對應的是哪一版資料集。",
     "§4.3 說作者難度標籤只有 medium 或 hard，但附錄 H 有 4 個 Easy；Figure 7 的百分比（93.3%＝28/30、54.5%＝30/55）只對得上 30＋55＝85 個任務，4 個 Easy 任務在難度分析中被無聲排除。",
-    "模型清單前後不一：§3 說評測 16 個模型，§3.3 卻列出 21 個，Table 2 也有 21 個但組成不同（GPT-5 有結果卻不在 §3.3，Llama 4 Maverick 列在 §3.3 卻沒有結果）；附錄 G 的分析還提到 GPT-5 Codex 與 GLM 4.5 Air，兩者都不在 §3.3 也不在 Table 2。附錄分析與主表似乎來自不同的實驗批次。",
+    "模型清單前後不一：§3 說評估 16 個模型，§3.3 卻列出 21 個，Table 2 也有 21 個但組成不同（GPT-5 有結果卻不在 §3.3，Llama 4 Maverick 列在 §3.3 卻沒有結果）；附錄 G 的分析還提到 GPT-5 Codex 與 GLM 4.5 Air，兩者都不在 §3.3 也不在 Table 2。附錄分析與主表似乎來自不同的實驗批次。",
     "「回合數與成功率無關」只是約十幾個模型點的跨模型相關（r = −0.028），無法推到模型內或任務內；同一模型在同一任務上，長軌跡可能正好代表卡住或逾時（Figure 12 另有逾時率），跨模型相關會把這種關係抵銷掉。",
     "「換模型比換 scaffold 重要」的比較不對等：一邊是同家族最大與最小模型的差距（約 51 個百分點），另一邊只挑一組 scaffold 對比（約 17 個百分點）；而同一個 Gemini 2.5 Pro 在四種 scaffold 間就差 15.7%–32.6%，廠商自家 CLI 也不一定最好（Opus 4.5：Claude Code 52.1% 低於 Terminus 2 57.8%；Gemini 2.5 Pro：Gemini CLI 19.6% 低於 Terminus 2 32.6%）。加上廠商 CLI 只配自家模型、不是完整因子設計，模型×scaffold 的交互作用根本估不出來。論文寫的「52%／17%」其實是百分點而非相對提升。",
     "95% CI 只有 ±2–3 個百分點，計算方式沒寫；若把 ≥5×89 次試跑當作獨立樣本，就低估了只有 89 個任務的任務抽樣變異（試跑依任務群聚）。許多相鄰排名（57.8% vs 56.9%、42.8% vs 42.5%）實際上分不出高下。",
@@ -137,17 +137,17 @@
   "adoption": {
     "evidence": [
       "Google 官方部落格（2025-11-18）介紹 Gemini 3 時寫明 Gemini 3 Pro 在 Terminal-Bench 2.0 得 54.2%，並描述它測的是透過終端機操作電腦的工具使用能力：https://blog.google/products/gemini/gemini-3/",
-      "Anthropic 官方 Claude Opus 4.5 發表頁（2025-11-24）的評測方法說明特別註明 Terminal Bench 使用 128K thinking budget，顯示官方有在此基準上評測；擷取到的文字沒有給分數，也沒寫是哪一版：https://www.anthropic.com/news/claude-opus-4-5",
+      "Anthropic 官方 Claude Opus 4.5 發表頁（2025-11-24）的評估方法說明特別註明 Terminal Bench 使用 128K thinking budget，顯示官方有在此基準上評估；擷取到的文字沒有給分數，也沒寫是哪一版：https://www.anthropic.com/news/claude-opus-4-5",
       "官方程式碼庫 github.com/laude-institute/terminal-bench（Apache-2.0）提供任務資料集與執行 harness，並指引新使用者改用 Harbor 執行 Terminal-Bench 2.0：https://github.com/laude-institute/terminal-bench"
     ],
-    "assessment": "有可查證的業界採納：至少 Google 在前沿模型發表的官方文案中引用 Terminal-Bench 2.0 分數，Anthropic 官方發表頁也列出此基準的評測設定。時間順序上，Google 2025-11-18 的文章已引用 Terminal-Bench 2.0 分數，可見 2.0 在本文 arXiv v1（2026-01-17）之前就已公開，廠商採納的是已釋出的基準本身，不是時間倒置。這屬於「被當作評測標準採用」，不是部署進產品。OpenAI 的發表頁擋掉存取（403），沒有列入。"
+    "assessment": "有可查證的業界採納：至少 Google 在前沿模型發表的官方文案中引用 Terminal-Bench 2.0 分數，Anthropic 官方發表頁也列出此基準的評估設定。時間順序上，Google 2025-11-18 的文章已引用 Terminal-Bench 2.0 分數，可見 2.0 在本文 arXiv v1（2026-01-17）之前就已公開，廠商採納的是已釋出的基準本身，不是時間倒置。這屬於「被當作評估標準採用」，不是部署進產品。OpenAI 的發表頁擋掉存取（403），沒有列入。"
   },
   "reproducibility": {
     "code": "https://github.com/laude-institute/terminal-bench（harness 另見 github.com/laude-institute/harbor；實驗設定 github.com/laude-institute/terminal-bench-experiments）",
     "data": "公開：任務放在公開 GitHub 並經 Harbor registry 發布（terminal-bench@2.0），結果公布於 tbench.ai；未入選的任務也公開，沒有私有測試集。"
   },
   "value_verdict": "high",
-  "verdict_reason": "它是 T7「可執行環境基準設計」的代表作：品管與防作弊流程、判官與人工一致率、ABC 自評都寫到可照做，也已被前沿模型廠商拿來當官方評測；但文中有任務數與模型清單前後不一、ABC 給分偏寬、判官驗證樣本小等問題，引用時要核對。",
+  "verdict_reason": "它是 T7「可執行環境基準設計」的代表作：品管與防作弊流程、判官與人工一致率、ABC 自評都寫到可照做，也已被前沿模型廠商拿來當官方評估；但文中有任務數與模型清單前後不一、ABC 給分偏寬、判官驗證樣本小等問題，引用時要核對。",
   "related": [
     "2503.13657",
     "2507.02825",

@@ -20,7 +20,7 @@
       "超參數": "輸入長 4096、輸出長 910、batch 128、100K iterations；SentencePiece 32K（C4 詞表）；T5X＋SeqIO；Cloud TPU-v3（32 GiB HBM、128 cores）。",
       "初始化": "先用以 PEGASUS 目標（長段落中重要句子的遮蔽預測）預訓練過的權重，再做 HTML 去噪。Table 7：不用 PEGASUS 初始化時 real-estate 離線規劃掉到 67.11、MiniWoB 掉到 49.1%，是所有消融中影響最大的一項。"
     },
-    "下游微調": "context window 16K token（另註者除外）。學習率、步數、優化器等微調超參數未揭露。",
+    "下游微調": "context window 16K token（另註者除外）。學習率、步數、最佳化器等微調超參數未揭露。",
     "自我經驗監督（§3.2）": [
       "指令模板：帶佔位符的模板（例：map 網站「從 <start> 到 <goal> 用第 <n-th> 個 <transportation> 選項」），從預先定義的鍵值對隨機填值取樣指令。",
       "腳本化規劃：規則式 parser 把指令拆成子指令序列，以 regular expression 從 HTML 取回對應的 data-ref。",

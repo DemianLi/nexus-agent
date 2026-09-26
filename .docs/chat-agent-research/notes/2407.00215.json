@@ -177,7 +177,7 @@
   "edges": [
     {
       "edge": "E5",
-      "how": "critic 的輸出直接進評估流程：Human+CriticGPT 模式把 LLM critique 預填進承包商的評估回答，承包商保留、刪除或改寫後形成最終的評估 critique（§2.1.3、Figure 4）；§3.6 用 CriticGPT 重新篩檢被評為 flawless 的 ChatGPT 訓練資料，再交給人審；也用 critique RM 的分數排序哪些資料優先送審。這些都是「critique／修正紀錄回流評估」的實作，只是這裡的評估服務的是 RLHF 標註，而不是 agent 的離線評測。"
+      "how": "critic 的輸出直接進評估流程：Human+CriticGPT 模式把 LLM critique 預填進承包商的評估回答，承包商保留、刪除或改寫後形成最終的評估 critique（§2.1.3、Figure 4）；§3.6 用 CriticGPT 重新篩檢被評為 flawless 的 ChatGPT 訓練資料，再交給人審；也用 critique RM 的分數排序哪些資料優先送審。這些都是「critique／修正紀錄回流評估」的實作，只是這裡的評估服務的是 RLHF 標註，而不是 agent 的離線評估。"
     }
   ],
   "adoption": {

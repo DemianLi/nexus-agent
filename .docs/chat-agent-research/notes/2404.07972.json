@@ -154,14 +154,14 @@
       "OpenAI Operator System Card（文件日期 2025-01-23；OSWorld 那句位於 2025-03-11 更新的 API Availability 段落，https://cdn.openai.com/operator_system_card.pdf）：以 CUA 在 OSWorld 的 38.1% 說明它在非瀏覽器的作業系統任務上還不夠可靠，建議人工監督，並引用 Xie 2024 OSWorld。openai.com 上的 CUA 介紹頁回 403，沒能開啟確認，不列入。",
       "旁證，不計為採納：OSWorld 官方 README（https://github.com/xlang-ai/OSWorld）的 OSWorld-Verified 致謝段，列出 OpenAI 與 Anthropic 等機構提供回饋並參與修正。這是基準維護者的自述，不是廠商文件。"
     ],
-    "assessment": "有可查證的業界採納，形式是「模型廠商把 OSWorld 當作電腦操作能力的官方評測指標」：Anthropic 在兩次產品發布中引用，OpenAI 在 Operator／CUA 的 system card 中拿它說明可靠度的界線。這屬於評測基準的採納，不是把 OSWorld 環境部署進產品。時間上要分開看：較早的引用（2024-10 的 3.5 Sonnet、2025-01／03 的 Operator system card）用的是原版 OSWorld，但步數設定不一定是論文的 15 步，例如 3.5 Sonnet 另外報了多步數的成績；2025-07 之後的引用（Sonnet 4.5）改用 OSWorld-Verified。兩者都不能和本篇 Table 5 直接比較。"
+    "assessment": "有可查證的業界採納，形式是「模型廠商把 OSWorld 當作電腦操作能力的官方評估指標」：Anthropic 在兩次產品發布中引用，OpenAI 在 Operator／CUA 的 system card 中拿它說明可靠度的界線。這屬於評估基準的採納，不是把 OSWorld 環境部署進產品。時間上要分開看：較早的引用（2024-10 的 3.5 Sonnet、2025-01／03 的 Operator system card）用的是原版 OSWorld，但步數設定不一定是論文的 15 步，例如 3.5 Sonnet 另外報了多步數的成績；2025-07 之後的引用（Sonnet 4.5）改用 OSWorld-Verified。兩者都不能和本篇 Table 5 直接比較。"
   },
   "reproducibility": {
     "code": "https://github.com/xlang-ai/OSWorld（Apache-2.0；論文寫 https://os-world.github.io）",
     "data": "公開：任務指令、初始狀態設定、評估腳本與基線實作都已釋出。Windows 分析集需自備授權才能啟用；部分任務依賴真實網站與雲端檔案，結果會隨時間漂移。2025-07-28 推出 OSWorld-Verified，修正了社群回報的問題，官方要求與新版結果比較；README 也說，要上 verified leaderboard，須由維護者在他們那端執行 agent。"
   },
   "value_verdict": "high",
-  "verdict_reason": "第一個在真實作業系統虛擬機上，以逐例狀態檢查器評分的開放式跨應用電腦操作基準，被 Anthropic 與 OpenAI 的官方文件採為電腦操作能力指標，是「agent 基準與評估環境設計」的必讀；但原版評測協定（15 步、單次、temperature 1.0、沒有 FAIL 地板基線）的統計與效度缺陷要一併讀懂。",
+  "verdict_reason": "第一個在真實作業系統虛擬機上，以逐例狀態檢查器評分的開放式跨應用電腦操作基準，被 Anthropic 與 OpenAI 的官方文件採為電腦操作能力指標，是「agent 基準與評估環境設計」的必讀；但原版評估協定（15 步、單次、temperature 1.0、沒有 FAIL 地板基線）的統計與效度缺陷要一併讀懂。",
   "related": [
     "2307.13854",
     "2401.13649",

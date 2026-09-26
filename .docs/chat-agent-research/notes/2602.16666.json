@@ -5,7 +5,7 @@
   "subarea": "多次試驗的可靠性度量與統計嚴謹性",
   "read_level": "full",
   "source": "arxiv-html",
-  "one_liner": "借鏡安全關鍵工程，把 agent 可靠性拆成一致性、穩健性、可預測性、安全性四個維度共 12 個可計算指標（資料來自 K=5 次重跑、擾動後重跑、事後自評信心與 LLM judge），用 GAIA 與 τ-bench 評測 15 個模型，發現 24 個月的能力進步只換來小幅的可靠性提升。",
+  "one_liner": "借鏡安全關鍵工程，把 agent 可靠性拆成一致性、穩健性、可預測性、安全性四個維度共 12 個可計算指標（資料來自 K=5 次重跑、擾動後重跑、事後自評信心與 LLM judge），用 GAIA 與 τ-bench 評估 15 個模型，發現 24 個月的能力進步只換來小幅的可靠性提升。",
   "problem": "主流 agent 評估只報單次執行的平均成功率，有四件事看不出來：(1) 同樣準確率下，是固定一批題目穩定失敗，還是每題隨機失敗；(2) 格式小錯與刪除資料這類嚴重後果的差別；(3) 對換句話說、工具故障、介面格式變動的敏感度；(4) agent 能不能知道自己可能會失敗。實際部署事故（Replit 刪除正式資料庫、OpenAI Operator 未經確認就購買、NYC 政府聊天機器人給出違法建議）都顯示基準分數與部署可靠性之間有落差。所以需要一套跟準確率分開量、可重複計算的可靠性剖面，讓部署決策（例如從沙盒試點升到正式環境）有具體門檻可用。",
   "core_idea": "整理航空、核能、汽車、流程控制等產業的認證實務，歸納出四個反覆出現的可靠性維度，再逐一轉成 agent 可算的指標：\n- consistency：同條件重跑時，結果、動作路徑、資源用量是否一致。\n- robustness：注入故障、改環境格式、改寫提示詞之後，準確率還剩原本的幾成。\n- predictability：事後自評信心的 calibration、discrimination 與 Brier。\n- safety：違規頻率乘上發生違規時的嚴重度。\n前三個維度等權平均成總分 R。safety 刻意不進平均，理由是它屬於尾端現象，平均會把罕見的災難性失敗稀釋掉，所以改為另列、當硬約束看。論文把這套定位成可量測的「工作性操作化」，不是重新定義古典可靠度。",
   "method": {
@@ -146,9 +146,9 @@
   "adoption": {
     "evidence": [
       "作者團隊自己的學術基礎建設：Princeton 團隊的 HAL Reliability Dashboard（https://hal.cs.princeton.edu/reliability/，2026-09-26 開啟確認）列出各模型在四個維度的可靠性分數，頁面沒有提到任何公司或產品採用。",
-      "作者團隊自己的評測框架：HAL harness repo（https://github.com/princeton-pli/hal-harness）有 reliability_eval/ 目錄，README 表示目前工作重心放在 agent reliability。"
+      "作者團隊自己的評估框架：HAL harness repo（https://github.com/princeton-pli/hal-harness）有 reliability_eval/ 目錄，README 表示目前工作重心放在 agent reliability。"
     ],
-    "assessment": "商用採納：未見證據。上面兩項都是作者團隊自己的學術排行榜與評測框架，不算商用採納。本次 WebSearch 額度已用完，沒能再搜尋廠商官方文件或 model card 是否採用這套指標，因此只能判定為未見證據。"
+    "assessment": "商用採納：未見證據。上面兩項都是作者團隊自己的學術排行榜與評估框架，不算商用採納。本次 WebSearch 額度已用完，沒能再搜尋廠商官方文件或 model card 是否採用這套指標，因此只能判定為未見證據。"
   },
   "reproducibility": {
     "code": "https://github.com/princeton-pli/hal-harness（論文指明使用；repo 內有 reliability_eval/ 目錄，但沒有逐檔核對是否涵蓋全部 12 個指標）",

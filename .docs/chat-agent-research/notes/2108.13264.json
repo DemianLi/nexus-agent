@@ -133,7 +133,7 @@
       "RL Baselines3 Zoo（DLR-RM 維護的 Stable-Baselines3 訓練框架）官方文件的繪圖章節寫明整合了 rliable 的部分功能，繪圖腳本提供 --iqm 選項：https://rl-baselines3-zoo.readthedocs.io/en/master/guide/plot.html（已開啟確認）。這是開源框架的整合，不是商用產品。",
       "Google Research 官方部落格 2021-11-17〈RLiable: Towards Reliable Evaluation & Reporting in Reinforcement Learning〉（作者 Rishabh Agarwal、Pablo Samuel Castro）介紹此方法與函式庫：https://research.google/blog/rliable-towards-reliable-evaluation-reporting-in-reinforcement-learning/（已開啟確認）。內容是發布說明，沒有描述其他團隊的部署。"
     ],
-    "assessment": "工具層面有可查證的開源採用：作者所屬的 Google 將實驗併入 Dopamine，第三方的 RL Baselines3 Zoo 官方文件整合 rliable 並提供 IQM 選項。商用產品、或 LLM agent 評測平台官方文件採用此方法的證據：未見證據（本次 WebSearch 額度已用完，無法再做更廣的查找）。NeurIPS 2021 Outstanding Paper Award 屬於學術肯定，不算採納。"
+    "assessment": "工具層面有可查證的開源採用：作者所屬的 Google 將實驗併入 Dopamine，第三方的 RL Baselines3 Zoo 官方文件整合 rliable 並提供 IQM 選項。商用產品、或 LLM agent 評估平台官方文件採用此方法的證據：未見證據（本次 WebSearch 額度已用完，無法再做更廣的查找）。NeurIPS 2021 Outstanding Paper Award 屬於學術肯定，不算採納。"
   },
   "reproducibility": {
     "code": "https://github.com/google-research/rliable（另有 Atari 100k 實驗程式碼在 Dopamine 的 labs/atari_100k）",

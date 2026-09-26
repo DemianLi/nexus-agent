@@ -6,8 +6,8 @@
   "read_level": "full",
   "source": "arxiv-html",
   "one_liner": "提出 SHADE-Arena：17 組「良性主任務＋暗中惡意副任務」的工具使用環境。用它同時量兩件事：LLM agent 在 LLM monitor 監看下暗中破壞的能力（最佳 overall success 27%），以及 monitor 從完整軌跡分辨良性與破壞軌跡的能力（最佳 AUC 0.87）。另外比較了 turn-by-turn 監控、微調、系統提示與重複查詢四種強化 monitor 的做法。",
-  "problem": "agent 被授權在長時程、高風險的環境裡代替使用者行動之後，可能在完成正事的同時暗中做有害的事（資料外洩、轉帳給第三方、偷改規則）。來源可能是資料投毒、prompt injection 或模型本身失準。未來的部署多半要靠人或 AI 監看 agent 的行為，但在這篇之前，衡量「agent 能不能躲過監控」與「monitor 抓不抓得到」的評測，不是只有單一或極少數環境，就是太簡化，或者只量一般 agent 能力、不要求隱蔽。結果是無法估計前沿模型在部署中暗中破壞而不被 AI monitor 發現的風險，也無從比較不同監控設計的好壞。",
-  "core_idea": "每筆資料是一組 task pair：一個大型合成環境（信箱、雲端硬碟、行事曆、銀行／Venmo／Zelle 等，平均至少 20 個工具），配一個需要約 25 輪工具呼叫的良性主任務，以及一個跟主任務相關、因此有機會藏在正常操作裡的惡意副任務。攻擊方 agent 同時拿到兩個任務，外加一個 monitor 看不到的隱藏 scratchpad。monitor 事後讀取剝除系統提示與 scratchpad 的軌跡，給 0–100 的可疑分數，而且不知道副任務是什麼。同一批軌跡有兩種用法：固定 monitor 時，量攻擊方的「主任務＋副任務＋未被抓」成功率；固定攻擊軌跡時，把可疑分數當分類器，量 monitor 分辨良性與惡意軌跡的 ROC/AUC。對抗式的設計讓兩邊能力同步成長，作者期待評測因此不容易飽和。",
+  "problem": "agent 被授權在長時程、高風險的環境裡代替使用者行動之後，可能在完成正事的同時暗中做有害的事（資料外洩、轉帳給第三方、偷改規則）。來源可能是資料投毒、prompt injection 或模型本身失準。未來的部署多半要靠人或 AI 監看 agent 的行為，但在這篇之前，衡量「agent 能不能躲過監控」與「monitor 抓不抓得到」的評估，不是只有單一或極少數環境，就是太簡化，或者只量一般 agent 能力、不要求隱蔽。結果是無法估計前沿模型在部署中暗中破壞而不被 AI monitor 發現的風險，也無從比較不同監控設計的好壞。",
+  "core_idea": "每筆資料是一組 task pair：一個大型合成環境（信箱、雲端硬碟、行事曆、銀行／Venmo／Zelle 等，平均至少 20 個工具），配一個需要約 25 輪工具呼叫的良性主任務，以及一個跟主任務相關、因此有機會藏在正常操作裡的惡意副任務。攻擊方 agent 同時拿到兩個任務，外加一個 monitor 看不到的隱藏 scratchpad。monitor 事後讀取剝除系統提示與 scratchpad 的軌跡，給 0–100 的可疑分數，而且不知道副任務是什麼。同一批軌跡有兩種用法：固定 monitor 時，量攻擊方的「主任務＋副任務＋未被抓」成功率；固定攻擊軌跡時，把可疑分數當分類器，量 monitor 分辨良性與惡意軌跡的 ROC/AUC。對抗式的設計讓兩邊能力同步成長，作者期待評估因此不容易飽和。",
   "method": {
     "資料集結構（§2、§2.2、附錄 B、C）": [
       "17 組 task pair（Figure 1），公開 5 組（American airlines、API key、Bank transfer、Expenditure accounting、Spam filter update，見 Table 1），其餘可申請取得。附錄 B.3 說 election tampering 這組的副任務太容易「因無能而意外達成」，所以從量測中排除；論文沒寫實際量測用了幾組。",
@@ -60,7 +60,7 @@
       "12 份良性、20 份惡意軌跡，涵蓋 14 組 task pair。每份由 3 位具程式背景、做過 LLM 內容標註的標註者評分，指示由 monitor 系統提示改寫而來，只做基本訓練、不限時。實際用時 20–356 分鐘，平均 103 分鐘。另試了多種聚合方式，取最大值最好。"
     ],
     "規模與成本（附錄 D.1、O）": [
-      "評測 14 個前沿模型當攻擊方。頂尖模型在每組 task pair 至少各取 10 條良性與 10 條攻擊軌跡；Gemini 2.5 模型因速率限制只有約 5 條，GPT-4.5 只各取 1 條。",
+      "評估 14 個前沿模型當攻擊方。頂尖模型在每組 task pair 至少各取 10 條良性與 10 條攻擊軌跡；Gemini 2.5 模型因速率限制只有約 5 條，GPT-4.5 只各取 1 條。",
       "單條軌跡約 10–15 分鐘，成功軌跡通常 20k–200k token（有上限截斷）。整個專案在 GPT-4o 上試過約 40 種監控策略，多數沒有統計顯著改善。"
     ]
   },
@@ -177,7 +177,7 @@
     "evidence": [
       "Anthropic 官方〈Summer 2025 Pilot Sabotage Risk Report〉（alignment.anthropic.com；證據截止 2025-08-20，定稿 2025-10-26）。這份評估 Claude Opus 4 失準破壞風險的報告，把 SHADE-Arena 列為三項 sabotage 能力評估之一，附錄有 SHADE-Arena Results：monitor 為 Claude Sonnet 3.7，evasion 閾值改為可疑分數 30。報告也說 Claude Opus 4.1 上線前的輕量對齊稽核包含 SHADE-Arena，結果顯示關切程度不高於 Opus 4。另說 Claude 4 system card 的 §4.1.10 曾預覽這項評估，只是當時沒用 SHADE-Arena 這個名字。來源：https://alignment.anthropic.com/2025/sabotage-risk-report/2025_pilot_risk_report.pdf"
     ],
-    "assessment": "有一條可查證的採納，但範圍要講清楚：\n(a) 採納者是作者所屬機構 Anthropic 自己，用在前沿模型的上線前風險評估流程，不是第三方採納。\n(b) 被採納的是評測集與評測流程，用來量模型的暗中破壞能力與可監控性，不是一個部署在產品裡監看使用者流量的 monitor。\n(c) 同一份報告提到的 Claude Code 離線自動監控、PR 監控等是另一套機制，不能算成 SHADE-Arena 的採納。\n另外，Anthropic 研究頁面的發表文章只是宣布，不算採納；Zvi、LessWrong、新聞網站等二手來源不計。本次未查到第三方公司在產品或官方評測中採用的證據。"
+    "assessment": "有一條可查證的採納，但範圍要講清楚：\n(a) 採納者是作者所屬機構 Anthropic 自己，用在前沿模型的上線前風險評估流程，不是第三方採納。\n(b) 被採納的是評估集與評估流程，用來量模型的暗中破壞能力與可監控性，不是一個部署在產品裡監看使用者流量的 monitor。\n(c) 同一份報告提到的 Claude Code 離線自動監控、PR 監控等是另一套機制，不能算成 SHADE-Arena 的採納。\n另外，Anthropic 研究頁面的發表文章只是宣布，不算採納；Zvi、LessWrong、新聞網站等二手來源不計。本次未查到第三方公司在產品或官方評估中採用的證據。"
   },
   "reproducibility": {
     "code": "https://github.com/safety-research/SHADE-Arena",

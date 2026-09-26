@@ -155,10 +155,10 @@
   ],
   "adoption": {
     "evidence": [
-      "Anthropic 官方工程文章寫明，跑 SWE-bench Verified 時以 SWE-Agent 框架作為其 agent 程式碼的基礎（2025-01-06，https://www.anthropic.com/engineering/swe-bench-sonnet）。這屬於模型廠商的評測用途，不是產品部署。",
+      "Anthropic 官方工程文章寫明，跑 SWE-bench Verified 時以 SWE-Agent 框架作為其 agent 程式碼的基礎（2025-01-06，https://www.anthropic.com/engineering/swe-bench-sonnet）。這屬於模型廠商的評估用途，不是產品部署。",
       "旁證，不計為採納：Anthropic 的「Building effective agents」（2024-12-19，https://www.anthropic.com/engineering/building-effective-agents）使用 agent-computer interface（ACI）一詞，並建議投入與 HCI 相當的心力設計 ACI；但全文沒有引用或連結本篇，無法確認是直接採納本篇。"
     ],
-    "assessment": "有可查證的業界使用，但屬於評測 harness 用途（Anthropic 以 SWE-Agent 為基礎跑 SWE-bench）。把 SWE-agent 或其 ACI 部署進商用產品，未見官方證據。OpenAI 的 SWE-bench Verified 介紹頁無法開啟確認，不列入。ACI 這個概念在業界官方指引中出現，屬於概念擴散，不等同於採納本篇系統。"
+    "assessment": "有可查證的業界使用，但屬於評估 harness 用途（Anthropic 以 SWE-Agent 為基礎跑 SWE-bench）。把 SWE-agent 或其 ACI 部署進商用產品，未見官方證據。OpenAI 的 SWE-bench Verified 介紹頁無法開啟確認，不列入。ACI 這個概念在業界官方指引中出現，屬於概念擴散，不等同於採納本篇系統。"
   },
   "reproducibility": {
     "code": "https://github.com/SWE-agent/SWE-agent（論文寫 swe-agent.com）",

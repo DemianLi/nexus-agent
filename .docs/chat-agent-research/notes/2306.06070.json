@@ -144,10 +144,10 @@
   "edges": [],
   "adoption": {
     "evidence": [
-      "Z.ai（Hugging Face 組織 zai-org；此網址為原 THUDM 頁面，研究出自清華大學 THUDM）在 CogAgent 官方 Hugging Face model card 寫明 CogAgent-18B 在包括 AITW 與 Mind2Web 在內的 GUI 操作資料集上超越既有模型（卡上沒列數字）：https://huggingface.co/THUDM/cogagent-chat-hf 。屬於以本基準評測自家模型。",
+      "Z.ai（Hugging Face 組織 zai-org；此網址為原 THUDM 頁面，研究出自清華大學 THUDM）在 CogAgent 官方 Hugging Face model card 寫明 CogAgent-18B 在包括 AITW 與 Mind2Web 在內的 GUI 操作資料集上超越既有模型（卡上沒列數字）：https://huggingface.co/THUDM/cogagent-chat-hf 。屬於以本基準評估自家模型。",
       "ByteDance Seed 的 UI-TARS-7B-DPO 官方 model card 在「Offline Agent Capability Evaluation」段落以表格列出 Multimodal Mind2Web 的成績：https://huggingface.co/bytedance-research/UI-TARS-7B-DPO 。Multimodal Mind2Web 是同一團隊在 SeeAct（2401.01614）中以本資料集任務加上截圖所做的衍生版本，屬於間接使用。"
     ],
-    "assessment": "有可查證的業界使用，但限於評測用途：至少兩家公司的官方 model card 以 Mind2Web 或其多模態衍生版評測自家 GUI agent 模型。MindAct 本身被部署進商用產品，未見證據。本次 WebSearch 額度已用完，只能以 WebFetch 核對上述兩個已知頁面，其他可能的採納（例如大廠 computer-use 產品的評測報告）未能查證，不列入。"
+    "assessment": "有可查證的業界使用，但限於評估用途：至少兩家公司的官方 model card 以 Mind2Web 或其多模態衍生版評估自家 GUI agent 模型。MindAct 本身被部署進商用產品，未見證據。本次 WebSearch 額度已用完，只能以 WebFetch 核對上述兩個已知頁面，其他可能的採納（例如大廠 computer-use 產品的評估報告）未能查證，不列入。"
   },
   "reproducibility": {
     "code": "https://github.com/OSU-NLP-Group/Mind2Web（MIT License）",

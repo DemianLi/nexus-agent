@@ -6,13 +6,13 @@
   "read_level": "full",
   "source": "arxiv-html",
   "one_liner": "Scale AI 以 copyleft 公開 repo、購買的新創私有 repo 與保留集建出 1,865 題多檔長時程軟體工程 agent 基準，經人工補規格與測試審查後，前沿模型在統一 SWE-Agent 下的 Pass@1 仍不到 45%。",
-  "problem": "SWE-bench 系列已是程式 agent 的標準評測，但有兩個問題。(1) 污染：題目取自寬鬆授權的熱門開源 repo，很可能已在預訓練語料中。(2) 過於簡單：SWE-Bench Verified 的 500 題中有 161 題只要改 1–2 行，與企業環境動輒跨多檔、數百行的修改不符，而且分數已接近飽和（作者引用 >70%）。此外，從 commit 自動生成的題目描述常不完整；單元測試又只接受特定介面，verifier 容易把合理的解判錯，形成偽陰性。要量出程式 agent 的真實進展，需要一個抗污染、夠難、具產業代表性，而且判定可靠的基準。",
+  "problem": "SWE-bench 系列已是程式 agent 的標準評估，但有兩個問題。(1) 污染：題目取自寬鬆授權的熱門開源 repo，很可能已在預訓練語料中。(2) 過於簡單：SWE-Bench Verified 的 500 題中有 161 題只要改 1–2 行，與企業環境動輒跨多檔、數百行的修改不符，而且分數已接近飽和（作者引用 >70%）。此外，從 commit 自動生成的題目描述常不完整；單元測試又只接受特定介面，verifier 容易把合理的解判錯，形成偽陰性。要量出程式 agent 的真實進展，需要一個抗污染、夠難、具產業代表性，而且判定可靠的基準。",
   "core_idea": "從資料來源與存取政策兩端防污染。公開部分只用 GPL 等 copyleft repo；另外買下新創公司的私有 repo 作為商用集；再保留一組不公開的 held-out 集，供日後檢查過擬合。題目只收多檔、至少 10 行的實質修改。每題由人工把零散的 commit、PR、issue 資訊改寫成 issue 格式的 problem statement，再依據測試寫出 requirements 與 interface，把解空間收窄到測試判得出來的範圍。環境由工程師手工建置 Docker，多次重跑以排除 flaky 測試，並人工剔除無關或過寬的測試。最後在單一 scaffold 下比較各模型，並用 LLM judge 替失敗軌跡分類。",
   "method": {
     "任務形式": "輸入是一整份程式碼庫（位於 Docker 容器內），加上三件式任務描述：problem statement、requirements，以及選配的 interface。輸出是一個 patch 檔。判定方式：套用 patch 後，fail2pass 測試（驗證 issue 已解決）與 pass2pass 測試（驗證既有功能沒壞）必須全部過關才算解決。指標是 Pass@1 resolve rate，沒有部分分數。",
     "題目擷取（§4.1）": "沿著 repo 的 commit 歷史，找一對相鄰 commit，視為一次 issue 的解決；較舊的叫 base，較新的叫 instance。兩者之間屬於測試相關檔案的 diff 定為 test patch，也就是 instance 新增或修改、而 base 沒有的測試；其餘 diff 定為 gold patch。論文沒有交代怎麼判斷哪些檔案算「測試相關」，也沒說明 commit pair 如何對應到 issue。",
     "篩選門檻（§1、§3.1）": "排除只改 1–10 行的小改動，只留多檔、實質修改的題目。每題至少 10 行變更；gold patch 平均 107.4 行、橫跨 4.1 個檔案，超過 100 題的改動超過 100 行。每個 repo 貢獻 50–100 題、硬上限 100 題，避免模型只因擅長某個 repo 就拿高分。repo 必須是仍在維護的專業專案，要有使用者基礎與文件，領域涵蓋消費者應用、B2B 服務與開發者工具。",
-    "資料來源與存取分層（§1、§3.3）": "三個子集，各用一種存取政策。public 731 題，來自 11 個 GPL 等 copyleft 授權的公開 repo，題目與成績全部公開在 HuggingFace。held-out 858 題，來自另外 12 個 copyleft repo，題目與成績都不公開，留待日後檢查模型是否對 public 過擬合。commercial 276 題，來自 18 個向新創公司購買的私有 repo，只公開評測成績。合計 1,865 題、41 個 repo。防污染的論點是：copyleft 授權對商用訓練語料構成法律障礙，私有 repo 則根本不在網路上。",
+    "資料來源與存取分層（§1、§3.3）": "三個子集，各用一種存取政策。public 731 題，來自 11 個 GPL 等 copyleft 授權的公開 repo，題目與成績全部公開在 HuggingFace。held-out 858 題，來自另外 12 個 copyleft repo，題目與成績都不公開，留待日後檢查模型是否對 public 過擬合。commercial 276 題，來自 18 個向新創公司購買的私有 repo，只公開評估成績。合計 1,865 題、41 個 repo。防污染的論點是：copyleft 授權對商用訓練語料構成法律障礙，私有 repo 則根本不在網路上。",
     "任務描述擴充（§3.2、§4.2、附錄 B）": "由人工蒐集 issue 討論、commit message、PR 等原始資訊，產出三件東西。(1) problem statement：改寫成該 repo 預設 issue 模板的格式，只陳述動機，不超出原始資訊的範圍。Table 6 的範例中，原 commit message 只有一行，改寫後有標題、描述、影響、重現步驟與預期行為。(2) requirements：條列預期行為，以 gold patch 與單元測試為依據。例如測試若斷言某段錯誤日誌字串，requirement 就寫明必須輸出同一字串。論文聲稱 requirements 不描述實作方式。(3) interface（選配）：只在需要新增或修改公開介面時提供，列出 gold patch 新增或改動的每個類別與函式，內容包括名稱、檔案路徑、輸入、輸出與一句描述。目的是避免 agent 寫出可行的解，卻因命名或模組路徑與測試預期不同而被判失敗。引言稱這是「三階段 human-in-the-loop 流程」，但正文沒有把三個階段拆開說明，也沒有交代人員數、撰寫指引或一致性檢查。",
     "環境建置（§3.2、§4.3）": "分三步。(1) 由專業軟體工程師手寫 Dockerfile，納入系統套件、repo 文件、建置工具與相依套件，反覆調整到容器內能直接執行程式碼與測試。Python 用隔離的虛擬環境；JS／TS 用 Node.js 搭配 npm 或 yarn；Go 用 module-aware 環境並設好 GOPATH。(2) 自動驗證：每個環境把 gold 測試重跑數次，必須每次都過關，否則整題丟棄，藉此排除 flaky 測試。(3) 人工測試審查：fail2pass 清單中與任務描述無關、或範圍過寬的測試逐條剔除；所有測試都被剔除的題目直接丟棄。環境預定以預建 Docker 映像檔釋出。",
     "評估設定（§5）": "scaffold 固定為 SWE-Agent，所有模型共用同一份 SWE-Agent 預設 prompt，上限 50 輪。作者試過 Agentless，但它不擅長多檔編輯、分數偏低，所以沒有採用。模型版本取 2025-09-18 當時的最新版。開源模型以 vllm 架在單節點 8 張 H100 上。能用原生 tool-use 就用，開源模型則改以語法解析實現 tool-use。Claude Opus 4.1 不開 extended thinking，比照 Anthropic 自己在 SWE-Bench Verified 上的做法。所有評估都在「無歧義」設定下進行，也就是 prompt 同時包含 problem statement、requirements 與 interface。報告 Pass@1；每個模型只跑一次，沒有信賴區間。",
@@ -110,7 +110,7 @@
   "limitations_observed": [
     "評估預算混著用，讓幾個主要對比失真。Claude Sonnet 4 在 Table 1 是 42.7%，在 Table 5（$2 上限）只有 17.6%；同一模型因預算不同差了 25.1 個百分點，論文完全沒有討論這對排名的影響。「public 最高 43.6%、commercial 不到 20%」的對比很可能跨了兩種設定：Table 2 的模型組合與 Table 5 相同，也沒有 v2 新增的 Sonnet 4.5 與 Haiku 4.5。若在同一設定下比，差距小得多（Opus 4.1 是 22.7% 對 17.8%）。Conclusion 用 23% 對比 Verified 的 >70%，則是跨 harness、跨預算的比較，因為本文沒有在同一個 scaffold 下跑 Verified。",
     "「抗污染」只有論證，沒有量測。GPL 是法律障礙，不是技術障礙；public repo 的完整 commit 歷史（包括 gold patch）本來就公開在 GitHub。論文沒有做任何污染檢測，例如依 commit 日期切分，或做記憶探測。held-out 集的成績也還沒報告，因此目前這只是設計主張。public set 已經放上 HuggingFace，時間一久，它本身也會進入語料。",
-    "requirements 與 interface 有洩題的疑慮。附錄 B 的範例點名了檔案路徑（scripts/affiliate_server.py）、函式名稱（stage_from_google_books）、要呼叫的 Batch.add_items，也列出每個新函式的輸入與輸出，這和「不洩漏解法」的聲稱互相矛盾。評測對象因此從「解 issue」偏向「照規格實作」。Table 3 的 25.9%→8.40% 被歸因於 verifier 偽陰性，但作者沒有人工檢查「只給 problem statement」那組的失敗 patch 裡有多少其實是正確的。「資訊變少」與「verifier 太窄」兩個因素沒有被拆開，偽陰性率也就沒有被量出來。",
+    "requirements 與 interface 有洩題的疑慮。附錄 B 的範例點名了檔案路徑（scripts/affiliate_server.py）、函式名稱（stage_from_google_books）、要呼叫的 Batch.add_items，也列出每個新函式的輸入與輸出，這和「不洩漏解法」的聲稱互相矛盾。評估對象因此從「解 issue」偏向「照規格實作」。Table 3 的 25.9%→8.40% 被歸因於 verifier 偽陰性，但作者沒有人工檢查「只給 problem statement」那組的失敗 patch 裡有多少其實是正確的。「資訊變少」與「verifier 太窄」兩個因素沒有被拆開，偽陰性率也就沒有被量出來。",
     "失敗模式分析的可靠度偏低，只適合當定性參考。(1) judge 是 GPT-5，同時也在評 GPT-5 自己的軌跡，有自我偏好的風險。(2) 人評一致性借用 SWE-agent 論文在另一套分類上的 87%，本文沒有自己量；「20 輪最貼近人工」也沒有數字與樣本數。(3) C.1 提示詞把「最終狀態失敗、沒有產生成功的 patch」寫死，連已提交 patch 的軌跡也這樣告訴 judge。(4) 10 個提示詞類別怎麼對應到 Table 4 的 9 欄，論文沒有說明。(5) Table 4 的計數加總超過評估集大小：GPT-4o 是 569+220＝789，大於 731；Opus 4.1 是 689，高於從 Table 5 推得的約 565 個未解決題。這和「只取未解決實例」的說法矛盾。(6) 內文百分比與表格重算的結果對不上（見 key_results）。",
     "「專業工程師需要數小時到數天」這一點沒有實測。論文沒有量工程師實際花了多久，只拿 patch 行數與檔案數當代理；平均 107.4 行、4.1 個檔案不等於長時程。評估時只給 50 輪（分析時再加上 $2 上限），這個上限本身就和「數小時到數天」的任務長度不相稱，一部分失敗可能只是預算耗盡。",
     "統計力不足，推論過頭。每個模型只跑一次 Pass@1，沒有信賴區間，也沒有多個種子。作者依 Figure 3 中只有 20–30 題的 10+ 檔類別，推論「開源模型缺乏處理多檔脈絡的能力」，這是過度推論。這個結果也和 tool-use 的實作方式混在一起：開源模型是靠語法解析做 tool-use，而 Qwen3 32B 的失敗中有 41.5% 屬於 Tool-Use。",
@@ -123,18 +123,18 @@
   "edges": [],
   "adoption": {
     "evidence": [
-      "Google DeepMind 的 Gemini 3.1 Pro 官方模型頁（https://deepmind.google/models/gemini/pro/ ，2026-09-26 查閱，頁面沒有標日期）在評測表中列出「SWE-Bench Pro (Public)」的單次嘗試成績：Gemini 3.1 Pro 54.2%、Gemini 3 Pro 43.3%。頁面連到的 methodology PDF（https://storage.googleapis.com/deepmind-media/gemini/gemini_3-1_pro_model_evaluation.pdf）這次無法解析，所以沒能確認所用的 harness 與預算。同一張表裡 GPT-5.2 與 GPT-5.3-Codex 的數字是 Google 做的比較，不當作 OpenAI 採用的證據；OpenAI 官網頁面回應 403，未能確認。",
+      "Google DeepMind 的 Gemini 3.1 Pro 官方模型頁（https://deepmind.google/models/gemini/pro/ ，2026-09-26 查閱，頁面沒有標日期）在評估表中列出「SWE-Bench Pro (Public)」的單次嘗試成績：Gemini 3.1 Pro 54.2%、Gemini 3 Pro 43.3%。頁面連到的 methodology PDF（https://storage.googleapis.com/deepmind-media/gemini/gemini_3-1_pro_model_evaluation.pdf）這次無法解析，所以沒能確認所用的 harness 與預算。同一張表裡 GPT-5.2 與 GPT-5.3-Codex 的數字是 Google 做的比較，不當作 OpenAI 採用的證據；OpenAI 官網頁面回應 403，未能確認。",
       "論文作者 Scale AI 自營公開排行榜（https://labs.scale.com/leaderboard/swe_bench_pro_public ，由 scale.com/leaderboard/swe_bench_pro_public 轉址過去，2026-09-26 查閱），持續更新 public set 的成績。頁面註明多數條目是 250 輪、不設成本上限，部分條目是 50 輪加上限，另有部分使用 mini-swe-agent。這屬於作者自己的部署。",
-      "旁證，不計入：MiniMax-M2.1（https://huggingface.co/MiniMaxAI/MiniMax-M2.1）與 DeepSeek-V3.2（https://huggingface.co/deepseek-ai/DeepSeek-V3.2）的 HF 模型卡中，SWE-bench Pro 只出現在「Evaluation results」中介資料區塊；MiniMax-M2.1 的 36.81 標註的來源是 Scale leaderboard。兩者 README 本文的廠商評測表都沒有這一項，因此不算廠商自己的主張。"
+      "旁證，不計入：MiniMax-M2.1（https://huggingface.co/MiniMaxAI/MiniMax-M2.1）與 DeepSeek-V3.2（https://huggingface.co/deepseek-ai/DeepSeek-V3.2）的 HF 模型卡中，SWE-bench Pro 只出現在「Evaluation results」中介資料區塊；MiniMax-M2.1 的 36.81 標註的來源是 Scale leaderboard。兩者 README 本文的廠商評估表都沒有這一項，因此不算廠商自己的主張。"
     ],
-    "assessment": "有可查證的業界採用。至少一家前沿模型廠商（Google DeepMind）在官方模型頁把 SWE-Bench Pro (Public) 列為代理式程式設計的評測項目，作者方也維運一個持續更新的排行榜。採用的形式是「當作模型評測基準」，不是把方法部署進產品。其他廠商（OpenAI、Anthropic 等）是否在官方材料中採用，這次未能打開確認；Anthropic 的 Claude Opus 4.5 發表頁只列了 SWE-bench Verified 與 Multilingual。不做推測。"
+    "assessment": "有可查證的業界採用。至少一家前沿模型廠商（Google DeepMind）在官方模型頁把 SWE-Bench Pro (Public) 列為代理式程式設計的評估項目，作者方也維運一個持續更新的排行榜。採用的形式是「當作模型評估基準」，不是把方法部署進產品。其他廠商（OpenAI、Anthropic 等）是否在官方材料中採用，這次未能打開確認；Anthropic 的 Claude Opus 4.5 發表頁只列了 SWE-bench Verified 與 Multilingual。不做推測。"
   },
   "reproducibility": {
     "code": "https://github.com/scaleapi/SWE-bench_Pro-os",
     "data": "public set 的 731 題公開於 https://huggingface.co/datasets/ScaleAI/SWE-bench_Pro；commercial（276 題）與 held-out（858 題）不公開，commercial 只公開成績。程式碼庫採 MIT 授權，2026-09-26 以 gh api 查得 531 stars、最後 push 於 2026-09-22。論文說環境會以預建 Docker 映像檔釋出，這次沒有逐一確認映像檔。LLM judge 的提示詞模板在附錄 C.1，但 system prompt 裡類別定義的全文與 judge 的輸出都沒有釋出。"
   },
   "value_verdict": "high",
-  "verdict_reason": "它是 T7 基準設計在 2025–2026 年被前沿廠商官方評測表採用的主流實例，其中三層存取分級，以及「用規格收窄解空間、量化 verifier 偽陰性」這兩個設計可以直接借用；不過論文本身的方法揭露與數字一致性偏弱，閱讀時要搭配本筆記的批判。",
+  "verdict_reason": "它是 T7 基準設計在 2025–2026 年被前沿廠商官方評估表採用的主流實例，其中三層存取分級，以及「用規格收窄解空間、量化 verifier 偽陰性」這兩個設計可以直接借用；不過論文本身的方法揭露與數字一致性偏弱，閱讀時要搭配本筆記的批判。",
   "related": [
     "2310.06770",
     "2405.15793",

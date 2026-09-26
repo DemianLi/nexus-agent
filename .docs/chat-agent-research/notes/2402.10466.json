@@ -135,7 +135,7 @@
     "表格之間的數字對不上：oracle 領域下的 Overall JGA，Table 5 與 Table 11 在 GPT-4 是 44.44 vs 44.70、FnCTOD-LLaMA2-13B 是 37.93 vs 38.70、LLaMA2-13B-Chat 是 26.56 vs 29.56；端到端的 Success，Table 3 與 Table 10 在 Zephyr 是 57.5 vs 57.40、FnCTOD 是 44.4 vs 44.50。差距不大，但顯示各表不是同一批輸出。",
     "「預測領域與 oracle 大致相當」對 GPT-4 不成立：GPT-4 的領域選擇準確率最低（88.62），改用 oracle 領域後 Overall JGA 從 38.71 升到 44.44（+5.73），是所有模型中差距最大的，代表 GPT-4 的新紀錄有相當部分受第一步限制。GPT-3.5 改用 oracle 反而降 0.24，與作者「標註有雜訊」的解釋一致，但在 temperature 0.3、單次推論的設定下，分不出這是雜訊還是取樣波動，論文也沒有量化。",
     "Table 6 的「每領域 200 筆最佳」是在 MultiWOZ 測試集上比出來的，沒有獨立的驗證集，等於用測試集選超參數；100 到 400 筆之間最多只差 3.6 分，而且都是單次訓練、單次推論、沒有變異數，200 筆是否真的最好無從判斷，「過擬合」的解釋也只是推測。",
-    "「保留對話能力」沒有直接證據：loss 只算函式呼叫、LoRA 只動 q_proj／v_proj，機制上說得通，但論文沒有任何通用對話評測（例如 MT-Bench、AlpacaEval），唯一佐證是 MultiWOZ 2.2 去詞彙化（delexicalized）回覆的 Success（44.4），而作者自己也承認這個指標可以被刷分。",
+    "「保留對話能力」沒有直接證據：loss 只算函式呼叫、LoRA 只動 q_proj／v_proj，機制上說得通，但論文沒有任何通用對話評估（例如 MT-Bench、AlpacaEval），唯一佐證是 MultiWOZ 2.2 去詞彙化（delexicalized）回覆的 Success（44.4），而作者自己也承認這個指標可以被刷分。",
     "§5.3 說除 LLaMA2-7B-Chat 以外的開源模型都勝過 ChatGPT 的端到端結果，但 Table 3 中 LLaMA2-13B-Chat 的 JGA 25.8 與 Success 27.7 都低於 ChatGPT 的 27.0／44.0；Success 方面 Vicuna-7B（37.7）、Vicuna-13B（23.1）也都低於 44.0，這句話只在大部分模型的 JGA 上成立。",
     "端到端的 Success 與 JGA 走勢不一致：Zephyr 的 JGA 32.3 卻有 57.5 的 Success，Vicuna-13B 的 JGA 33.8 只有 23.1 的 Success。ChatGPT 基準（27.0／44.0）來自另一篇論文的提示與模型快照，本文沒有用自己的方法跑 GPT-3.5／4 的端到端，所以「FnCTOD 在端到端的優勢更明顯」缺少同一模型的對照。",
     "狀態更新規則有結構上的上限（依公開程式碼）：每輪只選一個領域、slot 只增不刪、enum 以外的值直接丟棄。使用者同一輪修改兩個領域，或撤回先前的條件（例如不需要訂位了），這套表示都無法正確反映。MultiWOZ 這類情境少，JGA 看不出來，但放到長多輪的 agent 互動就會浮現。",

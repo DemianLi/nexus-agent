@@ -128,7 +128,7 @@
   "adoption": {
     "evidence": [
       "官方程式庫 README 宣稱此方法已成為 Spider、SParC、CoSQL 的官方指標，並將在三者的官方排行榜報告 test suite accuracy（https://github.com/taoyds/test-suite-sql-eval）——屬學術基準層級的採用，非商用產品。",
-      "反例參考：Defog 的開源評測框架 sql-eval 的 README 描述為在資料庫上執行 gold 與生成查詢後以 exact／subset 比對 dataframe，未提及 test suite 或本文（https://github.com/defog-ai/sql-eval）。"
+      "反例參考：Defog 的開源評估框架 sql-eval 的 README 描述為在資料庫上執行 gold 與生成查詢後以 exact／subset 比對 dataframe，未提及 test suite 或本文（https://github.com/defog-ai/sql-eval）。"
     ],
     "assessment": "學術基準層級有明確採用（Spider/SParC/CoSQL 官方指標）；商用產品或部署採用未見證據。注意：本次 WebSearch 額度已用盡，只能直接開啟已知頁面確認，商用端查證不完整。"
   },

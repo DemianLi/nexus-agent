@@ -6,7 +6,7 @@
   "read_level": "full",
   "source": "arxiv-html",
   "one_liner": "以 Qwen-VL 為底，在約 100 萬筆從網頁 HTML 與行動介面資料集自動整理出的 GUI 定位資料上做持續預訓練，得到只看截圖、直接輸出正規化點擊座標的視覺 GUI agent SeeClick；同時建立跨 iOS、Android、macOS、Windows、網頁的 GUI grounding 基準 ScreenSpot，並在 MiniWob、AITW、Mind2Web 上顯示 grounding 變好時下游 agent 表現跟著變好。",
-  "problem": "當時的 GUI agent 多半把結構化文字（網頁 HTML／DOM、Android view hierarchy）當觀測，作者指出三個問題：(1) iOS 與桌面應用常常根本拿不到這類結構化資料；(2) 結構化文字冗長，佔用 LLM context 效率很差，卻又丟掉版面、圖片與圖示資訊；(3) 各平台格式不同，每個任務都要另外設計觀測與動作空間。改用截圖可以跨平台統一，但作者的前期研究發現，視覺 agent 的關鍵瓶頸是 GUI grounding，也就是依自然語言指令在截圖上找到正確元素位置的能力。通用 LVLM 在自然影像上有 grounding 能力，GUI 截圖卻是文字密集、圖示小而多，現有模型（含 GPT-4V）在 GUI 上幾乎定位不到。此外，當時缺少跨平台、貼近真實使用的 GUI grounding 評測，既有研究大多只用 2017 年蒐集的 Android RICO 資料。",
+  "problem": "當時的 GUI agent 多半把結構化文字（網頁 HTML／DOM、Android view hierarchy）當觀測，作者指出三個問題：(1) iOS 與桌面應用常常根本拿不到這類結構化資料；(2) 結構化文字冗長，佔用 LLM context 效率很差，卻又丟掉版面、圖片與圖示資訊；(3) 各平台格式不同，每個任務都要另外設計觀測與動作空間。改用截圖可以跨平台統一，但作者的前期研究發現，視覺 agent 的關鍵瓶頸是 GUI grounding，也就是依自然語言指令在截圖上找到正確元素位置的能力。通用 LVLM 在自然影像上有 grounding 能力，GUI 截圖卻是文字密集、圖示小而多，現有模型（含 GPT-4V）在 GUI 上幾乎定位不到。此外，當時缺少跨平台、貼近真實使用的 GUI grounding 評估，既有研究大多只用 2017 年蒐集的 Android RICO 資料。",
   "core_idea": "把觀測收斂成「只有目前截圖」，把動作收斂成「在正規化座標上點擊，加上打字」，並把 agent 能力中的感知部分拆成一個可以單獨訓練、單獨量測的子能力：GUI grounding。做法分四步：(1) 用語言生成的形式輸出座標，數字直接當成一般文字，不另設座標詞彙，訓練目標是給截圖 s 與元素描述 x 預測位置 y；(2) 從網頁 HTML 自動抽出「顯示可見文字的元素」與「帶 title 屬性的元素」，組成大量（指令、位置）配對，再加上行動介面資料與通用視覺語言資料做持續預訓練；(3) 建 ScreenSpot，只量 grounding；(4) 在各 agent 任務上微調，檢查 grounding 的提升是否轉成任務成功率的提升。",
   "method": {
     "基底模型": "Qwen-VL-Chat（9.6B），輸入影像解析度 448×448，本身已有自然影像 grounding 能力。",
@@ -134,17 +134,17 @@
   "edges": [],
   "adoption": {
     "evidence": [
-      "阿里巴巴 Qwen2.5-VL-7B-Instruct 的官方 Hugging Face model card，在 Agent benchmark 區塊把 ScreenSpot 列為評測項目（84.7），並與 ScreenSpot Pro（29.0）分開列。性質是業界模型發布時沿用本文提出的基準當評測指標，不是 SeeClick 模型本身被部署。來源：https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct",
+      "阿里巴巴 Qwen2.5-VL-7B-Instruct 的官方 Hugging Face model card，在 Agent benchmark 區塊把 ScreenSpot 列為評估項目（84.7），並與 ScreenSpot Pro（29.0）分開列。性質是業界模型發布時沿用本文提出的基準當評估指標，不是 SeeClick 模型本身被部署。來源：https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct",
       "Microsoft Research 官方文章〈OmniParser for pure vision-based GUI agent〉（2024-10-08）以 ScreenSpot 評估 OmniParser 對 GPT-4V 的改善。性質偏研究用途，只當旁證。來源：https://www.microsoft.com/en-us/research/articles/omniparser-for-pure-vision-based-gui-agent/"
     ],
-    "assessment": "SeeClick 模型本身未見商用部署證據。它提出的 ScreenSpot 基準有可查證的業界沿用：Qwen2.5-VL 的官方 model card 用它報 GUI grounding 分數，Microsoft Research 的 OmniParser 文章也用它評估。所以採納屬於「評測基準被業界採用」，不是方法或模型進入產品。"
+    "assessment": "SeeClick 模型本身未見商用部署證據。它提出的 ScreenSpot 基準有可查證的業界沿用：Qwen2.5-VL 的官方 model card 用它報 GUI grounding 分數，Microsoft Research 的 OmniParser 文章也用它評估。所以採納屬於「評估基準被業界採用」，不是方法或模型進入產品。"
   },
   "reproducibility": {
     "code": "https://github.com/njucckevin/SeeClick",
     "data": "repo（Apache-2.0）提供 Hugging Face 上的模型權重（cckevinn/SeeClick）、ScreenSpot 基準、從 Common Crawl 整理的網頁 grounding 預訓練資料、預訓練與 ScreenSpot 評估程式、三個下游任務的微調程式。論文說 AITW 依指令切分的 train/val/test 會開源；MiniWob 訓練資料來自 Synapse 的 rollout；Mind2Web 截圖由原始 raw dump 解析。每步 agent 提示詞與 30 個預訓練模板在論文裡沒有全文，要看 repo；下游微調的超參數論文沒給。以上 repo 內容是我讀 GitHub 頁面說明所得，沒有逐檔核對。"
   },
   "value_verdict": "high",
-  "verdict_reason": "它把 GUI grounding 定義成純截圖觀測的核心瓶頸，並提出後來成為業界標準評測的 ScreenSpot（Qwen2.5-VL model card 也沿用），是 T3 感知子領域中 GUI 觀測與 grounding 這條線的必讀起點；不過方法新意主要在資料工程，實驗比較有 Mind2Web 裁切、AITW 基線切分不一致等瑕疵，數字要打折看。",
+  "verdict_reason": "它把 GUI grounding 定義成純截圖觀測的核心瓶頸，並提出後來成為業界標準評估的 ScreenSpot（Qwen2.5-VL model card 也沿用），是 T3 感知子領域中 GUI 觀測與 grounding 這條線的必讀起點；不過方法新意主要在資料工程，實驗比較有 Mind2Web 裁切、AITW 基線切分不一致等瑕疵，數字要打折看。",
   "related": [
     "2308.12966",
     "2312.08914",

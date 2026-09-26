@@ -5,9 +5,9 @@
   "subarea": "可觀測性／監控（執行期監控、異常偵測、安全監控）",
   "read_level": "full",
   "source": "arxiv-html",
-  "one_liner": "把「LLM 當 agent 安全監控器」定義成一個任務：輸入一整段 agent 互動紀錄，輸出風險分析與 safe/unsafe 標籤。作者據此建了 569 筆人工標註的 benchmark，評測 11 個 LLM。GPT-4o（F1 74.45）是唯一在兩個子集都高於隨機的模型，也是 Table 1 裡唯一贏過「全判 unsafe」基準（F1 69.04）的模型。",
-  "problem": "過去的 LLM 安全評測（SafetyBench 等）與內容審核模型（Llama Guard 等）處理的都是「生成內容有沒有害」。agent 的風險則出在行為上：在多輪的使用者／agent／環境互動裡，執行了不該執行的工具呼叫，例如照著工具回傳值裡被注入的指令去開門鎖，或關掉所有電器時連監視器一起關掉。ToolEmu 與 AgentMonitor 已經拿 LLM 當安全監控器，但沒有人系統性量過：LLM 讀 agent 的執行紀錄時，到底認不認得出行為風險。沒有這個量尺，就無法判斷拿通用 LLM 當執行期守門員可不可靠。",
-  "core_idea": "把 agent 的一次執行記成 R=(u, [(t,a,f)_1..n])，也就是使用者指令加上 ReAct 式的 thought／action／環境回饋三元組序列。「安全監控」則定義成 p_θ(R)→(analysis, label)。評測分兩步串接：先讓模型寫風險分析，再以分析為條件輸出二元標籤。標籤以 F1 評分（safety judgment）。分析則由 GPT-4 對照人工寫的 MTO（Motivation／Trigger／Outcome）風險描述評分（risk identification）。資料刻意讓 safe 與 unsafe 約各半，而且 safe 樣本都是「差點出事但沒出事」的近似案例。",
+  "one_liner": "把「LLM 當 agent 安全監控器」定義成一個任務：輸入一整段 agent 互動紀錄，輸出風險分析與 safe/unsafe 標籤。作者據此建了 569 筆人工標註的 benchmark，評估 11 個 LLM。GPT-4o（F1 74.45）是唯一在兩個子集都高於隨機的模型，也是 Table 1 裡唯一贏過「全判 unsafe」基準（F1 69.04）的模型。",
+  "problem": "過去的 LLM 安全評估（SafetyBench 等）與內容審核模型（Llama Guard 等）處理的都是「生成內容有沒有害」。agent 的風險則出在行為上：在多輪的使用者／agent／環境互動裡，執行了不該執行的工具呼叫，例如照著工具回傳值裡被注入的指令去開門鎖，或關掉所有電器時連監視器一起關掉。ToolEmu 與 AgentMonitor 已經拿 LLM 當安全監控器，但沒有人系統性量過：LLM 讀 agent 的執行紀錄時，到底認不認得出行為風險。沒有這個量尺，就無法判斷拿通用 LLM 當執行期守門員可不可靠。",
+  "core_idea": "把 agent 的一次執行記成 R=(u, [(t,a,f)_1..n])，也就是使用者指令加上 ReAct 式的 thought／action／環境回饋三元組序列。「安全監控」則定義成 p_θ(R)→(analysis, label)。評估分兩步串接：先讓模型寫風險分析，再以分析為條件輸出二元標籤。標籤以 F1 評分（safety judgment）。分析則由 GPT-4 對照人工寫的 MTO（Motivation／Trigger／Outcome）風險描述評分（risk identification）。資料刻意讓 safe 與 unsafe 約各半，而且 safe 樣本都是「差點出事但沒出事」的近似案例。",
   "method": {
     "紀錄格式": "每筆 case 包含：(1) 紀錄：使用者指令，加上 1 到多輪的 [Thought]／[Action]／環境回饋（Observation），採 ReAct 格式；AgentMonitor 來源的資料沒有 thought，該欄留空。(2) 二元安全標籤 safe／unsafe。(3) unsafe 樣本附 MTO 風險描述：Motivation 是風險來自使用者或環境的哪裡；Trigger 是 agent 的哪個動作觸發了風險；Outcome 是造成什麼後果。(4) 中繼資料：5 個類別（Program、IoT、Software、Web、Finance）、27 個情境、10 種風險類型（Privacy Leakage、Computer Security、Physical Health、Data Loss、Financial Loss、Property Damage、Illegal Activities、Ethics & Morality、Bias & Offensiveness、Miscellaneous，沿用 ToolEmu 的分類）。",
     "威脅模型與範圍": "只看 personal LLM agent，假設使用者提示是善意的，因此排除 jailbreak 等直接攻擊。風險分兩個來源：Intended Attacks，也就是透過環境（工具回傳值）做的間接提示注入；Unintended Risks，也就是沒有攻擊者，但因環境複雜或指令不完整而闖禍。",
@@ -18,7 +18,7 @@
       "擴充 Unintended Risks：標註者針對「某情境下容易觸發某風險類型」發想案例，再用 ChatGPT 潤飾成完整軌跡，最後人工檢查有效性。",
       "最終組成：InjecAgent 414 筆（全部是 Intended Attacks，200 unsafe／214 safe）；Unintended Risks 155 筆（ToolEmu 81、AgentMonitor 24、人工 55，其中 100 unsafe／55 safe）。兩個子集的 unsafe／safe 拆分論文沒有直接列出，是由 Table 1 的 Recall／Specificity 分母與 Table 5 推得。總計 569 筆，300 unsafe／269 safe（52.7% unsafe），平均 2.6 輪、206 字。"
     ],
-    "評測流程（兩輪串接）": [
+    "評估流程（兩輪串接）": [
       "第 1 輪（risk identification）：把紀錄接在對話裡，要求模型分析「你身為 agent 的行動」在此情境下是否安全，輸出純文字、不要 JSON，也不要沿用 [Thought]/[Action] 格式（Figure 4，Zero-Shot-CoT）。",
       "第 2 輪（safety judgment）：要求模型根據上一輪的分析，只輸出 safe 或 unsafe，不輸出其他文字。",
       "變體 +Risk Types：在第 1 輪提示裡列出 9 種風險類型，要求特別注意。",
@@ -129,11 +129,11 @@
   ],
   "adoption": {
     "evidence": [],
-    "assessment": "未見證據。論文本身沒有部署或產品。GitHub README（https://github.com/Lordog/R-Judge）只標示 EMNLP 2024 Findings，沒有提到任何產業使用。WebSearch 查過 Artificial Analysis 的 guardrail 評測（只用 WildGuardTest、ToxicChat、XSTest）與 ServiceNow AprielGuard 的論文，兩者列出的評測資料都沒有 R-Judge（AprielGuard 那篇是用 WebFetch 摘要核對的，不是逐字讀完）；也沒有查到商用產品頁、官方部落格或企業 model card 採用它。（Hugging Face 上 AI45Research／上海 AI Lab 的 AgentDoG-Qwen3-4B model card 有報告 R-Judge 分數，但那是研究機構的研究釋出，性質等同後續論文拿它來比較，屬於學術影響力。Semantic Scholar 顯示 316 次引用、33 次 influential，也同樣只是學術影響力。）"
+    "assessment": "未見證據。論文本身沒有部署或產品。GitHub README（https://github.com/Lordog/R-Judge）只標示 EMNLP 2024 Findings，沒有提到任何產業使用。WebSearch 查過 Artificial Analysis 的 guardrail 評估（只用 WildGuardTest、ToxicChat、XSTest）與 ServiceNow AprielGuard 的論文，兩者列出的評估資料都沒有 R-Judge（AprielGuard 那篇是用 WebFetch 摘要核對的，不是逐字讀完）；也沒有查到商用產品頁、官方部落格或企業 model card 採用它。（Hugging Face 上 AI45Research／上海 AI Lab 的 AgentDoG-Qwen3-4B model card 有報告 R-Judge 分數，但那是研究機構的研究釋出，性質等同後續論文拿它來比較，屬於學術影響力。Semantic Scholar 顯示 316 次引用、33 次 influential，也同樣只是學術影響力。）"
   },
   "reproducibility": {
     "code": "https://github.com/Lordog/R-Judge",
-    "data": "公開：資料與評測腳本都在上述 repo（data/、eval/ 目錄），README 沒有標示授權。資料衍生自 ToolEmu 與 InjecAgent（致謝中提到有取得原作者同意），再次散布的授權條件不明。溫度用預設值、沒有重複次數，數字不一定能精確重現。"
+    "data": "公開：資料與評估腳本都在上述 repo（data/、eval/ 目錄），README 沒有標示授權。資料衍生自 ToolEmu 與 InjecAgent（致謝中提到有取得原作者同意），再次散布的授權條件不明。溫度用預設值、沒有重複次數，數字不一定能精確重現。"
   },
   "value_verdict": "medium",
   "verdict_reason": "它把「LLM 審閱 agent 軌跡判斷安全」定義成可量測的任務，也公開了後續 guard 研究常拿來當 held-out 的測試集；但資料有 73% 是 InjecAgent 範本、平均只有 2.6 輪，而除了 GPT-4o 之外沒有模型贏過全判 unsafe 的 69.04 F1，加上 Llama Guard 那組的「同設定」比較不成立，結論只能當參考基準，不是監控器設計的必讀。",

@@ -9,7 +9,7 @@
   "problem": "agent 的除錯目前仰賴人工逐條看冗長軌跡，無法隨軌跡數量與長度擴充；既有 benchmark 多只看端到端成敗，既有失敗分類（如 MAST）多針對解析成純文字的軌跡、偏重推理與多 agent 協調，缺少 API 錯誤、環境設定、資源管理這類系統執行錯誤，也不對應實務上 agent 框架輸出的 OpenTelemetry 結構化 span。作者要的是一份步驟（span）層級、接地於真實框架輸出格式的標註資料，用來衡量「自動化軌跡除錯／LLM-as-judge」到底能不能做。",
   "core_idea": "把一次 agent 執行當成 OpenTelemetry span 樹（LLM 呼叫、工具呼叫各為一個 span），用一份三層分類法在 span 層級標出每個錯誤的類別、位置（span id）、證據、描述與影響程度，並在軌跡層級給四項 1–5 分的 rubric；再把整份原始軌跡 JSON 丟給長上下文 LLM，要它輸出同格式的錯誤清單與分數，與人工標註比對類別、位置與分數相關性。",
   "method": {
-    "taxonomy": "三大類、葉節點共 20 個（加一個開放的 Domain Specific Errors）。Reasoning Errors：Hallucinations（Language-only、Tool-related）、Information Processing（Poor Information Retrieval、Tool Output Misinterpretation）、Decision Making（Incorrect Problem Identification、Tool Selection Errors）、Output Generation（Formatting Errors、Instruction Non-compliance）。System Execution Errors：Configuration（Tool Definition Issues、Environment Setup Errors）、API Issues（Rate Limiting 429、Authentication Errors 401/403、Service Errors 500、Resource Not Found 404）、Resource Management（Resource Exhaustion、Timeout Issues）。Planning and Coordination Errors：Context Management（Context Handling Failures、Resource Abuse＝因記憶問題重複呼叫工具）、Task Management（Goal Deviation、Task Orchestration）。每個葉節點在評測提示詞裡附一行括號定義（§3、§A.11）。",
+    "taxonomy": "三大類、葉節點共 20 個（加一個開放的 Domain Specific Errors）。Reasoning Errors：Hallucinations（Language-only、Tool-related）、Information Processing（Poor Information Retrieval、Tool Output Misinterpretation）、Decision Making（Incorrect Problem Identification、Tool Selection Errors）、Output Generation（Formatting Errors、Instruction Non-compliance）。System Execution Errors：Configuration（Tool Definition Issues、Environment Setup Errors）、API Issues（Rate Limiting 429、Authentication Errors 401/403、Service Errors 500、Resource Not Found 404）、Resource Management（Resource Exhaustion、Timeout Issues）。Planning and Coordination Errors：Context Management（Context Handling Failures、Resource Abuse＝因記憶問題重複呼叫工具）、Task Management（Goal Deviation、Task Orchestration）。每個葉節點在評估提示詞裡附一行括號定義（§3、§A.11）。",
     "trace_collection": {
       "GAIA_split": "GAIA 純文字題。用 Hugging Face OpenDeepResearch（smolagents）階層式編排：manager agent 把需要瀏覽的子任務交給 search agent；兩者 backbone 都是 o3-mini-2025-01-31。search agent 的工具：web_search（Google，可選 filter_year）、visit_page、page_up、page_down、find_on_page_ctrl_f、find_next、find_archived_url（Wayback Machine）、inspect_file_as_text、visualizer；工具定義全文見 §A.10。",
       "SWE_split": "SWE-Bench Lite。單一 CodeAct agent（Thought／Code／Observation 迴圈，程式碼以 <end_code> 結尾），backbone claude-3-7-sonnet-20250219，只給沙箱 Python 直譯器、final_answer 工具與 gitingest 函式庫讀 repo；可 import 的模組列白名單。為「有機地」誘發錯誤，刻意加指令限制：禁止用 git、禁止印出檔案內容、一次只看 500 字元、必須以正規表達式解析 gitingest 字串、輸出長度限制，並在系統提示詞結尾加「答對給一百萬美元」（§4.1、§A.12）。",
@@ -17,7 +17,7 @@
     },
     "annotation": "4 位具軟體工程與記錄檔除錯經驗的標註者，逐一檢查每個 LLM span 與工具 span；每個錯誤標：span ID、錯誤類別（只能用葉節點）、證據（軌跡中的原文）、描述、影響（LOW／MEDIUM／HIGH）。軌跡層級另給四項 1–5 Likert：Reliability、Security、Instruction adherence、Plan optimality（rubric 全文在 §A.7.1），以及 overall。之後做四輪由 ML 研究員執行的複核；另挑 63 條軌跡（SWE 30 條、GAIA 33 條）量複核修改率當一致性證據。每條 GAIA 軌跡標註約 30 分鐘、SWE 約 40 分鐘，加複核約 110／120 分鐘；標註者不查證軌跡以外的外部資訊；報酬每條 12.66 美元。",
     "judge_task": {
-      "input": "評測提示詞（§A.11）＝分類法樹狀清單＋指令＋輸出模板＋一個範例＋整份原始軌跡 JSON（直接字串插入，不切塊、不壓縮、不給工具）。",
+      "input": "評估提示詞（§A.11）＝分類法樹狀清單＋指令＋輸出模板＋一個範例＋整份原始軌跡 JSON（直接字串插入，不切塊、不壓縮、不給工具）。",
       "output": "純 JSON：errors 陣列（每筆 category／location＝span id／evidence／description／impact），以及 scores（reliability、security、instruction_adherence、plan_opt 各含分數與理由，加 overall）。",
       "rules": "必須窮舉所有錯誤；只能填葉節點類別；位置一律標該錯誤第一次出現的 span，唯獨 Resource Abuse 標最後一次出現的 span；軌跡無錯時 errors 為空陣列。"
     },
@@ -141,7 +141,7 @@
     "evidence": [
       "Patronus AI 官方部落格〈Introducing TRAIL: A Benchmark for Agentic Evaluation〉明言其產品 Percival（agent 軌跡除錯器）依 TRAIL 的分類法呈現 20 多種失敗模式並建議提示詞修改：https://www.patronus.ai/blog/introducing-trail-a-benchmark-for-agentic-evaluation",
       "Patronus AI 官方 Agents 產品頁同時列出 TRAIL benchmark 與可偵測 agent 軌跡中 20 多種失敗模式的 Percival：https://www.patronus.ai/agents",
-      "資料集與評測程式碼公開：https://huggingface.co/datasets/PatronusAI/TRAIL（MIT、需同意分享聯絡資訊的 gated 資料集）；https://github.com/patronus-ai/trail-benchmark（MIT）"
+      "資料集與評估程式碼公開：https://huggingface.co/datasets/PatronusAI/TRAIL（MIT、需同意分享聯絡資訊的 gated 資料集）；https://github.com/patronus-ai/trail-benchmark（MIT）"
     ],
     "assessment": "有商用採納證據，但來源是作者所屬公司 Patronus AI 自家產品 Percival 的官方自述（分類法被用作產品偵測失敗模式的依據），屬於同一公司的內部採用，不是第三方採用；docs.patronus.ai 的 Percival 文件需要登入（回傳 401），無法進一步核對分類法在產品內的實際對應。未見其他廠商以官方文件表明採用 TRAIL 分類法或資料集。"
   },

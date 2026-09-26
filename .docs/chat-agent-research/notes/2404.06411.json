@@ -124,7 +124,7 @@
   ],
   "adoption": {
     "evidence": [],
-    "assessment": "未見證據。論文本身只提供 GitHub 開源碼（https://github.com/nec-research/agentquest）與 demo 影片，沒有描述任何部署或產品採用；作者雖來自 NEC Laboratories Europe，但文中沒有提到 NEC 內部使用。本次 WebSearch 額度已用盡，未能再做線上查證。"
+    "assessment": "未見證據。論文本身只提供 GitHub 開源程式碼（https://github.com/nec-research/agentquest）與 demo 影片，沒有描述任何部署或產品採用；作者雖來自 NEC Laboratories Europe，但文中沒有提到 NEC 內部使用。本次 WebSearch 額度已用盡，未能再做線上查證。"
   },
   "reproducibility": {
     "code": "https://github.com/nec-research/agentquest",

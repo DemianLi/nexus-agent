@@ -137,7 +137,7 @@
   "edges": [],
   "adoption": {
     "evidence": [],
-    "assessment": "未見證據。本次只查了作者的 GitHub repo（https://github.com/MadryLab/platinum-benchmarks）與 HF 資料集頁面（https://huggingface.co/datasets/madrylab/gsm8k-platinum），兩者都沒有提到任何產品、model card 或官方評測套件採用。作者自己維護的排行榜與資料集釋出屬於發布，不算採納。本 session 的 WebSearch 額度已用完，未能做更廣的檢索。"
+    "assessment": "未見證據。本次只查了作者的 GitHub repo（https://github.com/MadryLab/platinum-benchmarks）與 HF 資料集頁面（https://huggingface.co/datasets/madrylab/gsm8k-platinum），兩者都沒有提到任何產品、model card 或官方評估套件採用。作者自己維護的排行榜與資料集釋出屬於發布，不算採納。本 session 的 WebSearch 額度已用完，未能做更廣的檢索。"
   },
   "reproducibility": {
     "code": "https://github.com/MadryLab/platinum-benchmarks",

@@ -5,9 +5,9 @@
   "subarea": "部分分數與過程度量",
   "read_level": "full",
   "source": "arxiv-html",
-  "one_liner": "Apple 提出有狀態、對話式、互動式的工具使用 benchmark ToolSandbox：以人工標註的 milestone DAG 做拓樸順序約束下的最佳匹配，給任意軌跡 [0,1] 部分分數，以 minefield 一票否決，並用 GPT-4o 使用者模擬器做 on-policy 評測 13 個模型。",
-  "problem": "既有工具使用評測多半是無狀態的 REST API（BFCL、ToolEval）、單輪自足的請求，或是在預先展開的 off-policy 對話軌跡上逐輪比對（API-Bank、ToolTalk），無法評估 agent 用自己的策略與使用者多輪互動、處理工具之間隱性的世界狀態相依、從工具錯誤中恢復的能力。互動式軌跡又高度多樣：同一任務可以用不同工具、不同順序或試錯完成。評分若綁死單一動作序列，就會誤判合理的替代路徑；若只靠 LLM 評審給 pass rate／win rate，可靠性與可解釋性又有疑慮。因此需要一種能對任意軌跡給出可解釋的中間與終局訊號的評分方式。",
-  "core_idea": "把評分對象從「動作序列」換成「每一輪的世界狀態快照加上完整訊息紀錄」。由人寫出必須發生的關鍵事件（milestone，彼此有時間相依、構成 DAG）與絕不能發生的事件（minefield）；評分時在所有符合拓樸順序的「milestone→輪次」對應中，找相似度平均最高的那一個。這樣任何路徑都能被評，中途進度也拿得到部分分數；任何 minefield 被觸發，整條軌跡歸零。效率另以輪數報告。對話端用帶 Knowledge Boundary 與 Demonstration 的 LLM 使用者模擬器做 on-policy 評測。",
+  "one_liner": "Apple 提出有狀態、對話式、互動式的工具使用 benchmark ToolSandbox：以人工標註的 milestone DAG 做拓樸順序約束下的最佳匹配，給任意軌跡 [0,1] 部分分數，以 minefield 一票否決，並用 GPT-4o 使用者模擬器做 on-policy 評估 13 個模型。",
+  "problem": "既有工具使用評估多半是無狀態的 REST API（BFCL、ToolEval）、單輪自足的請求，或是在預先展開的 off-policy 對話軌跡上逐輪比對（API-Bank、ToolTalk），無法評估 agent 用自己的策略與使用者多輪互動、處理工具之間隱性的世界狀態相依、從工具錯誤中恢復的能力。互動式軌跡又高度多樣：同一任務可以用不同工具、不同順序或試錯完成。評分若綁死單一動作序列，就會誤判合理的替代路徑；若只靠 LLM 評審給 pass rate／win rate，可靠性與可解釋性又有疑慮。因此需要一種能對任意軌跡給出可解釋的中間與終局訊號的評分方式。",
+  "core_idea": "把評分對象從「動作序列」換成「每一輪的世界狀態快照加上完整訊息紀錄」。由人寫出必須發生的關鍵事件（milestone，彼此有時間相依、構成 DAG）與絕不能發生的事件（minefield）；評分時在所有符合拓樸順序的「milestone→輪次」對應中，找相似度平均最高的那一個。這樣任何路徑都能被評，中途進度也拿得到部分分數；任何 minefield 被觸發，整條軌跡歸零。效率另以輪數報告。對話端用帶 Knowledge Boundary 與 Demonstration 的 LLM 使用者模擬器做 on-policy 評估。",
   "method": {
     "整體架構": "Python 原生的測試環境。Execution Context 是全域狀態，內含 World State（各工具的資料庫：CONTACT、MESSAGING、REMINDER、SETTING 等，repo 以 polars DataFrame 存放）與 Message Bus（所有角色間訊息的線性紀錄），每一輪都保留完整快照供事後評分。LLM agent 不能直接改 Execution Context，只能透過工具改。工具執行時，名稱、輸入與輸出會寫成 tool trace 存進 Execution Context。",
     "角色與訊息協定": "三個角色：User（LLM 模擬器）、Agent、Execution Environment。每則訊息帶 sender、recipient、content 與 visible_to；協調器的規則是「最近一則訊息的收件者就是下一個發話者」。每個角色只讀得到自己可見的 Message Bus 子視圖（預設是寄給自己或自己寄出的訊息）。Agent 可以回覆 User 追問資訊，或把 JSON 形式的工具呼叫轉成 Python 程式碼，交給 Execution Environment 在 code.InteractiveConsole 裡執行；例外經由 stderr 回傳給 Agent，讓它能試錯修正。User 判斷任務完成（或無法完成）時，呼叫它唯一可用的工具 end_conversation，系統進入終態後才開始評分。",
@@ -144,7 +144,7 @@
   ],
   "adoption": {
     "evidence": [],
-    "assessment": "未見證據。本文由 Apple 研究人員發表，評測框架開源於 GitHub（apple/ToolSandbox），但那是論文自身的釋出，不構成部署或產品採用。查過 Apple Machine Learning Research 的 2024 基礎模型技術報告頁（https://machinelearning.apple.com/research/apple-intelligence-foundation-language-models）與 2025 技術報告頁（https://machinelearning.apple.com/research/apple-foundation-models-tech-report-2025），都沒有提到 ToolSandbox。本次 WebSearch 額度已用盡，無法再擴大查找其他模型卡或產品文件。"
+    "assessment": "未見證據。本文由 Apple 研究人員發表，評估框架開源於 GitHub（apple/ToolSandbox），但那是論文自身的釋出，不構成部署或產品採用。查過 Apple Machine Learning Research 的 2024 基礎模型技術報告頁（https://machinelearning.apple.com/research/apple-intelligence-foundation-language-models）與 2025 技術報告頁（https://machinelearning.apple.com/research/apple-foundation-models-tech-report-2025），都沒有提到 ToolSandbox。本次 WebSearch 額度已用盡，無法再擴大查找其他模型卡或產品文件。"
   },
   "reproducibility": {
     "code": "https://github.com/apple/ToolSandbox（GitHub 授權欄為 Other／NOASSERTION，屬 Apple 自訂授權；本筆記查閱的是 commit c8571d7）",

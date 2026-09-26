@@ -132,7 +132,7 @@
   ],
   "adoption": {
     "evidence": [],
-    "assessment": "未見證據。論文沒有提到任何產品或部署，只說在模擬器上訓練的 agent 之後「可以」部署給真人繼續學習，並沒有實際做。公開儲存庫 https://github.com/MiuLab/TC-Bot（論文中的 MiuLab/UserSimulator 連結會轉到這裡；MIT 授權，約 800 星、288 fork，最後一次提交在 2023-05）是研究用程式碼。SLT 2018 的 Microsoft Dialogue Challenge（https://github.com/xiul-msr/e2e_dialog_challenge）引用本文，沿用同一套命令列介面，並擴充到餐廳與計程車領域；這屬於研究社群的共同評測，是學術影響力，不算商用採納。Semantic Scholar 記錄 187 次引用、24 次 influential citation，同樣只是學術影響力。"
+    "assessment": "未見證據。論文沒有提到任何產品或部署，只說在模擬器上訓練的 agent 之後「可以」部署給真人繼續學習，並沒有實際做。公開儲存庫 https://github.com/MiuLab/TC-Bot（論文中的 MiuLab/UserSimulator 連結會轉到這裡；MIT 授權，約 800 星、288 fork，最後一次提交在 2023-05）是研究用程式碼。SLT 2018 的 Microsoft Dialogue Challenge（https://github.com/xiul-msr/e2e_dialog_challenge）引用本文，沿用同一套命令列介面，並擴充到餐廳與計程車領域；這屬於研究社群的共同評估，是學術影響力，不算商用採納。Semantic Scholar 記錄 187 次引用、24 次 influential citation，同樣只是學術影響力。"
   },
   "reproducibility": {
     "code": "https://github.com/MiuLab/TC-Bot（MIT；Python 2、numpy 自寫的 DQN／LSTM；包含規則模擬器、error model、NLU／NLG 預訓練模型、規則 agent、DQN agent 與訓練指令。論文與程式碼有多處不一致，見 limitations_observed）",

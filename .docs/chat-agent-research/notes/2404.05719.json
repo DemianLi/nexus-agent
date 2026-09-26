@@ -5,8 +5,8 @@
   "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
   "read_level": "full",
   "source": "arxiv-html",
-  "one_liner": "Apple 在 Ferret 上加入依長寬比切兩塊子圖的 anyres，並用 UI 偵測器與 GPT-4 自動產生的 referring／grounding／推理資料微調，做出只吃螢幕像素、能直接輸出元素座標的手機 UI 理解 MLLM，並建立 14 項任務的評測集。",
-  "problem": "GUI agent 要先「看懂」螢幕才能行動，但通用 MLLM（含具 referring／grounding 能力的 Ferret、Shikra、Kosmos-2）是為自然影像設計：手機螢幕長寬比很極端、關注目標（圖示、文字）常小於整張螢幕的 0.1%，直接縮成低解析度全圖會丟掉關鍵細節。既有 UI 專用模型則多半只把整張螢幕當單一輸入、只支援輸入端單一框的 referring（Spotlight），或依賴 GPT-4V 加外部偵測模組、疊編號框（SoM）或 view hierarchy／XML 才能指到元素。缺的是一個只看像素、同時能在輸入端指定區域（referring）與在輸出端給出精確座標（grounding）的 UI 觀測模型，以及涵蓋這些面向的評測。",
+  "one_liner": "Apple 在 Ferret 上加入依長寬比切兩塊子圖的 anyres，並用 UI 偵測器與 GPT-4 自動產生的 referring／grounding／推理資料微調，做出只吃螢幕像素、能直接輸出元素座標的手機 UI 理解 MLLM，並建立 14 項任務的評估集。",
+  "problem": "GUI agent 要先「看懂」螢幕才能行動，但通用 MLLM（含具 referring／grounding 能力的 Ferret、Shikra、Kosmos-2）是為自然影像設計：手機螢幕長寬比很極端、關注目標（圖示、文字）常小於整張螢幕的 0.1%，直接縮成低解析度全圖會丟掉關鍵細節。既有 UI 專用模型則多半只把整張螢幕當單一輸入、只支援輸入端單一框的 referring（Spotlight），或依賴 GPT-4V 加外部偵測模組、疊編號框（SoM）或 view hierarchy／XML 才能指到元素。缺的是一個只看像素、同時能在輸入端指定區域（referring）與在輸出端給出精確座標（grounding）的 UI 觀測模型，以及涵蓋這些面向的評估。",
   "core_idea": "把 UI 觀測當成「可被指涉、可被定位」的視覺表徵來學：(1) 架構上沿用 Ferret 的混合區域表徵（離散座標＋視覺取樣器抽出的連續區域特徵），再加 anyres —— 依螢幕方向選 1x2 或 2x1 網格切成兩張子圖，與全圖一起分別編碼後送進 LLM，放大小元件細節；(2) 資料上用 UI 偵測器把螢幕拆成元素（類型、框、文字），以模板大量生成基礎 referring／grounding 任務，再把偵測結果（純文字、不給圖）交給 GPT-4 生成描述、對話與功能推論等進階任務，讓模型先學元素層級的語意與空間，再學整頁推理。",
   "method": {
     "base_model": "Ferret：預訓練視覺編碼器（文中舉 CLIP-ViT-L/14）＋decoder-only LLM（文中舉 Vicuna；本文正文未寫 LLM 參數量）。區域以混合表徵輸入：文字中的座標＋spatial-aware visual sampler 產生的連續區域特徵，支援點、框、任意形狀（scribble）作為 referring 輸入；grounding 時模型在輸出文字中直接生成框座標。",

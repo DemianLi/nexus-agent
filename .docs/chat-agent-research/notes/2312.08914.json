@@ -99,7 +99,7 @@
       "anchor_idx": 7
     },
     {
-      "claim": "以 GUI 為重點的訓練沒有犧牲通用視覺能力，反而在多數文字密集 VQA 與零樣本評測上超過 generalist 對手",
+      "claim": "以 GUI 為重點的訓練沒有犧牲通用視覺能力，反而在多數文字密集 VQA 與零樣本評估上超過 generalist 對手",
       "numbers": "MM-Vet 52.8（LLaVA-1.5 為 36.3，+16.5），POPE-adversarial 85.9；TextVQA 76.1、DocVQA 81.6、ST-VQA 80.5、ChartQA 68.4、InfoVQA 44.5、VQAv2 83.7",
       "section": "§3.1、Table 1、Table 2",
       "anchor_idx": 2
@@ -140,7 +140,7 @@
   },
   "reproducibility": {
     "code": "https://github.com/THUDM/CogVLM（論文 18B 版的程式碼與權重入口）；新版 CogAgent-9B-20241220 見 https://github.com/zai-org/CogAgent",
-    "data": "評測資料集（Mind2Web、AITW、各 VQA 基準）都公開；預訓練的讀字與 grounding 資料都是由公開資料集衍生的，建構方法有寫。但 CCS400K（40 萬張網頁截圖與 1.4 億組 REC/REG）、逾 2,000 張人工標註截圖、GPT-4 轉寫的 Mind2Web／AITW 微調資料，論文都沒說有沒有公開，要自己重建。提示詞只給 Mind2Web 轉寫用的一個範例，AITW 轉寫的提示詞沒有給。"
+    "data": "評估資料集（Mind2Web、AITW、各 VQA 基準）都公開；預訓練的讀字與 grounding 資料都是由公開資料集衍生的，建構方法有寫。但 CCS400K（40 萬張網頁截圖與 1.4 億組 REC/REG）、逾 2,000 張人工標註截圖、GPT-4 轉寫的 Mind2Web／AITW 微調資料，論文都沒說有沒有公開，要自己重建。提示詞只給 Mind2Web 轉寫用的一個範例，AITW 轉寫的提示詞沒有給。"
   },
   "value_verdict": "medium",
   "verdict_reason": "它是截圖型 GUI agent 的代表作，有 GLM-PC 的產品血緣，也是「像素觀測對結構化觀測」的常用參照；但標題主張被 HTML 候選集、DOM 預訓練與 GPT-4 轉寫格式混淆，消融中解析度對代理任務在 490／756 就飽和、資料與解析度的貢獻又沒分開測，觀測設計上能直接帶走的結論不多，所以列有價值但非必讀。",
