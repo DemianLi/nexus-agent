@@ -1044,11 +1044,12 @@ describe('記住這條 thread', () => {
   });
 
   /**
-   * serve 還開著，重新整理之後接回一條停在核准點的 thread。**核准卡補不回來**：歷史重播得出那幾張工具卡
-   * （#306），但中斷的酬載只在當初發出去的那一顆 frame 上。這一條的假 client 連歷史都是空的，送出框也就沒鎖。
-   * #637 之前伺服器把這時送的話擋回來；現在照收、排著等那一輪收尾（#645），所以它出現在送出佇列裡，刪得掉。
+   * serve 還開著，重新整理之後接回一條那一輪還沒收尾的 thread。停在核准點的話，伺服器從
+   * [#728](https://github.com/DemianLi/nexus-agent/issues/728) 起會在下行接上時補送那一顆，面板回來、送出框跟著鎖
+   * （見下一組）。這一條的假 client 什麼都不補、歷史也是空的，送出框就沒鎖——驗的是那一輪沒收尾時送出去的話：
+   * #637 之前伺服器把它擋回來；現在照收、排著等那一輪收尾（#645），所以它出現在送出佇列裡，刪得掉。
    */
-  it('接回一條停在核准點的 thread：送出去的話排進佇列，看得到也刪得掉', async () => {
+  it('接回一條還沒收尾的 thread：送出去的話排進佇列，看得到也刪得掉', async () => {
     seq = 0;
     remember('停著的那條');
     const fake = fakeClient([]);
@@ -1076,6 +1077,123 @@ describe('記住這條 thread', () => {
 
     fireEvent.click(within(dock).getByRole('button', { name: '刪除：一句話' }));
     await waitFor(() => expect(screen.queryByTestId('queue-dock')).toBeNull());
+  });
+
+  describe('停在核准或提問時重新整理，面板回得來（#728）', () => {
+    /** 歷史那一頁的 frame：**一律不帶號**（`historyPath` 的規則），伺服器從日誌導出來的就長這樣。 */
+    function historyFrame(method: string, namespace: readonly string[], data: unknown): Event {
+      return {
+        type: 'event',
+        event_id: `h:${method}`,
+        method,
+        params: { namespace, timestamp: 0, data },
+      } as Event;
+    }
+
+    /** 歷史裡的那張工具卡：日誌只記得它開跑了，中斷的酬載不在日誌上。 */
+    const HISTORY = [
+      historyFrame('tools', ['tools:a'], {
+        event: 'tool-started',
+        tool_call_id: 'call_alpha',
+        tool_name: 'alpha',
+        input: '{"n":"alpha"}',
+      }),
+    ];
+
+    /**
+     * 重新整理後的那一頁：先開下行，伺服器在第一顆即時 frame 之前補送還掛著的中斷（`replayed`）；歷史是 {@link HISTORY}。
+     * **補送的那顆帶原本的號**，而且比 0 大很多——網頁從空重折，歷史不帶號，所以收得下它。
+     */
+    function reloaded(replayed: readonly Event[]) {
+      remember('停著的那條');
+      const fake = fakeClient(replayed);
+      const client: WireClient = {
+        ...fake.client,
+        threadHistory: async () => ({
+          kind: 'ok',
+          result: { events: HISTORY, firstSeq: 0, throughSeq: 0, hasMore: false, legacy: false },
+        }),
+      };
+      render(<App client={client} />);
+      return fake;
+    }
+
+    it('前提：歷史自己折不出面板——卡在，面板不在，送出框沒鎖', async () => {
+      // 沒有這一條，哪天歷史自己補得出面板，下面兩條照樣綠而補送沒被量到。
+      reloaded([]);
+      await waitFor(() => expect(screen.getByTestId('tool-entry').textContent).toContain('alpha'));
+      await waitFor(() => expect(screen.getByRole('status').textContent).toContain('就緒'));
+      expect(screen.queryByRole('region', { name: /等待核准/ })).toBeNull();
+      expect(screen.queryByTestId('approval-card')).toBeNull();
+      fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '換條路' } });
+      expect(screen.getByRole('button', { name: '送出' }).hasAttribute('disabled')).toBe(false);
+    });
+
+    it('核准：補送的那顆畫回面板、送出框鎖住，答得出去，之後的即時 frame 照樣折得進去', async () => {
+      seq = 57;
+      const fake = reloaded([
+        approvalFrame([{ name: 'alpha', allowed: ['approve', 'reject'] }], 'int-7'),
+      ]);
+
+      const panel = await screen.findByRole('region', { name: '等待核准：alpha' });
+      expect(screen.getByRole('status').textContent).toBe('等待核准：alpha');
+      fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '換條路' } });
+      expect(
+        screen.getByRole('button', { name: '送出', hidden: true }).hasAttribute('disabled'),
+      ).toBe(true);
+
+      fireEvent.click(within(panel).getByRole('button', { name: '全部核准' }));
+      await waitFor(() => expect(fake.responded).toHaveLength(1));
+      expect(fake.responded[0]).toEqual({
+        namespace: ['tools:a'],
+        interrupt_id: 'int-7',
+        response: { decisions: [{ type: 'approve' }] },
+      });
+
+      // 號比補送那顆大的即時 frame 沒被當成重複：resume 那一輪開跑、收尾，畫面回到就緒。
+      fake.downlink.push(fake.opened[0]!, [
+        fake.downlink.lifecycleFrame('running'),
+        fake.downlink.lifecycleFrame('completed'),
+      ]);
+      await waitFor(() => expect(screen.getByRole('status').textContent).toContain('就緒'));
+      await waitFor(() => expect(screen.queryByRole('region', { name: /等待核准/ })).toBeNull());
+    });
+
+    it('計劃審核：補送的那一題帶著計劃全文回來，答的是同意那個標籤', async () => {
+      seq = 91;
+      const fake = reloaded([
+        frame('input.requested', ['tools:a'], {
+          interrupt_id: 'plan-1',
+          payload: {
+            kind: 'question',
+            questions: [
+              {
+                id: 'plan-review',
+                header: '計劃審核',
+                question: '同意這份計劃並離開計劃模式？',
+                detail: '# 改登入頁\n\n- 改成中文\n- 補測試',
+                options: [{ label: '同意' }, { label: '繼續規劃' }],
+                intent: { kind: 'plan-review', approve: '同意', callId: 'call_alpha' },
+              },
+            ],
+          },
+        }),
+      ]);
+
+      const panel = await screen.findByRole('region', { name: '有 1 個問題要你回答' });
+      const detail = panel.querySelector('[data-slot="question-detail"]');
+      expect(detail).not.toBeNull();
+      expect(within(detail as HTMLElement).getByRole('heading', { name: '改登入頁' })).toBeTruthy();
+
+      fireEvent.click(within(panel).getByRole('radio', { name: /^同意/ }));
+      fireEvent.click(within(panel).getByRole('button', { name: '送出答案' }));
+      await waitFor(() => expect(fake.responded).toHaveLength(1));
+      expect(fake.responded[0]).toEqual({
+        namespace: ['tools:a'],
+        interrupt_id: 'plan-1',
+        response: { answers: [{ id: 'plan-review', selected: ['同意'] }] },
+      });
+    });
   });
 
   it('跑著的時候「新對話」也按得動——它不看忙不忙', async () => {
