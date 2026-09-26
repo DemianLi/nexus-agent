@@ -21,11 +21,9 @@ import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { appendHumanTurn, emptyConversation, reduceConversation } from '@nexus/wire';
-import type { ConversationState } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { serveClient } from '../fixtures.js';
+import { foldTurn, serveClient } from '../fixtures.js';
 import { loadDefaultPlugins } from '../plugin-config.js';
 import { runServe } from '../serve.js';
 import type { RunningServe } from '../serve.js';
@@ -87,12 +85,7 @@ async function driveTurn(server: RunningServe, threadId: string): Promise<void> 
   const client = await serveClient(server);
   const events = await client.openEvents(threadId);
   await client.runStart(threadId, PROMPT);
-  let state: ConversationState = appendHumanTurn(emptyConversation(), PROMPT);
-  while (state.status === 'running') {
-    const next = await events.next();
-    if (next.done === true) break;
-    state = reduceConversation(state, next.value);
-  }
+  await foldTurn(events);
   await events.return?.(undefined);
 }
 

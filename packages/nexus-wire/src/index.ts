@@ -154,7 +154,6 @@ export {
   appendQuestionCancel,
   cancelResponse,
   appendDecision,
-  appendHumanTurn,
   emptyConversation,
   isApprovalPending,
   isQuestionPending,

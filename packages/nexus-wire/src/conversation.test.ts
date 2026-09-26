@@ -4,7 +4,6 @@ import {
   answerResponse,
   appendAnswers,
   appendDecision,
-  appendHumanTurn,
   appendQuestionCancel,
   cancelResponse,
   emptyConversation,
@@ -75,16 +74,6 @@ function aiEntries(state: ConversationState) {
 }
 
 describe('折疊器', () => {
-  it('使用者那句話由送出端補，因為線上不會回聲它', () => {
-    const state = appendHumanTurn(emptyConversation(), '記一筆。');
-    // 標著還沒認領：過渡期 `inbox` 的 `claimed` 到了會認領它（見 `inbox.test.ts`）。
-    expect(state.entries).toEqual([
-      { kind: 'human', id: 'human-0', text: '記一筆。', pendingClaim: true },
-    ]);
-    // 送出去的那一刻就算 running，不必等第一顆 frame 回來畫面才動。
-    expect(state.status).toBe('running');
-  });
-
   it('重連之後接上的巢狀訊息標成未歸屬——鑰匙已經過去了', () => {
     seq = 0;
     // 這條線沒有重播也沒有歷史重抓（決策 6），所以 `task` 那顆 tools frame 收不到了。

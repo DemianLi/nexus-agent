@@ -2,12 +2,7 @@ import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { ConversationState, Event, WireChannel } from '@nexus/wire';
-import {
-  appendHumanTurn,
-  createWireClient,
-  emptyConversation,
-  reduceConversation,
-} from '@nexus/wire';
+import { createWireClient, emptyConversation, reduceConversation } from '@nexus/wire';
 import { createDeepAgent, StateBackend } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -114,7 +109,7 @@ async function converse(
   );
   await client.runStart(threadId, text);
 
-  let state = appendHumanTurn(emptyConversation(), text);
+  let state = emptyConversation();
   const frames: Event[] = [];
   while (!done(state)) {
     const next = await events.next();

@@ -16,11 +16,11 @@ import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { ConversationEntry, ConversationState, WireClient } from '@nexus/wire';
-import { appendHumanTurn, emptyConversation, reduceAll, reduceConversation } from '@nexus/wire';
+import type { ConversationEntry, WireClient } from '@nexus/wire';
+import { emptyConversation, reduceAll } from '@nexus/wire';
 import type { SessionEvent } from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
-import { serveClient } from './fixtures.js';
+import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
@@ -82,12 +82,7 @@ async function startServe(root: string): Promise<ServeProcess> {
 async function say(client: WireClient, threadId: string, prompt: string): Promise<void> {
   const events = await client.openEvents(threadId);
   await client.runStart(threadId, prompt);
-  let state: ConversationState = appendHumanTurn(emptyConversation(), prompt);
-  while (state.status === 'running') {
-    const next = await events.next();
-    if (next.done === true) break;
-    state = reduceConversation(state, next.value);
-  }
+  await foldTurn(events);
   void events.return?.(undefined).catch(() => undefined);
 }
 

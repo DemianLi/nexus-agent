@@ -27,8 +27,6 @@ import {
   TOOL_OUTCOME_UNKNOWN_TEXT,
 } from '@nexus/core';
 import type { PluginEntry, SessionEvent } from '@nexus/core';
-import { appendHumanTurn, emptyConversation, reduceConversation } from '@nexus/wire';
-import type { ConversationState } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -40,7 +38,7 @@ import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
-import { serveClient } from './fixtures.js';
+import { foldTurn, serveClient } from './fixtures.js';
 
 const FIXTURE = fileURLToPath(new URL('./conversation-restore.patch.yml', import.meta.url));
 
@@ -228,12 +226,7 @@ describe('serve 重開之後', () => {
     const client = await serveClient(server);
     const events = await client.openEvents(threadId);
     await client.runStart(threadId, prompt);
-    let state: ConversationState = appendHumanTurn(emptyConversation(), prompt);
-    while (state.status === 'running') {
-      const next = await events.next();
-      if (next.done === true) break;
-      state = reduceConversation(state, next.value);
-    }
+    await foldTurn(events);
     await events.return?.(undefined);
   }
 

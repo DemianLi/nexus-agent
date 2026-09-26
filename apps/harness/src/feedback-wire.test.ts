@@ -25,7 +25,6 @@ import { createCommandExecutor } from '@nexus/plugin-commands';
 import type { AiEntry, ConversationState, Event, WireClient } from '@nexus/wire';
 import {
   appendDecision,
-  appendHumanTurn,
   createWireClient,
   emptyConversation,
   reduceAll,
@@ -133,7 +132,7 @@ interface Session {
 async function open(wired: Line, threadId: string, text: string): Promise<Session> {
   const events = await wired.client.openEvents(threadId);
   await wired.client.runStart(threadId, text);
-  return { events, state: appendHumanTurn(emptyConversation(), text) };
+  return { events, state: emptyConversation() };
 }
 
 /** 抽到條件成立為止。**用 `next()` 不用 `for await`**，理由同 `hitl-wire.test.ts`。 */

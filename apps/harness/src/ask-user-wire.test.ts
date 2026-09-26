@@ -25,7 +25,6 @@ import {
   QUESTION_PENDING_KIND,
   answerResponse,
   appendAnswers,
-  appendHumanTurn,
   appendQuestionCancel,
   cancelResponse,
   createWireClient,
@@ -101,7 +100,7 @@ async function open(threadId: string): Promise<Session> {
     client,
     events,
     frames: [],
-    state: appendHumanTurn(emptyConversation(), '幫我登記一位訪客'),
+    state: emptyConversation(),
     log: () =>
       sessions
         ?.list()

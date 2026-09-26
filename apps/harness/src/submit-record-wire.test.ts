@@ -40,7 +40,6 @@ import {
   answerResponse,
   appendAnswers,
   appendDecision,
-  appendHumanTurn,
   createWireClient,
   emptyConversation,
   isApprovalPending,
@@ -140,7 +139,7 @@ async function connect(
     client,
     events,
     threadId,
-    state: appendHumanTurn(emptyConversation(), '幫我登記一位訪客'),
+    state: emptyConversation(),
     close: () => handler.close(),
   };
 }
