@@ -283,23 +283,35 @@ async function refresh(client: WireClient, threadId: string): Promise<Line> {
   return { events, state: reduceAll(emptyConversation(), page.result.events) };
 }
 
+/** 真的 handler 與 client，產品路徑的閘門擋 `alpha`。 */
+async function wire() {
+  const built = await build(['alpha']);
+  const handler = createWireHandler({
+    auth: TEST_BROWSER_AUTH,
+    createAgent: async () => ({
+      agent: built.agent as unknown as PumpAgent,
+      commands: emptyCommandPoint(),
+      // 沒接的話日誌裡沒有模型與工具的事件，歷史折出來只剩使用者那句——重新整理量不到真的那一頁。
+      attachSession: built.attachSession,
+      dispose: built.dispose,
+    }),
+  });
+  const client = createWireClient({
+    baseUrl: BASE_URL,
+    fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
+  });
+  return { client, handler };
+}
+
+function cards(state: ConversationState): string[] {
+  return state.entries.flatMap((entry) =>
+    entry.kind === 'tool' ? [`${entry.name}:${entry.status}`] : [],
+  );
+}
+
 describe('停在核准時重新整理，走真的線', () => {
   it('面板回來，按了核准這一輪接著跑完', async () => {
-    const built = await build(['alpha']);
-    const handler = createWireHandler({
-      auth: TEST_BROWSER_AUTH,
-      createAgent: async () => ({
-        agent: built.agent as unknown as PumpAgent,
-        commands: emptyCommandPoint(),
-        // 沒接的話日誌裡沒有模型與工具的事件，歷史折出來只剩使用者那句——重新整理量不到真的那一頁。
-        attachSession: built.attachSession,
-        dispose: built.dispose,
-      }),
-    });
-    const client = createWireClient({
-      baseUrl: BASE_URL,
-      fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
-    });
+    const { client, handler } = await wire();
     try {
       const first: Line = {
         events: await client.openEvents('refresh'),
@@ -315,11 +327,7 @@ describe('停在核准時重新整理，走真的線', () => {
       // 前提：歷史自己折不出面板——沒有這一句，歷史哪天自己補得出來，下面照樣綠而補送沒被量到。卡在歷史裡，
       // 停在閘門上的照 dsh 是執行中（#317）。
       expect(again.state.pendings).toEqual([]);
-      expect(
-        again.state.entries.flatMap((entry) =>
-          entry.kind === 'tool' ? [`${entry.name}:${entry.status}`] : [],
-        ),
-      ).toEqual(['alpha:running']);
+      expect(cards(again.state)).toEqual(['alpha:running']);
 
       await until(again, (state) => state.status === 'awaiting-input');
       const after = approvalAt(again.state.pendings);
@@ -338,11 +346,46 @@ describe('停在核准時重新整理，走真的線', () => {
       expect(ran).toEqual(['alpha']);
       expect(again.state.pendings).toEqual([]);
       // 歷史那張卡與 resume 之後的即時 frame 折成同一張，而且跑完了。
-      expect(
-        again.state.entries.flatMap((entry) =>
-          entry.kind === 'tool' ? [`${entry.name}:${entry.status}`] : [],
-        ),
-      ).toEqual(['alpha:done']);
+      expect(cards(again.state)).toEqual(['alpha:done']);
+    } finally {
+      await handler.close();
+    }
+  }, 20000);
+
+  /**
+   * **兩個分頁**：新開的那頁拿到補送、答了；原本那頁沒有收到任何「別人答了」的訊號（拍板第 3 題不補 dsh 的 cancel），
+   * 它的面板靠 resume 那一輪的 `lifecycle running` 收掉。
+   */
+  it('兩個分頁：一邊答完，另一邊的面板收掉', async () => {
+    const { client, handler } = await wire();
+    try {
+      const tabA: Line = {
+        events: await client.openEvents('two-tabs'),
+        state: emptyConversation(),
+      };
+      await client.runStart('two-tabs', '動手');
+      await until(tabA, (state) => state.status === 'awaiting-input');
+
+      const tabB = await refresh(client, 'two-tabs');
+      await until(tabB, (state) => state.status === 'awaiting-input');
+      // 前提：兩邊都看得到那一題。
+      expect(approvalToolNames(tabA.state.pendings)).toEqual(['alpha']);
+      expect(approvalToolNames(tabB.state.pendings)).toEqual(['alpha']);
+
+      const pending = approvalAt(tabB.state.pendings);
+      await client.inputRespond('two-tabs', {
+        namespace: [...pending.namespace],
+        interrupt_id: pending.interruptId,
+        response: uniformDecisions(pending, 'approve'),
+      });
+      await until(tabB, (state) => state.status === 'idle');
+      // A 線上還排著中斷那一輪自己的收尾（`idle`），所以等到卡跑完，不只等 `idle`。
+      await until(tabA, (state) => state.status === 'idle' && cards(state).includes('alpha:done'));
+
+      expect(ran).toEqual(['alpha']);
+      expect(tabA.state.pendings).toEqual([]);
+      expect(cards(tabA.state)).toEqual(['alpha:done']);
+      expect(tabB.state.pendings).toEqual([]);
     } finally {
       await handler.close();
     }
