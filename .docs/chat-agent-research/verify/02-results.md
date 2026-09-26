@@ -2,7 +2,7 @@
 
 驗證對象：`.docs/chat-agent-research/chapters/02-dialogue-state-tracking.md`。
 
-四條候選主張都能用程式驗，所以四條都驗了。每條一支程式，只用 Python 標準函式庫，各自在 0.1 秒內跑完。輸入數字只取自 `notes/<id>.json` 與 `.cache/text/<id>.txt`，出處寫在各程式的檔頭。
+第一輪的四條候選主張都能用程式驗，所以四條都驗了（第 1–4 節）。修訂時依缺口清單（`.cache/work/w4/02-gaps.md` 的 C20、C21、C23，以及全域的 G7）再補驗三條（第 5–7 節）；另一條 C22 被資料擋住，沒有驗（見〈被擋住的驗證〉）。每條一支程式，只用 Python 標準函式庫；第 1–5、7 節各自在 0.1 秒內跑完，第 6 節的模擬約 3 秒。輸入數字只取自 `notes/<id>.json` 與 `.cache/text/<id>.txt`，出處寫在各程式的檔頭。
 
 一條主張裡如果有幾個子主張的判讀不同，就分開下結論。
 
@@ -19,7 +19,13 @@
 | 4a | 282／96／841／321 加權可重現 Hindsight 除 Zep 外各列與 Mem0 論文 Overall J；Open Domain 占 54.6% | **證實** |
 | 4b | Hindsight 表的 Zep 總分 75.14 與分項加權（約 71.30）對不起來 | **照原表欄位證實**；但後三欄輪換後可以唯一地對上，Zep 列的類別對應與其他列不一致（原因無法判定，見第 4 節） |
 | 4c | Hindsight 表的 Mem0、Mem0-Graph、LangMem、OpenAI 四列與 Mem0 論文逐格相同 | **證實**（20 格全同） |
-| 4d | 「LoCoMo 總分由 Open Domain 主導」 | **無法判定**：取決於欄名是否對應 LoCoMo 原始類別 |
+| 4d | 「LoCoMo 總分由 Open Domain 主導」 | 第一輪判為**無法判定**（取決於欄名是否對應 LoCoMo 原始類別）；**已由第 5 節取代** |
+| 5a | 標為 Open Domain 的欄（841 題）就是 LoCoMo 原始的 open-domain 類別 | **照欄名否定**：全集 50 段的 open-domain 只有 285 題，子集不可能超過；前提是公開版題目為全集的子集、類別沒被改標 |
+| 5b | 那一欄最可能是哪一類 | **強旁證**：24 種對應中比例最接近全集的是 Open Domain 欄＝原始 single-hop、Multi-Hop 欄＝原始 open-domain；Single-Hop 與 Temporal 兩欄分不清 |
+| 6a | Drift No More 的恢復力迴歸在 i.i.d. 雜訊下必然得到 b≈−1、R²≈0.5 | **證實**（解析＋模擬），P(b<0) 在測過的各種段數下都 ≥ 0.99 |
+| 6b | Table 6 的 b、R² 就是虛無模型的期望值 | **只對兩列成立**（GPT-4.1 與 70B 的 Baseline，在測過的段數 K = 1、5、20、100 下都在 95% 區間內；區間隨 K 變窄，K 再大時也可能落到區間外）；另四列不在中心、方向也不是有記憶的恢復，K = 20 與 100 時都在區間外，K 小時其中幾列仍在內 |
+| 7a | MemoryBank 的 exp(-t/5*S) 依運算順序是 e^(−t·S/5)，隨 S 遞減，與論文公式方向相反 | **證實**（算術） |
+| 7b | 公開程式碼確實寫成那一行 | **無法判定**：快取沒有程式碼 |
 
 ---
 
@@ -277,6 +283,7 @@ python3 .docs/chat-agent-research/verify/02-sumbt-floor-div.py
 - **4c：證實**，四列 20 格逐格相同。這支撐章節推論的前半句：這些基線源自 Mem0 論文。後半句「因此帶著它那把 gpt-4o-mini judge」是由前半句推出的。不過 Hindsight 原文說它照 Backboard 公布的數字列出，中間可能還隔了一手。
 - **4d「總分由 Open Domain 主導」：無法判定。** 權重本身已證實，但標為 Open Domain 的那一欄（841 題）是否真是 LoCoMo 的 open-domain 題，兩份快取都無法確立：Hindsight 的欄名沿用 Backboard 與 Mem0，Mem0 論文也沒列題數。要拿 LoCoMo 資料集的 category 欄位逐一對照各論文的欄名才能判定，這個檢查也同時解 4b。在那之前，這句話只在「欄名正確」的前提下成立。
   - （推論）若 4b 的輪換成立，表上至少有一列的欄名對應與其他列不同，所以「欄名可不可信」不只是理論上的疑慮。
+  - **修訂時補註：4d 已由第 5 節取代。** 第一輪只用了 Mem0 與 Hindsight 兩份全文；T7 的 LoCoMo 原論文筆記有全集五類題數，接上之後照欄名的解讀被推翻。
 
 **重現。**
 
@@ -286,11 +293,157 @@ python3 .docs/chat-agent-research/verify/02-locomo-weights.py
 
 ---
 
+## 5. LoCoMo 標為 Open Domain 的欄是哪一類（取代 4d）
+
+**主張。**
+
+- (a) Mem0／Hindsight 表上標為 Open Domain 的欄（反推 841 題）就是 LoCoMo 原論文定義的 open-domain 類別。
+- (b) 若不是，最可能是哪一類。
+
+**出處。** 缺口 C20 與全域缺口 G7：[arXiv:2402.17753]（T7 計入的 LoCoMo 原論文）的筆記已有全集五類題數，第一輪沒有接上。
+
+**輸入。**
+
+| 檔案 | 內容 |
+| --- | --- |
+| `notes/2402.17753.json` method「評估任務（§4）」QA | single-hop 2,705、multi-hop 1,104、temporal 1,547、open-domain 285、adversarial 1,871，共 7,512 題。程式直接從筆記文字抽，並核對五類加總等於總題數 |
+| `notes/2402.17753.json` reproducibility.data | 公開版只有 50 段中最長的 10 段（精讀時依 LoCoMo 的 GitHub README 查到，不是論文的內容） |
+| `.cache/text/2504.19413.txt` | Mem0 排除了 adversarial 類（確認比較的分母要排除它） |
+| 第 4 節 | 282／96／841／321 四欄題數（反推，兩份全文都沒寫明） |
+
+**方法。**
+
+1. 題數上限：若公開版題目是全集的子集、類別沒被改標，任何一欄的題數都不能超過全集同類的題數。照欄名對應，逐欄檢查。
+2. 比例配對：列舉 4! = 24 種「欄名 → 原始類別」的對應，檢查上限可行性，並算比例距離 Σ (p_sub − p_full)² / p_full。這只是描述，不是檢定：公開版挑的是最長的 10 段，不是隨機抽樣。
+
+**實際輸出（摘要）。**
+
+- 排除 adversarial 後全集 5,641 題：single-hop 48.0%、multi-hop 19.6%、temporal 27.4%、open-domain 5.1%。四欄合計 1,540 題：Single-Hop 18.3%、Multi-Hop 6.2%、Open Domain 54.6%、Temporal 20.8%。公開版占全集非 adversarial 題的 1540/5641 = 27.3%。
+- 照欄名對應時，Open Domain 欄 841 題對全集 open-domain 285 題，占 295.1%，上限不成立；其餘三欄成立。
+- 24 種對應中有 12 種滿足上限。比例距離前兩名：
+
+  | 名次 | 距離 | 對應 | 各欄占全集同類 |
+  | --- | --- | --- | --- |
+  | 1 | 0.029 | Single-Hop→multi-hop、Multi-Hop→open-domain、Open Domain→single-hop、Temporal→temporal | 20.7%–33.7% |
+  | 2 | 0.043 | Single-Hop→temporal、Multi-Hop→open-domain、Open Domain→single-hop、Temporal→multi-hop | 18.2%–33.7% |
+
+  照欄名的對應排第 20／24，距離 5.151。依題數名次配對（大配大）得到的就是第 1 名。
+- 前兩名的共同點（Multi-Hop→open-domain、Open Domain→single-hop）與差異（Single-Hop、Temporal 兩欄在 multi-hop 與 temporal 之間互換），以及結論句裡的「最可能是原始 single-hop」，都由程式從排序結果比對、組出，不是寫死的句子。
+- 第 1 名下各欄占全集同類：Single-Hop 282／1104 = 25.5%、Multi-Hop 96／285 = 33.7%、Open Domain 841／2705 = 31.1%、Temporal 321／1547 = 20.7%，都接近整體的 27.3%。
+
+**結論。**
+
+- **5a：照欄名否定（在子集前提下）。** 841 題不可能是全集只有 285 題的 open-domain 的子集。這個前提（公開版題目沒被重新出題或改標類別）快取無法驗證。
+- **5b：強旁證，不是證明。** 前兩名都把 Open Domain 欄對到原始 single-hop、Multi-Hop 欄對到原始 open-domain；Single-Hop 與 Temporal 兩欄的歸屬在前兩名之間互換，比例配對分不清。所以「兩篇的 LoCoMo 總分由 open-domain 題主導」不成立，最可能是由原始 single-hop 題主導。
+- 這也讓第 4 節 4b 的 Zep 列輪換更容易理解：各來源的欄名本來就可能錯位。實際欄位對照仍要 LoCoMo 資料集的 category 欄位，快取沒有。
+
+**重現。**
+
+```bash
+python3 .docs/chat-agent-research/verify/02-locomo-category-map.py
+```
+
+---
+
+## 6. Drift No More 的恢復力迴歸與 i.i.d. 虛無模型
+
+**主張。**
+
+- (a) 若 D_t 只是彼此獨立的雜訊，把 ΔD_t = D_{t+1} − D_t 對 D_t 做 OLS，必然得到 b≈−1、R²≈0.5；所以「b<0 證明有恢復力」沒有鑑別力。
+- (b) Table 6 的 b 與 R² 就落在這個虛無模型附近。
+
+**出處。** [arXiv:2510.07777]（📖）的 `notes/2510.07777.json` limitations_observed 第 1 條。缺口 C21 指出：章節原稿說撰寫第 4 組草稿時跑過模擬，但 verify/ 裡沒有程式，也沒有把 Table 6 放進虛無分佈。
+
+**輸入。** 程式直接讀 `.cache/text/2510.07777.txt`：
+
+- 斷言 ΔD_t 的定義、迴歸式 ΔD_t = a + b·D_t + η_t、「ordinary least squares」與「across 8 turns」都在全文裡。
+- 解析 Table 6 的六列 (a, b, D̂*, R²)。快取裡每列的 Model 與 Condition 各占一行，程式抽出這兩格，和程式裡的列名清單逐列 assert（突變測試：把清單前兩列對調，assert 會擋下）；另用 D̂* = −a/b 核對列內的一致性。
+- 論文沒報每個條件用了幾段對話（筆記 limitations_observed 第 9 條），所以段數 K 只能掃描。
+
+**方法。**
+
+1. 解析：D_t i.i.d.、變異數 σ² 時，cov(ΔD_t, D_t) = −σ²、Var(ΔD_t) = 2σ²，所以 b = −1、R² = 1/2。平穩 AR(1)（D_{t+1} − μ = φ(D_t − μ) + ε）下 b = φ − 1、R² = (1 − φ)/2 = −b/2。
+2. 模擬：每段 8 輪，K 段合併做一次 OLS；K ∈ {1, 5, 20, 100}，雜訊分常態與對數常態（KL 恆正、右偏）兩種；每個設定 2,000 次，種子 20260926。另跑 AR(1) φ = 0.5 與 φ = 1 當對照。
+3. 把 Table 6 六列放進常態 i.i.d. 各設定的 95% 區間，b 與 R² 都要在區間內才算「在內」。
+
+**實際輸出（摘要）。**
+
+- Table 6：
+
+  | 列 | b | R² | 隱含 φ = 1 + b | AR(1) 的 R² = −b/2 |
+  | --- | --- | --- | --- | --- |
+  | GPT-4.1 Baseline | −0.957 | 0.494 | 0.043 | 0.478 |
+  | GPT-4.1 Reminders | −1.250 | 0.626 | −0.250 | 0.625 |
+  | LLaMA-3.1-70B Baseline | −1.049 | 0.494 | −0.049 | 0.524 |
+  | LLaMA-3.1-70B Reminders | −1.007 | 0.278 | −0.007 | 0.503 |
+  | LLaMA-3.1-8B Baseline | −1.432 | 0.723 | −0.432 | 0.716 |
+  | LLaMA-3.1-8B Reminders | −2.444 | 0.538 | −1.444 | 1.222（> 1，任何平穩 AR(1) 都給不出） |
+
+- 模擬（摘錄）：i.i.d. 常態 K=20 時 b 中位數 −1.004、95% 區間 [−1.174, −0.833]，R² 中位數 0.502、[0.411, 0.592]；各種 K 與兩種分佈下 P(b<0) 都 ≥ 0.99。對照組 φ = 0.5 時 b ≈ −0.511、R² ≈ 0.247；φ = 1（隨機漫步）時 b ≈ −0.009。
+- 落在常態 i.i.d. 95% 區間內的列數：K=1 是 5／6、K=5 是 3／6、K=20 與 K=100 都是 2／6。兩個 Baseline 列（GPT-4.1、70B）在測過的每一種 K 下都在內；8B Reminders 在測過的每一種 K 下都在外。K=100 時 b 的區間已縮到 [−1.076, −0.930]、R² 縮到 [0.463, 0.539]，GPT-4.1 Baseline 的 b −0.957 離下緣不遠，K 再大時可能落到區間外；這一點程式沒有測。
+
+**結論。**
+
+- **6a：證實。** 解析與模擬一致，而且 b 幾乎一定是負的，所以「斜率全為負」分不出有恢復力還是沒有動態。
+- **6b：只對兩列成立。** GPT-4.1 與 70B 的 Baseline 列正落在虛無模型的中心，在測過的每一種 K（1、5、20、100）下都在 95% 區間內，隱含的 φ 都在 ±0.05 內，相鄰兩輪的散度幾乎不相關。另四列不在中心，方向也不是「有記憶的恢復」（那會讓 −1 < b < 0）：GPT-4.1 Reminders 與 8B 兩列的 b < −1，8B Reminders 連平穩 AR(1) 都給不出來，也是唯一在測過的每一種 K 下都在區間外的列；70B Reminders 的 R² 偏低。「在區間外」要加條件：K = 20 與 100 時四列都在外，K=1 時只有 8B Reminders 在外。原稿只引了三個 b（−0.957、−1.049、−1.007）與兩個 R²，章節已改成列出六列。
+- 章節原稿「撰寫第 4 組草稿時跑過模擬」的說法已刪除，改指向本節。
+
+**重現。**
+
+```bash
+python3 .docs/chat-agent-research/verify/02-drift-iid-null.py
+```
+
+---
+
+## 7. MemoryBank 程式碼的遺忘式
+
+**主張。** 論文的保留率是 R = e^(−t/S)，召回一次 S 加 1、t 歸零，所以召回越多次忘得越慢；精讀時發現公開程式碼寫成 exp(-t/5*S)，依運算順序等於 e^(−t·S/5)，方向相反。
+
+- (a) 算術：運算子優先順序與單調性。
+- (b) 程式碼那一行本身。
+
+**出處。** [arXiv:2305.10250] 的 `notes/2305.10250.json` limitations_observed（含「exp(」的那一條）。缺口 C23 要求比照第 3 節 SUMBT 的做法，把算術與程式碼原文分開。
+
+**輸入。**
+
+- `.cache/text/2305.10250.txt` §2.3：斷言論文公式 R=e^{-\frac{t}{S}} 與「We increase $S$ by 1 and reset $t$ to 0」都在全文裡。
+- 程式碼寫法、筆記算出的三個數，以及它們對應的 S 與 t，程式用正則從筆記原句抽出，不手抄。
+
+**方法。** 用 Python 的 `ast` 解析 `-t/5*S`，確認結合方式；在 t ∈ {0.5, 1, 3, 7, 14, 30}、S = 1 到 10 比較相鄰 S 的保留率；重算筆記的三個數字。另列 exp(-t/(5S)) 當「若本意是 5·S 在分母」的對照。
+
+**實際輸出（摘要）。**
+
+- 語法樹是 ((−t)/5)*S，也就是 −t·S/5。* 與 / 同優先序、左結合，在 C、Java、JavaScript 裡也一樣。
+- t = 7 時：程式碼寫法 S=1 是 0.2466、S=3 是 0.0150；論文公式 S=1 是 0.000912、S=5 是 0.2466。
+- 程式碼寫法隨 S 嚴格遞減；論文公式與 exp(-t/(5S)) 都隨 S 嚴格遞增。
+- 筆記的三個數（≈0.015、≈0.247、≈0.0009）四捨五入到同位數後都相符。
+
+**結論。**
+
+- **7a：證實（算術）。** 照這一行實作，召回越多次反而忘得越快，與論文宣稱的方向相反。
+- **7b：無法判定。** 快取只有論文全文，沒有 MemoryBank 的程式碼，這一行只來自筆記的轉述。章節已改成「程式碼那一行依筆記轉述；算術由程式證實」。
+
+**重現。**
+
+```bash
+python3 .docs/chat-agent-research/verify/02-memorybank-forgetting.py
+```
+
+---
+
+## 被擋住的驗證
+
+缺口 C22 建議從 MultiWOZ 2.1／2.2 的逐輪狀態，直接統計 slot 被移除、值被改寫、同一輪跨領域變更的輪次比例；這是章節「JGA 看不出刪除類錯誤」「資料的更新型態太窄」的核心證據。快取裡沒有 MultiWOZ 的資料檔，本調研的規則也不允許下載，所以沒有驗。章節相關的句子已改寫成「本調研讀過的論文沒有統計，本調研也統計不了」。
+
+---
+
 ## 全部重現
 
 ```bash
 cd .docs/chat-agent-research/verify
-for f in 02-lic-au-percentile.py 02-trade-slot-acc-bound.py 02-sumbt-floor-div.py 02-locomo-weights.py; do
+for f in 02-lic-au-percentile.py 02-trade-slot-acc-bound.py 02-sumbt-floor-div.py 02-locomo-weights.py \
+         02-locomo-category-map.py 02-drift-iid-null.py 02-memorybank-forgetting.py; do
   python3 "$f"
 done
 ```

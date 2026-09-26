@@ -2,7 +2,7 @@
 
 驗證對象：`.docs/chat-agent-research/chapters/03-agent-observation.md`。
 
-四條候選主張都能用程式驗，所以四條都驗了，每條一支程式，只用 Python 標準函式庫（本機是 Python 3.9.19）。前三支是數值驗算；第四支是文字主張，做的是原文錨點檢查。只有第 3 支的模擬用到隨機數，種子固定為 20260926，約 1.6 秒跑完；其餘三支都在 0.4 秒內跑完。
+共九條主張，每條一支程式，只用 Python 標準函式庫（本機是 Python 3.9.19）。第 1 到第 4 條是第一輪的候選主張；第 5 到第 9 條是修訂時依審查意見補的（OSWorld 基線與地板、GUI-R1 照抄、AI Control 的 Pareto、Turpin Table 9、否定性主張的全文搜尋）。第 1 到第 3 支與第 5 到第 8 支是數值驗算或逐格比對；第 4 支是原文錨點檢查；第 9 支是全文搜尋，附正對照。只有第 3 支的模擬用到隨機數，種子固定為 20260926，約 1.6 秒跑完；其餘八支都在 0.4 秒內跑完（第 5 到第 8 支實測都在 0.1 秒內；第 9 支在正對照改用 N1 的通用關鍵字之後約 0.13 秒）。
 
 表格數字都由程式從 `.cache/text/<id>.txt` 解析，不手抄。解析時用表題當錨點，並對表頭字串與列數做 assert，解析錯了程式會當場失敗，不會默默比錯欄。每支程式的輸出都附行號，最後一行印出 `DONE <檔名>`，用來確認輸出沒有被截斷。
 
@@ -28,6 +28,14 @@
 | 4b | 論文寫了 Azure 的閾值是在 1–6 之間挑 average precision 最高的那個 | **證實**（§4.3.2 原文） |
 | 4c | Azure 實際用的閾值就是依 average precision 挑出來的，而且是在各資料集上挑 | **無法判定**。§4.3.3 說 Azure 算不了 AP，與 4b 直接矛盾；附錄 B 說閾值全設 0.5，可能與 4b 等價也可能不同。另外 Azure 只評在一個資料集上 |
 | 4d | 未微調的 Llama2-7b 零樣本輸出格式錯誤，被記為 AUPRC 0 | **證實** |
+| 5a | OSWorld 原論文 GPT-4o 的四個觀測設定是 5.03／4.59／11.36／11.21 | **證實**（Table 5，並由 Table 14 的分項以題數加權重算回來） |
+| 5b | OS-ATLAS 表裡的「GPT-4o」「GPT-4o + SoM」兩列是照抄 OSWorld | **證實**。兩列十個分項都與 OSWorld Table 14 逐格相同，包括不在 k/n 格點上的值；Human 列也相同 |
+| 5c | OS-ATLAS 沒交代版本與任務數，兩邊可能不是同一版任務集 | **收窄**。OS-ATLAS 自己跑的三列除 4B 的 Calc 一格外都在 369 題的格點上，題數加權平均能重算回 Avg：與同一套 369 題相容，但不是證明 |
+| 5d | 每題回 FAIL 的 30/369 = 8.13% 地板可以套用到 OS-ATLAS 的表 | **證實**。只看截圖與加 SoM 在地板之下，三個 grounder 列在地板之上；VS Code 與 GIMP 兩類沒有任何一列高過各自的地板 |
+| 6 | GUI-R1 Table 3 的 GPT-4o、OS-Atlas-4B、OS-Atlas-7B 三列 18 個數字與 OS-ATLAS 逐位相同 | **證實**。全部取自 OS-ATLAS 的零樣本組。GUI-R1 依訓練方式分組，把兩列 OS-Atlas 歸在「Supervised Fine-Tuning」組，引用的是 OS-ATLAS 未在 AndroidControl／GUI-Odyssey 上微調的零樣本數字 |
+| 7 | AI Control Table 7：UM 0%、5%、10% 被列出的 TE 點支配，UM 20% 沒有；TE 最高 safety 96% | **證實**（只比列出的點） |
+| 8 | Turpin Table 9：Answer is Always A 的 CoT 26 格中 4 格 biased 不低於 unbiased | **證實**。4 格都是嚴格上升；Suggested Answer 的 CoT 52 格一格都沒有 |
+| 9 | UI-TARS 的歷史 N、解析度與影像 token 沒有報；OmniParser、UGround 沒量延遲與成本；UGround 沒有去重 | **全文找不到反例**（只查全文，沒查程式碼與專案頁）。N1 的正對照改用 N1 自己的通用關鍵字，兩篇都找得到；但這組關鍵字是看過兩篇的寫法後才擴充的，N1 的主要證據仍是 $N$ 的逐處分類 |
 
 ---
 
@@ -285,7 +293,163 @@ python3 .docs/chat-agent-research/verify/03-llamaguard-eval-parity.py
 
 ---
 
+## 5. OSWorld：GPT-4o 的觀測比較、OS-ATLAS 的照抄基線與 FAIL 地板
+
+**主張。** (1) OSWorld 原論文裡 GPT-4o 只看截圖 5.03、加 SoM 4.59、accessibility tree 11.36、截圖＋accessibility tree 11.21。(2) OS-ATLAS §4.3 表中的「GPT-4o」「GPT-4o + SoM」兩列連分項都與 OSWorld 同值，是直接引用。(3) OS-ATLAS 沒交代 OSWorld 版本與任務數，兩邊可能不是同一版任務集。(4) T7 已驗證的「每題回 FAIL 得 30/369 = 8.13%」地板，可以套用到 OS-ATLAS 的表。
+
+**出處。** [arXiv:2410.23218] 筆記 limitations_observed（OSWorld 基線那兩條）；[arXiv:2404.07972] Table 5、Table 10、Table 14；T7 的 `verify/07-osworld-fail-floor.py`。
+
+**輸入。** `.cache/text/2404.07972.txt` 的 Table 10（第 3220 行起）、Table 5（第 755 行起）、Table 14（第 3943 行起）；`.cache/text/2410.23218.txt` §4.3 的 OSWorld 表（第 467 行起）。
+
+**方法。**
+
+1. 解析 OSWorld Table 10 的逐 app 題數與 infeasible 題數，assert 合計 369 與 30，算出地板。
+2. 解析 Table 5 四個觀測設定的列，取 GPT-4o 與 Gemini-Pro-1.5；解析 Table 14 的逐 app 分項，以 Table 10 的題數加權重算平均，對回 Table 5。
+3. 解析 OS-ATLAS 的表，逐格比對 GPT-4o 兩列與 Table 14 的 Screenshot、SoM 列；Human 列當對照。
+4. OS-ATLAS 自己跑的三列：檢查每個分項是否落在該 app 題數的 k/n 格點上（判準是最近的 k/n 四捨五入到兩位小數後，與表列值相差不超過 0.011 個百分點），並以最近格點重算 Avg。
+5. 每一列的 Avg 與地板相減，並逐 app 比對各自的地板（infeasible／題數）。
+
+**實際輸出（摘要）。**
+
+- 題數 [24, 47, 47, 23, 17, 15, 46, 23, 26, 101]，合計 369；infeasible [5, 1, 0, 1, 3, 1, 3, 5, 10, 1]，合計 30；地板 8.1301%。
+- Table 5：GPT-4o 11.36（a11y）／5.03（截圖）／11.21（截圖＋a11y）／4.59（SoM）；Gemini-Pro-1.5 4.81／5.40／5.10／7.79。Table 14 的 GPT-4o 四列加權平均 11.361、5.029、11.207、4.588，都對得回 Table 5。
+- OS-ATLAS 的 GPT-4o 列與 Table 14 Screenshot 列 10/10 相同，GPT-4o + SoM 與 SoM 列 10/10 相同，Human 列 10/10 相同；其中 Impress 6.77、VLC 16.10／6.53、Workflow 5.58／3.60 都不在 k/n 格點上，照樣逐格相同。
+- OS-ATLAS 自己的三列：+SeeClick 與 +7B 全部在格點上，+4B 只有 Calc 2.23 不在（最近格點 1/47 = 2.13）；三列取最近格點後是 34/369、43/369、54/369，對回 9.21、11.65、14.63。
+- 與地板的距離：GPT-4o + SoM −3.54、GPT-4o −3.10、+SeeClick +1.08、+4B +3.52、+7B +6.50。逐 app：OS 的地板 20.83%，只有 +7B 高過，GPT-4o + SoM 與 +4B 剛好等於；VS Code（21.74%）與 GIMP（38.46%）沒有任何一列高過。
+
+**結論。**
+
+- **(1) 證實。**
+- **(2) 證實。** 連不在格點上的值都逐格相同，而且 Avg 等於 Table 5，照抄可以確定。
+- **(3) 收窄。** 三列與同一套 369 題相容，但格點檢查只能排除「題數不同」的一部分可能，排除不了環境映像或評估腳本的版本差異。4B 的 Calc 2.23 可能是部分給分或筆誤，程式分不出來。
+- **(4) 證實**，但地板只是參考線：真的 agent 在不可行題上也可能沒回 FAIL 而失分，所以「Avg − 地板」不是扣掉運氣後的能力。
+
+**重現。**
+
+```bash
+python3 .docs/chat-agent-research/verify/03-osworld-observation-baselines.py
+```
+
+---
+
+## 6. GUI-R1 Table 3 照抄 OS-ATLAS 的三列
+
+**主張。** GUI-R1 的表註說所有實驗在同一個零樣本提示下進行；精讀時對照 OS-ATLAS 原論文發現，Table 3 的 GPT-4o、OS-Atlas-4B、OS-Atlas-7B 三列共 18 個數字逐位相同，是直接引用。
+
+**出處。** [arXiv:2504.10458] 筆記 limitations_observed；[arXiv:2410.23218] Table 5。
+
+**輸入。** `.cache/text/2504.10458.txt` 的 Table 3（第 777–887 行）；`.cache/text/2410.23218.txt` 的 Table 5（第 739–830 行，表題第 831 行），含分組標題。
+
+**方法。** 兩張表都以表題當錨點，把「名稱＋固定個數的數字」組成列，assert 列名與列數。GUI-R1 每列前 6 格（AndroidControl-High 與 GUI-Odyssey 各三欄）對 OS-ATLAS 同名列的第 4–9 格逐位比對；OS-Atlas-4B／7B 在 OS-ATLAS 的零樣本組與微調組各出現一次，兩組都比。對照組是 GUI-R1 自己跑的五列。另外記下兩邊的分組標題與各組成員，只陳列事實：兩邊的分組不在同一個軸上，GUI-R1 依模型的訓練方式分組，OS-ATLAS 依評估設定分組（有沒有在 AndroidControl／GUI-Odyssey 上微調）。
+
+**實際輸出（摘要）。**
+
+- 表題含「same zero-shot prompt for fair comparison」。
+- GPT-4o、OS-Atlas-4B、OS-Atlas-7B 對 OS-ATLAS 零樣本組都是 6/6 相同，對微調組都是 0/6；合計 18/18。
+- 對照組 QwenVL2.5-3B、QwenVL2.5-7B、UI-R1-3B、GUI-R1-3B、GUI-R1-7B 的 30 格，沒有一格出現在 OS-ATLAS Table 5。
+- GUI-R1 的三組：「Supervised Fine-Tuning」組是 OS-Atlas-4B、OS-Atlas-7B、QwenVL2.5-3B*、QwenVL2.5-7B*；「Zero Shot」組是 GPT-4o、QwenVL2.5-3B、QwenVL2.5-7B；「Reinforcement Fine-Tuning」組是 UI-R1-3B、GUI-R1-3B、GUI-R1-7B。表題註明「* denotes supervised fine-tuned on GUI-R1-3K.」；§4.2 也稱 OS-Atlas-7B 是用 SFT 在大量資料上訓練的（全文第 230 行）。
+- 三列引用的數字在 OS-ATLAS 原本都屬於「Zero-shot OOD Setting」，也就是沒有在 AndroidControl／GUI-Odyssey 上微調的評估設定。OS-ATLAS 微調後的 4B 是 High SR 67.54、Odyssey SR 56.39，7B 是 71.17、61.98。
+
+**結論。** **證實。** 另外記下一個筆記沒寫的事實：GUI-R1 依訓練方式把 OS-Atlas 歸在「Supervised Fine-Tuning」組，這符合它自己的分組軸；但引用的是 OS-ATLAS 在 AndroidControl／GUI-Odyssey 上未微調的零樣本數字。兩個標籤不在同一個軸上，所以這不算分組標錯；讀這張表時要知道 SFT 組裡的 OS-Atlas 數字是它未微調時的表現。
+
+**重現。**
+
+```bash
+python3 .docs/chat-agent-research/verify/03-guir1-osatlas-copy.py
+```
+
+---
+
+## 7. AI Control Table 7：trusted editing 是否 Pareto 支配 untrusted monitoring
+
+**主張。** §3.5 說 trusted editing Pareto 支配 untrusted monitoring。綜合階段逐點比對 Table 7：UM 0%（79%／96%）與 UM 5%（82%／95%）被 TE 10%（85%／96%）支配，UM 10%（92%／92%）被 TE 20%（92%／94%）支配，只有 UM 20%（98%／85%）沒有被任何列出的 TE 點支配；精讀時指出 TE 列出的最高 safety 只有 96%（TE 50%，usefulness 89%）。
+
+**出處。** [arXiv:2312.06942] 筆記 limitations_observed；Table 7、§3.5。
+
+**輸入。** `.cache/text/2312.06942.txt` 的 Table 7（表頭第 843 行、表題第 907 行，表題在表的下方）。
+
+**方法。** 解析每一列的協定名稱、safety、scaled usefulness，assert 共 15 列、UM 4 列、TE 4 列。支配的定義是 s ≥ s′ 且 u ≥ u′、至少一項嚴格大於。只看列出的點，不做內插。
+
+**實際輸出（摘要）。**
+
+- UM 0%（79, 96）與 UM 5%（82, 95）被 TE 10%（85, 96）支配；UM 10%（92, 92）被 TE 20%（92, 94）支配；UM 20%（98, 85）沒有任何 TE 點支配。
+- TE 列出的最高 safety 是 TE 50%（96, 89）。
+- §3.5 原句在第 840 行。
+
+**結論。** **證實。** 限制：只比 Table 7 列出的點；Figure 2 的曲線若有更多點，程式看不到。
+
+**重現。**
+
+```bash
+python3 .docs/chat-agent-research/verify/03-aicontrol-pareto.py
+```
+
+---
+
+## 8. Turpin et al. Table 9：「每個 task 都下降」的反例
+
+**主張。** §3.2 說下降趨勢對每個 task 個別成立；綜合階段依 Table 9 重數，Answer is Always A 的 CoT 設定 13 × 2 = 26 格中，有 4 格 biased context 不低於 unbiased，例如 Logical Deduction 的 GPT-3.5 從 62.0 變成 64.7。
+
+**出處。** [arXiv:2305.04388] §3.2、Table 9。
+
+**輸入。** `.cache/text/2305.04388.txt` 的 Table 9（第 1941–2439 行）。
+
+**方法。** 解析 13 個 task、每個 task 三列（Sugg. Ans. ZS、Sugg. Ans. FS、Ans. A FS）、每列 8 個數字（GPT-3.5 與 Claude 1.0 各有 No-CoT 與 CoT 的 UB／B），assert 列數與欄數。兩種偏誤都數：Answer is Always A 的 CoT 26 格、Suggested Answer 的 CoT 52 格；判準是 B ≥ UB，另外分開列出嚴格上升與持平。
+
+**實際輸出（摘要）。**
+
+- Answer is Always A：26 格中 4 格 B ≥ UB，4 格都是嚴格上升：Movie Recommendation 的 Claude 1.0 90.4 → 91.1、Logical Deduction Five Objects 的 GPT-3.5 62.0 → 64.7 與 Claude 1.0 63.1 → 65.1、Disambiguation QA 的 GPT-3.5 63.3 → 64.7。
+- Suggested Answer：52 格中 0 格；降幅最小的一格是 Web of Lies FS 的 Claude 1.0，98.3 → 97.4。
+- §3.2 原句在第 463 行。
+
+**結論。** **證實。** 反例只出在 Answer is Always A；Suggested Answer 那一半的確逐 task 都下降。
+
+**重現。**
+
+```bash
+python3 .docs/chat-agent-research/verify/03-turpin-table9-count.py
+```
+
+---
+
+## 9. 否定性主張的全文搜尋
+
+**主張。** N1：UI-TARS 的 N=5 截圖歷史沒有消融。N2：UI-TARS 主實驗的輸入解析度與影像 token 數沒有報告。N3：OmniParser 沒有量解析延遲與提示長度。N4：UGround 的 Web-Hybrid 沒有和 ScreenSpot-Web 或 Mind2Web 的網站去重。N5：UGround 沒有量延遲、提示長度或端到端成本。
+
+**出處。** [arXiv:2501.12326]、[arXiv:2408.00203]、[arXiv:2410.05243] 各自筆記的 limitations_observed。
+
+**輸入。** 三篇的 `.cache/text/<id>.txt`；正對照用 `.cache/text/2405.15793.txt` 與 `.cache/text/2404.07972.txt`。
+
+**方法。**
+
+1. 每條主張列出反例關鍵字與寫法變體，逐行搜尋並印出命中的行號與內容，再依預先寫好的規則判讀命中是不是真的反例。
+2. 正對照：N1 用來找「歷史長度的其他寫法」的通用關鍵字 `HISTORY_KW`，原封不動拿去掃 SWE-agent 與 OSWorld 的全文。兩篇都要命中，而且命中裡要包含真正的消融：SWE-agent 的 Full history 表列或「history set to last five observations」，OSWorld 的 Figure 7 圖說。只命中「history processors」這類順帶提到的句子不算。找不到就表示掃描器壞了。
+3. 修訂紀錄：第一版的正對照用的是替兩篇另寫的專用字串（SWE-agent 的表列名、OSWorld 的「history encoding length of 1, 2, 3」），沒有驗證 N1 實際用的通用關鍵字；而第一版的通用關鍵字在兩篇上都是 0 命中。修訂時把 `HISTORY_KW` 擴充到兩篇都命中（加上 length of history、history (trajectory|encoding) length、last／past／previous N observations 或 rounds、full history、history processing 等寫法），N1 與正對照共用這一組。
+4. 正對照的限制：`HISTORY_KW` 是看過兩篇的寫法之後才擴充的，正對照只證明它涵蓋得到這兩種寫法，不代表對其他寫法的召回率。N1 的主要證據仍是 UI-TARS 全文每一處 $N$ 的逐處分類；`HISTORY_KW` 在 UI-TARS 上的命中也逐處分類，未分類的命中才算反例。
+5. 限制：只能說「全文裡找不到」，不能排除論文附帶的程式碼、專案頁或後續版本有報。
+
+**實際輸出（摘要）。**
+
+- 正對照：`HISTORY_KW` 在 SWE-agent 命中 4 處，其中 2 處是消融本身（第 400 行的 Full history 表列、第 1540 行的「history set to last five observations」），另 2 處是順帶提到 history processor 的句子；在 OSWorld 命中 6 處，其中第 1802 行是歷史長度曲線的圖說。第一版的通用關鍵字在兩篇都是 0 命中。
+- N1：歷史 N 只出現在定義處與「整節固定為 5」各一次；有掃過 1、16、64 的 N 是 Best-of-N 的取樣數。`HISTORY_KW` 在 UI-TARS 命中 2 處：第 546 行是定義句，第 547 行說 thought 與 action 的文字歷史全部保留，不是截圖歷史 N 的消融；未分類 0 處。
+- N2：沒有寬×高形式的解析度數字，也沒有 max_pixels、image tokens 這類設定；有一句定性說在 ScreenSpot Pro 上提高輸入解析度明顯有幫助，沒給數字。
+- N3：唯一的量測字眼命中是序數用法（the second section of the table）；只有定性說描述模型「fast」。
+- N4：唯一的 deduplication 出現在談訓練資料效率的未來工作句。
+- N5：latency 與 cost 只出現在動機段落與「線上評估成本高」的說明，其餘命中是動作 API 的參數說明。
+
+**結論。** **全文找不到反例**，五條都維持原判讀；N2 另有一處沒給數字的定性說法，章節已補上。N1 的證據強度要照實說：它主要靠「$N$ 出現的每一處都已分類」撐；正對照現在驗證的是 N1 實際用的關鍵字，但那組關鍵字是依兩篇正對照的寫法調出來的，所以對「換一種寫法報歷史消融」的召回率仍然未知。
+
+**重現。**
+
+```bash
+python3 .docs/chat-agent-research/verify/03-negative-claims-scan.py
+```
+
+---
+
 ## 建議回頭修改的章節文字
+
+下表是第一輪（第 1 到第 4 條）的建議，當時的行號指第一輪的章節；這些建議已在第一輪改進正文。第 5 到第 9 條的結果已在修訂時直接同步進正文，見章節〈程式驗證〉表後的說明。
 
 | 章節行 | 現在的寫法 | 建議 |
 | --- | --- | --- |

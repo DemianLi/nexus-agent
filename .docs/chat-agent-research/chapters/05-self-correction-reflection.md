@@ -2,11 +2,20 @@
 
 ## 這一章回答什麼
 
-本章整理 agent 或 LLM 怎麼發現並修正自己的錯，涵蓋四類機制：只靠模型自己的內在修正與口語反思（包括主張「LLM 其實不能自我修正」的批判研究）、借驗證器、執行結果或檢索等外部回饋的修正、以訓練得到的修正能力與 critique 模型，以及靠搜尋回溯的修正；一般的 chain-of-thought 提示與跟修正無關的 RLHF 不收。
+本章整理 agent 或 LLM 怎麼發現並修正自己的錯，涵蓋四類機制：只靠模型自己的內在修正與口語反思（包括主張「LLM 其實不能自我修正」的批判研究）、借驗證器、執行結果或檢索等外部回饋的修正、以訓練得到的修正能力與 critique 模型，以及靠搜尋回溯的修正（這一類在本章只有 LATS 一篇代表，見下方範圍說明）；一般的 chain-of-thought 提示與跟修正無關的 RLHF 不收。
 
-本節點精讀 24 篇、計入 23 篇，另有 5 篇候補沒有讀。唯一不計入的一篇精讀後判為低價值，本章只拿它當脈絡與反例 [arXiv:2302.07459]。計入的 23 篇分在三個子領域：內在自我修正與口語反思（含批判性研究）7 篇（名單配額 8）、外部回饋／工具輔助的修正 8 篇（配額 8）、訓練得到的自我修正、critique 模型與搜尋回溯 8 篇（配額 8）。
+本節點精讀 24 篇、計入 23 篇，另有 5 篇候補沒有讀（逐篇列在下方範圍說明）。唯一不計入的一篇精讀後判為低價值，本章只拿它當脈絡與反例 [arXiv:2302.07459]。計入的 23 篇分在三個子領域：內在自我修正與口語反思（含批判性研究）7 篇（名單配額 8，第 8 格就是那篇 📖）、外部回饋／工具輔助的修正 8 篇（配額 8）、訓練得到的自我修正、critique 模型與搜尋回溯 8 篇（配額 8）。訓練子領域的 8 篇裡，以訓練取得修正能力、並在推論時量了修正後正確率的只有 Welleck 等人、RISE、SCoRe 三篇 [arXiv:2211.00053][arXiv:2407.18219][arXiv:2409.12917]，外加外部回饋子領域裡也訓練了 refiner 的 SCORE [arXiv:2404.17140]；Constitutional AI、Shepherd、CriticGPT 不量修正後的正確率，Saunders 等人的改寫勝率只有圖 [arXiv:2212.08073][arXiv:2308.04592][arXiv:2407.00215][arXiv:2206.05802]；搜尋回溯只有 LATS [arXiv:2310.04406]。所以「以訓練取得修正能力」與「搜尋回溯」這兩支，實質篇數比名目上的 8 篇少。
 
 本章的主軸是一場還沒結束的來回：早期方法宣稱 LLM 能靠自己的回饋變好，批判研究拿掉標籤重跑後得到反面結論，後續研究改問修正訊號從哪裡來、有多可靠、由誰決定何時觸發 [arXiv:2303.17651][arXiv:2310.01798][arXiv:2404.17140]。
+
+**範圍說明。** 讀本章的結論前要先知道它涵蓋到哪裡。
+
+- **時間窗。** 依文獻表的 arXiv 年月，計入的論文最早是 2022-06（2206.05802），最晚是 2024-09（2409.12917）；📖 那一篇是 2023-02。時間窗停在 2024-09，是因為 T5 候選池裡之後的候選沒有一篇入選：2024 年第四季的候選只有 Understanding the Dark Side of LLMs' Intrinsic Self-Correction（arXiv 2412.14959，未讀） 列為候補，其餘落選；候選池記錄年份在 2025 年以後的候選，過半被程式硬規則 RECENT-INELIGIBLE 擋掉，其餘以制式理由落選，只有 DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning（arXiv 2501.12948，未讀） 列為候補（逐篇計數見「程式驗證」一節）。所以讀者不能把 2023 年那場「LLM 能不能自我修正」的來回當成領域現況。
+- **五篇候補沒有讀，各自原本要補的一塊**（依篩選時寫下的理由）：
+  - 內在子領域：Small Language Model Can Self-correct（arXiv 2401.07301，未讀），補小模型以遮蔽部分答案做自我修正；Understanding the Dark Side of LLMs' Intrinsic Self-Correction（arXiv 2412.14959，未讀），補內在修正在什麼情況下把對的改錯。
+  - 外部回饋子領域：Verify-and-Edit: A Knowledge-Enhanced Chain-of-Thought Framework（arXiv 2305.03268，未讀），補以外部知識驗證並改寫推理鏈。
+  - 訓練子領域：DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning（arXiv 2501.12948，未讀），補以 RL 訓練推理模型與自我檢查、反思行為之間的關係，篩選理由註明它的主要貢獻是推理 RL；CriticBench: Benchmarking LLMs for Critique-Correct Reasoning（arXiv 2402.14809，未讀），補 critique 與修正之間關係的基準。
+- **不涵蓋的部分。** 2024-09 之後的研究，包括以 RL 訓練的推理型模型（本調研未讀，其行為本章不做描述），本章結論一律不涵蓋；上面五塊，以及「已知缺口與未讀」一節列出、從沒進過候選池的經典，也不涵蓋。本章凡是寫「沒有一篇」「唯一」「只有」的地方，範圍都是本調研讀過的論文，不是整個領域。
 
 ## 問題的演進
 
@@ -14,7 +23,7 @@
 
 第一，SCORE [arXiv:2404.17140] 與 SCoRe [arXiv:2409.12917] 是兩篇不同的論文，名字只差大小寫。SCORE 是 2024 年 4 月的論文，讓小模型搭配強度不同、可替換的驗證器做修正，歸在外部回饋子領域 [arXiv:2404.17140]。SCoRe 是 2024 年 9 月的論文，用多輪 on-policy RL 訓練單一模型修正自己，歸在訓練子領域 [arXiv:2409.12917]。本章每次提到這兩篇都附 ID。
 
-第二，歸屬分三層。只附 [arXiv:ID] 的句子，是論文自己的主張或表格數字。寫「精讀時發現」「精讀時推算」「精讀時查閱公開程式碼發現」的，是精讀筆記的分析，多數出自筆記的 limitations_observed，沒有經過同儕審查，也不是論文的結論。寫「本章重算」「本章推論」的，是組章時依論文報告的數字自行算出或推論的結果，算式寫在句子裡。另外有四條主張加註「程式驗證證實」，表示另寫程式從快取全文解析表格核對過，細節見「程式驗證」一節。
+第二，歸屬分三層。只附 [arXiv:ID] 的句子，是論文自己的主張或表格數字。寫「精讀時發現」「精讀時推算」「精讀時查閱公開程式碼發現」的，是精讀筆記的分析，多數出自筆記的 limitations_observed，沒有經過同儕審查，也不是論文的結論。寫「本章重算」「本章推論」的，是組章時依論文報告的數字自行算出或推論的結果，算式寫在句子裡。另外有八組主張另寫程式核對過：七組從快取全文解析表格，一組從候選池與筆記的資料檔計數；正文在對應的句子加註「程式驗證證實」，或寫明程式判定不了的部分，細節見「程式驗證」一節。
 
 **三條線怎麼接起來。** 計入的 23 篇橫跨 2022 年 6 月到 2024 年 9 月，三個子領域彼此有明確的傳承 [arXiv:2206.05802][arXiv:2409.12917]。
 
@@ -27,7 +36,7 @@
 
 這個子領域的 7 篇計入論文與 1 篇 📖 落在 2023 年 2 月到 2024 年 6 月 [arXiv:2302.07459][arXiv:2406.01297]。主線是一來一回：2023 年上半年的方法論文宣稱 LLM 能靠自己的回饋變好 [arXiv:2303.11366][arXiv:2303.17651]；下半年的批判研究追問，這些增益有多少來自混進實驗的標籤、偏弱的初始提示、多花的推論成本 [arXiv:2310.01798]，又有多少卡在「找不到錯在哪」[arXiv:2311.08516]；2024 年一條路換一個可以自動比對的自我驗證訊號再試 [arXiv:2405.14092]，另一條路把文獻重新分類、定出評估規範 [arXiv:2406.01297]。CoVe 夾在中間，是少數在事實回憶任務上用「拆題＋隔離脈絡」做出內在修正增益的方法 [arXiv:2309.11495]。
 
-**脈絡（📖，不計入）：「道德自我修正」其實是事前引導。** Anthropic 在 810M–175B、RLHF 50–1000 步的模型上比較三種提示：只給原題、加一句要求不偏頗的指示、再加一段先想怎麼避免偏見的 CoT [arXiv:2302.07459]。175B、RLHF 800 步時，BBQ 偏見分數相對原題約降 43%（加指示）與約 84%（加指示＋CoT）[arXiv:2302.07459]。精讀時指出，三個條件都在第一次作答前給出，模型從沒看到自己的答案再修改，量到的是指令引導，不是事後發現並修正錯誤 [arXiv:2302.07459]。
+**脈絡（📖，不計入）：「道德自我修正」其實是事前引導。** 本章只把它當脈絡與反例，不拿它支撐任何主張。Anthropic 在 810M–175B、RLHF 50–1000 步的模型上比較三種提示：只給原題、加一句要求不偏頗的指示、再加一段先想怎麼避免偏見的 CoT [arXiv:2302.07459]。175B、RLHF 800 步時，BBQ 偏見分數相對原題約降 43%（加指示）與約 84%（加指示＋CoT）[arXiv:2302.07459]。精讀時指出，三個條件都在第一次作答前給出，模型從沒看到自己的答案再修改，量到的是指令引導，不是事後發現並修正錯誤 [arXiv:2302.07459]。這兩個數字本身也有指標問題：精讀時依 BBQ 原定義指出，ambiguous 偏見分數會乘上 (1 − 準確率)，多答 Unknown 就會機械式降低分數 [arXiv:2302.07459]。另一個觀察是它會修過頭：歧視實驗中，175B 加指示的版本在 RLHF 50 步約 −15%（不利黑人學生），到 1000 步約 +10%（偏向黑人學生），parity 只出現在特定步數（加指示約 600 步、加指示＋CoT 約 200 步）；精讀時指出，方法裡沒有驗證器或目標訊號判斷何時修到位 [arXiv:2302.07459]。這與 Huang et al. 的觀察方向相同，都是沒有外部訊號就沒有停止條件，但機制不同，只能當旁證 [arXiv:2302.07459][arXiv:2310.01798]。
 
 **2023 年 3 月，Reflexion：把稀疏的成敗訊號寫成口語反思。** 它處理的問題是：RL 需要大量樣本與微調，而二元 reward 又難以歸因到長軌跡裡的哪一步 [arXiv:2303.11366]。
 
@@ -69,7 +78,7 @@
 
 - 做法是把題目裡一個關鍵條件遮成 X，把候選答案當已知條件反推 X；對不上就把這個答案加入「可能錯誤集合」並要求重答，驗證成立就停，最多 3 輪 [arXiv:2405.14092]。
 - 結果：GPT-3.5 GSM8K 87.1，CoT 78.6、Self-Correct 75.1 [arXiv:2405.14092]。GSM8K 三輪後，ProCo 對改錯 2.5%、錯改對 8.2%，Self-Correct 分別是 9.1% 與 7.6% [arXiv:2405.14092]。
-- 精讀時發現兩個缺口：驗證器本身沒有報 precision／recall；遮蔽反推的驗證形狀與 Self-Verification、FOBAR 幾乎相同，卻沒有引用或比較 [arXiv:2405.14092]。
+- 精讀時發現兩個缺口：驗證器本身沒有報 precision／recall；遮蔽反推的驗證形狀與兩篇先前的反向驗證方法幾乎相同，卻沒有引用或比較 [arXiv:2405.14092]。那兩篇本調研也沒有讀（見「已知缺口與未讀」第 3 項），所以本章同樣沒辦法把 ProCo 和它們並排比。
 
 **2024 年 6 月，Kamoi et al.：用研究問題重新分類文獻。** 它處理的是文獻結論互相矛盾，作者認為根源在各篇沒講清楚自己回答的是哪個問題 [arXiv:2406.01297]。
 
@@ -81,7 +90,7 @@
 
 ### 外部回饋／工具輔助的修正
 
-這個子領域的 8 篇橫跨 2022 年 10 月到 2024 年 4 月，沿三條線推進 [arXiv:2210.08726][arXiv:2404.17140]。第一條是回饋訊號的來源，依序出現過網頁檢索證據、regex 驗證器、程式執行結果、搜尋引擎加直譯器加毒性 API、同一模型的其他實例、規劃模擬器，最後是強度不同、可以替換的驗證器 [arXiv:2210.08726][arXiv:2303.17491][arXiv:2304.05128][arXiv:2305.11738][arXiv:2305.14325][arXiv:2308.13724][arXiv:2404.17140]。第二條是觸發：有沒有一道閘門決定「這一次要不要修」，還是對每個輸出一律改寫 [arXiv:2210.08726][arXiv:2305.11738][arXiv:2404.17140]。第三條是評估的誠實度：評估用的正解或評分器同時被拿來當回饋或停止條件，這個漏洞從 2023 年 3 月的 RCI 延續到 2023 年 8 月的 ISR-LLM；把 oracle 設定另外標成上限來報的，只有 CRITIC 的 CRITIC∗ 與 SCORE 的 oracle 列 [arXiv:2303.17491][arXiv:2304.05128][arXiv:2305.11738][arXiv:2308.13724][arXiv:2404.17140]。
+這個子領域的 8 篇橫跨 2022 年 10 月到 2024 年 4 月，沿三條線推進 [arXiv:2210.08726][arXiv:2404.17140]。第一條是回饋訊號的來源，依序出現過網頁檢索證據、regex 驗證器、程式執行結果、搜尋引擎加直譯器加毒性 API、同一模型的其他實例、規劃模擬器，最後是強度不同、可以替換的驗證器 [arXiv:2210.08726][arXiv:2303.17491][arXiv:2304.05128][arXiv:2305.11738][arXiv:2305.14325][arXiv:2308.13724][arXiv:2404.17140]。第二條是觸發：有沒有一道閘門決定「這一次要不要修」，還是對每個輸出一律改寫 [arXiv:2210.08726][arXiv:2305.11738][arXiv:2404.17140]。第三條是評估的誠實度：評估用的正解或評分器同時被拿來當回饋或停止條件，這個漏洞從 2023 年 3 月的 RCI 延續到 2023 年 8 月的 ISR-LLM（RCI 那一項是論文自述，ISR-LLM 那一項是精讀時查閱公開程式碼發現的）；在這個子領域裡，把 oracle 設定另外標成上限來報的，只有 CRITIC 的 CRITIC∗ 與 SCORE 的 oracle 列，其他子領域的例子見「標題數字與它的測試條件」[arXiv:2303.17491][arXiv:2304.05128][arXiv:2305.11738][arXiv:2308.13724][arXiv:2404.17140]。
 
 **2022 年 10 月，RARR：把檢索當成事後驗證器。** 它要處理的是「檢索不等於歸因」：retrieval-augmented 模型會超出、忽略甚至違背檢索到的文件，而既有的事後修正器（EFEC 等）在 Wikipedia 上微調，又常把整段改寫掉 [arXiv:2210.08726]。
 
@@ -118,7 +127,7 @@
 **2023 年 8 月，Pan et al. 的綜述：三個角色、五個分類軸。** 它把所有以自動回饋修正 LLM 的方法看成同一條管線：語言模型產生輸出，critic 給回饋，refine 模型修輸出或修模型本身；再以錯誤類型、回饋來源、回饋格式、修正時機、修正策略五個軸分類 [arXiv:2308.03188]。
 
 - 精讀時逐列計數，共收錄 79 篇，其中訓練期 20、生成期 24、事後修正 35；事後修正裡外部回饋有 22 篇，回饋格式是自然語言的 17 篇 [arXiv:2308.03188]。
-- 作者的核心論點是，外部回饋補得上自我回饋看不到的錯，例如拿不到最新資訊、不會精確計算、不能執行動作；它也引用 Olausson et al.，指出程式自我修復的瓶頸在回饋階段而不在改寫 [arXiv:2308.03188]。
+- 作者的核心論點是，外部回饋補得上自我回饋看不到的錯，例如拿不到最新資訊、不會精確計算、不能執行動作 [arXiv:2308.03188]。Pan et al. 關於程式自我修復的回饋瓶頸論點，轉述自一篇本調研沒有讀的研究（見「已知缺口與未讀」第 5 項），本章不把它當成獨立證據 [arXiv:2308.03188]。
 - 精讀時發現，這套分類的 Source 欄混用了「誰產生回饋」與「回饋以什麼為依據」：CodeT 標為 Program Executor，但它的測試是 LLM 自己生成的；確定性執行、LLM 自產測資、正解標籤三者的可靠度差很多，分類框架卻沒有「訊號可靠度」這一維，而且定稿早於 Huang et al. 這類批判研究 [arXiv:2308.03188][arXiv:2310.01798]。
 
 **2023 年 8 月，ISR-LLM：在同一框架裡並排比較兩種驗證器。** 它先用 LLM 把自然語言任務翻成 PDDL，再用 few-shot 加 CoT 產生動作序列；接著由驗證器在執行前逐步檢查、停在第一個錯誤並回饋，迭代重新規劃，直到驗證器判定無誤或達到上限 [arXiv:2308.13724]。
@@ -134,7 +143,7 @@
 - 不經訓練的 prompted 自我修正在小模型上多半變差，例如 LLaMA-2-13B-chat 在 CSQA 上 −7.5 [arXiv:2404.17140]。
 - 精讀時發現，所有有意義的增益都要在推論時對每一題呼叫 GPT-4 或直接用標準答案，而 GPT-4 本身就能解這些題；論文沒有比較「直接讓 GPT-4 作答」[arXiv:2404.17140]。
 
-**這個子領域留下的東西。** 八篇連起來看，問題從「LLM 能不能靠某種回饋修正自己」，轉成「回饋訊號從哪裡來、有多可靠、由誰決定何時觸發」[arXiv:2308.03188][arXiv:2404.17140]。評估用的正解或評分器進入修正迴圈的情形沒有隨時間消失：RCI 的推理實驗、Self-Debugging 的 TransCoder、CRITIC 的降毒、ISR-LLM 的外部驗證器都有 [arXiv:2303.17491][arXiv:2304.05128][arXiv:2305.11738][arXiv:2308.13724]。CRITIC 與 SCORE 另外把 oracle 設定標成上限來報，SCORE 更進一步固定 refiner、掃描驗證器強度 [arXiv:2305.11738][arXiv:2404.17140]。
+**這個子領域留下的東西。** 八篇連起來看，問題從「LLM 能不能靠某種回饋修正自己」，轉成「回饋訊號從哪裡來、有多可靠、由誰決定何時觸發」[arXiv:2308.03188][arXiv:2404.17140]。評估用的正解或評分器進入修正迴圈的情形沒有隨時間消失：RCI 的推理實驗、Self-Debugging 的 TransCoder、CRITIC 的降毒、ISR-LLM 的外部驗證器都有 [arXiv:2303.17491][arXiv:2304.05128][arXiv:2305.11738][arXiv:2308.13724]。這四項裡，RCI 以標籤決定何時停是論文自述；Self-Debugging 與 CRITIC 那兩項是精讀時從論文內文發現的；ISR-LLM 的外部驗證器就是評分模擬器，則是精讀時查閱公開程式碼發現的，沒有經過程式驗證 [arXiv:2303.17491][arXiv:2304.05128][arXiv:2305.11738][arXiv:2308.13724]。在這個子領域裡，CRITIC 與 SCORE 另外把 oracle 設定標成上限來報，SCORE 更進一步固定 refiner、掃描驗證器強度 [arXiv:2305.11738][arXiv:2404.17140]。
 
 ### 訓練得到的自我修正、critique 模型與搜尋回溯
 
@@ -142,7 +151,7 @@
 
 - **把「找錯」訓練成 critique 模型。** 起點是人寫示範的 SFT，接著改由 AI 依明文原則批評，再來是用社群回覆訓練小型通用 critic，最後用植入的已知 bug 做 RLHF [arXiv:2206.05802][arXiv:2212.08073][arXiv:2308.04592][arXiv:2407.00215]。
 - **把「改錯」訓練進權重。** 起點是另外訓練一個 corrector 掛在凍結的 generator 後面，接著把「再試一次」寫成多輪 MDP、用教師補監督，最後只用模型自己的資料做單模型的多輪 on-policy RL [arXiv:2211.00053][arXiv:2407.18219][arXiv:2409.12917]。
-- **不訓練，靠搜尋回溯。** 在推論期展開一棵樹，走錯就回到分岔點改走別的分支 [arXiv:2310.04406]。
+- **不訓練，靠搜尋回溯。** 在推論期展開一棵樹，走錯就回到分岔點改走別的分支 [arXiv:2310.04406]。這條線在本調研只有 LATS 一篇。它的筆記在相關研究欄列了三篇推論期搜尋的前作，LATS 自己也把其中兩篇當成會搜尋、卻吃不到環境觀測的前作（見下文 LATS 段）；這三篇本調研都沒有讀（見「已知缺口與未讀」第 6 項）[arXiv:2310.04406]。所以「回到分岔點另走一支」與「就地改寫同一條」之間，本章只有 LATS 對 Reflexion 這一組比較。
 
 **2022 年 6 月，Saunders 等人：把 critique 做成可訓練、可量測的任務。** 出發點是 scalable oversight：人類評不出程式正確性、事實真偽這類難任務時，RLHF 的訊號就會出錯 [arXiv:2206.05802]。
 
@@ -170,7 +179,7 @@
 - GPT-4 兩兩比較下，它對 ChatGPT 的平均勝率 56.0%；人工兩兩比較則是 49.6% [arXiv:2308.04592]。
 - 精讀時指出，全文只評 critique 本身，從沒把回饋交給生成模型改寫、再量改寫後的正確率 [arXiv:2308.04592]。
 
-**2023 年 10 月，LATS：把修正從「改同一條軌跡」換成「回到分岔點走別條」。** 它要補的是：CoT／ReAct 一路走到底、走錯只能順著錯；Reflexion、Self-Refine 只精修單一條軌跡；ToT、RAP 會搜尋，卻吃不到環境的外部觀測 [arXiv:2310.04406]。
+**2023 年 10 月，LATS：把修正從「改同一條軌跡」換成「回到分岔點走別條」。** 它要補的是：CoT／ReAct 一路走到底、走錯只能順著錯；Reflexion、Self-Refine 只精修單一條軌跡；兩篇先前的樹搜尋方法會搜尋，卻吃不到環境的外部觀測（這兩篇本調研沒有讀，見「已知缺口與未讀」第 6 項）[arXiv:2310.04406]。
 
 - LATS 把 ReAct 包進 MCTS：每次展開取樣 n 個動作並實際送進環境；LLM 看過觀測後打 1–10 分，再加 self-consistency 當價值函數；終局 reward 反向傳播；失敗時寫口語反思存進記憶，之後擴展與評分都附上 [arXiv:2310.04406]。回到先前狀態的做法是把當時的歷史文字重新貼回 context，不需要學世界模型 [arXiv:2310.04406]。
 - HumanEval 上 GPT-4 達 92.7（Reflexion 91.0），GPT-3.5 達 83.8；HotPotQA EM 0.63（Reflexion 0.51）；WebShop Score 75.9、SR 38.0 [arXiv:2310.04406]。拿掉反思只從 0.63 掉到 0.58，拿掉 LM 評分則掉到 0.37 [arXiv:2310.04406]。
@@ -187,7 +196,7 @@
 
 - 狀態是題目加上先前所有嘗試與固定的重試回饋；只在學習者自己走到的失敗狀態上，接 GPT-3.5 或自身 best-of-16 的較佳答案，再以 advantage 加權回歸 [arXiv:2407.18219]。
 - Llama2-7B 在 GSM8K 無 oracle 的 m1@t5 從 Boost 的 39.2 升到 Iter1 的 50.7、Iter2 的 55.0 [arXiv:2407.18219]。把同一批教師資料拿去做單輪 SFT，m1@t5 只有 34.0 [arXiv:2407.18219]。
-- 本章依 Table 1 換算：從未訓練的 11.1 到 Iter2 的 55.0，knowledge boosting 那一步就占了 (39.2 − 11.1) ÷ (55.0 − 11.1) ≈ 64% [arXiv:2407.18219]。無 oracle 模式靠跨輪多數決；自我蒸餾版一輪後仍輸給同模型第一輪的平行多數決（作者自承）[arXiv:2407.18219]。
+- 本章依 Table 1 換算：從未訓練的 11.1 到 Iter2 的 55.0，knowledge boosting 那一步就占了 (39.2 − 11.1) ÷ (55.0 − 11.1) ≈ 64% [arXiv:2407.18219]。這個比例有一個保留，程式驗證證實：附錄 Table 4 的同一個 Boost 列，m1@t5 寫的是 26.5 而不是 39.2，兩表的 +RISE 列卻逐格相同；論文沒說明兩個 Boost 是不是同一設定，若以 26.5 計，占比是 (26.5 − 11.1) ÷ (55.0 − 11.1) ≈ 35% [arXiv:2407.18219]。無 oracle 模式靠跨輪多數決；自我蒸餾版一輪後仍輸給同模型第一輪的平行多數決（作者自承）[arXiv:2407.18219]。
 
 **2024 年 9 月，SCoRe [arXiv:2409.12917]：拿掉教師，只用自己產生的資料做多輪 on-policy RL。** 它先診斷 SFT 式做法為什麼失敗：離線修正軌跡的錯誤來自別的模型（分佈偏移），而且模型會學成「第一輪直接答好、第二輪不改」（行為崩塌）[arXiv:2409.12917]。
 
@@ -196,52 +205,52 @@
 - MATH500 上 base 的 Δ 是 −11.2，SCoRe 從 60.0% 升到 64.4%，Δ +4.4；HumanEval 從 52.4% 升到 64.6%，Δ 12.2 [arXiv:2409.12917]。
 - 它留下的缺口：只訓練兩輪，附錄的多輪曲線兩輪後持平（作者自述）；精讀時指出，它沒和最接近的 RISE 直接比，封閉模型、沒有程式碼 [arXiv:2409.12917][arXiv:2407.18219]。
 
-**這個子領域留下的東西。** critique 模型這條線的產出不是交給人類評估者，就是拿去合成訓練資料 [arXiv:2206.05802][arXiv:2407.00215][arXiv:2212.08073]；Shepherd 只評了 critique 本身 [arXiv:2308.04592]。改錯這條線都需要可自動驗證的結果訊號 [arXiv:2211.00053][arXiv:2407.18219][arXiv:2409.12917]。兩條線只在 Saunders 等人那裡短暫交會：同一個 SFT 模型用自己的 critique 做單步 conditional refinement，而且要先挑 critique 才贏過直接改寫 [arXiv:2206.05802]。在這個子領域內，之後的 critique 模型沒有再接回修正，之後的修正訓練（RISE、SCoRe）也不用 critique [arXiv:2308.04592][arXiv:2407.00215][arXiv:2407.18219][arXiv:2409.12917]。跨子領域看有一個例外：外部回饋子領域的 SCORE 把自產的逐步 critique 訓練進 refiner，並量了修正後的準確率，它的 critique 只寫到第一個錯誤步驟 [arXiv:2404.17140]。
+**這個子領域留下的東西。** critique 模型這條線的產出不是交給人類評估者，就是拿去合成訓練資料 [arXiv:2206.05802][arXiv:2407.00215][arXiv:2212.08073]；Shepherd 只評了 critique 本身 [arXiv:2308.04592]。改錯這條線都需要可自動驗證的結果訊號 [arXiv:2211.00053][arXiv:2407.18219][arXiv:2409.12917]。兩條線只在 Saunders 等人那裡短暫交會：同一個 SFT 模型用自己的 critique 做單步 conditional refinement，而且要先挑 critique 才贏過直接改寫 [arXiv:2206.05802]。在本調研讀過的這個子領域論文裡，之後的 critique 模型沒有再接回修正，之後的修正訓練（RISE、SCoRe）也不用 critique [arXiv:2308.04592][arXiv:2407.00215][arXiv:2407.18219][arXiv:2409.12917]。這句只描述語料內的空白：把訓練出來的反思或 critique 接回生成的研究從沒進過候選池，本調研沒有讀（見「已知缺口與未讀」第 7 項）。跨子領域看有一個例外：外部回饋子領域的 SCORE 把自產的逐步 critique 訓練進 refiner，並量了修正後的準確率，它的 critique 只寫到第一個錯誤步驟 [arXiv:2404.17140]。
 
 **三個子領域合起來。** 問題的重心移動了兩次。第一次是從「LLM 能不能自我修正」移到「增益來自模型的判斷，還是來自混進迴圈的標籤」[arXiv:2310.01798][arXiv:2406.01297]。第二次是從「有沒有訊號」移到「訊號多可靠、由誰觸發、修正能力要不要訓練進權重」[arXiv:2404.17140][arXiv:2409.12917]。批判研究的直接回應落在三個子領域：ProCo 換驗證訊號 [arXiv:2405.14092]，SCORE 換驗證器強度 [arXiv:2404.17140]，RISE 與 SCoRe 改用訓練 [arXiv:2407.18219][arXiv:2409.12917]。
 
 ## 方法比較
 
-三張表依子領域拆開。「需要的資料或監督」一欄要特別看：名義上是「內在」的方法，有幾個其實需要可重置的環境、成敗訊號或標籤。
+三張表依子領域拆開。「需要的資料或監督」一欄要特別看：名義上是「內在」的方法，有幾個其實需要可重置的環境、成敗訊號或標籤。「每題呼叫或輪數上限；token 記帳」一欄把散在各處的推論成本集中列出，陷阱四與未解問題 2 的成本比較都以它為準；多數方法只給輪數上限，沒有 token 記帳。
 
 **表 1：內在自我修正與口語反思（含批判性研究）**
 
-| 方法 | 核心機制 | 需要的資料或監督 | 評估在哪 | 關鍵數字 | 出處 |
-| --- | --- | --- | --- | --- | --- |
-| Reflexion | Actor／Evaluator／Self-Reflection 閉環；失敗後寫第一人稱反思，存進上限 1–3 則的記憶，重置環境重試同一題 | 不訓練；需要可重置的環境與成敗訊號（環境完成訊號、對標準答案的 EM、自產單元測試）；few-shot 提示 | ALFWorld 134 題、HotpotQA 100 題、HumanEval、MBPP、LeetcodeHardGym 40 題 | ALFWorld 130／134；HumanEval PY 91.0 vs GPT-4 80.1；MBPP PY 77.1 vs 80.1；Rust 消融只反思 0.52 < 基準 0.60 < 完整 0.68 | [arXiv:2303.11366] |
-| Self-Refine | 同一模型以三組 few-shot 提示生成→分面向回饋→帶全部歷史改寫，最多 4 輪；依回饋停止或跨輪選最高分 | 不訓練、不用外部訊號；每個任務要手寫評分面向與回饋、改寫範例 | 7 個任務（FED 對話、PIE、CodeNet、GSM8K、Yelp、Acronym、CommonGen-Hard）；GPT-3.5／ChatGPT／GPT-4 | 作者總結約 20% 絕對增益；GPT-4 對話 25.4→74.6；GSM8K 64.1→64.1、92.9→93.1；oracle 版 GSM8K +0.7～+4.8 | [arXiv:2303.17651] |
-| CoVe | 草稿→規劃驗證問題→在看不到草稿的脈絡逐題作答→只留一致的事實重寫；factor+revise 加逐事實一致性判定 | 不訓練、不用工具；每任務每步 3-shot 示範；Llama 65B、greedy | Wikidata 56 題、Wiki-Category 55 題、MultiSpanQA 418 題、FactScore 傳記 | Wikidata precision 0.17→0.36；MultiSpanQA F1 0.39→0.48；FactScore 55.9→71.4，平均事實數 16.6→12.3 | [arXiv:2309.11495] |
-| Huang et al.（批判研究） | 定義 intrinsic self-correction；對照 oracle 停止與無標籤跑滿兩輪、等回應數的 self-consistency、補強過的初始提示 | 不訓練；初始、回饋、改寫三段提示；oracle 設定用標籤 | GSM8K、CommonSenseQA、HotpotQA 100 題、CommonGen-Hard；GPT-3.5／GPT-4／GPT-4-Turbo／Llama-2 | GPT-3.5 CommonSenseQA：基準 75.8、oracle 89.7、無標籤 41.8；9 個回應時 MAD 83.0 vs SC 88.2；CommonGen-Hard 強初始提示 81.8，再套 Self-Refine 75.1 | [arXiv:2310.01798] |
-| Tyen et al.（BIG-Bench Mistake＋回溯） | 標出首個錯誤步；三種找錯提示；給定錯誤位置後回溯到該步以 temperature=1 重抽再續寫 | 人工標註 2,186 條軌跡（Dyck 為演算法標註）；分類器以其他四個任務的資料微調 | BIG-Bench 五個任務；五個 LLM 找錯；PaLM 2 Unicorn 回溯 | 找錯最高 52.87（GPT-4）；oracle 位置 Δ✗ +18.04～+43.92、Δ✓ −0.00～−11.43；回溯划算門檻約 60–70%；Otter 6.00–37.67 | [arXiv:2311.08516] |
-| ProCo | 遮蔽關鍵條件、以答案反推；對不上就把答案加入錯誤集合重答，最多 3 輪；驗證成立即停 | 不訓練；zero-shot 提示；算術題用 SimCSE 挑條件 | GSM8K、AQuA、MATH、NQ、TriviaQA、WebQ、HotpotQA、CSQA；GPT-3.5／GPT-4／Mixtral | GPT-3.5 GSM8K 87.1 vs CoT 78.6 vs Self-Correct 75.1；GSM8K 對改錯 2.5% vs Self-Correct 9.1% | [arXiv:2405.14092] |
-| Kamoi et al.（綜述） | RQ1–RQ3 與 unrealistic／fair／unfair 框架；重新判讀既有文獻；正面與負面結果各一份查核清單 | 無自有實驗 | 判讀收錄到 2024 年 5 月的代表研究（推理、閉卷 QA、程式、受限生成等） | 無自有數字；引用的 SFT 修正資料量：SelFee 178K、Volcano 274K、Self-Critique 100K | [arXiv:2406.01297] |
-| Moral self-correction（📖 不計入，僅脈絡） | 事前引導：原題／加去偏指示／再加先想怎麼避免偏見的 CoT；沒有「先答再改」的迴圈 | Anthropic 內部 810M–175B、RLHF 50–1000 步的模型 | BBQ、Winogender、法學院入學歧視題 | 175B：BBQ 偏見分數約降 43%／84%；歧視差值隨 RLHF 從約 −15% 擺到約 +10% | [arXiv:2302.07459] |
+| 方法 | 核心機制 | 需要的資料或監督 | 評估在哪 | 關鍵數字 | 每題呼叫或輪數上限；token 記帳 | 出處 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Reflexion | Actor／Evaluator／Self-Reflection 閉環；失敗後寫第一人稱反思，存進上限 1–3 則的記憶，重置環境重試同一題 | 不訓練；需要可重置的環境與成敗訊號（環境完成訊號、對標準答案的 EM、自產單元測試）；few-shot 提示 | ALFWorld 134 題、HotpotQA 100 題、HumanEval、MBPP、LeetcodeHardGym 40 題 | ALFWorld 130／134；HumanEval PY 91.0 vs GPT-4 80.1；MBPP PY 77.1 vs 80.1；Rust 消融只反思 0.52 < 基準 0.60 < 完整 0.68 | 每次失敗多一次反思呼叫；ALFWorld 每題最多 12 次嘗試，HotpotQA 重試到連續 3 次失敗；沒有呼叫次數或 token 記帳（精讀時） | [arXiv:2303.11366] |
+| Self-Refine | 同一模型以三組 few-shot 提示生成→分面向回饋→帶全部歷史改寫，最多 4 輪；依回饋停止或跨輪選最高分 | 不訓練、不用外部訊號；每個任務要手寫評分面向與回饋、改寫範例 | 7 個任務（FED 對話、PIE、CodeNet、GSM8K、Yelp、Acronym、CommonGen-Hard）；GPT-3.5／ChatGPT／GPT-4 | 作者總結約 20% 絕對增益；GPT-4 對話 25.4→74.6；GSM8K 64.1→64.1、92.9→93.1；oracle 版 GSM8K +0.7～+4.8 | 最多 4 輪，每題最多 1＋2×4 次呼叫，改寫提示帶全部歷史；沒有等成本比較（精讀時） | [arXiv:2303.17651] |
+| CoVe | 草稿→規劃驗證問題→在看不到草稿的脈絡逐題作答→只留一致的事實重寫；factor+revise 加逐事實一致性判定 | 不訓練、不用工具；每任務每步 3-shot 示範；Llama 65B、greedy | Wikidata 56 題、Wiki-Category 55 題、MultiSpanQA 418 題、FactScore 傳記 | Wikidata precision 0.17→0.36；MultiSpanQA F1 0.39→0.48；FactScore 55.9→71.4，平均事實數 16.6→12.3 | 論文沒有呼叫次數或 token 記帳；精讀時依方法推算，factored 每個驗證問題多 1 次呼叫，成本隨草稿的事實數線性成長 | [arXiv:2309.11495] |
+| Huang et al.（批判研究） | 定義 intrinsic self-correction；對照 oracle 停止與無標籤跑滿兩輪、等回應數的 self-consistency、補強過的初始提示 | 不訓練；初始、回饋、改寫三段提示；oracle 設定用標籤 | GSM8K、CommonSenseQA、HotpotQA 100 題、CommonGen-Hard；GPT-3.5／GPT-4／GPT-4-Turbo／Llama-2 | GPT-3.5 CommonSenseQA：基準 75.8、oracle 89.7、無標籤 41.8；9 個回應時 MAD 83.0 vs SC 88.2；CommonGen-Hard 強初始提示 81.8，再套 Self-Refine 75.1 | 以呼叫次數記帳：單次 1、第一輪 3、第二輪 5；以回應數對齊 self-consistency | [arXiv:2310.01798] |
+| Tyen et al.（BIG-Bench Mistake＋回溯） | 標出首個錯誤步；三種找錯提示；給定錯誤位置後回溯到該步以 temperature=1 重抽再續寫 | 人工標註 2,186 條軌跡（Dyck 為演算法標註）；分類器以其他四個任務的資料微調 | BIG-Bench 五個任務；五個 LLM 找錯；PaLM 2 Unicorn 回溯 | 找錯最高 52.87（GPT-4）；oracle 位置 Δ✗ +18.04～+43.92、Δ✓ −0.00～−11.43；回溯划算門檻約 60–70%；Otter 6.00–37.67 | 回溯時重抽上限 8 次（作者自述沒調過）；沒有同等算力的基準（精讀時） | [arXiv:2311.08516] |
+| ProCo | 遮蔽關鍵條件、以答案反推；對不上就把答案加入錯誤集合重答，最多 3 輪；驗證成立即停 | 不訓練；zero-shot 提示；算術題用 SimCSE 挑條件 | GSM8K、AQuA、MATH、NQ、TriviaQA、WebQ、HotpotQA、CSQA；GPT-3.5／GPT-4／Mixtral | GPT-3.5 GSM8K 87.1 vs CoT 78.6 vs Self-Correct 75.1；GSM8K 對改錯 2.5% vs Self-Correct 9.1% | 最多 3 輪；Table 5、Table 7 報平均 token 與耗時；精讀時推算每題最壞約 14 次（算術）或 18 次（問答）呼叫，self-consistency 對照只取 3 個樣本 | [arXiv:2405.14092] |
+| Kamoi et al.（綜述） | RQ1–RQ3 與 unrealistic／fair／unfair 框架；重新判讀既有文獻；正面與負面結果各一份查核清單 | 無自有實驗 | 判讀收錄到 2024 年 5 月的代表研究（推理、閉卷 QA、程式、受限生成等） | 無自有數字；引用的 SFT 修正資料量：SelFee 178K、Volcano 274K、Self-Critique 100K | 不適用（無自有實驗）；要求與同等計算成本的強基準比較，但沒定義記帳單位（精讀時） | [arXiv:2406.01297] |
+| Moral self-correction（📖 不計入，僅脈絡） | 事前引導：原題／加去偏指示／再加先想怎麼避免偏見的 CoT；沒有「先答再改」的迴圈 | Anthropic 內部 810M–175B、RLHF 50–1000 步的模型 | BBQ、Winogender、法學院入學歧視題 | 175B：BBQ 偏見分數約降 43%／84%；歧視差值隨 RLHF 從約 −15% 擺到約 +10% | 單次作答，沒有修正迴圈 | [arXiv:2302.07459] |
 
 **表 2：外部回饋／工具輔助的修正**
 
-| 方法 | 核心機制 | 需要的資料或監督 | 評估在哪 | 關鍵數字 | 出處 |
-| --- | --- | --- | --- | --- | --- |
-| RARR | 查核問題產生→Google 搜尋取證據→一致性閘門→先定位片段再最小改寫→附至多 5 段證據的歸因報告；編輯距離超過 50 字元或原文一半就拒絕該次編輯 | 不微調；PaLM 540B few-shot 提示（每個子任務 5–10 個範例）；Google 搜尋；T5-large 相關度模型 | NQ、StrategyQA、QReCC（每組 150 筆 test）；附錄 SummEval、ELI5、MMLU | Pres_intent 90.0／92.6／95.6；F1_AP 57.0／45.9／41.5；人工 AIS 35.4→43.4（NQ）、13.2→28.3（QReCC）；拿掉閘門後 Pres_Lev 89.6→82.6（NQ） | [arXiv:2210.08726] |
-| RCI | 產生→自我批評→改進；MiniWoB++ 上拆成計劃 explicit RCI 一次、state grounding 一次、regex 可執行性檢查最多 3 次 | 每任務 2–3 個人工示範，不更新參數；推理實驗以正解標籤決定何時停止（最多 2 輪） | MiniWoB++（排除長 HTML 與拖曳類任務）；8 個推理基準 | 以標籤停止：GSM8K 77.95→85.43；不用標籤：GSM8K 72.83、CommonSenseQA 64.56→46.06；MiniWoB++ 自承排名第二 | [arXiv:2303.17491] |
-| Self-Debugging | 產生→逐行解釋或模擬執行→對錯回饋→修正，最多 10 輪；回饋格式分 Simple／UT／Expl／Trace | 不微調；Codex、StarCoder 用 few-shot，GPT-3.5／GPT-4 用 zero-shot 對話；程式執行沙箱與單元測試 | Spider dev（無測試）、TransCoder（560 題，每題 10 個測試）、MBPP（500 題，1 個可見、2 個隱藏測試） | Spider Codex 81.3→84.1；TransCoder Codex 80.4→92.5、GPT-4 77.3→90.4；MBPP 無執行時 Codex Simple 61.4→57.6 | [arXiv:2304.05128] |
-| CRITIC | 驗證→附工具證據的 critique→以 critique 為條件重新生成；QA 最多 3 輪、數學與降毒最多 4 輪 | 不微調；few-shot 提示；Google 搜尋、Python 直譯器、Perspective API | AmbigNQ／TriviaQA／HotpotQA（各抽 500 筆）、GSM8k／SVAMP／TabMWP、RealToxicityPrompts | ChatGPT QA F1 平均 +7.7、數學平均 +7.0；toxicity probability 0.192→0.040；幻覺偵測 AUROC 0.810–0.831；GSM8k 有 41 筆由對改錯 | [arXiv:2305.11738] |
-| 多代理辯論 | 3 個同模型實例各自作答，逐輪讀彼此上一輪的答案再更新；論文沒寫最終答案怎麼取，精讀時查閱官方（自稱初步的）程式碼發現，它以多數決合併各 agent 的答案 | 不微調、不用工具，只需黑箱 API（gpt-3.5-turbo-0301） | Arithmetic、GSM8K、MMLU、Chess Move Validity 各約 100 題；西洋棋走子 300 盤；傳記 524 人的 ground truth | Arithmetic 81.8（單一 67.0、多數決 69.0）；GSM8K 85.0（多數決 81.0）；MMLU 71.1（單一 63.9、反思 57.7） | [arXiv:2305.14325] |
-| Pan et al.（自動修正綜述） | 語言模型／critic／refine 三角色；錯誤類型、回饋來源、格式、時機、策略五個軸 | 不適用（文獻綜述，沒有實驗） | 無；收錄 79 篇（精讀時逐列計數） | 精讀時計數：訓練期 20、生成期 24、事後修正 35；事後修正中外部回饋 22 篇 | [arXiv:2308.03188] |
-| ISR-LLM | 自然語言→PDDL→few-shot CoT 規劃→驗證器停在第一個錯誤並回饋→重新規劃；驗證器可換成 LLM 自我驗證器或外部模擬器 | 不微調；每個領域手寫翻譯、規劃、驗證的 few-shot 範例；外部驗證器要逐領域實作 | Cooking、Blocksworld、Ball Moving（n=3、4，每格 30 例）；GPT3.5 與 GPT4 | GPT3.5 Blocksworld n=3 成功率：直接 20、自我 37、外部 70；精讀時平均自我 +14、外部 +41；無翻譯器時自我驗證 36→16 | [arXiv:2308.13724] |
-| SCORE（2404.17140，不是 SCoRe） | 驗證器判錯才觸發；refiner 一次產出「只到第一個錯誤步驟的 critique＋修正解」，只修 1 輪 | 小模型自己取樣 10 個解，以正解為提示逆推 critique，過濾後 LoRA 微調；驗證器用 self-verifier、GPT-4 或 oracle | GSM8K、CommonsenseQA；遷移到 MATH 子集（181 題）、QASC、RiddleSense | 增益：self-verifier −0.3～+0.4；GPT-4 +2.2～+12.1；oracle +7.7～+18.8；RFT 起點改用 gpt-3.5-turbo 當驗證器則 −11.2 | [arXiv:2404.17140] |
+| 方法 | 核心機制 | 需要的資料或監督 | 評估在哪 | 關鍵數字 | 每題呼叫或輪數上限；token 記帳 | 出處 |
+| --- | --- | --- | --- | --- | --- | --- |
+| RARR | 查核問題產生→Google 搜尋取證據→一致性閘門→先定位片段再最小改寫→附至多 5 段證據的歸因報告；編輯距離超過 50 字元或原文一半就拒絕該次編輯 | 不微調；PaLM 540B few-shot 提示（每個子任務 5–10 個範例）；Google 搜尋；T5-large 相關度模型 | NQ、StrategyQA、QReCC（每組 150 筆 test）；附錄 SummEval、ELI5、MMLU | Pres_intent 90.0／92.6／95.6；F1_AP 57.0／45.9／41.5；人工 AIS 35.4→43.4（NQ）、13.2→28.3（QReCC）；拿掉閘門後 Pres_Lev 89.6→82.6（NQ） | 每段取樣 3 組查核問題、每題取 5 個搜尋結果，判定與編輯各取樣 1 次；沒有呼叫次數或 token 記帳（精讀時） | [arXiv:2210.08726] |
+| RCI | 產生→自我批評→改進；MiniWoB++ 上拆成計劃 explicit RCI 一次、state grounding 一次、regex 可執行性檢查最多 3 次 | 每任務 2–3 個人工示範，不更新參數；推理實驗以正解標籤決定何時停止（最多 2 輪） | MiniWoB++（排除長 HTML 與拖曳類任務）；8 個推理基準 | 以標籤停止：GSM8K 77.95→85.43；不用標籤：GSM8K 72.83、CommonSenseQA 64.56→46.06；MiniWoB++ 自承排名第二 | 推理最多 2 輪；MiniWoB++ 每回合計劃 1 次，每步 state grounding 1 次、regex 重寫最多 3 次；沒有呼叫次數或 token 記帳（精讀時） | [arXiv:2303.17491] |
+| Self-Debugging | 產生→逐行解釋或模擬執行→對錯回饋→修正，最多 10 輪；回饋格式分 Simple／UT／Expl／Trace | 不微調；Codex、StarCoder 用 few-shot，GPT-3.5／GPT-4 用 zero-shot 對話；程式執行沙箱與單元測試 | Spider dev（無測試）、TransCoder（560 題，每題 10 個測試）、MBPP（500 題，1 個可見、2 個隱藏測試） | Spider Codex 81.3→84.1；TransCoder Codex 80.4→92.5、GPT-4 77.3→90.4；MBPP 無執行時 Codex Simple 61.4→57.6 | 最多 10 輪，Spider 上每輪三段生成；樣本效率只數初始程式個數，沒計除錯成本（精讀時） | [arXiv:2304.05128] |
+| CRITIC | 驗證→附工具證據的 critique→以 critique 為條件重新生成；QA 最多 3 輪、數學與降毒最多 4 輪 | 不微調；few-shot 提示；Google 搜尋、Python 直譯器、Perspective API | AmbigNQ／TriviaQA／HotpotQA（各抽 500 筆）、GSM8k／SVAMP／TabMWP、RealToxicityPrompts | ChatGPT QA F1 平均 +7.7、數學平均 +7.0；toxicity probability 0.192→0.040；幻覺偵測 AUROC 0.810–0.831；GSM8k 有 41 筆由對改錯 | QA 最多 3 輪、數學與降毒最多 4 輪，每輪最多 7 次工具呼叫；沒有 token 記帳（精讀時），作者只說延遲隨輪數線性增加 | [arXiv:2305.11738] |
+| 多代理辯論 | 3 個同模型實例各自作答，逐輪讀彼此上一輪的答案再更新；論文沒寫最終答案怎麼取，精讀時查閱官方（自稱初步的）程式碼發現，它以多數決合併各 agent 的答案 | 不微調、不用工具，只需黑箱 API（gpt-3.5-turbo-0301） | Arithmetic、GSM8K、MMLU、Chess Move Validity 各約 100 題；西洋棋走子 300 盤；傳記 524 人的 ground truth | Arithmetic 81.8（單一 67.0、多數決 69.0）；GSM8K 85.0（多數決 81.0）；MMLU 71.1（單一 63.9、反思 57.7） | 3 個 agent × 2 輪，至少 6 次生成，提示含其他實例的全文；對照的多數決只有 3 個回答（精讀時） | [arXiv:2305.14325] |
+| Pan et al.（自動修正綜述） | 語言模型／critic／refine 三角色；錯誤類型、回饋來源、格式、時機、策略五個軸 | 不適用（文獻綜述，沒有實驗） | 無；收錄 79 篇（精讀時逐列計數） | 精讀時計數：訓練期 20、生成期 24、事後修正 35；事後修正中外部回饋 22 篇 | 不適用（綜述）；全文沒有討論任何方法的呼叫次數、延遲或 token 成本（精讀時） | [arXiv:2308.03188] |
+| ISR-LLM | 自然語言→PDDL→few-shot CoT 規劃→驗證器停在第一個錯誤並回饋→重新規劃；驗證器可換成 LLM 自我驗證器或外部模擬器 | 不微調；每個領域手寫翻譯、規劃、驗證的 few-shot 範例；外部驗證器要逐領域實作 | Cooking、Blocksworld、Ball Moving（n=3、4，每格 30 例）；GPT3.5 與 GPT4 | GPT3.5 Blocksworld n=3 成功率：直接 20、自我 37、外部 70；精讀時平均自我 +14、外部 +41；無翻譯器時自我驗證 36→16 | 自我驗證組最多 11 次規劃＋11 次驗證呼叫，只和單次直接規劃比（精讀時查閱公開程式碼） | [arXiv:2308.13724] |
+| SCORE（2404.17140，不是 SCoRe） | 驗證器判錯才觸發；refiner 一次產出「只到第一個錯誤步驟的 critique＋修正解」，只修 1 輪 | 小模型自己取樣 10 個解，以正解為提示逆推 critique，過濾後 LoRA 微調；驗證器用 self-verifier、GPT-4 或 oracle | GSM8K、CommonsenseQA；遷移到 MATH 子集（181 題）、QASC、RiddleSense | 增益：self-verifier −0.3～+0.4；GPT-4 +2.2～+12.1；oracle +7.7～+18.8；RFT 起點改用 gpt-3.5-turbo 當驗證器則 −11.2 | 只修 1 輪；附錄 E 報延遲，驗證器＋refiner 管線是基礎模型的 ×1.3 到 ×1.4，取樣 10 解重排 ×4.5；GPT-4 驗證器設定沒量延遲（精讀時） | [arXiv:2404.17140] |
 
 **表 3：訓練得到的自我修正、critique 模型與搜尋回溯**
 
-| 方法 | 核心機制 | 需要的資料或監督 | 評估在哪 | 關鍵數字 | 出處 |
-| --- | --- | --- | --- | --- | --- |
-| Self-critiquing（Saunders 等人） | 同一模型聯合 SFT 六個任務：主題式摘要、critiqueability（當閘門）、critique、helpfulness（篩 critique）、conditional／direct refinement；以 best-of-N 比較生成、判別、critique 三種能力（GDC gap） | 多輪人類示範與判斷：主題式摘要訓練集 critique 15,277 筆、helpfulness 41,724 筆、refinement 14,323 筆；刻意誤導答案；5 個 GPT-3 風格預訓練模型 | 自建主題式摘要（短篇故事、Wikipedia、新聞）；誤導答案集；合成任務 Addition、3-SAT、Alphabetize、RACE | 整體多找約 50% critique；模型答案被找到缺陷 54%→78%；intended critique 45±5% 對 27±5%；有效且新穎 0.24±0.06 對 0.18±0.05；改寫與 GDC 只有圖 | [arXiv:2206.05802] |
-| Self-Correction（Welleck 等人） | 凍結 generator＋另訓 corrector；在自身取樣池以 value function 組 value-improving pairs，依 exp(α·Δv＋β·s) 取樣；corrector 輸出回灌資料池；選配回饋 f | 訓練期可自動計算的純量 v（程式執行結果、限制詞涵蓋率、Perspective API）；不需人工編輯資料 | MultiArith、Multitask、GSM8k（Lila 程式版）；CommonGen、E2E；RealToxicityPrompts | GSM 8.57→21.26（oracle 24.22）；Multitask 49.02→73.53（oracle 78.24）；CommonGen coverage 91.38→94.58；Avg. Max. 毒性 0.527→0.171；拿掉 value pairing 78.24→62.35（oracle） | [arXiv:2211.00053] |
-| Constitutional AI（SL-CAI＋RL-CAI） | helpful RLHF 模型依隨機抽到的原則對自己的回應 critique→revision，每題 4 輪，用 revision 微調；feedback 模型依原則二選一，正規化機率當軟標籤訓練 PM 再做 RL | 16 對 critique／revision 原則、16 條多選題原則、few-shot 範例；182,831 筆紅隊提示（42,496 筆人寫）；有用性仍用 135,296 組人類比較 | 群眾工作者多輪對話 A/B 比較（Elo）；HHH 共 438 組二選一；人類資料訓練的 PM 分數；64 筆保留紅隊提示的絕對有害分數 | PM 資料 135,296 組人類 helpfulness＋182,831 組 AI 無害性比較；CoT 標籤夾在 40%–60%；Elo 與 PM 分數只有圖 | [arXiv:2212.08073] |
-| Shepherd | LLaMA-7B 微調成專職 critic：輸入（問題, 答案），輸出含正誤判斷、錯誤位置與建議的 feedback；不產生改寫 | 約 8K 筆：Stack Exchange 173 個社群與 16 個 subreddit 的回覆，以關鍵字、編輯紀錄、票數過濾；1,317 筆付費專家標註 | AlpacaFarm、FairEval、CosmosQA、OBQA、PIQA、TruthfulQA 各 50 題＋自建 CritiqueEval 52 題；GPT-4 與人工評審 | 對 ChatGPT 平均勝率：GPT-4 兩兩比較 56.0%、人工兩兩比較 49.6%；GPT-4 Likert ChatGPT 6.25 對 Shepherd 5.37 | [arXiv:2308.04592] |
-| LATS | ReAct 包進 MCTS：UCT 選擇、展開 n 個動作並實際執行、LLM 看過觀測後打 1–10 分加 self-consistency 當價值、終局 reward 反向傳播、失敗時寫口語反思存入記憶；回溯靠重貼歷史文字 | 不訓練；需要可回退或可重放的環境、終局成敗訊號、GPT-3.5／GPT-4 API | HotPotQA 100 題、HumanEval 164 題、MBPP 397 題、WebShop 50 條、Game of 24 50 題 | HumanEval GPT-4 92.7（Reflexion 91.0）、GPT-3.5 83.8；HotPotQA EM 0.63（Reflexion 0.51）；WebShop Score 75.9／SR 38.0；拿掉反思 0.58、拿掉 LM 評分 0.37 | [arXiv:2310.04406] |
-| CriticGPT | GPT-4 系列 critic，輸出「引用片段＋評論」；RM 預測人類整體排序，PPO 最佳化；推論期 FSBS 以 RM 分數加長度獎勵在 28 個候選中挑一份 | 承包商在 ChatGPT 程式答案植入隱微 bug 並寫說明（tampering），再依 7 點評分表評 4 份 critique；資料與模型不公開 | Human Inserted Bugs（留出的 tamper）、Human Detected Bugs（自然 bug）；競程正誤配對（附錄） | Detected Bugs 偏好率：對人類 62.8%、Human+CriticGPT 對人類 60.4%、對 ChatGPT 62.7%；植入 bug 上相對人類 >80%；只靠放大預訓練追上 RL-only 約需 30 倍算力 | [arXiv:2407.00215] |
-| RISE | 同一題的連續嘗試寫成多輪 MDP（回饋固定為「答錯了，再試」）；在自身失敗狀態上接 GPT-3.5 或自身 best-of-16 的較佳答案，advantage 加權回歸；每輪疊代從 base 重訓 | 二元答案檢查器；GSM8K 7,473 題、MATH 7,500 題訓練集；教師 GPT-3.5（蒸餾版）或 N=16 取樣（自我蒸餾版）；先做 knowledge boosting SFT | GSM8K 1,319 題、MATH 1,000 題、SVAMP（只做 OOD）；Llama2-7B、Mistral-7B、Llama-3-8B | Llama2 GSM8K m1@t5：Boost 39.2→Iter1 50.7→Iter2 55.0（p1@t5 68.4）；Mistral Iter1 m1@t5 59.2 對 m5@t1 50.6；同資料單輪 SFT m1@t5 34.0 | [arXiv:2407.18219] |
-| SCoRe（2409.12917，不是 SCORE） | 單一模型兩輪 on-policy REINFORCE 加 KL：Stage I 以強 KL 綁住第一輪、只最佳化第二輪；Stage II 聯合最佳化並加進步獎勵 α·(r2 − r1)，α=10 | 可自動驗證的二元獎勵（答案比對或單元測試）；只用模型自己產生的資料、不用教師；Gemini 1.5 Flash／1.0 Pro | MATH500；MBPP 訓練、HumanEval 測試；MBPP-R 離線修復 | MATH：60.0%→64.4%（Δ +4.4；base Δ −11.2）；HumanEval：52.4%→64.6%（Δ 12.2）；MBPP-R 60.6%；w/o Stage I Δ 2.2 | [arXiv:2409.12917] |
+| 方法 | 核心機制 | 需要的資料或監督 | 評估在哪 | 關鍵數字 | 每題呼叫或輪數上限；token 記帳 | 出處 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Self-critiquing（Saunders 等人） | 同一模型聯合 SFT 六個任務：主題式摘要、critiqueability（當閘門）、critique、helpfulness（篩 critique）、conditional／direct refinement；以 best-of-N 比較生成、判別、critique 三種能力（GDC gap） | 多輪人類示範與判斷：主題式摘要訓練集 critique 15,277 筆、helpfulness 41,724 筆、refinement 14,323 筆；刻意誤導答案；5 個 GPT-3 風格預訓練模型 | 自建主題式摘要（短篇故事、Wikipedia、新聞）；誤導答案集；合成任務 Addition、3-SAT、Alphabetize、RACE | 整體多找約 50% critique；模型答案被找到缺陷 54%→78%；intended critique 45±5% 對 27±5%；有效且新穎 0.24±0.06 對 0.18±0.05；改寫與 GDC 只有圖 | conditional refinement 先以 best-of-N 挑 critique；作者承認算力對齊後 best-of-8 的 direct refinement 可能更強 | [arXiv:2206.05802] |
+| Self-Correction（Welleck 等人） | 凍結 generator＋另訓 corrector；在自身取樣池以 value function 組 value-improving pairs，依 exp(α·Δv＋β·s) 取樣；corrector 輸出回灌資料池；選配回饋 f | 訓練期可自動計算的純量 v（程式執行結果、限制詞涵蓋率、Perspective API）；不需人工編輯資料 | MultiArith、Multitask、GSM8k（Lila 程式版）；CommonGen、E2E；RealToxicityPrompts | GSM 8.57→21.26（oracle 24.22）；Multitask 49.02→73.53（oracle 78.24）；CommonGen coverage 91.38→94.58；Avg. Max. 毒性 0.527→0.171；拿掉 value pairing 78.24→62.35（oracle） | 一律修一次或只修已知答錯；CommonGen 推論時間 0.20s→0.80s；沒有 pass@2、best-of-k 等同算力對照（精讀時） | [arXiv:2211.00053] |
+| Constitutional AI（SL-CAI＋RL-CAI） | helpful RLHF 模型依隨機抽到的原則對自己的回應 critique→revision，每題 4 輪，用 revision 微調；feedback 模型依原則二選一，正規化機率當軟標籤訓練 PM 再做 RL | 16 對 critique／revision 原則、16 條多選題原則、few-shot 範例；182,831 筆紅隊提示（42,496 筆人寫）；有用性仍用 135,296 組人類比較 | 群眾工作者多輪對話 A/B 比較（Elo）；HHH 共 438 組二選一；人類資料訓練的 PM 分數；64 筆保留紅隊提示的絕對有害分數 | PM 資料 135,296 組人類 helpfulness＋182,831 組 AI 無害性比較；CoT 標籤夾在 40%–60%；Elo 與 PM 分數只有圖 | 修正只在離線合成資料時做（每題 4 輪 revision）；推論時不修 | [arXiv:2212.08073] |
+| Shepherd | LLaMA-7B 微調成專職 critic：輸入（問題, 答案），輸出含正誤判斷、錯誤位置與建議的 feedback；不產生改寫 | 約 8K 筆：Stack Exchange 173 個社群與 16 個 subreddit 的回覆，以關鍵字、編輯紀錄、票數過濾；1,317 筆付費專家標註 | AlpacaFarm、FairEval、CosmosQA、OBQA、PIQA、TruthfulQA 各 50 題＋自建 CritiqueEval 52 題；GPT-4 與人工評審 | 對 ChatGPT 平均勝率：GPT-4 兩兩比較 56.0%、人工兩兩比較 49.6%；GPT-4 Likert ChatGPT 6.25 對 Shepherd 5.37 | 每題單次 critique，不做修正 | [arXiv:2308.04592] |
+| LATS | ReAct 包進 MCTS：UCT 選擇、展開 n 個動作並實際執行、LLM 看過觀測後打 1–10 分加 self-consistency 當價值、終局 reward 反向傳播、失敗時寫口語反思存入記憶；回溯靠重貼歷史文字 | 不訓練；需要可回退或可重放的環境、終局成敗訊號、GPT-3.5／GPT-4 API | HotPotQA 100 題、HumanEval 164 題、MBPP 397 題、WebShop 50 條、Game of 24 50 題 | HumanEval GPT-4 92.7（Reflexion 91.0）、GPT-3.5 83.8；HotPotQA EM 0.63（Reflexion 0.51）；WebShop Score 75.9／SR 38.0；拿掉反思 0.58、拿掉 LM 評分 0.37 | 每次展開取樣 n 個動作並實際執行，每個節點一次評分、每次失敗一次反思；成本表只計成功時的 token 與節點（精讀時） | [arXiv:2310.04406] |
+| CriticGPT | GPT-4 系列 critic，輸出「引用片段＋評論」；RM 預測人類整體排序，PPO 最佳化；推論期 FSBS 以 RM 分數加長度獎勵在 28 個候選中挑一份 | 承包商在 ChatGPT 程式答案植入隱微 bug 並寫說明（tampering），再依 7 點評分表評 4 份 critique；資料與模型不公開 | Human Inserted Bugs（留出的 tamper）、Human Detected Bugs（自然 bug）；競程正誤配對（附錄） | Detected Bugs 偏好率：對人類 62.8%、Human+CriticGPT 對人類 60.4%、對 ChatGPT 62.7%；植入 bug 上相對人類 >80%；只靠放大預訓練追上 RL-only 約需 30 倍算力 | FSBS 每題展開 28 個候選；不做修正 | [arXiv:2407.00215] |
+| RISE | 同一題的連續嘗試寫成多輪 MDP（回饋固定為「答錯了，再試」）；在自身失敗狀態上接 GPT-3.5 或自身 best-of-16 的較佳答案，advantage 加權回歸；每輪疊代從 base 重訓 | 二元答案檢查器；GSM8K 7,473 題、MATH 7,500 題訓練集；教師 GPT-3.5（蒸餾版）或 N=16 取樣（自我蒸餾版）；先做 knowledge boosting SFT | GSM8K 1,319 題、MATH 1,000 題、SVAMP（只做 OOD）；Llama2-7B、Mistral-7B、Llama-3-8B | Llama2 GSM8K m1@t5：Boost 39.2→Iter1 50.7→Iter2 55.0（p1@t5 68.4）；Mistral Iter1 m1@t5 59.2 對 m5@t1 50.6；同資料單輪 SFT m1@t5 34.0 | 推論 5 輪；對照組 m5@t1 以樣本數對齊 | [arXiv:2407.18219] |
+| SCoRe（2409.12917，不是 SCORE） | 單一模型兩輪 on-policy REINFORCE 加 KL：Stage I 以強 KL 綁住第一輪、只最佳化第二輪；Stage II 聯合最佳化並加進步獎勵 α·(r2 − r1)，α=10 | 可自動驗證的二元獎勵（答案比對或單元測試）；只用模型自己產生的資料、不用教師；Gemini 1.5 Flash／1.0 Pro | MATH500；MBPP 訓練、HumanEval 測試；MBPP-R 離線修復 | MATH：60.0%→64.4%（Δ +4.4；base Δ −11.2）；HumanEval：52.4%→64.6%（Δ 12.2）；MBPP-R 60.6%；w/o Stage I Δ 2.2 | 固定 2 輪；§6.2 以每題 32 個樣本的預算比較；沒計第二輪 context 變長的 token 成本（精讀時） | [arXiv:2409.12917] |
 
 ## 評估方式與關鍵數字
 
@@ -277,7 +286,7 @@
 
 本章從這張表讀出三件事。
 
-- **正解進迴圈的情形三個子領域都有，而且集中在標題數字上。** 內在子領域有 Reflexion 的 HotpotQA [arXiv:2303.11366]，外部子領域有 RCI 的推理實驗、Self-Debugging 的 TransCoder、CRITIC 的降毒、ISR-LLM 的外部驗證器 [arXiv:2303.17491][arXiv:2304.05128][arXiv:2305.11738][arXiv:2308.13724]，訓練子領域有 LATS 的三個決策任務與 RISE 的 p1@t5 [arXiv:2310.04406][arXiv:2407.18219]。
+- **正解進迴圈的情形三個子領域都有，而且集中在標題數字上。** 內在子領域有 Reflexion 的 HotpotQA [arXiv:2303.11366]，外部子領域有 RCI 的推理實驗、Self-Debugging 的 TransCoder、CRITIC 的降毒、ISR-LLM 的外部驗證器 [arXiv:2303.17491][arXiv:2304.05128][arXiv:2305.11738][arXiv:2308.13724]，訓練子領域有 LATS 的三個決策任務與 RISE 的 p1@t5 [arXiv:2310.04406][arXiv:2407.18219]。歸屬要分開看：Reflexion、RCI、RISE 與 LATS 的 HotPotQA 是論文自述的設定；Self-Debugging 與 CRITIC 那兩項是精讀時從論文內文發現的；ISR-LLM 的外部驗證器，以及 LATS 在 HumanEval 與 WebShop 上的停止與挑選方式，是精讀時查閱公開程式碼發現的，本章沒有另外驗證 [arXiv:2303.11366][arXiv:2303.17491][arXiv:2407.18219][arXiv:2304.05128][arXiv:2305.11738][arXiv:2308.13724][arXiv:2310.04406]。
 - **把 oracle 設定明標成上限另報的，是少數。** CRITIC 的 CRITIC∗、SCORE 的 oracle 列、Welleck 等人的 Correct*、Self-Refine 的 oracle 版、RISE 區分 p1@t5 與 m1@t5 [arXiv:2305.11738][arXiv:2404.17140][arXiv:2211.00053][arXiv:2303.17651][arXiv:2407.18219]。主結果完全不查答案的，有 CoVe、ProCo、RARR、多代理辯論（官方初步程式碼以多數決取最終答案）與 SCoRe（2409.12917）[arXiv:2309.11495][arXiv:2405.14092][arXiv:2210.08726][arXiv:2305.14325][arXiv:2409.12917]。
 - **規模普遍很小。** 每格 30 例、每任務約 100 題、每集 50 題的設計都出現在標題結果裡 [arXiv:2308.13724][arXiv:2305.14325][arXiv:2308.04592]。
 
@@ -295,7 +304,7 @@
 
 **Self-Refine 的數學結果分不清有沒有用到標籤。** 精讀時發現三處說法互相矛盾 [arXiv:2303.17651]：
 - Appendix O 說依 Welleck et al. 用正確答案決定何時推進迴圈，H.1 卻把 oracle 另列成 Table 9 [arXiv:2303.17651]。
-- Table 7 同樣標為 Self-Refine 的 GSM8K 是 62.4／75.1／94.5，其中 94.5 比 Table 9 的 oracle 93.8 還高 [arXiv:2303.17651]。
+- Table 7 同樣標為 Self-Refine 的 GSM8K 是 62.4／75.1／94.5，其中 94.5 比 Table 9 的 oracle 93.8 還高；程式驗證證實，而且 Table 7 的三格也都不等於 Table 9 非 oracle 版的 64.1／75.0／93.1，兩張表標同一個方法卻是不同的數 [arXiv:2303.17651]。
 - Figure 17 又畫出 71.34→76.19 的逐輪曲線 [arXiv:2303.17651]。
 
 **評估用的測試或評分器同時當回饋。**
@@ -305,7 +314,7 @@
 - 精讀時依 LATS 官方程式碼發現：WebShop 的 run.py 平均的是所有已探索節點裡的最佳 reward；HumanEval 的 programming/mcts.py（commit 853d816146）在搜尋途中只要有子解過了自產測試，就拿隱藏測試評一次，沒過就繼續搜 [arXiv:2310.04406]。repo 直到 2024-07-30 才修正「第一次過了自產測試就計為成功」的計數 bug，晚於論文 v3，論文沒說明 92.7、83.8 是否受影響 [arXiv:2310.04406]。
 
 **明標為上限的 oracle 設定，本身也有疑點。**
-- 精讀時發現，CRITIC 的 CRITIC∗ 在 LLaMA-2-7B、HotpotQA 上 EM 為 28.6，低於非 oracle 的 28.8；QA 全程 greedy 的話，只修錯題的 oracle 理應不低於全修 [arXiv:2305.11738]。
+- 精讀時發現，CRITIC 的 CRITIC∗ 在 LLaMA-2-7B、HotpotQA 上 EM 為 28.6，低於非 oracle 的 28.8；QA 全程 greedy 的話，只修錯題的 oracle 理應不低於全修 [arXiv:2305.11738]。程式驗證證實，而且 Table 8 三個尺寸 × 六欄 = 18 組比較中，CRITIC∗ 低於 CRITIC 的只有這一組 [arXiv:2305.11738]。
 - Welleck 等人的 oracle 模式永遠不會把對的改錯，分數下限就是 generator；精讀時指出，非 oracle 與 oracle 的落差正好量出 corrector 改壞對稿的程度：GSM 是 24.22 − 21.26 = 2.96 點，Multitask 是 78.24 − 73.53 = 4.71 點 [arXiv:2211.00053]。
 
 ### 陷阱二：「修正後準確率」在各篇是不同的量
@@ -335,8 +344,8 @@
 
 **SCoRe 的 Δ 分解（2409.12917）。** SCoRe 定義 Δ(t1,t2) 為第二輪減第一輪，Δ^{i→c} 與 Δ^{c→i} 都以全部題為分母 [arXiv:2409.12917]。
 - 恆等式：本章依 Table 2、Table 3 逐列重算，每一列都滿足 Δ = Δ^{i→c} − Δ^{c→i}，例如 SCoRe 的 MATH 是 5.8 − 1.4 = 4.4，base 是 4.6 − 15.8 = −11.2，HumanEval 的 SCoRe 是 15.2 − 3.0 = 12.2 [arXiv:2409.12917]。
-- 分母混用：精讀時依表重算發現，§6.1 的「修好 14.5%、base 9.5%」是以第一輪答錯的題為分母，5.8 ÷ (100 − 60.0) = 14.5%，但 base 是 4.6 ÷ (100 − 52.6) ≈ 9.7%，不是 9.5%；同一句的「15.8% 降到 1.4%」卻是以全部題為分母 [arXiv:2409.12917]。本章依同表另算「對題被改錯」的條件比例：base 是 15.8 ÷ 52.6 ≈ 30.0%，SCoRe 是 1.4 ÷ 60.0 ≈ 2.3% [arXiv:2409.12917]。
-- 順序寫反：精讀時發現，§6.1 說相對 Pair-SFT 分別提升「10.2% 與 2.6%」（依序是 Δ 與 Acc@t2），但依 Table 2，Δ 只多 4.4 − 1.8 = 2.6，Acc@t2 多 64.4 − 54.2 = 10.2，順序反了 [arXiv:2409.12917]。HumanEval 的 Δ 增益依表是 12.2 − 3.0 = 9.2，摘要寫 9.1 [arXiv:2409.12917]。
+- 分母混用：精讀時依表重算發現、程式驗證證實，§6.1 的「修好 14.5%、base 9.5%」是以第一輪答錯的題為分母，5.8 ÷ (100 − 60.0) = 14.5%，但 base 是 4.6 ÷ (100 − 52.6) ≈ 9.7%，不是 9.5%；同一句的「15.8% 降到 1.4%」卻是以全部題為分母 [arXiv:2409.12917]。本章依同表另算「對題被改錯」的條件比例：base 是 15.8 ÷ 52.6 ≈ 30.0%，SCoRe 是 1.4 ÷ 60.0 ≈ 2.3% [arXiv:2409.12917]。
+- 順序寫反：精讀時發現、程式驗證證實，§6.1 說相對 Pair-SFT 分別提升「10.2% 與 2.6%」（依序是 Δ 與 Acc@t2），但依 Table 2，Δ 只多 4.4 − 1.8 = 2.6，Acc@t2 多 64.4 − 54.2 = 10.2，順序反了；程式同時用同一句的相對 base 提升 4.4 − (−11.2) = 15.6 與 64.4 − 41.4 = 23.0 當對照組，確認欄位解析無誤 [arXiv:2409.12917]。HumanEval 的 Δ 增益依表是 12.2 − 3.0 = 9.2，摘要與引言都寫 9.1，程式驗證證實 [arXiv:2409.12917]。
 - Δ 會被較差的第一輪灌大：精讀時指出，SCoRe 在 HumanEval 的 Acc@t1 52.4% 低於 base 的 53.7%，所以 12.2 的 Δ 有一部分來自較差的第一輪；Acc@t2 從 56.7% 到 64.6% 仍是實質進步 [arXiv:2409.12917]。
 
 ### 陷阱四：推論成本沒有對齊，或記帳單位選得有利
@@ -346,14 +355,14 @@
 **沒對齊的比較。**
 - 精讀時發現，多代理辯論拿至少 6 次生成去比 3 個回答的多數決，而且每次呼叫的提示還包含其他實例的全文 [arXiv:2305.14325]。
 - ProCo 的 self-consistency 對照只取 3 個樣本；精讀時依附錄提示推算，ProCo 每題最壞約要 14 次（算術）或 18 次（問答）呼叫 [arXiv:2405.14092]。ProCo 還有文件數混淆：GenRead／RAG 單獨當基準時用 5 份文件，接 ProCo 時改用 1 份，卻沒有「1 份文件、不加 ProCo」的對照；精讀時指出，Table 5 省下約一半 token，主要是文件數的效果 [arXiv:2405.14092]。
-- 精讀時發現，ISR-LLM 的自我驗證組最多有 11 次規劃呼叫加 11 次驗證呼叫，卻只和單次的直接規劃比 [arXiv:2308.13724]。
-- 精讀時發現，Self-Debugging 的樣本效率只數初始程式的個數，沒有計入每輪三段生成、最多 10 輪的除錯成本 [arXiv:2304.05128]。
+- 精讀時查閱公開程式碼發現，ISR-LLM 的自我驗證組最多有 11 次規劃呼叫加 11 次驗證呼叫，卻只和單次的直接規劃比 [arXiv:2308.13724]。
+- 精讀時發現，Self-Debugging 的樣本效率只數初始程式的個數，沒有計入 Spider 上每輪三段生成、最多 10 輪的除錯成本 [arXiv:2304.05128]。
 - 精讀時指出，Welleck 等人沒拿 generator 自己的 pass@2、多數決或用 v 挑的 best-of-k 當對照；CommonGen 的推論時間也從 0.20s 變成 0.80s，是 0.80 ÷ 0.20 = 4 倍 [arXiv:2211.00053]。
 - 精讀時指出，LATS 的成本表只計成功時的 token 與節點，排除失敗軌跡，也沒和 ReAct、Reflexion 比 token [arXiv:2310.04406]。
 - 精讀時指出，Reflexion、CoVe、RCI、CRITIC、RARR 都沒有每筆的呼叫次數或 token 記帳 [arXiv:2303.11366][arXiv:2309.11495][arXiv:2303.17491][arXiv:2305.11738][arXiv:2210.08726]。CRITIC 只在限制段說延遲隨輪數線性增加 [arXiv:2305.11738]。
 
-**「修正勝過多取樣」的主張，重算後縮水。**
-- RISE 宣稱 m1@t5 比同樣本數的 m5@t1 在 GSM8K「一致高 4%–8%」、在 MATH 高 6.5% [arXiv:2407.18219]。本章依 Table 1 重算 m1@t5 − m5@t1：GSM8K 上 Llama2 Iter1 為 50.7 − 49.7 = 1.0，Iter2 為 55.0 − 51.0 = 4.0，Mistral Iter1 為 59.2 − 50.6 = 8.6；MATH 上 Llama2 Iter1 為 9.7 − 8.8 = 0.9，Iter2 為 10.4 − 10.4 = 0，Mistral Iter1 為 18.4 − 9.5 = 8.9 [arXiv:2407.18219]。精讀時指出，GSM8K 1,319 題、temperature 1.0、單次執行，p≈0.5 時標準誤約 1.4 點，+1 點左右落在取樣雜訊內；Eurus-7B-SFT 的 m5@t1 是 66.3，高於 Mistral+RISE 的 m1@t5 59.2 [arXiv:2407.18219]。
+**「修正勝過多取樣」的主張，重算後對不上或縮水。**
+- RISE 宣稱 m1@t5 比同樣本數的 m5@t1 在 GSM8K「一致高 4%–8%」、在 MATH 高 6.5% [arXiv:2407.18219]。本章依 Table 1 讀出的 m1@t5 − m5@t1，GSM8K 上 Llama2 Iter1 為 50.7 − 49.7 = 1.0，Iter2 為 55.0 − 51.0 = 4.0，Mistral Iter1 為 59.2 − 50.6 = 8.6；MATH 上 Llama2 Iter1 為 9.7 − 8.8 = 0.9，Iter2 為 10.4 − 10.4 = 0，Mistral Iter1 為 18.4 − 9.5 = 8.9；程式驗證確認這六個差值的運算元都取自宣稱的那一列那一欄 [arXiv:2407.18219]。但程式也列舉了 Table 1 同列所有欄對與 Mistral 訓練前後的跨列組合，找不到任何兩格能同時重現「一致 4%–8%」與「MATH 6.5%」；作者原句比的是第 1 輪與第 5 輪的 maj@5，而 Table 1 沒有第 5 輪 maj@5 這一欄 [arXiv:2407.18219]。所以能確定的只有：依本章的讀法，數字對不上；作者比的是哪兩格無法定位，不能據此說作者算錯 [arXiv:2407.18219]。精讀時指出，GSM8K 1,319 題、temperature 1.0、單次執行，p≈0.5 時標準誤約 1.4 點，+1 點左右落在取樣雜訊內；Eurus-7B-SFT 的 m5@t1 是 66.3，高於 Mistral+RISE 的 m1@t5 59.2 [arXiv:2407.18219]。
 - SCoRe（2409.12917）在每題 32 個樣本的預算下，純平行取樣增益 7.4%，結合自我修正為 10.5% [arXiv:2409.12917]。精讀時指出，這只在 SCoRe 模型內部比，沒有拿 Acc@t1 更高（61.8%）的單輪 RL 模型做同樣的平行多數決，也沒計入第二輪 context 變長的 token 成本 [arXiv:2409.12917]。
 - Saunders 等人自己承認，算力對齊後 best-of-8 的 direct refinement 可能比「先 critique 再改」更強 [arXiv:2206.05802]。
 - Kamoi et al. 要求與同等計算成本的強基準比較 [arXiv:2406.01297]。精讀時指出它沒有定義記帳單位；回饋與改寫步驟的輸入包含完整初始回應，只數呼叫次數仍可被操弄 [arXiv:2406.01297]。
@@ -364,14 +373,13 @@
 - 精讀時指出，Self-Refine 的「約 20% 絕對增益」混了 solve rate、% optimized、coverage、GPT-4 判定的變數命名比例與 A/B 偏好勝率 [arXiv:2303.17651]。本章依 Table 1 重算，21 格增益的平均是 (21.6 + 31.8 + 32.4 + 27.2 + 19.8 + 49.2 + 8.2 + 3.6 + 8.7 + 13.9 + 35.4 + 28.8 + 0 + 0.2 + 0.2 + 14.8 + 10.0 + 25.6 + 9.0 + 23.0 + 30.0) / 21 = 18.7 [arXiv:2303.17651]。
 - 按指標類型拆開，差距很大：以 GPT-4-pref 勝率計的 Sentiment、Dialogue、Acronym 共 9 格，平均 (21.6 + 31.8 + 32.4 + 27.2 + 19.8 + 49.2 + 14.8 + 10.0 + 25.6) / 9 = 25.8；其餘 12 格平均 (8.2 + 3.6 + 8.7 + 13.9 + 35.4 + 28.8 + 0 + 0.2 + 0.2 + 9.0 + 23.0 + 30.0) / 12 = 13.4 [arXiv:2303.17651]。
 - 精讀時指出，偏好勝率還藏著平手：GPT-4 Sentiment Reversal 的 Base 勝率 3.8、Self-Refine 36.2，平手占 100 − 3.8 − 36.2 = 60.0 [arXiv:2303.17651]。精讀時依 Appendix J 指出，達顯著的任務數只有 GPT-3.5 的 3/7、ChatGPT 的 4/7、GPT-4 的 6/7 [arXiv:2303.17651]。
-- SCORE（2404.17140）引言的「平均 14.6%」是 10 格相對增益的平均，不是百分點；其中 Gemma 在 181 題的 MATH 子集上一格就有 44.6%，精讀時驗算去掉這格後其餘 9 格平均約 11.2%，LLaMA 的絕對增益平均只有 +4.3 個百分點 [arXiv:2404.17140]。
+- SCORE（2404.17140）引言的「平均 14.6%」是 10 格相對增益的平均，不是百分點；其中 Gemma 在 181 題的 MATH 子集上一格就有 44.6%，精讀時驗算去掉這格後其餘 9 格平均約 11.2%，LLaMA 的絕對增益平均只有 +4.3 個百分點；這三個數都經程式從 Table 6 重算證實 [arXiv:2404.17140]。
 - 精讀時發現，CRITIC 在 HotpotQA 的 hallucination 占比 36%→7% 是兩種方法各自錯誤樣本裡的組成比例，沒有給錯誤總數，看不出幻覺的絕對發生率降了多少 [arXiv:2305.11738]。
 
 **精確率型指標獎勵刪除。**
 - CoVe 的清單題只報 micro-averaged precision，而 Wikidata 每題約 600 個 gold 實體；精讀時指出，召回率因此本來就接近零 [arXiv:2309.11495]。依 Table 1 換算，two-step 把每題平均輸出實體從 0.59 + 2.95 = 3.54 個砍到 0.38 + 0.68 = 1.06 個，正確實體少了 (0.59 − 0.38) / 0.59 = 36% [arXiv:2309.11495]。
 - 精讀時指出，一個「只保留最有把握的答案」的簡單過濾器也可能拿到類似的精確率，論文沒有做這種 abstention 基準 [arXiv:2309.11495]。FactScore 同樣是精確率型指標，factor+revise 在設計上就會丟掉被判為 INCONSISTENT 的事實；作者拿 Llama 2 70B Chat 依位置截斷到前 10 句（41.3→42.7）說明長度不影響分數，精讀時指出 CoVe 是依把握程度刪除，位置截斷回答不了這個混淆 [arXiv:2309.11495]。
 - 與外部系統的 FactScore 比較也不同條件：平均事實數 CoVe 是 12.3，ChatGPT 34.7、PerplexityAI 40.8，後兩者的數字引自 FactScore 原論文 [arXiv:2309.11495]。
-- 📖 論文的 BBQ 偏見分數有同類問題：精讀時依 BBQ 原定義指出，ambiguous 偏見分數會乘上 (1 − 準確率)，多答 Unknown 就會機械式降低分數 [arXiv:2302.07459]。
 
 **其他指標設計。**
 - RARR 的 F1_AP 是 attribution 與 preservation 的調和平均，Pres_Lev 定義為 max(1 − 字元級 Levenshtein(x, y) ÷ len(x), 0) [arXiv:2210.08726]。精讀時發現，F1_AP 的領先幾乎全來自 preservation，而 preservation 被 RARR 自己的編輯拒絕門檻封頂，這個指標等於部分獎勵了這項設計：RARR 修正後的人工 AIS 為 43.4／31.5／28.3，三組都低於 EFEC 的 48.3／51.7／48.7 [arXiv:2210.08726]。auto-AIS 與人工評估的 Pearson 相關為 0.74，但作者承認它傾向把沒有根據的句子判成有根據，而 Table 2–4 的消融全部只用自動指標 [arXiv:2210.08726]。
@@ -389,7 +397,7 @@
 ### 陷阱七：找錯與 critique 品質的量尺各有漏洞
 
 - **組成偏斜。** BIG-Bench Mistake 的前四個任務刻意抽成 85% 答錯、15% 答對，整體定位準確率主要反映有錯軌跡的表現 [arXiv:2311.08516]。提示法越細，模型越容易判出「有錯」，無錯軌跡的準確率就掉：GPT-4 在 Dyck 上，trace-level、step-level、CoT step-level 依序是 98.41→78.57→13.79 [arXiv:2311.08516]。
-- **結論過度概括。** Tyen et al. 的結論說拿提示式找錯判斷答案對錯是差的策略，全猜錯的 naive 基準加權 F1 是 78；精讀時逐格數過，GPT-4 有 10／15 格、GPT-4-Turbo 有 6／10 格高於這個基準，這個結論對 GPT-4 家族是過度概括 [arXiv:2311.08516]。
+- **結論過度概括。** Tyen et al. 的結論說拿提示式找錯判斷答案對錯是差的策略，全猜錯的 naive 基準加權 F1 是 78；精讀時逐格數過，GPT-4 有 10／15 格、GPT-4-Turbo 有 6／10 格高於這個基準，這個結論對 GPT-4 家族是過度概括 [arXiv:2311.08516]。程式驗證證實：依 85%／15% 的組成重算 naive 基準得到同一個 78，兩個計數逐格吻合；同一張表的 GPT-3.5-Turbo、Gemini Pro、PaLM 2 高於基準的格數明顯較少，所以「過度概括」只針對 GPT-4 家族 [arXiv:2311.08516]。
 - **CriticGPT 的 CBI 是「評審知道答案」時量到的。** 評分者評估時看得到植入 bug 的說明；精讀時指出，CBI 因此量的是「單一已知 bug 的 recall」，而 §7.5 顯示沒有參考時評分者一致率明顯較低 [arXiv:2407.00215]。作者自承偏好率受風格影響、critique 越長 CBI 越高 [arXiv:2407.00215]。換到自然分佈的 Human Detected Bugs，RL-only CriticGPT 反而比 ChatGPT 不完整（作者自述）[arXiv:2407.00215]。
 - **CriticGPT 的兩個數字不是它看起來的樣子。** §3.6 的 24% 對 6% 不是對照實驗：critique 指出問題的樣本中 24% 被承包商認定要大幅下修，沒有 critique 時第二位承包商大幅下修的比例只有 6%，精讀時指出兩者的分母與條件都不同 [arXiv:2407.00215]。精讀時也發現，摘要的 63% 是模型 critique 對人類 critique（Table 3 的 62.8%），官方部落格寫的卻是 CriticGPT 對 ChatGPT（Table 3 的 62.7%）；Table 3 表頭標「69% CI」，信賴水準不明 [arXiv:2407.00215]。
 - **Saunders 等人的「多找 50%」主要是小問題。** 精讀時指出，增量主要來自 minor 與 coverage 類 critique [arXiv:2206.05802]。誤導答案那一組由寫誤導答案的人判定 critique 成不成立，輔助條件下成立比例 71%，也就是仍有 100 − 71 = 29% 不成立 [arXiv:2206.05802]。論文的誤差棒是 z=1；精讀時指出，「有效且新穎」的 critique 只從 0.18±0.05 增加到 0.24±0.06，差距 0.24 − 0.18 = 0.06 與合併標準誤（約 0.08）相當，並不顯著 [arXiv:2206.05802]。
@@ -418,11 +426,11 @@
 **同一篇的表格自相矛盾。**
 - CoVe Table 1：micro-averaged precision 應該等於 Pos. / (Pos. + Neg.)，精讀時發現 Wiki-Category 有兩列對不上，程式驗證以捨入區間判定後證實 [arXiv:2309.11495]。本章重算：two-step 是 0.50 / (0.50 + 0.52) = 0.490，表中寫 0.21；factored 是 0.52 / (0.52 + 1.52) = 0.255，表中寫 0.22；其餘 10 列在四捨五入內吻合 [arXiv:2309.11495]。所以這兩列的 Pos.／Neg. 不能拿來佐證「正確實體沒有減少」；至於是哪一格錯，表格本身分不出來 [arXiv:2309.11495]。
 - Shepherd Table 5（人工 Likert）：精讀時依逐欄重算發現平均欄有誤，程式驗證證實；本章依全文 Table 5 再算一次，Shepherd 為 (4.38 + 4.75 + 4.36 + 4.58 + 4.44 + 4.66 + 4.65) ÷ 7 ≈ 4.55，ChatGPT 為 (4.56 + 4.31 + 4.28 + 4.30 + 4.43 + 4.27 + 4.04) ÷ 7 ≈ 4.31；表上卻寫 4.41 與 4.59，高低整個顛倒 [arXiv:2308.04592]。ChatGPT 表上的 4.59 還高於它七欄中最大的 4.56，任何非負加權平均都算不出來；Alpaca 與 SelFee 兩列的平均欄也對不上（精讀時算出 2.82、3.60，表上是 2.91、3.84），所以問題在整個平均欄，不是兩格對調 [arXiv:2308.04592]。精讀時也指出，逐欄看 Shepherd 在 6 個公開集中贏了 5 個，只輸 AlpacaFarm（4.38 對 4.56），其中 PIQA 只贏 4.44 − 4.43 = 0.01；這和表說「ChatGPT 在公開資料集普遍較好」相反 [arXiv:2308.04592]。同一個重算用在 GPT-4 Likert 的 Table 6，平均欄與逐欄平均相符：ChatGPT 為 (6.54 + 6.46 + 5.98 + 6.10 + 6.51 + 6.16 + 6.00) ÷ 7 ≈ 6.25，可見出問題的是 Table 5 [arXiv:2308.04592]。
-- RISE Table 2：精讀時發現，自我蒸餾版 Mistral 那一列標 +6.6，實際 39.5 − 36.8 = 2.7；p1@t5 標 +15.9，實際 48.7 − 36.8 = 11.9；引言「Mistral-7B 完全用自身資料提升 6.6%」正是來自這一格 [arXiv:2407.18219]。若改和未訓練 Mistral 的 m1@t5 比，訓練後只多 39.5 − 39.0 = 0.5 點 [arXiv:2407.18219]。
+- RISE Table 2：精讀時發現、程式驗證證實，自我蒸餾版 Mistral 那一列的 m1@t5 標 +6.6，依同列絕對值是 39.5 − 36.8 = 2.7；p1@t5 標 +15.9，依絕對值是 48.7 − 36.8 = 11.9；引言「Mistral-7B 完全用自身資料提升 6.6%」正是來自這一格 [arXiv:2407.18219]。對照組是同一張表的其他格：同列 m5@t1 的 +7.6 等於 44.4 − 36.8，Mistral 基礎列與 Llama-3 兩列的括號值也全部自洽 [arXiv:2407.18219]。所以矛盾在這兩格的絕對值或括號值，至少一個錯，表格本身分不出是哪一個；若絕對值正確，提升只有 2.7 [arXiv:2407.18219]。依絕對值改和未訓練 Mistral 的 m1@t5 比，訓練後只多 39.5 − 39.0 = 0.5 點 [arXiv:2407.18219]。
 - RARR Table 7（MMLU）：精讀時發現 Pres_Lev 欄是 6.6–7.6，代入調和平均算不出表上的 F1_AP，改用 100 減去該值才吻合；本章重算 Humanities 一列，2 × 29.6 × (100 − 6.6) ÷ (29.6 + 100 − 6.6) ≈ 45.0，與表上相同 [arXiv:2210.08726]。
 - Reflexion：§4.3 文字說 HumanEval 與 MBPP Python 的基準是 82% 與 80%，Table 2 兩者都是 0.80；Table 1 的 GPT-4 在兩個不同 benchmark 上都是 80.1，而 OpenAI 技術報告公布的 GPT-4 HumanEval 是 67%（皆精讀時發現）[arXiv:2303.11366]。
 - Self-Refine 的 Sentiment Reversal：Vader 分類器量到的負向目標準確率，基準 92%、Self-Refine 93.6%，幾乎沒有差別；Figure 4 的 y0→y3 只從 33.9 升到 36.8，與 Table 1 的 +21.6～+32.4 顯然是不同量尺（皆精讀時發現）[arXiv:2303.17651]。
-- 其他文表不一（除 SCORE 與 RARR 兩項外，皆為精讀時發現）：RCI 的 Zero-Shot 在 Table 1 與 Table 2 不同（GSM8K 77.95 對 78.35）[arXiv:2303.17491]；CRITIC 的 text-davinci-003 GSM8k 在 Table 2 是 72.2、在 Table 10 是 71.2 [arXiv:2305.11738]；SCORE（2404.17140）Appendix C 內文寫 gpt-4＋SCORE 升到 45.1，Table 4 卻是 46.3 [arXiv:2404.17140]；ISR-LLM 同一設定的自我驗證成功率 Table 2 寫 36%、Table 1 寫 37% [arXiv:2308.13724]；RARR 內文說歸因「最多提升 13%」，但 QReCC 的人工 AIS 是 13.2→28.3，本章重算 28.3 − 13.2 = 15.1 [arXiv:2210.08726]；Self-Debugging 的多樣本溫度在 §5 寫 0.7、附錄 F.1 寫 0.8 [arXiv:2304.05128]。
+- 其他文表不一（除 SCORE 與 RARR 兩項外，皆為精讀時發現，都沒有程式驗證）：RCI 的 Zero-Shot 在 Table 1 與 Table 2 不同（GSM8K 77.95 對 78.35）[arXiv:2303.17491]；CRITIC 的 text-davinci-003 GSM8k 在 Table 2 是 72.2、在 Table 10 是 71.2 [arXiv:2305.11738]；SCORE（2404.17140）Appendix C 內文寫 gpt-4＋SCORE 升到 45.1，Table 4 卻是 46.3 [arXiv:2404.17140]；ISR-LLM 同一設定的自我驗證成功率 Table 2 寫 36%、Table 1 寫 37% [arXiv:2308.13724]；RARR 內文說歸因「最多提升 13%」，但 QReCC 的人工 AIS 是 13.2→28.3，本章重算 28.3 − 13.2 = 15.1 [arXiv:2210.08726]；Self-Debugging 的多樣本溫度在 §5 寫 0.7、附錄 F.1 寫 0.8 [arXiv:2304.05128]。
 
 **變因綁在一起。**
 - 精讀時指出，Huang et al. 的模型、回饋提示、溫度與樣本數四個變因沒有交叉設計 [arXiv:2310.01798]。前三者綁在一起：GPT-3.5 與 GPT-4 用語意上預設答案有錯的回饋提示、溫度 1；GPT-4-Turbo 與 Llama-2 用中性提示、溫度 0 [arXiv:2310.01798]。樣本數另有一條分界：GPT-3.5 跑全集，其餘三個模型（GPT-4、GPT-4-Turbo、Llama-2）各抽 200 題（HotpotQA 100 題）[arXiv:2310.01798]。跌幅最大的 GPT-3.5 CommonSenseQA（75.8→38.1）從沒在中性提示下跑過 [arXiv:2310.01798]。公允地說，Llama-2 在中性提示下 CommonSenseQA 仍從 64.0 掉到 37.5，現象不只是提示造成的假象；而「判斷對錯、錯才找問題」的提示讓 GPT-4-Turbo CommonSenseQA 第一輪掉到 74.5，強模型的退化幅度確實取決於措辭 [arXiv:2310.01798]。
@@ -432,7 +440,7 @@
 
 ## 程式驗證
 
-本章挑出四條只靠快取全文就能用程式核對的主張，每條寫一支只用 Python 標準函式庫的程式。表格數字由程式從快取全文解析，不手抄；逐格輸出與判讀寫在 [05-results.md](../verify/05-results.md)。同一條主張裡的子主張判讀不同時，分開下結論。四條都沒有被推翻，正文對應的段落（陷阱八、陷阱九）已改寫成「精讀時發現，程式驗證證實」，判定不了的子主張也在原處註明。
+本章挑出八組只靠快取全文或資料檔就能用程式核對的主張，每組寫一支只用 Python 標準函式庫的程式。表格數字由程式從快取全文解析，不手抄；逐格輸出與判讀寫在 [05-results.md](../verify/05-results.md)。同一組主張裡的子主張判讀不同時，分開下結論。八組都沒有被推翻，但有五個子主張程式判定不了，逐列見下表：CoVe 那兩列是哪一格錯、ProCo 與基準的評估分母是否不同、多代理辯論的 ± 是不是算錯、RISE Table 2 是絕對值還是括號值錯，以及 RISE「一致高 4%–8%」比的是哪兩格。最後一項讓本章自己原本的說法降級：陷阱四原本寫 RISE 的主張「重算後縮水」，驗證後改成「依本章讀法對不上、無法定位」。正文對應的段落已改寫成「程式驗證證實」，判定不了的部分也在原處註明。
 
 | 被驗證的主張 | 主張來源 | 結論 | 驗證檔 | 出處 |
 | --- | --- | --- | --- | --- |
@@ -440,12 +448,17 @@
 | CoVe Table 1 的 Wiki-Category 有兩列 micro-averaged precision 不等於 Pos./(Pos.+Neg.)，其餘 10 列吻合；所以這兩列的 Pos./Neg. 不能佐證「正確實體沒有減少」 | 精讀筆記 limitations_observed 第 1 條 | 證實。以捨入區間判定，不吻合的恰好是 two-step（0.50 / (0.50 + 0.52) = 0.490，表上 0.21）與 factored（0.52 / (0.52 + 1.52) = 0.255，表上 0.22）。「不能佐證」由此推出，成立；是哪一格錯，無法判定 | [05-cove-precision-identity.py](../verify/05-cove-precision-identity.py) | [arXiv:2309.11495] |
 | ProCo Table 4 的 GPT-4 基準六格與 Huang et al. Table 3 的 GPT-4 逐格相同，兩篇宣稱的設定卻不同；ProCo 的 97.6、86.7 放不進 200 題的格點 | 精讀筆記 limitations_observed 第 1 條 | 三點都證實：六格逐格相同，拿來對照的 Huang et al. GPT-4 第二輪與 GPT-3.5 列都不同；兩篇的設定原句都在全文找到；97.6 × 2 = 195.2、86.7 × 2 = 173.4 不是整數。「所以評估分母不同」無法判定，因為 ProCo 沒寫題數，也沒寫是否多次執行取平均 | [05-proco-gpt4-baselines.py](../verify/05-proco-gpt4-baselines.py) | [arXiv:2405.14092][arXiv:2310.01798] |
 | 多代理辯論 Table 1／2 的 ±：Arithmetic 辯論列 ±2.3 與 n=100 的二項標準誤（約 3.9）對不上；Chess Move Validity 三列 ±2.6／2.9／2.9 也對不上；其餘 10 個比例格與公式值相差不超過 0.1 | 前一點出自精讀筆記 limitations_observed 第 4 條；後兩點是本章組章時的延伸 | 三點都證實。若 ± 是二項標準誤，Arithmetic 辯論列反推的題數是 81.8 × (100 − 81.8) ÷ (2.3 × 2.3) ≈ 281，約是附錄所寫 100 題的三倍。「± 算錯了」無法判定：論文沒有定義 ±，全文也沒有提到標準誤、種子或重複執行；能確定的只有這四格的 ± 與附錄宣稱的 n=100 不一致 | [05-debate-binomial-se.py](../verify/05-debate-binomial-se.py) | [arXiv:2305.14325] |
+| 論文自己的表格或引言寫錯：RISE Table 2 自我蒸餾版 Mistral 的 +6.6、+15.9 與同列絕對值不符；SCoRe §6.1 的 base 9.5% 應為 9.7%、相對 Pair-SFT 的「10.2% 與 2.6%」順序寫反、HumanEval 的 Δ 增益 9.1 應為 9.2；Self-Refine Table 7 的 GPT-4 94.5 高於 Table 9 的 oracle 93.8 | 精讀筆記 limitations_observed 與 key_results；Table 7 對 Table 9 非 oracle 版的比較是本章組章時的延伸 | 7 個子主張證實，1 個無法判定：RISE 那兩格只能確定「絕對值或括號值至少一個錯」，分不出是哪一個。另有 2 組對照組都吻合（SCoRe 同一句對 base 的 15.6、23.0；RISE 引言同一句對 Llama-3 的 8.2），RISE 的逐列檢查也拿同一張表自洽的列當對照 | [05-author-table-errors.py](../verify/05-author-table-errors.py) | [arXiv:2407.18219][arXiv:2409.12917][arXiv:2303.17651] |
+| 多格重算的運算元是不是取自宣稱的那一格：RISE 的六個 m1@t5 − m5@t1；Tyen et al. Table 5 高於 naive 基準 78 的格數（GPT-4 10／15、GPT-4-Turbo 6／10）；Self-Debugging TransCoder 上 Simple 佔增益的比例，以及 MBPP 兩個 Codex 數字的出處 | RISE 的差值與 Self-Debugging 的比例是本章組章時重算；Tyen 的計數出自精讀筆記 limitations_observed | 運算元出處全部證實。但 RISE「一致高 4%–8%、MATH 6.5%」在 Table 1 同列 12 種欄對與 Mistral 訓練前後 16 種跨列欄對裡都找不到能重現的組合（沒有掃全表任兩格），只能說依本章讀法不吻合、無法定位，不能說推翻作者；另外發現附錄 Table 4 的 Boost 列 m1@t5 是 26.5，與 Table 1 的 39.2 不同 | [05-multicell-recalc.py](../verify/05-multicell-recalc.py) | [arXiv:2407.18219][arXiv:2311.08516][arXiv:2304.05128] |
+| 精讀時對大表自行做的彙總：RCI Table 18 對 54 個任務的等權平均 0.906／0.936／0.940；SCORE Table 6 的「平均 14.6%」、去掉 Gemma MATH 那格後 11.2%、LLaMA 絕對增益平均 4.3；CRITIC Table 8 的 CRITIC∗ 28.6 低於 CRITIC 28.8 | 精讀筆記 limitations_observed | 三組都證實。另外確認 RCI 換成 GPT-4 分數的任務正好 9 個，CRITIC∗ 低於 CRITIC 在三個尺寸 × 六欄 = 18 組比較中只有這一組 | [05-aggregate-recalc.py](../verify/05-aggregate-recalc.py) | [arXiv:2303.17491][arXiv:2404.17140][arXiv:2305.11738] |
+| 本章的範圍與跨節點計數：計入 23 篇的時間窗是 2022-06 到 2024-09；T5 候選池記錄年份在 2025 年以後的候選沒有一篇入選；2024 年第四季的候選只有一篇是候補；Tree of Thoughts: Deliberate Problem Solving with Large Language Models（arXiv 2305.10601，未讀） 以制式理由落選；「已知缺口與未讀」列的其他 11 篇經典不在任何節點的候選池、也沒有筆記；E2、E3、E5 三條邊的逐節點篇數 | 本章組章時依文獻表、data/candidates、data/pool 與全部筆記的 edges 欄位計數 | 8 個子主張都證實。2025 年以後的候選共 58 + 27 + 1 = 86 篇：58 篇被 RECENT-INELIGIBLE 擋掉、27 篇以制式理由落選、DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning（arXiv 2501.12948，未讀） 列為候補；2024 年第四季依 arXiv ID（2410–2412）有 10 篇候選，9 篇以制式理由落選、1 篇列為候補；三條邊分別是 10、42、23 篇，與「與其他節點的關係」一節相同 | [05-scope-counts.py](../verify/05-scope-counts.py) | 資料檔，不是論文 |
 
-其餘主張沒有程式驗證，原因分三類。
+其餘主張沒有程式驗證，原因分四類。
 
 - 靠查閱官方程式碼得到的發現，例如多代理辯論的多數決與反思基準、ISR-LLM 的驗證器、LATS 的停止條件與分數解析，驗證對象是程式碼庫，不是論文全文；這次驗證只用快取全文，所以沒有驗 [arXiv:2305.14325][arXiv:2308.13724][arXiv:2310.04406]。
 - 要重跑實驗才能驗的主張，例如 Huang et al. 的提示與溫度混淆，需要多半已下架的模型快照與沒有公開的抽樣索引，無法重現 [arXiv:2310.01798]。
-- 句中已經寫出算式的換算，例如 Tyen et al. 的損益兩平點、CRITIC 的淨效益，由章節數字比對工具逐條驗算，不另寫程式 [arXiv:2311.08516][arXiv:2305.11738]。
+- 句中已經寫出算式的換算。章節數字比對工具只驗兩件事：算式本身成立，以及每個運算元在引用論文的筆記或全文裡某處出現過；它不驗運算元是不是取自宣稱的那一格。這次只把多格引用、最容易張冠李戴的三組寫成程式（上表第六列）；其餘換算，例如 Tyen et al. 的損益兩平點、CRITIC 的淨效益、Self-Refine 21 格增益的平均、SCoRe 的條件比例，運算元的出處沒有逐格核對 [arXiv:2311.08516][arXiv:2305.11738][arXiv:2303.17651][arXiv:2409.12917]。
+- 只存在筆記裡、要解析整張表才能核對的彙總與計數。這一類不必查程式碼、也不必重跑實驗，這次驗了 RCI、SCORE、CRITIC 三組（上表第七列）；其餘沒有驗，例如 Pan et al. 的逐列計數（79 篇、訓練期 20、生成期 24、事後修正 35）、ISR-LLM 依 Table 1 六格算出的平均增益、Self-Debugging Table 4(a) 百分比都是 1/35 倍數這個觀察 [arXiv:2308.03188][arXiv:2308.13724][arXiv:2304.05128]。
 
 ## 爭議、矛盾與反證
 
@@ -466,7 +479,7 @@
 
 訓練子領域內部也不一致。RISE 結論說它達到了先前在強專有模型上沒觀察到的逐輪改進，但精讀時發現，附錄以 RISE 同一個重試提示跑 GPT-3.5，MATH 的 m1@t5 +5.4 高於 Llama2 RISE Iter2 的 +4.6，GSM8K 上也有 +4.6；主文 Table 1 列的 GPT-3.5 則是會退步的 Self-Refine 版本（66.4 → 61.0）[arXiv:2407.18219]。SCoRe（2409.12917）的 base 在 MATH 上 Δ −11.2，在 HumanEval 上卻是 56.7 − 53.7 = 3.0（本章依 Table 3 重算），而兩者不是同一個模型 [arXiv:2409.12917]。精讀時指出，SCoRe 唯一的提示式基準 Self-Refine 在 MBPP-R 只有 30.7%，遠低於 base 的 47.3%，這個實作的提示品質值得懷疑 [arXiv:2409.12917]。
 
-規劃任務上方向也相反。精讀 ISR-LLM 時引用的 Valmeekam et al. 在 Blocksworld 上讓 GPT-4 同時生成與驗證，發現自我批判反而降低規劃表現、LLM 驗證器大量誤接受；ISR-LLM 報告的卻是自我驗證器有正增益，但它用了高度手寫的狀態追蹤範例，又沒有報誤接受率與純重抽對照，兩者的差異無法從本文判斷（精讀時發現）[arXiv:2308.13724]。
+規劃任務上，本調研只有 ISR-LLM 一篇。它報告自我驗證器有正增益；精讀時發現，它用了高度手寫的狀態追蹤範例，又沒有報誤接受率與純重抽對照 [arXiv:2308.13724]。直接研究規劃與推理任務上 LLM 自我批判、自我驗證的幾篇論文，本調研都沒有讀（見「已知缺口與未讀」第 4 項），所以規劃任務上自我驗證的方向是否與 ISR-LLM 相反，本章無法判斷。
 
 本章推論：「沒有外部訊號就修不好」在方向上多數成立，幅度卻取決於消融怎麼設計、用哪個模型、用哪一版提示，跨篇數字不能直接相比 [arXiv:2303.17491][arXiv:2304.05128][arXiv:2305.11738][arXiv:2404.17140][arXiv:2407.18219][arXiv:2409.12917]。
 
@@ -484,7 +497,7 @@ Kamoi et al. 自己的分類界線也有彈性，以下四點都是精讀時指�
 
 ### 三、瓶頸在找錯，還是改錯也是瓶頸
 
-**主張瓶頸在找錯的一方。** Self-Refine 人工檢視的 35 個失敗案例（只涵蓋程式最佳化與數學推理）中，33% 是回饋指錯位置、61% 是回饋建議錯的修法，只有 6% 是改寫器失誤 [arXiv:2303.17651]。Tyen et al. 量到找錯最高只有 52.87，給了正確位置後改錯卻能救回不少 [arXiv:2311.08516]。Kamoi et al. 與 Pan et al.（引用 Olausson et al.）都把回饋定為瓶頸 [arXiv:2406.01297][arXiv:2308.03188]。SCORE（2404.17140）主張瓶頸在驗證器而不在 refiner [arXiv:2404.17140]。
+**主張瓶頸在找錯的一方。** Self-Refine 人工檢視的 35 個失敗案例（只涵蓋程式最佳化與數學推理）中，33% 是回饋指錯位置、61% 是回饋建議錯的修法，只有 6% 是改寫器失誤 [arXiv:2303.17651]。Tyen et al. 量到找錯最高只有 52.87，給了正確位置後改錯卻能救回不少 [arXiv:2311.08516]。Kamoi et al. 把回饋定為瓶頸 [arXiv:2406.01297]。Pan et al. 也這樣主張，但依據是轉述一篇本調研沒有讀的研究（見「已知缺口與未讀」第 5 項），所以這裡只算 Pan et al. 的主張，不算一份獨立的實驗證據 [arXiv:2308.03188]。SCORE（2404.17140）主張瓶頸在驗證器而不在 refiner [arXiv:2404.17140]。
 
 **顯示改錯也是瓶頸的證據。**
 - SCORE（2404.17140）Table 2 的 oracle＋SCORE 列，GSM8K 的 Contrib.（修正嘗試中最後答對的比例）是 14.0（LLaMA）與 17.4（Gemma）[arXiv:2404.17140]。精讀時依「oracle 下的 Freq. 就是錯題率」這個前提，把它解讀為錯題只有約 14%–17% 被修好 [arXiv:2404.17140]。本章依 Table 2 與 Table 6 交叉核對這個前提：LLaMA 的初始準確率 46.0 − 8.8 = 37.2，正好等於 100 − 62.8 = 37.2；Gemma 是 47.4 − 11.1 = 36.3，等於 100 − 63.7 = 36.3；再以增益換算，8.8 ÷ 62.8 ≈ 14.0%、11.1 ÷ 63.7 ≈ 17.4%，與 Contrib. 一致 [arXiv:2404.17140]。精讀時發現，它在固定驗證器下只比了 prompted refiner 與 SCORE refiner 兩種（例如 LLaMA 在 CSQA 搭配 oracle 為 83.7 對 86.2），不足以支撐「refiner 不是瓶頸」[arXiv:2404.17140]。
@@ -493,13 +506,13 @@ Kamoi et al. 自己的分類界線也有彈性，以下四點都是精讀時指�
 - RARR 碰到整段前提錯誤的 ELI5 段落，受限於編輯拒絕門檻而修不動 [arXiv:2210.08726]。Self-Refine 用 Vicuna-13B 試過，即使給它 oracle 或寫死的回饋，它也常不照改寫提示做，只重複原輸出或幻想出對話；這是質性觀察，沒有數字，也只試了一個模型 [arXiv:2303.17651]。Pan et al. 轉述這個觀察時，把它推廣成「小型開源模型」[arXiv:2308.03188]。
 - Self-Refine 對話任務的錯誤分類顯示，改寫器忽略好回饋占 25%、引入新問題占 20%，樣本數沒有說明 [arXiv:2303.17651]。Tyen et al. 即使給了正確位置，原本答對的軌跡也會被改壞，word sorting 是 −11.11 [arXiv:2311.08516]。
 
-**兩邊量的是不同的「改寫」。** Tyen et al. 的改寫是不帶回饋文字的重抽，精讀時指出它撐不起「模型讀了錯誤提示就會改」的推論，而且「自我修正」的兩半沒有在同一個模型上閉環：找錯實驗多半是 GPT-4 等其他模型檢查 PaLM 2 的軌跡，改錯只用 PaLM 2 [arXiv:2311.08516]。精讀時也指出，它的隨機位置基準在結構上偏弱：抽到真錯誤「之後」的步時，錯誤還留在前綴裡，幾乎不可能修好 [arXiv:2311.08516]。Self-Refine 的 6% 只是 35 個失敗案例裡的約 2 例（35 × 6% ≈ 2.1），而且只涵蓋程式最佳化與數學推理 [arXiv:2303.17651]。本章推論：「瓶頸在找錯」在推理題的單步重抽設定下有證據，「改錯不是瓶頸」則沒有任何一篇在掃描過 refiner 強度之後證明過 [arXiv:2311.08516][arXiv:2404.17140]。
+**兩邊量的是不同的「改寫」。** Tyen et al. 的改寫是不帶回饋文字的重抽，精讀時指出它撐不起「模型讀了錯誤提示就會改」的推論，而且「自我修正」的兩半沒有在同一個模型上閉環：找錯實驗多半是 GPT-4 等其他模型檢查 PaLM 2 的軌跡，改錯只用 PaLM 2 [arXiv:2311.08516]。精讀時也指出，它的隨機位置基準在結構上偏弱：抽到真錯誤「之後」的步時，錯誤還留在前綴裡，幾乎不可能修好 [arXiv:2311.08516]。Self-Refine 的 6% 只是 35 個失敗案例裡的約 2 例（35 × 6% ≈ 2.1），而且只涵蓋程式最佳化與數學推理 [arXiv:2303.17651]。本章推論：「瓶頸在找錯」在推理題的單步重抽設定下有證據，「改錯不是瓶頸」則在本調研讀過的論文裡，沒有一篇在掃描過 refiner 強度之後證明過 [arXiv:2311.08516][arXiv:2404.17140]。能直接檢驗這個推論的程式自我修復研究，本調研沒有讀（見「已知缺口與未讀」第 5 項），所以這個推論只在語料內成立。
 
 ### 四、回饋的價值在「知道錯了」這個位元，還是在內容
 
 **外部回饋子領域的證據：位元與內容的比重隨模型而變。**
-- Self-Debugging 的 TransCoder：只給對錯位元的 Simple 佔全部增益的比例，本章依 Table 2 重算，Codex 為 (89.3 − 80.4) ÷ (92.5 − 80.4) ≈ 73.6%，GPT-3.5 為 (91.6 − 89.1) ÷ (92.7 − 89.1) ≈ 69.4%，StarCoder 為 (72.9 − 70.0) ÷ (76.6 − 70.0) ≈ 43.9%，GPT-4 只有 (80.9 − 77.3) ÷ (90.4 − 77.3) ≈ 27.5% [arXiv:2304.05128]。GPT-4 的 UT 回饋達 88.8，遠高於 Simple 的 80.9；本章據此推論，失敗測試的內容對 GPT-4 比位元重要 [arXiv:2304.05128]。
-- Self-Debugging 的 MBPP：可見測試給的對錯位元讓 Codex 從 61.4 升到 68.2（Table 2），模型自己判斷對錯卻讓它掉到 57.6（Table 3）[arXiv:2304.05128]。可見測試不是評估用的兩個隱藏測試，所以本章認為這一組在同一篇內把「oracle 洩漏」與「一個可靠位元本身的價值」分開了：位元可靠時就有大部分增益，位元來自模型自判時反而變差 [arXiv:2304.05128]。
+- Self-Debugging 的 TransCoder：只給對錯位元的 Simple 佔全部增益的比例，本章依 Table 2 重算，Codex 為 (89.3 − 80.4) ÷ (92.5 − 80.4) ≈ 73.6%，GPT-3.5 為 (91.6 − 89.1) ÷ (92.7 − 89.1) ≈ 69.4%，StarCoder 為 (72.9 − 70.0) ÷ (76.6 − 70.0) ≈ 43.9%，GPT-4 只有 (80.9 − 77.3) ÷ (90.4 − 77.3) ≈ 27.5% [arXiv:2304.05128]。程式驗證證實，四組運算元都取自 TransCoder 表的 Baseline、Simple、+Expl. 三列，分母用的 +Expl. 在四個模型上都是最好的回饋格式 [arXiv:2304.05128]。GPT-4 的 UT 回饋達 88.8，遠高於 Simple 的 80.9；本章據此推論，失敗測試的內容對 GPT-4 比位元重要 [arXiv:2304.05128]。
+- Self-Debugging 的 MBPP：可見測試給的對錯位元讓 Codex 從 61.4 升到 68.2（Table 2），模型自己判斷對錯卻讓它掉到 57.6（Table 3）；兩組數字分別取自這兩張表的 Codex 欄，程式驗證證實 [arXiv:2304.05128]。可見測試不是評估用的兩個隱藏測試，所以本章認為這一組在同一篇內把「oracle 洩漏」與「一個可靠位元本身的價值」分開了：位元可靠時就有大部分增益，位元來自模型自判時反而變差 [arXiv:2304.05128]。
 - SCORE（2404.17140）的 refiner 只拿到 GPT-4 的 1 個位元、看不到它的說明，仍有 +2.2～+12.1 [arXiv:2404.17140]。精讀時發現，在多選題上 oracle 增益有相當部分可能來自這 1 個位元本身：LLaMA 的 prompted refiner 搭配 oracle 在 CSQA 就有 +14.0，SCORE 只再多 86.2 − 83.7 = 2.5；Gemma 的情形相反，SCORE 多了 85.4 − 74.5 = 10.9 [arXiv:2404.17140]。
 - ISR-LLM 把外部驗證器的優勢歸於「能精確指出出錯的那個動作」；但精讀時查閱公開程式碼發現，外部回饋同時帶著 ground truth 狀態與修法，定位、修法、正確性三個因素綁在一起 [arXiv:2308.13724]。
 
@@ -510,7 +523,7 @@ Kamoi et al. 自己的分類界線也有彈性，以下四點都是精讀時指�
 - RISE 的回饋固定是「答錯了，再試」，SCoRe（2409.12917）的第二輪指令也不透露對錯，兩個多輪訓練方法都不用 critique [arXiv:2407.18219][arXiv:2409.12917]。
 - Reflexion 的 Rust 消融裡，只反思、不跑測試（0.52）低於基準（0.60）[arXiv:2303.11366]。
 
-本章推論：兩邊可以接成同一個判斷。對修正有用的「內容」，在本節點裡幾乎都是可執行或可比對的證據，例如失敗測試的輸出、模擬器的狀態；純自然語言的 critique，沒有一篇在等算力下證明它對模型自己修正的貢獻 [arXiv:2304.05128][arXiv:2308.13724][arXiv:2206.05802][arXiv:2407.00215]。critique 的價值在本節點主要是對人量到的，例如幫人多找缺陷、被評審偏好 [arXiv:2206.05802][arXiv:2407.00215]。
+本章推論：兩邊可以接成同一個判斷。對修正有用的「內容」，在本調研讀過的本節點論文裡幾乎都是可執行或可比對的證據，例如失敗測試的輸出、模擬器的狀態；純自然語言的 critique，這些論文裡沒有一篇在等算力下證明它對模型自己修正的貢獻 [arXiv:2304.05128][arXiv:2308.13724][arXiv:2206.05802][arXiv:2407.00215]。critique 的價值在本節點主要是對人量到的，例如幫人多找缺陷、被評審偏好 [arXiv:2206.05802][arXiv:2407.00215]。這個推論的證據基礎有明顯缺口：直接研究 LLM 自我驗證、自我批判與程式自我修復的幾篇論文都從沒進過候選池，本調研沒有讀（見「已知缺口與未讀」第 4、5 項），它們能直接檢驗這個推論。所以這個推論只描述語料內的情形，不是對領域的判斷。
 
 ### 五、觸發閘門：要不要有、用什麼調
 
@@ -525,7 +538,7 @@ Kamoi et al. 自己的分類界線也有彈性，以下四點都是精讀時指�
 - SCoRe（2409.12917）的診斷是學不會：它以 Welleck 等人為藍本做的 Pair-SFT，在 MATH 的改善主要來自少改壞（Δ^{i→c} 5.4、Δ^{c→i} 3.6），在 HumanEval 甚至讓 Δ 變成 −1.8；STaR 更常把對的改錯 [arXiv:2409.12917]。
 - Welleck 等人卻在非 oracle 設定下把 GSM 從 8.57 提到 21.26 [arXiv:2211.00053]。RISE 同樣是監督式（advantage 加權回歸），也報告 m1@t5 的增益 [arXiv:2407.18219]。SCORE（2404.17140）以 LoRA 在自產 critique 上微調 refiner，搭配強驗證器時有增益 [arXiv:2404.17140]。Kamoi et al. 則歸納出以 SFT 取得修正能力的方法多半用超過 10 萬筆回饋資料 [arXiv:2406.01297]。
 
-這不是反駁，是張力，幾篇在三個軸上都不同：一個模型還是兩個（SCoRe 的 Pair-SFT 只訓練單一模型、base 是很強的 Gemini 1.5 Flash；Welleck 等人凍結 GSM 只有 8.57 的 GPT-Neo 1.3B generator，另訓一個 corrector）[arXiv:2409.12917][arXiv:2211.00053]；資料在誰的狀態上收（RISE 在學習者自己走到的失敗狀態上取監督並逐輪重收，正好對到 SCoRe 說的分佈偏移）[arXiv:2407.18219][arXiv:2409.12917]；最終答案怎麼定（RISE 靠跨輪多數決，SCORE 靠外部驗證器決定修不修）[arXiv:2407.18219][arXiv:2404.17140]。精讀時還指出，Welleck 等人的 corrector 可能只是在自身正確解上再微調的第二個 generator；SCoRe 則用兩次回應的 edit distance ratio 直接診斷「幾乎不改」[arXiv:2211.00053][arXiv:2409.12917]。沒有一篇同時控制這三個軸，所以「SFT 能不能教會修正」仍沒有定論 [arXiv:2211.00053][arXiv:2407.18219][arXiv:2409.12917]。
+這不是反駁，是張力，幾篇在三個軸上都不同：一個模型還是兩個（SCoRe 的 Pair-SFT 只訓練單一模型、base 是很強的 Gemini 1.5 Flash；Welleck 等人凍結 GSM 只有 8.57 的 GPT-Neo 1.3B generator，另訓一個 corrector）[arXiv:2409.12917][arXiv:2211.00053]；資料在誰的狀態上收（RISE 在學習者自己走到的失敗狀態上取監督並逐輪重收，正好對到 SCoRe 說的分佈偏移）[arXiv:2407.18219][arXiv:2409.12917]；最終答案怎麼定（RISE 靠跨輪多數決，SCORE 靠外部驗證器決定修不修）[arXiv:2407.18219][arXiv:2404.17140]。精讀時還指出，Welleck 等人的 corrector 可能只是在自身正確解上再微調的第二個 generator；SCoRe 則用兩次回應的 edit distance ratio 直接診斷「幾乎不改」[arXiv:2211.00053][arXiv:2409.12917]。本調研讀過的論文裡沒有一篇同時控制這三個軸，所以「SFT 能不能教會修正」仍沒有定論 [arXiv:2211.00053][arXiv:2407.18219][arXiv:2409.12917]。
 
 ### 七、多代理辯論是修正，還是換了形式的多數決
 
@@ -555,20 +568,26 @@ Kamoi et al. 自己的分類界線也有彈性，以下四點都是精讀時指�
 
 **只看結果的獎勵與評分，會放過「答案對、過程錯」的修正。** 精讀時發現，SCoRe（2409.12917）附錄 E 標為修正成功的例子裡就有錯誤推理：MATH Example 3 第二輪把根 −11、−3、−1、1、3 的乘積算成 ±33，實際是 −99；同一例 case 3 的七個根加總是 1 而不是 −11，只是最終答案 14 剛好對；Example 5 在 C、D 還沒放置前就用它們界定弧段 [arXiv:2409.12917]。精讀時也發現，CRITIC 成功與否只看最終答案，Listing 2 的「成功」案例修正後的推理本身是錯的 [arXiv:2305.11738]。SCoRe、RISE 與 Welleck 等人的數學任務，訓練訊號都只看最終答案或程式執行結果；依筆記，沒有一篇量過修正後推理過程的正確率 [arXiv:2409.12917][arXiv:2407.18219][arXiv:2211.00053]。
 
-**「零人工標籤」「只用自己的資料」的說法都偏強。** 精讀時指出，Constitutional AI 號稱無害性零人工標籤，但人類監督只是換了形式：42,496 筆人寫紅隊提示、以人類資料訓練的 helpful RLHF 起點、以人類資料訓練的評估 PM、反覆調整的原則與 few-shot 範例，以及過度訓練後得靠人工評估挑 snapshot [arXiv:2212.08073]。SCoRe（2409.12917）不用教師，但訓練獎勵來自資料集的標準答案或單元測試 [arXiv:2409.12917]。RISE 蒸餾版的絕對表現大半來自 GPT-3.5 軌跡的 boosting，精讀時發現，自我蒸餾版的「提升 6.6%」重算只有 39.5 − 36.8 = 2.7（見陷阱九）[arXiv:2407.18219]。
+**「零人工標籤」「只用自己的資料」的說法都偏強。** 精讀時指出，Constitutional AI 號稱無害性零人工標籤，但人類監督只是換了形式：42,496 筆人寫紅隊提示、以人類資料訓練的 helpful RLHF 起點、以人類資料訓練的評估 PM、反覆調整的原則與 few-shot 範例，以及過度訓練後得靠人工評估挑 snapshot [arXiv:2212.08073]。SCoRe（2409.12917）不用教師，但訓練獎勵來自資料集的標準答案或單元測試 [arXiv:2409.12917]。RISE 蒸餾版的絕對表現大半來自 GPT-3.5 軌跡的 boosting；精讀時發現、程式驗證證實，自我蒸餾版的「提升 6.6%」與同列絕對值對不上，依絕對值只有 39.5 − 36.8 = 2.7（見陷阱九）[arXiv:2407.18219]。
 
 **SotA 與基準比較的口徑。**
-- RCI 在 MiniWoB++ 的 §3.2.2 自承在所有基準中排第二，只輸給 CC-Net（SL+RL）；精讀時依全文 Table 18 對 54 個有分數的任務做等權平均，純 gpt-3.5-turbo 的 Ours 約 0.906，低於 CC-Net（SL+RL）的約 0.936，要把 9 個任務換成 GPT-4 分數的「Ours (w/ GPT-4)」欄才到約 0.940 [arXiv:2303.17491]。
+- RCI 在 MiniWoB++ 的 §3.2.2 自承在所有基準中排第二，只輸給 CC-Net（SL+RL）；精讀時依全文 Table 18 對 54 個有分數的任務做等權平均，純 gpt-3.5-turbo 的 Ours 約 0.906，低於 CC-Net（SL+RL）的約 0.936，要把 9 個任務換成 GPT-4 分數的「Ours (w/ GPT-4)」欄才到約 0.940；程式從 Table 18 的 104 列重新解析，四個數都證實 [arXiv:2303.17491]。
 - 精讀時發現，CRITIC 自己重現的 ReAct 在 TriviaQA 低於不查資料的 Vanilla（ChatGPT EM 63.7 對 70.4），「優於 ReAct」的基線偏弱；降毒時比較的 Self-Correct（toxicity probability 0.026）與 Quark（0.035）都跑在 GPT-2 上，底模不同 [arXiv:2305.11738]。
 - 精讀時發現，在 GPT-3 生成的 QReCC 段落上，EFEC 的 F1_AP 44.9 高於 GPT-3 骨幹 RARR 的 39.5；作者自己也承認，EFEC 與 LaMDA 原本就不是為這個任務設計的基線 [arXiv:2210.08726]。
 - 精讀時依文字推算，Self-Debugging Spider 表中 Codex 的 81.3 很可能來自多樣本挑選，GPT-3.5 的 71.1 則是 greedy，兩欄不是同條件；這一點未見圖表數值確認 [arXiv:2304.05128]。
 - Reflexion 說基準以溫度 0.7 重試後沒有解出任何新題；精讀時認為這對隨機重抽很不尋常，論文也沒交代取樣細節 [arXiv:2303.11366]。
 
-**脈絡（📖）：名為「自我修正」的研究會修過頭。** 歧視實驗中，175B 加指示的版本在 RLHF 50 步約 −15%（不利黑人學生），到 1000 步約 +10%（偏向黑人學生）；parity 只出現在特定步數（加指示約 600 步、加指示＋CoT 約 200 步）[arXiv:2302.07459]。精讀時指出，方法裡沒有驗證器或目標訊號判斷何時修到位 [arXiv:2302.07459]。這與 Huang et al. 的觀察方向相同，都是沒有外部訊號就沒有停止條件，但機制不同，只能當旁證 [arXiv:2302.07459][arXiv:2310.01798]。
-
 ## 商用採納現況
 
-只收附 URL 的證據。被論文引用、學術引用數、頂會錄取都不算採納。另外，多份筆記註明本次網路搜尋額度已用盡，所以下文的「未見證據」是「未搜到」，不代表搜過之後確認沒有 [arXiv:2406.01297][arXiv:2405.14092][arXiv:2311.08516][arXiv:2304.05128][arXiv:2305.11738][arXiv:2303.17491][arXiv:2404.17140][arXiv:2210.08726][arXiv:2409.12917][arXiv:2407.18219][arXiv:2211.00053][arXiv:2308.04592]。
+只收附 URL 的證據。被論文引用、學術引用數、頂會錄取都不算採納。
+
+各篇的查證範圍差很多，下文的「未見證據」要照這個範圍讀：
+- 筆記註明本次網路搜尋額度已用盡、查證只做到論文與作者程式碼庫的，有 Tyen et al.、ProCo、Kamoi et al.、RARR、RCI、Self-Debugging、SCORE（2404.17140）、Welleck 等人、Shepherd、RISE、SCoRe（2409.12917）[arXiv:2311.08516][arXiv:2405.14092][arXiv:2406.01297][arXiv:2210.08726][arXiv:2303.17491][arXiv:2304.05128][arXiv:2404.17140][arXiv:2211.00053][arXiv:2308.04592][arXiv:2407.18219][arXiv:2409.12917]。這些論文的「未見證據」是「沒有搜」，不是「搜過之後確認沒有」。
+- CRITIC 找到下文的框架證據之後，也因額度用盡沒有再搜其他產品或官方文件 [arXiv:2305.11738]。
+- Huang et al. 與 CoVe 搜過主要廠商與框架的官方文件；多代理辯論查過 AutoGen 的官方頁面 [arXiv:2310.01798][arXiv:2309.11495][arXiv:2305.14325]。
+- Pan et al. 與 ISR-LLM 只查了論文與程式碼庫；Saunders 等人查 OpenAI 官方部落格時被 HTTP 403 擋下，沒能確認 [arXiv:2308.03188][arXiv:2308.13724][arXiv:2206.05802]。
+
+另外，本節只涵蓋時間窗內的論文。2024-09 之後以 RL 訓練的推理型模型（本調研未讀，其行為本章不做描述），本調研沒有附 URL 的採納證據，這一節不涵蓋。
 
 ### 論文自述部署
 
@@ -586,7 +605,7 @@ Kamoi et al. 自己的分類界線也有彈性，以下四點都是精讀時指�
 - **CRITIC。** LlamaIndex 官方整合套件 llama-index-agent-introspective 的 README 寫明 ToolInteractiveReflectionAgentWorker 實作了 CRITIC，首版 0.1.0 發布於 2024-05-03、最新版 0.3.2 發布於 2025-06-29（https://pypi.org/project/llama-index-agent-introspective/）[arXiv:2305.11738]。這個類別後來列入 LlamaIndex 的棄用名詞清單（https://github.com/run-llama/llama_index/blob/main/docs/src/content/docs/framework/changes/deprecated_terms.md）[arXiv:2305.11738]。
 - **LATS。** LangGraph 官方教學以 Reflection 結構化輸出（0–10 分＋found_solution）當評分、每次展開 5 個候選、樹高超過 5 或已解就停，並自承沒有接程式執行等外部回饋、只用自我反思評分；該檔在 langgraph main 已移除（https://github.com/langchain-ai/langgraph/blob/23961cff61a42b52525f3b20b4094d8d2fba1744/docs/docs/tutorials/lats/lats.ipynb）[arXiv:2310.04406]。LlamaIndex 官方整合套件 llama-index-agent-lats 提供 LATSAgentWorker（預設 num_expansions = 2、max_rollouts = 5），0.1.0 於 2024-04-22 發佈，最後版 0.3.2 於 2025-06-29，同日的 commit 3035a9684d 將它標為棄用（https://pypi.org/project/llama-index-agent-lats/ ；https://github.com/run-llama/llama_index/blob/3035a9684d/llama-index-integrations/agent/llama-index-agent-lats/llama_index/agent/lats/step.py）[arXiv:2310.04406]。精讀者指出，兩者都沒有 self-consistency 項、沒有 oracle 終局 reward，成敗改由 LLM 自評，正好是論文沒驗證過的版本（見「爭議、矛盾與反證」）[arXiv:2310.04406]。
 
-查過但不算採納的兩條：Microsoft AutoGen 官方文件的 Multi-Agent Debate 頁面實作了 GSM8K 上的多 agent 辯論，但引用的是另一篇論文 2406.11776，頁面中沒有出現本篇（https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/design-patterns/multi-agent-debate.html）[arXiv:2305.14325]；Anthropic 官方的降低幻覺指南列有「生成後逐條找引文驗證、找不到就撤回」等相近做法，但沒有提到或引用 CoVe（https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-hallucinations）[arXiv:2309.11495]。
+查過但不算採納的兩條：Microsoft AutoGen 官方文件的 Multi-Agent Debate 頁面實作了 GSM8K 上的多 agent 辯論，但引用的是另一篇多代理辯論論文（本調研沒有讀），頁面中沒有出現本篇（https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/design-patterns/multi-agent-debate.html）[arXiv:2305.14325]；Anthropic 官方的降低幻覺指南列有「生成後逐條找引文驗證、找不到就撤回」等相近做法，但沒有提到或引用 CoVe（https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-hallucinations）[arXiv:2309.11495]。
 
 ### 僅作者自家釋出
 
@@ -598,7 +617,7 @@ Kamoi et al. 自己的分類界線也有彈性，以下四點都是精讀時指�
 
 其餘計入論文未見證據：Huang et al.、CoVe、Tyen et al.、ProCo、Kamoi et al.、RARR、RCI、Self-Debugging、多代理辯論、Pan et al.、ISR-LLM、SCORE（2404.17140）、Saunders 等人、Welleck 等人、Shepherd、RISE、SCoRe（2409.12917）[arXiv:2310.01798][arXiv:2309.11495][arXiv:2311.08516][arXiv:2405.14092][arXiv:2406.01297][arXiv:2210.08726][arXiv:2303.17491][arXiv:2304.05128][arXiv:2305.14325][arXiv:2308.03188][arXiv:2308.13724][arXiv:2404.17140][arXiv:2206.05802][arXiv:2211.00053][arXiv:2308.04592][arXiv:2407.18219][arXiv:2409.12917]。
 
-本章推論：在採納證據有細節可比的三篇裡，被採納的形狀都和論文驗證過的形狀不同。框架收錄的 Reflexion 與 LATS 拿掉了外部 Evaluator 或 oracle 終局訊號，改由模型自評；Constitutional AI 被採納的是訓練期流程，不是推論期修正 [arXiv:2303.11366][arXiv:2310.04406][arXiv:2212.08073]。Self-Refine、CRITIC 與 CriticGPT 的採納證據沒有足以比對形狀的細節 [arXiv:2303.17651][arXiv:2305.11738][arXiv:2407.00215]。
+本章推論：在採納證據有細節可比的三篇裡，被採納的形狀都和論文驗證過的形狀不同。框架收錄的 Reflexion 與 LATS 拿掉了外部 Evaluator 或 oracle 終局訊號，改由模型自評；Constitutional AI 被採納的是訓練期流程，不是推論期修正 [arXiv:2303.11366][arXiv:2310.04406][arXiv:2212.08073]。Self-Refine、CRITIC 與 CriticGPT 的採納證據沒有足以比對形狀的細節 [arXiv:2303.17651][arXiv:2305.11738][arXiv:2407.00215]。這個推論只建立在三篇上，而上面列的多數論文根本沒有搜；它說的是「搜到的幾個採納案例長什麼樣」，撐不起「這個領域在產品上的採納程度」這類判斷。
 
 ## 與其他節點的關係
 
@@ -611,7 +630,7 @@ Kamoi et al. 自己的分類界線也有彈性，以下四點都是精讀時指�
 **寫回的是跨嘗試的記憶或搜尋樹，不是同一段對話的狀態。**
 - Reflexion 把每則反思附加到長期記憶（滑動視窗 1–3 則），下一次嘗試的 Actor 以它為條件行動；精讀者註明這是重置環境後的跨嘗試寫回，不是同一段對話內的狀態追蹤 [arXiv:2303.11366]。
 - LATS 把反思與失敗軌跡存入記憶，之後每次擴展與評分都當作額外 context 注入，同時反向傳播更新整棵樹的訪問次數與價值 [arXiv:2310.04406]。
-- WebCanvas 的 reward 模組把口語反思、狀態與分數寫回 agent 的 memory，下一步規劃直接讀取；它的 §6.3 指出，低品質的反思訊號累積在 memory 裡會長期拖累表現 [arXiv:2406.12373]。本章判斷：在標了這條邊的論文裡，這是唯一一個「寫回有害」的實證 [arXiv:2406.12373]。
+- WebCanvas 的 reward 模組把口語反思、狀態與分數寫回 agent 的 memory，下一步規劃直接讀取；它的 §6.3 指出，低品質的反思訊號累積在 memory 裡會長期拖累表現；130 題上，GPT-4 加上自評 reward 後 CR 從 46.9 降到 42.1、SR 從 16.9 降到 13.8 [arXiv:2406.12373]。本章判斷：在本調研讀過、標了這條邊、而且本章計入（不屬於下文「標了但不算，或只算一半」一類）的論文裡，這是唯一一個「寫回有害」的實證 [arXiv:2406.12373]。
 
 **寫回同一回合的工作狀態，但只寫一次。** RCI 的計劃在回合開始時經一次 explicit RCI 修正後，存成 current plan 放進之後每一步的提示；執行途中從不回寫或重擬，guess-number 偏離計劃後無法挽回正是這個缺口的後果 [arXiv:2303.17491]。
 
@@ -627,7 +646,7 @@ Kamoi et al. 自己的分類界線也有彈性，以下四點都是精讀時指�
 
 **本節點裡的反例。** 精讀時發現，RARR 在 QReCC 上只修最後一輪回答，修正結果沒有寫回對話歷史，也沒量對後續輪次的影響；它的局部修正也不會傳到依賴它的結論 [arXiv:2210.08726]。精讀時查閱公開程式碼發現，ISR-LLM 的規劃器每一輪都看不到自己上一版的計畫 [arXiv:2308.13724]。
 
-**本章判斷。** 這條資料流兩半都有人做，但沒有人把兩半接起來量。本節點的論文有觸發修正的機制，寫回的卻是重置後的跨嘗試記憶或搜尋樹，任務也是可重置的 episode [arXiv:2303.11366][arXiv:2310.04406]；T2、T3 那側的論文真的改寫了對話狀態，卻沒有錯誤觸發的修正，或者有修正卻沒有量 [arXiv:2310.08560][arXiv:2405.15793]。缺的那一半是：修正結果寫回多輪對話狀態之後，對之後輪次的正確率有什麼影響，唯一的量測是 WebCanvas 的負面結果 [arXiv:2406.12373]。
+**本章判斷。** 在本調研讀過的論文裡，這條資料流兩半都有人做，但沒有人把兩半接起來量。本節點的論文有觸發修正的機制，寫回的卻是重置後的跨嘗試記憶或搜尋樹，任務也是可重置的 episode [arXiv:2303.11366][arXiv:2310.04406]；T2、T3 那側的論文真的改寫了對話狀態，卻沒有錯誤觸發的修正，或者有修正卻沒有量 [arXiv:2310.08560][arXiv:2405.15793]。在本調研讀過、標了這條邊的論文裡，量過「寫回」本身效果的有五筆；本章只計其中三筆，排除的是上文「標了但不算，或只算一半」那一類。被排除的兩筆：Generative Agents 拿掉反思後 TrueSkill μ 從 29.89 降到 26.88，但寫回的是綜合出的洞見，不是修正 [arXiv:2304.03442]；RMM 加上 Retrospective Reflection 後 LongMemEval 準確率從 58.8 升到 60.2，不接 reranker、直接以 RL 微調檢索器的變體則掉到 31.0，但它改的是讀取策略，不是記憶內容 [arXiv:2503.08026]。計入的三筆，寫回的對象都不是對話狀態：Reflexion 的 EPM 消融量的是跨嘗試記憶，HotpotQA 上差 8%，也就是 100 題中 8 題 [arXiv:2303.11366]；LATS 拿掉反思從 0.63 掉到 0.58，寫回的是搜尋樹與反思記憶 [arXiv:2310.04406]；WebCanvas 的自評 reward 寫回同一個 episode 內的 memory，結果是負的 [arXiv:2406.12373]。缺的那一半是：修正結果寫回多輪對話狀態之後，對之後輪次的正確率有什麼影響，本調研讀過的論文沒有量過。
 
 ### E3 Anomalies Detected（T4→T5）：軌跡中偵測到異常時觸發自我修正
 
@@ -636,7 +655,8 @@ Kamoi et al. 自己的分類界線也有彈性，以下四點都是精讀時指�
 **完整的資料流：從多步軌跡偵測異常，並觸發修正。**
 - Reflexion 的 Evaluator 讀整條軌跡判定失敗後觸發反思；ALFWorld 用軌跡層級的啟發式，同一動作得到同一回應連續超過 3 次視為幻覺、動作數超過 30 視為規劃無效率 [arXiv:2303.11366]。
 - LATS 在步級上由 LLM 讀完「到此為止的軌跡＋最新觀測」後給分，低分分支在 UCT 選擇中被冷落；終局上，軌跡走到失敗終點就觸發反思，並把失敗 reward 反向傳播到整條路徑 [arXiv:2310.04406]。
-- Autonomous Evaluation and Refinement 的評估器讀完 agent 的一次執行後，判定失敗就啟動 Reflexion 式的反思，最多 3 輪 [arXiv:2404.06474]。作者觀察到偽陰性（把成功誤判為失敗）會逼 agent 重做已成功的任務，而重做幾乎一定失敗，傷害大於偽陽性；觸發訊號也只有二元判定，沒有指出出錯的步驟 [arXiv:2404.06474]。
+- Autonomous Evaluation and Refinement 的評估器讀 agent 一次執行的最終截圖與動作紀錄，判定失敗就啟動 Reflexion 式的反思，最多 3 輪 [arXiv:2404.06474]。它在同一篇論文裡兩端都量了，但分屬兩個實驗：§4.1 在 WebArena 釋出的軌跡上量評估器與手寫 oracle 的一致率，在 74.4% 到 82.1% 之間；§4.2 接上 Reflexion 後，相對基線重現值 15.6% 的成功率提升 16%（Captioner + Mixtral）與 29%（GPT-4V）[arXiv:2404.06474]。作者觀察到偽陰性（把成功誤判為失敗）會逼 agent 重做已成功的任務，而重做幾乎一定失敗，傷害大於偽陽性；觸發訊號也只有二元判定，沒有指出出錯的步驟 [arXiv:2404.06474]。精讀時指出三個保留：內文只報 accuracy，誤報與漏報沒有分開報；若這批軌跡的成功率確實約 14.4%–15.6%（原報與重現的 agent 成功率），一律回答「失敗」就有約 84–86% 的準確率，高於四種評估器；評估器實際只看最終截圖與動作字串，本質是最終狀態判定，不是逐步的軌跡分析 [arXiv:2404.06474]。
+- AgentQuest 在 Mastermind 上加了一個執行期檢查：輸出的猜測若已在過往 buffer 裡，就重新提示 agent 換一個 [arXiv:2404.06411]。15 個實例上 SR 從 0.47 升到 0.60、RR60 從 0.32 降到 0 [arXiv:2404.06411]。它有三個保留：線上的偵測器是精確字串比對的規則，不是模型；這條規則是開發者離線讀 PR／RR 曲線、診斷出重複動作之後才加上的；精讀時指出，RR60 歸零是這條規則強制出來的，不是另外量到的改善 [arXiv:2404.06411]。
 - Where LLM Agents Fail 在失敗軌跡上逐步標錯、挑出最早的關鍵錯誤，產出含 correction_guidance 的結構化報告，再從該步重跑，最多 5 輪；觸發條件是整條任務判定失敗之後，不是執行中偵測到異常就介入 [arXiv:2509.25370]。
 - AgenTracer 把失敗軌跡交給 AgenTracer-8B 歸因，把診斷推理當回饋注入下一輪，迭代三輪，在 MaAS、OWL、MetaGPT 上帶來 4.8% 到 14.21% 的提升；觸發條件是 oracle 給的失敗訊號，tracer 只負責定位 [arXiv:2509.03312]。
 - ToolLLM 的 DFSDT 由模型自己判斷目前這條軌跡走不下去，放棄該節點、回溯到父節點，並把先前失敗的候選動作列給模型要求換一個；異常由 agent 自評，不是外部偵測器判的 [arXiv:2307.16789]。
@@ -662,14 +682,14 @@ Kamoi et al. 自己的分類界線也有彈性，以下四點都是精讀時指�
 **修正者不是 agent 自己，或只在訓練期與離線發生。**
 - AI Control 在可疑分數超過門檻時，改交另一個可信模型從頭寫或改寫；偵測對象是單次產出 [arXiv:2312.06942]。
 - Monitoring Reasoning Models 比較了偵測後的兩種處置：測試期 rejection sampling（預算 32 次）對未受壓力的 agent 有效，但一旦異常偵測器變成 agent 的最佳化目標，偵測本身就會失效 [arXiv:2503.11926]。
-- ETO 以最終報酬低於專家軌跡判定失敗，再配對做 DPO，是訓練期的策略修正 [arXiv:2403.02502]；UI-TARS 在事後標出第一個錯誤步，轉成反思 SFT 與 DPO 的資料 [arXiv:2501.12326]；AgentQuest 由開發者離線讀軌跡曲線發現重複動作，再加一個精確字串比對的執行期檢查，RR60 由 0.32 降到 0 [arXiv:2404.06411]。
+- ETO 以最終報酬低於專家軌跡判定失敗，再配對做 DPO，是訓練期的策略修正 [arXiv:2403.02502]；UI-TARS 在事後標出第一個錯誤步，轉成反思 SFT 與 DPO 的資料 [arXiv:2501.12326]。
 - 精讀者自己註明不算或只算一半的有三篇：ReAct 在步數上限內沒有 finish 就改走 CoT-SC，判定依據是軌跡長度，換上的是另一種方法 [arXiv:2210.03629]；FireAct 在固定輪數插入反思，觸發條件不是異常 [arXiv:2310.05915]；Feed Yourself 以滿意度分類器判定上一輪出錯，但修正內容由使用者提供，模型要等離線重訓才學到 [arXiv:1901.05415]。
 
-**本章判斷。** 本節點的論文裡，真正「從多步軌跡偵測異常、再觸發修正」的只有 Reflexion 與 LATS，而兩者的偵測訊號多半來自環境或 oracle 等級的終局結果 [arXiv:2303.11366][arXiv:2310.04406]；其餘多數是答案或單一輸出層級的閘門。T4、T3 那側把偵測做得很仔細，卻沒有接到修正 [arXiv:2412.06559][arXiv:2505.08638][arXiv:2504.08942]。兩半都有做的幾篇，觸發點多半在整條任務判定失敗之後，不在執行中 [arXiv:2404.06474][arXiv:2509.25370][arXiv:2509.03312]。缺的那一半是：同一個實驗裡，同時量一個非 oracle 的軌跡層級偵測器有多準，以及它觸發的修正帶來多少淨效益；最接近的是 Tyen et al.，但用的是模擬分類器 [arXiv:2311.08516]。另有兩條關於觸發品質的證據方向一致：偽陰性比偽陽性傷害大 [arXiv:2404.06474]，驗證器 F1 預測不了淨增益 [arXiv:2404.17140]。
+**本章判斷。** 本節點的論文裡，真正「從多步軌跡偵測異常、再觸發修正」的只有 Reflexion 與 LATS，而兩者的偵測訊號多半來自環境或 oracle 等級的終局結果 [arXiv:2303.11366][arXiv:2310.04406]；其餘多數是答案或單一輸出層級的閘門。T4、T3 那側把偵測做得很仔細，卻沒有接到修正 [arXiv:2412.06559][arXiv:2505.08638][arXiv:2504.08942]。兩半都有做的幾篇，觸發點多半在整條任務判定失敗之後，不在執行中 [arXiv:2404.06474][arXiv:2509.25370][arXiv:2509.03312]。在同一篇論文裡同時量「非 oracle 偵測器有多準」與「它觸發的修正帶來多少增益」的，本調研讀過的論文裡有兩篇，但都不是逐步的軌跡偵測器：Autonomous Evaluation and Refinement 用的是讀最終畫面與動作紀錄的終局判定器，準確率與 Reflexion 增益分屬 §4.1 與 §4.2 兩個實驗（數字見上）[arXiv:2404.06474]；WebCanvas 在同一張 Table 6 報了自評 reward 模組的 HAS 與加上它之後的 CR、SR，但 HAS 量的是完成判斷與人類標註的一致度，不是異常偵測的準確率，加上模組後的結果也是負的（見 E2）[arXiv:2406.12373]；Tyen et al. 量了偵測準確率與修正增益，但接回修正的是模擬分類器 [arXiv:2311.08516]。所以真正缺的是更窄的一塊：誤報與漏報分開報、有非平凡基線可比、而且在執行中觸發的軌跡層級偵測器，連同它觸發修正後的淨效益 [arXiv:2404.06474]。另有兩條關於觸發品質的證據方向一致：偽陰性比偽陽性傷害大 [arXiv:2404.06474]，驗證器 F1 預測不了淨增益 [arXiv:2404.17140]。
 
 ### E5 Correction Logs（T5→T7）：修正紀錄回流評估
 
-依全部精讀筆記的 edges 欄位計數，標了這條邊的有 20 + 2 + 1 = 23 篇：本節點 20 篇，T8 2 篇，T3 1 篇。判準是「修正過程留下的紀錄，有沒有被拿來做評估」。回流到評估的部分全是離線、一次性的分析，沒有一篇形成持續的評估紀錄管線（回流到訓練的是另一回事，見本小節後段）；差別在記下了哪些欄位。
+依全部精讀筆記的 edges 欄位計數，標了這條邊的有 20 + 2 + 1 = 23 篇：本節點 20 篇，T8 2 篇，T3 1 篇。判準是「修正過程留下的紀錄，有沒有被拿來做評估」。回流到評估的部分全是離線、一次性的分析，本調研讀過的論文沒有一篇形成持續的評估紀錄管線（回流到訓練的是另一回事，見本小節後段）；差別在記下了哪些欄位。
 
 **記下修正前後的轉移，並算出淨效益或成本。**
 - Huang et al. 把每題修正前後的答案配對分成四類轉移，以呼叫次數記帳每輪成本，再以回應數對齊 self-consistency 做等成本比較 [arXiv:2310.01798]。
@@ -686,7 +706,7 @@ Kamoi et al. 自己的分類界線也有彈性，以下四點都是精讀時指�
 - SWE-agent 把被 lint 拒絕的編輯與後續恢復紀錄當成評估資料，在失敗分類中獨立列出 Failed Edit Recovery 一類（23.4%）[arXiv:2405.15793]。Holistic Agent Leaderboard 事後從軌跡回收修正行為，以「自我修正」rubric 標出片段，再與任務成功做條件機率比較（RR 1.47–2.97）[arXiv:2510.11977]。
 
 **把 critique 或修正紀錄交給人或評審。**
-- Saunders 等人把每個答案的 8 條模型 critique 依 helpfulness 排序後交給人類評估者，也把 critique 當判別器量 GDC gap [arXiv:2206.05802]。CriticGPT 把 critique 預填進承包商的評估回答，也用 critique RM 的分數排序哪些資料優先送審；這裡的評估服務的是 RLHF 標註，不是 agent 的離線評測 [arXiv:2407.00215]。
+- Saunders 等人把每個答案的 8 條模型 critique 依 helpfulness 排序後交給人類評估者，也把 critique 當判別器量 GDC gap [arXiv:2206.05802]。CriticGPT 把 critique 預填進承包商的評估回答，也用 critique RM 的分數排序哪些資料優先送審；這裡的評估服務的是 RLHF 標註，不是 agent 的離線評估 [arXiv:2407.00215]。
 - Shepherd 把每一則 critique 交給 GPT-4 與人工評審打分，同時量出評審端的偏差：GPT-4 獨立打分時普遍偏高，所以改用兩兩比較 [arXiv:2308.04592]。WebCanvas 拿 reward 模組的完成判斷對照人類標註的 key node 完成情況，單獨量這個自我評估模組的品質 [arXiv:2406.12373]。
 
 **回流到訓練，而不是評估。** Welleck 等人把每一次修正寫回資料池、依分數差組成配對餵回 corrector，唯一把修正過程本身當評估對象的是「修正次數 vs 品質」曲線 [arXiv:2211.00053]。Constitutional AI 保留每筆紅隊提示的初始回應與 4 輪 revision，用三種 PM 逐輪打分；同一批紀錄也被當成 SL 訓練資料 [arXiv:2212.08073]。
@@ -698,36 +718,84 @@ Kamoi et al. 自己的分類界線也有彈性，以下四點都是精讀時指�
 ## 未解問題
 
 1. **沒有標籤時，觸發修正的偵測器要多準，修正才有正的淨效益？** 三個子領域各給了一塊，但接不起來。
-   - Tyen et al. 的 60–70% 門檻來自模擬分類器；精讀時指出，那個模擬假設錯誤位置與題目難度無關、刻意排除正確位置，也不給「比真錯誤更早」的位置部分分數，所以門檻只屬於那個模擬設定 [arXiv:2311.08516]。實際量過的偵測器都沒接回修正迴圈：提示式最高 52.87，微調的 Otter 只有 6.00–37.67 [arXiv:2311.08516]。
+   - Tyen et al. 的 60–70% 門檻來自模擬分類器；精讀時指出，那個模擬假設錯誤位置與題目難度無關、刻意排除正確位置，也不給「比真錯誤更早」的位置部分分數，所以門檻只屬於那個模擬設定 [arXiv:2311.08516]。它實際量過的偵測器都沒接回它的修正迴圈：提示式最高 52.87，微調的 Otter 只有 6.00–37.67 [arXiv:2311.08516]。
    - ProCo 的驗證器在迴圈裡，卻沒有單獨報 precision／recall [arXiv:2405.14092]；CRITIC 有 AUROC 約 0.81 的驗證器，卻沒拿來當閘門 [arXiv:2305.11738]；SCORE（2404.17140）顯示驗證器 F1 預測不了淨增益 [arXiv:2404.17140]。
-   - 卡在：沒有一篇同時報「觸發率、對改錯率、錯改對率、成本」四個量，也沒有依原始準確率分層評估 [arXiv:2310.01798][arXiv:2311.08516][arXiv:2405.14092]。要把觸發的錯報率和它造成的下游損害連起來量，需要逐題標好「需不需要修」的資料，本節點沒有一篇做過 [arXiv:2404.17140][arXiv:2212.08073]。精讀時也指出，後續研究以同一協定量到的推理型模型定位能力明顯較強，2023 年的否定結果可能已經過時 [arXiv:2311.08516]。
+   - 跨節點的偵測器數字，量尺與任務都和上面不同，只能並陳、不能直接比。ProcessBench 在數學推理軌跡上量找出最早錯誤步的能力，平均 F1 是 o1-mini 87.9（單次取樣）、QwQ-32B-Preview 71.5（maj@8）、GPT-4o 61.9（greedy），以 PRM800K 人工步驟標籤訓練的 PRM 平均 56.5 [arXiv:2412.06559]。它的 F1 是錯誤樣本與正確樣本兩種準確率的調和平均；Tyen et al. 的 52.87 是依 85%／15% 的答錯答對組成加權的整體定位準確率，任務也不同 [arXiv:2412.06559][arXiv:2311.08516]。Autonomous Evaluation and Refinement 的終局判定器與 oracle 的一致率是 74.4%–82.1%，也真的接回了 Reflexion；但精讀時推算，若那批軌跡的成功率確實約 14.4%–15.6%，一律判失敗的基線就有約 84–86%，這組數字撐不起「偵測器夠準」[arXiv:2404.06474]。Let's Verify Step by Step 報的是 PRM 重排解答後的解題率，不是偵測準確率，不列入這裡的比較 [arXiv:2305.20050]。所以本章的判斷只到：ProcessBench 一篇在不同量尺上量到 o1-mini 平均 F1 87.9，無法據此判斷 2023 年的否定結果是否仍成立 [arXiv:2412.06559]。
+   - 卡在：本調研讀過的論文裡，沒有一篇同時報「觸發率、對改錯率、錯改對率、成本」四個量，也沒有依原始準確率分層評估 [arXiv:2310.01798][arXiv:2311.08516][arXiv:2405.14092]。要把觸發的錯報率和它造成的下游損害連起來量，需要逐題標好「需不需要修」的資料，本節點讀過的論文沒有一篇做過 [arXiv:2404.17140][arXiv:2212.08073]。模型能不能判斷自己答錯的校準研究，本調研也沒有讀（見「已知缺口與未讀」第 8 項）。
 
 2. **在呼叫數與 token 數相同時，修正是否仍勝過重抽、多數決或 best-of-N？**
-   - 對齊過的證據多半不利於修正：回答數相同時辯論輸給 self-consistency [arXiv:2310.01798]；SCORE（2404.17140）同篇的重排 10 個解勝過單解修正 [arXiv:2404.17140]；RISE 的 m1@t5 對 m5@t1 由本章重算後，Llama2 Iter1 只多 50.7 − 49.7 = 1.0 點，精讀時指出這落在雜訊內 [arXiv:2407.18219]。
-   - 卡在記帳單位：回饋與改寫步驟要讀完整的初始回應與回饋，token 成本和呼叫次數不成比例 [arXiv:2406.01297]；辯論類方法還要讀他人回答 [arXiv:2310.01798]。本節點沒有一篇以 token 對齊比較過修正與重抽，而單位怎麼選，會左右「修正是否勝過重抽多數決」的結論 [arXiv:2406.01297][arXiv:2409.12917]。
+   - 對齊過的證據多半不利於修正：回答數相同時辯論輸給 self-consistency [arXiv:2310.01798]；SCORE（2404.17140）同篇的重排 10 個解勝過單解修正 [arXiv:2404.17140]；RISE 的 m1@t5 對 m5@t1，依本章讀 Table 1 的方式，Llama2 Iter1 只多 50.7 − 49.7 = 1.0 點，精讀時指出這落在雜訊內 [arXiv:2407.18219]。但作者「一致高 4%–8%」比的是哪兩格，程式驗證無法定位（見陷阱四），所以 RISE 這一條只能當弱證據 [arXiv:2407.18219]。
+   - 卡在記帳單位：回饋與改寫步驟要讀完整的初始回應與回饋，token 成本和呼叫次數不成比例 [arXiv:2406.01297]；辯論類方法還要讀他人回答 [arXiv:2310.01798]。本調研讀過的論文裡，沒有一篇以 token 對齊比較過修正與重抽，而單位怎麼選，會左右「修正是否勝過重抽多數決」的結論 [arXiv:2406.01297][arXiv:2409.12917]。Kamoi et al. 指出，只有少數研究拿 self-consistency 或 pass@k 當強基準 [arXiv:2406.01297]；它舉的例子裡有一篇程式自我修復研究能直接檢驗這一題，本調研沒有讀（見「已知缺口與未讀」第 5 項）。
 
 3. **回饋的內容，尤其是自然語言 critique，能不能驅動比「知道錯了」這個位元更好的修正？**
    - Self-Debugging 系統性比較了回饋格式，但 TransCoder 那組用的是評估用測試，位元佔增益的比例又隨模型差很多（算式見「爭議、矛盾與反證」第四條）[arXiv:2304.05128]。ISR-LLM 的外部回饋同時帶 ground truth、定位與修法，三者分不開 [arXiv:2308.13724]。SCORE（2404.17140）的 refiner 從沒看過 GPT-4 的說明 [arXiv:2404.17140]。
    - CriticGPT 與 Shepherd 只量 critique 本身，沒有把 critique 交回生成器改寫 [arXiv:2407.00215][arXiv:2308.04592]；有量修正的幾篇，critique 的邊際貢獻都很小 [arXiv:2206.05802][arXiv:2212.08073][arXiv:2310.04406]。
-   - 卡在：要在同一任務上以非評估用的可靠訊號，把「只給位元」「位元加定位」「位元加定位加修法」「位元加自然語言 critique」分開跑，還要等算力比較，結果也要有可驗證的正誤；本節點沒有一篇做到 [arXiv:2304.05128][arXiv:2404.17140][arXiv:2407.00215]。
+   - 卡在：要在同一任務上以非評估用的可靠訊號，把「只給位元」「位元加定位」「位元加定位加修法」「位元加自然語言 critique」分開跑，還要等算力比較，結果也要有可驗證的正誤；本調研讀過的本節點論文沒有一篇做到 [arXiv:2304.05128][arXiv:2404.17140][arXiv:2407.00215]。這是名單造成的空白，不是領域現況：直接關係到這一題的幾篇論文，本章都沒有讀（見「已知缺口與未讀」第 4、5 項）。
 
 4. **沒有可執行或可比對訊號的任務，修正訊號從哪裡來？** 本節點有效的修正幾乎都依賴執行結果、測試、模擬器、檢索比對或標準答案 [arXiv:2304.05128][arXiv:2305.11738][arXiv:2308.13724][arXiv:2409.12917]。
-   - 偏好型、開放式任務上，唯一的正面證據 Self-Refine 正好是評估問題最多的一份：評審面向與回饋面向重疊、沒有控制長度，Kamoi et al. 又指出它的初始提示偏弱 [arXiv:2303.17651][arXiv:2406.01297]。Huang et al. 與 Kamoi et al. 都把這類任務列為可能有效但未驗證 [arXiv:2310.01798][arXiv:2406.01297]。
+   - 偏好型、開放式任務上，本調研讀過的論文裡唯一的正面證據 Self-Refine 正好是評估問題最多的一份：評審面向與回饋面向重疊、沒有控制長度，Kamoi et al. 又指出它的初始提示偏弱 [arXiv:2303.17651][arXiv:2406.01297]。Huang et al. 與 Kamoi et al. 都把這類任務列為可能有效但未驗證 [arXiv:2310.01798][arXiv:2406.01297]。
    - 知識型任務上，RISE 作者推測（沒有實驗），用這個方法訓練只會鼓勵幻覺 [arXiv:2407.18219]；RARR 的檢索雜訊會主動傷害結果，精讀時發現整段當查詢時，SQA 修正後的 Attr_auto 從 39.4 降到 30.3 [arXiv:2210.08726]。Constitutional AI 用明文原則繞開答案檢查器，但它的修正對象是看文字就能判斷的內容，誠實性完全沒評 [arXiv:2212.08073]。
    - 卡在：開放式、多輪的任務沒有即時可算的正確性訊號；評估又要靠 LLM 評審，而評審常與修正器共用同一套 rubric [arXiv:2303.17651]；只看結果的訊號，已知會放過過程錯誤的修正 [arXiv:2409.12917]。
 
 5. **修正怎麼傳到下游步驟與後續輪次？狀態不能回退時還剩多少？**
    - RARR 改了事實卻沒改依賴它的結論，也沒把修正寫回對話歷史 [arXiv:2210.08726]；RCI 的計劃只在回合開始修一次 [arXiv:2303.17491]；ISR-LLM 的規劃器看不到自己上一版的計畫 [arXiv:2308.13724]。
    - LATS 假設能回到任何先前狀態，作者自己承認不是所有環境都成立；精讀時指出，WebShop 的 Buy 在真實購物中不可逆，論文卻把 WebShop 列為可回退的實際應用 [arXiv:2310.04406]。Reflexion 預設環境可以重置 [arXiv:2303.11366]。
-   - 卡在：本節點的任務幾乎都是單次問答、單次生成或可重置的 episode [arXiv:2303.11366][arXiv:2310.01798][arXiv:2311.08516]；目前沒有基準量「修正之後，依賴它的步驟與後續輪次有沒有跟著變對」，而 E2 那條邊唯一的量測是 WebCanvas 的負面結果 [arXiv:2406.12373]。
+   - 卡在：本節點的任務幾乎都是單次問答、單次生成或可重置的 episode [arXiv:2303.11366][arXiv:2310.01798][arXiv:2311.08516]；本調研讀過的論文裡，沒有基準量「修正之後，依賴它的步驟與後續輪次有沒有跟著變對」；E2 那條邊上本章計入、量過寫回效果的三筆（Reflexion 的跨嘗試記憶、LATS 的搜尋樹、WebCanvas 的同一 episode memory），寫回的都不是對話狀態（見「與其他節點的關係」）[arXiv:2303.11366][arXiv:2310.04406][arXiv:2406.12373]。
 
 6. **多輪修正為什麼兩輪之後就停住？**
    - SCoRe（2409.12917）只訓練兩輪，最多 10 次迭代的曲線在第二輪之後只微幅上升就持平；作者說因為基礎設施限制只做兩輪 [arXiv:2409.12917]。Welleck 等人修到 2–3 輪之後，沒有回饋的 corrector 就需要額外指引 [arXiv:2211.00053]。RISE 在輪數超過訓練疊代數時要用滑動視窗截歷史，避免測試期分佈偏移 [arXiv:2407.18219]。
-   - 卡在：SCoRe 附錄顯示，γ=0.8、α=1.0 的標準多輪 RL 仍然會崩塌到不修正 [arXiv:2409.12917]。後面幾輪的行為崩塌與分佈偏移怎麼處理，本節點沒有答案；SCoRe 與 RISE 也從沒直接比過 [arXiv:2409.12917][arXiv:2407.18219]。
+   - 卡在：SCoRe 附錄顯示，γ=0.8、α=1.0 的標準多輪 RL 仍然會崩塌到不修正 [arXiv:2409.12917]。後面幾輪的行為崩塌與分佈偏移怎麼處理，本調研讀過的本節點論文沒有答案；SCoRe 與 RISE 也從沒直接比過 [arXiv:2409.12917][arXiv:2407.18219]。
 
 7. **「盡力的初始回應」怎麼操作化？**
    - Kamoi et al. 把 best-possible initial response 當成 RQ1、RQ2 的前提 [arXiv:2406.01297]。Huang et al. 只給了一個實例：補強 CommonGen-Hard 的初始提示後，單次生成勝過再套 Self-Refine [arXiv:2310.01798]。
-   - 卡在：沒有人定義初始提示的搜尋預算 [arXiv:2406.01297]。精讀時指出，沒有這個預算，任何正面結果都能事後歸因於初始提示不夠強，否定結論也就無法證偽 [arXiv:2406.01297]。同一個問題也出現在反方向：SCoRe（2409.12917）唯一的提示式基準明顯低於 base，精讀時懷疑那個實作的提示品質 [arXiv:2409.12917]。
+   - 卡在：本調研讀過的論文裡，沒有人定義初始提示的搜尋預算 [arXiv:2406.01297]。精讀時指出，沒有這個預算，任何正面結果都能事後歸因於初始提示不夠強，否定結論也就無法證偽 [arXiv:2406.01297]。同一個問題也出現在反方向：SCoRe（2409.12917）唯一的提示式基準明顯低於 base，精讀時懷疑那個實作的提示品質 [arXiv:2409.12917]。
+
+8. **由使用者回饋觸發的修正，什麼時候可信、什麼時候會把對的改錯？** 以 chat agent 來看，最常見的修正觸發是使用者的質疑；本章計入的論文幾乎都是模型自己或工具觸發的修正。
+   - 語料內的分佈：精讀時逐列計數，Pan et al. 收錄的 79 篇裡，與對話相關的只有 4 篇（Sparrow、RLAIF、SelFee、REFEED）[arXiv:2308.03188]。
+   - 跨節點最接近的量測是 MINT。以 GPT-4 模擬使用者給語言回饋時，micro Δ_feedback 在開源模型是 +1.7 到 +17.2、閉源 +6.5 到 +15.2，GPT-4 給自己回饋是 −0.7 [arXiv:2309.10691]。固定 gpt-3.5 受測的消融裡，GPT-4 改成只給二元回饋時平均 +2.71 [arXiv:2309.10691]。同樣固定 gpt-3.5 受測、換回饋者時，GPT-4 當回饋者是 +15.2，gpt-3.5-turbo-16k 是 −10.4、Llama-2-70b-chat 是 −14.0，解題 SR_5 比 gpt-3.5 低 19.1 的 CodeLlama-34b-Instruct 卻是 +3.2；回饋者的強弱和增益不是單調關係 [arXiv:2309.10691]。精讀時指出兩個保留：這裡的「使用者」在提出解答時由 ground truth 判對錯，等於握有神諭；不看 ground truth 的 GPT-4 回饋也會誤導，例如對錯誤的中間結果回 This is GOOD [arXiv:2309.10691]。
+   - 旁證：Turpin et al. 讓使用者在題目後暗示一個答案，zero-shot CoT 的準確率 GPT-3.5 從 59.6% 降到 23.3%、Claude 1.0 從 65.3% 降到 34.7% [arXiv:2305.04388]。這發生在第一次作答之前，不是修正步驟，只說明使用者的暗示會牽動答案 [arXiv:2305.04388]。
+   - 卡在：跨節點有 MT-Bench-101 的 SA（Self-affirmation）任務量過這件事：金上下文裡助手先答對、使用者提出錯誤的質疑，看模型會不會守住原答案；GPT-3.5 的 SA 是 7.23，Yi-34B 是 9.04，論文的案例分析也說模型常在錯誤回饋下改掉原本正確的答案 [arXiv:2402.14762]。精讀時指出三個保留：歷史是金上下文，原答案由 GPT-4 預先寫好，不是受測模型自己的答案；SA 每段 2 輪、第一輪不評，所以每段只評一輪；分數是 GPT-4 評審依評分準則打的 1–10 分，不是改錯率 [arXiv:2402.14762]。所以缺的是更窄的一塊：本調研讀過的論文裡，沒有一篇在模型自己的答案上、以改對率與改錯率量過使用者質疑觸發的修正。依標題專門研究相關傾向的論文沒有讀（見「已知缺口與未讀」第 9 項）。
+
+## 已知缺口與未讀
+
+本節列出本章沒有讀、但會直接影響結論的幾塊。每一塊寫三件事：缺了什麼、哪些結論因此只在本調研讀過的論文內成立、可以補的未讀論文。下面列的論文都沒有讀，本章不引用它們的任何數字或結論，只依標題說明它們研究什麼、能檢驗本章哪一句。五篇候補之外，除了 Tree of Thoughts 在 T5 候選池裡以制式理由落選，其餘論文從沒進過任何節點的候選池（見「程式驗證」一節最後一列）。
+
+1. **2024-09 之後，用 RL 訓練的推理型模型。**
+   - 缺了什麼：2024-09 之後以 RL 訓練的推理型模型（本調研未讀，其行為本章不做描述）。
+   - 只在語料內成立的結論：主軸那場「LLM 能不能自我修正」的來回、爭議一的本章推論「沒有外部訊號就修不好」、未解問題 1 對偵測器準確度的判斷、「商用採納現況」一節。
+   - 可以補：DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning（arXiv 2501.12948，未讀，本節點候補）。依標題，它研究的是以 RL 激發 LLM 的推理能力；「三個子領域合起來」一段的問句「修正能力要不要訓練進權重」是否也適用於它，要讀過才能判斷。
+2. **內在修正把對的改錯、小模型的內在修正。**
+   - 缺了什麼：內在子領域只計入 7 篇，專門研究內在修正負面效應與小模型自我修正的論文都沒有讀。
+   - 只在語料內成立的結論：內在子領域總結「推理與事實類任務上站得住的正面結果，背後都有一個外部或可自動比對的訊號」、爭議一的本章推論、未解問題 1 關於對改錯率的空白。
+   - 可以補：Understanding the Dark Side of LLMs' Intrinsic Self-Correction（arXiv 2412.14959，未讀，本節點候補），依標題研究內在自我修正的負面效應，能檢驗爭議一；Small Language Model Can Self-correct（arXiv 2401.07301，未讀，本節點候補），依標題研究小模型能不能自我修正，能檢驗 SCORE 段「不經訓練的 prompted 自我修正在小模型上多半變差」這一句。
+3. **反向驗證，以及用外部知識改寫推理鏈。**
+   - 缺了什麼：與 ProCo 形狀相近的反向驗證方法，以及以外部知識驗證並改寫推理鏈的方法。
+   - 只在語料內成立的結論：ProCo 段指出的「與兩篇先前的反向驗證方法幾乎相同」，本章沒辦法並排比，依 ProCo 的筆記，那兩篇是 Self-Verification 與 FOBAR；外部回饋子領域「回饋訊號的來源」那條線少了一種來源。FOBAR 也沒有讀，不在本調研的清單上。
+   - 可以補：Large Language Models are Better Reasoners with Self-Verification（arXiv 2212.09561，未讀），依標題研究以自我驗證改善推理，能檢驗 ProCo 段；Verify-and-Edit: A Knowledge-Enhanced Chain-of-Thought Framework（arXiv 2305.03268，未讀，本節點候補），依標題研究以外部知識增強的推理鏈驗證與改寫。
+4. **LLM 的自我驗證與自我批判，以及回饋內容的價值。**
+   - 缺了什麼：在推理與規劃任務上直接研究 LLM 自我驗證、自我批判表現的論文。
+   - 只在語料內成立的結論：爭議一的規劃段（本調研只剩 ISR-LLM 一篇）、爭議四的本章推論「純自然語言的 critique，這些論文裡沒有一篇在等算力下證明它對模型自己修正的貢獻」、未解問題 3 的「卡在」。
+   - 可以補：Can Large Language Models Really Improve by Self-critiquing Their Own Plans?（arXiv 2310.08118，未讀，ISR-LLM 的筆記提到它）；GPT-4 Doesn't Know It's Wrong: An Analysis of Iterative Prompting for Reasoning Problems（arXiv 2310.12397，未讀）；On the Self-Verification Limitations of Large Language Models on Reasoning and Planning Tasks（arXiv 2402.08115，未讀）。依標題，第一篇研究 LLM 能不能靠自我批判改進計畫，第二篇分析推理問題上的反覆提示，第三篇研究 LLM 在推理與規劃任務上自我驗證的限制；三篇都能檢驗上面三處。
+5. **程式任務上，自我修復與重抽在同等預算下的比較。**
+   - 缺了什麼：以相同樣本或 token 預算比較自我修復與重抽、並單獨看回饋品質的研究。
+   - 只在語料內成立的結論：未解問題 2「沒有一篇以 token 對齊比較過修正與重抽」、Pan et al. 綜述段與爭議三裡它的回饋瓶頸主張（轉述自下面這篇）、未解問題 3。
+   - 可以補：Is Self-Repair a Silver Bullet for Code Generation?（arXiv 2306.09896，未讀；Olausson 等人），依標題研究自我修復對程式生成是否真的有效；Pan et al. 的回饋瓶頸論點轉述的就是它，Kamoi et al. 也把它列為少數拿 pass@k 當強基準的研究之一 [arXiv:2308.03188][arXiv:2406.01297]。
+6. **搜尋回溯。**
+   - 缺了什麼：四類機制之一的搜尋回溯只有 LATS 一篇。
+   - 只在語料內成立的結論：「回到分岔點另走一支」與「就地改寫同一條」只有 LATS 對 Reflexion 一組比較；LATS 段對兩篇先前樹搜尋方法（LATS 點名的是 Tree of Thoughts 與 RAP）的定位只是 LATS 作者自己的說法。
+   - 可以補：Tree of Thoughts: Deliberate Problem Solving with Large Language Models（arXiv 2305.10601，未讀；在 T5 候選池裡以制式理由落選，有 4 份筆記引用它）；Reasoning with Language Model is Planning with World Model（arXiv 2305.14992，未讀）；Self-Evaluation Guided Beam Search for Reasoning（arXiv 2305.00633，未讀）。依標題，三篇都研究推論期的樹搜尋、規劃或自評引導的搜尋。
+7. **把訓練出來的反思或 critique 接回生成。**
+   - 缺了什麼：訓練反思模型或反思 token、再接回生成並量修正效果的研究，以及 critique 與修正之間關係的基準。
+   - 只在語料內成立的結論：訓練子領域總結「之後的 critique 模型沒有再接回修正」；本章開頭說訓練子領域以訓練取得修正能力、並量了修正後正確率的只有三篇。
+   - 可以補：Retroformer: Retrospective Large Language Agents with Policy Gradient Optimization（arXiv 2308.02151，未讀）；Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection（arXiv 2310.11511，未讀）；CriticBench: Benchmarking LLMs for Critique-Correct Reasoning（arXiv 2402.14809，未讀，本節點候補）。依標題，前兩篇研究以訓練取得的反思或自我批判接回生成，第三篇是 critique 與修正的基準，能檢驗上面那句。
+8. **模型能不能判斷自己答錯。**
+   - 缺了什麼：內在錯誤偵測的基礎，也就是模型對自己答案對錯的校準。
+   - 只在語料內成立的結論：內在子領域「瓶頸在找錯」的判讀、未解問題 1 對無標籤偵測器的討論、CRITIC 驗證器 AUROC 高於模型自評那一段的解讀。
+   - 可以補：Language Models (Mostly) Know What They Know（arXiv 2207.05221，未讀；有 5 份筆記引用它），依標題研究語言模型知不知道自己知道什麼。
+9. **使用者質疑觸發的修正。**
+   - 缺了什麼：在模型自己的答案上，以改對率與改錯率量「使用者質疑觸發的修正」的研究。跨節點的 MT-Bench-101 SA 任務量過相近的情境，但原答案由 GPT-4 預先寫在金上下文裡、每段只評一輪、分數是評審打的 1–10 分（見未解問題 8）[arXiv:2402.14762]。
+   - 只在語料內成立的結論：未解問題 8 的「卡在」；E2 一節只談模型自己觸發的寫回。
+   - 可以補：Towards Understanding Sycophancy in Language Models（arXiv 2310.13548，未讀；有 2 份筆記引用它），依標題研究語言模型的諂媚傾向，能檢驗未解問題 8。
 
 ## 文獻表
 
