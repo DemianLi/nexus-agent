@@ -1,11 +1,11 @@
 /**
- * 真實供應商那五個連線值的**設定條目**（[#545](https://github.com/DemianLi/nexus-agent/issues/545)／
+ * 真實供應商那六個連線值的**設定條目**（[#545](https://github.com/DemianLi/nexus-agent/issues/545)／
  * [#457](https://github.com/DemianLi/nexus-agent/issues/457)）。
  *
  * **這一顆不裝功能，只講設定**，`apply` 是空的，同 `thread-title`／`tool-text` 那幾列。
  * 消費者是 `live-model.ts` 的 `createLiveModel`，只在 `--live` 時才建。
  *
- * ## 與 dsh 的關係：五格都是 dsh 的設定欄位
+ * ## 與 dsh 的關係：前五格是 dsh 的設定欄位，第六格見偏離四
  *
  * dsh 的 adapter `@deepseek-ai/dsh-llm-deepseek` 的 `Config`（`packages/llm/llm-deepseek/src/config.ts`，
  * `ddefc45`）有 `baseURL`（`:83`）、`maxTokens`（`:86`）、`streamIdleTimeoutMs`（`:89`）、
@@ -92,6 +92,15 @@
  * 我們對應的是 chat-completions，但照樣套用：URL 帶帳密就是把 key 寫進設定，而 dsh 自己那一列
  * 的註解說 key 不內嵌。
  *
+ * ## 偏離四：關推理的寫法放在連線這一列
+ *
+ * dsh 的 DeepSeek adapter 對 `purpose: 'session-title'` 在**程式裡**關思考（`packages/llm/llm-deepseek/src/serialize.ts:146`，
+ * `477b4f4`）——它知道自己後面接的是哪一家的協定；它的連線設定只有「預設開不開思考」（`defaults.thinking`）。
+ * **我們的 adapter 是通用的 OpenAI 相容端點**，後面接的模型各有各的關法（chat template 的參數），程式裡寫不出來。
+ * 所以退到連線設定：`thinkingOffBody` 放在這一列，因為它跟 `modelId` 一起換；標題程式只表明用途，由
+ * `createLiveModel` 決定帶什麼（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。量測在 `live-model.ts` 的
+ * `DEFAULT_LIVE_THINKING_OFF_BODY` 檔頭。
+ *
  * ## 這一列關不掉
  *
  * `disabled: true` 在載入期當場拋，理由同起動期那幾列：`startupSetting` 把關掉的那一列當成
@@ -114,6 +123,7 @@ import {
   DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
   DEFAULT_LIVE_MAX_RETRIES,
   DEFAULT_LIVE_MODEL_ID,
+  DEFAULT_LIVE_THINKING_OFF_BODY,
   DEFAULT_LIVE_TIMEOUT_MS,
 } from '../live-model.js';
 
@@ -148,7 +158,7 @@ function isHttpRoot(value: string): boolean {
   );
 }
 
-/** 五格。`strictObject`：多寫一個欄位是打錯字，不是擴充點。 */
+/** 六格。`strictObject`：多寫一個欄位是打錯字，不是擴充點。 */
 export const liveModelConfigSchema = z.strictObject({
   /** OpenAI 相容端點的根。 */
   baseUrl: z
@@ -163,6 +173,13 @@ export const liveModelConfigSchema = z.strictObject({
   timeoutMs: z.number().int().min(1).max(MAX_LIVE_TIMEOUT_MS).default(DEFAULT_LIVE_TIMEOUT_MS),
   /** 被限流時最多重試幾次。 */
   maxRetries: z.number().int().min(0).max(MAX_LIVE_RETRIES).default(DEFAULT_LIVE_MAX_RETRIES),
+  /**
+   * 要關掉推理時加進請求 body 的東西，只有標題那種用途會帶（#650）。空物件就是什麼都不加。
+   * 跟 `modelId` 綁著，見檔頭「偏離四」與 `live-model.ts` 的 `DEFAULT_LIVE_THINKING_OFF_BODY`。
+   */
+  thinkingOffBody: z
+    .record(z.string(), z.unknown())
+    .default(() => structuredClone(DEFAULT_LIVE_THINKING_OFF_BODY) as Record<string, unknown>),
 });
 
 /** 驗過的設定。 */
