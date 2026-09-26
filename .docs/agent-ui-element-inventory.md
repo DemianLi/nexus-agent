@@ -116,7 +116,7 @@
 
 | # | 元件 | wire | dsh | 市面 | 動效 | 備註 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 6 | 會話列表（分組、搜尋、狀態點） | P0（`ThreadSummary`、`ThreadListResult`） | `ui-sidebar`（multi-level tree、search、grouping、state dots）、`ui-primitives/StateDot` | — | 列表 stagger 40ms | `thread-list.tsx`；2026-09-25 #611 補分組（今天、昨天、過去 7 天、更早）、標題搜尋、執行中的點。資料仍是打開側欄那一刻的快照；按內容搜尋、即時狀態、釘選封存改名要 harness，已開 #631、#632、#633 |
+| 6 | 會話列表（分組、搜尋、狀態點） | P0（`ThreadSummary`、`ThreadListResult`） | `ui-sidebar`（multi-level tree、search、grouping、state dots）、`ui-primitives/StateDot` | — | 列表 stagger 40ms | `thread-list.tsx`；2026-09-25 #611 補分組（今天、昨天、過去 7 天、更早）、標題搜尋、執行中的點。資料仍是打開側欄那一刻的快照；按內容搜尋、即時狀態、釘選封存改名要 harness，已開 #631、#632、#633；2026-09-26 #631 拍板照 dsh 出廠預設關，關著時側欄仍只比標題 |
 | 7 | 新對話／空白狀態 hero | P0 | `ui-conversation/.../EmptyHero`、`HeroShell` | AIE `suggestion` | `thinking-orbs` `breathing` | |
 | 8 | 會話標頭（標題、工作目錄、背景工作） | P1 | `ui-jobs`、`ui-open-in-app`、`ui-schedule` | — | — | 2026-09-26 #655 做了標題：有標題寫標題，空白寫「新會話」，有輪次沒人打過字的跟列表同一句；瀏覽器分頁標題照 dsh「標題 — nexus-agent」；側欄目前這一列跟著即時標題換字。工作目錄與背景工作還沒 |
 | 9 | 歷史分頁載入（往回捲） | P0（`ThreadHistoryQuery`） | `ui-chat/ChatView`（`loadOlderAnchored`：一顆按鈕、自己記錨點） | sc `message-scroller` | —（**不做骨架**：跟真的內容不一樣高，換掉那一下又要補位置；規格 §7 也把載入歷史列在不動的那一類） | #306 做了讀取與按鈕；2026-09-25 補完（`earlier-pager.tsx`）：捲到頂端附近而且有往上的意圖才自動換一頁，按鈕留著；讀取中「讀取中…」；失敗畫在按鈕旁、改「再試一次」、不自動重試；讀完報讀接上幾則。輪次側軌拆成第 37 項 |
@@ -146,7 +146,7 @@
 | 22 | 決定紀錄（人按了什麼） | P0（`DecisionEntry`） | `ui-chat/ApprovalCommand` | — | — | 與失敗工具卡並存 |
 | 23 | 提問（單選／多選／自由文字／跳過／放棄整組） | P0（`PendingQuestion`、`QuestionItem`、`AnswerEntry`） | `ui-user-questions/QuestionComposer`：**"ask_user_question composer takeover"** | sc `questionnaire`；AIE `question` | 題目切換 slide＋blur 2px | 現有 `question-card.tsx` |
 | 24 | 計劃審核 | P1 | `ui-user-questions/PlanReviewPanel` | AIE `plan` | — | nexus 有 plan-mode plugin，wire 沒送；2026-09-25 請 dev-harness 排投影，排第一（交出計劃時核准面板只列 JSON 原文）。#652 起交出計劃改走提問通道、全文在 `QuestionItem.detail`，一般提問面板先把它畫成 markdown 過渡；專用的審核面板與計劃卡是 #654 |
-| 25 | 權限模式切換 | P1 | `ui-permission-presets` | — | 滑動 tab pill | |
+| 25 | 權限模式切換 | P1 | `ui-permission-presets` | — | 滑動 tab pill | 2026-09-26 #437 拍板照 dsh 做、排後面：三組（唯讀＋要問、可寫工作區＋要問、全開＋不問），`/permission` 取代 `/sandbox`；harness 那一半先做，web 選單接在後面 |
 
 **分歧**：dsh 的 21、23 都是「輸入框被接管」，nexus 目前是 `App.tsx:319–333` 把 `pendings` 渲染成 `QuestionCard`／`ApprovalCard`。手機上 takeover 比較省空間，因為鍵盤起來時畫面上只剩輸入區那一塊。這要拍板，見 §4 的 fog。
 
