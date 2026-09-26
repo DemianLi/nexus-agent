@@ -1,0 +1,180 @@
+{
+  "id": "2306.02552",
+  "title": "User Behavior Simulation with Large Language Model based Agents",
+  "topic": "T6",
+  "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 RecAgent：每位使用者一個由 profile、感官／短期／長期三層記憶與動作模組組成的 LLM agent，放進可介入、可重設的回合制沙盒，模擬推薦系統上的搜尋、瀏覽、點擊、翻頁與社群上的一對一聊天、一對多廣播，並用它重現資訊繭房與從眾現象、試驗緩解策略。",
+  "problem": "傳統使用者模擬器（RecSim、Virtual-Taobao、以 embedding 內積或 MLP 當決策函數）有三個問題：決策過程過度簡化，離人類認知很遠；啟動時就得用真實資料訓練，形成「雞生蛋」問題，只能模擬與已知資料集相似的行為樣態；只能處理單一環境（推薦或社群），而跨環境且使用者對齊的資料幾乎拿不到。真實使用者資料又受商業機密與隱私限制，因此需要一種近乎零樣本、可跨多環境、決策更像人的模擬器，才能在缺資料時產生可信的合成行為，並做反事實與政策研究。",
+  "core_idea": "用 LLM 在網路語料中學到的行為知識取代對領域資料的依賴：每位使用者做成一個 LLM agent，由 profile 模組定角色、仿認知神經科學的三層記憶模組保存並演化經驗（壓縮、依重複強化、冪律遺忘、反思產生高層洞見），動作模組以統一提示框架輸出受限格式的行為。agent 放進回合制沙盒，活躍度依 Pareto 長尾分布決定誰行動，推薦演算法可插拔並以 agent 互動增量重訓，還支援真人扮演 agent 與外部介入（訪談、暫停改 profile），讓模擬器同時是資料產生器與實驗平台。",
+  "method": {
+    "整體架構與執行迴圈（Results 第一節、Methods）": [
+      "每位使用者一個 agent；系統以回合運行，每回合每個 agent 自行決定要不要行動。",
+      "活躍度以 Pareto 分布建模：p(x)=α·x_min^α / x^(α+1)，x_min 為最小活躍度、α 控制形狀；附錄 A.5 以 MovieLens、Amazon-Beauty、Book-Crossing、Steam 的使用者互動數當活躍度擬合，顯示調 α 可貼合長尾。論文未給實驗所用的 α 與 x_min。",
+      "推薦演算法與模擬器解耦，可換成隨機推薦（產生無偏資料）或接 RecBole。實驗用矩陣分解 MF，每次推 5 部；每回合結束後，以 agent 搜尋行為與系統推薦形成的 agent–item 互動增量重訓。",
+      "真人可扮演任一 agent，與推薦系統或其他 agent 互動（例如用聊天或廣播糾正其他 agent 的幻覺）。",
+      "外部介入：可「訪談」agent，例如問它想跟別人聊最近看的電影時會說什麼；也可暫停、修改 profile 後再繼續。附錄 A.4 的做法是先跑 5 回合，再分成「介入分支」與「原始分支」各跑 5 回合，比較兩邊的聊天內容與推薦理由。"
+    ],
+    "Profile 模組": [
+      "欄位：ID、名字、性別、年齡、traits（如 compassionate、ambitious、optimistic）、career、interests（以 item 類別表示，如 sci-fi movies）、behavioral features；欄位可依應用留空。",
+      "五種行為特徵，由 ChatGPT 歸納：Watcher（主動評分回饋）、Explorer（主動搜尋聽過的片）、Critic（標準高、會批評系統與片）、Chatter（愛私聊、信任朋友推薦）、Poster（愛公開貼文）。",
+      "三種產生方式，可混用：手寫（例如「David Smith, a 25-year-old male photographer」）；GPT 續寫 profile 表；真實資料對齊（以資料集中使用者過去互動的 item 當 profile，或沿用真實性別分布）。",
+      "每次行動前，先用 LLM 從完整 profile 摘出與當前觀測相關的部分（附錄 B 的 Summary 提示），不整份塞進提示詞。"
+    ],
+    "記憶模組": {
+      "觀測": "每個事件以自然語言記錄，例如「某人進入推薦系統」「某人看了某片」。",
+      "感官記憶": "兩步處理。第一步用 LLM 把觀測壓成一句獨立句子（附錄 A.1 的提示要求：有人名就用第三人稱，聚焦電影興趣與理由，不要明寫 profile）。第二步給重要性分數：與 item 相關的感受、聊天、貼文，比「進入推薦系統」重要；repo 以 LLM 提示打 1–10 分。每筆再附時間戳，輸出三元組 M=<c, s, t>（內容、重要性、時間）。",
+      "短期記憶": "新紀錄 M_{n+1} 跟每筆既有紀錄算 embedding 相似度，超過門檻就標記它「強化」了那筆紀錄；都沒超過就單純加入。某筆紀錄被強化 K 次後，把它和強化它的紀錄一起用 LLM 摘成高層 insight（附錄 A.2 的提示：從這些記憶推論此人性格的高層洞見，內容與結構要跟原記憶顯著不同，一句話），再把原紀錄與 insight 一起寫入長期記憶，兼顧具體知識與泛化。",
+      "長期記憶": "容量最大。每筆以機率遺忘，機率正比於 g(M_i)=1−(s_i+r_i)/2·max(r_i^β, δ)，其中 β>1 控制冪函數形狀，δ∈(0,1) 是下限，讓很久以前的重要記憶仍可被想起；δ→1 時退化為重要性與新近度的平均。反思照 Generative Agents 的做法，但會合併高度相似的記憶與 insight，以去除冗餘。",
+      "讀取": "以目前觀測當查詢，從長期記憶取 top-N，再加上全部短期記憶，同時捕捉長期與近期偏好。",
+      "寫入": "觀測依序經過感官記憶、短期記憶（可被強化），被強化 K 次才寫入長期記憶。",
+      "repo 預設值（論文未載；以 WebFetch 讀 agents/recagent_memory.py，未逐行核對）": "enhance_threshold=3（即 K=3）；短期記憶 capacity=10，超過就丟最不重要的；強化判定為 sigmoid(相似度)≥0.7，且還要再過一道 random()≤該機率的隨機閘門，不是論文寫的確定性門檻；insight 合併門檻為 sigmoid≥0.72；score_func = max(recency^1.5, 0.01)·(importance+recency)/2，對應論文式子的 β=1.5、δ=0.01，冪次作用在 recency；recency=(1−0.01)^經過小時數；importance_weight 有 0.9 與 0.15 兩處設定。"
+    },
+    "動作模組與提示詞（Methods、附錄 B）": [
+      "統一提示框架分四部分：profile（經 LLM 篩過的相關部分）、memory（短期記憶加長期檢索結果）、instruction（行為要求，可加 few-shot）、context（時間等環境狀態，例如「It is September 12, 2023, 08:00 AM」，以及最近在社群聽過、在推薦系統看過哪些片）。",
+      "決策是分層的受限格式輸出。第一層 Take Action 三選一：[RECOMMENDER]、[SOCIAL]、[NOTHING]。進入推薦系統後四選一：[BUY]:: 片名||描述、[NEXT]（翻頁）、[SEARCH]:: 片名、[LEAVE]；提示詞還提醒，最近在社群聽過的片可以去搜尋。",
+      "推薦清單以「<片名>||一句描述」列出 5 部；所有片名一律要求用 <> 包起來，方便解析。",
+      "看完片後產生一行第一人稱感受（Generate Feeling）。",
+      "聊天：一次 LLM 呼叫同時生成雙方的整段對話（格式 [A]: … [B]: …），限制不得談沒看過或沒聽過的片。雙人反應提示會把兩人的 summary、近期觀測與時間一起放入。",
+      "廣播：一行貼文，必須與最近在推薦系統看過的片有關，同樣不得提沒看過或沒聽過的片。",
+      "六種行為：搜尋、瀏覽、點擊、翻頁、一對一聊天、一對多廣播。"
+    ],
+    "LLM、成本與效率（附錄 Efficiency analysis）": "LLM 用 ChatGPT（repo config：llm gpt-3.5、temperature 0、max_token 1500），支援多把 API key 平行呼叫。硬體為 6 顆 Xeon Gold 6148 CPU、4GB 記憶體（只打 API）。所有 agent 都行動時，10 個 agent 每回合約 220 秒、約 0.25 美元；100 個 agent 每回合約 1.9 小時。成本隨 agent 數大致線性成長，隨回合數加速上升（記憶累積導致處理變長）；三種行為中聊天最耗時。",
+    "評估實驗設定": [
+      "辨別能力：從 MovieLens-1M 抽 20 位使用者，每人留最後 a 部當 ground truth，其餘用來初始化 profile；混入 b 部負樣本組成 a+b 部的清單，讓 agent 挑 a 部。指標 p=Σ_u |T_u∩S_u|/|T_u|，掃多組 (a,b)。對照組為 Embedding（PMF）、RecSim、Real Human（真人看同一份清單替該使用者挑）。",
+      "生成能力：以較早的互動建立 profile，接下來的 N 部當參考行為 RB。3 位標註者看使用者過去看的片，比較「RecAgent 序列 vs RB」與「RecSim 序列 vs RB」，判斷哪條更像真人，或答「無法分辨」；選中模擬器那條就算模擬器 win（對抗式主觀評估）。",
+      "聊天與廣播：部署 20 個 agent，在第 5、10、15 回合觀察；3 位標註者就 4 題（聊天、廣播各自與 profile 一不一致、與過往行為一不一致）打 1–5 分，對標註者與 agent 取平均。",
+      "記憶模組：兩項功能（短期轉長期的摘要、依長期記憶產生反思），由 RecAgent 與非專家人類 NH 各做，每項 20 對，3 位標註者判斷哪個更像人。整體記憶則與 w/o short、w/o long、w/o reflection 三個變體比較，抽 15 個行為案例（選片、聊天、貼文），以「資訊量」「相關性」各打 1–5 分。",
+      "資訊繭房：50 個 agent 跑 50 回合，推薦用 MF。熵 E=−(1/|U|)Σ_u Σ_c f_{u,c}·log f_{u,c}，f_{u,c} 是類別 c 被推給使用者 u 的頻率，熵越小繭房越嚴重。第 20 回合後分別套用 Rec-Strategy（5 部中換 1 部為隨機片）、Soc-Strategy（每人加 1 位不同興趣的朋友），以及兩者合用；再掃介入頻率（每 1、5、10 回合）、替換數 N（1、3、5）、加朋友數（1、3、5），並請每個 agent 對推薦品質打 1–10 分的滿意度。",
+      "從眾：先讓 5 位社交連結充足的 agent 看同一部片，之後透過聊天與廣播擴散意見；每回合請每個 agent 對該片打 1–10 分。AC(i) 是有 i 位朋友的 agent 在 10 回合中改分的平均比例。"
+    ]
+  },
+  "assumptions": [
+    "LLM 已從網路語料學到足夠的使用者行為樣態，幾乎不用領域資料就能做出可信決策（近零樣本）。",
+    "仿人類的感官／短期／長期記憶分層、重複強化與冪律遺忘，是讓模擬行為可信的合適歸納偏差。",
+    "使用者行為可以完整用自然語言事件描述，離散回合足以近似時間。",
+    "標註者對「像不像真人」「與 profile／過往行為是否一致」的主觀判斷，可以代表逼真度。",
+    "使用者活躍度服從 Pareto 長尾分布。",
+    "LLM agent 自評的 1–10 分滿意度與電影評分，可以當成使用者回饋訊號，用來衡量體驗與意見變化。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MovieLens-1M（抽 20 位使用者，用於辨別與生成實驗）",
+      "自建 RecAgent 沙盒（20 個 agent 的聊天與廣播、50 個 agent 的資訊繭房、社交網路上的從眾實驗）",
+      "MovieLens、Amazon-Beauty、Book-Crossing、Steam（只用於擬合 Pareto 活躍度分布）"
+    ],
+    "metrics": [
+      "辨別準確度 p=Σ_u |T_u∩S_u|/|T_u|（多組 (a,b)）",
+      "對抗式主觀評估的 win／lose／indistinguishable 比例",
+      "聊天與廣播可信度 1–5 分（4 題）",
+      "記憶的資訊量與相關性 1–5 分；記憶功能「像人」的支持比例",
+      "推薦類別熵 E（資訊繭房）",
+      "agent 自評推薦滿意度 1–10",
+      "改分機率 AC(i)（從眾）與評分分布",
+      "每回合的時間與美元成本"
+    ],
+    "baselines": [
+      "Embedding（PMF）",
+      "RecSim",
+      "Real Human（真人看歷史，替該使用者從清單挑片）",
+      "非專家人類 NH（記憶功能比較）",
+      "記憶消融：w/o short、w/o long、w/o reflection"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在 MovieLens-1M 的辨別任務（從 a+b 部中挑出使用者真正看過的 a 部）中，RecAgent 明顯勝過傳統模擬器，並接近 Real Human。",
+      "numbers": "跨多組 (a,b) 平均，比最佳基準高約 68%，比 Real Human 低約 8%（逐組數值只畫在 Figure 2a，正文未列）",
+      "section": "Results「Believability of the simulated user behaviors」、Figure 2a",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "生成任務的對抗式主觀評估中，RecAgent 產生的序列比 RecSim 更常被標註者判為更像真人。",
+      "numbers": "N=5 時 win rate：RecAgent 45.0%，RecSim 33.3%（3 位標註者）",
+      "section": "Results「Believability of the simulated user behaviors」、Figure 2b",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "聊天與廣播的可信度多數高於 4 分，但隨回合增加普遍下降，顯示長程模擬會漂移。",
+      "numbers": "1–5 分量表；第 5、10 回合多數 >4，第 15 回合 4 題全部 <4",
+      "section": "Results「Chatting and Broadcasting Behaviors」、Figure 2c",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "記憶模組的「短期轉長期摘要」功能，被判定像人的比例與非專家人類相當。",
+      "numbers": "約 40% 的標註認為 RecAgent 較像人，只比 NH 低 1.7%（每項 20 對、3 位標註者）",
+      "section": "Results「Believability of the Agent Memory Mechanism」、Figure 3a",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "模擬器可以重現資訊繭房：以 MF 增量重訓時，推薦類別熵在初期幾回合後持續下降。",
+      "numbers": "50 個 agent、50 回合；最終熵比峰值低約 8.5%",
+      "section": "Results「Studying the information cocoon phenomenon」、Figure 4a",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "Rec-Strategy 每回合替換的隨機片越多，繭房緩解越明顯，但 agent 自評滿意度隨之下降（滿意度只以圖呈現）。",
+      "numbers": "替換數 N=3、N=5 相對 N=1，熵分別提升約 30.8%、52.6%",
+      "section": "Results「Studying the information cocoon phenomenon」、Figure 4d",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "模擬器呈現從眾：意見在社交網路擴散後評分收斂，朋友越多的 agent 越容易改分（後者只以圖呈現）。",
+      "numbers": "評分分布由 3–8 分散，收斂到 6 與 7",
+      "section": "Results「Studying the user conformity phenomenon」、Figure 5a–5b",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "所有 agent 都行動時，執行成本隨 agent 數快速上升。",
+      "numbers": "10 個 agent 每回合約 220 秒（單一 API key）",
+      "section": "Appendix「Efficiency analysis」、Figure 6",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "回合制把時間離散化，使用者不能在回合之間行動，彈性不如真實情境。",
+    "沒有針對推薦問題微調 LLM。",
+    "提示詞為手工精心設計，換 LLM 可能不穩健；例如 ChatGPT 與 GPT-4 可能需要不同的提示。",
+    "聊天與廣播可信度隨回合增加而下降，作者推測是記憶累積過多，LLM 抓不到有價值的資訊。",
+    "agent 數增加時時間成本上升；多 API key 平行時因網路不穩，變異很大；回合增加時成本加速上升。",
+    "只涵蓋推薦系統與社群網路兩種環境。",
+    "agent 行為可能出錯或幻覺（作者在 Role Playing 一節以此說明為何引入真人協作）。"
+  ],
+  "limitations_observed": [
+    "Real Human 對照組不是被模擬的使用者本人，而是由其他人看歷史紀錄後替該使用者挑片。「只比 Real Human 低 8%」量的是相對於人類預測者的預測準確度，不是行為逼真度，摘要卻據此寫成「模擬行為非常接近真人」。",
+    "辨別任務缺少熱門度基準。MovieLens-1M 的片名都是 LLM 熟知的老片，隨機負樣本多半冷門（附錄的推薦清單例子就是 T-Men、Son of Flubber 這類）。LLM 可能只是挑出比較知名的片，沒有 most-popular 對照就分不開個人化與熱門度。此外，指標 p 對使用者求和卻沒有除以 |U|，數值尺度綁死在 20 位使用者上；Embedding 與 RecSim 如何在這 20 位使用者上訓練也沒有交代，逐組數字只在圖中。",
+    "樣本極小，而且沒有任何統計檢定：辨別與生成只用 20 位使用者，記憶功能各 20 對、整體記憶 15 個案例，標註者都只有 3 位，沒有報告標註者一致性或顯著性。正文說 45.0% 對 33.3%「significantly better」，卻沒有檢定支撐。記憶反思那段寫「surpasses RH by 3.3%」，RH 應是 NH 的筆誤。",
+    "聊天與廣播的「可信度」只問是否符合 profile 與過往行為，量的是自我一致性，不是對照真實人類對話資料的逼真度。這組實驗也完全沒有對照組（沒有無記憶或單純提示詞的 LLM），無法把分數歸功於 agent 框架。",
+    "從眾實驗沒有「agent 不互相交流」的對照組。評分從 3–8 收斂到 6–7，也可能只是 LLM 評分本來就趨中，或 temperature 0 下的預設偏好，未必是社會影響。朋友數與改分率的正相關也有干擾：朋友越多，進入記憶與提示詞的訊息就越多，而 temperature 0 的輸出只要提示詞改變就可能改變。",
+    "資訊繭房只報一條曲線，沒有多種子重跑，也沒有變異數；熵下降 8.5% 沒有拿真實系統的繭房程度來比。Rec-Strategy 的效果有一部分是定義上的必然：直接塞隨機片，本來就會提高類別熵。滿意度是 LLM 自評的 1–10 分，沒有對照真人驗證，卻被拿來當作「隨機化會傷害使用者體驗與留存」的證據，對 T6 的滿意度估計而言，這正是需要先驗證的環節。",
+    "可重現性不足。論文沒有給 K、相似度門檻、top-N、β、δ、短期記憶容量、α 與 x_min。遺忘式的符號前後矛盾：感官記憶中 s 代表重要性，遺忘式卻說 s_i、r_i 分別是新近度與重要性，而 max(r_i^β, δ) 的說明又指向新近度。這些要讀 repo 才確定（β=1.5、δ=0.01、冪次作用在 recency、強化判定帶隨機閘門；以 WebFetch 讀取，未逐行核對）。repo config 預設 active_method: random、active_prob: 1，與論文主打的 Pareto 活躍度不一致；repo 是否另有 Pareto 選項，未查證。",
+    "對 T6 的外推有限：被測系統是 MF 推薦器，不是對話 agent；「聊天」是 agent 對 agent，而且一次 LLM 呼叫就寫完雙方台詞，不是兩個獨立決策者輪流說話。全文沒有任何實驗把 RecAgent 當成對話 agent 的評估或訓練對手。聊天可信度在 15 回合就跌破 4 分，表示長對話模擬的漂移問題並未解決。",
+    "規模與成本限制結論：100 個 agent 每回合約 1.9 小時，實驗最多只用 50 個 agent。從眾與繭房這類網路效應是否在真實母體規模下成立，沒有支撐。"
+  ],
+  "framework_role": "T6「LLM 使用者模擬器」的代表作之一。它提供了一套 profile＋三層記憶＋受限格式動作的模擬使用者架構範本，示範如何讓模擬使用者跨回合保持偏好一致、並隨互動演化；外部介入與訪談機制則可當作探測模擬器狀態的工具。它的閉環「模擬使用者互動 → 系統以互動紀錄增量重訓 → 再影響模擬使用者」，是 T6 使用者回饋迴路的模擬版：隱式回饋是點擊與搜尋，顯式回饋是 LLM 自評的滿意度與評分；它也示範了如何用模擬器做反事實 A/B（Rec 與 Soc 策略、平行模擬器比較推薦演算法）。但它模擬的是推薦系統使用者，不是對話 agent 的對話對手，逼真度證據也薄。對本框架而言，主要價值是模擬器設計，以及失真來源（長程漂移、評分趨中、自我一致性不等於逼真度）的參考。",
+  "edges": [
+    {
+      "edge": "E6",
+      "how": "模擬器的互動紀錄直接回流成評估指標：系統推給每個 agent 的類別頻率算成熵，用來量化資訊繭房；agent 自評的 1–10 分滿意度用來量化體驗。兩者一起用來比較 Rec-Strategy、Soc-Strategy、介入頻率、替換數與加朋友數。作者也提出同時跑兩個平行模擬器、比較使用者回饋，來評估不同推薦模型。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "官方 repo RUC-GSAI/YuLan-Rec（https://github.com/RUC-GSAI/YuLan-Rec，2026-09-26 以 WebFetch 讀取）自述為 RecAgent 的實作，已被 ACM TOIS 接受（DOI 10.1145/3708985）。授權寫 MIT，但另註明資料與程式碼只能用於學術用途。這是開源與學術發表，不是商用採納。"
+    ],
+    "assessment": "未見證據。論文沒有提到任何部署或產品；repo 明訂只限學術用途，對商用反而是限制。Semantic Scholar 引用 229（influential 16）屬於學術影響力，不算採納。本次 WebSearch 額度已用盡，未能再搜尋產品頁或官方部落格。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/RUC-GSAI/YuLan-Rec",
+    "data": "MovieLens-1M 等為公開資料集。repo config 指向 data/item.csv、data/user_1000.csv、data/relationship_1000.csv 等檔，但未確認這些檔是否都已提交。人工標註結果與實驗 log 未見公開。論文 v3 全文沒有附程式碼連結。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "是 profile＋分層記憶式 LLM 使用者模擬器的早期代表作（ACM TOIS、S2 引用 229），架構與提示詞可以直接借鏡；但情境是推薦系統而不是對話 agent，逼真度驗證樣本小、缺對照組，因此不是 T6 必讀。",
+  "related": ["1909.04847", "2304.03442", "2006.08732", "2208.10264", "2103.08057", "1805.10000"],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

@@ -1,0 +1,166 @@
+{
+  "id": "2402.17753",
+  "title": "Evaluating Very Long-Term Conversational Memory of LLM Agents",
+  "topic": "T7",
+  "subarea": "多輪對話與互動式評估",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "用「人格＋時間事件圖」驅動兩個具記憶模組的 LLM agent 產生超長多 session 對話，經人工修正後得到 LoCoMo（50 段、平均 19.3 個 session、約 300 輪、9K token），再以 QA、事件摘要、多模態對話生成三個任務評估 LLM 的長期對話記憶。",
+  "problem": "既有長期開放域對話資料集（MSC、Conversation Chronicles）最多約 5 個 session、1K token 左右，測不出 long-context LLM 或 RAG 在「跨數月、數十個 session」對話裡是否真的記得、能否做時間與因果推理；而傳統的回應層指標（BLEU、BERTScore、一致性、矛盾偵測）也不是直接量「對長期脈絡的理解」。沒有夠長的資料與系統化的評估框架，就無法比較各種長期記憶做法。",
+  "core_idea": "把「對話內容」與「對話背後的真相」分開生成：先為每個說話者產生人格描述與帶日期、帶因果連結的事件圖，再讓兩個具短期（session 摘要）與長期（observation 資料庫）記憶的生成式 agent 依事件在 session 之間發生的時間逐 session 對話，最後由人工修正長程不一致。因為事件圖與每則 observation 的證據 turn ID 都是生成時就有的隱藏狀態，所以可以直接當成評估的標準答案：QA 附證據 turn（可分開量檢索召回與答案品質）、事件摘要以事件圖為 gold、多模態對話生成以原對話為參考。",
+  "method": {
+    "資料生成管線（§3、附錄 A）": {
+      "1_人格": "從 MSC 資料集挑 4–5 句的初始人格描述 p_c，用 gpt-3.5-turbo 加一個 in-context 示範擴寫成完整人格 p（目標、過往經歷、日常習慣、人際關係、姓名、年齡、性別；提示詞見 Fig. 5）。",
+      "2_時間事件圖": "以 text-davinci-003 在人格 p 條件下生成事件圖 G：每個事件 e_i 帶發生日期 t_i，事件間有因果邊 l=(e_i,e_j)；每張圖最多 25 個事件、跨 6–12 個月。迭代生成：先用「基底提示詞＋初始化提示詞」產生 k=3 個彼此獨立的事件，再用「基底提示詞＋迭代提示詞」每次產生 k 個由既有事件引起的新事件（Fig. 6、7）。",
+      "3_虛擬 agent（沿用 Generative Agents 架構）": "兩個 agent L1、L2 都用 gpt-3.5-turbo。每個 session k 結束後，以本 session 對話 h_k 與前一份摘要 w_{k-1} 產生新摘要 w_k（短期記憶，Fig. 8）；session 內每一輪 h_{k_j} 轉成一則關於說話者的斷言式 observation o_{k_j} 存入長期記憶，並要求模型標出支撐該 observation 的 turn ID（Fig. 9）。session k+1（日期 t^s_{k+1}）的回應以下列條件生成：最新摘要 w_k、對檢索到的相關 observation 所做的 reflection、本 session 目前的對話、人格 p，以及事件圖中日期落在兩個 session 之間的事件子集 {e | t^s_k < t^e_i < t^s_{k+1}}。注意：正文 §3.3 的符號把短期 H_s 與長期 H_l 寫反了一次，照做時以附錄 A.2.1 的文字描述為準。",
+      "4_圖片分享與回應": "要分享圖片時：M 產生圖片說明 c → 轉成關鍵字 → 用 icrawler 網路搜尋取圖 → 分享；收到圖片時：用 BLIP-2 產生說明 → M 依說明與雙方人格產生回應（Fig. 10）。圖片說明也存入長期記憶。",
+      "5_人工修正": "內部標註員依規則修改：刪除與對話無關的圖片、補上圖片的上下文、替換與查詢說明不符的圖片、修正與前後輪（含圖片）矛盾的內容、修正與該 session 事件不一致的內容、從事件圖刪除對話裡沒出現的事件。約 15% 的輪被編輯、約 19% 的圖片被刪除或替換。",
+      "資料規模（Table 5）": "50 段對話；平均每段 19.3 個 session、每 session 15.8 輪（約 305 輪）、9,209 token、32.3 張圖；observation 平均 18.2 token、session 摘要平均 127.4 token；每段平均 24.2 個 gold 事件（摘要約 896.5 token）。"
+    },
+    "評估任務（§4）": {
+      "QA": "7,512 題，分五類：single-hop 2,705（36%，答案在單一 session）、multi-hop 1,104（14.6%，跨 session 整合）、temporal 1,547（20.6%，時間推理）、open-domain 285（3.9%，需結合常識或世界知識）、adversarial 1,871（24.9%，設計來誘答，期望模型判定無法回答）。答案盡量直接取自對話原文，並要求被測 LLM 盡量照抄原文措辭；每題標註含答案的證據 turn ID。指標：預測與 gold 正規化後的 token 層級 F1（partial match），按類別與總體回報；RAG 另回報證據檢索的 recall@k（摘要式 RAG 以是否取回相關 session 的摘要計）。論文沒寫 adversarial 題如何計分、gold 長什麼樣。",
+      "事件摘要": "要求模型摘要某時間範圍內說話者的事件，與事件圖 G 比對。改寫 FactScore：把預測與參考都拆成 atomic facts，precision＝預測的 atomic facts 中能對上 G 的比例，recall＝G 的 atomic facts 被預測涵蓋的比例，回報 F1；另附 ROUGE-1/2/L。",
+      "多模態對話生成": "給定先前對話，預測下一輪（文字＋圖片），以 BLEU-1/2、ROUGE-L 與 MM-Relevance 對照資料集中的真實下一輪。"
+    },
+    "實驗設定（§5、附錄 C）": {
+      "前處理": "QA 與事件摘要都把圖片換成 BLIP-2 說明，交錯在文字對話裡；只有多模態對話生成直接用圖片。",
+      "QA 受測組": "(1) Base：Mistral-Instruct-7B（8K）、Llama-2-Chat-70B（4,096）、gpt-3.5-turbo（4,096）、gpt-4-turbo（限制在 4,096）；對話放前面、任務描述放後面，超出窗口時從最早的對話開始截掉。(2) Long-context：gpt-3.5-turbo-16k，分別給 4K/8K/12K/16K 的對話。(3) RAG：DRAGON 當 retriever、gpt-3.5-turbo-16k 當 reader；檢索單位三種——原始對話輪（top-5/10/25/50）、observation（top-5/10/25/50）、session 摘要（top-2/5/10）。未測 long-context 微調的開源模型或 sliding window 方法。",
+      "事件摘要受測組": "只測 Base 與 Long-context，不做 RAG（理由是摘要要看整段對話）。採 incremental summarization：先摘要前面的 session，再以該摘要為基礎摘要下一個 session，並給一個輸入輸出示範引導模型只挑重要生活事件。",
+      "多模態對話生成": "另用自動管線（不經人工修正）生成 50 段對話當訓練資料，從 MMDialog 微調過的 MiniGPT-5 checkpoint 出發訓練三個版本：Base（只用先前對話）、+summary（加整段對話的摘要，top-1/2/5）、+observation（加檢索到的 observation，top-5/10/25）；照原程式碼建議的超參數訓練 10 個 epoch，單張 A6000 約 30 小時。",
+      "實作細節": "OpenAI API 與 HuggingFace（2024 年 1 月版本），temperature=0、top_p=1；A6000、FP32；每個模型只跑一次推論。BLEU 用 nltk、ROUGE 用 rouge 套件、BERTScore 用 bert-score、FactScore 用官方 repo 的預設實作（附錄提到 BERTScore，但正文表格沒有回報 BERTScore）。"
+    }
+  },
+  "assumptions": [
+    "由 gpt-3.5-turbo／text-davinci-003 生成、再經約 15% 輪次人工修正的對話，足以代表真實的長期線上對話。",
+    "經人工刪去「對話裡沒出現的事件」之後，事件圖 G 就是對話中事件的完整且正確的標準答案（對話中新冒出、但不在 G 裡的事件會被當成幻覺扣 precision）。",
+    "答案可以盡量從對話原文照抄，因此正規化後的 token F1 能近似答案正確性。",
+    "BLIP-2 圖片說明可以取代圖片而不損失 QA 與摘要所需的資訊（作者說 OCR 情境例外）。",
+    "讓模型閱讀「兩個第三方人格之間」的對話紀錄再回答問題，可以代表 agent 對自己與使用者互動的長期記憶能力。",
+    "證據 turn 的檢索召回率是記憶存取品質的合理中間指標。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "LoCoMo QA（7,512 題；single-hop／multi-hop／temporal／open-domain／adversarial 五類）",
+      "LoCoMo 事件摘要（以事件圖 G 為 gold）",
+      "LoCoMo 多模態對話生成（下一輪預測）"
+    ],
+    "metrics": [
+      "QA：正規化後 token F1（partial match），分類別與總體",
+      "RAG：證據檢索 recall@k",
+      "事件摘要：改寫版 FactScore precision／recall／F1，ROUGE-1／2／L",
+      "多模態對話生成：BLEU-1／2、ROUGE-L、MM-Relevance"
+    ],
+    "baselines": [
+      "Human（QA）",
+      "Mistral-Instruct-7B、Llama-2-Chat-70B、gpt-3.5-turbo、gpt-4-turbo（Base，截斷上下文）",
+      "gpt-3.5-turbo-16k（Long-context，4K／8K／12K／16K）",
+      "DRAGON + gpt-3.5-turbo-16k RAG（檢索單位：對話輪／observation／session 摘要）",
+      "MiniGPT-5：Base／+summary／+observation"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "所有 LLM 在 QA 上都遠低於人類；截斷上下文的 Base 模型中 gpt-4-turbo 最好。",
+      "numbers": "Human 總體 F1 87.9；gpt-4-turbo 32.1（Table 2，正文寫 32.4）、gpt-3.5-turbo 22.4、Llama-2-Chat-70B 17.9、Mistral-Instruct-7B 13.9",
+      "section": "§6.1、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "Long-context 模型看到越多對話，總體分越高，但 adversarial 題幾乎全錯，容易被誘導而產生幻覺，常把對話或事件安到錯的說話者身上。",
+      "numbers": "gpt-3.5-turbo-16k 總體 24.1→25.2→33.5→37.8（4K→16K）；adversarial 13.1→8.4→6.4→2.1；對照 gpt-4-turbo（4K）adversarial 70.2、Llama-2-Chat-70B 22.1",
+      "section": "§6.1、Table 2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "RAG 以 observation 為檢索單位效果最好，檢索量加大反而下降（作者解讀為檢索雜訊）；temporal 也在這個設定最好，但仍遠低於人類。",
+      "numbers": "observation top-5 總體 F1 41.4（全文最佳），top-10／25／50 為 38.8／38.0／37.8；對話輪 top-5 為 31.7；temporal：observation top-5 41.9、top-10 42.1，Long-context 16K 20.3，Human 92.6",
+      "section": "§6.1、Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "以 session 摘要為檢索單位，檢索召回很高，答案 F1 卻沒有明顯提升，作者歸因於對話轉成摘要時的資訊流失。",
+      "numbers": "摘要 top-10：recall@k 90.7、總體 F1 31.5；top-5：75.1／32.5；top-2：61.5／29.9；無檢索 gpt-3.5-turbo 22.4",
+      "section": "§6.1、Table 3",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "事件摘要上 gpt-3.5-turbo 的 incremental summarization 最好；long-context 版本反而退步；開源模型遠落後於商用模型。",
+      "numbers": "FactScore F1：gpt-3.5-turbo 45.9（P 45.3／R 46.5）、gpt-4-turbo 45.1（P 51.6／R 41.8）、gpt-3.5-turbo-16k 39.9（P 42.3／R 37.8，較 4K 版 P −3.0、R −8.7）、Llama-2-Chat-70B 28.3、Mistral-Instruct-7B 23.0",
+      "section": "§6.2、Table 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "多模態對話生成中，把檢索到的 observation 加進訓練脈絡最有幫助；MM-Relevance 隨對話歷史變長而下降，RAG 只能部分緩解。",
+      "numbers": "MM-Relevance：Base 56.1、+summary（top-1）56.9、+observation（top-5）57.8、+observation（top-25）56.5；BLEU-1 57.1→59.7",
+      "section": "§6.3、Table 6、Fig. 4B",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "LLM 生成的長對話需要不少人工修正才能維持長程一致性。",
+      "numbers": "約 15% 的對話輪被編輯，約 19% 的圖片被刪除或替換",
+      "section": "§3.4",
+      "anchor_idx": 0
+    }
+  ],
+  "limitations_stated": [
+    "資料主要由 LLM 生成，雖經人工驗證修正，仍可能無法完全反映真實線上對話的細微之處。",
+    "圖片來自網路搜尋，缺少個人照片會有的長期視覺一致性（外觀、住家、寵物等），因此除 OCR 情境外，圖片幾乎都能換成說明文字而不損失資訊。",
+    "生成管線只做了英文。",
+    "生成管線依賴付費的閉源 LLM。",
+    "LLM 即使被要求簡短回答也常冗長，使答案正確性難以自動評估，本框架也受此影響。",
+    "沒有評估 long-context 微調的開源模型或 sliding window 方法（附錄 C.1）。",
+    "倫理面：擬真人生的 agent 可能引發擬社會關係；多模態生成可能傳播錯誤資訊與偏見；不應拿生成式 agent 取代真人做影響現實決策的研究。"
+  ],
+  "limitations_observed": [
+    "人類基準（總體 87.9、temporal 92.6）完全沒有描述協定：誰作答、答幾題、是否能翻閱全文、有無時間限制都沒寫，但引言「落後人類 56%、temporal 落後 73%」這些核心主張都建立在這個數字上。",
+    "7,512 題 QA 怎麼產生的沒有交代：誰出題、adversarial 題如何設計、它的 gold 與計分方式為何、有無標註者一致性，全都缺。Zep 官方部落格回報公開版的 category 5 缺 gold 答案而無法使用（該文沒寫明是哪一類；Mem0 研究頁只列其餘四類，對照可知被排除的是 adversarial），另有說話者歸屬錯誤、需要圖片資訊卻不在說明文字裡、一題多解等問題。",
+    "observation 的檢索召回比原始對話輪低，F1 卻高很多：top-5 recall 49.6 對 58.8，F1 41.4 對 31.7。這表示 F1 的提升不完全來自「取回了證據」，可能有一部分是因為 observation 本身由 gpt-3.5-turbo 寫成的斷言句，措辭剛好對上 token F1。作者歸因於訊噪比，但沒有做對照實驗。",
+    "observation 資料庫本身是生成管線的副產品，也就是生成 agent 的長期記憶，還附著 turn ID 證據。論文沒說人工改掉約 15% 對話輪之後有沒有重新產生 observation。實際部署時 observation 必須由受測系統自己從對話抽取，因此「observation RAG 最好」其實是在有特權資訊的條件下得出的，不能直接當成記憶架構的公平比較。",
+    "Base 與 Long-context 的比較同時換了模型版本與窗口大小：同樣只給 4K，gpt-3.5-turbo-16k 得 24.1、gpt-3.5-turbo 得 22.4。對話平均只有 9.2K token，所以 16K 幾乎等於給全文。long-context 只測了一個模型，而 gpt-4-turbo 在表中只給 4,096 token 的上下文，因此「長上下文導致 adversarial 崩到 2.1」可能只是 gpt-3.5-turbo-16k 這個模型的特性，推廣到所有長上下文模型的根據不足。",
+    "內部數字不一致：Table 3 對話輪 top-10 的 multi-hop recall 寫成 247.4（不可能超過 100）；§6.1 正文說 gpt-4-turbo 總體 32.4，Table 2 是 32.1；正文說 observation 比原始對話「提升 5%」，但 Table 3 的差距是 41.4 對 31.7（約 +9.7 分），和 16K long-context 比也只有 +3.6，對不上任何一組；§3.3 的符號把 H_s 與 H_l 寫反。",
+    "每個設定都只跑一次推論，沒有信賴區間或顯著性檢定。多模態任務的增益只有 1.7 個 MM-Relevance 點（56.1→57.8），訓練資料只有 50 段未經人工修正的對話，差距可能落在雜訊範圍內。",
+    "改寫版 FactScore 的原子事實拆解與支持判定本質上是 LLM-as-a-judge，但論文沒說用哪個模型、哪套提示詞，也沒驗證它與人工判斷的一致性。另外，對話中出現、卻不在 G 裡的事件會被算成幻覺；附錄 A.3 的標註規則只有「刪掉 G 中對話沒提到的事件」與「改對話去配合事件」，沒有「把對話裡出現、卻不在 G 裡的事件補進 G」這一條，因此 precision 可能系統性偏低。",
+    "公開資料只有 50 段中的 10 段（GitHub README 說明是為了品質與成本而保留最長的 10 段），論文 Table 2–4 的數字在公開資料上無法重現。後續廠商又各自取子集、各用不同指標：Mem0 研究頁用 1,540 題，排除了 adversarial；Letta 回報的是 accuracy 而不是 token F1。因此跨來源的 LoCoMo 分數彼此不可比，也不能拿來和本文表格比。",
+    "這不是互動式評估：受測模型不參與產生對話，而是閱讀兩個模擬人格之間的第三方對話；事件圖只會單調累積，沒有「事實被更新或推翻」的題目（Zep 也提出這點）。因此它測不到真實助理最需要的兩件事：記住自己與使用者之間發生過什麼，以及在事實改變時更新記憶。",
+    "生成者與受測者同源：對話與 observation 由 gpt-3.5-turbo 產生，受測與 reader 也以 gpt-3.5-turbo 家族為主，可能有風格與措辭上的同源優勢，論文沒有討論。"
+  ],
+  "framework_role": "T7 的「多輪／跨 session 長期記憶」離線基準：提供五類 QA 分類（single-hop、multi-hop、temporal、open-domain、adversarial），每題附證據 turn ID，因此能把「檢索是否取回證據（recall@k）」和「答案是否正確（F1）」拆開量，並加上以隱藏事件圖為 gold 的事件摘要任務。對框架的價值主要有三點：(1) RAG 檢索單位的消融（原始輪、observation、session 摘要）直接對應 T2 要把對話狀態存成什麼形狀；(2) 它的資料生成管線（人格＋時間事件圖＋具記憶的模擬 agent＋人工修正）是用 T6 模擬器替 T7 造長程評估資料的具體範本，也示範了「模擬器的隱藏狀態可以直接當 gold」；(3) 它也是現今記憶產品宣稱成績時最常引用的基準，框架要能解讀這些數字。限制是它屬於靜態、被動閱讀式的評估，不互動、不量任務完成（T8），也不測記憶更新。",
+  "edges": [
+    {
+      "edge": "E6",
+      "how": "兩個由人格與時間事件圖驅動的模擬 agent（T6）產生的多 session 互動紀錄，連同生成時就記下的隱藏狀態（事件圖 G、帶證據 turn ID 的 observation、session 摘要），經人工修正後直接變成 T7 的評估材料：QA 題與證據 turn 由對話紀錄標出，事件摘要以 G 為標準答案，多模態對話生成以原紀錄的下一輪為參考答案。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "Mem0 官方研究頁以 LoCoMo 作為主要記憶評估指標，報告總體 92.5、single-hop 94.6、multi-hop 95.4、temporal 82.3，題數 1,540（未含 adversarial 類）；來源 https://mem0.ai/research（2026-09-26 查閱，頁面內容可能隨版本更新）。",
+      "Zep 官方部落格以 LoCoMo 評估自家記憶服務（75.14% ± 0.17、p95 搜尋延遲 0.632 秒），同時批評此基準：對話太短、缺少知識更新題、category 5 缺 gold、說話者歸屬錯誤；來源 https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/。",
+      "Letta 官方部落格（2025-08-12）以 LoCoMo 評估自家 agent 的檔案系統記憶（gpt-4o-mini，74.0%），並指出 LoCoMo 偏重檢索、測不到 agentic memory；來源 https://www.letta.com/blog/benchmarking-ai-agent-memory。",
+      "論文本身沒有描述任何部署或產品；作者群雖有 Snap Inc，但文中沒有產品採用的陳述。"
+    ],
+    "assessment": "被採納的是「評估標準」而不是方法：至少三家商用 agent 記憶產品（Mem0、Zep、Letta）在官方頁面以 LoCoMo 分數作為主要對外指標，已是這個領域事實上的標準基準。不過各家用的子集與指標不同（排除 adversarial、改用 accuracy），分數彼此不可比；Zep 與 Letta 的官方文章也公開質疑它的鑑別力。沒有證據顯示論文中的生成管線或 observation 式記憶被直接用在產品上。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/snap-research/locomo（專案頁 https://snap-research.github.io/locomo）",
+    "data": "公開，但 repo 目前的 locomo10.json 只有 10 段對話（README 說明 2024 年 3 月首次釋出時有 50 段，後來為品質與評估成本改成保留最長的 10 段）；論文附錄 B.2 註明授權為 CC BY-NC 4.0。論文的 50 段／7,512 題數字無法在現行公開資料上重現。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是跨 session 長期對話記憶評估事實上的標準基準，商用記憶產品在官方頁面以它作為主要指標，要解讀這些數字就得讀原文；但量測本身有多處瑕疵（人類基準沒有協定、token F1、observation 的特權資訊、數字不一致），必須帶著批判讀。",
+  "related": [
+    "2304.03442",
+    "2107.07567",
+    "2310.13420",
+    "2305.14251",
+    "2305.10250",
+    "2308.08239",
+    "2304.13343",
+    "2307.03172",
+    "2311.04939",
+    "2302.07452"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

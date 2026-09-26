@@ -1,0 +1,151 @@
+{
+  "id": "1805.09655",
+  "title": "Global-Locally Self-Attentive Dialogue State Tracker",
+  "topic": "T2",
+  "subarea": "傳統任務型對話 DST 與資料集",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 GLAD：以「全槽共用的 global biLSTM＋自注意力」與「每槽專屬的 local biLSTM＋自注意力」按每槽學到的比例混合來編碼使用者話語、前一輪系統動作與候選 slot-value，逐一做二元判斷，藉跨槽共享參數改善稀有 slot-value 的追蹤，在 WoZ 與 DSTC2 取得當時最佳的 joint goal accuracy。",
+  "problem": "任務型對話的 DST 要在每一輪估計使用者的 goal（inform 的 slot-value）與 request。DST 資料集相對於狀態空間很小，許多 slot-value 在訓練資料中很少出現：作者統計 WoZ 中 slot-value 平均有 214.9 筆訓練樣本，但 38.6% 的輪次其 joint goal 含有訓練樣本少於 20 筆的稀有 slot-value。單一輪次漏掉一個稀有值就讓該輪 turn goal 錯，而 joint goal 是逐輪累加的，錯誤會一路帶下去，因此稀有值的辨識直接拖垮 joint goal accuracy。先前方法（delexicalisation＋手工語意詞典、NBT）為每個 slot-value 各自獨立估計，要嘛依賴手工詞典，要嘛依賴特化的 paraphrase embedding，無法在不同槽之間共享從資料學到的特徵。",
+  "core_idea": "把多標籤狀態預測拆成每個 slot-value 一個二元分類器（沿用 NBT 等前作的分解），但讓所有槽的編碼器共享一組 global 參數，同時每個槽保有一組 local 參數，以每槽一個可學的純量 β_s 在兩者之間做線性混合：資料少的槽可以借用 global 模組從所有槽學到的通用特徵，資料多的槽則能用 local 模組學到槽專屬特徵。另外分兩個來源打分數：直接看使用者話語是否表達了該 slot-value，以及（在使用者只回「yes」這類話時）看使用者話語指向前一輪哪個系統動作，再把兩者加權後過 sigmoid。",
+  "method": {
+    "任務形式": "輸入：當輪使用者話語 U（詞序列；DSTC2 評估時是 ASR N-best 中的每一條假設）、前一輪系統動作 A_1..A_l（每個動作轉成詞序列，例如 request(price range)），以及本體（ontology）中待判斷的一個候選 slot-value V（例如 food = french，也含 request 類的 request = address）。輸出：該 slot-value 在本輪是否被使用者表達的機率 y ∈ (0,1)。對本體中所有 slot-value 各跑一次，得到 turn goal 與 turn request。",
+    "global-local 編碼器 encode(X)": [
+      "X ∈ R^{n×d_emb} 為詞向量序列。",
+      "H^g = biLSTM^g(X)（所有槽共用）；H^s = biLSTM^s(X)（槽 s 專屬），維度 n×d_rnn。",
+      "H = β_s·H^s + (1−β_s)·H^g，β_s 是每個槽一個、介於 0 與 1 之間的可學純量（論文沒寫參數化方式，用 sigmoid 包一個純量參數即可滿足）。",
+      "自注意力：global 分數 a^g_i = W^g·H_i + b^g，p^g = softmax(a^g)，c^g = Σ_i p^g_i H_i；local 以槽專屬的 W^s、b^s 同樣算出 c^s。",
+      "c = β_s·c^s + (1−β_s)·c^g（與 LSTM 混合用同一個 β_s）。",
+      "encode(X) 回傳 (H, c)：逐詞表示與摘要向量。"
+    ],
+    "編碼模組": "話語、系統動作、候選 slot-value 各有一個獨立的 global-local 編碼器（三組參數），且都以候選值所屬的槽 s 選用 local 部分：H^utt, c^utt = encode(U)；H^act_j, C^act_j = encode(A_j)（每個動作取其摘要向量 C^act_j）；H^val, c^val = encode(V)。",
+    "打分模組": [
+      "話語打分：a^utt_i = (H^utt_i)ᵀ c^val，p^utt = softmax(a^utt) 於話語 m 個詞上，q^utt = Σ_i p^utt_i H^utt_i，y^utt = W·q^utt + b（線性層投到純量）。",
+      "系統動作打分：a^act_j = (C^act_j)ᵀ c^utt，p^act = softmax 於 l+1 個動作上（多出來的一個是 sentinel 動作，讓注意力可以選擇忽略所有前輪系統動作），q^act = Σ_j p^act_j C^act_j，y^act = (q^act)ᵀ c^val。注意動作注意力只以話語摘要 c^utt 為查詢，不看候選值。",
+      "最終：y = σ(y^utt + w·y^act)，w 為可學純量。"
+    ],
+    "訓練目標": "論文把問題定為每個 slot-value 的二元預測，但沒有明寫損失函數；按形式即對每個 slot-value 的 sigmoid 輸出做 binary cross-entropy。從分數轉成 turn goal 的門檻（例如 0.5、或每個 goal 槽取最高分且過門檻者）論文也沒寫，需查程式碼。",
+    "joint goal 的更新規則": "joint goal 不是模型預測的，而是規則累加：把每輪的 turn goal 併入 joint goal，同一個槽被新的一輪再次指定時，以新值覆寫舊值（例如先前 food=thai、本輪 food=french，就換成 french）。request 只做 turn-level 評估，不累加。",
+    "實作細節": [
+      "詞向量：固定不訓練的預訓練 GloVe，加上 Hashimoto et al. (2017) 的 character n-gram embedding。",
+      "最佳化：Adam。dropout 0.2，套在 embedding 以及每個 local、global 模組的輸出上。",
+      "以 dev split 調超參數，並以 dev 的 joint goal accuracy 做 early stopping。",
+      "DSTC2：用使用者話語的人工轉寫訓練，用資料集附的 ASR N-best 評估；評估時把每條 ASR 假設算出的分數（sigmoid 之前）相加，再過 sigmoid 當作該 slot-value 的分數。另加 word dropout：每個詞的 embedding 以 0.3 機率被設為零，模擬 ASR 漏字；在 WoZ 上作者發現 word dropout 沒幫助所以不用。",
+      "報告方式：每個資料集跑 10 個隨機種子、各自 early stopping，回報測試集平均與標準差。",
+      "論文未給 d_rnn、學習率、batch size、epoch。官方程式碼 train.py 的預設值為 epoch=50、batch_size=50、lr=1e-3、demb=400、dhid=200、dropout emb/local/global 皆 0.2、stop=joint_goal（https://github.com/salesforce/glad，以 WebFetch 讀取；demb=400 推測為 GloVe 300 維加字元 n-gram 100 維，這一點是我的推測）。官方 README 只描述 WoZ 的資料目錄與以 Stanford CoreNLP 做前處理，並附 Docker 映像。"
+    ]
+  },
+  "assumptions": [
+    "有一份固定、可窮舉的本體：所有候選 slot-value 事先已知，推論時要對每一個 slot-value 各跑一次編碼與打分。",
+    "當輪狀態只需看當輪使用者話語與前一輪的系統動作就能判定（一階馬可夫），更早的脈絡完全由規則累加的 joint goal 承載。",
+    "系統動作以結構化的 dialogue act 形式可取得（DSTC 框架），而且可以轉成詞序列交給編碼器。",
+    "同一個槽在後面的輪次被指定時一定代表覆寫；使用者不會撤銷某個限制（沒有刪除槽的機制）。",
+    "不同槽之間有足夠的共通語言現象，使共享的 global 參數對稀有值有幫助。",
+    "有逐輪的 turn-level goal／request 標註可供監督式訓練。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "WoZ 2.0 餐廳訂位（Wen et al., 2017；使用人工文字話語，無 ASR）",
+      "DSTC2 餐廳資訊（Henderson et al., 2014a；以資料集附的 ASR N-best 評估，本體與 WoZ 相同）"
+    ],
+    "metrics": [
+      "joint goal accuracy（規則累加後的 joint goal 整組完全正確的輪次比例）",
+      "turn request accuracy",
+      "turn goal accuracy（只在消融表 Table 2 呈現）",
+      "依訓練樣本數分組的每個 slot-value F1（Figure 5，只有圖）"
+    ],
+    "baselines": [
+      "Delexicalisation-Based Model（DSTC2 用 Henderson et al. 2014b，WoZ 用 Wen et al. 2017）",
+      "Delexicalisation Model + Semantic Dictionary",
+      "Neural Belief Tracker (NBT) - DNN",
+      "Neural Belief Tracker (NBT) - CNN",
+      "內部消融：只用 local（β_s=1）、只用 global（β_s=0）、以 mean-pooling 取代自注意力、拿掉 LSTM 直接在詞向量上做自注意力"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "WoZ 測試集上 GLAD 的 joint goal 與 turn request 都超過先前最佳。",
+      "numbers": "joint goal 88.1±0.4%（先前最佳 NBT-DNN 84.4%，+3.7）；turn request 97.1±0.2%（先前最佳 NBT-CNN 91.6%，+5.5）；10 個種子的平均±標準差",
+      "section": "§3.4、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "以 ASR N-best 評估的 DSTC2 上增益較小但仍為當時最佳。",
+      "numbers": "joint goal 74.5±0.2%（NBT-CNN 73.4%，+1.1）；turn request 97.5±0.1%（NBT-CNN 96.5%，+1.0）",
+      "section": "§3.4、Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "只留 local 模組（拿掉 global，等同 β_s=1）時 goal 追蹤大幅退化，但 request 不受影響；作者解釋為 goal 是多個樣本少的 slot-value 的聯合預測，而 request 樣本最多。",
+      "numbers": "WoZ dev：turn goal 93.7→88.8，joint goal 88.8→73.4（−15.4），turn request 97.3→97.3",
+      "section": "§3.5、Table 2（“- global” 列）",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "只留 global 模組（拿掉 local，等同 β_s=0）時 goal 與 request 都變差，因為除了最後的打分層之外沒有槽專屬的表示。",
+      "numbers": "WoZ dev：turn goal 93.1，joint goal 86.6（−2.2），turn request 95.1（−2.2）",
+      "section": "§3.5、Table 2（“- local” 列）",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "拿掉 LSTM、直接在詞向量上做自注意力的 embedding-matching 變體退化最多，作者據此主張捕捉時序依賴的表示對狀態追蹤重要。",
+      "numbers": "WoZ dev：turn goal 88.7，joint goal 71.5（−17.3），turn request 93.2（−4.1）",
+      "section": "§3.5、Table 2（“- LSTM” 列）",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "以 mean-pooling 取代自注意力會一致地變差，goal 受影響較多。",
+      "numbers": "WoZ dev：turn goal 91.6（−2.1），joint goal 84.4（−4.4），turn request 97.1（−0.2）",
+      "section": "§3.5、Table 2（“- self-attn” 列）",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "在稀有 slot-value 上 GLAD 一致優於兩個共享極端（只 global、只 local）；訓練資料充足的 slot-value 則三者沒有顯著差異。",
+      "numbers": "正文沒有數值，只有 Figure 5 的依訓練樣本數分組 F1 圖；比較對象只有兩個內部變體，不含 NBT",
+      "section": "§3.5、Figure 5",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "質性分析：使用者只回「Yes please」時，模型靠前一輪系統動作正確推出 request(phone) 與 request(address)；錯誤範例是使用者沒回答系統對食物類型的詢問、反問有哪些選擇時，作者說模型把「沒回答」誤判成「不在乎食物」。",
+      "numbers": "Table 3 三則 dev 範例；錯誤範例標記為漏掉 inform(food=dontcare)、多出 request(food)",
+      "section": "§3.6、Table 3",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "論文沒有獨立的限制章節，作者承認的弱點只散見在實驗段落。",
+    "Table 3 的錯誤範例：使用者不回答系統的上一個提問而是反問選項時，模型會判讀錯誤。",
+    "Figure 5：在訓練資料充足的 slot-value 上，GLAD 與兩個共享變體沒有顯著差異，增益集中在稀有值。",
+    "DSTC2 的 ASR 輸出經常漏字，需要 word dropout（0.3）補救；WoZ 上 word dropout 沒有幫助。",
+    "只保留 local 模組並不影響 request 追蹤，也就是 global-local 共享主要幫到的是 goal，不是 request。"
+  ],
+  "limitations_observed": [
+    "受限於固定本體的逐值二元分類：每輪要對本體中每個 slot-value 各做一次編碼與打分，成本隨值的數量線性成長，而且本體外的值完全無法預測。這在單一領域、本體與 DSTC2 相同的 WoZ 上看不出來；後續 TRADE（1905.08743）Table 2 把 GLAD 搬到多領域 MultiWOZ，還得先補出完整本體並改掉它的手工規則，joint 只剩 35.57%（僅餐廳領域 53.23%），與 WoZ 上的 88.1% 差距很大。",
+    "論文的核心元件是槽專屬的 local LSTM，但後續 GCE（1812.00899）依 TRADE 的描述是拿掉槽專屬 RNN 的簡化加速版（並非完全等同本文「只留 global」的變體），而依 TRADE Table 2 的數字，它在 MultiWOZ 上反而略高於 GLAD（joint 36.27% 對 35.57%，僅餐廳領域 60.93% 對 53.23%）。這至少說明本文 Table 2 中「拿掉 local 掉 2.2 點 joint」的結論不一定能外推，local 模組的價值可能綁在 WoZ 這種小資料、單領域的設定上。",
+    "Table 1 的比較不對等：GLAD 是 10 個種子的平均±標準差，基線數字則是直接抄各自論文的單一數值，沒有重跑也沒有顯著性檢定；DSTC2 上 +1.1 的 joint 增益在不知道 NBT 變異的情況下說服力有限，但作者在 WoZ 上仍用了 significantly 一詞。Table 2 的消融只在 dev 上、看起來是單次執行、沒有標準差，其中 “- self-attn” 的 request 97.1 對 97.3 這種差距落在雜訊範圍內。",
+    "embedding 是混淆因子：GLAD 用 GloVe＋字元 n-gram embedding，NBT 用以 paraphrase 資料庫特化的 embedding，兩者的差異沒有被消融（沒有拿掉字元 n-gram 的實驗），所以 Table 1 對 NBT 的增益有多少來自 global-local 架構、多少來自詞向量，論文沒有分開。內部消融雖固定了 embedding，但只對自己的變體。",
+    "「改善稀有值追蹤」的主張證據偏弱：引言用 38.6% 的輪次含稀有值當動機，但沒有報告這些輪次上的 joint accuracy，也沒有拿 NBT 做依頻率分組的比較；Figure 5 只有圖、沒有數字，比較對象只是兩個內部共享變體。",
+    "Table 3 的正文與圖表標記互相矛盾：依表格圖例，「−」是模型漏掉的真值、「+」是模型多出的預測，所以模型其實沒有輸出 food=dontcare，而是輸出 request(food)；正文卻說模型把沒回答判成不在乎食物，兩者方向相反。而且使用者原話是在問有哪些食物類型，request(food) 反而貼近字面，這暗示 WoZ 的標註慣例本身有爭議，88% 附近的 joint accuracy 差距可能有一部分反映的是標註慣例而非理解能力。",
+    "狀態更新只有「同槽覆寫」一條規則，而且輸入只看前一輪系統動作：沒有刪除或撤銷限制的機制、沒有機會回頭修正早期輪次的錯誤預測（錯的值會一直留在 joint goal 裡直到被覆寫），也沒有維持機率分布式的 belief，只用硬決策累加。對需要多輪修正與不確定性的 LLM agent 狀態維護來說，這個狀態模型太薄。",
+    "DSTC2 的 N-best 融合是把每條 ASR 假設 sigmoid 之前的分數直接相加，沒有用 ASR 信心值加權；N-best 條數不同時，分數尺度也跟著變，等於用假設數量改變了決策門檻。訓練用人工轉寫、測試用 ASR 的落差也只靠 word dropout 補，沒有分析這個設計的影響。",
+    "系統動作注意力只以話語摘要 c^utt 當查詢、不看候選值：當前一輪系統同時提出多個動作時，注意力分配與正在判斷的 slot-value 無關，要靠之後與 c^val 的內積過濾。論文沒有分析多動作情境下的錯誤。"
+  ],
+  "framework_role": "T2 傳統任務型對話 DST 的代表性基線之一，屬於 NBT 之後、TRADE 之前「固定本體＋逐 slot-value 二元分類」這一派的高點。對框架的價值有三：一是給出清楚的狀態表示與更新規則（turn goal／turn request＋同槽覆寫累加成 joint goal），說明 joint goal accuracy 為什麼會把逐輪錯誤累積放大；二是用跨槽共享參數處理長尾 slot-value 的做法；三是把前一輪系統動作當作解讀使用者簡短回覆（如「yes」）的依據，並加上 sentinel 讓模型可選擇忽略系統動作，這對 agent 如何用自己上一輪的行動來更新狀態有直接參考價值。turn request 的偵測與 T1 的意圖／對話行為偵測有重疊。它不處理 LLM 時代的長多輪記憶或指令保持，也沒有跨領域能力，在框架中主要作為歷史基線與指標定義的來源。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文只在引言以 Amazon Alexa、Apple Siri、Google Assistant 作為任務型對話的動機，沒有描述任何部署或產品。作者來自 Salesforce Research 並公開程式碼（https://github.com/salesforce/glad），但以 WebSearch 查詢未找到 Salesforce 官方文件或產品頁說明使用 GLAD。後續被 TRADE 等論文當作基線屬於學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/salesforce/glad",
+    "data": "WoZ 2.0 與 DSTC2 皆為公開資料集；作者附 Docker 映像。官方 README 只描述 WoZ 的資料目錄與前處理流程，DSTC2 則是 Nikola Mrkšić 提供的前處理版本（見致謝），程式碼庫中未見 DSTC2 的處理說明，DSTC2 結果較難照原樣重現。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "ACL 2018、Semantic Scholar 196 次引用（37 次 influential）的經典 DST 基線，joint goal 的定義、跨槽共享與利用前輪系統動作的做法值得知道，但它綁死在固定本體、單領域與規則式累加，後續 TRADE 已顯示它在 MultiWOZ 上掉到 35.57%，對 LLM 時代的狀態維護只有歷史與概念參考價值，不到必讀。",
+  "related": ["1606.03777", "1604.04562", "1506.07190", "1507.03471", "1611.01587"],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

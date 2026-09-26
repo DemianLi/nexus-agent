@@ -1,0 +1,154 @@
+{
+  "id": "2506.18824",
+  "title": "Understanding Software Engineering Agents: A Study of Thought-Action-Result Trajectories",
+  "topic": "T4",
+  "subarea": "軌跡分析、失敗分類與歸因",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把 RepairAgent、AutoCodeRover、OpenHands 三個程式修復／issue 解決 agent 的異質日誌統一成 thought–action–result 三元組序列，抽樣 120 條軌跡（2,822 次迭代），用軌跡統計、8 類動作分類加 4-gram 序列探勘，以及對約 14K 對相鄰軌跡元件做開放編碼的語意關係標註，比較成功與失敗軌跡，歸納出除錯反模式並公開標註資料。",
+  "problem": "LLM 軟體工程 agent 會自主思考、呼叫工具、依結果迭代，已被廣泛使用，但它們如何得到解答、為何在某些任務上失敗，大多仍不透明。agent 雖然留下詳細日誌（作者稱為軌跡），卻沒有一套系統化研究軌跡的方法論：不同框架的日誌格式各異，也沒有共同的動作詞彙與標註方式。缺少這些，開發者就難以找出工具使用與推理上的共通陷阱，也沒有依據去設計提示策略、失敗診斷與反模式偵測。",
+  "core_idea": "把 agent 的一次執行當成可分析的資料物件：先定義跨框架的最小統一表示——軌跡是 (thought, action, result) 三元組的序列——再從三個層次分析，並以「成功 vs 失敗」當橫切比較軸。(1) 軌跡層級：長度與 token 成本的分布。(2) 動作層級：把各框架五花八門的工具呼叫歸到 8 類開發者除錯活動，看動作隨任務進度的分布，並用 4-gram 探勘成功與失敗軌跡中常見的動作序列，歸納反模式。(3) 語意連貫層級：用開放編碼為五種相鄰元件對（thought→action、thought→thought、action→action、result→thought、result→action）建立 18 個關係標籤，量化 agent 是否照想法行動、是否把結果納入下一步。",
+  "method": {
+    "資料收集": "不重跑 agent，直接取三個 agent 原始評估留下的日誌。RepairAgent：在 Defects4J 835 個 bug 上的評估軌跡，只取主軌跡、忽略 mutation 子軌跡。AutoCodeRover：v1 在 SWE-bench Lite 300 題上的軌跡；原作者跑三次取平均，本文只取第一次（後續版本的軌跡拿不到）。OpenHands：CodeAct 版在 SWE-bench Lite 300 題上的軌跡。每個 agent 隨機抽 40 條；因三者平均成功率約 27%，每個 agent 按比例抽約 10 條成功軌跡。合計 120 條軌跡、2,822 次迭代。",
+    "統一表示（Definition 1）": "軌跡 T = [(t_1,a_1,r_1), …, (t_n,a_n,r_n)]。thought t_i：LLM 的自然語言推理（診斷、程式行為解釋、修補提案）；action a_i：對外部操作的一次呼叫（編輯程式碼、跑測試或其他工具）；result r_i：a_i 的回應（編譯輸出、測試結果、執行追蹤、錯誤日誌）。",
+    "解析器": "RepairAgent 與 OpenHands 的日誌是結構化 JSON，推理、動作、結果分開存放，但兩者 schema 不同，各寫一支專屬 parser。AutoCodeRover 是半結構化輸出，用啟發式切分：以工具名稱偵測工具呼叫，把呼叫前的推理文字當 thought，呼叫結果另存為一個文字項當 result。公開 repo 的 parsers/ 有 autocoderover.py、openhands.py、repairagent.py、trajectory.py、serialize.py。",
+    "RQ1 指標": "長度 = |T|，也就是迭代數（RepairAgent 上限 40 步、OpenHands 上限 100 步）。成本 = Σ_i [tokens(t_i) + tokens(a_i) + tokens(input_i)]，其中 input_i 是第 i 次迭代送進 LLM 的完整輸入提示（已包含 r_i）。成功 = 二元標籤，沿用各 agent 原始評估：AutoCodeRover 與 OpenHands 看產生的 patch 是否過了 SWE-bench 的測試；RepairAgent 要求 patch 讓 Defects4J 測試全過（plausible），且人工確認與開發者 patch 相同或語意等價（correct）。呈現方式是成功／失敗分組的分布圖與平均、中位數，沒有做統計檢定。",
+    "RQ2 動作分類": "8 類，對應開發者除錯時的常見活動（引 Zeller《Why Programs Fail》）：Explore（列目錄、瀏覽、讀檔以取得脈絡）、Locate（找出與 bug 相關的程式區域）、Search（用搜尋工具找符號、樣式或正規表示式）、Reproduce（寫測試確認 bug 存在）、Generate fix（提出或寫入修改）、Run tests（執行測試以驗證修補或驗證測試本身）、Refactor（最佳化、重排、加註解）、Explain（用自然語言解釋或總結問題、修補）。流程：先把已知工具名自動對應到類別（例如搜尋工具→Search）；對應不到的（例如任意 terminal 指令）由第一作者人工標註，模稜兩可的由兩位作者討論決定。8.3% 的動作無法歸類（RepairAgent 的內部狀態轉換、AutoCodeRover 無法解析的 LLM 建議動作），從後續分析中排除。",
+    "RQ2 進度正規化": "把迭代 i ∈ [1..N] 換算成任務進度百分比，畫出每個進度區間各類動作所佔比例的堆疊分布圖（Fig. 4(b)–(d)）；失敗軌跡中的 ErrorResponse 事件不畫進圖裡。",
+    "RQ2 序列探勘": "每條軌跡轉成動作類別標籤序列，用一支輕量 Python 腳本抽固定長度 n-gram 並計頻。n 要夠大以避開瑣碎短序列、又要夠小以保留多樣性與可讀性；n ∈ {4,5,6} 都可行，本文用 n = 4。對每個 agent 取最常見的 4-gram，比較它們在成功與失敗軌跡中的相對頻率，標出在失敗軌跡中過度出現的樣式，以及罕見、異常、可能代表非標準流程的 4-gram。沒有設定支持度門檻或顯著性檢定；結果只以圖呈現（Fig. 5–7，各 agent 前 11／12／11 個序列）。",
+    "RQ3 語意關係標註": "採開放編碼（Corbin 的 grounded theory 做法）：不預設標籤，邊看軌跡邊浮現、收斂。最後得到五種相鄰關係、共 18 個標籤（Table I）。thought_i→action_i（同一迭代）：Alignment／Misalignment。thought_i→thought_{i+1}：Follow-up／Refinement（補上更具體的細節）／Redundancy（無新洞見的重複，語意或字面皆算）／Divergence（轉向另一方向）／Contradiction（與前一個想法矛盾）。action_i→action_{i+1}：Follow-up／Refinement／Repetition（以相同參數原樣重做）／Divergence。result_i→thought_{i+1}：Follow-up／Refinement／No influence／Misinterpretation（誤讀結果，例如錯誤輸出後說 bug 已修好）。result_i→action_{i+1}：Informative（結果中的資訊被用進下一個動作的參數）／Triggering（結果直接觸發某個動作，例如修好後結束任務）／No influence。刻意只標相鄰兩步，長距離相依因不易系統標註而不在範圍內。",
+    "標註規模與品質控管": "120 條軌跡共約 14K 對元件。初標由第一作者全職做了五個月；兩位作者共同討論標籤集、解決困難案例、交叉驗證個別標註；主標註者定期回頭檢查早先的標註以維持一致，並重新調查異常數字（例如某個 agent 的 misalignment 偏高）。全文沒有報告任何標註者一致性統計量。",
+    "彙整方式": "Table II 以 agent 為單位，把所有軌跡的元件對合併後計算各標籤百分比，再分成功與失敗兩列；是按對合併（pooled），不是先算每條軌跡再平均。",
+    "公開資料格式（repo）": "每個 agent 一個資料夾：actions_categories/ 每條軌跡一份 CSV（欄位 iteration,category）；action_action/、thought_action/、thought_thought/、result_action/、result_thought/ 各 40 份 CSV，每一列是一對元件的 label，沒有標註理由或原文。",
+    "照著重做的步驟": "(1) 為自家 agent 框架寫 parser，把日誌轉成 (thought, action, result) 列；(2) 建工具名→8 類的對應表，對應不到的人工補標；(3) 把每條軌跡轉成類別序列，分成功／失敗計算 4-gram 頻率並比較；(4) 依 Table I 的 18 個標籤定義，逐對標註相鄰元件；(5) 以 agent × 成功／失敗彙整各標籤百分比，檢查 Misalignment、Repetition、Redundancy、No influence 等在失敗組是否偏高。要自動化的話，第 (4) 步可改由 LLM 依相同定義標註，但本文沒有做也沒有驗證這一點。"
+  },
+  "assumptions": [
+    "各框架的日誌可以乾淨地切成 thought、action、result；AutoCodeRover 半結構化輸出靠工具名稱的啟發式切分是正確的。",
+    "各 agent 原始評估給的成功標籤可以當成 ground truth，而且三個 agent 的「成功」可以放在一起比較（實際上 RepairAgent 要求人工判定 correct，另外兩個只看測試）。",
+    "每個 agent 隨機抽 40 條、其中約 10 條成功，足以代表該 agent 的行為分布。",
+    "8 類開發者除錯活動可以涵蓋 agent 的絕大多數動作（實測有 8.3% 例外，被排除）。",
+    "相鄰兩步（同一迭代或 i→i+1）的語意關係足以捕捉最主要的連貫性問題，長距離相依可以略過。",
+    "單一主標註者加上兩位作者協商的主觀標註，一致性足夠高。",
+    "成功組與失敗組之間的比例差，可以當作改進 agent 設計的依據（作者自己承認這只是關聯、不是因果）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Defects4J（RepairAgent 原始評估的既有軌跡，原評估 835 個 bug；本文只抽 40 條，不重跑）",
+      "SWE-bench Lite（AutoCodeRover v1 第一次 run 與 OpenHands CodeAct 的既有軌跡，各抽 40 條，不重跑）"
+    ],
+    "metrics": [
+      "軌跡長度（迭代數）",
+      "軌跡成本（token 數：thought＋action＋每次迭代的完整輸入提示）",
+      "成功（沿用原評估的二元標籤）",
+      "8 類動作的整體頻率，以及依正規化任務進度的分布",
+      "4-gram 動作序列在成功與失敗軌跡中的相對頻率",
+      "五種相鄰關係、18 個標籤的百分比（Table II，分成功／失敗）"
+    ],
+    "baselines": ["無（實證研究，不提出新方法）；比較軸是成功 vs 失敗軌跡，以及三個 agent 之間"]
+  },
+  "key_results": [
+    {
+      "claim": "以測試驅動的 agent（RepairAgent、OpenHands）失敗軌跡明顯較長，反映在困難任務上持續嘗試直到預算用完；AutoCodeRover 的檢索—定位—修補流程短得多，成功與失敗的平均長度相近，但失敗的變異較大。",
+      "numbers": "平均長度：RepairAgent 34、OpenHands 29、AutoCodeRover 6（中位數 N=5）；RepairAgent 失敗 40 vs 成功 22；OpenHands 趨勢相同但較不明顯，有些失敗軌跡撞到 100 步上限；AutoCodeRover 失敗的離群值多半來自 Response Parse Error 等內部錯誤",
+      "section": "§III-A、Fig. 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "三個 agent 的 token 成本差了一到兩個數量級；RepairAgent 失敗軌跡用的 token 較多，OpenHands 則相反，成功軌跡的輸入 token 比失敗的多、輸出相近。",
+      "numbers": "每條軌跡累計 token：AutoCodeRover 平均 23K（中位數 14K）、RepairAgent 平均 220K（中位數 180K）、OpenHands 平均約 1.2M（中位數 900K），約為 AutoCodeRover 的 52 倍",
+      "section": "§III-A、Fig. 3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "動作以修補、測試、搜尋、探索為主，但三個 agent 的組成與時序不同：OpenHands 特別強調寫重現測試；AutoCodeRover 主流程不含 Reproduce 與 Run tests；各 agent 都是前段偏探索、後段偏修補與測試。",
+      "numbers": "全體動作：Generate Fix 23%、Run tests 19%、Search 15%、Explore 14%。進度分布：RepairAgent 前 20% 約一半是修補＋跑測試，20%–100% 約 70%；OpenHands 前 20% 約 50% 為 Explore＋Search，最後 20% 約 75% 為修補、重現、跑測試；AutoCodeRover 前 50% 以 Search、Locate、Explain 為主，後半為 Locate（30%）與 Generate Fix（20%）",
+      "section": "§III-B1–B2、Fig. 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "成功軌跡的常見 4-gram 在探索、解釋、修補、驗證之間平衡交錯；失敗軌跡則多是重複、不隨結果調整的循環。",
+      "numbers": "RepairAgent 失敗軌跡中常見反覆的 Generate Fix–Run Tests 循環；OpenHands 失敗軌跡多連續的探索／搜尋，或沒有穿插其他動作的反覆測試與修補；AutoCodeRover 成功序列集中在 Explain、Explore 之後接 Generate Fix。只有 Fig. 5–7 的長條圖，內文沒有給頻率數值",
+      "section": "§III-B3、Fig. 5–7",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "歸納出三個除錯反模式：重複相同動作卻不處理結果、連續產生修補卻不測試、沒有適當測試驗證就結束任務；作者建議 agent 設計中加入反模式與 trajectory smell 的檢查。",
+      "numbers": "只有定性歸納，沒有量化出現頻率。重複搜尋三個 agent 都有；不測就連續修補主要見於 OpenHands 與 AutoCodeRover（RepairAgent 強制修補後測試）；AutoCodeRover 設計上不測試，OpenHands 有時產生重現測試卻不確認它能揭露 bug",
+      "section": "§III-B3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "thought 與 action 不一致（Misalignment）很少見；作者稱它與失敗緊密相關，單一次就可能大幅拉長軌跡或導致失敗，因此建議以自我反思、critique 或推理模型驗證動作是否對齊想法。但自己的 Table II 在 RepairAgent 上方向相反，內文沒有討論。",
+      "numbers": "Misalignment：OpenHands 成功 0.5% vs 失敗 1.4%；AutoCodeRover 成功 0% vs 失敗 4.8%；OpenHands 中至少含一次 misalignment 的軌跡，失敗者平均 2.7 次、成功者 1 次。個案 Compress_13：第 5 步想精修卻送出空修補，讓第 6 步已可得的正確 patch 拖到第 38 步。反例：RepairAgent 成功 2.3% vs 失敗 1.3%",
+      "section": "§III-C1、Table II",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "連續重複同一動作在失敗軌跡中高出數倍；相對地，動作層的 Divergence（在階段之間轉換）在成功軌跡中較高；RepairAgent 的冗餘想法也集中在失敗軌跡。",
+      "numbers": "Action–Action Repetition 成功 vs 失敗：RepairAgent 6.1% vs 13.6%、OpenHands 0.5% vs 3.8%、AutoCodeRover 0.0% vs 8.8%；Action Divergence：23.3 vs 20.0、28.6 vs 24.9、26.8 vs 23.4；Thought Redundancy（RepairAgent）：6.9% vs 14.7%；Thought Contradiction 只在 RepairAgent（GPT-3.5）明顯，整體 1.4%，其他兩者約 0",
+      "section": "§III-C2–C3、Table II",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "失敗軌跡中，結果對下一個動作「沒有影響」的比例較高，也就是 agent 拿到結果卻沒有用上；作者另稱成功軌跡有較高比例的 Triggering，但這一句不被自己的表支持。",
+      "numbers": "Result–Action No influence 成功 vs 失敗：RepairAgent 1.2% vs 6.2%、AutoCodeRover 4.9% vs 14.6%、OpenHands 2.8% vs 4.2%；Informative（RepairAgent）41.2% vs 22.5%。Triggering：RepairAgent 成功 57.6% vs 失敗 71.3%（反向），OpenHands 67.6% vs 66.7%、AutoCodeRover 51.2% vs 48.2%（差距不到 3 個百分點）",
+      "section": "§III-C4、Table II",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "標註與分類有主觀性，只做了部分的標註者一致性檢查。",
+    "只研究三個修 bug 類 agent，無法涵蓋所有軟體開發任務或真實部署情境；能否推廣到程式碼生成、測試等其他任務仍待研究。",
+    "三個 agent 使用不同的模型，確保了多樣性，但讓公平比較變得困難。",
+    "抽樣的軌跡可能沒有涵蓋完整的行為變異，罕見但重要的樣式可能被漏掉；建議擴大資料集並採用自動化樣式偵測。",
+    "相關性與序列探勘只揭露趨勢與關聯，無法建立行為與任務成功之間的因果。",
+    "只標相鄰元件的關係；長距離相依雖有資訊量，但難以系統化標註與解讀，因此不在範圍內（§II-F）。",
+    "AutoCodeRover 只用 v1 的軌跡，後續版本的軌跡拿不到（§II-A）。",
+    "thought–action 不一致雖然少見，但與所用模型有關（§III-C1）。",
+    "RepairAgent 使用的 GPT-3.5 常犯瑣碎錯誤，thought 之間的 Contradiction 因此在它身上最多（§III-C2）。"
+  ],
+  "limitations_observed": [
+    "頭條主張被自己的 Table II 部分推翻：摘要與引言把「即使少見的 thought–action 不一致也與失敗強相關」寫成通則，但 §III-C1 只舉 OpenHands（0.5% vs 1.4%）與 AutoCodeRover（0% vs 4.8%）；RepairAgent 方向相反（成功 2.3% vs 失敗 1.3%），RepairAgent 的 result→thought Misinterpretation 也是成功組較高（4.8% vs 3.4%），內文完全沒有討論這些反例。",
+    "「成功軌跡有較高比例的 Triggering」一句與表格不符：RepairAgent 失敗 71.3% 反而高於成功 57.6%，OpenHands（67.6 vs 66.7）與 AutoCodeRover（51.2 vs 48.2）的差距都不到 3 個百分點。",
+    "樣本太小又沒有不確定性估計：每個 agent 只有約 10 條成功軌跡；AutoCodeRover 軌跡中位數約 5 步，10 條成功軌跡的 thought–action 對大概只有幾十對，「0.0% misalignment」「0.0% repetition」這類數字沒有鑑別力。全文沒有信賴區間、顯著性檢定或效果量，4-gram 比較也沒有支持度門檻，結果只在圖上、內文沒有數值。",
+    "軌跡長度是沒有控制的干擾因子：Table II 是把所有元件對合併後算百分比，失敗軌跡較長（RepairAgent 40 vs 22，OpenHands 有撞到 100 步上限的），所以整體列被失敗軌跡加權；而 Repetition、Redundancy 偏高很可能只是預算耗盡前原地打轉的副產品，是失敗的結果而不是原因。作者沒有做按軌跡平均、長度配對或只看前 k 步的分析，無法分辨這兩種解讀。",
+    "成功的定義跨 agent 不一致：RepairAgent 要求人工判定語意等價（correct），另外兩個只要過了 SWE-bench 的測試。RepairAgent 的「失敗」因此可能混入 plausible 但不 correct 的 patch，其行為型態與真正沒修好的軌跡不同，卻被併在同一組。",
+    "跨 agent 差異無法歸因到架構：任務不同（Defects4J 的 Java 單一 bug vs SWE-bench Lite 的 Python issue），模型也不同——全文只寫明 RepairAgent 用 GPT-3.5，AutoCodeRover 與 OpenHands 這批軌跡用哪個模型沒有寫明。但 §I 的第四點發現仍把差異歸因於 state machine、test-driven、streamlined 三種架構。",
+    "標註可靠度沒有數字：§IV 說有部分標註者一致性檢查，但全文沒有 kappa 或一致率；約 14K 對主要由單人標了五個月。公開的 CSV 只有 label、沒有理由或對應原文，外部無法稽核爭議案例，也難以拿來訓練或校準自動標註器。",
+    "把失敗訊號排除在分析之外：8.3% 無法歸類的動作（包含 AutoCodeRover 無法解析的 LLM 建議動作）被丟掉，Fig. 4 也省略 ErrorResponse 事件；但 §III-A 自己指出 AutoCodeRover 失敗的變異主要來自 Response Parse Error，RQ2 的動作分析因此看不到這個 agent 最主要的失敗機制。",
+    "與 T4「歸因」需求有落差：本文只做分布層級的成功／失敗比較，除了 Compress_13、Cli_11、Django-10924 幾個個案外，沒有替每條失敗軌跡標出決定性錯誤步驟，也沒有把關係標籤與最終失敗做步驟層級的連結。它建議的 n-gram／滑動視窗重複偵測與 thought–action 對齊驗證都沒有實作，更沒有 precision／recall，不能直接當成可用的異常偵測器。",
+    "相鄰對的設計會低估迴圈：Repetition 定義為連續兩步、參數相同；A–B–A–B 這類週期大於 1 的震盪，或隔幾步再重跑同一個測試，都不會被標成 Repetition，只能靠 4-gram 部分捕捉。",
+    "token 成本把每次迭代的完整輸入都算進去，對會累積上下文的 agent 與只送局部上下文的 agent 不可直接比較；「OpenHands 成功軌跡輸入 token 較多，代表輸入上下文有助成功」是沒有對照的推測——成功軌跡步數較少、輸入卻較多，也可能只是各 issue 所在程式庫與檔案大小不同。",
+    "時效性：研究對象是 GPT-3.5 世代的 RepairAgent 與 AutoCodeRover v1 等較早版本；作者自己也提到新推理模型已內建自我反思，contradiction、misalignment 等比例外推到現今模型的效度有限。"
+  ],
+  "framework_role": "T4「軌跡分析、失敗分類」的實證研究代表作，提供三樣可直接沿用的東西。(1) 格式：跨框架的最小統一表示——(thought, action, result) 三元組序列——並示範如何把結構化 JSON 與半結構化文字兩種異質日誌正規化成它。(2) 分類：兩層 taxonomy。動作層是 8 類除錯活動加 3 個反模式；語意層是五種相鄰關係、18 個標籤（Misalignment、Redundancy、Contradiction、Repetition、Misinterpretation、No influence 等），可以直接當軌跡標註 schema，或當 LLM-as-judge 的標籤集。(3) 資料：公開 120 條人工標註軌跡與各標籤在成功／失敗組的基線比例。它不做步驟層級的錯誤歸因、不做 process reward、也沒有自動偵測。在框架裡，它的定位是 E3（T4→T5）要偵測的「異常」的定義來源：重複動作、未測即結束、結果被忽略、想法與動作不一致，都在這裡被命名並給了比例；但這條資料流本身在論文裡沒有被實作或驗證。對 T7 也有間接貢獻：作者建議把動作分布（頻率與出現時機）當作評估 agent 品質的次要指標，或拿來與人類專家的軌跡比較。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。Semantic Scholar 查得 85 次引用（influential 7，約每年 38 次），屬學術影響力，不算採納；未查到任何產品、官方文件或 model card 採用本文的標註 schema、反模式清單或解析器。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/sola-st/llm-agents-study",
+    "data": "公開（MIT）。2026-09-26 以 GitHub API 查核 HEAD 的檔案樹：有 parsers/（三個 agent 的解析器）、trajectories/（解析後的軌跡文字檔，RepairAgent 300 個、OpenHands 200 個、AutoCodeRover 200 個檔）、每個 agent 6 類標註 CSV 各 40 份（actions_categories 為 iteration,category；五種關係的 CSV 每列只有 label，沒有理由）、rq1/ 的長度與 token 資料加一支 violin 圖腳本，以及 rq2_stats/ 的圖與 unique 4-gram 清單。但 README 使用說明引用的 stats/*.py（actions_bars.py、stacked_histogram.py、top_sequences.py、global_stats_*.py）不在檔案樹中，relationships_ra.sh 等三支 shell 腳本逐一呼叫的 stats/global_stats_*.py 因此不存在、跑不起來；RQ2 的 4-gram 比較與 Table II 要自己從 CSV 重寫彙整才能重算。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "提供可沿用的相鄰關係標註 schema 與公開的 120 條標註軌跡，是單一 agent 軌跡失敗分類的實用參考；但只做分布比較、不做步驟歸因，樣本小且沒有不確定性估計，頭條的 misalignment 與 triggering 主張又被自己 Table II 的 RepairAgent 數字部分推翻，所以值得參考但非必讀。",
+  "related": [
+    "2403.17134",
+    "2404.05427",
+    "2407.16741",
+    "2310.06770",
+    "2501.07531",
+    "2408.02232",
+    "2305.11738",
+    "2401.13178",
+    "2503.02068",
+    "2410.07706",
+    "2403.02502"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

@@ -1,0 +1,137 @@
+{
+  "id": "1809.00385",
+  "title": "Zero-shot User Intent Detection via Capsule Neural Networks",
+  "topic": "T1",
+  "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出以 capsule 網路做意圖分類的 IntentCapsNet，並把測試語句對既有意圖的路由投票，依意圖標籤名稱的詞向量相似度轉移給沒有任何標註語句的新意圖（IntentCapsNet-ZSL），在 SNIPS-NLU 與一個商用中文語音助理語料上做 zero-shot 意圖偵測。",
+  "problem": "語音助理持續新增技能，新意圖上線時沒有標註語句；監督式分類器只能分辨訓練時見過的意圖，為新意圖標註並重訓整個模型成本高。既有的 zero-shot 意圖方法不是依賴額外的標籤本體或人工定義的意圖屬性（需要額外標註），就是直接學一個語句到意圖的相容性映射（DeViSE、CDSSM、Zero-shot DNN 一類），而使用者表達方式多樣時，這個映射很難學好。",
+  "core_idea": "把語句拆成多個由 self-attention head 萃取的語意特徵向量（SemanticCaps），再用 capsule 的 dynamic routing-by-agreement 把特徵動態分配、聚合成每個意圖的 activation vector（DetectionCaps；向量長度代表該意圖存在的機率）。對新意圖不訓練任何參數：沿用測試語句對既有意圖跑出的路由係數與預測向量（合稱 vote vectors），依「新意圖標籤詞向量」與「既有意圖標籤詞向量」的相似度加權混合，當成新意圖的預測向量，再跑一次 dynamic routing，取 activation 向量長度最大者為預測。",
+  "method": {
+    "input_output": "輸入為已斷詞的語句 x=(w_1..w_T)，每個詞以預訓練 skip-gram 詞向量表示（維度 D_W）；輸出為一個意圖標籤。訓練資料只含 K 個既有意圖 Y；推論時對 L 個新意圖 Z 分類，Y 與 Z 不相交。",
+    "semantic_caps": "雙向 LSTM（每個方向 D_H 個隱藏單元），前後向隱藏狀態串接得 H∈R^{T×2D_H}。多頭 self-attention：A=softmax(W_s2·tanh(W_s1·H^T))，W_s1∈R^{D_A×2D_H}、W_s2∈R^{R×D_A}，softmax 沿詞的維度（每個 head 對所有詞的權重和為 1）。M=A·H 得到 R 個 2D_H 維的語意向量 m_r，即 Lin et al. 2017 的 structured self-attentive sentence embedding，每一列當作一顆低層 capsule。",
+    "detection_caps": "對每個既有意圖 k 與每個語意特徵 r，用各自獨立的矩陣 W_{k,r}∈R^{2D_H×D_P} 算預測向量 p_{k|r}=m_r·W_{k,r}。接著跑 Algorithm 1（Sabour et al. 2017 的 dynamic routing）：b_kr 初始為 0；重複 iter 次：c_r=softmax(b_r)（對意圖 k 做 softmax，每個語意特徵把總量 1 分給各意圖）、s_k=Σ_r c_kr·p_{k|r}、v_k=squash(s_k)=(‖s_k‖²/(1+‖s_k‖²))·s_k/‖s_k‖、b_kr ← b_kr + p_{k|r}·v_k。‖v_k‖ 當作意圖 k 的機率，既有意圖推論取 argmax_k ‖v_k‖。",
+    "training_objective": "margin loss：對正確意圖加 max(0, m+ − ‖v_k‖)²，對其他意圖加 λ·max(0, ‖v_k‖ − m−)²；另加正則項 α·‖A·A^T − I‖_F²，促使各 attention head 注意語句的不同部位。m+=0.9、m−=0.1、λ=0.5，Adam 最佳化。只在既有意圖上訓練，新意圖路徑沒有可訓練參數。",
+    "zero_shot_inference": [
+      "(1) 用訓練好的 SemanticCaps 萃取測試語句的 m_r。",
+      "(2) 先對 K 個既有意圖跑 Algorithm 1，取最後一輪的 c_kr 與 p_{k|r}，組成 vote vector g_{k,r}=c_kr·p_{k|r}。",
+      "(3) 意圖嵌入 e：由標籤名稱中各詞的詞向量組成，§3.3 寫相加、§4 寫平均，兩處不一致；標籤是 CamelCase（AddToPlaylist），須先切成詞。D_I=D_W。",
+      "(4) 相似度矩陣 Q∈R^{L×K}：q_lk=softmax_k(−d(e_{z_l}, e_{y_k}))，d 為 Σ=σ²I 的 Mahalanobis 距離，也就是對 −‖e_z − e_y‖²/σ² 做 softmax。Q 只取決於標籤名稱，與語句無關，可預先算好。",
+      "(5) 新意圖的預測向量 u_{l|r}=Σ_k q_lk·g_{k,r}。",
+      "(6) 把 u_{l|r} 當預測向量，對 L 個新意圖再跑一次 Algorithm 1 得 activation 向量 n_l。轉出的原文在此處寫成把 n_l 餵進 Algorithm 1，依上下文只可能是 u_{l|r}。",
+      "(7) 預測 ẑ=argmax_{z_l∈Z} ‖n_l‖；只在新意圖集合上取 argmax，沒有「都不是」的選項。"
+    ],
+    "hyperparameters": "SNIPS-NLU：D_W=300、D_H=32、D_A=20、R=3、σ=4、α=0.0001，另加輸入 dropout（keep rate 0.8）。CVA：D_W=200、D_H=200、D_A=100、R=8、σ=1、α=0.01。兩者共用 D_P=10、iter=3、λ=0.5、m+=0.9、m−=0.1、Adam。超參數以三折交叉驗證選擇（σ 如何選沒有說明）。",
+    "baselines_setup": "既有意圖：TF-IDF＋LR／SVM、CNN（Kim 2014）、RNN／GRU／LSTM／Bi-LSTM（取最後隱藏狀態分類）、Self-attention Bi-LSTM（Lin et al. 2017）。zero-shot：DeViSE（線性相容函數）、CMT（非線性相容函數；兩者原為影像 ZSL，改用 LSTM 編碼語句）、CDSSM（字元級 CNN，語句與標籤共用編碼器）、Zero-shot DNN（語句與標籤分開的編碼器）。baseline 的超參數如何調整沒有交代。",
+    "code": "官方實作為 TensorFlow 1.6／Python 2.7，只附 SNIPS-NLU 實驗。"
+  },
+  "assumptions": [
+    "每則語句只有一個意圖；多意圖語句須先用 CRF 之類的序列標註切成單意圖片段（作者留作未來工作）。",
+    "新意圖的標籤名稱是有意義的自然語言詞，而且其詞向量的鄰近關係能反映意圖語意的相近（例如 AddToPlaylist 靠近 PlayMusic 而非 GetWeather）。",
+    "新意圖可以表示成既有意圖 vote vectors 的凸組合（q_l 是 softmax，權重非負且和為 1）；與所有既有意圖都不像的全新領域無從表示。",
+    "推論時已經知道語句屬於新意圖集合 Z（argmax 只在 Z 上取），評估的是傳統 ZSL，不是既有與新意圖混合的 generalized ZSL。",
+    "在既有意圖上學到的 attention head 萃取行為（例如專看「動作」詞的 head）能遷移到新意圖的語句上。",
+    "有涵蓋語句與標籤用詞的預訓練詞向量。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "SNIPS-NLU：英文、群眾外包，13,802 句，詞彙 10,896，平均句長 9.05；切成 5 個既有意圖＋2 個新意圖（依表 6，新意圖為 AddToPlaylist 與 RateBook）",
+      "CVA：中文、取自商用手機語音助理的匿名語料，9,992 句，詞彙 1,709，平均句長 4（單位未說明）；80 個既有意圖＋20 個新意圖；未公開"
+    ],
+    "metrics": [
+      "Accuracy",
+      "Precision、Recall、F1（皆為依各類樣本數加權的平均；加權 Recall 在定義上等於 Accuracy）",
+      "質性分析：t-SNE 視覺化新意圖 activation 向量方向、attention 案例（表 5、表 6）、新意圖準確率對相似度分布變異數的散佈圖"
+    ],
+    "baselines": [
+      "既有意圖：TFIDF-LR、TFIDF-SVM、CNN、RNN、GRU、LSTM、Bi-LSTM、Self-attention Bi-LSTM",
+      "zero-shot：DeViSE、CMT、CDSSM、Zero-shot DNN",
+      "消融：IntentCapsNet-ZSL w/o Self-attention、w/o Bi-LSTM、w/o Regularizer"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "IntentCapsNet 在既有意圖分類上優於所有 baseline；CVA 上差距大，SNIPS-NLU 上差距很小。",
+      "numbers": "CVA（80 個意圖）：Accuracy 0.9088 vs 最佳 baseline Self-attention Bi-LSTM 0.8521（F1 0.9023 vs 0.8513）；SNIPS-NLU（5 個意圖）：Accuracy 0.9621 vs CNN 0.9595（F1 0.9620 vs 0.9595）",
+      "section": "§5, Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "IntentCapsNet-ZSL 在 zero-shot 意圖偵測上優於四種相容性映射式的 ZSL 策略。",
+      "numbers": "SNIPS-NLU（2 個新意圖）：Accuracy 0.7752 vs 最佳 baseline CDSSM 0.7588（F1 0.7750 vs 0.7580）；CVA（20 個新意圖）：Accuracy 0.8628 vs Zero-shot DNN 0.7903（F1 0.8635 vs 0.7774）",
+      "section": "§5, Table 4",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "CDSSM 在中文的 CVA 上幾乎完全失效，作者歸因於字元級模型只適合英文語料。",
+      "numbers": "CDSSM on CVA：Accuracy 0.2140、F1 0.1667；同一方法在 SNIPS-NLU 上 Accuracy 0.7588",
+      "section": "§5, Table 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "消融：CVA 上 self-attention 是貢獻最大的元件。",
+      "numbers": "CVA F1：完整模型 0.8635 vs w/o Self-attention 0.8115（−5.2 點）、w/o Bi-LSTM 0.8403、w/o Regularizer 0.8553",
+      "section": "§5 Ablation Study, Table 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "消融：作者稱 SNIPS-NLU 上三個元件貢獻相當，各約 2–3% F1。",
+      "numbers": "SNIPS-NLU F1：完整模型 0.7750 vs w/o Self-attention 0.7547、w/o Bi-LSTM 0.7616、w/o Regularizer 0.7675（絕對差分別為 2.0、1.3、0.75 點）",
+      "section": "§5 Ablation Study, Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "語意相近的新意圖會互相混淆：調整顯示設定的幾個新意圖在表示空間擠在一起。",
+      "numbers": "CVA 中 DecreaseScreenBrightness（No. 9）被誤判為 ReduceFontSize（No. 10）與 SetColdColor（No. 11），三者 activation 向量在 t-SNE 圖約 (15, −5) 處重疊；沒有給定量的混淆矩陣",
+      "section": "§5, Figure 3",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "新意圖對既有意圖的相似度分布越集中（變異數越大），zero-shot 表現越穩定；變異數低則不一定差。",
+      "numbers": "CVA 20 個新意圖中，var(q_l) > 0.005 的 13 個 Accuracy 皆 ≥ 0.83",
+      "section": "§6, Figure 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "在既有意圖上學到的 attention head 會把相同的萃取行為用在新意圖語句上。",
+      "numbers": "SNIPS-NLU：萃取 PlayMusic 中「play」動作的 head，在新意圖 RateBook 上注意 rate、add the rating、give 等詞；其他 head 注意書名與評分。只有質性案例（表 5、表 6），沒有定量統計",
+      "section": "§6, Table 5, Table 6",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "只處理單一意圖語句；多意圖語句須先切段，留作未來工作（§2）。",
+    "語意本身相近的新意圖（DecreaseScreenBrightness、ReduceFontSize、SetColdColor）表示接近、容易誤判（§5, Figure 3）。",
+    "新意圖對既有意圖的相似度分布變異數低時，模型較無法確定該從哪個既有意圖遷移知識（§6, Figure 4）。"
+  ],
+  "limitations_observed": [
+    "評估是傳統 ZSL：argmax 只在新意圖集合 Z 上取，測試集只含新意圖語句；沒有測 generalized ZSL（既有與新意圖混在一起），也沒有「都不是」的拒絕選項。實務上意圖路由最先要回答的是「這句是已知意圖、新意圖還是範圍外」，本文完全沒碰；子領域標籤裡的 OOD 不適用於這篇。SNIPS-NLU 只有 2 個新意圖，隨機猜就有 0.5，0.7752 對 0.7588 的差距意義有限。",
+    "結構性混淆：u_{l|r}=Σ_k q_lk·g_{k,r} 中，唯一依新意圖而異的是 q_l，而 q_l 只由標籤名稱決定、與語句無關。兩個新意圖若對既有意圖的相似度分布接近，它們對任何語句的預測向量都幾乎一樣，原理上分不開。Figure 3 中 DecreaseScreenBrightness／ReduceFontSize／SetColdColor 的混淆是這個設計的直接後果，不只是作者說的「意圖本身相近」；把意圖改名也會改變模型行為。",
+    "σ 的選擇來源不明：σ 只出現在式 (8)，只在 zero-shot 推論路徑上起作用，兩個資料集取值不同（4 與 1）。用既有意圖的訓練資料做三折交叉驗證選不到它，除非把部分既有意圖留出當假新意圖，而文中沒有描述這種切分；因此 σ 很可能是看過新意圖資料後選的（推論，文中未說明）。",
+    "核心遷移主張沒有被單獨驗證：Table 4 的消融只拿掉編碼器零件（self-attention、Bi-LSTM、正則項），沒有「不用路由係數 c_kr、直接用 p_{k|r}」或「把 Q 換成均勻分布」的對照組；§3.3 主張的三條知識遷移管道（萃取行為、既有路由資訊、標籤相似度）各自貢獻多少完全不知道。",
+    "數字的解讀偏寬：作者說 SNIPS-NLU 上三個元件各貢獻約 2–3% F1，但表中絕對差是 2.0、1.3、0.75 點（正則項不到 1 點）；SNIPS-NLU 既有意圖上對 CNN 只領先 0.26 點 Accuracy。所有結果都是單次切分，沒有變異數或顯著性檢定，也沒交代既有意圖評估的訓練／測試怎麼切、baseline 的超參數怎麼調。",
+    "主要增益落在不公開的 CVA：既有意圖 Accuracy +5.7 點、zero-shot +7.3 點都在 CVA 上，但資料不公開、平均句長 4 的單位沒說明；Figure 3 的意圖名稱是英文而語料是中文，CVA 的標籤嵌入用的是中文還是英文詞向量沒交代，無法重現。",
+    "SNIPS-NLU 既有意圖實驗只用 5 類（標準設定是 7 類），數字不能與使用完整 7 類的 SNIPS 意圖偵測文獻直接比較。",
+    "Figure 4 的 var(q_l) > 0.005 門檻是事後挑的，只顯示相關，而且只在 CVA 上觀察。",
+    "文字不一致會妨礙重現：意圖嵌入在 §3.3 寫詞向量相加、§4 寫平均（有 σ 尺度的距離時兩者結果不同）；轉出的全文在式 (10) 之後把餵進 Algorithm 1 的向量寫成 n_l（未對照 PDF 確認是原文筆誤還是轉換問題）；Table 4 中完整模型在 CVA 的加權 Recall（0.8629）與 Accuracy（0.8628）不一致，但兩者在定義上應相等。"
+  ],
+  "framework_role": "屬 T1 的 zero-shot 意圖分支，不是 OOD 偵測（沒有拒絕機制）。它代表「用意圖標籤本身的語意把新意圖掛進既有分類器、不需要新標註」這條思路，是後來以標籤描述或指令做 zero-shot 意圖分類與路由的前身。對本框架的啟示：agent 新增工具或技能時，意圖路由不必重訓也可能涵蓋新類別，但必須另外有一道「已知／新／範圍外」的判斷，而這篇沒有提供；它只處理單輪、單一語句、單一意圖的分類，不涉及多輪狀態、澄清提問或使用者目標推斷。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文沒有宣稱任何部署；雖有 Huawei 共同作者、CVA 語料取自商用手機語音助理，但那只說明資料來源，不是本方法上線的證據。WebSearch 只查到論文本身（ACL Anthology D18-1348、arXiv）、研究用程式碼儲存庫（https://github.com/congyingxia/ZeroShotCapsule，README 未提及任何生產用途）與後續學術延伸，後者屬學術影響力。Semantic Scholar 記錄為 EMNLP 2018，引用 224、influential citation 19。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/congyingxia/ZeroShotCapsule",
+    "data": "部分公開：SNIPS-NLU 公開（https://github.com/snipsco/nlu-benchmark/）；CVA 為商用語音助理的中文語料，未公開。官方程式碼（TensorFlow 1.6、Python 2.7）只附 SNIPS-NLU 實驗，既有／新意圖的切分需從程式碼確認。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "把 zero-shot 意圖偵測定型、以標籤語意轉移路由投票的想法有奠基價值，但只評估傳統 ZSL（沒有既有／新意圖混合與拒絕），capsule 機制也難移植到 LLM 時代的意圖路由，屬有價值但非必讀。",
+  "related": ["1710.09829", "1703.03130", "1301.3666", "1609.01454", "1408.5882", "1603.00550"],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

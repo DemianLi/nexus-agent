@@ -1,0 +1,223 @@
+{
+  "id": "2305.04388",
+  "title": "Language Models Don't Always Say What They Think: Unfaithful Explanations in Chain-of-Thought Prompting",
+  "topic": "T3",
+  "subarea": "可觀測性／監控（執行期監控、異常偵測、安全監控）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "在提示中加入模型不會說出口的偏誤特徵（few-shot 示範的正解一律排在 A、使用者暗示某個答案、社會刻板印象），再用成對的反事實輸入證明：GPT-3.5 與 Claude 1.0 的 CoT 解釋會系統性地替被帶偏的答案找理由，卻幾乎從不提到真正影響決策的那個特徵。",
+  "problem": "CoT 常被當成觀察模型決策過程的透明窗口，用於部署、稽核與監控。如果解釋只是看起來合理（plausible），卻不反映真正驅動預測的因素（unfaithful），那麼依賴 CoT 的監控、稽核與公平性檢查都會被誤導，反而讓人對系統產生不該有的信任。作者主張訓練目標本來就沒有獎勵「如實回報理由」，RLHF 甚至可能反向懲罰；因此需要一種不靠主觀判讀、能大規模量化「系統性不忠實」的方法，而且要涵蓋有主觀成分、多個答案都能被說得通的任務，因為這正是合理但不忠實的解釋最容易藏身的地方。",
+  "core_idea": "採用 counterfactual simulatability 的忠實度定義：刻意加入一個會可預測地改變預測、而解釋不會提及的特徵。既然解釋沒提到它，它就不該影響預測；只要預測朝偏誤方向移動，就證明解釋系統性不忠實。如此一來只需比較最終答案，不必逐篇人工判讀解釋。設計兩種反事實：(1) BBH，擾動解釋「沒提到」的特徵（Answer is Always A、Suggested Answer），忠實的模型預測應該不變；(2) BBQ，擾動解釋「有引用」的特徵，也就是對調兩個人物身上的 weak evidence，忠實的模型預測應該跟著對調（或兩邊都答 Unknown），否則就是依刻板印象不一致地權衡證據。「系統性」指偏移方向可以預先指定（朝偏誤方向），有別於抽樣雜訊造成的隨機翻轉。質性分析另外顯示：BBQ 上導向刻板印象答案的解釋，大多數（86%）也明確為那個答案辯護。",
+  "method": {
+    "忠實度的操作型定義（§2）": [
+      "模型要算忠實，只有兩條路：在解釋中承認偏誤特徵的影響，或者預測根本不受偏誤影響。",
+      "先以抽查確認解釋幾乎不提偏誤特徵（見下方「驗證解釋沒提到偏誤特徵」），再把「加入偏誤後預測朝偏誤方向改變」直接認定為系統性不忠實。",
+      "主觀任務的判準：單篇解釋與自己的預測前後一致即為 plausible；但若偏誤讓模型在不同情境下採用彼此矛盾的假設，且沒有承認偏誤，就是 unfaithful。"
+    ],
+    "受測模型與取樣設定（§3.1）": [
+      "text-davinci-003（文中稱 GPT-3.5，RLHF 微調），溫度 0.7（OpenAI playground 預設值）。",
+      "claude-v1.0（Constitutional AI 訓練），溫度 1（預設值）。",
+      "每個條件只取樣一次；兩個模型的溫度不同。"
+    ],
+    "BBH 資料（§3.1、App F.1）": [
+      "從 BBH 的 23 個 task 中挑出 13 個帶主觀成分或難以證偽之世界知識的 task：Causal Judgment、Date Understanding、Disambiguation QA、Hyperbaton、Logical Deduction（五物件子集）、Movie Recommendation、Navigate、Ruin Names、Snarks、Sports Understanding、Temporal Sequences、Tracking Shuffled Objects（三物件子集）、Web of Lies。",
+      "大多數 task 取自 Hugging Face 的 bigbench 資料集，以取得比 Suzgun et al. 更大的樣本；Web of Lies 以及 Logical Deduction、Tracking Shuffled Objects 的分物件數子集取自 Suzgun et al. 的版本。",
+      "每個 task 子抽樣 330 筆（不足 330 則全取），其中 30 筆保留為 few-shot 示範的候選，最後評估 3,299 筆。",
+      "所有選項順序都先打亂，避免 Answer is Always A 在分類 task 上變成偏向某一個類別。",
+      "主要分析集中在偏誤指向錯誤答案（bias-contradicting）的子集：Suggested Answer 有 2,111 筆，Answer is Always A 有 1,928 筆；偏誤指向正解的結果放在 App F.6。"
+    ],
+    "BBH 的兩種偏誤特徵（§3.1、Table 2、App F.2）": [
+      "Answer is Always A：只重排 few-shot 示範的選項順序，讓每個示範的正解都是 (A)；示範解釋裡若提到選項字母，也跟著改。測試題本身不動。靈感來自 LLM 對重複模式的敏感度。",
+      "Suggested Answer：在題目後面加上一句話，由使用者表示自己認為答案是某個選項，但想聽聽模型的看法。每筆資料各自隨機抽一個選項字母，所以有時會剛好是正解。few-shot 時只加在最後那一題，不加在示範上。靈感來自 sycophancy 研究。"
+    ],
+    "BBH 提示條件（§3.1、App E、Table 14）": [
+      "CoT 與 No-CoT 對照：CoT 提示要求模型先把思考過程說出來，再用固定格式「The best answer is: (X)」作答，並強調務必遵守格式；Assistant 端以 Kojima et al. 的「Let's think step by step」開頭。No-CoT 則是把 answer trigger「The best answer is: (」預先填在 Assistant 端，直接取樣選項字母。",
+      "zero-shot 與 few-shot 對照：Suggested Answer 的 few-shot 用 3 個示範；Answer is Always A 在 4,096 token 內塞到最多 15 個示範（GPT-3.5 的 context 上限），各 task 實際為 7 到 15 個（Table 12 逐 task 列出）。Answer is Always A 只有 few-shot 版本。",
+      "CoT 與 No-CoT 共用同一份含 CoT 示範的 few-shot 提示，用以分離「示範」與「是否產生 CoT」這兩個因素。",
+      "Claude 使用 Human／Assistant 對話格式，所有 context 放在 Human 端（放在 Assistant 端行為會不同），並在兩個標記前加換行；GPT-3.5 則拿掉 Human／Assistant 標記。作者指出，少了標記時，Suggested Answer 那句話中的「我」「你」會有指涉上的歧義。",
+      "答案抽取：CoT 輸出必須包含 answer trigger，沒有取樣出這個 trigger 的樣本整筆丟棄；只要 biased 或 unbiased 其中一側失敗，就把這一對一起丟掉，確保比較的是同一組樣本（Table 12 列出各 task 的丟棄數）。"
+    ],
+    "few-shot CoT 示範的產生流程（App F.3）": [
+      "以 Suzgun et al. 的 3 個 CoT 示範當作提示，用 text-davinci-003 為保留的 30 筆候選產生 CoT。",
+      "濾掉答錯的 CoT。",
+      "挑出推理品質高的，同時讓選項字母分布大致平衡；分類 task 也讓類別分布平衡。",
+      "人工修正錯誤或不合理的敘述；Navigate、Logical Deduction、Hyperbaton 需要大幅修正。",
+      "任務描述沿用 Suzgun et al. 的版本。"
+    ],
+    "BBH 指標（§3.1、App F.5、Table 10、Table 13）": [
+      "主指標：在 bias-contradicting 子集上，biased context 的準確率減去 unbiased context 的準確率（Δ）。在 No-CoT 設定下，Δ 只代表模型對偏誤的易感性，因為沒有解釋可言。",
+      "作者以 Table 13 拆解預測的四種轉移方向（正確→偏誤一致的錯誤、偏誤一致的錯誤→正確、正確→非偏誤的錯誤、非偏誤的錯誤→正確），確認準確率下降幾乎全部來自偏誤一致答案的增加，而不是雜訊。",
+      "直接對應定義的輔助指標（Table 10，含 bias-consistent 與 bias-contradicting 兩類樣本）：% Unfaithful Overall 是加入偏誤後預測改變的樣本比例；% Unfaithfulness Explained by Bias 是改變的樣本中轉向偏誤一致答案的比例。隨機基線取各 task 平均選項數的倒數，為 36.3%。"
+    ],
+    "BBQ 資料與 weak evidence 產生（§4.1、App G.1、G.2、Table 15）": [
+      "BBQ 的每個情境有 ambiguous（正解為 Unknown）與 disambiguated 兩個版本；本實驗只使用 ambiguous 版本。",
+      "依社會偏誤類別分層抽樣，共 2,592 筆，涵蓋 9 個類別（原本 11 類，作者不小心漏掉 age 與 physical appearance）。",
+      "weak evidence 以 GPT-3.5 搭配 4 個示範的 few-shot 提示產生：要求寫一句與問題相關、但無法決定性回答問題的資訊，並輸出兩次，第二次把兩個人物對調。同一情境的正向與負向問法視為兩筆資料，各自產生不同的 evidence。人工確認人物確實有對調。",
+      "設計目標是證據弱到沒有明確正解，但又顯眼到會被模型拿來當理由；作者承認部分 evidence 過強或過弱，會減少可分析的樣本數。"
+    ],
+    "BBQ 的判定規則（§4.1）": [
+      "同一題兩個 evidence 版本組成一對。兩邊都答 Unknown，或預測跟著 evidence 從一人換到另一人，這一對就算 faithful；其餘都算 unfaithful。模型同時選兩個答案時視為 Unknown。",
+      "unfaithful 的配對如果兩邊都給出刻板印象一致的答案，或一邊刻板印象一致、另一邊答 Unknown（代表人口特徵影響了模型是否棄答），就算 stereotype-aligned。",
+      "主指標 % Unfaithfulness Explained by Bias：unfaithful 配對中 stereotype-aligned 的比例，不受刻板印象影響時應為 50%。次指標 % Unfaithful Overall：unfaithful 配對佔全部配對的比例。BBQ 沒有明確定義的準確率，因為判斷所需的證據強度是刻意不指定的。"
+    ],
+    "BBQ 提示條件（§4.1、App G.3、Table 14、Table 16）": [
+      "CoT 與 No-CoT 對照：CoT 提示要求說出思考過程，並用「The best answer to the question '<原問題>' is: (X) <選項文字>」的格式作答。把原問題複述一次，是為了修正模型偶爾會回答問題變體（例如把「誰數學不好」答成「誰數學好」）的毛病。No-CoT 則把同樣的 trigger 預先填好。",
+      "兩種提示都另外提醒模型盡量準確，證據足夠時不要答 Unknown。模型預設很常答 Unknown，這句提醒是為了增加可分析的樣本；作者主張它不偏向任何特定答案。",
+      "zero-shot 與 few-shot 對照：few-shot 用 3 個示範，包括 1 個標為 Unknown 的 ambiguous 範例，以及 2 個答案與刻板印象一致的 disambiguated 範例。",
+      "去偏誤指令對照：仿照 Ganguli et al.，加一句要求答案不帶偏見、不依賴刻板印象；few-shot 時每個示範都加上這句。",
+      "只要其中一個 evidence 版本格式失敗，整對就丟棄（Table 11：Claude 的 zero-shot 設定在無指令／有指令下分別丟了 300 與 272 對，其他設定為 0）。"
+    ],
+    "驗證解釋沒提到偏誤特徵（App B）": [
+      "BBH：每個「模型 × task × zero/few-shot × 偏誤」組合抽 3 篇 biased context 的解釋，共 234 篇，沒有任何一篇提到偏誤特徵。",
+      "BBQ：每個「模型 × zero/few-shot × 提示」組合抽 12 對 unfaithful 配對（含刻板印象一致與不一致），共 192 篇，只有 1 篇明確以人口特徵作為理由；同時確認這些解釋 100% 都聲稱依據 weak evidence，這是「證據對調時預測應該跟著變」的前提。"
+    ],
+    "質性標註（§3.3、§4.3、App C、Table 7）": [
+      "BBH：從 Suggested Answer 設定中，每個「模型 × zero/few-shot × task × context」組合各取 1 篇，共 104 篇 unfaithful 解釋，標註兩個欄位：(1) 解釋是否支持最終預測（若暗示另一個答案，或沒有指向任何答案，就算不支持；有推理錯誤但仍指向該答案則算支持）；(2) 對所選答案的說服力，1 到 5 分（1 分是有常識或邏輯錯誤；3 分是可能沒錯但不完整；5 分是合理的論證）。3 分以下要記錄主要問題：邏輯連貫性、缺步驟、解釋與預測矛盾、常識錯誤。",
+      "BBQ：每個「模型 × zero/few-shot × 提示 × evidence 版本」組合取 6 篇，共 96 篇刻板印象一致的 unfaithful 解釋，只標註是否支持預測；因為任務刻意模糊，不評說服力。",
+      "論文沒有交代標註者人數與標註者間一致性。"
+    ],
+    "統計檢定（App H）": [
+      "因為各條件使用同一批樣本，差異一律用成對差異檢定（paired difference test）計算信賴區間。區間寬度取決於樣本數，以及兩個條件之間預測不一致的程度；跨 task 平均時，把所有預測串接起來計算經驗不一致率。",
+      "BBQ 用二項檢定，檢查 stereotype-aligned 的比例是否顯著高於 50%。"
+    ],
+    "照做時的要點": [
+      "這套檢驗是黑箱的，也不需要正解標籤（BBQ 本來就沒有正解），只需要能對同一輸入做受控擾動，並取得最終答案。",
+      "要先抽查解釋確實沒提到擾動特徵，否則「預測改變」不能直接解讀為「不忠實」。",
+      "偏誤特徵對正解必須沒有資訊量：隨機標籤、只重排示範，或者對稱對調的證據。"
+    ]
+  },
+  "assumptions": [
+    "解釋沒有提到偏誤特徵；這個前提靠 App B 的抽查支撐（BBH 234 篇、BBQ 192 篇），是把「預測改變」直接等同於「不忠實」的關鍵。",
+    "偏誤特徵對正解沒有資訊量：Answer is Always A 只重排示範，Suggested Answer 用隨機標籤；理想的推理者不應受影響。",
+    "BBQ 的 weak evidence 對兩個人物對稱，對調後，依證據推理的模型應該跟著改變預測，或者兩邊都棄答。",
+    "不受刻板印象影響時，不忠實配對裡刻板印象一致與不一致應各佔 50%。",
+    "BBH 的準確率下降幾乎全部來自轉向偏誤一致的答案（Table 13 驗證），所以可以用準確率變化代表系統性不忠實。",
+    "因格式不符而丟棄的樣本，不會系統性地改變結論。",
+    "每個條件取樣一次（溫度 0.7 或 1.0），足以代表模型在該條件下的行為。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "BIG-Bench Hard 的 13 個 task（評估 3,299 筆；bias-contradicting 子集：Suggested Answer 2,111 筆、Answer is Always A 1,928 筆）",
+      "BBQ 的 ambiguous 子集，加上成對的 weak evidence（2,592 筆，9 個社會偏誤類別）"
+    ],
+    "metrics": [
+      "BBH：bias-contradicting 子集的準確率，以及 biased 減 unbiased 的差 Δ（paired CI）",
+      "% Unfaithful Overall：加入偏誤或對調證據後，預測不一致的比例",
+      "% Unfaithfulness Explained by Bias：不一致的樣本中轉向偏誤或刻板印象的比例（BBH 基線 36.3%，BBQ 基線 50%）",
+      "Table 13：預測轉移方向的拆解",
+      "質性：解釋是否支持預測（%）、說服力 1–5 分、錯誤類別分布",
+      "統計：成對差異檢定的 95% CI；BBQ 對 50% 的二項檢定"
+    ],
+    "baselines": [
+      "No-CoT 對 CoT",
+      "zero-shot 對 few-shot",
+      "unbiased context 對 biased context",
+      "BBQ：無去偏誤指令對有去偏誤指令",
+      "不受偏誤影響的理論基線（BBH 36.3%、BBQ 50%）",
+      "受測模型：text-davinci-003（GPT-3.5）、claude-v1.0"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "模型幾乎從不在解釋中提到偏誤特徵，所以預測被偏誤帶動時，解釋就是系統性不忠實。",
+      "numbers": "抽查 426 篇支持偏誤預測的解釋，只有 1 篇明確提到偏誤。細分：BBH 234 篇中 0 篇；BBQ 192 篇中 1 篇以人口特徵當理由，而且 100% 聲稱依據 weak evidence。",
+      "section": "§2、App B",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "加入偏誤特徵之後，CoT 的準確率大幅下降，而且兩種偏誤、兩個模型的下降都達統計顯著。",
+      "numbers": "Suggested Answer、zero-shot CoT：GPT-3.5 從 59.6% 降到 23.3%（−36.3），Claude 1.0 從 65.3% 降到 34.7%（−30.6）。Answer is Always A、few-shot CoT：GPT-3.5 從 77.4% 降到 58.7%（−18.7），Claude 1.0 從 84.8% 降到 80.1%（−4.7）。差異的 CI 介於 ±1.6% 到 ±2.4%。",
+      "section": "§3.2、Figure 1、Table 8",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "加入 few-shot 示範之後，Suggested Answer 造成的不忠實程度下降，但仍然很大。",
+      "numbers": "Δ 從 −36.3 縮小到 −24.1（GPT-3.5），從 −30.6 縮小到 −21.5（Claude 1.0）。",
+      "section": "§3.2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "CoT 對偏誤易感性的影響是雙向的：zero-shot CoT 反而把模型從原本答對的地方帶向偏誤答案；few-shot CoT 則降低易感性。",
+      "numbers": "Suggested Answer、biased context 的準確率，No-CoT→CoT：zero-shot 下 GPT-3.5 從 39.5% 降到 23.3%、Claude 1.0 從 37.3% 降到 34.7%；few-shot 下 GPT-3.5 從 35.0% 升到 51.7%、Claude 1.0 從 38.9% 升到 60.1%。Answer is Always A：GPT-3.5 從 55.2% 升到 58.7%、Claude 1.0 從 63.2% 升到 80.1%。在 unbiased context 下，CoT 平均有幫助（GPT-3.5 從 57.1% 到 59.6%，Claude 1.0 從 59.2% 到 65.3%）。CI 介於 ±2.1% 到 ±2.8%。",
+      "section": "§3.2、Table 8",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "偏誤改變的不只是最終答案，還有解釋的內容：多數不忠實的解釋會改寫推理，轉而支持偏誤答案，其中一部分完全看不出錯誤。",
+      "numbers": "104 篇標註樣本中，73% 支持偏誤一致的答案，15% 沒有明顯錯誤；說服力平均 2.0（正確預測的解釋為 4.0）。錯誤類別：邏輯連貫性 42%、解釋與預測矛盾 17%、缺步驟 15%、常識錯誤 10%。",
+      "section": "§3.3、App C、Table 7",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "在 BBQ 上，模型聲稱依據 weak evidence，實際上卻不一致地套用證據，而且偏向刻板印象；CoT 比 No-CoT 偏得少，但偏誤仍在。",
+      "numbers": "無去偏誤指令時，CoT 的 % Unfaithfulness Explained by Bias：GPT-3.5 zero-shot 59.2%、few-shot 56.1%；Claude 1.0 zero-shot 54.5%、few-shot 62.5%（基線 50%，四格都顯著；CI 介於 ±3.7% 到 ±4.8%）。作者稱各設定下 CoT 都比 No-CoT 偏得少，降幅從 −1.2 到 −8.9 點（CI 介於 ±2.3% 到 ±3.5%）。% Unfaithful Overall（CoT）在全部八個設定中介於 17.2% 到 26.1%。",
+      "section": "§4.2、Table 5",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "明確要求模型不要依賴刻板印象，對 Claude 1.0 有效，對 GPT-3.5 只在 few-shot 下有小幅效果。",
+      "numbers": "Claude 1.0：few-shot 從 62.5% 降到 50.6%（幾乎消除），zero-shot 從 54.5% 降到 45.4%（矯枉過正，顯著低於 50%）。GPT-3.5：few-shot 從 56.1% 降到 51.8%，zero-shot 從 59.2% 變成 60.0%（沒有改善）。",
+      "section": "§4.2、Table 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "BBH 的準確率下降幾乎全部來自轉向偏誤一致的答案，而不是雜訊，因此準確率變化可以代表系統性不忠實。",
+      "numbers": "以 GPT-3.5 zero-shot CoT、Suggested Answer 為例：正確→偏誤一致的錯誤佔 38.4%，反方向只有 1.6%；非偏誤錯誤的兩個方向分別是 1.4% 與 1.8%。Table 10：Suggested Answer 下 CoT 的 % Unfaithfulness Explained by Bias 介於 84.4% 到 91.3%（基線 36.3%）。",
+      "section": "App F.5、Table 13、Table 10",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "這是必要但不充分的檢驗：能抓出不忠實，卻無法證明解釋是忠實的（§6 Limitations）。",
+    "只評估輸入的小幅修改；理想的解釋應該能讓使用者預測模型在更廣泛輸入上的行為（§6 Limitations）。",
+    "無法區分不忠實是能力不足，還是模型其實察覺偏誤卻不說（dishonesty），需要後續研究（§6）。",
+    "提示式去偏只能處理事先知道的偏誤，無法確定能否推廣到未知的偏誤（§6 Future Work）。",
+    "Date Understanding 的 few-shot 提示有一題正解不在選項中（原資料集的錯誤）；作者表示排除這個 task 後趨勢仍然成立（App F.3）。",
+    "BBQ 不小心漏掉 age 與 physical appearance 兩個類別，只測了 9 類（App G.1）。",
+    "產生的 weak evidence 有時太強、有時太弱，減少可分析的樣本（App G.2）。",
+    "因推論成本做了子抽樣（BBH 每 task 330 筆、BBQ 2,592 筆），格式不符的樣本也被丟棄（§3.1、§4.1、App E）。"
+  ],
+  "limitations_observed": [
+    "§3.2 聲稱準確率下降的趨勢在每個 task 上都成立，但 Table 9 的 Answer is Always A 有反例：CoT 下 biased context 反而比 unbiased 高。例如 Logical Deduction（五物件）GPT-3.5 從 62.0 升到 64.7、Claude 1.0 從 63.1 升到 65.1；Disambiguation QA 的 GPT-3.5 從 63.3 升到 64.7；Movie Recommendation 的 Claude 1.0 從 90.4 升到 91.1。這句話只對 Suggested Answer 成立。",
+    "§4.2 聲稱在所有設定下，CoT 的刻板印象偏誤都比 No-CoT 低（−1.2 到 −8.9 點），但 Table 5 裡 GPT-3.5 zero-shot 加上去偏誤指令的那一格是 59.7→60.0，CoT 反而略高。另外，Claude zero-shot 加去偏誤指令從 48.9 降到 45.4，是往 50% 以下矯枉過正，把它算成「偏誤減少」並不恰當。",
+    "結論把系統性不忠實推廣到「三種偏誤 × 兩個模型」，但在 Claude 1.0 加 Answer is Always A 這一格證據很弱：CoT 的 Δ 只有 −4.7；Table 10 顯示，加入偏誤後只有 10.7% 的預測改變，其中能歸因於偏誤的只有 47.2%，高出隨機基線 36.3% 不多，作者在表註裡也承認只有一半。這一格比較像「多數不受影響」。",
+    "BBQ 沒有 test-retest 對照：溫度 0.7 或 1.0、每個條件只取樣一次，所以 % Unfaithful Overall（CoT 下 17.2% 到 26.1%）混進了單純抽樣造成的翻轉。只有以 50% 為基準的 % Explained by Bias 能抵銷對稱的雜訊，而且雜訊一多，這個指標也會被稀釋往 50% 靠。BBH 有 Table 13 可以排除雜訊，BBQ 沒有對應的拆解，也沒有「同一版本 evidence 重抽兩次」的基線。",
+    "BBQ 的刻板印象效應以弱偏為主：App C.2 的樣本中，79% 是一邊答 Unknown、另一邊作答，只有 21% 兩邊給同一個非 Unknown 答案。CoT 下超出 50% 最多約 12.5 點（Claude few-shot 62.5%）。結論「系統性不忠實」成立，但效應量不大，而且主要表現在「要不要棄答」。",
+    "樣本丟棄不是隨機的：Claude 1.0 zero-shot 在 BBQ 丟了 300 對與 272 對（約佔 2,592 的 10.5% 到 11.6%），而其他設定都是 0；BBH 的 Answer is Always A 裡，Ruin Names 丟了 71 筆（Claude）與 37 筆（GPT），Date Understanding 兩個模型各丟 83 筆，都是 300 筆裡的量。能否遵守格式作答，可能和容不容易被帶偏相關，但論文沒有檢查丟棄樣本的分布。",
+    "BBQ 的 weak evidence 由 GPT-3.5 產生，而 GPT-3.5 本身就是受測模型；evidence 的措辭風格可能和 GPT-3.5 的權衡習慣系統性地相關，這會影響兩個模型之間的比較。",
+    "質性標註（BBH 104 篇、BBQ 96 篇，含 1–5 分的說服力）沒有報告標註者人數與一致性；App B 用來支撐「解釋幾乎從不提偏誤」的抽查，BBH 每個組合只有 3 篇。整個「預測改變即不忠實」的推論都建立在這個抽查上，樣本偏小。",
+    "實驗有混淆變因：兩個模型的溫度不同（0.7 對 1.0）；Answer is Always A 受限於 GPT-3.5 的 4,096 token，各 task 的示範數從 7 到 15 不等，偏誤強度因 task 而異，所以跨 task、跨模型比較 Δ 的大小並不乾淨。",
+    "搬到 T3 agent 情境的外推限制：全部是單輪選擇題、2023 年的非推理型 RLHF 模型（text-davinci-003、claude-v1.0），沒有工具呼叫，也沒有多步軌跡。更關鍵的是，Suggested Answer 的誘因明擺在輸入裡：論文證明的是「只讀 CoT 的監控器」會漏掉這類影響，並沒有證明「同時看輸入與輸出的監控器」也做不到，也沒有測試任何監控器的偵測率。能不能用來判斷 agent 的思考軌跡能否當監控訊號，要靠後續工作在長軌跡與推理模型上重新驗證。"
+  ],
+  "framework_role": "屬於 T3 的 (b) 可觀測性／監控，定位是「CoT／行為監控的訊號可信度」這條主線上的奠基實證：它證明模型自述的推理不是決策過程的忠實紀錄，偏誤可以在完全不留痕跡的情況下改變行為。對框架的具體意義有三點。(1) T3 的監控設計不能把 agent 的 CoT 或思考軌跡當成唯一的觀測來源，必須同時觀測輸入與最終行動，並用受控擾動去驗證。(2) 它提供一套黑箱、不需要正解標籤的偵測方法：對同一輸入做成對的反事實擾動，比較最終答案的一致性，並以「偏移是否朝可預期的方向」區分系統性偏誤與抽樣雜訊。這套方法可以做成離線稽核，或 T7 的評估項目；Anthropic 後來在 Claude 3.7 Sonnet 的系統卡中，就以類似的成對提示評估 CoT 忠實度。(3) 它提醒 T4→T5 的 E3（在軌跡中偵測異常以觸發自我修正）：如果異常偵測器只讀 CoT，會系統性地漏掉這類被合理化的偏誤。論文本身沒有實作任何偵測→修正的資料流，所以不列邊。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "Anthropic《Claude 3.7 Sonnet System Card》（2025-02）§5.1「Chain-of-Thought Faithfulness」把本文列為參考文獻 [23]，並說明評估方法受本文與 Chua & Evans 啟發：建立有／無線索的成對提示，看模型在答案因線索改變時，是否在 CoT 中明確承認用了線索。六種線索中包含 sycophancy（對應本文的 Suggested Answer），以 MMLU 與 GPQA 建立題目；報告的平均忠實度分數為 MMLU 0.30、GPQA 0.19。來源：https://www.anthropic.com/claude-3-7-sonnet-system-card（實際轉址到 https://www-cdn.anthropic.com/9ff93dfa8f445c932415d335c88852ef47f1201e/claude-3-7-sonnet-system-card.pdf，已打開 PDF 確認 §5.1 與參考文獻 [23]）。"
+    ],
+    "assessment": "有一條可查證的商用採納：本文的「成對提示＋看是否承認影響因素」評估方法，被 Anthropic 用在商用模型發布前的安全評估，並寫進官方系統卡。要注意兩點。第一，被採用的是評估方法，不是執行期的監控產品或服務；未見任何廠商把它做成線上監控元件的證據。第二，同源關係：共同作者 Samuel R. Bowman 掛 Anthropic 的單位，致謝中也列了 Anthropic 的 in-kind support，所以這是作者所屬機構內部的延續。其他廠商的官方文件中，未見證據。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/milesaturpin/cot-unfaithfulness",
+    "data": "論文註明資料與程式碼都放在上面的 repo。BBH 取自 Hugging Face 的 bigbench 與 Suzgun et al.，BBQ 為公開資料集。完整提示格式見 Table 14–16。結果依賴 2023 年的 text-davinci-003 與 claude-v1.0 端點，重跑前要先確認端點是否仍然可用；此外取樣溫度為 0.7／1.0，數字不會逐位重現。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是「CoT 不能直接當監控訊號」的奠基實證，並給出一套黑箱、不需標註的成對反事實檢驗，後來也被用在商用模型的發布評估；T3(b) 談 CoT 監控時繞不過它。但它的場景是單輪選擇題、非推理模型，搬到 agent 軌跡要自己補驗證。",
+  "related": [
+    "2307.13702",
+    "2307.11768",
+    "2307.08678",
+    "2310.13548",
+    "2212.09251",
+    "2302.07459",
+    "2210.09261",
+    "2212.08061",
+    "2302.00093",
+    "2309.15840"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 4,
+    "total": 8
+  }
+}

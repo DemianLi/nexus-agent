@@ -1,0 +1,158 @@
+{
+  "id": "2106.05555",
+  "title": "Shades of BLEU, Flavours of Success: The Case of MultiWOZ",
+  "topic": "T8",
+  "subarea": "任務成功的判準",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把 MultiWOZ 上 13 個任務型對話系統的輸出收回來，用同一套前處理、資料庫與 Inform／Success 實作重算，證明各論文回報的 BLEU 與任務成功率因去詞彙化風格、實體比對規則、狀態與領域來源不同而不可直接比較（用作者 checkpoint 重算的 UniConv，Inform／Success 比回報值低約 18 分），並釋出後來被 MultiWOZ 官方指定的標準評分腳本。",
+  "problem": "MultiWOZ 是任務型對話 context-to-response 生成最常用的基準，進度幾乎完全靠三個語料式指標判定：BLEU、Inform（對話中提供的實體是否符合使用者目標）與 Success（符合目標且提供了所有被要求的資訊）。但資料集本身只附一份很粗糙的去詞彙化與評估程式，各論文於是各自改寫：去詞彙化風格不同、BLEU 斷詞不同、資料庫查詢時的表面形式正規化不同、多個候選實體時怎麼判定「符合」不同、目前是哪個領域的資訊從哪裡來也不同，有的甚至在評估時偷用 ground-truth 資料。結果是「SOTA 比較」混了大量來自評估實作而非模型本身的雜訊，研究者無從判斷真正的進步。這對「任務成功分數怎麼定義」是根本問題：名稱相同的 Success，實作差一個比對規則就可能差十幾分。",
+  "core_idea": "不提新指標，而是把「任務成功判準」的每一個實作自由度攤開（去詞彙化、後處理、資料庫表面形式、訂位可得性、實體比對規則、領域來源、測試集與訓練集重疊），逐一說明它如何影響分數；再把 13 個系統的原始輸出統一正規化後，用單一實作重算 BLEU、Inform、Success，並另外做一個「樂觀設定」模擬部分論文的寬鬆實作，以量化實作差異造成的分數落差。最後釋出獨立的標準評分腳本與所有系統的輸出，並建議：用標準實作、在去詞彙化之前的表面文字上評估或用標準前後處理、回報確切的評估腳本、公開系統輸出。另外補上輸出多樣性指標，說明語料式指標沒量到的面向。",
+  "method": {
+    "input_output": "輸入：各系統在 MultiWOZ 測試集（1000 段對話）上逐回合產生的去詞彙化系統回應（在 ground-truth 對話脈絡下生成，屬 turn-level 評估），必要時附上系統預測的對話狀態與目前的活躍領域。輸出：6 種參考答案下的 BLEU、Inform 率、Success 率（標準與樂觀兩種設定）、6 項詞彙多樣性指標。",
+    "system_collection": "7 個端到端系統（DAMD、MinTL、UBAR、SOLOIST、AuGPT、LABES、DoTS）與 6 個 policy optimization 系統（MarCo、HDSA、HDNO、SFN、UniConv、LAVA；這類系統訓練與推論都拿 ground-truth 對話狀態）。來源分三種：作者提供的輸出（SOLOIST、AuGPT、LAVA）、作者訓練好的 checkpoint（DoTS、LABES、UBAR 與 LAVA 以外的 policy 系統）、用公開程式碼從頭訓練（DAMD、MinTL；MinTL 只重現得出 T5-small）。LABES 的 checkpoint 只能對 91.66% 的測試語句產生輸出。系統訓練所用的 MultiWOZ 版本不一（2.0 或 2.1），作者承認對 policy 系統而言版本會影響評估，但判斷其影響小於評估腳本差異。",
+    "audit_dimensions": "§4 列出六類陷阱並給出 Table 3 的逐系統設定表：(1) 去詞彙化風格（13 系統共 5 種：HDSA、DAMD、AuGPT、UniConv、LAVA）與 BLEU 斷詞（word、sub-word、NLTK）；(2) 後處理：12 個有程式碼的系統只有 4 個附反向詞彙化腳本；(3) 資料庫：同一實體有多種表面形式（「4pm」與「16:00」），且資料庫沒有訂位可得性資訊，有些工作評估時用 ground-truth 訂位資訊、有些放任系統亂答；(4) Inform／Success 的實作變體，Table 3 用四欄描述：Venue comparison（sampling、intersection、subset、first）、Venue updates（何時更新候選實體集：提到 name、id、ref 時，或只在對話結束時）、Reduced search（提到名稱或車次時是否忽略其他搜尋條件）、Domain source（活躍領域取自狀態變化、slot 名稱或模型預測）；(5) 缺少多樣性評估；(6) 測試集與訓練集的目標重疊。",
+    "bleu_normalization": "為了在同一基準上算 BLEU：先移除 start-of-sequence 符號；刪掉所有「-s」「-ly」字串以及黏在 slot 佔位符後面的「s」「es」；轉小寫；辨識 slot 名稱並映射到統一的 18 個 slot 的本體（原本帶領域前綴的去詞彙化約有 40 種 slot 名稱；映射是有損的，例如 departure、destination、taxi_destination 都變成 PLACE）；最後用 Moses 斷詞器與反斷詞器（sacremoses）跑一遍。BLEU 用 SacreBLEU 計算，對 6 種參考答案各算一次：上述 5 種系統去詞彙化風格加上由 MultiWOZ 2.2 span 標註導出的去詞彙化。",
+    "database": "資料庫查詢改成對不同表面形式做模糊比對：FuzzyWuzzy 套件，相似度門檻 90%；另外用規則把時間字串、場所名稱、食物類型、場所類型轉成與資料庫條目一致的標準形式（例如「ten o'clock p.m.」轉成「22:00」）。",
+    "inform_success_standard": "照 Budzianowski et al. (2018) 的定義，以對話為單位計算。逐回合掃描去詞彙化回應：(1) 只有當回應中出現場所名稱或車次佔位符時，才用該領域目前的對話狀態查資料庫，把查到的條目集合更新為「已提供的候選實體集」；(2) 記錄回應中提過哪些 requestable slot（電話、地址、郵遞區號等）。對話結束後，對使用者目標中的每個領域：以目標的 informable 條件查資料庫得到「目標實體集」，若已提供的候選集是目標實體集的非空子集，該領域算 match（沿用 HDSA 的子集規則，取代原實作「從查詢結果隨機抽一筆」的做法）。Inform = 所有目標領域都 match 的對話比例；Success = match 且每個領域要求的 requestable slot 都提過的對話比例（因此 Success ≤ Inform）。活躍領域：slot 佔位符帶領域名時直接取用；不帶時優先用模型預測的領域，沒有就從後續回合狀態預測的變化推估。附錄 A 以 UBAR 的一段對話（SNG0805）逐回合示範候選集、活躍領域與已提供資訊的變化。",
+    "inform_success_optimistic": "為解釋回報值與重算值的落差，另做「樂觀設定」模擬部分論文的寬鬆實作：(1) 候選集與目標集只要有交集就算 match（取代子集規則）；(2) 回應提到名稱或車次時忽略其他搜尋條件（因為 ground-truth 脈絡常含正確名稱，這等於放過狀態追蹤錯誤）；(3) 使用 ground-truth 活躍領域（取自 DAMD 程式碼庫的腳本）。",
+    "diversity": "在統一 slot 本體正規化後的文字上計算：不重複 token 數、不重複 trigram 數、token 的 Shannon entropy、bigram 條件熵、MSTTR-50（把輸出切成每段 50 個 token 算 type-token ratio 再平均，降低對總長度的依賴）、平均回合長度；以 MultiWOZ 2.2 去詞彙化的人類回應當參考。",
+    "released_tool_repo_implementation": "以下細節取自 GitHub 上 Tomiinek/MultiWOZ_Evaluation 的 master 版程式碼（最後推送 2023-10-11），論文本身沒有寫到，可能與論文當時的版本不同：安裝後以 Evaluator(bleu, success, richness).evaluate(predictions) 呼叫，predictions 是 {對話 ID: [每回合 {response, state（選填）, active_domains（選填）}]}；沒給 state 時改用 MultiWOZ 2.2 的 ground-truth 狀態（提示這件事的警告行被註解掉）；沒給 active_domains 時從狀態變化推估。requestable slot 固定為 PHONE、ADDRESS、POST、REFERENCE、TRAINID；REFERENCE 只有在該領域於 ground-truth 標註中確實訂位成功時才計入。目標條件含 name 的領域、taxi／police／hospital 三個沒有資料庫的領域、以及沒要求車次且系統也沒提供車次的 train 領域，一律直接算 match。候選集只有在舊候選中有任何一筆不在新查詢結果裡時才整批替換。模糊比對用 fuzz.partial_ratio，門檻 90，只套用在特定欄位；dontcare 類的值不當成查詢條件；出發／抵達時間以分鐘比大小。輸出除 total 外也有逐領域的 inform／success。函式說明文字列了四種設定（預測或真實狀態 × 標準或樂觀），但程式碼只算一種。",
+    "leaderboard_aggregation_readme": "MultiWOZ 官方 README 的回應生成排行榜另用 Combined Score = (Inform + Success) × 0.5 + BLEU 聚合排名（這個公式出自 README，不是本篇論文）。"
+  },
+  "assumptions": [
+    "系統輸出是去詞彙化文字，佔位符能被可靠辨識並映射到統一的 slot 本體；「提到某個 requestable 佔位符」就等同於「提供了該資訊」，不檢查填進去的值是否正確。",
+    "評估是在 ground-truth 對話脈絡下逐回合生成，系統必須剛好在語料中那一個回合提到實體（作者註腳 3），因此這裡的 Success 並非互動式的任務完成。",
+    "目標實體集可以由使用者目標的 informable 條件查靜態資料庫得到，而且資料庫是完整的；訂位可得性只能靠 ground-truth 標註推得。",
+    "FuzzyWuzzy 門檻 90% 加上人工規則足以把表面形式正規化到正確的資料庫條目，不會誤配。",
+    "有損的 18-slot 本體映射不會大幅扭曲系統之間的 BLEU 相對排序。",
+    "MultiWOZ 2.0 與 2.1 的版本差異，對分數的影響小於評估腳本之間的差異（作者的判斷，未量化）。",
+    "子集比對（HDSA 的做法）是比隨機抽樣或交集比對更合理的「符合目標」判準；論文沒有用人工判斷驗證這個選擇。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MultiWOZ 測試集 1000 段對話（系統分別訓練在 2.0 或 2.1 版；參考答案含 MultiWOZ 2.2 span 導出的去詞彙化）"
+    ],
+    "metrics": [
+      "BLEU（SacreBLEU，對 6 種去詞彙化參考各算一次）",
+      "Inform rate（標準子集比對；樂觀設定）",
+      "Success rate（標準；樂觀設定）",
+      "不重複 token 數、不重複 trigram 數",
+      "token Shannon entropy、bigram 條件熵",
+      "MSTTR-50、平均回合長度"
+    ],
+    "baselines": [
+      "端到端：DAMD、MinTL（T5-small）、UBAR、SOLOIST、AuGPT、LABES、DoTS",
+      "policy optimization：MarCo、HDSA、HDNO、SFN、UniConv、LAVA",
+      "各論文自行回報的分數（Table 4、Table 5 的 Reported／rep. 列）",
+      "ground-truth 語料回應與狀態本身（Inform／Success 的上限參照；多樣性的人類參考）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "13 個系統共用了 5 種去詞彙化風格，而且每篇都用自己前處理的資料當 BLEU 參考答案；含 slot 的語句在各系統之間很少完全一致。",
+      "numbers": "70.61% 的測試語句至少在一種去詞彙化版本中含 slot；含 slot 的回應只有 17.52% 在所有系統間完全相同；有 8 句在 5 種風格下兩兩皆不同。",
+      "section": "§4.1、Table 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "MultiWOZ 測試集與訓練集高度重疊，評估其實測不到狀態追蹤的泛化能力，理論上系統可以背下整個資料庫。",
+      "numbers": "1000 段測試對話中有 174 段的目標也出現在訓練或驗證集；測試集沒有任何未見過的 slot-value 組合，只有 12 個新的 domain-slot-value 三元組。",
+      "section": "§4.6",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "換一種去詞彙化參考答案，同一系統的 BLEU 最多變動約 2 分，而且系統之間的相對排名會跟著改變；多數系統在自己訓練時用的去詞彙化參考上分數最高。",
+      "numbers": "HDSA 在 AuGPT 風格參考下 20.4、在 HDSA 風格參考下 22.5（差 2.1）；MarCo 17.1–19.0；DAMD 與 AuGPT 在 MWZ 2.2 參考下為 16.4 對 16.8，在 DAMD 參考下反轉為 16.9 對 16.5。以 MWZ 2.2 參考比，6 個 policy 系統回報的 BLEU 都高於重算值（例如 HDSA 回報 23.6、重算 20.7）；但若取各系統最高的重算值，HDNO 是反例（回報 19.0，HDSA 與 LAVA 參考下重算 19.4）。",
+      "section": "§5.2、Table 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "在統一實作下重算的 Inform／Success 與各論文回報值差距很大，差距主要來自評估實作；改用樂觀設定後，端到端系統的落差大幅縮小，顯示寬鬆比對會掩蓋狀態追蹤錯誤。",
+      "numbers": "DAMD：重算 Inform 57.9／Success 47.6，回報 76.3／60.4，樂觀設定 73.7／63.0（DAMD 是作者用公開程式碼從頭重訓的，這段落差也混了訓練變異）。UniConv（用作者提供的 checkpoint）：重算 66.7／58.7，回報 84.7／76.3（兩者都差約 17–18 分），樂觀設定只到 67.5／60.1。反方向：SFN 重算 93.4／82.3 高於回報 82.7／72.1。排名也會翻轉：UniConv 回報 Success 76.3 高於 HDSA 的 68.9，重算後 58.7 低於 HDSA 的 79.4。",
+      "section": "§5.1、§5.2、Table 5",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "UBAR 原本的高分是因為評估時用了部分 ground-truth 資料；AuGPT 的較高回報值來自只在對話結束時才取候選實體集的不同 Inform 算法。",
+      "numbers": "UBAR：回報 Inform 95.7／Success 81.8，重算 83.4／70.3。AuGPT：回報 91.4／72.9，重算 76.6／60.5。",
+      "section": "§5.2、Table 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "拿 ground-truth 回應與狀態當輸出本身去算，也拿不到滿分，這給出指標的實際上限；樂觀設定會把上限再往上推。",
+      "numbers": "語料本身：Inform 93.7%、Success 90.9%；樂觀設定下為 97.9%、96.6%。",
+      "section": "§5.2",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "標準實作採用子集比對：候選實體集必須是目標實體集的非空子集才算符合，取代原實作隨機抽一筆實體的做法（隨機抽樣在兩集合部分重疊時會隨機算成功或失敗）。",
+      "numbers": "13 個系統中，DAMD 系 4 個用交集、MarCo 與 HDSA 用子集、DoTS／HDNO／SFN／UniConv／LAVA 用隨機抽樣、AuGPT 只取第一筆、SOLOIST 未標示；標準實作統一改為子集比對加上 90% 門檻的模糊資料庫查詢。",
+      "section": "§4.4、§5.1、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "所有系統的詞彙多樣性都遠低於人類回應，用強化學習訓練的系統最單調；SOLOIST 最多樣也最長，但仍比較接近其他模型而不是人類。",
+      "numbers": "人類參考 1407 個不重複 token、25212 個 trigram、bigram 條件熵 3.37、MSTTR-50 0.75。HDNO 只用 315 個 trigram（約為參考的 1.2%）、條件熵 0.84；LAVA 708 個 trigram、MSTTR-50 0.54；SOLOIST 7923 個 trigram、平均長度 18.45。",
+      "section": "§5.3、Table 6",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "每個系統只有一份輸出（作者的預測、公開權重或單次重新訓練），無法做統計分析（§5 註腳 9）。",
+    "policy optimization 系統分別訓練在 MultiWOZ 2.0 與 2.1，版本會影響評估，比較並非完全公平。",
+    "LABES 只在 91.66% 的測試語句上有輸出；MinTL 只重現了 T5-small；拿不到 SimpleTOD、ARDM 的程式碼、權重或輸出。",
+    "統一 18-slot 本體的映射是有損的，會抹掉部分系統較細的 slot 區分；多樣性比較因各系統去詞彙化不同只能粗略推論。",
+    "去詞彙化評估本身排除了互動式人工評估、open-domain 的模型式指標，以及 ConvLab 這類使用者模擬器的端到端評估。",
+    "BLEU 只有單一參考答案，而且 MT 來的指標與人類判斷在對話上相關性很弱。",
+    "MultiWOZ 2.2 的 span 標註仍需人工修訂；比語料式指標更重要的是人工評估與完整對話評估，但這在端到端系統中仍不普及。",
+    "測試集與訓練集目標重疊，評估無法檢驗狀態追蹤的泛化能力。"
+  ],
+  "limitations_observed": [
+    "內文與表格對不上：§5.2 寫 DAMD 回報值「兩個 rate 都高約 20」，但 Table 5 的差距是 Inform 18.4 分（76.3 對 57.9）、Success 12.8 分（60.4 對 47.6），相對比例也分別是 32% 與 27%，不是 20%。引用這篇時要以表格數字為準。",
+    "指標上限被打穿，論文沒有討論：在作者自己的標準設定下，LAVA 的 Success 93.5 高於 ground-truth 語料的 90.9，LAVA（95.9）與 MarCo（94.5）的 Inform 也高於語料的 93.7。原因是 Success 只算 requestable slot 的召回、不罰多講或講錯時機的內容。附錄 B 的 Table 8 與 Table 9 中，LAVA 面對兩個完全不同的脈絡（詢問植物園、要找市中心的貴餐廳且尚未選定）都回出幾乎同一句「名稱＋地址＋郵遞區號＋電話」樣板，而它的 MSTTR-50（0.54）是所有系統中最低，trigram 數（708）僅高於 HDNO。統一實作只解決了可比性，沒解決這個 Success 判準本身會獎勵灌 slot 的效度問題；對 T8 來說，任務成功判準需要精確度或適當性的約束，並檢查分數是否超過人類參照。",
+    "歸因沒有做消融：作者把 MarCo、HDSA、SFN 重算後變高（SFN 的 Inform 從 82.7 升到 93.4）歸因於「更寬鬆的資料庫」，但標準實作同時改了模糊比對、子集規則與領域推估三件事，沒有逐項切換量測，無法知道各元件各貢獻幾分。樂觀設定也是三項一起開，同樣分不出來。",
+    "標準設定仍有 ground-truth 洩漏：附錄 A 自己指出，area 這個 slot 從未在生成的回應或使用者語句中出現，卻透過 ground-truth 脈絡進入對話狀態並參與 Inform 判定。policy 系統更是整個狀態都用 ground truth。統一實作提高了可比性，但這個分數量的仍是「在正確歷史下單回合是否提到對的東西」，不是任務完成。",
+    "工具預設值會悄悄換成 ground truth：repo 版本中若送出的預測沒有 state，評估器直接改用 MultiWOZ 2.2 的 ground-truth 狀態，提示警告被註解掉。只交回應的端到端系統因此會在不知情下拿到 policy 系統式的評估，而官方排行榜把「端到端」與「policy」分表，依賴的是投稿者自己申報。",
+    "評分器版本會漂移，卻沒有被記錄：MultiWOZ 官方 README 的參考語料多樣性數字（bigram 條件熵 3.01、23877 個 trigram、平均長度 14.00）與本文 Table 6（3.37、25212、14.07）不同；repo 的函式說明寫四種設定、程式碼只算一種。論文建議「回報確切的評估腳本」，但官方排行榜表格沒有標出所用腳本的版本或 commit。",
+    "落差的歸因混了訓練變異：DAMD 與 MinTL 是作者用公開程式碼重訓的，DAMD 回報與重算之間 18.4／12.8 分的落差，有多少來自評估腳本、多少來自重訓沒重現原模型，論文分不開。用作者 checkpoint 的 UniConv 是最乾淨的例子（落差 18.0／17.6），但樂觀設定只把它拉到 67.5／60.1，三項寬鬆規則都解釋不了這段落差，論文也沒有給出歸因，只描述為 policy 系統中差最多的。",
+    "沒有誤差估計，但其實做得到：作者以「每系統只有一份輸出」為由不做統計分析，但 Inform／Success 是 1000 段對話上的二元結果，對對話做 bootstrap 就能給信賴區間。缺了這一步，LAVA 95.9 對 MarCo 94.5、DAMD 16.4 對 AuGPT 16.8 這類差距是否有意義無從判斷。",
+    "判準是全有全無：一段對話只要有一個領域沒 match 就整段 Inform 為 0，Success 也要求所有領域全對，論文正文沒有部分分數，也沒有依對話的領域數分層，多領域對話越多的子集分數天生越低。repo 雖然輸出逐領域的比率，論文沒有分析。",
+    "訂位成功的判定綁在 crowd worker 的決定上：repo 只在 ground-truth 標註該領域有訂位時才計入 REFERENCE，等於假設系統應該重現原對話中「這次能訂、那次不能訂」的隨機安排；這是在資料庫缺乏可得性資訊下的權宜之計，論文 §4.3 點出問題但沒說明標準實作怎麼處理。"
+  ],
+  "framework_role": "T8 的「任務成功判準」基礎文獻：它把對話任務成功拆成 Inform（提供的實體是否落在目標實體集內）與 Success（符合目標且提供所有被要求的資訊）兩層，並用 13 個系統的重算證明，同名指標光是比對規則、狀態來源、領域來源與資料庫正規化不同，就能讓分數差到 17–18 分、排名翻轉。對本框架的直接啟示是：任務完成分數必須有唯一、可版本鎖定的參考實作；判準要寫明比對規則（子集、交集或抽樣）、狀態與領域資訊是預測的還是 ground truth；並用人類或 ground-truth 參照檢查分數有沒有超過上限（LAVA 的 Success 就高過語料本身）。它也是 T7 評估可重現性的案例，但只處理離線、單回合、ground-truth 脈絡的語料式評估，沒有涉及使用者模擬器或互動紀錄；ConvLab 等模擬器評估只在文中被當作對照提及。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "MultiWOZ 官方 GitHub README 的「Response Generation」段落明確要求回應生成評估使用本文釋出的評分腳本（https://github.com/Tomiinek/MultiWOZ_Evaluation），官方排行榜的數字與本文 Table 4／5 一致（例如 DAMD 的 BLEU 16.4、Inform 57.9、Success 47.6，LAVA 的 10.8／95.9／93.5），並把舊結果另列、註明可能因評估腳本不一致而無法直接比較。來源：https://github.com/budzianowski/multiwoz（README，2026-09-26 查閱）。"
+    ],
+    "assessment": "屬於基準維護者層級的採納：MultiWOZ 官方把它指定為回應生成的標準評分器，排行榜也依此重排。商用產品或部署使用未見證據。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/Tomiinek/MultiWOZ_Evaluation",
+    "data": "公開。MultiWOZ 資料集公開；repo 以 MIT 授權釋出評分腳本，並在 predictions 目錄附上受比較系統的原始輸出。注意 repo master 版的預設行為（缺 state 時改用 ground-truth 狀態）與論文敘述不完全一致，重現時要鎖定 commit。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "直接回答 T8「任務成功怎麼判」：它證明同名的 Inform／Success 因實作不同可差約 18 分（UniConv）、排名翻轉，給出一份後來被 MultiWOZ 官方指定的參考實作，而且它的表格本身就暴露了 Success 判準會被灌 slot 的樣板打穿。",
+  "related": [
+    "1810.00278",
+    "2007.12720",
+    "1907.01669",
+    "1604.04562",
+    "1804.08771",
+    "2005.07362",
+    "1603.08023",
+    "2002.04793",
+    "1911.10484",
+    "2012.03539",
+    "2011.09378",
+    "1905.12866",
+    "2005.05298",
+    "2102.05126"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

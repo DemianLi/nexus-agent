@@ -1,0 +1,187 @@
+{
+  "id": "2304.05128",
+  "title": "Teaching Large Language Models to Self-Debug",
+  "topic": "T5",
+  "subarea": "外部回饋／工具輔助的修正",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 Self-Debugging：不微調模型，只用 few-shot（或 zero-shot 對話）提示，讓 LLM 依序做「產生程式 → 執行並逐行解釋自己的程式 → 產生對錯回饋 → 修正」的迴圈；在 Spider（無單元測試）、TransCoder（C++→Python）、MBPP 上都比同模型基準高，Codex 在 Spider 達 84.1、TransCoder 從 80.4 升到 92.5，並用「拿掉程式執行」的對照實驗顯示增益大半來自外部的執行訊號。",
+  "problem": "複雜程式題很難一次寫對。既有兩條路各有代價：(1) 抽很多候選再用執行結果或重排序挑一個（MBR-Exec、Coder-Reviewer、LEVER），通常要幾十到上百個樣本；(2) 訓練專門的程式修復模型，需要額外訓練資料。而同期研究（Chen et al. 2023a）指出，LLM 在沒有外部回饋（單元測試或人類指示）時還不會修正程式。作者要回答：能不能只靠提示，教一個預訓練 LLM 在沒有人類回饋的情況下自己找出並修掉錯誤，並藉由重用失敗的預測來減少取樣成本。",
+  "core_idea": "模仿人類的「小黃鴨除錯法」：不要求模型直接說出錯在哪、怎麼修，而是讓它先把自己的程式用自然語言逐行解釋（或模擬執行軌跡），再拿解釋去和題目需求比對，由此推斷對錯；有單元測試時再把真實執行結果（失敗的斷言、實際輸出或 traceback）塞進回饋。把一輪除錯拆成 Generation、Explanation、Feedback 三步，回饋可以是模型自己判斷，也可以是外部測試產生；迴圈在回饋判定為正確或達到輪數上限時停止。",
+  "method": {
+    "整體迴圈（§3，Figure 1）": [
+      "1. Generation：給題目描述，模型產生候選程式。",
+      "2. Explanation：提示模型把預測「以語意上有用的方式處理」——用自然語言逐行解釋程式，或對某個輸入寫出逐行執行軌跡。注意：軌跡是模型自己生成的，不是真的去取中間執行狀態。",
+      "3. Feedback：產生一段關於正確性的回饋訊息；可以由模型自己判斷，也可以由單元測試外部產生。",
+      "4. 把回饋接回提示，模型產生新程式，回到步驟 2。",
+      "停止條件：回饋說預測正確，或達到最大除錯輪數。實務上一輪不一定包含全部三步（例如 simple 回饋省略 Explanation）。"
+    ],
+    "四種回饋格式（§3）": {
+      "Simple": "只給一句對錯，不含細節。Spider 的 few-shot 範例在正確時寫「SQL prediction 正確」，錯誤時寫「錯了，請修」。在有單元測試的任務上，是否給出「錯」其實是由執行結果決定，只是執行細節不放進訊息。",
+      "Unit test（UT）": "有單元測試時，把失敗測試的執行結果放進回饋：TransCoder 的格式是「Python 翻譯與 C++ 行為不同，以下是一個失敗單元測試的結果：Failed: assert f(x) == y；Actual Result: 實際輸出或 Python runtime error 的 traceback；請修正翻譯」。每輪只放一個失敗的測試。",
+      "Code Explanation（Expl）": "模型逐行解釋自己的程式（TransCoder 另外也先解釋原始 C++），再依解釋判斷與題目是否一致。",
+      "Execution trace（Trace）": "有單元測試時，要求模型針對失敗測試的那個函式呼叫逐步追蹤執行過程，指出哪一步和預期不同，再修正。軌跡由模型想像，不需要額外的執行期資訊。"
+    },
+    "初始程式的挑選（§2）": "只取一個樣本時用 greedy（τ=0）；取多個樣本時以 τ=0.7 抽樣（附錄 F.1 則寫 TransCoder 初始翻譯沿用 PaLM 的 τ=0.8，兩處不一致），在沒有執行錯誤的候選中挑執行結果出現最多次者（MBR-Exec 式多數決）；題目附單元測試時，先濾掉沒跑過測試的候選再投票。Self-Debugging 套在被選出的那一個程式上。",
+    "共同超參數（§5）": "除錯階段的解釋、回饋、新程式一律 greedy 解碼；最大除錯輪數 10，但成功的除錯大多在 3 輪內結束；Spider 上第一輪之後的增益在 0.1% 以內，TransCoder 上一輪完整回饋就帶來約 12% 的增益。",
+    "Text-to-SQL（Spider dev，§4.1，附錄 E）": {
+      "輸入": "資料庫 schema 以 CREATE TABLE 呈現，每張表附一列 INSERT 範例資料，加上自然語言問題；輸出 SQL。",
+      "步驟一：問題解釋（E.4）": "提示「推斷問題的回傳型別」，模型把問題逐片段拆開、數出每段回傳幾個欄位，最後得出整題應回傳幾欄。",
+      "步驟二：SQL 解釋（E.5）": "實際執行 SQL，把回傳表格放進提示（超過 2 列只放前 2 列），要求「摘要執行結果的回傳型別」：逐子句說明（JOIN、WHERE、GROUP BY、LIMIT…）、回傳幾欄、整句 SQL 的高層意義；空表時要說明為何為空（例如 WHERE 條件互斥）。",
+      "步驟三：比對與判斷（E.3）": "回饋格式固定為「如你的解釋，SQL 回傳 X；問題要的是 Y；所以預測錯了請修」或「……所以預測正確」。判定為正確或達 10 輪即停。",
+      "提示規模": "基準 5-shot；simple 回饋 9-shot；explanation 回饋 9-shot（每則範例都含完整 schema）。GPT-3.5／GPT-4 改用 zero-shot 對話版（E.6、E.7），指令如「SQL 是否符合問題？若否，產生修正後的 SQL」。"
+    },
+    "程式翻譯（TransCoder C++→Python，§4.2，附錄 F）": {
+      "資料": "560 題，每題 10 個單元測試；題目描述同時包含 C++ 程式與全部單元測試。",
+      "觸發": "只有在預測的 Python 沒跑過全部測試時才啟動 Self-Debugging，因此模型不必自己預測回饋；反覆修到測試全過或達輪數上限。",
+      "提示": "基準 3-shot（取自 PaLM 論文）；Baseline+Expl 3-shot（先逐行解釋 C++ 再翻譯，不做除錯）；simple／UT／UT+Expl／UT+Trace 皆 2-shot；另有 GPT 系列用的 zero-shot 對話版（F.7–F.10）。"
+    },
+    "Text-to-Python（MBPP test，§4.3，附錄 G）": {
+      "資料": "500 題，每題 3 個單元測試；只把第 1 個放進題目，另外 2 個藏起來做完整評估。",
+      "判斷": "即使程式跑過可見的那個測試，模型仍要自行推斷是否真的正確（few-shot 範例中刻意放了「跑過可見斷言但仍判為錯」的例子）。",
+      "提示": "基準 3-shot（取自 LEVER）；simple、UT 回饋 6-shot；UT+Expl 因 context 長度限制只放 3-shot。",
+      "對話版的收尾規則（G.5–G.7）": "沒跑過可見測試時持續給「錯了請修」或附失敗測試的回饋；一旦跑過，只再問一次「程式正確嗎？若否請修」，新程式必須也跑過可見測試才採用，否則沿用原本那份，之後就結束除錯。"
+    },
+    "模型": "code-davinci-002（Codex）、gpt-3.5-turbo、gpt-4、StarCoder 15.5B。Codex 與 StarCoder 用 few-shot 提示；GPT-3.5／GPT-4 主要用 zero-shot 對話提示（附錄 A 說 GPT-3.5 加 few-shot 範例效果相近）。",
+    "重做需要的元件": "程式執行沙箱（SQLite 執行 SQL、Python 執行器能捕捉 traceback）；每個任務的 4–6 份提示模板（附錄 E–G 全文列出）；初始候選的執行式多數決挑選器；一個控制迴圈（輪數上限 10、依回饋文字判斷停止、每輪只取一個失敗測試）。論文正文未附程式碼連結。"
+  },
+  "assumptions": [
+    "有可以安全、便宜、確定性地執行預測程式的環境；UT 與 Trace 回饋都依賴真實執行結果。",
+    "單元測試（或 SQL 執行結果）能代表正確性；TransCoder 設定中題目直接給了評估用的全部 10 個測試。",
+    "初始預測多半「接近正確、只差一點」；作者自己觀察到錯誤多是少了 WHERE 條件、DISTINCT 等小錯，初始程式離正解太遠時解釋幫助變小。",
+    "基礎模型能從長 few-shot 範例學到除錯格式（Codex 明顯比 GPT-3.5 擅長）或能遵循對話式指令。",
+    "在沒有測試的 Spider 上，「問題回傳幾欄、SQL 回傳幾欄」這類比對足以揭露大部分錯誤；SQL 執行結果只看前 2 列就夠用。",
+    "模型自己寫的解釋或模擬執行軌跡大致可信；方法本身沒有機制檢查解釋是否寫錯。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Spider dev set（text-to-SQL，無單元測試；依難度分 easy／medium／hard／extra hard）",
+      "TransCoder test set（C++→Python，560 題 × 10 個單元測試）",
+      "MBPP test set（500 題，1 個可見測試＋2 個隱藏測試）"
+    ],
+    "metrics": [
+      "準確率（Spider 本文未明確寫是 execution accuracy 還是 exact match）",
+      "TransCoder pass@1（全部單元測試通關）",
+      "MBPP 準確率（以隱藏測試評估）",
+      "樣本效率：不同初始樣本數下的準確率曲線（Figure 6a、8b）",
+      "依除錯輪數的準確率（Figure 8a）",
+      "依 Spider 難度等級的準確率（Figure 6b）",
+      "被成功修好的錯誤類型百分比（Table 4）"
+    ],
+    "baselines": [
+      "同模型不除錯的基準（greedy 或多樣本＋執行式多數決）",
+      "T5-3B + N-best Reranking（Spider 上以訓練集微調）",
+      "LEVER（Codex 產生候選＋訓練過的執行驗證器）",
+      "MBR-Exec（多樣本、選最常見執行輸出）",
+      "Coder-Reviewer（以 Coder 與 Reviewer 似然重排）",
+      "TransCoder、PaLM、PaLM-Coder（附錄 B，TransCoder 上的不除錯模型）",
+      "消融：Simple／UT／+Expl／+Trace 各回饋格式；有無單元測試執行（Table 3）；只解釋不除錯的 Baseline+Expl"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在沒有單元測試的 Spider 上，只給對錯一句話的 simple 回饋對 Codex 完全沒有增益；加上自我解釋才有效，且 Codex 的結果超過需要訓練的 LEVER 與 T5-3B 重排。但其他模型的解釋增益幾乎為零。",
+      "numbers": "Codex：基準 81.3 → Simple 81.3 → +Expl 84.1；LEVER 81.9、T5-3B + N-best 80.6、MBR-Exec 75.2、Coder-Reviewer 74.5。GPT-3.5 71.1 → 72.2 → 72.2；GPT-4 73.2 → 73.4 → 73.6；StarCoder 64.7 → 64.9 → 64.9。",
+      "section": "§5.1，Table 1(a)、Table 2(a)",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "有單元測試可用時，所有模型都有明顯增益；GPT-4 的除錯增益與 Codex 相當，StarCoder 也受惠。",
+      "numbers": "TransCoder：Codex 80.4 → UT+Expl 92.5；GPT-4 77.3 → 90.4；GPT-3.5 89.1 → 92.7；StarCoder 70.0 → 76.6。MBPP：Codex 61.4 → 69.8（+Trace 70.8）；GPT-4 72.8 → UT 80.6；GPT-3.5 67.6 → 74.2；StarCoder 47.2 → +Trace 53.2。",
+      "section": "§5.1，Table 2(b)(c)",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "Self-Debugging 提升樣本效率：少量初始樣本加除錯就追平或超過多很多樣本的基準；在 MBPP 上以 10 個樣本勝過用 25–100 個樣本的重排方法。",
+      "numbers": "Spider：greedy＋除錯 ≈ 16 樣本基準；8 樣本＋除錯 > 32 樣本基準。TransCoder：greedy＋除錯 > 5 樣本基準、接近 10 樣本基準。MBPP：Codex n=10 基準 72.2 → Simple 73.6 → UT 75.2 → UT+Expl 75.6，對比 LEVER 68.9（n=100）、Reviewer 66.9（n=25）、MBR-Exec 63.0（n=25）。",
+      "section": "§5.2.1，Figure 6(a)；附錄 C.1，Figure 8(b)；Table 1(b)",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "拿掉單元測試執行、讓模型全靠自己判斷對錯時，增益大幅縮水，甚至變差；GPT-3.5 與 GPT-4 傾向對自己的初始預測過度自信。模型模擬的執行軌跡在此設定下是最穩定的一種自生回饋。",
+      "numbers": "MBPP 無執行：Codex 61.4 → Simple 57.6（下降 3.8）→ +Expl 64.4 → +Trace 66.2；GPT-3.5 67.6 → 68.2／68.2／69.2；GPT-4 72.8 → 76.0／76.0／76.4。TransCoder 無執行：Codex 80.4 → 83.4／83.9／83.9；GPT-3.5 全部維持 89.1；GPT-4 77.3 → 78.2／78.0／78.4。",
+      "section": "§5.2.2，Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "被修好的多是「接近正解的小錯」；在 Spider 最難的題目上增益最大。",
+      "numbers": "Spider extra hard 題準確率 +9%。Spider（Codex）修好的錯誤：WHERE 條件錯 25.7%、少 DISTINCT 17.1%、JOIN 錯 14.3%、SELECT 欄數錯 11.4%、INTERSECT／UNION 錯 8.6%。TransCoder（GPT-3.5）輸出不符 61.9%／執行期錯誤 38.1%；MBPP（GPT-4）69.2%／30.8%。TransCoder 超過 30% 的修正是語言間實作差異；MBPP 超過 10% 的初始程式靠調換參數順序或型別就修好。",
+      "section": "§5.2.3，Figure 6(b)、Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "同一批初始程式交給不同模型除錯時，Codex 做除錯不輸甚至優於 GPT-3.5，作者推論 Codex 較會從長 context 的 few-shot 範例學習；GPT-3.5 在 Spider 上 zero-shot 生成遠差於 few-shot。",
+      "numbers": "從最佳初始程式出發：TransCoder UT+Expl Codex 92.7 = GPT-3.5 92.7；MBPP Simple 72.4 vs 70.8、UT 73.2 vs 72.2、UT+Expl 73.6 vs 74.2；Spider +Expl 84.1 vs 83.0。GPT-3.5 在 Spider greedy：zero-shot 59.9、few-shot 71.1。",
+      "section": "附錄 A，Table 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "主要增益來自第一輪除錯；輪數上限設 10，但成功的除錯大多在 3 輪內結束。",
+      "numbers": "TransCoder：單一輪完整回饋（UT+Expl）比 greedy 高約 12%；Spider：第一輪之後的增益在 0.1% 以內。",
+      "section": "§5、§5.2.1；附錄 C.1，Figure 8(a)",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "在 MBPP 上程式解釋的額外效益較小，作者給出三個原因：有測試時錯誤本來就好辨識；加入解釋後因 context 長度限制範例數從 6 降到 3；初始程式離正解太遠時模型乾脆重寫、不依賴原程式。",
+      "numbers": "Codex MBPP：UT 69.4 → UT+Expl 69.8（僅 +0.4）；GPT-4：UT 80.6 → UT+Expl 80.4（略降）。",
+      "section": "附錄 C.2，Table 2(c)",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "在沒有單元測試的 Spider 上，simple 回饋幾乎無效，因為模型分不出 SQL 對錯、也不會做出有意義的修改。",
+    "沒有執行結果時，GPT-3.5 與 GPT-4 對自己的初始預測過度自信，few-shot 範例也沒有明顯改善它們的除錯表現，只能靠模型內部的程式知識。",
+    "GPT-4 在 Spider 上的初始生成與除錯都明顯比 Codex 差，作者推測它針對 zero-shot 調校、較不會照 few-shot 範例做；GPT 系列 zero-shot 生成 SQL 比 few-shot 差超過 10%。",
+    "MBPP 上程式解釋效益較小：有測試時錯誤好辨識、context 長度讓範例數減半、初始程式太差時解釋派不上用場。",
+    "初步結果顯示，讓模型另外產生「語意錯誤描述」的回饋，在逐行解釋之上沒有額外好處；如何預測更有資訊量的錯誤訊息留作未來工作。",
+    "作者假設更好的程式解釋能力會帶來更好的除錯表現，並把改進解釋、錯誤辨識與依錯誤訊息修正列為未來工作。"
+  ],
+  "limitations_observed": [
+    "TransCoder 的 UT 回饋其實是「評估用測試」本身：題目描述附上全部 10 個單元測試，除錯迴圈跑到這些測試全過為止，而評估指標也是同一組測試的 pass@1。這等於用 oracle 回饋除錯，量到的是「給定正確答案的判定器時能修多少」，不是自我修正能力。更說明問題的是：只給一個 oracle 對錯位元的 Simple 回饋，就讓 Codex 從 80.4 升到 89.3，佔全部增益（到 92.5）的約 74%；附錄 B 拿 92.5 對比沒用測試的 PaLM-Coder 55.1 也因此不是同條件比較。這正是後來 Huang et al.（2310.01798）批評「自我修正增益來自 oracle 標籤」的典型情形。",
+    "摘要宣稱 Spider 上「以解釋除錯穩定提升 2–3%」，但 Table 2(a) 中只有 Codex 有這個增益（81.3 → 84.1）；GPT-3.5（72.2 → 72.2）、GPT-4（73.4 → 73.6）、StarCoder（64.9 → 64.9）的解釋增益接近零。也就是說「沒有測試時靠小黃鴨解釋修正」這個最貼近內在自我修正的主張，在主表上只由一個模型支撐，而 code-davinci-002 據我所知已停止對一般使用者提供（本次未查證）。附錄 A 的 GPT-3.5 在 Codex 初始 SQL 上有 81.3 → 83.0 的增益，顯示效果還和初始程式的來源有關，論文沒有拆開這兩個因素。",
+    "Trace 回饋的結論被寫得比數字強：作者總結「執行軌跡回饋帶來一致的改善」，但這只在 Table 3 無執行的設定成立；在有 UT 的 Table 2(b)，+Trace 讓 Codex 從 UT 的 91.6 掉到 87.9、StarCoder 從 76.4 掉到 73.6。模型想像出來的執行軌跡在有真實失敗訊息時可能反而引入錯誤推理。",
+    "自我判斷可能讓結果變差卻沒有被量化：Codex 在無執行的 MBPP 上 Simple 回饋從 61.4 掉到 57.6，代表模型把原本正確的程式「修」壞了。全文只報淨準確率，沒有報「正確→錯誤」的翻轉數；在沒有測試的 Spider 上，這個被修壞的比例正是判斷自我修正是否可靠的關鍵，卻看不到。",
+    "樣本效率的比較只數「初始程式的個數」，沒有計入除錯本身的成本：Spider 的 explanation 提示是 9-shot、每則都含完整 schema，每輪還要跑問題解釋、SQL 解釋、回饋三段生成，最多 10 輪。論文沒有報 token 數或延遲，所以「追平 10 倍樣本」不等於成本降低 10 倍。",
+    "跨模型比較混入了提示格式與取樣預算的差異：Codex 與 StarCoder 用 few-shot，GPT-3.5／GPT-4 用 zero-shot 對話提示；Spider 的初始樣本數在本文沒寫清楚，而附錄 A 說 GPT-3.5 greedy few-shot 71.1「比 Codex 低 6% 以上」，推算 Codex 的 greedy 應在 77 左右，所以 Table 2(a) Codex 欄的 81.3 很可能來自多樣本挑選，與 GPT-3.5 欄的 greedy 71.1 不是同條件（此點為依文字推算，未見圖表數值確認）。另外多樣本溫度在 §5 寫 0.7、附錄 F.1 寫 0.8，前後不一致。",
+    "錯誤類型分析的樣本很小：Table 4(a) 的百分比都是 1/35 的倍數（25.7 = 9/35、17.1 = 6/35……），代表 Spider 上只分析了約 35 個被修好的案例；TransCoder 的 61.9／38.1 對應約 21 例、MBPP 的 69.2／30.8 對應約 39 例或其因數。以這麼少的案例排出九類錯誤比例，排序本身不穩定。全文也沒有任何重複實驗、變異數或顯著性檢定，全部是單次 greedy 結果。",
+    "Spider 的指標沒有在本文明確定義（execution accuracy 或 exact match），又直接與 T5-3B + N-best、LEVER 的數字並列比較；若指標定義或評估腳本不同，Table 1(a) 的「超越需訓練方法」結論就站不穩。",
+    "外推限制：三個任務都是有確定性執行器的程式生成，錯誤訊號便宜且精準。對話 agent 大多沒有等價的「執行」可跑，Spider 的結果（沒有測試時多數模型幾乎沒有增益）反而暗示：搬到沒有驗證器的領域，這個方法的效益會接近內在自我修正、相當有限。"
+  ],
+  "framework_role": "T5「外部回饋／工具輔助的修正」子領域的代表作：把自我修正拆成 Generation → Explanation → Feedback 三步，並系統性比較回饋來源（一個對錯位元、真實單元測試結果、模型自寫的逐行解釋、模型模擬的執行軌跡）。它同時附帶一組「拿掉執行」的對照（Table 3），直接顯示沒有外部驗證器時模型過度自信、甚至越修越差，可和 T5 的批判性研究（例如 2310.01798）對照閱讀。對框架設計的啟示是：修正品質主要取決於觸發與判定訊號的來源（T4 端的異常偵測／驗證器），而不是反思文字本身；停止條件（回饋判定正確或輪數上限）與「新版必須也跑過可見測試才採用」的保護規則，可直接借用為 T5 迴圈的控制規則。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "執行結果就是觸發修正的異常訊號：TransCoder 只在預測程式沒跑過單元測試時才啟動 Self-Debugging，並把一個失敗斷言與實際輸出／traceback 當作回饋；MBPP 對話版以可見測試失敗觸發「錯了請修」，跑過後只再做一次確認。Spider 沒有外部偵測器，改由模型自己比對「問題要幾欄 vs SQL 回傳幾欄」當異常偵測。Table 3 拿掉執行訊號後增益大幅下降，等於量化了這條邊的價值。"
+    },
+    {
+      "edge": "E5",
+      "how": "論文把修正紀錄拿回來做評估分析：統計成功修好的錯誤類型（Table 4）、依題目難度拆解增益（Figure 6b）、依除錯輪數畫準確率（Figure 8a）。但這是離線、人工分類的一次性分析，不是自動把修正紀錄回流評估系統的管線。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。這篇論文沒有提到任何部署或產品採用；本次調研的 WebSearch 額度已用完，無法再查證官方文件、model card 或產品頁是否明確引用此方法，因此不做推測。「執行結果回饋給模型再修正」的做法在程式助理產品中很常見，但沒有可查證的出處能把它歸功於這篇，不列為採納證據。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "Spider dev、TransCoder test（560 題）、MBPP test（500 題）皆為公開資料集；附錄 E–G 列出每個任務每種回饋格式的完整提示詞。本文未附程式碼連結；主要最佳結果依賴 code-davinci-002，該模型據我所知已停止對一般使用者提供（本次未查證），數字難以原樣重現，但可用 GPT-3.5／GPT-4／StarCoder 的設定重做。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "執行回饋驅動自我修正的經典之作，回饋格式消融與「拿掉執行」對照清楚劃出外部驗證器與內在自我判斷的差距，是 T5 外部回饋子領域必讀；但讀的時候要記得 TransCoder 用的是評估測試當 oracle，而 Spider 的解釋增益只在 Codex 上成立。",
+  "related": [
+    "2303.16749",
+    "2303.11366",
+    "2303.17651",
+    "2303.17491",
+    "2302.08468",
+    "2211.16490",
+    "2108.07732",
+    "2107.03374",
+    "2212.08073"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 3,
+    "total": 8
+  }
+}

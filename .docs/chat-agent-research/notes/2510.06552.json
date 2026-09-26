@@ -1,0 +1,179 @@
+{
+  "id": "2510.06552",
+  "title": "Flipping the Dialogue: Training and Evaluating User Language Models",
+  "topic": "T6",
+  "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把 WildChat 的真實人機對話「翻轉」過來，以使用者回合為預測目標、以 GPT-4o 摘要出的高階意圖為條件，對 Llama3 base 做全參數微調，得到專門扮演使用者的 UserLM-1b／8b（8b 權重已公開）；另提出 6 項內在指標與 8 項外在模擬指標，顯示訓練型使用者模型比「提示 assistant 扮演使用者」更貼近真人，並讓 GPT-4o 在數學與程式多輪任務的成功率由 74.6% 降到 57.4%。",
+  "problem": "多輪互動評估 assistant 時需要模擬使用者，主流做法是提示一個 assistant LM（例如 GPT-4o）去扮演使用者。但 assistant 經過後訓練，傾向產出合作、完整、結構化的回合：一開始就把需求講清楚、很少主動結束對話、容易被 assistant 帶離原本目標、文字一眼看得出是 AI 寫的。真實使用者則是逐步透露意圖、打字偷懶、用字多變、會換句話重講、不滿意就重申需求、講完就走。模擬器太配合時，assistant 在模擬環境裡的分數會被高估，多輪評估也就失去意義。問題在於：怎麼得到一個能被意圖導向特定任務、行為又像真人的使用者模擬器，以及怎麼量它像不像。",
+  "core_idea": "使用者與 assistant 是同一個 base LM 可以被後訓練成的兩個相反角色。與其提示 assistant 去演使用者，不如直接用真實對話中的使用者回合當監督訊號，訓練一個「使用者語言模型」：條件是一句只講高階目標、不含細節的意圖，外加到目前為止的對話；輸出是下一個使用者回合，或一個代表「使用者離開」的特殊 token。意圖的抽象程度是關鍵的設計點：完全不給意圖就導不動模擬器；給完整細節，模擬器就只會照抄。高階意圖讓研究者能指定任務，措辭與節奏則交給模型從真人資料學。另外主張從 base checkpoint 起訓比從 instruct checkpoint 好，因為 instruct 模型已被推往 assistant 的分布。",
+  "method": {
+    "task_formulation": "使用者模型要做三件事：(1) 給定意圖開啟對話；(2) 依 assistant 的回應決定下一句；(3) 在對話該結束時結束。形式上是建模條件分布：第一回合 P(u_1 | intent)，之後 P(u_{k+1} | intent, u_1, a_1, …, u_k, a_k)。一段 K 回合的對話被展開成 K+1 個訓練樣本：前 K 個的目標是各回合的使用者語句，第 K+1 個的目標是在最後一個 assistant 回合之後輸出 <|endconversation|>。",
+    "special_tokens": "在 tokenizer 裡新增 <|endconversation|>，代表使用者結束對話（多數真實使用者結束時不會給任何明確回饋）。未加意圖的消融版本，第一回合只以 Llama 的 user 角色標頭 token 為條件。",
+    "intent_generation": "對每段對話，用 GPT-4o 做 3-shot 提示：輸入整段使用者與 assistant 的對話，要求產出一句不含具體細節的高階意圖摘要，固定以「You are a user chatting with an assistant language model to …」開頭，只回摘要本身。三個範例是作者手寫的（例如：要在阿爾及利亞找景點推薦；想了解減重策略與某些藥物對體重的影響；想了解量子力學如何挑戰愛因斯坦的決定論）。完整提示詞在 Appendix D、Figure 8。PRISM 用同一流程產生意圖。注意意圖是看過整段對話（含後續回合）才摘要出來的。",
+    "data_pipeline": "WildChat 共 478,498 段英文對話。去重：對第一回合使用者提示計算 7-gram 次數、人工檢查高頻模式，移除重複出現的提示模板（最大的一個模板出現在 81,196 段對話中），剩 384,336 段。切分：WildChat 沒有官方切分，作者以雜湊後的 IP 加國家辨識使用者，每個國家內把使用者依 90/5/5 隨機分到 train/val/test，同一使用者的所有對話落在同一份，得到 343,951／22,442／17,943 段對話，展開後為 1,047,930／118,291／137,224 個樣本。train 與 test 的第一回合 7-gram 重疊只有 4.19%。另以 PRISM 全部 8,011 段對話作為分布外測試集。",
+    "training": "對 Llama3-8b-Base 與 Llama3.2-1b-Base 做全參數微調。最大序列長度 2048 token，batch size 1024 個樣本，learning rate 2e-5，硬體為 4 張 A6000，1b 訓練 62 小時、8b 訓練 227 小時。產物稱為 UserLM-1b、UserLM-8b。消融組：(a) 不帶意圖訓練；(b) 從 Llama3.2-1b-Instruct／Llama3-8b-Instruct 起訓。",
+    "baselines_setup": "提示型 assistant：Llama3.2-1b-Instruct、Llama3-8b-Instruct、GPT-4o-mini、GPT-4o（GPT 系列只出現在 Table 2 與 §4，Table 1 的 PPL 不含 GPT）。提示詞以 Chang et al. 2025 與 Ivey et al. 2024 的寫法為起點再加工：要求像真人一樣偶有錯字、標點隨意、偷懶少打字、把資訊分散到多個回合，但不要過頭；後續回合附上對話紀錄，若目標已達成就只輸出 <|endconversation|>。在 WildChat 驗證集上以 PPL 挑出最佳的提示詞版本（Figure 9）。訓練型基線是 USP-8b（Wang et al. 2025：在 94,874 段 LMSys-Chat 對話上微調 Llama3-8b-Base），同樣被指示在意圖達成時輸出結束 token。",
+    "intrinsic_eval_protocols": {
+      "distributional_alignment": "每 token 的 PPL，只算人類使用者語句，比較有無意圖條件；資料為 WildChat test 與 PRISM。另在 Appendix B.1 報逐回合 PPL。",
+      "first_turn_diversity": "每個模型隨機抽 2,000 個第一回合，以兩兩 1-gram Jaccard 計算詞彙多樣性，越高越好（論文以「unique 1-grams %」報數）。",
+      "intent_decomposition": "在 PRISM 上計算生成的使用者回合與意圖之間的 1-gram 重疊平均（先去停用詞），越低代表越會換句話說、越會把資訊分散到多個回合。",
+      "dialogue_termination": "在 PRISM 的每個 assistant 回合之後，看模型是否生成 <|endconversation|>，以真實對話是否在此結束為標準答案，當成二元分類算 F1。",
+      "naturalness": "抽 2,000 個長度介於 50–200 token 的第一回合，送 Pangram AI 文字偵測器，取「人寫」機率的平均。",
+      "role_adherence": "第一回合用 CommonsenseQA 的選擇題（含選項），再用 GPT-4o 產生一個「我不確定，你直接告訴我答案吧」的 assistant 回應，看模擬器下一句是否守住使用者角色、不去回答。回覆中出現一或兩個選項算破功；全部選項都出現則視為重述題目，不算破功。共 2,000 題。",
+      "intent_adherence": "第一回合用 NaturalQuestions 的開放問題，再用 GPT-4o 產生一個「不確定答案，要不要改聊別的」的 assistant 回應，看模擬器是否拒絕轉移話題、重申原問題。以 GPT-4o 當 judge 判定 REFUSED／ACCEPTED（Figure 10）。共 2,000 題。"
+    },
+    "extrinsic_simulation": "沿用 Laban et al. 2025（Lost in Conversation）的設定：65 個任務意圖，來源是 GSM8K 數學題與 HumanEval 程式題。每個任務都有完整指令，以及切成 3–8 個 shard 的分片版本，每個 shard 標記是否為必要資訊（數學題的 shard 全部必要）。把 LiC 的 instruction 包成「You are a user chatting with an assistant language model to complete the following: …」當作意圖。論文沒講明用的是完整版還是分片版，由護欄 3、4 推斷應為含完整細節的指令。每個模擬器對每個意圖各跑 10 次對話（UserLM-8b 共 650 段），assistant 一律固定為 GPT-4o，取樣溫度 T=1.0。比較的模擬器為 GPT-4o-mini、GPT-4o、UserLM-8b；USP-8b 與 UserLM-1b 不在此實驗中。",
+    "generation_guardrails": "只用在 §4 的 UserLM-8b（Appendix C.1），不影響 Table 1、2。(1) 第一個 token 禁用 I／You／Here 的大小寫共 6 個 token（把它們的 logit 設成 0；原文寫法如此，實際效果應是遮罩）；(2) 把 <|endconversation|> 的機率設為 0，禁止結束對話；(3) 回合超過 25 字就丟掉重新生成，直到不超過為止，少於 3 字也濾掉；(4) 逐字重複先前使用者回合或逐字抄意圖的回合，也丟掉重新生成。作者說這些護欄是因為 8b 模型太小、輸出雜訊多。model card 的範例程式碼使用 temperature=1、top_p=0.8（來源：https://huggingface.co/microsoft/UserLM-8b）。",
+    "extrinsic_metrics": "用 o3 標出每個使用者回合揭露了哪些 shard（作者只人工抽查 5 段對話）。Intent Coverage：至少揭露一次的 shard 數除以 shard 總數。%Repeat Required：至少一個必要 shard 被講了兩次以上的對話比例。%Skip Non-Required：至少漏掉一個非必要 shard 的對話比例。%Add Demands：出現任何 shard 以外新資訊的對話比例，同樣由 o3 判定。Turn Variance 與 Turn Range：同一意圖 10 段對話的回合數變異數與 [min, max]。Unigram Difference：1 減去同一意圖下兩兩對話使用者語句經 lemmatize 後的 unigram Jaccard 平均。Assistant Score：任一回合 assistant 的解答能解出隱藏的單元測試或算對答案即記 1。",
+    "not_specified": "論文未說明：訓練 epoch 數；loss 是否只算目標使用者回合（是否遮掉意圖與歷史的 loss）；§3 內在評估的解碼設定；§4 對話在禁用結束 token 後依什麼條件結束（最大回合數或 shard 是否揭露完）；§4 的 GPT 模擬器用哪份提示詞、能否自行結束；65 個意圖中數學與程式各有幾題（由 Table 3／5 反推約 1:2.2）；o3 標註 shard 的提示詞。model card 的 model tree 標記基底為 meta-llama/Llama-3.1-8B，論文正文則寫 Llama3-8b-Base，兩處不一致。"
+  },
+  "assumptions": [
+    "WildChat（2023–2024 年間與 ChatGPT 的對話）中的使用者行為，能代表一般使用者面對各種 assistant 的行為；使用者怎麼回應，與當時 assistant 的風格及能力脫鉤不大。",
+    "由 GPT-4o 看完整段對話後摘要出的高階意圖，足以代表使用者開場時心中的目標；把它當條件不會把後續回合的資訊洩漏給模型，或者洩漏對所有模型的影響相同。",
+    "真實對話在哪裡結束，就是「使用者目標已達成或放棄」的正確訊號；PRISM 的結束點可以當 termination 的標準答案。",
+    "Pangram 判定為人寫的機率，可以代表「像真人」；AI 偵測器只是學會辨認 assistant 風格，而不是只要非 assistant 風格就給高分。",
+    "在模擬環境中 assistant 分數越低，就越接近真實部署的表現；也就是說，UserLM-8b 帶來的困難來自逼真的使用者行為，而不是資訊沒給夠。",
+    "o3 對 shard 揭露與新增需求的標註夠準（只人工抽查 5 段對話）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "WildChat 使用者切分的 test 集（17,943 段對話）：PPL",
+      "PRISM（8,011 段對話，分布外）：PPL、意圖分解、對話結束 F1，並提供真人參考值",
+      "CommonsenseQA 2,000 題：角色守持探針",
+      "NaturalQuestions 2,000 題：意圖守持探針",
+      "Lost in Conversation 的 65 個分片任務（GSM8K 數學、HumanEval 程式），每個意圖各模擬 10 次、assistant 固定為 GPT-4o"
+    ],
+    "metrics": [
+      "每 token PPL（有無意圖條件）",
+      "第一回合詞彙多樣性（兩兩 1-gram Jaccard）",
+      "意圖分解（與意圖的 1-gram 重疊，越低越好）",
+      "對話結束 F1（<|endconversation|> 與真實結束點比對）",
+      "Naturalness（Pangram 判為人寫的平均機率）",
+      "User role adherence 比例",
+      "Intent adherence 比例（GPT-4o judge）",
+      "Intent Coverage、%Repeat Required、%Skip Non-Required、%Add Demands",
+      "Turn Variance、Turn Range",
+      "Unigram Difference",
+      "Assistant Score（任一回合解對）"
+    ],
+    "baselines": [
+      "Llama3.2-1b-Base、Llama3-8b-Base（只出現在 PPL）",
+      "Llama3.2-1b-Instruct、Llama3-8b-Instruct（提示扮演使用者）",
+      "GPT-4o-mini、GPT-4o（提示扮演使用者；不在 PPL 表）",
+      "USP-8b（Wang et al. 2025，在 LMSys-Chat 上訓練的使用者模擬器）",
+      "消融：不帶意圖訓練的 UserLM；從 instruct checkpoint 起訓的 UserLM"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在人類使用者語句上，UserLM 的 PPL 遠低於所有 base、instruct 與 USP-8b 基線，在分布外的 PRISM 上也一樣；所有模型加上意圖條件後 PPL 都會下降。",
+      "numbers": "有意圖條件時，WildChat：UserLM-8b 4.33、UserLM-1b 7.78、Llama3.2-1b-Instruct 16.08、Llama3-8b-Instruct 21.40、USP-8b 21.78；PRISM：UserLM-8b 7.42、UserLM-1b 10.33、Llama3.2-1b-Instruct 20.80、USP-8b 30.16、Llama3-8b-Instruct 36.29。無意圖時 UserLM-8b 為 5.60（WildChat）與 14.92（PRISM）。",
+      "section": "§2.3, Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "訓練型使用者模型知道何時結束對話；提示型 assistant 幾乎從不結束，而且越強的 GPT-4o 越不會結束（高 precision、極低 recall）。",
+      "numbers": "對話結束 F1：UserLM-8b 63.54、UserLM-1b 56.83、USP-8b 21.31、GPT-4o-mini 15.31、Llama3-8b-Instruct 3.51、Llama3.2-1b-Instruct 3.47、GPT-4o 1.38",
+      "section": "§3.3, Table 2, Appendix B.1 Figure 6",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "提示型 assistant 就算被明確要求偶有錯字、偷懶，產出的使用者語句仍幾乎全被 AI 偵測器認出；訓練型模型則接近真人。",
+      "numbers": "Pangram 判為人寫的機率：真人（PRISM）90.15、UserLM-8b 80.21、UserLM-1b 78.96、USP-8b 77.73，提示型四個模型 0.04–3.31",
+      "section": "§3.3, Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "被 assistant 反問或帶偏時，訓練型模擬器（含 USP-8b）大多守住使用者角色與原意圖；提示型模擬器常退回 assistant 角色、接受轉移話題。這項優勢屬於「訓練型對提示型」，不是 UserLM-8b 獨有：兩項守持指標最高的都是 USP-8b。",
+      "numbers": "Role adherence：USP-8b 98.05、UserLM-8b 93.95、UserLM-1b 91.30；GPT-4o-mini 80.20、Llama3.2-1b-Instruct 77.55、Llama3-8b-Instruct 63.25、GPT-4o 38.85。Intent adherence：USP-8b 97.55、UserLM-8b 94.65、UserLM-1b 93.55；GPT-4o-mini 88.70、Llama3-8b-Instruct 78.05、GPT-4o 70.95、Llama3.2-1b-Instruct 54.95",
+      "section": "§3.3, Table 2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "從 base checkpoint 起訓的使用者模型，PPL 較低，意圖分解、對話結束與 naturalness 也較好；從 instruct 起訓的在兩項守持指標上相近甚至略高。",
+      "numbers": "UserLM-8b base 對 instruct 起訓：意圖分解 2.69 對 8.88、結束 F1 63.54 對 56.96、naturalness 80.21 對 56.54、role adherence 93.95 對 95.45、intent adherence 94.65 對 97.75。從 instruct 起訓時，1b 的 PRISM PPL 為 18.45，8b 反而較差（27.25）。",
+      "section": "§2.3 Figure 3(b), Appendix B.2 Table 4, §5",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "在分片任務模擬中，三個模擬器都大致不離題；UserLM-8b 揭露的 shard 較少，但更常重複必要資訊、跳過非必要資訊，也是唯一會自行加需求的模擬器，節奏與用字更多樣。",
+      "numbers": "Intent Coverage：GPT-4o-mini 86.6、GPT-4o 84.7、UserLM-8b 76.7；%Add Demands：9.5／1.1／43.8（新增需求中 34% 是給測試範例、21% 是指定命名、20% 是實作限制）；Turn Variance：0.9／0.6／2.8，Turn Range：3.7–5.7／4.0–5.4／2.1–6.7；Unigram Difference：0.43／0.40／0.71",
+      "section": "§4.2, Table 3",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "換成 UserLM-8b 當使用者之後，GPT-4o assistant 的任務成功率明顯下降，數學題掉得最多。",
+      "numbers": "Assistant Score：GPT-4o 模擬 74.6、GPT-4o-mini 模擬 73.2、UserLM-8b 模擬 57.4。分任務：數學 0.85／0.83 降到 0.46，程式 0.70／0.69 降到 0.63",
+      "section": "§4.2, Table 3, Appendix C.4 Table 5",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "UserLM-8b 直接取樣的輸出品質不足以做 §4 的模擬實驗，需要四道生成護欄：禁用常見開頭字、禁止結束對話、超過 25 字就重新生成、過濾逐字重複。",
+      "numbers": "第一個 token 禁用 6 個 token；超過 25 字或少於 3 字就重新生成；<|endconversation|> 機率設為 0",
+      "section": "Appendix C.1",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "UserLM 只模擬一般使用者群體，沒有個人化或特定族群、特定領域的使用者模型；例如非英語母語者的措辭差異未被建模。",
+    "模型只有 1b／8b、訓練資料只有 343,951 段對話；8b 模型雜訊多，在 §4 需要四道生成護欄。作者推測更大的模型可以不用護欄。",
+    "模擬不能取代真人：法律、創意寫作、科學等專業領域仍需與專家合作。作者把模擬定位為「大規模找出影響廣泛族群的系統缺陷」，細部的使用者差異仍需真人研究。",
+    "基底是未經安全對齊的 base 模型，可能比 instruct 模型更容易產生有害語言。產出的使用者語句不易被現有 AI 偵測器分辨，有被濫用的風險。",
+    "model card 另外寫明：role adherence 與意圖守持並非 100%，可能幻想出意圖以外的需求，只在英文上測試過，並繼承 Llama 基底的偏差；也不建議用於商用或真實部署。"
+  ],
+  "limitations_observed": [
+    "§4 的 74.6 降到 57.4，混進了「資訊沒給夠」的效果，不能全歸功於逼真。數學題的 shard 全部是必要資訊，但 UserLM-8b 的 Intent Coverage 只有 76.5（GPT-4o 模擬為 97.1），也就是平均約四分之一的必要條件從沒講出來。這種情況下題目本身可能解不出來，而數學的 Assistant Score 正好掉最多（0.85 降到 0.46）。論文把低覆蓋率詮釋為「選擇性揭露」，但沒有區分「使用者表達模糊，assistant 本該問清楚卻沒問」與「使用者根本沒給必要條件」這兩種失敗。",
+    "§4 的比較條件不對等。四道護欄只套在 UserLM-8b：25 字上限加上重抽，直接壓低每回合揭露的資訊量，也拉大了回合數的變異（2.1–6.7）；GPT 模擬器沒有字數限制。UserLM-8b 被禁止結束對話；論文沒有說明 §4 的 GPT 模擬器用哪份提示詞、依什麼條件結束，若沿用 Figure 9 的提示詞，GPT 模擬器在目標達成時可以結束，兩邊的終止規則就不同。因此 Turn Variance 與 Coverage 的差異，有一部分是護欄造成的，不全是模型本身的行為。",
+    "§4 的意圖格式很可能跟訓練時不一樣（由 C.1、C.3 推斷）。§2.1 自己說完整意圖會讓模擬器照抄，所以訓練用的是高階意圖。C.3 說把 Lost in Conversation 的 instruction 直接當意圖，但沒講明是完整版還是分片版；而護欄 3（長回合會把整題講完）與護欄 4（過濾逐字抄意圖的回合）都在壓制照抄，強烈暗示餵進去的是含完整細節的指令。果真如此，§4 量到的是「分布外條件＋護欄」下的 UserLM-8b，不是 §3 評估的那個模型。",
+    "「更逼真的估計」沒有外部校準。§4 沒有真人對照組，也只用 GPT-4o 一個 assistant，所以無法知道 57.4 是否比 74.6 更接近真人使用時的成功率，也無法知道 UserLM-8b 能否保住不同 assistant 之間的排序。對評估用途而言，排序保真度比絕對分數更重要。ChatBench（Chang et al. 2025）那種拿真人結果比對的驗證，本文沒有做。",
+    "摘要「更好的 assistant 反而是更差的模擬器」屬於過度概括。§3.3 的計數（Llama3-8b 只在 1/6 項勝過 1b、GPT-4o 只在 2/6 項勝過 mini），要把只差零點零幾的項目當平手才對得上。即使照這個算法，贏的那幾項差距都不小：Llama3-8b 的 intent adherence 以 78.05 對 54.95 領先約 23 點，GPT-4o 的第一回合多樣性（74.42 對 66.10）與意圖分解（7.68 對 9.66）也明顯較好。方向一致的證據只有 PPL，以及 GPT-4o 在結束 F1 與兩項守持指標上較差。「規模不會自動變成更好的模擬器」站得住；「越強越差」則沒有足夠證據。",
+    "Table 3 與附錄 Table 5 的 %Repeat Required 無法自洽。GPT-4o 的總體值 9.4，同時低於數學的 44.0 與程式的 12.2，不可能是加權平均。用 Assistant Score 與 Coverage 反推，數學與程式的題數約為 1:2.2；把 Table 5 數學那一列 GPT-4o 與 UserLM-8b 的 3.0／44.0 兩格對調，兩者總體值剛好算回 9.3 與 54.2，與報告值相符。表格（或 HTML 轉換）很可能把這兩格放反了，引用分任務數字時要小心。",
+    "UserLM-8b 相對於另一個訓練型模擬器 USP-8b 的優勢，比摘要讀起來窄。第一回合多樣性（94.55 對 94.37）與 naturalness（80.21 對 77.73）差距很小，兩項守持指標 USP-8b 還更高。真正的差距在 PPL、意圖分解（2.69 對 6.33）與結束 F1（63.54 對 21.31）。但 USP-8b 沒有用本文新增的 <|endconversation|> token 訓練，只是被「指示」要輸出它，結束 F1 的比較對 USP-8b 不公平。而且 §4 的外在實驗完全沒有放 USP-8b。",
+    "幾個內在指標本身有漏洞。意圖分解只獎勵「跟意圖重疊少」，完全離題的模擬器也會拿高分，§3 卻沒有同時量覆蓋率。角色守持只在回覆中出現一或兩個選項時才算破功，答非所問或把選項全列出來都算守住。intent adherence 的 GPT-4o judge 沒有報與人工標註的一致性。第一回合多樣性在方法寫的是兩兩 Jaccard（通常越高越相似），結果卻以「unique 1-grams %、越高越好」報告，定義不清。",
+    "結束點的標準答案來自 PRISM，而 PRISM 是為研究而蒐集的資料集，結束點可能受資料蒐集流程影響（論文沒有討論，本筆記也未查證），不一定等同自然部署中使用者離開的時機。WildChat 是 2023–2024 年與 ChatGPT 的對話，使用者行為會隨 assistant 能力演進而變，模型學到的是當時的使用者。",
+    "意圖是 GPT-4o 看過整段對話（含後續回合）才摘要出來的，拿它當條件評估 PPL 與意圖分解時，後續回合的資訊會洩漏給所有模型。實際部署時，研究者只能手寫意圖，分布不同，論文沒有評估意圖來源換掉之後的表現。",
+    "重現缺件：epoch 數、loss 遮罩方式、§3 的解碼設定、§4 對話的終止條件、數學與程式的題數、o3 標註提示詞都沒交代；o3 標註只人工抽查 5 段。論文寫 Llama3-8b-Base，model card 的 model tree 卻標 Llama-3.1-8B，基底版本不確定。沒有訓練程式碼，產生的意圖與切分也沒有公開。"
+  ],
+  "framework_role": "T6 的核心文獻：把「LLM 使用者模擬器」從提示工程推進到專門訓練的模型，並提供一套量模擬器逼真度的指標。對本框架有三個用途。(1) E1 的來源：它是一個可被高階意圖導向、會逐步揭露需求、會換句話說、會自行加需求、會守住原目標的使用者端，能產生比提示 GPT 更難的 T1 輸入。(2) 模擬器的驗收清單：第一回合多樣性、意圖分解、對話結束、naturalness、角色守持、意圖守持六項內在指標，加上 coverage、重複、跳過、新增需求、節奏、用字多樣性等外在指標，可直接拿來檢查我們自己的模擬器是否太配合。(3) 評估偏差的警訊：模擬器太配合時，T7／T8 的任務完成分數會被高估；本文量到約 17 個百分點的落差，但這個數字混有資訊揭露不足的效果（見 limitations_observed）。它不處理使用者回饋迴路（從部署中的滿意度或隱式回饋學習），<|endconversation|> 也只是離開訊號，不是滿意度估計。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "UserLM 以高階意圖加上對話歷史為條件，生成下一個使用者回合，餵給 assistant；assistant 必須從被改寫、分散、甚至不完整的回合中推回真正的目標。§4 用 o3 把每個使用者回合對應到意圖 shard，量出意圖在傳遞過程中被覆蓋多少（Intent Coverage）、被重複多少、被新增多少，直接刻畫這條「使用者輸入進入目標對齊」的資料流品質。§3 的 intent adherence 探針也在測同一件事：assistant 把話題帶偏時，使用者端是否堅持原目標。"
+    },
+    {
+      "edge": "E6",
+      "how": "§4 的 650 段模擬對話被整份回收做評估：o3 對互動紀錄逐回合標出揭露與新增的資訊，據此計算 coverage、重複、跳過、新增需求；同一意圖的 10 段紀錄用來算回合數變異與用字差異；從紀錄中找出任一回合 assistant 的解答，拿去比對單元測試或正確答案，得到 Assistant Score。互動紀錄同時被用來評估模擬器本身與被測的 assistant。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "Microsoft Research 在 Hugging Face 以 MIT 授權公開 UserLM-8b 權重與 model card，頁面顯示約 1,690 次月下載、21 個量化版本、2 個衍生微調、3 個 Spaces（https://huggingface.co/microsoft/UserLM-8b，2026-09-26 查閱）。這是研究釋出，不是產品部署。"
+    ],
+    "assessment": "未見商用採納證據。論文沒有提到任何產品或部署，model card 更明寫商用與真實部署屬於不建議的用途、只供研究者評估 assistant 使用。下載數與量化版本只代表社群有取用，不構成採納證據。查證範圍有限：本次 WebSearch 額度已用盡，只直接核對了 Hugging Face 的 model card 頁面，沒有進一步搜尋官方部落格或其他產品頁，所以只能說「未見證據」，不能說「確認沒有」。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "部分公開。訓練與測試資料 WildChat、PRISM 都是公開資料集，§4 的分片任務來自公開的 Lost in Conversation。GPT-4o 產生的意圖、去重後的清單、依使用者切分的 train/val/test 都未見公開。UserLM-8b 權重以 MIT 授權公開於 https://huggingface.co/microsoft/UserLM-8b；UserLM-1b 未見公開。未見訓練程式碼（只核對了論文與 model card），附錄給了提示詞與生成護欄。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "T6 中「訓練型 LLM 使用者模擬器」的代表作，權重公開，內在與外在逼真度指標可直接拿來驗收模擬器（influential 12）。但 §4 的 17 點落差混有資訊未揭露與護欄不對等的效果，「越強的 assistant 越不適合當模擬器」也說得過頭，引用數字時要搭配本筆記的批判。",
+  "related": [
+    "2505.06120",
+    "2502.18968",
+    "2409.08330",
+    "2405.01470",
+    "2406.01633",
+    "2402.13374",
+    "2309.11998",
+    "1612.05688",
+    "1909.01388",
+    "2210.08692"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

@@ -1,0 +1,179 @@
+{
+  "id": "2401.13178",
+  "title": "AgentBoard: An Analytical Evaluation Board of Multi-turn LLM Agents",
+  "topic": "T8",
+  "subarea": "部分分數與過程度量",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 AgentBoard：把 9 個部分可觀測、需要多輪互動的文字環境統一成同一套 act-only agent 介面，並為每個樣本人工標註子目標或定義終態相似度函式，提出逐步計算、取歷史最大值的 progress rate，作為 success rate 之外的部分分數；另外附上 grounding 準確率、難易拆分、長程互動曲線、子技能雷達圖等分析面板。",
+  "problem": "多輪 agent 任務的主流指標只有最終成功率，它把「差一步就完成」和「幾乎沒動」都算成同樣的 0。在困難環境裡，多數開源模型的成功率趨近於零，彼此分不出高下，也看不出卡在哪一步。既有的替代方案，例如環境原生的 reward，又各自為政：ScienceWorld 的原生子目標稀疏、權重不均；BabyAI 要走很多步才加分；WebShop 只在下單時計分。因此無法跨環境比較。另外，當時的 agent 基準還常混入單輪可解的任務，或由 MMLU、GSM8K 這類全可觀測題目改造而來，量不到真正的多輪探索能力。對模型開發者來說，缺少一種在成功率接近零時仍能追蹤小幅進步、又能跨任務統一的過程分數。",
+  "core_idea": "把每個任務的目標 g 拆成人工標註的子目標序列，或直接定義「目前狀態與目標狀態的相似度」函式，在每一輪互動後打分。progress rate 取到目前為止的最高分，任務完成時為 1。狀態比較得出連續分數的任務（PDDL、WebShop、WebArena、Sheet）用 r^match；中間狀態難以直接比較的任務，改用 regex 比對「必要觀測」的離散子目標，取已達成子目標的比例（r^subgoal）。為了讓每個狀態都有唯一的進度值，把少數有多條子目標路徑的題目改寫成只有一組子目標，但仍允許繞路。progress rate 與 success rate（progress rate 等於 1）並列報告，再以人工評分的相關係數驗證 progress rate 的效度。",
+  "method": {
+    "形式化": "每個環境視為 POMDP 的特例 ⟨g, S, A, O, T⟩，狀態轉移是確定性的。回饋函式 o_t = f(s_t, a_t) 有三種輸出：agent 使用 check valid actions 這類求助動作時列出所有合法動作；執行合法動作時描述改變後的狀態；動作超出動作空間時回傳錯誤訊息。agent 依據目標 g 與記憶 m_t（最近的動作與觀測序列）決定下一步。",
+    "progress_rate_定義": {
+      "r_match（連續型）": "r_t = max_{0≤i≤t} f(s_i, g)，其中 f(·, g) 回傳 [0,1] 的狀態相似度。用於 PDDL、WebShop、WebArena，以及 Tool-Operation 的 Sheet 子環境。",
+      "r_subgoal（離散型）": "先把目標 g 拆成子目標 g_1..g_K，每個子目標對應一個標註好的完成狀態或必要觀測，並用 regex 比對函式 f(·, g_k) → {0,1} 判定是否達成。r_t = max_{0≤i≤t} (1/K)·Σ_k f(s_i, g_k)。用於 AlfWorld、ScienceWorld、BabyAI、Jericho、Tool-Query，以及 Tool-Operation 的 Todo 子環境。",
+      "實作上的真實語意（照官方程式碼）": "官方 repo main @bb7255e（2024-04-23 提交，2026-09-26 讀取；這個版本未必產生論文 v2 的數字）裡，AlfWorld 與 Jericho 的子目標是「任一觀測符合任一 regex 就永久記一分」：已完成的旗標不會被撤銷，也不檢查子目標順序。Jericho 每一步最多消化一個 pattern。AlfWorld 只要環境回報 done 就直接給 1.0。要重做的話，應該實作成「曾經命中的子目標集合 / K」這種單調不減的分數。",
+      "success_rate": "在 T 步內完成任務的比例。Table 14 的定義是 progress rate 等於 1；AlfWorld 用環境原生的成功旗標。"
+    },
+    "各環境的計分細節": {
+      "AlfWorld（134 題）": "每題標 N−1 個必要觀測的 regex，例如拿起物件時的回應句型，再加上環境的最終成功旗標，合計 N 個子目標。",
+      "ScienceWorld（90 題）": "原生的「sequential／optional」子目標權重不均，改成以均勻權重的必要觀測當子目標，例如「移動到廚房」「冰箱已開啟」「溫度計讀數落在某個 regex 範圍」「固態柳橙汁」。同時改寫題目，指定要用的工具與房間，確保只有一條子目標路徑。",
+      "BabyAI（112 題）": "原本是影像觀測與張量動作，改成文字觀測（例如「右前方 1 步有紅球」），並加入「go to red ball 1」這類高階動作。子目標重新標註、加密：進入新房間、找到物件、撿起物件都會加分。",
+      "Jericho（20 題）": "原遊戲要 50–300 步，改寫成 15 個子目標以內可完成的目標，例如 zork1 改成找到地下室入口，約 8 步。子目標如「找到房子入口 → 進屋 → 找到客廳 → 發現活板門 → 找到地城入口」。",
+      "PDDL（60 題；Gripper、Barman、Blocksworld、Tyreworld）": "把 PDDL 謂詞轉成自然語言觀測與文字指令。f = |G ∩ P| / |G|，也就是目標謂詞集合中，被目前狀態滿足的比例（式 3）。",
+      "WebShop（251 題）": "沿用原始的商品評分 f = f_type ·（屬性交集＋選項交集＋價格是否符合）/（屬性數＋選項數＋1），分三個頁面算分：搜尋結果頁取頁面上最佳商品的分數、商品頁取各選項組合的最高分、下單確認頁取最終商品的分數。progress rate 是這三頁分數的平均。",
+      "WebArena（245 題，只取 Site Navigation 與 Contact & Config 兩類）": "論文式 (5) 以 n/(m+n) 與 m/(m+n) 加權融合 URL 分量與內容分量，n=3 是 URL 元件數，m 是必要內容數。程式碼中的 URL 分量是 domain 是否相符 ×（URL path 片段的 LCS 比例＋query 參數集合的 F1）/ 2；參考 URL 沒有 query 參數時，退化成 domain × path 分數；有多個可接受的參考 URL 時取最大值。內容分量是頁面上偵測到的必要內容所佔比例。",
+      "Tool-Query（60 題；Weather、Movie、Academia）": "每個動作設計成功能不可分解，所以每題有確定的一組 golden actions。由人工標出 golden actions，執行後的每個輸出都當成一個子目標。題目刻意設計成模型無法直接作答，必須查資料庫才算對。",
+      "Tool-Operation（40 題；Todo、Sheet）": "Todo 用 r^subgoal，標法同 Tool-Query。Sheet 由人工做出 golden 試算表，每一輪算「位置與值都和 golden 相同的格子比例」（r^match）。"
+    },
+    "子目標標註與品質控制": "每個任務由一位作者主標、至少兩位作者覆核。另外做了互動式 UI：檢查者親自玩一遍，看每一步拿到的分數，覺得不合理就交給多人討論後重標。品質控制分三輪：自檢；兩人對每個任務抽 5–10 題檢查（第二輪錯誤率：Jericho 25%、AlfWorld 10%、PDDL 5%、BabyAI 4.2%，其餘 0%）；最後由熟悉所有任務的人抽查全部任務。有多組子目標的題目被改寫成單一組，ScienceWorld 改了 36 題、BabyAI 改了 4 題。",
+    "agent 與提示詞": "採 act-only 的 reflex agent，不輸出 thought。提示詞用統一模板，依序是 {System Prompt}{Instruction：任務描述與動作定義}{Examples：one-shot 示範}{Goal}{Trajectory：互動歷史}。記憶採滑動視窗，只保留塞得進 context 的最近互動，超出長度時不中止。附錄 N 附各環境完整提示詞，例如 WebArena 要求把動作包在一對 @ 中，工具類要求輸出「Action: ... with Action Input: {...}」。",
+    "關鍵超參數（官方設定檔）": "max_num_steps = 30；temperature = 0、top_p = 1；API 模型以換行當 stop；開源模型用 vLLM 推論、max_tokens = 100；context 長度依模型而定（例如 gpt-3.5-turbo 4096、gpt-4 8192）；memory_size = 100。",
+    "分析面板的其他指標": "grounding 準確率是合法動作佔所有動作的比例。難易拆分依子目標（或目標條件）數量的門檻：ALF、SW、BA 為 3，JC、WA、TQ、TO 為 4，PL 為 6，WS 為 1，超過門檻算難題。長程互動分析畫 progress rate 對步數的曲線。子技能分數（記憶、規劃、世界模型、自我反思、grounding、空間導航）依 Table 11 為每個任務標 1–3 級，再和模型的任務分數組合出雷達圖；論文沒寫出組合公式。探索行為分析計算造訪過的房間、容器或地點數，只有部分環境適用，沒有整合進框架。全部結果透過 W&B 面板呈現。",
+    "人工效度驗證": "8 個任務各取 60 條軌跡，來自 GPT-4、GPT-3.5-Turbo、DeepSeek-67b。4 位作者在看不到自動分數的情況下，從 {0, 25, 50, 75, 100}% 中選一個進度分，取平均當人工分數，再計算與 progress rate 的 Pearson 相關，並用 Fleiss' κ 衡量評分者一致性。"
+  },
+  "assumptions": [
+    "任務可以拆成有限個、能用 regex 或狀態比對自動判定的子目標，而且在改寫之後，每個最終目標只對應一組子目標；多條可行路徑的題目可以改寫成單一路徑而不改變難度。",
+    "子目標等權：每個子目標對「進度」的貢獻相同，子目標數量越多，單一子目標的權重越小。",
+    "取歷史最大值是合理的聚合：曾經達到的最佳狀態就代表 agent 的進度，之後的倒退或破壞性動作不需要扣分。",
+    "人工評分者感受到的「進度」可以當作 progress rate 的效度標準，而且作者本人評分不會因為熟悉子目標設計而產生偏差。",
+    "環境是確定性的，同一模型在溫度 0 下重跑的變異夠小，單次執行的點估計就足以排序模型。",
+    "act-only、one-shot、滑動視窗、30 步上限這個簡化的 scaffold 能代表模型的基本 agent 能力，scaffold 本身不會成為主要的干擾因素。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "AlfWorld（134 題）",
+      "ScienceWorld（90 題，重新標註子目標並改寫題目）",
+      "BabyAI（112 題，改成文字介面）",
+      "Jericho（20 題，改寫目標）",
+      "PDDL（60 題：Gripper、Barman、Blocksworld、Tyreworld）",
+      "WebShop（251 題）",
+      "WebArena（245 題子集）",
+      "Tool-Query（60 題：Weather、Movie、Academia，新建）",
+      "Tool-Operation（40 題：Todo、Google Sheet，新建）"
+    ],
+    "metrics": [
+      "progress rate（r^match 或 r^subgoal，逐步計算、取歷史最大值）",
+      "success rate（progress rate 等於 1）",
+      "grounding 準確率（合法動作比例）",
+      "難題／易題拆分後的 progress rate 與 success rate",
+      "progress rate 對互動步數的曲線（長程互動）",
+      "六項子技能分數（雷達圖）",
+      "探索過的地點數（附錄 E）",
+      "人工進度分數與 progress rate 的 Pearson 相關、Fleiss' κ",
+      "信賴區間（附錄 D，只有 4 個模型）"
+    ],
+    "baselines": [
+      "專有模型：GPT-4、Claude2、Gemini1.5-Flash、Claude3-Haiku、GPT-3.5-Turbo、GPT-3.5-Turbo-16k、Text-Davinci-003",
+      "開源通用模型：Llama3-70b、Llama3-8b、DeepSeek-67b、Lemur-70b、CodeLlama-34b、CodeLlama-13b、Llama2-70b、Llama2-13b、Mistral-7b、Vicuna-13b-16k",
+      "agent 專用模型：AgentLM-70b、xLAM-70b",
+      "框架消融：Act 對 ReAct；記憶處理採滑動視窗、截斷（AgentBench 的做法）或摘要"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "progress rate 與人工進度評分高度相關，評分者之間的一致性也達到 substantial；作者以此主張 progress rate 是有效的過程度量。",
+      "numbers": "8 個任務的 Pearson 相關都超過 0.95；每個任務 60 條軌跡、4 位評分者、5 級量表",
+      "section": "§3.2、Figure 3",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "在成功率同樣趨近零的模型之間，progress rate 仍分得出高下。",
+      "numbers": "Llama2-13b 對 Mistral-7b：SR 2.1% 對 3.9%，PR 18.9% 對 24.6%",
+      "section": "§4.2、Table 3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "成功率會被 agent 的個別習慣左右，例如不會輸出終止動作；progress rate 比較不受影響。",
+      "numbers": "CodeLlama-34b 對 CodeLlama-13b：平均 PR 30.0 對 25.8，平均 SR 7.6 對 10.0；Tool-Query 的 PR/SR 為 60.0/13.3 對 52.5/25.0",
+      "section": "§4.2、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "GPT-4 在九個任務的 PR 全部領先，SR 除了 AlfWorld 輸給 AgentLM-70b（50.7 對 43.3）之外也全部領先；專有模型整體仍明顯強過最好的開源模型。",
+      "numbers": "平均 PR/SR：GPT-4 70.0/47.9、Claude2 48.9/26.2、Gemini1.5-Flash 43.5/20.6、Llama3-70b 41.9/20.2、xLAM-70b 40.2/20.4、Llama2-70b 23.8/4.5、Llama2-13b 18.9/2.1",
+      "section": "§4.2、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "長程互動：強模型在 AlfWorld 與 PDDL 上可以持續推進約 30 步，但在 WebArena 與工具任務上很早就停滯；除了 Llama3-70b 與 DeepSeek-67b，開源模型大約在第 6 步之後就不再有進展。",
+      "numbers": "開源模型約在第 6 步停滯；GPT-4、Claude2 在 AlfWorld 與 PDDL 上持續進步到約 30 步",
+      "section": "§4.3、Figure 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "重跑的變異：專有模型的輸出變異明顯大於開源模型；某些任務的 SR 標準差大到足以蓋過模型間的差距。",
+      "numbers": "GPT-4 的 ALF SR 為 46.3±20.3，JC PR 為 45.4±12.9，平均 PR 為 70.3±4.7；GPT-3.5 平均 PR 為 38.5±3.1；Mistral-7b 各任務 PR 的 ± 多在 0.1–0.6",
+      "section": "附錄 D、Table 6、Table 7",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "記憶處理方式對短 context 的模型影響很大，對長 context 的模型幾乎沒有影響；滑動視窗整體最好，所以被選為標準設定。",
+      "numbers": "GPT-3.5（4k）平均 PR/SR：滑動視窗 41.4/19.7、截斷 32.8/13.7、摘要 33.5/14.4；Mistral-7b（32k）：24.6/3.9、24.0/3.8、23.9/4.0",
+      "section": "附錄 F、Table 10",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "為了讓每個最終目標只對應一組子目標而改寫題目，作者說只影響不到 5% 的題目，而且不改變難度；但改寫集中在 ScienceWorld。",
+      "numbers": "ScienceWorld 改了 36 題（40%），BabyAI 改了 4 題（3%），其餘任務都沒有改",
+      "section": "附錄 L.1、Table 15",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "progress rate 仰賴人工標註的子目標：標註者的主觀性需要多輪覆核才能拉齊，任務越複雜，子目標數量與標註粒度越難擴展。想改用 LLM 自動標註，但現有模型在這些任務上表現不佳，無法準確產生子目標（§7、附錄 B）。",
+    "為了標準化，只在模擬環境中評估；真實環境的正解會隨時間變動（例如網頁內容），而且讓 agent 在真實網路上操作有安全風險（附錄 B）。",
+    "連續的狀態相似度 f(·, g) 對中間狀態模糊的任務不好用，所以才另外引入離散子目標；同時也必須把題目簡化成單一子目標序列（§2.2、附錄 L.1）。",
+    "專有模型因為解碼後處理，輸出變異比開源模型大（附錄 D）。",
+    "Gemini1.5-Flash 的分數可能因為嚴格的內容安全篩選而偏低（Table 3 註）。",
+    "探索行為分析只適用於部分環境，沒有整合進框架（附錄 E）。",
+    "Tool-Operation 讓 agent 存取線上的 Google Sheet 與 Todoist API，作者表示已確保沒有個人資訊外洩（附錄 C）。"
+  ],
+  "limitations_observed": [
+    "效度驗證的樣本，剛好避開了 progress rate 最主要的賣點。人工評分用的軌跡只來自 GPT-4、GPT-3.5-Turbo、DeepSeek-67b 三個較強的模型；但 progress rate 最被強調的用途，是在成功率接近零的弱模型之間分出高下（例如 Llama2-13b 對 Mistral-7b），這類軌跡完全沒有被驗證。此外，評分者是 4 位論文作者，而子目標也是由作者群標註的（附錄 A），評分者對子目標設計並不陌生；量表只有 5 級；任務有 9 個，驗證只做了 8 個，正文沒說少了哪一個；只報 Pearson，沒有報分數分佈或秩相關。軌跡集中在 0% 與 100% 兩端時，Pearson 很容易被拉高。",
+    "WebShop 的 progress rate 鑑別力很弱，在這個任務上和 §4.2「progress rate 比 success rate 更具鑑別力」的主張正好相反。Table 3 的 19 個模型中，有 17 個的 WS PR 擠在 65–77 之間，GPT-4 是 76.5、GPT-3.5-Turbo 是 76.4，幾乎一樣；WS SR 反而從 10.8 分布到 39.0。原因出在計分設計：WS 的 PR 是三個頁面分數的平均，搜尋結果頁又取頁面上最佳商品的分數，只要搜尋字詞合理就能拿到大量部分分數。WS 同時讓每個模型的九任務平均 PR 都墊高約 6–8.5 分（WS PR 除以 9），壓縮了模型之間的整體差距。",
+    "旗艦例子的差距，拆開來看並不穩。Llama2-13b 對 Mistral-7b 的 5.7 分 PR 差距，逐任務看主要來自 SW（+14.7）與 TQ（+15.9），在 TO 反而是 −2.1。附錄 D 對同兩個模型重跑的平均 PR 是 19.1±1.9 與 22.6±0.2，差距縮成 3.5 分，點估計也和 Table 3 對不上（Mistral 是 22.6 對 24.6，TQ SR 是 0.0 對 3.3）。論文沒說重跑幾次，也沒說 ± 是標準差還是信賴區間。附錄 I 說用溫度 0 的貪婪解碼，附錄 D 卻說開源模型「用了較小的溫度」，兩處設定互相矛盾。",
+    "主表的聚合方式放大了雜訊。Avg 是九個任務不加權的算術平均（GPT-4：630.4/9 ≈ 70.0），所以只有 20 題的 Jericho，和有 251 題的 WebShop 權重一樣；而 Jericho 的一題就佔 SR 的 5 個百分點，TO 的一題佔 2.5 個。中段模型 Claude3-Haiku 43.3、Llama3-70b 41.9、GPT-3.5 41.4、xLAM 40.2 的平均 PR，相鄰兩名差距都在 1.4 分以內，頭尾也只差 3.1 分；而 GPT-3.5 的平均 PR 在附錄 D 是 ±3.1。這段排名在統計上分不開，主表卻只給點估計，還據此做誰勝誰負的敘述。另外，Table 3 表頭說依 success rate 排序，實際上並非如此：Claude3-Haiku 的 SR 17.6 排在 Llama3-70b 的 20.2 前面，xLAM 的 20.4 排在 GPT-3.5 的 19.7 後面；實際順序接近依平均 PR 排，只有 Llama2-70b（23.8）排在 Mistral-7b（24.6）前面這一處例外。",
+    "取歷史最大值的聚合方式，對倒退與破壞性動作完全不扣分。照式 (2) 的定義，PDDL Blocksworld 這類要先拆掉再疊回去的任務，暫時滿足的目標謂詞會被記分，之後拆掉分數也不會下降。Tool-Operation 提供 delete_task 等破壞性工具，agent 達成子目標後就算刪錯任務，PR 也不受影響。對需要衡量副作用的對話型任務（例如客服改訂單），這個指標會系統性地偏樂觀。",
+    "論文說子目標「一個接一個」，但實作是無序集合。官方程式碼（main @bb7255e）的 AlfWorld 與 Jericho，都是任一觀測符合任一 regex 就永久記一分，不檢查順序；AlfWorld 只要環境回報 done，PR 就直接變 1.0。所以 PR 量的其實是「必要觀測曾經出現過幾個」，不是「照正確順序推進了多少」。先偶然觸發後面的觀測，也能拿分。",
+    "WebArena 的公式照論文重做會出錯。論文式 (5) 照印出來的樣子，當 m=0 時 URL 分量 r_d(r_q+r_p) 最高可以到 2，超出 [0,1]；程式碼其實有除以 2，而且 LCS 用在 URL path，不是論文說的 query。重做時必須照程式碼、不能照論文公式。此外，WebArena 只取了原本 812 題中的 245 題（Site Navigation 與 Contact & Config 兩類），WA 的分數不能拿來和原版 WebArena 的成功率比較。",
+    "式 (2) 讓 r^match 從第 0 步就開始取最大值。如果初始狀態已經滿足一部分目標條件，例如 PDDL 裡本來就在桌上的方塊、Sheet 裡本來就和 golden 相同的格子，progress rate 一開始就不是 0，和正文「初始值為 0」的說法矛盾；論文也沒說有沒有扣掉這個基線。Sheet 用整張表的格子相符比例計分，Table 2 的例子在第 7 步只從 0.47 變成 0.49，一次正確的公式填寫只加 2 分，看起來分母被大量原本就一致的格子稀釋了（我沒讀 PDDL 與 Sheet 的實作，這點是依公式推論）。",
+    "把「不會宣告完成」當成成功率的雜訊，而不是當成失敗。CodeLlama-34b 的例子被拿來說明 PR 比較不受 agent 習慣影響；但在部署時，不會呼叫 finish 或不回答，就是任務沒完成。PR 對終止行為完全不敏感，單獨使用會高估這類 agent。對 T8 來說，終止與回報的正確性應該是獨立的一個維度，不該被 PR 抹平。",
+    "ScienceWorld 的改寫幅度，遠大於「整體不到 5%」這個說法。SW 有 40%（36/90）的題目被改寫成指定工具與房間，直接降低了探索需求；作者說不改變難度，卻沒有做改寫前後的對照。另外，SW 的 grounding 準確率所有模型都很低：GPT-4 只有 22.8%，最高的反而是 Lemur-70b 的 47.8%，和其他任務動輒 90% 以上的數字落差極大。這比較像是改編環境的動作格式或解析問題，不像模型能力的差異，論文沒有檢查。",
+    "AgentLM-70b 是用 AlfWorld 與 WebShop 的軌跡訓練的，§4.2 自己也這麼寫。所以它在 ALF 的 SR 50.7 高過 GPT-4 的 43.3，是訓練分佈內的結果；但論文仍用 +9.5/+10.2 的平均增幅，支持「agent 任務訓練能泛化」，沒有把這兩個任務排除後再算一次。",
+    "所有數字都綁在同一個 scaffold 上：act-only、one-shot、滑動視窗、30 步上限、溫度 0。附錄 F 顯示，光是換記憶處理方式，GPT-3.5 的平均 PR 就在 32.8–41.4 之間變動；換成 ReAct，TO 的 PR 從 37.2 升到 54.8。scaffold 造成的差距和模型間的差距同一個量級，PR 卻被當成「模型的 agent 能力」來報告。",
+    "分數裡沒有成本與效率。PR 與 SR 都不看步數、token 數或無效動作數，30 步內繞遠路和直達拿到的分數一樣；長程分析也只是畫 PR 對步數的曲線，沒有把效率折進分數。另外有一個小瑕疵：Table 14 各任務的環境數加總是 1012，正文寫的是 1013。"
+  ],
+  "framework_role": "T8「部分分數與過程度量」子領域的代表作。它把 progress rate 定義成與 success rate 並列的標準分數：子目標完成比例或終態相似度，逐步計算、取歷史最大值；並提供人工相關驗證、跨 9 個環境的統一標註方法，以及官方程式碼。對 T7 來說，它是多環境統一評估框架的一個實例，附帶分析面板：grounding 準確率、難易拆分、長程曲線、子技能雷達、W&B 視覺化。對 T4 來說，它逐步記錄軌跡並逐步算分，形成「軌跡 → 逐步分數」的路徑；這在我們的框架裡是 T4→T8，不屬於六條邊。論文沒有使用者模擬器，目標直接寫在 prompt 裡；agent 是 act-only，沒有反思或狀態追蹤模組；所以 T1、T2、T5、T6 以及六條邊都不涉及。對我們的啟示：對話任務可以拆成能用 regex 或狀態比對驗證的子目標，逐輪算出單調的進度分數；但要自己補上子目標順序、倒退與副作用的懲罰、終止與回報的正確性，以及成本維度。它的 WebShop 結果也提醒我們，部分分數設計得太寬鬆時，鑑別力反而比二元成功率差。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。官方 GitHub README（https://github.com/hkust-nlp/AgentBoard，2026-09-26 讀取）只列了評估過的模型，沒有提到任何公司、產品或官方模型發布採用它。NeurIPS 2024 Oral 與作者自架的 leaderboard 屬於學術影響，不算採納；v2 的 Table 3 評了 Salesforce 的 xLAM-70b，那是 AgentBoard 去評別人，方向相反。Salesforce 的 xLAM-7b-r 官方 model card（https://huggingface.co/Salesforce/xLAM-7b-r）報了 Webshop 與 ToolQuery 的 success rate，ToolQuery 與 AgentBoard 新建的 Tool-Query 環境同名，但卡上沒寫 AgentBoard，也沒用 progress rate，出處無法從卡片本身確認，所以不計入。本次 WebSearch 額度已耗盡，只能直接開已知的官方頁面查證，採納面的搜尋並不完整。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/hkust-nlp/AgentBoard",
+    "data": "公開：資料放在 HuggingFace 資料集 hkust-nlp/agentboard，程式碼採 Apache-2.0、資料採 GPL-2.0。重做時要注意三件事：repo main 最後提交是 2024-04-23，早於加入 Llama3、xLAM、Gemini 等模型的論文 v2（2024-12），不保證能重現 v2 的數字；Tool-Operation 依賴線上的 Google Sheets 與 Todoist API，WebArena 需要自架網站環境；WebArena 的計分公式要以程式碼為準，不能照論文式 (5)。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是第一個把「子目標完成比例或終態相似度、逐步取最大值」的 progress rate，標準化到 9 個多輪環境、附人工效度驗證與開源實作的工作，正好落在 T8「部分分數與過程度量」子領域的核心；它的設計缺陷（無序、取最大值、WebShop 過寬）本身也是這個子領域必讀的反面教材。",
+  "related": [
+    "2308.03688",
+    "2307.13854",
+    "2309.10691",
+    "2207.01206",
+    "2203.07540",
+    "2010.03768",
+    "1810.08272",
+    "1909.05398",
+    "2210.03629",
+    "2311.12983",
+    "2002.06432",
+    "2305.18654"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

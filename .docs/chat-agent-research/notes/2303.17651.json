@@ -1,0 +1,188 @@
+{
+  "id": "2303.17651",
+  "title": "Self-Refine: Iterative Refinement with Self-Feedback",
+  "topic": "T5",
+  "subarea": "內在自我修正與口語反思（含批判性研究）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "只用一個 LLM 與三組 few-shot 提示詞（生成、回饋、改寫），讓模型對自己的輸出寫出具體可執行的自然語言回饋再據以改寫、反覆迭代到停止條件，免訓練；在 7 個任務、GPT-3.5／ChatGPT／GPT-4 上宣稱平均約 20 個百分點的絕對增益，但數學推理幾乎沒有增益。",
+  "problem": "LLM 第一次產出常常不是最好的，尤其是目標多面向（對話回應要同時切題、有資訊、有趣、安全）或目標難以定義（程式可讀性）的任務。既有的迭代修正方法多半要為每個領域訓練專用的 refiner 或 corrector（PEER、Self-Correction），或依賴獎勵模型、RL、大量人工標註（RLHF、CodeRL），成本高而且換一個任務就要重來。作者想知道：能不能不訓練、不用外部監督，只靠同一個模型在推論時自我批評、自我改寫，就把任意強模型的輸出再往上推。這是「內在自我修正」路線的起點，後續 Reflexion 類 agent 與批判性研究（2310.01798）都以它為參照。",
+  "core_idea": "模仿人寫作時「先寫草稿→自己挑毛病→改」的流程：同一個模型 M 輪流扮演生成者、回饋者、改寫者。關鍵是回饋必須「可執行」（指出具體該做什麼改動）與「具體」（指出輸出中哪個片段有問題），而且以多面向評分的形式呈現，讓模型能據此改寫，也能據分數決定何時停止或從多輪中挑出最好的一版。改寫時把先前所有版本與回饋串進提示詞，讓模型看到自己犯過的錯。所有監督訊號只來自提示詞裡的 few-shot 範例，不更新參數。",
+  "method": {
+    "輸入輸出": "輸入 x（任務輸入，例如對話脈絡、慢程式、數學題、評論＋目標情感、標題、概念清單）；輸出為最後一版 y_t，或在多面向評分任務中取跨輪回饋總分最高的一版。模型 M 為黑箱 LLM API，不需權重。",
+    "演算法（Algorithm 1）": [
+      "1. 初始生成：y0 = M(p_gen ‖ x)。p_gen 為任務專屬 few-shot 提示，內含 ⟨x, y⟩ 範例對。",
+      "2. 對 t = 0, 1, … 迴圈：回饋 fb_t = M(p_fb ‖ x ‖ y_t)。p_fb 內含 ⟨x, y, fb⟩ 三元組範例，示範可執行、具體的回饋（常附各面向分數與總分）。",
+      "3. 停止判斷 stop(fb_t, t)：到達指定輪數，或從回饋中抽出停止指標（例如純量停止分數、回饋說沒有問題）。停止指標由 p_fb 範例教模型輸出，規則依任務而定。",
+      "4. 若不停止：y_{t+1} = M(p_refine ‖ x ‖ y0 ‖ fb0 ‖ … ‖ y_t ‖ fb_t)。p_refine 內含 ⟨x, y_t, fb_t, y_{t+1}⟩ 四元組範例；實作上把全部歷史版本與回饋串接進提示詞（Eqn. 4），而不只是最近一版。",
+      "5. 回傳：Algorithm 1 寫的是回傳最後一版 y_t；但 Appendix H 說對多面向任務依回饋分數取跨輪最高分者。實際上對話任務選跨輪總分最高、而且排除 y0 的那一版；Acronym 也取最高分版本；其餘任務用最後一版。照做時要自己決定選版規則。"
+    ],
+    "全域設定": "迭代上限 4 輪（§3.1）；即使 ChatGPT／GPT-4 能吃指令，回饋與改寫仍一律用 few-shot 提示以求跨模型一致；解碼設定文中寫成「溫度 0.7 的 greedy decoding」，本身自相矛盾，應視為溫度 0.7 取樣。能沿用前人提示的任務（Code Optimization、Math Reasoning）直接沿用，其餘由作者自寫（Appendix S）。",
+    "各任務實例化": {
+      "Dialogue Response Generation（FED）": "p_fb 以 10 個面向（Relevant、Informative、Interesting、Consistent、Helpful、Engaging、Specific、Safe、User understanding、Fluent）各給一句理由與 1–3 分，外加總分 /30；p_refine 示範依評分改寫出更好的回應。最多 k=3 輪；few-shot 數量文內不一致（M.1 說回饋用 6 個範例、M.2 說 init 用 3 個並與回饋共用同樣的脈絡，Appendix S 又說 init 取 6 個）。M.2 說全部實驗用 text-davinci-003。",
+      "Code Optimization（PIE）": "p_gen 用 PIE 的慢／快程式對；p_fb 在程式後加上一行「為什麼這段程式慢？」的註解問句，範例回答是 PIE 提供的自然語言解釋；p_refine 在解釋之後接改進版程式。指標 % programs optimized。",
+      "Code Readability（CodeNet 300 題）": "init 是 no-op，直接從原始程式開始；p_fb 為零樣本指令，要求只給一條可讀性建議、不要改程式；p_refine 附上建議後要求修正程式。迭代 N=5；critique 溫度 0.0 與 0.7 兩組，editor 固定 0.0；用 text-davinci-003。",
+      "Math Reasoning（GSM8K 1,319 題）": "沿用 PaL 的 Python 解題提示；p_fb 範例取兩題 Codex 答錯的訓練題，由作者手寫逐區塊檢查的錯誤說明（提示開頭直接說上面的程式有錯）與正確解。Appendix O 說依 Welleck et al. 用正確答案標籤決定何時推進迴圈；H.1 另列 oracle 版本（答錯才進入改寫）。",
+      "Sentiment Reversal（Yelp，Zhang et al. 2015）": "以 Very negative／Negative／Neutral／Positive／Very positive 五級描述；p_fb 回答「為何這篇還不是目標情感」並點名應替換的字詞；最多 k=4 輪，到達目標情感即停。p_refine 範例在已達 Very negative 時仍要求更負面。",
+      "Acronym Generation（作者自建 250 筆）": "p_gen 15 個（標題, 縮寫）範例；p_fb 以 5 個面向（好念、好拼、與標題相關、正面聯想、知名度）各 1–5 分，先寫理由再給分（CoT 式），總分 /25；3 個範例同時用於回饋與改寫；取跨輪總分最高的版本。",
+      "Constrained Generation（CommonGen-Hard，200 筆，每題 20–30 個概念）": "p_gen 10 個範例；p_fb 由 6 個訓練樣本改造成缺概念或不合常識的變體，回饋分成 Concept Feedback（缺哪些概念）與 Commonsense Feedback（哪裡不合理）；範例顯示兩者都為 None 時結束。指標 concept coverage %。"
+    },
+    "評估流程": "Task-specific 指標（solve rate、% optimized、coverage）；Human-pref 為作者本人做的盲測 A/B（每任務 150 例）；GPT-4-pref 以 GPT-4 做 A/B 偏好判斷（Appendix D 的提示要求先寫理由再選 A／B／both／neither），與人工偏好的一致率 82%（Sentiment）、68%（Acronym）、71%（Dialogue）；Code Readability 以 GPT-4 計算命名恰當的變數比例。",
+    "重做要點": [
+      "三組提示詞都要寫範例，回饋範例的品質（可執行、具體、分面向評分）是成敗關鍵；作者的失敗分析顯示 94% 的失敗來自回饋而非改寫。",
+      "回饋格式要可剖析（分數、停止標記），否則弱模型（Vicuna-13B）會直接破格式讓迴圈崩潰。",
+      "多面向任務要保留每輪分數並做 best-of-iterations 選版，因為品質不單調上升。",
+      "改寫提示要帶全部歷史，token 成本隨輪數線性增加；每題最多 1＋2×4 次呼叫。"
+    ]
+  },
+  "assumptions": [
+    "基礎模型要有足夠的 few-shot／指令遵循能力，才能照格式產出回饋並依回饋改寫（作者自承；Vicuna-13B 反例）。",
+    "模型評判自己輸出的能力高於一次生成出好答案的能力（生成與驗證有落差），否則回饋只是重述原輸出。",
+    "錯誤在表面上可見，可以透過閱讀輸出本身找到；對一條看起來一致的推理鏈中的細微錯誤，這個前提不成立（數學任務）。",
+    "每個任務能事先寫出一套評分面向與示範，且這套面向就是使用者真正在意的品質。",
+    "推論成本（多次呼叫、長提示）可以接受，而且與基準比較時不需對齊運算量。",
+    "LLM 評審（GPT-4-pref）能作為人工偏好的可靠代理。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Dialogue Response Generation：FED（Mehri & Eskenazi 2020；App A 寫 372 段對話，M.2 寫測試 342 例）",
+      "Code Optimization：PIE（Madaan et al. 2023，1,000 支程式）",
+      "Code Readability Improvement：CodeNet 隨機 300 例（另 60 例有人工改寫對照）",
+      "Math Reasoning：GSM8K（1,319 題）",
+      "Sentiment Reversal：Yelp 評論（Zhang et al. 2015，1,000 篇）",
+      "Acronym Generation：作者自建 250 筆",
+      "Constrained Generation：作者自建 CommonGen-Hard（200 筆，20–30 個概念）"
+    ],
+    "metrics": [
+      "solve rate %（Math）",
+      "% programs optimized、relative speedup、speedup（Code Optimization）",
+      "concept coverage %（Constrained Gen）",
+      "GPT-4-pref 勝率（Sentiment、Dialogue、Acronym；其餘判為平手）",
+      "GPT-4 判定的命名恰當變數比例；meaningful variable ratio、comment per line、function units（Code Readability）",
+      "Human-pref 盲測 A/B 勝率（作者本人標註）",
+      "Vader 情感分類準確率（Sentiment 補充）",
+      "Wilson 信賴區間與顯著性（Appendix J）"
+    ],
+    "baselines": [
+      "同一模型單次生成（GPT-3.5 text-davinci-003、ChatGPT gpt-3.5-turbo、GPT-4；程式任務另測 Codex code-davinci-002）",
+      "消融：generic feedback、no feedback、「something is wrong」式無定位回饋",
+      "ChatGPT 取 k=4 個樣本、無回饋改寫的多樣本對照（1 vs k 人工評估）",
+      "Oracle feedback（依正確答案決定是否改寫，Math）",
+      "Self-Correction（Welleck et al. 2022，同為 GPT-3）",
+      "PaL／CoT（Math）；PIE fine-tuned 模型、scalene、CodeGen-16B（Code Optimization）",
+      "Vicuna-13B（弱模型）與 Vicuna 生成＋ChatGPT 回饋改寫的 mixed-refine",
+      "人工改寫（Code Readability 60 例）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在 7 個任務、3 個基礎模型上，Self-Refine 輸出相較同模型單次生成都獲得偏好或指標提升；作者總結為平均約 20 個百分點的絕對增益。注意這個平均混合了 solve rate、coverage 與偏好勝率等不可比的指標；依 Table 1 的 21 格增益自行平均約為 18.7。",
+      "numbers": "增益範圍 0（GPT-3.5 Math）到 +49.2（GPT-4 Dialogue）；GPT-4：Sentiment 3.8→36.2、Code Opt 27.3→36.0、Code Readability 27.4→56.2、Acronym 30.4→56.0、Constrained Gen 15.0→45.0。",
+      "section": "Abstract、§3.3、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "偏好型任務增益最大：對話回應在 GPT-4 上，GPT-4-pref 勝率由 25.4% 升到 74.6%；人工評估（100 例）同樣偏好 Self-Refine，但有大量平手。",
+      "numbers": "GPT-4-pref：GPT-3.5 36.4→63.6、ChatGPT 40.1→59.9、GPT-4 25.4→74.6；人工評估（Table 15）Self-Refine 勝 36／48／54%、init 勝 23／18／16%、平手 41／50／30%。",
+      "section": "§3.3、Table 1、Appendix M Table 15",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "數學推理幾乎沒有增益，原因是模型無法判斷自己有沒有錯：一條看似一致的推理鏈會讓回饋直接說沒問題。",
+      "numbers": "GSM8K：GPT-3.5 64.1→64.1、ChatGPT 74.8→75.0、GPT-4 92.9→93.1；ChatGPT 的回饋有 94% 是「everything looks good」。",
+      "section": "§3.3、Table 1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "回饋的品質是關鍵：把具體可執行的回饋換成泛泛的回饋會掉分，完全不給回饋會掉更多。",
+      "numbers": "Code Opt（ChatGPT）27.5／26.0／24.8；Sentiment Reversal（ChatGPT）43.2／31.2／0；Acronym（GPT-3.5）56.4／54.0／48.0（Self-Refine 回饋／generic／無回饋）。App P 的「something is wrong」消融：情感偏好 85%→73%、戲劇性偏好 80.09%→58.92%。",
+      "section": "§4、Table 2、Appendix P",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "多輪迭代有幫助但邊際遞減，大部分增益發生在第一輪；多面向任務（Acronym）品質會隨迭代上下震盪，需要依分數選版。",
+      "numbers": "三模型平均：Code Opt 22.0→27.0→27.9→28.8、Sentiment 33.9→34.9→36.1→36.8、Constrained Gen 29.0→40.3→46.7→49.7（y0→y3）；Acronym 範例四輪總分 11→17→12→17。",
+      "section": "§4、Figure 4、Appendix H Table 10",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "人工檢視 70 例（Code Opt＋Math，成功與失敗各 35）：失敗幾乎都來自回饋而非改寫；成功案例中改寫器對部分錯誤的回饋也有一定容錯。",
+      "numbers": "失敗：33% 回饋錯指位置、61% 回饋建議錯的修法、6% 改寫器沒正確實作好回饋；成功：61% 由準確回饋引導、33% 回饋部分錯誤仍改對。對話任務另有回饋錯誤 25%、泛泛 30%、評分錯 10%，改寫忽略回饋 25%、引入新問題 20%（Table 11／12，樣本數未說明）。",
+      "section": "§4 Qualitative Analysis、Appendix H Table 11／12",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "方法依賴強模型：Vicuna-13B 能做初始生成，但無法穩定照格式產出回饋，給它 oracle 或寫死的回饋也常改不好，會重複原輸出或幻想出對話。改用 ChatGPT 負責回饋與改寫時，Vicuna 的初始解可被大幅拉高（但這已不是自我修正）。",
+      "numbers": "Mixed-refine（Vicuna-13B 初始生成＋ChatGPT 回饋改寫）在 Math Reasoning 由 24.18% 升到 40.5%。",
+      "section": "§4、Appendix G",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "加入外部正確性訊號（oracle：答錯才進入改寫）後，數學任務才看得到增益，顯示瓶頸在錯誤偵測而非改寫能力。",
+      "numbers": "GSM8K oracle：GPT-3.5 64.06→68.9（+4.8）、ChatGPT 74.8→76.2（+1.4）、GPT-4 92.9→93.8（+0.7）；另與 Self-Correction 同為 GPT-3 時 55.7 vs 45.9。",
+      "section": "Appendix H.1 Table 9、Appendix B",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "基礎模型必須具備足夠的 few-shot／指令遵循能力，才能在上下文中學會給回饋與改寫；弱模型（Vicuna-13B）做不到。",
+    "實驗全用不開源、要付費的 OpenAI 模型（GPT-3.5、ChatGPT、GPT-4、Codex），預訓練語料、規模與偏誤不透明；作者以公開程式碼與模型輸出彌補可重現性。",
+    "只用英文資料集，其他語言未必有相同效益。",
+    "數學等錯誤細微的任務，模型難以判斷有沒有錯，增益很小；需要外部訊號（oracle）才有明顯增益。",
+    "多面向任務的品質不一定隨迭代單調上升，一個面向變好可能另一個面向變差。",
+    "回饋錯誤是失敗主因；對話任務中改寫也會忽略好回饋或引入新問題。",
+    "方法沒有防範惡意使用者用提示技巧引導模型產出有害內容。",
+    "自動指標未必能準確評估文字生成品質，因此另做人工評估。"
+  ],
+  "limitations_observed": [
+    "數學數字在文內互相矛盾，無法判斷哪些結果其實用了標籤：Table 1 的 GSM8K 是 64.1／75.0／93.1，Table 7 同樣標為 Self-Refine 卻是 62.4／75.1／94.5（GPT-4 的 94.5 甚至高於 Table 9 的 oracle 93.8），Figure 17 又畫出 71.34→76.19 的逐輪曲線；Appendix O 明說依 Welleck et al. 用正確標籤決定迴圈推進，H.1 卻把 oracle 另列成 Table 9。讀者無從確認 Table 7、Figure 17 與 Self-Correction 比較（55.7 vs 45.9）是否為 oracle 設定。後續 2310.01798 正是以此指出這類設定混入了標籤，並顯示拿掉標籤後內在自我修正在推理任務上反而退步。",
+    "「平均約 20% 絕對增益」把不可比的指標平均在一起：solve rate、coverage、GPT-4 判定的變數命名比例與 A/B 偏好勝率混算。偏好類任務 Base 與 Self-Refine 的勝率相加遠小於 100，其餘算平手，例如 GPT-4 Sentiment 3.8 對 36.2，約六成是平手；把「勝率差」當成「絕對增益」會誇大效果。",
+    "統計強度不如正文語氣：Appendix J 顯示 GPT-3.5 只有 3/7、ChatGPT 只有 4/7 個任務達顯著，GPT-4 為 6/7；而且表格說明寫 95% 信賴區間、正文寫 α=99%，前後不一致。Acronym 在 GPT-3.5 上 41.6→56.4 並不顯著，人工評估也有 43% 平手。",
+    "Sentiment Reversal 的大增益主要來自「更戲劇化」而非更準確：App P 用 Vader 分類器量目標情感時，負向目標下 GPT-3.5 為 92%、Self-Refine 為 93.6%，幾乎沒有差別；Figure 38 的改寫範例在已達 Very negative 時仍要求再更負面，等於把評審偏好的誇張風格寫進提示。Figure 4 中 Sentiment 的 y0→y3 只從 33.9 升到 36.8，與 Table 1 的 +21.6～+32.4 顯然用了不同量尺，文中沒有說明。",
+    "對話任務的評估與最佳化目標重疊：回饋提示以 10 個面向打分並改寫，評審（GPT-4-pref 與人工）被要求依同樣 10 個面向選出較好的回應，而且最後輸出強制排除 y0、取回饋自評最高分的修改版。作者自己的人工檢視也說 Self-Refine 的輸出通常更詳盡（more elaborate），而 LLM 評審與人工都有已知的長度偏誤，這個實驗沒有控制或回報長度。另外 M.2 寫全部實驗用 text-davinci-003、自動評估是 zero-shot text-davinci-003、測試 342 例，與 §3.2 的 GPT-4-pref、Table 1／15 的三個模型欄、App A 的 372 段對話都對不上。",
+    "人工 A/B 評估由作者本人執行（Appendix C），雖然盲測，但仍有評審與方法設計者重疊的風險；GPT-4-pref 用 GPT-4 評 GPT-4 自己修改過的輸出，可能有自我偏好，而且與人工的一致率只有 68%–82%。",
+    "沒有做等成本比較：每題最多 1＋2×4 次呼叫、改寫提示還串接全部歷史，但主表只對單次生成比。唯一的多樣本對照（k=4，Figure 9）只用 ChatGPT、兩個任務，從文字抽出的數字無法可靠解讀，也沒有對照 self-consistency 或 best-of-n 加評審的選版。2310.01798 後來在 CommonGen-Hard 上顯示，把「要涵蓋全部概念」寫進初始提示後，單次生成（81.8）就勝過再套 Self-Refine（75.1），說明部分增益來自初始提示資訊不足。",
+    "回饋提示預設輸出有錯：Math 的回饋範例開頭直接說上面的程式有錯，Code Optimization 則問「為什麼這段程式慢」。沒有 oracle 停止時，這種措辭會誘導模型對正確輸出也找錯、過度修改；作者沒有量測「對改錯」的比例。",
+    "多處實驗細節不一致，影響重做：§3.1 寫「溫度 0.7 的 greedy decoding」；Code Optimization 的 Table 16（Direct 9.7%→15.6%）與 Table 1（14.8→23.0 等）對不上，也沒交代是哪個模型；Table 8 的 ChatGPT＋Self-Refine 是 26.7，Table 1 是 27.5；Code Readability 的 init 是 no-op（L.1），但 Table 1 的 Base 在三個模型間不同，Base 到底是什麼不清楚，且 Appendix L 只用 text-davinci-003；Table 2 Sentiment 無回饋得 0 分，較像是改寫提示依賴回饋格式而無法執行，不是「沒有回饋就做不到」的證據。",
+    "「不需監督」的說法偏強：每個任務的評分面向、few-shot 回饋範例與改寫範例都由作者手寫（Appendix S 還留有 TODO 未補完），任務知識以提示工程的形式進場；換到新任務（例如多輪對話 agent）要重寫整套 rubric，成本並非為零。",
+    "外推到 agent 的限制：所有任務都是單次輸入、單次輸出的生成，沒有工具呼叫、多輪狀態或環境回饋；迭代歷史只存在單次請求的提示詞裡，不回寫任何狀態。結論不能直接外推到 agent 軌跡中的錯誤修正。"
+  ],
+  "framework_role": "T5 內在自我修正的原型方法與主要基準。它定義了 generate→feedback→refine 的最小迴圈、「可執行＋具體＋分面向評分」的回饋格式、以回饋內的停止指標或輪數上限停止、以及依分數跨輪選版，是後續 Reflexion 類反思機制與 2310.01798 等批判性研究的直接參照對象。對框架的具體啟示有四點：(1) 在沒有外部訊號時，它對「風格／多面向偏好」類輸出（例如對話回應的切題、資訊量、同理）有效，可作為送出回應前的潤飾步驟；(2) 對「正確性」類錯誤（推理、事實）它自己偵測不到，T5 需要外部驗證訊號觸發；(3) 失敗主要出在回饋而非改寫，工程投資應放在 critic 的品質與可剖析的回饋格式；(4) 每輪的回饋分數與版本歷史是天然的修正紀錄，應保留下來供評估使用，但評估時要注意評審面向與回饋面向重疊造成的自我增強偏誤。",
+  "edges": [
+    {
+      "edge": "E5",
+      "how": "方法本身會產出一份逐輪的修正紀錄：y0、fb0、…、y_t、fb_t 全部串進改寫提示，回饋中含各面向分數與總分，並以此在多面向任務中選出最高分版本。論文再拿這些紀錄做評估：逐輪分數曲線（Figure 4、Table 10）、70 例成功／失敗歸因（回饋錯位 33%、錯的修法 61%、改寫失誤 6%）、對話任務的回饋與改寫錯誤分類（Table 11／12）。對框架的含義是修正紀錄至少要保留每輪版本、回饋、分數與最終選版理由，評估端才能分辨失敗是出在 critic 還是 refiner。"
+    },
+    {
+      "edge": "E3",
+      "how": "只在 Appendix H.1 的 oracle 版本成立：以答案正確與否作為外部異常訊號，只有答錯才進入改寫，數學增益才從約 0 變成 +0.7～+4.8。主方法本身每題都無條件跑回饋、停止靠模型自評分數，沒有軌跡層級的異常偵測。它提供的是反面證據：沒有外部異常訊號時，模型自評幾乎不會觸發有效修正（94% 回饋說沒問題）。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "AWS Prescriptive Guidance〈Optimizing generative AI prompts〉在 Critique prompting 條目中把 Self-Refine 列為迭代修正方法的例子，並直接連結 arXiv 2303.17651：https://docs.aws.amazon.com/prescriptive-guidance/latest/gen-ai-lifecycle-operational-excellence/dev-experimenting-prompt-optimization.html"
+    ],
+    "assessment": "只有官方最佳實務文件的推薦，未見產品部署證據。AWS 的指引把 Self-Refine 列為建議的 critique prompting 做法，屬於廠商推薦的開發模式，不代表 AWS 產品內建此方法。Google ADK 的 LoopAgent（critic／refiner＋exit_loop＋max_iterations）、DSPy 的 dspy.Refine（失敗後自動產生回饋再重試）與 LangChain〈Reflection Agents〉部落格的 basic reflection，結構都與 Self-Refine 相似，但經開頁確認都沒有引用本文，因此不列為本文的採納證據。論文本身沒有描述任何部署，網站生成（Appendix I）只是示範。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/madaan/self-refine",
+    "data": "官方 repo（Apache-2.0）附有 7 個任務的程式碼、提示詞與資料；除新建的 Acronym（250 筆）與 CommonGen-Hard 外，其餘都是公開資料集（FED、PIE、CodeNet、GSM8K、Yelp）。論文說釋出模型輸出，但 repo 以範例輸出與評估腳本為主。所用 text-davinci-003、code-davinci-002 等模型快照已下架，無法逐位重現。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "內在自我修正的原型方法與事實標準基準，後續反思類 agent 與「LLM 不能自我修正」批判都以它為對照，是 T5 必讀；但要連同其評估漏洞（標籤混入、偏好指標混算、評審與回饋面向重疊）一起讀。",
+  "related": [
+    "2303.11366",
+    "2211.00053",
+    "2302.07867",
+    "2211.10435",
+    "2212.08073",
+    "2206.05802",
+    "2208.11663",
+    "2302.04166"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 3,
+    "total": 8
+  }
+}

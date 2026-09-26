@@ -1,0 +1,175 @@
+{
+  "id": "2404.04475",
+  "title": "Length-Controlled AlpacaEval: A Simple Way to Debias Automatic Evaluators",
+  "topic": "T7",
+  "subarea": "LLM/agent-as-judge 與評估可靠性",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把 LLM 評審的成對偏好當成「模型品質直接效應＋長度中介效應＋題目難度」的 logistic GLM 來擬合，再把長度項歸零，算出「若兩邊輸出等長，評審會怎麼偏好」的反事實 win rate（AlpacaEval-LC）。這讓 AlpacaEval 對冗長提示的敏感度從 25% 降到 10%，與 Chatbot Arena 的 Spearman 相關從 0.94 升到 0.98。",
+  "problem": "LLM-as-a-judge 的免參考評估（AlpacaEval、MT-bench、WildBench）便宜又和人評高度相關，但這種相關有一部分來自偽相關特徵，例如輸出長度、有沒有列表、位置偏差。AlpacaEval 原本只把呈現順序隨機化，沒有控制長度，因為當初在分析資料上發現人類也有類似的長度偏好。後來 AlpacaEval 被當成公開排行榜使用，模型開發者（尤其是經過 RLHF 的開源模型）就能靠把回答寫長來刷分：光是改 verbosity 提示詞，baseline 模型自己的 win rate 就能從 22.9% 擺到 64.3%。問題在於怎麼在不重跑評審、不換評審模型的前提下，事後從既有評分裡移除一個已知偏差，同時保住 win rate 原有的可解釋性：值域 0–100%、baseline 對自己 50%、交換雙方時對稱。這件事重要，是因為低成本自動評估若可被冗長度操弄，就會變成錯誤的最佳化目標。",
+  "core_idea": "採用因果推論的中介分析觀點：評審給出的偏好，一部分是模型品質的直接效應，一部分是經由「長度」這個不想要的中介變數傳遞的間接效應。作者用最簡單的 regression adjustment 估 controlled direct effect：以 logistic 回歸擬合評審偏好，特徵包含模型項、經過標準化並取 tanh 的長度差項、題目難度項；預測時把長度差設為 0，得到反事實的 LC win rate。所有項都對 m／b 反對稱且以 0 為中心，所以 identity（自己對自己 50%）與 symmetry 自動成立。這個框架可以把其他疑似偏差當成額外特徵加進回歸。",
+  "method": {
+    "問題設定（§2 Setup）": "輸入：固定指令集 x（AlpacaEval 805 題，取自 Alpaca web demo 的使用者互動分佈）、baseline 模型 b（當時是 GPT-4 turbo，gpt4_1106_preview）的輸出 z_b、受評模型 m 的輸出 z_m，以及 GPT-4 turbo 評審對每題給出的偏好 y。AlpacaEval 評審輸出的是「偏好 m」的機率，所以 y 是 [0,1] 的軟標籤。原始指標為 winrate(m,b) = 100·E_x[f(z_m,z_b,x)]。輸出：長度控制後的 win rate，必須保留三個性質：值域在 [0,100]、baseline 對自己是 50%、winrate(m,b) = 100 − winrate(b,m)。",
+    "因果框架（§3、Figure 2）": "把評審的判斷拆成模型品質的直接效應，以及經由長度等偽相關變數傳遞的間接效應。目標是回答反事實問題：如果 m 的輸出與 b 等長，評審會給多少 win rate。估計對象借用 VanderWeele 的 controlled direct effect，用 GLM 近似。",
+    "回歸模型（Eq.1）": "q(y=1 | z_m, z_b, m, b, x) = logistic( (θ_m − θ_b) + φ_{m,b}·tanh( (len(z_m) − len(z_b)) / std(len(z_m) − len(z_b)) ) + (ψ_m − ψ_b)·γ_x )。三項依序是模型項、長度項、指令難度項。長度差先除以標準差標準化成單位變異，再過 tanh，讓長度差對 log odds 的效果邊際遞減。γ_x 是每題對 baseline 的難度，ψ 是模型對難度的敏感度；難度不是模型造成的，但放進回歸可以降低殘差變異、提高估計精度。因為 logistic(x) = 1 − logistic(−x)、tanh 是奇函數，交換 m 與 b 時三項都變號，symmetry 成立；m=b 時長度差為 0、其餘係數相同，identity 成立。作者指出任何以 0 為中心的反對稱加法項都滿足這兩個性質，所以其他偏差（列表、markdown 等）可以用同樣方式當特徵加入。",
+    "LC win rate（Eq.2）": "把長度項設為 0（等同 len(z_m) = len(z_b)），對每題算 logistic(θ_m − θ_b + (ψ_m − ψ_b)·γ_x)，對 805 題取平均再乘 100。",
+    "擬合步驟（§3 Training）": [
+      "1. 因為排行榜的 baseline 固定，θ_b、ψ_b 可以併入 m 的參數。每個模型有 θ_m、φ_{m,b}、ψ_m 三個參數，每題一個 γ_x，共 3M+N 個參數、MN 筆觀測（M>128、N=805），在 M、N 都大時是過度決定的。",
+      "2. 先估指令難度 γ_x：對所有模型做一次聯合回歸，把 ψ_m − ψ_b 固定為 1，取得每題的 γ_x。之後凍結，不隨新模型加入而重估（作者承認重估會更準，但不想每加一個模型就改動整個排行榜）。",
+      "3. 再對每個模型「分開」擬合 θ_m、φ_{m,b}、ψ_m，重用凍結的 γ_x。損失為 logit link 下的交叉熵。分開擬合的好處是新模型加入時，既有模型的分數不會變。",
+      "4. 為了在 M、N 較小時也穩健，使用 5-fold 交叉驗證並對權重加正則化（論文寫 L2）。",
+      "5. 對長度係數 φ_{m,b} 加弱正則化，防禦「把表現差的題目故意截短」的白箱攻擊：不加的話，差表現會與短長度完全相關，長度校正反而會把這些題的分數拉高。加了正則化後，表現問題會先由模型項解釋，殘差才歸給長度項。作者稱正則化弱到對非對抗模型沒有可察覺的影響，但論文沒有給強度數值。"
+    ],
+    "實驗協定（§4）": [
+      "Length gameability：對同一模型分別加上要求盡量詳盡（verbose）與盡量精簡但資訊完整（concise）的指示，連同標準提示共三種；以三者 win rate 的 normalized standard deviation 衡量指標被冗長度左右的程度。",
+      "與 Chatbot Arena 的相關：只計算對 Arena 中至少 25 個模型有分數的基準；AlpacaEval 與 AlpacaEval-LC 有 38 個重疊模型，MT-bench 有 34 個。使用 Spearman 而非 Pearson，理由是機率與 Elo 是 log-linear 關係。以 bootstrap 檢定相關係數差異。",
+      "截斷攻擊：把 GPT-4 的輸出除了「明顯較好且長度與 baseline 相近」的那些以外，全部截成只剩幾個字元，量測攻擊後 win rate 的增益。",
+      "替代方法比較（§4.4）：Length-balanced（LB）把資料依「比 baseline 長／短」分兩層，各自算 win rate 再平均；Length-normalized（LN）是把原始 win rate 除以「平均長度差的溫度化 logistic 函數」，這是作者試過多種正規化後最好的一種。",
+      "評審自偏（§5）：以 gpt-4-1106、claude-3-opus、mistral-large 三個評審各自評同一組 5 個模型，看排名是否改變。"
+    ],
+    "官方實作細節（tatsu-lab/alpaca_eval 的 src/alpaca_eval/metrics/glm_winrate.py，論文未載或與論文不同）": [
+      "長度以字元數計算（pandas 的 str.len()）；標準差是在該受評模型自己的 805 筆長度差上計算。論文沒有說明 len 的單位。",
+      "patsy 公式為 np.tanh(std_delta_len) + instruction_difficulty + not_gamed_baseline - 1：不含截距；not_gamed_baseline 欄的係數就是模型項 θ_m，instruction_difficulty 欄的係數就是 ψ_m。γ_x 不在本地重估，而是從 Hugging Face dataset tatsu-lab/alpaca_eval 下載預先算好的 instruction difficulty。",
+      "擬合器是 sklearn 的 LogisticRegressionCV，參數為 penalty='l1'、solver='liblinear'、fit_intercept=False、GroupKFold 5 折、random_state=123。這與論文寫的 L2 正則化不一致。",
+      "軟標籤處理：AlpacaEval 的偏好值從 [1,2] 平移到 [0,1]（平手的 0 轉成 0.5）；每筆資料複製成 y=1 與 y=0 兩列，以真實機率當 sample weight，等同於對連續標籤做交叉熵；CV 的 scorer 也是對應的連續 log loss。",
+      "論文說的「對 φ 的弱正則化」在實作裡不是懲罰項，而是資料層面的先驗：把 df_gamed（程式註解說是兩個 gamed baseline 的評審資料，模型項欄位為 0；依名稱推測是被刻意操弄冗長度的 baseline 變體，我沒有打開資料確認）併入訓練集，樣本權重為 λ=0.2 再除以 2，與受評模型共用長度與難度係數。等於用「只改長度時評審會怎麼變」的資料把長度係數拉住。預設設定名為 length_controlled_v1，另有 length_controlled_noreg（不併 gamed 資料）與 length_controlled_minimal（再拿掉難度項）兩個變體。",
+      "預測時把 std_delta_len 設為 0，取 predict_proba 的平均乘 100 當 LC win rate；標準誤是逐題預測值的 SEM。LC 與原始 win rate 相差超過 10 個百分點（或超過相對距離的 1/4）時會發出警告，提示 GLM 可能失效。",
+      "換 baseline（對應 Figure 5）：predict_winrate 用兩模型的權重差 Δθ + Δψ·γ_x，對每題算 logistic 後取平均，就能得到排行榜上任意兩個模型之間的 LC win rate，不必重跑評審。"
+    ],
+    "移植到自家評估的最小配方": "需要：一個固定的參照系統（baseline）、一個能輸出偏好機率的成對評審、每題可計算的偏差特徵（長度或其他）、足夠多的系統與題目來估題目難度。步驟：(1) 對所有系統聯合擬合取得每題難度 γ_x 並凍結；(2) 對每個受評系統單獨擬合 logistic(θ + φ·tanh(標準化偏差特徵差) + ψ·γ_x)；(3) 用一組只改偏差特徵、不改內容的操弄資料（例如冗長／精簡提示的 baseline）當低權重先驗，穩住 φ；(4) 預測時把偏差特徵差設為 0，平均得到校正後的 win rate；(5) 以 verbosity 提示擾動的 normalized std 與截斷攻擊增益，驗證校正後的指標是否較難被操弄。"
+  },
+  "assumptions": [
+    "長度是「不想要的中介變數」：評審因長度而產生的偏好都屬於偏差，應整個移除。這也表示「長度帶來的合理品質」（例如回答更完整）會一併被扣掉。",
+    "Controlled direct effect 可以用這個簡單的 GLM 估出來：模型項、長度項、難度項在 logit 尺度上可加，且沒有未觀測的變數同時影響長度與評審偏好（例如內容品質本身讓輸出變長又讓評審更喜歡）。",
+    "長度效應可以用「標準化長度差經 tanh」這一個純量特徵描述，效果邊際遞減，並且對每個模型有自己的斜率 φ_{m,b}。",
+    "題目難度 γ_x 與受評模型無關，可以從既有模型群體估一次後凍結套用在新模型上。",
+    "Chatbot Arena 的人評排名可以當成 silver standard，而與它的 Spearman 相關提升，代表指標更貼近人類判斷。",
+    "排行榜有一個固定 baseline，且評審輸出的是可平均的偏好機率。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "AlpacaEval 2.0：805 題指令、超過 120 個模型的既有成對評審資料；評審為 GPT-4 turbo，baseline 為 gpt4_1106_preview",
+      "LMSYS Chatbot Arena 的 Elo 排名（silver standard，38 個與 AlpacaEval 重疊的模型；MT-bench 有 34 個重疊）",
+      "Verbosity 提示擾動實驗：standard／verbose／concise 三種提示下的 win rate（Figure 3）",
+      "截斷攻擊：後處理過的 GPT-4 輸出（§4.3）",
+      "跨評審自偏實驗：gpt-4-1106、claude-3-opus、mistral-large 三個評審 × 5 個模型（Table 2）"
+    ],
+    "metrics": [
+      "與 Chatbot Arena 的 Spearman 相關係數，並以 bootstrap p-value 檢定差異",
+      "Length gameability：三種 verbosity 提示下 win rate 的 normalized standard deviation",
+      "Adversarial win rate gain：截斷攻擊帶來的 win rate 增益",
+      "LC win rate 本身及排名變化（Figure 4 的 rank gain）",
+      "可解釋性性質：baseline 對自己 50%、交換對稱、值域 0–100%"
+    ],
+    "baselines": [
+      "原始（未控制長度）的 AlpacaEval win rate",
+      "MT-bench（只比較與 Arena 的相關）",
+      "Length-balanced（LB）win rate：依長／短於 baseline 分層平均（Duong, 2024 的社群提案）",
+      "Length-normalized（LN）win rate：以長度差的溫度化 logistic 函數正規化原始 win rate（Galambosi, 2024；Teortaxes, 2024）",
+      "不加正則化的 AlpacaEval-LC（只在截斷攻擊實驗中比較）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "控制長度後，AlpacaEval 與 Chatbot Arena 排名的 Spearman 相關提高，作者稱這是他們所知與 Arena 相關最高的自動基準。",
+      "numbers": "0.94 → 0.98；AlpacaEval／AlpacaEval-LC 用 38 個與 Arena 重疊的模型，MT-bench 用 34 個（MT-bench 的相關值只畫在 Figure 1，正文沒寫）",
+      "section": "§4.2、Figure 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "相關係數的提升在常用的 0.05 水準下並不顯著：bootstrap 檢定 LC 對原始 AlpacaEval、LC 對 MT-bench 的 p 值都略高於 0.05。",
+      "numbers": "p = 0.07（對原始 AlpacaEval）、p = 0.06（對 MT-bench）",
+      "section": "§4.2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "原始 AlpacaEval 很容易被冗長度操弄；長度控制後，同一模型在不同 verbosity 提示下的分數波動大幅縮小，排名大致穩定。",
+      "numbers": "baseline gpt4_1106_preview 的原始 win rate 隨提示在 22.9%–64.3% 之間擺動，LC 後只在 41.9%–51.6%；三種提示的 normalized std 從 25% 降到 10%（Table 1 寫 26%）",
+      "section": "§4.1、Figure 3、Table 1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "長度控制普遍讓輸出較短的閉源模型排名上升，排名跌最多的是經過 RLHF 的開源模型；作者認為這與「開源模型曾利用 AlpacaEval 的長度偏差」的假說一致。",
+      "numbers": "定性結果，見 Figure 4（2024-03-19 排行榜的前 15 名與後 5 名）；正文沒有給逐模型數字",
+      "section": "§4.2、Figure 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "沒有正則化的 LC 容易被截斷攻擊利用；對長度係數加正則化後，攻擊增益大幅下降，但沒有歸零。",
+      "numbers": "截斷後的 GPT-4 輸出：原始 AlpacaEval 2.0 win rate 3.7 → 無正則化 LC 25.9 → 有正則化 LC 12.2（Table 1 記為增益 8.5）",
+      "section": "§4.3、Table 1",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "三種長度校正方法中，LC 的 Arena 相關與 gameability 最好；LB 被 LC 在三個指標上全面壓過；LN 在截斷攻擊上比 LC 穩健，作者仍以「較有原則、可解釋為 win rate」為由選 LC。",
+      "numbers": "Arena 相關／gameability／攻擊增益：原始 0.94／26%／0.0；LC 0.98／10%／8.5；LN 0.96／15%／3.6；LB 0.95／15%／40.8",
+      "section": "§4.4、Table 1",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "初步的評審自偏實驗顯示，自偏存在但通常小於模型間的差距，三個評審給出的 5 個模型排名相同；claude-3-opus 評審也偏好 GPT-4 Preview 勝過自己，mistral-large 評審偏好前兩者勝過自己。",
+      "numbers": "對 gpt-4-1106 的 win rate（評審依序為 gpt-4-1106／claude-3-opus／mistral-large）：claude-3-opus 40.4／43.3／47.5；mistral-large 32.7／28.2／45.5；gpt-4-0613 30.2／20.5／34.3；gpt-3.5-turbo 19.3／16.7／28.9",
+      "section": "§5、Table 2",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "每個模型分開擬合、題目難度凍結，讓排行榜在新增模型時不會改動既有分數；同一組權重也能推算任意 baseline 下的 LC win rate。",
+      "numbers": "設計性質，無數值；參數量 3M+N，M>128、N=805",
+      "section": "§3 Training、§4.3、Figure 5",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "只在 AlpacaEval 上測試；它的指令相對簡單、只有英文，而且評審只用一種特定提示詞。",
+    "LC 建立在簡化假設上：使用者想要比較的是「模型與 baseline 等長時」的表現。",
+    "不處理 LLM 評審的其他問題（例如 Zheng et al. 列舉的那些）；列表、自偏等其他偏差只提到可以用同樣方式加特徵，自偏只做了初步探索。",
+    "Chatbot Arena 也可能有偏差（網路使用者可能只看表面特徵，忽略事實正確性這類難以衡量的能力），只是它是目前最大的公開人評。",
+    "題目難度 γ_x 凍結不重估，估計較不準，是為了排行榜穩定而做的取捨。",
+    "LC 在截斷攻擊上不如 LN 穩健（Table 1），作者是在知道這點的情況下仍選 LC。",
+    "無正則化的 LC 會被截斷攻擊利用，必須靠對 φ 的正則化才能緩解。"
+  ],
+  "limitations_observed": [
+    "統計證據比摘要的語氣弱：0.94 → 0.98 的 bootstrap p 值是 0.07 與 0.06，在 0.05 水準下不顯著，正文卻說這個差距「significant enough」讓 LC 成為相關最高的基準。而且 LC 用 38 個模型、MT-bench 用 34 個模型，兩者不是在同一組模型上配對比較，相關係數差異有一部分來自模型集合不同。",
+    "在同一個目標上做方法選擇：LC、LN、LB 的取捨，以及 LN「試了多種正規化後挑最好的一種」，全都用同一個 38 模型的 Arena 相關來比，沒有保留一組模型做外部驗證。0.96、0.98 這種差距在 38 個模型上很可能只是雜訊，§4.4 的「LC 最好」因此只是弱證據。",
+    "論文與官方程式碼不一致，照論文無法重現：論文寫 L2 正則化，程式碼是 LogisticRegressionCV 的 penalty='l1'；論文說對 φ 加「弱正則化」，程式碼實際上是把兩個 gamed baseline 的資料以 0.2/2 的權重併入訓練集當先驗，而且同時影響難度係數 ψ，不只 φ。強度 λ 在論文中完全沒有揭露。另外，論文沒說長度的單位（程式碼是字元數），§3 的損失式寫成 E[q] 而不是 E[−log q]，是式子筆誤。",
+    "數字前後不一致：§4.1 說 gameability 從 25% 降到 10%，Table 1 的原始 win rate 卻是 26%；官方 README 寫與 Arena 的相關從 0.93 升到 0.98，論文寫 0.94。差異不大，但顯示這些數字依賴排行榜當下的模型集合，會隨時間漂移。",
+    "中介分析的識別假設沒有被檢驗：把長度當成純偽相關的中介變數並整個歸零，等於假設沒有「內容品質同時讓輸出變長、又讓評審偏好」的混淆。實務上較完整的回答自然較長，這部分合理的長度效應也會被扣掉。φ_{m,b} 是在每個模型自己的資料上估的，如果某模型正好在長回答時品質較好，這個品質差會被當成長度偏差移除。Figure 4 中閉源模型因輸出較短而大幅上升，作者解讀為「開源模型利用了長度偏差」，但「LC 系統性偏袒精簡模型」這個替代解釋並沒有被排除。",
+    "驗證目標本身帶有長度與風格偏差：當時的 Chatbot Arena 沒有做風格控制；LMSYS 在 2024-08 的 style control 部落格就是把長度與 markdown 加進 Bradley-Terry 回歸，顯示 Arena 排名也受風格影響。拿「與未控制風格的 Arena 更相關」來證明「去偏差成功」有循環論證的風險；一個更貼近 Arena 長度偏好的指標，未必更貼近真實品質。",
+    "穩健性主張偏強：結論說 LC「robust (hard to game)」，但正則化後截斷攻擊仍多拿 8.5 點（12.2 對 3.7），是 LN 攻擊增益 3.6 的兩倍多。而且只測了一種截斷攻擊，沒有測知道 gamed 先驗存在的自適應攻擊者，也沒測只把一小部分題目寫長或截短的混合策略。",
+    "Gameability 實驗規模小：只有兩種 verbosity 提示詞，正文只點名 gpt4_1106_preview 與 Claude-2.1，沒有說明總共幾個模型，也沒有信賴區間；「排名大致穩定」只有圖、沒有量化。",
+    "評審自偏的結論證據很薄：Table 2 只有 3 個評審 × 5 個模型、沒有信賴區間，也沒說是原始還是 LC win rate。mistral-large 評審把所有模型都往 50 壓（例如 gpt-3.5-turbo 從 gpt-4 評審的 19.3 變成 28.9），所以它給自己 45.5 的高分分不清是自偏還是評審整體比較寬鬆。只用 5 個差距很大的模型說「排名穩定」，檢定力很低。",
+    "移植到 agent 評估有明顯限制：方法依賴固定 baseline、輸出偏好機率的成對評審、同一題庫上有大量系統（γ_x 要從 M>128 個模型的群體估），而且只處理單輪回答的一個純量長度特徵。多輪 agent 軌跡的潛在偏差特徵更多（輪數、工具呼叫次數、總 token 數），彼此高度共線；論文也沒有提供「哪些特徵算偽相關、該被歸零」的判準，這是規範性選擇而非統計問題。",
+    "題目難度凍結會讓分數依賴排行榜版本：新模型的 LC 分數取決於當時下載的 instruction difficulty 與 gamed 資料。只要這兩個預算好的檔案更新，同一模型的 LC 分數就可能改變，但論文沒有討論版本管理。"
+  ],
+  "framework_role": "屬於 T7 的「評估本身的可靠性」：它提供一個事後校正 LLM-as-a-judge 成對分數的通用模板，把評審分數拆成「系統效應＋已知偏差特徵效應＋題目難度」，再把偏差項歸零。在本框架中，凡是用 LLM 評審給 agent 對話或軌跡打分（包括 T8 以評審判定的任務完成分數），都可以把冗長度、輪數、工具呼叫數等疑似偏差放進同樣的 GLM 校正。它也給了兩個可直接沿用的評審可靠性探針：以 verbosity 提示擾動量測 gameability，以及以截斷攻擊量測校正方法本身能不能被利用。它不涉及多輪互動、使用者模擬器或 agent 執行環境。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "作者自己的公開排行榜：AlpacaEval 官方 repo 的 README 說明 AlpacaEval 2.0 預設使用 length-controlled win rate，並宣稱與 Chatbot Arena 的 Spearman 相關為 0.98；實作位於 src/alpaca_eval/metrics/glm_winrate.py（Apache-2.0）。來源：https://github.com/tatsu-lab/alpaca_eval",
+      "NVIDIA 官方 model card 以此指標宣傳模型：Llama-3.1-Nemotron-70B-Instruct-HF 的評估表列出「AlpacaEval 2 LC (SE)」57.6 (1.65)，並寫明截至 2024-10-01 該模型在 Arena Hard、AlpacaEval 2 LC（verified tab）與 MT Bench 上表現最佳。來源：https://huggingface.co/nvidia/Llama-3.1-Nemotron-70B-Instruct-HF"
+    ],
+    "assessment": "有可查證的採納證據，但性質是「作為評估指標被使用」，不是嵌進某個產品的評估管線。LC win rate 是作者自家 AlpacaEval 排行榜的預設指標，NVIDIA 這樣的商業廠商也在官方 model card 上用它報成績。另外，LMSYS 的部落格〈Does style matter? Disentangling style and substance in Chatbot Arena〉（2024-08-29，https://lmsys.org/blog/2024-08-28-style-control/）同樣是把長度、markdown 等風格特徵加進 logistic 回歸做控制，文中也提到 AlpacaEval LC 的 tanh 正規化是另一種做法；但它用的是不同的正規化，也沒有明說採用本方法，所以只算方法上的近親，不列入採納證據。本次 WebSearch 額度已用完，以上都是直接打開官方頁面確認的；其他廠商 model card 是否也報 AlpacaEval LC，沒有再逐一查證。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/tatsu-lab/alpaca_eval",
+    "data": "大致公開。805 題指令、各模型輸出與評審標註都在官方 repo 與 Hugging Face dataset tatsu-lab/alpaca_eval；程式碼會從該 dataset 下載預算好的 instruction_difficulty.csv 與 df_gamed.csv。重現時要注意三點：(1) 論文寫的 L2 正則化與程式碼的 L1、gamed 資料先驗不一致，要以程式碼為準；(2) 評審 gpt-4-1106-preview 是 OpenAI 的舊 API，可能已下架，重新產生評審標註未必能完全重現；(3) LC 分數依賴凍結的題目難度與 gamed 資料版本，排行榜數字會隨版本漂移（README 的 0.93 與論文的 0.94 就是一例）。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "這是 LLM 評審長度偏差校正的標準做法：LC win rate 成了 AlpacaEval 的預設指標，也出現在 NVIDIA 官方 model card 上。它的「迴歸出已知偏差再歸零」模板可以直接移植到 agent 對話的評審打分，所以是 T7 評估可靠性子領域的必讀；但它只處理單輪、單一長度特徵，統計證據偏弱（p=0.07），論文與程式碼也不一致，引用時要看程式碼。",
+  "related": [
+    "2306.05685",
+    "2305.14387",
+    "2310.03716",
+    "2310.05199",
+    "2402.07319",
+    "2403.19159",
+    "2305.17926",
+    "2307.03025",
+    "2309.17012"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

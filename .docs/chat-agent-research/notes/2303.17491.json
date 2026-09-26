@@ -1,0 +1,169 @@
+{
+  "id": "2303.17491",
+  "title": "Language Models can Solve Computer Tasks",
+  "topic": "T5",
+  "subarea": "外部回饋／工具輔助的修正",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 RCI（Recursive Criticism and Improvement）提示法：讓 LLM 先產出、再批評自己的輸出、再依批評改進；在 MiniWoB++ 電腦操作任務上把每個動作的生成拆成 task／state／agent 三段依序修正的 grounding，並在 8 個推理基準上報告以正解標籤決定停止時的增益。",
+  "problem": "讓 LLM 直接以鍵盤滑鼠操作電腦時，一個動作要同時符合任務（task grounding）、在當前畫面狀態可行（state grounding）、且能被執行器接受（agent grounding）。先前最強的方法（CC-Net）靠 240 萬筆專家示範加逐任務 reward 做 SL+RL，WebN-T5-3B 也需要 12K 筆示範微調，兩者都難以用少量樣本推廣到新任務。若只靠少量示範加提示就能完成電腦任務，新任務的資料與 reward 設計成本可以大幅下降。",
+  "core_idea": "在輸出最終答案前插入「批評」步驟：先 zero-shot 產生輸出，再提示模型找出自己輸出的問題，再依找到的問題產生改進版，可重複到滿足停止條件。分兩種：explicit RCI 先把批評文字生出來、再放進改進提示；implicit RCI 不生批評，直接要求模型依某項考量改寫輸出。套到電腦任務時，把一個動作拆成三段依序修正：計劃（explicit RCI 一次）→ 依當前 HTML 把動作具體化（implicit，一次）→ 以 regex 檢查動作格式、不合就重寫（implicit，最多 3 次）。",
+  "method": {
+    "通用 RCI 迴圈": "輸入問題 x → 以 zero-shot 提示得到初始輸出 y0 → 批評提示（Fig. 2 的例子是要模型檢視先前答案並找出問題）得到批評 c → 改進提示（依找到的問題改進答案）得到 y1；可重複，停止條件可以是環境回饋、預設的最大迭代數或啟發式。explicit 版把 c 放進改進提示；implicit 版不取樣 c，直接要求更新輸出。",
+    "推理實驗設定": "模型 gpt-3.5-turbo，temperature 0，max tokens 256。8 個資料集照 Kojima et al. 選：GSM8K、MultiArith、AddSub、SVAMP、SingleEq、AQuA（算術）與 CommonSenseQA、StrategyQA（常識）。沿用 CoT 論文的提示與答案清理；答案抽取提示只用在 zero-shot CoT 實驗；Few-Shot CoT 用 Wei et al. 的範例，只評 5 個算術任務。RCI 迴圈上限 2，輸出與正解一致即停止（作者稱為 label feedback，C.2）。Appendix G Table 17 另外報告不用標籤、照跑 RCI 的版本。",
+    "電腦任務：問題設定與動作空間": "環境 MiniWoB++；狀態只用 HTML 原始碼（無截圖）。動作以自然語言指令表達，由初始提示中的 5 條 regex 界定：type <文字>、press <enter／四個方向鍵／backspace>、clickoption <XPath>、movemouse <XPath>、clickxpath <XPath>。初始提示放一段代理規格說明（Table 6：每種指令的用途，例如打字前要先點輸入框定位游標）。打字是生成式的（模型自己產生要輸入的文字），不是從預先定義的字典挑選。每個任務給 2–3 個示範計劃／軌跡作 in-context learning，不更新參數。",
+    "電腦任務：每回合流程": [
+      "1. 初始計劃：base prompt＋代理規格＋任務＋範例計劃（＋HTML）→ LLM 產生逐步計劃。",
+      "2. 計劃的 explicit RCI（一次）：要求模型對照範例計劃找出此計劃的問題 → 產生批評 → 再要求依此給出代理完成任務的計劃 → 改進後計劃存成 current plan，整個回合都放進提示，作為讓模型判斷進行到哪一步的 memory。",
+      "3. 每一步 task grounding：提示含 HTML、current plan、已執行指令歷史，要求模型依計劃與任務給出下一個指令（Table 7 模板）。",
+      "4. state grounding（implicit RCI，一次）：接著提示模型考慮網頁上的實際內容、給出具體指令（Table 8 模板），把抽象動作（例如「點 Bob 寄來的信」）對應到具體 HTML 元素／XPath；作者觀察重複超過一次對成功率沒有影響。",
+      "5. agent grounding（implicit RCI，迴圈）：以 regex 檢查指令；不符合任何一條就告訴模型此動作不符合 regex、要求給出符合的更新指令（Table 9 模板），重試到符合或達上限 3 次；仍不符合即該回合判失敗。",
+      "6. 把指令轉成 MiniWoB++ 動作執行，加入指令歷史，回到步驟 3，直到回合結束；成功率＝取得正 reward 的回合比例。"
+    ],
+    "關鍵超參數": "temperature 0（greedy）；max tokens 256；計劃 explicit RCI 1 次；state grounding 1 次；agent grounding 上限 3 次。主實驗用 gpt-3.5-turbo 與 gpt-4（context 4,096／8,192），消融另用 davinci（2,049）與 text-davinci-002（4,097）；2023 年 1–3 月透過 OpenAI API 存取。",
+    "逐任務調整與任務修改": "click-dialog-2 關掉 state grounding（F.1：這一步會把動作改成與任務無關）；click-menu 在示範中加入說明 hover 用途的註解（F.2）；Table 5 將 social-media 系列的媒體元件數、email-inbox 系列的郵件數限制在 3–6 個以符合 context 長度；HTML 過長的任務（book-flight、choose-date 系列、click-pie）排除；需要拖曳或複製貼上的任務未評估。部分任務的「Ours (w/ GPT-4)」欄改用 GPT-4。",
+    "官方程式碼核對（posgnu/rci-agent：讀了 llm_agent.py 的 RCI 相關段落，main.py 只查 CLI 參數）": "rci_plan 的批評提示要求模型「對照範例計劃」找出此計劃的問題，改進提示再要求依此給出完成任務的計劃；rci_action 以 while 迴圈做 regex 檢查，超過 rci_limit 就拋出例外（回合失敗）；check_regex 檢查 6 條 pattern（type 分 ChatGPT 與 davinci 兩種寫法；regex 字串本身定義在 prompt 模組，未讀）；CLI 參數 --erci（計劃 RCI 次數）、--irci（動作 RCI 上限）、--sgrounding（開關 state grounding）、--num-episodes（預設 10）。CLI 預設 erci=0、irci=1、不開 state grounding，與論文設定（1／3／開）不同，重現時要自己指定；temperature=0、max_tokens=256 與論文一致。"
+  },
+  "assumptions": [
+    "動作的可執行性可以機械檢查（此處是 regex），作為 agent grounding 的停止條件。",
+    "狀態能完整以 HTML 文字表示且放得進 context，不需要視覺資訊。",
+    "每個任務有人工撰寫的 2–3 個示範計劃／軌跡，計劃批評可以拿這些範例當參照。",
+    "推理實驗的增益前提是有正解標籤決定何時停止；沒有標籤時這個前提不成立（Table 17）。",
+    "底層 LLM 必須經過 instruction tuning／RLHF；未經指令微調的 GPT-3 davinci 幾乎無法完成任務（§3.2.5）。",
+    "任務計劃可以在回合開始時一次擬定，途中不需要依執行結果重擬。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MiniWoB++（正文稱 55 個任務；排除長 HTML 與拖曳類任務，並修改部分任務）",
+      "GSM8K",
+      "MultiArith",
+      "AddSub",
+      "SVAMP",
+      "SingleEq",
+      "AQuA",
+      "CommonSenseQA",
+      "StrategyQA"
+    ],
+    "metrics": [
+      "success rate（取得正 reward 的回合比例）",
+      "accuracy（推理基準）",
+      "專家示範樣本數（sample complexity）"
+    ],
+    "baselines": [
+      "WebN-T5-3B（12K 筆示範微調）",
+      "CC-Net（SL、RL、SL+RL，以及不含字典式打字動作的版本）",
+      "Others（WoB、WGE、DOM-Q-NET 等 CC-Net 之前的方法合併）",
+      "依類別彙總的 SotA（SL／RL／SL+RL）",
+      "Zero-Shot",
+      "Zero-Shot CoT",
+      "Few-Shot CoT"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "以正解標籤決定何時停止（RCI 最多 2 輪）時，Zero-Shot+RCI 在 8 個推理基準上全數高於 Zero-Shot。",
+      "numbers": "GSM8K 77.95→85.43；MultiArith 94.48→97.64；AddSub 88.58→89.76；SVAMP 80.70→84.65；SingleEq 86.61→94.49；AQuA 60.23→67.32；CommonSenseQA 64.56→68.11；StrategyQA 48.81→61.81（gpt-3.5-turbo）",
+      "section": "§3.1、Table 1、Appendix C.2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "RCI 與 CoT 疊加後，在 5 個算術任務中的 4 個拿到最高分（同樣以標籤停止）。",
+      "numbers": "GSM8K：Zero-Shot CoT 82.28→＋RCI 86.22；SVAMP：Few-Shot CoT 83.46→＋RCI 87.40；MultiArith：Few-Shot CoT 98.82→＋RCI 99.21；AddSub：Few-Shot CoT 89.37→＋RCI 90.55；SingleEq 最高者仍是 Zero-Shot+RCI 94.49",
+      "section": "§3.1、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "拿掉外部（標籤）回饋後，RCI 在推理基準上持平或低於 zero-shot；作者歸因於 false negative 的批評。",
+      "numbers": "Zero-Shot+RCI：GSM8K 72.83（zero-shot 77.95）、MultiArith 86.61（94.48）、CommonSenseQA 46.06（64.56）、StrategyQA 48.81（48.42）；Few-Shot CoT+RCI GSM8K 71.65（Few-Shot CoT 80.31）",
+      "section": "§3.1、Appendix G Table 17",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "MiniWoB++ 上，作者稱 RCI 代理優於 SL 與 RL 的 SotA，並以極小差距超過 SL+RL 的 SotA。",
+      "numbers": "比 SotA（SL）高 37 個百分點、比 SotA（RL）高 27 個百分點、比 SotA（SL+RL）高不到 1 個百分點；比不含字典式打字的 CC-Net 高 6%；比 WebN-T5-3B 高 41%；terminal 任務 1.00（Table 18 中其餘有分數的基準皆 0.00）。但同節第一段自承在所有基準中排第二、只輸給 CC-Net（SL+RL）；「略勝 SotA」只在 GPT-4 換欄與逐任務彙總 SotA 的口徑下成立",
+      "section": "§3.2.2、Figure 4(a)、Table 18",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "樣本效率：每個任務只用 2–3 個 in-context 示範、不更新參數；§3.2.3 稱成功率高於所有基準，但這與 §3.2.2 自承排名第二（輸給 CC-Net SL+RL）互相矛盾，只在 GPT-4 換欄的口徑下成立。",
+      "numbers": "樣本數比 WebN-T5-3B（12,000 筆示範）少 120 倍、比 CC-Net（240 萬筆、約 6,300 小時）少 11,000 倍",
+      "section": "§3.2.3、Figure 4(b)",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "三段 grounding 都不可或缺、貢獻約略相當；拿掉 agent grounding 對簡單任務的傷害特別明顯。",
+      "numbers": "簡單任務在拿掉 agent grounding 後成功率下降 60%（9 個消融任務、gpt-3.5-turbo，數值只以 Figure 5 呈現）",
+      "section": "§3.2.4、Figure 5、Table 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "agent grounding 的修正迴圈以「動作可執行」為停止條件反覆重寫，並設迴圈次數上限。",
+      "numbers": "上限 3（同段下一句稱此值在 MiniWoB++ 上經驗最佳，未附對照資料）",
+      "section": "§2.2.2",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "主要只用 InstructGPT-3+RLHF 系列（gpt-3.5-turbo、gpt-4），RCI 在其他模型上的通用性未驗證。",
+    "長 HTML 狀態受 context 長度限制，而修剪 HTML 本身不容易。",
+    "動作空間只有點擊與打字，限制了網頁導覽能力。",
+    "只做短期決策、缺乏長期策略：guess-number、search-engine、use-spinner 等長時程任務表現差。",
+    "需要多步推理的任務選不出正確動作：tic-tac-toe 不會防守也不考慮被擋，use-autocomplete 算不出要按幾次方向鍵。",
+    "只看 HTML 做不了需要視覺的任務（count-shape），需要加入更多模態。",
+    "state grounding 有時會把動作改成與任務無關（click-dialog-2），因此該任務關掉此步驟；突發彈窗（login-user-popup）有時處理不了。",
+    "沒有外部回饋時，RCI 容易產生 false negative 的批評，推理表現持平或下降（Table 17）。",
+    "RCI 比只取樣一次的方法昂貴；在部分電腦任務上仍不如任務專屬的 SL+RL。"
+  ],
+  "limitations_observed": [
+    "推理半段（Table 1／2）量到的是 oracle 表現，不是自我修正能力：停止條件是正解標籤、最多 2 輪，答對就停、答錯才再試，結構上準確率只會持平或上升，等於「有正解驗證的最多 3 次嘗試」。Table 17 自己顯示無標籤時 CommonSenseQA 從 64.56 掉到 46.06（−18.5 個百分點）、GSM8K 77.95→72.83，但摘要只說「with external feedback」優於 CoT，沒點明回饋就是正解。Huang et al.（arXiv:2310.01798）後來照此設定重現，並把它定性為只反映 oracle 的表現。這一半不能當作可部署的自我修正證據。",
+    "電腦任務半段不看標籤，問題不同，要分開評：修正由一次計劃批評、一次 state grounding 與 regex 可執行性檢查驅動，是 label-free、由驗證器觸發的重試，原則上可部署；它的弱點在於下面幾條的比較公平性與消融設計。",
+    "自我批評在 agent 實驗裡從未被單獨量化：§3.2.4 的 task grounding 消融拿掉的是整個計劃取樣，不是只拿掉計劃批評那一步；state 與 agent 消融拿掉的分別是隱式狀態更新與 regex 重試。沒有「RCI 全關」或「相同呼叫次數的單純重抽樣」對照。因此 MiniWoB++ 的成績究竟來自 LLM 自我批評，還是來自外部 regex 驗證器與額外呼叫，論文分不出來；§3.2.4 把 agent grounding 的效果歸於「只靠語言模型的推理能力」並不精確，停止訊號其實來自 regex 驗證器。",
+    "SotA 主張依賴 GPT-4 換欄（Table 18 說明只寫「部分任務」改用 GPT-4，未交代挑選標準；count-shape、guess-number、tic-tac-toe 等低分任務兩欄相同，分不出是沒跑 GPT-4 還是跑了沒進步）：我從快取文字版 Table 18 自行計算（等權平均、54 個有 Ours 分數的任務；Figure 4(a) 用的 violet 子集無法從文字還原），純 gpt-3.5-turbo 的 Ours ≈0.906，低於 CC-Net（SL+RL）≈0.936；只有把 9 個 gpt-3.5 分數偏低的任務換成 GPT-4（如 click-collapsible-2 0.62→1.00、click-tab-2 0.74→1.00、multi-layouts 0.72→0.96）的「Ours (w/ GPT-4)」欄才到 ≈0.940，也就是論文所說「高不到 1 個百分點」的來源；§3.2.2 第一段自己也承認排名第二、只輸給 CC-Net。",
+    "任務子集與任務修改對本方法有利：排除 HTML 過長的任務（book-flight、choose-date 系列、click-pie）與所有拖曳／複製貼上類任務（CC-Net 評了約 104 個任務）；Table 5 把 social-media、email-inbox 系列的元件數限制在 3–6 個，卻直接拿去和基準在原版任務上的分數比（如 social-media-all 1.00 對 CC-Net SL+RL 0.75）；click-dialog-2 關掉 state grounding、click-menu 加解釋型示範，都屬逐任務手調。",
+    "「少量示範」仍是逐任務手寫：每個任務 2–3 個專屬示範，沒有 held-out 任務類型的評估，§3.2.3 所稱「推廣到未見任務」並未直接測試；樣本數比較把人工設計提示與逐任務調整的成本算成零。",
+    "沒有回報評估回合數、變異或信賴區間：正文與附錄都沒寫每個任務跑幾回合（程式碼 CLI 預設 10 回合，但表中出現 0.98、0.62、0.76 等值，表示至少部分任務跑了 50 回合以上），無法判斷差距是否顯著；消融（Figure 5、6）只有 9 個任務，且只以圖呈現。",
+    "表內數字不一致：同一批推理基準的 Zero-Shot 分數在 Table 1 與 Table 2 不同（GSM8K 77.95 vs 78.35、SingleEq 86.61 vs 91.34、AddSub 88.58 vs 85.83、MultiArith 94.48 vs 96.06、SVAMP 80.70 vs 78.35），而 Zero-Shot+RCI 兩表完全相同，看不出 RCI 是從哪一組基準出發；StrategyQA zero-shot 在 Table 1 是 48.81、在 Table 17 是 48.42；click-tab-2-hard 在 Table 4 是 0.56、在 Table 18 的 Ours 欄是 0.76。",
+    "成本沒有量化：作者承認 RCI 比單次取樣昂貴，卻沒報告每步 LLM 呼叫數或 token 數；照流程每回合開頭至少 3 次呼叫（計劃、批評、改進），之後每步 2 次以上（task、state，外加可能的 agent 重試）。",
+    "計劃只在回合開始修正一次，途中不依執行結果重擬：guess-number（超過 50 步）一旦偏離計劃就無法挽回（F.4），login-user-popup 的突發彈窗只能靠 state grounding 碰運氣（F.5）。也就是說，缺少由執行結果觸發的中途修正，這正是後續 Reflexion 類方法補上的部分。",
+    "計劃批評其實有參照物：官方程式碼的批評提示要求模型「對照範例計劃」找問題，屬於以 few-shot 範例為參照的批評，並不是 B.3 所說純粹靠「找出這個計劃的問題」這種隱式回饋；論文正文沒有寫明這一點。",
+    "重現性受模型下架影響：davinci、text-davinci-002 與 2023 年 1–3 月的 gpt-3.5-turbo 快照都已下架或更新，數字無法精確重現；官方程式碼 CLI 預設值（erci=0、irci=1、不開 state grounding）也與論文設定不同。"
+  ],
+  "framework_role": "T5 的早期代表作，同時提供一正一反兩個教訓。正面：在 agent 迴圈裡，把每個動作的修正拆成「計劃層批評 → 狀態對齊 → 可執行性驗證」三段，最後一段以機械驗證器（regex）偵測不可執行的動作、觸發重寫並設上限，是 label-free、可直接部署的 validator-triggered retry，可當作框架中「T4 軌跡異常觸發 T5 修正」的最小實作。反面：推理實驗用正解標籤決定何時停止，等於把 T7 的評估標籤漏進 T5 的修正迴圈（這是反方向的洩漏，不在六條邊內）；本框架報告 T8 分數時應禁止這類 label-stop，並像 Table 17 一樣同時報告無外部回饋的版本。子領域歸屬成立：agent 半段的有效修正訊號來自 regex 驗證器與 HTML 觀測，推理半段來自 oracle 標籤；純內在批評的部分（Table 17）反而是負結果。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "每一步動作在執行前先以 regex 檢查是否屬於可執行的指令格式；不符合就當作異常，觸發 implicit RCI 要模型重寫成符合格式的指令，最多 3 次，仍失敗則該回合判失敗。偵測點是執行前的單步輸出，不是事後分析整條軌跡。"
+    },
+    {
+      "edge": "E2",
+      "how": "計劃在回合開始時經一次 explicit RCI 修正後，存成 current plan 放進之後每一步的提示，作為讓模型判斷進行到哪一步的 memory；但修正只發生一次，執行途中從不回寫或重擬計劃（F.4 guess-number 偏離計劃後無法挽回，正是這個缺口的後果）。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文只在研究基準上實驗（Appendix A 明言），沒有描述任何部署或產品；官方 GitHub repo（MIT 授權）存在，但公開程式碼不算採納。本次未能以 WebSearch 另外搜尋官方產品文件（搜尋額度已用盡）。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/posgnu/rci-agent",
+    "data": "公開：MiniWoB++ 環境與 8 個推理資料集都是公開資料；Table 5 修改過的任務版本要依程式碼重建。repo 為 MIT 授權（據 repo 首頁），提供 CLI（--erci／--irci／--sgrounding）。限制：所用 OpenAI 模型（davinci、text-davinci-002、2023 年初的 gpt-3.5-turbo）已下架或更新，無法精確重現數字。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "獨有物是 agent 半段 label-free、由 regex 驗證器觸發的重試（三段 grounding 分解），以及 Table 17 自承的無回饋負結果；但自我批評在 agent 實驗中從未被單獨量化，推理半段的 oracle 問題已由 Huang et al. 更嚴謹地重現，因此有價值但非必讀。",
+  "related": [
+    "2303.11366",
+    "2303.17651",
+    "2210.03629",
+    "2206.05802",
+    "2211.00053",
+    "2302.07459",
+    "2210.03945",
+    "2202.08137",
+    "2205.11916",
+    "2201.11903"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

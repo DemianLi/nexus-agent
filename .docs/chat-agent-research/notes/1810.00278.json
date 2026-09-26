@@ -1,0 +1,156 @@
+{
+  "id": "1810.00278",
+  "title": "MultiWOZ -- A Large-Scale Multi-Domain Wizard-of-Oz Dataset for Task-Oriented Dialogue Modelling",
+  "topic": "T2",
+  "subarea": "傳統任務型對話 DST 與資料集",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Budzianowski 等人（Cambridge／PolyAI，EMNLP 2018）用一套完全群眾外包的 Wizard-of-Oz 流程，蒐集出 10,438 則、橫跨 7 個領域（每則 1–5 個領域）的人對人打字任務型對話，每輪附 wizard 查詢表單留下的 belief state 與另行標註的 system dialogue act，並在 DST（只做 restaurant 子集）、以 oracle 狀態做的 context-to-response，以及 act-to-text 三個子任務上給出基準。這就是後來的 MultiWOZ 2.0，也是之後 2.1–2.4 各修正版的原版。",
+  "problem": "資料驅動的任務型對話研究卡在資料規模：既有的結構化標註語料（DSTC2、WOZ 2.0、FRAMES、KVRET、M2M 等）都只有數百到兩千多則對話，多半只有單一領域、語言變化少，或缺少完整標註。三種既有蒐集方式各有缺陷。機器對機器（M2M）的自然度完全取決於模擬器設計。人對機器受「雞與蛋」問題限制，必須先有能運作的系統，而且初始系統的能力會讓使用者遷就，把偏差帶進資料。人對人的社群語料（Twitter、Reddit、Ubuntu）則沒有明確目標，也沒有接到資料庫或 API。多領域 DST 與端到端對話建模因此缺少一個夠大、夠自然、又有逐輪狀態標註的共同基準。",
+  "core_idea": "把 Wizard-of-Oz 改造成可大規模群眾外包的流水線。使用者端拿到從多領域本體隨機抽樣、逐步揭露的目標模板；wizard 端拿到可以查資料庫的圖形介面，把從使用者話語聽到的約束填進一張跨輪保留的網頁表單，用它查資料庫再回覆。表單內容本身就是每一輪的 belief state，狀態標註因此成為 wizard 工作的副產品，不需要另外請專業標註者。dialogue act 則在對話蒐集完之後，交給經過兩階段資格測試的群眾工作者另外標註。規模與多領域組合，讓同一份資料可以同時當作模組化系統（DST、策略、NLG）的分類任務基準，以及端到端模型的訓練資料。",
+  "method": {
+    "ontology": "本體即後端資料庫的結構化表示，定義所有 slot 與每個 slot 的可能值；slot 分為 informable（使用者用來約束搜尋，例如 area、pricerange）與 requestable（使用者可詢問的實體屬性，例如 phone）。7 個領域：Attraction、Hospital、Police、Hotel、Restaurant、Taxi、Train，其中後四個有 Booking 子任務。Table 2 列出 13 種 act（inform、request、select、recommend、not found、request booking info、offer booking、inform booked、decline booking、welcome、greet、bye、reqmore）與 24 個 slot（address、postcode、phone、name、no of choices、area、pricerange、type、internet、parking、stars、open hours、departure、destination、leave after、arrive by、no of people、reference no.、trainID、ticket price、travel time、department、day、no of days），並用上標標出各 slot 與 act 屬於哪些領域。Table 1 另報訓練集共 4,510 個值。",
+    "task_sampling": "依本體對每個任務隨機抽樣出任務模板（task template），產生單領域或多領域情境（每則對話 1–5 個領域）與各領域的約束；允許預訂的領域以某個機率額外抽一個預訂需求。為了模擬目標變更，以某個機率把初始約束設成資料庫中沒有任何符合實體的值，同時在目標裡準備替代值；wizard 回報找不到之後，使用者改用替代值即可。兩個機率的數值都沒有報。",
+    "user_side": "任務模板用啟發式規則轉成自然語言，依已進行的回合數逐步揭露給使用者，避免資訊一次過載；子任務（例如預訂）會和該領域的主目標一起直接顯示。目標描述裡刻意用隱含方式提及部分 slot，誘發共指與詞彙蘊涵。使用者端每次都先讀完整段對話歷史，再寫下一句（Figure A1 為介面）。",
+    "wizard_side": "wizard 扮演旅遊資訊中心的店員，使用涵蓋所有領域的資料庫介面（Figure A2）。每收到一句使用者話語，就把其中的資訊填進網頁表單；表單內容跨輪保留，並且直接用來查詢資料庫，belief state 就這樣隱式標註出來。查詢結果是符合目前約束的實體清單，wizard 據此決定追問細節或提供資訊；每個 system turn 都從上一輪的查詢結果開始。同一則對話的各輪可能由不同工作者接力完成，雙方都要先讀歷史以維持連貫。",
+    "dialogue_act_annotation": "對話全部蒐集完之後才標註 system dialogue act（Figure A3 是 restaurant 領域的標註介面）。act 由 intent 加 slot-value 組成，例如 inform(domain=hotel, price=expensive)。先在 MTurk 做三輪試標，每則對話收三份標註，共約 750 個 turn，用 Fleiss' kappa 逐 act 計算（多標註者、多標籤）。加權平均 κ=0.704，但仍有大量很差的標註、act 覆蓋也不足；依錯誤與工作者建議，把 act 集合從 8 種擴到 13 種。之後改成兩階段資格測試：先標一則刻意涵蓋多種難例的長對話，品質夠好的收到更正回饋後再標一則新試題，兩關都過關才能標真實資料，形成一小群高品質標註者。最終在 291 個 turn 上的加權平均 κ=0.884。",
+    "quality_control": "採兩步驟：先蒐集完所有對話，再開始 act 標註，讓標註者順便回報對話本身的錯誤（沒照任務走、語句令人困惑），許多錯誤因此得以修正；另外檢查對話中提供的資訊是否符合預設目標。自動規則會偵測過短的語句、過短的對話與標註時漏掉的 turn，這些情況一律修正或刪除。共 1,249 名工作者參與，作者稱只有少數蓄意亂做的案例。",
+    "data_format_and_split": "每則對話包含：goal、交替的 user／system 語句、每輪的 belief state、每輪 system act 與 slot，以及給使用者端工作者看的自然語言任務描述。GitHub README 另說明 belief state 分成 semi、book、booked 三部分。資料隨機切成 train／dev／test，dev 與 test 各 1k 則；因為部分對話沒有照任務描述完成，dev 與 test 只收完全成功的對話。統計（§4.1）：3,406 則單領域、7,032 則多領域（2–5 個領域）；約 70% 的對話超過 10 turns；單領域與多領域平均 8.93 與 15.39 turns；user 與 wizard 平均句長 11.75 與 15.12 個詞；近 60% 的 turn 有一個以上的 act。",
+    "benchmark_dst": "沿用同組 Ramadan et al.（ACL 2018，arXiv:1807.06517）的模型：利用對話語句與本體詞彙的語意相似度在領域間共享資訊，參數與本體及 belief state 無關，所以參數量不隨領域大小成長。只在 MultiWOZ 的 restaurant 子集上訓練與測試，並用同一模型在 WOZ 2.0（1,200 則單領域 restaurant 對話）上訓練做對照。指標為 Overall accuracy 與 Joint goals，論文沒有給定義，也沒有報子集規模。",
+    "benchmark_context_to_text": "沿用 Wen et al.（2017）的 context→response 設定：seq2seq 模型在解碼器端加入 belief state 與離散的資料庫指標（DB pointer）作為額外特徵，注意力以 belief state 與 DB pointer 為條件（Figure 4）。原論文的 belief tracker 是預先訓練的，本文改用 wizard 的標註當 oracle belief state，讓對話管理加生成的評估和 DST 脫鉤。超參數以網格搜尋決定（embedding 大小、學習率、不同的 RNN 架構），分別比較有無注意力。最佳設定：Cam676 用雙向 GRU；MultiWOZ 的編碼器與解碼器都用 LSTM，搭配 global attention（Bahdanau）。指標：Inform（是否提供了合適的實體）、Success（在 Inform 之外是否回答了所有被詢問的屬性）、BLEU。",
+    "benchmark_act_to_text": "用 SC-LSTM（Wen et al. 2015）同時訓練在 SFX（約 5k 組 act 與句子）與 MultiWOZ 的 restaurant 子集（約 25k turns；12 種 act、14 個 slot，SFX 則是 9 種 act、12 個 slot）上。網格搜尋 embedding 大小、學習率與 LSTM 層數；指標為 BLEU 與 slot error rate（SER）。",
+    "reimplementation_notes": "直接取用資料：從 GitHub 下載 2.0 版（或社群慣用的 2.1、2.2 修正版）。要重做蒐集流程，最小可行路徑是：(1) 定義多領域本體並能隨機抽樣目標模板，包含預訂子任務與「約束查無資料就改用替代值」；(2) 使用者端介面依回合數逐步揭露目標；(3) wizard 端介面用跨輪保留的表單查資料庫，每輪存下表單快照當 belief state；(4) 蒐集完之後再做 act 標註，並設兩階段資格測試；(5) 用自動規則過濾過短的語句與對話。論文沒有給的數值要自己決定並註明：各抽樣機率、揭露規則、DST 子集規模、兩個 DST 指標的定義、各基準最終的超參數、Inform／Success 的實體比對方式。"
+  },
+  "assumptions": [
+    "wizard 為了查資料庫而填的表單，等於使用者在該輪表達過的約束，可以直接當作 belief state 的正解；論文沒有量測這一點的標註一致性。",
+    "照著抽樣模板發言的群眾工作者（可能多人接力扮演同一位使用者），行為足以代表真實使用者；只要先讀對話歷史，多人接力就不會破壞連貫。",
+    "打字的人對人對話可以作為口語任務型對話系統的訓練資料（作者承認回合比口語長）。",
+    "本體能列舉每個 slot 的所有可能值，而且每個 slot 在每一輪只有一個正確值。",
+    "在 oracle belief state 下，以語料為基礎的 Inform／Success／BLEU 能反映對話管理加生成的品質。",
+    "dev 與 test 只保留完全成功的對話，才能公平比較模型。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MultiWOZ（本文，即 2.0 版；10,438 則對話，dev 與 test 各 1k 則）",
+      "WOZ 2.0（DST 對照，1,200 則 restaurant 單領域對話）",
+      "Cam676（context-to-response 對照）",
+      "SFX restaurant（act-to-text 對照，約 5k 組）"
+    ],
+    "metrics": [
+      "Fleiss' kappa（逐 act 計算，再加權平均；用於 system act 標註一致性）",
+      "DST：Overall accuracy、Joint goals（論文未定義）",
+      "Context-to-response：Inform rate、Success rate、BLEU",
+      "Act-to-text：BLEU、slot error rate（SER）"
+    ],
+    "baselines": [
+      "DST：Ramadan et al. 2018 的多領域 belief tracker（參數與本體無關）",
+      "Context-to-response：seq2seq 加 oracle belief state 加 DB pointer，比較有無 attention（Wen et al. 2017 的架構）",
+      "Act-to-text：SC-LSTM（Wen et al. 2015）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "純群眾外包的 WOZ 流程產出當時規模最大的多領域、結構化標註任務型對話語料；只看訓練集，對話數就是先前最大的 KVRET 的三倍多，unique token 數約為 FRAMES 的兩倍。",
+      "numbers": "共 10,438 則對話（3,406 則單領域、7,032 則多領域，每則 2–5 個領域），7 個領域，1,249 名工作者。§4.1：共 115,434 turns，單領域與多領域平均 8.93 與 15.39 turns，約 70% 的對話超過 10 turns。Table 1（訓練集）：8,438 則、113,556 turns、平均每則 13.46 turns、每 turn 13.13 個 token、23,689 個 unique token、24 個 slot、4,510 個值；對照 KVRET 2,425 則、FRAMES 12,043 個 unique token",
+      "section": "§4.1, §4.2, Table 1",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "belief state 不另外標註：wizard 把使用者的約束填進跨輪保留的表單並拿它查資料庫，表單快照就是每一輪的 belief state，讓 wizard 可以專心提供資訊。",
+      "numbers": "方法性主張，沒有量化；這個機制的標註品質在本文沒有任何一致性量測",
+      "section": "§3.3, §4.2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "目標模板刻意注入目標變更：以某個機率讓初始約束查無資料，迫使使用者在對話中改用替代值，讓狀態出現覆寫。",
+      "numbers": "機率沒有報；觸發條件只有「初始約束在資料庫中查無資料」這一種",
+      "section": "§3.1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "初次群眾外包試標的 act 一致性看似很高，但實際標註品質與 act 覆蓋都不夠；作者因此擴充 act 集合並改用兩階段資格測試。",
+      "numbers": "三輪試跑，每則對話 3 份標註，約 750 個 turn；加權平均 Fleiss' κ=0.704；act 集合從 8 種擴到 13 種",
+      "section": "§3.4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "經過兩階段篩選後，雖然 act 集合更大，標註者之間的一致性仍明顯提高。",
+      "numbers": "291 個 turn 上的加權平均 κ=0.884（試標時為 0.704）",
+      "section": "§3.5",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "同一個 DST 模型在 MultiWOZ restaurant 子集上的表現低於 WOZ 2.0，作者據此說明新資料更難；但作者也承認兩者不能直接比較。",
+      "numbers": "Overall accuracy：WOZ 2.0 96.5、MultiWOZ（restaurant）89.7；Joint goals：85.5、80.9",
+      "section": "§5.1, Table 3",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "即使給了完美的 belief state（oracle），context-to-response 基線在 MultiWOZ 的 Inform 仍比 Cam676 低約 30 個百分點；attention 對 Success 的幫助不到 1 個百分點；BLEU 也較低，作者歸因於語言更多樣。",
+      "numbers": "Cam676 無／有 attention：Inform 99.17／99.58、Success 75.08／73.75、BLEU 0.219／0.204。MultiWOZ 無／有 attention：Inform 71.29／71.33、Success 60.29／60.96、BLEU 0.188／0.189",
+      "section": "§5.2, Table 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "SC-LSTM 在 MultiWOZ restaurant 子集上的 act-to-text 表現明顯比 SFX 差，作者歸因於超過 60% 的 turn 含兩個以上的 system act。",
+      "numbers": "SER：SFX 0.46%、MultiWOZ 4.378%；BLEU：0.731、0.616",
+      "section": "§5.3, Table 5（正文誤寫為 Table 6）",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "打字對話的回合比口語互動長得多（註 3、§4.3）。",
+    "多領域 DST 仍在起步、可比較的方法不多，所以只報 restaurant 子集的結果當參考基線（§5.1）。",
+    "Table 3 中 WOZ 2.0 與 MultiWOZ 的 DST 結果不能直接比較（§5.1）。",
+    "有些對話雖然連貫，但沒有照任務描述完成，所以 dev 與 test 只收完全成功的對話（§4.2）。",
+    "同一則對話由多名工作者接力，少數對話不連貫；沒有給比例（§3.3）。",
+    "初次試標時有許多很差的標註、act 覆蓋也不足，所以改為兩階段資格篩選（§3.4）。",
+    "有少數工作者蓄意亂做；以自動規則偵測過短的語句與對話、漏標的 turn，再修正或刪除（§4.1）。",
+    "不經真實使用者直接互動的評估可能誤導，所以同時報三種自動指標，以便解讀結果（§5.2）。"
+  ],
+  "limitations_observed": [
+    "對 T2 最關鍵的缺口是 belief state 的標註品質從未被量測。κ（0.704 與 0.884）只算 system act；belief state 是 wizard 查詢表單的副產品，會跨輪保留，而且以自由文字輸入。只要 wizard 某一輪漏改或多填，錯誤就會延續到後面每一輪。後續修正版把錯誤型態分類出來，正好對應這個機制：MultiWOZ 2.2（arXiv:2007.12720）§2 列出 wizard 提前寫入系統才提到的值（early markups）、依資料庫結果填進對話中沒出現的值、自由文字造成的錯字、隱式的時間換算（例如 12:08 被記成 12:15）。規模上，據 2.2 轉述，2.1（arXiv:1907.01669）修正了 32% 的 state 標註、分布在 40% 的 turn；2.2 又在 2.1 之上修正了 17.3% 的 user utterance（涵蓋 28.2% 的對話）。MultiWOZ 2.4（arXiv:2104.00773）Table 4 顯示，TRADE 在 2.0 的 test JGA 為 48.62%，換到只修正 dev 與 test 的 2.4 則為 55.05%：同一個模型只換標註版本就差 6.4 個百分點。本文發布的 2.0 上，DST 分數有相當一部分是被標註雜訊壓住的。",
+    "本文的 DST 實驗撐不起「多領域 DST 基準」的說法。它只做 restaurant 子集，沒報子集大小，沒定義 Overall accuracy 與 Joint goals，兩個資料集的訓練規模也不同（作者自己也說不能直接比較）。89.7 對 96.5 的落差，分不出是對話更難還是標註雜訊更多。這個 DST 模型出自同組的 ACL 2018 論文，而 GitHub README 標明 1.0 版用於 ACL 那篇、2.0 版用於本篇，論文卻沒說明 Table 3 用的是哪一版資料。後來社群通行的全領域 joint goal accuracy（例如 TRADE 在 2.0 的 48.62%）是後續工作才建立的，不是本文給的基準。",
+    "狀態表示本身不完整。每輪只有 informable slot 的值（README：semi／book／booked），沒有 user dialogue act、requested slots，也沒有 active intent：user act 由 Lee et al.（2019）補上，requested slots 與 active intent 由 2.2 補上（2.2 §5）。本體宣稱列舉了所有值，但 2.2 §3 指出 2.0 的本體已被回報不完整，許多研究因此自建本體；2.1 以狀態中出現過的值重建本體後，hotel-name 仍有 51% 的值語意重複（例如 8pm 與 20:00 這類同義值），而評估只接受單一正解。換句話說，本文定義的是「單一正解、字串比對」的狀態，這會直接影響 JGA 的可信度。",
+    "語料統計自相矛盾，讀者可以自己驗算。Table 1 光訓練集就有 8,438 則、113,556 turns；§4.1 卻說全部 10,438 則只有 115,434 turns，等於 2,000 則 dev／test 對話只分到約 1,878 turns（平均每則不到 1 turn）。用 §4.1 自己的平均回合數計算，3,406×8.93＋7,032×15.39≈138.6k，與 Table 1 的平均 13.46 一致，所以 115,434 才是異數，turn 的定義前後不一。其他編號錯誤：Table 6 的標題照抄 Table 5；§5.3 說結果在 Table 6，實際在 Table 5；§4.3「Figure 1 clearly shows」應為 Table 1；Table 6 的領域數寫 1–2／2–6，與正文的 1–5、2–5 矛盾。",
+    "狀態更新的型態很窄。目標變更只有一種觸發方式：系統回報初始約束查無資料，使用者改用模板裡預備好的替代值。沒有使用者主動改變主意、更正系統的誤解、撤回先前的約束，或跨領域回指修改既有 slot 這類更新；而且是打字對話，沒有 ASR 雜訊。這份資料測到的狀態維護主要是「累加加上一次覆寫」，對 LLM agent 在長對話中處理撤回、衝突指令與指令保持的情境代表性有限。",
+    "評估設計有幾個漏洞。(a) dev 與 test 只保留完全成功的對話，訓練集卻包含沒完成的，形成分布差異。(b) Inform／Success 的計算細節（實體怎麼比對、哪些 slot 算 requestable）論文沒寫；Nekvinda 與 Dušek（arXiv:2106.05555）後來指出，這個基準的前處理與指標實作不一致、指標定義不足、資料庫過於僵化。(c) 沒有報人類 wizard 參考回應本身的 Inform／Success，無法判斷 71%／60% 離上限多遠。(d) Table 4 只跑一次、沒有變異數：attention 在 MultiWOZ 上 Inform 只多 0.04、Success 多 0.67，在 Cam676 上 Success 反而少 1.33，這些差異很可能都在隨機波動之內。Cam676 與 MultiWOZ 的最佳架構也不同（雙向 GRU 對 LSTM 加 attention），跨資料集比較還混進了架構差異。",
+    "act-to-text 的難度歸因沒有驗證。MultiWOZ restaurant 子集有 12 種 act、14 個 slot，SFX 是 9 種 act、12 個 slot；而且 MultiWOZ 的資料量約 25k turns，SFX 只有約 5k。SER 從 0.46% 升到 4.378%，被歸因於超過 60% 的 turn 含多個 act，但沒有只評單一 act turn 的對照組，無法排除 act 與 slot 集合較大、或 act 標註本身有雜訊的影響。",
+    "使用者不是一個一致的人。同一則對話的使用者端可能由多名工作者輪流扮演，只靠閱讀歷史維持連貫，目標也是逐步揭露的模板。對 T2 與 T6 想研究的「同一位使用者在長多輪中保持並修改目標」，這份資料的使用者行為反映的是模板揭露順序加上多人接力，不是單一使用者的長程行為。",
+    "可重現性缺口：預訂需求與目標變更的抽樣機率、目標逐步揭露的啟發式規則、各基準最後選定的超參數、DST 子集的規模，論文都沒有給。資料與三個基線的程式碼則有公開。"
+  ],
+  "framework_role": "在 T2「傳統任務型對話 DST 與資料集」子領域，這篇是基準的原點。(1) 它把多輪狀態定義成「每領域 slot→value 的累積表」，每輪附一份快照，讓 DST 變成逐輪預測整張表的問題；後續全領域的 joint goal accuracy、TRADE 這類 open-vocabulary 生成式 DST，以及 LLM 時代的 zero／few-shot DST，幾乎都以它與它的修正版為共同考場。(2) 它的隱式標註機制同時是一個反面教材：狀態是某個角色為了查資料庫而寫下的、跨輪保留的工作狀態，錯誤會累積，而且沒人檢查一致性。這對設計 agent 的狀態回寫（例如 E2 由反思修正回寫狀態）很有參考價值：寫入狀態的一方與驗證狀態的一方要分開，而且每次寫入都應該可以追溯。(3) 次要角色：Inform／Success 是 T8 任務完成分數的早期原型（以目標為基準的實體與請求屬性比對），但定義不足；以抽樣目標模板驅動群眾使用者、逐步揭露目標的蒐集方式，是 T6 目標導向使用者模擬器常用的目標來源與設計參考。它處理的是資料與評估基準，不是 DST 方法本身；本文自己的 DST 實驗很薄。",
+  "edges": [
+    {
+      "edge": "E6",
+      "how": "蒐集到的人對人對話（每則附 goal、逐輪 belief state 與 system act）就是一批互動紀錄。本文把其中完全成功的 1k 則當成固定 test set，用來算模型在 context-to-response 上的 Inform、Success 與 BLEU（§5.2），也就是由真實（群眾）使用者的互動紀錄回流評估。不過這是靜態、一次性的語料評估，模型的回覆不會回到使用者端，不構成閉環。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "NVIDIA 在 NGC 官方模型目錄發布「TRADE - MultiWOZ 2.1 - Dialogue State Tracker」model card：以 NeMo 在 MultiWOZ 2.1（本文 2.0 版的修正版）上訓練的 DST 檢查點，test JGA 47.77%、dev 50.85%，版本 1.0 於 2023-04-04 發布。來源：https://catalog.ngc.nvidia.com/orgs/nvidia/-/models/trade___dialogue_state_tracker___multiwoz_2_1/-",
+      "官方 GitHub README 以 MIT 授權釋出，並列出 1.0（ACL 發表用）、2.0（本篇 EMNLP 用）、2.1（Amazon 團隊修正）、2.2（Google 團隊修正）各版本，另維護 DST 與端到端模型排行榜；README 沒有提到任何產品或生產環境使用。來源：https://github.com/budzianowski/multiwoz"
+    ],
+    "assessment": "只有工具鏈層級的證據：NVIDIA 在官方模型目錄以 MultiWOZ 衍生版訓練並發布 DST 示範檢查點，顯示業界框架把它當成 DST 的標準訓練與示範資料。但這是研究用的預訓練檢查點，不是產品部署；未見任何以 MultiWOZ 訓練的對話系統上線的官方證據。Amazon 與 Google 研究人員推出的 2.1、2.2 修正版、大量後續論文與排行榜，都屬於學術影響力，不算商用採納；作者掛名 PolyAI 也不構成採納證據。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/budzianowski/multiwoz（資料與 context-to-response 基線，MIT 授權）；DST 基線：https://github.com/osmanio2/multi-domain-belief-tracking；act-to-text 基線：https://github.com/andy194673/nlg-sclstm-multiwoz",
+    "data": "公開（MIT 授權），GitHub 提供 1.0、2.0、2.1、2.2 各版本；每則對話含 goal、語句、逐輪 belief state 與 system act，以及給使用者端的任務描述。另有社群修正的 2.3（arXiv:2010.05594）與 2.4（arXiv:2104.00773，只修 dev 與 test）。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是傳統多領域 DST 最核心的資料集與基準原點（2.0 版），belief state 的表示方式、隱式標註機制，以及由此衍生的標註雜訊問題，決定了之後 2.1–2.4 修正版與整個 JGA 評估文化的樣貌，T2 必讀；但本文自己的 DST 實驗很薄（只有 restaurant 子集、指標未定義），讀的重點應放在資料設計與它的缺陷。",
+  "related": [
+    "1807.06517",
+    "1604.04562",
+    "1606.03777",
+    "1712.10224",
+    "1801.04871",
+    "1704.00057",
+    "1705.05414"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

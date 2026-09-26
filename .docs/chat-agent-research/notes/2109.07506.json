@@ -1,0 +1,165 @@
+{
+  "id": "2109.07506",
+  "title": "Dialogue State Tracking with a Language Model using Schema-Driven Prompting",
+  "topic": "T2",
+  "subarea": "LLM 時代的 zero/few-shot DST",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把 schema 的 domain／slot 名稱（再加上自然語言描述與類別槽的可能值清單）當成提示，接在完整對話歷史後面一起餵進 T5 的雙向 encoder，對每個 domain-slot 各自生成一個值（沒有就生成 none），以全量資料微調 T5-small／base，在 MultiWOZ 2.2 取得當時最佳 JGA（57.6），在 MultiWOZ 2.1 與 M2M 與當時最佳相當（註：全量微調、無 zero/few-shot 實驗，子領域不符）。",
+  "problem": "任務型對話的 DST 要在每一輪把使用者目標表示成預先定義的 (domain, slot, value) 三元組。分類式 DST 需要事先窮舉每個槽的候選值，非類別槽只能挑訓練資料看過的值；生成式 DST 可以逐 token 生成未見過的值，但既有做法多半要特製模組，或者（以預訓練 LM 為基礎的 SimpleTOD、SOLOIST 等）還需要 dialogue act、資料庫查詢結果或額外對話語料當監督。另一個障礙是 schema 的符號本身資訊量太少：像 arriveby、ref 這類縮寫不是一般書面英文，預訓練 LM 難以利用；而真實資料庫通常都附有欄位說明文件，這份現成的領域知識沒被用上。作者想要一個只用狀態標註、架構通用、能用同一種方式處理類別槽與非類別槽的生成式 DST。",
+  "core_idea": "兩件事。第一，把 schema 資訊從 decoder 端搬到 encoder 端：先前的生成式 DST（TRADE、MinTL）把 domain／slot 的嵌入當成 decoder 的初始狀態或第一個輸入，對話歷史的編碼與要查的槽無關；本篇把「對話歷史＋[domain] 提示＋[slot] 提示」串成一條輸入，讓雙向 encoder 針對「現在要查哪個槽」重新脈絡化整段歷史（作者稱 task-aware contextualization），decoder 只需生成該槽的值。每個 domain-slot 各自獨立解碼（independent decoding），而不是一次生成全部三元組（sequential decoding）。第二，把資料庫文件中的自然語言描述（domain 描述、slot 描述、類別槽的可能值清單）附在名稱後面當成提示的一部分，讓 LM 看得懂縮寫、知道值的型別，並用可能值清單約束輸出；類別槽與非類別槽因此都用生成的方式統一處理。",
+  "method": {
+    "任務形式": "對話為 U_1, A_1, …, U_T, A_T（U 為使用者、A 為系統）。第 t 輪的脈絡 C_t = {U_1, A_1, …, A_{t-1}, U_t}，不含本輪系統回應 A_t。schema 有 M 個 domain、N 個 slot；狀態 B_t 是把 (d_m, s_n) 對應到值 v 的映射，不在狀態中的配對記為空值，模型以字串 none 表示。每一輪狀態都從完整歷史重新推論，不把上一輪狀態 B_{t-1} 當輸入。",
+    "輸入格式（independent decoding）": [
+      "論文寫法：[user] U_1 [system] A_1 … [system] A_{t-1} [user] U_t [domain] X(d_m) [slot] X(s_n)，四個特殊 segment token 標示使用者話語、系統話語、domain 提示、slot 提示的起點。",
+      "Schema-Based Prompt：X(d) 只是 domain 名稱、X(s) 只是 slot 名稱，例如 [domain] train [slot] day。",
+      "Natural Language Augmented Prompt：X(d) = domain 名稱＋domain 描述；X(s) = slot 名稱＋slot 描述（類別槽再接上可能值序列）。",
+      "公開程式碼（data/preprocess_mw22_prompt_by_slot.py）的實際字串為：歷史以「 [USER] 」「 [SYSTEM] 」前綴逐句串接到當輪使用者話語為止，後接「 [domain] {domain 名} {domain 描述} [slot] {slot 名} {slot 描述}」，若為類別槽再接「 [PVs] 值1, 值2, …」（逗號分隔）。"
+    ],
+    "輸出與訓練目標": [
+      "對每個使用者輪次、schema 中每一個（未排除網域的）domain-slot 配對各做一筆訓練樣本；目標是該槽的值字串，不在狀態中的配對目標為 none（公開程式碼寫成 NONE）；dontcare 也當成一般值字串生成。以 Figure 1 為例，hotel-ref 這類尚未出現的槽也要生成 none。",
+      "encoder 輸出 H_t = Encoder(C_t, X(d_m), X(s_n))，decoder 以 H_t 生成 B_t(d_m, s_n)；訓練目標是對所有 (m, n) 加總的條件對數似然（標準 seq2seq 交叉熵、teacher forcing）。",
+      "MultiWOZ 2.2 的標註中一個槽可能有多個可接受值；公開程式碼以不設種子的 random.sample 從中隨機挑一個當訓練目標。"
+    ],
+    "推論": "greedy decoding（每步取機率最高的 token）。每一輪要對每個 domain-slot 各跑一次完整的 encoder＋decoder，收集值不為 none 的配對組成 B_t。每一輪都是從頭重算整份狀態，沒有規則式的累加或覆寫。",
+    "sequential decoding 對照組": "論文 §3.1 (a)：encoder 只吃 C_t，decoder 依序生成所有值不為空的 (domain, slot, value) 三元組，同樣用 T5 骨幹。公開程式碼的對應變體（Prompt All Domain）改為輸入「完整 schema 字串＋上一輪狀態＋當輪對話對」、輸出當輪的狀態變化，訓練 20 epoch、max_target_length 100；論文沒有交代 Table 2 的 sequential 列是用哪一種設定跑的。",
+    "骨幹與超參數（附錄 A）": [
+      "骨幹：T5-small（約 60M 參數）與 T5-base（約 220M），HuggingFace transformers 的 t5-small／t5-base 預訓練權重。",
+      "T5-small：batch size 4、learning rate 5e-5、3 epoch；T5-base：batch size 64、learning rate 5e-4、2 epoch（附錄原文誤植為 T4-base）；最佳化器寫 Adam 但引用 Loshchilov & Hutter（即 AdamW）。",
+      "不使用任何文字或標籤正規化腳本（不同於 TRADE、SimpleTOD）。",
+      "MultiWOZ 2.1／2.2 排除只出現在訓練集的 police 與 hospital 網域（公開程式碼的 excluded_domains 還多排除 bus）。",
+      "論文沒寫最大輸入長度與 dev set 的模型選擇方式。公開程式碼的 run_t5.py 是 HuggingFace summarization 範例改寫，MultiWOZ 2.4 的指令設 max_source_length 512、max_target_length 10、batch 48、lr 5e-4、3 epoch；MultiWOZ 2.2 的指令只指定 batch 48，lr 與 epoch 沿用 Trainer 預設，max_source_length 沿用腳本預設 1024；tokenizer 以預設的右側截斷處理超長輸入。"
+    ],
+    "描述的來源": [
+      "MultiWOZ 2.2：官方附 domain 描述、slot 描述與類別槽可能值（21 個類別槽、40 個非類別槽）。",
+      "MultiWOZ 2.1：每個 slot 有 2–3 條描述，隨機抽一條後所有實驗固定使用（附錄 Table 9 列出）；沒有 domain 描述也沒有可能值，37 個槽全當非類別槽。",
+      "M2M：語料本身沒有描述，restaurant 網域借用 MultiWOZ 2.2 的描述、movie 網域借用 SGD 的描述（附錄 Table 8），全是非類別槽所以不附可能值。"
+    ],
+    "評估": "joint goal accuracy（每一輪所有 domain 的所有槽都與標註完全相符才算對）。MultiWOZ 2.1／2.2 用 DSTC8 的官方 SGD 評估腳本（公開程式碼先把逐槽預測後處理回 SGD 格式再評）；M2M 用同一腳本稍作修改。"
+  },
+  "assumptions": [
+    "有一份預先定義的 schema，推論時知道要查哪些 domain-slot；新的槽要重新訓練，本篇沒有測試未見過的網域或槽。",
+    "schema 附有品質足夠的自然語言描述，類別槽附有完整可能值清單；描述在訓練與測試時一致（M2M 甚至假設別的語料的描述可以直接借用）。",
+    "有逐輪、完整的狀態標註可做全量監督式微調（本篇所有結果都用 100% 訓練資料）。",
+    "完整對話歷史加上 schema 提示放得進 encoder 的輸入長度；超過時如何處理論文沒有說明。",
+    "給定對話脈絡後，各槽的值可以彼此獨立地推論，不需要跨槽約束或聯合解碼。",
+    "每一輪都能負擔「槽數 × 完整歷史」次的 encoder 前向計算。",
+    "每一輪的狀態可以只靠對話文字重新推出，不需要上一輪狀態、dialogue act 或資料庫查詢結果。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MultiWOZ 2.2（8 網域、10,438 段對話；實驗排除 police、hospital）",
+      "MultiWOZ 2.1（同上，只有 slot 描述）",
+      "M2M（Shah et al. 2018，Sim-M 電影、Sim-R 餐廳，3,008 段對話；描述從 MultiWOZ 2.2 與 SGD 借來）"
+    ],
+    "metrics": [
+      "joint goal accuracy（JGA）",
+      "MultiWOZ 2.2 類別槽與非類別槽分開計算的 JGA（Table 5 的 CAT／NON-CAT，依 Zang et al. 2020 的分類）"
+    ],
+    "baselines": [
+      "MultiWOZ 2.2：TRADE、DS-DST、Seq2Seq-DU",
+      "MultiWOZ 2.1：TRADE、MinTL（T5-small 與 BART-large）、SST、TripPy、SimpleTOD（取未做 label cleaning 的數字）、SOLOIST（用了額外對話語料）、TripPy + SCORE",
+      "M2M：Rastogi et al. 2017（候選值保證在列，視為 oracle 上限）、Rastogi et al. 2018、Chao and Lane 2019（BERT-DST）、Heck et al. 2020（TripPy）",
+      "內部對照：同一 T5 骨幹的 sequential decoding、無描述的 independent decoding，以及只加 slot 描述、只加 domain 描述、slot＋domain 描述但不含可能值的消融"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "independent decoding 加 schema 提示在 MultiWOZ 2.2 取得當時最佳 JGA，連參數量約為 BERT-base 一半的 T5-small 就已超過先前最佳。",
+      "numbers": "Independent T5-small 55.2、加描述 56.3；Independent T5-base 56.7、加描述 57.6；先前最佳 Seq2Seq-DU（BERT-base）54.4、DS-DST 51.7、TRADE 48.6",
+      "section": "§4.2、Table 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "同一個 T5 骨幹下，sequential decoding（一次生成所有三元組）明顯差於逐槽的 independent decoding。",
+      "numbers": "T5-small 48.9 vs 55.2（−6.3）；T5-base 51.2 vs 56.7（−5.5）",
+      "section": "§4.2、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "在 MultiWOZ 2.2 加入自然語言描述（domain 描述、slot 描述、可能值）可再提升 JGA；定性分析顯示描述幫助比對槽的說法、正規化時間（4:45 PM → 16:45）與修正拼錯的值。",
+      "numbers": "T5-small 55.2→56.3（+1.1）；T5-base 56.7→57.6（+0.9，正文說兩者都超過 1%，與表不符）。§5.3：在加描述模型答對、未加描述模型答錯的案例中，未加描述模型的錯誤有 82.8% 是漏掉正確槽或多報無關槽，17.2% 是槽對值錯",
+      "section": "§4.2、Table 2；§5.3、Table 6",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "MultiWOZ 2.1 上所有設定都勝過不使用額外對話資料的基準，但描述帶來的增益比 MultiWOZ 2.2 小（2.1 只有 slot 描述、沒有 domain 描述與可能值）。",
+      "numbers": "T5-small 55.37→56.12（+0.75）；T5-base 56.39→56.66（+0.27）；SimpleTOD 55.72、TripPy 55.29、SST 55.23、MinTL（BART-large）53.62、MinTL（T5-small）50.95；用額外資料的 SOLOIST 56.85、TripPy + SCORE 60.48 仍較高",
+      "section": "§4.3、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "M2M 上借來的描述只在餐廳網域有幫助，電影網域與合併設定反而下降。",
+      "numbers": "Sim-R 89.6→90.6（先前 Heck et al. 90.0）；Sim-M 83.3→81.0（Heck et al. 83.5）；Sim-M+R 88.0→86.4（唯一有回報的基準 Rastogi et al. 2018 為 73.8）；Rastogi et al. 2017 的 96.8／94.4 屬候選值保證在列的 oracle",
+      "section": "§4.4、Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "按槽的類型拆開看，independent decoding 對類別槽的提升比非類別槽更大；描述對 T5-base 兩類槽都有幫助，對 T5-small 只幫到非類別槽。",
+      "numbers": "CAT：sequential→independent 為 61.3→71.4（small）、62.9→71.6（base）；NON-CAT：69.0→75.2、70.9→76.3。加描述：T5-base CAT 71.6→72.4、NON-CAT 76.3→76.8；T5-small CAT 71.4→71.1（下降）、NON-CAT 75.2→76.2",
+      "section": "§5.1、Table 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "描述元件的消融（T5-small、MultiWOZ 2.2）：作者結論是 slot 描述最重要、可能值清單次之、domain 描述幾乎沒有作用。",
+      "numbers": "正文：完整描述 56.3，拿掉可能值 −0.4、拿掉 slot 描述 −0.8、拿掉 domain 描述 −0.1。Table 5 的實際列：slot＋domain 描述（無可能值）55.9、只有 slot 描述 55.2、只有 domain 描述 54.3、無描述 55.2",
+      "section": "§5.2、Table 5",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "最佳模型（T5-base 加描述）的錯誤中，過半其實是標註錯誤；真正的模型錯誤主要來自沒把系統提供並經使用者接受的資訊寫進狀態、漏掉使用者說的 dontcare 等槽，作者歸因於缺少對使用者與系統互動的明確建模。",
+      "numbers": "隨機抽 50 輪：標註錯誤 53.33%、未捕捉系統提供的資訊 20%、漏掉使用者提供的槽 16.66%、槽對但值錯 10%",
+      "section": "§5.4、Table 7",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "T5-small 容量有限，無法有效利用描述中關於型別與可能值的額外文字（類別槽加描述後沒有進步）。",
+    "MultiWOZ 2.1 的描述資訊較少（無 domain 描述、無可能值），所以描述帶來的增益不明顯。",
+    "M2M 電影網域的 slot 描述沒有比槽名多提供多少資訊，或其槽（日期、時間、人數）本來就較容易跨網域泛化，所以描述沒有幫助。",
+    "domain 描述效果有限：MultiWOZ 2.2 有 61 個槽但只有 8 個網域，而且網域名稱都是意思完整的單字。",
+    "多數錯誤可能來自缺少對使用者與系統互動的明確建模；MultiWOZ 的標註不一致（使用者確認系統提議後，該提議不一定被寫進狀態）使部分錯誤無法避免。",
+    "sequential decoding 在解碼長序列時較難最佳化，因此表現較差（作者對其對照組的說明）。",
+    "尚未利用在對話語料上再預訓練的領域 LM，留作未來工作。"
+  ],
+  "limitations_observed": [
+    "子領域不符：全文所有結果都是以 100% 訓練資料全量微調 T5-small／base，沒有任何 zero-shot、few-shot 或未見網域的實驗，標題中的 prompting 指的是把 schema 文字接進 encoder 的輸入格式，不是 in-context learning。現有唯一的 few-shot 數字來自後續的 IC-DST（2203.08568）拿它當微調基準所量：MultiWOZ 2.1 在 1%／5%／10% 訓練資料下為 32.11／43.14／46.92，不是本篇自己的結果（IC-DST 同表的 100% 欄 56.66 則與本篇 Table 3 的 T5-base 加描述相同）。",
+    "新意與 T5DST（2105.04222，NAACL 2021，2021-05-10 上 arXiv，早本篇四個月）高度重疊：T5DST 已經把「user:／system: 前綴的完整歷史＋[sep]＋槽描述」送進 T5 encoder、由 decoder 生成值，並系統性比較了槽描述的寫法；本篇沒有引用它。本篇真正新增的主要是 domain 描述、類別槽的可能值清單，以及 MultiWOZ 2.2 全量資料的 SOTA 數字。",
+    "描述的增益很小且只跑一次：MultiWOZ 2.2 為 +1.1（small）與 +0.9（base），2.1 為 +0.75 與 +0.27；全文沒有報告多個隨機種子的平均或變異，無法判斷這些差距是否超出訓練隨機性。正文說兩個模型的提升都超過 1%，但 Table 2 的 T5-base 只有 0.9。",
+    "消融的文字與表格對不上：§5.2 說拿掉 slot 描述掉 0.8、拿掉 domain 描述掉 0.1，換算應為 55.5 與 56.2，這兩個數字在 Table 5 找不到；只有拿掉可能值（56.3→55.9）對得上。Table 5 能看到的單一元件列反而是：只加 slot 描述 55.2，與完全不加相同；只加 domain 描述 54.3，比不加還低 0.9。表格本身無法支持「slot 描述最重要」，增益似乎只有在元件組合起來時才出現。",
+    "「可能值清單約束輸出」的主張主要靠 Table 6 的三個挑選過的例子；量化上 T5-small 加完整描述（含可能值）後類別槽 JGA 反而從 71.4 降到 71.1，只加 slot 描述時更降到 70.4。",
+    "M2M 的結果對描述不利：Sim-M 由 83.3 降到 81.0、Sim-M+R 由 88.0 降到 86.4。宣稱的 Sim-M+R SOTA 是不加描述的版本，而且這一欄只有 Rastogi et al. 2018 一個基準；Sim-R 的 SOTA 只比 Heck et al. 高 0.6，也是單次實驗。",
+    "基準數字看起來是從各自論文抄來的，那些論文用各自的評估腳本與正規化，本篇則用 DSTC8 的 SGD 腳本且不做標籤正規化；除了 SimpleTOD 特地挑未做 label cleaning 的數字外，沒有說明其他基準是否可直接比較。MultiWOZ 2.1 的最佳結果 56.66 其實低於 SOLOIST 的 56.85，只能說「與當時最佳相當」。",
+    "錯誤分析的樣本極小且前後不一致：正文說隨機抽 50 輪，但 53.33%、20%、16.66%、10% 這組比例對應的分母是 30（16／6／5／3），可能是 50 輪中只有 30 輪有錯，也可能是正文有誤；無論哪種，約 30 個案例、由作者單獨判定「其實是標註錯」，不足以支撐過半錯誤來自標註的結論。",
+    "推論成本隨槽數與對話長度相乘：每一輪都要對每個 domain-slot（MultiWOZ 2.2 的 schema 有 61 個槽，含 ref 這類多數時間為 none 的槽）各跑一次完整歷史的 encoder，而且大部分輸出都是 none。論文沒有報告延遲或計算量；官方 README 自己承認這種做法計算上較昂貴，後續 D3ST（2201.08904）也以「連不活躍的槽都要逐一生成」批評這類設計。",
+    "就 T2 而言，狀態沒有被「維護」：每一輪都從完整歷史重算，不讀上一輪狀態，所以外部修正（例如反思後的更正）沒有地方可以寫回，對話變長時也只能靠加長輸入。公開程式碼把 schema 提示放在輸入尾端、並用 tokenizer 預設的右側截斷（MultiWOZ 2.4 指令設 512），超長輸入被截掉的恰好是告訴模型要查哪個槽的那一段；這只是依程式碼推得的風險，我沒有量測實際有多少輪超長。",
+    "sequential 對照組是作者自己實作的，論文沒給它的超參數；公開程式碼的 sequential 變體吃的是「上一輪狀態＋當輪對話對」、訓練 20 epoch，與論文 §3.1 描述的「吃完整歷史」不同，無法確認超過 5 分的差距有多少來自解碼策略本身、多少來自對照組的設定。",
+    "可重現性落差：附錄的超參數（T5-base batch 64、lr 5e-4、2 epoch；T5-small batch 4、lr 5e-5）與公開 README 的指令（batch 48，MultiWOZ 2.2 指令未指定 lr 與 epoch）不一致；env.yml 釘的是 transformers 4.29、torch 2.0.1 這些 2023 年的套件版本，顯示環境在論文發表後更新過；repo 沒有 M2M 的前處理，多了論文沒做的 MultiWOZ 2.4；訓練目標從多個可接受值中不設種子地隨機挑一個。另外前處理腳本以旗標關掉描述時，因為運算子優先順序，[domain]／[slot] 這兩個 segment token 也會一起消失；若論文的無描述對照與消融是用這支腳本產生的，「有無描述」的比較就同時混入了「有無 segment token」，但論文沒交代，無法確認。"
+  ],
+  "framework_role": "屬於 T2，但應歸在「傳統任務型對話 DST（預訓練 LM 微調）」而不是「LLM 時代的 zero/few-shot DST」。它在框架中的價值是提供一種狀態查詢介面的原型：狀態就是 schema 定義的 (domain, slot, value) 三元組，每個槽用「槽名＋自然語言描述＋可能值清單」當提示去問模型，不活躍的槽回 none；這是後來 description-driven DST（D3ST）與 LLM 提示式 DST（IC-DST 把它當微調基準）一路延續的形式，也說明 schema 描述的品質會直接影響追蹤品質。它的狀態更新方式是每輪從完整歷史無狀態地重算，沒有維護、覆寫或寫回機制，對 T2 在 LLM agent 長多輪互動中的狀態維護（記憶管理、多輪退化）沒有直接貢獻；若要接上 E2（反思修正回寫狀態），必須另外把上一輪狀態當輸入或加一層覆寫邏輯，本篇只能當反例參考。§5.4 的錯誤分類（系統提議經使用者接受後沒寫進狀態、漏掉 dontcare）可以直接拿來當 T2 失敗類型清單的一部分。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文與官方 repo 都沒有提到部署或產品；致謝中的 Allstate 是研究經費資助，不是採納。被 IC-DST（2203.08568）、D3ST（2201.08904）等後續論文當成比較基準，屬於學術影響力（Semantic Scholar 約 150 次引用、21 次 influential），不算商用採納。以 WebSearch 查詢也沒有找到官方產品頁、model card 或官方部落格提到使用此方法。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/chiahsuan156/DST-as-Prompting（已 301 轉址到 https://github.com/Chia-Hsuan-Lee/DST-as-Prompting；含 MultiWOZ 2.1／2.2／2.4 的前處理、run_t5.py 訓練腳本與評估腳本，不含 M2M，未釋出訓練好的權重）",
+    "data": "公開。MultiWOZ 2.1／2.2 與 M2M 都是公開資料集；repo 附 MultiWOZ_2.2.zip 與 MultiWOZ 2.1 的 slot 描述檔（slot_descriptions_mw21.json）；M2M 借用的描述只列在論文附錄 Table 8。超參數與公開程式碼不一致，詳見 limitations_observed。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "主要貢獻確屬 T2（以 schema 描述當提示的逐槽生成式 DST，當時 MultiWOZ 2.2 SOTA，後續被 IC-DST 當基準），但全是全量微調、沒有任何 zero/few-shot 實驗，不屬於所指派的子領域，核心形式又與早四個月的 T5DST 重疊，描述帶來的增益僅約 1 分且為單次實驗，有參考價值但非必讀。",
+  "related": [
+    "1905.08743",
+    "2009.12005",
+    "2011.09553",
+    "2005.00796",
+    "2005.02877",
+    "2007.12720",
+    "1909.05855"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

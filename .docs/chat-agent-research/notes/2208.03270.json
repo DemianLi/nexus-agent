@@ -1,0 +1,191 @@
+{
+  "id": "2208.03270",
+  "title": "Learning New Skills after Deployment: Improving open-domain internet-driven dialogue with human feedback",
+  "topic": "T6",
+  "subarea": "使用者回饋迴路與滿意度估計",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Meta 把 BB1、BB2、SeeKeR 這幾個 3B 對話模型部署給 MTurk 群眾外包工作者。工作者在自己寫的開放領域任務上逐輪留下四種回饋：二元滿意度、自由文字、指出錯在哪個模組並補上 gold 修正、最終 1–5 評分。作者收成 FITS 資料集，在同一份資料上比較監督式微調、模組監督、文字回饋、reranking、reward-based learning 與 Director。結論是「模組回饋＋二元回饋餵給 Director」最好，重新部署再訓練一輪（v1→v2）還能再進步，這批資料也被拿去訓練 BB3-175B。",
+  "problem": "對話模型預訓練、微調完就凍結，部署時看到的人機對話分佈和訓練用的人人對話不同，模型也無從改進。而且人機對話是不對稱的：人問、模型答，沒有人會示範「答案該長怎樣」，LIGHT 那種模仿人類發言的做法用不上。部署時可以向使用者要哪幾種回饋？各自該配什麼學習演算法？哪一組合成本效益最好？在這之前沒有人在同一份資料、同一組基底模型上系統性比較過。對要靠部署回饋持續改進的對話系統來說，這決定了要設計什麼回饋介面，以及怎麼把回饋接回訓練。",
+  "core_idea": "把一次部署當成資料收集回合，並讓回饋的粒度對上系統的模組結構。模型是「產生搜尋查詢 → 取回網路結果 → 挑出知識 → 產生回應」的管線，所以使用者除了評好壞，還要指出錯在查詢、結果使用還是最終回應，並補上該模組的 gold 修正（查詢字串、結果中相關片段、改寫後的回應）。每一種回饋都配上對應的學習演算法，然後用人工評估與自動指標並排比較。模型出錯時，下一輪直接改用人給的 gold，讓對話能繼續推進，收得到後段的回饋。v1 資料訓練出的模型再部署一次，收成 v2，形成持續學習迴路。",
+  "method": {
+    "任務定義收集（§3.1、附錄 A.1）": [
+      "情境設定：一個假想的 AI 簡訊聊天機器人，什麼主題都能聊，也能上網查資料。",
+      "每位標註者寫三樣東西：(i) 一個主題（1–10 字）；(ii) 該主題下的三個任務；(iii) 各任務的完成判準描述，也就是怎樣算機器人做到了。",
+      "規模是 152 位標註者、1108 個任務類型。類型涵蓋 QA 加延伸討論、排序清單、評論、摘要、個人化推薦、推理計算、創作（如講笑話）、教學與操作步驟等，多數任務需要上網查資料，或查了會比較簡單（Table 1 有範例）。"
+    ],
+    "部署與逐輪回饋協定（§3.2）": [
+      "開始方式：人類對話者從隨機抽出的兩個任務中選一個，透過多輪對話請模型幫忙完成。說明文字要求對話要「一來一往」，請求要拆成多則訊息。",
+      "每一輪 bot 回應後都收下列回饋：(1) 二元回饋：這句回應是否令人滿意。(2) 不滿意時，用自由文字說明哪裡不對。(3) 四選一，選「這一輪可以怎麼改進」：(a) 換更好的搜尋查詢；(b) 更注意相關的搜尋結果；(c) 其他問題；(d) 沒問題，是好回應。(4) 依選項追問：選 (a) 就請人寫出更好的查詢；選 (b) 就把搜尋結果給人看，請人選出相關片段；選 (c) 就請人寫出更好的整句回應。",
+      "繼續對話的補救機制：選 (a) 時，下一輪強制 bot 使用人給的 gold 查詢；選 (b) 時，把 gold 知識片段加進模型輸入；選 (c) 時直接略過 bot，當作 bot 說出的是人給的 gold 回應。作者的理由是：沒有這個機制，模型會陷入低品質迴圈，對話只能放棄。",
+      "結束條件：人類標記任務完成，或做滿 4 輪（原文如此，但 Table 2 的平均每段 bot 話語數約 6–8，兩者對不上，見 limitations_observed）。結束後再收一個 1–5 的整體評分。"
+    ],
+    "部署模型（§3.3）": {
+      "BB1": "2.7B Transformer，不能上網，只看對話 context 產生回應。",
+      "BB2": "2.7B，以 fusion-in-decoder（FiD）使用搜尋結果；搜尋查詢由另一個 400M transformer 產生。",
+      "SeeKeR": "2.7B，採 Knowledge-to-Response（K2R）多步生成：查詢 → 先產生知識回應 → 再依知識產生最終回應。模組化程度最高，最容易直接吃模組回饋。",
+      "OPT-175B": "0-shot 或 few-shot，few-shot 時每個模組給 5 個輸入加回應的範例，模仿 SeeKeR 的流程。",
+      "BB3-175B": "以對話資料集微調，其中包含本文收集的模組監督資料。Table 3 的標記是「+ v2 modular supervision」。"
+    },
+    "資料切分與持續學習（§3.5、Table 2）": [
+      "v1：部署基底模型收集的對話與回饋，切成 train 5592／valid 737／test seen 1230 段對話。",
+      "v2：把用 v1 訓練出的各種模型再部署一次所收集的資料，切成 train 9817／valid 1848／test seen 1848 段。",
+      "test unseen：主題與任務都沒在 v1、v2 出現過的新技能，共 1221 段，用來測遷移。",
+      "每句 bot 話語恰好落在四類之一（better search query／better results usage／better response／good response），四類加總等於 bot 話語數（例如 v1 train 為 5179＋6875＋6601＋19868＝38523）。good 的比例約 51–58%。",
+      "資料品質檢查：每段對話找 3 位工作者評 bot 與人的表現，並判斷任務是否完成，2/3 多數決判為完成。另請評「人類對話者在定義、澄清、引導 bot 完成任務上的幫助程度」，1–5 分。"
+    ],
+    "學習演算法（§4）": {
+      "4.1 回應的監督式學習": "拿 (c) 的 gold 回應繼續微調；可選擇把被標為 (d) 好回應的 bot 自身回應也加進去。兩類資料的混合權重用 validation set 挑。",
+      "4.2 細粒度模組監督": "(a) 的 gold 查詢直接微調查詢產生器，BB2 那個 400M 模型與 SeeKeR 的查詢模組都用。(b) 的 gold 知識片段在 SeeKeR 上直接當知識模組的目標。BB2 的 FiD 沒有顯式的知識回應，所以照 Hancock et al. (2019) 的做法，以知識片段為目標做監督式訓練，並在輸入與目標兩端加特殊 token，標明這不是一般的對話回應任務，當輔助任務用，希望學到對最終回應有用的特徵。",
+      "4.3 自由文字回饋": "同樣照 Hancock et al. (2019)：把使用者寫的回饋文字當成生成目標來微調，輸入與目標兩端都加特殊 token。注意這種做法是讓模型學會「說出批評」，不是用批評去改寫回應。",
+      "4.4 Rejection sampling／reranking": "用二元滿意度訓練 reward model（也就是逐輪滿意度分類器）。骨幹是 311M transformer，以 MLM 目標在 pushshift.io Reddit 上預訓練過；輸入為 context 與回應串接，用標準分類 loss 訓練。推論時由對話模型產生多個候選，取分類器分數最高者。候選數論文未寫。",
+      "4.5 Reward-based learning": "用 4.4 的 reward model 在訓練集 context 上：產生候選 → rerank → 取最高分者當目標，再微調生成模型。類似 LaMDA（Thoppilan et al. 2022）的做法。",
+      "4.6 Director（Arora et al. 2022，arXiv:2206.07694）": "在 decoder 最後一層輸出上接兩個線性頭，都從 embedding 維度映射到詞表大小：LM 頭給下一個 token 機率，分類頭給每個候選 token 的「任務適合度」機率。正例同時訓練 LM 頭與分類頭（當分類正例），負例只訓練分類頭。解碼時由左至右把兩個頭的機率合併決定下一個 token，藉此把負面回饋帶進生成過程。合併方式與權重本文沒寫，要看 2206.07694 或程式碼。本文用法：binary only 版以好、壞標籤訓練分類頭；module+binary 版用二元回饋訓練分類頭，用模組回饋（gold 查詢、gold 知識）訓練各模組的 LM 頭。",
+      "組合基線": "supervised & reranking：監督式微調後的模型再接 reranker，只有自動評估。"
+    },
+    "迭代重訓（§5）": "拿 v1 上最好的 Director（module+binary）用 v2 split 訓練，得到 Director v2。原文只說「with the v2 data split」，沒講清楚是只用 v2 還是 v1＋v2。",
+    "評估（§3.4、§5）": "人工評估：由群眾外包工作者與模型實際對話，套用同一套回饋協定，統計 Good response %（(d) 無問題的比例）、最終評分平均，以及三類錯誤的比例（search query／search results／response）。以獨立雙樣本 t 檢定、p<0.05 標粗體表示顯著；本快取文字的粗體已遺失，無法判斷哪些格顯著。自動評估：在 Valid Seen v1、Test Seen v1、Test Unseen 上算 F1 與 PPL。SeeKeR 的 PPL 用不同字典，不能和 BB2 比；reranking 類方法不給 PPL。",
+    "論文未載、要去程式碼找的": "reranking 的候選數與解碼設定、Director 兩個頭的合併權重、各微調的學習率與 epoch、監督資料混合權重的實際值、每個模型在人工評估中評了幾段對話、F1 是對哪一個參考回應算的（推測是 gold 或被標為好的回應，論文沒寫明）。程式碼與資料在 ParlAI（`-t fits`、`parlai/tasks/fits`），人工評估用的 Mephisto 任務在 `crowdsourcing/projects/fits`。"
+  },
+  "assumptions": [
+    "付費群眾外包工作者對每一輪給出的二元判斷、錯誤歸因與 gold 修正，足以代表真實使用者的偏好與正確答案；而且這些標註大致一致、沒有惡意。",
+    "錯誤可以乾淨歸到單一模組：查詢、結果使用、最終回應三選一互斥，四類恰好加總為 bot 話語數。",
+    "使用者願意在每一輪都給回饋，且負擔得起細粒度回饋的成本，例如閱讀搜尋結果並挑出片段、自己寫查詢或完整回應。",
+    "模型出錯時用 gold 取代以推進對話，不會讓收集到的 context 分佈偏離模型獨立運作時的真實分佈，至少不會偏到影響學習。",
+    "系統是可拆解的管線（查詢產生器、檢索、知識選擇、回應生成），模組回饋才有地方可以監督；端到端的單一模型拿不到這部分增益。",
+    "由人工 Good% 與評分衡量的改進，可以外推到非付費、自發使用的公開部署情境。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "FITS（Feedback for Interactive Talk & Search，本文自建並公開）：Valid Seen v1、Test Seen v1、Test Unseen（新主題／新任務）三個自動評估切分",
+      "MTurk 上的即時人機對話人工評估：同一套逐輪回饋協定，人類重新和每個模型對話",
+      "資料品質檢查：每段對話由 3 位工作者判定任務是否完成，並評人類對話者的幫助程度"
+    ],
+    "metrics": [
+      "Good response %：人類標為 (d) 沒問題的 bot 回應比例",
+      "Rating：對話結束時的 1–5 整體評分平均",
+      "Error Breakdown：被標為 search query、search results、response 錯誤的比例（越低越好）",
+      "F1（自動）",
+      "PPL（自動；SeeKeR 與 BB2 用不同字典，不可互比）",
+      "任務完成率：3 位標註者 2/3 多數決",
+      "人類對話者幫助程度：1–5 分",
+      "顯著性：獨立雙樣本 t 檢定，p<0.05"
+    ],
+    "baselines": [
+      "BB1 3B（不能上網）",
+      "BB2 3B（沒有回饋學習）",
+      "SeeKeR 3B（沒有回饋學習）",
+      "OPT-175B 0-shot 與 few-shot",
+      "BB3-175B + v2 modular supervision（當作大模型的上界參照）",
+      "方法間互比：supervised feedback、module supervision、free-form textual feedback、reranking binary feedback、reward-based learning、supervised & reranking、Director binary only、Director module+binary、Director v2 module+binary"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "有網路增強的模型明顯勝過不上網的 BB1，而模組化程度更高的 SeeKeR 又明顯勝過 BB2。",
+      "numbers": "Good response%：BB1 24.8%、BB2 33.2%、SeeKeR 49.3%；Rating：2.63、3.09、3.52",
+      "section": "§5 Internet-augmentation helps、Table 3",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "模組回饋（指出錯在查詢或結果使用，並給 gold）優於只給最終回應的監督回饋；模組化的 SeeKeR 受益更多。",
+      "numbers": "BB2：supervised 40.3% → module supervision 42.0%（無回饋時 33.2%）。SeeKeR：52.2% → 56.7%（無回饋時 49.3%）。Search query 錯誤率 BB2 12.1%→8.4%、SeeKeR 11.9%→8.6%。",
+      "section": "§5 Modular superior to non-modular feedback、Table 3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "自由文字回饋對兩個基底模型都有增益，但不如 gold 回應的監督回饋。",
+      "numbers": "BB2：free-form 37.0% vs supervised 40.3%（基線 33.2%）。SeeKeR：51.3% vs 52.2%（基線 49.3%）。",
+      "section": "§5 Free-form feedback is useful、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "三種只用二元回饋的方法中，Director 勝過 reranking 與 reward-based learning。",
+      "numbers": "BB2 Valid Seen v1 F1：Director 16.2、reranking 15.8、reward-based 15.1（基線 14.4）。人工 Good%：BB2 上 Director 37.8%、reranking 36.1%、reward-based 36.4%；SeeKeR 上 Director 55.5%、reranking 53.7%。SeeKeR 的 Director binary 比 supervised 高 3.3 個百分點（55.5 vs 52.2）。",
+      "section": "§5 Director is better than reranking and reward-based learning、Table 3、Table 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "Director 同時吃模組回饋（訓練 LM 頭）與二元回饋（訓練分類頭）時，人工評估是所有 3B 方法中最好的。",
+      "numbers": "BB2：47.0%（基線 33.2%、Director binary only 37.8%），Rating 3.38。SeeKeR：59.1%，Rating 3.73，Search query 錯誤 7.8%。",
+      "section": "§5 Combining multiple feedback signals、Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "拿 v1 最佳系統重新部署收到的 v2 資料再訓練 Director（module+binary），三個自動評估切分都再進步。僅有自動指標，沒有人工評估。",
+      "numbers": "SeeKeR 為基底的 F1：Valid Seen v1 19.3→20.1、Test Seen v1 19.0→19.5、Test Unseen 20.9→21.5",
+      "section": "§5 Iterative deployment、Table 4 最後一列",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "以 3B 模型收集的模組監督資料微調的 BB3-175B，在人工評估中勝過所有 3B 系統，也勝過未微調的 OPT-175B。",
+      "numbers": "BB3-175B + v2 modular supervision：Good 64.8%、Rating 4.08。OPT-175B few-shot：43.0%、3.19；0-shot：31.0%、2.67。",
+      "section": "§5 Very large models benefit from feedback from smaller models、Table 3",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "資料品質檢查：3 位標註者多數決下，九成的對話任務被判為完成。這是在 gold 補救機制下的結果，不是模型自己完成任務的能力。任務完成的對話中，人類對話者的幫助程度評分略高。",
+      "numbers": "完成率 90.4%；人類幫助程度：完成的對話 3.8、未完成的 3.5（1–5 分）",
+      "section": "§3.5 Data Quality and Verification",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "所有實驗都在 Amazon Mechanical Turk 上用美國的英語付費工作者進行，和自發使用的公開部署不同。真實使用者的回饋取捨沒有納入，例如要求細粒度回饋可能降低參與意願、減少資料量；作者推測那種情境下自然的自由文字或輕量回饋可能較合適。",
+    "公開部署會有雜訊或對抗性的輸入與回饋，最壞情況下使用者可能教會模型錯誤推理、假資訊或有害行為；作者只在另一篇（Ju et al. 2022，arXiv:2208.03295）處理這個問題。",
+    "自由文字回饋的學習演算法不一定最佳，不排除其他演算法（如 Scheurer et al. 2022）能做得更好。",
+    "即使是最好的 BB3-175B 仍會自相矛盾、產生事實錯誤（附錄 B），需要持續收集回饋。",
+    "任務完成率只有 90.4% 而非理想上的 100%，反映人類對話者本身不是每次都做得完美。"
+  ],
+  "limitations_observed": [
+    "gold 補救機制會墊高數字。§3.2 規定：選 (a)(b) 時，下一輪強制使用人給的查詢或知識；選 (c) 時直接用人寫的回應取代 bot。所以對話後段的 context 是人修過的，90.4% 的完成率衡量的是「人機協作加代打」，不是模型獨立完成任務的能力。Table 3 的 Good% 也包含在人修過的 context 上算出來的回應，會高估模型獨立運作時的表現，而且弱模型被修得越多，墊高越多，可能壓縮了各模型之間的差距。",
+    "二元回饋類方法（reranker、reward model、Director 分類頭）學的是同一群工作者標的「(d) 無問題」標籤，而人工評估的主指標 Good% 也是這個標籤，訓練目標和評估指標是同一個訊號。另一個比較獨立的指標 Rating 就沒有一致地跟著升：BB2 上三個二元方法 reward-based 2.83、reranking 3.00、Director binary 3.07 全部低於基線 3.09；SeeKeR 上 Director binary 3.48 低於基線 3.52，reranking 則略高（3.55）。Good% 的升幅沒有一致地反映在 Rating 上。",
+    "「學會新技能」的主張在 Test Unseen 上撐不住。以 SeeKeR 為基底時，Test Unseen F1 基線是 20.8，free-form 19.7、supervised 19.5、module 19.9、supervised & reranking 19.8、Director binary 20.7 全部低於基線，只有 reranking 與 Director module+binary 是 20.9（+0.1）。連 Test Seen v1 上 free-form（17.7）、supervised（17.8）都低於基線 18.2。這與 §5「across the board」與「自動指標也改善」的說法矛盾，而 Test Unseen 沒有人工評估可以佐證。",
+    "BB2 上「Director module+binary 在自動與人工評估都大幅領先」這句話，在 Test Unseen 不成立：它的 F1 16.0，低於 Director binary only 17.6、supervised & reranking 18.0 與 supervised 17.0。模組監督在 BB2 上對新技能幾乎沒有遷移（15.3→15.4）。",
+    "v1→v2 迭代的證據很薄。只有 Table 4 的自動 F1（SeeKeR Test Unseen +0.6、Test Seen v1 +0.5），沒有人工評估，也沒有顯著性檢定，卻寫成「significant gains」。v2 train 有 9817 段，約為 v1 train（5592 段）的 1.76 倍，而且沒講清楚是只用 v2 還是 v1＋v2 訓練，增益可能單純來自資料量，無法歸因於迭代部署本身。評估集仍是 v1 的測試集。",
+    "「大模型能受益於小模型收集的回饋」沒有被隔離驗證。BB3-175B 同時換了規模、加入許多其他對話資料集，對照組 OPT-175B 則完全沒有微調，缺少「BB3 去掉 FITS」的消融。64.8% 對 43.0% 的差距，無法歸因於 FITS 資料。",
+    "比較回饋類型時沒有控制標註成本。模組回饋要人讀搜尋結果、挑片段、自己寫查詢；二元回饋只要點一下。論文比的是「每輪都有、全部收齊」下的效果，沒有在相同標註時間或相同標註數量下比較。所以「模組回饋最好」不能直接轉成回饋介面的設計建議，這一點比作者在 §7 承認的「可能降低參與度」更根本。",
+    "BB2 加上模組監督後，search results 類錯誤反而從 18.6% 升到 20.8%，是全表最高。可見模組回饋的效果不是各模組一起改善，論文沒有討論。",
+    "作為滿意度估計器，311M 的 reward model 從未報告自身的分類品質（accuracy、AUC、校準），也沒有和最終 Rating 或任務完成做相關分析。讀者無法判斷它是否適合拿來當即時的使用者滿意度估計。",
+    "可重現性上的缺口：reranking 的候選數、Director 的合併權重、所有微調超參數、每個模型人工評估的對話數，論文都沒寫。Director 比 reranking 只多 1–2 個百分點，在未知樣本數下無法判斷是否在雜訊內；本快取文字的粗體顯著性標記也已遺失。",
+    "內部數字不一致：§3.5 說總共「超過 210k 句話語、超過 14k 段對話」，但 Table 2 七欄加總是 316,824 句話語、22,293 段對話。§3.2 說對話最多 4 輪，但 Table 2 每段對話的平均 bot 話語數是 5.76–8.08。論文沒有交代原因。",
+    "回饋密度不真實。每一句 bot 話語都被強制標註（四類加總等於 bot 話語數），真實部署的回饋是稀疏、自願、有選擇偏差的。這批 100% 覆蓋的資料上得出的演算法排序，搬到稀疏回饋下未必成立。"
+  ],
+  "framework_role": "T6 使用者回饋迴路的代表作之一，而且是系統性比較研究：它回答部署時該收哪種顯式回饋，以及各該配什麼學習演算法。涵蓋的面向有：(1) 逐輪顯式回饋的完整協定，從二元滿意度、自由文字、模組級錯誤歸因到 gold 修正，外加整段對話的評分；(2) 以二元滿意度訓練的 311M 逐輪滿意度分類器，拿來 rerank 或當 reward，屬於滿意度估計，但本文沒有評估它本身；(3) 部署 → 收回饋 → 重訓 → 再部署（v1→v2）的持續學習迴路。本文沒有使用者模擬器，扮演使用者的是拿著自寫任務定義的付費工作者，性質接近有明確目標的人類使用者。次要關聯：T7／T8 方面，部署時的回饋紀錄直接變成評估指標（Good%、Rating、錯誤分類），任務完成則以 3 人多數決判定；T3／T4 方面，把錯誤歸因到查詢、檢索、回應哪一段，相當於人工做的軌跡級錯誤定位。",
+  "edges": [
+    {
+      "edge": "E6",
+      "how": "§3.4 的人工評估直接取自部署時的互動紀錄：同一套逐輪回饋協定產生的 (d) 無問題比例、最終 1–5 評分、三類錯誤比例，就是 Table 3 的評估指標。部署收集的 v1、v2 資料也切出 valid、test seen、test unseen 當自動評估集（Table 4）。互動紀錄同時回流評估與訓練。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "論文 §5 與 Table 3：BlenderBot 3（BB3-175B）是用本文收集的模組監督回饋資料（標記為 v2 modular supervision）加上其他對話資料集微調的。來源：本文 §5「Very large models benefit from feedback from smaller models」。",
+      "Meta AI 官方部落格說明 BB3 以公開互動 demo 形式部署在 https://blenderbot.ai/ ，只開放美國使用者，定位是透過與大眾的對話與回饋持續改進；文中連到 FITS 專案，並提到 Director 學習演算法，也說已從公開 demo 收到約 70K 段對話。來源：https://ai.meta.com/blog/blenderbot-3-a-175b-parameter-publicly-available-chatbot-that-improves-its-skills-and-safety-over-time/（以 WebFetch 讀取，內容為轉述）。",
+      "FITS 資料集與 4 個模型公開在 ParlAI：`-t fits`；model zoo 有 BB2／SeeKeR 的 module supervision 與 Director module+binary 版本。來源：https://parl.ai/projects/fits/"
+    ],
+    "assessment": "有部署證據，但屬於同一實驗室的研究型公開 demo（BB3，只限美國），不是商用產品。本文能確認的是 BB3 用了 FITS 的模組監督資料；部落格提到 Director，但無法從這些來源確認部署中的 BB3 用了本文訓練的 Director 模型。未見第三方商用產品採用本文方法或資料的可查證證據。"
+  },
+  "reproducibility": {
+    "code": "https://parl.ai/projects/fits/（ParlAI：https://github.com/facebookresearch/ParlAI；任務 parlai/tasks/fits；人工評估的 Mephisto 程式碼在 crowdsourcing/projects/fits）",
+    "data": "公開：FITS 資料集（ParlAI `-t fits`），含 v1、v2、test unseen 各切分與逐輪回饋標註。專案頁列出的預訓練模型只有 4 個（BB2／SeeKeR × module supervision／Director module+binary）；未見 reranker、reward-based、Director v2 等模型。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "在同一份公開資料與同一組基底模型上，系統性比較了部署時各種顯式使用者回饋類型與學習演算法（含逐輪滿意度分類器與 v1→v2 重訓迴路），資料與程式碼都公開，也直接接到 BB3 的公開部署。這是 T6 回饋迴路子領域的必讀基準，但數字要配合上面的評估漏洞一起讀。",
+  "related": [
+    "2206.07694",
+    "2208.03188",
+    "1901.05415",
+    "2203.13224",
+    "2107.07566",
+    "2208.03295",
+    "1611.09823",
+    "2008.08076",
+    "2204.14146"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

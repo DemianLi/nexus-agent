@@ -1,0 +1,170 @@
+{
+  "id": "2311.09469",
+  "title": "Clarify When Necessary: Resolving Ambiguity Through Interaction with LMs",
+  "topic": "T1",
+  "subarea": "模糊指令與澄清提問",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把「用澄清提問化解模糊請求」拆成三個依序的子任務：何時問、問什麼、拿到回答後怎麼答，並在 QA（AmbigQA）、NLI（AmbiEnt）、MT（DiscourseMT）上建立評估框架。另提出 Intent-Sim：讓模型自己生成一個澄清問題，取樣多個模擬使用者的回答，用 NLI 分群後算出意圖熵，依此決定哪些輸入值得問。",
+  "problem": "LLM 助理遇到模糊請求時很少主動澄清，但也不該每次都問。一來互動有成本，二來很多模糊句其實有一個占主導的解讀；作者舉的例子是「She's from Boston」幾乎不會指 Georgia 州的 Boston。既有的 LLM 不確定性估計只預測「輸出會不會錯」，分不出錯誤的來源：是缺知識（epistemic，問了也沒用），還是請求本身有多種解讀（aleatoric，問了才有用）。所以需要一個與任務無關的框架和指標，評估系統在有限的互動預算下能不能挑對該問的輸入，也要評估模型拿到澄清後能不能真的答對。",
+  "core_idea": "有三個要點。(1) 把「何時問」定義成不確定性估計，而不是二元分類。每個輸入給一個純量 u(x)，它要與「澄清後表現會提升多少」相關，而不是與「現在答錯的機率」相關。評估用兩種指標：只准對 b% 的輸入發問時的端任務表現，以及預測「澄清會不會讓這題變好」的 AUROC。(2) 「問什麼」這一步用 oracle 固定下來：由 GPT-3.5 依 gold 解讀生成澄清問答對。這樣第一和第三個子任務可以各自單獨量。(3) Intent-Sim 不看輸出分布的熵，而是看「使用者對澄清問題可能怎麼回答」的分布熵，藉此把不確定性歸因到意圖本身的模糊。",
+  "method": {
+    "notation": "使用者給出請求 x。模糊的 x 對應 k 個可行輸出 Y={y_i}，其中 gold 輸出 y* 對應使用者的真實意圖。系統可以問一個澄清問題 q，使用者回覆與其意圖對應的澄清答案 a*∈A={a_i}。論文假設 A 與 Y 一一對應（bipartite matching）。每個 x 都有自己的意圖分布 P(y=y*|x)。作者不假設能拿到這個分布，只用從分布抽出的 (x, y*) 樣本評估。",
+    "data_construction": {
+      "QA": "用 AmbigQA，也就是 NaturalQuestions 重新標註了模糊性、並附上各解讀的消歧改寫與對應答案的版本。把 NQ 原本的標註答案當作從真實意圖分布抽出的樣本，再找出哪一個消歧改寫含有相同答案，對應回意圖。NQ 答案不出現在任何解讀裡，或同時對上多個解讀的例子一律刪除（附錄 A）。規模是 652 個模糊輸入加 830 個不模糊輸入，共 1482 個取樣解讀，全部解讀有 2781 個（Table 6）。",
+      "NLI": "用 AmbiEnt 的模糊 premise/hypothesis 對。標註者先為模糊原句標 NLI 標籤，再為各消歧版本各標一次；與原句標籤一致的那個解讀，就當作取樣到的意圖與 y*。規模是 504 個模糊輸入、0 個不模糊輸入，取樣解讀 504 個，全部解讀 1008 個。",
+      "MT": "用 DiscourseMT（Bawden et al. 2018）的英法對照。每個測試句本身有歧義，配兩個前文，譯法取決於前文。去掉前文後的測試句當作模糊輸入，兩種譯法當作可行輸出。兩個前文句各自只有一種譯法，當作不模糊輸入。因為句子是人工刻意造得高度模糊，意圖分布直接設為均勻分布。規模是 88 個模糊輸入、176 個不模糊輸入，共 352 個解讀。",
+      "sampled_vs_uniform": "Sampled 是主設定，每個輸入用取樣到的那個解讀。Uniform 則評估每個輸入的所有解讀並等權重，用來檢查系統在少見意圖上的表現。MT 在兩種設定下相同。"
+    },
+    "task2_oracle_clarification": "用 GPT-3.5 few-shot 提示：指示語加兩個手寫範例，不給 system prompt，整段放在一則 user 訊息裡。輸入是模糊原句 x 加上 k 個解讀：QA 與 NLI 給消歧改寫，MT 給 k 個目標譯文。輸出一個能區分各解讀的澄清問題 q，外加每個解讀各一句澄清回答 a_i。MT 的提示要求針對某個特定字詞的意思發問，產出的問答都是英文，所以作者認為不會洩漏譯文，但承認有這個風險。三個任務的提示只做最小改動（附錄 B.1，Table 7–9）。這是 oracle，因為它需要知道全部可行解讀。後續第一、三子任務的評估都拿「gold 解讀對應的那組 (q, a*)」當作使用者給的澄清。",
+    "task3_responding": "受測模型有 GPT-3（論文沒寫是哪個版本）、LLaMA-2 7B/13B 及其 Chat 版。一律用 few-shot，每一題隨機抽 4 個範例、greedy 解碼。有澄清時的對話格式是：User 給輸入，Assistant 輸出「Follow-Up Question: …」，User 回「Follow-Up Response/Answer: …」，Assistant 再輸出最終答案（Table 10）。三種條件分別是：Direct（無澄清）、Follow（加上 oracle 澄清問答）、Disambig（直接換成消歧後的輸入；MT 則是在前面加上「Context: …」）。system 指示依任務而定，例如 QA 是「Answer the question.」；NLI 用 True/False/Inconclusive 對應三類，沿用 AmbiEnt 的提示。",
+    "intent_sim": {
+      "inputs": "LM M、NLI 模型 N、使用者輸入 x、取樣溫度 T、模擬次數 S。",
+      "steps": [
+        "1. 沿用回應澄清時的 few-shot 提示結構，以 x 為條件，用 greedy 解碼讓 M 生成一個澄清問題 q。",
+        "2. 以 [x; q] 為條件，用溫度 T 取樣 S 個模擬的使用者回答 a_1..a_S。論文設定 S=10、T=0.5，沿用 Kuhn et al. 2023 與 Cole et al. 2023 的做法。",
+        "3. 對每一對 (i, j) 用 N 判斷 [q; a_i] 與 [q; a_j] 兩個方向的關係。只要其中一個方向判為 entailment 就在等價圖 G 上連邊。N 是在 MNLI 上微調的 DeBERTa-large。",
+        "4. 在 G 上用 DFS 找連通分量，每個分量視為一個不同的意圖 c。",
+        "5. 估計 P̂(c|x)=|c|/S，u(x) 取這個分布的熵。u(x) 越高，就越優先發問。"
+      ],
+      "cost": "每筆輸入要跑 1 次 greedy 生成、10 次取樣生成，NLI 最多 90 次前向（45 對乘兩個方向）。",
+      "note": "q 只拿來算不確定性。預算評估時真正「問出去」的是 oracle 的 gold 問答，不是 Intent-Sim 自己生成的 q。等價判定只要單向 entailment 就成立，比 Kuhn et al. 的雙向 entailment 寬鬆。"
+    },
+    "baselines": {
+      "Random": "隨機挑 b% 的輸入發問，期望的增益百分比剛好等於 b。",
+      "Likelihood": "先用無澄清的 few-shot 提示 greedy 生成答案，以該輸出的機率當信心，機率越低越該問。",
+      "Self-Ask": "改寫自 Press et al. 2022。在每個輸入之後插入「Is a Follow-Up Question Needed Here?」，用模型生成「No」的機率評分。few-shot 範例固定一半是模糊輸入（答 Yes，後面接澄清問答），一半是不模糊輸入（答 No）。NLI 沒有不模糊的例子，改用 9 位標註者全部判讀一致的例子充當（附錄 B.2，Table 11）。",
+      "Semantic Entropy": "照 Kuhn et al. 2023，在無澄清的條件下取樣多個輸出並分群，再算熵。QA 用同一個 NLI 模型判斷 QA 對是否互相蘊含，MT 與 NLI 用 exact match 判斷等價；分群方式與 Intent-Sim 相同。"
+    },
+    "evaluation_protocol": "Task 1 的做法：依 u(x) 排序，取前 b%（10/20/30%）的輸入，給它們 oracle 澄清後讓模型回答，其餘輸入直接回答，再算整體端任務表現。除了絕對分數，也報「增益百分比」，也就是這個預算下的增益占『所有輸入都澄清』時總增益的百分比，random 的期望值等於 b。AUROC 的正類是「這題在澄清後會變好」。端任務指標：QA 在 §3.1 定義為正規化後的 answer recall，也就是 gold 字串是否出現在輸出中，但 Table 2 的圖說寫成 EM accuracy；NLI 用三類 accuracy；MT 用 contrastive accuracy，看模型給正確譯文的機率是否高於另一個譯文。MT 的不模糊輸入一律直接算答對。",
+    "reproduction_pitfalls": "GPT-3 的具體版本沒有交代。MT 的 contrastive accuracy 需要對給定的譯文取 logprob，暗示用的是 completion 式 API，而這類模型多半已下架。每題的 few-shot 範例隨機抽取，但沒給 seed，也只跑了一次。Table 4 只有六個「任務 × 模型」組合：MT 只有 GPT-3；NLI 與 QA 都是 LLaMA-2 7B/13B Chat，QA 另外加上 GPT-3。為什麼排除其他組合，論文沒有解釋。v1 沒有公開程式碼，衍生出的 sampled 意圖切分與 oracle 澄清問答也都沒有公開。"
+  },
+  "assumptions": [
+    "每個模糊輸入的可行解讀是有限、事先列得出來的集合，而且澄清答案與最終輸出一一對應，也就是一個問題、一個回答就能完全消歧。",
+    "資料集裡的標註（NQ 原答案、AmbiEnt 標註者對模糊原句的判讀）可以當作真實意圖分布的樣本；MT 則直接假設均勻分布。",
+    "使用者會照自己的意圖給出乾淨、正確的澄清回答。實驗裡這個「使用者」是握有 gold 解讀的 GPT-3.5，全程沒有真人。",
+    "模型自行模擬的使用者回答分布，能近似真實使用者的意圖分布；回答之間的等價關係可以用一個現成的 MNLI 模型判斷。",
+    "只考慮單輪澄清：問一次、答一次，然後輸出。",
+    "互動成本可以用「發問比例 b」這一個預算參數代表，不區分問題的難度或使用者的不耐煩程度。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "AmbigQA（衍生自 NaturalQuestions，QA）",
+      "AmbiEnt（NLI）",
+      "DiscourseMT／Bawden et al. 2018 英法對比測試集（MT）"
+    ],
+    "metrics": [
+      "端任務表現：QA 為 answer recall（Table 2 圖說寫成 EM accuracy），NLI 為三類 accuracy，MT 為 contrastive accuracy",
+      "固定互動預算 b=10/20/30% 下的表現，以及占全部澄清總增益的百分比",
+      "AUROC（預測「澄清會不會讓這題變好」）",
+      "Sampled 與 Uniform 兩種解讀加權"
+    ],
+    "baselines": [
+      "Random（期望增益百分比等於 b）",
+      "Likelihood（greedy 輸出的機率）",
+      "Self-Ask（生成「No」的機率，Press et al. 2022 改寫）",
+      "Semantic Entropy（Kuhn et al. 2023，輸出空間的熵）",
+      "回應澄清實驗的對照：Direct、Follow（oracle 澄清問答）、Disambig（消歧後的輸入）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "拿到 oracle 澄清問答之後，多數「任務 × 模型」組合的表現都會提升；主要的例外是 LLaMA-2 系列做 MT 時，加了澄清反而變差。作者把原因歸於 LLaMA-2 的多語預訓練不足。",
+      "numbers": "GPT-3（Direct→Follow）：MT 50.0→85.8（+35.8）；QA Uniform 22.7→40.8（+18.1），Sampled 51.8→61.8（+10.0）；NLI Uniform 31.2→31.6（+0.4），Sampled 41.7→45.9（+4.2）。LLaMA-2 13B Chat：QA Sampled 40.0→50.9；NLI Uniform 28.0→49.1。LLaMA-2 做 MT 時：7B −3.4、7B Chat −6.8、13B −3.4、13B Chat −9.1。",
+      "section": "§5、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "給澄清問答（Follow）通常優於直接給消歧改寫（Disambig），差距在 NLI 最明顯，Disambig 在 NLI 上甚至常比完全不給還差。不過在 QA 上，GPT-3 的兩者幾乎打平，作者說的「particularly for QA」只對 LLaMA-2 成立。作者把原因歸於資料集的消歧改寫是最小編輯、讀起來不自然，但論文沒有驗證這個解釋。",
+      "numbers": "NLI Sampled：GPT-3 Follow 45.9 對 Disambig 30.6（Direct 41.7）；LLaMA-2 13B Chat Follow 52.5 對 Disambig 26.6（Direct 40.7）。QA GPT-3：Uniform 40.8 對 41.2，Sampled 61.8 對 62.0。QA LLaMA-2 7B Chat：Sampled 47.9 對 42.0。",
+      "section": "§5、Table 2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "v1 內文說 chat 微調不會提升模型利用澄清的能力，同尺寸 base 與 Chat 版的澄清增益大致相同。但 Table 2 顯示這只在 QA 成立：在 NLI 上，Chat 版的增益明顯大得多；在 MT 上，Chat 版退步得更多。NAACL 正式版的附錄 D 已改口，承認增益只在 NLI 上變大。",
+      "numbers": "QA Sampled 的增益：7B +14.0 對 7B Chat +10.6；13B +14.6 對 13B Chat +10.9。NLI Uniform 的增益：7B −4.0 對 7B Chat +14.3；13B +4.0 對 13B Chat +21.1。NLI Sampled：+3.5 對 +9.0；+5.7 對 +11.8。MT：−3.4 對 −6.8；−3.4 對 −9.1。",
+      "section": "§5、Table 2",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "Intent-Sim 在六個組合中有四個拿到最高的 AUROC。但所有方法的 AUROC 都只在 0.37 到 0.63 之間，離隨機的 0.5 不遠；在 QA LLaMA-2 7B Chat 上，Intent-Sim 反而是四個方法中最低的。",
+      "numbers": "Intent-Sim 的 AUROC：MT GPT-3 0.512（最佳是 Likelihood 0.547）；NLI 7B Chat 0.531（最佳）；NLI 13B Chat 0.544（最佳）；QA GPT-3 0.628（最佳，Semantic Entropy 0.625）；QA 7B Chat 0.501（最低，最佳是 Semantic Entropy 0.532）；QA 13B Chat 0.570（最佳，Semantic Entropy 0.552）。NAACL 版補了 bootstrap 顯著性檢定（p<0.05、1000 次），只有 NLI 7B Chat、NLI 13B Chat、QA GPT-3 三格標為顯著。",
+      "section": "§1、§6.3、Table 4",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "v1 摘要宣稱，只准對 10% 的輸入發問時，Intent-Sim 拿到的增益是隨機挑選的兩倍。Table 4 只在一個組合支持這個說法；六格平均約為隨機的 1.4 倍，其中一格還低於隨機。NAACL 正式版的摘要已刪掉這句話。",
+      "numbers": "b=10% 時 Intent-Sim 占總增益的百分比（隨機的期望值是 10%）：MT GPT-3 13%、NLI 7B Chat 24%、NLI 13B Chat 14%、QA GPT-3 17%、QA 7B Chat 6%、QA 13B Chat 11%，平均約 14.2%。",
+      "section": "Abstract、Table 4",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "v1 §6.3 宣稱 Semantic Entropy 與 Intent-Sim 在所有預算下都贏過隨機。Table 4 並不支持。在四個方法裡，Intent-Sim 低於隨機的格數最少，但仍占三分之一；Semantic Entropy 更多。整體排序是 Intent-Sim 略優於 Semantic Entropy，兩者都明顯優於 Likelihood 與 Self-Ask，但差距多半只有幾個百分點。在 QA GPT-3 上，兩者三個預算的數字完全相同。NAACL 版改寫成 Intent-Sim 約在三分之二的設定上勝過 Semantic Entropy。",
+      "numbers": "18 格（6 個組合乘 3 個預算）裡低於隨機的格數：Intent-Sim 6 格（MT b30 24%、NLI 7B Chat b30 15%、QA 7B Chat b10/b20/b30 分別為 6%/19%/26%、QA 13B Chat b20 17%）；Semantic Entropy 8 格，另有 1 格持平；Self-Ask 10 格，另有 3 格持平；Likelihood 12 格。QA GPT-3 上 Semantic Entropy 與 Intent-Sim 都是 55.5（17%）、56.1（29%）、57.0（49%）。",
+      "section": "§6.3、Table 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "AUROC 與預算指標常常不一致。作者的解釋只針對取樣法（Intent-Sim 與 Semantic Entropy）：只取 10 個樣本估熵太粗，很多輸入的分群結果完全相同，彼此分不出高下，低熵區尤其如此。但最極端的落差出在不需要取樣的 Self-Ask，所以作者的解釋蓋不到它。我的推論是：AUROC 的正類是二元的「會不會變好」，預算指標算的是淨增益，會把澄清後變差的題目也算進去，兩個指標本來就可能排出不同順序。",
+      "numbers": "MT GPT-3 的 Self-Ask：AUROC 0.371，是全表最低；但 b=10/20/30% 的增益是 13%/25%/37%，在 b20 與 b30 都是四個方法中最高。作者另外指出，兩個資料集裡能因澄清受益的例子都不到 50%，因此很大的 b 沒有實用意義。",
+      "section": "§6.3、Table 4",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "不提出、也不評估「問什麼」的方法（Task 2），只用需要知道全部解讀的 oracle 來固定這一步（§2.2）。",
+    "真實的意圖分布無法標註，而且會隨時間、地點、個人偏好改變，只能用樣本近似（§2 Definitions；NAACL 版 Limitations 另外說明這個框架還沒納入這些語言外的因素）。",
+    "只用 10 個樣本估熵太粗，很多例子的分群結果一樣；b 很大時 Intent-Sim 可能輸給其他 baseline（§6.3）。",
+    "MT 的 oracle 提示把目標譯文放進了輸入，有洩漏答案的風險。作者檢查後認為生成的問答都是英文，不構成問題（附錄 B.1）。",
+    "LLaMA-2 翻譯能力不足，所以 MT 上加了澄清反而變差（§5）。",
+    "QA 與 NLI 的消歧改寫採最小編輯，不自然，可能讓 Disambig 條件吃虧（§5）。",
+    "只處理單輪澄清；多輪互動與任務無關的澄清問題生成留待未來（§8；NAACL 版 Limitations 也列出這兩點）。",
+    "NAACL 版 Limitations 補充：Intent-Sim 有額外的計算開銷，作者認為主要來自多次取樣，NLI 與分群的成本可以忽略。"
+  ],
+  "limitations_observed": [
+    "版本範圍：本筆記的數字與批判都針對 arXiv v1（2023-11-16）。我另外用 PDFKit 抽出 NAACL 2025 Findings 正式版（pp. 5541–5558）的文字，核對了摘要、Table 2、Table 4、Limitations 與附錄 C/D：Table 4 的數字完全相同，但正式版刪掉了「兩倍」與「所有預算都贏隨機」兩句，補上顯著性標記與 Limitations 段，也改寫了 chat 微調的結論。所以下面幾條「宣稱與表格矛盾」只適用於 v1 的文字，實驗數字本身兩版一樣。",
+    "效果量太小，撐不起「consistently outperforms」的說法。所有方法的 AUROC 都在 0.37 到 0.63 之間。Intent-Sim 領先 Semantic Entropy 的幅度常只有 0.003 到 0.02（QA GPT-3 0.628 對 0.625），在 QA 7B Chat 上還是最低的 0.501。NAACL 版把 QA GPT-3 這格標成顯著，但顯著不代表差距有實務意義：0.003 的差距還能顯著，較可能是成對 bootstrap 造成的，而論文沒交代用的是成對還是獨立抽樣。測試集也小：NLI 只有 504 題，accuracy 差 1 分約等於 5 題；MT 共 352 個例子，b=10% 只挑約 35 個。v1 完全沒有顯著性檢定，NAACL 版補上後也只有 3 格顯著。",
+    "看不出「模擬使用者回答」比「直接看輸出熵」多了什麼。在 QA GPT-3 上，Intent-Sim 與 Semantic Entropy 三個預算的數字一模一樣；其他組合的差距也多在幾個百分點內，方向不一致。論文沒做消融來證明「對澄清答案的分布算熵」比「對輸出的分布算熵」更能把 aleatoric 與 epistemic 分開，例如在分別控制過兩種不確定性的子集上比較。所以核心賣點「disentangle」其實沒有被直接驗證。",
+    "預算評估假設澄清是完美的。被選中發問的輸入，實際拿到的是 GPT-3.5 依 gold 解讀生成的問答，不是 Intent-Sim 自己 greedy 生成的 q。換句話說，打分用的是模型自己的問題，實際問出去的卻是 oracle 的問題。部署時如果模型的問題沒涵蓋使用者真正的意圖，或使用者的回答含糊，Table 4 的增益就是上限，實際會更低，論文沒有量這個落差。",
+    "等價判定可能系統性低估意圖熵。只要單向 entailment 就連邊，比 Kuhn et al. 的雙向 entailment 寬鬆；再加上用 DFS 取連通分量，等於把「蘊含」當成可遞移，A–B、B–C 各有一條邊，A 與 C 就會被併成同一群。澄清回答又常常很短（例如 NLI oracle 提示範例裡的「The same.」「Different.」，v1 Table 8），前面接上 q 之後交給 MNLI 模型判讀，可靠性存疑。論文沒有報分群的準確度。",
+    "資料設計讓「何時不該問」這一面測得不完整。NLI 有 0 個不模糊輸入（Table 6），模型不需要分辨「根本不模糊」的情況。MT 的意圖分布被設成均勻，作者在引言強調的「有主導解讀、不必問」的情況在 MT 裡根本不存在；MT 的不模糊輸入又一律算答對，發問在這些輸入上只是浪費預算，沒有任何風險。真正同時涵蓋兩面的只有 QA。",
+    "v1 表格有未解釋的異常。Table 2 裡 NLI 的 Disambig 列，五個模型的 Uniform 與 Sampled 數字完全相同（30.6/30.6、29.8/29.8、40.0/40.0、30.2/30.2、26.6/26.6），而兩種設定的評估集大小不同（1008 對 504），這很難是巧合，NAACL 版照樣保留。QA 指標也前後不一：§3.1 寫 answer recall，Table 2 的圖說寫 EM accuracy。",
+    "結果的穩定性沒有交代。NAACL 附錄 Table 5 自己揭露：用 LLaMA-2 對 NQ 的 2 萬題換 10 組 few-shot 範例，只有 29% 的題目每次答案都一樣，18% 會出現超過 5 種答案（表上寫 >5）。論文的做法是每題隨機抽範例、只跑一次，範例本身造成的變異可能與 Table 4 裡方法之間幾個百分點的差距同一個量級。",
+    "外推到對話 agent 有限。三個任務都是單次輸入、單次輸出的 NLP 任務；Table 4 只有三個模型、六個組合，GPT-3 的 NLI 與 LLaMA-2 base 模型被排除卻沒說理由，摘要仍寫「wide range of LMs」。沒有真人使用者、沒有多輪互動、沒有工具或任務型對話；發問的成本只用固定比例 b 表示，沒有與使用者滿意度或延遲連起來。",
+    "成本效益沒有分析。Intent-Sim 每筆輸入要 11 次 LLM 生成、最多 90 次 NLI 前向，但 v1 沒報延遲或 token 成本，也沒和只要一次前向的 Self-Ask 比較成本效益。這點在 MT 上尤其明顯：Self-Ask 在 b=20% 與 30% 的預算增益反而比 Intent-Sim 好。"
+  ],
+  "framework_role": "這篇是 T1「何時該澄清」的形式化來源，貢獻主要在問題設定與評估協議，方法本身較次要。對框架可以直接借用的有三件事。(1) 把「問不問」的決策改成排序：估計的是「澄清後會變好多少」，不是「現在會不會錯」，並明確把 aleatoric 不確定性（意圖模糊，值得問）和 epistemic 不確定性（缺知識，問了也沒用）分開。(2) 用互動預算 b% 下的端任務增益曲線加上 AUROC 評估發問政策。這個指標同時可以餵給 T7／T8，把「多問一次的成本」與「完成率的提升」放在同一張表上。(3) Intent-Sim 是一個具體可實作的意圖分布估計器：先自問一個澄清問題，取樣 K 個模擬回答，分群算熵，超過門檻就發問。它本質上是讓模型自己扮演使用者模擬器（T6）來推斷使用者目標，所以落在 T1 與 T6 的交界。實務上要注意兩點：它的實證優勢很小，與輸出空間的 Semantic Entropy 幾乎分不開；而且只測過單輪、oracle 澄清的 NLP 任務。同作者的後續工作 2410.13788（ICLR 2025）改用訓練（模擬未來回合的偏好）教模型何時問，也在 T1 名單上，兩篇合讀較完整。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "論文裡有兩條「模擬使用者輸入進入意圖對齊」的資料流。(a) 評估時，被選中發問的輸入會收到一個模擬的使用者回覆，也就是 GPT-3.5 依 gold 解讀生成的澄清答案 a*，模型再以原輸入加上這組問答決定最終輸出。這相當於使用者模擬器把意圖資訊送進目標對齊。(b) Intent-Sim 內部讓受測模型自己取樣 10 個使用者對澄清問題的回答，把它們當作意圖分布的樣本，算熵後決定問或不問。兩條流裡的「使用者」都是 LLM，全程沒有真人。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文沒有提到任何部署或產品。ACL Anthology 頁面（https://aclanthology.org/2025.findings-naacl.306/）與第一作者個人頁（https://mikejqzhang.github.io/）都沒有附程式碼連結。作者 GitHub 上名稱相近的 mikejqzhang/clarifying_questions，README 寫明是 2410.13788 的 repo，不是本篇的。以 WebSearch 查 Intent-Sim 與產品或部署的關聯，只找到論文本身、學術索引、個人部落格與同名但無關的文章，都不算採納。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "三個來源資料集（AmbigQA、AmbiEnt、DiscourseMT）都公開。論文衍生的 sampled 意圖切分、oracle 澄清問答與模型輸出都沒有公開；提示全文在附錄（v1 Table 7–12）。GPT-3 與 GPT-3.5 的具體版本沒交代，每題隨機抽的 few-shot 範例也沒給 seed，實質上只能近似重現。本筆記依據的是 arXiv v1；NAACL 2025 Findings 正式版的 Table 4 數字相同，但文字與附錄有修訂。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是 T1 名單上最直接把「何時該澄清」形式化成可評估問題的一篇：估的是澄清帶來的增益而不是錯誤率、分開 aleatoric 與 epistemic、用互動預算曲線評估，這套框架是設計發問政策的必要基礎。但讀的時候要把實證打折：AUROC 只有 0.50–0.63、Intent-Sim 與 Semantic Entropy 幾乎分不開、澄清由 oracle 提供，v1 的幾句宣稱也比表格強。",
+  "related": [
+    "2305.14613",
+    "2302.09664",
+    "2004.10645",
+    "2304.14399",
+    "2210.03350",
+    "2207.05221",
+    "2212.10409",
+    "1805.04655",
+    "1911.03598",
+    "2301.10309"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 6,
+    "total": 8
+  }
+}

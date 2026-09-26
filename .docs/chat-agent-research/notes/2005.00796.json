@@ -1,0 +1,149 @@
+{
+  "id": "2005.00796",
+  "title": "A Simple Language Model for Task-Oriented Dialogue",
+  "topic": "T2",
+  "subarea": "傳統任務型對話 DST 與資料集",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "SimpleTOD 把任務型對話的三個子任務（belief state 追蹤、系統動作決策、去詞彙化回應生成）串成一條「context → belief → DB 結果 → action → response」的文字序列，用單一因果語言模型（GPT-2／DistilGPT2 微調）以標準 LM loss 一次學完；在 MultiWOZ 2.1 拿到 55.76 joint goal accuracy，在不給任何 oracle 狀態與動作的 MultiWOZ 2.0 設定下，Inform／Success 高於 DAMD。",
+  "problem": "傳統任務型對話是 NLU（含 DST）→ DM → NLG 的管線，各模組用不同監督各自訓練，前一模組的錯誤會一路傳下去，而且許多系統每回合不看完整歷史，只依賴 NLU 傳來的 belief state。既有的「端對端」工作多半只串起部分子任務，或評估時借用 oracle belief state、oracle action，不能代表完整系統的實際表現；想用 GPT-2 這類預訓練因果 LM 的工作（Budzianowski & Vulić 2019、ARDM、Ham et al. 2020）要不是只做 context-to-response、不做 DST，要不是 DST 與端對端表現都低於專用模型。作者要回答：一個不額外加編碼器、token-type embedding、額外預訓練或資料擴增的單一因果 LM，能否同時在 DST 與完整端對端設定上勝過專用架構。",
+  "core_idea": "把 DST 看成條件式文字生成：belief state 序列化成扁平的「domain slot_name value」清單，當作同一條對話序列裡的一段，由模型在讀完全部歷史之後自迴歸寫出來；動作與回應同樣序列化為後續段落。各段以語意化的起訖特殊 token 標示，使用者與系統話語也以角色 token 區分。因為輸入輸出都只是文字，就能直接沿用 open-domain 預訓練 LM 的權重做遷移。推論時在 belief 段結束處暫停，拿生成的狀態去查資料庫，把彙總結果接回序列再繼續生成。",
+  "method": {
+    "資料與前處理": "MultiWOZ（Budzianowski et al. 2018）：10,438 段人對人多輪對話，平均 13.68 回合，7 個領域；police 與 hospital 沒有驗證與測試切分，因此排除，剩 5 個領域、30 個 domain-slot pair、約 4,500 種值。系統回應依 Budzianowski et al. (2018) 的前處理做去詞彙化（實體換成 [restaurant_name]、[value_time] 之類的佔位符）。DST 評估用 MultiWOZ 2.1；端對端評估為了與前人比較用 2.0，同時也報 2.1。",
+    "序列格式": "第 t 回合的訓練序列為 x^t = [C_t; B_t; D_t; A_t; S_t]。C_t = [U_0, S_0, …, U_t] 是到目前為止的全部歷史（評估時歷史中的系統話語是資料集的參考回覆，見附錄 Table 15/16）。B_t 是 belief state，格式為以逗號分隔的「domain slot_name value」三元組，例如「hotel pricerange cheap, hotel parking yes」。D_t 是資料庫查詢的彙總（符合條件的筆數，視設定再加訂位狀態），不是原始資料列。A_t 是系統動作，格式為「domain action_type slot_name」三元組，例如「train inform day, train offerbook none」。S_t 是去詞彙化的系統回應。",
+    "特殊 token": "每段都有起訖標記：<|context|>…<|endofcontext|>、<|belief|>…<|endofbelief|>、<|db|>…<|endofdb|>、<|action|>…<|endofaction|>、<|response|>…<|endofresponse|>；context 內的每句話前面加 <|user|> 或 <|system|>。附錄 Table 6 的示意圖用方括號寫法（[belief]、[endofbelief]），實際範例（Table 9–16）則用 <|…|>；重做時以 repo 的前處理為準。作者強調用語意化的詞當標記，而不是 Ham et al. 那種 <usr>/<ds> 分隔符加 token-type embedding；SimpleTOD 不用 token-type embedding。",
+    "模型": "標準的 decoder-only Transformer（GPT-2 架構）：token embedding 加位置 embedding、pre-LayerNorm、causal mask 多頭注意力、ReLU 前饋層、殘差連接，最後一層輸出乘上詞表矩陣得到下一個 token 的分數。實驗用兩種底座：DistilGPT2（6 層）與 GPT-2（12 層），皆從預訓練權重初始化，tokenizer 用 DistilGPT2 的 BPE。",
+    "訓練目標": "對整條序列做標準的因果語言模型負對數似然（Eq. 4）：損失加總序列中每一個 token，包括 context 部分，沒有另外遮掉輸入段、沒有各子任務的權重、沒有對比學習或資料擴增。論文只說用 Huggingface Transformers 對 GPT-2／DistilGPT2 的預設超參數，序列超過 1,024 token 就截斷；§3.4 有一句話在「According to experimental results,」之後就斷掉。學習率、epoch、batch size 論文都沒寫。官方 repo（已確認）：train_dst.sh 與 train_end2end.sh 兩支腳本都設 num_train_epochs 100、每 10,000 步存檔，batch size 由命令列傳入；參數解析檔預設 learning_rate 5e-5、weight_decay 0、adam_epsilon 1e-8、max_grad_norm 1.0、warmup_steps 0、seed 42。兩支腳本分別讀 train.history_belief（只含 context→belief）與 train.history_belief_action_sys_delex（context→belief→action→去詞彙化回應，檔名中沒有 DB 段）兩種資料檔，也就是說 repo 裡的 DST 模型與端對端模型是分開訓練的。",
+    "推論流程": "(1) 把 C_t 包成 <|context|>…<|endofcontext|> 餵給模型，用 greedy decoding 逐 token 生成，直到 <|endofbelief|> 為止，得到 B_t；(2) 依 B_t 查資料庫，把彙總結果 D_t 包成 <|db|>…<|endofdb|> 接在序列後面（最佳設定整段省略）；(3) 繼續 greedy 生成 A_t 與去詞彙化回應 S_t，直到 <|endofresponse|>；(4) 用 B_t 與 DB 查詢到的資料列把佔位符填回，得到人可讀的回應。作者試過 nucleus sampling，效能反而下降；也不需要 HDSA、DAMD 用的 beam search 或 top-k。每一回合都從完整歷史重新生成完整的 B_t，不讀入上一回合的 B_{t-1}，也沒有顯式的狀態更新運算。",
+    "DB 的三種設定": "oracle：訓練與推論都用資料集提供的 DB 結果（前人的做法）；dynamic：訓練時用符合筆數，推論時依生成的 B_t 即時計算筆數；不用 DB：訓練與推論序列都不含 D_t。作者也試過訓練三個分開的 SimpleTOD（DST、action、response 各一個），個別的 Inform、Success 會上升，但 combined score 幾乎相同，論文未列數字。",
+    "評估": "DST 用 joint goal accuracy：每回合生成的 belief state 必須與標註逐值完全相同才算對。測試標籤清理分三種：不清理（raw）；Wu et al. (2019a) TRADE 的 fix_label.py 腳本（多數前人採用）；作者另外清理 Type 2 與部分 Type 4 雜訊（非標準）。端對端用 MultiWOZ 標準的 Inform rate（系統提供的實體是否符合使用者目標）、Success rate（是否回答了使用者要求的所有屬性）、BLEU，以及 Mehri et al. (2019) 的 combined score = BLEU + 0.5 ×（Inform + Success）。附錄另報 oracle belief＋oracle action、oracle belief＋生成 action 兩種非端對端設定。"
+  },
+  "assumptions": [
+    "對話狀態能完整表示為固定本體內的扁平 (domain, slot, value) 三元組；不需要表達否定、多選一、條件式偏好（附錄 Type 1 的例子正是這類「使用者給了多個選項」的狀況）。",
+    "每回合從完整歷史重新推得整份狀態就夠了，而且歷史加上輸出能放進 1,024 token；超過就截斷，不另外保存或延續上一回合的狀態。",
+    "評估時前面各回合的系統話語是資料集的參考回覆，不是模型自己生成的；因此模型不會在自己前幾回合的錯誤之上繼續追蹤。",
+    "belief state 裡的值與資料庫實體名稱一致，查詢可以直接做字串比對；論文自己就指出這條在 MultiWOZ 上不成立（例如 'pizza hut fenditton' 與 'pizza hut fen ditton'）。",
+    "有大量逐回合 belief state、dialogue act 與去詞彙化回應的標註資料（MultiWOZ 全量）可以做監督式微調；方法不處理零樣本或新領域。",
+    "預訓練因果 LM 在 open-domain 學到的語言理解能遷移到任務型對話，只要用語意化特殊 token 標好段落與說話者角色。",
+    "回應的實體資訊可以在 LM 之外靠去詞彙化與再詞彙化處理；LM 本身只產生佔位符。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MultiWOZ 2.1（DST；端對端也報）",
+      "MultiWOZ 2.0（端對端與 oracle 設定，為了與前人比較）"
+    ],
+    "metrics": [
+      "Joint goal accuracy（DST）",
+      "Inform rate",
+      "Success rate",
+      "BLEU",
+      "Combined score = BLEU + 0.5 ×（Inform + Success）"
+    ],
+    "baselines": [
+      "DST：TRADE、DSTQA、DST-Picklist（DS-DST）、SST、TripPy",
+      "端對端：DAMD + augmentation（唯一在推論時用生成 belief state 的前作）",
+      "oracle 設定（附錄）：DAMD + augmentation、PARG、HDSA、ARDM、LaRL",
+      "消融：有無 end token 與 user/system token；隨機初始化對預訓練權重；6 層 DistilGPT2 對 12 層 GPT-2；DB 輸入的 oracle／dynamic／不用"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在 MultiWOZ 2.1 上，使用與多數前作相同的 TRADE 標籤清理腳本時，SimpleTOD 的 joint goal accuracy 最高；它只用單向解碼器、沒有雙向編碼器與額外監督。",
+      "numbers": "SimpleTOD 55.76；TripPy 55.3（自有正規化）、SST 55.23、DST-Picklist 53.3、DSTQA 51.17、TRADE 45.6；領先次佳約 0.46 分",
+      "section": "§4.1, Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "不做任何測試標籤清理時仍高於所有前作的清理後分數；作者再清理自己找出的 Type 2 與部分 Type 4 雜訊後分數更高，但這不是標準協定，作者自己也不加粗。",
+      "numbers": "raw 55.72；Wu et al. 腳本 55.76；額外清理 57.47",
+      "section": "§4.1, Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "MultiWOZ 2.0 完整端對端設定（belief state 與 action 都由模型生成）下，Inform 與 Success 高於 DAMD，BLEU 較低。摘要的 +8.1／+9.7／+7.2 是 SimpleTOD 不用 DB 的設定對 DAMD 用 oracle DB 的設定；兩邊都用 oracle DB 時差距小得多。",
+      "numbers": "不用 DB：Inform 84.4、Success 70.1、BLEU 15.01、Combined 92.26；DAMD+aug（oracle DB）：76.3、60.4、16.6、85；SimpleTOD 同樣用 oracle DB：78.1、63.4、16.91、87.66（同條件差距 +1.8、+3.0、+2.66）",
+      "section": "§4.2, Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "DB 資訊反而拖累表現：不用 DB 最好，dynamic 次之，oracle DB 最差；作者歸因於 belief state 的值與資料庫實體名稱不一致。",
+      "numbers": "MultiWOZ 2.0 Combined：oracle 87.66 < dynamic 91.66 < 不用 92.26；MultiWOZ 2.1：87.36 < 90.24 < 92.98（2.1 不用 DB 時 Inform 85、Success 70.5、BLEU 15.23）",
+      "section": "§4.2, Table 2, Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "段落結束 token 與 user/system 角色 token 對所有指標都是關鍵，兩者缺一 DST 就崩；沒有 end token 時模型會生成過長的 belief、action 與回應。",
+      "numbers": "JGA／Combined：兩者皆無 16.79／26.73；只有 end token 21.5／57.33；只有 user/system token 22.22／66.87；兩者皆有 55.76／92.98（這一列把 GPT-2 的 JGA 與 DistilGPT2 的 Combined 並列，見 limitations_observed）",
+      "section": "§5, Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "預訓練權重是必要條件：同樣架構隨機初始化時 DST 幾乎失效。模型較大也不一定較好，12 層 GPT-2 的 DST 較高，但端對端 combined 低於 6 層 DistilGPT2。",
+      "numbers": "6 層：隨機 JGA 16.45／Combined 62.89，DistilGPT2 54.54／92.98；12 層：隨機 20.17／59.65，GPT-2 55.76／90.75（Inform 88、Success 61.7）",
+      "section": "§5, Table 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "在給 oracle belief state（甚至 oracle action）的部分 oracle 設定下，SimpleTOD 並非最強；作者據此主張部分 oracle 評估的名次無法推到完整系統，只有端對端評估才反映真實表現。",
+      "numbers": "MultiWOZ 2.0 Combined，oracle belief＋oracle action：DAMD+aug 118.5、SimpleTOD 106.08（不用 DB 107.66）、PARG 103.8；oracle belief＋生成 action：DAMD+aug 102.5、HDSA 99.5、SimpleTOD 94.5（不用 DB 94.9）、LaRL 93.79；ARDM 用 oracle belief 但不生成 action（Action 欄為「-」），100.7。MultiWOZ 2.1 的 SimpleTOD：oracle belief＋oracle action 107.55，oracle belief＋生成 action 95.52",
+      "section": "Appendix B, Table 7, Table 8",
+      "anchor_idx": 6
+    }
+  ],
+  "limitations_stated": [
+    "belief state 的值與資料庫實體名稱會對不上（'pizza hut fenditton' 與 'pizza hut fen ditton'），使 oracle 或 dynamic DB 結果反而降低表現；已諮詢資料集作者，目前沒有修正計畫。",
+    "BLEU 比 DAMD 低 1.59 分，作者推測是因為沒有 DAMD 的 action/response 資料擴增。",
+    "在部分 oracle 設定下其他方法可以勝過 SimpleTOD。",
+    "分開訓練三個模型能提高個別的 Inform／Success，但會傷到 BLEU，combined 幾乎不變。",
+    "較大的模型在端對端 MultiWOZ 上不一定較好（GPT-2 12 層的 combined 低於 DistilGPT2）。",
+    "MultiWOZ 2.1 的標註仍有四類雜訊（多選項無法判定、該標未標、無依據卻有標、拼寫錯誤）；57.47 的額外清理不是標準協定。",
+    "nucleus sampling 會降低表現，精確度優先時只能用 greedy。",
+    "多回合、長上下文的狀態追蹤只有定性範例，作者明說不把它當主要貢獻。",
+    "Broader impact：對話代理普及可能使可自動化的溝通去人性化，在預測方案不適用時讓使用者更挫折。"
+  ],
+  "limitations_observed": [
+    "頭條增益的比較條件不一致：摘要與引言的 Inform +8.1、Success +9.7、Combined +7.2，是 SimpleTOD「不用 DB」對 DAMD「oracle DB」。Table 2 同樣用 oracle DB 的那一列只領先 +1.8、+3.0、+2.66，BLEU 還略高（16.91 對 16.6）。也就是說，大半的頭條增益來自拿掉 DB 這個設定差異，而不是模型本身。",
+    "「一個模型同時在 DST 與端對端拿下 SOTA」的說法沒有被單一模型證明。Table 5 顯示 JGA 55.76 來自 12 層 GPT-2（它的 combined 只有 90.75），combined 92.98 來自 6 層 DistilGPT2（它的 JGA 54.54 低於 TripPy 的 55.3）。Table 4「兩種 token 都有」那一列把 55.76 與 92.98 並列，等於拼接兩個模型的數字，所以 Table 4 其他列用的是哪個底座也無從判斷。官方 repo 還把 DST（train.history_belief，只有 context→belief）與端對端（train.history_belief_action_sys_delex）分成兩支腳本、兩份資料訓練；論文沒交代 Table 1 的 DST 分數是不是來自只學 DST 的模型。",
+    "所謂端對端其實是逐回合評估、用 oracle 歷史：附錄 Table 15/16 從第 2 回合起，context 裡的系統話語是資料集的參考回覆，不是 SimpleTOD 上一回合自己生成的。模型從來沒有在自己的錯誤之上繼續對話，錯誤累積與狀態漂移都沒被量到；這正是 T2 在 LLM agent 長多輪互動中最關心的失效模式。",
+    "狀態維護機制對長對話沒有交代：每回合都從完整歷史重新生成整份 B_t，不帶 B_{t-1}，而且 1,024 token 以上直接截斷。論文沒報截斷觸發的比例，也沒有 JGA 隨回合深度或 context 長度變化的曲線；『長上下文也追蹤得準』只有 Table 9 一段對話加上 §5 的定性敘述。截斷時較早回合的約束會無聲消失，這個風險完全沒被量測。",
+    "DST 的 SOTA 幅度落在雜訊範圍內：對 TripPy 只多 0.46 分，而兩者的標籤清理與正規化協定不同（TripPy 用自己的正規化與等價比對）。論文只跑一次，沒有 seed、變異數或顯著性檢定。",
+    "57.47 帶有朝自己模型偏移的偏誤：§5 說雜訊是『為了理解 DST 錯誤來源』而去查標註時找到的；依文意，等於從 SimpleTOD 自己的錯誤裡挑出『其實是標註錯』的案例再改測試標籤，其他模型沒有得到同樣的待遇。論文說所有標錯的例子都已公開，但官方 repo 的 noisy_annotations/ 目錄只有 type_2_noisy_annotations.json 一個檔，部分清理的 Type 4 沒有公開，57.47 無法完整重現。",
+    "『對雜訊標註穩健』只靠挑選過的定性範例，沒有統計各類雜訊佔 SimpleTOD 錯誤的比例，也沒拿其他追蹤器在同一批回合上比較，所以無法說這種穩健是 SimpleTOD 特有的。部分範例其實有爭議：Table 13 PMUL0069 使用者先要 hungarian，系統說沒有，他接著問 expensive 的餐廳，target 保留 hungarian 未必是錯標；Table 11 MUL0088 第 7 回合的 hamilton lodge 是系統推薦、使用者只追問設施與地址，是否算已選定也見仁見智。Table 11 裡 PMUL2437 同一個例子重複列了兩次。",
+    "『不用 DB 反而最好』很可能是指標被灌高，而不是模型更好（這是我的推論）：MultiWOZ 的 Inform／Success 是看去詞彙化回應中的佔位符，並用生成的 belief state 去查實體，模型不需要知道 DB 結果也能拿分。Table 15 第 1 回合參考動作只有 4 個，模型卻輸出 8 個 inform／offerbook 動作，回應塞滿 [train_id]、[value_time] 等佔位符；這種過度提供資訊有利於 Success，代價是 BLEU（16.91 降到 15.01）。實務上，不看 DB 的系統無法得知『沒有符合的餐廳』這類事實，只能照訓練資料的先驗猜，因此最佳設定不是可部署的系統形狀。",
+    "超參數報告不足：論文只說用 Huggingface 預設值，§3.4 還有一句被截斷；學習率、epoch、batch、訓練時間都要去 repo 腳本裡找（100 epochs、lr 5e-5、batch 由命令列給），也沒報根據驗證集選哪一個 checkpoint。這和作者宣稱的『容易重現』有落差。",
+    "外推範圍窄：只在 MultiWOZ 一個資料集、固定本體、全量監督下實驗。沒有 SGD 或其他資料集、沒有零樣本與少樣本、沒有新領域或新 slot，也沒有人工評估；DST 用 2.1、端對端主比較用 2.0，兩張主表的資料版本不同。"
+  ],
+  "framework_role": "T2 的橋接點：它把『對話狀態』從分類器的輸出槽位，變成單一因果 LM 在同一條序列裡寫出來的一段文字（domain slot value 清單），是從 TRADE 這類專用 DST 走到 LLM 時代『用文字表示並重新生成狀態』這條脈絡的起點。它提供了三個對 T2 直接有用的實證：(1) 狀態段落的序列化格式與角色標記是承重的（缺 end token 或 user/system token 時 JGA 從 55.76 掉到 16–22）；(2) 預訓練權重是生成式 DST 的前提；(3) 每回合從完整歷史重新生成整份狀態、不延續 B_{t-1}，是一種最簡的狀態維護策略，而它在 oracle 歷史與 1,024 token 截斷之外的行為沒被量過，正好點出 LLM agent 長多輪狀態維護要補什麼。次要角色：推論時在 belief 段結束處暫停、用狀態查 DB 再把結果接回序列，是後來 agent 工具呼叫迴圈的前身（這是類比，論文沒有這樣說）；附錄 B『部分 oracle 評估名次無法推到完整系統』的論點，與 Inform／Success 作為任務完成分數的用法，和 T7 評估方法、T8 任務完成分數相關。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據（商用採納）。論文沒有提到任何部署或產品。作者全部來自 Salesforce Research，但 Salesforce 官方部落格（https://www.salesforce.com/blog/simpletod/，2020-07-21）只把它當研究成果介紹，沒有提到用於任何 Salesforce 產品。官方 repo（https://github.com/salesforce/simpletod，BSD-3-Clause）是研究用程式碼，已於 2025-05-01 封存為唯讀，未提及生產用途。後續論文把它當基線引用屬於學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/salesforce/simpletod",
+    "data": "MultiWOZ 2.0／2.1 公開。repo 提供資料前處理、DST 與端對端訓練腳本、生成與評估腳本（compute_joint_acc.py、evaluate_multiwoz.py），以及 noisy_annotations/type_2_noisy_annotations.json；論文所說完整的雜訊清單與清理後的測試集，在 repo 中只看到 Type 2 那一份。repo 已封存（2025-05-01），BSD-3-Clause。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是用單一預訓練因果 LM 把 belief state 當文字生成的早期代表作（NeurIPS 2020，Semantic Scholar 589 次引用、113 次 influential），並用消融量出序列化格式與預訓練對 DST 的承重程度，是理解 T2 從專用追蹤器走到文字化狀態的必讀；但它的 DST 領先只有 0.46、端對端增益大半來自設定差異、評估用 oracle 歷史，要搭配 limitations_observed 讀。",
+  "related": [
+    "1810.00278",
+    "1907.01669",
+    "1905.08743",
+    "1910.03544",
+    "1911.06192",
+    "2005.02877",
+    "1911.10484",
+    "2005.05298",
+    "1907.05774",
+    "1910.03756",
+    "1905.12866",
+    "2004.07462",
+    "1902.08858",
+    "1907.10016"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}
