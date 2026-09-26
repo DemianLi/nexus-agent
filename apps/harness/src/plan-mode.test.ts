@@ -10,10 +10,11 @@
  * 四組，各自釘一件不同的事：
  *
  * 1. **指引**：開著才夾、關著一個字都不多、而且不會踩掉別人的 prompt。
- * 2. **`exit_plan_mode` 的三條路**：有人核准、沒人可問、不在模式裡——三種結局要分得開。
+ * 2. **`exit_plan_mode` 的結局**：同意、繼續規劃、關掉這一題、沒人可問、不在模式裡——走提問通道
+ *    （[#652](https://github.com/DemianLi/nexus-agent/issues/652)），結局要分得開。
  * 3. **模式狀態活得過什麼**：同一條 thread 的下一輪、以及一次真的壓縮。跨重啟那一條在
  *    `session-resume.test.ts`。
- * 4. **`prepend` 的證據**：模式外的呼叫拿到的是「不在計劃模式」，不是核准的措辭。
+ * 4. **`prepend` 的證據**：模式外的呼叫拿到的是「不在計劃模式」，不是核准的措辭（第 2 組最後一條）。
  * 5. **`/plan` 這條路**：人打的那一行到底有沒有讓下一輪的 prompt 變得不一樣
  *    （[#120](https://github.com/DemianLi/nexus-agent/issues/120)）。
  */
@@ -24,8 +25,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Command, MemorySaver } from '@langchain/langgraph';
-import { SessionRegistry } from '@nexus/core';
-import type { PluginEntry, SessionEvent } from '@nexus/core';
+import { createHostServicesPlugin, deriveApprovalChannel, SessionRegistry } from '@nexus/core';
+import type { PluginEntry, QuestionInterruptItem, QuestionReply, SessionEvent } from '@nexus/core';
+import { CANCELLED_MESSAGE } from '@nexus/plugin-ask-user';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { createMemoryPlugin } from '@nexus/plugin-memory';
 import {
@@ -33,10 +35,18 @@ import {
   DEFAULT_PLAN_GUIDANCE,
   EXIT_PLAN_MODE_TOOL_NAME,
   NOT_IN_PLAN_MODE_MESSAGE,
+  PLAN_APPROVE_LABEL,
   PLAN_APPROVED_MESSAGE,
   PLAN_ARGS_ERROR_MESSAGE,
   PLAN_ENTERED_MESSAGE,
+  PLAN_KEEP_PLANNING_LABEL,
   PLAN_LEFT_MESSAGE,
+  PLAN_NO_REVIEWER_MESSAGE,
+  PLAN_REVIEW_DISMISSED_MESSAGE,
+  PLAN_REVIEW_HEADER,
+  PLAN_REVIEW_QUESTION,
+  PLAN_REVIEW_QUESTION_ID,
+  planFeedbackMessage,
   recordedPlanMode,
 } from '@nexus/plugin-plan-mode';
 import { createSummarizationMiddleware } from 'deepagents';
@@ -224,99 +234,193 @@ describe('計劃指引進不進 system prompt', () => {
   });
 });
 
-/** 一顆核准中斷在問的那幾件事。 */
-function actionRequests(interrupts: unknown): { name?: string; args?: { plan?: string } }[] {
-  const first = (interrupts as { value?: { actionRequests?: unknown } }[] | undefined)?.[0];
-  const requests = first?.value?.actionRequests;
-  return Array.isArray(requests) ? (requests as { name?: string; args?: { plan?: string } }[]) : [];
+/** 一顆中斷的酬載，照 `__interrupt__` 的形狀讀。 */
+interface RaisedInterrupt {
+  readonly value?: {
+    readonly kind?: string;
+    readonly actionRequests?: unknown;
+    readonly questions?: readonly QuestionInterruptItem[];
+  };
 }
 
-describe('exit_plan_mode 的三條路', () => {
+/** 一份會呼叫 `exit_plan_mode`、給了回覆再收工的一輪：先停在提問上，再用 `reply` 接回去。 */
+async function reviewPlan(
+  threadId: string,
+  reply: QuestionReply,
+): Promise<{
+  readonly raised: readonly RaisedInterrupt[];
+  readonly after: { readonly messages: readonly BaseMessage[]; readonly __interrupt__?: unknown };
+  readonly events: readonly SessionEvent[];
+  readonly model: ScriptedChatModel;
+}> {
+  const model = planScript();
+  const { agent, attachSession, dispose } = await createNexusAgent({
+    model,
+    checkpointer: new MemorySaver(),
+    plugins: [createPlanModePlugin({ startActive: true })],
+  });
+  const config = { configurable: { thread_id: threadId } };
+  const sessions = new SessionRegistry(threadId);
+  const detach = attachSession(sessions);
+  try {
+    const paused = await agent.invoke(toAgentInvocation('幫我改一下。'), config);
+    const raised = (paused.__interrupt__ ?? []) as readonly RaisedInterrupt[];
+    const after = (await agent.invoke(new Command({ resume: reply }) as never, config)) as {
+      messages: BaseMessage[];
+      __interrupt__?: unknown;
+    };
+    return { raised, after, events: sessions.root.events, model };
+  } finally {
+    detach();
+    await dispose();
+  }
+}
+
+/** 日誌上 `exit_plan_mode` 那顆 `tool/result` 的判定，不含訊息本文。 */
+function exitVerdicts(events: readonly SessionEvent[]): unknown[] {
+  const exitCalls = new Set(
+    events.flatMap((event) =>
+      event.type === 'tool/call' && event.data.name === EXIT_PLAN_MODE_TOOL_NAME
+        ? [event.data.callId]
+        : [],
+    ),
+  );
+  return events.flatMap((event) => {
+    if (event.type !== 'tool/result' || !exitCalls.has(event.data.callId)) return [];
+    const { message: _message, ...verdict } = event.data;
+    return [verdict];
+  });
+}
+
+/**
+ * `exit_plan_mode` 走提問通道（[#652](https://github.com/DemianLi/nexus-agent/issues/652)），照 dsh
+ * `packages/plan/plan-mode/src/index.ts:278-350`。
+ *
+ * **以前這一組叫「三條路」**，走的是核准：plan-mode 掛一位閘門對 `exit_plan_mode` 回 `ask`，計劃變成
+ * 核准卡上的工具參數。dsh 明文否決那條路（核准的詞彙封閉，拒絕帶不回意見）。現在的結局有五種：
+ * 同意、繼續規劃（帶意見）、關掉這一題、沒有人可以回答、不在模式裡。停止這一輪那條在
+ * `plan-review-wire.test.ts`，要真的 pump。
+ */
+describe('exit_plan_mode 的結局', () => {
   /**
-   * **這一條撐著整個設計的那句話**：「人批准計劃」與「人批准這次工具呼叫」是同一件事，
-   * 所以不另建評審通道。少了它那句話是空的——一個把 `plan` 丟掉的實作，
-   * 「獲准之後模式關掉」照樣會綠，而按下批准的人根本沒看到要批准什麼。
+   * **翻過來的絆索**：以前這裡斷言「停在一顆核准中斷上、`actionRequests` 帶著計劃」。現在剛好一顆中斷、
+   * 是提問、沒有 `actionRequests`——鏈底要是對它回了 `ask`，這裡會看到兩顆，或看到一顆核准。
    *
-   * 計劃全文走的是核准請求的 `args`，`@nexus/wire` 的 `pending.actions` 原樣帶著它
-   * （`conversation.ts` 的 `actions: { name, args, description }`），所以瀏覽器那端
-   * 讀得到。閘門給的理由落在 `description`。
+   * 計劃全文在 `detail`；`intent.callId` 是日誌上那顆 `tool/call` 的 id，歷史重播時計劃卡從它的參數畫。
    */
-  it('要批准的人看得到計劃全文', async () => {
-    const model = planScript();
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      checkpointer: new MemorySaver(),
-      plugins: [createPlanModePlugin({ startActive: true })],
-    });
+  it('停在一顆提問上：計劃全文在 detail，intent 指得到那顆呼叫，沒有核准', async () => {
+    const { raised, events } = await reviewPlan('review-shape', { cancelled: true });
 
-    try {
-      const paused = await agent.invoke(toAgentInvocation('幫我改一下。'), {
-        configurable: { thread_id: 'sees-plan' },
-      });
-      const requests = actionRequests(paused.__interrupt__);
-
-      expect(requests.map((request) => request.name)).toEqual([EXIT_PLAN_MODE_TOOL_NAME]);
-      expect(requests[0]?.args?.plan).toBe('# 計劃\n\n先看再改。');
-    } finally {
-      await dispose();
-    }
+    expect(raised).toHaveLength(1);
+    expect(raised[0]?.value?.kind).toBe('question');
+    expect(raised[0]?.value?.actionRequests).toBeUndefined();
+    const callIds = events.flatMap((event) =>
+      event.type === 'tool/call' && event.data.name === EXIT_PLAN_MODE_TOOL_NAME
+        ? [event.data.callId]
+        : [],
+    );
+    // resume 時本體從頭再跑一次，所以同一個 id 的 `tool/call` 會記兩顆；要的是它們指同一顆呼叫。
+    expect(new Set(callIds).size).toBe(1);
+    expect(raised[0]?.value?.questions).toEqual([
+      {
+        id: PLAN_REVIEW_QUESTION_ID,
+        header: PLAN_REVIEW_HEADER,
+        question: PLAN_REVIEW_QUESTION,
+        detail: '# 計劃\n\n先看再改。',
+        options: [
+          { label: PLAN_APPROVE_LABEL, description: expect.any(String) },
+          { label: PLAN_KEEP_PLANNING_LABEL, description: expect.any(String) },
+        ],
+        intent: { kind: 'plan-review', approve: PLAN_APPROVE_LABEL, callId: callIds[0] },
+      },
+    ]);
   });
 
   /**
-   * **有人在的時候：計劃交出去 → 停下來等 → 獲准 → 模式關掉。**
+   * **同意 → 工具成功，模式在下一個模型步驟之前才關**（照 dsh 的 `pendingIntents`）。
    *
-   * 「人批准計劃」與「人批准這次工具呼叫」是同一件事，所以這裡走的就是
-   * [#113](https://github.com/DemianLi/nexus-agent/issues/113) 已經有的那條核准迴圈，
-   * 沒有第二套評審通道。
+   * 日誌上的順序就是證據：那顆 `plan/mode { active: false }` 落在 `exit_plan_mode` 的 `tool/result`
+   * **之後**、下一次模型呼叫的 `model/end` 之前。當場寫的實作會把它排在 `tool/result` 前面。
    */
-  it('獲准 → 模式關掉，下一輪的 prompt 沒有指引了', async () => {
-    const model = planScript();
-    const { agent, attachSession, dispose } = await createNexusAgent({
-      model,
-      checkpointer: new MemorySaver(),
-      plugins: [createPlanModePlugin({ startActive: true })],
+  it('同意 → 工具成功；plan/mode 落在工具結果之後、下一步回覆之前；下一步沒有指引', async () => {
+    const { after, events, model } = await reviewPlan('review-approve', {
+      answers: [{ id: PLAN_REVIEW_QUESTION_ID, selected: [PLAN_APPROVE_LABEL] }],
     });
-    const config = { configurable: { thread_id: 'approve' } };
-    const sessions = new SessionRegistry('approve');
-    const detach = attachSession(sessions);
 
-    try {
-      const paused = await agent.invoke(toAgentInvocation('幫我改一下。'), config);
-      // 停在核准點——工具還沒跑，所以模式一定還開著。
-      expect(paused.__interrupt__).toBeDefined();
-
-      const after = await agent.invoke(
-        new Command({ resume: { decisions: [{ type: 'approve' }] } }) as never,
-        config,
-      );
-
-      // 模式關了，而且關在日誌上——那是續接讀得回來的那一份。
-      expect(planModeOf(sessions, true)).toBe(false);
-      expect(lastToolMessage(after.messages as BaseMessage[])?.text).toContain(
-        PLAN_APPROVED_MESSAGE,
-      );
-      // 模式關了，所以獲准之後那一輪的 prompt 裡不該再有指引。
-      expect(systemPrompt(model.lastPrompt)).not.toContain(DEFAULT_PLAN_GUIDANCE);
-    } finally {
-      detach();
-      await dispose();
-    }
+    expect(exitVerdicts(events)).toEqual([{ callId: expect.any(String), isError: false }]);
+    const tool = lastToolMessage(after.messages);
+    expect(tool?.text).toBe(PLAN_APPROVED_MESSAGE);
+    expect(recordedPlanMode(events)).toBe(false);
+    const order = events
+      .map((event) => event.type)
+      .filter((type) => type === 'tool/result' || type === 'plan/mode' || type === 'model/end');
+    // 第一次模型呼叫 → 工具結果 → 待關交出去 → 第二次模型呼叫。
+    expect(order).toEqual(['model/end', 'tool/result', 'plan/mode', 'model/end']);
+    expect(systemPrompt(model.lastPrompt)).not.toContain(DEFAULT_PLAN_GUIDANCE);
   });
 
   /**
-   * **沒有人可問的時候：確定性拒絕，而且模式還開著。**
-   *
-   * 這正是 `startActive` 的 JSDoc 警告的那個結局——在收不了核准決定的入口打開計劃模式，
-   * 等於把那一輪鎖死：計劃被拒、模式沒關、而今天沒有第二條路出去。**寫成測試是因為
-   * 它是設計的後果，不是缺陷**：改掉它要先有開啟／關閉的命令，那是另一張卡。
+   * **繼續規劃 → 意見帶回給模型，模式留著。** 同 dsh：只要不是「剛好選了同意、沒有自由作答」都算繼續規劃，
+   * 所以選了同意又寫了字的那一種也是。
    */
-  it('headless → 確定性拒絕，而且模式還開著', async () => {
+  it.each([
+    ['選繼續規劃、寫了意見', [PLAN_KEEP_PLANNING_LABEL], '先補測試', '先補測試'],
+    ['選繼續規劃、沒寫意見', [PLAN_KEEP_PLANNING_LABEL], undefined, ''],
+    ['選了同意但也寫了字', [PLAN_APPROVE_LABEL], '改成兩步', '改成兩步'],
+  ] as const)('%s → 拒絕、模式留著', async (_label, selected, custom, feedback) => {
+    const { after, events, model } = await reviewPlan(`review-keep-${String(selected)}`, {
+      answers: [
+        { id: PLAN_REVIEW_QUESTION_ID, selected, ...(custom === undefined ? {} : { custom }) },
+      ],
+    });
+
+    expect(exitVerdicts(events)).toEqual([{ callId: expect.any(String), isError: true }]);
+    expect(lastToolMessage(after.messages)?.text).toBe(`Error: ${planFeedbackMessage(feedback)}`);
+    expect(events.some((event) => event.type === 'plan/mode')).toBe(false);
+    expect(systemPrompt(model.lastPrompt)).toContain(DEFAULT_PLAN_GUIDANCE);
+  });
+
+  /**
+   * **關掉這一題 → 停在這裡等使用者，不是放棄、也不是停止這一輪。**
+   *
+   * 那句不是 `ask_user_question` 的 {@link CANCELLED_MESSAGE}（它叫模型別重問同一組），日誌上也不標
+   * `ASK_CANCELLED`：dsh 在這裡拋的是一般 `Error`。這一輪照常走完——模型收到拒絕之後還有下一步。
+   */
+  it('關掉這一題 → 模型收到「停在這裡等使用者的訊息」，模式留著，這一輪沒有被中止', async () => {
+    const { after, events, model } = await reviewPlan('review-dismiss', { cancelled: true });
+
+    const tool = lastToolMessage(after.messages);
+    expect(tool?.text).toBe(`Error: ${PLAN_REVIEW_DISMISSED_MESSAGE}`);
+    expect(tool?.text).not.toContain(CANCELLED_MESSAGE);
+    expect(exitVerdicts(events)).toEqual([{ callId: expect.any(String), isError: true }]);
+    expect(events.some((event) => event.type === 'plan/mode')).toBe(false);
+    expect(after.__interrupt__).toBeUndefined();
+    expect(events.filter((event) => event.type === 'model/end')).toHaveLength(2);
+    expect(systemPrompt(model.lastPrompt)).toContain(DEFAULT_PLAN_GUIDANCE);
+  });
+
+  /**
+   * **沒有人可以回答 → 確定性拒絕，請使用者自己切模式，而且模式還開著。**
+   *
+   * 照 dsh「沒有提問通道就拋錯」。`channel` 由組裝點明著算（同 `cli.ts`），輸入跟 `HEADLESS_APPROVALS`
+   * 同一組；少了這一格的話 plugin 退到「有人在」，這一輪會停下來問一個不會來的答案。
+   */
+  it('headless → 請使用者自己切模式，沒有中斷，模式還開著', async () => {
     const model = planScript();
+    const checkpointer = new MemorySaver();
     const { agent, attachSession, dispose } = await createNexusAgent({
       model,
-      checkpointer: new MemorySaver(),
+      checkpointer,
       approvals: HEADLESS_APPROVALS,
-      plugins: [createPlanModePlugin({ startActive: true })],
+      plugins: [
+        createHostServicesPlugin({
+          channel: deriveApprovalChannel({
+            approvalsEnabled: HEADLESS_APPROVALS.enabled,
+            hasCheckpointer: true,
+          }),
+        }),
+        createPlanModePlugin({ startActive: true }),
+      ],
     });
     const sessions = new SessionRegistry('headless');
     const detach = attachSession(sessions);
@@ -331,12 +435,10 @@ describe('exit_plan_mode 的三條路', () => {
       await dispose();
     }
 
-    // 沒有停下來等——這是 #113 的整個重點。
     expect(result.__interrupt__).toBeUndefined();
-    const denial = lastToolMessage(result.messages as BaseMessage[]);
-    expect(denial?.text).toContain('是沒有人被問到');
-    expect(denial?.text).not.toContain(PLAN_APPROVED_MESSAGE);
-    // **模式沒關**：工具沒跑，那顆 `plan/mode` 就沒有寫。
+    expect(lastToolMessage(result.messages as BaseMessage[])?.text).toBe(
+      `Error: ${PLAN_NO_REVIEWER_MESSAGE}`,
+    );
     expect(planModeOf(sessions, true)).toBe(true);
     expect(sessions.root.events.some((event) => event.type === 'plan/mode')).toBe(false);
   });
@@ -344,17 +446,26 @@ describe('exit_plan_mode 的三條路', () => {
   /**
    * **不在模式裡的時候：說的是模式，不是核准。**
    *
-   * 這一條是 `prepend: true` 的證據。少了它，`fold` 會把計劃模式的 middleware 排到
-   * 核准閘門**之後**，於是這次呼叫會先撞上閘門、拿到一句關於核准的話——而真正的原因
-   * 是「你不在計劃模式」。兩句話都「不是成功」，但只有一句說得出為什麼。
+   * 這一條是 `prepend: true` 的證據。plan-mode 自己不再掛閘門，所以這裡掛一位**什麼工具都要核准**的探針
+   * （`approval.patch.yml` 那一類組裝會長這樣）。少了 `prepend`，`fold` 會把計劃模式的 middleware 排到
+   * 核准閘門**之後**，這次呼叫會先撞上探針、在 headless 底下拿到「沒有人被問到」——而真正的原因是
+   * 「你不在計劃模式」。
    */
   it('模式外呼叫 → 說的是「不在計劃模式」，不是核准的措辭', async () => {
     const model = planScript();
+    const askEverything: PluginEntry = {
+      plugin: {
+        name: 'probe-ask-everything',
+        apply(registry) {
+          registry.approvals.gate(() => ({ kind: 'ask', reason: '探針：每個工具都要人看過' }));
+        },
+      },
+    };
     const { agent, attachSession, dispose } = await createNexusAgent({
       model,
       checkpointer: new MemorySaver(),
       approvals: HEADLESS_APPROVALS,
-      plugins: [createPlanModePlugin()],
+      plugins: [askEverything, createPlanModePlugin()],
     });
     const sessions = new SessionRegistry('not-in-mode');
     const detach = attachSession(sessions);
@@ -374,13 +485,9 @@ describe('exit_plan_mode 的三條路', () => {
     expect(refusal?.text).not.toContain('是沒有人被問到');
     // **日誌上記的是錯誤、不帶碼**（#273）：模式外 dsh 拋的是一般 `Error`。這是 middleware
     // 自己回結果、不往下叫的那條路，所以圍堵讀的是 middleware 那則訊息。
-    expect(
-      sessions.root.events.flatMap((event) => {
-        if (event.type !== 'tool/result') return [];
-        const { message: _message, ...verdict } = event.data;
-        return [verdict];
-      }),
-    ).toEqual([{ callId: expect.any(String), isError: true }]);
+    expect(exitVerdicts(sessions.root.events)).toEqual([
+      { callId: expect.any(String), isError: true },
+    ]);
   });
 });
 

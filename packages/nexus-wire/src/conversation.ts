@@ -309,13 +309,35 @@ export type ConversationStatus = 'idle' | 'running' | 'awaiting-input' | 'failed
 export const APPROVAL_PENDING_KIND = 'approval';
 export const QUESTION_PENDING_KIND = 'question';
 
-/** 問人的一題。形狀照抄 dsh 的 `AskUserQuestionItem` 在**模型面**的那五格。 */
+/**
+ * 問人的一題。形狀照抄 dsh 的 `AskUserQuestionItem`：模型面的五格，加上只有內部生產者會填的
+ * `detail` 與 `intent`（[#652](https://github.com/DemianLi/nexus-agent/issues/652)：`exit_plan_mode`
+ * 的計劃審核）。**兩格都原樣從中斷酬載帶過來**，`reduceInputRequested` 不挑欄位。
+ *
+ * 生產者那側的同一份形狀在 `@nexus/core` 的 `QuestionInterruptItem`（這個套件不相依 core，所以各寫一份）。
+ */
 export interface QuestionItem {
   readonly id: string;
   readonly question: string;
   readonly header?: string;
+  /** 跟著這一題一起畫、但不進選項標籤的補充內容。計劃審核把計劃全文（Markdown）放在這裡。 */
+  readonly detail?: string;
   readonly options?: readonly { readonly label: string; readonly description?: string }[];
   readonly multiSelect?: boolean;
+  /** 純呈現用：認得的 UI 照它畫，不認得的照一般提問畫。**答法兩邊一樣**，送回的都是選項標籤。 */
+  readonly intent?: PlanReviewIntent;
+}
+
+/**
+ * 這一題**就是**一次計劃審核。照 dsh 的 `AskUserQuestionIntent`。
+ *
+ * `approve` 是同意那個選項的**標籤**，其餘選項都是不同意——用名字不用位置。`callId` 是參數裡
+ * 裝著這份計劃的那顆工具呼叫，歷史重播時計劃卡從那顆呼叫的參數畫。
+ */
+export interface PlanReviewIntent {
+  readonly kind: 'plan-review';
+  readonly approve: string;
+  readonly callId?: string;
 }
 
 interface PendingCommon {

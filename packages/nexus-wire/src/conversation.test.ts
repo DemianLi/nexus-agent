@@ -558,6 +558,27 @@ describe('判別式', () => {
     expect(state.status).toBe('awaiting-input');
   });
 
+  it('計劃審核那一題（#652）：`detail` 與 `intent` 原樣帶到卡上', () => {
+    seq = 0;
+    const review = {
+      id: 'plan-review',
+      header: '計劃審核',
+      question: '同意這份計劃並離開計劃模式？',
+      detail: '# 計劃\n\n先看再改。',
+      options: [{ label: '同意' }, { label: '繼續規劃' }],
+      intent: { kind: 'plan-review', approve: '同意', callId: 'call-1' },
+    } as const;
+    const state = reduceAll(emptyConversation(), [
+      frame('input.requested', ['tools:call-1'], {
+        interrupt_id: 'q-plan',
+        payload: { kind: 'question', questions: [review] },
+      }),
+    ]);
+    expect(state.pendings).toEqual([
+      { kind: 'question', interruptId: 'q-plan', namespace: ['tools:call-1'], questions: [review] },
+    ]);
+  });
+
   it('**認不得的 `kind` 明著壞掉，不會靜靜變成一張核准卡**', () => {
     // 這是這一刀最容易寫錯的地方：寫成 `kind === 'question' ? 問答 : 核准` 的兩支三元式，
     // 第三種中斷會長出 `approve`／`reject` 兩顆按鈕，而對面等的是別的東西。**誤放行不會

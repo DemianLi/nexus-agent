@@ -29,7 +29,7 @@ import type { StructuredTool } from '@langchain/core/tools';
 import type { AnyBackendProtocol, SubAgent } from 'deepagents';
 import type { ZodType } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
-import type { PreToolListener } from './approval.js';
+import type { ApprovalChannel, PreToolListener } from './approval.js';
 import { normalizeCommandDefinition } from './commands.js';
 import type { CommandDefinition, CommandDescriptor } from './commands.js';
 import { AnonymousEntries, CapabilitySet, NamedEntries } from './entries.js';
@@ -268,6 +268,13 @@ export interface NexusServices {
    * （基座無條件建的那顆要靠同名取代才消得掉）。分野見 {@link DisabledEntryView}。
    */
   summarization: SummarizationSettings;
+  /**
+   * 這次組裝有沒有人可以回答。名字見 {@link ./approval.ts | CHANNEL_SERVICE}。
+   *
+   * **沒人提供時消費者退到 `{ kind: 'human' }`**（軟相依）：那是給測試與「我知道我在幹嘛」的
+   * 組裝點用的；產品路徑由組裝點明著算一次提供出來。
+   */
+  channel: ApprovalChannel;
 }
 
 /** 已經宣告過型別的服務名。空表時是 `never`，那時只有寬的多載可用。 */

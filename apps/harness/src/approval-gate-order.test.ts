@@ -13,22 +13,21 @@
  * `registry.ts:248-256` 兩處都寫著）。於是一位排在前面、回 `{ kind: 'allow' }` 而不呼叫
  * `next()` 的 gate，會把排在它後面的每一位整條吃掉。
  *
- * **今天不是缺陷**：預設組裝裡只有一位 gate（下面第一層就是在釘這件事），而它從不回
- * `allow`。但那是**組裝的巧合**，不是機制擋住的。
+ * **今天不是缺陷**：出貨清單裡一位 gate 都沒有（下面第一層就是在釘這件事），`cli.ts` 另外掛的
+ * submit-record 與沙箱升級那兩位從不回 `allow`。但那是**組裝的巧合**，不是機制擋住的。
  *
- * ## 結局是「計劃被批准了」，不是「核准被跳過」
+ * ## 結局是「紀錄寫出去了」，不是「核准被跳過」
  *
- * 被吃掉的那位是 plan-mode 的 `exit_plan_mode` 閘門
- * （`packages/nexus-plugin-plan-mode/src/index.ts:514`）。它被短路之後，工具**真的跑完**，
- * 而 `createExitPlanModeTool()` 往會話日誌寫一顆 `plan/mode { active: false }`——
- * 所以模式關掉、模型從下一步起可以動手，**而沒有任何人看過那份計劃**。
+ * 被吃掉的那位是 submit-record 的 `submit_record` 閘門（`packages/nexus-plugin-submit-record/src/index.ts`
+ * 的 `approvals.gate`）。它被短路之後，工具**真的跑完**，那一列真的寫進工作區的檔案——**而沒有任何人
+ * 看過它**。畫面上完全正常：沒有例外、沒有拒絕訊息、沒有中斷。這就是為什麼第二層量的是檔案最後在不在
+ * （`written`），不是「閘門有沒有被呼叫」。
  *
- * plan-mode 檔頭那句「人批准計劃與人批准這次工具呼叫是同一件事，所以不另建評審通道」
- * 被整條拆掉，**而畫面上完全正常**：沒有例外、沒有拒絕訊息、沒有中斷。這就是為什麼第二層
- * 量的是模式最後是開是關（`planModeActive`，讀自日誌上最後一顆 `plan/mode`），不是「閘門有沒有
- * 被呼叫」。
+ * **以前被吃掉的是 plan-mode 的 `exit_plan_mode` 閘門**，量的是計劃模式最後是開是關。
+ * [#652](https://github.com/DemianLi/nexus-agent/issues/652) 照 dsh 把交出計劃改走提問通道，plan-mode
+ * 不再掛閘門，這裡換成下一位真的會 `ask` 的閘門。危險本身沒變。
  *
- * ## 順序由 plugin 載入順序決定，plan-mode 自己管不著
+ * ## 順序由 plugin 載入順序決定，被排到後面的那位管不著
  *
  * `approvals` 這個註冊點**只有 `append`**（`packages/nexus-core/src/registry.ts:787`），
  * 沒有 `middleware.use({ prepend })` 或 `permissions` 那種槓桿。想排到前面的人只要在
@@ -49,9 +48,10 @@
  * ## 更正 #198 的一句話
  *
  * #198 的答案裡寫著：「寬鬆 gate 在前時，`interrupt` 必須還在、`planModeActive` 必須還是
- * `true`」。**那句今天跑會紅**——下面第二層量到的就是 `interrupt=false planModeActive=false`。
+ * `true`」。**那句當時跑會紅**——第二層當時量到的是 `interrupt=false planModeActive=false`。
  * 它是「**建了那一層之後**」的驗收句，而 #198 判的正是不建。正確的說法是本檔第二層那三行：
  * **釘住今天的實際值**。這是 #190 的第七次自我更正，對象是上一張卡的**答案**，不是它的判決。
+ * （受害者換成 submit_record 之後，同一句對應的是 `written=true`。）
  *
  * ## 射程：只到出貨清單
  *
@@ -60,17 +60,17 @@
  * 管不住，而且假裝管得住比不管更糟。**不要把這條絆索讀成「所有組裝都覆蓋到了」。**
  */
 
+import { access, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { MemorySaver } from '@langchain/langgraph';
-import { formatOrigin, loadPlugins, SessionRegistry } from '@nexus/core';
+import { createHostServicesPlugin, formatOrigin, loadPlugins } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
-import {
-  EXIT_PLAN_MODE_TOOL_NAME,
-  createPlanModePlugin,
-  recordedPlanMode,
-} from '@nexus/plugin-plan-mode';
-import { describe, expect, it } from 'vitest';
+import { createSubmitRecordPlugin, SUBMIT_RECORD_TOOL_NAME } from '@nexus/plugin-submit-record';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
+import { ContainedFilesystemBackend } from './contained-backend.js';
 
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -93,8 +93,8 @@ const shipped = await shippedPlugins();
  *
  * ## 為什麼是有序陣列，不是名字的 `Set`
  *
- * `new Set(['plan-mode', 'plan-mode']).size` 是 1——**一位與 plan-mode 同名的第二位 gate
- * 會從名字集合裡整個消失**。`formatOrigin` 是 `${id} (${name})`（`plugin.ts:104`），而 `id`
+ * `new Set(['plan-mode', 'plan-mode']).size` 是 1——**一位與既有那位同名的第二位 gate
+ * 會從名字集合裡整個消失**（這一格寫的時候清單裡是 plan-mode）。`formatOrigin` 是 `${id} (${name})`（`plugin.ts:104`），而 `id`
  * 是逐個掛載唯一的，所以陣列版連同名的那種也擋得住；順帶還釘住了**順序**，而順序正是這張
  * 卡的整個主題。
  *
@@ -102,13 +102,19 @@ const shipped = await shippedPlugins();
  *
  * 以前這裡寫的是 `plan-mode#0`——`DEFAULT_PLUGINS` 的條目沒寫 id，由 `resolveEntries` 補
  * `<name>#<序號>`。**[#454](https://github.com/DemianLi/nexus-agent/issues/454) 之後清單從
- * `apps/harness/cordis.yml` 來，每一列都寫著看得懂的 id**，所以這裡是 `plan-mode`。
+ * `apps/harness/cordis.yml` 來，每一列都寫著看得懂的 id**，所以後來是 `plan-mode (plan-mode)`。
+ *
+ * ## 現在是空的
+ *
+ * [#652](https://github.com/DemianLi/nexus-agent/issues/652) 之後 plan-mode 不再掛閘門，出貨清單裡一位都沒有。
+ * submit-record 與沙箱升級的閘門是 `cli.ts` 在清單之外掛的，不在這一層的射程裡（見檔頭「射程」）。
+ * **空清單照樣是身分清單**：有人往出貨清單加一位，這裡就響。
  *
  * 這一格因此比以前更穩：自動編號的 `<name>#<序號>` 本來就不承諾跨清單穩定，而設定檔裡的
  * id 是人指定的，**它會變的唯一情形是有人真的去改那一行**——那本來就是該響的事。id 是
  * 外部 patch 指得著這一列的唯一辦法，改它會靜靜弄壞別人的 patch。
  */
-const EXPECTED_APPROVAL_GATES: readonly string[] = ['plan-mode (plan-mode)'];
+const EXPECTED_APPROVAL_GATES: readonly string[] = [];
 
 /**
  * 這條絆索響的時候，讀的人該往哪裡去。
@@ -119,8 +125,8 @@ const EXPECTED_APPROVAL_GATES: readonly string[] = ['plan-mode (plan-mode)'];
 const NEW_GATE_GUIDANCE =
   '預設組裝的核准 gate 換人了。這不是把期望值改一改就好的事——\n' +
   '要回答的問題是：**這位新的 gate 會不會回 `{ kind: "allow" }` 而不呼叫 `next()`？**\n' +
-  '會的話，排在它後面的每一位都被整條吃掉，包括 plan-mode 的 `exit_plan_mode` 閘門，\n' +
-  '結局是「計劃被批准了」而不是「核准被跳過」——本檔第二層那三行實測就是那個結局。\n' +
+  '會的話，排在它後面的每一位都被整條吃掉，包括 submit-record 的 `submit_record` 閘門，\n' +
+  '結局是「紀錄寫出去了」而不是「核准被跳過」——本檔第二層那三行實測就是那個結局。\n' +
   '三個出路：(a) 讓它一定呼叫 `next()`；(b) 真的建 dsh 那種只能拒絕的 guard 層\n' +
   '（#198 判過不建，要推翻請開新卡）；(c) 明著接受並把它加進上面那份清單。\n' +
   '`approvals` 只有 `append`（registry.ts:787），排在前面的人贏，被排到後面的沒有辦法。';
@@ -136,10 +142,10 @@ describe('預設組裝裡的核准 gate', () => {
    *
    * 這一條**同時擋得住規矩的第二位**（有呼叫 `next()` 的那種）。那是刻意的：絆索的工作是
    * 「有人來了，回答上面那個問題」，不是「偵測強制允許」。只擋沒禮貌的那種，順序這個危險
-   * 就整個漏掉了——而全樹唯一的第二位 gate（`apps/harness/src/approval.fixture.ts:29`）
-   * 正是規矩的那種，這個形狀早就存在。
+   * 就整個漏掉了——而測試夾具那位 gate（`apps/harness/src/approval.fixture.ts`）正是規矩的那種，
+   * 這個形狀早就存在。
    */
-  it('恰好是 plan-mode 一位，依 waterfall 順序', async () => {
+  it('出貨清單裡一位都沒有', async () => {
     const { registry, dispose } = await loadPlugins([...shipped]);
     try {
       const gates = registry.approvals.listeners().map((entry) => formatOrigin(entry.origin));
@@ -172,49 +178,67 @@ function permissiveGatePlugin(): PluginEntry {
   };
 }
 
-/** 一份會呼叫 `exit_plan_mode`、獲准之後再收工的腳本。 */
-function planScript(): ScriptedChatModel {
+/** 要寫出去的那一列。 */
+const CSV_PATH = '/visitors.csv';
+const RECORD = { 姓名: '阿明', 日期: '週二' };
+
+/** 一份會呼叫 `submit_record`、寫完之後再收工的腳本。 */
+function submitScript(): ScriptedChatModel {
   return new ScriptedChatModel({
     turns: [
       {
-        content: '我先規劃。',
-        toolCalls: [{ name: EXIT_PLAN_MODE_TOOL_NAME, args: { plan: '# 計劃\n\n先看再改。' } }],
+        content: '我登記一下。',
+        toolCalls: [
+          { name: SUBMIT_RECORD_TOOL_NAME, args: { file_path: CSV_PATH, record: RECORD } },
+        ],
       },
-      { content: '開始動手。' },
+      { content: '登記好了。' },
     ],
   });
 }
 
+const roots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
 /**
  * 跑一輪真組裝，回傳這兩個量湊成的一行。
  *
- * **兩個量一起回、不分開斷言**，是因為它們講的是同一件事的兩半：停下來問了沒、以及計劃
- * 模式最後是開是關。分開斷言時失敗訊息只講得出其中一半。
+ * **兩個量一起回、不分開斷言**，是因為它們講的是同一件事的兩半：停下來問了沒、以及那一列最後
+ * 寫出去沒。分開斷言時失敗訊息只講得出其中一半。
  *
- * 每一組**自己建一份 `ScriptedChatModel`**：三組吃掉的輪次不一樣（control 停在中斷，第二
- * 輪根本沒被用到；permissive-first 把工具跑完，第二輪被吃掉），共用一份會讓後跑的那組拿到
- * 一個已經被吃掉輪次的腳本。
+ * 每一組**自己建一份 `ScriptedChatModel` 與一個工作區**：三組吃掉的輪次不一樣（control 停在中斷，
+ * 第二輪根本沒被用到；permissive-first 把工具跑完，第二輪被吃掉），共用一份會讓後跑的那組拿到
+ * 一個已經被吃掉輪次的腳本；共用工作區則會讓前一組寫的檔案被後一組量到。
  *
- * **模式讀自日誌，所以要接會話日誌。** 模式住在 `plan/mode` 上（#251 的第二刀），沒接的話
- * `exit_plan_mode` 寫不下來——那會量成「模式還開著」，把寬鬆 gate 那一行的危險整個藏起來。
- * 一顆 `plan/mode` 都沒有時，模式是三組共用的初值 `startActive: true`。
+ * **backend 要經 `createHostServicesPlugin` 交給 submit-record**，同 `cli.ts`：沒給的話它退到基座那個
+ * 記憶體裡的預設，「寫出去沒」就量不到磁碟上。
  */
-async function measure(plugins: readonly PluginEntry[], threadId: string): Promise<string> {
-  const { agent, attachSession, dispose } = await createNexusAgent({
-    model: planScript(),
+async function measure(
+  plugins: (backend: ContainedFilesystemBackend) => readonly PluginEntry[],
+  threadId: string,
+): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'nexus-gate-order-'));
+  roots.push(root);
+  const backend = new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' });
+  const { agent, dispose } = await createNexusAgent({
+    model: submitScript(),
+    backend,
     checkpointer: new MemorySaver(),
-    plugins: [...plugins],
+    plugins: [...plugins(backend)],
   });
-  const sessions = new SessionRegistry(threadId);
-  const detach = attachSession(sessions);
   try {
-    const result = await agent.invoke(toAgentInvocation('幫我改一下。'), {
+    const result = await agent.invoke(toAgentInvocation('登記一位訪客。'), {
       configurable: { thread_id: threadId },
     });
-    const active = recordedPlanMode(sessions.root.events) ?? true;
-    return `interrupt=${result.__interrupt__ !== undefined} planModeActive=${String(active)}`;
+    const written = await access(join(root, CSV_PATH.slice(1))).then(
+      () => true,
+      () => false,
+    );
+    return `interrupt=${result.__interrupt__ !== undefined} written=${String(written)}`;
   } finally {
-    detach();
     await dispose();
   }
 }
@@ -233,33 +257,44 @@ async function measure(plugins: readonly PluginEntry[], threadId: string): Promi
  *
  * ## 為什麼要有第三行
  *
- * `plan-first` 是**對調**，不是刪掉。刪掉寬鬆那位只證明「它不能省」；**對調才證明是順序在
- * 決定**——同一組 plugin、同一份腳本，只換排列，結局就從「沒人看過計劃」變回「停下來等人」。
+ * `submit-first` 是**對調**，不是刪掉。刪掉寬鬆那位只證明「它不能省」；**對調才證明是順序在
+ * 決定**——同一組 plugin、同一份腳本，只換排列，結局就從「沒人看過就寫出去」變回「停下來等人」。
  */
 const ROWS = [
   {
-    label: 'control：只有 plan-mode',
+    label: 'control：只有 submit-record',
     threadId: 'gate-order-control',
-    plugins: () => [createPlanModePlugin({ startActive: true })],
-    outcome: 'interrupt=true planModeActive=true',
+    plugins: (backend: ContainedFilesystemBackend) => [
+      createHostServicesPlugin({ backend }),
+      createSubmitRecordPlugin(),
+    ],
+    outcome: 'interrupt=true written=false',
   },
   {
-    label: 'permissive-first：寬鬆 gate 排在 plan-mode 之前',
+    label: 'permissive-first：寬鬆 gate 排在 submit-record 之前',
     threadId: 'gate-order-permissive-first',
-    plugins: () => [permissiveGatePlugin(), createPlanModePlugin({ startActive: true })],
-    // **刻意的**：計劃被批准了，而沒有任何人看過它。見上面那段 JSDoc。
-    outcome: 'interrupt=false planModeActive=false',
+    plugins: (backend: ContainedFilesystemBackend) => [
+      createHostServicesPlugin({ backend }),
+      permissiveGatePlugin(),
+      createSubmitRecordPlugin(),
+    ],
+    // **刻意的**：那一列寫出去了，而沒有任何人看過它。見上面那段 JSDoc。
+    outcome: 'interrupt=false written=true',
   },
   {
-    label: 'plan-first：同一組人，只把順序對調',
-    threadId: 'gate-order-plan-first',
-    plugins: () => [createPlanModePlugin({ startActive: true }), permissiveGatePlugin()],
-    outcome: 'interrupt=true planModeActive=true',
+    label: 'submit-first：同一組人，只把順序對調',
+    threadId: 'gate-order-submit-first',
+    plugins: (backend: ContainedFilesystemBackend) => [
+      createHostServicesPlugin({ backend }),
+      createSubmitRecordPlugin(),
+      permissiveGatePlugin(),
+    ],
+    outcome: 'interrupt=true written=false',
   },
 ] as const;
 
-describe('核准 waterfall 的順序決定計劃有沒有被人看過', () => {
+describe('核准 waterfall 的順序決定紀錄有沒有被人看過就寫出去', () => {
   it.each(ROWS.map((row) => [row.label, row] as const))('%s', async (_label, row) => {
-    expect(await measure(row.plugins(), row.threadId)).toBe(row.outcome);
+    expect(await measure(row.plugins, row.threadId)).toBe(row.outcome);
   });
 });
