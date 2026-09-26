@@ -10,6 +10,12 @@
  * upstream traffic remains on HTTP.」
  */
 
+import type {
+  FileReferenceCandidate,
+  FileReferenceListResponse,
+  FileReferenceListResult,
+} from './file-references.js';
+import { fileReferencesPath } from './file-references.js';
 import { decodeSseStream } from './sse.js';
 import type {
   Command,
@@ -192,6 +198,45 @@ export interface WireClient {
    * 兩邊都沒有。這條 thread 會為它建起來（同開下行），跟列表的冷讀不同。
    */
   threadHistory(threadId: string, query?: ThreadHistoryQuery): Promise<ThreadHistoryOutcome>;
+  /**
+   * `@` 後面那一段的候選（[#651](https://github.com/DemianLi/nexus-agent/issues/651)）。契約見 `fileReferencesPath`。
+   *
+   * @param query - `@` 或 `@"` 後面那一段，原文原樣；開頭的 `/` 給不給都一樣。
+   * @param signal - 中止這一次。**每打一個字就該取消上一次**：伺服器那側一個呼叫者取消不會殺掉共用的走訪。
+   */
+  fileReferences(
+    threadId: string,
+    query: string,
+    signal?: AbortSignal,
+  ): Promise<FileReferenceListOutcome>;
+}
+
+/** `GET /threads/:id/file-references` 的結果。`rejected` 是這條 thread 起不來、或索引建不起來。 */
+export type FileReferenceListOutcome =
+  | { readonly kind: 'ok'; readonly result: FileReferenceListResult }
+  | { readonly kind: 'rejected'; readonly message: string };
+
+/** 線上回來的候選得先驗過，理由同 {@link readDescriptors}。 */
+function readFileReferences(result: unknown): FileReferenceListResult {
+  const { available, candidates } = result as { available?: unknown; candidates?: unknown };
+  if (available === false) return { available: false };
+  if (available !== true || !Array.isArray(candidates)) {
+    throw new Error('GET /threads/:id/file-references 回了不認得的結果');
+  }
+  return {
+    available: true,
+    candidates: candidates.map((entry: unknown): FileReferenceCandidate => {
+      const row = entry as Record<string, unknown> | null;
+      if (
+        typeof row?.path !== 'string' ||
+        !row.path.startsWith('/') ||
+        (row.kind !== 'file' && row.kind !== 'directory')
+      ) {
+        throw new Error('GET /threads/:id/file-references 回了不認得的候選');
+      }
+      return Object.freeze({ path: row.path, kind: row.kind });
+    }),
+  };
 }
 
 /** `GET /threads/:id/history` 的結果。`rejected` 是這條 thread 起不來、或參數不對。 */
@@ -484,6 +529,23 @@ export function createWireClient(options: WireClientOptions): WireClient {
       return body.type === 'error'
         ? { kind: 'rejected', message: body.message }
         : { kind: 'ok', result: readHistory(body.result) };
+    },
+
+    async fileReferences(threadId, query, signal) {
+      const search = new URLSearchParams({ query }).toString();
+      const response = await doFetch(`${base}${fileReferencesPath(threadId)}?${search}`, {
+        method: 'GET',
+        // 同 `listThreads`，見 `THREADS_PATH`。
+        headers: { 'content-type': 'application/json' },
+        signal,
+      });
+      if (!response.ok) {
+        throw new Error(`列檔被載體層擋下：${response.status} ${await response.text()}`);
+      }
+      const body = (await response.json()) as FileReferenceListResponse;
+      return body.type === 'error'
+        ? { kind: 'rejected', message: body.message }
+        : { kind: 'ok', result: readFileReferences(body.result) };
     },
   };
 }

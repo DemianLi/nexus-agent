@@ -188,3 +188,52 @@ describe('瀏覽器端的 client', () => {
     await expect(badDescriptor.client.slashList('t8')).rejects.toThrow('不認得的 descriptor');
   });
 });
+
+describe('列檔（#651）', () => {
+  it('GET 路徑掛在 thread 底下，query 原文帶上，帶 JSON header 與呼叫者的 signal', async () => {
+    const seen: { url: string; method?: string; type: string | null; signal?: AbortSignal }[] = [];
+    const client = createWireClient({
+      baseUrl: 'http://agent.test/',
+      fetch: async (input, init) => {
+        seen.push({
+          url: String(input),
+          method: init?.method,
+          type: new Headers(init?.headers).get('content-type'),
+          signal: init?.signal ?? undefined,
+        });
+        return Response.json(
+          successResponse(0, {
+            available: true,
+            candidates: [{ path: '/a b/c.ts', kind: 'file' }],
+          }),
+        );
+      },
+    });
+    const controller = new AbortController();
+    const outcome = await client.fileReferences('t 1', '/a b/c', controller.signal);
+    expect(seen).toEqual([
+      {
+        url: 'http://agent.test/threads/t%201/file-references?query=%2Fa+b%2Fc',
+        method: 'GET',
+        type: 'application/json',
+        signal: controller.signal,
+      },
+    ]);
+    expect(outcome).toEqual({
+      kind: 'ok',
+      result: { available: true, candidates: [{ path: '/a b/c.ts', kind: 'file' }] },
+    });
+  });
+
+  it('「不提供」與協定層的拒絕是兩種形狀', async () => {
+    const reply = (body: unknown) =>
+      createWireClient({ baseUrl: 'http://agent.test', fetch: async () => Response.json(body) });
+    expect(await reply(successResponse(0, { available: false })).fileReferences('t', '')).toEqual({
+      kind: 'ok',
+      result: { available: false },
+    });
+    expect(
+      await reply(errorResponse(null, 'unknown_error', '建不起來')).fileReferences('t', ''),
+    ).toEqual({ kind: 'rejected', message: '建不起來' });
+  });
+});
