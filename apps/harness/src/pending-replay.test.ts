@@ -233,6 +233,18 @@ describe('下行接上時補送還掛著的中斷', () => {
     }
   }, 20000);
 
+  it('thread 收掉之後接上的線什麼都不補，直接收線', async () => {
+    const run = await parkedPump('replay-closed');
+    try {
+      // 前提：收掉的那一刻還掛著——`close()` 不清 `#pending`。
+      expect(run.pump.pendings).toHaveLength(2);
+      run.pump.close();
+      expect(await replayed(run.pump, ALL)).toEqual([]);
+    } finally {
+      await run.close();
+    }
+  }, 20000);
+
   it('停止這一輪（收回）之後不再補', async () => {
     const run = await parkedPump('replay-withdrawn');
     try {
