@@ -367,6 +367,7 @@ describe('exit_plan_mode 的結局', () => {
     ['選繼續規劃、寫了意見', [PLAN_KEEP_PLANNING_LABEL], '先補測試', '先補測試'],
     ['選繼續規劃、沒寫意見', [PLAN_KEEP_PLANNING_LABEL], undefined, ''],
     ['選了同意但也寫了字', [PLAN_APPROVE_LABEL], '改成兩步', '改成兩步'],
+    ['同意與繼續規劃都選了', [PLAN_APPROVE_LABEL, PLAN_KEEP_PLANNING_LABEL], undefined, ''],
   ] as const)('%s → 拒絕、模式留著', async (_label, selected, custom, feedback) => {
     const { after, events, model } = await reviewPlan(`review-keep-${String(selected)}`, {
       answers: [

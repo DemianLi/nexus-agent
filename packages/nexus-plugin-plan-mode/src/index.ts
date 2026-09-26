@@ -625,6 +625,7 @@ export const planModePlugin: NexusPlugin<PlanModeConfig> = {
       attachedHere.push(session);
       sessionsHere.set(subject.log, session);
       return () => {
+        // 只是不留一格記憶體：收掉之後兩張表都找不到這份，命令與下一步都交不出它，行為上觀察不到。
         pendingExits.delete(session);
         sessionsHere.delete(subject.log);
         const at = attachedHere.indexOf(session);
