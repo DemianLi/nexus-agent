@@ -1,0 +1,161 @@
+{
+  "id": "2412.19723",
+  "title": "OS-Genesis: Automating GUI Agent Trajectory Construction via Reverse Task Synthesis",
+  "topic": "T4",
+  "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把 GUI 軌跡蒐集的順序倒過來：先用規則式遍歷在 Android 模擬器與瀏覽器裡逐一點擊介面元素、收集〈動作前畫面、動作、動作後畫面〉三元組，再讓 GPT-4o 從單步狀態轉移反推低階與高階指令、依高階指令執行出完整軌跡，最後用 1–5 分的軌跡獎勵模型（TRM）按分數加權取樣，拿來對開源 VLM 做 SFT。",
+  "problem": "GUI agent 要做端到端訓練，需要同時含高階指令、逐步低階指令、狀態（截圖＋a11ytree）與動作的完整軌跡。人工標註要人先想任務再逐步示範，成本高；現行模型合成法是 task-driven：先讓模型憑初始畫面想出高階任務再去執行，任務清單受限於模型的想像，多樣性低，而且預想的任務常與實際環境對不上（功能不存在、狀態不符），中間步驟一錯就產生不完整或前後不一致的軌跡。另一方面，既有做法用 labeler 做二元過濾、直接丟掉未完成軌跡，浪費了其中仍有價值的環境探索。這個瓶頸直接卡住開源 GUI agent 的訓練資料供給。",
+  "core_idea": "互動先於任務（interaction-driven）：先讓環境本身揭露它有哪些功能——無任務地遍歷可互動元素、記錄每一步的狀態轉移——再從「確實發生過」的單步轉移反推出必然可執行的低階指令，並聯想出涵蓋這一步的高階任務。任務因此錨定在環境真實存在的功能上，而不是模型憑空想像。品質控制則從二元丟棄改成分級評分，把分數當訓練取樣權重，讓部分完成的軌跡也能被利用。",
+  "method": {
+    "trajectory_format": "每條軌跡是四件套：(1) high-level instruction（整體目標）；(2) 逐步的 low-level instructions（每一步要做什麼的自然語言描述，訓練時扮演 thought）；(3) states：截圖＋a11ytree（a11ytree 過濾到只剩畫面上可見元素的位置／索引，減少冗餘文字）；(4) actions。資料格式對齊 AndroidWorld 與 WebArena 的評估格式，訓練後模型輸出 ReAct 風格（先 thought 再 action），逐步思考寫回 action history。",
+    "step1_interaction_driven_discovery": "環境：以 AndroidWorld 與 WebArena 的環境為基底建的 Android 模擬器與 Chrome 瀏覽器。動作集合 CLICK／TYPE／SCROLL。探索全程規則式遍歷互動元素，只有碰到輸入欄位時才呼叫 GPT-4o 產生符合上下文的輸入內容。產出大量〈s_pre, a, s_post〉三元組，s 是動作前後的截圖。論文未說明遍歷策略（BFS／DFS、深度、每個 app 的步數預算）與三元組總數。",
+    "step2_reverse_task_synthesis": {
+      "formal": "§3.2 寫成兩個映射：f_low：〈s_pre, a, s_post〉→ τ_low（原子、可執行的單步指令，例如「點下拉選單以顯示選項」）；f_high：τ_low → τ_high（把這一步放進一個更大的使用者意圖，例如「設定應用程式」）。標註模型 M 為 GPT-4o。",
+      "as_implemented_prompt": "附錄 C 與 Prompt 14（mobile）／15（web）實際上是一次 GPT-4o 呼叫同時產出三欄。輸入：動作類型（mobile 列 CLICK、SCROLL、TYPE、PRESS_BACK、LONG_PRESS 五種；TYPE 附輸入值、SCROLL 附方向）、前後截圖（CLICK 時在前截圖用紅框標出被互動元素）、app 名稱；web 版另注入 website_intro（網站簡介）與 task_examples（高階任務範例），mobile 版有 {examples} 範例欄位。要求只回傳 JSON 字典：Sub-Instruction（簡潔、可執行，須含畫面上的檔名、時間等具體細節）、Analysis（逐步推想此轉移之後可能的後續操作）、High-Level-Instruction（可在當前介面完成的任務，須含所有關鍵細節）。",
+      "task_types": "mobile 分 Task-Oriented（完成一串操作達成目標）與 Question-Oriented（操作後回答特定問題）；web 分 Information seeking（要有明確答案，避免「摘要某商品資訊」這類摘要題）、Site navigation、Content modification，並要求任務要有創意但必須能在當前網站完成、不能與網站無關。"
+    },
+    "step3_trajectory_execution": "把合成的高階指令集合 T = {τ_1..τ_N} 交給 GPT-4o 在環境中執行，得到軌跡集合 G = {g_1..g_N}，每步記錄 low-level instruction、action 與 state。論文未說明執行是從該三元組的 s_pre 起跑還是從 app／網站初始畫面起跑，也沒有報高階任務到可用軌跡的轉換率。",
+    "step4_trajectory_reward_model": "TRM 以 GPT-4o 為骨幹（Prompt 21，mobile 與 web 共用）。輸入：high-level instruction、整條 action history（每步的 reasoning 與實際動作）、最後三張截圖（不足三張就全給）。評分面向兩個：Trajectory Coherence（步驟是否邏輯地朝目標前進、描述是否具體、有無冗餘動作）與 Task Completion（是否達成、必要互動是否完整、錯誤是否妥善處理）。1–5 分定義：5 完美完成且無冗餘；4 大致完成但因指令歧義或挑戰而不完美、或過程有低效；3 部分完成，或以迴圈／錯誤收尾；2 只執行少數動作、早期即偏離或嚴重低效；1 完全失敗、立即死鎖、重複迴圈或任務根本無法存取。附註：任務複雜但有有價值的嘗試時可上調分數，沒有實質貢獻則不加分。輸出兩行：Reason 與 Score。附錄 F.1 另以 Qwen2.5-VL-72B 當 TRM 骨幹，在 200 條軌跡上與 GPT-4o 評分的 Spearman 為 web 0.788、mobile 0.729（Table 5）。",
+    "step5_reward_based_sampling": "Algorithm 1：對每條軌跡 g_i 抽出低階指令序列 L_i 與最後三個狀態 S_last，R_i = RM(L_i, S_last)；每個訓練 step 以 P(g_i) = R_i / Σ_k R_k 抽樣一條軌跡。不丟棄任何軌跡，只做按分數比例的軟加權。",
+    "step6_training_objectives": "VLM 全參數 SFT，兩個目標同時使用：Planning Training L1 = −Σ log[ p(ℓ | s, h, c) · p(a | s, h, c, ℓ) ]：給截圖＋a11ytree s、高階指令 h、歷史 c，先生成低階指令 ℓ 再生成動作 a；Action Training L2 = −Σ log p(a | s, c, ℓ)：給低階指令直接預測動作（內文敘述說條件含 h_i，但式 (2) 與 Android 的 action-training prompt 都沒有高階指令）。訓練 prompt 見 Figure 12（Android）與 Figure 13（Web，含完整動作清單與「In summary, the next action I will perform is」輸出格式）。",
+    "action_space": "mobile（Table 3）：click、long_press、type、scroll、navigate_home、navigate_back、open_app、wait，AndroidWorld 評估另加 terminate、keyboard_enter。web（Table 4）：click [id]、type [id] [content]、hover [id]、press [key_comb]、scroll [down|up]、new_tab、tab_focus [tab_index]、close_tab、goto [url]、go_back、go_forward，prompt 另有 stop [answer]。",
+    "hyperparameters_and_setup": "合成、執行與 TRM 皆用 GPT-4o。受訓 backbone：InternVL2-4B／8B（max_dynamic_patch=24，每張圖最多切 24 片 448×448 tile，外加一張全圖縮圖）與 Qwen2-VL-7B-Instruct（訓練與推論都設 image_resolution=1024）。8×A100 80GB 叢集全參數微調。主實驗 OS-Genesis 與 Task-Driven 各 1K 條軌跡、Self-Instruct baseline 1.5K 條，論文稱平均軌跡長 6.4 步。AndroidControl 評估時額外給 a11ytree 與歷史動作，座標落在 ground truth 14% 螢幕寬以內算對。學習率、epoch、batch size、warmup 論文都沒給。",
+    "internal_inconsistencies": [
+      "§3.2 描述兩步映射（f_low 再 f_high），實際 prompt 是一次呼叫同時輸出三欄；重做時應照 prompt。",
+      "§3.1 探索動作只列 CLICK／TYPE／SCROLL，mobile 合成 prompt 卻列五種（含 PRESS_BACK、LONG_PRESS）。",
+      "Action Training 的內文說條件含高階指令 h_i，式 (2) 與 Android prompt 都沒有。",
+      "§4.2 說平均軌跡長 6.4 步，附錄 G 報 OS-Genesis mobile 5.60 步、web 4.46 步，兩者對不上。"
+    ]
+  },
+  "assumptions": [
+    "單一步的狀態轉移（前後截圖＋動作＋紅框）足以讓 GPT-4o 推斷出有意義、且在當前環境可執行的高階任務。",
+    "無任務的規則式遍歷能覆蓋環境中足夠多、足夠深的功能；深層功能（需多步才到得了的頁面）也會被遍歷到。",
+    "執行器 GPT-4o 能把多數反推出的高階任務落實成至少部分正確的軌跡。",
+    "TRM 只看執行器自己寫的低階指令敘述加最後三張截圖，就能判斷整條軌跡的完成度與一致性，也就是中段的錯誤會反映在敘述或最終畫面上。",
+    "部分完成的軌跡仍有訓練價值，按分數比例取樣即可利用它們而不會把錯誤行為教給模型。",
+    "探索環境與評估環境同源（在 AndroidWorld 與 WebArena 的 app／網站上探索），合成資料的價值在同源環境上量得出來。",
+    "可取得 GPT-4o 這類專有 VLM 來做探索中的輸入、任務反推、執行與評分。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "AndroidWorld（線上 Pixel 6 模擬器，116 題／20 個 app，因 app 不可用實際跑 112 題，以系統狀態檢查判成功）",
+      "AndroidControl（833 個 app，分 High：只給高階指令；Low：另給低階指令，離線逐步比對 ground truth 動作；合成時只碰過其中 20 個 app，作者當 OOD 測試）",
+      "WebArena（812 題、241 個 template，Shopping／CMS／Reddit／Gitlab／Maps；成本考量每個 template 只測一次，共 241 次）"
+    ],
+    "metrics": [
+      "SR（任務成功率；AndroidWorld 看系統狀態、WebArena 看功能正確性、AndroidControl 看逐步動作是否與 ground truth 相符）",
+      "Type（AndroidControl 上預測動作類型與 ground truth 的 exact match）",
+      "指令多樣性與軌跡多樣性：Sentence-BERT 嵌入的平均 cosine 距離（§5.1、附錄 G）",
+      "TRM 與人工／與另一個 VLM 評分的 Spearman 相關（附錄 F）"
+    ],
+    "baselines": [
+      "Zero-Shot（CoT prompting；AndroidWorld 用 M3A agent 設定）",
+      "GPT-4o Zero-Shot（M3A），作為閉源上界參考",
+      "Task-Driven：GPT-4o 看 app／網站初始畫面與任務範例生成高階指令再去探索，1K 條軌跡（作者自建，參照 AutoWebGLM、OpenWebVoyager）",
+      "Task-Driven w. Self-Instruct：每輪隨機抽 3 條 task-driven 指令當 in-context 範例擴增任務，連同前者共 1.5K 條",
+      "TRM 消融：不用 RM（全部等權）、labeler（只保留完整軌跡）",
+      "人類資料對照：500 條 AndroidControl 人寫高階指令＋GPT-4o 執行；1K 條 AndroidControl 群眾標註軌跡"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "AndroidWorld 上，OS-Genesis 資料訓練的三個 backbone 成功率相對 Task-Driven 為 2.8–3.8 倍、相對 Self-Instruct 為 1.8–3.2 倍，縮小與 GPT-4o M3A 的差距；引言的「近乎翻倍」（9.82→17.41，約 1.77 倍）比的是 Self-Instruct 而非 Task-Driven。",
+      "numbers": "SR（Zero-Shot／Task-Driven／Self-Instruct／OS-Genesis）：InternVL2-4B 0.00／4.02／7.14／15.18；InternVL2-8B 2.23／4.46／5.36／16.96；Qwen2-VL-7B 0.89／6.25／9.82／17.41；GPT-4o M3A 23.70。",
+      "section": "§1、§4.3、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "AndroidControl（833 個 app 中只有 20 個在合成時碰過）上，OS-Genesis 在 High 與 Low 設定都高於兩個 baseline，Qwen2-VL-7B 與 InternVL2-8B 在 High 設定的優勢較大（InternVL2-4B 則是 Low 略大）；Low 設定三個 backbone 都超過 GPT-4o，但 task-driven baseline 本身也已接近或超過 GPT-4o。",
+      "numbers": "High SR（ZS／TD／SI／OSG）：Qwen2-VL-7B 28.92／38.84／39.36／44.54；InternVL2-8B 17.89／23.79／23.43／35.77；InternVL2-4B 16.62／27.37／24.95／33.39。Low SR：Qwen2-VL-7B 46.37／71.33／71.51／74.17；InternVL2-8B 47.69／64.43／64.69／71.37；InternVL2-4B 33.69／66.48／66.70／73.38。GPT-4o High SR 53.04、Low SR 69.59。微調後 Low Type 都在 88.7–91.3 之間。",
+      "section": "§4.3、Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "WebArena 上 OS-Genesis 的總成功率在三個 backbone 都最高；InternVL2 零樣本連輸出格式都做不到（0.00），Qwen2-VL-7B 用 task-driven 資料微調反而低於零樣本，用 OS-Genesis 資料才有提升。",
+      "numbers": "Overall SR（ZS／TD／SI／OSG）：InternVL2-4B 0.00／4.98／5.81／7.88；InternVL2-8B 0.00／4.56／7.05／9.96；Qwen2-VL-7B 7.47／7.05／5.39／10.79；GPT-4o 16.25。分站並非全勝，例如 Qwen2-VL-7B Shopping：OSG 7.14 < TD 8.93。",
+      "section": "§4.3、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "TRM 分級加權取樣在高階能力（AndroidControl-High、AndroidWorld）上優於不用 RM 與 labeler 過濾；labeler 在高階任務只有小幅增益、卻犧牲低階任務表現；低階任務上三種策略都有穩定提升。",
+      "numbers": "僅以 Figure 5 相對長條呈現，內文未給具體數字。",
+      "section": "§5.2、Figure 5",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "在 AndroidWorld 上擴大 OS-Genesis 軌跡數量，表現先隨資料量上升，再於較大規模時飽和；作者歸因於 VLM 容量與探索空間／GPT-4o 把高階指令落實成軌跡的能力。",
+      "numbers": "僅以 Figure 6 呈現，內文未給資料量切點與數字。",
+      "section": "§5.3、Figure 6",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "與人類資料比：以 500 條 AndroidControl 人寫高階指令交給 GPT-4o 執行得到的軌跡，訓練效果不如等量的 OS-Genesis 指令；與 1K 條群眾標註的人類軌跡相比，OS-Genesis 以平均成功率計保留了八成以上，差距在高階任務上縮小最多。",
+      "numbers": "OS-Genesis 相對人類軌跡的平均 SR 保留率 > 80%；其餘僅見 Figure 7、8。",
+      "section": "§5.4、Figure 7–8",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "TRM（GPT-4o）的 1–5 分與人工依同一套準則的評分高度相關。",
+      "numbers": "100 條 web 與 mobile 軌跡：Spearman mobile 0.813（p=9.23e-24）、web 0.798（p=2.54e-23）。",
+      "section": "附錄 F.2、Table 6",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "OS-Genesis 生成的指令較長、較具體，長度接近人寫指令；Sentence-BERT 平均 cosine 距離顯示其指令多樣性與軌跡多樣性都是合成方法中最高；人類資料指令多樣但軌跡多樣性低。",
+      "numbers": "mobile 平均字數：TD 9.64、SI 9.84、OSG 18.01、人類 18.71；web：TD 11.79、SI 8.45、OSG 19.68。平均步數 mobile：TD 5.64、SI 3.43、OSG 5.60、人類 5.31；web：TD 8.74、SI 7.37、OSG 4.46。",
+      "section": "§5.1、Figure 4、附錄 G",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "探索、執行與獎勵建模都依賴 GPT-4o；作者認為現有開源 VLM 無法跟隨指令、主動在線上環境完成探索，所以沒有換成開源模型。",
+    "訓練與評估同時使用文字（a11ytree）與視覺表示；只用單一模態的做法留待未來。",
+    "軌跡由模型建構，成功建構出的軌跡數量受執行模型能力限制。",
+    "資料量放大後效能飽和，受限於 VLM 本身容量、探索空間大小與 GPT-4o 落實高階指令的能力（§5.3）。",
+    "與人類標註軌跡仍有差距，平均成功率保留率約八成以上而非追平（§5.4）。"
+  ],
+  "limitations_observed": [
+    "評估範圍被高估：探索環境就建在 AndroidWorld 與 WebArena 的 app／網站上，這兩個 benchmark 的增益屬於同環境（in-environment）增益，反推出的任務也可能與 benchmark 的任務模板重疊，論文沒有做去重檢查。真正 OOD 的只有 AndroidControl（833 個 app 只碰過 20 個），而那裡 High SR 的增益（Qwen2-VL-7B 44.54 對 TD 38.84）明顯小於 AndroidWorld 的倍數級差距。",
+    "樣本小、無變異數：AndroidWorld 只有 112 題、單次執行、沒有種子或信賴區間；17.41% 與 9.82% 相差約 8.5 題。而且 17.41%、4.02%、2.23% 換算成 19.5、4.5、2.5 題，出現半題，計分或平均方式沒有說明（附錄 A 只提到 NaN 任務會重測）。WebArena 每個 template 只測一次，Qwen2-VL-7B 的 10.79% 對 7.47% 約只差 8 題，分站的差距更是一到兩題。",
+    "「Self-Instruct 用了 1.5 倍資料仍不如 OS-Genesis」這句只按軌跡條數算：附錄 G 的 mobile 平均步數 SI 3.43、OSG 5.60，換成 step 級樣本約為 1.5K×3.43≈5.1K 對 1K×5.60≈5.6K，SI 的 step 級監督反而較少（假設附錄 G 統計的就是訓練集）。",
+    "主表混了兩個變因：論文沒有說明 Task-Driven／Self-Instruct baseline 是否也經 TRM 加權取樣，所以 Table 1–2 的差距同時包含反向任務合成與 TRM；§5.2 的 TRM 消融只給 Figure 5 的相對長條，看不出「OS-Genesis 不用 RM」對 baseline 的淨差。",
+    "baseline 可能偏弱：Task-Driven 與 Self-Instruct 都是作者自建，Qwen2-VL-7B 用它們微調後 WebArena 反而從零樣本 7.47 降到 7.05／5.39，可見 baseline 資料品質本身有問題；沒有和同期的 NNetNav、BAGEL 或 OpenWebVoyager 等外部合成資料直接比。",
+    "TRM 有自我敘事偏差：執行器與評分者都是 GPT-4o，而 TRM 只看執行器自己寫的低階指令敘述加最後三張截圖，中段畫面上的錯誤（點錯元素但敘述寫對）看不到；rubric 還明文要求「複雜任務有價值的嘗試可上調」，會系統性抬高部分完成軌跡的分數。",
+    "TRM 其實是溫和的重加權而非品質閘門：R∈[1,5] 直接當取樣權重，1 分（完全失敗、死鎖）的軌跡仍有滿分軌跡 1/5 的機率被抽到；論文沒報分數分佈，無法判斷實際有多少失敗軌跡進了訓練。",
+    "人評對齊證據薄：只有 100 條（web 與 mobile 合計），沒報標註者人數與 inter-annotator agreement；Spearman 在 1–5 的粗刻度上高，不代表能區分 4 分與 5 分這種對訓練影響最大的差異。",
+    "多樣性指標可能被指令長度與專有名詞灌高：OSG 指令平均約 18–20 字、含檔名與時間等具體細節，baseline 約 8–12 字；Sentence-BERT 平均 cosine 距離會因具體實體名而拉大，不必然代表功能覆蓋更廣。web 端 OSG 軌跡平均只有 4.46 步、TD 8.74 步，OSG 的 web 任務可能較短、較容易。",
+    "WebArena 上 InternVL2 零樣本為 0，作者自己說是輸出格式不對，所以與零樣本比較主要反映格式學習；有意義的比較只剩對 TD／SI，而對每個 backbone 較強的那個 baseline，差距只有 2.1–3.7 個百分點（InternVL2-4B 7.88 對 5.81、InternVL2-8B 9.96 對 7.05、Qwen2-VL-7B 10.79 對 7.05），約 5–9 題。",
+    "可重現性缺口：學習率、epoch、batch、遍歷策略與深度、三元組總數、高階任務到軌跡的轉換率、執行起點都沒給，雖然程式碼與資料公開，但論文本身不足以單獨重做。"
+  ],
+  "framework_role": "T4「軌跡的格式、收集與合成」子領域的代表作，貢獻三件事：(1) 明確定義 GUI 軌跡的四件套資料物件（高階指令、低階指令、狀態、動作），並把〈前狀態、動作、後狀態〉三元組當成可重用的最小單位；(2) 提出「先互動、後反推任務」的合成路線，與 task-driven、self-instruct 兩條路線形成對照；(3) TRM 是軌跡層級（非步驟層級）的 LLM-judge 評分，把分數當成訓練取樣權重而非過濾閘門，rubric（coherence＋completion、1–5 分）可借給 T7／T8 當軌跡層級評分參考。它不是 step-level process reward model，也不做失敗歸因（哪一步錯、為何錯）。反向任務合成可以看成一種離線的「使用者目標來源」，但沒有互動式使用者模擬器、沒有意圖偵測，所以不直接觸及 T1 與 T6。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有提到任何產品或部署；作者在 GitHub（https://github.com/OS-Copilot/OS-Genesis ，MIT）與 Hugging Face 釋出程式碼、訓練資料與 9 個微調權重（例如 https://huggingface.co/OS-Copilot/OS-Genesis-7B-AW ），這屬於可重現性而非商用採納；README 也沒有提到任何組織或產品採用。已確認收錄於 ACL 2025 主會（https://aclanthology.org/2025.acl-long.277/ ），Semantic Scholar 引用數 151，屬學術影響力。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/OS-Copilot/OS-Genesis",
+    "data": "公開。Hugging Face 上有 OS-Genesis-ac-training-data、OS-Genesis-aw-training-data、OS-Genesis-web-training-data 三個訓練資料集，原始〈s_pre, a, s_post〉三元組與截圖放在 Google Drive；另有 AC／AW／Web × 4B／7B／8B 共 9 個權重。mobile 的訓練資料與權重分成 AC、AW 兩份釋出，論文沒說兩份差在哪、各自對應 Table 1 的哪一欄。repo 含 /collection 軌跡蒐集腳本與 AndroidControl 推論評估程式，訓練沿用 InternVL2／Qwen2-VL 官方流程；論文未給學習率、epoch 等訓練超參數。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "T4 軌跡合成子領域必讀：定義了四件套 GUI 軌跡格式、提出反向任務合成這條代表路線並附軌跡層級 TRM，ACL 2025 且資料權重全開；但實驗樣本小、無變異數、baseline 自建且與 TRM 效果混在一起，數字要打折看。",
+  "related": [
+    "2406.03679",
+    "2405.14573",
+    "2307.13854",
+    "2410.02907",
+    "2403.08140",
+    "2410.19609",
+    "2404.03648",
+    "2404.06474",
+    "2212.10560",
+    "2405.20309"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

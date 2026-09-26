@@ -1,0 +1,160 @@
+{
+  "id": "2404.05719",
+  "title": "Ferret-UI: Grounded Mobile UI Understanding with Multimodal LLMs",
+  "topic": "T3",
+  "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Apple 在 Ferret 上加入依長寬比切兩塊子圖的 anyres，並用 UI 偵測器與 GPT-4 自動產生的 referring／grounding／推理資料微調，做出只吃螢幕像素、能直接輸出元素座標的手機 UI 理解 MLLM，並建立 14 項任務的評估集。",
+  "problem": "GUI agent 要先「看懂」螢幕才能行動，但通用 MLLM（含具 referring／grounding 能力的 Ferret、Shikra、Kosmos-2）是為自然影像設計：手機螢幕長寬比很極端、關注目標（圖示、文字）常小於整張螢幕的 0.1%，直接縮成低解析度全圖會丟掉關鍵細節。既有 UI 專用模型則多半只把整張螢幕當單一輸入、只支援輸入端單一框的 referring（Spotlight），或依賴 GPT-4V 加外部偵測模組、疊編號框（SoM）或 view hierarchy／XML 才能指到元素。缺的是一個只看像素、同時能在輸入端指定區域（referring）與在輸出端給出精確座標（grounding）的 UI 觀測模型，以及涵蓋這些面向的評估。",
+  "core_idea": "把 UI 觀測當成「可被指涉、可被定位」的視覺表徵來學：(1) 架構上沿用 Ferret 的混合區域表徵（離散座標＋視覺取樣器抽出的連續區域特徵），再加 anyres —— 依螢幕方向選 1x2 或 2x1 網格切成兩張子圖，與全圖一起分別編碼後送進 LLM，放大小元件細節；(2) 資料上用 UI 偵測器把螢幕拆成元素（類型、框、文字），以模板大量生成基礎 referring／grounding 任務，再把偵測結果（純文字、不給圖）交給 GPT-4 生成描述、對話與功能推論等進階任務，讓模型先學元素層級的語意與空間，再學整頁推理。",
+  "method": {
+    "base_model": "Ferret：預訓練視覺編碼器（文中舉 CLIP-ViT-L/14）＋decoder-only LLM（文中舉 Vicuna；本文正文未寫 LLM 參數量）。區域以混合表徵輸入：文字中的座標＋spatial-aware visual sampler 產生的連續區域特徵，支援點、框、任意形狀（scribble）作為 referring 輸入；grounding 時模型在輸出文字中直接生成框座標。",
+    "anyres": "只設兩種網格：1x2 與 2x1。對每張螢幕選與原始長寬比最接近的網格，把螢幕縮放成符合該網格的尺寸再切成 2 張子圖（直式螢幕水平切成上下兩塊，橫式螢幕垂直切成左右兩塊）。全圖與 2 張子圖都用同一個影像編碼器分別編碼、經投影層後，連同區域特徵與文字 embedding 一起送進 LLM。等於每張螢幕送 3 份影像特徵（全圖＋2 子圖）。Ferret-UI-base 則是不加 anyres、完全照 Ferret 架構的版本。",
+    "screens": "Android：取 RICO 的子集，也就是 Spotlight 公開的 screen2words、widget captions、taperception 三項任務所用影像，依 train／test 聚合去重，得 26,527 張訓練、3,080 張測試。iPhone：從 AMP 資料集隨機抽子集，84,685 張訓練、9,410 張測試，涵蓋 1792x828、828x1792、2436x1125、1125x2436 等解析度（Table 1a）。",
+    "element_annotation": "用 Screen Recognition 的像素式 UI 偵測模型對每張螢幕做元素偵測，輸出 UI 類型（Button、Text、Icon、Picture 等）與框；元素上的文字用 Apple Vision Framework 的 OCR 取得；再用 Screen Recognition 的啟發式規則把相鄰元素群組化（多行文字合為一組、圖片與其說明合為一組等）。所有訓練與測試標籤都源自這條偵測管線，不是人工標註。",
+    "task_data": {
+      "spotlight_reformatted": "screen2words（78k）、widget captions（109k）、taperception（14k），只有 Android。每項任務作者寫一句基礎提示（摘要整張截圖；對某個 [bbox] 互動元素給一段功能描述；預測某 [bbox] 是否可點），再用 GPT-3.5 Turbo 擴寫成多種問法，訓練時每筆隨機抽一種問法配原圖與原標籤。",
+      "elementary": "每個平台 7 項、各 40k 筆。referring（框在輸入）：OCR、icon recognition、widget classification；grounding（框在輸出）：widget listing、find text、find icon、find widget。生成方式：把一張螢幕的偵測結果分成 icon、text、其他 widget 三類，每類各做一筆 referring 與一筆 grounding 樣本；widget listing 用全部偵測結果做一筆，答案以固定句首開頭，每個元素寫成「{顯示文字} {UI 類型}」，文字元素則寫成顯示某文字的形式。問法同樣用 GPT-3.5 Turbo 擴寫。附錄規則：Checkbox／Toggle 的 Checked 與 Unchecked 合併成一類；OCR 只收少於 10 個 token 的文字，單一 token 時長度至少 2；find 類任務若同一畫面有多個相同元素（例如多個登入鈕）則整筆排除；測試集大小取 5k 與可生成數量的較小者。",
+      "advanced": "照 LLaVA 的做法，只用 iPhone 螢幕、且只取偵測數大於 2 小於 15 的畫面。先把偵測框座標正規化（範圍本文未寫），把偵測結果（類型、文字、框）以文字形式連同任務提示、以及（對話任務）一個 one-shot 範例送給 GPT-4 —— 不給實際影像。4 項任務：detailed description、conversation perception、conversation interaction、function inference，各 10k。描述與功能推論把 GPT-4 回答配上預先擴寫好的問法；對話類則從 GPT-4 原始輸出解析出框，轉成多輪對話格式，共得 40K 則有效對話。提示詞原文只以圖片形式放在附錄 Fig. 12，純文字版本無法取得。附錄統計：conversation interaction 有 33,649 個提問輪、29,933 個回答輪，回答輪全部帶框；互動回答以 tap 為絕對主體。"
+    },
+    "training": "視覺編碼器凍結，只更新投影層與 LLM decoder；所有資料轉成 instruction-following 格式，訓練目標與 Ferret 相同（自迴歸語言模型損失）。從上述資料池依不同比例抽樣組成共 250K 筆的訓練混合（各任務比例未公開，池子總量遠大於 250K）。Ferret-UI-base 在 8 張 A100 上訓練 1 天，anyres 約 3 天。學習率、epoch、batch size 本文未寫；GitHub 上 2024-10 釋出的 FerretUI-Gemma2b 與 FerretUI-Llama8B 兩個權重註明 lr 2e-5、3 epochs、global batch 128，但那是換了底座 LLM 的後續版本，不等於論文中的模型。",
+    "evaluation_protocol": "Spotlight 三項：S2W 與 WiC 用 CIDEr，TaP 用 F1。基礎任務：OCR 用 exact match，icon recognition 與 widget classification 用 accuracy，grounding 以預測框與標籤框 IoU > 0.5 算正確；widget listing 視為輔助任務不列入平均。每項基礎任務測試 5K 筆。進階任務：每項任務選 25 張 iPhone、5 張 Android 測試螢幕（去重後 56 與 13 張），對話任務每則隨機抽 2 個 QA 各自成一題，最後 iPhone 四項為 20/40/38/20 題、Android 為 5/10/10/10 題；由 GPT-4 分別為標籤與預測打分，回報「預測分 / 標籤分」百分比（因此可超過 100）。另將 UIBert 的 Referring Expression Comprehension 以 find widget 形式做 zero-shot 測試。",
+    "gpt4v_baseline": "成本考量，Spotlight 與基礎任務只隨機抽 100 筆給 GPT-4V。無框任務給原圖；referring 任務在圖上畫一個洋紅色框標出目標元素；grounding 任務因 GPT-4V 拒絕輸出像素座標，改用 Set-of-Mark：把偵測器找到的每個元素畫洋紅框並標數字編號，要求只回答編號。分類任務在提示中列出全部類別、TaP 只准答 Yes 或 No、OCR 只輸出文字。基礎 Ferret 也在分類任務提示中補上類別清單。"
+  },
+  "assumptions": [
+    "UI 偵測器（Screen Recognition）與 Apple Vision OCR 的輸出足夠準，可以同時當訓練標籤與測試標準答案；偵測不到的東西（顏色、設計、狀態列圖示）模型就學不到。",
+    "手機螢幕只有直式與橫式兩種主要形狀，1x2／2x1 兩種網格就足以涵蓋；不需要更細的切塊。",
+    "只看偵測結果文字、不看影像的 GPT-4 能產出與畫面相符的描述、對話與功能推論，可當進階任務的訓練標籤與評分參考答案。",
+    "單一螢幕的理解能力（referring、grounding、單步 tap 建議）是多步 UI 導航與自動化的基礎；本文不驗證這個前提在 agent 迴圈中是否成立。",
+    "同一畫面中重複出現的相同元素可以從 find 類任務中排除，不影響模型對真實場景的適用性。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Spotlight 公開任務：screen2words、widget captions、taperception（RICO／Android）",
+      "自建基礎任務 iPhone 與 Android 各 7 項：OCR、icon recognition、widget classification、widget listing、find text、find icon、find widget（每項 5K 測試）",
+      "自建進階任務 iPhone 與 Android 各 4 項：detailed description、conversation perception、conversation interaction、function inference（iPhone 共 118 題、Android 共 35 題）",
+      "UIBert Referring Expression Comprehension（zero-shot，以 find widget 形式）"
+    ],
+    "metrics": [
+      "CIDEr（S2W、WiC）",
+      "F1（TaP）",
+      "exact match accuracy（OCR）",
+      "accuracy（icon recognition、widget classification）",
+      "grounding accuracy：IoU > 0.5 視為正確",
+      "GPT-4 相對分數：預測得分 / 參考答案得分 ×100%（進階任務）",
+      "人工評分的輸出框正確率（conversation interaction 的 grounded 框）"
+    ],
+    "baselines": [
+      "Spotlight",
+      "Ferret（原始自然影像版本）",
+      "GPT-4V（referring 畫框、grounding 用 Set-of-Mark 編號框）",
+      "Fuyu-8B（只比進階任務）",
+      "CogAgent（只比進階任務）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "基礎 referring／grounding 任務上 Ferret-UI 大幅超越原始 Ferret 與 GPT-4V，唯一例外是 iPhone find text；GPT-4V 在 Android grounding 幾乎失效。",
+      "numbers": "Ferret-UI-anyres：Ref-i 82.4、Ref-A 82.4、Grd-i 81.4、Grd-A 83.8；Ferret-UI-base：80.5／82.4／79.4／83.5；Ferret：13.3／13.9／8.6／12.9；GPT-4V（100 筆子集）：61.3／37.7／70.3／4.7",
+      "section": "§5.1、Table 2、Fig. 5",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "加入 anyres 後 iPhone 基礎任務約提升 2 分，Android 基礎任務幾乎不變；錯誤分析顯示 anyres 主要修正把小文字讀成鄰近文字、把被文字包圍的小圖示判成 Text 這類小元件錯誤。",
+      "numbers": "Ref-i 80.5→82.4、Grd-i 79.4→81.4；Ref-A 82.4→82.4、Grd-A 83.5→83.8",
+      "section": "§5.1、§5.3、Table 2、Fig. 6–7",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "在 Spotlight 公開任務上，Ferret-UI 的 S2W 高於 Spotlight，WiC 只有 base 版略高，TaP 則明顯落後；作者歸因於 taperception 標籤雜訊。",
+      "numbers": "S2W：base 113.4、anyres 115.6 vs Spotlight 106.7；WiC：base 142.0、anyres 140.3 vs 141.8；TaP F1：base 78.4、anyres 72.9 vs 88.4",
+      "section": "§5.1、Table 2、Appendix C",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "anyres 讓 iPhone 進階任務大幅進步，但 Android 進階任務反而下降；作者推測是訓練資料沒有 Android 進階任務，模型在 iPhone 上學得更深、泛化略失。",
+      "numbers": "iPhone 進階平均：base 73.4 → anyres 93.9；Android：base 80.5 → anyres 70.1（Table 3）或 71.7（Table 2），其中 Android ConvI 79.3 → 50.2",
+      "section": "§5.1、Table 2、Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "進階任務以 GPT-4 對預測與參考答案打分再取比值；GPT-4V 因回答更詳盡而全面拿最高分、甚至超過 100%，作者認為這反映評分者偏好冗長答案；Ferret-UI 的平均則高於 Fuyu 與 CogAgent。",
+      "numbers": "iPhone 平均：GPT-4V 114.3、Ferret-UI-anyres 93.9、CogAgent 64.9、Fuyu 21.0、Ferret 20.0；Android 平均：GPT-4V 128.2、base 80.5、anyres 70.1、CogAgent 66.8、Fuyu 25.9；GPT-4V 的 iPhone ConvI 高達 198.5",
+      "section": "§5.1、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "基礎任務資料能帶動進階任務：只用進階資料時兩個平台都約 64%，加入任一平台的基礎任務各有提升，兩平台都加最好；即使進階資料只有 iPhone，加 Android 基礎任務對 Android 進階任務幫助最大。",
+      "numbers": "iPhone／Android：只進階 64.6／64.3；+iPhone 基礎 70.3／68.6；+Android 基礎 70.2／75.3；+兩者（即 base 全混合）73.4／80.5",
+      "section": "§5.2、Table 4(a)",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "人工逐一檢查 conversation interaction 輸出框的正確性與相關性，Ferret-UI 直接生成原始座標的正確率接近 GPT-4V 從候選框中挑選的正確率。",
+      "numbers": "Ferret-UI 91.7% vs GPT-4V（SoM 候選框）93.4%",
+      "section": "§5.4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "Set-of-Mark 作為 GPT-4V 的 UI 觀測表徵有兩個缺陷：畫面上小元件密集時編號標籤會遮住原內容甚至超出元件範圍；只能從偵測器給的候選區域中挑，偵測器把整區合成一個元素時（例如卡片裡的 BUY 按鈕）就無法單獨指涉。",
+      "numbers": "對應 GPT-4V 在 Android grounding 平均只有 4.7（iPhone 為 70.3）",
+      "section": "§5.4、Table 2、Appendix E",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "UI 偵測模型是瓶頸：基礎與進階任務都建立在偵測結果上，偵測不到的面向（顏色、設計風格、可用性、狀態列的時間／Wi-Fi／電量）模型學不到，例如無法像 GPT-4V 那樣評論整體設計美感。",
+    "互動對話的動作幾乎只有 tap，捲動、長按、輸入文字等動作留待未來。",
+    "conversation perception 與 conversation interaction 兩類對話界線不清、會互相重疊。",
+    "anyres 讓 Android 進階任務下降，可能是缺少 Android 進階資料、在 iPhone 上學得更深而失去部分泛化性。",
+    "GPT-4 評分者偏好冗長答案，Ferret-UI 精簡的答案在進階任務評分中吃虧。",
+    "模型難以理解元件之間的組合關係（由圖片、圖示、文字組成的大按鈕被判成占面積最大的子元件；位於分頁列上的按鈕被判成 Tab）。",
+    "OCR 傾向輸出真實單字而非逐字辨識（品牌名等刻意拼法常被「糾正」），小文字常被讀成鄰近文字。",
+    "find text 只能回答單一框，畫面上同一文字多次出現時無法處理，未來應支援多框答案。",
+    "TaP 落後 Spotlight，作者認為可能源自 taperception 標籤雜訊：30 筆人工重標中，人工標籤與 GPT-4V 一致 76%、與原標籤只一致 8%。"
+  ],
+  "limitations_observed": [
+    "資料描述自相矛盾：Table 1(b) 在 Android 欄同樣列出進階任務 10k×4，但 §5.2 明說進階資料完全來自 iPhone 螢幕、§5.1 也說 Android 進階資料不在訓練混合中，並據此主張跨作業系統遷移（§4.2 的措辭較弱，只說聚焦於 iPhone）。若 Table 1(b) 才是對的，跨平台遷移的主張就不成立；論文沒有澄清。",
+    "摘要宣稱在「全部」基礎任務上超越 GPT-4V，但 §5.1 自己寫明 iPhone find text 是例外；Spotlight 比較中 WiC 也只有 base 版（142.0）勝過 Spotlight（141.8），anyres 版是 140.3、較低，TaP 上 anyres（72.9）還比 base（78.4）差。anyres 並非全面較好，摘要裡的數字挑了對自己有利的版本。",
+    "表格數字對不上：Ferret-UI-anyres 的 Android 進階平均在 Table 2 是 71.7、在 Table 3 是 70.1，而 Table 3 四格（86.4、70.3、50.2、77.3）的算術平均是 71.05，兩個都不符；其他模型各列的平均都算得對，只有這一格有誤。",
+    "GPT-4V 的比較不是同條件：GPT-4V 只跑 100 筆隨機子集，其他模型跑 5K；grounding 讓 GPT-4V 從同一個偵測器產生的 SoM 候選框中挑編號，而標準答案也來自同一個偵測器，選對就等於 IoU=1。在這種「較簡單版本」下 Android grounding 仍只有 4.7，比較像是 SoM 標籤在密集小元件上被遮蔽或渲染失敗的量測產物，而不是 GPT-4V 能力的真實下限；拿它來撐「超越 GPT-4V」並不公平。",
+    "進階任務評估有循環性且樣本極小：參考答案是只看偵測文字、沒看影像的 GPT-4 生成的，再由 GPT-4 打分，GPT-4V 分數可以衝到 198.5 顯示這個比值量的是與參考答案風格的相符程度而非正確性。iPhone 只有 118 題、Android 只有 35 題（每項 5–10 題），Android ConvI 從 79.3 掉到 50.2 這種 30 分擺盪可能只是 10 題的雜訊，全文沒有任何變異數或信賴區間。",
+    "「進階任務超越 CogAgent」只在平均成立：Android 上 CogAgent 的 ConvI（90.1）與 FuncIn（90.5）都明顯高於 Ferret-UI-anyres（50.2、77.3）與 base（79.3、79.2），而這幾格各只有 10 題。",
+    "標籤由偵測器與 OCR 自動產生，評估量的是與偵測管線的一致性：Fig. 6 右例 Ferret-UI 讀對、OCR 標籤錯，照規則仍算錯；find 類任務把同畫面重複出現的元素整筆剔除，等於刪掉最需要上下文消歧的 grounding 情境，真實 agent 常遇到的「多個相同按鈕」反而沒被量到，grounding 分數可能偏高。",
+    "Appendix C 的標籤一致性數字可疑：taperception 是二元任務，隨機猜也有約 50% 一致，人工標籤與原標籤只有 8% 一致幾乎等於極性顛倒，較像標籤方向或處理錯誤而非單純「雜訊」，且只有 30 筆；拿它解釋 TaP 落後的說服力比作者呈現的弱。",
+    "所有消融都做在 base 上（Table 4(a) 最後一列 73.4／80.5 即 base 的數字），沒有任何消融檢驗 anyres 本身（網格數、切法、是否保留全圖）；anyres 讓每張螢幕的影像特徵變成 3 份、訓練時間從 1 天變 3 天，卻完全沒報推論延遲或 token 成本 —— 對每一步都要重新觀測的 agent 來說，這正是觀測表徵選擇最關鍵的代價。",
+    "沒有放進 agent 迴圈驗證：全是單一螢幕、單輪問答，conversation interaction 只「建議」要點哪裡、從不執行，也沒有 AITW、Mind2Web 之類多步導航或任務成功率。因此無法得出「像素式 grounding 優於 SoM／XML 觀測能提升任務完成」的結論；相較之下 SeeClick 至少把 grounding 能力與下游 agent 表現連起來量過。UIBert zero-shot 76% 也沒有附任何基準模型可比。",
+    "重現資訊不足：正文沒寫 LLM 參數量、250K 混合中各任務比例與訓練超參數，進階任務提示詞只以圖片呈現；官方後來釋出的是換成 Gemma 與 LLaMA 底座的權重（FerretUI-Gemma2b、FerretUI-Llama8B），無法直接對上 Table 2、Table 3 的數字。"
+  ],
+  "framework_role": "屬於 T3(a) 感知／觀測空間，扮演「GUI 觀測編碼器」的角色：把原始螢幕像素轉成可被區域指涉、可輸出座標的表徵，作為 accessibility tree／XML、偵測器＋Set-of-Mark 之外的第三種觀測路線（純像素、端到端 grounding）。對框架最有用的是三點：(1) 觀測解析度與切塊策略會直接決定小元件能否被看見（anyres 對 iPhone 的增益與錯誤分析）；(2) §5.4 對 SoM 的實證批評 —— 密集小元件時編號遮蔽內容、只能指涉偵測器給的候選區域 —— 是選擇 agent 觀測表徵時的具體風險清單；(3) 一旦觀測依賴偵測器，偵測器漏掉的資訊就永遠進不了 agent 的觀測。它本身不涉及 agent 執行、軌跡或監控，因此只落在 T3 的感知面，與 T4–T8 沒有直接接點。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文由 Apple 發表（ECCV 2024，Apple Machine Learning Research 頁面 https://machinelearning.apple.com/research/ferretui-mobile 未提及任何產品部署）；官方 GitHub（https://github.com/apple/ml-ferret/tree/main/ferretui）於 2024-10-08 釋出 FerretUI-Gemma2b 與 FerretUI-Llama8B 兩個權重，但明訂僅限研究用途、資料集為 CC BY-NC 4.0，屬開源研究釋出而非商用採納。後續的 Ferret-UI 2、Ferret-UI Lite 屬學術延續，不計入採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/apple/ml-ferret/tree/main/ferretui",
+    "data": "螢幕來源 RICO（經 Spotlight 公開任務）為公開資料，iPhone 螢幕來自 AMP 資料集；官方 repo 釋出程式碼與兩個換底座的權重（FerretUI-Gemma2b、FerretUI-Llama8B），README 註明資料集授權為 CC BY-NC 4.0、僅限非商業研究用途（本次未逐一確認資料下載連結）。論文原版模型的 LLM 大小、資料混合比例與訓練超參數未公開，無法精確重現表中數字。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它是純像素 UI 觀測與 grounding 的代表作，§5.4 對 Set-of-Mark 在密集小元件下失效與偵測器瓶頸的實證對 T3 觀測表徵選擇有直接參考價值，但從未放進 agent 迴圈量任務成功、評估有循環與樣本過小問題，且與本節點已收錄的 SeeClick、CogAgent 高度重疊，屬有價值但非必讀。",
+  "related": [
+    "2310.07704",
+    "2209.14927",
+    "2310.11441",
+    "2312.08914",
+    "2401.10935",
+    "2312.13771",
+    "2401.16158",
+    "2311.07562",
+    "2210.03347",
+    "2402.04615",
+    "2310.04869"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

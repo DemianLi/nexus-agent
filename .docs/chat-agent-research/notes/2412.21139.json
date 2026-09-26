@@ -1,0 +1,165 @@
+{
+  "id": "2412.21139",
+  "title": "Training Software Engineering Agents and Verifiers with SWE-Gym",
+  "topic": "T4",
+  "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "建出 SWE-Gym：2,438 個真實 GitHub issue 任務，每題都有可執行的 Docker 環境與單元測試。在其中用拒絕取樣收集 agent 軌跡，以單元測試自動標記成敗，成功軌跡拿來微調 Qwen2.5-Coder 成為 SWE agent，成功與失敗軌跡平衡後訓練軌跡層級的結果型 verifier（ORM）做 Best-of-k 重排，32B 開放權重系統在 SWE-Bench Verified 達到 32.0%。",
+  "problem": "SWE agent 的進步大多來自專有模型加上 scaffold／提示工程，底層 LM 本身很少被改進。瓶頸在於缺乏訓練環境：SWE-Bench 的 train split 只有 gold patch，沒有開發者逐步的動作、可執行環境，也沒有獎勵訊號；R2E 是合成任務；APPS、HumanEval 是孤立的題目，不是 repo 層級。沒有可執行而且測試可驗證的環境，就無法大量產生「帶有可信成敗標籤」的 agent 軌跡，也就做不了 rejection sampling fine-tuning、verifier 訓練或 RL。放到 T4 來看，本文要回答：怎麼在真實 repo 層級的環境裡量產有結果標籤的軌跡，並把它們同時變成 policy 的訓練資料與軌跡評估器的訓練資料。",
+  "core_idea": "把「可執行＋測試可驗證」的環境當成軌跡工廠：任何 agent（強教師模型或正在訓練的 policy 本身）在環境裡跑出的每一條軌跡，都能由該題的單元測試自動標為成功或失敗。成功軌跡用於 filtered behavior cloning（rejection sampling fine-tuning）；成功與失敗軌跡取等量，再訓練一個讀整條軌跡、輸出成功機率的 ORM；推論時取樣 k 條軌跡，由 ORM 挑分數最高的一條。以這套最簡單的基線觀察兩種 scaling：訓練軌跡數量與推論時取樣數量。",
+  "method": {
+    "環境建構（§3.1）": "(1) 用 SEART GitHub search 篩 repo：Python、2022-07-01 以前建立、超過 500 stars、至少 300 行程式碼、超過 500 個 PR、超過 100 位貢獻者，得到 358 個 repo。(2) 用 SWE-Bench 的 instance extraction script 把 PR 對應的 issue 轉成任務實例（issue 文字＋issue 建立當下的 repo 快照＋一組單元測試＋gold patch），共 64,689 題，釋出為 SWE-Gym Raw（無執行環境）。(3) 挑實例多的 11 個 repo，把 SWE-Bench 的 versioning script 推廣成可執行腳本，依 pyproject.toml、git tag 等資訊半自動替每題標版本號，按版本建環境以免重複設定。(4) 依 issue 建立當下快照裡的 requirements.txt、CI 腳本、文件，人工為每個版本設定相依套件。作者強調不能只丟掉難裝的題目，否則會引入分佈偏差（這也是它與 Nebius 自動腳本做法的主要差異，見附錄 A）。(5) 用 SWE-Bench 的 execution-based validation script 驗證：gold patch 必須比原始程式碼多過至少一個單元測試。過濾後得到 11 個 repo 的 2,438 題；耗費約 200 小時人工標註（作者自己做）與 10,000 CPU core hours；每題都有預建的 Docker image，總計 6 TB。",
+    "Lite 子集與統計（§3.2–3.3）": "SWE-Gym Lite 取 230 題，照 SWE-Bench Lite 的篩法：排除需要改超過一個檔案、問題描述不清、gold diff 過於複雜，以及測試在驗證錯誤訊息的題目。與 SWE-Bench test split 相比，gold patch 平均改 69.8 行、2.5 個檔案、4.1 個函式（SWE-Bench 為 32.8、1.7、3.0），FAIL_TO_PASS 測試平均 10.0 個；repo 分佈呈長尾，pandas 約佔三分之一、bokeh 約 1%。repo 與 SWE-Bench 不重疊，用意是避免污染。",
+    "軌跡收集：OpenHands 教師軌跡（§4.2、B.4、Table 10）": "scaffold 為 OpenHands CodeActAgent 2.1（ReAct 式通用提示，工具只有 bash terminal 與檔案編輯器，關掉瀏覽器）。分三批累積：D0 = gpt-4o-2024-08-06、t=0、SWE-Gym Lite、最多 30 輪，19 條成功（8.26%）；D1 = 再加 t∈{0.2, 0.3, 0.4, 0.5, 0.8} 在 Lite 上各取樣一次，累計 106 條；D2 = 最多 50 輪，gpt-4o t=0 於 Lite（19/230）、claude-3-5-sonnet-20241022 t=0 於 Lite（67/230）、gpt-4o t∈{0, 1} 於完整 SWE-Gym（兩次共 299/4,876），累計 491 條成功軌跡。每條成功軌跡平均約 19 輪、約 19k tokens（Table 8：成功軌跡平均 39.9 則訊息、18,578 tokens；5,557 條失敗軌跡平均 39.2 則訊息、17,218 tokens，以 Qwen-2.5-Coder-7B tokenizer 計）。t=0 那次在完整集上遇到基礎設施錯誤，成功數可能低估。",
+    "軌跡格式": "OpenHands 軌跡是觀測與動作交錯的序列 τ=[o1,a1,…,on,an]：觀測包含題目敘述、指令執行輸出、錯誤訊息；動作是 bash 指令或檔案操作（edit、view）。SFT 時直接以 OpenHands 的多輪訊息格式訓練。MoatlessTools 沒有輪流的動作－觀測結構，verifier 的輸入改由解析流程（沿用 Zhang et al. 2024a）組成：issue 文字、agent 軌跡中實際取得的 code spans（帶檔案路徑、span id、行號），以及候選 patch 前後的 hunk（before_patch / after_patch）。",
+    "SFT 訓練（B.2）": "base model 為 Qwen-2.5-Coder-Instruct 7B／14B／32B。以 torchtune 做全參數微調：learning rate 1e-4、最多 5 epochs、global batch size 8、最大 context 32,768，使用 2–8 張 H100 80G（Modal）。訓練目標就是對成功軌跡做 behavior cloning（filtered BC）。評估時每題上限 100 輪或 32k context，取先到者；預設 temperature 0。評估以 OpenHands remote runtime 平行執行單元測試。",
+    "軌跡層級行為指標（§4.1–4.2）": "除 resolve rate 外，另報三個由軌跡算出的指標：Empty Patch（整條軌跡沒有改到 repo 任何程式碼的比例）、Stuck in Loop（agent 連續三次輸出同一個動作的軌跡比例）、Avg. Turns（平均輪數）。",
+    "OpenHands 上的 on-policy 自我改進（§4.2）": "用微調後的 32B 在每個 SWE-Gym 實例上以 t=0.5 取樣 6 次，得到 868 條成功（on-policy）軌跡；與先前 491 條 off-policy 軌跡混合，從 base 32B 重新微調。沒有套用 per-instance capping。",
+    "MoatlessTools 上的迭代 RFT（§4.3、B.3）": "MoatlessTools 把動作空間限制在預先定義的專門流程（定位、編輯等），任務視野較短。每一輪迭代：(a) 在 SWE-Gym Lite 上每題以 t=1.0 取樣 30 次，把成功軌跡加入微調資料；(b) 用篩過的軌跡微調 policy。兩輪之後增益可忽略。7B 以 torchtune 全參數微調（4 張 H100、batch 8、lr 2e-5、5 epochs）；32B 以 Unsloth 做 LoRA（單張 H100、rank 64、lr 5e-4、batch 8、5 epochs）；context window 10,240；推論以 FP8 量化服務。",
+    "per-instance capping（§4.3、Table 6、Fig. 6）": "重複取樣下各題的成功次數呈長尾，簡單題的成功軌跡遠多於難題，直接全收會把資料偏向簡單題（數學推理領域的 DART-math 已觀察到同一現象）。作法：每題最多保留 N 條成功軌跡，同一題內依模型回應輪數由少到多排序、優先保留短的。實驗上 N=2 最佳。",
+    "Verifier：OpenHands ORM（§5.1.1、B.6）": "輸入為整條軌跡 τ，輸出 r∈[0,1]。以 Qwen2.5-Coder-Instruct-32B 微調成二元分類器，輸出 token 為 YES 或 NO。提示模板：system 要它扮演評審，列四條準則（是否完成主要任務、是否處理所有邊界情況與需求、最終解是否有錯、是否驗證過解法），只能回 <judgement>YES</judgement> 或 <judgement>NO</judgement>；user 訊息把整條軌跡序列化成 INTERACTION LOG；訓練時 assistant 訊息附上正確判決。訓練資料：443 條 off-policy 成功軌跡（491 條中長度在 32k 以內者）＋875 條 on-policy 成功軌跡（微調後 32B 產生），共 1,318 條成功，再從兩個子集各抽等量失敗軌跡，共 1,318 條失敗，總計 2,636 條。主結果用 Unsloth LoRA 訓練最多 2 epochs，其餘超參數同 B.2。推論時以 SGLang 取下一個 token 為 YES／NO 的 log prob（l_y、l_n），r = exp(l_y)/(exp(l_y)+exp(l_n))；Best@k 選 r 最高的軌跡。",
+    "Verifier：MoatlessTools ORM（§5.1.2、B.5）": "提示改編自 Zhang et al. 2024a，但 code spans 直接取自受評軌跡本身，不另外呼叫專有模型抽取脈絡；要求回答 True／False 表示 patch 是否解決 issue。用最後（第 2）輪取樣的 on-policy 軌跡訓練 7B 與 32B verifier（LoRA，設定同 B.3），每題成功軌跡最多保留 2 條，再把失敗軌跡抽樣到與成功數相同。評估時 k=8、t=0.5。",
+    "推論時 scaling 的評估協定（§5.1.1、B.1）": "Pass@k：k 條中至少一條成功的題目比例（Best@k 的上限）；Best@k：由 verifier 從 k 條中選出的最高分軌跡的成功率，用來量 verifier 的挑選能力。照 Lightman et al. 2023 的作法，從 M 條 rollout 中隨機抽 100 組大小為 N 的子樣本，計算平均與變異數。OpenHands 曲線的第一條 rollout 用 t=0（N=1 不算變異數），之後用 t=0.5。",
+    "訓練資料 scaling 實驗（§5.2、Table 7）": "只用既有的 491 條軌跡做子抽樣，比較 25%、50%、100% 三個比例、三種方式：(1) 隨機丟軌跡（上限 491 條）；(2) 每個實例只留一條成功軌跡的唯一實例 scaling（去重後上限 294 條）；(3) repo scaling：repo 依字母排序，依序整包納入。一律以 OpenHands＋§4.2 的微調設定在 SWE-Bench Verified 上評估。"
+  },
+  "assumptions": [
+    "單元測試（FAIL_TO_PASS 加上既有測試）足以代表解法是否正確；「gold patch 比原始程式碼多過至少一個測試」就被當成測試有效的證據。",
+    "二元的最終結果標籤就足以當作監督：SFT 只靠結果篩軌跡，ORM 只學整條軌跡成功與否，不需要步驟層級標註。",
+    "教師模型（gpt-4o、claude-3.5-sonnet）在同一個 OpenHands scaffold 下產生的軌跡格式，學生模型可以直接模仿；教師與學生共用同一套提示與工具。",
+    "SWE-Gym 的 11 個 repo 與 SWE-Bench 不重疊就足以避免污染，而且兩者分佈夠接近，能從 SWE-Gym 遷移到 SWE-Bench。",
+    "軌跡能塞進 32k context（超過的在 verifier 訓練時直接丟掉）。",
+    "預建 Docker image 能穩定重現執行環境，同一題重複取樣時測試結果具決定性。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "SWE-Bench Lite（300 題）",
+      "SWE-Bench Verified（500 題）",
+      "SWE-Gym／SWE-Gym Lite 只用於取樣訓練軌跡，另在 §3.3 用來比較任務難度"
+    ],
+    "metrics": [
+      "Resolve rate（%）",
+      "Empty Patch（%）：沒有改到任何程式碼的軌跡比例",
+      "Stuck in Loop（%）：連續三次重複同一動作的軌跡比例",
+      "Avg. Turns",
+      "Pass@k",
+      "Best@k（verifier 從 k 條中選出的軌跡成功率）"
+    ],
+    "baselines": [
+      "同一 scaffold 下 zero-shot 的 Qwen2.5-Coder-Instruct 7B／14B／32B",
+      "OpenHands 與 MoatlessTools 兩種 scaffold 互相對照（通用提示 vs 專門流程）",
+      "verifier 訓練資料消融：僅 off-policy、僅 on-policy、混合，以及成功／失敗比例（Fig. 8）",
+      "verifier LoRA vs 全參數微調",
+      "per-instance cap 為 1、2、3、不設限（Table 6）",
+      "公開權重系統：SWE-Llama 7B／13B（RAG）、Lingma SWE-GPT 7B／72B（Table 9）；並行工作 Nebius（Golubev et al. 2024，72B agent＋verifier，SWE-Bench Verified 40.6）與 Lingma 72B（Table 5）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "以半人工方式建出真實 repo 層級、可執行、測試可驗證的訓練環境；規模與 SWE-Bench test split 相當，但任務平均更難",
+      "numbers": "2,438 題、11 個 repo（另有 Raw 64,689 題、358 個 repo；Lite 230 題）；約 200 小時人工標註與 10,000 CPU core hours；Docker image 共 6 TB。gold patch 平均改 69.8 行（SWE-Bench 32.8）、2.5 個檔案（1.7）",
+      "section": "§3.1、§3.3、Table 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "只用 491 條教師（gpt-4o／claude-3.5-sonnet）成功軌跡做 filtered BC，就能讓 Qwen2.5-Coder 在 OpenHands 通用 scaffold 下從幾乎不能用變成可用的 SWE agent；模型越大效果越好",
+      "numbers": "32B：Lite 3.0% → 15.3%（+12.3），Verified 7.0% → 20.6%（+13.6）；14B：Verified 4.0% → 16.4%；7B：Verified 1.8% → 10.6%（t=0）",
+      "section": "§4.2、Table 3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "以軌跡微調能降低軌跡層級的失敗行為：卡在迴圈與空 patch 的比例都下降，唯一例外是 32B 在 Lite 上（本來卡迴圈的比例就低）",
+      "numbers": "Stuck in Loop 下降 4.6–18.6 個百分點（例：7B Verified 39.6% → 21.0%；32B Verified 29.4% → 23.8%）；32B Lite 反升 1.5。Empty Patch：14B Lite 49.7% → 18.1%；32B Verified 反升 9.5% → 13.8%",
+      "section": "§4.2、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "在 OpenHands 上用 policy 自己取樣的 on-policy 軌跡做自我改進反而退步",
+      "numbers": "微調後 32B 每題取樣 6 次（t=0.5）得到 868 條成功軌跡，與 491 條 off-policy 混合後重訓：SWE-Bench Lite 15.3% → 8.7%",
+      "section": "§4.2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "在任務視野較短的 MoatlessTools 專門流程下，不靠強教師的迭代 RFT 自我改進可行但增益小，兩輪就飽和；per-instance cap=2 以較少資料得到略好的結果",
+      "numbers": "7B：7.0% → 9.0% → 10.0%（Empty Patch 56.3% → 29.0% → 23.3%）；32B（LoRA）：19.0% → 19.7% → 19.7%。7B cap 消融（Lite）：cap1 36 條 9.0%、cap2 62 條 9.7%、cap3 82 條 7.7%、不設限 172 條 9.3%",
+      "section": "§4.3、Table 4、Table 6",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "用 SWE-Gym 成敗軌跡訓練的軌跡層級 ORM 讓推論時 scaling 有效，Best@k 大致隨 log k 線性上升，但與 Pass@k 的差距顯示 verifier 仍不完美；LoRA 訓練的 verifier 反而比全參數好",
+      "numbers": "OpenHands 32B（Verified）：Best@k 20.6%@1 → 29.8%@8 → 32.0%@16；Pass@k 37.8%@8、42.8%@16。verifier LoRA 29.8%@8 vs 全參數 27.2%@8。MoatlessTools（Lite，k=8，§5.1.2）：7B verifier＋7B policy 10% → 13.3%；32B verifier＋32B policy 19.7% → 26.3%；7B verifier 在 k=4 之後持平",
+      "section": "§5.1.1、§5.1.2、Fig. 1、Fig. 3、Fig. 4、Fig. 7",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "verifier 的訓練資料組成影響很大：on-policy 與 off-policy 混合最好，只用教師（off-policy）軌跡很早就持平",
+      "numbers": "全參數微調下：混合資料 27%@8；只用 off-policy 在約 22% 持平；只用 on-policy 有改善但有限",
+      "section": "§5.1.1、Fig. 8",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "訓練軌跡數量從 25% 加到 100% 時 resolve rate 持續上升、看不到飽和；作者據此認為目前的瓶頸是取樣算力，不是 SWE-Gym 的實例數或 repo 多樣性",
+      "numbers": "子抽樣 25%／50%／100%（最多 491 條；去重後最多 294 條）；不去重的隨機 scaling 最終最高，作者歸因於軌跡較多（491 vs 294）；repo scaling 在 25% 時起步較強（Fig. 5、Fig. 9 只有圖，正文沒給數字）",
+      "section": "§5.2、Fig. 5、Fig. 9、Table 7",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "環境多樣性有限：只有 11 個 repo、只有 Python、任務類型有限；作者認為下一步是自動合成環境（自動建環境、生成測試或生成任務）。",
+    "自我改進成效有限：OpenHands 上 on-policy 自我改進退步，MoatlessTools 32B 幾乎沒有增益；作者歸因於 scaffold 的動作空間受限與 RFT 方法太簡單，寄望 PPO 或大規模線上 RL。",
+    "訓練軌跡只有 491 條，主要受限於取樣的算力預算。",
+    "verifier 不完美：Pass@k 與 Best@k 之間有明顯差距，reward modeling 還有改進空間；7B verifier 在 k=4 之後就持平。",
+    "目前的 SWE 設定只看任務完成，忽略人機協作；作者提到可用使用者模擬或離線人機互動資料來補。",
+    "Table 10 註明部分取樣遇到基礎設施錯誤，成功軌跡數可能低估。",
+    "Impact Statement 承認模型目前只是研究成果，還不能用於正式環境。"
+  ],
+  "limitations_observed": [
+    "§4.2 的 on-policy 自我改進負面結果有混雜變因：868 條 on-policy 成功軌跡來自每題取樣 6 次，卻沒有套用作者自己在 §4.3 證明有用的 per-instance capping，簡單題重複造成的偏差沒有控制；也只跑一次、沒調超參數。所以 15.3% → 8.7% 分不出是「on-policy 資料本身有害」還是「資料偏向簡單題」，「self-improvement 還不可行」這個結論下得太快。",
+    "多個設定直接在測試集上選：verifier 用 LoRA 還是全參數（29.8 vs 27.2 @8）、verifier 資料的混合方式（Fig. 8）、capping 門檻（Table 6）都是在 SWE-Bench Verified／Lite 上比過之後才定，沒有獨立的 dev split。32.0% 這個頭條數字因此帶有在測試集上挑設定的偏差。",
+    "拿很小的差異當結論：Table 6 各 cap 設定之間只差 0.4–2.0 個百分點（300 題裡 1–6 題），cap3（7.7%）反而低於 cap1（9.0%），趨勢不單調；MoatlessTools 32B 的 19.0% → 19.7% 大約只差 2 題。這些都是 t=0 單次評估，沒有信賴區間，「threshold 2 最佳」的證據很薄。Table 3 的 ± 值也沒說明是怎麼算的。",
+    "文內數字彼此對不上：§4.2 說 on-policy 成功軌跡有 868 條，§5.1.1 卻說保留 32k 以內的之後是 875 條（過濾只會變少，不會變多）；Lite 最佳成績在 §5.1.2 正文寫 26.3%，摘要與 Table 5 寫 26.0%；Table 4 第一輪 7B 是 9.0%，Table 6 的 cap=2（也是第一輪，Empty Patch 同為 29.0%）卻是 9.7%；摘要說的「up to 19% absolute gains」在正文找不到可以直接對上的單一對照。",
+    "失敗標籤可能有雜訊：Table 10 承認取樣時有基礎設施錯誤、部分實例沒跑完，而 verifier 的 1,318 條失敗軌跡是從未成功的軌跡中隨機抽的。文中沒有說明是否排除因環境故障而失敗的軌跡，所以 ORM 學到的「失敗」可能混入了跟 agent 行為無關的故障。",
+    "verifier 只見過 32k 以內的軌跡（491 條成功軌跡裡只剩 443 條），但推論時候選軌跡最多可到 100 輪或 32k context。長軌跡上的判斷品質沒有單獨量過，而長軌跡正是最容易卡迴圈、最需要被挑掉的一群。",
+    "從 T4 的角度看，軌跡在這篇只是一段黑盒序列：ORM 只給整條軌跡一個分數，完全沒有步驟層級的歸因，也沒有 process reward；唯一接近步驟層級的行為指標 Stuck in Loop 定義成「同一動作連續重複 3 次」，抓不到換個參數的近似迴圈或來回振盪。論文也沒有失敗分類（定位錯、編輯錯、沒驗證等），所以無法說明 SFT 修好的是哪一類錯誤。",
+    "「多樣性還不是瓶頸」外推過頭：491 條軌跡只涵蓋 294 個實例（約佔 2,438 題的 12%），其中 192 條來自只有 230 題的 Lite；scaling 只有 25/50/100% 三個點、各訓練一次；repo scaling 按字母順序整包納入，repo 效應和各 repo 的難度與數量混在一起（Table 7：moto 一個 repo 就佔 155 條）。在只用到約一成實例的情況下，能說的只是「還看不到飽和」，推不出環境多樣性已經足夠。",
+    "教師軌跡的收集條件高度混雜：491 條裡 gpt-4o 佔 424 條、claude 只有 67 條；最大輪數有 30 和 50 兩種，溫度從 0 到 1 共六種。論文沒有拆開各子集的貢獻，所以沒有證據說明哪一種收集設定（教師、溫度、輪數上限）比較值得多花取樣預算，而這正是 T4 最想知道的。",
+    "OpenHands verifier 只在同一個微調後 32B policy 產生的候選上評估，而它的 on-policy 訓練資料也出自這個 policy；換成其他 policy 時的泛化沒有測（只有 MoatlessTools 那邊有 7B verifier 排序 32B 軌跡的交叉結果，而且在 k=4 就持平）。",
+    "Best@k 曲線把 t=0 的第一條 rollout 和 t=0.5 的後續 rollout 混在一起算，k=1 那一點沒有變異估計；因此「約略對 log k 線性」的斜率其實包含了溫度改變的效果。"
+  ],
+  "framework_role": "T4 子領域「軌跡的收集與合成（含以軌跡訓練 agent）」的代表性範本：它示範了一條完整的軌跡資料管線——可執行環境 → 教師或 policy 取樣 → 用單元測試自動標記成敗 → 成功軌跡做 SFT，成敗平衡後訓練軌跡層級的 ORM。另外提供三個可以直接移植的經驗：以 per-instance capping 對抗重複取樣造成的簡單題偏差、verifier 資料要 on-policy 與 off-policy 混合，以及 Empty Patch／Stuck in Loop 這類從軌跡算出的行為指標。它也碰到 T7（ORM 本身就是學出來的軌跡評估器，Best@k 是評估協定）和 T8（resolve rate 由單元測試決定，是二元的任務完成分數），但沒有步驟層級評估、沒有失敗歸因，也沒有把軌跡異常接回修正或使用者互動，所以六條邊都沒有實際涉及：verifier 只在執行結束後重排候選，不會觸發自我修正（不是 E3）；環境是程式碼 repo 而不是使用者模擬器（不涉及 E1、E4、E6）。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "All Hands AI（OpenHands 背後的公司）官方部落格〈Introducing OpenHands LM 32B -- A Strong, Open Coding Agent Model〉（2025-03-31）說明：OpenHands LM 32B 以 Qwen2.5-Coder-32B-Instruct 為基礎，使用 SWE-Gym 的框架加上自家可擴充的訓練基礎設施建立訓練環境，用現有 agent 產生訓練資料，只拿成功解題的例子微調；SWE-Bench Verified 37.2%。來源：https://www.openhands.dev/blog/introducing-openhands-lm-32b-a-strong-open-coding-agent-model",
+      "Hugging Face 官方 model card OpenHands/openhands-lm-32b-v0.1（MIT 授權）同樣寫明採用 SWE-Gym 描述的框架：建訓練環境、用現有 agent 產生資料、只以成功解題的例子微調。來源：https://huggingface.co/OpenHands/openhands-lm-32b-v0.1",
+      "反例（不計入）：SWE-Gym 的 GitHub README 把 OpenHands Critic 列為下游使用，但 All Hands 官方的 critic model 部落格（2025-04-17，https://www.openhands.dev/blog/sota-on-swe-bench-verified-with-inference-time-scaling-and-critic-model）完全沒有提到 SWE-Gym，無法證實，因此不列為採納證據。"
+    ],
+    "assessment": "有一條可查證的業界採納：All Hands AI 的開放權重產品模型 OpenHands LM 32B，明言沿用 SWE-Gym 的「環境取樣 → 只留成功軌跡 → 微調」流程，時間（2025-03）也在本文（2024-12）之後。但這不是獨立第三方採納：本文作者 Xingyao Wang 與 Graham Neubig 同時是 OpenHands 論文（Wang et al. 2024c）的作者，採納方與作者群高度重疊。其他產品是否使用 SWE-Gym 資料或方法，未見證據。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/SWE-Gym/SWE-Gym（Apache-2.0；OpenHands 與 MoatlessTools 各有訓練與取樣說明）",
+    "data": "公開。Hugging Face 的 SWE-Gym 組織（https://huggingface.co/SWE-Gym）釋出 SWE-Gym、SWE-Gym-Lite、SWE-Gym-Raw，以及軌跡資料集 OpenHands-SFT-Trajectories、OpenHands-Sampled-Trajectories、OpenHands-Verifier-Trajectories、MoatlessTools-Sampled-Trajectories、MoatlessTools-Agent-Verifier-Train-Data，另有 8 個 checkpoint（OpenHands 7B／14B／32B Agent、OpenHands-32B-Verifier、MoatlessTools 7B／32B Agent 與 Verifier）；每題的 Docker image 放在 Docker Hub，前綴為 xingyaoww/sweb.eval.x86_64（論文說合計 6 TB）。注意：GitHub issue #20（2025-08-11，https://github.com/SWE-Gym/SWE-Gym/issues/20）回報，用 SWE-Gym 的 SFT 資料以 VERL 重訓 Qwen2.5-Coder-32B，在 50 題 SWE-bench 抽樣上只解出 6 題，官方 OpenHands-32B-Agent 解出 11 題；查詢當時還沒有維護者回應。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是 T4「以軌跡訓練 agent」最具代表性的開放範本：用真實可執行環境加測試自動標記，把同一批軌跡同時用於 SFT 與軌跡層級 ORM，公開了完整的軌跡資料集，也有業界產品模型沿用；不過方法本身只是 RFT 加 ORM 的基線，對軌跡的分析偏粗，也缺步驟層級歸因。",
+  "related": [
+    "2310.06770",
+    "2405.15793",
+    "2407.16741",
+    "2402.01030",
+    "2110.14168",
+    "2305.20050",
+    "2407.01489",
+    "2408.07060",
+    "2411.00622",
+    "2407.21787",
+    "2407.13690",
+    "2310.05915",
+    "2406.04151"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

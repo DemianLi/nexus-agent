@@ -1,0 +1,150 @@
+{
+  "id": "2402.14762",
+  "title": "MT-Bench-101: A Fine-Grained Benchmark for Evaluating Large Language Models in Multi-Turn Dialogues",
+  "topic": "T7",
+  "subarea": "多輪對話與互動式評估",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把多輪對話能力拆成三層分類（3 大能力、7 項能力、13 個任務），用 GPT-4 生成、人工篩出 1388 段對話共 4208 輪。評估時固定使用金上下文，GPT-4 依各任務的評分準則逐輪打 1–10 分，每段取最低分。以此評了 21 個 LLM，並量測評審和人評的一致度。",
+  "problem": "既有的對話基準多半只有單輪（AlpacaEval），不然就是粗粒度的少輪設定（MT-Bench 每題只有兩輪、只分 8 類主題），看不出模型在多輪情境裡是哪一種能力壞掉：記不住前文、代名詞解錯、被相似問題干擾、被使用者錯誤的質疑帶著走，或是不會主動澄清。多輪對話是聊天機器人的主要使用形態，缺乏細粒度診斷，就無法指引對齊與訓練資料要往哪裡補。",
+  "core_idea": "有三個設計。(1) 能力分類：從 ShareGPT 與 LMSYS-Chat-1M 的真實對話，加上教育心理學的對話教學分類，歸納出由淺到深的 Perceptivity（感知前文）→ Adaptability（依使用者回饋調整）→ Interactivity（主動發問），逐層細分到 13 個可單獨出題的任務。(2) 評估協定：歷史一律用人工篩過的金上下文，只評受測模型在最新一輪的回覆，避免自己前一輪的錯誤滾雪球，也讓受測模型之間的比較公平。(3) 聚合：每段對話取各輪的最低分，理由是一次失敗就足以毀掉緊密相依的對話，而且可以壓住模型從金上下文模仿格式造成的虛高分。",
+  "method": {
+    "taxonomy": "第一層 3 項能力、第二層 7 項、第三層 13 個任務。Perceptivity 下分 Memory（CM：Context Memory）、Understanding（AR：Anaphora Resolution；SI：Separate Input，第一輪只給任務要求、後續輪才給輸入）、Interference（TS：Topic Shift；CC：Content Confusion，字面相似但語意不同的問題）。Adaptability 下分 Rephrasing（CR：內容改寫；FR：格式改寫）、Reflection（SC：Self-correction，使用者正確指出錯誤；SA：Self-affirmation，使用者的質疑是錯的，模型應堅持原答案）、Reasoning（MR：數學；GR：一般推理，條件跨輪逐步加入）。Interactivity 下為 Questioning（IC：Instruction Clarification，對模糊請求反問；PI：Proactive Interaction，主動提問讓對話延續）。",
+    "data_generation": "每個任務各寫一份生成提示，前面接一段共用的初始指令：指定主題 #TOPIC#、用 'Human:'／'Assistant:' 標示說話者、以英文回答。任務提示寫明逐步的生成規則，並附 3 個人工撰寫的範例（附錄 A Fig 8–20）。例如：SI 規定第一輪使用者只講要求、助手必須反問；FR／CR 規定三輪、第二與第三輪要求改寫第一輪回覆；SC 規定助手先答錯、使用者質疑、助手再更正；SA 規定助手答對、使用者質疑、助手堅持原答案；GR 以一組推理題與答案為種子，逐輪推論。主題共 30 個（醫學、法律、金融、體育等），每個任務至少涵蓋 10 個主題。",
+    "curation": "每個任務先用 GPT-4 生成 1000 筆以上，每筆由 5 位標註者審查，只保留 5 人都判為高品質的樣本。篩選準則有五條：符合該任務的生成規則；每個任務至少 10 個主題；去除只換幾個關鍵字的近似對話；去除即時性問題與 2022 年以後的知識；去除常識錯誤、冒犯內容與個資。最終 1388 段、4208 輪，平均每段 3.03 輪；各任務 71–153 段，SC／SA 恰好每段 2 輪，PI 平均 4.07 輪（附錄 B Table 6）。",
+    "inference_protocol": "受測模型套用各自官方的 chat template、system prompt 與取樣參數。歷史一律用金上下文（資料集內的 Human 與 Assistant 輪），只讓受測模型生成當前輪；每段 k 輪就產生 k 次（或 k−1 次）獨立的生成。FR、CR、AR、SA、SC、CM 六個任務跳過第一輪，因為這幾個任務的能力從第二輪才開始考，第一輪一律用金回覆（附錄 C）。",
+    "judge": "評審用 GPT-4，temperature 0.6。提示由三段串接：共用初始指令＋任務專屬評分提示＋固定輸出格式（Fig 21–34）。初始指令強調只評最後一輪 assistant 的回覆，之前的輪次是 ground truth、不評。任務專屬提示列出 2–4 條評估準則，並把 1–3、4–6、7–9、10 分四個分段各自要滿足什麼寫清楚（評分準則）。MR／GR 另外附 '### reference solution ###' 參考解，對答案比對。評審要先寫理由，再以 'Rating: [[score]]' 輸出 1–10 分。CR 與 FR 共用同一份改寫評分提示。",
+    "aggregation": "每段對話的分數取其所有被評輪次的最低分；任務分數是該任務所有對話分數的平均；總分 Avg 是 13 個任務分數的宏平均（以 Table 3 各列驗算，Avg 等於 13 欄的平均）。能力維度分數是其下各任務的平均（Figure 3）。",
+    "judge_validation": "人評：隨機抽 100 段對話，5 位專家依回覆是否滿足任務要求對整段打 1–10 分，以多數決定人評分。沿用 Zheng et al.（MT-Bench）的 agreement 定義：隨機各抽一位兩類評審中的個體（不可相同），看他們在隨機一題上是否一致的機率。附錄 G 另外計算 Fleiss' Kappa。自偏誤檢查：用 Qwen-72B-Chat 當評審，重評前 5 名模型（附錄 D）。",
+    "reimplementation": "官方資料與程式碼在 github.com/mtbench101/mt-bench-101（Apache-2.0；資料為 data/subjective/mtbench101.jsonl），已整合進 OpenCompass。OpenCompass 的實作：opencompass/datasets/subjective/mtbench101.py 以 ChatInferencer 的 infer_mode='last' 只生成最後一輪；skip_first_tasks = [FR, CR, AR, SA, SC, CM]；get_final_results 對每個 (task, multi_id) 取 min，再做任務平均與宏平均，和論文描述一致。"
+  },
+  "assumptions": [
+    "GPT-4 依任務評分準則打的單輪分數，是對該項能力的有效代理；人評一致度（100 段）足以支撐這個假設能推廣到全部 13 個任務。",
+    "使用金上下文時，模型在第 t 輪的表現可以代表它在真實多輪互動裡的表現；也就是說，把錯誤累積與分支偏離排除在外，並不會改變能力排名。",
+    "一段對話的品質由最差的那一輪決定（min 聚合），各任務、各輪數下都成立。",
+    "GPT-4 生成、人工全票認可的對話，足以代表真實使用者的多輪行為（包括使用者質疑的方式、澄清時怎麼回答、話題怎麼轉換）。",
+    "評審和資料生成器都是 GPT-4，而 GPT-4 也是受測模型；作者假設這樣造成的偏誤很小，並以 Qwen-72B 在 5 個模型上的排名一致作為支持。",
+    "以英文、2022 年以前知識為範圍的 13 個任務，足以覆蓋多輪對話的主要能力（作者承認不完整）。"
+  ],
+  "evaluation": {
+    "benchmarks": ["MT-Bench-101（本文提出，1388 段／4208 輪／13 任務）"],
+    "metrics": [
+      "GPT-4 評審的每輪 1–10 分，每段取最低分，再做任務平均與 13 任務宏平均",
+      "能力維度分數（其下任務平均）",
+      "逐輪平均分（Figure 4、6）",
+      "評審與人評的 agreement（沿用 MT-Bench 的定義）",
+      "Fleiss' Kappa（人評之間、GPT-4 與人評之間）"
+    ],
+    "baselines": [
+      "受測模型 21 個：GPT-3.5、GPT-4（Table 8 標為 GPT4-turbo）、Llama2-Chat 7B／13B、Mistral-7B-Instruct-v0.2、Mixtral-8x7B-Instruct-v0.1、Snorkel-Mistral-PairRM-DPO、Qwen-Chat 7B／14B、Yi-Chat 6B／34B、ChatGLM2-6B、ChatGLM3-6B、InternLM2-Chat 7B／20B（SFT 與 RLHF 版各一）、Vicuna-13B-v1.5、Baichuan2-13B-Chat、UltraLM-13B-v2.0、Baize-v2-13B",
+      "評估方法的消融：拿掉評分準則、改用平均取代最低分",
+      "評審替代：Qwen-72B-Chat 當評審"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "基準規模：13 個任務，1388 段對話，4208 輪。和 MT-Bench（80 段、160 輪）、MT-Bench++（80 段、640 輪）相比，對話數與輪數都大一個數量級，而且是唯一標示為細粒度的基準。",
+      "numbers": "1388 段／4208 輪／13 任務；平均每段 3.03 輪、每段 202 字",
+      "section": "§3.3、Table 2、Table 6",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "數學推理是最難的任務，一般推理次之；改寫與抗干擾類任務相對容易。",
+      "numbers": "Table 3 平均列：MR 3.61、GR 4.84、FR 8.44、CR 8.36。以表中 18 列重算，MR 為 3.01、GR 4.25、CC 8.83（最高），和文中「CC 與 FR 較容易」的說法相符，但和平均列不符（見 limitations_observed）。",
+      "section": "§4.2、Table 3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "GPT-4 在整體最強，Yi-34B-Chat 第二。作者歸納出 adaptability 與 interactivity 是現有 LLM 的主要弱點。",
+      "numbers": "GPT-4 Avg 8.86、Yi-34B 8.10、GPT-3.5 7.99、Qwen-14B 7.82；最弱 UltraLM-13B 4.61；PI 最佳也只有 6.64（GPT-4）",
+      "section": "§4.2、Table 3、Figure 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "RLHF／DPO 對多輪能力幾乎沒有幫助：InternLM2 兩個尺寸小幅上升，Mistral 的 DPO 版反而下降。作者推測原因是現有偏好資料多半是單輪。",
+      "numbers": "InternLM2-Chat-7B 6.69→6.85（+0.16）、20B 6.95→7.05（+0.10）、Mistral-7B 6.95→6.89（−0.06）",
+      "section": "§4.3、Table 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "金上下文會讓後續輪的分數虛高，因為模型能從歷史裡學到格式與風格；改用模型自己預測的上下文時，分數則隨輪數下降，因為錯誤累積與傳播。這是作者採用金上下文加最低分聚合的依據。",
+      "numbers": "只用 ChatGLM3-6B 在 SI 與 IC 兩個任務上做對照，以 Figure 6 的曲線呈現，文中沒有給出數值",
+      "section": "§4.2 Per-Turn Performance、§4.3 Effect of the Golden Context、Figure 4、Figure 6",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "照本文的評分提示與準則，GPT-4 和人類專家的一致度高於專家彼此之間；Fleiss' Kappa 也呈現同樣方向。",
+      "numbers": "agreement：GPT-4 vs 人評 87%、人評之間 80%。Fleiss' Kappa：人評之間 0.672；GPT-4 vs 人評，全部標註合計 0.676、逐人平均 0.681、對多數決 0.699",
+      "section": "§4.5、Table 5、附錄 G Table 9",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "兩個評估設計都有助於和人評一致：拿掉分段評分準則，或把最低分改成平均，一致度都會下降。",
+      "numbers": "拿掉評分準則 77%、改用平均 75%，相對完整方法的 87% 分別下降 10 與 12 個百分點。Table 5 的 Δ 欄（−3%、−5%）是相對人評之間的 80%，不是相對 87%。",
+      "section": "§4.5、Table 5",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "改用開源的 Qwen-72B-Chat 當評審，前 5 名的排名和 GPT-4 評審完全一致。作者據此認為自偏誤影響不大，Qwen-72B 可以當作可重現的替代評審。",
+      "numbers": "Qwen-72B 評審：GPT-4 8.75、Yi-34B 8.60、GPT-3.5 8.49、Qwen-14B 8.40、Mixtral 8.32。GPT-4 評審下同 5 個模型為 8.86 至 7.38。",
+      "section": "§3.4、附錄 D、Table 7",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "多輪能力會隨 LLM 發展出現新的面向，13 個任務不可能涵蓋全部；作者打算持續更新版本。",
+    "資料由 GPT-4 生成再經人工審查，仍可能殘留 GPT-4 的錯誤或偏誤，也可能有標註者疏漏。",
+    "資料公開後可能被拿去訓練，基準會因此失效（資料污染）；作者計劃以新版本應對資料外洩。",
+    "資料集僅供研究用途，商用需另行驗證。",
+    "LLM 評審有自偏誤（GPT-4 偏好 GPT-4 的回答）；作者以 Qwen-72B 評審做交叉檢查，認為影響不大。",
+    "金上下文會讓 SI、IC、PI、MR 的後續輪分數虛高；作者用最低分聚合來抵銷。"
+  ],
+  "limitations_observed": [
+    "Table 3 的平均列有 4 欄和表身對不上（依 arXiv HTML v3 版的表、以 18 列重算；PDF 版未核對）。Avg、CM、SI、AR、CR、FR、SC、SA、IC、PI 這 10 欄的重算值和報告值一致，但 TS 報告 7.72、重算 8.31，CC 報告 8.24、重算 8.83，MR 報告 3.61、重算 3.01，GR 報告 4.84、重算 4.25，差距都在 0.59–0.60。§4.2 說「CC 與 FR 相對容易」，這和重算值相符，和平均列反而不符。引用任務難度時，要以逐列數字為準。",
+    "§4.2 說閉源模型在所有任務上一致優於開源模型，但 Table 3 自己就有反例：GPT-3.5 在 SI（7.67，Qwen-14B 8.36）、AR（7.67，Yi-34B 9.34）、TS、SA（7.23，Yi-34B 9.04）、GR、PI 共 6 項，都低於最佳開源模型；GPT-4 的 TS（9.83）也略低於 Yi-34B（9.84）。",
+    "§4.3 說模型變大就「普遍」提升，這是看 Figure 5 的能力維度得出的。在任務層級，Llama2 從 7B 到 13B，MR 1.88→1.75、GR 3.83→3.16、SC 8.45→7.63 三項都下降，Reasoning 能力維度也跟著下降。「普遍」至少在 Llama2 系列、Reasoning 與 Reflection 上不成立。",
+    "RLHF／DPO 無效的結論只靠 3 組配對，差距 0.06–0.16。評審 temperature 設為 0.6，但沒有重跑，也沒有報告變異或信賴區間，無法排除這些差距落在評審雜訊內。而且 Mistral 的 DPO 版是第三方的 Snorkel-Mistral-PairRM-DPO，不是同一個團隊的受控消融。以此推論「現有 RLHF／DPO 不改善多輪能力」證據不足。",
+    "金上下文協定和 IC、PI 這類互動任務本質上有衝突。後續的使用者輪是固定的：受測模型如果問了和金回覆不同的澄清問題，下一輪的「使用者」仍然回答它沒問的問題，對話在語意上已經斷裂。作者說最依賴互動的正是這兩個任務，而受這個設計傷害最大的也是它們。更精確地說，這個基準量的是「給定理想歷史時的單輪條件表現」，不是真正的互動評估。",
+    "min 聚合和金上下文的虛高效應疊在一起，讓部分任務退化成近乎單輪評估。SC、SA 每段剛好 2 輪，而第一輪跳過不評，所以每段只評 1 輪，min 等於單輪分數。SI、IC、PI 後續輪因模仿金上下文而虛高，最低分幾乎都落在最早的被評輪。所謂「多輪」分數在這些任務上，主要反映的是第一個被評輪。",
+    "SC 任務裡「被指出的錯誤」是 GPT-4 預先寫進金上下文的，不是受測模型自己的錯。它量的是「面對別人植入的錯答與使用者質疑時，會不會改」，不是模型能否修正自己真實的錯誤。SA 同理，量的是對錯誤質疑的抗壓性。兩者都無法外推到 agent 自我修正迴路裡的真實錯誤分佈。",
+    "GPT-4 同時是資料生成器、評審與受測模型，而且排第一。自偏誤的檢查只有 Qwen-72B 在前 5 名上的排名一致；可是 Qwen-72B 也在評同家族的 Qwen-14B，自偏誤一樣沒有控制住。它的分數區間也從 GPT-4 評審下的約 1.5 分（8.86 至 7.38）壓縮到約 0.4 分（8.75 至 8.32），鑑別度明顯變低。另外，金上下文本身就是 GPT-4 的文風，GPT-4 在模仿金上下文這件事上可能天生佔優，這一項沒有被分離出來。",
+    "人評驗證的細節不足。agreement 沿用 MT-Bench 的定義，但那是為成對比較設計的；本文用 1–10 分的量表時，「一致」是指分數完全相等、分箱後相等，還是別的定義，文中沒有交代。10 點量表的多數決遇到平手怎麼處理，也沒有說明。樣本只有 100 段，平均分到每個任務不到 8 段，無法支撐「每個任務的評分都可靠」。而且人評是對整段對話打一個整體分，拿這個去比較 min 與平均兩種聚合，結果會受標註指引措辭影響。",
+    "附錄 A 的生成提示有明顯的標註錯置，影響復現。Fig 15 標題寫 topic shift，內容卻是 instruction clarification 的生成規則；Fig 19 標題寫 instruction clarification，內容卻是 topic shift。MR 的生成提示也整份缺漏：Fig 9–20 只有 12 份任務提示，13 個任務少了 MR。CR 的提示第 5 步還寫成「continuing to request a formal rephrase」，是從 FR 提示複製過來沒改，可能讓 CR 資料混入格式改寫。",
+    "資料篩選率極低：每個任務生成 1000 筆以上、13 個任務合計至少 13000 筆，最後只留 1388 筆，約 10% 以下。這代表 GPT-4 的生成品質不穩，或是全票認可的門檻很嚴。文中沒有報告標註者之間的一致度，也沒有被剔除的原因分佈，讀者無從判斷篩選是否引入系統性偏差，例如偏好較短、較標準化的對話。",
+    "OpenCompass 整合版的評分解析（opencompass/datasets/subjective/mtbench101.py）用 regex '\\[([0-9]+)\\]' 抓全文第一個方括號數字，沒有錨定在 'Rating:' 後面，評審在理由中寫到 [1] 之類的字樣就會抓錯。解析失敗的輪次在 get_judgeanswer_and_reference 裡會被靜默丟棄，只有成功率 ≤95% 時才印警告；被丟棄的輪次不進 min，會抬高該段對話的分數。這個整合版也不保證等同論文當時跑的評分程式碼。"
+  ],
+  "framework_role": "定位在 T7 的「多輪對話與互動式評估」：提供一套可重跑的離線多輪評估協定，也就是金上下文重播、只評最新一輪、任務專屬分段評分準則、每段取最低分，再加上評審和人評一致度的驗證方式。它的 13 個任務剛好是框架裡其他節點的能力探針：CM、AR、TS、CC 對應 T2 的多輪狀態追蹤，IC 對應 T1 的意圖澄清，SC 與 SA 對應 T5 的反思，而且兩個方向都測，也就是該改時改、不該改時守住。所以它可以當 T7 對 T1、T2、T5 做單點能力回歸測試的現成題庫。但它不是 agent 評估：沒有工具、沒有環境、沒有任務成功判準，評的是對話回覆品質，不能拿來代替 T8 的任務完成分數；它的靜態重播設計也量不到錯誤累積與互動分支，這正是框架裡 T4→T5→T2 迴路要處理的現象。",
+  "edges": [
+    {
+      "edge": "E6",
+      "how": "只成立在離線、靜態的版本。評估吃的是事先寫好的互動逐字稿，也就是 GPT-4 扮演使用者生成、人工篩過的金上下文，逐輪重播給受測模型，再交給評審打分；任務分類本身也是從 ShareGPT 與 LMSYS-Chat-1M 的真實互動紀錄歸納出來的。§4.3 的金上下文對自預測上下文實驗（Figure 6），正面回答了「送進評估的互動歷史該用誰產生的」：用理想歷史會因為模仿而虛高，用模型自己的歷史則會累積錯誤。這是設計 E6 回流格式時可以直接借用的證據。這裡沒有活的使用者模擬器，使用者輪不會依模型回覆改變，所以不涵蓋閉環互動。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "已整合進開源評估框架 OpenCompass。以 gh api 確認 open-compass/opencompass 有 opencompass/datasets/subjective/mtbench101.py，以及 opencompass/configs/datasets/subjective/multiround/mtbench101_judge.py 等 3 份設定（https://github.com/open-compass/opencompass/tree/main/opencompass/configs/datasets/subjective/multiround）；官方 repo 的 README 說明這個整合是作者團隊送的 PR（https://github.com/mtbench101/mt-bench-101）。OpenCompass 與作者同屬上海 AI Lab，屬於評估工具鏈整合，不是產品部署。"
+    ],
+    "assessment": "未見商用採納證據。唯一可查證的是同機構的評估框架 OpenCompass 收錄了它，屬於工具可用性，不等於企業在產品開發或模型發布流程中採用。論文 Ethics 段也自己寫明資料集僅供研究，商用需另行驗證。本次 WebSearch 配額已用盡，未能廣泛檢索 model card 或技術報告是否引用其分數；「未見」是有限檢索下的結論。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/mtbench101/mt-bench-101",
+    "data": "公開，Apache-2.0（以 gh api 確認 license 為 Apache-2.0），資料在 repo 內的 data/subjective/mtbench101.jsonl；也可以透過 OpenCompass 的 mtbench101 設定直接跑。評審依賴 GPT-4 API（版本未指明、temperature 0.6、無重跑），分數完全重現有難度；附錄 D 建議改用 Qwen-72B-Chat 評審以求可重現，但只在 5 個模型上驗證過。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是 T7「多輪與互動式評估」子領域裡被廣泛引用、並已整合進 OpenCompass 的細粒度多輪基準；金上下文加最低分聚合、分段評分準則、評審與人評一致度驗證這套協定，是設計多輪評估時必須理解的基準線，也是必須理解的反例：靜態重播量不到互動分支。",
+  "related": [
+    "2306.05685",
+    "2309.11998",
+    "2310.13650",
+    "2309.10691",
+    "2310.07301",
+    "2212.09180",
+    "2310.20410",
+    "2305.15717"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

@@ -1,0 +1,163 @@
+{
+  "id": "2502.03461",
+  "title": "Do Large Language Model Benchmarks Test Reliability?",
+  "topic": "T8",
+  "subarea": "任務成功的判準",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "用「多模型分歧→人工分流」清理 15 個已飽和基準的標籤錯誤與爛題，做成可以拿到 100% 的 platinum 版本；結果顯示原版殘餘錯誤多半是標籤雜訊，但清理後幾乎每個前沿模型在幾乎每個集合上仍會出錯。",
+  "problem": "社群把準確率停在 90–95% 的基準視為「飽和」而淘汰，假設剩下的錯誤都是標籤雜訊。但部署在醫療、金融、法律等場景需要的是「近乎每次都對」的可靠性；如果成功判準（標籤）本身有錯，錯誤率就混雜了模型失敗與題目錯誤，既無法量可靠性，也可能讓人選錯模型。這對任何「任務完成分數」都是前提問題：判準不乾淨，分數在天花板附近就失去意義。",
+  "core_idea": "提出 platinum benchmark：刻意把標籤錯誤與歧義壓到最低，使 100% 可達，於是每一個錯誤都能確定是模型的失敗；並以此定義 reliability frontier（模型能零錯誤完成的最難任務），跟 capability frontier（能做到的最難任務）區分。清理手段是利用多個前沿模型的答案分歧，只對「至少一個模型答錯」的題目做人工複核。",
+  "method": {
+    "輸入": "15 個舊基準的隨機子集（有公開解答的用 test split，否則用 validation split），分六類：數學（SingleOp 159、SingleEq 109、MultiArith 174、SVAMP 300、GSM8K 300、MMLU HS Math 270）、邏輯（BBH Logical Deduction 3-Obj 200、Object Counting 200、Navigate 200）、表格（TabFact 200）、閱讀理解（HotpotQA 250、SQuAD2.0 250、DROP 250）、常識（Winograd WSC 200）、視覺（VQA v2.0 600）。",
+    "步驟1_跑模型": "約 20 個 2025 年 1 月的前沿模型（o1 high/med、o1-preview、o1-mini、o3-mini high、GPT-4o Aug/Nov、GPT-4o mini、Claude 3.5 Sonnet June/Oct、Claude 3.5 Haiku、Gemini 1.5 Pro/Flash、Gemini 2.0 Flash、Gemini Thinking 12/19、Llama 3.1 70B/405B、Llama 3.3 70B、Qwen 2.5 72B、DeepSeek-V3/R1、Mistral Large/Small、Grok 2）。zero-shot、temperature 0.5；非推理模型用 CoT，推理模型（o1 系列、R1、Gemini Thinking）不加 CoT 指令；VQA 不用 CoT。論文未說明每題取樣幾次。",
+    "提示詞要點": "開放題：『Answer the following {category} question.』＋題目＋要求逐步思考，最後以『Answer: XXX』格式作答；選擇題列出 A)–D) 選項，要求以『Answer: X』給字母；BIG-bench 改用 (A) 格式對齊原作者；開放式數學題另要求只回整數、不要 LaTeX。作者說只調到不因格式出錯為止，沒有進一步做 prompt engineering。",
+    "步驟2_判分": "解析 Answer: 後的字串，跟單一正解（選擇題字母或唯一答案）比對；閱讀理解題的正解是一份有效答案清單。",
+    "步驟3_分流與人工複核": "只要有 ≥1 個模型答錯就進人工檢查。判斷依據：模型普遍與給定標籤不同 → 疑似標錯；模型彼此答案分歧 → 疑似題目歧義。每題處置三選一：標籤正確（保留，該錯誤算模型的）／標籤錯（relabel 後保留）／爛題（刪除）。爛題分三類：題幹邏輯矛盾、歧義導致多個合理答案、題目構造明顯缺陷（如缺條件）。所有模型都答對的題不複核，所以找到的錯誤數只是下限。",
+    "閱讀理解的特殊處理": "標籤改為有效答案清單：凡是模型答出、與原標籤不同但正確的說法都加入，並再主動補列同義寫法（如 1／one／1 scoring drive）；開放到列不完的題標為爛題。計算『標錯』時只數原標籤不在新清單內的情況。比較原版錯誤數時，改用 GPT-4o 判斷模型答案是否與原標籤『等價』；platinum 版則全用人工列舉。",
+    "VQA_v2.0": "因原資料是 10 個群眾標籤的重疊分數，改為全部人工重標成單一標籤；只取 yes/no 題；按 VQA v2.0 的互補圖片成對抽樣，任一張判為模糊就整對剔除。",
+    "度量與聚合": "報告每個集合的錯誤題數而非準確率（天花板附近較能區分模型）。總分 Score＝每個集合算錯誤率 → 類別內平均 → 對 Math、Logic、Tab、RC、CR 五類再平均（不含 Vis）；分數是錯誤率，越低越好。可靠性前沿＝模型零錯誤的最難集合，數學用 SingleOp→SingleEq→MultiArith→SVAMP→GSM8K→MMLU HS Math 當難度階梯。",
+    "失敗模式探勘": "讀失敗案例的 CoT 找出可疑模式，再程序化生成同型題驗證：(a) first event bias：用 GPT-4o 生成 50 段歷史脈絡並挑兩個先後明確的事件，問『What happened second: X or Y』，正反順序各一次共 100 題；(b) rounding up primes：模板『n*k 人的旅行團、每台巴士坐 k 人、需要幾台』，n 取 3–300 並依非平凡因數對數量 0–3 分組，k 取 3–9，過濾掉除法本身算錯的案例，只數『整除仍無條件進位』的錯誤；只測 Claude 3.5 Sonnet (June)。",
+    "輸出": "15 個 platinum 子集（Table 2 最右欄的題數）、每個模型的逐集合錯誤數（Table 3，每個錯誤都經人工確認）、原版與清理版的平均錯誤數對照（Table 4）。"
+  },
+  "assumptions": [
+    "標籤錯誤或歧義多半會讓至少一個前沿模型答錯；所有模型都與錯誤標籤一致的題會漏掉（作者承認是下限）。",
+    "作者的人工判斷（何謂歧義、何謂爛題）正確且一致；論文沒有報告多位標註者或一致性指標。",
+    "一個定義清楚的問題有唯一答案或可列舉的答案集合，可靠性等於在這類題目上近乎 100% 正確。",
+    "在 temperature 0.5 下每題的一次作答足以代表模型在該題的可靠性。",
+    "選定的 CoT 格式提示足以排除格式錯誤，剩下的錯誤反映能力而非提示詞。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "SingleOp",
+      "SingleEq",
+      "MultiArith",
+      "SVAMP",
+      "GSM8K",
+      "MMLU High School Math",
+      "BIG-bench Logical Deduction (3 objects)",
+      "BIG-bench Object Counting",
+      "BIG-bench Navigate",
+      "TabFact",
+      "HotpotQA",
+      "SQuAD2.0",
+      "DROP",
+      "Winograd WSC",
+      "VQA v2.0"
+    ],
+    "metrics": [
+      "每集合錯誤題數（# errors）",
+      "Score：類別內平均錯誤率再對五類平均（不含 VQA）",
+      "原版 vs 清理版的平均錯誤數",
+      "% errors caused by benchmark errors（原版錯誤中可歸因於標籤錯誤或爛題的比例）",
+      "爛題數、標錯數、platinum 題數（Table 2）",
+      "程序化生成題上的失敗率（Figure C.1、C.2）"
+    ],
+    "baselines": [
+      "各基準的原始版本（Table 4 對照）",
+      "MMLU-Redux 對 MMLU HS Math 的重標（重疊 100 題）",
+      "約 20 個前沿模型彼此比較（無方法層面的 baseline）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "已飽和基準的標籤錯誤與爛題比例相當高，在 GSM8K、SVAMP、VQA v2.0、TabFact 上甚至高於前沿模型自己回報的錯誤率；閱讀理解類最嚴重。",
+      "numbers": "由 Table 2 推算（爛題＋標錯／原題數）：SVAMP 30/300＝10%、GSM8K 27/300＝9%、TabFact 30/200＝15%、HotpotQA 72/250＝28.8%、DROP 47/250＝18.8%、SQuAD2.0 90/250＝36%；VQA v2.0 刪 352/600（含成對剔除）。注意：§2.2 文字說閱讀理解最高約 30%、引言說 GSM8K 約 5%，都與表格推算不一致。",
+      "section": "§2.2、Table 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "原版基準上模型的錯誤，多數集合有過半可歸因於標籤雜訊而非真正的模型失敗；清理後平均錯誤數大幅下降。",
+      "numbers": "可歸因比例：SingleOp 90%、SingleEq 93%、MultiArith 89%、SVAMP 77%、GSM8K 48%、MMLU HS Math 5%、Logic 3-Obj 0%、Object Counting 24%、Navigate 0%、TabFact 75%、HotpotQA 91%、SQuAD2.0 82%、DROP 77%、Winograd 10%（14 個中 8 個 >50%）。平均錯誤數例：SQuAD2.0 56.2→9.9、HotpotQA 26.4→2.3、SVAMP 18.8→4.3、GSM8K 10.1→5.2；邏輯類因為是程式生成所以幾乎沒有標籤錯誤。",
+      "section": "§3.2 finding 2、Table 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "清理後幾乎每個模型在幾乎每個集合上仍有錯；只有 SingleOp、SingleEq、MultiArith 這類極簡單的數學集合普遍零錯誤。",
+      "numbers": "Score 最佳 o1 (high) 0.75%（仍錯 GSM8K 2、MMLU HS Math 1、SQuAD2.0 5、Winograd 5、VQA 10），其次 Claude 3.5 Sonnet (Oct) 1.08%、o1 (med) 1.27%、DeepSeek-R1 1.64%；最差 Mistral Small 11.09%。",
+      "section": "§3.2 finding 1、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "能力較強的模型也較可靠，且只有較強的模型能在少數集合零錯誤；最弱的模型沒有任何一個集合能全對。",
+      "numbers": "GPT-4o (Aug) 2.40% vs GPT-4o mini 6.88%；Llama 3.1 405B 1.91% vs Llama 3.1 70B 4.02%。",
+      "section": "§3.2 finding 3、Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "可靠性依能力類別而異：o1 系列與 DeepSeek-R1 在數學最可靠，Claude 3.5 Sonnet (Oct) 在常識推理最可靠，所以選模型要看任務類別。",
+      "numbers": "Winograd 錯誤數：Claude 3.5 Sonnet (Oct) 3、o1 (high) 5、o1-mini 19；但同一個 Sonnet (Oct) 在 MMLU HS Math 錯 21/268（7.8%），o1 (high) 只錯 1。",
+      "section": "§3.2 finding 4、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "First event bias：問「兩件事哪個發生在第二」時，部分模型幾乎總是答第一件，甚至在 CoT 裡明說自己找的是先發生的那件。",
+      "numbers": "100 題程序化生成題（50 段脈絡 × 正反順序）：Gemini 1.5 Flash、Gemini 1.5 Pro、Mistral Small 失敗率 >85%（隨機猜是 50%），許多其他模型錯誤率 ≥25%；同難度的 DROP 整體錯誤率中位數 <3%。",
+      "section": "§3.3、Appendix C.1、Figure C.1",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "Rounding up primes：Claude 3.5 Sonnet (June) 在整除的應用題上仍會無條件進位多算 1；答案越接近質數（非平凡因數對越少）越常發生。",
+      "numbers": "答案為質數時，這種進位錯誤出現約 20%；因數對越多頻率越低（Figure C.2）。",
+      "section": "§3.3、Appendix C.2、Figure C.2",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "跟 14 位人類專家做的 MMLU-Redux 對照，重標結果幾乎一致，唯一的分歧是 MMLU-Redux 的專家把正確標籤改錯了，顯示清理流程本身也難免出錯。",
+      "numbers": "MMLU HS Math 重疊 100 題，99 題一致、1 題分歧（分歧處判定為 MMLU-Redux 標錯）。",
+      "section": "§4 Related Work",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "偵測策略是只對「至少一個模型答錯」的題做人工檢查，所以找到的錯誤數只是下限；所有模型都以同一種方式理解歧義題時會漏掉。",
+      "numbers": "無量化；GSM8K-Platinum 全量版（HF 資料集卡片）從 1,319 題刪到 1,209 題（110 題，約 8.3%），並以 cleaning_status 標出 consensus（未複核）／verified／revised。",
+      "section": "§2.2、§5.1 limitation 3",
+      "anchor_idx": 1
+    }
+  ],
+  "limitations_stated": [
+    "15 個集合沒涵蓋程式碼、工具使用等能力；只有數學做了難度階梯，其他類別沒有。",
+    "部分集合只有約 100 題，0% 與 1% 錯誤率在這種樣本量下分不太開。",
+    "只複核至少一個模型答錯的題，全體模型都與錯誤標籤一致的爛題仍可能留在集合裡。",
+    "目前最難只到高中數學，等可靠性前沿往上推，建 platinum 基準會需要昂貴的專家標註。",
+    "提示詞會影響可靠性；作者只調到避免格式錯誤，沒有系統性研究 prompt brittleness。"
+  ],
+  "limitations_observed": [
+    "可靠性只抽一次：論文把可靠性定義為「總是（或近乎總是）答對」，但在 temperature 0.5 下看不到重複取樣次數，也沒有誤差棒或信賴區間。單次答錯分不出是隨機失誤還是系統性失敗。用 rule of three 估，SingleEq 100 題零錯誤只能說錯誤率 95% 上界約 3%，150 題約 2%。Table 3 中 o1-mini 3.03%、Gemini Thinking 3.03%、Qwen 2.5 72B 3.09%、o3-mini (high) 3.18%、Grok 2 3.20% 這一串排序落在抽樣誤差內，卻被當成排名呈現。要量「每次都對」，應該對同一題重複 k 次，算 pass^k 或逐題一致性。",
+    "Score 的聚合權重讓少數小集合主導排名：五類等權，數學六個集合共享 1/5，TabFact（173 題）與 Winograd（195 題）各自單獨佔 1/5。o1 (high) 的 0.75% 中約 0.51 個百分點來自 Winograd 的 5 題錯誤；Claude 3.5 Sonnet (Oct) 在 MMLU HS Math 錯 21/268（7.8%），被六個數學集合攤平後只貢獻約 0.26。前兩名的先後幾乎由一個 195 題的集合決定。以上由 Table 3 反算，三列都與論文分數吻合。",
+    "「每個錯誤都經人工確認」只對當時受測的這批模型成立：候選題由同一批模型的錯誤篩出，閱讀理解的有效答案清單也是從這批模型的答案擴充而來。新模型只要用了清單外的正確說法就會被誤判；所有模型都答對而沒人看過的題（HF 卡片上的 consensus 狀態）也沒有保證。所以 platinum 性質不能自動轉移到下一代模型，每次加入新模型都得再複核它的新錯誤，論文沒有定義這個流程。",
+    "Table 4 的「錯誤可歸因於標籤雜訊」比例其實混了兩種判分器：原版閱讀理解用 GPT-4o 判等價（GPT-4o 本身也是受測模型），platinum 版用人工列舉的答案清單。HotpotQA 91%、SQuAD2.0 82%、DROP 77% 的降幅中，有一部分是判分器從 LLM 換成人工造成的，不全是標籤錯誤。",
+    "只有答錯的題才會被檢查、才可能被刪，所以刪題與模型失敗是相關的：作者單人判定為「歧義」而刪除的題，可能其實是難但公平的題，會讓 platinum 分數系統性偏樂觀。反過來也有爭議標籤被保留的例子：附錄 E 的 SQuAD2.0「挖地基能防止什麼損壞」一題，標籤是 N/A，幾乎所有模型都答 utility lines。依論文自己的啟發式，這正是「模型一致與標籤不同」的疑似標錯訊號，卻算成每個模型的錯誤。o3-mini (high) 在 SQuAD2.0 錯 35/164（21%），遠高於它在其他集合的表現，推測 RC 的分數有一大塊是在量「何時該回 N/A」的棄答政策，而不只是閱讀理解能力。",
+    "論文內部數字不一致：§2.2 說閱讀理解集合最多約 30% 有問題，但 Table 2 的 SQuAD2.0 是 (86+4)/250＝36%；引言說 GSM8K 約 5% 有誤，Table 2 則是 27/300＝9%；§3.2 說 SVAMP 約 75%，Table 4 是 77%。另外，快取全文中附錄 E 一則 GSM8K 範例（問年薪）標示的答案是 23，與題意的數量級不符（多數模型答 10080），可能是排版或抄錄錯誤。一篇主張嚴格標註的論文，自己的呈現層也有未校對之處，正好說明判準稽核需要機制化，不能只靠一次人工。",
+    "First event bias 的 100 題脈絡與「正解」由 GPT-4o 生成並挑選，論文沒有說有人工驗證。這組數字依賴的判準，正是論文批評的那種未經複核的標籤。",
+    "取樣設定的交代不完整：論文宣稱全部題目用 temperature 0.5，但 o1／o3-mini 等 OpenAI 推理模型的 API 不開放調整 temperature（依 OpenAI reasoning 文件），論文沒說明這些模型實際用了什麼設定，也沒交代 DeepSeek-R1 等開源模型走哪個服務商。",
+    "外推到 agent 任務完成分數的限制：全部是單輪、單一答案比對、一次作答。agent 任務的成功判準常是終態比對或多個可接受終態，「≥1 個模型失敗就人工複核」在軌跡長、可接受解多的任務上成本會暴增；而且這裡的可靠性是「每個類別的錯誤率」，不是同一任務反覆執行的一致性，不能直接拿來當 pass^k 類指標的替代。"
+  ],
+  "framework_role": "T8「任務成功的判準」的前置稽核方法與警訊。第一，在天花板附近，量到的失敗多半是判準（標籤）本身錯了。任務完成分數在計算前，要先用多模型分歧做分流、人工處置標籤：relabel、刪題，或擴充成可接受答案集合。第二，全對型的可靠性指標（零錯誤、pass^k、每次都成功）對判準錯誤極度敏感：一題標錯或不可解，就會讓所有模型在該題的 pass^k 永遠是 0，看起來像模型不可靠。所以 platinum 式清理是這類指標成立的前提。第三，接近滿分時應報錯誤數而非準確率。它不提供多次試驗的可靠性度量、部分分數或過程度量，對 agent 的多步任務只能提供判準稽核的流程範本。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。本次只查了作者的 GitHub repo（https://github.com/MadryLab/platinum-benchmarks）與 HF 資料集頁面（https://huggingface.co/datasets/madrylab/gsm8k-platinum），兩者都沒有提到任何產品、model card 或官方評估套件採用。作者自己維護的排行榜與資料集釋出屬於發布，不算採納。本 session 的 WebSearch 額度已用完，未能做更廣的檢索。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/MadryLab/platinum-benchmarks",
+    "data": "公開：HF 上的 madrylab/platinum-bench（15 個 platinum 子集）與 madrylab/gsm8k-platinum（GSM8K 測試集全量 1,319→1,209 題，每題附 cleaning_status：consensus／verified／revised）。附加標註採 CC BY-SA 4.0（依 HF 資料集卡片），另有作者的錯誤檢視器與排行榜。提示詞模板在附錄 B.2，每題取樣次數未說明。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它對「成功判準本身可能是錯的」給出了可移植的稽核流程與量化證據，是 pass^k 類全對指標的前提警訊；但實驗全是單輪 QA、單一答案比對、單次作答，不涉及 agent 的終態判準與多次試驗可靠性，核心教訓可以一段話轉述，不算 T8 必讀。",
+  "related": [
+    "2103.14749",
+    "2406.04127",
+    "2104.02145",
+    "2406.12809",
+    "2406.02061",
+    "2110.14168",
+    "2103.07191",
+    "1806.03822"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

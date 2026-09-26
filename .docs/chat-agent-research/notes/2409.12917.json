@@ -1,0 +1,179 @@
+{
+  "id": "2409.12917",
+  "title": "Training Language Models to Self-Correct via Reinforcement Learning",
+  "topic": "T5",
+  "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 SCoRe：以兩階段、多輪 on-policy RL（REINFORCE＋KL），只用模型自己產生的資料訓練單一 LLM 做一輪內在自我修正，並用「進步」獎勵塑形避免退化成「第一輪答好、第二輪不改」，在 MATH 與 HumanEval 上首次得到明顯為正的 Δ(t1,t2)。",
+  "problem": "內在自我修正（測試時沒有外部回饋、沒有 oracle）在現行 LLM 上幾乎無效，提示式方法（Self-Refine 類）甚至讓第二輪準確率下降；既有訓練式做法不是要多個模型（另訓練一個 refinement／corrector 模型、部署時要同時服務），就是要更強的 teacher 或人工修訂示範。作者要回答：能不能只靠模型自己產生的資料、只訓練一個模型，就讓它在第二次嘗試時真的修正錯誤。這關係到「用測試時算力換品質」的 meta-strategy：若序列修正無效，多花的推論算力只能拿去做平行取樣。",
+  "core_idea": "先診斷 SFT 式做法（STaR、Pair-SFT）失敗的兩個原因：(1) 分布偏移——離線修正軌跡裡的錯誤來自資料收集模型，學到的修正遷移不到模型自己的錯誤；(2) 行為崩塌——模型學成「第一輪直接給最好的答案、第二輪原樣或微改」。on-policy RL 能解 (1)，但標準多輪 RL 仍會崩塌，因為「真的改進」與「第一輪答對後不動」在訓練集上一樣最佳（作者類比 meta-learning 的 memorization 問題）。SCoRe 因此刻意讓「直接答」這條路變得沒那麼划算：Stage I 用強 KL 把第一輪綁在 base 模型附近、只最佳化第二輪，得到兩輪解耦的初始化；Stage II 聯合最佳化兩輪，並在第二輪獎勵加上 α·(r2−r1) 的進步獎勵，重賞錯→對、重罰對→錯。",
+  "method": {
+    "問題設定": "資料集 D={(x_i, y*_i)}；策略 π_θ(·|[x, ŷ_{1:l}, p_{1:l}])，本文固定兩次嘗試（一輪修正）。第一輪輸入題目 x（MATH 用 zero-shot CoT、MBPP 用 canonical 3-shot、HumanEval 用 zero-shot），產生 ŷ1；第二輪 context＝[x, ŷ1, p1]，p1 是固定的自我修正指令，不透露第一輪對錯，產生 ŷ2。訓練時有 oracle 二元獎勵 r̂(y, y*)：MATH 為最終答案比對，程式為是否過全部測試案例；測試時沒有 oracle，模型必須自己判斷有沒有錯。",
+    "基礎 RL 演算法": "REINFORCE 策略梯度，加上對固定參考策略 π_ref 的 KL 懲罰（沿用 Ahmadian et al. 2024，2402.14740 的做法），單輪形式為 max E[r̂(y,y*) − β1·KL(π_θ(·|x)||π_ref(·|x))]；多輪版依 ArCHer（2402.19446）的階層框架延伸。只用每輪的瞬時獎勵，等同折扣因子 γ=0（附錄 A.2）。",
+    "Stage I（解耦用的初始化）": "目標：max E[r̂(y2,y*) − β2·KL(π_θ(·|x1)||π_ref(·|x1))]。只對第二輪的正確性最佳化，同時對第一輪輸出施加較強的 KL（β2）把它壓在 base 模型附近；預設的 β1 KL 仍在，但權重小。目的是提高「給定 base 風格的第一輪、第二輪能改對」的覆蓋度，打破兩輪輸出綁在一起的傾向，讓後續 RL 不易崩塌。論文提到可改用 adaptive β2 來平衡第一輪 KL 與第二輪目標的量級，但沒寫哪些實驗用了。",
+    "Stage II（多輪 RL＋獎勵塑形）": "由 Stage I 的權重起跑，目標：max E[Σ_{i=1,2} ( r̂(y_i,y*) − β1·KL(π_θ(·|x_i)||π_ref(·|x_i)) )]。第二輪的獎勵再加 bonus b̂(y2|y1,y*) = α·(r̂(y2,y*) − r̂(y1,y*))，α 為大於 1 的常數（實作 α=10）。二元獎勵下：錯→對的第二輪得 1+α，對→錯得 −α，正確性不變則 bonus 為 0。",
+    "狀態覆蓋增強": "部分實驗把「重複取樣 base 模型得到的第一輪答案」當成離線 prompt 加進 on-policy RL（尤其是 Stage II，此時第一輪策略可能已偏離 base），作者說在資料少時幫助很大；論文沒說明哪幾個主結果用了這個技巧。",
+    "超參數（附錄 B，Table 5）": {
+      "MATH": "Gemini 1.5 Flash；Adam；lr 5e-6；3000 training steps；batch 512；取樣溫度 1.0；α=10；β1=0.01；β2=0.1。",
+      "MBPP（程式）": "Gemini 1.0 Pro；Adam；lr 1e-5；1500 training steps；batch 128；取樣溫度 1.0；α=10；β1=0.01；β2=0.25。",
+      "論文未寫明": "步數在 Stage I 與 Stage II 之間如何分配、每題 rollout 數、REINFORCE 的 baseline 形式、兩個 stage 是否交替或重複執行。"
+    },
+    "提示詞（附錄 C，轉述）": {
+      "MATH 第一輪": "系統說明：扮演數學專家、只回答最後一題、逐步思考，最後以固定句式「Final Answer: The final answer is $answer$. I hope it is correct.」給出答案。",
+      "MATH 自我修正指令": "告訴模型上面的解答可能因為沒理解題意而有錯，請在有錯時修正並重寫解答，只輸出最終解，並沿用同一個最終答案句式。",
+      "MBPP／HumanEval 自我修正指令": "以一行 Python 註解表達同樣語意：程式可能因誤解題意而有錯，請在有錯時修正並重寫，只輸出最終正確的 Python 程式。",
+      "MBPP 第一輪": "三則「任務描述＋三條 assert 測試＋[BEGIN] 程式 [DONE]」的 few-shot 範例。"
+    },
+    "評估協定": "每題兩次嘗試；評估一律 greedy decoding（溫度 0），只有 §6.2 的推論算力實驗用溫度 0.7。所有 RL 執行以「訓練獎勵最高」的 checkpoint 為準。MATH 依 Lightman et al. 的切分：訓練集再加入 4500 題測試題，只在剩下的 MATH500 報結果；程式在 MBPP 訓練、HumanEval 測試（測試案例不給模型看），另報 MBPP-R（修復 PaLM 2 產生的錯誤程式的離線修復任務，依 Ni et al. 2024 的協定）。所有方法固定取樣與梯度更新預算，lr 與 batch 不隨方法調整。",
+    "指標": "Accuracy@t1、Accuracy@t2、Δ(t1,t2)＝t2−t1；Δ^{i→c}（第一輪錯、第二輪對的題數佔全部題的比例，衡量修好幾題）；Δ^{c→i}（第一輪對、第二輪錯的比例，衡量模型懂不懂什麼叫對）。診斷用 edit distance ratio：兩次回應的編輯距離除以兩者總長，用來看模型是否「幾乎不改」。",
+    "基準的建構（§4）": "用 Gemini 1.5 Flash 在 MATH 上大量取樣兩輪修正軌跡。STaR：只保留把錯答改對的軌跡做 SFT，跑 3 輪迭代（依 ReST-EM 協定）。Pair-SFT：把同一題的錯誤回應與正確回應配成人工的修復對做 SFT，只訓練單一模型、只跑一輪。兩者的「＋」版本另加入「對→對」的配對。",
+    "重做需要的元件": "有可自動驗證答案的訓練集與二元判定器；兩輪 rollout 管線（第二輪 context 拼接第一輪輸出與固定指令）；支援逐輪 KL（第一輪、第二輪不同係數）的 REINFORCE 訓練器；依序執行 Stage I、Stage II；獎勵塑形函式。沒有官方程式碼。"
+  },
+  "assumptions": [
+    "訓練時有 oracle 二元獎勵（答案比對或單元測試），也就是任務的結果要能自動驗證。",
+    "模型本身已具備解題所需的知識，只是第一次沒有引出來（作者的動機論證）；修正是在「引出既有知識」，不是學新知識。",
+    "base 模型的第一輪有足夠多可修的錯誤，第二輪取樣有足夠覆蓋讓 RL 探索得到錯→對的轉移。",
+    "修正固定為一輪、每題都一定進行第二輪；何時需要修正不由外部判斷，也不由模型決定是否開啟第二輪，模型只能用「不改答案」表達。",
+    "訓練與測試分布相近（MATH 內部切分；MBPP→HumanEval 同屬短函式生成）。",
+    "有能力對大型封閉模型做線上多輪 RL 的基礎設施（作者自承因基礎設施限制只做兩輪）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MATH（在 MATH500 上評估；訓練集含 4500 題原測試題）",
+      "MBPP（程式訓練集）",
+      "HumanEval（程式測試）",
+      "MBPP-R（離線程式修復，修 PaLM 2 的錯誤程式）"
+    ],
+    "metrics": [
+      "Accuracy@t1",
+      "Accuracy@t2",
+      "Δ(t1,t2)",
+      "Δ^{i→c}(t1,t2)",
+      "Δ^{c→i}(t1,t2)",
+      "edit distance ratio（診斷用）",
+      "self-consistency 多數決準確率對取樣預算的曲線（§6.2）",
+      "最多 10 次迭代修正的逐次準確率（附錄 A.1）"
+    ],
+    "baselines": [
+      "Base model（Gemini 1.5 Flash／Gemini 1.0 Pro，以相同指令做兩輪）",
+      "Self-Refine（提示式自我修正）",
+      "STaR（D_STaR 與 D_STaR+，3 輪迭代）",
+      "Pair-SFT（Welleck et al. 2023 風格，但只訓練單一模型；D_SFT 與 D_SFT+）",
+      "消融：單輪 RL（w/o multi-turn training）、w/o Stage I、w/o reward shaping、Stage II 以 STaR 取代 REINFORCE",
+      "附錄 A.2：γ=0.8、α=1.0 的標準多輪 RL"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在 MATH500 上，SCoRe 是第一個得到明顯為正內在自我修正 Δ 的方法，第二輪準確率也最高；提示式與 SFT 式基準的 Δ 都接近 0 或為負。",
+      "numbers": "Base：Acc@t1 52.6%→Acc@t2 41.4%（Δ −11.2）；Self-Refine Δ −1.0；STaR+ Δ 0.4；Pair-SFT Δ 1.8（t2 54.2%）；SCoRe：60.0%→64.4%（Δ +4.4）。相對 base，Δ 提升 15.6pp、Acc@t2 提升 23.0pp。",
+      "section": "§6.1、Table 2、Figure 1 左",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "只在 MBPP 上訓練，SCoRe 在 HumanEval 的自我修正 Δ 明顯高於 base，而 Pair-SFT 與 Self-Refine 反而讓第二輪變差。",
+      "numbers": "Base：53.7%→56.7%（Δ 3.0；i→c 7.9、c→i 4.9）；Self-Refine Δ −1.2；Pair-SFT Δ −1.8；SCoRe：52.4%→64.6%（Δ 12.2；i→c 15.2、c→i 3.0）。作者寫「比 base 高 9.1pp」，依表計算為 9.2pp。",
+      "section": "§6.1、Table 3",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "SCoRe 同時提高修好錯題的比率並大幅壓低把對題改錯的比率，但這兩個數字用的分母不同。",
+      "numbers": "以「第一輪答錯的題」為分母：SCoRe 修好 14.5%（＝5.8/40.0），作者寫 base 為 9.5%（依表 4.6/47.4 約 9.7%）；以全部題為分母的對→錯比例從 15.8% 降到 1.4%（Table 2 的 Δ^{c→i} 欄）。",
+      "section": "§6.1、Table 2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "SCoRe 在離線修復任務 MBPP-R 也最好，但 Pair-SFT 在這個靜態任務上幾乎追平，卻在線上自我修正變差，作者據此強調 on-policy 取樣的必要。",
+      "numbers": "MBPP-R：Base 47.3%、Self-Refine 30.7%、Pair-SFT 59.8%、SCoRe 60.6%；作者類比為 GPT-3.5（43%）到 GPT-4（63.2%）的差距。同一個 Pair-SFT 在 HumanEval 的 Δ 為 −1.8。",
+      "section": "§6.1、Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "在自己產生的修正軌跡上做 SFT 不足以學會自我修正：Pair-SFT 的改善主要來自少改壞，而不是多改好；STaR 甚至更常把對的改錯；加入對→對資料後則偏向完全不改。",
+      "numbers": "Table 1（Gemini 1.5 Flash、MATH）：Base Δ −11.2（i→c 4.6、c→i 15.8）；STaR Δ −14.2（c→i 19.6）；STaR+ Δ 0.4；Pair-SFT Δ 1.8（i→c 5.4、c→i 3.6）；Pair-SFT+ Δ 0（i→c 與 c→i 皆 0）。",
+      "section": "§4、Table 1、Figure 4、Figure 5",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "在固定取樣預算下，把一半預算拿去「平行取樣後各自修正一次」再做多數決，比全部拿去平行取樣更有效。",
+      "numbers": "每題 32 個樣本預算：純平行取樣的準確率增益 7.4%，結合序列自我修正為 10.5%（溫度 0.7；增益的起點論文內文未明說）。",
+      "section": "§6.2、Figure 1 右",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "Stage I 不可省：直接跑 Stage II 會讓 Δ 與第二輪準確率都下降；標準多輪 RL 下模型在第二輪換答案的頻率很快掉下去（行為崩塌）。",
+      "numbers": "w/o Stage I：Acc@t1 59.2%、Acc@t2 61.4%、Δ 2.2（相對 SCoRe 的 64.4%／4.4，約少 3.0pp 與 2.2pp）。",
+      "section": "§6.3、Table 4、Figure 6",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "Stage II 若以 STaR（離線過濾後 SFT）取代 on-policy REINFORCE，絕對準確率明顯較低，自我修正也沒有額外改善。",
+      "numbers": "w/ STaR instead of REINFORCE Stage II：Acc@t1 56.2%、Acc@t2 58.4%、Δ 2.2（SCoRe 為 60.0／64.4／4.4）。",
+      "section": "§6.3、Table 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "只訓練兩輪的 SCoRe 在最多 10 次的迭代修正中，第二輪之後只微幅上升就持平；base 從未超過第一輪，Pair-SFT 第二輪後不再進步。",
+      "numbers": "論文只以圖呈現，未給具體數字。",
+      "section": "附錄 A.1、Figure 8",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "因基礎設施限制只訓練一輪修正（兩次嘗試），之後的輪次可能沒有第一輪有效；附錄 A.1 的多輪曲線在兩輪後持平。",
+    "兩個 stage 要分別執行多次訓練，作者希望未來能合併 Stage I 與 Stage II。",
+    "作者認為學習 self-correction 這類 meta-strategy 可能需要超越標準 LLM 微調、加入正則（如進步獎勵），改善多次修正的擴展性留待未來。",
+    "附錄 A.2：用 γ=0.8、α=1.0 的多輪 RL 仍然會崩塌到不修正，也就是單靠折扣回報不足以取代兩階段設計。"
+  ],
+  "limitations_observed": [
+    "沒有多種子、沒有信賴區間，卻多次用「significantly positive」。MATH500 每 1pp 是 5 題，HumanEval 164 題每題約 0.61pp；Table 4 的「w/o Stage I」Δ 2.2 與「w/o reward shaping」Δ 2.6 相對 SCoRe 的 4.4，只差約 9–11 題，而且都來自單次 greedy 評估，消融結論的強度不足。",
+    "checkpoint 選擇沒有獨立驗證集：RL 執行一律挑「訓練獎勵最高」的 checkpoint（作者也承認可以改用小型驗證集但沒做）；而 STaR、Pair-SFT 等 SFT 基準的 checkpoint 怎麼選，論文完全沒寫，SCoRe 與基準之間的比較不一定是同一套選模規則。",
+    "§6.1 的內文數字與表格不一致，引用時要以表為準：(a) 14.5% 與 9.5% 是以「第一輪答錯的題」為分母（5.8/40.0＝14.5；base 依表 4.6/47.4≈9.7 而非 9.5），同一句的 15.8%→1.4% 卻是全部題為分母，也和 Table 2 的 Δ^{i→c} 欄（5.8 vs 4.6）不是同一尺度；(b) 相對 Pair-SFT「10.2% 與 2.6%」照 respectively 的順序是 Δ 與 Acc@t2，但依 Table 2，Δ 只多 2.6（1.8→4.4）、Acc@t2 多 10.2（54.2→64.4），順序寫反了，會讓人高估相對最強 SFT 基準的修正增益；(c) HumanEval 的 Δ 增益依表是 9.2pp，摘要寫 9.1pp；(d) 式 (1) 寫 l=1、指標段落寫 l=2，嘗試數的記號前後不一。",
+    "HumanEval 上 SCoRe 的 Acc@t1（52.4%）低於 base（53.7%），所以 12.2 的 Δ 有一部分來自較差的第一輪；Acc@t2 從 56.7% 到 64.6% 仍是實質進步，但單看 Δ 會誇大修正能力。",
+    "§6.2「序列修正比平行取樣更划算」的比較只在 SCoRe 模型內部做：沒有跟 Table 4 的單輪 RL 模型（Acc@t1 61.8%，第一輪比 SCoRe 還高）以同樣 32 樣本做平行多數決比較，也沒有計入第二輪 context 變長帶來的 token 成本，所以只證明了對 SCoRe 自己成立，不能推到「訓練自我修正比訓練更強的單輪模型更划算」。",
+    "沒有跟最接近的前作 RISE（2407.18219，同作者群、同樣是多輪自我改進）直接比較，只在相關工作中以文字比較；也沒有跟借助外部回饋（執行結果、驗證器）的修正方法比，無法判斷內在修正相對外部回饋修正的價值。提示式基準只有 Self-Refine 一個，而它在 MBPP-R 只有 30.7%（遠低於 base 的 47.3%），這個實作的提示品質值得懷疑。",
+    "二元結果獎勵只看最終答案，附錄 E 被標為「修正成功」的例子裡就有錯誤推理：MATH Example 3 第二輪的 case 2，根 −11、−3、−1、1、3 的乘積是 −99 而不是 ±33，case 3 七個根加總是 1 而不是 −11，只是最終答案 14 剛好對；Example 5 在 C、D 還沒放置前就用它們界定弧段，分情況討論不成立，答案 1/3 也只是剛好對。這表示結果獎勵可能強化「答案對、過程錯」的修正，對需要可解釋修正紀錄的 agent 場景是風險。",
+    "固定指令、固定兩輪：每題都強制進入第二輪，沒有「何時需要修正」的判斷，也沒有評估強制修正的延遲與 token 成本，或與「只在低信心時才觸發修正」的策略比較；放進多輪 agent 時，觸發條件仍得由外部決定。",
+    "只在數學與短函式程式這類有可驗證答案的單輪任務上驗證；開放式對話、多輪使用者互動、工具呼叫軌跡沒有現成的 oracle 二元獎勵，方法不能直接搬到本框架的主場景。",
+    "封閉模型（Gemini 1.0 Pro／1.5 Flash）、沒有程式碼、沒有公開 rollout 數與 stage 步數分配，外部幾乎無法重現；對開源模型、較小模型是否同樣有效，論文沒有證據。"
+  ],
+  "framework_role": "T5 的核心文獻，是「訓練得到的內在自我修正」子領域的代表作與比較基準點：證明不靠外部回饋、不靠更強的 teacher，只用可驗證獎勵的多輪 on-policy RL，就能讓單一模型在第二輪修正自己；同時提供 SFT 式自我修正失敗的診斷（分布偏移、行為崩塌）與一組衡量修正效能的指標（Δ、Δ^{i→c}、Δ^{c→i}）。在框架裡它回答的是「修正能力從哪來」：修正行為被內建進模型權重，而不是靠外掛的 reflection 迴圈或驗證器。它不處理修正的觸發（第二輪無條件發生，沒有軌跡異常偵測，所以不涉及 E3），也不把修正結果回寫對話狀態（不涉及 E2）。對本框架最直接可用的是兩點：Δ^{i→c}／Δ^{c→i} 可作為 T5→T7 修正紀錄的標準評估欄位；「錯→對重賞、對→錯重罰」的進步獎勵塑形可借用到任何以修正紀錄訓練 corrector 的流程。",
+  "edges": [
+    {
+      "edge": "E5",
+      "how": "評估完全建立在每題「第一輪／第二輪」的正確性轉移紀錄上：Accuracy@t1／t2、Δ(t1,t2)、Δ^{i→c}（新修好的題）、Δ^{c→i}（改壞的題），再加上兩輪回應的 edit distance ratio 用來偵測「幾乎不改」的行為崩塌；同一組轉移資料還被轉成訓練訊號（第二輪獎勵加上 α·(r2−r1)）。這是把修正紀錄回流評估、甚至回流訓練的具體做法。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身只在研究中微調 Gemini 1.0 Pro 與 Gemini 1.5 Flash，沒有宣稱任何產品部署或 Gemini 服務採用 SCoRe；Semantic Scholar 登記場域為 ICLR、約 462 次引用，屬學術影響力，不算採納。本次 WebSearch 額度已用盡，未能在官方文件或 model card 進一步查證，因此不做推測。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "MATH、MBPP、HumanEval、MBPP-R 皆為公開資料集；模型為封閉的 Gemini，沒有官方程式碼、沒有釋出訓練 rollout 或 checkpoint；超參數見附錄 B。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "第一個在嚴格內在設定下得到明顯為正自我修正的訓練方法，直接回應「LLM 還不能自我修正」的批判，其失敗診斷與 Δ^{i→c}／Δ^{c→i} 指標是 T5 的必備詞彙；缺點是封閉模型、沒有程式碼、統計證據偏薄。",
+  "related": [
+    "2310.01798",
+    "2406.01297",
+    "2407.18219",
+    "2211.00053",
+    "2203.14465",
+    "2303.17651",
+    "2303.11366",
+    "2402.14740",
+    "2402.19446",
+    "2408.03314",
+    "2312.06585",
+    "2402.10963",
+    "2305.08844",
+    "2404.14662"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

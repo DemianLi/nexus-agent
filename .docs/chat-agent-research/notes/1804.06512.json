@@ -1,0 +1,163 @@
+{
+  "id": "1804.06512",
+  "title": "Dialogue Learning with Human Teaching and Feedback in End-to-End Trainable Task-Oriented Dialogue Systems",
+  "topic": "T6",
+  "subarea": "使用者回饋迴路與滿意度估計",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "先用語料監督預訓練一個端到端任務型對話模型，再讓它與使用者互動：前期請使用者逐輪更正狀態追蹤錯誤（DAgger 式模仿學習），後期只收對話結束時的成功／失敗回饋做 REINFORCE，以緩解離線訓練與線上互動之間的對話狀態分布落差。",
+  "problem": "任務型對話 RL 常先用人—人或人—機語料做監督預訓練，再上線互動學習。但 agent 自己的回應會改變後續對話狀態的分布：一旦犯小錯進入語料裡罕見的狀態（好的人類客服很少示範「怎麼從錯誤中救回來」），就不知如何恢復，錯誤逐輪累積導致任務失敗；純靠 RL 探索找回復原動作又極沒效率。這對「從部署中的使用者互動持續學習」很關鍵：要決定該向使用者要哪一種回饋、什麼時候要、要多少，才能以可接受的標註成本修正 covariate shift。",
+  "core_idea": "把使用者回饋依成本分成兩級、依序使用：(1) 昂貴但資訊密度高的「逐輪教學」——讓以 agent 自身 policy 跑出來的對話由使用者更正每一輪追蹤到的使用者目標，把這批 on-policy 樣本併入語料重新監督訓練（即 DAgger 資料聚合），專門補上 agent 自己會走到、但語料沒涵蓋的狀態；(2) 便宜但稀疏的「對話層級二元回饋」——只在對話結束時給成功／失敗，當作 reward 做端到端 REINFORCE。先用少量教學把分布拉近，再用大量廉價回饋繼續最佳化；同時因模型全可微，RL 梯度可一路回傳到 NLU 與狀態追蹤，而非只更新 policy。",
+  "method": {
+    "architecture": {
+      "utterance_encoder": "詞嵌入（300 維）→ 雙向 LSTM（utterance-level，狀態 150 維），取正向最後狀態與反向第一個狀態串接成 U_k。",
+      "dialogue_state": "dialogue-level LSTM（狀態 200 維）：s_k = LSTM_D(s_{k-1}, [U_k, A_{k-1}])，A_{k-1} 為上一輪系統動作的編碼（系統動作與 slot value 的嵌入皆 32 維）。",
+      "belief_tracker": "每個目標 slot m 各一個單隱藏層 MLP + softmax（SlotDist_m），輸出該 slot 候選值的機率分布 P(l_k^m)。",
+      "kb_operation": "以每個 slot 的最佳假設（或 n-best）填入查詢指令樣板，對 KB 發出符號式查詢；實體排序交給外部推薦系統，模型不負責。回傳結果存入佇列，但只把『結果摘要』（是否有結果、符合筆數）編碼成向量 E_k 餵給 policy，不編碼實體值本身。",
+      "policy": "PolicyNet 為單隱藏層（100 維）MLP + softmax，輸入為 s_k、各 slot 候選值 log 機率串接 v_k、查詢摘要 E_k；輸出系統動作。系統動作定義為 dialogue act 的 act＋slot type（例：confirm(date=monday) → 動作 confirm_date，值 monday 取自 DST 輸出）。",
+      "nlg": "樣板式 NLG：以 DST 估計值或 KB 實體填入去詞彙化 token。"
+    },
+    "stage1_supervised_pretraining": "在語料上以 MLE 端到端訓練，損失為各 slot 的狀態追蹤交叉熵與系統動作交叉熵的線性加權和（eq 4，權重 λ_{l^m}、λ_a）。Adam，初始學習率 1e-3；只在監督訓練時用 dropout 0.5。",
+    "stage2_imitation_learning_with_teaching": "Algorithm 1 第 2–7 行：以目前 policy π_θ 與使用者互動收集對話 D_π（系統動作從 policy 取樣以鼓勵探索）；請使用者逐輪更正 D_π 中『追蹤到的使用者目標』；D ← D ∪ D_π；在聚合後的 D 上依 eq 4 重新端到端訓練。每收 25 段對話做一次 mini-batch 更新。實驗比較 IL 500 與 IL 1000 段對話兩種預算。",
+    "stage3_rl_with_feedback": "Algorithm 1 第 8–12 行：π_θ 與使用者跑一段新對話，只在結束時收 reward；以 softmax policy 取樣動作探索，用 REINFORCE（likelihood-ratio 梯度，eq 5）端到端更新（梯度一路回傳到使用者輸入層），每 25 段 mini-batch 更新一次。Reward：成功 +15.0、失敗 0，每輪 −1.0 step penalty；對話上限 15 輪。成功需同時滿足：(1) DST 估計的目標 slot 值與使用者真實目標完全一致；(2) 系統與使用者確認過追蹤到的目標值，且提供的實體最終被使用者接受。",
+    "user_side_in_experiments": "IL 與 RL 階段的互動對象都是 agenda-based 使用者模擬器（Schatzmann et al. 2007 形式，可設定不同隨機性與合作度的 personality，每段對話隨機抽一個 profile）；互動評估時使用比訓練更大的一組使用者 NLG 樣板，以測試對沒見過的表面形式的泛化。",
+    "not_specified_in_paper": [
+      "discount factor γ 的值",
+      "eq 4 的插值權重 λ 的值",
+      "監督預訓練的 epoch 數與停止條件",
+      "RL 階段總共跑多少段對話（曲線橫軸以外沒有明說）",
+      "IL 階段 agent 自行產生的對話中，系統動作的正確標籤從哪裡來（Algorithm 1 只要求更正追蹤到的使用者目標，但 eq 4 同時含動作預測損失）",
+      "REINFORCE 是否使用 baseline 或 reward 正規化"
+    ]
+  },
+  "assumptions": [
+    "使用者（或專家）願意且有能力在每一輪指出 agent 對自己目標的追蹤錯誤，並給出正確 slot 值。",
+    "對話結束時可以得到可靠的二元任務成功訊號；實驗中的成功判定需要知道使用者真實目標並與 DST 輸出逐 slot 比對。",
+    "任務可表達為固定 slot 集合的 slot-filling 加上有限的 dialogue act 動作空間，NLG 可用樣板完成。",
+    "KB 實體排序可外包給推薦系統，policy 只需要查詢結果摘要（有無結果、筆數）。",
+    "agenda-based 模擬器產生的狀態分布與錯誤型態足以代表真實使用者，模擬器上的改善可以外推到真人互動。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "DSTC2（餐廳搜尋，使用 live ASR 轉寫當輸入；僅用於監督式 DST 評估）",
+      "Google 內部以 FSM agent＋agenda-based 模擬器產生、由真人改寫語句的電影訂票語料（Sim-GEN：訓練 100K、驗證 10K、測試 10K 段對話，平均 8.4 輪）",
+      "與 agenda-based 使用者模擬器的互動評估（使用擴充的使用者 NLG 樣板）",
+      "Amazon Mechanical Turk 人工評分：每個模型 100 段模型—模擬器對話"
+    ],
+    "metrics": [
+      "DST 個別 slot 準確率與 joint accuracy",
+      "互動評估的任務成功率（task success rate）",
+      "成功對話的平均輪數（average dialogue turn size）",
+      "互動評估中的 DST joint accuracy",
+      "逐輪人工評分 1（frustrating）到 5（optimal），每輪 3 位評審"
+    ],
+    "baselines": [
+      "DSTC2 上的 RNN、RNN+sem. dict（Henderson et al. 2014b）與 NBT（Mrkšić et al. 2016）",
+      "SL（只做監督預訓練）",
+      "SL + RL",
+      "只用 RL 從零訓練（不做監督預訓練）",
+      "SL + IL 500 + RL、SL + IL 1000 + RL",
+      "RL 階段的 policy-only 更新（凍結 policy 以外的參數）對比端到端更新"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "監督預訓練的端到端模型在 DSTC2 狀態追蹤上接近當時 SOTA，joint accuracy 與 NBT 持平。",
+      "numbers": "DSTC2 joint：本文 SL 72、NBT 72、RNN+sem. dict 71、RNN 69；area/food/price 為 90/84/92。電影訂票語料 joint 84.57%，各 slot 91.86–99.31%。",
+      "section": "§4.3、Table 1、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "監督模型從固定語料換到互動評估（加入沒見過的使用者 NLG 樣板）時，狀態追蹤大幅退化，作者以此佐證離線／線上分布落差。",
+      "numbers": "joint DST 從固定語料的 84.57% 掉到互動評估的 50.51%。",
+      "section": "§4.4 Dialogue State Tracking Accuracy、Figure 5",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "少量逐輪教學（模仿學習）就能快速把 DST 拉回來；之後再做 RL 也會進一步提升 DST，而不只是改善 policy。",
+      "numbers": "僅 500 段模仿學習對話後 joint DST 由 50.51% 升到 67.47%；RL 後的 DST 增益只見於 Figure 5 曲線，正文未給數值。",
+      "section": "§4.4、Figure 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "在監督模型上先做模仿學習再接 RL，任務成功率高於 SL 與 SL + RL；IL 之後再做 RL 會再往上提升。IL 1000 組作者只說有跡象顯示能適應互動時的分布，沒有明確與 IL 500 比較。",
+      "numbers": "僅見於 Figure 3 曲線，正文未給任何成功率數值。",
+      "section": "§4.4 Task Success Rate、Figure 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "不做監督預訓練、只用 RL 從零學，任務成功率幾乎學不起來；作者歸因於狀態空間太複雜，須同時學會 NLU 與 policy。",
+      "numbers": "10K 段模擬對話後成功率仍停在很低水準（正文未給數值）。",
+      "section": "§4.4 Task Success Rate",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "RL 階段做端到端更新（梯度回傳到使用者輸入層）的任務成功率明顯高於只更新 policy 網路。",
+      "numbers": "僅見於 Figure 6 曲線，正文未給數值。",
+      "section": "§4.4 End-to-End RL Optimization、Figure 6",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "AMT 評審對模型—模擬器對話的逐輪評分隨 IL 與 RL 依序提升。",
+      "numbers": "SL 3.987 ± 0.086；SL + IL 1000 為 4.378 ± 0.082；SL + IL 1000 + RL 為 4.603 ± 0.067（1–5 分，每個模型 100 段對話、每輪 3 位評審；± 標註為標準差）。",
+      "section": "§4.5、Table 3",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "逐輪的使用者教學成本高（需要專家使用者在每一輪更正），所以要盡量減少模仿學習的循環數，改用較便宜的對話結束回饋。",
+    "Reward 只用任務完成度設計，沒有納入互動自然度、KB 查詢成本等其他因素。",
+    "SL + RL 的平均輪數最低，但那是因為它只解得了簡單任務、較難的任務會失敗；平均輪數本身會誤導。",
+    "電影訂票任務用文字輸入、雜訊遠低於 DSTC2 的 ASR 輸入，這部分解釋了兩個語料上 DST 準確率的差距。"
+  ],
+  "limitations_observed": [
+    "標題與 §3.6、§3.7 講的是『人類教學與回饋』，但 §4.1 明說 IL 與 RL 階段的互動對象都是 agenda-based 使用者模擬器；逐輪更正與結束時的成功訊號實際上都由持有真實目標的模擬器以 oracle 方式給出。論文沒有任何一組實驗讓真人提供教學或回饋，『從使用者回饋學習』的成本、雜訊與一致性完全沒被量到。",
+    "Reward 的成功判定（§4.2 條件 1）要求 DST 估計的 slot 值與使用者真實目標逐一完全一致；真實使用者按讚／倒讚無法檢查模型內部的 slot 對齊，這是只有模擬器能給的訊號。對本子領域最關鍵的問題——真實使用者能給的弱回饋是否足以訓練——這篇其實沒有回答。",
+    "Algorithm 1 第 4 行只更正『追蹤到的使用者目標』，但 eq 4 同時要最小化系統動作的交叉熵；agent 自行產生的 on-policy 對話裡，正確系統動作的標籤從哪來完全沒交代（推測是 FSM 規則 agent 或模擬器 oracle，但論文沒寫）。這決定了 IL 到底是 DAgger 式的完整專家示範還是只補 DST 標籤，影響可重現性與成本估算。",
+    "動機是『agent 自己犯錯造成的狀態分布偏移』，但文中唯一量化的落差（84.57% → 50.51%）來自評估時換上沒見過的使用者 NLG 樣板，是詞彙／表面形式偏移，不是 agent 行為造成的狀態偏移；兩種成因沒有被拆開量。另外論文沒說 IL／RL 訓練互動是否也使用擴充樣板——若有，互動評估就不是真正的 held-out，泛化的說法會被高估。",
+    "監督預算沒有對齊：SL + IL 組多拿了 500 或 1000 段逐輪標註對話，SL + RL 組沒有；IL 勝過 RL 部分可能只是多了標註資料。論文也沒量化『一段教學對話等於多少段二元回饋』的成本—效益換算，500 與 1000 兩個預算點是任意選的，無法據此決定實務上該教多少。",
+    "任務成功率、RL 後的 DST 增益、端到端 vs policy-only 這幾個核心主張的數值只出現在 Figure 3/5/6 曲線，正文沒有任何數字，也沒有多個亂數種子或變異範圍；在 REINFORCE（未提 baseline）這種高變異方法上，單條曲線的差距可信度有限。",
+    "人工評估（§4.5）沒有 SL + RL 組，無法把 IL 的貢獻從 RL 分離出來；評審是閱讀模型—模擬器文字紀錄的第三方群眾，不是實際與系統對話的使用者，因此不能當作使用者滿意度。Table 3 標註的標準差只有 0.067–0.086，對 1–5 分的逐輪評分而言小得不太合理，較像是標準誤，存疑。",
+    "平均輪數只在成功對話上計算（§4.4），有倖存者偏差——作者自己也發現 SL + RL 因只解簡單任務而輪數最低，卻沒有改用全部對話或按難度分層的指標。",
+    "未給 γ、λ、監督訓練 epoch 數與 RL 總對話數，加上程式碼未公開，要精確重現曲線有困難。"
+  ],
+  "framework_role": "T6 的『使用者回饋迴路』早期代表作：提出按成本分級使用使用者回饋的排程——先用昂貴的逐輪更正（on-policy 資料聚合）修正離線／線上分布落差，再用廉價的對話層級二元成功回饋當 RL reward 持續最佳化——並示範回饋可以端到端回流到狀態追蹤而不只是 policy。同時它也是『agenda-based 模擬器作為 RL 訓練對手』的實例，但真人回饋部分全由模擬器代替，所以對『真實使用者回饋品質與滿意度估計』只提供框架，不提供證據。附帶貢獻落在 T2（DST 在互動中被回饋改善）與 T8（以任務成功＋步數懲罰定義 reward）。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "模擬器（在方法設定中是使用者）的自然語言語句經 BiLSTM 編碼後進入 dialogue-level LSTM 與逐 slot 的使用者目標追蹤器；IL 階段使用者對『追蹤到的目標』的逐輪更正直接成為目標追蹤的訓練標籤，是外部輸入修正目標對齊的具體通道。"
+    },
+    {
+      "edge": "E6",
+      "how": "所有互動評估（Figure 3–6 的任務成功率、平均輪數、DST 準確率曲線）都由 agent 與模擬器的互動紀錄計算；§4.5 的 AMT 逐輪評分也是讓評審閱讀模型—模擬器的對話紀錄打分。互動紀錄同時回流訓練（IL 資料聚合、RL reward）與評估。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "實驗用的電影訂票語料以 Sim-GEN 名義公開於 https://github.com/google-research-datasets/simulated-dialogue（訓練 100K／驗證 10K／測試 10K，README 要求引用本篇）；這是資料釋出，不是產品採納。"
+    ],
+    "assessment": "未見證據。論文本身未宣稱任何產品部署（作者單位為 Google Research，但實驗全在模擬器上）。本次 WebSearch 額度已用盡，未能再查官方文件或產品頁，判斷僅基於論文全文與上述 GitHub README。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "部分公開：電影訂票語料（Sim-GEN，100K/10K/10K）在 https://github.com/google-research-datasets/simulated-dialogue；DSTC2 為公開資料集。互動學習用的 agenda-based 模擬器與擴充的使用者 NLG 樣板未見公開，論文也未提供程式碼連結（本次未能以網路搜尋確認是否另有釋出）。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它把『昂貴的逐輪使用者更正先修分布落差、廉價的對話層級二元回饋後續 RL』的回饋分級排程講清楚且可重做，是 T6 回饋迴路的經典起點；但所有『人類』教學與回饋其實都是持有真實目標的模擬器 oracle，沒有真人回饋、也沒有滿意度估計，主要數字只在曲線裡，所以有價值但非必讀。",
+  "related": [
+    "1605.07669",
+    "1011.0686",
+    "1702.03274",
+    "1711.10712",
+    "1709.06136",
+    "1703.01008",
+    "1609.00777",
+    "1606.01269",
+    "1606.03777"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

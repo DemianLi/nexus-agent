@@ -1,0 +1,153 @@
+{
+  "id": "2504.08942",
+  "title": "AgentRewardBench: Evaluating Automatic Evaluations of Web Agent Trajectories",
+  "topic": "T4",
+  "subarea": "軌跡／步驟層級評估與 process reward",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "收集 4 個 LLM 網頁 agent 在 5 個基準上的 1302 條軌跡，由專家逐條標註成功、副作用與重複循環，拿來量 12 個 LLM judge 與官方規則式評估對軌跡成敗的判定和專家差多少。",
+  "problem": "網頁 agent 的軌跡要判定是否完成任務：規則式評估（字串比對、URL 比對、HTML 程式檢查）要專家逐題設計，擴充到新任務很貴，而且會把「換一種說法但正確」的軌跡判成失敗；人工標註準但慢又貴。LLM judge 已被拿來做軌跡合成的過濾（rejection finetuning）、RL 的 reward 與自動評估，但既有工作多半只用下游效能間接驗證 judge，或只拿規則式評估當對照（例如 AER 對 WebArena 規則式評估的 80.6%），沒有一個以專家標註為準、跨多個 agent 與環境的基準來直接量 judge 判得準不準。judge 誤判會直接變成訓練資料的雜訊與錯誤的 reward，所以需要先量它。",
+  "core_idea": "把「評估軌跡的評估器」本身當成受測物：固定一組軌跡與專家的三題標註（成功、副作用、重複循環）當 ground truth，讓各種 judge 回答同樣的問題，以 precision 為主指標比對。同時把各基準的官方規則式評估也當成一個 judge 放進同一張表，藉此揭露規則式評估系統性低估成功率。另提出一個不需要額外 captioner 或摘要器的簡化 judge：只餵動作序列、agent 的推理與最後一步的觀測（AXTree 或截圖），一次回答多題。",
+  "method": {
+    "軌跡資料物件": "軌跡定義為 {o1,(r1,a1),o2,…,(r_{n-1},a_{n-1}),o_n}；o_i 含瀏覽器截圖 s_i、DOM 樹與由 DOM 產生的 accessibility tree（AXTree），r_i 是 agent 選動作的推理，a_i 是可在瀏覽器執行的動作，o_{i+1}=B(o_i,a_i)。agent 端用表示函式 R 把歷史轉成 prompt p_i，LLM／VLM 產生 completion c_i，再由執行函式 E 解析成 (a_i,r_i)。judge 端另有自己的表示函式 R_j，可以只是動作清單，也可以用另一個 LLM 先處理觀測歷史。",
+    "任務與環境": "351 個任務：WebArena 100、VisualWebArena 100、AssistantBench 33（測試集不公開，改用 validation set）、WorkArena 18、WorkArena++ 100（只取 Level 2，Level 3 對現有 agent 太難）。WebArena／VWA 以「網域 × 原始評估方法（字串比對、HTML 程式、網頁影像查詢、最終 URL 比對）」分組，每組最多抽 8 題（WA）或 9 題（VWA）；WorkArena 盡量平均分配各類別。切成 51 個開發任務與 300 個測試任務。AssistantBench 把預設搜尋引擎換成 DuckDuckGo（原首頁會擋自動化），實際造訪 66 個網域。",
+    "軌跡收集": "4 個 agent 骨幹：GPT-4o（gpt-4o-2024-11-20）、Claude 3.7 Sonnet、Llama-3.3-70B（純文字，不跑 VWA）、Qwen2.5-VL（皆用 instruct 版）。平台用 BrowserGym＋AgentLab，所有模型共用同一組 R 與超參數以避免逐模型調 prompt 的差異。AgentLab 旗標開啟：use_screenshot、use_som、use_thinking、use_concrete_example、use_abstract_example、use_hints、be_cautious；關閉：use_html、use_past_error_logs、use_think_history、use_diff、filter_visible_elements_only、long_description、individual_examples、use_plan、use_criticise、use_memory、enable_chat。輸入上限 40K tokens、輸出上限 8192 tokens。Llama 3.3 有兩個 WebArena 任務（735、805）因環境逾時跑不完。總計 1302 條軌跡（開發 196、測試 1106）。",
+    "標註流程": "6 位做網頁 agent 研究的專家，用 Gradio 自製介面逐步檢視目標、每一步的推理與動作、疊上動作元素的截圖；截圖不夠時可進環境或看 AXTree。每條回答三題：成功（動作序列是否達成目標）、副作用（是否做了可能造成非預期副作用的多餘動作）、重複循環（是否繞著沒有進展的動作序列打轉），共 3906 個二元標註。不確定的可標 uncertain 交其他人複核；前半段標註全員在場當面討論到共識；指令有歧義時一律採最寬鬆的解讀。以 GPT-4o agent 在 WebArena 的軌跡請第二位標註者重標，成功一題的一致率 89.3%。",
+    "judge 實作": "（1）AER（Pan et al. 2024）：輸入 agent 的想法與動作序列加最後的瀏覽器狀態；AER-V 直接給 GPT-4o 截圖，AER-C 先用 GPT-4o captioner 把截圖轉成文字；judge 先輸出推理再判成敗。（2）NNetNav（Murty et al. 2025）：用 LLM 依相鄰兩個 AXTree 描述每一步的變化，把變化摘要交給 Llama 3.3 70B 先寫思考過程再給 1–5 分，≥4 視為成功。（3）簡化 judge（本文）：同一個 completion 回答全部問題；把系統提示與推理鏈跟最終狀態表示脫鉤，最終狀態可以只給最後的 AXTree（A 變體）或只給最後截圖（S 變體），因此純文字模型也能用，不需要額外的 captioner 或摘要器。骨幹：Claude 3.7 Sonnet、GPT-4o、GPT-4o mini、Qwen2.5-VL 各做 A 與 S，Llama 3.3 只做 A；加上 AER-C、AER-V、NNetNav 共 12 個 judge。Agent-as-a-Judge 因需要事後與環境互動（環境狀態無法保存或跨 agent 共享）而未納入。",
+    "提示詞要點": "系統提示：角色是評判網頁導航任務的 LLM；說明會收到目標、目前 URL、agent 的動作與思考過程，以及第一張與最後一張截圖和最後的 AXTree。四題：Q1 成功（Successful／Unsuccessful）、Q2 副作用（Yes／No）、Q3 是否最佳（1 Complete Failure、2 Suboptimal、3 Somewhat Optimal、4 Completely Optimal）、Q4 循環（Yes／No）。要求先給推理，輸出格式固定為 <reasoning>…</reasoning><success>…</success><side>…</side><optimal>…</optimal><loop>…</loop>，用標籤解析。使用者訊息：目標，接著逐步列出 Step 編號、URL、Action、Reasoning，最後附最後一步的 AXTree 與截圖。提示詞不含任何模型專屬指令。",
+    "評估指標": "成功、副作用、重複三個維度各算 precision／recall／F1，以 precision 為主：理由是 rejection finetuning 與 RL 都以正例為主要訊號，false positive 會把失敗軌跡混進訓練資料或 loss；recall 與 F1 反映丟掉多少有效軌跡（樣本效率），列為輔助。另外以專家、GPT-4o judge（A 變體）、規則式評估三種方式計算各 agent 在各基準的成功率並比較排名。",
+    "重做步驟": "① 以 BrowserGym／AgentLab 按上述旗標跑 4 個 agent，保存每步截圖、AXTree、URL、動作與推理；② 用專家依三題標註（或直接下載公開的軌跡與標註）；③ 對每條軌跡組出使用者訊息（逐步 URL／動作／推理＋最後 AXTree 或截圖），配上系統提示呼叫 judge，以正規表示式抽出 <success>、<side>、<loop> 標籤；④ 對照專家標註算各維度 P／R／F1，並依基準、依 agent 拆開；⑤ 以判定為成功的比例估成功率，與專家、規則式比較。"
+  },
+  "assumptions": [
+    "6 位專家在寬鬆解讀原則下的共識標註就是「真的成功與否」；專家與規則式評估的差距被解讀為規則式的缺陷，而不是標註偏寬。",
+    "軌跡層級的二元標籤足以代表評估需求；不需要標出哪一步出錯。",
+    "judge 只看動作、agent 自述的推理與最後一步的觀測（加上提示裡說的第一張截圖）就足以判定成敗，不需要事後與環境互動或檢查中間狀態。",
+    "precision 是 RFT 與 RL 用途最重要的指標，judge 之間可以在各自的預設判定門檻下直接比 precision。",
+    "BrowserGym／AgentLab 的單一 agent 設定產生的軌跡分佈，足以代表各家 agent 的實際失敗型態。",
+    "4 個 agent 骨幹跑出的軌跡足以區分 judge；judge 骨幹與 agent 骨幹重疊（GPT-4o、Claude 3.7、Llama 3.3、Qwen2.5-VL）不會造成偏誤。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "AgentRewardBench（本文，1302 條軌跡；開發 196、測試 1106）",
+      "軌跡來源：WebArena、VisualWebArena、AssistantBench（validation）、WorkArena、WorkArena++（Level 2）"
+    ],
+    "metrics": [
+      "成功判定的 precision（主指標）、recall、F1",
+      "副作用與重複循環的 precision／recall／F1",
+      "各 agent 在各基準的成功率（專家 vs GPT-4o judge vs 規則式）與排名",
+      "標註者一致率（成功一題，單一子集）"
+    ],
+    "baselines": [
+      "各基準官方規則式評估（Rule-based／Functional）",
+      "AER-C、AER-V（Pan et al. 2024，改用 GPT-4o 重新實作）",
+      "NNetNav judge（Murty et al. 2025，改用 Llama 3.3 70B 重新實作）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "建立第一個以專家標註量網頁 agent 軌跡 judge 的基準，標註者之間在成功判定上高度一致。",
+      "numbers": "351 任務、4 個 agent、1302 條軌跡（測試 1106）、3906 個二元標註；雙標子集（GPT-4o agent × WebArena）成功一題一致率 89.3%",
+      "section": "§3.2、§3.3、§A.2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "只給最後一步觀測的簡化 judge，以 GPT-4o 或 Claude 3.7 Sonnet 當骨幹時 precision 略高於需要 captioner 或變化摘要器的既有做法，代表拿掉這些內部 LLM 沒有損失。",
+      "numbers": "整體成功 P／R／F1：GPT-4o (A) 69.8／83.1／75.9、Claude 3.7 (S) 69.4／76.3／72.7、Claude 3.7 (A) 68.8／81.6／74.7；AER-C 67.7／71.9／69.7、AER-V 67.6／71.5／69.5、NNetNav 52.5／82.4／64.1",
+      "section": "§4.3、Table 1、Table 7",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "沒有任何 judge 的整體 precision 超過 70%，約三成被判成功的軌跡其實失敗；而且各基準的最佳 judge 不同，沒有一個全面領先。",
+      "numbers": "整體最高 precision 69.8（GPT-4o (A)）；各基準最佳 precision：AB 87.5（Claude (A)）、VWA 64.8（Claude (S)）、WA 70.2（GPT-4o (A)）、WorkArena 100.0（AER-C）、WorkArena++ 66.7（AER-C／Claude）",
+      "section": "§4.3、Table 1、Table 8",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "官方規則式評估 precision 最高但 recall 很低，會把大量專家認定成功的軌跡判成失敗（例如答案多了修飾語就不符合精確字串比對）。",
+      "numbers": "規則式整體 P 83.8、R 55.9、F1 67.1；AssistantBench 上規則式 precision 只有 25.0，WorkArena 上則是 P 100.0／R 91.9",
+      "section": "§4.3、Table 1、Table 8",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "輸入表示的消融（GPT-4o mini judge）：只給截圖的 success precision 最高，只給 AXTree 的 recall 最高，兩者都給反而比只給截圖差，多餘資訊會干擾 judge。",
+      "numbers": "成功 P／R：AXTree＋截圖 62.1／81.7、只 AXTree 61.5／86.1、只截圖 64.5／78.3、兩者皆無 60.7／73.9；重複循環 P：92.5、78.6、92.3、78.1",
+      "section": "§4.3、Table 2",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "以成功率而言，規則式評估一致低估、GPT-4o judge 大多高估；規則式還會翻轉 agent 排名（在 WebArena 與 WorkArena++ 把 Qwen2.5-VL 排在 GPT-4o 之上，專家則在所有基準都偏好 GPT-4o）。",
+      "numbers": "GPT-4o agent 成功率（專家／judge／規則式）：WA 42.3／50.0／25.6、VWA 35.9／47.8／17.4、Wk++ 18.4／11.5／4.6；整體 Claude 33.0／38.0／20.4、GPT-4o 31.3／35.3／16.3、Llama 17.0／17.5／13.3、Qwen 22.3／31.7／19.5",
+      "section": "§5、Table 3、Table 6",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "質性錯誤分析歸出 judge 的四類失誤：畫面理解錯位（agent 自述與畫面不符而 judge 照單全收）、被 agent 誤導的推理、漏看指令細節（只找到商品沒買就判成功）、誤解動作意圖（該回答卻回報不可行）；judge 容易附和 agent 的錯誤推理（sycophancy）。",
+      "numbers": "無量化分佈，僅以 GPT-4o judge 的案例說明（Qwen2.5-VL agent 的第二列第二欄案例、WorkArena++ 篩選器案例、VWA 買穀片案例、地圖行車時間案例）",
+      "section": "§6、Figure 3",
+      "anchor_idx": 6
+    }
+  ],
+  "limitations_stated": [
+    "最好的 judge precision 也不到 70%，直接拿來過濾 RFT 資料或當 RL reward 仍不可靠，judge 需要更高 precision 才實用。",
+    "沒有一個 judge 在所有基準都最好，必須依任務性質挑骨幹。",
+    "judge 難以察覺軌跡中的細微問題，且容易附和 agent 錯誤的推理（引用 sycophancy 研究）。",
+    "同時給 AXTree 與截圖反而變差，更多資訊會干擾 judge。",
+    "標註者都是網頁 agent 專家，共享非專家未必具備的知識（知道 agent 會幻覺、知道環境採字串或 URL 比對的自動評估等）。",
+    "標註分歧主要來自指令歧義，處理方式是採最寬鬆的解讀並當面討論到共識。",
+    "Agent-as-a-Judge 需要事後與環境互動，在環境狀態無法保存或共享時不可行，因此未納入。",
+    "Llama 3.3 為純文字模型未跑 VisualWebArena，另有兩個 WebArena 任務因環境逾時缺漏；AssistantBench 測試集不公開改用 validation；WorkArena++ Level 3 太難未納入。"
+  ],
+  "limitations_observed": [
+    "論文批評規則式評估會翻轉 agent 排名，但它自己的 GPT-4o judge 也一樣翻轉：Table 3 在 WebArena 上 judge 給 Qwen2.5-VL 52.6、GPT-4o 50.0，專家是 33.3 對 42.3；在 WorkArena++ 上 judge 給 Qwen 14.9、GPT-4o 11.5，專家是 13.8 對 18.4。也就是三個基準裡 judge 有兩個排名顛倒，跟規則式一樣多，文中只強調規則式的問題。",
+    "只比 precision 對判定門檻很敏感：各 judge 輸出的是二元標籤（NNetNav 固定以 ≥4 分二值化），沒有機率、沒有 PR 曲線或校準分析，judge 之間是在各自不同的操作點上比較。規則式 precision 83.8 最高卻被論文認定不足，本身就說明單看 precision 排不出好壞；論文也沒有提供在固定 recall 下的比較。",
+    "副作用這個維度幾乎沒有可用的 judge：Table 7 各 judge 的副作用 recall 全都能寫成 k/72，推算測試集中只有約 72 條（約 6.5%）被標為有副作用，而最佳 precision 只有 14.1（Claude 3.7 (S)），GPT-4o mini 的 7.2 幾乎等於基率。正文除了 Table 2 以外沒有討論這個結果，卻在 §3.1 把副作用訊號宣傳為可在訓練時懲罰或推論時轉向的依據。",
+    "judge 輸入包含 agent 自述的推理 r_i，而 §6 把多數錯誤歸因於被 agent 推理誤導，但沒有做「拿掉推理只留動作與觀測」的消融；Table 2 反而顯示把最終 AXTree 與截圖都拿掉，GPT-4o mini 的 success precision 只從 61.5–64.5 掉到 60.7，暗示 judge 主要靠動作清單與 agent 的自我敘述在判斷，而最終觀測貢獻很小。消融也只做在最弱的 GPT-4o mini 上。",
+    "樣本量小卻沒有信賴區間或多次重跑：由 Table 3／6 的百分比反推，每個 agent 的測試軌跡只有 WorkArena 16 條、AssistantBench 27 條（WA 78、VWA 92、Wk++ 87），WorkArena 上 AER-C precision 100.0、規則式 25.0（AB）這類數字的誤差很大，「沒有一個 judge 全面領先」有一部分可能只是雜訊。",
+    "arXiv HTML v2 的附錄 Table 9–12（號稱分別是 Qwen2.5-VL、Llama 3.3、Claude 3.7、GPT-4o agent 的細分結果）與 Table 8（全部 agent）逐格完全相同，連 Llama 3.3 agent 那張都有 VisualWebArena 的列，而 Llama 3.3 並未跑 VWA；看起來是排版時放錯檔，逐 agent 的 judge 表現因此無法從論文查證（PDF 版未另行核對）。",
+    "Table 6 的 AssistantBench 規則式成功率為 0.8、5.3、2.2 等值，無法寫成 k/27，應是 AssistantBench 原生的部分給分（F1 類）平均，而專家與 judge 是二元成功率；三者放在同一欄比較並據此說規則式低估，量綱並不一致。",
+    "標註政策偏寬（歧義時一律從寬）、標註者就是作者團隊的專家、一致率只在一個 agent × 一個基準的子集上量、只報原始一致率沒有 Cohen's kappa；「規則式低估成功率」的幅度有一部分可能來自專家端的寬鬆政策，而非只是規則式的缺陷。",
+    "系統提示與正文不一致：正文說簡化 judge 回答三題、只給最後一張截圖或 AXTree，附錄 Figure 5 的系統提示卻問四題（多一題 1–4 級的 optimal）並宣稱提供第一張與最後一張截圖；optimal 一題的結果從未報告，A／S 變體實際收到的輸入難以精確重現。",
+    "只有軌跡層級的結果標籤，沒有步驟層級標註，無法用來評估 process reward model 或「哪一步出錯」的歸因；錯誤分析也只有質性案例，沒有各類錯誤的頻率。",
+    "judge 骨幹與 agent 骨幹大量重疊（GPT-4o、Claude 3.7、Llama 3.3、Qwen2.5-VL），卻沒有分析自我偏好；加上逐 agent 表格重複，讀者也無法自行檢查。",
+    "agent 設定關掉 enable_chat，任務是一次給定目標、中途沒有使用者互動；結論外推到多輪對話型 agent（需要判斷是否該回問使用者、是否滿足使用者後續修正）時要保守。"
+  ],
+  "framework_role": "T4 軌跡節點裡「軌跡層級評估」的基準與量具。它把一次網頁 agent 執行定義成 (o_i, r_i, a_i) 序列的資料物件（每個觀測含截圖、DOM、AXTree），並提供附專家標註的軌跡資料集，讓軌跡層級的 outcome judge（也就是 outcome reward model）在上線前先被校準：成功判定 precision 不到 70%、會附和 agent 自述、副作用幾乎偵測不到。對本框架的意義有三：一是任何拿 LLM judge 讀軌跡來餵 T7 評估或 T8 完成分數的設計，都應先在這類有人工標註的集合上量 precision；二是「副作用」「重複循環」兩個標籤是軌跡異常偵測的原型，可作為觸發 T5 的訊號，但數據顯示副作用訊號目前不可信；三是它同時量了規則式、LLM judge 與專家三種 T8 成功率，示範同一批軌跡的完成分數會因評估器而差十幾個百分點、甚至翻轉排名。它不涵蓋步驟層級的 process reward 與出錯步驟的定位。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "簡化 judge 對整條軌跡輸出副作用（<side>）與重複循環（<loop>）兩個異常旗標，論文在 §3.1 明言這兩個訊號可在訓練時懲罰 agent 或在推論時讓它改走別的動作；實驗只量了偵測端的可靠度（整體重複循環 precision 78.6–92.3（Table 7）、副作用 precision 最高 14.1），並未實作由旗標觸發的自我修正迴路。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。作者公開了程式碼（GitHub McGill-NLP/agent-reward-bench、PyPI 套件 agent-reward-bench）、Hugging Face 資料集與 leaderboard，但這屬於作者自己的釋出；專案頁與 README 都沒有提到任何公司或產品採用，搜尋也未找到官方產品文件或 model card 使用它的紀錄。後續論文引用或延伸屬學術影響力，不計入。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/McGill-NLP/agent-reward-bench",
+    "data": "公開：軌跡與專家標註放在 Hugging Face 資料集 McGill-NLP/agent-reward-bench，另有 leaderboard（huggingface.co/spaces/McGill-NLP/agent-reward-bench-leaderboard）；judge 提示詞在附錄 Figure 5／6。重新收集軌跡需自架 WebArena／VWA 環境並申請 ServiceNow 開發者執行個體（WorkArena），AssistantBench 走真實網站、結果會隨時間漂移。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "第一個以專家標註直接量「軌跡 judge 判得準不準」的公開基準，附資料、提示詞與 judge 程式碼，量出的 judge 上限（precision < 70%）與規則式低估是 T4 軌跡層級評估必須知道的基準線；雖然只有軌跡層級標籤、附錄有排版錯誤，仍是該子領域必讀。",
+  "related": [
+    "2404.06474",
+    "2410.02907",
+    "2410.10934",
+    "2403.13787",
+    "2306.05685",
+    "2307.13854",
+    "2401.13649",
+    "2403.07718",
+    "2407.05291",
+    "2407.15711",
+    "2412.05467",
+    "2401.13919",
+    "2502.06776",
+    "2408.07199",
+    "2310.13548"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

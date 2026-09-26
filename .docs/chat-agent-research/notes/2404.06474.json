@@ -1,0 +1,164 @@
+{
+  "id": "2404.06474",
+  "title": "Autonomous Evaluation and Refinement of Digital Agents",
+  "topic": "T4",
+  "subarea": "軌跡／步驟層級評估與 process reward",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "用 VLM／LM 組成不需要人工測試案例的評估器，讀 digital agent 的執行軌跡（指令、動作字串、螢幕截圖）後給出整條軌跡的成功與否或逐步的進度標籤，驗證它與 WebArena 的 oracle 及 AitW 人工判定的一致度（74.4–92.9%），再把它當 Reflexion 的獎勵訊號與 filtered behavior cloning 的篩選器來改進 web 與手機 agent。",
+  "problem": "digital agent（網頁操作、手機裝置控制）要判斷「這次執行到底有沒有完成任務」，過去只有兩條路：模擬環境裡手寫每一題的測試函式（WebArena 812 題各配一個 test case），或在示範資料集上用 action matching 這類「給人類示範的前綴、預測下一步」的參考式指標（AitW）。前者寫不完、無法擴展到真實環境；後者需要人類示範，而且只看單步，不反映錯誤累積與分布偏移，還會被錯誤的示範誤導。沒有可靠的成功判定，就既無法在新環境（例如沒有 benchmark 的 iOS）評估 agent，也無法把判定當獎勵拿去做推論時的反思重試或訓練資料篩選。作者要回答：一個跨領域通用、只看軌跡本身的模型式評估器，準不準、夠不夠用來改進 agent。",
+  "core_idea": "把「評估一條軌跡」定義成函式 r̄ = evaluate(x, ā, s̄)：輸入使用者指令 x、動作序列 ā（文字）與狀態序列 s̄（截圖），輸出每一步的純量評分。整條軌跡層級只呼叫一次、只在最後一步給 1／0；逐步層級呼叫 n 次，把每一步分成「完成」「朝目標前進」「沒有貢獻」三類，讓任務退化成每步的二元或三元分類。實作有兩種：端到端直接叫 GPT-4V 看截圖判斷；或模組化的「先描述再推理」—— 先用微調過的開放權重 VLM 把截圖轉成詳細的 Markdown 文字描述，再交給純文字 LM（Mixtral 或 GPT-4）推理。評估器本身不完美也沒關係：它只要能當鑑別器，就能在沒有 oracle 的情況下替 Reflexion 決定要不要重試，或替 filtered BC 挑出值得模仿的 state-action pair。",
+  "method": {
+    "形式化": "指令 x 與動作 a 都是文字（例如 <Type:“Hello”>），每個狀態 s 是一張截圖。軌跡 = 動作序列 ⟨a_0…a_n⟩ 與狀態序列 ⟨s_0…s_{n+1}⟩。輸出 r̄ = ⟨r_0…r_n⟩。軌跡層級：r_0…r_{n-1} = 0，r_n ∈ {0, 1}，模型呼叫一次。逐步層級：r_i = 1 表示執行 a_i 後任務已完成；r_i = p ≥ 0 表示朝目標有進展；r_i = d < 0 表示該動作對目標沒有貢獻；模型呼叫 n 次。論文沒有給 p 與 d 的具體數值。",
+    "輸入的取捨（實際實驗用的版本）": "WebArena 與 Android 的實驗都做軌跡層級評估，而且只餵最後一張截圖 s_{n+1}、指令 x 與完整動作字串序列（外加 agent 回給使用者的回答，若有）。作者的初步實驗發現加入前面的狀態不會變好，歸因於現有模型處理長上下文的能力不足。只有 iOS 實驗餵整條軌跡並做逐步評估。所以實驗中的「軌跡層級評估」實質上是「最終狀態＋動作文字」的結果判定。",
+    "端到端評估器（GPT-4V）": "模型為 gpt-4-1106-vision-preview，影像不縮放、以高解析度模式送入，temperature 0。WebArena 的 system prompt 設定它為網頁導航 agent 的評估專家，並把任務分三類給出判準：資訊查詢型——回答必須含有使用者要的資訊，或明確說資訊不存在；回傳例外錯誤內容視為失敗；還要檢查動作是否充分（提示詞舉的例子是：列出熱門搜尋商品時若沒先依搜尋次數排序，很可能失敗）。網站導航型與內容修改型——看動作歷史與最終頁面，不必看回答。user prompt 依序放指令、動作歷史、最終截圖、agent 的回答（沒有則填 N/A）。要求兩行輸出：Thoughts（推理過程）與 Status（success／failure）。Android 版提示詞較簡單，只說明根據指令與最終畫面判斷是否完成，輸出格式相同。",
+    "模組化評估器之一：Captioner": "以 QWen-VL-chat 為底，用 1,263 筆「截圖＋詳細描述」微調。截圖來源（Table 3）：WebScreenshot 128、Mind2Web 429、AitW 訓練集 596、GPT-4V in Wonderland 的 iOS 截圖 60、自行擷取的 iOS 截圖 50。描述由 GPT-4V（temperature 0）產生，提示詞要求它當 GUI 描述器、鉅細靡遺、以階層式 Markdown 輸出、不要改寫原文；再由人工修正或剔除明顯錯誤。微調與推論時都把 EasyOCR 的文字辨識結果一起放進輸入以減少幻覺。超參數：3 epochs、batch size 72、AdamW、cosine 排程、初始 learning rate 1e-5、weight decay 0.1、warmup ratio 0.01。關鍵設計：推論時刻意不給 captioner 看使用者指令，因為給了會讓它「描述出」與任務相關但畫面上其實不存在的元素。",
+    "模組化評估器之二：Reasoner": "純文字 LM，實驗了 Mixtral-8x7B-Instruct-v0.1 與 gpt-4-turbo-preview，temperature 0。軌跡層級的提示詞與 GPT-4V 版本幾乎相同，只是把最終截圖換成 captioner 產生的 Markdown 描述；同樣輸出 Thoughts 與 Status 兩行。動作一律表示成字串；作者承認對像素座標型的點擊動作，座標在截圖被轉成文字後就失去意義。",
+    "逐步評估器（iOS）": "每一步獨立呼叫 reasoner 一次，輸入只有：目標、動作前畫面的描述、動作、動作後畫面的描述。官方程式碼 agent_eval/agent_eval/eval/annotator.py 顯示最後一步的「動作後畫面」直接填 Terminated，且不帶更早的歷史。提示詞要求在四個標籤中選一個：towards-the-goal、not-sure、goal-reached、away-from-the-goal，附 5 個 in-context 範例（例如從主畫面點進鬧鐘 app、或為了開 Starbucks 而從 Amazon app 按返回回到主畫面，都算 towards-the-goal；在結帳頁點一下後出現購買成功畫面算 goal-reached；從倫敦天氣頁按 home 回主畫面算 away-from-the-goal；滑動後畫面沒變算 not-sure），並提醒在不確定時優先選 not-sure、給 goal-reached 與 towards-the-goal 要特別謹慎。四個標籤如何對應到 §3 的三種獎勵（1、p、d），論文與我檢查過的程式碼檔案都沒有交代，not-sure 是否跨過篩選門檻因此不明。",
+    "應用一：Reflexion（WebArena，推論時改進）": "沿用 Reflexion 的 Actor／Evaluator／Self-Reflection 三元件。Actor 與 Self-Reflection 都用 GPT-4-preview-1106，觀測是 WebArena 的 accessibility tree（DOM），動作是 click [id]、type [id] [content]、scroll、goto、stop [answer] 等；Actor 提示詞含 2 個 CoT 範例與一個 MEMORY 欄位。Evaluator 換成本文三種評估器之一（輸入用網頁截圖，而非 Actor 看的 DOM），或 WebArena 內建 oracle（當上限）。若評估器判定失敗，Self-Reflection 拿到目標、完整觀測／動作歷史、STATUS: FAILED 與過去的反思，被要求歸納失敗原因並寫一個與先前不同的精簡新計劃，存進 Actor 的 memory 後重試；最多 3 輪。最終成功率一律用 WebArena oracle 計算。基線 agent 為 WebArena 論文的 GPT-4 agent，原報 14.4%，作者重現為 15.6%。",
+    "應用二：filtered BC（iOS）": "自建 iOS 環境：XCode 模擬 iPhone 13（iOS 16），以 facebook/idb 包成 Python API，動作空間對齊 AitW；Android 上「在主畫面往上滑」開 App Drawer，在 iOS 對應成左右滑，資料蒐集時一半機率改成左或右、評估時一律改成右。132 個內建 app 任務，80 個訓練、52 個測試。策略模型為 CogAgent，在訓練任務上以 temperature 1.5、top-k 100 取樣 737 條軌跡；用 Captioner + Mixtral 做逐步評估，只保留獎勵 ≥ p 的 state-action pair（即對成功有正面貢獻的步），再用 CogAgent 官方程式碼加 LoRA 微調：rank 50、cosine 排程、warmup 0.2、learning rate 1e-5、batch size 4、3,000 steps。評估時一律 greedy。對照組：未改動的 CogAgent，以及不篩選、把全部取樣資料拿去微調的 self-training。",
+    "應用二：filtered BC（Android，擴大版）": "Android Studio 模擬 Pixel 4（API 33），以 appium 包成 Python API（不用 AndroidEnv 是因為它不支援打字）。策略為 AutoUI-base，從 AitW General 分割取 560 個訓練任務、96 個評估任務；取樣 temperature 1，訓練 learning rate 3e-3、batch size 128；重複訓練 3 次取平均與標準差。",
+    "評估器準確度的量法": "WebArena：直接用 WebArena 釋出的 GPT4-0613 + CoT v2 軌跡，以內建 test case 為 oracle，比較四種評估器（GPT-4V、QWen-VL-chat 端到端、Captioner + Mixtral、Captioner + GPT-4）的判定準確率。AitW：從測試集的 General、WebShopping、GoogleApps 三個子集各隨機抽 40 題共 120 題（排除要輸入信用卡的 Install 與單步的 Single），在自建模擬器上跑 CogAgent、Auto-UI-large、Auto-UI-base（temperature 0），加上 AitW 原始人類示範（跑在原作者未釋出的模擬器上），以人工判定的成功與否為 oracle；另把各策略的 partial action match 分數拿來比較排序。",
+    "評估器錯誤分析": "在 WebArena 上，每個評估器隨機抽 20 個判對、30 個判錯的案例人工標註錯誤來源，分三類並依序判定（前一類沒犯才看下一類）：截圖理解或描述遺漏關鍵資訊、推理錯誤、任務敘述與成功條件本身有歧義；比例四捨五入到 5%。"
+  },
+  "assumptions": [
+    "任務成功與否大多能從「最終畫面＋動作文字（＋agent 的回答）」判斷；過程中的副作用或中間步驟的錯誤，若沒有留在最終畫面或動作字串裡，就不在評估範圍內。",
+    "判定用的 VLM／LM 對 GUI 畫面有足夠的理解力；模組化路線另外假設描述器能把判定需要的細節都寫進文字（作者自己的錯誤分析顯示並非總是如此）。",
+    "評估器的錯誤可以容忍：只要它當鑑別器時的誤差不把改進訊號抵銷掉，Reflexion 與 filtered BC 就會變好；而且偽陽性比偽陰性便宜（偽陰性會逼 agent 重做已經成功的任務）。",
+    "逐步評估可以只看「動作前畫面、動作、動作後畫面」三元組做出判斷，不需要更早的歷史（Markov 化的進度判定）。",
+    "filtered BC 中「獎勵 ≥ p 的步」即使來自最終失敗的軌跡，也是值得模仿的好行為。",
+    "人工判定可以當 AitW 的 oracle；WebArena 的手寫 test case 是正確的 ground truth。",
+    "iOS 與 Android 的動作空間可以對齊（包括用左右滑近似上滑），讓 AitW 上訓練的 CogAgent 轉移到 iOS。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "WebArena（812 題，評估器準確度用 WebArena 釋出的 GPT-4 CoT 軌跡；Reflexion 實驗在同一環境中實跑）",
+      "Android-in-the-Wild（AitW）測試集抽樣 120 題（General／WebShopping／GoogleApps 各 40），在自建 Android 模擬器上執行",
+      "自建 iOS 任務集：132 題（80 訓練、52 測試），iPhone 13 模擬器",
+      "AitW General 分割取 560 訓練／96 評估任務（Android filtered BC）"
+    ],
+    "metrics": [
+      "評估器與 oracle（WebArena test case）或人工判定的一致率（accuracy）",
+      "策略排序與人工判定的 Kendall correlation（對照 AitW 的 partial action match score）",
+      "agent 任務成功率（WebArena，以 oracle 計算）與相對提升",
+      "成功任務數（iOS 52 題中、Android 96 題中；Android 取 3 次訓練的平均 ± 標準差）",
+      "逐步評估器與人工標註的一致數（50 個隨機 state-action pair）",
+      "評估器錯誤類型的人工分類比例"
+    ],
+    "baselines": [
+      "評估器方面：WebArena 內建 oracle evaluator（當上限）、QWen-VL-chat 直接端到端（開放權重基線）、AitW 的 action matching 參考式指標",
+      "Reflexion 方面：不做 Reflexion 的 GPT-4 WebArena agent（重現 15.6%）、以 oracle 當 Reflexion 評估器的上限",
+      "filtered BC 方面：未改動的 CogAgent／AutoUI-base、不篩選資料的 self-training",
+      "被評估的策略：CogAgent、Auto-UI-large、Auto-UI-base、AitW 人類示範、WebArena GPT-4 agent"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在 WebArena 上，評估器與手寫 oracle 的一致率在 74.4% 到 82.1% 之間；模組化且全用開放權重的 Captioner + Mixtral 明顯優於直接拿 QWen-VL-chat 端到端判定，作者據此主張先描述再推理的設計有效。",
+      "numbers": "GPT-4V 80.6%、QWen-VL-chat 68.0%、Captioner + Mixtral 74.4%、Captioner + GPT-4 82.1%",
+      "section": "§4.1、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "在 AitW（四種策略的軌跡合併計算）上，評估器與人工判定的一致率更高，開放權重的 Captioner + Mixtral 反而最高。",
+      "numbers": "GPT-4V 90.6%、QWen-VL-chat 70.2%、Captioner + Mixtral 92.9%、Captioner + GPT-4 89.8%",
+      "section": "§4.1、Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "以整條軌跡的成功率排序策略時，三種評估器的排序都與人工判定完全一致；AitW 慣用的單步 action matching 則排錯：Auto-UI-large 的 action matching 高於 Auto-UI-base，但實際任務成功率幾乎為零。作者據此說明單步指標看不到錯誤累積與分布偏移。",
+      "numbers": "Kendall correlation：三種評估器皆 100%，action matching 66.7%（4 個策略）",
+      "section": "§4.1、Figure 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "AitW 的人類示範軌跡本身品質不穩：人工檢視後約三分之一其實沒有完成任務，常見錯誤是提早停止、做了別的任務、任務參數弄錯。這表示拿示範當參考答案的指標會高估模型，也說明需要自動評估器當資料品質篩選器。",
+      "numbers": "約 36% 的受標註人類示範為失敗",
+      "section": "§4.1",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "把評估器當 Reflexion 的外部獎勵（最多 3 輪），不需要任何手寫評估函式就能提升 WebArena 上最強的 GPT-4 agent，而且提升幅度隨評估器能力增加；用 oracle 的 Reflexion 是上限。",
+      "numbers": "相對成功率提升：Captioner + Mixtral 16%、GPT-4V 29%；基線重現值 15.6%。內文只給相對值，絕對值只在 Figure 3；若以 15.6% 為基底換算約為 18.1% 與 20.1%（此為筆記作者自行換算）",
+      "section": "§4.2、Figure 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "在沒有 benchmark 也沒有訓練資料的 iOS 上，用 Captioner + Mixtral 的逐步評估篩選 CogAgent 自己取樣的軌跡再做 filtered BC，成功任務數明顯多於未改動的模型與不篩選的 self-training。",
+      "numbers": "52 題測試：CogAgent 8 題（約 15%）→ self-training 11 題 → filtered BC 14 題（相對提升 75%）；訓練資料為 737 條取樣軌跡；單次訓練",
+      "section": "§4.2、Table 2(a)",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "在規模較大、可重複的 Android 實驗中，用逐步評估器做 filtered BC 仍明顯勝過 self-training，這是本文 filtered BC 最具統計說服力的結果。",
+      "numbers": "96 題評估：AutoUI-base 15 題 → self-training 18.9 ± 1.0 → filtered BC 26.0 ± 0.8（3 次訓練平均，相對提升 73%）；560 個訓練任務",
+      "section": "§4.2、Table 2(b)",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "逐步評估器（process reward 的角色）的準確度只做了初步檢查：在 iOS 實驗隨機抽 50 個 state-action pair，人工標註與評估器一致 43 個。",
+      "numbers": "43／50（86%）",
+      "section": "§4.2",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "評估器仍遠非完美；更好的動作表示或更強的底層模型，應會直接轉成更好的下游改進。",
+    "偽陰性比偽陽性傷害大：把成功的執行判成失敗會逼 agent 重做，重做幾乎一定失敗；偽陽性只是少了重試機會。推論時演算法在雜訊監督下的穩健性是未來方向（此為初步觀察，沒有數字）。",
+    "只做了 Reflexion 與 filtered BC 兩種用法，尚未擴大實驗規模，也還沒有對雜訊監督穩健且有效率的訓練或推論演算法。",
+    "只用了評估器的二元／三元判定，丟掉它產生的語言解釋；未來可以用來做語言監督或對 agent 行為的可擴展監督。",
+    "開放權重 VLM 直接產生的截圖描述不夠詳細；模組化路線有資訊遺失的風險；像素座標型的點擊動作在轉成文字後座標失去意義。",
+    "加入更早的狀態沒有幫助，作者歸因於現有模型的長上下文能力不足，因此多數實驗只看最後一張截圖。",
+    "iOS 模擬需要實體 Mac、速度慢、無法擴展，限制了 iOS 實驗的規模（因此另做 Android 實驗）。",
+    "AitW 人類示範跑在原作者未釋出的模擬器上，與其他策略不能直接比較。",
+    "錯誤分析（WebArena，每個評估器 20 對＋30 錯）：描述遺漏關鍵資訊約 10%（模組化），GPT-4V 看錯截圖約 5%；推理錯誤約 50%（GPT-4V／GPT-4 系）與 70%（Mixtral）；任務敘述或成功條件有歧義約 30% 與 10%；另有約 10% 的正確判定其實推理過程是錯的。",
+    "倫理：強大的 web agent 可能接觸密碼、金融資訊等；自動評估應補充而非取代人工監督。"
+  ],
+  "limitations_observed": [
+    "準確率可能低於最簡單的多數類基線：WebArena 評估用的是 WebArena 釋出的 GPT-4 CoT 軌跡，這個 agent 的成功率約 14.4%（原報）到 15.6%（重現）。若該軌跡集的成功率確實落在這個區間，永遠回答「失敗」就有約 84–86% 的準確率，高於四種評估器的 74.4–82.1%。內文只報 accuracy，confusion matrix 只在 Figure 4 的圖裡，文字中算不出 precision、recall 或偽陰性率；而作者自己在 §4.2 說偽陰性對 Reflexion 的傷害大於偽陽性，這個關鍵指標卻沒有在文字中報告。",
+    "AitW 的 89.8–92.9% 是把四種策略的軌跡合併計算，各策略的成功率差很大（Auto-UI-large 幾乎全失敗；人類示範由 36% 失敗推得約 64% 成功，此為筆記作者自行換算），類別不平衡同樣會墊高 accuracy；內文沒有分策略的準確率。",
+    "Kendall correlation 只在 4 個策略上計算，共 6 對排序；66.7% 等於 5 對一致、1 對相反，100% 對 66.7% 其實只差一對（Auto-UI-large 與 base 的相對順序）。而且人類示範跑在不同的模擬器上，排序比較混合了兩種環境。這是方向正確的例證，不是強的統計證據。",
+    "標題與方法強調「軌跡」評估，但 WebArena 與 Android 實驗實際只看最後一張截圖加動作字串，本質是最終狀態判定；中途做了不可逆或多餘的操作（例如加錯商品又刪掉、改了不該改的設定）只要沒留在最終畫面就看不到。另外 Figure 10 顯示，即使是最終畫面上就有的錯誤訊息（fork 失敗），所有評估器也都漏看了，所以連單張截圖內的資訊都不保證會被注意到。對 T4 而言，本文的軌跡層級評估比較接近 T8 的 outcome 判定，不是逐步的軌跡分析。",
+    "逐步評估的設計很粗：每一步只看（前畫面描述、動作、後畫面描述），不帶更早的歷史（annotator.py 可證），因此判斷不了重複繞圈、或價值取決於先前步驟的動作；四個輸出標籤如何對應 §3 的 1／p／d 沒有說明，not-sure 是否被保留進訓練資料不明，p 與 d 的數值也沒給。",
+    "沒有任何消融把逐步篩選（process reward）與只看結果的軌跡層級篩選做比較，也沒有與「只保留成功軌跡」的 rejection sampling 比較。iOS 與 Android 的提升只能說明「有篩選優於不篩選」，無法說明逐步獎勵本身的邊際價值；「失敗軌跡中的好步驟也值得模仿」這個假設沒有被單獨檢驗。",
+    "逐步評估器的準確度證據只有 iOS 的 50 個 state-action pair（43 個一致），沒有標籤分布、沒有標註者人數或一致度，也沒有在 Android 上檢查——而 Android 正是 filtered BC 結果最可靠的地方。",
+    "iOS 結果是單次訓練、52 題：filtered BC 比 self-training 只多 3 題。測試任務與訓練任務高度同型（例如都是「建立某名稱的提醒事項」「在 Contacts 查某人的電話」「把 Safari 搜尋引擎改成某個」），驗證的是同型任務的內插，不是對新 app 或新任務類型的泛化。",
+    "Reflexion 實驗沒有報告重複次數或變異；29% 是相對 15.6% 的相對提升，換算約 4.5 個百分點（約 812 題中的 37 題，筆記作者自行換算）。也沒有報告多輪 GPT-4V 評估的成本，而評估器與 Actor 同屬 GPT-4 系列，可能有相關的盲點。",
+    "「domain-general」的主張有兩個保留：一是 WebArena 評估提示詞裡舉的「列熱門搜尋商品卻沒先排序」例子，與附錄 Figure 5 展示的 WebArena 案例（漏掉排序這個關鍵步驟）同一型，論文沒有說明提示詞是否在與測試集分開的任務上開發；二是 captioner 的訓練資料（Table 3）含 AitW 訓練集截圖與 iOS 截圖，所以 AitW 與 iOS 上的評估並非零樣本；WebArena 的網站不在訓練資料中，但網頁這個領域已由 Mind2Web 與 WebScreenshot 涵蓋。Android 與 WebArena 之間的準確率落差另有基礎比率、任務類型與合併計算等差異，無法單獨歸因於訓練資料重疊。",
+    "AitW 的人工 oracle 標註流程（標註者人數、一致度、判準）在正文與附錄 A.4 都沒有交代，所以 92.9% 的「一致率」本身的上限不明。"
+  ],
+  "framework_role": "在 T4 中，本文提供「把一次執行當資料物件、由模型打分」的早期範本：輸入是指令＋動作字串＋截圖序列的軌跡，輸出是整條軌跡的成功／失敗，或逐步的進度標籤（process reward 的雛形）。它在框架裡有三個用途：(1) 當異常偵測器，判定失敗就觸發 T5 的 Reflexion 重試（E3）；(2) 當軌跡資料的篩選器，從 agent 自己取樣的軌跡中挑出值得模仿的步驟做 filtered BC，這是 T4 內部的軌跡策展，不是一條跨節點的邊；(3) 在沒有 oracle 的環境中代替 T7／T8 的任務完成判定，並揭露 AitW 人類示範約 36% 失敗這類軌跡資料品質問題。它的主要缺口正好落在 T4 的歸因需求上：觸發 E3 的訊號只說「有沒有失敗」，不說「哪一步、為什麼」——判定是二元的、語言解釋被丟掉、逐步標籤也從未被餵給自我修正，所以做不到步驟層級的失敗歸因。它的主貢獻（結果判定器）其實更靠近 T7／T8。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "WebArena 的 Reflexion 實驗就是這條邊：評估器讀完 agent 的一次執行（最終截圖＋動作歷史＋回答）後，若判定失敗，就啟動 Self-Reflection 模組，把目標、完整軌跡、STATUS: FAILED 與先前反思交給 GPT-4 寫出失敗原因與新計劃，存進記憶後重試，最多 3 輪。作者的初步觀察對這條邊的設計很關鍵：偽陰性（把成功誤判為失敗）會逼 agent 重做已成功的任務，而重做幾乎一定失敗，傷害大於偽陽性；因此觸發自我修正的異常偵測器應該偏向高 precision。另外，觸發訊號只有二元判定，沒有指出出錯的步驟。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有描述任何部署或產品；網路搜尋只找到論文頁、官方 GitHub（BSD-3-Clause）與 Hugging Face 上的模型與資料集釋出，屬於開源研究成果，不是商用採納證據。COLM 2024 收錄與後續論文的引用（Semantic Scholar 144 次引用、15 次 influential）屬於學術影響力。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/Berkeley-NLP/Agent-Eval-Refine",
+    "data": "公開。官方 README 列出 Hugging Face 上的 captioner 權重與 demo（Agent-Eval-Refine/Captioner）、captioner 訓練資料 GUI-Dense-Descriptions、以及跨領域的 Agent-Trajectories 資料集；程式庫含評估器（agent_eval/）、WebArena Reflexion、Android 與 iOS 模擬器程式（exps/）。限制：端到端與 Captioner + GPT-4 版本依賴 OpenAI 專有模型的特定版本（gpt-4-1106-vision-preview、gpt-4-turbo-preview），版本停用後無法原樣重現；iOS 需要實體 Mac；逐步標籤到獎勵值的對應與 CogAgent 的 filtered BC 訓練腳本，在我檢查過的程式庫檔案中沒有看到。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它是「以 VLM 判定 digital agent 軌跡、再當 Reflexion 獎勵與 filtered BC 篩選器」的早期代表作，E3 的偽陰性教訓與 36% 示範失敗的發現有參考價值；但主貢獻是只看最終畫面的結果判定（較屬 T7／T8），T4 核心的逐步 process reward 只有 50 筆的準確度檢查、也沒有與結果層級篩選對照的消融，因此不是 T4 必讀。",
+  "related": [
+    "2303.11366",
+    "2307.13854",
+    "2307.10088",
+    "2312.08914",
+    "2309.11436",
+    "2401.13919",
+    "2402.07456",
+    "2303.07280",
+    "2306.06070",
+    "2311.07562"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

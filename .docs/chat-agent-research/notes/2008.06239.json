@@ -1,0 +1,161 @@
+{
+  "id": "2008.06239",
+  "title": "Language Models as Few-Shot Learner for Task-Oriented Dialogue Systems",
+  "topic": "T1",
+  "subarea": "LLM 時代的意圖理解、zero-shot 意圖與意圖路由",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "用 GPT-2（117M／762M／1.54B）不更新任何參數、只在輸入前綴塞入少量範例（priming／in-context learning）的方式，對任務導向對話的四個模組 —— NLU（意圖分類＋slot filling）、DST、對話行為偵測與 NLG —— 做可行性評估，並與 fine-tune 基線比較。",
+  "problem": "任務導向對話系統的 NLU、DST、對話策略、NLG 各自需要標註資料，其中對話策略標註甚至要語言學專家，成本高；既有的少樣本做法（TOD-BERT、SC-GPT、Coach 等）都要對每個任務 fine-tune 一組參數。作者想知道：GPT-3 論文提出的「只靠範例 priming、不更新參數」能不能讓一個模型同時做完這四種任務，以及在公開可取得的 GPT-2 規模下效果如何。這是 LLM 時代「用提示做意圖偵測」最早的一批實證之一。",
+  "core_idea": "把每個對話子任務改寫成「輸入 → 輸出」的文字續寫格式，讓語言模型從前綴裡的幾個範例推出規律，再續寫查詢句的答案。為了讓小模型做得動，分類題一律拆成逐類的二元判斷（每類一個前綴、輸出 True／False），slot 題拆成逐 slot 的值填空（輸出值或 None），生成題則直接給「對話行為 → 句子」配對。",
+  "method": {
+    "models": "GPT-2 SMALL（117M）、LARGE（762M）、XL（1.54B）；完全不更新參數；單張 NVIDIA 1080Ti；輸入上限 1024 tokens，這個上限決定了各任務能塞多少 shots。",
+    "prompt_format": "前綴由多行「範例輸入 → 範例輸出」組成，每行一個範例，最後一行只放查詢輸入與箭頭（或 slot 名＋等號），模型續寫的 token 就是預測。官方 repo 的實際字串是每行「文字=>意圖=標籤」並以換行分隔。",
+    "binary_prefix": {
+      "used_for": "意圖分類（SNIPS）與對話行為偵測（MultiWOZ ACT）",
+      "steps": [
+        "對每個類別 c 建一個獨立前綴：正例寫成「句子 → c = true」，負例取自其他類別（或資料中的 false 類）寫成「句子 → c = false」。範例：以 playmusic 為類別時，一句播歌請求標 true、一句替小說評分的請求標 false。",
+        "查詢句接在最後：「查詢句 → c =」，讓模型續寫，解析出 true 或 false。",
+        "n 個類別就要 n 個前綴、n 次前向（SNIPS 意圖 7 類 → 每句 7 次）。前向之間彼此獨立、可平行。",
+        "多類聚合規則論文沒寫；官方 repo 的 evaluate.py 是：收集所有輸出 true 的類別，若一個都沒有就預設第 0 類，若有多個就隨機挑一個。",
+        "ACT 在論文 §2 定義為多標籤分類（一句可含多個 speech-act），輸入只用系統那句話，不含對話歷史與使用者句。"
+      ]
+    },
+    "value_based_prefix": {
+      "used_for": "SNIPS slot filling 與 MultiWOZ DST",
+      "steps": [
+        "對每個 slot s 建一個前綴：有值的範例寫成「句子 → s = 值」，沒提到的範例寫成「句子 → s = None」；查詢寫成「查詢句 → s =」。",
+        "續寫結果就是該 slot 的值；None 表示沒提到。逐 slot 重複，組出 slot-value 字典。n 個 slot 就要 n 次前向（形式上仿 TRADE 的逐 slot 解碼）。",
+        "DST 只把「最後一句使用者話」當輸入，把每輪預測到的非 None 值累積進前一輪的狀態，不看完整對話歷史。"
+      ]
+    },
+    "generative_prefix": {
+      "used_for": "FewShotWOZ NLG",
+      "steps": [
+        "前綴是 k 組「對話行為字串 → 句子」，例如 inform(name=…;area=…) 對應一句自然語言回覆；查詢只放對話行為與箭頭，讓模型續寫句子。"
+      ]
+    },
+    "decoding": "論文沒寫解碼設定。官方 repo 的 main.py 預設 do_sample 搭配 top_k=1（等同貪婪解碼）、top_p=0.9、temperature=1.0、最多生成 10 個 token，亂數種子 42，看起來每個設定只跑一次。",
+    "shots_per_task": "意圖最多 10 shots（表中 1／2／5／10）；slot filling 最多 15（1／10／15）；DST 最多 15（5／10／15）；ACT 最多 15（5／10／15）；NLG 最多 20（5／10／20）。論文沒定義一個「shot」是指每類一個正例、還是整個二元前綴裡一個範例；shots 怎麼抽樣也沒說明。",
+    "failed_variant": "作者早期試過把所有任務都改成直接生成（直接生成類別名或 tag 序列），在 GPT-2 上結果很差，因此才改用逐類二元與逐 slot 填空；但沒有給出數字。",
+    "evaluation_protocol": "意圖：SNIPS 測試集，準確率與 micro／macro F1，對照組為用 10 個樣本 fine-tune 的 RoBERTa。Slot filling：沿用 Coach（Liu et al. 2020）的逐 domain 少樣本設定、CoNLL F1。DST：沿用 TOD-BERT 的少樣本設定，joint 與 slot accuracy。ACT：沿用 TOD-BERT 設定，F1。NLG：沿用 FewShotWOZ 設定，BLEU 與 slot error rate。"
+  },
+  "assumptions": [
+    "類別與 slot 的名稱（例如 playmusic、offerbooked、leave_at）本身對語言模型有語意，模型能從少數範例把名稱與句子對上。",
+    "意圖集合是封閉的：每句話必定屬於某個已知意圖，沒有 out-of-scope 類別；聚合規則在「全部判 false」時直接落到預設類。",
+    "逐類二元判斷彼此獨立，且以字串 true／false 決定就足夠，不需要比較各類的機率或做校準。",
+    "單句資訊足以判斷：ACT 只看系統句、DST 只看最後一句使用者話並累加。",
+    "範例與查詢放得進 GPT-2 的 1024 tokens。",
+    "範例的挑選與順序對結果影響不大（論文只報單次結果）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "SNIPS（意圖分類、slot filling；7 個 domain／意圖）",
+      "MultiWOZ（DST；論文同時引用 2.0／2.1／2.2 但沒說用哪一版）",
+      "MultiWOZ 系統端對話行為（ACT 偵測）",
+      "FewShotWOZ（NLG；restaurant、laptop、hotel、tv、attraction、train、taxi 七個 domain）"
+    ],
+    "metrics": [
+      "Accuracy、micro F1、macro F1（意圖、ACT）",
+      "CoNLL F1（slot filling）",
+      "Joint accuracy、slot accuracy（DST）",
+      "BLEU、slot error rate（NLG；論文正文寫 SLR，表中為 ERR）"
+    ],
+    "baselines": [
+      "RoBERTa，用 10 個樣本 fine-tune（意圖）",
+      "CT、RZT、Coach，20-shot（slot filling，取自 Liu et al. 2020）",
+      "BERT、TOD-BERT，用 10% 訓練資料（約 500 筆）fine-tune（DST、ACT）",
+      "SC-LSTM、GPT-2、SC-GPT，用 50 筆 fine-tune（NLG，取自 Peng et al. 2020b）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "意圖分類的準確率隨模型變大明顯上升，10-shot 的 XL 最高；但 1-shot 三個模型都只在隨機猜測水準附近。",
+      "numbers": "SNIPS 7 類，10-shot：gpt2 36.0%、gpt2-large 55.1%、gpt2-xl 73.0%（macro F1 0.745）；1-shot：13.4%–17.0%（7 類隨機猜約 14.3%）；gpt2-large 2-shot 37.9% 高於 5-shot 33.0%，shots 數與效果不單調。",
+      "section": "§4 NLU、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "Slot filling 同樣是模型越大越好，15-shot 的 XL 平均 CoNLL F1 最高；各 domain 差異很大，Weather 最弱。",
+      "numbers": "15-shot 平均 F1：gpt2 39.94、gpt2-large 51.44、gpt2-xl 55.19；gpt2-xl 1-shot 33.94；Weather 在 gpt2-xl 15-shot 只有 30.85，PlayList 67.94、RateBook 77.15。",
+      "section": "§4 NLU、Table 1",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "DST 幾乎失敗：joint accuracy 只有個位數，與 fine-tune 基線差距仍大。",
+      "numbers": "Joint accuracy 最高 3.5%（gpt2-large、15 shots），gpt2 small 只有 0.6–0.8%；slot accuracy 約 78.7–83.5%。基線（BERT／TOD-BERT 以約 500 筆 fine-tune）的數字只出現在圖中，文字版無法核對。",
+      "section": "§4 DST、§5、Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "規模效應在 DST 與 ACT 上反轉：LARGE 優於 XL，與 GPT-3 論文的規模趨勢相反。",
+      "numbers": "ACT：gpt2-large 10-shot micro F1 83.58／macro 68.68，gpt2-xl 15-shot 77.74／63.02；DST joint：gpt2-large 15-shot 3.5% vs gpt2-xl 15-shot 2.0%。",
+      "section": "§5、Table 3、Table 4",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "作者宣稱在 NLU、ACT、NLG 上，priming 能達到與最弱的 fine-tune 基線相近或更好，而且基線用了更多樣本；NLG 的實際數字顯示這個說法只在 slot error rate 對 SC-LSTM 時成立。",
+      "numbers": "NLG 平均 BLEU：gpt2-xl 20-shot 15.64，基線（50 筆 fine-tune）SC-LSTM 16.71、GPT-2 23.89、SC-GPT 28.51；平均 ERR：priming 最佳 42.57（gpt2-xl 10-shot），SC-LSTM 120.44、GPT-2 13.65、SC-GPT 5.35。",
+      "section": "§5、Table 5、Table 6",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "把分類與 tagging 直接改成生成格式（直接生成類別名或 tag 序列）在 GPT-2 上效果很差，這是採用逐類二元前綴的原因。",
+      "numbers": "論文只有定性描述，沒有數字。",
+      "section": "§5",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "所有分類（包括多類意圖）都拆成逐類二元判斷，代價是 n 類需要 n 次前向。",
+      "numbers": "SNIPS 意圖 7 類 → 每句 7 次前向；DST 與 slot filling 則是每個 slot 一次前向。",
+      "section": "§3 Binary、§5",
+      "anchor_idx": 0
+    }
+  ],
+  "limitations_stated": [
+    "二元與 value-based 前綴需要與類別或 slot 數一樣多次的前向，計算成本高，而且不如直接生成類別或 tag 那樣有效率。",
+    "直接生成格式在早期實驗中表現很差，作者不確定 GPT-3 這類更大模型是否會好一些。",
+    "GPT-2 的 1024 token 上限讓多數任務最多只能放約 15 個 shots，因此無法與使用更多樣本的既有模型公平比較。",
+    "DST 與既有基線的差距仍然很大。",
+    "DST 與 ACT 上 LARGE 優於 XL 的反直覺結果尚待研究，作者猜測可能與前綴設計有關。"
+  ],
+  "limitations_observed": [
+    "1-shot 意圖準確率 13.4%–17.0%，SNIPS 7 類隨機猜約 14.3%，等於沒有學到東西；意圖這一節真正有訊號的只有 10-shot 那三個數字。",
+    "每個設定只跑一次（官方 repo 固定 seed 42），沒有報告變異數。測試集依準確率的刻度推得是 700 句（例如 16.7143% = 117/700），光是二項抽樣誤差在 73% 附近就約 ±3.3 個百分點；範例挑選與排序造成的變異沒有量，而後續 ICL 研究（例如 arXiv:2102.09690）顯示這類變異可以相當大。gpt2-large 2-shot 37.9% 高於 5-shot 33.0%、slot filling 的 Weather 在 gpt2 與 gpt2-xl 上 10→15 shots 反而下降，這些非單調很可能只是雜訊，不足以支撐任何結論。",
+    "多類聚合規則沒寫在論文裡：官方 repo 在「沒有任何類別輸出 true」時預設第 0 類、「多個 true」時隨機挑一個。這不但讓準確率混入隨機成分、讓第 0 類的 precision 受影響，也把「全部否定」這個本來可以導向 out-of-scope 或澄清提問的訊號直接吞掉 —— 對 T1 來說這正是最該保留的資訊。",
+    "意圖的 shots 定義不清：「10 shots」是每類 10 個正例，還是每個二元前綴總共 10 個正負例，論文沒有定義；與 RoBERTa 的「10 samples」是否同量也沒交代。此外官方 repo 的 run_INTENT.sh 跑的是 1／5／10／25 shots，而 Table 2 報的是 1／2／5／10，論文與程式碼對不上。",
+    "所有基線數字只出現在圖（Figure 5–8）裡，文字與表格只列 priming 的結果（NLG 除外），讀者無法從正文核對「相近或更好」的主張。以唯一有文字數字的 NLG 來看：BLEU 最佳 15.64 仍低於最弱基線 SC-LSTM 的 16.71；ERR 最佳 42.57 是 fine-tune GPT-2（13.65）的約 3 倍、SC-GPT（5.35）的約 8 倍。「優於最弱基線」只靠 SC-LSTM 異常的 ERR 120.44（attraction 高達 367.12）撐住。",
+    "DST 的 slot accuracy 約 80% 幾乎不帶資訊：多數 slot 在多數輪都是 None，照抄 None 就能拿到高分；joint 最高 3.5% 才是真實訊號。加上只用最後一句使用者話並把非 None 值累加，指代、改口與刪除 slot 都無法處理，所以這個 DST 數字反映的是設計選擇，而不只是 priming 的能力。",
+    "NLG 的 laptop 與 tv 兩欄在 5／10／20 shots 下數值完全相同（例如 gpt2 的 laptop BLEU 三格都是 17.75、gpt2-xl 的 tv ERR 三格都是 37.92），表示這兩個 domain 的前綴實際上沒有隨 shots 設定改變（很可能被 1024 上限截斷）。論文沒有說明，「shots 數」這個自變數在這兩欄其實不成立，平均值也因此被稀釋。",
+    "Table 3（ACT）的 Acc 欄與 micro F1 逐位相同（例如 73.9364 對 0.7394、83.5762 對 0.8358）。單標籤評估時這兩者必然相等，但論文 §2 說 ACT 是多標籤分類，多標籤的 subset accuracy 一般不會等於 micro F1。這暗示實際評估可能把 ACT 當成單標籤處理（與意圖共用同一套聚合），指標與任務定義不一致。",
+    "作者把 DST／ACT 上 LARGE 勝過 XL 歸因於前綴設計，但沒有做任何換前綴的實驗；在只跑一次的前提下，這個「反轉」同樣可能是範例抽樣的雜訊。",
+    "外推到現代 LLM 的限制很大：結論綁在 GPT-2 規模與 1024 token 上下文，「生成格式很差」「最多 15 shots」這兩個主要限制在指令微調過、長上下文的模型上已不成立。T1 範圍內也缺了關鍵面向：只有 SNIPS 7 個高度可分的意圖，沒有 out-of-scope、沒有模糊指令或澄清提問、沒有大量意圖時的路由成本分析（逐類二元在上百個意圖時要上百次前向）。"
+  ],
+  "framework_role": "T1 的早期先驅與歷史基線：它是最早用「不 fine-tune、只靠範例 priming」做意圖偵測與聯合 slot 抽取的實證之一，證明 GPT-2 規模已能在 10-shot 下做到 7 類意圖約 73% 的準確率，但也顯示這條路在當時規模下並不穩。對框架設計最有用的是它的「逐意圖二元驗證」形式：在依意圖路由時，可以把每條路由當成一個是／否驗證器，而「全部判否」天然就是 out-of-scope 或需要澄清的訊號 —— 這篇恰好示範了反面做法（落到預設類別）。它對 T2（DST）只是一個負面資料點：只看最後一句、逐輪累加的 priming DST，joint accuracy 只有個位數。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據（商用採納）。論文沒有提到任何部署或產品。可查證的只有作者公開的研究用程式碼（https://github.com/andreamad8/TASK-ORIENTED-LM-FEWSHOT，Apache-2.0），這屬於研究成果的公開，不是產品採納。作者後續的 Few-Shot Bot（arXiv:2110.08118）延伸了同一套 priming 思路，屬於學術延伸。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/andreamad8/TASK-ORIENTED-LM-FEWSHOT",
+    "data": "公開：SNIPS、MultiWOZ、FewShotWOZ 都是公開資料集；repo README 表示實驗用的前綴與結果另放在 Google Drive 下載（連結是否仍可存取未確認）。論文本身沒有寫 shots 怎麼抽、多類怎麼聚合，要重現必須讀程式碼。"
+  },
+  "value_verdict": "low",
+  "verdict_reason": "T1 相關的只有一組 SNIPS 7 類意圖的單次實驗（1-shot 在隨機水準、聚合規則藏在程式碼裡且把全否落到預設類），主要貢獻是橫跨 NLU／DST／ACT／NLG 的 GPT-2 可行性探測，其結論與限制已被長上下文、指令微調的 LLM 取代，對 T1 只有歷史先驅的價值、不是必讀。",
+  "related": [
+    "2005.14165",
+    "2004.06871",
+    "2004.11727",
+    "2002.12328",
+    "2005.05298",
+    "1905.08743",
+    "1805.10190",
+    "2004.15006"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

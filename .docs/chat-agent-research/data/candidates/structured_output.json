@@ -1,0 +1,205 @@
+{
+  "main": [
+    {
+      "id": "1606.03777",
+      "title": "Neural Belief Tracker: Data-Driven Dialogue State Tracking",
+      "subarea": "傳統任務型對話 DST 與資料集",
+      "rank": 1
+    },
+    {
+      "id": "1612.00913",
+      "title": "End-to-End Joint Learning of Natural Language Understanding and Dialogue Manager",
+      "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+      "rank": 2
+    },
+    {
+      "id": "1712.05181",
+      "title": "Rasa: Open Source Language Understanding and Dialogue Management",
+      "subarea": "傳統任務型對話 DST 與資料集",
+      "rank": 3
+    },
+    {
+      "id": "1805.09655",
+      "title": "Global-Locally Self-Attentive Dialogue State Tracker",
+      "subarea": "傳統任務型對話 DST 與資料集",
+      "rank": 4
+    },
+    {
+      "id": "1810.00278",
+      "title": "MultiWOZ -- A Large-Scale Multi-Domain Wizard-of-Oz Dataset for Task-Oriented Dialogue Modelling",
+      "subarea": "傳統任務型對話 DST 與資料集",
+      "rank": 5
+    },
+    {
+      "id": "1901.04713",
+      "title": "Global-to-local Memory Pointer Networks for Task-Oriented Dialogue",
+      "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+      "rank": 6
+    },
+    {
+      "id": "1905.08743",
+      "title": "Transferable Multi-Domain State Generator for Task-Oriented Dialogue Systems",
+      "subarea": "傳統任務型對話 DST 與資料集",
+      "rank": 7
+    },
+    {
+      "id": "1908.01946",
+      "title": "Dialog State Tracking: A Neural Reading Comprehension Approach",
+      "subarea": "傳統任務型對話 DST 與資料集",
+      "rank": 8
+    },
+    {
+      "id": "1909.05855",
+      "title": "Towards Scalable Multi-domain Conversational Agents: The Schema-Guided Dialogue Dataset",
+      "subarea": "傳統任務型對話 DST 與資料集",
+      "rank": 9
+    },
+    {
+      "id": "2004.06871",
+      "title": "TOD-BERT: Pre-trained Natural Language Understanding for Task-Oriented Dialogue",
+      "subarea": "LLM 時代的 zero/few-shot DST",
+      "rank": 10
+    },
+    {
+      "id": "2009.12005",
+      "title": "MinTL: Minimalist Transfer Learning for Task-Oriented Dialogue Systems",
+      "subarea": "傳統任務型對話 DST 與資料集",
+      "rank": 11
+    },
+    {
+      "id": "2012.15504",
+      "title": "Continual Learning in Task-Oriented Dialogue Systems",
+      "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+      "rank": 12
+    },
+    {
+      "id": "2105.04222",
+      "title": "Leveraging Slot Descriptions for Zero-Shot Cross-Domain Dialogue State Tracking",
+      "subarea": "LLM 時代的 zero/few-shot DST",
+      "rank": 13
+    },
+    {
+      "id": "2109.04655",
+      "title": "Zero-Shot Dialogue State Tracking via Cross-Task Transfer",
+      "subarea": "LLM 時代的 zero/few-shot DST",
+      "rank": 14
+    },
+    {
+      "id": "2109.07506",
+      "title": "Dialogue State Tracking with a Language Model using Schema-Driven Prompting",
+      "subarea": "LLM 時代的 zero/few-shot DST",
+      "rank": 15
+    },
+    {
+      "id": "2110.00534",
+      "title": "TEACh: Task-driven Embodied Agents that Chat",
+      "subarea": "傳統任務型對話 DST 與資料集",
+      "rank": 16
+    },
+    {
+      "id": "2203.08568",
+      "title": "In-Context Learning for Few-Shot Dialogue State Tracking",
+      "subarea": "LLM 時代的 zero/few-shot DST",
+      "rank": 17
+    },
+    {
+      "id": "2205.10475",
+      "title": "DeepStruct: Pretraining of Language Models for Structure Prediction",
+      "subarea": "LLM 時代的 zero/few-shot DST",
+      "rank": 18
+    },
+    {
+      "id": "2209.01975",
+      "title": "Selective Annotation Makes Language Models Better Few-Shot Learners",
+      "subarea": "LLM 時代的 zero/few-shot DST",
+      "rank": 19
+    },
+    {
+      "id": "2410.10813",
+      "title": "LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory",
+      "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+      "rank": 20
+    },
+    {
+      "id": "2505.06120",
+      "title": "LLMs Get Lost In Multi-Turn Conversation",
+      "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+      "rank": 21
+    },
+    {
+      "id": "2510.07777",
+      "title": "Drift No More? Context Equilibria in Multi-Turn LLM Interactions",
+      "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+      "rank": 22
+    },
+    {
+      "id": "2512.12818",
+      "title": "Hindsight is 20/20: Building Agent Memory that Retains, Recalls, and Reflects",
+      "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+      "rank": 23
+    },
+    {
+      "id": "2601.03515",
+      "title": "Mem-Gallery: Benchmarking Multimodal Long-Term Conversational Memory for MLLM Agents",
+      "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+      "rank": 24
+    }
+  ],
+  "reserve": [
+    {
+      "id": "1906.01543",
+      "title": "Training Neural Response Selection for Task-Oriented Dialogue Systems",
+      "subarea": "傳統任務型對話 DST 與資料集",
+      "rank": 1
+    },
+    {
+      "id": "1907.01669",
+      "title": "MultiWOZ 2.1: A Consolidated Multi-Domain Dialogue Dataset with State Corrections and State Tracking Baselines",
+      "subarea": "傳統任務型對話 DST 與資料集",
+      "rank": 2
+    },
+    {
+      "id": "1909.00754",
+      "title": "Scalable and Accurate Dialogue State Tracking via Hierarchical Sequence Generation",
+      "subarea": "傳統任務型對話 DST 與資料集",
+      "rank": 3
+    },
+    {
+      "id": "2005.00891",
+      "title": "Zero-Shot Transfer Learning with Synthesized Data for Multi-Domain Dialogue State Tracking",
+      "subarea": "傳統任務型對話 DST 與資料集",
+      "rank": 4
+    },
+    {
+      "id": "2104.00773",
+      "title": "MultiWOZ 2.4: A Multi-Domain Task-Oriented Dialogue Dataset with Essential Annotation Corrections to Improve State Tracking Evaluation",
+      "subarea": "傳統任務型對話 DST 與資料集",
+      "rank": 5
+    },
+    {
+      "id": "2109.02492",
+      "title": "DialogLM: Pre-trained Model for Long Dialogue Understanding and Summarization",
+      "subarea": "傳統任務型對話 DST 與資料集",
+      "rank": 6
+    }
+  ],
+  "n_candidates": 140,
+  "n_gate_dropped": 0,
+  "n_rejected": 110,
+  "subarea_counts": [
+    {
+      "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+      "main": 8
+    },
+    {
+      "subarea": "LLM 時代的 zero/few-shot DST",
+      "main": 7
+    },
+    {
+      "subarea": "傳統任務型對話 DST 與資料集",
+      "main": 9
+    }
+  ],
+  "shortfall": "",
+  "notes": "T2節點篩選完成：140篇候選，經過範圍判斷與影響力評分，選出24篇主選+6篇候補。配額達成（傳統DST 9篇、zero/few-shot 7篇、LLM多輪 8篇）。主要排除因素：T1單輪NLU/意圖槽位標籤(18篇)、長期個人化記憶(3篇)、無關領域(27篇)。MultiWOZ版本適度去重（保留2.0、2.1、2.4三版）。高引用且頂會發表的論文優先入選。"
+}

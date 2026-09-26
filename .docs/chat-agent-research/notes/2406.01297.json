@@ -1,0 +1,210 @@
+{
+  "id": "2406.01297",
+  "title": "When Can LLMs Actually Correct Their Own Mistakes? A Critical Survey of Self-Correction of LLMs",
+  "topic": "T5",
+  "subarea": "內在自我修正與口語反思（含批判性研究）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "批判性綜述（TACL 2024）：把 self-correction 研究拆成 RQ1（純靠模型本身）、RQ2（借外部資訊）、RQ3（最終輸出是否勝過其他方法）三個研究問題，並依「是否用到真實應用拿不到的資訊」與「初始回應是否已盡力」把框架分成 unrealistic／fair／unfair，重新判讀既有文獻後得出：一般任務中沒有公平設定下成功的 intrinsic 修正、可靠外部回饋才有效、大規模微調才能學會修正，最後給出一份實驗設計查核清單。",
+  "problem": "2023 年起 Self-Refine、RCI、Reflexion、CRITIC、RARR 等工作宣稱 LLM 能修正自己的錯誤，但 Huang et al.、Olausson et al.、Valmeekam et al.、Stechly et al. 等又報告「自我修正沒用甚至更差」，文獻結論互相矛盾。作者認為矛盾的根源是各篇沒有講清楚自己在回答哪個研究問題，於是用了不適合的框架或不公平的比較：偷用 ground-truth 決定何時停止、給初始生成刻意弱化的提示、外部知識只在修正階段使用、沒和同成本的強基準比。這很重要，因為工程上要決定「要不要在 agent 裡加一個反思／修正步驟、要用什麼回饋來源」，若依據的是被高估的文獻，會多花數倍呼叫成本卻換不到品質。",
+  "core_idea": "自我修正的瓶頸在回饋生成（偵錯），不在精煉：只要回饋可靠，LLM 大多能照著改好；但只靠提示自己產生回饋，除了「驗證明顯比生成容易」的少數任務（回應可分解成逐項驗證、或答案本身可機械檢查），都拿不到可靠回饋。為了讓這個判斷站得住，作者把研究問題與框架對齊：要宣稱模型能「修正自己」（RQ1／RQ2），修正必須從 best-possible initial response 出發（修正階段能用的資訊，初始生成也要盡量用上），且不得使用 oracle；要宣稱方法「整體更好」（RQ3），則必須和同等計算成本的強基準（self-consistency、generate-and-rank、pass@k）比較。",
+  "method": {
+    "性質": "文獻綜述，無新實驗；做法是先定義分類體系與判定規則，再把既有研究逐篇套進去重新判讀（Table 1、2、4、5、6），最後彙整成查核清單（Table 7、8）。收錄範圍主要到 2024 年 5 月，§12 簡述之後的 RL 類方法與 OpenAI o1。",
+    "self-correction 的定義與排除": "推論期間用 LLM 精煉 LLM 自己的回應，可以借外部工具或知識。self-consistency（多數決）與 generate-and-rank（多抽樣後以驗證器挑選）不修改回應、且假設模型能以合理機率生出正解，因此不算 self-correction，而是 §6 的強基準。",
+    "三階段管線（Figure 1）": [
+      "初始生成：LLM 對輸入產生初始回應。",
+      "回饋模型：輸入＝原始輸入＋初始回應，輸出回饋；此階段可呼叫外部工具或知識。",
+      "精煉模型：輸入＝原始輸入＋初始回應＋回饋，輸出精煉後的回應。",
+      "變體：direct refinement 不產生顯式回饋、直接改寫（Saunders、CAI、Welleck、RL4F）。"
+    ],
+    "分類軸（§2）": {
+      "時機": "post-hoc（整份回應生成後再修）vs generation-time／step-level（對推理中間步驟給回饋）。",
+      "模型": "same-model vs cross-model（小的微調模型修大模型的回應，或能力相近的多模型辯論）。",
+      "回饋來源": "intrinsic（提示自己；含 zero/few-shot、分解回應、信心估計）；external（程式直譯器、符號推理器、證明助理、任務指標、搜尋引擎、Wikipedia、ground-truth、人、更強模型）；fine-tuning（SFT 或 RL 訓練回饋／精煉模組）。"
+    },
+    "研究問題（§3.1）": {
+      "RQ1": "LLM 能否只靠自身能力修正自己的 best-possible 初始回應？",
+      "RQ2": "LLM 能否在外部資訊協助下修正自己的 best-possible 初始回應？",
+      "RQ3": "自我修正的最終輸出是否優於其他方法？",
+      "best-possible initial response": "用修正模組能取得的所有資訊（外部工具、知識、微調）盡力產生的初始回應。"
+    },
+    "框架判定程序（§3.2、Figure 2／3）": [
+      "步驟 1：回饋或停止條件是否用到真實應用中拿不到的資訊（ground-truth 答案、以標籤判定答對就停）？是 → Unrealistic，不能拿來驗證任何 RQ（例：RCI 的 oracle 停止、Reflexion HotpotQA 以 exact match 當回饋）。",
+      "步驟 2：否 → Realistic。若修正與初始生成用同一模型、同一份資訊 → Intrinsic（fair），可驗 RQ1。",
+      "步驟 3：若修正多用了外部資訊，但這份資訊無法直接拿來改善初始生成（例：程式直譯器）→ Fair-asymmetric，可驗 RQ2。",
+      "步驟 4：若外部資訊本來也能用於初始生成卻只用在修正（例：RARR、ReFeed 只在修正時搜尋），或修正模組的微調比初始生成器更強（例：Welleck et al.）→ Unfair(-asymmetric)，只能驗 RQ3。",
+      "步驟 5：cross-model（初始生成與修正不同模型）不能驗 RQ1／RQ2，只能驗 RQ3。"
+    ],
+    "各 RQ 的實驗要求（Table 3）": {
+      "RQ1": "資訊對稱、best-possible 初始回應、realistic、與初始回應比較。",
+      "RQ2": "best-possible 初始回應、realistic、與初始回應比較（資訊可不對稱）。",
+      "RQ3": "realistic、與強基準比較（初始回應可以不是最強）。"
+    },
+    "查核清單：宣稱正面結果時（Table 7，轉述）": [
+      "所有 RQ 必要：寫明目標 RQ 與所屬框架類別；不使用 oracle 資訊；若有微調，報告標註數量與達到該表現所需的計算成本。",
+      "所有 RQ 建議：直接評估回饋品質（例如錯誤偵測準確率），不只看下游最終表現。",
+      "RQ1、RQ2 必要：初始生成要用夠強的提示。",
+      "RQ1 必要：使用 intrinsic 設定。",
+      "RQ2 必要：若用外部工具或知識，也要盡量用在初始生成；若微調修正模組，也要盡量微調初始生成器。",
+      "RQ2 建議：找出能啟動自我修正的最小訓練資料量；評估 cross-model 設定下修正更強 LLM 回應的能力。",
+      "RQ3 必要：與同等計算成本的強基準比較。"
+    ],
+    "查核清單：宣稱負面結果時（Table 8，轉述）": [
+      "必要：寫明被推翻的是哪個 RQ、哪類框架。",
+      "必要：修正用夠強的提示（例如採用最先進的 reference-free 評估指標當回饋）。",
+      "必要：若沒用上真實應用中可取得的外部工具或知識，明說評估是在弱條件下進行。",
+      "建議：用真實應用中可取得的外部工具或知識再評估一次。"
+    ],
+    "強基準（§6）": {
+      "self-consistency": "同一輸入多次生成，對最終答案多數決；延伸到文字生成與程式生成。",
+      "generate-and-rank（post-hoc）": "多次生成後以自評、信心、微調驗證器（如 Cobbe、Lightman 的 verifier）或借工具的驗證器（CodeT、LEVER）排序挑選。",
+      "feedback-guided decoding": "逐步生成多個候選，按生成機率、提示自評（含 Tree-of-Thoughts）或微調驗證器選每一步。",
+      "pass@k": "程式生成時與自我修正對照。"
+    },
+    "文獻判讀的呈現方式": "Table 1 列代表研究的框架類別、主要模型、額外回饋（oracle／工具／微調）與任務型別（推理與程式、閉卷知識、開卷情境、開放生成、可分解）；Table 2 標出各篇隱含驗證或推翻的 RQ；Table 4 標出使用 oracle 或弱初始提示的研究；Table 5 比對外部工具在初始生成與回饋兩階段的使用；Table 6 列 SFT 目標與訓練資料量。",
+    "附錄（Table 9、10）": "引出 Self-Refine 原始提示作為弱初始提示的證據：對話回應任務的初始提示把部分期望特質寫成反向（要求回應不有趣、不太吸引人），而回饋提示則以正向標準逐項打 3 分制分數；Sentiment Reversal 的初始 few-shot 範例方向與目標任務不同（示範的是轉成 Positive／Neutral），精煉的 few-shot 則全部是轉成 Very negative。兩表皆附 Self-Refine repo 的原始檔連結。",
+    "照做流程（把本文當成評估自家 T5 的規格）": [
+      "1. 先寫明要驗證的是 RQ1、RQ2 還是 RQ3。",
+      "2. 逐一列出修正模組用到的每一種資訊（工具輸出、檢索結果、驗證器、標籤），檢查真實上線時是否取得得到；取不到的一律移除或另列為上界。",
+      "3. 對每一種在修正階段使用的資訊，嘗試把它也放進初始生成（例如初始生成也做檢索、把回饋提示裡的要求寫進初始提示），以此作為對照組。",
+      "4. 同時記錄修正前後的回應與回饋內容，計算回饋的錯誤偵測準確率與把正確回應改錯的比例。",
+      "5. 以相同呼叫次數或 token 預算跑 self-consistency、generate-and-rank（或 pass@k）作為強基準。"
+    ]
+  },
+  "assumptions": [
+    "「修正」與「重抽樣／重排序」可以清楚切開，前者才算 self-correction。",
+    "存在可界定的 best-possible initial response，而研究者能判斷某份外部資訊「能否輕易用在初始生成」，據此區分 fair 與 unfair。",
+    "既有論文報告的數字可信，只要重新分類其實驗設定就能得出結論，不需要重跑實驗。",
+    "評估對象主要是單輪任務的最終答案品質（推理、閉卷 QA、程式、去毒、受限生成）。",
+    "2024 年 5 月以前的模型與文獻足以代表「現階段 LLM」的自我修正能力（o1 類以 RL 訓練的推理模型僅在 §12 提及）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "無自有實驗",
+      "所判讀文獻涵蓋：GSM8k、SVAMP、CommonsenseQA、HotpotQA（閉卷／給定情境／Wikipedia API）、MiniWoB++ 等 computer tasks、NQ、StrategyQA、QReCC、2WikiMultihopQA、ASQA、TriviaQA、MT-Bench、去毒（detoxification）、受限生成（constrained generation）、Game of 24、Text-to-Code／程式生成、證明生成、Moral Stories、主題式摘要、視覺推理"
+    ],
+    "metrics": [
+      "定性判定：框架是否 realistic、是否從 best-possible 初始回應出發、修正後相對初始回應是否提升、是否與強基準比較",
+      "作者建議直接量測：回饋的錯誤偵測準確率",
+      "作者建議報告：微調所需標註量與計算成本、同等計算成本下的最終表現、能啟動修正的最小訓練資料量"
+    ],
+    "baselines": [
+      "Self-consistency（多數決）",
+      "Generate-and-rank：post-hoc 驗證器重排（自評、信心、微調驗證器、借工具的驗證器）",
+      "Feedback-guided decoding（逐步挑選，含 Tree-of-Thoughts）",
+      "pass@k（程式生成）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "RQ1：在一般任務中，公平設定下沒有任何主要研究證明「靠提示自己產生回饋」的 intrinsic 修正能成功；報告成功的研究不是用了 oracle 就是初始提示偏弱，負面結果則涵蓋算術推理、閉卷 QA、程式生成、規劃與圖著色。",
+      "numbers": "無自有數字。Table 4 列出 4 篇被判定高估修正效果的研究（RCI、Reflexion 用 oracle；CAI Revisions、Self-Refine 用弱初始提示）；Table 1 的負面結果列 RCI（其 Table 17）、CRITIC w/o Tool、Huang et al. 2024a 三組。",
+      "section": "§4、Table 1、Table 4",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "RCI 以 ground-truth 判定初始回應正確就不修正，Reflexion（HotpotQA 設定）以與標準答案的 exact match 當回饋；兩者屬 unrealistic 框架，前者還系統性地忽略「把對的改錯」這種失敗。",
+      "numbers": "無量化；Table 4 分別標為 oracle 用於 stop condition 與 feedback。",
+      "section": "§3.2、§4、Table 4",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "Self-Refine 的初始生成提示被刻意弱化或與任務不符，使「修正後的提升」被高估：對話回應任務的初始提示把部分期望特質寫成反向，Sentiment Reversal 的初始 few-shot 範例方向與目標任務不同，而精煉用的提示與範例則對題。",
+      "numbers": "對話回應初始提示列出的期望特質中，Interesting 與 Engaging 兩項被寫成反向描述；Sentiment Reversal 初始範例示範轉成 Positive／Neutral，精煉範例全部轉成 Very negative。作者未重跑量化影響。",
+      "section": "§4、Appendix Table 9、Table 10",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "例外：回應可分解、逐項驗證明顯比生成容易的任務（如 CoVe 的「列出多個答案」類問題），即使只用 in-context learning 也能做到 intrinsic 修正；但多數真實任務不具備這個性質。",
+      "numbers": "無量化；CoVe 在 Table 1 被歸為 Intrinsic、任務型別為 Multiple Answers（可分解）。",
+      "section": "§4、§7",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "RQ2：有可靠外部回饋（程式直譯器、符號推理器、證明助理、以回應生成查詢去搜尋驗證）時，自我修正確實有效；但像 RARR、ReFeed、Verify-and-Edit 只在修正階段用外部知識、初始生成不用，只能證明 RQ3，不能證明模型修好了自己的最佳初始回應。答案可機械檢查的任務（受限生成、Game of 24）等同擁有強外部回饋。",
+      "numbers": "Table 5 的 7 列中，CRITIC（HotpotQA）與 FLARE 在初始生成與回饋兩階段都用 Web Search；RARR（Web Search）與 ReFeed（Wikipedia）只在回饋階段使用。",
+      "section": "§5.1、Table 5",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "以微調取得修正能力可行，但多數 SFT 方法的回饋訓練資料超過 10 萬筆，且常用更強模型的回饋模擬人工標註；小資料下能否做到仍未被探索。",
+      "numbers": "SelFee 178K、Volcano 274K、Self-Critique 100K；cross-model 的 REFINER（T5-base 當回饋模型）20K–30K 合成資料。",
+      "section": "§5.2、Table 6",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "RQ3：多數自我修正研究沒有和強基準比較，只有少數對照 self-consistency（CRITIC、Huang et al.）或 pass@k（Self-Edit、Olausson et al.），因此「自我修正是否優於其他方法」仍無定論。",
+      "numbers": "無量化。",
+      "section": "§6",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "總結：瓶頸在回饋生成。「辨識錯誤比避免錯誤容易」這個假設，對現行 LLM 只在驗證格外容易的任務成立；作者建議研究直接分析回饋品質，而不只報精煉後的下游表現。",
+      "numbers": "無量化。",
+      "section": "§7",
+      "anchor_idx": 6
+    }
+  ],
+  "limitations_stated": [
+    "主要收錄到 2024 年 5 月的文獻，之後的工作（RL 訓練的自我修正、OpenAI o1）只在 §12 簡述、未系統分析。",
+    "聚焦於推論期的 self-correction，訓練策略的廣度不如 Pan et al. 的綜述。",
+    "分類只針對同架構的 same-model 修正；cross-model 修正不適合回答 RQ1／RQ2。",
+    "多數 intrinsic 研究用的是簡單回饋提示，回饋仍有改進空間（例如套用 reference-free 的 LLM 評估指標、分解回應、信心估計），結論可能隨回饋方法改進而改變。",
+    "小訓練資料下的微調式自我修正尚未被探索；RL 與 self-corrective learning 需要合理的獎勵函數，許多任務沒有（RL4F 用 ROUGE 當獎勵並不理想）。",
+    "RQ3 仍無定論，因為缺乏與強基準的比較。",
+    "可能存在尚未被探索、intrinsic 修正有效的任務（例如對話生成、摘要等 LLM 評估研究較成熟的開放生成）。"
+  ],
+  "limitations_observed": [
+    "否定型結論（一般任務中沒有公平設定下成功的 intrinsic 修正）建立在非系統性的文獻抽樣：沒有交代檢索式、收錄與排除標準或總篇數，Table 1 只列約 20 列代表研究，無法排除漏收的正面結果；結論的強度應理解為「作者審視過的主要工作中沒有」。",
+    "「best-possible initial response」無法操作化：什麼算夠強的初始提示沒有客觀判準，也沒有規定提示搜尋的預算，任何正面結果都可以事後歸因為「初始提示不夠強」，使 RQ1 的否定結論接近無法證偽；Table 7 要求「夠強的提示」卻沒給判定程序。",
+    "對 Self-Refine（Table 9、10）與 CAI 去毒設定的指控只停在指出提示有問題，沒有用修正後的初始提示重跑來量化增益縮水多少；相較之下 Huang et al.（2310.01798）曾把回饋要求提前寫進初始提示實測。這篇沒有新增任何量測，所有「高估」都是定性判斷。",
+    "fair-asymmetric 的判定前後不一致：§3.2 與 §5.1 把程式直譯器歸為「無法輕易用來改善初始生成」，但 §6 自己列為強基準的 CodeT、LEVER、pass@k 正是在初始生成階段用執行結果做 generate-and-rank；同一種資訊在不同段落被放進不同類別，顯示 fair／unfair 的界線依賴研究者判斷。",
+    "要求「與同等計算成本的強基準比較」卻沒有給記帳單位（呼叫次數、輸入／輸出 token、延遲、工具呼叫成本）；回饋與精煉步驟的輸入包含完整初始回應與回饋，token 成本通常遠高於一次重抽，只數呼叫次數會讓 RQ3 的比較仍可被操弄。",
+    "任務範圍偏重單輪推理、QA 與程式；多輪對話與 tool-using agent 情境只在 Reflexion 的遊戲環境、RCI 的 MiniWoB++ 片段出現，沒有討論使用者更正作為回饋來源、對話狀態的修正、或長軌跡中錯誤的累積。agent 通常本來就有環境與工具回饋，因此「intrinsic 修正不行」對 agent 的直接外推有限，真正可外推的是「回饋要可靠」與評估規範。",
+    "「大規模微調才能學會修正」主要來自 SFT 研究（Table 6）；§12 提到的 SCoRe（2409.12917）以 RL 與模型自生資料訓練修正能力，顯示門檻未必是人工標註量，而是有沒有可驗證的獎勵。作者只在 §7 以「可用 RL 的任務」一筆帶過，沒有整合這個張力。",
+    "文字瑕疵：§8 把兩份清單都寫成 Table 8（第一份應為 Table 7）；同一篇論文（RCI、Reflexion、CRITIC）在 Table 1 依不同實驗段落同時出現在正面、oracle 與負面列，需對照 Table 2 才讀得懂各自的角色。"
+  ],
+  "framework_role": "T5 的全景地圖與評估規範。對框架的三個直接含義：(1) T5 不應預設為「每輪讓模型用提示自我反思」；修正要掛在可靠的回饋來源上——工具執行結果、測試、檢索比對、限制條件檢查器，或把回應拆成可逐項驗證的子問題（CoVe 式）。(2) 任何在修正階段才用的資訊（例如檢索），都要先問能不能直接用在初始生成；否則 T5 的「增益」可能只是把本該在 T1／T2 做的事延後。(3) T7 評估 T5 時要單獨量測回饋（偵錯）的準確率與把對的改錯的比例，不得使用 oracle 停止條件，並和同等成本的 self-consistency、generate-and-rank 比較。它本身不提出新機制，價值在於決定 T5 該用哪一類回饋、以及 T5 的效果要怎麼公平地算。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "本文把三階段中的「回饋生成」（即偵錯、判斷哪裡錯）定為瓶頸：以提示自評當修正觸發器不可靠；以 ground-truth 判定答對就停（RCI）被判為 unrealistic；可靠的觸發只來自外部工具（直譯器執行結果、測試、證明助理）、搜尋比對，或可分解回應的逐項驗證。另區分 post-hoc 與 generation-time（對推理中間步驟給回饋）兩種觸發時機。注意這是文獻層級的歸納，論文沒有軌跡或異常偵測器的實驗；對框架的含義是 E3 的異常訊號要來自可驗證的來源，且偵測本身的準確率要單獨量。"
+    },
+    {
+      "edge": "E5",
+      "how": "查核清單（Table 7、8）規定修正結果回流評估時要做的事：與初始回應比較、揭露是否用了 oracle、報告微調的標註量與計算成本、直接評估回饋的錯誤偵測準確率、與同成本強基準比較；並指出 RCI 的設定會漏掉「把對的改錯」。要算出這些量，修正紀錄至少得保存修正前回應、回饋內容、修正後回應與呼叫成本。論文沒有定義紀錄格式，只規定評估端要算什麼。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文是文獻綜述，本身沒有描述任何部署或產品；作者維護的 GitHub 論文清單（https://github.com/ryokamoi/llm-self-correction-papers，經 WebFetch 確認為依本綜述整理的論文列表）屬學術資源，不算採納。本次 WebSearch 額度已用罄，未能進一步搜尋官方文件、model card 或官方部落格。TACL 2024 刊登與 Semantic Scholar 359 次引用（28 次 influential）屬學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "綜述無自有實驗、資料或程式碼。作者公開的論文清單在 https://github.com/ryokamoi/llm-self-correction-papers；附錄 Table 9、10 附有 Self-Refine repo 中原始提示檔的連結，可自行查核被指出的弱初始提示。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "T5 批判性研究的全景整理（TACL 2024、S2 359 次引用）：把「何時能自我修正」拆成 RQ1–RQ3 與 unrealistic／fair／unfair 框架並給出查核清單，直接決定 T5 該用哪種回饋來源、T7 該如何公平評估修正；但沒有新實驗，具體數字要回原論文取。",
+  "related": [
+    "2310.01798",
+    "2303.17651",
+    "2303.11366",
+    "2305.11738",
+    "2303.17491",
+    "2210.08726",
+    "2309.11495",
+    "2304.05128",
+    "2306.09896",
+    "2311.08516",
+    "2404.03602",
+    "2211.00053",
+    "2308.03188",
+    "2409.12917",
+    "2203.11171"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

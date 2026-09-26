@@ -1,0 +1,169 @@
+{
+  "id": "2408.04682",
+  "title": "ToolSandbox: A Stateful, Conversational, Interactive Evaluation Benchmark for LLM Tool Use Capabilities",
+  "topic": "T8",
+  "subarea": "部分分數與過程度量",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Apple 提出有狀態、對話式、互動式的工具使用 benchmark ToolSandbox：以人工標註的 milestone DAG 做拓樸順序約束下的最佳匹配，給任意軌跡 [0,1] 部分分數，以 minefield 一票否決，並用 GPT-4o 使用者模擬器做 on-policy 評估 13 個模型。",
+  "problem": "既有工具使用評估多半是無狀態的 REST API（BFCL、ToolEval）、單輪自足的請求，或是在預先展開的 off-policy 對話軌跡上逐輪比對（API-Bank、ToolTalk），無法評估 agent 用自己的策略與使用者多輪互動、處理工具之間隱性的世界狀態相依、從工具錯誤中恢復的能力。互動式軌跡又高度多樣：同一任務可以用不同工具、不同順序或試錯完成。評分若綁死單一動作序列，就會誤判合理的替代路徑；若只靠 LLM 評審給 pass rate／win rate，可靠性與可解釋性又有疑慮。因此需要一種能對任意軌跡給出可解釋的中間與終局訊號的評分方式。",
+  "core_idea": "把評分對象從「動作序列」換成「每一輪的世界狀態快照加上完整訊息紀錄」。由人寫出必須發生的關鍵事件（milestone，彼此有時間相依、構成 DAG）與絕不能發生的事件（minefield）；評分時在所有符合拓樸順序的「milestone→輪次」對應中，找相似度平均最高的那一個。這樣任何路徑都能被評，中途進度也拿得到部分分數；任何 minefield 被觸發，整條軌跡歸零。效率另以輪數報告。對話端用帶 Knowledge Boundary 與 Demonstration 的 LLM 使用者模擬器做 on-policy 評估。",
+  "method": {
+    "整體架構": "Python 原生的測試環境。Execution Context 是全域狀態，內含 World State（各工具的資料庫：CONTACT、MESSAGING、REMINDER、SETTING 等，repo 以 polars DataFrame 存放）與 Message Bus（所有角色間訊息的線性紀錄），每一輪都保留完整快照供事後評分。LLM agent 不能直接改 Execution Context，只能透過工具改。工具執行時，名稱、輸入與輸出會寫成 tool trace 存進 Execution Context。",
+    "角色與訊息協定": "三個角色：User（LLM 模擬器）、Agent、Execution Environment。每則訊息帶 sender、recipient、content 與 visible_to；協調器的規則是「最近一則訊息的收件者就是下一個發話者」。每個角色只讀得到自己可見的 Message Bus 子視圖（預設是寄給自己或自己寄出的訊息）。Agent 可以回覆 User 追問資訊，或把 JSON 形式的工具呼叫轉成 Python 程式碼，交給 Execution Environment 在 code.InteractiveConsole 裡執行；例外經由 stderr 回傳給 Agent，讓它能試錯修正。User 判斷任務完成（或無法完成）時，呼叫它唯一可用的工具 end_conversation，系統進入終態後才開始評分。",
+    "工具與狀態相依": "34 個工具、11 個領域（Contact、Messaging、Reminder、System settings、Time／Math utilities、Map、Weather、Stock、Conversion、Holiday）；以帶型別註記與 docstring 的 Python 函式實作，自動轉成 JSON schema 給 agent。44% 是 stateful 工具。狀態相依有四種：cellular 關閉時 send_message 拋 ConnectionError；Wi-Fi 關閉時 RapidAPI 類工具失敗；location service 關閉時定位類工具失敗；low battery mode 開啟時打不開前三者，形成巢狀相依。設計原則：每個領域一個 omni-search 工具（所有搜尋欄位都是參數）；有狀態的領域至少一個改狀態的工具；另有時間戳轉換、經緯度距離等 canonicalization 工具，讓 agent 不必硬靠自身知識。agent 對相依工具發平行呼叫時，環境依 Murphy's Law 一律觸發 race condition 作為懲罰。",
+    "工具擴增（ablation）": "在必要工具之外，加 0、3、10 個或全部其他工具當干擾，依領域重疊與文字相似度排序挑選。另有四種 schema 擾動：工具名稱打亂（例如 messages_0）、移除工具一句話描述、移除參數描述、移除型別註記。這四種都和 3 個干擾工具一起套用。型別不符時，環境會在例外中回報預期型別，確保題目仍然可解。",
+    "使用者模擬器": "GPT-4o，系統提示分三段。User Goal：一般指示與目標，把 agent 稱為 User B，以降低角色反轉造成的混淆。Knowledge Boundary：告訴模擬器它該知道與不該知道什麼，提供部分預期結果以抑制幻覺。Demonstration：few-shot 範例對話，放在 Message Bus 裡但只對 User 可見。",
+    "Agent 提示": "所有受測模型用同一份極簡系統提示（Figure 8），不做模型專屬的提示工程；附錄 D.1 另跑 ReAct 提示作對照。",
+    "評分：Milestone 最佳匹配": "每個情境由人工定義一組 milestone，依時間相依形成 DAG（repo 未給邊時，預設依序串成一條鏈）。每個 milestone 由一或多個 snapshot 約束組成，對某一輪的快照給出 [0,1] 相似度。在所有「milestone→輪次快照」的一對一對應中，限制對應後的時間順序必須是 DAG 的某個拓樸排序，找出讓各 milestone 相似度算術平均最大的那個對應；這個最大值就是 score_M+（Eq. 2）。repo 以 DFS 加 max-heap 暴力搜尋，並用上界剪枝（已得分＋目前分＋剩餘 milestone 數−1 仍不超過目前最佳就剪掉），相似度會快取。",
+    "評分：相似度函式": "欄位層級（皆輸出 [0,1]）：exact match（例如 cellular 狀態）、ROUGE-L F measure（訊息內容；repo 開 stemmer）、tool trace 比對（類似 BFCL 的 AST metric）、contains、數值容差 close 等。列層級：一列的相似度是各欄相似度的幾何平均。快照與目標各有 k 列時，以 Hungarian 演算法找出讓列相似度幾何平均最大的配對，作為該 milestone 的相似度（repo 對 −log 相似度做 linear_sum_assignment；列數不符或欄位缺漏直接記 0）。全程用幾何平均，是為了讓任一必須成立的欄位為 0 時，整個 milestone 歸零。另有 reference milestone 機制：guardrail_similarity 檢查兩個 milestone 之間某個資料庫有沒有被動過；tool_trace_dependant_similarity 把前一個 milestone 的工具輸出注入目前 milestone 的目標值，用來追蹤工具之間的資訊流。repo 另有 addition／removal／update_similarity，比對資料庫的增刪改差異。",
+    "評分：Minefield 與最終分數": "Minefield 的定義方式與 milestone 相同，但代表不能發生的事件，主要用在 Insufficient Information 情境，例如呼叫某個必然導致幻覺參數的工具。最終分數 = score_M+ × 𝟙(score_M− = 0)（Eq. 1）：任一 minefield 相似度非零，整條軌跡歸零。repo 實作：沒有 milestone 時 milestone 分數預設為 1，沒有 minefield 時 minefield 分數預設為 0；minefield 分數是各 minefield 相似度的算術平均。",
+    "效率度量": "Milestone 不計效率，另報平均輪數（Table 11），並說明輪數要在分數相近的模型之間比較才有意義。repo 的 effective turn count 會排除系統訊息、User 與 Execution Environment 之間的訊息（即 end_conversation），以及只對 User 可見的 few-shot 訊息。",
+    "情境建構": "由 2 名內部專家建構。一人先寫 seed 情境（單輪、單工具、自足的請求，涵蓋大多數工具與參數），再從 seed 分支出 Multiple Tool Call、Multiple User Turn、State Dependency、Insufficient Information 等衍生情境，彼此可以組合，最後改寫成多種說法並重用 milestone。另一人以與 agent 相同的訊息子視圖實際操作，驗證題目可解、milestone／minefield 合理。之後再對多個模型 agent 跑至少 4 輪，確認判準對正確與錯誤軌跡都成立。總計 1032 個情境（repo：129 個基底情境 × 8 種工具擴增）、7 個類別標籤（可重疊），85% 的情境至少屬於一個困難類別。",
+    "關鍵超參數": "使用者模擬器 GPT-4o；每個情境的訊息數上限 max_messages = 30（repo 預設值，計入所有角色的訊息；論文正文未寫出）；干擾工具數 0／3／10／全部；13 個受測模型一律使用極簡提示。",
+    "程式碼版本註記": "上述標「repo」的細節取自 apple/ToolSandbox main 分支 commit c8571d7（2026-09-11），可能晚於論文 v2（2025-04），屬於實作行為，不是論文本身的陳述。"
+  },
+  "assumptions": [
+    "任務的正確性可以由少量人工列舉的關鍵事件（milestone）及其時間相依完整刻畫，而且各事件相似度等權平均能代表完成程度",
+    "世界狀態與工具行為可以完全由 Python 資料庫模擬，並在每一輪留下可比對的快照",
+    "GPT-4o 使用者模擬器加上 Knowledge Boundary 與 Demonstration 後足夠可靠（總錯誤率約 8%），且錯誤對各 agent 一致，不影響模型間比較",
+    "拒答類任務只用 minefield（不該做的事）判定即可，不需要正面的完成條件",
+    "一份極簡共用提示足以呈現模型本身的能力，提示工程的增益與模型排名無關",
+    "agent 對相依工具發平行呼叫時，race condition 必定發生（Murphy's Law），是合理的懲罰設定"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "ToolSandbox（本文；1032 個情境、34 個工具、11 個領域；類別：Single／Multiple Tool Call、Single／Multiple User Turn、State Dependency、Canonicalization、Insufficient Information，加 8 種工具擴增）"
+    ],
+    "metrics": [
+      "Avg Score：每條軌跡的 milestone 平均相似度乘上 minefield 指標函數，再對情境平均（0–100）",
+      "依情境類別與工具擴增拆分的平均相似度（Table 5）",
+      "平均輪數（effective turn count，Table 11）",
+      "使用者模擬器錯誤率：Hallucination 與 Instruction Following（人工標註，Table 2、Table 3）"
+    ],
+    "baselines": [
+      "GPT-4o-2024-05-13",
+      "GPT-4-0125-Preview",
+      "GPT-3.5-Turbo-0125",
+      "Claude-3-Opus／Sonnet／Haiku",
+      "Gemini-1.5-Pro-001、Gemini-1.0-Pro",
+      "Hermes-2-Pro-Mistral-7B",
+      "Mistral-7B-Instruct-v0.3",
+      "Gorilla-Openfunctions-v2",
+      "C4AI-Command-R-v01、C4AI-Command R+",
+      "ReAct 提示對照（附錄 D.1，4 個模型）",
+      "使用者模擬器提示消融：只有 User Goal／加 Knowledge Boundary／再加 Demonstration"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "專有模型與開源模型之間差距很大；GPT-4o 分數最高，Claude-3-Opus 緊追在後；最好的開源模型 Hermes 落後倒數第二名的專有模型 Claude-3-Haiku 超過 20 分。部分原因是 Gorilla 與 Command-R 無法讀入工具回應，只能解單一工具呼叫的情境。",
+      "numbers": "Avg Score：GPT-4o 73.0、Claude-3-Opus 69.2、GPT-3.5-Turbo 65.6、GPT-4 64.3、Claude-3-Sonnet 63.8、Gemini-1.5-Pro 60.4、Claude-3-Haiku 54.9、Gemini-1.0-Pro 38.1、Hermes 31.4、Mistral-7B 29.8、Command-R 26.2、Gorilla 25.6、Command R+ 24.7",
+      "section": "§4, Table 5, Table 10",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "使用者模擬器提示逐步加入 Knowledge Boundary 與 Demonstration 後，幻覺與指令遵循錯誤都下降，兩者合用最低。",
+      "numbers": "Hallucination 12.4% → 7.75% → 6.97%；IF 錯誤 6.20% → 3.88% → 0.77%（1032 條人工標註軌跡，GPT-4o 模擬器搭 GPT-4o agent）",
+      "section": "§2.2, Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "模擬器錯誤率在不同 agent 之間相近，作者據此主張模擬器錯誤不影響 agent 間的比較。",
+      "numbers": "總錯誤率：GPT-4o 8.02±1.36%、Claude-3-Opus 7.78±0.52%、Gemini-1.5-Pro 8.07±1.03%（各 4 次試驗 × 1032 條軌跡）",
+      "section": "§2.2, Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "開源模型因為整體表現差（無法消化工具回應、判斷不出何時該呼叫工具），反而在 Insufficient Information 類別拿到較高分，作者承認這是副作用而不是能力；作者也指出 II 分數整體與其他類別呈負相關。",
+      "numbers": "II：Mistral-7B 76.8、Gorilla 69.2、Hermes 48.3、Command-R 47.8、Command R+ 35.3，對比 GPT-4o 42.0、GPT-4 33.6、GPT-3.5-Turbo 22.3",
+      "section": "§4, Table 5",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "State Dependency 類別中，大模型反而不如中小模型，原因是對相依工具發平行呼叫而觸發 race condition；巢狀相依時模型也常忘記尚未解決的問題，無法有效回溯。",
+      "numbers": "SD：GPT-4 69.2、Claude-3-Opus 74.5，對比 GPT-3.5-Turbo 82.6、Claude-3-Sonnet 84.5",
+      "section": "§4, Table 5, Figure 17–18",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "分數相近的模型可以用輪數比效率：Claude-3-Opus 分數略低於 GPT-4o，但平均輪數較少。",
+      "numbers": "平均輪數：Claude-3-Opus 11.6、GPT-4o 12.2、GPT-4 13.0、Gemini-1.5-Pro 15.0；Command-R 29.7、Command R+ 30.0（與 repo 的 30 則訊息上限相符，應是撞到上限）",
+      "section": "§4, Appendix D.3, Table 11",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "部分分數的診斷價值：GPT-4o 在上限內沒完成任務、最終 milestone 失敗，但中間 milestone 顯示它已解決狀態相依並取得目前位置，失敗原因是處理狀態相依的輪數效率不足。",
+      "numbers": "質性案例（Figure 10），無量化數字",
+      "section": "Appendix A.7, Figure 10",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "Minefield 一票否決：Insufficient Information 情境中，GPT-4 幻覺出目前時間戳並呼叫 timestamp_diff，觸發 minefield，整條軌跡得 0 分。",
+      "numbers": "score = score_M+ × 𝟙(score_M− = 0)；Figure 3 的案例得分 0",
+      "section": "§2.3, Eq. 1, Figure 3",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "Milestone 與 minefield（尤其是必經的中間 milestone）的撰寫需要深入了解工具能力並反覆迭代，難以擴展規模；需要簡化或全自動的標註方法",
+    "即使加了控制，使用者模擬器仍有不可忽略的幻覺與指令遵循錯誤",
+    "未處理強制確認與身分驗證（交易類服務前的 confirmation）",
+    "未處理會產生背景程序、之後再中斷主流程的工具（例如計時器）",
+    "部分工具仍依賴外部 web 服務（RapidAPI），影響可重現性；建議採用類似 StableToolBench 的快取",
+    "弱模型在 Insufficient Information 類別的高分是副作用，不應視為正面結果",
+    "輪數不能單獨解讀，因為模型可能自信地答錯而提早結束；只適合在分數相近的模型之間比較"
+  ],
+  "limitations_observed": [
+    "II 類別的高分指向計分機制本身的缺陷，不只是副作用：repo 現行版本的 insufficient_information_scenarios.py 定義了 28 個 II 基底情境（正好對上 Table 6 的 224 ÷ 8），其中 26 個沒有任何 milestone（16 個明寫 milestones=[]，其餘沿用預設的空清單）。評分程式在沒有 milestone 時把 milestone 分數預設為 1，所以只要沒踩到 minefield 就是滿分，什麼都不做的 agent 在這 26 個情境也拿 1.0。repo 裡還有一支 UnhelpfulAgent（一律回答無法協助），docstring 說是用來把各 agent 的分數放進脈絡比較，但論文沒有報它的分數。論文中開源模型（Mistral 76.8、Gorilla 69.2）的 II 分數高於 GPT-4o 42.0，與這個機制吻合（以現行 repo 解釋 2025-04 版論文的數字，因果只能說到吻合）；我另外注意到 Gemini 家族 II 也偏高（1.5-Pro 76.2、1.0-Pro 65.5），但它們的 MTC（49.8）、MUT（37.3）偏低，論文沒有把它們歸進這個副作用。Avg Score 又把 II 平均進總分。對 T8 的啟示：拒答類情境要配一個正面 milestone（例如明確告知使用者無法完成），或一律報 do-nothing 基線做校正。",
+    "Avg Score 是部分分數，不是成功率：73.0 不代表 73% 的任務完成。論文沒有另報二元完成率（例如所有 milestone 相似度皆為 1 的比例），Figure 10 那種最終 milestone 失敗的軌跡照樣拿到中間分數；ROUGE-L 是連續值，內容寫錯的訊息也能拿部分分。排行榜因此把「進度」與「完成」混在一起，和 τ-bench 的 0/1 成功率不能直接比。",
+    "權重與懲罰尺度不一致：各 milestone 等權（Table 8 中 get_current_timestamp 是最常見的 milestone，共 296 個，暖身性質的查時間與最終送出訊息同權）；milestone 之內用幾何平均，milestone 之間用算術平均，minefield 再用指標函數相乘。repo 的 snapshot_similarity 在列數不符時直接記 0，所以多寫一列就讓該 milestone 歸零，漏做一個 milestone 卻只扣 1/m。論文沒有討論這些聚合選擇對排名的影響。",
+    "沒有變異或誤差棒：Table 3 顯示至少 GPT-4o、Claude-3-Opus、Gemini-1.5-Pro 各跑過 4 次，但 Table 5 的 agent 分數只給單點。中段模型差距很小（GPT-4 64.3 對 Claude-3-Sonnet 63.8），而模擬器總錯誤率約 8%，中段排名是否穩定無從判斷；也沒有 pass^k 之類的一致性度量。",
+    "1032 個情境的獨立性被高估：repo 的 named_scenarios 把每個基底情境複製成 8 個工具擴增變體（0／3／10 個干擾工具、全部工具，以及在 3 個干擾工具上各套一種 schema 擾動）；四個情境檔的基底數是 19＋54＋28＋28＝129，129 × 8＝1032。這和 Table 6 的各類別數都能被 8 整除一致（152=19×8、656=82×8、224=28×8、192=24×8、472=59×8）。基底情境裡又包含改寫版，且共用同一組 milestone，所以實際獨立的任務遠少於 1032：State Dependency 約 24 個、II 28 個。Table 4 拿 1032 和其他 benchmark 比情境數，有誇大之虞；各擴增變體之間也不是獨立樣本。",
+    "預算和能力混在一起：repo 預設訊息上限 30（計入工具回應與所有角色訊息），論文正文沒寫這個數字，也沒做上限敏感度分析。巢狀狀態相依的情境很吃訊息數，Figure 10 的 GPT-4o 就是被截斷；分數有一部分反映的是上限，而不只是能力。另外 Table 4 的 ToolSandbox 平均 13.9 輪（計入所有訊息）與 Table 11 的 GPT-4o 12.2 輪（排除部分訊息）用了不同的「輪」定義。",
+    "State Dependency 的結論受環境政策左右：Execution Environment 對平行呼叫相依工具一律觸發 race condition，所以 GPT-4 在 SD 拿 69.2、GPT-3.5 拿 82.6 的落差，量到的主要是平行呼叫傾向碰上刻意設計的最壞情境環境，而不只是狀態推理能力。論文沒有做關掉平行呼叫、或 race 機率小於 1 的對照，外推到真實 API 時要打折。",
+    "模擬器與榜首同家族：使用者模擬器是 GPT-4o，排第一的 agent 也是 GPT-4o；Table 2 的 1032 條人工標註也全是 GPT-4o 對 GPT-4o。Table 3 只證明模擬器錯誤率跨 agent 相近，不能排除同家族互動較順暢的可能，而論文沒有更換模擬器做穩健性檢查。",
+    "判準本身沒有效度驗證：情境與 milestone 只由 2 名內部專家撰寫與驗證，沒有報告標註者間一致性，也沒有報告 milestone 分數與人工判定的「任務成功」之間的相關。",
+    "對 τ-bench 的描述不精確：§1 說 τ-bench 要求 agent 的動作吻合單一預定序列，不留錯誤修正的空間。但 τ-bench repo（sierra-research/tau-bench，commit 59a200c）的 calculate_reward 是把標註動作在初始資料上重播，得到目標資料庫的 hash，再和 agent 結束時的資料庫 hash 比對（外加回覆是否包含指定輸出）。判準是終態，不同路徑只要終態相同都算對。兩者真正的差別在於：τ-bench 只接受單一終態、只給 0/1；ToolSandbox 對中間過程給部分分數，並能表達「不能發生」的事件。",
+    "可重現性有限：搜尋類工具需要 RapidAPI 金鑰，外部結果會漂移；受測模型多為 2024 年的快照版本，數字難以原樣重現；論文也沒有附上各模型的原始軌跡。"
+  ],
+  "framework_role": "T8「部分分數與過程度量」的代表作：把任務完成拆成人工標註的 milestone DAG，以拓樸順序約束的最佳匹配把任意軌跡對應到關鍵事件，給出 [0,1] 部分分數；minefield 作為硬性否決；效率（輪數）另外報告，不併入分數。它提供可直接重用的計分元件（逐欄相似度、列層級 Hungarian 配對、幾何平均歸零、guardrail 與 tool-trace 資訊流約束），也示範了拒答類情境的計分陷阱。次要角色：T6（附 Knowledge Boundary 與 Demonstration 的 LLM 使用者模擬器，並有錯誤率量測）、T7（有狀態、對話式、互動式的 benchmark 設計）、T2（隱性的世界狀態追蹤是受測能力）、T4（以每輪世界狀態快照加 Message Bus 作為評分對象）。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "GPT-4o 使用者模擬器依 User Goal、Knowledge Boundary 與 Demonstration 產生初始與後續話語，成為 agent 的輸入。Multiple User Turn 情境刻意以模糊或缺參數的請求開場，要求 agent 判斷意圖並向模擬器追問 slot；Table 2、Table 3 量測這條輸入的品質（幻覺與指令遵循錯誤率）。"
+    },
+    {
+      "edge": "E3",
+      "how": "工具例外（ConnectionError、PermissionError、型別錯誤）經 stderr 寫回軌跡，對相依工具的平行呼叫一律觸發 race condition；agent 要據此推斷缺少的前置狀態、改用其他工具並重試。這是由環境訊號觸發的修正，不是另設的軌跡異常偵測器；benchmark 量的是 agent 能否從這些異常中恢復（State Dependency 類別、Figure 17–19）。"
+    },
+    {
+      "edge": "E6",
+      "how": "Message Bus（使用者模擬器、agent、執行環境之間的完整互動紀錄）加上每一輪的世界狀態快照，全部留在 Execution Context 中，事後整份交給 milestone／minefield 比對與輪數計算，產出評估分數。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。本文由 Apple 研究人員發表，評估框架開源於 GitHub（apple/ToolSandbox），但那是論文自身的釋出，不構成部署或產品採用。查過 Apple Machine Learning Research 的 2024 基礎模型技術報告頁（https://machinelearning.apple.com/research/apple-intelligence-foundation-language-models）與 2025 技術報告頁（https://machinelearning.apple.com/research/apple-foundation-models-tech-report-2025），都沒有提到 ToolSandbox。本次 WebSearch 額度已用盡，無法再擴大查找其他模型卡或產品文件。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/apple/ToolSandbox（GitHub 授權欄為 Other／NOASSERTION，屬 Apple 自訂授權；本筆記查閱的是 commit c8571d7）",
+    "data": "情境、milestone／minefield、工具與使用者模擬器的 few-shot 範例，都以 Python 原始碼的形式公開在 repo 中；搜尋類工具依賴 RapidAPI（需設定 RAPID_API_KEY 環境變數），外部結果會漂移；未見論文附上各模型的原始軌跡或逐情境分數。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是「部分分數與過程度量」最具體、可重用的設計：DAG 拓樸約束的最佳匹配、逐欄相似度加幾何平均歸零、minefield 否決、效率分開報告，且有開源實作；但 II 情境缺 milestone 時預設滿分、沒有報告變異、1032 題其實是 129 個基底情境 × 8 種工具擴增（repo 組裝邏輯確認）等缺陷，必須一起吸收。",
+  "related": [
+    "2406.12045",
+    "2311.10775",
+    "2307.16789",
+    "2403.07714",
+    "2305.15334",
+    "2401.13178",
+    "2404.06921"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 6,
+    "total": 8
+  }
+}

@@ -1,0 +1,178 @@
+{
+  "id": "2005.02877",
+  "title": "TripPy: A Triple Copy Strategy for Value Independent Neural Dialog State Tracking",
+  "topic": "T2",
+  "subarea": "傳統任務型對話 DST 與資料集",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "TripPy 以 BERT 編碼「本回合＋對話歷史」，替每個 domain-slot 配一個五類 slot gate，決定值要從使用者話語抽 span、從系統本回合告知過的值複製（inform），或從對話狀態裡另一個 slot 複製（refer），完全不用候選值清單，在 MultiWOZ 2.1 取得 55.29% JGA（當時最佳），並在 WOZ 2.0、sim-M、sim-R 上也領先非 oracle 基線。",
+  "problem": "任務型對話要靠 DST 在整段互動中追蹤使用者目標，下一個系統動作取決於狀態是否正確。傳統做法在固定本體上對預先定義的 slot-value 組合做分類：本體難以完整取得、本體外或訓練沒見過的值在測試時抓不到、計算量至少隨本體大小線性成長，而真實應用的本體又不斷變動。改用 span 抽取的開放詞彙方法只能處理「值以原字串出現在使用者話語裡」的情況，遇到三種常見現象就失效：共指與跨領域值共享（例如要找跟餐廳同一區的旅館）、隱含選擇（使用者只說「哪個都可以」或接受系統推薦），以及改寫。當時 MultiWOZ 上表現好的方法（DS-DST、DST-picklist、SOM-DST 等）幾乎都靠候選值清單撐分數，純 span 方法明顯落後，形成「越不依賴值清單、分數越差」的取捨。本文要打破這個取捨：在不維護任何候選值清單的前提下，仍達到甚至超越依賴本體的方法。",
+  "core_idea": "把「slot 值從哪裡來」拆成三種來源，各配一個複製機制：(1) 使用者在話語中直接說出 → span 抽取；(2) 系統在本回合說出、使用者以確認或接受的方式指涉 → 從系統告知記憶（system inform memory）複製；(3) 先前已被指派給另一個 domain-slot → 從對話狀態記憶（DS memory）複製，以處理共指與跨領域值共享。每個 slot 每回合由一個分類頭（slot gate）決定走哪一條路，或判為 none（本回合沒提到，沿用舊值）與 dontcare。兩個記憶都是在對話中即時建立，候選值只來自對話本身，因此對值是獨立的（value independent），但 slot 集合仍須預先定義。",
+  "method": {
+    "任務形式": "對話 X = {(U_1, M_1), …, (U_T, M_T)}，U_t 是第 t 回合使用者話語，M_t 是緊接在 U_t 之前的系統話語。預先定義 N 個 domain-slot pair（MultiWOZ 2.1 是 5 個領域、30 個 pair）。每回合要：判斷每個 slot 是否出現、預測其值、並維護累積的對話狀態 DS_t。",
+    "輸入編碼": "每回合一次前向：BERT([CLS] ⊕ U_t ⊕ [SEP] ⊕ M_t ⊕ [SEP] ⊕ H_t ⊕ [SEP])，H_t = (U_{t-1}, M_{t-1}), …, (U_1, M_1)，也就是歷史由新到舊排列。輸出 r_CLS（整段脈絡的彙總向量）與每個 token 的表示 r^1…r^seq_max。依此排列，超過最大長度時被截掉的會是最早的回合（文中未明說截斷方向，依序列順序推斷）。沒有遞迴結構，也不把上一回合的狀態當文字輸入。",
+    "輔助特徵（late fusion）": "兩個 N 維二元向量：a_inform 標記哪些 slot 最近被系統告知過（取自系統告知記憶），a_ds 標記哪些 slot 在對話中已經被填過（取自 DS 記憶）。直接串接到 BERT 輸出：r̂_CLS = r_CLS ⊕ a_inform ⊕ a_ds，之後所有 gate 與 refer 頭都吃 r̂_CLS。只帶 slot 身分，不帶值。",
+    "Slot gate（每個 domain-slot 一個）": "線性層＋softmax，對 r̂_CLS 分成五類 {none, dontcare, span, inform, refer}。none＝本回合此 slot 不取值；dontcare＝使用者表示都可以；span＝值在 U_t 中可抽；inform＝使用者指涉系統在 M_t 說出的值；refer＝使用者指涉已在狀態中的值。布林 slot 另用四類 gate {none, dontcare, true, false}（哪些 slot 算布林，文中未列）。",
+    "Span 頭（每個 slot 一個）": "線性層把每個 token 表示投影成兩個 logit（start、end），對整段序列各自做 softmax，再各自取 argmax。沒有處理 end < start 的情況，這時 span 就是空的。訓練時 span 目標只取自使用者話語（含歷史中的使用者話語）。",
+    "系統告知記憶（inform）": "I_t 記錄系統在第 t 回合（即 M_t）告知的所有 slot 值。gate 判為 inform 時，直接令 DS_t^s = I_t^s。只涵蓋本回合的系統話語；系統說出的值被當作已知（系統自己的輸出），實作上值的來源是資料集的系統端標註或系統動作，文中未細說，需看程式碼。",
+    "DS 記憶（refer）": "每個 slot 一個線性層＋softmax，對 r̂_CLS 輸出 N+1 類：被指涉的是哪一個 slot，或 none。gate 判為 refer 時，把被指涉 slot 在狀態中的值複製過來，用於例如計程車目的地＝先前訂的餐廳名稱這類跨領域共指。",
+    "部分遮罩": "歷史 H_t 中只有過去的系統話語被遮：其中的值換成 BERT 的 [UNK]；使用者話語不遮。目的是讓 gate 依脈絡而非看到特定值來判斷。",
+    "狀態更新規則": "沿用 BERT-DST 的規則式更新：每回合對每個 slot，只要預測出的值不是 none 就覆寫，none 則保留舊值。沒有刪除或清空 slot 的路徑。",
+    "訓練目標": "L = 0.8·L_gate + 0.1·L_span + 0.1·L_refer，全部是 joint cross entropy；單領域資料集沒有共指，改用 L = 0.8·L_gate + 0.2·L_span。標籤不是 span 的 slot，span loss 設為 0；標籤不是 refer 的 slot，refer loss 設為 0。",
+    "超參數與元件": "BERT-base-uncased（12 層、768 維、12 頭），整個網路一起微調；Adam，初始學習率 2e-5，warmup 10% 後線性衰減；BERT 輸出 dropout 0.3；以開發集 JGA 做 early stopping；WordPiece 後最大長度 180，MultiWOZ 2.1 改用 512。slot value dropout 只用在 sim-M（比率未給）。",
+    "資料前處理": "單領域資料集自帶 span 標籤；MultiWOZ 2.1 沒有，作者以字串比對把標準答案值對回話語，自行產生 span 標籤。MultiWOZ 標註不一致，作者在訓練集上半自動整理出每個值的所有標註變體（例如 centre／center），測試時照表判定。",
+    "評估協定": "JGA＝所有 slot 都填對的回合比例（slot 無值時須預測 none）；另報 slot gate 的整體與逐類準確率。每組實驗跑三個 seed 取平均。",
+    "文中未載明、需看程式碼": "batch size、epoch 數；MultiWOZ 上 inform 與 refer 的標準標籤如何導出；哪些 slot 當布林處理；系統告知值從哪裡取得；Table 4 前五列消融用的最大長度（只知最後一列才擴到 512）；標註變體對照表與 OOV 測試集是否隨程式碼公開。"
+  },
+  "assumptions": [
+    "slot 集合（N 個 domain-slot pair）事先已知且固定；每個 slot 各有一組 gate、span、refer 分類頭，所以只對值獨立，不對 slot 獨立。",
+    "slot 值只會來自三個來源之一：使用者話語中的原字串、系統本回合說出的值、或狀態中另一個 slot 的值；不在這三處的值（需要推論、正規化或系統兩回合前才提過的值）無法產生。",
+    "系統自己說出的值可精確取得（用於系統告知記憶與歷史遮罩），也就是系統端有結構化的告知動作可讀。",
+    "使用者不會撤回已填的 slot：更新規則只覆寫、不刪除，none 一律視為沿用舊值。",
+    "MultiWOZ 2.1 的值可以用字串比對對回話語來產生 span 標籤，且這些弱標籤夠準確。",
+    "完整對話歷史（最長 512 個 WordPiece）塞得進 BERT 的輸入，足以涵蓋判斷所需的脈絡。",
+    "評估時接受半自動整理出的標註變體對照表，視為「同一個值」的合理定義。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MultiWOZ 2.1（5 個領域、30 個 domain-slot pair、逾一萬段多領域對話）",
+      "WOZ 2.0（單領域餐廳）",
+      "sim-M（單領域電影，部分 slot OOV 率高）",
+      "sim-R（單領域餐廳，部分 slot OOV 率高）",
+      "作者自建的 MultiWOZ OOV 測試集（人工把測試集大部分值換成虛構但合理的 OOV 值）"
+    ],
+    "metrics": [
+      "Joint goal accuracy（JGA，三個 seed 平均與標準差）",
+      "Slot gate 準確率（整體與逐類 F1，僅以圖呈現）",
+      "高 OOV slot 的逐 slot 準確率（僅以圖呈現）",
+      "依訓練中見過次數分組的值 recall（僅以圖呈現）",
+      "原始與 OOV 測試集的逐 slot 準確率（僅以圖呈現）"
+    ],
+    "baselines": [
+      "DST-reader（Gao et al. 2019）",
+      "DST-span、DS-DST、DST-picklist（Zhang et al. 2019）",
+      "SUMBT（MultiWOZ 2.0 數字）",
+      "TRADE",
+      "MA-DST",
+      "SOM-DST",
+      "NBT、GLAD、GCE、StateNet、BERT-DST（WOZ 2.0）",
+      "SMD-DST（oracle，候選值即標準答案）、LU-DST、BERT-DST（sim-M、sim-R）",
+      "自家消融：只用 span 抽取、單回合輸入的基線（相當於 BERT-DST）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "整個模型不維護任何候選值清單，所有值都在對話中即時取得；這是本文相對於 DS-DST、DST-picklist 等混合法的主要賣點。",
+      "numbers": "同樣不用候選清單的 span 系方法在 MultiWOZ 2.1 只有 DST-reader 36.40%、DST-span 40.39%，TripPy 為 55.29 ± 0.28%",
+      "section": "Abstract, §2, Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "MultiWOZ 2.1 上 JGA 55.29%，比前一名高約 2.0 點絕對值；前一名 DST-picklist 用的是完整本體。",
+      "numbers": "TripPy 55.29 ± 0.28；DST-picklist 53.30、SOM-DST 52.57、DS-DST 51.21、MA-DST 51.04、TRADE 45.60（基線數字取自各原論文）",
+      "section": "§5, Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "三個單領域資料集上也都高於非 oracle 基線，但差距大小不一；sim-M、sim-R 上 SMD-DST 分數更高，因為它的候選值就是標準答案。",
+      "numbers": "WOZ 2.0：92.7 ± 0.2 對 SUMBT 91.0；sim-M：83.5 ± 1.2 對 BERT-DST 80.1；sim-R：90.0 ± 0.2 對 BERT-DST 89.6；SMD-DST（oracle）96.8／94.4",
+      "section": "§5, Tables 2–3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "累加式消融中，三重複製與加入對話歷史是最大的兩個增益；作者指出歷史降低了脈絡歧義，讓 slot gate 更常判對值的存在與類型，dontcare 與布林 slot 受益最明顯，也更常把值分到正確的 slot。",
+      "numbers": "只用 span（單回合）42.63 → ＋三重複製 49.23（+6.60）→ ＋對話歷史 52.58（+3.35）→ ＋輔助特徵 54.08（+1.50）→ ＋遮罩 54.29（+0.21）→ 全寬 512 55.29（+1.00）；逐類 gate 表現僅見於 Figure 3，正文無數字",
+      "section": "§5.1, Table 4, Figure 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "遮罩歷史中系統告知的值沒有明確好處也沒有壞處：inform 類判得更準，但其他類別因輸入資訊減少而受損，整體只有微小提升；作者說其他資料集趨勢相同。",
+      "numbers": "54.08 → 54.29（+0.21），小於完整模型的 seed 標準差 ±0.28",
+      "section": "§5.1, Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "把歷史長度拉到 BERT 上限 512 對較長的 MultiWOZ 對話有幫助；單領域資料集對話較短，沒有變化。",
+      "numbers": "MultiWOZ 2.1 +1.0 點絕對值（54.29 → 55.29）",
+      "section": "§5.1, Table 4",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "人工把 MultiWOZ 測試集的大部分值換成虛構的 OOV 值後，多數 slot 仍維持原本的準確率，只有少數 slot 明顯下滑，主要集中在 train 領域。",
+      "numbers": "修改後逾 1000 個不同 slot-value 組合中約 84% 為 OOV；有 OOV 值的 slot 平均 OOV 率 90%；逐 slot 準確率與 train 領域的下降幅度僅見於 Figure 6，正文無數字，也沒有報 OOV 測試集上的 JGA",
+      "section": "§5.2, Figure 6",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "值的 recall 與「訓練時是否見過」關係不大：OOV 值和少見值被偵測得差不多好，但每個值大約要見過 50 次左右 recall 才會大幅提升；只用 span 的基線在 OOV 與少見值上明顯較差。作者也承認 OOV 的 recall 偏高，可能是因為許多未見過的值屬於格式固定、容易辨認的時間。",
+      "numbers": "門檻約 50 個訓練樣本；各分組 recall 僅見於 Figure 5，正文無數字",
+      "section": "§5.2, Figure 5",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "追蹤能力仍限於本體中預先定義的 slot，尚未做到 slot 獨立；作者希望往 schema-guided 範式延伸。",
+    "狀態更新策略簡單，未來想加入例如部分遺忘的選項。",
+    "部分遮罩沒有明確效益：inform 類變好，但其他類別因輸入資訊減少而受損。",
+    "以具名實體為值的 slot 準確率最低；OOV 測試集上 train 領域的下降高於平均。",
+    "OOV 值 recall 偏高可能部分來自格式固定的時間類值，而非模型真的能處理任何未見值。",
+    "每個值需要約 50 個訓練樣本才能有好的 recall。",
+    "MultiWOZ 2.1 部分標註不一致，因此評估時需要標註變體對照。",
+    "span 頭沒有處理 end < start，這時會輸出空 span。",
+    "單領域資料集規模小、沒有共指，只能當作沒有過度擬合特定問題的健全性檢查。"
+  ],
+  "limitations_observed": [
+    "SOTA 比較不是同一把尺：§4.2 的評估把預測與半自動整理出的任一標註變體相符都算對，但 Table 1 的基線數字直接取自各原論文，沒有在同一個寬鬆判準下重跑。55.29 對 DST-picklist 53.30 的 2.0 點差距，有多少來自模型、多少來自判準，無從分辨。",
+    "「值獨立」的宣稱在評估端打了折扣：測試時套用的標註變體對照表本質上就是從訓練集整理出的值清單，模型推論不需要候選清單，但分數的計算需要。",
+    "消融無法歸因到單一元件：Table 4 是逐列累加，每列沒有標準差，也沒有逐一拿掉某個元件的對照。＋遮罩的 +0.21 小於完整模型的 seed 標準差 ±0.28，統計上跟零分不開；「＋三重複製」一次加入 inform、refer 兩種機制與新的 gate 類別，看不出 inform 與 refer 各自貢獻多少，也沒報 MultiWOZ 中 inform／refer 標籤占多少回合。",
+    "消融的長度設定不清：只有最後一列說明用了 512，前五列的最大長度沒寫，§4.3 卻說 MultiWOZ 用 512。＋對話歷史（+3.35）與全寬（+1.00）兩個增益可能都在量「看到更多歷史」這件事，加總起來才是歷史的真正效果。",
+    "與 SOM-DST 的比較輸入預算不同：SOM-DST 只看上一回合加上一回合的狀態，TripPy 看最長 512 token 的完整歷史，再加兩組輔助特徵。作者把勝出歸因於記憶特徵，但輸入量的差異沒有被控制。",
+    "OOV 泛化的證據偏弱：OOV 測試集由作者人工改寫，沒說歷史中的值是否一致替換、改寫後是否自然、有沒有公開；只報了逐 slot 準確率且只在圖上，沒報 JGA，讀者無法得知整體狀態正確率掉了多少。Figure 5 的「見沒見過都一樣」又被作者自己歸因於時間值格式固定，這個混淆沒有排除（例如分開時間與具名實體類 slot 報告）。",
+    "更新規則沒有刪除路徑：預測為 none 一律沿用舊值，一旦某回合寫錯，除非之後被另一個非 none 預測覆寫，否則錯誤會一路帶到對話結束；論文沒量化這種錯誤傳播占 JGA 損失的比例。",
+    "inform 記憶只看本回合的系統話語：系統兩回合前列出的選項、使用者現在才接受，這種情況不在 inform 的射程內，只能靠 refer（但它只能指向已進入狀態的 slot）或 span，文中沒有分析這類情況多常見。",
+    "單領域的領先幅度有些很小：sim-R 上 90.0 ± 0.2 對 BERT-DST 89.6，差距約兩個標準差，而表中 BERT-DST 的數字沒有標準差；SUMBT 的 42.40 是 MultiWOZ 2.0 的結果，卻與 2.1 的數字放在同一張表。",
+    "資料集覆蓋窄：多領域只測 MultiWOZ 2.1，沒有測作者在相關工作中已引用、發表時間也早於本文的 SGD（1909.05855），而 SGD 正是檢驗 slot 獨立與未見 schema 的標準場景；結論把 schema-guided 列為未來工作，等於承認這塊沒驗。",
+    "規模限制：每個 slot 各有 gate、span、refer 三個分類頭，refer 頭輸出 N+1 類，參數與計算隨 slot 數成長；新增 slot 需要重新訓練，對 slot 數大或會變動的應用不友善。",
+    "重現性依賴程式碼：MultiWOZ 上 inform 與 refer 標籤怎麼導出、哪些 slot 是布林、batch size 與 epoch 數，正文都沒有寫；只照論文無法重做出相同的訓練資料。",
+    "對 LLM 時代的外推有限：TripPy 假設有結構化的系統告知動作可讀，也假設狀態是固定 slot 的字典；LLM agent 的狀態多是自由格式、沒有系統端的結構化 dialog act，三種值來源的分類可以借用，但實作無法直接搬。"
+  ],
+  "framework_role": "T2 傳統任務型 DST 的代表性強基線，也是 MultiWOZ 2.1 時代分類式（非生成式）DST 的里程碑。它對 T2 最有價值的是一個關於狀態更新的分類：每個狀態欄位每回合要嘛沿用（none），要嘛從三個來源之一取值——使用者本回合說的話、系統本回合提供的選項（使用者只以確認或接受表態）、或狀態裡另一個欄位（共指與跨領域值共享）。這個分類可直接用來檢查 LLM agent 的狀態維護是否漏掉「agent 自己提議、使用者隱含接受」與「跨任務沿用前面已確定的值」這兩類更新。它也暴露了傳統 DST 的狀態維護缺口：只覆寫不刪除、錯誤會一路帶下去、狀態欄位必須預先定義，正好是 LLM 時代長多輪狀態維護與修正回寫要補的地方。論文本身沒有處理修正、評估回流或使用者模擬，所以只落在 T2 節點內。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "ConvLab-3 的 README 把 TripPy 列為內建的 Dialog State Tracking 模型之一（程式碼在 convlab/dst/trippy）；README 註明由清華大學 THU-COAI、杜塞道夫大學 HHU 對話系統與機器學習組與 Microsoft Research 共同維護：https://github.com/ConvLab/ConvLab-3 ——屬學術工具組，不算商用採納。",
+      "Hugging Face 上有 ConvLab 發布的 TripPy 權重 ConvLab/roberta-base-trippy-dst-multiwoz21（以 RoBERTa-base 重做、非論文的 BERT-base，Apache-2.0，模型卡說明預期 MultiWOZ 2.1 JGA 約 55–56%，定位為 ConvLab-3 的研究用模型，未提及任何生產部署）：https://huggingface.co/ConvLab/roberta-base-trippy-dst-multiwoz21",
+      "Amazon Alexa 組織下的 DialoGLUE 基準儲存庫以修改過的 TripPy 當 MultiWOZ 任務的基線實作：https://github.com/alexa/dialoglue ——這是研究基準的基線，儲存庫內沒有任何產品使用的說明，不代表 Amazon 產品採用。"
+    ],
+    "assessment": "未見證據（商用採納）。論文沒有提到任何部署或產品；可查證的只有學術工具組（ConvLab-3、Hugging Face 上的 ConvLab 權重）與研究基準（DialoGLUE）的整合，屬學術影響力，不算商用採納。Semantic Scholar 顯示 246 次引用、49 次 influential，學術影響力明確。"
+  },
+  "reproducibility": {
+    "code": "https://gitlab.cs.uni-duesseldorf.de/general/dsml/trippy-public（論文附的官方儲存庫，GitLab 頁面標示 Apache-2.0）",
+    "data": "公開：MultiWOZ 2.1、WOZ 2.0、sim-M、sim-R 都是公開資料集。作者自產的 MultiWOZ span 標籤、標註變體對照表與人工改寫的 OOV 測試集，論文沒說是否公開，需查程式碼儲存庫確認。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "三種值來源（使用者說的、系統提供的、狀態內共指）的分類與 none 即沿用的更新規則，是理解傳統 DST 狀態更新的好材料，也是 MultiWOZ 2.1 上被廣泛沿用的強基線；但 BERT 逐 slot 分類頭、預先定義 slot、只覆寫不刪除的設計已經過時，SOTA 數字又建立在寬鬆且未對齊的評估判準上，核心概念看摘要即可吸收，非本節點必讀。",
+  "related": [
+    "1907.03040",
+    "1911.03906",
+    "1910.03544",
+    "1905.08743",
+    "1907.07421",
+    "2002.08898",
+    "1907.01669",
+    "1810.00278",
+    "1909.05855",
+    "1805.01555",
+    "1801.04871",
+    "1604.04562",
+    "1606.03777",
+    "1805.09655",
+    "1812.00899",
+    "1807.06517"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

@@ -1,0 +1,170 @@
+{
+  "id": "2208.10817",
+  "title": "GenTUS: Simulating User Behaviour and Language in Task-oriented Dialogues with Generative Transformers",
+  "topic": "T6",
+  "subarea": "經典與神經使用者模擬器",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "以 BART encoder-decoder 把任務型對話的使用者模擬器寫成「JSON 字串進、JSON 字串出」的 seq2seq，一次解碼同時產生 semantic action 與自然語言回覆，並以 goal 與 ontology 導出的圖約束解碼；ontology 只當輸入，所以可 zero-shot 換 ontology，也能再用 RL 塑形出不同性格的模擬使用者（SIGDIAL 2022）。",
+  "problem": "任務型對話系統的 dialogue policy 常靠使用者模擬器（US）以 RL 訓練，但既有 US 有兩個缺口：(1) 互動多停在 semantic 層，或是「semantic policy＋另外訓練的 NLG」的模組拼接，policy 與 NLG 各自最佳化，產生的句子在上下文中不夠自然，訓練環境與部署環境（真人講自然語言）之間有落差；(2) 資料驅動的 US（Seq2Seq US、NUS、VHUS）的特徵表示綁定 ontology，換領域要重做特徵或重訓；TUS 雖與領域無關，卻不產生語言，而且 intent 集合寫死在模型裡，換到 intent 不同的 ontology 很困難。規則式 ABUS 可解釋，但規則難以擴展到複雜領域，也只輸出 dialogue act。缺少一個同時「產生自然語言」「保留可解釋的 semantic 輸出」「可 zero-shot 遷移到新 ontology」的 US。",
+  "core_idea": "把 US 的所有輸入（系統 action、使用者歷史、user goal、輪次）與輸出（使用者 semantic action＋文字）全部序列化成 JSON 字串，用預訓練的 BART 當 seq2seq 生成器，讓 user policy 與 NLG 在同一個解碼序列裡聯合最佳化：先解出 semantic action，再以它與上下文為條件生出句子。可解釋性來自 semantic action 仍被顯式輸出並留在模擬器內部；泛化性來自「全是字詞」的表示加上預訓練語言模型；合法性由一張從 ontology（intent）與 user goal／系統 action（domain、slot、value）建出的約束圖把關，ontology 只作為外部輸入、不寫進模型參數，因此換 ontology 不需重訓。行為多樣性則靠事後以不同 reward 的 PPO 微調。",
+  "method": {
+    "task_formulation": "每一輪 t，模擬器接收上下文序列，輸出使用者 semantic action 與對應的自然語言 utterance。semantic action（使用者與系統皆同）是一組 (intent, domain, slot, value) tuple；使用者與系統的 intent 集合可以不同（例如 MultiWOZ 系統有 recommend、nooffer 等，使用者只有 inform、request 與 bye／thank／greet）。",
+    "goal_representation": "user goal 是 tuple 清單，每個 tuple 為 (domain, type, slot, value, status)。type ∈ {info（約束）, reqt（要問的資訊）, book（訂位資訊）}；status ∈ {fulfilled, in conflict, requested, not mentioned}。tuple 依使用者偏好排序：越早想提的放越前面（沿用 TUS 的設定）。domain／slot／value 從 ontology 抽樣。",
+    "goal_update": "每輪先以上一輪自己的 user action 與本輪系統 action 更新 goal（更新 status）。若系統告知請求不可行或失敗，就把對應 constraint slot 的值換成隨機值（模擬使用者放寬或改條件）。",
+    "input": "JSON 格式字串：{\"system\": 本輪系統 semantic action, \"user\": 前 3 輪使用者 semantic action, \"goal\": goal tuple 清單, \"turn\": 輪次 t}。系統端只以 semantic 層進入模擬器（假設使用者很少誤解系統）。",
+    "output": "JSON 格式字串：{\"action\": 本輪使用者 semantic action, \"text\": 本輪使用者 utterance}。text 送給對話系統；action 留在模擬器內部，用於下一輪的歷史與 goal 更新。",
+    "model": "以 Huggingface transformers 的 BART（雙向 encoder＋左到右 decoder）初始化，整體當 seq2seq 以 teacher forcing 監督學習；目標序列就是上述輸出 JSON 字串。論文未寫 BART 規模（base 或 large）、學習率、epoch 與 batch size。",
+    "constrained_decoding": "為防止大型語言模型產生 hallucination 造成非法 action，解碼 semantic action 時沿著一張圖走路徑：第一層節點是 ontology 的 intent（general intent 如 greet／bye 與 domain-specific 如 inform／request）；domain、slot、value 節點由 user goal 導出，並由系統 action 插入新節點（例如系統問到 price range 時加入對應節點）；intent→domain→slot→value 的合法連線由 ontology 決定。每解完一個 action，模型決定繼續解下一個 action 或停止。論文沒說 text 部分有受約束，推定 text 為自由生成。論文未說明此約束是以 token 層級的 prefix 限制或其他方式實作。",
+    "decoding": "未使用 beam search 或 sampling（作者為壓低運算成本），即近似 greedy 解碼；這也是 self-BLEU 最差的原因。",
+    "supervised_data": "MultiWOZ 2.1（約 1 萬段人對人對話，7 個 domain、使用者 5 個 intent）與 SGD（2 萬段以上人對虛擬助理對話，20 個 domain、使用者 11 個 intent；domain 名稱去掉 _編號 做正規化）。各自訓練一個模型；zero-shot 測試為 MultiWOZ 訓練→SGD 測試與反向，不再微調。",
+    "dialogue_system_training": "以 ConvLab-2 的模組化管線搭 DS：BERTNLU（解析模擬器送來的自然語言）＋RuleDST＋PPO 訓練的 policy＋template NLG（系統端）。對手 US 三種：ABUS＋template NLG（ABUS-T）、ABUS＋SC-GPT（ABUS-S）、GenTUS。PPO 訓練 200 epoch，每 epoch 1000 段對話；reward：成功 +80、每輪 −1、失敗額外 −40，最多 40 輪；每種 US 各 5 個 seed。",
+    "evaluation_protocol": "(a) semantic 層：與語料中真人 action 比 precision、recall、F1、turn accuracy（整輪 action 完全吻合）；(b) 語言層：sacreBLEU（對 golden utterance）、SER=(missing slot 數＋hallucinated slot 數)/總 slot 數 N、self-BLEU（每句對其餘生成句算 BLEU 後平均，越低越多樣）；(c) AMT 人工偏好測試，照 SOLOIST 的設定對每句 informativeness 與 naturalness 打 1–3 分；(d) cross-model：每個 DS 各以三種 US 測，每組 400 段 × 5 seed；(e) human trial：每種 US 選出在自身訓練 US 上表現最好的 policy，經 DialCrowd 接 AMT，每個 DS 收 300 段，使用者依隨機生成的 MultiWOZ goal 以自然語言互動，判定 success 並給 1–5 的 overall 分數。",
+    "rl_finetuning_of_simulator": "把監督訓練好的 GenTUS 放到 semantic 層與 rule-based DS 互動，以 PPO 微調其 policy。turn-level reward r = −ρ_eff + ρ_act·m（m 為本輪 action 數），另加終局 reward：成功 +80、失敗 −40。兩組設定：r1 = −5·m（懲罰多講）與 r2 = −10 + 20·m（每輪扣 10、每多一個 action 加 20，鼓勵多講）；各 4 個 seed，每個 seed 取在自身 reward 上平均 return 最高的模型，再做 cross-reward 評估。只調 semantic 行為，NLG 未經 RL。",
+    "code_note": "ConvLab-3 的 convlab/policy/genTUS 目錄有後續整理的實作：unify/build_data.py 產生訓練資料（--add-history）、train_model.py（README 範例 batch-size 8）、evaluate.py（--do-nlg）與 ppo 子目錄；這些參數屬工具包設定，不是論文本身寫明的超參數。"
+  },
+  "assumptions": [
+    "使用者很少誤解系統回應，因此模擬器的輸入可以停在系統的 semantic action，不需要自己做 NLU；只有使用者→系統方向走自然語言。",
+    "存在一份明確的 ontology（intent 集合與 domain／slot／value），user goal 可從中抽樣並表示成有序 tuple 清單；使用者偏好的提及順序可以用 tuple 排序表達。",
+    "有 dialogue act 與 utterance 對齊標註的語料可供監督學習（MultiWOZ、SGD）。",
+    "新 ontology 的 intent、domain、slot 名稱本身是可讀的自然語言字詞，BART 的預訓練知識才能讓 zero-shot 遷移生效。",
+    "被訓練的 DS 是模組化管線（NLU＋DST＋policy＋NLG），dialogue success 可由「goal 是否被滿足」客觀判定。",
+    "監督學習學到的是語料裡「平均」的使用者行為；要得到特定行為（例如話多的使用者）得另以手工設計的 reward 做 RL 塑形。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MultiWOZ 2.1（同語料測試與 zero-shot 目標）",
+      "Schema-Guided Dialogue（論文以 SGD-X 引用；同語料測試與 zero-shot 目標）",
+      "ConvLab-2 模組化 DS 環境（BERTNLU＋RuleDST＋PPO policy＋template NLG）",
+      "AMT 人工偏好測試（NLG 句子評分）",
+      "DialCrowd＋AMT 互動式 human trial（155 位使用者，每個 DS 300 段）"
+    ],
+    "metrics": [
+      "semantic 層 precision／recall／F1／turn accuracy",
+      "sacreBLEU",
+      "slot error rate（SER）",
+      "self-BLEU（多樣性，越低越好）",
+      "人工 informativeness、naturalness（1–3）",
+      "DS dialogue success rate（cross-model 與 human trial）",
+      "human trial overall rating（1–5）",
+      "RL 微調後的 success、平均 action 數、輪數、各 reward 下的平均 return（R1、R2）"
+    ],
+    "baselines": [
+      "TemplateNLG（NLG 比較，輸入 golden action）",
+      "SC-GPT（NLG 比較，輸入 golden action）",
+      "Human（語料中的真人 utterance，作 SER 與 self-BLEU 參照）",
+      "ABUS-T：agenda-based US＋template NLG",
+      "ABUS-S：agenda-based US＋SC-GPT",
+      "監督學習版 GenTUS（RL 微調的對照）",
+      "刻意排除：TUS（先前 human trial 未顯著勝過 ABUS）與 Tseng et al. 2021 等以 delexicalisation 為基礎的 NLG"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "輸入特徵消融：加入 user goal 是最關鍵的一步，再加更長的使用者歷史只帶來小幅提升。",
+      "numbers": "MultiWOZ 上只給系統 action＋上一輪 user action＋輪次：P 0.42／R 0.30／F1 0.35／ACC 0.21；＋user goal：0.66／0.64／0.65／0.51；再＋前 3 輪歷史：0.68／0.66／0.66／0.51。",
+      "section": "§5.1、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "以 golden action 為輸入時，GenTUS 的句子 BLEU 明顯高於 SC-GPT 與 template，作者歸因於它額外看到 user goal 等上下文；SER 與 SC-GPT 無顯著差異。",
+      "numbers": "sacreBLEU：GenTUS-golden 19.61、SC-GPT 10.51、TemplateNLG 10.46；SER：GenTUS-golden 5.73%、SC-GPT 5.33%、TemplateNLG 1.67%、Human 3.92%；GenTUS 以自己預測的 action 為準時 SER 3.97%。",
+      "section": "§5.2、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "人工偏好測試中 GenTUS 比 SC-GPT 更自然，資訊完整度相近；只有 naturalness 的差異達顯著。",
+      "numbers": "informativeness：GenTUS 2.55 對 SC-GPT 2.50；naturalness：2.58 對 2.45（p<0.05）。評分量尺 1–3，樣本數未報告。",
+      "section": "§5.2、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "GenTUS 生成句的多樣性是所有比較對象中最差的，作者歸因於未使用 beam search 或 sampling。",
+      "numbers": "self-BLEU（越低越多樣）：GenTUS 0.95、GenTUS-golden 0.93、TemplateNLG 0.89、SC-GPT 0.79、Human 0.77。",
+      "section": "§5.2、Table 2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "zero-shot ontology 遷移：SGD 訓練的模型直接測 MultiWOZ 仍有接近同語料的 semantic 表現，但反向遷移大幅退化，語言層 BLEU 在兩個方向都崩落。",
+      "numbers": "M→M：F1 0.66、ACC 0.51、sacreBLEU 17.84；S→S：0.58、0.47、18.30；S→M：P 0.51、R 0.51、F1 0.49、ACC 0.34、sacreBLEU 2.70；M→S：P 0.30、R 0.26、F1 0.27、ACC 0.16、sacreBLEU 1.86。",
+      "section": "§5.3、Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "cross-model 評估：三個 DS 都在 ABUS-T 上表現最好，作者據此主張手寫 policy＋template NLG 不足以模擬真實情境；以資料驅動 NLG 發話的 US 較難應付。",
+      "numbers": "success（列＝訓練用 US，欄＝測試用 ABUS-T／ABUS-S／GenTUS）：ABUS-T 訓練 0.78／0.63／0.50；ABUS-S 訓練 0.74／0.57／0.45；GenTUS 訓練 0.68／0.43／0.53。每格 400 段 × 5 seed＝2K 段。",
+      "section": "§5.4、Table 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "互動式 human trial：以 GenTUS 訓練的 DS 在真人使用者上的 success 與 overall 評分都顯著最高；ABUS-T 與 ABUS-S 之間無顯著差異，作者據此認為只給規則式 US 接上資料驅動 NLG 不夠。",
+      "numbers": "success／overall：ABUS-T 0.75／3.71、ABUS-S 0.79／3.83、GenTUS 0.86／4.08；155 位使用者、每個 DS 300 段、每人 1–48 段；GenTUS 對兩者 p<0.05。",
+      "section": "§5.5、Table 6",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "以不同 turn-level reward 做 PPO 微調可塑形出不同行為的模擬使用者：鼓勵多講的 User 2 每輪 action 數明顯增加（「話多的使用者」），各自在自己的 reward 上 return 最高。",
+      "numbers": "User 1：success 0.84±0.03、acts 1.33±0.03、turns 7.01、R1 33.5、R2 34.2；User 2：0.78±0.04、1.81±0.04、7.24、R1 4.3、R2 119.1；Supervised：0.76±0.08、1.39±0.04、7.38、R1 30.9、R2 38.6（95% 信賴區間）。",
+      "section": "§5.6、Table 7",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "生成句多樣性最差（self-BLEU 0.95）：為了壓低運算成本沒用 beam search 或 sampling，如何在多樣性與成本之間取得平衡留待未來。",
+    "跨語料遷移時 BLEU 大幅下降，因 MultiWOZ 與 SGD 的使用者用字與語言風格不同。",
+    "SGD 的 ontology 比 MultiWOZ 複雜（intent、domain、slot、value 更多），同語料訓練測試的 semantic 表現也較低。",
+    "監督學習只會學到最貼合資料的平均行為，要模擬不同使用者得另做 RL 塑形；目前 RL 只調 semantic 行為，以 RL 調整 NLG 來建模使用者情緒或個性留待未來。",
+    "資料驅動 NLG（含 GenTUS）的 SER 高於 template NLG。"
+  ],
+  "limitations_observed": [
+    "模擬器評估與真人評估的排名互相矛盾，作者沒有討論：Table 5 中 GenTUS 訓練的 DS 列平均 success 約 0.55（0.68／0.43／0.53），是三者最低；ABUS-T 訓練的約 0.64。GenTUS 訓練的 DS 在 ABUS-S 上最差（0.43），拿 GenTUS 自己測也只比 ABUS-T 訓練的 DS 高 3 點（0.53 對 0.50）。但 Table 6 的 human trial 卻是它最好（0.86 對 0.75／0.79）。這代表 cross-model 模擬評估無法預測真人評估的排名，正是 T7／E6 要當心的事；論文反而把 cross-model 結果解讀成支持性證據。",
+    "SER 的比較基準不一致：GenTUS 的 3.97% 是對照它自己預測的 action 算出，其他模型（含 GenTUS-golden 5.73%）是對照 golden action。若自己預測的 action 較短、slot 較少，分母 N 會變小、題目也變簡單，所以「比 golden 版低」量到的是自我一致性，不代表句子更正確。此外作者寫下降 1.77 點，表中數字相減是 1.76。",
+    "zero-shot 遷移的主張只靠單一方向撐著：M→S 的 F1 0.27、ACC 0.16 已接近失敗，只有 S→M（0.49／0.34）像樣，而這個方向可能只反映「SGD 的 intent 集合大致涵蓋 MultiWOZ」。語言層在兩個方向都只剩 BLEU 2.70／1.86，等於語言沒有遷移。整組實驗沒有任何 baseline（作者自己說沒有其他資料驅動 US 做過這種設定），無從判斷 0.49 算好還是差。",
+    "摘要宣稱「enhancing language variation」，但 self-BLEU 0.95 是全表最差（真人 0.77、SC-GPT 0.79）。摘要主張與論文自己的數字直接衝突。",
+    "「policy 與 NLG 聯合最佳化有益」的因果沒有被隔離：human trial 中 GenTUS 與 ABUS 同時差在「資料驅動 policy 對規則 policy」和「聯合 NLG 對分離 NLG」兩個因素；缺少「GenTUS 的 policy＋獨立 NLG」或「其他資料驅動 US（NUS、VHUS、TUS）」的對照組。TUS 被排除的理由只是它先前 human trial 沒贏 ABUS。",
+    "§4.4 的 reward 描述與公式對不上：r1 = −5·m 對應 ρ_eff=0，實質上是按 action 數扣分，文字卻寫成「turn level penalty and low action reward」。Table 7 中 User 2 的 success 0.78±0.04 與 Supervised 的 0.76±0.08 信賴區間重疊，「兩個 RL 使用者 success 都較高」對 User 2 不成立；User 1 的 acts 1.33 與 Supervised 的 1.39 幾乎沒差，實際只有 User 2 展現出行為差異。",
+    "塑形出特化使用者的動機是「讓 DS 更穩健」，但論文從未拿 User 1／User 2 去訓練或評估任何 DS，這個動機完全沒有被驗證；RL 也只在 semantic 層、面對 rule-based DS 進行，微調後的語言品質沒有評估。",
+    "human trial 的設計偏弱：155 人每人做 1–48 段，少數重度參與者可能主導結果；每種 US 只挑一個 seed 中表現最好的 policy，沒有 seed 間變異。人工偏好測試未報告樣本數與評分者數，只有 naturalness 達顯著；Appendix C 說呈現的是兩個系統各自產生的 action 與句子，若兩者 action 不同，informativeness 的比較基準也不同。",
+    "約束解碼圖的貢獻沒有量化：沒有「不加約束」的消融，也沒有報告非法 action 比例，因此無法得知 constrained decoding 擋掉多少 hallucination、對 zero-shot 表現貢獻多少。",
+    "可重做性缺口：論文未提供 BART 規模、學習率、epoch、batch size 等監督學習超參數，只能倚賴後續 ConvLab-3 的實作補齊。",
+    "外推到 LLM agent 有結構性限制：GenTUS 假設系統端以 semantic action 輸入模擬器、且系統端用 template NLG，因此模擬器從未面對系統的自由文字。今天的 LLM agent 輸出的是自然語言且沒有 ontology 可約束，這套輸入介面與約束圖無法直接套用。"
+  ],
+  "framework_role": "T6 的核心代表作之一：LLM 之前世代的神經使用者模擬器，擔任任務型 DS 以 RL 訓練時的對手與評估者。它示範的「雙輸出」設計很值得帶進框架：每輪同時產生結構化 semantic action（可解釋、可稽核，也可直接當作評估用的結構化軌跡）與自然語言（讓被測系統面對真實的理解難度），並以 goal 與 ontology 導出的約束圖保證 action 合法。它也提供以 reward 塑形出不同性格使用者的做法。對 T7／T8 的教訓是：以模擬器算出的 success rate（T8）與 cross-model 排名，未必能預測真人評估。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "GenTUS 每輪把 text 欄位的自然語言送進 DS 的 BERTNLU 做 intent／slot 解析，再經 RuleDST 更新狀態；semantic action 只留在模擬器內，不給系統，所以 DS 在訓練時就得面對自然語言層的意圖辨識誤差。Appendix B 的對話示範 GenTUS 用 anaphora 說「兩地之間」時 NLU 解不出，DS 處理失敗，模擬器後來才明確講出起訖點。作者把 human trial 的提升歸因於 policy 與 NLG 聯合最佳化；機制上推測（非論文所述）是 DS 的 NLU＋policy 在訓練時就接觸到較接近真人的輸入。"
+    },
+    {
+      "edge": "E6",
+      "how": "模擬器與 DS 的互動對話直接被轉成評估訊號：cross-model 評估以三種 US 各與每個 DS 跑 400 段 × 5 seed，依 goal 是否滿足算 success rate，形成 Table 5 的矩陣；同一個模擬器既是訓練對手也是評估者。論文的結果同時顯示這條回流的風險：模擬器互動算出的排名與真人互動（Table 6）相反。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文沒有宣稱任何產品或線上部署。程式碼收進有本文作者參與的 ConvLab-3 學術工具包（github.com/ConvLab/ConvLab-3 的 convlab/policy/genTUS），屬研究基礎建設，不算商用採納。本次查核只涵蓋論文本身與 ConvLab-3 repo；WebSearch 額度已用完，未能再搜尋產業使用。"
+  },
+  "reproducibility": {
+    "code": "https://gitlab.cs.uni-duesseldorf.de/general/dsml/gentus-public.git（論文註腳提供，本次未開啟確認）；ConvLab-3 內的實作 https://github.com/ConvLab/ConvLab-3/tree/master/convlab/policy/genTUS（已確認存在，含 build_data、train_model、evaluate、ppo）",
+    "data": "訓練與測試用的 MultiWOZ 2.1 與 SGD 皆為公開資料集；人工偏好測試與 human trial 收集的對話與評分未見公開。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "「semantic action＋自然語言」雙輸出、ontology 只當輸入加上約束解碼，是可以直接借用的模擬器設計，且有 SIGDIAL、開源與 human trial 支撐；但它的核心證據有內部矛盾（cross-model 排名與 human trial 相反、zero-shot 只單向成立、多樣性最差），相對 TUS 屬漸進式延伸，又已被 LLM 模擬器世代取代，所以有價值但不到本節點必讀。",
+  "related": [
+    "2106.08838",
+    "1805.06966",
+    "1811.04369",
+    "1607.00070",
+    "2107.11904",
+    "2002.12328",
+    "2002.04793",
+    "1910.13461",
+    "1810.00278",
+    "2110.06800"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

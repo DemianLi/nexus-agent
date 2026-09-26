@@ -1,0 +1,173 @@
+{
+  "id": "2406.12045",
+  "title": "$τ$-bench: A Benchmark for Tool-Agent-User Interaction in Real-World Domains",
+  "topic": "T8",
+  "subarea": "任務成功的判準",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 τ-bench：讓 LM 模擬的使用者與 agent 在零售／航空客服情境多輪對話，agent 透過 API 操作資料庫並須遵守領域政策；成功與否以「對話結束時的資料庫終態是否等於唯一的標註終態、回覆是否含必要資訊」判定，並提出 pass^k（同一任務 k 次試驗全部成功的機率）衡量可靠性。",
+  "problem": "既有的 agent／工具使用基準（BFCL、ToolBench、MetaTool、WebArena、SWE-bench 等）多是單輪指令、資訊一次給齊、不必查閱領域規則；任務導向對話基準則是靜態語料，或使用規則式／符號式使用者模擬器、群眾外包真人測試。真實部署（例如客服）要求 agent 在多輪中逐步向人收集資訊與授權、遵守特定領域的政策，並在數百萬次互動中表現一致。但多輪對話的軌跡高度多樣、成功判準多面向，傳統上只能靠終端使用者與領域專家人工評估，又慢又主觀。缺的是一種自動、忠實、而且能量測一致性的任務成功判準。",
+  "core_idea": "把成功判準從「軌跡」移到「世界終態」：精心撰寫使用者 instruction，讓它在領域政策下只可能有唯一一個合法的資料庫結果。如此一來，不論對話怎麼走、agent 呼叫了哪些讀取 API，只要比對最終資料庫與標註終態，並檢查回覆中是否包含必要資訊，就能得到 0/1 獎勵；主觀的人工判斷被換成客觀的狀態比對。接著利用 LM 使用者模擬器的取樣隨機性，對同一任務重跑 n 次，以 pass^k（k 次 i.i.d. 試驗全部成功的機率）衡量可靠性，和衡量「至少一次成功」的 pass@k 形成對照。",
+  "method": {
+    "形式化": "每個任務是一個 POMDP (S, A, O, T, R, U)，其中 S = S_db ⊗ S_user、A = A_db ∪ A_user、O = O_db ∪ O_user，獎勵函數 R: S→[0,1]，U 是 instruction 空間。另外提供一份領域政策文件給 agent，作者把它視為部分描述的世界模型。資料庫內容 s_db 對 agent 與使用者都隱藏，只能經由 API 動作 tool_name(**kwargs) 讀寫；資料庫轉移是確定性的 Python 函式。",
+    "四種元件": {
+      "資料庫（JSON）": "retail：500 users、50 種 products（每種有多個 item 變體，各有唯一 item_id）、1,000 orders。airline：500 users、300 個航班（20 個美國城市之間）、2,000 reservations。資料欄位由程式碼隨機抽樣產生。",
+      "API 工具（Python）": "retail 有 7 個寫入、8 個非寫入 API；airline 有 6 個寫入、7 個非寫入 API；另有兩個共用的非資料庫工具 calculate、transfer_to_human_agents。部分政策寫成 API 內的檢查，違反時回傳 \"Error: ...\" 字串（例如付款方式不在使用者檔案中）；另一部分政策 API 不檢查（例如航空的免費行李額度依會員等級與艙等而異、改票與取消規則），要 agent 自己判斷後填參數。每個 API 附 OpenAI function schema；附錄範例 exchange_delivered_order_items 的 schema 描述寫明，執行前要說明細節並取得使用者明確的 yes/no 確認。",
+      "領域政策（Markdown）": "retail 政策的要點：先以 email 或姓名＋郵遞區號驗證身分；每次對話只服務一位使用者；寫入前必須列出細節並取得明確的 yes；一次只做一個工具呼叫，呼叫工具時不回覆使用者；exchange／modify 工具每張訂單只能呼叫一次，所以要把所有品項收齊成一個列表；只有在超出能力範圍時才轉交真人客服。airline 政策另外規定：付款組合上限（1 張旅行憑證、1 張信用卡、3 張禮品卡）、免費行李額度表（每件額外行李 50 美元）、basic economy 不可改航班、取消條件（24 小時內、航空公司取消、有保險且符合條件、商務艙）、補償憑證（每位乘客 100 或 50 美元，且只在使用者抱怨並明確要求時提供）。",
+      "任務實例（JSON）": "每題包含：instruction（對 agent 隱藏，交給使用者模擬器；內容是身分、意圖、偏好與個性，寫到在政策下只有一種結果）、actions（ground-truth 的資料庫寫入動作與參數）、可選的 outputs（必須出現在 agent 回覆中的字串，例如價格）。retail 115 題、airline 50 題。"
+    },
+    "使用者模擬器": "使用 gpt-4-0613，溫度 1.0。使用者狀態由兩部分組成：含任務 instruction 的 system prompt，以及與 agent 之間的完整對話歷史；使用者看不到 agent 與工具之間的互動。每輪把 agent 訊息附加到歷史後，由 LM 取樣出新的使用者訊息；使用者輸出 \"###STOP###\" 時該輪結束並進入評估。論文沒有附上模擬器 system prompt 的完整模板（未載明），實作細節要看程式碼。",
+    "agent 設定": "主方法是 function calling（FC）：system prompt 就是領域政策，每輪由模型自行決定要回覆使用者或呼叫工具。另外測試 text-formatted ReAct（零樣本輸出「Thought: … Action: {JSON}」）與只輸出 Action 的 Act 消融；Llama-3-70B 不支援 FC，只用 ReAct。agent 溫度 0.0；每題最多 30 個 agent 動作（工具呼叫與回覆使用者都算一個）；主結果每題至少跑 3 次試驗。也試過給 FC agent 加一個 \"think\" 函式，但沒有提升。",
+    "獎勵（成功判準）": "r = r_action × r_output ∈ {0,1}。r_action：最終資料庫是否與唯一的標註終態完全相同；中間的讀取動作與對話措辭都不影響，比對的具體實作（雜湊或逐欄比較）論文未載明。r_output：agent 對使用者的回覆是否以子字串形式包含 outputs 中的每個字串（例如 \"54.04\"、\"41.64\"）。作者明言 r=1 只是成功的必要條件而非充分條件，例如 agent 沒取得使用者明確確認就執行寫入，仍可能得到 1。",
+    "可靠性指標": "每題跑 n 次、其中成功 c 次，無偏估計為 pass^k = E_task[ C(c,k) / C(n,k) ]、pass@k = 1 − E_task[ C(n−c,k) / C(n,k) ]，其中 C 是組合數，估計時需要 n ≥ k。k=1 時兩者相等，都等於平均獎勵 E[c/n]，這是主要的比較指標。Table 2 的平均是先算各領域再平均兩個領域，不按任務數加權。",
+    "三階段建構流程": [
+      "Stage I：人工共同設計最簡的資料庫 schema、API 與政策，以真實世界為參考並加以簡化，目的是維持各元件的邏輯一致、方便標註。",
+      "Stage II：給一筆範例資料，讓 gpt-4 產生可擴充的抽樣程式碼（數值與類別欄位用 random 抽，文字欄位從 LM 產生的清單抽），執行後先用 gpt-4 依結果修幾輪，再人工修細節。",
+      "Stage III：人工撰寫使用者 instruction → 用 gpt-4-turbo FC agent 跑一次 → 檢查軌跡找出歧義（例如沒指定付款方式，會讓終態在各次試驗間不同）→ 修改 instruction，反覆到確定沒有歧義為止。retail 每題跑超過 40 次 gpt-4-turbo 試驗，把成功率為零或偏低的題目挑出來重點檢查。ground-truth 動作可以從 agent 軌跡複製再編輯，比從頭標註容易。"
+    ],
+    "分析方法": "人工檢查 gpt-4o FC 在 retail 的失敗軌跡，分成三類：錯誤參數／錯誤資訊、錯誤決策（違反政策）、複合請求只完成一部分。另做政策消融（從 system prompt 拿掉領域政策），依 ground-truth 寫入動作數分組看成功率，統計每題使用不存在的 ID 的工具呼叫數，並拆解每題的 API 成本。"
+  },
+  "assumptions": [
+    "使用者 instruction 能寫到在領域政策下只有唯一的資料庫終態；只要還有歧義，終態比對就會把合理的結果判為失敗。",
+    "LM 使用者模擬器會忠實依照 instruction 行事（不漏講需求、不自作主張、不算錯），模擬器的錯誤不會被系統性地算到 agent 頭上。",
+    "任務成功可以化約為「資料庫寫入集合正確＋回覆包含特定字串」；過程合規（取得確認、先驗證身分）不需要獨立檢查。",
+    "重跑同一任務時的隨機性（主要來自溫度 1.0 的使用者模擬器）足以代表真實使用者對同一需求的不同說法，因此 pass^k 能反映部署時的一致性。",
+    "同一任務的各次試驗彼此 i.i.d.，組合數估計式才是無偏的。",
+    "經過簡化的零售與航空領域（數十個 schema、API、規則）足以代表真實客服工作的難度。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "τ-retail（115 題；500 users、50 products、1,000 orders）",
+      "τ-airline（50 題；500 users、300 flights、2,000 reservations）"
+    ],
+    "metrics": [
+      "pass^1（等於平均獎勵，主指標）",
+      "pass^k（retail，k 最大到 8）",
+      "pass@k（對照用）",
+      "失敗類型佔比（人工分類）",
+      "每題使用不存在 ID 的工具呼叫數",
+      "每題成本（美元）與輸入／輸出成本佔比",
+      "依 ground-truth 寫入動作數分組的成功率"
+    ],
+    "baselines": [
+      "OpenAI：gpt-4o、gpt-4-turbo、gpt-4-32k、gpt-3.5-turbo",
+      "Anthropic：claude-3-opus、claude-3-sonnet、claude-3-haiku",
+      "Google：gemini-1.5-pro-latest、gemini-1.5-flash-latest",
+      "Mistral：mistral-large、open-mixtral-8x22b",
+      "meta-llama-3-70B-instruct（AnyScale API，只用 text ReAct）",
+      "方法：function calling（主方法）、text ReAct、Act-only；FC 加 think 函式（只有文字敘述）",
+      "消融：從 system prompt 拿掉領域政策"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "成功判準只看終態：最終資料庫必須與唯一的標註終態完全相同，且回覆要包含必要資訊；對話措辭與讀取動作可以任意變化，評估仍然客觀又快速。",
+      "numbers": "r = r_action × r_output ∈ {0,1}；Figure 2(d) 的例子只允許一個寫入動作，回覆須含 \"54.04\" 與 \"41.64\" 兩個子字串",
+      "section": "§3（Reward）、Figure 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "gpt-4o 搭配 function calling 表現最好，但兩個領域都遠未解決；對 gpt-4 系列與 claude-3-opus 等頂尖模型，airline 明顯比 retail 難（但 mixtral-8x22b、gemini-1.5-flash、claude-3-sonnet 反而是 airline 分數較高）；開放權重模型與頂尖專有模型差距大。",
+      "numbers": "pass^1（retail／airline／avg）：gpt-4o 61.2／35.2／48.2；gpt-4-turbo 57.7／32.4／45.1；claude-3-opus 44.2／34.7／39.5；mistral-large 30.7／22.4／26.6；gpt-3.5-turbo 20.0／10.8／15.4；mixtral-8x22b 17.7／31.6／24.7；llama-3-70B（ReAct）14.8／14.4／14.6",
+      "section": "§5.1、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "k 增加時，同一任務連續成功的機率快速下降，顯示即使平均成功率不差，agent 的一致性仍然很低。",
+      "numbers": "gpt-4o FC 在 τ-retail：pass^1 超過 60%，pass^8 低於 25%",
+      "section": "§5.1、Figure 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "原生 function calling 一致勝過文字格式的 agent 方法；在文字格式方法中，加上推理軌跡（ReAct）優於只有動作（Act）；替 FC 加 think 函式沒有提升。",
+      "numbers": "只有 Figure 3 的長條圖，內文沒有給數值",
+      "section": "§5.1、Figure 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "評估成本主要來自冗長的 system prompt（領域政策加上函式定義），而不是模型輸出。",
+      "numbers": "gpt-4o FC agent 搭配 gpt-4 使用者模擬器（retail）：agent 每題 0.38 美元、使用者模擬每題 0.23 美元；agent 成本中輸入佔 95.9%、輸出佔 4.1%",
+      "section": "§5.1（Cost analysis）",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "失敗主要來自資料庫推理錯誤，其次是違反政策的決策錯誤；較弱的模型還會大量捏造 ID。",
+      "numbers": "retail 115 條 gpt-4o FC 軌跡（每題 1 次）中有 40 題失敗，pass^1 = 65.2%；其中 4 題是 instruction 錯字或歧義（事後修掉），其餘 36 題是 agent 問題：錯誤參數／資訊約 55%、錯誤決策 25%、複合請求只完成一部分 19%。每題使用不存在 ID 的呼叫數：gpt-4o FC 0.46、gpt-3.5-turbo FC 2.08、Act 6.34",
+      "section": "§5.2、Figure 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "拿掉領域政策後，retail 只小幅下降（成功多半來自常識性地使用工具）；airline 的 gpt-4o 大幅下降，gpt-3.5 幾乎不變（本來就沒在遵守複雜規則）。",
+      "numbers": "gpt-4o：retail 61.2→56.8（−4.4）、airline 33.2→10.8（−22.4）；gpt-3.5：retail 20.0→14.5（−5.5）、airline 10.8→9.6（−1.2）",
+      "section": "§5.2、Table 3",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "ground-truth 寫入動作越多（使用者的請求越多）的任務越難，agent 常會漏掉開頭提到的請求或隱含的動作。",
+      "numbers": "複合請求只完成一部分佔失敗的 19%；成功率隨寫入數下降的趨勢只有 Figure 6 的圖，沒有給數值",
+      "section": "§5.2、Figure 6、§C.2.3",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "r=1 只是必要條件、不是充分條件：獎勵不檢查過程合規，例如 agent 沒取得使用者明確確認就執行寫入，也可能得分。",
+    "使用者模擬的限制：instruction 可能有錯字或歧義（需要人工修）；instruction 不一定涵蓋所有領域知識；模擬 LM 的推理、計算、長上下文記憶與遵循 instruction 的能力有限（例如 §C.2.2 使用者沒再確認就同意了 agent 推薦的檯燈）。",
+    "可以在模擬器上加更系統的檢查來確保結果唯一；也可以加更多成功指標，例如用 LM 檢查特定規則是否被遵守。",
+    "領域政策比真實世界簡化；更進階的領域（醫療、稅務、法律）留待未來。",
+    "人工標註很困難，需要同時深入了解領域與 agent 的能力。",
+    "用 gpt-4-turbo FC agent 來調整使用者 prompt，任務篩選過程帶有隱性偏差。",
+    "沒有測 7B／13B 小模型；self-reflection 與 planning 類方法被判定不適合使用者在迴路中的設定，所以沒有測。"
+  ],
+  "limitations_observed": [
+    "表格之間的數字不一致：Table 2 的 gpt-4o airline pass^1 是 35.2，Table 3 消融的起點卻是 33.2（−22.4 也是用 33.2 算的）。§5.2 失敗分析那次 retail 單次試驗的 pass^1 是 65.2%，Table 2 則是 61.2。同一設定的分數會浮動好幾個百分點，論文卻沒有交代哪個數字對應哪一次執行。",
+    "成本數字對不上：每題 agent 0.38 美元加使用者 0.23 美元，約 0.61 美元；文中說所有任務各跑一次合計約 200 美元，但 retail 115 題各跑一次只約 70 美元，連 airline 50 題一起算也只有約 100 美元。用文內的數字無法重算出 200 美元。",
+    "誤差棒與試驗次數：Checklist 勾選「有報告誤差棒」，但 Table 2 沒有任何標準差或信賴區間，主結果只寫「每題至少 3 次試驗」。Figure 4 的 pass^k 畫到 k=8，而無偏估計要求 n ≥ k，這張圖實際跑了幾次沒有交代。",
+    "樣本量小、排序的統計意義不明：airline 只有 50 題。以二元結果粗估（這是我自己算的，不是論文的數字），任務層級的標準誤上限約 6.5 個百分點，retail 115 題約 4.6 個百分點。Table 2 有好幾組相鄰名次的差距落在一個標準誤內（例如 airline 的 claude-3-opus 34.7、gpt-4-32k 33.0、gpt-4-turbo 32.4）；gemini-1.5-flash 在 airline 與平均都勝過 pro（retail 則是 pro 21.7 勝過 flash 17.4）、mixtral-8x22b 在 airline 勝過 claude-3-sonnet 這類反直覺的排序，論文既沒有討論也沒有做檢定。",
+    "pass^k 量到的變異來源很窄：agent 溫度 0.0、使用者溫度 1.0，重跑時的差異主要來自使用者模擬器的措辭取樣（加上 API 本身的非確定性）。因此 pass^k 量的是「agent 面對同一需求不同說法時的穩健度」，不是 agent 自身取樣的一致性。換一個使用者模擬器或溫度，pass^k 就會改變，跨論文比較時必須固定模擬器與其設定。",
+    "模擬器的錯誤被算在 agent 頭上：§C.2.2 中，agent 把亮度同為 medium 的檯燈也列為「較不亮」的選項（這是 agent 的錯），但最後是模擬使用者自己挑了那一盞，而不是 ground truth 1569765161。§C.2.3 中，instruction 要求修正「所有訂單」的地址，模擬使用者在對話中卻只要求改「那張訂單」，ground truth 仍然要求兩張都改，作者把這歸為 agent 漏掉隱含動作。結果導向的獎勵分不出 agent 錯與模擬器錯，所以 §5.2 的失敗佔比混有模擬器造成的部分。",
+    "r_output 的子字串比對很脆弱：數字格式不同（例如 \"$54\" 或 \"54.0\"）就會漏判；回覆一次列出大量價格時，又可能碰巧命中。它也判斷不了資訊是否在正確的語境下傳達給使用者。",
+    "只有 0/1、沒有部分分數：需要多筆寫入的任務只要漏一筆就記 0（§C.2.3 的四筆 ground-truth 寫入做對了三筆，只漏改另一張訂單的地址，得分仍和完全沒做一樣）；§C.2.1 中 agent 遇到 API 錯誤後轉交真人客服，也和做錯動作一樣記 0。論文做了成本分析，卻沒有把成本、回合數或使用者滿意度納入分數。對 T8 的「部分分數／過程度量」與「多目標分數」兩個子領域，本文沒有提供任何東西，要另找 progress rate 類的工作來補。",
+    "結論有時效性，而且任務集沒有版本號：論文說替 FC agent 加 think 函式沒有幫助，並推測是當時的 FC 模型沒受過這類推理訓練；但 Anthropic 2025 年的工程部落格換了模型、也用了最佳化提示，在 τ-bench airline 上用 think 工具把 pass^1 從 0.370 提到 0.570。這是條件改變後結論翻轉，不是同條件下的反例，但說明本文關於方法效果的結論只對當時的模型成立。Claude 3.7 Sonnet 的發表頁也承認資料集後來做過小幅修正，並把步數上限從 30 放寬到 100。再加上本文自己在失敗分析中就修掉了 4 題標註錯誤，可見不同時間點、不同步數上限下的分數不能直接比較。",
+    "選題與模型同源的偏差：任務 instruction 是用 gpt-4-turbo FC agent 反覆調到「沒有歧義」，也是依 gpt-4-turbo 的成功率挑出問題題目；使用者模擬器又是 gpt-4-0613。GPT-4 系列在 Table 2 名列前茅，可能有一部分來自這種同源的篩選偏差。作者承認有偏差，但沒有量化，例如沒有改用其他模型族重新驗證任務。"
+  ],
+  "framework_role": "T8 的核心文獻。它把「任務成功」定義為終態比對（資料庫終態＋回覆中的必要資訊），而不是軌跡比對，並提出 pass^k 作為多次試驗的可靠性度量；兩者後來都成為 agent 任務成功判準與一致性度量的通用做法。它的評估環境本身也是 T6（instruction 對 agent 隱藏的 LM 使用者模擬器）→ T1（agent 從對話中推斷意圖）→ T7（自動評估）的完整實作；T4 軌跡只拿來做人工失敗分類，不參與計分。論文刻意排除 self-reflection，理由是真實 agent 只有一次服務使用者的機會，所以 T5 與 E2、E3、E5 在設計上就不存在。對 T8 的「部分分數／過程度量」與「多目標分數」兩個子領域貢獻有限：只做了成本分析，沒有部分分數。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "使用者模擬器（gpt-4-0613，溫度 1.0）持有對 agent 隱藏的 instruction（身分、意圖、偏好、個性），以多輪自然語言逐步揭露需求，也會拒絕提供某些資訊（例如不給 email）。這是 agent 取得目標的唯一來源：agent 必須從這些輸入推斷意圖、收集資訊與授權，再決定寫入動作。"
+    },
+    {
+      "edge": "E6",
+      "how": "模擬器輸出 ###STOP###（或達到 30 個動作上限）後，這一輪互動留下的最終資料庫狀態與 agent 對使用者的訊息被拿去計算獎勵 r_action × r_output；同一任務多次互動的結果再彙總成 pass^1、pass^k、pass@k。完整的互動軌跡另外交給人工做失敗分類（§5.2），並用來回頭修正有錯字或歧義的任務 instruction。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "Sierra（作者所屬公司）官方部落格在 2024-06-20 發表 τ-bench，表示計劃用它來編排、調整與微調自家的模型組合；這只是計劃，沒有說已經用在產品上。來源：https://sierra.ai/blog/benchmarking-ai-agents",
+      "Anthropic 官方的 Claude 3.7 Sonnet 發表頁用 TAU-bench 報告 agent 表現，並註明 airline 政策加了鼓勵使用 planning 工具的提示、步數上限從 30 放寬到 100，以及 Claude 3.5 Sonnet（new）的分數因資料集小幅修正而與當初公布的不同。來源：https://www.anthropic.com/news/claude-3-7-sonnet",
+      "Anthropic 工程部落格用 τ-bench 評估 think 工具，主指標就是 pass^k（報告 k=1 到 5）：airline 的 pass^1 從 0.370 提升到 0.570，retail 從 0.783 提升到 0.812。來源：https://www.anthropic.com/engineering/claude-think-tool"
+    ],
+    "assessment": "有可查證的業界採納：前沿模型廠商 Anthropic 在官方模型發表頁與工程部落格中，把 τ-bench 與 pass^k 當作 agent 能力的評估依據，等於把它用在發版評估上。Sierra 是作者自家公司，2024 年的部落格只說計劃使用。OpenAI 的發表頁因為打不開（HTTP 403），沒有列入。未見證據顯示 τ-bench 的判準本身被部署在客服產品的線上監控中。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/sierra-research/tau-bench",
+    "data": "公開：資料庫、API、政策、任務實例與資料生成程式碼都在 repo，論文附錄也附了部分範例與完整政策。重現時要注意使用者模擬器依賴付費 API（gpt-4-0613），這類模型可能被淘汰；而且任務集事後修改過，要固定 repo 版本。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它以終態比對定義任務成功、以 pass^k 定義多次試驗的可靠性，兩者都已成為 agent 評估的通用判準，也被前沿模型廠商用在發版評估上，是 T8「任務成功的判準」子領域的必讀。",
+  "related": [
+    "2107.03374",
+    "2309.15817",
+    "2307.13854",
+    "2308.03688",
+    "1810.00278",
+    "2104.00783",
+    "2210.03629",
+    "2303.11366"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

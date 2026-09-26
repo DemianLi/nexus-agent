@@ -1,0 +1,160 @@
+{
+  "id": "2306.00774",
+  "title": "In-Context Learning User Simulators for Task-Oriented Dialog Systems",
+  "topic": "T6",
+  "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "用 few-shot in-context learning 讓 LLM（GPT-3.5、FLAN-T5、LLaMA）扮演任務型對話的使用者，只給自然語言目標與兩段範例對話就能跟 ConvLab-2 的系統對話。在 MultiWOZ 2.1 上，它的目標達成率遠低於 agenda-based 模擬器，詞彙多樣性則較高；作者另外整理了 LLM 模擬器與系統互動時的錯誤類型。",
+  "problem": "任務型對話系統上線前要靠使用者模擬器來測試與評估。傳統做法有兩種：agenda-based 要人工寫規則，換領域就得重寫；資料驅動的神經模擬器要大量標註資料與訓練成本。LLM 有 few-shot 能力，作者想知道：不做任何微調，只靠提示詞加幾段範例，能不能得到一個可用、可跨領域、語言比規則式更多樣的模擬器？又會犯哪些錯？",
+  "core_idea": "把使用者模擬當成一個逐輪的文字接龍任務。提示詞依序放入任務描述、K 段「目標＋對話」範例，以及目標對話的目標與截至目前的歷史，結尾停在 CUSTOMER:，讓 LLM 生成下一句使用者語句。範例可以隨機挑，也可以依目標的領域與槽位集合的 Jaccard 相似度挑。評估時另外掛兩顆 BERT NLU，把雙方語句轉成對話行為（DA），用來追蹤目標是否達成。模擬器本身完全不需要結構化的使用者行為模型。",
+  "method": {
+    "問題設定（§4.1）": "目標對話 d_t 是一串 (使用者語句, 系統語句) 配對，共 N 輪。第 i 輪的使用者語句由三樣東西條件生成：K 個 (目標 g_k, 對話 d_k) 範例、目標對話的目標 g_t，以及 d_t 前 i−1 輪的歷史。系統被當成黑盒，每輪只回一句自然語言。",
+    "使用者目標（§3.2、§5）": "目標是一串 (intent, domain, slot, value) 四元組，例如 Inform 餐廳料理、Book 人數與日期。實驗用 ConvLab-2 內建的 goal generator 取樣目標，再用 ConvLab-2 的模板轉成自然語言的 REQUIREMENTS 段落（例如要找什麼樣的餐廳、找到後要拿電話與郵遞區號、要訂幾人幾點）。附錄比較過條列式與敘述式兩種寫法；Table 1 的主實驗提示詞與程式預設都是敘述式。",
+    "提示詞結構（Table 1、Appendix A.1.1）": "開頭是一段任務描述（default 版），要素有四：指定模型扮演 CUSTOMER，對方是 ASSISTANT；說明對話的內容是訂位或詢問資訊；要求依序滿足所有 REQUIREMENTS；要求精確、清楚、簡潔。完整原文在 repo 的 prompts/task_description_5.txt。接著是 K 段範例，每段的格式為「Example n:」、REQUIREMENTS 段落，再逐行列出 CUSTOMER／ASSISTANT 的語句。最後放目標對話的 REQUIREMENTS，後面接到目前為止的歷史，結尾停在「CUSTOMER:」。附錄另外測了四種任務描述：default＋domains（插入從範例目標取出的領域名稱）、extra personality（加入挑剔觀光客的人設，並指示系統聽不懂時要換句話重問）、minimal（只留一句角色指定）、none（完全不放）。",
+    "逐輪生成迴圈（§4.1、§4.3、Figure 1）": "第一輪由 LLM 依初始提示詞生成第一句使用者語句，送給系統。之後每一輪都把系統回覆與剛才的使用者語句接到提示詞尾端，再叫 LLM 生成下一句，直到對話結束。prompt builder 的輸入是歷史、g_t 與範例；LLM 的輸出經後處理，只留下使用者語句，再回傳給系統。",
+    "範例挑選（§4.2，式 2）": "有兩種策略。第一種是從 MultiWOZ 訓練集隨機取 K 段。第二種是 Jaccard sampling（JS），對每段候選對話算 J(g_k, g_t) = [|Dom_t ∩ Dom_k| / |Dom_t ∪ Dom_k|] × [|Slot_t ∩ Slot_k| / |Slot_t ∪ Slot_k|]，取最高的 K 段。公開程式碼（master）的做法：槽位用 domain__intent__slot 字串表示；先打亂候選再依相似度排序，所以同分時是隨機決定；湊不到 K 段就退回隨機抽。",
+    "輸出後處理（公開程式碼 master，論文只說會後處理）": "如果輸出含「CUSTOMER: 」，取其後的文字；遇到「ASSISTANT」就截斷；只保留第一行；超過 150 字元時，按句號累加到 150 字元為止。處理後長度不到 2 個字元就重新生成，超過 20 次仍失敗則回傳固定字串 \"I DONT KNOW\"。HF 模型用 sampling，max_length 設為輸入長度加 30。GPT-3.5 走 Azure ChatCompletion，整段提示詞放在單一 system message 裡；程式註解說拆成 user／assistant 角色反而讓模型混亂。",
+    "終止規則（公開程式碼 master 的 SimulatorPolicy）": "對話在以下任一條件成立時結束：(a) 依 DA 追蹤到的目標已完成（task_complete）；(b) 輪數超過上限（max_turn 40，time_step 每輪加 2，所以約 20 輪）；(c) 已有超過 4 個系統 DA，而且最後三個系統 DA 完全相同；(d) 使用者端 NLU 把 LLM 的語句判成 thank 或 bye。所以「使用者何時結束對話」是由 NLU 加規則決定的，LLM 本身不直接輸出結束訊號。",
+    "評估元件（§4.3 灰框）": "兩顆 ConvLab-2 的 BERT NLU：一顆把系統語句轉成 DA，一顆把 LLM 生成的使用者語句轉成 DA，再以這些 DA 更新目標狀態並計算 goal fulfillment 指標。作者強調這個元件不是生成語句所必需。",
+    "受測對話系統（§5.5）": "ConvLab-2 中表現最好的 pipeline：微調過的 BERT NLU（intent 與 slot）、rule-based DST、rule-based policy、template NLG。",
+    "LLM 與超參數（§5.5、§5.6）": "GPT-3.5 Turbo（Azure，版本 0301）、FLAN-T5 3B（flan-t5-xl）、LLaMA 7B。主實驗用 Table 1 的提示詞與 2 個範例。temperature：LLaMA 0.8、GPT-3.5 1、FLAN-T5 0.9；超參數以 Succ Rate 挑選。每組設定跑 200 段帶 seed 的對話後取平均（公開程式碼的預設 seed 為 20200202），分 JS 與隨機兩種挑法。硬體是一張 RTX A6000，48GB RAM。",
+    "提示工程實驗（Appendix A）": "只用 FLAN-T5，temperature 0.8，每組 200 段對話。一次只變動一個維度，沒有做完整的 grid search。變動的維度有三個：範例數 0 到 6、五種任務描述、REQUIREMENTS 用條列式或敘述式。記錄 Succ Rate 與 MSTTR。",
+    "基準線（§5.5）": "ConvLab-2 的 agenda-based 模擬器（Schatzmann et al. 2007），有兩個版本：ABUS-T 用模板 NLG，ABUS-D 用資料驅動的 SC-LSTM NLG（Wen et al. 2015）。作者也嘗試過 ConvLab-3 裡的 GenTUS 與 Cheng et al. 2022 的模擬器，但重現不出原作者宣稱的結果，所以沒有放進比較。"
+  },
+  "assumptions": [
+    "LLM 讀完自然語言的 REQUIREMENTS 與少量範例，就能在多輪中持續追蹤並逐項提出目標；不需要顯式的 agenda 或目標狀態。",
+    "系統端與使用者端的 BERT NLU 夠準，能把 LLM 的語句正確轉成 DA，goal fulfillment 指標才算數；作者自己也承認 NLU 是混淆因素。",
+    "詞彙多樣性越高，對測試系統（尤其 NLU）越有用；多樣性被當成品質的代理指標。",
+    "LLM 預訓練時沒有大量看過 MultiWOZ 或相近資料（作者承認無法確認）。",
+    "ConvLab-2 的 goal generator 與 MultiWOZ 2.1 足以代表真實使用者的目標分布。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MultiWOZ 2.1（ConvLab-2 版本，10,433 段、7 個領域）：範例對話與目標模板的來源",
+      "ConvLab-2 的互動式評估：LLM 模擬器與 BERT NLU＋rule DST＋rule policy＋template NLG 系統對話，每組設定 200 段"
+    ],
+    "metrics": [
+      "Goal fulfillment：Succ Rate（book 與 inform 槽位全部相符才算 1）、Compl Rate（所有 book 槽位都有填，不論值對不對）、Book Rate（book 槽位值相符的比例）、Inform Precision／Recall／F1、DT（每段對話輪數）與 Succ DT（成功對話的輪數）、Avg Time（跑 200 段所需分鐘數）",
+      "Lexical diversity：UUtt 數與平均長度、unique uni／bi／tri-gram 數、Shannon Entropy（SE）、Conditional bigram Entropy（CE）、MSTTR（50 字一段）、MTLD、HDD（42 字樣本）",
+      "人類 LD 基準：從訓練集取 200 段對話的使用者語句，重複抽樣 1,000 次後取平均",
+      "人工錯誤分析：質性檢視，沒有給出比例"
+    ],
+    "baselines": [
+      "ABUS-T：agenda-based＋模板 NLG（ConvLab-2）",
+      "ABUS-D：agenda-based＋SC-LSTM 資料驅動 NLG（ConvLab-2）",
+      "LLM 之間互相比較（GPT-3.5、FLAN-T5 3B、LLaMA 7B），以及 JS 與隨機挑範例的對照",
+      "沒有與任何神經使用者模擬器（TUS、GenTUS 等）做量化比較"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "目標達成指標上，agenda-based 模擬器全面勝過 LLM 模擬器；LLM 裡 GPT-3.5 最好，FLAN-T5 次之，LLaMA 最差。LLM 模擬器也慢得多。",
+      "numbers": "Succ Rate：ABUS-T 0.83、ABUS-D 0.60、GPT-3.5 0.29（JS）／0.30（隨機）、FLAN-T5 0.13／0.15、LLaMA 0.07／0.04。Compl Rate：ABUS-T 0.93、GPT-3.5 0.44／0.41。Inform F1：ABUS-T 0.86、GPT-3.5 0.63／0.65。跑 200 段所需時間：ABUS-T 10 分、ABUS-D 20 分、FLAN-T5 60 分、LLaMA 80 分、GPT-3.5 120 分（受 Azure 負載影響）。",
+      "section": "§6.1、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "作者認為 JS 挑範例對小模型（LLaMA、FLAN-T5）比較有幫助。但表中數字有混有漲，並非一致改善。",
+      "numbers": "LLaMA JS／隨機：Succ 0.07／0.04、Compl 0.05／0.04、Inform F1 0.27／0.21。FLAN-T5 JS／隨機：Compl 0.14／0.12、Book 0.32／0.28、Inform F1 0.36／0.34，但 Succ 0.13／0.15（隨機反而較高）。GPT-3.5 JS／隨機：Succ 0.29／0.30、Inform F1 0.63／0.65。",
+      "section": "§6.1、Table 2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "LLM 模擬器的詞彙多樣性高於 agenda-based 模擬器，接近訓練集中的人類語句；ABUS-D 的多樣性極低。",
+      "numbers": "GPT-3.5（JS／隨機）對 ABUS-T：SE 7.3 對 6.9、CE 2.8 對 2.5、HDD 0.78 對 0.75、MTLD 47.4／48.3 對 46.9；但 MSTTR 是 0.70 對 0.72，ABUS-T 較高。unique unigram：GPT-3.5 876／871、ABUS-T 527、ABUS-D 327、訓練集 919。trigram：GPT-3.5 6,970／6,985、ABUS-T 3,867、訓練集 7,678。訓練集 SE 7.3、HDD 0.78、MTLD 61.0。ABUS-D 的 CE 1.2、MTLD 28.0。平均語句長度：GPT-3.5 16.7／16.4、ABUS-T 17.4、訓練集 12.6。",
+      "section": "§6.2、Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "FLAN-T5 的 temperature 越高，詞彙多樣性越高。JS 在多樣性上不比隨機挑範例好。",
+      "numbers": "FLAN-T5（JS），T=0.7→0.8→0.9：unique unigram 755→897→994、SE 7.0→7.2→7.4、CE 2.4→2.7→3.0、MTLD 36.6→40.0→44.8。相同 T 下 JS 對隨機的 MTLD：36.6 對 37.6（T=0.7）、44.8 對 45.5（T=0.9）。",
+      "section": "§6.2、Table 3",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "系統端 NLU 常聽不懂 LLM 使用者的正常說法，例如問價格、要求立刻訂位、要電話號碼，於是輸出空的 DA 清單。系統收到空 DA 會回 bye，LLM 模擬器常因此以為對話已結束，在目標完成前就收掉對話。",
+      "numbers": "沒有給出定量比例，只用 Appendix B 的案例（Table 9 等）呈現。",
+      "section": "§6.3（System NLU misclassifications）",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "使用者端的失敗有幾種類型：對話中斷後就放棄（FLAN-T5）、漏提某項要求（GPT-3.5 沒問價位）、重複同一句話（LLaMA）、反過來扮演 ASSISTANT 並挪用範例裡的槽位資訊（FLAN-T5）、生成與目標衝突的幻覺（FLAN-T5 無故表示不要中式料理）。GPT-3.5 最堅持追完目標，對話也最自然。",
+      "numbers": "只有質性案例：Appendix B 的 Table 5（放棄）、Table 6（漏提要求）、Table 7（GPT-3.5 堅持追問）、Table 8（重複）、Table 9–10（角色錯置）、Table 11（幻覺）。",
+      "section": "§6.3、Appendix B",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "在任務描述裡加上人設與「聽不懂就換句話重問」的指示，對 FLAN-T5 有幫助，0-shot 時最明顯。minimal 描述的成功率最低，多樣性卻最高。條列式 REQUIREMENTS 沒有明顯效果。",
+      "numbers": "FLAN-T5、T=0.8、200 段，Succ（括號內為 MSTTR）：0-shot 時 default 0.08（0.68）對 extra personality 0.15（0.65）；1-shot 0.10 對 0.12。但 2-shot 時 0.12 對 0.11、3-shot 時 0.14 對 0.13，extra personality 反而較低。minimal 描述在 0-shot 為 0.01（0.71）。條列式對敘述式：1-shot 0.08 對 0.10、2-shot 0.11 對 0.12、3-shot 0.12 對 0.14。",
+      "section": "Appendix A.2、Table 4",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "範例數增加能提高成功率，但到某個數量後就持平，甚至下降。作者推測是提示詞太長，超出模型的輸入容量。",
+      "numbers": "FLAN-T5、default 描述，0 到 6 個範例的 Succ：0.08、0.10、0.12、0.14、0.13、0.12、0.11，3 個範例時最高。",
+      "section": "Appendix A.2、Table 4",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "GPT-3.5 不開源，影響實驗的可重現性。",
+    "LLM 的預訓練與微調資料不透明，無法確認模型是否看過 MultiWOZ 2.1 或相近的資料。",
+    "只在 MultiWOZ 上評估，不一定能推廣到特定領域或低資源語言。",
+    "LLM 會產生幻覺，提示詞驅動的方法可能產生難以預測、甚至不當的回應，部署時要小心。",
+    "goal fulfillment 指標量的不是模擬器本身，而是模擬器與系統之間溝通的成效；系統 NLU 並不完美，是混淆因素。任一元件誤導另一方，指標就會失真。對話完成率與成功率本身也因為過嚴、夾帶啟發式而受到批評，要謹慎解讀。",
+    "模擬器對提示詞高度敏感，小改動就會讓結果改變。",
+    "提示工程實驗是在 temperature 0.8 下跑的，所以數字與主表（FLAN-T5 用 0.9）對不上。",
+    "LLM 的訓練資料偏重模仿助理行為，而不是使用者行為，這被認為是模擬器會反過來扮演助理的原因。",
+    "ConvLab-3 裡的 GenTUS 與 Cheng et al. 2022 的模擬器重現不出原作者宣稱的結果，所以沒有納入比較。"
+  ],
+  "limitations_observed": [
+    "量到的其實是整組 harness，不只是 LLM。依公開程式碼（master）的 SimulatorPolicy，對話何時結束由使用者端 BERT NLU 判到 thank／bye、目標完成、約 20 輪上限、系統連三次同一個 DA 這幾條規則決定。§6.3 說 LLM 被系統的 bye 騙到而提早結束，但這條因果鏈中間還夾著一顆 NLU：LLM 只要說出含感謝的句子，就可能被判成結束。所以 Compl 與 Succ 量的是整組 harness：LLM、模擬器端兩顆 BERT NLU、系統端 NLU，再加上終止規則。作者沒有做任何拆解，例如換成人工標註的 DA、或量 NLU 在 LLM 語句上的準確率，所以分不出失敗有多少來自模擬器、多少來自 NLU。",
+    "與 ABUS 的比較在結構上不對稱。§5.5 寫明只有 prompt-based 模型要用 BERT NLU 把自己的語句轉回 DA。公開程式碼（master）也確認這一點：ABUS 的使用者 agent 是 sys 模式 NLU、agenda（RulePolicy usr）、NLG 三段，自己的 DA 直接來自 agenda；LLM 模擬器則另外掛一顆 all 模式的 BERT NLU 解析自己說的話，再拿結果更新目標狀態並判斷是否結束。所以在目標追蹤與終止判斷上，LLM 這條路比 ABUS 多一顆會出錯的 NLU，兩者的 Succ 不是在同一把尺上量的。另一個證據是：同一個 agenda policy 只把表層 NLG 從模板換成 SC-LSTM（ABUS-D），Succ 就從 0.83 掉到 0.60。這表示這個 harness 對語句的表層寫法高度敏感，0.83 對 0.29 的落差不能全算成模擬器「目標達成能力」的差距。",
+    "超參數選擇與評估沒有分開，也沒有變異數。temperature 等超參數以 Succ Rate 挑選，又用同一批 200 段帶 seed 的對話報告結果，沒有保留驗證集，也沒有信賴區間或多 seed。JS 對隨機的 0.29 對 0.30，差距約 2 段對話，落在雜訊範圍內。附錄說 extra personality「顯著」改善，實際只有 0-shot 的 0.15 對 0.08（約 30 對 16 段），沒有做任何統計檢定；到 2-shot 與 3-shot，extra personality 反而較低（0.11 對 0.12、0.13 對 0.14）。主實驗最後用的也是 default 描述，不是 extra personality。",
+    "內文與表格有三處對不上。(a) §6.1 說 JS 對小模型較有益，但 FLAN-T5 在作者自己用來挑超參數的 Succ Rate 上，JS 0.13 低於隨機 0.15。(b) §6.2 說 GPT-3.5 的 SE 與 HDD 超過訓練集，但以 Table 3 的有效位數來看，兩者相等（7.3 對 7.3、0.78 對 0.78）；論文可能是依四捨五入前的值下結論，但沒有給出來。(c) §6.3 說依 Table 2，目標完成前就終止的對話不到 45%；但 Table 2 的 Compl Rate 最高只有 0.44，代表至少 56% 的對話沒把 book 槽位填完，方向正好相反。",
+    "詞彙多樣性不等於逼真度。LD 指標只數詞彙的變化，不管語句是否守住角色與目標，所以離題、角色錯置、幻覺的文字一樣會把分數推高。附錄就有這類案例：FLAN-T5 反過來扮演助理並挪用範例資訊（Table 9–10），LLaMA 則一直重複同一句（Table 8）。在表上，FLAN-T5 在 T=0.9 時 unique unigram 994、SE 7.4，都高於訓練集的 919、7.3，但它在 Table 2 的 Succ 只有 0.13；多樣性最高的設定，並不是最會完成任務的使用者。論文沒有量任何分布相似度，例如使用者 DA 分布或語句層級與人類的差距，也沒有人工評分；說 GPT-3.5 最自然，只是非正式的人工檢視，沒有流程也沒有數字。所以「語言多樣、適合測試系統」這個結論不能當成逼真度證據。",
+    "三個後端的生成長度上限不同，會混進 LD 比較。依公開程式碼（master），HF 模型的 max_length 是輸入長度加 30：對 decoder-only 的 LLaMA，這等於新生成最多 30 個 token；對 encoder-decoder 的 FLAN-T5，max_length 算的是 decoder 長度，等於沒有上限；GPT-3.5 的呼叫沒有設 max_tokens。三者共同的限制只有 150 字元的截斷。Table 3 的平均語句長度（LLaMA 11.0 最短）與 n-gram 數，有一部分反映的是這些上限。此外，Azure 呼叫沒有把 temperature 傳進去，GPT-3.5 的「temperature 1」其實只是 API 預設值，「依 Succ Rate 挑超參數」對它的 temperature 並不成立。",
+    "外推範圍很窄。只測了一個受測系統，而且是 rule-based policy 加 template NLG 的 pipeline。沒有驗證 LLM 模擬器排出的多個系統名次，是否與真人或 ABUS 一致，所以「適合拿來評估系統」這個用途沒有被實際檢驗。模擬器在任務型對話裡的經典用途是當 RL 的訓練對手，本文完全沒有做訓練實驗；以 GPT-3.5 跑 200 段要 120 分鐘（ABUS-T 的 12 倍），用在 RL 的規模上成本也沒有討論。",
+    "論文與公開程式碼有些細節不一致，重現時要注意。程式碼在每段範例的 REQUIREMENTS 後面多了 CONVERSATION: 標記，但 Table 1 沒有；程式預設的 temperature 是 0.8，論文的 FLAN-T5 用 0.9；repo 在論文上線隔天（2023-06-02）最後一次 push，無法確認就是產生 Table 2 與 Table 3 的版本。"
+  ],
+  "framework_role": "屬於 T6，是較早的 LLM 使用者模擬器基準之一（2023 年 6 月）。它的設計可以直接當成 T6 模擬器的最小骨架：自然語言目標、few-shot 範例、逐輪歷史，外加 NLU 追蹤目標與規則式終止。它對本框架最有用的貢獻是兩份失敗清單：模擬器端有放棄、漏提要求、重複、角色錯置、與目標衝突的幻覺；系統端則有 NLU 聽不懂正常說法而回 bye。這提醒我們，T6 的輸出要先做模擬器端的一致性檢查，才能把失敗歸給受測 agent。它也示範了互動紀錄怎麼轉成 T8 式的任務完成指標（Succ、Compl、Book、Inform），同時暴露這類指標會被 NLU 混淆的問題。但它沒有逼真度驗證，也沒有訓練用實驗，所以不能拿來證明 LLM 模擬器可以取代真人或規則式模擬器。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "LLM 模擬器依 goal generator 取樣的目標（轉成自然語言的 REQUIREMENTS）生成使用者語句，直接送進受測系統的 BERT NLU（intent 與 slot 辨識）。§6.3 顯示，這條輸入流能暴露系統意圖辨識的盲點：問價格、要電話、「現在就訂」這類正常說法被判成空 DA，系統就回 bye。所以模擬器在這裡同時是外部輸入源，也是 T1 的壓力測試。"
+    },
+    {
+      "edge": "E6",
+      "how": "互動紀錄是所有評估的來源。評估元件用系統端與使用者端兩顆 NLU，把每一輪語句轉成 DA，更新目標狀態後算出 Succ、Compl、Book、Inform、DT。LD 指標直接從生成的使用者語句計算。作者再人工檢視這些對話紀錄，歸納出模擬器端與系統端的錯誤類型（§6.3、Appendix B）。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。作者單位是 Telepathy Labs，但論文沒有提到任何部署或產品使用。公開 repo（github.com/telepathylabsai/prompt-based-user-simulator，Apache-2.0，ConvLab-2 的 fork，最後一次 push 在 2023-06-02，約 29 stars）是研究程式碼，不算採納。本次工作階段的 WebSearch 額度已用完（200／200），無法另外查證產品或官方文件，這是工具限制，不代表查過後確認沒有。Semantic Scholar 記錄 27 次引用、1 次 influential citation，屬於學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/telepathylabsai/prompt-based-user-simulator",
+    "data": "MultiWOZ 2.1 是公開資料，透過 ConvLab-2 取得；repo 附有 train_corrected.json.zip，需要自行解壓。GPT-3.5 用的是 Azure 上的 gpt-35-turbo 0301 快照，屬於封閉 API 的特定版本，無法保證日後還能取得。程式碼預設的 LLaMA 權重是第三方轉檔的 HF repo ID（decapoda-research/llama-7b-hf），不是官方發佈。產生論文表格用的 200 段對話紀錄，沒有看到公開。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它是早期開源的 in-context LLM 使用者模擬器基準，附有一份實用的失敗類型清單，對 T6 有參考價值。但評估很薄：單一系統、200 段對話、沒有逼真度或人工評估、沒有訓練用實驗，內文與表格還有多處不一致；S2 只有 27 次引用、1 次 influential，所以不到必讀。",
+  "related": [
+    "2210.04185",
+    "2208.10817",
+    "2106.08838",
+    "2210.14529",
+    "2210.08692",
+    "1805.06966",
+    "2002.04793",
+    "2211.17148",
+    "2106.05555",
+    "2304.07944",
+    "1907.01669"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

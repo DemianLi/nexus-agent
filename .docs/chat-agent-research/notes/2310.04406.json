@@ -1,0 +1,179 @@
+{
+  "id": "2310.04406",
+  "title": "Language Agent Tree Search Unifies Reasoning Acting and Planning in Language Models",
+  "topic": "T5",
+  "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 LATS：把 ReAct 式 agent 包進蒙地卡羅樹搜尋（MCTS），同一個 LLM 兼任動作產生器、看過環境回饋後才打分的狀態評分器，以及失敗後的口語反思器，靠「回退到先前狀態改走別的分支」加上反思記憶修正錯誤；在 HotPotQA、HumanEval／MBPP、WebShop、Game of 24 上超過 ReAct、Reflexion、ToT、RAP（HumanEval GPT-4 pass@1 92.7），但三個決策任務的終局回饋都帶有標準答案等級的訊號。",
+  "problem": "既有的 LLM agent 方法各缺一塊：CoT／ReAct 一次自迴歸走到底，走錯一步只能順著錯下去，不會考慮替代分支；Reflexion、Self-Refine 只精修單一條軌跡；ToT、RAP 雖然會搜尋多條推理鏈，卻只靠模型內部知識、吃不到環境的外部觀測，RAP 還得讓 LLM 充當世界模型去預測狀態。作者要的是一個不需訓練、同時具備推理、行動與規劃，並能把外部回饋與「從失敗學習」納入搜尋啟發式的通用框架。這對 agent 很重要，因為多步決策中早期錯誤會一路累積，而且 2310.01798 指出 LLM 沒有外部回饋時難以自我修正。",
+  "core_idea": "關鍵觀察是：多數 LLM 任務可以「回到任何先前狀態」，只要把當時的歷史文字重新貼回 context 即可，所以不需要學出世界模型就能跑 MCTS。LATS 把 ReAct 的思考＋動作空間展開成一棵樹：節點是（原始輸入、動作序列、觀測序列），每次擴展取樣 n 個候選動作並實際送進環境拿觀測；用 LLM 在看過觀測後給的 1–10 分再加上 self-consistency 分數當價值函數；走到終局時用環境給的客觀 reward 反向傳播；失敗時讓 LLM 寫口語反思，連同失敗軌跡存進記憶，當作之後 agent 與價值函數兩邊的額外 context。修正的主力因此有兩層：搜尋層的「回溯改走兄弟分支」，以及語意層的「反思寫回 context」。",
+  "method": {
+    "輸入輸出": "輸入：自然語言任務 x、預訓練 LM p_θ（論文用 GPT-3.5、GPT-4；官方程式碼用 gpt-3.5-turbo）、可執行動作並回傳觀測的環境、終局 reward 判定。輸出：一條軌跡／最終答案（程式任務為一份完整函式）。",
+    "樹與節點": "節點 s = [x, a_1..i, o_1..i]，記錄造訪次數 N(s)、價值 V(s)、子節點、是否終局、終局 reward、反思文字；整棵樹存在外部記憶。回到某狀態的做法是把該節點的歷史文字重新組成提示，不需要環境真的支援 undo（但 WebShop 等環境要能重放或另開實例）。",
+    "主迴圈（Algorithm 1、§4.2）": [
+      "1. Selection：從根節點往下，每層挑 UCT 最大的子節點直到葉節點；UCT(s) = V(s) + w·sqrt(ln N(parent) / N(s))，論文設 w = 1。",
+      "2. Expansion：在選中的節點用 p_θ 取樣 n 個動作（預設 n = 5），逐一送進環境拿觀測，得到 n 個新子節點。官方程式碼以 temperature 1.0 取樣，並把思考＋動作完全相同的候選去重。",
+      "3. Evaluation：對每個新子節點算 V(s) = λ·LM(s) + (1−λ)·SC(s)。LM(s)：把問題、到此為止的軌跡（含最新觀測）、過去的失敗軌跡與反思一起丟給 p_θ，要求分析正確性、特別看最新一步，未完成的軌跡只要目前為止正確就可以高分，最後一行以固定句式「Thus the correctness score is s」給 1–10 的整數，換算成 0.1–1.0。SC(s)：同一狀態下被重複取樣到的動作視為較可信（論文沒有給精確公式）。λ：HotPotQA 與 Game of 24 用 0.5，程式與 WebShop 用 0.8；λ = 1 等於拿掉 SC。",
+      "4. Simulation：從價值最高的子節點繼續往下，每層同樣取樣並評分、挑最高分者，直到終局。終局由環境決定成敗（例如 WebShop 按下 Buy）；若成功就結束整個搜尋。",
+      "5. Backpropagation：沿著根到終局的路徑，N 加 1，V 以累積平均更新為 (V_old·(N−1) + r) / N，r 為終局 reward。",
+      "6. Reflection：終局失敗時，把軌跡與最終 reward 交給 p_θ，寫一段口語反思，診斷錯在哪、提出新的高階計畫；失敗軌跡與反思一起存入記憶，之後每次擴展（agent 提示）與評分（價值提示）都附上它們。官方 HotPotQA 程式碼只對前 3 條不重複的失敗軌跡產生反思。",
+      "7. 停止：任務成功或用完 k 條軌跡的預算。程式任務在搜尋結束後挑價值最高的解，拿隱藏測試算 pass@1。"
+    ],
+    "HotPotQA 設定": "動作空間沿用 ReAct 的 Wikipedia API：search[entity] 回傳條目前 5 句或 5 個相似條目，lookup[string] 回傳頁面中下一個含該字串的句子，finish[answer] 作答。隨機抽 100 題、每個方法 3 則 few-shot；n = 5、k = 50；最大深度正文附錄 C 寫 7、附錄 D.1 寫 6。採 oracle 設定：作答後環境直接告知對錯（與 ReAct、Reflexion 相同）。另做兩個變體：LATS(CoT) 拿掉動作與觀測、純內部推理；LATS(CoT + ReAct) 先用 CoT 提示，失敗後才切換成 ReAct 提示去檢索。",
+    "程式設定（HumanEval、MBPP）": "每個動作是一份完整解答，所以跳過 simulation，直接以「自產測試的過關比例」當反向傳播的 reward。依 CodeT 的做法先讓 LLM 產生語法合法的 assert 測試（測試產生提示只要求寫出獨特、多樣、直觀的單元測試）；觀測＝過關與失敗的測試＋編譯器輸出。k = 8 次迭代、n = 5；§5.2 寫產生 4 條測試，附錄 D.2 又寫 GPT-3.5 用 6 條、GPT-4 用 4 條；最大深度 8。反思提示：看實作與測試結果，用幾句話解釋為什麼錯，不要寫實作。改寫提示：給前一版實作、單元測試結果與反思，要求重寫完整函式（含簽名）。HumanEval 用全部 164 題（有 3 題無範例測試由作者補寫），MBPP 隨機抽 397 題。",
+    "WebShop 設定": "1.18M 商品、12k 條人寫購物指令的模擬電商；動作為 search[query] 與 click[按鈕]（回搜尋、上下頁、商品、選項、描述、Buy），共 4 種頁面。評 50 條指令；n = 5、k = 30（ReAct best-of-k、Reflexion 也用 k = 30）；最大深度 15。指標：Score = 100 × 平均 reward（商品屬性與選項符合比例），SR = reward 為 1 的比例。價值提示：以「買到完全符合規格的商品＝1.0」為目標分析軌跡並給 1–10 分；反思提示：說明失敗可能原因並給出簡潔的新高階計畫。",
+    "Game of 24 設定": "以 CoT 為基底提示、操作相同；50 題、k = 30、n = 5、最大深度 5、λ = 0.5。",
+    "關鍵超參數": "n（每次擴展的子節點數，預設 5；HotPotQA 另測 3、10）、k（軌跡預算：HotPotQA 50、WebShop 與 Game of 24 30、程式 8）、w（探索權重 1；另測 0.5、2.0）、λ（0.5 或 0.8）、最大深度 d（HotPotQA 7 或 6、程式 8、WebShop 15、Game of 24 5）。",
+    "官方程式碼與論文的落差（重做前要知道）": "repo（github.com/andyz245/LanguageAgentTreeSearch，原 lapisrocks 路徑轉址過去，MIT）的 hotpot/lats.sh 用 iterations 30、temperature 1.0，不是論文的 k = 50；programming/run_lats_gpt4.sh 用 max_iters 8、number_of_tests 2，run_lats_gpt3.sh 用 max_iters 4、expansion_factor 3、number_of_tests 4；HotPotQA 的 UCT 寫成 value/visits + sqrt(2·ln N_parent / N)，等於 w = √2；價值分數的解析（hotpot/hotpotqa.py、webshop/webshop.py 的 value_outputs_unwrap）是在整段模型輸出裡依序找子字串 10、9、8…；以關鍵字搜尋 hotpot、webshop、programming 的主要檔案，找不到 Eq. 2 的 SC 項或 λ，重複的候選反而被去重或給 0 分；repo 沒有 Game of 24 的程式碼。"
+  },
+  "assumptions": [
+    "環境可以回退或重放：能把任意歷史狀態的文字重新餵回模型，並對同一任務實例反覆嘗試多次（最多 k 條軌跡）。",
+    "終局有可靠、客觀的成敗訊號可用來反向傳播與決定何時停止；主要實驗裡這個訊號是 oracle 等級（HotPotQA 直接告知答案對錯、WebShop 用評分函數本身、程式用測試）。",
+    "LLM 看過環境觀測後給的 1–10 分與真實進度正相關，足以當無需訓練的價值函數。",
+    "同一狀態下重複被取樣到的動作較可能正確（self-consistency 啟發式）。",
+    "推論成本（每條軌跡 n 次取樣、每個節點一次評分、每次失敗一次反思）可以接受，查詢環境本身便宜。",
+    "失敗後寫出的口語反思對後續的動作與評分有幫助，而且放得進 context。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "HotPotQA（隨機 100 題、oracle 設定；分推理版與行動版）",
+      "HumanEval（全部 164 題；GPT-3.5、GPT-4）",
+      "MBPP（隨機 397 題；GPT-3.5）",
+      "WebShop（50 條指令；GPT-3.5）",
+      "Game of 24（50 題；GPT-3.5）"
+    ],
+    "metrics": [
+      "exact match（HotPotQA）",
+      "pass@1（HumanEval、MBPP）",
+      "Score（100 × 平均 reward）與 success rate（WebShop）",
+      "success rate（Game of 24）",
+      "漸進取樣複雜度、成功時平均展開節點數、成功時的 token 消耗（Table 9、10）"
+    ],
+    "baselines": [
+      "Base LM、CoT、CoT-SC、ToT（DFS）、RAP、RAP（n = 10）（純推理）",
+      "ReAct、ReAct best-of-k、Reflexion（行動類）",
+      "ToT(ReAct)、RAP(ReAct)：作者自己把 ToT 與 RAP 接上 ReAct 提示的簡單版本",
+      "WebShop 的 IL、IL+RL（取自 WebShop 論文）、Fine-tuning（Furuta et al. 2024）、人類 Expert",
+      "HumanEval GPT-4 的 Base LM 80.1 與 Reflexion 91.0（與 Reflexion 論文 Table 1 數字相同）",
+      "消融：拿掉 LM 評分、改用 DFS、拿掉反思、n ∈ {3, 5, 10}、w ∈ {0.5, 1, 2}、d ∈ {4, 7}、λ ∈ {0.5, 1}"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "程式任務上 LATS 在兩個資料集、兩種模型都最高，GPT-4 在 HumanEval 取得當時最佳。",
+      "numbers": "HumanEval GPT-4：LATS 92.7 vs Reflexion 91.0 vs Base 80.1；HumanEval GPT-3.5：LATS 83.8 vs Reflexion 68.1、RAP 63.1、ReAct 56.9、ToT 54.4、CoT 46.9；MBPP GPT-3.5：LATS 81.1 vs RAP 71.4、Reflexion 70.0、ReAct 67.0、ToT 65.8、CoT 54.9。",
+      "section": "Abstract、§5.2、Table 4、Table 5",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "WebShop 上 LATS 的平均分數超過其他提示法與 IL／RL 訓練法，作者稱與梯度微調相當；但成功率仍低於微調。",
+      "numbers": "Score／SR：LATS 75.9／38.0；Reflexion 64.2／35.0；ReAct best-of-k 59.1／32.0；ReAct 53.8／28.0；IL 59.9／29.1；IL+RL 62.4／28.7；Fine-tuning 67.5／45.0；Expert 82.1／59.6。",
+      "section": "Abstract、§5.3、Table 6",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "HotPotQA 行動版上 LATS 大幅超過 ReAct 與 Reflexion，而直接把 ToT、RAP 接上 ReAct 反而比它們的純推理版差；先 CoT 失敗再改用 ReAct 檢索的組合最好。",
+      "numbers": "EM：ReAct 0.32、ReAct best-of-k 0.38、Reflexion 0.51、ToT(ReAct) 0.39、RAP(ReAct) 0.54、LATS(ReAct) 0.63（n = 3 為 0.58、n = 10 為 0.65）、LATS(CoT + ReAct) 0.71；純推理版：CoT 0.34、CoT-SC 0.38、ToT 0.55、RAP 0.60、LATS(CoT) 0.62。",
+      "section": "§5.1、Table 2、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "在有搜尋的前提下，口語反思的邊際貢獻很小：拿掉反思只掉 0.05，遠小於 Reflexion 相對 ReAct 的 0.19，作者解讀為反思能救的題目與搜尋能救的題目大幅重疊。",
+      "numbers": "HotPotQA EM：LATS 0.63 → 無反思 0.58；Reflexion 0.51 vs ReAct 0.32。",
+      "section": "§5.4、Table 8",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "在 WebShop 這種複雜環境，反思常流於空泛、沒有提供有用回饋，agent 容易卡在局部極小；同樣 30 次嘗試，Reflexion 與重抽的 ReAct 差距有限，LATS 的提升主要來自較有效的探索。",
+      "numbers": "k = 30：ReAct best-of-k 59.1／32.0 vs Reflexion 64.2／35.0 vs LATS 75.9／38.0（Score／SR）。",
+      "section": "§5.3、Table 6",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "LM 評分是價值函數的主體，拿掉後只剩稀疏的二元終局 reward，效能崩掉；把 MCTS 換成 ToT 式 DFS 加剪枝也大幅下降。",
+      "numbers": "HotPotQA EM：LATS 0.63；無 LM 評分 0.37（−0.26）；DFS 0.42（−0.21）；w = 0.5 為 0.55、w = 2.0 為 0.63；d = 4 為 0.58。",
+      "section": "§5.4、Table 8、Appendix C、Table 11",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "純推理的 Game of 24 上 LATS 也勝過專為推理設計的方法，作者歸功於價值函數裡的 self-consistency 項。",
+      "numbers": "成功率：LATS(CoT) 0.44、RAP 0.40、ToT 0.20、Reflexion 0.12、CoT 0.08；λ = 1（去掉 SC）為 0.40。",
+      "section": "§5.4、Table 7、Appendix D.4、Table 13",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "LATS 與 ToT、RAP 的漸進取樣複雜度同為 O(kn)，但成功時展開的節點與 token 較少；作者說計入失敗軌跡後差距會更大。",
+      "numbers": "成功時 token：LATS 173,290、RAP 176,500、ToT 210,215（n = 5、k = 50）；成功時平均節點數（k = 50）：LATS 66.65、RAP 70.60、ToT 84.05；LATS（n = 1、k = 50）0.48 vs ReAct best-of-250 0.42、CoT-SC（k = 250）0.40。",
+      "section": "§5.4、Table 9、Table 10",
+      "anchor_idx": 6
+    }
+  ],
+  "limitations_stated": [
+    "計算成本高於 ReAct、Reflexion 等簡單提示法；作者建議只用在程式這類困難任務或效能優先的情境，並以 n 當效能與成本的旋鈕（n = 1 時成本約等於多次 ReAct 或 CoT-SC）。",
+    "假設決策環境可以回退到先前狀態，並非所有環境都成立；作者主張程式、網頁搜尋、ALFWorld、ToolBench 等許多實際應用可以回退。",
+    "使用的 benchmark 相對簡單、以決策為主，比真實互動環境單純；有些環境不容易回滾。",
+    "查詢環境本身有少量成本（作者認為在所用環境中可忽略，且比 RAP 那樣用 LLM 當世界模型便宜）。",
+    "WebShop 上產生的反思常常很籠統，沒有提供有用回饋，agent 容易陷入局部極小。",
+    "探索權重的最佳值依環境與狀態空間而定；深度加大容易把 agent 推進局部極小、很少提升成功率。",
+    "影響聲明：提升自主決策能力可能被濫用，強化 agent 也帶來執行惡意程式等安全風險。"
+  ],
+  "limitations_observed": [
+    "三個決策任務的終局訊號都等同評分標準本身，數字其實是「用 oracle 決定何時停止的 best-of-k」。HotPotQA 作者自己承認作答即告知對錯，而且答對就停，所以 0.63 是「50 條軌跡內有任一條答對」。WebShop 的官方 run.py 把 lats_search 回傳的 best reward 取平均，lats_search 回傳的是所有已探索節點中環境 reward 最高者，環境觀測裡還直接顯示分數文字；因此 Score 75.9 是最多 30 次購買裡的最佳評分，卻拿去和單次嘗試、在另外 500 條指令測試集上報數字的 IL、IL+RL、微調（Table 6 引自他文）相比，「媲美微調」的說法不成立；何況 SR 38.0 仍低於微調的 45.0。",
+    "HumanEval 的 pass@1 宣稱與官方程式碼對不上。論文說搜尋結束後才拿隱藏測試評一次，但 programming/mcts.py（commit 853d816146）在迭代中只要有子解過了自產測試，就呼叫 exe.evaluate 跑 item[\"test\"]（隱藏測試）；沒過就把 reward_real 記為 0、繼續搜尋，等於拿隱藏測試當停止條件。此外 repo 直到 2024-07-30 才修正「第一次嘗試過了自產測試就計為成功（num_success += 1），不看隱藏測試結果」的計數 bug，晚於論文 v3（2024-06-06）與 2024-04-25 的「new gpt4 results」commit。論文與 repo 都沒說明 92.7、83.8 是否受影響。",
+    "數字本身也有對不上的地方：GPT-3.5 HumanEval 83.8% 在 164 題上對應 137.4 題，單次執行不可能得到（137 題是 83.5、138 題是 84.1），論文卻說 LATS 用全部 164 題，也沒說是多次平均；WebShop Reflexion 的 SR 35.0 在 50 條指令上等於 17.5 條，同樣不是同一組 50 題單次執行的結果；Table 10 的 LATS（k = 50）0.61 與 Table 3 的 0.63 不一致；GPT-4 的 Base 80.1 與 Reflexion 91.0 直接沿用 Reflexion 論文的數字（題數可能是 161 而非 164，腳註自承）。",
+    "超參數在論文內、論文與程式碼之間互相矛盾：HotPotQA 最大深度附錄 C 寫 7、D.1 寫 6，程式碼則是擴展深度 7、rollout 深度 4；HotPotQA 的 k 論文為 50、lats.sh 為 30；GPT-3.5 程式任務的自產測試數 §5.2 寫 4、D.2 寫 6，腳本是 4 且 max_iters 4、expansion_factor 3（論文為 k = 8、n = 5）；GPT-4 腳本 number_of_tests 2（論文為 4）；w 論文為 1、HotPotQA 程式碼等於 √2。附錄 E.4 的「反思提示」逐字重複 E.3 的價值提示，真正的 HotPotQA 反思提示（Reflexion 式的診斷＋新計畫）只在 repo 的 hotpot/hotpot.py 裡。",
+    "Eq. 2 的 self-consistency 項在官方程式碼裡找不到：我以關鍵字搜尋 hotpot、webshop、programming 的主要檔案，都沒有 SC 或 λ，重複取樣到的候選反而被去重（generate_new_states）或給 0 分（get_values），方向與論文說的「重複出現較可信」相反。佐證 SC 的唯一證據是 Game of 24 的 0.44 vs 0.40（50 題中差 2 題），而 repo 沒有 Game of 24 的程式碼，無法查核。",
+    "價值函數的實作很脆弱：value_outputs_unwrap 在整段模型輸出（包含推理文字）裡依序找子字串 10、9、8…，HotPotQA 推理中常見的年份（例如 1844、1989）或 WebShop 的價格（例如 $10.99）都會被讀成高分。所以「LM 評分是關鍵（拿掉掉 0.26）」量到的是這個含雜訊解析器加上 oracle 終局 reward 的組合，不能直接外推為「LLM 自評可靠」。",
+    "從 T5 的角度，修正能力主要來自搜尋＋外部 reward，而不是口語反思：拿掉反思只掉 0.05（100 題中 5 題），WebShop 的反思被作者自己形容為空泛。論文沒有測「終局成敗改由 LLM 自己判斷」的設定，而這正是 LangGraph 教學實際採用的形式（found_solution 由模型自評）；被廣泛採用的版本，恰好是論文沒驗證過的版本。",
+    "樣本小、單次執行、沒有變異數或信賴區間：HotPotQA 100 題、WebShop 50 條、Game of 24 50 題；GPT-4 HumanEval 領先 Reflexion 1.7 分，約等於 3 題。n = 3／5／10、w、d 這些消融的差距多半只有 5–8 題。",
+    "成本比較有選擇性：Table 9、10 只計「成功時」的 token 與節點，排除失敗軌跡（作者說計入後差距會更大，但沒有給數字）；也沒有和 ReAct、Reflexion 比 token，更沒有把每個節點的評分呼叫、反思呼叫的成本拆開列。",
+    "可回退的前提與作者舉的例子自相矛盾：WebShop 的 Buy 在真實購物中不可逆，論文卻把 WebShop 列為可回退的實際應用。對對話完成框架而言，已經送給真實使用者的話收不回來，所以 LATS 只能用在送出前的內部草稿、工具沙箱，或 T6 使用者模擬器上的離線重演。"
+  ],
+  "framework_role": "T5 裡「搜尋與回溯式修正」的代表作：把自我修正從「重寫同一條軌跡」（Reflexion、Self-Refine）改成「回到分岔點改走兄弟分支」，並示範三件框架可直接借用的東西：(1) 以環境觀測為依據、逐步給分的 LLM 價值函數，扮演步級 critic；(2) 終局失敗時觸發口語反思，並把反思同時寫回 agent 與評分器的 context；(3) 以 n、k 控制修正預算。它沒有任何訓練，所以不屬於「訓練得到的 critique 模型」，而是搜尋回溯這一支。放進框架時要標明兩點：一是它的增益大部分來自 oracle 等級的終局 reward，T5 若只有自評訊號，效果未經本文驗證；二是它要求狀態可回退，對話中只能用在送出前的草稿、工具沙箱或 T6 模擬器。它也暗示 T4 的軌跡要能存成樹而非單一路徑；而 T8 型的任務完成分數（WebShop 的屬性符合比例、測試過關率）在這裡直接被當成搜尋的 reward。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "軌跡中的異常用兩種方式觸發修正：步級上，每個新節點都由 LLM 讀完「到此為止的軌跡＋最新觀測」後給 1–10 分，低分分支在 UCT 選擇中被冷落，搜尋自動回溯到其他分支；終局上，軌跡走到失敗終點（HotPotQA 答錯、WebShop reward < 1、程式自產測試未全過）就觸發反思，並把失敗 reward 反向傳播到整條路徑。"
+    },
+    {
+      "edge": "E2",
+      "how": "反思結果與失敗軌跡存入記憶，後續每次擴展與評分都當作額外 context 注入（Algorithm 1 的 c ← reflection）；同時反向傳播更新整棵樹的 N 與 V，改變之後的選擇。這是寫回 agent 工作狀態與搜尋樹，不是對話狀態追蹤的 slot。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "LangGraph（LangChain 公司）官方教學〈Language Agent Tree Search〉開頭引用 arXiv 2310.04406，以 Reflection 結構化輸出（0–10 分＋found_solution）當評分、每次展開 5 個候選、UCB 選擇、樹高超過 5 或已解就停；教學自承沒有接程式執行等外部回饋，只用自我反思評分。該檔在 langgraph main 目前已 404。來源：https://github.com/langchain-ai/langgraph/blob/23961cff61a42b52525f3b20b4094d8d2fba1744/docs/docs/tutorials/lats/lats.ipynb",
+      "LlamaIndex 官方整合套件 llama-index-agent-lats（PyPI 0.1.0 於 2024-04-22 發佈，最後版 0.3.2 於 2025-06-29），README 註明實作 Zhou et al. 2023 並附論文連結，提供 LATSAgentWorker（預設 num_expansions = 2、max_rollouts = 5）。同日的 commit 3035a9684d（deprecate older agent packages）將它標為已棄用、不再維護，run-llama/llama_index main 已無此目錄。來源：https://pypi.org/project/llama-index-agent-lats/ ；https://github.com/run-llama/llama_index/blob/3035a9684d/llama-index-integrations/agent/llama-index-agent-lats/llama_index/agent/lats/step.py"
+    ],
+    "assessment": "有兩個主流 agent 框架（LangGraph、LlamaIndex）的官方教學或整合套件實作過 LATS，屬於「被納入工具鏈教材與元件」層級；但兩者都是簡化版（沒有 self-consistency 項、沒有 oracle 終局 reward，成敗改由 LLM 自評），LlamaIndex 版已於 2025-06 棄用，LangGraph 教學也已從 main 移除。未見任何產品在正式環境部署 LATS 的可查證證據。作者 repo 提到的 Hugging Face「CodeLATS」展示屬作者自家 demo，不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/andyz245/LanguageAgentTreeSearch",
+    "data": "公開：HotPotQA、HumanEval、MBPP、WebShop、Game of 24 都是公開 benchmark；repo（MIT）含 hotpot、programming、webshop 三個目錄與執行腳本，WebShop 需自架本地實例。但 HotPotQA 的 100 題、MBPP 的 397 題、WebShop 的 50 條只說隨機抽取，腳本以 index 0–99、0–49 取題；沒有 Game of 24 的程式碼；腳本超參數與論文不一致（見 limitations_observed）；需要 OpenAI API（GPT-3.5、GPT-4）。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是 T5「搜尋回溯式修正」這一支被引用最多、被 LangGraph 與 LlamaIndex 實作過的原型，步級評分器＋回溯＋反思記憶的設計可直接對應框架的 E3／E2；但它的標題數字大多建立在 oracle 終局訊號上，閱讀時必須和 2310.01798 對照，也要把論文與程式碼的落差一起讀。",
+  "related": [
+    "2210.03629",
+    "2303.11366",
+    "2305.10601",
+    "2305.14992",
+    "2303.17651",
+    "2310.01798",
+    "2203.11171",
+    "2207.10397",
+    "2305.00633",
+    "2305.16653",
+    "2309.17382",
+    "2310.13227",
+    "2207.01206",
+    "2107.03374",
+    "2305.11854"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 6,
+    "total": 8
+  }
+}

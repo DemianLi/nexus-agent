@@ -1,0 +1,172 @@
+{
+  "id": "2405.14092",
+  "title": "Large Language Models Can Self-Correct with Key Condition Verification",
+  "topic": "T5",
+  "subarea": "內在自我修正與口語反思（含批判性研究）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出零樣本提示法 ProCo：把題目裡一個關鍵條件遮成 X、把目前答案當已知條件，讓 LLM 反推 X；反推值對不上原條件就判定答案可能有錯，把它加入「可能錯誤答案集合」後要求重答，最多迭代 3 輪。在算術、開放域問答、常識推理 8 個資料集上宣稱不靠外部回饋就能自我修正，勝過 Self-Correct 與 CoVe。",
+  "problem": "Huang et al.（2310.01798）指出，沒有外部回饋（人、工具、其他模型、正確答案標籤）時，LLM 判斷不了自己的答案對不對，Self-Correct（Kim et al. 2023，RCI）這類「檢查並找出錯誤」的提示常把對的答案改錯，準確率不升反降。本文要回答的是：換一個更可靠的自我驗證訊號，能不能讓內在自我修正真正有效？這很重要，因為真實部署大多拿不到正確答案標籤。若驗證訊號本身不可靠，每一輪修正都在賭，還多花 3–5 倍呼叫成本。",
+  "core_idea": "驗證不要問模型「你的答案有沒有錯」，改問一個可以自動比對的逆向問題：把題目中對解題關鍵的條件（算術題的數字、問答題的實體、常識題的概念）遮成 X，把候選答案當成新條件，要求模型解出 X。若候選答案正確，反推出的 X 應該等於（或至少相容於）被遮掉的原條件；對不上，就表示答案可能錯。驗證失敗時不要模型自由批判，而是把所有被判錯的答案累積成負面提示「答案很可能不在 {集合} 中」，要求模型重答；驗證成立就立刻停止。這讓修正只在有證據時才發生，並避免重複同一個錯誤（作者稱為 substitute verification＋progressive correction）。",
+  "method": {
+    "輸入與輸出": "輸入是一題 Q（m 個敘述句 s_j 加上最後一句問句 q）。輸出是一個短答案（數字、單一實體或選項）。後端模型為 GPT-3.5-Turbo-1106、GPT-4-0125-Preview、Mixtral-8x7B，溫度 0.7，不做任何訓練。",
+    "步驟 0 初始答案（§4.2、Prompt A.1／A.2／A.5）": "預設用 zero-shot CoT：先送出「Q: {Q} A: Let's think step by step.」取得推理路徑，再加一次答案抽取呼叫。算術題抽阿拉伯數字；開放域問答與常識題抽單一實體或選項，並在前面加一句要求只回答一個實體。共 2 次 LLM 呼叫，得到 a_0。初始答案也可以改由 GenRead（LLM 自生文件）或 RAG（Bing 檢索文件）產生，接上 ProCo 時文件數 M=1（單獨當基準時 M=5）。",
+    "步驟 1 找關鍵條件 c_k（§3，整題只做一次，之後每輪共用）": {
+      "算術（相似度法，不呼叫 LLM）": "用 SimCSE 分別編碼每個敘述句與問句，取 cosine 相似度最高的敘述句 s_ℓ，再用正規表示式抽出其中的數字當 c_k。若有多個數字就隨機挑一個。論文沒有交代 SimCSE 的具體權重版本。",
+      "開放域問答與常識（零樣本法，1 次 LLM 呼叫，Prompt A.6）": "請模型先列出題目中的實體或概念，再選出與解題過程最相關的一個當 c_k。"
+    },
+    "步驟 2 驗證階段（第 t 輪，§4.3、Prompt A.3）": [
+      "把 Q 中 c_k 所在的那一句裡的 c_k 換成字元 X，得到遮蔽題 Q_mask。",
+      "組出驗證題：Q_mask＋「假設答案是 {a_(t-1)}，未知變數 X 的值是多少？」（原文句型見 Prompt A.3）。每輪都用同一個 c_k，而且 c_k 本身不出現在驗證題裡。",
+      "用同一套 CoT 推理＋答案抽取解驗證題（2 次呼叫），得到 a^v_t。",
+      "算術題用比對式驗證：a^v_t 等於 c_k 就判定 a_(t-1) 大概是對的。論文沒有說明數值比對有沒有容忍誤差。",
+      "開放域問答與常識題用命題式驗證（Prompt A.7，多 1 次呼叫）：請模型判斷命題「若驗證題的答案是 c_k，則 X 也可以是 a^v_t」是否成立。理由是逆向題可能有多個合法答案；附錄 A.5 的例子中，B. Traven 寫過好幾本書，直接做字串比對會把對的答案誤判成錯。",
+      "驗證成立：輸出 a_(t-1) 並結束。驗證不成立：把 a_(t-1) 加進可能錯誤答案集合 P（初始為空集合）。"
+    ],
+    "步驟 3 修正階段（Prompt A.4，沿用作者前作 PRP，2312.06867）": "在原題後面加上括號提示「答案很可能不在 {P} 之中」，再跑一次 CoT＋答案抽取（2 次呼叫），得到 a_t。",
+    "步驟 4 停止條件（§4.4）": "滿足以下任一條就停止：(1) a_(t-1) 驗證成立，輸出 a_(t-1)；(2) 修正後的 a_t 與 a_(t-1) 相同，輸出 a_t；(3) 迭代次數到達上限 T，輸出最後的 a_T。注意 a_T 沒有再驗證。",
+    "關鍵超參數": "T=3（依 Figure 4 選定，作者報告平均迭代次數小於 3）；溫度 0.7；接 ProCo 時外部文件 M=1，GenRead／RAG 單獨當基準時 M=5。",
+    "每題 LLM 呼叫數（依附錄提示推算）": "初始 2 次＋關鍵條件 0（算術）或 1（問答）次；每輪驗證 2 次，問答題再加命題檢查 1 次；驗證失敗時修正 2 次。算術題最壞約 2＋3×4＝14 次，問答題約 3＋3×5＝18 次。答案一驗證成立就提前結束，所以實際次數通常少很多。",
+    "要重做需要的元件": "chat completion API、SimCSE 句向量模型、抽數字的正規表示式、7 段提示模板（Prompt A.1–A.7）、負面提示集合 P 的狀態維護、三種停止條件，以及可選的 Bing 檢索（RAG）或 LLM 生文件（GenRead）前處理。"
+  },
+  "assumptions": [
+    "題目中存在一個與解題相關、而且可以由答案反推回來的關鍵條件。也就是正向題與逆向題大致一一對應；若逆向題有很多合法答案，就得靠命題檢查的寬鬆判斷補救。",
+    "模型解逆向題時犯的錯，與解正向題時犯的錯不高度相關，所以反推結果能當作獨立的驗證訊號。",
+    "答案是短的數字、實體或選項，可以直接相等比對，或讓模型做等價判斷。",
+    "算術題中與問句語意最相近的敘述句，裡面含有與解題相關的數字。",
+    "負面提示「答案很可能不在 P 中」會讓模型換一條推理路徑，而不是隨便換一個答案；而且被排除的答案確實是錯的（驗證器的偽陰性要夠低）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "GSM8K",
+      "AQuA（五選一數學題）",
+      "MATH",
+      "NQ（Natural Questions）",
+      "TriviaQA",
+      "WebQ（WebQuestions）",
+      "HotpotQA",
+      "CSQA（CommonsenseQA，dev set，五選一）"
+    ],
+    "metrics": [
+      "EM 與 F1（開放域問答，EM 以正規化答案比對可接受答案清單）",
+      "accuracy（算術與常識）",
+      "平均 token 用量與平均耗時（Table 5、Table 7）",
+      "答案轉移比例：對改錯（Correct→Incorrect）與錯改對（Incorrect→Correct）（Figure 3）",
+      "逐輪 EM／F1（Figure 4、Table 7）"
+    ],
+    "baselines": [
+      "CoT（zero-shot，Kojima et al.）",
+      "Self-Correct（Kim et al. 2023，RCI 式批判後改寫）",
+      "CoVe（Chain-of-Verification）",
+      "GenRead（LLM 自生 M=5 份文件）",
+      "RAG（DSP 式，Bing 檢索 M=5 份文件）",
+      "CoT＋Self-Consistency（3 個樣本，僅 GSM8K 與 CSQA）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "不用外部文件時，ProCo 在開放域問答與常識推理上勝過 Self-Correct 與 CoVe；但對 CoVe、對 CoT 的差距遠小於對 Self-Correct 的差距。",
+      "numbers": "GPT-3.5-Turbo-1106，EM／accuracy（ProCo vs Self-Correct）：NQ 48.0 vs 40.1（+7.9）、TriviaQA 78.7 vs 71.3（+7.4）、WebQ 47.0 vs 39.2（+7.8）、HotpotQA 33.0 vs 29.0（+4.0）、CSQA 75.5 vs 65.9（+9.6）。對 CoVe 只多 +4.6／+2.3／+3.9／+2.0／+2.4；CSQA 對 CoT（72.9）只多 +2.6。Mixtral-8x7B 對 CoVe 的差距為 +1.3 至 +3.1（例：NQ 50.7 vs 47.6、TriviaQA 74.5 vs 73.2）。",
+      "section": "§5.2、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "ProCo 可以接在 GenRead／RAG 之後當修正層，五個 benchmark 都有提升；但接 ProCo 時外部文件數從 5 份降為 1 份，兩個變因混在一起。",
+      "numbers": "GPT-3.5，GenRead→GenRead+ProCo：NQ EM 42.2→48.3（+6.1）、TriviaQA 70.8→78.4（+7.6）、WebQ 41.3→46.7（+5.4）、HotpotQA 38.0→47.0（+9.0）、CSQA 67.3→76.4（+9.1）。RAG→RAG+ProCo：NQ 45.3→48.5、TriviaQA 72.7→78.4、WebQ 40.1→45.2、HotpotQA 37.0→39.0、CSQA 65.9→74.2。",
+      "section": "§5.2、Table 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "算術推理上 ProCo 勝過 CoT 與 Self-Correct；Self-Correct 反而比 CoT 差，與 Huang et al. 的結論一致。",
+      "numbers": "GPT-3.5（ProCo／CoT／Self-Correct）：GSM8K 87.1／78.6／75.1、AQuA 65.2／51.3／48.7、MATH 41.5／37.9／27.6，對 Self-Correct 平均 +14.1。Mixtral：GSM8K 78.7／74.4／72.5、AQuA 54.3／49.2／44.4、MATH 30.2／28.4／21.5。",
+      "section": "§5.2、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "換成 GPT-4 後 ProCo 仍居首，但基準數字的來源有疑問（見 limitations_observed）。",
+      "numbers": "GPT-4-0125-Preview（ProCo／CoT／Self-Correct／CoVe）：GSM8K 97.6／95.5／91.5／–、CSQA 86.7／82.0／79.5／83.5、HotpotQA EM 61.0／49.0／49.0／57.0。",
+      "section": "§5.2、Table 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "ProCo 把對的答案改錯的比例遠低於 Self-Correct；錯改對的比例只略高。增益主要來自「不亂改」，而不是「改得更準」。",
+      "numbers": "GSM8K、GPT-3.5、3 輪修正後：ProCo 對改錯 2.5%、錯改對 8.2%；Self-Correct 對改錯 9.1%、錯改對 7.6%。CSQA 上 ProCo 辨識錯誤答案的準確度比 Self-Correct 高 21.5%。",
+      "section": "§5.3、Figure 3（數字取自正文，圖本身不在快取中）",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "與 GenRead／RAG（M=5）相比，GenRead／RAG＋ProCo（M=1）的 EM 較高，token 約只用一半。",
+      "numbers": "NQ：GenRead 1023.3 tokens／EM 42.2，GenRead+ProCo 469.1／48.3（token −54.2%）；RAG 1971.5／45.3，RAG+ProCo 916.4／48.5（−53.5%）。三個問答集平均 EM 相對提升：比 GenRead 高 12.8%、比 RAG 高 9.2%（都是相對百分比，不是絕對點數）。",
+      "section": "§5.2、Table 5",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "逐輪來看，ProCo 的 EM 單調上升，而且每輪 token 越用越少（驗證成立的題目提前結束）；Self-Correct 每輪成本幾乎不變，EM 在原地打轉。",
+      "numbers": "WebQ、GPT-3.5，Iter-0 至 Iter-5 的 EM：ProCo 38.2→42.6→44.3→47.0→47.2→47.2；Self-Correct 38.2→38.7→38.6→39.2→38.5→38.0。總 token：ProCo 1368.3、Self-Correct 3446.0、CoVe 4152.9；總耗時：15.32、33.68、35.28 秒。ProCo 每輪 token 從 431.5 降到 59.4。最終 EM 比 Self-Correct 高 +9.2、比 CoVe 高 +4.1。",
+      "section": "附錄 A.5、Table 7",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "在 GSM8K 與 CSQA 上，ProCo 的準確率高於同樣取 3 個樣本的 CoT＋Self-Consistency，token 用量也較少。",
+      "numbers": "正文只給定性結論，具體數字只在 Figure 5 圖中，快取全文沒有；SC 只取 3 個樣本（對齊 T=3）。",
+      "section": "§5.3、Figure 5",
+      "anchor_idx": 6
+    }
+  ],
+  "limitations_stated": [
+    "只在英文題目上評估，非英文任務的效果未知。",
+    "題目都很短（平均 52.3 字），答案是數字或實體；更長的題目，或答案不是數字／實體的任務，留待未來研究。",
+    "GPT-4 成本高，只挑 GSM8K、HotpotQA、CSQA 三個資料集，而且只比不用外部文件的基準。",
+    "逆向驗證題可能有多個合法答案，所以直接做字串比對會把對的答案誤判成錯；這是作者改用命題式驗證的原因（附錄 A.5）。"
+  ],
+  "limitations_observed": [
+    "Table 4 的基準數字來源沒有交代：CoT 的 95.5／82.0／49.0 與 Self-Correct 的 91.5／79.5／49.0，六格和 Huang et al.（2310.01798）Table 3 的 GPT-4 Standard Prompting 與 Self-Correct round 1 完全相同。Huang et al. 用的是 2023/08/29 存取的 GPT-4、溫度 1，每個資料集隨機抽 200 題（HotpotQA 100 題）；本文宣稱用 GPT-4-0125-Preview、溫度 0.7。ProCo 的 97.6 與 86.7 不落在 n=200 的 0.5 格點上，表示 ProCo 與基準的評估分母不同。這張表不能當作同條件比較。",
+    "新穎性被高估：遮蔽一個數字條件、把候選答案當已知、再要模型反推被遮的值——這個驗證形狀與 Self-Verification（Weng et al.，2212.09561）以及 FOBAR（Jiang et al.，2308.07758）幾乎相同，但兩篇都沒被引用或比較。算術題的修正提示又直接沿用作者自己的 PRP（2312.06867）。真正新的只有開放域問答／常識題的命題式驗證，以及接在 GenRead／RAG 後面的用法。",
+    "文件數混淆：GenRead／RAG 單獨當基準時用 M=5，接 ProCo 時改用 M=1，卻沒有「M=1、不加 ProCo」的對照。作者自己也說多份文件常帶無關資訊、導致答錯，所以 RAG+ProCo 的 EM 增益有一部分可能來自文件變少；Table 5 省下約一半 token，主要也是文件數的效果，不能全算成 ProCo 本身的效率。",
+    "標題數字靠弱基準撐起：Self-Correct 在多數設定下比 CoT 還差（GPT-3.5 CSQA 72.9→65.9；Mixtral CSQA 68.4→49.8，掉了 18.6 分，可疑地大）。對 Self-Correct 的 +9.6 放大了效果：對 CoT 的 CSQA 增益只有 +2.6，對 CoVe 在 GPT-3.5 上多為 +2.0 至 +4.6、在 Mixtral 上只有 +1.3 至 +3.1。",
+    "沒有報告各資料集實際評估的題數、隨機種子或變異數，而且是溫度 0.7 的單次執行。HotpotQA 所有數字都是整數，推測只評估約 100 題（和 Huang et al. 的 HotpotQA 子集一樣），那麼 ProCo 對 CoVe 的 33.0 vs 31.0（Mixtral 35.0 vs 33.0）落在雜訊範圍內。",
+    "AQuA 可能有選項排除效應：GPT-3.5 上 ProCo 對 CoT 的增益，AQuA 為 +13.9，遠大於 GSM8K 的 +8.5 與 MATH 的 +3.6。AQuA 是五選一，光是排除一個被判錯的選項就能提高命中率。論文沒有「隨機判錯並排除」或「一律判錯」這類對照，分不出增益是來自驗證器準確，還是來自帶排除條件的重新取樣。",
+    "內部數字對不起來：依 §5.3 正文（Figure 3 圖本身不在快取中），GSM8K 上 ProCo 錯改對 8.2% 減對改錯 2.5%，淨值 +5.7；但 Table 3 顯示 ProCo 比 CoT 高 +8.5。Self-Correct 淨值 −1.5，Table 3 卻是 −3.5。百分比的分母沒有定義，換成各類別內比例又會算出 ProCo 淨值接近 0。",
+    "驗證器沒有單獨評估：沒有報告驗證判定的 precision／recall，只有彙總的答案轉移比例。附錄自己挑的範例就顯示命題檢查很寬鬆：Table 15 把「German traditions」當成與「European culture」等價，而最終答案是 German culture；Table 12 中，逆向題解不出 X（回答 unknown）就被當成驗證失敗。這種訊號其實是「反推不出來」，不是「反推出錯」；正確答案同樣可能反推不出來，然後被誤排除。此外，第 T 輪的 a_T 沒有再驗證就直接輸出。",
+    "「無外部回饋」的邊界有漏洞：Table 14 標為「ProCo on CSQA」（不帶文件的版本），修正後的答案文字卻寫著「Based on the provided search results」。這表示展示用的輸出可能來自有檢索的設定，或提示中混入了檢索內容，削弱了內在自我修正的主張。",
+    "SC 對照太弱：CoT＋SC 只取 3 個樣本，而 ProCo 每輪要做驗證＋命題檢查＋修正，實際呼叫數最多可到十幾次。以樣本數而不是呼叫數對齊，對 SC 不利；常見的 SC 設定是 5–40 個樣本。",
+    "外推到對話 agent 有限：這個方法需要短答案，而且題目裡要有可以遮蔽、可以反推的關鍵條件。多步工具呼叫軌跡、長篇生成、開放式回覆都沒有自然的 c_k；論文也沒在任何多輪或 agent 任務上測試。"
+  ],
+  "framework_role": "屬於 T5 的「內在自我修正」分支，是 Huang et al.（2310.01798）的直接反論，兩篇應該對照著讀：Huang 說明「沒有好訊號的自我批判會把對的改錯」；ProCo 示範「換成可以自動比對的逆向一致性訊號，再用它當閘門，只在驗證失敗時才修正」可以降低對改錯。可以搬進框架的設計模式有三個：(1) 驗證閘門——驗證成立就提前結束，省 token，也減少無謂改動；(2) 負面約束記憶——把被否決的候選答案累積成「不要再給這些」的提示，避免原地打轉；(3) 逆向一致性檢查——在任務型對話中，可以把 T2 已追蹤到的某個使用者約束（槽值）遮起來，要模型依據擬回覆的內容反推，對不上就觸發修正。第 (3) 點是本筆記的推想，論文沒有在對話或 agent 上驗證過。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "ProCo 的替代驗證就是「偵測到異常才觸發修正」的閘門：驗證成立就直接輸出，失敗才進入修正階段（§4.3–4.4）。但它只檢查最終答案，沒有吃任何多步軌跡（T4）的輸入，所以只示範了觸發閘門的形狀，沒有示範怎麼從軌跡裡偵測異常。"
+    },
+    {
+      "edge": "E5",
+      "how": "實驗把每一輪的修正紀錄拿來評估：Figure 3 統計 3 輪後對改錯／錯改對的比例，Table 7 列出 Iter-0 到 Iter-5 每輪的 EM、F1、token 與耗時，用來論證驗證閘門減少無謂改動並節省成本。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有提到任何部署或產品。專案頁（https://wzy6642.github.io/proco.github.io/）與 GitHub 倉庫（https://github.com/wzy6642/ProCo，Apache-2.0，約 7 stars）也都沒有提到採用。論文發表於 EMNLP 2024 main（ACL Anthology 2024.emnlp-main.714），Semantic Scholar 引用約 56 次，這些都是學術影響力，不算採納。本次 WebSearch 額度已用完，採納查證只做到專案頁與 GitHub，沒有做更廣泛的搜尋。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/wzy6642/ProCo",
+    "data": "8 個 benchmark 都是公開資料集（作者稱皆為 MIT 授權），但論文沒有報告各資料集實際評估的題數與抽樣方式。RAG 依賴 Bing Search API 的即時結果，GPT-3.5-Turbo-1106 與 GPT-4-0125-Preview 也是舊版 API，完全重現有困難。完整提示詞在附錄 A.4。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "提供一個可以直接搬用的「逆向遮蔽驗證＋失敗才修正＋排除集合」閘門，也是 Huang et al. 的重要對照；但核心驗證與 Self-Verification／FOBAR 同形而未引用，GPT-4 基準疑似沿用他人數字、文件數混淆、弱基準等問題讓主張要打折，所以不到必讀。",
+  "related": [
+    "2310.01798",
+    "2303.17491",
+    "2303.17651",
+    "2309.11495",
+    "2305.11738",
+    "2203.11171",
+    "2209.10063",
+    "2212.14024",
+    "2312.06867"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

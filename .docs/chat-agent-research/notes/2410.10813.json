@@ -1,0 +1,195 @@
+{
+  "id": "2410.10813",
+  "title": "LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory",
+  "topic": "T7",
+  "subarea": "多輪對話與互動式評估",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "建立 500 題、歷史長度可自由延伸（S 約 115k tokens、M 約 500 個 session／1.5M tokens）的使用者與助理多 session 對話記憶基準，以帶後設評估的 GPT-4o judge 評 QA 正確率、以人工標註的證據位置評 Recall／NDCG，並用它拆解記憶系統的索引、檢索、閱讀設計。",
+  "problem": "聊天助理開始內建長期記憶（ChatGPT memory、Coze），但既有長期對話基準多半是人與人對話、歷史只有幾千 tokens 且長度固定，也沒測助理自己說過的內容、使用者資訊更新、時間推理與拒答。缺少能跟著系統進步而加難、又能分辨記憶系統哪一段出錯的評估，就無法判斷「看起來有個人化」的助理是否真的記得住。",
+  "core_idea": "仿 needle-in-a-haystack：由人工撰寫題目與證據陳述，用 LLM self-chat 把證據「間接地」藏進任務導向的使用者與助理 session，再把這些證據 session 隨機插入大量無關 session 並配上合理的時間戳記，組成長度可調的歷史；系統必須逐 session 線上吸收，最後回答一題。評分分兩層：端到端 QA 用各題型專屬提示詞的 GPT-4o judge（有人工後設評估），中間層用證據位置標籤算 Recall@k／NDCG@k，因此能把失敗歸因到檢索或閱讀。作者再以「索引－檢索－閱讀」三階段、value／key／query／閱讀策略四個控制點統一描述記憶系統，並用此基準找出有效設計。",
+  "method": {
+    "task_format": "每個實例是四元組 (S, q, t_q, a)：S 是依時間排序的 N 個 session，每個 session 附時間戳記，可再拆成 round（一則使用者訊息加一則助理回覆）；測試時 S 逐一餵給系統；q 為最後提問、t_q 晚於最後一個 session；a 為短答案，開放題則為描述理想回答的 rubric。",
+    "abilities_and_types": "五種能力：資訊抽取（IE，含使用者或助理說過的細節）、跨 session 推理（MR，彙總與比較）、知識更新（KU）、時間推理（TR，含 metadata 時間戳記與話語中的時間指涉）、拒答（ABS）。對應七種題型：single-session-user、single-session-assistant、single-session-preference（用 rubric 評個人化回答）、multi-session、knowledge-update、temporal-reasoning，另從前述題型挑 30 題改寫成錯誤前提題測拒答。共 500 題。",
+    "question_curation": [
+      "人工建立 164 個使用者屬性、分五大類（人口統計、生活方式、情境脈絡、人生事件、持有物；全表見 Table 5）。",
+      "對每個屬性用 Llama 3 70B Instruct 以零樣本提示（Figure 7：扮演想記錄近期個人事實的使用者，寫出跨越數天到數月的長段落）生成使用者背景。",
+      "隨機抽一段背景，由 LLM 提出數組種子 (問題, 答案)；TR、MR、single-session-preference 另用 GPT-4o 提題。每種題型約產生 1000 題，人工篩選改寫後的留存率約 5%。",
+      "人工把答案拆成一或多條證據陳述；涉及時間者此時指定時間戳記，之後對應的證據 session 一律沿用。"
+    ],
+    "evidence_session_construction": [
+      "每條證據陳述各自以 self-chat 生成一個任務導向 session：Llama 3 70B 扮演使用者（Figure 8 提示詞要點：必須傳達該證據但要間接帶出、每則訊息 1 到 2 句、語氣中性不過度熱情或客套、不要回「謝謝」、直接提後續問題、避免洩漏同題其他證據），助理端直接把使用者訊息丟給 LLM、不做提示工程。",
+      "最多模擬 10 個 round，任一方輸出空字串即停止。",
+      "專家人工檢查並編修（約 70% 的 session 被編修過）：證據確實出現、沒有洩漏其他證據、日期與時間講法口語化、對話自然收尾；標註證據在 session 內的位置；使用者 LLM 反串成助理而無法修復者整筆丟棄。"
+    ],
+    "history_compilation": [
+      "每題的 session 池：ShareGPT、UltraChat、以及用同一管線依其他不衝突屬性模擬出的 session。",
+      "抽樣比例固定為 25% ShareGPT、25% UltraChat、50% 模擬 session，與證據 session 一起洗牌；證據 session 若有先後要求則洗牌後再調換順序。",
+      "時間戳記依順序隨機指派；證據 session 有預設時間者作為錨點，決定前後無關 session 的時間範圍，否則在 2023 年 5 月內隨機指派。",
+      "兩個標準設定：LongMemEval_S（每題約 115k tokens，論文稱約 50 個 session）與 LongMemEval_M（500 個 session，約 1.5M tokens）；另有只給證據 session 的 oracle 設定。長度可任意延伸。"
+    ],
+    "metrics": {
+      "qa_accuracy": "gpt-4o-2024-08-06 當 judge，給問題、正確答案與模型回答，只輸出 yes／no。依題型用不同提示詞（Figure 10）：temporal-reasoning 不懲罰天數差一的錯誤；knowledge-update 回答中同時出現舊資訊但最終答案是更新後的值仍算對；single-session-preference 依 rubric 判斷，不必涵蓋全部要點，只要正確回想並運用使用者資訊即可；其他題型要求包含正確答案或完整中間步驟，只含部分資訊判錯。",
+      "judge_meta_evaluation": "每種題型抽 30 題，收集 GPT-4o 與 Llama 3.1 8B Instruct 的長脈絡作答，與專家判定比對，報各題型準確率（Table 6）。",
+      "memory_recall": "利用人工標註的證據位置，在系統公開檢索結果時計算 Recall@k 與 NDCG@k（k = 5、10）。"
+    },
+    "commercial_system_study": "從早期版本資料（尚無拒答題）隨機抽 97 題，以 50% ShareGPT 加 50% 模擬 session 組成 3 到 6 個 session 的短歷史（約為 S 的十分之一長），五位標註者在 ChatGPT 與 Coze 網頁介面上逐 session、逐輪手動輸入，最後開新 session 提問，由人工判對錯；每題之間手動清空記憶。略過需要跨數月互動的時間推理題與 single-session-assistant 題。於 2024 年 8 月前兩週進行，約 150 人時；資料建構約 400 人時。",
+    "memory_system_framework": "把長期記憶視為 key-value 資料庫。三階段：索引（把每個 session 轉成一或多個 key-value 項）、檢索（形成查詢並取 top-k）、閱讀（LLM 讀檢索結果作答）。四個控制點：value（儲存粒度與格式）、key（索引鍵）、query（查詢形式）、閱讀策略。附錄 C 另給出以 I、Q、S、R 四個函式描述的數學形式，並把 in-context RAG、MemoryBank、LD-Agent、CoN、ChatGPT、Coze、RAPTOR、MemWalker、HippoRAG 對應到此框架（Table 2）。",
+    "memory_optimizations": [
+      "Value 分解：比較整個 session、拆成 round、再壓縮成摘要或使用者事實；以 token 預算為橫軸比較（Figure 5，於 M 上）。",
+      "Key 擴充（key merging）：用 Llama 3.1 8B Instruct 從 value 抽出摘要、關鍵片語或使用者事實（事實抽取用 10 個 in-context 範例，5 個來自模擬 session、5 個來自 ShareGPT，範例答案由 GPT-4o 產生再人工修改；抽取只看使用者端訊息），直接前置到原本的 value 上組成索引鍵。對照組 rank merging：抽出的資訊另建平行索引、檢索後依排名合併（附錄 E.3）。",
+      "時間感知索引與查詢擴充：索引時用 Llama 3.1 8B 抽出可推定日期的事件（輸出 date 為 YYYY/MM/DD 與 event 的 JSON 清單），把 value 額外依事件日期建索引；檢索時由 M_T（GPT-4o 或 Llama 3.1 8B，附 10 個人工 in-context 範例）從問題與提問日期推出 start／end 時間範圍，無時間指涉時輸出 N/A，再用範圍過濾候選 value。",
+      "閱讀策略：檢索結果依時間戳記排序、以 JSON 結構呈現，並用 Chain-of-Note 變體提示（先逐一抽出相關資訊再推理作答；提示詞含歷史對話、目前日期、問題）。"
+    ],
+    "experimental_setup": "閱讀模型主要為 GPT-4o、Llama 3.1 70B Instruct、Llama 3.1 8B Instruct，附錄另測 Mistral-Nemo、Qwen2.5-7B、Phi-3.5-mini、Llama-3.2 1B／3B。檢索器為 Stella V5 1.5B 稠密檢索，附錄比較 BM25 與 Contriever。以 session 或 round 當 key 時只保留使用者端話語。§5.2 到 §5.4 預設套用 CoN 與 JSON 格式。貪婪解碼、生成上限 800 tokens，QA 取 top-5 與 top-10。"
+  },
+  "assumptions": [
+    "在整段歷史之後只問一題、以 QA 正確率當作記憶能力的代理指標，足以反映系統在持續互動中的記憶品質。",
+    "LLM self-chat 生成並經人工編修的任務導向 session，加上「間接透露」的提示設計，能近似真實使用者與助理的互動。",
+    "從 ShareGPT、UltraChat 與其他屬性模擬 session 抽出的填充內容不會與證據衝突，且不會讓證據 session 因風格或主題差異而容易被辨識。",
+    "每題型各 30 題的後設評估，足以代表 GPT-4o judge 在所有受測系統輸出（包括長篇 CoN 推理）上的判定品質。",
+    "人工標註的證據 session／round 位置就是正確的檢索目標；答對一題需要取回全部證據。",
+    "受測系統在吸收每個 session 時可以取得該 session 的時間戳記 metadata。",
+    "§4 與 §5 的分析假設記憶系統可寫成線上的「索引－檢索－閱讀」情境壓縮流程。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "LongMemEval_S（約 115k tokens／題）",
+      "LongMemEval_M（500 個 session、約 1.5M tokens／題）",
+      "LongMemEval oracle（只給證據 session）",
+      "97 題、3 到 6 個 session 的短歷史人工互動子集（商用系統研究）",
+      "LongMemEval_M 的 temporal-reasoning 子集（時間感知檢索實驗）"
+    ],
+    "metrics": [
+      "QA accuracy（gpt-4o-2024-08-06 judge，題型專屬提示詞，yes/no）",
+      "相對 oracle 的效能下降百分比",
+      "Recall@5、Recall@10",
+      "NDCG@5、NDCG@10",
+      "judge 與專家判定的一致率（後設評估）",
+      "錯誤分類：檢索對或錯 × 生成對或錯（附錄 E.5）"
+    ],
+    "baselines": [
+      "ChatGPT memory（GPT-4o、GPT-4o-mini）",
+      "Coze memory（GPT-4o、GPT-3.5-turbo）",
+      "Offline reading（GPT-4o 直接讀完整短歷史）",
+      "長脈絡 LLM 直接讀全歷史：GPT-4o、Llama 3.1 70B／8B Instruct、Phi-3 128k 14B、Phi-3.5 Mini",
+      "附錄加測：Mistral-Nemo-Instruct-2407、Qwen2.5-7B、Llama-3.2 1B／3B Instruct",
+      "Flat index、K = V（以 value 本身當 key）",
+      "Rank merging（檢索後合併多路排名）",
+      "檢索器：BM25、Contriever、Stella V5 1.5B",
+      "閱讀：直接作答 vs Chain-of-Note；自然語言 vs JSON 格式"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "有記憶功能的商用助理在只有 3 到 6 個 session 的短歷史上，正確率就遠低於同一模型直接讀完整歷史。",
+      "numbers": "Offline reading（GPT-4o）0.9184；ChatGPT（GPT-4o）0.5773、ChatGPT（GPT-4o-mini）0.7113；Coze（GPT-4o）0.3299、Coze（GPT-3.5-turbo）0.2474；以 GPT-4o 計分別下降約 37% 與 64%。依能力拆分時 Coze 的 MR 只有 0.118 到 0.147。",
+      "section": "§3.4、Figure 3(a)、Appendix B Table 7",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "長脈絡 LLM 直接讀完 LongMemEval_S 的正確率，比只讀證據 session 的 oracle 低 30% 到 60%，加上 CoN 也一樣。",
+      "numbers": "GPT-4o：oracle 0.870 → S 0.606（-30.3%），加 CoN 0.924 → 0.640（-30.7%）；Llama 3.1 70B：0.744 → 0.334（-55.1%），加 CoN 0.848 → 0.286（-66.3%）；附錄 Table 8 中 Llama-3.2-3B 直接讀 S 只有 0.008。",
+      "section": "§3.4、Figure 3(b)、Appendix E.1 Table 8",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "題型專屬提示詞的 GPT-4o judge 與專家判定高度一致，最低的是開放性較高的 preference 與拒答題。",
+      "numbers": "平均一致率 0.98（評 GPT-4o 的回答）與 0.97（評 Llama 3.1 8B 的回答）；最低 0.90（single-session-preference 評 GPT-4o、abstention 評 Llama 8B）；每格 30 題。",
+      "section": "§3.3、Appendix A.4 Table 6",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "把 session 拆成 round 對強閱讀模型有利；壓縮成摘要或事實整體會因資訊流失而變差，唯獨跨 session 推理題受惠於事實分解；最佳檢索 token 預算隨閱讀模型能力而異。",
+      "numbers": "Llama 3.1 8B 超過約 3k 檢索 tokens 後效能急降，GPT-4o 到 20k 以上仍持續上升（Figure 5 為圖表，未給逐點數字）。",
+      "section": "§5.2、Figure 5",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "單用壓縮後的摘要、關鍵片語或事實當 key 不會比 value 本身好，但把抽出的使用者事實前置到 value 上組成 key（document expansion）同時提升檢索與 QA；在索引階段合併優於檢索後合併排名。",
+      "numbers": "平均 Recall@k +9.4%、QA 正確率 +5.4%。Value = round 時 Recall@5 0.582 → 0.644、Recall@10 0.692 → 0.784、GPT-4o top-10 QA 0.670 → 0.720；value = session 時 Recall@10 0.783 → 0.862。Rank merging 的 round + fact Recall@5 只有 0.478。",
+      "section": "§5.3、Table 3、Appendix E.3 Table 10",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "時間感知的索引加查詢擴充能縮小時間推理題的檢索範圍、提升召回，但需要強模型推時間範圍；Llama 3.1 8B 常在沒有時間指涉的問題上硬擠出範圍，反而把答案過濾掉。",
+      "numbers": "M_T = GPT-4o 時平均召回提升：round 11.3%、session 6.8%；K = V + fact、round 的 Recall@10 0.550 → 0.722。M_T = Llama 3.1 8B 時 round、K = V 的 Recall@5 0.421 → 0.384（下降）。",
+      "section": "§5.4、Table 4、Appendix E.4 Table 11",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "即使檢索完美（oracle），閱讀策略不佳仍會損失大量正確率；CoN 搭配 JSON 格式在各閱讀模型上都最好，而沒有 CoN 時 JSON 不一定贏自然語言。",
+      "numbers": "GPT-4o 在 oracle 設定下，最差與最佳閱讀設定相差最多約 10 個百分點（Figure 6 為圖表）。",
+      "section": "§5.5、Figure 6",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "最佳記憶設計下的錯誤有相當比例是「檢索對了、生成錯了」，閱讀端仍有改良空間；答對的題目約九成需要檢索正確。",
+      "numbers": "檢索正確但生成錯誤占全部實例 15% 到 19%、占錯誤實例 40% 到 50%，閱讀模型越弱比例越高；約 90% 的答對案例伴隨正確檢索，其餘約 10% 多為只取回更新後資訊的 knowledge-update 題。設定：round、K = V + fact、CoN、Stella V5、top-10、JSON。",
+      "section": "Appendix E.5、Figure 14",
+      "anchor_idx": 6
+    }
+  ],
+  "limitations_stated": [
+    "LongMemEval_S 的歷史仍然偏短（約 50 個 session），歷史再拉長時效能很可能進一步下降。",
+    "商用系統研究只能透過網頁介面人工操作，因此歷史縮短到 3 到 6 個 session，且無法評估需跨數月互動的時間推理題、single-session-assistant 題，也因使用早期資料版本而沒有拒答題。",
+    "GPT-4o judge 在 single-session-preference 與拒答題上因答案開放而與人工判定略有落差。",
+    "把 session 壓縮成摘要或事實會造成資訊流失、拉低多數題型的 QA 表現。",
+    "時間感知查詢擴充仰賴強 LLM 推時間範圍，Llama 3.1 8B 即使給了大量範例仍常幻覺或漏掉時間線索。",
+    "較大的嵌入檢索模型因延遲不切實際而未納入比較。",
+    "閱讀端仍有大幅改良空間（檢索正確但生成錯誤的比例高）。",
+    "嚴格的檢索評估會把只取回更新後資訊的 knowledge-update 題判成檢索失敗。",
+    "倫理面：儲存與回想使用者資訊可能洩漏個資、缺少記憶刪除操作會損害可信度、惡意內容可能被寫進記憶而在推論時造成越獄，需對記憶讀寫資料流做審核。"
+  ],
+  "limitations_observed": [
+    "名為 interactive，實際上是離線重播：歷史中的助理回覆全由 Llama 3 70B 事先生成，受測系統只負責吸收，自己的回覆從不影響後續使用者輪次，因此「系統在對話中記錯並把錯誤帶下去」這類互動誤差完全測不到。真正互動的只有商用系統研究，而那部分用 3 到 6 個 session、由人工判分、不含拒答題，並非 LongMemEval_S 的協定，摘要把兩者的數字並列容易讓讀者誤以為是同一套評估。",
+    "商用系統研究的樣本很小且沒有信賴區間：由 Table 7 的分數反推，各能力欄的題數約為 IE 16、MR 34、KU 24、TR 23（合計 97）。ChatGPT 用 GPT-4o-mini（0.7113）反而高於用 GPT-4o（0.5773），IE 欄甚至是 1.000 對 0.688，顯示變異大或產品端有未揭露的差異；且只是 2024 年 8 月的快照，無法代表之後改版的產品記憶。",
+    "論文內部數字不一致：Phi-3.5 Mini 的 oracle 正確率在 Figure 3(b) 是 0.660，在 Table 8 卻是 0.488；Table 9 的 Stella V5 列與 Table 3 同設定對不上（session、K = V + fact 的 NDCG@5 在 Table 3 是 0.620、Table 9 是 0.520；round、K = V 的 Recall@5 在 Table 3 是 0.582、Table 9 是 0.660，反而接近 Table 3 的 K = V + fact）。引用這些表格做精確比較前要先存疑。",
+    "oracle 並不是穩定的上界：Table 8 中 Phi-3.5-mini 在 S 上走記憶檢索（K = V，0.550）高於 oracle（0.488／0.490），Qwen2.5-7B 在 M 上走檢索（0.390）也高於 oracle 直接作答（0.282）。檢索欄預設套用 CoN 與 JSON，oracle 與長脈絡欄的閱讀格式不同，§3.4 用來論證難度的「相對 oracle 下降百分比」混入了閱讀格式這個干擾變數。",
+    "平均數掩蓋了異質性：依 Table 4 自行換算，round 的 11.3% 是四個相對召回變化（+7.1%、-0.8%、+7.6%、+31.3%）的平均，主要由單一格撐起；session 設定下 NDCG@10 在套用 GPT-4o 查詢擴充後反而下降（0.707 → 0.679、0.782 → 0.758）。而且 §5.4 只報檢索指標、只在時間推理子集上測，沒有報時間感知擴充對端到端 QA 的影響。",
+    "judge 的可靠性檢驗範圍窄：後設評估只用兩個模型的長脈絡直接作答輸出，沒有涵蓋最多 800 tokens 的 CoN 逐步推理輸出，而主實驗的大部分數字正是 CoN 輸出。judge 是 GPT-4o、主要受測閱讀模型也是 GPT-4o，同家族偏好沒有檢驗；引言寫「超過 97% 一致」，但開放題型最低只有 0.90，而拒答題全集只有 30 題。",
+    "haystack 可能有捷徑：填充 session 有一半來自 ShareGPT／UltraChat，風格與 Llama 生成的個人化任務 session 不同；沒有預設時間的 session 全擠在 2023 年 5 月；Figure 9(c) 顯示證據多半落在 session 開頭。這些位置與風格線索可能讓檢索器找到捷徑，但論文沒有做消融；附錄 E.5「讀者無法走捷徑」的論證只涵蓋閱讀端，不涵蓋檢索端。",
+    "一題配一段專屬歷史，評估成本很高：S 每題約 115k tokens，500 題約 57M tokens（Mastra 的報告也寫到此量級），M 約 750M tokens，線上記憶系統每題都要重新吸收，實務上大家多半只報 S；而且同一段歷史只問一題，無法衡量同一份記憶面對多次查詢的一致性，也沒量測寫入成本與延遲（DialSim 至少有時間限制）。",
+    "記憶設計結論與實作高度綁定：抽取器一律用 Llama 3.1 8B、key 只保留使用者端話語，「事實壓縮有害」「single-session-assistant 難」可能部分反映抽取器品質與只看使用者端的設計，而非壓縮本身；這些結論外推到更強抽取器或保留助理端內容的系統時要小心。",
+    "飽和與版本問題：repo 顯示 2025/09 做過資料清理，論文數字屬於清理前版本；廠商自報的數字（Zep 用 GPT-4o 為 71.2%、Mastra 用 GPT-4o 為 84.23%、gpt-5-mini 為 94.87%）時間點、資料版本與設定不一，而且 S 在頂端已接近飽和，逐漸失去鑑別力。"
+  ],
+  "framework_role": "T7 的多 session 記憶評估範本：提供可延伸長度的歷史組裝法、五能力七題型的分類、題型專屬且有後設評估的 LLM judge，以及用證據位置標籤算的中間層檢索指標，讓評估能把失敗拆成「沒記住或沒找到」與「找到但讀錯」兩類；這種兩層指標設計可直接借來評估框架中 T2 跨 session 狀態（長期記憶）的品質。次要角色：其 self-chat「間接透露證據」的使用者模擬提示詞屬於 T6 的測試資料生成用法（不是回饋迴路）；§4 到 §5 的索引、檢索、閱讀設計比較則偏 T2 的實作指引，不是評估方法本身。",
+  "edges": [
+    {
+      "edge": "E6",
+      "how": "評估的原料就是互動紀錄：由 Llama 3 70B 扮演使用者的 self-chat 模擬器產生任務導向 session，經人工編修並標註證據位置後，與 ShareGPT／UltraChat 等真實風格的使用者與助理紀錄組成帶時間戳記的歷史，逐 session 餵給受測系統，再以 GPT-4o judge 評 QA、以證據位置標籤算 Recall／NDCG。商用系統研究則是把人工標註者與 ChatGPT、Coze 的實際逐輪互動當作評估對象。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "Zep 官方部落格（2025-01-22）以 LongMemEval_S 評估自家記憶服務：GPT-4o 加 Zep 為 71.2%、全脈絡基準 63.8%；GPT-4o-mini 加 Zep 為 60.2%、全脈絡 55.4%。來源：https://blog.getzep.com/state-of-the-art-agent-memory/",
+      "Mastra Research（2026-02-09）以 LongMemEval_s 評估其 Observational Memory，明寫使用 gpt-4o 當 judge 並採用基準本身的題型專屬評估提示詞；報告 gpt-4o 84.23%、gpt-5-mini 94.87%。來源：https://mastra.ai/research/observational-memory",
+      "Supermemory 研究頁（評估報告標示 2026 年 5 月）以 LongMemEval-S 的 500 題、六類題型報告 Recall@20（含彙總）97%。來源：https://supermemory.ai/research",
+      "官方 repo 以 MIT 授權釋出程式碼與評估腳本（src/evaluation/evaluate_qa.py 用 gpt-4o 當 judge），資料放在 HuggingFace xiaowu0162/longmemeval-cleaned；README 記載 2025/02 被 ICLR 2025 接受、2025/09 資料清理、2026/05 釋出 LongMemEval-V2。來源：https://github.com/xiaowu0162/LongMemEval"
+    ],
+    "assessment": "有可查證的商用採納：至少三家商用 agent 記憶產品（Zep、Mastra、Supermemory）在官方部落格或研究頁以 LongMemEval（S 設定）作為對外評估基準，Mastra 並直接沿用論文的 judge 協定；不過這些都是廠商自報、資料版本與設定不一，不是獨立評估。論文提出的記憶設計（事實擴充 key、時間感知查詢擴充）則未見產品採用的證據。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/xiaowu0162/LongMemEval",
+    "data": "公開：LongMemEval_S、LongMemEval_M 與 oracle 三份 JSON 放在 HuggingFace（xiaowu0162/longmemeval-cleaned，2025/09 清理版），MIT 授權；judge 提示詞與評估腳本一併釋出。商用系統的人工互動研究無法重現（產品已改版）。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是多 session 對話記憶評估的事實標準：長度可延伸的歷史組裝、題型專屬且有後設評估的 judge、以證據標籤拆開檢索與閱讀的兩層指標都可直接借用，且已被多家商用記憶產品拿來對外評估；缺點是互動性其實是離線重播、內部數字有不一致，引用時要自行核對。",
+  "related": [
+    "2402.17753",
+    "2305.10250",
+    "2406.13144",
+    "2311.09210",
+    "2405.14831",
+    "2401.18059",
+    "2310.05029",
+    "2406.05925",
+    "2306.05685",
+    "2303.16634"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

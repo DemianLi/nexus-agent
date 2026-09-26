@@ -1,0 +1,195 @@
+{
+  "id": "2407.01502",
+  "title": "AI Agents That Matter",
+  "topic": "T8",
+  "subarea": "成本、效率與使用者滿意度等多目標分數",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "以 HumanEval、HotPotQA、NovelQA、WebArena 的重跑與稽核，主張 agent 評估必須把美元成本與準確率一起畫成 Pareto 前緣（成本控制比較），並示範用 Optuna 聯合最佳化 DSPy 管線，在準確率相近下把變動成本砍掉 41–53%；同時指出 holdout 不足與評估腳本不標準化造成分數灌水。",
+  "problem": "agent 排行榜只看準確率，但 LLM 是隨機的，單純重試、多次取樣就能無上限地用推論成本換準確率，於是「SOTA」可能只是花更多錢，社群也可能把增益誤歸因於反思、規劃等 System 2 設計。此外，模型開發者（科學問題，想排除成本這種會隨時間與供應商變動的量）和下游開發者（採購問題，成本正是關心的構念）的評估需求被混為一談；agent benchmark 樣本少、常缺 holdout，容易被寫死策略走捷徑；評估腳本不標準化、少有誤差棒，使報告分數無法重現且偏樂觀。這些都讓「任務完成分數」無法反映真實可用性。",
+  "core_idea": "把 agent 評估從單一準確率改成至少二維（準確率 × 實際美元推論成本，時間可作第三軸）：以非支配點構成凸 Pareto 前緣做成本控制比較，並提供簡單但強的基線（retry、warming、escalation）當對照；既然成本進了評分，就能反過來做成本與準確率的聯合最佳化，並把總成本拆成一次性固定成本（最佳化設計）與每次推論的變動成本，用損益兩平點決定值不值得。成本要以 token 數加上可替換的單價回報，讓讀者日後能用當下價格重算。",
+  "method": {
+    "成本控制評估（§2、附錄 A）": {
+      "資料": "HumanEval 164 題，採 LDB 論文提供的修改版（原版 3 題缺範例測試，LDB 版補齊並轉成機器可讀格式）。最終判分用 HumanEval 的隱藏測試，agent 只能看題目附的範例測試。",
+      "模型與價格": "gpt-3.5-turbo-0125（每百萬 token 輸入 $0.5／輸出 $1.5）、gpt-4-turbo-2024-04-09（$10／$30），2024 年 4 月價格；穩健性檢查另用 2023 年 6 月版 gpt-3.5-turbo-0613 與 gpt-4-0613（$30／$60）。",
+      "成本與時間計算": "每次 API 呼叫的輸入 token × 輸入單價 + 輸出 token × 輸出單價，加總為該 agent 跑完 164 題的總成本；時間為所有 API 呼叫推論時間的總和。每個 agent 跑 5 次，報平均準確率與平均總成本。",
+      "誤差棒": "5 次執行的 min–max，加上以 Student t 分布（n=5）算的 95% 信賴區間，準確率與成本兩軸都畫。",
+      "簡單基線": [
+        "Zero-shot：沿用 LDB 程式庫的 simple 策略，輸入文字提示加題目的範例測試。",
+        "Retry：溫度 0，產生程式碼後跑範例測試，只要有一個沒過就重新呼叫同一模型，最多 5 次；第一個讓範例測試全過的解就是最終答案（溫度 0 也非決定性，所以重試有意義）。",
+        "Warming：同 Retry，但溫度逐次升高：第 1 次 0、第 2–3 次 0.3、第 4–5 次 0.5。",
+        "Escalation：溫度 0，範例測試失敗就沿成本遞增的模型鏈升級：llama-3-8b-chat-hf → gpt-3.5-turbo-0125 → llama-3-70b-chat-hf → gpt-4-turbo-2024-04-09；便宜模型可能過了範例測試但沒過隱藏測試，所以準確率略低於 GPT-4。"
+      ],
+      "被比較的 agent 設定（皆釘在特定 commit）": [
+        "LDB：生成器與除錯器可為不同模型，記作 LDB(生成器, 除錯器)；最多 10 輪、溫度 0。",
+        "LATS：最多 8 輪、擴展因子 3、產生實作的溫度 0.8、產生自我反思與內部單元測試的溫度 0.2；內部測試上限 GPT-3.5 為 6、GPT-4 為 4（論文未寫，向作者詢問得知）。",
+        "Reflexion：最多 2 輪、擴展因子 3、產生實作溫度 0、測試與反思溫度 0.2。"
+      ],
+      "Pareto 前緣": "在平均成本與平均準確率兩軸上找非支配點，再取凸包：兩個前緣上的 agent A、B 可用機率 p 呼叫 A、1−p 呼叫 B 的混合策略線性內插，因此凸包下方的點（例如 zero-shot GPT-4）不算在前緣上。作者附 Colab 範例實作。"
+    },
+    "成本與準確率聯合最佳化（§3、附錄 B）": {
+      "任務與判準": "HotPotQA 多跳問答，用 DSPy 的 simplified Baleen 管線：每一跳由 LM 依問題與已取回脈絡產生搜尋查詢 → 用 ColBERTv2 從 2017 年 Wikipedia 摘要段落取 top-k → 去重後加入脈絡；跳數 2、每次取 2 段；最後 LM 依脈絡作答。評分不是答案正確率，而是「所有 ground-truth 文件是否都被取回」。從訓練集隨機抽 100 筆做最佳化、評估集抽 200 筆做測試，固定 seed。",
+      "模型與價格": "gpt-3.5-turbo-0125（Azure，$0.5／$1.5）與 Llama-3-70b-chat-hf（Together.ai，$0.9／$0.9），2024 年 5 月價格。",
+      "五種設計": [
+        "Uncompiled：只有任務指示與內容，無 few-shot、無格式指示。",
+        "Formatting instructions only：加上 DSPy 預設的輸出格式指示。",
+        "DSPy few-shot（BootstrapFewShot）：用 100 筆訓練資料，依編譯判準（預測答案與標準答案相符且出現在取回脈絡中、每個查詢不超過 100 字元、查詢彼此夠不同）收集成功軌跡作示範，上限 8 個；不足就隨機補。",
+        "DSPy random search（BootstrapFewShotWithRandomSearch）：50 筆訓練、50 筆驗證，候選程式 16 個，選驗證集最佳。",
+        "Joint optimization：以 BootstrapFewShot 為底，但不在湊滿示範數時停止，而是跑完 50 筆訓練樣本建立候選示範池；再用 Optuna 多目標最佳化，同時最大化準確率、最小化 prompt 中 few-shot 示範加格式指示的 token 數。搜尋空間：每個模組的溫度 ∈ {0.0, 0.2, 0.4, 0.6}、示範數（上限 8）、挑哪些示範、要不要加格式指示；trial 數 16。Optuna 回傳的 Pareto 集合在 50 筆 dev set 上評估，選 dev 準確率最高者當最終設計。"
+      ],
+      "固定與變動成本": "固定成本＝最佳化過程的 API 花費（5 次平均）；變動成本＝每 100 次推論的花費（Table A3 的單位），由 200 題評估集平均得出。損益兩平推論次數＝(固定成本差) ÷ (每次推論的變動成本差)。每個設計在測試集跑 5 次，誤差棒同樣用 t 分布 95% CI 與 min–max，但不含最佳化與重抽樣造成的變異。"
+    },
+    "下游評估案例（§4.1、附錄 D）": "NovelQA 多選子集：GPT-4 整本小說進 context（原設定：每本小說一次輸入、一次問完全部題目）對比 RAG（text-embedding-3-large 嵌入整本小說，每題取 10 段、每段 1000 字元，用原論文提示詞加上片段）。以 tiktoken 精算題目、選項、提示詞 token 數，用 2024 年 5 月價格推算「一次只問一題」情境下每題成本。只跑一次。",
+    "benchmark 調查與重現稽核（§5、§6、附錄 C、E）": "把 17 個 agent benchmark 依四種通用層級（distribution-specific、task-specific、domain-general、general-purpose）分類，檢查 holdout 是否落在對應層級（分別應保留同分布樣本、分布外樣本、任務、領域）；只要實際存在或作者表明打算建立就算合格。另重跑 HumanEval 上的 LATS、LDB、Reflexion 與讀 WebArena 上 STeP 的原始紀錄，逐項列出子集評估、判分錯誤、速率限制、基線低報等問題。"
+  },
+  "assumptions": [
+    "美元推論成本是下游開發者真正關心的構念；模型評估則應改用與時間、供應商無關的代理量（參數量、訓練算力）。",
+    "兩個 agent 可以用機率混合，因此前緣可取凸包；這只對平均準確率與平均成本成立。",
+    "Retry、warming、escalation 之所以有效，前提是任務附有便宜且可信的正確性訊號（範例測試），而且範例測試與隱藏測試高度相關。",
+    "變動成本主導總成本的前提是 agent 會被重複使用成千上萬次。",
+    "HotPotQA 以「取回所有 gold 文件」當成功判準足以代表管線品質。",
+    "NovelQA 的每題成本推算假設 long-context 在逐題提問時準確率不變。",
+    "benchmark 的預期通用層級可由論文敘述推斷（作者承認是最佳猜測）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "HumanEval（LDB 修改版，164 題）",
+      "HotPotQA（100 筆最佳化、200 筆測試，檢索判準）",
+      "NovelQA（多選子集）",
+      "WebArena（STeP 紀錄稽核，Reddit 子集 129 題）",
+      "17 個 agent benchmark 的 holdout 調查（Table A4）"
+    ],
+    "metrics": [
+      "HumanEval 隱藏測試準確率（5 次平均，min–max 與 t 分布 95% CI）",
+      "總美元成本（依 token 數與當期單價計算）",
+      "推論時間（所有 API 呼叫時間總和）",
+      "HotPotQA 檢索成功率（所有 gold 文件都被取回）",
+      "固定成本、每 100 次推論的變動成本、損益兩平推論次數",
+      "NovelQA 多選準確率與每題成本、成本比",
+      "holdout 合格比例"
+    ],
+    "baselines": [
+      "GPT-3.5／GPT-4 zero-shot",
+      "Retry、Warming、Escalation（本文提出）",
+      "LDB、LATS、Reflexion（HumanEval 排行榜上有公開程式碼的 agent）",
+      "DSPy uncompiled、formatting only、BootstrapFewShot、BootstrapFewShotWithRandomSearch",
+      "GPT-4 long-context 對 GPT-4 + RAG"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在 HumanEval 上，簡單基線與「SOTA」複雜 agent 準確率沒有顯著差異，但成本差到接近兩個數量級；準確率本身無法辨識進步",
+      "numbers": "Warming(GPT-4) 93.2%／$2.45、Retry(GPT-4) 92.0%／$2.51、LDB(GPT-4) 93.3%／$6.36、Reflexion(GPT-4) 87.8%／$3.90、LATS(GPT-4) 88.0%／$134.50（約 warming 的 55 倍）、GPT-4 zero-shot 89.6%／$1.93；Escalation 85.0%／$0.27 對 LDB(GPT-3.5) 80.2%／$0.63。2023 年 6 月版模型重跑結論相同：Warming 90.6%／$3.88、LATS(GPT-4) 83.5%／$360.02",
+      "section": "§2.3、Figure 1、Table A1、Table A2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "聯合最佳化在準確率相近下大幅降低變動成本",
+      "numbers": "每 100 次推論變動成本：GPT-3.5 為 $0.174（準確率 0.509）對 random search $0.376（0.495）、few-shot $0.384（0.47），約低 53%；Llama-3-70B 為 $0.374（0.601）對 $0.643（0.617）、$0.661（0.622），約低 41%",
+      "section": "§3.2、Figure 2、Table A3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "固定成本換變動成本的損益兩平點在一千多次推論，之後聯合最佳化的總成本就比 DSPy few-shot 低",
+      "numbers": "附錄 Figure A6：Llama-3-70B 1332 次、GPT-3.5 1275 次（對照 few-shot；以 Table A3 自行重算約 1330 與 1278 次吻合）；正文寫成約 1,350 次，前後不一致。固定成本：JO $2.714／$3.844，few-shot $0.029／$0.028，random search $2.696／$4.820",
+      "section": "§3.2、附錄 B、Figure A6、Table A3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "為模型評估設計的 benchmark 會誤導下游決策：NovelQA 一次問完全部題目，嚴重低估 RAG 相對 long-context 的成本優勢",
+      "numbers": "RAG 67.89%／$52.80 對 long-context 67.81%／$99.80（NovelQA 原設定下只省約一半）；改成逐題提問時 long-context 每題約 $1.115、RAG 約 $0.051，成本比約 21.86 倍；若逐題評估 GPT-4 全部約 2,300 題約需 $2,590",
+      "section": "§4.1、附錄 D、Table A5",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "多數 agent benchmark 沒有與預期通用層級相符的 holdout",
+      "numbers": "17 個中 7 個沒有 holdout 且無建立計畫；有 holdout 的 10 個中只有 5 個層級合格；分層：distribution-specific 1/1、task-specific 3/6、domain-general 1/8、fully general 0/2",
+      "section": "§5、Table 1、Table A4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "重現結果與原論文報告有明顯落差，基線有時被低報、agent 有時被高報",
+      "numbers": "LDB 論文的 GPT-4 zero-shot 基線報 75.0%，重跑 89.6%（2023 年 6 月版也有 86.5%）；LATS(GPT-4) 報 94.4% 重跑 88.0%；LDB(Reflexion, GPT-3.5) 報 95.1% 重跑 88.9%；Reflexion(GPT-4) 報 91.0% 重跑 87.8%；但 LDB(GPT-4, GPT-3.5) 報 89.6% 重跑 91.0%",
+      "section": "§6、Table A6、Table A7",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "判分只用部分隱藏測試會讓錯誤解被算成成功，直接灌水任務完成率",
+      "numbers": "LATS 只在部分題目用真正的測試判分，造成約 3 個百分點的準確率差（5 次平均）；LATS 另移除 4 題、Reflexion 移除 3 題未申報",
+      "section": "§6、附錄 E.1",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "環境副作用與評估器錯誤讓 WebArena 成績失真：任務之間不獨立，且失敗任務被判成成功",
+      "numbers": "Reddit 速率限制影響 STeP 的 30/129 題（原 WebArena 基線 2/129）；STeP 紀錄中 agent 因速率限制停下的任務仍記 reward 1.0、success 1.0；STeP 移除 8 題；STeP 35.8% 的成績部分來自寫死網址規則等針對任務的策略",
+      "section": "§5.1、§6、Table A6、Listing 2",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "成本評估依賴當下的定價與技術條件，價格變動會改變結論；作者以可自行輸入單價的網頁工具部分緩解。",
+    "沒有涵蓋所有任務環境與 agent 變體。",
+    "環境成本、資料標註人力、維運成本等其他成本沒有分析。",
+    "NovelQA 評估成本太高只跑一次，沒有誤差棒。",
+    "HotPotQA 的誤差棒只含測試集上的樣本內變異，不含最佳化與重抽樣造成的變異。",
+    "聯合最佳化只是示範，預期更複雜的方法會大幅勝過它。",
+    "System 2 技術在比 HumanEval 更難的任務（如 SWE-bench）上可能有用。",
+    "人在迴路中的評估昂貴且結果取決於使用者技能，本文只討論未實驗。",
+    "benchmark 的通用層級是作者依論文敘述做的最佳猜測。"
+  ],
+  "limitations_observed": [
+    "Retry、Warming、Escalation 的強勢建立在 HumanEval 題目附帶範例測試這個便宜的驗證器上：本質是「用可見測試篩選的多次取樣」。客服、多輪對話這類沒有可執行 oracle 的任務（T8 真正要打分的場景）無法直接套用，也沒有實驗顯示驗證器有雜訊時結論是否還成立。",
+    "「簡單基線 Pareto 改善 SOTA」依設定而定：正文說 LDB 比 warming 貴 50% 以上，只對作者自己加的 LDB(GPT-4) 成立；原論文有評估的 LDB(GPT-4, GPT-3.5) 為 91.0%／$2.19，比 warming 的 $2.45 還便宜，準確率只低約 2 個百分點，本身就可能在前緣上。",
+    "凸包靠隨機混合兩個 agent 撐起，只保住平均準確率與平均成本；逐題一致性（pass^k 之類）與成本變異在混合策略下反而變差，前緣上的內插點不是實際可部署的單一 agent。",
+    "5 次重跑只拿來算平均值的 min–max 與 t 分布 CI，沒有報逐題一致性或 pass^k；論文在 Table A4 引用了 τ-bench，卻沒有採用它的可靠性度量。這個 CI 只反映同一組 164 題重跑之間的變異，不含題目抽樣的變異（把 164 題當成任務分布的樣本時，誤差會大得多），拿來判斷「無顯著差異」偏樂觀。",
+    "Pareto 支配的定義前後不一：§2.3 寫「兩個維度都顯著更好」卻沒說用什麼檢定，附錄 A.1 則以平均值判斷非支配。",
+    "Llama-3-70B 上「維持準確率」站不太住：JO 0.601（0.59–0.62）對 few-shot 0.622（0.615–0.63）、random search 0.617（0.60–0.63），區間幾乎不重疊；GPT-3.5 則是 JO 較高但區間 0.475–0.54 很寬。兩個模型方向不一致，只憑 5 次、200 題難以下結論。",
+    "HotPotQA 的「accuracy」其實是檢索判準（所有 gold 文件都取回），而 DSPy 編譯判準是答案相符；最佳化目標與評估目標不同，§3 的成本與準確率權衡並未量到最終答案品質。",
+    "損益兩平點只對 DSPy few-shot 成立（few-shot 固定成本只有約 $0.03）；對 random search 而言，GPT-3.5 的 JO 固定成本只多 $0.018，Llama 的 JO 甚至更低，根本不存在「用固定成本換變動成本」的取捨。正文的 1,350 與附錄的 1332／1275 也不一致。",
+    "Escalation 的第一級與第三級是 Llama-3-8B／70B，但附錄 A.1 只列 GPT 單價，沒寫 HumanEval 實驗中 Llama 的供應商與價格，成本無法完整重現。",
+    "NovelQA 只跑一次，67.89 對 67.81 的差距在單次雜訊內；21.86 倍是以 token 數推算，沒有實際逐題跑 long-context，隱含假設逐題提問時準確率不變。",
+    "STeP 案例只指出受影響題數（30/129）與一筆被誤判成功的紀錄，沒有量化 35.8% 中有多少是評估器偽陽性，也沒有重跑修正後的分數。",
+    "多目標只做到準確率 × 成本（時間只附圖、未納入最佳化），沒有把它們合成可比較的單一分數或決策規則，也完全沒有使用者滿意度、互動輪數等 T8 子領域關心的維度；§5.2 的人在迴路中只有論述。",
+    "HumanEval 已接近飽和（多數設定 85–93%），在天花板附近比較 System 2 是否有用，鑑別力有限；結論外推到長時程、多步驟的 agent 任務需謹慎。"
+  ],
+  "framework_role": "T8 多目標分數子領域的基準論文：確立「任務完成率必須與美元成本並列報告」的原則，給出可操作的定義（token 數 × 可替換單價、5 次平均與 CI、非支配點加凸包構成前緣、固定與變動成本拆分與損益兩平），並提醒成功判準本身的完整性（只用部分隱藏測試判分、環境速率限制、評估器把失敗記成成功、未申報的子集評估都會灌水完成率）。它刻意維持二維 Pareto 報告而不合成單一分數，也沒有處理使用者滿意度，所以在框架中是「成本軸」與「判分完整性」的依據，需與 τ-bench 類的 pass^k 可靠性度量、以及使用者端分數搭配。benchmark holdout 與重現性的部分同時可供 T7 評估方法參考。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "只在單次嘗試層級成立：本文提出的 Retry、Warming、Escalation 以及被比較的 LDB、Reflexion、LATS，都是在可見範例測試失敗時觸發修正（原樣重試、升溫重抽、換更貴的模型，或是除錯、反思後重寫）。論文的貢獻是把這條修正迴圈的 token 成本計入分數，並顯示在 HumanEval 上不帶反思的重試與帶反思的修正準確率相當、成本低很多。它不是從整條軌跡偵測異常，也沒有分析軌跡內容。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "旁證，不計為採納：同一 Princeton 團隊（SAgE）營運的 HAL（Holistic Agent Leaderboard，https://hal.cs.princeton.edu/）以成本感知、並列準確率與美元成本並畫出 Pareto 前緣為賣點；但它是學術排行榜，頁面引用的是自家新論文（arXiv 2510.11977），沒有引用本篇。",
+      "論文自身只提供原型網頁工具（https://benediktstroebl.github.io/agent-eval-webapp/）供輸入單價重算，屬研究原型，不是產品部署；文中宣稱打算把聯合最佳化器送進 DSPy 官方程式庫，未查證是否落地。"
+    ],
+    "assessment": "未見證據。論文沒有寫任何商業部署；已確認的後續只有作者團隊自己的學術排行榜。本次 WebSearch 額度已用完（200/200），沒能進一步查證業界官方文件是否採用其成本控制評估，因此採納面證據並不完整。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/benediktstroebl/agent-evals",
+    "data": "使用的資料皆為公開 benchmark（HumanEval 的 LDB 版、HotPotQA、NovelQA、WebArena）；程式庫以 MIT 授權釋出重現 HumanEval、HotPotQA、NovelQA、WebArena 分析的腳本、三個基線與聯合最佳化器，另附 Pareto 前緣計算的 Colab 範例與可調單價的網頁工具。被比較的 LDB、LATS、Reflexion 皆釘在特定 commit。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是 T8「成本與效率多目標分數」的核心立論之一，給出成本控制比較、Pareto 前緣、固定與變動成本拆分等可直接落地的定義，並用實例揭露判分灌水；缺點是只做到準確率與成本兩軸，不合成單一分數、不碰使用者滿意度。",
+  "related": [
+    "2403.02419",
+    "2310.03714",
+    "2307.13854",
+    "2310.03720",
+    "2402.16906",
+    "2310.04406",
+    "2303.11366",
+    "2107.03374",
+    "2403.12766",
+    "2406.12045",
+    "2310.06770",
+    "2211.09110",
+    "2405.14782"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 6,
+    "total": 8
+  }
+}

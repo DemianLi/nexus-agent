@@ -1,0 +1,179 @@
+{
+  "id": "1603.08023",
+  "title": "How NOT To Evaluate Your Dialogue System: An Empirical Study of Unsupervised Evaluation Metrics for Dialogue Response Generation",
+  "topic": "T7",
+  "subarea": "多輪對話與互動式評估",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "用 Twitter 與 Ubuntu 各 100 筆回應的人評，量 BLEU、METEOR、ROUGE 與三種詞嵌入指標跟人類判斷的相關，發現這些以參考答案比對的指標在 Twitter 只有弱相關、在 Ubuntu 完全不相關，也說明能分出模型高下不代表指標有效。",
+  "problem": "開放領域（非任務導向）的回應生成模型沒有 task completion 或使用者滿意度這類監督訊號，大家就把機器翻譯與摘要的指標（BLEU、METEOR、ROUGE）搬來用，拿模型回應跟唯一一句 ground-truth 回應比字面重疊。可是對話的合理回應高度多樣，兩句都合理的回應可能一個字都不重疊（Table 1 的例子 BLEU 為 0）。一旦指標跟人類判斷不相關，拿它做模型比較、調參、寫進論文結論，都會系統性地誤導研究方向。作者要回答兩件事：這些指標在對話上到底有沒有效度，以及失效的原因是什麼。",
+  "core_idea": "做一次 meta-evaluation：把指標當成受測物，拿人類評分當基準。多種來源的回應各算一次指標分數，同時收集人類評分，再算逐筆回應的 Pearson 與 Spearman 相關，並用「人類評分者隨機分兩半互相對照」的相關當作上限。另外做三種診斷：去掉停用詞後重算、按長度差分組、挑指標與人類意見相反的例子逐一分析，藉此找出失效的原因。論證的關鍵是：指標能把模型分出統計顯著的高下（Table 2），跟指標有效是兩回事；在新任務上沒先對人評驗證過的指標，不應該拿來評那個任務。",
+  "method": {
+    "問題設定": "輸入是對話 context、候選回應 r̂，以及唯一一句 ground-truth 回應 r（假設每個 context 只有一句參考）。每個指標只比 r̂ 與 r，完全不看 context，逐句輸出一個分數。刻意排除的有三類：word perplexity（不是逐回應計算，檢索模型也算不出來）、recall 這類檢索指標，以及有監督（task completion 等）的評估方法。",
+    "受測指標：字詞重疊類": [
+      "BLEU-N（N=1..4）：P_n 是 n-gram 精確率，分子是每個 n-gram 在兩句中出現次數的最小值加總。BLEU-N 等於 brevity penalty 乘上 exp(Σ β_n log P_n)，β_n 一律均等。逐句計算時用 sentence-level smoothing（引 Chen & Cherry 2014），否則沒有 4-gram 重疊時幾何平均會直接歸零。論文沒寫用了哪一種 smoothing。",
+      "METEOR：先做明確的對齊，依序是完全相同的 token、WordNet 同義詞、詞幹、paraphrase；分數取精確率與召回率的調和平均。版本未註明。",
+      "ROUGE-L：以最長共同子序列（LCS，不必連續但要保持順序）計算的 F-measure。"
+    ],
+    "受測指標：詞嵌入類": [
+      "嵌入來源：Word2Vec。作者強調嵌入的訓練語料不能跟任務語料重疊，以維持統計獨立，但這一版全文沒寫實際用了哪一套預訓練向量。",
+      "Greedy Matching：r 的每個詞，到 r̂ 裡找 cosine 最大的那個詞，取最大值後對 |r| 平均，得到 G(r, r̂)。因為這個式子不對稱，最終分數是兩個方向的平均：GM = (G(r, r̂) + G(r̂, r)) / 2。來源是智慧家教系統的評估。",
+      "Embedding Average：句向量是詞向量的加總再正規化，兩句之間取 cosine。",
+      "Vector Extrema：句向量的每一維，取句中所有詞在該維的極值，也就是絕對值最大的那個值（保留正負號），再比 cosine。直觀上常用詞靠近原點會被忽略，資訊量高的詞會被保留。"
+    ],
+    "候選回應來源（受評模型）": [
+      "R-TFIDF／C-TFIDF：每個 context 與 response 都算 TF-IDF 向量，其中 tf 是詞 w 在 context c 中出現的次數，idf 是 log(總對話數／含 w 的對話數)。R-TFIDF 拿輸入 context 去比語料中的 responses，C-TFIDF 拿輸入 context 去比語料中的 contexts，取 cosine 最高者對應的回應。",
+      "檢索設定：從候選池移除 ground-truth 回應的其中一次出現，模擬部署時看不到正解的情況；但如果語料中有別的 context 恰好有完全相同的回應，它仍然可以被選中。",
+      "Dual Encoder（DE）：兩個 RNN 分別把 context 與 response 編成向量 c、r，p(r 正確) = σ(cᵀ M r + b)。以 negative sampling 對所有 (context, response) 配對最小化 cross-entropy。",
+      "LSTM language model：在 (context, response) 串接序列上預測下一個詞；測試時先編碼 context，再用 greedy beam search 生成回應。",
+      "HRED：兩層階層式編碼。utterance-level encoder 逐句編碼，輸出再餵給 context-level encoder，以處理較長程的相依。"
+    ],
+    "人評協定": [
+      "評分者：作者所屬學校電腦科學系的 25 位志工。",
+      "題目：每個資料集 20 個不重複的 context，每個 context 配 5 種回應，每人每個資料集 100 題。5 種回應是：從測試集別處隨機抽的一句、TF-IDF（未寫是 R 或 C 版本）檢索的一句、DE 檢索的一句、HRED 生成的一句，以及一位人類標註者另外寫的一句。作者稱這 5 種來源大致均勻覆蓋了品質區間。",
+      "量表：只評 adequacy（適切性），1 到 5 分，1 是在該 context 下不恰當或不合理，5 是非常合理。不評 fluency，因為 5 種回應中有 4 種出自人手；不評 informativeness，理由是它在 Twitter 不重要，在 Ubuntu 又跟 adequacy 高度相關。",
+      "一致性篩選：計算每位評分者對其他人的 Cohen's kappa（引 1968 年的 weighted kappa）。剔除 κ<0.2 的 2 人，剩 23 人，中位數 κ 約 0.55。附錄 Table 6 列出全部 253 組兩兩配對（C(23,2)）的 κ 分佈。"
+    ],
+    "相關分析": [
+      "單位是逐筆回應：每個資料集 100 筆，每筆的人評分數對上指標分數，算 Spearman（任意單調關係）與 Pearson（線性關係），各附 p 值（Table 3）。",
+      "人類上限：把評分者隨機分成兩組，兩組的平均分互相算相關，列在 Table 3 的 Human 列。",
+      "散佈圖：Figure 1 放 BLEU-2、Embedding Average 與人類分半；附錄 Figures 3–6 放全部指標。"
+    ],
+    "敏感度與診斷分析": [
+      "去停用詞：在 Twitter 上去掉停用詞與標點，重算 BLEU-1／BLEU-2 對人評的相關（Table 4）。",
+      "長度差：Δw 是 ground truth 與候選回應字數差的絕對值。依 Δw≤6（n=47）與 Δw≥6（n=53）分組，比較 BLEU-1、BLEU-2、Embedding Average、METEOR 與人評的組平均，附 p 值（Table 5）。論文沒寫用了什麼檢定。",
+      "定性分析：挑嵌入指標與 BLEU-1 的評分和人評大幅相反的例子（Figure 2），逐例說明失效原因。"
+    ],
+    "模型比較（§4.3，用來示範「不完整的分析」）": "在 Ubuntu 與 Twitter 測試集上，用三個嵌入指標評 R-TFIDF、C-TFIDF、DE、LSTM、HRED 五個模型，附 95% 信賴區間（Table 2）。目的是展示：指標可以把模型分出統計顯著的差距，但這不代表它與人評相關。",
+    "資料": "Ubuntu Dialogue Corpus（技術支援，多輪）；Twitter 語料依 Ritter et al. 2010 的程序自行蒐集（閒聊）。從 Figure 2 的例子看得出 Twitter 文字已做前處理，數字換成 <number>、使用者名稱換成 @user 等。",
+    "重做時需自行補齊的缺口": "預訓練詞向量的來源、BLEU 的 smoothing 方法、METEOR 版本與斷詞方式、人評用的是哪個 TF-IDF 版本、Table 5 的檢定方法、人工撰寫回應的人是否看過 ground truth、各模型的訓練超參數（全文都沒有）。"
+  },
+  "assumptions": [
+    "每個 context 只有一句 ground-truth 參考回應，這也是當時端到端對話模型文獻的常見設定。",
+    "23 位評分者平均後的 adequacy 分數可以當作回應品質的基準真值；電腦科學系志工的判斷可以代表一般使用者，Ubuntu 的技術問題也包括在內。",
+    "逐筆回應（sentence-level）的相關是檢驗指標效度的合適粒度，即使 BLEU 原本是為 corpus-level 與多參考答案設計的。",
+    "五種回應來源（隨機、TF-IDF、DE、HRED、人寫）大致均勻覆蓋品質區間，每個領域 20 個 context 足以代表該領域。",
+    "訓練詞嵌入的語料與任務語料不重疊，嵌入指標與任務之間才保持統計獨立。",
+    "評估對象是非任務導向的回應品質，拿不到 task completion 之類的監督訊號。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Twitter 語料（依 Ritter et al. 2010 程序蒐集，閒聊領域）：人評 20 個 context × 5 種回應 = 100 筆",
+      "Ubuntu Dialogue Corpus（技術支援領域）：人評 20 個 context × 5 種回應 = 100 筆",
+      "Table 2 的模型比較用兩個資料集的測試集（筆數未寫）"
+    ],
+    "metrics": [
+      "受測的自動指標：BLEU-1/2/3/4、METEOR、ROUGE-L、Greedy Matching、Embedding Average、Vector Extrema",
+      "Meta-evaluation 用的統計量：逐筆回應的 Spearman 與 Pearson 相關及 p 值",
+      "評分者一致性：Cohen's kappa（剔除門檻 κ<0.2；另列兩兩配對的分佈）",
+      "人類上限：評分者隨機分半後兩組互相的相關",
+      "Table 2：指標平均值與 95% 信賴區間；Table 5：分組平均與 p 值"
+    ],
+    "baselines": [
+      "人類分半相關，作為指標相關的上限參照",
+      "受評的回應來源：隨機測試句、R-TFIDF、C-TFIDF、Dual Encoder、LSTM LM、HRED、人類撰寫（人評只用了其中的隨機、TF-IDF、DE、HRED、人寫五種）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在閒聊的 Twitter 領域，部分嵌入指標與 BLEU 只有弱正相關；最好的是 BLEU-2，ROUGE 與 BLEU-1 則不顯著",
+      "numbers": "Twitter，Spearman／Pearson（p 值）：BLEU-2 0.3576（<0.01）／0.3874（<0.01）；Embedding Average 0.2259（0.024）／0.1971（0.049）；Greedy 0.2119（0.034）／0.1994（0.047）；Extrema 0.2103（0.036）／0.1842（0.067）；METEOR 0.1887（0.06）／0.1927（0.055）；BLEU-1 0.1665（0.098）／0.1288（0.2）；ROUGE 0.1235（0.22）／0.09714（0.34）；人類分半 0.9476",
+      "section": "§5 Survey Results、Table 3、Figure 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "在技術性的 Ubuntu 領域，沒有任何指標與人評顯著相關，Embedding Average 甚至是負相關；人類之間卻高度一致",
+      "numbers": "Ubuntu：所有指標的 |Spearman| 與 |Pearson| 都 ≤0.17，p 值都 ≥0.10；Embedding Average 為 Spearman −0.1387（p=0.17）、Pearson −0.1631（p=0.10）；人類分半 Spearman 0.9550",
+      "section": "§5、Table 3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "在兩個領域、三個嵌入指標上，DE 都顯著勝過兩種 TF-IDF，看起來像是指標抓到了模型品質；但同樣的指標與人評幾乎不相關，所以「能區分模型」不能當作指標有效的證據（HRED 對 LSTM 在 Twitter 上其實分不開，見 limitations_observed）",
+      "numbers": "Embedding Average（±95% CI）：Ubuntu 上 DE 0.650 > C-TFIDF 0.571 > R-TFIDF 0.536，HRED 0.580 對 LSTM 0.130；Twitter 上 DE 0.597、C-TFIDF 0.531、R-TFIDF 0.483，HRED 0.599 對 LSTM 0.593；各格 CI 約 ±0.001–0.003",
+      "section": "§4.3、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "BLEU-3／BLEU-4 在逐句層級幾乎全是 0，它們與人評的相關主要來自 smoothing 常數，等同於帶雜訊、縮放過的 BLEU-2；若一定要用 BLEU，作者建議用 N=2",
+      "numbers": "BLEU-4 大於 10^-9 的只有 4 筆；但在 Twitter 的 Spearman 仍有 0.3417（BLEU-3 為 0.3423），與 BLEU-2 的 0.3576 相近，Pearson 則只剩 0.1392／0.1443（不顯著）",
+      "section": "§5 Survey Results、Table 3、附錄 Figure 6",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "去掉停用詞與標點後，BLEU-2 與人評的相關變弱，顯示 BLEU 對不影響語意的表面因素很敏感",
+      "numbers": "Twitter BLEU-2：Spearman 由 0.3576 降到 0.2030（p=0.043），Pearson 由 0.3874 降到 0.1300（p=0.20）；BLEU-1 的 Spearman 為 0.1580（p=0.12）、Pearson 0.2074（p=0.038）",
+      "section": "§5、Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "BLEU 與 METEOR 會懲罰與參考答案長度差距大的回應，人評與 Embedding Average 則沒有這個傾向",
+      "numbers": "Δw≤6（n=47）對 Δw≥6（n=53）：BLEU-1 0.1724 對 0.1009、BLEU-2 0.0744 對 0.04176、METEOR 0.2386 對 0.2073（三者 p 都 <0.01）；Embedding Average 0.6587 對 0.6246（p=0.25）；人評 2.66 對 2.57（p=0.73）。正文把這個表誤寫成 Table 4，實際是 Table 5",
+      "section": "§5、Table 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "人評協定本身可靠：評分者之間至少中度一致，作者據此認為任務設計合理、評分者理解題意",
+      "numbers": "25 人中 23 人對其他人的 κ>0.2（剔除 2 人），中位數 κ 約 0.55；253 組兩兩配對中，κ>0.2 佔 100%、>0.4 佔 88.9%、>0.5 佔 64.0%、>0.6 佔 19.8%、>0.7 佔 1.2%",
+      "section": "§5 Data Collection、附錄 Table 6",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "定性分析指出兩種失效：嵌入指標不會加權關鍵詞，用詞不同但同樣在道謝的合理回應被打低分；又因為常見詞與語意相近的詞在嵌入空間很接近，語意相反的回應被打高分。兩例的 BLEU-2/3/4 都接近 0，作者認為需要考慮 context 的指標",
+      "numbers": "Figure 2 兩例；兩例與參考答案之間都沒有超過 unigram 的 n-gram 重疊",
+      "section": "§5 Qualitative Analysis、Figure 2",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "只研究相對無約束的開放領域。受限領域（例如 Wen et al. 2015 從 dialogue act 生成句子）的輸出多樣性較低、較接近翻譯，BLEU 可能相關較高，但本文沒有實證。",
+    "只假設一句參考答案；多參考答案（例如自動檢索補充的參考）如何影響字詞重疊指標的相關，文獻中沒有標準做法，留待未來研究。",
+    "只證明現有指標不行，沒有提出替代指標。",
+    "受測的嵌入指標只是詞向量的簡單平均，無法建模句子層級的組合語意，比較像在量「是否切題」（topicality）。",
+    "所有受測指標都只比候選與參考答案，沒有考慮對話 context。",
+    "測試語料更大時，BLEU-3／BLEU-4 的非零分數會變多，相關可能更強。",
+    "Ubuntu 的正確回應含有模型不太會產出的技術詞，而且在 context 條件下的熵可能本來就比 Twitter 高，評估難度因此更高。",
+    "只評 adequacy，沒評 fluency 與 informativeness。",
+    "從資料學一個評估模型，可能跟解回應生成本身一樣難；果真如此，就只能一直把人評與粗略近似的指標並用。"
+  ],
+  "limitations_observed": [
+    "被評的回應幾乎都不是模型生成的：每個 context 的 5 種回應中，隨機句、TF-IDF 句、DE 句與人寫句共 4 種出自人手，只有 HRED 是生成的。註 5 只把這點當作不評 fluency 的理由。但它的真正含意是：「指標與人評不相關」主要是在人寫的檢索候選上量到的。要外推到生成模型，特別是流暢度與表面形式都完全不同的 LLM 輸出，需要打折扣。",
+    "統計檢定力很低，也沒有做多重比較校正：每個領域只有 20 個 context、100 筆，共 9 個指標 × 2 種相關 × 2 個領域 = 36 個檢定。Bonferroni 校正後門檻約 0.0014。Twitter 上三個嵌入指標的 p 值落在 0.024–0.067，校正後都不顯著；BLEU-2 只標了「<0.01」，無法判斷。所以「Twitter 有弱正相關」這半個結論本身也站不穩；反過來，「Ubuntu 完全不相關」在 n=100 下也可能只是測不出小效應。",
+    "§4.3 的論證有缺口：作者主張「指標分得出模型，但與人評不相關，所以會誤導」，但全文沒算過系統層級的相關（每個模型的人評平均對指標平均）。Table 2 的模型集合（兩種 TF-IDF、DE、LSTM、HRED）也與人評的回應集合（隨機、一種 TF-IDF、DE、HRED、人寫）不同。它實際證明的是逐句相關很弱，不是模型排序錯了；逐句雜訊很大的指標，平均到整個測試集後仍可能排對模型。",
+    "正文對 Table 2 的描述過度：文中說 HRED 在兩個領域都顯著勝過 LSTM，但 Twitter 上 Greedy Matching 兩者都是 0.439，Vector Extrema 是 0.422±0.002 對 0.420±0.002，信賴區間重疊；只有 Embedding Average（0.599 對 0.593）勉強分得開。Ubuntu 上 LSTM 只有 0.130、遠低於其他模型，論文沒有解釋（推測可能是生成退化，例如輸出空字串或極短回應）。可見這張表不能當作模型實力的可靠排序。",
+    "Table 4 的結論是選擇性的：去停用詞後 BLEU-2 確實變弱，但 BLEU-1 的 Pearson 由 0.1288（p=0.2）升到 0.2074（p=0.038），反而變顯著。正文只講 BLEU-2，就推出「BLEU 對不影響語意的因素敏感」；更精確的說法是 BLEU 的相關會隨前處理不穩定地變動，方向因 N 而異。",
+    "內部數字與標示有錯：Table 3 的 Human 列在兩個領域都是 Pearson 1.0、p=0.0，但 Spearman 只有 0.9476／0.9550，分半 Pearson 完全等於 1 並不合理，很可能是填表錯誤。正文把長度效應寫成 Table 4，實際在 Table 5。Table 5 的兩組是 Δw≤6 與 Δw≥6，在 6 字時重疊，而 47+53=100，所以恰好 6 字的樣本究竟歸哪組並不清楚。",
+    "可重現性缺口大：沒有釋出程式碼，沒寫詞向量來源、BLEU smoothing 方法、METEOR 版本，沒寫人評用了哪個 TF-IDF 版本、Table 5 用了什麼檢定，也沒寫任何模型的訓練超參數。後續工作即使想重跑同一組相關分析，也無法保證指標實作一致；sentence-level BLEU 的 smoothing 選擇本身就會改變 BLEU-3/4 的相關（作者自己就歸因於 smoothing 常數）。",
+    "評分者與量表的外部效度有限：評分者是作者系上的 CS 志工，不是 Ubuntu 求助者或 Twitter 使用者；只評 1–5 的 adequacy，又把 informativeness 視為在 Ubuntu 上與 adequacy 高度相關而省略，但沒有提供資料佐證。人類分半相關約 0.95，是兩組各約 11–12 人的平均分互相比較的結果；單一評分者的可靠度低得多（κ 中位數約 0.55）。論文沒報告單一評分者對其餘人平均的相關，所以讀者看不出指標與「一位人類評審」相比差多少，指標與人類的差距容易被高估。",
+    "設定只涵蓋「給定多輪 context，評下一句」的靜態、單參考、逐句評估，沒有互動式或整段對話層級的評估，也沒有任務成功率。結論無法直接回答多輪互動評估或 agent 評估中的指標效度問題，只能提供方法論上的教訓。"
+  ],
+  "framework_role": "T7 的方法論奠基文獻，但落點不在指派的「互動式評估」，而在「評估本身的可靠性／人評協定」，也就是 meta-evaluation：先驗證評估器，再用它評系統。它評的是給定多輪 context、評下一句回應的靜態評估，不是互動式評估，也刻意排除 task completion 這類有監督的訊號，所以跟 T8 的任務完成分數是互補、不重疊的。框架可以直接沿用的協定元件有：(1) 任何自動評分器（包括今天的 LLM-as-a-judge）用在新領域之前，都要先對同領域的人評做相關驗證，同時報 Pearson 與 Spearman 及 p 值；(2) 用評分者分半相關當上限，用 Cohen's kappa 篩掉不一致的評分者；(3) 用擾動測試（去停用詞、長度差）檢查評分器是否對不影響語意的表面因素敏感；(4) 評分器能區分系統不等於它有效，必須另做對人評的驗證；(5) 同一評分器在不同領域可能從弱相關掉到完全不相關（Twitter 對 Ubuntu），所以驗證要逐領域做。文末提出以資料學習、會看 context 的評估模型，預告了後來學習式評估器與 LLM 評審的方向。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。本篇是指標分析論文，文中沒有提到任何部署或產品；本次工作的 WebSearch 額度已經用完，沒能另外查證官方文件。它被大量引用（Semantic Scholar 約 1,416 次、influential 93 次）屬於學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "部分公開。Ubuntu Dialogue Corpus 公開；Twitter 語料是依 Ritter et al. 2010 的程序自行蒐集，文中稱兩者屬大型公開語料，但沒給這份 Twitter 語料的下載處；200 筆回應與 23 位評分者的人評分數，文中沒說有釋出。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是「評估本身的可靠性」子領域的經典 meta-evaluation：先前 deltaBLEU 只在 Twitter 上驗過 BLEU，本篇把字詞重疊與嵌入兩類指標跨兩個領域一併對人評驗證，並附上定性與擾動分析。它的協定（逐領域相關驗證、分半上限、kappa 篩選、擾動測試）以及「能區分模型不等於有效」的教訓，可以直接轉用來驗證 LLM-as-a-judge；但它對互動式評估沒有直接貢獻。",
+  "related": [
+    "1506.06863",
+    "1510.03055",
+    "1506.06714",
+    "1507.04808",
+    "1506.08909",
+    "1603.06155",
+    "1605.06069",
+    "1506.05869",
+    "1508.01745",
+    "1506.06726",
+    "1511.08198"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

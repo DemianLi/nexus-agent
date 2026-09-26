@@ -1,0 +1,167 @@
+{
+  "id": "2203.08568",
+  "title": "In-Context Learning for Few-Shot Dialogue State Tracking",
+  "topic": "T2",
+  "subarea": "LLM 時代的 zero/few-shot DST",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "IC-DST 把多領域 DST 改寫成 text-to-SQL，以「前一輪狀態＋最新一輪對話」取代完整歷史、只預測本輪狀態變化量，並用「狀態變化相似度」微調的 SBERT 檢索器挑選範例，讓凍結參數的 Codex 在 MultiWOZ 1%／5%／10% few-shot 與 zero-shot 設定下超越需要微調的前作。",
+  "problem": "逐輪標註對話狀態很貴，商用系統又經常擴充 schema、加新領域；既有 few-shot DST 幾乎都靠微調預訓練模型，每加一個欄位或領域就得重訓，大模型微調成本高；既有 zero-shot DST 多靠跨領域遷移，效果很差。先前把 in-context learning（ICL）用在 DST 的嘗試（Few-Shot Bot、UnifiedSKG）也遠遜於微調方法。作者認為原因在於 DST 有兩個句子級 ICL 沒有的難處：雙方對話歷史很長、而且輸出必須對齊結構化的 ontology。解掉這兩點，才能得到「不改參數、只換範例或 schema 就能擴充領域」的狀態追蹤器。",
+  "core_idea": "三個設計一起讓 ICL 能做 DST：(1) 狀態表示改成 SQL——每個領域一張表、每個 slot 一個欄位、所有 slot-value 放在 WHERE 子句，schema 以 CREATE TABLE＋範例列放進 prompt，借用 code 預訓練模型對 SQL 與表格的先驗；(2) 對話脈絡不送完整歷史，而是把上一輪累積狀態當成歷史摘要，只送〔前一輪狀態, 本輪系統語句, 本輪使用者語句〕，且標籤改成本輪的狀態變化量（新增／刪除／修改），再由程式把變化量套到前一輪狀態上；(3) few-shot 時以「兩個輪次的狀態變化量有多像」作為監督訊號，對比式微調 SBERT 檢索器，從小量標註池取出最相關的範例輪次。",
+  "method": {
+    "任務與狀態更新": "對話為交替的系統／使用者語句 A_1,U_1,…,A_T,U_T；一個 turn 指 (A_t,U_t) 一對。第 t 輪的狀態 y_t 是 slot-value 對的集合，slot 由預先定義的多領域 schema 給定（例如 hotel-name、hotel-pricerange）。模型不直接預測 y_t，而是預測本輪狀態變化 c_t；更新規則是先把 y_{t-1} 複製成 y_t，再依 c_t 中每個 (slot, value) 執行新增、刪除或改值。測試時 y_{t-1} 是模型自己逐輪累積出來的預測值，不是 gold。",
+    "SQL 狀態表示": "三條規則：每個領域是一張表、每個 slot 是一欄；所有 slot 與值都寫在 WHERE 子句中（以 AND 串接的等式，例如附錄的 zero-shot 範例 SELECT * FROM hotel WHERE type = guest house AND area = west AND internet = no，值不加引號）；同一輪涉及多個領域時把各表改名為 d1…dm。論文沒有給多領域或「刪除一個 slot」在 SQL 中如何寫的具體範例，這部分要看程式碼。",
+    "對話脈絡表示": "每個範例與測試輪次都表示成〔y_{t-1}, A_t, U_t〕。在 prompt 中，[context] 行是前一輪累積狀態的純文字清單（以逗號分隔的 domain-slot: value，不是 SQL），接著 [system] 行放系統語句、以 Q: [user] 開頭放使用者語句、最後是 SQL: 標籤。範例的 [context] 用 gold 狀態，測試輪次用預測狀態。",
+    "提示詞結構（附錄 A.1）": [
+      "開頭是 schema：每個領域一段 CREATE TABLE，列出欄位與型別；類別型 slot 用 CHECK (欄位 IN (可選值…)) 列出所有合法值（含 dontcare），開放型 slot（name、book_time 等）只給型別。",
+      "每張表後面接一段 SQL 註解，內容是 SELECT * FROM 該表 LIMIT N 與 3–5 列範例資料（值取自 MultiWOZ 資料庫），作為開放型 slot 的值域示意；格式沿用 Rajkumar et al. (2022) 的表格提示。五個領域（hotel、train、attraction、restaurant、taxi）的表全部串接。",
+      "schema 之後是一行 SQL 註解形式的任務指示，要求模型用合法的 SQLite 回答針對上列資料表的多輪對話問題。",
+      "接著是 k 個範例，依相似度由檢索器選出，每個標成 Example #i，內含 [context]、[system]、Q: [user]、SQL: 完整標籤。",
+      "測試輪次標成 Example #(k+1)，以 SQL: SELECT * FROM 結尾，讓 LM 接著補完表名與 WHERE 子句；temperature 設 0（greedy）。",
+      "範例數：Codex 用 10 個，GPT-Neo 用 5 個（受 context 長度限制；CodeGen 的範例數論文未明說）。"
+    ],
+    "zero-shot 設定（附錄 A.2）": "不用檢索器、不用任何標註資料；schema 同上但部分欄位改名成較易懂的名稱（book_stay→book_number_of_days、food→food_type、leaveat→depart_time、arriveby→arrive_by_time），attraction-type 補上完整的 CHECK 值域。只放一個由開發者手寫的格式示範輪（空 context、空系統語句、一句找 west 區 guest house 且不需網路的請求及其 SQL），測試輪次接在後面。",
+    "檢索器": {
+      "候選池": "標註池中每一個有標籤的 turn 都是候選，鍵是它的脈絡表示文字〔y_{t-1},A_t,U_t〕，值是它的狀態變化 c_i。",
+      "無監督版本": "以預訓練 embedding 模型 M 的 cosine 相似度取 top-k；試過 RoBERTa、SBERT 與 BM25，SBERT 最好，因此主結果都以 SBERT 為基礎。",
+      "監督式微調目標": "定義兩組狀態變化 c_a、c_b 的相似度 s = ½(F_slot + F_slot-value)：F_slot 是只比 slot 名稱集合、F_slot-value 是比 (slot, value) 對集合；其中 F(set1,set2) 是分別以 set1、set2 為 target 算出的兩個 F1 的平均。",
+      "正負例取樣": "對每個訓練樣本，先依標籤相似度排序，在其 10% 最近鄰中取相似度最高與最低的各 5% 當正例與負例（hard negatives）；每筆樣本的正負例數隨池大小線性縮放：1% 資料時各 2 個、5% 時各 10 個。論文沒有明說「最近鄰」是在哪個空間算的。",
+      "訓練": "以對比損失讓正例對的 embedding 相似、負例對不相似。初始化為 SBERT all-mpnet-v2（220M），AdamW，learning rate 2e-5（試過 1e-5），warmup 1000 步，輸入最長 512 token（以狀態表示脈絡時 MultiWOZ 沒有輪次超過）。5% 設定訓 10 個 epoch（單張 A10G 每 epoch 約 10 分鐘），100% 設定訓 2 個 epoch（約 6 小時）。以檢索到的範例的平均 F1 在 dev 上手動選超參數。"
+    },
+    "推論 LM": "主模型是 OpenAI code-davinci-002（Codex，context 上限 4096 token；作者初步實驗發現 Codex 明顯優於 GPT-3）；另測 GPT-Neo 2.7B 與 CodeGen 2.7B（單張 A10G，每輪約 2 秒）。Codex 經 API 呼叫，每輪平均約 4 秒。",
+    "實驗設定": "MultiWOZ 2.1 與 2.4，只用 hotel、taxi、attraction、restaurant、train 五個領域；訓練集 8438 段對話、dev／test 各 1000 段，平均每段 13.46 輪；以 Ye et al. (2021a) 的腳本前處理。few-shot 依 Wu et al. (2020) 從訓練集抽 1%、5%、10% 當選取池，檢索器只在池內微調；100% 為全訓練集當池。每個 few-shot 數字是 3 次評估的平均。消融實驗全部在 MultiWOZ 2.4 dev 的 100 段隨機對話、5% 設定、Codex 上做。"
+  },
+  "assumptions": [
+    "對話狀態是歷史的充分摘要：只看〔前一輪狀態, 本輪系統語句, 本輪使用者語句〕就足以預測本輪變化；沒被寫進 slot 的資訊（例如系統兩輪前提過、使用者此刻才指涉的實體）假設不需要。",
+    "前一輪累積狀態大致正確；測試時用的是模型自己的預測，錯誤會一路帶到後面，直到某一輪明確改掉它。",
+    "schema 能表示成關聯式表格：slot 集合事先已知、類別型 slot 可列舉，值可用 WHERE 等式表達。",
+    "推論 LM 夠大且看過大量程式碼，能讀懂 CREATE TABLE 與 CHECK 約束並產出可解析的 SQL；結果顯示 2.7B 模型不成立。",
+    "標註池乾淨且覆蓋度夠：測試輪次的狀態變化能在池中找到相近的範例，範例標籤的缺漏會被 LM 照學。",
+    "context window 容得下全部領域的 schema 加上 10 個範例（Codex 4096 token）。"
+  ],
+  "evaluation": {
+    "benchmarks": ["MultiWOZ 2.1（5 個領域）", "MultiWOZ 2.4（5 個領域；主表與全部消融）"],
+    "metrics": [
+      "Joint Goal Accuracy（JGA）：few-shot 報 multi-domain JGA，zero-shot 報 per-domain JGA（沿用 Wu et al. 2019 的慣例）",
+      "slot-value F1（Table 4 的分析用，對完整狀態計算）",
+      "逐輪 JGA（Figure 5：狀態變化 JGA 與累積狀態 JGA 隨輪次變化）",
+      "copy 基線的 JGA／F1：直接抄最近範例的標籤，用來衡量檢索品質"
+    ],
+    "baselines": [
+      "few-shot（微調）：TRADE、SGP-DST、DS2-BART、DS2-T5（先前 few-shot SOTA）",
+      "zero-shot：SimpleTOD++、T5DST + slot description、TransferQA（先前 zero-shot SOTA），三者只有 MultiWOZ 2.1 數字",
+      "先前的 ICL DST：UnifiedSKG、Few-Shot Bot（只在內文比一個數字，未列表）",
+      "檢索器：random、BM25、無監督 SBERT、F1-oracle（假設已知測試輪 gold 狀態）；RoBERTa 有試但未報數字",
+      "輸出格式：SimpleTOD 式的 slot-value 傳統格式（附錄 A.3）",
+      "脈絡表示：完整歷史、只有本輪、前一輪狀態＋本輪"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "以 Codex 為推論 LM 的 IC-DST 在 MultiWOZ 2.1 與 2.4 的 1%、5%、10% few-shot 設定都拿到最佳 multi-domain JGA，勝過需要微調的前作；但領先幅度隨資料量增加而快速縮小。",
+      "numbers": "MW2.1（1%／5%／10%）：IC-DST Codex 43.13／47.08／48.67；DS2-T5 33.76／44.20／45.38；SGPDST 32.11／43.14／46.92。MW2.4：IC-DST Codex 48.35／55.43／56.88；DS2-T5 36.76／49.89／51.05。對最強基線的差距在 MW2.1 為 +9.37／+2.88／+1.75。",
+      "section": "§4、Table 1、Table 7",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "同一框架換成 2.7B 的 GPT-Neo 或 CodeGen，趨勢相同但普遍落後 Codex 與微調基線，作者據此認為 ICL 的效果取決於模型規模。",
+      "numbers": "MW2.1（1%／5%／10%／100%）：GPT-Neo 16.70／26.90／31.65／39.18；CodeGen 20.72／29.62／33.81／39.93；同條件 TRADE 12.58／31.17／36.18／46.00（1% 時兩個 2.7B 模型其實贏過 TRADE）。",
+      "section": "§4、Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "zero-shot（只有 schema 與一個手寫格式示範、不用任何標註資料）下，IC-DST 在每個領域的 per-domain JGA 都高於先前 zero-shot 方法；MultiWOZ 2.4 的 multi-domain JGA 為 35.3%，可對照 1% few-shot 的 48.35%。",
+      "numbers": "MW2.1 per-domain（attraction／hotel／restaurant／taxi／train）：IC-DST Codex 59.97／46.69／57.28／71.35／49.37；各領域最佳基線 33.09（T5DST）／22.72（TransferQA）／26.28（TransferQA）／64.62（T5DST）／36.72（TransferQA）。MW2.4：62.09／53.18／54.87／71.87／51.42；multi-domain 35.3。",
+      "section": "§4、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "不論檢索目標是完整狀態還是狀態變化，以「前一輪狀態＋本輪」表示脈絡都最好；完整歷史因為要截斷才塞得進 context，表現甚至不如只給本輪。",
+      "numbers": "MW2.4 dev 100 段、5%、Codex 的 JGA：完整歷史＋完整狀態標籤 45.0；前一輪狀態＋本輪＋完整狀態標籤 47.9；完整歷史＋狀態變化 52.0；只有本輪＋狀態變化 55.8；前一輪狀態＋本輪＋狀態變化 58.7。",
+      "section": "§5、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "以狀態變化而非完整狀態當標籤帶來大幅提升；逐輪看，狀態變化的 JGA 在整段對話中維持高檔，完整狀態的 JGA 則隨輪次下降，而累積預測的變化量下降得比直接預測完整狀態慢。",
+      "numbers": "同為前一輪狀態＋本輪：完整狀態標籤 47.9 → 狀態變化 58.7（+10.8）；同為完整歷史：45.0 → 52.0。Figure 5 的逐輪曲線在內文沒有給數值，只有趨勢描述。",
+      "section": "§5、Table 3、Figure 5",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "Codex 的表現高度依賴檢索到的範例品質；以狀態變化相似度微調的 SBERT 明顯勝過無監督檢索器，而假設已知 gold 狀態的 oracle 檢索器顯示還有很大空間。",
+      "numbers": "IC-DST Codex 的 JGA／F1（MW2.4 dev、5%）：random 29.8／81.1；BM25 49.0／91.0；SBERT 49.2／91.7；微調後 58.7／93.3；F1-oracle 82.9／98.1（作者對照的 MW2.4 全資料 SOTA 為 73.62）。",
+      "section": "§5、Table 4",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "LM 並非只是照抄最近範例的標籤：直接抄最近範例標籤的 copy 基線在所有檢索器下都遠低於 IC-DST，但 copy 基線的 F1 與最終 JGA 同向變化，佐證了用狀態變化 F1 當檢索器的學習目標。",
+      "numbers": "copy 基線 JGA／F1：random 0.7／4.9；BM25 4.9／31.8；SBERT 5.9／28.7；微調 16.3／61.4；oracle 24.6／76.8。對應 IC-DST 為 29.8／81.1、49.0／91.0、49.2／91.7、58.7／93.3、82.9／98.1。",
+      "section": "§5、Table 4",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "把 DST 寫成 text-to-SQL，三個 LM 都比 SimpleTOD 式的 slot-value 傳統格式好，小模型差距最大。",
+      "numbers": "JGA（5% 設定，傳統格式 → text-to-SQL）：GPT-Neo 2.7B 10.7 → 33.2；CodeGen 2.7B 17.6 → 30.6；Codex 49.1 → 58.7。",
+      "section": "§5、Table 5",
+      "anchor_idx": 6
+    }
+  ],
+  "limitations_stated": [
+    "框架的表現高度依賴推論 LM，可能不適用於語音辨識轉錄稿或其他語言，因為 LM 預訓練時缺這類資料（§9）。",
+    "省下微調大模型的成本，換來的是推論成本；作者寄望開源大模型、LLM.int8() 之類的壓縮，或用 ICL 當 teacher 產生 pseudo-label 再訓練便宜的小模型（§9）。",
+    "ICL 對含雜訊的標註範例很敏感，因為 LM 只看得到 prompt 裡的少數範例（§5 錯誤分析第一類）。",
+    "檢索限制：取回的範例缺少測試輪該預測的 slot 時，LM 會跟著漏；原因可能是標註稀疏或檢索器錯誤（§5 第二類）。",
+    "LM 有時無法從範例類推，例如範例中有 dontcare 的用法，測試輪卻漏掉 hotel-area: dontcare（§5 第三類、附錄 B）。",
+    "2.7B 的開源模型遠不如 Codex，模型規模是部署 ICL 的前提（§4）。",
+    "完整對話歷史受 context 長度限制（GPT-3 2048、Codex 4096 token），多範例時必須截斷（§2.1、§5）。"
+  ],
+  "limitations_observed": [
+    "SOTA 只在 1%／5%／10% 成立，而且優勢隨資料量快速消失：MW2.1 上對最強基線的差距從 1% 的 +9.37 縮到 10% 的 +1.75（48.67 對 SGPDST 46.92）；100% 時 IC-DST 50.65 反而輸給 SGPDST 56.66 與 DS2-T5 52.32。MW2.4 的 few-shot 欄只有 DS2 有數字，而 IC-DST 在 MW2.4 全資料的 62.43 遠低於作者自己引用的 SOTA 73.62。對 T2 選型而言，資料一多就該重新比較微調方案，不能把 few-shot 的領先外推到一般情況。",
+    "引言宣稱 zero-shot 在每個領域都提升 10–30 個百分點，與 Table 2 不符：taxi 只比 T5DST 高 6.73（71.35 對 64.62），restaurant 則高 31.0（57.28 對 26.28）。",
+    "zero-shot 比較的口徑不對等：SimpleTOD++ 與 T5DST 是在其他 4 個 MultiWOZ 領域訓練、測第 5 個的跨域遷移，模型規模小得多；IC-DST 用的是 Codex，加上附錄 A.2 人工改名的欄位（book_number_of_days、food_type、depart_time、arrive_by_time）、完整的 attraction-type 值域，以及取自資料庫的範例列。增益同時混了模型規模、schema 工程與方法本身，論文沒有拆開；改名是依據什麼、有沒有看過 dev 或 test 才決定，也沒有交代。基線只有 MW2.1 數字，MW2.4 那列沒有對照。",
+    "兩組消融各自同時換了兩個變因：Table 3 的範例標籤型態與檢索器的訓練目標綁在一起換（每種設定重訓一個檢索器），分不出 +10.8 來自 LM 看到的標籤較簡單，還是檢索器因為標籤較稀疏而較好找範例。Table 5 同時把 schema 從 CREATE TABLE 換成 slot: 值清單、把輸出從 SQL 換成 slot-value，而 [context] 在兩種格式下其實都是 slot-value 純文字，因此無法確定 SQL 輸出本身貢獻多少。",
+    "消融的統計強度偏弱：全部只在 100 段 dev 對話、5%、單次執行，沒有變異數。主表 1% 設定的跨 run 標準差達 1.13–2.66（Table 7），而作者據以選 SBERT 的依據是 BM25 49.0 對 SBERT 49.2，差距落在雜訊內。",
+    "三次 run 的變異從哪裡來沒有交代：temperature 為 0，附錄 C 又說每組超參數的檢索器只訓一次；可能是每次重抽選取池或 API 的非決定性，但論文沒說。",
+    "Oracle 的 82.9 需要已知測試輪的 gold 狀態，不是可達到的上限；作者由此推論 few-shot ICL 可能追上全資料 SOTA，屬於外推。",
+    "模型間比較混了範例數：Codex 用 10 個範例、GPT-Neo 用 5 個，「模型規模決定成敗」的結論與範例數、context 長度的效應分不開。",
+    "錯誤傳遞沒有量化：測試時的 y_{t-1} 是模型自己累積的預測，一旦錯就持續錯到有人改掉。Figure 5 也顯示累積狀態 JGA 隨輪次下降，但論文沒有做「餵 gold y_{t-1}」與「餵預測 y_{t-1}」的對照，看不出下降有多少來自錯誤累積。對長多輪互動來說，這正是最該量的部分。",
+    "以狀態取代歷史有資訊損失：系統先前提過但沒寫進 slot 的實體、使用者跨多輪的指涉，都不在〔y_{t-1}, A_t, U_t〕裡。只看 MultiWOZ（平均 13.46 輪）量不出這個代價。",
+    "SQL 表示只用 WHERE 等式，表達不了否定、範圍、多值或「移除某個 slot」；論文說狀態變化包含刪除，卻沒說刪除在 SQL 裡怎麼寫。「text-to-SQL」比較像借用 code 模型先驗的序列化格式，而不是真的可執行查詢。",
+    "只測 MultiWOZ 的 5 個英文、文字領域；沒有測 SGD 這類有大量未見 service 的資料集。論文主打「加新領域只要改 SQL 表、加一個示範」，這項彈性並沒有在真正陌生的 schema 上驗證。",
+    "資料汙染未檢驗：MultiWOZ 對話與標註自 2018 年起就公開在 GitHub，Codex 以 GitHub 程式碼預訓練，論文沒有做任何記憶化檢查。這不代表汙染已經發生，只是沒排除。",
+    "「不需要參數更新」只對 LM 成立：few-shot 的主結果仍要在標註池上微調檢索器（5% 設定 10 個 epoch）。論文也沒有給每輪 token 數與費用；每輪都要塞入全部 5 個領域的 schema 加 10 個範例，Codex 每輪約 4 秒，成本分析付之闕如。",
+    "與先前 ICL DST 的比較條件不透明：內文宣稱勝過 Few-Shot Bot（50.6% 對 13.9%），但 50.6 對應的是 Table 1 的 100% 選取池，論文沒有交代 Few-Shot Bot 那側用了多少標註資料，兩邊的資料條件無從比對。"
+  ],
+  "framework_role": "T2 的核心文獻，也是 LLM 時代 zero/few-shot DST 的起點。它對 T2 的三個面向各給了一個可轉用到 LLM agent 的具體設計：表示——把狀態寫成對齊 schema 的結構化查詢，schema 直接放進 prompt，換領域只換表；更新——只預測本輪的增量，由確定性程式碼把 add／delete／change 套到前一輪狀態上，而不是讓模型每輪重寫完整狀態；維護——用累積狀態取代對話原文當作歷史摘要，讓 context 長度不隨輪數成長。Figure 5 的逐輪 JGA 也是量測「多輪退化」的一個簡單做法：增量預測準確率不隨輪次下降，下降主要來自累積。與其他節點的關係：DST 抽取的是使用者意圖的 slot 值，與 T1 有重疊；add／delete／change 這組操作正好是 E2 需要的狀態寫入介面，但論文沒有任何偵測或修正迴路，錯誤只能靠之後某一輪的變化量碰巧改掉。§2.2 說增刪範例就能修正預測，指的是開發者手動改範例池，不是系統的反思機制。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文沒有宣稱任何部署或產品使用；致謝中的 Allstate 經費、OpenAI 免費提供的 Codex 額度、AWS credits 都是研究資源，不是採納；發表於 EMNLP 2022 Findings 是發表場所。搜尋只找到本文的 GitHub（MIT 授權）與後續學術延伸（例如 arXiv 2307.01453、2412.03270），這些屬學術影響力，不算採納。另外，本文主模型 code-davinci-002 已由 OpenAI 於 2023-03-23 下架（https://developers.openai.com/api/docs/deprecations），原始設定也不可能以原樣在產品中延續。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/Yushi-Hu/IC-DST",
+    "data": "MultiWOZ 2.1 與 2.4 公開，前處理用 Ye et al. (2021a) 的公開腳本；repo 為 MIT 授權（以 gh api 確認），README 另提供前處理流程、prompt 範例與 SBERT 檢索器 checkpoint 下載（據 README 摘要，未逐一下載驗證）。主結果使用的 code-davinci-002 已於 2023-03-23 下架（https://developers.openai.com/api/docs/deprecations），Codex 的數字無法再以原模型重現，只剩 GPT-Neo／CodeGen 2.7B 的結果能以開源模型重跑。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是 LLM 時代 ICL-DST 的開山之作，程式碼公開、是後續 LLM DST 研究固定比較的基準；「前一輪狀態＋本輪取代完整歷史」「只預測狀態增量再由程式套用」「以標籤相似度訓練範例檢索器」三個設計可直接轉用到 LLM agent 的多輪狀態維護，儘管消融有變因混雜、主模型已下架。",
+  "related": [
+    "2203.01552",
+    "2109.04655",
+    "2105.04222",
+    "2109.07506",
+    "2110.08118",
+    "2201.05966",
+    "2005.00796",
+    "1905.08743",
+    "2112.08633",
+    "2204.00498",
+    "2112.08696",
+    "2104.00773",
+    "1810.00278"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

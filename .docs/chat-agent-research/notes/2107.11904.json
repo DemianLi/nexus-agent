@@ -1,0 +1,184 @@
+{
+  "id": "2107.11904",
+  "title": "Transferable Dialogue Systems and User Simulators",
+  "topic": "T6",
+  "subarea": "經典與神經使用者模擬器",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 JOUST：以 LSTM 建立文字進、文字出的端到端對話系統（DS）與神經使用者模擬器（US），先在 MultiWOZ 上監督式預訓練，再讓兩者以自然語言 self-play 並用 policy gradient 同時最佳化（含逐輪手工獎勵），用在領域調適與單領域到多領域遷移。",
+  "problem": "任務型對話系統進新領域時缺乏訓練資料；pipeline 式 DS 要逐個元件微調，難保整體最佳。既有使用者模擬器多半只在語意層（dialogue act）運作，agenda-based US（ABUS）換任務就得重新設計，資料驅動的 seq2seq US 也不收發自然語言，接不上端到端 DS。先前「DS 與 US 聯合訓練」的工作不是只最佳化語意層策略（Takanobu et al. 2020 需要另外的 NLU/NLG），就是只處理單領域 DSTC2（Liu & Lane 2017b、Papangelis et al. 2019：每輪只能預測一個 act、DST 太弱、沒有建模使用者目標隨對話推進的變化）。作者要的是一個能在複雜多領域對話上運作、且換領域只要少量資料微調、不需重新設計的 DS＋US 組合。",
+  "core_idea": "把 US 做成與 DS 對稱的端到端神經模型：兩者都有句子編碼器、共用結構的階層式 context encoder、以 token 序列輸出 dialogue act 的 policy decoder 與 NLG decoder；DS 多了 DST 與資料庫查詢，US 則以一個二元目標狀態向量（goal state）追蹤還有哪些目標沒講或沒問。因為兩者都收發自然語言，預訓練後可以直接對話產生模擬資料；再用 RL 讓兩方同時改進，獎勵除了對話層的成功與否，另設逐輪、按角色區分的規則式獎勵（DS 不重複請求、提供正確實體、答對屬性；US 提供新資訊、問新屬性、答對 DS 的請求）。在新領域上：先在來源資料預訓練、用少量目標資料微調（Naive 或 EWC），再以 self-play RL 擴大探索的狀態與動作。",
+  "method": {
+    "io": "DS 輸入：到上一輪為止的對話 context 狀態與最新一句使用者話語；輸出：belief state（slot-value 對）、系統 dialogue act 序列、去詞彙化（delexicalized）的系統回應，再以 DB 查詢結果填回實值。US 輸入：goal state、最新一句系統回應與 context 狀態；輸出：使用者 dialogue act 序列與去詞彙化的使用者話語，再以使用者目標（user goal）填回實值。",
+    "ds_components": [
+      "DST：attention encoder-decoder。以 bi-LSTM 編碼 context 與最新使用者話語，decoder 每步以上一步 hidden state 對 encoder states 做 Bahdanau attention，經兩個獨立的 affine＋softmax 分別預測一個 slot token 與其 value；全部解碼步的 slot-value 彙總為 belief state。論文腳註報告其 joint accuracy 約 45%（DAMD 約 35%）。",
+      "DB 查詢：依 belief state 查資料庫取得符合的實體，另以 3 維 one-hot 表示查詢結果（三類各代表什麼，文中未說明）。",
+      "Context encoding：階層式 LSTM。句子編碼器（LSTM）把最新使用者話語編成 sentence embedding e^us_t 與 hidden states H^us_t；context LSTM 以 e^us_t 與 US 側上一輪的 context 輸出 c^us_{t-1} 為輸入，產生 c^ds_t。Figure 1 說明 context encoder 在兩個 agent 之間共用。",
+      "Policy：LSTM decoder 把系統 act 當 token 序列生成（可在一輪內輸出多個 act）。每步輸入為上一步 act token 的 embedding、上一步 hidden state、以該 hidden state 對 H^us_t 做 attention 得到的向量、DB 查詢向量，以及 summarized belief state（每個 domain-slot 一格的二元向量）；hidden state 以 c^ds_t 初始化。",
+      "NLG：LSTM decoder，每步以上一步 hidden state 對 policy decoder 的 hidden states 做 attention，與上一個輸出詞的 embedding 一起輸入，生成含去詞彙化 token 的詞序列。"
+    ],
+    "us_components": [
+      "Goal state：對 ontology 中每個 domain-slot 一格的二元向量。對話開始時，構成使用者目標的所有 slot 設為 1；每輪依上一輪的使用者 act 更新：某 slot 若已在上一輪使用者 act 中出現（不論是使用者提供資訊或提出請求），就把該格關掉。",
+      "Context encoding：句子編碼器編碼系統回應得 H^ds_t、e^ds_t；context LSTM 以 e^ds_t 與 c^ds_t 產生 c^us_t，再傳給下一輪的 DS。",
+      "Policy：LSTM decoder，輸入為 goal state、H^ds_t（attention）與 c^us_t，輸出使用者 act token 序列。",
+      "NLG：LSTM decoder，對 policy decoder 的 hidden states 做 attention 生成去詞彙化話語，再以使用者目標填值。若 US 生成了目標以外的屬性，值從 ontology 隨機抽（Table 20 標題）；DS 生成了 belief state 裡沒有的屬性時亦同（Table 19 標題）。"
+    ],
+    "supervised_pretraining": "每一輪以 ground-truth 的 act 序列與詞序列當監督。L_pol 與 L_nlg 為序列的 cross-entropy；DS 另加 DST loss（每個 slot-value 解碼步的 slot 與 value cross-entropy 之和）。L^ds = L_dst + L_pol + L_nlg，L^us = L_pol + L_nlg，兩個 agent 以 L^ds + L^us 聯合更新。停止準則為「產生之對話的成功率」（原文未明說是 self-play 對話還是對語料產生的回應）。需要雙方的 act 標註：系統 act 與 belief state 用 MultiWOZ 原標註，使用者 act 標籤取自 ConvLab（Lee et al. 2019）。",
+    "rl_finetuning": [
+      "兩個預訓練好的 agent 以訓練資料中的使用者目標（不合成新目標）互相對話，產生模擬對話。",
+      "對話層獎勵（dial-R）：對話成功給 +1（附錄 A.1），每輪另給小懲罰以抑制冗長（懲罰值文中未說明）；聯合訓練時兩個 agent 共用此獎勵。",
+      "逐輪獎勵（turn-R），DS：本輪請求了先前沒請求過的 slot（r^req）、成功提供實體（r^pro）、正確回答使用者要求的所有額外屬性（r^ans）時給正獎勵，否則給負獎勵。US：提供新的 slot 資訊（r^inf）、詢問實體的新屬性（r^req）、正確回答 DS 的請求（r^ans）時給正獎勵，否則給懲罰。判定需要存取使用者目標、DB 與雙方的 act。",
+      "最佳模型的 turn-R 數值（正, 負；Table 10）：DS r^req (0, −1)、r^pro (0, −5)、r^ans (2.5, −5)；RL-Joint 的 US r^req (0, −1)、r^inf (1, −1)、r^ans (1, −1)；RL-DS 的 US 獎勵全為 0（即 US 不更新）。獎勵在 [−5, 5] 範圍內，依 dev set 的 combined score（三個 seed 平均）調整。",
+      "最佳化：對 act token 序列套用 policy gradient（REINFORCE 形式）。每輪的獎勵 r_t 放在該 agent act 序列的最後一個 token；第 i 個 token 的 return 為 γ^{|A|−i}·r_t，γ=1（所以整段 act 序列的每個 token 都拿到同一個 r_t）。梯度為 Σ_i R_i ∇log p_{a,i}，對模擬對話中的每一輪都做一次更新。是否使用 baseline／advantage，文中未說明；RL 只對 act 機率求梯度，NLG 的輸出機率不在目標函數內。"
+    ],
+    "hyperparameters": "Adam；embedding 與 hidden 維度 300；SL batch 100、learning rate 1e-3；RL batch 10、learning rate 1e-4；γ=1；總參數約 11M；在 GTX-1080 上以完整訓練資料訓練一個模型約 6 小時。",
+    "transfer_protocols": [
+      "領域調適：5 個目標領域（restaurant、hotel、attraction、train、taxi）各做一次。從訓練集抽 300 則含目標領域的對話（約占該領域資料 10%）作調適資料；不含目標領域的其餘對話為來源資料。流程：來源資料上預訓練 DS 與 US（Source）→ 用 300 則微調（Naive，或加 EWC 正則）→ 以 turn-R 的 RL-Joint 做 self-play（+RL）。",
+      "單領域到多領域：所有單領域對話為來源資料；6 種多領域組合各抽 100 則（約占該組合多領域資料 11%）作調適資料；以測試集中的多領域對話評估。流程同上。",
+      "RL 階段的使用者目標取自哪個池（僅調適資料，或整個訓練集），文中未說明。"
+    ],
+    "evaluation_protocol": "MultiWOZ 官方評估腳本與官方 train/dev/test 切分（8420/1000/1000）。Inform rate：DS 是否提供符合使用者目標的實體；Success rate：另外要求答對使用者所有提問；Comb = 0.5×(Info+Succ)+BLEU（Mehri et al. 2019）。兩種評估情境：(1) 互動品質：兩個 agent 以測試集 1k 個使用者目標 self-play，只報 Info／Succ（沒有參考句，無法算 BLEU）；(2) 基準：DS 對固定的測試語料逐輪生成（corpus-based），分 predicted belief state 與 oracle belief state 兩種設定。"
+  },
+  "assumptions": [
+    "有雙方的 dialogue act 標註（系統 act、使用者 act、belief state），才能監督預訓練 DS 與 US 的 policy；使用者 act 取自 ConvLab 的補標。",
+    "有固定、共用的 ontology 與可查詢的資料庫：goal state、summarized belief state 都是 domain-slot 上的二元向量，目標領域的 slot 在預訓練時就已存在於向量中。",
+    "使用者目標是結構化的（informable 限制＋requestable 屬性），且 RL 期間直接取用語料中的目標，不需合成。",
+    "逐輪獎勵可以用規則判定：需要知道使用者目標、DB 查詢結果與雙方的 act，判定「是否提供正確實體」「是否答對請求」。",
+    "監督式預訓練後的 US 已足以形成有意義的互動（SL self-play 成功率 58.02%），RL 從這個起點出發不會崩壞。",
+    "與共同訓練的 US 對話所學到的策略，能遷移到真實（語料中）使用者的話語上；作者以 corpus-based 基準結果作為這一點的證據。",
+    "去詞彙化生成＋事後填值的做法可行，填不到值時隨機抽 ontology 的值不會嚴重干擾學習。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MultiWOZ 2.0（10.4k 對話、平均 13.6 輪、7 領域 39 slot；官方切分 8420/1000/1000）",
+      "MultiWOZ 上自行切出的兩種低資源遷移設定：領域調適（5 個目標領域，各 300 則調適對話；dev/test 各約 200–500 則，見附錄 Table 11）與單領域到多領域（6 種組合，各 100 則調適對話；見附錄 Table 12）",
+      "僅用 50% 訓練資料做監督式預訓練的對照實驗（Table 4）"
+    ],
+    "metrics": [
+      "Inform rate、Success rate、BLEU、Combined score（MultiWOZ 官方腳本）",
+      "self-play 互動品質：以測試集 1k 個使用者目標生成對話後的 Info／Succ",
+      "錯誤分析：DS 的 Miss Ent.（漏給實體）與 Wrong Ans.（答錯屬性）比率；US 的 Rep. Att.（重複屬性）與 Miss Ans.（沒回答 DS 的請求）比率",
+      "探索量：模擬對話中 unique belief state 數與每個 state 的平均 unique action 序列數",
+      "人工評估：400 則 self-play 對話、14 位評估者，SL 對 RL 兩兩比較，問 DS Success、US Human-like、Dialogue Flow 三題，報 win ratio"
+    ],
+    "baselines": [
+      "自身變體：Supervised Learning、RL-DS（只更新 DS）與 RL-Joint（兩者都更新），各配 dial-R 或 turn-R",
+      "端到端 DS（predicted belief state）：HRED-TS、DAMD、SimpleTOD、SOLOIST、MinTL-BART",
+      "端到端 DS（oracle belief state）：SimpleTOD、MoGNet、ARDM、DAMD、SOLOIST、PARG、MarCo",
+      "遷移：Source（只在來源資料訓練）、Naive fine-tuning、EWC fine-tuning"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在 self-play（以測試集使用者目標讓兩個 agent 互相對話）中，所有 RL 變體的成功率都比監督式預訓練高 10 分以上。",
+      "numbers": "SL：Info 69.77、Succ 58.02；RL 四個變體 Succ 介於 70.34–73.04，Info 介於 81.38–86.49",
+      "section": "§4.1, Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "在 self-play 中，同時更新 US 與 DS（RL-Joint）的成功率高於只更新 DS（RL-DS）。",
+      "numbers": "dial-R：RL-DS Succ 70.67 vs RL-Joint 71.57；turn-R：RL-DS 70.34 vs RL-Joint 73.04（Info 分別為 81.38 vs 82.83、85.62 vs 86.49）",
+      "section": "§4.1, Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "對固定測試語料的基準上，RL-Joint＋turn-R 在 predicted belief state 下與使用預訓練 transformer 的系統接近但未超越，在 oracle belief state 下則是表中最高。",
+      "numbers": "predicted：JOUST RL-Joint turn-R Info 83.2／Succ 73.5／BLEU 17.6／Comb 96.0，SL 為 89.5；MinTL-BART 84.9／74.9／17.9／97.8、SOLOIST Comb 95.7。oracle：JOUST 94.7／86.7／18.7／109.4，SL 102.3、dial-R 106.7；表中其他系統最高為 MarCo Comb 105.5",
+      "section": "§4.2, Table 2, Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "領域調適（每個目標領域只有 300 則對話）：在 Naive 或 EWC 微調之後再做 self-play RL，五個領域的平均 combined score 進一步提高；EWC+RL 的平均約為 Source 的兩倍。",
+      "numbers": "平均 Comb，predicted：Source 36.6 → Naive 60.8 → Naive+RL 68.8（+8.0 分）；EWC 66.9 → EWC+RL 73.5（+6.6 分）。oracle：Source 46.7；Naive 87.5 → 98.5（+11.0 分）；EWC 91.6 → 101.1（+9.5 分）。對應的平均成功率（predicted）EWC 44.9 → EWC+RL 50.8（附錄 Table 17）",
+      "section": "§4.3, Table 5, Table 17",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "單領域到多領域（每種組合只有 100 則多領域對話）：微調後再做 RL，六種組合的平均 combined score 進一步提高。",
+      "numbers": "平均 Comb，predicted：Source 34.0；Naive 51.7 → 57.5（+5.8 分）；EWC 53.9 → 58.0（+4.1 分）。oracle：Source 64.4；Naive 83.6 → 93.9（+10.3 分）；EWC 85.5 → 94.0（+8.5 分）。三領域組合最差（predicted EWC+RL 43.2–48.5）",
+      "section": "§4.3, Table 6, Table 18",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "RL 之後，US 大幅減少重複已提供的資訊，也回答了更多 DS 的提問；DS 的漏給實體與答錯屬性也大幅下降（五個調適領域平均）。",
+      "numbers": "US：Rep. Att. 10.12% → 1.47%、Miss Ans. 47.27% → 32.60%；DS：Miss Ent. 17.59% → 2.73%、Wrong Ans. 36.99% → 9.54%（Naive vs Naive+RL）",
+      "section": "§4.4.1, Table 7, Table 13, Table 14",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "與 US 互動時，DS 遇到的 belief state 種類與每個 state 採取的 action 種類，都比訓練語料中多。",
+      "numbers": "領域調適：unique state 614 → 1425、每 state 平均 action 3.34 → 6.22；單領域到多領域：223 → 399、3.61 → 15.33（五／六個設定平均）",
+      "section": "§4.4.2, Table 8, Table 15, Table 16",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "人工兩兩比較中，RL 後的對話在 DS 成功、US 像真人、對話流暢三方面都勝過 SL。",
+      "numbers": "win ratio（SL vs RL）：DS Success 26.0 vs 74.0、US Human-like 29.5 vs 70.5、Dialogue Flow 21.0 vs 79.0；400 則對話、14 位評估者",
+      "section": "§4.5, Table 9",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "沒有使用 GPT-2／T5 等預訓練 transformer；把以 transformer 強化兩個 agent 的基礎能力列為未來工作（§4.2、§6）。",
+    "JOUST SL 相對 DAMD 的領先，部分來自本文 DST 較強（joint accuracy 約 45% vs 約 35%），不全是框架本身的貢獻（§4.2 腳註 3）。",
+    "self-play 對話沒有參考句，互動品質實驗無法報 BLEU（Table 1 標題）。",
+    "去詞彙化 token 無法由 belief state／使用者目標填值時，改從 ontology 隨機抽值，會產生與目標不符的實體（Table 19、Table 20 標題的例子：london kings cross、thanh binh）。",
+    "只在來源領域預訓練的模型在目標領域表現很差，尤其無法處理三領域組合的對話流程（§4.3）。"
+  ],
+  "limitations_observed": [
+    "「joint 優於只更新 DS」只在自評迴圈裡被驗證：Table 1 的 RL-Joint vs RL-DS 是以被一起最佳化的 US 當對話對象量出來的，RL-Joint 的 US 本身就因為獎勵而變得更好配合（Table 1 沒有報 US 行為；遷移設定下 Table 7 的 US Miss Ans. 從 47.27% 降到 32.60% 可作旁證），所以成功率上升無法區分是 DS 變好還是 US 變得容易對付。能排除這個混淆的 corpus-based 基準（Table 2／3）只報 RL-Joint，沒有報 RL-DS，因此「讓 US 一起學對 DS 有幫助」在真實語料上沒有證據。",
+    "turn-R 優於 dial-R 的結論不一致：Table 1 中只更新 DS 時，turn-R 的 Succ（70.34）反而低於 dial-R（70.67），turn-R 的成功率優勢只出現在 RL-Joint（73.04 vs 71.57）；Info 則兩種設定都是 turn-R 較高。作者以「b&c vs. d&e」概括為 turn-R 較有效，略過了這個反例；而且全文沒有報任何變異數或多 seed 的結果，2–3 分的差距是否超過 seed 間的波動無從判斷。",
+    "US 的逼真度評估很薄：唯一的逼真度證據是 Table 9 對 SL 版本的兩兩比較（29.5 vs 70.5），沒有和 ABUS、NUS 或真實使用者比，也沒有對話長度、act 分布、詞彙多樣性這類與人類語料的分布比較。附錄的 SL 例子充滿同一句話重複十次的迴圈，評估者偏好 RL 可能只是偏好「沒有鬼打牆」，不等於更像人。人工評估沒有報評估者間一致性與顯著性，也沒說 RL 端用的是哪個變體。",
+    "RL 後 US 仍有約三分之一的 DS 請求沒回答（Table 7：Miss Ans. 32.60%；附錄 Table 14 中 taxi 48.42%、hotel 40.74%）。拿這樣的模擬器當訓練對手或評估對象，DS 學到的是「如何應付不太回答問題的使用者」，這個偏差對 DS 策略的影響沒有分析。",
+    "錯誤分析的指標就是獎勵本身：Table 7 的四個錯誤率（漏給實體、答錯、重複屬性、漏回答）幾乎一對一對應 §3.2 的逐輪獎勵項，而且是在 self-play 對話上量的，所以它量到的是「最佳化有沒有達成目標」，不是泛化；也沒有檢查是否出現鑽獎勵漏洞的行為（例如 US 為了拿 r^inf 塞進與目標無關的新 slot）。",
+    "「transferable、不需重新設計」的主張有範圍限制：goal state 與 summarized belief state 是在整個 MultiWOZ ontology 上的固定二元向量，遷移實驗的目標領域 slot 早已在向量裡；逐輪獎勵要靠規則比對使用者目標、DB 與 act，換到新 schema 或無 act 標註的領域都得重做標註與規則。這比 ABUS 省工，但不是「零設計」。",
+    "遷移實驗的資料預算有疑點：§4 說 RL 期間的使用者目標取自訓練資料，但遷移設定沒交代 RL 用的目標池是否只限 300／100 則調適對話。若用了訓練集中其他含目標領域的對話目標，低資源預算就被放寬了（只能列為待確認，文中未說明）。",
+    "作者概括的增幅比表格寬鬆：領域調適宣稱 RL 帶來平均 7–10% 的提升，實際為 +6.6（EWC, predicted）到 +11.0 分（Naive, oracle）；單領域到多領域宣稱 6–9%，predicted 下 EWC 只有 +4.1 分、oracle 下 Naive 則是 +10.3 分。這些是 combined score 的絕對分數，不是百分比。逐領域也有例外：predicted 下 train 領域 EWC → EWC+RL 的成功率只從 47.7 到 48.5（Table 17），A+T、A+H+X 組合的 EWC+RL 低於 Naive+RL（Table 6）。",
+    "「新 state-of-the-art」只在 oracle belief state 下成立：predicted belief state（實際部署的設定）下，JOUST 的 Comb 96.0 低於 MinTL-BART 97.8，Succ 73.5 也低於 74.9。表中其他系統的數字直接抄自各論文，沒有重跑；只用 MultiWOZ 2.0，沒報 2.1 之後的修正版。",
+    "Table 8 的探索量增加不等於品質提升：unique belief state 在 RL 期間變多，可能包含 DST 錯誤或隨機填值造成的無效 state；interaction 與 corpus 的對話數也沒交代是否相同，數量不可直接比。作者把它當成效能提升的來源，但沒有做「探索量 vs 效能」的對照。",
+    "SL 基準本身就依賴模擬器：SL 的停止準則是「產生之對話的成功率」，若如字面指 self-play 對話，連 Table 1 (a) 的模型挑選都經過 US，並不是與模擬器無關的基準。",
+    "重現性細節有缺口：dial-R 的每輪懲罰值、DB 查詢 3 維 one-hot 的類別定義、policy gradient 是否用 baseline 都沒寫；正文 Table 7 的 Naive／Naive+RL 在附錄 Table 13／14 改稱 SL／RL，DS 的 Wrong Ans. 在附錄叫 Missing answer rate，對照時容易混淆。"
+  ],
+  "framework_role": "T6「經典與神經使用者模擬器」的代表作之一：它把 US 從語意層提升到自然語言層的端到端神經模型，並把 US 當作可以和 agent 一起用 RL 改進的對手，而不是固定環境。對本框架有三點可直接借用或引以為戒：(1) US 內部以二元 goal state 追蹤「哪些目標還沒講或還沒問」，是讓模擬器不重複、知道何時結束的最小狀態機，LLM 使用者模擬器同樣需要這種顯式目標追蹤；(2) 按角色設計的逐輪獎勵（不重複請求、答對請求、提供新資訊）同時是一組可以自動計算的逐輪品質訊號，與 T8 任務完成分數的「逐輪 vs 對話層」問題直接相關；(3) 與 agent 共同最佳化的模擬器會讓 self-play 成功率變得不可信（模擬器可能變得好對付），所以評估時要用固定、與 agent 分開訓練的模擬器或真實語料。這篇不涉及真實使用者回饋迴路或使用者滿意度估計。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "US 以抽樣的結構化使用者目標為條件，產生自然語言話語送進 DS；DS 的 DST 從這些話語抽出 slot-value 限制，policy 再依此提供實體。inform／success rate 正是在量 DS 有沒有對齊 US 背後的使用者目標。訓練時這些 US 輸入就是 DS 的唯一外部輸入。"
+    },
+    {
+      "edge": "E6",
+      "how": "self-play 的互動紀錄被直接拿去評估：以 Info／Succ 計算互動品質（Table 1）、逐輪計算 US 與 DS 的錯誤率（Table 7）、統計探索的 state／action 數（Table 8），並交給人工評估（Table 9）；同一批紀錄也在逐輪計算獎勵、回饋給兩個 agent 的 RL 更新。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文沒有宣稱任何部署或產品使用；雖有一位 Alibaba Group 的共同作者，但文中沒有提到上線。實際查證範圍有限：本 session 的 WebSearch 額度已用完（200/200），沒能做網路搜尋；只用 WebFetch 打開官方程式碼庫 https://github.com/andy194673/joust，README 只描述 ACL-IJCNLP 2021 的研究程式碼與訓練／評估腳本，沒有提到生產用途。Semantic Scholar 記錄為 ACL 2021，引用 65、influential citation 10，屬學術影響力。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/andy194673/joust",
+    "data": "公開：MultiWOZ 2.0 與官方評估腳本（https://github.com/budzianowski/multiwoz）；使用者 act 標籤來自 ConvLab（Lee et al. 2019）。程式碼庫附有 SL 與 RL 訓練腳本，並釋出訓練好的 checkpoint（provided_joust.tar.gz）以重現基準結果；遷移實驗的抽樣切分需從程式碼確認。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "是神經使用者模擬器從語意層走到自然語言層、並與 DS 共同 RL 最佳化的代表作，goal state 追蹤與逐輪角色獎勵有參考價值；但 US 逼真度只和自己的 SL 版本比，joint 的好處只在自評迴圈中成立，LSTM 架構也已過時，屬有價值但非必讀。",
+  "related": [
+    "1805.06966",
+    "2004.03809",
+    "1907.05507",
+    "1709.06136",
+    "1607.00070",
+    "1612.05688",
+    "1811.04369",
+    "1810.00278",
+    "1904.08637",
+    "1911.10484",
+    "2009.12005",
+    "2005.05298",
+    "2005.00796",
+    "1612.00796"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

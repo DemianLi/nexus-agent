@@ -1,0 +1,184 @@
+{
+  "id": "2404.07972",
+  "title": "OSWorld: Benchmarking Multimodal Agents for Open-Ended Tasks in Real Computer Environments",
+  "topic": "T7",
+  "subarea": "agent 基準與評估環境設計",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "在虛擬機裡的真實作業系統（主要是 Ubuntu）上建立可執行的電腦操作評估環境：以設定檔驅動初始狀態，任務結束後由逐例撰寫的執行式檢查器讀最終狀態給分。並據此發布 369 題跨應用基準，量到人類 72.36%，最佳模型只有 12.24%。",
+  "problem": "既有的數位 agent 基準有兩類缺陷。第一類是 Mind2Web、AitW、OmniAct 這類靜態示範資料集：沒有可執行環境，只比對下一步動作，等於假設每題只有一種解法，會誤罰其他正確解；也無法做互動式學習。第二類雖然可執行，但只限單一領域，例如 MiniWoB++、WebArena 只做網頁，InterCode 只做程式碼，AgentBench 是彼此隔離的多個環境。這些環境也簡化了觀測與動作空間，只有點選、打字等網頁專用動作，沒有右鍵、按住 ctrl 點選這類完整的鍵鼠操作。因此評不到真實電腦使用中最常見的情境：跨應用、GUI 與 CLI 混用、從中途狀態接手。對 T7 來說，核心難題是「開放式電腦任務沒有統一的正確答案格式」：要可靠、可重現地判斷任務完成，就必須能控制初始狀態，並依任務去讀軟體的內部狀態。",
+  "core_idea": "把評估環境做成「真實作業系統＋可還原快照的虛擬機」，所有任務都用同一套機制描述：一份設定檔寫明初始化步驟、結束後的整理步驟、要從環境取回哪些資料（getter），以及用哪個評估函式與參數判定（evaluator）。評估只看最終環境狀態是否符合目標，不比對動作序列，因此任何達成目標的路徑都能得分。任務來自真實使用者在論壇、教學中遇到的需求，其中刻意放入做不到的任務，要求 agent 主動回報 FAIL。這樣就能在單一環境裡評估任意應用與跨應用工作流程，同時把人類表現當作參照。",
+  "method": {
+    "任務形式化": "POMDP (S, O, A, T, R)。每一步 agent 收到觀測 o_t（自然語言指令加上截圖、a11y tree，或兩者），輸出可執行動作 a_t，環境轉移到新狀態並回傳新觀測。迴圈在 agent 輸出 DONE 或 FAIL，或達到步數上限時結束（實驗為 15 步，另設 30 分鐘的牆鐘時間上限，防止環境卡死）。reward 只在最後一步給：目標達成給 1，部分達成給 0 到 1 之間的小數；infeasible 任務若 agent 輸出 FAIL 也給 1；其餘一律 0。",
+    "環境架構（§2.2、A.1）": [
+      "以虛擬機而非 Docker 實作：虛擬機可以跑自己的 kernel，因此能涵蓋 Windows、Linux 等作業系統與 x64、ARM 等硬體；還能隔離 agent 的破壞性操作，並用快照快速重置。同一台主機可平行跑多個虛擬機，支援 headless。",
+      "三個元件：Coordinator 讀取任務設定檔並建立虛擬機實例；Task Manager 負責初始化、結束後的整理與取回資料；Simulator 把 agent 輸出的程式碼字串放進虛擬機執行。",
+      "流程：還原快照 → 執行初始化 → agent 互動 → 依 post-config 做整理（例如存檔、切換到某個視窗、重開某個 app）→ 從虛擬機或雲端取回資料到主機 → 執行評估函式。"
+    ],
+    "初始狀態設定（§2.2.2、B.5）": "作者刻意模擬「做到一半」的真實情境，例如軟體已開啟或剛當機。為了不讓每題都存一份數 GB 的快照，採用混合做法，分三段：(1) 啟動虛擬機，還原到共用的基礎快照；(2) 選配：準備檔案，先從直連網址下載到主機，再經區域網路上傳進虛擬機，OS 類任務則直接用命令列操作檔案系統；(3) 選配：前處理指令，例如用檔案對應的軟體開檔、把 Impress 翻到第 5 頁、調整視窗大小、點選畫面中央回到主介面。前處理用軟體與作業系統的 API 實作；API 做不到的部分用 pyautogui 補。全套共 302 種不同的初始狀態，每題的 setup 約花 1 人時。",
+    "執行式評估（§2.2.3、§3.2、B.6）": [
+      "每題的設定檔選用 getter、evaluator 與參數。getter 從最終狀態抽出關鍵資料，例如修改後的檔案、視窗元素的文字、cookie、a11y tree；evaluator 依抽出的資料判定是否成功。函式庫裡沒有合適的函式，就新寫一個加進去。全套共 134 個不同的評估函式，每題評估的開發與檢查約花 2 人時。",
+      "各應用的取值手段：LibreOffice Calc／Writer／Impress（7.3.7.2 版）用 openpyxl、python-docx、python-pptx 讀結果檔，這些函式庫讀不到的屬性直接解析 Office Open XML，判定方式是和黃金參考檔比對，或檢查特定屬性（頁面樣式、凍結窗格、locale 等）。Thunderbird（115.6.0）讀 profile 資料夾裡的設定與資料，帳號資訊用逆向工具 firefox_decrypt 解密；撰寫中的郵件在寄出前用 a11y tree 檢查內容。VLC 用它的 HTTP 介面、設定檔、結果檔比對與 a11y tree。Chrome 用 Playwright 經遠端除錯埠連進虛擬機裡的 Chrome，主機與虛擬機之間用 socat 轉埠（Windows 改用 Ncat），必要時也讀網頁的 HTML 原始碼。VS Code 安裝一個自製擴充套件，評估時呼叫它的指令，並檢查 settings.json 特定鍵的值。GIMP 的檔案類任務用 pillow 和黃金檔比對，功能類任務則讀 GIMP 的設定檔。",
+      "答案會隨時間變動的任務（例如某人論文的引用數、部落格內容），在 getter 裡放爬蟲之類的動態函式，評估當下即時取值，再和 agent 的結果比對。",
+      "Table 1 的三個例子：刪除 Amazon cookie（get_cookie_data 取值，再用 is_cookie_deleted 依 domains 規則判定）；工作表改名並複製（get_file 分別取環境檔與雲端參考檔，再用 compare_table 依 sheet_name、sheet_data 規則比對）；在郵件收件人欄填入 email（get_a11y_tree 取樹，再用 check_a11y_tree 以 CSS 風格選擇器比對收件人欄位）。"
+    ],
+    "觀測空間（§2.3、A.2）": "(1) 全螢幕截圖，含滑鼠游標，預設 1920×1080，可以改解析度，避免模型記住絕對像素座標。(2) a11y tree：Ubuntu 用 pyatspi（AT-SPI），Windows 用 pywinauto，轉成 XML。(3) 終端機輸出。另有錄影功能，但實驗沒有用。",
+    "動作空間（§2.4、A.3）": "主要是 pyautogui：任何語法正確的 pyautogui Python 程式碼都算合法動作，可以用 for 迴圈等控制結構組合多個基本動作，另加三個特殊動作 WAIT、FAIL、DONE。另提供給強化學習用的 computer_13 變體：13 種帶參數的動作型別（MOVE_TO、CLICK、MOUSE_DOWN、MOUSE_UP、RIGHT_CLICK、DOUBLE_CLICK、DRAG_TO、SCROLL、TYPING、PRESS、KEY_DOWN、KEY_UP、HOTKEY），加上同樣三個特殊動作。實驗採用 pyautogui，理由是描述動作空間時比較省 token。",
+    "任務蒐集與品管（§3.2、B.2–B.4）": [
+      "軟體選擇有五個條件：Ubuntu 22.04 上可用、開源、熱門、社群與文件完整、類別多元。最後選定 Chrome、VLC、Thunderbird、VS Code、LibreOffice Calc／Writer／Impress、GIMP，加上終端機、檔案管理員等系統工具。",
+      "題目來源包括官方文件、YouTube 與 TikTok 教學、WikiHow、Reddit／Quora／Super User／Stack Overflow、Coursera 與 Udemy 等，依瀏覽數與得票數挑受歡迎、有幫助、夠多元的。跨應用題在網路上不好找，由作者腦力激盪組合出來。每題都由另外兩位作者交叉檢查可行性、歧義，以及和原始出處是否一致。",
+      "30 題 infeasible 任務來自真實使用者提出的已廢棄功能或根本不存在的功能。另有 84 題改編自 NL2Bash、Mind2Web、SheetCopilot、PPTC、GAIA。",
+      "品管：標註完成後，由兩位沒參與該題標註的作者當作 agent 實際做一遍，回報指令不清、做不出來、邊角情況當機、嚴重的假陽性或假陰性。之後在跑人類與基線實驗時又修了四輪，超過 400 人時。整體由 9 位資工學生作者花 3 個多月完成，約 1800 人時。",
+      "分布（Table 10）：OS 24、Calc 47、Impress 47、Writer 23、VLC 17、Thunderbird 15、Chrome 46、VS Code 23、GIMP 26、Workflow 101，共 369 題。另有 Windows 分析集 43 題（Excel 11、Word 9、PPT 7、Workflow 16），因授權問題需使用者自行啟用。"
+    ],
+    "人類表現協定（§3.4）": "每題都請資工系大學生實際做一次。這些人有基本的軟體使用能力，但沒看過題目，也沒用過相關軟體。記錄完成時間與是否正確，判定用同一套評估腳本。另從 WebArena 抽 100 題，在同一設定下施測作為對照。難度分組也依人類完成時間切：60 秒內為 Easy，60 到 180 秒為 Medium，超過 180 秒為 Hard。",
+    "基線 agent（§4.1、C.1–C.4）": [
+      "模型：gpt-3.5-turbo-16k、gpt-4-0125-preview（只給 a11y tree 的純文字設定）、gpt-4-vision-preview（有截圖的設定）、gemini-pro、gemini-pro-vision、Gemini-Pro-1.5、Claude-3-Opus、Qwen-Max、Mixtral-8x7B、Llama-3-70B、CogAgent、GPT-4o。",
+      "解碼參數：temperature 1.0、top_p 0.9、每次最多生成 1500 token。上下文放最近 3 輪的觀測與動作，用 chat 格式讓 user 與 assistant 交替；超過模型上限時從開頭截斷。先前照 VisualWebArena 用 (觀測, 動作) few-shot 的做法，純截圖只有 2.79%，作者歸因於缺少歷史編碼，因此改成這種格式。",
+      "提示詞要點（C.2，轉述）：要求 agent 依觀測輸出 pyautogui 程式碼，座標自己從觀測推算；禁用 pyautogui.locateCenterOnScreen 與 pyautogui.screenshot()；多行程式碼之間插入 time.sleep(0.5)；每一步的程式碼必須自成一體，不能沿用前幾步的變數；只能回傳程式碼區塊，或特殊碼 WAIT、FAIL、DONE，並叮嚀「別輕易說 FAIL」；提供 sudo 密碼；要求先對目前截圖與先前步驟做簡短反思，再輸出程式碼。SoM 版本則允許用 tag_N 取代座標。",
+      "四種輸入設定：(a) a11y tree：依 Table 13 過濾節點，條件是標籤屬於白名單（document、item、button、heading、label、textbox、link、menu、table-cell、terminal 等）、showing 且 visible、enabled／editable／expandable／checkable 其一成立、有名稱、文字或圖片、位置 ≥0 且大小 >0。只留 tag、name、text、position、size 五欄，用 tab 分隔成表格。原始 XML 常超過一百萬 token，過濾後單一觀測要約 6000 token 的 context 才能涵蓋九成的情況。(b) 截圖：1920×1080 原圖直接送入 VLM。(c) 截圖＋過濾後的 a11y tree。(d) Set-of-Mark：不用分割模型，而是用 a11y tree 的座標在截圖上畫編號框，另附 index、tag、name、text 的中繼資料表；模型輸出 tag 編號，後處理再轉成座標。"
+    ],
+    "分析實驗（§5、除非另註皆為 GPT-4V＋SoM）": "(1) 依難度、可行性、單一或多應用分組計算成功率（Table 6）。(2) 解析度消融：截圖依 0.2、0.4、0.6、0.8 比例降取樣，截圖設定的輸出座標仍須對齊 1080p，在 10% 子集上跑。(3) 歷史長度：放 1、2、3 輪，或盡量塞滿，同樣在 10% 子集上跑。(4) 視窗擾動：從 agent 表現較好的 28 題（成功率 50.79%）出發，每題開始時改變視窗位置、把視窗縮到最小，或開啟無關軟體並最大化來製造雜亂。(5) 跨作業系統：把 43 題移植到 Windows，逐題做微調，用 GPT-4V 純截圖設定比較兩邊。(6) 質性分析：人工檢視 550 個失敗例的錯誤類型。"
+  },
+  "assumptions": [
+    "最終環境狀態（檔案、設定檔、cookie、a11y tree 等）足以判定任務是否完成：評估只看結果、不看過程，所以指令中的過程限制（例如「用 GIMP 做」「別關掉其他工作」）和副作用都不在評估範圍內。",
+    "作者撰寫的檢查器能涵蓋所有合法解法，不會誤罰替代解；這一點靠多輪人工檢查保證，沒有形式化驗證。",
+    "快照加上設定檔可以決定性地重建初始狀態；依賴的網路資源（直連下載、真實網站、雲端檔案、爬蟲取得的即時答案）在評估時仍然可用，而且答案穩定。",
+    "指令只有一輪，目標明確；過程中沒有使用者可以追問或釐清。",
+    "資工系學生在「沒看過題目與軟體」的條件下做出的結果，可以當作合理的人類參照；而且人類的失敗主要反映任務難度，不是評估腳本的誤判。",
+    "15 步的上限對大部分任務夠用（作者憑經驗設定，沒有提出證據）。",
+    "以 Ubuntu 上的開源軟體為主，能代表真實世界的電腦使用；Windows 子集的結果與 Ubuntu 相關，可以用來支持這一點。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "OSWorld Ubuntu 主集：369 題（單一應用 268、多應用 workflow 101、infeasible 30、改編自其他基準 84）",
+      "OSWorld Windows 分析集：43 題（Excel、Word、PPT、Workflow）",
+      "WebArena 隨機 100 題（只用於人類完成時間與正確率的對照）"
+    ],
+    "metrics": [
+      "Success Rate：執行式 reward 的平均。reward 落在 [0,1]，含部分給分；infeasible 題輸出 FAIL 也給 1",
+      "依類別（OS、Office、Daily、Professional、Workflow）與依應用分列的成功率（Table 5、Table 14）",
+      "依難度、可行性、應用數量分組的成功率（Table 6）",
+      "人類完成時間（中位數與分布）與人類正確率",
+      "Ubuntu 與 Windows 成功率的相關係數",
+      "失敗例的錯誤類型比例（人工質性分析）",
+      "GPT-4V 在四種設定下的步數分布（Figure 15）"
+    ],
+    "baselines": [
+      "a11y tree 設定：Mixtral-8x7B、Llama-3-70B、GPT-3.5、GPT-4、Gemini-Pro、Gemini-Pro-1.5、Qwen-Max、GPT-4o",
+      "純截圖設定：CogAgent、GPT-4V、Gemini-ProV、Gemini-Pro-1.5、Claude-3-Opus、GPT-4o",
+      "截圖＋a11y tree 設定：同上六個 VLM",
+      "Set-of-Mark 設定：同上六個 VLM",
+      "人類表現（資工系大學生）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "逐例撰寫的執行式評估：用 getter 加 evaluator 組出近乎每題專屬的檢查腳本，評估函式的種類遠多於先前可執行的基準",
+      "numbers": "369 題共用 134 個不同的評估函式、302 種初始狀態。對照 Table 4：WebArena 5 個、VWebArena 6 個、WorkArena 7 個、AgentBench 7 個、MiniWoB++ 125 個。每題評估約 2 人時，setup 約 1 人時，整套約 1800 人時",
+      "section": "§3.2、Table 3、Table 4",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "OSWorld 對人類也明顯比純網頁任務難：正確率較低、耗時較長",
+      "numbers": "人類正確率 72.36%，WebArena 為 88%；完成時間中位數 111.94 秒，WebArena 為 35.38 秒，另有不少題超過 900 秒",
+      "section": "§3.4、Figure 4",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "當時最強的 LLM／VLM 遠遠達不到人類水準；最佳成績是純文字 GPT-4 讀 a11y tree",
+      "numbers": "a11y tree 設定下各模型 2.37%–12.24%，最高是 GPT-4 的 12.24%，GPT-4o 為 11.36%；人類 72.36%。論文另外報告，Claude-3-Opus 雖然在一般基準上和 GPT-4V 相當，在這裡比 GPT-4V 低 2.84 到 7.76 個百分點",
+      "section": "§4.2、Table 5、§5.4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "額外輸入（a11y tree、SoM）的效果因模型而異；GPT-4V 加上 SoM 反而略低於截圖＋a11y tree，和 SoM 在網頁 agent 上的既有結論相反",
+      "numbers": "GPT-4V：截圖＋a11y 12.17%、SoM 11.77%、純截圖 5.26%。Gemini-ProV 加了 a11y tree 反而下降：純截圖 5.80%，截圖＋a11y 3.48%",
+      "section": "§4.2、Table 5、D.5–D.6",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "跨應用工作流程是最弱的一環：多應用任務的成功率不到單一應用的一半",
+      "numbers": "GPT-4V（SoM）：單一應用 13.74%、多應用 workflow 6.57%。Table 5 所有設定中，workflow 最高是 GPT-4o（a11y）的 7.56%；人類在 workflow 是 73.27%。同一張 Table 6 依難度分組：Easy 16.78%、Medium 13.12%、Hard 4.59%",
+      "section": "§5.1、Table 6、Table 5",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "VLM agent 對視窗版面的擾動很脆弱：改變視窗位置、大小或加入無關視窗，成功率就大幅下降",
+      "numbers": "從原始成功率 50.79% 的 28 題子集出發，內文說擾動後下降 60% 到 80%",
+      "section": "§5.2、Figure 8",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "同一批任務移植到 Windows 後，成功率與 Ubuntu 呈正相關，作者據此主張在 OSWorld 上的結論可以轉移到 Windows",
+      "numbers": "GPT-4V 純截圖、43 題：Ubuntu 4.88%、Windows 2.55%，相關係數 0.7",
+      "section": "§5.3、Table 7",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "失敗的主因是 GUI grounding，不是規劃：agent 在程式碼註解裡寫出正確步驟，但點不準座標，進而引發重複點選與誤開視窗等連鎖錯誤",
+      "numbers": "550 個失敗例中超過 75% 有滑鼠點選不準的問題",
+      "section": "§5.4、D.2",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "評估腳本仍有假陽性與假陰性，作者認為需要投入更多時間與 red teaming（§3.2 Quality control）。",
+    "評估函式只看任務是否正確完成，不看不必要的破壞性動作；沒有可靠的安全指標，也找不到有效方法偵測潛在副作用（§7）。",
+    "infeasible 題有「運氣」成分；有些模型與設定（例如 Gemini-Pro 純截圖）很容易直接輸出 FAIL，因此在 infeasible 題上造成假陽性（§5.1）。",
+    "各應用的 a11y tree 品質不一，無法保證開發者遵守無障礙規範；過濾規則可能漏掉元素（§7）。SoM 的框取自 a11y tree，會出現低品質甚至誤導的框（C.4）。",
+    "閉源模型的版本會隨時間改變，結果可能跟著變（C.1）。",
+    "Windows 任務因版權問題需要使用者自行啟用；macOS 因授權限制沒有建立 benchmark（§3、B.1）。",
+    "標註成本高，所以只選了少數代表性軟體；涵蓋醫療、教育、產業等專業領域是未來工作（B.2、§7）。"
+  ],
+  "limitations_observed": [
+    "沒有報告「永遠輸出 FAIL」的零能力基線，而這條地板不低。依 §2.1 的 reward 定義，agent 第一步就回 FAIL，就能拿下全部 30 題 infeasible，等於 30/369＝8.13%。Table 5 的 26 組模型×設定中，只有 5 組超過這個值：GPT-4 a11y 12.24%、GPT-4V 截圖＋a11y 12.17%、GPT-4V SoM 11.77%、GPT-4o a11y 11.36%、GPT-4o 截圖＋a11y 11.21%。所有純截圖設定（最高 5.80%）都低於它。作者在 §5.1 意識到有運氣成分與 FAIL 誤判，但沒有量化；報告的分數混合了「真的做完」與「放棄剛好對」，infeasible 題又和 feasible 題等權，會扭曲模型之間的排序。",
+    "「Success Rate」其實是平均 reward，裡面含有部分給分，但論文沒有說明哪些評估函式會給部分分數、怎麼算。Table 14 的數字就露了餡：Impress 有 47 題，只算二元成敗的話最小的非零值是 2.13%，Mixtral 卻是 0.39%；Workflow 101 題，Mixtral 是 0.10%。這些都只可能來自部分分數。和其他只算二元成功率的基準比較時，並不是同一個量。",
+    "統計力不足，但主張下得很強。主表用 temperature 1.0、top_p 0.9，每題只跑一次，沒有信賴區間。整體 1 題約等於 0.27 個百分點；OS 類只有 24 題，1 題就是 4.17 個百分點。「SoM 讓 GPT-4V 下降」的依據是 11.77% 對 12.17%，差 0.40 個百分點，大約 1.5 題；「最佳模型 12.24%」和第二名 12.17% 的差距同樣微不足道。解析度與歷史長度的曲線只在 10% 子集（約 37 題）上各跑一次，拿來下趨勢結論很勉強。",
+    "模態與模型混在一起：純 a11y 設定用 gpt-4-0125-preview，含截圖的設定用 gpt-4-vision-preview。「a11y tree 在目前技術條件下有決定性作用」這個結論，同時混入了換模型的效果。",
+    "跨作業系統「高度可轉移」的證據很薄。43 題上的 4.88% 和 2.55%，大約只對應 2 題和 1 題成功（部分分數除外）；論文沒說相關係數 0.7 是在逐題 reward、還是在應用類別上算的。移植時又逐題做了「微調」，兩邊其實不是同一批題目。靠這幾個成功點算出的相關，撐不起「高可靠度轉移」的說法。",
+    "視窗擾動實驗有選樣偏差：28 題是挑「agent 表現較好」的，重跑時即使不擾動，也會因為均值回歸而下降，論文沒有報告未擾動重跑的對照。另外，從 Figure 8 抽出的數值是 36.5、15.04、25.39，對照原始 50.79。依我從抽出文字推測的長條對應，相對下降約 28% 到 70%，和內文說的「60% 到 80%」對不上；這個對應是推測，但內文與圖至少有一方表述不清。",
+    "人類與 agent 的施測協定不對等。人類沒有步數限制，中位數 111.94 秒，不少題超過 900 秒；agent 只有 15 步、30 分鐘。外部官方資料證實步數上限會綁住分數：Anthropic 在 2024-10-22 發布的 Claude 3.5 Sonnet 公告中寫，給更多步數時成功率從 14.9% 升到 22.0%；Anthropic 在 Claude Sonnet 4.5 公告中，則是在 OSWorld-Verified 框架上以 100 步上限、4 次執行取平均來回報。人類 27.64% 的失敗也沒有拆成人為失誤、評估腳本假陰性與指令歧義三類。這個失敗率本來可以當作「評估器對正確解法誤判率」的上界來用，論文卻沒有拿它估計評估器的品質。論文說「人類表現穩定在 70% 上下、差異不超過 5%」，這只在類別層級成立。依應用分列，從 Thunderbird 的 46.67% 到 Impress 的 80.85%；依難度分組，則從 84.91% 掉到 49.57%。而難度分組本身就是用人類完成時間切的，拿它和人類成功率一起看，有循環論證的問題。",
+    "只看結果的檢查器管不到指令中的過程限制與副作用，論文自己的例子就是反證。D.3 的「用 GIMP 剪影片」一題，agent 改用 ffmpeg，無視「用 GIMP」的要求，卻被歸在「agent 勝過人類」一類，論文沒說這題怎麼計分。強制關閉 LibreOffice Writer 那題，使用者明說不想失去其他開著的工作，agent 卻下了 killall soffice.bin 與 pkill -9 soffice.bin，會把所有 LibreOffice 行程一起關掉，軌跡仍被標成 Done。對 T7 來說，這說明結果導向的 reward 需要另外搭配軌跡層級的限制檢查。",
+    "可重現性會隨時間流失。Chrome 題依賴真實網站（Amazon、Nike 官網、Google Drive），答案會變的題目用爬蟲即時取值，初始檔案又從外部直連下載，所以同一題在不同時間的標準答案與可行性都可能不同。官方 repo 在 2025-07-28 推出 OSWorld-Verified，說明修了多項社群回報的問題，並要求用新版結果比較，這是原版題目與評估有缺陷、會漂移的實證。",
+    "資料污染風險沒有討論。題目刻意取自公開的論壇、教學與影片，另有 84 題改編自 NL2Bash、Mind2Web、SheetCopilot、PPTC、GAIA 等公開基準；任務設定與評估腳本也全部公開，沒有保留私有測試集。",
+    "內文有幾處自相矛盾或誇大。(1) 摘要與引言說支援 macOS，B.1 卻說為避免法律問題，沒有在 macOS 上建 benchmark，全文也沒有任何 macOS 任務。(2) 引言說評估函式數量比 WebArena 多出「幾個數量級」，實際是 5 對 134，約 27 倍；§3.3 更說明顯多於先前所有工作，但自己的 Table 4 裡 MiniWoB++ 就有 125 個；369 題共用 134 個函式，平均約 2.75 題共用一個，「近乎逐題專屬」也言過其實，而且函式數量本身不等於評估可靠度。(3) 引言說 workflow 最高只有 6.57%，Table 5 卻有 GPT-4o a11y 的 7.56%，應該是 v2 加入 GPT-4o 後內文沒更新。(4) Table 5 與 Table 14 有數處對不上，例如 CogAgent SoM 的 Workflow 分別是 0.53% 與 0.00%。",
+    "SoM 的結論不能推廣到 SoM 本身。這裡的 SoM 用 a11y tree 的座標畫框，不是原論文的分割模型；C.4 也承認框的品質差。因此「SoM 在作業系統任務上失效」只適用於「a11y 導出的 SoM」這種實作，而且如上所述，差距本身在雜訊範圍內。"
+  ],
+  "framework_role": "T7 的核心參考文獻，屬於「agent 基準與評估環境設計」。它定下可執行電腦環境評估的基本形狀：可還原快照的真實作業系統、設定檔驅動的中途初始狀態、getter 與 evaluator 分離的逐例狀態檢查器，並納入 infeasible 題，測 agent 會不會正確放棄。和 T8 的關係：它定義了任務完成分數的具體形式，也就是最終狀態上的 [0,1] reward、部分給分，以及 infeasible 題靠 FAIL 得分；前面指出的零能力地板問題正好落在 T8 的計分設計上。和 T3 的關係：四種觀測設定（a11y tree、截圖、兩者合併、SoM）與解析度、歷史長度的消融，是觀測設計的對照資料。和 T4 的關係：錯誤分析是離線人工檢視軌跡，不是自動化的軌跡評估。邊一律不套：評估只讀最終環境狀態，不讀互動或修正紀錄；迴圈裡沒有使用者或使用者模擬器，指令只有一輪、無法追問；提示詞要求的每步「簡短反思」只是 agent 內部的產出，沒有回寫狀態，也沒有進入評估。所以 E1–E6 都沒有實際的資料流。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "Anthropic〈Introducing computer use, a new Claude 3.5 Sonnet, and Claude 3.5 Haiku〉（2024-10-22，https://www.anthropic.com/news/3-5-models-and-computer-use）：以 OSWorld 作為電腦操作能力的指標，Claude 3.5 Sonnet 在 screenshot-only 類別 14.9%，次佳系統 7.8%；給更多步數時 22.0%。",
+      "Anthropic〈Introducing Claude Sonnet 4.5〉（2025-09-29，https://www.anthropic.com/news/claude-sonnet-4-5）：宣稱在 OSWorld 以 61.4% 領先，方法說明寫明使用官方 OSWorld-Verified 框架、100 步上限、4 次執行取平均。",
+      "OpenAI Operator System Card（文件日期 2025-01-23；OSWorld 那句位於 2025-03-11 更新的 API Availability 段落，https://cdn.openai.com/operator_system_card.pdf）：以 CUA 在 OSWorld 的 38.1% 說明它在非瀏覽器的作業系統任務上還不夠可靠，建議人工監督，並引用 Xie 2024 OSWorld。openai.com 上的 CUA 介紹頁回 403，沒能開啟確認，不列入。",
+      "旁證，不計為採納：OSWorld 官方 README（https://github.com/xlang-ai/OSWorld）的 OSWorld-Verified 致謝段，列出 OpenAI 與 Anthropic 等機構提供回饋並參與修正。這是基準維護者的自述，不是廠商文件。"
+    ],
+    "assessment": "有可查證的業界採納，形式是「模型廠商把 OSWorld 當作電腦操作能力的官方評估指標」：Anthropic 在兩次產品發布中引用，OpenAI 在 Operator／CUA 的 system card 中拿它說明可靠度的界線。這屬於評估基準的採納，不是把 OSWorld 環境部署進產品。時間上要分開看：較早的引用（2024-10 的 3.5 Sonnet、2025-01／03 的 Operator system card）用的是原版 OSWorld，但步數設定不一定是論文的 15 步，例如 3.5 Sonnet 另外報了多步數的成績；2025-07 之後的引用（Sonnet 4.5）改用 OSWorld-Verified。兩者都不能和本篇 Table 5 直接比較。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/xlang-ai/OSWorld（Apache-2.0；論文寫 https://os-world.github.io）",
+    "data": "公開：任務指令、初始狀態設定、評估腳本與基線實作都已釋出。Windows 分析集需自備授權才能啟用；部分任務依賴真實網站與雲端檔案，結果會隨時間漂移。2025-07-28 推出 OSWorld-Verified，修正了社群回報的問題，官方要求與新版結果比較；README 也說，要上 verified leaderboard，須由維護者在他們那端執行 agent。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "第一個在真實作業系統虛擬機上，以逐例狀態檢查器評分的開放式跨應用電腦操作基準，被 Anthropic 與 OpenAI 的官方文件採為電腦操作能力指標，是「agent 基準與評估環境設計」的必讀；但原版評估協定（15 步、單次、temperature 1.0、沒有 FAIL 地板基線）的統計與效度缺陷要一併讀懂。",
+  "related": [
+    "2307.13854",
+    "2401.13649",
+    "2306.06070",
+    "2308.03688",
+    "2311.12983",
+    "2403.07718",
+    "2306.14898",
+    "2402.17553",
+    "2307.10088",
+    "2312.13108",
+    "2310.11441",
+    "2312.08914"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

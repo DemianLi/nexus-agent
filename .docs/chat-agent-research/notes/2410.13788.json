@@ -1,0 +1,181 @@
+{
+  "id": "2410.13788",
+  "title": "Modeling Future Conversation Turns to Teach LLMs to Ask Clarifying Questions",
+  "topic": "T1",
+  "subarea": "模糊指令與澄清提問",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把「澄清問題好不好」改由模擬未來兩輪的結果來標註：讓持有不同標準答案的多位模擬使用者回答同一個澄清問題，再看模型第四輪的答案對了幾位，以此產生 double-turn 偏好做 DPO，教 7B 模型在開放域 QA 中問出能區分各種解讀的問題，並學會何時該直接回答。",
+  "problem": "LLM 面對模糊請求時常預設單一解讀直接作答（論文以「最高薪的 football 球員」為例，GPT-4 與 Gemini 各自假設了不同的 football），讓持另一種解讀的使用者得不到要的答案。作者推測根源在 RLHF 的偏好標註只看「前文」：標註者只對下一輪回應排序，看不到澄清問題之後會發生什麼，因此難以評估澄清問題的效用，還容易偏好完整但武斷的答案、而非不完整的提問；多標註者的偏好又常以多數決合併成單一標籤，進一步把輸出推向多數人的解讀。這對需要服務廣大使用者、又缺乏個人化脈絡的助理尤其重要。",
+  "core_idea": "標註一個回應時，不看它本身，而是模擬它在未來輪次的結果：對同一個查詢，資料集中多位標註者給出的不同答案被當作 k 位意圖不同的使用者；每位模擬使用者依自己的目標答案回答澄清問題，模型再據此作答，以「k 位使用者中有幾位最後拿到自己的答案」（EM 平均）替候選回應排序。澄清問題與直接回答放在同一把尺上比較，平手時偏向直接回答以懲罰不必要的提問。排序後轉成成對偏好，用 DPO 訓練。",
+  "method": {
+    "task_definition": "輸入可能模糊的查詢 x；有 k 位使用者 u_1..u_k 都問了 x，第 i 位有消歧後的意圖與目標答案 y_i。系統 M 在第 2 輪輸出 r_init。若 r_init 以字串「Clarifying Question:」開頭即視為澄清問題（φ=True），否則視為直接回答。澄清路徑：對每位使用者 i，模擬器 ψ(x, r_init, y_i) 產生第 3 輪的澄清回答 a_i，系統在第 4 輪依 (x, r_init, a_i) 產生 r_next^i，最終答案集 R = {r_next^1..r_next^k}。直接回答路徑：從模型抽樣最多 k 個答案當作 R。",
+    "evaluation_metrics": "效率 = 平均模型輪數（1 或 2，混合系統介於其間）。效果 = Answer F1：R 與金標答案集 {y_1..y_k} 的 F1；對澄清系統另加嚴格條件——第 i 位使用者拿到的答案必須就是 y_i，不能只是落在金標集合裡。§5.1 另有兩個「何時問」指標：Direct-Answer Acc（題目未模糊且模型的貪婪直接答案正確時，系統是否選擇直接回答）與 Ambig Acc（澄清／直接回答的決策對上人工模糊／未模糊標籤的準確率）。顯著性以 N=10,000 次抽樣、p<0.01 判定。",
+    "eval_user_simulator": "評估時以 GPT-4（gpt-4-0613）當模擬使用者，輸入查詢、澄清問題與各個預期答案，要求扮演使用者，為每個預期答案各寫一句簡短的澄清回答、且不得包含預期答案；若無合適回答則輸出 None（Table 12）。輸出 None 或回答中出現目標答案字串者，該使用者的最終答案一律算錯（字串包含式的洩漏過濾）。",
+    "sft_data": {
+      "generation_prompt": "以 GPT-4 產生 SFT 資料（Table 11）：給查詢與數個可能答案，說明這些答案可能因問題模糊或提問時間不同而都正確，要求產生一個能判斷哪個答案才對的澄清問題，並為每個答案寫出對應的澄清回答與該答案；若只有 0 或 1 個答案正確則回 None。注意這份提示詞沒有「澄清回答不得包含答案」的限制，只有評估用的 Table 12 有。",
+      "Y_human": "取 AmbigQA train 與 dev 中被標為模糊的查詢，用人工標註的答案集當可能答案。",
+      "Y_model": "取 NQ-Open train 的查詢，以 Llama-2-7b 做 5-shot 預測：每次抽一組 5-shot 提示，產生一個貪婪答案（T=0.0）與一個抽樣答案（T=1.0），重複 10 次後去重，得到模型認為可行的答案集；若其中沒有任何答案與 NQ-Open 標註相符則丟棄。",
+      "size": "兩種來源各 4,400 組 (x, q)，切成 train 4,000 / dev 400；(x, q, a, y) 四元組：Y_human train 8,781 / dev 889、Y_model train 9,189 / dev 948，合計 19,807。",
+      "uses": "(x→q) 訓練澄清問題模型；(x, q, a→y) 訓練第 4 輪作答模型；(x, q, y→a) 訓練「訓練用」的使用者模擬器；(x→y) 訓練直接回答模型（忽略 q 與 a）。"
+    },
+    "models": "基底為 Llama2-7b、Gemma-7b、Llama3-8b 的預訓練版（刻意不用 instruct 版，因為那些模型用整份 NQ-Open 微調過，有洩漏疑慮）。訓練與推論都用 8-bit 量化加 LoRA。第 2 輪模型（澄清或直接回答）與第 4 輪模型（Ans-After-Clarify SFT，以全部 SFT 四元組訓練）分開，所有能提問的系統共用同一個第 4 輪模型，確保差異只反映澄清問題本身的價值。",
+    "preference_labeling_double_turn": [
+      "偏好資料的查詢取自 NQ-Open train，扣掉已用於 SFT 的查詢，剩 70,904 題，切成 train 64,584 / dev 6,320；每題的多個標註答案當作 k 位模擬使用者的目標答案。",
+      "從 Clarify SFT 模型對每題抽 6 個候選澄清問題（1 個 T=0.0、5 個 T=1.0）。",
+      "對每個候選問題 q、每位使用者 i，以「訓練用」使用者模擬器（以 SFT 四元組訓練的 (x, q, y_i→a_i) 模型，不用 GPT-4 以降低成本並避免過度擬合特定模擬器）產生 a_i，再由作答模型產生 ŷ_i。",
+      "Match 分數 = Σ_i EM(ŷ_i, y_i) / k。直接回答只有一個答案 ŷ，同樣逐一比對每位使用者的答案取平均。",
+      "依分數排序，平手時直接回答優先；排序轉成成對偏好（preferred, rejected）。",
+      "對照的兩種給分方式：RM＝用 Starling-RM-7B-alpha（在 380 萬筆單輪偏好上訓練）只看 (x, q) 打分，代表標準單輪標註；Likelihood＝模擬澄清回答後，以各金標答案的似然總和打分（沿用 STaR-GATE 的想法），也屬於模擬未來輪次的方法。"
+    ],
+    "training": [
+      "Direct Ans SFT：以 next-token loss 在 (x, y_i) 上微調；推論分 Greedy（單一答案）與 Sampled（抽 20 個答案，取出現最多的前 k 個，k 等於金標答案數；少於 2% 的題目湊不滿 k 個）。",
+      "Clarify SFT：在 Y_human 與 Y_model 兩份資料的 (x→q) 上微調。",
+      "Clarify DPO（RM／Likelihood／Match）：從 Clarify SFT 出發，以上述 6 個候選問題之間的成對偏好做 DPO，三者只差在給分方式。",
+      "Clarify-or-Direct Ans SFT：在 Clarify SFT 與 Direct Ans SFT 的訓練資料聯集上微調，讓模型自己選擇提問或作答。",
+      "Clarify-or-Direct Ans DPO：從上一個模型出發，以 6 個候選澄清問題加上 Direct Ans SFT 的 1 個貪婪直接回答之間的 Match 排序（含平手偏向直接回答的規則）做 DPO。",
+      "Joint 模型（§5）：把澄清模型與第 4 輪作答模型的 LoRA 更新做權重平均（model soup）合成單一模型；附錄 C 又說合併後會以相同 SFT 超參數再訓練，兩處敘述不完全一致。"
+    ],
+    "hyperparameters": "單機 8 張 A40（48GB），transformers＋AdamW，每次訓練在 24 小時內完成。SFT：lr 5e-5、batch 32、最多 5 epoch，每個 epoch 後在 dev 上選最佳 checkpoint。DPO：先合併 SFT 的 LoRA，KL 係數 β=0.1、lr 5e-6、最多 2 epoch，至 dev loss 收斂並選最佳 checkpoint；Llama2 batch 32、每 750 步評估一次，Gemma batch 16、每 1,500 步評估一次。",
+    "when_to_ask_baselines": "§5.1 與附錄 B：Random＝固定與本方法相同的直接回答比例（DA%），隨機挑題直接回答、其餘提問；ProCoT＝用 instruct 版模型與 CoT 提示先判斷是否模糊；PPDPP＝以 SFT 另訓一個二元分類器，標籤為「題目模糊就澄清、否則直接回答」（沒做原論文的 RL 部分）。所有基準的決策都交給 Clarify-or-Direct Ans DPO 模型去實際產生提問或答案。",
+    "unspecified": "論文沒有交代：LoRA 的 rank／alpha 與 target modules；Llama3 的 DPO batch size 與評估間隔（附錄 C 只寫 Llama2 與 Gemma）；6 個候選之間如何組成配對、同分的澄清問題之間怎麼處理；偏好標註時第 4 輪用哪個作答模型、訓練用使用者模擬器的基底模型是哪個；訓練端是否也做了評估端那種答案洩漏過濾；Answer F1 的答案比對用什麼正規化；Clarify-or-Direct 系統選擇直接回答時是否也抽 k 個答案；顯著性檢定的具體抽樣方式。"
+  },
+  "assumptions": [
+    "資料集中多位標註者給出的不同答案，代表真實使用者群體中的不同意圖；每位模擬使用者有一個固定的目標答案。",
+    "使用者知道自己要的是哪一種解讀，並能用一句話說清楚，且不會直接說出答案；模擬器（GPT-4 或訓練出的模擬器）能忠實扮演這種使用者。",
+    "短答案的 EM 足以當作「這段互動是否滿足使用者」的訊號；任務是事實型短答案 QA。",
+    "多問一輪的代價可以用「平手時偏向直接回答」與平均輪數來表達，不需要明確的輪數成本。",
+    "第 4 輪作答模型固定不變時，最終答案的差異就能歸因於澄清問題的品質。",
+    "基底模型自己的抽樣分佈可以代表「對模型而言模糊的地方」（Y_model 的前提）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "AmbigQA test（n=1,960；未模糊 788 題、每題 1 個答案；模糊 1,172 題、平均每題 3.7 個答案），分 Unamb／Amb／All 三組報告",
+      "訓練資料：AmbigQA train/dev（Y_human SFT）、NQ-Open train（Y_model SFT 與 70,904 題偏好資料）"
+    ],
+    "metrics": [
+      "Answer F1（答案集對金標集，澄清系統要求每位使用者拿到自己的答案）",
+      "# Turns（平均模型輪數）",
+      "Direct-Answer Accuracy",
+      "Ambig Accuracy",
+      "DA%（直接回答比例）"
+    ],
+    "baselines": [
+      "Direct-Ans SFT（Greedy／Sampled top-k）",
+      "Clarify SFT（一律提問，無偏好訓練）",
+      "Clarify DPO w/ RM（Starling-RM-7B-alpha 單輪偏好）",
+      "Clarify DPO w/ Likelihood（金標答案似然，也模擬未來輪次）",
+      "Clarify-or-Direct Ans SFT",
+      "何時問：Random（同 DA%）、ProCoT（Deng et al. 2023a，instruct 版模型）、PPDPP（Deng et al. 2023b，另訓分類器）",
+      "消融：Y_human／Y_model／Both 的 SFT 資料、Separate 對 Joint 模型"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "以 Match 給分的 double-turn DPO 在三個基底模型上都得到最高的整體 Answer F1，高於單輪 RM 標註與只做 SFT 的澄清模型。",
+      "numbers": "All F1：Llama2 32.8（Clarify SFT 25.9、RM 28.3、Likelihood 27.2、Direct-Ans Greedy 21.1）；Llama3 36.5（SFT 31.5、RM 30.9、Likelihood 35.9、Direct 24.8）；Gemma 33.9（SFT 28.8、RM 29.5、Likelihood 31.5、Direct 21.1）。對 RM 的差距為 +4.5／+5.6／+4.4，即作者說的 4–5%。Table 1 原文把 Llama3 Likelihood 的 35.9 印成 359、Match 的 Amb 31.7 印成 3.17（以 Table 2/3 的同一格交叉確認）。",
+      "section": "§5、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "用現成單輪 reward model（Starling RM）的偏好訓練澄清問題，效果不一致：只在 Llama2 上明顯改善，Llama3 與 Gemma 只有小幅增減。作者以此佐證「單輪標註難以辨識有用的澄清問題」。",
+      "numbers": "RM 對 Clarify SFT 的 All F1：Llama2 28.3 vs 25.9；Llama3 30.9 vs 31.5；Gemma 29.5 vs 28.8。",
+      "section": "§5、Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "會自己決定提問或作答的 Clarify-or-Direct Ans DPO，在輪數與 F1 之間取折衷：F1 高於直接回答與其 SFT 版，但低於一律提問的系統。",
+      "numbers": "Llama2 1.56 輪／F1 24.3（SFT 1.12 輪／21.3）；Llama3 1.57／29.1（SFT 1.40／28.2）；Gemma 1.61／24.6（SFT 1.43／20.3）。三個模型的 F1 都低於一律提問的 Clarify SFT（25.9／31.5／28.8）。",
+      "section": "§5、Table 1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "作者主張澄清問題不只幫助模糊題，連未模糊題的正確率也會提升，並在附錄 D 舉例。",
+      "numbers": "Unamb F1，Llama2：Clarify DPO Match 38.3 vs Direct-Ans Greedy 25.4；Llama3 42.9 vs 31.2；Gemma 40.7 vs 26.1。此主張的解讀見 limitations_observed 中關於模擬器洩漏的批判。",
+      "section": "§5、Table 1、附錄 D Table 13",
+      "anchor_idx": 8
+    },
+    {
+      "claim": "SFT 資料同時用人工與模型兩種模糊來源最好；只用模型模糊（Y_model）在 Llama2 上明顯勝過只用人工模糊，但在 Gemma、Llama3 上差距很小。作者推論模型模糊資料要針對各自的基底模型建構（Y_model 是用 Llama2 產生的）。",
+      "numbers": "All F1（Human / Model / Both）：Llama2 25.9 / 28.3 / 32.8；Llama3 34.9 / 36.4 / 36.5；Gemma 32.3 / 32.9 / 33.9。",
+      "section": "§5 Ablations、Table 2",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "把澄清模型與作答模型的 LoRA 平均成單一模型會掉分，但仍保留大部分相對於直接回答與單輪偏好方法的增益。",
+      "numbers": "All F1（Separate → Joint）：Llama2 32.8 → 28.7；Llama3 36.5 → 34.6；Gemma 33.9 → 31.4。",
+      "section": "§5、Table 3",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "在「何時該問」的判斷上，本方法在 Answer F1 與 Direct-Answer Acc 上勝過 Random、ProCoT 與 PPDPP，但 Ambig Acc 不是最高。ProCoT 在 Llama3 與 Gemma 上退化成從不直接回答，因此未列入附錄 Table 6。",
+      "numbers": "Llama2（DA% / F1 / DA Acc / A Acc）：Random 44% / 23.4 / 55.4 / 52.1；Ours 44% / 24.3 / 61.9 / 53.7；ProCoT 35% / 15.6 / 60.1 / 49.2；PPDPP 46% / 23.9 / 57.7 / 59.0。Llama3：Random 43% / 24.5 / 55.6 / 51.1；Ours 43% / 25.1 / 59.2 / 54.0；PPDPP 60% / 22.2 / 45.3 / 53.4。Gemma：Random 38% / 23.6 / 60.0 / 52.1；Ours 38% / 24.6 / 64.1 / 54.3；PPDPP 54% / 21.7 / 50.8 / 56.7。摘要說對既有方法的判斷準確率提升 3%，但本方法對 ProCoT／PPDPP 在 DA Acc 與 Ambig Acc 上的差值（Llama2：+1.8／+4.5 對 ProCoT、+4.2／−5.3 對 PPDPP；Llama3：+13.9／+0.6；Gemma：+13.3／−2.4）沒有一個接近 3，接近 3 的差值只出現在對 Random 的比較或 F1 上，所以對不上摘要的說法。",
+      "section": "§5.1、Table 4、附錄 B.2 Table 6",
+      "anchor_idx": 9
+    },
+    {
+      "claim": "另訓一個模糊分類器（PPDPP）的 Ambig Acc 比本方法高，但本方法的答案正確率仍較高；作者解讀為本方法會避開「模型就算問了也用不上」的模糊題。",
+      "numbers": "作者寫的 almost 10% 是相對差：Llama2 上 59.0 vs 53.7，絕對差 5.3 點。這個優勢只在 Llama2 與 Gemma（56.7 vs 54.3）成立；Llama3 上 PPDPP 的 53.4 反而低於本方法的 54.0。",
+      "section": "§5.1、Table 4、Table 6",
+      "anchor_idx": 3
+    }
+  ],
+  "limitations_stated": [
+    "只處理一到兩輪的互動，不考慮看到澄清回答後再追問第二個問題的情境；延伸到一般多輪互動留待未來。",
+    "系統只有「單一答案」與「澄清問題」兩種對話行為，沒有模擬其他更適合的策略，例如在解讀不多時一次列出多個答案（Overton 式回應）、依問題複雜度給長答或短答、或是棄答以免答錯。",
+    "只在 QA 上實驗；框架要搬到其他任務，需要多標註者的預期輸出與可替換的任務評估指標。",
+    "澄清與作答合成單一模型時效果下降，需要 mixture-of-experts 或更好的多輪學習演算法。",
+    "Y_model 是用 Llama2 的預測建構的，在 Gemma 與 Llama3 上增益很小，暗示需要針對各基底模型建構模型模糊資料。",
+    "ProCoT 基準必須用 instruct 版模型，效能可能因基底較強而被高估；PPDPP 訓練對超參數敏感，建議的超參數會讓系統永遠只選同一個選項。"
+  ],
+  "limitations_observed": [
+    "模擬器洩漏可能灌大了主結果，而且訓練端的風險比評估端更大。評估用 GPT-4 模擬器拿得到目標答案，只用「回答中是否出現答案字串」做過濾；附錄 D Table 13 的成功案例正好是半洩漏：使用者回答「2013 年那部」而答案是 2013 年的上映日、回答「得獎的那幾個人」而答案是兩位共同得主、回答「所有島嶼與小島」而答案是 607 個島嶼與小島。這些提示並不是在消歧，而是在把答案範圍縮小。訓練端更嚴重：訓練用模擬器是從 Table 11 的 GPT-4 輸出學來的，而那份提示詞沒有「不得包含答案」的限制，§3.1 也沒有描述訓練時做過洩漏過濾。偏好資料又來自 NQ-Open train（作者自己說只有約 10% 有多個答案），所以大多數 DPO 配對是單一答案題；在這種題目上，一個澄清問題要贏過另一個，最主要的途徑是引出知道答案的模擬器更多提示。這是一條 reward hacking 的路徑，可能解釋了未模糊題上 +11 到 +15 F1「意外」增益的一部分（Llama2 25.4→38.3、Llama3 31.2→42.9、Gemma 26.1→40.7），作者則把這解讀為澄清問題對一般問題也有幫助。Table 1 拆開來看有兩個旁證。第一，完全沒做偏好訓練的 Clarify SFT 在未模糊題上就已經比直接回答高 +5.6／+6.4／+9.6，可見評估端的提示管道本身就會帶來增益。第二，Match 相對單輪 RM 的優勢在未模糊題上反而比模糊題大：Unamb +7.3／+6.7／+6.8，Amb 只有 +2.5／+5.0／+2.9。論文宣稱 double-turn 偏好教會模型「消歧」，但它相對 RM 的增益集中在根本沒有歧義可消的題目上。論文沒有任何不含洩漏管道的對照實驗（例如讓模擬器只知道意圖類別、不知道答案）。",
+    "對照組不對稱：一律提問的系統每位使用者都多拿到一輪「由知道答案的 oracle 寫的資訊」，直接回答系統則沒有。另外，兩邊都用了金標的 k：澄清系統的模擬使用者人數等於金標答案數，直接回答的 Sampled 版也被允許輸出剛好 k 個答案，而實際部署中不可能事先知道有幾種解讀，這是外推上的限制。光是 Clarify SFT（沒有任何偏好訓練）就比直接回答高 4.5–7.7 F1，可見相對直接回答的增益大半來自評估設定本身；真正支撐「double-turn 偏好」這個貢獻的，只有 Match 對 RM 的 4.4–5.6 F1。",
+    "「何時問」的證據很弱。在相同 DA% 下，本方法的 Answer F1 只比隨機決定高 0.6–1.0（Llama2 24.3 vs 23.4、Llama3 25.1 vs 24.5、Gemma 24.6 vs 23.6）。Ambig Acc 的 53.7／54.0／54.3 也低於「一律判為模糊」的多數類基準 1,172/1,960 ≈ 59.8%——前提是 Ambig Acc 的分母是整個測試集，論文沒有明說；不過以 44% DA 隨機決策的期望值約 51.2%、實測 52.1% 來看，分母應該就是全集。換言之，模型的提問決策與人工模糊標籤幾乎無關。作者把這解讀成「避開用不上的澄清」，但在 F1 只贏隨機不到 1 點的情況下，這個解讀缺乏支撐。",
+    "選擇性提問系統的絕對表現不佳：Clarify-or-Direct Ans DPO 在三個模型上的 F1（24.3／29.1／24.6）都低於一律提問、完全沒有偏好訓練的 Clarify SFT（25.9／31.5／28.8），同時又要花約 1.56–1.61 輪。論文沒有定義「多一輪值多少 F1」的綜合指標，所以「取得平衡」無法被驗證；平手偏向直接回答是唯一的輪數成本，而且只在兩者 EM 完全相同時才生效。",
+    "double-turn 內部的比較也不一致：同樣模擬未來輪次的 Likelihood 在 Llama3 上 All F1 35.9，與 Match 的 36.5 幾乎打平（Unamb 43.5 甚至高於 Match 的 42.9），但在 Llama2 上只有 27.2、低於 RM 的 28.3。「模擬未來輪次」這個想法本身並非一致有效，哪種給分方式才有用依模型而異；論文把功勞統一歸給 double-turn 偏好，說得太滿。",
+    "摘要與正文的數字對不上：摘要說判斷何時提問的準確率比既有方法高 3%，但 Table 4／6 中本方法對 ProCoT、PPDPP 在 DA Acc 與 Ambig Acc 上的差值，三個模型都沒有接近 3 的（Llama2 對 ProCoT +1.8／+4.5、對 PPDPP +4.2／−5.3；Llama3 對 PPDPP +13.9／+0.6；Gemma 對 PPDPP +13.3／−2.4）。接近 3 的差值只出現在對 Random 的比較（Llama3 Ambig Acc +2.9）或 F1 上（Llama3、Gemma 對 PPDPP 都是 +2.9），無法確定摘要指的是哪一組。正文的 almost 10% higher 是相對差（絕對差 5.3 點），而且在 Llama3 上方向相反。此外 Table 1 有 359、3.17 兩處筆誤；Table 14 的圖說寫「未模糊題」，但附錄 D 正文與表格內容都是多答案的模糊題；Table 13 有兩列的澄清回答一字不差（都在問「所有平台的發售日」），其中一列答非所問，疑似複製錯誤。在 HTML 轉文字的全文中看不到 Table 1 的粗體顯著性標記，無法確認哪些格顯著。",
+    "外推範圍有限：動機是 GPT-4／Gemini 這類前沿 instruct 模型不會提問，但方法只在 7B–8B 的預訓練基底模型上驗證，絕對 F1 只有 21–37；沒有檢驗套用到已做過 RLHF 的 instruct 模型時是否仍有效。任務是答案只有幾個 token 的事實型 QA，意圖差異都能用一句話說清楚，而且成功與否由 EM 判定——對開放式請求、工具呼叫或多步驟任務中「問什麼」的價值，這個 EM 獎勵無法直接搬用。",
+    "沒有任何人類評估：澄清問題的自然度、使用者負擔、真實使用者願不願意回答，都沒有量測；所謂 double-turn 人工標註方案，實際上全部由模擬器完成，從未真的請人標註過，因此「比單輪人工標註好」的主張只對模擬標註成立。",
+    "「多位標註者＝多種使用者意圖」的前提有雜訊：附錄 A Table 5 顯示 NQ-Open 的多答案有相當比例只是格式差異（同一車重分別以公斤與磅表示），或是其中一個答案其實是錯的（AmbigQA 判為不模糊）。以這些答案模擬「不同使用者」，會獎勵去區分一些根本不是意圖差異的東西。",
+    "Joint 模型的訓練程序前後矛盾：§5 說是 LoRA 權重平均，附錄 C 又說合併後再以 SFT 超參數訓練，兩種做法的結果含義不同，Table 3 的數字無法確定是哪一種產生的。"
+  ],
+  "framework_role": "T1「模糊指令與澄清提問」中同時處理「問什麼」與「何時問」的訓練型方法代表作。它提供的核心可搬用概念是：一個澄清動作的價值不能用單輪評判，要把它往後推演到使用者回答、模型作答之後，對一個意圖分佈（多位模擬使用者）取平均來計分，並在平手時偏好直接回答。對本框架而言，它把 T6（使用者模擬器）的輸出接進 T1 的決策訓練，也示範了一套以模擬互動評估澄清行為的協定（T7）。讀的時候要一併帶走它的反面教訓：模擬使用者若知道標準答案，「問得好」會退化成「套出答案」，所以模擬器只能持有意圖、不能持有答案，並需要洩漏對照組；「何時問」的評估必須對照同提問率的隨機基準與多數類基準，否則很容易把幾乎隨機的決策報告成進步。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "方法的核心資料流：k 位模擬使用者（訓練時是以 SFT 四元組訓練的 (x, q, y_i→a_i) 模型，評估時是 GPT-4 gpt-4-0613），各自持有 Questioner 看不到的目標答案 y_i，對澄清問題給出第 3 輪回答 a_i；第 4 輪作答模型據此判定使用者的真實意圖並作答。模擬器輸出 None（問題沒問到模糊點）或洩漏答案時，該使用者直接判錯，因此模擬器的輸入品質直接決定目標對齊的成敗。"
+    },
+    {
+      "edge": "E6",
+      "how": "模擬互動的結果被逐條計分並回流：訓練時以各模擬使用者最終答案的 EM 平均，替 6 個候選澄清問題與直接回答排序，轉成 DPO 的偏好配對；評估時以同一套模擬互動計算 Answer F1、平均輪數、Direct-Answer Acc 與 Ambig Acc。需注意同一條資料流同時當獎勵與評估使用，而且兩端的模擬器不同（訓練用自訓模擬器、評估用 GPT-4），這是作者為避免過度擬合特定模擬器所做的設計。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有提到任何部署或產品使用。WebSearch 找到的只有 arXiv、ICLR 2025 論文集頁面（https://proceedings.iclr.cc/paper_files/paper/2025/hash/97e2df4bb8b2f1913657344a693166a2-Abstract-Conference.html，證明它已被 ICLR 2025 接收，屬學術影響力）、論文彙整與摘要網站，以及作者自己的 GitHub 程式碼庫，沒有任何官方產品頁、model card、官方文件或官方部落格說明採用本方法。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/mikejqzhang/clarifying_questions",
+    "data": "部分公開。README 列出 SFT／DPO／推論／獎勵計算／指標的腳本（src/sft.py、src/dpo.py、src/inference.py、src/clarifying_rewards.py、src/metrics.py），並附上兩份 SFT 資料：data/ambigqa.train_4k.clarify.jsonl、data/ambigqa.dev_4h.clarify.jsonl（Y_human）與 data/nqopen.train_4k.clarify.jsonl、data/nqopen.dev_4h.clarify.jsonl（Y_model）。README 沒有提到模型權重、偏好資料或授權；論文附錄 E 說自製資產採 CC BY-NC-SA 4.0。NQ-Open 與 AmbigQA 為公開資料集。SFT 資料生成與評估用模擬器的提示詞都完整列在附錄 Table 11、12；重新產生資料與評估需要 GPT-4（gpt-4-0613）API。LoRA rank 等數項設定未寫在論文中（見 method.unspecified）。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是把「澄清問題的價值要由後續輪次的結果來決定」做成偏好標註並實際訓練出來的代表作（ICLR 2025，程式碼與 SFT 資料公開），同時觸及問什麼與何時問，概念可直接搬進 T1 的設計；但主結果可能被知道答案的模擬器洩漏灌大，何時問的決策也只比隨機好不到 1 F1，閱讀時必須搭配本筆記的批判一起看。",
+  "related": [
+    "2403.19154",
+    "2311.09469",
+    "2305.13626",
+    "2311.00262",
+    "2212.07769",
+    "2004.10645",
+    "2311.05584",
+    "2311.09144",
+    "2310.11589",
+    "2305.18290"
+  ],
+  "anchor_check": {
+    "exact": 10,
+    "deep": 10,
+    "total": 10
+  }
+}

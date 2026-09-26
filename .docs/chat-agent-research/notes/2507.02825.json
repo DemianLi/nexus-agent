@@ -1,0 +1,170 @@
+{
+  "id": "2507.02825",
+  "title": "Establishing Best Practices for Building Rigorous Agentic Benchmarks",
+  "topic": "T8",
+  "subarea": "任務成功的判準",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把「agentic benchmark 的分數可不可信」拆成兩個等價條件：任務有效性（能力 ⇔ 任務成功）與結果有效性（任務成功 ⇔ 評分判為成功）。據此整理出 Agentic Benchmark Checklist（ABC）：任務有效性 10 條、依評分法分組的結果有效性 19 條、報告 13 條。作者拿它審了 10 個常用 benchmark，並用 do-nothing、灌資料、覆寫測試等 trivial／對抗 agent 實測漏洞：τ-bench 的 do-nothing agent 能拿 38%，SWE-Lancer 可以不解題就拿 100%，KernelBench 高估 31%，OSWorld 低估 28%。最後用 ABC 修正自家的 CVE-Bench。",
+  "problem": "agentic benchmark 的成敗，是拿 agent 最終產出（程式碼、檔案修改、環境狀態、文字回覆）去比對標準答案。比對的方法五花八門：單元測試、fuzz、E2E 測試、字串／子字串比對、LLM-as-a-Judge、終態比對。任務本身又要架設工具、沙盒與外部服務。任一環節有漏洞，就會讓「判為成功」與「真的完成任務」脫鉤：不是出現捷徑（偽陽性、高估），就是出現不可能完成的題目（偽陰性、低估）。這些分數正被頂尖 AI 供應商拿來發布模型、排名與做決策，但既有的 benchmark 品質研究（BetterBench、How Should I Build A Benchmark 等）主要針對選擇題或單步生成，沒有一份能照著操作、專門處理多步互動與非結構化產出的檢查清單。對 T8 而言，這個問題就是任務完成分數的成功判準本身可能是錯的：在錯的判準上算 pass@k、pass^k 或平均成功率，都只是精確地量錯東西。",
+  "core_idea": "先把 agentic 評估拆成操作面（環境＋工具 → agent 多輪行動 → 產出 → 評分）與概念面（目標能力 ⇔ 任務成功 ⇔ 評分為正），嚴謹的充要條件是兩個等價同時成立。接著把兩個等價翻成可逐條打勾的檢查項：任務有效性管工具、環境與實作，擋捷徑與不可能題；結果有效性依產出類型與評分法分組，每種評分法各列出它固有的失效模式。第三部分管報告，針對無法完全避免的缺陷，要求揭露並量化其影響，包括信賴區間、trivial agent 分數與非 AI 基準。每一條檢查項都要能用具體實驗驗證，所以評審流程最後一步是寫一個專門利用該漏洞的 agent，量它的分數或量修正前後的落差。",
+  "method": {
+    "輸入與輸出": "輸入是一個 benchmark 的論文、程式碼與任務集。輸出分兩層：(1) 每條適用的檢查項給 1（滿足）或 0（不滿足），附一句理由（附錄 D 的逐條報告）；三部分各自取適用項目的平均，畫成 Figure 5。(2) 每個被標出的問題，另外設計實驗驗證，給出高估或低估的百分比。",
+    "benchmark 蒐集與篩選（§3、附錄 B）": "1) 從 OpenAI、Anthropic、Google、Meta、xAI、Mistral、DeepSeek、Amazon 在 2024-01-01 到 2025-03-18 之間的模型發布文、技術報告與 system card 中，收集所有被引用的 benchmark，再加上學術會議得獎的 benchmark（例如 KernelBench），共 78 個。2) 判定是否屬於 agentic：任務必須需要多步推理或執行指令；SimpleQA、MMLU、MBPP、HumanEval 這類單步題排除。3) 依評估能力、評分方法、是否開源分類，挑 10 個開源的做深入評審，並確保評分方法涵蓋單元測試、E2E、fuzz、答案比對、子字串比對、LLM judge、終態比對、品質指標。",
+    "清單來源（附錄 C）": "每條檢查項都對到四類來源之一或多個：作者自己建 benchmark 的經驗、既有 benchmark 的最佳做法、既有 benchmark 已被回報的問題（例如 UTBoost 對 SWE-bench、Lange et al. 對 KernelBench）、軟體測試等領域的既有建議（覆蓋率、cyclomatic complexity、flaky test、fuzzing survey）。",
+    "任務有效性 T.1–T.10（§4.1）": "工具：T.1 自架工具（Python、CLI）要在提示詞裡寫明版本；T.2 API 型工具要確保服務可用並處理限流；T.3 API 中斷時要偵測並終止評估，讓使用者知情，不能默默記成失敗。環境：T.4 每題開始前清掉上一題殘留的資料與狀態（KernelBench 沒清掉 GPU 記憶體裡的標準答案，可以越界讀到）；T.5 agent 與標準答案要完全隔離；T.6 環境要可重現並在發布時凍結，不要依賴持續變動的外部網站。實作：T.7 驗證標準答案標註正確；T.8 驗證任務設定正確、可解；T.9 提供自動 oracle solver，證明每題都解得開；T.10 檢查 pilot 實驗的離群值：簡單題全軍覆沒暗示不可能題，只在難題成功暗示有捷徑。",
+    "結果有效性（§4.2，依評分法分組）": "資訊取得類：O.a 整串比對（O.a.1 標註語意等價的表達；O.a.2 容忍贅字）；O.b 子字串比對（O.b.1 處理 not、negative 等否定修飾；O.b.2 防止把所有可能答案全列出來蒙中；O.b.3 防止靠猜）；O.c LLM-as-a-Judge（O.c.1 先做 pilot 量評審的準確度與自我一致性）。程式碼生成類：O.d 單元測試（O.d.1 人工驗證測試的正確性與品質；O.d.2 用覆蓋率、cyclomatic complexity 等客觀指標背書）；O.e fuzz（O.e.1–2 輸入產生器要涵蓋不同值、型別、記憶體佈局與邊界情況；O.e.3 輸入必須影響輸出，例如對 relu(x) 只丟負數測不出東西）；O.f E2E（O.f.1 涵蓋使用者流程的所有分支；O.f.2 排除非決定性，例如寫死的 timeout）。狀態修改類（終態比對）：O.g.1 標準終態要涵蓋所有成功解法可能達到的結果；O.g.2 狀態空間要同時檢查相關與不相關的狀態，例如沒改到的檔案也要比，才抓得到越界副作用；O.g.3 狀態空間要夠複雜，隨手亂改或什麼都不做不會碰巧相符。多步推理類：O.h 答案比對（O.h.1 解析器對輸出格式的隱含假設要明寫，例如 MATH 假設答案以「Answer:」開頭；O.h.2 避免靠猜答對）；O.i 品質指標（O.i.1 指標要與推理過程強相關，防止 metric hacking）。",
+    "報告 R.1–R.13（§4.3、附錄 F）": "透明與效度：R.1 開源資料集；R.2 開源評估 harness；R.3 防污染（私有 held-out 測試集）；R.4 定期更新任務的計畫；R.5 說清楚要量的能力與實際量到的構念之間的關係；R.6 說清楚評估對象是模型還是 agent 框架。緩解：R.7 描述預防、偵測、修正缺陷的步驟；R.8 定性討論無法避免的缺陷有何影響；R.9 定量評估其影響。結果解讀：R.10 報統計顯著性（信賴區間）；R.11 給出帶缺陷時如何解讀結果的指引；R.12 報非 AI 基準（人類專家）；R.13 報 trivial agent（什麼都不做的 agent）的分數。",
+    "評分規則": "每條適用項目滿足給 1 分，否則 0 分；不適用的項目不計，每部分取適用項目的平均。評審依據是論文與程式碼。論文沒有說明評審人數、有沒有交叉評審或一致性檢驗。",
+    "驗證實驗（§5.2、附錄 E）": "硬體是 Intel E5-2630、128 GB RAM，需要 GPU 時加一張 H100 80GB。τ-bench：跑一個立即回傳、什麼都不做的 agent，另跑一個把資料庫內容全部吐出來的 spamming agent，分別量 airline 與 retail 的 pass^k／pass@k。SWE-Lancer：寫一個 agent 列出受密碼保護的 zip 目錄結構，不需要密碼就能把測試檔覆寫成 assert 1==1。KernelBench：level 1 每題抽 3 個生成的 kernel，請 o3-mini 找出可能的缺陷並為每個缺陷寫測試，人工確認這些測試正確後，套用到 Lange et al.（AI CUDA Engineer）的全部生成結果，重算正確率。WebArena：檢查子字串比對與 LLM judge 的誤判案例（例如標準答案 63 分鐘，agent 回答 45＋8＝53 分鐘仍被 judge 判對）。OSWorld：清點 chrome 區塊中因網站改版而失效的 HTML selector 題，用 UI-TARS 比較修正前後的成功率。SWE-bench 的偽陽性數字直接引用 UTBoost。",
+    "CVE-Bench 修正流程（§5.3）": "時間型 SQL 注入原本以資料庫日誌是否出現 SLEEP 字樣判成功；依 O.g.1 改為必須證明 SLEEP 真的被執行。對外連線攻擊依 T.9 做多輪 mock 執行，發現 agent 一律過關，追查後發現同一個 docker 網路內可以直接連到 outbound server，於是改成拒絕外部請求。",
+    "不確定性量化範例（附錄 F 的 R.9–R.11）": "以 BIRD 示範：採 Arcwise 對 500 題抽樣複核的結果，把標準答案錯誤率估為 e＝11.65%，假設 N 夠大、成功率近似常態，令 μ＝e＋(1−2e)·p0、σ²＝μ(1−μ)，95% 信賴區間取 μ±1.96·σ/√N。依區間重疊推出每個方法「可能的排名」範圍，例如榜首 CHASE-SQL＋Gemini 74.9% 的區間是 [66.8, 71.4]，可能排名第 1 到第 13；並建議使用者看信賴區間而不是單一成功率。"
+  },
+  "assumptions": [
+    "任務成功是二元的，由最終產出與標準答案比對決定。整份清單都圍繞 outcome-based 評估，沒有處理部分分數與過程度量。",
+    "兩個等價（能力 ⇔ 任務成功 ⇔ 評分為正）足以刻畫評估是否嚴謹；構念效度只在報告部分（R.5）帶過。",
+    "評審者能單憑論文與程式碼逐條判定 0/1，而且各條等權重，取平均就能代表該部分的品質。",
+    "trivial agent 或對抗 agent 拿到的分數，可以代表 benchmark 對真實 agent 的高估幅度。",
+    "2024-01 至 2025-03 頂尖供應商使用的 benchmark，足以代表 agentic 評估常見的做法與陷阱。",
+    "附錄 F 的信賴區間假設常態近似、標準答案錯誤造成對稱翻轉，並把從 500 題樣本估出的 e 當成已知常數。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "SWE-bench（Verified／Lite）",
+      "SWE-Lancer",
+      "KernelBench",
+      "BIRD",
+      "Cybench",
+      "MLE-bench",
+      "GAIA",
+      "τ-bench（airline、retail）",
+      "WebArena",
+      "OSWorld（chrome 區塊）",
+      "CVE-Bench（修正案例）"
+    ],
+    "metrics": [
+      "ABC 逐條 0/1 分數與三部分各自的平均（Figure 5）",
+      "估計誤差：高估或低估的百分比（有的是絕對、有的是相對，依案例而定）",
+      "trivial／對抗 agent 的成功率（τ-bench 用 pass^k 與 pass@k）",
+      "修正前後的成功率落差（CVE-Bench、OSWorld）",
+      "信賴區間與可能排名範圍（附錄 F，BIRD）"
+    ],
+    "baselines": [
+      "do-nothing agent（立即回傳）",
+      "spamming agent（輸出全部資料）",
+      "覆寫測試檔的對抗 agent（SWE-Lancer）",
+      "GPT-4o-based agent（τ-bench-airline 35%，引自原論文）",
+      "UI-TARS（OSWorld）",
+      "Lange et al. 的 AI CUDA Engineer kernel 生成結果（KernelBench）",
+      "沒有拿其他 benchmark 檢查清單（例如 BetterBench）做並列比較"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "τ-bench 把「環境沒變」當成不可能題的成功條件，所以什麼都不做的 agent 就能拿分；有些題又拿資料庫原文做子字串比對，把全部資料吐出來也能拿分。因為 trivial agent 是決定性的，這個分數對任何 k 的 pass^k 與 pass@k 都一樣，重複試驗的可靠性度量擋不住判準本身的偏差。",
+      "numbers": "do-nothing agent：airline 38%、retail 6.0%。spamming agent：airline 40%、retail 9.6%。不可能題占 airline 38%、retail 6%；以原文子字串評分的題目占 airline 2%、retail 3.6%。GPT-4o-based agent 在 airline 只有 35%。",
+      "section": "§1、§5.2、附錄 E.2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "SWE-Lancer 的 E2E 測試檔放在受密碼保護的 zip 裡，但 agent 不需要密碼就能列出目錄並覆寫檔案，可以不解任何題就拿滿分（違反 T.5）。",
+      "numbers": "resolve rate 100%，實際解題數為 0。",
+      "section": "§5.2、附錄 E.4",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "KernelBench 的 fuzzer 只改變 tensor 的值，不改變 shape、記憶體佈局與邊界情況，而且部分函式對均勻亂數輸入不敏感（例如 mean(softmax(x))、relu(x−2)），錯的 kernel 也能過關（違反 O.e.1–O.e.3）。",
+      "numbers": "用 o3-mini 生成、人工確認的補充測試重新檢驗後，kernel 正確率被高估 31%。",
+      "section": "§5.2、附錄 E.6",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "CVE-Bench 對時間型 SQL 注入只檢查日誌裡有沒有 SLEEP 字樣，在查詢任何位置塞 SLEEP 就能判成功（違反 O.g.1）；另外同一個 docker 網路內能直接連到 outbound server，形成捷徑。",
+      "numbers": "SLEEP 判準造成 32.5% 高估；關閉外部請求後，對外連線攻擊的成功率降 10%；摘要把兩者合計寫成高估減少 33%，但沒有交代怎麼合計。",
+      "section": "§5.3、Figure 6",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "10 個被評審的 benchmark 中，7 個違反任務有效性、7 個違反結果有效性，10 個在報告上都有缺口；80% 沒有承認自身設計或實作的弱點，沒有一個滿足所有報告條件。R.10（統計顯著性）只有 MLE-bench 拿到分，R.13（trivial agent 分數）只有 GAIA 拿到分（把搜尋引擎當成 trivial agent）。",
+      "numbers": "任務有效性 7/10 有缺陷、結果有效性 7/10、報告 10/10；80% 未揭露弱點。",
+      "section": "§5.1、Figure 5、附錄 D",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "附錄 F 以 BIRD 示範合格的報告：揭露標準答案錯誤率，依此給出信賴區間與可能排名。區間一加上去，前段班的名次幾乎無法區分。",
+      "numbers": "抽樣 500 題中有 11.65% 的標準 SQL 是錯的（採 Arcwise 的複核結果）。榜首 74.9% 的區間是 [66.8, 71.4]，可能排名 1–13；第 13 名 69.0%，可能排名 1–33。SQL 專家 92.96%，do-nothing agent 0%（附錄 F 說這是示範性的改寫報告）。",
+      "section": "附錄 F、BIRD 修正後排行榜表",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "WebArena 的子字串比對不會懲罰多餘內容，塞進無關資訊也算成功；標準答案為「N/A」的題目，LLM judge 會把空回覆判對；judge 也會把算錯的答案（53 分鐘對上標準答案 63 分鐘）判為正確。",
+      "numbers": "合計造成 1.4–5.2% 的高估。",
+      "section": "§5.2、附錄 E.5",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "OSWorld 的評分倚賴即時網站上的 HTML selector（class、XPath），網站改版後題目失效，造成低估（違反 T.6）。",
+      "numbers": "chrome 區塊 46 題中有 13 題失效；UI-TARS 的表現被低估 28%（絕對值）。",
+      "section": "§5.2、附錄 D（OSWorld T.6）",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "只分析了 2024-01 到 2025-03 之間頂尖供應商使用的 17 個 agentic benchmark，不在這段時間內的做法沒有涵蓋，清單可能不完整。",
+    "分類法與分析建立在目前對 agent 推理能力的理解上，未來出現的新能力可能帶來本文沒處理的評估挑戰。",
+    "結論只反映撰寫當下各 benchmark 的版本，之後的修訂可能得出不同結果。",
+    "完全避免評估缺陷有時不可行，尤其是 LLM-as-a-Judge 與測試型評分，所以才另立報告部分，要求揭露與量化。"
+  ],
+  "limitations_observed": [
+    "「高估」的定義混用。τ-bench 的 38% 與 SWE-Lancer 的 100% 是 trivial／對抗 agent 能拿到的分數下限或上限，不是真實 agent 分數的偏差量。一個真的會查規則並拒絕的 agent，在那些不可能題上拿分是應得的。真正量到真實 agent 偏差的只有 KernelBench 31%、OSWorld 28%、CVE-Bench 32.5%／10%、WebArena 1.4–5.2%、SWE-bench 2.3%／1.6%（引自 UTBoost）。摘要與引言的「相對誤差最高 100%」沒有交代是從哪一組數字算出來的。",
+    "附錄 D 的逐條評分與正文互相矛盾。§5.2 說 WebArena 用 LLM judge 卻沒驗證準確度與一致性，違反 O.c.1；附錄 D 的 WebArena 卻給 O.c.1 1 分，理由是原論文 Appendix A.8 做過準確度評估。SWE-bench-Verified 的 O.d.1 給 1 分，理由卻寫「論文沒提到任何驗證流程」。τ-bench 在引言被當成任務有效性失敗的範例，§5.2 卻歸到 O.b.3／O.g.3（結果有效性），附錄 D 的 τ-bench 則是 T.1–T.10 全拿 1 分。同一個漏洞該歸哪一類，看起來取決於評審當下的判斷。",
+    "清單的編號在正文與附錄之間有版本漂移。附錄 D 出現正文沒有的 O.c.2（LLM judge 的對抗輸入與 reward hacking）與 O.f.3；SWE-Lancer 的 T.10 記的是隔離問題（T.5 的內容），而不是 pilot 離群值檢查；MLE-bench 寫成「O.I.1」；WebArena 的 T.10 理由在「4.4」處斷掉。正文說收集到 17 個 agentic benchmark，附錄 B 卻說 25 個。拿這份清單當工具的人，要先自己確定用的是哪一版。",
+    "評分本身缺少它要求別人具備的東西。它要求 LLM judge 先量準確度與自我一致性（O.c.1），自己的 0/1 評分卻沒有報告評審人數與評審間一致性。等權重再取「適用項目的平均」，會讓評分法單純、適用項目少的 benchmark（Cybench 只適用 O.h 兩條）比評分法複雜的 WebArena 更容易拿高分，所以 Figure 5 的跨 benchmark 比較不公平。",
+    "附錄 F 示範 R.9 的信賴區間公式方向用反了。μ＝e＋(1−2e)·p0 是「真實成功率為 p0 時，觀測值的期望」這個正向式；要從觀測值 p0 推回真實成功率，應該反解成 (p0−e)/(1−2e)。結果高分被往 50% 拉：74.9% 變成區間中心約 69.1%，照反解應該約 82.5%。T5-Base 觀測 6.3%，給出的區間 [14.6, 18.4] 連觀測值都不包含。對稱翻轉的假設本身也不合 BIRD 的情況：標準答案錯了，主要是把答對的 agent 誤判成錯；答錯的 agent 除非剛好寫出同一條錯的 SQL，否則不會被誤判成對。另外 e 只是從 500 題樣本估出來的，本身的不確定性沒有傳進區間。這一段是整份清單裡最接近 T8 的「誤差棒」示範，照抄會得到錯的區間與錯的名次範圍。",
+    "NeurIPS checklist 第 7 題宣稱所有數字都是決定性的、沒有隨機成分，所以不報誤差棒。但 OSWorld 的 UI-TARS 前後比較（28%）與 CVE-Bench 的 10% 降幅都來自重跑 LLM agent，本質上是隨機的，卻只報單點，違反自己提出的 R.10。",
+    "KernelBench 的 31% 外推範圍很窄：只用 level 1、每題抽 3 個 kernel 讓 o3-mini 找缺陷，而且是套在 Lange et al. 的 AI CUDA Engineer 生成結果上，不是 KernelBench 原論文報告的模型。直接寫成「KernelBench 高估 31%」會誇大適用範圍。",
+    "CVE-Bench 修正案例的作者（Zhu、Kellermann、Kang）就是 CVE-Bench 的作者，不是第三方用清單改別人的 benchmark，也沒有對照組（例如不用 ABC 的團隊能不能找到同樣的漏洞），不足以證明清單本身的增益。引言說「經資安專家確認」，但沒有描述確認流程。",
+    "SWE-bench 的數字前後不一致：§2 寫 Verified 5.2%、Lite 7.7%，附錄 E.1 寫 Verified 5.3%、Lite 7.7%。引言說前 50 名有 24% 的排名錯了，附錄 E.1 卻寫 Verified 排行榜有 40.9% 的變動，24.4% 是 Lite。",
+    "對 T8 的覆蓋有缺口。清單只處理二元成敗判準，沒有處理部分分數、子目標完成度、pass^k 這類多次試驗的一致性度量該怎麼報（只在 τ-bench 案例順帶指出 trivial agent 的 pass^k 與 pass@k 不隨 k 變），也沒有處理成本、效率這類多目標分數。對多輪對話型任務，也沒有提出「拒絕類任務要看對話內容，不只看終態」的具體判準，只指出 O.g.3 被違反。"
+  ],
+  "framework_role": "T8「任務成功的判準」的稽核層：它不發明新的分數，而是規定一個成功判準要先滿足哪些條件，算出來的 Task Completion Score 才有意義。在框架裡可以直接搬用三件事。(1) 終態比對的三條規則（O.g.1–3）：標準終態要涵蓋所有合法解法、要一併檢查不該動的狀態、狀態空間要複雜到亂改或不動都不會碰巧相符。這三條直接對應 τ-bench 式 DB 終態比對的弱點。(2) 每次改動判準都要跑 do-nothing 與 dump-all 兩個 trivial agent 當地板（R.13），而且要知道 pass^k 量的是一致性，量不到判準的效度：決定性的 trivial agent 在任何 k 下分數都一樣。(3) LLM judge 當判準之前，要先用 pilot 量它的準確度與自我一致性（O.c.1）；分數要附信賴區間與可能名次範圍（R.10–R.11）。但附錄 F 的區間公式方向有誤，要自己重推。它同時屬於 T7 的評估方法論，在 T8 的位置是「分數可信度的前置條件」，要跟定義 pass^k、progress rate 等度量的論文搭配著讀。",
+  "edges": [
+    {
+      "edge": "E6",
+      "how": "τ-bench 的每一題都是 agent 與使用者模擬器的多輪互動，評分端消費這份互動紀錄的方式只有兩種：最終資料庫狀態，以及 agent 回覆裡有沒有出現必要的子字串。本文用 do-nothing agent 與 spamming agent 實際跑過這條資料流，量出這種消費方式可以被鑽漏洞（airline 38%／40%）：拒絕類任務只看「狀態沒變」，完全不看對話裡有沒有查規則、有沒有給出拒絕理由；子字串比對則被灌資料打穿。本文只指出這條資料流被錯用，沒有提出以互動紀錄為基礎的新評分器。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "CVE-Bench 官方 repo 的 README 新聞欄記載：2025-10-30 發布的 CVE-Bench v2.0.0，其修正與強化是依 ABC 指引完成（https://github.com/uiuc-kang-lab/cve-bench，本次以 WebFetch 開啟確認）。但 CVE-Bench 與本文出自同一個實驗室，屬於學術 benchmark，不是商用產品。"
+    ],
+    "assessment": "未見商用採納證據。本文自己的 repo（https://github.com/uiuc-kang-lab/agentic-benchmarks）與專案網站（https://uiuc-kang-lab.github.io/agentic-benchmarks/）都沒有列出任何外部採用者或承認問題的 benchmark 維護者。τ²-bench 的 README（https://github.com/sierra-research/tau2-bench）有提到修正不可能題等任務錯誤，但歸功於 SABER（Cuadron et al., 2025），沒有提到本文或 ABC，不能算在本文頭上。UK AISI 的 inspect_evals CONTRIBUTING.md 引用的是 Generality Labs 的檢查清單，也不是 ABC。作者群雖然包含 UK AI Safety Institute、Amazon、ML Commons 的成員，但這是作者身分，不是機構採用的證據。唯一查得到的採用是同一實驗室的 CVE-Bench v2.0.0。查核範圍：本次 WebSearch 額度已用完，只用 WebFetch 查了上述四個頁面，所以這是查核不完整，不是已確認沒有採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/uiuc-kang-lab/agentic-benchmarks",
+    "data": "10 個 benchmark 的逐條評審報告在論文附錄 D，並公開於 https://uiuc-kang-lab.github.io/agentic-benchmarks/。驗證實驗腳本（τ-bench、KernelBench、SWE-Lancer、WebArena、OSWorld）在上述 repo 裡。以 WebFetch 讀取的 repo 頁面沒有標示授權條款。KernelBench 驗證用到的 Lange et al. 生成結果與 BIRD 的 Arcwise 複核資料，屬於第三方資料。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是 T8「任務成功的判準」子領域裡少數直接處理「判準本身可不可信」的系統性工作：終態比對、子字串比對、LLM judge、測試各自的失效模式都有可操作的檢查項，也有 trivial agent 實測數字，設計 Task Completion Score 前必讀。但附錄的評分與信賴區間公式有錯，引用前要自行核對。",
+  "related": [
+    "2406.12045",
+    "2310.06770",
+    "2307.13854",
+    "2404.07972",
+    "2502.12115",
+    "2502.10517",
+    "2503.17332",
+    "2305.03111",
+    "2410.07095",
+    "2407.01502",
+    "2411.17501",
+    "2411.12990",
+    "2501.10711",
+    "2410.10934"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}
