@@ -3,7 +3,7 @@
  * [#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
  *
  * **這一顆不裝功能，只講設定**——同 `@nexus/core/tool-result-pruner` 那一列（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
- * 跟同目錄那兩列（`thread-title`、`browser-session`）的差別是**消費點跑的時刻**：那兩個的消費者
+ * 跟同目錄那兩列（`thread-title`、`browser-session`）的差別是**消費點跑的時刻**：那兩個都有消費者
  * （`serve.ts` 的冷讀清單、`BrowserAuth` 的建構子）跑在任何 agent 出生之前，所以值由
  * {@link ./startup.ts | startupSetting} 在起動期讀；**這一個的消費點在組裝期**
  * （`agent-factory.ts` 的 `createDeepAgent(...).withConfig(...)`，跑在 `loadPlugins` 之後），

@@ -4,7 +4,6 @@ import {
   answerResponse,
   appendAnswers,
   appendDecision,
-  appendHumanTurn,
   appendQuestionCancel,
   cancelResponse,
   emptyConversation,
@@ -75,13 +74,6 @@ function aiEntries(state: ConversationState) {
 }
 
 describe('折疊器', () => {
-  it('使用者那句話由送出端補，因為線上不會回聲它', () => {
-    const state = appendHumanTurn(emptyConversation(), '記一筆。');
-    expect(state.entries).toEqual([{ kind: 'human', id: 'human-0', text: '記一筆。' }]);
-    // 送出去的那一刻就算 running，不必等第一顆 frame 回來畫面才動。
-    expect(state.status).toBe('running');
-  });
-
   it('重連之後接上的巢狀訊息標成未歸屬——鑰匙已經過去了', () => {
     seq = 0;
     // 這條線沒有重播也沒有歷史重抓（決策 6），所以 `task` 那顆 tools frame 收不到了。
@@ -553,6 +545,27 @@ describe('判別式', () => {
       ],
     });
     expect(state.status).toBe('awaiting-input');
+  });
+
+  it('計劃審核那一題（#652）：`detail` 與 `intent` 原樣帶到卡上', () => {
+    seq = 0;
+    const review = {
+      id: 'plan-review',
+      header: '計劃審核',
+      question: '同意這份計劃並離開計劃模式？',
+      detail: '# 計劃\n\n先看再改。',
+      options: [{ label: '同意' }, { label: '繼續規劃' }],
+      intent: { kind: 'plan-review', approve: '同意', callId: 'call-1' },
+    } as const;
+    const state = reduceAll(emptyConversation(), [
+      frame('input.requested', ['tools:call-1'], {
+        interrupt_id: 'q-plan',
+        payload: { kind: 'question', questions: [review] },
+      }),
+    ]);
+    expect(state.pendings).toEqual([
+      { kind: 'question', interruptId: 'q-plan', namespace: ['tools:call-1'], questions: [review] },
+    ]);
   });
 
   it('**認不得的 `kind` 明著壞掉，不會靜靜變成一張核准卡**', () => {

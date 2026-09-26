@@ -498,6 +498,10 @@ describe('什麼推得動 roundsStarted', () => {
     // 記一顆，理由同 `model/usage`。
     // `inbox/spliced`（[#637](https://github.com/DemianLi/nexus-agent/issues/637)）：不推。它是人送出、還沒開跑的
     // 那幾句的變動；那一件真的開跑時有自己的 `turn/start`，推的是那一顆。續行走佇列（#638）之後也一樣。
+    // `session/title`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）：不推。它跟在一顆人打的
+    // `turn/start` 後面，推的是那一顆。
+    // `session/title-llm-request`（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）：不推。LLM 標題在背景
+    // 跑、寫在一輪之外，不是一輪的開始。
     const KNOWN = [
       'turn/start',
       'turn/end',
@@ -525,6 +529,8 @@ describe('什麼推得動 roundsStarted', () => {
       'workspace/changes',
       'context/measure',
       'inbox/spliced',
+      'session/title',
+      'session/title-llm-request',
     ] as const;
     KNOWN satisfies readonly SessionEventType[];
     // 反過來這一條才是絆索：多一種而沒有列進來，`Exhaustive` 就變成 `never`。

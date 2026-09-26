@@ -9,6 +9,7 @@ import {
   LOADING_EARLIER_LABEL,
   RETRY_EARLIER_LABEL,
 } from '@/components/earlier-pager';
+import { fakeDownlink } from '@/test/downlink';
 
 /**
  * 切回以前的 thread，畫面照日誌重播（[#306](https://github.com/DemianLi/nexus-agent/issues/306) 的畫面那一刀）。
@@ -142,16 +143,22 @@ function fakeClient(
 ): { readonly client: WireClient; readonly sent: string[] } {
   const sent: string[] = [];
   const rejected = async () => ({ kind: 'rejected' as const, message: '這一檔沒有接' });
+  const downlink = fakeDownlink();
   const client: WireClient = {
-    openEvents: async () =>
-      (async function* stream() {
+    // 列檔（#651）沒有接。spread 的理由見 App.test.tsx 的 UNWIRED_FILE_REFERENCES。
+    ...{ fileReferences: rejected },
+    openEvents: async (threadId) => {
+      const stream = downlink.open(threadId, []);
+      return (async function* delayed() {
         if (liveDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, liveDelayMs));
         for (const event of live) yield event;
-        await new Promise(() => undefined);
-      })(),
-    runStart: async (_threadId, text) => {
+        yield* stream;
+      })();
+    },
+    // 收下就照伺服器的順序推「排著」與「領走」，人的話由後者畫（#645）。
+    runStart: async (threadId, text) => {
       sent.push(text);
-      return { type: 'success', id: 1, result: {} };
+      return { type: 'success', id: 1, result: { run_id: downlink.accept(threadId, text) } };
     },
     inputRespond: async () => ({ type: 'success', id: 2, result: {} }),
     runCancel: async () => ({ type: 'success', id: 3, result: { accepted: true } }),

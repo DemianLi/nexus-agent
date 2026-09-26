@@ -85,6 +85,11 @@
  *   （`agent-instructions.test.ts` 的兩輪那條、`probe` 的三組 super-step 對照）。`beforeModel` 仍然是
  *   圖裡每步一格的節點（`repeat-reminder.ts` 掛在上面），但它不是 pre-step 注入。
  *
+ * **plan-mode 在 [#652](https://github.com/DemianLi/nexus-agent/issues/652) 又回到這一格，佔的是邊界提交那半**：
+ * `exit_plan_mode` 改走提問通道之後，同意不當場寫 `plan/mode`，排一格待關到下一步之前才交，同 dsh 的
+ * `pendingIntents`。這一次載體是它本來就有的 `wrapModelCall`，不是當年的 `beforeAgent`——所以節奏是每一步，
+ * 不是每次 agent 呼叫；下面那條 `beforeAgent:` 掃描把它列成明寫的例外。
+ *
  * **九格之外的縫也沒有列。** dsh 的 `approval/request`（應答者 waterfall）不是那九個時刻名
  * 之一，落不進這個軸；它記在第 4 列的權限差裡，因為第 4 格是我們這側唯一的提問者。規矩往
  * 前推是一句話：**軸就是那九格，九格之外的東西只能掛在有關係的那一列上，不另開列。**
@@ -150,9 +155,17 @@ const INDEX: readonly InterceptionRow[] = [
     cell: 2,
     moment: 'agent/pre-step',
     permission: '讀／改這一步要送出的訊息批次，可 `jumpTo: "end"` 收掉這一輪',
-    occupants: ['packages/nexus-plugin-agent-instructions/src/index.ts'],
+    occupants: [
+      'packages/nexus-plugin-agent-instructions/src/index.ts',
+      // 邊界提交（#652）：`exit_plan_mode` 同意之後的待關在下一步請求組起來之前交出去，同 dsh。
+      // 載體是 `wrapModelCall`，不是 `beforeAgent`，見下面 `PRE_STEP_OTHER_CARRIERS`。
+      'packages/nexus-plugin-plan-mode/src/index.ts',
+    ],
     permissionDelta:
-      '**只佔了注入那半**：dsh 拿得到整個 `decision.messages` 自己 splice（插在已領取的訊息之後），' +
+      '**邊界提交那半由 plan-mode 佔著**（#652）：`exit_plan_mode` 同意之後排一格待關，下一次模型呼叫' +
+      '前由它的 `wrapModelCall` 寫進 `plan/mode`，同 dsh 在 pre-step 提交 `pendingIntents`。' +
+      '`wrapModelCall` 每次模型呼叫都跑、不是圖節點，所以那一半的節奏與 dsh 同（每一步），也不多一格。' +
+      '**注入那半只佔了一部分**：dsh 拿得到整個 `decision.messages` 自己 splice（插在已領取的訊息之後），' +
       '我們的 `beforeAgent` 只能**追加**——刪不掉、也指定不了位置，位置由基座決定' +
       '（2026-09-18 實測落在使用者那一句之後，與 dsh 同位，但那是基座的行為不是我們的選擇）。' +
       '攔截那半（`jumpTo: "end"`）照舊零使用，見檔頭。',
@@ -192,7 +205,8 @@ const INDEX: readonly InterceptionRow[] = [
       ' 四值（`types.ts:32`），我們只有 approve／reject，**`cancelled` 沒有表達式**。' +
       '**`approval/request` 是第十條縫，不在 #190 那九個時刻名裡**，所以它沒有自己的列；' +
       '記在這一列是因為第 4 格是我們這側**唯一的提問者**' +
-      '（`packages/nexus-plugin-plan-mode/src/index.ts` 的 `approvals.gate`，`exit_plan_mode` 回 `ask`）。',
+      '（例如 `packages/nexus-plugin-submit-record/src/index.ts` 的 `approvals.gate`，`submit_record` 回 `ask`；' +
+      'plan-mode 以前也掛一位，#652 照 dsh 改走提問通道，不在這裡了）。',
     recordDelta:
       '**核准這件事一顆事件都沒有。** dsh 每次 request 追加 `approval/asked` ＋ ' +
       '`approval/decided`（`user-approval/src/types.ts:44-58`，log-only audit，帶 id／工具名／' +
@@ -255,7 +269,7 @@ const INDEX: readonly InterceptionRow[] = [
 const EXPECTED_ROWS = 5;
 
 /** 佔用位址的總數（列可能共用檔案，第 6 與第 7 格就共用 `output-schema.ts`）。 */
-const EXPECTED_SITES = 14;
+const EXPECTED_SITES = 15;
 
 /**
  * 第 2 列的承重事實：全樹的產品程式碼裡，`beforeAgent:` 的實作**恰好就是這一列列出的那些**。
@@ -268,8 +282,19 @@ const EXPECTED_SITES = 14;
  *
  * `beforeModel`、`wrapModelCall` 不算：它們是別的節點，第 2 格當年就判過它們不是 pre-step
  * 注入。掃的範圍同門 B 那條（`session-resume-doors.test.ts`）：只掃產品原始碼，測試與 fixture 排除。
+ *
+ * **例外明著列**：第 2 列裡不是靠 `beforeAgent` 佔住的那幾個，見 {@link PRE_STEP_OTHER_CARRIERS}。
  */
 const PRE_STEP_ROOTS = ['apps/harness/src', 'apps/web/src', 'packages'] as const;
+
+/**
+ * 第 2 列裡**載體不是 `beforeAgent`** 的佔用者，下面那條掃描不找它們。
+ *
+ * plan-mode 佔的是 dsh pre-step 的**邊界提交**那半（#652）：待關在下一次模型呼叫前交出去，載體是它本來就有的
+ * `wrapModelCall`——那是每次模型呼叫都跑的包裹，不是注入，也不是圖節點。列在這裡而不是讓掃描放寬，
+ * 是因為放寬成「`wrapModelCall` 也算」會把十幾個與 pre-step 無關的 `wrapModelCall` 一起掃進來。
+ */
+const PRE_STEP_OTHER_CARRIERS: readonly string[] = ['packages/nexus-plugin-plan-mode/src/index.ts'];
 
 /** 遞迴列出產品原始碼的 `.ts`。 */
 function productSources(dir: string): string[] {
@@ -328,7 +353,9 @@ describe('攔截時刻索引', () => {
   );
 
   it('第 2 格的 `beforeAgent:` 實作恰好是索引裡列的那幾個', () => {
-    const listed = INDEX.find((row) => row.cell === 2)?.occupants ?? [];
+    const listed = (INDEX.find((row) => row.cell === 2)?.occupants ?? []).filter(
+      (path) => !PRE_STEP_OTHER_CARRIERS.includes(path),
+    );
     const found: string[] = [];
     for (const root of PRE_STEP_ROOTS) {
       for (const file of productSources(join(REPO_ROOT, root))) {

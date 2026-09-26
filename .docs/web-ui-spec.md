@@ -40,7 +40,7 @@
 
 **明確不做**（實作時最容易誤做的；完整清單見地圖 Out of scope）：
 
-- **P1 元件**：reasoning、連線狀態、todo、goal、plan mode、context 用量、佇列、子代理血緣、附件——都要先補 harness／wire。
+- **P1 元件**：reasoning、連線狀態、todo、goal、plan mode、context 用量、佇列、子代理血緣、附件——都要先補 harness／wire。其中佇列 2026-09-26 由 [#645](https://github.com/DemianLi/nexus-agent/issues/645) 做了（伺服器端的送出佇列，#637），形狀見 §4.2 第 29 列。
 - **320px 與 1920px 以上的驗收**：只驗三個寬度（§9）。
 - **Libraries.dev 的視覺複刻**、暗色專用：走風格參考，保留亮暗兩套。
 - **nexus 沒有的產品面**：設定頁、工作區挑選、dock 分割版面、右側欄裡的檔案樹與終端、語音、生圖特效。右側欄本身 2026-09-25 由 [#640](https://github.com/DemianLi/nexus-agent/issues/640) 做了（一格停靠＋分頁，形狀見 §9），這一句原本把整個右側欄列在這裡，是 #372 那一輪的範圍。
@@ -77,6 +77,7 @@
 | 3 | 主題切換 | 自建（§6） | — |
 | 6 | 會話列表 | shadcn `SidebarMenu*` | `thread-list.tsx` 留邏輯、換外殼 |
 | 7 | 空白狀態 hero | 自建（shadcn 基礎件＋breathing orb） | — |
+| 8 | 會話標頭 | 自建；標題規則在 `lib/thread-title.ts`（標頭、瀏覽器分頁標題、側欄列表共用），換字不做動效 | 在 `App.tsx` |
 | 9 | 歷史往回捲 | shadcn `message-scroller`（帶 `@shadcn/react`） | — |
 | 10／11 | 使用者／助理訊息 | shadcn `message`＋`bubble`；**markdown 自建**：`mdast-util-from-markdown`＋`micromark-extension-gfm`＋增量解析＋`cjkFriendlyStrong` | `transcript.tsx` 留（歸屬、狀態字面） |
 | 13 | 工具卡 | 自建，shadcn `collapsible`＋`badge`，直接吃四格 `ToolEntry.status`；浮起來（material），輸入輸出放內層 stage | 在 `transcript.tsx` |
@@ -86,6 +87,7 @@
 | 23 | 提問 | shadcn `questionnaire`（`radix-vega`）＋§4.3 的補件 | `question-card.tsx` 被取代 |
 | 26 | 輸入框 | shadcn `input-group`＋`textarea` | 在 `App.tsx` |
 | 27 | slash 選單 | shadcn `command` | 在 `App.tsx` |
+| 29 | 送出佇列 | 自建，shadcn `collapsible`＋`button`＋`textarea`；行為照 dsh `QueueDock`（一件直接畫、兩件以上收合、就地改與刪、沒有插話）；新項目撐過 200ms 才畫、只淡入淡出不 stagger；放在待辦面板下、換手區外，停在核准點時照樣看得到 | `queue-dock.tsx` |
 | 31 | 狀態列 | 自建（shimmer、orb 見 §7） | `status-line.tsx` 留 |
 | 35 | 讚踩＋回饋框 | 框換 shadcn `dialog`，表單邏輯留；讚踩按鈕留在 `transcript.tsx` | `feedback-dialog.tsx` 換外殼 |
 | 36 | Toast | shadcn `sonner`，**改成收 `theme` prop、拿掉 `next-themes`** | — |
@@ -221,7 +223,7 @@
   - item 帶 `content-visibility:auto`（paint containment），會把卡片外陰影與面板光暈切成直角。原型直接關掉；實作要另外保住長列表的效能。
 - 側欄的 cookie 與 `history.replaceState` 在沙盒 iframe 裡可能拋錯（原型包了 try/catch；產品頁面不在 iframe 裡，視情況處理）。
 - **右側欄**（[#640](https://github.com/DemianLi/nexus-agent/issues/640)，`components/right-sidebar.tsx`）：
-  - 一格停靠＋分頁，住著改動比對與交付預覽；不做分格、浮窗、拖放、復原。開關鈕在會話區右上角，會話標頭做好後搬進去。
+  - 一格停靠＋分頁，住著改動比對與交付預覽；不做分格、浮窗、拖放、復原。開關鈕在會話標頭那一列的右端（#655 做標題時確認它已經在標頭上，不用再搬）。
   - 1024 以上停靠，會話區讓出寬度，左緣可以拖寬：會話區至少 480、面板至少 320。1024 寬、左側欄展開時兩個下限放不下，面板先縮到 320，再輪到會話區讓。Esc 不做事。
   - 1024 以下全螢幕覆蓋，Esc 或收起鈕關掉，分頁留著；**載入時一律從收起開始**，不照存下來的「開著」蓋住對話。
   - 改動一輪一個分頁、交付一個檔一個分頁；分頁第一次被選中才讀內容。版面每條會話存在 `localStorage`，最近 50 條。

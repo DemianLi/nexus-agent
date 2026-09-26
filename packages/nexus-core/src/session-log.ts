@@ -92,8 +92,9 @@ import type { ToolErrorInfo } from './tool-events.js';
  * 都帶 seed 開日誌。
  *
  * `plan/mode` 沒有帶來新的生產者，兩個寫者各走一條舊路：`/plan` 走 `goal/change` 那條
- * （經 `registry.sessions` 接到 root 那一份的 plugin），`exit_plan_mode` 走 `todo/write` 那條
- * （模型工具問 `forCall`）。「兩條路都產得出來嗎」答得出來——命令面與工具清單兩條路共用。
+ * （經 `registry.sessions` 接到 root 那一份的 plugin），`exit_plan_mode` 的同意走 `todo/write` 那條
+ * （問 `forCall`）——只是寫的那一刻從工具本體挪到下一次模型呼叫前的 middleware（#652，照 dsh 在
+ * pre-step 提交）。「兩條路都產得出來嗎」答得出來——命令面與工具清單兩條路共用。
  *
  * `tool/call`／`tool/result` 生產者同第四種（fold 自己建的 middleware），而且就是**圍堵那一顆**
  * （{@link ./containment.ts | createContainmentMiddleware}）：只有第 0 格同時看得到內層拋出的
@@ -141,6 +142,14 @@ import type { ToolErrorInfo } from './tool-events.js';
  * `inbox/spliced` 是**只有一條路產得出來的第二種**（第一種是 `feedback/message-*`）：寫的是 web 的 pump，CLI 的 REPL
  * 一行一輪、沒有排隊。它記的是人送出、還沒開跑的那幾句，只寫 root 那一份。**它不進模型**：開跑那一刻的文字由
  * `turn/start` 帶，推模型歷史的一側不讀它。見 [#637](https://github.com/DemianLi/nexus-agent/issues/637)。
+ *
+ * `session/title` 兩個寫者各走一條舊路：web 的 pump 與 CLI 的 `runTurn`，都在自己寫下 `turn/start {kind:'message'}`
+ * 的那一段裡接著寫（`apps/harness/src/session-title.ts`），只寫 root 那一份。**它不進模型**：推模型歷史的一側
+ * 不讀它，同 dsh 的「log-only」。見 [#647](https://github.com/DemianLi/nexus-agent/issues/647)。
+ *
+ * `session/title` 另有第三個寫者、`session/title-llm-request` 只有它一個：LLM 標題（[#650](https://github.com/DemianLi/nexus-agent/issues/650)，
+ * `apps/harness/src/session-title-llm.ts`）。它是 root 日誌的訂閱者，在背景跑，**寫在一輪之外**——主回覆不等它。
+ * 兩顆都不進模型。
  */
 export type SessionEventType =
   | 'turn/start'
@@ -168,6 +177,8 @@ export type SessionEventType =
   | 'deliverables/presented'
   | 'workspace/changes'
   | 'inbox/spliced'
+  | 'session/title'
+  | 'session/title-llm-request'
   | 'session/end-seed';
 
 /**
@@ -187,6 +198,36 @@ export type SessionEventType =
 export type TurnEndReason =
   | { readonly kind: 'aborted'; readonly cause: { readonly kind: 'user' } }
   | { readonly kind: 'max-tokens' };
+
+/** 產生標題的那一次模型呼叫走的路由。照 dsh 的 `SessionTitleModelIdentity`。 */
+export interface SessionTitleModelIdentity {
+  /** 端點。dsh 是註冊過的 provider 名；我們只有一條 OpenAI 相容的連線，它的身分就是端點的根。 */
+  readonly provider: string;
+  /** 模型 id。 */
+  readonly model: string;
+}
+
+/**
+ * 一個標題是誰給的。見 `SessionEventMap['session/title']`。
+ *
+ * - `fallback`：第一則合格的人話照規則截出來的（#647）。
+ * - `provider`：模型依第一則合格的人話產生的（#650）。`provider` 是產生器的身分，`model` 是那一次走的路由。
+ *
+ * dsh 另有 `user`（改名，會釘住），歸 #633，有了生產者再加。
+ */
+export type SessionTitleSource =
+  | { readonly kind: 'fallback' }
+  | {
+      readonly kind: 'provider';
+      readonly provider: string;
+      readonly model?: SessionTitleModelIdentity;
+    };
+
+/** 送給標題模型的一則訊息。只有文字，所以只存字串。 */
+export interface SessionTitleLlmMessage {
+  readonly role: 'user';
+  readonly content: string;
+}
 
 /** 每一種事件帶什麼。 */
 export interface SessionEventMap {
@@ -499,7 +540,8 @@ export interface SessionEventMap {
    *
    * 照 dsh 的 `plan/mode`（`packages/plan/plan-mode/src/index.ts`，`d347e70`）：`{ active }`。
    * 寫者兩個，都只寫 **root** 那一份：`/plan` 的 handler（人）與 `exit_plan_mode`（模型，
-   * 計劃獲准之後）。折疊它的是 `@nexus/plugin-plan-mode` 自己。
+   * 計劃獲准之後；照 dsh 排到下一步請求組起來之前才寫，[#652](https://github.com/DemianLi/nexus-agent/issues/652)）。
+   * 折疊它的是 `@nexus/plugin-plan-mode` 自己。
    *
    * **它是第一顆要熬過 `session/end-seed` 的狀態。** 那顆標記之前的開頭屬於上一個生命週期，
    * 讀「當前這一段」的人要在那裡重設；這一顆相反——跨重啟留得住正是它搬進日誌的理由，所以
@@ -669,6 +711,37 @@ export interface SessionEventMap {
    * - **改、刪**：任何時候（排著的那一件還沒被領走就行）。
    */
   'inbox/spliced': InboxSplice;
+  /**
+   * 這條會話現在叫什麼（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）。**latest-wins**：讀的人拿最後
+   * 一顆。
+   *
+   * 照 dsh 的 `session/title`（`packages/session/session-title/src/types.ts`，`477b4f4`）：
+   *
+   * - `messageSeqs` 是推出這個標題用到的那幾則人話。dsh 指的是 `user/message`，我們對到的是
+   *   `turn/start {kind:'message'}`——人打的字在我們的日誌上只在那裡。
+   * - `source` 見 {@link SessionTitleSource}。dsh 另有 `user`（改名，會釘住），有了生產者再加成員，同
+   *   {@link TurnEndReason}。
+   */
+  'session/title': {
+    readonly title: string;
+    readonly messageSeqs: readonly number[];
+    readonly source: SessionTitleSource;
+  };
+  /**
+   * 一次標題模型呼叫**送出之前**記下它送了什麼（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。
+   *
+   * 照 dsh 的 `session/title-llm-request`（`packages/session/session-title-llm/src/index.ts`，`477b4f4`）：系統提示、
+   * 訊息、輸出上限都是**真的送出去的那一份**，路由是那一次解析出來的。模型後來失敗了，這一顆照樣留著。
+   * `messageSeqs` 同 `session/title`，指到 `turn/start {kind:'message'}`。
+   */
+  'session/title-llm-request': {
+    readonly titleProvider: string;
+    readonly messageSeqs: readonly number[];
+    readonly route: SessionTitleModelIdentity;
+    readonly system: string;
+    readonly messages: readonly SessionTitleLlmMessage[];
+    readonly maxTokens: number;
+  };
   /**
    * 一段 seed 的結尾——這一顆之前的事件是上一個行程寫的，這個行程一顆都沒寫
    * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。

@@ -32,6 +32,7 @@
 import type {
   Command,
   EventStreamRequest,
+  FileReferenceListResponse,
   SlashDescriptor,
   SlashListResult,
   SlashMethod,
@@ -55,6 +56,7 @@ import {
   deliverableFilePath,
   encodeSseFrame,
   errorResponse,
+  fileReferencesPath,
   isFeedbackMethod,
   isQueueUpdateMethod,
   isRpcMethod,
@@ -91,10 +93,14 @@ import {
   readDeliverablePage,
 } from './deliverable-files.js';
 import { readDeliverableWindow, resolveDeliverableWindow } from './deliverable-window.js';
+import { listFileReferences, WorkspaceFileSearch } from './file-references.js';
 import {
   deliverableFilesConfigSchema,
   type DeliverableFilesConfig,
 } from './settings/deliverable-files.js';
+import type { ThreadTitleLimits } from './session-title.js';
+import type { AttachSessionTitleLlm } from './session-title-llm.js';
+import { threadTitleConfigSchema } from './settings/thread-title.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
 import type { GoalDriverPort } from './goal-driver.js';
@@ -216,6 +222,13 @@ export interface ThreadAgent {
     sessions: SessionRegistry,
   ): { flush(): Promise<void>; dispose(): Promise<void> } | undefined;
   /**
+   * 把 LLM 標題接到這條 thread 的 root 日誌上（[#650](https://github.com/DemianLi/nexus-agent/issues/650)），選配。
+   * 沒帶 `--live`、或清單把 `thread-title-llm` 那一列關掉，`createCliAgent` 就不給，那時只有退回標題。
+   *
+   * 它跟其他四條一樣住在組裝點：模型與設定是 `createCliAgent` 那一次組裝的，日誌是 pump 建的。
+   */
+  readonly attachTitle?: AttachSessionTitleLlm;
+  /**
    * 組出續行排程器要問域的四件事。**沒開 `--goal-driver` 就整個不給**，那時這條 thread
    * 一輪都不會自己排。
    *
@@ -303,11 +316,19 @@ export interface WireHandlerOptions {
    */
   readonly toolTextLimits?: ToolTextConfig;
   /**
+   * 退回標題的兩個上限（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）。消費點與 {@link toolTextLimits}
+   * 一樣是這個閉包底下的兩個：即時那條（pump 寫標題），重播那條（18 以前的日誌當場推）。省略即 schema 的預設。
+   */
+  readonly threadTitleLimits?: ThreadTitleLimits;
+  /**
    * 這台 server 講話的地方，選配（[#479](https://github.com/DemianLi/nexus-agent/issues/479)）。
    *
-   * **這是這個檔案的第一個、而且目前唯一的記錄點**，加它的理由很窄：一頁歷史的位元組上限是**軟的**
-   * （單獨一輪就超標時不從輪中間切，見 `conversation-history.ts` 的 `fitBytes`），而那件事發生時回應
-   * 照樣是 200、畫面照樣對——不講就完全看不見。缺席就是不講，測試不必為它接線。
+   * **今天只有兩件事走到它**，加它的理由都很窄——發生時回應照樣是 200、畫面照樣對，不講就完全看不見：
+   *
+   * - 一頁歷史的位元組上限是**軟的**（單獨一輪就超標時不從輪中間切，見 `conversation-history.ts` 的 `fitBytes`）。
+   * - 退回標題寫不進去（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）：那一輪照跑，同 dsh；經 pump 的建構子傳下去。
+   *
+   * 缺席就是不講，測試不必為它接線。
    */
   warn?(message: string): void;
 }
@@ -333,15 +354,16 @@ function json(body: unknown, status = 200): Response {
 }
 
 /**
- * `/threads/:id/stream`、`/threads/:id/history`、`/threads/:id/changes/{summary,diff}`、
- * `/threads/:id/deliverables/{file,download}` 或 `/threads/:id/commands/:method`，
- * 都不是就 undefined。
+ * `/threads/:id/stream`、`/threads/:id/history`、`/threads/:id/file-references`、
+ * `/threads/:id/changes/{summary,diff}`、`/threads/:id/deliverables/{file,download}` 或
+ * `/threads/:id/commands/:method`，都不是就 undefined。
  */
 function parsePath(
   pathname: string,
 ):
   | { readonly kind: 'stream'; readonly threadId: string }
   | { readonly kind: 'history'; readonly threadId: string }
+  | { readonly kind: 'file-references'; readonly threadId: string }
   | { readonly kind: 'changes-summary'; readonly threadId: string }
   | { readonly kind: 'changes-diff'; readonly threadId: string }
   | { readonly kind: 'deliverable-file'; readonly threadId: string }
@@ -359,6 +381,9 @@ function parsePath(
   }
   if (segments.length === 3 && segments[2] === 'history') {
     return { kind: 'history', threadId };
+  }
+  if (segments.length === 3 && pathname === fileReferencesPath(threadId)) {
+    return { kind: 'file-references', threadId };
   }
   if (segments.length === 4 && segments[2] === 'changes') {
     if (pathname === changesSummaryPath(threadId)) return { kind: 'changes-summary', threadId };
@@ -487,6 +512,14 @@ interface ThreadState {
    */
   readonly resumedWorkspaceRoot: string | undefined;
   /**
+   * `@` 引用的列檔索引（[#651](https://github.com/DemianLi/nexus-agent/issues/651)），**沒給 `--workspace` 就是
+   * `undefined`**，那時列檔回「不提供」、不碰磁碟。
+   *
+   * **一條 thread 一份，只聽 root 日誌的 `tool/result`**：dsh 是一個 agent 一份、各聽各的。子代理寫的檔，要等父那顆
+   * `task` 的 `tool/result` 落在 root 日誌上才過期——dsh 那邊父 agent 的索引也是等到那一刻，所以逐格等價。
+   */
+  readonly fileSearch: WorkspaceFileSearch | undefined;
+  /**
    * 有沒有一次 `slash.run` 還沒回來。
    *
    * **HTTP handler 本身沒有序列性**：`handle()` 是一次請求一次呼叫，兩個分頁同時打
@@ -613,6 +646,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
   // **解一次、兩個消費點共用同一份**：即時與重播對同一則結果要截得一模一樣，不然同一張卡會
   // 「即時一個樣、重新整理另一個樣」——那正是 `tool-result-text.ts` 存在的理由。
   const toolTextLimits: ToolTextConfig = options.toolTextLimits ?? toolTextConfigSchema.parse({});
+  // 同上：兩個消費點共用同一份，寫的標題與推的標題才會一字不差。
+  const threadTitleLimits: ThreadTitleLimits =
+    options.threadTitleLimits ?? threadTitleConfigSchema.parse({});
   /**
    * **存的是 promise 不是狀態**，而且是同步就存進去的。
    *
@@ -663,6 +699,8 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           driver,
           threadAgent.rootSeed,
           toolTextLimits,
+          threadTitleLimits,
+          (message) => options.warn?.(message),
         );
         late.log = pump.sessionLog;
         const detachTelemetry = threadAgent.attachTelemetry?.(pump.sessions);
@@ -677,6 +715,20 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         // **沒開落盤時 `flush` 就整個缺席**，而不是一個假裝成功的 no-op：`late.flush?.()`
         // 的缺席語意就是「這條路上沒有耐久檢查點」，同 `attachPersistence` 自己的規矩。
         late.flush = persistence === undefined ? undefined : () => persistence.flush();
+        // **LLM 標題接在落盤之後**，同 `cli.ts`：它寫的兩顆照常落地。只接 root，子代理的日誌不排。
+        const detachTitle = threadAgent.attachTitle?.(pump.sessionLog, (message) =>
+          options.warn?.(`[標題] thread ${threadId} ${message}`),
+        );
+        // **列檔索引跟 pump 同一刻建**：它要聽的是這條 thread 的 root 日誌，而那份日誌在這裡誕生。
+        const fileSearch =
+          threadAgent.workspaceRoot === undefined
+            ? undefined
+            : new WorkspaceFileSearch(threadAgent.workspaceRoot);
+        const unsubscribeFileSearch = fileSearch
+          ? pump.sessionLog.subscribe((event) => {
+              if (event.type === 'tool/result') fileSearch.invalidate();
+            })
+          : undefined;
         const state: ThreadState = {
           pump,
           commands: threadAgent.commands,
@@ -693,8 +745,16 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           storedCount: threadAgent.rootSeed?.length ?? 0,
           workspaceRoot: threadAgent.workspaceRoot,
           resumedWorkspaceRoot: threadAgent.resumedWorkspaceRoot,
+          fileSearch,
           slashInFlight: false,
           dispose: async () => {
+            // **標題最先拆**：它在任何一輪之外寫日誌，拆掉會中止還在跑的那一次，之後回來的寫不進去
+            // （同 dsh 的會話拆卸）。排在參與者前面，理由同下一條：寫得動日誌的先停手。
+            await detachTitle?.();
+            // **列檔索引接著收**，同 dsh 在 `agent/disposed` 上收它：中止還在背景跑的走訪，之後的查詢回空。它不寫日誌，
+            // 所以排在寫得動日誌的那幾個之間哪裡都不改變誰看到什麼。
+            unsubscribeFileSearch?.();
+            fileSearch?.dispose();
             // **參與者先收，比不變量還早**：它是唯一寫得動日誌的那一個，先讓它停手，
             // 檢查才還在看著它最後那幾筆。反過來收的話，關機途中寫進去的東西沒人檢。
             detachSession?.();
@@ -1183,6 +1243,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
               `單獨一輪就超標，不從輪中間切（#479）。`,
           ),
         toolTextLimits,
+        threadTitleLimits,
       );
     } catch (error: unknown) {
       if (error instanceof HistoryQueryError) {
@@ -1192,6 +1253,43 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     }
     const response: ThreadHistoryResponse = { type: 'success', result };
     return json(response);
+  }
+
+  /**
+   * `GET /threads/:id/file-references?query=`（[#651](https://github.com/DemianLi/nexus-agent/issues/651)）：`@` 後面那一段的候選。
+   * 契約見 `@nexus/wire` 的 `file-references.ts`，查法與圍堵見 `file-references.ts`。
+   *
+   * **經 `threadFor`，同 `slash.list`**：打 `@` 多半發生在第一句之前，所以沒開過的 thread 要為它建起來，而不是像
+   * `changes` 那樣回 404。也同 `slash.list` **不看「還在跑」與核准點**：它只讀，沒有東西可以跟誰賽跑。
+   *
+   * **取消與失敗分開**：請求被取消（web 每打一個字就取消上一次）時照樣拋出去，由載體收掉，同 `changes/diff`；
+   * 其他失敗（例如工作區根讀不到，索引照 dsh 不落定成空的）回協定層的錯誤封包。
+   */
+  async function handleFileReferences(
+    threadId: string,
+    search: URLSearchParams,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    const thread = await threadOrError(threadId, null);
+    if (thread instanceof Response) return thread;
+    let response: FileReferenceListResponse;
+    if (thread.fileSearch === undefined) {
+      response = { type: 'success', result: { available: false } };
+    } else {
+      try {
+        const candidates = await listFileReferences(
+          thread.fileSearch,
+          search.get('query') ?? '',
+          signal,
+        );
+        response = { type: 'success', result: { available: true, candidates } };
+      } catch (error: unknown) {
+        signal.throwIfAborted();
+        const reason = error instanceof Error ? error.message : String(error);
+        return changesResponse(errorResponse(null, 'unknown_error', `列不出檔案：${reason}`));
+      }
+    }
+    return changesResponse(response);
   }
 
   /**
@@ -1473,6 +1571,12 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
         if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
         return handleHistory(route.threadId, searchParams);
+      }
+      if (route?.kind === 'file-references') {
+        if (request.method !== 'GET') return new Response('not found', { status: 404 });
+        // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
+        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+        return handleFileReferences(route.threadId, searchParams, request.signal);
       }
       if (
         route?.kind === 'deliverable-file' ||

@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { appendHumanTurn, emptyConversation, prependEntries, reduceAll } from './conversation.js';
+import { emptyConversation, prependEntries, reduceAll } from './conversation.js';
 import type { ConversationState } from './conversation.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
 import type { DeliverablesPresentedPayload } from './deliverables.js';
+import { INBOX } from './inbox.js';
 import type { Event } from './protocol.js';
 
 /**
@@ -27,6 +28,10 @@ function frame(method: string, namespace: readonly string[], data: unknown): Eve
 }
 
 const running = () => frame('lifecycle', [], { event: 'running', graph_name: 'root' });
+
+/** 人說一句話：線上是 `inbox` 帶 `claimed` 的那一顆，接著才是 root 的 `running`。 */
+const said = (text: string): Event =>
+  frame('custom', [], { name: INBOX, payload: { items: [], claimed: { id: `q-${seq}`, text } } });
 const completed = () => frame('lifecycle', [], { event: 'completed', graph_name: 'root' });
 
 function reply(id: string, text: string): Event[] {
@@ -72,7 +77,8 @@ function kinds(state: ConversationState): string[] {
 
 describe('交付', () => {
   it('落在串流裡它自己的位置，id 是確定值', () => {
-    const state = reduceAll(appendHumanTurn(emptyConversation(), '交付。'), [
+    const state = reduceAll(emptyConversation(), [
+      said('交付。'),
       running(),
       ...tool('c1'),
       delivered({ callId: 'c1', seq: 1, files: FILES }),
@@ -138,7 +144,8 @@ describe('交付', () => {
   });
 
   it('不動狀態、不當輪尾：輪尾照樣標在最後一則有文字的回覆上', () => {
-    const state = reduceAll(appendHumanTurn(emptyConversation(), '交付。'), [
+    const state = reduceAll(emptyConversation(), [
+      said('交付。'),
       running(),
       ...reply('r1', '先寫。'),
       ...tool('c1'),

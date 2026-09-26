@@ -43,6 +43,14 @@ import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import { liveModelPlugin } from './settings/live-model.js';
 import type { LiveModelConfig } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
+import { threadTitleConfigSchema, threadTitlePlugin } from './settings/thread-title.js';
+import type { ThreadTitleConfig } from './settings/thread-title.js';
+import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
+import type { ThreadTitleLlmConfig } from './settings/thread-title-llm.js';
+import { ensureFallbackTitle } from './session-title.js';
+import type { ThreadTitleLimits } from './session-title.js';
+import { createSessionTitleLlm } from './session-title-llm.js';
+import type { AttachSessionTitleLlm } from './session-title-llm.js';
 import {
   attachSessionPersistence,
   createHostServicesPlugin,
@@ -83,6 +91,7 @@ import {
 import type { SandboxMode } from './contained-backend.js';
 import { createLiveModel, loadLiveEnvIfNeeded, DEFAULT_LIVE_MODEL_ID } from './live-model.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
+import { createFileReferencePlugin } from './file-references.js';
 import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -700,7 +709,7 @@ export function transcriptLine(node: string, message: BaseMessage): string | und
  * 依這次呼叫建 model。
  *
  * @param live - 是否用真實供應商。
- * @param liveModel - 真實供應商的五個連線值，清單上 `live-model` 那一列（#545）。
+ * @param liveModel - 真實供應商的連線值，清單上 `live-model` 那一列（#545）。
  * @returns 可以交給組裝點的 model。
  * @throws `--live` 但環境變數裡沒有 key——訊息指名缺哪一個，不 fallback。
  */
@@ -766,6 +775,13 @@ export async function createCliAgent(
      * （`settings/live-model.test.ts`）。
      */
     readonly liveModel?: LiveModelConfig;
+    /**
+     * LLM 標題那一列與標題上限（[#650](https://github.com/DemianLi/nexus-agent/issues/650)），理由同 {@link liveModel}：
+     * 兩條產品路徑在起動期解一次往下傳，serve 上那一列寫壞了就在 server 起來之前失敗，而不是等到第一條 thread。
+     * 省略時從 `plugins` 解。**掛不掛不在這兩格**：那一列關掉時照樣由 `startupEntryMounted` 判。
+     */
+    readonly threadTitleLlm?: ThreadTitleLlmConfig;
+    readonly threadTitle?: ThreadTitleConfig;
   },
   plugins: readonly PluginEntry[],
   cwd: string = process.cwd(),
@@ -803,14 +819,32 @@ export async function createCliAgent(
    * {@link resolveWorkspaceRoot}。
    */
   workspaceRoot: string | undefined;
+  /**
+   * 把 LLM 標題接到一份 root 日誌上（[#650](https://github.com/DemianLi/nexus-agent/issues/650)），**沒有時是
+   * `undefined`**：沒帶 `--live`，或清單上 `thread-title-llm` 那一列關掉了。
+   *
+   * 沒帶 `--live` 不掛是承重的：假模型的腳本是一格一格吃的，多出來的標題呼叫會吃掉主回覆的那一格。它也不另給
+   * 一顆假模型——沒有人要讀一個假的標題。
+   *
+   * 接線同其他三個 attach，交給呼叫端：CLI 接它那一份，serve 在 wire-handler 建 pump 的那一刻接。
+   */
+  attachTitle: AttachSessionTitleLlm | undefined;
 }> {
-  const model = createCliModel(
-    invocation.live,
-    invocation.liveModel ?? startupSetting(plugins, liveModelPlugin),
-  );
-  // **channel 在這裡算一次，兩個消費者共用。** 核准閘門由 `foldRegistry` 自己算
-  // （同一個 `deriveApprovalChannel`），`ask_user_question` 拿的是這一份——兩邊分岔的
-  // 樣子是「核准擋得下來、問答還掛在那裡」，而那不會有任何測試紅。
+  const liveModel = invocation.liveModel ?? startupSetting(plugins, liveModelPlugin);
+  const model = createCliModel(invocation.live, liveModel);
+  // **標題模型是另一顆實例**：輸出上限換成標題那一列的，並表明用途，由 `createLiveModel` 決定要不要關推理
+  // （`live-model.ts` 的 `LiveModelPurpose`）。這一行排在 `createCliModel` 之後：`.env` 在那裡才載入。
+  const attachTitle =
+    invocation.live && startupEntryMounted(plugins, threadTitleLlmPlugin)
+      ? titleLlmFor(
+          liveModel,
+          invocation.threadTitleLlm ?? startupSetting(plugins, threadTitleLlmPlugin),
+          invocation.threadTitle ?? startupSetting(plugins, threadTitlePlugin),
+        )
+      : undefined;
+  // **channel 在這裡算一次，消費者共用。** 核准閘門由 `foldRegistry` 自己算
+  // （同一個 `deriveApprovalChannel`），`ask_user_question` 與 `exit_plan_mode`（#652）拿的是這一份
+  // ——分岔的樣子是「核准擋得下來、問答還掛在那裡」，而那不會有任何測試紅。
   //
   // **它掛在這裡而不是出貨清單裡**：那份清單是一個設定檔，看不到這一次
   // 呼叫的 checkpointer 與 `approvals`。
@@ -884,6 +918,8 @@ export async function createCliAgent(
       // 政策是 workspace-write」是對模型說謊——它會以為根外被擋著，而整道 fence 不在
       // 路徑上。理由與 dsh 的 `ctx.fs.sandboxMode === undefined` 就不貢獻同一條。
       ...(workspaceRoot === undefined ? [] : [createSandboxPolicyPlugin()]),
+      // **`@` 引用那一句跟圍堵同一個條件**（#651）：沒有工作區時不提供列檔，使用者插不出 `@` 路徑，檔案工具讀的也不是磁碟。
+      ...(workspaceRoot === undefined ? [] : [createFileReferencePlugin()]),
       ...(workspaceChanges === undefined ? [] : [workspaceChanges]),
     ],
     ...(backend !== undefined && { backend }),
@@ -915,7 +951,28 @@ export async function createCliAgent(
     workspaceChanges: services.get(WORKSPACE_CHANGES_SERVICE),
     goals: services.get(GOALS_SERVICE),
     workspaceRoot,
+    attachTitle,
   };
+}
+
+/**
+ * 這一次組裝的 LLM 標題。路由就是 `live-model` 那一列（一個組裝一條連線），記進 `session/title-llm-request` 與
+ * provider 標題的 `model`。
+ */
+function titleLlmFor(
+  liveModel: LiveModelConfig,
+  config: ThreadTitleLlmConfig,
+  limits: ThreadTitleConfig,
+): AttachSessionTitleLlm {
+  return createSessionTitleLlm({
+    model: createLiveModel(
+      { ...liveModel, maxOutputTokens: config.maxOutputTokens },
+      'session-title',
+    ),
+    route: { provider: liveModel.baseUrl, model: liveModel.modelId },
+    config,
+    limits,
+  });
 }
 
 /** 把一輪 stream 出來的東西印給人看。 */
@@ -996,12 +1053,15 @@ function printInterrupt(update: unknown, printer: Printer): void {
  * @param input - 使用者說的那句話，或**排程器排的一輪續行**。
  * @param printer - 輸出去處。
  * @param sessionLog - 這條 REPL 的事件日誌。
+ * @param titleLimits - 退回標題的兩個上限（[#647](https://github.com/DemianLi/nexus-agent/issues/647)），由 `main`
+ *   在起動期從清單解出來。**省略即 schema 的預設**，理由同 `ThreadPump` 的 `toolText`：測試呼叫點量的不是它。
  */
 export async function runTurn(
   agent: NexusAgent,
   input: string | GoalRoundRequest,
   printer: Printer,
   sessionLog: SessionLog,
+  titleLimits: ThreadTitleLimits = threadTitleConfigSchema.parse({}),
 ): Promise<void> {
   let files: Record<string, unknown> = {};
 
@@ -1021,6 +1081,15 @@ export async function runTurn(
         },
   );
   try {
+    // 退回標題（#647），同 web 的 pump：人打的字那一種才寫，還沒有標題才寫，寫不進去只講一聲、這一輪照跑。CLI 的日誌
+    // 今天沒有讀標題的人（serve 的列表讀不到 run 目錄），寫它是照 dsh：退回標題在 `base` bundle 裡，每一種組裝都有。
+    if (typeof input === 'string') {
+      try {
+        ensureFallbackTitle(sessionLog, titleLimits);
+      } catch (error: unknown) {
+        printer.error(`[標題] 退回標題寫不進去：${String(error)}`);
+      }
+    }
     for await (const [mode, payload] of await agent.stream(toAgentInvocation(text), {
       streamMode: ['updates', 'values'],
       configurable: { thread_id: THREAD_ID },
@@ -1230,6 +1299,7 @@ function assertNoReplNameCollision(commands: Pick<CommandRegistrationPoint, 'fin
  * @param commands - plugin 註冊的命令。`find` 給執行器派發，`list` 給 `/help` 列清單。
  *   **執行器在這裡建，一個 REPL 一個**——
  *   `@nexus/plugin-commands` 的配套入口就是靠「一次一個」這件事在檢查配對的。
+ * @param titleLimits - 見 {@link runTurn}。
  */
 export async function runRepl(
   agent: NexusAgent,
@@ -1239,6 +1309,7 @@ export async function runRepl(
   commands: Pick<CommandRegistrationPoint, 'find' | 'list'>,
   driver?: GoalDriverPort,
   roundCap?: number,
+  titleLimits?: ThreadTitleLimits,
 ): Promise<void> {
   assertNoReplNameCollision(commands);
   const executor = createCommandExecutor({ commands, sessionLog });
@@ -1263,7 +1334,7 @@ export async function runRepl(
         const execution = await executor.execute(text, new AbortController().signal);
         if (execution === undefined) {
           // 語法不符或名字不認得——**照原樣送給模型**，跟這行改動之前一模一樣。
-          await runTurn(agent, text, printer, sessionLog);
+          await runTurn(agent, text, printer, sessionLog, titleLimits);
         } else if (execution.result.text !== undefined) {
           const write = execution.result.kind === 'error' ? printer.error : printer.log;
           write(execution.result.text);
@@ -1349,6 +1420,10 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   const persistenceWindow = startupSetting(plugins, sessionPersistencePlugin);
   // 真實供應商的連線值（#545）。
   const liveModel = startupSetting(plugins, liveModelPlugin);
+  // 退回標題的兩個上限（#647）。`startupSetting` 照 schema 驗過，寫壞的話在跑起來之前就拋。
+  const threadTitle = startupSetting(plugins, threadTitlePlugin);
+  // LLM 標題那一列（#650），同上：沒帶 `--live` 也解，寫壞的設定不因為這一次用不到就放過。
+  const threadTitleLlm = startupSetting(plugins, threadTitleLlmPlugin);
 
   // **續接也在建 agent 之前讀**：沙箱模式的起始那一格與 root 日誌的 seed 都是組裝時就要給的
   // 東西，而讀不到（沒有那個目錄、版本太新、壞檔）也該在什麼都還沒起來的時候就講。
@@ -1419,7 +1494,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     }
     // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
     built = await createCliAgent(
-      { ...effective, liveModel },
+      { ...effective, liveModel, threadTitle, threadTitleLlm },
       plugins,
       options.cwd,
       (error) =>
@@ -1480,6 +1555,11 @@ export async function runCli(options: RunCliOptions): Promise<void> {
             printer.error(`[會話日誌] ${message}`);
           },
         });
+  // **LLM 標題（#650）接在落盤之後**，所以它寫的兩顆照常落地。它自己不在任何一輪裡，失敗只講一聲。收尾時先拆它
+  // 再收落盤：拆掉會中止還在跑的那一次（一次性路徑上行程多半比標題先結束），之後回來的寫不進去，同 dsh 的拆卸。
+  const detachTitle = built.attachTitle?.(sessionLog, (message) => {
+    printer.error(`[標題] ${message}`);
+  });
 
   // 一輪跑壞了也要收——資源的所有權跟這一次呼叫綁在一起，不跟它成不成功綁在一起。
   //
@@ -1553,7 +1633,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
 
     if (invocation.prompt !== undefined) {
       printer.log(`> ${invocation.prompt}\n`);
-      await runTurn(agent, invocation.prompt, printer, sessionLog);
+      await runTurn(agent, invocation.prompt, printer, sessionLog, threadTitle);
       if (driver !== undefined)
         await driveGoalRounds(agent, printer, sessionLog, driver, invocation.maxGoalRounds);
     } else {
@@ -1566,11 +1646,13 @@ export async function runCli(options: RunCliOptions): Promise<void> {
         commands,
         driver,
         invocation.maxGoalRounds,
+        threadTitle,
       );
     }
   } catch (error) {
     // 跑壞了也要盡量把已經記下來的事件寫下去——**但不能讓它蓋掉原本的錯誤**，
     // 同下面那條「先保住原本的錯誤」的規則。
+    await detachTitle?.().catch(() => {});
     await persistence?.dispose().catch(() => {});
     await dispose().catch(() => {});
     throw error;
@@ -1584,6 +1666,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // （也實測過）。留著這個順序的理由是 plugin 的 disposer 一跑，後端就可能被它的擁有者
   // 收掉，而那時還在飛的寫入就沒有人接了——今天的後端是我們自己 `new` 的，所以碰不到；
   // 哪天後端由 plugin 提供，順序就會開始有意義。**別把它讀成一條驗過的因果。**
+  await detachTitle?.();
   await persistence?.dispose();
   await dispose();
 }

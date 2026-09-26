@@ -29,6 +29,11 @@ export type {
   PreToolDecision,
   PreToolListener,
   ApprovalChannel,
+  PlanReviewIntent,
+  QuestionAnswerItem,
+  QuestionInterruptItem,
+  QuestionInterruptPayload,
+  QuestionReply,
 } from './approval.js';
 export {
   APPROVAL_GATE_MIDDLEWARE_NAME,
@@ -36,6 +41,7 @@ export {
   approvalGatePlugin,
   APPROVAL_INTERRUPT_KIND,
   QUESTION_INTERRUPT_KIND,
+  CHANNEL_SERVICE,
   createApprovalGateMiddleware,
   deriveApprovalChannel,
   runApprovalGate,
@@ -369,6 +375,9 @@ export type {
   SessionLogListener,
   SessionLogOptions,
   SessionLogView,
+  SessionTitleLlmMessage,
+  SessionTitleModelIdentity,
+  SessionTitleSource,
   TurnEndReason,
 } from './session-log.js';
 export { currentTurnStart, hasUnansweredInterrupt, SessionLog } from './session-log.js';

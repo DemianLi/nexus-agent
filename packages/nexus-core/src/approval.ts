@@ -115,6 +115,70 @@ export const APPROVAL_INTERRUPT_KIND = 'approval';
  */
 export const QUESTION_INTERRUPT_KIND = 'question';
 
+/**
+ * 提問中斷的**生產者有兩個**：`@nexus/plugin-ask-user`（模型自己問）與 `@nexus/plugin-plan-mode`
+ * 的 `exit_plan_mode`（計劃審核，[#652](https://github.com/DemianLi/nexus-agent/issues/652)）。
+ * 所以一題的形狀、回覆的形狀、判「有沒有人可以回答」的服務名都放在這裡，兩邊讀同一份。
+ *
+ * dsh 的對應是 `userQuestions` 這個共用服務（`packages/interaction/user-questions/src/types.ts`，
+ * `477b4f4`），兩個生產者都呼叫它的 `ask()`。我們沒有那一層：LangGraph 只給一顆 `interrupt()`，
+ * 生產者各自呼叫它、酬載帶 {@link QUESTION_INTERRUPT_KIND}——那是 ask-user 登記過的偏離
+ * （一條通道加一個判別式）的延伸，不是新的一條。
+ */
+export interface QuestionInterruptItem {
+  readonly id: string;
+  readonly question: string;
+  readonly header?: string;
+  /** 跟著這一題一起畫、但不進選項標籤的補充內容。計劃審核把計劃全文放在這裡。 */
+  readonly detail?: string;
+  readonly options?: readonly { readonly label: string; readonly description?: string }[];
+  readonly multiSelect?: boolean;
+  /** 純呈現用：認得的 UI 照它畫，不認得的照一般提問畫。答法兩邊一樣。 */
+  readonly intent?: PlanReviewIntent;
+}
+
+/**
+ * 這一題**就是**一次計劃審核。照 dsh 的 `AskUserQuestionIntent`。
+ *
+ * `approve` 是同意那個選項的**標籤**，其餘選項都是不同意——用名字不用位置，所以沒有 UI
+ * 需要從選項順序猜哪個是同意。
+ */
+export interface PlanReviewIntent {
+  readonly kind: 'plan-review';
+  readonly approve: string;
+  /** 參數裡裝著這份計劃的那顆工具呼叫，日誌 `tool/call` 的 `callId`。 */
+  readonly callId?: string;
+}
+
+/** 提問中斷的酬載。 */
+export interface QuestionInterruptPayload {
+  readonly kind: typeof QUESTION_INTERRUPT_KIND;
+  readonly questions: readonly QuestionInterruptItem[];
+}
+
+/** 一題的答案。空的 `selected` 且沒有 `custom` ＝ 那一題被跳過。 */
+export interface QuestionAnswerItem {
+  readonly id: string;
+  readonly selected: readonly string[];
+  readonly custom?: string;
+}
+
+/** 人回來的東西。`cancelled` 那一格是「放棄整組」，不是一份答案。 */
+export interface QuestionReply {
+  readonly answers?: readonly QuestionAnswerItem[];
+  readonly cancelled?: boolean;
+}
+
+/**
+ * 「這次組裝有沒有人可以回答」這個服務的名字，型別見 `NexusServices.channel`。
+ *
+ * 由**組裝點**提供（`apps/harness` 的 `createHostServicesPlugin`）：產品路徑一律呼叫
+ * {@link deriveApprovalChannel} 明著算一次再提供出來，理由是消費者（核准閘門、`ask_user_question`、
+ * `exit_plan_mode`）必須讀到同一個值。以前住在 `@nexus/plugin-ask-user`，第二個提問的生產者
+ * 出現之後搬來這裡——它與 {@link ApprovalChannel} 是同一個擁有者。
+ */
+export const CHANNEL_SERVICE = 'channel';
+
 export type ApprovalChannel =
   /** 有人在，`ask` 真的會停下來問。 */
   | { readonly kind: 'human' }

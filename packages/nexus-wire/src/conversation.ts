@@ -34,8 +34,11 @@
 import { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 import type { WireContextMeasure, WireContextPressure } from './context-pressure.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
+import { INBOX } from './inbox.js';
+import type { WireQueuedInput } from './inbox.js';
 import { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
 import type { WireSessionStats, WireTokenUsage } from './session-totals.js';
+import { TITLE } from './title.js';
 import { TODOS } from './todos.js';
 import type { WireTodoItem } from './todos.js';
 import type { WirePresentedFile } from './deliverables.js';
@@ -52,6 +55,11 @@ export interface HumanEntry {
   readonly kind: 'human';
   readonly id: string;
   readonly text: string;
+  /**
+   * 這一則是送出佇列的哪一件開跑時畫的（`inbox` 的 `claimed.id`）。同一顆 `claimed` 再到一次靠它認出來，不畫第二次。
+   * 歷史重播的人話沒有這一格。
+   */
+  readonly inboxId?: string;
 }
 
 export interface AiEntry {
@@ -170,7 +178,7 @@ export interface ToolEntry {
  * ——但卡說的是「這顆沒執行、模型看到了什麼」，**不說人按了什麼**：同一張失敗的卡也可能來自
  * 規則直接擋、或沒有核准管道。我們沒有 dsh 的 `approval/asked`／`approval/decided`
  * （[#220](https://github.com/DemianLi/nexus-agent/issues/220) 認帳不做），所以決定要跟
- * {@link appendHumanTurn} 一樣在送出的那一刻自己寫進來，與那張卡並存——那不是裝飾，是唯一的紀錄。
+ * 所以決定要在送出的那一刻自己寫進來，與那張卡並存——那不是裝飾，是唯一的紀錄。
  */
 export interface DecisionEntry {
   readonly kind: 'decision';
@@ -296,13 +304,35 @@ export type ConversationStatus = 'idle' | 'running' | 'awaiting-input' | 'failed
 export const APPROVAL_PENDING_KIND = 'approval';
 export const QUESTION_PENDING_KIND = 'question';
 
-/** 問人的一題。形狀照抄 dsh 的 `AskUserQuestionItem` 在**模型面**的那五格。 */
+/**
+ * 問人的一題。形狀照抄 dsh 的 `AskUserQuestionItem`：模型面的五格，加上只有內部生產者會填的
+ * `detail` 與 `intent`（[#652](https://github.com/DemianLi/nexus-agent/issues/652)：`exit_plan_mode`
+ * 的計劃審核）。**兩格都原樣從中斷酬載帶過來**，`reduceInputRequested` 不挑欄位。
+ *
+ * 生產者那側的同一份形狀在 `@nexus/core` 的 `QuestionInterruptItem`（這個套件不相依 core，所以各寫一份）。
+ */
 export interface QuestionItem {
   readonly id: string;
   readonly question: string;
   readonly header?: string;
+  /** 跟著這一題一起畫、但不進選項標籤的補充內容。計劃審核把計劃全文（Markdown）放在這裡。 */
+  readonly detail?: string;
   readonly options?: readonly { readonly label: string; readonly description?: string }[];
   readonly multiSelect?: boolean;
+  /** 純呈現用：認得的 UI 照它畫，不認得的照一般提問畫。**答法兩邊一樣**，送回的都是選項標籤。 */
+  readonly intent?: PlanReviewIntent;
+}
+
+/**
+ * 這一題**就是**一次計劃審核。照 dsh 的 `AskUserQuestionIntent`。
+ *
+ * `approve` 是同意那個選項的**標籤**，其餘選項都是不同意——用名字不用位置。`callId` 是參數裡
+ * 裝著這份計劃的那顆工具呼叫，歷史重播時計劃卡從那顆呼叫的參數畫。
+ */
+export interface PlanReviewIntent {
+  readonly kind: 'plan-review';
+  readonly approve: string;
+  readonly callId?: string;
 }
 
 interface PendingCommon {
@@ -392,6 +422,17 @@ export interface ConversationState {
    * `session-totals.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
    */
   readonly sessionStats: WireSessionStats | null;
+  /**
+   * 送出佇列（#637）：人送出、還沒開跑的那幾句，照開跑的先後。後到的 `inbox` frame 整份換掉，**沒收到過就是空的**
+   * ——佇列從日誌開頭折起，不會在一輪開頭清空，所以沒有「還沒寫過」與「空」之分。規則見 `inbox.ts`。它是「現在」的事，
+   * 所以 {@link prependEntries} 不動它。
+   */
+  readonly inbox: readonly WireQueuedInput[];
+  /**
+   * 這條會話現在叫什麼（#647）：最後一顆 `title` frame 的。**還沒收到過就是 `null`**，同 dsh 投影的初值。規則見
+   * `title.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
+   */
+  readonly title: string | null;
 }
 
 const ROOT: Attribution = { kind: 'root' };
@@ -408,18 +449,9 @@ export function emptyConversation(): ConversationState {
     todos: null,
     tokenUsage: null,
     sessionStats: null,
+    inbox: [],
+    title: null,
   };
-}
-
-/**
- * 把使用者剛送出去的那句話放進來。
- *
- * **線上不會回聲它**：`run.start` 的 input 不會變成下行的 frame，而 `input` channel
- * 上只有核准請求。所以送出的那一刻由這裡補，不是等它回來。
- */
-export function appendHumanTurn(state: ConversationState, text: string): ConversationState {
-  const entry: HumanEntry = { kind: 'human', id: `human-${state.entries.length}`, text };
-  return trackTurn(state, { ...state, entries: [...state.entries, entry], status: 'running' });
 }
 
 /** 一輪在跑或停下來等人：還沒收尾。 */
@@ -466,7 +498,7 @@ function trackTurn(previous: ConversationState, next: ConversationState): Conver
 /**
  * 把人剛按下去的那個決定放進來，並把核准請求收掉。
  *
- * 跟 {@link appendHumanTurn} 同一個理由：**線上不回聲**。被拒的那顆呼叫下行上有一張失敗的卡，
+ * **線上不回聲決定**，所以由這裡在按下去的那一刻補。被拒的那顆呼叫下行上有一張失敗的卡，
  * 但「是人按了拒絕」只有這一則說得出來，見 {@link DecisionEntry}。
  *
  * 認不得那顆 `interruptId` 時原樣回傳：重複按下去的第二次不該憑空長出一則紀錄。
@@ -615,8 +647,8 @@ function isPresentedFile(value: unknown): value is WirePresentedFile {
 
 /**
  * `custom` frame。**只認 {@link DELIVERABLES_PRESENTED}、{@link WORKSPACE_CHANGES}、{@link MODEL_USAGE}、
- * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link TOKEN_USAGE} 與 {@link SESSION_STATS}**，其他名字、形狀不對的一律略過：這個 channel 上的東西由 pump 從日誌
- * 合成，認不得的不猜。
+ * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link TOKEN_USAGE}、{@link SESSION_STATS}、{@link INBOX} 與 {@link TITLE}**，其他名字、形狀
+ * 不對的一律略過：這個 channel 上的東西由 pump 從日誌合成，認不得的不猜。
  */
 function reduceCustom(state: ConversationState, data: unknown): ConversationState {
   const { name, payload } = (data ?? {}) as { name?: unknown; payload?: unknown };
@@ -627,6 +659,8 @@ function reduceCustom(state: ConversationState, data: unknown): ConversationStat
   if (name === TODOS) return reduceTodos(state, payload);
   if (name === TOKEN_USAGE) return reduceTokenUsage(state, payload);
   if (name === SESSION_STATS) return reduceSessionStats(state, payload);
+  if (name === INBOX) return reduceInbox(state, payload);
+  if (name === TITLE) return reduceTitle(state, payload);
   if (name !== DELIVERABLES_PRESENTED) return state;
   const { callId, seq, files } = payload as { callId?: unknown; seq?: unknown; files?: unknown };
   if (
@@ -689,6 +723,15 @@ function reduceContextMeasure(state: ConversationState, payload: object): Conver
   return { ...state, contextPressure: { ...state.contextPressure, measure } };
 }
 
+/**
+ * `title` 的 `payload`：換成這一個。不是非空字串就不收，同 dsh 投影的 `z.string().min(1)`。
+ */
+function reduceTitle(state: ConversationState, payload: object): ConversationState {
+  const { title } = payload as { title?: unknown };
+  if (typeof title !== 'string' || title === '') return state;
+  return { ...state, title };
+}
+
 /** 清單裡的一項長得對不對：同 dsh 的 `todosProjectionSchema`。 */
 function isTodoItem(value: unknown): value is WireTodoItem {
   if (typeof value !== 'object' || value === null) return false;
@@ -728,6 +771,49 @@ function reduceSessionStats(state: ConversationState, payload: object): Conversa
   const { turns, steps, llmMs, toolMs } = payload as Record<string, unknown>;
   if (!isCount(turns) || !isCount(steps) || !isCount(llmMs) || !isCount(toolMs)) return state;
   return { ...state, sessionStats: { turns, steps, llmMs, toolMs } };
+}
+
+/** 排著的一件長得對不對：`@nexus/core` 的 `QueuedInput`，這一版 `source` 只有人。 */
+function isQueuedInput(value: unknown): value is WireQueuedInput {
+  if (typeof value !== 'object' || value === null) return false;
+  const { id, text, source } = value as { id?: unknown; text?: unknown; source?: unknown };
+  return (
+    typeof id === 'string' &&
+    typeof text === 'string' &&
+    typeof source === 'object' &&
+    source !== null &&
+    (source as { kind?: unknown }).kind === 'user'
+  );
+}
+
+/**
+ * `inbox` 的 `payload`：清單**整份換掉**。任何一件不對、`claimed` 不對，就整顆不收，不收一半——少一件的清單分不出是
+ * 開跑了還是被刪了，而且看起來正常。
+ *
+ * 帶 `claimed` 的那一顆是某一件剛被領走開跑：多折一則人的話，文字用開跑用的那份（改過的就是改過的）。
+ *
+ * - **一律接在最後**：畫面不在送出當下先畫（#645），所以這一則就是人話在即時畫面上唯一的來處，沒有別的可以認領。
+ * - **id 是 `inbox:<項目 id>`**，跟歷史重播的人話（`message-start` 的 `run_id`）分得開；帶
+ *   {@link HumanEntry.inboxId}，同一顆 `claimed` 再到一次靠它認出來，不畫第二次。
+ * - **`status` 不在這裡轉**：開跑由接著到的 `lifecycle` 說，理由同 `claimed` 的先後保證（見 `inbox.ts`）。
+ */
+function reduceInbox(state: ConversationState, payload: object): ConversationState {
+  const { items, claimed } = payload as { items?: unknown; claimed?: unknown };
+  if (!Array.isArray(items) || !items.every(isQueuedInput)) return state;
+  let human: HumanEntry | undefined;
+  if (claimed !== undefined) {
+    const { id, text } = (claimed ?? {}) as { id?: unknown; text?: unknown };
+    if (typeof id !== 'string' || typeof text !== 'string') return state;
+    human = { kind: 'human', id: `inbox:${id}`, text, inboxId: id };
+  }
+  const inbox = items.map(({ id, text }) => ({ id, text, source: { kind: 'user' as const } }));
+  if (
+    human === undefined ||
+    state.entries.some((entry) => entry.kind === 'human' && entry.inboxId === human.inboxId)
+  ) {
+    return { ...state, inbox };
+  }
+  return { ...state, inbox, entries: [...state.entries, human] };
 }
 
 /** `workspace/changes` 的 `payload`：`seq` 要是非負整數，同一個 `seq` 只長一格。 */
@@ -787,7 +873,7 @@ function replace(
 
 interface MessageData {
   readonly event: string;
-  /** `message-start` 的作者。**`human` 只有歷史送**：線上不回聲人打的字，見 {@link appendHumanTurn}。 */
+  /** `message-start` 的作者。**`human` 只有歷史送**：即時的人話走 `inbox` 的 `claimed`，見 {@link reduceInbox}。 */
   readonly role?: string;
   readonly id?: string;
   readonly run_id?: string;
@@ -817,7 +903,7 @@ function reduceMessage(
     case 'message-start': {
       if (data.role === 'human') {
         // **歷史才會送這一種**（`GET /threads/:id/history`，#306）：協定留給「整則重播的人話」的格。
-        // `status` 不動——這一句已經說過了，不是剛送出去的那一句（那一句走 `appendHumanTurn`）。
+        // `status` 不動——這一句已經說過了，不是剛開跑的那一句（那一句走 `inbox` 的 `claimed`）。
         const entry: HumanEntry = { kind: 'human', id, text: '' };
         return { ...state, entries: [...state.entries, entry] };
       }

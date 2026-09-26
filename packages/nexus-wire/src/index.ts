@@ -79,6 +79,12 @@ export type {
 } from './workspace-changes.js';
 export { changesDiffPath, changesSummaryPath, WORKSPACE_CHANGES } from './workspace-changes.js';
 export type {
+  FileReferenceCandidate,
+  FileReferenceListResponse,
+  FileReferenceListResult,
+} from './file-references.js';
+export { fileReferencesPath } from './file-references.js';
+export type {
   ModelUsagePayload,
   WireContextMeasure,
   WireContextPressure,
@@ -88,6 +94,8 @@ export { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 export type { TodosPayload, WireTodoItem } from './todos.js';
 export type { InboxPayload, WireQueuedInput } from './inbox.js';
 export { INBOX } from './inbox.js';
+export type { TitlePayload } from './title.js';
+export { TITLE } from './title.js';
 export { TODOS } from './todos.js';
 export type { WireSessionStats, WireTokenUsage } from './session-totals.js';
 export { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
@@ -133,6 +141,7 @@ export type {
   PendingApproval,
   PendingInput,
   PendingQuestion,
+  PlanReviewIntent,
   QuestionItem,
   ToolEntry,
   WorkspaceChangesEntry,
@@ -146,7 +155,6 @@ export {
   appendQuestionCancel,
   cancelResponse,
   appendDecision,
-  appendHumanTurn,
   emptyConversation,
   isApprovalPending,
   isQuestionPending,
@@ -158,6 +166,7 @@ export {
 
 export type {
   FeedbackOutcome,
+  FileReferenceListOutcome,
   OpenEventsOptions,
   SlashListOutcome,
   SlashRunOutcome,

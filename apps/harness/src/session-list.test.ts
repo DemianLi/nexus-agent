@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { openJsonlSessionStore } from './jsonl-session-store.js';
-import { fallbackThreadTitle, listStoredThreads } from './session-list.js';
+import { listStoredThreads } from './session-list.js';
 
 const CWD = '/專案/甲';
 const LIMITS = { maxWords: 5, maxBytes: 40 };
@@ -128,6 +128,36 @@ describe('listStoredThreads', () => {
     expect(byId['header-only']).toMatchObject({ blank: true });
   });
 
+  it('記了標題就讀最後一顆；工具參數裡提到 session/title、形狀不對的都不算（#647）', async () => {
+    const directory = await dir();
+    const titled = (title: unknown, time: number): Draft => ({
+      type: 'session/title',
+      time,
+      data: { title, messageSeqs: [0], source: { kind: 'fallback' } },
+    });
+    await writeThread(directory, 'logged', {
+      events: [said('第一句', 1_100), titled('記下的標題', 1_101), titled('後來的標題', 1_300)],
+    });
+    // 記的標題跟第一句推出來的不一樣：讀到的是記的，不是當場推的。
+    await writeThread(directory, 'noise', {
+      events: [
+        said('第一句', 1_100),
+        {
+          type: 'tool/call',
+          time: 1_200,
+          data: { callId: 'c', name: 'grep', arguments: '{"pattern":"session/title"}' },
+        },
+        titled(42, 1_300),
+      ],
+    });
+
+    const { items } = await listStoredThreads(directory, { cwd: CWD, title: LIMITS });
+    const byId = Object.fromEntries(items.map((item) => [item.threadId, item]));
+    expect(byId['logged']).toMatchObject({ title: '後來的標題' });
+    // 一顆像樣的 `session/title` 都沒有：照舊從第一句推。
+    expect(byId['noise']).toMatchObject({ title: '第一句' });
+  });
+
   it('只列切得過去的：subagent、別的目錄、沒記目錄的都不列，也不算讀不懂', async () => {
     const directory = await dir();
     await writeThread(directory, 'root', { events: [said('我的', 1_100)] });
@@ -212,32 +242,5 @@ describe('listStoredThreads', () => {
       await holder.stored.close();
     }
     expect([await readFile(headerPath, 'utf8'), await readFile(logPath, 'utf8')]).toEqual(before);
-  });
-});
-
-describe('fallbackThreadTitle', () => {
-  it('中文吃位元組上限：40 個位元組是 13 個字，不切在一個字的中間', () => {
-    const title = fallbackThreadTitle('請幫我把登入頁面的錯誤訊息改成中文並補上測試', LIMITS);
-    expect(title).toBe('請幫我把登入頁面的錯誤訊息');
-    expect(Buffer.byteLength(title, 'utf8')).toBeLessThanOrEqual(40);
-  });
-
-  it('英文吃詞數上限', () => {
-    expect(fallbackThreadTitle('fix the login bug on safari please', LIMITS)).toBe(
-      'fix the login bug on',
-    );
-  });
-
-  it('控制字元、跳脫序列與方向控制字元都拿掉，空白收成一格', () => {
-    const esc = String.fromCharCode(0x1b);
-    const rlo = String.fromCharCode(0x202e);
-    const bell = String.fromCharCode(0x07);
-    expect(fallbackThreadTitle(`  ${esc}[31m紅字${esc}[0m\n\t${rlo}反過來${bell}  `, LIMITS)).toBe(
-      '紅字 反過來',
-    );
-  });
-
-  it('清完是空的就是空字串', () => {
-    expect(fallbackThreadTitle(`  ${String.fromCharCode(0x200b)}  `, LIMITS)).toBe('');
   });
 });

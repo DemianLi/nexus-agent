@@ -239,27 +239,31 @@
 #
 # **它們內部又分兩層，分界是消費點跑的時刻**：
 #
-# - **起動期**（`thread-title`、`browser-session`、`deliverable-files`、`tool-text`、`live-model`）：消費者是
-#   `serve.ts` 的冷讀清單、`BrowserAuth` 的建構子、`createWireHandler` 閉包裡的兩條交付路由，以及交給
-#   組裝的那顆 model——全都在**任何 agent 出生之前**就要有值，那一刻註冊表還不存在。所以這幾列的 `apply` 是空的，值由
+# - **起動期**（`thread-title`、`thread-title-llm`、`browser-session`、`deliverable-files`、`tool-text`、
+#   `live-model`）：消費者是`serve.ts` 的冷讀清單、`BrowserAuth` 的建構子、`createWireHandler` 閉包裡的兩條交付
+#   路由，以及交給組裝的那顆 model——全都在**任何 agent 出生之前**就要有值，那一刻註冊表還不存在。`thread-title`
+#   另外還給寫退回標題的 pump 與 CLI（#647），吃的是同一份起動期的值；`thread-title-llm` 跟它一起在建模型的那一刻
+#   讀（#650）。所以這幾列的 `apply` 是空的，值由
 #   `src/settings/startup.ts` 的 `startupSetting` 在起動期解一次、往下傳一份——形狀上仍是
 #   「值從一個地方來」，機制上不是服務，那條退讓登記在 #529 上。
 # - **組裝期**（`recursion-limit`）：消費者是 `agent-factory.ts`，跑在 `loadPlugins` 之後，
 #   **註冊表就在手上**。所以這一列跟上面 core 那三列完全同形——`apply` 把驗過的值提供成一個
 #   服務，消費點去讀服務。這一層做得到的事，不該跟著上一層退。
 #
-# **`name` 是 `#settings/…` 而不是一個套件名**，那是一條登記過的偏離，六列共用：dsh 的每個可調值
+# **`name` 是 `#settings/…` 而不是一個套件名**，那是一條登記過的偏離，七列共用：dsh 的每個可調值
 # 都由一個套件擁有，而 `apps/harness` **解不到自己**（條目走 `import(entry.name)`，`@nexus/harness`
 # 沒有連進自己的 `node_modules`，實測是 `Cannot find package`）。退到 Node 的 `imports` 欄位，映射
 # 寫在 `apps/harness/package.json` 裡看得見。逐條理由在 `src/settings/thread-title.ts` 的檔頭。
 #
-# **這六列關不掉**（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`），但理由分兩種。起動期那五列是
+# **除了 `thread-title-llm`，這六列關不掉**（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`），但理由分兩種。
+# 起動期那五列是
 # 「關掉沒有意義」：它們不裝任何東西，關掉不會讓標題不再被裁切、cookie 不再過期、交付檔不再有
 # 上限——`startupSetting` 把關掉的那一列當成沒有那一列，於是回到 schema 的預設值。
 # `recursion-limit` 硬一級——關掉它在機制上確實會讓服務消失、於是落回內建的 100，**看起來像關掉了
-# 護欄，實際上護欄還在**。兩種都只會讓人以為自己關掉了什麼。
+# 護欄，實際上護欄還在**。兩種都只會讓人以為自己關掉了什麼。`thread-title-llm` 相反：關掉它就真的沒有
+# 模型產生的標題，理由寫在它自己那一段上。
 
-# 執行緒列表上標題的兩個上限（#302）。值照 dsh base 的 `session-title`
+# 會話標題的兩個上限（#302、#647）：列表、畫面標頭與日誌裡的退回標題都照它截。值照 dsh base 的 `session-title`
 # （`packages/bundle/base/cordis.patch.yml:55-60`，`ddefc45`：`fallbackMaxWords: 5`、
 # `fallbackMaxBytes: 40`），**數字一模一樣**。
 #
@@ -271,6 +275,24 @@
   config:
     maxWords: 5
     maxBytes: 40
+    maxTitleBytes: 80
+
+# 模型產生的會話標題（#650），只在 `--live` 時才跑：第一則人話開跑、主回覆的第一次模型呼叫送出之後，另外打一次
+# 標題模型，回來的標題蓋過上面那一列截出來的退回標題。照 dsh base 的 `session-title-llm`（掛的是
+# `@deepseek-ai/dsh-session-title-first-prompt-llm`，`packages/bundle/base/cordis.patch.yml:62-69`，`477b4f4`），
+# **五個數字一模一樣**。上面那一列的 `maxTitleBytes` 是任何來源的標題上限，模型產生的照它正規化。
+#
+# **這一列關得掉**，跟上面那一列相反：`disabled: true` 就是只剩退回標題，同 dsh 的 acp-app 與 sdk-app。
+# 標題走 `live-model` 那一列的連線與模型（dsh 那一對選配的 `provider`／`model` 我們沒有，理由見
+# `src/settings/thread-title-llm.ts` 的檔頭），並帶上那一列的 `thinkingOffBody`。
+- id: thread-title-llm
+  name: '#settings/thread-title-llm'
+  config:
+    targetWords: 5
+    targetCjkCharacters: 10
+    maxInputBytes: 4096
+    maxOutputTokens: 64
+    timeoutMs: 60000
 
 # 瀏覽器 cookie 的絕對有效期（#424）。dsh 那側是 plugin 設定 `cookieMaxAgeDays`，預設同樣是 30
 # ——這一列補上的正是 `browser-auth.ts` 原本登記的那條偏離（「寫死 30 天，不能設定」）。
@@ -312,7 +334,7 @@
   config:
     maxBytes: 50000
 
-# 真實供應商的五個連線值（#545／#457），只在 `--live` 時才用。**五格都是 dsh 的設定欄位**：
+# 真實供應商的連線值（#545／#457），只在 `--live` 時才用。**前五格都是 dsh 的設定欄位**：
 # `@deepseek-ai/dsh-llm-deepseek` 的 `Config` 有 `baseURL`、`maxTokens`、`streamIdleTimeoutMs`、
 # `retryPolicy`（`packages/llm/llm-deepseek/src/config.ts:83-100`，`ddefc45`），所以可設定本身沒有偏離，
 # 寫死才是。值全是原本寫死的那幾個，測量與理由留在 `src/live-model.ts` 各常數的檔頭。
@@ -323,6 +345,11 @@
 #
 # **`modelId` 與 `maxOutputTokens` 是綁著的**：預設那顆模型是拿「吃不吃得下 16384」當淘汰門檻選出來的。
 # 換其中一個之前拿另一個重新確認——吃不下的模型會每一次呼叫都失敗。
+#
+# **`thinkingOffBody` 也跟 `modelId` 綁著**（#650）：標題呼叫（上面 `thread-title-llm` 那一列）加進請求 body 的那幾格，
+# 用來關掉推理——預設那顆模型不關推理的話，64 個輸出 token 全被推理吃光、一個標題都回不出來（實測 0/6，關掉 6/6）。
+# dsh 由 adapter 依用途在程式裡關；我們的 adapter 是通用的 OpenAI 相容，不知道每顆模型怎麼關，所以退到這一列，
+# 登記在 `src/settings/live-model.ts` 的檔頭「偏離四」。換一顆不認得這幾格的模型，寫 `{}`。
 - id: live-model
   name: '#settings/live-model'
   config:
@@ -331,6 +358,9 @@
     maxOutputTokens: 16384
     timeoutMs: 90000
     maxRetries: 6
+    thinkingOffBody:
+      chat_template_kwargs:
+        enable_thinking: false
 
 # agent 迴圈的 super-step 上限（#457／#529）。**dsh 對這個值沒有意見**——它不跑 LangGraph，
 # `recursionLimit` 在 `bundle/*` 的 patches 與 `core/agent-loop` 全樹零命中（`ddefc45`）。所以這一列

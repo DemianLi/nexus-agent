@@ -27,6 +27,8 @@
  *
  * | `inbox/spliced` | 送出佇列（#637）：**只在最新一頁送一顆，是到 `throughSeq` 為止目前的清單**（空的也送），窗口裡一顆變動都沒有就不送；`data` 同即時（{@link inboxData}），不帶 `claimed` |
  *
+ * | `session/title` | 標題（#647）：**只在最新一頁送一顆，是到 `throughSeq` 為止目前的標題**；18 以前的日誌沒有這一顆，照同一條規則當場推，推不出來就不送；`data` 同即時（{@link titleData}） |
+ *
  * 用量表那兩種不是逐顆轉：web 只留最新那一筆，逐顆轉只會多出一串馬上被蓋掉的 frame。「到這一頁結尾為止」包括這一頁
  * 開頭之前的——最後一輪在第一次模型呼叫之前就失敗的話，這一頁自己沒有那兩種事件，而即時的畫面上用量表還在。見
  * {@link historyPage}。
@@ -37,7 +39,8 @@
  *
  * ## 目標排的輪次不畫那一串字
  *
- * 即時的畫面只畫人送出去的那句（`appendHumanTurn`），目標排的那一輪的指示沒有人打過，畫面上沒有它。歷史照即時。
+ * 即時的畫面只畫人送出去的那句（開跑那一刻 `inbox` 帶的 `claimed`，只有送出佇列裡被領走的那一件才帶），目標排的
+ * 那一輪的指示沒有人打過、不進送出佇列，畫面上沒有它。歷史照即時。
  */
 
 import type {
@@ -45,6 +48,7 @@ import type {
   Event,
   InboxPayload,
   ModelUsagePayload,
+  TitlePayload,
   TodosPayload,
   WireSessionStats,
   WireTokenUsage,
@@ -61,6 +65,7 @@ import {
   INBOX,
   MODEL_USAGE,
   SESSION_STATS,
+  TITLE,
   TODOS,
   TOKEN_USAGE,
   WORKSPACE_CHANGES,
@@ -83,6 +88,9 @@ import {
   tokenUsageUnit,
 } from '@nexus/core';
 
+import { threadTitleOf } from './session-title.js';
+import type { ThreadTitleLimits } from './session-title.js';
+import { threadTitleConfigSchema } from './settings/thread-title.js';
 import { capToolResultMeta, toolResultText } from './tool-result-text.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
@@ -273,6 +281,20 @@ export function inboxData(
       ...(claimed === undefined ? {} : { claimed: { id: claimed.id, text: claimed.text } }),
     },
   };
+}
+
+/**
+ * 會話標題在線上的 `custom` 事件 `data`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）。即時與這裡共用，
+ * 規則見 `@nexus/wire` 的 `title.ts`。
+ *
+ * @param title - 標題，不是空字串。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `TitlePayload`。
+ */
+export function titleData(title: string): {
+  readonly name: typeof TITLE;
+  readonly payload: TitlePayload;
+} {
+  return { name: TITLE, payload: { title } };
 }
 
 /**
@@ -760,11 +782,13 @@ export function historyPage(
   awaitingInput?: AwaitingInput,
   onOversize?: (bytes: number) => void,
   toolText?: ToolTextConfig,
+  titleLimits?: ThreadTitleLimits,
 ): ThreadHistoryResult {
   // **這是這條路上唯一的退路**：呼叫端沒講就用 schema 的預設，同 `createWireHandler` 對
   // `deliverableLimits` 的做法（#536）。底下每一層都是必填轉發，所以「忘了傳」不會變成
   // 一個安靜的預設值。
   const toolTextMaxBytes = (toolText ?? toolTextConfigSchema.parse({})).maxBytes;
+  const titleLimitsOrDefault = titleLimits ?? threadTitleConfigSchema.parse({});
   const maxMessages = query.maxMessages ?? HISTORY_PAGE_MESSAGES;
   checkIndex('maxMessages', maxMessages, 1);
   checkIndex('beforeSeq', query.beforeSeq, 0);
@@ -809,7 +833,10 @@ export function historyPage(
     end === window.length && window.some((event) => event.type === 'inbox/spliced')
       ? [frame('custom', lastTime, inboxData(foldInbox(window)))]
       : [];
-  const tailFrames = [...totalsFrames, ...inboxFrames];
+  // 標題（#647）：同送出佇列，**只在最新一頁**、是目前的那一個。它不在一輪開頭清空，較舊的頁帶的話會把新的蓋回舊的。
+  const title = end === window.length ? threadTitleOf(window, titleLimitsOrDefault) : undefined;
+  const titleFrames = title === undefined ? [] : [frame('custom', lastTime, titleData(title))];
+  const tailFrames = [...totalsFrames, ...inboxFrames, ...titleFrames];
   const bytes =
     fitted.bytes +
     (carried.length === 0 ? 0 : weigh(carried, toolTextMaxBytes)) +
