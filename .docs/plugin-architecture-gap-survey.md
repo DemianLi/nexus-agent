@@ -82,7 +82,7 @@
 | 「九個之外有一條 `lifecycle` 通道」 | ✅ 但**數字過時** | 現在是**七條**不折的通道：`lifecycle`（#59 為 MCP 的 stdio 子行程引進）、`telemetry`（#89→#100）、`invariants`（#101）、`commands`（#118→#119）、`sessions`（#132→#138）、`services`（[#459](https://github.com/DemianLi/nexus-agent/issues/459)；原本這一格是 `feedback`，[#477](https://github.com/DemianLi/nexus-agent/issues/477) 把它收進 `services` 的一個名字）、`disabledEntries`（[#456](https://github.com/DemianLi/nexus-agent/issues/456)，2026-09-21；**唯讀視圖，沒有人往它註冊東西**）。`PluginRegistry` 是 16 個欄位。`registry.ts` 檔頭與計劃 §1 原本寫「四條」／「一條」，**與這份筆記同一張 PR 改正** |
 | 一個 plugin 只相依 `@nexus/core`，靠 pnpm 隔離擋住 `import '@nexus/harness'` | ✅ | `packages/nexus-plugin-echo/src/index.ts` 檔頭；#30 |
 | `requires` 對能力集合做存在性檢查、不排序 | ✅ | `registry.capabilities`；#28 決議 10、#29 |
-| 同層報錯、跨層遮蔽、fail-closed、載入期失敗 | ✅ | `registry.ts`、`load.ts`；`packages/nexus-core/src/registry.test.ts`（20KB） |
+| 同層報錯、跨層遮蔽、fail-closed、載入期失敗 | ✅ | `registry.ts`、`load.ts`；`packages/nexus-core/src/registry.test.ts`（20KB）。**2026-09-26 拍板照 dsh 分必掛與可少掛**（#751，未落地）：落地後，一列載不起來就整個起不來的只剩必掛的列，不在名單上的列照樣起來、印警告、那一列不掛；錯誤仍然在載入時報出來。計劃書 §1 那一條也加了註 |
 | `subagents` 沒有層、同名一律報錯 | ✅ | `registry.ts:112` |
 | 組裝點所有、plugin 不得提供：backend、工具順序、model、checkpointer／store、核准開關 | ✅ | `apps/harness/src/agent-factory.ts`（`CreateNexusAgentOptions`） |
 | 工具呈現順序自建（顯式清單＋rest entry＋字典序） | ✅ | `apps/harness/src/base-tools.ts`；`fold.ts` 的 `orderTools` |
