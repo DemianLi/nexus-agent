@@ -10,8 +10,19 @@
 import { tool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
 import type { CommandRegistrationPoint, PluginEntry } from '@nexus/core';
-import type { PendingApproval, PendingInput, WireClient } from '@nexus/wire';
-import { createWireClient, isApprovalPending } from '@nexus/wire';
+import type {
+  ConversationState,
+  Event,
+  PendingApproval,
+  PendingInput,
+  WireClient,
+} from '@nexus/wire';
+import {
+  createWireClient,
+  emptyConversation,
+  isApprovalPending,
+  reduceConversation,
+} from '@nexus/wire';
 import { createRegistry } from '@nexus/core';
 import { StateBackend } from 'deepagents';
 import { z } from 'zod';
@@ -147,6 +158,38 @@ export async function serveClient(running: {
 }): Promise<WireClient> {
   const cookie = await exchangeServeToken(running.authenticatedUrl);
   return createWireClient({ baseUrl: running.url, fetch: fetchWithCookie(cookie) });
+}
+
+/**
+ * 從下行折一輪，折到 root 那顆收尾的 `lifecycle`（`completed` 或 `failed`，含）為止。
+ *
+ * **判準是那顆 frame，不是 `status`**：人的話由 `inbox` 的 `claimed` 在開跑前畫，那一刻 `status` 還是 `idle`，
+ * 看 `status` 的話這一輪還沒開跑就收手了。停在核准點時 root 照樣發 `completed`，所以停在那裡也會回來；人按停止時
+ * 發的是 `failed`（帶 `aborted`）。下行在收尾之前斷掉就拋，不默默回半份。
+ *
+ * @param events - `openEvents` 開的那條下行，要在 `runStart` 之前開好。
+ * @param from - 從哪一份狀態折起。同一條下行上說第二句時，把上一句折完的傳進來。
+ * @returns 折到收尾那顆為止的狀態。
+ */
+export async function foldTurn(
+  events: AsyncIterator<Event>,
+  from: ConversationState = emptyConversation(),
+): Promise<ConversationState> {
+  let state = from;
+  for (;;) {
+    const next = await events.next();
+    if (next.done === true) throw new Error('下行在 root 收尾之前就斷了');
+    state = reduceConversation(state, next.value);
+    const data = next.value.params.data as { event?: unknown; graph_name?: unknown } | null;
+    if (
+      next.value.method === 'lifecycle' &&
+      next.value.params.namespace.length === 0 &&
+      data?.graph_name === 'root' &&
+      (data.event === 'completed' || data.event === 'failed')
+    ) {
+      return state;
+    }
+  }
 }
 
 /** fixture plugin 註冊的工具名。 */

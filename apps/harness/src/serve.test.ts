@@ -5,17 +5,11 @@ import {
 } from '@nexus/plugin-goal';
 import { PLAN_COMMAND_NAME, PLAN_ENTERED_MESSAGE } from '@nexus/plugin-plan-mode';
 
-import {
-  appendDecision,
-  appendHumanTurn,
-  emptyConversation,
-  reduceConversation,
-  uniformDecisions,
-} from '@nexus/wire';
+import { appendDecision, emptyConversation, reduceConversation, uniformDecisions } from '@nexus/wire';
 import type { ConversationState } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 import { documentedFixture } from './documented-fixture.js';
-import { approvalAt, serveClient } from './fixtures.js';
+import { approvalAt, foldTurn, serveClient } from './fixtures.js';
 import { DEFAULT_PORT, parseServeArgs, runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 
@@ -98,14 +92,7 @@ describe('起起來之後', () => {
     const events = await client.openEvents('web');
     await client.runStart('web', '把這句話回聲一次。');
 
-    let state: ConversationState = appendHumanTurn(emptyConversation(), '把這句話回聲一次。');
-    while (state.status === 'running') {
-      const next = await events.next();
-      if (next.done === true) {
-        break;
-      }
-      state = reduceConversation(state, next.value);
-    }
+    const state = await foldTurn(events);
 
     // 預設清單只有 echo，而 CLI 的假模型腳本第一輪就是呼叫它——「工具真的接上了」
     // 因此是這條線上看得到的事，不是靠讀 log 推的。
@@ -142,13 +129,8 @@ describe('serve 上的工具拋錯', () => {
         const events = await client.openEvents(threadId);
         let state: ConversationState = emptyConversation();
         for (const sentence of sentences) {
-          state = appendHumanTurn(state, sentence);
           await client.runStart(threadId, sentence);
-          while (state.status === 'running') {
-            const next = await events.next();
-            if (next.done === true) break;
-            state = reduceConversation(state, next.value);
-          }
+          state = await foldTurn(events, state);
           expect(state.status).toBe('idle');
         }
         return state;
@@ -261,7 +243,7 @@ describe('核准那份清單', () => {
     const events = await client.openEvents('gated');
     await client.runStart('gated', '把這句話回聲一次。');
 
-    let state: ConversationState = appendHumanTurn(emptyConversation(), '把這句話回聲一次。');
+    let state: ConversationState = emptyConversation();
     const drainUntil = async (done: (current: ConversationState) => boolean) => {
       while (!done(state)) {
         const next = await events.next();

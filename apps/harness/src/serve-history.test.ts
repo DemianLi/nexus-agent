@@ -12,13 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ConversationEntry, ConversationState, WireClient } from '@nexus/wire';
-import {
-  appendHumanTurn,
-  emptyConversation,
-  historyPath,
-  reduceAll,
-  reduceConversation,
-} from '@nexus/wire';
+import { emptyConversation, historyPath, reduceAll } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { AIMessage, ToolMessage } from '@langchain/core/messages';
@@ -27,13 +21,7 @@ import { toLoggedMessage } from '@nexus/core';
 
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
-import {
-  exchangeServeToken,
-  fetchWithCookie,
-  loopbackRequest,
-  serveClient,
-  TEST_BROWSER_AUTH,
-} from './fixtures.js';
+import { exchangeServeToken, fetchWithCookie, foldTurn, loopbackRequest, serveClient, TEST_BROWSER_AUTH } from './fixtures.js';
 import { HISTORY_PAGE_MAX_BYTES } from '@nexus/wire';
 
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
@@ -86,12 +74,7 @@ async function openAndSay(
   let state = reduceAll(emptyConversation(), page.result.events);
   const historyCount = state.entries.length;
   await client.runStart(threadId, prompt);
-  state = appendHumanTurn(state, prompt);
-  while (state.status === 'running') {
-    const next = await events.next();
-    if (next.done === true) break;
-    state = reduceConversation(state, next.value);
-  }
+  state = await foldTurn(events, state);
   await events.return?.(undefined);
   return { state, historyCount };
 }
