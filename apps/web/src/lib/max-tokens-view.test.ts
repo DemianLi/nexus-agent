@@ -61,5 +61,6 @@ describe('子代理撞到輸出上限的 task', () => {
     expect(subagentMaxTokensOf(task({ name: 'echo' }))).toBeUndefined();
     expect(subagentMaxTokensOf(task({ status: 'done', error: undefined }))).toBeUndefined();
     expect(subagentMaxTokensOf(task({ error: `${HEADLINE}，而且別的` }))).toBeUndefined();
+    expect(subagentMaxTokensOf(task({ error: `${HEADLINE}\n別的東西` }))).toBeUndefined();
   });
 });

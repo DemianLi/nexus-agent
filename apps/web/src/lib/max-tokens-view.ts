@@ -19,7 +19,9 @@ export const MAX_TOKENS_NOTICE = '（已達輸出上限，這一輪沒寫完）'
 
 /**
  * 抄自 `@nexus/core` 的 `max-tokens.ts`（web 不相依 core；`max-tokens-view.test.ts` 讀原始檔比對，那邊改了這裡要紅）。
- * 卡上的字是 `Error: ` 接這一句，寫到一半的那段另起一行接在 {@link PARTIAL_OUTPUT_HEADING} 後面；沒寫出字就只有前一句。
+ * 卡上的第一行是 core 的錯誤前綴接這一句，寫到一半的那段另起一行接在 {@link PARTIAL_OUTPUT_HEADING} 後面；沒寫出字
+ * 就只有第一行。**前綴只有一個主人**（`apps/harness/src/tool-error-prefix.test.ts`），所以這裡只抄理由、比第一行的
+ * 結尾，同 `question-view.ts` 的 `WITHDRAWN_TOOL_REASON`。
  */
 export const SUBAGENT_MAX_TOKENS_REASON = 'subagent run hit its token limit before finishing';
 
@@ -33,7 +35,6 @@ export const SUBAGENT_MAX_TOKENS_TEXT = '子代理寫到輸出上限，沒寫完
 export const SUBAGENT_PARTIAL_TEXT = '以下是它寫到一半的內容：';
 
 const TASK_TOOL = 'task';
-const HEADLINE = `Error: ${SUBAGENT_MAX_TOKENS_REASON}`;
 
 /**
  * 這張卡是不是子代理撞到輸出上限而失敗的 `task`。
@@ -45,7 +46,11 @@ export function subagentMaxTokensOf(entry: ToolEntry): { readonly partial: strin
   if (entry.name !== TASK_TOOL || entry.status !== 'failed' || entry.error === undefined) {
     return undefined;
   }
-  if (entry.error === HEADLINE) return { partial: '' };
-  const lead = `${HEADLINE}\n${PARTIAL_OUTPUT_HEADING}\n`;
-  return entry.error.startsWith(lead) ? { partial: entry.error.slice(lead.length) } : undefined;
+  const newline = entry.error.indexOf('\n');
+  const headline = newline < 0 ? entry.error : entry.error.slice(0, newline);
+  if (!headline.endsWith(SUBAGENT_MAX_TOKENS_REASON)) return undefined;
+  if (newline < 0) return { partial: '' };
+  const rest = entry.error.slice(newline + 1);
+  const lead = `${PARTIAL_OUTPUT_HEADING}\n`;
+  return rest.startsWith(lead) ? { partial: rest.slice(lead.length) } : undefined;
 }
