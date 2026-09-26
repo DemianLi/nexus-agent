@@ -677,12 +677,12 @@ export class ThreadPump {
    *
    * middleware 往 state 塞一則 `HumanMessage` 時（工作區指令的基線、重複提醒），LangGraph 照樣把它當成
    * 一則訊息串出來：`message-start role: "human"` ＋ 逐段 `content-block-delta`。而 `@nexus/wire` 的
-   * `reduceMessage` 看到 `role: "human"` 就開一顆使用者泡泡——它的註解寫著「**`human` 只有歷史送**：
-   * 線上不回聲人打的字」，那句話一直是**假設**，不是有人在擋。基線一來就被打破：畫面上每個會話開頭都會多
+   * `reduceMessage` 看到 `role: "human"` 就開一顆使用者泡泡——它的註解寫著「**`human` 只有歷史送**」，
+   * 那句話一直是**假設**，不是有人在擋。基線一來就被打破：畫面上每個會話開頭都會多
    * 一顆幾百個位元組的 `<system-reminder>` 泡泡，而那是給模型看的東西，不是誰講的話。
    *
-   * **所以這裡把那個假設變成護欄**：線上一則 human 訊息都不送。人剛打的那句走 `appendHumanTurn`，
-   * 重播的那幾句走歷史（`conversation-history.ts`，它同樣不畫外掛注入的 `user/message`）——兩條都不經過
+   * **所以這裡把那個假設變成護欄**：線上一則 human 訊息都不送。人剛打的那句走 `inbox` 的 `claimed`（開跑那一刻
+   * 由 `#spliceInbox` 推），重播的那幾句走歷史（`conversation-history.ts`，它同樣不畫外掛注入的 `user/message`）——兩條都不經過
    * 這裡。認的是 `run_id`：`content-block-delta` 與 `message-finish` 上沒有 `role`。
    */
   readonly #injectedMessages = new Set<string>();
