@@ -158,7 +158,7 @@ function useControl(): RightSidebarControl {
   return control;
 }
 
-/** 會話區右上角的開關鈕（#640 決定 2；會話標頭做好後搬進去）。 */
+/** 會話標頭那一列右端的開關鈕（#640 決定 2；#655 確認不用再搬）。 */
 export function RightSidebarToggle({ className }: { className?: string }) {
   const { layout, isMobile, toggle, update } = useControl();
   const label = layout.open ? '收起右側欄' : '打開右側欄';

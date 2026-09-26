@@ -77,6 +77,7 @@
 | 3 | 主題切換 | 自建（§6） | — |
 | 6 | 會話列表 | shadcn `SidebarMenu*` | `thread-list.tsx` 留邏輯、換外殼 |
 | 7 | 空白狀態 hero | 自建（shadcn 基礎件＋breathing orb） | — |
+| 8 | 會話標頭 | 自建；標題規則在 `lib/thread-title.ts`（標頭、瀏覽器分頁標題、側欄列表共用），換字不做動效 | 在 `App.tsx` |
 | 9 | 歷史往回捲 | shadcn `message-scroller`（帶 `@shadcn/react`） | — |
 | 10／11 | 使用者／助理訊息 | shadcn `message`＋`bubble`；**markdown 自建**：`mdast-util-from-markdown`＋`micromark-extension-gfm`＋增量解析＋`cjkFriendlyStrong` | `transcript.tsx` 留（歸屬、狀態字面） |
 | 13 | 工具卡 | 自建，shadcn `collapsible`＋`badge`，直接吃四格 `ToolEntry.status`；浮起來（material），輸入輸出放內層 stage | 在 `transcript.tsx` |
@@ -222,7 +223,7 @@
   - item 帶 `content-visibility:auto`（paint containment），會把卡片外陰影與面板光暈切成直角。原型直接關掉；實作要另外保住長列表的效能。
 - 側欄的 cookie 與 `history.replaceState` 在沙盒 iframe 裡可能拋錯（原型包了 try/catch；產品頁面不在 iframe 裡，視情況處理）。
 - **右側欄**（[#640](https://github.com/DemianLi/nexus-agent/issues/640)，`components/right-sidebar.tsx`）：
-  - 一格停靠＋分頁，住著改動比對與交付預覽；不做分格、浮窗、拖放、復原。開關鈕在會話區右上角，會話標頭做好後搬進去。
+  - 一格停靠＋分頁，住著改動比對與交付預覽；不做分格、浮窗、拖放、復原。開關鈕在會話標頭那一列的右端（#655 做標題時確認它已經在標頭上，不用再搬）。
   - 1024 以上停靠，會話區讓出寬度，左緣可以拖寬：會話區至少 480、面板至少 320。1024 寬、左側欄展開時兩個下限放不下，面板先縮到 320，再輪到會話區讓。Esc 不做事。
   - 1024 以下全螢幕覆蓋，Esc 或收起鈕關掉，分頁留著；**載入時一律從收起開始**，不照存下來的「開著」蓋住對話。
   - 改動一輪一個分頁、交付一個檔一個分頁；分頁第一次被選中才讀內容。版面每條會話存在 `localStorage`，最近 50 條。

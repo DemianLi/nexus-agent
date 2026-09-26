@@ -38,6 +38,7 @@ import { STOPPED_QUESTION_TEXT, stoppedOnQuestion } from '@/lib/question-view';
 import { canRunSlash, canSendText } from '@/lib/queue-view';
 import { recallThread, rememberThread } from '@/lib/remembered-thread';
 import type { ThreadChoice } from '@/lib/remembered-thread';
+import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
 
 /**
  * 接回上一次那條 thread 時講的話。
@@ -215,6 +216,19 @@ function ConversationView({
   // **歷史還沒折完（`connected` 還沒翻）就當成講過**：那時分不出來，而這顆按鈕是停在核准點、連不上的 thread
   // 唯一的出口——寧可多開一條，也不能把人留在原地。
   const engaged = !conversation.connected || conversation.state.entries.length > 0;
+  const title = conversation.state.title;
+  const heading = headerTitle(
+    title,
+    conversation.state.entries.length === 0,
+    conversation.connected,
+  );
+  // 瀏覽器分頁標題（Q2）：照 dsh `DocumentTitle`，卸掉時還原成產品名。
+  useEffect(() => {
+    document.title = documentTitle(title);
+    return () => {
+      document.title = PRODUCT_TITLE;
+    };
+  }, [title]);
   const [draft, setDraft] = useState('');
   // 關掉之後留著最後那一份：退場動效那 150ms 裡框裡的字不能先消失。
   const lastDialog = useRef(conversation.feedbackDialog);
@@ -267,6 +281,7 @@ function ConversationView({
       <AppSidebar
         client={client}
         currentThreadId={threadId}
+        currentTitle={title}
         onNewConversation={() => onNewConversation(engaged)}
         onPick={onSwitch}
       />
@@ -276,14 +291,17 @@ function ConversationView({
         <header className="flex h-14 shrink-0 items-center gap-2 border-b px-2">
           {/* 觸控目標 44px，1024 以上回到 36（§9）。 */}
           <SidebarTrigger className="size-11 rounded-full lg:size-9" />
-          <h1 className="min-w-0 flex-1 truncate text-sm font-medium">nexus-agent</h1>
+          {/* 換字不做動效（Q4）；截斷時 `title` 帶全文。 */}
+          <h1 className="min-w-0 flex-1 truncate text-sm font-medium" title={heading}>
+            {heading}
+          </h1>
           {/* #574：這條對話累計燒了多少（root 日誌的總帳，不是畫面加總）。 */}
           <SessionUsage
             tokenUsage={conversation.state.tokenUsage}
             sessionStats={conversation.state.sessionStats}
           />
           <ThemeToggle className="size-11 rounded-full lg:size-9" />
-          {/* 會話區右上角（#640 決定 2）；會話標頭做好之後搬進去。 */}
+          {/* 會話標頭那一列的右端（#640 決定 2；#655 確認不用再搬）。 */}
           <RightSidebarToggle className="size-11 rounded-full lg:size-9" />
         </header>
 

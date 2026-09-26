@@ -5,7 +5,7 @@ import type {
   UplinkResult,
   WireQueuedInput,
 } from '@nexus/wire';
-import { INBOX, QUEUE_ITEM_NOT_FOUND } from '@nexus/wire';
+import { INBOX, QUEUE_ITEM_NOT_FOUND, TITLE } from '@nexus/wire';
 
 /**
  * 假 client 的下行：開線時先吐一批事先備好的 frame，之後還能再推（#645）。
@@ -51,15 +51,33 @@ export function fakeDownlink() {
     for (const listener of listeners.get(threadId) ?? []) listener(events);
   }
 
-  function inboxFrame(payload: InboxPayload): Event {
+  function pushedFrame(method: string, id: string, data: unknown): Event {
     const current = seq++;
     return {
       type: 'event',
       seq: current,
-      event_id: `inbox:${current}`,
-      method: 'custom',
-      params: { namespace: [], timestamp: 0, data: { name: INBOX, payload } },
+      event_id: `${id}:${current}`,
+      method,
+      params: { namespace: [], timestamp: 0, data },
     } as Event;
+  }
+
+  function customFrame(name: string, payload: unknown): Event {
+    return pushedFrame('custom', name, { name, payload });
+  }
+
+  /** root 那一輪的生命週期（開跑／收尾）。 */
+  function lifecycleFrame(event: 'running' | 'completed'): Event {
+    return pushedFrame('lifecycle', 'lifecycle', { event, graph_name: 'root' });
+  }
+
+  function inboxFrame(payload: InboxPayload): Event {
+    return customFrame(INBOX, payload);
+  }
+
+  /** 會話標題（#649）：伺服器在第一句人話開跑時推，#650 之後模型產生的標題會再推一顆。 */
+  function titleFrame(title: string): Event {
+    return customFrame(TITLE, { title });
   }
 
   /**
@@ -102,5 +120,5 @@ export function fakeDownlink() {
     return { type: 'success', id: 4, result: { accepted: true } };
   }
 
-  return { open, push, accept, update, inboxFrame };
+  return { open, push, accept, update, inboxFrame, titleFrame, lifecycleFrame };
 }

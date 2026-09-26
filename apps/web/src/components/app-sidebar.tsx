@@ -14,11 +14,13 @@ import { Sidebar, SidebarContent, SidebarHeader, useSidebar } from '@/components
 export function AppSidebar({
   client,
   currentThreadId,
+  currentTitle,
   onNewConversation,
   onPick,
 }: {
   readonly client: WireClient;
   readonly currentThreadId: string;
+  readonly currentTitle: string | null;
   readonly onNewConversation: () => void;
   readonly onPick: (threadId: string) => void;
 }) {
@@ -58,6 +60,7 @@ export function AppSidebar({
           <ThreadList
             client={client}
             currentThreadId={currentThreadId}
+            currentTitle={currentTitle}
             onPick={(threadId) => {
               setOpenMobile(false);
               onPick(threadId);
