@@ -51,8 +51,13 @@ export interface ToolOutput {
 export function toolOutput(entry: ToolEntry): ToolOutput | undefined {
   if (entry.text === undefined || entry.text === '') return undefined;
   if (entry.status === 'failed' && entry.error !== undefined) return undefined;
-  const lines = contentLines(entry.text);
+  return outputOf(entry.text);
+}
+
+/** 一段結果文字照 {@link OUTPUT_MAX_LINES} 切。子代理撞到上限時寫到一半的那段也走這裡（#608）。 */
+export function outputOf(text: string): ToolOutput {
+  const lines = contentLines(text);
   const { head, tail, hidden } = cappedRows(lines, OUTPUT_MAX_LINES);
-  if (hidden === 0) return { head: entry.text, tail: '', omitted: 0 };
+  if (hidden === 0) return { head: text, tail: '', omitted: 0 };
   return { head: head.join('\n'), tail: tail.join('\n'), omitted: hidden };
 }
