@@ -512,7 +512,8 @@ export interface AwaitingInput {
  *
  * @param events - 從一輪的開頭切下來的一段（見 {@link isPageStart}）。
  * @param awaitingInput - 有給就是這一段的最後一輪停下來等人，**而且這條 thread 現在還掛著那幾顆中斷**。那幾張卡
- *   照上面分兩種畫，都不收掉；卡本身（核准的按鈕）補不回來——中斷的酬載只在發出去的那一顆 frame 上。行程重開過的話
+ *   照上面分兩種畫，都不收掉。面板（核准的按鈕、提問）不從這裡來——中斷的酬載只在發出去的那一顆 frame 上，由 pump
+ *   在下行接上時補送（`ThreadPump.subscribe`，[#728](https://github.com/DemianLi/nexus-agent/issues/728)）。行程重開過的話
  *   中斷已經不在了（它在 checkpointer 裡），那幾張照即時那條規則收成失敗。
  */
 export function historyFrames(
