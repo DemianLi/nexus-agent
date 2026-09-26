@@ -300,7 +300,7 @@
 - **呼叫者必須知道、介面沒表達的事**：changes/{summary,diff} 與 deliverables/{file,download,bytes} 的呼叫者必須知道：查詢參數名與格式（?seq=、?index=…）、每個拒絕理由對到哪個 HTTP 狀態碼（例如 not-text 對 422）、回應 body 的形狀。wire 只匯出路徑函式與 DTO，狀態碼只寫在 deliverables.ts 的散文裡；
 - **dsh 的形狀**：changes 路由：ui-deliverables/src/changes.ts 一份模組同時給 server 與 client——含查詢參數的 URL builder（changesSummaryUrl 用 URLSearchParams 帶 sessionId 與 seq）與回應 validator（isChangesSummary）；　`dsh:packages/client/ui-deliverables/src/changes.ts:111`、`dsh:packages/client/ui-deliverables/src/changes.ts:112`
 - **建議**：加深 wire 的路由模組，讓它吸收契約而不只是路徑：(1) 每條 GET 一個含查詢參數的 URL builder（照 dsh 的 changes.ts），harness 的解析與 web 的拼接共用同一組參數名；(2) 拒絕理由對狀態碼的 `Record<DeliverableRefusal, number>` 搬進 wire，harness 用它回應、web 用反查表判讀——或照 dsh 在回應 body 帶理由碼，web 比碼不比狀態碼；(3) 回應 validator（isChangesSummary 等）放進 wire，兩端共用；
-- **追蹤**：專卡 #684（盤點後開）。交付檔三條的 builder 與 validator 等讀檔載體拍板；把狀態碼表搬進 wire、把 GET 包進 WireClient 超出 dsh，卡裡寫明不做。
+- **追蹤**：專卡 #684（盤點後開）。交付檔三條的 builder 與 validator 等讀檔載體拍板；把狀態碼表搬進 wire、把 GET 包進 WireClient 超出 dsh，卡裡寫明不做。2026-09-26 拍板照 dsh 改走命令通道：#684 只做改動紀錄兩條，交付三條改由 #747 換傳送方式。
 - **證據**：`packages/nexus-wire/src/workspace-changes.ts:110`、`packages/nexus-wire/src/deliverables.ts:115`、`apps/harness/src/wire-handler.ts:409`
 - **否定搜尋**：git grep -n "createChangesSummaryStore\|createChangesDiffStore\|createDeliverableFileStore\|createDeliverableDownload\|failureOf" -- apps/harness packages（零命中：沒有測試跨接 web 的路由 store 與真 handler）；git grep -n "createWireHandler\|startWireServer\|@nexus/harness" -- apps/web（只有註解）（另有 2 條）
 - **驗證意見**：dsh_shape 寫的每一句都有原始碼支撐，所以 dsh_shape_ok 填 true；但它只講了對 finding 有利的那一半。dsh 的 changes.ts 確實共用路徑常數、client 端含查詢參數的 URL builder 與回應 validator；但 dsh 自己的 GET 路由有同一種耦合：server 端 present-open.ts 逐條路由手解 query.get('seq')／'index'（三處，沒有共用 parser）；
@@ -362,7 +362,7 @@
 - **呼叫者必須知道、介面沒表達的事**：WorkspaceChanges 服務（summary／diff）的回傳型別由傳輸層 @nexus/wire 定義，所以這個 plugin 是 18 個 plugin 裡唯一不只相依 @nexus/core 的一個；wire 那側為了 web 改 DTO，生產端的 plugin 就得跟著改，而這件事在 plugin 的介面上看不出來。
 - **dsh 的形狀**：dsh 的 WorkspaceChangesSummary、WorkspaceFileDiff 與服務定義都在 packages/deliverables/workspace-changes/src/types.ts，連事件都用 declare module 在同一檔擴充；　`dsh:packages/client/ui-deliverables/src/changes.ts:3`、`dsh:packages/deliverables/workspace-changes/src/types.ts:86`
 - **建議**：二擇一，而且要寫下來：（甲，照 dsh）把 WorkspaceChangedFile／WorkspaceChangesSummary／WorkspaceDiffHunk／WorkspaceFileDiff 搬進 plugin 的 type-only 子路徑（例如 @nexus/plugin-workspace-changes/types，零執行期相依），wire 或 web 以 import type 取用；wire 保留自己的 WORKSPACE_CHANGES 事件名與 WorkspaceChangesPayload。
-- **追蹤**：專卡 #689（盤點後開）。照 dsh 搬家與登記成偏離兩條路都列在卡上，由 demian 拍板。
+- **追蹤**：專卡 #689（盤點後開）。照 dsh 搬家與登記成偏離兩條路都列在卡上，由 demian 拍板。2026-09-26 拍板照 dsh 搬回外掛（wire 以 export type 轉出，web 不動）。
 - **證據**：`.docs/development-plan.md:192`、`packages/nexus-plugin-workspace-changes/package.json:28`、`packages/nexus-plugin-workspace-changes/src/index.ts:65`
 - **否定搜尋**：for p in packages/nexus-plugin-*/package.json; do python3 -c "import json;d=json.load(open('$p'));print([k for k in d.get('dependencies',{}) if k.startswith('@nexus')])"; done → 只有 workspace-changes 有 @nexus/wire；rtk proxy git grep -n "@nexus/wire" -- 'packages/*/package.json' 'apps/*/package.json' → 四行：apps/harness/package.json:62、apps/web/package.json:19、packages/nexus-plugin-workspace-changes/package.json:28、packages/nexus-wir
 - **驗證意見**：獨立重推：逐一讀 20 個套件的 package.json，18 個 plugin 裡只有 workspace-changes 多相依 @nexus/wire，而且 index.ts、recorder.ts、compare.ts 三處都是 import type；wire 對 core 只有 devDependency。dsh 的方向核實：ui-deliverables 在 devDependencies 相依 dsh-workspace-changes，從它的 ./types 子路徑 type-only 取 DTO。要更正一點：這不是隨手、沒登記的選擇。
@@ -373,7 +373,7 @@
 - **呼叫者必須知道、介面沒表達的事**：每個套件都匯出 X_CAPABILITY 並在 apply 裡 provide，註解說「要相依它的 plugin 把這個字串放進自己的 requires」；但全 repo 的非測試程式碼裡，requires 只出現一次（sandbox-policy 要的是服務），capabilities.has 只有 present 查 WORKSPACE_CAPABILITY。這六個名字是只有一個角色的接縫。
 - **dsh 的形狀**：dsh 房規：A capability seam comprises Service Definition / Service Provider / Consumer roles，而且 never one role。dsh 的 skills 是服務，skill-badge、skill-filesystem、skill-office、tool-skill 都 inject ['skills']。　`dsh:AGENTS.md:138`、`dsh:packages/skill/skill-badge/src/index.ts:55`
 - **建議**：照 dsh 的三角色規則：沒有消費者的能力名先不發（刪掉 provide 與匯出常數、以及只釘它的那條測試），等第一個 requires 出現時再由那一刀一起加。要保留的話，至少把註解從「要相依它的 plugin 把這個字串放進 requires」改成「目前沒有消費者」，免得讀者以為那是一條在用的接縫。
-- **追蹤**：專卡 #690（盤點後開）。同形的 echo、agent-instructions、plan-mode 也納入，共八個；validation 那一個歸 #691。
+- **追蹤**：專卡 #690（盤點後開）。同形的 echo、agent-instructions、plan-mode 也納入，共八個；validation 那一個歸 #691。2026-09-26 拍板照 dsh 刪（沒有 repo 外的使用方）。
 - **證據**：`packages/nexus-plugin-memory/src/index.ts:37`、`packages/nexus-plugin-memory/src/index.ts:36`、`packages/nexus-plugin-skills/src/index.ts:95`
 - **否定搜尋**：rtk proxy git grep -n "capabilities.has(" -- packages apps → 非測試只有 load.ts:259、registry.ts:1044、present/index.ts:253（WORKSPACE_CAPABILITY）；rtk proxy git grep -n "requires:" -- 'packages/*/src/*.ts' 'apps/*/src/*.ts' 'apps/*/src/**/*.ts' ':!*.test.ts' → 只有 sandbox-policy/index.ts:167，其餘是 load.ts:239、registry.ts:290 的註解與 plugin.ts:139 的 schema（另有 4 條）
 - **驗證意見**：重跑否定 grep：git grep -n "capabilities\.\(has\|providers\)(" -- packages apps ':!*.test.ts' 只命中 load.ts:259、registry.ts:1044-1045 的轉手與 present:253（WORKSPACE_CAPABILITY）。git grep -nE "requires\s*:" 排除測試後，只有 sandbox-policy:167 加上註解與 schema。yml、yaml、json 裡沒有任何 requires。
@@ -395,7 +395,7 @@
 - **呼叫者必須知道、介面沒表達的事**：sandbox-policy 的委派快照只在 resolveToolName(request) === 'task' 時才拍，workspace-changes 只擷取名字是 write_file／edit_file／delete 的呼叫；兩者都靠字面值對上 deepagents 的工具名，而那份名單唯一的守衛（baseline.test.ts）守的是 harness 的 base-tools.ts，不是這些副本。
 - **dsh 的形狀**：dsh 的委派快照不靠工具名：委派邊界本身（subagent 的 in-process driver 與 continuation）在第一個 await 前呼叫 captureDelegatedPolicyOverrides(parent)，由它透過 ctx.get('sandboxPolicy') 向政策服務要當下的覆寫。方向是委派者 → 政策，政策不必認得委派工具。　`dsh:packages/subagent/subagent/src/child-agent.ts:253`、`dsh:packages/subagent/subagent-in-process-driver/src/index.ts:119`
 - **建議**：在 @nexus/core 匯出一份基座工具名（把 max-tokens.ts 的 TASK_TOOL 升成公開常數，檔案工具那三個一起），sandbox-policy、workspace-changes、thread-pump、base-tools 都改讀它，baseline.test.ts 的守衛因此一次涵蓋所有讀者；wire 沒有對 core 的執行期相依，保留字面值並靠既有測試。委派快照的方向維持現狀即可——那是被迫的（見偏離註記）。
-- **追蹤**：專卡 #692（盤點後開）。web 手列名單漏的 delete 歸 #672。
+- **追蹤**：專卡 #692（盤點後開）。web 手列名單漏的 delete 歸 #672。2026-09-26 主線依 AGENTS.md 判定照 dsh 不收成一份，#692 關卡（not planned）；守衛說法那一句註解的更正併進 #743。
 - **證據**：`packages/nexus-plugin-sandbox-policy/src/index.ts:87`、`packages/nexus-plugin-sandbox-policy/src/index.ts:218`、`packages/nexus-core/src/max-tokens.ts:85`
 - **否定搜尋**：rtk proxy git grep -nF "'task'" -- packages apps（排除 .test.）→ base-tools.ts:72、thread-pump.ts:543、max-tokens.ts:85、sandbox-policy/index.ts:87、wire/conversation.ts:923；rtk proxy git grep -nE "export const (TASK_TOOL|DELEGATION_TOOL)" -- packages apps → 零命中（exit=1），沒有匯出的共用常數
 - **驗證意見**：副本數核實：git grep -nF "'task'" -- packages apps 排除測試後，命中 base-tools.ts:72、thread-pump.ts:543、max-tokens.ts:85、sandbox-policy:87、wire conversation.ts:923；git grep -nE "export const (TASK_TOOL|DELEGATION_TOOL)" 零命中。node_modules 裡 deepagents 1.13.1 的 index.d.ts 確實沒有匯出工具名常數。
