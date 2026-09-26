@@ -435,8 +435,10 @@ pnpm --filter @nexus/harness run serve --patch src/approval.patch.yml
 這一份把 `echo` 與 `write_file` 標起來，假模型的腳本正好兩個都會呼叫——一條對話會停兩次，核准或
 拒絕都繼續得下去。**介面一批只送一個決定**（`uniformDecisions`）：逐筆按是介面還沒做，不是底下擋著。
 
-`exit_plan_mode` 也是需要核准的工具，所以「規劃 → 交計劃 → 有人按批准 → 開始動手」整條路只有
-`serve` 加 `--live` 走得完——假模型的腳本寫死在 `cli.ts`，它不會呼叫 `exit_plan_mode`。
+`exit_plan_mode` 不走核准：它問一題「同意這份計劃並離開計劃模式？」，計劃全文附在題目裡，選「繼續規劃」
+可以寫意見給模型（#652，照 dsh）。所以「規劃 → 交計劃 → 有人按同意 → 開始動手」整條路只有 `serve` 加
+`--live` 走得完——假模型的腳本寫死在 `cli.ts`，它不會呼叫 `exit_plan_mode`；CLI 沒有人回答問題，
+`exit_plan_mode` 會拒絕並請你打 `/plan off`。
 
 ## 評測
 

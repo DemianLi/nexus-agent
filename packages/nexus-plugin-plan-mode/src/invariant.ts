@@ -10,20 +10,23 @@
  * state 裡，這一節原本的標題是「檢不到的那一條」。
  *
  * **但看得到的只有形狀，照 dsh 的 plan-mode 配套入口**（`packages/plan/plan-mode/src/invariant.ts`）：
- * `plan/mode` 是整份值的單顆事件，選擇在兩輪之間當場提交（dsh 另有一條輪中排隊、在步邊界提交
- * 的路，我們沒有），**沒有 turn 包圍關係可以檢**，剩下的就是 `active` 必須是布林。
+ * `plan/mode` 是整份值的單顆事件。`/plan` 的選擇在兩輪之間當場提交；`exit_plan_mode` 的同意照 dsh 排到
+ * 下一步之前才提交（[#652](https://github.com/DemianLi/nexus-agent/issues/652)），那一格待關只活在記憶體裡，
+ * 日誌上看不到排著的那一刻。所以**沒有 turn 包圍關係可以檢**，剩下的就是 `active` 必須是布林。
  *
  * 這個 package 最想檢的兩條——「批准之後模式必定關閉」「模式外不會有批准」——**仍然檢不到**，
  * 理由換了：模式在日誌上了，工具執行也在了（`tool/call`／`tool/result`，
- * [#264](https://github.com/DemianLi/nexus-agent/issues/264)），**批准仍然不在**（攔截索引第 4 格
- * 的紀錄差：核准一顆事件都沒有）。一顆 `exit_plan_mode` 的成功結果分不出是人批准了、還是
- * 閘門根本沒問，所以那兩條照舊證在別處，三樣都是 dsh 明說的「型別、載入或
- * 單元測試關注點」：
+ * [#264](https://github.com/DemianLi/nexus-agent/issues/264)），**人的答案仍然不在**：`exit_plan_mode`
+ * 從 #652 起走提問通道，而提問的答覆同核准一樣一顆事件都沒有（resume 只留一顆 `turn/start`）。本體只有
+ * 「同意」那一條回成功，但那是程式碼保證的、不是日誌看得到的，所以那兩條照舊證在別處，三樣都是 dsh
+ * 明說的「型別、載入或單元測試關注點」：
  *
  * - **模式狀態的讀寫**由 `index.test.ts` 與 `apps/harness/src/plan-mode.test.ts` 驗，
- *   後者跑的是真的 agent 迴圈——獲准之後日誌上多一顆 `plan/mode`、下一步的 prompt 沒有指引。
+ *   後者跑的是真的 agent 迴圈——同意之後日誌上多一顆 `plan/mode`（落在工具結果之後）、下一步的
+ *   prompt 沒有指引。
  * - **工具撞名**歸 `PluginRegistry` 的註冊期擋（同一個 `exit_plan_mode` 註冊兩次當場拋）。
- * - **middleware 的順序**（`prepend` 要排在核准閘門之前）歸 `fold.ts` 與它的測試。
+ * - **middleware 的順序**（`prepend` 要排在核准閘門之前，別人的閘門才攔不到模式外的呼叫）歸 `fold.ts`
+ *   與它的測試。
  *
  * ## 檢得到的那一條：`/plan` 的參數契約
  *

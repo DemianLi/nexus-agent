@@ -145,6 +145,8 @@ function fakeClient(
   const rejected = async () => ({ kind: 'rejected' as const, message: '這一檔沒有接' });
   const downlink = fakeDownlink();
   const client: WireClient = {
+    // 列檔（#651）沒有接。spread 的理由見 App.test.tsx 的 UNWIRED_FILE_REFERENCES。
+    ...{ fileReferences: rejected },
     openEvents: async (threadId) => {
       const stream = downlink.open(threadId, []);
       return (async function* delayed() {

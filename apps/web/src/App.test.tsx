@@ -66,6 +66,15 @@ afterEach(() => {
  * 是假的、frame 是手餵的。
  */
 
+/**
+ * 列檔（`@` 引用，#651）這一檔沒有接。**用 spread 放進 `WireClient` 字面量**：`WireClient` 還沒有 `fileReferences`
+ * 時，直接寫成屬性會被當成多出來的屬性（TS2353），spread 進來的不做這個檢查；#651 讓它變成必填之後照樣成立。
+ * #651 合了之後可以收成一般屬性。
+ */
+const UNWIRED_FILE_REFERENCES = {
+  fileReferences: async () => ({ kind: 'rejected' as const, message: '這一檔沒有接列檔' }),
+};
+
 let seq = 0;
 
 function frame(method: string, namespace: readonly string[], data: unknown): Event {
@@ -147,6 +156,7 @@ function fakeClient(
   const cancels: string[] = [];
   const downlink = fakeDownlink();
   const client: WireClient = {
+    ...UNWIRED_FILE_REFERENCES,
     slashList: async () => ({ kind: 'ok', commands: slash.commands ?? [] }),
     slashRun: async (_threadId, line) => {
       slashed.push(line);
@@ -320,6 +330,7 @@ describe('對話介面', () => {
 
   it('連不上就說連不上，不是一片空白', async () => {
     const client: WireClient = {
+      ...UNWIRED_FILE_REFERENCES,
       openEvents: async () => {
         throw new Error('下行開不起來：502');
       },
