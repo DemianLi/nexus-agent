@@ -1,8 +1,8 @@
 import type { ConversationState, DeliverablesPresentedPayload, Event } from '@nexus/wire';
 import {
-  appendHumanTurn,
   DELIVERABLES_PRESENTED,
   emptyConversation,
+  INBOX,
   reduceAll,
   WORKSPACE_CHANGES,
 } from '@nexus/wire';
@@ -88,11 +88,23 @@ function delivered(payload: Omit<DeliverablesPresentedPayload, 'seq'>, seq = 0):
   return frame('custom', [], { name: DELIVERABLES_PRESENTED, payload: { ...payload, seq } });
 }
 
+let claims = 0;
+
+/** 人的那一句：伺服器領走開跑時推的 `inbox`（`claimed`），接著才是 `running`。 */
+function asked(text: string): Event {
+  claims += 1;
+  return frame('custom', [], {
+    name: INBOX,
+    payload: { items: [], claimed: { id: `q-${claims}`, text } },
+  });
+}
+
 /** 一輪：frame 照線上的順序取 seq，所以本體要在 `running` 之後才建（先建的 seq 比較小，會被當成重複丟掉）。 */
 function turn(text: string, events: () => Event[], from = emptyConversation()): ConversationState {
+  const claim = asked(text);
   const start = running();
   const body = events();
-  return reduceAll(appendHumanTurn(from, text), [start, ...body, completed()]);
+  return reduceAll(from, [claim, start, ...body, completed()]);
 }
 
 /** 每一格的種類；交付卡寫成 `卡:路徑,路徑`，改動卡寫成 `改:seq`。 */

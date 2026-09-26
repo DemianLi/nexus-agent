@@ -1,5 +1,5 @@
 import type { Event } from '@nexus/wire';
-import { appendHumanTurn, emptyConversation, reduceAll } from '@nexus/wire';
+import { emptyConversation, INBOX, reduceAll } from '@nexus/wire';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -34,8 +34,24 @@ const delta = (id: string, value: Record<string, unknown>) =>
 const finish = (id: string) =>
   frame('messages', ROOT, { event: 'message-finish', reason: 'stop', run_id: id });
 
+/**
+ * 人問的那一句：伺服器領走開跑時推的 `inbox`（`claimed`）。**不帶 `seq`**：各測試的 frame 在呼叫 {@link show} 之前就
+ * 取好了 `seq`，這一顆若另取一個比它們大的，後面那些會被當成重複丟掉；沒有 `seq` 的 frame 不推進 `lastSeq`。
+ */
+const asked = (text: string): Event =>
+  ({
+    type: 'event',
+    event_id: 't:asked',
+    method: 'custom',
+    params: {
+      namespace: [],
+      timestamp: 0,
+      data: { name: INBOX, payload: { items: [], claimed: { id: 'q', text } } },
+    },
+  }) as Event;
+
 function show(events: Event[]) {
-  const state = reduceAll(appendHumanTurn(emptyConversation(), '問'), events);
+  const state = reduceAll(emptyConversation(), [asked('問'), ...events]);
   render(<Transcript state={state} isFresh={() => false} />);
   return state;
 }
