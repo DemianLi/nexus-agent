@@ -258,3 +258,63 @@ describe('換手層上的提問面板', () => {
     expect(await axeViolations(document.body)).toEqual([]);
   });
 });
+
+/** 照 #652 的生產者（`exit_plan_mode`）問的那一題。 */
+const PLAN_REVIEW: QuestionItem = {
+  id: 'plan-review',
+  header: '計劃審核',
+  question: '同意這份計劃並離開計劃模式？',
+  detail: '# 改登入頁\n\n先做**錯誤訊息**：\n\n- 改成中文\n- 補測試',
+  options: [{ label: '同意' }, { label: '繼續規劃' }],
+  intent: { kind: 'plan-review', approve: '同意', callId: 'call-1' },
+};
+
+const detailOf = () => document.querySelector('[data-slot="question-detail"]');
+
+describe('題目帶 detail（計劃審核，#652；專用面板是 #654）', () => {
+  it('計劃全文畫成 markdown，放在題目那一組裡、選項前面', () => {
+    renderPanel(question([PLAN_REVIEW]));
+    const group = screen.getByRole('group', { name: /同意這份計劃並離開計劃模式？/ });
+    const detail = detailOf();
+    expect(detail).not.toBeNull();
+    expect(group.contains(detail)).toBe(true);
+    expect(within(group).getByRole('heading', { name: '改登入頁' })).toBeTruthy();
+    expect(
+      within(group)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['改成中文', '補測試']);
+    expect(detail!.querySelector('strong')?.textContent).toBe('錯誤訊息');
+    expect(detail!.textContent).not.toContain('**');
+    // 在選項前面：先讀計劃，再選。
+    const firstChoice = radio('同意');
+    expect(detail!.compareDocumentPosition(firstChoice) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  it('答法跟一般提問一樣：送回選項標籤，不看 intent', () => {
+    const answers = renderPanel(question([PLAN_REVIEW]));
+    fireEvent.click(radio('同意'));
+    fireEvent.click(screen.getByRole('button', { name: '送出答案' }));
+    expect(answers).toEqual([[{ id: 'plan-review', selected: ['同意'] }]]);
+  });
+
+  it('沒有 detail、或只有空白的，不畫那一塊', () => {
+    renderPanel(question([DAY, { ...NAME, detail: '  \n ' }]));
+    expect(detailOf()).toBeNull();
+    fireEvent.click(radio('週一'));
+    fireEvent.click(screen.getByRole('button', { name: '下一題' }));
+    expect(currentTitle()).toContain('訪客姓名？');
+    expect(detailOf()).toBeNull();
+  });
+
+  it('axe：帶計劃全文的提問面板（亮、暗）', async () => {
+    const view = render(<Harness pendings={[question([PLAN_REVIEW])]} />);
+    expect(await axeViolations(document.body)).toEqual([]);
+    view.unmount();
+    document.documentElement.classList.add('dark');
+    render(<Harness pendings={[question([PLAN_REVIEW])]} />);
+    expect(await axeViolations(document.body)).toEqual([]);
+  });
+});

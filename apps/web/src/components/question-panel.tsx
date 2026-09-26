@@ -11,6 +11,8 @@
  * - **有選項的題目也附一列「輸入你的答案」**（#376 第 2 條，dsh 的 “Other”）：單選時填字就取代選項、點選項就取代
  *   填的字（primitive 同一題只留一個作答），多選並存。沒有選項的題目只有這一列。
  * - **沒有「放棄整組」**：❌＝停止這一輪，是寫明的例外（§4.3），按鈕在換手層的名稱列上。
+ * - **題目帶 `detail` 就在題目下面畫成 markdown**（#652 起計劃審核把計劃全文放在這裡）。認得 `intent` 的審核面板
+ *   是 #654；這裡不看 `intent`，照一般提問畫、照一般提問答。
  *
  * **單選自動跳只認指標選取**（§8、WCAG 3.2.2）：滑鼠、觸控、VoiceOver 點兩下選了才跳，先停 200 讓勾選看得到；
  * 鍵盤（方向鍵、數字鍵）改選取不跳，要按 Enter。說明句放在題目描述裡事先告知。
@@ -23,6 +25,7 @@ import type { FormEvent } from 'react';
 
 import type { PendingQuestion } from '@nexus/wire';
 
+import { MarkdownText } from '@/components/markdown-text';
 import {
   Questionnaire,
   QuestionnaireActions,
@@ -155,6 +158,15 @@ export function QuestionPanel({
                     </span>
                   )}
                 </QuestionnaireDescription>
+              )}
+              {question.detail !== undefined && question.detail.trim() !== '' && (
+                // 計劃審核（#652）把計劃全文放在這裡。專用的審核面板是 #654；在那之前照一般提問畫，全文不能丟。
+                <div
+                  data-slot="question-detail"
+                  className="text-body border-border rounded-lg border px-3 py-2 text-sm"
+                >
+                  <MarkdownText text={question.detail} />
+                </div>
               )}
               {options.length > 0 && (
                 <QuestionnaireChoices>

@@ -145,7 +145,7 @@
 | 21 | 核准（整批 `actions`、允許／拒絕＋理由） | P0（`PendingApproval`、`DecisionEntry`） | `ui-approval/ApprovalPanel`：**"Composer takeover for one pending approval waterfall"**（`ApprovalPanel.tsx:1`）；`ui-primitives/RiskConfirmation` | AIE `confirmation`（逐顆、卡內，不合 #317） | 輸入框換成核准面板時 `border-beam` `pulse-inner` | 現有 `approval-card.tsx` |
 | 22 | 決定紀錄（人按了什麼） | P0（`DecisionEntry`） | `ui-chat/ApprovalCommand` | — | — | 與失敗工具卡並存 |
 | 23 | 提問（單選／多選／自由文字／跳過／放棄整組） | P0（`PendingQuestion`、`QuestionItem`、`AnswerEntry`） | `ui-user-questions/QuestionComposer`：**"ask_user_question composer takeover"** | sc `questionnaire`；AIE `question` | 題目切換 slide＋blur 2px | 現有 `question-card.tsx` |
-| 24 | 計劃審核 | P1 | `ui-user-questions/PlanReviewPanel` | AIE `plan` | — | nexus 有 plan-mode plugin，wire 沒送；2026-09-25 請 dev-harness 排投影，排第一（交出計劃時核准面板只列 JSON 原文） |
+| 24 | 計劃審核 | P1 | `ui-user-questions/PlanReviewPanel` | AIE `plan` | — | nexus 有 plan-mode plugin，wire 沒送；2026-09-25 請 dev-harness 排投影，排第一（交出計劃時核准面板只列 JSON 原文）。#652 起交出計劃改走提問通道、全文在 `QuestionItem.detail`，一般提問面板先把它畫成 markdown 過渡；專用的審核面板與計劃卡是 #654 |
 | 25 | 權限模式切換 | P1 | `ui-permission-presets` | — | 滑動 tab pill | |
 
 **分歧**：dsh 的 21、23 都是「輸入框被接管」，nexus 目前是 `App.tsx:319–333` 把 `pendings` 渲染成 `QuestionCard`／`ApprovalCard`。手機上 takeover 比較省空間，因為鍵盤起來時畫面上只剩輸入區那一塊。這要拍板，見 §4 的 fog。
