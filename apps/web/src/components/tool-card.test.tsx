@@ -3,6 +3,12 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ToolCard } from '@/components/tool-card';
+import {
+  PARTIAL_OUTPUT_HEADING,
+  SUBAGENT_MAX_TOKENS_REASON,
+  SUBAGENT_MAX_TOKENS_TEXT,
+  SUBAGENT_PARTIAL_TEXT,
+} from '@/lib/max-tokens-view';
 import { WITHDRAWN_TOOL_REASON } from '@/lib/question-view';
 import { Transcript } from '@/components/transcript';
 import { axeViolations } from '@/test/axe';
@@ -971,5 +977,49 @@ describe('讀檔卡收著時不畫內容（#625）', () => {
     expect(screen.queryByTestId('tool-read')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /讀取/ }));
     expect(screen.getByTestId('tool-read')).toBeTruthy();
+  });
+});
+
+describe('子代理撞到輸出上限的 task（#608）', () => {
+  const HEADLINE = `Error: ${SUBAGENT_MAX_TOKENS_REASON}`;
+
+  function showTask(error: string) {
+    render(
+      <ToolCard
+        entry={tool({
+          name: 'task',
+          input: '{"description":"寫報告","subagent_type":"worker"}',
+          status: 'failed',
+          text: error,
+          error,
+        })}
+        beam={false}
+      />,
+    );
+    fireEvent.click(screen.getAllByRole('button')[0]!);
+  }
+
+  it('英文那句換成中文，寫到一半的那段照結果畫', () => {
+    showTask(`${HEADLINE}\n${PARTIAL_OUTPUT_HEADING}\n報告\n寫到一半`);
+    expect(document.body.textContent).toContain(SUBAGENT_MAX_TOKENS_TEXT + SUBAGENT_PARTIAL_TEXT);
+    expect(within(screen.getByTestId('tool-output')).getByLabelText('工具結果').textContent).toBe(
+      '報告\n寫到一半',
+    );
+    expect(document.body.textContent).not.toContain(SUBAGENT_MAX_TOKENS_REASON);
+    expect(document.body.textContent).not.toContain(PARTIAL_OUTPUT_HEADING);
+  });
+
+  it('一個字都沒寫：只講沒寫完，沒有「以下是」也沒有結果', () => {
+    showTask(HEADLINE);
+    expect(document.body.textContent).toContain(SUBAGENT_MAX_TOKENS_TEXT);
+    expect(document.body.textContent).not.toContain(SUBAGENT_PARTIAL_TEXT);
+    expect(screen.queryByTestId('tool-output')).toBeNull();
+    expect(document.body.textContent).not.toContain(SUBAGENT_MAX_TOKENS_REASON);
+  });
+
+  it('對照：別的失敗照舊畫原文紅字', () => {
+    showTask('Error: 子代理不存在');
+    expect(document.body.textContent).toContain('Error: 子代理不存在');
+    expect(document.body.textContent).not.toContain(SUBAGENT_MAX_TOKENS_TEXT);
   });
 });

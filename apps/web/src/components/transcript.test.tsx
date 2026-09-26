@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { Transcript } from '@/components/transcript';
+import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
 
 /**
  * 推理列與正文空的回覆（[#527](https://github.com/DemianLi/nexus-agent/issues/527)、#565）。只想、只呼叫工具的
@@ -168,6 +169,47 @@ describe('正文空的回覆', () => {
     const entry = screen.getByTestId('ai-entry');
     expect(within(entry).getByRole('button').textContent).toContain('思考過程');
     expect(entry.textContent).toContain('（已停止）');
+  });
+
+  describe('撞到輸出上限（#608）', () => {
+    const cut = () =>
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root', maxTokens: true });
+
+    it('有字的那則照畫泡泡，底下多一行提示', () => {
+      show([running(), start('a'), say('a', '寫到一半'), finish('a'), cut()]);
+      const entry = screen.getByTestId('ai-entry');
+      expect(bubbleIn(entry)?.textContent).toContain('寫到一半');
+      expect(entry.textContent).toContain(MAX_TOKENS_NOTICE);
+    });
+
+    it('一個字都沒吐（只在寫工具參數時被切斷）：照畫提示，不畫空泡泡', () => {
+      show([running(), start('a'), finish('a'), cut()]);
+      const entry = screen.getByTestId('ai-entry');
+      expect(entry.textContent).toBe(MAX_TOKENS_NOTICE);
+      expect(bubbleIn(entry)).toBeNull();
+    });
+
+    it('只有推理：推理列加提示，不畫空泡泡', () => {
+      show([running(), start('a'), think('a', '想'), finish('a'), cut()]);
+      const entry = screen.getByTestId('ai-entry');
+      expect(rowIn(entry)).not.toBeNull();
+      expect(entry.textContent).toContain(MAX_TOKENS_NOTICE);
+      expect(bubbleIn(entry)).toBeNull();
+    });
+
+    it('對照：沒撞到上限的沒有提示，沒字的那則照舊整則不畫', () => {
+      show([
+        running(),
+        start('a'),
+        say('a', '寫完了'),
+        finish('a'),
+        start('b'),
+        finish('b'),
+        frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+      ]);
+      expect(screen.getAllByTestId('ai-entry')).toHaveLength(1);
+      expect(document.body.textContent).not.toContain(MAX_TOKENS_NOTICE);
+    });
   });
 
   it('出錯的空回覆照畫錯誤', () => {
