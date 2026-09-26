@@ -136,7 +136,7 @@
 | 17 | 回合分隔與用量 | P1 | `ui-chat/TurnUsagePanel`、`StatsPills`、`TurnTailNodeView` | AIE `context` | 數字滾動 | #574（PR #600）在頂列畫整條對話累計的 token 與時間，那是總帳；逐輪的用量還沒有，要線上逐次帶輸入與輸出，跟總帳是兩份投影 |
 | 18 | 壓縮／系統注入列 | P1 | `ui-chat/CompactionItem`、`ContextInjectionRow`、`SystemPromptRow` | AIE `checkpoint` | — | 2026-09-25 請 dev-harness 排投影，順序：計劃模式 → 壓縮列 → 目標列 |
 | 19 | 交付檔案列 | ~~P1~~ **P0（2026-09-22 已做完）** | `ui-deliverables`（`ProducedFiles`，有 `@container` 斷點） | AIE `artifact`、`attachments` | — | |
-| 20 | 附件（輸入與訊息中的圖） | P1 | `ui-attachment` | sc `attachment`；AIE `attachments` | — | |
+| 20 | 附件（輸入與訊息中的圖） | P1 | `ui-attachment` | sc `attachment`；AIE `attachments` | — | 2026-09-26 #715 拍板照 dsh 做：harness 那一刀 #732（先合），web 那一刀 #733；兩張都在等 gemma-4-31b 的收圖實測（#731），送圖另等 #723 的每會話換模型 |
 
 ### 2.4 人在迴圈裡
 
@@ -158,7 +158,7 @@
 | 27 | slash 命令選單 | P0（`SlashDescriptor`、`SlashListCommand`） | `ui-commands`、`ui-input-trigger`（`/`、`@` 偵測） | sc `command` | 選單 open 250ms／close 150ms | |
 | 28 | `@` 引用（檔案、會話、子代理、skill） | P1 | `ui-reference`、`ui-subagent` 的 `@` source、`ui-skill` | AIE `inline-citation` | — | |
 | 29 | 送出佇列 | P1 | `ui-conversation/.../QueueDock` | AIE `queue` | 只淡入淡出，不 stagger（#645 Q8） | 2026-09-26 做了（#645）：放在待辦面板下、換手區外；跑著時純文字送得出去、排進佇列，斜線命令照擋；人的話等開跑才畫。2026-09-25 拍板：照 dsh 放伺服器（列得出、可改可刪、落盤），harness 先做、web 等落地再畫；停止後排著的停住不跑（翻掉 #265 Q6「停完接著跑」）；插話另開。harness 先修 #629（排著的訊息吞掉核准） |
-| 30 | 模型選擇 | P1 | `ui-model-selection` | AIE `model-selector` | — | |
+| 30 | 模型選擇 | P1 | `ui-model-selection` | AIE `model-selector` | — | 2026-09-26 #723 拍板：先做底下的型錄（#729，只動 harness、畫面不變），每會話選擇與這一項晚點，恢復條件寫在 #723 |
 
 ### 2.6 agent 狀態面板
 
