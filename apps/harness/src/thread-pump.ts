@@ -282,6 +282,13 @@ export interface PendingInterrupt {
    * `tool/call` 與一顆只帶 id 的 `interrupt/raised`，閘門的酬載也沒有 callId——這裡是唯一分得出來的地方。
    */
   readonly gatedTools: readonly string[];
+  /**
+   * 發出去的那一顆 `input.requested`，**蓋過號的原物**（[#728](https://github.com/DemianLi/nexus-agent/issues/728)）。
+   *
+   * 中斷的酬載只在這顆 frame 上，日誌只記一顆帶 id 的 `interrupt/raised`。之後才接上的下行由
+   * {@link ThreadPump.subscribe} 補送它，重新整理的網頁因此拿得回面板。
+   */
+  readonly request: Event;
 }
 
 /** 基座把中斷發在 `updates` 上的那一顆的 data 形狀。 */
@@ -893,6 +900,11 @@ export class ThreadPump {
    *
    * 沒有重播——訂閱之前發生的事這條線上看不到，接回來的方式是重開 ＋ 重抓歷史
    * （照 dsh 的 `reconnection = reopen the stream + refetch history`）。
+   *
+   * **唯一的例外是還掛著的中斷**（[#728](https://github.com/DemianLi/nexus-agent/issues/728)）：註冊當下把它們那幾顆
+   * `input.requested` 先放進這條線的佇列，同 dsh gateway 接上就補送還沒答的（`packages/api/gateway/src/index.ts:500`，
+   * `477b4f4`）。歷史折不出它們——酬載不在日誌上。**號是原本那顆的**：歷史的 frame 不帶號，從空重折的一頁收得下它，
+   * 之後的即時 frame 號都比它大。答掉或收回的那一刻就從 `#pending` 拿掉，之後接上的不會再拿到。
    */
   subscribe(
     channels: readonly WireChannel[],
@@ -901,6 +913,16 @@ export class ThreadPump {
     // **註冊是同步的**，抽是之後的事。這樣「線開好了」與「開始抽」才是兩件事——
     // 開好之後才發生的 frame 一顆都不會掉在中間，即使消費端還沒開始抽。
     const subscriber: Subscriber = { channels, queue: [], done: this.#closed };
+    if (!subscriber.done) {
+      // **照號排，不照 Map 的順序**：同 id 再度中斷時 `set` 留在原本的位置、換上新號，Map 順序就不再是發出的順序，
+      // 而折疊器丟掉號比上一顆小的。
+      subscriber.queue.push(
+        ...[...this.#pending.values()]
+          .map((pending) => pending.request)
+          .filter((request) => accepts(subscriber, request))
+          .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0)),
+      );
+    }
     this.#subscribers.add(subscriber);
     return this.#drain(subscriber, signal);
   }
@@ -1475,14 +1497,11 @@ export class ThreadPump {
       // `input.requested`。這裡補上那一顆——順帶讓 `updates` 整條留在白名單外，
       // 它每一顆都夾著完整序列化的訊息。
       for (const entry of asInterruptEntries(raw.params.data)) {
-        // 同 id 覆寫：沒被答到的那些會帶著原本那顆 id 再度中斷（實測）。
-        this.#pending.set(entry.id, {
-          interruptId: entry.id,
-          actionCount: actionCountOf(entry.value),
-          gatedTools: gatedToolsOf(entry.value),
-        });
+        // **先記日誌、再蓋號**，同以前的先後：日誌的訂閱者同步送出的 frame 要拿比這顆小的號，否則這顆廣播出去時
+        // 會被折疊器當成重複丟掉。
         this.#sessions.root.append('interrupt/raised', { interruptId: entry.id });
-        yield this.#seal({
+        // **補送的是廣播出去的同一顆**，號也一樣：同 dsh 把原本那顆 frame 再送一次。
+        const request = this.#seal({
           method: 'input.requested',
           params: {
             namespace: raw.params.namespace,
@@ -1490,6 +1509,14 @@ export class ThreadPump {
             data: { interrupt_id: entry.id, payload: entry.value },
           },
         } as Event);
+        // 同 id 覆寫：沒被答到的那些會帶著原本那顆 id 再度中斷（實測）。
+        this.#pending.set(entry.id, {
+          interruptId: entry.id,
+          actionCount: actionCountOf(entry.value),
+          gatedTools: gatedToolsOf(entry.value),
+          request,
+        });
+        yield request;
       }
       return;
     }
@@ -1805,13 +1832,16 @@ export class ThreadPump {
   }
 
   #broadcast(event: Event): void {
-    const channel = channelOfMethod(event.method);
     for (const subscriber of this.#subscribers) {
-      if (subscriber.done || channel === undefined || !subscriber.channels.includes(channel)) {
-        continue;
-      }
+      if (subscriber.done || !accepts(subscriber, event)) continue;
       subscriber.queue.push(event);
       subscriber.wake?.();
     }
   }
+}
+
+/** 這條下行訂了這顆 frame 的 channel 沒有。即時廣播與補送共用這一個，兩邊的過濾才不會分岔。 */
+function accepts(subscriber: Subscriber, event: Event): boolean {
+  const channel = channelOfMethod(event.method);
+  return channel !== undefined && subscriber.channels.includes(channel);
 }

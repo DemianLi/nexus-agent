@@ -5,8 +5,8 @@
  * `plan-mode.test.ts` 直接呼叫 `agent.invoke` 量得到工具的結局；量不到的是這三件：
  *
  * 1. **`detail` 與 `intent` 在線上活得下來**：酬載要穿過 pump 與折疊器，三層之間掉欄位不會有人報錯。
- * 2. **重新整理之後歷史帶得到**：計劃卡從重播出來的那顆呼叫的參數畫、結果從它的結果文字讀。掛著的面板
- *    重新整理之後回不來，那不是計劃獨有的，卡上列在「不在這張」。
+ * 2. **重新整理之後帶得到**：計劃卡從重播出來的那顆呼叫的參數畫、結果從它的結果文字讀。掛著的面板由 pump 在
+ *    下行接上時補送（[#728](https://github.com/DemianLi/nexus-agent/issues/728)），`detail` 與 `intent` 跟著回來。
  * 3. **停止這一輪**：掛著的呼叫由 pump 收回，工具本體不會再跑，中止保留它自己那句。
  */
 
@@ -29,6 +29,7 @@ import {
   createWireClient,
   emptyConversation,
   isQuestionPending,
+  reduceAll,
   reduceConversation,
 } from '@nexus/wire';
 import { describe, expect, it, vi } from 'vitest';
@@ -47,7 +48,7 @@ const PLAN = '# 計劃\n\n先看再改。';
 interface Session {
   readonly threadId: string;
   readonly client: WireClient;
-  readonly events: AsyncGenerator<Event, void, undefined>;
+  events: AsyncGenerator<Event, void, undefined>;
   state: ConversationState;
   /** root 那份會話日誌。 */
   log(): readonly SessionEvent[];
@@ -211,6 +212,39 @@ describe('計劃審核在線上', () => {
     // 這一輪沒有被中止：收尾那顆不帶理由，同一般跑完的一輪。
     expect(resumedTurnEnd(session)?.data).toEqual({});
     expect(recordedPlanMode(session.log()) ?? true).toBe(true);
+    await session.close();
+  });
+
+  /**
+   * **停在計劃審核時重新整理**：照網頁的順序接回來（開下行 → 抓歷史 → 從空重折 → 抽下行）。歷史只折得出卡，
+   * 那一題是 pump 補送的，`detail` 與 `intent` 要原樣在上面，答了這一輪接著收尾。
+   */
+  it('停在計劃審核時重新整理：那一題帶著計劃全文回來，同意之後模式關掉', async () => {
+    const session = await open('review-refresh');
+    const before = await pendingReview(session);
+
+    await session.events.return(undefined);
+    session.events = await session.client.openEvents(session.threadId);
+    const page = await session.client.threadHistory(session.threadId);
+    if (page.kind !== 'ok') throw new Error(page.message);
+    session.state = reduceAll(emptyConversation(), page.result.events);
+    // 前提：歷史自己折不出這一題。
+    expect(session.state.pendings).toEqual([]);
+
+    const after = await pendingReview(session);
+    expect(after.interruptId).toBe(before.interruptId);
+    expect(after.questions).toEqual(before.questions);
+    expect(after.questions[0]).toMatchObject({ detail: PLAN, intent: { kind: 'plan-review' } });
+
+    await session.client.inputRespond(session.threadId, {
+      namespace: [...after.namespace],
+      interrupt_id: after.interruptId,
+      response: answerResponse([{ id: PLAN_REVIEW_QUESTION_ID, selected: [PLAN_APPROVE_LABEL] }]),
+    });
+    await until(session, turnEnded);
+
+    expect(exitResultText(session)).toBe(PLAN_APPROVED_MESSAGE);
+    expect(recordedPlanMode(session.log())).toBe(false);
     await session.close();
   });
 
