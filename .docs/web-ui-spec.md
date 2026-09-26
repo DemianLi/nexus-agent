@@ -79,7 +79,7 @@
 | 7 | 空白狀態 hero | 自建（shadcn 基礎件＋breathing orb） | — |
 | 8 | 會話標頭 | 自建；標題規則在 `lib/thread-title.ts`（標頭、瀏覽器分頁標題、側欄列表共用），換字不做動效 | 在 `App.tsx` |
 | 9 | 歷史往回捲 | shadcn `message-scroller`（帶 `@shadcn/react`） | — |
-| 10／11 | 使用者／助理訊息 | shadcn `message`＋`bubble`；**markdown 自建**：`mdast-util-from-markdown`＋`micromark-extension-gfm`＋增量解析＋`cjkFriendlyStrong` | `transcript.tsx` 留（歸屬、狀態字面） |
+| 10／11 | 使用者／助理訊息 | shadcn `message`＋`bubble`；**markdown 自建**：`mdast-util-from-markdown`＋`micromark-extension-gfm`＋增量解析＋`cjkFriendlyStrong`。撞到輸出上限的那一輪，最後一則底下一行灰字，同「（已停止）」（`lib/max-tokens-view.ts`，#608） | `transcript.tsx` 留（歸屬、狀態字面） |
 | 13 | 工具卡 | 自建，shadcn `collapsible`＋`badge`，直接吃四格 `ToolEntry.status`；浮起來（material），輸入輸出放內層 stage | 在 `transcript.tsx` |
 | 14 | 工具專屬呈現 | 自建：依工具名分類（`classifyTool`）＋通用卡兜底，分哪幾類照 nexus 實際工具名定；高亮 `shiki/core`（ts／bash／json 靜態、其餘 `import()`）、數學 `katex` | — |
 | 15／22 | 子代理歸屬、決定紀錄 | 自建＋shadcn `badge` | 在 `transcript.tsx` |

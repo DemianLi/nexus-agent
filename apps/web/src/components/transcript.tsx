@@ -53,6 +53,7 @@ import type { ChangesStores } from '@/lib/changes-diff';
 import type { DeliverableDownloader } from '@/lib/deliverable-download';
 import { transcriptItems } from '@/lib/deliverables-view';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
+import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
 import { pairAnswers } from '@/lib/question-view';
 import { reasoningRunning, visibleReasoning } from '@/lib/reasoning-view';
 
@@ -199,6 +200,7 @@ function Entry({
     reasoning === undefined &&
     !entry.streaming &&
     entry.stopped !== true &&
+    entry.maxTokens !== true &&
     entry.error === undefined
   ) {
     // 講完了、沒正文、沒推理、沒被打斷、沒出錯，沒有東西可畫；畫出來是一顆空泡泡（#565）。
@@ -208,7 +210,8 @@ function Entry({
   const indented = entry.attribution.kind !== 'root';
   // **有推理時，正文空就不畫泡泡**（#527）：只想、只呼叫工具的那幾步只剩推理列；串流中也一樣，推理列在長，
   // 就是模型在動的訊號，不必再疊一顆帶游標的空泡泡。沒有推理的照舊。
-  const bubble = hasText || reasoning === undefined;
+  // 撞到輸出上限而沒字的那則（只在寫工具參數時被切斷）只畫底下那行提示，不畫空泡泡（#608）。
+  const bubble = hasText || (reasoning === undefined && entry.maxTokens !== true);
   return (
     <Message
       align="start"
@@ -240,6 +243,10 @@ function Entry({
         )}
         {/* 講到一半被人按了停止（#276）。不是失敗，所以不用紅字。 */}
         {entry.stopped === true && <MessageFooter className="px-0">（已停止）</MessageFooter>}
+        {/* 這一輪寫到輸出上限被切斷（#608）。同「已停止」：不是失敗，不用紅字。 */}
+        {entry.maxTokens === true && (
+          <MessageFooter className="px-0">{MAX_TOKENS_NOTICE}</MessageFooter>
+        )}
         {entry.error !== undefined && <p className="text-destructive text-xs">{entry.error}</p>}
         {feedback !== undefined && isRatable(entry) && (
           <RatingButtons messageId={entry.messageId} feedback={feedback} />
