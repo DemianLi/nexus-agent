@@ -9,7 +9,9 @@
  * - **模型面五個欄位**：`id`、`question`、`header?`、`options?: {label, description?}[]`、
  *   `multi_select?`。dsh 的 `AskUserQuestionItem` **型別上還有 `detail?` 與 `intent?`**，
  *   但它的**工具 schema 沒有這兩個**——那條路只給 `ctx.userQuestions.ask()` 的內部呼叫者
- *   （plan-review）用。模型看得到的那一面就是這五格，所以我們照這五格。
+ *   （plan-review）用。模型看得到的那一面就是這五格，所以我們照這五格。我們的 plan-review 是
+ *   `@nexus/plugin-plan-mode` 的 `exit_plan_mode`，#652 起由它填這兩格；一題的形狀因此搬進
+ *   `@nexus/core` 的 `QuestionInterruptItem`，兩個生產者讀同一份。
  * - **`multi_select` 是蛇形，內部是 `multiSelect`**。dsh 兩邊也是這樣分的，不是筆誤。
  * - **回程 `{ answers: [{ id, selected: string[], custom? }] }`**，欄位名與巢狀都一樣。
  * - **不加型別、不加必填、不加格式**（[#231](https://github.com/DemianLi/nexus-agent/issues/231)
@@ -46,8 +48,22 @@
 import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { interrupt } from '@langchain/langgraph';
-import type { ApprovalChannel, NexusPlugin, PluginEntry, ToolErrorInfo } from '@nexus/core';
-import { markToolError, QUESTION_INTERRUPT_KIND, toolCallIdOf, toolRefusal } from '@nexus/core';
+import type {
+  ApprovalChannel,
+  NexusPlugin,
+  PluginEntry,
+  QuestionAnswerItem,
+  QuestionInterruptPayload,
+  QuestionReply,
+  ToolErrorInfo,
+} from '@nexus/core';
+import {
+  CHANNEL_SERVICE,
+  markToolError,
+  QUESTION_INTERRUPT_KIND,
+  toolCallIdOf,
+  toolRefusal,
+} from '@nexus/core';
 import { z } from 'zod';
 
 /** 模型看到的工具名。與 dsh 同名。 */
@@ -94,18 +110,11 @@ export const ASK_USER_OUTPUT_SCHEMA = z.object({
   ),
 });
 
-/** 一題問答的答案。空的 `selected` 且沒有 `custom` ＝ 那一題被跳過。 */
-export interface AskUserAnswerItem {
-  readonly id: string;
-  readonly selected: readonly string[];
-  readonly custom?: string;
-}
+/** 一題問答的答案。形狀住在 `@nexus/core`，因為提問的生產者不只這一個（見 `QuestionInterruptItem`）。 */
+export type AskUserAnswerItem = QuestionAnswerItem;
 
 /** 人回來的東西。`cancelled` 那一格是「放棄整組」，不是一份答案。 */
-export interface AskUserAnswer {
-  readonly answers?: readonly AskUserAnswerItem[];
-  readonly cancelled?: boolean;
-}
+export type AskUserAnswer = QuestionReply;
 
 /**
  * 人放棄整組問題時回給模型的話。
@@ -142,20 +151,10 @@ export const DELEGATED_CALLER_MESSAGE =
   '把沒解決的問題或待定的決定寫進子代理的最終結果。';
 
 /**
- * 「這次組裝有沒有人可以回答」這個服務的名字。
- *
- * 由**組裝點**提供（`apps/harness` 的 `createHostServicesPlugin`）：產品路徑一律呼叫
- * `deriveApprovalChannel()` 明著算一次再提供出來，理由是兩個消費者（核准閘門與這個
- * 工具）必須讀到同一個值。
+ * 「這次組裝有沒有人可以回答」這個服務的名字。**搬到 `@nexus/core` 了**（#652：`exit_plan_mode`
+ * 也要讀它），這裡轉出舊名，匯入它的人不必改。
  */
-export const CHANNEL_SERVICE = 'channel';
-
-declare module '@nexus/core' {
-  interface NexusServices {
-    /** 這次組裝有沒有人可以回答。見 {@link CHANNEL_SERVICE}。 */
-    channel: ApprovalChannel;
-  }
-}
+export { CHANNEL_SERVICE };
 
 /** 空的問題清單。dsh 在 `ask()` 當場拋 `EMPTY_QUESTIONS`，我們照做。 */
 export const EMPTY_QUESTIONS_MESSAGE = `${ASK_USER_QUESTION_TOOL_NAME} 至少要有一題，收到的是空清單，所以沒有問任何人。`;
@@ -204,7 +203,7 @@ export const askUserPlugin: NexusPlugin = {
 
           // `interrupt` 用拋例外傳播，**不能包在 try/catch 裡**
           // （`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
-          const answer = (await interrupt({
+          const payload: QuestionInterruptPayload = {
             kind: QUESTION_INTERRUPT_KIND,
             questions: questions.map((question) => ({
               id: question.id,
@@ -215,7 +214,8 @@ export const askUserPlugin: NexusPlugin = {
                 multiSelect: question.multi_select,
               }),
             })),
-          })) as AskUserAnswer | undefined;
+          };
+          const answer = (await interrupt(payload)) as AskUserAnswer | undefined;
 
           if (answer?.cancelled === true) {
             return markToolError(failed(CANCELLED_MESSAGE), CANCELLED_ERROR);

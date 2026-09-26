@@ -141,6 +141,7 @@ export type {
   PendingApproval,
   PendingInput,
   PendingQuestion,
+  PlanReviewIntent,
   QuestionItem,
   ToolEntry,
   WorkspaceChangesEntry,

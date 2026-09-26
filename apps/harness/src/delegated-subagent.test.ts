@@ -238,7 +238,8 @@ describe('委派聲明：子代理每次模型請求都有，root 的沒有', ()
 
 /**
  * **真的會停下來問人的工具**，不只是測試用的 `danger`：閘門不看名字，產品裡掛 `ask`、在閘門之前沒被別層擋下的每一顆，
- * 在子代理裡都拿到 `policy-never` 那句。`exit_plan_mode` 也掛 `ask`，但它在閘門之前就被計劃模式那層擋下，見下一組。
+ * 在子代理裡都拿到 `policy-never` 那句。`exit_plan_mode` 以前也掛 `ask`，#652 照 dsh 改走提問通道、不再過閘門；
+ * 它在子代理裡照樣先被計劃模式那層擋下，見下一組。
  */
 describe('產品裡掛 `ask` 的工具在子代理裡也不停下來', () => {
   const cases = [
@@ -282,7 +283,7 @@ describe('產品裡掛 `ask` 的工具在子代理裡也不停下來', () => {
 /**
  * **計劃模式照 dsh 讀呼叫者自己的 session**（[#327](https://github.com/DemianLi/nexus-agent/issues/327)）：計劃模式那層
  * middleware 也掛到子代理上，而子代理的 session 從沒進過計劃模式。所以 root 開著計劃模式時，子代理拿不到指引，叫
- * `exit_plan_mode` 在那一層就被擋、回「不在計劃模式」——走不到後面的 `policy-never` 閘門，同 dsh 的先後
+ * `exit_plan_mode` 在那一層就被擋、回「不在計劃模式」——走不到工具本體那一題計劃審核，同 dsh 的先後
  * （`packages/plan/plan-mode/src/index.ts:292-294` 在問人之前）。
  *
  * **翻面寫的**：#324 時這一格釘的是「閘門先拒、沒有人被問到」，那時這層到不了子代理。

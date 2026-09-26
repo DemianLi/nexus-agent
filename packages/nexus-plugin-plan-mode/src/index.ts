@@ -27,6 +27,42 @@
  * | 退出工具 | `exit_plan_mode`，兩種狀態都在 schema 裡，模式外執行會失敗 | {@link EXIT_PLAN_MODE_TOOL_NAME}，同樣一律註冊、模式外拒絕 |
  * | 模式狀態 | `plan/mode` 會話事件 ＋ `planProjectionDefinition` 這個帶版本的會話投影 | `plan/mode` 會話事件 ＋ 這個 plugin 在 root 那份日誌上的折疊 |
  *
+ * ## 交出計劃走提問通道——曾經走核准，已照 dsh 改回（[#652](https://github.com/DemianLi/nexus-agent/issues/652)）
+ *
+ * **這一格曾經走核准**：plan-mode 註冊一位 `approvals.gate`，對 `exit_plan_mode` 回 `ask`，理由寫的是
+ * 「人批准計劃與人批准這次工具呼叫是同一件事，所以不另建評審通道」。**那正是 dsh 明文否決的那條路**
+ * （`.agents/notes/archived/feature/2026-07-07-plan-mode.md` 的 Alternatives，`477b4f4`）：核准的結果
+ * 詞彙刻意封閉（允許／拒絕），拒絕帶不回意見，同意也長不出選項。而我們當時沒有照 AGENTS.md 把它登記成
+ * 偏離。後果是計劃變成核准卡裡的工具參數，拒絕帶不回意見。
+ *
+ * 現在照 dsh（`packages/plan/plan-mode/src/index.ts:278-350`）：**工具本體自己問一題**，走提問通道，
+ * 核准閘門不再管它。
+ *
+ * - 題目 {@link PLAN_REVIEW_QUESTION}，`detail` 帶計劃全文，兩個選項 {@link PLAN_APPROVE_LABEL} 與
+ *   {@link PLAN_KEEP_PLANNING_LABEL}，`intent` 是 `plan-review`（純呈現用，答法同一般提問）。
+ * - 選同意、沒有自由作答 → 回成功，**模式在下一個模型步驟之前才關**（見下一節）。
+ * - 其他（選繼續規劃、或有自由作答）→ 拒絕，意見帶回給模型，模式留著。
+ * - 人關掉這一題（`cancelled`）→ 拒絕，模型收到「停在這裡等使用者的訊息」，模式留著，**這一輪不停**。
+ *   不是 `ask_user_question` 那句放棄訊息：那句叫模型別重問同一組，說的是它沒呼叫過的工具。
+ * - 停止這一輪 → 由 `apps/harness` 的 `ThreadPump` 收回掛著的呼叫，工具本體不會再跑，中止保留它自己那句。
+ * - **沒有人可以回答**（{@link CHANNEL_SERVICE} 說 `policy-never` 或 `no-channel`）→ 拒絕，請使用者自己切模式，
+ *   同 dsh「沒有提問通道就拋錯」。CLI 與 eval 走這條。
+ *
+ * **怎麼問**：dsh 呼叫共用的 `userQuestions.ask()`，我們沒有那一層，這裡直接 `interrupt()`，酬載帶
+ * `QUESTION_INTERRUPT_KIND`。那是 `@nexus/plugin-ask-user` 登記過的偏離（LangGraph 只有一顆中斷，
+ * 所以一條通道加一個判別式）的延伸，不是新的一條；題目與回覆的形狀放在 `@nexus/core`，兩個生產者讀同一份。
+ *
+ * ### 模式在下一個模型步驟之前才關
+ *
+ * 照 dsh：同意之後不當場寫 `plan/mode`，排一格待關，到下一個 `agent/pre-step`（請求組起來之前）才寫。
+ * 所以同一批工具裡其他呼叫照樣看到計劃模式開著，日誌上那顆 `plan/mode { active: false }` 落在
+ * `exit_plan_mode` 的 `tool/result` 之後。載體是 {@link PLAN_MODE_MIDDLEWARE_NAME} 已經有的
+ * `wrapModelCall`：它本來就在每次模型呼叫前問一次模式，在那裡先把待關交出去，不多一格圖節點。
+ * **只認 root 那份日誌**：子代理的模型呼叫交不出 root 的待關。
+ *
+ * 待關只活在記憶體裡，同 dsh 的 `pendingIntents`：同意之後這一輪被停掉，它等到下一輪第一次模型呼叫才交出去；
+ * 行程在那之前重開，它就沒了，模式留在開著。
+ *
  * ## 模式狀態走事件日誌——原本的偏離，收回了
  *
  * **這一格曾經是一條登記過的偏離**：模式狀態住在 middleware 的 `stateSchema` 裡，由
@@ -80,7 +116,7 @@
  * 理由，跟著收掉了。
  *
  * **當場寫的前提是命令跑在兩輪之間。** dsh 在輪還開著時把選擇排著、到下一個
- * `agent/pre-step` 才提交，免得模式在一輪中間翻面。我們不需要那一格：REPL 一行一輪；
+ * `agent/pre-step` 才提交，免得模式在一輪中間翻面。命令那側我們不需要那一格：REPL 一行一輪；
  * `serve.ts` 那條線的發派面在 run 飛在半空、停在核准點、或另一個命令在跑時一律拒收
  * （`apps/harness/src/wire-handler.ts` 的 `handleSlash`，
  * [#123](https://github.com/DemianLi/nexus-agent/issues/123)），絆索在
@@ -93,6 +129,10 @@
  * 永遠跑在兩輪之間、選擇當場提交，兩個都沒有指涉物。（上一版留著 `cancelled`：它那時指的是
  * 「pending intent 還沒被 `beforeAgent` 交出去」，那一格已經不在了。）所以 `/plan` 之後緊接著
  * `/plan off` 是兩次 `committed`，日誌上兩顆 `plan/mode`。
+ *
+ * **兩輪之間唯一可能排著的是 `exit_plan_mode` 的待關**（同意之後那一輪被停掉）。命令先把它丟掉再判：
+ * 人在兩輪之間打的那一行比模型上一輪的同意新。所以那時 `/plan` 是「已經在計劃模式」、模式留著；
+ * `/plan off` 照常關。
  *
  * ### 沒做的，也是偏離
  *
@@ -111,17 +151,21 @@
 
 import { tool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
+import { interrupt } from '@langchain/langgraph';
 import type {
   AgentMiddleware,
+  ApprovalChannel,
   CommandResult,
   NexusPlugin,
   PluginEntry,
   PluginRegistry,
+  QuestionInterruptPayload,
+  QuestionReply,
   SessionEvent,
   SessionLog,
   SessionSubject,
 } from '@nexus/core';
-import { toolCallIdOf, toolRefusal } from '@nexus/core';
+import { CHANNEL_SERVICE, QUESTION_INTERRUPT_KIND, toolCallIdOf, toolRefusal } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import { z } from 'zod';
 
@@ -179,16 +223,61 @@ export const EXIT_PLAN_MODE_DESCRIPTION =
 export const NOT_IN_PLAN_MODE_MESSAGE = `現在不在計劃模式，${EXIT_PLAN_MODE_TOOL_NAME} 沒有東西可以離開，所以沒有執行。`;
 
 /**
- * 計劃獲准了，但這一份組裝沒接會話日誌，模式寫不下來。
+ * 這一份組裝沒接會話日誌：就算獲准，模式也寫不下來，所以**不送審**。
  *
- * **不能回 {@link PLAN_APPROVED_MESSAGE}**：模式沒關，指引下一步還會在，回「關了」是在騙
- * 模型。也不能回 {@link NOT_IN_PLAN_MODE_MESSAGE}——它明明在計劃模式裡。
+ * 排在問人之前：問了、人按了同意、模式卻關不掉，是讓人白答一次。也不能回
+ * {@link NOT_IN_PLAN_MODE_MESSAGE}——它明明在計劃模式裡。
  */
 export const PLAN_NOT_ATTACHED_TOOL_MESSAGE =
-  '計劃獲准了，但計劃模式沒有接上會話日誌，模式關不掉。這是組裝的問題，不是計劃的問題。';
+  '計劃模式沒有接上會話日誌，就算獲准也關不掉模式，所以沒有送審。這是組裝的問題，不是計劃的問題。';
 
-/** 計劃被批准、離開計劃模式時回給模型的話。 */
-export const PLAN_APPROVED_MESSAGE = '計劃已獲准，計劃模式關閉了。從下一步起可以執行。';
+/** 計劃不是以 `#` 標題開頭。照 dsh，在問人之前擋。 */
+export const PLAN_HEADING_REQUIRED_MESSAGE = `${EXIT_PLAN_MODE_TOOL_NAME} 要一份非空的 Markdown 計劃，以一個 # 標題開頭。`;
+
+/** 沒有人可以回答。照 dsh「沒有提問通道就拋錯，請使用者自己切模式」。 */
+export const PLAN_NO_REVIEWER_MESSAGE =
+  '沒有提問通道可以審這份計劃（這個 session 沒有人在回答問題）。請使用者自己切換模式：/plan off。';
+
+/** 計劃被同意時回給模型的話。模式在下一個模型步驟之前才關，見檔頭。 */
+export const PLAN_APPROVED_MESSAGE = '計劃已獲准，離開計劃模式；從你的下一步起照計劃執行。';
+
+/** 審核那一題的 id。照 dsh 的 `REVIEW_ID`。 */
+export const PLAN_REVIEW_QUESTION_ID = 'plan-review';
+
+/** 審核那一題的短標題。 */
+export const PLAN_REVIEW_HEADER = '計劃審核';
+
+/** 審核那一題問的話。 */
+export const PLAN_REVIEW_QUESTION = '同意這份計劃並離開計劃模式？';
+
+/** 同意的那個選項。**`intent.approve` 就是它**，UI 用名字認同意，不用位置。 */
+export const PLAN_APPROVE_LABEL = '同意';
+
+/** 繼續規劃的那個選項。 */
+export const PLAN_KEEP_PLANNING_LABEL = '繼續規劃';
+
+/** 選了繼續規劃、沒有寫意見。 */
+export const PLAN_KEEP_PLANNING_MESSAGE = '使用者選擇繼續規劃；修改計劃後再提交一次。';
+
+/**
+ * 選了繼續規劃（或自由作答）時回給模型的話，帶著使用者的意見。
+ *
+ * @param feedback - 使用者寫的那句；空的時候是 {@link PLAN_KEEP_PLANNING_MESSAGE}。
+ */
+export function planFeedbackMessage(feedback: string): string {
+  return feedback === ''
+    ? PLAN_KEEP_PLANNING_MESSAGE
+    : `使用者選擇繼續規劃；使用者的意見：${feedback}`;
+}
+
+/**
+ * 人關掉了這一題、要自己說話。**不是失敗，也不是停止這一輪**：模型該停在這裡等下一則訊息。
+ *
+ * 不能用 `ask_user_question` 的放棄訊息：那句說的是「不要重問同一組」，指的是模型沒呼叫過的工具。
+ * 也不標 `ASK_CANCELLED`：dsh 在這裡拋的是一般 `Error`，日誌上因此分得出它與 ask-user 的放棄。
+ */
+export const PLAN_REVIEW_DISMISSED_MESSAGE =
+  '使用者關掉了計劃審核，要自己說話。留在計劃模式，停在這裡，等使用者的訊息。';
 
 /** 這個 plugin 的設定。 */
 export const planModeConfigSchema = z.strictObject({
@@ -205,12 +294,11 @@ export const planModeConfigSchema = z.strictObject({
    * 從沒切過模式的會話（例如 v3 寫的檔）也從它起算；**一份日誌上有過 `plan/mode` 的會話，
    * 最後那一顆說了算，這一格管不到**。沒接會話日誌的組裝，模式就一直是這一格。
    *
-   * **在收不了核准決定的入口把它打開，等於把那一輪鎖死。** `exit_plan_mode` 是需要
-   * 核准的工具，而 CLI 與 `eval/runner.ts` 傳的是 `HEADLESS_APPROVALS`
-   * （[#113](https://github.com/DemianLi/nexus-agent/issues/113)），核准閘門在那裡
-   * 走 `policy-never`、確定性地拒絕。於是模型提了計劃、被拒、還在計劃模式，唯一出去的路是
+   * **在沒有人可以回答的入口把它打開，模型交不出計劃。** `exit_plan_mode` 要問人，而 CLI 與
+   * `eval/runner.ts` 傳的是 `HEADLESS_APPROVALS`（[#113](https://github.com/DemianLi/nexus-agent/issues/113)），
+   * {@link CHANNEL_SERVICE} 在那裡是 `policy-never`，工具確定性地拒絕、請使用者自己切模式。唯一出去的路是
    * 人打 `/plan off`（[#120](https://github.com/DemianLi/nexus-agent/issues/120)）。在 web 上
-   * 打開則是「提了計劃、有人按批准」那條正路。
+   * 打開則是「提了計劃、有人按同意」那條正路。
    *
    * **這一格今天剩下的用途是測試**：要走真的那條路而不是直接往日誌裡寫。
    */
@@ -275,16 +363,24 @@ function trackPlanMode(subject: SessionSubject, startActive: boolean): PlanModeS
  * `/plan of` 看起來成功了而其實做了相反的事。這條關係同時是這個套件配套入口檢的那一條
  * （見 `invariant.ts`），所以參數先判——不管有沒有接上日誌，打錯的參數都落定成 `error`。
  *
+ * **排著的待關先丟掉再判**（見檔頭「兩值」那節最後一段）。
+ *
  * @param sessions - 這次組裝接著的 root 日誌；剛好一份才動得了。
+ * @param pendingExits - `exit_plan_mode` 同意之後排著、還沒交出去的待關。
  * @param rawInput - 命令名之後的原文。
  * @returns 直接印給人看的結果。
  */
-function planCommandResult(sessions: readonly PlanModeSession[], rawInput: string): CommandResult {
+function planCommandResult(
+  sessions: readonly PlanModeSession[],
+  pendingExits: Set<PlanModeSession>,
+  rawInput: string,
+): CommandResult {
   const request = parsePlanCommandArgs(rawInput);
   if (request === undefined) return { kind: 'error', text: PLAN_ARGS_ERROR_MESSAGE };
   if (sessions.length === 0) return { kind: 'error', text: PLAN_NOT_ATTACHED_MESSAGE };
   if (sessions.length > 1) return { kind: 'error', text: planAmbiguousMessage(sessions.length) };
   const session = sessions[0] as PlanModeSession;
+  pendingExits.delete(session);
   const entering = request === 'enter';
   if (session.active() === entering) {
     return {
@@ -301,7 +397,9 @@ function planCommandResult(sessions: readonly PlanModeSession[], rawInput: strin
  *
  * 兩件事在同一個 middleware 裡，因為它們讀同一格模式：
  *
- * 1. **`wrapModelCall`** 在模式生效時把指引接到 system prompt **後面**。
+ * 1. **`wrapModelCall`** 先交出這次呼叫者排著的待關（`exit_plan_mode` 同意之後那一格，見檔頭），
+ *    再在模式生效時把指引接到 system prompt **後面**。**這是 dsh `agent/pre-step` 位置的一個佔用者**：
+ *    待關在請求組起來之前交出去，同 dsh。
  *    用 `concat` 不用取代——`@nexus/plugin-memory` 與基座的摘要器都在同一份
  *    system prompt 上加東西，取代會把它們吃掉（`dynamicSystemPromptMiddleware`
  *    正是取代，所以刻意不用它）。模式沒生效時原樣穿過，**一個 token 都不多**。
@@ -317,21 +415,25 @@ function planCommandResult(sessions: readonly PlanModeSession[], rawInput: strin
  * [#327](https://github.com/DemianLi/nexus-agent/issues/327)），所以兩件事都先問「這一次是誰」：
  * 照 dsh，`plan:policy` 段落與 `exit_plan_mode` 讀的都是**呼叫者自己的** session
  * （`packages/plan/plan-mode/src/index.ts:212-220`、`:292-294`）。子代理的 session 從沒進過計劃模式，
- * 所以 root 開著計劃模式時，子代理照樣拿不到指引，叫 `exit_plan_mode` 照樣在這一層被擋——走不到後面
- * 那顆 `policy-never` 閘門，模型看到的是「不在計劃模式」而不是「沒人批准」，同 dsh 的先後。
+ * 所以 root 開著計劃模式時，子代理照樣拿不到指引，叫 `exit_plan_mode` 照樣在這一層被擋——走不到工具本體
+ * 那句「沒有人可以回答」，模型看到的是「不在計劃模式」，同 dsh 的先後。
  *
  * @param guidance - 模式生效時夾的那一段。
  * @param active - 這一次呼叫的呼叫者在不在計劃模式裡；收的是 handler 形狀的 config。
+ * @param settle - 交出這一次呼叫者排著的待關；不是 root、或沒有排著的，什麼都不做。
  * @returns 可以交給 `registry.middleware.use()` 的 middleware。
  */
 function createPlanModeMiddleware(
   guidance: string,
   active: (config: unknown) => boolean,
+  settle: (config: unknown) => void,
 ): AgentMiddleware {
   return createMiddleware({
     name: PLAN_MODE_MIDDLEWARE_NAME,
     wrapModelCall: (request, handler) => {
-      if (!active(callConfigOf(request))) return handler(request);
+      const config = callConfigOf(request);
+      settle(config);
+      if (!active(config)) return handler(request);
       // 兩條路是同一件事的兩個入口：`systemMessage` 在的時候接在它後面，不在的時候
       // 由 `systemPrompt` 這個字串欄位承接。基座兩個都讀，給錯那一個等於沒講。
       const { systemMessage } = request;
@@ -374,35 +476,85 @@ type PlanModeLookup =
 /**
  * 造 `exit_plan_mode` 工具。
  *
- * **它只會被呼叫到一次成功的路徑**：root 上模式外的呼叫在 middleware 的 `wrapToolCall` 就
- * 被擋掉了，需要核准這件事則由核准閘門處理。所以這裡剩下的是「往日誌寫一顆
- * `plan/mode { active: false }`、回一句話」。
+ * **先擋、再問、最後才排待關**，順序照 dsh（`packages/plan/plan-mode/src/index.ts:290-340`）：
+ *
+ * 1. 沒接會話日誌 → {@link PLAN_NOT_ATTACHED_TOOL_MESSAGE}（dsh 的「沒有呼叫方 agent」那一格）。
+ * 2. 不在計劃模式、或不是 root 那一份 → {@link NOT_IN_PLAN_MODE_MESSAGE}。
+ * 3. 計劃不是以 `#` 標題開頭 → {@link PLAN_HEADING_REQUIRED_MESSAGE}。
+ * 4. 沒有人可以回答 → {@link PLAN_NO_REVIEWER_MESSAGE}。
+ * 5. 問一題，照答案落定（三種結局見檔頭）。
+ *
+ * 每一條拒絕都是一則 `status: 'error'` 的 ToolMessage，不是 `throw`：有兩條發生在 **resume 之後**，
+ * 那時拋出去的例外會從 LangGraph 的 stream mux 逸出（`@nexus/plugin-ask-user` 實測過同一件事）。
+ * 都不帶碼：dsh 在這裡拋的是一般 `Error`。
+ *
+ * **`interrupt()` 不能包在 try/catch 裡**：它用拋例外傳播。resume 時整個本體從頭再跑一次、
+ * `interrupt()` 直接回人的答案，所以前面那幾條檢查會再判一次，結果不變（它們讀的東西在兩輪之間動不了：
+ * 停在提問上時斜線命令一律拒收，見 `apps/harness` 的 `wire-handler.ts`）。
  *
  * **日誌問的是這次呼叫的 config，不是組裝的閉包**（同 `@nexus/plugin-goal` 的工具，理由見
  * `@nexus/core` 的 `sessions.ts`）。在 subagent 裡被呼叫時，`forCall` 認出來的是那個
  * subagent 自己的日誌，而計劃模式不管那一份。產品組裝上那裡的 middleware 會先擋掉（#327），走不到這裡；
- * 這一格留著，是因為工具本體不該靠 middleware 在場才對：回一則帶 {@link NOT_IN_PLAN_MODE_MESSAGE} 的錯誤訊息。**不標 `rootOnly`**：那會換掉
+ * 這一格留著，是因為工具本體不該靠 middleware 在場才對。**不標 `rootOnly`**：那會換掉
  * subagent 看到的工具目錄，而 dsh 的「工具目錄不隨模式變動」講的正是這一件。
  *
  * @param lookup - 認這次呼叫的日誌。
+ * @param channel - 這次組裝有沒有人可以回答。
+ * @param queueExit - 同意之後排一格待關，由下一次模型呼叫交出去。
  * @returns 可以交給 `registry.tools.register()` 的工具。
  */
-function createExitPlanModeTool(lookup: (config: unknown) => PlanModeLookup): StructuredTool {
+function createExitPlanModeTool(
+  lookup: (config: unknown) => PlanModeLookup,
+  channel: ApprovalChannel,
+  queueExit: (session: PlanModeSession) => void,
+): StructuredTool {
   return tool(
-    (_args: { plan: string }, config: unknown) => {
-      // 兩條拒絕都不帶碼：dsh 對模式外拋的是一般 `Error`（`plan/plan-mode/src/index.ts:292-294`），
-      // 沒接日誌 dsh 沒有對應物。
+    async ({ plan }: { plan: string }, config: unknown) => {
+      const callId = toolCallIdOf(config) ?? '';
       const refuse = (message: string) =>
-        toolRefusal(message, {
-          callId: toolCallIdOf(config) ?? '',
-          name: EXIT_PLAN_MODE_TOOL_NAME,
-        });
+        toolRefusal(message, { callId, name: EXIT_PLAN_MODE_TOOL_NAME });
       const found = lookup(config);
       if (found.kind === 'not-attached') return refuse(PLAN_NOT_ATTACHED_TOOL_MESSAGE);
       if (found.kind === 'not-root' || !found.session.active()) {
         return refuse(NOT_IN_PLAN_MODE_MESSAGE);
       }
-      found.session.log.append('plan/mode', { active: false });
+      if (!/^#\s+\S/u.test(plan.trim())) return refuse(PLAN_HEADING_REQUIRED_MESSAGE);
+      if (channel.kind !== 'human') return refuse(PLAN_NO_REVIEWER_MESSAGE);
+
+      const payload: QuestionInterruptPayload = {
+        kind: QUESTION_INTERRUPT_KIND,
+        questions: [
+          {
+            id: PLAN_REVIEW_QUESTION_ID,
+            header: PLAN_REVIEW_HEADER,
+            question: PLAN_REVIEW_QUESTION,
+            detail: plan,
+            options: [
+              { label: PLAN_APPROVE_LABEL, description: '離開計劃模式；從下一步起照計劃執行。' },
+              { label: PLAN_KEEP_PLANNING_LABEL, description: '留在計劃模式；意見會回給模型。' },
+            ],
+            // 純呈現用：認得的 UI 畫成審核卡，不認得的照一般提問畫，答的都是上面兩個標籤之一。
+            intent: { kind: 'plan-review', approve: PLAN_APPROVE_LABEL, callId },
+          },
+        ],
+      };
+      const reply = (await interrupt(payload)) as QuestionReply | undefined;
+
+      if (reply?.cancelled === true) return refuse(PLAN_REVIEW_DISMISSED_MESSAGE);
+      // 照 dsh：剛好一筆審核的答案、只選了同意、沒有自由作答，才算同意。其餘一律是繼續規劃，
+      // 看不懂的回覆也是——那時沒有意見可帶，回的是沒有意見的那一句。
+      const items = (Array.isArray(reply?.answers) ? reply.answers : []).filter(
+        (entry) => entry.id === PLAN_REVIEW_QUESTION_ID,
+      );
+      const item = items.length === 1 ? items[0] : undefined;
+      if (
+        item?.selected.length !== 1 ||
+        item.selected[0] !== PLAN_APPROVE_LABEL ||
+        item.custom !== undefined
+      ) {
+        return refuse(planFeedbackMessage(item?.custom ?? ''));
+      }
+      queueExit(found.session);
       return PLAN_APPROVED_MESSAGE;
     },
     {
@@ -418,15 +570,16 @@ function createExitPlanModeTool(lookup: (config: unknown) => PlanModeLookup): St
 /**
  * 建一個計劃模式 plugin。
  *
- * 六個註冊點，各有各的理由：
+ * 五個註冊點，各有各的理由：
  *
  * - **`capabilities`**：讓別人 `requires` 得到。
  * - **`sessions`**：接上 root 那份日誌、折它的 `plan/mode`。**只管 root**，同 goal：模式是
  *   人對這個會話選的，subagent 沒有人可以選。
  * - **`middleware`（`prepend: true`）**：**排在核准閘門之前是必要的，不是偏好。**
- *   `fold.ts` 的順序是「`prepend` 的在前、核准閘門接著、其餘依註冊順序」，所以不
- *   `prepend` 的話，一次模式外的 `exit_plan_mode` 會先撞上核准閘門——headless 入口
- *   回的是「沒有人被問到」，而真正的原因是「你不在計劃模式」。順序決定模型看到哪一句。
+ *   `fold.ts` 的順序是「`prepend` 的在前、核准閘門接著、其餘依註冊順序」。這個 plugin 自己不再掛閘門，
+ *   但別人的閘門可能把所有工具都攔下來（`approval.patch.yml` 那一類組裝）；不 `prepend` 的話，
+ *   一次模式外的 `exit_plan_mode` 會先撞上那位——headless 入口回的是「沒有人被問到」，而真正的原因是
+ *   「你不在計劃模式」。順序決定模型看到哪一句。
  * - **`tools`**：`exit_plan_mode` 走 `registry.tools.register()`，**不用
  *   `AgentMiddleware` 自帶的 `tools`**。那條路繞過 `toolOrder`——`fold.ts` 的
  *   `orderTools` 只排 `registry.tools.effective()` 裡的東西，而工具呈現順序是我們
@@ -436,10 +589,10 @@ function createExitPlanModeTool(lookup: (config: unknown) => PlanModeLookup): St
  *   `ctx.inject(['commands'], …)` 底下（「命令註冊表被組進來時才啟用」），我們的
  *   `PluginRegistry` 每個註冊點永遠都在，所以直接註冊；**這是形狀差異不是偏離**，
  *   理由已經寫在 `@nexus/core` 的 `CommandRegistrationPoint` 上。
- * - **`approvals.gate`**：`exit_plan_mode` 回 `ask`。**「人批准計劃」與「人批准這次
- *   工具呼叫」是同一件事**，所以不另建一套評審通道——接回
- *   [#113](https://github.com/DemianLi/nexus-agent/issues/113) 已經有的那個：web 按得
- *   下去，CLI 與 eval 走 `policy-never`。
+ *
+ * **不再註冊 `approvals.gate`**（[#652](https://github.com/DemianLi/nexus-agent/issues/652)）。以前那位對
+ * `exit_plan_mode` 回 `ask`，理由是「人批准計劃與人批准這次工具呼叫是同一件事」——dsh 明文否決那條路，
+ * 已照 dsh 改回提問通道，見檔頭。
  *
  * **工具一律註冊，不看模式。** 照 dsh：模式沒啟用時 `exit_plan_mode` 仍然留在面向模型的
  * schema 裡，「這樣狀態轉換不會在規劃策略變更之外額外造成工具目錄變動」。代價是模式關著的
@@ -464,12 +617,16 @@ export const planModePlugin: NexusPlugin<PlanModeConfig> = {
     // 的那份日誌」，命令問的是「這次組裝的那一份」。兩者同生同滅。
     const attachedHere: PlanModeSession[] = [];
     const sessionsHere = new Map<SessionLog, PlanModeSession>();
+    // `exit_plan_mode` 同意之後排著、等下一次模型呼叫交出去的待關（見檔頭）。同 dsh 的 `pendingIntents`。
+    const pendingExits = new Set<PlanModeSession>();
     registry.sessions.join((subject) => {
       if (subject.address.kind !== 'root') return;
       const session = trackPlanMode(subject, startActive);
       attachedHere.push(session);
       sessionsHere.set(subject.log, session);
       return () => {
+        // 只是不留一格記憶體：收掉之後兩張表都找不到這份，命令與下一步都交不出它，行為上觀察不到。
+        pendingExits.delete(session);
         sessionsHere.delete(subject.log);
         const at = attachedHere.indexOf(session);
         if (at >= 0) attachedHere.splice(at, 1);
@@ -490,29 +647,38 @@ export const planModePlugin: NexusPlugin<PlanModeConfig> = {
       if (found.kind !== 'ok') return fallback();
       return sessionsHere.get(found.log)?.active() ?? false;
     };
+    // 只認得出來、而且是這個 plugin 接著的 root 那份：子代理的模型呼叫交不出 root 的待關。
+    const settle = (config: unknown): void => {
+      const found = registry.sessions.forCall(config);
+      if (found.kind !== 'ok') return;
+      const session = sessionsHere.get(found.log);
+      if (session === undefined || !pendingExits.delete(session)) return;
+      if (session.active()) session.log.append('plan/mode', { active: false });
+    };
+    // 軟相依，同 `@nexus/plugin-ask-user`：沒人提供時當作有人在。產品路徑由組裝點明著提供。
+    const channel: ApprovalChannel = registry.services.get(CHANNEL_SERVICE) ?? { kind: 'human' };
 
     registry.capabilities.provide(PLAN_MODE_CAPABILITY);
-    registry.middleware.use(createPlanModeMiddleware(guidance, active), { prepend: true });
+    registry.middleware.use(createPlanModeMiddleware(guidance, active, settle), { prepend: true });
     registry.tools.register(
-      createExitPlanModeTool((config) => {
-        const found = registry.sessions.forCall(config);
-        if (found.kind === 'not-attached') return { kind: 'not-attached' };
-        if (found.kind !== 'ok') return { kind: 'not-root' };
-        const session = sessionsHere.get(found.log);
-        return session === undefined ? { kind: 'not-root' } : { kind: 'ok', session };
-      }),
+      createExitPlanModeTool(
+        (config) => {
+          const found = registry.sessions.forCall(config);
+          if (found.kind === 'not-attached') return { kind: 'not-attached' };
+          if (found.kind !== 'ok') return { kind: 'not-root' };
+          const session = sessionsHere.get(found.log);
+          return session === undefined ? { kind: 'not-root' } : { kind: 'ok', session };
+        },
+        channel,
+        (session) => pendingExits.add(session),
+      ),
     );
     registry.commands.register({
       name: PLAN_COMMAND_NAME,
       description: PLAN_COMMAND_DESCRIPTION,
       input: { hint: PLAN_COMMAND_HINT },
-      handler: ({ rawInput }) => planCommandResult(attachedHere, rawInput),
+      handler: ({ rawInput }) => planCommandResult(attachedHere, pendingExits, rawInput),
     });
-    registry.approvals.gate((exec, next) =>
-      exec.name === EXIT_PLAN_MODE_TOOL_NAME
-        ? { kind: 'ask', reason: '計劃要有人看過才算獲准' }
-        : next(),
-    );
   },
 };
 

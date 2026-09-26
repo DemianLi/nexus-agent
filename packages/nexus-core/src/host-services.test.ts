@@ -12,7 +12,7 @@ import { fakePlugin } from './fixtures.js';
 
 describe('createHostServicesPlugin', () => {
   it('把給的每一格都提供出去，名字就是鍵', async () => {
-    const channel = { kind: 'human' };
+    const channel = { kind: 'human' } as const;
     const backend = { kind: 'contained' };
     const { registry } = await loadPlugins([createHostServicesPlugin({ channel, backend })]);
 

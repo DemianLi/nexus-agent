@@ -842,9 +842,9 @@ export async function createCliAgent(
           invocation.threadTitle ?? startupSetting(plugins, threadTitlePlugin),
         )
       : undefined;
-  // **channel 在這裡算一次，兩個消費者共用。** 核准閘門由 `foldRegistry` 自己算
-  // （同一個 `deriveApprovalChannel`），`ask_user_question` 拿的是這一份——兩邊分岔的
-  // 樣子是「核准擋得下來、問答還掛在那裡」，而那不會有任何測試紅。
+  // **channel 在這裡算一次，消費者共用。** 核准閘門由 `foldRegistry` 自己算
+  // （同一個 `deriveApprovalChannel`），`ask_user_question` 與 `exit_plan_mode`（#652）拿的是這一份
+  // ——分岔的樣子是「核准擋得下來、問答還掛在那裡」，而那不會有任何測試紅。
   //
   // **它掛在這裡而不是出貨清單裡**：那份清單是一個設定檔，看不到這一次
   // 呼叫的 checkpointer 與 `approvals`。
