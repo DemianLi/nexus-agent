@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   appendDecision,
-  appendHumanTurn,
   emptyConversation,
   prependEntries,
   reduceAll,
   reduceConversation,
 } from './conversation.js';
 import type { ConversationState } from './conversation.js';
+import { INBOX } from './inbox.js';
 import type { Event } from './protocol.js';
 
 /**
@@ -105,10 +105,17 @@ function walk(steps: readonly Step[], from = emptyConversation()): ConversationS
 
 const events = (list: readonly Event[]): Step[] =>
   list.map((event) => (state: ConversationState) => reduceConversation(state, event));
-const human =
-  (text: string): Step =>
-  (state) =>
-    appendHumanTurn(state, text);
+/**
+ * 人說一句話：線上是 `inbox` 帶 `claimed` 的那一顆，接著才是 root 的 `running`。**frame 在這裡當場建**，理由同
+ * {@link reasoned}：拖到走的時候才建，seq 會排到後面那串之後，被當成退回去的丟掉。
+ */
+const human = (text: string): Step => {
+  const claimed = frame('custom', [], {
+    name: INBOX,
+    payload: { items: [], claimed: { id: `q-${seq}`, text } },
+  });
+  return (state) => reduceConversation(state, claimed);
+};
 
 /** 標了收尾的那幾則的 key。 */
 function tailIds(state: ConversationState): string[] {
