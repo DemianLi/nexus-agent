@@ -94,7 +94,10 @@ export interface Conversation {
   readonly historyError?: string;
   /** 往前翻一頁，接在最前面。沒有更早的、或正在拿時什麼都不做。 */
   loadEarlier(): Promise<void>;
-  /** 下行開好了沒。**開好之前不能送**——這條線沒有重播，早送的那一輪會看不到。斷了就翻回 `false`。 */
+  /**
+   * 下行開好了沒。**開好之前不能送**——這條線只補送還掛著的中斷（[#728](https://github.com/DemianLi/nexus-agent/issues/728)），
+   * 其他的不重播，早送的那一輪會看不到。斷了就翻回 `false`。
+   */
   readonly connected: boolean;
   /** 上一次開線失敗、或下行斷掉的原因。接回來就清掉。串流自己正常收掉時沒有原因可講，這一格不在。 */
   readonly connectionError?: string;
@@ -347,6 +350,8 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         // **從空的重折，不接在現有的後面**（#593）：重接時傳輸 seq 可能從 0 重算（serve 重開過），折疊器又丟掉
         // `seq <= lastSeq` 的 frame，沿用舊的那份的話，新來的會全被當成重複。重接等於重新打開這一頁，只存在
         // 本地的東西（例如「已核准：X」）跟重新整理一樣不在了。第一次開線時現有的那份本來就是空的。
+        // **還掛著的中斷也靠這一條回來**（#728）：歷史折不出它，伺服器在下行接上時補送原本那一顆、號也是原本的，
+        // 排在線上等這裡折完才抽。沿用舊的那份的話，它的號比斷線前看到的小，面板就在重接那一刻不見。
         if (page.kind === 'ok') {
           const { events: frames, ...cursor } = page.result;
           advance(() => reduceAll(emptyConversation(), frames));
@@ -370,7 +375,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
           clearTimeout(book.recoveredTimer);
           book.recoveredTimer = setTimeout(() => setRecovered(false), RECOVERED_NOTICE_MS);
         }
-        // **抓清單排在開線之後**，跟送話同一條規則：這條線沒有重播，所有的上行都等
+        // **抓清單排在開線之後**，跟送話同一條規則：這條線除了還掛著的中斷不重播，所有的上行都等
         // 下行開好。清單本身不需要重播，但兩套順序規則比一套容易記錯。
         const listed = await client.slashList(threadId);
         if (cancelled) {

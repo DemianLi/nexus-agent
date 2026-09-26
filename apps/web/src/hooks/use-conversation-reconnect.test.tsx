@@ -190,6 +190,44 @@ describe('useConversation 斷線與重接（#593）', () => {
     expect(result.current.state.entries).toHaveLength(1);
   });
 
+  it('重接時補送的那顆中斷照樣折得進去：號比斷線前看到的小也收得下（#728）', async () => {
+    // serve 沒重開，伺服器接上時補送的是**同一顆**、原本的號（`ThreadPump.subscribe`）。沿用舊的 `lastSeq`
+    // 的話它比斷線前看到的最後一顆小，會被當成重複丟掉——面板在重接的那一刻不見，而且再也回不來。
+    const approval = {
+      type: 'event',
+      seq: 40,
+      event_id: 't:40',
+      method: 'input.requested',
+      params: {
+        namespace: ['tools:a'],
+        timestamp: 0,
+        data: {
+          interrupt_id: 'int-1',
+          payload: {
+            actionRequests: [{ name: 'alpha', args: {} }],
+            reviewConfigs: [{ actionName: 'alpha', allowedDecisions: ['approve', 'reject'] }],
+          },
+        },
+      },
+    } as Event;
+    const { client, line } = scriptedClient();
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick();
+    line(0).push(approval, frame(41, 'a'));
+    await tick();
+    expect(result.current.state.pendings).toHaveLength(1);
+
+    line(0).fail('network error');
+    await tick(250);
+    expect(result.current.connected).toBe(true);
+    // 前提：重建之後面板跟著不見——歷史折不出它，回來全靠補送。
+    expect(result.current.state.pendings).toHaveLength(0);
+
+    line(1).push(approval);
+    await tick();
+    expect(result.current.state.pendings.map((pending) => pending.interruptId)).toEqual(['int-1']);
+  });
+
   it('「立刻重連」不等退避，退避也從頭算', async () => {
     const { client, openEvents, setFailOpen } = scriptedClient();
     setFailOpen('connection refused');
