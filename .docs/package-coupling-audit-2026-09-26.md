@@ -9,7 +9,7 @@
   - 模組、介面、深度、接縫、adapter、刪除測試。**介面**不只是型別，還包括呼叫者必須知道的不變量、順序、錯誤模式、設定與效能。**深度**看的是槓桿，不看行數。
   - 一個 adapter 的接縫是假想接縫，兩個才是真接縫。
 - **技術標準**：每條發現都對照 dsh 在同一處的形狀。建議照 dsh；偏離時寫明 deepagents 或 LangChain 表達不出什麼。
-- **追蹤欄**：盤點合併後，同一天（2026-09-26）替中級發現開了專卡，追蹤欄與各條的「既有追蹤」已補上卡號。發現本文仍以基準 `70357bb` 為準。卡是對之後的 develop 重核過再寫的，有幾張的主軸或建議跟本文不同，例如 #664、#667、#668、#670，動工時以卡為準。
+- **追蹤欄**：盤點合併後，同一天（2026-09-26）替中級與低級發現都開了專卡：中級的卡號補在追蹤欄與各條的「既有追蹤」，低級的補在各條的「追蹤」。發現本文仍以基準 `70357bb` 為準。卡是對之後的 develop 重核過再寫的，有幾張的主軸或建議跟本文不同，例如中級的 #664、#667、#668、#670，低級的 #686、#687、#694、#699、#700、#701，動工時以卡為準。
 - 這份是七層盤點（[`seven-layer-inventory-2026-09-26.md`](seven-layer-inventory-2026-09-26.md)）的姊妹篇。前一次相關的盤點是 [`srp-audit-2026-09-19.md`](srp-audit-2026-09-19.md)，它量的是單一職責；這次量的是模組之間的介面。
 
 ## 結論
@@ -64,6 +64,8 @@
 - N2 → #664、F5 → #665、wire-r2-01 → #666、wire-r2-02 → #667。
 - hcr-r2-01 → #668、hcr-r2-03 → #669、hcr-r2-05 → #670。
 - 開 #666 時另外查到 web 的工具表漏了基座的 `delete`，單獨開成 #672。
+
+**低級 27 條之後也全部開卡**：#677–#703，照本文順序一條一張，卡號寫在各條的「追蹤」。plugins-interaction-r2-04 的 ask-user 那一半併進 #669，其餘幾點在 #687。
 
 ### 中級一覽
 
@@ -222,6 +224,7 @@
 - **呼叫者必須知道、介面沒表達的事**：trackUndo 必須逐一鏡像 registry 上每一個會回傳 undo、給 plugin 用的註冊方法。registry 新增一個這種方法時，型別和測試都不會提醒 load.ts 要跟著包。
 - **dsh 的形狀**：dsh 由每個註冊方法自己透過 layers.effect(ctx, action, {label}) 把 undo 掛到註冊者的 context 上（store.ts:220、:233 的 ctx.effect），例如 tools.register 走 layer => layer.tools.insert(...)，並帶 label 'tools.register()'。沒有外部鏡像表，新增註冊方法時，undo 的歸屬自動成立。　`dsh:packages/core/scope/src/store.ts:220`、`dsh:packages/core/scope/src/store.ts:233`
 - **建議**：照 dsh「undo 由註冊點自己掛到註冊者」的形狀改：在 createRegistry 內，以 enter(origin) 設定的 current origin 為鍵，讓每個註冊方法（今天都已呼叫 requireOrigin）把回傳的 undo 推進該 origin 的堆疊，並提供內部的 rollback(origin)。loadPlugins 失敗時呼叫它，然後刪掉 trackUndo。 若先止血： - trackUndo 補上 useWithBackend。
+- **追蹤**：專卡 #677（盤點後開）。
 - **證據**：`packages/nexus-core/src/load.ts:189`、`packages/nexus-core/src/load.ts:141`、`packages/nexus-core/src/load.ts:146`
 - **否定搜尋**：git grep -n useWithBackend -- packages/nexus-core/src/load.ts packages/nexus-core/src/load.test.ts：0 筆；git grep -n useWithBackend -- .：只出現在 fold.ts、fold.test.ts、registry.ts、sandbox.ts、nexus-plugin-agent-instructions、nexus-plugin-present 與 plan-mode／present 的測試，沒有任何回滾測試（另有 3 條）
 - **驗證意見**：耦合是真的，推翻不了，但嚴重度從「中」降為「低」。 一、耦合是真的。 - trackUndo 對 middleware 只包了 use（load.ts:189），其餘方法由 `...registry.middleware`（:188）原樣展開轉發，所以 useWithBackend 繞過 remember。 - 型別照樣滿足，tsc 抓不到。 - 貪婪回滾測試（load.test.ts:317）只呼叫 use，結構上也抓不到。 二、獨立探針重現。 - 用 vitest 直接呼叫 worktree 的 loadPlugins：plugin 依序呼叫 use、useWithBackend 後拋錯。
@@ -232,6 +235,7 @@
 - **呼叫者必須知道、介面沒表達的事**：disabledEntries.has(name) 回答的是「有沒有任何一列被關的條目叫這個名字」，fold 卻把它當成「這個功能被關了」。同名的另一列開著也不算數，而 NexusPlugin.name 明文不唯一。
 - **dsh 的形狀**：dsh 的停用是逐條目的：Entry.refresh 一開頭就是 if (this.disabled) return（vendor/loader/src/config/entry.ts:111）。disabled 是「這一列或它的父列」的性質（:73），不會波及同一顆 plugin 的另一列。「關掉」的意思是樹上沒有開著的那一列：fs-observation-policy 的檔頭說，沒有這顆 plugin，工具就保留無條件改寫。　`dsh:vendor/loader/src/config/entry.ts:111`、`dsh:vendor/loader/src/config/entry.ts:73`
 - **建議**：照 dsh 的逐條目語意，改問「有沒有開著的那一列」：load 同時記下開著的掛載（或由 registry 提供 enabled(name)），fold 的三態／兩態改成「沒有任何開著的同名列，且有被關的列」才視為關掉。 另一個做法是把鍵從字串 name 換成 plugin 物件的身分：core 自己那幾顆是單例常數，可以用參考相等比對，無關的 plugin 撞名就關不掉 core 的功能。 不論選哪個，都順手修掉 plugin.ts:55「唯一用途是錯誤訊息指名」這句已經不成立的說明。
+- **追蹤**：專卡 #678（盤點後開）。
 - **證據**：`packages/nexus-core/src/registry.ts:813`、`packages/nexus-core/src/registry.ts:1249`、`packages/nexus-core/src/load.ts:69`
 - **否定搜尋**：git grep -n disabledEntries -- apps packages（排除測試與註解）：消費點只有 fold.ts:951、:1036、:1071、:1115、:1132、:1155；git grep -n -E 'enabledEntries|enabledNames|mountedNames' -- packages apps：0 筆，沒有「開著的掛載」這種視圖（另有 2 條）
 - **驗證意見**：判 confirmed，嚴重度維持「低」，但兩個建議選項只有一個合規。 一、耦合是真的。 - load.ts:69 只記被關的那一半（markDisabled(plugin.name)）。 - 開著的 core 條目 apply 是空的，不留任何痕跡（model-usage.ts:221、observation.ts:347、session-checkpoint-policy.ts:136 都寫「承重的空」）。 - 所以三態、兩態那三格（fold.ts:1071、:1115、:1132）只看得到「有沒有被關的列叫這個名字」。
@@ -242,6 +246,7 @@
 - **呼叫者必須知道、介面沒表達的事**：core 的 SessionEventMap 必須知道每個 plugin 的酬載型別，所以每個領域的型別都得搬進 @nexus/core；加一個 plugin 事件就要改 core。
 - **dsh 的形狀**：dsh 的 SessionEventType = keyof SessionEventMap。todo、workspace-changes 各自在自己的 types.ts 以 declare module '@deepseek-ai/dsh-session/types' 補事件種類，workspace-changes 的 DTO 也宣告在同一個 types.ts；　`dsh:packages/core/session/src/types.ts:431`、`dsh:packages/todo/tool-todo/src/types.ts:28`
 - **建議**：一致原則（同時回應 core-session-04 與 plugins-capability-01）：型別歸生產它、對它語意負責的套件，事件酬載與 DTO 都一樣；core 只提供可合併的擴充點；消費者以 type-only 從生產者的 /types 子路徑拿。照這個原則，(1) SessionEventType 改成 keyof SessionEventMap，各 plugin 用 declare module '@nexus/core' 補自己的事件，做法與 NexusServices 相同；
+- **追蹤**：專卡 #679（盤點後開）。卡照驗證的更正改了主軸：三份檔頭講的是同一件事，毛病在它們指向的理由找不到出處，以及 todo.ts 把它定性成「不是偏離」。
 - **證據**：`packages/nexus-core/src/session-log.ts:145`、`packages/nexus-core/src/session-log.ts:192`、`packages/nexus-core/src/session-log.ts:44`
 - **否定搜尋**：git grep -n "keyof SessionEventMap"；git grep -n -E "declare module ['\"]@nexus/"（另有 2 條）
 - **驗證意見**：耦合是真的：core 的 SessionEventMap 引入 todo、goal、deliverables 等領域型別。dsh 形狀也核過：keyof SessionEventMap、todo 在自己的套件以 declare module 補 todo/write、isFeedback 的 switch 走 default: false。NexusServices 的 6 處合併先例屬實（`git grep -n -A3 "declare module '@nexus/core'" -- packages apps` 找到 6 處，全是 NexusServices）。
@@ -252,6 +257,7 @@
 - **呼叫者必須知道、介面沒表達的事**：讀方必須知道 data.content 在執行期可能是字串，也可能是 v1 區塊陣列（text、reasoning 等），而 response_metadata 的 finish_reason 形狀隨 provider 而變；這些都不在 LoggedMessage 的型別上。
 - **dsh 的形狀**：dsh 的訊息是自己的型別，content 是 readonly ContentBlock[]；讀 content 的 helper（例如 contentHasImage）住在型別擁有者 llm 套件的 content.ts。（⚠ 驗證者判此描述不被 dsh 原始碼完整支持）　`dsh:packages/llm/llm/src/message.ts:142`、`dsh:packages/llm/llm/src/content.ts:126`
 - **建議**：讓 logged-message.ts 變深：加 loggedMessageText（字串或 text 塊）、loggedMessageReasoning、loggedMessageFinishReason，並把 loggedMessageId 從 feedback.ts 搬過來；4 個讀方改用這些 helper。LoggedMessage = StoredMessage 這個已登記的偏離保留（換掉訊息型別不在這條的射程內），只把「怎麼讀」收回型別的擁有者旁邊。
+- **追蹤**：專卡 #680（盤點後開）。取 id、取 finish_reason 已各有單一 helper，卡收窄成修正 content 的型別，再加一個收窄的讀法。
 - **證據**：`packages/nexus-core/src/logged-message.ts:39`、`packages/nexus-core/src/logged-message.ts:18`、`packages/nexus-core/src/feedback.ts:218`
 - **否定搜尋**：git grep -n "mapStoredMessagesToChatMessages\|mapChatMessagesToStoredMessages\|StoredMessage\b"；git grep -n -E "\.data\.content" -- packages apps ':!*.test.ts' ':!*.test.tsx'
 - **驗證意見**：逐一核對「4 個讀方各自重寫取文字、取 id、取 finish_reason」這句，大半不成立。取 id：loggedMessageId 已經是 core 匯出的單一 helper，plugin-feedback 與 harness 的 conversation-history 都共用它，沒有人重寫（`git grep -n loggedMessageId -- packages apps ':!*.test.ts'`）。
@@ -262,6 +268,7 @@
 - **呼叫者必須知道、介面沒表達的事**：新增一種「應該進模型」的事件時，作者必須記得去改 conversation-replay 的 switch；不改的話續接後模型會靜默少掉那些內容，型別與窮舉絆索都不會紅。
 - **dsh 的形狀**：dsh 在型別上定義 SurfaceEventType（system／developer／user／assistant 的 message 與 tool/result），SessionEvent 對這些種類在型別層強制帶 surfaceOp；另有由生成器產出的 MESSAGE_PROJECTION_EVENT_TYPES。（⚠ 驗證者判此描述不被 dsh 原始碼完整支持）　`dsh:packages/core/session/src/types.ts:439`、`dsh:packages/core/session/src/types.ts:512`
 - **建議**：在 session-log.ts 定義 ModelVisibleEventType（或照 dsh 叫 SurfaceEventType）這個子聯集，把散文表變成型別；replay 對這個子聯集做窮舉（例如 switch 後以 never 斷言），其他種類再落進 default。要順帶對 Record<SessionEventType, …> 的讀方加一條「屬於 ModelVisibleEventType 的一定被 replay 處理」的測試。surfaceOp 那一軸不必一起做。
+- **追蹤**：專卡 #681（盤點後開）。
 - **證據**：`packages/nexus-core/src/conversation-replay.ts:279`、`packages/nexus-core/src/conversation-replay.ts:9`、`packages/nexus-core/src/session-log.ts:31`
 - **否定搜尋**：git grep -n "Record<SessionEventType"；git grep -n "SessionEventType\[\]\|readonly SessionEventType\|Set<SessionEventType\|Map<SessionEventType\|in SessionEventType\|Exhaustive\|extends (typeof KNOWN"（另有 4 條）
 - **驗證意見**：我方 replay 的 default: break 會靜默略過未列出的種類，這一點屬實；還原測試是逐情境的（describe('每一種產訊息的事件')），不是窮舉。但 dsh 自己也是同一個形狀：deriveEventMessage 註解明寫「Intentionally non-exhaustive」，default 回 null，還寫了「Merge-extensible union: no assertNever here」。依規則，照標準本來就這樣，判 weakened。dsh_shape 有兩處不準。
@@ -272,6 +279,7 @@
 - **呼叫者必須知道、介面沒表達的事**：一筆事件屬於哪一輪，要讀方自己由 seq 往回找最近一顆 kind 不是 resume 的 turn/start；resume 不開新輪這條規則不在型別上，也沒有共用的函式。
 - **dsh 的形狀**：dsh 的 turn/start 酬載直接帶輪號 { turn: number }，agent-loop 另外註冊一個 turnBoundary 投影作為輪邊界的單一擁有者。　`dsh:packages/core/session/src/types.ts:288`、`dsh:packages/core/agent-loop/src/index.ts:364`
 - **建議**：短期：在 session-log.ts 的 currentTurnStart 旁邊加一個 logicalTurnStart（或 isLogicalTurnStart 述詞），7 處改用它。長期照 dsh 讓 turn/start 帶輪號，讀方直接讀欄位，不再往回找。
+- **追蹤**：專卡 #682（盤點後開）。重數後要收的拷貝是 7 份。
 - **證據**：`packages/nexus-core/src/session-log.ts:651`、`packages/nexus-core/src/feedback.ts:263`、`apps/harness/src/conversation-history.ts:148`
 - **否定搜尋**：git grep -n -E "kind (!==|===) 'resume'" -- packages apps ':!*.test.ts' ':!*.test.tsx'
 - **驗證意見**：成立，嚴重度維持低。`git grep -n -E "kind (!==|===) 'resume'" -- packages apps ':!*.test.ts' ':!*.test.tsx'` 核過 7 處邏輯輪述詞：feedback、conversation-history 兩處、session-stats、session-scan、session-draft、workspace-changes invariant。物理輪有 currentTurnStart 這個單一擁有者，邏輯輪沒有。要修正三點。
@@ -282,6 +290,7 @@
 - **呼叫者必須知道、介面沒表達的事**：`const _descriptorFitsTheWire: SlashDescriptor = {} as CommandDescriptor;` 只保證 CommandDescriptor 可以指派給 SlashDescriptor。CommandDescriptor 多一個欄位時照樣可以指派（多餘屬性檢查只作用在新鮮的物件字面值上），所以註解說的「多一格那一刻編不過」這個保證並不存在。
 - **dsh 的形狀**：dsh 在程式碼層不做鏡像：UI 直接 import type domain 套件的型別（例如 ui-user-questions 的 contract/slots.ts 從 '@deepseek-ai/dsh-user-questions' 拿），沒有第二份需要比對。　`dsh:scripts/verify-type-equiv.ts:2`、`dsh:packages/client/ui-user-questions/src/client/contract/slots.ts:8`
 - **建議**：把單向斷言換成完全相等的檢查：對要上線的欄位做雙向可指派，或用 Equals<A, B> 型別（必要時先 Omit 刻意不上線的欄位），像分類那組一樣。若刻意只要求「wire 是 core 的子集」，就把註解改成它實際保證的事，並刪掉與 slash.list 回應建構重複的那條。FeedbackItem 同樣處理。若照 dsh 讓 web 直接型別相依（見 wire-seam-r2-01），這組鏡像可以整個拿掉。
+- **追蹤**：專卡 #683（盤點後開）。
 - **證據**：`apps/harness/src/wire-handler.ts:114`、`apps/harness/src/wire-handler.ts:110`、`apps/harness/src/wire-handler.ts:991`
 - **驗證意見**：tsc 探針實測（work 目錄 probe.ts，--strict）：`const x: Wire = {} as CoreMore` 在來源多一格時不報錯，只有少一格報 TS2741。所以 wire-handler.ts:111 的「那一刻編不過」不成立；client.ts 的 readDescriptors 會逐格重建，多出的欄位靜默丟掉。同一段 :119 的作者自己知道「只釘一邊會安靜地通過」，分類那組是雙向，描述子與 FeedbackItem 沒照做。:991 的 SlashListResult 建構已做同一方向的檢查，:114 那條是重複。
 
@@ -291,6 +300,7 @@
 - **呼叫者必須知道、介面沒表達的事**：changes/{summary,diff} 與 deliverables/{file,download,bytes} 的呼叫者必須知道：查詢參數名與格式（?seq=、?index=…）、每個拒絕理由對到哪個 HTTP 狀態碼（例如 not-text 對 422）、回應 body 的形狀。wire 只匯出路徑函式與 DTO，狀態碼只寫在 deliverables.ts 的散文裡；
 - **dsh 的形狀**：changes 路由：ui-deliverables/src/changes.ts 一份模組同時給 server 與 client——含查詢參數的 URL builder（changesSummaryUrl 用 URLSearchParams 帶 sessionId 與 seq）與回應 validator（isChangesSummary）；　`dsh:packages/client/ui-deliverables/src/changes.ts:111`、`dsh:packages/client/ui-deliverables/src/changes.ts:112`
 - **建議**：加深 wire 的路由模組，讓它吸收契約而不只是路徑：(1) 每條 GET 一個含查詢參數的 URL builder（照 dsh 的 changes.ts），harness 的解析與 web 的拼接共用同一組參數名；(2) 拒絕理由對狀態碼的 `Record<DeliverableRefusal, number>` 搬進 wire，harness 用它回應、web 用反查表判讀——或照 dsh 在回應 body 帶理由碼，web 比碼不比狀態碼；(3) 回應 validator（isChangesSummary 等）放進 wire，兩端共用；
+- **追蹤**：專卡 #684（盤點後開）。交付檔三條的 builder 與 validator 等讀檔載體拍板；把狀態碼表搬進 wire、把 GET 包進 WireClient 超出 dsh，卡裡寫明不做。
 - **證據**：`packages/nexus-wire/src/workspace-changes.ts:110`、`packages/nexus-wire/src/deliverables.ts:115`、`apps/harness/src/wire-handler.ts:409`
 - **否定搜尋**：git grep -n "createChangesSummaryStore\|createChangesDiffStore\|createDeliverableFileStore\|createDeliverableDownload\|failureOf" -- apps/harness packages（零命中：沒有測試跨接 web 的路由 store 與真 handler）；git grep -n "createWireHandler\|startWireServer\|@nexus/harness" -- apps/web（只有註解）（另有 2 條）
 - **驗證意見**：dsh_shape 寫的每一句都有原始碼支撐，所以 dsh_shape_ok 填 true；但它只講了對 finding 有利的那一半。dsh 的 changes.ts 確實共用路徑常數、client 端含查詢參數的 URL builder 與回應 validator；但 dsh 自己的 GET 路由有同一種耦合：server 端 present-open.ts 逐條路由手解 query.get('seq')／'index'（三處，沒有共用 parser）；
@@ -301,6 +311,7 @@
 - **呼叫者必須知道、介面沒表達的事**：下行 custom frame 的 name 是開放字串。reduceCustom 只認 deliverables、workspace changes、model usage、CONTEXT_MEASURE、TODOS、TOKEN_USAGE、SESSION_STATS 這幾個，其他名字靜默略過。生產者（pump 與歷史投影）多送一個名字時，沒有任何型別或清單會提醒消費端要接。
 - **dsh 的形狀**：dsh 的 UI 事件逐種註冊（ui-chat 的 register.ts 呼叫 registerInboxConversationNodes(ctx)），另外替沒人認領的事件註冊 fallback：`ctx.uiConversation.events.registerFallback(unknownFallbackDefinition)`，match 條件是 `event.type !== 'assistant/live-chunk'…　`dsh:packages/client/ui-chat/src/client/conversation-nodes/fallback.ts:40`、`dsh:packages/client/ui-chat/src/client/conversation-nodes/fallback.ts:19`
 - **建議**：(1) 短期照 #645 Q1：dev-harness 先在 wire 補 inbox 的折疊，web 再照那張卡改泡泡的時機。(2) 通用：在 wire 立一份「custom 名字 → payload 型別」的對照（例如 CustomPayloads），pump 與 conversation-history 的 custom frame 建構子只收這份的鍵，reduceCustom 對它做窮舉檢查，新名字一加，折疊器那裡就編不過。
+- **追蹤**：專卡 #685（盤點後開）。短期那一半（wire 折疊 inbox）已由 #646 落地，卡只做「名字→酬載一張表」那一半。
 - **證據**：`packages/nexus-wire/src/conversation.ts:618`、`packages/nexus-wire/src/conversation.ts:630`、`apps/harness/src/thread-pump.ts:1243`
 - **否定搜尋**：git grep -n -i "inbox\|claimed\|WireQueuedInput\|queueUpdate\|queue_item\|QUEUE_" -- apps/web/src（非測試檔零命中）；git grep -n "INBOX\b\|InboxPayload\|'inbox'" -- apps/web/src packages/nexus-wire/src apps/harness/src/thread-pump.ts（生產者在 pump，wire 只有常數與型別，web 零命中）
 - **驗證意見**：分兩半。INBOX 那半在 70357bb 屬實（conversation.ts:630 的 reduceCustom 沒有 INBOX），但它不是意外漏接，而是分階段落地：#637 先落伺服器（PR #639、#641），#645 明寫 web 那側另做。快照後都補上了：#645 已 CLOSED，PR #646（2026-09-25T16:48Z）在 wire 補了 inbox 折疊，PR #648 拿掉 use-conversation 送出當下的 appendHumanTurn；PR #649 加 TITLE 時也同一張 PR 補了 reduceTitle。
@@ -311,6 +322,7 @@
 - **呼叫者必須知道、介面沒表達的事**：goal 的直接人類授權（hasDirectHumanTurn）與輪次計數（fold 推進 roundsStarted）都靠入口點寫進 turn/start 的 kind 分辨「人」與「續行」；佇列的件帶著 source，但開跑時 kind 不是由 source 推出來的，而是寫死的 'message'。「source 決定 kind」只寫在 inbox.ts 的註解裡，型別與測試都沒有表達。
 - **dsh 的形狀**：dsh 的續行本來就走收件匣：goal-round-driver 建一則 source 為 {kind:'goal', goalId, revision, round} 的 user 訊息，用 agent.followup 排進 next-turn；判別欄跟著訊息本身走。　`dsh:packages/goal/goal-round-driver/src/index.ts:178`、`dsh:packages/goal/goal-round-driver/src/index.ts:192`
 - **建議**：#638 動工時，#runQueued 的 turn/start 要由 item.source 推導：寫成對 source.kind 的窮舉 switch 加 never 分支，讓 QueuedInputSource 一加成員就在 #runQueued 當場編不過，而不是只在 wire 投影那裡紅。配一條正面測試：佇列裡一件 goal 來源的件開跑後，日誌上的 turn/start 是 kind 'goal'、hasDirectHumanTurn 為假、roundsStarted 前進一格。
+- **追蹤**：專卡 #686（盤點後開）。「無聲失效」被驗證推翻：goal-driver-pump.test.ts 釘著續行輪的 kind 與輪次計數。卡改成不改行為的 refactor。
 - **證據**：`apps/harness/src/thread-pump.ts:1229`、`packages/nexus-core/src/inbox.ts:27`、`packages/nexus-core/src/inbox.ts:25`
 - **否定搜尋**：git grep -n -E "QueuedInputSource|\.source\.kind|item\.source|source: \{ kind" -- apps packages ':!*.md'；git grep -n -E "#runOnce\(\{ kind:" -- apps/harness/src/thread-pump.ts
 - **驗證意見**：耦合的事實屬實：#runQueued 把 kind 寫死成 'message'，沒有讀 item.source。#637 的拍板規格（「開跑時 turn/start 的 kind 由 source 決定，授權的判別不變」）與 inbox.ts 檔頭寫的都是由 source 決定，實作確實沒照做。但發現的核心主張「無聲失效、沒有測試會紅」被推翻，理由有三：(1) 今天 QueuedInputSource 只有 user，續行輪次完全不經佇列，而是 thread-pump.ts:1207 直接 submit({kind:'goal',…})，所以今天等價、沒有錯。
@@ -321,7 +333,7 @@
 - **呼叫者必須知道、介面沒表達的事**：ask-user 要正確 fail-closed，必須同時滿足三件型別上看不到的事：組裝點用與核准閘門相同的兩格輸入另算一次 channel；經 host-services 提供；host-services 排在 ask-user 之前（因為它在 apply 當下就讀）。缺任何一件，ask-user 退到 { kind: 'human' }，也就是 fail-open。退路本身寫在 ask-user 的 JSDoc 裡，但改動會發生的地方（cli.ts 的組裝、host-services.ts）看不到它；
 - **dsh 的形狀**：dsh 的 tool-ask-user inject ['tools', 'userQuestions']，是硬相依；UserQuestionService.ask() 走 user-questions/request 的 waterfall，沒有提供者接手時預設回 UserQuestionError 'NO_PROVIDER'——沒人可答是拒絕，不是假設有人。　`dsh:packages/interaction/tool-ask-user/src/index.ts:14`、`dsh:packages/interaction/user-questions/src/index.ts:131`
 - **建議**：照 dsh 讓缺席成為 fail-closed：ask-user 改成 services.use（硬相依，缺件在載入時當場拋），或 get 不到時退到 { kind: 'no-channel' } 而不是 human；讀取挪進工具 handler（#459 的原設計），順序就不再承重。更根本的是 channel 只算一次：讓核准閘門也讀同一個服務，不要 fold 與 cli.ts 各算一次。
-- **追蹤**：ask-user 那一半已併進 #669，當作第 1 步（盤點後開卡時併入）。其餘幾點沒有卡。
+- **追蹤**：ask-user 那一半已併進 #669，當作第 1 步（盤點後開卡時併入）。其餘幾點開成專卡 #687（盤點後開）：submit-record 缺 backend 時響亮失敗，並改正順序與「缺件當場失敗」的散文。
 - **證據**：`packages/nexus-plugin-ask-user/src/index.ts:185`、`packages/nexus-plugin-ask-user/src/index.ts:178`、`packages/nexus-plugin-ask-user/src/index.ts:180`
 - **併入 hcr-r2-02 獨有的四點**（驗證者建議）：
   - `submit-record` 同樣在 apply 當下軟讀 backend，排錯時會無聲退回基座預設。
@@ -339,6 +351,7 @@
 - **呼叫者必須知道、介面沒表達的事**：命令要作用的那份日誌不在 CommandInvocation 裡。handler 必須自己在 apply 時 registry.sessions.join、過濾 address.kind === 'root'、記成陣列，執行時再判「剛好一份」。少了 root 過濾，從第二次委派起命令就一律回 ambiguous——goal 的檔頭記過這個實際發生過的失敗。
 - **dsh 的形狀**：dsh 的 CommandInvocation 帶 readonly agent: Agent（註解：Exact agent whose UI received the command）。command-feedback 直接 recordFeedback(invocation.agent.session, …)，command-goal 用 ctx.goals.get(invocation.agent)；　`dsh:packages/interaction/commands/src/index.ts:44`、`dsh:packages/interaction/commands/src/index.ts:45`
 - **建議**：照 dsh 在 CommandInvocation 加上目標那一格。我們的對應物是日誌——commands.ts 自己說指涉對象「不是 agent 而是會話日誌」——而 createCommandExecutor 已經持有 sessionLog，直接交給 handler 即可。之後 feedback 的 rootsHere 可刪；goal 與 plan-mode 的命令改讀 invocation 的日誌（servicesHere／sessionsHere 留給工具與 middleware 用）；
+- **追蹤**：專卡 #688（盤點後開）。
 - **證據**：`packages/nexus-core/src/commands.ts:13`、`packages/nexus-core/src/commands.ts:23`、`packages/nexus-core/src/commands.ts:64`
 - **否定搜尋**：git grep -n -w "attached" -- apps packages ':!*.test.ts' ':!*.md'；git grep -n -E "\.attached\(\)" -- apps packages ':!*.md'
 - **驗證意見**：介面缺目標那一格屬實。CommandInvocation 只有 commandId、rawInput、signal；執行器持有 sessionLog 卻不交出去。dsh 的 CommandInvocation 帶 agent，/feedback 直接寫 invocation.agent.session。core commands.ts 的登記理由是閉包對得上，屬形狀偏好，不是 AGENTS.md 要的「表達不出來」；前提「一份 registry 一份日誌」在 #137 之後要改寫成「一份 root 日誌」。
@@ -349,6 +362,7 @@
 - **呼叫者必須知道、介面沒表達的事**：WorkspaceChanges 服務（summary／diff）的回傳型別由傳輸層 @nexus/wire 定義，所以這個 plugin 是 18 個 plugin 裡唯一不只相依 @nexus/core 的一個；wire 那側為了 web 改 DTO，生產端的 plugin 就得跟著改，而這件事在 plugin 的介面上看不出來。
 - **dsh 的形狀**：dsh 的 WorkspaceChangesSummary、WorkspaceFileDiff 與服務定義都在 packages/deliverables/workspace-changes/src/types.ts，連事件都用 declare module 在同一檔擴充；　`dsh:packages/client/ui-deliverables/src/changes.ts:3`、`dsh:packages/deliverables/workspace-changes/src/types.ts:86`
 - **建議**：二擇一，而且要寫下來：（甲，照 dsh）把 WorkspaceChangedFile／WorkspaceChangesSummary／WorkspaceDiffHunk／WorkspaceFileDiff 搬進 plugin 的 type-only 子路徑（例如 @nexus/plugin-workspace-changes/types，零執行期相依），wire 或 web 以 import type 取用；wire 保留自己的 WORKSPACE_CHANGES 事件名與 WorkspaceChangesPayload。
+- **追蹤**：專卡 #689（盤點後開）。照 dsh 搬家與登記成偏離兩條路都列在卡上，由 demian 拍板。
 - **證據**：`.docs/development-plan.md:192`、`packages/nexus-plugin-workspace-changes/package.json:28`、`packages/nexus-plugin-workspace-changes/src/index.ts:65`
 - **否定搜尋**：for p in packages/nexus-plugin-*/package.json; do python3 -c "import json;d=json.load(open('$p'));print([k for k in d.get('dependencies',{}) if k.startswith('@nexus')])"; done → 只有 workspace-changes 有 @nexus/wire；rtk proxy git grep -n "@nexus/wire" -- 'packages/*/package.json' 'apps/*/package.json' → 四行：apps/harness/package.json:62、apps/web/package.json:19、packages/nexus-plugin-workspace-changes/package.json:28、packages/nexus-wir
 - **驗證意見**：獨立重推：逐一讀 20 個套件的 package.json，18 個 plugin 裡只有 workspace-changes 多相依 @nexus/wire，而且 index.ts、recorder.ts、compare.ts 三處都是 import type；wire 對 core 只有 devDependency。dsh 的方向核實：ui-deliverables 在 devDependencies 相依 dsh-workspace-changes，從它的 ./types 子路徑 type-only 取 DTO。要更正一點：這不是隨手、沒登記的選擇。
@@ -359,6 +373,7 @@
 - **呼叫者必須知道、介面沒表達的事**：每個套件都匯出 X_CAPABILITY 並在 apply 裡 provide，註解說「要相依它的 plugin 把這個字串放進自己的 requires」；但全 repo 的非測試程式碼裡，requires 只出現一次（sandbox-policy 要的是服務），capabilities.has 只有 present 查 WORKSPACE_CAPABILITY。這六個名字是只有一個角色的接縫。
 - **dsh 的形狀**：dsh 房規：A capability seam comprises Service Definition / Service Provider / Consumer roles，而且 never one role。dsh 的 skills 是服務，skill-badge、skill-filesystem、skill-office、tool-skill 都 inject ['skills']。　`dsh:AGENTS.md:138`、`dsh:packages/skill/skill-badge/src/index.ts:55`
 - **建議**：照 dsh 的三角色規則：沒有消費者的能力名先不發（刪掉 provide 與匯出常數、以及只釘它的那條測試），等第一個 requires 出現時再由那一刀一起加。要保留的話，至少把註解從「要相依它的 plugin 把這個字串放進 requires」改成「目前沒有消費者」，免得讀者以為那是一條在用的接縫。
+- **追蹤**：專卡 #690（盤點後開）。同形的 echo、agent-instructions、plan-mode 也納入，共八個；validation 那一個歸 #691。
 - **證據**：`packages/nexus-plugin-memory/src/index.ts:37`、`packages/nexus-plugin-memory/src/index.ts:36`、`packages/nexus-plugin-skills/src/index.ts:95`
 - **否定搜尋**：rtk proxy git grep -n "capabilities.has(" -- packages apps → 非測試只有 load.ts:259、registry.ts:1044、present/index.ts:253（WORKSPACE_CAPABILITY）；rtk proxy git grep -n "requires:" -- 'packages/*/src/*.ts' 'apps/*/src/*.ts' 'apps/*/src/**/*.ts' ':!*.test.ts' → 只有 sandbox-policy/index.ts:167，其餘是 load.ts:239、registry.ts:290 的註解與 plugin.ts:139 的 schema（另有 4 條）
 - **驗證意見**：重跑否定 grep：git grep -n "capabilities\.\(has\|providers\)(" -- packages apps ':!*.test.ts' 只命中 load.ts:259、registry.ts:1044-1045 的轉手與 present:253（WORKSPACE_CAPABILITY）。git grep -nE "requires\s*:" 排除測試後，只有 sandbox-policy:167 加上註解與 schema。yml、yaml、json 裡沒有任何 requires。
@@ -369,6 +384,7 @@
 - **呼叫者必須知道、介面沒表達的事**：主入口只做兩件事：provide 一個沒人 requires 的 'validation'，以及 re-export 一組已經住在 @nexus/core 的名字（註解要新呼叫端直接從 core 拿）。不變量配套入口是空 installer，卻掛在出貨清單上。package.json 還宣告了 @langchain/core、@langchain/langgraph、langchain、zod 四個執行期相依，原始碼一行都沒 import；原始碼只 import @nexus/core。
 - **dsh 的形狀**：dsh 沒有 validation plugin；輸出 schema 校驗在 packages/core/tools 的執行管線裡（validateJsonSchemaValue），是性質不是功能。　`dsh:packages/core/tools/src/index.ts:1834`
 - **建議**：開一張 chore 卡把 @nexus/plugin-validation 整包移除：刪套件、cordis.yml 第 415 行那顆 invariant、apps/harness 的 package.json 相依與兩個測試清單裡的那一列。若擔心外部 patch 以名字載入它，先在 README 標 deprecated 一個版本再刪。至少先把四個沒用到的執行期相依（@langchain/core、@langchain/langgraph、langchain、zod）拿掉。
+- **追蹤**：專卡 #691（盤點後開）。
 - **證據**：`packages/nexus-plugin-validation/src/index.ts:2`、`packages/nexus-plugin-validation/src/index.ts:23`、`packages/nexus-plugin-validation/src/index.ts:39`
 - **否定搜尋**：rtk proxy git grep -n "plugin-validation" -- '*.ts' '*.tsx' '*.yml' '*.json' ':!packages/nexus-plugin-validation' ':!pnpm-lock.yaml' → 只有 cordis.yml 的 /invariant、harness package.json、兩個測試清單、core 的歷史註解；rtk proxy git grep -n "import(.*validation" -- packages apps → 零命中（沒有動態 import）（另有 3 條）
 - **驗證意見**：重跑否定 grep：git grep -nE "createValidationPlugin|validationPlugin\b|VALIDATION_CAPABILITY|plugin-validation'" 排除自身套件後，非測試呼叫點是零（只剩 harness package.json、兩個測試清單與散文）。git grep -n "import\|from '" -- packages/nexus-plugin-validation/src 顯示原始碼只 import @nexus/core，測試另外 import vitest，所以四個執行期相依確實沒用到。
@@ -379,6 +395,7 @@
 - **呼叫者必須知道、介面沒表達的事**：sandbox-policy 的委派快照只在 resolveToolName(request) === 'task' 時才拍，workspace-changes 只擷取名字是 write_file／edit_file／delete 的呼叫；兩者都靠字面值對上 deepagents 的工具名，而那份名單唯一的守衛（baseline.test.ts）守的是 harness 的 base-tools.ts，不是這些副本。
 - **dsh 的形狀**：dsh 的委派快照不靠工具名：委派邊界本身（subagent 的 in-process driver 與 continuation）在第一個 await 前呼叫 captureDelegatedPolicyOverrides(parent)，由它透過 ctx.get('sandboxPolicy') 向政策服務要當下的覆寫。方向是委派者 → 政策，政策不必認得委派工具。　`dsh:packages/subagent/subagent/src/child-agent.ts:253`、`dsh:packages/subagent/subagent-in-process-driver/src/index.ts:119`
 - **建議**：在 @nexus/core 匯出一份基座工具名（把 max-tokens.ts 的 TASK_TOOL 升成公開常數，檔案工具那三個一起），sandbox-policy、workspace-changes、thread-pump、base-tools 都改讀它，baseline.test.ts 的守衛因此一次涵蓋所有讀者；wire 沒有對 core 的執行期相依，保留字面值並靠既有測試。委派快照的方向維持現狀即可——那是被迫的（見偏離註記）。
+- **追蹤**：專卡 #692（盤點後開）。web 手列名單漏的 delete 歸 #672。
 - **證據**：`packages/nexus-plugin-sandbox-policy/src/index.ts:87`、`packages/nexus-plugin-sandbox-policy/src/index.ts:218`、`packages/nexus-core/src/max-tokens.ts:85`
 - **否定搜尋**：rtk proxy git grep -nF "'task'" -- packages apps（排除 .test.）→ base-tools.ts:72、thread-pump.ts:543、max-tokens.ts:85、sandbox-policy/index.ts:87、wire/conversation.ts:923；rtk proxy git grep -nE "export const (TASK_TOOL|DELEGATION_TOOL)" -- packages apps → 零命中（exit=1），沒有匯出的共用常數
 - **驗證意見**：副本數核實：git grep -nF "'task'" -- packages apps 排除測試後，命中 base-tools.ts:72、thread-pump.ts:543、max-tokens.ts:85、sandbox-policy:87、wire conversation.ts:923；git grep -nE "export const (TASK_TOOL|DELEGATION_TOOL)" 零命中。node_modules 裡 deepagents 1.13.1 的 index.d.ts 確實沒有匯出工具名常數。
@@ -389,6 +406,7 @@
 - **呼叫者必須知道、介面沒表達的事**：workspace-changes 要把模型給的路徑對到磁碟，得知道 ContainedFilesystemBackend 一律 virtualMode: true、'/' 就是工作區根；這件事它沒有相依邊可以問，只能在 paths.ts 自己重寫一份規則。present 為了同一件事匯出了 virtualPathOf 並寫明「複製一份的話就是第二個真相」，workspace-changes 卻是那第二份。
 - **dsh 的形狀**：dsh 的檔案工具收的就是主機路徑，所以規則是作業系統本身：workspace-changes 用 node:path 的 resolve(cwd, path)，present 用 ctx.fs.resolve(file.path, { cwd })。沒有一份自訂的虛擬位址規則要複製。　`dsh:packages/deliverables/workspace-changes/src/recorder.ts:163`、`dsh:packages/deliverables/tool-present/src/index.ts:89`
 - **建議**：把「工具位址 → 主機路徑」收成一份：放在 @nexus/core 的 sandbox.ts（fence 與控制器的合約已住在那裡，兩個 plugin 都已相依 core），present 的 virtualPathOf 與 workspace-changes 的 hostPathOf 都改用它，contained-backend.ts 的註解指向它。這樣改位址空間的人只要改一處，而且有一個地方可以寫絆索。
+- **追蹤**：專卡 #693（盤點後開）。dsh 自己也有兩份「工具路徑→主機路徑」，卡不寫「照 dsh 收成一份」，只收已登記的虛擬位址空間偏離的足跡。
 - **證據**：`packages/nexus-plugin-present/src/index.ts:178`、`packages/nexus-plugin-present/src/index.ts:172`、`apps/harness/src/deliverable-files.ts:52`
 - **否定搜尋**：rtk proxy git grep -n "hostPathOf\|virtualPathOf\|virtualMode" -- packages apps（排除 .test.）→ 只在 contained-backend.ts、deliverable-files.ts、present/index.ts、sandbox-policy/index.ts（註解）、workspace-changes 的 paths.ts 與 recorde
 - **驗證意見**：我方的事實核實，副本還比發現說的多：present:179 與 workspace-changes paths.ts:126 各有一份 normalize；contained-backend.ts 另有三處內聯的「補前導斜線」（297、526、602），因為基座的 resolvePath 是 private；deliverable-files.ts:153 接到根上那一步又自己寫一次。用來找的指令：git grep -nE "posix\.normalize|startsWith\('/'\) \? " -- packages apps 排除測試與 web。
@@ -399,6 +417,7 @@
 - **呼叫者必須知道、介面沒表達的事**：plugin 在 apply 裡看不到折好的 backend；唯一拿得到的地方是 middleware.useWithBackend 的工廠。present 要的是工具本體讀 backend，不是 middleware，所以它註冊一顆名為 PresentBackend、沒有任何鉤子的 middleware，只為了在工廠被叫時把 backend 存進閉包。這顆空 middleware 因此出現在 root 與每個子代理的 stack 裡。
 - **dsh 的形狀**：dsh 的 present 宣告 inject = ['tools', 'fs', 'sessionProjections']，直接用 ctx.fs 的 lstat／resolve／stat，工作區判準讀會話 header 的 cwd。　`dsh:packages/deliverables/tool-present/src/index.ts:26`、`dsh:packages/deliverables/tool-present/src/index.ts:81`
 - **建議**：在 registry 開一個給工具用的窄口，例如 registry.backend.onFolded(cb) 或一個在 fold 之後才可讀的 getter（語義同 useWithBackend：沒有 backend 就永遠不回），present 改用它、拿掉 PresentBackend。不急；等第二個工具型消費者出現時一起做也可以。
+- **追蹤**：專卡 #694（盤點後開）。重核時補了 submit-record 那一半：它拿到的 backend 跟工具實際讀寫的不是同一個（讀碼推得，沒有實測），所以「等第二個工具型消費者出現」不必再等。這也推翻了「看過、判定沒問題的接縫」裡兩條 backend 通道那一條。
 - **證據**：`packages/nexus-plugin-present/src/index.ts:73`、`packages/nexus-plugin-present/src/index.ts:218`、`packages/nexus-plugin-present/src/index.ts:230`
 - **否定搜尋**：rtk proxy git grep -n "useWithBackend" -- packages apps（排除 .test.）→ 使用者只有 agent-instructions 與 present
 - **驗證意見**：核實：present:228-231 註冊一顆只回名字的 middleware。registry.ts:403 的介面本意是建 middleware，:410 說一次組裝只建一份、走遍 root 與每個子代理。git grep useWithBackend 排除測試後，使用者只有 agent-instructions 與 present。present 檔頭的五條偏離沒有一條登記這個取法（第 2 條講的是工作區判準），#441、#388 的內文與留言也沒有討論（gh issue view 核過）。
@@ -409,6 +428,7 @@
 - **呼叫者必須知道、介面沒表達的事**：設定錯了什麼時候拋：檔頭偏離三與 telemetryOtelPlugin 的註解說「在工廠函式當場驗、建構就會拋」，createTelemetryOtelPlugin 的註解卻說「設定不在這裡驗，驗在載入的時候」。實際上 schema 由載入器驗、值檢查在 OpenTelemetrySessionService 建構子，也就是 apply 當下。
 - **dsh 的形狀**：dsh 的 session-telemetry-otel：Config 只驗頂層欄位，值檢查放在建構子裡好讓錯誤訊息指得出欄位。　`dsh:packages/session/session-telemetry-otel/src/index.ts:124`、`dsh:packages/session/session-telemetry-otel/src/index.ts:164`
 - **建議**：撤掉偏離三（或改寫成「已與 dsh 同形」），把第 327–329 行的「設定在工廠函式當場驗、建構就會拋」改成「載入時驗：schema 在 loadPlugins、值檢查在 apply 建的服務建構子」，讓兩段 JSDoc 一致。
+- **追蹤**：專卡 #695（盤點後開）。
 - **證據**：`packages/nexus-plugin-telemetry-otel/src/index.ts:33`、`packages/nexus-plugin-telemetry-otel/src/index.ts:35`、`packages/nexus-plugin-telemetry-otel/src/index.ts:327`
 - **驗證意見**：核實：偏離三由 #100 引入（git log -S 找到 db97056），說我們沒有會跑 Config 的 loader。#476（e85806d）把設定搬進 Config，加了「設定不在這裡驗」的工廠註解，卻沒改偏離三與 plugin 的 JSDoc。實際上 schema 在 loadPlugins 驗（load.ts:76），值檢查在 OpenTelemetrySessionService 的建構子（:243 起），由 apply 呼叫。這與 dsh「Config 只驗頂層、值檢查在建構子」同形。
 
@@ -418,6 +438,7 @@
 - **呼叫者必須知道、介面沒表達的事**：present 的工具描述是模型面的介面，檔頭宣稱逐字照抄 dsh；上游在 ddefc45 之後改了那段描述（從「必須在最後回覆前呼叫」改成「使用者需要獨立檔案時才用、能用最後回覆就別用」），並替 files 參數加了「通常 1 到 2 個、一次最多 4 個」的說明。
 - **dsh 的形狀**：dsh 477b4f4 的 tool-present 描述是「Declare existing files as final deliverables for the user. Use it when the user needs a separate file…; prefer your final response when that suffices.」，files 參數說明「Usually the 1-2 most impor…　`dsh:packages/deliverables/tool-present/src/index.ts:40`、`dsh:packages/deliverables/tool-present/src/index.ts:47`
 - **建議**：開一張小卡把描述與 files 參數說明對齊 477b4f4，檔頭的出處 SHA 一併更新；web 卡片不受影響（它看工具名與參數形狀）。
+- **追蹤**：專卡 #696（盤點後開）。
 - **證據**：`packages/nexus-plugin-present/src/index.ts:5`、`packages/nexus-plugin-present/src/index.ts:82`
 - **驗證意見**：核實：我們的描述與 dsh ddefc45 逐字相同（git show ddefc45:packages/deliverables/tool-present/src/index.ts 對過）。477b4f4 改成「使用者需要獨立檔案時才用、能用最後回覆就別用」，並替 files 參數加了「通常 1–2 個、一次最多 4 個」的說明。git log ddefc45..477b4f4 顯示 present 只改了這兩處，maxFiles 預設仍是 8。依 AGENTS.md，模型面的文字要照 dsh 的實際做法，現況是標準漂移。這不是耦合問題，嚴重度低。
 
@@ -427,6 +448,7 @@
 - **呼叫者必須知道、介面沒表達的事**：serve 的每條 thread 組裝、goal port 的 adapter 與五個旗標解析／驗證函式，都得從 cli.ts（一個有 main() 的 CLI 入口）import。createCliAgent 靠「省略哪幾個位置參數」表達自己是 serve 還是 CLI，而且會回傳 serve 用不到的 SessionRegistry 與 sessionLog。
 - **dsh 的形狀**：dsh 的兩個入口 apps/cli 與 apps/desktop-host 都相依共用套件 @deepseek-ai/dsh-app-boot（profile-boot.ts 與 desktop-host/src/index.ts 從它 import），入口之間互不相依。組裝內容本身是 bundle 裡的資料，不寫在入口裡。（⚠ 驗證者判此描述不被 dsh 原始碼完整支持）　`dsh:apps/cli/src/profile-boot.ts:34`、`dsh:apps/desktop-host/src/index.ts:5`
 - **建議**：把 createCliAgent、goalDriverPort，以及兩個入口共用的解析與驗證 helper，搬進 apps/harness/src 下的一個組裝模組（例如 assembly.ts），cli.ts 與 serve.ts 都從它 import。順手把「入口身分」從位置參數的省略改成具名選項，並把 CLI 專屬的 SessionRegistry 移回 runCli。和 hcr-r2-05 的模型接縫一起做。
+- **追蹤**：專卡 #697（盤點後開）。
 - **證據**：`apps/harness/src/serve.ts:45`、`apps/harness/src/serve.ts:414`、`apps/harness/src/serve.ts:496`
 - **否定搜尋**：git grep -n "from './cli.js'\|from '../cli.js'" -- 'apps/harness/src/**.ts' ':!*.test.ts' （只有 serve.ts）；git grep -l "from './cli.js'\|from '../cli.js'" -- 'apps/harness/src/*.test.ts' 'apps/harness/src/**/*.test.ts' | wc -l （23）
 - **驗證意見**：事實屬實：serve.ts:45 從 cli.ts import 8 個符號，createCliAgent 是兩條路共用的組裝根。但 dsh_shape 寫錯了。原文說 dsh「入口之間互不相依」，實際上 dsh 的 apps/desktop-host 直接 import '@deepseek-ai/dsh/profile-boot'（index.ts:6），package.json 也宣告相依 @deepseek-ai/dsh（:15）；
@@ -437,6 +459,7 @@
 - **呼叫者必須知道、介面沒表達的事**：createReadContinuationMiddleware 必須跟 recordReadExtent 一起用，createFsToolErrorsMiddleware 必須跟 recordBackendOutcomes 一起用，tool-result-meta 的槽則必須由圍堵來開。兩半之間靠模組層的 AsyncLocalStorage 傳遞，型別看不出這層配對。
 - **dsh 的形狀**：跨段狀態都在 ToolRuntime 裡處理：meta 由工具自己的 output.presentationMeta 在 createSuccessResult 產生，不走旁通道。　`dsh:packages/core/tools/src/index.ts:1848`
 - **建議**：把每一對收成單一入口，例如 withReadContinuation(backend) 回傳 { backend, middleware }；或者 index 只公開 foldRegistry 用得到的組合，不再單獨公開半邊。最小的一步是從 index 拿掉那些在 core 以外零消費者的半邊。
+- **追蹤**：專卡 #698（盤點後開）。
 - **證據**：`packages/nexus-core/src/read-continuation.ts:196`、`packages/nexus-core/src/read-continuation.ts:377`、`packages/nexus-core/src/read-continuation.ts:150`
 - **否定搜尋**：for s in recordReadExtent recordBackendOutcomes createReadContinuationMiddleware createFsToolErrorsMiddleware recordToolResultMeta runInToolMetaSlot putToolResultMeta; do git grep -l "$s" -- ':!packages/nexus-core/src'; ；git grep -nE "nexus-core/src/(read-continuation|fs-tool-errors|tool-result-meta)" -- ':!packages/nexus-core/src' ':!*.md' → 只有 interception-index.test 與 tool-error-prefix.test 的路徑清單，加上 web 的一行註解，沒有 import
 - **驗證意見**：獨立重推成立。index.ts:185-199 公開 createFsToolErrorsMiddleware／recordBackendOutcomes、createReadContinuationMiddleware／recordReadExtent 兩對半邊，tool-result-meta 只公開型別（:200-205），三組做法確實不一致。
@@ -447,6 +470,7 @@
 - **呼叫者必須知道、介面沒表達的事**：recordedSandboxMode 的回傳型別宣稱是 SandboxMode，但值直接來自磁碟上的日誌，沒有經過 isSandboxMode。下游的 fence verdict 與 sandboxPolicySentence 都假設值只會是那三個名字之一。
 - **dsh 的形狀**：dsh 的 sandbox-policy 套件自帶 invariant，遇到 sandbox/mode 事件帶著未知模式就當場報違規。它在產品路徑上是否也擋住讀回：dsh 形狀未核（只核到 invariant 的檢查本身）。　`dsh:packages/sandbox/sandbox-policy/src/invariant.ts:18`
 - **建議**：照 invariant.ts 自己指出的位置，在 recordedSandboxMode 的讀取邊界加上 isSandboxMode：未知值回 undefined（落回部署預設）或直接拋。同時讓 verdict 的最後一個分支對未知值 fail-closed。
+- **追蹤**：專卡 #699（盤點後開）。主刀改成照 dsh 在配套入口檢查日誌裡的沙箱模式詞彙；「verdict 對未知值 fail-closed」跟 dsh 不同形，卡裡不做；在讀取邊界拒收列為動工前要查。
 - **證據**：`packages/nexus-plugin-sandbox-policy/src/sandbox-mode.ts:103`、`packages/nexus-plugin-sandbox-policy/src/invariant.ts:16`、`packages/nexus-plugin-sandbox-policy/src/invariant.ts:22`
 - **否定搜尋**：git grep -n "isSandboxMode(" -- 'packages/*/src/*.ts' 'apps/harness/src/*.ts' ':!*.test.ts' → 只有 cli.ts:388（啟動旗標）與 sandbox-mode.ts:346（/sandbox 指令參數），讀回路徑沒有
 - **驗證意見**：事實屬實：recordedSandboxMode（sandbox-mode.ts:103）原樣交出 event.data.mode；contained-backend 的 verdict（:514-517）只特判 danger-full-access 與 read-only，其餘落進 workspace-write；sandboxPolicySentence 的 switch 沒有 default。
@@ -457,6 +481,7 @@
 - **呼叫者必須知道、介面沒表達的事**：升級工具本體一被執行，就 controller.grant({ mode, target, denied: lastDenial })：把最近一次被 fence 擋下的那個操作（操作、canonical 目標、內容摘要都要對得上），綁成可以在要求的模式下認領一次。「有人核准過」這件事，只由另一個註冊點上的 approvals gate 保證，而那位 gate 排在 waterfall 的最後。前面任何一位 listener 只要回 allow 而不呼叫 next()，它就會被跳過；工具本身不知道自己有沒有被核准過。
 - **dsh 的形狀**：tool-fs 的 sandbox.ts 在工具路徑裡 `await approveEscalation(...)`；escalation.ts 在沒有核准服務時直接拋錯（fail-closed）。guard 的型別 ToolGuard 只能回拒絕字串，沒有強制放行的回傳值可用。　`dsh:packages/fs/tool-fs/src/sandbox.ts:97`、`dsh:packages/sandbox/sandbox/src/escalation.ts:181`
 - **建議**：照 dsh 把升級的核准放進工具路徑：讓工具本體自己 interrupt 要核准（跟 ask_user 的 interrupt 同一個形狀），或在 grant 之前確認這一次呼叫確實經過 ask 決策（把 gate 的判決綁到 callId）。至少要把 approval-gate-order.test 的射程擴到 createCliAgent 的產品組裝，並更新檔頭兩句過期前提，以及失敗指引裡的受害者清單。
+- **追蹤**：專卡 #700（盤點後開）。主刀改成照 dsh 在升級工具本體裡問人。
 - **證據**：`packages/nexus-plugin-sandbox-policy/src/sandbox-escalation.ts:177`、`packages/nexus-plugin-sandbox-policy/src/sandbox-escalation.ts:213`、`packages/nexus-plugin-sandbox-policy/src/sandbox-escalation.ts:226`
 - **否定搜尋**：git grep -n "approvals.gate(" -- 'packages/*/src/*.ts' 'apps/harness/src/*.ts' ':!*.test.ts' → 實際的 gate 是 plan-mode、submit-record、sandbox-escalation 三位，加上 approval.fixture.ts 一位；load.ts 與 registry.ts 是註冊點本身
 - **驗證意見**：結構屬實：升級工具本體無條件 controller.grant（sandbox-escalation.ts:177），「人看過」只靠同檔 :212 的 gate；createCliAgent 的順序是 host-services → ...plugins（出貨清單＋patch，cli.ts:880）→ ask-user → submit-record → sandbox-policy（:881-886），升級 gate 結構上永遠最後。
@@ -467,6 +492,7 @@
 - **呼叫者必須知道、介面沒表達的事**：createInvalidToolArgsMiddleware 在載體查不到 callId 時，會照 {} 放行並真的執行。它的安全前提是「停在核准點的那張卡不會跨行程被續答」。這件事實際上是由 conversation-replay 的 closer 把懸著的呼叫補成錯誤結果來保證的，兩者之間沒有相依邊。
 - **dsh 的形狀**：agent-loop 的 parseArguments 把解不開的 JSON 原字串留在呼叫資料本身，等執行時才驗，不靠行程內另外存一份。　`dsh:packages/core/agent-loop/src/tool-calls.ts:104`
 - **建議**：先把檔頭的前提改寫成真正在擋的東西，也就是 replay closer，再加一條絆索：續接一條停在核准點、參數解不開的日誌，斷言那顆呼叫得到的是補上的錯誤結果，而不是被執行。長期照 dsh，把「參數解不開」的記號放進訊息本身，讓它活得過續接。至於這個記號能不能撐過 v3 串流轉換器與供應商的來回：未核。
+- **追蹤**：專卡 #701（盤點後開）。「實際擋住的是 replay closer、重開條件看錯了軸」被驗證推翻；卡只改寫檔頭過期的前提，並讓門 B 的絆索指到這個檔。
 - **證據**：`packages/nexus-core/src/invalid-tool-args.ts:69`、`packages/nexus-core/src/invalid-tool-args.ts:70`、`packages/nexus-core/src/invalid-tool-args.ts:248`
 - **否定搜尋**：git grep -l "replayConversation\|restoreConversation" -- '*.test.ts' | xargs grep -l "INVALID_ARGS\|rawOf\|invalid-tool-args\|InvalidArguments\|repairInvalidToolCalls" → 無輸出：沒有續接測試涵蓋解不開的參數
 - **驗證意見**：前提有一半對：invalid-tool-args.ts:70「行程一死 thread 跟著死」寫於 de6d6ae（#284，2026-09-13），隔天 3dfd92c（#309，2026-09-14）起 CLI 與 serve 以 restoreConversation 跨行程接回對話（cli.ts:1440、serve.ts:427），就「對話」的意義這句已過期。
@@ -477,6 +503,7 @@
 - **呼叫者必須知道、介面沒表達的事**：estimateAnchoredTokens 的準度靠有人在每次呼叫回來時叫 book.record。產品組裝永遠用模組層級的 defaultTokenAnchorBook，而「學」只發生在摘要器外包的預算層。所以同一行程的所有組裝共用一本帳，摘要關掉時沒有人餵它；要隔離只能清模組全域。
 - **dsh 的形狀**：dsh 的 TokenMeter 是一個 Service，狀態用 WeakMap<Session, ReplayState> 逐 session 存，並由 session/event 從耐久日誌重播。compaction-basic 以 static inject 宣告相依 tokenMeter，由 ctx 注入，不碰模組全域。　`dsh:packages/llm/token-meter/src/index.ts:101`、`dsh:packages/llm/token-meter/src/index.ts:108`
 - **建議**：分兩級： - 最小一步：帳本改由組裝點提供，走 registry 服務或 FoldOptions，對應 dsh 的 ctx.tokenMeter 注入。serve 由進入點建一本給所有 thread 共用（保住跨 thread 借錨），測試各自建一本，setup 就不必清模組全域，clear() 也可以拿掉。 - 若要讓估算脫離摘要器，把 record 移到一顆獨立的、無論摘要開關都掛的 wrapModelCall，比較接近 dsh 的「量測是獨立服務」。 - 完整照 dsh（從日誌重播出帳本）要先有請求標頭的事件，超出本叢集。
+- **追蹤**：專卡 #702（盤點後開）。
 - **證據**：`packages/nexus-core/src/token-estimate.ts:382`、`packages/nexus-core/src/token-estimate.ts:285`、`packages/nexus-core/src/token-estimate.ts:294`
 - **否定搜尋**：git grep -n -E "estimateAnchoredTokens|estimateRequestTokens|TokenAnchorBook|defaultTokenAnchorBook|\.record\(|token-estimate" -- ':!*.md' → 非測試的使用者只有 summarization.ts、index.ts、session-log.ts（註解）與 nexus-wire/context-pres；git grep -l -w createSummarizer -- ':!*.md' → 產品呼叫點只有 fold.ts:1007，而且不傳 book
 - **驗證意見**：我自己重推過，結論成立。 TokenAnchorBook 的預設值是模組單例 defaultTokenAnchorBook，createSummarizer 與 isUnderCompactionPressure 兩處都預設落在它上面（summarization.ts:315、722）。產品唯一的呼叫點 fold.ts:1007 不傳 book，FoldOptions 也沒有這一格。clear() 明寫「給測試用」，harness 的 test-home.setup.ts 每條測試前都清一次全域。
@@ -487,6 +514,7 @@
 - **呼叫者必須知道、介面沒表達的事**：messages: 60 在一場跑滿的迴圈裡碰得到，前提是「上限 100、每輪三格」。上限是使用者可調的 #settings 條目，每輪幾格由掛了哪些 beforeModel 決定。這個條件沒寫在門檻那一側。
 - **dsh 的形狀**：dsh 的 compaction-basic 以窗口比例（thresholdRatio）觸發，沒有訊息數門檻，也就沒有「門檻可不可達」跟迴圈預算的耦合。　`dsh:packages/compaction/compaction-basic/src/config.ts:78`
 - **建議**：把 summarization.ts 的換算改成 33 輪（給 --workspace 時 32）。repeat-reminder.ts 的 3×輪數+2 與 recursion-limit.ts 的 floor((上限−1)/3) 對齊成同一條式子，後者有 LoopingChatModel 的實測表撐著。在 messages 門檻的註解寫出可達條件 floor((limit−1)/每輪格數) × 2 + 1 ≥ 60，並指向 recursion-limit 條目，讓調上限的人看得到這個連帶。
+- **追蹤**：專卡 #703（盤點後開）。只剩散文過期那一半；在門檻旁寫「可達條件」那一項不採。
 - **證據**：`packages/nexus-core/src/summarization.ts:212`、`packages/nexus-core/src/summarization.ts:176`、`packages/nexus-core/src/repeat-reminder.ts:413`
 - **否定搜尋**：git grep -n -E "49 輪|32 輪|33 輪" -- ':!*.md' → summarization.ts:176 是唯一還寫 49 輪、當成預設組裝換算的地方
 - **驗證意見**：耦合的前提被推翻，剩下的是散文過期。 （一）耦合不存在。messages 門檻比的是這條 thread 的有效訊息總數（summarization.ts:577 的 baseWillCatch 比 view.length）。serve 同一條 thread 每一輪共用同一個 thread_id 與 checkpointer 狀態，state.messages 跨輪累積（提醒器檔頭也寫連續次數跨輪累積）。所以「單次 invoke 跑滿能不能碰到 60 則」只關係到註解裡「一場跑滿的長任務會摘要一次」這句理由，不管門檻的作用： - 上限調低時，那一輪根本湊不到 60 則，不需要這道門檻；
@@ -613,7 +641,7 @@
 - **core-plugin-system**｜middleware 包裹層次（第一輪 01）：層次是基座的圖語意，排序知識集中在 fold 內部，plugin 端只拿得到 prepend，全名單測試釘著順序。這是深模組把知識藏在內部，不是漏到介面外的事實。
 - **core-plugin-system**｜plugin middleware 在 root 與子代理間共用實例，以及摘要器例外（第一輪 02、05）：契約寫在 use 的介面上：逐 agent 的狀態要從呼叫身分查，不放閉包；摘要器例外也寫在同一處。沒有工廠介面是 fold.ts 登記過的偏離，而且跟 dsh 同一個契約：dsh 的共用 plugin 以 WeakMap<Session> 放逐 agent 狀態。「沒有絆索」這一點登記裡自己承認了，今天全樹零顆帶逐 agent 閉包狀態的 plugin middleware。
 - **core-plugin-system**｜具名條目集合 entries.ts：跟 dsh scope/store.ts 的 NamedEntries 同名同形：撞名政策由建構時注入，undo 是冪等的。
-- **core-plugin-system**｜兩條 backend 通道：backend.mount 與 BACKEND_SERVICE：submit-record 拿的是折前那一個 backend，一致性靠「預設清單裡零個 backend.mount()」這條絆索守住。哪天有人掛路由，測試會紅。
+- **core-plugin-system**｜兩條 backend 通道：backend.mount 與 BACKEND_SERVICE：submit-record 拿的是折前那一個 backend，一致性靠「預設清單裡零個 backend.mount()」這條絆索守住。哪天有人掛路由，測試會紅。**盤點後更正：這一條不成立。** 組裝點在 fold 之前已經用 CompositeBackend 把 `/large_tool_results/` 與 `/conversation_history/` 路由到另一顆 backend，絆索只數 backend.mount()，看不到這一層，所以 submit-record 拿到的跟工具實際讀寫的不是同一個（讀碼推得，沒有實測）。見 #694。
 - **core-plugin-system**｜服務注入的清單順序：「缺件當場失敗、清單順序承重」是登記過的偏離（deepagents／LangGraph 沒有 cordis 的反應式 inject）。今天沒有 plugin 對 plugin 的 apply 期服務相依：git grep 'services.get(' -- apps packages（排除測試）顯示，apply 期讀服務的只有 ask-user 的 CHANNEL_SERVICE 與 submit-record 的 BACKEND_S…
 - **core-plugin-system**｜HostServices 的寬索引簽名：收任意服務名，跟 dsh cordis 的 provide(name: string, value?) 一致；registry.ts:220-221 也寫明了這一點。已知的服務名仍有具名型別的多載。
 - **core-plugin-system**｜PluginRegistry 的通道數：registry-channel-count.test.ts 用 satisfies Record<keyof PluginRegistry, true> 窮舉每個通道，加一個通道就會型別紅。它守的是通道層級，方法層級不在射程內，N1 就是方法層級漏掉的例子。
