@@ -328,7 +328,9 @@ describe('走真的線', () => {
 
       await feed.until((frames) => frames.length >= 1);
       // 補送的是那條 thread 下行上的同一顆，號一起；狀態不補送。
-      expect(feed.frames).toEqual([{ type: 'input-requested', threadId: 'parked', event: request }]);
+      expect(feed.frames).toEqual([
+        { type: 'input-requested', threadId: 'parked', event: request },
+      ]);
 
       const answered = await client.inputRespond('parked', {
         namespace: [...request.params.namespace],
