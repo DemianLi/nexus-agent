@@ -16,7 +16,7 @@ import type {
   FileReferenceListResult,
 } from './file-references.js';
 import { fileReferencesPath } from './file-references.js';
-import { decodeSseStream } from './sse.js';
+import { decodeSseData, decodeSseStream } from './sse.js';
 import type {
   Command,
   CommandResponse,
@@ -36,6 +36,7 @@ import type {
   SlashCommand,
   SlashDescriptor,
   SlashRunResult,
+  ThreadFeedFrame,
   ThreadHistoryQuery,
   ThreadHistoryResponse,
   ThreadHistoryResult,
@@ -48,10 +49,12 @@ import type {
 import {
   QUEUE_UPDATE_METHOD,
   RUN_CANCEL_METHOD,
+  THREAD_FEED_PATH,
   THREADS_PATH,
   WIRE_CHANNELS,
   commandPath,
   historyPath,
+  isThreadFeedFrame,
   streamPath,
 } from './protocol.js';
 
@@ -192,6 +195,15 @@ export interface WireClient {
    */
   listThreads(): Promise<ThreadListOutcome>;
   /**
+   * 開全部 thread 共用的那條下行（[#632](https://github.com/DemianLi/nexus-agent/issues/632)），契約見
+   * `THREAD_FEED_PATH`。**promise 兌現代表線已經開好**，同 {@link openEvents}；還掛著的那幾題緊接著補送。
+   *
+   * **兌現之後再抓一次 {@link listThreads}** 當「在跑」的起點：狀態切換不補送。不認得的 frame 在這裡就丟掉。
+   *
+   * @param signal - 中止這條線，不是任何一條 thread 的 run。
+   */
+  openThreadFeed(signal?: AbortSignal): Promise<AsyncGenerator<ThreadFeedFrame, void, undefined>>;
+  /**
    * 這條 thread 的一頁歷史（#306）。省略參數就是最後一頁；往前翻帶上一頁的 `firstSeq` 與第一頁的 `throughSeq`。
    *
    * **排在 {@link openEvents} 兌現之後**，照 dsh 的「先訂閱、再拿 snapshot」：反過來的話，兩者之間發生的事
@@ -209,6 +221,15 @@ export interface WireClient {
     query: string,
     signal?: AbortSignal,
   ): Promise<FileReferenceListOutcome>;
+}
+
+/** 全域下行上認得的那幾顆；不認得的跳過（`THREAD_FEED_PATH`：那條線之後會多出新種類）。 */
+async function* knownFeedFrames(
+  frames: AsyncGenerator<unknown, void, undefined>,
+): AsyncGenerator<ThreadFeedFrame, void, undefined> {
+  for await (const frame of frames) {
+    if (isThreadFeedFrame(frame)) yield frame;
+  }
 }
 
 /** `GET /threads/:id/file-references` 的結果。`rejected` 是這條 thread 起不來、或索引建不起來。 */
@@ -404,6 +425,25 @@ export function createWireClient(options: WireClientOptions): WireClient {
         throw new Error('下行沒有 body');
       }
       return decodeSseStream(response.body);
+    },
+
+    async openThreadFeed(signal) {
+      const response = await doFetch(`${base}${THREAD_FEED_PATH}`, {
+        method: 'GET',
+        // 同列表那一條：沒有它就是一個不發 preflight 的跨來源 simple request，見 `THREAD_FEED_PATH`。
+        headers: { 'content-type': 'application/json' },
+        ...(signal === undefined ? {} : { signal }),
+      });
+      if (!response.ok) {
+        throw new Error(`全域下行開不起來：${response.status} ${await response.text()}`);
+      }
+      if (!(response.headers.get('content-type') ?? '').startsWith('text/event-stream')) {
+        throw new Error(`全域下行被拒：${await response.text()}`);
+      }
+      if (response.body === null) {
+        throw new Error('全域下行沒有 body');
+      }
+      return knownFeedFrames(decodeSseData(response.body));
     },
 
     async runStart(threadId, text) {

@@ -35,6 +35,16 @@ export function encodeSseFrame(event: Event): string {
   return `${lines.join('\n')}${FRAME_SEPARATOR}`;
 }
 
+/**
+ * 一顆全域下行的 frame 編成一段 SSE frame（#632）。沒有 `id:`：那條線不重播，也沒有號。
+ *
+ * @param event - `event:` 欄位，給 SSE 那一層與除錯看的重複資訊，同 {@link encodeSseFrame}。
+ * @param data - 整顆 frame，JSON 編進 `data:`。
+ */
+export function encodeSseData(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}${FRAME_SEPARATOR}`;
+}
+
 /** SSE 的註解行（`:` 開頭）。目前只在解碼端認得，我們自己不發心跳。 */
 function isComment(line: string): boolean {
   return line.startsWith(':');
@@ -61,12 +71,25 @@ function isComment(line: string): boolean {
 export function decodeSseStream(
   body: ReadableStream<Uint8Array>,
 ): AsyncGenerator<Event, void, undefined> {
+  return decodeFrames(body.getReader()) as AsyncGenerator<Event, void, undefined>;
+}
+
+/**
+ * 同 {@link decodeSseStream}，但 `data` 只解成 JSON、不假設是 `Event`——給全域下行用（#632），那條線的 frame 由
+ * 呼叫端驗。**body 一樣在呼叫的當下就鎖住**，理由同上。
+ *
+ * @param body - 下行回應的 body。
+ * @returns 一顆一顆 `data` 解出來的值。
+ */
+export function decodeSseData(
+  body: ReadableStream<Uint8Array>,
+): AsyncGenerator<unknown, void, undefined> {
   return decodeFrames(body.getReader());
 }
 
 async function* decodeFrames(
   reader: ReadableStreamDefaultReader<Uint8Array>,
-): AsyncGenerator<Event, void, undefined> {
+): AsyncGenerator<unknown, void, undefined> {
   const decoder = new TextDecoder();
   let buffer = '';
 
@@ -95,7 +118,7 @@ async function* decodeFrames(
   }
 }
 
-function parseFrame(frame: string): Event | undefined {
+function parseFrame(frame: string): unknown {
   const data = frame
     .split('\n')
     .filter((line) => !isComment(line) && line.startsWith('data:'))
@@ -104,5 +127,5 @@ function parseFrame(frame: string): Event | undefined {
   if (data === '') {
     return undefined;
   }
-  return JSON.parse(data) as Event;
+  return JSON.parse(data) as unknown;
 }
