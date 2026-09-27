@@ -147,6 +147,8 @@ function fakeClient(
   const client: WireClient = {
     // 列檔（#651）沒有接。spread 的理由見 App.test.tsx 的 UNWIRED_FILE_REFERENCES。
     ...{ fileReferences: rejected },
+    // 全部會話共用的下行（#632）也沒有接，理由見 App.test.tsx 的 UNWIRED_THREAD_FEED。
+    ...{ openThreadFeed: () => new Promise<never>(() => undefined) },
     openEvents: async (threadId) => {
       const stream = downlink.open(threadId, []);
       return (async function* delayed() {

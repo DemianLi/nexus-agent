@@ -75,6 +75,15 @@ const UNWIRED_FILE_REFERENCES = {
   fileReferences: async () => ({ kind: 'rejected' as const, message: '這一檔沒有接列檔' }),
 };
 
+/**
+ * 全部會話共用的那條下行（#632）這一檔也沒有接，一樣用 spread 放進去，理由同上：`WireClient` 還沒有 `openThreadFeed`
+ * 時直接寫成屬性會被擋，有了之後照樣成立。回傳一個永遠不落地的 `Promise<never>`：不必引用還不存在的 frame 型別，
+ * 也就接得上任何回傳型別。#632 合了之後可以收成一般屬性。
+ */
+const UNWIRED_THREAD_FEED = {
+  openThreadFeed: () => new Promise<never>(() => undefined),
+};
+
 let seq = 0;
 
 function frame(method: string, namespace: readonly string[], data: unknown): Event {
@@ -157,6 +166,7 @@ function fakeClient(
   const downlink = fakeDownlink();
   const client: WireClient = {
     ...UNWIRED_FILE_REFERENCES,
+    ...UNWIRED_THREAD_FEED,
     slashList: async () => ({ kind: 'ok', commands: slash.commands ?? [] }),
     slashRun: async (_threadId, line) => {
       slashed.push(line);
@@ -331,6 +341,7 @@ describe('對話介面', () => {
   it('連不上就說連不上，不是一片空白', async () => {
     const client: WireClient = {
       ...UNWIRED_FILE_REFERENCES,
+      ...UNWIRED_THREAD_FEED,
       openEvents: async () => {
         throw new Error('下行開不起來：502');
       },
