@@ -107,8 +107,10 @@ function fakeClient(
   const client: WireClient = {
     // 列檔（#651）沒有接。spread 的理由見 App.test.tsx 的 UNWIRED_FILE_REFERENCES。
     ...{ fileReferences: async () => ({ kind: 'rejected' as const, message: '這一檔沒有接列檔' }) },
-    // 全部會話共用的下行（#632）也沒有接，理由見 App.test.tsx 的 UNWIRED_THREAD_FEED。
-    ...{ openThreadFeed: () => new Promise<never>(() => undefined) },
+    // 全部會話共用的下行（#632）沒有接：開不起來也不失敗。
+    openThreadFeed: () => new Promise<never>(() => undefined),
+    // 按內容搜尋（#631）也沒有接。spread 的理由見 App.test.tsx 的 UNWIRED_THREAD_SEARCH。
+    ...{ searchThreads: () => new Promise<never>(() => undefined) },
     openEvents: async () =>
       (async function* stream() {
         for (const event of ONE_RUN) yield event;
