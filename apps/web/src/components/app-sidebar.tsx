@@ -1,24 +1,24 @@
-import type { WireClient } from '@nexus/wire';
 import { Plus } from 'lucide-react';
 
 import { ThreadList } from '@/components/thread-list';
 import { Button } from '@/components/ui/button';
 import { Sidebar, SidebarContent, SidebarHeader, useSidebar } from '@/components/ui/sidebar';
+import type { ThreadDirectory } from '@/hooks/use-thread-directory';
 
 /**
  * 左側欄（inventory 列 1、2、6）：1024 以上是桌面側欄，以下收成抽屜（`hooks/use-mobile.ts`）。
  *
- * **清單只在看得到時掛上**：桌面展開、或抽屜打開。`ThreadList` 掛上才讀、每次掛上都重讀（#302 的理由：清單會變，
- * 讀一次是冷的），收起來就卸掉，下次打開重讀。
+ * **清單只在看得到時掛上**：桌面展開、或抽屜打開。資料不在這裡：清單與每一列的即時狀態由 `App` 的
+ * `useThreadDirectory` 持有（#632），`ThreadList` 每次掛上請它重抓一次（#302 的理由：清單會變），收起來就卸掉。
  */
 export function AppSidebar({
-  client,
+  directory,
   currentThreadId,
   currentTitle,
   onNewConversation,
   onPick,
 }: {
-  readonly client: WireClient;
+  readonly directory: ThreadDirectory;
   readonly currentThreadId: string;
   readonly currentTitle: string | null;
   readonly onNewConversation: () => void;
@@ -58,7 +58,7 @@ export function AppSidebar({
       <SidebarContent>
         {visible && (
           <ThreadList
-            client={client}
+            directory={directory}
             currentThreadId={currentThreadId}
             currentTitle={currentTitle}
             onPick={(threadId) => {

@@ -116,7 +116,7 @@
 
 | # | 元件 | wire | dsh | 市面 | 動效 | 備註 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 6 | 會話列表（分組、搜尋、狀態點） | P0（`ThreadSummary`、`ThreadListResult`） | `ui-sidebar`（multi-level tree、search、grouping、state dots）、`ui-primitives/StateDot` | — | 列表 stagger 40ms | `thread-list.tsx`；2026-09-25 #611 補分組（今天、昨天、過去 7 天、更早）、標題搜尋、執行中的點。資料仍是打開側欄那一刻的快照；按內容搜尋、即時狀態、釘選封存改名要 harness，已開 #631、#632、#633；2026-09-26 #631 拍板照 dsh 出廠預設關，關著時側欄仍只比標題 |
+| 6 | 會話列表（分組、搜尋、狀態點） | P0（`ThreadSummary`、`ThreadListResult`） | `ui-sidebar`（multi-level tree、search、grouping、state dots）、`ui-primitives/StateDot` | — | 列表 stagger 40ms | `thread-list.tsx`；2026-09-25 #611 補分組（今天、昨天、過去 7 天、更早）、標題搜尋、執行中的點。按內容搜尋、即時狀態、釘選封存改名要 harness，已開 #631、#632、#633；2026-09-26 #631 拍板照 dsh 出廠預設關，關著時側欄仍只比標題；2026-09-28 #632 接上即時狀態（在跑、等核准／提問／計劃審核、跑完沒看，走全域下行），清單本身仍是打開側欄與全域下行接上時各抓一次的快照（會話增減還不推） |
 | 7 | 新對話／空白狀態 hero | P0 | `ui-conversation/.../EmptyHero`、`HeroShell` | AIE `suggestion` | `thinking-orbs` `breathing` | |
 | 8 | 會話標頭（標題、工作目錄、背景工作） | P1 | `ui-jobs`、`ui-open-in-app`、`ui-schedule` | — | — | 2026-09-26 #655 做了標題：有標題寫標題，空白寫「新會話」，有輪次沒人打過字的跟列表同一句；瀏覽器分頁標題照 dsh「標題 — nexus-agent」；側欄目前這一列跟著即時標題換字。工作目錄與背景工作還沒 |
 | 9 | 歷史分頁載入（往回捲） | P0（`ThreadHistoryQuery`） | `ui-chat/ChatView`（`loadOlderAnchored`：一顆按鈕、自己記錨點） | sc `message-scroller` | —（**不做骨架**：跟真的內容不一樣高，換掉那一下又要補位置；規格 §7 也把載入歷史列在不動的那一類） | #306 做了讀取與按鈕；2026-09-25 補完（`earlier-pager.tsx`）：捲到頂端附近而且有往上的意圖才自動換一頁，按鈕留著；讀取中「讀取中…」；失敗畫在按鈕旁、改「再試一次」、不自動重試；讀完報讀接上幾則。輪次側軌拆成第 37 項 |

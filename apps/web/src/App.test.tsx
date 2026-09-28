@@ -2,12 +2,22 @@ import type {
   Event,
   SlashDescriptor,
   SlashRunOutcome,
+  ThreadFeedFrame,
   ThreadListResult,
+  ThreadListOutcome,
   UplinkResult,
   WireClient,
 } from '@nexus/wire';
 import { CONTEXT_MEASURE, MODEL_USAGE, TITLE, TODOS } from '@nexus/wire';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  cleanup,
+  configure,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -75,13 +85,18 @@ const UNWIRED_FILE_REFERENCES = {
   fileReferences: async () => ({ kind: 'rejected' as const, message: '這一檔沒有接列檔' }),
 };
 
-/**
- * 全部會話共用的那條下行（#632）這一檔也沒有接，一樣用 spread 放進去，理由同上：`WireClient` 還沒有 `openThreadFeed`
- * 時直接寫成屬性會被擋，有了之後照樣成立。回傳一個永遠不落地的 `Promise<never>`：不必引用還不存在的 frame 型別，
- * 也就接得上任何回傳型別。#632 合了之後可以收成一般屬性。
- */
-const UNWIRED_THREAD_FEED = {
+/** 全部會話共用的那條下行（#632）：預設開不起來也不失敗，側欄就跟沒有這條線一樣。要它的測試自己換掉這一格。 */
+const SILENT_THREAD_FEED: Pick<WireClient, 'openThreadFeed'> = {
   openThreadFeed: () => new Promise<never>(() => undefined),
+};
+
+/**
+ * 按內容搜尋（#631）這一檔沒有接。**用 spread 放進 `WireClient` 字面量**，理由同 `UNWIRED_FILE_REFERENCES`：
+ * `WireClient` 還沒有 `searchThreads` 時直接寫成屬性會被擋，有了之後照樣成立。`Promise<never>` 接得上任何回傳型別。
+ * #631 合了之後可以收成一般屬性。
+ */
+const UNWIRED_THREAD_SEARCH = {
+  searchThreads: () => new Promise<never>(() => undefined),
 };
 
 let seq = 0;
@@ -166,7 +181,8 @@ function fakeClient(
   const downlink = fakeDownlink();
   const client: WireClient = {
     ...UNWIRED_FILE_REFERENCES,
-    ...UNWIRED_THREAD_FEED,
+    ...SILENT_THREAD_FEED,
+    ...UNWIRED_THREAD_SEARCH,
     slashList: async () => ({ kind: 'ok', commands: slash.commands ?? [] }),
     slashRun: async (_threadId, line) => {
       slashed.push(line);
@@ -341,7 +357,8 @@ describe('對話介面', () => {
   it('連不上就說連不上，不是一片空白', async () => {
     const client: WireClient = {
       ...UNWIRED_FILE_REFERENCES,
-      ...UNWIRED_THREAD_FEED,
+      ...SILENT_THREAD_FEED,
+      ...UNWIRED_THREAD_SEARCH,
       openEvents: async () => {
         throw new Error('下行開不起來：502');
       },
@@ -1544,8 +1561,8 @@ describe('以前的會話', () => {
     it('跑著的那一列有一顆點，報讀器唸「執行中」', async () => {
       const list = await rendered();
       const running = within(list).getByRole('button', { name: /幫我改登入頁/ });
-      expect(within(running).getByTestId('thread-running').textContent).toBe('執行中');
-      expect(within(list).getAllByTestId('thread-running')).toHaveLength(1);
+      expect(within(running).getByTestId('thread-status').textContent).toBe('執行中');
+      expect(within(list).getAllByTestId('thread-status')).toHaveLength(1);
     });
 
     it('搜標題只留對得上的列，分組照樣在；Esc 清掉', async () => {
@@ -1573,6 +1590,231 @@ describe('以前的會話', () => {
       await rendered();
       expect(await axeViolations(document.body)).toEqual([]);
     });
+  });
+});
+
+/**
+ * 側欄每一列的即時狀態（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）。規則逐條驗在
+ * `lib/thread-status.test.ts`；這裡驗接上畫面之後：全域下行推來的東西畫到哪一列、重接時的順序、晚到的列表不蓋新的。
+ * `main.tsx` 開著 StrictMode，所以每條都在兩種模式各跑一次：dev 模式先掛上、卸載、再掛上，**活著的線只能有一條**。
+ */
+describe.each([false, true])('側欄的即時狀態（StrictMode：%s）', (strict) => {
+  beforeEach(() => configure({ reactStrictMode: strict }));
+  afterEach(() => configure({ reactStrictMode: false }));
+
+  const row = (threadId: string, title: string, running: boolean) => ({
+    threadId,
+    updatedAt: Date.now(),
+    running,
+    blank: false,
+    title,
+  });
+
+  const PLAN_REVIEW = {
+    id: 'plan-review',
+    question: '同意這份計劃嗎？',
+    detail: '# 改登入頁',
+    options: [{ label: '同意' }, { label: '繼續規劃' }],
+    intent: { kind: 'plan-review', approve: '同意' },
+  };
+
+  /** 每次 `openThreadFeed` 開一條新的線；測試推 frame 或讓它斷。斷掉的、卸載時被 abort 的都不算活著。 */
+  function scriptedFeed() {
+    const lines: {
+      readonly push: (...frames: ThreadFeedFrame[]) => void;
+      readonly fail: () => void;
+      readonly dead: () => boolean;
+    }[] = [];
+    const openThreadFeed: WireClient['openThreadFeed'] = async (signal) => {
+      const queue: ThreadFeedFrame[] = [];
+      let wake: (() => void) | undefined;
+      let error: Error | undefined;
+      signal?.addEventListener('abort', () => {
+        error = new Error('aborted');
+        wake?.();
+      });
+      lines.push({
+        push: (...frames) => {
+          queue.push(...frames);
+          wake?.();
+        },
+        fail: () => {
+          error = new Error('network error');
+          wake?.();
+        },
+        dead: () => error !== undefined,
+      });
+      return (async function* stream() {
+        for (;;) {
+          while (queue.length > 0) yield queue.shift()!;
+          if (error !== undefined) throw error;
+          await new Promise<void>((resolve) => (wake = resolve));
+        }
+      })();
+    };
+    const live = () => lines.filter((line) => !line.dead());
+    return {
+      openThreadFeed,
+      opened: () => lines.length,
+      /** 唯一活著的那一條。StrictMode 下先開的那一條要已經被收掉。 */
+      line: () => {
+        expect(live()).toHaveLength(1);
+        return live()[0]!;
+      },
+    };
+  }
+
+  function rendered(listThreads: WireClient['listThreads']) {
+    seq = 0;
+    const fake = fakeClient([]);
+    const feed = scriptedFeed();
+    render(<App client={{ ...fake.client, listThreads, openThreadFeed: feed.openThreadFeed }} />);
+    return feed;
+  }
+
+  const ok = (...items: ReturnType<typeof row>[]): ThreadListOutcome => ({
+    kind: 'ok',
+    result: { unreadable: 0, items },
+  });
+
+  async function rowOf(title: string): Promise<HTMLElement> {
+    const list = await screen.findByRole('group', { name: '以前的會話' });
+    return within(list).findByRole('button', { name: new RegExp(title) });
+  }
+
+  const statusOf = (element: HTMLElement) =>
+    within(element).queryByTestId('thread-status')?.getAttribute('data-status') ?? null;
+
+  it('沒打開的那條停在核准：那一列標出來、時間換成「待核准」；撤回就回到在跑', async () => {
+    const feed = rendered(async () => ok(row('a', '改登入頁', true)));
+    const target = await rowOf('改登入頁');
+    await waitFor(() => expect(statusOf(target)).toBe('running'));
+
+    feed.line().push({
+      type: 'input-requested',
+      threadId: 'a',
+      event: approvalFrame([{ name: 'alpha', allowed: ['approve', 'reject'] }], 'int-1'),
+    });
+    await waitFor(() => expect(statusOf(target)).toBe('approval'));
+    expect(within(target).getByTestId('thread-status').textContent).toBe('等待核准');
+    expect(target.textContent).toContain('待核准');
+    expect(target.textContent).not.toMatch(/\d{1,2}:\d{2}/);
+
+    feed.line().push({ type: 'input-withdrawn', threadId: 'a', interruptId: 'int-1' });
+    await waitFor(() => expect(statusOf(target)).toBe('running'));
+  });
+
+  it('同一條同時掛核准與計劃審核，畫計劃審核', async () => {
+    const feed = rendered(async () => ok(row('a', '改登入頁', true)));
+    const target = await rowOf('改登入頁');
+    feed.line().push(
+      {
+        type: 'input-requested',
+        threadId: 'a',
+        event: approvalFrame([{ name: 'alpha', allowed: ['approve'] }], 'int-1'),
+      },
+      {
+        type: 'input-requested',
+        threadId: 'a',
+        event: frame('input.requested', ['tools:b'], {
+          interrupt_id: 'int-2',
+          payload: { kind: 'question', questions: [PLAN_REVIEW] },
+        }),
+      },
+    );
+    await waitFor(() => expect(statusOf(target)).toBe('plan-review'));
+    expect(target.textContent).toContain('計劃待審');
+  });
+
+  it('別條跑完標「已完成」，點進去就清掉；目前這條停下不標', async () => {
+    let items = [row('b', '寫測試', true)];
+    const feed = rendered(async () => ok(...items));
+    const target = await rowOf('寫測試');
+    await waitFor(() => expect(statusOf(target)).toBe('running'));
+
+    items = [row('b', '寫測試', false)];
+    feed.line().push({ type: 'status', threadId: 'b', running: false });
+    await waitFor(() => expect(statusOf(target)).toBe('completed'));
+    expect(within(target).getByTestId('thread-status').textContent).toBe('已完成');
+
+    fireEvent.click(target);
+    const current = await rowOf('寫測試');
+    await waitFor(() => expect(current.textContent).toContain('目前這條'));
+    expect(statusOf(current)).toBeNull();
+
+    feed.line().push({ type: 'status', threadId: 'b', running: true });
+    await waitFor(() => expect(statusOf(current)).toBe('running'));
+    feed.line().push({ type: 'status', threadId: 'b', running: false });
+    await waitFor(() => expect(statusOf(current)).toBeNull());
+  });
+
+  it('換會話不重開全域下行：別條的「已完成」換過去之後還在', async () => {
+    let items = [row('b', '寫測試', false), row('c', '跑腿', true)];
+    const feed = rendered(async () => ok(...items));
+    const errand = await rowOf('跑腿');
+    await waitFor(() => expect(statusOf(errand)).toBe('running'));
+    items = [row('b', '寫測試', false), row('c', '跑腿', false)];
+    feed.line().push({ type: 'status', threadId: 'c', running: false });
+    await waitFor(() => expect(statusOf(errand)).toBe('completed'));
+    // **換之前記**：線掛在會跟著對話畫面重掛的地方的話，換的那一下就重開了。
+    const opened = feed.opened();
+
+    fireEvent.click(await rowOf('寫測試'));
+    await waitFor(async () => expect((await rowOf('寫測試')).textContent).toContain('目前這條'));
+    expect(statusOf(await rowOf('跑腿'))).toBe('completed');
+    expect(feed.opened()).toBe(opened);
+  });
+
+  it('斷線重接：重抓一次列表、舊的標記清掉、補送回來的才畫', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    let reads = 0;
+    const feed = rendered(async () => {
+      reads += 1;
+      return ok(row('a', '改登入頁', true), row('b', '寫測試', true));
+    });
+    const first = await rowOf('改登入頁');
+    const second = await rowOf('寫測試');
+    feed.line().push({
+      type: 'input-requested',
+      threadId: 'a',
+      event: approvalFrame([{ name: 'alpha', allowed: ['approve'] }], 'int-a'),
+    });
+    await waitFor(() => expect(statusOf(first)).toBe('approval'));
+    const opened = feed.opened();
+    const before = reads;
+
+    feed.line().fail();
+    // 第 1 次重試等 250ms（亂數固定在 0）。
+    await waitFor(() => expect(feed.opened()).toBe(opened + 1), { timeout: 2_000 });
+    await waitFor(() => expect(reads).toBe(before + 1));
+    // 斷線期間 a 那一題答掉了：接上時伺服器只補送 b 的。
+    await waitFor(() => expect(statusOf(first)).toBe('running'));
+    feed.line().push({
+      type: 'input-requested',
+      threadId: 'b',
+      event: approvalFrame([{ name: 'beta', allowed: ['approve'] }], 'int-b'),
+    });
+    await waitFor(() => expect(statusOf(second)).toBe('approval'));
+    expect(statusOf(first)).toBe('running');
+    vi.restoreAllMocks();
+  });
+
+  it('早送出、晚回來的那份列表不蓋掉晚送出的', async () => {
+    const pending: ((outcome: ThreadListOutcome) => void)[] = [];
+    rendered(
+      () =>
+        new Promise<ThreadListOutcome>((resolve) => {
+          pending.push(resolve);
+        }),
+    );
+    // 掛上時一次、全域下行接上時一次（StrictMode 下更多）。
+    await waitFor(() => expect(pending.length).toBeGreaterThanOrEqual(2));
+    pending.at(-1)!(ok(row('a', '改登入頁', true)));
+    const target = await rowOf('改登入頁');
+    await waitFor(() => expect(statusOf(target)).toBe('running'));
+    for (const resolve of pending.slice(0, -1)) resolve(ok(row('a', '改登入頁', false)));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(statusOf(target)).toBe('running');
   });
 });
 

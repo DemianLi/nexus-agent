@@ -28,6 +28,8 @@ import { Toaster } from '@/components/ui/sonner';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useConversation } from '@/hooks/use-conversation';
+import { useThreadDirectory } from '@/hooks/use-thread-directory';
+import type { ThreadDirectory } from '@/hooks/use-thread-directory';
 import { useThemePreference } from '@/hooks/use-theme-preference';
 import { agentBaseUrl, createAgentClient } from '@/lib/agent';
 import { createChangesStores } from '@/lib/changes-diff';
@@ -126,6 +128,8 @@ export function App({ client }: { client?: WireClient } = {}) {
   // 一個 App 一個 client：清單與對話走同一條線。放在這裡而不是 hook 裡，是因為清單不屬於任何一條 thread。
   const wire = useMemo(() => client ?? createAgentClient(), [client]);
   const [theme] = useThemePreference();
+  // 清單與每一列的即時狀態（#632）也在 thread 外面：換一條不重開全域下行，「跑完沒看」不歸零。
+  const directory = useThreadDirectory(wire, choice.threadId);
   // 換 thread 有兩條路（「新對話」與從清單點一條），**後按的那一下贏**：「新對話」要先讀清單，讀回來之前人已經從清單
   // 點了別條的話，晚到的結果不能把人拉回去。讀清單期間再按一次「新對話」不另開一次（dsh `connectWorkspace` 的
   // `connecting`）——兩次讀到的是同一份清單，只會換一次。
@@ -166,6 +170,7 @@ export function App({ client }: { client?: WireClient } = {}) {
       <ConversationView
         key={choice.threadId}
         client={wire}
+        directory={directory}
         threadId={choice.threadId}
         notice={ORIGIN_NOTICE[choice.origin]}
         onNewConversation={newConversation}
@@ -182,12 +187,14 @@ export function App({ client }: { client?: WireClient } = {}) {
 
 function ConversationView({
   client,
+  directory,
   threadId,
   notice,
   onNewConversation,
   onSwitch,
 }: {
   readonly client: WireClient;
+  readonly directory: ThreadDirectory;
   readonly threadId: string;
   readonly notice: string | undefined;
   readonly onNewConversation: (engaged: boolean) => void;
@@ -279,7 +286,7 @@ function ConversationView({
   return (
     <RightSidebarProvider threadId={threadId} sources={sidebarSources}>
       <AppSidebar
-        client={client}
+        directory={directory}
         currentThreadId={threadId}
         currentTitle={title}
         onNewConversation={() => onNewConversation(engaged)}
