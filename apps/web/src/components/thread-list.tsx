@@ -43,7 +43,7 @@ export { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/lib/thread-title';
  *
  * **分組、搜尋**（inventory 列 6）：按今天／昨天／過去 7 天／更早分組，規則在 `lib/thread-groups.ts`。搜尋比標題，也問伺服器
  * 比內容（[#760](https://github.com/DemianLi/nexus-agent/issues/760)），規則在 `lib/thread-search.ts`：打完停 250ms 才問、下一個
- * 字一到就取消上一次；伺服器拒絕（出廠沒開就是）或搜尋失敗，那一次只比標題、照印原因，跟 #610 一樣。
+ * 字一到就取消上一次；伺服器拒絕（出廠沒開就是）或搜尋失敗，那一次只比標題，跟 #610 一樣（拋錯時多一句說明）。
  *
  * **狀態點**（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）：即時的，照全域下行翻，規則在
  * `lib/thread-status.ts`。等人回答（核准、提問、計劃審核）＞ 在跑 ＞ 跑完沒看，一列只畫最前面那一種；點旁邊有給
@@ -89,8 +89,8 @@ export function ThreadList({
   const searching = needle !== '' && search !== undefined;
   const [answer, setAnswer] = useState<{
     readonly query: string;
-    /** 內容命中，或這一次為什麼只比了標題。 */
-    readonly matches: ContentMatches | { readonly fallback: string };
+    /** 內容命中，或這一次只比了標題（拋錯時帶一句給人看的）。 */
+    readonly matches: ContentMatches | { readonly fallback: string | null };
   } | null>(null);
   useEffect(() => {
     if (!searching) return;
@@ -98,16 +98,17 @@ export function ThreadList({
     const timer = window.setTimeout(() => {
       search(needle, controller.signal).then(
         (outcome) => {
-          // 這一格要留著：沒有別的東西擋得住取消之後晚到的那一份。
-          if (controller.signal.aborted) return;
+          // 取消掉的那一次回來了也不用擋：答案按查詢記，舊查詢的對不上；打回同一個字時，回來的是同一個查詢的答案。
+          // 被拒就是 #610 的樣子，不印原因：提示字「搜尋標題」已經講了只比標題，出廠又是關的，印了每個人每次搜都看得到。
           if (outcome.kind === 'rejected') {
-            setAnswer({ query: needle, matches: { fallback: outcome.message } });
+            setAnswer({ query: needle, matches: { fallback: null } });
           } else {
             setOn(true);
             setAnswer({ query: needle, matches: outcome.result });
           }
         },
         () => {
+          // 這一格要留著：被取消的 fetch 也從這裡拋，打回同一個字時會被當成這個查詢失敗了。
           if (!controller.signal.aborted) {
             setAnswer({ query: needle, matches: { fallback: '內容搜尋失敗，這一次只比了標題。' } });
           }
@@ -122,7 +123,8 @@ export function ThreadList({
   // 回來的那一份是這個查詢的才算；不是就還在等（dsh 的 `currentRemote`）。
   const current = searching && answer?.query === needle ? answer.matches : undefined;
   const pending = searching && on && current === undefined;
-  const fallback = current !== undefined && 'fallback' in current ? current.fallback : undefined;
+  const fellBack = current !== undefined && 'fallback' in current;
+  const fallback = fellBack ? current.fallback : null;
   const visible =
     listing.kind === 'ok'
       ? withCurrentTitle(listing.result.items, currentThreadId, currentTitle).filter(
@@ -135,7 +137,7 @@ export function ThreadList({
     current === undefined || 'fallback' in current ? undefined : current,
   );
   // 只比了標題：沒接、被拒、失敗，或還不知道開沒開。
-  const titleOnly = !searching || fallback !== undefined || !on;
+  const titleOnly = !searching || fellBack || !on;
 
   return (
     <SidebarGroup role="group" aria-labelledby={labelId} className="text-sm">
@@ -202,7 +204,7 @@ export function ThreadList({
                   還有更多沒列出來，多打幾個字可以縮小範圍。
                 </p>
               )}
-              {fallback !== undefined && (
+              {fallback !== null && (
                 <p className="text-muted-foreground px-2 pt-1 text-xs">{fallback}</p>
               )}
             </>

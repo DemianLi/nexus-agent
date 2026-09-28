@@ -217,20 +217,19 @@ describe('有開內容搜尋', () => {
 });
 
 describe('退回只比標題', () => {
-  it('伺服器拒絕：照印原因、這一次只比標題；不記住，下一次照樣問', async () => {
+  it('伺服器拒絕：這一次只比標題，跟 #610 一樣不多講；不記住，下一次照樣問', async () => {
     const fake = searcher();
     renderList(fake.search);
     type('部署');
     await wait(SEARCH_DEBOUNCE_MS);
     await act(async () => fake.calls[0]!.resolve({ kind: 'rejected', message: '這個部署沒開' }));
-    expect(screen.getByText('這個部署沒開')).toBeTruthy();
+    expect(screen.queryByText('這個部署沒開')).toBeNull();
     expect(rows()).toEqual([expect.stringContaining('整理部署腳本')]);
     expect(box().placeholder).toBe('搜尋標題');
     type('沒這個字');
     // 沒回過「有」：不畫骨架，「搜不到」照 #610 馬上講。
     expect(skeleton()).toBeNull();
     expect(screen.getByRole('status').textContent).toBe('沒有標題含「沒這個字」的會話。');
-    expect(screen.queryByText('這個部署沒開')).toBeNull();
     await wait(SEARCH_DEBOUNCE_MS);
     expect(fake.calls).toHaveLength(2);
   });
