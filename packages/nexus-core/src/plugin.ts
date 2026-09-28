@@ -326,6 +326,65 @@ export function parseEntryConfig(
  *   指得出是清單裡哪一個。
  */
 export function resolveEntries(entries: readonly PluginEntry[]): ResolvedPluginEntry[] {
+  // **設定全部驗完才回傳**，不是邊回傳邊驗：`loadPlugins` 拿到清單就開始跑 `apply`，
+  // 所以「第三個條目的設定打錯時第一個的 apply 不能跑」這條驗收句活在這一圈裡。
+  return resolveIdentities(entries).map(({ entry, origin, disabled }) => ({
+    plugin: entry.plugin,
+    origin,
+    disabled,
+    config: disabled ? undefined : parseEntryConfig(entry, entry.plugin, origin),
+  }));
+}
+
+/** {@link resolveEntriesPerEntry} 的一格：解析得出身分，設定可能驗不過。 */
+export interface EntryResolution {
+  readonly plugin: NexusPlugin<unknown>;
+  readonly origin: PluginOrigin;
+  readonly disabled: boolean;
+  /** 驗過的設定；{@link configError} 在時沒有意義。 */
+  readonly config: unknown;
+  /** 這一列的設定驗不過時的錯誤，訊息同 {@link parseEntryConfig}。 */
+  readonly configError?: TypeError;
+}
+
+/**
+ * {@link resolveEntries} 的逐列版：**一列的設定驗不過只記在那一列**，不讓整份失敗。
+ *
+ * 給 `loadPlugins` 的逐列掉模式用（照 dsh：一列起不來，其他列照樣起來）。**整份清單的性質照舊整份失敗**：
+ * 條目形狀不合法、兩個條目寫了同一個 id——那是 dsh 失敗表的第一列，設定檔本身含不合法的條目
+ * （dsh `packages/boot/app-boot/README.zh.md:96`，`477b4f4`）。
+ *
+ * @param entries - 待解析的清單，順序有意義。
+ * @returns 與清單等長、同序的掛載。
+ * @throws 某個條目的形狀不合法，或兩個條目寫了同一個 id。
+ */
+export function resolveEntriesPerEntry(entries: readonly PluginEntry[]): EntryResolution[] {
+  return resolveIdentities(entries).map(({ entry, origin, disabled }) => {
+    if (disabled) return { plugin: entry.plugin, origin, disabled, config: undefined };
+    try {
+      return {
+        plugin: entry.plugin,
+        origin,
+        disabled,
+        config: parseEntryConfig(entry, entry.plugin, origin),
+      };
+    } catch (error) {
+      // schema 裡的 transform 或 refine 自己拋的也算這一列的設定壞了，不讓它拖垮整份。
+      const configError =
+        error instanceof TypeError
+          ? error
+          : new TypeError(`${formatOrigin(origin)} 的 config 不合法 — ${String(error)}`, {
+              cause: error,
+            });
+      return { plugin: entry.plugin, origin, disabled, config: undefined, configError };
+    }
+  });
+}
+
+/** 驗形狀、抓重複 id、補號。兩支解析共用，見 {@link resolveEntries}。 */
+function resolveIdentities(
+  entries: readonly PluginEntry[],
+): { entry: PluginEntry; origin: PluginOrigin; disabled: boolean }[] {
   const parsed = entries.map((entry, index) => ({ entry, ...parseEntry(entry, index) }));
 
   // 先把手寫的 id 全部收進來再補號：補號要跳過它們，而它們可能出現在清單的任何位置。
@@ -343,7 +402,7 @@ export function resolveEntries(entries: readonly PluginEntry[]): ResolvedPluginE
   }
 
   const counters = new Map<string, number>();
-  const resolved = parsed.map(({ entry, manifest, entryManifest }, index) => {
+  return parsed.map(({ entry, manifest, entryManifest }, index) => {
     const disabled = entryManifest.disabled ?? false;
     if (entryManifest.id !== undefined) {
       return { entry, origin: { id: entryManifest.id, name: manifest.name }, disabled };
@@ -358,13 +417,4 @@ export function resolveEntries(entries: readonly PluginEntry[]): ResolvedPluginE
     taken.set(id, index);
     return { entry, origin: { id, name: manifest.name }, disabled };
   });
-
-  // **設定全部驗完才回傳**，不是邊回傳邊驗：`loadPlugins` 拿到清單就開始跑 `apply`，
-  // 所以「第三個條目的設定打錯時第一個的 apply 不能跑」這條驗收句活在這一圈裡。
-  return resolved.map(({ entry, origin, disabled }) => ({
-    plugin: entry.plugin,
-    origin,
-    disabled,
-    config: disabled ? undefined : parseEntryConfig(entry, entry.plugin, origin),
-  }));
 }

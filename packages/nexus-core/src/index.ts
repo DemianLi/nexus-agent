@@ -12,6 +12,7 @@ export type {
   PluginManifest,
   PluginOrigin,
   ResolvedPluginEntry,
+  EntryResolution,
 } from './plugin.js';
 export {
   entryManifestSchema,
@@ -19,6 +20,7 @@ export {
   parseEntry,
   parseEntryConfig,
   resolveEntries,
+  resolveEntriesPerEntry,
   formatOrigin,
 } from './plugin.js';
 
@@ -120,7 +122,7 @@ export { createRegistry } from './registry.js';
 export type { HostServices } from './host-services.js';
 export { createHostServicesPlugin } from './host-services.js';
 
-export type { LoadResult } from './load.js';
+export type { DropStage, DroppedEntry, LoadOptions, LoadResult } from './load.js';
 export { loadPlugins } from './load.js';
 
 export type { ToolEventSessions } from './containment.js';
