@@ -7,10 +7,10 @@
  * 自己 spawn 的地方，所以直接用 `node:child_process` 的 `spawn`（參數陣列，不經 shell）。**退掉的是載體，
  * 隨載體來的規則明著抄過來**：
  *
- * - **環境**：dsh 的 `scrubbedParentEnv()`（`packages/subprocess/subprocess/src/index.ts:47-78`）拿掉名字像
- *   憑證的變數（`/KEY|PASSWORD|SECRET|TOKEN/i`）與自己的 `DSH_*`；我們拿掉同一批與自己的 `NEXUS_*`，見
- *   {@link scrubbedParentEnv}。dsh 另外把 proxy 變數還原成使用者設的樣子，給子行程裡的 Node 用；git 快照不碰
- *   網路，那一段不抄。
+ * - **環境**：dsh 的 `scrubbedParentEnv()`（`packages/subprocess/subprocess/src/index.ts:47-80`）拿掉名字像
+ *   憑證的變數（`/KEY|PASSWORD|SECRET|TOKEN/i`）與自己的 `DSH_*`；我們拿掉同一批與自己的 `NEXUS_*`，定義跟 MCP
+ *   的 stdio server 共用一份，在 `@nexus/core` 的 `child-env.ts`（#726）。dsh 另外把 proxy 變數還原成使用者設的
+ *   樣子，給子行程裡的 Node 用；那一層將來疊進共用的那一份（#746），git 快照不碰網路，用不到。
  * - **逾時與輸出上限**：能力層提供的 `AbortSignal`、`graceMs`、stdout 位元組上限（保留尾端），在
  *   {@link GitRunner.run} 裡自己做。
  * - **找執行檔**：能力層的 `resolveExecutable` 在淨化過的 `PATH` 裡找，見 {@link resolveGitExecutable}。
@@ -33,6 +33,8 @@ import { access, copyFile, mkdir, mkdtemp, rm, stat, utimes } from 'node:fs/prom
 import { homedir } from 'node:os';
 import { delimiter, isAbsolute, join, relative, resolve } from 'node:path';
 
+import { scrubbedParentEnv } from '@nexus/core';
+
 import { parseNumstat } from './numstat.js';
 import type { NumstatEntry } from './numstat.js';
 import { canonicalPath, isInside, toPosix } from './paths.js';
@@ -41,32 +43,6 @@ import { canonicalPath, isInside, toPosix } from './paths.js';
 const TERMINATE_GRACE_MS = 2_000;
 /** 留下來診斷用的 stderr 尾端。 */
 const STDERR_TAIL_BYTES = 16 * 1024;
-
-/**
- * 名字像憑證的環境變數不交給子行程，照抄 dsh 的 `SENSITIVE_ENV_PATTERN`。git 自己的
- * `GIT_CONFIG_KEY_<n>` 也中這一條，所以 {@link GitRunner} 另外設 `GIT_CONFIG_COUNT=0`，同 dsh。
- */
-export const SENSITIVE_ENV_PATTERN = /KEY|PASSWORD|SECRET|TOKEN/i;
-/** harness 自己的變數前綴；dsh 拿掉的是 `DSH_*`。 */
-const HARNESS_ENV_PREFIX = 'NEXUS_';
-
-/**
- * 父行程的環境，拿掉名字像憑證的與 harness 自己的變數，照 dsh 的 `scrubbedParentEnv()`。兩條都不分大小寫。
- * `PATH`、`HOME`、語系照留，git 才跑得起來。
- * @param source - 父行程的環境，省略是 `process.env`。
- * @returns 一份新的環境物件。
- */
-export function scrubbedParentEnv(
-  source: Readonly<Record<string, string | undefined>> = process.env,
-): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(source)) {
-    if (value === undefined || SENSITIVE_ENV_PATTERN.test(key)) continue;
-    if (key.toUpperCase().startsWith(HARNESS_ENV_PREFIX)) continue;
-    env[key] = value;
-  }
-  return env;
-}
 
 /** 一次 git 指令落定的結果；非零的結束碼是結果，不是例外。 */
 export interface GitRunResult {

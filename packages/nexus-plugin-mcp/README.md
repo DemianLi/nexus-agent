@@ -44,7 +44,7 @@ server-qualified 形狀。（**只有乾淨的名字對得上**，被正規化�
 | `connection.transport` | 兩者 | 是 | `"stdio"` 或 `"http"` |
 | `connection.command` | stdio | 是 | 要執行的程式 |
 | `connection.args` | stdio | 否 | 參數 |
-| `connection.env` | stdio | 否 | 額外的環境變數 |
+| `connection.env` | stdio | 否 | 額外的環境變數，疊在清洗過的父環境上（見下） |
 | `connection.cwd` | stdio | 否 | 子行程的工作目錄 |
 | `connection.url` | http | 是 | server 網址 |
 | `connection.headers` | http | 否 | 額外標頭（授權用） |
@@ -53,6 +53,14 @@ server-qualified 形狀。（**只有乾淨的名字對得上**，被正規化�
 
 秘密一律從呼叫端的環境變數來，不寫進程式碼、設定檔或測試 fixture（見
 [`docs/standards.md`](../../docs/standards.md)）。
+
+**stdio server 的環境照 dsh 以清洗過的父環境為底**（[#726](https://github.com/DemianLi/nexus-agent/issues/726)）：
+子行程拿到的是 nexus 這個行程的環境，扣掉名字像憑證的（`/KEY|PASSWORD|SECRET|TOKEN/i`，不分大小寫）與
+`NEXUS_*`，再疊上 `connection.env`。所以語系、代理（`HTTPS_PROXY`／`NO_PROXY`）、`NODE_EXTRA_CA_CERTS`、
+`TMPDIR` 這類照繼承，不必逐個填；要交給 server 的憑證得明著寫進 `connection.env`（上面範例的
+`GITHUB_TOKEN`），同名時 `connection.env` 的值優先。清洗的定義跟 git 快照共用一份（`@nexus/core` 的
+`scrubbedParentEnv`）。代理變數到得了子行程，但 Node 寫的 server 要自己開 `NODE_USE_ENV_PROXY` 才會照它走；
+替子行程補這個旗標是 [#746](https://github.com/DemianLi/nexus-agent/issues/746) 的事。
 
 ## 工具名
 

@@ -21,6 +21,7 @@
 import type { StructuredTool } from '@langchain/core/tools';
 import { MultiServerMCPClient } from '@langchain/mcp-adapters';
 import type { Connection } from '@langchain/mcp-adapters';
+import { scrubbedParentEnv } from '@nexus/core';
 import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
 import { z } from 'zod';
 import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
@@ -45,7 +46,9 @@ export const mcpStdioConnectionSchema = z.strictObject({
   /** 傳給它的參數。 */
   args: z.array(z.string()).optional(),
   /**
-   * 額外的環境變數。
+   * 額外的環境變數，**疊在清洗過的父環境上**（#726，照 dsh）：子行程拿到的是這個行程的環境扣掉名字像憑證的
+   * （`/KEY|PASSWORD|SECRET|TOKEN/i`）與 `NEXUS_*`，再疊這一格。所以語系、代理、CA 這類不必逐個填；要交給
+   * server 的憑證（例如 `GITHUB_TOKEN`）得明著寫在這裡，同名時這一格的值蓋過父環境的。
    *
    * **秘密只從呼叫端的環境變數來**（`docs/standards.md`）：這裡收的是值，寫死 token 的
    * 地方不在這個型別裡，而在填它的那一行。
@@ -212,7 +215,10 @@ function toAdapterConnection(config: McpConfig): Connection {
       command: connection.command,
       // adapter 的 stdio schema 把 `args` 列為必填，沒有參數的 server 也要給一個空陣列。
       args: [...(connection.args ?? [])],
-      ...(connection.env !== undefined && { env: { ...connection.env } }),
+      // **一律傳整份**，照 dsh 的 `buildChildEnv`（`packages/mcp/mcp-client/src/transport.ts:22`，`477b4f4`）：清洗過的
+      // 父環境在前、設定的在後。不傳或只傳設定那幾格的話，底由 adapter（只補 `PATH`）與 SDK
+      // （`getDefaultEnvironment()`，六個名字）決定，語系與代理都到不了子行程。
+      env: { ...scrubbedParentEnv(), ...connection.env },
       ...(connection.cwd !== undefined && { cwd: connection.cwd }),
       defaultToolTimeout: timeout,
     };

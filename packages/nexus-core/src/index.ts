@@ -129,6 +129,7 @@ export type {
 export { createRegistry } from './registry.js';
 export type { HostServices } from './host-services.js';
 export { createHostServicesPlugin } from './host-services.js';
+export { scrubbedParentEnv, SENSITIVE_ENV_PATTERN } from './child-env.js';
 
 export type { DropStage, DroppedEntry, LoadOptions, LoadResult } from './load.js';
 export { loadPlugins } from './load.js';

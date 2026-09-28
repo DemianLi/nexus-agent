@@ -91,6 +91,15 @@ const UNWIRED_THREAD_SEARCH: Pick<WireClient, 'searchThreads'> = {
   searchThreads: () => new Promise<never>(() => undefined),
 };
 
+/**
+ * 列會話候選（`@` 引用別的會話，#713）這一檔沒有接。**用 spread 放進 `WireClient` 字面量**：`WireClient` 還沒有
+ * `sessionReferences` 時，直接寫成屬性會被當成多出來的屬性（TS2353），spread 進來的不做這個檢查；#713 的 harness
+ * 那一半讓它變成必填之後照樣成立。那一半合了之後，改成 `Pick<WireClient, 'sessionReferences'>` 跟上面幾個一樣。
+ */
+const UNWIRED_SESSION_REFERENCES = {
+  sessionReferences: async () => ({ kind: 'rejected' as const, message: '這一檔沒有接列會話' }),
+};
+
 let seq = 0;
 
 function frame(method: string, namespace: readonly string[], data: unknown): Event {
@@ -175,6 +184,7 @@ function fakeClient(
     ...UNWIRED_FILE_REFERENCES,
     ...SILENT_THREAD_FEED,
     ...UNWIRED_THREAD_SEARCH,
+    ...UNWIRED_SESSION_REFERENCES,
     slashList: async () => ({ kind: 'ok', commands: slash.commands ?? [] }),
     slashRun: async (_threadId, line) => {
       slashed.push(line);
@@ -351,6 +361,7 @@ describe('對話介面', () => {
       ...UNWIRED_FILE_REFERENCES,
       ...SILENT_THREAD_FEED,
       ...UNWIRED_THREAD_SEARCH,
+      ...UNWIRED_SESSION_REFERENCES,
       openEvents: async () => {
         throw new Error('下行開不起來：502');
       },
