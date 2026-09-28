@@ -1,7 +1,8 @@
 /**
  * 按內容搜尋以前的 thread（[#631](https://github.com/DemianLi/nexus-agent/issues/631)）。行為與偏離見 `thread-search.ts` 的檔頭。
  *
- * 日誌由 `SessionLog` 產生、照 JSONL 後端的檔名寫下去，不經 serve：這一檔問的是「讀出來搜不搜得到、排得對不對」。
+ * 日誌由 `SessionLog` 產生、照 JSONL 後端的檔名寫下去，不經 serve，讀經過後端的 `list`／`open(id, 'read')`（#665）：
+ * 這一檔問的是「讀出來搜不搜得到、排得對不對」。
  * 線上的形狀與產品路徑在 `serve-thread-search.test.ts`。
  */
 
@@ -18,8 +19,8 @@ import {
 } from '@nexus/wire';
 import { describe, expect, it, vi } from 'vitest';
 
+import { openJsonlSessionStore } from './jsonl-session-store.js';
 import {
-  documentsOf,
   makeSnippet,
   searchDocuments,
   THREAD_SEARCH_DISABLED_MESSAGE,
@@ -79,7 +80,7 @@ function search(directory: string | undefined, overrides: Partial<ThreadSearchOp
   return new ThreadSearch({
     cwd: CWD,
     openAt: 'first-search',
-    ...(directory !== undefined && { directory }),
+    ...(directory !== undefined && { store: openJsonlSessionStore({ directory }) }),
     ...overrides,
   });
 }
@@ -188,8 +189,8 @@ describe('搜得到哪幾則（searchDocuments）', () => {
   });
 });
 
-describe('中間壞掉的日誌（documentsOf）', () => {
-  it('壞的那幾行略過，其餘照一般規則：壓縮換掉的照樣不收', () => {
+describe('中間壞掉的日誌（後端的撿回模式）', () => {
+  it('壞的那幾行略過，其餘照一般規則：壓縮換掉的照樣不收', async () => {
     const log = new SessionLog('t');
     chat(log, '一', 'A');
     // 回覆「A」之後壓縮：那一刻推出來兩則，`messagesBefore` 是 1，切掉「一」。
@@ -202,9 +203,16 @@ describe('中間壞掉的日誌（documentsOf）', () => {
     chat(log, '二', 'B');
     const lines = jsonl(log.events).split('\n');
     const torn = [...lines.slice(0, 3), '{壞掉', ...lines.slice(3)].join('\n');
-    const texts = (body: string) => documentsOf('t', body).map((document) => document.text);
-    expect(texts(jsonl(log.events))).toEqual(['A', '摘要', '二', 'B']);
-    expect(texts(torn)).toEqual(['A', '摘要', '二', 'B']);
+    const directory = await dir();
+    await writeThread(directory, 'clean', log.events);
+    await writeThread(directory, 'torn', []);
+    await writeFile(join(directory, 'torn.jsonl'), torn);
+    const texts = async (id: string) =>
+      searchDocuments(
+        await (await openJsonlSessionStore({ directory }).open(id, 'read')).read({ salvage: true }),
+      ).map((document) => document.text);
+    expect(await texts('clean')).toEqual(['A', '摘要', '二', 'B']);
+    expect(await texts('torn')).toEqual(['A', '摘要', '二', 'B']);
   });
 });
 

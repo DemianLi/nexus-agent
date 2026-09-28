@@ -434,7 +434,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     ? new ThreadSearch({
         cwd,
         openAt: threadSearchConfig.openAt,
-        ...(sessionStore !== undefined && { directory: sessionStore.directory }),
+        ...(sessionStore !== undefined && { store: sessionStore }),
       })
     : undefined;
   // `startup` 在這裡載入 `node:sqlite`，載不起來就不開 server：設定說要一起來，那就在什麼都還沒起來時講。
@@ -454,7 +454,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     ...(sessionStore === undefined
       ? {}
       : {
-          listThreads: () => listStoredThreads(sessionStore.directory, { cwd, title: threadTitle }),
+          listThreads: () => listStoredThreads(sessionStore, { cwd, title: threadTitle }),
         }),
     // 按內容搜（#631）。沒掛那一列就不給，handler 那時一律回「沒掛」。
     ...(threadSearch !== undefined && {

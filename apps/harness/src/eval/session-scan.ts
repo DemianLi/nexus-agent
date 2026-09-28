@@ -70,6 +70,7 @@ import {
   repeatReminderTracks,
   resolveRepeatReminderSettings,
   SESSION_LOG_FORMAT_VERSION,
+  SessionCorruptionError,
 } from '@nexus/core';
 import type {
   LegacyTurnFeedbackItem,
@@ -78,7 +79,7 @@ import type {
   SessionEvent,
   SessionEventType,
 } from '@nexus/core';
-import { parseJsonlSessionBody } from '../jsonl-session-store.js';
+import { parseHeader, parseJsonlSessionBody, sessionLogPathOf } from '../jsonl-session-store.js';
 
 /** 沒帶碼的錯誤結果落在這一格。dsh 只替帶碼的錯誤填 `error`，一般拋錯與核准被拒都在這裡。 */
 export const UNCODED_ERROR = '無碼';
@@ -330,39 +331,31 @@ export function scanSessionLog(
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/** 讀 header 裡掃描要的那幾格。**版本比這一版新不拒絕**，見檔頭「照格式版本表態」。 */
-function parseHeader(text: string): SessionLogHeader | string {
-  let value: unknown;
+/**
+ * 讀 header 裡掃描要的那幾格。**版本比這一版新不拒絕**，見檔頭「照格式版本表態」。規則是後端那一份
+ * （`jsonl-session-store.ts` 的 `parseHeader`），這裡只開 `acceptNewer`。
+ */
+function readHeader(text: string): SessionLogHeader | string {
+  let header;
   try {
-    value = JSON.parse(text);
-  } catch {
-    return 'header 不是 JSON';
-  }
-  if (!isRecord(value)) return 'header 不是一個物件';
-  const { id, version, parentSession } = value;
-  if (typeof id !== 'string') return 'header 沒有 id';
-  if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) {
-    return `header 的 version 是 ${JSON.stringify(version)}`;
+    header = parseHeader(text, { acceptNewer: true });
+  } catch (error: unknown) {
+    if (error instanceof SessionCorruptionError) return error.message;
+    throw error;
   }
   return {
-    id,
-    version,
-    ...(typeof parentSession === 'string' && { parentSession }),
+    id: header.id,
+    version: header.version,
+    ...(header.parentSession !== undefined && { parentSession: header.parentSession }),
   };
 }
-
-const HEADER_SUFFIX = '.header.json';
-const LOG_SUFFIX = '.jsonl';
 
 /**
  * 從幾個根目錄往下找每一份日誌讀進來。**唯讀**：不拿租約、不截尾巴、不改 header。
  *
- * 認的是 JSONL 後端的檔名（`<base>.header.json` 配 `<base>.jsonl`，`jsonl-session-store.ts`），
- * 所以 CLI 的 run 目錄與 serve 的 `<根>/<projectKey>/` 都掃得到，給會話根就一次全掃。
+ * 認檔名與讀 header 都照 JSONL 後端那一份（`jsonl-session-store.ts` 的 `sessionLogPathOf`、`parseHeader`），
+ * 所以 CLI 的 run 目錄與 serve 的 `<根>/<projectKey>/` 都掃得到，給會話根就一次全掃。不走 `SessionStore.list`：
+ * 它不讀比這一版新的，也不說讀不懂的原因（[#665](https://github.com/DemianLi/nexus-agent/issues/665)）。
  * 只有 header 沒有日誌的是「還沒寫第一筆就當了」，讀成零顆事件。
  *
  * @param roots - 會話根、run 目錄或 projectKey 那一格，都行。
@@ -384,9 +377,9 @@ export async function readSessionLogs(roots: readonly string[]): Promise<{
         await visit(path);
         continue;
       }
-      if (!entry.isFile() || !entry.name.endsWith(HEADER_SUFFIX)) continue;
-      const file = `${path.slice(0, -HEADER_SUFFIX.length)}${LOG_SUFFIX}`;
-      const header = parseHeader(await readFile(path, 'utf8'));
+      const file = entry.isFile() ? sessionLogPathOf(path) : undefined;
+      if (file === undefined) continue;
+      const header = readHeader(await readFile(path, 'utf8'));
       if (typeof header === 'string') {
         unreadable.push({ file, reason: header });
         continue;

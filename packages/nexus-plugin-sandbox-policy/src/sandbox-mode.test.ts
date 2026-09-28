@@ -173,16 +173,19 @@ describe('委派（#326）', () => {
 });
 
 describe('跨重啟：`SessionStore` 長出了讀介面', () => {
-  it('成員是 `create` 與 `resume`——再長一個讀介面仍然響在這裡', () => {
+  it('成員是 `create`、`resume`、`list`、`open`——再長一個讀介面仍然響在這裡', () => {
     // **這一條原本是絆索**：它釘住「`SessionStore` 只有 `create`」，註解寫著長出讀介面的那天
     // 就是該把模式接回去的時候。[#251](https://github.com/DemianLi/nexus-agent/issues/251)
     // 開門的那天它照設計紅在 `typecheck`，模式也接回去了——行為的驗收在
     // `session-resume.test.ts`（上一次切成 `read-only`，`--resume` 回來還是 `read-only`）。
     //
     // 這裡留下的是形狀：**釘的是介面不是某個實作的鍵**，`createJsonlSessionStore` 回的物件
-    // 上多一個 `directory` 這種與讀寫無關的欄位不該讓這裡響。`stat`／`list` 真的長出來的那
-    // 天才該響——那時候要回頭看 `session-store.ts` 檔頭那條「只抄續接要的那一條」。
-    const KNOWN = ['create', 'resume'] as const;
+    // 上多一個 `directory` 這種與讀寫無關的欄位不該讓這裡響。
+    //
+    // [#665](https://github.com/DemianLi/nexus-agent/issues/665) 照設計響過一次：長出唯讀的 `list` 與
+    // `open(id, 'read')`，`session-store.ts` 檔頭改寫成「讀回有兩條」。兩個都不拿租約、不寫，模式的續接仍然只走
+    // `resume`，所以這裡只補名字。下一個（例如 `stat`）長出來時再回頭看一次那段檔頭。
+    const KNOWN = ['create', 'resume', 'list', 'open'] as const;
     KNOWN satisfies readonly (keyof SessionStore)[];
     type Exhaustive = keyof SessionStore extends (typeof KNOWN)[number] ? true : never;
     const exhaustive: Exhaustive = true;

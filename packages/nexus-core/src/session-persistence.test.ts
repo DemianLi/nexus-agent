@@ -20,6 +20,12 @@ import { SESSION_LOG_FORMAT_VERSION } from './session-store.js';
 import type { SessionEvent } from './session-log.js';
 import type { SessionStore, StoredSession, StoredSessionHeader } from './session-store.js';
 
+/** 協調器只寫不讀：唯讀的兩個方法一被叫就是錯。 */
+const NO_READS: Pick<SessionStore, 'list' | 'open'> = {
+  list: () => Promise.reject(new Error('協調器不該列會話')),
+  open: () => Promise.reject(new Error('協調器不該唯讀打開')),
+};
+
 /** 記下每一次呼叫的假把手，`fail` 打開之後每一次 `append` 都拒絕。 */
 function fakeStored(): StoredSession & {
   readonly written: SessionEvent[];
@@ -197,6 +203,7 @@ describe('接在註冊表上', () => {
     const headers: StoredSessionHeader[] = [];
     const handles: ReturnType<typeof fakeStored>[] = [];
     const store: SessionStore = {
+      ...NO_READS,
       create(header) {
         headers.push(header);
         const stored = fakeStored();
@@ -236,6 +243,7 @@ describe('接在註冊表上', () => {
       const sessions = new SessionRegistry('root-w');
       const headers: StoredSessionHeader[] = [];
       const store: SessionStore = {
+        ...NO_READS,
         create(header) {
           headers.push(header);
           return fakeStored();
@@ -276,6 +284,7 @@ describe('批次窗口一路轉發', () => {
     const sessions = new SessionRegistry('root-window');
     const stored = fakeStored();
     const store: SessionStore = {
+      ...NO_READS,
       create() {
         return stored;
       },
@@ -318,6 +327,7 @@ describe('續接：只寫還沒存的後綴', () => {
     const resumed = fakeStored();
     const created: string[] = [];
     const store: SessionStore = {
+      ...NO_READS,
       create(header) {
         created.push(header.id);
         return fakeStored();
@@ -359,6 +369,7 @@ describe('續接：只寫還沒存的後綴', () => {
     const sessions = new SessionRegistry('root-r', { rootSeed: earlier.events });
     const headers: StoredSessionHeader[] = [];
     const store: SessionStore = {
+      ...NO_READS,
       create(header) {
         headers.push(header);
         return fakeStored();
@@ -406,6 +417,7 @@ describe('註冊表上的排空者（#599）', () => {
     const sessions = new SessionRegistry('root-1');
     const handles = new Map<string, ReturnType<typeof fakeStored>>();
     const store: SessionStore = {
+      ...NO_READS,
       create(header) {
         const stored = fakeStored();
         handles.set(header.id, stored);

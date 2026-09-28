@@ -6,43 +6,53 @@
  * `updatedAt = max(header.createdAt, 最後一則人類提示的時間)`，`blank` 是「還沒有任何 `turn/start`」
  * （`applySessionListMetadata`）。`running` 不在這裡：它來自活著的 agent，歸 `wire-handler.ts`。
  *
- * ## 唯讀，而且比續接更唯讀
+ * ## 唯讀，經過 `SessionStore`
  *
- * 不拿寫租約、不截撕裂的尾巴、不動 header。續接（`JsonlSessionStore.resume`）三件都做，所以列表
- * 不能借它——別的行程握著的那一條也要列得出來，而且列一次不能改到任何一個位元組。同 `eval/session-scan.ts`
- * 的 `readSessionLogs`，差在這裡在請求路徑上：**日誌逐行串流，只解析帶 `turn/start` 字樣的那幾行**，
- * 不整份讀進記憶體。
+ * 列走 `list`、讀本文走 `open(id, 'read')`，同 dsh 的列表走 `persistence.list`、冷讀走 `open(sessionId, 'read')`
+ * （[#665](https://github.com/DemianLi/nexus-agent/issues/665)）。**不拿寫租約、不截撕裂的尾巴、不動 header**：別的行程
+ * 握著的那一條也要列得出來，而且列一次不能改到任何一個位元組。檔名與 header 的規則只在後端
+ * （`jsonl-session-store.ts`），這裡一個都不認。
+ *
+ * **本文整份讀、整份解析**，不再逐行篩：dsh 的冷列讀投影快取，我們沒有那一層（[#725](https://github.com/DemianLi/nexus-agent/issues/725)），
+ * 讀的是日誌本身。#665 量過整份解析不比逐行篩慢（見 PR），換到的是標題規則只剩一份（{@link threadTitleOf}）。
  *
  * ## 列出來的每一列都要切得過去
  *
- * 切換走的是 serve 的續接路徑，所以會在那裡被擋的，這裡就不列：
+ * 切換走的是 serve 的續接路徑，所以會在那裡被擋的，這裡就不列（{@link isListedThread}）：
  *
  * - **header 帶 `parentSession` 的不列**：subagent 的 id 是 `<thread>/<task>`，不是一條 thread。dsh 會列、
  *   標 `origin: 'subagent'`；我們切不進去（#302 拍板的第 3 件）。
  * - **`header.cwd` 不等於這一次的 `cwd` 就不列**，沒記的也不列。**不是按目錄判**：`projectKey` 是有損的，
  *   兩個目錄可能落在同一格，header 的 `cwd` 才是唯一分得開的東西（`resume-guards.ts` 的 `assertSameCwd`，
  *   續接時一樣比它）。dsh 只擋沒記的，因為它的列表跨專案。
- * - **header 讀不懂、版本比這一版新的不列，但數出來**（`unreadable`）。續接會拒絕這兩種；不數的話，
- *   畫面上「少了一條」跟「本來就沒有」分不出來。
+ * - **header 讀不懂、版本比這一版新的不列，但數出來**（`unreadable`，後端的 `list` 數的）。續接會拒絕這兩種；
+ *   不數的話，畫面上「少了一條」跟「本來就沒有」分不出來。
  *
- * **日誌本文壞在中間不在這裡擋**：要驗就得逐行解析整份，而這條路只讀需要的那幾行。那一列照樣列出來，
- * 點下去由續接那條路講出原因（`wire-handler.ts` 的 `threadOrError`）。
+ * **日誌本文壞在中間不在這裡擋**：讀的時候開撿回模式（`salvage`），讀得懂的照算。那一列照樣列出來，點下去由續接
+ * 那條路講出原因（`wire-handler.ts` 的 `threadOrError`）。
  *
  * ## 標題
  *
- * 最後一顆 `session/title`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)），同 dsh 列表讀的 `title` 投影
- * （latest-wins）。**一顆都沒有才照規則推**：18 以前的日誌，或第一句還沒開跑。規則與偏離見 `session-title.ts`。
- * dsh 的冷列讀持久化的投影快取，我們沒有那一層，讀的是日誌本身：**多篩一種字樣**，同樣只解析那幾行。
+ * {@link threadTitleOf}：最後一顆 `session/title`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)），同 dsh 列表讀的
+ * `title` 投影（latest-wins）；一顆都沒有才照規則推。規則與偏離見 `session-title.ts`。
  *
  * @module
  */
 
-import { open, readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
+import {
+  SessionCorruptionError,
+  SessionFormatUnsupportedError,
+  SessionNotFoundError,
+} from '@nexus/core';
+import type {
+  SessionEvent,
+  SessionStore,
+  StoredSessionHeader,
+  StoredSessionSnapshot,
+} from '@nexus/core';
 import type { ThreadSummary } from '@nexus/wire';
 
-import { assertThreadTitleLimits, fallbackThreadTitle } from './session-title.js';
+import { assertThreadTitleLimits, threadTitleOf } from './session-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
 
 /** 從磁碟讀得出來的那一列：線上那一列少掉 `running`（它來自活著的 agent）。 */
@@ -59,42 +69,43 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isNotFound(error: unknown): boolean {
-  return (error as { code?: unknown } | null)?.code === 'ENOENT';
+/**
+ * 一份列得出來嗎：root、`cwd` 對得上。判準見檔頭的「列出來的每一列都要切得過去」。
+ *
+ * 列表與內容搜尋（`thread-search.ts`，[#631](https://github.com/DemianLi/nexus-agent/issues/631)）共用這一支：
+ * **搜得到的一定列得出來**，同 dsh 的搜尋先拿列表的可見集合過濾（`packages/api/session-controller/src/list.ts:179-183`）。
+ */
+export function isListedThread(header: StoredSessionHeader, cwd: string): boolean {
+  return header.parentSession === undefined && header.cwd === cwd;
 }
 
-/** header 裡列表要的那幾格。讀不懂或版本太新是 `undefined`。 */
-interface ListedHeader {
-  readonly id: string;
-  readonly createdAt: number;
-  readonly cwd?: string;
-  readonly parentSession?: string;
+/**
+ * `store` 裡**列得出來**的那幾份（{@link isListedThread}），照 `list` 的順序，與沒列的份數。
+ *
+ * @param store - serve 的那一個（`<會話根>/<projectKey(cwd)>` 那一格）。
+ * @param cwd - 這台 server 的工作目錄。
+ * @throws 存放處存在但讀不到；`signal` 中止時拋它的 `reason`。
+ */
+export async function listVisibleThreads(
+  store: SessionStore,
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<{ readonly items: readonly StoredSessionSnapshot[]; readonly unreadable: number }> {
+  const { sessions, unreadable } = await store.list(signal === undefined ? {} : { signal });
+  return { items: sessions.filter(({ header }) => isListedThread(header, cwd)), unreadable };
 }
 
-function parseHeader(text: string): ListedHeader | undefined {
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-  if (!isRecord(value)) return undefined;
-  const { id, createdAt, version, cwd, parentSession } = value;
-  if (typeof id !== 'string' || typeof createdAt !== 'number') return undefined;
-  if (
-    typeof version !== 'number' ||
-    !Number.isSafeInteger(version) ||
-    version < 1 ||
-    version > SESSION_LOG_FORMAT_VERSION
-  ) {
-    return undefined;
-  }
-  return {
-    id,
-    createdAt,
-    ...(typeof cwd === 'string' && { cwd }),
-    ...(typeof parentSession === 'string' && { parentSession }),
-  };
+/**
+ * 形狀對得上列表要的那幾格的事件。**`read` 只驗 `type`、`seq`、`time`**，`data` 長怎樣沒人擋，而一份壞掉的日誌
+ * 撿回來的更是什麼都有：{@link threadTitleOf} 直接讀 `data`，形狀不對的在這裡先濾掉，同以前逐行篩時的判斷。
+ */
+function listable(event: SessionEvent): boolean {
+  const data: unknown = event.data;
+  if (!isRecord(data)) return false;
+  if (event.type === 'session/title') return typeof data['title'] === 'string';
+  if (event.type === 'turn/start')
+    return data['kind'] !== 'message' || typeof data['text'] === 'string';
+  return true;
 }
 
 /** 一份日誌裡列表要的東西。 */
@@ -104,60 +115,15 @@ interface PromptScan {
   readonly lastPromptAt?: number;
 }
 
-const TURN_START = 'turn/start';
-const SESSION_TITLE = 'session/title';
-
-/**
- * 逐行掃一份日誌，只解析帶 `turn/start` 或 `session/title` 字樣的行。**字樣只是篩子**：解析之後照樣比 `type`，所以一個
- * 工具參數裡提到這幾個字的行不會被當成一輪，也不會被當成標題。
- *
- * 解析不動的行略過：最後一行寫到一半是當掉的常態（`parseJsonlSessionBody` 也不算它），中間壞掉的見檔頭。
- * 只有 header 沒有日誌是「還沒寫第一筆就當了」，讀成空白。
- */
-async function scanPrompts(file: string, limits: ThreadTitleLimits): Promise<PromptScan> {
-  let handle;
-  try {
-    handle = await open(file, 'r');
-  } catch (error: unknown) {
-    if (isNotFound(error)) return { blank: true };
-    throw error;
-  }
-  let blank = true;
-  /** 最後一顆 `session/title` 的。 */
-  let logged: string | undefined;
-  /** 第一則合格的人話推出來的，一顆 `session/title` 都沒有時才用。 */
-  let derived: string | undefined;
+function scanPrompts(events: readonly SessionEvent[], limits: ThreadTitleLimits): PromptScan {
+  // `blank` 看的是有沒有任何一顆 `turn/start`，形狀對不對都算；其餘只看形狀對的。
+  const blank = !events.some((event) => event.type === 'turn/start');
+  const usable = events.filter(listable);
   let lastPromptAt: number | undefined;
-  try {
-    for await (const line of handle.readLines({ encoding: 'utf8' })) {
-      if (!line.includes(TURN_START) && !line.includes(SESSION_TITLE)) continue;
-      let event: unknown;
-      try {
-        event = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (!isRecord(event)) continue;
-      const data = event['data'];
-      if (event['type'] === SESSION_TITLE) {
-        if (isRecord(data) && typeof data['title'] === 'string') logged = data['title'];
-        continue;
-      }
-      if (event['type'] !== TURN_START) continue;
-      blank = false;
-      if (!isRecord(data) || data['kind'] !== 'message' || typeof data['text'] !== 'string') {
-        continue;
-      }
-      if (typeof event['time'] === 'number') lastPromptAt = event['time'];
-      if (derived === undefined) {
-        const title = fallbackThreadTitle(data['text'], limits);
-        if (title !== '') derived = title;
-      }
-    }
-  } finally {
-    await handle.close().catch(() => undefined);
+  for (const event of usable) {
+    if (event.type === 'turn/start' && event.data.kind === 'message') lastPromptAt = event.time;
   }
-  const title = logged ?? derived;
+  const title = threadTitleOf(usable, limits);
   return {
     blank,
     ...(title !== undefined && { title }),
@@ -165,87 +131,44 @@ async function scanPrompts(file: string, limits: ThreadTitleLimits): Promise<Pro
   };
 }
 
-const HEADER_SUFFIX = '.header.json';
-const LOG_SUFFIX = '.jsonl';
-
-/** 列得出來的一條：`header` 讀得懂、是 root、`cwd` 對得上。 */
-export interface VisibleThreadLog {
-  readonly threadId: string;
-  readonly createdAt: number;
-  /** 日誌本文的路徑。檔案可能還不存在（只有 header：還沒寫第一筆就當了）。 */
-  readonly logPath: string;
-}
-
 /**
- * `directory` 裡**列得出來**的那幾條，照目錄的順序，與沒列的份數。判準見檔頭的「列出來的每一列都要切得過去」。
+ * 列出 `store` 裡屬於 `cwd` 的 root thread。
  *
- * 列表與內容搜尋（`thread-search.ts`，[#631](https://github.com/DemianLi/nexus-agent/issues/631)）共用這一支：
- * **搜得到的一定列得出來**，同 dsh 的搜尋先拿列表的可見集合過濾（`packages/api/session-controller/src/list.ts:179-183`）。
+ * **列與讀之間那一份變了**（別的行程刪掉、或以更新的版本續接過）：刪掉的不列，header 讀不懂了的算進 `unreadable`。
  *
- * @param directory - serve 的 `<會話根>/<projectKey(cwd)>` 那一格。還不存在就是空的。
- * @param cwd - 這台 server 的工作目錄。
- * @throws 目錄存在但讀不到。
- */
-export async function listVisibleThreadLogs(
-  directory: string,
-  cwd: string,
-): Promise<{ readonly items: readonly VisibleThreadLog[]; readonly unreadable: number }> {
-  let names: string[];
-  try {
-    names = await readdir(directory);
-  } catch (error: unknown) {
-    if (isNotFound(error)) return { items: [], unreadable: 0 };
-    throw error;
-  }
-  const items: VisibleThreadLog[] = [];
-  let unreadable = 0;
-  for (const name of names) {
-    if (!name.endsWith(HEADER_SUFFIX)) continue;
-    let headerText: string;
-    try {
-      headerText = await readFile(join(directory, name), 'utf8');
-    } catch (error: unknown) {
-      // 讀目錄與讀檔之間被刪掉：不是壞檔，就是不在了。
-      if (isNotFound(error)) continue;
-      throw error;
-    }
-    const header = parseHeader(headerText);
-    if (header === undefined) {
-      unreadable += 1;
-      continue;
-    }
-    if (header.parentSession !== undefined || header.cwd !== cwd) continue;
-    const base = name.slice(0, -HEADER_SUFFIX.length);
-    items.push({
-      threadId: header.id,
-      createdAt: header.createdAt,
-      logPath: join(directory, `${base}${LOG_SUFFIX}`),
-    });
-  }
-  return { items, unreadable };
-}
-
-/**
- * 列出 `directory` 裡屬於 `cwd` 的 root thread。
- *
- * @param directory - serve 的 `<會話根>/<projectKey(cwd)>` 那一格。還不存在就是空的。
+ * @param store - serve 的那一個（`<會話根>/<projectKey(cwd)>` 那一格）。
  * @param options - `cwd` 是這台 server 的工作目錄；`title` 的兩個上限必填。
  * @returns 由新到舊的列，與沒列的份數。
- * @throws 上限不是正整數；目錄存在但讀不到。
+ * @throws 上限不是正整數；存放處存在但讀不到。
  */
 export async function listStoredThreads(
-  directory: string,
+  store: SessionStore,
   options: { readonly cwd: string; readonly title: ThreadTitleLimits },
 ): Promise<StoredThreadList> {
-  // 先驗，不等到第一則人打的字：一份空的目錄不該讓錯的設定看起來是對的。
+  // 先驗，不等到第一則人打的字：一份空的存放處不該讓錯的設定看起來是對的。
   assertThreadTitleLimits(options.title);
-  const visible = await listVisibleThreadLogs(directory, options.cwd);
+  const visible = await listVisibleThreads(store, options.cwd);
   const items: StoredThreadSummary[] = [];
-  for (const thread of visible.items) {
-    const scan = await scanPrompts(thread.logPath, options.title);
+  let { unreadable } = visible;
+  for (const { header } of visible.items) {
+    let events: readonly SessionEvent[];
+    try {
+      events = await (await store.open(header.id, 'read')).read({ salvage: true });
+    } catch (error: unknown) {
+      if (error instanceof SessionNotFoundError) continue;
+      if (
+        error instanceof SessionCorruptionError ||
+        error instanceof SessionFormatUnsupportedError
+      ) {
+        unreadable += 1;
+        continue;
+      }
+      throw error;
+    }
+    const scan = scanPrompts(events, options.title);
     items.push({
-      threadId: thread.threadId,
-      updatedAt: Math.max(thread.createdAt, scan.lastPromptAt ?? 0),
+      threadId: header.id,
+      updatedAt: Math.max(header.createdAt, scan.lastPromptAt ?? 0),
       blank: scan.blank,
       ...(scan.title !== undefined && { title: scan.title }),
     });
@@ -255,5 +178,5 @@ export async function listStoredThreads(
       right.updatedAt - left.updatedAt ||
       (left.threadId < right.threadId ? -1 : left.threadId > right.threadId ? 1 : 0),
   );
-  return { items, unreadable: visible.unreadable };
+  return { items, unreadable };
 }
