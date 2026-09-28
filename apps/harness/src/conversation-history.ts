@@ -155,9 +155,7 @@ function isMessage(event: SessionEvent): boolean {
 }
 
 /** 人在一輪跑著時插的話（#710）：`user/message` 帶 user 來源。外掛塞的那一種畫面不畫。 */
-function isSteer(
-  event: SessionEvent,
-): event is SessionEvent<'user/message'> & {
+function isSteer(event: SessionEvent): event is SessionEvent<'user/message'> & {
   readonly data: { readonly source: { readonly kind: 'user' } };
 } {
   return event.type === 'user/message' && event.data.source.kind === 'user';
