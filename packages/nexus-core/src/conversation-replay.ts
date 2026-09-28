@@ -98,6 +98,16 @@ export interface ReplayOptions {
    * 門檻與暫存路徑，那是組裝點的設定，所以由呼叫端給。
    */
   readonly toolResultAsSeen?: (message: ToolMessage) => BaseMessage;
+  /**
+   * 每從一顆事件推出一則訊息就叫一次，交出那則訊息與那顆事件。補上的結果（{@link TOOL_OUTCOME_UNKNOWN_TEXT}
+   * 那兩句）不是從事件推出來的，不叫。
+   *
+   * 給要知道「推出來的串裡哪一則出自日誌哪一顆」的讀者：會話內容搜尋（`apps/harness` 的 `thread-search.ts`，
+   * [#631](https://github.com/DemianLi/nexus-agent/issues/631)）拿它判哪幾顆還在模型看得到的那一串上，
+   * 同 dsh 的 `foldSurface` 分 `current` 與 `shadowed`。拿到的是推出來的那一則本身（工具結果是換過預覽之後的），
+   * 所以跟回傳的 `messages` 可以用物件身分對。
+   */
+  readonly origin?: (message: BaseMessage, event: SessionEvent) => void;
 }
 
 /** 一則回覆要了、還在等結果的那一批。 */
@@ -182,13 +192,18 @@ export function replayConversation(
     options.toolResultAsSeen !== undefined && ToolMessage.isInstance(message)
       ? options.toolResultAsSeen(message)
       : message;
+  /** 這一則出自這一顆，見 {@link ReplayOptions.origin}。 */
+  const from = <M extends BaseMessage>(message: M, event: SessionEvent): M => {
+    options.origin?.(message, event);
+    return message;
+  };
 
   for (const event of events) {
     switch (event.type) {
       case 'turn/start': {
         turn = { replied: false, interrupted: false };
         // `resume` 是回覆核准，沒有使用者說的話——送進圖的是 `Command`，不是一則訊息。
-        if (event.data.kind !== 'resume') push(new HumanMessage(event.data.text));
+        if (event.data.kind !== 'resume') push(from(new HumanMessage(event.data.text), event));
         break;
       }
       case 'model/start': {
@@ -198,7 +213,7 @@ export function replayConversation(
       case 'assistant/message': {
         replied = true;
         if (turn !== undefined) turn.replied = true;
-        const message = fromLoggedMessage(event.data.message);
+        const message = from(fromLoggedMessage(event.data.message), event);
         const calls = requestedCalls(message);
         push(message);
         if (calls.length > 0) batch = { calls, results: new Map(), started: new Set() };
@@ -215,7 +230,7 @@ export function replayConversation(
         if (event.data.message === undefined) {
           return { kind: 'unreplayable', reason: 'result-missing', seq: event.seq };
         }
-        const message = asSeen(fromLoggedMessage(event.data.message));
+        const message = from(asSeen(fromLoggedMessage(event.data.message)), event);
         if (batch?.calls.some((call) => call.id === event.data.callId) === true) {
           batch.results.set(event.data.callId, [message]);
         } else {
@@ -224,7 +239,7 @@ export function replayConversation(
         break;
       }
       case 'user/message': {
-        const message = fromLoggedMessage(event.data.message);
+        const message = from(fromLoggedMessage(event.data.message), event);
         // 緊跟在一顆結果後面、而且是那顆工具注入的：跟著那顆結果走。其餘的（repeat-reminder 的提醒）
         // 在那一批之後。
         const owner = previous?.type === 'tool/result' ? previous.data.callId : undefined;
@@ -245,7 +260,7 @@ export function replayConversation(
         if (raw.length + pendingCount() !== messagesBefore + 1 || cutoffIndex > messagesBefore) {
           return { kind: 'unreplayable', reason: 'compaction-misaligned', seq: event.seq };
         }
-        summary = { message: fromLoggedMessage(logged), cutoff: cutoffIndex };
+        summary = { message: from(fromLoggedMessage(logged), event), cutoff: cutoffIndex };
         break;
       }
       case 'interrupt/raised': {

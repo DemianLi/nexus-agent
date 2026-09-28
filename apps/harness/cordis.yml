@@ -239,9 +239,9 @@
 #
 # **它們內部又分兩層，分界是消費點跑的時刻**：
 #
-# - **起動期**（`thread-title`、`thread-title-llm`、`browser-session`、`deliverable-files`、`tool-text`、
-#   `live-model`）：消費者是`serve.ts` 的冷讀清單、`BrowserAuth` 的建構子、`createWireHandler` 閉包裡的兩條交付
-#   路由，以及交給組裝的那顆 model——全都在**任何 agent 出生之前**就要有值，那一刻註冊表還不存在。`thread-title`
+# - **起動期**（`thread-title`、`thread-title-llm`、`thread-search`、`browser-session`、`deliverable-files`、`tool-text`、
+#   `live-model`）：消費者是`serve.ts` 的冷讀清單、內容搜尋的索引、`BrowserAuth` 的建構子、`createWireHandler` 閉包裡的
+#   兩條交付路由，以及交給組裝的那顆 model——全都在**任何 agent 出生之前**就要有值，那一刻註冊表還不存在。`thread-title`
 #   另外還給寫退回標題的 pump 與 CLI（#647），吃的是同一份起動期的值；`thread-title-llm` 跟它一起在建模型的那一刻
 #   讀（#650）。所以這幾列的 `apply` 是空的，值由
 #   `src/settings/startup.ts` 的 `startupSetting` 在起動期解一次、往下傳一份——形狀上仍是
@@ -250,18 +250,18 @@
 #   **註冊表就在手上**。所以這一列跟上面 core 那三列完全同形——`apply` 把驗過的值提供成一個
 #   服務，消費點去讀服務。這一層做得到的事，不該跟著上一層退。
 #
-# **`name` 是 `#settings/…` 而不是一個套件名**，那是一條登記過的偏離，七列共用：dsh 的每個可調值
+# **`name` 是 `#settings/…` 而不是一個套件名**，那是一條登記過的偏離，八列共用：dsh 的每個可調值
 # 都由一個套件擁有，而 `apps/harness` **解不到自己**（條目走 `import(entry.name)`，`@nexus/harness`
 # 沒有連進自己的 `node_modules`，實測是 `Cannot find package`）。退到 Node 的 `imports` 欄位，映射
 # 寫在 `apps/harness/package.json` 裡看得見。逐條理由在 `src/settings/thread-title.ts` 的檔頭。
 #
-# **除了 `thread-title-llm`，這六列關不掉**（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`），但理由分兩種。
+# **除了 `thread-title-llm` 與 `thread-search`，這六列關不掉**（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`），但理由分兩種。
 # 起動期那五列是
 # 「關掉沒有意義」：它們不裝任何東西，關掉不會讓標題不再被裁切、cookie 不再過期、交付檔不再有
 # 上限——`startupSetting` 把關掉的那一列當成沒有那一列，於是回到 schema 的預設值。
 # `recursion-limit` 硬一級——關掉它在機制上確實會讓服務消失、於是落回內建的 100，**看起來像關掉了
-# 護欄，實際上護欄還在**。兩種都只會讓人以為自己關掉了什麼。`thread-title-llm` 相反：關掉它就真的沒有
-# 模型產生的標題，理由寫在它自己那一段上。
+# 護欄，實際上護欄還在**。兩種都只會讓人以為自己關掉了什麼。`thread-title-llm` 與 `thread-search` 相反：關掉
+# 它們就真的沒有模型產生的標題、沒有內容搜尋，理由寫在各自那一段上。
 
 # 會話標題的兩個上限（#302、#647）：列表、畫面標頭與日誌裡的退回標題都照它截。值照 dsh base 的 `session-title`
 # （`packages/bundle/base/cordis.patch.yml:55-60`，`ddefc45`：`fallbackMaxWords: 5`、
@@ -293,6 +293,20 @@
     maxInputBytes: 4096
     maxOutputTokens: 64
     timeoutMs: 60000
+
+# 按內容搜尋以前的會話（#631），側欄的搜尋框用它。**出廠不開**（`openAt: never`），同 dsh `base` 與 `web-app` 兩個
+# bundle 的 `session-query-sqlite` 那一列（`packages/bundle/base/cordis.patch.yml:141-153`、
+# `packages/bundle/web-app/cordis.patch.yml:22-30`，`477b4f4`）：要不要多背一份索引是部署自己的選擇。不開的時候側欄
+# 只比標題，同今天。要用的人在自己的 `~/.nexus-agent/cordis.patch.yml` 把這一列改成 `openAt: first-search`（第一次搜才
+# 載入）或 `startup`（serve 起動就載入），寫法見 docs/operations.md。
+#
+# **這一列關得掉，而且關掉跟 `never` 不一樣**：`disabled: true` 是沒掛，搜尋一律回失敗；`never` 是掛了不開，沒有
+# 會話可搜時照樣回空。**schema 的預設是 `startup`**（同 dsh），所以把 `config:` 整段拿掉的 patch 會把它打開。
+# 索引只放在記憶體、斷詞與 dsh 不同（中文），理由見 `src/settings/thread-search.ts` 與 `src/thread-search.ts` 的檔頭。
+- id: thread-search
+  name: '#settings/thread-search'
+  config:
+    openAt: never
 
 # 瀏覽器 cookie 的絕對有效期（#424）。dsh 那側是 plugin 設定 `cookieMaxAgeDays`，預設同樣是 30
 # ——這一列補上的正是 `browser-auth.ts` 原本登記的那條偏離（「寫死 30 天，不能設定」）。

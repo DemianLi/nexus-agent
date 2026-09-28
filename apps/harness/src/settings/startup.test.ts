@@ -40,6 +40,7 @@ import { liveModelPlugin } from './live-model.js';
 import { startupEntryMounted, startupSetting } from './startup.js';
 import { toolTextPlugin } from './tool-text.js';
 import { DEFAULT_THREAD_TITLE_MAX_WORDS, threadTitlePlugin } from './thread-title.js';
+import { threadSearchPlugin } from './thread-search.js';
 import { threadTitleLlmPlugin } from './thread-title-llm.js';
 
 const OVERRIDE_PATCH = 'src/settings/settings-override.patch.yml';
@@ -255,7 +256,7 @@ describe('startupSetting', () => {
     ).toThrow(/thread-title/u);
   });
 
-  it('出貨清單上真的讀得到那六列——不是只有手搭的清單走得通', async () => {
+  it('出貨清單上真的讀得到那七列——不是只有手搭的清單走得通', async () => {
     const plugins = await loadDefaultPlugins({ env: {} });
     expect(startupSetting(plugins, threadTitlePlugin).maxBytes).toBe(40);
     expect(startupSetting(plugins, threadTitlePlugin).maxTitleBytes).toBe(80);
@@ -268,6 +269,9 @@ describe('startupSetting', () => {
       timeoutMs: 60000,
     });
     expect(startupEntryMounted(plugins, threadTitleLlmPlugin)).toBe(true);
+    // 內容搜尋（#631）：掛著、但出廠不開。兩件事分開問，同上面那一列。
+    expect(startupSetting(plugins, threadSearchPlugin)).toEqual({ openAt: 'never' });
+    expect(startupEntryMounted(plugins, threadSearchPlugin)).toBe(true);
     expect(startupSetting(plugins, browserSessionPlugin).maxAgeDays).toBe(30);
     // **字面值，不是那三個常數**：出貨那一列與 schema 的預設今天是同一個數字，兩邊都讀常數的話
     // 改掉常數兩邊一起動，這一條就再也分不出「那一列在講話」與「那一列不見了」。

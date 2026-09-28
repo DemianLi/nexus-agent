@@ -235,7 +235,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `repeatReminder` 時，以那句話為準；而手搭 plugin 清單（沒有這幾列）的組裝拿到的是內建
   預設，不是「什麼都沒掛」。
 
-今天有十五列：
+今天有十六列：
 
 | id | 管什麼 | 有 `config` 嗎 | 關得掉嗎 |
 | --- | --- | --- | --- |
@@ -249,23 +249,24 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `session-persistence` | 會話日誌落盤本身，以及它的批次窗口（毫秒） | 有（一格） | 關得掉（＝不落盤） |
 | `thread-title` | 會話標題的三個上限（退回標題的詞數與位元組，以及任何來源的標題的位元組） | 有（三格） | **關不掉** |
 | `thread-title-llm` | `--live` 時由模型依第一句話產生會話標題 | 有（五格） | 關得掉（＝只剩退回標題） |
+| `thread-search` | 按內容搜尋以前的會話（側欄的搜尋框）；**出廠不開** | 有（一格） | 關得掉（＝搜尋一律失敗） |
 | `browser-session` | 瀏覽器 cookie 的絕對有效期 | 有（一格） | **關不掉** |
 | `deliverable-files` | 交付檔的三個上限（一頁位元組／整檔位元組（只管下載）／一頁行數） | 有（三格） | **關不掉** |
 | `tool-text` | 一段工具結果文字放上線的位元組上限 | 有（一格） | **關不掉** |
 | `live-model` | `--live` 時真實供應商的連線值（端點／模型 id／輸出上限／逾時／重試次數），加上標題呼叫關推理的參數 | 有（六格） | **關不掉** |
 | `recursion-limit` | agent 迴圈的 super-step 上限 | 有（一格） | **關不掉** |
 
-**最後八列裡，七列是「不裝功能、只講設定」的那一型；`session-persistence` 例外，它代表落盤本身**
-（[#612](https://github.com/DemianLi/nexus-agent/issues/612)，關掉就不落盤）。**八列的擁有者分兩邊**：`session-persistence` 住在
-`@nexus/core`（值的家在那個套件裡），其餘七列住在 `apps/harness`
+**最後九列裡，八列是「不裝功能、只講設定」的那一型；`session-persistence` 例外，它代表落盤本身**
+（[#612](https://github.com/DemianLi/nexus-agent/issues/612)，關掉就不落盤）。**九列的擁有者分兩邊**：`session-persistence` 住在
+`@nexus/core`（值的家在那個套件裡），其餘八列住在 `apps/harness`
 （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
 **更要緊的分界是消費點跑的時刻**：
 
-- **`session-persistence`、`thread-title`、`thread-title-llm`、`browser-session`、`deliverable-files`、
-  `tool-text`、`live-model` 跑在註冊表存在之前**，所以 `apply` 是空的、值在起動期解一次往下傳。`browser-session`、
-  `deliverable-files`、`tool-text` 的消費點分別是瀏覽器會話的建構子、兩條交付路由、以及工具結果文字那兩條
-  （即時的 `ThreadPump` 與重播的 `historyPage`，都在 `createWireHandler` 的閉包底下），**只在 `serve` 上有
-  作用**；**`session-persistence`、`thread-title` 與 `live-model` 兩條路都讀**——`session-persistence` 由
+- **`session-persistence`、`thread-title`、`thread-title-llm`、`thread-search`、`browser-session`、`deliverable-files`、
+  `tool-text`、`live-model` 跑在註冊表存在之前**，所以 `apply` 是空的、值在起動期解一次往下傳。`thread-search`、
+  `browser-session`、`deliverable-files`、`tool-text` 的消費點分別是內容搜尋的索引、瀏覽器會話的建構子、兩條交付路由、
+  以及工具結果文字那兩條（即時的 `ThreadPump` 與重播的 `historyPage`，都在 `createWireHandler` 的閉包底下），
+  **只在 `serve` 上有作用**；**`session-persistence`、`thread-title` 與 `live-model` 兩條路都讀**——`session-persistence` 由
   `cli.ts` 與 `serve.ts` 各自在接落盤時讀；`thread-title` 在 serve 上給冷讀清單、pump 與歷史，在 CLI 上給
   寫退回標題的 `runTurn`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）；`live-model` 各自在起動期
   解一次、交給組裝去建 model（只有 `--live` 用得到）；`thread-title-llm` 跟它一起在建 model 的那一刻讀，
@@ -274,10 +275,11 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   跟前七列完全同形（`apply` 提供一顆服務、組裝點去讀）。**CLI 的 `--recursion-limit` 仍然贏過
   這一列**——程式路徑上直接傳的參數贏過這份清單，那條規則對它照樣適用。
 
-**這八列裡關得掉的有兩列。** `session-persistence`（[#612](https://github.com/DemianLi/nexus-agent/issues/612)）
+**這九列裡關得掉的有三列。** `session-persistence`（[#612](https://github.com/DemianLi/nexus-agent/issues/612)）
 代表落盤本身，關掉就是不落盤（見上面「會話日誌」一節）；它曾經也關不掉，那時它只講批次窗口、
 關掉只會回到預設，而 #444 讓落盤預設開著之後，「想停掉日誌的人第一個試的就是這一格」。
 `thread-title-llm` 關掉就真的沒有模型產生的標題，只剩從第一句話截出來的退回標題（見下面那一段）。
+`thread-search` 關掉就真的沒有內容搜尋；它跟出廠的 `openAt: never` 差在哪裡見下面那一段。
 
 **其餘六列關不掉**，但理由分兩種。起動期那五列是「關掉沒有意義」：它們**不裝任何東西**，關掉
 不會讓標題不再被裁切、cookie 不再過期、交付檔不再有上限、工具結果不再被截、
@@ -335,6 +337,35 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 - **CLI 一次性的呼叫多半等不到它**：主回覆收完行程就收尾，還沒回來的標題請求會被中止（不講話），只留退回標題。
 - 送出去的系統提示與訊息原文記在日誌的 `session/title-llm-request`，想知道模型看到什麼去讀那一顆。
 
+**`thread-search`**（[#631](https://github.com/DemianLi/nexus-agent/issues/631)）讓側欄按**內容**搜尋以前的會話，
+不只比標題。**出廠不開**，同 dsh 的產品組裝：要不要多背一份搜尋索引是部署自己的選擇。多人共用的主機上沒有「整台
+一起設」的那一層，想用的人在自己的 `~/.nexus-agent/cordis.patch.yml` 加這一段：
+
+```yaml
+- id: thread-search
+  config:
+    openAt: first-search
+```
+
+- **`openAt` 三個值**：`first-search` 是第一次搜尋才開索引；`startup` 是 serve 起動就開（Node 載不起來的話 serve
+  起不來，比到第一次搜才發現好）；`never` 是出廠那一個。**schema 的預設是 `startup`**，所以把 `config:` 整段
+  拿掉等於打開。
+- **`never` 與 `disabled: true` 不一樣**：`never` 時沒有會話可搜回空、有的話回「這個部署沒開」；`disabled: true`
+  是沒掛，一律回失敗。兩種失敗網頁都退回只比標題。
+- **要 Node 內建的 `node:sqlite`**：Node 22.13 以上不必加旗標，Node 22 載入它時 stderr 會印一行實驗功能的警告
+  （24 以後不印）。Node 太舊時搜尋回失敗、講明要哪一版，其他功能照常。`never` 時它一次都不載入。
+- **索引只放在記憶體裡，而且不小**：serve 重開之後的第一次搜尋要把這個目錄的日誌全部讀一次重建，之後每次搜尋
+  只重讀變了的那幾條。**建好之後一直佔著記憶體，直到 serve 結束**。合成資料量過的數字（1000 條會話、每條 40 輪、
+  日誌共 343 MB，本機 Node 25）：第一次搜尋約 2.7 秒；之後沒有變動時約 0.1 秒，兩個字的中文約 0.2 秒，命中很多條的
+  英文字約 0.6 秒；**索引佔約 350 MB**（行程的 RSS 從 286 MB 漲到 639 MB，JS 堆積只有 45 MB）。多人共用的主機上，
+  每個打開它的人各佔一份。
+- **搜什麼**：人打的字、模型回覆的文字與它要叫的工具（名字與參數）、外掛塞進對話的訊息、壓縮換上去的摘要。
+  **推理、工具結果、標題不搜**；**被壓縮換掉的那幾則搜不到**（模型也看不到它們了），同 dsh。只搜這台 serve
+  列得出來的會話（同一個工作目錄、不含子代理）。
+- **怎麼比對跟 dsh 不同**：子字串比對，英文不分大小寫、連續空白算一個。dsh 的斷詞把連續的中文當成一個詞，
+  句子中間的「搜尋」「會話」都搜不到，所以這裡換掉了；代價是索引大一些。
+- 日誌不落盤（`session-persistence` 關掉）時沒有東西可搜，一律回空。
+
 `observation-policy`、`model-usage`、`session-checkpoint-policy`、`approval-gate` 那四列**不可以加
 `config:`**——它們沒有設定，載入器對「這顆 plugin 沒有 Config schema 卻給了 config」是當場拋。前三列
 列在這裡的唯一意義就是讓 `disabled: true` 指得著；最後那一列相反，見本節最後。
@@ -376,7 +407,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 （給了 `truncateArgs` 就要把它底下兩格都寫出來），而 `trigger` 那兩個數字的來歷寫在
 `DEFAULT_SUMMARIZATION` 的檔頭上——**換模型要重量一次**。
 
-**最後八列的 `config` 同樣是整份替換。** 沒重述的欄位回到 schema 的預設值，不是保留原本那一列
+**最後九列的 `config` 同樣是整份替換。** 沒重述的欄位回到 schema 的預設值，不是保留原本那一列
 寫的值——例如 `thread-title` 只寫 `maxBytes` 的話，`maxWords` 拿到的是預設的 5。`thread-title`、
 `thread-title-llm`、`browser-session` 與 `deliverable-files` 的預設（`5`／`40`／`80`；`5` 詞／`10` 字／4096 位元組／
 64 token／60 秒；`30` 天；2 MiB／32 MiB／5000 行）都照 dsh 的產品組裝；**`session-persistence` 的 `10` 毫秒沒有 dsh 的對應物**——dsh 的落盤後端只收根目錄

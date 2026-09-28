@@ -73,6 +73,8 @@ import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { toolTextPlugin } from './settings/tool-text.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
+import { threadSearchPlugin } from './settings/thread-search.js';
+import { ThreadSearch } from './thread-search.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
 import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
 
@@ -324,6 +326,10 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // LLM 標題那一列（#650），理由同上：標題模型一條 thread 一顆，設定是 server 的性質。沒帶 `--live` 也解——
   // 寫壞的設定不因為這一次用不到就放過，同 `live-model` 那一列。
   const threadTitleLlm = startupSetting(plugins, threadTitleLlmPlugin);
+  // 會話內容搜尋那一列（#631）。**掛沒掛與設定分開問**，同 `thread-title-llm`：`disabled: true` 是沒掛（搜尋一律回
+  // 失敗），`openAt: never` 是掛了不開（沒東西可搜時回空）。出廠是後者，見 `settings/thread-search.ts`。
+  const threadSearchMounted = startupEntryMounted(plugins, threadSearchPlugin);
+  const threadSearchConfig = startupSetting(plugins, threadSearchPlugin);
   const auth = new BrowserAuth(
     await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)),
     browserSession.maxAgeDays,
@@ -348,6 +354,17 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
           },
         });
 
+  // 一台 server 一份索引：對帳與查詢在它裡面排隊。沒接落盤時照樣建，搜尋回空（沒有東西可搜）。
+  const threadSearch = threadSearchMounted
+    ? new ThreadSearch({
+        cwd,
+        openAt: threadSearchConfig.openAt,
+        ...(sessionStore !== undefined && { directory: sessionStore.directory }),
+      })
+    : undefined;
+  // `startup` 在這裡載入 `node:sqlite`，載不起來就不開 server：設定說要一起來，那就在什麼都還沒起來時講。
+  await threadSearch?.open();
+
   let telemetryDisclosed = false;
   const handler = createWireHandler({
     auth,
@@ -365,6 +382,10 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
       : {
           listThreads: () => listStoredThreads(sessionStore.directory, { cwd, title: threadTitle }),
         }),
+    // 按內容搜（#631）。沒掛那一列就不給，handler 那時一律回「沒掛」。
+    ...(threadSearch !== undefined && {
+      searchThreads: (query: unknown, signal: AbortSignal) => threadSearch.search(query, signal),
+    }),
     // 一個 thread 一個 agent——各自的 checkpointer、各自的虛擬檔案系統。
     createAgent: async (threadId: string) => {
       // **以前寫過就接回來**（照 dsh：碰到一個已存的 session id 就 resume，不另開）。續接在讀
@@ -549,6 +570,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     });
   } catch (error) {
     await handler.close();
+    threadSearch?.close();
     throw error;
   }
 
@@ -582,6 +604,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     close: async () => {
       await server.close();
       await handler.close();
+      threadSearch?.close();
     },
   };
 }

@@ -41,7 +41,10 @@ import type {
   ThreadHistoryResponse,
   ThreadHistoryResult,
   ThreadListResponse,
+  ThreadSearchResponse,
+  ThreadSearchResult,
   UplinkMethod,
+  WireErrorCode,
   WireChannel,
   FeedbackMethod,
   WireFeedbackCategory,
@@ -49,6 +52,7 @@ import type {
 } from '@nexus/wire';
 import {
   THREAD_FEED_PATH,
+  THREAD_SEARCH_PATH,
   THREADS_PATH,
   changesDiffPath,
   changesSummaryPath,
@@ -103,6 +107,8 @@ import {
 import type { ThreadTitleLimits } from './session-title.js';
 import type { AttachSessionTitleLlm } from './session-title-llm.js';
 import { threadTitleConfigSchema } from './settings/thread-title.js';
+import { normalizeThreadSearchQuery, ThreadSearchError } from './thread-search.js';
+import type { ThreadSearchErrorKind } from './thread-search.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
 import type { GoalDriverPort } from './goal-driver.js';
@@ -291,6 +297,15 @@ export interface WireHandlerOptions {
    */
   listThreads?(): Promise<StoredThreadList>;
   /**
+   * 按內容搜以前的 thread（`POST /threads/search`，[#631](https://github.com/DemianLi/nexus-agent/issues/631)），選配。實作是
+   * `thread-search.ts` 的 `ThreadSearch.search`，失敗拋 `ThreadSearchError`。
+   *
+   * **缺席就是清單上沒掛 `thread-search` 那一列**（`disabled: true`）：查詢合法時一律回 `not_supported`，連沒有東西可搜
+   * 也是，同 dsh 沒掛 `sessionQuery`（`packages/api/session-controller/src/list.ts:170-177`，`477b4f4`）。掛了但沒接落盤、
+   * 或設成 `openAt: never`，由它自己回空或拋，不在這裡判。**同 {@link listThreads}，它不准碰 {@link createAgent}**。
+   */
+  searchThreads?(query: unknown, signal: AbortSignal): Promise<ThreadSearchResult>;
+  /**
    * 瀏覽器會話的驗證（[#424](https://github.com/DemianLi/nexus-agent/issues/424)）。
    *
    * **必填，沒有「不驗」的選項**：這條線上每一條路由都能以 serve 擁有者的身分操作 agent，
@@ -348,6 +363,13 @@ export interface WireHandler {
 }
 
 const JSON_MEDIA_TYPE = 'application/json';
+
+/** 搜尋失敗怎麼上線。`disabled` 同 dsh 的 `SESSION_QUERY_SEARCH_DISABLED`：web 收到就退回只比標題。 */
+const SEARCH_ERROR_CODES: Record<ThreadSearchErrorKind, WireErrorCode> = {
+  invalid: 'invalid_argument',
+  disabled: 'not_supported',
+  failed: 'unknown_error',
+};
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -1231,6 +1253,36 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
   }
 
   /**
+   * `POST /threads/search`（#631）。**不經 `threadFor`**，同列表。先後見 `@nexus/wire` 的 `THREAD_SEARCH_PATH`。
+   */
+  async function handleSearch(body: unknown, signal: AbortSignal): Promise<Response> {
+    const query = (body as { query?: unknown } | null)?.query;
+    let result: ThreadSearchResult;
+    try {
+      if (options.searchThreads === undefined) {
+        // 查詢不合法的話先講那一條，同 dsh 在問提供方之前先正規化（`list.ts:164`）。
+        normalizeThreadSearchQuery(query);
+        return json(
+          errorResponse(
+            null,
+            'not_supported',
+            '這台 server 沒掛會話內容搜尋（清單上 thread-search 那一列關掉了），只能比標題',
+          ),
+        );
+      }
+      result = await options.searchThreads(query, signal);
+    } catch (error: unknown) {
+      if (!(error instanceof ThreadSearchError)) {
+        const reason = error instanceof Error ? error.message : String(error);
+        return json(errorResponse(null, 'unknown_error', `搜尋失敗：${reason}`));
+      }
+      return json(errorResponse(null, SEARCH_ERROR_CODES[error.kind], error.message));
+    }
+    const response: ThreadSearchResponse = { type: 'success', result };
+    return json(response);
+  }
+
+  /**
    * `GET /threads/:id/history`（#306）。**經 `threadFor`**，跟列表相反：照 dsh 的 `session.follow` 開的是那條
    * session，而 web 拿歷史之前已經開了下行、這條 thread 本來就建起來了。
    *
@@ -1587,6 +1639,17 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         // `GET` 沒有 body，這個 header 在這裡純粹是閘門：見 `THREADS_PATH` 的說明。
         if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
         return handleList();
+      }
+      if (pathname === THREAD_SEARCH_PATH) {
+        if (request.method !== 'POST') return new Response('not found', { status: 404 });
+        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+        let body: unknown;
+        try {
+          body = await request.json();
+        } catch {
+          return new Response('body is not JSON', { status: 400 });
+        }
+        return handleSearch(body, request.signal);
       }
       if (pathname === THREAD_FEED_PATH) {
         if (request.method !== 'GET') return new Response('not found', { status: 404 });
