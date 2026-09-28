@@ -242,6 +242,7 @@ describe('ThreadSearch', () => {
     expect(await ids(engine, '會話清單')).toEqual(['zh']);
     expect(await ids(engine, '  搜尋  ')).toEqual(['zh']);
     expect(await ids(engine, 'thread list')).toEqual(['en']);
+    expect(await ids(engine, 'thread \n\t list')).toEqual(['en']);
     expect(await ids(engine, 'THREAD')).toEqual(['en']);
     expect(await ids(engine, '100%')).toEqual(['pct']);
     expect(await ids(engine, 'snake_case')).toEqual(['under']);
@@ -253,9 +254,10 @@ describe('ThreadSearch', () => {
     const directory = await dir();
     const once = new SessionLog('t');
     chat(once, '索引只講一次', '好');
+    // 同一條裡挑命中多的那則，即使它比較長。
     const twice = new SessionLog('t');
-    chat(twice, '索引、索引', '好');
-    chat(twice, '又提到索引一次，這一則比較長', '好');
+    chat(twice, '索引、索引，這一則比較長', '好');
+    chat(twice, '提到索引', '好');
     const shortOne = new SessionLog('t');
     chat(shortOne, '索引短', '好');
     await writeThread(directory, 'once', once.events);
@@ -267,7 +269,7 @@ describe('ThreadSearch', () => {
     expect(result).toEqual({
       hasMore: false,
       items: [
-        { threadId: 'twice', snippet: '索引、索引' },
+        { threadId: 'twice', snippet: '索引、索引，這一則比較長' },
         { threadId: 'short', snippet: '索引短' },
         { threadId: 'once', snippet: '索引只講一次' },
       ],
@@ -279,10 +281,13 @@ describe('ThreadSearch', () => {
     const directory = await dir();
     // 同一份事件（連時間都一樣），排序只剩 id 分得開。
     const same = said('同一句話').events;
-    for (let index = THREAD_SEARCH_RESULT_LIMIT; index >= 0; index -= 1) {
+    for (let index = THREAD_SEARCH_RESULT_LIMIT; index >= 1; index -= 1) {
       await writeThread(directory, `t${String(index).padStart(2, '0')}`, same);
     }
     const engine = search(directory);
+    // 剛好 20 筆：沒有更多。
+    expect(await engine.search('同一句')).toMatchObject({ hasMore: false });
+    await writeThread(directory, 't00', same);
     const result = await engine.search('同一句');
     expect(result.items).toHaveLength(THREAD_SEARCH_RESULT_LIMIT);
     expect(result.hasMore).toBe(true);
@@ -304,7 +309,7 @@ describe('ThreadSearch', () => {
     engine.close();
   });
 
-  it('每次搜尋前對帳：寫進去的新一輪、新開的 thread 搜得到，刪掉的搜不到', async () => {
+  it('每次搜尋前對帳：寫進去的新一輪、新開的 thread 搜得到，刪掉的、壓縮換掉的搜不到', async () => {
     const directory = await dir();
     const log = said('第一句');
     await writeThread(directory, 'a', log.events);
@@ -319,6 +324,26 @@ describe('ThreadSearch', () => {
 
     await rm(join(directory, 'b.header.json'));
     expect(await ids(engine, '第二句')).toEqual(['a']);
+
+    // 同一條之後被壓縮：換掉的那幾則要從索引裡拿掉，不是只把新的加上去。
+    const compactedFrom = log.events.length;
+    log.append('turn/start', { kind: 'message', text: '第三句' });
+    log.append('assistant/message', { message: reply('好') });
+    log.append('compaction/summary', {
+      cutoffIndex: 4,
+      messagesBefore: 5,
+      filePath: null,
+      summary: toLoggedMessage(
+        new HumanMessage({
+          content: '前情摘要',
+          additional_kwargs: { lc_source: 'summarization' },
+        }),
+      ),
+    });
+    log.append('turn/end', {});
+    await appendFile(join(directory, 'a.jsonl'), jsonl(log.events.slice(compactedFrom)));
+    expect(await ids(engine, '第二句')).toEqual([]);
+    expect(await ids(engine, '前情摘要')).toEqual(['a']);
     engine.close();
   });
 
