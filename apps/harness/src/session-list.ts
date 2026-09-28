@@ -168,20 +168,28 @@ async function scanPrompts(file: string, limits: ThreadTitleLimits): Promise<Pro
 const HEADER_SUFFIX = '.header.json';
 const LOG_SUFFIX = '.jsonl';
 
+/** 列得出來的一條：`header` 讀得懂、是 root、`cwd` 對得上。 */
+export interface VisibleThreadLog {
+  readonly threadId: string;
+  readonly createdAt: number;
+  /** 日誌本文的路徑。檔案可能還不存在（只有 header：還沒寫第一筆就當了）。 */
+  readonly logPath: string;
+}
+
 /**
- * 列出 `directory` 裡屬於 `cwd` 的 root thread。
+ * `directory` 裡**列得出來**的那幾條，照目錄的順序，與沒列的份數。判準見檔頭的「列出來的每一列都要切得過去」。
+ *
+ * 列表與內容搜尋（`thread-search.ts`，[#631](https://github.com/DemianLi/nexus-agent/issues/631)）共用這一支：
+ * **搜得到的一定列得出來**，同 dsh 的搜尋先拿列表的可見集合過濾（`packages/api/session-controller/src/list.ts:179-183`）。
  *
  * @param directory - serve 的 `<會話根>/<projectKey(cwd)>` 那一格。還不存在就是空的。
- * @param options - `cwd` 是這台 server 的工作目錄；`title` 的兩個上限必填。
- * @returns 由新到舊的列，與沒列的份數。
- * @throws 上限不是正整數；目錄存在但讀不到。
+ * @param cwd - 這台 server 的工作目錄。
+ * @throws 目錄存在但讀不到。
  */
-export async function listStoredThreads(
+export async function listVisibleThreadLogs(
   directory: string,
-  options: { readonly cwd: string; readonly title: ThreadTitleLimits },
-): Promise<StoredThreadList> {
-  // 先驗，不等到第一則人打的字：一份空的目錄不該讓錯的設定看起來是對的。
-  assertThreadTitleLimits(options.title);
+  cwd: string,
+): Promise<{ readonly items: readonly VisibleThreadLog[]; readonly unreadable: number }> {
   let names: string[];
   try {
     names = await readdir(directory);
@@ -189,7 +197,7 @@ export async function listStoredThreads(
     if (isNotFound(error)) return { items: [], unreadable: 0 };
     throw error;
   }
-  const items: StoredThreadSummary[] = [];
+  const items: VisibleThreadLog[] = [];
   let unreadable = 0;
   for (const name of names) {
     if (!name.endsWith(HEADER_SUFFIX)) continue;
@@ -206,12 +214,38 @@ export async function listStoredThreads(
       unreadable += 1;
       continue;
     }
-    if (header.parentSession !== undefined || header.cwd !== options.cwd) continue;
+    if (header.parentSession !== undefined || header.cwd !== cwd) continue;
     const base = name.slice(0, -HEADER_SUFFIX.length);
-    const scan = await scanPrompts(join(directory, `${base}${LOG_SUFFIX}`), options.title);
     items.push({
       threadId: header.id,
-      updatedAt: Math.max(header.createdAt, scan.lastPromptAt ?? 0),
+      createdAt: header.createdAt,
+      logPath: join(directory, `${base}${LOG_SUFFIX}`),
+    });
+  }
+  return { items, unreadable };
+}
+
+/**
+ * 列出 `directory` 裡屬於 `cwd` 的 root thread。
+ *
+ * @param directory - serve 的 `<會話根>/<projectKey(cwd)>` 那一格。還不存在就是空的。
+ * @param options - `cwd` 是這台 server 的工作目錄；`title` 的兩個上限必填。
+ * @returns 由新到舊的列，與沒列的份數。
+ * @throws 上限不是正整數；目錄存在但讀不到。
+ */
+export async function listStoredThreads(
+  directory: string,
+  options: { readonly cwd: string; readonly title: ThreadTitleLimits },
+): Promise<StoredThreadList> {
+  // 先驗，不等到第一則人打的字：一份空的目錄不該讓錯的設定看起來是對的。
+  assertThreadTitleLimits(options.title);
+  const visible = await listVisibleThreadLogs(directory, options.cwd);
+  const items: StoredThreadSummary[] = [];
+  for (const thread of visible.items) {
+    const scan = await scanPrompts(thread.logPath, options.title);
+    items.push({
+      threadId: thread.threadId,
+      updatedAt: Math.max(thread.createdAt, scan.lastPromptAt ?? 0),
       blank: scan.blank,
       ...(scan.title !== undefined && { title: scan.title }),
     });
@@ -221,5 +255,5 @@ export async function listStoredThreads(
       right.updatedAt - left.updatedAt ||
       (left.threadId < right.threadId ? -1 : left.threadId > right.threadId ? 1 : 0),
   );
-  return { items, unreadable };
+  return { items, unreadable: visible.unreadable };
 }

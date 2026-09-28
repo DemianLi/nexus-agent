@@ -448,6 +448,77 @@ export type ThreadListResponse =
   { readonly type: 'success'; readonly result: ThreadListResult } | ErrorResponse;
 
 /**
+ * 按內容搜尋以前的 thread（[#631](https://github.com/DemianLi/nexus-agent/issues/631)），`POST`，body 是一顆
+ * {@link ThreadSearchRequest}，回 {@link ThreadSearchResponse}。
+ *
+ * 對到 dsh 的 `session.search`（`packages/api/session-controller/src/index.ts:262-265`、`list.ts:163-266`，`477b4f4`）：
+ * 冷讀、不啟動任何 thread；搜得到的一定列得出來（同 {@link THREADS_PATH} 的判準）；一條 thread 最多一筆，
+ * 固定最多 {@link THREAD_SEARCH_RESULT_LIMIT} 筆加一格 `hasMore`，**線上沒有 cursor、limit、filter**，同 dsh。
+ *
+ * ## 搜什麼
+ *
+ * 人打的字、目標排的那一輪的字、外掛塞進對話的訊息、壓縮換上去的摘要，與模型回覆的文字加上它要叫的工具（名字與參數）。
+ * 推理、工具結果、標題不搜，同 dsh（標題由 web 在列表上自己比）。**只搜模型現在看得到的那一串**：被壓縮換掉的
+ * 那幾則搜不到，換上去的摘要搜得到，同 dsh 只查 `surface: current`。
+ *
+ * ## 怎麼比
+ *
+ * **偏離**：dsh 用 unicode61 斷詞、整段當一個片語比，而連續的中文在那裡是一整個詞，句子中間的「搜尋」「會話」都搜不到。
+ * 我們比的是**子字串**（英文不分大小寫，連續的空白算一個）。細節見 `apps/harness` 的 `thread-search.ts`。
+ *
+ * ## 失敗
+ *
+ * 錯誤分層同 {@link ThreadListResponse}，先後照 dsh `list.ts:163-266`：
+ *
+ * 1. 查詢去掉頭尾空白之後是空的、超過 {@link THREAD_SEARCH_QUERY_MAX_LENGTH}、或含 NUL：`invalid_argument`，有沒有東西可搜都一樣。
+ * 2. 清單上沒掛內容搜尋那一列（`disabled: true`）：`not_supported`，同 dsh 沒掛 `sessionQuery` 時的「unavailable」。
+ * 3. **沒有東西可搜時回空，不是錯**：這台 server 沒接落盤，或一條列得出來的 thread 都沒有。dsh 先列會話、一個都沒有
+ *    就回空，還沒問到搜尋那一層（`list.ts:179-184`）。
+ * 4. **有東西可搜、但那一列設成不開**（`openAt: never`，出廠就是）：`not_supported`，同 dsh 的
+ *    `SESSION_QUERY_SEARCH_DISABLED`。web 收到失敗就退回只比標題。
+ *
+ * **`POST`，body 是 JSON**，同上行：`content-type` 不是 `application/json` 就回 415。
+ */
+export const THREAD_SEARCH_PATH = '/threads/search';
+
+/** 一次最多回幾條 thread，同 dsh 的 `SESSION_SEARCH_RESULT_LIMIT`（`types.ts:197`）。 */
+export const THREAD_SEARCH_RESULT_LIMIT = 20;
+
+/** 命中片段最多幾個 code point，同 dsh 的 `SESSION_SEARCH_SNIPPET_MAX_CODE_POINTS`（`types.ts:200`）。 */
+export const THREAD_SEARCH_SNIPPET_MAX_CODE_POINTS = 240;
+
+/** 去掉頭尾空白之後最長幾個 UTF-16 code unit（`String.length`），同 dsh 的 `SESSION_SEARCH_QUERY_MAX_CHARS`（`list.ts:22`）。 */
+export const THREAD_SEARCH_QUERY_MAX_LENGTH = 500;
+
+/** `POST /threads/search` 的 body，同 dsh 的 `SessionSearchRequest`。 */
+export interface ThreadSearchRequest {
+  readonly query: string;
+}
+
+/** 一筆命中，同 dsh 的 `SessionSearchItem`。 */
+export interface ThreadSearchItem {
+  readonly threadId: string;
+  /**
+   * 那條 thread 裡最相關的那一則，截在命中附近的一段：連續的空白算一個，前後被截掉的地方是 `…`，最多
+   * {@link THREAD_SEARCH_SNIPPET_MAX_CODE_POINTS} 個 code point。**純文字，不帶命中的位置**，同 dsh：要標出來的話
+   * client 自己找。
+   */
+  readonly snippet: string;
+}
+
+/** `POST /threads/search` 的結果，同 dsh 的 `SessionSearchValue`。 */
+export interface ThreadSearchResult {
+  /** 最相關的在前。 */
+  readonly items: readonly ThreadSearchItem[];
+  /** 超過 {@link THREAD_SEARCH_RESULT_LIMIT} 條還有。 */
+  readonly hasMore: boolean;
+}
+
+/** `POST /threads/search` 的回應。 */
+export type ThreadSearchResponse =
+  { readonly type: 'success'; readonly result: ThreadSearchResult } | ErrorResponse;
+
+/**
  * 全部 thread 共用的一條下行（[#632](https://github.com/DemianLi/nexus-agent/issues/632)），`GET`，回
  * `text/event-stream`。每顆 SSE frame 的 `data` 是一顆 {@link ThreadFeedFrame}。
  *

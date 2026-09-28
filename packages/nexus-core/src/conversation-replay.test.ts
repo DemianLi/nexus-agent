@@ -383,6 +383,41 @@ describe('壓縮', () => {
     ]);
   });
 
+  /**
+   * `origin` 交出每一則出自哪一顆（#631 的內容搜尋拿它判哪幾顆還在串上）。對得上的只有留下來的那幾則：
+   * 被壓掉的「一」「A」「二」叫過 `origin`，但不在回傳的串裡；補上的結果不叫。
+   */
+  it('`origin`：留下來的每一則都對得回它那一顆，補上的結果沒有來源', () => {
+    const log = new SessionLog('replay');
+    compacted(log);
+    log.append('turn/start', { kind: 'message', text: '四' });
+    log.append('assistant/message', { message: asking('查', [['c1', 'ls']]) });
+    log.append('turn/end', {});
+
+    const seqOf = new Map<BaseMessage, number>();
+    const replay = replayConversation(log.events, {
+      origin: (message, event) => seqOf.set(message, event.seq),
+    });
+    if (replay.kind !== 'replayed') throw new Error(replay.reason);
+    const typeOf = new Map(log.events.map((event) => [event.seq, event.type]));
+    expect(
+      replay.messages.map((message) => {
+        const seq = seqOf.get(message);
+        return seq === undefined ? `補:${message.text.slice(0, 10)}` : `${typeOf.get(seq)}:${message.text}`;
+      }),
+    ).toEqual([
+      'compaction/summary:摘要一',
+      'assistant/message:B',
+      'turn/start:三',
+      'assistant/message:C',
+      'turn/start:四',
+      'assistant/message:查',
+      `補:${TOOL_NOT_STARTED_TEXT.slice(0, 10)}`,
+    ]);
+    // 被壓掉的三則也叫過，所以「叫過」不等於「在串上」：讀者要拿回傳的串去對。
+    expect(seqOf.size).toBe(9);
+  });
+
   it('壓了兩次：以最後一次為準，切點仍是原始串的座標', () => {
     const log = new SessionLog('replay');
     compacted(log);
