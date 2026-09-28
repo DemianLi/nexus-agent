@@ -42,6 +42,9 @@ import type {
   ThreadHistoryResult,
   ThreadListResponse,
   ThreadListResult,
+  ThreadSearchItem,
+  ThreadSearchResponse,
+  ThreadSearchResult,
   ThreadSummary,
   WireChannel,
   WireErrorResponse,
@@ -50,6 +53,7 @@ import {
   QUEUE_UPDATE_METHOD,
   RUN_CANCEL_METHOD,
   THREAD_FEED_PATH,
+  THREAD_SEARCH_PATH,
   THREADS_PATH,
   WIRE_CHANNELS,
   commandPath,
@@ -120,6 +124,11 @@ export type FeedbackOutcome<T> =
  */
 export type ThreadListOutcome =
   | { readonly kind: 'ok'; readonly result: ThreadListResult }
+  | { readonly kind: 'rejected'; readonly message: string };
+
+/** `searchThreads` 的結果。`rejected` 是協定層的失敗（這個部署沒開、查詢不合法、索引壞了），見 `THREAD_SEARCH_PATH`。 */
+export type ThreadSearchOutcome =
+  | { readonly kind: 'ok'; readonly result: ThreadSearchResult }
   | { readonly kind: 'rejected'; readonly message: string };
 
 export interface WireClient {
@@ -194,6 +203,14 @@ export interface WireClient {
    * 也不替任何一條 thread 建 agent——server 那側照 dsh 的 `session/list` 是冷讀。
    */
   listThreads(): Promise<ThreadListOutcome>;
+  /**
+   * 按內容搜以前的 thread（[#631](https://github.com/DemianLi/nexus-agent/issues/631)），契約見 `THREAD_SEARCH_PATH`。
+   * 跟 {@link listThreads} 一樣冷讀、不綁 thread。**這個部署沒開內容搜尋時是 `rejected`，不是空的**：畫面要退回只比標題。
+   *
+   * @param query - 原樣送出；去頭尾空白與檢查長度在 server 那側。
+   * @param signal - 中止這一次搜尋。
+   */
+  searchThreads(query: string, signal?: AbortSignal): Promise<ThreadSearchOutcome>;
   /**
    * 開全部 thread 共用的那條下行（[#632](https://github.com/DemianLi/nexus-agent/issues/632)），契約見
    * `THREAD_FEED_PATH`。**promise 兌現代表線已經開好**，同 {@link openEvents}；還掛著的那幾題緊接著補送。
@@ -306,6 +323,23 @@ function readThreadList(result: unknown): ThreadListResult {
         blank: row.blank,
         ...(typeof row.title === 'string' ? { title: row.title } : {}),
       });
+    }),
+  };
+}
+
+function readThreadSearch(result: unknown): ThreadSearchResult {
+  const { items, hasMore } = result as { items?: unknown; hasMore?: unknown };
+  if (!Array.isArray(items) || typeof hasMore !== 'boolean') {
+    throw new Error(`POST ${THREAD_SEARCH_PATH} 的結果裡沒有 items 陣列或 hasMore`);
+  }
+  return {
+    hasMore,
+    items: items.map((entry: unknown): ThreadSearchItem => {
+      const row = entry as Record<string, unknown> | null;
+      if (typeof row?.threadId !== 'string' || typeof row.snippet !== 'string') {
+        throw new Error(`POST ${THREAD_SEARCH_PATH} 回了不認得的一筆`);
+      }
+      return Object.freeze({ threadId: row.threadId, snippet: row.snippet });
     }),
   };
 }
@@ -548,6 +582,17 @@ export function createWireClient(options: WireClientOptions): WireClient {
       return body.type === 'error'
         ? { kind: 'rejected', message: body.message }
         : { kind: 'ok', result: readThreadList(body.result) };
+    },
+
+    async searchThreads(query, signal) {
+      const response = await postJson(THREAD_SEARCH_PATH, { query }, signal);
+      if (!response.ok) {
+        throw new Error(`搜尋被載體層擋下：${response.status} ${await response.text()}`);
+      }
+      const body = (await response.json()) as ThreadSearchResponse;
+      return body.type === 'error'
+        ? { kind: 'rejected', message: body.message }
+        : { kind: 'ok', result: readThreadSearch(body.result) };
     },
 
     async threadHistory(threadId, query = {}) {
