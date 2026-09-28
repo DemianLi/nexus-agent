@@ -9,7 +9,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { GitRunner, resolveGitExecutable, scrubbedParentEnv } from './git.js';
+import { GitRunner, resolveGitExecutable } from './git.js';
 import { parseNumstat } from './numstat.js';
 
 const cleanup: string[] = [];
@@ -63,23 +63,6 @@ describe('parseNumstat', () => {
 });
 
 describe('環境淨化', () => {
-  it('拿掉名字像憑證的與 `NEXUS_*`，不分大小寫；其餘照留', () => {
-    expect(
-      scrubbedParentEnv({
-        PATH: '/bin',
-        HOME: '/h',
-        OPENAI_API_KEY: 'k',
-        GH_TOKEN: 't',
-        db_password: 'p',
-        MY_SECRET: 's',
-        GIT_CONFIG_KEY_0: 'core.hooksPath',
-        NEXUS_AGENT_HOME: '/n',
-        nexus_x: 'x',
-        UNDEFINED: undefined,
-      }),
-    ).toEqual({ PATH: '/bin', HOME: '/h' });
-  });
-
   it('子行程拿到的是淨化過的環境，外加 dsh 那四個 git 變數', async () => {
     vi.stubEnv('FAKE_API_TOKEN', 'leak');
     vi.stubEnv('NEXUS_AGENT_HOME', '/somewhere');

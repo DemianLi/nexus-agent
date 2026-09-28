@@ -68,7 +68,7 @@ import { GitRunner, resolveGitExecutable } from './git.js';
 import { TurnRecorder } from './recorder.js';
 
 export { mutationPath } from './capture.js';
-export { GitRunner, resolveGitExecutable, scrubbedParentEnv } from './git.js';
+export { GitRunner, resolveGitExecutable } from './git.js';
 export { TurnRecorder } from './recorder.js';
 export type { RecorderEnvironment } from './recorder.js';
 
