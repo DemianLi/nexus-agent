@@ -49,6 +49,7 @@ import {
   isFeedbackEvent,
   loadPlugins,
   MESSAGE_FEEDBACK_SERVICE,
+  resolveEntriesPerEntry,
   SESSION_TELEMETRY_SERVICE,
   SessionTelemetryCoordinator,
   type AgentCheckpointer,
@@ -57,7 +58,9 @@ import {
   type ApprovalPolicy,
   type InvariantError,
   type InvariantSelection,
+  type DroppedEntry,
   type PluginEntry,
+  type PluginOrigin,
   type PluginRegistry,
   type SessionLog,
   type SessionRegistry,
@@ -74,9 +77,51 @@ import { assertHarnessProfileDeclared } from './harness-profile.js';
 import type { HarnessProfileEffects } from './harness-profile.js';
 import { DEFAULT_RECURSION_LIMIT, RECURSION_LIMIT_SERVICE } from './settings/recursion-limit.js';
 
+/** 組裝時掉了的一列（#751）：載入器交出來的原因，加上它是清單上哪一個條目。 */
+export interface AssemblyDrop {
+  /** 放進 {@link CreateNexusAgentOptions.plugins} 的那一顆條目物件。 */
+  readonly entry: PluginEntry;
+  readonly drop: DroppedEntry;
+}
+
+/**
+ * 組裝時有不能少掛的條目掉了：整個組裝失敗（#751）。**拋出之前已經收掉**這次組裝開的資源。
+ *
+ * 帶著這一次掉了的全部（可少掛的也在），呼叫端要跟讀清單那一次的一起列時從這裡讀。
+ */
+export class AssemblyDropError extends Error {
+  readonly dropped: readonly AssemblyDrop[];
+  /** 不能少掛、卻掉了的那幾個條目。 */
+  readonly fatal: ReadonlySet<PluginEntry>;
+
+  constructor(dropped: readonly AssemblyDrop[], fatal: ReadonlySet<PluginEntry>) {
+    const lines = dropped.map(
+      ({ entry, drop }) => `  ${drop.message}${fatal.has(entry) ? '〔不能少掛〕' : ''}`,
+    );
+    super(
+      `組裝失敗：${String(fatal.size)} 個不能少掛的條目沒有掛上。這一次掉了的全部：\n${lines.join('\n')}`,
+    );
+    this.name = 'AssemblyDropError';
+    this.dropped = dropped;
+    this.fatal = fatal;
+  }
+}
+
 export interface CreateNexusAgentOptions {
   /** plugin 清單。順序有意義：middleware 的順序、以及 `except` 的射程都跟著它。 */
   readonly plugins: readonly PluginEntry[];
+  /**
+   * **哪幾個條目可以少掛**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)），以條目物件比對
+   * （放進 {@link plugins} 的那一顆）。
+   *
+   * 給了就用載入器的逐列掉模式，照 dsh：這幾個條目自己的失敗——`apply` 拋錯、`requires` 缺件、撞到基座保留的
+   * 工具名——只讓它掉，組出來的 agent 照樣有其餘的，掉了哪幾個從回傳的 `dropped` 讀。**不在這份裡的條目掉了，
+   * 整個組裝失敗**（{@link AssemblyDropError}）：產品路徑上那是組裝點自己加的外掛與必掛的列。組裝點的外掛不能
+   * 少掛，因為有些使用方查不到它們給的服務就自己退回預設值照樣跑（例如 `ask-user` 查不到對話管道）。
+   *
+   * 省略即全有全無，手搭清單的呼叫端照舊。
+   */
+  readonly optionalEntries?: ReadonlySet<PluginEntry>;
   /**
    * 模型。**刻意是必填**——基座省略時會退到它自己的預設（`anthropic:claude-sonnet-4-6`），
    * 那會讓「忘了指定」與「就是要 Anthropic」看起來一模一樣，而前者的代價是打一支
@@ -452,9 +497,29 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
   // 所以失敗了不必先 `dispose()`。其餘四種都在下面那個 try 裡，因為它們要等 registry。
   assertHarnessProfileDeclared(options.model, options.expectedHarnessProfile);
 
-  const { registry, dispose } = await loadPlugins(options.plugins);
+  const optional = options.optionalEntries;
+  const { registry, dispose, dropped } = await loadPlugins(
+    options.plugins,
+    undefined,
+    optional === undefined
+      ? {}
+      : {
+          perEntry: true,
+          // **撞名算那一列 `apply` 失敗**（#751）：在它 `apply` 完的當下查整份，前面每一列都已經查過、保留名單又是
+          // 固定的，所以查得到的只會是它剛註冊的，掉的就只有它。
+          afterApply: (loading) => void assertNoBaseToolNameCollision(loading),
+        },
+  );
+  const assemblyDrops = optional === undefined ? [] : pairWithEntries(options.plugins, dropped);
 
   try {
+    const fatal = new Set(
+      assemblyDrops
+        .filter(({ entry }) => !(optional?.has(entry) ?? false))
+        .map(({ entry }) => entry),
+    );
+    if (fatal.size > 0) throw new AssemblyDropError(assemblyDrops, fatal);
+    // 逐列掉模式下每一列已經查過自己的了；整份再查一次當安全網，全有全無那條路則靠它。
     assertNoBaseToolNameCollision(registry);
     // 選擇的合法性在**這裡**驗，不是等接線時才驗：runner 是每一份會話日誌各建一個的，
     // 壞掉的 regex 預設會拖到第一輪對話才炸，那不是組裝失敗該出現的地方。
@@ -496,6 +561,11 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     const attached = new Set<TelemetryAttachment>();
     return {
       agent,
+      /**
+       * 這一次組裝掉了的可少掛條目（#751）。沒給 {@link CreateNexusAgentOptions.optionalEntries} 時一律是空的：
+       * 全有全無的組裝一列失敗就整個拋，走不到這裡。
+       */
+      dropped: assemblyDrops,
       /**
        * plugin 註冊的**人的命令**。進入點靠它把一行 `/name` 發派出去。
        *
@@ -672,6 +742,23 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
   }
 }
 
+/**
+ * 把載入器交出來的掉了的列對回清單上的條目物件。身分照載入器同一支算（補號、重複 id），所以 `origin.id`
+ * 對得上。
+ */
+function pairWithEntries(
+  plugins: readonly PluginEntry[],
+  dropped: readonly DroppedEntry[],
+): AssemblyDrop[] {
+  const byId = new Map(
+    resolveEntriesPerEntry(plugins).map(({ origin }, index) => [origin.id, plugins[index]]),
+  );
+  return dropped.flatMap((drop) => {
+    const entry = byId.get(drop.origin.id);
+    return entry === undefined ? [] : [{ entry, drop }];
+  });
+}
+
 /** 一份日誌的遙測接線：協調器，加上 `feedback-only`／`disabled` 那個看回饋的訂閱。 */
 interface TelemetryAttachment {
   dispose(): Promise<void>;
@@ -734,21 +821,23 @@ function watchFeedback(
 function assertNoBaseToolNameCollision(registry: PluginRegistry): void {
   const collisions: string[] = [];
 
-  const collect = (name: string, where: string, cite: string): void => {
-    if (RESERVED_BASE_TOOL_NAMES.has(name)) collisions.push(`${cite} 在${where}註冊了 "${name}"`);
+  const collect = (name: string, where: string, origin: PluginOrigin): void => {
+    if (RESERVED_BASE_TOOL_NAMES.has(name)) {
+      collisions.push(`${formatOrigin(origin)} 在${where}註冊了 "${name}"`);
+    }
   };
 
   for (const [name, entry] of registry.tools.effective()) {
-    collect(name, '全域', formatOrigin(entry.origin));
+    collect(name, '全域', entry.origin);
   }
   for (const scope of registry.tools.scopes()) {
     for (const [name, entry] of registry.tools.own(scope)) {
-      collect(name, `subagent "${scope}"`, formatOrigin(entry.origin));
+      collect(name, `subagent "${scope}"`, entry.origin);
     }
   }
   for (const [name, entry] of registry.subagents.entries()) {
     for (const tool of entry.value.tools ?? []) {
-      collect(tool.name, `subagent "${name}" 自帶的工具裡`, formatOrigin(entry.origin));
+      collect(tool.name, `subagent "${name}" 自帶的工具裡`, entry.origin);
     }
   }
 

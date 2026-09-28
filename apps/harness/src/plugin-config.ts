@@ -872,17 +872,26 @@ function groupedDump(
   return `${lines.join('\n')}\n`;
 }
 
-/** 讀清單那一次掉了的一列（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）。 */
+/**
+ * 啟動時掉了的一列（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）。讀清單那一次交出 `module`／`config`
+ * 兩步，組裝那一次（`startup-audit.ts` 的 `assemblyDropsOf`）補上 `apply`／`requires` 兩步。
+ */
 export interface StartupDrop {
   /** 條目 id。沒寫 id 的列（只有 `insert` 進來的會這樣）：設定那一步是補過號的 id，模組那一步是模組 specifier。 */
   readonly id: string;
-  /** 模組 specifier，即那一列的 `name`。 */
+  /** 模組 specifier，即那一列的 `name`。組裝點自己加的外掛不是清單上的列，沒有這個名字，見 `startup-audit.ts`。 */
   readonly module: string;
-  /** 掉在哪一步：模組載不進來（或匯出的不是一顆 plugin），或設定驗不過。 */
-  readonly stage: 'module' | 'config';
+  /**
+   * 掉在哪一步：模組載不進來（或匯出的不是一顆 plugin）、設定驗不過，或組裝時 `apply` 失敗（含撞到基座保留的
+   * 工具名）、`requires` 缺件。
+   */
+  readonly stage: 'module' | 'config' | 'apply' | 'requires';
   /** 指名那一列的原因，跟今天整個拋的那一句同一句。 */
   readonly message: string;
-  /** 清單上那一列（已標成 `disabled: true`）。模組那一步掉的沒有：它不在清單上，見 {@link loadPluginConfig}。 */
+  /**
+   * 清單上那一列：設定那一步的已標成 `disabled: true`，組裝那兩步的是交給組裝的那一顆。模組那一步掉的沒有：它不在
+   * 清單上，見 {@link loadPluginConfig}。
+   */
   readonly entry?: PluginEntry;
 }
 
@@ -903,6 +912,11 @@ export interface LoadedPluginConfig {
   readonly dropped: readonly StartupDrop[];
   /** 照樣掛上、但寫的 `config` 沒有作用的列。 */
   readonly ignoredConfig: readonly IgnoredConfig[];
+  /**
+   * {@link plugins} 裡每一顆條目的 id 與模組名，以條目物件為鍵。組裝時掉了的列只帶著條目物件回來，警告要寫 id 與
+   * 模組名、必掛名單要比 id，從這裡查（`startup-audit.ts`）。
+   */
+  readonly rows: ReadonlyMap<PluginEntry, { readonly id: string; readonly module: string }>;
 }
 
 /**
@@ -953,12 +967,16 @@ export async function loadPluginConfig(
   // 身分照載入器同一支算（補號、重複 id），訊息裡的 id 才跟組裝時對得上。
   const resolutions = resolveEntriesPerEntry(loaded.map(({ entry }) => entry));
   const ignoredConfig: IgnoredConfig[] = [];
+  const rows = new Map<PluginEntry, { readonly id: string; readonly module: string }>();
   const plugins = loaded.map(({ row, entry }, index): PluginEntry => {
     const resolution = resolutions[index];
-    if (resolution === undefined || resolution.disabled) return entry;
+    if (resolution === undefined) return entry;
     const { origin, configError } = resolution;
+    rows.set(entry, { id: origin.id, module: row.name });
+    if (resolution.disabled) return entry;
     if (configError !== undefined) {
       const off: PluginEntry = { ...entry, disabled: true };
+      rows.set(off, { id: origin.id, module: row.name });
       dropped.push({
         id: origin.id,
         module: row.name,
@@ -973,7 +991,7 @@ export async function loadPluginConfig(
     }
     return entry;
   });
-  return { plugins, dropped, ignoredConfig };
+  return { plugins, dropped, ignoredConfig, rows };
 }
 
 /**
