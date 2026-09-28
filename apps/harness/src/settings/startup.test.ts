@@ -227,9 +227,15 @@ describe('startupEntryMounted', () => {
 
   it('出貨清單上掛著；疊上關掉的夾具就沒掛', async () => {
     expect(
-      startupEntryMounted(await loadDefaultPlugins({ env: {} }), sessionPersistencePlugin),
+      startupEntryMounted(
+        (await loadDefaultPlugins({ env: {} })).plugins,
+        sessionPersistencePlugin,
+      ),
     ).toBe(true);
-    const off = await loadDefaultPlugins({ env: {}, patches: [PERSISTENCE_OFF_PATCH] });
+    const { plugins: off } = await loadDefaultPlugins({
+      env: {},
+      patches: [PERSISTENCE_OFF_PATCH],
+    });
     expect(startupEntryMounted(off, sessionPersistencePlugin)).toBe(false);
   });
 });
@@ -257,7 +263,7 @@ describe('startupSetting', () => {
   });
 
   it('出貨清單上真的讀得到那七列——不是只有手搭的清單走得通', async () => {
-    const plugins = await loadDefaultPlugins({ env: {} });
+    const { plugins } = await loadDefaultPlugins({ env: {} });
     expect(startupSetting(plugins, threadTitlePlugin).maxBytes).toBe(40);
     expect(startupSetting(plugins, threadTitlePlugin).maxTitleBytes).toBe(80);
     // 字面值，理由同下一段：照 dsh base 的 `session-title-llm`（#650）。

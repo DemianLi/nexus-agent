@@ -45,7 +45,7 @@ export function fakeSubAgent(name: string): SubAgent {
 /**
  * 包一個 plugin，回傳掛著它的**條目**——清單收的是條目，所以測試直接把它放進 `plugins` 即可。
  *
- * 不收 `config`：假 plugin 沒有 `Config`，給了 config 是錯誤（見 `plugin.ts` 的 `parseEntryConfig`）。
+ * 不收 `config`：假 plugin 沒有 `Config`，給了也不驗、原樣交給 `apply`（見 `plugin.ts` 的 `parseEntryConfig`）。
  * 要驗設定那條路的測試自己寫條目。
  *
  * @param name - plugin 名，不必唯一。

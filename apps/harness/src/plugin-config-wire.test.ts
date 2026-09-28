@@ -25,10 +25,13 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BROWSER_SESSION_SECRET_FILE } from './browser-session-secret.js';
-import { parseCliArgs, runCli } from './cli.js';
+import { createCliAgent, parseCliArgs, runCli } from './cli.js';
 import { serveClient, foldTurn } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { LIVE_API_KEY_ENV } from './live-model.js';
+import { toAgentInvocation } from './messages.js';
+import { loadDefaultPlugins } from './plugin-config.js';
+import { ScriptedChatModel } from './scripted-model.js';
 import { parseServeArgs, runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 
@@ -60,9 +63,8 @@ function writePatch(root: string, name: string, content: string): string {
 /**
  * 一條合法但**值**不合法的 patch：`todo` 的 `allowParallelInProgress` 只收布林。
  *
- * 它是 `resolveEntries` 擋下來的，而那件事發生在 `createCliAgent` 裡——所以它證得了
- * 「設定一路流到了驗證」。兩個入口都在啟動時組 agent：CLI 進對話之前組，serve 在綁 port 之前
- * 先試組一次（#749）。
+ * 讀完清單時逐列驗設定，驗不過的那一列掉了（#751）：`todo` 是可少掛的，所以兩個入口都起得來、
+ * 啟動時印一段警告指名它。**那段警告就是「這一層被讀了」的證據**：沒被讀的檔不會讓任何一列掉。
  */
 const BAD_CONFIG = "- id: todo\n  config:\n    allowParallelInProgress: '不是布林'\n";
 
@@ -127,27 +129,61 @@ describe('--patch 的解析（兩個入口同一份規則）', () => {
   });
 });
 
+/** 跑一次 CLI，回它印到標準錯誤的每一行。 */
+async function cliErrors(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<string[]> {
+  const errors: string[] = [];
+  await runCli({
+    argv: [...argv],
+    env,
+    input: new PassThrough(),
+    output: new PassThrough(),
+    printer: { log: () => undefined, error: (line) => errors.push(line) },
+  });
+  return errors;
+}
+
+/** 警告裡指名 `todo` 掉在設定驗證的那一行。 */
+const TODO_DROPPED = /^ {2}todo（@nexus\/plugin-todo）設定驗不過：/u;
+
 describe('CLI 真的走設定檔那條路', () => {
-  it('home 那一層壞掉就啟動不了——證明它被讀了', async () => {
+  it('home 那一層的 `todo` 設定寫壞了：起得來、標準錯誤有一段警告指名它——證明那一層被讀了', async () => {
     const home = privateHome();
     writePatch(home, 'cordis.patch.yml', BAD_CONFIG);
 
-    await expect(
-      runCli({ argv: ['說點什麼'], env: { [HARNESS_HOME_ENV]: home }, ...silent() }),
-    ).rejects.toThrow(/todo/u);
+    const errors = await cliErrors(['說點什麼'], { [HARNESS_HOME_ENV]: home });
+    expect(errors[0]).toBe('警告：1 列沒有掛上，其餘照樣起來：');
+    expect(errors.filter((line) => TODO_DROPPED.test(line))).toHaveLength(1);
   });
 
-  it('--patch 壞掉也啟動不了', async () => {
+  it('--patch 那一層也一樣', async () => {
     const home = privateHome();
     const patch = writePatch(home, 'bad.yml', BAD_CONFIG);
 
-    await expect(
-      runCli({
-        argv: ['--patch', patch, '說點什麼'],
-        env: { [HARNESS_HOME_ENV]: home },
-        ...silent(),
-      }),
-    ).rejects.toThrow(/todo/u);
+    const errors = await cliErrors(['--patch', patch, '說點什麼'], { [HARNESS_HOME_ENV]: home });
+    expect(errors.filter((line) => TODO_DROPPED.test(line))).toHaveLength(1);
+  });
+
+  /**
+   * **掉了就是沒掛**：跟 `runCli` 同一條載入、同一支 `createCliAgent`，看模型拿到的工具清單。對照組是沒寫壞的同一份，
+   * `todo_write` 在——不然「沒有」可能只是這個量法本來就看不到它。
+   */
+  it('掉了的 `todo` 不在模型拿到的工具清單上；對照：沒寫壞就在', async () => {
+    const boundTools = async (env: NodeJS.ProcessEnv): Promise<readonly string[]> => {
+      const { plugins } = await loadDefaultPlugins({ env });
+      const built = await createCliAgent({ live: false }, plugins);
+      try {
+        await built.agent.invoke(toAgentInvocation('說點什麼'), {
+          configurable: { thread_id: 'wire' },
+        });
+        return (built.model as ScriptedChatModel).boundToolNames;
+      } finally {
+        await built.dispose();
+      }
+    };
+    const home = privateHome();
+    expect(await boundTools({ [HARNESS_HOME_ENV]: home })).toContain('todo_write');
+    writePatch(home, 'cordis.patch.yml', BAD_CONFIG);
+    expect(await boundTools({ [HARNESS_HOME_ENV]: home })).not.toContain('todo_write');
   });
 
   it('--patch 指到不存在的檔就拋——是呼叫方指名它的', async () => {
@@ -198,11 +234,9 @@ describe('CLI 真的走設定檔那條路', () => {
 });
 
 /**
- * serve 那一半：讀檔與形狀那一層（`BAD_SHAPE`），是 `composeEntries` 在開機當下做的。
+ * serve 那一半：讀檔與形狀那一層（`BAD_SHAPE`），是 `composeEntries` 在開機當下做的，整份起不來。
  *
- * 值那一層（`BAD_CONFIG`）以前在 serve 上不對稱：agent 每條 thread 才組，伺服器照樣起得來，
- * 第一個開 thread 的人才撞到。#749 起 serve 在綁 port 之前先試組一次，那一類也在啟動時報出來，
- * 見下一組。
+ * 值那一層（`BAD_CONFIG`）是一列自己的失敗：讀完清單時就驗、那一列掉了、照樣起來（#751），見下一組。
  */
 describe('serve 也真的走設定檔那條路', () => {
   // **兩個入口各釘一條，不是只釘一個然後說「另一邊一樣」。** 兩條路各自呼叫一次
@@ -248,8 +282,8 @@ describe('serve 也真的走設定檔那條路', () => {
  * **serve 在綁 port 之前先照每條 thread 那一次組一份 agent**（#749），清單上哪一列壞了在啟動時就講，
  * 跟 CLI 同一刻、同一句。dsh 在 `boot()` 就掛完整份清單（dsh `packages/boot/app-boot/README.zh.md:92`，`477b4f4`）。
  *
- * 「報了之後起不起得來」歸 #751（必掛與可少掛）：那張合了之後，`todo` 與 `tool-result-pruner` 這種可少掛的列
- * 壞了會變成啟動時的警告、照樣起來，下面前兩條要跟著翻；「在啟動時報出來」不變。
+ * 報了之後起不起得來照 #751 的必掛名單：設定驗不過的 `todo` 是可少掛的，啟動時印警告、照樣起來。`apply` 裡才驗的
+ * 那一類（`tool-result-pruner`）今天還是整個起不來：組裝那一層的逐列掉是 #751 的下一刀，那時第二條跟著翻。
  */
 describe('serve 在啟動時就把清單組過一次', () => {
   /** 同一份 home 覆寫檔下，CLI 與 serve 各起一次，回兩邊拋的錯。 */
@@ -270,12 +304,39 @@ describe('serve 在啟動時就把清單組過一次', () => {
     return [cli, serve];
   }
 
-  it('值不合法的設定：serve 起不來，訊息跟 CLI 同一句', async () => {
-    const [cli, serve] = await bothEntries(BAD_CONFIG);
-    expect(cli).toBeInstanceOf(Error);
-    expect((cli as Error).message).toMatch(/todo/u);
-    expect(serve).toBeInstanceOf(Error);
-    expect((serve as Error).message).toBe((cli as Error).message);
+  /**
+   * 卡上的驗收：同一份壞設定，serve 起得來、綁 port 之前伺服器日誌有**跟 CLI 同一段**警告，而且只印那一次——開兩條對話
+   * 都不再印。「綁 port 之前」量的是順序：警告排在印網址那一行前面，而網址那一行是 `listen` 之後才印的。
+   */
+  it('值不合法的設定：serve 起得來，綁 port 之前印跟 CLI 同一段警告，開兩條對話也只印那一次', async () => {
+    const home = privateHome();
+    writePatch(home, 'cordis.patch.yml', BAD_CONFIG);
+    const env = { [HARNESS_HOME_ENV]: home };
+    const cli = await cliErrors(['說點什麼'], env);
+
+    const lines: string[] = [];
+    const server = (await runServe({
+      argv: ['--port', '0'],
+      log: (line) => lines.push(line),
+      env,
+    })) as RunningServe;
+    running = server;
+    const client = await serveClient(server);
+    for (const thread of ['a', 'b']) {
+      const events = await client.openEvents(thread);
+      await client.runStart(thread, '說點什麼');
+      await foldTurn(events);
+      await events.return?.(undefined);
+    }
+
+    const warning = lines.filter((line) => line.startsWith('警告：') || TODO_DROPPED.test(line));
+    expect(warning).toEqual(cli);
+    const url = lines.findIndex((line) => line.includes(server.url));
+    expect(url).toBeGreaterThan(lines.indexOf(cli[0] ?? ''));
+    // 啟動那幾行裡的「plugin：」不列掉了的列。
+    const listed = lines.find((line) => line.startsWith('plugin：'));
+    expect(listed).not.toMatch(/[：、]todo(、|$)/u);
+    expect(listed).toMatch(/[：、]plan-mode(、|$)/u);
   });
 
   it('`apply` 裡才驗的值：設定格式過得了、`apply` 拋的那一類也在啟動時報出來', async () => {

@@ -131,7 +131,7 @@ export async function loadPlugins(
     const tracked = trackUndo(registry, undos);
     const leave = registry.enter(origin);
     try {
-      // `config` 是 `resolveEntries` 驗過的那一份（沒有 `Config` 的 plugin 是 `undefined`）。
+      // `config` 是 `resolveEntries` 驗過的那一份（沒有 `Config` 的 plugin 是條目上原樣的那一份）。
       await plugin.apply(tracked, config);
       options.afterApply?.(registry, origin);
     } catch (error) {

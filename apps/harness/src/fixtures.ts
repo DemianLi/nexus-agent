@@ -44,11 +44,21 @@ import { loadPluginConfig } from './plugin-config.js';
  * 都是模組層級的常數（設定是條目上的資料，不在閉包裡），所以兩次組裝共用同一顆 plugin 物件
  * 跟以前共用 `DEFAULT_PLUGINS` 那份模組常數（#454 之前）是同一回事。
  *
+ * **出貨清單一列都不該掉**（#751 之後載入是逐列掉的）：掉了一列的話，測試會安靜地拿到一份少了東西的清單，
+ * 所以這裡照樣拋，而不是交出殘缺的那一份。
+ *
  * @returns 出貨清單，跟產品路徑上零設定時組出來的那一份相同。
  */
 let shipped: Promise<readonly PluginEntry[]> | undefined;
 export function shippedPlugins(): Promise<readonly PluginEntry[]> {
-  shipped ??= loadPluginConfig();
+  shipped ??= loadPluginConfig().then(({ plugins, dropped, ignoredConfig }) => {
+    const problems = [
+      ...dropped.map((drop) => drop.message),
+      ...ignoredConfig.map((row) => `${row.id} 寫了沒有作用的 config`),
+    ];
+    if (problems.length > 0) throw new Error(`出貨清單有列沒掛上：${problems.join('；')}`);
+    return plugins;
+  });
   return shipped;
 }
 

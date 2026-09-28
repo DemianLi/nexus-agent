@@ -530,6 +530,17 @@ describe('設定驗證排在所有 apply 之前（#453）', () => {
     await loadPlugins([entry]);
     expect(seen).toEqual([undefined]);
   });
+
+  it('沒有 Config 的 plugin 給了 config：照 dsh 不驗、原樣交給 apply（#751）', async () => {
+    // dsh `vendor/cordis/src/fiber.ts:51`（`477b4f4`）：`if (!runtime.Config) return config`。
+    const seen: unknown[] = [];
+    const entry = {
+      plugin: { name: 'plain', apply: (_r: unknown, c: unknown) => void seen.push(c) },
+      config: { anything: 1 },
+    };
+    await loadPlugins([entry]);
+    expect(seen).toEqual([{ anything: 1 }]);
+  });
 });
 
 /**

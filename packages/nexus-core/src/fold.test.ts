@@ -1770,12 +1770,14 @@ describe('先讀後改的條目', () => {
     expect(off.registry.disabledEntries.names()).toEqual(['observation-policy']);
   });
 
-  it('它不收 config——給了會在載入期拋', async () => {
-    // 這一顆沒有 Config schema，而 `parseEntryConfig` 對這件事是當場拋，不是默默吞掉。
-    // 出貨的 `cordis.yml` 那一列因此刻意沒有 `config:`。
-    await expect(
-      loadPlugins([{ plugin: observationPolicyPlugin, config: { anything: 1 } } as PluginEntry]),
-    ).rejects.toThrow(/不收 config/);
+  it('它沒有 config——給了也照樣掛，先讀後改照樣在（#751 拍板照 dsh）', async () => {
+    // 這一顆沒有 Config schema，`parseEntryConfig` 照 dsh 原樣交下去、不驗。**多寫一行 `config:` 不能讓它掉**：
+    // 掉了就是沒讀過的檔改得動，那是 dsh 沒有的「設定寫壞反而放行」。警告只在產品路徑上印。
+    const { registry } = await loadPlugins([
+      { plugin: observationPolicyPlugin, config: { anything: 1 } } as PluginEntry,
+    ]);
+    expect(registry.disabledEntries.names()).toEqual([]);
+    expect(() => foldRegistry(registry, { summarization: false })).toThrow(/先讀後改/);
   });
 });
 
@@ -1875,10 +1877,11 @@ describe('用量記錄器的條目', () => {
     expect(off.registry.disabledEntries.names()).toEqual(['model-usage']);
   });
 
-  it('它不收 config——給了會在載入期拋', async () => {
-    await expect(
-      loadPlugins([{ plugin: modelUsagePlugin, config: { anything: 1 } } as PluginEntry]),
-    ).rejects.toThrow(/不收 config/);
+  it('它沒有 config——給了也照樣掛（#751 拍板照 dsh）', async () => {
+    const { registry } = await loadPlugins([
+      { plugin: modelUsagePlugin, config: { anything: 1 } } as PluginEntry,
+    ]);
+    expect(registry.disabledEntries.names()).toEqual([]);
   });
 });
 
@@ -1928,14 +1931,15 @@ describe('耐久檢查點打底', () => {
     expect(middlewareNames(params)).toContain(SESSION_CHECKPOINT_MIDDLEWARE_NAME);
   });
 
-  it('它一顆服務都不註冊，也不收 config', async () => {
+  it('它一顆服務都不註冊，也沒有 config——給了也照樣掛（#751）', async () => {
     const { registry } = await loadPlugins([{ plugin: sessionCheckpointPlugin }]);
     expect(registry.services.names()).toEqual([]);
     const off = await loadPlugins([{ plugin: sessionCheckpointPlugin, disabled: true }]);
     expect(off.registry.disabledEntries.names()).toEqual(['session-checkpoint-policy']);
-    await expect(
-      loadPlugins([{ plugin: sessionCheckpointPlugin, config: { anything: 1 } } as PluginEntry]),
-    ).rejects.toThrow(/不收 config/);
+    const given = await loadPlugins([
+      { plugin: sessionCheckpointPlugin, config: { anything: 1 } } as PluginEntry,
+    ]);
+    expect(given.registry.disabledEntries.names()).toEqual([]);
   });
 });
 

@@ -191,8 +191,8 @@ export const MODEL_USAGE_PLUGIN_NAME = 'model-usage';
  * 所以它只有三態而不是四態，「條目在場」與「這次組裝沒有經過部署設定層」的正確答案都是
  * 「照預設開著」。要分的只有**有沒有被明著關掉**，而那件事 `disabledEntries` 已經記著了。
  *
- * **因此這一列不可以帶 `config`**：`parseEntryConfig` 對「沒有 Config schema 卻給了
- * config」是當場拋，不是默默吞掉（見 {@link ./plugin.ts | parseEntryConfig}）。
+ * **因此這一列沒有 `config`**：沒有 Config schema，寫了也沒有作用——`parseEntryConfig` 照 dsh 原樣交給 `apply`、
+ * 不驗，產品路徑上啟動時印一句警告（見 {@link ./plugin.ts | parseEntryConfig}）。
  *
  * **關掉它之後不見的是日誌裡的 `model/usage`**——檔頭第一段講的那本帳——**連帶 web 用量表
  * 的「目前大小」那一行**：pump 與歷史路由把 root 最新那一筆的 `inputTokens` 送上線

@@ -372,14 +372,58 @@ describe('在設定裡覆寫會生效——產品路徑（#545）', () => {
     expectOverrideOnEveryRequest(fake.seen);
   });
 
-  it('serve：那一列寫壞了，server 起不來——不是等到第一條 thread 才炸', async () => {
+  /** 一份把 `live-model` 寫壞的 patch。 */
+  async function writeBadPatch(): Promise<string> {
     const dir = await mkdtemp(join(tmpdir(), 'nexus-live-model-'));
     const patch = join(dir, 'bad.patch.yml');
     await writeFile(patch, "- id: live-model\n  config:\n    baseUrl: 'ftp://nope'\n", 'utf8');
+    return patch;
+  }
 
+  /**
+   * 沒帶 `--live`：那份值沒人用（#751），`live-model` 是可少掛的，所以起得來、啟動時的警告指名它——不是等到第一條
+   * thread 才講。
+   */
+  it('serve：那一列寫壞了、沒帶 --live：起得來，啟動時的警告指名它', async () => {
+    const logged: string[] = [];
+    running = (await runServe({
+      argv: ['--port', '0', '--patch', await writeBadPatch()],
+      log: (line: string) => void logged.push(line),
+      env: {},
+    })) as RunningServe;
+    expect(
+      logged.filter((line) => /^ {2}live-model（#settings\/live-model）設定驗不過：/u.test(line)),
+    ).toHaveLength(1);
+    expect(logged).toContain('模型：假模型（ScriptedChatModel）');
+  });
+
+  /**
+   * 帶 `--live`：**兩個入口都起不來，不退回設定格式的預設值**（#751）。那份預設的網址是對外的公開端點，退回去就連同金鑰
+   * 一起送出去；照 dsh 的連鎖，使用方（帶 `--live` 的組裝）硬要這一份，提供方掉了使用方起不來。
+   *
+   * CLI 那條不給題目、輸入一開始就結束：萬一檢查被拿掉，它也只會進對話迴圈就收，不會真的對外送請求。
+   */
+  it('帶 --live：serve 與 CLI 都起不來，訊息標出 live-model 是必掛的', async () => {
+    const patch = await writeBadPatch();
+    const required = /live-model（#settings\/live-model）〔必掛〕設定驗不過/u;
     await expect(
-      runServe({ argv: ['--port', '0', '--patch', patch], log: () => undefined, env: {} }),
-    ).rejects.toThrow(/live-model/u);
+      runServe({
+        argv: ['--port', '0', '--live', '--patch', patch],
+        log: () => undefined,
+        env: {},
+      }),
+    ).rejects.toThrow(required);
+    const input = new PassThrough();
+    input.end();
+    await expect(
+      runCli({
+        argv: ['--live', '--patch', patch],
+        input,
+        output: new PassThrough(),
+        printer: { log: () => undefined, error: () => undefined },
+        env: {},
+      }),
+    ).rejects.toThrow(required);
   });
 });
 
@@ -408,7 +452,7 @@ describe('createCliAgent 拿到的是哪一份', () => {
 
   it('沒傳 liveModel 的呼叫端：從同一份清單解，拿到的跟產品路徑一樣', async () => {
     const baseUrl = 'http://127.0.0.1:9/v1';
-    const plugins = await loadDefaultPlugins({
+    const { plugins } = await loadDefaultPlugins({
       env: {},
       patches: [await writeOverridePatch(baseUrl)],
     });
@@ -423,7 +467,7 @@ describe('createCliAgent 拿到的是哪一份', () => {
   });
 
   it('傳了 liveModel：用傳進來的那一份，不再讀清單', async () => {
-    const plugins = await loadDefaultPlugins({ env: {} });
+    const { plugins } = await loadDefaultPlugins({ env: {} });
     const passed: LiveModelConfig = { ...OVERRIDE, baseUrl: 'http://127.0.0.1:9/v1' };
     const built = await createCliAgent({ live: true, liveModel: passed }, plugins);
     try {

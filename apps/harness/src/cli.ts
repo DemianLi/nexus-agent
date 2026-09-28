@@ -93,6 +93,7 @@ import { createLiveModel, loadLiveEnvIfNeeded, DEFAULT_LIVE_MODEL_ID } from './l
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { createFileReferencePlugin } from './file-references.js';
 import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js';
+import { auditStartupEntries } from './startup-audit.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
@@ -1410,10 +1411,15 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // 之前，那是承重的**（#612）：落盤掛不掛由清單上 `session-persistence` 那一列講，而下面讀續接、
   // 解析日誌根都要先知道答案——關掉的時候一件都不該做。清單在這裡載也讓設定寫壞的那一類錯
   // 早於續接拿租約，拋了沒有東西要放。
-  const plugins = await loadDefaultPlugins({
+  const loaded = await loadDefaultPlugins({
     env: options.env ?? process.env,
     ...(invocation.patches !== undefined && { patches: invocation.patches }),
   });
+  // **掉了哪幾列在這裡判第一次**（#751）：模組載不進來、設定驗不過的列已經標成沒掛；必掛的掉了就在這裡起不來，
+  // 早於下面任何一個 `startupSetting`，也早於建模型（`--live` 時 `live-model` 那一列掉了不退回預設值）。
+  // 可少掛的掉了印一段警告到標準錯誤，只印這一次。
+  for (const line of auditStartupEntries(loaded, { live: invocation.live })) printer.error(line);
+  const { plugins } = loaded;
   const persistenceMounted = startupEntryMounted(plugins, sessionPersistencePlugin);
   assertPersistenceFlags(invocation, persistenceMounted);
   // **起動期解一次**。值不合法跟清單上其他列的毛病落在同一個時刻——跑起來之前。
