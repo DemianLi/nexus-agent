@@ -48,12 +48,14 @@ import type {
   WireFeedbackItem,
 } from '@nexus/wire';
 import {
+  THREAD_FEED_PATH,
   THREADS_PATH,
   changesDiffPath,
   changesSummaryPath,
   deliverableBytesPath,
   deliverableDownloadPath,
   deliverableFilePath,
+  encodeSseData,
   encodeSseFrame,
   errorResponse,
   fileReferencesPath,
@@ -107,6 +109,7 @@ import type { GoalDriverPort } from './goal-driver.js';
 import { isTrustedWireRequest } from './request-trust.js';
 import type { StoredThreadList } from './session-list.js';
 import type { PumpAgent, QueueAction } from './thread-pump.js';
+import { ThreadFeed } from './thread-feed.js';
 import { ThreadPump } from './thread-pump.js';
 
 /**
@@ -666,6 +669,8 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
    * `set` 之前），而 thread 只在 `close()` 一起收，那裡整張清掉。哪天有了逐條收 thread 的路，要跟著刪。
    */
   const ready = new Map<string, ThreadState>();
+  /** 全部 thread 共用的那條下行（#632）。每條 pump 一建好就接上，見 `thread-feed.ts`。 */
+  const feed = new ThreadFeed();
 
   function threadFor(threadId: string): Promise<ThreadState> {
     const existing = threads.get(threadId);
@@ -677,6 +682,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       // **從這裡到回傳之間拋錯，要把剛建好的 agent 收掉。** 下面說好「下一次請求該重試」，
       // 而續接的 thread 在 `createAgent` 裡就拿了寫租約——沒人收的話，重試撞上的是**自己
       // 上一次**留下的租約。收 agent 也順便收掉它底下的東西（MCP 的子行程之類）。
+      let detachFeed: (() => void) | undefined;
       try {
         // **三個東西互相要對方，所以綁定是延後的**：port 要日誌（pump 才有）與 flush
         // （協調器才有），而 pump 的建構參數就是 port。這個格子把環打開——兩個 getter
@@ -702,6 +708,8 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           threadTitleLimits,
           (message) => options.warn?.(message),
         );
+        // **緊接著建好就接上全域下行**（#632）：在它收下任何一件之前，狀態與中斷一顆都不漏。
+        detachFeed = feed.attach(pump);
         late.log = pump.sessionLog;
         const detachTelemetry = threadAgent.attachTelemetry?.(pump.sessions);
         const detachInvariants = threadAgent.attachInvariants?.(pump.sessions);
@@ -748,6 +756,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           fileSearch,
           slashInFlight: false,
           dispose: async () => {
+            detachFeed?.();
             // **標題最先拆**：它在任何一輪之外寫日誌，拆掉會中止還在跑的那一次，之後回來的寫不進去
             // （同 dsh 的會話拆卸）。排在參與者前面，理由同下一條：寫得動日誌的先停手。
             await detachTitle?.();
@@ -774,6 +783,8 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         ready.set(threadId, state);
         return state;
       } catch (error) {
+        // 建不起來的那條不留在全域下行上：它的中斷永遠答不到。
+        detachFeed?.();
         await threadAgent.dispose().catch(() => {});
         throw error;
       }
@@ -816,8 +827,19 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     channels: readonly WireChannel[],
     signal: AbortSignal,
   ): Response {
+    return sseResponse(pump.subscribe(channels, signal), encodeSseFrame);
+  }
+
+  /** `GET /threads/feed`（#632）：契約見 `@nexus/wire` 的 `THREAD_FEED_PATH`。不建任何一條 thread。 */
+  function openFeed(signal: AbortSignal): Response {
+    return sseResponse(feed.subscribe(signal), (frame) => encodeSseData(frame.type, frame));
+  }
+
+  function sseResponse<T>(
+    events: AsyncGenerator<T, void, undefined>,
+    encode: (value: T) => string,
+  ): Response {
     const encoder = new TextEncoder();
-    const events = pump.subscribe(channels, signal);
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         // **開線就先吐一行 SSE 註解。** 沒有這一行的話，中間任何一層代理都可能把
@@ -835,7 +857,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           controller.close();
           return;
         }
-        controller.enqueue(encoder.encode(encodeSseFrame(next.value)));
+        controller.enqueue(encoder.encode(encode(next.value)));
       },
       cancel() {
         void events.return(undefined);
@@ -1200,7 +1222,8 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         unreadable: stored.unreadable,
         items: stored.items.map((item) => ({
           ...item,
-          running: ready.get(item.threadId)?.pump.running ?? false,
+          // 同全域下行的狀態（#632）：停在等人回答也算在跑，兩邊是同一個判準。
+          running: ready.get(item.threadId)?.pump.agentRunning ?? false,
         })),
       },
     };
@@ -1565,6 +1588,12 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
         return handleList();
       }
+      if (pathname === THREAD_FEED_PATH) {
+        if (request.method !== 'GET') return new Response('not found', { status: 404 });
+        // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
+        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+        return openFeed(request.signal);
+      }
       const route = parsePath(pathname);
       if (route?.kind === 'history') {
         if (request.method !== 'GET') return new Response('not found', { status: 404 });
@@ -1619,6 +1648,8 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         : handleCommand(route.threadId, route.method, body, request.signal);
     },
     async close() {
+      // 全域下行先收：它不屬於任何一條 thread，下面那幾條 pump 收掉也不會讓它結束。
+      feed.close();
       const opened = [...threads.values()];
       threads.clear();
       ready.clear();

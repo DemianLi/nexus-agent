@@ -86,7 +86,7 @@ import {
   type SessionLog,
   type TurnEndReason,
 } from '@nexus/core';
-import type { Event, WireChannel } from '@nexus/wire';
+import type { Event, ThreadFeedFrame, WireChannel } from '@nexus/wire';
 import { channelOfMethod, eventId } from '@nexus/wire';
 
 import {
@@ -271,6 +271,15 @@ interface QueuedJob {
 }
 
 /** 掛在這條 thread 上、還沒被回答的其中一顆中斷。 */
+/**
+ * 這條 thread 對全部 thread 共用的那條下行講的事（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）：
+ * 那條線上的 frame 拿掉 `threadId`，由接上的人補（`thread-feed.ts`）。契約見 `@nexus/wire` 的 `THREAD_FEED_PATH`。
+ */
+export type PumpActivity = WithoutThread<ThreadFeedFrame>;
+
+/** 逐個成員拿掉 `threadId`（聯集上的 `Omit` 會把成員併成一個）。 */
+type WithoutThread<F> = F extends unknown ? Omit<F, 'threadId'> : never;
+
 export interface PendingInterrupt {
   readonly interruptId: string;
   /** 這一批要回答幾筆決定——基座逐 index 配對，長度不符當場拋。 */
@@ -671,6 +680,10 @@ export class ThreadPump {
    * 「回答第一顆」判成 `no_such_interrupt`。
    */
   readonly #pending = new Map<string, PendingInterrupt>();
+  /** 聽 {@link PumpActivity} 的人，見 {@link ThreadPump.watch}。 */
+  readonly #watchers = new Set<(activity: PumpActivity) => void>();
+  /** 最後一次講出去的 {@link ThreadPump.agentRunning}，見 {@link ThreadPump.#noteStatus}。 */
+  #reportedRunning = false;
   /**
    * 參數解不開的那幾顆：callId → 模型吐的原字串，見 {@link invalidArgumentsOf}。
    *
@@ -896,6 +909,53 @@ export class ThreadPump {
   }
 
   /**
+   * 整個 agent 在跑沒有，給列表與全域下行（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）：
+   * {@link ThreadPump.running}，**加上停在等人回答**。照 dsh 的 `agent/status`：核准與提問發生在一輪的工具執行
+   * 當中，那段時間是 `running`（`packages/core/agent-loop/src/agent.ts:140-152`，`477b4f4`）。我們的那一輪在中斷時
+   * 就收了，所以要把掛著的中斷加回來。按了停止之後停住的仍然不算，同 dsh 的 `cancel({keepInbox: true})` 之後是 idle。
+   *
+   * **不拿它取代 {@link ThreadPump.running}**：斜線命令的閘門與續行的讓行靠的是那一個，停在核准點另有
+   * {@link ThreadPump.awaitingInput} 擋。
+   */
+  get agentRunning(): boolean {
+    return this.running || this.#pending.size > 0;
+  }
+
+  /**
+   * 聽這條 thread 的 {@link PumpActivity}。回呼在改動的那一段同步程式裡叫，**不接例外**：它是 `wire-handler.ts`
+   * 自己的集線器，不是任意的訂閱者。
+   *
+   * @returns 退訂。
+   */
+  watch(listener: (activity: PumpActivity) => void): () => void {
+    this.#watchers.add(listener);
+    return () => void this.#watchers.delete(listener);
+  }
+
+  #tell(activity: PumpActivity): void {
+    for (const watcher of this.#watchers) watcher(activity);
+  }
+
+  /**
+   * **狀態只從這裡講出去**：算一次 {@link ThreadPump.agentRunning}，跟上次講的不同才送。它由好幾格推出來
+   * （`#busy`、`#queue`、`#stopParked`、`#pending`），逐個改動點各自判斷翻了沒的話，漏一處就是側欄一直亮著。
+   *
+   * 叫它的是改得動那幾格、**又可能讓結果翻面**的地方：排進一件（{@link ThreadPump.#schedule}）、一件跑完
+   * （`#next` 的 `settle`）、開跑之前就被刪掉的一件（{@link ThreadPump.updateQueue}）。其餘的改動點翻不了面：
+   * 開跑那一刻，被挑中的那一件本來就算在 `running` 裡；中斷登記時一定有一輪在跑；答掉與收回緊接著就排進一件；
+   * 收線時丟掉的那幾件，不是被掛著的中斷擋著（那時照樣算在跑），就是按停止停住的（本來就不算）。
+   *
+   * 續行那一輪會在兩輪之間先講一次閒著：`settle` 放下 `#busy` 之後，排程器非同步才送下一輪。**dsh 也是**：它的
+   * 續行掛在 `agent/status` 翻成 idle 上（`packages/goal/goal-round-driver/src/index.ts:258-280`）。
+   */
+  #noteStatus(): void {
+    const running = this.agentRunning;
+    if (running === this.#reportedRunning) return;
+    this.#reportedRunning = running;
+    this.#tell({ type: 'status', running });
+  }
+
+  /**
    * 開一條下行。它**跨 run 存活**：核准前後是同一條線。
    *
    * 沒有重播——訂閱之前發生的事這條線上看不到，接回來的方式是重開 ＋ 重抓歷史
@@ -1000,8 +1060,8 @@ export class ThreadPump {
     //
     // 說話與續行**不碰**掛著的中斷：它們停在隊裡等（#629）。以前這裡整個清掉當止血，那等於
     // 讓繞過上行那道擋的呼叫端把中斷靜靜丟掉——正是這張卡要修的事換一扇門進來。
-    if (input.kind === 'resume') {
-      this.#pending.delete(input.interruptId);
+    if (input.kind === 'resume' && this.#pending.delete(input.interruptId)) {
+      this.#tell({ type: 'input-withdrawn', interruptId: input.interruptId });
     }
     return this.#schedule(() => this.#runOnce(input), input.kind === 'resume');
   }
@@ -1025,6 +1085,7 @@ export class ThreadPump {
         ...(itemId === undefined ? {} : { itemId }),
       });
     });
+    this.#noteStatus();
     // **不在這裡同步開跑**：`turn/start` 記在真正開跑的那一刻（`#runOnce`），不是收下的那一刻。
     this.#kick();
     return done;
@@ -1072,6 +1133,7 @@ export class ThreadPump {
     // 被中止的那一條同理，看到 `turn/end` 帶 aborted 而回 `turn-aborted`。
     const settle = (finish: () => void) => {
       this.#busy = false;
+      this.#noteStatus();
       this.#driveGoalRound();
       finish();
       this.#kick();
@@ -1119,7 +1181,9 @@ export class ThreadPump {
     if (this.#pending.size > 0 && !this.#closed) {
       // **同步就清**，同 `submit`：收下的那一刻就不再掛著，緊接著到的 `run.start` 排在這次收回後面、
       // 喚醒停住的那幾件（#637）。
+      const withdrawn = [...this.#pending.keys()];
       this.#pending.clear();
+      for (const interruptId of withdrawn) this.#tell({ type: 'input-withdrawn', interruptId });
       this.#stopRequested = true;
       void this.#schedule(() => this.#withdraw(), true).catch(() => {
         // 失敗已經進了日誌（`turn/failed`），這個 promise 沒有別人在等。
@@ -1316,6 +1380,7 @@ export class ThreadPump {
     const at = this.#queue.findIndex((job) => job.itemId === itemId);
     const [job] = at < 0 ? [] : this.#queue.splice(at, 1);
     job?.resolve();
+    this.#noteStatus();
     this.#kick();
     return 'updated';
   }
@@ -1516,6 +1581,7 @@ export class ThreadPump {
           gatedTools: gatedToolsOf(entry.value),
           request,
         });
+        this.#tell({ type: 'input-requested', event: request });
         yield request;
       }
       return;

@@ -417,7 +417,11 @@ export interface ThreadSummary {
   readonly threadId: string;
   /** Unix epoch 毫秒：`max(建立時間, 最後一則人打的字的時間)`，同 dsh。 */
   readonly updatedAt: number;
-  /** 這台 server 上這條 thread 正在跑一輪。 */
+  /**
+   * 這台 server 上這條 thread 的 agent 在跑：有一輪在跑或排著要跑，**或停在等人回答**（核准、提問、計劃審核），
+   * 同 dsh 的 `agent/status`（等核准發生在一輪裡面）。按了停止之後停住的那幾件不算。之後的切換走
+   * {@link THREAD_FEED_PATH} 的 {@link ThreadStatusFrame}，兩邊是同一個判準（#632）。
+   */
   readonly running: boolean;
   /** 還沒有任何一輪，同 dsh 的 `blank`。 */
   readonly blank: boolean;
@@ -442,6 +446,83 @@ export interface ThreadListResult {
  */
 export type ThreadListResponse =
   { readonly type: 'success'; readonly result: ThreadListResult } | ErrorResponse;
+
+/**
+ * 全部 thread 共用的一條下行（[#632](https://github.com/DemianLi/nexus-agent/issues/632)），`GET`，回
+ * `text/event-stream`。每顆 SSE frame 的 `data` 是一顆 {@link ThreadFeedFrame}。
+ *
+ * 照 dsh gateway 的 remote event 串流（`packages/api/gateway/src/index.ts:490-600`，`477b4f4`）：一個 client 接一條，
+ * 這台 server 上所有會話的狀態與等人回答的請求都走它，側欄因此看得到沒打開的會話。
+ *
+ * - **在跑／閒著**：切換時各一顆 {@link ThreadStatusFrame}，同 dsh 的 `api-session/status` 廣播。**接上時不補送**：
+ *   起點是 {@link THREADS_PATH} 那份列表的 `running`，所以 client **每次接上之後都重抓一次列表**（dsh 的
+ *   `reconcileStatus` 也是列表當基準）。
+ * - **等人回答**：還掛著的 `input.requested` 一顆 {@link ThreadInputRequestedFrame}；答掉或收回（按停止）時
+ *   一顆 {@link ThreadInputWithdrawnFrame}。**接上當下補送所有 thread 還掛著的**，同 dsh 的 `pendingRemoteEvents`。
+ *   同一條 thread、同一個 `interrupt_id` 再來一顆 requested（沒被答到的那些會帶原 id 再中斷），**後到的蓋過先到的**。
+ *
+ * **回答不走這條線**：照舊走那條 thread 自己的 `input.respond`。
+ *
+ * **client 要跳過不認得的 `type`**：這條線之後還要帶會話增減與活動時間（dsh 的 `api-session/added`／`removed`／
+ * `activity`，#632 拍板這一版不做），舊的 client 收到新種類不能當掉。
+ *
+ * **偏離**：dsh 的 frame 是 Cordis 的 `emit`／`waterfall`，路徑是 gateway 的；我們沒有那一層，frame 與路徑是這裡定的。
+ * dsh 的撤回只送給收過那一顆的 client，我們送給每一條——多收一顆認不得的撤回，client 照規則跳過。
+ *
+ * **`GET` 也要帶 `content-type: application/json`**，理由同 {@link THREADS_PATH}：這條線上有每一條 thread 的
+ * 核准內容。
+ */
+export const THREAD_FEED_PATH = '/threads/feed';
+
+/** 一條 thread 的 agent 切換了在跑／閒著。判準同 {@link ThreadSummary.running}。 */
+export interface ThreadStatusFrame {
+  readonly type: 'status';
+  readonly threadId: string;
+  readonly running: boolean;
+}
+
+/**
+ * 一條 thread 停下來等人回答。`event` 就是那條 thread 自己的下行送出的那一顆 `input.requested`，**號與
+ * `event_id` 一起**，所以兩條線上的同一題對得起來。
+ */
+export interface ThreadInputRequestedFrame {
+  readonly type: 'input-requested';
+  readonly threadId: string;
+  readonly event: Event;
+}
+
+/** 那一題不用再問了：答掉，或收回（按停止）。 */
+export interface ThreadInputWithdrawnFrame {
+  readonly type: 'input-withdrawn';
+  readonly threadId: string;
+  readonly interruptId: string;
+}
+
+/** {@link THREAD_FEED_PATH} 上的一顆。 */
+export type ThreadFeedFrame =
+  ThreadStatusFrame | ThreadInputRequestedFrame | ThreadInputWithdrawnFrame;
+
+/**
+ * 認得這一顆嗎。**client 在這裡丟掉不認得的**，見 {@link THREAD_FEED_PATH}。只驗 client 要讀的欄位，`event` 的
+ * 其餘形狀是 server 那側的型別保證的（同一份 `@nexus/wire`）。
+ */
+export function isThreadFeedFrame(value: unknown): value is ThreadFeedFrame {
+  if (typeof value !== 'object' || value === null) return false;
+  const frame = value as Record<string, unknown>;
+  if (typeof frame['threadId'] !== 'string') return false;
+  switch (frame['type']) {
+    case 'status':
+      return typeof frame['running'] === 'boolean';
+    case 'input-requested': {
+      const event = frame['event'] as { method?: unknown } | null | undefined;
+      return typeof event === 'object' && event !== null && event.method === 'input.requested';
+    }
+    case 'input-withdrawn':
+      return typeof frame['interruptId'] === 'string';
+    default:
+      return false;
+  }
+}
 
 /**
  * 一條 thread 的歷史（[#306](https://github.com/DemianLi/nexus-agent/issues/306) 的畫面那一刀），`GET`。

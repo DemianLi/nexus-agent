@@ -43,11 +43,15 @@ export type {
   SlashMethod,
   SlashRunCommand,
   SlashRunResult,
+  ThreadFeedFrame,
   ThreadHistoryQuery,
   ThreadHistoryResponse,
   ThreadHistoryResult,
   ThreadListResponse,
   ThreadListResult,
+  ThreadInputRequestedFrame,
+  ThreadInputWithdrawnFrame,
+  ThreadStatusFrame,
   ThreadSummary,
   UplinkMethod,
   WireChannel,
@@ -110,6 +114,7 @@ export {
   QUEUE_UPDATE_METHOD,
   RUN_CANCEL_METHOD,
   SLASH_METHODS,
+  THREAD_FEED_PATH,
   THREADS_PATH,
   UPLINK_METHODS,
   WIRE_CHANNELS,
@@ -120,13 +125,14 @@ export {
   isRpcMethod,
   isRunCancelMethod,
   isSlashMethod,
+  isThreadFeedFrame,
   isUplinkMethod,
   isWireChannel,
   streamPath,
   successResponse,
 } from './protocol.js';
 
-export { decodeSseStream, encodeSseFrame } from './sse.js';
+export { decodeSseData, decodeSseStream, encodeSseData, encodeSseFrame } from './sse.js';
 
 export type {
   AiEntry,
