@@ -8,7 +8,15 @@
  * 只有可少掛的沒起來時印一段警告、繼續（dsh `packages/boot/app-boot/src/index.ts:739-754`、`:925-938`，
  * `README.zh.md:137`，`477b4f4`）。**比對用條目的 id**（`:931-932`），名單不分入口；沒掛或被關掉的不影響啟動。
  *
- * 這個模組是那一步的產品路徑版：`loadPluginConfig` 交出掉了哪幾列，這裡拿名單判要不要整個起不來。
+ * 這個模組是那一步的產品路徑版。掉了哪幾列分兩次知道，照卡上第 4 項：
+ *
+ * 1. **讀完清單、還沒建任何東西**（{@link auditStartupEntries}）：`loadPluginConfig` 交出模組載不進來與設定驗不過的列，
+ *    必掛的掉了就在這裡起不來——早於建模型、讀或建瀏覽器會話密鑰、綁 port。
+ * 2. **組裝**（CLI 的那一次、serve 的那一次試組）：只有清單交出來、又不在必掛名單上的條目可以少掛
+ *    （{@link optionalEntriesOf}），補上 `apply` 失敗、`requires` 缺件、撞名掉的列（{@link assemblyDropsOf}）。
+ *    不能少掛的掉了，組裝拋 `AssemblyDropError`，換成跟第一次同一種 `StartupError`（{@link startupErrorFrom}）。
+ *
+ * 兩次合起來印一段（{@link startupWarning}），只印一次。
  *
  * ## 名單只有 `browser-session`
  *
@@ -40,6 +48,9 @@
  * @module
  */
 
+import type { NexusPlugin, PluginEntry } from '@nexus/core';
+
+import type { AssemblyDrop, AssemblyDropError } from './agent-factory.js';
 import { PluginConfigError } from './plugin-config.js';
 import type { IgnoredConfig, LoadedPluginConfig, StartupDrop } from './plugin-config.js';
 
@@ -51,6 +62,9 @@ export const REQUIRED_ENTRY_IDS: ReadonlySet<string> = new Set(['browser-session
 
 /** 帶 `--live` 時也必須在的那一列的 id，理由見檔頭。 */
 const LIVE_MODEL_ENTRY_ID = 'live-model';
+
+/** 組裝點自己加的外掛不是清單上的列，警告裡模組那一格寫這個。 */
+const ASSEMBLY_POINT = '組裝點';
 
 /** 有必掛的列掉了：整個起不來。訊息連可少掛的一起列，照 dsh 的 `StartupError`。 */
 export class StartupError extends PluginConfigError {
@@ -71,28 +85,104 @@ export interface StartupAuditOptions {
 }
 
 /**
- * 套必掛名單：有必掛的掉了就拋，否則交出要印的那一段警告（可能是空的）。
- *
- * **呼叫端只印一次**：CLI 印到標準錯誤，serve 印到伺服器日誌、在綁 port 之前。
+ * 第一次判定：讀完清單時有必掛的掉了就拋。可少掛的掉了在這裡不印，等組裝完跟那一次的合成一段
+ * （{@link startupWarning}）。
  *
  * @param loaded - `loadDefaultPlugins` 的結果。
  * @param options - 這一次呼叫的事。
- * @returns 那一段警告的每一行；沒有要講的就是空陣列。
  * @throws {StartupError} 有必掛的列掉了。
  */
 export function auditStartupEntries(
-  loaded: Pick<LoadedPluginConfig, 'dropped' | 'ignoredConfig'>,
+  loaded: Pick<LoadedPluginConfig, 'dropped'>,
   options: StartupAuditOptions,
-): readonly string[] {
+): void {
   const required = requiredIds(options);
-  const fatal = loaded.dropped.filter((drop) => required.has(drop.id));
-  if (fatal.length > 0) {
-    throw new StartupError(
-      startupDiagnostic(loaded.dropped, required, fatal.length),
-      loaded.dropped,
-    );
+  const count = loaded.dropped.filter((drop) => required.has(drop.id)).length;
+  if (count > 0) {
+    throw new StartupError(startupDiagnostic(loaded.dropped, required, count), loaded.dropped);
   }
-  return activationWarning(loaded.dropped, loaded.ignoredConfig);
+}
+
+/**
+ * 組裝時可以少掛的條目：清單交出來的列裡，不在必掛名單上的那些。
+ *
+ * **只有清單交出來的列照名單判**（卡上第 2 項）：組裝點自己加的外掛（`host-services`、`sandbox-policy`……）不在
+ * {@link LoadedPluginConfig.rows} 裡，所以不在這份裡，掉了照舊整個起不來。
+ */
+export function optionalEntriesOf(
+  loaded: Pick<LoadedPluginConfig, 'rows'>,
+  options: StartupAuditOptions,
+): ReadonlySet<PluginEntry> {
+  const required = requiredIds(options);
+  return new Set(
+    [...loaded.rows].filter(([, row]) => !required.has(row.id)).map(([entry]) => entry),
+  );
+}
+
+/** 把組裝時掉了的列換成跟讀清單那一次同一種形狀：id 與模組名從清單查，組裝點的外掛查不到。 */
+export function assemblyDropsOf(
+  loaded: Pick<LoadedPluginConfig, 'rows'>,
+  dropped: readonly AssemblyDrop[],
+): StartupDrop[] {
+  return dropped.map(({ entry, drop }) => ({
+    id: drop.origin.id,
+    module: loaded.rows.get(entry)?.module ?? ASSEMBLY_POINT,
+    stage: drop.stage,
+    message: drop.message,
+    entry,
+  }));
+}
+
+/**
+ * 組裝時有不能少掛的掉了：換成跟第一次同一種 {@link StartupError}，讀清單那一次掉的與組裝這一次掉的一起列，
+ * 不能少掛的標出來。
+ */
+export function startupErrorFrom(
+  loaded: Pick<LoadedPluginConfig, 'dropped' | 'rows'>,
+  error: AssemblyDropError,
+  options: StartupAuditOptions,
+): StartupError {
+  const all = [...loaded.dropped, ...assemblyDropsOf(loaded, error.dropped)];
+  const fatal = new Set(
+    error.dropped.filter(({ entry }) => error.fatal.has(entry)).map(({ drop }) => drop.origin.id),
+  );
+  const required = new Set([...requiredIds(options), ...fatal]);
+  const count = all.filter((drop) => required.has(drop.id)).length;
+  return new StartupError(startupDiagnostic(all, required, count), all);
+}
+
+/**
+ * 兩次合起來要印的那一段（可能是空的），照 dsh 的 `activationDiagnostic`。**呼叫端只印一次**：CLI 印到標準錯誤，
+ * serve 印到伺服器日誌、在綁 port 之前。
+ *
+ * @param loaded - `loadDefaultPlugins` 的結果。
+ * @param assembled - 組裝那一次掉的（{@link assemblyDropsOf}）。
+ * @returns 那一段警告的每一行；沒有要講的就是空陣列。
+ */
+export function startupWarning(
+  loaded: Pick<LoadedPluginConfig, 'dropped' | 'ignoredConfig'>,
+  assembled: readonly StartupDrop[],
+): readonly string[] {
+  return activationWarning([...loaded.dropped, ...assembled], loaded.ignoredConfig);
+}
+
+/**
+ * 讀清單那一次掉了的、屬於這顆 plugin 的列，每列一行（不帶縮排）。
+ *
+ * 給組裝之前就要拋的錯自己帶上原因：那時合成的那一段警告還沒印（要等組裝完），錯誤只講「那一列沒掛上」的話，
+ * 使用者看不到為什麼。
+ */
+export function dropReasonsOf<T>(
+  loaded: Pick<LoadedPluginConfig, 'dropped'>,
+  plugin: NexusPlugin<T>,
+): readonly string[] {
+  // 以名字比，同 `startupEntryMounted`：那一支判「沒掛」用的就是名字。
+  return loaded.dropped.filter((drop) => drop.entry?.plugin.name === plugin.name).map(describeDrop);
+}
+
+/** 一列掉了的那一行，不帶縮排。serve 每條對話組裝時才掉的列用它記進伺服器日誌。 */
+export function describeDrop(drop: StartupDrop): string {
+  return dropLine(drop, false).trimStart();
 }
 
 function requiredIds(options: StartupAuditOptions): ReadonlySet<string> {
@@ -132,6 +222,8 @@ function activationWarning(
 const STAGE_LABEL: Readonly<Record<StartupDrop['stage'], string>> = {
   module: '模組載不起來',
   config: '設定驗不過',
+  apply: '掛上時失敗',
+  requires: '要用的服務沒人提供',
 };
 
 function dropLine(drop: StartupDrop, required: boolean): string {
