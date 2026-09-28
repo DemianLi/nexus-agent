@@ -668,6 +668,37 @@ describe('假 agent：收尾那一刻與重啟', () => {
     }
   });
 
+  it('按停止之後停住的那一件：閒著時不收改成插話', async () => {
+    const hold = gate();
+    const { agent } = handleAgent([{ holdBeforeClaim: hold.opened }]);
+    const pump = new ThreadPump(
+      agent,
+      'parked',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    try {
+      const first = pump.submit({ kind: 'message', text: 'A', id: 'a' });
+      await until(() => pump.running);
+      // 停住的那一件在 `close()` 時被拒絕：這條不驗它。
+      pump.submit({ kind: 'message', text: 'B', id: 'b' }).catch(() => undefined);
+      pump.cancel();
+      hold.open();
+      await first.catch(() => undefined);
+      await pump.whenIdle();
+      expect(pump.inbox.map((item) => item.id)).toEqual(['b']);
+      expect(pump.running).toBe(false);
+      expect(pump.updateQueue('b', { kind: 'steer' })).toBe('steer-unavailable');
+      expect(pump.nextStep).toEqual([]);
+    } finally {
+      pump.close();
+    }
+  });
+
   it('閒著時送插話：沒有一輪可插，照樣開一輪', async () => {
     const { agent } = handleAgent([]);
     const pump = new ThreadPump(
