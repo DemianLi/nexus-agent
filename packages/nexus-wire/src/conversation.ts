@@ -429,6 +429,11 @@ export interface ConversationState {
    */
   readonly inbox: readonly WireQueuedInput[];
   /**
+   * 插話（#710）：跑著的那一輪下一步就要送進模型、還沒被領走的那幾句，照送出的先後。規則同 {@link inbox}，由同一顆
+   * `inbox` frame 的 `nextStep` 整份換掉；沒帶就是空的。
+   */
+  readonly inboxNextStep: readonly WireQueuedInput[];
+  /**
    * 這條會話現在叫什麼（#647）：最後一顆 `title` frame 的。**還沒收到過就是 `null`**，同 dsh 投影的初值。規則見
    * `title.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
    */
@@ -450,6 +455,7 @@ export function emptyConversation(): ConversationState {
     tokenUsage: null,
     sessionStats: null,
     inbox: [],
+    inboxNextStep: [],
     title: null,
   };
 }
@@ -787,33 +793,52 @@ function isQueuedInput(value: unknown): value is WireQueuedInput {
 }
 
 /**
- * `inbox` 的 `payload`：清單**整份換掉**。任何一件不對、`claimed` 不對，就整顆不收，不收一半——少一件的清單分不出是
- * 開跑了還是被刪了，而且看起來正常。
+ * `inbox` 的 `payload`：兩條清單**整份換掉**。任何一件不對、`claimed`／`claimedNextStep` 不對，就整顆不收，不收一半——
+ * 少一件的清單分不出是開跑了還是被刪了，而且看起來正常。
  *
- * 帶 `claimed` 的那一顆是某一件剛被領走開跑：多折一則人的話，文字用開跑用的那份（改過的就是改過的）。
+ * 帶 `claimed` 的那一顆是某一件剛被領走開跑：多折一則人的話，文字用開跑用的那份（改過的就是改過的）。帶
+ * `claimedNextStep` 的那一顆是整條插話剛被領走、送進模型（#710）：照先後各折一則人的話，規則相同。
  *
  * - **一律接在最後**：畫面不在送出當下先畫（#645），所以這一則就是人話在即時畫面上唯一的來處，沒有別的可以認領。
+ *   插話也一樣：它被領走時，這一輪前面的回覆與工具卡都已經在畫面上了，它接在它們後面，同它在對話裡的位置。
  * - **id 是 `inbox:<項目 id>`**，跟歷史重播的人話（`message-start` 的 `run_id`）分得開；帶
- *   {@link HumanEntry.inboxId}，同一顆 `claimed` 再到一次靠它認出來，不畫第二次。
- * - **`status` 不在這裡轉**：開跑由接著到的 `lifecycle` 說，理由同 `claimed` 的先後保證（見 `inbox.ts`）。
+ *   {@link HumanEntry.inboxId}，同一顆再到一次靠它認出來，不畫第二次。
+ * - **`status` 不在這裡轉**：開跑由接著到的 `lifecycle` 說，理由同 `claimed` 的先後保證（見 `inbox.ts`）。插話被領走時
+ *   這一輪本來就在跑。
  */
 function reduceInbox(state: ConversationState, payload: object): ConversationState {
-  const { items, claimed } = payload as { items?: unknown; claimed?: unknown };
+  const { items, nextStep, claimed, claimedNextStep } = payload as {
+    items?: unknown;
+    nextStep?: unknown;
+    claimed?: unknown;
+    claimedNextStep?: unknown;
+  };
   if (!Array.isArray(items) || !items.every(isQueuedInput)) return state;
-  let human: HumanEntry | undefined;
-  if (claimed !== undefined) {
-    const { id, text } = (claimed ?? {}) as { id?: unknown; text?: unknown };
+  if (nextStep !== undefined && (!Array.isArray(nextStep) || !nextStep.every(isQueuedInput))) {
+    return state;
+  }
+  const claims: unknown[] = [];
+  if (claimed !== undefined) claims.push(claimed);
+  if (claimedNextStep !== undefined) {
+    if (!Array.isArray(claimedNextStep)) return state;
+    claims.push(...claimedNextStep);
+  }
+  const humans: HumanEntry[] = [];
+  for (const claim of claims) {
+    const { id, text } = (claim ?? {}) as { id?: unknown; text?: unknown };
     if (typeof id !== 'string' || typeof text !== 'string') return state;
-    human = { kind: 'human', id: `inbox:${id}`, text, inboxId: id };
+    humans.push({ kind: 'human', id: `inbox:${id}`, text, inboxId: id });
   }
-  const inbox = items.map(({ id, text }) => ({ id, text, source: { kind: 'user' as const } }));
-  if (
-    human === undefined ||
-    state.entries.some((entry) => entry.kind === 'human' && entry.inboxId === human.inboxId)
-  ) {
-    return { ...state, inbox };
-  }
-  return { ...state, inbox, entries: [...state.entries, human] };
+  const queued = (list: readonly WireQueuedInput[]) =>
+    list.map(({ id, text }) => ({ id, text, source: { kind: 'user' as const } }));
+  const inbox = queued(items);
+  const inboxNextStep = queued(nextStep ?? []);
+  const fresh = humans.filter(
+    (human) =>
+      !state.entries.some((entry) => entry.kind === 'human' && entry.inboxId === human.inboxId),
+  );
+  if (fresh.length === 0) return { ...state, inbox, inboxNextStep };
+  return { ...state, inbox, inboxNextStep, entries: [...state.entries, ...fresh] };
 }
 
 /** `workspace/changes` 的 `payload`：`seq` 要是非負整數，同一個 `seq` 只長一格。 */

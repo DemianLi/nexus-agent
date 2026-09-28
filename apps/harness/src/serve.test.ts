@@ -288,4 +288,29 @@ describe('核准那份清單', () => {
         .map((entry) => (entry.kind === 'tool' ? [entry.name, entry.status] : [])),
     ).toEqual([['echo', 'done']]);
   });
+
+  it('serve 的每條對話都掛了插話：停在核准點時送的插話進 next-step（#710）', async () => {
+    running = await runServe({
+      argv: ['--port', '0', '--patch', documentedFixture()],
+      log: () => undefined,
+      env: {},
+    });
+    const client = await serveClient(running as RunningServe);
+    const events = await client.openEvents('steer');
+    await client.runStart('steer', '把這句話回聲一次。');
+    let state = await foldTurn(events);
+    expect(state.status).toBe('awaiting-input');
+
+    expect((await client.runStart('steer', '回聲完順便說聲好', { mode: 'steer' })).type).toBe(
+      'success',
+    );
+    // 沒掛的話它退成排隊，落在 `inbox`：兩個都等，才分得出是哪一條。
+    while (state.inboxNextStep.length === 0 && state.inbox.length === 0) {
+      const next = await events.next();
+      if (next.done === true) throw new Error('下行斷了');
+      state = reduceConversation(state, next.value);
+    }
+    expect(state.inboxNextStep.map((item) => item.text)).toEqual(['回聲完順便說聲好']);
+    expect(state.inbox).toEqual([]);
+  });
 });

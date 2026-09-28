@@ -3,8 +3,9 @@
  *
  * **時刻：dsh 的 `agent/turn-stopping`**（awaited 通知，聽者可以要求再跑一步）。
  * 這個模組是那個時刻在我們樹上唯一的佔用者，但**只佔了一半**：dsh 那一格配一個
- * `agent.steer()` 讓聽者把下一步塞進去，我們沒有等價物——輪迴圈歸入口點所有，見下面
- * 那條載體偏離。索引見 `apps/harness/src/interception-index.test.ts`。
+ * `agent.steer()` 讓聽者把下一步塞進去，我們沒有給聽者用的等價物——輪迴圈歸入口點所有，見下面
+ * 那條載體偏離。人插話那一面有了（[#710](https://github.com/DemianLi/nexus-agent/issues/710)，
+ * `@nexus/core` 的 `step-inbox.ts`），但它由 pump 送進圖，聽者碰不到。索引見 `apps/harness/src/interception-index.test.ts`。
  *
  * 形狀照 dsh 的 `packages/goal/goal-round-driver/`（對讀版本
  * `d347e703908d0406b7a7ef80e3a0e594d86b2215`，2026-09-04），

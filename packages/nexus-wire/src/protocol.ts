@@ -75,6 +75,29 @@ export function channelOfMethod(method: string): WireChannel | undefined {
   return isWireChannel(method) && method !== 'input' ? method : undefined;
 }
 
+/**
+ * 送出的那一句怎麼進收件匣（[#710](https://github.com/DemianLi/nexus-agent/issues/710)），照 dsh `prompt` 的 `mode`
+ * （`packages/api/session-controller/src/commands.ts:364`，`477b4f4`）：
+ *
+ * - `queue`（省略就是它）：排進 `next-turn`，等這一輪收掉再開新的一輪。
+ * - `steer`：插話，排進 `next-step`，跑著的這一輪下一步就送進模型、不停。這一輪已經不收插話時（閒著、按了停止、
+ *   正在收尾）同 dsh 改排 `next-turn`，照樣開一輪。
+ */
+export const RUN_START_MODES = ['queue', 'steer'] as const;
+
+export type RunStartMode = (typeof RUN_START_MODES)[number];
+
+/**
+ * `run.start` 的封包。**`params` 比協定的 `RunStartParams` 多一格我們自己的 {@link RunStartMode}**：協定的 `Command`
+ * 沒有送出模式那一格，而 dsh 的送出模式就掛在送出請求本身（`prompt` 的 `mode`）。另立一支命令的話，同一句話會有
+ * 兩條上行，將來每會話的模型選擇（#723）也要掛在送出請求上，又得再長一支。所以加在這裡。
+ */
+export interface RunStartCommand {
+  readonly id: number;
+  readonly method: 'run.start';
+  readonly params: RunStartParams & { readonly mode?: RunStartMode };
+}
+
 /** 上行收得下的 method。其餘一律 404，見決策 6 的未採納清單。 */
 export const UPLINK_METHODS = ['run.start', 'input.respond'] as const;
 
@@ -151,15 +174,28 @@ export function isRunCancelMethod(value: unknown): value is typeof RUN_CANCEL_ME
  * - `remove`：拿掉，它不會跑。
  * - 已經不在隊裡（開跑了、被刪了、從沒有過）：回 {@link QUEUE_ITEM_NOT_FOUND}，同 dsh 的
  *   `session/queue-item-not-found`。
- * - dsh 的第三種 `steer`（插話）這一版沒有，回 `not_supported`（#637 的 Q3）。
+ * - `steer`：排著的那一件改成插話（[#710](https://github.com/DemianLi/nexus-agent/issues/710)），下一步送進模型、這一輪
+ *   不停。條件照 dsh：那一件還在 `next-turn`、這一輪還收插話，否則回 {@link STEER_UNAVAILABLE}，同 dsh 的
+ *   `session/steer-unavailable`（`:495-497`）。
+ *
+ * 改、刪兩條清單裡的都找得到（dsh `:469-472`），插話的那一件也能改能刪，直到它被領走。
  *
  * **這是我們加在自己 wire 上的命令**，理由同 {@link RUN_CANCEL_METHOD}：`@langchain/protocol@0.0.18` 的 `Command`
- * 沒有佇列類的 method。**任何時候都收**：跑著、停在核准點、按了停止之後都能改能刪。
+ * 沒有佇列類的 method。改、刪**任何時候都收**：跑著、停在核准點、按了停止之後都能改能刪。
  */
 export const QUEUE_UPDATE_METHOD = 'queue.update';
 
+/** `queue.update` 的改、刪兩種。 */
 export type QueueUpdateAction =
   { readonly kind: 'edit'; readonly text: string } | { readonly kind: 'remove' };
+
+/**
+ * `queue.update` 的第三種：改成插話（#710）。**不併進 {@link QueueUpdateAction}**：那個聯集今天在 web 裡被窮舉成改、刪兩種，
+ * 加寬它會讓 web 當場編不過，而 web 送不送插話是它自己那一張卡的事。上行的型別收兩種的聯集。
+ */
+export interface QueueSteerAction {
+  readonly kind: 'steer';
+}
 
 export interface QueueUpdateCommand {
   readonly id: number;
@@ -167,7 +203,7 @@ export interface QueueUpdateCommand {
   readonly params: {
     /** 那一件的 id：送出它的 `run.start` 回的 `run_id`。 */
     readonly item_id: string;
-    readonly action: QueueUpdateAction;
+    readonly action: QueueUpdateAction | QueueSteerAction;
   };
 }
 
@@ -184,8 +220,15 @@ export function isQueueUpdateMethod(value: unknown): value is typeof QUEUE_UPDAT
  */
 export const QUEUE_ITEM_NOT_FOUND = 'queue_item_not_found';
 
+/**
+ * 這一輪不收插話了：`queue.update` 的 `steer` 撞上那一件已經不在 `next-turn`（已經是插話、或被領走了），或這一輪
+ * 已經不收插話（閒著、按了停止、正在收尾）。同 dsh 的 `session/steer-unavailable`。擴充的理由同
+ * {@link QUEUE_ITEM_NOT_FOUND}。
+ */
+export const STEER_UNAVAILABLE = 'steer_unavailable';
+
 /** 這條線上的錯誤碼：協定的那十個，加上我們自己的命令用到的。 */
-export type WireErrorCode = ErrorCode | typeof QUEUE_ITEM_NOT_FOUND;
+export type WireErrorCode = ErrorCode | typeof QUEUE_ITEM_NOT_FOUND | typeof STEER_UNAVAILABLE;
 
 /** 協定的 `ErrorResponse`，錯誤碼換成 {@link WireErrorCode}。 */
 export type WireErrorResponse = Omit<ErrorResponse, 'error'> & { error: WireErrorCode };

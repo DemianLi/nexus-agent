@@ -67,6 +67,7 @@ import {
   MAX_TOKENS_TURN_END,
   SessionRegistry,
   spliceInbox,
+  STEP_INBOX_CONFIG_KEY,
   TOOL_ABORTED,
   TOOL_ABORTED_BEFORE_DISPATCH,
   TOOL_ABORTED_BEFORE_DISPATCH_REASON,
@@ -78,12 +79,14 @@ import {
   toLoggedMessage,
   turnReachedMaxTokens,
   type InboxSplice,
+  type InboxState,
   type QueuedInput,
   type SessionAddress,
   type SessionEntry,
   type SessionEvent,
   type SessionEventMap,
   type SessionLog,
+  type StepInbox,
   type TurnEndReason,
 } from '@nexus/core';
 import type { Event, ThreadFeedFrame, WireChannel } from '@nexus/wire';
@@ -93,6 +96,7 @@ import {
   contextMeasureData,
   deliverablesData,
   inboxData,
+  type InboxClaim,
   isTodosReset,
   modelUsageData,
   SessionTotals,
@@ -208,6 +212,8 @@ export interface PumpAgent {
         readonly thread_id: string;
         /** 這一輪的中止訊號。**不交給 LangGraph 的 `signal`**，理由見 `@nexus/core` 的 `turn-cancel.ts`。 */
         readonly [TURN_CANCEL_CONFIG_KEY]?: AbortSignal;
+        /** 插話的領取口（#710）。圖裡沒掛那顆 middleware 就沒人讀，見 `@nexus/core` 的 `step-inbox.ts`。 */
+        readonly [STEP_INBOX_CONFIG_KEY]?: StepInbox;
       };
     },
   ): Promise<AsyncIterable<RawProtocolEvent> & RunProjections>;
@@ -230,6 +236,11 @@ export type PumpInput =
        * 省略就由 pump 自己產一個。
        */
       readonly id?: string;
+      /**
+       * 插話（#710，`run.start` 的 `mode: 'steer'`）：這一輪還收插話就排進 `next-step`，下一步送進模型、不開新的一輪；
+       * 不收了（閒著、按了停止、正在收尾）就排到 `next-turn` 的**頭**，照樣開一輪。見 {@link ThreadPump.submit}。
+       */
+      readonly steer?: true;
     }
   | {
       readonly kind: 'resume';
@@ -265,6 +276,11 @@ interface QueuedJob {
   readonly answers: boolean;
   /** 人送出的那一句在送出佇列裡的 id（#637）。續行那一輪與答覆沒有。 */
   readonly itemId?: string;
+  /**
+   * 是回答核准的那一種（`resume`），不是收回：它跑起來會接著叫模型，所以停在核准點時送來的插話由它領走（#710）。
+   * 收回（{@link ThreadPump.#withdraw}）不叫模型。
+   */
+  readonly resumes?: true;
   readonly run: () => Promise<void>;
   readonly resolve: () => void;
   readonly reject: (error: unknown) => void;
@@ -544,9 +560,11 @@ function gatedToolsOf(value: unknown): string[] {
   });
 }
 
-/** 改或刪送出佇列裡的一件（#637）。照 dsh 的 `updateQueue` 的 `edit`／`remove`；`steer` 另開。 */
+/** 改、刪送出佇列裡的一件（#637），或把它改成插話（#710）。照 dsh 的 `updateQueue` 的三種 action。 */
 export type QueueAction =
-  { readonly kind: 'edit'; readonly text: string } | { readonly kind: 'remove' };
+  | { readonly kind: 'edit'; readonly text: string }
+  | { readonly kind: 'remove' }
+  | { readonly kind: 'steer' };
 
 const settled = (): void => undefined;
 
@@ -581,6 +599,11 @@ interface CurrentRun {
   stopped: boolean;
   /** 同 {@link stopped}，標的是撞到輸出上限（#433）。 */
   maxTokens: boolean;
+  /**
+   * 這一輪不再收插話了（#710）：圖在收尾時沒有插話可領（`@nexus/core` 的 `StepInbox.finish`），或串流已經抽完。
+   * 之後到的插話排 `next-turn`，見 {@link ThreadPump.#acceptsSteer}。
+   */
+  closed: boolean;
 }
 
 /** root 那一層的訊息片段（子代理的 namespace 至少兩段，見 `@nexus/wire` 的 `attribute`）。 */
@@ -753,7 +776,9 @@ export class ThreadPump {
    * 送出佇列（#637）：從 root 日誌的 `inbox/spliced` 折出來的那份，**寫入當下就更新**。不靠日誌的訂閱者：
    * 訂閱者拋錯只換來一行 warn，而且發佈期間不能寫。照 dsh 的 `mutate`，先算出下一份、驗過，才落日誌、才換掉這一份。
    */
-  #inbox: readonly QueuedInput[] = [];
+  #inbox: InboxState;
+  /** 這個 agent 的圖裡掛沒掛插話的載體（#710），見建構子的 `stepInbox`。 */
+  readonly #stepInboxMounted: boolean;
   /**
    * 按了停止之後，開新一輪的停住（#637 的 Q2）：照 dsh 的 `cancel({keepInbox: true})`，排著的保留但不跑，等下一次
    * 送出才喚醒（`agent-loop/tests/cancel.spec.ts:192-216`，`477b4f4`）。重啟之後接回來的佇列也是這個狀態。
@@ -796,6 +821,8 @@ export class ThreadPump {
    *   「省略即 schema 的預設」同 `toolText`。**在這裡驗**：寫標題的那一刻已經在一輪裡面，那時才拋只剩一行 warn，標題永遠寫不出來。
    * @param warn - 這台 server 講話的地方（`createWireHandler` 的 `warn`）。今天只有退回標題寫不進去時會走到它。
    *   **省略即不講**，同 `createWireHandler`。
+   * @param stepInbox - `agent` 的圖裡掛沒掛插話的載體（[#710](https://github.com/DemianLi/nexus-agent/issues/710)，
+   *   `createNexusAgent` 回的那一格）。**省略即沒掛**：插話退成排隊，不放進一條沒人領的 `next-step`。
    * @throws `titleLimits` 不是兩個正整數。
    */
   constructor(
@@ -806,8 +833,10 @@ export class ThreadPump {
     toolText?: ToolTextConfig,
     titleLimits?: ThreadTitleLimits,
     warn?: (message: string) => void,
+    stepInbox = false,
   ) {
     this.#agent = agent;
+    this.#stepInboxMounted = stepInbox;
     this.#threadId = threadId;
     this.#toolTextMaxBytes = (toolText ?? toolTextConfigSchema.parse({})).maxBytes;
     this.#titleLimits = titleLimits ?? threadTitleConfigSchema.parse({});
@@ -835,8 +864,11 @@ export class ThreadPump {
     // （`.agents/notes/implemented/bug-fix/2026-08-17-durable-web-queue-recovery.md`）。不推：那一段的值由歷史送。
     // 日誌壞了（範圍超出、id 重複）就在這裡拋，這條 thread 起不來——同 dsh 折疊那一側拋的
     // `invalid persisted inbox splice`，靜靜收下的話跑的東西會跟佇列對不上。
+    //
+    // **插話那一條（`next-step`）不排工作**：它不開新的一輪，留著的由下一輪的第一次模型呼叫領走（同 dsh 按停止帶
+    // `keepInbox` 之後，下一輪開頭 `claim` 先領 `next-step`）。
     this.#inbox = foldInbox(this.#sessions.root.events);
-    for (const item of this.#inbox) {
+    for (const item of this.#inbox['next-turn']) {
       // 沒有人等這幾件的結果：resolve、reject 都是空的，收線時 reject 它們也不會變成沒人接的 rejection。
       this.#queue.push({
         answers: false,
@@ -846,7 +878,7 @@ export class ThreadPump {
         reject: settled,
       });
     }
-    this.#stopParked = this.#inbox.length > 0;
+    this.#stopParked = this.#inbox['next-turn'].length > 0;
   }
 
   get threadId(): string {
@@ -888,9 +920,14 @@ export class ThreadPump {
     return this.#pending.get(interruptId);
   }
 
-  /** 送出佇列：人送出、還沒開跑的那幾件，照開跑的先後（#637）。 */
+  /** 送出佇列：人送出、還沒開跑的那幾件（`next-turn`），照開跑的先後（#637）。 */
   get inbox(): readonly QueuedInput[] {
-    return this.#inbox;
+    return this.#inbox['next-turn'];
+  }
+
+  /** 插話：人在這一輪跑著時插的、還沒被領走送進模型的那幾句（`next-step`），照送出的先後（#710）。 */
+  get nextStep(): readonly QueuedInput[] {
+    return this.#inbox['next-step'];
   }
 
   /**
@@ -1030,6 +1067,16 @@ export class ThreadPump {
    *
    * 回傳的 promise 在**這一段** run 抽完時 resolve（跑完或停在核准點都算）；停住的那段要等它真的
    * 跑完。收線時還停著的會 reject。上行的 handler 不等它——那是收件回條，不是「跑完了」。
+   *
+   * **插話**（`steer`，[#710](https://github.com/DemianLi/nexus-agent/issues/710)）：這一輪還收插話（{@link ThreadPump.#acceptsSteer}）
+   * 就排進 `next-step`，回的 promise 當場 resolve——它不開一段 run，由跑著的那一段在下一步領走。不收了就照送出開一輪，
+   * 但排在 `next-turn` 的**頭**（見下面的偏離）。
+   *
+   * **偏離（登記）**：dsh 把收尾中、閒著時到的插話照樣放 `next-step` 並叫醒迴圈，下一輪開頭 `claim` 先領整條 `next-step`、
+   * 再領一件 `next-turn`，一起送進同一輪（`packages/core/agent-loop/src/agent.ts:154-169`、`inbox.ts:109-114`，
+   * `477b4f4`）。我們的一輪一定由一件 `next-turn` 開頭：那件的文字記在 `turn/start`（`session-log.ts` 登記過的偏離，
+   * 授權的判別欄），只有插話開不出一顆 `turn/start`。所以退成排隊、**插在頭上**：佇列裡排著幾句時它仍是下一輪，不排到
+   * 它們後面。跟 dsh 的差別只在「收尾中或閒著時插話、而佇列裡還排著別的」那一刻：dsh 兩件同一輪，我們分兩輪。
    */
   submit(input: PumpInput): Promise<void> {
     if (this.#closed) {
@@ -1037,20 +1084,29 @@ export class ThreadPump {
     }
     if (input.kind === 'message') {
       const id = input.id ?? crypto.randomUUID();
+      const item: QueuedInput = { id, text: input.text, source: { kind: 'user' } };
+      const steer = input.steer === true;
+      const intoStep = steer && this.#acceptsSteer();
       try {
-        this.#spliceInbox({
-          target: 'next-turn',
-          start: this.#inbox.length,
-          inserted: [{ id, text: input.text, source: { kind: 'user' } }],
-        });
+        this.#spliceInbox(
+          intoStep
+            ? { target: 'next-step', start: this.#inbox['next-step'].length, inserted: [item] }
+            : {
+                target: 'next-turn',
+                start: steer ? 0 : this.#inbox['next-turn'].length,
+                inserted: [item],
+              },
+        );
       } catch (error: unknown) {
         return Promise.reject(error instanceof Error ? error : new Error(String(error)));
       }
+      if (intoStep) return Promise.resolve();
       // **下一次送出喚醒停住的**（#637 的 Q2）：它們排在前面，照 FIFO 先跑。按了停止、那一輪還沒收尾就又送的話，
-      // 那一句一樣是「下一次送出」，所以停住的請求也一起清掉。
+      // 那一句一樣是「下一次送出」，所以停住的請求也一起清掉。退成排隊的插話同樣是一次送出，同 dsh 中止之後的插話
+      // 照樣叫醒迴圈（`agent.ts:157-158`）。
       this.#stopParked = false;
       this.#stopRequested = false;
-      return this.#schedule(() => this.#runQueued(id), false, id);
+      return this.#schedule(() => this.#runQueued(id), false, { itemId: id, atHead: steer });
     }
     // **收下的那一刻就不再掛著了，不是等它排到才清。** 排隊期間還掛著的話，連按兩次
     // 核准的第二次會通過上行的校驗、送出第二次 resume，而那時已經沒有中斷可以回答。
@@ -1063,7 +1119,9 @@ export class ThreadPump {
     if (input.kind === 'resume' && this.#pending.delete(input.interruptId)) {
       this.#tell({ type: 'input-withdrawn', interruptId: input.interruptId });
     }
-    return this.#schedule(() => this.#runOnce(input), input.kind === 'resume');
+    return input.kind === 'resume'
+      ? this.#schedule(() => this.#runOnce(input), true, { resumes: true })
+      : this.#schedule(() => this.#runOnce(input), false);
   }
 
   /**
@@ -1073,17 +1131,29 @@ export class ThreadPump {
    * 兩邊的 `turn/start`／`turn/end` 會交錯，不變量會把它讀成寫錯了。
    *
    * @param answers - 是不是答覆（`resume`、收回），見 {@link QueuedJob.answers}。
+   * @param extra.itemId - 見 {@link QueuedJob.itemId}。
+   * @param extra.atHead - 排在其他開新一輪的前面（答覆照樣先跑）：退成排隊的插話（#710），它在送出佇列裡也插在頭上。
+   * @param extra.resumes - 見 {@link QueuedJob.resumes}。
    */
-  #schedule(run: () => Promise<void>, answers: boolean, itemId?: string): Promise<void> {
+  #schedule(
+    run: () => Promise<void>,
+    answers: boolean,
+    extra: { readonly itemId?: string; readonly atHead?: boolean; readonly resumes?: true } = {},
+  ): Promise<void> {
     // **同步就排進去**：上行回的是收件回條，緊接著到的 `slash.run` 必須看得到「在飛」（{@link ThreadPump.running}）。
     const done = new Promise<void>((resolve, reject) => {
-      this.#queue.push({
+      const job: QueuedJob = {
         answers,
         run,
         resolve,
         reject,
-        ...(itemId === undefined ? {} : { itemId }),
-      });
+        ...(extra.itemId === undefined ? {} : { itemId: extra.itemId }),
+        ...(extra.resumes === undefined ? {} : { resumes: extra.resumes }),
+      };
+      const firstRound =
+        extra.atHead === true ? this.#queue.findIndex((queued) => !queued.answers) : -1;
+      if (firstRound < 0) this.#queue.push(job);
+      else this.#queue.splice(firstRound, 0, job);
     });
     this.#noteStatus();
     // **不在這裡同步開跑**：`turn/start` 記在真正開跑的那一刻（`#runOnce`），不是收下的那一刻。
@@ -1326,7 +1396,7 @@ export class ThreadPump {
    * 大聲拋，不去中間找那一件——那會靜靜跑錯件。
    */
   async #runQueued(id: string): Promise<void> {
-    const item = this.#inbox[0];
+    const item = this.#inbox['next-turn'][0];
     if (item === undefined || item.id !== id) {
       throw new Error(`送出佇列與排程走散了：輪到 "${id}"，佇列第一件是 "${item?.id ?? '（空）'}"`);
     }
@@ -1336,32 +1406,90 @@ export class ThreadPump {
   /**
    * 送出佇列的一次變動：先算、驗過，再落日誌、換掉手上那份、推一顆（#637）。
    *
-   * @param claimed - 這一次是領走那一件開跑：推送多帶它，畫面據它畫人的泡泡。
+   * @param claimed - 這一次是領走開跑的那一件（`turn`），或領走送進模型的整條插話（`steps`，#710）：推送多帶它們，
+   *   畫面據它們畫人的泡泡。
    * @throws 變動不合規（{@link spliceInbox}）——日誌不動。
    */
-  #spliceInbox(splice: InboxSplice, claimed?: QueuedInput): void {
+  #spliceInbox(splice: InboxSplice, claimed?: InboxClaim): void {
     const next = spliceInbox(this.#inbox, splice);
     this.#sessions.root.append('inbox/spliced', splice);
     this.#inbox = next;
-    this.#presentCustom(
-      inboxData(next, claimed === undefined ? undefined : { id: claimed.id, text: claimed.text }),
-    );
+    this.#presentCustom(inboxData(next, claimed));
   }
 
   /**
-   * 改或刪送出佇列裡排著的一件（#637）。照 dsh 的 `updateQueue`：改是同一顆裡拿掉再插回（id、位置不變），刪是拿掉，
-   * 兩種都帶 `outcome: 'canceled'`。**任何時候都收**：跑著、停在核准點、停住時都行。
+   * 這一輪現在收不收插話（#710）：收就排進 `next-step`，跑著的這一段在下一步領走；不收就退成排隊。照 dsh 的兩條判準——
+   * agent 在跑（`status === 'running'`，含等核准），而且這一輪還沒被中止（`agent.ts:157`）——再加上我們自己的兩條：
    *
-   * @returns 那一件已經不在隊裡（開跑了、刪掉了、從沒有過）就是 `'not-found'`，日誌不動。
+   * - **圖裡要掛了載體**（{@link ThreadPump.#stepInboxMounted}），否則放進去的永遠沒人領。
+   * - **這一輪還沒關窗**（{@link CurrentRun.closed}）：圖在收尾時已經問過最後一次。dsh 的迴圈收尾後還會回頭看
+   *   `hasPending` 開下一輪；我們由退成排隊的那一件開，見 {@link ThreadPump.submit} 的偏離。
+   *
+   * 停在核准點時（沒有 run 在跑、有中斷掛著，或答覆已經排著）也收：答覆那一段跑起來就接著叫模型，由它領走。收回不叫
+   * 模型，所以只排著收回時不收。
    */
-  updateQueue(itemId: string, action: QueueAction): 'updated' | 'not-found' {
+  #acceptsSteer(): boolean {
+    if (!this.#stepInboxMounted || this.#closed) return false;
+    const current = this.#current;
+    if (current?.controller.signal.aborted === true) return false;
+    if (current !== undefined && !current.closed) return true;
+    return this.#pending.size > 0 || this.#queue.some((job) => job.resumes === true);
+  }
+
+  /**
+   * 領走整條插話（#710）：落領走那一顆 `inbox/spliced`，再每一句落一顆 `user/message`（`source: {kind: 'user'}`），同 dsh
+   * `claim` 之後 `step()` 逐則寫 `user/message`（`agent.ts:403-405`）。回的訊息要原封不動併進 state：推回模型照日誌推。
+   *
+   * **中止之後不領**：同 dsh 每一步 `preStep` 之前先 `signal.throwIfAborted()`。留著的由下一輪的第一次模型呼叫領走。
+   *
+   * @param current - 領的那一段 run。
+   * @returns 領走的那幾句，照送出的先後。沒有就是空的，日誌不動。
+   */
+  #claimSteps(current: CurrentRun): HumanMessage[] {
+    const items = this.#inbox['next-step'];
+    if (items.length === 0 || current.controller.signal.aborted || this.#current !== current) {
+      return [];
+    }
+    this.#spliceInbox(
+      { target: 'next-step', start: 0, removedCount: items.length, inserted: [] },
+      { steps: items },
+    );
+    return items.map((item) => {
+      // **id 就是佇列裡那一件的 id**：日誌、checkpoint、推回模型的那一則是同一則，reducer 照 id 對得上。
+      const message = new HumanMessage({ content: item.text, id: item.id });
+      this.#sessions.root.append('user/message', {
+        message: toLoggedMessage(message),
+        source: { kind: 'user' },
+      });
+      return message;
+    });
+  }
+
+  /**
+   * 改、刪送出佇列裡排著的一件（#637），或把它改成插話（#710）。照 dsh 的 `updateQueue`（`packages/api/session-controller/src/commands.ts:468-498`，
+   * `477b4f4`）：在兩條清單裡找那一件。
+   *
+   * - **改**：同一顆裡拿掉再插回（id、位置不變），帶 `outcome: 'canceled'`。
+   * - **刪**：拿掉，帶 `outcome: 'canceled'`。在 `next-turn` 的話排程那一件一起拿掉。
+   * - **插話**：只收還在 `next-turn`、而且這一輪還收插話的（{@link ThreadPump.#acceptsSteer}），否則 `'steer-unavailable'`，
+   *   同 dsh 的 `session/steer-unavailable`。從 `next-turn` 拿掉（帶 `outcome: 'canceled'`）、接到 `next-step` 尾巴，同 dsh
+   *   `inbox.remove` 之後 `agent.steer`。
+   *
+   * 改、刪**任何時候都收**：跑著、停在核准點、停住時都行，插話那一條裡的也行。
+   *
+   * @returns 那一件已經不在隊裡（開跑了、被領走了、刪掉了、從沒有過）就是 `'not-found'`，日誌不動。
+   */
+  updateQueue(itemId: string, action: QueueAction): 'updated' | 'not-found' | 'steer-unavailable' {
     if (this.#closed) return 'not-found';
-    const index = this.#inbox.findIndex((item) => item.id === itemId);
-    const item = this.#inbox[index];
-    if (item === undefined) return 'not-found';
+    const target = (['next-turn', 'next-step'] as const).find((list) =>
+      this.#inbox[list].some((item) => item.id === itemId),
+    );
+    if (target === undefined) return 'not-found';
+    const index = this.#inbox[target].findIndex((item) => item.id === itemId);
+    const item = this.#inbox[target][index]!;
     if (action.kind === 'edit') {
       this.#spliceInbox({
-        target: 'next-turn',
+        target,
         start: index,
         removedCount: 1,
         inserted: [{ ...item, text: action.text }],
@@ -1369,19 +1497,25 @@ export class ThreadPump {
       });
       return 'updated';
     }
-    this.#spliceInbox({
-      target: 'next-turn',
-      start: index,
-      removedCount: 1,
-      inserted: [],
-      outcome: 'canceled',
-    });
-    // 它不會跑了：排程那一件一起拿掉，送出它的 promise 就此有結果。
-    const at = this.#queue.findIndex((job) => job.itemId === itemId);
-    const [job] = at < 0 ? [] : this.#queue.splice(at, 1);
-    job?.resolve();
-    this.#noteStatus();
-    this.#kick();
+    if (action.kind === 'steer' && (target !== 'next-turn' || !this.#acceptsSteer())) {
+      return 'steer-unavailable';
+    }
+    this.#spliceInbox({ target, start: index, removedCount: 1, inserted: [], outcome: 'canceled' });
+    if (action.kind === 'steer') {
+      this.#spliceInbox({
+        target: 'next-step',
+        start: this.#inbox['next-step'].length,
+        inserted: [item],
+      });
+    }
+    if (target === 'next-turn') {
+      // 它不會開一輪了：排程那一件一起拿掉，送出它的 promise 就此有結果。
+      const at = this.#queue.findIndex((job) => job.itemId === itemId);
+      const [job] = at < 0 ? [] : this.#queue.splice(at, 1);
+      job?.resolve();
+      this.#noteStatus();
+      this.#kick();
+    }
     return 'updated';
   }
 
@@ -1409,8 +1543,15 @@ export class ThreadPump {
     this.#sessions.root.append('turn/start', turnStartOf(input));
     // 領走：落在 `turn/start` 之後、叫模型之前，所以帶 `claimed` 的那顆推送一定比這一輪模型與工具的任何 frame 早。
     // 比它早的只有 `turn/start` 的訂閱者當場合成的 `custom`（清空待辦），同 dsh 的先後。
+    //
+    // **留在插話那一條的不在這裡領**（按停止之後留下的、重啟接回來的），由這一輪的第一次模型呼叫領走，排在這一件後面。
+    // **偏離（登記）**：dsh 的 `claim` 先領 `next-step` 再領 `next-turn`（`inbox.ts:109-114`），模型看到的是插話在前。我們
+    // 這一件的文字在 `turn/start`（`session-log.ts` 登記過的偏離），推回模型時它就是這一輪的第一則，所以插話只能在後。
     if (claimed !== undefined) {
-      this.#spliceInbox({ target: 'next-turn', start: 0, removedCount: 1, inserted: [] }, claimed);
+      this.#spliceInbox(
+        { target: 'next-turn', start: 0, removedCount: 1, inserted: [] },
+        { turn: claimed },
+      );
     }
     // **`text` 只讀一次的那個值就是上面寫進日誌的那個。** 兩份分開算的話，一顆日誌上
     // 逐字正確的 `turn/start` 可以配上餵給模型的任意字串，而不變量伴生只看得到日誌那
@@ -1430,6 +1571,16 @@ export class ThreadPump {
       replyOpen: false,
       stopped: false,
       maxTokens: false,
+      closed: false,
+    };
+    // 插話的領取口（#710）：圖裡那顆 middleware 每次叫模型之前 `claim`、收尾時 `finish`，見 `@nexus/core` 的 `step-inbox.ts`。
+    const stepInbox: StepInbox = {
+      claim: () => this.#claimSteps(current),
+      finish: () => {
+        const messages = this.#claimSteps(current);
+        if (messages.length === 0) current.closed = true;
+        return messages;
+      },
     };
     this.#current = current;
     try {
@@ -1453,6 +1604,7 @@ export class ThreadPump {
           // **放在 `configurable`，不是 LangGraph 的 `signal`**：交給 LangGraph 會丟下正在跑的
           // 工具（實測），見 `@nexus/core` 的 `turn-cancel.ts`。
           [TURN_CANCEL_CONFIG_KEY]: current.controller.signal,
+          [STEP_INBOX_CONFIG_KEY]: stepInbox,
         },
       });
       // **在第一顆封包之前**：投影裡的 promise 一建立就可能被 reject，晚掛就漏（#346）。
@@ -1463,6 +1615,9 @@ export class ThreadPump {
           this.#broadcast(event);
         }
       }
+      // 串流抽完就關窗（#710）：圖收尾時通常已經關了（`finish`），這裡擋的是沒經過那顆 middleware 就收掉的圖——停在
+      // 核准點的不算，那時之後的插話由 `#pending` 那一條收。
+      current.closed = true;
       // 跑完與停在核准點都算收工——停在核准點時前面會有一顆 `interrupt/raised`。
       // **中止照上線那顆收尾 frame 判**，不是照訊號：訊號在收尾 frame 送出之後才觸發的話，
       // 畫面上是「完成」，日誌也該是。

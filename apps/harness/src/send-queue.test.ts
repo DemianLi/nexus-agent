@@ -220,8 +220,8 @@ describe('送出與領走', () => {
         { target: 'next-turn', start: 0, removedCount: 1, inserted: [] },
       ]);
       expect(inboxPushes(run.frames)).toEqual([
-        { items: [{ id: 'item-1', text: '嗨', source: { kind: 'user' } }] },
-        { items: [], claimed: { id: 'item-1', text: '嗨' } },
+        { items: [{ id: 'item-1', text: '嗨', source: { kind: 'user' } }], nextStep: [] },
+        { items: [], nextStep: [], claimed: { id: 'item-1', text: '嗨' } },
       ]);
       const claimedAt = run.frames.findIndex(
         (frame) => frame.method === 'custom' && inboxPushes([frame])[0]?.claimed !== undefined,
@@ -374,6 +374,7 @@ describe('改與刪', () => {
       await until(() => inboxPushes(run.frames).length === 5);
       expect(inboxPushes(run.frames).at(-1)).toEqual({
         items: [{ id: 'c', text: 'C', source: { kind: 'user' } }],
+        nextStep: [],
       });
       hold.open();
       await Promise.all([first, second, third]);
@@ -712,7 +713,7 @@ describe('歷史帶的是目前的清單', () => {
       await run.pump.whenIdle();
       const page = historyPage(run.pump.sessionLog.events);
       const pushed = inboxPushes(page.events);
-      expect(pushed).toEqual([{ items: inboxPushes(run.frames).at(-1)!.items }]);
+      expect(pushed).toEqual([{ items: inboxPushes(run.frames).at(-1)!.items, nextStep: [] }]);
       expect(pushed[0]!.items.map((item) => item.id)).toEqual(['b', 'c']);
 
       // 折起來：清單是停住的那兩件；人的話由重播的那一輪畫，不會多出一則 `inbox:` 的。
@@ -735,7 +736,7 @@ describe('歷史帶的是目前的清單', () => {
     log.append('turn/end', {});
     const last = historyPage(log.events, { maxMessages: 1 });
     expect(last.firstSeq).toBe(4);
-    expect(inboxPushes(last.events)).toEqual([{ items: [item('b'), item('c')] }]);
+    expect(inboxPushes(last.events)).toEqual([{ items: [item('b'), item('c')], nextStep: [] }]);
     // 較舊的那一頁不帶：畫面往上捲時才抓它，那時即時的推送早就換過清單了，帶的話會把新的蓋回舊的。
     const older = historyPage(log.events, { maxMessages: 1, beforeSeq: 4 });
     expect(older.firstSeq).toBe(2);
@@ -747,7 +748,9 @@ describe('歷史帶的是目前的清單', () => {
     try {
       await run.pump.submit({ kind: 'message', text: 'A', id: 'a' });
       await run.pump.whenIdle();
-      expect(inboxPushes(historyPage(run.pump.sessionLog.events).events)).toEqual([{ items: [] }]);
+      expect(inboxPushes(historyPage(run.pump.sessionLog.events).events)).toEqual([
+        { items: [], nextStep: [] },
+      ]);
 
       const bare = new SessionLog('bare');
       bare.append('turn/start', { kind: 'message', text: '舊日誌' });
@@ -859,7 +862,7 @@ describe('wire', () => {
       handler.handle(loopbackRequest(input as string, init));
     const client = createWireClient({ baseUrl: 'http://queue.test', fetch });
     let nextId = 1;
-    /** 直接打 `queue.update` 的路徑：client 的型別送不出畸形的封包（`steer`、缺 `item_id`），伺服器那一側要自己擋。 */
+    /** 直接打 `queue.update` 的路徑：client 的型別送不出的封包（`steer`、缺 `item_id`），伺服器那一側要自己認。 */
     const rawQueueUpdate = async (thread: string, params: unknown) => {
       const response = await fetch(
         `http://queue.test/threads/${thread}/commands/${QUEUE_UPDATE_METHOD}`,
@@ -893,7 +896,7 @@ describe('wire', () => {
     expect(inserted).toEqual([firstId, secondId]);
   });
 
-  it('queue.update：改、刪回受理；不在隊裡回 queue_item_not_found；空白回 invalid_argument；steer 回 not_supported', async () => {
+  it('queue.update：改、刪回受理；不在隊裡回 queue_item_not_found；空白回 invalid_argument；沒掛插話的組裝上 steer 回 steer_unavailable', async () => {
     const { client, rawQueueUpdate, log } = wire(scriptedAgent([{ interrupt: 'i1' }]));
     const thread = 'queue-update';
     await client.runStart(thread, '第一句');
@@ -907,9 +910,11 @@ describe('wire', () => {
     expect(
       await client.queueUpdate(thread, { item_id: id, action: { kind: 'edit', text: '  ' } }),
     ).toMatchObject({ type: 'error', error: 'invalid_argument' });
+    // 插話（#710）的正面行為在 `steer.test.ts`。這一個組裝沒說它掛了插話的載體（`ThreadAgent.stepInbox`），所以停在
+    // 核准點也不收：放進 `next-step` 的話永遠沒人領。
     expect(await rawQueueUpdate(thread, { item_id: id, action: { kind: 'steer' } })).toMatchObject({
       type: 'error',
-      error: 'not_supported',
+      error: 'steer_unavailable',
     });
     expect(
       await client.queueUpdate(thread, { item_id: id, action: { kind: 'remove' } }),

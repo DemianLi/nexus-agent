@@ -133,7 +133,7 @@ registry.memory.addSource(path); // 純累加；路徑格式在註冊期擋（�
 
 **`requires` 的第一個產品消費者是 `sandbox-policy`（#459）**：它宣告 `requires: ['sandboxPolicy']`，沒有人提供控制器就載入失敗。在那之前產品程式碼裡一個條目都沒宣告過，只有 `apps/harness/src/agent-factory.test.ts` 用它測機制本身。
 
-**事件那一列真正缺的不是匯流排。** #190 查過：dsh 的 `send()`／`steer()`／`inject()` 是同一個「帶邊界、選擇叫不叫醒」的 `UserMessage` 佇列的三個預設，我們缺的是那個佇列；今天沒有「把一步塞進正在跑的迴圈」的消費者，所以不補。
+**事件那一列真正缺的不是匯流排。** #190 查過：dsh 的 `send()`／`steer()`／`inject()` 是同一個「帶邊界、選擇叫不叫醒」的 `UserMessage` 佇列的三個預設，我們缺的是那個佇列；今天沒有「把一步塞進正在跑的迴圈」的消費者，所以不補。（**2026-09-28 加註**：前提翻了。送出佇列（#637）落地之後人插話就是那個消費者，[#710](https://github.com/DemianLi/nexus-agent/issues/710) 照 dsh 補了 `next-step`：跑著的這一輪下一次叫模型之前領走，載體在 `@nexus/core` 的 `step-inbox.ts`。`inject()`（外掛塞話）與聽者用的 `steer()` 仍然沒有。）
 
 ## 2. 七層架構 ↔ 實作映射
 

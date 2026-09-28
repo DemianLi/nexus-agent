@@ -74,8 +74,14 @@ export { GOAL_CHANGE_VERSION, goalId } from './goal.js';
 export type { TodoItem, TodoStatus } from './todo.js';
 export type { PresentedFile } from './deliverables.js';
 export { TODO_STATUSES } from './todo.js';
-export type { InboxSplice, InboxTarget, QueuedInput, QueuedInputSource } from './inbox.js';
-export { foldInbox, spliceInbox } from './inbox.js';
+export type {
+  InboxSplice,
+  InboxState,
+  InboxTarget,
+  QueuedInput,
+  QueuedInputSource,
+} from './inbox.js';
+export { EMPTY_INBOX, foldInbox, spliceInbox } from './inbox.js';
 
 export type {
   SandboxDenial,
@@ -243,6 +249,13 @@ export {
   SUBAGENT_DELEGATION_CONTEXT,
   SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
 } from './subagent-delegation.js';
+export type { StepInbox } from './step-inbox.js';
+export {
+  createStepInboxMiddleware,
+  STEP_INBOX_CONFIG_KEY,
+  STEP_INBOX_MIDDLEWARE_NAME,
+  stepInboxOf,
+} from './step-inbox.js';
 export {
   createTurnCancelGuard,
   createTurnCancelModelSignal,
@@ -383,6 +396,7 @@ export type {
   SessionTitleModelIdentity,
   SessionTitleSource,
   TurnEndReason,
+  UserMessageSource,
 } from './session-log.js';
 export { currentTurnStart, hasUnansweredInterrupt, SessionLog } from './session-log.js';
 

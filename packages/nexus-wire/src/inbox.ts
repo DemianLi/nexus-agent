@@ -1,8 +1,10 @@
 /**
- * 送出佇列上線的形狀（[#637](https://github.com/DemianLi/nexus-agent/issues/637)）。
+ * 送出佇列上線的形狀（[#637](https://github.com/DemianLi/nexus-agent/issues/637)、
+ * [#710](https://github.com/DemianLi/nexus-agent/issues/710)）。
  *
- * 照 dsh 的收件匣投影（key `inbox`，`packages/core/agent-loop/src/inbox.ts`，`477b4f4`）：人送出、還沒開跑的那幾句，
- * 從會話日誌的 `inbox/spliced` 折出來，**從日誌開頭折起**——它不會在一輪開頭清空。
+ * 照 dsh 的收件匣投影（key `inbox`，`packages/core/agent-loop/src/inbox.ts`，`477b4f4`）：人送出、還沒送進模型的那幾句，
+ * 從會話日誌的 `inbox/spliced` 折出來，**從日誌開頭折起**——它不會在一輪開頭清空。兩條清單同 dsh：排著等開新一輪的
+ * （{@link InboxPayload.items}，dsh 的 `next-turn`）與插話（{@link InboxPayload.nextStep}，dsh 的 `next-step`）。
  *
  * 載體是協定的 `custom` 事件，`data.name` 是 {@link INBOX}，`payload` 是 {@link InboxPayload}，後到的取代先到的：
  *
@@ -22,6 +24,14 @@
  * 清單。我們沒有投影與通知兩層，只有 pump 合成的 `custom` 事件（同 #575 的待辦清單），所以把領走併進同一顆：清單少一件與
  * 人的泡泡出現是同一件事，拆成兩顆的話中間會有一瞬間兩邊對不上。丟掉的那一種不需要：換掉清單就夠了。
  *
+ * ## 插話被領走那一刻：`claimedNextStep`
+ *
+ * 跑著的那一輪每次叫模型之前領走整條插話，同 `claimed` 的理由多帶 {@link InboxPayload.claimedNextStep}：畫面據它在
+ * 那一輪裡接著畫人的泡泡。它一定比那次模型呼叫的任何 frame 先到：pump 在叫模型之前寫下領走那一顆，寫入的當下就同步送出。
+ *
+ * **對 dsh 的偏離**：dsh 的投影 key 就是兩條清單的名字（`'next-turn'`、`'next-step'`）。我們的 `items` 在插話之前就上線
+ * 了，改名會讓舊的畫面讀不到佇列，所以 `items` 留著當 `next-turn`，插話那一條另起一格。
+ *
  * @module
  */
 
@@ -37,13 +47,29 @@ export interface WireQueuedInput {
   readonly source: { readonly kind: 'user' };
 }
 
+/** 被領走的一件：畫面據它畫人的泡泡。 */
+export interface WireClaimedInput {
+  readonly id: string;
+  readonly text: string;
+}
+
 /** {@link INBOX} 的 `payload`。 */
 export interface InboxPayload {
-  /** 整份清單，照開跑的先後。 */
+  /** 排著等開新一輪的整份清單（`next-turn`），照開跑的先後。 */
   readonly items: readonly WireQueuedInput[];
+  /**
+   * 插話的整份清單（`next-step`），照送出的先後：跑著的那一輪下一步整條送進模型。**選填只為了舊的一側**：
+   * harness 每一顆都帶（空的也帶），沒帶就當空的。
+   */
+  readonly nextStep?: readonly WireQueuedInput[];
   /**
    * 這一顆是因為這一件被領走開跑而送的：畫面據它畫人的泡泡。**只有領走那一顆帶**，送出、改、刪都不帶；歷史也不帶
    * （人的泡泡在歷史裡由那一輪的 human 訊息畫）。
    */
-  readonly claimed?: { readonly id: string; readonly text: string };
+  readonly claimed?: WireClaimedInput;
+  /**
+   * 這一顆是因為整條插話被領走、送進模型而送的：畫面據它在這一輪裡接著畫人的泡泡，照送出的先後。規則同
+   * {@link claimed}：只有領走那一顆帶，歷史也不帶（歷史裡由那幾則 human 訊息畫）。
+   */
+  readonly claimedNextStep?: readonly WireClaimedInput[];
 }

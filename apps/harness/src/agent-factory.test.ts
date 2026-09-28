@@ -540,6 +540,33 @@ describe('迴圈上限', () => {
     expect(await rounds(undefined)).toBe(2);
   });
 
+  /**
+   * **插話的載體（#710）再多一格，serve 每輪四格。** 它的 `beforeModel` 是另一個節點，跟提醒器那一顆一樣每輪走一次；
+   * `afterAgent` 那一半一次執行只走一次，跑掉的迴圈走不到它。CLI 不掛（`stepInbox` 只有 serve 給），所以這一格只在 serve 上付。
+   *
+   * 量在預設上限上，因為那是 serve 真正吃到的數字。
+   */
+  it('插話的載體把每輪的格數從三格變四格，預設上限底下從 33 輪變 24 輪', async () => {
+    const rounds = async (stepInbox: boolean): Promise<number> => {
+      const model = new LoopingChatModel();
+      const { agent, dispose } = await createNexusAgent({
+        model,
+        plugins: [createEchoPlugin()],
+        summarization: false,
+        stepInbox,
+      });
+      try {
+        await expect(agent.invoke(toAgentInvocation('一直跑'))).rejects.toThrow(/Recursion limit/);
+      } finally {
+        await dispose();
+      }
+      return model.calls;
+    };
+
+    expect(await rounds(false)).toBe(Math.floor((DEFAULT_RECURSION_LIMIT - 1) / 3));
+    expect(await rounds(true)).toBe(Math.floor((DEFAULT_RECURSION_LIMIT - 1) / 4));
+  });
+
   it('正常收工的對話不受影響 —— 上限擋的是跑掉，不是複雜', async () => {
     const model = new ScriptedChatModel({ turns: BOTH_TOOLS });
     const { agent, dispose } = await createNexusAgent({
