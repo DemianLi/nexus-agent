@@ -2,14 +2,14 @@
  * 側欄按內容搜以前的會話（[#760](https://github.com/DemianLi/nexus-agent/issues/760)，後端是 #631 的 `searchThreads`）。
  * 照 dsh（`477b4f4`，MIT，Copyright (c) DeepSeek）的 `ui-workspace`：
  *
- * - **查詢**照 `WorkspaceBrowser.tsx` 的 `sanitizeSearchQuery`：拿掉 NUL、最多 500 個 UTF-16 單位、不切開代理對。線上的
- *   三種不合法（去頭尾後是空的、太長、含 NUL）都在這裡先擋掉，所以伺服器回來的 `rejected` 只剩「這台沒開」一種。
+ * - **查詢**照 `WorkspaceBrowser.tsx` 的 `sanitizeSearchQuery`：拿掉 NUL、最多 500 個 UTF-16 單位、不切開代理對；去頭尾後是
+ *   空的就不問。線上的三種不合法都在送出前擋掉。
  * - **打完停 250ms 才問**（`SEARCH_DEBOUNCE_MS`），下一個字一到就取消上一次。
  * - **合併**照 `tree.ts` 的 `deriveSearchResults`：標題對得上的在前（由新到舊），只有內容對得上的照伺服器排的順序接在後面；
  *   兩邊都有的那一列掛上片段。內容命中但不在清單上（空白、別條空白、清單上沒有）的不列。合起來最多
  *   {@link THREAD_SEARCH_RESULT_LIMIT} 列，多的由 `hasMore` 講。
- * - **沒開或搜尋失敗就退回只比標題**，照 `WorkspaceBrowser.tsx:1114-1121`：那時的畫面就是 #610 的樣子，**不套 20 列的上限**
- *   （`filterThreads`）。
+ * - **被拒或失敗就退回只比標題**，照 `WorkspaceBrowser.tsx:1114-1121`：那時的畫面就是 #610 的樣子，**不套 20 列的上限**
+ *   （`filterThreads`）。被拒不記住：`rejected` 分不出是沒開、不合法還是搜尋失敗。
  *
  * 版面（分組、片段、標亮）是 web 的 UI/UX，不照 dsh：dsh 搜尋時換成一份不分組的清單，我們保留 #610 的分組，退回只比標題時
  * 才跟 #610 一模一樣。dsh 的片段不標亮，我們標。
@@ -93,7 +93,10 @@ export interface HighlightPart {
  * 直接在原字串上配，不拿轉過小寫的位置去切（有些字轉小寫之後長度會變）。
  */
 export function highlightMatches(text: string, query: string): readonly HighlightPart[] {
-  const words = query.trim().split(/\s+/u).filter((word) => word !== '');
+  const words = query
+    .trim()
+    .split(/\s+/u)
+    .filter((word) => word !== '');
   if (words.length === 0) return [{ text, hit: false }];
   const pattern = new RegExp(
     words.map((word) => word.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')).join('\\s+'),

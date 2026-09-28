@@ -216,6 +216,11 @@ function ConversationView({
     (query: string, signal: AbortSignal) => client.fileReferences(threadId, query, signal),
     [client, threadId],
   );
+  // 側欄按內容搜（#760）：不分哪一條，搜的是整個清單。參照要穩，側欄靠它決定要不要重問。
+  const searchThreads = useCallback(
+    (query: string, signal: AbortSignal) => client.searchThreads(query, signal),
+    [client],
+  );
   // 下載沒有快取（#452 第三刀）——它是一次性的副作用，留著等於把整份檔擱在記憶體裡。
   // 仍然綁 `threadId`：座標只在自己那條 thread 上有意義。
   const deliverableDownload = useMemo(
@@ -296,6 +301,7 @@ function ConversationView({
         currentTitle={title}
         onNewConversation={() => onNewConversation(engaged)}
         onPick={onSwitch}
+        search={searchThreads}
       />
       {/* `SidebarInset` 就是 `<main>`。 */}
       {/* 基準寬 480：右側欄打開時會話區至少留這麼多，視窗再窄才輪到它讓（#640，見 `right-sidebar.tsx`）。 */}

@@ -43,7 +43,7 @@ export { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/lib/thread-title';
  *
  * **分組、搜尋**（inventory 列 6）：按今天／昨天／過去 7 天／更早分組，規則在 `lib/thread-groups.ts`。搜尋比標題，也問伺服器
  * 比內容（[#760](https://github.com/DemianLi/nexus-agent/issues/760)），規則在 `lib/thread-search.ts`：打完停 250ms 才問、下一個
- * 字一到就取消上一次；伺服器說沒開（出廠就是）就記住、之後只比標題，搜尋失敗則這一次只比標題，兩種都跟 #610 一樣。
+ * 字一到就取消上一次；伺服器拒絕（出廠沒開就是）或搜尋失敗，那一次只比標題、照印原因，跟 #610 一樣。
  *
  * **狀態點**（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）：即時的，照全域下行翻，規則在
  * `lib/thread-status.ts`。等人回答（核准、提問、計劃審核）＞ 在跑 ＞ 跑完沒看，一列只畫最前面那一種；點旁邊有給
@@ -82,14 +82,15 @@ export function ThreadList({
 
   const [query, setQuery] = useState('');
   const needle = query.trim();
-  // 伺服器說沒開（`rejected` 只剩這一種，見 `lib/thread-search.ts`）：記住，之後只比標題。同一台 server 每次都一樣。
-  const [off, setOff] = useState<string | null>(null);
-  // 伺服器回過一次「有」之前不畫骨架：出廠是關的，先畫的話每個部署第一次搜都會閃一下，「搜不到」也晚一拍（同 #653 的選單）。
+  // **被拒不記住**：`rejected` 分不出是沒開、查詢不合法還是搜尋失敗（線上只帶訊息），記住的話偶發失敗一次這一頁就再也不搜
+  // 內容。所以每一次都問，被拒或失敗就那一次只比標題。
+  // 伺服器回過一次「有」之前不畫骨架：出廠是關的，先畫的話每次搜都會閃一下，「搜不到」也晚一拍（同 #653 的選單）。
   const [on, setOn] = useState(false);
-  const searching = needle !== '' && off === null && search !== undefined;
+  const searching = needle !== '' && search !== undefined;
   const [answer, setAnswer] = useState<{
     readonly query: string;
-    readonly matches: ContentMatches | 'failed';
+    /** 內容命中，或這一次為什麼只比了標題。 */
+    readonly matches: ContentMatches | { readonly fallback: string };
   } | null>(null);
   useEffect(() => {
     if (!searching) return;
@@ -99,14 +100,17 @@ export function ThreadList({
         (outcome) => {
           // 這一格要留著：沒有別的東西擋得住取消之後晚到的那一份。
           if (controller.signal.aborted) return;
-          if (outcome.kind === 'rejected') setOff(outcome.message);
-          else {
+          if (outcome.kind === 'rejected') {
+            setAnswer({ query: needle, matches: { fallback: outcome.message } });
+          } else {
             setOn(true);
             setAnswer({ query: needle, matches: outcome.result });
           }
         },
         () => {
-          if (!controller.signal.aborted) setAnswer({ query: needle, matches: 'failed' });
+          if (!controller.signal.aborted) {
+            setAnswer({ query: needle, matches: { fallback: '內容搜尋失敗，這一次只比了標題。' } });
+          }
         },
       );
     }, SEARCH_DEBOUNCE_MS);
@@ -118,7 +122,7 @@ export function ThreadList({
   // 回來的那一份是這個查詢的才算；不是就還在等（dsh 的 `currentRemote`）。
   const current = searching && answer?.query === needle ? answer.matches : undefined;
   const pending = searching && on && current === undefined;
-  const failed = current === 'failed';
+  const fallback = current !== undefined && 'fallback' in current ? current.fallback : undefined;
   const visible =
     listing.kind === 'ok'
       ? withCurrentTitle(listing.result.items, currentThreadId, currentTitle).filter(
@@ -128,10 +132,10 @@ export function ThreadList({
   const view = mergeThreadSearch(
     visible,
     needle,
-    current === undefined || current === 'failed' ? undefined : current,
+    current === undefined || 'fallback' in current ? undefined : current,
   );
-  // 只比了標題：沒開、失敗，或還不知道開沒開。
-  const titleOnly = !searching || failed || !on;
+  // 只比了標題：沒接、被拒、失敗，或還不知道開沒開。
+  const titleOnly = !searching || fallback !== undefined || !on;
 
   return (
     <SidebarGroup role="group" aria-labelledby={labelId} className="text-sm">
@@ -154,7 +158,7 @@ export function ThreadList({
               <SidebarInput
                 type="search"
                 aria-label="搜尋以前的會話"
-                placeholder={off === null && search !== undefined ? '搜尋會話' : '搜尋標題'}
+                placeholder={on ? '搜尋會話' : '搜尋標題'}
                 value={query}
                 onChange={(event) => setQuery(sanitizeSearchQuery(event.target.value))}
                 onKeyDown={(event) => {
@@ -198,13 +202,8 @@ export function ThreadList({
                   還有更多沒列出來，多打幾個字可以縮小範圍。
                 </p>
               )}
-              {needle !== '' && off !== null && (
-                <p className="text-muted-foreground px-2 pt-1 text-xs">{off}</p>
-              )}
-              {failed && (
-                <p className="text-muted-foreground px-2 pt-1 text-xs">
-                  內容搜尋失敗，這一次只比了標題。
-                </p>
+              {fallback !== undefined && (
+                <p className="text-muted-foreground px-2 pt-1 text-xs">{fallback}</p>
               )}
             </>
           )}

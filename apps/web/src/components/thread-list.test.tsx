@@ -1,3 +1,4 @@
+import { THREAD_SEARCH_QUERY_MAX_LENGTH } from '@nexus/wire';
 import type { ThreadSearchOutcome, ThreadSummary } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,11 +18,7 @@ const NOW = Date.now();
 function thread(threadId: string, title: string): ThreadSummary {
   return { threadId, updatedAt: NOW, running: false, blank: false, title };
 }
-const ITEMS = [
-  thread('a', '幫我改登入頁'),
-  thread('b', '讀規格'),
-  thread('c', '整理部署腳本'),
-];
+const ITEMS = [thread('a', '幫我改登入頁'), thread('b', '讀規格'), thread('c', '整理部署腳本')];
 const DIRECTORY: ThreadDirectory = {
   listing: { kind: 'ok', result: { items: ITEMS, unreadable: 0 } },
   statusOf: () => undefined,
@@ -105,6 +102,25 @@ describe('什麼時候問', () => {
     expect(fake.calls.map((call) => call.query)).toEqual(['登', '登入']);
   });
 
+  it('打得快：停下來之前的字都不問', async () => {
+    const fake = searcher();
+    renderList(fake.search);
+    type('登');
+    await wait(SEARCH_DEBOUNCE_MS - 1);
+    type('登入');
+    await wait(SEARCH_DEBOUNCE_MS);
+    expect(fake.calls.map((call) => call.query)).toEqual(['登入']);
+  });
+
+  it('貼上超過線上的長度：搜尋框與送出的都截在上限', async () => {
+    const fake = searcher();
+    renderList(fake.search);
+    type('規'.repeat(THREAD_SEARCH_QUERY_MAX_LENGTH + 20));
+    expect(box().value).toHaveLength(THREAD_SEARCH_QUERY_MAX_LENGTH);
+    await wait(SEARCH_DEBOUNCE_MS);
+    expect(fake.calls[0]!.query).toHaveLength(THREAD_SEARCH_QUERY_MAX_LENGTH);
+  });
+
   it('被取消的那一次晚到的失敗不畫：打回同一個字也一樣', async () => {
     const fake = searcher();
     renderList(fake.search);
@@ -140,11 +156,13 @@ describe('有開內容搜尋', () => {
   it('標題對得上的先畫；內容命中回來之後接在後面，掛上片段、標亮', async () => {
     const fake = searcher();
     renderList(fake.search);
-    expect(box().placeholder).toBe('搜尋會話');
+    // 還不知道伺服器有沒有開：提示字只講確定做得到的。
+    expect(box().placeholder).toBe('搜尋標題');
     type('部署');
     expect(rows()).toEqual([expect.stringContaining('整理部署腳本')]);
     await wait(SEARCH_DEBOUNCE_MS);
     await fake.answer(0, [['b', '…規格裡講部署的那一段…']]);
+    expect(box().placeholder).toBe('搜尋會話');
     expect(rows()).toEqual([
       expect.stringContaining('整理部署腳本'),
       expect.stringContaining('讀規格'),
@@ -199,7 +217,7 @@ describe('有開內容搜尋', () => {
 });
 
 describe('退回只比標題', () => {
-  it('伺服器說沒開：照印原因、記住，之後不再問，提示字換成「搜尋標題」', async () => {
+  it('伺服器拒絕：照印原因、這一次只比標題；不記住，下一次照樣問', async () => {
     const fake = searcher();
     renderList(fake.search);
     type('部署');
@@ -209,10 +227,12 @@ describe('退回只比標題', () => {
     expect(rows()).toEqual([expect.stringContaining('整理部署腳本')]);
     expect(box().placeholder).toBe('搜尋標題');
     type('沒這個字');
-    await wait(SEARCH_DEBOUNCE_MS * 2);
-    expect(fake.calls).toHaveLength(1);
+    // 沒回過「有」：不畫骨架，「搜不到」照 #610 馬上講。
     expect(skeleton()).toBeNull();
     expect(screen.getByRole('status').textContent).toBe('沒有標題含「沒這個字」的會話。');
+    expect(screen.queryByText('這個部署沒開')).toBeNull();
+    await wait(SEARCH_DEBOUNCE_MS);
+    expect(fake.calls).toHaveLength(2);
   });
 
   it('搜尋失敗：這一次只比標題，下一次照樣問', async () => {

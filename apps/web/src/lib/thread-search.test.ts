@@ -38,7 +38,9 @@ describe('合併', () => {
   ];
 
   it('沒有內容命中：只比標題，就是 #610 的樣子，不設上限', () => {
-    const many = Array.from({ length: THREAD_SEARCH_RESULT_LIMIT + 3 }, (_, i) => thread(`登入 ${i}`));
+    const many = Array.from({ length: THREAD_SEARCH_RESULT_LIMIT + 3 }, (_, i) =>
+      thread(`登入 ${i}`),
+    );
     const view = mergeThreadSearch(many, '登入', undefined);
     expect(view.items).toHaveLength(THREAD_SEARCH_RESULT_LIMIT + 3);
     expect(view.hasMore).toBe(false);
