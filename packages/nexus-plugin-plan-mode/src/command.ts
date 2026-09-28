@@ -24,7 +24,7 @@ export const PLAN_COMMAND_DESCRIPTION = '進入或離開計劃模式';
  * 使用者還沒打字時的佔位字串。
  *
  * **dsh 是 `[off|message]`，我們是 `[off]`**——差的那個 `message` 是 dsh 用
- * `agent.steer()` 把它插進對話裡，我們沒有那條路（見 `index.ts` 的偏離說明）。
+ * `agent.steer()` 把它插進對話裡。那條路 #710 之後有了（人插話），但命令還沒接上，接不接待重判（見 `index.ts` 的偏離說明）。
  * 提示字串要跟真的收得下的東西一致：寫了收不下的東西，等於在騙打字的人。
  */
 export const PLAN_COMMAND_HINT = '[off]';

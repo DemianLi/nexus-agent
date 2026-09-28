@@ -159,4 +159,53 @@ describe('inbox', () => {
     const earlier = fold(inboxFrame({ items: [second] }));
     expect(prependEntries(now, earlier).inbox).toEqual([first]);
   });
+
+  describe('插話那一條（#710）', () => {
+    it('一顆都沒有是空的；nextStep 整份換掉，沒帶就是空的', () => {
+      expect(emptyConversation().inboxNextStep).toEqual([]);
+      const state = fold(inboxFrame({ items: [first], nextStep: [second] }));
+      expect(state.inbox).toEqual([first]);
+      expect(state.inboxNextStep).toEqual([second]);
+      expect(
+        fold(inboxFrame({ items: [], nextStep: [second] }), inboxFrame({ items: [] }))
+          .inboxNextStep,
+      ).toEqual([]);
+    });
+
+    it('claimedNextStep 照順序折出人的話，同一顆再到一次不畫第二次', () => {
+      const claim = inboxFrame({
+        items: [],
+        nextStep: [],
+        claimedNextStep: [
+          { id: first.id, text: first.text },
+          { id: second.id, text: second.text },
+        ],
+      });
+      const state = fold(
+        claim,
+        inboxFrame({ items: [], claimedNextStep: [{ id: first.id, text: first.text }] }),
+      );
+      expect(state.entries).toEqual([
+        { kind: 'human', id: `inbox:${first.id}`, text: first.text, inboxId: first.id },
+        { kind: 'human', id: `inbox:${second.id}`, text: second.text, inboxId: second.id },
+      ]);
+    });
+
+    it('形狀不對整顆不收', () => {
+      const before = fold(inboxFrame({ items: [first], nextStep: [second] }));
+      for (const payload of [
+        { items: [], nextStep: 'x' },
+        { items: [], nextStep: [{ id: 1 }] },
+        { items: [], claimedNextStep: { id: 'a', text: 'b' } },
+        { items: [], claimedNextStep: [{ id: 'a' }] },
+      ]) {
+        const after = reduceConversation(before, inboxFrame(payload));
+        expect([after.inbox, after.inboxNextStep, after.entries]).toEqual([
+          before.inbox,
+          before.inboxNextStep,
+          before.entries,
+        ]);
+      }
+    });
+  });
 });
