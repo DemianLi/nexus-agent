@@ -39,6 +39,7 @@ afterEach(async () => {
   await running?.close();
   running = undefined;
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   for (const root of temporary.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -292,20 +293,22 @@ describe('serve 在啟動時就把清單組過一次', () => {
    * **檢查排在建瀏覽器會話密鑰之前**：起不來的那一次，home 底下沒有密鑰檔。用「`--live` 而環境裡沒有金鑰」測，
    * 因為它壞在組裝本身、不是某一列的設定，#751 合了之後照樣起不來，這條不會跟著翻。
    *
-   * 金鑰設成空字串而不是刪掉：`loadLiveEnvIfNeeded` 看到沒有這個變數會去讀 repo 根目錄的 `.env`，在有那份檔的
-   * 工作樹上會讀到真的金鑰；空字串 `process.loadEnvFile` 不會蓋掉（2026-09-28 在 Node 20 與 25 實測），而
-   * `createLiveModel` 把它當成缺。
+   * **`.env` 一個字都不讀**：金鑰缺的時候 `loadLiveEnvIfNeeded` 會去讀 repo 根目錄的 `.env`，在有那份檔的工作樹上
+   * 會讀到真的金鑰，而且檔案裡其他的變數也會一起留在這個測試行程裡（`vi.unstubAllEnvs` 只還原 stub 過的那一格）。
+   * 所以把 `process.loadEnvFile` 換成什麼都不做，並斷言它被叫過：走的是缺金鑰那條路，只是沒讀檔。
    */
   it('`--live` 沒有金鑰：起不來、講缺哪一個，密鑰檔還沒建；對照：有金鑰就起得來、密鑰檔建了', async () => {
     const home = privateHome();
     const env = { [HARNESS_HOME_ENV]: home };
     const secret = join(home, BROWSER_SESSION_SECRET_FILE);
 
+    const loadEnvFile = vi.spyOn(process, 'loadEnvFile').mockImplementation(() => undefined);
     vi.stubEnv(LIVE_API_KEY_ENV, '');
     await expect(
       runServe({ argv: ['--port', '0', '--live'], log: () => undefined, env }),
     ).rejects.toThrow(`缺少環境變數 ${LIVE_API_KEY_ENV}`);
     expect(existsSync(secret)).toBe(false);
+    expect(loadEnvFile).toHaveBeenCalled();
 
     vi.stubEnv(LIVE_API_KEY_ENV, 'nvapi-fake-key-for-tests');
     running = await runServe({ argv: ['--port', '0', '--live'], log: () => undefined, env });
