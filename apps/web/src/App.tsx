@@ -211,6 +211,11 @@ function ConversationView({
     () => createDeliverableFileStore({ threadId, baseUrl: agentBaseUrl() }),
     [threadId],
   );
+  // `@` 的候選（#653）綁在這條 thread 上；要穩定，輸入框每換一次就重查一次。
+  const fileReferences = useCallback(
+    (query: string, signal: AbortSignal) => client.fileReferences(threadId, query, signal),
+    [client, threadId],
+  );
   // 下載沒有快取（#452 第三刀）——它是一次性的副作用，留著等於把整份檔擱在記憶體裡。
   // 仍然綁 `threadId`：座標只在自己那條 thread 上有意義。
   const deliverableDownload = useMemo(
@@ -463,6 +468,7 @@ function ConversationView({
                   });
                 }}
                 commands={conversation.slashCommands}
+                fileReferences={fileReferences}
                 decorated={DECORATED_COMMANDS}
                 // 從 `/` 選單直接執行不帶參數的命令：走斜線那一道閘（跑著時只有 `/feedback` 過得去）。
                 onRunCommand={(line) => {

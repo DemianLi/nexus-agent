@@ -76,13 +76,9 @@ afterEach(() => {
  * 是假的、frame 是手餵的。
  */
 
-/**
- * 列檔（`@` 引用，#651）這一檔沒有接。**用 spread 放進 `WireClient` 字面量**：`WireClient` 還沒有 `fileReferences`
- * 時，直接寫成屬性會被當成多出來的屬性（TS2353），spread 進來的不做這個檢查；#651 讓它變成必填之後照樣成立。
- * #651 合了之後可以收成一般屬性。
- */
-const UNWIRED_FILE_REFERENCES = {
-  fileReferences: async () => ({ kind: 'rejected' as const, message: '這一檔沒有接列檔' }),
+/** 列檔（`@` 引用，#651）這一檔沒有接：`@` 的選單查一次就收起來。要它的測試自己換掉這一格。 */
+const UNWIRED_FILE_REFERENCES: Pick<WireClient, 'fileReferences'> = {
+  fileReferences: async () => ({ kind: 'rejected', message: '這一檔沒有接列檔' }),
 };
 
 /** 全部會話共用的那條下行（#632）：預設開不起來也不失敗，側欄就跟沒有這條線一樣。要它的測試自己換掉這一格。 */
@@ -90,12 +86,8 @@ const SILENT_THREAD_FEED: Pick<WireClient, 'openThreadFeed'> = {
   openThreadFeed: () => new Promise<never>(() => undefined),
 };
 
-/**
- * 按內容搜尋（#631）這一檔沒有接。**用 spread 放進 `WireClient` 字面量**，理由同 `UNWIRED_FILE_REFERENCES`：
- * `WireClient` 還沒有 `searchThreads` 時直接寫成屬性會被擋，有了之後照樣成立。`Promise<never>` 接得上任何回傳型別。
- * #631 合了之後可以收成一般屬性。
- */
-const UNWIRED_THREAD_SEARCH = {
+/** 按內容搜尋（#631）這一檔沒有接：開不起來也不失敗。 */
+const UNWIRED_THREAD_SEARCH: Pick<WireClient, 'searchThreads'> = {
   searchThreads: () => new Promise<never>(() => undefined),
 };
 
@@ -1815,6 +1807,43 @@ describe.each([false, true])('側欄的即時狀態（StrictMode：%s）', (stri
     for (const resolve of pending.slice(0, -1)) resolve(ok(row('a', '改登入頁', false)));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(statusOf(target)).toBe('running');
+  });
+});
+
+/**
+ * `@` 引用（[#653](https://github.com/DemianLi/nexus-agent/issues/653)）接上畫面：列檔綁在目前這條 thread 上，
+ * 新對話第一句送出之前就能用。選單本身驗在 `components/composer.test.tsx`。
+ */
+describe('@ 引用', () => {
+  beforeEach(stubCmdkLayout);
+
+  it('新對話還沒講話就能打 @：查的是目前這條、選了之後原樣送出', async () => {
+    seq = 0;
+    const fake = fakeClient([]);
+    const asked: { threadId: string; query: string }[] = [];
+    const client: WireClient = {
+      ...fake.client,
+      fileReferences: async (threadId, query) => {
+        asked.push({ threadId, query });
+        return {
+          kind: 'ok',
+          result: { available: true, candidates: [{ path: '/src/alpha.ts', kind: 'file' }] },
+        };
+      },
+    };
+    render(<App client={client} />);
+    const box = await screen.findByLabelText<HTMLTextAreaElement>('要說的話');
+    await waitFor(() => expect(fake.opened).toHaveLength(1));
+    fireEvent.change(box, { target: { value: '看 @alp' } });
+    await screen.findByRole('dialog', { name: '檔案選單' });
+    expect(asked).toEqual([{ threadId: fake.opened[0], query: 'alp' }]);
+
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(box.value).toBe('看 @/src/alpha.ts ');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '檔案選單' })).toBeNull());
+    fireEvent.keyDown(box, { key: 'Enter' });
+    // 送出時照舊修掉頭尾空白；`@path` 本身原樣送（#653 Q1：協定就是純文字）。
+    await waitFor(() => expect(fake.sent.at(-1)).toBe('看 @/src/alpha.ts'));
   });
 });
 

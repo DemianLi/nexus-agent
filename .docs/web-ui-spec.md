@@ -87,6 +87,7 @@
 | 23 | 提問 | shadcn `questionnaire`（`radix-vega`）＋§4.3 的補件 | `question-card.tsx` 被取代 |
 | 26 | 輸入框 | shadcn `input-group`＋`textarea` | 在 `App.tsx` |
 | 27 | slash 選單 | shadcn `command` | 在 `App.tsx` |
+| 28 | `@` 引用 | shadcn `command`（跟 slash 選單共用同一顆 popover）；觸發、插入、非同步狀態照 dsh（§4.4） | `lib/file-mention.ts`、`lib/mention-menu.ts`、在 `composer.tsx` |
 | 29 | 送出佇列 | 自建，shadcn `collapsible`＋`button`＋`textarea`；行為照 dsh `QueueDock`（一件直接畫、兩件以上收合、就地改與刪、沒有插話）；新項目撐過 200ms 才畫、只淡入淡出不 stagger；放在待辦面板下、換手區外，停在核准點時照樣看得到 | `queue-dock.tsx` |
 | 31 | 狀態列 | 自建（shimmer、orb 見 §7） | `status-line.tsx` 留 |
 | 35 | 讚踩＋回饋框 | 框換 shadcn `dialog`，表單邏輯留；讚踩按鈕留在 `transcript.tsx` | `feedback-dialog.tsx` 換外殼 |
@@ -103,6 +104,21 @@
 - **提問的 ❌＝停止這一輪，拿掉「放棄整組」**。這是**寫明的例外**：dsh 的取消是放棄後這一輪繼續，我們表達得出來，是 demian 選擇不讓模型接著猜。停止後那張提問工具卡直接展開、列出題目與選項，標「已停止，請直接打字回覆」。
 - **答完**：`ask_user_question` 的工具卡上列「問題 → 回答」（按 id 配對，配不起來退成「已回答 N 題」）；拿掉 `transcript.tsx` 的 `answerSummary`，重寫 `App.tsx` 的 `stuck` 邏輯（它的「解鎖輸入框」本來就是假出口）。
 - **`questionnaire` 要補**：自由作答列、單選自動跳、中文進度（primitive 寫死 `Question ${n} of ${total}`）、真的渲染 `QuestionnaireError` 並給中文訊息、數字快捷鍵、❌ 的位置、跨面板進度、收起／展開、legend 前的 sr-only 題號。
+
+### 4.4 `@` 引用
+
+出處：[#653](https://github.com/DemianLi/nexus-agent/issues/653) 的拍板（純文字、只列檔案與資料夾、沒有 `--workspace` 就沒有選單、不做 chip、泡泡原樣顯示）。行為照 dsh `477b4f4`：`file-reference/src/grammar.ts`、`ui-input-trigger/src/core/`（`detect.ts`、`menu.ts`、`controller.ts`）、`ui-reference`。
+
+- **觸發**：`@` 只在字首或空白後面才算（`a@b`、`user@host`、全形 `＠` 不開）；`@"` 開頭的可以跨空白。**先判 `@` 再判 `/`**，`@/` 是路徑不是命令。
+- **插入的字**：`@/src/a.ts` 加一個空白；資料夾補結尾 `/`；有空白就用 `@"/a b.md"`；路徑有雙引號或控制字元寫不回草稿，那一列不列。送出時照舊修掉頭尾空白，`@path` 原樣送，模型自己用讀檔工具去讀。
+- **鍵盤**（dsh `arbitrate`）：上下選；Enter 選定；資料夾按 Tab 往下鑽（換上 `@/dir/`、選單留著、查下一層），檔案按 Tab 就是選定；Esc 或 Shift+Tab 收起，同一段不再自己跳出來。組字中所有鍵都不歸選單。
+- **非同步**（dsh `menuReduce`）：每次查詢一個號，號不對的結果丟掉；查詢變了先留著舊列，**還沒回來時舊列選不到**，這時 Enter／Tab 被選單吃掉、不選也不送；一列都沒有時畫骨架，這時 Enter 照常送出；回來是空的或失敗就收起。伺服器回「沒有工作區」就記住，之後一律不開。
+- **跟卡片原文不同的地方**：卡片原文寫「查詢中 Enter 不送出」；dsh 的 `arbitrate` 在沒有選中列時放行 Enter。按下去送不送是執行語意，照 dsh：只有畫面上有列時才吞。
+- **畫面取捨**（UI/UX 不在 dsh 規則範圍，依據是 #653 的拍板與第一版範圍）：
+  - **第一次回來之前不畫**（dsh 先畫骨架）：依 Q3。回來之前分不出有沒有工作區，沒有工作區時打 `@` 會閃一下。
+  - **不做 chip**（Q7）：dsh 選定之後是一顆 chip，我們換成純文字。引號形式的資料夾選定時收掉引號，往下鑽時留著開口。
+  - **不畫麵包屑**（第一版範圍）：dsh 往下鑽之後在上方畫麵包屑、列裡不再寫父目錄；我們每一列都寫父目錄。
+- **還沒做**：會話、子代理、skill 三種來源；chip 與泡泡上的標示（inventory §2 第 28 列）。
 
 ## 5. 設計 token
 

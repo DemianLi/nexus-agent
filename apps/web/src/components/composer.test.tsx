@@ -1,5 +1,9 @@
-import type { SlashDescriptor } from '@nexus/wire';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import type {
+  FileReferenceCandidate,
+  FileReferenceListOutcome,
+  SlashDescriptor,
+} from '@nexus/wire';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -35,11 +39,13 @@ function Harness({
   canSend = true,
   run = () => true,
   onSubmit = () => {},
+  fileReferences,
 }: {
   initial?: string;
   canSend?: boolean;
   run?: (line: string) => boolean;
   onSubmit?: (draft: string) => void;
+  fileReferences?: (query: string, signal: AbortSignal) => Promise<FileReferenceListOutcome>;
 }) {
   const [draft, setDraft] = useState(initial);
   return (
@@ -59,6 +65,7 @@ function Harness({
         stoppable={false}
         stopDisabled={false}
         onStop={() => {}}
+        {...(fileReferences === undefined ? {} : { fileReferences })}
       />
     </main>
   );
@@ -226,6 +233,207 @@ describe('`/` 選單', () => {
   it('選單開著時過 axe', async () => {
     render(<Harness />);
     type('/');
+    expect(await axeViolations(document.body)).toEqual([]);
+  });
+});
+
+/**
+ * `@` 引用（#653）。規則逐條驗在 `lib/file-mention.test.ts` 與 `lib/mention-menu.test.ts`；這裡驗接上輸入框之後：
+ * 什麼時候去查、鍵盤歸誰、草稿變成什麼。候選由測試決定什麼時候回來。
+ */
+describe('@ 引用', () => {
+  const file = (path: string): FileReferenceCandidate => ({ path, kind: 'file' });
+  const dir = (path: string): FileReferenceCandidate => ({ path, kind: 'directory' });
+
+  function lister() {
+    const calls: {
+      readonly query: string;
+      readonly signal: AbortSignal;
+      readonly resolve: (outcome: FileReferenceListOutcome) => void;
+    }[] = [];
+    const fileReferences = (query: string, signal: AbortSignal) =>
+      new Promise<FileReferenceListOutcome>((resolve) => calls.push({ query, signal, resolve }));
+    return {
+      fileReferences,
+      calls,
+      answer: (index: number, ...candidates: FileReferenceCandidate[]) =>
+        calls[index]!.resolve({ kind: 'ok', result: { available: true, candidates } }),
+    };
+  }
+
+  const ROOT = [dir('/docs'), dir('/src'), file('/README.md')];
+  const menu = () => screen.queryByRole('dialog', { name: '檔案選單' });
+  /** 讓回來的結果先處理完：沒等的話下一個字先到，那一份就成了過期的、被丟掉。 */
+  const settle = () => act(async () => {});
+
+  async function opened(fake: ReturnType<typeof lister>, draft = '@') {
+    type(draft);
+    await waitFor(() => expect(fake.calls).toHaveLength(1));
+    fake.answer(0, ...ROOT);
+    await waitFor(() => expect(menu()).not.toBeNull());
+  }
+
+  it('行首的 @ 查根目錄那一層；列出名字，資料夾有「Tab」提示', async () => {
+    const fake = lister();
+    render(<Harness fileReferences={fake.fileReferences} />);
+    await opened(fake);
+    expect(fake.calls[0]!.query).toBe('');
+    expect(options()).toEqual(['docs/Tab', 'src/Tab', 'README.md']);
+  });
+
+  it.each([['a@b'], ['user@host'], ['(@x'], ['＠src']])('%s 不查也不開', async (draft) => {
+    const fake = lister();
+    render(<Harness fileReferences={fake.fileReferences} />);
+    type(draft);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fake.calls).toHaveLength(0);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('@/ 不叫出命令選單：它是一段路徑', async () => {
+    const fake = lister();
+    render(<Harness fileReferences={fake.fileReferences} />);
+    await opened(fake, '@/');
+    expect(fake.calls[0]!.query).toBe('/');
+    expect(screen.queryByRole('dialog', { name: '命令選單' })).toBeNull();
+  });
+
+  it('沒接列檔時 @/ 也不叫出命令選單', async () => {
+    render(<Harness />);
+    type('@/');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('Enter 選定檔案：換成 @/path 加一個空白，選單收起', async () => {
+    const fake = lister();
+    render(<Harness fileReferences={fake.fileReferences} />);
+    await opened(fake);
+    key('ArrowUp');
+    key('Enter');
+    expect(input().value).toBe('@/README.md ');
+    await waitFor(() => expect(menu()).toBeNull());
+  });
+
+  it('資料夾按 Tab 往下鑽：換成 @/docs/、選單留著、查下一層；按 Enter 是選定', async () => {
+    const fake = lister();
+    render(<Harness fileReferences={fake.fileReferences} />);
+    await opened(fake);
+    key('Tab');
+    expect(input().value).toBe('@/docs/');
+    await waitFor(() => expect(fake.calls).toHaveLength(2));
+    expect(fake.calls[1]!.query).toBe('/docs/');
+    // 下一層還沒回來：舊的列留著。
+    expect(menu()).not.toBeNull();
+    fake.answer(1, file('/docs/guide.md'), dir('/docs/api'));
+    // 第一版不畫麵包屑，所以下一層的列照樣寫父目錄（dsh 有麵包屑時才省掉）。
+    await waitFor(() => expect(options()).toEqual(['guide.md/docs', 'api//docsTab']));
+    key('ArrowDown');
+    key('Enter');
+    expect(input().value).toBe('@/docs/api/ ');
+  });
+
+  it('Esc 收起，同一段不再自己跳出來；再打一個字又開', async () => {
+    const fake = lister();
+    render(<Harness fileReferences={fake.fileReferences} />);
+    await opened(fake);
+    key('Escape');
+    await waitFor(() => expect(menu()).toBeNull());
+    fireEvent.select(input());
+    expect(menu()).toBeNull();
+    expect(fake.calls).toHaveLength(1);
+    type('@s');
+    await waitFor(() => expect(fake.calls).toHaveLength(2));
+    fake.answer(1, dir('/src'));
+    await waitFor(() => expect(menu()).not.toBeNull());
+  });
+
+  it('Shift+Tab 也收起，輸入框留著剛打的字（dsh 的 arbitrate）', async () => {
+    const fake = lister();
+    render(<Harness fileReferences={fake.fileReferences} />);
+    await opened(fake);
+    key('Tab', { shiftKey: true });
+    await waitFor(() => expect(menu()).toBeNull());
+    expect(input().value).toBe('@');
+  });
+
+  it('組字中的 Enter 不選也不送', async () => {
+    const fake = lister();
+    const sent: string[] = [];
+    render(<Harness fileReferences={fake.fileReferences} onSubmit={(draft) => sent.push(draft)} />);
+    await opened(fake);
+    key('Enter', { isComposing: true, keyCode: 229 });
+    expect(input().value).toBe('@');
+    expect(sent).toEqual([]);
+  });
+
+  it('還在查的時候：舊的列留著但選不到，Enter 不選也不送', async () => {
+    const fake = lister();
+    const sent: string[] = [];
+    render(<Harness fileReferences={fake.fileReferences} onSubmit={(draft) => sent.push(draft)} />);
+    await opened(fake);
+    type('@d');
+    await waitFor(() => expect(fake.calls).toHaveLength(2));
+    expect(options()).toEqual(['docs/Tab', 'src/Tab', 'README.md']);
+    key('Enter');
+    key('Tab');
+    expect(input().value).toBe('@d');
+    expect(sent).toEqual([]);
+  });
+
+  it('一列都還沒有時畫骨架；這時 Enter 不歸選單管，照常送出（dsh 的 arbitrate）', async () => {
+    const fake = lister();
+    const sent: string[] = [];
+    render(<Harness fileReferences={fake.fileReferences} onSubmit={(draft) => sent.push(draft)} />);
+    type('@zz');
+    await waitFor(() => expect(fake.calls).toHaveLength(1));
+    fake.answer(0);
+    await settle();
+    type('@zzz');
+    await waitFor(() => expect(fake.calls).toHaveLength(2));
+    await waitFor(() => expect(screen.getByTestId('mention-skeleton')).toBeTruthy());
+    key('Enter');
+    expect(sent).toEqual(['@zzz']);
+  });
+
+  it('打得快：前幾次被取消，晚回來的舊結果不畫', async () => {
+    const fake = lister();
+    render(<Harness fileReferences={fake.fileReferences} />);
+    await opened(fake);
+    type('@a');
+    type('@al');
+    type('@alp');
+    await waitFor(() => expect(fake.calls).toHaveLength(4));
+    expect(fake.calls.slice(1, 3).every((call) => call.signal.aborted)).toBe(true);
+    expect(fake.calls[3]!.signal.aborted).toBe(false);
+    fake.answer(3, file('/src/alpha.ts'));
+    fake.answer(1, file('/a-old.ts'));
+    await waitFor(() => expect(options()).toEqual(['alpha.ts/src']));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(options()).toEqual(['alpha.ts/src']);
+  });
+
+  it('沒有工作區：選單一次都不畫，之後也不再查', async () => {
+    const fake = lister();
+    render(<Harness fileReferences={fake.fileReferences} />);
+    type('@');
+    await waitFor(() => expect(fake.calls).toHaveLength(1));
+    fake.calls[0]!.resolve({ kind: 'ok', result: { available: false } });
+    await settle();
+    type('@s');
+    type('@sr');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fake.calls).toHaveLength(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('aria-activedescendant 跟著選中那一列走；過 axe', async () => {
+    const fake = lister();
+    render(<Harness fileReferences={fake.fileReferences} />);
+    await opened(fake);
+    key('ArrowDown');
+    await waitFor(() => expect(input().getAttribute('aria-activedescendant')).toBe(selected()?.id));
+    expect(selected()?.textContent).toBe('src/Tab');
     expect(await axeViolations(document.body)).toEqual([]);
   });
 });
