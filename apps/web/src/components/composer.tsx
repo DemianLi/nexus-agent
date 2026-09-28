@@ -8,14 +8,20 @@
  * 方向鍵換選項，Enter／Tab 選，Esc 與 Shift＋Tab 收起，收起後同一個片段不再自己跳出來。
  * 選單沒開時 Enter 送出、Shift＋Enter 換行；打注音、拼音時的 Enter 是選字，不送出。
  *
+ * **打 `@` 跳檔案選單**（#653，規則見 `lib/file-mention.ts` 與 `lib/mention-menu.ts`）：跟 `/` 共用這一個浮層與
+ * 同一套鍵盤，**先判 `@` 再判 `/`**。候選是非同步的：查詢一變就取消上一次，還沒回來時留著舊的列、那些列選不到，
+ * Enter 與 Tab 在這時什麼都不做（dsh 的 `arbitrate`）；一列都還沒有時 Enter 照常送出——dsh 也是這樣，選單上沒有
+ * 選中的那一列，Enter 就不歸選單管。資料夾按 Tab 往下鑽，Enter 是選定。沒給 `fileReferences`、或伺服器說沒有
+ * 工作區時，`@` 就是普通字元。
+ *
  * **外觀與動效是 nexus 的**：浮層 250／150、縮放 .97／.99（§7，在 `ui/popover.tsx`）；送出鍵是實心主按鈕，
  * 按壓 .96（`styles/motion.css`）。
  */
 
-import { ArrowUp, Square } from 'lucide-react';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ArrowUp, ChevronRight, File, Folder, Square } from 'lucide-react';
+import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode, RefObject } from 'react';
-import type { SlashDescriptor } from '@nexus/wire';
+import type { FileReferenceListOutcome, SlashDescriptor } from '@nexus/wire';
 
 import { Button } from '@/components/ui/button';
 import { Command, CommandItem, CommandList } from '@/components/ui/command';
@@ -26,11 +32,26 @@ import {
   InputGroupTextarea,
 } from '@/components/ui/input-group';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
+import { Skeleton } from '@/components/ui/skeleton';
+import { applyMentionPick, detectMention } from '@/lib/file-mention';
+import type { MentionRow } from '@/lib/file-mention';
+import {
+  MENTION_MENU_CLOSED,
+  mentionMenuOpen,
+  mentionPickable,
+  reduceMentionMenu,
+} from '@/lib/mention-menu';
 import { applySlashPick, detectSlash, slashCandidates } from '@/lib/slash-trigger';
-import type { SlashHit } from '@/lib/slash-trigger';
 
-/** 收起的是哪一個片段：同一個 `/`、同樣的字才算同一個。 */
-function sameHit(left: SlashHit | null, right: SlashHit | null): boolean {
+/** 一個片段：`/` 或 `@` 的位置、游標、中間的字。 */
+interface Span {
+  readonly start: number;
+  readonly end: number;
+  readonly query: string;
+}
+
+/** 收起的是哪一個片段：同一個位置、同樣的字才算同一個。 */
+function sameHit(left: Span | null, right: Span | null): boolean {
   return (
     left !== null &&
     right !== null &&
@@ -54,6 +75,7 @@ export function Composer({
   onStop,
   textareaRef,
   meter,
+  fileReferences,
 }: {
   readonly draft: string;
   readonly onDraftChange: (draft: string) => void;
@@ -74,22 +96,60 @@ export function Composer({
   readonly textareaRef?: RefObject<HTMLTextAreaElement | null>;
   /** 底列「Enter 送出」旁邊的用量表（#528）；資料由呼叫端接，這裡只管放哪。 */
   readonly meter?: ReactNode;
+  /** `@` 的候選（#653）；要穩定，每換一次就重查一次。沒給就沒有 `@` 選單。 */
+  readonly fileReferences?: (
+    query: string,
+    signal: AbortSignal,
+  ) => Promise<FileReferenceListOutcome>;
 }) {
   const ownRef = useRef<HTMLTextAreaElement>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
   const textarea = textareaRef ?? ownRef;
   const [caret, setCaret] = useState(draft.length);
-  const [dismissed, setDismissed] = useState<SlashHit | null>(null);
+  const [dismissed, setDismissed] = useState<Span | null>(null);
   const [highlight, setHighlight] = useState(0);
   // 選了之後要把游標放回去的位置：草稿由呼叫端更新，要等它畫出來才放得進去。
   const pendingCaret = useRef<number | null>(null);
 
-  const hit = detectSlash(draft, Math.min(caret, draft.length));
+  const at = Math.min(caret, draft.length);
+  // 先判 `@` 再判 `/`（dsh `detectTrigger`）：`@/` 是一段路徑，不是命令。
+  const mention = detectMention(draft, at);
+  const hit = mention === null ? detectSlash(draft, at) : null;
+  const span: Span | null = mention ?? hit;
   // 照 dsh `InputTriggerController.track`：片段不見了、或換成別的片段，收起的記錄就作廢——刪光重打 `/` 要再跳出來。
-  if (dismissed !== null && !sameHit(hit, dismissed)) setDismissed(null);
+  if (dismissed !== null && !sameHit(span, dismissed)) setDismissed(null);
   const candidates = hit === null ? [] : slashCandidates(commands, hit);
   const open = hit !== null && candidates.length > 0 && !sameHit(hit, dismissed);
   const active = open ? candidates[Math.min(highlight, candidates.length - 1)] : undefined;
+
+  const [menu, dispatchMenu] = useReducer(reduceMentionMenu, MENTION_MENU_CLOSED);
+  const generation = useRef(0);
+  const asking = mention !== null && fileReferences !== undefined && !sameHit(mention, dismissed);
+  const mentionQuery = mention?.query;
+  const mentionQuoted = mention?.quoted ?? false;
+  const mentionStart = mention?.start;
+  const mentionOff = menu.availability === 'unavailable';
+  useEffect(() => {
+    if (!asking || mentionQuery === undefined || mentionOff) {
+      dispatchMenu({ type: 'close' });
+      return;
+    }
+    generation.current += 1;
+    const mine = generation.current;
+    const controller = new AbortController();
+    dispatchMenu({ type: 'hit', generation: mine });
+    // 取消掉的那一次不用另外擋：取消之後不是緊接著新的一號，就是收起來，reducer 兩種都會丟掉它回來的東西。
+    fileReferences(mentionQuery, controller.signal).then(
+      (outcome) => {
+        dispatchMenu({ type: 'settled', generation: mine, outcome, quoted: mentionQuoted });
+      },
+      () => {
+        dispatchMenu({ type: 'failed', generation: mine });
+      },
+    );
+    return () => controller.abort();
+  }, [asking, mentionQuery, mentionQuoted, mentionStart, mentionOff, fileReferences]);
+  const mentionOpen = asking && mentionMenuOpen(menu);
 
   // cmdk 自己產生選項與清單的 id（傳進去的會被蓋掉），選中哪一項也是它在自己的 effect 裡更新。所以盯著清單的
   // `aria-selected`，讀回來給輸入框的 `aria-controls`／`aria-activedescendant`。
@@ -144,8 +204,52 @@ export function Composer({
     edit(result.draft, result.caret);
   }
 
+  function pickMention(row: MentionRow, action: 'pick' | 'drill') {
+    if (mention === null) return;
+    const result = applyMentionPick(draft, mention, row.candidate, action);
+    if (result === undefined) return;
+    pendingCaret.current = result.caret;
+    edit(result.draft, result.caret);
+  }
+
+  /** `@` 選單開著時這一鍵歸不歸它；歸它就回 true。 */
+  function mentionKey(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
+    const pickable = mentionPickable(menu);
+    switch (event.key) {
+      case 'ArrowDown':
+      case 'ArrowUp':
+        event.preventDefault();
+        dispatchMenu({ type: 'move', dir: event.key === 'ArrowDown' ? 1 : -1 });
+        return true;
+      case 'Escape':
+        event.preventDefault();
+        setDismissed(mention);
+        return true;
+      case 'Enter':
+        if (event.shiftKey || menu.highlight === null) return false;
+        event.preventDefault();
+        // 還在查：留在畫面上的舊列選不到，也不送出。
+        if (pickable !== undefined) pickMention(pickable, 'pick');
+        return true;
+      case 'Tab':
+        if (event.shiftKey) {
+          event.preventDefault();
+          setDismissed(mention);
+          return true;
+        }
+        if (menu.highlight === null) return false;
+        event.preventDefault();
+        if (pickable !== undefined) {
+          pickMention(pickable, pickable.candidate.kind === 'directory' ? 'drill' : 'pick');
+        }
+        return true;
+    }
+    return false;
+  }
+
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    if (mentionOpen && mentionKey(event)) return;
     if (open && active !== undefined) {
       switch (event.key) {
         case 'ArrowDown':
@@ -180,9 +284,9 @@ export function Composer({
 
   return (
     <Popover
-      open={open}
+      open={open || mentionOpen}
       onOpenChange={(next) => {
-        if (!next) setDismissed(hit);
+        if (!next) setDismissed(span);
       }}
     >
       {/* anchor 自己包一層：`asChild` 會把 InputGroup 的 `data-slot` 蓋掉。 */}
@@ -198,8 +302,8 @@ export function Composer({
             className="text-body max-h-48 min-h-12 px-4"
             value={draft}
             placeholder={placeholder}
-            aria-controls={open ? ids.list : undefined}
-            aria-activedescendant={open ? ids.option : undefined}
+            aria-controls={open || mentionOpen ? ids.list : undefined}
+            aria-activedescendant={open || mentionOpen ? ids.option : undefined}
             onChange={(event) => {
               edit(event.target.value, event.target.selectionStart);
             }}
@@ -243,7 +347,7 @@ export function Composer({
         side="top"
         align="start"
         className="w-(--radix-popover-trigger-width) p-1"
-        aria-label="命令選單"
+        aria-label={mentionOpen ? '檔案選單' : '命令選單'}
         // 焦點一直留在輸入框：打開、關掉都不搬；點輸入框本身不算點外面。**底列另一顆浮層的按鈕算外面**（用量表，
         // #528）：它也在輸入框裡，不收的話兩個浮層疊在同一個位置（真 Chrome 量過）。
         onOpenAutoFocus={(event) => event.preventDefault()}
@@ -259,38 +363,126 @@ export function Composer({
           }
         }}
       >
-        <Command
-          shouldFilter={false}
-          value={active?.name ?? ''}
-          onValueChange={(name) => {
-            const index = candidates.findIndex((command) => command.name === name);
-            if (index !== -1) setHighlight(index);
-          }}
-          className="bg-transparent"
-        >
-          <CommandList
-            ref={setList}
-            label="命令"
-            // 點選項時焦點不離開輸入框。
-            onMouseDown={(event) => event.preventDefault()}
+        {mentionOpen ? (
+          <MentionList
+            rows={menu.rows}
+            highlight={menu.highlight}
+            loading={menu.status === 'pending'}
+            listRef={setList}
+            onHover={(index) => dispatchMenu({ type: 'hover', index })}
+            onPick={(row) => {
+              // 還在查的時候點舊列不算（同 Enter）。
+              if (menu.status === 'ready') pickMention(row, 'pick');
+            }}
+          />
+        ) : (
+          <Command
+            shouldFilter={false}
+            value={active?.name ?? ''}
+            onValueChange={(name) => {
+              const index = candidates.findIndex((command) => command.name === name);
+              if (index !== -1) setHighlight(index);
+            }}
+            className="bg-transparent"
           >
-            {candidates.map((command) => (
-              <CommandItem
-                key={command.name}
-                value={command.name}
-                onSelect={() => pick(command)}
-                className="flex-col items-start gap-0.5 rounded-lg px-3 py-2"
-              >
-                <span className="font-mono text-sm">
-                  /{command.name}
-                  {command.input === undefined ? '' : ` ${command.input.hint}`}
-                </span>
-                <span className="text-muted-foreground text-xs">{command.description}</span>
-              </CommandItem>
-            ))}
-          </CommandList>
-        </Command>
+            <CommandList
+              ref={setList}
+              label="命令"
+              // 點選項時焦點不離開輸入框。
+              onMouseDown={(event) => event.preventDefault()}
+            >
+              {candidates.map((command) => (
+                <CommandItem
+                  key={command.name}
+                  value={command.name}
+                  onSelect={() => pick(command)}
+                  className="flex-col items-start gap-0.5 rounded-lg px-3 py-2"
+                >
+                  <span className="font-mono text-sm">
+                    /{command.name}
+                    {command.input === undefined ? '' : ` ${command.input.hint}`}
+                  </span>
+                  <span className="text-muted-foreground text-xs">{command.description}</span>
+                </CommandItem>
+              ))}
+            </CommandList>
+          </Command>
+        )}
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * `@` 選單的列：名字加父目錄，資料夾右邊一個「Tab」提示與箭頭（按 Tab 往下鑽）。一列都還沒有時畫兩行骨架。
+ * 高度上限 400px（dsh 的 `MenuView`）。
+ */
+function MentionList({
+  rows,
+  highlight,
+  loading,
+  listRef,
+  onHover,
+  onPick,
+}: {
+  readonly rows: readonly MentionRow[];
+  readonly highlight: number | null;
+  readonly loading: boolean;
+  readonly listRef: (element: HTMLDivElement | null) => void;
+  readonly onHover: (index: number) => void;
+  readonly onPick: (row: MentionRow) => void;
+}) {
+  const active = highlight === null ? undefined : rows[highlight];
+  return (
+    <Command
+      shouldFilter={false}
+      value={active?.candidate.path ?? ''}
+      onValueChange={(path) => {
+        const index = rows.findIndex((row) => row.candidate.path === path);
+        if (index !== -1) onHover(index);
+      }}
+      className="bg-transparent"
+    >
+      <CommandList
+        ref={listRef}
+        label="檔案"
+        aria-busy={loading}
+        className="max-h-100"
+        onMouseDown={(event) => event.preventDefault()}
+      >
+        {rows.length === 0 && loading && (
+          <div className="flex flex-col gap-2 px-3 py-2" data-testid="mention-skeleton">
+            <Skeleton className="h-4 w-2/3" />
+            <Skeleton className="h-4 w-1/2" />
+          </div>
+        )}
+        {rows.map((row) => {
+          const directory = row.candidate.kind === 'directory';
+          const Icon = directory ? Folder : File;
+          return (
+            <CommandItem
+              key={row.candidate.path}
+              value={row.candidate.path}
+              onSelect={() => onPick(row)}
+              className="gap-2 rounded-lg px-3 py-2"
+            >
+              <Icon aria-hidden className="text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate">
+                <span className="text-sm">{row.name}</span>
+                {row.parent !== undefined && (
+                  <span className="text-muted-foreground ml-2 text-xs">{row.parent}</span>
+                )}
+              </span>
+              {directory && (
+                <span aria-hidden className="text-muted-foreground flex items-center gap-1 text-xs">
+                  Tab
+                  <ChevronRight className="size-3" />
+                </span>
+              )}
+            </CommandItem>
+          );
+        })}
+      </CommandList>
+    </Command>
   );
 }
