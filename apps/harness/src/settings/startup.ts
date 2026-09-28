@@ -11,7 +11,9 @@
  * cordis 服務。這條偏離登記在 #529 上，射程就是這個函式的呼叫者。
  *
  * **值仍然是驗過的**：`parseEntryConfig` 是 `@nexus/core` 匯出的純函式，跟組裝期用的是同一支，
- * 所以「不合法的值在載入時就失敗」這條驗收在這一層照樣成立，而且失敗訊息跟組裝期同一種。
+ * 失敗訊息跟組裝期同一種。產品路徑上走不到那個失敗：設定驗不過的那一列在讀完清單時就掉了、標成
+ * `disabled: true`（[#751](https://github.com/DemianLi/nexus-agent/issues/751)，`plugin-config.ts` 的
+ * `loadPluginConfig`），而這兩支都把它當成沒有那一列。
  *
  * ## 沒有那一列的時候
  *
@@ -32,7 +34,7 @@ import type { NexusPlugin, PluginEntry } from '@nexus/core';
  * `./settings/…`（原始碼）兩個 specifier 進來，今天解析到同一個 URL、因此是同一顆物件——但那是
  * 一個會隨打包方式改變的巧合，不是契約。名字是契約。
  *
- * **關掉的那一列當成沒有那一列**。只講設定的那幾列大多在 `PROTECTED_ENTRY_NAMES` 上，關了會在
+ * **關掉的那一列當成沒有那一列**，掉了的列也一樣（#751：它在清單上標成 `disabled: true`）。只講設定的那幾列大多在 `PROTECTED_ENTRY_NAMES` 上，關了會在
  * 載入期拋，所以對它們走不到；留著是因為判斷「關掉＝沒講」比「關掉＝undefined 然後炸在別處」
  * 好讀。**也正因為這樣，它不能拿來判「那一列掛了沒」**——關掉與預設在這裡長得一模一樣。
  * 關得掉的那一列（落盤，#612）要另外問 {@link startupEntryMounted}。
@@ -54,7 +56,9 @@ export function startupSetting<T>(plugins: readonly PluginEntry[], plugin: Nexus
 }
 
 /**
- * 某一顆起動期的 plugin 這一次**有沒有掛**：清單上有它、而且沒寫 `disabled: true`。
+ * 某一顆起動期的 plugin 這一次**有沒有掛**：清單上有它、而且沒寫 `disabled: true`。設定驗不過而掉了的列
+ * 在清單上也標成 `disabled: true`（#751），所以算沒掛——`session-persistence` 寫壞了就是只在記憶體裡，不會一邊
+ * 當成有掛、一邊拿到預設值。
  *
  * **語意照 dsh：沒有那一列就是沒掛。** dsh 的會話落盤是清單上的一列
  * （`session-persistence-jsonl`，`packages/bundle/base/cordis.patch.yml:130-133`，`477b4f4`），

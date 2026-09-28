@@ -67,6 +67,7 @@ import type { WireHandler } from './wire-handler.js';
 import { startWireServer } from './wire-server.js';
 import type { WireServer } from './wire-server.js';
 import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js';
+import { auditStartupEntries } from './startup-audit.js';
 import { browserSessionPlugin } from './settings/browser-session.js';
 import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { liveModelPlugin } from './settings/live-model.js';
@@ -294,10 +295,17 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   //
   // **它排在瀏覽器會話之前，那是承重的**（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）：
   // cookie 的有效期由清單上 `#settings/browser-session` 那一列講，密鑰讀出來的那一刻就要有它。
-  const plugins: readonly PluginEntry[] = await loadDefaultPlugins({
+  const loaded = await loadDefaultPlugins({
     env,
     ...(invocation.patches !== undefined && { patches: invocation.patches }),
   });
+  // **掉了哪幾列在這裡判第一次**（#751），同 CLI 那一刻：必掛的掉了就在這裡起不來——還沒建瀏覽器會話密鑰、還沒綁
+  // port；可少掛的掉了印一段警告到伺服器日誌，只印這一次，也在綁 port 之前。掉了的列在清單上已標成沒掛，每條 thread
+  // 組裝時照樣跳過。
+  for (const line of auditStartupEntries(loaded, { live: invocation.live })) log(line);
+  const plugins: readonly PluginEntry[] = loaded.plugins;
+  // 啟動那幾行裡的「plugin：」不列掉了的列。
+  const droppedEntries = new Set(loaded.dropped.flatMap((drop) => drop.entry ?? []));
   // **起動期解一次、往下傳一份**：這兩顆都有消費者跑在任何 agent 出生之前（冷讀清單、`BrowserAuth`），那時
   // 還沒有註冊表可以讀服務。標題那兩個數字也往下傳給寫標題的 pump（#647），同一份值。理由與偏離登記見
   // `settings/startup.ts` 的檔頭。
@@ -592,7 +600,14 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   log(`nexus-agent 在 ${authenticatedUrl}`);
   // 印的是這一次真的用的那一個（#545），不是預設值。
   log(`模型：${invocation.live ? liveModel.modelId : '假模型（ScriptedChatModel）'}`);
-  log(`plugin：${plugins.map((entry) => entry.plugin.name).join('、') || '（空）'}`);
+  log(
+    `plugin：${
+      plugins
+        .filter((entry) => !droppedEntries.has(entry))
+        .map((entry) => entry.plugin.name)
+        .join('、') || '（空）'
+    }`,
+  );
   log(
     existsSync(join(webDist, 'index.html'))
       ? `網頁：${webDist}`

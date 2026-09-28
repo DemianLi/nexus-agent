@@ -457,10 +457,14 @@ describe('組裝：什麼時候有 attachTitle', () => {
   });
 
   it('--live 預設就掛；那一列關掉就不掛', async () => {
-    const on = await createCliAgent({ live: true }, await loadDefaultPlugins({ env: {} }));
+    const on = await createCliAgent(
+      { live: true },
+      (await loadDefaultPlugins({ env: {} })).plugins,
+    );
     const off = await createCliAgent(
       { live: true },
-      await loadDefaultPlugins({ env: {}, patches: [await writePatch(DISABLE_TITLE_LLM)] }),
+      (await loadDefaultPlugins({ env: {}, patches: [await writePatch(DISABLE_TITLE_LLM)] }))
+        .plugins,
     );
     try {
       expect(on.attachTitle).toBeTypeOf('function');
@@ -661,29 +665,57 @@ async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-describe('那一列寫壞了：起動期就拒絕，不等到第一條 thread', () => {
+/**
+ * 那一列寫壞了：**起動期就講，但照樣起來**（#751）。`thread-title-llm` 是可少掛的：讀完清單時就驗、那一列掉了、印一段
+ * 警告；掉了算沒掛，所以沒有模型產生的標題，退回標題照舊。以前是整個起不來。
+ */
+describe('那一列寫壞了：起動期就講，照樣起來、沒有模型標題', () => {
   const BAD = '- id: thread-title-llm\n  config:\n    timeoutMs: 0\n';
+  /** 警告裡指名它掉在設定驗證的那一行。 */
+  const DROPPED = /^ {2}thread-title-llm（#settings\/thread-title-llm）設定驗不過：/u;
 
-  it('serve：起不來，訊息指名那一列——沒帶 --live 也一樣', async () => {
-    await expect(
-      runServe({
-        argv: ['--port', '0', '--patch', await writePatch(BAD)],
-        log: () => undefined,
-        env: {},
-      }),
-    ).rejects.toThrow(/thread-title-llm/u);
+  let running: RunningServe | undefined;
+  beforeEach(() => {
+    vi.stubEnv(LIVE_API_KEY_ENV, FAKE_KEY);
+  });
+  afterEach(async () => {
+    await running?.close();
+    running = undefined;
+    vi.unstubAllEnvs();
   });
 
-  it('CLI：跑起來之前就拋', async () => {
-    await expect(
-      runCli({
-        argv: ['--patch', await writePatch(BAD), FIRST],
-        input: new PassThrough(),
-        output: new PassThrough(),
-        printer: { log: () => undefined, error: () => undefined },
-        env: {},
-      }),
-    ).rejects.toThrow(/thread-title-llm/u);
+  it('serve：起得來，伺服器日誌的警告指名那一列——沒帶 --live 也一樣', async () => {
+    const logged: string[] = [];
+    running = (await runServe({
+      argv: ['--port', '0', '--patch', await writePatch(BAD)],
+      log: (line) => logged.push(line),
+      env: {},
+    })) as RunningServe;
+    expect(logged.filter((line) => DROPPED.test(line))).toHaveLength(1);
+  });
+
+  it('CLI：跑得完，標準錯誤的警告指名那一列', async () => {
+    const errors: string[] = [];
+    await runCli({
+      argv: ['--patch', await writePatch(BAD), FIRST],
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer: { log: () => undefined, error: (line) => errors.push(line) },
+      env: {},
+    });
+    expect(errors.filter((line) => DROPPED.test(line))).toHaveLength(1);
+  });
+
+  it('掉了算沒掛：帶 --live 也沒有模型標題，同寫 `disabled: true`', async () => {
+    const built = await createCliAgent(
+      { live: true },
+      (await loadDefaultPlugins({ env: {}, patches: [await writePatch(BAD)] })).plugins,
+    );
+    try {
+      expect(built.attachTitle).toBeUndefined();
+    } finally {
+      await built.dispose();
+    }
   });
 });
 

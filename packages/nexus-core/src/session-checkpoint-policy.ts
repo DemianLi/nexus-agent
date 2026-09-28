@@ -125,7 +125,7 @@ export function createSessionCheckpointMiddleware(sessions: CheckpointSessions):
  *
  * **一顆服務都不註冊，`apply` 是空的**，形狀同 {@link ./model-usage.ts | modelUsagePlugin}：
  * 沒有設定，而且組裝點也沒有旗標，所以只有兩態——條目被明著關掉、或照預設掛著。這一列
- * 因此**不可以帶 `config`**（`parseEntryConfig` 對「沒有 schema 卻給了 config」當場拋）。
+ * 因此**沒有 `config`**：寫了也沒有作用（`parseEntryConfig` 照 dsh 原樣交下去、不驗，產品路徑上啟動時印警告）。
  *
  * **關掉它之後**：日誌只在寫回窗口到期與收尾時落地。正常收尾一樣完整，但收尾被打斷時，
  * 丟的可能是整輪（見檔頭「為什麼要有它」）。沒有任何測試會因此紅——那正是要寫下來的理由。

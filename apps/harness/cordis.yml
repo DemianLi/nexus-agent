@@ -9,8 +9,10 @@
 #
 #   id        這一次掛載的識別。外面的 patch 靠它指到這一列，所以名字是承重的。
 #   name      模組 specifier，用動態 import 載進來再取 default export。
-#   config    交給那顆 plugin 的設定，由它自己的 `Config` schema 驗。沒有 `Config` 的
-#             plugin（下面二十個配套入口全部是）不得寫這個欄位。
+#   config    交給那顆 plugin 的設定，由它自己的 `Config` schema 驗。驗不過的那一列掉了、
+#             啟動時印一段警告，其餘照樣起來；只有 `browser-session`（必掛）掉了會整個起不來
+#             （#751，照 dsh 分必掛與可少掛）。沒有 `Config` 的 plugin（下面二十個配套入口
+#             全部是）沒有設定：寫了也沒有作用，照樣掛，啟動時印警告。
 #   disabled  這一次掛載不跑。只收字面布林——dsh 那邊可以寫 `!!js` 運算式，我們刻意不接
 #             （#104 的偏離標註）。
 #
@@ -162,8 +164,8 @@
 # 先讀後改：沒讀過的檔不准改（#273）。照 dsh base 的 `fs-observation-policy`
 # （`packages/bundle/base/cordis.patch.yml:264`，`ddefc45`）預設就載著。
 #
-# **這一列刻意沒有 `config:`**，而且不可以加：這一顆沒有設定，plugin 也就沒有 Config
-# schema，而載入器對「沒有 schema 卻給了 config」是**當場拋**，不是默默吞掉。它跟上面兩列
+# **這一列刻意沒有 `config:`**：這一顆沒有設定，plugin 也就沒有 Config schema，寫了也沒有
+# 作用——照 dsh 原樣交下去、不驗，那一列照樣掛（先讀後改照樣在），啟動時印警告（#751）。它跟上面兩列
 # 因此差一格——上面兩列是四態（明著傳的 > 條目的設定 > 被關掉 > 內建預設），這一列只有
 # 三態，因為「條目在場」與「沒有經過設定檔」的答案都是「開著」。
 #
@@ -172,8 +174,8 @@
   name: '@nexus/core/observation-policy'
 
 # 每一次模型呼叫的 token 帳目記進會話日誌（#264）。**這一列刻意沒有 `config:`**，理由同上
-# 一列：這一顆沒有任何數字可以調，plugin 也就沒有 Config schema，而載入器對「沒有 schema
-# 卻給了 config」是當場拋。所以它跟上面那一列一樣是三態。
+# 一列：這一顆沒有任何數字可以調，plugin 也就沒有 Config schema，寫了也沒有作用、啟動時印警告。
+# 所以它跟上面那一列一樣是三態。
 #
 # **關掉它之後不見的是落盤日誌裡那本逐次呼叫的 token 帳**（`model/usage`），連帶 web 用量表
 # 的「目前大小」那一行（#528，它讀 root 最新那一筆；環與比例讀的是摘要器的量測，照舊在）。
@@ -203,7 +205,7 @@
 # 第二個理由跟擋人無關：**這一列讓核准在 `--dump-config` 裡看得見**。沒有它的時候，那份
 # dump 從頭到尾沒有任何一列跟核准有關，想確認「這台機器上核准是開的嗎」的人分不出來。
 #
-# `config:` 同上，不可以加。
+# `config:` 同上：沒有設定，寫了也沒有作用，啟動時印警告。
 - id: approval-gate
   name: '@nexus/core/approval-gate'
 
@@ -310,6 +312,9 @@
 
 # 瀏覽器 cookie 的絕對有效期（#424）。dsh 那側是 plugin 設定 `cookieMaxAgeDays`，預設同樣是 30
 # ——這一列補上的正是 `browser-auth.ts` 原本登記的那條偏離（「寫死 30 天，不能設定」）。
+#
+# **這一列是必掛的**（#751，`src/startup-audit.ts`）：設定寫壞了不是少掛一列，是整個起不來——CLI 也一樣，
+# 兩個入口共用這一份清單。對到 dsh 必掛名單上的 `connection`。
 - id: browser-session
   name: '#settings/browser-session'
   config:
@@ -364,6 +369,9 @@
 # 用來關掉推理——預設那顆模型不關推理的話，64 個輸出 token 全被推理吃光、一個標題都回不出來（實測 0/6，關掉 6/6）。
 # dsh 由 adapter 依用途在程式裡關；我們的 adapter 是通用的 OpenAI 相容，不知道每顆模型怎麼關，所以退到這一列，
 # 登記在 `src/settings/live-model.ts` 的檔頭「偏離四」。換一顆不認得這幾格的模型，寫 `{}`。
+#
+# **設定寫壞時**（#751）：帶 `--live` 就整個起不來，**不退回 schema 的預設值**——那份預設的網址是對外的公開端點，
+# 退回去就連同金鑰一起送出去；沒帶 `--live` 時那份值沒人用，只印警告。
 - id: live-model
   name: '#settings/live-model'
   config:

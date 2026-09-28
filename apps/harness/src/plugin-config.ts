@@ -48,6 +48,7 @@ import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { resolveEntriesPerEntry } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 
 import { resolveHarnessHome } from './harness-home.js';
@@ -65,6 +66,21 @@ export class PluginConfigError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'PluginConfigError';
+  }
+}
+
+/**
+ * 指到檔案的那一列，它的模組檔別人動得了（或檢查不了）。
+ *
+ * **分成子類別是為了讓 {@link loadPluginConfig} 分得出兩種「那一列載不起來」**
+ * （[#751](https://github.com/DemianLi/nexus-agent/issues/751)）：模組真的載不進來，那一列掉了、其餘照樣起來；
+ * 權限被拒照舊整個起不來——理由跟 patch 檔那條是同一則偏離登記（見 {@link assertPrivateFile}），別人寫得動那個檔，
+ * 就是別人替你決定跑什麼程式碼，不能降成「少掛一列」。{@link resolveEntryModule} 本身兩種都照舊拋。
+ */
+export class PluginModuleAccessError extends PluginConfigError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PluginModuleAccessError';
   }
 }
 
@@ -668,7 +684,7 @@ export async function resolveEntryModule(entry: ConfigEntry): Promise<PluginEntr
  */
 function assertPrivateModule(entry: ConfigEntry): void {
   const reject = (reason: string): never => {
-    throw new PluginConfigError(`條目 ${describeEntry(entry)}：${reason}`);
+    throw new PluginModuleAccessError(`條目 ${describeEntry(entry)}：${reason}`);
   };
   let path: string;
   try {
@@ -856,18 +872,108 @@ function groupedDump(
   return `${lines.join('\n')}\n`;
 }
 
+/** 讀清單那一次掉了的一列（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）。 */
+export interface StartupDrop {
+  /** 條目 id。沒寫 id 的列（只有 `insert` 進來的會這樣）：設定那一步是補過號的 id，模組那一步是模組 specifier。 */
+  readonly id: string;
+  /** 模組 specifier，即那一列的 `name`。 */
+  readonly module: string;
+  /** 掉在哪一步：模組載不進來（或匯出的不是一顆 plugin），或設定驗不過。 */
+  readonly stage: 'module' | 'config';
+  /** 指名那一列的原因，跟今天整個拋的那一句同一句。 */
+  readonly message: string;
+  /** 清單上那一列（已標成 `disabled: true`）。模組那一步掉的沒有：它不在清單上，見 {@link loadPluginConfig}。 */
+  readonly entry?: PluginEntry;
+}
+
+/** 照樣掛上、但要警告的一列：這顆 plugin 沒有設定格式，那一列卻寫了 `config`。 */
+export interface IgnoredConfig {
+  readonly id: string;
+  readonly module: string;
+}
+
+/** {@link loadPluginConfig} 的結果。 */
+export interface LoadedPluginConfig {
+  /**
+   * 可以交給 `loadPlugins` 的清單。**設定驗不過的那一列還在，改成 `disabled: true`**：掉了的列照 dsh 算沒掛，
+   * 標成停用，載入器才會記進 `disabledEntries`，折疊那側與 `startupSetting`／`startupEntryMounted` 都把它當沒掛。
+   */
+  readonly plugins: readonly PluginEntry[];
+  /** 掉了哪幾列：模組那一步的在前、設定那一步的在後，各自依清單順序。哪幾列掉了要整個起不來由呼叫端判（`startup-audit.ts`）。 */
+  readonly dropped: readonly StartupDrop[];
+  /** 照樣掛上、但寫的 `config` 沒有作用的列。 */
+  readonly ignoredConfig: readonly IgnoredConfig[];
+}
+
 /**
- * 組裝：疊完、驗完，再把每一列的模組 import 進來。
+ * 組裝：疊完、驗完，再把每一列的模組 import 進來，逐列驗一次設定。
+ *
+ * **一列自己的失敗只讓那一列掉**，照 dsh 的失敗表（`packages/boot/app-boot/README.zh.md:97-99`，`477b4f4`），
+ * 掉了哪幾列交出去，哪幾列掉了要整個失敗由呼叫端拿必掛名單判
+ * （[#751](https://github.com/DemianLi/nexus-agent/issues/751)，`startup-audit.ts`）：
+ *
+ * - **模組載不進來、或匯出的不是一顆 plugin**：那一列不在回傳的清單上——手上沒有那顆 plugin，連名字都取不到，
+ *   所以載入器標不到它，折疊那側會把它讀成「清單上沒有」而不是「關掉」。射程：出貨的列是 `@nexus/*`／`#settings/*`
+ *   的裸 specifier，patch 又改不動既有列的 `name`（{@link applyEntryPatches} 的解構），所以只有 `insert` 進來的列
+ *   或安裝壞掉才走得到這一格。停用的列模組載不起來時不算掉：dsh 對停用的列根本不載入（`Entry.refresh` 開頭就
+ *   `if (this.disabled) return`），失敗表那一列是「忽略」（`README.zh.md:106`）。
+ * - **設定驗不過**：那一列留在清單上、改成 `disabled: true`（見 {@link LoadedPluginConfig.plugins}）。
+ * - **沒有設定格式卻寫了 `config`**：不算掉，照 dsh 原樣交下去（`vendor/cordis/src/fiber.ts:51`），記進
+ *   {@link LoadedPluginConfig.ignoredConfig} 讓呼叫端印警告。
+ *
+ * 整份的錯照舊整個拋，對到 dsh 失敗表第一列（`README.zh.md:96`）：讀檔、疊層、條目形狀、重複 id、關不掉的列被關掉；
+ * 權限被拒也照舊整個拋（{@link PluginModuleAccessError}）。
  *
  * @param sources - 三層的來源。
- * @returns 可以交給 `loadPlugins` 的清單。
- * @throws {PluginConfigError} 任何一步失敗。
+ * @returns 清單、掉了的列、寫了沒作用的 `config` 的列。
+ * @throws {PluginConfigError} 整份的錯，或權限被拒。
  */
-export async function loadPluginConfig(sources: PluginConfigSources = {}): Promise<PluginEntry[]> {
+export async function loadPluginConfig(
+  sources: PluginConfigSources = {},
+): Promise<LoadedPluginConfig> {
   const entries = composeEntries(sources);
-  const loaded: PluginEntry[] = [];
-  for (const entry of entries) loaded.push(await resolveEntryModule(entry));
-  return loaded;
+  const loaded: { readonly row: ConfigEntry; readonly entry: PluginEntry }[] = [];
+  const dropped: StartupDrop[] = [];
+  for (const row of entries) {
+    try {
+      loaded.push({ row, entry: await resolveEntryModule(row) });
+    } catch (error) {
+      if (error instanceof PluginModuleAccessError || !(error instanceof PluginConfigError)) {
+        throw error;
+      }
+      if (row.disabled === true) continue;
+      dropped.push({
+        id: row.id ?? row.name,
+        module: row.name,
+        stage: 'module',
+        message: error.message,
+      });
+    }
+  }
+  // 身分照載入器同一支算（補號、重複 id），訊息裡的 id 才跟組裝時對得上。
+  const resolutions = resolveEntriesPerEntry(loaded.map(({ entry }) => entry));
+  const ignoredConfig: IgnoredConfig[] = [];
+  const plugins = loaded.map(({ row, entry }, index): PluginEntry => {
+    const resolution = resolutions[index];
+    if (resolution === undefined || resolution.disabled) return entry;
+    const { origin, configError } = resolution;
+    if (configError !== undefined) {
+      const off: PluginEntry = { ...entry, disabled: true };
+      dropped.push({
+        id: origin.id,
+        module: row.name,
+        stage: 'config',
+        message: configError.message,
+        entry: off,
+      });
+      return off;
+    }
+    if (entry.plugin.Config === undefined && entry.config !== undefined) {
+      ignoredConfig.push({ id: origin.id, module: row.name });
+    }
+    return entry;
+  });
+  return { plugins, dropped, ignoredConfig };
 }
 
 /**
@@ -879,12 +985,12 @@ export async function loadPluginConfig(sources: PluginConfigSources = {}): Promi
  *
  * @param options - `env` 決定 harness home 落在哪（省略即 `process.env`）；`patches` 是
  *   `--patch` 給的那幾個檔，照命令列順序；`warn` 省略即 stderr。
- * @returns 可以交給 `createNexusAgent` 的清單。
- * @throws {PluginConfigError} 任何一層讀不了、形狀不合、別人動得了，或模組載不起來。
+ * @returns 同 {@link loadPluginConfig}：清單、掉了的列、寫了沒作用的 `config` 的列。
+ * @throws {PluginConfigError} 任何一層讀不了、形狀不合、別人動得了。
  */
 export async function loadDefaultPlugins(
   options: DefaultConfigOptions = {},
-): Promise<PluginEntry[]> {
+): Promise<LoadedPluginConfig> {
   return loadPluginConfig(defaultSources(options));
 }
 

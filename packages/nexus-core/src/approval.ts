@@ -381,8 +381,8 @@ export const APPROVAL_GATE_PLUGIN_NAME = 'approval-gate';
  * 工具確定性地回一則 `status: 'error'` 的 ToolMessage（fail-closed）。所以替這一列留一個
  * 「真的要關就這樣寫」的後門，會是**新增一個今天不存在的能力**，不是保留現況。
  *
- * **因此這一列不可以帶 `config`**：沒有 Config schema 卻給了 config 是當場拋
- * （見 {@link ./plugin.ts | parseEntryConfig}）。
+ * **因此這一列沒有 `config`**：沒有 Config schema，寫了也沒有作用——照 dsh 原樣交給 `apply`、不驗，產品路徑上
+ * 啟動時印一句警告（見 {@link ./plugin.ts | parseEntryConfig}）。
  */
 export const approvalGatePlugin: NexusPlugin = {
   name: APPROVAL_GATE_PLUGIN_NAME,
