@@ -384,6 +384,10 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
           clearTimeout(book.recoveredTimer);
           book.recoveredTimer = setTimeout(() => setRecovered(false), RECOVERED_NOTICE_MS);
         }
+        // **讀過的評分重讀一次**（#772），照 dsh 的 `connection/reset`：每次連上都發、第一次也算，評分外掛只重讀
+        // 不是 `cold` 的那份，冷的等人滑過再讀。斷線期間別的分頁可能改過；走 `resync` 排在路上的修改後面，
+        // 晚回來的舊清單才不會蓋掉剛寫進去的版本。
+        if (ratingsController.view.status !== 'cold') void ratingsController.resync();
         // **抓清單排在開線之後**，跟送話同一條規則：這條線除了還掛著的中斷不重播，所有的上行都等
         // 下行開好。清單本身不需要重播，但兩套順序規則比一套容易記錯。
         const listed = await client.slashList(threadId);
@@ -415,7 +419,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       controller.abort();
       setConnected(false);
     };
-  }, [client, threadId, advance, generation, scheduleRetry]);
+  }, [client, threadId, advance, generation, scheduleRetry, ratingsController]);
 
   /** 收下上行的回條：被拒就說出來，成功就把上一次的抱怨收掉。 */
   const note = useCallback((result: UplinkResult) => {
