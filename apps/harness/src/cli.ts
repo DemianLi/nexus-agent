@@ -8,9 +8,9 @@
  * 它與 [`spike/cli.ts`](./spike/cli.ts) 的分工：spike 那支綁死 Phase 0 的驗證腳本，
  * 這支收任意一句話、任意一份 plugin 清單。兩支都走 `createNexusAgent`——組裝點只有一個。
  *
- * **三件事刻意留給錯誤自己說話**：plugin 清單載不起來（重名、`requires` 缺件、`apply`
- * 拋錯）、fold 的前置條件不成立、基座擋下這份組裝，全都發生在 agent 跑起來之前，
- * 而這裡不吞：訊息原樣進 stderr，行程以非零狀態退出。**那條傳播路徑只有一條**，
+ * **三件事刻意留給錯誤自己說話**：plugin 清單起不來（必掛的列、組裝點自己加的外掛掉了；清單上可少掛的列
+ * 重名、`requires` 缺件、`apply` 拋錯只讓那一列掉、印一段警告，#751）、fold 的前置條件不成立、基座擋下這份組裝，
+ * 全都發生在 agent 跑起來之前，而這裡不吞：訊息原樣進 stderr，行程以非零狀態退出。**那條傳播路徑只有一條**，
  * 它的端到端測試也因此只有一條（見 [`cli.test.ts`](./cli.test.ts)）。
  *
  * **非零狀態有兩個值**：一次性模式撞到 agent 自己的迴圈上限是 `2`，其餘失敗是 `1`
@@ -96,6 +96,7 @@ import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js'
 import {
   assemblyDropsOf,
   auditStartupEntries,
+  dropReasonsOf,
   optionalEntriesOf,
   startupErrorFrom,
   startupWarning,
@@ -497,7 +498,8 @@ export const SESSION_LOG_OFF_DISCLOSURE =
 /**
  * 落盤沒掛的時候（清單上 `session-persistence` 那一列 `disabled: true`，
  * [#612](https://github.com/DemianLi/nexus-agent/issues/612)；或設定驗不過而掉了，#751），擋掉跟它矛盾的旗標。
- * 兩個入口共用。**訊息兩種成因都講**：掉了的那一種在這之前已經印了指名原因的警告，要改的是設定，不是 `disabled`。
+ * 兩個入口共用。**訊息照成因分開講**：掉了的那一種把原因帶在訊息裡（啟動時那段警告要到組裝完才印，拋的這一刻
+ * 還看不到），要改的是設定，不是 `disabled`。
  *
  * - **`--resume`**：續接答應呼叫端「這一次也接得回來」，而沒有落盤的話這一次一個位元組都不寫回去。
  *   照 dsh：headless 的 `--session-id` 沒有持久化服務就當場拋，理由正是「跑完會印出 id，卻在
@@ -509,18 +511,24 @@ export const SESSION_LOG_OFF_DISCLOSURE =
  *
  * @param invocation - 解析出來的呼叫（serve 沒有 `resume`）。
  * @param mounted - 這一次清單上落盤那一列有沒有掛。
+ * @param dropped - 那一列讀清單時掉了的原因（`startup-audit.ts` 的 `dropReasonsOf`）。**錯誤自己帶上**：這裡在組裝
+ *   之前拋，啟動時那段警告要等組裝完才印，拋的這一刻還沒印出來（#751）。
  * @throws 關掉了卻給了其中一個旗標。
  */
 export function assertPersistenceFlags(
   invocation: { readonly sessionLog?: string | undefined; readonly resume?: string | undefined },
   mounted: boolean,
+  dropped: readonly string[] = [],
 ): void {
   if (mounted) return;
   const off =
-    '清單上 `session-persistence` 那一列沒掛上（寫了 `disabled: true`，或設定驗不過而掉了），' +
-    '這一次會話日誌只在記憶體裡';
+    dropped.length === 0
+      ? '清單上 `session-persistence` 那一列關掉了（`disabled: true`），這一次會話日誌只在記憶體裡'
+      : `清單上 \`session-persistence\` 那一列掉了（${dropped.join('；')}），這一次會話日誌只在記憶體裡`;
   const fix =
-    '把那一列的 `disabled` 拿掉（或寫成 `false`）；設定驗不過的話照啟動時那段警告把設定改好';
+    dropped.length === 0
+      ? '把那一列的 `disabled` 拿掉（或寫成 `false`）'
+      : '照上面的原因把設定改好';
   if (invocation.resume !== undefined) {
     throw new Error(
       `--resume 接不起來：${off}——接回來之後一個位元組都不會寫回去，下一次也接不到這一段。` +
@@ -1447,7 +1455,11 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   auditStartupEntries(loaded, { live: invocation.live });
   const { plugins } = loaded;
   const persistenceMounted = startupEntryMounted(plugins, sessionPersistencePlugin);
-  assertPersistenceFlags(invocation, persistenceMounted);
+  assertPersistenceFlags(
+    invocation,
+    persistenceMounted,
+    dropReasonsOf(loaded, sessionPersistencePlugin),
+  );
   // **起動期解一次**。值不合法跟清單上其他列的毛病落在同一個時刻——跑起來之前。
   const persistenceWindow = startupSetting(plugins, sessionPersistencePlugin);
   // 真實供應商的連線值（#545）。
@@ -1524,9 +1536,9 @@ export async function runCli(options: RunCliOptions): Promise<void> {
           `接回來的模式一個位元組都影響不到。\n\n${USAGE}`,
       );
     }
-    // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。**掉了哪幾列在這裡判
+    // 重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件都在這一步發生——全在跑起來之前。**掉了哪幾列在這裡判
     // 第二次**（#751）：清單上可少掛的列自己的失敗只讓它掉；必掛的、組裝點自己加的外掛掉了，換成跟第一次同一種
-    // `StartupError`，兩次掉的一起列。
+    // `StartupError`，兩次掉的一起列；fold 的前置條件照舊原樣拋。
     built = await createCliAgent(
       {
         ...effective,

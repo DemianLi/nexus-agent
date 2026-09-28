@@ -108,6 +108,36 @@ describe('必掛的列掉了：兩個入口都起不來', () => {
   });
 });
 
+/**
+ * **組裝之前就拋的錯自己帶上掉了的原因**：啟動時那段警告要等組裝完才印（兩次合成一段），落盤那一列設定寫壞又給了
+ * `--session-log` 的話，拋的那一刻警告還沒印——錯誤只說「那一列沒掛上」，使用者看不到為什麼。
+ */
+describe('組裝之前就拋的錯', () => {
+  it('session-persistence 設定寫壞又給 --session-log：兩個入口都拋，訊息帶著那一列掉的原因', async () => {
+    const env = homeWith('- id: session-persistence\n  config:\n    windowMs: 2147483648\n');
+    const logRoot = mkdtempSync(join(tmpdir(), 'nexus-startup-audit-log-'));
+    temporary.push(logRoot);
+    const reason =
+      /^--session-log 跟設定矛盾：清單上 `session-persistence` 那一列掉了（session-persistence（@nexus\/core\/session-persistence）設定驗不過：.*windowMs/su;
+
+    const errors: string[] = [];
+    const fromCli = await runCli({
+      argv: ['--session-log', logRoot, '說點什麼'],
+      env,
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer: { log: () => undefined, error: (line) => errors.push(line) },
+    }).catch((error: unknown) => error);
+    expect((fromCli as Error).message).toMatch(reason);
+    // 拋的這一刻，那段警告確實還沒印：原因只在錯誤裡。
+    expect(errors).toEqual([]);
+
+    await expect(
+      runServe({ argv: ['--port', '0', '--session-log', logRoot], log: () => undefined, env }),
+    ).rejects.toThrow(reason);
+  });
+});
+
 describe('掉了的列算沒掛', () => {
   /**
    * 卡上的驗收：`summarization` 設定寫壞，組出來的跟寫 `disabled: true` 的那份一樣。量的是載入器記下的「沒掛上」

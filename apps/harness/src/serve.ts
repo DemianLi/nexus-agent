@@ -72,6 +72,7 @@ import {
   assemblyDropsOf,
   auditStartupEntries,
   describeDrop,
+  dropReasonsOf,
   optionalEntriesOf,
   startupErrorFrom,
   startupWarning,
@@ -327,7 +328,11 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // **落盤掛不掛也由清單講**（#612，照 dsh 的 `session-persistence-jsonl` 那一列）。關掉的話
   // 下面一個 store 都不建、日誌根也不解析，`--session-log` 跟它矛盾就當場拋——同 CLI 那一份檢查。
   const persistenceMounted = startupEntryMounted(plugins, sessionPersistencePlugin);
-  assertPersistenceFlags(invocation, persistenceMounted);
+  assertPersistenceFlags(
+    invocation,
+    persistenceMounted,
+    dropReasonsOf(loaded, sessionPersistencePlugin),
+  );
   // **在開 server 之前解析**，同 `cli.ts` 那條的理由：一個指錯地方的日誌根該在什麼都還沒起來的
   // 時候就講。同一個函式，所以「日誌不能落在 `--workspace` 底下」那條檢查兩個入口共用一份，預設值
   // （harness home 底下的 `sessions`，#444）也是同一份。

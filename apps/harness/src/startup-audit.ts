@@ -48,7 +48,7 @@
  * @module
  */
 
-import type { PluginEntry } from '@nexus/core';
+import type { NexusPlugin, PluginEntry } from '@nexus/core';
 
 import type { AssemblyDrop, AssemblyDropError } from './agent-factory.js';
 import { PluginConfigError } from './plugin-config.js';
@@ -164,6 +164,20 @@ export function startupWarning(
   assembled: readonly StartupDrop[],
 ): readonly string[] {
   return activationWarning([...loaded.dropped, ...assembled], loaded.ignoredConfig);
+}
+
+/**
+ * 讀清單那一次掉了的、屬於這顆 plugin 的列，每列一行（不帶縮排）。
+ *
+ * 給組裝之前就要拋的錯自己帶上原因：那時合成的那一段警告還沒印（要等組裝完），錯誤只講「那一列沒掛上」的話，
+ * 使用者看不到為什麼。
+ */
+export function dropReasonsOf<T>(
+  loaded: Pick<LoadedPluginConfig, 'dropped'>,
+  plugin: NexusPlugin<T>,
+): readonly string[] {
+  // 以名字比，同 `startupEntryMounted`：那一支判「沒掛」用的就是名字。
+  return loaded.dropped.filter((drop) => drop.entry?.plugin.name === plugin.name).map(describeDrop);
 }
 
 /** 一列掉了的那一行，不帶縮排。serve 每條對話組裝時才掉的列用它記進伺服器日誌。 */
