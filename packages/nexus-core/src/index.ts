@@ -108,6 +108,8 @@ export type {
   SkillSourceRegistrationPoint,
   MemorySourceRegistrationPoint,
   LifecycleRegistrationPoint,
+  PluginLogger,
+  PluginWarning,
   InvariantRegistrationPoint,
   TelemetryRegistrationPoint,
   CommandRegistrationPoint,

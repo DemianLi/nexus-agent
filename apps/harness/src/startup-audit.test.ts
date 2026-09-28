@@ -186,11 +186,11 @@ describe('判定的幾支函式', () => {
   const entry = (name: string): PluginEntry => ({ plugin: { name, apply: () => undefined } });
 
   it('沒有要講的：空陣列', () => {
-    expect(startupWarning({ dropped: [], ignoredConfig: [] }, [])).toEqual([]);
+    expect(startupWarning({ dropped: [], ignoredConfig: [], rows: new Map() }, [])).toEqual([]);
   });
 
   it('live-model 掉了：沒帶 --live 只是警告，帶了就起不來', () => {
-    const loaded = { dropped: [drop('live-model')], ignoredConfig: [] };
+    const loaded = { dropped: [drop('live-model')], ignoredConfig: [], rows: new Map() };
     expect(() => auditStartupEntries(loaded, { live: false })).not.toThrow();
     expect(startupWarning(loaded, [])[0]).toBe('警告：1 列沒有掛上，其餘照樣起來：');
     expect(() => auditStartupEntries(loaded, { live: true })).toThrow(StartupError);

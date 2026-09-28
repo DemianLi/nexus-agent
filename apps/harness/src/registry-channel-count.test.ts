@@ -81,7 +81,9 @@ const CHANNELS = {
   commands: true,
   sessions: true,
   services: true,
-  // 第七條是唯讀視圖，不是註冊點——沒有人往它註冊東西
+  // 外掛在 `apply` 裡交出警告的出口（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）。
+  logger: true,
+  // 第八條是唯讀視圖，不是註冊點——沒有人往它註冊東西
   // （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。它照樣要進這份窮舉表，
   // 因為 `satisfies` 比的是 `PluginRegistry` 的欄位集合，而它確實是一個欄位。
   disabledEntries: true,
@@ -89,8 +91,8 @@ const CHANNELS = {
 
 /** 折進 `createDeepAgent` 參數的那幾個。`registry.ts` 檔頭的「九個註冊點」。 */
 const FOLDED_CHANNELS = 9;
-/** 不折進任何參數的正交通道。`registry.ts` 檔頭的「外加七條」。 */
-const ORTHOGONAL_CHANNELS = 7;
+/** 不折進任何參數的正交通道。`registry.ts` 檔頭的「外加八條」。 */
+const ORTHOGONAL_CHANNELS = 8;
 /** 兩者相加，也就是 `PluginRegistry` 的欄位數。 */
 const TOTAL_CHANNELS = FOLDED_CHANNELS + ORTHOGONAL_CHANNELS;
 

@@ -49,6 +49,7 @@ server-qualified 形狀。（**只有乾淨的名字對得上**，被正規化�
 | `connection.url` | http | 是 | server 網址 |
 | `connection.headers` | http | 否 | 額外標頭（授權用） |
 | `toolCallTimeoutMs` | 兩者 | 否 | 一次 `tools/call` 的逾時，預設 60000 |
+| `failOnStartupError` | 兩者 | 否 | 掛上那一刻連不上、列不出工具或註冊不上時要不要讓這一列失敗，預設 `false`（見行為） |
 
 秘密一律從呼叫端的環境變數來，不寫進程式碼、設定檔或測試 fixture（見
 [`docs/standards.md`](../../docs/standards.md)）。
@@ -63,19 +64,26 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
 一個——併掉的下場是模型呼叫到另一個工具，而且沒有任何錯誤。
 
 - 兩台 server 公告同一個 raw name（例如 `search`）在各自的命名空間下共存。
-- 兩個 plugin 實例用同一個 `serverName` 會在 registry 那一層以「同層同名工具」撞掉，
-  訊息指名是清單裡哪兩個。
+- 兩個 plugin 實例用同一個 `serverName`：後掛的那一個在連線之前就失敗，訊息指名是清單裡
+  哪兩個。照 dsh 先佔名字再連線，所以這一條不受 `failOnStartupError` 管。
 - 一台 server 公告兩個同名工具，同樣撞在那一層。
 
 ## 行為
 
 - **載入期連線。** `apply` 連上 server、`tools/list`、逐個註冊，三件事都在 agent 跑起來
-  之前。連不上、列不出、註冊撞名，任何一件都讓**整份 plugin 清單載入失敗**，而不是安靜
-  地少幾個工具。
+  之前。
+- **連不上照樣掛上，照 dsh**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）。
+  連不上、列不出、註冊撞名，任何一件發生時：已經註冊的工具撤掉、連線收掉、這一列照樣掛上但
+  **這台 server 一個工具都沒有**，並經 `registry.logger` 交出一則警告。出貨的啟動程式把它印在
+  啟動時那段警告裡（「警告：N 則外掛掛上時交出的話」），`serve` 每條對話組裝時又連不上的話在
+  伺服器日誌記一行 `[組裝] thread "…" 警告：…`。這種時候不宣告 `mcp` 能力。
+- **`failOnStartupError: true` 讓這一列失敗。** 同樣三件事改成在 `apply` 裡拋：清單上的這一列
+  掉了（啟動時的警告指名它），手搭清單則整個載入失敗。`serve` 啟動時就掉了的列之後每條對話都
+  算沒掛、不再重連，要到重啟。
 - **關機收線。** plugin 經 `registry.lifecycle.onDispose()` 登記關閉連線，由組裝點的
   `dispose()` 觸發。stdio 子行程的 pipe 是活的 handle，沒收掉的話行程不會退出。
-- **`apply` 中途失敗自己收拾。** 連線開了但註冊撞名時，plugin 在拋出之前先關掉 client
-  ——那時登記還沒發生，`lifecycle` 通道接不到它。
+- **`apply` 中途失敗自己收拾。** 連線開了但註冊撞名時，plugin 先關掉 client 再收成警告或
+  拋出——那時登記還沒發生，`lifecycle` 通道接不到它。
 
 ## 明文限制
 
@@ -88,11 +96,9 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   不在 Phase 2 範圍（[#34](https://github.com/DemianLi/nexus-agent/issues/34)）。
 - **只橋接工具。** Resources 與 Prompts 沒有 harness 消費端，延後。
 - **不重連。** 連線掉了之後那台 server 的工具留在註冊表上、呼叫會失敗，直到重新組裝
-  agent。dsh 有指數退避的重連監督與 `notifications/tools/list_changed` 的重新同步；
-  deepagents 建構後不可變，工具集合換不掉，重連回來也沒有地方放。
-- **失敗即載入失敗，沒有 `failOnStartupError` 那個旋鈕。** dsh 預設連不上照樣啟動（沒有
-  工具）。nexus 的共同軸線是 fail-closed、載入期失敗，`@langchain/mcp-adapters` 的預設
-  （`onConnectionError: 'throw'`、`throwOnLoadError: true`）站在同一邊，所以照它走。
+  agent；掛上時就連不上的那台，這一次組裝都沒有它的工具。dsh 有指數退避的重連監督與
+  `notifications/tools/list_changed` 的重新同步，連上了就把工具補上；deepagents 建構後不可變，
+  工具集合換不掉，重連回來也沒有地方放。`serve` 每條對話各組裝一次，所以下一條對話會再連。
 - **結果的呈現由 adapter 決定。** 文字與圖片進 `content`、embedded resource 進 `artifact`
   是 `@langchain/mcp-adapters` 的預設，我們不改。dsh 那套「圖片要先證明這條 model route
   真的收圖片才落地」在這裡沒有對應物。
