@@ -33,6 +33,7 @@ import type {
   FeedbackService,
   InvariantError,
   PluginEntry,
+  PluginWarning,
   SessionEvent,
   SessionTelemetrySharingStatus,
 } from '@nexus/core';
@@ -859,6 +860,8 @@ export async function createCliAgent(
   attachTitle: AttachSessionTitleLlm | undefined;
   /** 這一次組裝掉了的可少掛條目（#751）；沒給 `optionalEntries` 時一律是空的。 */
   dropped: readonly AssemblyDrop[];
+  /** 外掛在 `apply` 裡交出的警告（#751），例如 MCP 連不上而照樣掛上。 */
+  warnings: readonly PluginWarning[];
 }> {
   const liveModel = invocation.liveModel ?? startupSetting(plugins, liveModelPlugin);
   const model = createCliModel(invocation.live, liveModel);
@@ -930,6 +933,7 @@ export async function createCliAgent(
     feedback,
     services,
     dropped,
+    warnings,
   } = await createNexusAgent({
     model,
     plugins: [
@@ -987,6 +991,7 @@ export async function createCliAgent(
     workspaceRoot,
     attachTitle,
     dropped,
+    warnings,
   };
 }
 
@@ -1565,7 +1570,11 @@ export async function runCli(options: RunCliOptions): Promise<void> {
         : error;
     });
     // 兩次合起來印一段到標準錯誤，只印這一次（卡上第 5 項）。
-    for (const line of startupWarning(loaded, assemblyDropsOf(loaded, built.dropped))) {
+    for (const line of startupWarning(
+      loaded,
+      assemblyDropsOf(loaded, built.dropped),
+      built.warnings,
+    )) {
       printer.error(line);
     }
     // **對話從日誌推回模型**（#306），在第一輪之前。放在 try 裡：灌不進去要放掉續接那把租約。

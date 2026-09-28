@@ -48,7 +48,7 @@
  * @module
  */
 
-import type { NexusPlugin, PluginEntry } from '@nexus/core';
+import type { NexusPlugin, PluginEntry, PluginWarning } from '@nexus/core';
 
 import type { AssemblyDrop, AssemblyDropError } from './agent-factory.js';
 import { PluginConfigError } from './plugin-config.js';
@@ -153,17 +153,36 @@ export function startupErrorFrom(
 
 /**
  * 兩次合起來要印的那一段（可能是空的），照 dsh 的 `activationDiagnostic`。**呼叫端只印一次**：CLI 印到標準錯誤，
- * serve 印到伺服器日誌、在綁 port 之前。
+ * serve 印到伺服器日誌、在綁 port 之前。外掛在 `apply` 裡交出的警告（`registry.logger`）也印在同一段（卡上第 7 項）。
  *
  * @param loaded - `loadDefaultPlugins` 的結果。
  * @param assembled - 組裝那一次掉的（{@link assemblyDropsOf}）。
+ * @param warnings - 組裝那一次外掛交出的警告。
  * @returns 那一段警告的每一行；沒有要講的就是空陣列。
  */
 export function startupWarning(
-  loaded: Pick<LoadedPluginConfig, 'dropped' | 'ignoredConfig'>,
+  loaded: Pick<LoadedPluginConfig, 'dropped' | 'ignoredConfig' | 'rows'>,
   assembled: readonly StartupDrop[],
+  warnings: readonly PluginWarning[] = [],
 ): readonly string[] {
-  return activationWarning([...loaded.dropped, ...assembled], loaded.ignoredConfig);
+  const lines = [...activationWarning([...loaded.dropped, ...assembled], loaded.ignoredConfig)];
+  if (warnings.length > 0) {
+    lines.push(`警告：${String(warnings.length)} 則外掛掛上時交出的話：`);
+    for (const line of describeWarnings(loaded, warnings)) lines.push(`  ${line}`);
+  }
+  return lines;
+}
+
+/** 外掛交出的每一則警告一行（不帶縮排）：是誰（id 與模組名）、說了什麼。 */
+export function describeWarnings(
+  loaded: Pick<LoadedPluginConfig, 'rows'>,
+  warnings: readonly PluginWarning[],
+): readonly string[] {
+  const modules = new Map([...loaded.rows.values()].map((row) => [row.id, row.module]));
+  return warnings.map(
+    ({ origin, message }) =>
+      `${origin.id}（${modules.get(origin.id) ?? ASSEMBLY_POINT}）：${message}`,
+  );
 }
 
 /**
