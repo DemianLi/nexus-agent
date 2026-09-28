@@ -90,6 +90,15 @@ const SILENT_THREAD_FEED: Pick<WireClient, 'openThreadFeed'> = {
   openThreadFeed: () => new Promise<never>(() => undefined),
 };
 
+/**
+ * 按內容搜尋（#631）這一檔沒有接。**用 spread 放進 `WireClient` 字面量**，理由同 `UNWIRED_FILE_REFERENCES`：
+ * `WireClient` 還沒有 `searchThreads` 時直接寫成屬性會被擋，有了之後照樣成立。`Promise<never>` 接得上任何回傳型別。
+ * #631 合了之後可以收成一般屬性。
+ */
+const UNWIRED_THREAD_SEARCH = {
+  searchThreads: () => new Promise<never>(() => undefined),
+};
+
 let seq = 0;
 
 function frame(method: string, namespace: readonly string[], data: unknown): Event {
@@ -173,6 +182,7 @@ function fakeClient(
   const client: WireClient = {
     ...UNWIRED_FILE_REFERENCES,
     ...SILENT_THREAD_FEED,
+    ...UNWIRED_THREAD_SEARCH,
     slashList: async () => ({ kind: 'ok', commands: slash.commands ?? [] }),
     slashRun: async (_threadId, line) => {
       slashed.push(line);
@@ -348,6 +358,7 @@ describe('對話介面', () => {
     const client: WireClient = {
       ...UNWIRED_FILE_REFERENCES,
       ...SILENT_THREAD_FEED,
+      ...UNWIRED_THREAD_SEARCH,
       openEvents: async () => {
         throw new Error('下行開不起來：502');
       },
