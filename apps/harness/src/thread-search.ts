@@ -39,8 +39,11 @@
  * 推理不收（`extraction.ts` 的 `reasoning` 回 `[]`；`.text` 只取文字區塊）；工具結果、標題不收。
  *
  * **推不出來的日誌**（格式 9 以前、壓縮對不上）：沒辦法分哪幾則被換掉，**整份都算看得到**，上面那幾種事件全收。
- * dsh 摺不出 surface 時拋 `SESSION_QUERY_INVALID_SURFACE`，整次搜尋失敗；我們不讓一份舊日誌拖垮整次搜尋。**日誌讀不懂**
- * （中間壞掉）的那一條不收，同列表不擋它、點進去由續接講原因。
+ * dsh 摺不出 surface 時拋 `SESSION_QUERY_INVALID_SURFACE`，整次搜尋失敗；我們不讓一份舊日誌拖垮整次搜尋。日誌中間壞掉的
+ * 略過壞的那幾行，同列表不擋它。
+ *
+ * **整份解析、重播，不先篩行**：只解析帶訊息字樣的那幾行、沒壓縮過就不重播，量過只快 6%（合成的 1000 條、343 MB，
+ * 第一次搜尋 2.7 秒對 2.85 秒），不值得多一條要跟重播保持一致的路。
  *
  * ## 怎麼比：偏離
  *
@@ -189,16 +192,20 @@ function messageText(message: BaseMessage): string {
   );
 }
 
-/** 推不出歷史的那種日誌：上面表裡那幾種事件全收。 */
+/** 推不出歷史的那種日誌：上面表裡那幾種事件全收。形狀不對的那一顆略過（壞掉的日誌逐行撿回來的會有）。 */
 function everyMessage(events: readonly SessionEvent[]): [BaseMessage, SessionEvent][] {
   const found: [BaseMessage, SessionEvent][] = [];
   for (const event of events) {
-    if (event.type === 'turn/start') {
-      if (event.data.kind !== 'resume') found.push([new HumanMessage(event.data.text), event]);
-    } else if (event.type === 'user/message' || event.type === 'assistant/message') {
-      found.push([fromLoggedMessage(event.data.message), event]);
-    } else if (event.type === 'compaction/summary' && event.data.summary !== undefined) {
-      found.push([fromLoggedMessage(event.data.summary), event]);
+    try {
+      if (event.type === 'turn/start') {
+        if (event.data.kind !== 'resume') found.push([new HumanMessage(event.data.text), event]);
+      } else if (event.type === 'user/message' || event.type === 'assistant/message') {
+        found.push([fromLoggedMessage(event.data.message), event]);
+      } else if (event.type === 'compaction/summary' && event.data.summary !== undefined) {
+        found.push([fromLoggedMessage(event.data.summary), event]);
+      }
+    } catch {
+      continue;
     }
   }
   return found;
@@ -250,6 +257,7 @@ type Stamp = string;
 interface Prepared {
   readonly db: DatabaseSync;
   readonly insert: StatementSync;
+  /** 按列號刪。**不按 `thread_id` 刪**：那一欄在 FTS5 裡沒有索引，每刪一條就整表掃一次，第一次建索引變成平方（實測 1000 條 17 秒）。 */
   readonly remove: StatementSync;
 }
 
@@ -258,6 +266,8 @@ export class ThreadSearch {
   readonly #options: ThreadSearchOptions;
   #prepared: Promise<Prepared> | undefined;
   readonly #stamps = new Map<string, Stamp>();
+  /** 每條 thread 佔了哪幾列，刪的時候用。跟 `#stamps` 同進同出。 */
+  readonly #rows = new Map<string, readonly (number | bigint)[]>();
   /** 對帳與查詢排成一條隊，同 dsh 的 `_serialized`。 */
   #queue: Promise<unknown> = Promise.resolve();
   #closed = false;
@@ -344,7 +354,7 @@ export class ThreadSearch {
     return {
       db,
       insert: db.prepare('INSERT INTO docs (thread_id, seq, time, text) VALUES (?, ?, ?, ?)'),
-      remove: db.prepare('DELETE FROM docs WHERE thread_id = ?'),
+      remove: db.prepare('DELETE FROM docs WHERE rowid = ?'),
     };
   }
 
@@ -354,35 +364,54 @@ export class ThreadSearch {
     visible: readonly { readonly threadId: string; readonly logPath: string }[],
     signal?: AbortSignal,
   ): Promise<void> {
-    const seen = new Set<string>();
-    const changed: { threadId: string; stamp: Stamp; documents: SearchDocument[] }[] = [];
-    for (const { threadId, logPath } of visible) {
-      signal?.throwIfAborted();
-      seen.add(threadId);
-      const { stamp, body } = await readIfChanged(logPath, this.#stamps.get(threadId));
-      if (body === undefined) continue;
-      changed.push({ threadId, stamp, documents: documentsOf(threadId, body) });
-    }
-    const gone = [...this.#stamps.keys()].filter((threadId) => !seen.has(threadId));
-    if (changed.length === 0 && gone.length === 0) return;
     const { db, insert, remove } = prepared;
-    db.exec('BEGIN');
+    const seen = new Set(visible.map(({ threadId }) => threadId));
+    const gone = [...this.#stamps.keys()].filter((threadId) => !seen.has(threadId));
+    /** 這一次寫進去的。交易成功之後才併進 `#stamps`／`#rows`。 */
+    const written = new Map<string, { stamp: Stamp; rows: (number | bigint)[] }>();
+    // **邊讀邊寫**：讀一條、寫一條，不把全部的內容先收在手上。一條一條讀進來的本文用完就丟，第一次建索引時的記憶體
+    // 高點只多一條的份。整段包在一個交易裡，同 dsh 的 `BEGIN IMMEDIATE`：中途失敗或中止就整段不算。
+    let open = false;
+    const begin = (): void => {
+      if (open) return;
+      db.exec('BEGIN');
+      open = true;
+    };
     try {
-      for (const threadId of gone) remove.run(threadId);
-      for (const { threadId, documents } of changed) {
-        remove.run(threadId);
-        for (const document of documents) {
-          insert.run(threadId, document.seq, document.time, document.text);
-        }
+      for (const threadId of gone) {
+        begin();
+        for (const rowid of this.#rows.get(threadId) ?? []) remove.run(rowid);
       }
-      db.exec('COMMIT');
+      for (const { threadId, logPath } of visible) {
+        signal?.throwIfAborted();
+        const { stamp, body } = await readIfChanged(logPath, this.#stamps.get(threadId));
+        if (body === undefined) continue;
+        const documents = documentsOf(threadId, body);
+        begin();
+        for (const rowid of this.#rows.get(threadId) ?? []) remove.run(rowid);
+        const rows: (number | bigint)[] = [];
+        for (const document of documents) {
+          rows.push(
+            insert.run(threadId, document.seq, document.time, document.text).lastInsertRowid,
+          );
+        }
+        written.set(threadId, { stamp, rows });
+      }
+      if (open) db.exec('COMMIT');
     } catch (error: unknown) {
-      db.exec('ROLLBACK');
+      if (open) db.exec('ROLLBACK');
+      if (signal?.aborted === true || error instanceof ThreadSearchError) throw error;
       throw new ThreadSearchError('failed', `寫不進搜尋索引：${String(error)}`, { cause: error });
     }
     // 交易成功之後才記，失敗的那幾條下一次搜尋再讀一次，同 dsh 失敗時 ROLLBACK、下一次再試。
-    for (const threadId of gone) this.#stamps.delete(threadId);
-    for (const { threadId, stamp } of changed) this.#stamps.set(threadId, stamp);
+    for (const threadId of gone) {
+      this.#stamps.delete(threadId);
+      this.#rows.delete(threadId);
+    }
+    for (const [threadId, { stamp, rows }] of written) {
+      this.#stamps.set(threadId, stamp);
+      this.#rows.set(threadId, rows);
+    }
   }
 
   #query(db: DatabaseSync, query: string): ThreadSearchResult {
@@ -454,12 +483,29 @@ async function readIfChanged(
   }
 }
 
-/** 一份日誌本文裡搜得到的。讀不懂的整條不收，見檔頭。 */
-function documentsOf(threadId: string, body: string): SearchDocument[] {
+/**
+ * 一份日誌本文裡搜得到的。**中間壞掉的**（`parseJsonlSessionBody` 拋 {@link SessionCorruptionError}）逐行解析、略過解析不動的
+ * 那幾行，其餘照一般規則，同列表不擋它。
+ *
+ * @param threadId - 只給錯誤訊息用。
+ */
+export function documentsOf(threadId: string, body: string): SearchDocument[] {
+  let events: SessionEvent[];
   try {
-    return searchDocuments(parseJsonlSessionBody(threadId, body).events);
+    events = parseJsonlSessionBody(threadId, body).events;
   } catch (error: unknown) {
-    if (error instanceof SessionCorruptionError) return [];
-    throw error;
+    if (!(error instanceof SessionCorruptionError)) throw error;
+    events = [];
+    for (const line of body.split('\n')) {
+      try {
+        const value = JSON.parse(line) as Partial<SessionEvent> | null;
+        if (typeof value?.seq === 'number' && typeof value.time === 'number') {
+          events.push(value as SessionEvent);
+        }
+      } catch {
+        continue;
+      }
+    }
   }
+  return searchDocuments(events);
 }

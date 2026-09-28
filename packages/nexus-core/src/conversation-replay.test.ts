@@ -403,7 +403,9 @@ describe('壓縮', () => {
     expect(
       replay.messages.map((message) => {
         const seq = seqOf.get(message);
-        return seq === undefined ? `補:${message.text.slice(0, 10)}` : `${typeOf.get(seq)}:${message.text}`;
+        return seq === undefined
+          ? `補:${message.text.slice(0, 10)}`
+          : `${typeOf.get(seq)}:${message.text}`;
       }),
     ).toEqual([
       'compaction/summary:摘要一',

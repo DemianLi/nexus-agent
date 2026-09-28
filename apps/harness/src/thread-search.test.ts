@@ -19,6 +19,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  documentsOf,
   makeSnippet,
   searchDocuments,
   THREAD_SEARCH_DISABLED_MESSAGE,
@@ -160,7 +161,8 @@ describe('搜得到哪幾則（searchDocuments）', () => {
     const documents = searchDocuments(log.events);
     expect(documents.map((document) => document.text)).toEqual(['B', '三', 'C', '摘要']);
     // 帶的是各自那一顆的 seq，不是推出來的串裡的位置。
-    const seqOf = (type: string, nth = 0) => log.events.filter((event) => event.type === type)[nth]!.seq;
+    const seqOf = (type: string, nth = 0) =>
+      log.events.filter((event) => event.type === type)[nth]!.seq;
     expect(documents.map((document) => document.seq)).toEqual([
       seqOf('assistant/message', 1),
       seqOf('turn/start', 2),
@@ -183,6 +185,26 @@ describe('搜得到哪幾則（searchDocuments）', () => {
       'A',
       '摘要',
     ]);
+  });
+});
+
+describe('中間壞掉的日誌（documentsOf）', () => {
+  it('壞的那幾行略過，其餘照一般規則：壓縮換掉的照樣不收', () => {
+    const log = new SessionLog('t');
+    chat(log, '一', 'A');
+    // 回覆「A」之後壓縮：那一刻推出來兩則，`messagesBefore` 是 1，切掉「一」。
+    log.append('compaction/summary', {
+      cutoffIndex: 1,
+      messagesBefore: 1,
+      filePath: null,
+      summary: toLoggedMessage(new HumanMessage('摘要')),
+    });
+    chat(log, '二', 'B');
+    const lines = jsonl(log.events).split('\n');
+    const torn = [...lines.slice(0, 3), '{壞掉', ...lines.slice(3)].join('\n');
+    const texts = (body: string) => documentsOf('t', body).map((document) => document.text);
+    expect(texts(jsonl(log.events))).toEqual(['A', '摘要', '二', 'B']);
+    expect(texts(torn)).toEqual(['A', '摘要', '二', 'B']);
   });
 });
 
@@ -300,15 +322,15 @@ describe('ThreadSearch', () => {
     engine.close();
   });
 
-  it('只有 header 的、日誌中間壞掉的：不收，也不拖垮其他條', async () => {
+  it('只有 header 的沒東西；日誌中間壞掉的：壞的那行略過、其餘照收（同列表），不拖垮其他條', async () => {
     const directory = await dir();
     await writeThread(directory, 'good', said('好好的一句').events);
     await writeThread(directory, 'blank', []);
     await rm(join(directory, 'blank.jsonl'));
-    await writeThread(directory, 'torn', said('好好的一句').events);
+    await writeThread(directory, 'torn', []);
     await writeFile(join(directory, 'torn.jsonl'), `{壞掉\n${jsonl(said('好好的一句').events)}`);
     const engine = search(directory);
-    expect(await ids(engine, '好好的')).toEqual(['good']);
+    expect((await ids(engine, '好好的')).sort()).toEqual(['good', 'torn']);
     engine.close();
   });
 
