@@ -9,8 +9,8 @@
  */
 
 import { createRegistry } from './registry.js';
-import type { InternalPluginRegistry } from './registry.js';
-import { formatOrigin, resolveEntries } from './plugin.js';
+import type { Disposer, InternalPluginRegistry, PluginRegistry } from './registry.js';
+import { formatOrigin, resolveEntries, resolveEntriesPerEntry } from './plugin.js';
 import type { PluginEntry, PluginOrigin, ResolvedPluginEntry } from './plugin.js';
 
 export interface LoadResult {
@@ -24,12 +24,65 @@ export interface LoadResult {
    */
   entries: readonly ResolvedPluginEntry[];
   /**
+   * 這一次掉了的條目，依發生順序。**只有 {@link LoadOptions.perEntry} 開著時才可能不空**：預設模式下一列
+   * 失敗就整個拋，走不到回傳。
+   */
+  dropped: readonly DroppedEntry[];
+  /**
    * 收掉 plugin 經 `lifecycle.onDispose()` 登記的東西，逆序、冪等。
    *
    * **不碰 registry 上的註冊內容**——agent 建構完之後那些是基座的了，撤掉也追不回去。
    * 這裡收的是 plugin 自己開的活資源（MCP 的 stdio 子行程是第一個）。
    */
   dispose: () => Promise<void>;
+}
+
+/** 一列掉在哪一步。 */
+export type DropStage = 'config' | 'apply' | 'requires';
+
+/** 逐列掉模式下掉了的一列。 */
+export interface DroppedEntry {
+  readonly origin: PluginOrigin;
+  readonly stage: DropStage;
+  /** 指名那一列的完整訊息，跟預設模式下同一種失敗拋的訊息同一句。 */
+  readonly message: string;
+  readonly cause: unknown;
+}
+
+export interface LoadOptions {
+  /**
+   * **逐列掉**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)），照 dsh 的載入器：一列自己的失敗只讓
+   * 那一列掉，其他列照樣掛上，掉了哪幾列從 {@link LoadResult.dropped} 讀。
+   *
+   * dsh 的載入器本身不管嚴不嚴，嚴格的語意由用它的那一方持有：app-boot 全部結算之後才套必掛名單
+   * （dsh `packages/boot/app-boot/README.zh.md:137`，`477b4f4`）。所以**哪幾列掉了要整個失敗，由呼叫端判**，
+   * 不在這裡。呼叫端判出要整個失敗時，自己 {@link LoadResult.dispose}。
+   *
+   * 一列自己的失敗有三種，各對到 {@link DropStage}：
+   *
+   * - `config`：設定驗不過。
+   * - `apply`：`apply` 拋錯，或 {@link afterApply} 拋錯。照預設模式先撤掉它自己的註冊，但**不收其他列的資源**。
+   * - `requires`：宣告要的能力或服務沒人提供。**連鎖照 dsh**：一列掉了，要用它服務的列也掉
+   *   （dsh `packages/boot/app-boot/README.zh.md:109`）。它的 `apply` 已經跑完、可能開了資源，所以先跑它自己登記的
+   *   清理，再撤它的註冊。dsh 的可少掛列在這一格是等著（`:103`）；我們的載入一趟到底、表達不出等待
+   *   （`.docs/development-plan.md` 已登記），退到那一列掉了。
+   *
+   * 整份清單的性質照舊整個拋：條目形狀不合法、兩個條目寫了同一個 id（dsh 失敗表第一列，`:96`）。
+   *
+   * 掉了的列**算沒掛**，跟 `disabled: true` 一樣經 `markDisabled` 標記，折疊那側照停用處理。
+   *
+   * 省略即預設模式：一列失敗就整個失敗，手搭清單的呼叫端靠它。
+   */
+  readonly perEntry?: boolean;
+  /**
+   * 每一列 `apply` 跑完之後的檢查，拋錯就算那一列 `apply` 失敗（訊息裡講的是它拋的那一句）。
+   *
+   * 給只有呼叫端知道的規則用，例如撞到基座保留的工具名：名單在 harness，載入器不知道。
+   *
+   * @param registry - 載入中的 registry。
+   * @param origin - 剛跑完 `apply` 的那一列。
+   */
+  readonly afterApply?: (registry: PluginRegistry, origin: PluginOrigin) => void;
 }
 
 /**
@@ -43,14 +96,19 @@ export interface LoadResult {
  * 它仍然佔著自己的 id 與回傳的 `entries` 裡的位置，理由見
  * {@link ../plugin.ts | PluginEntry.disabled}。
  *
+ * 逐列掉的模式見 {@link LoadOptions.perEntry}。
+ *
  * @param plugins - 待載入的條目清單，順序有意義。
  * @param registry - 要載入進去的 registry，省略即開一個新的。
+ * @param options - 省略即預設模式。
  * @returns 載入結果。
  */
 export async function loadPlugins(
   plugins: readonly PluginEntry[],
   registry: InternalPluginRegistry = createRegistry(),
+  options: LoadOptions = {},
 ): Promise<LoadResult> {
+  if (options.perEntry === true) return loadPerEntry(plugins, registry, options);
   // **整份清單先解析完才開始跑。** 補 id、抓重複 id 與驗設定都是整份清單的性質，而且這三種
   // 失敗要發生在任何 `apply` 之前——已經有 plugin 掛上去之後才發現身分或設定是壞的，那些
   // 註冊留在 registry 上就沒有名字可以指。
@@ -75,6 +133,7 @@ export async function loadPlugins(
     try {
       // `config` 是 `resolveEntries` 驗過的那一份（沒有 `Config` 的 plugin 是 `undefined`）。
       await plugin.apply(tracked, config);
+      options.afterApply?.(registry, origin);
     } catch (error) {
       for (const undo of undos.reverse()) undo();
       // **註冊內容留著、活資源不留。** 先前成功的 plugin 的註冊留在 registry 上是刻意的
@@ -100,7 +159,116 @@ export async function loadPlugins(
     await disposeAll(registry).catch(() => {});
     throw error;
   }
-  return { registry, entries, dispose: () => disposeAll(registry) };
+  return { registry, entries, dropped: [], dispose: () => disposeAll(registry) };
+}
+
+/** 掛上了、還可能因 `requires` 連鎖掉的一列。 */
+interface Mounted {
+  readonly entry: ResolvedPluginEntry;
+  readonly undos: (() => void)[];
+  readonly disposers: Disposer[];
+}
+
+/** {@link LoadOptions.perEntry} 的那一條路。 */
+async function loadPerEntry(
+  plugins: readonly PluginEntry[],
+  registry: InternalPluginRegistry,
+  options: LoadOptions,
+): Promise<LoadResult> {
+  const resolutions = resolveEntriesPerEntry(plugins);
+  const dropped: DroppedEntry[] = [];
+  const drop = (entry: DroppedEntry): void => {
+    dropped.push(entry);
+    registry.markDisabled(entry.origin.name);
+  };
+  const mounted: Mounted[] = [];
+
+  for (const { plugin, origin, disabled, config, configError } of resolutions) {
+    if (disabled) {
+      registry.markDisabled(plugin.name);
+      continue;
+    }
+    if (configError !== undefined) {
+      drop({ origin, stage: 'config', message: configError.message, cause: configError });
+      continue;
+    }
+    const undos: (() => void)[] = [];
+    const disposers: Disposer[] = [];
+    const tracked = trackUndo(registry, undos, disposers);
+    const leave = registry.enter(origin);
+    try {
+      await plugin.apply(tracked, config);
+      options.afterApply?.(registry, origin);
+      mounted.push({ entry: { plugin, origin, disabled, config }, undos, disposers });
+    } catch (error) {
+      for (const undo of undos.reverse()) undo();
+      const reason = error instanceof Error ? error.message : String(error);
+      drop({
+        origin,
+        stage: 'apply',
+        message: `${formatOrigin(origin)} 的 apply 失敗，它註冊的東西已全數撤銷 — ${reason}`,
+        cause: error,
+      });
+    } finally {
+      leave();
+    }
+  }
+
+  // **連鎖到不再有人掉為止**：一列掉了，它提供的能力與服務跟著撤掉，要用它們的下一輪才看得到。
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const item of [...mounted]) {
+      const missing = (item.entry.plugin.requires ?? []).filter(
+        (capability) =>
+          !registry.capabilities.has(capability) &&
+          registry.services.provider(capability) === undefined,
+      );
+      if (missing.length === 0) continue;
+      mounted.splice(mounted.indexOf(item), 1);
+      const cleanup = await runOwn(item.disposers);
+      for (const undo of item.undos.reverse()) undo();
+      const gone = dropped.map((entry) => formatOrigin(entry.origin));
+      const hint = gone.length === 0 ? '' : `。這一次掉了的條目：${gone.join('、')}`;
+      drop({
+        origin: item.entry.origin,
+        stage: 'requires',
+        message:
+          `${formatOrigin(item.entry.origin)} 需要能力 ${missing.map((name) => `"${name}"`).join('、')}，` +
+          `沒有人提供，它註冊的東西已全數撤銷${hint}${cleanup}`,
+        cause: undefined,
+      });
+      changed = true;
+    }
+  }
+
+  return {
+    registry,
+    entries: resolutions.map(({ plugin, origin, disabled, config }) => ({
+      plugin,
+      origin,
+      disabled,
+      config,
+    })),
+    dropped,
+    dispose: () => disposeAll(registry),
+  };
+}
+
+/**
+ * 逆序跑完一列自己登記的清理，失敗不拋：要掉的那一列已經在掉了，清理失敗附在它的訊息後面。
+ *
+ * @returns 空字串，或一段接在訊息後面的說明。
+ */
+async function runOwn(disposers: readonly Disposer[]): Promise<string> {
+  const reasons: string[] = [];
+  for (const dispose of [...disposers].reverse()) {
+    try {
+      await dispose();
+    } catch (error) {
+      reasons.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  return reasons.length === 0 ? '' : `；收掉它開的資源時也失敗了：${reasons.join('；')}`;
 }
 
 /**
@@ -157,6 +325,7 @@ async function disposeAll(registry: InternalPluginRegistry): Promise<void> {
 function trackUndo(
   registry: InternalPluginRegistry,
   undos: (() => void)[],
+  disposers?: Disposer[],
 ): InternalPluginRegistry {
   const remember = (undo: () => void): (() => void) => {
     undos.push(undo);
@@ -206,7 +375,11 @@ function trackUndo(
     },
     lifecycle: {
       ...registry.lifecycle,
-      onDispose: (dispose) => remember(registry.lifecycle.onDispose(dispose)),
+      onDispose: (dispose) => {
+        // 逐列掉模式要記下是誰的清理：因 `requires` 掉的那一列 `apply` 已經跑完，要先跑它自己的清理再撤。
+        disposers?.push(dispose);
+        return remember(registry.lifecycle.onDispose(dispose));
+      },
     },
     telemetry: {
       ...registry.telemetry,
