@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { SESSION_LOG_FORMAT_VERSION, SessionLog, toLoggedMessage } from '@nexus/core';
-import type { SessionEvent } from '@nexus/core';
+import type { SessionEvent, SessionStore } from '@nexus/core';
 import {
   THREAD_SEARCH_QUERY_MAX_LENGTH,
   THREAD_SEARCH_RESULT_LIMIT,
@@ -365,6 +365,32 @@ describe('ThreadSearch', () => {
     const engine = search(directory);
     expect((await ids(engine, '好好的')).sort()).toEqual(['good', 'torn']);
     engine.close();
+  });
+
+  it('列到一半被中止：拋訊號的 reason，不包成「列不出來」；後端真的壞了才是 failed', async () => {
+    const controller = new AbortController();
+    const reason = new Error('不搜了');
+    const listing = (fail: () => never): SessionStore => ({
+      create: () => {
+        throw new Error('搜尋不該開新的');
+      },
+      resume: () => Promise.reject(new Error('搜尋不該續接')),
+      open: () => Promise.reject(new Error('還沒列完')),
+      list: () => Promise.resolve().then(fail),
+    });
+    const aborted = search(undefined, {
+      store: listing(() => {
+        controller.abort(reason);
+        throw reason;
+      }),
+    });
+    await expect(aborted.search('什麼', controller.signal)).rejects.toBe(reason);
+    const broken = search(undefined, {
+      store: listing(() => {
+        throw new Error('讀不到目錄');
+      }),
+    });
+    await expect(broken.search('什麼')).rejects.toMatchObject({ kind: 'failed' });
   });
 
   describe('先後：查詢 → 沒東西可搜 → 不開（同 dsh `list.ts:163-266`）', () => {

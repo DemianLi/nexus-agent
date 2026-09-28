@@ -300,7 +300,7 @@
 | T-16 | A2A | **dsh 也沒有** | 框架要、dsh 也沒有 | 沒有 | — |
 | T-17 | tool search／漸進披露 | **dsh 也沒有** | 框架要、dsh 也沒有 | 沒有 | — |
 | T-18 | 把 agent 當 MCP server | **dsh 也沒有** | 框架要、dsh 也沒有 | 沒有 | — |
-| T-19 | 會話續接、列表、租約 | **完成** | 有 | 有-預設 | — |
+| T-19 | 會話續接、列表、租約 | **完成** | 有 | 有-預設 | #665（2026-09-29 落地：列表與內容搜尋改經 `SessionStore` 的 `list`／`open(id, 'read')`，檔名與 header 規則只留在 JSONL 後端） |
 | T-20 | 會話標題（含 LLM 生成標題 session-title-llm） | **部分**（改判） | 部分；LLM 標題未判（小） | 部分：70357bb 只有規則回退 fallbackThreadTitle（列表冷讀時推，同 dsh fallbackSessionTitle）；LLM 首句標題沒有，已由 #650（OPEN、ready-for-agent，2026-09-26 demian 拍板拆卡）追蹤 | 基準之後由 PR #658 做完（#650 已關），走另一顆模型的選配在 #657 |
 | T-21 | 斜線命令 | **完成** | 有 | 有-預設 | — |
 | T-22 | 產品路徑上的示範工具 echo（判過：刻意多掛） | **dsh 也沒有**（改判） | 判過：刻意 | 有-預設 | #454 |

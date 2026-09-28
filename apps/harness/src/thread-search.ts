@@ -301,6 +301,8 @@ export class ThreadSearch {
     try {
       visible = await listVisibleThreads(store, this.#options.cwd, signal);
     } catch (error: unknown) {
+      // 列到一半被中止：拋的是訊號的 reason，不是「列不出來」，同對帳那一段。
+      if (signal?.aborted === true) throw error;
       throw new ThreadSearchError('failed', `以前的 thread 列不出來：${String(error)}`, {
         cause: error,
       });
