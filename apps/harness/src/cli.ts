@@ -8,9 +8,9 @@
  * 它與 [`spike/cli.ts`](./spike/cli.ts) 的分工：spike 那支綁死 Phase 0 的驗證腳本，
  * 這支收任意一句話、任意一份 plugin 清單。兩支都走 `createNexusAgent`——組裝點只有一個。
  *
- * **三件事刻意留給錯誤自己說話**：plugin 清單載不起來（重名、`requires` 缺件、`apply`
- * 拋錯）、fold 的前置條件不成立、基座擋下這份組裝，全都發生在 agent 跑起來之前，
- * 而這裡不吞：訊息原樣進 stderr，行程以非零狀態退出。**那條傳播路徑只有一條**，
+ * **三件事刻意留給錯誤自己說話**：plugin 清單起不來（必掛的列、組裝點自己加的外掛掉了；清單上可少掛的列
+ * 重名、`requires` 缺件、`apply` 拋錯只讓那一列掉、印一段警告，#751）、fold 的前置條件不成立、基座擋下這份組裝，
+ * 全都發生在 agent 跑起來之前，而這裡不吞：訊息原樣進 stderr，行程以非零狀態退出。**那條傳播路徑只有一條**，
  * 它的端到端測試也因此只有一條（見 [`cli.test.ts`](./cli.test.ts)）。
  *
  * **非零狀態有兩個值**：一次性模式撞到 agent 自己的迴圈上限是 `2`，其餘失敗是 `1`
@@ -77,10 +77,10 @@ import { PLAN_COMMAND_NAME, recordedPlanMode } from '@nexus/plugin-plan-mode';
 import { createWorkspaceChanges, WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 
-import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
+import { AssemblyDropError, createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
 import { driveGoalRound } from './goal-driver.js';
 import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
-import type { NexusAgentHandle } from './agent-factory.js';
+import type { AssemblyDrop, NexusAgentHandle } from './agent-factory.js';
 import { isSandboxMode, SANDBOX_MODES, ContainedFilesystemBackend } from './contained-backend.js';
 import { createSandboxPolicyPlugin } from '@nexus/plugin-sandbox-policy';
 import {
@@ -93,7 +93,14 @@ import { createLiveModel, loadLiveEnvIfNeeded, DEFAULT_LIVE_MODEL_ID } from './l
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { createFileReferencePlugin } from './file-references.js';
 import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js';
-import { auditStartupEntries } from './startup-audit.js';
+import {
+  assemblyDropsOf,
+  auditStartupEntries,
+  dropReasonsOf,
+  optionalEntriesOf,
+  startupErrorFrom,
+  startupWarning,
+} from './startup-audit.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
@@ -491,7 +498,8 @@ export const SESSION_LOG_OFF_DISCLOSURE =
 /**
  * 落盤沒掛的時候（清單上 `session-persistence` 那一列 `disabled: true`，
  * [#612](https://github.com/DemianLi/nexus-agent/issues/612)；或設定驗不過而掉了，#751），擋掉跟它矛盾的旗標。
- * 兩個入口共用。**訊息兩種成因都講**：掉了的那一種在這之前已經印了指名原因的警告，要改的是設定，不是 `disabled`。
+ * 兩個入口共用。**訊息照成因分開講**：掉了的那一種把原因帶在訊息裡（啟動時那段警告要到組裝完才印，拋的這一刻
+ * 還看不到），要改的是設定，不是 `disabled`。
  *
  * - **`--resume`**：續接答應呼叫端「這一次也接得回來」，而沒有落盤的話這一次一個位元組都不寫回去。
  *   照 dsh：headless 的 `--session-id` 沒有持久化服務就當場拋，理由正是「跑完會印出 id，卻在
@@ -503,18 +511,24 @@ export const SESSION_LOG_OFF_DISCLOSURE =
  *
  * @param invocation - 解析出來的呼叫（serve 沒有 `resume`）。
  * @param mounted - 這一次清單上落盤那一列有沒有掛。
+ * @param dropped - 那一列讀清單時掉了的原因（`startup-audit.ts` 的 `dropReasonsOf`）。**錯誤自己帶上**：這裡在組裝
+ *   之前拋，啟動時那段警告要等組裝完才印，拋的這一刻還沒印出來（#751）。
  * @throws 關掉了卻給了其中一個旗標。
  */
 export function assertPersistenceFlags(
   invocation: { readonly sessionLog?: string | undefined; readonly resume?: string | undefined },
   mounted: boolean,
+  dropped: readonly string[] = [],
 ): void {
   if (mounted) return;
   const off =
-    '清單上 `session-persistence` 那一列沒掛上（寫了 `disabled: true`，或設定驗不過而掉了），' +
-    '這一次會話日誌只在記憶體裡';
+    dropped.length === 0
+      ? '清單上 `session-persistence` 那一列關掉了（`disabled: true`），這一次會話日誌只在記憶體裡'
+      : `清單上 \`session-persistence\` 那一列掉了（${dropped.join('；')}），這一次會話日誌只在記憶體裡`;
   const fix =
-    '把那一列的 `disabled` 拿掉（或寫成 `false`）；設定驗不過的話照啟動時那段警告把設定改好';
+    dropped.length === 0
+      ? '把那一列的 `disabled` 拿掉（或寫成 `false`）'
+      : '照上面的原因把設定改好';
   if (invocation.resume !== undefined) {
     throw new Error(
       `--resume 接不起來：${off}——接回來之後一個位元組都不會寫回去，下一次也接不到這一段。` +
@@ -787,6 +801,15 @@ export async function createCliAgent(
      */
     readonly threadTitleLlm?: ThreadTitleLlmConfig;
     readonly threadTitle?: ThreadTitleConfig;
+    /**
+     * `plugins` 裡**哪幾個條目可以少掛**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)），原樣交給
+     * `createNexusAgent`：這幾個條目組裝時自己的失敗只讓它掉，掉了哪幾個從回傳的 `dropped` 讀。兩條產品路徑拿
+     * 必掛名單算（`startup-audit.ts` 的 `optionalEntriesOf`）。
+     *
+     * 組裝點在下面自己加的外掛**永遠不在這份裡**，理由見 `CreateNexusAgentOptions.optionalEntries`。省略即全有全無，
+     * 手搭清單的呼叫端照舊。
+     */
+    readonly optionalEntries?: ReadonlySet<PluginEntry>;
   },
   plugins: readonly PluginEntry[],
   cwd: string = process.cwd(),
@@ -834,6 +857,8 @@ export async function createCliAgent(
    * 接線同其他三個 attach，交給呼叫端：CLI 接它那一份，serve 在 wire-handler 建 pump 的那一刻接。
    */
   attachTitle: AttachSessionTitleLlm | undefined;
+  /** 這一次組裝掉了的可少掛條目（#751）；沒給 `optionalEntries` 時一律是空的。 */
+  dropped: readonly AssemblyDrop[];
 }> {
   const liveModel = invocation.liveModel ?? startupSetting(plugins, liveModelPlugin);
   const model = createCliModel(invocation.live, liveModel);
@@ -904,6 +929,7 @@ export async function createCliAgent(
     telemetrySharing,
     feedback,
     services,
+    dropped,
   } = await createNexusAgent({
     model,
     plugins: [
@@ -933,6 +959,9 @@ export async function createCliAgent(
     checkpointer,
     ...(onInvariantViolation !== undefined && { onInvariantViolation }),
     ...(approvals !== undefined && { approvals }),
+    ...(invocation.optionalEntries !== undefined && {
+      optionalEntries: invocation.optionalEntries,
+    }),
   });
   // 註冊表跟 agent 同壽命：REPL 是一條連續對話，`seq` 要跨輪連續才有意義。**subagent 的
   // 那些日誌也掛在它上面**，第一次有人要寫的時候才出生（見 `SessionRegistry` 的偏離）。
@@ -957,6 +986,7 @@ export async function createCliAgent(
     goals: services.get(GOALS_SERVICE),
     workspaceRoot,
     attachTitle,
+    dropped,
   };
 }
 
@@ -1421,11 +1451,15 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   });
   // **掉了哪幾列在這裡判第一次**（#751）：模組載不進來、設定驗不過的列已經標成沒掛；必掛的掉了就在這裡起不來，
   // 早於下面任何一個 `startupSetting`，也早於建模型（`--live` 時 `live-model` 那一列掉了不退回預設值）。
-  // 可少掛的掉了印一段警告到標準錯誤，只印這一次。
-  for (const line of auditStartupEntries(loaded, { live: invocation.live })) printer.error(line);
+  // 可少掛的掉了先不印，等組裝那一次（下面 `createCliAgent`）補完再合成一段。
+  auditStartupEntries(loaded, { live: invocation.live });
   const { plugins } = loaded;
   const persistenceMounted = startupEntryMounted(plugins, sessionPersistencePlugin);
-  assertPersistenceFlags(invocation, persistenceMounted);
+  assertPersistenceFlags(
+    invocation,
+    persistenceMounted,
+    dropReasonsOf(loaded, sessionPersistencePlugin),
+  );
   // **起動期解一次**。值不合法跟清單上其他列的毛病落在同一個時刻——跑起來之前。
   const persistenceWindow = startupSetting(plugins, sessionPersistencePlugin);
   // 真實供應商的連線值（#545）。
@@ -1502,9 +1536,17 @@ export async function runCli(options: RunCliOptions): Promise<void> {
           `接回來的模式一個位元組都影響不到。\n\n${USAGE}`,
       );
     }
-    // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
+    // 重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件都在這一步發生——全在跑起來之前。**掉了哪幾列在這裡判
+    // 第二次**（#751）：清單上可少掛的列自己的失敗只讓它掉；必掛的、組裝點自己加的外掛掉了，換成跟第一次同一種
+    // `StartupError`，兩次掉的一起列；fold 的前置條件照舊原樣拋。
     built = await createCliAgent(
-      { ...effective, liveModel, threadTitle, threadTitleLlm },
+      {
+        ...effective,
+        liveModel,
+        threadTitle,
+        threadTitleLlm,
+        optionalEntries: optionalEntriesOf(loaded, { live: invocation.live }),
+      },
       plugins,
       options.cwd,
       (error) =>
@@ -1517,7 +1559,15 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       // 拿到一則模型讀得懂的拒絕，其餘照跑完（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
       HEADLESS_APPROVALS,
       resumed?.events,
-    );
+    ).catch((error: unknown) => {
+      throw error instanceof AssemblyDropError
+        ? startupErrorFrom(loaded, error, { live: invocation.live })
+        : error;
+    });
+    // 兩次合起來印一段到標準錯誤，只印這一次（卡上第 5 項）。
+    for (const line of startupWarning(loaded, assemblyDropsOf(loaded, built.dropped))) {
+      printer.error(line);
+    }
     // **對話從日誌推回模型**（#306），在第一輪之前。放在 try 裡：灌不進去要放掉續接那把租約。
     restored =
       resumed === undefined

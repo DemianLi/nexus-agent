@@ -9,10 +9,10 @@
 #
 #   id        這一次掛載的識別。外面的 patch 靠它指到這一列，所以名字是承重的。
 #   name      模組 specifier，用動態 import 載進來再取 default export。
-#   config    交給那顆 plugin 的設定，由它自己的 `Config` schema 驗。驗不過的那一列掉了、
-#             啟動時印一段警告，其餘照樣起來；只有 `browser-session`（必掛）掉了會整個起不來
-#             （#751，照 dsh 分必掛與可少掛）。沒有 `Config` 的 plugin（下面二十個配套入口
-#             全部是）沒有設定：寫了也沒有作用，照樣掛，啟動時印警告。
+#   config    交給那顆 plugin 的設定，由它自己的 `Config` schema 驗。驗不過（或 `apply` 裡才驗的
+#             值不合法）的那一列掉了、啟動時印一段警告，其餘照樣起來；只有 `browser-session`
+#             （必掛）掉了會整個起不來（#751，照 dsh 分必掛與可少掛）。沒有 `Config` 的 plugin
+#             （下面二十個配套入口全部是）沒有設定：寫了也沒有作用，照樣掛，啟動時印警告。
 #   disabled  這一次掛載不跑。只收字面布林——dsh 那邊可以寫 `!!js` 運算式，我們刻意不接
 #             （#104 的偏離標註）。
 #

@@ -14,7 +14,7 @@
  * **一個 thread 一個 agent，關掉 server 時一起清。** `createNexusAgent` 回的
  * `dispose` 在這裡才真的有意義——MCP plugin 底下是 stdio 子行程，而這是一個長命的
  * 行程，漏了不會有任何錯誤訊息。啟動時另外先組一份、驗完就收（#749），清單上哪一列壞了
- * 在綁 port 之前就講，不等第一條 thread。
+ * 在綁 port 之前就講，不等第一條 thread；那一次掉了的列，之後每條 thread 都直接算沒掛（#751）。
  *
  * 假模型下的限制與 CLI 的 REPL 一樣：`CLI_SCRIPT` 只有四輪，問到後面
  * `ScriptedChatModel` 會當場失敗而不是靜默重播。**那個失敗會以
@@ -34,6 +34,7 @@ import type {
   SessionRegistry,
   SessionStore,
 } from '@nexus/core';
+import { AssemblyDropError } from './agent-factory.js';
 import {
   assertPersistenceFlags,
   createCliAgent,
@@ -67,7 +68,15 @@ import type { WireHandler } from './wire-handler.js';
 import { startWireServer } from './wire-server.js';
 import type { WireServer } from './wire-server.js';
 import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js';
-import { auditStartupEntries } from './startup-audit.js';
+import {
+  assemblyDropsOf,
+  auditStartupEntries,
+  describeDrop,
+  dropReasonsOf,
+  optionalEntriesOf,
+  startupErrorFrom,
+  startupWarning,
+} from './startup-audit.js';
 import { browserSessionPlugin } from './settings/browser-session.js';
 import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { liveModelPlugin } from './settings/live-model.js';
@@ -300,12 +309,11 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     ...(invocation.patches !== undefined && { patches: invocation.patches }),
   });
   // **掉了哪幾列在這裡判第一次**（#751），同 CLI 那一刻：必掛的掉了就在這裡起不來——還沒建瀏覽器會話密鑰、還沒綁
-  // port；可少掛的掉了印一段警告到伺服器日誌，只印這一次，也在綁 port 之前。掉了的列在清單上已標成沒掛，每條 thread
-  // 組裝時照樣跳過。
-  for (const line of auditStartupEntries(loaded, { live: invocation.live })) log(line);
+  // port。可少掛的掉了先不印，等下面試組那一次補完再合成一段。掉了的列在清單上已標成沒掛，每條 thread 組裝時照樣跳過。
+  const audit = { live: invocation.live };
+  auditStartupEntries(loaded, audit);
   const plugins: readonly PluginEntry[] = loaded.plugins;
-  // 啟動那幾行裡的「plugin：」不列掉了的列。
-  const droppedEntries = new Set(loaded.dropped.flatMap((drop) => drop.entry ?? []));
+  const optionalEntries = optionalEntriesOf(loaded, audit);
   // **起動期解一次、往下傳一份**：這兩顆都有消費者跑在任何 agent 出生之前（冷讀清單、`BrowserAuth`），那時
   // 還沒有註冊表可以讀服務。標題那兩個數字也往下傳給寫標題的 pump（#647），同一份值。理由與偏離登記見
   // `settings/startup.ts` 的檔頭。
@@ -320,7 +328,11 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // **落盤掛不掛也由清單講**（#612，照 dsh 的 `session-persistence-jsonl` 那一列）。關掉的話
   // 下面一個 store 都不建、日誌根也不解析，`--session-log` 跟它矛盾就當場拋——同 CLI 那一份檢查。
   const persistenceMounted = startupEntryMounted(plugins, sessionPersistencePlugin);
-  assertPersistenceFlags(invocation, persistenceMounted);
+  assertPersistenceFlags(
+    invocation,
+    persistenceMounted,
+    dropReasonsOf(loaded, sessionPersistencePlugin),
+  );
   // **在開 server 之前解析**，同 `cli.ts` 那條的理由：一個指錯地方的日誌根該在什麼都還沒起來的
   // 時候就講。同一個函式，所以「日誌不能落在 `--workspace` 底下」那條檢查兩個入口共用一份，預設值
   // （harness home 底下的 `sessions`，#444）也是同一份。
@@ -343,7 +355,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // `requires` 缺件、`apply` 裡的值檢查（例如 `tool-result-pruner` 的門檻），不組一次就不會發生，而 serve 的
   // agent 是每條 thread 才組的——不先組這一次，伺服器照樣起來，每個開對話的人才各撞一次，伺服器日誌一行都沒有。
   // 跟下面 `createAgent` 同一個函式、同一組參數，不帶續接，失敗的處理跟 CLI 那一刻（`cli.ts` 的 `createCliAgent`）
-  // 同一套：原樣拋。
+  // 同一套：可少掛的列掉了印警告、照樣起來，其餘原樣拋（見下面「判第二次」那段）。
   //
   // **偏離登記**：dsh 的 `boot()` 把 plugin 樹掛一次、一直用下去，驗證是掛載順帶發生的
   // （dsh `packages/boot/app-boot/README.zh.md:92`，`477b4f4`）。我們沒有那棵樹：agent 一條 thread 一份（見檔頭），
@@ -352,12 +364,38 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   //
   // **位置是承重的**：在讀或建瀏覽器會話密鑰與綁 port 之前，起不來的那一次什麼都還沒留下。收掉失敗也拋，同 CLI
   // 那條：組得起來卻收不乾淨，可能有子行程還活著（`cli-dispose-failure.fixture.ts`）。
+  //
+  // **掉了哪幾列在這裡判第二次**（#751），同 CLI 那一次組裝：清單上可少掛的列 `apply` 失敗、`requires` 缺件、撞名，
+  // 只讓它掉；必掛的、組裝點自己加的外掛掉了，換成跟第一次同一種 `StartupError`。兩次合起來印一段到伺服器日誌，
+  // 只印這一次，在綁 port 之前。
   const trial = await createCliAgent(
-    { ...invocation, workspaceChanges: true, liveModel, threadTitle, threadTitleLlm },
+    {
+      ...invocation,
+      workspaceChanges: true,
+      liveModel,
+      threadTitle,
+      threadTitleLlm,
+      optionalEntries,
+    },
     plugins,
     options.cwd,
-  );
+  ).catch((error: unknown) => {
+    throw error instanceof AssemblyDropError ? startupErrorFrom(loaded, error, audit) : error;
+  });
   await trial.dispose();
+  for (const line of startupWarning(loaded, assemblyDropsOf(loaded, trial.dropped))) log(line);
+  // **試組掉了的列帶進每條 thread 的組裝，直接算沒掛**（卡上第 6 項）：不再重試、不再每條各印一次。照 dsh：樹只掛
+  // 一次，沒起來的條目一直不在，直到改設定重載；我們沒有重載，所以到重啟為止。標成 `disabled: true` 跟讀清單那一次
+  // 設定驗不過的列同一個做法，載入器因此記成沒掛。
+  const trialDropped = new Set(trial.dropped.map(({ entry }) => entry));
+  const threadPlugins = plugins.map((entry) =>
+    trialDropped.has(entry) ? { ...entry, disabled: true } : entry,
+  );
+  // 啟動那幾行裡的「plugin：」不列掉了的列，兩次掉的都不列。
+  const droppedEntries = new Set([
+    ...loaded.dropped.flatMap((drop) => drop.entry ?? []),
+    ...trialDropped,
+  ]);
   // 遙測的答案也在這一次定下來，印在下面啟動那幾行裡：每條 thread 掛的是同一份清單，答案每條都一樣。
   const telemetrySharing = trial.telemetrySharing;
   const auth = new BrowserAuth(
@@ -468,13 +506,25 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
           resumedSandbox === undefined ? invocation : { ...invocation, sandbox: resumedSandbox };
         // 每一輪改了哪些檔（#443）：只有 serve 開，見 `createCliAgent` 那一格。
         built = await createCliAgent(
-          { ...effective, workspaceChanges: true, liveModel, threadTitle, threadTitleLlm },
-          plugins,
+          {
+            ...effective,
+            workspaceChanges: true,
+            liveModel,
+            threadTitle,
+            threadTitleLlm,
+            optionalEntries,
+          },
+          threadPlugins,
           options.cwd,
         );
       } catch (error) {
         await release().catch(() => {});
         throw error;
+      }
+      // **啟動時沒掉、這一條組裝時才掉的列**（卡上第 6 項，例如跟這條 thread 的工作區有關的 `apply`）：同一套規則，
+      // 只作用在這一條——可少掛的在這條 thread 裡不掛、伺服器日誌記一筆；不能少掛的已經在上面讓這條 thread 建不起來。
+      for (const drop of assemblyDropsOf(loaded, built.dropped)) {
+        log(`[組裝] thread "${threadId}" 這一條沒掛上：${describeDrop(drop)}`);
       }
       // **對話從日誌推回模型**（#306），同 CLI 的 `--resume`，在這條 thread 的第一輪之前。灌不進去就讓它
       // 起不來（理由見 `conversation-restore.ts`）：剛建好的 agent 與續接那把租約都要收掉，下一次請求才重試得了。

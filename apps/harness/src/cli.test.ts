@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -696,11 +696,17 @@ describe('CLI 行程', () => {
     });
   }
 
-  it('兩個 plugin 撞同一個工具名時退出碼是 1，stderr 指名是誰撞了什麼', async () => {
+  /**
+   * 撞上去的那一列是 `insert` 進來的可少掛列（#751）：照 dsh，它 `apply` 拋錯只讓它自己掉，行程照樣跑完。錯誤沒有被
+   * 吞掉——它從 registry 一路傳到行程的 stderr，那段警告指名撞的是哪兩個 plugin。
+   */
+  it('兩個 plugin 撞同一個工具名：後來的那一列掉了、退出碼是 0，stderr 的警告指名是誰撞了什麼', async () => {
     const { code, stderr } = await runProcess(['--patch', fixture, '說點什麼']);
 
-    // **是 1 不是 2**：組裝失敗不是撞到迴圈上限，兩者要分得開。
-    expect(code).toBe(1);
+    expect(code).toBe(0);
+    expect(stderr).toMatch(
+      new RegExp(`^ {2}${SECOND_PLUGIN_NAME}（file:[^）]+）掛上時失敗：`, 'mu'),
+    );
     // **不能只 `toContain(FIRST_PLUGIN_NAME)`**：出貨清單上那顆 echo plugin 的名字，跟它
     // 註冊的那個工具名是同一個字串（`ECHO_TOOL_NAME === 'echo'`），而衝突訊息本來就會講
     // 「已經有名為 echo 的工具」——那半句自己就滿足了斷言，於是「有指名先註冊的是誰」
@@ -714,6 +720,26 @@ describe('CLI 行程', () => {
         'u',
       ),
     );
+  }, 90_000);
+
+  /**
+   * **起不來的那一次退出碼是 1，不是 2**：組裝失敗不是撞到迴圈上限，兩者要分得開。用必掛的 `browser-session` 寫壞測，
+   * 它掉了整個起不來（#751）。
+   */
+  it('必掛的列寫壞了：起不來、退出碼是 1，stderr 指名那一列', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'nexus-cli-required-'));
+    try {
+      await chmod(dir, 0o700);
+      const patch = join(dir, 'bad.yml');
+      await writeFile(patch, '- id: browser-session\n  config:\n    maxAgeDays: 0\n', {
+        mode: 0o600,
+      });
+      const { code, stderr } = await runProcess(['--patch', patch, '說點什麼']);
+      expect(code).toBe(1);
+      expect(stderr).toMatch(/browser-session（#settings\/browser-session）〔必掛〕設定驗不過/u);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   }, 90_000);
 
   /**

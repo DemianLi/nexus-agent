@@ -282,28 +282,10 @@ describe('serve 也真的走設定檔那條路', () => {
  * **serve 在綁 port 之前先照每條 thread 那一次組一份 agent**（#749），清單上哪一列壞了在啟動時就講，
  * 跟 CLI 同一刻、同一句。dsh 在 `boot()` 就掛完整份清單（dsh `packages/boot/app-boot/README.zh.md:92`，`477b4f4`）。
  *
- * 報了之後起不起得來照 #751 的必掛名單：設定驗不過的 `todo` 是可少掛的，啟動時印警告、照樣起來。`apply` 裡才驗的
- * 那一類（`tool-result-pruner`）今天還是整個起不來：組裝那一層的逐列掉是 #751 的下一刀，那時第二條跟著翻。
+ * 報了之後起不起得來照 #751 的必掛名單：設定驗不過的 `todo`、`apply` 裡才驗的 `tool-result-pruner` 都是可少掛的，
+ * 啟動時印警告、照樣起來。
  */
 describe('serve 在啟動時就把清單組過一次', () => {
-  /** 同一份 home 覆寫檔下，CLI 與 serve 各起一次，回兩邊拋的錯。 */
-  async function bothEntries(patch: string): Promise<[unknown, unknown]> {
-    const home = privateHome();
-    writePatch(home, 'cordis.patch.yml', patch);
-    const env = { [HARNESS_HOME_ENV]: home };
-    const cli = await runCli({ argv: ['說點什麼'], env, ...silent() }).catch(
-      (error: unknown) => error,
-    );
-    const serve = await runServe({ argv: ['--port', '0'], log: () => undefined, env }).then(
-      (server) => {
-        running = server;
-        return undefined;
-      },
-      (error: unknown) => error,
-    );
-    return [cli, serve];
-  }
-
   /**
    * 卡上的驗收：同一份壞設定，serve 起得來、綁 port 之前伺服器日誌有**跟 CLI 同一段**警告，而且只印那一次——開兩條對話
    * 都不再印。「綁 port 之前」量的是順序：警告排在印網址那一行前面，而網址那一行是 `listen` 之後才印的。
@@ -339,15 +321,39 @@ describe('serve 在啟動時就把清單組過一次', () => {
     expect(listed).toMatch(/[：、]plan-mode(、|$)/u);
   });
 
-  it('`apply` 裡才驗的值：設定格式過得了、`apply` 拋的那一類也在啟動時報出來', async () => {
+  /**
+   * **`apply` 裡才驗的值也在啟動時報出來**，組裝那一次判定（#751）：那一列掉了、照樣起來，兩個入口印同一段警告，serve
+   * 那段在綁 port 之前（排在網址那一行前面）。
+   */
+  it('`apply` 裡才驗的值：設定格式過得了、`apply` 拋的那一類也在啟動時報出來，那一列掉了、照樣起來', async () => {
     // 頭＋標記＋尾不能大於門檻，這條檢查刻意只放在 `apply` 裡（`tool-result-pruner.ts`），不在設定格式裡。
-    const [cli, serve] = await bothEntries(
+    const home = privateHome();
+    writePatch(
+      home,
+      'cordis.patch.yml',
       '- id: tool-result-pruner\n  config:\n    thresholdChars: 10\n',
     );
-    expect(cli).toBeInstanceOf(Error);
-    expect((cli as Error).message).toMatch(/apply 失敗/u);
-    expect(serve).toBeInstanceOf(Error);
-    expect((serve as Error).message).toBe((cli as Error).message);
+    const env = { [HARNESS_HOME_ENV]: home };
+    const cli = await cliErrors(['說點什麼'], env);
+    expect(cli).toHaveLength(2);
+    expect(cli[0]).toBe('警告：1 列沒有掛上，其餘照樣起來：');
+    expect(cli[1]).toMatch(
+      /^ {2}tool-result-pruner（@nexus\/core\/tool-result-pruner）掛上時失敗：.*apply 失敗/u,
+    );
+
+    const lines: string[] = [];
+    const server = (await runServe({
+      argv: ['--port', '0'],
+      log: (line) => lines.push(line),
+      env,
+    })) as RunningServe;
+    running = server;
+    const start = lines.indexOf(cli[0] ?? '');
+    expect(lines.slice(start, start + 2)).toEqual(cli);
+    expect(lines.findIndex((line) => line.includes(server.url))).toBeGreaterThan(start);
+    expect(lines.find((line) => line.startsWith('plugin：'))).not.toMatch(
+      /[：、]tool-result-pruner(、|$)/u,
+    );
   });
 
   /**
