@@ -58,6 +58,7 @@ import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
 import { EXIT_PLAN_MODE } from '@/lib/plan-review';
 import { pairAnswers } from '@/lib/question-view';
 import { reasoningRunning, visibleReasoning } from '@/lib/reasoning-view';
+import { PENDING_STEER_TEXT, pendingSteers } from '@/lib/steer-view';
 
 /**
  * 評分按鈕要的東西（[#278](https://github.com/DemianLi/nexus-agent/issues/278)、
@@ -300,6 +301,25 @@ function useFinishedReply(entries: readonly ConversationEntry[], isFresh: (id: s
   return announced;
 }
 
+/**
+ * 還沒被領走的插話（#710）：跟人的泡泡同一個樣子，淡一階，底下一句 {@link PENDING_STEER_TEXT}。被領走時同一格換成
+ * 正式的泡泡，那一句跟著消失。
+ */
+function PendingSteerBubble({ text }: { text: string }) {
+  return (
+    <Message align="end" data-pending-steer="">
+      <MessageContent>
+        <Bubble variant="secondary" align="end" className="opacity-70">
+          <BubbleContent className="text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap">
+            {text}
+          </BubbleContent>
+        </Bubble>
+        <MessageFooter className="px-0">{PENDING_STEER_TEXT}</MessageFooter>
+      </MessageContent>
+    </Message>
+  );
+}
+
 /** JS 的捲動不看 CSS 的 reduced-motion，要自己讀（§7）。 */
 function scrollBehavior(): ScrollBehavior {
   const reduce =
@@ -361,6 +381,10 @@ export function Transcript({
       ),
     };
   });
+  // 還沒被領走的插話接在最後（#710）：鍵跟領走後那則人的話同一個，換成正式的是同一格換內容。
+  for (const steer of pendingSteers(state)) {
+    items.push({ id: steer.key, node: <PendingSteerBubble text={steer.text} /> });
+  }
   const announced = useFinishedReply(state.entries, isFresh);
   const autoLoad = useEarlierAutoLoad(earlier);
 

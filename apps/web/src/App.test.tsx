@@ -5,6 +5,7 @@ import type {
   ThreadFeedFrame,
   ThreadListResult,
   ThreadListOutcome,
+  RunStartMode,
   UplinkResult,
   WireClient,
 } from '@nexus/wire';
@@ -31,6 +32,7 @@ import { NO_DECISION_REASON } from '@/components/approval-card';
 import { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/components/thread-list';
 import { STOPPED_QUESTION_TEXT, WITHDRAWN_TOOL_REASON } from '@/lib/question-view';
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
+import { PENDING_STEER_TEXT } from '@/lib/steer-view';
 import { axeViolations } from '@/test/axe';
 import { stubCmdkLayout } from '@/test/cmdk';
 import { fakeDownlink } from '@/test/downlink';
@@ -354,6 +356,93 @@ describe('對話介面', () => {
     ]);
     await waitFor(() => expect(screen.queryByTestId('queue-dock')).toBeNull());
     expect(screen.getAllByText('下一句')).toHaveLength(1);
+  });
+
+  describe('插話（#710）', () => {
+    /** 記下每一句帶的送出模式；插話走 `next-step`，排隊的那句留在隊裡（這一輪還沒收尾）。 */
+    function steeringClient(events: readonly Event[]) {
+      const fake = fakeClient(events);
+      const modes: (RunStartMode | undefined)[] = [];
+      const client: WireClient = {
+        ...fake.client,
+        runStart: async (threadId, text, options) => {
+          modes.push(options?.mode);
+          const run_id =
+            options?.mode === 'steer'
+              ? fake.downlink.acceptSteer(threadId, text)
+              : fake.downlink.accept(threadId, text, false);
+          return { type: 'success', id: 1, result: { run_id } };
+        },
+      };
+      return { fake, client, modes };
+    }
+
+    it('跑著時 Cmd/Ctrl+Enter 送插話：這一輪不停，排著的畫在對話尾端，被領走時同一格換成人的話', async () => {
+      seq = 0;
+      const { fake, client, modes } = steeringClient([
+        frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      ]);
+      render(<App client={client} />);
+      await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
+      expect(screen.getByTestId('send-hint').textContent).toMatch(
+        /^Enter 排隊・(⌘|Ctrl\+)Enter 插話$/,
+      );
+      const input = screen.getByLabelText('要說的話');
+
+      fireEvent.change(input, { target: { value: '改用 X' } });
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+      await waitFor(() => expect(modes).toEqual(['steer']));
+      expect((input as HTMLTextAreaElement).value).toBe('');
+
+      const pending = await screen.findByText('改用 X');
+      expect(pending.closest('[data-pending-steer]')).not.toBeNull();
+      expect(screen.getByText(PENDING_STEER_TEXT)).toBeTruthy();
+      // 不進送出佇列：它不等這一輪收掉。
+      expect(screen.queryByTestId('queue-dock')).toBeNull();
+      const slot = pending.closest('[data-slot="message-scroller-item"]');
+      expect(slot).not.toBeNull();
+      // 這一格是看著它出現的：進場一次。
+      expect(slot!.classList.contains('motion-rise-in')).toBe(true);
+
+      fake.downlink.claimSteers(fake.opened[0]!);
+      await waitFor(() => expect(screen.queryByText(PENDING_STEER_TEXT)).toBeNull());
+      const claimed = screen.getByText('改用 X');
+      expect(screen.getAllByText('改用 X')).toHaveLength(1);
+      expect(claimed.closest('[data-pending-steer]')).toBeNull();
+      // 同一格換內容：不跳位、不重播進場（class 沒被拿掉再加回去）。
+      expect(claimed.closest('[data-slot="message-scroller-item"]')).toBe(slot);
+      expect(slot!.classList.contains('motion-rise-in')).toBe(true);
+      expect(screen.getByRole('status').textContent).toContain('執行中');
+
+      // 只按 Enter 照舊排隊。
+      fireEvent.change(input, { target: { value: '下一句' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() => expect(modes).toEqual(['steer', undefined]));
+      const dock = await screen.findByTestId('queue-dock');
+      expect(within(dock).getByText('下一句')).toBeTruthy();
+    });
+
+    it('送出鈕同 Enter：跑著時也是排隊', async () => {
+      seq = 0;
+      const { client, modes } = steeringClient([
+        frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      ]);
+      render(<App client={client} />);
+      await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
+      fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '下一句' } });
+      fireEvent.click(screen.getByRole('button', { name: '送出' }));
+      await waitFor(() => expect(modes).toEqual([undefined]));
+    });
+
+    it('沒在跑時 Cmd/Ctrl+Enter 照舊送出、不帶插話；提示照舊', async () => {
+      const { client, modes } = steeringClient([]);
+      render(<App client={client} />);
+      await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+      expect(screen.getByTestId('send-hint').textContent).toBe('Enter 送出');
+      fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '你好' } });
+      fireEvent.keyDown(screen.getByLabelText('要說的話'), { key: 'Enter', metaKey: true });
+      await waitFor(() => expect(modes).toEqual([undefined]));
+    });
   });
 
   it('連不上就說連不上，不是一片空白', async () => {
@@ -2227,7 +2316,8 @@ describe('用量表（#528）', () => {
 
     const meter = await screen.findByTestId('context-meter');
     expect(meter.getAttribute('aria-label')).toBe('對話用量：約 75%，點開看明細');
-    expect(meter.previousElementSibling?.textContent).toBe('Enter 送出');
+    // 這一輪在跑，提示換成兩種送法（#710）；要驗的是用量表的位置。
+    expect(meter.previousElementSibling?.textContent).toMatch(/^Enter 排隊・(⌘|Ctrl\+)Enter 插話$/);
     fireEvent.click(meter);
     expect(screen.getByTestId('context-meter-input').textContent).toBe('4,321 token');
   });

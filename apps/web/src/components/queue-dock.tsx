@@ -58,7 +58,9 @@ export interface QueueDockProps {
  * - **位置**：待辦面板下面、換手區外面（Q7）。停在核准點時輸入框被面板換掉，佇列照樣看得到、改得到。
  * - **空的不畫**；一件直接畫；兩件以上預設收合，表頭寫件數，清單自己捲。有一列在編輯或送出中時強制展開。
  * - **停住**（Q6）：表頭多一行 {@link QUEUE_PARKED_TEXT}，判斷在 {@link isQueueParked}。
- * - **每一列**：攤成一行的預覽，加上編輯與刪除。沒有插話（#637 Q3 另開）。
+ * - **每一列**：攤成一行的預覽，加上編輯與刪除。插話鈕（dsh 的 `queue.steer`）還沒接：`WireClient.queueUpdate` 的參數型別
+ *   要先放寬（[#710](https://github.com/DemianLi/nexus-agent/issues/710) 拆開的第二步）。**排著的插話不在這裡**：它不等這一輪
+ *   收掉，照 dsh 畫在對話尾端（`lib/steer-view.ts`）。
  * - **就地編輯**：Enter 存、Shift+Enter 換行、Esc 取消；組字中不存；空白不能存。
  * - **改、刪失敗用 toast**，不進頂端紅字。那一件已經不在隊裡時講 {@link QUEUE_GONE_TEXT}：編輯中的那件被領走時
  *   編輯器自己收掉，跟伺服器回「不在隊裡」是同一件事，只講一次。

@@ -42,6 +42,8 @@ import { STOPPED_QUESTION_TEXT, stoppedOnQuestion } from '@/lib/question-view';
 import { canRunSlash, canSendText } from '@/lib/queue-view';
 import { recallThread, rememberThread } from '@/lib/remembered-thread';
 import type { ThreadChoice } from '@/lib/remembered-thread';
+import { pendingSteers } from '@/lib/steer-view';
+import { resolveSubmitMode, runningSendHint } from '@/lib/submit-mode';
 import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
 
 /**
@@ -265,8 +267,10 @@ function ConversationView({
   // 並存——每一顆各自帶著回答自己要用的那把鑰匙，所以每一個面板按下去落在自己那顆上。
   // 面板換掉輸入框、一次一個、先來先處理（#408，`PendingSwap`）。
   const pendings = conversation.state.pendings;
+  // 還沒被領走的插話也算一格（#710）：它的鍵就是領走後那則人的話的 id，先記住，換成正式的時候才不會重播進場。
+  const steers = pendingSteers(conversation.state);
   const isFresh = useFreshItems(
-    conversation.state.entries.map((entry) => entry.id),
+    [...conversation.state.entries.map((entry) => entry.id), ...steers.map((steer) => steer.key)],
     conversation.connected,
   );
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -363,7 +367,8 @@ function ConversationView({
           </div>
         </div>
 
-        {conversation.state.entries.length === 0 ? (
+        {/* 排著插話就有東西可畫（#710），就算這一輪是從還沒有任何一則的地方跑起來的。 */}
+        {conversation.state.entries.length === 0 && steers.length === 0 ? (
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6">
             <EmptyHero />
           </div>
@@ -485,13 +490,18 @@ function ConversationView({
                   stoppedOnQuestion: stoppedOnQuestion(conversation.state),
                 })}
                 canSend={canSend}
-                onSubmit={() => {
+                {...(conversation.state.status === 'running'
+                  ? { sendHint: runningSendHint(navigator.userAgent) }
+                  : {})}
+                onSubmit={(gesture) => {
                   if (!canSend) {
                     return;
                   }
                   const text = draft;
                   setDraft('');
-                  void conversation.send(text).then((rejected) => {
+                  // 跑著時 Cmd/Ctrl+Enter 是插話（#710）：這一輪不停，那句下一步送進模型。
+                  const mode = resolveSubmitMode(conversation.state.status, gesture);
+                  void conversation.send(text, mode).then((rejected) => {
                     if (rejected === undefined) return;
                     // 沒收下（#645 Q4）：草稿放回去——人已經開始打下一句的話不蓋掉——並說出原因。
                     setDraft((current) => (current === '' ? text : current));

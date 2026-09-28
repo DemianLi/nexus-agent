@@ -1,11 +1,12 @@
 import type {
   Event,
   InboxPayload,
+  QueueSteerAction,
   QueueUpdateAction,
   UplinkResult,
   WireQueuedInput,
 } from '@nexus/wire';
-import { INBOX, QUEUE_ITEM_NOT_FOUND, TITLE } from '@nexus/wire';
+import { INBOX, QUEUE_ITEM_NOT_FOUND, STEER_UNAVAILABLE, TITLE } from '@nexus/wire';
 
 /**
  * 假 client 的下行：開線時先吐一批事先備好的 frame，之後還能再推（#645）。
@@ -19,6 +20,8 @@ import { INBOX, QUEUE_ITEM_NOT_FOUND, TITLE } from '@nexus/wire';
 export function fakeDownlink() {
   const listeners = new Map<string, Set<(events: readonly Event[]) => void>>();
   const queues = new Map<string, WireQueuedInput[]>();
+  /** 排著的插話（`next-step`，#710）。harness 每一顆 `inbox` 都帶這一條，空的也帶。 */
+  const steers = new Map<string, WireQueuedInput[]>();
   let seq = 1_000_000;
   let runs = 0;
 
@@ -92,33 +95,74 @@ export function fakeDownlink() {
       { id, text, source: { kind: 'user' as const } },
     ];
     queues.set(threadId, queue);
-    push(threadId, [inboxFrame({ items: queue })]);
+    const nextStep = steers.get(threadId) ?? [];
+    push(threadId, [inboxFrame({ items: queue, nextStep })]);
     if (claim) {
       const rest = queue.filter((item) => item.id !== id);
       queues.set(threadId, rest);
-      push(threadId, [inboxFrame({ items: rest, claimed: { id, text } })]);
+      push(threadId, [inboxFrame({ items: rest, nextStep, claimed: { id, text } })]);
     }
     return id;
+  }
+
+  /**
+   * 伺服器收下一句插話（`run.start` 帶 `mode: 'steer'`，#710），這一輪還收插話：排進 `next-step`，推一顆
+   * `inbox`。回給呼叫端的 `run_id` 就是項目 id。什麼時候被領走由測試自己叫 {@link claimSteers}。
+   */
+  function acceptSteer(threadId: string, text: string): string {
+    runs += 1;
+    const id = `run-${runs}`;
+    const nextStep = [
+      ...(steers.get(threadId) ?? []),
+      { id, text, source: { kind: 'user' as const } },
+    ];
+    steers.set(threadId, nextStep);
+    push(threadId, [inboxFrame({ items: queues.get(threadId) ?? [], nextStep })]);
+    return id;
+  }
+
+  /** 下一次叫模型之前領走整條插話：清單清空，同一顆帶 `claimedNextStep`（照 `thread-pump.ts`）。 */
+  function claimSteers(threadId: string): void {
+    const claimed = (steers.get(threadId) ?? []).map(({ id, text }) => ({ id, text }));
+    steers.set(threadId, []);
+    push(threadId, [
+      inboxFrame({ items: queues.get(threadId) ?? [], nextStep: [], claimedNextStep: claimed }),
+    ]);
   }
 
   /** 改或刪一件（`queue.update`）：照伺服器回收下或「不在隊裡」，清單的新樣子走下行。 */
   function update(
     threadId: string,
-    params: { readonly item_id: string; readonly action: QueueUpdateAction },
+    params: { readonly item_id: string; readonly action: QueueUpdateAction | QueueSteerAction },
   ): UplinkResult {
     const queue = queues.get(threadId) ?? [];
     if (!queue.some((item) => item.id === params.item_id)) {
       return { type: 'error', id: 4, error: QUEUE_ITEM_NOT_FOUND, message: '這一件已經不在隊裡' };
     }
     const { action } = params;
+    // 把排著的一件改成插話：網頁還送不出去（`WireClient.queueUpdate` 的參數型別還沒放寬，#710 拆開的第二步），
+    // 這裡先照伺服器「不收」的那一種回，接上的那一張再照 harness 的條件做。
+    if (action.kind === 'steer') {
+      return { type: 'error', id: 4, error: STEER_UNAVAILABLE, message: '這一輪不收插話了' };
+    }
     const next =
       action.kind === 'remove'
         ? queue.filter((item) => item.id !== params.item_id)
         : queue.map((item) => (item.id === params.item_id ? { ...item, text: action.text } : item));
     queues.set(threadId, next);
-    push(threadId, [inboxFrame({ items: next })]);
+    push(threadId, [inboxFrame({ items: next, nextStep: steers.get(threadId) ?? [] })]);
     return { type: 'success', id: 4, result: { accepted: true } };
   }
 
-  return { open, push, accept, update, inboxFrame, titleFrame, lifecycleFrame };
+  return {
+    open,
+    push,
+    accept,
+    acceptSteer,
+    claimSteers,
+    update,
+    inboxFrame,
+    titleFrame,
+    lifecycleFrame,
+  };
 }

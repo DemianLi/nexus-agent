@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Composer } from '@/components/composer';
+import type { SendHint, SubmitGesture } from '@/lib/submit-mode';
 import { axeViolations } from '@/test/axe';
 import { stubCmdkLayout } from '@/test/cmdk';
 
@@ -39,12 +40,14 @@ function Harness({
   canSend = true,
   run = () => true,
   onSubmit = () => {},
+  sendHint,
   fileReferences,
 }: {
   initial?: string;
   canSend?: boolean;
   run?: (line: string) => boolean;
-  onSubmit?: (draft: string) => void;
+  onSubmit?: (draft: string, gesture: SubmitGesture) => void;
+  sendHint?: SendHint;
   fileReferences?: (query: string, signal: AbortSignal) => Promise<FileReferenceListOutcome>;
 }) {
   const [draft, setDraft] = useState(initial);
@@ -55,10 +58,11 @@ function Harness({
         onDraftChange={setDraft}
         placeholder="說點什麼…"
         canSend={canSend && draft.trim() !== ''}
-        onSubmit={() => {
-          onSubmit(draft);
+        onSubmit={(gesture) => {
+          onSubmit(draft, gesture);
           setDraft('');
         }}
+        {...(sendHint === undefined ? {} : { sendHint })}
         commands={[plan, feedback, goal, todo]}
         decorated={new Set(['feedback'])}
         onRunCommand={run}
@@ -93,8 +97,38 @@ describe('送出', () => {
     key('Enter', { isComposing: true });
     expect(onSubmit).not.toHaveBeenCalled();
     key('Enter');
-    expect(onSubmit).toHaveBeenCalledWith('記一筆');
+    expect(onSubmit).toHaveBeenCalledWith('記一筆', 'enter');
     expect(input().value).toBe('');
+  });
+
+  it('Cmd/Ctrl＋Enter 也送出，標成加速；送出鈕同 Enter（#710）', () => {
+    const onSubmit = vi.fn();
+    render(<Harness onSubmit={onSubmit} />);
+    type('改用 X');
+    key('Enter', { ctrlKey: true });
+    type('先別動');
+    key('Enter', { metaKey: true });
+    type('多按了 Shift');
+    key('Enter', { metaKey: true, shiftKey: true });
+    expect(input().value).toBe('多按了 Shift');
+    type('按鈕');
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    expect(onSubmit.mock.calls).toEqual([
+      ['改用 X', 'accelerated'],
+      ['先別動', 'accelerated'],
+      ['按鈕', 'enter'],
+    ]);
+  });
+
+  it('底列提示預設「Enter 送出」，呼叫端可以換掉；寬螢幕才畫的那一段窄螢幕藏起來', () => {
+    const { unmount } = render(<Harness />);
+    expect(screen.getByTestId('send-hint').textContent).toBe('Enter 送出');
+    unmount();
+    render(<Harness sendHint={{ text: 'Enter 排隊', wide: '・Ctrl+Enter 插話' }} />);
+    expect(screen.getByTestId('send-hint').textContent).toBe('Enter 排隊・Ctrl+Enter 插話');
+    expect(screen.getByText('・Ctrl+Enter 插話').className).toBe('hidden sm:inline');
+    // 外殼是 flex：兩段之間不能有間距。
+    expect(screen.getByTestId('send-hint').classList.contains('gap-0')).toBe(true);
   });
 
   it('送不出去時 Enter 不送、送出鍵按不下去', () => {
@@ -219,7 +253,7 @@ describe('`/` 選單', () => {
     key('Tab', { shiftKey: true });
     // 收起之後 Enter 就是送出。
     key('Enter');
-    expect(onSubmit).toHaveBeenCalledWith('/pl');
+    expect(onSubmit).toHaveBeenCalledWith('/pl', 'enter');
   });
 
   it('句中的 `/` 只列不帶參數的命令；網址不開', () => {

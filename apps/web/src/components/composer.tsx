@@ -6,7 +6,8 @@
  *
  * **選單的行為照 dsh**（觸發、排序、選了之後做什麼，見 `lib/slash-trigger.ts`）：焦點一直留在輸入框，
  * 方向鍵換選項，Enter／Tab 選，Esc 與 Shift＋Tab 收起，收起後同一個片段不再自己跳出來。
- * 選單沒開時 Enter 送出、Shift＋Enter 換行；打注音、拼音時的 Enter 是選字，不送出。
+ * 選單沒開時 Enter 送出、Shift＋Enter 換行；打注音、拼音時的 Enter 是選字，不送出。Cmd/Ctrl＋Enter 也送出，
+ * 但標成加速的手勢，跑著時由呼叫端送成插話（#710）。
  *
  * **打 `@` 跳檔案選單**（#653，規則見 `lib/file-mention.ts` 與 `lib/mention-menu.ts`）：跟 `/` 共用這一個浮層與
  * 同一套鍵盤，**先判 `@` 再判 `/`**。候選是非同步的：查詢一變就取消上一次，還沒回來時留著舊的列、那些列選不到，
@@ -42,6 +43,8 @@ import {
   reduceMentionMenu,
 } from '@/lib/mention-menu';
 import { applySlashPick, detectSlash, slashCandidates } from '@/lib/slash-trigger';
+import { isAcceleratedEnter } from '@/lib/submit-mode';
+import type { SendHint, SubmitGesture } from '@/lib/submit-mode';
 
 /** 一個片段：`/` 或 `@` 的位置、游標、中間的字。 */
 interface Span {
@@ -67,6 +70,7 @@ export function Composer({
   placeholder,
   canSend,
   onSubmit,
+  sendHint = { text: 'Enter 送出' },
   commands,
   onRunCommand,
   decorated,
@@ -82,8 +86,13 @@ export function Composer({
   readonly placeholder: string;
   /** 現在這份草稿送不送得出去。 */
   readonly canSend: boolean;
-  /** 送出現在這份草稿（`canSend` 為真時才會叫）。 */
-  readonly onSubmit: () => void;
+  /**
+   * 送出現在這份草稿（`canSend` 為真時才會叫）。`gesture` 是 Enter（送出鈕同它）還是 Cmd/Ctrl+Enter，要排隊還是
+   * 插話由呼叫端照 `lib/submit-mode.ts` 判（#710）。
+   */
+  readonly onSubmit: (gesture: SubmitGesture) => void;
+  /** 底列左邊那句提示；跑著時呼叫端換成兩種送法各一句（#710）。 */
+  readonly sendHint?: SendHint;
   readonly commands: readonly SlashDescriptor[];
   /** 從選單直接執行一行命令；現在不能執行就回 false，那一行改留在草稿裡。 */
   readonly onRunCommand: (line: string) => boolean;
@@ -278,7 +287,7 @@ export function Composer({
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      if (canSend) onSubmit();
+      if (canSend) onSubmit(isAcceleratedEnter(event) ? 'accelerated' : 'enter');
     }
   }
 
@@ -313,7 +322,13 @@ export function Composer({
             onKeyDown={onKeyDown}
           />
           <InputGroupAddon align="block-end" className="px-2 pb-2">
-            <InputGroupText className="pl-2 text-xs">Enter 送出</InputGroupText>
+            {/* `gap-0`：外殼是 flex、預設 `gap-2`，寬螢幕那一段會被隔開一大截（實機截圖量到）。 */}
+            <InputGroupText className="gap-0 pl-2 text-xs" data-testid="send-hint">
+              {sendHint.text}
+              {sendHint.wide !== undefined && (
+                <span className="hidden sm:inline">{sendHint.wide}</span>
+              )}
+            </InputGroupText>
             {meter}
             <div className="ml-auto flex items-center gap-2">
               {stoppable && (
@@ -335,7 +350,7 @@ export function Composer({
                 className="size-11 rounded-full lg:size-9"
                 aria-label="送出"
                 disabled={!canSend}
-                onClick={onSubmit}
+                onClick={() => onSubmit('enter')}
               >
                 <ArrowUp />
               </Button>
