@@ -815,7 +815,9 @@ export type SessionLookup =
  */
 export interface DisabledEntryView {
   /**
-   * 這個 plugin 名有沒有出現在某個明著被關掉的條目上。
+   * 這個 plugin 名有沒有出現在某個**這一次沒掛上**的條目上：明著被關掉的，加上掉了的
+   * （[#751](https://github.com/DemianLi/nexus-agent/issues/751)：設定驗不過、`apply` 拋錯、`requires` 缺件）。
+   * 掉了的列照 dsh 算沒掛，結局跟 `disabled: true` 一樣；掉了的原因另外從載入結果讀。
    *
    * **比對的是 {@link ../plugin.ts | NexusPlugin.name} 而不是條目的 id**：id 是使用者的
    * patch 改得動的字串，拿它當行為開關等於讓改名變成關功能。
@@ -843,7 +845,7 @@ export interface PluginRegistry {
   readonly invariants: InvariantRegistrationPoint;
   readonly commands: CommandRegistrationPoint;
   readonly sessions: SessionRegistrationPoint;
-  /** 清單上明著被關掉的條目，見 {@link DisabledEntryView}。**不算註冊點。** */
+  /** 這一次沒掛上的條目（明著被關掉的，加上掉了的），見 {@link DisabledEntryView}。**不算註冊點。** */
   readonly disabledEntries: DisabledEntryView;
 }
 

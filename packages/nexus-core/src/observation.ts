@@ -333,8 +333,8 @@ export const OBSERVATION_POLICY_PLUGIN_NAME = 'observation-policy';
  * 「照預設開著」，一顆只能表達「開著」的服務因此帶不了任何資訊。真正要分的只有一件事
  * ——**有沒有被明著關掉**，而那件事 `disabledEntries` 已經記著了。
  *
- * **因此這一列不可以帶 `config`**：`parseEntryConfig` 對「沒有 Config schema 卻給了
- * config」是當場拋，不是默默吞掉（見 {@link ./plugin.ts | parseEntryConfig}）。
+ * **因此這一列沒有 `config`**：沒有 Config schema，寫了也沒有作用——`parseEntryConfig` 照 dsh 原樣交給 `apply`、
+ * 不驗，產品路徑上啟動時印一句警告（見 {@link ./plugin.ts | parseEntryConfig}）。
  *
  * **偏離登記**同 {@link ./repeat-reminder.ts | repeatReminderPlugin}：dsh 那側是 base 的一個
  * 獨立套件、plugin 自己掛 middleware；我們表達不出來的是「逐個 agent 各建一份」

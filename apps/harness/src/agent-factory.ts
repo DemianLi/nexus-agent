@@ -424,7 +424,8 @@ function withConversationHistory(backend: AnyBackendProtocol): AnyBackendProtoco
  * 態**。那邊有第四格（`registry.disabledEntries.has(...)`）是因為「條目被關掉」與「清單上沒有那
  * 一列」在 `services.get()` 眼中一模一樣、而正確答案相反；這裡兩件事都不成立：
  *
- * - **這一列關不掉**（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`），那一格走不到。
+ * - **這一列關不掉**（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`）。設定寫壞時它會掉、記成沒掛（#751），但那時
+ *   也不需要第四格，理由是下一條。
  * - **就算關得掉，兩種成因的答案相同**——都是 {@link DEFAULT_RECURSION_LIMIT}，因為護欄沒有
  *   「不掛」這個狀態，基座那層 `withConfig({ recursionLimit: 1e4 })` 永遠在下面。
  *

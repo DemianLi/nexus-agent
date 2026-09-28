@@ -1227,7 +1227,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         errorResponse(
           null,
           'not_supported',
-          '這台 server 的會話日誌只在記憶體裡（沒接落盤：清單上 session-persistence 那一列關掉了），以前的 thread 列不出來',
+          '這台 server 的會話日誌只在記憶體裡（沒接落盤：清單上 session-persistence 那一列沒掛上），以前的 thread 列不出來',
         ),
       );
     }
@@ -1266,7 +1266,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           errorResponse(
             null,
             'not_supported',
-            '這台 server 沒掛會話內容搜尋（清單上 thread-search 那一列關掉了），只能比標題',
+            '這台 server 沒掛會話內容搜尋（清單上 thread-search 那一列沒掛上），只能比標題',
           ),
         );
       }

@@ -24,6 +24,7 @@
 
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -53,6 +54,7 @@ import {
   renderConfigDump,
   parsePatchList,
   PluginConfigError,
+  PluginModuleAccessError,
   resolveEntryModule,
   shippedConfigPath,
   validateEntries,
@@ -102,7 +104,9 @@ function writePrivate(root: string, name: string, content: string): string {
 
 describe('出貨的 cordis.yml', () => {
   it('每一列都載得起來，而且每一顆都是真的 plugin', async () => {
-    const fromYaml = await loadPluginConfig();
+    const { plugins: fromYaml, dropped, ignoredConfig } = await loadPluginConfig();
+    expect(dropped).toEqual([]);
+    expect(ignoredConfig).toEqual([]);
     // 43 = 7 個功能 ＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
     // 外加 #529 的 `session-persistence`——它是 core 那一段裡唯一消費點在起動期的——與 #599 的
     // `session-checkpoint-policy`）
@@ -169,10 +173,10 @@ describe('出貨的 cordis.yml', () => {
     expect(byId.get('summarization')).toEqual({ ...DEFAULT_SUMMARIZATION });
 
     // **其餘每一列都不帶 config**，這半句同樣承重：二十個配套入口一個 `Config` schema 都
-    // 沒有，給它們設定會在載入時拋（`parseEntryConfig`）。
+    // 沒有，給它們設定沒有作用——照 dsh 原樣交下去、不驗，啟動時印警告（#751）。
     //
     // **`observation-policy` 不在這張名單上，而那是承重的不對稱**（#456）：那一顆沒有設定、
-    // 也沒有 Config schema，所以替它加一行 `config:` 會在載入期拋。它進到這棵樹裡的唯一
+    // 也沒有 Config schema，替它加一行 `config:` 沒有作用、啟動時印警告。它進到這棵樹裡的唯一
     // 意義是「關得掉」，關掉的行為由 `observation-policy-entry` 那組測試守著。
     // harness 自己那八列（#529）：跟上面那幾列同一個用途（只講設定），擁有者住在 `apps/harness`。
     // 前七列的消費者跑在任何 agent 出生之前，所以 `apply` 是空的、值由 `startupSetting` 在起動期
@@ -518,7 +522,7 @@ describe('insert 進來的模組檔也要只有自己動得了（#542）', () =>
   it('私有的模組照常載得起來', async () => {
     const root = privateDirectory();
     moduleFile(root, 'team.ts');
-    const loaded = await loadWith(root, './team.ts');
+    const { plugins: loaded } = await loadWith(root, './team.ts');
     expect(loaded[0]?.plugin.name).toBe('m-team.ts');
   });
 
@@ -537,13 +541,114 @@ describe('insert 進來的模組檔也要只有自己動得了（#542）', () =>
     }
   });
 
-  it('模組檔不存在：照舊說那一列載不起來，不是一個裸的 ENOENT', async () => {
+  it('模組檔不存在：那一列掉了（#751），原因照舊說那一列載不起來，不是一個裸的 ENOENT', async () => {
     const root = privateDirectory();
-    const rejected = loadWith(root, './沒這個檔.ts');
-    await expect(rejected).rejects.toThrow(PluginConfigError);
-    await expect(rejected).rejects.toThrow(
-      /^條目 "team"（file:[^）]+） 載不起來：Cannot find module/,
+    const { plugins, dropped } = await loadWith(root, './沒這個檔.ts');
+    expect(plugins).toEqual([]);
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]).toMatchObject({ id: 'team', stage: 'module' });
+    expect(dropped[0]?.message).toMatch(/^條目 "team"（file:[^）]+） 載不起來：Cannot find module/);
+  });
+
+  /**
+   * 卡上的驗收（#751）：**權限太寬照舊整個起不來，而且模組沒被載入**——見證是模組頂層寫一個檔，那個檔不存在。
+   * 對照：同一個模組放進私有目錄，但模組本身 import 時拋錯——那一列掉了、其餘照樣起來。兩條用同一種模組，量得到
+   * 分岔在權限那一格，不是在「載不載得起來」那一格。
+   */
+  it('權限太寬：照舊整個拋（子類別分得出來），模組一行都沒跑；對照：私有但 import 時拋錯只讓那一列掉', async () => {
+    const root = privateDirectory();
+    const witness = join(root, 'ran');
+    const body = `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(witness)}, 'x');\nthrow new Error('模組自己拋的');\n`;
+    const shared = join(root, 'shared');
+    mkdirSync(shared);
+    chmodSync(shared, 0o775);
+    writeFileSync(join(shared, 'team.mjs'), body);
+    const rejected = loadWith(root, join(shared, 'team.mjs'));
+    await expect(rejected).rejects.toThrow(PluginModuleAccessError);
+    expect(existsSync(witness)).toBe(false);
+
+    const own = join(root, 'own.mjs');
+    writeFileSync(own, body);
+    chmodSync(own, 0o600);
+    const { dropped } = await loadWith(root, own);
+    expect(existsSync(witness)).toBe(true);
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]?.message).toMatch(/載不起來：模組自己拋的/);
+  });
+});
+
+/**
+ * 讀清單那一次的逐列掉（#751），照 dsh 的失敗表（`packages/boot/app-boot/README.zh.md:96-106`，`477b4f4`）：一列自己的
+ * 失敗只讓那一列掉，整份的錯照舊整個拋。哪幾列掉了要整個起不來不在這一層判，見 `startup-audit.test.ts`。
+ */
+describe('讀清單時一列自己的失敗只讓那一列掉（#751）', () => {
+  /** 私有目錄裡一份出貨清單＋一份 patch，載下去。 */
+  function loadRows(shippedRows: string, patchRows = '[]\n') {
+    const root = privateDirectory();
+    const shipped = writePrivate(root, 'cordis.yml', shippedRows);
+    const patch = writePrivate(root, 'p.yml', patchRows);
+    return loadPluginConfig({ shipped, overlays: [patch], warn: () => {} });
+  }
+
+  it('設定驗不過：那一列留在清單上、改成停用，原因指名它；前後的列照樣在', async () => {
+    const { plugins, dropped } = await loadRows(
+      "- id: echo\n  name: '@nexus/plugin-echo'\n" +
+        "- id: todo\n  name: '@nexus/plugin-todo'\n  config:\n    allowParallelInProgress: '不是布林'\n" +
+        "- id: plan\n  name: '@nexus/plugin-plan-mode'\n",
     );
+    expect(plugins.map((entry) => [entry.id, entry.disabled === true])).toEqual([
+      ['echo', false],
+      ['todo', true],
+      ['plan', false],
+    ]);
+    expect(dropped).toEqual([
+      {
+        id: 'todo',
+        module: '@nexus/plugin-todo',
+        stage: 'config',
+        message: expect.stringMatching(
+          /^todo \(todo\) 的 config 不合法 — allowParallelInProgress/u,
+        ) as unknown,
+        entry: plugins[1],
+      },
+    ]);
+  });
+
+  it('模組載得起來但不是一顆 plugin：那一列掉了', async () => {
+    const { plugins, dropped } = await loadRows("- id: path\n  name: 'node:path'\n");
+    expect(plugins).toEqual([]);
+    expect(dropped).toMatchObject([{ id: 'path', module: 'node:path', stage: 'module' }]);
+    expect(dropped[0]?.message).toContain('沒有匯出一顆 plugin');
+  });
+
+  it('停用的列模組載不起來、設定寫壞都不算掉：dsh 對停用的列不載入、不驗', async () => {
+    const { plugins, dropped } = await loadRows(
+      "- id: gone\n  name: '@nexus/根本沒這個套件'\n  disabled: true\n" +
+        "- id: todo\n  name: '@nexus/plugin-todo'\n  disabled: true\n  config:\n    allowParallelInProgress: 1\n",
+    );
+    expect(dropped).toEqual([]);
+    expect(plugins.map((entry) => entry.id)).toEqual(['todo']);
+  });
+
+  it('沒有設定格式卻寫了 config：不算掉，照樣掛、原樣帶著，記一筆', async () => {
+    const { plugins, dropped, ignoredConfig } = await loadRows(
+      "- id: observation-policy\n  name: '@nexus/core/observation-policy'\n  config:\n    anything: 1\n",
+    );
+    expect(dropped).toEqual([]);
+    expect(plugins[0]?.disabled).not.toBe(true);
+    expect(plugins[0]?.config).toEqual({ anything: 1 });
+    expect(ignoredConfig).toEqual([
+      { id: 'observation-policy', module: '@nexus/core/observation-policy' },
+    ]);
+  });
+
+  it('整份的錯照舊整個拋：重複 id', async () => {
+    await expect(
+      loadRows(
+        "- id: echo\n  name: '@nexus/plugin-echo'\n",
+        "- insert:\n    - id: echo\n      name: '@nexus/plugin-echo'\n",
+      ),
+    ).rejects.toThrow(/echo/u);
   });
 });
 
@@ -564,7 +669,7 @@ describe('模組解析', () => {
     expect(entry).toMatchObject({ disabled: true, config: { allowParallelInProgress: true } });
   });
 
-  it('沒寫 config 就不帶——沒有 Config 的 plugin 收到設定會拋', async () => {
+  it('沒寫 config 就不帶——不替沒有 Config 的 plugin 編一份設定出來', async () => {
     const entry = await resolveEntryModule({ name: '@nexus/core/invariant' });
     expect('config' in entry).toBe(false);
   });
@@ -901,7 +1006,11 @@ describe('insert 的模組路徑錨在 patch 檔旁邊', () => {
       "- insert:\n    - id: probe\n      name: './probe.ts'\n",
     );
 
-    const loaded = await loadPluginConfig({ shipped, overlays: [patch], warn: () => {} });
+    const { plugins: loaded } = await loadPluginConfig({
+      shipped,
+      overlays: [patch],
+      warn: () => {},
+    });
     expect(loaded).toHaveLength(1);
     expect(loaded[0]?.plugin.name).toBe('probe');
   });
@@ -918,7 +1027,11 @@ describe('insert 的模組路徑錨在 patch 檔旁邊', () => {
       "- insert:\n    - id: up\n      name: '../up.ts'\n",
     );
 
-    const loaded = await loadPluginConfig({ shipped, overlays: [patch], warn: () => {} });
+    const { plugins: loaded } = await loadPluginConfig({
+      shipped,
+      overlays: [patch],
+      warn: () => {},
+    });
     expect(loaded[0]?.plugin.name).toBe('up');
   });
 
@@ -932,7 +1045,11 @@ describe('insert 的模組路徑錨在 patch 檔旁邊', () => {
       `- insert:\n    - id: abs\n      name: '${module}'\n`,
     );
 
-    const loaded = await loadPluginConfig({ shipped, overlays: [patch], warn: () => {} });
+    const { plugins: loaded } = await loadPluginConfig({
+      shipped,
+      overlays: [patch],
+      warn: () => {},
+    });
     expect(loaded[0]?.plugin.name).toBe('abs');
   });
 
@@ -945,7 +1062,11 @@ describe('insert 的模組路徑錨在 patch 檔旁邊', () => {
       "- insert:\n    - id: echo\n      name: '@nexus/plugin-echo'\n",
     );
 
-    const loaded = await loadPluginConfig({ shipped, overlays: [patch], warn: () => {} });
+    const { plugins: loaded } = await loadPluginConfig({
+      shipped,
+      overlays: [patch],
+      warn: () => {},
+    });
     expect(loaded[0]?.plugin.name).toBe('echo');
   });
 

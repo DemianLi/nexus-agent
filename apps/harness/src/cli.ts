@@ -93,6 +93,7 @@ import { createLiveModel, loadLiveEnvIfNeeded, DEFAULT_LIVE_MODEL_ID } from './l
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { createFileReferencePlugin } from './file-references.js';
 import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js';
+import { auditStartupEntries } from './startup-audit.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
@@ -485,11 +486,12 @@ export function resolveSessionLogDir(
  * 一份，兩個入口共用：講的是同一列設定。
  */
 export const SESSION_LOG_OFF_DISCLOSURE =
-  '會話日誌：只在記憶體裡（行程結束就沒了；清單上 session-persistence 那一列關掉了）';
+  '會話日誌：只在記憶體裡（行程結束就沒了；清單上 session-persistence 那一列沒掛上）';
 
 /**
- * 落盤關掉的時候（清單上 `session-persistence` 那一列 `disabled: true`，
- * [#612](https://github.com/DemianLi/nexus-agent/issues/612)），擋掉跟它矛盾的旗標。兩個入口共用。
+ * 落盤沒掛的時候（清單上 `session-persistence` 那一列 `disabled: true`，
+ * [#612](https://github.com/DemianLi/nexus-agent/issues/612)；或設定驗不過而掉了，#751），擋掉跟它矛盾的旗標。
+ * 兩個入口共用。**訊息兩種成因都講**：掉了的那一種在這之前已經印了指名原因的警告，要改的是設定，不是 `disabled`。
  *
  * - **`--resume`**：續接答應呼叫端「這一次也接得回來」，而沒有落盤的話這一次一個位元組都不寫回去。
  *   照 dsh：headless 的 `--session-id` 沒有持久化服務就當場拋，理由正是「跑完會印出 id，卻在
@@ -509,17 +511,20 @@ export function assertPersistenceFlags(
 ): void {
   if (mounted) return;
   const off =
-    '清單上 `session-persistence` 那一列關掉了（`disabled: true`），這一次會話日誌只在記憶體裡';
+    '清單上 `session-persistence` 那一列沒掛上（寫了 `disabled: true`，或設定驗不過而掉了），' +
+    '這一次會話日誌只在記憶體裡';
+  const fix =
+    '把那一列的 `disabled` 拿掉（或寫成 `false`）；設定驗不過的話照啟動時那段警告把設定改好';
   if (invocation.resume !== undefined) {
     throw new Error(
       `--resume 接不起來：${off}——接回來之後一個位元組都不會寫回去，下一次也接不到這一段。` +
-        `要續接就把那一列的 \`disabled\` 拿掉（或寫成 \`false\`）。`,
+        `要續接就讓那一列掛上：${fix}。`,
     );
   }
   if (invocation.sessionLog !== undefined) {
     throw new Error(
       `--session-log 跟設定矛盾：${off}，給了目錄也不會寫。` +
-        `要落盤就把那一列的 \`disabled\` 拿掉（或寫成 \`false\`）；要只在記憶體裡就別給 --session-log。`,
+        `要落盤就讓那一列掛上：${fix}；要只在記憶體裡就別給 --session-log。`,
     );
   }
 }
@@ -1410,10 +1415,15 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // 之前，那是承重的**（#612）：落盤掛不掛由清單上 `session-persistence` 那一列講，而下面讀續接、
   // 解析日誌根都要先知道答案——關掉的時候一件都不該做。清單在這裡載也讓設定寫壞的那一類錯
   // 早於續接拿租約，拋了沒有東西要放。
-  const plugins = await loadDefaultPlugins({
+  const loaded = await loadDefaultPlugins({
     env: options.env ?? process.env,
     ...(invocation.patches !== undefined && { patches: invocation.patches }),
   });
+  // **掉了哪幾列在這裡判第一次**（#751）：模組載不進來、設定驗不過的列已經標成沒掛；必掛的掉了就在這裡起不來，
+  // 早於下面任何一個 `startupSetting`，也早於建模型（`--live` 時 `live-model` 那一列掉了不退回預設值）。
+  // 可少掛的掉了印一段警告到標準錯誤，只印這一次。
+  for (const line of auditStartupEntries(loaded, { live: invocation.live })) printer.error(line);
+  const { plugins } = loaded;
   const persistenceMounted = startupEntryMounted(plugins, sessionPersistencePlugin);
   assertPersistenceFlags(invocation, persistenceMounted);
   // **起動期解一次**。值不合法跟清單上其他列的毛病落在同一個時刻——跑起來之前。

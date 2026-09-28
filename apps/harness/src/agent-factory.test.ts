@@ -498,7 +498,7 @@ describe('迴圈上限', () => {
      * `~/.nexus-agent`**；自己傳一份 `env` 會把那道安全網繞過去。
      */
     it('整條路：patch 改掉出貨清單那一列，組裝點當場拿到新的值', async () => {
-      const plugins = await loadDefaultPlugins({
+      const { plugins } = await loadDefaultPlugins({
         patches: ['src/settings/settings-override.patch.yml'],
       });
       const message = await limitFrom({ plugins });
