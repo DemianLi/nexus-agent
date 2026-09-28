@@ -28,7 +28,10 @@ import { projectNonText } from './project-content.js';
 
 export { publicToolName, SERVER_NAME_PATTERN } from './names.js';
 
-/** 這個 plugin 宣告的能力名。要相依「有 MCP 工具在」的 plugin 把它放進自己的 `requires`。 */
+/**
+ * 這個 plugin 宣告的能力名。要相依「有 MCP 工具在」的 plugin 把它放進自己的 `requires`。**連上、工具也註冊好了才宣告**：
+ * 連不上而照樣掛上的那一列沒有工具，不宣告（見 {@link mcpPlugin}）。
+ */
 export const MCP_CAPABILITY = 'mcp';
 
 /** 一次 `tools/call` 的預設逾時，照 dsh 的 `toolCallTimeoutMs`。 */
@@ -91,6 +94,13 @@ export const mcpConfigSchema = z.strictObject({
   connection: mcpConnectionSchema,
   /** 一次 `tools/call` 的逾時。省略即 {@link DEFAULT_TOOL_CALL_TIMEOUT_MS}。 */
   toolCallTimeoutMs: z.number().int().positive().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
+  /**
+   * 掛上那一刻連不上、列不出工具、或工具註冊不上時，要不要讓這一列失敗。照 dsh 的 `failOnStartupError`，**預設
+   * `false`**：那一列照樣掛上、這台伺服器沒有工具、交出一則警告。寫 `true` 就在 `apply` 裡拋——清單上的可少掛列
+   * 因此掉了（啟動時的警告指名它），手搭清單則整個載入失敗（dsh `packages/mcp/mcp-client/src/index.ts:194-202`，
+   * `477b4f4`）。
+   */
+  failOnStartupError: z.boolean().default(false),
 });
 
 /** 驗過的設定。 */
@@ -102,16 +112,23 @@ export type McpPluginOptions = z.input<typeof mcpConfigSchema>;
 /**
  * MCP plugin。
  *
- * `apply` 是 async 的，裡面做三件事：連上 server、`tools/list` 拿工具、逐個註冊。三件
- * 事**都在載入期**——agent 跑起來的時候工具集合已經定了，這是共同軸線的「載入期失敗」
- * 在這個 plugin 上的樣子。連不上、列不出、註冊撞名，任何一件事發生都讓整份清單載入
- * 失敗，而不是安靜地少幾個工具。
+ * `apply` 是 async 的，裡面做四件事：預留這台伺服器的名字、連上 server、`tools/list` 拿工具、逐個註冊。四件事
+ * **都在載入期**——agent 跑起來的時候工具集合已經定了。
  *
- * **這一條是刻意偏離 dsh 的**：dsh 的 `failOnStartupError` 預設 `false`（連不上照樣啟動、
- * 沒有工具）。nexus 的共同軸線是 fail-closed、載入期失敗，而
- * `@langchain/mcp-adapters` 的預設（`onConnectionError: 'throw'`、
- * `throwOnLoadError: true`）本來就站在同一邊，所以照 adapter 的預設走。理由是 repo
- * 層級的軸線，不是套件層級的預設值偏好。
+ * **失敗照 dsh 分兩類**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）：
+ *
+ * - **同一個 `serverName` 掛兩次**：不管 {@link McpConfig.failOnStartupError}，這一列 `apply` 拋錯。dsh 在連線之前
+ *   先預留名字、重複就讓那一個實例失敗（`packages/mcp/mcp-client/src/index.ts:160-176`）。預留用一個服務名
+ *   （`mcp:server:<serverName>`）：服務是單一佔位、重名就拋，而且訊息指名兩個 plugin。
+ * - **連不上、列不出工具、工具註冊不上**：預設收住——撤掉這一列已經註冊的工具、收掉連線、交出一則警告
+ *   （`registry.logger`），那一列照樣掛上、這台伺服器沒有工具。寫 `failOnStartupError: true` 才拋。dsh 在初次
+ *   同步時也是三種一起管（連線與列工具經 `ready`，註冊經 `registrationFailure`，`connection.ts:130-140`）。
+ *
+ * 收住的做法是自己 `catch`，不是把 adapter 換成 `onConnectionError: 'ignore'`：那一格只管連線，列不出工具照樣拋，
+ * 蓋不到 dsh 的三種。
+ *
+ * **偏離登記**：dsh 連不上之後在背景重連、連上就把工具補上。我們一次組裝之內工具就定了（deepagents 建好就不可變，
+ * `packages/nexus-core/src/load.ts` 檔頭），不重連；serve 下一條對話重新組裝時會再連一次。
  *
  * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
  * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
@@ -122,12 +139,15 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
   Config: mcpConfigSchema,
   async apply(registry: PluginRegistry, config: McpConfig): Promise<void> {
     const { serverName } = config;
+    // 名字先佔住，在連線之前：重名是設定寫錯，不是伺服器不在，照 dsh 讓這一列失敗、不收成警告。
+    registry.services.provide(`mcp:server:${serverName}`, { serverName });
     const client = new MultiServerMCPClient({
       mcpServers: { [serverName]: toAdapterConnection(config) },
       // 名字由 `publicToolName` 一個地方說了算，所以 adapter 這邊的前綴全部關掉。
       // 開著的話會有兩份拼名字的邏輯，而其中一份不做正規化。
       prefixToolNameWithServerName: false,
       additionalToolNamePrefix: '',
+      // 兩格都拋，失敗才全部走到下面同一個 `catch`，收住還是拋由 `failOnStartupError` 一個地方決定。
       throwOnLoadError: true,
       onConnectionError: 'throw',
       // 圖片、音訊這些非文字塊換成文字說明（#642）：模型那一側的工具訊息只收文字。換在工具本體裡，
@@ -138,20 +158,31 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
       },
     });
 
+    const registered: (() => void)[] = [];
     try {
       for (const tool of await client.getTools()) {
         // 改的是**註冊給模型看的**名字。`tools/call` 送上線的是 adapter 在建這個工具時
         // 就閉包住的 raw name（`dist/tools.js:456`），不是這個欄位——所以改它不會讓
         // 呼叫送到不存在的工具上。
         tool.name = publicToolName(serverName, tool.name);
-        registry.tools.register(tool as StructuredTool);
+        registered.push(registry.tools.register(tool as StructuredTool));
       }
     } catch (error) {
+      // **模型看到的是整台伺服器的工具或一個都沒有**，照 dsh：註冊到一半撞了，已經註冊的撤掉（撤銷是冪等的，
+      // 之後載入器因為別的理由再撤一次也沒事）。
+      for (const undo of registered.reverse()) undo();
       // 回滾期的資源釋放是 plugin 自己的事——`lifecycle` 通道只管關機，而這裡是
       // `apply` 還沒跑完就壞掉，登記根本還沒發生。連線已經開了就得收掉，否則這個
-      // 子行程會活過整個行程。
+      // 子行程會活過整個行程。收住的那條路也一樣：沒有工具就沒有理由留著它。
       await client.close().catch(() => {});
-      throw error;
+      if (config.failOnStartupError) throw error;
+      const reason = error instanceof Error ? error.message : String(error);
+      registry.logger.warn(
+        `MCP 伺服器 "${serverName}" 連不上、列不出工具或工具註冊不上，這一次沒有它的工具` +
+          `（要讓這一列失敗就寫 failOnStartupError: true）：${reason}`,
+      );
+      // 不宣告 `MCP_CAPABILITY`：它說的是「有 MCP 工具在」，這台一個都沒有。
+      return;
     }
 
     registry.capabilities.provide(MCP_CAPABILITY);

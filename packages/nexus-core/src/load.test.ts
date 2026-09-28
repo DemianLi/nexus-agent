@@ -725,3 +725,45 @@ describe('loadPlugins 的逐列掉模式', () => {
     expect(dropped).toEqual([]);
   });
 });
+
+/**
+ * **外掛交出警告的出口**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)），照 dsh 的 `ctx.logger`：
+ * `apply` 裡交出的話記下是誰說的，組裝完由呼叫端讀出來跟掉了的列印在同一段。
+ */
+describe('registry.logger', () => {
+  it('`apply` 裡交出的警告記下是誰交的，依順序', async () => {
+    const { registry, dispose } = await loadPlugins([
+      fakePlugin('quiet', () => undefined),
+      fakePlugin('chatty', (r) => {
+        r.logger.warn('第一句');
+        r.logger.warn('第二句');
+      }),
+    ]);
+    await dispose();
+    expect(registry.logger.warnings()).toEqual([
+      { origin: { id: 'chatty#0', name: 'chatty' }, message: '第一句' },
+      { origin: { id: 'chatty#0', name: 'chatty' }, message: '第二句' },
+    ]);
+  });
+
+  it('`apply` 之外講不出是誰：拋', () => {
+    expect(() => createRegistry().logger.warn('沒有人')).toThrow(/logger\.warn\(\)/u);
+  });
+
+  /** 一列 `apply` 失敗撤掉的是它註冊的東西，講過的話照樣交出去——那可能正是它為什麼失敗。 */
+  it('逐列掉模式下 `apply` 拋錯的那一列，講過的話還在', async () => {
+    const { registry, dispose, dropped } = await loadPlugins(
+      [
+        fakePlugin('failing', (r) => {
+          r.logger.warn('我快要失敗了');
+          throw new Error('果然');
+        }),
+      ],
+      undefined,
+      { perEntry: true },
+    );
+    await dispose();
+    expect(dropped).toHaveLength(1);
+    expect(registry.logger.warnings().map(({ message }) => message)).toEqual(['我快要失敗了']);
+  });
+});

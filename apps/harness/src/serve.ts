@@ -72,6 +72,7 @@ import {
   assemblyDropsOf,
   auditStartupEntries,
   describeDrop,
+  describeWarnings,
   dropReasonsOf,
   optionalEntriesOf,
   startupErrorFrom,
@@ -383,7 +384,13 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     throw error instanceof AssemblyDropError ? startupErrorFrom(loaded, error, audit) : error;
   });
   await trial.dispose();
-  for (const line of startupWarning(loaded, assemblyDropsOf(loaded, trial.dropped))) log(line);
+  for (const line of startupWarning(
+    loaded,
+    assemblyDropsOf(loaded, trial.dropped),
+    trial.warnings,
+  )) {
+    log(line);
+  }
   // **試組掉了的列帶進每條 thread 的組裝，直接算沒掛**（卡上第 6 項）：不再重試、不再每條各印一次。照 dsh：樹只掛
   // 一次，沒起來的條目一直不在，直到改設定重載；我們沒有重載，所以到重啟為止。標成 `disabled: true` 跟讀清單那一次
   // 設定驗不過的列同一個做法，載入器因此記成沒掛。
@@ -525,6 +532,10 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
       // 只作用在這一條——可少掛的在這條 thread 裡不掛、伺服器日誌記一筆；不能少掛的已經在上面讓這條 thread 建不起來。
       for (const drop of assemblyDropsOf(loaded, built.dropped)) {
         log(`[組裝] thread "${threadId}" 這一條沒掛上：${describeDrop(drop)}`);
+      }
+      // 外掛交出的警告同理逐條記（例如 MCP 連不上）：它每條對話都重連一次，這一條連不上不代表上一條也沒連上。
+      for (const line of describeWarnings(loaded, built.warnings)) {
+        log(`[組裝] thread "${threadId}" 警告：${line}`);
       }
       // **對話從日誌推回模型**（#306），同 CLI 的 `--resume`，在這條 thread 的第一輪之前。灌不進去就讓它
       // 起不來（理由見 `conversation-restore.ts`）：剛建好的 agent 與續接那把租約都要收掉，下一次請求才重試得了。

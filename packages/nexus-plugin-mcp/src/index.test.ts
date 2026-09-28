@@ -12,8 +12,10 @@
 
 import { fileURLToPath } from 'node:url';
 import type { ToolMessage } from '@langchain/core/messages';
+import { tool } from '@langchain/core/tools';
 import { loadPlugins } from '@nexus/core';
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import {
   createMcpPlugin,
   DEFAULT_TOOL_CALL_TIMEOUT_MS,
@@ -188,8 +190,12 @@ describe('接上一台真的 MCP server', () => {
     }
   });
 
-  it('同一台 server 掛兩次撞在工具那一層，訊息指名兩個 plugin', async () => {
-    // `name` 不唯一是刻意的，所以撞不在 plugin 清單那一層——撞在它們註冊的東西上。
+  /**
+   * 同一個 `serverName` 掛兩次：照 dsh 在連線之前就讓後來那一個失敗，**不管 `failOnStartupError`**——那是設定寫錯，
+   * 不是伺服器不在，不收成警告（#751）。
+   */
+  it('同一台 server 掛兩次：後來那一個在連線之前就拋，訊息指名兩個 plugin', async () => {
+    // `name` 不唯一是刻意的，所以撞不在 plugin 清單那一層——撞在它們預留的伺服器名上。
     await expect(loadPlugins([fixturePlugin(), fixturePlugin()])).rejects.toThrow(
       /mcp#0 \(mcp\)[\s\S]*mcp#1 \(mcp\)/,
     );
@@ -208,14 +214,60 @@ describe('接上一台真的 MCP server', () => {
     }
   });
 
-  it('連不上就讓整份清單載入失敗，不是安靜地少幾個工具', async () => {
-    // 一個立刻結束、什麼都不印的子行程：連得上 stdio、握不成手。用它而不是一個不存在
-    // 的檔案，是為了讓這條測試通過時 CI 的輸出是乾淨的——子行程的 stderr 預設 inherit。
-    const plugin = createMcpPlugin({
-      serverName: 'missing',
-      connection: { transport: 'stdio', command: process.execPath, args: ['-e', ''] },
-    });
-    await expect(loadPlugins([plugin])).rejects.toThrow('mcp#0 (mcp)');
+  /**
+   * 卡上的驗收（#751）：**連不上照 dsh 照樣掛上**——那台伺服器沒有工具、交出一則警告，不是整份清單載入失敗。子行程
+   * 收掉了：沒有工具就沒有理由留著它，而收住的那條路沒登記 `onDispose`，漏收的話它會活過整個行程。
+   */
+  it('連不上：照樣掛上、沒有那台的工具、交出一則警告，子行程收掉了', async () => {
+    const { registry, dispose } = await loadPlugins([missingServer()]);
+    try {
+      expect(registry.tools.effective().size).toBe(0);
+      expect(registry.logger.warnings()).toHaveLength(1);
+      expect(registry.logger.warnings()[0]).toMatchObject({
+        origin: { name: 'mcp' },
+        message: expect.stringMatching(/^MCP 伺服器 "missing" 連不上、列不出工具或工具註冊不上/u),
+      });
+      // 「有 MCP 工具在」不成立，所以不宣告。
+      expect(registry.capabilities.has(MCP_CAPABILITY)).toBe(false);
+      await vi.waitFor(() => expect(childProcessCount()).toBe(0));
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('寫 `failOnStartupError: true`：連不上就在 `apply` 裡拋，手搭清單整個載入失敗', async () => {
+    await expect(loadPlugins([missingServer({ failOnStartupError: true })])).rejects.toThrow(
+      'mcp#0 (mcp)',
+    );
+    await vi.waitFor(() => expect(childProcessCount()).toBe(0));
+  });
+
+  /**
+   * 工具註冊不上（外來的 plugin 先佔了這台伺服器命名空間裡的一個名字）也收成警告，而且**整台一個都不註冊**，照 dsh：
+   * 模型看到的是整台的工具或一個都沒有，不會是一半。
+   */
+  it('工具名被別的 plugin 佔了：收成警告，這台的工具一個都不留，佔名的那個照樣在', async () => {
+    const squatter = {
+      plugin: {
+        name: 'squatter',
+        apply: (r: Parameters<typeof mcpPlugin.apply>[0]) =>
+          void r.tools.register(
+            tool(() => '別人的', {
+              name: 'mcp__fixture__snapshot',
+              description: '佔名',
+              schema: z.object({}),
+            }),
+          ),
+      },
+    };
+    const { registry, dispose } = await loadPlugins([squatter, fixturePlugin()]);
+    try {
+      expect([...registry.tools.effective().keys()]).toEqual(['mcp__fixture__snapshot']);
+      expect(registry.tools.resolve('mcp__fixture__snapshot')?.origin.name).toBe('squatter');
+      expect(registry.logger.warnings()[0]?.message).toMatch(/squatter/u);
+    } finally {
+      await dispose();
+    }
   });
 
   it('dispose 之後子行程收掉了，而且呼叫第二次是 no-op', async () => {
@@ -231,6 +283,18 @@ describe('接上一台真的 MCP server', () => {
     await vi.waitFor(() => expect(childProcessCount()).toBe(0));
   });
 });
+
+/**
+ * 一台連不上的 server：一個立刻結束、什麼都不印的子行程，連得上 stdio、握不成手。用它而不是一個不存在的檔案，是為了讓
+ * 測試通過時 CI 的輸出是乾淨的——子行程的 stderr 預設 inherit。
+ */
+function missingServer(extra: { failOnStartupError?: boolean } = {}) {
+  return createMcpPlugin({
+    serverName: 'missing',
+    connection: { transport: 'stdio', command: process.execPath, args: ['-e', ''] },
+    ...extra,
+  });
+}
 
 /** 只用來餵設定檢查，不會真的去連。 */
 function emptyStdio() {

@@ -177,10 +177,14 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 
 # 插一個原本不在清單裡的 plugin
 - insert:
-    - id: mcp
+    - id: mcp-github
       name: '@nexus/plugin-mcp'
       config:
-        servers: []
+        serverName: github
+        connection:
+          transport: stdio
+          command: npx
+          args: ['-y', '@modelcontextprotocol/server-github']
 
 # 插一顆自己寫的：路徑錨在這個 patch 檔旁邊（`./` 與 `../` 都可以，絕對路徑也可以），
 # 模組要 `export default` 那顆 plugin
@@ -208,6 +212,11 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   **警告只印在啟動時**：CLI 印到標準錯誤，`serve` 印到伺服器日誌、在印出網址之前。`serve` 啟動時掉了的列，
   之後每條對話都直接算沒掛，不再重試，到重啟為止；啟動時沒掉、某一條對話組裝時才掉的列，只在那條對話裡不掛，
   伺服器日誌記一行「[組裝] thread "…" 這一條沒掛上」。
+- **掛上了、但外掛自己有話要講的，也在那段警告裡。** 例如 MCP 伺服器連不上：那一列照 dsh 照樣掛上、那台
+  沒有工具，啟動時印「警告：N 則外掛掛上時交出的話」指名它與原因。`serve` 每條對話各連一次，某一條又連不上
+  就記一行「[組裝] thread "…" 警告：…」，伺服器回來之後開的對話就有工具了。要它連不上就算掉，那一列的
+  `config` 寫 `failOnStartupError: true`（掉了之後照上一條，到重啟為止不再連），見
+  [`packages/nexus-plugin-mcp/README.md`](../packages/nexus-plugin-mcp/README.md)。
 - **空檔與只有註解的檔會讓啟動失敗。** 要停用某一層請寫 `[]`——「我把它清空了」與「我把它
   寫壞了」在磁碟上長得一樣，所以不猜。
 - **patch 檔只有你自己動得了才會被接受。** 檔案本身與它每一層上層目錄都不能讓群組或其他人

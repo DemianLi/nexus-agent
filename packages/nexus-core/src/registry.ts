@@ -6,16 +6,17 @@
  * `permissions` / `approvals`）沒有名字可撞，走匿名追加。折疊成
  * `createDeepAgent` 參數的部分在 {@link ./fold.ts}。
  *
- * 外加七條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
+ * 外加八條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
  * {@link LifecycleRegistrationPoint} 回答「這些東西怎麼收掉」，
  * {@link TelemetryRegistrationPoint} 回答「送出去之前怎麼洗」，
  * {@link InvariantRegistrationPoint} 回答「這個會話發生的事有沒有破壞誰的約定」，
  * {@link CommandRegistrationPoint} 回答「人打得出哪些斜線命令」，
  * {@link SessionRegistrationPoint} 回答「誰拿得到這個會話的日誌」，
- * {@link ServiceRegistrationPoint} 回答「這次組裝的協作者從哪裡拿」（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
- * 九個註冊點回答的是「這個 agent 由什麼組成」，六者正交。
+ * {@link ServiceRegistrationPoint} 回答「這次組裝的協作者從哪裡拿」（[#459](https://github.com/DemianLi/nexus-agent/issues/459)），
+ * {@link PluginLogger} 回答「掛上的時候有什麼要跟人講」（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）。
+ * 九個註冊點回答的是「這個 agent 由什麼組成」，七者正交。
  *
- * **第七條是唯一一條沒有人往裡面註冊東西的**：{@link DisabledEntryView | disabledEntries}
+ * **第八條是唯一一條沒有人往裡面註冊東西的**：{@link DisabledEntryView | disabledEntries}
  * 回答「產生這個 registry 的那份清單說了什麼」，是唯讀視圖而不是註冊點
  * （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。它進得了這份清單是因為
  * 它確實是 `PluginRegistry` 的一個欄位，而那個數字有絆索在數（`registry-channel-count.test.ts`）。
@@ -575,6 +576,36 @@ export interface LifecycleRegistrationPoint {
   takeDisposers(): NamedEntry<Disposer>[];
 }
 
+/** 外掛交出的一則警告，連同是誰交的。 */
+export interface PluginWarning {
+  readonly origin: PluginOrigin;
+  readonly message: string;
+}
+
+/**
+ * `logger` 通道：外掛在 `apply` 裡**交出一句給人看的話**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)），
+ * 照 dsh 的 `ctx.logger`。例子是 MCP 連不上：那一列照樣掛上、那台伺服器沒有工具，要讓人知道。
+ *
+ * **只收 `apply` 裡的呼叫**，同其他註冊點：沒有 origin 就講不出是誰說的。呼叫端（產品路徑上是 CLI 與 serve）在組裝完
+ * 之後讀 {@link warnings}，跟掉了的列印在同一段。所以這一格收的是**掛上那一刻**的話，不是執行期的記錄；dsh 的
+ * logger 兩者都收，我們執行期沒有要講的（MCP 不重連，見 `@nexus/plugin-mcp`）。
+ *
+ * **它與九個註冊點不同軸**，理由同 lifecycle：產物不進 `createDeepAgent` 的參數。也不跟著回滾：一列 `apply` 失敗
+ * 撤掉的是它註冊的東西，它講過的話照樣交出去——那可能正是它為什麼失敗。
+ */
+export interface PluginLogger {
+  /**
+   * 交出一則警告。
+   * @param message - 給人看的一句話，不必自己寫是誰（讀的一方從 origin 補）。
+   */
+  warn(message: string): void;
+  /**
+   * 目前交出的警告，依順序。
+   * @returns 每一則連同是誰交的。
+   */
+  warnings(): readonly PluginWarning[];
+}
+
 /**
  * `telemetry` 通道：**送出去之前**的脫敏規則。
  *
@@ -845,6 +876,8 @@ export interface PluginRegistry {
   readonly invariants: InvariantRegistrationPoint;
   readonly commands: CommandRegistrationPoint;
   readonly sessions: SessionRegistrationPoint;
+  /** 外掛在 `apply` 裡交出的警告，見 {@link PluginLogger}。 */
+  readonly logger: PluginLogger;
   /** 這一次沒掛上的條目（明著被關掉的，加上掉了的），見 {@link DisabledEntryView}。**不算註冊點。** */
   readonly disabledEntries: DisabledEntryView;
 }
@@ -1235,6 +1268,14 @@ export function createRegistry(): InternalPluginRegistry {
     takeDisposers: () => disposers.drain(),
   };
 
+  const warnings: PluginWarning[] = [];
+  const loggerPoint: PluginLogger = {
+    warn(message) {
+      warnings.push({ origin: requireOrigin('logger.warn()'), message });
+    },
+    warnings: () => [...warnings],
+  };
+
   /** 明著被關掉的條目留下的唯一痕跡，見 {@link DisabledEntryView}。 */
   const disabledNames: string[] = [];
 
@@ -1254,6 +1295,7 @@ export function createRegistry(): InternalPluginRegistry {
     invariants: invariantPoint,
     commands: commandPoint,
     sessions: sessionPoint,
+    logger: loggerPoint,
     disabledEntries: {
       has: (pluginName) => disabledNames.includes(pluginName),
       names: () => [...disabledNames],

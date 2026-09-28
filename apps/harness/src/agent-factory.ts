@@ -567,6 +567,10 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        */
       dropped: assemblyDrops,
       /**
+       * 外掛在 `apply` 裡交出的警告（#751，`registry.logger`），例如 MCP 連不上而照樣掛上。呼叫端跟掉了的列印在同一段。
+       */
+      warnings: registry.logger.warnings(),
+      /**
        * plugin 註冊的**人的命令**。進入點靠它把一行 `/name` 發派出去。
        *
        * 交出去的是整個註冊點而不是只有 `find`，理由是 `register()` 自己就擋得住誤用：
