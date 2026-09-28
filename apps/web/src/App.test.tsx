@@ -1578,6 +1578,38 @@ describe('以前的會話', () => {
       expect(list.textContent).not.toContain('還沒有以前的會話');
     });
 
+    it('按內容搜（#760）：問的是伺服器，內容才對得上的那一列帶著片段接在後面', async () => {
+      seq = 0;
+      const fake = fakeClient([]);
+      const asked: string[] = [];
+      render(
+        <App
+          client={{
+            ...listing(fake, async () => ({ kind: 'ok', result: recent() })),
+            searchThreads: async (query) => {
+              asked.push(query);
+              return {
+                kind: 'ok',
+                result: {
+                  items: [{ threadId: 't2', snippet: '…規格裡講登入的那一段…' }],
+                  hasMore: false,
+                },
+              };
+            },
+          }}
+        />,
+      );
+      const list = await openList();
+      await waitFor(() => expect(within(list).getAllByRole('button')).toHaveLength(3));
+      fireEvent.change(within(list).getByRole('searchbox', { name: '搜尋以前的會話' }), {
+        target: { value: '登入' },
+      });
+      await waitFor(() => expect(rowNames(list)).toHaveLength(3));
+      expect(asked).toEqual(['登入']);
+      const hit = within(list).getByRole('button', { name: /讀規格/ });
+      expect(within(hit).getByTestId('thread-snippet').textContent).toBe('…規格裡講登入的那一段…');
+    });
+
     it('過 axe', async () => {
       await rendered();
       expect(await axeViolations(document.body)).toEqual([]);

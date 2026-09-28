@@ -1,3 +1,4 @@
+import type { ThreadSearchOutcome } from '@nexus/wire';
 import { Plus } from 'lucide-react';
 
 import { ThreadList } from '@/components/thread-list';
@@ -17,12 +18,15 @@ export function AppSidebar({
   currentTitle,
   onNewConversation,
   onPick,
+  search,
 }: {
   readonly directory: ThreadDirectory;
   readonly currentThreadId: string;
   readonly currentTitle: string | null;
   readonly onNewConversation: () => void;
   readonly onPick: (threadId: string) => void;
+  /** 按內容搜以前的會話（#760），原樣交給 `ThreadList`。 */
+  readonly search?: (query: string, signal: AbortSignal) => Promise<ThreadSearchOutcome>;
 }) {
   const { isMobile, openMobile, setOpenMobile, state } = useSidebar();
   const visible = isMobile ? openMobile : state === 'expanded';
@@ -65,6 +69,7 @@ export function AppSidebar({
               setOpenMobile(false);
               onPick(threadId);
             }}
+            {...(search === undefined ? {} : { search })}
           />
         )}
       </SidebarContent>
