@@ -1202,6 +1202,74 @@ describe('記住這條 thread', () => {
       });
     }
 
+    it('計劃卡：重新整理後走歷史照樣在，結果讀自工具卡（同意、要求修改；舊路由的拒絕也認得）', async () => {
+      seq = 0;
+      remember('審過計劃的那條');
+      const plan = (callId: string, title: string, finished: Record<string, unknown>) => [
+        historyFrame('tools', ['tools:a'], {
+          event: 'tool-started',
+          tool_call_id: callId,
+          tool_name: 'exit_plan_mode',
+          input: JSON.stringify({ plan: `# ${title}\n\n照這樣做。` }),
+        }),
+        historyFrame('tools', ['tools:a'], {
+          event: 'tool-finished',
+          tool_call_id: callId,
+          ...finished,
+        }),
+      ];
+      const events = [
+        ...plan('call_1', '第一版', {
+          failed: true,
+          message: '使用者關掉了計劃審核，要自己說話。留在計劃模式，停在這裡，等使用者的訊息。',
+        }),
+        ...plan('call_2', '舊路由', {
+          failed: true,
+          message: '有人看過並拒絕了 "exit_plan_mode"。',
+        }),
+        ...plan('call_3', '第二版', {
+          message: '計劃已獲准，離開計劃模式；從你的下一步起照計劃執行。',
+        }),
+      ].map((event, index) => ({ ...event, event_id: `h:${index}` }) as Event);
+      const fake = fakeClient([]);
+      render(
+        <App
+          client={{
+            ...fake.client,
+            threadHistory: async () => ({
+              kind: 'ok',
+              result: { events, firstSeq: 0, throughSeq: 0, hasMore: false, legacy: false },
+            }),
+          }}
+        />,
+      );
+
+      await waitFor(() => expect(screen.getAllByTestId('plan-card')).toHaveLength(3));
+      expect(
+        screen
+          .getAllByTestId('plan-card')
+          .map((card) => [
+            within(card).getByTestId('plan-title').textContent,
+            within(card).getByTestId('plan-outcome').textContent,
+          ]),
+      ).toEqual([
+        ['第一版', '要求修改'],
+        ['舊路由', '要求修改'],
+        ['第二版', '已同意'],
+      ]);
+      // 從計劃卡打開全文：分頁的名稱是計劃標題。
+      fireEvent.click(
+        within(screen.getAllByTestId('plan-card')[2]!).getByRole('button', {
+          name: '查看全文：第二版',
+        }),
+      );
+      await waitFor(() =>
+        expect(screen.getByRole('tab', { name: '第二版' }).getAttribute('aria-selected')).toBe(
+          'true',
+        ),
+      );
+    });
+
     it('計劃審核：補送的那一題畫回審核面板，「同意執行」答的是同意那個標籤', async () => {
       seq = 91;
       const fake = reloaded([planReviewFrame('plan-1')]);
@@ -1217,6 +1285,14 @@ describe('記住這條 thread', () => {
           .getAllByRole('button')
           .map((button) => button.textContent),
       ).toEqual(['查看全文', '要求修改', '同意執行']);
+
+      // 寬螢幕：全文自動停靠在右側欄。這一份的工具卡不在歷史裡（歷史只有 alpha），全文來自那一題的 detail。
+      expect(screen.getByRole('tab', { name: '改登入頁' }).getAttribute('aria-selected')).toBe(
+        'true',
+      );
+      expect(
+        within(screen.getByTestId('plan-preview')).getByRole('heading', { name: '改登入頁' }),
+      ).toBeTruthy();
 
       fireEvent.click(within(panel).getByRole('button', { name: '同意執行' }));
       await waitFor(() => expect(fake.responded).toHaveLength(1));
