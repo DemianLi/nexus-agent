@@ -21,7 +21,8 @@ import {
   fakeSubAgent,
   fakeTool,
 } from './fixtures.js';
-import type { PluginEntry } from './plugin.js';
+import type { NexusPlugin, PluginEntry, PluginOrigin } from './plugin.js';
+import type { PluginRegistry } from './registry.js';
 import { MESSAGE_FEEDBACK_SERVICE } from './feedback.js';
 import { SESSION_TELEMETRY_SERVICE } from './session-telemetry.js';
 
@@ -528,5 +529,188 @@ describe('設定驗證排在所有 apply 之前（#453）', () => {
     };
     await loadPlugins([entry]);
     expect(seen).toEqual([undefined]);
+  });
+});
+
+/**
+ * 逐列掉（[#751](https://github.com/DemianLi/nexus-agent/issues/751)），照 dsh 的載入器：一列自己的失敗只讓那一列掉。
+ * 預設模式一個字都沒改，上面那些測試照舊成立。
+ */
+describe('loadPlugins 的逐列掉模式', () => {
+  const withSchema = (name: string, apply: (registry: PluginRegistry) => void): PluginEntry => ({
+    plugin: {
+      name,
+      Config: z.strictObject({ n: z.number().default(1) }),
+      apply,
+    } as NexusPlugin<unknown>,
+    config: { n: '不是數字' },
+  });
+
+  it('第二列設定驗不過、第三列 apply 拋錯：這兩列掉了、原因各自寫明，第一、四列照樣掛上', async () => {
+    const plugins = [
+      fakePlugin('a', (registry) => void registry.tools.register(fakeTool('a_tool'))),
+      withSchema('b', (registry) => void registry.tools.register(fakeTool('b_tool'))),
+      fakePlugin('c', (registry) => {
+        registry.tools.register(fakeTool('c_tool'));
+        throw new Error('c 壞了');
+      }),
+      fakePlugin('d', (registry) => void registry.tools.register(fakeTool('d_tool'))),
+    ];
+    const { registry, dropped } = await loadPlugins(plugins, undefined, { perEntry: true });
+
+    expect(registry.tools.resolve('a_tool')).toBeDefined();
+    expect(registry.tools.resolve('d_tool')).toBeDefined();
+    expect(registry.tools.resolve('b_tool')).toBeUndefined();
+    // c 註冊過又撤掉了。
+    expect(registry.tools.resolve('c_tool')).toBeUndefined();
+    expect(dropped.map(({ origin, stage }) => [origin.id, stage])).toEqual([
+      ['b#0', 'config'],
+      ['c#0', 'apply'],
+    ]);
+    expect(dropped[0]?.message).toMatch(/b#0 \(b\) 的 config 不合法 — n:/u);
+    expect(dropped[1]?.message).toBe('c#0 (c) 的 apply 失敗，它註冊的東西已全數撤銷 — c 壞了');
+    // 掉了的列算沒掛，跟 `disabled: true` 同一個標記。
+    expect(registry.disabledEntries.names()).toEqual(['b', 'c']);
+
+    // 對照：同一份清單在預設模式下整個失敗，第一列的 apply 一次都不跑。
+    let applied = false;
+    await expect(
+      loadPlugins([fakePlugin('a', () => void (applied = true)), ...plugins.slice(1)]),
+    ).rejects.toThrow(/b#0 \(b\) 的 config 不合法/u);
+    expect(applied).toBe(false);
+  });
+
+  it('一列 apply 拋錯不收其他列的資源；收是呼叫端 dispose 的事', async () => {
+    let closed = 0;
+    const { dropped, dispose } = await loadPlugins(
+      [
+        fakePlugin(
+          'keeper',
+          (registry) => void registry.lifecycle.onDispose(() => void (closed += 1)),
+        ),
+        fakePlugin('broken', () => {
+          throw new Error('壞');
+        }),
+      ],
+      undefined,
+      { perEntry: true },
+    );
+    expect(dropped).toHaveLength(1);
+    expect(closed).toBe(0);
+    await dispose();
+    expect(closed).toBe(1);
+  });
+
+  it('requires 連鎖：A 掉了，要用它服務的 B 跟著掉，再要用 B 的 C 也掉；B 自己開的資源先收掉再撤', async () => {
+    let bClosed = 0;
+    const { registry, dropped, dispose } = await loadPlugins(
+      [
+        fakePlugin('a', (registry) => {
+          registry.services.provide('a-service', {});
+          throw new Error('A 起不來');
+        }),
+        // C 排在 B 前面：第一趟看 C 時 B 還在，要再掃一趟才看得到它缺件。
+        fakePlugin('c', () => undefined, ['b-capability']),
+        fakePlugin(
+          'b',
+          (registry) => {
+            registry.capabilities.provide('b-capability');
+            registry.lifecycle.onDispose(() => void (bClosed += 1));
+          },
+          ['a-service'],
+        ),
+        fakePlugin('d', (registry) => void registry.tools.register(fakeTool('d_tool'))),
+      ],
+      undefined,
+      { perEntry: true },
+    );
+    expect(dropped.map(({ origin, stage }) => [origin.id, stage])).toEqual([
+      ['a#0', 'apply'],
+      ['b#0', 'requires'],
+      ['c#0', 'requires'],
+    ]);
+    // 原因寫明缺的是哪一個，以及這一次掉了誰。
+    expect(dropped[1]?.message).toContain('b#0 (b) 需要能力 "a-service"，沒有人提供');
+    expect(dropped[1]?.message).toContain('這一次掉了的條目：a#0 (a)');
+    expect(dropped[2]?.message).toContain('需要能力 "b-capability"');
+    expect(registry.capabilities.has('b-capability')).toBe(false);
+    expect(registry.tools.resolve('d_tool')).toBeDefined();
+    expect(bClosed).toBe(1);
+    // 撤掉的是登記，所以呼叫端再收一次不會重跑 B 的清理。
+    await dispose();
+    expect(bClosed).toBe(1);
+  });
+
+  it('afterApply 拋錯算那一列 apply 失敗，只撤它自己；預設模式下照舊整個拋', async () => {
+    const plugins = [
+      fakePlugin('ok', (registry) => void registry.tools.register(fakeTool('ok_tool'))),
+      fakePlugin('taker', (registry) => void registry.tools.register(fakeTool('ls'))),
+    ];
+    const afterApply = (registry: PluginRegistry, origin: PluginOrigin): void => {
+      if (origin.name === 'taker' && registry.tools.resolve('ls') !== undefined) {
+        throw new Error('"ls" 是保留的名字');
+      }
+    };
+    const { registry, dropped } = await loadPlugins(plugins, undefined, {
+      perEntry: true,
+      afterApply,
+    });
+    expect(dropped.map(({ origin, message }) => [origin.id, message])).toEqual([
+      ['taker#0', 'taker#0 (taker) 的 apply 失敗，它註冊的東西已全數撤銷 — "ls" 是保留的名字'],
+    ]);
+    expect(registry.tools.resolve('ls')).toBeUndefined();
+    expect(registry.tools.resolve('ok_tool')).toBeDefined();
+
+    await expect(loadPlugins(plugins, undefined, { afterApply })).rejects.toThrow(
+      '"ls" 是保留的名字',
+    );
+  });
+
+  it('設定的 schema 自己拋的錯也只讓那一列掉', async () => {
+    const throwing: PluginEntry = {
+      plugin: {
+        name: 'odd',
+        Config: z.object({}).transform(() => {
+          throw new RangeError('transform 爆了');
+        }),
+        apply: () => undefined,
+      } as NexusPlugin<unknown>,
+    };
+    const { dropped } = await loadPlugins(
+      [throwing, fakePlugin('fine', () => undefined)],
+      undefined,
+      {
+        perEntry: true,
+      },
+    );
+    expect(dropped.map(({ origin, stage }) => [origin.id, stage])).toEqual([['odd#0', 'config']]);
+    expect(dropped[0]?.message).toContain('transform 爆了');
+  });
+
+  it('整份清單的性質照舊整個拋：重複 id、條目形狀不合法', async () => {
+    const same = (id: string): PluginEntry => ({ ...fakePlugin('x', () => undefined), id });
+    await expect(
+      loadPlugins([same('dup'), same('dup')], undefined, { perEntry: true }),
+    ).rejects.toThrow(/寫了同一個 id/u);
+    await expect(
+      loadPlugins([{ plugin: { name: 'x' } } as unknown as PluginEntry], undefined, {
+        perEntry: true,
+      }),
+    ).rejects.toThrow(/沒有 apply 方法/u);
+  });
+
+  it('停用的列照舊不驗設定、不算掉', async () => {
+    const { dropped, registry } = await loadPlugins(
+      [{ ...withSchema('off', () => undefined), disabled: true }],
+      undefined,
+      { perEntry: true },
+    );
+    expect(dropped).toEqual([]);
+    expect(registry.disabledEntries.names()).toEqual(['off']);
+  });
+
+  it('預設模式的回傳帶著空的 dropped', async () => {
+    const { dropped } = await loadPlugins([fakePlugin('a', () => undefined)]);
+    expect(dropped).toEqual([]);
   });
 });
