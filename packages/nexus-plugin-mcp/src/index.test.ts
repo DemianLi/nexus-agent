@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import type { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { loadPlugins } from '@nexus/core';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import {
   createMcpPlugin,
@@ -34,16 +34,21 @@ const FIXTURE_SERVER = fileURLToPath(new URL('./fixture-server.ts', import.meta.
  * 用 `node --import tsx` 而不是直接跑 `tsx`：`process.execPath` 一定是正在跑測試的那個
  * node，不必猜 `.bin` 在哪裡，也不會因為 PATH 不同而在 CI 上換一個行為。
  */
-function fixturePlugin(serverName = 'fixture') {
+function fixturePlugin(serverName = 'fixture', env?: Record<string, string>) {
   return createMcpPlugin({
     serverName,
     connection: {
       transport: 'stdio',
       command: process.execPath,
       args: ['--import', 'tsx', FIXTURE_SERVER],
+      ...(env !== undefined && { env }),
     },
   });
 }
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe('publicToolName', () => {
   it('乾淨的名字就是 mcp__<server>__<raw>，不動它', () => {
@@ -143,6 +148,7 @@ describe('接上一台真的 MCP server', () => {
         'mcp__fixture__fetch_release_note',
         expect.stringMatching(/^mcp__fixture__legacy_ping_[0-9a-f]{12}$/),
         'mcp__fixture__snapshot',
+        'mcp__fixture__read_env',
       ]);
       expect(registry.capabilities.has(MCP_CAPABILITY)).toBe(true);
     } finally {
@@ -311,3 +317,61 @@ function emptyStdio() {
 function childProcessCount(): number {
   return process.getActiveResourcesInfo().filter((kind) => kind === 'ProcessWrap').length;
 }
+
+/**
+ * 卡上的驗收（#726）：stdio 子行程的環境**照 dsh 以清洗過的父環境為底**，設定裡的 `env` 疊在後面
+ * （dsh `packages/mcp/mcp-client/src/transport.ts:22`，`477b4f4`）。走真的子行程，問假 server 它看得到什麼。
+ *
+ * 這幾條同時是上游的絆索：底是 adapter（有 `env` 才傳、只補 `PATH`）與 SDK（`getDefaultEnvironment()` 只有六個
+ * 名字）兩層合出來的，哪天它們改了合併方式，這裡會紅。
+ */
+describe('子行程的環境（#726）', () => {
+  const ASKED = ['KEEP_ME', 'HTTPS_PROXY', 'FAKE_API_TOKEN', 'NEXUS_X', 'GITHUB_TOKEN'];
+
+  /** 用這份 `connection.env` 起一台假 server，回它看得到的那幾個變數。 */
+  async function childEnv(env?: Record<string, string>): Promise<Record<string, string | null>> {
+    const { registry, dispose } = await loadPlugins([fixturePlugin('fixture', env)]);
+    try {
+      const result = await registry.tools
+        .resolve('mcp__fixture__read_env')
+        ?.value.invoke({ names: ASKED });
+      return JSON.parse(String(result)) as Record<string, string | null>;
+    } finally {
+      await dispose();
+    }
+  }
+
+  function stubParent(): void {
+    vi.stubEnv('KEEP_ME', 'yes');
+    vi.stubEnv('HTTPS_PROXY', 'http://proxy.internal:3128');
+    vi.stubEnv('FAKE_API_TOKEN', 'leak');
+    vi.stubEnv('NEXUS_X', 'harness');
+  }
+
+  it('沒設 env：一般變數與代理照繼承，名字像憑證的與 `NEXUS_*` 拿掉', async () => {
+    stubParent();
+    expect(await childEnv()).toEqual({
+      KEEP_ME: 'yes',
+      HTTPS_PROXY: 'http://proxy.internal:3128',
+      FAKE_API_TOKEN: null,
+      NEXUS_X: null,
+      GITHUB_TOKEN: null,
+    });
+  });
+
+  it('設了 env：疊在清洗過的底上，明著轉傳的憑證到得了', async () => {
+    stubParent();
+    expect(await childEnv({ GITHUB_TOKEN: 'x' })).toEqual({
+      KEEP_ME: 'yes',
+      HTTPS_PROXY: 'http://proxy.internal:3128',
+      FAKE_API_TOKEN: null,
+      NEXUS_X: null,
+      GITHUB_TOKEN: 'x',
+    });
+  });
+
+  it('設定裡的值蓋過父行程的同名變數', async () => {
+    stubParent();
+    expect((await childEnv({ KEEP_ME: 'explicit' }))['KEEP_ME']).toBe('explicit');
+  });
+});

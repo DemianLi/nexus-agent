@@ -53,4 +53,24 @@ server.registerTool(
   }),
 );
 
+// 子行程拿到了哪些環境變數（#726）。回一份 JSON：問到的每個名字對到它的值，沒有就是 `null`——「沒有」與「空字串」
+// 要分得開。
+server.registerTool(
+  'read_env',
+  {
+    description: '回報這個行程看得到的環境變數。',
+    inputSchema: { names: z.array(z.string()).describe('要看的變數名') },
+  },
+  ({ names }) => ({
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify(
+          Object.fromEntries(names.map((name) => [name, process.env[name] ?? null])),
+        ),
+      },
+    ],
+  }),
+);
+
 await server.connect(new StdioServerTransport());
