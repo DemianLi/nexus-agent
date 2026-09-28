@@ -486,11 +486,12 @@ export function resolveSessionLogDir(
  * 一份，兩個入口共用：講的是同一列設定。
  */
 export const SESSION_LOG_OFF_DISCLOSURE =
-  '會話日誌：只在記憶體裡（行程結束就沒了；清單上 session-persistence 那一列關掉了）';
+  '會話日誌：只在記憶體裡（行程結束就沒了；清單上 session-persistence 那一列沒掛上）';
 
 /**
- * 落盤關掉的時候（清單上 `session-persistence` 那一列 `disabled: true`，
- * [#612](https://github.com/DemianLi/nexus-agent/issues/612)），擋掉跟它矛盾的旗標。兩個入口共用。
+ * 落盤沒掛的時候（清單上 `session-persistence` 那一列 `disabled: true`，
+ * [#612](https://github.com/DemianLi/nexus-agent/issues/612)；或設定驗不過而掉了，#751），擋掉跟它矛盾的旗標。
+ * 兩個入口共用。**訊息兩種成因都講**：掉了的那一種在這之前已經印了指名原因的警告，要改的是設定，不是 `disabled`。
  *
  * - **`--resume`**：續接答應呼叫端「這一次也接得回來」，而沒有落盤的話這一次一個位元組都不寫回去。
  *   照 dsh：headless 的 `--session-id` 沒有持久化服務就當場拋，理由正是「跑完會印出 id，卻在
@@ -510,17 +511,20 @@ export function assertPersistenceFlags(
 ): void {
   if (mounted) return;
   const off =
-    '清單上 `session-persistence` 那一列關掉了（`disabled: true`），這一次會話日誌只在記憶體裡';
+    '清單上 `session-persistence` 那一列沒掛上（寫了 `disabled: true`，或設定驗不過而掉了），' +
+    '這一次會話日誌只在記憶體裡';
+  const fix =
+    '把那一列的 `disabled` 拿掉（或寫成 `false`）；設定驗不過的話照啟動時那段警告把設定改好';
   if (invocation.resume !== undefined) {
     throw new Error(
       `--resume 接不起來：${off}——接回來之後一個位元組都不會寫回去，下一次也接不到這一段。` +
-        `要續接就把那一列的 \`disabled\` 拿掉（或寫成 \`false\`）。`,
+        `要續接就讓那一列掛上：${fix}。`,
     );
   }
   if (invocation.sessionLog !== undefined) {
     throw new Error(
       `--session-log 跟設定矛盾：${off}，給了目錄也不會寫。` +
-        `要落盤就把那一列的 \`disabled\` 拿掉（或寫成 \`false\`）；要只在記憶體裡就別給 --session-log。`,
+        `要落盤就讓那一列掛上：${fix}；要只在記憶體裡就別給 --session-log。`,
     );
   }
 }
