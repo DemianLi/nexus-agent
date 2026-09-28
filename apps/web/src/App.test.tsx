@@ -1731,12 +1731,26 @@ describe.each([false, true])('側欄的即時狀態（StrictMode：%s）', (stri
     await waitFor(() => expect(current.textContent).toContain('目前這條'));
     expect(statusOf(current)).toBeNull();
 
-    // 換過去之後全域下行沒有重開：`App` 那層的線，不跟著對話畫面重掛。
-    const opened = feed.opened();
     feed.line().push({ type: 'status', threadId: 'b', running: true });
     await waitFor(() => expect(statusOf(current)).toBe('running'));
     feed.line().push({ type: 'status', threadId: 'b', running: false });
     await waitFor(() => expect(statusOf(current)).toBeNull());
+  });
+
+  it('換會話不重開全域下行：別條的「已完成」換過去之後還在', async () => {
+    let items = [row('b', '寫測試', false), row('c', '跑腿', true)];
+    const feed = rendered(async () => ok(...items));
+    const errand = await rowOf('跑腿');
+    await waitFor(() => expect(statusOf(errand)).toBe('running'));
+    items = [row('b', '寫測試', false), row('c', '跑腿', false)];
+    feed.line().push({ type: 'status', threadId: 'c', running: false });
+    await waitFor(() => expect(statusOf(errand)).toBe('completed'));
+    // **換之前記**：線掛在會跟著對話畫面重掛的地方的話，換的那一下就重開了。
+    const opened = feed.opened();
+
+    fireEvent.click(await rowOf('寫測試'));
+    await waitFor(async () => expect((await rowOf('寫測試')).textContent).toContain('目前這條'));
+    expect(statusOf(await rowOf('跑腿'))).toBe('completed');
     expect(feed.opened()).toBe(opened);
   });
 
