@@ -253,3 +253,59 @@ describe('讀的是事件不是日誌', () => {
     expect(hasDirectHumanTurn(crafted)).toBe(true);
   });
 });
+
+/**
+ * **釘住 `user/message` 的來源聯集剛好是那兩個成員**（#710）。理由同上面那一條：user 來源是授權的另一條路（插話），
+ * 放寬它就是多開一條，而 `hasDirectHumanTurn` 只認 `kind: 'user'`——加一個成員不會讓任何一條現有測試變紅。
+ */
+type UserMessageSourcePinned =
+  { readonly kind: 'plugin'; readonly plugin: string } | { readonly kind: 'user' };
+type UserMessageSourceActual = SessionEventMap['user/message']['source'];
+const _sourceWidened: UserMessageSourcePinned = undefined as unknown as UserMessageSourceActual;
+const _sourceNarrowed: UserMessageSourceActual = undefined as unknown as UserMessageSourcePinned;
+void _sourceWidened;
+void _sourceNarrowed;
+
+describe('輪中插話算直接人類授權（#710）', () => {
+  const GOAL_ROUND: readonly [keyof SessionEventMap, unknown] = [
+    'turn/start',
+    { kind: 'goal', text: '<goal_round>…', goalId: goalId('g-1'), revision: 1, round: 1 },
+  ];
+  const message = { type: 'human', data: { content: '改用 X', additional_kwargs: {} } };
+  const STEER: readonly [keyof SessionEventMap, unknown] = [
+    'user/message',
+    { message, source: { kind: 'user' } },
+  ];
+  const INJECTED: readonly [keyof SessionEventMap, unknown] = [
+    'user/message',
+    { message, source: { kind: 'plugin', plugin: 'repeat-reminder' } },
+  ];
+
+  it('續行輪次裡人插了話：拿得到', () => {
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND, STEER]).events)).toBe(true);
+  });
+
+  it('沒有插話的續行輪次照舊拿不到', () => {
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND]).events)).toBe(false);
+  });
+
+  it('外掛塞的 user/message 不是人，拿不到（#152 的底線）', () => {
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND, INJECTED]).events)).toBe(false);
+  });
+
+  it('插話之後停在核准點、恢復：同一條鏈，恢復那一段照樣拿得到', () => {
+    const events = logOf([
+      GOAL_ROUND,
+      STEER,
+      ['interrupt/raised', { interruptId: 'i-1' }],
+      END,
+      RESUME,
+    ]).events;
+    expect(hasDirectHumanTurn(events)).toBe(true);
+  });
+
+  it('更早那一條鏈裡插過的話不算：界線同追根', () => {
+    const events = logOf([HUMAN, STEER, END, GOAL_ROUND]).events;
+    expect(hasDirectHumanTurn(events)).toBe(false);
+  });
+});

@@ -56,14 +56,22 @@ import type { GoalView } from './service.js';
 type TurnStart = SessionEventMap['turn/start'];
 
 /**
- * 這條物理輪次鏈往回追到的是不是一則人類訊息。
+ * 這條物理輪次鏈背後有沒有一個人：往回追到的是一則人類訊息，**或這條鏈裡有人插過話**。
+ *
+ * 插話（[#710](https://github.com/DemianLi/nexus-agent/issues/710)）照 dsh：開著的那一輪裡有一顆 user 來源的
+ * `user/message` 就是直接人類授權（`packages/goal/tool-goal/src/authority.ts:82-83`，`477b4f4`）。所以一輪由續行排出來、
+ * 人在中途插了話，之後的變更呼叫也拿得到授權。**只認 `source.kind === 'user'`**：外掛塞的那一種（重複提醒、goal 收尾
+ * 指示）不是人，拿不到（#152 的底線）；寫 user 來源的只有 pump 領走插話的那條路（見 `@nexus/core` 的 `session-log.ts`）。
+ *
+ * 「這條鏈」的界線同追根：只看到根那一顆 `turn/start` 為止，更早的輪次裡插過的話不算。
  *
  * @param events - 一份會話日誌到目前為止的全部事件，照 `seq` 排。
- * @returns 追到 `kind: 'message'` 為真；追到頭、或撞上認不得的 `kind` 為假。
+ * @returns 追到 `kind: 'message'`、或追到根之前遇到人插的話，為真；追到頭、或撞上認不得的 `kind` 為假。
  */
 export function hasDirectHumanTurn(events: readonly SessionEvent[]): boolean {
   for (let at = events.length - 1; at >= 0; at -= 1) {
     const event = events[at];
+    if (event?.type === 'user/message' && event.data.source.kind === 'user') return true;
     if (event === undefined || event.type !== 'turn/start') continue;
     const data = event.data as TurnStart;
     if (data.kind === 'message') return true;

@@ -171,6 +171,15 @@ export interface CreateNexusAgentOptions {
    * 形狀與理由見 `@nexus/core` 的 `model-usage.ts`。
    */
   readonly modelUsage?: boolean;
+  /**
+   * 掛不掛插話的載體（[#710](https://github.com/DemianLi/nexus-agent/issues/710)）。省略即不掛。**只有 serve 開**：
+   * 插話由 web 的 pump 經 `configurable` 送進圖裡，CLI 一行一輪沒有插話。開了之後每一步多一個 super-step，
+   * 換算見 `settings/recursion-limit.ts`。形狀見 `@nexus/core` 的 `step-inbox.ts`。
+   *
+   * 開沒開從回傳的 `stepInbox` 讀：pump 據它決定插話放 `next-step` 還是退成排隊——沒掛的組裝放進 `next-step`
+   * 的話，永遠沒有人領。
+   */
+  readonly stepInbox?: boolean;
   /** checkpointer。有 plugin 宣告要核准的工具卻沒給，fold 會報錯。 */
   readonly checkpointer?: AgentCheckpointer;
   /** 長期記憶用的 store。 */
@@ -219,8 +228,8 @@ export interface CreateNexusAgentOptions {
    * 偏離登記見 [`repeat-reminder.ts`](../../../packages/nexus-core/src/repeat-reminder.ts)。
    *
    * **開著會吃掉迴圈預算**：它掛在 `beforeModel` 上，那在圖裡是一個節點，每一輪多一個
-   * super-step，於是 `recursionLimit` 的換算從 `2 × 輪數 + 2` 變成 `3 × 輪數 + 2`。
-   * 見 {@link DEFAULT_RECURSION_LIMIT}。
+   * super-step，於是 `recursionLimit` 的換算從 `2 × 輪數 + 2` 變成 `3 × 輪數 + 2`（{@link stepInbox}
+   * 再多一格）。見 {@link DEFAULT_RECURSION_LIMIT}。
    */
   readonly repeatReminder?: Partial<RepeatReminderSettings> | false;
   /** 附加在基座 base prompt 前面的 system prompt。 */
@@ -545,6 +554,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         observationPolicy: options.observationPolicy,
       }),
       ...(options.modelUsage !== undefined && { modelUsage: options.modelUsage }),
+      ...(options.stepInbox === true && { stepInbox: true }),
     });
 
     // `withConfig` 疊在基座自己那一層 `withConfig` 上面，後者贏（實測 `8` → 模型只被叫
@@ -570,6 +580,10 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * 外掛在 `apply` 裡交出的警告（#751，`registry.logger`），例如 MCP 連不上而照樣掛上。呼叫端跟掉了的列印在同一段。
        */
       warnings: registry.logger.warnings(),
+      /**
+       * 這一次組裝收不收插話（#710），見 {@link CreateNexusAgentOptions.stepInbox}。
+       */
+      stepInbox: options.stepInbox === true,
       /**
        * plugin 註冊的**人的命令**。進入點靠它把一行 `/name` 發派出去。
        *

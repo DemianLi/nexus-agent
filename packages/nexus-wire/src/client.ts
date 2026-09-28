@@ -30,9 +30,12 @@ import type {
   FeedbackRecordCommand,
   FeedbackRecordResult,
   InputRespondOne,
+  QueueUpdateAction,
   QueueUpdateCommand,
   RpcMethod,
   RunCancelCommand,
+  RunStartCommand,
+  RunStartMode,
   SlashCommand,
   SlashDescriptor,
   SlashRunResult,
@@ -142,8 +145,17 @@ export interface WireClient {
     threadId: string,
     options?: OpenEventsOptions,
   ): Promise<AsyncGenerator<Event, void, undefined>>;
-  /** 送一句話進去。回應只是收件回條，不等這一輪跑完。 */
-  runStart(threadId: string, text: string): Promise<UplinkResult>;
+  /**
+   * 送一句話進去。回應只是收件回條，不等這一輪跑完。
+   *
+   * `options.mode` 見 {@link RunStartMode}：省略就是排隊；`steer` 是插話（[#710](https://github.com/DemianLi/nexus-agent/issues/710)），
+   * 跑著的這一輪下一步就送進模型。
+   */
+  runStart(
+    threadId: string,
+    text: string,
+    options?: { readonly mode?: RunStartMode },
+  ): Promise<UplinkResult>;
   /**
    * 回答**一顆**核准請求。
    *
@@ -167,8 +179,14 @@ export interface WireClient {
    *
    * **回的是受理回條**——佇列變成什麼樣走下行的 `inbox` 推送。那一件已經開跑、被刪了（可能是別的分頁）或從沒有過，
    * 回 `queue_item_not_found`；改成空白回 `invalid_argument`。
+   *
+   * **只收改、刪**：線上的 `queue.update` 也收改成插話（`protocol.ts` 的 `QueueSteerAction`，#710），但這裡的參數型別刻意不加寬——
+   * web 的測試替身今天把 `action` 窮舉成改、刪兩種，加寬會讓 web 當場編不過。web 要送插話的那一張卡連同替身一起加寬它。
    */
-  queueUpdate(threadId: string, params: QueueUpdateCommand['params']): Promise<UplinkResult>;
+  queueUpdate(
+    threadId: string,
+    params: { readonly item_id: string; readonly action: QueueUpdateAction },
+  ): Promise<UplinkResult>;
   /** 評一則回覆（`feedback.put`，[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。 */
   feedbackPut(
     threadId: string,
@@ -410,7 +428,13 @@ export function createWireClient(options: WireClientOptions): WireClient {
   async function sendCommand(
     threadId: string,
     method: RpcMethod,
-    command: Command | SlashCommand | RunCancelCommand | QueueUpdateCommand | FeedbackCommand,
+    command:
+      | Command
+      | RunStartCommand
+      | SlashCommand
+      | RunCancelCommand
+      | QueueUpdateCommand
+      | FeedbackCommand,
   ): Promise<UplinkResult> {
     // 路徑與封包各講一次 method，server 端不合就拒——照 dsh 的端點慣例
     // （`packages/api/gateway/src/index.ts:134`，`<namespace>/<method>`）。
@@ -480,7 +504,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
       return knownFeedFrames(decodeSseData(response.body));
     },
 
-    async runStart(threadId, text) {
+    async runStart(threadId, text, options) {
       return sendCommand(threadId, 'run.start', {
         id: nextCommandId++,
         method: 'run.start',
@@ -489,6 +513,8 @@ export function createWireClient(options: WireClientOptions): WireClient {
           // agent，所以這一格是形式上的，server 只檢查它是字串。
           assistant_id: 'nexus',
           input: { messages: [{ role: 'human', content: text }] },
+          // 省略就不放這個 key：排隊是預設，舊的 server 也收得下。
+          ...(options?.mode === undefined ? {} : { mode: options.mode }),
         },
       });
     },

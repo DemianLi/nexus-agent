@@ -516,6 +516,8 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
           {
             ...effective,
             workspaceChanges: true,
+            // 插話（#710）：只有 serve 有，見 `createCliAgent` 那一格。
+            stepInbox: true,
             liveModel,
             threadTitle,
             threadTitleLlm,
@@ -561,9 +563,11 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         goals,
         workspaceRoot,
         attachTitle,
+        stepInbox,
       } = built;
       return {
         agent: agent as unknown as PumpAgent,
+        stepInbox,
         // **`createCliAgent` 一直都回著這個註冊點，這條路以前把它丟掉了。**
         // 撿起來就是 web 那端打得到 `/plan` 的全部
         // （[#123](https://github.com/DemianLi/nexus-agent/issues/123)）；發派面本身在

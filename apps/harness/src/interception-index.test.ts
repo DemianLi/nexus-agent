@@ -184,8 +184,9 @@ const INDEX: readonly InterceptionRow[] = [
     permission: 'awaited 通知，聽者可以要求再跑一步（`agent.steer()`）',
     occupants: ['apps/harness/src/goal-driver.ts'],
     permissionDelta:
-      '**只佔了一半**：`agent.steer()` 沒有等價物，輪迴圈歸入口點所有。' +
-      '載體偏離已登記在該檔檔頭；今天只有 goal 一個消費者，一個消費者不撐起一條通道。',
+      '**只佔了一半**：聽者要求再跑一步的口（`agent.steer()` 給聽者用的那一面）沒有等價物，輪迴圈歸入口點所有。' +
+      '載體偏離已登記在該檔檔頭；今天只有 goal 一個消費者，一個消費者不撐起一條通道。' +
+      '人插話的那一面有了（#710，`@nexus/core` 的 `step-inbox.ts`），但它由 pump 送進圖、不經這個時刻。',
     recordDelta: undefined,
     frequencyDelta: UNMEASURED,
   },

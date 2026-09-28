@@ -12,6 +12,7 @@
  * | 日誌事件 | 畫面 |
  * | --- | --- |
  * | `turn/start`（`message`） | 人打的字（`message-start` `role: "human"`） |
+ * | `user/message`（`source.kind: "user"`） | 輪中插的話（#710），同上 |
  * | `turn/start`（任何一種） | `lifecycle running` |
  * | `assistant/message` | 模型的回覆，連同推理（#527）；`interrupted` 的那則不收尾，由那一輪的中止標成「已停止」 |
  * | `tool/call` ／ `tool/result` | 工具卡開、收；那則結果的文字成功失敗都帶（成功是輸出、失敗是紅字，[#439](https://github.com/DemianLi/nexus-agent/issues/439)） |
@@ -25,7 +26,7 @@
  *
  * | `model/usage` ／ 輪、模型、工具的起訖 | token 總帳與會話統計（#574）：**一頁各一顆，是從日誌開頭折到這一頁結尾的值**，還是初值就不送；`data` 同即時（{@link SessionTotals}） |
  *
- * | `inbox/spliced` | 送出佇列（#637）：**只在最新一頁送一顆，是到 `throughSeq` 為止目前的清單**（空的也送），窗口裡一顆變動都沒有就不送；`data` 同即時（{@link inboxData}），不帶 `claimed` |
+ * | `inbox/spliced` | 送出佇列（#637、#710）：**只在最新一頁送一顆，是到 `throughSeq` 為止目前的兩條清單**（空的也送），窗口裡一顆變動都沒有就不送；`data` 同即時（{@link inboxData}），不帶 `claimed`／`claimedNextStep` |
  *
  * | `session/title` | 標題（#647）：**只在最新一頁送一顆，是到 `throughSeq` 為止目前的標題**；18 以前的日誌沒有這一顆，照同一條規則當場推，推不出來就不送；`data` 同即時（{@link titleData}） |
  *
@@ -33,7 +34,7 @@
  * 開頭之前的——最後一輪在第一次模型呼叫之前就失敗的話，這一頁自己沒有那兩種事件，而即時的畫面上用量表還在。見
  * {@link historyPage}。
  *
- * 其餘的（壓縮、外掛注入的 `user/message`、模型起訖、命令、模式、目標、回饋）即時的畫面也不畫，這裡也不畫。
+ * 其餘的（壓縮、外掛注入的 `user/message`（`source.kind: "plugin"`）、模型起訖、命令、模式、目標、回饋）即時的畫面也不畫，這裡也不畫。
  * **壓縮不畫是偏離**：dsh 的畫面由那顆 `user/message {surfaceOp: replace}` 把被壓掉的那一段換成摘要；我們沒有
  * surface 那一軸，即時的畫面從來沒換過，歷史跟著即時。
  *
@@ -72,6 +73,7 @@ import {
 } from '@nexus/wire';
 import type {
   LoggedMessage,
+  InboxState,
   QueuedInput,
   SessionEvent,
   SessionEventMap,
@@ -141,12 +143,22 @@ function reasoningOf(message: LoggedMessage | undefined): string {
     .join('');
 }
 
-/** 畫面上算一則的：人打的字、模型的回覆。分頁以它計數，同 dsh 以 `user/message`／`assistant/message` 計。 */
+/**
+ * 畫面上算一則的：人打的字（一輪開頭的、輪中插的）、模型的回覆。分頁以它計數，同 dsh 以 `user/message`／`assistant/message` 計。
+ */
 function isMessage(event: SessionEvent): boolean {
   return (
     (event.type === 'turn/start' && event.data.kind === 'message') ||
+    isSteer(event) ||
     event.type === 'assistant/message'
   );
+}
+
+/** 人在一輪跑著時插的話（#710）：`user/message` 帶 user 來源。外掛塞的那一種畫面不畫。 */
+function isSteer(event: SessionEvent): event is SessionEvent<'user/message'> & {
+  readonly data: { readonly source: { readonly kind: 'user' } };
+} {
+  return event.type === 'user/message' && event.data.source.kind === 'user';
 }
 
 /**
@@ -262,23 +274,35 @@ export function todosData(todos: SessionEventMap['todo/write']['todos'] | null):
   };
 }
 
+/** 一次變動是因為領走而送的：開跑的那一件（`turn`），或送進模型的整條插話（`steps`，#710）。 */
+export interface InboxClaim {
+  readonly turn?: QueuedInput;
+  readonly steps?: readonly QueuedInput[];
+}
+
 /**
- * 送出佇列在線上的 `custom` 事件 `data`（[#637](https://github.com/DemianLi/nexus-agent/issues/637)）：整份清單，領走那一次
- * 多帶 `claimed`。即時與這裡共用，規則見 `@nexus/wire` 的 `inbox.ts`。
+ * 送出佇列在線上的 `custom` 事件 `data`（[#637](https://github.com/DemianLi/nexus-agent/issues/637)、
+ * [#710](https://github.com/DemianLi/nexus-agent/issues/710)）：兩條整份清單，領走那一次多帶 `claimed` 或 `claimedNextStep`。
+ * 即時與這裡共用，規則見 `@nexus/wire` 的 `inbox.ts`。
  *
- * @param items - 整份清單。
- * @param claimed - 這一次是因為這一件被領走開跑。歷史不帶。
+ * @param inbox - 兩條整份清單。
+ * @param claimed - 這一次是因為領走而送的。歷史不帶。
  * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `InboxPayload`。
  */
 export function inboxData(
-  items: readonly QueuedInput[],
-  claimed?: { readonly id: string; readonly text: string },
+  inbox: InboxState,
+  claimed?: InboxClaim,
 ): { readonly name: typeof INBOX; readonly payload: InboxPayload } {
+  const wire = (items: readonly QueuedInput[]) =>
+    items.map(({ id, text, source }) => ({ id, text, source: { kind: source.kind } }));
+  const claim = ({ id, text }: QueuedInput) => ({ id, text });
   return {
     name: INBOX,
     payload: {
-      items: items.map(({ id, text, source }) => ({ id, text, source: { kind: source.kind } })),
-      ...(claimed === undefined ? {} : { claimed: { id: claimed.id, text: claimed.text } }),
+      items: wire(inbox['next-turn']),
+      nextStep: wire(inbox['next-step']),
+      ...(claimed?.turn === undefined ? {} : { claimed: claim(claimed.turn) }),
+      ...(claimed?.steps === undefined ? {} : { claimedNextStep: claimed.steps.map(claim) }),
     },
   };
 }
@@ -568,6 +592,15 @@ export function historyFrames(
           frames.push(...message(event.time, 'human', `history-${event.seq}`, event.data.text));
         }
         break;
+      case 'user/message': {
+        // 輪中插的話（#710）：即時的畫面由 `inbox` 的 `claimedNextStep` 畫一則人的話，歷史照即時。外掛塞的不畫。
+        if (isSteer(event)) {
+          frames.push(
+            ...message(event.time, 'human', `history-${event.seq}`, textOf(event.data.message)),
+          );
+        }
+        break;
+      }
       case 'assistant/message': {
         const text = textOf(event.data.message);
         const reasoning = reasoningOf(event.data.message);

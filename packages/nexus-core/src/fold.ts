@@ -46,6 +46,7 @@ import {
   createSessionCheckpointMiddleware,
   SESSION_CHECKPOINT_PLUGIN_NAME,
 } from './session-checkpoint-policy.js';
+import { createStepInboxMiddleware } from './step-inbox.js';
 import { createTurnCancelGuard, createTurnCancelModelSignal } from './turn-cancel.js';
 import {
   REPEAT_REMINDER_PLUGIN_NAME,
@@ -306,6 +307,15 @@ export interface FoldOptions {
    * 見 {@link createModelUsageRecorder}。
    */
   modelUsage?: boolean;
+
+  /**
+   * 掛不掛插話的載體（[#710](https://github.com/DemianLi/nexus-agent/issues/710)）。省略即不掛。
+   *
+   * **要在 `configurable` 放收件匣 handle 的進入點才開**（web 的 pump）：沒有 handle 時它什麼都不做，但它的
+   * `beforeModel` 照樣是圖裡的一個節點，每一步多一個 super-step。CLI 一行一輪、沒有插話，不必付那一格。
+   * 只折進 root 的 middleware 陣列，見 {@link ./step-inbox.ts}。
+   */
+  stepInbox?: boolean;
 }
 
 /**
@@ -452,6 +462,7 @@ export function foldRegistry(
       maxTokens,
     }),
     middleware: foldMiddleware(
+      options.stepInbox === true ? createStepInboxMiddleware() : undefined,
       plugins,
       containment,
       turnCancel,
@@ -776,6 +787,7 @@ function foldApprovalGate(
  * 的政策**，兩件事要一起想。
  */
 function foldMiddleware(
+  stepInbox: AgentMiddleware | undefined,
   plugins: PluginMiddleware,
   containment: AgentMiddleware,
   turnCancel: AgentMiddleware,
@@ -794,6 +806,10 @@ function foldMiddleware(
   maxTokens: AgentMiddleware,
 ): AgentMiddleware[] {
   return [
+    // 插話排最前面：它的 `beforeModel` 先於其餘每一顆（重複提醒在同一步就看得到人插了話、清零），它的
+    // `afterAgent` 最後才問（排在它後面的 `afterAgent` 先走完）。它沒有 `wrap*`，不影響洋蔥的層次。
+    // 見 {@link ./step-inbox.ts}。
+    ...(stepInbox === undefined ? [] : [stepInbox]),
     containment,
     // 緊貼圍堵：在它裡面（換過的結果圍堵才記得到碼），在起訖紀錄器外面（中止之後被擋下的那次
     // 呼叫不算一步）。見 {@link ./turn-cancel.ts}。

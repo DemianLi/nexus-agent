@@ -240,12 +240,13 @@ export function replayConversation(
       }
       case 'user/message': {
         const message = from(fromLoggedMessage(event.data.message), event);
-        // 緊跟在一顆結果後面、而且是那顆工具注入的：跟著那顆結果走。其餘的（repeat-reminder 的提醒）
-        // 在那一批之後。
+        const { source } = event.data;
+        // 緊跟在一顆結果後面、而且是那顆工具注入的：跟著那顆結果走。其餘的（repeat-reminder 的提醒、人插的話）
+        // 在那一批之後。人插的話（#710）不屬於任何一顆工具，連比對都不比。
         const owner = previous?.type === 'tool/result' ? previous.data.callId : undefined;
         const call = batch?.calls.find((candidate) => candidate.id === owner);
         const results = call === undefined ? undefined : batch?.results.get(call.id);
-        if (call?.name === event.data.source.plugin && results !== undefined) {
+        if (source.kind === 'plugin' && call?.name === source.plugin && results !== undefined) {
           results.push(message);
         } else {
           push(message);

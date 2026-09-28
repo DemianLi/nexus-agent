@@ -241,9 +241,12 @@ describe('線的兩端對得起來', () => {
     expect(
       frames.filter((frame) => isMethod(frame, 'custom')).map((frame) => frame.params.data),
     ).toEqual([
-      { name: INBOX, payload: { items: [sentence] } },
+      { name: INBOX, payload: { items: [sentence], nextStep: [] } },
       { name: TODOS, payload: { todos: null } },
-      { name: INBOX, payload: { items: [], claimed: { id: runId, text: '記一筆。' } } },
+      {
+        name: INBOX,
+        payload: { items: [], nextStep: [], claimed: { id: runId, text: '記一筆。' } },
+      },
       // 第一句開跑：領走之後寫退回標題、當場推一顆（#647），也比這一輪模型與工具的 frame 早。
       { name: TITLE, payload: { title: '記一筆。' } },
     ]);

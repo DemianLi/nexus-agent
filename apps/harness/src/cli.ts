@@ -811,6 +811,11 @@ export async function createCliAgent(
      * 手搭清單的呼叫端照舊。
      */
     readonly optionalEntries?: ReadonlySet<PluginEntry>;
+    /**
+     * 收不收插話（[#710](https://github.com/DemianLi/nexus-agent/issues/710)），原樣交給 `createNexusAgent`。**只有 serve 開**：
+     * CLI 一行一輪，沒有插話。
+     */
+    readonly stepInbox?: boolean;
   },
   plugins: readonly PluginEntry[],
   cwd: string = process.cwd(),
@@ -862,6 +867,8 @@ export async function createCliAgent(
   dropped: readonly AssemblyDrop[];
   /** 外掛在 `apply` 裡交出的警告（#751），例如 MCP 連不上而照樣掛上。 */
   warnings: readonly PluginWarning[];
+  /** 這一次組裝收不收插話（#710），見 `stepInbox` 那一格。 */
+  stepInbox: boolean;
 }> {
   const liveModel = invocation.liveModel ?? startupSetting(plugins, liveModelPlugin);
   const model = createCliModel(invocation.live, liveModel);
@@ -934,6 +941,7 @@ export async function createCliAgent(
     services,
     dropped,
     warnings,
+    stepInbox,
   } = await createNexusAgent({
     model,
     plugins: [
@@ -966,6 +974,7 @@ export async function createCliAgent(
     ...(invocation.optionalEntries !== undefined && {
       optionalEntries: invocation.optionalEntries,
     }),
+    ...(invocation.stepInbox === true && { stepInbox: true }),
   });
   // 註冊表跟 agent 同壽命：REPL 是一條連續對話，`seq` 要跨輪連續才有意義。**subagent 的
   // 那些日誌也掛在它上面**，第一次有人要寫的時候才出生（見 `SessionRegistry` 的偏離）。
@@ -992,6 +1001,7 @@ export async function createCliAgent(
     attachTitle,
     dropped,
     warnings,
+    stepInbox,
   };
 }
 

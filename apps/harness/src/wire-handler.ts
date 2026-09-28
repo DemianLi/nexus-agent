@@ -68,6 +68,8 @@ import {
   isRpcMethod,
   isRunCancelMethod,
   QUEUE_ITEM_NOT_FOUND,
+  RUN_START_MODES,
+  STEER_UNAVAILABLE,
   isSlashMethod,
   isWireChannel,
   successResponse,
@@ -149,6 +151,12 @@ void _feedbackItemFitsTheWire;
  */
 export interface ThreadAgent {
   readonly agent: PumpAgent;
+  /**
+   * 這個 agent 的圖裡掛沒掛插話的載體（[#710](https://github.com/DemianLi/nexus-agent/issues/710)，`createNexusAgent`
+   * 回的那一格）。**省略即沒掛**：那時插話退成排隊、`queue.update` 的 `steer` 回 `steer_unavailable`，不會放進一條沒人領的
+   * `next-step`。
+   */
+  readonly stepInbox?: boolean;
   /**
    * 這個 thread 打得出哪些斜線命令。**必填**，理由同 `dispose`：忘記它的代價看不見。
    *
@@ -729,6 +737,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           toolTextLimits,
           threadTitleLimits,
           (message) => options.warn?.(message),
+          threadAgent.stepInbox === true,
         );
         // **緊接著建好就接上全域下行**（#632）：在它收下任何一件之前，狀態與中斷一顆都不漏。
         detachFeed = feed.attach(pump);
@@ -1012,9 +1021,22 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           errorResponse(command.id, 'invalid_argument', 'run.start 的 input 沒有可用的訊息'),
         );
       }
-      // **`run_id` 就是這一件在送出佇列裡的 id**：畫面據它對上自己送出的那一句（推送裡的 `claimed.id`）。
+      // 送出模式（#710）：我們加在協定 `RunStartParams` 上的一格，見 `@nexus/wire` 的 `RunStartCommand`。省略就是排隊。
+      const mode = (params as { mode?: unknown }).mode;
+      if (mode !== undefined && !(RUN_START_MODES as readonly unknown[]).includes(mode)) {
+        return json(
+          errorResponse(command.id, 'invalid_argument', 'run.start 的 mode 要是 queue 或 steer'),
+        );
+      }
+      // **`run_id` 就是這一件在送出佇列裡的 id**：畫面據它對上自己送出的那一句（推送裡的 `claimed.id`，插話是
+      // `claimedNextStep` 裡的那一件）。插話在這一輪不收時退成排隊，由 pump 決定，這裡不分。
       const runId = crypto.randomUUID();
-      start(pump, { kind: 'message', text, id: runId });
+      start(pump, {
+        kind: 'message',
+        text,
+        id: runId,
+        ...(mode === 'steer' ? { steer: true as const } : {}),
+      });
       return json(successResponse(command.id, { run_id: runId }));
     }
 
@@ -1190,12 +1212,11 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       return json(errorResponse(id, 'invalid_argument', 'queue.update 缺 item_id'));
     }
     const kind = params.action?.kind;
-    if (kind === 'steer') {
-      // dsh 的第三種：插話。另開一張（#637 的 Q3），明著說不支援，不靜靜吞掉。
-      return json(errorResponse(id, 'not_supported', '這一版的 queue.update 不支援 steer'));
-    }
     let action: QueueAction;
-    if (kind === 'remove') {
+    if (kind === 'steer') {
+      // 排著的那一件改成插話（#710）：收不收由 pump 照 dsh 的條件判，見 `ThreadPump.updateQueue`。
+      action = { kind: 'steer' };
+    } else if (kind === 'remove') {
       action = { kind: 'remove' };
     } else if (kind === 'edit') {
       const text = params.action?.text;
@@ -1206,12 +1227,22 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       action = { kind: 'edit', text };
     } else {
       return json(
-        errorResponse(id, 'invalid_argument', 'queue.update 的 action 要是 edit 或 remove'),
+        errorResponse(id, 'invalid_argument', 'queue.update 的 action 要是 edit、remove 或 steer'),
       );
     }
-    if (pump.updateQueue(params.item_id, action) === 'not-found') {
+    const outcome = pump.updateQueue(params.item_id, action);
+    if (outcome === 'not-found') {
       return json(
         errorResponse(id, QUEUE_ITEM_NOT_FOUND, `"${params.item_id}" 已經不在送出佇列裡`),
+      );
+    }
+    if (outcome === 'steer-unavailable') {
+      return json(
+        errorResponse(
+          id,
+          STEER_UNAVAILABLE,
+          `"${params.item_id}" 現在不能改成插話：這一輪不收插話了，或它已經是插話`,
+        ),
       );
     }
     return json(successResponse(id, { accepted: true }));

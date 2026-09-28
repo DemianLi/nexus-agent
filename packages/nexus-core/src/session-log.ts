@@ -229,6 +229,10 @@ export interface SessionTitleLlmMessage {
   readonly content: string;
 }
 
+/** `user/message` 是誰塞的，見 {@link SessionEventMap} 的 `user/message`。 */
+export type UserMessageSource =
+  { readonly kind: 'plugin'; readonly plugin: string } | { readonly kind: 'user' };
+
 /** 每一種事件帶什麼。 */
 export interface SessionEventMap {
   /**
@@ -403,25 +407,29 @@ export interface SessionEventMap {
    */
   'assistant/message': { readonly message: LoggedMessage; readonly interrupted?: true };
   /**
-   * 外掛塞進對話的一則 user-role 訊息——**不是人打的字**，人打的字在 `turn/start`。
+   * 塞進對話的一則 user-role 訊息。兩種來源：
    *
-   * 照 dsh 的 `user/message` 帶 `source: {kind: 'plugin', plugin}`（`packages/llm/llm/src/message.ts`，
-   * `c291e79`；repeat-tool-reminder 與 tool-goal 都這樣注入）。今天兩個生產者：
+   * - **`plugin`：外掛塞的，不是人打的字**。照 dsh 的 `user/message` 帶 `source: {kind: 'plugin', plugin}`
+   *   （`packages/llm/llm/src/message.ts`，`c291e79`；repeat-tool-reminder 與 tool-goal 都這樣注入）。今天兩個生產者：
+   *   - repeat-reminder 的提醒，`plugin` 是那顆 middleware 的名字。落在它提醒的那次模型呼叫的
+   *     `model/start` 之前，同 dsh 在 `agent/pre-step` 注入。
+   *   - goal 收尾時注入的那段指示，`plugin` 是回它的那顆**工具**的名字：它包在工具回的 `Command` 裡，
+   *     由圍堵讀出來，而圍堵只知道工具、不知道工具屬於哪個 plugin。落在那次呼叫的 `tool/result` 之後，
+   *     同它在對話裡的位置。
+   * - **`user`：人在一輪跑著時插的話**（[#710](https://github.com/DemianLi/nexus-agent/issues/710)），照 dsh 輪中領走
+   *   `next-step` 時寫的 `user/message`（`packages/core/agent-loop/src/agent.ts:403-405`，`477b4f4`）。**唯一的生產者是
+   *   pump 領走插話的那條路**（`apps/harness/src/thread-pump.ts`），緊跟在領走那顆 `inbox/spliced` 後面、那次模型呼叫
+   *   的 `model/start` 之前。goal 的直接人類授權認它（dsh `packages/goal/tool-goal/src/authority.ts:82-83`），所以外掛
+   *   與工具不能寫這一種：上面兩個生產者都寫死 `plugin`。
    *
-   * - repeat-reminder 的提醒，`plugin` 是那顆 middleware 的名字。落在它提醒的那次模型呼叫的
-   *   `model/start` 之前，同 dsh 在 `agent/pre-step` 注入。
-   * - goal 收尾時注入的那段指示，`plugin` 是回它的那顆**工具**的名字：它包在工具回的 `Command` 裡，
-   *   由圍堵讀出來，而圍堵只知道工具、不知道工具屬於哪個 plugin。落在那次呼叫的 `tool/result` 之後，
-   *   同它在對話裡的位置。
-   *
-   * **偏離**：dsh 的人話也是 `user/message`；我們的在 `turn/start`，而那一格是授權的判別欄，不動它。
-   * 所以這一種只收外掛注入的，`source.kind` 只有 `plugin`。
+   * **偏離**：dsh 一輪開頭那句人話也是 `user/message`；我們的在 `turn/start`，而那一格是授權的判別欄，不動它。
+   * 所以一輪開頭的人話不在這裡，只有輪中插的話在。
    *
    * ⚠️ 原樣進遙測。
    */
   'user/message': {
     readonly message: LoggedMessage;
-    readonly source: { readonly kind: 'plugin'; readonly plugin: string };
+    readonly source: UserMessageSource;
   };
   /**
    * 壓縮真的發生了一次：舊訊息被換成一份摘要。**一次摘要一筆**。

@@ -110,8 +110,13 @@ export const RECURSION_LIMIT_SERVICE = 'recursionLimit';
  * CLI 與 serve 給了 `--workspace` 時，出貨清單裡的工作區指令那顆每次 invoke 再吃一格，
  * 100 換算成 32 輪（2026-09-18 實測，見 `@nexus/plugin-agent-instructions` 檔頭「代價」）。
  *
+ * **serve 每輪是四格**：它另掛插話的載體（[#710](https://github.com/DemianLi/nexus-agent/issues/710)，
+ * `@nexus/core` 的 `step-inbox.ts`），那顆 `beforeModel` 同樣每輪一個節點；另一半掛在 `afterAgent`，一次執行只走一次，
+ * 跑掉的迴圈走不到。2026-09-28 實測：出貨清單上 100 換算成 24 輪，給不給 `--workspace` 都一樣（不掛時兩者都是 32）；
+ * 裸組裝的 33 對 24 由 `agent-factory.test.ts` 那條「三格變四格」正面量。CLI 不掛，照舊三格。
+ *
  * **這個常數沒有跟著動。** 方向是護欄變嚴不是變鬆，而校準的兩端換算過去都還成立（見
- * 上一段）。要拿回原本的預算就自己傳一個大的 `recursionLimit`，或明著關掉提醒器。
+ * 上一段；每輪四格時是 ≈ 114 與 ≈ 16，跑掉的那次照樣攔得住，正常任務照樣很遠）。要拿回原本的預算就自己傳一個大的 `recursionLimit`，或明著關掉提醒器。
  *
  * ## 它現在是 schema 的預設值
  *

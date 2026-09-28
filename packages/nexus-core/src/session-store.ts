@@ -201,8 +201,17 @@ import type { SessionEvent } from './session-log.js';
  *
  * 升版照新增詞彙的慣例（同 18），不是非升不可：18 讀到 `provider` 的標題照樣拿最後一顆，一字不差；讀到
  * `session/title-llm-request` 只是不認得一種它本來就不用的事件。
+ *
+ * ## 20：插話（`next-step`）
+ *
+ * 跑著的那一輪可以插話（[#710](https://github.com/DemianLi/nexus-agent/issues/710)）：`inbox/spliced` 的 `target` 多一種
+ * `next-step`，`user/message` 的 `source` 多一種 `user`（輪中領走、送進模型的那一句）。v19 的檔直接讀：那時候只有
+ * `next-turn`，也沒有人話的 `user/message`，一顆都沒有就是當時的樣子。
+ *
+ * **非升不可**，同 17：19 的折疊不看 `target`，每一顆都套在同一條清單上——`next-step` 的變動會混進 `next-turn`，
+ * 或讓折疊拋錯。19 推回模型時也把人話的 `user/message` 當成外掛注入的那一種讀。
  */
-export const SESSION_LOG_FORMAT_VERSION = 19;
+export const SESSION_LOG_FORMAT_VERSION = 20;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。

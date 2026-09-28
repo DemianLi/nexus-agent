@@ -137,13 +137,14 @@
  * ### 沒做的，也是偏離
  *
  * - **`/plan <message>`**：dsh 收自由訊息，用 `agent.steer()` 把它插進對話。
- *   deepagents / LangChain JS / LangGraph JS 沒有「從圖外插一則訊息進下一輪」的表達；
- *   在 `CommandResult` 上加一格 steer 又會弄糊 `command/done` 的語意，以及
- *   `@nexus/plugin-commands` 配套入口那條序列性規則。所以 {@link PLAN_COMMAND_HINT}
- *   是 `[off]`——收不下的東西不寫進提示。
+ *   原本登記的第一個理由「基座沒有從圖外插一則訊息的表達」**已經不成立**：
+ *   [#710](https://github.com/DemianLi/nexus-agent/issues/710) 的插話就是這條路（`@nexus/core` 的 `step-inbox.ts`，
+ *   由 serve 的 pump 送進圖）。第二個理由還在：在 `CommandResult` 上加一格 steer 會弄糊 `command/done` 的語意，
+ *   以及 `@nexus/plugin-commands` 配套入口那條序列性規則。整條偏離撤不撤、要不要改走插話，待重判（另開卡）。
+ *   在那之前 {@link PLAN_COMMAND_HINT} 照舊是 `[off]`——收不下的東西不寫進提示。
  * - **切換的旁白**：dsh 在人切換模式、而上一份請求標頭描述的是另一個模式時，往對話裡插一句
  *   「The user switched this session to plan mode.」（`loggedActiveAtLastHeader`）。我們沒有
- *   `request/header` 這一顆，也沒有從圖外插訊息的路（同上一條）；模型從下一次請求的
+ *   `request/header` 這一顆；從圖外插訊息的路 #710 之後有了，但只接人插的話、只在 serve 上（同上一條，待重判）。模型從下一次請求的
  *   system prompt 看得出來——指引在或不在。
  * - **`input.images`**：dsh 的命令收圖片附件，我們沒有 attachment store
  *   （`@nexus/core` 的 `commands.ts` 已經記著這一格是缺不是省）。

@@ -389,7 +389,8 @@
 # 的形狀抄的是上面 core 那三列，不是抄 dsh 的某一列。
 #
 # **100 不是模型輪數**：換算是 `模型輪數 = floor((limit − 1) / 每輪格數)`，而每輪幾格取決於這一次
-# 掛了哪些 middleware（預設組裝三格＝33 輪，再給 `--workspace` 是 32 輪）。那正是這個值歸 harness
+# 掛了哪些 middleware（預設組裝三格＝33 輪，再給 `--workspace` 是 32 輪；serve 另掛插話的載體（#710），
+# 每輪四格，出貨清單上是 24 輪）。那正是這個值歸 harness
 # 而不是歸 `@nexus/core` 的理由：core 不知道組裝長什麼樣。逐段實測見
 # `src/settings/recursion-limit.ts` 的檔頭。
 #

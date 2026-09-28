@@ -30,10 +30,13 @@ export type {
   FeedbackTargetNotFound,
   FeedbackVersionConflict,
   InputRespondOne,
+  QueueSteerAction,
   QueueUpdateAction,
   QueueUpdateCommand,
   RpcMethod,
   RunCancelCommand,
+  RunStartCommand,
+  RunStartMode,
   RunStartParams,
   SlashCommand,
   SlashDescriptor,
@@ -100,7 +103,7 @@ export type {
 } from './context-pressure.js';
 export { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 export type { TodosPayload, WireTodoItem } from './todos.js';
-export type { InboxPayload, WireQueuedInput } from './inbox.js';
+export type { InboxPayload, WireClaimedInput, WireQueuedInput } from './inbox.js';
 export { INBOX } from './inbox.js';
 export type { TitlePayload } from './title.js';
 export { TITLE } from './title.js';
@@ -117,7 +120,9 @@ export {
   QUEUE_ITEM_NOT_FOUND,
   QUEUE_UPDATE_METHOD,
   RUN_CANCEL_METHOD,
+  RUN_START_MODES,
   SLASH_METHODS,
+  STEER_UNAVAILABLE,
   THREAD_FEED_PATH,
   THREAD_SEARCH_PATH,
   THREAD_SEARCH_QUERY_MAX_LENGTH,

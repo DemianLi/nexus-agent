@@ -38,8 +38,8 @@
  * @module
  */
 
-import { spliceInbox } from './inbox.js';
-import type { QueuedInput } from './inbox.js';
+import { EMPTY_INBOX, spliceInbox } from './inbox.js';
+import type { InboxState } from './inbox.js';
 import type { InvariantInstaller } from './invariants.js';
 import type { NexusPlugin, PluginEntry } from './plugin.js';
 
@@ -74,7 +74,7 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
    */
   let openModelCalls = 0;
   /** 從檔頭折起的送出佇列。**跨 `session/end-seed` 不重設**，見檔頭。 */
-  let inbox: readonly QueuedInput[] = [];
+  let inbox: InboxState = EMPTY_INBOX;
 
   subject.observe((event) => {
     switch (event.type) {
