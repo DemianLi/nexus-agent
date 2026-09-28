@@ -96,7 +96,7 @@ function PlanSummary({ plan, id }: { plan: PlanDocument; id: string }) {
   const sidebar = useRightSidebar();
   return (
     <div className="flex flex-col gap-1 px-3 py-2">
-      <div className="flex min-w-0 items-start gap-2">
+      <div className="flex min-w-0 items-center gap-2">
         <h3 className="min-w-0 flex-1 text-sm font-medium break-words" data-testid="plan-title">
           {plan.title}
         </h3>

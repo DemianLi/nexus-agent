@@ -1287,9 +1287,10 @@ describe('記住這條 thread', () => {
       ).toEqual(['查看全文', '要求修改', '同意執行']);
 
       // 寬螢幕：全文自動停靠在右側欄。這一份的工具卡不在歷史裡（歷史只有 alpha），全文來自那一題的 detail。
-      expect(screen.getByRole('tab', { name: '改登入頁' }).getAttribute('aria-selected')).toBe(
-        'true',
-      );
+      // 分頁比面板晚一拍才畫出來，要等。
+      expect(
+        (await screen.findByRole('tab', { name: '改登入頁' })).getAttribute('aria-selected'),
+      ).toBe('true');
       expect(
         within(screen.getByTestId('plan-preview')).getByRole('heading', { name: '改登入頁' }),
       ).toBeTruthy();
