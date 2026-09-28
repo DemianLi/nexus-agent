@@ -91,14 +91,14 @@
 
 | 狀態 | 項 |
 | --- | --- |
-| 做完了（19） | 29 送出佇列（#645，2026-09-26）、1 App 殼（#640 補上右側欄）、2 手機抽屜、3 主題、4 連線狀態（#593）、9 歷史分頁（#618）、10 使用者訊息、11 助理訊息、12 推理（#527）、13 工具卡四態、19 交付檔、26 輸入框、27 slash 選單、31 狀態列、32 todo（#575）、34 用量表（#528）、35 讚踩與回饋、36 toast、5 右側欄（#640） |
-| 做了一部分（6） | 28 `@` 引用（#653，2026-09-28：檔案與資料夾；會話、子代理、skill、chip 還沒）、 8 會話標頭（#655 做了標題；工作目錄、背景工作還沒）、6 會話列表（按內容搜尋 #760、即時狀態 #632 已接上；釘選、封存、改名要 harness：#633）、14 按工具換呈現（終端、網頁沒有生產者；讀圖會讓那一輪 400，harness 修在 #642）、15 子代理標示（重新整理後歷史只讀 root 那份）、21 核准（拒絕送不出理由） |
-| 做了、缺的那塊是刻意不做（3） | 7 空白 hero 的建議按鈕（原型那排是假資料）、22 決定紀錄只存在本地（#220）、23 提問的「放棄整組」（❌ 就是停止這一輪，§2.4） |
-| 沒做（9） | 16 子代理檢視、17 逐輪用量、18 壓縮列、20 附件、24 計劃審核、25 權限模式、30 模型選擇、33 目標列、37 輪次側軌 |
+| 做完了（20） | 24 計劃審核（#654，2026-09-28：面板、計劃卡、全文分頁）、29 送出佇列（#645，2026-09-26）、1 App 殼（#640 補上右側欄）、2 手機抽屜、3 主題、4 連線狀態（#593）、9 歷史分頁（#618）、10 使用者訊息、11 助理訊息、12 推理（#527）、13 工具卡四態、19 交付檔、26 輸入框、27 slash 選單、31 狀態列、32 todo（#575）、34 用量表（#528）、35 讚踩與回饋、36 toast、5 右側欄（#640） |
+| 做了一部分（5） | 28 `@` 引用（#653，2026-09-28：檔案與資料夾；會話、子代理、skill、chip 還沒）、 8 會話標頭（#655 做了標題；工作目錄、背景工作還沒）、6 會話列表（按內容搜尋 #760、即時狀態 #632 已接上；釘選、封存、改名要 harness：#633）、14 按工具換呈現（終端、網頁沒有生產者；讀圖會讓那一輪 400，harness 修在 #642）、15 子代理標示（重新整理後歷史只讀 root 那份） |
+| 做了、缺的那塊是刻意不做（4） | 7 空白 hero 的建議按鈕（原型那排是假資料）、21 核准的拒絕理由（照 dsh：核准的結果詞彙刻意封閉在允許／拒絕，要帶意見的走提問通道；#654 Q2，2026-09-28 移過來）、22 決定紀錄只存在本地（#220）、23 提問的「放棄整組」（❌ 就是停止這一輪，§2.4） |
+| 沒做（9） | 16 子代理檢視、17 逐輪用量、18 壓縮列、20 附件、25 權限模式、30 模型選擇、33 目標列、37 輪次側軌、38 計劃模式的指示與切換（2026-09-28 從 24 拆出來） |
 
 沒做的按誰先動分三類：
 
-- **等 harness 先投影**（日誌有、線上沒有）：18、24、33 已請 dev-harness 排，順序計劃模式 → 壓縮列 → 目標列；17 要逐次的輸入與輸出；25 是 `sandbox/mode`；37 要整條對話的輪次索引。
+- **等 harness 先投影**（日誌有、線上沒有）：38（原 24 的另一半，要 `plan/mode`）、18、33 已請 dev-harness 排，順序計劃模式 → 壓縮列 → 目標列；17 要逐次的輸入與輸出；25 是 `sandbox/mode`；37 要整條對話的輪次索引。
 - **要先開一條路**：8 標頭的標題只在開了會話日誌時隨列表送，要每種情況都有得另開一條拿當前標題的路。harness 那一條由 [#647](https://github.com/DemianLi/nexus-agent/issues/647) 開：即時與歷史都送 `custom` 的 `title`，沒開落盤也有，折疊器的 `title` 讀得到。web 那一刀是 #655（2026-09-26）：標頭、瀏覽器分頁標題、側欄目前這一列都讀它。
 - **整塊新功能**（三層都沒有，先 grilling）：16、20、30。28 原本也在這裡，檔案與資料夾那一塊由 #653 做掉（2026-09-28）。5 右側欄原本也歸在這裡，是錯的：dsh 右側欄的兩種主要內容（改動比對 #443、交付預覽 #452）早就做了、放在 Sheet，前端自己就做得了，同一天由 #640 做掉。
 
@@ -142,10 +142,11 @@
 
 | # | 元件 | wire | dsh | 市面 | 動效 | 備註 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 21 | 核准（整批 `actions`、允許／拒絕＋理由） | P0（`PendingApproval`、`DecisionEntry`） | `ui-approval/ApprovalPanel`：**"Composer takeover for one pending approval waterfall"**（`ApprovalPanel.tsx:1`）；`ui-primitives/RiskConfirmation` | AIE `confirmation`（逐顆、卡內，不合 #317） | 輸入框換成核准面板時 `border-beam` `pulse-inner` | 現有 `approval-card.tsx` |
+| 21 | 核准（整批 `actions`、允許／拒絕＋理由） | P0（`PendingApproval`、`DecisionEntry`） | `ui-approval/ApprovalPanel`：**"Composer takeover for one pending approval waterfall"**（`ApprovalPanel.tsx:1`）；`ui-primitives/RiskConfirmation` | AIE `confirmation`（逐顆、卡內，不合 #317） | 輸入框換成核准面板時 `border-beam` `pulse-inner` | 現有 `approval-card.tsx`。**拒絕理由刻意不做**（#654 Q2，2026-09-26 拍板）：照 dsh，核准的結果詞彙刻意封閉在允許／拒絕（`.agents/notes/archived/feature/2026-07-07-plan-mode.md` 的 Alternatives），要帶意見的走提問通道——計劃審核就是這樣改過去的 |
 | 22 | 決定紀錄（人按了什麼） | P0（`DecisionEntry`） | `ui-chat/ApprovalCommand` | — | — | 與失敗工具卡並存 |
 | 23 | 提問（單選／多選／自由文字／跳過／放棄整組） | P0（`PendingQuestion`、`QuestionItem`、`AnswerEntry`） | `ui-user-questions/QuestionComposer`：**"ask_user_question composer takeover"** | sc `questionnaire`；AIE `question` | 題目切換 slide＋blur 2px | 現有 `question-card.tsx` |
-| 24 | 計劃審核 | P1 | `ui-user-questions/PlanReviewPanel` | AIE `plan` | — | nexus 有 plan-mode plugin，wire 沒送；2026-09-25 請 dev-harness 排投影，排第一（交出計劃時核准面板只列 JSON 原文）。#652 起交出計劃改走提問通道、全文在 `QuestionItem.detail`，一般提問面板先把它畫成 markdown 過渡；專用的審核面板與計劃卡是 #654 |
+| 24 | 計劃審核 | ~~P1~~ **P0（2026-09-28 已做完）**（`QuestionItem.detail`＋`intent`，#652） | `ui-user-questions/PlanReviewPanel`、`ui-plan`（`PlanCard`、`PlanPreview`） | AIE `plan` | — | #654（2026-09-28）：認得 `plan-review` 意圖的提問換成審核面板（「計劃待審」、標題＋兩行摘要＋「查看全文」、要求修改／同意執行）；「要求修改」關掉這一題、這一輪不停；全文開在右側欄的「計劃」分頁，1024 以上待審時自動停靠一次；對話裡的計劃卡帶結果 chip，重新整理照樣在，舊會話（走核准的那種）也讀得出結果。規則在規格 §4.3。模式的指示與切換拆成第 38 項 |
+| 38 | 計劃模式的指示與切換 | P1（線上沒有 `plan/mode`） | `ui-plan/PlanModeControl`（輸入框的 plan chip） | — | — | 2026-09-28 從第 24 項拆出來；等 harness 把 `plan/mode` 送上線（2026-09-25 已請 dev-harness 排，排在壓縮列、目標列之前） |
 | 25 | 權限模式切換 | P1 | `ui-permission-presets` | — | 滑動 tab pill | 2026-09-26 #437 拍板照 dsh 做、排後面：三組（唯讀＋要問、可寫工作區＋要問、全開＋不問），`/permission` 取代 `/sandbox`；harness 那一半先做，web 選單接在後面 |
 
 **分歧**：dsh 的 21、23 都是「輸入框被接管」，nexus 目前是 `App.tsx:319–333` 把 `pendings` 渲染成 `QuestionCard`／`ApprovalCard`。手機上 takeover 比較省空間，因為鍵盤起來時畫面上只剩輸入區那一塊。這要拍板，見 §4 的 fog。

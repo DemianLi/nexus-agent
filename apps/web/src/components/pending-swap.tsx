@@ -9,7 +9,7 @@
  *   ⑨ 的當前題），沒有就落在面板本身（`tabIndex=-1`，核准面板不落在按鈕上）；面板收掉時到下一張或回輸入框。
  * - **動效是「換內容」**（§7）：舊的 150 淡出，換過去之後新的 250 長出（`motion-swap`，在 `styles/motion.css`）。
  *   第一次畫出來不動：載入歷史、切換對話不走動效。
- * - **提問面板可以收起，核准面板不行**（§4.3）：收起是 collapsible 的 250／150，內容**保持掛載**（答到一半的不丟），
+ * - **提問面板可以收起，核准面板與計劃審核面板不行**（§4.3，#654 二-Q5）：收起是 collapsible 的 250／150，內容**保持掛載**（答到一半的不丟），
  *   關完才 `hidden`。Esc＝收起（不是停止），焦點落到展開鈕上（§8）。核准面板 Esc 不做事。
  */
 
@@ -21,6 +21,7 @@ import type { PendingInput } from '@nexus/wire';
 import { Card } from '@/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { pendingLabel } from '@/lib/pending-label';
+import { isPlanReview } from '@/lib/plan-review';
 
 /** 舊的那一邊淡出多久（`--duration-quick`）；淡完才換成新的。收起的關也是這麼久（§7）。 */
 const SWAP_OUT_MS = 150;
@@ -103,7 +104,7 @@ export function PendingSwap({
           <PendingPanel
             key={panel.interruptId}
             label={label}
-            collapsible={panel.kind === 'question'}
+            collapsible={panel.kind === 'question' && !isPlanReview(panel.questions)}
             actions={renderActions?.(panel)}
           >
             {renderPanel(panel)}
