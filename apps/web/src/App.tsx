@@ -10,6 +10,7 @@ import { ContextMeter } from '@/components/context-meter';
 import { EmptyHero } from '@/components/empty-hero';
 import { FeedbackDialog } from '@/components/feedback-dialog';
 import { PendingSwap } from '@/components/pending-swap';
+import { PlanReviewPanel, usePlanLibrary } from '@/components/plan-review';
 import { QueueDock } from '@/components/queue-dock';
 import { FEEDBACK_COMMAND_LINE } from '@/lib/feedback';
 import { QuestionPanel } from '@/components/question-panel';
@@ -36,6 +37,7 @@ import { createChangesStores } from '@/lib/changes-diff';
 import { createDeliverableDownloader } from '@/lib/deliverable-download';
 import { createDeliverableFileStore } from '@/lib/deliverable-file';
 import { newConversationTarget, readThreadListing } from '@/lib/new-conversation';
+import { isPlanReview, planReviewOf } from '@/lib/plan-review';
 import { STOPPED_QUESTION_TEXT, stoppedOnQuestion } from '@/lib/question-view';
 import { canRunSlash, canSendText } from '@/lib/queue-view';
 import { recallThread, rememberThread } from '@/lib/remembered-thread';
@@ -287,10 +289,12 @@ function ConversationView({
     const panel = document.querySelector<HTMLElement>('[data-slot="pending-panel"]');
     (panel?.querySelector<HTMLElement>('[data-pending-focus]') ?? panel)?.focus();
   }, []);
+  // 計劃分頁讀的是對話裡那一份（#654）：沒變就是同一個參照。
+  const plans = usePlanLibrary(conversation.state.entries, pendings);
   // 右側欄讀的跟卡片同一批 store（#640）：分頁與卡片看到的是同一份快取。
   const sidebarSources = useMemo(
-    () => ({ changes, deliverableFiles, deliverableDownload }),
-    [changes, deliverableFiles, deliverableDownload],
+    () => ({ changes, deliverableFiles, deliverableDownload, plans }),
+    [changes, deliverableFiles, deliverableDownload, plans],
   );
 
   return (
@@ -404,8 +408,27 @@ function ConversationView({
             // **按 `kind` 分派到兩個元件，不是一個元件內部分支**（#231 第 4 項）：送出的形狀
             // 完全不同（`{decisions:[…]}` 對 `{answers:[…]}`），而認不得的 `kind` 根本到不了
             // 這裡——折疊器那一層就把它翻成 `failed` 了，理由見 `reduceInputRequested`。
-            renderPanel={(pending) =>
-              pending.kind === 'question' ? (
+            // 計劃審核（#654）是問答中斷的一種：認得 `intent` 才換成審核面板，其餘照一般提問。
+            renderPanel={(pending) => {
+              const review =
+                pending.kind === 'question' ? planReviewOf(pending.questions) : undefined;
+              if (pending.kind === 'question' && review !== undefined) {
+                return (
+                  <PlanReviewPanel
+                    pending={pending}
+                    review={review}
+                    busy={!conversation.connected}
+                    onApprove={() =>
+                      void conversation.answer(pending.interruptId, [
+                        { id: review.questionId, selected: [review.approve] },
+                      ])
+                    }
+                    // 關掉這一題，這一輪不停；面板一收，焦點由換手層交回輸入框。
+                    onRevise={() => void conversation.dismissQuestion(pending.interruptId)}
+                  />
+                );
+              }
+              return pending.kind === 'question' ? (
                 <QuestionPanel
                   pending={pending}
                   busy={!conversation.connected}
@@ -421,12 +444,14 @@ function ConversationView({
                     toast('已停止這一輪');
                   }}
                 />
-              )
-            }
+              );
+            }}
             // 提問的 ❌＝停止這一輪（§4.3 寫明的例外：dsh 是放棄後這一輪繼續，demian 選擇不讓模型接著猜）。
             // 停下來之後那張提問工具卡展開、列出題目，輸入框提示字同一句。
+            // 計劃審核面板沒有 ❌：「要求修改」才是它的出口（#654 二-Q1）。
             renderActions={(pending) =>
-              pending.kind === 'question' && (
+              pending.kind === 'question' &&
+              !isPlanReview(pending.questions) && (
                 <TooltipProvider>
                   <Tooltip>
                     <TooltipTrigger asChild>

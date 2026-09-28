@@ -6,6 +6,9 @@
  * - **1024 以下全螢幕覆蓋**：用 `Sheet`，Esc 或收起鈕關掉；關掉等同收起，分頁照樣留著（斷點同左側欄，`use-mobile.ts`）。
  *   **窄螢幕載入時一律從收起開始**，不照存下來的「開著」恢復：一進來整個對話就被蓋住不是人要的。
  * - **分頁第一次被選中才掛上**：重新整理後恢復十個分頁，不該一口氣打十份讀取。掛過之後切走只是藏起來。
+ * - **計劃（#654）**：審核面板與計劃卡按「查看全文」打開同一個分頁，焦點進分頁，停靠時收起鈕把焦點交回按下去的那顆；
+ *   待審時 1024 以上自動停靠一次（`autoOpenPlan`），1024 以下不自動開。內容讀的是對話裡那一份（`sources.plans`），
+ *   不另外打讀取。
  *
  * 狀態與記在 `localStorage` 的那一半在 `lib/right-sidebar.ts`。面向參考 dsh `ui-sidebar-right`（面板沒有標題行、
  * 分頁列就是上緣、收起鈕在分頁列末端），分格、浮窗、拖放、復原、快捷鍵、引導頁不做（#640 決定 1）。
@@ -16,7 +19,7 @@
  * 鍵盤在分頁上按 Delete 關（`aria-keyshortcuts` 讓讀屏講出來）。
  */
 
-import { FileDiff, FileText, PanelRight, PanelRightClose, X } from 'lucide-react';
+import { FileDiff, FileText, PanelRight, PanelRightClose, ScrollText, X } from 'lucide-react';
 import {
   createContext,
   useCallback,
@@ -31,6 +34,7 @@ import type { KeyboardEvent, PointerEvent, ReactNode, RefObject } from 'react';
 
 import { ChangesReviewTab } from '@/components/changes-review';
 import { DeliverablePreviewTab } from '@/components/deliverable-preview';
+import { PlanPreviewTab } from '@/components/plan-preview-tab';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -38,6 +42,7 @@ import type { ChangesStores } from '@/lib/changes-diff';
 import type { DeliverableDownloader } from '@/lib/deliverable-download';
 import type { DeliverableFileStore } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
+import type { PlanDocument } from '@/lib/plan-review';
 import { basename } from '@/lib/present-view';
 import {
   MIN_PANEL_WIDTH,
@@ -60,8 +65,11 @@ import { cn } from '@/lib/utils';
 export const RIGHT_SIDEBAR_ID = 'right-sidebar';
 
 /** 空狀態那一句（#640 決定 3）。 */
-export const RIGHT_SIDEBAR_EMPTY_TEXT =
-  '這裡會顯示改動比對與交付預覽。從對話裡的改動卡或交付卡打開。';
+export const RIGHT_SIDEBAR_EMPTY_TEXT = '這裡會顯示改動比對、交付預覽與計劃。從對話裡的卡片打開。';
+
+/** 計劃分頁找不到那一份時（還沒載入到那一段對話，或存下來的分頁指到別處）。 */
+export const PLAN_TAB_MISSING_TEXT =
+  '這份計劃不在目前載入的對話裡。往上捲載入更早的對話，或從計劃卡重新打開。';
 
 /** 鍵盤調寬一次幾像素。 */
 const KEYBOARD_STEP = 16;
@@ -71,6 +79,8 @@ export interface RightSidebarSources {
   readonly changes?: ChangesStores | undefined;
   readonly deliverableFiles?: DeliverableFileStore | undefined;
   readonly deliverableDownload?: DeliverableDownloader | undefined;
+  /** 對話裡的計劃，以 {@link SidebarTab} 的 `plan` id 為鍵（#654）。 */
+  readonly plans?: ReadonlyMap<string, PlanDocument> | undefined;
 }
 
 /** 卡片用得到的那一半。 */
@@ -78,6 +88,15 @@ export interface RightSidebarApi {
   openChanges(seq: number, index: number): void;
   /** 沒有讀檔的 store 時是 `undefined`：交付卡就不畫預覽鈕。 */
   readonly openDeliverable: ((file: LocatedFile) => void) | undefined;
+  /**
+   * 人按「查看全文」（#654）：打開那份計劃的分頁、焦點進分頁。`from` 是按下去的那顆鈕，停靠時收起鈕把焦點交回它
+   * （覆蓋那一種由 Sheet 自己還）。
+   */
+  openPlan(id: string, from?: HTMLElement | null): void;
+  /**
+   * 待審時自動打開一次（#654 二-Q4）：只有停靠的寬度才開，焦點不動。回傳有沒有開；沒開的話呼叫端不該記成開過。
+   */
+  autoOpenPlan(id: string): boolean;
 }
 
 interface RightSidebarControl {
@@ -88,6 +107,10 @@ interface RightSidebarControl {
   readonly width: number;
   /** 標頭的開關鈕：停靠時從面板裡收起，焦點交回這裡。 */
   readonly toggle: RefObject<HTMLButtonElement | null>;
+  /** 要把焦點放進去的分頁鍵：分頁列畫出來之後放、放完清掉。 */
+  readonly focusTab: RefObject<string | undefined>;
+  /** 停靠時收起鈕把焦點交回哪裡；沒有（或已經不在畫面上）就交回標頭的開關鈕。 */
+  readonly returnFocus: RefObject<HTMLElement | null>;
   update(change: (layout: SidebarLayout) => SidebarLayout): void;
   setWidth(width: number, commit: boolean): void;
 }
@@ -121,6 +144,8 @@ export function RightSidebarProvider({
   // **人動過才寫**：打開一條會話看一眼不算用過右側欄，不該佔掉記憶的一格（`writeLayout`）。
   const touched = useRef(false);
   const toggle = useRef<HTMLButtonElement>(null);
+  const focusTab = useRef<string | undefined>(undefined);
+  const returnFocus = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (touched.current) writeLayout(threadId, layout);
   }, [threadId, layout]);
@@ -142,11 +167,33 @@ export function RightSidebarProvider({
       openDeliverable: canPreview
         ? (file) => update((current) => openTab(current, { kind: 'deliverable', file }))
         : undefined,
+      openPlan: (id, from) => {
+        const tab: SidebarTab = { kind: 'plan', id };
+        focusTab.current = tabKey(tab);
+        returnFocus.current = from ?? null;
+        update((current) => openTab(current, tab));
+      },
+      autoOpenPlan: (id) => {
+        if (isMobile) return false;
+        update((current) => openTab(current, { kind: 'plan', id }));
+        return true;
+      },
     }),
-    [update, canPreview],
+    [update, canPreview, isMobile],
   );
   const control = useMemo<RightSidebarControl>(
-    () => ({ api, layout, sources, isMobile, width, toggle, update, setWidth }),
+    () => ({
+      api,
+      layout,
+      sources,
+      isMobile,
+      width,
+      toggle,
+      focusTab,
+      returnFocus,
+      update,
+      setWidth,
+    }),
     [api, layout, sources, isMobile, width, update, setWidth],
   );
   return <Control.Provider value={control}>{children}</Control.Provider>;
@@ -196,7 +243,7 @@ export function RightSidebarPanel() {
           data-testid="right-sidebar"
         >
           <SheetTitle className="sr-only">右側欄</SheetTitle>
-          <SheetDescription className="sr-only">改動比對與交付預覽</SheetDescription>
+          <SheetDescription className="sr-only">改動比對、交付預覽與計劃</SheetDescription>
           <PanelContents />
         </SheetContent>
       </Sheet>
@@ -297,7 +344,7 @@ function ResizeHandle() {
 const domId = (key: string) => `right-sidebar-${key.replace(/:/g, '-')}`;
 
 function PanelContents() {
-  const { layout, isMobile, toggle, update } = useControl();
+  const { layout, isMobile, toggle, returnFocus, update } = useControl();
   const { tabs, active } = layout;
   // 選中過的分頁才掛上（見檔頭）。用 render 期間的衍生 state，選中的那一刻就掛，不等 effect 多畫一格空白。
   const [visited, setVisited] = useState<ReadonlySet<string>>(() => new Set());
@@ -318,8 +365,11 @@ function PanelContents() {
           title="收起右側欄"
           onClick={() => {
             update((current) => setOpen(current, false));
-            // 停靠時面板一藏，焦點就掉到 body；交回標頭的開關鈕。覆蓋那一種由 Sheet 自己還焦點。
-            if (!isMobile) toggle.current?.focus();
+            // 停靠時面板一藏，焦點就掉到 body；交回從哪裡打開的那顆（「查看全文」，#654），不在了就交回標頭的開關鈕。
+            // 覆蓋那一種由 Sheet 自己還焦點。
+            const back = returnFocus.current;
+            returnFocus.current = null;
+            if (!isMobile) (back?.isConnected === true ? back : toggle.current)?.focus();
           }}
         >
           <PanelRightClose />
@@ -353,6 +403,16 @@ function PanelContents() {
 
 function TabBody({ tab }: { tab: SidebarTab }) {
   const { sources, update } = useControl();
+  if (tab.kind === 'plan') {
+    const plan = sources.plans?.get(tab.id);
+    return plan === undefined ? (
+      <p className="text-muted-foreground flex flex-1 items-center justify-center px-6 text-center text-sm">
+        {PLAN_TAB_MISSING_TEXT}
+      </p>
+    ) : (
+      <PlanPreviewTab plan={plan} />
+    );
+  }
   if (tab.kind === 'changes') {
     return sources.changes === undefined ? null : (
       <ChangesReviewTab
@@ -373,7 +433,14 @@ function TabBody({ tab }: { tab: SidebarTab }) {
 }
 
 function TabStrip({ collapseRef }: { collapseRef: RefObject<HTMLButtonElement | null> }) {
-  const { layout, update } = useControl();
+  const { layout, focusTab, update } = useControl();
+  // 從卡片或面板按「查看全文」打開的（#654 二-Q5）：分頁畫出來之後焦點進去。看整份版面，不只看選中哪一個：那一份
+  // 已經自動打開、選中了的話，再按一次選中的分頁不變，版面卻是新的一份（`openTab` 一律回新的）。
+  useEffect(() => {
+    if (focusTab.current === undefined || focusTab.current !== layout.active) return;
+    focusTab.current = undefined;
+    document.getElementById(domId(layout.active))?.focus();
+  }, [layout, focusTab]);
   // 用鍵盤關掉或換分頁之後，焦點跟著到新選中的那一個（沒有分頁了就到收起鈕）。
   const refocus = useRef(false);
   useEffect(() => {
@@ -465,6 +532,10 @@ function useTabTitle(tab: SidebarTab): { label: string; detail: string | undefin
     if (store !== undefined && seq !== undefined) store.load(seq);
   }, [store, seq]);
   if (tab.kind === 'deliverable') return { label: basename(tab.file.path), detail: tab.file.path };
+  if (tab.kind === 'plan') {
+    const title = sources.plans?.get(tab.id)?.title ?? '計劃';
+    return { label: title, detail: title };
+  }
   return changesTabTitle(typeof summary === 'object' ? summary : undefined);
 }
 
@@ -485,7 +556,7 @@ function TabChip({
 }) {
   const key = tabKey(tab);
   const { label, detail } = useTabTitle(tab);
-  const Icon = tab.kind === 'changes' ? FileDiff : FileText;
+  const Icon = tab.kind === 'changes' ? FileDiff : tab.kind === 'plan' ? ScrollText : FileText;
   return (
     <div
       role="none"

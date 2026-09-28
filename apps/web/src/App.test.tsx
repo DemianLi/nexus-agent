@@ -1179,40 +1179,71 @@ describe('記住這條 thread', () => {
       await waitFor(() => expect(screen.queryByRole('region', { name: /等待核准/ })).toBeNull());
     });
 
-    it('計劃審核：補送的那一題帶著計劃全文回來，答的是同意那個標籤', async () => {
+    /**
+     * 補送的一次計劃審核（#652 起 `exit_plan_mode` 這樣問）。同意的標籤故意不是 harness 的「同意」：網頁要照
+     * `intent.approve` 回答，不能寫死字面。
+     */
+    function planReviewFrame(interruptId: string): Event {
+      return frame('input.requested', ['tools:a'], {
+        interrupt_id: interruptId,
+        payload: {
+          kind: 'question',
+          questions: [
+            {
+              id: 'plan-review',
+              header: '計劃審核',
+              question: '同意這份計劃並離開計劃模式？',
+              detail: '# 改登入頁\n\n- 改成中文\n- 補測試',
+              options: [{ label: '核可' }, { label: '繼續規劃' }],
+              intent: { kind: 'plan-review', approve: '核可', callId: 'call_alpha' },
+            },
+          ],
+        },
+      });
+    }
+
+    it('計劃審核：補送的那一題畫回審核面板，「同意執行」答的是同意那個標籤', async () => {
       seq = 91;
-      const fake = reloaded([
-        frame('input.requested', ['tools:a'], {
-          interrupt_id: 'plan-1',
-          payload: {
-            kind: 'question',
-            questions: [
-              {
-                id: 'plan-review',
-                header: '計劃審核',
-                question: '同意這份計劃並離開計劃模式？',
-                detail: '# 改登入頁\n\n- 改成中文\n- 補測試',
-                options: [{ label: '同意' }, { label: '繼續規劃' }],
-                intent: { kind: 'plan-review', approve: '同意', callId: 'call_alpha' },
-              },
-            ],
-          },
-        }),
-      ]);
+      const fake = reloaded([planReviewFrame('plan-1')]);
 
-      const panel = await screen.findByRole('region', { name: '有 1 個問題要你回答' });
-      const detail = panel.querySelector('[data-slot="question-detail"]');
-      expect(detail).not.toBeNull();
-      expect(within(detail as HTMLElement).getByRole('heading', { name: '改登入頁' })).toBeTruthy();
+      // 名稱是「計劃待審」，只有兩顆鈕，沒有 ❌、不能收起（#654 二-Q2、Q5）。
+      const panel = await screen.findByRole('region', { name: '計劃待審' });
+      expect(within(panel).getByTestId('plan-title').textContent).toBe('改登入頁');
+      expect(within(panel).getByTestId('plan-summary').textContent).toBe('改成中文');
+      expect(within(panel).queryByRole('button', { name: STOP_QUESTIONS_LABEL })).toBeNull();
+      expect(within(panel).queryByRole('button', { name: /收起/ })).toBeNull();
+      expect(
+        within(panel)
+          .getAllByRole('button')
+          .map((button) => button.textContent),
+      ).toEqual(['查看全文', '要求修改', '同意執行']);
 
-      fireEvent.click(within(panel).getByRole('radio', { name: /^同意/ }));
-      fireEvent.click(within(panel).getByRole('button', { name: '送出答案' }));
+      fireEvent.click(within(panel).getByRole('button', { name: '同意執行' }));
       await waitFor(() => expect(fake.responded).toHaveLength(1));
       expect(fake.responded[0]).toEqual({
         namespace: ['tools:a'],
         interrupt_id: 'plan-1',
-        response: { answers: [{ id: 'plan-review', selected: ['同意'] }] },
+        response: { answers: [{ id: 'plan-review', selected: ['核可'] }] },
       });
+    });
+
+    it('計劃審核：「要求修改」關掉這一題、不停這一輪，焦點回到輸入框', async () => {
+      seq = 91;
+      const fake = reloaded([planReviewFrame('plan-2')]);
+
+      const panel = await screen.findByRole('region', { name: '計劃待審' });
+      within(panel).getByRole('button', { name: '要求修改' }).focus();
+      fireEvent.click(within(panel).getByRole('button', { name: '要求修改' }));
+      await waitFor(() => expect(fake.responded).toHaveLength(1));
+      expect(fake.responded[0]).toEqual({
+        namespace: ['tools:a'],
+        interrupt_id: 'plan-2',
+        response: { cancelled: true },
+      });
+      // 沒有送停止：這一輪由模型接著收（它收到的是「停在這裡等使用者的訊息」）。
+      expect(fake.cancels).toHaveLength(0);
+      await waitFor(() => expect(screen.queryByRole('region', { name: '計劃待審' })).toBeNull());
+      await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('要說的話')));
     });
   });
 

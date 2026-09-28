@@ -3,10 +3,10 @@
  * 面板開或收；寬度全站一個值。這裡只有純函式與 `localStorage` 的讀寫，畫面在 `components/right-sidebar.tsx`。
  *
  * **形狀是一格停靠＋分頁**（#640 決定 1）：dsh `ui-sidebar-right` 的分格、浮窗、拖放、復原都不做。以後多一種
- * 內容（計劃審核、檔案樹）只是 {@link SidebarTab} 多一支。
+ * 內容只是 {@link SidebarTab} 多一支（#654 的計劃就是這樣加的；檔案樹還沒有）。
  *
  * **去重的鍵就是內容的座標**（決定 8、9）：改動一輪一個分頁（`seq`），同一輪換檔只改 `index`；交付一個檔一個分頁
- * （`seq`、`index`），不同輪交付的同名檔是兩個分頁。
+ * （`seq`、`index`），不同輪交付的同名檔是兩個分頁；計劃一份一個分頁（工具呼叫 id，#654 二-Q3）。
  *
  * ## 記在哪裡
  *
@@ -28,7 +28,12 @@ export type SidebarTab =
       /** 正在看的檔在摘要 `files` 裡的位置。 */
       readonly index: number;
     }
-  | { readonly kind: 'deliverable'; readonly file: LocatedFile };
+  | { readonly kind: 'deliverable'; readonly file: LocatedFile }
+  | {
+      readonly kind: 'plan';
+      /** 交出這份計劃的那次工具呼叫 id（#654）；審核請求沒帶的話是 `review:<interruptId>`。 */
+      readonly id: string;
+    };
 
 export interface SidebarLayout {
   readonly open: boolean;
@@ -41,9 +46,9 @@ export const EMPTY_LAYOUT: SidebarLayout = { open: false, tabs: [], active: unde
 
 /** 分頁的身分：同一個鍵只開一個。 */
 export function tabKey(tab: SidebarTab): string {
-  return tab.kind === 'changes'
-    ? `changes:${tab.seq}`
-    : `deliverable:${tab.file.seq}:${tab.file.index}`;
+  if (tab.kind === 'changes') return `changes:${tab.seq}`;
+  if (tab.kind === 'plan') return `plan:${tab.id}`;
+  return `deliverable:${tab.file.seq}:${tab.file.index}`;
 }
 
 /**
@@ -136,6 +141,9 @@ function parseTab(value: unknown): SidebarTab | undefined {
     return isIndex(tab.seq) && isIndex(tab.index)
       ? { kind: 'changes', seq: tab.seq, index: tab.index }
       : undefined;
+  }
+  if (tab.kind === 'plan') {
+    return typeof tab.id === 'string' && tab.id !== '' ? { kind: 'plan', id: tab.id } : undefined;
   }
   if (tab.kind !== 'deliverable') return undefined;
   const file = tab.file as Record<string, unknown> | null;
