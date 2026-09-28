@@ -59,6 +59,13 @@ describe('開分頁', () => {
     expect(keys(layout)).toEqual(['deliverable:9:0', 'deliverable:12:0', 'deliverable:9:1']);
   });
 
+  it('計劃一份一個分頁，以工具呼叫 id 為鍵（#654 二-Q3）', () => {
+    const plan = (id: string): SidebarTab => ({ kind: 'plan', id });
+    const once = openTab(openTab(EMPTY_LAYOUT, plan('call_1')), plan('call_2'));
+    expect(keys(openTab(once, plan('call_1')))).toEqual(['plan:call_1', 'plan:call_2']);
+    expect(openTab(once, plan('call_1')).active).toBe('plan:call_1');
+  });
+
   it('收起時開分頁會展開', () => {
     const layout = openTab({ ...openTab(EMPTY_LAYOUT, changes(1)), open: false }, changes(1));
     expect(layout.open).toBe(true);
@@ -99,6 +106,7 @@ describe('存下來的版面', () => {
     tabs: [
       changes(7, 2),
       { kind: 'deliverable', file: { path: 'a.md', description: '報告', seq: 9, index: 1 } },
+      { kind: 'plan', id: 'call_1' },
     ],
     active: 'deliverable:9:1',
   };
@@ -124,6 +132,8 @@ describe('存下來的版面', () => {
       },
     ],
     ['同一個分頁兩次', { open: true, tabs: [changes(1), changes(1)], active: 'changes:1' }],
+    ['計劃沒有 id', { open: true, tabs: [{ kind: 'plan', id: '' }], active: 'plan:' }],
+    ['計劃的 id 不是字串', { open: true, tabs: [{ kind: 'plan', id: 3 }], active: 'plan:3' }],
     ['選中的不在分頁裡', { open: true, tabs: [changes(1)], active: 'changes:2' }],
     ['有分頁卻沒有選中的', { open: true, tabs: [changes(1)] }],
   ])('%s：整份不信', (_name, value) => {

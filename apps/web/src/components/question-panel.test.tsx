@@ -271,7 +271,7 @@ const PLAN_REVIEW: QuestionItem = {
 
 const detailOf = () => document.querySelector('[data-slot="question-detail"]');
 
-describe('題目帶 detail（計劃審核，#652；專用面板是 #654）', () => {
+describe('題目帶 detail（認不出來的計劃審核也走這裡，#652；認得的換成 #654 的面板）', () => {
   it('計劃全文畫成 markdown，放在題目那一組裡、選項前面', () => {
     renderPanel(question([PLAN_REVIEW]));
     const group = screen.getByRole('group', { name: /同意這份計劃並離開計劃模式？/ });

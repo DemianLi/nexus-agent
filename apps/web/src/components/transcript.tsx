@@ -37,6 +37,7 @@ import { DeliverablesCard } from '@/components/deliverables-card';
 import { EarlierPager, earlierLoadedNotice, useEarlierAutoLoad } from '@/components/earlier-pager';
 import type { EarlierHistory } from '@/components/earlier-pager';
 import { MarkdownText } from '@/components/markdown-text';
+import { PlanToolCard } from '@/components/plan-review';
 import { ReasoningRow } from '@/components/reasoning-row';
 import { AttributionBadge, ToolCard } from '@/components/tool-card';
 import { Button } from '@/components/ui/button';
@@ -54,6 +55,7 @@ import type { DeliverableDownloader } from '@/lib/deliverable-download';
 import { transcriptItems } from '@/lib/deliverables-view';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
+import { EXIT_PLAN_MODE } from '@/lib/plan-review';
 import { pairAnswers } from '@/lib/question-view';
 import { reasoningRunning, visibleReasoning } from '@/lib/reasoning-view';
 
@@ -189,6 +191,8 @@ function Entry({
   }
 
   if (entry.kind === 'tool') {
+    // 交出計劃的那一顆畫成計劃卡（#654）。
+    if (entry.name === EXIT_PLAN_MODE) return <PlanToolCard entry={entry} beam={beam} />;
     return <ToolCard entry={entry} beam={beam} {...(answer === undefined ? {} : { answer })} />;
   }
 
