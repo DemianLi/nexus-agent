@@ -2,7 +2,12 @@ import { emptyConversation, INBOX, reduceConversation } from '@nexus/wire';
 import type { ConversationState, Event, WireQueuedInput } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
-import { pendingSteers } from './steer-view';
+import {
+  PARKED_STEER_TEXT,
+  PENDING_STEER_TEXT,
+  pendingSteers,
+  pendingSteerText,
+} from './steer-view';
 
 let seq = 0;
 function inboxFrame(payload: unknown): Event {
@@ -57,5 +62,15 @@ describe('pendingSteers（#710）', () => {
     );
     const stale: ConversationState = { ...claimed, inboxNextStep: [first, second] };
     expect(pendingSteers(stale).map((steer) => steer.key)).toEqual(['inbox:run-b']);
+  });
+});
+
+describe('pendingSteerText', () => {
+  it('這一輪還在是下一步；停了是下一輪（harness 留到下一輪的第一次模型呼叫才領）', () => {
+    expect(pendingSteerText('running')).toBe(PENDING_STEER_TEXT);
+    expect(pendingSteerText('awaiting-input')).toBe(PENDING_STEER_TEXT);
+    for (const status of ['idle', 'stopped', 'failed'] as const) {
+      expect(pendingSteerText(status)).toBe(PARKED_STEER_TEXT);
+    }
   });
 });

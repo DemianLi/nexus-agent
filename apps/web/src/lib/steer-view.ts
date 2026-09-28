@@ -1,4 +1,4 @@
-import type { ConversationState } from '@nexus/wire';
+import type { ConversationState, ConversationStatus } from '@nexus/wire';
 
 /**
  * 還沒被領走的插話在畫面上怎麼畫（[#710](https://github.com/DemianLi/nexus-agent/issues/710)）。資料是 harness 的投影
@@ -11,8 +11,21 @@ import type { ConversationState } from '@nexus/wire';
  * @module
  */
 
-/** 插話泡泡底下那一句。 */
+/** 插話泡泡底下那一句：這一輪還在（跑著、停在核准點，答完接著跑）。 */
 export const PENDING_STEER_TEXT = '插話・下一步送進模型';
+
+/**
+ * 插話泡泡底下那一句：這一輪已經停了（按了停止、重啟接回來）。harness 把它留在 `next-step`，**下一輪的第一次模型呼叫**
+ * 才領走，排在開那一輪的那句後面（`thread-pump.ts` 的 `#runOnce`，同 dsh 按停止帶 `keepInbox`）。
+ */
+export const PARKED_STEER_TEXT = '插話・下一輪送進模型';
+
+/** 泡泡底下那一句看這一輪還在不在。 */
+export function pendingSteerText(status: ConversationStatus): string {
+  return status === 'running' || status === 'awaiting-input'
+    ? PENDING_STEER_TEXT
+    : PARKED_STEER_TEXT;
+}
 
 export interface PendingSteer {
   /** 同領走後那則人的話的 id。 */

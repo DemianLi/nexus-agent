@@ -89,7 +89,7 @@
 | 26 | 輸入框 | shadcn `input-group`＋`textarea` | 在 `App.tsx` |
 | 27 | slash 選單 | shadcn `command` | 在 `App.tsx` |
 | 28 | `@` 引用 | shadcn `command`（跟 slash 選單共用同一顆 popover）；觸發、插入、非同步狀態照 dsh（§4.4） | `lib/file-mention.ts`、`lib/mention-menu.ts`、在 `composer.tsx` |
-| 29 | 送出佇列 | 自建，shadcn `collapsible`＋`button`＋`textarea`；行為照 dsh `QueueDock`（一件直接畫、兩件以上收合、就地改與刪；列上的插話鈕還沒接，等 `WireClient.queueUpdate` 放寬，#710 拆開的第二步）；新項目撐過 200ms 才畫、只淡入淡出不 stagger；放在待辦面板下、換手區外，停在核准點時照樣看得到。**插話**（#710）：跑著時 Cmd/Ctrl+Enter 送插話，Enter 與送出鈕照舊排隊（照 dsh 的預設，沒做它讓 Enter 改成插話的偏好設定），底列提示跟著換（加速鍵那一句 640 以下不畫：手機多半沒有實體鍵盤，390 寬會斷在字中間）；排著的插話不進佇列，照 dsh 畫在對話尾端（淡一階，底下一句「插話・下一步送進模型」），被領走時同一格換成人的話 | `queue-dock.tsx`、`lib/submit-mode.ts`、`lib/steer-view.ts` |
+| 29 | 送出佇列 | 自建，shadcn `collapsible`＋`button`＋`textarea`；行為照 dsh `QueueDock`（一件直接畫、兩件以上收合、就地改與刪；列上的插話鈕還沒接，等 `WireClient.queueUpdate` 放寬，#710 拆開的第二步）；新項目撐過 200ms 才畫、只淡入淡出不 stagger；放在待辦面板下、換手區外，停在核准點時照樣看得到。**插話**（#710）：跑著時 Cmd/Ctrl+Enter 送插話，Enter 與送出鈕照舊排隊（照 dsh 的預設，沒做它讓 Enter 改成插話的偏好設定），底列提示跟著換（加速鍵那一句 640 以下不畫：手機多半沒有實體鍵盤，390 寬會斷在字中間）；排著的插話不進佇列，照 dsh 畫在對話尾端（淡一階，底下一句「插話・下一步送進模型」；這一輪停了就改說「下一輪送進模型」，harness 留到下一輪的第一次模型呼叫才領），被領走時同一格換成人的話 | `queue-dock.tsx`、`lib/submit-mode.ts`、`lib/steer-view.ts` |
 | 31 | 狀態列 | 自建（shimmer、orb 見 §7） | `status-line.tsx` 留 |
 | 35 | 讚踩＋回饋框 | 框換 shadcn `dialog`，表單邏輯留；讚踩按鈕留在 `transcript.tsx` | `feedback-dialog.tsx` 換外殼 |
 | 36 | Toast | shadcn `sonner`，**改成收 `theme` prop、拿掉 `next-themes`** | — |

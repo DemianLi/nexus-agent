@@ -32,7 +32,7 @@ import { NO_DECISION_REASON } from '@/components/approval-card';
 import { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/components/thread-list';
 import { STOPPED_QUESTION_TEXT, WITHDRAWN_TOOL_REASON } from '@/lib/question-view';
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
-import { PENDING_STEER_TEXT } from '@/lib/steer-view';
+import { PARKED_STEER_TEXT, PENDING_STEER_TEXT } from '@/lib/steer-view';
 import { axeViolations } from '@/test/axe';
 import { stubCmdkLayout } from '@/test/cmdk';
 import { fakeDownlink } from '@/test/downlink';
@@ -420,6 +420,24 @@ describe('對話介面', () => {
       await waitFor(() => expect(modes).toEqual(['steer', undefined]));
       const dock = await screen.findByTestId('queue-dock');
       expect(within(dock).getByText('下一句')).toBeTruthy();
+    });
+
+    it('這一輪停了、插話還沒被領走：泡泡留著，底下改說下一輪才送進模型', async () => {
+      seq = 0;
+      const { fake, client } = steeringClient([
+        frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      ]);
+      render(<App client={client} />);
+      await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
+      const input = screen.getByLabelText('要說的話');
+      fireEvent.change(input, { target: { value: '改用 X' } });
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+      await screen.findByText(PENDING_STEER_TEXT);
+
+      fake.downlink.push(fake.opened[0]!, [fake.downlink.lifecycleFrame('completed')]);
+      await waitFor(() => expect(screen.queryByText(PENDING_STEER_TEXT)).toBeNull());
+      expect(screen.getByText(PARKED_STEER_TEXT)).toBeTruthy();
+      expect(screen.getByText('改用 X').closest('[data-pending-steer]')).not.toBeNull();
     });
 
     it('送出鈕同 Enter：跑著時也是排隊', async () => {
