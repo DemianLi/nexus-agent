@@ -1,4 +1,4 @@
-import type { Event, WireClient } from '@nexus/wire';
+import type { Event, WireClient, WireFeedbackItem } from '@nexus/wire';
 import { act, cleanup, configure, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -32,8 +32,10 @@ interface Line {
   fail(message: string): void;
 }
 
-/** 每次 `openEvents` 開一條新的 `Line`；`failOpen` 為真時那一次開線直接拋。 */
-function scriptedClient() {
+/**
+ * 每次 `openEvents` 開一條新的 `Line`；`failOpen` 為真時那一次開線直接拋。`extra` 補上其他用得到的 method。
+ */
+function scriptedClient(extra: Record<string, unknown> = {}) {
   const lines: Line[] = [];
   let failOpen: string | undefined;
   const openEvents = vi.fn(async () => {
@@ -72,6 +74,7 @@ function scriptedClient() {
       result: { events: [], firstSeq: 0, throughSeq: 0, hasMore: false, legacy: false },
     }),
     slashList: async () => ({ kind: 'ok', commands: [] }),
+    ...extra,
   } as unknown as WireClient;
   return {
     client,
@@ -289,3 +292,143 @@ describe('useConversation 斷線與重接（#593）', () => {
     expect(openEvents).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * 伺服器那一側的評分。`list` 在**送出那一刻**照下存著的那份；`holdLists()` 之後要等 `releaseLists()` 才回，
+ * 用來做出「送得早、回得晚」的舊清單。`put` 等 `releasePut()` 才寫進去。
+ */
+function ratingsServer() {
+  const stored = new Map<string, WireFeedbackItem>();
+  let holding = false;
+  const held: (() => void)[] = [];
+  let openPut: (() => void) | undefined;
+  const feedbackList = vi.fn(async () => {
+    const items = [...stored.values()];
+    if (holding) await new Promise<void>((resolve) => held.push(resolve));
+    return { kind: 'ok', result: { ok: true, value: { items } } };
+  });
+  const feedbackPut = vi.fn(
+    async (
+      _threadId: string,
+      params: { messageId: string; rating: WireFeedbackItem['rating'] },
+    ) => {
+      await new Promise<void>((resolve) => (openPut = resolve));
+      const item: WireFeedbackItem = {
+        messageId: params.messageId,
+        rating: params.rating,
+        version: 'v-put',
+        createdAt: 0,
+        updatedAt: 0,
+      };
+      stored.set(item.messageId, item);
+      return { kind: 'ok', result: { ok: true, value: item } };
+    },
+  );
+  return {
+    stored,
+    feedbackList,
+    feedbackPut,
+    holdLists: () => (holding = true),
+    releaseLists: () => {
+      holding = false;
+      for (const resolve of held.splice(0)) resolve();
+    },
+    releasePut: () => openPut?.(),
+  };
+}
+
+// StrictMode 下先掛上的那一份會被收掉：重讀要跟著最後那條線走，不能漏也不能多讀一次。
+describe.each([false, true])(
+  'useConversation 重接之後重讀評分（#772，照 dsh 的 connection/reset；StrictMode：%s）',
+  (strict) => {
+    beforeEach(() => configure({ reactStrictMode: strict }));
+    afterEach(() => configure({ reactStrictMode: false }));
+
+    it('讀過的重讀一次：斷線期間別處改過的評分畫得出來', async () => {
+      const server = ratingsServer();
+      server.stored.set('m1', {
+        messageId: 'm1',
+        rating: 'negative',
+        version: 'v1',
+        createdAt: 0,
+        updatedAt: 0,
+      });
+      const { client, latest } = scriptedClient({ feedbackList: server.feedbackList });
+      const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+      await tick();
+      act(() => result.current.seedRatings());
+      await tick();
+      expect(result.current.ratings.get('m1')?.rating).toBe('negative');
+
+      // 斷線期間別的分頁改成讚。
+      server.stored.set('m1', {
+        messageId: 'm1',
+        rating: 'positive',
+        version: 'v2',
+        createdAt: 0,
+        updatedAt: 1,
+      });
+      latest().fail('network error');
+      await tick();
+      expect(result.current.connected).toBe(false);
+      await tick(250);
+      expect(result.current.connected).toBe(true);
+      expect(server.feedbackList).toHaveBeenCalledTimes(2);
+      expect(result.current.ratings.get('m1')).toMatchObject({ rating: 'positive', version: 'v2' });
+    });
+
+    it('沒讀過的不讀：冷的等人滑過再讀', async () => {
+      const server = ratingsServer();
+      const { client, latest } = scriptedClient({ feedbackList: server.feedbackList });
+      const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+      await tick();
+      latest().fail('network error');
+      await tick();
+      expect(result.current.connected).toBe(false);
+      await tick(250);
+      expect(result.current.connected).toBe(true);
+      expect(server.feedbackList).not.toHaveBeenCalled();
+    });
+
+    it('重讀排在路上的修改後面：重接前送出的評分不會被舊清單蓋掉', async () => {
+      const server = ratingsServer();
+      const { client, latest } = scriptedClient({
+        feedbackList: server.feedbackList,
+        feedbackPut: server.feedbackPut,
+      });
+      const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+      await tick();
+      // 還沒評過的按讚：先開對話框，送出之後才寫；寫的那一次卡在路上。
+      await act(() => result.current.rate('m1', 'positive'));
+      let submitted: Promise<void> | undefined;
+      act(() => {
+        submitted = result.current.submitFeedback({ text: '' });
+      });
+      await tick();
+      expect(server.feedbackPut).toHaveBeenCalledTimes(1);
+
+      // 重接那一刻要是直接讀，送出去的清單照下的是還沒寫進去的那份，而且比寫的那一次晚回來。
+      server.holdLists();
+      latest().fail('network error');
+      await tick();
+      expect(result.current.connected).toBe(false);
+      await tick(250);
+      expect(result.current.connected).toBe(true);
+      // 重讀還沒送出去：它排在那一次寫後面。
+      expect(server.feedbackList).toHaveBeenCalledTimes(1);
+
+      server.releasePut();
+      await tick();
+      server.releaseLists();
+      await act(async () => {
+        await submitted;
+      });
+      await tick();
+      expect(server.feedbackList).toHaveBeenCalledTimes(2);
+      expect(result.current.ratings.get('m1')).toMatchObject({
+        rating: 'positive',
+        version: 'v-put',
+      });
+    });
+  },
+);
