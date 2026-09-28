@@ -1,4 +1,4 @@
-import type { ThreadListResult, ThreadSummary, WireClient } from '@nexus/wire';
+import type { ThreadSummary } from '@nexus/wire';
 import { useEffect, useId, useState } from 'react';
 import type { ReactNode } from 'react';
 
@@ -10,7 +10,11 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/components/ui/sidebar';
+import type { ThreadDirectory } from '@/hooks/use-thread-directory';
+import { cn } from '@/lib/utils';
 import { BUCKET_LABEL, filterThreads, groupThreads } from '@/lib/thread-groups';
+import { ROW_STATUS_TEXT } from '@/lib/thread-status';
+import type { RowStatus } from '@/lib/thread-status';
 import { threadLabel, withCurrentTitle } from '@/lib/thread-title';
 
 export { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/lib/thread-title';
@@ -20,8 +24,8 @@ export { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/lib/thread-title';
  * 由新到舊、正在跑的有標記，每一列寫這條會話的標題：模型產生的那一個，還沒產生時是第一則人打的字的開頭
  * （伺服器那側的規則，見 `lib/thread-title.ts`）。
  *
- * **掛上來才讀、每次打開都重讀**：清單會變（別的分頁剛講過話、剛開了一條），而讀一次是冷的——server 那側
- * 一條 agent 都不為它建。
+ * **每次打開都重讀**：清單會變（別的分頁剛講過話、剛開了一條），而讀一次是冷的——server 那側一條 agent 都不為它建。
+ * 清單本身由 `App` 的 `useThreadDirectory` 持有（#632），這裡掛上時請它重抓；收起來再打開之前，畫的是上一份。
  *
  * **空白會話只列目前這一條**（[#313](https://github.com/DemianLi/nexus-agent/issues/313)），照 dsh 側欄的
  * `sessionVisible`（`packages/client/ui-workspace/src/client/tree.ts`）：別條空白的不是「以前的會話」，是開了沒講話
@@ -29,15 +33,12 @@ export { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/lib/thread-title';
  *
  * **沒有標題的另一種原因照講**（`ThreadSummary.title` 的說明）：有輪次、但全是目標排的。
  *
- * **分組、搜尋、狀態點**（inventory 列 6）：按今天／昨天／過去 7 天／更早分組、標題搜尋，規則在 `lib/thread-groups.ts`。
- * 正在跑的那一列在標題旁一顆點，旁邊有給報讀器的「執行中」。點跟清單一樣是打開那一刻的快照：dsh 的即時狀態與
- * 「跑完了還沒看」的提醒點靠伺服器推會話狀態，我們還沒有那條路。
+ * **分組、搜尋**（inventory 列 6）：按今天／昨天／過去 7 天／更早分組、標題搜尋，規則在 `lib/thread-groups.ts`。
+ *
+ * **狀態點**（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）：即時的，照全域下行翻，規則在
+ * `lib/thread-status.ts`。等人回答（核准、提問、計劃審核）＞ 在跑 ＞ 跑完沒看，一列只畫最前面那一種；點旁邊有給
+ * 報讀器的那一句。等人回答的三種照 dsh 把第二行的時間換成短的那一句。
  */
-
-type Listing =
-  | { readonly kind: 'loading' }
-  | { readonly kind: 'ok'; readonly result: ThreadListResult }
-  | { readonly kind: 'failed'; readonly message: string };
 
 function labelOf(item: ThreadSummary): string {
   return threadLabel(item.title, item.blank);
@@ -48,43 +49,23 @@ function formatTime(updatedAt: number): string {
 }
 
 export function ThreadList({
-  client,
+  directory,
   currentThreadId,
   currentTitle,
   onPick,
 }: {
-  readonly client: WireClient;
+  readonly directory: ThreadDirectory;
   readonly currentThreadId: string;
   /** 目前這條即時推來的標題（`ConversationState.title`）：蓋過快照裡的那一列（#655 的 Q3）。 */
   readonly currentTitle: string | null;
   readonly onPick: (threadId: string) => void;
 }) {
-  const [listing, setListing] = useState<Listing>({ kind: 'loading' });
+  const { listing, statusOf, refresh } = directory;
   const labelId = useId();
 
   useEffect(() => {
-    let live = true;
-    client.listThreads().then(
-      (outcome) => {
-        if (!live) return;
-        setListing(
-          outcome.kind === 'ok'
-            ? { kind: 'ok', result: outcome.result }
-            : { kind: 'failed', message: outcome.message },
-        );
-      },
-      (error: unknown) => {
-        if (!live) return;
-        setListing({
-          kind: 'failed',
-          message: error instanceof Error ? error.message : String(error),
-        });
-      },
-    );
-    return () => {
-      live = false;
-    };
-  }, [client]);
+    refresh();
+  }, [refresh]);
 
   const [query, setQuery] = useState('');
   const visible =
@@ -135,6 +116,7 @@ export function ThreadList({
                 <ThreadGroupList
                   items={matched}
                   currentThreadId={currentThreadId}
+                  statusOf={statusOf}
                   onPick={onPick}
                 />
               )}
@@ -155,10 +137,12 @@ export function ThreadList({
 function ThreadGroupList({
   items,
   currentThreadId,
+  statusOf,
   onPick,
 }: {
   readonly items: readonly ThreadSummary[];
   readonly currentThreadId: string;
+  readonly statusOf: ThreadDirectory['statusOf'];
   readonly onPick: (threadId: string) => void;
 }) {
   const { blank, groups } = groupThreads(items, Date.now());
@@ -166,6 +150,7 @@ function ThreadGroupList({
     <ThreadRow
       key={item.threadId}
       item={item}
+      status={statusOf(item)}
       current={item.threadId === currentThreadId}
       onPick={onPick}
     />
@@ -200,15 +185,27 @@ function BucketGroup({
   );
 }
 
+/** 點的顏色：等人回答是警示色，在跑是品牌色，跑完沒看是完成色。 */
+const DOT_CLASS: Record<Exclude<RowStatus, undefined>, string> = {
+  approval: 'bg-warning',
+  question: 'bg-warning',
+  'plan-review': 'bg-warning',
+  running: 'bg-brand',
+  completed: 'bg-success',
+};
+
 function ThreadRow({
   item,
+  status,
   current,
   onPick,
 }: {
   readonly item: ThreadSummary;
+  readonly status: RowStatus;
   readonly current: boolean;
   readonly onPick: (threadId: string) => void;
 }) {
+  const compact = status === undefined ? undefined : ROW_STATUS_TEXT[status].compact;
   return (
     <SidebarMenuItem>
       {/* 觸控目標 44px，1024 以上回到 36（§9）。 */}
@@ -221,10 +218,14 @@ function ThreadRow({
       >
         <span className="flex w-full min-w-0 items-center gap-2">
           <span className="min-w-0 flex-1 truncate">{labelOf(item)}</span>
-          {item.running && (
-            <span className="flex shrink-0 items-center" data-testid="thread-running">
-              <span aria-hidden className="bg-brand size-2 rounded-full" />
-              <span className="sr-only">執行中</span>
+          {status !== undefined && (
+            <span
+              className="flex shrink-0 items-center"
+              data-testid="thread-status"
+              data-status={status}
+            >
+              <span aria-hidden className={cn('size-2 rounded-full', DOT_CLASS[status])} />
+              <span className="sr-only">{ROW_STATUS_TEXT[status].label}</span>
             </span>
           )}
         </span>
@@ -233,8 +234,15 @@ function ThreadRow({
             {[
               ...(current ? ['目前這條'] : []),
               // 空白的那一列不帶時間（dsh `Rows.tsx`）：它的時間是建立時間，不是誰說過話。
-              ...(item.blank ? [] : [formatTime(item.updatedAt)]),
+              // 等人回答時換成短的那一句（dsh 的 `trailingLabel`）；報讀器已經從點旁邊那一句聽到了。
+              ...(item.blank || compact !== undefined ? [] : [formatTime(item.updatedAt)]),
             ].join(' · ')}
+            {compact !== undefined && (
+              <span aria-hidden className="text-warning">
+                {current ? ' · ' : ''}
+                {compact}
+              </span>
+            )}
           </span>
         )}
       </SidebarMenuButton>
