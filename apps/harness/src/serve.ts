@@ -13,7 +13,8 @@
  *
  * **一個 thread 一個 agent，關掉 server 時一起清。** `createNexusAgent` 回的
  * `dispose` 在這裡才真的有意義——MCP plugin 底下是 stdio 子行程，而這是一個長命的
- * 行程，漏了不會有任何錯誤訊息。
+ * 行程，漏了不會有任何錯誤訊息。啟動時另外先組一份、驗完就收（#749），清單上哪一列壞了
+ * 在綁 port 之前就講，不等第一條 thread。
  *
  * 假模型下的限制與 CLI 的 REPL 一樣：`CLI_SCRIPT` 只有四輪，問到後面
  * `ScriptedChatModel` 會當場失敗而不是靜默重播。**那個失敗會以
@@ -330,6 +331,27 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // 失敗），`openAt: never` 是掛了不開（沒東西可搜時回空）。出廠是後者，見 `settings/thread-search.ts`。
   const threadSearchMounted = startupEntryMounted(plugins, threadSearchPlugin);
   const threadSearchConfig = startupSetting(plugins, threadSearchPlugin);
+  // **先照每條 thread 那一次組一份，組完就收**（#749）。上面那幾列只驗了自己的設定；其餘每一列的設定、重名、
+  // `requires` 缺件、`apply` 裡的值檢查（例如 `tool-result-pruner` 的門檻），不組一次就不會發生，而 serve 的
+  // agent 是每條 thread 才組的——不先組這一次，伺服器照樣起來，每個開對話的人才各撞一次，伺服器日誌一行都沒有。
+  // 跟下面 `createAgent` 同一個函式、同一組參數，不帶續接，失敗的處理跟 CLI 那一刻（`cli.ts` 的 `createCliAgent`）
+  // 同一套：原樣拋。
+  //
+  // **偏離登記**：dsh 的 `boot()` 把 plugin 樹掛一次、一直用下去，驗證是掛載順帶發生的
+  // （dsh `packages/boot/app-boot/README.zh.md:92`，`477b4f4`）。我們沒有那棵樹：agent 一條 thread 一份（見檔頭），
+  // 這個形狀在這之前就在，不是基座表達不出來。退到這裡：形狀不動，啟動時多組一次、驗完就收，錯誤出現的時刻跟 dsh
+  // 一樣在啟動時，代價是每一列的 `apply` 多跑一遍。
+  //
+  // **位置是承重的**：在讀或建瀏覽器會話密鑰與綁 port 之前，起不來的那一次什麼都還沒留下。收掉失敗也拋，同 CLI
+  // 那條：組得起來卻收不乾淨，可能有子行程還活著（`cli-dispose-failure.fixture.ts`）。
+  const trial = await createCliAgent(
+    { ...invocation, workspaceChanges: true, liveModel, threadTitle, threadTitleLlm },
+    plugins,
+    options.cwd,
+  );
+  await trial.dispose();
+  // 遙測的答案也在這一次定下來，印在下面啟動那幾行裡：每條 thread 掛的是同一份清單，答案每條都一樣。
+  const telemetrySharing = trial.telemetrySharing;
   const auth = new BrowserAuth(
     await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)),
     browserSession.maxAgeDays,
@@ -365,7 +387,6 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // `startup` 在這裡載入 `node:sqlite`，載不起來就不開 server：設定說要一起來，那就在什麼都還沒起來時講。
   await threadSearch?.open();
 
-  let telemetryDisclosed = false;
   const handler = createWireHandler({
     auth,
     deliverableLimits,
@@ -466,21 +487,12 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
         attachTelemetry,
         attachInvariants,
         attachSession,
-        telemetrySharing,
         feedback,
         workspaceChanges,
         goals,
         workspaceRoot,
         attachTitle,
       } = built;
-      // **遙測披露印在這裡而不是啟動時，因為啟動的那一刻答案不存在**：`createAgent` 是
-      // lazy 的（`wire-handler.ts` 的 `pumpFor` 第一次收到請求才呼叫），plugin 沒跑過
-      // `apply` 就沒有人知道有沒有掛後端。在啟動時印「未配置」會是假的。一個 process
-      // 只印一次——每個 thread 一個 agent，但掛的是同一份 plugin 清單。
-      if (!telemetryDisclosed) {
-        telemetryDisclosed = true;
-        for (const line of formatTelemetryDisclosure(telemetrySharing)) log(line);
-      }
       return {
         agent: agent as unknown as PumpAgent,
         // **`createCliAgent` 一直都回著這個註冊點，這條路以前把它丟掉了。**
@@ -597,6 +609,10 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   for (const line of formatTracingDisclosure(readTracingDisclosure(env))) {
     log(line);
   }
+  // **遙測披露印在啟動時**（#749），同 CLI 緊接在追蹤那一行後面、分兩行講（理由見 `telemetry-disclosure.ts`）。
+  // 以前印在第一條 thread 組起來時，因為那之前沒有人知道掛了什麼；上面那一次試組之後答案就在了，管理的人起
+  // serve 的那一刻就看得到，不必等第一個人開對話。
+  for (const line of formatTelemetryDisclosure(telemetrySharing)) log(line);
 
   return {
     url: server.url,
