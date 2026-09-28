@@ -337,85 +337,98 @@ function ratingsServer() {
   };
 }
 
-describe('useConversation 重接之後重讀評分（#772，照 dsh 的 connection/reset）', () => {
-  it('讀過的重讀一次：斷線期間別處改過的評分畫得出來', async () => {
-    const server = ratingsServer();
-    server.stored.set('m1', {
-      messageId: 'm1',
-      rating: 'negative',
-      version: 'v1',
-      createdAt: 0,
-      updatedAt: 0,
-    });
-    const { client, line } = scriptedClient({ feedbackList: server.feedbackList });
-    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
-    await tick();
-    act(() => result.current.seedRatings());
-    await tick();
-    expect(result.current.ratings.get('m1')?.rating).toBe('negative');
+// StrictMode 下先掛上的那一份會被收掉：重讀要跟著最後那條線走，不能漏也不能多讀一次。
+describe.each([false, true])(
+  'useConversation 重接之後重讀評分（#772，照 dsh 的 connection/reset；StrictMode：%s）',
+  (strict) => {
+    beforeEach(() => configure({ reactStrictMode: strict }));
+    afterEach(() => configure({ reactStrictMode: false }));
 
-    // 斷線期間別的分頁改成讚。
-    server.stored.set('m1', {
-      messageId: 'm1',
-      rating: 'positive',
-      version: 'v2',
-      createdAt: 0,
-      updatedAt: 1,
-    });
-    line(0).fail('network error');
-    await tick(250);
-    expect(result.current.connected).toBe(true);
-    expect(server.feedbackList).toHaveBeenCalledTimes(2);
-    expect(result.current.ratings.get('m1')).toMatchObject({ rating: 'positive', version: 'v2' });
-  });
+    it('讀過的重讀一次：斷線期間別處改過的評分畫得出來', async () => {
+      const server = ratingsServer();
+      server.stored.set('m1', {
+        messageId: 'm1',
+        rating: 'negative',
+        version: 'v1',
+        createdAt: 0,
+        updatedAt: 0,
+      });
+      const { client, latest } = scriptedClient({ feedbackList: server.feedbackList });
+      const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+      await tick();
+      act(() => result.current.seedRatings());
+      await tick();
+      expect(result.current.ratings.get('m1')?.rating).toBe('negative');
 
-  it('沒讀過的不讀：冷的等人滑過再讀', async () => {
-    const server = ratingsServer();
-    const { client, line } = scriptedClient({ feedbackList: server.feedbackList });
-    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
-    await tick();
-    line(0).fail('network error');
-    await tick(250);
-    expect(result.current.connected).toBe(true);
-    expect(server.feedbackList).not.toHaveBeenCalled();
-  });
+      // 斷線期間別的分頁改成讚。
+      server.stored.set('m1', {
+        messageId: 'm1',
+        rating: 'positive',
+        version: 'v2',
+        createdAt: 0,
+        updatedAt: 1,
+      });
+      latest().fail('network error');
+      await tick();
+      expect(result.current.connected).toBe(false);
+      await tick(250);
+      expect(result.current.connected).toBe(true);
+      expect(server.feedbackList).toHaveBeenCalledTimes(2);
+      expect(result.current.ratings.get('m1')).toMatchObject({ rating: 'positive', version: 'v2' });
+    });
 
-  it('重讀排在路上的修改後面：重接前送出的評分不會被舊清單蓋掉', async () => {
-    const server = ratingsServer();
-    const { client, line } = scriptedClient({
-      feedbackList: server.feedbackList,
-      feedbackPut: server.feedbackPut,
+    it('沒讀過的不讀：冷的等人滑過再讀', async () => {
+      const server = ratingsServer();
+      const { client, latest } = scriptedClient({ feedbackList: server.feedbackList });
+      const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+      await tick();
+      latest().fail('network error');
+      await tick();
+      expect(result.current.connected).toBe(false);
+      await tick(250);
+      expect(result.current.connected).toBe(true);
+      expect(server.feedbackList).not.toHaveBeenCalled();
     });
-    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
-    await tick();
-    // 還沒評過的按讚：先開對話框，送出之後才寫；寫的那一次卡在路上。
-    await act(() => result.current.rate('m1', 'positive'));
-    let submitted: Promise<void> | undefined;
-    act(() => {
-      submitted = result.current.submitFeedback({ text: '' });
-    });
-    await tick();
-    expect(server.feedbackPut).toHaveBeenCalledTimes(1);
 
-    // 重接那一刻要是直接讀，送出去的清單照下的是還沒寫進去的那份，而且比寫的那一次晚回來。
-    server.holdLists();
-    line(0).fail('network error');
-    await tick(250);
-    expect(result.current.connected).toBe(true);
-    // 重讀還沒送出去：它排在那一次寫後面。
-    expect(server.feedbackList).toHaveBeenCalledTimes(1);
+    it('重讀排在路上的修改後面：重接前送出的評分不會被舊清單蓋掉', async () => {
+      const server = ratingsServer();
+      const { client, latest } = scriptedClient({
+        feedbackList: server.feedbackList,
+        feedbackPut: server.feedbackPut,
+      });
+      const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+      await tick();
+      // 還沒評過的按讚：先開對話框，送出之後才寫；寫的那一次卡在路上。
+      await act(() => result.current.rate('m1', 'positive'));
+      let submitted: Promise<void> | undefined;
+      act(() => {
+        submitted = result.current.submitFeedback({ text: '' });
+      });
+      await tick();
+      expect(server.feedbackPut).toHaveBeenCalledTimes(1);
 
-    server.releasePut();
-    await tick();
-    server.releaseLists();
-    await act(async () => {
-      await submitted;
+      // 重接那一刻要是直接讀，送出去的清單照下的是還沒寫進去的那份，而且比寫的那一次晚回來。
+      server.holdLists();
+      latest().fail('network error');
+      await tick();
+      expect(result.current.connected).toBe(false);
+      await tick(250);
+      expect(result.current.connected).toBe(true);
+      // 重讀還沒送出去：它排在那一次寫後面。
+      expect(server.feedbackList).toHaveBeenCalledTimes(1);
+
+      server.releasePut();
+      await tick();
+      server.releaseLists();
+      await act(async () => {
+        await submitted;
+      });
+      await tick();
+      expect(server.feedbackList).toHaveBeenCalledTimes(2);
+      expect(result.current.ratings.get('m1')).toMatchObject({
+        rating: 'positive',
+        version: 'v-put',
+      });
     });
-    await tick();
-    expect(server.feedbackList).toHaveBeenCalledTimes(2);
-    expect(result.current.ratings.get('m1')).toMatchObject({
-      rating: 'positive',
-      version: 'v-put',
-    });
-  });
-});
+  },
+);
