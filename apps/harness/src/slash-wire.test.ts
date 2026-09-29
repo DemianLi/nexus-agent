@@ -24,13 +24,13 @@ import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant'
 import { createEchoPlugin } from '@nexus/plugin-echo';
 import {
   PLAN_ALREADY_ACTIVE_MESSAGE,
-  PLAN_ARGS_ERROR_MESSAGE,
   PLAN_COMMAND_NAME,
   PLAN_ENTERED_MESSAGE,
 } from '@nexus/plugin-plan-mode';
-import { createWireClient } from '@nexus/wire';
+import { createWireClient, emptyConversation, reduceAll } from '@nexus/wire';
+import type { Event } from '@nexus/wire';
 import type { WireClient } from '@nexus/wire';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createCliAgent } from './cli.js';
 import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
@@ -139,14 +139,100 @@ describe('打得到 /plan', () => {
     });
   });
 
-  it('參數不合法是命令自己的錯，不是這條線的錯', async () => {
-    const { client } = await wire();
-    await client.openEvents('t');
-    const result = await client.slashRun('t', `/${PLAN_COMMAND_NAME} of`);
-    expect(result).toEqual({
+  /**
+   * **`/plan <message>` 走 serve 的產品路徑**（[#776](https://github.com/DemianLi/nexus-agent/issues/776)）：
+   * 回的還是「開了」，那句話由 server 自己進送出佇列開一輪，日誌順序是命令那一對收完才有 `turn/start`。
+   */
+  it('/plan 帶話：命令落定之後 server 開那一輪，下行畫得出那一句人話', async () => {
+    const wired = await wire();
+    const { client } = wired;
+    const events = await client.openEvents('t');
+    const frames: Event[] = [];
+    const draining = (async () => {
+      for await (const event of events) {
+        frames.push(event);
+        if (
+          event.method === 'lifecycle' &&
+          (event.params.data as { event?: string }).event === 'completed'
+        )
+          break;
+      }
+    })();
+
+    expect(await client.slashRun('t', `/${PLAN_COMMAND_NAME} 幫我規劃`)).toEqual({
+      kind: 'success',
+      command_id: expect.any(String),
+      text: PLAN_ENTERED_MESSAGE,
+    });
+    await vi.waitFor(() =>
+      expect(wired.log().events.map((event) => event.type)).toContain('turn/start'),
+    );
+    const types = wired.log().events.map((event) => event.type);
+    const at = (type: (typeof types)[number]): number => types.indexOf(type);
+    expect(at('command/run')).toBeLessThan(at('plan/mode'));
+    expect(at('plan/mode')).toBeLessThan(at('command/done'));
+    expect(at('command/done')).toBeLessThan(at('turn/start'));
+    expect(wired.log().events.find((event) => event.type === 'turn/start')?.data).toMatchObject({
+      text: '幫我規劃',
+    });
+
+    // **web 讀的是下行，不是日誌。** 這一輪是 server 自己進送出佇列的，客戶端沒送過那個 id——
+    // web 的折疊器據 `claimed` 畫人的泡泡，不需要事先認得它，所以同一份折疊器折出那一則。
+    await draining;
+    const folded = reduceAll(emptyConversation(), frames);
+    expect(folded.entries.filter((entry) => entry.kind === 'human').map((e) => e.text)).toEqual([
+      '幫我規劃',
+    ]);
+  });
+
+  /**
+   * **「命令落定之後」要量得出來，不能只量順序。** 命令先 steer、再自己回 error：話作廢、沒有那一輪，
+   * 線上是命令自己的失敗。早送的實作（steer 當場進佇列）在這裡會多一個 `turn/start`。
+   */
+  it('命令 steer 之後又失敗：沒有那一輪，線上帶著命令自己的錯', async () => {
+    const steerThenFail: PluginEntry = {
+      plugin: {
+        name: 'steer-then-fail',
+        apply: (registry) =>
+          void registry.commands.register({
+            name: 'steerfail',
+            description: '先 steer 再失敗',
+            handler: ({ steer }) => {
+              steer('不該送出的話');
+              return { kind: 'error', text: '沒成' };
+            },
+          }),
+      },
+    };
+    const wired = await wire([...shipped, steerThenFail]);
+    await wired.client.openEvents('t');
+
+    expect(await wired.client.slashRun('t', '/steerfail')).toEqual({
       kind: 'error',
       command_id: expect.any(String),
-      text: PLAN_ARGS_ERROR_MESSAGE,
+      text: '沒成',
+    });
+    // 等一拍：早送的話，那一輪這時已經寫下 `turn/start`。
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(wired.log().events.map((event) => event.type)).not.toContain('turn/start');
+  });
+
+  /**
+   * **這條 thread 不收 `@` 引用時，帶引用的 `/plan` 什麼都不改。**（#713）`run.start` 在收件時擋、
+   * 這裡是第三個進 pump 的入口，走同一道驗；命令在動模式之前就失敗，所以不會「模式開了、話沒送」。
+   */
+  it('/plan 帶不能用的引用：命令失敗，模式沒開，沒有那一輪', async () => {
+    const wired = await wire();
+    const { client } = wired;
+    await client.openEvents('t');
+
+    const result = await client.slashRun('t', `/${PLAN_COMMAND_NAME} 看 @[x](nexus-session:abc)`);
+    expect(result.kind).toBe('error');
+    const types = wired.log().events.map((event) => event.type);
+    expect(types).not.toContain('plan/mode');
+    expect(types).not.toContain('turn/start');
+    expect(wired.log().events.find((event) => event.type === 'command/done')?.data).toMatchObject({
+      kind: 'error',
     });
   });
 });

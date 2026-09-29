@@ -41,6 +41,9 @@ import { shippedPlugins } from './fixtures.js';
 
 const shipped = await shippedPlugins();
 
+/** 這條命令不 steer；直接呼叫 handler 的測試補上這一格。 */
+const noSteer = (): void => undefined;
+
 /** 把一則訊息的 `content` 攤成可以搜尋的字串，同 `sandbox-policy.test.ts` 的理由。 */
 function flatten(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -181,11 +184,11 @@ describe('組裝起來之後', () => {
       // 所以餵一個 abort 過的進來會讓這條測試記下一件產品路徑上不成立的事。
       const signal = new AbortController().signal;
       const command = first.commands.find(SANDBOX_COMMAND_NAME);
-      await command?.handler({ commandId: 'c1', rawInput: ' read-only', signal });
+      await command?.handler({ commandId: 'c1', rawInput: ' read-only', signal, steer: noSteer });
 
       const still = await second.commands
         .find(SANDBOX_COMMAND_NAME)
-        ?.handler({ commandId: 'c2', rawInput: '', signal });
+        ?.handler({ commandId: 'c2', rawInput: '', signal, steer: noSteer });
 
       expect(still?.text).toContain('目前的檔案政策：workspace-write');
     } finally {

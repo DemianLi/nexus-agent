@@ -346,6 +346,7 @@ describe('/feedback', () => {
           commandId: 'c1',
           rawInput: '   ',
           signal: new AbortController().signal,
+          steer: () => undefined,
         }),
       ).toEqual({
         kind: 'error',

@@ -311,6 +311,7 @@ describe('goal 的參與者只掛在 root 上', () => {
         commandId: 'cmd-1',
         rawInput: '',
         signal: new AbortController().signal,
+        steer: () => undefined,
       });
       expect(answer?.text).not.toBe(goalAmbiguousMessage(2));
     } finally {

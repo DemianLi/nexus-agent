@@ -23,6 +23,14 @@ function commandsOf(...definitions: CommandDefinition[]) {
 
 /** 日誌 ＋ 一個現成的執行器。 */
 function harness(...definitions: CommandDefinition[]) {
+  return harnessWith({}, ...definitions);
+}
+
+/** 同上，另外可以給執行器選項（`acceptSteer`）。 */
+function harnessWith(
+  extra: { acceptSteer?: (text: string) => void },
+  ...definitions: CommandDefinition[]
+) {
   const sessionLog = new SessionLog('t');
   const events: SessionEvent[] = [];
   sessionLog.subscribe((event) => events.push(event));
@@ -31,6 +39,7 @@ function harness(...definitions: CommandDefinition[]) {
     commands: commandsOf(...definitions),
     sessionLog,
     onWarn,
+    ...extra,
   });
   return { executor, events, onWarn, signal: new AbortController().signal };
 }
@@ -212,5 +221,100 @@ describe('失敗路徑也要落定', () => {
       'handler 壞了',
     );
     expect(onWarn).toHaveBeenCalledWith(expect.stringContaining('日誌滿了'));
+  });
+});
+
+/**
+ * `steer`（[#776](https://github.com/DemianLi/nexus-agent/issues/776)）：命令請宿主在落定後送一句話。
+ * **走真的執行器**——結果正規化只複製 `kind` 與 `text`，用替身會看不到新欄位被丟掉。
+ */
+describe('steer', () => {
+  it('依呼叫順序交給宿主，而且日誌上一個字都不多', async () => {
+    const { executor, events, signal } = harness(
+      ok('plan', ({ steer }) => {
+        steer('第一句');
+        steer('第二句');
+        return { kind: 'success', text: '好' };
+      }),
+    );
+
+    const execution = await executor.execute('/plan', signal);
+    expect(execution?.steers).toEqual(['第一句', '第二句']);
+    expect(events.map((event) => event.type)).toEqual(['command/run', 'command/done']);
+    expect(events[1]?.data).toEqual({
+      commandId: execution?.commandId,
+      kind: 'success',
+      text: '好',
+    });
+  });
+
+  it('沒呼叫就是空的', async () => {
+    const { executor, signal } = harness(ok('plan', () => ({ kind: 'success' })));
+    expect((await executor.execute('/plan', signal))?.steers).toEqual([]);
+  });
+
+  it('命令回 error：已經收下的話一起作廢', async () => {
+    const { executor, signal } = harness(
+      ok('plan', ({ steer }) => {
+        steer('不該送');
+        return { kind: 'error', text: '沒成' };
+      }),
+    );
+    expect((await executor.execute('/plan', signal))?.steers).toEqual([]);
+  });
+
+  /** 宿主拒收的例外從 `steer` 冒出去，命令照拋錯的路徑落定成 error，什麼都沒送。 */
+  it('宿主拒收：例外冒出 handler，command/done 是 error', async () => {
+    const { executor, events, signal } = harnessWith(
+      {
+        acceptSteer: () => {
+          throw new Error('這句話不收');
+        },
+      },
+      ok('plan', ({ steer }) => {
+        steer('幫我');
+        return { kind: 'success' };
+      }),
+    );
+
+    await expect(executor.execute('/plan', signal)).rejects.toThrow('這句話不收');
+    expect(events[1]?.data).toMatchObject({ kind: 'error', text: '這句話不收' });
+  });
+
+  it('acceptSteer 看到的是命令給的原文', async () => {
+    const seen: string[] = [];
+    const { executor, signal } = harnessWith(
+      { acceptSteer: (text) => void seen.push(text) },
+      ok('plan', ({ steer }) => {
+        steer('幫我 @x');
+        return { kind: 'success' };
+      }),
+    );
+    await executor.execute('/plan', signal);
+    expect(seen).toEqual(['幫我 @x']);
+  });
+
+  it('空字串不收', async () => {
+    const { executor, events, signal } = harness(
+      ok('plan', ({ steer }) => {
+        steer('  ');
+        return { kind: 'success' };
+      }),
+    );
+    await expect(executor.execute('/plan', signal)).rejects.toThrow('非空字串');
+    expect(events[1]?.data).toMatchObject({ kind: 'error' });
+  });
+
+  /** 命令結束後才叫：宿主已經不看了，靜靜丟掉比拋錯更糟。 */
+  it('命令結束之後再叫會拋', async () => {
+    let late: (() => void) | undefined;
+    const { executor, signal } = harness(
+      ok('plan', ({ steer }) => {
+        late = () => steer('太晚了');
+        return { kind: 'success' };
+      }),
+    );
+    await executor.execute('/plan', signal);
+    expect(() => late?.()).toThrow('已經結束');
   });
 });
