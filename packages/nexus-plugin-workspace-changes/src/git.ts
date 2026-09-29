@@ -10,7 +10,9 @@
  * - **環境**：dsh 的 `scrubbedParentEnv()`（`packages/subprocess/subprocess/src/index.ts:47-80`）拿掉名字像
  *   憑證的變數（`/KEY|PASSWORD|SECRET|TOKEN/i`）與自己的 `DSH_*`；我們拿掉同一批與自己的 `NEXUS_*`，定義跟 MCP
  *   的 stdio server 共用一份，在 `@nexus/core` 的 `child-env.ts`（#726）。dsh 另外把 proxy 變數還原成使用者設的
- *   樣子，給子行程裡的 Node 用；那一層將來疊進共用的那一份（#746），git 快照不碰網路，用不到。
+ *   樣子、補上子行程裡的 Node 要的旗標；那一層已疊進共用的那一份（#746），git 快照的環境自然帶著。git 自己不看
+ *   那個旗標、只讀代理變數，快照又不碰網路，所以這一層對今天的 git 呼叫沒有可觀察的效果——跟著共用函式走，
+ *   是為了將來哪個 git 底下的 Node 工具（hook、credential helper）連外時跟父行程走同一條路。
  * - **逾時與輸出上限**：能力層提供的 `AbortSignal`、`graceMs`、stdout 位元組上限（保留尾端），在
  *   {@link GitRunner.run} 裡自己做。
  * - **找執行檔**：能力層的 `resolveExecutable` 在淨化過的 `PATH` 裡找，見 {@link resolveGitExecutable}。

@@ -13,7 +13,7 @@
 import { fileURLToPath } from 'node:url';
 import type { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
-import { loadPlugins } from '@nexus/core';
+import { installProxyFromEnvironment, loadPlugins } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import {
@@ -149,6 +149,7 @@ describe('接上一台真的 MCP server', () => {
         expect.stringMatching(/^mcp__fixture__legacy_ping_[0-9a-f]{12}$/),
         'mcp__fixture__snapshot',
         'mcp__fixture__read_env',
+        'mcp__fixture__fetch_url',
       ]);
       expect(registry.capabilities.has(MCP_CAPABILITY)).toBe(true);
     } finally {
@@ -373,5 +374,69 @@ describe('子行程的環境（#726）', () => {
   it('設定裡的值蓋過父行程的同名變數', async () => {
     stubParent();
     expect((await childEnv({ KEEP_ME: 'explicit' }))['KEEP_ME']).toBe('explicit');
+  });
+
+  /**
+   * 行程裝了代理（#746）：子行程裡的 Node 不看代理變數，除非帶著旗標。問真的子行程看得到什麼，而不是直接呼叫 core 的函式——
+   * 要驗的是這個 plugin 讀到的，跟 harness 裝的是同一份行程層狀態。
+   */
+  describe('行程裝了代理（#746）', () => {
+    const PROXY_NAMES = [
+      'HTTP_PROXY',
+      'http_proxy',
+      'HTTPS_PROXY',
+      'https_proxy',
+      'ALL_PROXY',
+      'all_proxy',
+    ];
+
+    async function withProxy(
+      values: Record<string, string>,
+      body: () => Promise<Record<string, string | null>>,
+    ): Promise<Record<string, string | null>> {
+      for (const name of [...PROXY_NAMES, 'NODE_USE_ENV_PROXY']) {
+        vi.stubEnv(name, undefined);
+        Reflect.deleteProperty(process.env, name);
+      }
+      for (const [name, value] of Object.entries(values)) vi.stubEnv(name, value);
+      const dispose = await installProxyFromEnvironment(
+        { get: (name) => (name in values ? { value: values[name]! } : undefined) },
+        () => undefined,
+      );
+      try {
+        return await body();
+      } finally {
+        await dispose();
+      }
+    }
+
+    const asked = async () => {
+      const { registry, dispose } = await loadPlugins([fixturePlugin()]);
+      try {
+        const result = await registry.tools
+          .resolve('mcp__fixture__read_env')
+          ?.value.invoke({ names: ['NODE_USE_ENV_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY'] });
+        return JSON.parse(String(result)) as Record<string, string | null>;
+      } finally {
+        await dispose();
+      }
+    };
+
+    it('補旗標；只設 ALL_PROXY 時子行程拿到解析後的 HTTP_PROXY 與 HTTPS_PROXY', async () => {
+      expect(await withProxy({ ALL_PROXY: 'http://all.internal:3128' }, asked)).toEqual({
+        NODE_USE_ENV_PROXY: '1',
+        HTTP_PROXY: 'http://all.internal:3128',
+        HTTPS_PROXY: 'http://all.internal:3128',
+      });
+    });
+
+    it('有一個代理值被拒絕（SOCKS）：不補旗標，否則子行程裡的 Node 會在跑程式之前就結束', async () => {
+      const seen = await withProxy(
+        { HTTP_PROXY: 'http://proxy.internal:3128', HTTPS_PROXY: 'socks5://proxy.internal:1080' },
+        asked,
+      );
+      expect(seen['NODE_USE_ENV_PROXY']).toBeNull();
+      expect(seen['HTTPS_PROXY']).toBe('socks5://proxy.internal:1080');
+    });
   });
 });
