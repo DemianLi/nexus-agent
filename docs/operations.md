@@ -130,6 +130,34 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
 任何一個分頁再送出的請求（送訊息、列清單）都要排隊等一條連線空出來，看起來就是按了沒反應；再開一個分頁的話，
 連載入網頁本身都要排隊，會卡在載入畫面。關掉多的分頁就好。
 
+## 金鑰放哪裡
+
+真實供應商（`--live`）的 key 是 `NVIDIA_API_KEY`（[#730](https://github.com/DemianLi/nexus-agent/issues/730)）。**每次模型請求前**才解析一次，
+依序找，先找到的算數：
+
+1. **啟動環境**：shell 裡 `export` 的、或行程管理器傳進來的。
+2. **受管憑證檔**：`~/.nexus-agent/.credentials.yaml`（`NEXUS_AGENT_HOME` 可以換位置）。
+3. **目前資料夾的 `.env`**（已被 `.gitignore` 排除）。
+4. **harness home 的 `.env`**：`~/.nexus-agent/.env`，不跟著專案走。
+
+```yaml
+version: 1
+refs:
+  NVIDIA_API_KEY: nvapi-...
+```
+
+- **受管檔一定要 `chmod 600`。** group 或 other 任何一位有權限，serve／CLI 起動就拒絕，訊息帶著要跑的指令。
+  檔案格式錯（未知頂層鍵、`version` 不是 1、重複的鍵、非字串的值）也是起動就失敗；訊息指名檔案，不會把值印出來。
+- **它的值不進行程的環境變數**，所以子行程（`execute`、MCP、git 快照）看不到它。兩份 `.env` 則是照舊寫進
+  行程環境（啟動環境已有的變數不會被蓋掉）。
+- **改了下一個請求就生效**，不必重啟：每次請求前先 `stat` 一次，修改時間、大小、inode 或權限變了才重讀。
+  執行期改壞（格式錯、權限放寬）時，繼續用上一份可用的內容並在 stderr 警告一次；還沒讀成功過就直接失敗。
+  key 被整個拿掉的話，那個請求會失敗並指名缺哪一個。
+- **兩份 `.env` 不准設行程怎麼起的變數**（`PATH`、`NODE_OPTIONS`、`LD_PRELOAD`、`NEXUS_AGENT_*` 這類），起動就失敗並指名檔案與變數；
+  代理設定（`HTTP_PROXY` 等）只認 home 那一份。
+- **搬家**：程式碼資料夾根目錄的舊 `.env` 不再讀取。key 解析不到、而舊檔還在時，錯誤訊息會指出舊檔位置與該搬去哪裡。
+  搬法：`mkdir -p ~/.nexus-agent && mv <程式碼資料夾>/.env ~/.nexus-agent/.env`，或改存成受管檔。
+
 ## 執行上限
 
 **agent 迴圈的上限是組裝點設的不是基座設的。** `createDeepAgent` 自己把 `recursionLimit` 設成 `1e4`
@@ -348,7 +376,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   呼叫加進請求 body 的那幾格，用來關掉推理，主請求不帶。出貨那顆模型不關推理的話，標題那 64 個輸出 token
   全被推理吃光，一個標題都回不出來（實測 0/6；關掉之後 6/6）。換一顆不認得 `chat_template_kwargs` 的模型時，
   寫 `{}`，或另外量它自己的寫法——不認得的參數可能讓標題請求整個 400，也可能靜靜沒效果。
-- **key 不在這一列**：仍然只從 `NVIDIA_API_KEY` 讀。
+- **key 不在這一列**：從 `NVIDIA_API_KEY` 讀，來源與順序見「金鑰放哪裡」。
 - **`eval` 與 `spike` 不跟這一列走**：它們量的是出貨預設那一組設定底下的模型。
 
 **`thread-title-llm`**（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）只在 `--live` 時才跑：每條新
