@@ -1,7 +1,9 @@
-import { resolve } from 'node:path';
 import { ContextOverflowError } from '@langchain/core/errors';
 import { ChatOpenAI } from '@langchain/openai';
 
+import { resolveHarnessHome } from './harness-home.js';
+import { loadLaunchEnv } from './launch-env.js';
+import type { LaunchEnvironment } from './launch-env.js';
 import type { LiveModelConfig } from './settings/live-model.js';
 
 /**
@@ -851,8 +853,8 @@ export function createLiveModel(config: LiveModelConfig, purpose?: LiveModelPurp
   if (!apiKey) {
     throw new Error(
       `缺少環境變數 ${LIVE_API_KEY_ENV}。真實供應商的 key 只從環境變數讀，` +
-        '沒有預設值也不 fallback。把它放進專案根目錄的 .env（該檔已被 .gitignore 排除），' +
-        '或在 shell 裡設好；欄位名見 .env.example。',
+        '沒有預設值也不 fallback。在 shell 裡設好，或寫進目前資料夾的 .env（該檔已被 .gitignore 排除）' +
+        '或 harness home 的 .env（預設 ~/.nexus-agent/.env，不跟著專案走，建議放這裡）；欄位名見 .env.example。',
     );
   }
 
@@ -959,21 +961,23 @@ export function classifyFailedAttempt(error: unknown): void {
   throw error;
 }
 
-/** 專案根目錄的 `.env`（已被 .gitignore 排除）。 */
-const ENV_FILE = resolve(import.meta.dirname, '../../../.env');
-
 /**
- * 需要時把根目錄的 `.env` 填進環境變數。
+ * 真模型路徑的啟動環境：載入兩層 `.env`（{@link loadLaunchEnv}），並在需要的 key 沒有值、
+ * 而舊位置（程式碼資料夾根目錄）的 `.env` 還在時直接失敗、指名搬去哪裡。
  *
  * **這不是 fallback。** key 一律從環境變數讀（[docs/standards.md](../../../docs/standards.md)），
- * `.env` 只是填充環境變數的其中一種方式：檔案不存在就安靜跳過，缺的變數留給
- * {@link createLiveModel} 當場失敗並指名缺哪一個。已經設好的環境變數不會被檔案蓋掉。
+ * `.env` 只是填充環境變數的方式；缺的變數留給 {@link createLiveModel} 當場失敗並指名缺哪一個。
+ * 已經設好的環境變數不會被檔案蓋掉。
+ *
+ * @param options - `cwd` 是「專案」那一層 `.env` 所在（省略即 `process.cwd()`）；
+ *   `env` 只用來解 harness home（省略即 `process.env`）。**值一律寫進 `process.env`**，因為模型從那裡讀。
  */
-export function loadLiveEnvIfNeeded(): void {
-  if (process.env[LIVE_API_KEY_ENV]) return;
-  try {
-    process.loadEnvFile(ENV_FILE);
-  } catch {
-    // 沒有 .env 就靠 shell 裡既有的環境變數。
-  }
+export function loadLiveLaunchEnv(
+  options: { readonly cwd?: string; readonly env?: NodeJS.ProcessEnv } = {},
+): LaunchEnvironment {
+  return loadLaunchEnv({
+    cwd: options.cwd ?? process.cwd(),
+    home: resolveHarnessHome(options.env ?? process.env),
+    needs: LIVE_API_KEY_ENV,
+  });
 }

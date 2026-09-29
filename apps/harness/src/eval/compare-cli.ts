@@ -19,7 +19,7 @@
  * **這裡不設 `LANGSMITH_TRACING`，也不要在跑它的 shell 裡設。** 這支跑的是真的 agent，
  * 基準任務的題目與工具參數會跟著 trace 一起出境（見 `eval.test.ts` 檔頭量到的第二個寄件人）。
  */
-import { createLiveModel, loadLiveEnvIfNeeded, DEFAULT_LIVE_MAX_RETRIES } from '../live-model.js';
+import { createLiveModel, loadLiveLaunchEnv, DEFAULT_LIVE_MAX_RETRIES } from '../live-model.js';
 import { liveModelConfigSchema } from '../settings/live-model.js';
 import {
   compareTiers,
@@ -150,7 +150,7 @@ async function main(argv: readonly string[]): Promise<void> {
   const samples = parseSamples(argv);
   const cases = parseCases(argv);
   const models = parseModels(argv, MEASURED_MODELS);
-  loadLiveEnvIfNeeded();
+  loadLiveLaunchEnv();
 
   const scope = cases.length === BENCHMARK.length ? '' : `（${cases.map((c) => c.id).join('、')}）`;
   const who =
