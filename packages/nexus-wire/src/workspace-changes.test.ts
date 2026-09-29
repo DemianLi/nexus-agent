@@ -4,7 +4,15 @@ import { emptyConversation, prependEntries, reduceAll } from './conversation.js'
 import type { ConversationState } from './conversation.js';
 import { INBOX } from './inbox.js';
 import type { Event } from './protocol.js';
-import { changesDiffPath, changesSummaryPath, WORKSPACE_CHANGES } from './workspace-changes.js';
+import {
+  changesDiffPath,
+  changesDiffUrl,
+  changesSummaryPath,
+  changesSummaryUrl,
+  isChangesDiff,
+  isChangesSummary,
+  WORKSPACE_CHANGES,
+} from './workspace-changes.js';
 
 /**
  * 改動紀錄折成獨立的一格（[#443](https://github.com/DemianLi/nexus-agent/issues/443)，照 #441 交付格的做法）。
@@ -143,5 +151,47 @@ describe('workspace/changes', () => {
   it('路徑掛在 thread 底下，id 要編碼', () => {
     expect(changesSummaryPath('a/b')).toBe('/threads/a%2Fb/changes/summary');
     expect(changesDiffPath('t')).toBe('/threads/t/changes/diff');
+  });
+});
+
+/**
+ * 查詢怎麼拼、回應長什麼樣歸 wire（[#684](https://github.com/DemianLi/nexus-agent/issues/684)，照 dsh
+ * `packages/client/ui-deliverables/src/changes.ts`）。對著真 handler 的那一條在 `@nexus/harness` 的
+ * `workspace-changes.test.ts`：同一個 builder 的輸出打進去，回應再過這裡的 validator。
+ */
+describe('改動紀錄的網址與回應檢查', () => {
+  it('builder 的輸出：參數名與順序釘死，id 要編碼', () => {
+    expect(changesSummaryUrl('t', 7)).toBe('/threads/t/changes/summary?seq=7');
+    expect(changesDiffUrl('t', 7, 2)).toBe('/threads/t/changes/diff?seq=7&index=2');
+    expect(changesSummaryUrl('a/b', 0)).toBe('/threads/a%2Fb/changes/summary?seq=0');
+  });
+
+  it('isChangesSummary：正例，反例（缺欄位、型別不對、files 裡有壞的）', () => {
+    const file = { path: 'a.md', display: 'a.md', added: 1, deleted: 0 };
+    expect(isChangesSummary({ files: [file], total: 1, added: 1, deleted: 0 })).toBe(true);
+    expect(isChangesSummary({ files: [], total: 0, added: 0, deleted: 0 })).toBe(true);
+    expect(isChangesSummary(null)).toBe(false);
+    expect(isChangesSummary({ files: [file], total: 1, added: 1 })).toBe(false);
+    expect(isChangesSummary({ files: [file], total: '1', added: 1, deleted: 0 })).toBe(false);
+    expect(
+      isChangesSummary({ files: [{ ...file, added: '1' }], total: 1, added: 1, deleted: 0 }),
+    ).toBe(false);
+    expect(isChangesSummary({ files: 'x', total: 1, added: 1, deleted: 0 })).toBe(false);
+  });
+
+  it('isChangesDiff：三種 kind 的正例，與各自的反例', () => {
+    const base = { path: 'a.md', display: 'a.md' };
+    const hunk = { oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-a', '+b'] };
+    const text = { kind: 'text', ...base, before: true, after: true, coarse: false, hunks: [hunk] };
+    expect(isChangesDiff(text)).toBe(true);
+    expect(isChangesDiff({ ...text, hunks: [] })).toBe(true);
+    expect(isChangesDiff({ kind: 'binary', ...base })).toBe(true);
+    expect(isChangesDiff({ kind: 'oversized', ...base })).toBe(true);
+    expect(isChangesDiff(null)).toBe(false);
+    expect(isChangesDiff({ kind: 'binary', path: '', display: 'a.md' })).toBe(false);
+    expect(isChangesDiff({ kind: 'other', ...base })).toBe(false);
+    expect(isChangesDiff({ ...text, coarse: 'no' })).toBe(false);
+    expect(isChangesDiff({ ...text, hunks: [{ ...hunk, oldStart: -1 }] })).toBe(false);
+    expect(isChangesDiff({ ...text, hunks: [{ ...hunk, lines: ['x'] }] })).toBe(false);
   });
 });
