@@ -39,6 +39,7 @@ const BASE_TOOL_NAMES = [
   'read_file',
   'write_file',
   'edit_file',
+  'delete',
   'glob',
   'grep',
   'execute',
@@ -71,6 +72,7 @@ describe('classifyTool', () => {
     ['edit_file', 'edit'],
     ['execute', 'bash'],
     ['run_javascript', 'code'],
+    ['delete', 'others'],
     ['task', 'others'],
     ['todo_write', 'others'],
   ] as const)('%s → %s', (name, variant) => {
@@ -90,6 +92,11 @@ describe('摘要與展開內容', () => {
     expect(toolSummary('execute', '{"command":"pnpm test\\npnpm build"}')).toBe('pnpm test');
     expect(toolSummary('grep', '{"pattern":"TODO","path":"src"}')).toBe('TODO');
     expect(toolSummary('mcp__x__y', '{"n":1,"q":"找這個"}')).toBe('找這個');
+  });
+
+  it('刪檔有自己的標題，摘要是那個路徑（#672）', () => {
+    expect(toolTitle('delete')).toBe('刪除檔案');
+    expect(toolSummary('delete', '{"file_path":"/a.md"}')).toBe('/a.md');
   });
 
   it('壞 JSON 退回原字串', () => {

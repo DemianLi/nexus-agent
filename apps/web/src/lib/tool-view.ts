@@ -35,7 +35,7 @@ export const VARIANT_TITLE: Record<ToolVariant, string> = {
 /**
  * 認得的工具名 → 類別。`others` 不用列：查不到就是它。
  *
- * - 基座（deepagents 1.13）：`ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep`、`execute`、`task`。
+ * - 基座（deepagents 1.13）：`ls`、`read_file`、`write_file`、`edit_file`、`delete`、`glob`、`grep`、`execute`、`task`。
  * - `@nexus/plugin-quickjs`：`run_javascript`。
  * - 標題表另含 `apps/harness` 的 `request_sandbox_escalation`。
  */
@@ -56,6 +56,8 @@ const TOOL_VARIANTS: Readonly<Record<string, ToolVariant>> = {
  */
 const TOOL_TITLES: Readonly<Record<string, string>> = {
   echo: '回聲',
+  // 刪檔不能復原（基座的工具說明寫明），標題不能是一句「工具」；參數只有 `file_path`，摘要退到第一個字串值就是它（#672）。
+  delete: '刪除檔案',
   task: '委派子代理',
   todo_write: '更新待辦',
   create_goal: '設定目標',

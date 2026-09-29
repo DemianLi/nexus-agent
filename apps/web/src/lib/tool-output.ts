@@ -33,6 +33,7 @@ const OUTPUT_ONLY: ReadonlySet<string> = new Set([
   'grep',
   'write_file',
   'edit_file',
+  'delete',
 ]);
 
 /** 展開之後畫不畫參數。 */

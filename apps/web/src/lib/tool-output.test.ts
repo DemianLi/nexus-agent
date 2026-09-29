@@ -21,9 +21,12 @@ function entry(overrides: Partial<ToolEntry>): ToolEntry {
 const lines = (count: number) => Array.from({ length: count }, (_, index) => `l${index + 1}`);
 
 describe('showsInput', () => {
-  it.each(['ls', 'read_file', 'glob', 'grep', 'write_file', 'edit_file'])('%s 只畫結果', (name) => {
-    expect(showsInput(name)).toBe(false);
-  });
+  it.each(['ls', 'read_file', 'glob', 'grep', 'write_file', 'edit_file', 'delete'])(
+    '%s 只畫結果',
+    (name) => {
+      expect(showsInput(name)).toBe(false);
+    },
+  );
 
   it.each(['echo', 'run_javascript', 'task', 'mcp__x__y'])('%s 參數也畫', (name) => {
     expect(showsInput(name)).toBe(true);
