@@ -86,10 +86,13 @@ pnpm --filter @nexus/web dlx shadcn@latest add <component>   # 新增 shadcn/ui 
 程式碼規範見 [`docs/standards.md`](docs/standards.md)。分支策略、PR 標題格式、發版流程與設計方法論
 （含對 DeepSeek Harness 的偏離規則）見 [AGENTS.md](AGENTS.md)。
 
-CI 只有 `gate` 一個 required status check，無條件觸發、在 job 內以 `git diff` 決定要掃什麼，
-沒有可掃的檔案時直接綠燈——純文件的 PR 不會卡住。**三個例外**，共通點是「測試會讀這個檔」：
+CI 只有 `gate` 一個 required status check，無條件觸發。`plan` job 以 `git diff` 決定要掃什麼，
+lint、typecheck、各套件測試與 web build 平行跑，`gate` 只是把它們的結果收斂成單一燈號。
+沒有可掃的檔案時直接綠燈——純文件的 PR 不會卡住。功能分支 → `develop` 的 PR 只跑受影響的測試
+（判斷邏輯見 [`.github/scripts/plan_ci.py`](.github/scripts/plan_ci.py)），`develop → main` 的 PR 與 `main` 的 push 一律全跑。
+**三個例外**，共通點是「測試會讀這個檔」：
 `docs/operations.md`（測試從它讀核准 fixture 的參數，[#490](https://github.com/DemianLi/nexus-agent/issues/490)）、
 `apps/harness/cordis.yml`（出貨的 plugin 清單，十七個測試檔真的拿它組 agent，
 [#454](https://github.com/DemianLi/nexus-agent/issues/454)）
 與 `apps/harness/src/*.patch.yml`（patch 檔案，測試疊在出貨清單上組 agent，[#455](https://github.com/DemianLi/nexus-agent/issues/455)）。
-只改這些檔案也可能弄紅測試，所以它們會觸發完整掃描。細節見 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
+只改這些檔案也可能弄紅測試，所以它們會觸發完整掃描，而且是全跑而不是只跑相關的。細節見 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
