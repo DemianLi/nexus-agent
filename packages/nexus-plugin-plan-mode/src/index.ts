@@ -154,7 +154,7 @@
  * - **切換的旁白**：dsh 在人切換模式、而上一份請求標頭描述的是另一個模式時，往對話裡插一句
  *   「The user switched this session to plan mode.」（`loggedActiveAtLastHeader`）。我們沒有
  *   `request/header` 這一顆；從圖外插訊息的路 #710 之後有了，但只接人插的話、只在 serve 上。模型從下一次請求的
- *   system prompt 看得出來——指引在或不在。**待另一張卡重判**（#776 的結論留言）：觸發條件不能只比「模式與上一次 `model/start` 不同」，
+ *   system prompt 看得出來——指引在或不在。**待另一張卡重判**（[#788](https://github.com/DemianLi/nexus-agent/issues/788)）：觸發條件不能只比「模式與上一次 `model/start` 不同」，
  *   dsh 還有 `narrate: false`（`exit_plan_mode` 同意那條路，工具結果已經講過）與「從沒送過請求就不講」兩條；
  *   旁白要一種新的訊息來源，會牽動 goal 的 authority 絆索、各套件的 fold 測試、日誌版號與 web 的畫法。
  * - **`input.images`**：dsh 的命令收圖片附件，我們沒有 attachment store
