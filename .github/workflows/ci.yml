@@ -160,9 +160,9 @@ jobs:
       matrix:
         include:
           - scope: a
-            filters: '--filter=./packages/* --filter=!./packages/nexus-plugin-[n-z]*'
+            filters: '--filter=./packages/* --filter=./apps/web --filter=!./packages/nexus-plugin-[n-z]*'
           - scope: b
-            filters: '--filter=./apps/* --filter=./packages/nexus-plugin-[n-z]*'
+            filters: '--filter=./apps/* --filter=./packages/nexus-plugin-[n-z]* --filter=!./apps/web'
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -234,16 +234,35 @@ jobs:
     env:
       SHARD: ${{ matrix.shard }}/${{ needs.plan.outputs.harness_shard_total }}
     steps:
+      # 基座的 grep 有 rg 就走 rg、沒有就走只比檔名的退路，兩條的行為不同；runner 映像沒預裝 rg，
+      # 不裝的話 CI 只驗得到退路。contained-backend-grep.test.ts 的 rg 那組找不到 rg 會紅，不會跳過。
+      #
+      # 安裝要 15–20 秒，而且與後面的 checkout、pnpm 安裝互不相干，所以放到背景，
+      # 跑測試之前再「等它裝好」；等不到（或裝失敗）就當場紅，不會退回只比檔名的那條路。
+      - name: 背景安裝 ripgrep
+        run: |
+          nohup setsid bash -c '
+            { sudo apt-get install -y -qq --no-install-recommends ripgrep \
+                || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep; }; } \
+              > "$RUNNER_TEMP/rg-install.log" 2>&1
+            echo $? > "$RUNNER_TEMP/rg-install.status"
+          ' > /dev/null 2>&1 &
+
       - uses: actions/checkout@v7
         with:
           # `vitest --changed <sha>` 需要分歧點在本地歷史裡。
           fetch-depth: 0
       - uses: ./.github/actions/setup
 
-      # 基座的 grep 有 rg 就走 rg、沒有就走只比檔名的退路，兩條的行為不同；runner 映像沒預裝 rg，
-      # 不裝的話 CI 只驗得到退路。contained-backend-grep.test.ts 的 rg 那組找不到 rg 會紅，不會跳過。
-      - name: 安裝 ripgrep
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep
+      - name: 等 ripgrep 裝好
+        run: |
+          for _ in $(seq 1 90); do
+            [ -f "$RUNNER_TEMP/rg-install.status" ] && break
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/rg-install.log" || true
+          [ "$(cat "$RUNNER_TEMP/rg-install.status" 2>/dev/null)" = "0" ] || { echo "::error::ripgrep 沒裝起來"; exit 1; }
+          command -v rg
 
       - name: Test（全跑）
         if: needs.plan.outputs.test_mode == 'full'
