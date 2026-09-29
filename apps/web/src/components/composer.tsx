@@ -573,10 +573,14 @@ function MentionList({
         className="gap-2 rounded-lg px-3 py-2"
       >
         <Icon aria-hidden className="text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate">
-          <span className="text-sm">{row.name}</span>
+        {/* 截斷的是名字這一格；小字（子代理屬於誰、別的專案的目錄）在它外面且不縮。子代理的名字是 id，約 80 字，
+            放在同一格裡會把小字擠到省略號後面（實機 #783 補驗）。 */}
+        <span className="flex min-w-0 flex-1 items-baseline">
+          <span className="min-w-0 truncate text-sm" title={row.name}>
+            {row.name}
+          </span>
           {row.hint !== undefined && (
-            <span className="text-muted-foreground ml-2 text-xs">{row.hint}</span>
+            <span className="text-muted-foreground ml-2 shrink-0 text-xs">{row.hint}</span>
           )}
         </span>
       </CommandItem>
