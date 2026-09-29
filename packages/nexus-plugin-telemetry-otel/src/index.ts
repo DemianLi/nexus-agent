@@ -71,13 +71,17 @@ const OPS_SCOPE = '@nexus/plugin-telemetry-otel/ops';
 const SCOPE_VERSION = '0.0.0';
 
 /**
- * 共享策略。三個字跟 seam 的 `SessionTelemetrySharingStatus` 同一組，`sharing` 直接等於它。
+ * 共享策略。是 seam 的 `SessionTelemetrySharingStatus` 開出來的兩個，`sharing` 直接等於它。
+ * seam 的詞彙照 dsh 函式庫留著 `full`，但這個後端**不開**：dsh 唯一出廠的後端從
+ * `dsh-v0.1.3-alpha.2` 起拒絕 `FULL`、不當別名（部署方的設定不能授權新的捕獲，只有使用者自己送出的回饋可以），
+ * 我們照做（[#750](https://github.com/DemianLi/nexus-agent/issues/750)，不是偏離）。
  *
- * - `full`：每一筆會話事件都送。
  * - `feedback-only`：人送出回饋時，把日誌補送到那一顆；其餘時候一筆都不送（見模組說明的偏離四）。
  * - `disabled`：一筆都不送，連 SDK 都不建。
  */
-export type TelemetryMode = 'full' | 'feedback-only' | 'disabled';
+export type TelemetryMode = 'feedback-only' | 'disabled';
+
+const SUPPORTED_MODES: readonly string[] = ['feedback-only', 'disabled'];
 
 /** 省略即關閉。**預設要是不送的那一個**；dsh 預設 `FEEDBACK_ONLY`，這裡不跟，見模組說明的偏離一。 */
 export const DEFAULT_TELEMETRY_MODE: TelemetryMode = 'disabled';
@@ -146,7 +150,7 @@ export const telemetryProcessorConfigSchema = z.strictObject({
 /** 這個 plugin 的設定。 */
 export const telemetryOtelConfigSchema = z.strictObject({
   /** 共享策略。省略即 {@link DEFAULT_TELEMETRY_MODE}。 */
-  mode: z.enum(['full', 'feedback-only', 'disabled']).default(DEFAULT_TELEMETRY_MODE),
+  mode: z.enum(['feedback-only', 'disabled']).default(DEFAULT_TELEMETRY_MODE),
   /** 送去 collector 的那一端，見 {@link telemetryExporterConfigSchema}。 */
   exporter: telemetryExporterConfigSchema.optional(),
   /** 批次送出的那一端，見 {@link telemetryProcessorConfigSchema}。 */
@@ -231,6 +235,12 @@ export class OpenTelemetrySessionService implements SessionTelemetryService {
 
   constructor(options: TelemetryOtelOptions = {}) {
     const mode = options.mode ?? DEFAULT_TELEMETRY_MODE;
+    // 繞過設定檢查直接建構時也擋：`full` 與任何不認得的值都不當成別的模式的別名，照 dsh 的 `resolveMode`。
+    if (!SUPPORTED_MODES.includes(mode)) {
+      throw new Error(
+        `telemetry-otel：不支援的模式 ${JSON.stringify(mode)}，只收 ${SUPPORTED_MODES.join('、')}`,
+      );
+    }
     this.sharing = mode;
     if (mode === 'disabled') {
       this.#provider = undefined;
