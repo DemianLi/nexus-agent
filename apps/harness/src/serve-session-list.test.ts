@@ -214,7 +214,7 @@ describe('GET /threads', () => {
 
   /**
    * **`GET` 也要帶 JSON 的 content-type**：不帶就是一個不發 preflight 的跨來源 simple request，而這份回應是
-   * 每一條 thread 第一句話的開頭（`THREADS_PATH` 的說明）。
+   * 每一條 thread 的標題，標題是從第一句話來的（`THREADS_PATH` 的說明）。
    */
   it('載體層：沒帶或帶 simple request 認得的 content-type 是 415，別的 method 是 404', async () => {
     const server = await start(await tmp());

@@ -3,7 +3,7 @@
  * 的驗收。
  *
  * 產品路徑：真的組裝、真的 deepagents `task`，fence 與 plugin 讀同一顆控制器，同 `cli.ts` 的接法。**前提（驗收 1）
- * 不另寫一條**：下面每一條要綠，快照都得真的穿過 `task` 到得了子代理的 fence 或閘門；拿掉 `sandbox-policy.ts`
+ * 不另寫一條**：下面每一條要綠，快照都得真的穿過 `task` 到得了子代理的 fence 或閘門；拿掉 `@nexus/plugin-sandbox-policy`
  * 那顆 `wrapToolCall` 時，「放寬／收緊」「子代理的升級」三條都會紅。
  *
  * **「委派之後 root 切換」用一顆 `flip` 工具代替**：它在子代理那一輪裡叫 `switchTo`，也就是 `/sandbox` 走的同一個

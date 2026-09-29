@@ -499,7 +499,7 @@ async function startServer(
     deliverableLimits,
     toolTextLimits,
     threadTitleLimits: threadTitle,
-    // 一頁歷史撐破軟上限時（#479）、退回標題寫不進去時（#647）講一聲。只有這兩件事會走到它。
+    // 一頁歷史撐破軟上限時（#479）、退回標題寫不進去時（#647）、模型標題寫不成時（#650）講一聲。
     warn: (message) => {
       serverLog(message);
     },

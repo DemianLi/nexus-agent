@@ -36,8 +36,9 @@ export interface DeliverablesPresentedPayload {
    * 那顆 `deliverables/presented` 在 root 日誌裡的 `seq`（[#452](https://github.com/DemianLi/nexus-agent/issues/452)）。
    *
    * **它是座標，不是編號**：`(seq, index)` 一起指名「那一次交付宣告的第 index 個檔」，`index` 是它在
-   * {@link DeliverablesPresentedPayload.files} 裡的位置。照 dsh 的 `handlePresentOpen`——那條路由也不收
-   * 路徑輸入，只收座標，所以路徑遍歷在形狀上就不可能發生。
+   * {@link DeliverablesPresentedPayload.files} 裡的位置。[#452](https://github.com/DemianLi/nexus-agent/issues/452) 的範圍決定：只開放宣告過的檔、用座標定位，
+   * 所以路徑遍歷在形狀上就不可能發生。座標的形狀借自 dsh 的 `handlePresentOpen`（它也只收座標），但那條路由是在
+   * 主機桌面上開檔、不讀內容。
    *
    * `callId` 取代不了它：`callId` 認得出是哪一次呼叫，但日誌那側要的是「哪一顆事件」。
    */
@@ -106,7 +107,7 @@ export interface DeliverableFileBytes extends DeliverableFileStat {
 /**
  * 預覽一個宣告過的交付檔，`GET`，帶 `?seq=&index=`，選配 `?offset=&limit=`。
  *
- * **只收座標，不收路徑**，照 dsh 的 `handlePresentOpen`——路徑遍歷在形狀上就不可能發生。
+ * **只收座標，不收路徑**，是 [#452](https://github.com/DemianLi/nexus-agent/issues/452) 的範圍決定（只開放宣告過的檔）——路徑遍歷在形狀上就不可能發生。
  * 座標的意義見 {@link DeliverablesPresentedPayload.seq}。
  *
  * 錯誤協定照隔壁 `changes` 兩條（裸 status ＋純文字 ＋`cache-control: no-store`），而狀態碼**要分得出

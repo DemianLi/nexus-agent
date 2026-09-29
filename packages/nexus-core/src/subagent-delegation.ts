@@ -16,7 +16,7 @@
  * ## 載體
  *
  * 我們沒有「執行期上下文」這個槽。最接近的是 `wrapModelCall`：每次呼叫都接上、不改 spec 的
- * `systemPrompt`，同 root 的沙箱政策句（`apps/harness/src/sandbox-policy.ts`）。**由 fold 自己建、
+ * `systemPrompt`，同 root 的沙箱政策句（`packages/nexus-plugin-sandbox-policy/src/index.ts`）。**由 fold 自己建、
  * 只放進子代理的清單**，不走 plugin：plugin 的 middleware 會攤到 root 與每個子代理上
  * （[#327](https://github.com/DemianLi/nexus-agent/issues/327)），而這一句 root 不能有；fold 補的 general-purpose
  * 也要有。

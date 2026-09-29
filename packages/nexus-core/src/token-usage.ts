@@ -8,7 +8,7 @@
  *
  * ## 跟 dsh 對不上的幾格
  *
- * - **只有兩個桶：輸入、輸出。** dsh 分四桶（未快取輸入、輸出、快取讀、快取寫）。#574 定案第一版不分快取；而且我們的
+ * - **只有兩個桶：輸入、輸出。** dsh 分四桶（未快取輸入、輸出、快取讀、快取寫）。#574 定的是畫面上顯示什麼、第一版不分快取；資料層照 dsh 分四桶延後到 [#724](https://github.com/DemianLi/nexus-agent/issues/724)；而且我們的
  *   `inputTokens` **含快取讀取**（LangChain 的語義，見 `model-usage.ts`），dsh 的 `uncachedInputTokens` 不含。兩邊的
  *   「輸入 + 輸出」都是整筆帳，桶的切法不同。
  * - **沒有重試的替換槽。** dsh 的一步可能落好幾次 `assistant/attempt`，同一個 `(turn, step)` 後到的取代先到的，

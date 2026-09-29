@@ -9,8 +9,9 @@
  *
  * 名單不能從 `deepagents` import——`FILESYSTEM_TOOL_NAMES` 與 `ASYNC_TASK_TOOL_NAMES`
  * 都沒有出現在它的 public export 裡（1.13.1 實測）。所以是手抄的，而
- * [`baseline.test.ts`](./baseline.test.ts) 的第一條測試就是它的守衛：那條斷言
- * `StateBackend` 下基座實際註冊了哪些工具，名單漂掉時會當場紅。
+ * [`baseline.test.ts`](./baseline.test.ts) 的第一條測試守的是基座那一側：那條斷言
+ * `StateBackend` 下基座實際註冊了哪些工具，但它比的是自己寫死的另一份名單、不讀這一份，所以基座改了名字會紅，
+ * 這份抄錯了不會（`agent-factory.test.ts` 的行為測試以字面值打到其中幾個名字，那幾個抄錯會紅）。
  *
  * **這兩個常數與模型無關，而基座那側不是。** `createDeepAgent()` 會依 `model` 解出一份
  * harness profile，那份 profile 加得了工具也拿得掉工具——「基座這次帶哪些名字」因此是
@@ -57,7 +58,7 @@ const ASYNC_TASK_TOOL_NAMES = [
  * `registry.subagents.register()` 收的是 `SubAgent`，型別上就進不來——所以在目前的組裝
  * 裡那五個名字**永遠不會有對應的工具**。把它們放進宇宙的下場是 `toolOrder` 列了一個
  * 排不到任何東西的名字而不報錯。哪天真的支援 async subagent，這裡跟著補——**而且子代理的沙箱
- * 快照要重判**：它靠 ALS 包住 `task` 那一次呼叫（`sandbox-policy.ts`，[#326](https://github.com/DemianLi/nexus-agent/issues/326)），
+ * 快照要重判**：它靠 ALS 包住 `task` 那一次呼叫（`packages/nexus-plugin-sandbox-policy/src/index.ts`，[#326](https://github.com/DemianLi/nexus-agent/issues/326)），
  * async 那組立刻回傳、子代理跑在那次呼叫之外，快照帶不過去。
  *
  * （這份宇宙過去還餵給核准的名字檢查，那條隨機制一起走了——見
