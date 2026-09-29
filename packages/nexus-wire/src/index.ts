@@ -96,6 +96,25 @@ export type {
 } from './file-references.js';
 export { fileReferencesPath } from './file-references.js';
 export type {
+  ParsedSessionReferenceText,
+  SessionReferenceCandidate,
+  SessionReferenceErrorCode,
+  SessionReferenceInput,
+  SessionReferenceListResponse,
+  SessionReferenceListResult,
+} from './session-references.js';
+export {
+  DEFAULT_SESSION_REFERENCE_CANDIDATE_LIMIT,
+  decodeSessionReferenceUri,
+  encodeSessionReferenceUri,
+  formatSessionReferenceMention,
+  MAX_SESSION_REFERENCES,
+  parseSessionReferenceText,
+  SESSION_REFERENCE_SCHEME,
+  SessionReferenceError,
+  sessionReferencesPath,
+} from './session-references.js';
+export type {
   ModelUsagePayload,
   WireContextMeasure,
   WireContextPressure,
@@ -187,6 +206,7 @@ export type {
   FeedbackOutcome,
   FileReferenceListOutcome,
   OpenEventsOptions,
+  SessionReferenceListOutcome,
   SlashListOutcome,
   SlashRunOutcome,
   ThreadHistoryOutcome,
