@@ -180,6 +180,24 @@ describe('模型的請求走代理', () => {
     expect(seen.some((line) => line.includes('model-one.invalid/v1/chat/completions'))).toBe(true);
   });
 
+  /**
+   * **出貨的預設端點是 https**（NVIDIA），走代理靠的是 CONNECT 隧道，跟上面 http 那組是兩條路。
+   * 假代理收到 CONNECT 就把 socket 收掉，TLS 握手不會成功、這一輪失敗是預期的；要看的是隧道有沒有開向對的主機。
+   */
+  it('https 端點：模型往 .invalid 主機開 CONNECT 隧道到假代理', async () => {
+    cleanProxyEnv();
+    vi.stubEnv(LIVE_API_KEY_ENV, 'nvapi-fake-key-for-tests');
+    vi.stubEnv('HTTPS_PROXY', proxyUrl);
+    const home = privateDir();
+    const cwd = privateDir();
+
+    await liveCli(home, cwd, writePatch(home, 'https://model-tls.invalid/v1')).catch(
+      () => undefined,
+    );
+
+    expect(seen).toContain('CONNECT model-tls.invalid:443');
+  });
+
   it('換一家供應商不用改程式：只用 patch 把端點換成第二個 .invalid 主機，請求照樣到假代理', async () => {
     cleanProxyEnv();
     vi.stubEnv(LIVE_API_KEY_ENV, 'nvapi-fake-key-for-tests');

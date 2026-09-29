@@ -137,25 +137,21 @@ describe('量具自檢：每一種寫法都抓得到，逃生口與擁有者不�
   });
 });
 
+/**
+ * 掃哪些原始碼。**`'apps/web/src'` 要寫成字面值出現在這裡**：`.github/scripts/plan_ci.py` 靠檔案裡有這串字面值，
+ * 才把它認成「掃整個樹的絆索」而在選擇性測試時也必跑；換成別的寫法，只改 web 的 PR 就跑不到這一道。
+ */
+const SOURCE_ROOTS = ['apps/harness/src', 'apps/web/src', 'packages'] as const;
+
 describe('全樹掃描', () => {
   it('代理模組以外，沒有任何匯入 undici 或指定 dispatcher 的位置', () => {
-    const roots = [join(REPO_ROOT, 'apps'), join(REPO_ROOT, 'packages')];
     const found: string[] = [];
-    for (const root of roots) {
-      for (const entry of readdirSync(root, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const src = join(root, entry.name, 'src');
-        try {
-          readdirSync(src);
-        } catch {
-          continue;
-        }
-        for (const file of sourceFiles(src)) {
-          const path = relative(REPO_ROOT, file);
-          if (path.startsWith(DISPATCHER_OWNER)) continue;
-          for (const v of findViolations(path, readFileSync(file, 'utf8'))) {
-            found.push(`${v.file}:${String(v.line)} ${v.what}`);
-          }
+    for (const root of SOURCE_ROOTS) {
+      for (const file of sourceFiles(join(REPO_ROOT, root))) {
+        const path = relative(REPO_ROOT, file);
+        if (path.startsWith(DISPATCHER_OWNER)) continue;
+        for (const v of findViolations(path, readFileSync(file, 'utf8'))) {
+          found.push(`${v.file}:${String(v.line)} ${v.what}`);
         }
       }
     }

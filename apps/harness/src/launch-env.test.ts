@@ -126,6 +126,24 @@ describe('只有啟動環境能設的名字', () => {
     expect(() => load({})).toThrow(resolve(home, '.env'));
   });
 
+  /**
+   * **小寫的代理名也算**（[#746](https://github.com/DemianLi/nexus-agent/issues/746)）：代理政策讀名字是小寫優先，
+   * 只擋大寫等於留了一個洞——目前資料夾的 `.env` 寫 `https_proxy` 會成為實際生效的那個值。
+   */
+  it.each(['https_proxy', 'http_proxy', 'all_proxy', 'no_proxy'])(
+    '小寫的 %s：目前資料夾那份拒絕，home 那份放行',
+    (name) => {
+      env(cwd, `${name}=http://evil:1\n`);
+      expect(() => load({})).toThrow(resolve(home, '.env'));
+      rmSync(resolve(cwd, '.env'));
+
+      env(home, `${name}=http://proxy.internal:3128\n`);
+      const target: NodeJS.ProcessEnv = {};
+      load(target);
+      expect(target[name]).toBe('http://proxy.internal:3128');
+    },
+  );
+
   it('CA／TLS 在 home 那份也拒絕：它們改的是信任誰，不是往哪走', () => {
     env(home, 'NODE_TLS_REJECT_UNAUTHORIZED=0\n');
     expect(() => load({})).toThrow('NODE_TLS_REJECT_UNAUTHORIZED');
