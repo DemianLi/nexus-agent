@@ -1,6 +1,6 @@
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { loadLiveEnvIfNeeded, DEFAULT_LIVE_MODEL_ID } from '../live-model.js';
+import { loadLiveLaunchEnv, DEFAULT_LIVE_MODEL_ID } from '../live-model.js';
 import { createLiveSpikeAgent, createSpikeAgent } from './spike-agent.js';
 
 /**
@@ -22,7 +22,7 @@ async function main(): Promise<void> {
   const prompt =
     args.filter((arg) => arg !== '--live').join(' ') || '記錄 Phase 0 的結論並寫成檔案。';
 
-  if (live) loadLiveEnvIfNeeded();
+  if (live) loadLiveLaunchEnv();
 
   const { agent } = live ? await createLiveSpikeAgent() : await createSpikeAgent();
 
