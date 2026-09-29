@@ -10,7 +10,8 @@
  *
  * **`execute` 還沒有終端卡**：dsh 有（`terminal-card-model.ts`，解析結果結尾的 exit code），但今天產品路徑上的
  * backend 都沒有 shell，基座不註冊 `execute`（`apps/harness/src/base-tools.ts`）。sandbox backend 註冊它的那天要補
- * 終端卡；`tool-view.test.ts` 有一條讀 harness 用哪些 backend 的絆索，會在那時紅。
+ * 終端卡；絆索在 harness：`apps/harness/src/execute-not-bound.test.ts` 經產品組裝量模型實際綁到的工具，`execute` 一出現就紅
+ * （#666，原本這裡有一組讀 harness 原始碼的，已搬走）。
  *
  * 新增工具時在 {@link TOOL_VARIANTS}（或 {@link TOOL_TITLES}）加一列；`tool-view.test.ts` 列著每一個實際工具名，
  * 漏了會紅。
@@ -37,7 +38,7 @@ export const VARIANT_TITLE: Record<ToolVariant, string> = {
  *
  * - 基座（deepagents 1.13）：`ls`、`read_file`、`write_file`、`edit_file`、`delete`、`glob`、`grep`、`execute`、`task`。
  * - `@nexus/plugin-quickjs`：`run_javascript`。
- * - 標題表另含 `apps/harness` 的 `request_sandbox_escalation`。
+ * - 標題表另含 `@nexus/plugin-sandbox-policy` 的 `request_sandbox_escalation`。
  */
 const TOOL_VARIANTS: Readonly<Record<string, ToolVariant>> = {
   ls: 'read',

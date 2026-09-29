@@ -13,10 +13,11 @@
 /** 模型看到的工具名（`@nexus/plugin-todo` 的 `TODO_TOOL_NAME`，照 dsh `tool-todo`）。 */
 export const TODO_WRITE = 'todo_write';
 
-/** 一項的狀態，同 `@nexus/core` 的 `TODO_STATUSES`。 */
+/**
+ * 一項的狀態。同 wire 的 `WireTodoItem['status']`（`todo-view.test.ts` 在型別層釘住相等）；wire 與 core 的 `TodoStatus`
+ * 由 harness 的 `todo-status-wire.test.ts` 釘住（#666）。
+ */
 export type TodoStatus = 'pending' | 'in_progress' | 'completed';
-
-const STATUSES: readonly string[] = ['pending', 'in_progress', 'completed'] satisfies TodoStatus[];
 
 /** 清單裡的一項，照模型給的原樣。 */
 export interface TodoItem {
@@ -88,3 +89,6 @@ export const TODO_STATUS_LABEL = {
   in_progress: '進行中',
   completed: '已完成',
 } as const satisfies Record<TodoStatus, string>;
+
+/** 認得的狀態：從上面那張標籤表導出，不另外手列第三份。 */
+const STATUSES: readonly string[] = Object.keys(TODO_STATUS_LABEL);
