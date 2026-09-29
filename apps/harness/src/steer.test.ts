@@ -87,7 +87,9 @@ function marks(events: readonly SessionEvent[]): string[] {
       case 'user/message':
         return event.data.source.kind === 'user'
           ? [`steer:${String(event.data.message.data.content)}`]
-          : [`injected:${event.data.source.plugin}`];
+          : event.data.source.kind === 'plugin'
+            ? [`injected:${event.data.source.plugin}`]
+            : ['snapshot'];
       case 'model/start':
         return ['model'];
       default:
@@ -266,6 +268,26 @@ describe('真的組裝：跑著的這一輪收插話', () => {
         'model',
         'end',
       ]);
+    } finally {
+      await run.close();
+    }
+  }, 20000);
+
+  it('收尾時領走了插話：窗還開著，之後到的插話仍屬於這一輪（同一輪三次模型呼叫）', async () => {
+    const run = await assemble([{ content: '一' }, { content: '二' }, { content: '三' }], {
+      afterModelCall: (call) => {
+        if (call === 1) void run.pump.submit(steer('第一句插話', 's1'));
+        if (call === 2) void run.pump.submit(steer('第二句插話', 's2'));
+      },
+    });
+    try {
+      await run.pump.submit({ kind: 'message', text: '開始', id: 'm1' });
+      await run.pump.whenIdle();
+      expect(run.model.prompts).toHaveLength(3);
+      expect(humanTexts(run.model.prompts[2])).toEqual(['開始', '第一句插話', '第二句插話']);
+      const skeleton = run.marks();
+      expect(skeleton.filter((mark) => mark.startsWith('start:'))).toHaveLength(1);
+      expect(skeleton.filter((mark) => mark.startsWith('end'))).toEqual(['end']);
     } finally {
       await run.close();
     }
@@ -569,9 +591,9 @@ function handleAgent(
       const inbox = config.configurable[STEP_INBOX_CONFIG_KEY] as StepInbox;
       return (async function* () {
         if (step.holdBeforeClaim !== undefined) await step.holdBeforeClaim;
-        seen.push(texts(inbox.claim()));
+        seen.push(texts(await inbox.claim()));
         for (;;) {
-          const finished = texts(inbox.finish());
+          const finished = texts(await inbox.finish());
           seen.push(finished);
           if (finished.length === 0) break;
         }

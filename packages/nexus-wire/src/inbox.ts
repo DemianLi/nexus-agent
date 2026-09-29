@@ -47,10 +47,22 @@ export interface WireQueuedInput {
   readonly source: { readonly kind: 'user' };
 }
 
+/** 一句話裡 `@` 的一條會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）：`text` 裡對應的那段是 `@<label>`。 */
+export interface WireSessionReference {
+  readonly sessionId: string;
+  readonly label: string;
+}
+
 /** 被領走的一件：畫面據它畫人的泡泡。 */
 export interface WireClaimedInput {
   readonly id: string;
+  /**
+   * 人話。**`@` 了別的會話的話，引用網址已經換成 `@標題`**（伺服器在準備那一步換的）；排著的那份
+   * （{@link WireQueuedInput}）仍是使用者打的原文。
+   */
   readonly text: string;
+  /** 這句話 `@` 的會話，照出現先後、去重。沒有引用就不給這一格（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）。 */
+  readonly references?: readonly WireSessionReference[];
 }
 
 /** {@link INBOX} 的 `payload`。 */

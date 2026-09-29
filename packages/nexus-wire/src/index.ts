@@ -122,7 +122,12 @@ export type {
 } from './context-pressure.js';
 export { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 export type { TodosPayload, WireTodoItem } from './todos.js';
-export type { InboxPayload, WireClaimedInput, WireQueuedInput } from './inbox.js';
+export type {
+  InboxPayload,
+  WireClaimedInput,
+  WireQueuedInput,
+  WireSessionReference,
+} from './inbox.js';
 export { INBOX } from './inbox.js';
 export type { TitlePayload } from './title.js';
 export { TITLE } from './title.js';

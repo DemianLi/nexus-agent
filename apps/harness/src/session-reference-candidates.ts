@@ -32,7 +32,12 @@ import {
   SessionFormatUnsupportedError,
   SessionNotFoundError,
 } from '@nexus/core';
-import type { SessionEvent, SessionStore, StoredSessionSnapshot } from '@nexus/core';
+import type {
+  SessionEvent,
+  SessionStore,
+  StoredSessionHeader,
+  StoredSessionSnapshot,
+} from '@nexus/core';
 import {
   DEFAULT_SESSION_REFERENCE_CANDIDATE_LIMIT,
   formatSessionReferenceMention,
@@ -167,20 +172,56 @@ export class SessionReferenceCandidates {
       });
   }
 
-  /** 每一格專案目錄裡讀得出來的會話，各帶標題。同一個 id 出現在兩格時，專案自己的那一格優先。 */
-  async #rows(signal: AbortSignal | undefined): Promise<Row[]> {
-    signal?.throwIfAborted();
+  /** 專案目錄，自己的那一格排前面，其餘照名字。CLI 的 run 目錄不算（根 id 都叫 `cli`，不唯一）。 */
+  async #projectDirectories(): Promise<string[]> {
     const own = projectKey(this.#options.cwd);
-    const directories = (await listSessionStoreDirectories(this.#options.rootDir))
+    return (await listSessionStoreDirectories(this.#options.rootDir))
       .filter(({ kind }) => kind === 'project')
       .sort(
         (left, right) =>
           Number(basename(right.directory) === own) - Number(basename(left.directory) === own) ||
           byCodeUnit(left.directory, right.directory),
-      );
+      )
+      .map(({ directory }) => directory);
+  }
+
+  /**
+   * 精確讀一條會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713) 的準備那一半，給 `SessionReferenceReader` 用）：
+   * 整份日誌，**壞了就拋，不撿回**——快照會把內容帶進另一條會話，撿回來的殘缺版本不能當成那條會話的樣子。
+   *
+   * 找的範圍與 {@link SessionReferenceCandidates.list} 一致：只在專案目錄裡找，自己的那一格優先；同 id 出現在兩格時取先找到的，
+   * 跟列出來的是同一份。**唯讀**：不拿租約，別的把手握著照樣讀得到。
+   *
+   * @throws {@link SessionNotFoundError} 每一格都沒有。其餘（版本太新、日誌壞了）原樣拋出去。中止時拋 `signal.reason`。
+   */
+  async read(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<{ readonly header: StoredSessionHeader; readonly events: readonly SessionEvent[] }> {
+    signal?.throwIfAborted();
+    for (const directory of await this.#projectDirectories()) {
+      signal?.throwIfAborted();
+      let reader;
+      try {
+        reader = await this.#storeOf(directory).open(sessionId, 'read');
+      } catch (error: unknown) {
+        if (error instanceof SessionNotFoundError) continue;
+        throw error;
+      }
+      const events = await reader.read();
+      signal?.throwIfAborted();
+      return { header: reader.header, events };
+    }
+    throw new SessionNotFoundError(sessionId, `找不到會話 ${JSON.stringify(sessionId)}`);
+  }
+
+  /** 每一格專案目錄裡讀得出來的會話，各帶標題。同一個 id 出現在兩格時，專案自己的那一格優先。 */
+  async #rows(signal: AbortSignal | undefined): Promise<Row[]> {
+    signal?.throwIfAborted();
+    const directories = await this.#projectDirectories();
     const listed: { directory: string; snapshot: StoredSessionSnapshot }[] = [];
     const seen = new Set<string>();
-    for (const { directory } of directories) {
+    for (const directory of directories) {
       let sessions: readonly StoredSessionSnapshot[];
       try {
         sessions = (await this.#storeOf(directory).list(signal === undefined ? {} : { signal }))

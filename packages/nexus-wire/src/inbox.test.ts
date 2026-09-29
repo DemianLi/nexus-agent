@@ -191,6 +191,50 @@ describe('inbox', () => {
       ]);
     });
 
+    it('引用別的會話的話帶 references（#713）：claimed 與 claimedNextStep 都折進人的話；沒有就不帶這一格', () => {
+      const references = [{ sessionId: 'a', label: '甲' }];
+      const state = fold(
+        inboxFrame({
+          items: [],
+          claimed: { id: first.id, text: '看 @甲', references },
+          claimedNextStep: [
+            { id: second.id, text: '再看 @甲', references: [] },
+            { id: 'run-c', text: '沒有引用' },
+          ],
+        }),
+      );
+      expect(state.entries).toEqual([
+        { kind: 'human', id: `inbox:${first.id}`, text: '看 @甲', inboxId: first.id, references },
+        // 空陣列與沒給是同一件事，不讓兩種長相並存。
+        { kind: 'human', id: `inbox:${second.id}`, text: '再看 @甲', inboxId: second.id },
+        { kind: 'human', id: 'inbox:run-c', text: '沒有引用', inboxId: 'run-c' },
+      ]);
+    });
+
+    it('references 形狀不對：整顆不收，同其他欄位', () => {
+      const before = fold(inboxFrame({ items: [first] }));
+      for (const references of ['x', [{ sessionId: 'a' }], [{ label: '甲' }], [null]]) {
+        const after = reduceConversation(
+          before,
+          inboxFrame({ items: [], claimed: { id: 'z', text: 't', references } }),
+        );
+        expect([after.inbox, after.entries]).toEqual([before.inbox, before.entries]);
+      }
+    });
+
+    it('歷史重播的人話（message-start）帶 references 就掛上；壞的當沒有，人話照畫', () => {
+      const start = (extra: object) =>
+        frame('messages', { event: 'message-start', role: 'human', id: 'history-1', ...extra });
+      const references = [{ sessionId: 'a', label: '甲' }];
+      expect(fold(start({ references })).entries).toEqual([
+        { kind: 'human', id: 'history-1', text: '', references },
+      ]);
+      expect(fold(start({})).entries).toEqual([{ kind: 'human', id: 'history-1', text: '' }]);
+      expect(fold(start({ references: 'x' })).entries).toEqual([
+        { kind: 'human', id: 'history-1', text: '' },
+      ]);
+    });
+
     it('形狀不對整顆不收', () => {
       const before = fold(inboxFrame({ items: [first], nextStep: [second] }));
       for (const payload of [
