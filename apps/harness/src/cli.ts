@@ -90,7 +90,7 @@ import {
   SandboxModeController,
 } from '@nexus/plugin-sandbox-policy';
 import type { SandboxMode } from './contained-backend.js';
-import { createLiveModel, loadLiveEnvIfNeeded, DEFAULT_LIVE_MODEL_ID } from './live-model.js';
+import { createLiveModel, loadLiveLaunchEnv, DEFAULT_LIVE_MODEL_ID } from './live-model.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { createFileReferencePlugin } from './file-references.js';
 import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js';
@@ -731,11 +731,10 @@ export function transcriptLine(node: string, message: BaseMessage): string | und
  * @param live - 是否用真實供應商。
  * @param liveModel - 真實供應商的連線值，清單上 `live-model` 那一列（#545）。
  * @returns 可以交給組裝點的 model。
- * @throws `--live` 但環境變數裡沒有 key——訊息指名缺哪一個，不 fallback。
+ * @throws `--live` 但環境變數裡沒有 key——訊息指名缺哪一個，不 fallback（兩層 `.env` 在入口載入，見 `runCli`）。
  */
 function createCliModel(live: boolean, liveModel: LiveModelConfig): BaseChatModel {
   if (!live) return new ScriptedChatModel({ turns: CLI_SCRIPT });
-  loadLiveEnvIfNeeded();
   return createLiveModel(liveModel);
 }
 
@@ -873,7 +872,7 @@ export async function createCliAgent(
   const liveModel = invocation.liveModel ?? startupSetting(plugins, liveModelPlugin);
   const model = createCliModel(invocation.live, liveModel);
   // **標題模型是另一顆實例**：輸出上限換成標題那一列的，並表明用途，由 `createLiveModel` 決定要不要關推理
-  // （`live-model.ts` 的 `LiveModelPurpose`）。這一行排在 `createCliModel` 之後：`.env` 在那裡才載入。
+  // （`live-model.ts` 的 `LiveModelPurpose`）。`.env` 已經在入口（`runCli`／`runServe`）載入過了。
   const attachTitle =
     invocation.live && startupEntryMounted(plugins, threadTitleLlmPlugin)
       ? titleLlmFor(
@@ -1461,6 +1460,15 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       }).trimEnd(),
     );
     return;
+  }
+
+  // **真模型路徑的啟動環境：兩層 `.env`**（#730）。排在一切之前，壞的 `.env`（設了只有啟動環境能設的名字）
+  // 與舊位置搬家訊息在什麼都還沒起來的時候就講。沒帶 `--live` 不讀任何 `.env`，同以前。
+  if (invocation.live) {
+    loadLiveLaunchEnv({
+      ...(options.cwd !== undefined && { cwd: options.cwd }),
+      ...(options.env !== undefined && { env: options.env }),
+    });
   }
 
   // **清單只有一個來源：出貨的 `cordis.yml` 加上使用者那兩層**（#454、#455）。**它排在日誌

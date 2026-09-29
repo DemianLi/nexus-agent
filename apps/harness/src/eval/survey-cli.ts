@@ -16,7 +16,7 @@
  * 題目與工具參數會跟著 trace 出境。
  */
 
-import { createLiveModel, loadLiveEnvIfNeeded, DEFAULT_LIVE_MAX_RETRIES } from '../live-model.js';
+import { createLiveModel, loadLiveLaunchEnv, DEFAULT_LIVE_MAX_RETRIES } from '../live-model.js';
 import { liveModelConfigSchema } from '../settings/live-model.js';
 import { parseCases, parseModels, parseSamples } from './cli-args.js';
 import {
@@ -137,7 +137,7 @@ async function main(argv: readonly string[]): Promise<void> {
   const samples = parseSamples(argv);
   const cases = parseCases(argv);
   const models = parseModels(argv, SURVEY_MODELS);
-  loadLiveEnvIfNeeded();
+  loadLiveLaunchEnv();
 
   // 「難題」是題目的性質不是這一輪的性質，所以先跟這一輪實際要跑的取交集 ——
   // `--cases` 只點了簡單題時，難題那一欄整欄是 `—`，而那是對的。

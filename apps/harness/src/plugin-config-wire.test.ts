@@ -360,26 +360,83 @@ describe('serve 在啟動時就把清單組過一次', () => {
    * **檢查排在建瀏覽器會話密鑰之前**：起不來的那一次，home 底下沒有密鑰檔。用「`--live` 而環境裡沒有金鑰」測，
    * 因為它壞在組裝本身、不是某一列的設定，#751 合了之後照樣起不來，這條不會跟著翻。
    *
-   * **`.env` 一個字都不讀**：金鑰缺的時候 `loadLiveEnvIfNeeded` 會去讀 repo 根目錄的 `.env`，在有那份檔的工作樹上
-   * 會讀到真的金鑰，而且檔案裡其他的變數也會一起留在這個測試行程裡（`vi.unstubAllEnvs` 只還原 stub 過的那一格）。
-   * 所以把 `process.loadEnvFile` 換成什麼都不做，並斷言它被叫過：走的是缺金鑰那條路，只是沒讀檔。
+   * **`.env` 兩層都指到暫存資料夾**（#730）：目前資料夾與 home 都是空的，讀不到這台機器上任何真的檔。
    */
   it('`--live` 沒有金鑰：起不來、講缺哪一個，密鑰檔還沒建；對照：有金鑰就起得來、密鑰檔建了', async () => {
     const home = privateHome();
+    const cwd = privateHome();
     const env = { [HARNESS_HOME_ENV]: home };
     const secret = join(home, BROWSER_SESSION_SECRET_FILE);
 
-    const loadEnvFile = vi.spyOn(process, 'loadEnvFile').mockImplementation(() => undefined);
-    vi.stubEnv(LIVE_API_KEY_ENV, '');
+    vi.stubEnv(LIVE_API_KEY_ENV, undefined);
     await expect(
-      runServe({ argv: ['--port', '0', '--live'], log: () => undefined, env }),
+      runServe({ argv: ['--port', '0', '--live'], log: () => undefined, env, cwd }),
     ).rejects.toThrow(`缺少環境變數 ${LIVE_API_KEY_ENV}`);
     expect(existsSync(secret)).toBe(false);
-    expect(loadEnvFile).toHaveBeenCalled();
 
     vi.stubEnv(LIVE_API_KEY_ENV, 'nvapi-fake-key-for-tests');
-    running = await runServe({ argv: ['--port', '0', '--live'], log: () => undefined, env });
+    running = await runServe({ argv: ['--port', '0', '--live'], log: () => undefined, env, cwd });
     expect(existsSync(secret)).toBe(true);
+  });
+
+  /**
+   * **兩層 `.env` 走真的入口**（#730）：key 只放在 harness home 的 `.env`，`--live` 起得來，
+   * 而且值進了行程的環境變數（模型從那裡讀）。
+   */
+  it('`--live`：key 只在 harness home 的 .env 也起得來', async () => {
+    const home = privateHome();
+    const cwd = privateHome();
+    writeFileSync(join(home, '.env'), `${LIVE_API_KEY_ENV}=nvapi-from-home-env\n`);
+    vi.stubEnv(LIVE_API_KEY_ENV, undefined);
+
+    running = await runServe({
+      argv: ['--port', '0', '--live'],
+      log: () => undefined,
+      env: { [HARNESS_HOME_ENV]: home },
+      cwd,
+    });
+
+    expect(process.env[LIVE_API_KEY_ENV]).toBe('nvapi-from-home-env');
+  });
+
+  /** 目前資料夾那份 `.env` 想改行程怎麼起：server 起來之前就失敗，訊息指名檔案與變數，密鑰檔也還沒建。 */
+  it('`--live`：目前資料夾的 .env 設了 NODE_OPTIONS：起不來，指名檔案與變數', async () => {
+    const home = privateHome();
+    const cwd = privateHome();
+    writeFileSync(join(cwd, '.env'), 'NODE_OPTIONS=--require=/tmp/evil.js\n');
+    vi.stubEnv(LIVE_API_KEY_ENV, 'nvapi-fake-key-for-tests');
+
+    const failure = runServe({
+      argv: ['--port', '0', '--live'],
+      log: () => undefined,
+      env: { [HARNESS_HOME_ENV]: home },
+      cwd,
+    });
+    await expect(failure).rejects.toThrow(join(cwd, '.env'));
+    await expect(failure).rejects.toThrow('NODE_OPTIONS');
+    expect(existsSync(join(home, BROWSER_SESSION_SECRET_FILE))).toBe(false);
+  });
+
+  /** CLI 同一條：入口就擋，不必等到建模型；沒帶 `--live` 的對照組不讀 `.env`，壞檔不影響。 */
+  it('CLI：`--live` 時壞的 .env 在入口就失敗；沒帶 `--live` 不讀任何 .env', async () => {
+    const home = privateHome();
+    const cwd = privateHome();
+    writeFileSync(join(cwd, '.env'), 'PATH=/evil\n');
+    const env = { [HARNESS_HOME_ENV]: home };
+    const io = () => ({ input: new PassThrough(), output: new PassThrough() });
+
+    await expect(runCli({ argv: ['--live', '嗨'], ...io(), cwd, env })).rejects.toThrow(
+      join(cwd, '.env'),
+    );
+    await expect(
+      runCli({
+        argv: ['嗨'],
+        ...io(),
+        cwd,
+        env,
+        printer: { log: () => undefined, error: () => undefined },
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it('反面：`disabled: true` 的那一列設定再壞也不驗，serve 起得來、開得了對話', async () => {

@@ -55,7 +55,7 @@ import {
 } from '@nexus/core';
 import { assertSameCwd, assertSameWorkspaceRoot } from './resume-guards.js';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
-import { DEFAULT_LIVE_MODEL_ID } from './live-model.js';
+import { DEFAULT_LIVE_MODEL_ID, loadLiveLaunchEnv } from './live-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import type { SandboxMode } from './contained-backend.js';
 import { BrowserAuth } from './browser-auth.js';
@@ -301,6 +301,9 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // 密鑰在下面讀：權限過寬、記錄壞掉，都該在 server 還沒起來的時候就講。每次啟動只讀這一次，
   // 之後在記憶體裡驗。
   const env = options.env ?? process.env;
+  // **真模型路徑的啟動環境：兩層 `.env`**（#730），排在讀清單與建密鑰之前：壞的 `.env` 與舊位置搬家訊息在
+  // server 還沒起來的時候就講。沒帶 `--live` 不讀任何 `.env`。
+  if (invocation.live) loadLiveLaunchEnv({ cwd, env });
   // **清單只有一個來源：出貨的 `cordis.yml` 加上使用者那兩層**（#454、#455），與 CLI 同一條
   // 路：同一個函式、同一個 home 層、同一組 `--patch`。
   //
