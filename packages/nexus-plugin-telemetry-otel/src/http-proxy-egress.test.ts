@@ -78,7 +78,7 @@ describe('遙測匯出直連', () => {
       seen = [];
 
       const service = new OpenTelemetrySessionService({
-        mode: 'full',
+        mode: 'feedback-only',
         exporter: {
           url: `${collectorUrl}/v1/logs`,
           timeoutMillis: 1_000,
