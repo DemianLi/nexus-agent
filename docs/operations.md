@@ -330,7 +330,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `approval-gate` | 核准閘門 | **沒有** | **關不掉** |
 | `session-persistence` | 會話日誌落盤本身，以及它的批次窗口（毫秒） | 有（一格） | 關得掉（＝不落盤） |
 | `thread-title` | 會話標題的三個上限（退回標題的詞數與位元組，以及任何來源的標題的位元組） | 有（三格） | **關不掉** |
-| `thread-title-llm` | `--live` 時由模型依第一句話產生會話標題 | 有（五格） | 關得掉（＝只剩退回標題） |
+| `thread-title-llm` | `--live` 時由模型依第一句話產生會話標題 | 有（五格，另有選配的 `modelId`） | 關得掉（＝只剩退回標題） |
 | `thread-search` | 按內容搜尋以前的會話（側欄的搜尋框）；**出廠不開** | 有（一格） | 關得掉（＝搜尋一律失敗） |
 | `browser-session` | 瀏覽器 cookie 的絕對有效期 | 有（一格） | **關不掉** |
 | `deliverable-files` | 交付檔的三個上限（一頁位元組／整檔位元組（只管下載）／一頁行數） | 有（三格） | **關不掉** |
@@ -416,8 +416,12 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，另外打一次標題請求，回來的標題蓋過退回標題
 （列表、畫面標頭、歷史都讀最後一顆）。續接回來的舊 thread、第二句以後、子代理都不打。幾件要知道的事：
 
-- **每條新 thread 多一次請求**，走 `live-model` 那一列的端點、模型與 key，輸出上限是這一列的
-  `maxOutputTokens`（64，不看型錄）。這次呼叫**不計進會話統計，也不寫 `model/usage`**（同 dsh），所以用量表上看不到它。
+- **每條新 thread 多一次請求**，走 `live-model` 那一列的端點與 key，輸出上限是這一列的
+  `maxOutputTokens`（64，不看型錄）。**模型預設沿用 `live-model` 的預設模型**；選配的 `modelId`（[#657](https://github.com/DemianLi/nexus-agent/issues/657)）
+  可以改挑那一列 `models` 型錄裡的另一筆（例如一顆便宜、沒有推理的），關推理的寫法跟著那一筆走。
+  挑的 id 不在型錄裡，帶 `--live` 時 CLI 與 serve 都在啟動時起不來，訊息指名這一列與那個 id。換之前照 #650 的量法量一次
+  （`maxOutputTokens` 64 下，關推理與不關推理各跑 6 次）。`session/title-llm-request` 的 `route.model` 與標題的來源記的是實際走的那一顆。
+  dsh 那一對成對的 `provider`／`model` 我們只有 `modelId`：一個組裝一條連線，沒有第二個端點可挑。這次呼叫**不計進會話統計，也不寫 `model/usage`**（同 dsh），所以用量表上看不到它。
 - **重試次數沿用 `live-model` 的 `maxRetries`**，但整段有這一列的 `timeoutMs`（60 秒）封頂，所以最壞是等滿
   60 秒。
 - **失敗只講一聲**：serve 記進伺服器日誌、CLI 印在 stderr，前綴都是 `[標題]`，退回標題留著，不重試。

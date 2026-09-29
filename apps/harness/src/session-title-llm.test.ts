@@ -24,7 +24,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCliAgent, runCli } from './cli.js';
 import { serveClient, shippedPlugins } from './fixtures.js';
-import { LIVE_API_KEY_ENV } from './live-model.js';
+import { DEFAULT_LIVE_MODEL_ENTRY, DEFAULT_LIVE_MODEL_ID, LIVE_API_KEY_ENV } from './live-model.js';
 import { loadDefaultPlugins } from './plugin-config.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
@@ -491,17 +491,19 @@ async function writePatch(content: string): Promise<string> {
 }
 
 /** `live-model` 那一列指向假端點；不重試，免得一次失敗變成好幾次請求。 */
-function liveModelPatch(baseUrl: string): string {
+function liveModelPatch(baseUrl: string, extraConfig: readonly string[] = []): string {
   return [
     '- id: live-model',
     '  config:',
     `    baseUrl: '${baseUrl}'`,
     '    maxRetries: 0',
+    ...extraConfig,
     '',
   ].join('\n');
 }
 
 interface SeenBody {
+  readonly model: unknown;
   readonly title: boolean;
   readonly stream: unknown;
   readonly maxTokens: unknown;
@@ -543,6 +545,7 @@ async function startFakeEndpoint(titleMode: 'reply' | 'hang' | 'absent' | 'late'
         typeof first.content === 'string' &&
         first.content.startsWith('Create a concise title');
       seen.push({
+        model: body.model,
         title,
         stream: body.stream,
         maxTokens: body.max_tokens,
@@ -754,6 +757,27 @@ describe('產品路徑：serve --live', () => {
     return { client, frames };
   }
 
+  it('#657 標題挑的 id 不在型錄裡：serve 啟動時就起不來，不等到第一條 thread', async () => {
+    fake = await startFakeEndpoint('absent');
+    await expect(
+      runServe({
+        argv: [
+          '--port',
+          '0',
+          '--live',
+          '--patch',
+          await writePatch(
+            liveModelPatch(fake.baseUrl) +
+              "- id: thread-title-llm\n  config:\n    modelId: 'nexus-test/ghost'\n",
+          ),
+        ],
+        log: () => undefined,
+        env: {},
+      }),
+    ).rejects.toThrow(/thread-title-llm.*nexus-test\/ghost/su);
+    expect(fake.seen).toEqual([]);
+  });
+
   it('標題請求帶關推理那一格、主請求不帶；線上先後推兩顆標題；第二輪模型看不到標題', async () => {
     const { client, frames } = await openThread('reply', 'title-llm-serve');
     await client.runStart('title-llm-serve', FIRST);
@@ -880,7 +904,11 @@ describe('產品路徑：CLI --live', () => {
     vi.unstubAllEnvs();
   });
 
-  async function runOnce(titleMode: 'reply' | 'hang' | 'absent', extraPatch = '') {
+  async function runOnce(
+    titleMode: 'reply' | 'hang' | 'absent',
+    extraPatch = '',
+    liveModelConfig: readonly string[] = [],
+  ) {
     fake = await startFakeEndpoint(titleMode);
     const root = await mkdtemp(join(tmpdir(), 'nexus-title-llm-log-'));
     const errors: string[] = [];
@@ -890,7 +918,7 @@ describe('產品路徑：CLI --live', () => {
         '--session-log',
         root,
         '--patch',
-        await writePatch(liveModelPatch(fake.baseUrl) + extraPatch),
+        await writePatch(liveModelPatch(fake.baseUrl, liveModelConfig) + extraPatch),
         FIRST,
       ],
       input: new PassThrough(),
@@ -919,6 +947,60 @@ describe('產品路徑：CLI --live', () => {
     expect(requestEvents(events)).toHaveLength(1);
     expect(titleEvents(events).map((event) => event.data.source.kind)).toEqual(['fallback']);
     expect(errors.filter((line) => line.startsWith('[標題]'))).toEqual([]);
+  }, 30000);
+
+  /** 型錄兩筆：預設那一筆，加一筆關推理寫法不同、輸出上限不同的「便宜模型」。 */
+  const CHEAP = {
+    id: 'nexus-test/cheap-title-model',
+    contextWindow: 131007,
+    maxTokens: 4096,
+    reasoningEfforts: { off: null },
+    compat: { chatTemplateKwargs: { cheap_off: { $var: 'thinking.enabled' } } },
+  };
+  const catalogConfig = (): string[] => [
+    `    models: ${JSON.stringify([DEFAULT_LIVE_MODEL_ENTRY, CHEAP])}`,
+  ];
+  const titleModelPatch = (modelId: string): string =>
+    `- id: thread-title-llm\n  config:\n    modelId: '${modelId}'\n`;
+
+  it('#657 標題改挑型錄裡的另一顆：標題請求打到它、帶它那一筆的關推理寫法與標題自己的上限，主請求不受影響', async () => {
+    const { events, errors } = await runOnce('reply', titleModelPatch(CHEAP.id), catalogConfig());
+    const titles = fake!.seen.filter((body) => body.title);
+    const main = fake!.seen.filter((body) => !body.title);
+    expect(titles).toHaveLength(1);
+    expect(titles[0]).toMatchObject({
+      model: CHEAP.id,
+      maxTokens: 64,
+      chatTemplateKwargs: { cheap_off: false },
+    });
+    expect(main.length).toBeGreaterThan(0);
+    for (const body of main) {
+      expect(body).toMatchObject({ model: DEFAULT_LIVE_MODEL_ID, maxTokens: 16384 });
+      expect(body.chatTemplateKwargs).toBeUndefined();
+    }
+    // 記的是實際走的那條，不是 live-model 的預設模型。
+    expect(requestEvents(events).map((event) => event.data.route.model)).toEqual([CHEAP.id]);
+    expect(errors.filter((line) => line.startsWith('[標題]'))).toEqual([]);
+  }, 30000);
+
+  it('#657 沒給 modelId：沿用 live-model 的預設模型，請求跟 #650 一字不差', async () => {
+    const { events } = await runOnce('reply', '', catalogConfig());
+    const titles = fake!.seen.filter((body) => body.title);
+    expect(titles[0]).toMatchObject({
+      model: DEFAULT_LIVE_MODEL_ID,
+      maxTokens: 64,
+      chatTemplateKwargs: { enable_thinking: false },
+    });
+    expect(requestEvents(events).map((event) => event.data.route.model)).toEqual([
+      DEFAULT_LIVE_MODEL_ID,
+    ]);
+  }, 30000);
+
+  it('#657 標題挑的 id 不在型錄裡：組裝失敗，訊息指名 thread-title-llm 那一列與那個 id，沒有請求送出去', async () => {
+    await expect(runOnce('absent', titleModelPatch('nexus-test/ghost'))).rejects.toThrow(
+      /thread-title-llm（#settings\/thread-title-llm）.*nexus-test\/ghost/su,
+    );
+    expect(fake!.seen).toEqual([]);
   }, 30000);
 
   it('那一列關掉：一次標題請求都不發', async () => {

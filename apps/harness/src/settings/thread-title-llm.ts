@@ -13,11 +13,19 @@
  * 跟 `thread-title` 相反。關掉它就真的沒有 LLM 標題（只剩退回標題），同 dsh 關那一列的效果。所以它不在
  * `PROTECTED_ENTRY_NAMES` 上，掛沒掛由 `startupEntryMounted` 判，不是 `startupSetting`——後者把關掉的列讀成預設值。
  *
- * ## 沒有 `provider`／`model` 覆寫
+ * ## 標題走另一顆模型：`modelId`（[#657](https://github.com/DemianLi/nexus-agent/issues/657)）
  *
- * dsh 這一列另有一對選配的 `provider`／`model`，讓標題走獨立的路由；不給就沿用主請求的路由。**我們只有一條
- * 連線**（`live-model` 那一列），一律沿用它。這一對是選配、預設不給，沒有它不改變出廠行為；要做的話它跟
- * 型錄條目的關推理寫法（`off` 等級與 `compat`）是綁著的（換模型要一起換），不是單純多兩格。
+ * dsh 這一列另有一對選配、必須成對的 `provider`／`model`（`packages/session/session-title-llm/src/index.ts:71-74`，
+ * 給一半就在載入期拋，同檔 `:136-139`）：不給就沿用主請求記下的路由，給了就走獨立路由（例如一顆便宜、沒有推理的模型）。
+ *
+ * **我們是選配的 `modelId`，從 `live-model` 的型錄挑一筆**（#729）：關推理的寫法、窗口等跟著那一筆走，「只換模型 id 不換
+ * 關推理的寫法，標題會在新模型上靜靜失敗」那個坑由型錄收掉。不給就沿用 `live-model` 的預設模型，出廠行為不變。
+ * 標題的輸出上限照舊是這一列的 `maxOutputTokens`，不從條目來（dsh 也是用標題自己的上限，同檔 `:266`）。
+ *
+ * **與 dsh 的差異：沒有 `provider`。** 我們一個組裝只有一條連線（`live-model` 那一列的端點與那一把 key），挑同一個端點上的
+ * 模型就是同一把 key，所以沒有「成對」這回事；「給一半就拋」對應成「給的 id 不在型錄裡就拋」（`cli.ts` 的
+ * `titleLlmFor`，組裝時、serve 是啟動時的那次試組，訊息指名這一列與那個 id）。哪天有第二條連線（#730 的按名字取 key），
+ * 再加 `provider` 並補上成對驗證。
  *
  * @module
  */
@@ -45,6 +53,11 @@ export const threadTitleLlmConfigSchema = z.strictObject({
   maxInputBytes: z.number().int().positive().default(4096),
   /** 標題呼叫的 `max_tokens`。 */
   maxOutputTokens: z.number().int().positive().default(64),
+  /**
+   * 標題改走 `live-model` 型錄裡的另一顆模型，見檔頭。省略就沿用 `live-model` 的預設模型。
+   * 換模型之前照 #650 的量法量一次（`maxOutputTokens` 64 下，關推理與不關推理各跑 6 次）。
+   */
+  modelId: z.string().min(1).optional(),
   /** 從送出到收到的整段時限（毫秒）。 */
   timeoutMs: z.number().int().positive().max(MAX_THREAD_TITLE_LLM_TIMEOUT_MS).default(60_000),
 });
