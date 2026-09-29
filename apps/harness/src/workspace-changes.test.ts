@@ -38,9 +38,13 @@ import { createWorkspaceChanges, WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin
 import type { Event } from '@nexus/wire';
 import {
   changesDiffPath,
+  changesDiffUrl,
   changesSummaryPath,
+  changesSummaryUrl,
   createWireClient,
   emptyConversation,
+  isChangesDiff,
+  isChangesSummary,
   reduceAll,
   WORKSPACE_CHANGES,
 } from '@nexus/wire';
@@ -271,10 +275,20 @@ describe('每一輪的改動紀錄在真的圖上', () => {
       const entry = { kind: 'workspace-changes', id: `workspace-changes:${seq}`, seq };
       expect(folded).toEqual([[entry], [entry]]);
 
+      // **builder 的輸出先對手寫的字串，再把同一段手寫的查詢送進真的 handler**（照 dsh 的 host spec，
+      // `changes-open.host.spec.ts`）：wire 把參數改名而 handler 沒跟上，這一行先紅；反過來 handler 改名而
+      // builder 沒跟上，下面的請求 400。兩邊都拼自己的字串時，兩邊一起改，全綠，web 照舊送舊名。
+      expect(changesSummaryUrl(THREAD_ID, seq)).toBe(`${changesSummaryPath(THREAD_ID)}?seq=${seq}`);
+      expect(changesDiffUrl(THREAD_ID, seq, 2)).toBe(
+        `${changesDiffPath(THREAD_ID)}?seq=${seq}&index=2`,
+      );
       const summary = await outcome.get(`${changesSummaryPath(THREAD_ID)}?seq=${seq}`);
       expect(summary.status).toBe(200);
       expect(summary.headers.get('cache-control')).toBe('no-store');
-      expect(await summary.json()).toEqual({
+      const summaryBody: unknown = await summary.json();
+      // 回應過 wire 的 validator：server 改了形狀而 validator 沒跟上，web 會把卡當成讀壞（dsh 沒有這一條）。
+      expect(isChangesSummary(summaryBody)).toBe(true);
+      expect(summaryBody).toEqual({
         files: [
           { path: 'a.md', display: 'a.md', added: 1, deleted: 1 },
           { path: 'gone.md', display: 'gone.md', added: 0, deleted: 1 },
@@ -286,7 +300,9 @@ describe('每一輪的改動紀錄在真的圖上', () => {
       });
       const diff = await outcome.get(`${changesDiffPath(THREAD_ID)}?seq=${seq}&index=0`);
       expect(diff.status).toBe(200);
-      expect(await diff.json()).toEqual({
+      const diffBody: unknown = await diff.json();
+      expect(isChangesDiff(diffBody)).toBe(true);
+      expect(diffBody).toEqual({
         kind: 'text',
         path: 'a.md',
         display: 'a.md',
@@ -304,7 +320,9 @@ describe('每一輪的改動紀錄在真的圖上', () => {
         ],
       });
       const created = await outcome.get(`${changesDiffPath(THREAD_ID)}?seq=${seq}&index=2`);
-      expect(await created.json()).toMatchObject({ path: 'new.md', before: false, after: true });
+      const createdBody: unknown = await created.json();
+      expect(isChangesDiff(createdBody)).toBe(true);
+      expect(createdBody).toMatchObject({ path: 'new.md', before: false, after: true });
     } finally {
       await outcome.close();
     }

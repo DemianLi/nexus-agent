@@ -88,7 +88,15 @@ export type {
   WorkspaceDiffHunk,
   WorkspaceFileDiff,
 } from './workspace-changes.js';
-export { changesDiffPath, changesSummaryPath, WORKSPACE_CHANGES } from './workspace-changes.js';
+export {
+  changesDiffPath,
+  changesDiffUrl,
+  changesSummaryPath,
+  changesSummaryUrl,
+  isChangesDiff,
+  isChangesSummary,
+  WORKSPACE_CHANGES,
+} from './workspace-changes.js';
 export type {
   FileReferenceCandidate,
   FileReferenceListResponse,
