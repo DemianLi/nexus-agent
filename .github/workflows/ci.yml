@@ -43,8 +43,6 @@ jobs:
       harness_mode: ${{ steps.plan.outputs.harness_mode }}
       harness_shards: ${{ steps.plan.outputs.harness_shards }}
       harness_shard_total: ${{ steps.plan.outputs.harness_shard_total }}
-      web_shards: ${{ steps.plan.outputs.web_shards }}
-      web_shard_total: ${{ steps.plan.outputs.web_shard_total }}
       base_sha: ${{ steps.base.outputs.sha }}
       changed_count: ${{ steps.changes.outputs.count }}
     steps:
@@ -196,23 +194,17 @@ jobs:
           pnpm $PKG_FILTERS run test
 
   # web 的測試會 fs 讀 plugin 與 harness 的原始碼（todo-view、turn-cancel 等），套件圖上沒有這條邊，
-  # 所以有任何 TypeScript 相關異動就跑；它不在關鍵路徑上。
+  # 所以有任何 TypeScript 相關異動就跑。
   test-web:
-    name: test-web (${{ matrix.shard }}/${{ needs.plan.outputs.web_shard_total }})
+    name: test-web
     needs: plan
     if: needs.plan.outputs.ts == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: ${{ fromJSON(needs.plan.outputs.web_shards) }}
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - name: Test
-        env:
-          SHARD: ${{ matrix.shard }}/${{ needs.plan.outputs.web_shard_total }}
-        run: pnpm --filter @nexus/web exec vitest run --shard="$SHARD"
+        run: pnpm --filter @nexus/web run test
 
   test-harness:
     name: test-harness (${{ matrix.shard }}/${{ needs.plan.outputs.harness_shard_total }})
