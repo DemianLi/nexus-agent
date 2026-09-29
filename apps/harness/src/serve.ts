@@ -86,6 +86,7 @@ import { toolTextPlugin } from './settings/tool-text.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
 import { threadSearchPlugin } from './settings/thread-search.js';
+import { SessionReferenceCandidates } from './session-reference-candidates.js';
 import { ThreadSearch } from './thread-search.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
 import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
@@ -440,6 +441,16 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // `startup` 在這裡載入 `node:sqlite`，載不起來就不開 server：設定說要一起來，那就在什麼都還沒起來時講。
   await threadSearch?.open();
 
+  const sessionReferenceCandidates =
+    sessionLogDir === undefined
+      ? undefined
+      : new SessionReferenceCandidates({
+          rootDir: sessionLogDir,
+          cwd,
+          title: threadTitle,
+          warn: serverLog,
+        });
+
   const handler = createWireHandler({
     auth,
     deliverableLimits,
@@ -456,6 +467,11 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
       : {
           listThreads: () => listStoredThreads(sessionStore, { cwd, title: threadTitle }),
         }),
+    // `@` 引用別的會話的候選（#713）：冷讀整個會話根，跨專案。落盤關掉就不給，路由那時回 `available: false`。
+    ...(sessionReferenceCandidates !== undefined && {
+      listSessionReferences: (threadId: string, query: string, signal: AbortSignal) =>
+        sessionReferenceCandidates.list(threadId, query, signal),
+    }),
     // 按內容搜（#631）。沒掛那一列就不給，handler 那時一律回「沒掛」。
     ...(threadSearch !== undefined && {
       searchThreads: (query: unknown, signal: AbortSignal) => threadSearch.search(query, signal),

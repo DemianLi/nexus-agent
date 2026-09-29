@@ -109,13 +109,16 @@ function listable(event: SessionEvent): boolean {
 }
 
 /** 一份日誌裡列表要的東西。 */
-interface PromptScan {
+export interface PromptScan {
   readonly blank: boolean;
   readonly title?: string;
   readonly lastPromptAt?: number;
 }
 
-function scanPrompts(events: readonly SessionEvent[], limits: ThreadTitleLimits): PromptScan {
+export function scanPrompts(
+  events: readonly SessionEvent[],
+  limits: ThreadTitleLimits,
+): PromptScan {
   // `blank` 看的是有沒有任何一顆 `turn/start`，形狀對不對都算；其餘只看形狀對的。
   const blank = !events.some((event) => event.type === 'turn/start');
   const usable = events.filter(listable);
