@@ -95,8 +95,11 @@ middleware are left untouched」。絆索測試在
 這是**結構性偏離**，不是細節不同。dsh 的 sandbox（`packages/sandbox/*`、
 `packages/shell/*-sandbox`）是把子行程的 argv 包進**核心級**的檔案效果策略（Linux
 bwrap/Landlock、macOS Seatbelt、Windows ACL 受限 token）。它整個 repo grep `quickjs`
-零命中——**dsh 沒有「JS 直譯器」這個 seam**，它有的那一個正是開發計劃第 7 節決策 3
-延後掉的那一個（shell 沙箱，等容器隔離方案明朗）。
+零命中。dsh 有程式碼執行的接口 `ctx.ptcRuntime`（`packages/ptc-runtime/ptc-runtime/src/index.ts:98`），語言與
+執行方式由提供方決定，是它「模型寫程式、程式裡呼叫工具」那個模式（PTC，工具叫 `run_code`）的執行環境；出廠的
+提供方是每支程式開一個 Node 行程、跟 Bash 走同一個 `ctx.sandbox`（2026-09-11 起）。我們的 `run_javascript` 是
+沒有外部函式可叫的純計算工具，不是那個接口的提供方；它取代的是開發計劃第 7 節決策 3 延後掉的那一格（shell 沙箱，
+等容器隔離方案明朗）。
 
 所以這裡沒有可照抄的 dsh 做法，退到最接近的實作：**用行程內的 WASM 直譯器換掉「跑
 任意 shell 指令」**。可以對齊的先例只有詞彙——dsh 的 `SandboxMode` 三個模式與

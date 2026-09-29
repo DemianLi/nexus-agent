@@ -446,15 +446,16 @@ export type SlashRunResult =
  * 上，而列表不屬於任何一條 thread；`@langchain/protocol` 的 `Command` 也沒有這個 method（同斜線命令那兩支）。
  *
  * **`GET` 也要帶 `content-type: application/json`**，server 沒帶就回 415。這一條不是潔癖，是上行那道
- * 閘門的延伸：瀏覽器對不帶自訂 header 的跨來源 `GET` 不發 preflight，而這一份回應是每一條 thread 第一句話
- * 的開頭。帶了這個 header 就不是 simple request，逼出一個這台 server 從不回答的 preflight。
+ * 閘門的延伸：瀏覽器對不帶自訂 header 的跨來源 `GET` 不發 preflight，而這一份回應帶著每一條 thread 的標題，
+ * 標題是從第一句話來的。帶了這個 header 就不是 simple request，逼出一個這台 server 從不回答的 preflight。
  */
 export const THREADS_PATH = '/threads';
 
 /**
  * 列表上的一列。形狀照 dsh 的 `SessionSummary`，少掉的幾格：`parentSessionId`／`origin`（subagent 不列）、
- * `cwd`（只列這台 server 那個目錄的）、`projections`（我們沒有投影快取）。多的一格是 `title`：dsh 的標題走
- * 另一個 method，我們跟著列表一起給。
+ * `cwd`（只列這台 server 那個目錄的）、`projections`（我們沒有投影快取）、`agentAvailable`（dsh 後來才加，我們沒有
+ * 這一格）。多的一格是 `title`：dsh 的清單列把標題放在 `projections` 的 `title` 投影裡；我們把日誌上最後一顆
+ * `session/title` 直接放進 `title` 這一格，來源見 `@nexus/core` 的 `SessionTitleSource`。
  */
 export interface ThreadSummary {
   readonly threadId: string;
@@ -469,8 +470,8 @@ export interface ThreadSummary {
   /** 還沒有任何一輪，同 dsh 的 `blank`。 */
   readonly blank: boolean;
   /**
-   * 日誌上最後一顆 `session/title` 的文字（latest-wins：模型產生的會蓋過先到的退回標題）；一顆都沒有才從第一則人打的字
-   * 推。**缺席不等於空白**：只有目標排的輪次的 thread 不是空白，但沒有人打過字。
+   * 這條會話現在的標題：日誌上最後一顆 `session/title` 的文字（latest-wins，來源見 `@nexus/core` 的
+   * `SessionTitleSource`）；一顆都沒有時（例如 18 以前的日誌，或退回標題寫不進去），照退回規則從第一則合格的人話推。**缺席不等於空白**：只有目標排的輪次的 thread 不是空白，但沒有人打過字。
    */
   readonly title?: string;
 }

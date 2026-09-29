@@ -564,7 +564,7 @@ export interface SessionEventMap {
    *
    * **沒掛 fence 的組裝一顆都不寫。** 沒有 `--workspace` 就沒有
    * `ContainedFilesystemBackend`，沒有東西在擋——那種組裝底下記一顆「政策是
-   * workspace-write」是**在日誌裡說謊**，與 `sandbox-policy.ts` 那句提示不貢獻是同一條理由。
+   * workspace-write」是**在日誌裡說謊**，與 `@nexus/plugin-sandbox-policy` 那句提示不貢獻是同一條理由。
    *
    * ## 今天誰讀它，以及誰還讀不到
    *
