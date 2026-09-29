@@ -40,6 +40,10 @@ jobs:
       full: ${{ steps.plan.outputs.full }}
       pkg_filters: ${{ steps.plan.outputs.pkg_filters }}
       harness_mode: ${{ steps.plan.outputs.harness_mode }}
+      harness_shards: ${{ steps.plan.outputs.harness_shards }}
+      harness_shard_total: ${{ steps.plan.outputs.harness_shard_total }}
+      web_shards: ${{ steps.plan.outputs.web_shards }}
+      web_shard_total: ${{ steps.plan.outputs.web_shard_total }}
       base_sha: ${{ steps.base.outputs.sha }}
       changed_count: ${{ steps.changes.outputs.count }}
     steps:
@@ -138,16 +142,23 @@ jobs:
       - name: Lint
         run: pnpm -r run lint
 
+  # 22 個套件逐一啟動 tsc 是冷 runner 上最慢的部分，分成 apps 與 packages 兩批平行。
   typecheck:
-    name: typecheck
+    name: typecheck (${{ matrix.scope }})
     needs: plan
     if: needs.plan.outputs.ts == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scope: [apps, packages]
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - name: Typecheck
-        run: pnpm -r run typecheck
+        run: |
+          set -f
+          pnpm "--filter=./${{ matrix.scope }}/*" run typecheck
 
   # 選擇性時只跑異動到的 plugin 套件；全跑時是 packages/ 底下全部（core、wire 與所有 plugin）。
   # 沒有測試的套件照樣會紅（vitest 找不到測試檔就失敗，見 docs/standards.md）。
@@ -171,21 +182,33 @@ jobs:
   # web 的測試會 fs 讀 plugin 與 harness 的原始碼（todo-view、turn-cancel 等），套件圖上沒有這條邊，
   # 所以有任何 TypeScript 相關異動就跑；它不在關鍵路徑上。
   test-web:
-    name: test-web
+    name: test-web (${{ matrix.shard }}/${{ needs.plan.outputs.web_shard_total }})
     needs: plan
     if: needs.plan.outputs.ts == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.web_shards) }}
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - name: Test
-        run: pnpm --filter @nexus/web run test
+        env:
+          SHARD: ${{ matrix.shard }}/${{ needs.plan.outputs.web_shard_total }}
+        run: pnpm --filter @nexus/web exec vitest run --shard="$SHARD"
 
   test-harness:
-    name: test-harness
+    name: test-harness (${{ matrix.shard }}/${{ needs.plan.outputs.harness_shard_total }})
     needs: plan
     if: needs.plan.outputs.ts == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.harness_shards) }}
+    env:
+      SHARD: ${{ matrix.shard }}/${{ needs.plan.outputs.harness_shard_total }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -200,7 +223,7 @@ jobs:
 
       - name: Test（全跑）
         if: needs.plan.outputs.harness_mode == 'full'
-        run: pnpm --filter @nexus/harness run test
+        run: pnpm --filter @nexus/harness exec vitest run --shard="$SHARD"
 
       # 相關的測試（vitest --changed）∪ import 圖看不到的必跑集合；挑法與理由見 plan_ci.py。
       - name: Test（只跑相關）
@@ -213,7 +236,7 @@ jobs:
           echo "--- harness 要跑的測試檔 ---"
           cat "$RUNNER_TEMP/harness-files.txt"
           cd apps/harness
-          xargs pnpm exec vitest run < "$RUNNER_TEMP/harness-files.txt"
+          pnpm exec vitest run --shard="$SHARD" $(cat "$RUNNER_TEMP/harness-files.txt")
 
   # typecheck 過不代表 build 過：vite plugin、路徑 alias、verbatimModuleSyntax
   # 下的 import 寫法都可能 tsc 綠燈但打包失敗。其他套件的 `build` 就是 `tsc --noEmit`，
