@@ -1,11 +1,11 @@
 /**
- * 真實供應商那六個連線值的**設定條目**（[#545](https://github.com/DemianLi/nexus-agent/issues/545)／
- * [#457](https://github.com/DemianLi/nexus-agent/issues/457)）。
+ * 真實供應商的連線值與**模型型錄**的設定條目（[#545](https://github.com/DemianLi/nexus-agent/issues/545)／
+ * [#457](https://github.com/DemianLi/nexus-agent/issues/457)／[#729](https://github.com/DemianLi/nexus-agent/issues/729)）。
  *
  * **這一顆不裝功能，只講設定**，`apply` 是空的，同 `thread-title`／`tool-text` 那幾列。
  * 消費者是 `live-model.ts` 的 `createLiveModel`，只在 `--live` 時才建。
  *
- * ## 與 dsh 的關係：前五格是 dsh 的設定欄位，第六格見偏離四
+ * ## 與 dsh 的關係：連線值是 dsh 的設定欄位，型錄照 `llm-pi-ai`
  *
  * dsh 的 adapter `@deepseek-ai/dsh-llm-deepseek` 的 `Config`（`packages/llm/llm-deepseek/src/config.ts`，
  * `ddefc45`）有 `baseURL`（`:83`）、`maxTokens`（`:86`）、`streamIdleTimeoutMs`（`:89`）、
@@ -67,15 +67,24 @@
  * （`packages/util/timeout/src/index.ts:25`），理由相同：超過 2 147 483 647 的延遲 Node 會當成
  * 1 毫秒，「調得很寬」會變成「立刻逾時」。
  *
- * ## `maxOutputTokens` 與 `modelId` 是綁著的
+ * ## 型錄：輸出上限、窗口、收不收圖、怎麼關推理都跟著模型走（#729）
  *
- * dsh 由型錄裡「模型自己的上限」蓋過設定值（`config.ts:36` 的註解：「a model's own cap and
- * explicit request values win」），**我們沒有型錄**。所以耦合還在：`DEFAULT_LIVE_MODEL_ID` 是用
- * 「吃不吃得下 `DEFAULT_LIVE_MAX_OUTPUT_TOKENS`」當淘汰門檻選出來的，**換其中一個之前要拿另一個
- * 重新確認**——吃不下的模型會每一次呼叫都失敗，沒有任何測試會紅。
+ * dsh 由型錄裡「模型自己的上限」蓋過設定值（`packages/llm/llm-deepseek/src/config.ts:36` 的註解：「a model's own
+ * cap and explicit request values win」）；`llm-pi-ai` 則把型錄寫成設定：每條路由帶 `models` 清單，**整份取代**那條
+ * 路由的型錄，不逐筆合併（`packages/llm/llm-pi-ai/README.md:99`）。我們照 `llm-pi-ai` 的形狀寫成這一列的 `models`
+ * 欄位，形狀與逐欄的差異在 `model-catalog.ts` 的檔頭。
  *
- * **`maxOutputTokens` 的下限 1 是承重的**：`live-model.ts` 的 `isDerivedContextOverflow` 唯一的
- * 前提是我們送出去的輸出上限恆為正數（那樣伺服器回來的負值才只可能是它自己導出來的）。
+ * - **`modelId` 必須在 `models` 裡**，不在就是載入期失敗，訊息指名 id（那一列的名字由 `startupSetting` 加上）。
+ *   換 `modelId` 之前，先確認新那一筆的 `maxTokens` 吃得下：這顆預設模型是拿「吃不吃得下 16384」當淘汰門檻選出來的，
+ *   吃不下的模型會每一次呼叫都失敗，沒有任何測試會紅。
+ * - **`models` 是整份替換。** patch 只想改預設那一筆的 `maxTokens` 也要把整筆（連 `reasoningEfforts` 與 `compat`）
+ *   重述，沒重述的欄位不會回到出貨值。
+ * - **`maxTokens` 的下限 1 是承重的**：`live-model.ts` 的 `isDerivedContextOverflow` 唯一的前提是我們送出去的輸出
+ *   上限恆為正數（那樣伺服器回來的負值才只可能是它自己導出來的）。
+ * - **標題那一顆的輸出上限不看型錄**，看 `thread-title-llm` 那一列（`cli.ts` 的 `titleLlmFor` 明著傳進 `createLiveModel`）。
+ *
+ * **摘要門檻不跟型錄走**：`DEFAULT_SUMMARIZATION` 仍是絕對值 `100_000`，按量過最小那顆的窗口挑；型錄的
+ * `contextWindow` 今天沒有消費者。
  *
  * ## 換 `modelId` 今天碰不到 harness profile 那道檢查
  *
@@ -92,14 +101,19 @@
  * 我們對應的是 chat-completions，但照樣套用：URL 帶帳密就是把 key 寫進設定，而 dsh 自己那一列
  * 的註解說 key 不內嵌。
  *
- * ## 偏離四：關推理的寫法放在連線這一列
+ * ## 偏離四：標題要關推理，由 `createLiveModel` 依用途帶型錄條目的寫法
  *
- * dsh 的 DeepSeek adapter 對 `purpose: 'session-title'` 在**程式裡**關思考（`packages/llm/llm-deepseek/src/serialize.ts:146`，
- * `477b4f4`）——它知道自己後面接的是哪一家的協定；它的連線設定只有「預設開不開思考」（`defaults.thinking`）。
- * **我們的 adapter 是通用的 OpenAI 相容端點**，後面接的模型各有各的關法（chat template 的參數），程式裡寫不出來。
- * 所以退到連線設定：`thinkingOffBody` 放在這一列，因為它跟 `modelId` 一起換；標題程式只表明用途，由
- * `createLiveModel` 決定帶什麼（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。量測在 `live-model.ts` 的
- * `DEFAULT_LIVE_THINKING_OFF_BODY` 檔頭。
+ * 兩半各有 dsh 出處：
+ *
+ * - **「怎麼關推理」放在型錄條目**（`off` 那一級加 `compat.chatTemplateKwargs`）：照 `llm-pi-ai` 的形狀
+ *   （`packages/llm/llm-pi-ai/src/catalog.ts:389-396`、`:600-607`）。寫法跟模型 id 一起換，所以住在同一筆。
+ * - **「標題要關推理」依用途在程式裡決定**：照 dsh 的 DeepSeek adapter 對 `purpose: 'session-title'` 在程式裡關思考
+ *   （`packages/llm/llm-deepseek/src/serialize.ts:146`，`477b4f4`）；`llm-pi-ai` 自己不因用途關推理。標題程式只表明
+ *   用途，由 `createLiveModel` 決定帶什麼（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。
+ *
+ * **偏離的一格**：pi-ai 在非 `off` 的等級底下會把 `thinking.enabled` 解成 `true` 一併送出，我們的主請求不送
+ * `chat_template_kwargs`（今天的送法）。沒有量過兩者等價——這台機器沒有 key，量不了——所以保留今天的送法，見
+ * `model-catalog.ts` 檔頭。量測與寫法在 `live-model.ts` 的 `DEFAULT_LIVE_MODEL_ENTRY`。
  *
  * ## 這一列關不掉
  *
@@ -120,12 +134,13 @@ import type { NexusPlugin, PluginRegistry } from '@nexus/core';
 
 import {
   DEFAULT_LIVE_BASE_URL,
-  DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
   DEFAULT_LIVE_MAX_RETRIES,
+  DEFAULT_LIVE_MODEL_ENTRY,
   DEFAULT_LIVE_MODEL_ID,
-  DEFAULT_LIVE_THINKING_OFF_BODY,
   DEFAULT_LIVE_TIMEOUT_MS,
 } from '../live-model.js';
+import { findModelEntry, modelCatalogSchema } from '../model-catalog.js';
+import type { ModelEntry } from '../model-catalog.js';
 
 /** 這一列在訊息裡叫什麼。 */
 export const LIVE_MODEL_PLUGIN_NAME = 'live-model';
@@ -158,32 +173,57 @@ function isHttpRoot(value: string): boolean {
   );
 }
 
-/** 六格。`strictObject`：多寫一個欄位是打錯字，不是擴充點。 */
-export const liveModelConfigSchema = z.strictObject({
-  /** OpenAI 相容端點的根。 */
-  baseUrl: z
-    .string()
-    .refine(isHttpRoot, '端點要是 http: 或 https: 的網址，不能帶帳密、query 或 fragment')
-    .default(DEFAULT_LIVE_BASE_URL),
-  /** 模型 id。換它之前先讀檔頭「`maxOutputTokens` 與 `modelId` 是綁著的」。 */
-  modelId: z.string().min(1).default(DEFAULT_LIVE_MODEL_ID),
-  /** 每一次呼叫送出去的 `max_tokens`。下限 1 是承重的，見檔頭。 */
-  maxOutputTokens: z.number().int().min(1).default(DEFAULT_LIVE_MAX_OUTPUT_TOKENS),
-  /** 單一請求的逾時（毫秒）。 */
-  timeoutMs: z.number().int().min(1).max(MAX_LIVE_TIMEOUT_MS).default(DEFAULT_LIVE_TIMEOUT_MS),
-  /** 被限流時最多重試幾次。 */
-  maxRetries: z.number().int().min(0).max(MAX_LIVE_RETRIES).default(DEFAULT_LIVE_MAX_RETRIES),
-  /**
-   * 要關掉推理時加進請求 body 的東西，只有標題那種用途會帶（#650）。空物件就是什麼都不加。
-   * 跟 `modelId` 綁著，見檔頭「偏離四」與 `live-model.ts` 的 `DEFAULT_LIVE_THINKING_OFF_BODY`。
-   */
-  thinkingOffBody: z
-    .record(z.string(), z.unknown())
-    .default(() => structuredClone(DEFAULT_LIVE_THINKING_OFF_BODY) as Record<string, unknown>),
-});
+/** 五格。`strictObject`：多寫一個欄位是打錯字，不是擴充點。 */
+export const liveModelConfigSchema = z
+  .strictObject({
+    /** OpenAI 相容端點的根。 */
+    baseUrl: z
+      .string()
+      .refine(isHttpRoot, '端點要是 http: 或 https: 的網址，不能帶帳密、query 或 fragment')
+      .default(DEFAULT_LIVE_BASE_URL),
+    /** 用哪一顆模型。必須是 `models` 裡的一筆，見檔頭「型錄」。 */
+    modelId: z.string().min(1).default(DEFAULT_LIVE_MODEL_ID),
+    /** 模型型錄，**整份取代**，見檔頭「型錄」。省略即出廠那一筆。 */
+    models: modelCatalogSchema.default(() => [structuredClone(DEFAULT_LIVE_MODEL_ENTRY)]),
+    /** 單一請求的逾時（毫秒）。 */
+    timeoutMs: z.number().int().min(1).max(MAX_LIVE_TIMEOUT_MS).default(DEFAULT_LIVE_TIMEOUT_MS),
+    /** 被限流時最多重試幾次。 */
+    maxRetries: z.number().int().min(0).max(MAX_LIVE_RETRIES).default(DEFAULT_LIVE_MAX_RETRIES),
+  })
+  .superRefine((config, context) => {
+    if (findModelEntry(config.models, config.modelId) !== undefined) return;
+    const known = config.models.map((entry) => entry.id).join('、');
+    context.addIssue({
+      code: 'custom',
+      path: ['modelId'],
+      message: `模型 "${config.modelId}" 不在 models 型錄裡（型錄有：${known === '' ? '（空的）' : known}）`,
+    });
+  });
 
 /** 驗過的設定。 */
 export type LiveModelConfig = z.infer<typeof liveModelConfigSchema>;
+
+/**
+ * eval 與 spike 用的設定：出廠那一組，只換模型 id（`eval/*` 逐階傳各道階梯的 id，見 `eval/tiers.ts`）。
+ *
+ * 那些 id 多半不在出廠型錄裡，所以型錄裡沒有的就**合成一筆**：輸出上限沿用出廠那一筆（比較的是模型、不是設定），
+ * 窗口取量過最小那顆的下限 131,007。這一筆只給 eval 用，產品路徑不走這裡。
+ *
+ * @param modelId - 要比的模型 id。
+ * @returns 解好的設定。
+ */
+export function liveModelConfigForModel(modelId: string): LiveModelConfig {
+  const defaults = liveModelConfigSchema.parse({});
+  if (findModelEntry(defaults.models, modelId) !== undefined) {
+    return liveModelConfigSchema.parse({ modelId });
+  }
+  const synthesized: ModelEntry = {
+    id: modelId,
+    contextWindow: 131_007,
+    maxTokens: DEFAULT_LIVE_MODEL_ENTRY.maxTokens,
+  };
+  return liveModelConfigSchema.parse({ modelId, models: [...defaults.models, synthesized] });
+}
 
 /** 只講設定的那一顆，見檔頭。 */
 export const liveModelPlugin: NexusPlugin<LiveModelConfig> = {

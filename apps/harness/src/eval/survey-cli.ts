@@ -18,7 +18,7 @@
 
 import { installLaunchProxy } from '../http-proxy-boot.js';
 import { createLiveModel, loadLiveLaunchEnv, DEFAULT_LIVE_MAX_RETRIES } from '../live-model.js';
-import { liveModelConfigSchema } from '../settings/live-model.js';
+import { liveModelConfigForModel } from '../settings/live-model.js';
 import { parseCases, parseModels, parseSamples } from './cli-args.js';
 import {
   compareTiers,
@@ -167,7 +167,7 @@ async function main(argv: readonly string[]): Promise<void> {
     // **只換模型 id**（#545）：其餘四格是 schema 預設，不跟任何一台部署的設定走——量的是出貨
     // 那一組設定底下的模型。見 `settings/live-model.ts` 的「eval 不跟這一列走」。
     createModel: (modelId) =>
-      createLiveModel(liveModelConfigSchema.parse({ modelId }), undefined, credentials),
+      createLiveModel(liveModelConfigForModel(modelId), undefined, credentials),
     samples,
     cases,
     onOutcome: printOutcome,

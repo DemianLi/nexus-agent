@@ -23,7 +23,7 @@ import {
   withStreamIdleTimeout,
 } from './live-model.js';
 import { MEASURED_MODELS } from './eval/tiers.js';
-import { liveModelConfigSchema } from './settings/live-model.js';
+import { liveModelConfigForModel, liveModelConfigSchema } from './settings/live-model.js';
 
 /** schema 預設的那一組（#545）。`createLiveModel` 沒有預設參數，要建預設那顆就明著傳這個。 */
 const DEFAULTS = liveModelConfigSchema.parse({});
@@ -72,7 +72,7 @@ describe('真實供應商的 key 處理', () => {
   it('modelId 傳得進去，eval:compare 才換得動模型', () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
     for (const tier of MEASURED_MODELS) {
-      const model = createLiveModel({ ...DEFAULTS, modelId: tier.modelId });
+      const model = createLiveModel(liveModelConfigForModel(tier.modelId));
       expect(model.model).toBe(tier.modelId);
       // **換掉的只有 model。** 端點與取樣設定跟著變的話，比出來的差異就不只是模型。
       expect(model.clientConfig.baseURL).toBe(DEFAULT_LIVE_BASE_URL);
@@ -96,7 +96,7 @@ describe('真實供應商的 key 處理', () => {
   it('逾時有上限 —— #57 的失敗模式是永遠不回來，沒有上限就是整輪比較沒有結果', () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
     expect(createLiveModel(DEFAULTS).timeout).toBe(DEFAULT_LIVE_TIMEOUT_MS);
-    expect(createLiveModel({ ...DEFAULTS, modelId: MEASURED_MODELS[0]!.modelId }).timeout).toBe(
+    expect(createLiveModel(liveModelConfigForModel(MEASURED_MODELS[0]!.modelId)).timeout).toBe(
       DEFAULT_LIVE_TIMEOUT_MS,
     );
   });

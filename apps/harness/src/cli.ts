@@ -1030,11 +1030,9 @@ function titleLlmFor(
   credentials: CredentialService | undefined,
 ): AttachSessionTitleLlm {
   return createSessionTitleLlm({
-    model: createLiveModel(
-      { ...liveModel, maxOutputTokens: config.maxOutputTokens },
-      'session-title',
-      credentials,
-    ),
+    model: createLiveModel(liveModel, 'session-title', credentials, {
+      maxOutputTokens: config.maxOutputTokens,
+    }),
     route: { provider: liveModel.baseUrl, model: liveModel.modelId },
     config,
     limits,
