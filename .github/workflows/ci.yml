@@ -20,12 +20,13 @@ permissions:
 
 # 結構：一個 plan job 算出範圍，各項檢查平行跑，最後由名為 `gate` 的彙總 job 收斂成單一 required check。
 #
-#   plan ─┬─ lint ────────┐
-#         ├─ typecheck ───┤
+#   plan ─┬─ static ──────┐   format、lint、web build
+#         ├─ typecheck ───┤   兩批（matrix）
 #         ├─ test-packages┤
 #         ├─ test-web ────┼─► gate   ← ruleset 綁的 required status check，名稱永遠不要改
-#         ├─ test-harness ┤
-#         └─ build-web ───┘
+#         └─ test-harness ┘   全跑時兩片、選擇性時一片
+#
+# job 數是有代價的：免費額度同時只跑 20 個 job，一輪 10 個以內，兩張 PR 並行才不會排隊。
 #
 # 新增檢查：往現有 job 加 step，或新增 job 並把它列進 gate 的 needs 與判斷（不列進去的 job 掛了 gate 也不會紅）。
 #
@@ -129,8 +130,12 @@ jobs:
   # lint 用 pnpm -r（遞迴進 workspace 套件），不要用 --if-present：
   # --if-present 在 script 不存在時會回綠燈，gate 會變成什麼都沒掃的橡皮圖章。
   # 若所有套件都沒有該 script，pnpm -r 會直接失敗，逼你補上。
-  lint:
-    name: lint
+  #
+  # build 併在這一個 job：typecheck 過不代表 build 過（vite plugin、路徑 alias、verbatimModuleSyntax
+  # 下的 import 寫法都可能 tsc 綠燈但打包失敗），但它自己只要幾秒，獨立成 job 只是多付一次安裝。
+  # 其他套件的 `build` 就是 `tsc --noEmit`，與 typecheck 重複，所以只 build 真的會打包的 web。
+  static:
+    name: static
     needs: plan
     if: needs.plan.outputs.ts == 'true'
     runs-on: ubuntu-latest
@@ -141,9 +146,11 @@ jobs:
         run: pnpm run format:check
       - name: Lint
         run: pnpm -r run lint
+      - name: Build
+        run: pnpm --filter @nexus/web run build
 
-  # 22 個套件逐一啟動 tsc 是冷 runner 上最慢的部分，切成三批平行。
-  # 切法必須互補：packages-b 是明列的一批，packages-a 是「packages/ 全部扣掉 b」，
+  # 22 個套件逐一啟動 tsc 是冷 runner 上最慢的部分，切成兩批平行。
+  # 切法必須互補：`b` 是明列的一批，`a` 是「packages/ 全部扣掉 b」，
   # 這樣新增的套件不管叫什麼名字都一定落在其中一批，不會有套件沒被型別檢查。
   typecheck:
     name: typecheck (${{ matrix.scope }})
@@ -154,12 +161,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - scope: apps
-            filters: '--filter=./apps/*'
-          - scope: packages-a
+          - scope: a
             filters: '--filter=./packages/* --filter=!./packages/nexus-plugin-[n-z]*'
-          - scope: packages-b
-            filters: '--filter=./packages/nexus-plugin-[n-z]*'
+          - scope: b
+            filters: '--filter=./apps/* --filter=./packages/nexus-plugin-[n-z]*'
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -249,20 +254,6 @@ jobs:
           cd apps/harness
           pnpm exec vitest run --shard="$SHARD" $(cat "$RUNNER_TEMP/harness-files.txt")
 
-  # typecheck 過不代表 build 過：vite plugin、路徑 alias、verbatimModuleSyntax
-  # 下的 import 寫法都可能 tsc 綠燈但打包失敗。其他套件的 `build` 就是 `tsc --noEmit`，
-  # 與 typecheck 重複，所以只 build 真的會打包的 web。
-  build-web:
-    name: build-web
-    needs: plan
-    if: needs.plan.outputs.ts == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup
-      - name: Build
-        run: pnpm --filter @nexus/web run build
-
   # 這個 job 的名稱就是 ruleset 綁定的 required status check，永遠不要改。
   #
   # GitHub 把 required check 的 skipped 當成通過，而上游失敗時下游預設是被 skip 而不是變紅，
@@ -272,7 +263,7 @@ jobs:
   #   - 只有 plan 明說「不用掃」時，其餘才允許是 skipped。
   gate:
     name: gate
-    needs: [plan, lint, typecheck, test-packages, test-web, test-harness, build-web]
+    needs: [plan, static, typecheck, test-packages, test-web, test-harness]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -281,12 +272,11 @@ jobs:
           PLAN: ${{ needs.plan.result }}
           TS: ${{ needs.plan.outputs.ts }}
           PKG_FILTERS: ${{ needs.plan.outputs.pkg_filters }}
-          LINT: ${{ needs.lint.result }}
+          STATIC: ${{ needs.static.result }}
           TYPECHECK: ${{ needs.typecheck.result }}
           TEST_PACKAGES: ${{ needs.test-packages.result }}
           TEST_WEB: ${{ needs.test-web.result }}
           TEST_HARNESS: ${{ needs.test-harness.result }}
-          BUILD_WEB: ${{ needs.build-web.result }}
           CHANGED_COUNT: ${{ needs.plan.outputs.changed_count }}
           HARNESS_MODE: ${{ needs.plan.outputs.harness_mode }}
         run: |
@@ -300,12 +290,11 @@ jobs:
             echo "| job | 結果 |"
             echo "| --- | --- |"
             echo "| plan | $PLAN |"
-            echo "| lint | $LINT |"
+            echo "| static | $STATIC |"
             echo "| typecheck | $TYPECHECK |"
             echo "| test-packages | $TEST_PACKAGES |"
             echo "| test-web | $TEST_WEB |"
             echo "| test-harness | $TEST_HARNESS |"
-            echo "| build-web | $BUILD_WEB |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           fail() { echo "::error::$1"; exit 1; }
@@ -313,7 +302,7 @@ jobs:
           [ "$PLAN" = "success" ] || fail "plan 的結果是 '$PLAN'，不是 success；其餘 job 因此不可信。"
 
           if [ "$TS" = "true" ]; then
-            for pair in "lint=$LINT" "typecheck=$TYPECHECK" "test-web=$TEST_WEB" "test-harness=$TEST_HARNESS" "build-web=$BUILD_WEB"; do
+            for pair in "static=$STATIC" "typecheck=$TYPECHECK" "test-web=$TEST_WEB" "test-harness=$TEST_HARNESS"; do
               [ "${pair#*=}" = "success" ] || fail "${pair%%=*} 的結果是 '${pair#*=}'，需要 success。"
             done
             if [ -n "$PKG_FILTERS" ]; then
@@ -323,7 +312,7 @@ jobs:
             fi
           elif [ "$TS" = "false" ]; then
             echo "本次異動未觸及 TypeScript 相關檔案，略過。"
-            for pair in "lint=$LINT" "typecheck=$TYPECHECK" "test-packages=$TEST_PACKAGES" "test-web=$TEST_WEB" "test-harness=$TEST_HARNESS" "build-web=$BUILD_WEB"; do
+            for pair in "static=$STATIC" "typecheck=$TYPECHECK" "test-packages=$TEST_PACKAGES" "test-web=$TEST_WEB" "test-harness=$TEST_HARNESS"; do
               [ "${pair#*=}" = "skipped" ] || fail "不需要掃描，${pair%%=*} 卻是 '${pair#*=}'。"
             done
           else
