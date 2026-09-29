@@ -42,7 +42,7 @@ FULL_RES = [
         r'^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|\.prettierignore|\.prettierrc.*|prettier\.config\..*)$',
         r'^(eslint\.config\..*|tsconfig.*\.json|vitest\..*)$',
         # CI 自己：改了它就該用它驗一次完整的。
-        r'^\.github/(workflows|scripts)/',
+        r'^\.github/(workflows-EXPERIMENT|scripts-EXPERIMENT)/',
         # 測試「讀」而不是 import 的檔：import 圖看不到它們（見 ci.yml 的說明）。
         r'^docs/operations\.md$',
         r'^apps/harness/(cordis\.yml|package\.json|vitest\.config\..*|tsconfig.*\.json|eslint\.config\..*)$',
