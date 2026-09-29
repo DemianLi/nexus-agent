@@ -140,12 +140,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
-      - name: Format
-        run: pnpm run format:check
-      - name: Lint
-        run: pnpm -r run lint
-      - name: Build
-        run: pnpm --filter @nexus/web run build
+      # 三件事互不依賴、在四核 runner 上同時跑，各自的輸出收進檔案、跑完依序印成折疊群組；任何一件失敗整個 step 就紅。
+      - name: Format、Lint、Build
+        run: |
+          run() { local name="$1"; shift; "$@" > "$RUNNER_TEMP/$name.log" 2>&1; echo $? > "$RUNNER_TEMP/$name.rc"; }
+          run format pnpm run format:check &
+          run lint pnpm -r run lint &
+          run build pnpm --filter @nexus/web run build &
+          wait
+          rc=0
+          for name in format lint build; do
+            echo "::group::$name"; cat "$RUNNER_TEMP/$name.log"; echo "::endgroup::"
+            [ "$(cat "$RUNNER_TEMP/$name.rc")" = "0" ] || { echo "::error::$name 失敗"; rc=1; }
+          done
+          exit $rc
 
   # 22 個套件逐一啟動 tsc 是冷 runner 上最慢的部分，切成兩批平行。
   # 切法必須互補：`b` 是明列的一批，`a` 是「packages/ 全部扣掉 b」，
