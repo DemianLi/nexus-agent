@@ -26,6 +26,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BROWSER_SESSION_SECRET_FILE } from './browser-session-secret.js';
 import { createCliAgent, parseCliArgs, runCli } from './cli.js';
+import { CREDENTIALS_FILE } from './credentials.js';
 import { serveClient, foldTurn } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { LIVE_API_KEY_ENV } from './live-model.js';
@@ -397,6 +398,57 @@ describe('serve 在啟動時就把清單組過一次', () => {
     });
 
     expect(process.env[LIVE_API_KEY_ENV]).toBe('nvapi-from-home-env');
+  });
+
+  /**
+   * **受管憑證檔走真的入口**（#730 B）：key 只放在 harness home 的受管檔，`--live` 起得來，
+   * 而且值**不進**行程的環境變數 —— 這是受管檔存在的意義。
+   */
+  it('`--live`：key 只在受管憑證檔也起得來，且不進 process.env', async () => {
+    const home = privateHome();
+    const cwd = privateHome();
+    const file = join(home, CREDENTIALS_FILE);
+    writeFileSync(file, `version: 1\nrefs:\n  ${LIVE_API_KEY_ENV}: nvapi-only-in-managed-file\n`, {
+      mode: 0o600,
+    });
+    chmodSync(file, 0o600);
+    vi.stubEnv(LIVE_API_KEY_ENV, undefined);
+    delete process.env[LIVE_API_KEY_ENV];
+
+    running = await runServe({
+      argv: ['--port', '0', '--live'],
+      log: () => undefined,
+      env: { [HARNESS_HOME_ENV]: home },
+      cwd,
+    });
+
+    expect(process.env[LIVE_API_KEY_ENV]).toBeUndefined();
+  });
+
+  /** 權限放太寬：起動就擋，訊息帶 `chmod 600` 與路徑，密鑰檔還沒建。對照：改成 0600 就起得來。 */
+  it('`--live`：受管憑證檔 0644：起不來，講 chmod 600；改成 0600 起得來', async () => {
+    const home = privateHome();
+    const cwd = privateHome();
+    const file = join(home, CREDENTIALS_FILE);
+    writeFileSync(file, `version: 1\nrefs:\n  ${LIVE_API_KEY_ENV}: nvapi-only-in-managed-file\n`);
+    chmodSync(file, 0o644);
+    vi.stubEnv(LIVE_API_KEY_ENV, undefined);
+    delete process.env[LIVE_API_KEY_ENV];
+    const start = () =>
+      runServe({
+        argv: ['--port', '0', '--live'],
+        log: () => undefined,
+        env: { [HARNESS_HOME_ENV]: home },
+        cwd,
+      });
+
+    const failure = start();
+    await expect(failure).rejects.toThrow(`chmod 600 ${file}`);
+    expect(existsSync(join(home, BROWSER_SESSION_SECRET_FILE))).toBe(false);
+
+    chmodSync(file, 0o600);
+    running = await start();
+    expect(existsSync(join(home, BROWSER_SESSION_SECRET_FILE))).toBe(true);
   });
 
   /** 目前資料夾那份 `.env` 想改行程怎麼起：server 起來之前就失敗，訊息指名檔案與變數，密鑰檔也還沒建。 */

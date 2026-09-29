@@ -137,7 +137,7 @@ async function main(argv: readonly string[]): Promise<void> {
   const samples = parseSamples(argv);
   const cases = parseCases(argv);
   const models = parseModels(argv, SURVEY_MODELS);
-  loadLiveLaunchEnv();
+  const { credentials } = loadLiveLaunchEnv();
 
   // 「難題」是題目的性質不是這一輪的性質，所以先跟這一輪實際要跑的取交集 ——
   // `--cases` 只點了簡單題時，難題那一欄整欄是 `—`，而那是對的。
@@ -163,7 +163,8 @@ async function main(argv: readonly string[]): Promise<void> {
   const reports = await compareTiers<SurveyModel>(models, {
     // **只換模型 id**（#545）：其餘四格是 schema 預設，不跟任何一台部署的設定走——量的是出貨
     // 那一組設定底下的模型。見 `settings/live-model.ts` 的「eval 不跟這一列走」。
-    createModel: (modelId) => createLiveModel(liveModelConfigSchema.parse({ modelId })),
+    createModel: (modelId) =>
+      createLiveModel(liveModelConfigSchema.parse({ modelId }), undefined, credentials),
     samples,
     cases,
     onOutcome: printOutcome,

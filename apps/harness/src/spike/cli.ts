@@ -22,9 +22,9 @@ async function main(): Promise<void> {
   const prompt =
     args.filter((arg) => arg !== '--live').join(' ') || '記錄 Phase 0 的結論並寫成檔案。';
 
-  if (live) loadLiveLaunchEnv();
-
-  const { agent } = live ? await createLiveSpikeAgent() : await createSpikeAgent();
+  const { agent } = live
+    ? await createLiveSpikeAgent(loadLiveLaunchEnv().credentials)
+    : await createSpikeAgent();
 
   console.log(`模型：${live ? DEFAULT_LIVE_MODEL_ID : '假模型（ScriptedChatModel）'}`);
   console.log(`> ${prompt}\n`);

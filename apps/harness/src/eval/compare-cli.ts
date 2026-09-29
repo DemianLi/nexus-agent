@@ -19,6 +19,7 @@
  * **這裡不設 `LANGSMITH_TRACING`，也不要在跑它的 shell 裡設。** 這支跑的是真的 agent，
  * 基準任務的題目與工具參數會跟著 trace 一起出境（見 `eval.test.ts` 檔頭量到的第二個寄件人）。
  */
+import type { CredentialService } from '../credentials.js';
 import { createLiveModel, loadLiveLaunchEnv, DEFAULT_LIVE_MAX_RETRIES } from '../live-model.js';
 import { liveModelConfigSchema } from '../settings/live-model.js';
 import {
@@ -129,11 +130,13 @@ async function runAll(
   models: readonly MeasuredModel[],
   samples: number,
   cases: readonly BenchmarkCase[],
+  credentials: CredentialService,
 ): Promise<void> {
   const reports = await compareTiers(models, {
     // **只換模型 id**（#545）：其餘四格是 schema 預設，不跟任何一台部署的設定走——量的是出貨
     // 那一組設定底下的模型。見 `settings/live-model.ts` 的「eval 不跟這一列走」。
-    createModel: (modelId) => createLiveModel(liveModelConfigSchema.parse({ modelId })),
+    createModel: (modelId) =>
+      createLiveModel(liveModelConfigSchema.parse({ modelId }), undefined, credentials),
     samples,
     cases,
     onOutcome: printOutcome,
@@ -150,7 +153,7 @@ async function main(argv: readonly string[]): Promise<void> {
   const samples = parseSamples(argv);
   const cases = parseCases(argv);
   const models = parseModels(argv, MEASURED_MODELS);
-  loadLiveLaunchEnv();
+  const { credentials } = loadLiveLaunchEnv();
 
   const scope = cases.length === BENCHMARK.length ? '' : `（${cases.map((c) => c.id).join('、')}）`;
   const who =
@@ -165,7 +168,7 @@ async function main(argv: readonly string[]): Promise<void> {
       `時鐘 ${EVAL_DEADLINE_MS / 1000} 秒。超過就記成 budget，不是分數。`,
   );
 
-  await runAll(models, samples, cases);
+  await runAll(models, samples, cases, credentials);
 
   if (samples === 1) {
     console.log('\n注意：每題只取樣一次，取樣是隨機的 —— 這組數字是指示性的，不是定論。');

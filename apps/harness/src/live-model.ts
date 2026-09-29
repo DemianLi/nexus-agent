@@ -2,7 +2,9 @@ import { ContextOverflowError } from '@langchain/core/errors';
 import { ChatOpenAI } from '@langchain/openai';
 
 import { resolveHarnessHome } from './harness-home.js';
-import { loadLaunchEnv } from './launch-env.js';
+import { ambientCredentials, createCredentialService } from './credentials.js';
+import type { CredentialService } from './credentials.js';
+import { legacyEnvMovedError, loadLaunchEnv } from './launch-env.js';
 import type { LaunchEnvironment } from './launch-env.js';
 import type { LiveModelConfig } from './settings/live-model.js';
 
@@ -838,7 +840,7 @@ export type LiveModelPurpose = 'session-title';
 /**
  * 真實供應商的 model。
  *
- * key **只從環境變數讀**，缺少時直接失敗，沒有預設值也不 fallback
+ * key **每次請求前才向憑證服務取**（`credentials.ts`），缺少時直接失敗，沒有預設值也不 fallback
  * （[docs/standards.md](../../../docs/standards.md) 的秘密處理規則）。
  *
  * @param config - 六個連線值（`settings/live-model.ts`）。**必填，沒有預設參數**（#545）：
@@ -848,24 +850,30 @@ export type LiveModelPurpose = 'session-title';
  *   逾時、金鑰來源完全相同**，否則比的不是模型是設定。
  * @param purpose - 這一顆拿來做什麼，見 {@link LiveModelPurpose}。一般的對話請求不帶。
  */
-export function createLiveModel(config: LiveModelConfig, purpose?: LiveModelPurpose): ChatOpenAI {
-  const apiKey = process.env[LIVE_API_KEY_ENV];
-  if (!apiKey) {
-    throw new Error(
-      `缺少環境變數 ${LIVE_API_KEY_ENV}。真實供應商的 key 只從環境變數讀，` +
-        '沒有預設值也不 fallback。在 shell 裡設好，或寫進目前資料夾的 .env（該檔已被 .gitignore 排除）' +
-        '或 harness home 的 .env（預設 ~/.nexus-agent/.env，不跟著專案走，建議放這裡）；欄位名見 .env.example。',
-    );
-  }
+export function createLiveModel(
+  config: LiveModelConfig,
+  purpose?: LiveModelPurpose,
+  credentials: CredentialService = ambientCredentials(),
+): ChatOpenAI {
+  // **建構時先問一次**：缺 key 在組裝當下就失敗，不等到第一個請求。這是跟 dsh 的時刻差異——dsh 只在請求當下才拋
+  // （`llm-deepseek-api-key`），我們兩個時刻都拋：組裝時的那一次讓 `--live` 起不來的原因在起動時就講，
+  // 請求時的那一次負責受管檔在兩個請求之間被拿掉的情況。
+  if (credentials.resolve(LIVE_API_KEY_ENV) === undefined) throw new Error(missingKeyMessage());
 
   return new ChatOpenAI({
-    apiKey,
     model: config.modelId,
     // `fetch` 疊三層：最內層是 #592（送出前換掉空的助手內容），中間是 #516（串流內回報的錯誤
     // 翻成 HTTP 錯誤回應，才進得了重試射程），外層是 #521（第一則事件之後的閒置逾時）。外層收到的
     // 是中間那層嗅完第一則事件的那份回應。
     configuration: {
       baseURL: config.baseUrl,
+      // **每次請求前才解析**（openai 的 `apiKey` 收函式，實測經過 `bindTools`／`withConfig` 之後還在，
+      // 見 `live-model.test.ts`）。所以受管檔改了、下一個請求就用新的，也不必把 key 放進行程的環境變數。
+      apiKey: async () => {
+        const hit = credentials.resolve(LIVE_API_KEY_ENV);
+        if (hit === undefined) throw new Error(missingKeyMessage());
+        return hit.value;
+      },
       fetch: withStreamIdleTimeout(
         config.timeoutMs,
         withInbandStreamErrors(withEmptyAssistantContent()),
@@ -961,23 +969,46 @@ export function classifyFailedAttempt(error: unknown): void {
   throw error;
 }
 
+/** 缺 key 的失敗訊息：指名缺哪一個、去哪裡放。 */
+function missingKeyMessage(): string {
+  return (
+    `缺少環境變數 ${LIVE_API_KEY_ENV}。真實供應商的 key 沒有預設值也不 fallback，` +
+    '依序從這幾處找：啟動環境、harness home 的受管憑證檔（~/.nexus-agent/.credentials.yaml，chmod 600）、' +
+    '目前資料夾的 .env、harness home 的 .env（~/.nexus-agent/.env）；欄位名見 .env.example。'
+  );
+}
+
+/** {@link loadLiveLaunchEnv} 的結果。 */
+export interface LiveLaunch {
+  readonly launchEnv: LaunchEnvironment;
+  /** 這次啟動的憑證服務：模型從它取 key，每次請求前解析。 */
+  readonly credentials: CredentialService;
+}
+
 /**
- * 真模型路徑的啟動環境：載入兩層 `.env`（{@link loadLaunchEnv}），並在需要的 key 沒有值、
- * 而舊位置（程式碼資料夾根目錄）的 `.env` 還在時直接失敗、指名搬去哪裡。
+ * 真模型路徑的啟動：載入兩層 `.env`（{@link loadLaunchEnv}）、建憑證服務並**完整檢查受管檔**
+ * （權限或格式不對就起不來）。key 都找不到、而舊位置（程式碼資料夾根目錄）的 `.env` 還在時，
+ * 直接失敗、指名搬去哪裡。
  *
- * **這不是 fallback。** key 一律從環境變數讀（[docs/standards.md](../../../docs/standards.md)），
- * `.env` 只是填充環境變數的方式；缺的變數留給 {@link createLiveModel} 當場失敗並指名缺哪一個。
- * 已經設好的環境變數不會被檔案蓋掉。
+ * **這不是 fallback。** 每一層都是明說過的來源（順序見 `credentials.ts`）；缺的變數留給
+ * {@link createLiveModel} 當場失敗並指名缺哪一個。已經設好的環境變數不會被檔案蓋掉。
  *
  * @param options - `cwd` 是「專案」那一層 `.env` 所在（省略即 `process.cwd()`）；
- *   `env` 只用來解 harness home（省略即 `process.env`）。**值一律寫進 `process.env`**，因為模型從那裡讀。
+ *   `env` 只用來解 harness home（省略即 `process.env`）。兩層 `.env` 的值仍寫進 `process.env`（同 dsh）；
+ *   受管檔的值不會。
+ * @throws 壞的 `.env`、壞的受管檔、或舊位置搬家訊息。
  */
 export function loadLiveLaunchEnv(
   options: { readonly cwd?: string; readonly env?: NodeJS.ProcessEnv } = {},
-): LaunchEnvironment {
-  return loadLaunchEnv({
-    cwd: options.cwd ?? process.cwd(),
-    home: resolveHarnessHome(options.env ?? process.env),
-    needs: LIVE_API_KEY_ENV,
-  });
+): LiveLaunch {
+  const cwd = options.cwd ?? process.cwd();
+  const home = resolveHarnessHome(options.env ?? process.env);
+  const launchEnv = loadLaunchEnv({ cwd, home });
+  const credentials = createCredentialService({ home, launchEnv });
+  credentials.check();
+  if (credentials.resolve(LIVE_API_KEY_ENV) === undefined) {
+    const moved = legacyEnvMovedError(launchEnv, LIVE_API_KEY_ENV, { cwd, home });
+    if (moved !== undefined) throw moved;
+  }
+  return { launchEnv, credentials };
 }

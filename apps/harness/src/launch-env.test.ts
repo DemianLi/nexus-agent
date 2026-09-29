@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { loadLaunchEnv } from './launch-env.js';
+import { legacyEnvMovedError, loadLaunchEnv } from './launch-env.js';
 
 let root: string;
 let cwd: string;
@@ -172,28 +172,25 @@ describe('舊位置（程式碼資料夾根目錄的 .env）', () => {
   }
 
   function withLegacy(file: string, target: NodeJS.ProcessEnv = {}) {
-    return loadLaunchEnv({
-      cwd,
-      home,
-      target,
-      warn: () => undefined,
-      needs: 'NVIDIA_API_KEY',
-      legacyFile: file,
-    });
+    return loadLaunchEnv({ cwd, home, target, warn: () => undefined, legacyFile: file });
   }
 
-  /** 從 `apps/harness` 啟動、key 只在舊位置：失敗，指名舊路徑與要搬去哪裡；舊檔裡的 key 沒有被讀到。 */
-  it('key 只在舊位置：失敗，訊息指名舊路徑、新位置與變數名；舊檔沒被讀', () => {
+  /** 從 `apps/harness` 啟動、key 只在舊位置：舊檔沒被讀；缺 key 時給搬家訊息，指名舊路徑、新位置與變數名。 */
+  it('key 只在舊位置：舊檔沒被讀，搬家訊息指名舊路徑、新位置與變數名', () => {
     const file = legacy();
     const target: NodeJS.ProcessEnv = {};
 
-    expect(() => withLegacy(file, target)).toThrow(file);
-    expect(() => withLegacy(file, target)).toThrow(resolve(home, '.env'));
-    expect(() => withLegacy(file, target)).toThrow('NVIDIA_API_KEY');
+    const snapshot = withLegacy(file, target);
+    const moved = legacyEnvMovedError(snapshot, 'NVIDIA_API_KEY', { cwd, home });
+
     expect(target).toEqual({});
+    expect(snapshot.legacyEnvFile).toBe(file);
+    expect(moved?.message).toContain(file);
+    expect(moved?.message).toContain(resolve(home, '.env'));
+    expect(moved?.message).toContain('NVIDIA_API_KEY');
   });
 
-  it('新位置有 key：舊檔還在也不擋，而且舊檔不被讀', () => {
+  it('新位置有 key：舊檔還在，舊檔不被讀', () => {
     const file = legacy('NVIDIA_API_KEY=legacy-key\nOTHER=x\n');
     env(home, 'NVIDIA_API_KEY=new-key\n');
     const target: NodeJS.ProcessEnv = {};
@@ -212,9 +209,12 @@ describe('舊位置（程式碼資料夾根目錄的 .env）', () => {
 
     expect(target.NVIDIA_API_KEY).toBe('k');
     expect(snapshot.legacyEnvFile).toBeUndefined();
+    expect(legacyEnvMovedError(snapshot, 'NVIDIA_API_KEY', { cwd, home })).toBeUndefined();
   });
 
-  it('沒有舊檔：缺值不在這裡拋（留給模型建構當場講缺哪一個）', () => {
-    expect(withLegacy(join(root, '不存在', '.env')).legacyEnvFile).toBeUndefined();
+  it('沒有舊檔：沒有搬家訊息（缺值留給模型建構當場講缺哪一個）', () => {
+    const snapshot = withLegacy(join(root, '不存在', '.env'));
+    expect(snapshot.legacyEnvFile).toBeUndefined();
+    expect(legacyEnvMovedError(snapshot, 'X', { cwd, home })).toBeUndefined();
   });
 });

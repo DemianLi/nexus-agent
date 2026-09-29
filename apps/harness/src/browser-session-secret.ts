@@ -17,7 +17,7 @@
  *     `browser-auth.ts` 的 `storedSecret`／`canonicalSecret`；
  *   - 認不得的記錄明確失敗，**不覆寫**——同一個出處；
  *   - 讀之前先確認只有擁有者讀得到，group 或 other 有任何一個權限位元就拒絕啟動——
- *     `credentials-local` 的 `assertOwnerOnly`；Windows 沒有 POSIX mode 可看，跳過而不假裝；
+ *     `credentials-local` 的 `assertOwnerOnly`（抽成 `owner-only.ts`，受管憑證檔共用，#730）；Windows 沒有 POSIX mode 可看，跳過而不假裝；
  *   - 目錄 `0700`、檔案 `0600`——`credentials-local` 的 `writeFileAtomic(…, { mode: 0o600, dirMode: 0o700 })`；
  *   - 兩個行程同時第一次啟動不能互相蓋掉：dsh 在跨行程寫入鎖裡跑 `modifyRecord`；這裡只有一筆記錄，
  *     改用「先寫暫存檔、再 `link` 到正式路徑」——`link` 在目標已存在時失敗，所以先寫的贏，後到的讀
@@ -29,14 +29,15 @@ import { randomBytes } from 'node:crypto';
 import { link, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { assertOwnerOnlyMode, PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from './owner-only.js';
+
 /** 密鑰檔在 harness home 底下的名字。 */
 export const BROWSER_SESSION_SECRET_FILE = 'browser-session.json';
 
 const SECRET_BYTES = 32;
 const RECORD_VERSION = 1;
-const GROUP_OTHER_BITS = 0o077;
-const DIR_MODE = 0o700;
-const FILE_MODE = 0o600;
+const DIR_MODE = PRIVATE_DIR_MODE;
+const FILE_MODE = PRIVATE_FILE_MODE;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]*$/;
 
 function encodeBase64Url(value: Uint8Array): string {
@@ -72,12 +73,7 @@ async function readSecretFile(file: string): Promise<Buffer | undefined> {
     if (isMissing(error)) return undefined;
     throw error;
   }
-  if (process.platform !== 'win32' && (mode & GROUP_OTHER_BITS) !== 0) {
-    throw new Error(
-      `瀏覽器會話密鑰檔 ${file} 其他使用者讀得到（mode ${(mode & 0o777).toString(8)}）；` +
-        `先跑 chmod 600 ${file} 再啟動。`,
-    );
-  }
+  assertOwnerOnlyMode('瀏覽器會話密鑰檔', file, mode);
   const text = await readFile(file, 'utf8');
   let parsed: unknown;
   try {
