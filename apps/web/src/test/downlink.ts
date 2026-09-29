@@ -22,6 +22,8 @@ export function fakeDownlink() {
   const queues = new Map<string, WireQueuedInput[]>();
   /** 排著的插話（`next-step`，#710）。harness 每一顆 `inbox` 都帶這一條，空的也帶。 */
   const steers = new Map<string, WireQueuedInput[]>();
+  /** 不收插話的那幾條 thread。 */
+  const closedSteer = new Set<string>();
   let seq = 1_000_000;
   let runs = 0;
 
@@ -121,6 +123,11 @@ export function fakeDownlink() {
     return id;
   }
 
+  /** 這一輪不收插話了（跑完、按了停止、正在收尾）：之後的 `steer` 回 `steer_unavailable`。 */
+  function closeSteer(threadId: string): void {
+    closedSteer.add(threadId);
+  }
+
   /** 下一次叫模型之前領走整條插話：清單清空，同一顆帶 `claimedNextStep`（照 `thread-pump.ts`）。 */
   function claimSteers(threadId: string): void {
     const claimed = (steers.get(threadId) ?? []).map(({ id, text }) => ({ id, text }));
@@ -140,10 +147,19 @@ export function fakeDownlink() {
       return { type: 'error', id: 4, error: QUEUE_ITEM_NOT_FOUND, message: '這一件已經不在隊裡' };
     }
     const { action } = params;
-    // 把排著的一件改成插話：網頁還送不出去（`WireClient.queueUpdate` 的參數型別還沒放寬，#710 拆開的第二步），
-    // 這裡先照伺服器「不收」的那一種回，接上的那一張再照 harness 的條件做。
+    // 把排著的一件改成插話（#710）：這一輪還收（預設收；`closeSteer` 關掉）就從 `next-turn` 拿掉、接到 `next-step` 尾巴，
+    // 不收回 `steer_unavailable`，那一件照舊排著。照 harness 的 `queue.update`。
     if (action.kind === 'steer') {
-      return { type: 'error', id: 4, error: STEER_UNAVAILABLE, message: '這一輪不收插話了' };
+      if (closedSteer.has(threadId)) {
+        return { type: 'error', id: 4, error: STEER_UNAVAILABLE, message: '這一輪不收插話了' };
+      }
+      const moved = queue.find((item) => item.id === params.item_id)!;
+      const rest = queue.filter((item) => item.id !== params.item_id);
+      const nextStep = [...(steers.get(threadId) ?? []), moved];
+      queues.set(threadId, rest);
+      steers.set(threadId, nextStep);
+      push(threadId, [inboxFrame({ items: rest, nextStep })]);
+      return { type: 'success', id: 4, result: { accepted: true } };
     }
     const next =
       action.kind === 'remove'
@@ -160,6 +176,7 @@ export function fakeDownlink() {
     accept,
     acceptSteer,
     claimSteers,
+    closeSteer,
     update,
     inboxFrame,
     titleFrame,

@@ -10,6 +10,7 @@ import type {
   AnswerEntry,
   ConversationState,
   SlashDescriptor,
+  QueueSteerAction,
   QueueUpdateAction,
   RunStartMode,
   SlashRunOutcome,
@@ -30,6 +31,7 @@ import {
   QUEUE_ITEM_NOT_FOUND,
   reduceAll,
   reduceConversation,
+  STEER_UNAVAILABLE,
   uniformDecisions,
 } from '@nexus/wire';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -67,9 +69,13 @@ export interface SendRejected {
   readonly message: string;
 }
 
-/** 佇列的改或刪沒收下。`gone` 是那一件已經不在隊裡：多半是剛開跑了，也可能是別的分頁刪的。 */
+/**
+ * 佇列的改、刪或改成插話沒收下。`gone` 是那一件已經不在隊裡：多半是剛開跑了，也可能是別的分頁刪的。`unavailable` 是
+ * 改成插話時這一輪已經不收了（`steer_unavailable`，#710）。
+ */
 export interface QueueUpdateRejected {
   readonly gone: boolean;
+  readonly unavailable: boolean;
   readonly message: string;
 }
 
@@ -160,7 +166,10 @@ export interface Conversation {
    * 改或刪送出佇列裡的一件（`queue.update`，#637）。**只回有沒有收下**：清單的新樣子走下行的 `inbox`，
    * 不拿回條改本地的東西。
    */
-  updateQueue(itemId: string, action: QueueUpdateAction): Promise<QueueUpdateRejected | undefined>;
+  updateQueue(
+    itemId: string,
+    action: QueueUpdateAction | QueueSteerAction,
+  ): Promise<QueueUpdateRejected | undefined>;
   /**
    * 回答**指名的那一顆**核准請求。
    *
@@ -500,15 +509,26 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   );
 
   const updateQueue = useCallback(
-    async (itemId: string, action: QueueUpdateAction): Promise<QueueUpdateRejected | undefined> => {
+    async (
+      itemId: string,
+      action: QueueUpdateAction | QueueSteerAction,
+    ): Promise<QueueUpdateRejected | undefined> => {
       let result: UplinkResult;
       try {
         result = await clientRef.current.queueUpdate(threadId, { item_id: itemId, action });
       } catch (error) {
-        return { gone: false, message: error instanceof Error ? error.message : String(error) };
+        return {
+          gone: false,
+          unavailable: false,
+          message: error instanceof Error ? error.message : String(error),
+        };
       }
       if (result.type !== 'error') return undefined;
-      return { gone: result.error === QUEUE_ITEM_NOT_FOUND, message: result.message };
+      return {
+        gone: result.error === QUEUE_ITEM_NOT_FOUND,
+        unavailable: result.error === STEER_UNAVAILABLE,
+        message: result.message,
+      };
     },
     [threadId],
   );

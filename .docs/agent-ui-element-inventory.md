@@ -158,7 +158,7 @@
 | 26 | 輸入框（多行、送出、停止） | P0（`RunCancelCommand`） | `ui-conversation/.../InputBar` | AIE `prompt-input` | 執行中 `border-beam`（`md`，或手機上 `line`） | Libraries.dev 首頁卡就是這個組合 |
 | 27 | slash 命令選單 | P0（`SlashDescriptor`、`SlashListCommand`） | `ui-commands`、`ui-input-trigger`（`/`、`@` 偵測） | sc `command` | 選單 open 250ms／close 150ms | |
 | 28 | `@` 引用（檔案、會話、子代理、skill） | P1 | `ui-reference`、`ui-subagent` 的 `@` source、`ui-skill` | AIE `inline-citation` | — | 2026-09-28 #653 做了檔案與資料夾：打 `@` 開選單、選了插純文字 `@/path`，規則在規格 §4.4；沒有 `--workspace` 就沒有選單。會話、子代理、skill 三種來源與 chip、泡泡上的標示沒做 |
-| 29 | 送出佇列 | P1 | `ui-conversation/.../QueueDock` | AIE `queue` | 只淡入淡出，不 stagger（#645 Q8） | 2026-09-26 做了（#645）：放在待辦面板下、換手區外；跑著時純文字送得出去、排進佇列，斜線命令照擋；人的話等開跑才畫。2026-09-25 拍板：照 dsh 放伺服器（列得出、可改可刪、落盤），harness 先做、web 等落地再畫；停止後排著的停住不跑（翻掉 #265 Q6「停完接著跑」）；插話另開（#710：2026-09-29 web 第一步，跑著時 Cmd/Ctrl+Enter 送插話、排著的畫在對話尾端；佇列列上的插話鈕等第二步）。harness 先修 #629（排著的訊息吞掉核准） |
+| 29 | 送出佇列 | P1 | `ui-conversation/.../QueueDock` | AIE `queue` | 只淡入淡出，不 stagger（#645 Q8） | 2026-09-26 做了（#645）：放在待辦面板下、換手區外；跑著時純文字送得出去、排進佇列，斜線命令照擋；人的話等開跑才畫。2026-09-25 拍板：照 dsh 放伺服器（列得出、可改可刪、落盤），harness 先做、web 等落地再畫；停止後排著的停住不跑（翻掉 #265 Q6「停完接著跑」）；插話另開（#710：2026-09-29 web 第一步，跑著時 Cmd/Ctrl+Enter 送插話、排著的畫在對話尾端；佇列列上的插話鈕與草稿空白時 Cmd/Ctrl+Enter 全部改成插話是第二步，同日做完）。harness 先修 #629（排著的訊息吞掉核准） |
 | 30 | 模型選擇 | P1 | `ui-model-selection` | AIE `model-selector` | — | 2026-09-26 #723 拍板：先做底下的型錄（#729，只動 harness、畫面不變），每會話選擇與這一項晚點，恢復條件寫在 #723 |
 
 ### 2.6 agent 狀態面板

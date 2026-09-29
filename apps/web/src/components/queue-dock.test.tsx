@@ -1,4 +1,9 @@
-import type { ConversationStatus, QueueUpdateAction, WireQueuedInput } from '@nexus/wire';
+import type {
+  ConversationStatus,
+  QueueSteerAction,
+  QueueUpdateAction,
+  WireQueuedInput,
+} from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -28,7 +33,10 @@ function item(id: string, text: string): WireQueuedInput {
   return { id, text, source: { kind: 'user' } };
 }
 
-type Update = (id: string, action: QueueUpdateAction) => Promise<QueueUpdateRejected | undefined>;
+type Update = (
+  id: string,
+  action: QueueUpdateAction | QueueSteerAction,
+) => Promise<QueueUpdateRejected | undefined>;
 
 function mount(
   items: readonly WireQueuedInput[],
@@ -256,7 +264,7 @@ describe('編輯', () => {
     fireEvent.change(editor, { target: { value: '改過' } });
     fireEvent.keyDown(editor, { key: 'Enter' });
     rerender([item('b', '另一句')]);
-    answer({ gone: true, message: '這一件已經不在隊裡' });
+    answer({ gone: true, unavailable: false, message: '這一件已經不在隊裡' });
     await flush();
     expect(screen.queryByRole('textbox', { name: '改這一則排著的訊息' })).toBeNull();
     expect(toastSpy).toHaveBeenCalledTimes(1);
@@ -276,7 +284,11 @@ describe('刪除與錯誤', () => {
 
   it('不在隊裡：講「可能已經開始跑了」，不是紅字錯誤', async () => {
     mount([item('a', '第一句')], {
-      onUpdate: vi.fn<Update>(async () => ({ gone: true, message: '不在隊裡' })),
+      onUpdate: vi.fn<Update>(async () => ({
+        gone: true,
+        unavailable: false,
+        message: '不在隊裡',
+      })),
     });
     settle();
     fireEvent.click(screen.getByRole('button', { name: '刪除：第一句' }));
@@ -287,12 +299,87 @@ describe('刪除與錯誤', () => {
 
   it('別的失敗：toast.error 帶原因', async () => {
     mount([item('a', '第一句')], {
-      onUpdate: vi.fn<Update>(async () => ({ gone: false, message: 'fetch failed' })),
+      onUpdate: vi.fn<Update>(async () => ({
+        gone: false,
+        unavailable: false,
+        message: 'fetch failed',
+      })),
     });
     settle();
     fireEvent.click(screen.getByRole('button', { name: '刪除：第一句' }));
     await flush();
     expect(toastSpy.error).toHaveBeenCalledWith('刪不掉這一則', { description: 'fetch failed' });
+  });
+});
+
+describe('插話（#710）', () => {
+  it('每一列有插話鈕：跑著時按下去送 steer', async () => {
+    const { onUpdate } = mount([item('a', '第一句')]);
+    settle();
+    const button = screen.getByRole('button', { name: '插話：第一句' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    await flush();
+    expect(onUpdate).toHaveBeenCalledWith('a', { kind: 'steer' });
+  });
+
+  it.each(['idle', 'stopped', 'failed', 'awaiting-input'] as const)(
+    '這一輪不是跑著（%s）：鈕按不下去，說明講為什麼',
+    (status) => {
+      const { onUpdate } = mount([item('a', '第一句')], { status });
+      settle();
+      const button = screen.getByRole('button', { name: '插話：第一句' }) as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute('title')).toBe('只有這一輪跑著時才能插話');
+      fireEvent.click(button);
+      expect(onUpdate).not.toHaveBeenCalled();
+    },
+  );
+
+  it('伺服器說不收了：一般 toast，不是紅字；那一則照舊排著', async () => {
+    mount([item('a', '第一句')], {
+      onUpdate: vi.fn<Update>(async () => ({
+        gone: false,
+        unavailable: true,
+        message: '這一輪不收插話了',
+      })),
+    });
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '插話：第一句' }));
+    await flush();
+    expect(toastSpy).toHaveBeenCalledWith('這一輪已經不收插話了，那一則照舊排著');
+    expect(toastSpy.error).not.toHaveBeenCalled();
+    expect(screen.getByText('第一句')).toBeTruthy();
+  });
+
+  it('那一件已經不在隊裡：講「可能已經開始跑了」', async () => {
+    mount([item('a', '第一句')], {
+      onUpdate: vi.fn<Update>(async () => ({
+        gone: true,
+        unavailable: false,
+        message: '不在隊裡',
+      })),
+    });
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '插話：第一句' }));
+    await flush();
+    expect(toastSpy).toHaveBeenCalledWith(QUEUE_GONE_TEXT);
+  });
+
+  it('別的失敗：toast.error 帶原因', async () => {
+    mount([item('a', '第一句')], {
+      onUpdate: vi.fn<Update>(async () => ({
+        gone: false,
+        unavailable: false,
+        message: 'fetch failed',
+      })),
+    });
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '插話：第一句' }));
+    await flush();
+    expect(toastSpy.error).toHaveBeenCalledWith('插話沒送出去，請再試一次', {
+      description: 'fetch failed',
+    });
   });
 });
 

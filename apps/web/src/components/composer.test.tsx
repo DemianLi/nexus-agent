@@ -41,6 +41,7 @@ function Harness({
   run = () => true,
   onSubmit = () => {},
   sendHint,
+  onSteerQueue,
   fileReferences,
 }: {
   initial?: string;
@@ -48,6 +49,7 @@ function Harness({
   run?: (line: string) => boolean;
   onSubmit?: (draft: string, gesture: SubmitGesture) => void;
   sendHint?: SendHint;
+  onSteerQueue?: () => void;
   fileReferences?: (query: string, signal: AbortSignal) => Promise<FileReferenceListOutcome>;
 }) {
   const [draft, setDraft] = useState(initial);
@@ -63,6 +65,7 @@ function Harness({
           setDraft('');
         }}
         {...(sendHint === undefined ? {} : { sendHint })}
+        {...(onSteerQueue === undefined ? {} : { onSteerQueue })}
         commands={[plan, feedback, goal, todo]}
         decorated={new Set(['feedback'])}
         onRunCommand={run}
@@ -118,6 +121,30 @@ describe('送出', () => {
       ['先別動', 'accelerated'],
       ['按鈕', 'enter'],
     ]);
+  });
+
+  it('草稿空白時 Cmd/Ctrl＋Enter 改成把排著的全部改成插話；有字或沒給就照舊（#710）', () => {
+    const onSteerQueue = vi.fn();
+    const onSubmit = vi.fn();
+    const { unmount } = render(<Harness onSteerQueue={onSteerQueue} onSubmit={onSubmit} />);
+    key('Enter', { ctrlKey: true });
+    key('Enter', { metaKey: true });
+    expect(onSteerQueue).toHaveBeenCalledTimes(2);
+    // 只按 Enter、多按 Shift：不歸它管。
+    key('Enter');
+    key('Enter', { ctrlKey: true, shiftKey: true });
+    expect(onSteerQueue).toHaveBeenCalledTimes(2);
+    // 有字：是送出。
+    type('改用 X');
+    key('Enter', { ctrlKey: true });
+    expect(onSteerQueue).toHaveBeenCalledTimes(2);
+    expect(onSubmit).toHaveBeenCalledWith('改用 X', 'accelerated');
+    unmount();
+    // 沒給：跟以前一樣什麼都不做。
+    const quiet = vi.fn();
+    render(<Harness onSubmit={quiet} />);
+    key('Enter', { ctrlKey: true });
+    expect(quiet).not.toHaveBeenCalled();
   });
 
   it('底列提示預設「Enter 送出」，呼叫端可以換掉；寬螢幕才畫的那一段窄螢幕藏起來', () => {
