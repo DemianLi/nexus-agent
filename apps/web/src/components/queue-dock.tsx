@@ -22,6 +22,7 @@ import {
   queueHeading,
   queuePreview,
 } from '@/lib/queue-view';
+import { mentionDisplayText } from '@/lib/session-mention';
 import {
   canSteerRows,
   STEER_ACTION,
@@ -200,8 +201,10 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
   const renderRow = (row: QueueRow) => {
     const { item, leaving } = row;
     const isEditing = editing?.id === item.id && !leaving;
-    const preview = queuePreview(item.text);
-    const label = labelPreview(item.text);
+    // 排著的仍是原文：引用換成 `@標題` 再畫，編輯框才拿原文。
+    const shown = mentionDisplayText(item.text);
+    const preview = queuePreview(shown);
+    const label = labelPreview(shown);
     return (
       <li
         key={item.id}

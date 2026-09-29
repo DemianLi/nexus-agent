@@ -31,6 +31,7 @@ import type {
   WireFeedbackRating,
 } from '@nexus/wire';
 
+import { ReferencedText } from '@/components/session-reference';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { ChangesCard } from '@/components/changes-card';
 import { DeliverablesCard } from '@/components/deliverables-card';
@@ -50,6 +51,7 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller';
+import { mentionDisplayText } from '@/lib/session-mention';
 import type { ChangesStores } from '@/lib/changes-diff';
 import type { DeliverableDownloader } from '@/lib/deliverable-download';
 import { transcriptItems } from '@/lib/deliverables-view';
@@ -164,7 +166,7 @@ function Entry({
         <MessageContent>
           <Bubble variant="secondary" align="end">
             <BubbleContent className="text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap">
-              {entry.text}
+              <ReferencedText text={entry.text} references={entry.references} />
             </BubbleContent>
           </Bubble>
         </MessageContent>
@@ -311,7 +313,7 @@ function PendingSteerBubble({ text, caption }: { text: string; caption: string }
       <MessageContent>
         <Bubble variant="secondary" align="end" className="opacity-70">
           <BubbleContent className="text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap">
-            {text}
+            {mentionDisplayText(text)}
           </BubbleContent>
         </Bubble>
         <MessageFooter className="px-0">{caption}</MessageFooter>

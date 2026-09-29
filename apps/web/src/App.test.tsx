@@ -1,6 +1,7 @@
 import type {
   Event,
   SlashDescriptor,
+  SessionReferenceCandidate,
   SlashRunOutcome,
   ThreadFeedFrame,
   ThreadListResult,
@@ -9,7 +10,13 @@ import type {
   UplinkResult,
   WireClient,
 } from '@nexus/wire';
-import { CONTEXT_MEASURE, MODEL_USAGE, TITLE, TODOS } from '@nexus/wire';
+import {
+  CONTEXT_MEASURE,
+  formatSessionReferenceMention,
+  MODEL_USAGE,
+  TITLE,
+  TODOS,
+} from '@nexus/wire';
 import {
   cleanup,
   configure,
@@ -93,13 +100,9 @@ const UNWIRED_THREAD_SEARCH: Pick<WireClient, 'searchThreads'> = {
   searchThreads: () => new Promise<never>(() => undefined),
 };
 
-/**
- * 列會話候選（`@` 引用別的會話，#713）這一檔沒有接。**用 spread 放進 `WireClient` 字面量**：`WireClient` 還沒有
- * `sessionReferences` 時，直接寫成屬性會被當成多出來的屬性（TS2353），spread 進來的不做這個檢查；#713 的 harness
- * 那一半讓它變成必填之後照樣成立。那一半合了之後，改成 `Pick<WireClient, 'sessionReferences'>` 跟上面幾個一樣。
- */
-const UNWIRED_SESSION_REFERENCES = {
-  sessionReferences: async () => ({ kind: 'rejected' as const, message: '這一檔沒有接列會話' }),
+/** 列會話候選（`@` 引用別的會話，#713）這一檔沒有接。 */
+const UNWIRED_SESSION_REFERENCES: Pick<WireClient, 'sessionReferences'> = {
+  sessionReferences: async () => ({ kind: 'rejected', message: '這一檔沒有接列會話' }),
 };
 
 let seq = 0;
@@ -2209,15 +2212,241 @@ describe('@ 引用', () => {
     const box = await screen.findByLabelText<HTMLTextAreaElement>('要說的話');
     await waitFor(() => expect(fake.opened).toHaveLength(1));
     fireEvent.change(box, { target: { value: '看 @alp' } });
-    await screen.findByRole('dialog', { name: '檔案選單' });
+    await screen.findByRole('dialog', { name: '@ 選單' });
     expect(asked).toEqual([{ threadId: fake.opened[0], query: 'alp' }]);
 
     fireEvent.keyDown(box, { key: 'Enter' });
     expect(box.value).toBe('看 @/src/alpha.ts ');
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: '檔案選單' })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '@ 選單' })).toBeNull());
     fireEvent.keyDown(box, { key: 'Enter' });
     // 送出時照舊修掉頭尾空白；`@path` 本身原樣送（#653 Q1：協定就是純文字）。
     await waitFor(() => expect(fake.sent.at(-1)).toBe('看 @/src/alpha.ts'));
+  });
+});
+
+/**
+ * `@` 引用別的會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）。規則逐條驗在 `lib/session-mention.test.ts`、
+ * `lib/mention-menu.test.ts` 與 `components/composer.test.tsx`；這裡驗整條路：選單挑到草稿、原文送出、被領走之後
+ * 泡泡畫成一小塊（同專案的會話點得開）、重新整理後還在、被拒絕時說出原因。
+ */
+describe('@ 引用別的會話', () => {
+  beforeEach(stubCmdkLayout);
+
+  const candidate = (
+    sessionId: string,
+    label: string,
+    extra: Partial<SessionReferenceCandidate> = {},
+  ): SessionReferenceCandidate => ({
+    sessionId,
+    label,
+    sameWorkspace: true,
+    createdAt: 1,
+    updatedAt: 2,
+    mention: formatSessionReferenceMention({ sessionId, label }),
+    ...extra,
+  });
+  const mine = candidate('thread-mine', '昨天那條');
+  const other = candidate('thread-other', '報表', { sameWorkspace: false, cwd: '/w/reports' });
+  const sub = candidate('thread-sub', '查資料', {
+    parentSessionId: 'thread-mine',
+    parentLabel: '昨天那條',
+  });
+
+  /** 清單上只有 `thread-mine`（同專案的主會話）：別的專案與子代理不在上面，所以點不開。 */
+  function mentionClient(fake: ReturnType<typeof fakeClient>) {
+    const asked: { threadId: string; query: string }[] = [];
+    const client: WireClient = {
+      ...fake.client,
+      sessionReferences: async (threadId, query) => {
+        asked.push({ threadId, query });
+        return {
+          kind: 'ok',
+          result: {
+            available: true,
+            candidates: [mine, other, sub].filter((item) => item.label.includes(query)),
+          },
+        };
+      },
+      listThreads: async () => ({
+        kind: 'ok',
+        result: {
+          unreadable: 0,
+          items: [
+            {
+              threadId: 'thread-mine',
+              updatedAt: 1,
+              running: false,
+              blank: false,
+              title: '昨天那條',
+            },
+          ],
+        },
+      }),
+    };
+    return { client, asked };
+  }
+
+  const chips = () => [...document.querySelectorAll<HTMLElement>('[data-session-reference]')];
+
+  it('打 @ 挑會話：查的是目前這條；選了之後草稿是完整的引用文字，原文送出', async () => {
+    seq = 0;
+    const fake = fakeClient([]);
+    const { client, asked } = mentionClient(fake);
+    render(<App client={client} />);
+    const box = await screen.findByLabelText<HTMLTextAreaElement>('要說的話');
+    await waitFor(() => expect(fake.opened).toHaveLength(1));
+    fireEvent.change(box, { target: { value: '照 @昨' } });
+    await screen.findByRole('dialog', { name: '@ 選單' });
+    expect(asked).toEqual([{ threadId: fake.opened[0], query: '昨' }]);
+    expect(screen.getByRole('option', { name: /昨天那條/u })).toBeTruthy();
+
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(box.value).toBe(`照 ${mine.mention} `);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '@ 選單' })).toBeNull());
+    fireEvent.change(box, { target: { value: `${box.value}的方案改` } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    // 送出的是原文，伺服器在準備那一步才把它換成 `@標題`。
+    await waitFor(() => expect(fake.sent.at(-1)).toBe(`照 ${mine.mention} 的方案改`));
+  });
+
+  it('被領走之後畫成一小塊：同專案的會話點了切過去，別的專案與子代理只顯示', async () => {
+    seq = 0;
+    const fake = fakeClient([]);
+    const { client } = mentionClient(fake);
+    render(<App client={client} />);
+    const box = await screen.findByLabelText<HTMLTextAreaElement>('要說的話');
+    await waitFor(() => expect(fake.opened).toHaveLength(1));
+    // 清單讀回來了，才知道哪一條切得過去。
+    await waitFor(() => expect(screen.queryByText('昨天那條')).not.toBeNull());
+    fireEvent.change(box, {
+      target: { value: `對照 ${mine.mention} 和 ${other.mention} 和 ${sub.mention}` },
+    });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await waitFor(() => expect(chips()).toHaveLength(3));
+
+    const [first, second, third] = chips();
+    expect(first!.textContent).toBe('@昨天那條');
+    expect(first!.tagName).toBe('BUTTON');
+    expect(second!.textContent).toBe('@報表');
+    expect(second!.tagName).toBe('SPAN');
+    expect(third!.textContent).toBe('@查資料');
+    expect(third!.tagName).toBe('SPAN');
+    // 整句話還是那一句：換成 `@標題`，看不到網址。
+    expect(first!.closest('[data-slot="message-scroller-item"]')!.textContent).toBe(
+      '對照 @昨天那條 和 @報表 和 @查資料',
+    );
+
+    fireEvent.click(second!);
+    expect(fake.opened).toHaveLength(1);
+    fireEvent.click(first!);
+    await waitFor(() => expect(fake.opened.at(-1)).toBe('thread-mine'));
+  });
+
+  it('重新整理（歷史回來的人話帶 references）也畫成一小塊', async () => {
+    seq = 0;
+    const fake = fakeClient([
+      frame('messages', [], {
+        event: 'message-start',
+        role: 'human',
+        run_id: 'h1',
+        references: [{ sessionId: 'thread-mine', label: '昨天那條' }],
+      }),
+      frame('messages', [], {
+        event: 'content-block-delta',
+        index: 0,
+        delta: { type: 'text-delta', text: '照 @昨天那條 的方案改' },
+        run_id: 'h1',
+      }),
+      frame('messages', [], { event: 'message-finish', reason: 'stop', run_id: 'h1' }),
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+    ]);
+    const { client } = mentionClient(fake);
+    render(<App client={client} />);
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    expect(chips()[0]!.textContent).toBe('@昨天那條');
+    expect(chips()[0]!.closest('[data-slot="message-scroller-item"]')!.textContent).toBe(
+      '照 @昨天那條 的方案改',
+    );
+  });
+
+  it('沒有 references 的人話裡的 @ 字面不會被當成引用', async () => {
+    seq = 0;
+    const fake = fakeClient([
+      frame('messages', [], { event: 'message-start', role: 'human', run_id: 'h1' }),
+      frame('messages', [], {
+        event: 'content-block-delta',
+        index: 0,
+        delta: { type: 'text-delta', text: '寫信給 @昨天那條' },
+        run_id: 'h1',
+      }),
+      frame('messages', [], { event: 'message-finish', reason: 'stop', run_id: 'h1' }),
+    ]);
+    const { client } = mentionClient(fake);
+    render(<App client={client} />);
+    await screen.findByText('寫信給 @昨天那條');
+    expect(chips()).toHaveLength(0);
+  });
+
+  it('跑著時排隊：停靠列與待送的插話顯示 @標題，編輯框拿原文', async () => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'running', graph_name: 'root' })]);
+    const { client } = mentionClient(fake);
+    const running: WireClient = {
+      ...client,
+      runStart: async (threadId, text, options) => ({
+        type: 'success',
+        id: 1,
+        result: {
+          run_id:
+            options?.mode === 'steer'
+              ? fake.downlink.acceptSteer(threadId, text)
+              : fake.downlink.accept(threadId, text, false),
+        },
+      }),
+    };
+    render(<App client={running} />);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
+    const box = screen.getByLabelText<HTMLTextAreaElement>('要說的話');
+
+    fireEvent.change(box, { target: { value: `排一句 ${mine.mention}` } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    const dock = await screen.findByTestId('queue-dock');
+    expect(dock.textContent).toContain('排一句 @昨天那條');
+    expect(dock.textContent).not.toContain('nexus-session');
+    expect(within(dock).getByRole('button', { name: '編輯：排一句 @昨天那條' })).toBeTruthy();
+    fireEvent.click(within(dock).getByRole('button', { name: '編輯：排一句 @昨天那條' }));
+    expect(within(dock).getByRole<HTMLTextAreaElement>('textbox').value).toBe(
+      `排一句 ${mine.mention}`,
+    );
+    fireEvent.keyDown(within(dock).getByRole('textbox'), { key: 'Escape' });
+
+    fireEvent.change(box, { target: { value: `插一句 ${other.mention}` } });
+    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true });
+    const pending = await screen.findByText('插一句 @報表');
+    expect(pending.closest('[data-pending-steer]')).not.toBeNull();
+    expect(document.body.textContent).not.toContain('nexus-session');
+  });
+
+  it('伺服器拒絕（引用太多）：說出原因，草稿放回去', async () => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const { client } = mentionClient(fake);
+    const refused: WireClient = {
+      ...client,
+      runStart: async () => ({
+        type: 'error',
+        id: 1,
+        error: 'invalid_argument',
+        message: 'SESSION_REFERENCE_TOO_MANY: 一句話最多引用 3 條會話',
+      }),
+    };
+    render(<App client={refused} />);
+    const box = await screen.findByLabelText<HTMLTextAreaElement>('要說的話');
+    const text = `看 ${mine.mention} ${other.mention}`;
+    fireEvent.change(box, { target: { value: text } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    expect(await screen.findByText(/SESSION_REFERENCE_TOO_MANY/u)).toBeTruthy();
+    await waitFor(() => expect(box.value).toBe(text));
   });
 });
 

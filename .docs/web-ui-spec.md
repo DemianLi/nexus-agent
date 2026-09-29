@@ -88,7 +88,7 @@
 | 24 | 計劃審核 | 自建，shadcn `card`＋`button`，換掉輸入框；全文開在右側欄的「計劃」分頁，markdown 用列 10／11 那一套；對話裡的計劃卡放在 `exit_plan_mode` 工具卡的位置（§4.3） | `plan-review.tsx`、`plan-preview-tab.tsx`、`lib/plan-review.ts` |
 | 26 | 輸入框 | shadcn `input-group`＋`textarea` | 在 `App.tsx` |
 | 27 | slash 選單 | shadcn `command` | 在 `App.tsx` |
-| 28 | `@` 引用 | shadcn `command`（跟 slash 選單共用同一顆 popover）；觸發、插入、非同步狀態照 dsh（§4.4） | `lib/file-mention.ts`、`lib/mention-menu.ts`、在 `composer.tsx` |
+| 28 | `@` 引用 | shadcn `command`（跟 slash 選單共用同一顆 popover）；觸發、插入、非同步狀態照 dsh（§4.4） | `lib/file-mention.ts`、`lib/session-mention.ts`、`lib/mention-menu.ts`、`components/session-reference.tsx`、在 `composer.tsx` |
 | 29 | 送出佇列 | 自建，shadcn `collapsible`＋`button`＋`textarea`；行為照 dsh `QueueDock`（一件直接畫、兩件以上收合、就地改、刪與插話；插話鈕只在這一輪跑著時按得動，按下去那一則離開佇列、改畫在對話尾端）；新項目撐過 200ms 才畫、只淡入淡出不 stagger；放在待辦面板下、換手區外，停在核准點時照樣看得到。**插話**（#710）：跑著時 Cmd/Ctrl+Enter 送插話，Enter 與送出鈕照舊排隊（照 dsh 的預設，沒做它讓 Enter 改成插話的偏好設定），底列提示跟著換（加速鍵那一句 640 以下不畫：手機多半沒有實體鍵盤，390 寬會斷在字中間）；排著的插話不進佇列，照 dsh 畫在對話尾端（淡一階，底下一句「插話・下一步送進模型」；這一輪停了就改說「下一輪送進模型」，harness 留到下一輪的第一次模型呼叫才領），被領走時同一格換成人的話。**草稿空白時 Cmd/Ctrl+Enter 把排著的全部改成插話**（照 dsh `steerQueue`：照排的先後一件一件送，碰到「不收了」或「不在隊裡」靜靜停），輸入框提示字跟著換 | `queue-dock.tsx`、`lib/submit-mode.ts`、`lib/steer-view.ts`、`lib/steer-queue.ts` |
 | 31 | 狀態列 | 自建（shimmer、orb 見 §7） | `status-line.tsx` 留 |
 | 35 | 讚踩＋回饋框 | 框換 shadcn `dialog`，表單邏輯留；讚踩按鈕留在 `transcript.tsx` | `feedback-dialog.tsx` 換外殼 |
@@ -133,7 +133,15 @@
   - **第一次回來之前不畫**（dsh 先畫骨架）：依 Q3。回來之前分不出有沒有工作區，沒有工作區時打 `@` 會閃一下。
   - **不做 chip**（Q7）：dsh 選定之後是一顆 chip，我們換成純文字。引號形式的資料夾選定時收掉引號，往下鑽時留著開口。
   - **不畫麵包屑**（第一版範圍）：dsh 往下鑽之後在上方畫麵包屑、列裡不再寫父目錄；我們每一列都寫父目錄。
-- **還沒做**：會話、子代理、skill 三種來源；chip 與泡泡上的標示（inventory §2 第 28 列）。
+- **會話與子代理**（[#713](https://github.com/DemianLi/nexus-agent/issues/713)，2026-09-29；拍板在該卡 2026-09-28 的分類留言 Q2–Q4）：同一個 `@` 選單分三段——檔案、會話、子代理（有 `parentSessionId` 的算子代理）；只有檔案時不畫段標題，跟原來一樣。
+  - **問法**：打普通的字時檔案與會話一起問；`@/…`（路徑）與 `@"…`（有空白的路徑）只問檔案。每打一個字，兩邊的上一次都取消。
+  - **兩個來源各回各的**：先回來的先畫，檔案不等會話（會話是跨專案冷讀，慢一點）；後回來的併進去，選中的那一列跟著自己走。可不可用**按來源記**——沒有工作區只關掉檔案、沒接落盤只關掉會話，**兩個都不可用才整個不開**。
+  - **列**：會話寫標題，別的專案後面加目錄名；子代理寫「屬於 <母會話標題>」，不畫 id。候選內容（列全部、同工作區排前、最多 50、不搜內文）是伺服器的事，照 dsh。
+  - **插入**：選定就是把 `@…` 那一段換成伺服器編好的 `@[標題](nexus-session:…)` 加一個空白，**原樣插、不自己改寫**（Q2：第一版不做標籤）；Tab 對會話也是選定，沒有往下鑽。草稿、送出、排隊、重新編輯看到的都是這段完整文字；選好的整段貼著游標時不算在打 `@`。
+  - **還沒被領走的話仍是原文**（`inbox` 的 `items`、`nextStep`）：停靠列的預覽與待送插話泡泡把引用換成 `@標題` 再畫（`mentionDisplayText`），編輯框拿原文。
+  - **被領走之後**（Q3）：伺服器已把引用換成 `@標題` 並帶 `references`（即時走 `inbox` 的 `claimed`，歷史走人話 `message-start`），泡泡把那一段畫成一小塊 `@標題`，可見文字就是 `@標題`。**清單上有的會話（同專案的主會話）點了切過去**，別的專案與子代理只顯示：serve 綁在一個工作目錄上，今天切不過去。
+  - **被拒絕**（引用太多、引用自己、網址壞、沒接落盤）：伺服器回 `invalid_argument`，訊息開頭帶 `SESSION_REFERENCE_*`；送出時走原本的「這一句沒送出去」提示並把草稿放回去，改排隊裡的那一件走停靠列的錯誤提示。
+- **還沒做**：skill 來源；標籤（chip 進輸入框，Q2 留到之後檔案與會話一起做）。
 
 ## 5. 設計 token
 

@@ -107,10 +107,8 @@ function fakeClient(
   const client: WireClient = {
     // 列檔（#651）沒有接。
     fileReferences: async () => ({ kind: 'rejected', message: '這一檔沒有接列檔' }),
-    // 列會話候選（#713）沒有接。spread 的理由見 App.test.tsx 的 UNWIRED_SESSION_REFERENCES。
-    ...{
-      sessionReferences: async () => ({ kind: 'rejected' as const, message: '這一檔沒有接列會話' }),
-    },
+    // 列會話候選（#713）沒有接。
+    sessionReferences: async () => ({ kind: 'rejected', message: '這一檔沒有接列會話' }),
     // 全部會話共用的下行（#632）沒有接：開不起來也不失敗。
     openThreadFeed: () => new Promise<never>(() => undefined),
     // 按內容搜尋（#631）也沒有接：開不起來也不失敗。
