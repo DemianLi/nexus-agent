@@ -600,7 +600,7 @@ function createExitPlanModeTool(
  *   `orderTools` 只排 `registry.tools.effective()` 裡的東西，而工具呈現順序是我們
  *   自建的機制（dsh 那邊註冊順序造成過真實 CI flake），繞過它等於把那個保護放掉。
  * - **`commands`**：`/plan` 走 `registry.commands.register()`。**命令不進模型**——它是
- *   人對工具說的話，結果直接印給打字的人看。dsh 那邊這一格掛在
+ *   人對工具說的話，結果直接印給打字的人看（`/plan <message>` 的那句話例外：它經 `steer` 成為命令落定後的一輪人話，命令本身仍然不進模型）。dsh 那邊這一格掛在
  *   `ctx.inject(['commands'], …)` 底下（「命令註冊表被組進來時才啟用」），我們的
  *   `PluginRegistry` 每個註冊點永遠都在，所以直接註冊；**這是形狀差異不是偏離**，
  *   理由已經寫在 `@nexus/core` 的 `CommandRegistrationPoint` 上。

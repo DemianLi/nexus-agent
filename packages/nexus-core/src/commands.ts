@@ -4,7 +4,7 @@
  * 形狀照 dsh 的 `@deepseek-ai/dsh-commands`
  * （`references/deepseek-harness/packages/interaction/commands/src/`，對讀版本
  * `cd5ef8148158c3a752a658978873241fdf8e2bbc`）：`name` / `description` / `input` /
- * `handler`，handler 回一個 `CommandResult`，由**發派的 UI 直接呈現**——命令不進模型。
+ * `handler`，handler 回一個 `CommandResult`，由**發派的 UI 直接呈現**——命令與它的結果不進模型（要讓一句話進模型，走 {@link CommandInvocation.steer}：那是宿主在命令落定後替人開的一輪）。
  *
  * **這一層與工具是兩件事，不要合併。** 工具是模型呼叫的，命令是人打的；工具的結果回
  * 到 transcript 裡影響下一次推理，命令的結果只印給人看。dsh 兩者分屬不同子系統，
@@ -109,6 +109,7 @@ export interface CommandDefinition {
   readonly recordInput?: boolean;
   /**
    * 執行。**不把命令送給模型**——命令是人對工具說的話，不是對模型說的話。
+   * 命令要讓模型看到一句話時，呼叫 `invocation.steer`：那句話是普通的人話，不是命令。
    *
    * @param invocation - 這一次執行的原文、配對 id 與取消訊號。
    * @returns 直接呈現給人的結果。
