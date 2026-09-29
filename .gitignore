@@ -24,3 +24,5 @@ coverage/
 
 # 第三方參考原始碼（唯讀，不進版控）
 references/
+
+__pycache__/
