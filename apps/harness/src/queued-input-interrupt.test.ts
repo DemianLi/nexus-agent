@@ -108,6 +108,27 @@ async function until(predicate: () => boolean, ms = 5000): Promise<void> {
   }
 }
 
+/**
+ * 等一個自己沒有上限的 await，卡住時說出卡在哪一步（[#775](https://github.com/DemianLi/nexus-agent/issues/775)）。
+ *
+ * 這個檔的 wire 測試在 CI 出現過一次「整個測試 20 秒匿名逾時」，本機加壓（Node 20、限 2 個 worker、CPU 全滿，整個套件
+ * 連跑六次，另單檔十二次）重現不出來。`until` 自己有 5 秒上限、失敗會指名；沒有上限的是下面這幾個直接 await 的呼叫
+ * （開下行、送出、答覆、收線），它們卡住只會讓測試逾時，看不出是哪一個。下一次再撞上，訊息就是答案。
+ *
+ * **這不是根因的修法**：找不到根因，所以這裡只讓失敗說得出話，逾時沒有調長。
+ */
+async function within<T>(label: string, work: Promise<T>, ms = 8000): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const stalled = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`卡在「${label}」：${ms} 毫秒沒有回應`)), ms);
+  });
+  try {
+    return await Promise.race([work, stalled]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** 真的組裝接上一個 pump——serve 那條路的形狀，同 `turn-cancel.test.ts`。 */
 async function assemble(turns: readonly ScriptedTurn[] = SCRIPT) {
   const probe: Probe = { slowStarted: 0, danger: 0 };
@@ -495,10 +516,10 @@ describe('wire：跑著時收下的一句，等 input.respond 那一輪收掉才
     const thread = 'queued-wire';
     const line = new AbortController();
     const frames: Event[] = [];
-    const events = await client.openEvents(thread, {
-      channels: ['lifecycle', 'input'],
-      signal: line.signal,
-    });
+    const events = await within(
+      'openEvents',
+      client.openEvents(thread, { channels: ['lifecycle', 'input'], signal: line.signal }),
+    );
     const draining = (async () => {
       try {
         for await (const frame of events) frames.push(frame);
@@ -506,22 +527,26 @@ describe('wire：跑著時收下的一句，等 input.respond 那一輪收掉才
         // 收線時中止。
       }
     })();
+    let failed = false;
     try {
-      await client.runStart(thread, '第一句');
+      await within('runStart 第一句', client.runStart(thread, '第一句'));
       await until(() => probe.slowStarted === 1);
       // 跑著：收件照收。
-      await client.runStart(thread, '第二句');
+      await within('runStart 第二句', client.runStart(thread, '第二句'));
       await until(() => frames.some((frame) => frame.method === 'input.requested'));
       const requested = frames.find((frame) => frame.method === 'input.requested');
       const interruptId = (requested!.params.data as { interrupt_id: string }).interrupt_id;
       await until(() => turnMarks(log!.events).length === 2);
       expect(turnMarks(log!.events)).toEqual(['start:message:第一句', 'end']);
 
-      await client.inputRespond(thread, {
-        namespace: [],
-        interrupt_id: interruptId,
-        response: { decisions: [{ type: 'approve' }] },
-      });
+      await within(
+        'inputRespond',
+        client.inputRespond(thread, {
+          namespace: [],
+          interrupt_id: interruptId,
+          response: { decisions: [{ type: 'approve' }] },
+        }),
+      );
       await until(() => turnMarks(log!.events).length === 6);
       expect(turnMarks(log!.events)).toEqual([
         'start:message:第一句',
@@ -532,9 +557,15 @@ describe('wire：跑著時收下的一句，等 input.respond 那一輪收掉才
         'end',
       ]);
       expect(probe.danger).toBe(1);
+    } catch (error: unknown) {
+      failed = true;
+      throw error;
     } finally {
       line.abort();
-      await draining;
+      // 主體已經失敗時，收線卡住不能蓋掉它的錯（收不掉的下行只是後果）。
+      await within('收下行', draining, 3000).catch((error: unknown) => {
+        if (!failed) throw error;
+      });
     }
   }, 20000);
 });
