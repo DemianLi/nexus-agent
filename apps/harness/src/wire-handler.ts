@@ -33,6 +33,8 @@ import type {
   Command,
   EventStreamRequest,
   FileReferenceListResponse,
+  SessionReferenceCandidate,
+  SessionReferenceListResponse,
   SlashDescriptor,
   SlashListResult,
   SlashMethod,
@@ -72,6 +74,7 @@ import {
   STEER_UNAVAILABLE,
   isSlashMethod,
   isWireChannel,
+  sessionReferencesPath,
   successResponse,
 } from '@nexus/wire';
 import type {
@@ -314,6 +317,20 @@ export interface WireHandlerOptions {
    */
   searchThreads?(query: unknown, signal: AbortSignal): Promise<ThreadSearchResult>;
   /**
+   * `@` 引用別的會話的候選（`GET /threads/:id/session-references`，[#713](https://github.com/DemianLi/nexus-agent/issues/713)），選配。
+   * 實作是 `session-reference-candidates.ts` 的 `SessionReferenceCandidates.list`。
+   *
+   * **缺席就是沒接落盤**：路由回 `{ available: false }`，web 整個不列會話那兩段。**同 {@link listThreads}，它不准碰 {@link createAgent}**——
+   * 為了列候選把提問的那條 thread 建起來是反的。取消（web 每打一個字就取消上一次）時照樣拋出去，由載體收掉。
+   *
+   * @param threadId - 提問的那條 thread：候選不含它自己。
+   */
+  listSessionReferences?(
+    threadId: string,
+    query: string,
+    signal: AbortSignal,
+  ): Promise<readonly SessionReferenceCandidate[]>;
+  /**
    * 瀏覽器會話的驗證（[#424](https://github.com/DemianLi/nexus-agent/issues/424)）。
    *
    * **必填，沒有「不驗」的選項**：這條線上每一條路由都能以 serve 擁有者的身分操作 agent，
@@ -387,7 +404,7 @@ function json(body: unknown, status = 200): Response {
 }
 
 /**
- * `/threads/:id/stream`、`/threads/:id/history`、`/threads/:id/file-references`、
+ * `/threads/:id/stream`、`/threads/:id/history`、`/threads/:id/file-references`、`/threads/:id/session-references`、
  * `/threads/:id/changes/{summary,diff}`、`/threads/:id/deliverables/{file,download}` 或
  * `/threads/:id/commands/:method`，都不是就 undefined。
  */
@@ -397,6 +414,7 @@ function parsePath(
   | { readonly kind: 'stream'; readonly threadId: string }
   | { readonly kind: 'history'; readonly threadId: string }
   | { readonly kind: 'file-references'; readonly threadId: string }
+  | { readonly kind: 'session-references'; readonly threadId: string }
   | { readonly kind: 'changes-summary'; readonly threadId: string }
   | { readonly kind: 'changes-diff'; readonly threadId: string }
   | { readonly kind: 'deliverable-file'; readonly threadId: string }
@@ -417,6 +435,9 @@ function parsePath(
   }
   if (segments.length === 3 && pathname === fileReferencesPath(threadId)) {
     return { kind: 'file-references', threadId };
+  }
+  if (segments.length === 3 && pathname === sessionReferencesPath(threadId)) {
+    return { kind: 'session-references', threadId };
   }
   if (segments.length === 4 && segments[2] === 'changes') {
     if (pathname === changesSummaryPath(threadId)) return { kind: 'changes-summary', threadId };
@@ -1399,6 +1420,37 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
   }
 
   /**
+   * `GET /threads/:id/session-references?query=`（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）：`@` 後面那一段的會話候選。
+   * 契約見 `@nexus/wire` 的 `session-references.ts`，查法見 `session-reference-candidates.ts`。
+   *
+   * **不經 `threadOrError`**：候選是冷讀，為了回一份清單把 thread 建起來是反的（同 `handleList`）。取消與失敗分開，同 `handleFileReferences`。
+   */
+  async function handleSessionReferences(
+    threadId: string,
+    search: URLSearchParams,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    let response: SessionReferenceListResponse;
+    if (options.listSessionReferences === undefined) {
+      response = { type: 'success', result: { available: false } };
+    } else {
+      try {
+        const candidates = await options.listSessionReferences(
+          threadId,
+          search.get('query') ?? '',
+          signal,
+        );
+        response = { type: 'success', result: { available: true, candidates } };
+      } catch (error: unknown) {
+        signal.throwIfAborted();
+        const reason = error instanceof Error ? error.message : String(error);
+        return changesResponse(errorResponse(null, 'unknown_error', `列不出會話：${reason}`));
+      }
+    }
+    return changesResponse(response);
+  }
+
+  /**
    * `GET /threads/:id/changes/summary?seq=`（[#443](https://github.com/DemianLi/nexus-agent/issues/443)），照 dsh 的
    * `handleChangesSummary`：400 座標不對，404 這台 server 不再服務這份摘要。
    *
@@ -1700,6 +1752,11 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
         if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
         return handleFileReferences(route.threadId, searchParams, request.signal);
+      }
+      if (route?.kind === 'session-references') {
+        if (request.method !== 'GET') return new Response('not found', { status: 404 });
+        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+        return handleSessionReferences(route.threadId, searchParams, request.signal);
       }
       if (
         route?.kind === 'deliverable-file' ||

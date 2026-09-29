@@ -16,6 +16,12 @@ import type {
   FileReferenceListResult,
 } from './file-references.js';
 import { fileReferencesPath } from './file-references.js';
+import { sessionReferencesPath } from './session-references.js';
+import type {
+  SessionReferenceCandidate,
+  SessionReferenceListResponse,
+  SessionReferenceListResult,
+} from './session-references.js';
 import { decodeSseData, decodeSseStream } from './sse.js';
 import type {
   Command,
@@ -256,6 +262,17 @@ export interface WireClient {
     query: string,
     signal?: AbortSignal,
   ): Promise<FileReferenceListOutcome>;
+  /**
+   * `@` 後面那一段的會話候選（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）。契約見 `sessionReferencesPath`。
+   *
+   * @param query - `@` 後面那一段，原文原樣。
+   * @param signal - 中止這一次：每打一個字就該取消上一次。
+   */
+  sessionReferences(
+    threadId: string,
+    query: string,
+    signal?: AbortSignal,
+  ): Promise<SessionReferenceListOutcome>;
 }
 
 /** 全域下行上認得的那幾顆；不認得的跳過（`THREAD_FEED_PATH`：那條線之後會多出新種類）。 */
@@ -291,6 +308,55 @@ function readFileReferences(result: unknown): FileReferenceListResult {
         throw new Error('GET /threads/:id/file-references 回了不認得的候選');
       }
       return Object.freeze({ path: row.path, kind: row.kind });
+    }),
+  };
+}
+
+/** `GET /threads/:id/session-references` 的結果。`rejected` 是讀不了存放處。 */
+export type SessionReferenceListOutcome =
+  | { readonly kind: 'ok'; readonly result: SessionReferenceListResult }
+  | { readonly kind: 'rejected'; readonly message: string };
+
+/** 線上回來的候選得先驗過，理由同 {@link readDescriptors}。 */
+function readSessionReferences(result: unknown): SessionReferenceListResult {
+  const { available, candidates } = result as { available?: unknown; candidates?: unknown };
+  if (available === false) return { available: false };
+  if (available !== true || !Array.isArray(candidates)) {
+    throw new Error('GET /threads/:id/session-references 回了不認得的結果');
+  }
+  const optionalString = (value: unknown): string | undefined | null =>
+    value === undefined ? undefined : typeof value === 'string' ? value : null;
+  return {
+    available: true,
+    candidates: candidates.map((entry: unknown): SessionReferenceCandidate => {
+      const row = (entry ?? {}) as Record<string, unknown>;
+      const cwd = optionalString(row['cwd']);
+      const parentSessionId = optionalString(row['parentSessionId']);
+      const parentLabel = optionalString(row['parentLabel']);
+      if (
+        typeof row['sessionId'] !== 'string' ||
+        typeof row['label'] !== 'string' ||
+        typeof row['sameWorkspace'] !== 'boolean' ||
+        typeof row['createdAt'] !== 'number' ||
+        typeof row['updatedAt'] !== 'number' ||
+        typeof row['mention'] !== 'string' ||
+        cwd === null ||
+        parentSessionId === null ||
+        parentLabel === null
+      ) {
+        throw new Error('GET /threads/:id/session-references 回了不認得的候選');
+      }
+      return Object.freeze({
+        sessionId: row['sessionId'],
+        label: row['label'],
+        sameWorkspace: row['sameWorkspace'],
+        createdAt: row['createdAt'],
+        updatedAt: row['updatedAt'],
+        mention: row['mention'],
+        ...(cwd !== undefined && { cwd }),
+        ...(parentSessionId !== undefined && { parentSessionId }),
+        ...(parentLabel !== undefined && { parentLabel }),
+      });
     }),
   };
 }
@@ -657,6 +723,23 @@ export function createWireClient(options: WireClientOptions): WireClient {
       return body.type === 'error'
         ? { kind: 'rejected', message: body.message }
         : { kind: 'ok', result: readFileReferences(body.result) };
+    },
+
+    async sessionReferences(threadId, query, signal) {
+      const search = new URLSearchParams({ query }).toString();
+      const response = await doFetch(`${base}${sessionReferencesPath(threadId)}?${search}`, {
+        method: 'GET',
+        // 同 `listThreads`，見 `THREADS_PATH`。
+        headers: { 'content-type': 'application/json' },
+        signal,
+      });
+      if (!response.ok) {
+        throw new Error(`列會話被載體層擋下：${response.status} ${await response.text()}`);
+      }
+      const body = (await response.json()) as SessionReferenceListResponse;
+      return body.type === 'error'
+        ? { kind: 'rejected', message: body.message }
+        : { kind: 'ok', result: readSessionReferences(body.result) };
     },
   };
 }

@@ -237,3 +237,91 @@ describe('列檔（#651）', () => {
     ).toEqual({ kind: 'rejected', message: '建不起來' });
   });
 });
+
+describe('列會話候選（#713）', () => {
+  const candidate = {
+    sessionId: 's/1',
+    label: '標題',
+    cwd: '/專案',
+    sameWorkspace: true,
+    createdAt: 1,
+    updatedAt: 2,
+    parentSessionId: 'p',
+    parentLabel: '父',
+    mention: '@[標題](nexus-session:x)',
+  };
+
+  it('GET 路徑掛在 thread 底下，query 原文帶上，帶 JSON header 與呼叫者的 signal', async () => {
+    const seen: { url: string; method?: string; type: string | null; signal?: AbortSignal }[] = [];
+    const client = createWireClient({
+      baseUrl: 'http://agent.test/',
+      fetch: async (input, init) => {
+        seen.push({
+          url: String(input),
+          method: init?.method,
+          type: new Headers(init?.headers).get('content-type'),
+          signal: init?.signal ?? undefined,
+        });
+        return Response.json(
+          successResponse(0, {
+            available: true,
+            candidates: [
+              candidate,
+              {
+                ...candidate,
+                sessionId: 'n',
+                cwd: undefined,
+                parentSessionId: undefined,
+                parentLabel: undefined,
+              },
+            ],
+          }),
+        );
+      },
+    });
+    const controller = new AbortController();
+    const outcome = await client.sessionReferences('t 1', '標 題', controller.signal);
+    expect(seen).toEqual([
+      {
+        url: 'http://agent.test/threads/t%201/session-references?query=%E6%A8%99+%E9%A1%8C',
+        method: 'GET',
+        type: 'application/json',
+        signal: controller.signal,
+      },
+    ]);
+    expect(outcome.kind).toBe('ok');
+    if (outcome.kind !== 'ok' || !outcome.result.available) throw new Error('不該走到這裡');
+    expect(outcome.result.candidates[0]).toEqual(candidate);
+    // 選填的欄位沒有就是沒有這個鍵，不是 undefined。
+    expect(Object.keys(outcome.result.candidates[1] ?? {})).not.toContain('cwd');
+    expect(Object.keys(outcome.result.candidates[1] ?? {})).not.toContain('parentSessionId');
+  });
+
+  it('「不提供」與協定層的拒絕是兩種形狀', async () => {
+    const reply = (body: unknown) =>
+      createWireClient({ baseUrl: 'http://agent.test', fetch: async () => Response.json(body) });
+    expect(
+      await reply(successResponse(0, { available: false })).sessionReferences('t', ''),
+    ).toEqual({
+      kind: 'ok',
+      result: { available: false },
+    });
+    expect(
+      await reply(errorResponse(null, 'unknown_error', '讀不了')).sessionReferences('t', ''),
+    ).toEqual({ kind: 'rejected', message: '讀不了' });
+  });
+
+  it.each([
+    { ...candidate, sessionId: 1 },
+    { ...candidate, sameWorkspace: 'yes' },
+    { ...candidate, cwd: 3 },
+    { ...candidate, mention: undefined },
+    null,
+  ])('形狀不對的候選整個拒絕：%j', async (bad) => {
+    const client = createWireClient({
+      baseUrl: 'http://agent.test',
+      fetch: async () => Response.json(successResponse(0, { available: true, candidates: [bad] })),
+    });
+    await expect(client.sessionReferences('t', '')).rejects.toThrow('不認得的候選');
+  });
+});
