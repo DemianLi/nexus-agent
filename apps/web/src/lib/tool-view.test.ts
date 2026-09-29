@@ -7,7 +7,8 @@ import { classifyTool, isKnownTool, toolInputBody, toolSummary, toolTitle } from
 
 /**
  * `classifyTool` 涵蓋 nexus 每一個實際工具名（#406 驗收）。plugin 的工具名**從原始碼讀**（各 plugin 匯出的
- * `*_TOOL_NAME` 常數，外加 `apps/harness/src` 自己掛的，例如沙箱升級）：新增一個工具而沒在 `lib/tool-view.ts` 分類，這裡紅。基座的工具名是 deepagents 定的，
+ * `*_TOOL_NAME` 常數；沙箱升級那顆已經搬進 plugin。`apps/harness/src` 今天沒有命中的宣告，掃它是留給 harness 以後自己掛的工具）：
+ * 新增一個工具而沒在 `lib/tool-view.ts` 分類，這裡紅。基座的工具名是 deepagents 定的，
  * 手列（1.13.1；升版時對一次 `deepagents/dist` 的工具定義）。
  */
 
@@ -121,45 +122,5 @@ describe('摘要與展開內容', () => {
       lang: 'json',
     });
     expect(toolInputBody('echo', '')).toBeUndefined();
-  });
-});
-
-/**
- * **`execute` 的絆索**（#601）：基座只在 backend 帶 shell 時才註冊 `execute`（deepagents 1.13.1 的 `isSandboxBackend`：
- * 有 `execute` 方法而且 `id` 非空）。今天 harness 只建這三種 backend，沒有一種帶 shell——`CompositeBackend` 的 `id`
- * 只在預設 backend 是 sandbox 時才轉出來，`ContainedFilesystemBackend` 繼承的是沒有 shell 的 `FilesystemBackend`，
- * `TextOnlyStateBackend` 繼承的是同樣沒有 shell 的 `StateBackend`。
- * 這裡紅了表示有新的 backend 進來：確認它會不會讓 `execute` 上線，會的話先補終端卡（dsh `terminal-card-model.ts`）。
- */
-describe('execute 還沒上線', () => {
-  const harnessSources = sources(HARNESS.pathname);
-
-  it('harness 只建沒有 shell 的 backend', () => {
-    const constructed = new Set(
-      harnessSources.flatMap((file) =>
-        [...readFileSync(file, 'utf8').matchAll(/new (\w*Backend)\(/g)].map((match) => match[1]),
-      ),
-    );
-    expect([...constructed].sort()).toEqual([
-      'CompositeBackend',
-      'ContainedFilesystemBackend',
-      'TextOnlyStateBackend',
-    ]);
-  });
-
-  it('ContainedFilesystemBackend 沒有自己長出 execute', () => {
-    const file = harnessSources.find((path) => path.endsWith('contained-backend.ts'));
-    expect(file).toBeDefined();
-    const source = readFileSync(file ?? '', 'utf8');
-    expect(source).toContain('class ContainedFilesystemBackend extends FilesystemBackend');
-    expect(source).not.toMatch(/\bexecute\s*\(/);
-  });
-
-  it('TextOnlyStateBackend 沒有自己長出 execute', () => {
-    const file = harnessSources.find((path) => path.endsWith('binary-read.ts'));
-    expect(file).toBeDefined();
-    const source = readFileSync(file ?? '', 'utf8');
-    expect(source).toContain('class TextOnlyStateBackend extends StateBackend');
-    expect(source).not.toMatch(/\bexecute\s*\(/);
   });
 });

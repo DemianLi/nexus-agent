@@ -2,26 +2,40 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import type { WireTodoItem } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
-import { TODO_WRITE, todosOf, todoSummary } from '@/lib/todo-view';
+import { TODO_STATUS_LABEL, TODO_WRITE, todosOf, todoSummary } from '@/lib/todo-view';
+import type { TodoStatus } from '@/lib/todo-view';
 
 /** `todo_write` 的參數怎麼讀（#575）。形狀照 dsh `tool-todo`：`{ todos: [{ content, status }] }`。 */
 
 const packages = fileURLToPath(new URL('../../../../packages/', import.meta.url));
 
 describe('跟 @nexus/plugin-todo 對得上', () => {
-  // web 不相依 plugin 與 core，所以這裡讀原始碼：那一側改名或加狀態時這裡紅，而不是卡片默默退回參數原文。
+  // web 不相依 plugin，所以這裡讀原始碼：那一側改名時這裡紅，而不是卡片默默退回參數原文（等 #442 的工具目錄落地再換）。
   it('工具名同 TODO_TOOL_NAME', () => {
     const source = readFileSync(`${packages}nexus-plugin-todo/src/index.ts`, 'utf8');
     expect(source).toContain(`export const TODO_TOOL_NAME = '${TODO_WRITE}';`);
   });
+});
 
-  it('認得的狀態同 TODO_STATUSES', () => {
-    const source = readFileSync(`${packages}nexus-core/src/todo.ts`, 'utf8');
-    const statuses = /export const TODO_STATUSES = \[([^\]]*)\]/.exec(source)?.[1];
-    expect(statuses).toBe("'pending', 'in_progress', 'completed'");
-    for (const status of ['pending', 'in_progress', 'completed']) {
+/**
+ * web 自己宣告的狀態聯集與 wire 的兩個方向都要相等（#666）。wire 沒有執行期清單，所以在型別層比；`tsc -b` 檢查測試檔，
+ * vitest 本身不會因為型別紅。單向可指派只擋得住 wire 多一格（面板把 `WireTodoItem[]` 餵給 `todoSummary`），
+ * 擋不住 wire 少一格而 web 留著一個沒人會產生的狀態，所以要 `Equal`。core 那一邊由 harness 的 `todo-status-wire.test.ts` 釘住。
+ */
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+/** 量具自檢：分得出「多一格」與「少一格」。 */
+const detectsExtra: Equal<'a' | 'b', 'a'> = false;
+const detectsMissing: Equal<'a', 'a' | 'b'> = false;
+const statusesMatchWire: Equal<TodoStatus, WireTodoItem['status']> = true;
+
+describe('跟 wire 的待辦狀態對得上', () => {
+  it('型別層的斷言由 tsc 檢查；執行期確認每個認得的狀態都讀得進來', () => {
+    expect([detectsExtra, detectsMissing, statusesMatchWire]).toEqual([false, false, true]);
+    for (const status of Object.keys(TODO_STATUS_LABEL)) {
       expect(todosOf(JSON.stringify({ todos: [{ content: 'x', status }] }))).toEqual([
         { content: 'x', status },
       ]);
