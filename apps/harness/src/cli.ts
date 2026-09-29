@@ -91,7 +91,10 @@ import {
 } from '@nexus/plugin-sandbox-policy';
 import type { SandboxMode } from './contained-backend.js';
 import type { CredentialService } from './credentials.js';
+import { installLaunchProxy } from './http-proxy-boot.js';
+import { processLaunchEnv } from './launch-env.js';
 import { createLiveModel, loadLiveLaunchEnv, DEFAULT_LIVE_MODEL_ID } from './live-model.js';
+import type { LiveLaunch } from './live-model.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { createFileReferencePlugin } from './file-references.js';
 import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js';
@@ -1485,6 +1488,26 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       })
     : undefined;
 
+  // **對外代理：啟動流程的第一件事**（#746），排在載完環境之後、第一顆外掛載入之前。假模型路徑沒有 `.env`，
+  // 用只有行程環境的那一層。收尾一定還原，不然同一個行程裡後面的呼叫會繼承這一次的派送器與環境。
+  const disposeProxy = await installLaunchProxy(
+    liveLaunch?.launchEnv ?? processLaunchEnv(),
+    (message) => printer.error(message),
+  );
+  try {
+    await runLaunched(options, invocation, printer, liveLaunch);
+  } finally {
+    await disposeProxy();
+  }
+}
+
+/** {@link runCli} 在啟動環境與代理都就位之後的其餘部分：載清單、組裝、跑。 */
+async function runLaunched(
+  options: RunCliOptions,
+  invocation: CliInvocation,
+  printer: Printer,
+  liveLaunch: LiveLaunch | undefined,
+): Promise<void> {
   // **清單只有一個來源：出貨的 `cordis.yml` 加上使用者那兩層**（#454、#455）。**它排在日誌
   // 之前，那是承重的**（#612）：落盤掛不掛由清單上 `session-persistence` 那一列講，而下面讀續接、
   // 解析日誌根都要先知道答案——關掉的時候一件都不該做。清單在這裡載也讓設定寫壞的那一類錯
