@@ -18,16 +18,34 @@ concurrency:
 permissions:
   contents: read
 
+# 結構：一個 plan job 算出範圍，各項檢查平行跑，最後由名為 `gate` 的彙總 job 收斂成單一 required check。
+#
+#   plan ─┬─ static ──────┐   format、lint、web build
+#         ├─ typecheck ───┤   兩批（matrix）
+#         ├─ test-packages┤
+#         ├─ test-web ────┼─► gate   ← ruleset 綁的 required status check，名稱永遠不要改
+#         └─ test-harness ┘   全跑時兩片、選擇性時一片
+#
+# job 數是有代價的：免費額度同時只跑 20 個 job，一輪 10 個以內，兩張 PR 並行才不會排隊。
+#
+# 新增檢查：往現有 job 加 step，或新增 job 並把它列進 gate 的 needs 與判斷（不列進去的 job 掛了 gate 也不會紅）。
+#
+# 選擇性測試只發生在「功能分支 → develop」的 PR 上，判斷邏輯與取捨見 .github/scripts/plan_ci.py。
+# `develop → main` 的 PR 與 main 的 push 一律全跑，那是這套對照有漏時的最後保險。
 jobs:
-  # 這個 job 的名稱就是 ruleset 綁定的 required status check，永遠不要改。
-  # 新增檢查請往這個 job 裡面加 step，不要拆出新的 required job。
-  gate:
-    name: gate
+  plan:
+    name: plan
     runs-on: ubuntu-latest
+    outputs:
+      ts: ${{ steps.plan.outputs.ts }}
+      full: ${{ steps.plan.outputs.full }}
+      pkg_filters: ${{ steps.plan.outputs.pkg_filters }}
+      test_mode: ${{ steps.plan.outputs.test_mode }}
+      harness_shards: ${{ steps.plan.outputs.harness_shards }}
+      harness_shard_total: ${{ steps.plan.outputs.harness_shard_total }}
+      base_sha: ${{ steps.base.outputs.sha }}
+      changed_count: ${{ steps.changes.outputs.count }}
     steps:
-      # action 一律 pin 浮動 major tag，跟著修補版走，只有跨 major 才需要人看。
-      # 版本下限由 runtime 決定：node20 已棄用，runner 現在強制墊到 node24 並發警告，
-      # 所以這幾顆都必須是 node24 的 major（checkout ≥ v5、setup-node ≥ v5、pnpm ≥ v5）。
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -91,88 +109,220 @@ jobs:
           done < changed.txt
           exit $failed
 
-      - name: 偵測需要掃描的 TypeScript 異動
-        id: ts
+      - name: 決定要跑的範圍
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: python3 .github/scripts/plan_ci.py plan
+
+      # harness 的選擇性測試要拿「分歧點」當 `vitest --changed` 的基準。
+      - name: 計算分歧點
+        id: base
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: echo "sha=$(git merge-base "origin/$BASE_REF" HEAD)" >> "$GITHUB_OUTPUT"
+
+  # Prettier 裝在 root 一次掃全 repo，所以用 root script 而非 pnpm -r；markdown 由 .prettierignore 排除。
+  # lint 用 pnpm -r（遞迴進 workspace 套件），不要用 --if-present：
+  # --if-present 在 script 不存在時會回綠燈，gate 會變成什麼都沒掃的橡皮圖章。
+  # 若所有套件都沒有該 script，pnpm -r 會直接失敗，逼你補上。
+  #
+  # build 併在這一個 job：typecheck 過不代表 build 過（vite plugin、路徑 alias、verbatimModuleSyntax
+  # 下的 import 寫法都可能 tsc 綠燈但打包失敗），但它自己只要幾秒，獨立成 job 只是多付一次安裝。
+  # 其他套件的 `build` 就是 `tsc --noEmit`，與 typecheck 重複，所以只 build 真的會打包的 web。
+  static:
+    name: static
+    needs: plan
+    if: needs.plan.outputs.ts == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - name: Format
+        run: pnpm run format:check
+      - name: Lint
+        run: pnpm -r run lint
+      - name: Build
+        run: pnpm --filter @nexus/web run build
+
+  # 22 個套件逐一啟動 tsc 是冷 runner 上最慢的部分，切成兩批平行。
+  # 切法必須互補：`b` 是明列的一批，`a` 是「packages/ 全部扣掉 b」，
+  # 這樣新增的套件不管叫什麼名字都一定落在其中一批，不會有套件沒被型別檢查。
+  typecheck:
+    name: typecheck (${{ matrix.scope }})
+    needs: plan
+    if: needs.plan.outputs.ts == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scope: a
+            filters: '--filter=./packages/* --filter=!./packages/nexus-plugin-[n-z]*'
+          - scope: b
+            filters: '--filter=./apps/* --filter=./packages/nexus-plugin-[n-z]*'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - name: Typecheck
+        env:
+          FILTERS: ${{ matrix.filters }}
+        # 同 test-packages：刻意不加引號讓 FILTERS 分詞，`set -f` 關掉 glob 交給 pnpm 自己展開。
+        run: |
+          set -f
+          pnpm $FILTERS run typecheck
+
+  # 選擇性時只跑異動到的 plugin 套件；全跑時是 packages/ 底下全部（core、wire 與所有 plugin）。
+  # 沒有測試的套件照樣會紅（vitest 找不到測試檔就失敗，見 docs/standards.md）。
+  test-packages:
+    name: test-packages
+    needs: plan
+    if: needs.plan.outputs.ts == 'true' && needs.plan.outputs.pkg_filters != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - name: Test
+        env:
+          PKG_FILTERS: ${{ needs.plan.outputs.pkg_filters }}
+        # PKG_FILTERS 由 plan_ci.py 產生（只含 `--filter=./packages/...`），刻意不加引號讓它分詞；
+        # `set -f` 關掉 glob，`./packages/*` 要原樣交給 pnpm，不能被 shell 展開。
+        run: |
+          set -f
+          pnpm $PKG_FILTERS run test
+
+  # web 的測試有一批會 fs 讀 plugin 與 harness 的原始碼（todo-view 等），套件圖上沒有這條邊，
+  # 所以任何 TypeScript 相關異動都要跑這個 job；選擇性時跑「相關的 ∪ 用 fs 讀原始碼的」，挑法見 plan_ci.py。
+  test-web:
+    name: test-web
+    needs: plan
+    if: needs.plan.outputs.ts == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+
+      - name: Test（全跑）
+        if: needs.plan.outputs.test_mode == 'full'
+        run: pnpm --filter @nexus/web run test
+
+      - name: Test（只跑相關）
+        if: needs.plan.outputs.test_mode == 'selective'
+        env:
+          BASE_SHA: ${{ needs.plan.outputs.base_sha }}
         run: |
           set -euo pipefail
-          if [ ! -f package.json ]; then
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "尚無 package.json，略過 TypeScript 檢查。"
-            exit 0
-          fi
-          # 底下三個非 TypeScript 的檔名是刻意的窄例外，不是「開始掃文件與 YAML」：
-          #
-          # - `docs/operations.md`：`documented-fixture.ts` 會從那份文件那道 `run serve --patch`
-          #   指令讀出核准 fixture 的 patch 檔，餵進 serve/cli 的測試（#490、#455）。
-          # - `apps/harness/cordis.yml`：出貨的 plugin 清單，`plugin-config.test.ts` 會拿它組一次
-          #   agent（`shippedPlugins()`，十七個測試檔在用）。**它是組裝的唯一來源**，只改它的
-          #   PR 正是最需要跑測試的那一種。
-          # - `apps/harness/src/*.patch.yml`：patch 檔案，測試用 `--patch` 旗標疊在出貨清單上
-          #   組 agent（#455）。只改其中一個 yml 的 PR 會「測試紅、gate 綠」，必須觸發掃描。
-          #
-          # 三者的共通點是「測試會讀這個檔」。只改它們的 PR 命不中上面任何一條，測試整段跳過、
-          # gate 直接綠——而那正是這道護欄唯一承重的案例。別放寬成所有 `.md` 或所有 `.yml`：
-          # 「純文件的 PR 不會卡住」是設計，不是疏漏。
-          if grep -qE '\.(ts|tsx|mts|cts)$|^package\.json$|^pnpm-lock\.yaml$|^tsconfig.*\.json$|^docs/operations\.md$|^apps/harness/cordis\.yml$|^apps/harness/src/.*\.patch\.yml$' changed.txt; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "本次異動未觸及 TypeScript 相關檔案，略過。"
-          fi
+          python3 .github/scripts/plan_ci.py test-files web "$BASE_SHA" > "$RUNNER_TEMP/web-files.txt"
+          echo "--- web 要跑的測試檔 ---"
+          cat "$RUNNER_TEMP/web-files.txt"
+          cd apps/web
+          pnpm exec vitest run $(cat "$RUNNER_TEMP/web-files.txt")
 
-      # 需要 package.json 內含 packageManager 欄位（例如 "pnpm@10.x"）
-      - uses: pnpm/action-setup@v6
-        if: steps.ts.outputs.found == 'true'
-
-      - uses: actions/setup-node@v7
-        if: steps.ts.outputs.found == 'true'
+  test-harness:
+    name: test-harness (${{ matrix.shard }}/${{ needs.plan.outputs.harness_shard_total }})
+    needs: plan
+    if: needs.plan.outputs.ts == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.harness_shards) }}
+    env:
+      SHARD: ${{ matrix.shard }}/${{ needs.plan.outputs.harness_shard_total }}
+    steps:
+      - uses: actions/checkout@v7
         with:
-          node-version: 22
-          cache: pnpm
-
-      - name: 安裝相依套件
-        if: steps.ts.outputs.found == 'true'
-        run: pnpm install --frozen-lockfile
-
-      # Prettier 裝在 root 一次掃全 repo，所以用 root script 而非 pnpm -r。
-      # markdown 由 .prettierignore 排除，見該檔案內的說明。
-      - name: Format
-        if: steps.ts.outputs.found == 'true'
-        run: pnpm run format:check
-
-      # 用 pnpm -r（遞迴進 workspace 套件），不要用 --if-present：
-      # --if-present 在 script 不存在時會回綠燈，gate 會變成什麼都沒掃的橡皮圖章。
-      # 若所有套件都沒有該 script，pnpm -r 會直接失敗，逼你補上。
-      - name: Lint
-        if: steps.ts.outputs.found == 'true'
-        run: pnpm -r run lint
-
-      - name: Typecheck
-        if: steps.ts.outputs.found == 'true'
-        run: pnpm -r run typecheck
+          # `vitest --changed <sha>` 需要分歧點在本地歷史裡。
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
 
       # 基座的 grep 有 rg 就走 rg、沒有就走只比檔名的退路，兩條的行為不同；runner 映像沒預裝 rg，
       # 不裝的話 CI 只驗得到退路。contained-backend-grep.test.ts 的 rg 那組找不到 rg 會紅，不會跳過。
       - name: 安裝 ripgrep
-        if: steps.ts.outputs.found == 'true'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep
 
-      - name: Test
-        if: steps.ts.outputs.found == 'true'
-        run: pnpm -r run test
+      - name: Test（全跑）
+        if: needs.plan.outputs.test_mode == 'full'
+        run: pnpm --filter @nexus/harness exec vitest run --shard="$SHARD"
 
-      # typecheck 過不代表 build 過：vite plugin、路徑 alias、verbatimModuleSyntax
-      # 下的 import 寫法都可能 tsc 綠燈但打包失敗。main 上的東西照定義要能發版。
-      - name: Build
-        if: steps.ts.outputs.found == 'true'
-        run: pnpm -r run build
+      # 相關的測試（vitest --changed）∪ import 圖看不到的必跑集合；挑法與理由見 plan_ci.py。
+      - name: Test（只跑相關）
+        if: needs.plan.outputs.test_mode == 'selective'
+        env:
+          BASE_SHA: ${{ needs.plan.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/plan_ci.py test-files harness "$BASE_SHA" > "$RUNNER_TEMP/harness-files.txt"
+          echo "--- harness 要跑的測試檔 ---"
+          cat "$RUNNER_TEMP/harness-files.txt"
+          cd apps/harness
+          pnpm exec vitest run --shard="$SHARD" $(cat "$RUNNER_TEMP/harness-files.txt")
 
-      - name: 摘要
-        if: always()
+  # 這個 job 的名稱就是 ruleset 綁定的 required status check，永遠不要改。
+  #
+  # GitHub 把 required check 的 skipped 當成通過，而上游失敗時下游預設是被 skip 而不是變紅，
+  # 所以這裡 `if: always()` 並逐個檢查結果：
+  #   - plan 必須是 success（它掛了，其餘全 skip，不能因此綠燈）；
+  #   - 該跑的 job 必須是 success，failure / cancelled 一律紅；
+  #   - 只有 plan 明說「不用掃」時，其餘才允許是 skipped。
+  gate:
+    name: gate
+    needs: [plan, static, typecheck, test-packages, test-web, test-harness]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: 彙總
+        env:
+          PLAN: ${{ needs.plan.result }}
+          TS: ${{ needs.plan.outputs.ts }}
+          PKG_FILTERS: ${{ needs.plan.outputs.pkg_filters }}
+          STATIC: ${{ needs.static.result }}
+          TYPECHECK: ${{ needs.typecheck.result }}
+          TEST_PACKAGES: ${{ needs.test-packages.result }}
+          TEST_WEB: ${{ needs.test-web.result }}
+          TEST_HARNESS: ${{ needs.test-harness.result }}
+          CHANGED_COUNT: ${{ needs.plan.outputs.changed_count }}
+          TEST_MODE: ${{ needs.plan.outputs.test_mode }}
         run: |
           {
             echo "### gate 結果"
             echo ""
-            echo "- 異動檔案數：${{ steps.changes.outputs.count }}"
-            echo "- TypeScript 掃描：${{ steps.ts.outputs.found }}"
+            echo "- 異動檔案數：$CHANGED_COUNT"
+            echo "- TypeScript 掃描：${TS:-未知}"
+            echo "- 測試範圍：${TEST_MODE:-未知}"
+            echo ""
+            echo "| job | 結果 |"
+            echo "| --- | --- |"
+            echo "| plan | $PLAN |"
+            echo "| static | $STATIC |"
+            echo "| typecheck | $TYPECHECK |"
+            echo "| test-packages | $TEST_PACKAGES |"
+            echo "| test-web | $TEST_WEB |"
+            echo "| test-harness | $TEST_HARNESS |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          fail() { echo "::error::$1"; exit 1; }
+
+          [ "$PLAN" = "success" ] || fail "plan 的結果是 '$PLAN'，不是 success；其餘 job 因此不可信。"
+
+          if [ "$TS" = "true" ]; then
+            for pair in "static=$STATIC" "typecheck=$TYPECHECK" "test-web=$TEST_WEB" "test-harness=$TEST_HARNESS"; do
+              [ "${pair#*=}" = "success" ] || fail "${pair%%=*} 的結果是 '${pair#*=}'，需要 success。"
+            done
+            if [ -n "$PKG_FILTERS" ]; then
+              [ "$TEST_PACKAGES" = "success" ] || fail "test-packages 的結果是 '$TEST_PACKAGES'，需要 success。"
+            else
+              [ "$TEST_PACKAGES" = "skipped" ] || fail "沒有要測的套件，test-packages 卻是 '$TEST_PACKAGES'。"
+            fi
+          elif [ "$TS" = "false" ]; then
+            echo "本次異動未觸及 TypeScript 相關檔案，略過。"
+            for pair in "static=$STATIC" "typecheck=$TYPECHECK" "test-packages=$TEST_PACKAGES" "test-web=$TEST_WEB" "test-harness=$TEST_HARNESS"; do
+              [ "${pair#*=}" = "skipped" ] || fail "不需要掃描，${pair%%=*} 卻是 '${pair#*=}'。"
+            done
+          else
+            fail "plan 沒有輸出 ts，無法判斷該跑什麼。"
+          fi
