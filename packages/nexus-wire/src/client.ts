@@ -36,6 +36,7 @@ import type {
   FeedbackRecordCommand,
   FeedbackRecordResult,
   InputRespondOne,
+  QueueSteerAction,
   QueueUpdateAction,
   QueueUpdateCommand,
   RpcMethod,
@@ -186,12 +187,11 @@ export interface WireClient {
    * **回的是受理回條**——佇列變成什麼樣走下行的 `inbox` 推送。那一件已經開跑、被刪了（可能是別的分頁）或從沒有過，
    * 回 `queue_item_not_found`；改成空白回 `invalid_argument`。
    *
-   * **只收改、刪**：線上的 `queue.update` 也收改成插話（`protocol.ts` 的 `QueueSteerAction`，#710），但這裡的參數型別刻意不加寬——
-   * web 的測試替身今天把 `action` 窮舉成改、刪兩種，加寬會讓 web 當場編不過。web 要送插話的那一張卡連同替身一起加寬它。
+   * **也收改成插話**（`protocol.ts` 的 `QueueSteerAction`，#710）：`action` 是改、刪、插話三選一。web 的測試替身已在 #778 一併加寬。
    */
   queueUpdate(
     threadId: string,
-    params: { readonly item_id: string; readonly action: QueueUpdateAction },
+    params: { readonly item_id: string; readonly action: QueueUpdateAction | QueueSteerAction },
   ): Promise<UplinkResult>;
   /** 評一則回覆（`feedback.put`，[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。 */
   feedbackPut(
