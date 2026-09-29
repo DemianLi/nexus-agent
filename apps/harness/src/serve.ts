@@ -55,7 +55,10 @@ import {
 } from '@nexus/core';
 import { assertSameCwd, assertSameWorkspaceRoot } from './resume-guards.js';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
+import { installLaunchProxy } from './http-proxy-boot.js';
+import { processLaunchEnv } from './launch-env.js';
 import { DEFAULT_LIVE_MODEL_ID, loadLiveLaunchEnv } from './live-model.js';
+import type { LiveLaunch } from './live-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import type { SandboxMode } from './contained-backend.js';
 import { BrowserAuth } from './browser-auth.js';
@@ -275,9 +278,6 @@ async function resumeThread(
  */
 export async function runServe(options: RunServeOptions): Promise<RunningServe | undefined> {
   const log = options.log ?? ((line: string) => console.log(line));
-  // `goalDriver` 那個閉包的參數也叫 `log`（它是讀日誌的 getter），所以伺服器日誌在這裡
-  // 另取一個名字——同一個函式，只是不讓兩個 `log` 在同一段裡打架。
-  const serverLog = log;
   const invocation = parseServeArgs(options.argv);
   if (invocation.help) {
     log(USAGE);
@@ -297,13 +297,52 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   }
 
   const cwd = options.cwd ?? process.cwd();
-  // **瀏覽器會話的密鑰也從這一份 env 解 home**（#424）：日誌根與密鑰落在同一個 home 底下。
-  // 密鑰在下面讀：權限過寬、記錄壞掉，都該在 server 還沒起來的時候就講。每次啟動只讀這一次，
-  // 之後在記憶體裡驗。
   const env = options.env ?? process.env;
   // **真模型路徑的啟動環境：兩層 `.env`**（#730），排在讀清單與建密鑰之前：壞的 `.env` 與舊位置搬家訊息在
   // server 還沒起來的時候就講。沒帶 `--live` 不讀任何 `.env`。
   const liveLaunch = invocation.live ? loadLiveLaunchEnv({ cwd, env }) : undefined;
+  // **對外代理：啟動流程的第一件事**（#746），排在載完環境之後、第一顆外掛載入之前。假模型路徑沒有 `.env`，
+  // 用只有行程環境的那一層。server 起不來就當場還原；起來了，收尾跟著 `close()` 走。
+  const disposeProxy = await installLaunchProxy(
+    liveLaunch?.launchEnv ?? processLaunchEnv(),
+    (message) => {
+      log(message);
+    },
+  );
+  let running: RunningServe;
+  try {
+    running = await startServer(options, invocation, liveLaunch, log);
+  } catch (error) {
+    await disposeProxy();
+    throw error;
+  }
+  return {
+    ...running,
+    close: async () => {
+      try {
+        await running.close();
+      } finally {
+        await disposeProxy();
+      }
+    },
+  };
+}
+
+/** {@link runServe} 在啟動環境與代理都就位之後的其餘部分：載清單、組裝、綁 port。 */
+async function startServer(
+  options: RunServeOptions,
+  invocation: ServeInvocation,
+  liveLaunch: LiveLaunch | undefined,
+  serverLog: (line: string) => void,
+): Promise<RunningServe> {
+  // `goalDriver` 那個閉包的參數也叫 `log`（它是讀日誌的 getter），所以伺服器日誌在這裡
+  // 另取一個名字——同一個函式，只是不讓兩個 `log` 在同一段裡打架。
+  const log = serverLog;
+  const cwd = options.cwd ?? process.cwd();
+  // **瀏覽器會話的密鑰也從這一份 env 解 home**（#424）：日誌根與密鑰落在同一個 home 底下。
+  // 密鑰在下面讀：權限過寬、記錄壞掉，都該在 server 還沒起來的時候就講。每次啟動只讀這一次，
+  // 之後在記憶體裡驗。
+  const env = options.env ?? process.env;
   // **清單只有一個來源：出貨的 `cordis.yml` 加上使用者那兩層**（#454、#455），與 CLI 同一條
   // 路：同一個函式、同一個 home 層、同一組 `--patch`。
   //
