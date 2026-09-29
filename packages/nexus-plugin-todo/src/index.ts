@@ -295,3 +295,4 @@ export function createTodoPlugin(options: TodoPluginOptions): PluginEntry {
   return { plugin: todoPlugin, config: options };
 }
 // exp
+throw new Error('mutation');
