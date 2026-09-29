@@ -40,7 +40,7 @@ jobs:
       ts: ${{ steps.plan.outputs.ts }}
       full: ${{ steps.plan.outputs.full }}
       pkg_filters: ${{ steps.plan.outputs.pkg_filters }}
-      harness_mode: ${{ steps.plan.outputs.harness_mode }}
+      test_mode: ${{ steps.plan.outputs.test_mode }}
       harness_shards: ${{ steps.plan.outputs.harness_shards }}
       harness_shard_total: ${{ steps.plan.outputs.harness_shard_total }}
       base_sha: ${{ steps.base.outputs.sha }}
@@ -193,8 +193,8 @@ jobs:
           set -f
           pnpm $PKG_FILTERS run test
 
-  # web 的測試會 fs 讀 plugin 與 harness 的原始碼（todo-view、turn-cancel 等），套件圖上沒有這條邊，
-  # 所以有任何 TypeScript 相關異動就跑。
+  # web 的測試有一批會 fs 讀 plugin 與 harness 的原始碼（todo-view 等），套件圖上沒有這條邊，
+  # 所以任何 TypeScript 相關異動都要跑這個 job；選擇性時跑「相關的 ∪ 用 fs 讀原始碼的」，挑法見 plan_ci.py。
   test-web:
     name: test-web
     needs: plan
@@ -202,9 +202,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/setup
-      - name: Test
+
+      - name: Test（全跑）
+        if: needs.plan.outputs.test_mode == 'full'
         run: pnpm --filter @nexus/web run test
+
+      - name: Test（只跑相關）
+        if: needs.plan.outputs.test_mode == 'selective'
+        env:
+          BASE_SHA: ${{ needs.plan.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/plan_ci.py test-files web "$BASE_SHA" > "$RUNNER_TEMP/web-files.txt"
+          echo "--- web 要跑的測試檔 ---"
+          cat "$RUNNER_TEMP/web-files.txt"
+          cd apps/web
+          pnpm exec vitest run $(cat "$RUNNER_TEMP/web-files.txt")
 
   test-harness:
     name: test-harness (${{ matrix.shard }}/${{ needs.plan.outputs.harness_shard_total }})
@@ -230,17 +246,17 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep
 
       - name: Test（全跑）
-        if: needs.plan.outputs.harness_mode == 'full'
+        if: needs.plan.outputs.test_mode == 'full'
         run: pnpm --filter @nexus/harness exec vitest run --shard="$SHARD"
 
       # 相關的測試（vitest --changed）∪ import 圖看不到的必跑集合；挑法與理由見 plan_ci.py。
       - name: Test（只跑相關）
-        if: needs.plan.outputs.harness_mode == 'selective'
+        if: needs.plan.outputs.test_mode == 'selective'
         env:
           BASE_SHA: ${{ needs.plan.outputs.base_sha }}
         run: |
           set -euo pipefail
-          python3 .github/scripts/plan_ci.py harness-files "$BASE_SHA" > "$RUNNER_TEMP/harness-files.txt"
+          python3 .github/scripts/plan_ci.py test-files harness "$BASE_SHA" > "$RUNNER_TEMP/harness-files.txt"
           echo "--- harness 要跑的測試檔 ---"
           cat "$RUNNER_TEMP/harness-files.txt"
           cd apps/harness
@@ -270,14 +286,14 @@ jobs:
           TEST_WEB: ${{ needs.test-web.result }}
           TEST_HARNESS: ${{ needs.test-harness.result }}
           CHANGED_COUNT: ${{ needs.plan.outputs.changed_count }}
-          HARNESS_MODE: ${{ needs.plan.outputs.harness_mode }}
+          TEST_MODE: ${{ needs.plan.outputs.test_mode }}
         run: |
           {
             echo "### gate 結果"
             echo ""
             echo "- 異動檔案數：$CHANGED_COUNT"
             echo "- TypeScript 掃描：${TS:-未知}"
-            echo "- harness 測試：${HARNESS_MODE:-未知}"
+            echo "- 測試範圍：${TEST_MODE:-未知}"
             echo ""
             echo "| job | 結果 |"
             echo "| --- | --- |"
