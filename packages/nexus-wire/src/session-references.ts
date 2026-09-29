@@ -17,7 +17,9 @@
  * 2. **候選少 `displayTitle`**：dsh 的 `displayTitle` 是「子代理標籤優先」，我們的子代理日誌沒有獨立標籤，兩者永遠相同，留著只會讓 client
  *    多判一次。子代理屬於哪條會話走 `parentSessionId`／`parentLabel`（Q4 要的）。
  * 3. **路徑掛在 thread 底下、走 `GET`**：同 {@link fileReferencesPath} 的理由。與它不同，**這條不為它建起 thread**：候選是冷讀，見 `session-reference-candidates.ts`。
- * 4. **沒接落盤就不提供**（{@link SessionReferenceListResult} 的 `available: false`）：dsh 永遠有 `sessionQuery`。沒有落盤時別的會話的內容不在任何讀得到的地方。
+ * 4. **沒接落盤就不提供**（{@link SessionReferenceListResult} 的 `available: false`）：dsh 對還活著的會話讀記憶體裡那一份，落盤與否都讀得到。我們的候選與快照都經
+ *    `SessionStore` 冷讀（[#665](https://github.com/DemianLi/nexus-agent/issues/665)，demian 2026-09-29 拍板），沒接落盤就沒有可讀的存放處，活著的 thread 也不例外。
+ *    **接了落盤的話，活著的 thread 落後磁碟最多一個批次窗口**（`windowMs`，預設 10 毫秒，清單上可調大）：剛講完的一句話在窗口內看不到。
  * 5. **CLI 的 run 目錄不列**：CLI 的 root id 一律叫 `cli`，引用只編 id，`cli` 指不到唯一的一份。
  *
  * 這個檔案**不依賴 Node**：web 也要在重編輯與泡泡上認這段文字。
@@ -35,12 +37,14 @@ export const DEFAULT_SESSION_REFERENCE_CANDIDATE_LIMIT = 50;
 /** 引用文字的 scheme。 */
 export const SESSION_REFERENCE_SCHEME = 'nexus-session:';
 
-/** 引用失敗的穩定代碼，網頁與日誌依它分流。 */
+/** 引用失敗的穩定代碼，網頁與日誌依它分流。七個全照 dsh（`config.ts`）；準備那一半（PR2）決定各自何時拋。 */
 export type SessionReferenceErrorCode =
+  | 'SESSION_REFERENCE_INVALID_CONFIG'
   | 'SESSION_REFERENCE_INVALID_REFERENCE'
   | 'SESSION_REFERENCE_SELF_REFERENCE'
   | 'SESSION_REFERENCE_TOO_MANY'
   | 'SESSION_REFERENCE_READ_FAILED'
+  | 'SESSION_REFERENCE_BUDGET_EXCEEDED'
   | 'SESSION_REFERENCE_CANCELLED';
 
 /** 帶穩定代碼的引用失敗。 */

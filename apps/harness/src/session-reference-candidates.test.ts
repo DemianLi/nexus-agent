@@ -303,6 +303,80 @@ describe('標題快取', () => {
     expect(ids(candidates)).toEqual(['a']);
   });
 
+  it('被取消的一趟讀過的不作廢：下一趟接著讀，每一份總共只開一次', async () => {
+    for (let i = 0; i < 20; i += 1) {
+      await put(CWD, `s${String(i).padStart(2, '0')}`, { events: [said(`第${i}句`, 2_000 + i)] });
+    }
+    const { opened, openStore } = counting();
+    const controller = new AbortController();
+    const counted = (directory: string): SessionStore => {
+      const store = openStore(directory);
+      return {
+        ...store,
+        list: store.list.bind(store),
+        open: (async (id: string, access: 'read') => {
+          // 第一份開始讀就取消：一趟只讀到一半。
+          if (opened.length === 0) controller.abort(new Error('打了下一個字'));
+          return store.open(id, access);
+        }) as SessionStore['open'],
+      } as SessionStore;
+    };
+    const s = service({ openStore: counted });
+    await expect(s.list('me', '', controller.signal)).rejects.toThrow('打了下一個字');
+    expect(opened.length).toBeGreaterThan(0);
+    expect(opened.length).toBeLessThan(20);
+    const candidates = await s.list('me', '');
+    expect(candidates).toHaveLength(20);
+    expect(opened.sort()).toEqual([...new Set(opened)].sort());
+    expect(opened).toHaveLength(20);
+  });
+
+  it('上一趟還在讀的那幾份，下一趟接著等，不重開', async () => {
+    for (let i = 0; i < 12; i += 1) {
+      await put(CWD, `s${String(i).padStart(2, '0')}`, { events: [said(`第${i}句`, 2_000 + i)] });
+    }
+    const opened: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const openStore = (directory: string): SessionStore => {
+      const inner = openJsonlSessionStore({ directory });
+      return {
+        ...inner,
+        list: inner.list.bind(inner),
+        open: (async (id: string, access: 'read') => {
+          opened.push(id);
+          await gate;
+          return inner.open(id, access);
+        }) as SessionStore['open'],
+      } as SessionStore;
+    };
+    const s = service({ openStore });
+    const first = new AbortController();
+    const one = s.list('me', '', first.signal).catch((error: unknown) => error);
+    while (opened.length < 8) await new Promise((resolve) => setTimeout(resolve, 1));
+    first.abort(new Error('打了下一個字'));
+    const two = s.list('me', '');
+    // 第二趟起跑、把同樣的幾份也排進去之後才放行。
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    release();
+    expect(await one).toBeInstanceOf(Error);
+    expect(await two).toHaveLength(12);
+    expect(opened.sort()).toEqual([...new Set(opened)].sort());
+    expect(opened).toHaveLength(12);
+  });
+
+  it('日誌壞到撿回來是空的，也照 revision 記下、沒變就不再讀', async () => {
+    const directory = await put(CWD, 'torn', { events: [said('好', 2_000)] });
+    await writeFile(join(directory, 'torn.jsonl'), '{壞掉\n');
+    const { opened, openStore } = counting();
+    const s = service({ openStore });
+    await s.list('me', '');
+    await s.list('me', '');
+    expect(opened).toEqual(['torn']);
+  });
+
   it('刪掉的會話從快取與清單裡消失', async () => {
     const directory = await put(CWD, 'gone', { events: [said('要被刪', 2_000)] });
     const s = service();

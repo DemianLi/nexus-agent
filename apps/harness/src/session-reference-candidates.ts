@@ -12,6 +12,9 @@
  *
  * ## 偏離 dsh（登記）
  *
+ * 0. **子代理的標題是 id**（實測，`delegated-subagent.test.ts` 那組組裝）：子代理的日誌只有 `model/*`、`assistant/message`、`tool/*`，沒有任何人話，
+ *    所以 `threadTitleOf` 回 `undefined`，標題退回 `<thread>/tools:<uuid>`。任務描述在父那邊的 `task` 呼叫裡，兩者之間沒有記下來的對應。
+ *    候選帶 `parentSessionId`／`parentLabel`，menu 上子代理那一列靠它講「屬於哪條會話」（Q4）。
  * 1. **標題的來源**：dsh 的候選只讀投影快取，「不讀日誌」，沒有快取的會話就用 id 當標題（`projectedLabels` 的註解）。我們沒有那一層
  *    （[#725](https://github.com/DemianLi/nexus-agent/issues/725)），標題得從日誌本文折出來，而這條路在每打一個字的下面。退到最接近的實作：
  *    **行程內的快取，以 `revision` 為鍵**——`revision` 沒變就不重讀，正是 #665 加它的用途。第一次冷讀整個會話根，之後只有變動過的
@@ -73,7 +76,8 @@ interface Row {
 
 interface CachedScan {
   readonly revision: string;
-  readonly scan: PromptScan;
+  /** 讀不了（列與讀之間被刪、壞得撿不回來）的也記下來，`revision` 沒變就不再試。 */
+  readonly scan: PromptScan | undefined;
 }
 
 /** 由小到大的字串比較：`localeCompare` 依語系，同一份資料在兩台機器上排出不同順序。 */
@@ -84,8 +88,13 @@ function byCodeUnit(left: string, right: string): number {
 export class SessionReferenceCandidates {
   readonly #options: SessionReferenceCandidatesOptions;
   readonly #stores = new Map<string, SessionStore>();
-  /** `<目錄>\0<id>` → 讀過的標題與當時的 `revision`。每次列完只留這一次還在的。 */
-  #scans = new Map<string, CachedScan>();
+  /**
+   * `<目錄>\0<id>` → 讀過的標題與當時的 `revision`。**逐份讀完就寫進來**，不等整趟跑完：web 每打一個字就取消上一次，
+   * 整趟才寫的話，連續打字時讀過的全部作廢、每一次都從頭冷讀。只有**完整跑完一趟**才清掉這一趟沒看到的。
+   */
+  readonly #scans = new Map<string, CachedScan>();
+  /** 正在讀的：被取消的上一趟還在讀的那份，下一趟直接接著等，不重開一次。鍵含 `revision`。 */
+  readonly #reading = new Map<string, Promise<PromptScan | undefined>>();
 
   constructor(options: SessionReferenceCandidatesOptions) {
     assertThreadTitleLimits(options.title);
@@ -187,7 +196,7 @@ export class SessionReferenceCandidates {
         listed.push({ directory, snapshot });
       }
     }
-    const nextScans = new Map<string, CachedScan>();
+    const seenKeys = new Set<string>();
     const rows: (Row | undefined)[] = new Array<Row | undefined>(listed.length);
     let cursor = 0;
     const worker = async (): Promise<void> => {
@@ -198,15 +207,9 @@ export class SessionReferenceCandidates {
         if (item === undefined) return;
         const { directory, snapshot } = item;
         const key = `${directory}\0${snapshot.header.id}`;
-        const cached = this.#scans.get(key);
-        let scan: PromptScan | undefined;
-        if (cached?.revision === snapshot.revision) {
-          scan = cached.scan;
-        } else {
-          scan = await this.#scan(directory, snapshot);
-        }
+        seenKeys.add(key);
+        const scan = await this.#scanCached(key, directory, snapshot);
         if (scan === undefined) continue;
-        nextScans.set(key, { revision: snapshot.revision, scan });
         rows[index] = {
           snapshot,
           scan,
@@ -217,8 +220,37 @@ export class SessionReferenceCandidates {
     };
     await Promise.all(Array.from({ length: SCAN_CONCURRENCY }, worker));
     signal?.throwIfAborted();
-    this.#scans = nextScans;
+    for (const key of this.#scans.keys()) {
+      if (!seenKeys.has(key)) this.#scans.delete(key);
+    }
     return rows.filter((row): row is Row => row !== undefined);
+  }
+
+  /** 先看快取，`revision` 對得上就直接用；否則讀一次（同一份同一版正在讀的共用同一個 promise）並寫回。 */
+  async #scanCached(
+    key: string,
+    directory: string,
+    snapshot: StoredSessionSnapshot,
+  ): Promise<PromptScan | undefined> {
+    const cached = this.#scans.get(key);
+    if (cached?.revision === snapshot.revision) return cached.scan;
+    const readingKey = `${key}\0${snapshot.revision}`;
+    let reading = this.#reading.get(readingKey);
+    if (reading === undefined) {
+      reading = this.#scan(directory, snapshot).then(
+        (scan) => {
+          this.#scans.set(key, { revision: snapshot.revision, scan });
+          this.#reading.delete(readingKey);
+          return scan;
+        },
+        (error: unknown) => {
+          this.#reading.delete(readingKey);
+          throw error;
+        },
+      );
+      this.#reading.set(readingKey, reading);
+    }
+    return reading;
   }
 
   /** 讀一份日誌折出標題；列與讀之間被刪掉、或壞得讀不了的回 `undefined`（不列）。 */
