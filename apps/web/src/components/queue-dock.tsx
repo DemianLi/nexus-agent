@@ -1,5 +1,10 @@
-import type { ConversationStatus, QueueUpdateAction, WireQueuedInput } from '@nexus/wire';
-import { Check, ChevronDown, ListEnd, Pencil, Trash2, X } from 'lucide-react';
+import type {
+  ConversationStatus,
+  QueueSteerAction,
+  QueueUpdateAction,
+  WireQueuedInput,
+} from '@nexus/wire';
+import { Check, ChevronDown, ListEnd, Pencil, SendHorizontal, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { toast } from 'sonner';
@@ -17,6 +22,14 @@ import {
   queueHeading,
   queuePreview,
 } from '@/lib/queue-view';
+import {
+  canSteerRows,
+  STEER_ACTION,
+  STEER_FAILED_TEXT,
+  STEER_ROW_LABEL,
+  STEER_ROW_UNAVAILABLE_TEXT,
+  STEER_UNAVAILABLE_TEXT,
+} from '@/lib/steer-queue';
 
 /** 無障礙名稱裡帶多少字的預覽：同一個佇列裡的「編輯」「刪除」要分得出是哪一則。 */
 const LABEL_PREVIEW_CHARS = 24;
@@ -25,7 +38,7 @@ const LABEL_PREVIEW_CHARS = 24;
 function rowAction(
   root: HTMLElement | null,
   id: string,
-  action: 'edit' | 'remove',
+  action: 'edit' | 'remove' | 'steer',
 ): HTMLElement | null {
   const row = [...(root?.querySelectorAll<HTMLElement>('[data-queue-item]') ?? [])].find(
     (candidate) => candidate.getAttribute('data-queue-item') === id,
@@ -45,7 +58,10 @@ export interface QueueDockProps {
   readonly status: ConversationStatus;
   /** 線斷了就什麼都送不出去。 */
   readonly connected: boolean;
-  onUpdate(itemId: string, action: QueueUpdateAction): Promise<QueueUpdateRejected | undefined>;
+  onUpdate(
+    itemId: string,
+    action: QueueUpdateAction | QueueSteerAction,
+  ): Promise<QueueUpdateRejected | undefined>;
   /** 焦點原本在佇列裡、而它要去的那一列不在了：交給輸入框（看得到的話）。 */
   onFocusFallback(): void;
 }
@@ -58,9 +74,9 @@ export interface QueueDockProps {
  * - **位置**：待辦面板下面、換手區外面（Q7）。停在核准點時輸入框被面板換掉，佇列照樣看得到、改得到。
  * - **空的不畫**；一件直接畫；兩件以上預設收合，表頭寫件數，清單自己捲。有一列在編輯或送出中時強制展開。
  * - **停住**（Q6）：表頭多一行 {@link QUEUE_PARKED_TEXT}，判斷在 {@link isQueueParked}。
- * - **每一列**：攤成一行的預覽，加上編輯與刪除。插話鈕（dsh 的 `queue.steer`）還沒接：`WireClient.queueUpdate` 的參數型別
- *   要先放寬（[#710](https://github.com/DemianLi/nexus-agent/issues/710) 拆開的第二步）。**排著的插話不在這裡**：它不等這一輪
- *   收掉，照 dsh 畫在對話尾端（`lib/steer-view.ts`）。
+ * - **每一列**：攤成一行的預覽，加上編輯、刪除與插話（dsh 的 `queue.steer`，[#710](https://github.com/DemianLi/nexus-agent/issues/710)）。
+ *   插話鈕只在這一輪跑著時按得動（`lib/steer-queue.ts`）；按下去那一則離開佇列，改畫在對話尾端（`lib/steer-view.ts`）。
+ *   **排著的插話不在這裡**：它不等這一輪收掉。
  * - **就地編輯**：Enter 存、Shift+Enter 換行、Esc 取消；組字中不存；空白不能存。
  * - **改、刪失敗用 toast**，不進頂端紅字。那一件已經不在隊裡時講 {@link QUEUE_GONE_TEXT}：編輯中的那件被領走時
  *   編輯器自己收掉，跟伺服器回「不在隊裡」是同一件事，只講一次。
@@ -121,7 +137,12 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
   const locked = !connected || busy !== undefined || editing !== undefined;
   const parked = isQueueParked(status, live.length);
 
-  const update = async (id: string, action: QueueUpdateAction): Promise<boolean> => {
+  const steerable = canSteerRows(connected, status);
+
+  const update = async (
+    id: string,
+    action: QueueUpdateAction | QueueSteerAction,
+  ): Promise<boolean> => {
     setBusy(id);
     const rejected = await onUpdate(id, action);
     setBusy(undefined);
@@ -131,10 +152,18 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
         toldGone.current.add(id);
         toast(QUEUE_GONE_TEXT);
       }
+    } else if (rejected.unavailable) {
+      // 這一輪不收了：那一則照舊排著，不算錯誤，用一般 toast。
+      toast(STEER_UNAVAILABLE_TEXT);
     } else {
-      toast.error(action.kind === 'edit' ? '改不了這一則' : '刪不掉這一則', {
-        description: rejected.message,
-      });
+      toast.error(
+        action.kind === 'edit'
+          ? '改不了這一則'
+          : action.kind === 'remove'
+            ? '刪不掉這一則'
+            : STEER_FAILED_TEXT,
+        { description: rejected.message },
+      );
     }
     return false;
   };
@@ -256,6 +285,19 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
               onClick={() => void update(item.id, { kind: 'remove' })}
             >
               <Trash2 />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-11 shrink-0 lg:size-8"
+              data-queue-action="steer"
+              aria-label={`${STEER_ROW_LABEL}：${label}`}
+              title={steerable ? STEER_ROW_LABEL : STEER_ROW_UNAVAILABLE_TEXT}
+              disabled={locked || leaving || !steerable}
+              onClick={() => void update(item.id, STEER_ACTION)}
+            >
+              <SendHorizontal />
             </Button>
           </>
         )}

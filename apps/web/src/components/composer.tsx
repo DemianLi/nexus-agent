@@ -7,7 +7,7 @@
  * **選單的行為照 dsh**（觸發、排序、選了之後做什麼，見 `lib/slash-trigger.ts`）：焦點一直留在輸入框，
  * 方向鍵換選項，Enter／Tab 選，Esc 與 Shift＋Tab 收起，收起後同一個片段不再自己跳出來。
  * 選單沒開時 Enter 送出、Shift＋Enter 換行；打注音、拼音時的 Enter 是選字，不送出。Cmd/Ctrl＋Enter 也送出，
- * 但標成加速的手勢，跑著時由呼叫端送成插話（#710）。
+ * 但標成加速的手勢，跑著時由呼叫端送成插話（#710）；草稿空白時它改成「把排著的全部改成插話」（`onSteerQueue`）。
  *
  * **打 `@` 跳檔案選單**（#653，規則見 `lib/file-mention.ts` 與 `lib/mention-menu.ts`）：跟 `/` 共用這一個浮層與
  * 同一套鍵盤，**先判 `@` 再判 `/`**。候選是非同步的：查詢一變就取消上一次，還沒回來時留著舊的列、那些列選不到，
@@ -71,6 +71,7 @@ export function Composer({
   canSend,
   onSubmit,
   sendHint = { text: 'Enter 送出' },
+  onSteerQueue,
   commands,
   onRunCommand,
   decorated,
@@ -93,6 +94,11 @@ export function Composer({
   readonly onSubmit: (gesture: SubmitGesture) => void;
   /** 底列左邊那句提示；跑著時呼叫端換成兩種送法各一句（#710）。 */
   readonly sendHint?: SendHint;
+  /**
+   * 草稿空白時按 Cmd/Ctrl+Enter：把排著的全部改成插話（#710，dsh 的 `canSteerQueue`）。**給了才生效**；呼叫端在
+   * 現在沒東西可插時不要給，那個手勢就跟以前一樣什麼都不做。
+   */
+  readonly onSteerQueue?: () => void;
   readonly commands: readonly SlashDescriptor[];
   /** 從選單直接執行一行命令；現在不能執行就回 false，那一行改留在草稿裡。 */
   readonly onRunCommand: (line: string) => boolean;
@@ -287,7 +293,12 @@ export function Composer({
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      if (canSend) onSubmit(isAcceleratedEnter(event) ? 'accelerated' : 'enter');
+      const accelerated = isAcceleratedEnter(event);
+      if (accelerated && draft.trim() === '' && onSteerQueue !== undefined) {
+        onSteerQueue();
+        return;
+      }
+      if (canSend) onSubmit(accelerated ? 'accelerated' : 'enter');
     }
   }
 

@@ -363,8 +363,16 @@ describe('對話介面', () => {
     function steeringClient(events: readonly Event[]) {
       const fake = fakeClient(events);
       const modes: (RunStartMode | undefined)[] = [];
+      /** 每一次 `queue.update` 送了什麼；`hold` 設了就卡著不回，直到 `release()`。 */
+      const updates: string[] = [];
+      let hold: Promise<void> | undefined;
       const client: WireClient = {
         ...fake.client,
+        queueUpdate: async (threadId, params) => {
+          updates.push(`${params.item_id}:${params.action.kind}`);
+          await hold;
+          return fake.downlink.update(threadId, params);
+        },
         runStart: async (threadId, text, options) => {
           modes.push(options?.mode);
           const run_id =
@@ -374,7 +382,17 @@ describe('對話介面', () => {
           return { type: 'success', id: 1, result: { run_id } };
         },
       };
-      return { fake, client, modes };
+      return {
+        fake,
+        client,
+        modes,
+        updates,
+        holdUpdates() {
+          let release!: () => void;
+          hold = new Promise<void>((resolve) => (release = resolve));
+          return release;
+        },
+      };
     }
 
     it('跑著時 Cmd/Ctrl+Enter 送插話：這一輪不停，排著的畫在對話尾端，被領走時同一格換成人的話', async () => {
@@ -438,6 +456,104 @@ describe('對話介面', () => {
       await waitFor(() => expect(screen.queryByText(PENDING_STEER_TEXT)).toBeNull());
       expect(screen.getByText(PARKED_STEER_TEXT)).toBeTruthy();
       expect(screen.getByText('改用 X').closest('[data-pending-steer]')).not.toBeNull();
+    });
+
+    /** 跑著、排著兩句（Enter 排隊），等佇列停靠列出現。 */
+    async function runningWithQueue(lines: readonly string[]) {
+      seq = 0;
+      const made = steeringClient([
+        frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      ]);
+      render(<App client={made.client} />);
+      await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
+      const input = screen.getByLabelText('要說的話');
+      for (const line of lines) {
+        fireEvent.change(input, { target: { value: line } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+        await waitFor(() => expect((input as HTMLTextAreaElement).value).toBe(''));
+      }
+      // 新進來的一件要撐過 200ms 才畫（`QUEUE_SETTLE_MS`）：兩件以上等表頭寫到全部，全套件負載重時第二件會晚到。
+      const dock = await screen.findByTestId('queue-dock');
+      if (lines.length > 1) {
+        await waitFor(() => expect(dock.textContent).toContain(`${lines.length} 則排著的訊息`));
+      }
+      return { ...made, input };
+    }
+
+    it('佇列列上的插話鈕：那一則離開佇列，改畫在對話尾端，這一輪不停（第二步）', async () => {
+      const { fake } = await runningWithQueue(['先讀設定']);
+      const dock = await screen.findByTestId('queue-dock');
+      fireEvent.click(within(dock).getByRole('button', { name: '插話：先讀設定' }));
+      const pending = await screen.findByText(PENDING_STEER_TEXT);
+      expect(pending.closest('[data-pending-steer]')?.textContent).toContain('先讀設定');
+      await waitFor(() => expect(screen.queryByTestId('queue-dock')).toBeNull());
+      expect(screen.getByRole('status').textContent).toContain('執行中');
+
+      fake.downlink.claimSteers(fake.opened[0]!);
+      await waitFor(() => expect(screen.queryByText(PENDING_STEER_TEXT)).toBeNull());
+      expect(screen.getAllByText('先讀設定')).toHaveLength(1);
+    });
+
+    it('草稿空白時 Cmd/Ctrl+Enter 把排著的全部改成插話，照排的先後', async () => {
+      const { input } = await runningWithQueue(['第一句', '第二句']);
+      expect((input as HTMLTextAreaElement).placeholder).toBe(
+        'Cmd/Ctrl+Enter 把排著的全部改成插話',
+      );
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+      await waitFor(() => expect(screen.queryByTestId('queue-dock')).toBeNull());
+      const bubbles = [...document.querySelectorAll('[data-pending-steer]')].map((e) =>
+        e.textContent?.replace(PENDING_STEER_TEXT, ''),
+      );
+      expect(bubbles).toEqual(['第一句', '第二句']);
+      expect((input as HTMLTextAreaElement).placeholder).toBe('說點什麼…');
+    });
+
+    it('上一趟「全部改成插話」還沒送完，再按一次不重複送', async () => {
+      const { input, updates, holdUpdates } = await runningWithQueue(['第一句', '第二句']);
+      const release = holdUpdates();
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+      await waitFor(() => expect(updates).toHaveLength(1));
+      release();
+      await waitFor(() => expect(updates).toHaveLength(2));
+      await waitFor(() => expect(screen.queryByTestId('queue-dock')).toBeNull());
+      // 第二件之後不再有第二趟：兩件各一次。
+      expect(updates.map((u) => u.split(':')[1])).toEqual(['steer', 'steer']);
+      expect(new Set(updates).size).toBe(2);
+    });
+
+    it('草稿有字時 Cmd/Ctrl+Enter 是送出插話，排著的不動', async () => {
+      const { input, modes } = await runningWithQueue(['第一句']);
+      fireEvent.change(input, { target: { value: '改用 X' } });
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+      await waitFor(() => expect(modes).toEqual([undefined, 'steer']));
+      expect(within(screen.getByTestId('queue-dock')).getByText('第一句')).toBeTruthy();
+    });
+
+    it('這一輪不收插話了：靜靜停，排著的照舊，說一句', async () => {
+      const { fake, input } = await runningWithQueue(['第一句', '第二句']);
+      fake.downlink.closeSteer(fake.opened[0]!);
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+      // sonner 的 toast 是全域的、跨測試留著：斷言這一條才有的那句。
+      expect(await screen.findByText('這一輪已經不收插話了，那一則照舊排著')).toBeTruthy();
+      // 兩件以上預設收合：表頭還寫著兩則。
+      expect(screen.getByTestId('queue-dock').textContent).toContain('2 則排著的訊息');
+      expect(document.querySelector('[data-pending-steer]')).toBeNull();
+    });
+
+    it('這一輪停了：鈕按不下去，空白 Cmd/Ctrl+Enter 什麼都不做，提示字照舊', async () => {
+      const { fake, input } = await runningWithQueue(['第一句']);
+      fake.downlink.push(fake.opened[0]!, [fake.downlink.lifecycleFrame('completed')]);
+      await waitFor(() => expect(screen.getByRole('status').textContent).not.toContain('執行中'));
+      const button = within(screen.getByTestId('queue-dock')).getByRole('button', {
+        name: '插話：第一句',
+      }) as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+      expect((input as HTMLTextAreaElement).placeholder).toBe('說點什麼…');
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+      await Promise.resolve();
+      expect(document.querySelector('[data-pending-steer]')).toBeNull();
+      expect(screen.getByTestId('queue-dock')).toBeTruthy();
     });
 
     it('送出鈕同 Enter：跑著時也是排隊', async () => {

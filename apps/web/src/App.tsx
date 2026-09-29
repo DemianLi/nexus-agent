@@ -42,6 +42,13 @@ import { STOPPED_QUESTION_TEXT, stoppedOnQuestion } from '@/lib/question-view';
 import { canRunSlash, canSendText } from '@/lib/queue-view';
 import { recallThread, rememberThread } from '@/lib/remembered-thread';
 import type { ThreadChoice } from '@/lib/remembered-thread';
+import {
+  canSteerQueue,
+  steerAll,
+  STEER_FAILED_TEXT,
+  STEER_QUEUE_PLACEHOLDER,
+  STEER_UNAVAILABLE_TEXT,
+} from '@/lib/steer-queue';
 import { pendingSteers } from '@/lib/steer-view';
 import { resolveSubmitMode, runningSendHint } from '@/lib/submit-mode';
 import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
@@ -104,12 +111,16 @@ const DECORATED_COMMANDS: ReadonlySet<string> = new Set([FEEDBACK_COMMAND_LINE.s
 export function inputPlaceholder({
   connected,
   stoppedOnQuestion,
+  steerQueue = false,
 }: {
   readonly connected: boolean;
   readonly stoppedOnQuestion: boolean;
+  /** 草稿空白、這一輪跑著、佇列裡有排著的：提示那個手勢（#710，dsh 的 `placeholder.steerQueue`）。 */
+  readonly steerQueue?: boolean;
 }): string {
   if (!connected) return '連線中…';
-  return stoppedOnQuestion ? STOPPED_QUESTION_TEXT : '說點什麼…';
+  if (stoppedOnQuestion) return STOPPED_QUESTION_TEXT;
+  return steerQueue ? STEER_QUEUE_PLACEHOLDER : '說點什麼…';
 }
 
 /** 提問面板名稱列右邊的 ❌：停止這一輪、不回答這些問題（§4.3、§8）。名稱與 tooltip 同一句，不加確認。 */
@@ -274,6 +285,26 @@ function ConversationView({
     conversation.connected,
   );
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  // 草稿空白時 Cmd/Ctrl+Enter 把排著的全部改成插話（#710）。一次只跑一趟：上一趟還在送時再按不重複送。
+  const steeringAll = useRef(false);
+  const steerQueueReady =
+    canSteerQueue(
+      conversation.connected,
+      conversation.state.status,
+      draft,
+      conversation.state.inbox.length,
+    ) && !steeringAll.current;
+  const steerQueue = () => {
+    if (steeringAll.current) return;
+    steeringAll.current = true;
+    void steerAll(conversation.state.inbox, conversation.updateQueue).then((outcome) => {
+      steeringAll.current = false;
+      if (outcome.kind === 'stopped') toast(STEER_UNAVAILABLE_TEXT);
+      else if (outcome.kind === 'failed') {
+        toast.error(STEER_FAILED_TEXT, { description: outcome.message });
+      }
+    });
+  };
   // **送出分兩道閘**（#645 Q2）。純文字跑著也送得出去：伺服器收下就排進送出佇列，開跑時才畫人的話。停在核准點時
   // 輸入框被面板換掉（Q3、§4.3），那道閘照樣擋。斜線命令一輪沒收尾時照舊擋——伺服器那側也擋——只打 `/feedback`
   // 例外：它不起一輪，只開回饋對話框，而那個框送的 `feedback.record` 任何時候都收（#267 的 Q10）。
@@ -488,7 +519,9 @@ function ConversationView({
                 placeholder={inputPlaceholder({
                   connected: conversation.connected,
                   stoppedOnQuestion: stoppedOnQuestion(conversation.state),
+                  steerQueue: steerQueueReady,
                 })}
+                {...(steerQueueReady ? { onSteerQueue: steerQueue } : {})}
                 canSend={canSend}
                 {...(conversation.state.status === 'running'
                   ? { sendHint: runningSendHint(navigator.userAgent) }
