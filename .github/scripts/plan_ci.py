@@ -50,8 +50,9 @@ FULL_RES = [
 ]
 
 
-HARNESS_SHARDS = 3
-WEB_SHARDS = 1
+# 量測（2026-09-29，GitHub 公開倉庫的標準 runner）：harness 單片約 190 秒，兩片各約 80–110 秒，
+# 三片沒有更快（vitest 依檔名雜湊分片、不看耗時，片間不均）。web 單片約 85 秒，低於 harness 的一片，不需要分。
+HARNESS_SHARDS = 2
 
 
 def read_changed(path: str = 'changed.txt') -> list[str]:
@@ -74,8 +75,6 @@ def plan(changed: list[str], event: str, base_ref: str) -> dict[str, str]:
             'harness_mode': 'none',
             'harness_shards': '[1]',
             'harness_shard_total': '1',
-            'web_shards': '[1]',
-            'web_shard_total': '1',
         }
 
     selective = event == 'pull_request' and base_ref == 'develop' and not forced
@@ -92,8 +91,6 @@ def plan(changed: list[str], event: str, base_ref: str) -> dict[str, str]:
         'harness_mode': 'selective' if selective else 'full',
         'harness_shards': json.dumps(list(range(1, harness_total + 1))),
         'harness_shard_total': str(harness_total),
-        'web_shards': json.dumps(list(range(1, WEB_SHARDS + 1))),
-        'web_shard_total': str(WEB_SHARDS),
     }
 
 
