@@ -188,11 +188,6 @@ export interface LaunchEnvOptions {
   readonly target?: NodeJS.ProcessEnv;
   /** 讀不了的檔往哪裡講。省略即 stderr。 */
   readonly warn?: (line: string) => void;
-  /**
-   * 這條路徑必須有值的名字。載入完仍然沒有值、而舊位置的 `.env` 還在時，**直接失敗**並指名搬去哪裡
-   * ——不能默默失效，也不能偷偷再讀舊位置。
-   */
-  readonly needs?: string;
   /** 舊位置的檔案路徑。省略即程式碼資料夾根目錄的 `.env`；測試才傳。 */
   readonly legacyFile?: string;
 }
@@ -246,13 +241,29 @@ export function loadLaunchEnv(options: LaunchEnvOptions): LaunchEnvironment {
     },
   });
 
-  const needs = options.needs;
-  if (needs !== undefined && legacyEnvFile !== undefined && snapshot.get(needs) === undefined) {
-    throw new Error(
-      `缺少環境變數 ${needs}。舊位置 ${legacyEnvFile}（程式碼資料夾根目錄的 .env）已經不再讀取：` +
-        `請把它搬到 ${resolve(home, '.env')}（使用者這一層，建議），` +
-        `或目前資料夾的 ${resolve(cwd, '.env')}。`,
-    );
-  }
   return snapshot;
+}
+
+/**
+ * 舊位置的 `.env` 還在、而需要的名字又沒有值時的失敗訊息：指名舊路徑與要搬去哪裡。
+ *
+ * **由呼叫端在「所有層都問過了還是沒有」之後才丟**（憑證服務的受管檔也算一層）：
+ * 舊檔還在但值已經在別處，不該擋人。不能默默失效，也不能偷偷再讀舊位置。
+ *
+ * @param launchEnv - {@link loadLaunchEnv} 的回傳。
+ * @param name - 缺的名字。
+ * @param locations - 新位置：目前資料夾與 harness home。
+ * @returns 有舊檔時的錯誤；沒有舊檔是 `undefined`（缺值由模型建構當場講缺哪一個）。
+ */
+export function legacyEnvMovedError(
+  launchEnv: LaunchEnvironment,
+  name: string,
+  locations: { readonly cwd: string; readonly home: string },
+): Error | undefined {
+  if (launchEnv.legacyEnvFile === undefined) return undefined;
+  return new Error(
+    `缺少環境變數 ${name}。舊位置 ${launchEnv.legacyEnvFile}（程式碼資料夾根目錄的 .env）已經不再讀取：` +
+      `請把它搬到 ${resolve(locations.home, '.env')}（使用者這一層，建議），` +
+      `或目前資料夾的 ${resolve(locations.cwd, '.env')}。`,
+  );
 }

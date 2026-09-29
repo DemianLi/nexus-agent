@@ -90,6 +90,7 @@ import {
   SandboxModeController,
 } from '@nexus/plugin-sandbox-policy';
 import type { SandboxMode } from './contained-backend.js';
+import type { CredentialService } from './credentials.js';
 import { createLiveModel, loadLiveLaunchEnv, DEFAULT_LIVE_MODEL_ID } from './live-model.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { createFileReferencePlugin } from './file-references.js';
@@ -733,9 +734,13 @@ export function transcriptLine(node: string, message: BaseMessage): string | und
  * @returns 可以交給組裝點的 model。
  * @throws `--live` 但環境變數裡沒有 key——訊息指名缺哪一個，不 fallback（兩層 `.env` 在入口載入，見 `runCli`）。
  */
-function createCliModel(live: boolean, liveModel: LiveModelConfig): BaseChatModel {
+function createCliModel(
+  live: boolean,
+  liveModel: LiveModelConfig,
+  credentials: CredentialService | undefined,
+): BaseChatModel {
   if (!live) return new ScriptedChatModel({ turns: CLI_SCRIPT });
-  return createLiveModel(liveModel);
+  return createLiveModel(liveModel, undefined, credentials);
 }
 
 type NexusAgent = NexusAgentHandle['agent'];
@@ -794,6 +799,12 @@ export async function createCliAgent(
      * （`settings/live-model.test.ts`）。
      */
     readonly liveModel?: LiveModelConfig;
+    /**
+     * 真實供應商的憑證服務（[#730](https://github.com/DemianLi/nexus-agent/issues/730)）：`runCli`／`runServe` 在起動期建一次
+     * （載入兩層 `.env`、完整檢查受管檔），對話那顆與標題那顆都從它取 key，每次請求前解析。省略時退回啟動環境
+     * （`process.env`），給手上沒有入口的呼叫端（測試、嵌入方）。
+     */
+    readonly credentials?: CredentialService;
     /**
      * LLM 標題那一列與標題上限（[#650](https://github.com/DemianLi/nexus-agent/issues/650)），理由同 {@link liveModel}：
      * 兩條產品路徑在起動期解一次往下傳，serve 上那一列寫壞了就在 server 起來之前失敗，而不是等到第一條 thread。
@@ -870,7 +881,7 @@ export async function createCliAgent(
   stepInbox: boolean;
 }> {
   const liveModel = invocation.liveModel ?? startupSetting(plugins, liveModelPlugin);
-  const model = createCliModel(invocation.live, liveModel);
+  const model = createCliModel(invocation.live, liveModel, invocation.credentials);
   // **標題模型是另一顆實例**：輸出上限換成標題那一列的，並表明用途，由 `createLiveModel` 決定要不要關推理
   // （`live-model.ts` 的 `LiveModelPurpose`）。`.env` 已經在入口（`runCli`／`runServe`）載入過了。
   const attachTitle =
@@ -879,6 +890,7 @@ export async function createCliAgent(
           liveModel,
           invocation.threadTitleLlm ?? startupSetting(plugins, threadTitleLlmPlugin),
           invocation.threadTitle ?? startupSetting(plugins, threadTitlePlugin),
+          invocation.credentials,
         )
       : undefined;
   // **channel 在這裡算一次，消費者共用。** 核准閘門由 `foldRegistry` 自己算
@@ -1012,11 +1024,13 @@ function titleLlmFor(
   liveModel: LiveModelConfig,
   config: ThreadTitleLlmConfig,
   limits: ThreadTitleConfig,
+  credentials: CredentialService | undefined,
 ): AttachSessionTitleLlm {
   return createSessionTitleLlm({
     model: createLiveModel(
       { ...liveModel, maxOutputTokens: config.maxOutputTokens },
       'session-title',
+      credentials,
     ),
     route: { provider: liveModel.baseUrl, model: liveModel.modelId },
     config,
@@ -1464,12 +1478,12 @@ export async function runCli(options: RunCliOptions): Promise<void> {
 
   // **真模型路徑的啟動環境：兩層 `.env`**（#730）。排在一切之前，壞的 `.env`（設了只有啟動環境能設的名字）
   // 與舊位置搬家訊息在什麼都還沒起來的時候就講。沒帶 `--live` 不讀任何 `.env`，同以前。
-  if (invocation.live) {
-    loadLiveLaunchEnv({
-      ...(options.cwd !== undefined && { cwd: options.cwd }),
-      ...(options.env !== undefined && { env: options.env }),
-    });
-  }
+  const liveLaunch = invocation.live
+    ? loadLiveLaunchEnv({
+        ...(options.cwd !== undefined && { cwd: options.cwd }),
+        ...(options.env !== undefined && { env: options.env }),
+      })
+    : undefined;
 
   // **清單只有一個來源：出貨的 `cordis.yml` 加上使用者那兩層**（#454、#455）。**它排在日誌
   // 之前，那是承重的**（#612）：落盤掛不掛由清單上 `session-persistence` 那一列講，而下面讀續接、
@@ -1573,6 +1587,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
       {
         ...effective,
         liveModel,
+        ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
         threadTitle,
         threadTitleLlm,
         optionalEntries: optionalEntriesOf(loaded, { live: invocation.live }),

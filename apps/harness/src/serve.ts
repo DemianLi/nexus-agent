@@ -303,7 +303,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   const env = options.env ?? process.env;
   // **真模型路徑的啟動環境：兩層 `.env`**（#730），排在讀清單與建密鑰之前：壞的 `.env` 與舊位置搬家訊息在
   // server 還沒起來的時候就講。沒帶 `--live` 不讀任何 `.env`。
-  if (invocation.live) loadLiveLaunchEnv({ cwd, env });
+  const liveLaunch = invocation.live ? loadLiveLaunchEnv({ cwd, env }) : undefined;
   // **清單只有一個來源：出貨的 `cordis.yml` 加上使用者那兩層**（#454、#455），與 CLI 同一條
   // 路：同一個函式、同一個 home 層、同一組 `--patch`。
   //
@@ -378,6 +378,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
       ...invocation,
       workspaceChanges: true,
       liveModel,
+      ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
       threadTitle,
       threadTitleLlm,
       optionalEntries,
@@ -540,6 +541,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
             // 插話（#710）：只有 serve 有，見 `createCliAgent` 那一格。
             stepInbox: true,
             liveModel,
+            ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
             threadTitle,
             threadTitleLlm,
             optionalEntries,

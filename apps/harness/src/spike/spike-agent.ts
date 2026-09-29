@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { createNexusAgent } from '../agent-factory.js';
 import { ScriptedChatModel } from '../scripted-model.js';
 import type { ScriptedTurn } from '../scripted-model.js';
+import type { CredentialService } from '../credentials.js';
 import { createLiveModel } from '../live-model.js';
 import { liveModelConfigSchema } from '../settings/live-model.js';
 
@@ -120,8 +121,8 @@ export async function createSpikeAgent(options: SpikeAgentOptions = {}) {
  *
  * **不進 CI** —— 它需要 API key 而且會花錢。缺少 key 時 `createLiveModel` 直接失敗。
  */
-export async function createLiveSpikeAgent() {
+export async function createLiveSpikeAgent(credentials?: CredentialService) {
   // 手上沒有條目清單，吃 schema 預設（#545）。
-  const model = createLiveModel(liveModelConfigSchema.parse({}));
+  const model = createLiveModel(liveModelConfigSchema.parse({}), undefined, credentials);
   return { agent: await buildAgent(model), model };
 }
