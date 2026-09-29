@@ -19,6 +19,7 @@ import {
   RightSidebarProvider,
   RightSidebarToggle,
 } from '@/components/right-sidebar';
+import { SessionReferenceContext } from '@/components/session-reference';
 import { SessionUsage } from '@/components/session-usage';
 import { StatusLine } from '@/components/status-line';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -231,6 +232,22 @@ function ConversationView({
     (query: string, signal: AbortSignal) => client.fileReferences(threadId, query, signal),
     [client, threadId],
   );
+  // `@` 的會話與子代理候選（#713）同樣綁在這條 thread 上（候選裡不含它自己）。
+  const sessionReferences = useCallback(
+    (query: string, signal: AbortSignal) => client.sessionReferences(threadId, query, signal),
+    [client, threadId],
+  );
+  // 人的泡泡裡的會話引用（#713 Q3）：清單上有的（同專案的主會話）點了切過去，其餘只顯示。
+  const sessionLinks = useMemo(() => {
+    const listed =
+      directory.listing.kind === 'ok'
+        ? new Set(directory.listing.result.items.map((item) => item.threadId))
+        : new Set<string>();
+    return {
+      openable: (sessionId: string) => sessionId !== threadId && listed.has(sessionId),
+      open: onSwitch,
+    };
+  }, [directory.listing, threadId, onSwitch]);
   // 側欄按內容搜（#760）：不分哪一條，搜的是整個清單。參照要穩，側欄靠它決定要不要重問。
   const searchThreads = useCallback(
     (query: string, signal: AbortSignal) => client.searchThreads(query, signal),
@@ -404,27 +421,29 @@ function ConversationView({
             <EmptyHero />
           </div>
         ) : (
-          <Transcript
-            state={conversation.state}
-            isFresh={isFresh}
-            changes={changes}
-            deliverableDownload={deliverableDownload}
-            feedback={{
-              ratings: conversation.ratings,
-              busy: !conversation.connected,
-              loadFailed: conversation.ratingsLoadFailed,
-              onSeed: conversation.seedRatings,
-              onRate: (messageId, rating) => void conversation.rate(messageId, rating),
-            }}
-            {...(conversation.history === undefined
-              ? {}
-              : {
-                  earlier: {
-                    ...conversation.history,
-                    onLoad: () => void conversation.loadEarlier(),
-                  },
-                })}
-          />
+          <SessionReferenceContext.Provider value={sessionLinks}>
+            <Transcript
+              state={conversation.state}
+              isFresh={isFresh}
+              changes={changes}
+              deliverableDownload={deliverableDownload}
+              feedback={{
+                ratings: conversation.ratings,
+                busy: !conversation.connected,
+                loadFailed: conversation.ratingsLoadFailed,
+                onSeed: conversation.seedRatings,
+                onRate: (messageId, rating) => void conversation.rate(messageId, rating),
+              }}
+              {...(conversation.history === undefined
+                ? {}
+                : {
+                    earlier: {
+                      ...conversation.history,
+                      onLoad: () => void conversation.loadEarlier(),
+                    },
+                  })}
+            />
+          </SessionReferenceContext.Provider>
         )}
 
         <div className="mx-auto w-full max-w-2xl shrink-0 px-6 pt-2 pb-6">
@@ -543,6 +562,7 @@ function ConversationView({
                 }}
                 commands={conversation.slashCommands}
                 fileReferences={fileReferences}
+                sessionReferences={sessionReferences}
                 decorated={DECORATED_COMMANDS}
                 // 從 `/` 選單直接執行不帶參數的命令：走斜線那一道閘（跑著時只有 `/feedback` 過得去）。
                 onRunCommand={(line) => {

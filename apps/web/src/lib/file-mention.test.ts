@@ -107,9 +107,9 @@ describe('選單上的列', () => {
     expect(
       mentionRows([file('/src/alpha.ts'), dir('/docs'), file('/a"b.md'), dir('/src/lib')], false),
     ).toEqual([
-      { candidate: file('/src/alpha.ts'), name: 'alpha.ts', parent: '/src' },
-      { candidate: dir('/docs'), name: 'docs/' },
-      { candidate: dir('/src/lib'), name: 'lib/', parent: '/src' },
+      { source: 'file', candidate: file('/src/alpha.ts'), name: 'alpha.ts', parent: '/src' },
+      { source: 'file', candidate: dir('/docs'), name: 'docs/' },
+      { source: 'file', candidate: dir('/src/lib'), name: 'lib/', parent: '/src' },
     ]);
   });
 });

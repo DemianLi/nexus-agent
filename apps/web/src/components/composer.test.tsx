@@ -1,6 +1,9 @@
+import { formatSessionReferenceMention } from '@nexus/wire';
 import type {
   FileReferenceCandidate,
   FileReferenceListOutcome,
+  SessionReferenceCandidate,
+  SessionReferenceListOutcome,
   SlashDescriptor,
 } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -43,6 +46,7 @@ function Harness({
   sendHint,
   onSteerQueue,
   fileReferences,
+  sessionReferences,
 }: {
   initial?: string;
   canSend?: boolean;
@@ -51,6 +55,7 @@ function Harness({
   sendHint?: SendHint;
   onSteerQueue?: () => void;
   fileReferences?: (query: string, signal: AbortSignal) => Promise<FileReferenceListOutcome>;
+  sessionReferences?: (query: string, signal: AbortSignal) => Promise<SessionReferenceListOutcome>;
 }) {
   const [draft, setDraft] = useState(initial);
   return (
@@ -73,6 +78,7 @@ function Harness({
         stopDisabled={false}
         onStop={() => {}}
         {...(fileReferences === undefined ? {} : { fileReferences })}
+        {...(sessionReferences === undefined ? {} : { sessionReferences })}
       />
     </main>
   );
@@ -323,7 +329,7 @@ describe('@ 引用', () => {
   }
 
   const ROOT = [dir('/docs'), dir('/src'), file('/README.md')];
-  const menu = () => screen.queryByRole('dialog', { name: '檔案選單' });
+  const menu = () => screen.queryByRole('dialog', { name: '@ 選單' });
   /** 讓回來的結果先處理完：沒等的話下一個字先到，那一份就成了過期的、被丟掉。 */
   const settle = () => act(async () => {});
 
@@ -495,6 +501,222 @@ describe('@ 引用', () => {
     key('ArrowDown');
     await waitFor(() => expect(input().getAttribute('aria-activedescendant')).toBe(selected()?.id));
     expect(selected()?.textContent).toBe('src/Tab');
+    expect(await axeViolations(document.body)).toEqual([]);
+  });
+});
+
+/**
+ * `@` 引用別的會話（#713）。狀態怎麼併、列怎麼排逐條驗在 `lib/mention-menu.test.ts`、`lib/session-mention.test.ts`；
+ * 這裡驗接上輸入框之後：什麼時候問會話、分三段畫出來、選了之後草稿變成什麼。
+ */
+describe('@ 引用別的會話', () => {
+  const file = (path: string): FileReferenceCandidate => ({ path, kind: 'file' });
+  const session = (
+    sessionId: string,
+    extra: Partial<SessionReferenceCandidate> = {},
+  ): SessionReferenceCandidate => {
+    const label = extra.label ?? sessionId;
+    return {
+      sessionId,
+      label,
+      sameWorkspace: true,
+      createdAt: 1,
+      updatedAt: 2,
+      mention: formatSessionReferenceMention({ sessionId, label }),
+      ...extra,
+    };
+  };
+
+  function sources() {
+    const files: {
+      readonly query: string;
+      readonly signal: AbortSignal;
+      readonly resolve: (outcome: FileReferenceListOutcome) => void;
+    }[] = [];
+    const sessions: {
+      readonly query: string;
+      readonly signal: AbortSignal;
+      readonly resolve: (outcome: SessionReferenceListOutcome) => void;
+    }[] = [];
+    return {
+      files,
+      sessions,
+      fileReferences: (query: string, signal: AbortSignal) =>
+        new Promise<FileReferenceListOutcome>((resolve) => files.push({ query, signal, resolve })),
+      sessionReferences: (query: string, signal: AbortSignal) =>
+        new Promise<SessionReferenceListOutcome>((resolve) =>
+          sessions.push({ query, signal, resolve }),
+        ),
+      answerFiles: (index: number, ...candidates: FileReferenceCandidate[]) =>
+        files[index]!.resolve({ kind: 'ok', result: { available: true, candidates } }),
+      answerSessions: (index: number, ...candidates: SessionReferenceCandidate[]) =>
+        sessions[index]!.resolve({ kind: 'ok', result: { available: true, candidates } }),
+    };
+  }
+
+  const menu = () => screen.queryByRole('dialog', { name: '@ 選單' });
+  const headings = () =>
+    [...document.querySelectorAll('[cmdk-group-heading]')].map((heading) => heading.textContent);
+
+  async function opened(fake: ReturnType<typeof sources>, draft = '@') {
+    render(
+      <Harness fileReferences={fake.fileReferences} sessionReferences={fake.sessionReferences} />,
+    );
+    type(draft);
+    await waitFor(() => expect(fake.files).toHaveLength(1));
+  }
+
+  it('打 @ 兩邊一起問，分成檔案、會話、子代理三段；別的專案寫目錄名，子代理寫屬於誰', async () => {
+    const fake = sources();
+    await opened(fake, '@');
+    expect(fake.sessions).toHaveLength(1);
+    expect(fake.sessions[0]!.query).toBe('');
+    fake.answerSessions(
+      0,
+      session('sub', { label: '查資料', parentSessionId: 'root', parentLabel: '大會話' }),
+      session('other', { label: '報表', sameWorkspace: false, cwd: '/w/reports' }),
+      session('mine', { label: '昨天那條' }),
+    );
+    fake.answerFiles(0, file('/README.md'));
+    await waitFor(() => expect(menu()).not.toBeNull());
+    expect(headings()).toEqual(['檔案', '會話', '子代理']);
+    expect(options()).toEqual(['README.md', '報表reports', '昨天那條', '查資料屬於 大會話']);
+  });
+
+  it('只有檔案時不畫段標題（跟原來一樣）', async () => {
+    const fake = sources();
+    await opened(fake);
+    fake.answerFiles(0, file('/README.md'));
+    fake.answerSessions(0);
+    await waitFor(() => expect(menu()).not.toBeNull());
+    expect(headings()).toEqual([]);
+    expect(options()).toEqual(['README.md']);
+  });
+
+  it('會話比檔案先回來：先畫會話，檔案到了併進上面一段', async () => {
+    const fake = sources();
+    await opened(fake, '@');
+    fake.answerSessions(0, session('s1', { label: '甲' }));
+    await waitFor(() => expect(options()).toEqual(['甲']));
+    fake.answerFiles(0, file('/a.ts'));
+    await waitFor(() => expect(options()).toEqual(['a.ts', '甲']));
+  });
+
+  it('Enter 選定會話：@ 那一段換成編好的引用文字加一個空白，選單收起、不再自己跳出來', async () => {
+    const fake = sources();
+    await opened(fake, '照 @昨');
+    const picked = session('s1', { label: '昨天那條' });
+    fake.answerSessions(0, picked);
+    fake.answerFiles(0);
+    await waitFor(() => expect(menu()).not.toBeNull());
+    key('Enter');
+    expect(input().value).toBe(`照 ${picked.mention} `);
+    await waitFor(() => expect(menu()).toBeNull());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(menu()).toBeNull();
+    expect(fake.sessions).toHaveLength(1);
+  });
+
+  it('Tab 對會話也是選定，沒有往下鑽', async () => {
+    const fake = sources();
+    await opened(fake, '@');
+    const picked = session('s1', { label: '甲' });
+    fake.answerSessions(0, picked);
+    fake.answerFiles(0);
+    await waitFor(() => expect(menu()).not.toBeNull());
+    key('Tab');
+    expect(input().value).toBe(`${picked.mention} `);
+    await waitFor(() => expect(menu()).toBeNull());
+  });
+
+  it('點一下也是選定', async () => {
+    const fake = sources();
+    await opened(fake, '@');
+    const picked = session('s1', { label: '甲' });
+    fake.answerSessions(0, picked);
+    fake.answerFiles(0, file('/a.ts'));
+    await waitFor(() => expect(options()).toEqual(['a.ts', '甲']));
+    fireEvent.click(screen.getByRole('option', { name: /甲/u }));
+    expect(input().value).toBe(`${picked.mention} `);
+  });
+
+  it('@/ 與 @" 開頭只查檔案', async () => {
+    const fake = sources();
+    await opened(fake, '@/');
+    expect(fake.sessions).toHaveLength(0);
+    type('@"my dir');
+    await waitFor(() => expect(fake.files).toHaveLength(2));
+    expect(fake.sessions).toHaveLength(0);
+  });
+
+  it('每打一個字，兩邊的上一次都取消', async () => {
+    const fake = sources();
+    await opened(fake, '@');
+    type('@a');
+    await waitFor(() => expect(fake.files).toHaveLength(2));
+    expect(fake.files[0]!.signal.aborted).toBe(true);
+    expect(fake.sessions[0]!.signal.aborted).toBe(true);
+    expect(fake.sessions[1]!.query).toBe('a');
+    expect(fake.sessions[1]!.signal.aborted).toBe(false);
+  });
+
+  it('一邊回來說不可用，另一邊還在飛的請求不重來', async () => {
+    const fake = sources();
+    await opened(fake, '@');
+    fake.files[0]!.resolve({ kind: 'ok', result: { available: false } });
+    await act(async () => {});
+    expect(fake.sessions[0]!.signal.aborted).toBe(false);
+    expect(fake.sessions).toHaveLength(1);
+    fake.answerSessions(0, session('s1', { label: '甲' }));
+    await waitFor(() => expect(options()).toEqual(['甲']));
+    // 沒有工作區是這台 server 每次都一樣的事：之後打字不再問檔案，會話照問。
+    type('@a');
+    await waitFor(() => expect(fake.sessions).toHaveLength(2));
+    expect(fake.files).toHaveLength(1);
+  });
+
+  it('沒接落盤（會話不可用）：檔案照開，之後不再問會話', async () => {
+    const fake = sources();
+    await opened(fake, '@');
+    fake.sessions[0]!.resolve({ kind: 'ok', result: { available: false } });
+    fake.answerFiles(0, file('/a.ts'));
+    await waitFor(() => expect(options()).toEqual(['a.ts']));
+    type('@a');
+    await waitFor(() => expect(fake.files).toHaveLength(2));
+    expect(fake.sessions).toHaveLength(1);
+  });
+
+  it('只給會話那一邊也能開（沒有工作區的 server）', async () => {
+    const fake = sources();
+    render(<Harness sessionReferences={fake.sessionReferences} />);
+    type('@');
+    await waitFor(() => expect(fake.sessions).toHaveLength(1));
+    fake.answerSessions(0, session('s1', { label: '甲' }));
+    await waitFor(() => expect(options()).toEqual(['甲']));
+  });
+
+  it('選好的引用貼著游標不會又叫出選單', async () => {
+    const fake = sources();
+    const picked = session('s1', { label: '甲' });
+    render(
+      <Harness
+        initial={`看 ${picked.mention}`}
+        fileReferences={fake.fileReferences}
+        sessionReferences={fake.sessionReferences}
+      />,
+    );
+    fireEvent.select(input(), { target: { selectionStart: input().value.length } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fake.files).toHaveLength(0);
+    expect(fake.sessions).toHaveLength(0);
+  });
+
+  it('過 axe', async () => {
+    const fake = sources();
+    await opened(fake, '@');
+    fake.answerSessions(0, session('s1', { label: '甲' }));
+    fake.answerFiles(0, file('/a.ts'));
+    await waitFor(() => expect(options()).toEqual(['a.ts', '甲']));
     expect(await axeViolations(document.body)).toEqual([]);
   });
 });

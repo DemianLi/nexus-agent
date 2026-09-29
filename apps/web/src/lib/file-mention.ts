@@ -16,6 +16,9 @@
 
 import type { FileReferenceCandidate } from '@nexus/wire';
 
+/** 一整段選好的會話引用。 */
+const SESSION_MENTION_TOKEN = /^@\[(?:\\.|[^\\\]])*\]\(nexus-session:[A-Za-z0-9_-]+\)$/u;
+
 export interface MentionHit {
   /** `@` 或 `@"` 之後、游標之前的那一段。 */
   readonly query: string;
@@ -36,6 +39,8 @@ export function detectMention(draft: string, caret: number): MentionHit | null {
   }
   const plain = /(?:^|\s)(@(\S*))$/u.exec(before);
   if (plain?.[1] === undefined || plain[2] === undefined) return null;
+  // 選好的會話引用整段（`@[標題](nexus-session:…)`）：退格退掉後面那個空白時游標會貼在它尾巴上，那不是在打 `@`。
+  if (SESSION_MENTION_TOKEN.test(plain[1])) return null;
   return { query: plain[2], quoted: false, start: caret - plain[1].length, end: caret };
 }
 
@@ -86,8 +91,9 @@ export function applyMentionPick(
   };
 }
 
-/** 選單上的一列。 */
-export interface MentionRow {
+/** 選單上的一列檔案或資料夾。 */
+export interface FileMentionRow {
+  readonly source: 'file';
   readonly candidate: FileReferenceCandidate;
   /** 名字；資料夾加 `/`。 */
   readonly name: string;
@@ -99,12 +105,14 @@ export interface MentionRow {
 export function mentionRows(
   candidates: readonly FileReferenceCandidate[],
   quoted: boolean,
-): readonly MentionRow[] {
+): readonly FileMentionRow[] {
   return candidates.flatMap((candidate) => {
     if (formatMention(candidate, quoted, false) === undefined) return [];
     const slash = candidate.path.lastIndexOf('/');
     const name = `${candidate.path.slice(slash + 1)}${candidate.kind === 'directory' ? '/' : ''}`;
     const parent = slash <= 0 ? undefined : candidate.path.slice(0, slash);
-    return [{ candidate, name, ...(parent === undefined ? {} : { parent }) }];
+    return [
+      { source: 'file' as const, candidate, name, ...(parent === undefined ? {} : { parent }) },
+    ];
   });
 }

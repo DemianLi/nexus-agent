@@ -15,17 +15,24 @@
  * 選中的那一列，Enter 就不歸選單管。資料夾按 Tab 往下鑽，Enter 是選定。沒給 `fileReferences`、或伺服器說沒有
  * 工作區時，`@` 就是普通字元。
  *
+ * **同一個 `@` 選單也列會話與子代理**（#713，規則見 `lib/session-mention.ts`）：檔案、會話一起問、各回各的，分三段畫；
+ * 選了會話就把伺服器編好的引用文字原樣插進草稿。`@/` 與 `@"` 開頭只問檔案。
+ *
  * **外觀與動效是 nexus 的**：浮層 250／150、縮放 .97／.99（§7，在 `ui/popover.tsx`）；送出鍵是實心主按鈕，
  * 按壓 .96（`styles/motion.css`）。
  */
 
-import { ArrowUp, ChevronRight, File, Folder, Square } from 'lucide-react';
+import { ArrowUp, Bot, ChevronRight, File, Folder, MessageSquare, Square } from 'lucide-react';
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode, RefObject } from 'react';
-import type { FileReferenceListOutcome, SlashDescriptor } from '@nexus/wire';
+import type {
+  FileReferenceListOutcome,
+  SessionReferenceListOutcome,
+  SlashDescriptor,
+} from '@nexus/wire';
 
 import { Button } from '@/components/ui/button';
-import { Command, CommandItem, CommandList } from '@/components/ui/command';
+import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command';
 import {
   InputGroup,
   InputGroupAddon,
@@ -35,13 +42,16 @@ import {
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import { Skeleton } from '@/components/ui/skeleton';
 import { applyMentionPick, detectMention } from '@/lib/file-mention';
-import type { MentionRow } from '@/lib/file-mention';
 import {
   MENTION_MENU_CLOSED,
+  MENTION_SECTIONS,
   mentionMenuOpen,
   mentionPickable,
+  mentionRowKey,
   reduceMentionMenu,
 } from '@/lib/mention-menu';
+import type { MentionRow, MentionSource } from '@/lib/mention-menu';
+import { applySessionPick } from '@/lib/session-mention';
 import { applySlashPick, detectSlash, slashCandidates } from '@/lib/slash-trigger';
 import { isAcceleratedEnter } from '@/lib/submit-mode';
 import type { SendHint, SubmitGesture } from '@/lib/submit-mode';
@@ -81,6 +91,7 @@ export function Composer({
   textareaRef,
   meter,
   fileReferences,
+  sessionReferences,
 }: {
   readonly draft: string;
   readonly onDraftChange: (draft: string) => void;
@@ -116,6 +127,14 @@ export function Composer({
     query: string,
     signal: AbortSignal,
   ) => Promise<FileReferenceListOutcome>;
+  /**
+   * `@` 的會話與子代理候選（#713）；同樣要穩定。沒給就只有檔案那一段。打 `@/` 或 `@"` 開頭時不問（那是檔案的路徑），
+   * 其餘情況跟檔案一起問，每打一個字兩邊都取消上一次。
+   */
+  readonly sessionReferences?: (
+    query: string,
+    signal: AbortSignal,
+  ) => Promise<SessionReferenceListOutcome>;
 }) {
   const ownRef = useRef<HTMLTextAreaElement>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
@@ -139,11 +158,25 @@ export function Composer({
 
   const [menu, dispatchMenu] = useReducer(reduceMentionMenu, MENTION_MENU_CLOSED);
   const generation = useRef(0);
-  const asking = mention !== null && fileReferences !== undefined && !sameHit(mention, dismissed);
+  const asking =
+    mention !== null &&
+    (fileReferences !== undefined || sessionReferences !== undefined) &&
+    !sameHit(mention, dismissed);
   const mentionQuery = mention?.query;
   const mentionQuoted = mention?.quoted ?? false;
   const mentionStart = mention?.start;
-  const mentionOff = menu.availability === 'unavailable';
+  // 會話只在打普通的字時問：`@/…` 是路徑、`@"…` 是有空白的路徑（都只查檔案）。
+  const wantSessions =
+    sessionReferences !== undefined && !mentionQuoted && !(mentionQuery ?? '').startsWith('/');
+  // 這一次想問的來源都確定不可用（伺服器說過沒有工作區、沒接落盤）：選單整個不開，也不再查。
+  const mentionOff =
+    (fileReferences === undefined || menu.availability.file === 'unavailable') &&
+    (!wantSessions || menu.availability.session === 'unavailable');
+  // 一個來源回來說不可用，不該讓另一個還在飛的請求重來：effect 只讀這一份，不把可用與否放進依賴。
+  const availability = useRef(menu.availability);
+  useLayoutEffect(() => {
+    availability.current = menu.availability;
+  });
   useEffect(() => {
     if (!asking || mentionQuery === undefined || mentionOff) {
       dispatchMenu({ type: 'close' });
@@ -152,18 +185,45 @@ export function Composer({
     generation.current += 1;
     const mine = generation.current;
     const controller = new AbortController();
-    dispatchMenu({ type: 'hit', generation: mine });
+    const sources: MentionSource[] = [];
+    const askFiles = fileReferences !== undefined && availability.current.file !== 'unavailable';
+    const askSessions = wantSessions && availability.current.session !== 'unavailable';
+    if (askFiles) sources.push('file');
+    if (askSessions) sources.push('session');
+    dispatchMenu({ type: 'hit', generation: mine, sources });
     // 取消掉的那一次不用另外擋：取消之後不是緊接著新的一號，就是收起來，reducer 兩種都會丟掉它回來的東西。
-    fileReferences(mentionQuery, controller.signal).then(
-      (outcome) => {
-        dispatchMenu({ type: 'settled', generation: mine, outcome, quoted: mentionQuoted });
-      },
-      () => {
-        dispatchMenu({ type: 'failed', generation: mine });
-      },
-    );
+    // 兩個來源各問各的：一個失敗、不可用或慢，都不拖累另一個。
+    if (askFiles) {
+      fileReferences(mentionQuery, controller.signal).then(
+        (outcome) => {
+          dispatchMenu({ type: 'settled', generation: mine, outcome, quoted: mentionQuoted });
+        },
+        () => {
+          dispatchMenu({ type: 'failed', generation: mine, source: 'file' });
+        },
+      );
+    }
+    if (askSessions) {
+      sessionReferences(mentionQuery, controller.signal).then(
+        (outcome) => {
+          dispatchMenu({ type: 'settled', generation: mine, source: 'session', outcome });
+        },
+        () => {
+          dispatchMenu({ type: 'failed', generation: mine, source: 'session' });
+        },
+      );
+    }
     return () => controller.abort();
-  }, [asking, mentionQuery, mentionQuoted, mentionStart, mentionOff, fileReferences]);
+  }, [
+    asking,
+    mentionQuery,
+    mentionQuoted,
+    mentionStart,
+    mentionOff,
+    wantSessions,
+    fileReferences,
+    sessionReferences,
+  ]);
   const mentionOpen = asking && mentionMenuOpen(menu);
 
   // cmdk 自己產生選項與清單的 id（傳進去的會被蓋掉），選中哪一項也是它在自己的 effect 裡更新。所以盯著清單的
@@ -221,6 +281,13 @@ export function Composer({
 
   function pickMention(row: MentionRow, action: 'pick' | 'drill') {
     if (mention === null) return;
+    if (row.source !== 'file') {
+      // 會話與子代理沒有往下鑽，Tab 也是選定；插進去的是伺服器編好的引用文字。
+      const result = applySessionPick(draft, mention, row.candidate);
+      pendingCaret.current = result.caret;
+      edit(result.draft, result.caret);
+      return;
+    }
     const result = applyMentionPick(draft, mention, row.candidate, action);
     if (result === undefined) return;
     pendingCaret.current = result.caret;
@@ -255,7 +322,12 @@ export function Composer({
         if (menu.highlight === null) return false;
         event.preventDefault();
         if (pickable !== undefined) {
-          pickMention(pickable, pickable.candidate.kind === 'directory' ? 'drill' : 'pick');
+          pickMention(
+            pickable,
+            pickable.source === 'file' && pickable.candidate.kind === 'directory'
+              ? 'drill'
+              : 'pick',
+          );
         }
         return true;
     }
@@ -373,7 +445,7 @@ export function Composer({
         side="top"
         align="start"
         className="w-(--radix-popover-trigger-width) p-1"
-        aria-label={mentionOpen ? '檔案選單' : '命令選單'}
+        aria-label={mentionOpen ? '@ 選單' : '命令選單'}
         // 焦點一直留在輸入框：打開、關掉都不搬；點輸入框本身不算點外面。**底列另一顆浮層的按鈕算外面**（用量表，
         // #528）：它也在輸入框裡，不收的話兩個浮層疊在同一個位置（真 Chrome 量過）。
         onOpenAutoFocus={(event) => event.preventDefault()}
@@ -439,9 +511,13 @@ export function Composer({
   );
 }
 
+/** 段的標題（Q4：檔案、會話、子代理）。 */
+const SECTION_HEADINGS = { file: '檔案', session: '會話', subagent: '子代理' } as const;
+
 /**
- * `@` 選單的列：名字加父目錄，資料夾右邊一個「Tab」提示與箭頭（按 Tab 往下鑽）。一列都還沒有時畫兩行骨架。
- * 高度上限 400px（dsh 的 `MenuView`）。
+ * `@` 選單的列（#653、#713）：檔案寫名字加父目錄，資料夾右邊一個「Tab」提示與箭頭（按 Tab 往下鑽）；會話寫標題，
+ * 別的專案後面加目錄名；子代理寫它屬於哪條會話。分段照檔案、會話、子代理，**只有檔案時不畫段標題**（跟原來一樣）。
+ * 一列都還沒有時畫兩行骨架。高度上限 400px（dsh 的 `MenuView`）。
  */
 function MentionList({
   rows,
@@ -459,19 +535,66 @@ function MentionList({
   readonly onPick: (row: MentionRow) => void;
 }) {
   const active = highlight === null ? undefined : rows[highlight];
+  const sectioned = rows.some((row) => row.source !== 'file');
+  const item = (row: MentionRow) => {
+    const key = mentionRowKey(row);
+    if (row.source === 'file') {
+      const directory = row.candidate.kind === 'directory';
+      const Icon = directory ? Folder : File;
+      return (
+        <CommandItem
+          key={key}
+          value={key}
+          onSelect={() => onPick(row)}
+          className="gap-2 rounded-lg px-3 py-2"
+        >
+          <Icon aria-hidden className="text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate">
+            <span className="text-sm">{row.name}</span>
+            {row.parent !== undefined && (
+              <span className="text-muted-foreground ml-2 text-xs">{row.parent}</span>
+            )}
+          </span>
+          {directory && (
+            <span aria-hidden className="text-muted-foreground flex items-center gap-1 text-xs">
+              Tab
+              <ChevronRight className="size-3" />
+            </span>
+          )}
+        </CommandItem>
+      );
+    }
+    const Icon = row.source === 'subagent' ? Bot : MessageSquare;
+    return (
+      <CommandItem
+        key={key}
+        value={key}
+        onSelect={() => onPick(row)}
+        className="gap-2 rounded-lg px-3 py-2"
+      >
+        <Icon aria-hidden className="text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate">
+          <span className="text-sm">{row.name}</span>
+          {row.hint !== undefined && (
+            <span className="text-muted-foreground ml-2 text-xs">{row.hint}</span>
+          )}
+        </span>
+      </CommandItem>
+    );
+  };
   return (
     <Command
       shouldFilter={false}
-      value={active?.candidate.path ?? ''}
-      onValueChange={(path) => {
-        const index = rows.findIndex((row) => row.candidate.path === path);
+      value={active === undefined ? '' : mentionRowKey(active)}
+      onValueChange={(key) => {
+        const index = rows.findIndex((row) => mentionRowKey(row) === key);
         if (index !== -1) onHover(index);
       }}
       className="bg-transparent"
     >
       <CommandList
         ref={listRef}
-        label="檔案"
+        label="@ 引用"
         aria-busy={loading}
         className="max-h-100"
         onMouseDown={(event) => event.preventDefault()}
@@ -482,32 +605,16 @@ function MentionList({
             <Skeleton className="h-4 w-1/2" />
           </div>
         )}
-        {rows.map((row) => {
-          const directory = row.candidate.kind === 'directory';
-          const Icon = directory ? Folder : File;
-          return (
-            <CommandItem
-              key={row.candidate.path}
-              value={row.candidate.path}
-              onSelect={() => onPick(row)}
-              className="gap-2 rounded-lg px-3 py-2"
-            >
-              <Icon aria-hidden className="text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate">
-                <span className="text-sm">{row.name}</span>
-                {row.parent !== undefined && (
-                  <span className="text-muted-foreground ml-2 text-xs">{row.parent}</span>
-                )}
-              </span>
-              {directory && (
-                <span aria-hidden className="text-muted-foreground flex items-center gap-1 text-xs">
-                  Tab
-                  <ChevronRight className="size-3" />
-                </span>
-              )}
-            </CommandItem>
-          );
-        })}
+        {sectioned
+          ? MENTION_SECTIONS.map((section) => {
+              const inSection = rows.filter((row) => row.source === section);
+              return inSection.length === 0 ? null : (
+                <CommandGroup key={section} heading={SECTION_HEADINGS[section]}>
+                  {inSection.map(item)}
+                </CommandGroup>
+              );
+            })
+          : rows.map(item)}
       </CommandList>
     </Command>
   );

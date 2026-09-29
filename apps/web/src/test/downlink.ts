@@ -6,7 +6,14 @@ import type {
   UplinkResult,
   WireQueuedInput,
 } from '@nexus/wire';
-import { INBOX, QUEUE_ITEM_NOT_FOUND, STEER_UNAVAILABLE, TITLE } from '@nexus/wire';
+import {
+  INBOX,
+  parseSessionReferenceText,
+  QUEUE_ITEM_NOT_FOUND,
+  STEER_UNAVAILABLE,
+  TITLE,
+} from '@nexus/wire';
+import type { WireClaimedInput } from '@nexus/wire';
 
 /**
  * 假 client 的下行：開線時先吐一批事先備好的 frame，之後還能再推（#645）。
@@ -17,6 +24,26 @@ import { INBOX, QUEUE_ITEM_NOT_FOUND, STEER_UNAVAILABLE, TITLE } from '@nexus/wi
  *
  * 推的 frame 的 `seq` 從很大的數起算：折疊器丟掉 `seq <= lastSeq` 的 frame，而各檔事先備好的 frame 從 0 起算。
  */
+/**
+ * 被領走的一件在線上的樣子：`@` 了別的會話的話，引用網址已經換成 `@標題`，並帶去了重、照先後的 `references`
+ * （伺服器在準備那一步換，#713）。壞掉的引用伺服器在收下時就拒絕了，這裡不會碰到；碰到就原樣。
+ */
+function claimedOf(id: string, text: string): WireClaimedInput {
+  try {
+    const parsed = parseSessionReferenceText(text);
+    if (parsed.references.length === 0) return { id, text };
+    const seen = new Set<string>();
+    const references = parsed.references.filter(({ sessionId }) => {
+      if (seen.has(sessionId)) return false;
+      seen.add(sessionId);
+      return true;
+    });
+    return { id, text: parsed.text, references };
+  } catch {
+    return { id, text };
+  }
+}
+
 export function fakeDownlink() {
   const listeners = new Map<string, Set<(events: readonly Event[]) => void>>();
   const queues = new Map<string, WireQueuedInput[]>();
@@ -102,7 +129,7 @@ export function fakeDownlink() {
     if (claim) {
       const rest = queue.filter((item) => item.id !== id);
       queues.set(threadId, rest);
-      push(threadId, [inboxFrame({ items: rest, nextStep, claimed: { id, text } })]);
+      push(threadId, [inboxFrame({ items: rest, nextStep, claimed: claimedOf(id, text) })]);
     }
     return id;
   }
@@ -130,7 +157,7 @@ export function fakeDownlink() {
 
   /** 下一次叫模型之前領走整條插話：清單清空，同一顆帶 `claimedNextStep`（照 `thread-pump.ts`）。 */
   function claimSteers(threadId: string): void {
-    const claimed = (steers.get(threadId) ?? []).map(({ id, text }) => ({ id, text }));
+    const claimed = (steers.get(threadId) ?? []).map(({ id, text }) => claimedOf(id, text));
     steers.set(threadId, []);
     push(threadId, [
       inboxFrame({ items: queues.get(threadId) ?? [], nextStep: [], claimedNextStep: claimed }),
