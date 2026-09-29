@@ -13,12 +13,20 @@
  * （`packages/subprocess/subprocess/src/index.ts:58-60`）；我們沒有那個服務，兩個使用者都只能走這條。放在 core，
  * 是因為兩個 plugin 都已相依它，而 plugin 之間今天沒有互相相依。
  *
- * **dsh 另外疊的代理那一層還沒有**（`packages/subprocess/subprocess/src/index.ts:75-78`）：它在行程裝了代理時
- * 補 `NODE_USE_ENV_PROXY=1`、把代理變數還原成使用者設的值。我們還沒有代理政策，所以代理變數照繼承、不補旗標；
- * 那一層由 [#746](https://github.com/DemianLi/nexus-agent/issues/746) 疊進這個函式裡。
+ * ## 代理那一層（[#746](https://github.com/DemianLi/nexus-agent/issues/746)）
+ *
+ * 照 dsh 疊在 `scrubbedParentEnv()` 後面的那段（`packages/subprocess/subprocess/src/index.ts:75-78`）：行程裝了代理時，
+ * 結果多帶 `NODE_USE_ENV_PROXY=1`，並把代理變數還原成使用者匯出的值（沒設的名字移除），細節與判準在
+ * {@link proxyEnvironmentForChild}。子行程裡的 Node 不看這個旗標就不理代理變數，MCP 的 stdio server 與 git 底下的
+ * 任何 Node 工具會在父行程走代理時自己直連。沒裝代理時這一層是空的，結果跟只清洗一模一樣。
+ *
+ * **與 dsh 的差異**：dsh 的函式沒有參數，永遠讀 `process.env`；我們的可以餵一份合成的環境（測試用），而代理狀態是
+ * 行程層的、不屬於那份合成環境，所以**只有讀 `process.env` 時才疊這一層**，餵別份環境的呼叫端拿到純清洗。
  *
  * @module
  */
+
+import { proxyEnvironmentForChild } from './http-proxy/install.js';
 
 /**
  * 名字像憑證的環境變數不交給子行程，照抄 dsh 的 `SENSITIVE_ENV_PATTERN`（`packages/subprocess/subprocess/src/index.ts:47`）。
@@ -31,7 +39,7 @@ const HARNESS_ENV_PREFIX = 'NEXUS_';
 
 /**
  * 父行程的環境，拿掉名字像憑證的與 harness 自己的變數，照 dsh 的 `scrubbedParentEnv()`。兩條都不分大小寫。
- * `PATH`、`HOME`、語系、代理變數照留，子行程才跑得起來。**要刻意交出去的憑證**（例如 MCP 設定裡的
+ * `PATH`、`HOME`、語系、代理變數照留，子行程才跑得起來；行程裝了代理時另外疊上代理那一層（見檔頭）。**要刻意交出去的憑證**（例如 MCP 設定裡的
  * `GITHUB_TOKEN`）由呼叫端疊在結果後面，不在這裡放行。
  *
  * @param source - 父行程的環境，省略是 `process.env`（呼叫當下才讀）。
@@ -45,6 +53,12 @@ export function scrubbedParentEnv(
     if (value === undefined || SENSITIVE_ENV_PATTERN.test(key)) continue;
     if (key.toUpperCase().startsWith(HARNESS_ENV_PREFIX)) continue;
     env[key] = value;
+  }
+  if (source !== process.env) return env;
+  // `undefined` 是「使用者沒設這個名字」，要把這個行程自己寫進去的移掉。
+  for (const [name, value] of Object.entries(proxyEnvironmentForChild())) {
+    if (value === undefined) Reflect.deleteProperty(env, name);
+    else env[name] = value;
   }
   return env;
 }

@@ -73,4 +73,21 @@ server.registerTool(
   }),
 );
 
+// 子行程自己往外連一次（#746）。回它收到的狀態碼或錯誤——連到哪裡由測試在假代理那側量。
+server.registerTool(
+  'fetch_url',
+  {
+    description: '用這個行程自己的 fetch 連一個網址。',
+    inputSchema: { url: z.string().describe('要連的網址') },
+  },
+  async ({ url }) => {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+      return { content: [{ type: 'text', text: `status ${String(response.status)}` }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `error ${String(error)}` }] };
+    }
+  },
+);
+
 await server.connect(new StdioServerTransport());

@@ -158,6 +158,33 @@ refs:
 - **搬家**：程式碼資料夾根目錄的舊 `.env` 不再讀取。key 解析不到、而舊檔還在時，錯誤訊息會指出舊檔位置與該搬去哪裡。
   搬法：`mkdir -p ~/.nexus-agent && mv <程式碼資料夾>/.env ~/.nexus-agent/.env`，或改存成受管檔。
 
+## 經代理連外
+
+模型請求與走 HTTP 的 MCP server 會經標準代理環境變數指定的代理發出（[#746](https://github.com/DemianLi/nexus-agent/issues/746)）。
+啟動時讀一次，不需要別的設定；做法與限制照 dsh 的 `docs/user/guide/network-proxy.zh.md`。Node 要 22.19 以上（`package.json` 的 `engines`）。
+
+```bash
+export HTTPS_PROXY=http://127.0.0.1:7890
+export HTTP_PROXY=http://127.0.0.1:7890
+```
+
+- **設在哪裡**：shell 匯出的，或 harness home 的 `.env`（`~/.nexus-agent/.env`）；匯出的優先。**目前資料夾的 `.env` 不能設**，
+  會隨 `git clone` 進來的檔案不該決定你的流量去哪，設了就拒絕啟動並指名檔案與變數（大小寫寫法都擋）。
+  要帳密就寫在網址裡：`http://user:password@proxy:8080`；診斷只指名變數，不印網址。
+- **哪些名字**：`HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`，小寫優先；只設 `ALL_PROXY` 也行，兩種協定都用它；`https:` 沒設時退到 `HTTP_PROXY`。
+- **`NO_PROXY`** 寫主機名，連子網域一起放行（`example.com` 含 `api.example.com`），可帶 `:port`，`*` 全放行。
+  **不支援 CIDR**（`10.0.0.0/8` 不會生效），改寫主機名或網域尾巴。`localhost`、`127.0.0.0/8`、`::1` 永遠直連，不必列。
+- **不支援 SOCKS。** `socks5://…` 會在啟動時報出來（訊息以 `代理：` 開頭）並讓那個協定直連，不會借用另一個協定的代理。請改指向代理軟體的 HTTP 埠。
+- **做 TLS 攔截的企業代理**要它的憑證：啟動前 `export NODE_EXTRA_CA_CERTS=/path/to/corporate-ca.pem`（Node 只在行程啟動時讀）。
+- **子行程走同一個代理**：git 快照與以 stdio 起的 MCP server 繼承這些變數（`execute` 目前沒有註冊；哪天開了，要走同一份清洗過的環境）；子行程若是 Node，
+  要 22.21 以上才會遵守（我們替它補 `NODE_USE_ENV_PROXY=1`），更舊的直連。代理值有一個是被拒絕的（例如 SOCKS）時不補旗標，
+  Node 子行程直連，`curl` 與 `git` 仍讀得到那個值。
+- **代理網址裡的密碼，子行程也讀得到**：它就是一個普通環境變數，MCP server 與 git 都拿得到（名字不像憑證，清洗不會拿掉它）。
+  在意的話，請提供無需帳密的代理入口。
+- **刻意直連**：遙測（OTLP 匯出走 Node 自己的 HTTP 客戶端，不經代理；禁止直連的環境裡它只會失敗，沒有功能依賴它）、本機上的一切。
+
+驗證：`--live` 送一則訊息，同時看代理軟體的連線紀錄；沒看到請求時，用 `env | grep -i proxy` 確認變數真的在啟動這個行程的環境裡。
+
 ## 執行上限
 
 **agent 迴圈的上限是組裝點設的不是基座設的。** `createDeepAgent` 自己把 `recursionLimit` 設成 `1e4`
