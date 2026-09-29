@@ -142,7 +142,9 @@ jobs:
       - name: Lint
         run: pnpm -r run lint
 
-  # 22 個套件逐一啟動 tsc 是冷 runner 上最慢的部分，分成 apps 與 packages 兩批平行。
+  # 22 個套件逐一啟動 tsc 是冷 runner 上最慢的部分，切成三批平行。
+  # 切法必須互補：packages-b 是明列的一批，packages-a 是「packages/ 全部扣掉 b」，
+  # 這樣新增的套件不管叫什麼名字都一定落在其中一批，不會有套件沒被型別檢查。
   typecheck:
     name: typecheck (${{ matrix.scope }})
     needs: plan
@@ -151,14 +153,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scope: [apps, packages]
+        include:
+          - scope: apps
+            filters: '--filter=./apps/*'
+          - scope: packages-a
+            filters: '--filter=./packages/* --filter=!./packages/nexus-plugin-[n-z]*'
+          - scope: packages-b
+            filters: '--filter=./packages/nexus-plugin-[n-z]*'
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - name: Typecheck
+        env:
+          FILTERS: ${{ matrix.filters }}
+        # 同 test-packages：刻意不加引號讓 FILTERS 分詞，`set -f` 關掉 glob 交給 pnpm 自己展開。
         run: |
           set -f
-          pnpm "--filter=./${{ matrix.scope }}/*" run typecheck
+          pnpm $FILTERS run typecheck
 
   # 選擇性時只跑異動到的 plugin 套件；全跑時是 packages/ 底下全部（core、wire 與所有 plugin）。
   # 沒有測試的套件照樣會紅（vitest 找不到測試檔就失敗，見 docs/standards.md）。
