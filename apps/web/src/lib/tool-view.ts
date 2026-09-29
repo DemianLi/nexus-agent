@@ -145,3 +145,4 @@ export function toolInputBody(
 
 export { firstLine };
 // exp
+export const mutant = (x: string) => 'Error: ' + x;
