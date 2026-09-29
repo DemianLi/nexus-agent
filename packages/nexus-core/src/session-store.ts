@@ -15,15 +15,32 @@
  * 3. **實體化可以延後。** 後端可以把建檔推遲到第一次 `append` 或 `flush`——那是純粹的
  *    優化，dsh 明文允許。所以 {@link SessionStore.create} 是同步的，IO 在把手上。
  *
- * ## 兩處跟 dsh 不一樣的
+ * ## 讀回有兩條
  *
- * - **沒有 `stat`／`list`，讀回只有一個 `resume`。** dsh 的 `open`／`stat`／`list` 是給一個
- *   會列出、查詢、續接任何會話的服務用的；我們的讀方只有續接——CLI 的 `--resume <run 目錄>`
- *   與 serve 碰到一條 thread 時（[#251](https://github.com/DemianLi/nexus-agent/issues/251)
- *   的門 A），兩個手上都已經有位址（目錄與 thread id），不需要列。所以只抄續接要的那一條：讀回、交出一個接著寫的把手。`stat`／`list` 等有人
- *   要列的那天再加。**離線掃描（[#268](https://github.com/DemianLi/nexus-agent/issues/268)）是列的，
- *   但它不經過這個介面**：它在產品路徑外、只讀 JSONL 後端的檔（`apps/harness/src/eval/session-scan.ts`），
- *   不要把手也不拿租約。所以這一條說的仍是執行期的讀方。
+ * - **續接**（{@link SessionStore.resume}）：拿寫租約、截掉撕裂的尾巴、交出接著寫的把手。對到 dsh 的
+ *   `open(id, 'write')`。CLI 的 `--resume <run 目錄>` 與 serve 碰到一條 thread 時走它
+ *   （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
+ * - **唯讀**（{@link SessionStore.list} 與 {@link SessionStore.open}）：照 dsh 的 `list` 與 `open(id, 'read')`
+ *   （[#665](https://github.com/DemianLi/nexus-agent/issues/665)）。**不拿租約、不截尾巴、不動 header**，別的行程
+ *   握著的那一份照樣讀得到。讀方：serve 的會話列表（[#302](https://github.com/DemianLi/nexus-agent/issues/302)）與
+ *   按內容搜尋（[#631](https://github.com/DemianLi/nexus-agent/issues/631)），都在產品路徑上——所以列與冷讀要經過這個
+ *   介面，檔名與 header 的規則只留在後端。離線掃描（[#268](https://github.com/DemianLi/nexus-agent/issues/268)）
+ *   在產品路徑外、要讀比這一版新的，不走 `list`，只 import 後端那一份檔名與 header 規則
+ *   （同 dsh 的日誌匯出只 import 檔名定義）。
+ *
+ * ## 跟 dsh 不一樣的
+ *
+ * - **沒有 `stat`**：今天沒有消費者（dsh 拿它給投影快取，那一層在
+ *   [#725](https://github.com/DemianLi/nexus-agent/issues/725) 等決定）。`list` 的
+ *   {@link StoredSessionSnapshot.revision} 照抄了：內容搜尋的索引就是 dsh 說的衍生讀取快取。
+ * - **`list` 只列落了盤的**：dsh 連這個行程 `create` 了、還沒實體化的也列
+ *   （`packages/session/session-persistence/src/index.ts:125-130`）。#665 是不改行為的重構，照舊只讀盤；要照 dsh
+ *   列得另開一刀（demian 2026-09-29 拍板）。
+ * - **`list` 多回一格 {@link StoredSessionListing.unreadable}**：dsh 的 JSONL `list` 碰到讀不懂或版本太新的 header
+ *   直接略過、不數。我們的列表把它數出來、一路畫到 web 上（不數的話「少了一條」跟「本來就沒有」分不出來），
+ *   demian 2026-09-29 拍板照舊。
+ * - **唯讀讀有撿回模式**（{@link StoredSessionReadOptions.salvage}）：dsh 的冷讀碰到中段壞掉就拋。我們的列表與搜尋
+ *   以前各自逐行撿回、不讓一份壞檔拖垮整份清單；#665 把那條規則收進後端，只留一份。不是新偏離，是搬家。
  * - **`create` 撞到已存在的 session 必須拒絕**，不得覆寫也不得續寫。我們的 session id 只在
  *   一次組裝內唯一（`SessionRegistry` 的 `<root>/<runId>`），不像 dsh 的 `SessionId` 全域
  *   唯一，所以後端要自己把每一次組裝隔開。這條拒絕**在續接出現之後照樣成立**：續接是另一個
@@ -313,6 +330,80 @@ export interface SessionStore {
    * @throws {@link SessionNotFoundError} 這個 id 在這裡沒有存檔。
    */
   resume(id: string): Promise<ResumedStoredSession>;
+  /**
+   * 列出這裡每一份**落了盤的**會話，照 dsh 的 `list`（`packages/session/session-persistence/src/index.ts:201`）。
+   * 唯讀：不拿租約、不讀本文。root 與 subagent 都列，誰要過濾誰自己濾。
+   *
+   * @param options - 中止訊號，同 dsh 的 `SessionPersistenceListOptions`。
+   * @returns 讀得懂的每一份，**不承諾順序**；與讀不懂、版本太新而沒列的份數（偏離，見模組說明）。
+   * @throws 存放處存在但讀不到；`signal` 中止時拋它的 `reason`。
+   */
+  list(options?: StoredSessionListOptions): Promise<StoredSessionListing>;
+  /**
+   * 唯讀打開一份，照 dsh 的 `open(id, 'read')`（`packages/session/session-persistence/src/index.ts:165`）。
+   * **不拿租約、不截尾巴、不動 header**：別的行程握著的那一份照樣打得開，打開、讀完，一個位元組都不改。
+   *
+   * @param id - 哪一份，就是 `header.id`。
+   * @param access - 只有 `'read'`。寫的那一條是 {@link resume}。
+   * @returns header 已讀好的把手；本文等 {@link ReadonlyStoredSession.read} 才讀。
+   * @throws {@link SessionFormatUnsupportedError} header 的版本比這一版新。
+   * @throws {@link SessionCorruptionError} header 讀不懂。
+   * @throws {@link SessionNotFoundError} 這個 id 在這裡沒有存檔。
+   */
+  open(id: string, access: 'read'): Promise<ReadonlyStoredSession>;
+}
+
+/** {@link SessionStore.list} 的選項。 */
+export interface StoredSessionListOptions {
+  readonly signal?: AbortSignal;
+}
+
+/**
+ * {@link SessionStore.list} 的一格，照 dsh 的 `SessionPersistenceSnapshot`
+ * （`packages/session/session-persistence/src/index.ts:50-59`）。`eventCount`、`sizeBytes` 是選填的，沒抄。
+ */
+export interface StoredSessionSnapshot {
+  /** 存的那份 header，原樣。 */
+  readonly header: StoredSessionHeader;
+  /**
+   * 不透明的變更記號，照 dsh（`index.ts:184-189`）：**只能跟同一個後端、同一個 id 的比**；相等可以當成這份沒變，
+   * 不相等什麼都不承諾。給衍生的讀取快取用（按內容搜尋的索引），不參與 {@link SessionStore.open}／
+   * {@link SessionStore.resume}。
+   */
+  readonly revision: string;
+}
+
+/** {@link SessionStore.list} 交出來的東西。 */
+export interface StoredSessionListing {
+  readonly sessions: readonly StoredSessionSnapshot[];
+  /**
+   * header 讀不懂、版本比這一版新而沒列的份數。**dsh 沒有這一格**（它的 JSONL `list` 略過不數），見模組說明。
+   */
+  readonly unreadable: number;
+}
+
+/** {@link ReadonlyStoredSession.read} 的選項。 */
+export interface StoredSessionReadOptions {
+  /**
+   * 中段壞掉時**撿回讀得懂的**，不拋：解析不動、或不像一筆事件（沒有數字的 `seq` 與 `time`）的那幾行略過，
+   * 其餘照原樣交出——`seq` 可能不連續。給「一份壞檔不該拖垮整份清單」的讀方用（列表、按內容搜尋）；推回模型、
+   * 續接這種要整份對得上的，不要開。偏離，見模組說明。
+   */
+  readonly salvage?: boolean;
+}
+
+/** {@link SessionStore.open} 交出來的唯讀把手。 */
+export interface ReadonlyStoredSession {
+  /** 存的那份 header，原樣。 */
+  readonly header: StoredSessionHeader;
+  /**
+   * 讀整份本文：**實體上有效的前綴**，同續接——最後一行寫到一半不算進去，但也不截掉。只有 header 沒有本文的是零顆。
+   * 每叫一次讀一次，讀到的是叫的當下。
+   *
+   * @throws {@link SessionCorruptionError} 中段某一行讀不懂、或 `seq` 不連續（開了 {@link StoredSessionReadOptions.salvage}
+   *   就不拋）。
+   */
+  read(options?: StoredSessionReadOptions): Promise<readonly SessionEvent[]>;
 }
 
 /** {@link SessionStore.resume} 交出來的東西。 */

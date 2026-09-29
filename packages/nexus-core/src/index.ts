@@ -418,10 +418,15 @@ export type {
 export { SessionTelemetryCoordinator } from './session-telemetry-coordinator.js';
 
 export type {
+  ReadonlyStoredSession,
   ResumedStoredSession,
   SessionStore,
   StoredSession,
   StoredSessionHeader,
+  StoredSessionListing,
+  StoredSessionListOptions,
+  StoredSessionReadOptions,
+  StoredSessionSnapshot,
 } from './session-store.js';
 export {
   SESSION_LOG_FORMAT_VERSION,

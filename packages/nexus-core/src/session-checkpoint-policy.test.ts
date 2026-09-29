@@ -27,6 +27,12 @@ interface FakeStored extends StoredSession {
   fail: Error | undefined;
 }
 
+/** 協調器只寫不讀：唯讀的兩個方法一被叫就是錯。 */
+const NO_READS: Pick<SessionStore, 'list' | 'open'> = {
+  list: () => Promise.reject(new Error('協調器不該列會話')),
+  open: () => Promise.reject(new Error('協調器不該唯讀打開')),
+};
+
 function fakeStored(): FakeStored {
   const written: SessionEvent[] = [];
   return {
@@ -55,6 +61,7 @@ async function assemble(persist = true) {
   const sessions = new SessionRegistry('root-1');
   const handles = new Map<string, FakeStored>();
   const store: SessionStore = {
+    ...NO_READS,
     create(header) {
       const stored = fakeStored();
       handles.set(header.id, stored);

@@ -448,6 +448,28 @@ describe('讀磁碟：唯讀，壞一份不擋其餘', () => {
     expect(await readFile(torn, 'utf8')).toBe(`${before}{"type":"tool/ca`);
   });
 
+  it('比這一版新的照讀，header 讀不懂的連原因報出來（header 規則是後端那一份，#665）', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-scan-versions-'));
+    const newer = { version: SESSION_LOG_FORMAT_VERSION + 1, id: 'future', createdAt: 0 };
+    await writeFile(join(root, 'future.header.json'), JSON.stringify(newer));
+    await writeFile(
+      join(root, 'future.jsonl'),
+      `${JSON.stringify(events([turn('message')])[0])}\n`,
+    );
+    await writeFile(
+      join(root, 'no-date.header.json'),
+      JSON.stringify({ version: 1, id: 'no-date' }),
+    );
+
+    const { logs, unreadable } = await readSessionLogs([root]);
+    expect(logs.map((log) => [log.header.id, log.header.version])).toEqual([
+      ['future', SESSION_LOG_FORMAT_VERSION + 1],
+    ]);
+    expect(unreadable.map((item) => item.reason)).toEqual([
+      expect.stringContaining('header 沒有 createdAt'),
+    ]);
+  });
+
   /**
    * **這條才分得出唯讀與否**：上面那條的鎖檔名跟寫的那一方同名，走續接的讀法也不會多出檔案。
    * 一個還開著的寫入把手握著租約，續接那條會拋 `SessionAlreadyOwnedError`；掃描照讀。

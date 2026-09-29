@@ -8,13 +8,15 @@
  *
  * ## 冷讀，搜得到的一定列得出來
  *
- * 一條 thread 都不為它啟動。可見的集合就是列表的（`session-list.ts` 的 `listVisibleThreadLogs`：root、`cwd` 對得上、
- * header 讀得懂），同 dsh 先拿列表過濾。**多人共用主機時各搜各的**：目錄是這個 home 底下的，別人的日誌不在裡面。
+ * 一條 thread 都不為它啟動。可見的集合就是列表的（`session-list.ts` 的 `listVisibleThreads`：root、`cwd` 對得上、
+ * header 讀得懂），同 dsh 先拿列表過濾。列與讀都經過 `SessionStore`（`list` 與 `open(id, 'read')`，
+ * [#665](https://github.com/DemianLi/nexus-agent/issues/665)），同 dsh 的查詢層不碰檔名與目錄。**多人共用主機時各搜各的**：
+ * 存放處是這個 home 底下的，別人的日誌不在裡面。
  *
  * ## 索引：`node:sqlite` 的 FTS5，只放在記憶體裡
  *
  * 同 dsh 的載體（`schema.ts:52` 用 `await import('node:sqlite')`）。**每次搜尋前先對帳**（dsh `index.ts:268-293`）：列出可見的
- * 那幾條，日誌的大小或修改時間變了的整條重讀，不見了的拿掉。對帳與查詢排成一條隊，同 dsh 的 `_serialized`。
+ * 那幾條，`list` 給的 `revision` 跟上次不同的整條重讀（同 dsh `index.ts:510-514`），不見了的拿掉。對帳與查詢排成一條隊，同 dsh 的 `_serialized`。
  * 索引檔 dsh 可以落盤（`path`），我們只放記憶體，同 dsh 出廠的 `path: ':memory:'`：serve 重開之後第一次搜尋重建。
  *
  * **`node:sqlite` 在 `openAt: never` 時一次都不載入**：Node 22 載入它會在 stderr 印一行實驗功能的警告。載不起來
@@ -40,7 +42,7 @@
  *
  * **推不出來的日誌**（格式 9 以前、壓縮對不上）：沒辦法分哪幾則被換掉，**整份都算看得到**，上面那幾種事件全收。
  * dsh 摺不出 surface 時拋 `SESSION_QUERY_INVALID_SURFACE`，整次搜尋失敗；我們不讓一份舊日誌拖垮整次搜尋。日誌中間壞掉的
- * 略過壞的那幾行，同列表不擋它。
+ * 略過壞的那幾行（讀的時候開 `salvage`，撿回的規則在後端），同列表不擋它。
  *
  * **整份解析、重播，不先篩行**：只解析帶訊息字樣的那幾行、沒壓縮過就不重播，量過只快 6%（合成的 1000 條、343 MB，
  * 第一次搜尋 2.7 秒對 2.85 秒），不值得多一條要跟重播保持一致的路。
@@ -64,13 +66,18 @@
  * @module
  */
 
-import { readFile, stat } from 'node:fs/promises';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 
-import { fromLoggedMessage, replayConversation, SessionCorruptionError } from '@nexus/core';
-import type { SessionEvent } from '@nexus/core';
+import {
+  fromLoggedMessage,
+  replayConversation,
+  SessionCorruptionError,
+  SessionFormatUnsupportedError,
+  SessionNotFoundError,
+} from '@nexus/core';
+import type { SessionEvent, SessionStore, StoredSessionSnapshot } from '@nexus/core';
 import {
   THREAD_SEARCH_QUERY_MAX_LENGTH,
   THREAD_SEARCH_RESULT_LIMIT,
@@ -78,8 +85,7 @@ import {
 } from '@nexus/wire';
 import type { ThreadSearchResult } from '@nexus/wire';
 
-import { parseJsonlSessionBody } from './jsonl-session-store.js';
-import { listVisibleThreadLogs } from './session-list.js';
+import { listVisibleThreads } from './session-list.js';
 import type { ThreadSearchConfig } from './settings/thread-search.js';
 
 /**
@@ -240,8 +246,8 @@ export function searchDocuments(events: readonly SessionEvent[]): SearchDocument
 type Sqlite = typeof import('node:sqlite');
 
 export interface ThreadSearchOptions {
-  /** `<會話根>/<projectKey(cwd)>`。**缺席＝沒接落盤**：沒有東西可搜，一律回空。 */
-  readonly directory?: string;
+  /** serve 的那一個（`<會話根>/<projectKey(cwd)>` 那一格）。**缺席＝沒接落盤**：沒有東西可搜，一律回空。 */
+  readonly store?: SessionStore;
   /** 這台 server 的工作目錄，同列表。 */
   readonly cwd: string;
   readonly openAt: ThreadSearchConfig['openAt'];
@@ -251,7 +257,7 @@ export interface ThreadSearchOptions {
 
 const EMPTY: ThreadSearchResult = { items: [], hasMore: false };
 
-/** 一條 thread 在索引裡的樣子：日誌的大小與修改時間。變了就整條重讀。 */
+/** 一條 thread 在索引裡的樣子：`list` 給的 `revision`。變了就整條重讀。 */
 type Stamp = string;
 
 interface Prepared {
@@ -289,12 +295,14 @@ export class ThreadSearch {
   async search(query: unknown, signal?: AbortSignal): Promise<ThreadSearchResult> {
     const normalized = collapseWhitespace(normalizeThreadSearchQuery(query));
     signal?.throwIfAborted();
-    const { directory } = this.#options;
-    if (directory === undefined) return EMPTY;
+    const { store } = this.#options;
+    if (store === undefined) return EMPTY;
     let visible;
     try {
-      visible = await listVisibleThreadLogs(directory, this.#options.cwd);
+      visible = await listVisibleThreads(store, this.#options.cwd, signal);
     } catch (error: unknown) {
+      // 列到一半被中止：拋的是訊號的 reason，不是「列不出來」，同對帳那一段。
+      if (signal?.aborted === true) throw error;
       throw new ThreadSearchError('failed', `以前的 thread 列不出來：${String(error)}`, {
         cause: error,
       });
@@ -307,7 +315,7 @@ export class ThreadSearch {
     const prepared = await this.#ready();
     return this.#serialized(async () => {
       try {
-        await this.#reconcile(prepared, visible.items, signal);
+        await this.#reconcile(prepared, store, visible.items, signal);
         signal?.throwIfAborted();
         return this.#query(prepared.db, normalized);
       } catch (error: unknown) {
@@ -361,11 +369,12 @@ export class ThreadSearch {
   /** 見檔頭的「每次搜尋前先對帳」。 */
   async #reconcile(
     prepared: Prepared,
-    visible: readonly { readonly threadId: string; readonly logPath: string }[],
+    store: SessionStore,
+    visible: readonly StoredSessionSnapshot[],
     signal?: AbortSignal,
   ): Promise<void> {
     const { db, insert, remove } = prepared;
-    const seen = new Set(visible.map(({ threadId }) => threadId));
+    const seen = new Set(visible.map(({ header }) => header.id));
     const gone = [...this.#stamps.keys()].filter((threadId) => !seen.has(threadId));
     /** 這一次寫進去的。交易成功之後才併進 `#stamps`／`#rows`。 */
     const written = new Map<string, { stamp: Stamp; rows: (number | bigint)[] }>();
@@ -382,11 +391,14 @@ export class ThreadSearch {
         begin();
         for (const rowid of this.#rows.get(threadId) ?? []) remove.run(rowid);
       }
-      for (const { threadId, logPath } of visible) {
+      for (const { header, revision } of visible) {
         signal?.throwIfAborted();
-        const { stamp, body } = await readIfChanged(logPath, this.#stamps.get(threadId));
-        if (body === undefined) continue;
-        const documents = documentsOf(threadId, body);
+        const threadId = header.id;
+        if (this.#stamps.get(threadId) === revision) continue;
+        const events = await readForSearch(store, threadId);
+        // 列與讀之間變了：這一次不動它，下一次對帳再看（被刪掉的那時就在「不見了的」那一邊）。
+        if (events === undefined) continue;
+        const documents = searchDocuments(events);
         begin();
         for (const rowid of this.#rows.get(threadId) ?? []) remove.run(rowid);
         const rows: (number | bigint)[] = [];
@@ -395,7 +407,7 @@ export class ThreadSearch {
             insert.run(threadId, document.seq, document.time, document.text).lastInsertRowid,
           );
         }
-        written.set(threadId, { stamp, rows });
+        written.set(threadId, { stamp: revision, rows });
       }
       if (open) db.exec('COMMIT');
     } catch (error: unknown) {
@@ -453,59 +465,26 @@ export class ThreadSearch {
   }
 }
 
-/** 日誌本文還不在（只有 header：還沒寫第一筆就當了）。 */
-const MISSING: Stamp = 'missing';
-
-function isNotFound(error: unknown): boolean {
-  return (error as { code?: unknown } | null)?.code === 'ENOENT';
-}
-
-/** 大小或修改時間跟上次不同才讀。檔案不在是一份空的。 */
-async function readIfChanged(
-  logPath: string,
-  previous: Stamp | undefined,
-): Promise<{ stamp: Stamp; body?: string }> {
-  let stamp: Stamp = MISSING;
+/**
+ * 讀一條的整份本文。**中間壞掉的撿回讀得懂的**（`salvage`），同列表不擋它。
+ *
+ * 列與讀之間那一份變了——被刪掉、或 header 讀不懂了（別的行程以更新的版本續接過）——是 `undefined`：
+ * 不讓一條拖垮整次搜尋。
+ */
+async function readForSearch(
+  store: SessionStore,
+  threadId: string,
+): Promise<readonly SessionEvent[] | undefined> {
   try {
-    const stats = await stat(logPath);
-    stamp = `${stats.size}:${stats.mtimeMs}`;
+    return await (await store.open(threadId, 'read')).read({ salvage: true });
   } catch (error: unknown) {
-    if (!isNotFound(error)) throw error;
-  }
-  if (stamp === previous) return { stamp };
-  if (stamp === MISSING) return { stamp, body: '' };
-  try {
-    return { stamp, body: await readFile(logPath, 'utf8') };
-  } catch (error: unknown) {
-    // stat 與讀之間被刪掉：當成空的，下一次對帳再看。
-    if (isNotFound(error)) return { stamp: MISSING, body: '' };
+    if (
+      error instanceof SessionNotFoundError ||
+      error instanceof SessionCorruptionError ||
+      error instanceof SessionFormatUnsupportedError
+    ) {
+      return undefined;
+    }
     throw error;
   }
-}
-
-/**
- * 一份日誌本文裡搜得到的。**中間壞掉的**（`parseJsonlSessionBody` 拋 {@link SessionCorruptionError}）逐行解析、略過解析不動的
- * 那幾行，其餘照一般規則，同列表不擋它。
- *
- * @param threadId - 只給錯誤訊息用。
- */
-export function documentsOf(threadId: string, body: string): SearchDocument[] {
-  let events: SessionEvent[];
-  try {
-    events = parseJsonlSessionBody(threadId, body).events;
-  } catch (error: unknown) {
-    if (!(error instanceof SessionCorruptionError)) throw error;
-    events = [];
-    for (const line of body.split('\n')) {
-      try {
-        const value = JSON.parse(line) as Partial<SessionEvent> | null;
-        if (typeof value?.seq === 'number' && typeof value.time === 'number') {
-          events.push(value as SessionEvent);
-        }
-      } catch {
-        continue;
-      }
-    }
-  }
-  return searchDocuments(events);
 }
