@@ -583,6 +583,30 @@ describe('@ 引用別的會話', () => {
     expect(options()).toEqual(['README.md', '報表reports', '昨天那條', '查資料屬於 大會話']);
   });
 
+  it('名字太長時是名字自己截斷，後面的小字不縮不被吃掉', async () => {
+    const fake = sources();
+    await opened(fake, '@');
+    fake.answerSessions(
+      0,
+      session('sub', {
+        label: 'parent-id/tools:0000-0000-0000-0000-0000-0000-0000-0000',
+        parentSessionId: 'root',
+        parentLabel: '大會話',
+      }),
+    );
+    fake.answerFiles(0);
+    await waitFor(() => expect(menu()).not.toBeNull());
+    const name = screen.getByText('parent-id/tools:0000-0000-0000-0000-0000-0000-0000-0000');
+    const hint = screen.getByText('屬於 大會話');
+    // jsdom 沒有排版：只能釘結構——截斷的是名字這一格，小字在它外面且不縮（否則長名字會把小字擠到省略號後面）。
+    expect(name.classList.contains('truncate')).toBe(true);
+    expect(name.contains(hint)).toBe(false);
+    expect(hint.classList.contains('shrink-0')).toBe(true);
+    expect(name.getAttribute('title')).toBe(
+      'parent-id/tools:0000-0000-0000-0000-0000-0000-0000-0000',
+    );
+  });
+
   it('只有檔案時不畫段標題（跟原來一樣）', async () => {
     const fake = sources();
     await opened(fake);
