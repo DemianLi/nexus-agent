@@ -50,8 +50,8 @@ FULL_RES = [
 ]
 
 
-HARNESS_SHARDS = 2
-WEB_SHARDS = 2
+HARNESS_SHARDS = 3
+WEB_SHARDS = 1
 
 
 def read_changed(path: str = 'changed.txt') -> list[str]:
