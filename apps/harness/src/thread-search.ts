@@ -20,7 +20,8 @@
  * 索引檔 dsh 可以落盤（`path`），我們只放記憶體，同 dsh 出廠的 `path: ':memory:'`：serve 重開之後第一次搜尋重建。
  *
  * **`node:sqlite` 在 `openAt: never` 時一次都不載入**：Node 22 載入它會在 stderr 印一行實驗功能的警告。載不起來
- * （Node 22.13 以前要加旗標）時，搜尋回失敗、說明要哪一版，其他功能照常——所以 `package.json` 的 `engines` 不跟著收緊。
+ * （Node 22.13 以前要加旗標）時，搜尋回失敗、說明要哪一版，其他功能照常——當時 `package.json` 的 `engines` 因此沒有收緊。
+ * （[#746](https://github.com/DemianLi/nexus-agent/issues/746) 為了 undici 8 把下限收到 22.19，這條退路對受支援的版本已走不到，留著是給跳過 `engines` 的人。）
  *
  * ## 搜什麼：只搜模型現在看得到的那一串
  *

@@ -245,6 +245,30 @@ export function loadLaunchEnv(options: LaunchEnvOptions): LaunchEnvironment {
 }
 
 /**
+ * 只有「行程繼承的環境」這一層的啟動環境，**不讀任何 `.env`**。
+ *
+ * 沒帶 `--live` 的啟動不讀 `.env`（見檔頭），但對外代理照樣要裝——網路上的 MCP 在假模型路徑上一樣連外
+ * （[#746](https://github.com/DemianLi/nexus-agent/issues/746)）。這一個給那條路徑：形狀同
+ * {@link loadLaunchEnv} 的回傳，所以代理的解析不必分兩種來源。
+ *
+ * @param source - 要拍快照的環境，省略即 `process.env`。
+ */
+export function processLaunchEnv(source: NodeJS.ProcessEnv = process.env): LaunchEnvironment {
+  const values = { ...source } as Record<string, string>;
+  const layers: LaunchEnvLayer[] = [{ source: 'process', values }];
+  return Object.freeze({
+    layers: Object.freeze(layers),
+    get(name: string, sources?: readonly LaunchEnvSource[]) {
+      if (sources !== undefined && !sources.includes('process')) return undefined;
+      const value = values[name];
+      return value !== undefined && value.length > 0
+        ? { value, source: 'process' as const }
+        : undefined;
+    },
+  });
+}
+
+/**
  * 舊位置的 `.env` 還在、而需要的名字又沒有值時的失敗訊息：指名舊路徑與要搬去哪裡。
  *
  * **由呼叫端在「所有層都問過了還是沒有」之後才丟**（憑證服務的受管檔也算一層）：
