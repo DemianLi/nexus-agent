@@ -353,22 +353,25 @@
   config:
     maxBytes: 50000
 
-# 真實供應商的連線值（#545／#457），只在 `--live` 時才用。**前五格都是 dsh 的設定欄位**：
-# `@deepseek-ai/dsh-llm-deepseek` 的 `Config` 有 `baseURL`、`maxTokens`、`streamIdleTimeoutMs`、
-# `retryPolicy`（`packages/llm/llm-deepseek/src/config.ts:83-100`，`ddefc45`），所以可設定本身沒有偏離，
-# 寫死才是。值全是原本寫死的那幾個，測量與理由留在 `src/live-model.ts` 各常數的檔頭。
+# 真實供應商的連線值與模型型錄（#545／#457／#729），只在 `--live` 時才用。**連線那幾格都是 dsh 的設定欄位**：
+# `@deepseek-ai/dsh-llm-deepseek` 的 `Config` 有 `baseURL`、`streamIdleTimeoutMs`、`retryPolicy`
+# （`packages/llm/llm-deepseek/src/config.ts:83-100`，`ddefc45`），所以可設定本身沒有偏離，寫死才是。
+# 值全是原本寫死的那幾個，測量與理由留在 `src/live-model.ts` 各常數的檔頭。
 #
 # 照抄不了的三處登記在 `src/settings/live-model.ts` 的檔頭：dsh 逐次請求解析端點，`ChatOpenAI` 表達
 # 不出來，退到起動期解一次；重試只有次數（`AsyncCaller` 不收退避參數），而且因為退避沒有上限，次數
 # 有上限；逾時是整個請求的逾時，不是 dsh 的串流閒置逾時。
 #
-# **`modelId` 與 `maxOutputTokens` 是綁著的**：預設那顆模型是拿「吃不吃得下 16384」當淘汰門檻選出來的。
-# 換其中一個之前拿另一個重新確認——吃不下的模型會每一次呼叫都失敗。
+# **`models` 是型錄**（#729），照 `llm-pi-ai` 一條路由的 `models` 清單（`packages/llm/llm-pi-ai/README.md:40-103`）：
+# 每筆帶窗口、輸出上限（`maxTokens`，設了就是這顆每次請求送出去的 `max_tokens`）、`input`（收哪些種類，這是對端點
+# 的宣告，不是檢查）、`reasoningEfforts`（`off:` 是不推理）與 `compat`（關推理的 chat template 參數）。
+# **`modelId` 必須在裡面**，不在就是載入期失敗；**patch 寫 `models` 是整份取代**，不是逐筆合併。預設那顆模型是拿
+# 「吃不吃得下 16384」當淘汰門檻選出來的——換一筆之前先確認它的 `maxTokens` 吃得下，吃不下的模型會每一次呼叫都失敗。
 #
-# **`thinkingOffBody` 也跟 `modelId` 綁著**（#650）：標題呼叫（上面 `thread-title-llm` 那一列）加進請求 body 的那幾格，
-# 用來關掉推理——預設那顆模型不關推理的話，64 個輸出 token 全被推理吃光、一個標題都回不出來（實測 0/6，關掉 6/6）。
-# dsh 由 adapter 依用途在程式裡關；我們的 adapter 是通用的 OpenAI 相容，不知道每顆模型怎麼關，所以退到這一列，
-# 登記在 `src/settings/live-model.ts` 的檔頭「偏離四」。換一顆不認得這幾格的模型，寫 `{}`。
+# **關推理的寫法（原本的 `thinkingOffBody`，#650）在預設那一筆的 `off` 等級與 `compat`**：標題呼叫（上面
+# `thread-title-llm` 那一列）加進請求 body 的那幾格，用來關掉推理——預設那顆模型不關推理的話，64 個輸出 token 全被推理
+# 吃光、一個標題都回不出來（實測 0/6，關掉 6/6）。`$var: thinking.enabled` 在 `off` 那一級解成 `false`；主請求不帶。
+# 換一顆不認得這幾格的模型，不要寫 `compat`。登記在 `src/settings/live-model.ts` 的檔頭「偏離四」。
 #
 # **設定寫壞時**（#751）：帶 `--live` 就整個起不來，**不退回 schema 的預設值**——那份預設的網址是對外的公開端點，
 # 退回去就連同金鑰一起送出去；沒帶 `--live` 時那份值沒人用，只印警告。
@@ -377,12 +380,20 @@
   config:
     baseUrl: 'https://integrate.api.nvidia.com/v1'
     modelId: 'nvidia/nemotron-3-super-120b-a12b'
-    maxOutputTokens: 16384
     timeoutMs: 90000
     maxRetries: 6
-    thinkingOffBody:
-      chat_template_kwargs:
-        enable_thinking: false
+    models:
+      - id: 'nvidia/nemotron-3-super-120b-a12b'
+        contextWindow: 700045
+        maxTokens: 16384
+        input: [text]
+        reasoningEfforts:
+          off:
+          default: default
+        compat:
+          chatTemplateKwargs:
+            enable_thinking:
+              $var: thinking.enabled
 
 # agent 迴圈的 super-step 上限（#457／#529）。**dsh 對這個值沒有意見**——它不跑 LangGraph，
 # `recursionLimit` 在 `bundle/*` 的 patches 與 `core/agent-loop` 全樹零命中（`ddefc45`）。所以這一列

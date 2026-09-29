@@ -27,16 +27,19 @@ import {
   DEFAULT_LIVE_BASE_URL,
   DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
   DEFAULT_LIVE_MAX_RETRIES,
+  DEFAULT_LIVE_MODEL_ENTRY,
   DEFAULT_LIVE_MODEL_ID,
-  DEFAULT_LIVE_THINKING_OFF_BODY,
   DEFAULT_LIVE_TIMEOUT_MS,
   LIVE_API_KEY_ENV,
   createLiveModel,
 } from '../live-model.js';
+import { acceptsImages, findModelEntry, thinkingOffBody } from '../model-catalog.js';
+import type { ModelEntry } from '../model-catalog.js';
 import { loadDefaultPlugins } from '../plugin-config.js';
 import { runServe } from '../serve.js';
 import type { RunningServe } from '../serve.js';
 import {
+  liveModelConfigForModel,
   liveModelConfigSchema,
   liveModelPlugin,
   MAX_LIVE_RETRIES,
@@ -48,40 +51,63 @@ import { startupSetting } from './startup.js';
 /** 一把明顯是假的 key。每一條產品路徑測試都斷言請求帶的是它。 */
 const FAKE_KEY = 'nvapi-fake-for-loopback-only';
 
-/** 覆寫用的那一組，六格都跟預設不同。`baseUrl` 在測試裡換成 loopback 的位址。 */
-const OVERRIDE: Omit<LiveModelConfig, 'baseUrl'> = {
-  modelId: 'nexus-test/override-model',
-  maxOutputTokens: 1234,
-  timeoutMs: 4321,
-  maxRetries: 2,
-  thinkingOffBody: { chat_template_kwargs: { enable_thinking: false, nexus_override: true } },
+/** 覆寫用的那一筆型錄條目：跟預設每一格都不同（id、輸出上限、關推理多一格）。 */
+const OVERRIDE_ENTRY: ModelEntry = {
+  id: 'nexus-test/override-model',
+  contextWindow: 4321,
+  maxTokens: 1234,
+  input: ['text', 'image'],
+  reasoningEfforts: { off: null },
+  compat: {
+    chatTemplateKwargs: { enable_thinking: { $var: 'thinking.enabled' }, nexus_override: true },
+  },
 };
 
-/** 主模型身上讀得回的那幾格：五個連線值。`thinkingOffBody` 只到標題那顆，由請求本身驗。 */
-function connectionOf(config: LiveModelConfig): Omit<LiveModelConfig, 'thinkingOffBody'> {
-  const { thinkingOffBody: _unused, ...connection } = config;
-  return connection;
+/** 覆寫用的那一組，每一格都跟預設不同。`baseUrl` 在測試裡換成 loopback 的位址。 */
+const OVERRIDE: Omit<LiveModelConfig, 'baseUrl'> = {
+  modelId: OVERRIDE_ENTRY.id,
+  models: [OVERRIDE_ENTRY],
+  timeoutMs: 4321,
+  maxRetries: 2,
+};
+
+/** 覆寫那一筆在標題請求上關推理的 body。 */
+const OVERRIDE_OFF_KWARGS = { enable_thinking: false, nexus_override: true };
+
+/** 主模型身上讀得回的那幾格：連線值與輸出上限（輸出上限來自型錄條目）。 */
+function connectionOf(config: LiveModelConfig): Record<string, unknown> {
+  return {
+    baseUrl: config.baseUrl,
+    modelId: config.modelId,
+    maxOutputTokens: config.models.find((entry) => entry.id === config.modelId)?.maxTokens,
+    timeoutMs: config.timeoutMs,
+    maxRetries: config.maxRetries,
+  };
 }
 
 describe('live-model 的 schema', () => {
-  it('空的 config 解出來就是 live-model.ts 那六個預設值', () => {
+  it('空的 config 解出來就是 live-model.ts 那幾個預設值，型錄只有出廠那一筆', () => {
     expect(liveModelConfigSchema.parse({})).toEqual({
       baseUrl: DEFAULT_LIVE_BASE_URL,
       modelId: DEFAULT_LIVE_MODEL_ID,
-      maxOutputTokens: DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
+      models: [DEFAULT_LIVE_MODEL_ENTRY],
       timeoutMs: DEFAULT_LIVE_TIMEOUT_MS,
       maxRetries: DEFAULT_LIVE_MAX_RETRIES,
-      thinkingOffBody: DEFAULT_LIVE_THINKING_OFF_BODY,
     });
   });
 
-  it('關推理那一格的預設值是 #650 量過的那一種寫法', () => {
+  it('出廠那一筆是量過的字面值，關推理的寫法是 #650 量過的那一種', () => {
     // 字面值，不是讀常數：常數改掉的話兩邊一起動，這一條就量不到它。
-    expect(liveModelConfigSchema.parse({}).thinkingOffBody).toEqual({
-      chat_template_kwargs: { enable_thinking: false },
+    const [entry] = liveModelConfigSchema.parse({}).models;
+    expect(entry).toEqual({
+      id: 'nvidia/nemotron-3-super-120b-a12b',
+      contextWindow: 700_045,
+      maxTokens: 16_384,
+      input: ['text'],
+      reasoningEfforts: { off: null, default: 'default' },
+      compat: { chatTemplateKwargs: { enable_thinking: { $var: 'thinking.enabled' } } },
     });
-    // 空物件是「這顆模型不必關」：合法。
-    expect(liveModelConfigSchema.parse({ thinkingOffBody: {} }).thinkingOffBody).toEqual({});
+    expect(thinkingOffBody(entry!)).toEqual({ chat_template_kwargs: { enable_thinking: false } });
   });
 
   it.each([
@@ -108,14 +134,59 @@ describe('live-model 的 schema', () => {
    * **下限 1 是承重的**：`isDerivedContextOverflow` 唯一的前提是送出去的 `max_tokens` 恆為正數。
    * 放行 0 或負數的話，伺服器回來的負值就不再只可能是它自己導出來的。
    */
-  it('輸出上限必須是正整數', () => {
-    expect(liveModelConfigSchema.parse({ maxOutputTokens: 1 }).maxOutputTokens).toBe(1);
-    for (const maxOutputTokens of [0, -1, 1.5]) {
-      expect(
-        () => liveModelConfigSchema.parse({ maxOutputTokens }),
-        String(maxOutputTokens),
-      ).toThrow();
+  it('型錄條目的輸出上限必須是正整數', () => {
+    const withMax = (maxTokens: number) =>
+      liveModelConfigSchema.parse({ models: [{ ...DEFAULT_LIVE_MODEL_ENTRY, maxTokens }] });
+    expect(withMax(1).models[0]?.maxTokens).toBe(1);
+    for (const maxTokens of [0, -1, 1.5]) {
+      expect(() => withMax(maxTokens), String(maxTokens)).toThrow();
     }
+  });
+
+  it('頂層不再有 maxOutputTokens 與 thinkingOffBody：輸出上限與關推理跟著型錄條目走', () => {
+    expect(() => liveModelConfigSchema.parse({ maxOutputTokens: 8192 })).toThrow();
+    expect(() => liveModelConfigSchema.parse({ thinkingOffBody: {} })).toThrow();
+  });
+
+  it('modelId 必須在 models 裡，不在就失敗，訊息指名那個 id 與型錄有什麼', () => {
+    expect(() => liveModelConfigSchema.parse({ modelId: 'nexus-test/not-in-catalog' })).toThrow(
+      /nexus-test\/not-in-catalog.*nvidia\/nemotron-3-super-120b-a12b/su,
+    );
+    // 型錄整份取代：換掉 models 卻沒留預設那一筆，預設的 modelId 就指到型錄外。
+    expect(() => liveModelConfigSchema.parse({ models: [{ ...OVERRIDE_ENTRY }] })).toThrow(
+      /nvidia\/nemotron-3-super-120b-a12b/u,
+    );
+    expect(
+      liveModelConfigSchema.parse({ modelId: OVERRIDE_ENTRY.id, models: [OVERRIDE_ENTRY] }).modelId,
+    ).toBe(OVERRIDE_ENTRY.id);
+  });
+
+  it('型錄裡的 id 不能重複；條目多寫一格是打錯字；窗口與輸出上限必填', () => {
+    expect(() =>
+      liveModelConfigSchema.parse({ models: [DEFAULT_LIVE_MODEL_ENTRY, DEFAULT_LIVE_MODEL_ENTRY] }),
+    ).toThrow(/不只一次/u);
+    expect(() =>
+      liveModelConfigSchema.parse({ models: [{ ...DEFAULT_LIVE_MODEL_ENTRY, name: 'x' }] }),
+    ).toThrow();
+    const { contextWindow: _window, ...noWindow } = DEFAULT_LIVE_MODEL_ENTRY;
+    const { maxTokens: _max, ...noMax } = DEFAULT_LIVE_MODEL_ENTRY;
+    expect(() => liveModelConfigSchema.parse({ models: [noWindow] })).toThrow();
+    expect(() => liveModelConfigSchema.parse({ models: [noMax] })).toThrow();
+  });
+
+  it('eval 用的入口：型錄外的 id 合成一筆，輸出上限沿用出廠那一筆', () => {
+    const config = liveModelConfigForModel('openai/gpt-oss-20b');
+    expect(config.modelId).toBe('openai/gpt-oss-20b');
+    expect(findModelEntry(config.models, 'openai/gpt-oss-20b')?.maxTokens).toBe(
+      DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
+    );
+    // 出廠型錄裡有的 id 不合成。
+    expect(liveModelConfigForModel(DEFAULT_LIVE_MODEL_ID).models).toEqual([
+      DEFAULT_LIVE_MODEL_ENTRY,
+    ]);
+    // 而且真的建得出模型（eval 就是這樣用的）。
+    vi.stubEnv(LIVE_API_KEY_ENV, FAKE_KEY);
+    expect(createLiveModel(config).model).toBe('openai/gpt-oss-20b');
   });
 
   it('逾時的上限是計時器收得住的最大延遲', () => {
@@ -140,6 +211,31 @@ describe('live-model 的 schema', () => {
   });
 });
 
+describe('型錄的查詢（#729）', () => {
+  it('收不收圖：宣告 image 的收、只宣告 text 的不收、沒宣告 input 的回「沒宣告」', () => {
+    const base = { id: 'x', contextWindow: 1, maxTokens: 1 };
+    expect(acceptsImages({ ...base, input: ['text', 'image'] })).toBe('accepts');
+    expect(acceptsImages({ ...base, input: ['text'] })).toBe('rejects');
+    expect(acceptsImages(base)).toBe('undeclared');
+    // 出廠那一筆只宣告文字，不當成收圖。
+    expect(acceptsImages(DEFAULT_LIVE_MODEL_ENTRY)).toBe('rejects');
+  });
+
+  it('關推理的寫法：要有 off 那一級與 chat template 參數；不推理或沒宣告的模型什麼都不加', () => {
+    const base = { id: 'x', contextWindow: 1, maxTokens: 1 };
+    const compat = {
+      chatTemplateKwargs: { enable_thinking: { $var: 'thinking.enabled' as const } },
+    };
+    expect(thinkingOffBody({ ...base, reasoningEfforts: { off: null }, compat })).toEqual({
+      chat_template_kwargs: { enable_thinking: false },
+    });
+    expect(thinkingOffBody({ ...base, reasoningEfforts: false, compat })).toEqual({});
+    expect(thinkingOffBody({ ...base, reasoningEfforts: { high: 'high' }, compat })).toEqual({});
+    expect(thinkingOffBody({ ...base, compat })).toEqual({});
+    expect(thinkingOffBody({ ...base, reasoningEfforts: { off: null } })).toEqual({});
+  });
+});
+
 describe('createLiveModel 的接線', () => {
   beforeEach(() => {
     vi.stubEnv(LIVE_API_KEY_ENV, FAKE_KEY);
@@ -148,7 +244,7 @@ describe('createLiveModel 的接線', () => {
     vi.unstubAllEnvs();
   });
 
-  it('五個連線值都照傳進來的那一份建，不是照常數', () => {
+  it('連線值與型錄條目的輸出上限都照傳進來的那一份建，不是照常數', () => {
     const config: LiveModelConfig = { ...OVERRIDE, baseUrl: 'http://127.0.0.1:9/v1' };
     const model = createLiveModel(config);
     // `maxRetries` 不是公開屬性，它被拿去建 `AsyncCaller`——問那個 caller，理由同
@@ -169,11 +265,31 @@ describe('createLiveModel 的接線', () => {
 
     // 沒給的時候 `ChatOpenAI` 自己補成空物件。
     expect(createLiveModel(config).modelKwargs).toEqual({});
-    expect(createLiveModel(config, 'session-title').modelKwargs).toEqual(OVERRIDE.thinkingOffBody);
-    // 空物件是「這顆模型不必關」：標題那顆也不帶任何東西。
+    expect(createLiveModel(config, 'session-title').modelKwargs).toEqual({
+      chat_template_kwargs: OVERRIDE_OFF_KWARGS,
+    });
+    // 這顆沒宣告 `off` 那一級（或沒有 chat template 參數）：標題那顆也不帶任何東西。
+    const { compat: _compat, ...plain } = OVERRIDE_ENTRY;
+    expect(createLiveModel({ ...config, models: [plain] }, 'session-title').modelKwargs).toEqual(
+      {},
+    );
+  });
+
+  it('標題那顆的輸出上限是明著傳進來的，不看型錄條目', () => {
+    const config: LiveModelConfig = { ...OVERRIDE, baseUrl: 'http://127.0.0.1:9/v1' };
     expect(
-      createLiveModel({ ...config, thinkingOffBody: {} }, 'session-title').modelKwargs,
-    ).toEqual({});
+      createLiveModel(config, 'session-title', undefined, { maxOutputTokens: 64 }).maxTokens,
+    ).toBe(64);
+    expect(createLiveModel(config, 'session-title').maxTokens).toBe(OVERRIDE_ENTRY.maxTokens);
+  });
+
+  it('型錄裡沒有 modelId 的手搭設定：建構當場拋，訊息指名 id', () => {
+    const config: LiveModelConfig = {
+      ...OVERRIDE,
+      modelId: 'nexus-test/ghost',
+      baseUrl: 'http://127.0.0.1:9/v1',
+    };
+    expect(() => createLiveModel(config)).toThrow('nexus-test/ghost');
   });
 });
 
@@ -276,10 +392,10 @@ async function writeOverridePatch(baseUrl: string): Promise<string> {
       '  config:',
       `    baseUrl: '${baseUrl}'`,
       `    modelId: '${OVERRIDE.modelId}'`,
-      `    maxOutputTokens: ${String(OVERRIDE.maxOutputTokens)}`,
       `    timeoutMs: ${String(OVERRIDE.timeoutMs)}`,
       `    maxRetries: ${String(OVERRIDE.maxRetries)}`,
-      `    thinkingOffBody: ${JSON.stringify(OVERRIDE.thinkingOffBody)}`,
+      // YAML 是 JSON 的超集，`models` 整份取代出廠那一筆。
+      `    models: ${JSON.stringify(OVERRIDE.models)}`,
       '',
     ].join('\n'),
     'utf8',
@@ -302,7 +418,7 @@ function expectOverrideOnEveryRequest(seen: readonly SeenRequest[]): void {
       path: '/v1/chat/completions',
       authorization: `Bearer ${FAKE_KEY}`,
       model: OVERRIDE.modelId,
-      maxTokens: OVERRIDE.maxOutputTokens,
+      maxTokens: OVERRIDE_ENTRY.maxTokens,
       chatTemplateKwargs: undefined,
       title: false,
     });
@@ -313,7 +429,7 @@ function expectOverrideOnEveryRequest(seen: readonly SeenRequest[]): void {
       authorization: `Bearer ${FAKE_KEY}`,
       model: OVERRIDE.modelId,
       maxTokens: 64,
-      chatTemplateKwargs: OVERRIDE.thinkingOffBody.chat_template_kwargs,
+      chatTemplateKwargs: OVERRIDE_OFF_KWARGS,
       title: true,
     });
   }
@@ -425,6 +541,68 @@ describe('在設定裡覆寫會生效——產品路徑（#545）', () => {
       }),
     ).rejects.toThrow(required);
   });
+
+  /** 一份只改 `live-model` 型錄的 patch；`models` 是整份取代，所以連預設那一筆都要自己寫。 */
+  async function writeCatalogPatch(
+    baseUrl: string,
+    modelId: string,
+    models: unknown,
+  ): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'nexus-live-model-'));
+    const patch = join(dir, 'catalog.patch.yml');
+    await writeFile(
+      patch,
+      [
+        '- id: live-model',
+        '  config:',
+        `    baseUrl: '${baseUrl}'`,
+        `    modelId: '${modelId}'`,
+        `    models: ${JSON.stringify(models)}`,
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    return patch;
+  }
+
+  async function runOnce(patch: string): Promise<void> {
+    await runCli({
+      argv: ['--live', '--patch', patch, '說一句話。'],
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer: { log: () => undefined, error: () => undefined },
+      env: {},
+    });
+  }
+
+  it('patch 把預設那一筆的輸出上限改成 8192：主請求送 8192，標題請求仍是標題那一列的 64', async () => {
+    const patch = await writeCatalogPatch(fake.baseUrl, DEFAULT_LIVE_MODEL_ID, [
+      { ...DEFAULT_LIVE_MODEL_ENTRY, maxTokens: 8192 },
+    ]);
+    await runOnce(patch);
+
+    const main = fake.seen.filter((request) => !request.title);
+    expect(main.length).toBeGreaterThan(0);
+    for (const request of main) {
+      expect(request.model).toBe(DEFAULT_LIVE_MODEL_ID);
+      expect(request.maxTokens).toBe(8192);
+      expect(request.chatTemplateKwargs).toBeUndefined();
+    }
+    for (const request of fake.seen.filter((each) => each.title)) {
+      expect(request.maxTokens).toBe(64);
+      expect(request.chatTemplateKwargs).toEqual({ enable_thinking: false });
+    }
+  });
+
+  it('patch 把預設指到型錄沒有的 id：啟動失敗，訊息含那一列的名字與那個 id，沒有請求送出去', async () => {
+    const patch = await writeCatalogPatch(fake.baseUrl, 'nexus-test/not-in-catalog', [
+      DEFAULT_LIVE_MODEL_ENTRY,
+    ]);
+    await expect(runOnce(patch)).rejects.toThrow(
+      /live-model（#settings\/live-model）〔必掛〕設定驗不過.*nexus-test\/not-in-catalog/su,
+    );
+    expect(fake.seen).toEqual([]);
+  });
 });
 
 describe('createCliAgent 拿到的是哪一份', () => {
@@ -436,7 +614,7 @@ describe('createCliAgent 拿到的是哪一份', () => {
   });
 
   /** 從組好的 agent 身上讀回那五個連線值。主模型不帶關推理那一格，見 {@link connectionOf}。 */
-  function readBack(model: unknown): Omit<LiveModelConfig, 'thinkingOffBody'> {
+  function readBack(model: unknown): Record<string, unknown> {
     const live = model as ChatOpenAI;
     const { caller } = model as unknown as { caller: { maxRetries: number } };
     // 沒給的時候 `ChatOpenAI` 自己補成空物件。

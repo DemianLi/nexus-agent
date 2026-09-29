@@ -335,7 +335,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `browser-session` | 瀏覽器 cookie 的絕對有效期 | 有（一格） | **關不掉** |
 | `deliverable-files` | 交付檔的三個上限（一頁位元組／整檔位元組（只管下載）／一頁行數） | 有（三格） | **關不掉** |
 | `tool-text` | 一段工具結果文字放上線的位元組上限 | 有（一格） | **關不掉** |
-| `live-model` | `--live` 時真實供應商的連線值（端點／模型 id／輸出上限／逾時／重試次數），加上標題呼叫關推理的參數 | 有（六格） | **關不掉** |
+| `live-model` | `--live` 時真實供應商的連線值（端點／預設模型 id／逾時／重試次數），加上模型型錄（每顆的窗口、輸出上限、收不收圖、怎麼關推理） | 有（五格） | **關不掉** |
 | `recursion-limit` | agent 迴圈的 super-step 上限 | 有（一格） | **關不掉** |
 
 **最後九列裡，八列是「不裝功能、只講設定」的那一型；`session-persistence` 例外，它代表落盤本身**
@@ -387,22 +387,28 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 消失，也就是最勤的那一種，不是最懶的），所以那種值驗不過：那一列掉了、會話只在記憶體裡，啟動時的警告
 指名它——不會拿那個值靜靜跑起來。
 
-**`live-model` 的六格**（[#545](https://github.com/DemianLi/nexus-agent/issues/545)）只在 `--live` 時才用；
+**`live-model` 的五格**（[#545](https://github.com/DemianLi/nexus-agent/issues/545)、型錄 [#729](https://github.com/DemianLi/nexus-agent/issues/729)）只在 `--live` 時才用；
 出貨值是原本寫死的那幾個，每個數字怎麼量出來的寫在 `apps/harness/src/live-model.ts` 各常數的檔頭，
 **改之前先讀那一段**。幾件會咬人的事：
 
-- **`modelId` 與 `maxOutputTokens` 是綁著的。** 出貨那顆模型是拿「吃不吃得下 16384」當淘汰門檻選出
-  來的；換其中一個之前拿另一個重新確認。吃不下的模型會**每一次**呼叫都失敗，沒有任何東西會擋你。
+- **`models` 是模型型錄，`modelId` 必須在裡面**，不在就起不來（訊息指名那一列與那個 id）。每一筆帶 `id`、
+  `contextWindow`（窗口）、`maxTokens`（這顆每一次請求送出去的輸出上限）、選配的 `input`（收哪些種類，
+  `[text]` 或 `[text, image]`；這是對端點的宣告，不是檢查——宣告收圖而端點不收，請求當下才被供應商拒絕）、
+  `reasoningEfforts`（`off:` 是不推理）與 `compat`（關推理的 chat template 參數）。**寫 `models` 是整份取代**，
+  不是逐筆合併：想只改預設那一筆的 `maxTokens`，要把整筆連 `reasoningEfforts` 與 `compat` 一起重述。
+  出貨型錄只有預設那一筆。**新增一筆之前先確認它吃得下自己的 `maxTokens`**——出貨那顆模型是拿「吃不吃得下
+  16384」當淘汰門檻選出來的，吃不下的模型會**每一次**呼叫都失敗，沒有任何東西會擋你。
 - **`baseUrl` 要是 `http:` 或 `https:` 的網址，不能帶帳密、query 或 fragment**（照 dsh）。`http:` 放行，
   所以指向內網的明文端點是合法的——**key 會以明文送過去**，那是部署自己的判斷。
 - **`maxRetries` 上限 10**：退避是指數成長而且沒有上限，10 次的累計等待已經是 17–34 分鐘。
   `timeoutMs` 在串流上管兩段：連線到第一則事件（逾時會重試），以及之後每一段之間的閒置（逾時不重試，
   因為已經送到畫面上的字作廢不了）。上限是 2 147 483 647（同 `windowMs` 的理由）。**最壞情況是它乘上
   重試次數**：開了線卻一個位元組都不吐時，每一次都等滿，預設 90 秒 × 7 次，再加退避。
-- **`thinkingOffBody` 也跟 `modelId` 綁著**（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）：它是標題
-  呼叫加進請求 body 的那幾格，用來關掉推理，主請求不帶。出貨那顆模型不關推理的話，標題那 64 個輸出 token
-  全被推理吃光，一個標題都回不出來（實測 0/6；關掉之後 6/6）。換一顆不認得 `chat_template_kwargs` 的模型時，
-  寫 `{}`，或另外量它自己的寫法——不認得的參數可能讓標題請求整個 400，也可能靜靜沒效果。
+- **關推理的寫法在型錄那一筆**（[#650](https://github.com/DemianLi/nexus-agent/issues/650)、原本的 `thinkingOffBody`）：
+  `off` 那一級加 `compat.chatTemplateKwargs`（`$var: thinking.enabled` 在 `off` 解成 `false`）。它只有標題呼叫會
+  加進請求 body，主請求不帶。出貨那顆模型不關推理的話，標題那 64 個輸出 token 全被推理吃光，一個標題都回不出來
+  （實測 0/6；關掉之後 6/6）。換一顆不認得 `chat_template_kwargs` 的模型時，那一筆不要寫 `compat`，或另外量它自己
+  的寫法——不認得的參數可能讓標題請求整個 400，也可能靜靜沒效果。
 - **key 不在這一列**：從 `NVIDIA_API_KEY` 讀，來源與順序見「金鑰放哪裡」。
 - **`eval` 與 `spike` 不跟這一列走**：它們量的是出貨預設那一組設定底下的模型。
 
@@ -411,7 +417,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 （列表、畫面標頭、歷史都讀最後一顆）。續接回來的舊 thread、第二句以後、子代理都不打。幾件要知道的事：
 
 - **每條新 thread 多一次請求**，走 `live-model` 那一列的端點、模型與 key，輸出上限是這一列的
-  `maxOutputTokens`（64）。這次呼叫**不計進會話統計，也不寫 `model/usage`**（同 dsh），所以用量表上看不到它。
+  `maxOutputTokens`（64，不看型錄）。這次呼叫**不計進會話統計，也不寫 `model/usage`**（同 dsh），所以用量表上看不到它。
 - **重試次數沿用 `live-model` 的 `maxRetries`**，但整段有這一列的 `timeoutMs`（60 秒）封頂，所以最壞是等滿
   60 秒。
 - **失敗只講一聲**：serve 記進伺服器日誌、CLI 印在 stderr，前綴都是 `[標題]`，退回標題留著，不重試。

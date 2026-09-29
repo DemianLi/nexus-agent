@@ -6,6 +6,8 @@ import { ambientCredentials, createCredentialService } from './credentials.js';
 import type { CredentialService } from './credentials.js';
 import { legacyEnvMovedError, loadLaunchEnv } from './launch-env.js';
 import type { LaunchEnvironment } from './launch-env.js';
+import { requireModelEntry, thinkingOffBody } from './model-catalog.js';
+import type { ModelEntry } from './model-catalog.js';
 import type { LiveModelConfig } from './settings/live-model.js';
 
 /**
@@ -18,7 +20,7 @@ import type { LiveModelConfig } from './settings/live-model.js';
  *
  * ## 這個檔裡的 `DEFAULT_LIVE_*` 都只是**預設值**
  *
- * 六個連線值由清單上 `live-model` 那一列講（[#545](https://github.com/DemianLi/nexus-agent/issues/545)，
+ * 連線值與模型型錄由清單上 `live-model` 那一列講（[#545](https://github.com/DemianLi/nexus-agent/issues/545)，
  * `settings/live-model.ts`），這裡的常數是那一列的 schema 預設。**測量與理由留在各常數的檔頭**——
  * 部署要改其中一個之前，該讀的就是那一段。
  */
@@ -175,10 +177,19 @@ export function isRetryableRateLimit(error: unknown): boolean {
 export const DEFAULT_LIVE_MAX_OUTPUT_TOKENS = 16_384;
 
 /**
- * 要關掉推理時加進請求 body 的東西（[#650](https://github.com/DemianLi/nexus-agent/issues/650)），只有 `session-title` 這個
- * 用途會帶。寫法照 {@link DEFAULT_LIVE_MODEL_ID} 在 build.nvidia.com 的 model card（「Reasoning OFF」那段）。
+ * 預設那顆模型在型錄裡的那一筆（[#729](https://github.com/DemianLi/nexus-agent/issues/729)）：出廠型錄只放這一筆，對應 dsh
+ * 出廠預設模型那一筆。要加一筆先過入場量測：吃得下 {@link DEFAULT_LIVE_MAX_OUTPUT_TOKENS}，窗口不小於量過最小那顆的
+ * 131,007。
  *
- * ## 這是量出來的
+ * - `contextWindow`：見 {@link DEFAULT_LIVE_MODEL_ID} 的「窗口是量到的」，記的是量過的**下限**。
+ * - `maxTokens`：{@link DEFAULT_LIVE_MAX_OUTPUT_TOKENS}，這顆每一次請求送出去的 `max_tokens`。
+ * - `input`：只有文字。這顆收不收圖沒有量過，先不宣告收圖（#731 量 gemma 那一筆時一起看）。
+ * - `reasoningEfforts` 與 `compat`：關推理的寫法，從原本的 `thinkingOffBody` 搬進來（#650）。**只宣告 `off` 與 `default`
+ *   兩級**：這顆開著推理時有沒有分級沒在實際端點量過，`default` 是「不送任何東西、用模型自己的預設」，沒有線上的寫法要送。
+ *   `enable_thinking` 那一格寫成 `thinking.enabled` 的佔位符，`off` 那一級把它解成 `false`。寫法照
+ *   {@link DEFAULT_LIVE_MODEL_ID} 在 build.nvidia.com 的 model card（「Reasoning OFF」那段）。
+ *
+ * ## 關推理的寫法是量出來的
  *
  * 2026-09-26，預設模型、NVIDIA 閘道、非串流，送 dsh 逐字的標題請求（`maxOutputTokens: 64`），三句輸入各兩次：
  *
@@ -186,13 +197,28 @@ export const DEFAULT_LIVE_MAX_OUTPUT_TOKENS = 16_384;
  * - **帶這一份**：6/6。全部 `stop`、推理 0、輸出 2～23 個 token。
  * - model card 另一個寫法 `low_effort: true`：3/5，有兩次照樣吃光。
  *
- * ## 它跟 `modelId` 是綁著的
+ * ## 它跟這一筆的 id 是綁著的
  *
  * 關推理的寫法是各家模型自己的（chat template 的參數），不是 OpenAI 協定的一部分。**換模型時要一起換**：新模型
- * 不認得這一格的話，可能回 400，也可能照樣推理；兩種都讓標題一律失敗，而退回標題會把失敗蓋住。
+ * 不認得這一格的話，可能回 400，也可能照樣推理；兩種都讓標題一律失敗，而退回標題會把失敗蓋住。所以它住在型錄的
+ * 條目裡，跟 id 同一筆。
+ *
+ * ## 只有標題這種用途會帶
+ *
+ * 主請求不帶 `chat_template_kwargs`（預設就是開著）；pi-ai 在非 `off` 的等級底下會明著送 `enable_thinking: true`，
+ * 我們不送，**沒有量過兩者等價**——見 `model-catalog.ts` 檔頭。
  */
-export const DEFAULT_LIVE_THINKING_OFF_BODY: Readonly<Record<string, unknown>> = Object.freeze({
-  chat_template_kwargs: Object.freeze({ enable_thinking: false }),
+export const DEFAULT_LIVE_MODEL_ENTRY: ModelEntry = Object.freeze({
+  id: DEFAULT_LIVE_MODEL_ID,
+  contextWindow: 700_045,
+  maxTokens: DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
+  input: Object.freeze(['text' as const]) as ModelEntry['input'],
+  reasoningEfforts: Object.freeze({ off: null, default: 'default' }),
+  compat: Object.freeze({
+    chatTemplateKwargs: Object.freeze({
+      enable_thinking: Object.freeze({ $var: 'thinking.enabled' as const }),
+    }),
+  }),
 });
 
 /** `(parameter=max_tokens, value=-46771)`／`got -46771` 裡那個數字。 */
@@ -830,7 +856,7 @@ export function withEmptyAssistantContent(baseFetch: typeof fetch = fetch): type
  * 一次模型呼叫的用途。照 dsh `GenerateOptions.purpose`（`packages/llm/llm/src/types.ts:547-552`，`477b4f4`）：
  * 「adapters may map the purpose to … purpose-specific generation policy」，一般的對話請求不帶。
  *
- * - `session-title`：標題（#650）。帶上 `thinkingOffBody`，同 dsh 的 DeepSeek adapter 對這個用途關掉思考
+ * - `session-title`：標題（#650）。帶上型錄條目的關推理寫法（`thinkingOffBody`），同 dsh 的 DeepSeek adapter 對這個用途關掉思考
  *   （`packages/llm/llm-deepseek/src/serialize.ts:146`）。
  *
  * dsh 另有 `compaction`，我們的摘要走另一條路，沒有這一格的消費者。
@@ -843,7 +869,7 @@ export type LiveModelPurpose = 'session-title';
  * key **每次請求前才向憑證服務取**（`credentials.ts`），缺少時直接失敗，沒有預設值也不 fallback
  * （[docs/standards.md](../../../docs/standards.md) 的秘密處理規則）。
  *
- * @param config - 六個連線值（`settings/live-model.ts`）。**必填，沒有預設參數**（#545）：
+ * @param config - 連線值與型錄（`settings/live-model.ts`）。**必填，沒有預設參數**（#545）：
  *   一個預設參數會讓「呼叫端忘了傳」跟「設定就是這個」長得一模一樣。產品路徑（CLI、serve）
  *   傳起動期從清單解出來的那一份；eval 與 spike 手上沒有清單，在自己的入口用 schema 預設，
  *   eval 只換 `modelId`（見 [`eval/tiers.ts`](./eval/tiers.ts)）——**除了模型 id，取樣設定、
@@ -854,7 +880,10 @@ export function createLiveModel(
   config: LiveModelConfig,
   purpose?: LiveModelPurpose,
   credentials: CredentialService = ambientCredentials(),
+  overrides: { readonly maxOutputTokens?: number } = {},
 ): ChatOpenAI {
+  // 型錄沒有這個 id 就拋，訊息指名 id：設定的 schema 已經擋過一次，這裡是手搭設定的呼叫端（測試、eval）的最後一道。
+  const entry = requireModelEntry(config.models, config.modelId);
   // **建構時先問一次**：缺 key 在組裝當下就失敗，不等到第一個請求。這是跟 dsh 的時刻差異——dsh 只在請求當下才拋
   // （`llm-deepseek-api-key`），我們兩個時刻都拋：組裝時的那一次讓 `--live` 起不來的原因在起動時就講，
   // 請求時的那一次負責受管檔在兩個請求之間被拿掉的情況。
@@ -881,15 +910,16 @@ export function createLiveModel(
     },
     temperature: 1,
     topP: 0.95,
-    maxTokens: config.maxOutputTokens,
+    // 這顆的輸出上限跟著型錄條目走；覆寫是明著傳的（標題那一顆用它自己那一列的上限）。
+    maxTokens: overrides.maxOutputTokens ?? entry.maxTokens,
     timeout: config.timeoutMs,
     maxRetries: config.maxRetries,
     onFailedAttempt: classifyFailedAttempt,
     // 用途專屬的請求內容，見 {@link LiveModelPurpose}。**要在建構時給**：建好之後才設 `modelKwargs` 不會進請求
     // （#650 實測，前兩輪的參數就是這樣沒送出去的）。
     ...(purpose === 'session-title' &&
-      Object.keys(config.thinkingOffBody).length > 0 && {
-        modelKwargs: structuredClone(config.thinkingOffBody),
+      Object.keys(thinkingOffBody(entry)).length > 0 && {
+        modelKwargs: thinkingOffBody(entry),
       }),
   });
 }

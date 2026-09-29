@@ -292,10 +292,18 @@ describe('startupSetting', () => {
     expect(startupSetting(plugins, liveModelPlugin)).toEqual({
       baseUrl: 'https://integrate.api.nvidia.com/v1',
       modelId: 'nvidia/nemotron-3-super-120b-a12b',
-      maxOutputTokens: 16384,
       timeoutMs: 90000,
       maxRetries: 6,
-      thinkingOffBody: { chat_template_kwargs: { enable_thinking: false } },
+      models: [
+        {
+          id: 'nvidia/nemotron-3-super-120b-a12b',
+          contextWindow: 700045,
+          maxTokens: 16384,
+          input: ['text'],
+          reasoningEfforts: { off: null, default: 'default' },
+          compat: { chatTemplateKwargs: { enable_thinking: { $var: 'thinking.enabled' } } },
+        },
+      ],
     });
   });
 
