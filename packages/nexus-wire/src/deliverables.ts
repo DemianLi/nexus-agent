@@ -166,3 +166,237 @@ export function deliverableDownloadPath(threadId: string): string {
 export function deliverableBytesPath(threadId: string): string {
   return `/threads/${encodeURIComponent(threadId)}/deliverables/bytes`;
 }
+
+/**
+ * ## 命令通道上的交付檔讀取（[#747](https://github.com/DemianLi/nexus-agent/issues/747)）
+ *
+ * 照 dsh：讀工作區檔案走命令通道（`packages/api/workspace-files/src/index.ts:232-275`，`477b4f4`），不另開讀檔用的專用網址。
+ * dsh 的設計筆記把「讀檔另開專用網址」列為考慮過並否決的做法（`.agents/notes/implemented/architecture/2026-09-17-workspace-file-binary-transfer.md:20`）。
+ * 上面三個路徑函式是同一件事在另一個載體上的講法，第 3 刀（#747 收尾）會連同它們一起拿掉；這一段是新的講法。
+ *
+ * **只換傳送方式。** 用 `(seq, index)` 定位、只讀宣告過的檔，是 #452 的範圍決定，這裡不動。
+ *
+ * ### 兩支方法，照 dsh 的 `read` 與 `readBytes`
+ *
+ * - {@link DELIVERABLE_READ_METHOD}：讀一頁文字，對 dsh 的 `read`。
+ * - {@link DELIVERABLE_READ_BYTES_METHOD}：讀位元組，對 dsh 的 `readBytes`——**給 `offset`／`length` 就讀一個窗口，都不給就是整檔**
+ *   （整檔下載，吃 `maxFileBytes`）。dsh 的筆記否決了把整檔讀與範圍讀拆成不同方法（`:19`）。
+ *
+ * ### 拒絕怎麼上線
+ *
+ * - **業務上的拒絕**放在回應結果裡：`{ ok: false, error: { code, message, … } }`，同回饋那幾支命令（{@link FeedbackPutResult}），
+ *   碼是 {@link DeliverableRefusalCode}，形狀照 dsh 的 `<命名空間>/<理由>`（dsh 的讀檔服務是 `workspace-file/…`）。
+ *   `too-large` 照 dsh 帶上限數字。**沒有狀態碼這一層**，也就沒有「理由→數字→理由」的兩份對照表。
+ * - **參數本身不合格**（座標、翻頁、窗口）不是讀檔服務的碼：dsh 回閘道層共用的 `gateway/bad-request`
+ *   （`packages/api/workspace-files/src/index.ts:360`、`:370`），這裡對應協定錯誤 `invalid_argument`。
+ *
+ * ### 位元組怎麼上線：多段表單，不是 base64
+ *
+ * 照 dsh `packages/client/connection/src/rpc-host.ts:296-311` 與 `client/rpc.ts:61-64`：成功的結果裡有位元組時，回應是
+ * `multipart/form-data`——`metadata` 一段放 JSON 外殼（{@link BinaryAttachmentRef} 指出每份位元組在結果裡的位置），
+ * 每份位元組各一段 `bytes-<n>`。其餘（錯誤、不帶位元組的結果）照舊回 JSON。**結果裡的位元組是 `Uint8Array`**，
+ * 不是 base64 字串（dsh `types.ts:84-91`）；所以下載與窗口都不再多三分之一，也不需要解碼那一層。
+ * 編碼（{@link encodeBinaryResult}）與解碼（{@link decodeBinaryResult}）都放在這裡，兩端才不會各拼一份。
+ */
+export const DELIVERABLE_READ_METHOD = 'deliverable.read';
+
+/** 讀位元組：給 `offset`／`length` 是窗口，都不給是整檔。見 {@link DELIVERABLE_READ_METHOD} 那段。 */
+export const DELIVERABLE_READ_BYTES_METHOD = 'deliverable.readBytes';
+
+export const DELIVERABLE_METHODS = [
+  DELIVERABLE_READ_METHOD,
+  DELIVERABLE_READ_BYTES_METHOD,
+] as const;
+
+export type DeliverableMethod = (typeof DELIVERABLE_METHODS)[number];
+
+export function isDeliverableMethod(value: unknown): value is DeliverableMethod {
+  return typeof value === 'string' && (DELIVERABLE_METHODS as readonly string[]).includes(value);
+}
+
+/**
+ * 交付檔讀取的拒絕碼。**每一個都對應到前端一個不同的動作**（`not-text` 改給下載、`too-large` 講太大、
+ * `no-anchor`／`not-found`／`not-regular-file` 是這張卡讀不到），所以不壓成同一種。
+ *
+ * 參數不合格不在這裡：那是協定錯誤 `invalid_argument`（見 {@link DELIVERABLE_READ_METHOD} 的說明）。
+ * harness 那側把「內部的理由」對到這些碼的表以這個型別為值域，寫一個不在這裡的字串當場編不過。
+ */
+export type DeliverableRefusalCode =
+  | 'deliverable/no-anchor'
+  | 'deliverable/not-found'
+  | 'deliverable/not-regular-file'
+  | 'deliverable/too-large'
+  | 'deliverable/not-text';
+
+/** 讀交付檔失敗時 `error` 的形狀；`too-large` 帶上限，照 dsh。 */
+export type DeliverableReadError =
+  | {
+      readonly code: Exclude<DeliverableRefusalCode, 'deliverable/too-large'>;
+      readonly message: string;
+    }
+  | {
+      readonly code: 'deliverable/too-large';
+      readonly message: string;
+      /** 被超過的那個上限（位元組）：頁的上限，或整檔的上限。 */
+      readonly maxBytes: number;
+    };
+
+/** `deliverable.read` 的參數。`offset` 預設 0、`limit` 預設是這台 server 的頁行數上限。 */
+export interface DeliverableReadParams {
+  readonly seq: number;
+  readonly index: number;
+  readonly offset?: number;
+  readonly limit?: number;
+}
+
+/** `deliverable.readBytes` 的參數。`offset` 與 `length` 要嘛都不給（整檔），要嘛給了就是一個窗口（`length` 預設是頁的位元組上限）。 */
+export interface DeliverableReadBytesParams {
+  readonly seq: number;
+  readonly index: number;
+  readonly offset?: number;
+  readonly length?: number;
+}
+
+export interface DeliverableReadCommand {
+  readonly id: number;
+  readonly method: typeof DELIVERABLE_READ_METHOD;
+  readonly params: DeliverableReadParams;
+}
+
+export interface DeliverableReadBytesCommand {
+  readonly id: number;
+  readonly method: typeof DELIVERABLE_READ_BYTES_METHOD;
+  readonly params: DeliverableReadBytesParams;
+}
+
+export type DeliverableCommand = DeliverableReadCommand | DeliverableReadBytesCommand;
+
+/**
+ * 讀位元組的結果：照 dsh 的 `WorkspaceFileBytes`（`packages/api/workspace-files/src/types.ts:84-91`），**`data` 是位元組**。
+ *
+ * 跟上面 {@link DeliverableFileBytes} 並存：那個的 `data` 是 base64 字串，舊的 `GET` 路由還在用，第 3 刀跟路徑函式一起刪。
+ * 直接改舊型別，web 的 `apps/web/src/lib/deliverable-file.ts` 當場編不過，第 1 刀就不是純新增了。
+ *
+ * 整檔讀時 `offset` 是 0、`eof` 是 `true`。
+ */
+export interface DeliverableBytes extends DeliverableFileStat {
+  readonly offset: number;
+  readonly data: Uint8Array;
+  readonly eof: boolean;
+}
+
+export type DeliverableReadResult =
+  | { readonly ok: true; readonly value: DeliverableFilePage }
+  | { readonly ok: false; readonly error: DeliverableReadError };
+
+export type DeliverableReadBytesResult =
+  | { readonly ok: true; readonly value: DeliverableBytes }
+  | { readonly ok: false; readonly error: DeliverableReadError };
+
+/**
+ * 外殼裡的一筆附件說明，照 dsh：位元組住在結果的 `path` 那個位置（`['value', 'data']`），內容在表單的 `part` 那一段。
+ * `codec` 目前只有 `'bytes'`。
+ */
+export interface BinaryAttachmentRef {
+  readonly path: readonly string[];
+  readonly codec: 'bytes';
+  readonly part: string;
+}
+
+const METADATA_PART = 'metadata';
+
+/**
+ * 把一個帶位元組的成功結果編成多段表單回應。
+ *
+ * @param id - 回給哪一顆上行封包。
+ * @param value - `result.value`；位元組在 `data`。
+ * @returns 回應：`metadata` 一段是 `{ type: 'success', id, result: { ok: true, value: <去掉 data> }, attachments }`，
+ *   位元組在 `bytes-0`。不快取。
+ */
+export function encodeBinaryResult(id: number, value: DeliverableBytes): Response {
+  const { data, ...rest } = value;
+  const form = new FormData();
+  // 位元組可能是 SharedArrayBuffer 撐的，`BlobPart` 不收；複製成普通的 `Uint8Array`（dsh 同樣這樣做）。
+  form.set('bytes-0', new Blob([new Uint8Array(data)]));
+  const attachments: readonly BinaryAttachmentRef[] = [
+    { path: ['value', 'data'], codec: 'bytes', part: 'bytes-0' },
+  ];
+  form.set(
+    METADATA_PART,
+    JSON.stringify({ type: 'success', id, result: { ok: true, value: rest }, attachments }),
+  );
+  const response = new Response(form);
+  response.headers.set('cache-control', 'no-store');
+  return response;
+}
+
+/** 回應是不是多段表單。 */
+export function isBinaryResponse(response: Response): boolean {
+  return (
+    response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() ===
+    'multipart/form-data'
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * 解一個多段表單回應，把每份位元組放回外殼裡它的位置。照 dsh 的 `parseBinaryResponse`（`client/rpc.ts`）：
+ * 欄位重複、少了 `metadata`、附件說明不合格、附件指到不是位元組的段，都是壞回應，拋 `TypeError`。
+ *
+ * @param response - `content-type` 是 `multipart/form-data` 的回應。
+ * @returns 外殼（`type`、`id`）與放回位元組之後的 `result`。
+ */
+export async function decodeBinaryResult(
+  response: Response,
+): Promise<{ readonly id: number; readonly result: Record<string, unknown> }> {
+  const form = await response.formData();
+  const fields = new Map<string, string | Blob>();
+  for (const [name, value] of form) {
+    if (fields.has(name)) throw new TypeError('交付檔的二進位回應：欄位重複');
+    fields.set(name, value);
+  }
+  const metadata = fields.get(METADATA_PART);
+  fields.delete(METADATA_PART);
+  if (typeof metadata !== 'string') throw new TypeError('交付檔的二進位回應：缺 metadata');
+  const envelope: unknown = JSON.parse(metadata);
+  if (
+    !isRecord(envelope) ||
+    envelope.type !== 'success' ||
+    typeof envelope.id !== 'number' ||
+    !isRecord(envelope.result) ||
+    !Array.isArray(envelope.attachments) ||
+    envelope.attachments.length === 0
+  ) {
+    throw new TypeError('交付檔的二進位回應：外殼不合格');
+  }
+  const result = envelope.result;
+  for (const attachment of envelope.attachments as readonly unknown[]) {
+    if (
+      !isRecord(attachment) ||
+      attachment.codec !== 'bytes' ||
+      typeof attachment.part !== 'string' ||
+      !Array.isArray(attachment.path) ||
+      attachment.path.length === 0 ||
+      !attachment.path.every((segment): segment is string => typeof segment === 'string')
+    ) {
+      throw new TypeError('交付檔的二進位回應：附件說明不合格');
+    }
+    const blob = fields.get(attachment.part);
+    fields.delete(attachment.part);
+    if (!(blob instanceof Blob)) throw new TypeError('交付檔的二進位回應：附件不是位元組');
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    // 走到路徑的父層再放：路徑中間任何一格不是物件就是壞回應，不替它建。
+    let parent: Record<string, unknown> = result;
+    for (const segment of attachment.path.slice(0, -1)) {
+      const next = parent[segment];
+      if (!isRecord(next)) throw new TypeError('交付檔的二進位回應：附件的位置不存在');
+      parent = next;
+    }
+    parent[attachment.path[attachment.path.length - 1]!] = bytes;
+  }
+  if (fields.size > 0) throw new TypeError('交付檔的二進位回應：多出沒人指到的段');
+  return { id: envelope.id, result };
+}
