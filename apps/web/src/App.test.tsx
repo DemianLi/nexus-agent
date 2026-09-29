@@ -511,6 +511,27 @@ describe('對話介面', () => {
       expect((input as HTMLTextAreaElement).placeholder).toBe('說點什麼…');
     });
 
+    it('窄螢幕（640 以下）提示字不講快捷鍵，手勢照樣生效', async () => {
+      vi.stubGlobal('matchMedia', (query: string) => ({
+        matches: /\(min-width:\s*(\d+)px\)/.test(query)
+          ? 375 >= Number(/(\d+)px/.exec(query)![1])
+          : false,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }));
+      try {
+        const { input } = await runningWithQueue(['第一句', '第二句']);
+        // 手機沒有實體鍵盤：跟底列「⌘Enter 插話」在 640 以下不畫是同一個決定（#710 第一步）。
+        expect((input as HTMLTextAreaElement).placeholder).toBe('說點什麼…');
+        // 有實體鍵盤的窄視窗照樣能用手勢，只是不提示。
+        fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+        await waitFor(() => expect(screen.queryByTestId('queue-dock')).toBeNull());
+        expect(document.querySelectorAll('[data-pending-steer]')).toHaveLength(2);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
     it('上一趟「全部改成插話」還沒送完，再按一次不重複送', async () => {
       const { input, updates, holdUpdates } = await runningWithQueue(['第一句', '第二句']);
       const release = holdUpdates();

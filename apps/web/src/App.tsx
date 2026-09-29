@@ -30,6 +30,7 @@ import { Toaster } from '@/components/ui/sonner';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useConversation } from '@/hooks/use-conversation';
+import { SM_BREAKPOINT, useMinWidth } from '@/hooks/use-min-width';
 import { useThreadDirectory } from '@/hooks/use-thread-directory';
 import type { ThreadDirectory } from '@/hooks/use-thread-directory';
 import { useThemePreference } from '@/hooks/use-theme-preference';
@@ -304,6 +305,8 @@ function ConversationView({
   const composerRef = useRef<HTMLTextAreaElement>(null);
   // 草稿空白時 Cmd/Ctrl+Enter 把排著的全部改成插話（#710）。一次只跑一趟：上一趟還在送時再按不重複送。
   const steeringAll = useRef(false);
+  // 手機沒有實體鍵盤：手勢照樣生效，提示字在 640 以下不講快捷鍵（跟底列「⌘Enter 插話」同一條線，#710 第一步）。
+  const keyboardWide = useMinWidth(SM_BREAKPOINT);
   const steerQueueReady =
     canSteerQueue(
       conversation.connected,
@@ -538,7 +541,7 @@ function ConversationView({
                 placeholder={inputPlaceholder({
                   connected: conversation.connected,
                   stoppedOnQuestion: stoppedOnQuestion(conversation.state),
-                  steerQueue: steerQueueReady,
+                  steerQueue: steerQueueReady && keyboardWide,
                 })}
                 {...(steerQueueReady ? { onSteerQueue: steerQueue } : {})}
                 canSend={canSend}
