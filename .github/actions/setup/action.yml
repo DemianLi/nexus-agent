@@ -1,0 +1,20 @@
+name: 準備 Node 與相依套件
+description: 每個要跑 TypeScript 檢查的 job 共用的前置：pnpm、Node、frozen lockfile 安裝。
+
+runs:
+  using: composite
+  steps:
+    # 需要 package.json 內含 packageManager 欄位（例如 "pnpm@10.x"）。
+    # action 一律 pin 浮動 major tag，跟著修補版走；版本下限由 runtime 決定：node20 已棄用，
+    # runner 現在強制墊到 node24 並發警告，所以這幾顆都必須是 node24 的 major
+    # （checkout ≥ v5、setup-node ≥ v5、pnpm ≥ v5）。
+    - uses: pnpm/action-setup@v6
+
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 22
+        cache: pnpm
+
+    - name: 安裝相依套件
+      shell: bash
+      run: pnpm install --frozen-lockfile
