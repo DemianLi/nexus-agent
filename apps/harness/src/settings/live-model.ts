@@ -27,8 +27,8 @@
  * 所以退到 `startupSetting`：起動期解一次、往下傳一份，同 `#settings/…` 那幾列
  * （[#529](https://github.com/DemianLi/nexus-agent/issues/529) 的 A2）。**這一條與 `live-model.ts`
  * 裡 `DEFAULT_LIVE_MAX_RETRIES` 檔頭登記的「要對齊 dsh 的有界退避得自己包一層 caller」是同一層
- * 的工**——哪天包了那一層，逐次解析跟有界退避一起做。key 的讀取時刻（dsh 逐次請求從 credential
- * store 取，我們建構時從 `NVIDIA_API_KEY` 讀一次）同源，不在這一列。
+ * 的工**——哪天包了那一層，逐次解析跟有界退避一起做。key 不在這一列：它已經是逐次請求解析
+ * （[#730](https://github.com/DemianLi/nexus-agent/issues/730)，`credentials.ts`），跟這裡的「起動期解一次」是兩件事。
  *
  * ## 偏離二：重試只有次數，而且次數有上限
  *
