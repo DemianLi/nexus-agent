@@ -134,18 +134,29 @@
  * 人在兩輪之間打的那一行比模型上一輪的同意新。所以那時 `/plan` 是「已經在計劃模式」、模式留著；
  * `/plan off` 照常關。
  *
- * ### 沒做的，也是偏離
+ * ### 沒做的，也是偏離；以及撤掉的
  *
- * - **`/plan <message>`**：dsh 收自由訊息，用 `agent.steer()` 把它插進對話。
- *   原本登記的第一個理由「基座沒有從圖外插一則訊息的表達」**已經不成立**：
- *   [#710](https://github.com/DemianLi/nexus-agent/issues/710) 的插話就是這條路（`@nexus/core` 的 `step-inbox.ts`，
- *   由 serve 的 pump 送進圖）。第二個理由還在：在 `CommandResult` 上加一格 steer 會弄糊 `command/done` 的語意，
- *   以及 `@nexus/plugin-commands` 配套入口那條序列性規則。整條偏離撤不撤、要不要改走插話，待重判（另開卡）。
- *   在那之前 {@link PLAN_COMMAND_HINT} 照舊是 `[off]`——收不下的東西不寫進提示。
+ * - **`/plan <message>` 已經收了**（[#776](https://github.com/DemianLi/nexus-agent/issues/776) 重判）。
+ *   原本登記的兩個理由都不成立：
+ *   1. 「基座沒有從圖外插一則訊息的表達」——[#710](https://github.com/DemianLi/nexus-agent/issues/710) 之後有了。
+ *   2. 「在 `CommandResult` 上加一格 steer 會弄糊 `command/done`，也碰到配套入口的序列性」——載體不是結果，
+ *      是 `CommandInvocation.steer`（handler 呼叫，同 dsh 的 `agent.steer()`）；宿主等 `command/done` 寫完才動，
+ *      `command/run` → `command/done` 的配對先完整收掉，才有 `turn/start`，序列性規則看不到這一輪。
+ *
+ *   **一個表達上的退路，登記在這裡：** dsh 的 handler 拿到 agent，閒著時 steer 會喚醒一輪
+ *   （`packages/core/agent-loop/tests/agent.spec.ts` 的「steer() while idle becomes a woken prompt turn」）。
+ *   我們的命令沒有 agent 把手，而且只跑在兩輪之間（見上），所以 steer 永遠是閒著的那一種，
+ *   退成「宿主在命令落定後開一輪」（`serve` 進送出佇列、REPL 逐句跑）。這一輪的訊息是普通的 `user` 來源，
+ *   同 dsh 的 `source: { kind: 'user' }`。命令落定成 `error` 時，已經收下的 steer 作廢（dsh 沒有這一條，
+ *   它的 steer 一呼叫就送出去了；我們不讓失敗的命令開輪）。
+ *
+ *   **`off` 以外都是訊息，同 dsh**：`/plan of`（打錯的 `off`）以前回 error，現在是進計劃模式並把 `of` 送給模型。
  * - **切換的旁白**：dsh 在人切換模式、而上一份請求標頭描述的是另一個模式時，往對話裡插一句
  *   「The user switched this session to plan mode.」（`loggedActiveAtLastHeader`）。我們沒有
- *   `request/header` 這一顆；從圖外插訊息的路 #710 之後有了，但只接人插的話、只在 serve 上（同上一條，待重判）。模型從下一次請求的
- *   system prompt 看得出來——指引在或不在。
+ *   `request/header` 這一顆；從圖外插訊息的路 #710 之後有了，但只接人插的話、只在 serve 上。模型從下一次請求的
+ *   system prompt 看得出來——指引在或不在。**待另一張卡重判**（#776 的結論留言）：觸發條件不能只比「模式與上一次 `model/start` 不同」，
+ *   dsh 還有 `narrate: false`（`exit_plan_mode` 同意那條路，工具結果已經講過）與「從沒送過請求就不講」兩條；
+ *   旁白要一種新的訊息來源，會牽動 goal 的 authority 絆索、各套件的 fold 測試、日誌版號與 web 的畫法。
  * - **`input.images`**：dsh 的命令收圖片附件，我們沒有 attachment store
  *   （`@nexus/core` 的 `commands.ts` 已經記著這一格是缺不是省）。
  */
@@ -174,7 +185,6 @@ import {
   parsePlanCommandArgs,
   PLAN_ALREADY_ACTIVE_MESSAGE,
   PLAN_ALREADY_INACTIVE_MESSAGE,
-  PLAN_ARGS_ERROR_MESSAGE,
   PLAN_COMMAND_DESCRIPTION,
   PLAN_COMMAND_HINT,
   PLAN_COMMAND_NAME,
@@ -360,29 +370,33 @@ function trackPlanMode(subject: SessionSubject, startActive: boolean): PlanModeS
 /**
  * 跑一次 `/plan`。
  *
- * **參數不合法回 `error`，不是「不認得就當成進入」**：安靜吞掉打錯的參數，會讓
- * `/plan of` 看起來成功了而其實做了相反的事。這條關係同時是這個套件配套入口檢的那一條
- * （見 `invariant.ts`），所以參數先判——不管有沒有接上日誌，打錯的參數都落定成 `error`。
+ * **`off` 以外的參數都是進入，非空的部分是要送進對話的話**，同 dsh（見 {@link parsePlanCommandArgs}）。
+ * 「`/plan` 的方向與模式一致」這條關係由這個套件配套入口看日誌檢（見 `invariant.ts`）。
  *
  * **排著的待關先丟掉再判**（見檔頭「兩值」那節最後一段）。
  *
  * @param sessions - 這次組裝接著的 root 日誌；剛好一份才動得了。
  * @param pendingExits - `exit_plan_mode` 同意之後排著、還沒交出去的待關。
  * @param rawInput - 命令名之後的原文。
+ * @param steer - 宿主替命令保管的「命令結束後送一句話」（`CommandInvocation.steer`）。
  * @returns 直接印給人看的結果。
  */
 function planCommandResult(
   sessions: readonly PlanModeSession[],
   pendingExits: Set<PlanModeSession>,
   rawInput: string,
+  steer: (text: string) => void,
 ): CommandResult {
   const request = parsePlanCommandArgs(rawInput);
-  if (request === undefined) return { kind: 'error', text: PLAN_ARGS_ERROR_MESSAGE };
   if (sessions.length === 0) return { kind: 'error', text: PLAN_NOT_ATTACHED_MESSAGE };
   if (sessions.length > 1) return { kind: 'error', text: planAmbiguousMessage(sessions.length) };
   const session = sessions[0] as PlanModeSession;
+  // **先 steer，再動任何東西**：宿主可以拒收這句話（例如 `@` 的會話引用不能用），拒收會從這裡拋出去，
+  // 命令落定成 `error`，待關與模式都還原封不動。dsh 的順序是先 `set` 再 `steer`；這裡的 steer 只是
+  // 排進宿主的佇列（`command/done` 之後才開那一輪），對調順序看不出差別，卻讓「失敗的命令什麼都沒改」成立。
+  if (request.kind === 'enter' && request.message !== undefined) steer(request.message);
   pendingExits.delete(session);
-  const entering = request === 'enter';
+  const entering = request.kind === 'enter';
   if (session.active() === entering) {
     return {
       kind: 'success',
@@ -678,7 +692,8 @@ export const planModePlugin: NexusPlugin<PlanModeConfig> = {
       name: PLAN_COMMAND_NAME,
       description: PLAN_COMMAND_DESCRIPTION,
       input: { hint: PLAN_COMMAND_HINT },
-      handler: ({ rawInput }) => planCommandResult(attachedHere, pendingExits, rawInput),
+      handler: ({ rawInput, steer }) =>
+        planCommandResult(attachedHere, pendingExits, rawInput, steer),
     });
   },
 };

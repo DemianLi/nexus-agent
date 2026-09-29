@@ -27,7 +27,6 @@ import {
   PLAN_APPROVED_MESSAGE,
   PLAN_REVIEW_QUESTION_ID,
   PLAN_ALREADY_INACTIVE_MESSAGE,
-  PLAN_ARGS_ERROR_MESSAGE,
   PLAN_COMMAND_HINT,
   PLAN_COMMAND_NAME,
   PLAN_ENTERED_MESSAGE,
@@ -54,6 +53,7 @@ vi.mock('@langchain/langgraph', async (importOriginal) => ({
 async function runPlan(
   commands: Pick<CommandRegistrationPoint, 'find'>,
   rawInput: string,
+  steer: (text: string) => void = () => undefined,
 ): Promise<CommandResult> {
   const definition = commands.find(PLAN_COMMAND_NAME);
   if (definition === undefined) throw new Error('沒有註冊 /plan');
@@ -61,6 +61,7 @@ async function runPlan(
     commandId: 'cmd-test',
     rawInput,
     signal: new AbortController().signal,
+    steer,
   });
 }
 
@@ -220,15 +221,12 @@ describe('createPlanModePlugin', () => {
     expect(middleware.afterAgent).toBeUndefined();
   });
 
-  /**
-   * **提示字串要跟真的收得下的東西一致。** dsh 是 `[off|message]`，那個 `message` 靠
-   * `agent.steer()`，我們沒有——寫了收不下的東西等於在騙打字的人。
-   */
-  it('提示是 [off]，不是 dsh 的 [off|message]', async () => {
+  /** 收得下自由訊息之後，提示字串跟 dsh 一樣（#776）。 */
+  it('提示是 [off|message]，同 dsh', async () => {
     const { registry } = await loadPlugins([createPlanModePlugin()]);
 
     expect(registry.commands.list()[0]?.input?.hint).toBe(PLAN_COMMAND_HINT);
-    expect(PLAN_COMMAND_HINT).toBe('[off]');
+    expect(PLAN_COMMAND_HINT).toBe('[off|message]');
   });
 
   /**
@@ -388,18 +386,74 @@ describe('/plan 的結果', () => {
     });
     expect(modes(log)).toEqual([]);
   });
+});
+
+/**
+ * `/plan <message>`（[#776](https://github.com/DemianLi/nexus-agent/issues/776)）：`off` 以外都是進入，
+ * 非空的部分交給宿主的 `steer`，同 dsh。
+ */
+describe('/plan <message>', () => {
+  it('進入並 steer 那句話（去掉頭尾空白），回的還是「開了」', async () => {
+    const { registry, log } = await assemble();
+    const steered: string[] = [];
+
+    expect(
+      await runPlan(registry.commands, '  幫我規劃遷移  ', (text) => steered.push(text)),
+    ).toEqual({ kind: 'success', text: PLAN_ENTERED_MESSAGE });
+    expect(steered).toEqual(['幫我規劃遷移']);
+    expect(modes(log)).toEqual([true]);
+  });
+
+  it('本來就在計劃模式：話照送，回「已經在裡面」，不多寫一顆 plan/mode', async () => {
+    const { registry, log } = await assemble();
+    await runPlan(registry.commands, '');
+    const steered: string[] = [];
+
+    expect(await runPlan(registry.commands, '換個方向', (text) => steered.push(text))).toEqual({
+      kind: 'success',
+      text: PLAN_ALREADY_ACTIVE_MESSAGE,
+    });
+    expect(steered).toEqual(['換個方向']);
+    expect(modes(log)).toEqual([true]);
+  });
+
+  it('不帶話、`off` 都不 steer', async () => {
+    const { registry } = await assemble();
+    const steered: string[] = [];
+    const steer = (text: string): void => void steered.push(text);
+
+    await runPlan(registry.commands, '', steer);
+    await runPlan(registry.commands, '   ', steer);
+    await runPlan(registry.commands, ' off ', steer);
+    expect(steered).toEqual([]);
+  });
 
   /**
-   * **不認得的參數回 error，不是「當成進入」。** 安靜吞掉打錯的參數，會讓 `/plan of`
-   * 看起來成功了而其實做了相反的事。這條關係也是這個套件配套入口檢的那一條。
+   * **`off` 以外都是訊息，同 dsh。** `/plan of`（打錯的 `off`）與 `/plan off 再說`
+   * 都是進計劃模式並把整句送出去——以前 `of` 回 error，那條翻過面了。
    */
-  it('收不下的參數回 error，而且沒有改到模式', async () => {
+  it('`of`、`off 再說` 是訊息，不是離開', async () => {
     const { registry, log } = await assemble();
+    const steered: string[] = [];
+    const steer = (text: string): void => void steered.push(text);
 
-    expect(await runPlan(registry.commands, ' of')).toEqual({
-      kind: 'error',
-      text: PLAN_ARGS_ERROR_MESSAGE,
-    });
+    await runPlan(registry.commands, ' of', steer);
+    await runPlan(registry.commands, 'off 再說', steer);
+    expect(steered).toEqual(['of', 'off 再說']);
+    expect(modes(log)).toEqual([true]);
+  });
+
+  /**
+   * **宿主拒收就什麼都不改。** steer 排在動任何東西之前，所以被拒收的命令沒有寫 `plan/mode`，
+   * 也沒有丟掉 `exit_plan_mode` 排著的待關（那是命令成功才做的事）。
+   */
+  it('宿主拒收那句話：例外冒出去，模式沒動', async () => {
+    const { registry, log } = await assemble();
+    const refuse = (): void => {
+      throw new Error('這句話不收');
+    };
+
+    await expect(runPlan(registry.commands, '幫我', refuse)).rejects.toThrow('這句話不收');
     expect(modes(log)).toEqual([]);
     // 沒改到模式：下一次 `/plan` 仍然是「開了」而不是「已經在裡面」。
     expect(await runPlan(registry.commands, '')).toEqual({
@@ -423,14 +477,16 @@ describe('沒接、或接了不只一份', () => {
     });
   });
 
-  /** 參數先判：打錯的參數不管有沒有接上，都落定成 `error`，配套入口那條才站得住。 */
-  it('沒接會話日誌時，打錯的參數仍然回參數的錯', async () => {
+  /** 沒接上的命令不能開輪：話留在原地，沒有東西被送出去。 */
+  it('沒接會話日誌時，帶話的 /plan 不 steer', async () => {
     const { registry } = await loadPlugins([createPlanModePlugin()]);
+    const steered: string[] = [];
 
-    expect(await runPlan(registry.commands, 'of')).toEqual({
+    expect(await runPlan(registry.commands, '幫我', (text) => steered.push(text))).toEqual({
       kind: 'error',
-      text: PLAN_ARGS_ERROR_MESSAGE,
+      text: PLAN_NOT_ATTACHED_MESSAGE,
     });
+    expect(steered).toEqual([]);
   });
 
   it('接了兩份：挑不出來，兩份都不動', async () => {

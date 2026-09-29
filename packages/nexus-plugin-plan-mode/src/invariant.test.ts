@@ -1,5 +1,5 @@
 /**
- * `/plan` 的參數契約與 `plan/mode` 的形狀，**走真的 runner**。
+ * `/plan` 的方向與 `plan/mode` 的形狀，**走真的 runner**。
  *
  * 不直接呼叫 installer：那樣驗不到 `register()` 有沒有把包名接上、也驗不到違規會不會
  * 真的從 `onViolation` 出來。這個檔案要證明的是**這個配套入口不再是在掃空氣**——
@@ -50,49 +50,80 @@ function done(log: SessionLog, commandId: string, kind: 'success' | 'error'): vo
   log.append('command/done', { commandId, kind });
 }
 
-describe('收得下的參數不誤報', () => {
-  it('不帶參數與 off 都可以成功', () => {
+function mode(log: SessionLog, active: boolean): void {
+  log.append('plan/mode', { active });
+}
+
+describe('方向對的不誤報', () => {
+  it('不帶參數開、off 關', () => {
     const { log, violations } = watched();
     run(log, 'cmd-1', '');
+    mode(log, true);
     done(log, 'cmd-1', 'success');
     run(log, 'cmd-2', ' off');
+    mode(log, false);
     done(log, 'cmd-2', 'success');
     expect(violations).toEqual([]);
   });
 
   /** 空白的處理要跟 handler 同一份判準——這正是那個共用模組存在的理由。 */
-  it('只有空白也算不帶參數', () => {
+  it('只有空白也算不帶參數，帶話的也是開', () => {
     const { log, violations } = watched();
     run(log, 'cmd-1', '   ');
+    mode(log, true);
+    done(log, 'cmd-1', 'success');
+    run(log, 'cmd-2', ' 幫我規劃 ');
+    mode(log, true);
+    done(log, 'cmd-2', 'success');
+    expect(violations).toEqual([]);
+  });
+
+  /** 本來就在那個模式：命令沒寫 `plan/mode`，沒有東西可檢，不算違規。 */
+  it('沒寫 plan/mode 的 noop 不報', () => {
+    const { log, violations } = watched();
+    run(log, 'cmd-1', ' off');
     done(log, 'cmd-1', 'success');
     expect(violations).toEqual([]);
   });
 
-  /** 別人的命令不歸這條管，就算它的參數在我們的文法裡是非法的。 */
+  /** 別人的命令不歸這條管，就算它旁邊有人寫了 `plan/mode`。 */
   it('不是 /plan 的一律不看', () => {
     const { log, violations } = watched();
-    run(log, 'cmd-1', ' 隨便什麼', 'ping');
+    run(log, 'cmd-1', ' off', 'ping');
+    mode(log, true);
     done(log, 'cmd-1', 'success');
+    expect(violations).toEqual([]);
+  });
+
+  /** 命令之外的 `plan/mode`（例如 `exit_plan_mode` 同意之後）方向不受命令約束。 */
+  it('落定之後的 plan/mode 不歸命令管', () => {
+    const { log, violations } = watched();
+    run(log, 'cmd-1', ' off');
+    done(log, 'cmd-1', 'success');
+    mode(log, true);
     expect(violations).toEqual([]);
   });
 });
 
-describe('收不下的參數必須落定成 error', () => {
-  it('落成 success 就是違規，而且訊息帶得出那個參數', () => {
+describe('方向必須跟參數一致', () => {
+  it('off 卻寫成開就是違規，訊息帶得出參數與方向', () => {
     const { log, violations } = watched();
-    run(log, 'cmd-1', ' of');
+    run(log, 'cmd-1', ' off');
+    mode(log, true);
     done(log, 'cmd-1', 'success');
 
     expect(violations).toHaveLength(1);
     expect(violations[0]).toContain('@nexus/plugin-plan-mode');
-    expect(violations[0]).toContain('of');
+    expect(violations[0]).toContain('off');
+    expect(violations[0]).toContain('active: true');
   });
 
-  it('落成 error 就沒事', () => {
+  it('進入卻寫成關也是違規', () => {
     const { log, violations } = watched();
-    run(log, 'cmd-1', ' of');
-    done(log, 'cmd-1', 'error');
-    expect(violations).toEqual([]);
+    run(log, 'cmd-1', ' 幫我規劃');
+    mode(log, false);
+    done(log, 'cmd-1', 'success');
+    expect(violations).toHaveLength(1);
   });
 
   /**
@@ -101,22 +132,23 @@ describe('收不下的參數必須落定成 error', () => {
    */
   it('重播進來的一樣報得出來', () => {
     const { violations } = watched((log) => {
-      run(log, 'cmd-1', ' 亂打的');
+      run(log, 'cmd-1', ' off');
+      mode(log, true);
       done(log, 'cmd-1', 'success');
     });
     expect(violations).toHaveLength(1);
   });
 
   /**
-   * **非法的那一次落定之後就不再追。** 不重設的話，下一次合法的 `/plan` 落成 success
-   * 會被算到上一次頭上——那是誤報，而誤報會讓人開始無視這條檢查。
+   * **落定之後就不再追。** 不重設的話，下一次命令之外的 `plan/mode` 會被算到上一次頭上
+   * ——那是誤報，而誤報會讓人開始無視這條檢查。
    */
-  it('下一次合法的執行不會被算到上一次頭上', () => {
+  it('落定之後不再追那一次', () => {
     const { log, violations } = watched();
-    run(log, 'cmd-1', ' of');
-    done(log, 'cmd-1', 'error');
-    run(log, 'cmd-2', '');
-    done(log, 'cmd-2', 'success');
+    run(log, 'cmd-1', ' off');
+    mode(log, false);
+    done(log, 'cmd-1', 'success');
+    mode(log, true);
     expect(violations).toEqual([]);
   });
 });

@@ -20,38 +20,36 @@ export const PLAN_COMMAND_NAME = 'plan';
 /** 探索清單上的那一句。同上，寫死。 */
 export const PLAN_COMMAND_DESCRIPTION = '進入或離開計劃模式';
 
+/** 使用者還沒打字時的佔位字串。同 dsh 的 `[off|message]`（#776）。 */
+export const PLAN_COMMAND_HINT = '[off|message]';
+
 /**
- * 使用者還沒打字時的佔位字串。
+ * 一次 `/plan` 要求什麼。
  *
- * **dsh 是 `[off|message]`，我們是 `[off]`**——差的那個 `message` 是 dsh 用
- * `agent.steer()` 把它插進對話裡。那條路 #710 之後有了（人插話），但命令還沒接上，接不接待重判（見 `index.ts` 的偏離說明）。
- * 提示字串要跟真的收得下的東西一致：寫了收不下的東西，等於在騙打字的人。
+ * `enter` 帶著 `message` 時，命令進了計劃模式之後還要把這句話當成人打的一句話送進對話
+ * （`CommandInvocation.steer`，dsh 的 `agent.steer()`）。
  */
-export const PLAN_COMMAND_HINT = '[off]';
-
-/** 一次 `/plan` 要求的方向。 */
-export type PlanCommandRequest = 'enter' | 'leave';
+export type PlanCommandRequest =
+  { readonly kind: 'leave' } | { readonly kind: 'enter'; readonly message?: string };
 
 /**
- * 讀 `/plan` 後面的原文。
+ * 讀 `/plan` 後面的原文。**照 dsh**（`packages/plan/plan-mode/src/index.ts` 的 handler）：
+ * 剛好是 `off`（去掉頭尾空白後）就離開，其餘都是進入，非空的部分是要送進對話的話。
  *
- * **只收兩種**：空的（進計劃模式）與 `off`（離開）。其餘一律是 `undefined`，由呼叫端
- * 回 `{ kind: 'error' }`——而不是「不認得就當成進入」。安靜地把打錯的參數吞掉，會讓
- * `/plan of` 看起來成功了而其實做了相反的事。
+ * **這裡沒有「不合法的參數」了。** 以前只收空的與 `off`，其餘回 `error`，理由是安靜吞掉打錯的
+ * 參數會讓 `/plan of` 看起來成功了而其實做了相反的事；收下自由訊息之後，`/plan of` 就是
+ * 「進計劃模式並把 `of` 送給模型」，同 dsh。要擋這一類缺陷改由 `invariant.ts` 看日誌：
+ * `/plan off` 落定之前寫下的 `plan/mode` 必須是關、其餘必須是開。
  *
  * @param rawInput - 命令名之後的原文，**含分隔的空白**（`CommandInvocation.rawInput`
  *   不做 trim，文法歸這裡管）。
- * @returns 要求的方向，或參數不合法時的 `undefined`。
+ * @returns 要求的方向與要送的話。
  */
-export function parsePlanCommandArgs(rawInput: string): PlanCommandRequest | undefined {
+export function parsePlanCommandArgs(rawInput: string): PlanCommandRequest {
   const message = rawInput.trim();
-  if (message === '') return 'enter';
-  if (message === 'off') return 'leave';
-  return undefined;
+  if (message === 'off') return { kind: 'leave' };
+  return message === '' ? { kind: 'enter' } : { kind: 'enter', message };
 }
-
-/** 參數不合法時回給人的話。**指名收得下什麼**，不然人只知道自己錯了。 */
-export const PLAN_ARGS_ERROR_MESSAGE = `/${PLAN_COMMAND_NAME} 只收兩種：不帶參數（進計劃模式）或 off（離開）。`;
 
 /**
  * 這一份組裝還沒接上會話日誌。

@@ -808,6 +808,8 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           executor: createCommandExecutor({
             commands: threadAgent.commands,
             sessionLog: pump.sessionLog,
+            // 命令要送的話跟 `run.start` 收的話同一道驗（#713）：引用不能用就讓命令在動任何東西之前失敗。
+            acceptSteer: (text) => void pump.referencedText(text),
           }),
           feedback: threadAgent.feedback,
           workspaceChanges: threadAgent.workspaceChanges,
@@ -1188,7 +1190,12 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         // ——封包是好的，只是那一行不是命令。
         return json(successResponse(id, { kind: 'unknown' } satisfies SlashRunResult));
       }
-      const { commandId, result } = execution;
+      const { commandId, result, steers } = execution;
+      // **`command/done` 已經寫完了才開這一輪**（`CommandInvocation.steer` 的時刻承諾）：日誌上 `command/run` → `command/done`
+      // 的配對先完整收掉，才有 `turn/start`。`slashInFlight` 這時還沒放，但它只擋斜線命令，不擋 `pump.submit`。
+      // 每句一件、進送出佇列，順序就是命令呼叫 `steer` 的順序。
+      for (const text of steers)
+        start(thread.pump, { kind: 'message', text, id: crypto.randomUUID() });
       return json(
         successResponse(
           id,

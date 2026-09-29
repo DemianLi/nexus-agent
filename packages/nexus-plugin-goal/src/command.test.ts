@@ -88,6 +88,7 @@ function mount(
         commandId: 'cmd-test-1',
         rawInput,
         signal: new AbortController().signal,
+        steer: () => undefined,
       });
       if (result instanceof Promise) throw new TypeError('/goal 是同步的');
       return result;
@@ -222,6 +223,7 @@ describe('找得到要動的那一份', () => {
         commandId: 'cmd-test-1',
         rawInput,
         signal: new AbortController().signal,
+        steer: () => undefined,
       }) as CommandResult;
 
     expect(errorText(run(''))).toBe(goalAmbiguousMessage(2));
@@ -258,6 +260,7 @@ describe('找得到要動的那一份', () => {
             commandId: 'cmd-test-1',
             rawInput: input,
             signal: new AbortController().signal,
+            steer: () => undefined,
           }) as CommandResult,
       };
     };

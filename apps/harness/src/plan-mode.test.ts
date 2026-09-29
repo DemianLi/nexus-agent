@@ -35,9 +35,9 @@ import {
   DEFAULT_PLAN_GUIDANCE,
   EXIT_PLAN_MODE_TOOL_NAME,
   NOT_IN_PLAN_MODE_MESSAGE,
+  PLAN_ALREADY_INACTIVE_MESSAGE,
   PLAN_APPROVE_LABEL,
   PLAN_APPROVED_MESSAGE,
-  PLAN_ARGS_ERROR_MESSAGE,
   PLAN_ENTERED_MESSAGE,
   PLAN_KEEP_PLANNING_LABEL,
   PLAN_LEFT_MESSAGE,
@@ -723,22 +723,61 @@ describe('/plan 這條路', () => {
   });
 
   /**
-   * **收不下的參數走 `printer.error`，而且不驚動模型。**
+   * **`/plan <message>` 的產品路徑**（[#776](https://github.com/DemianLi/nexus-agent/issues/776)）：
+   * 日誌順序是命令那一對先收完、才有那一輪；第一次模型請求同時帶計劃指引與那句話。
    *
-   * `/plan of` 是打錯的 `/plan off`，而它在語法上是一個合法的命令行——`parseCommand`
-   * 收得下、註冊表也找得到，所以它**會**進 handler。分辨對錯的是 handler 自己的文法，
-   * 而它回 `error`。掉回模型的話，模型會收到一行沒頭沒尾的 `/plan of`。
+   * 只斷言「有一輪」的話，一個把話在 `command/done` 之前就送出去的實作照樣綠——順序才是這張卡的承諾。
    */
-  it('/plan of 回報錯誤，模式沒動，模型沒被驚動', async () => {
-    const { model, stderr, stdout } = await repl(
+  it('/plan 幫我規劃：命令落定之後才開那一輪，第一個請求有指引也有那句話', async () => {
+    const { model, events, stdout } = await repl(
       [createEchoPlugin(), createPlanModePlugin()],
-      '/plan of\n說點什麼\n/exit\n',
+      '/plan 幫我規劃\n/exit\n',
       1,
     );
 
-    expect(stderr).toContain(PLAN_ARGS_ERROR_MESSAGE);
+    expect(stdout).toContain(PLAN_ENTERED_MESSAGE);
+    expect(
+      events
+        .map((event) => event.type)
+        .filter((type) =>
+          ['command/run', 'plan/mode', 'command/done', 'turn/start'].includes(type),
+        ),
+    ).toEqual(['command/run', 'plan/mode', 'command/done', 'turn/start']);
+    expect(events.find((event) => event.type === 'turn/start')?.data).toMatchObject({
+      text: '幫我規劃',
+    });
     expect(model.prompts).toHaveLength(1);
-    expect(systemPrompt(model.prompts[0] ?? [])).not.toContain(DEFAULT_PLAN_GUIDANCE);
-    expect(stdout).not.toContain(PLAN_ENTERED_MESSAGE);
+    const first = model.prompts[0] ?? [];
+    expect(systemPrompt(first)).toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(first.filter((message) => message.getType() === 'human').map((m) => m.text)).toEqual([
+      '幫我規劃',
+    ]);
+  });
+
+  /**
+   * **`off` 以外都是訊息，同 dsh。** `/plan of` 是打錯的 `/plan off`，現在進計劃模式並把 `of` 送給模型
+   * ——以前它回 error。翻面登記在 `index.ts` 的偏離說明，這條是它的絆索。
+   */
+  it('/plan of 是進入並把 of 送給模型，不是離開也不是錯誤', async () => {
+    const { model, stderr } = await repl(
+      [createEchoPlugin(), createPlanModePlugin()],
+      '/plan of\n/exit\n',
+      1,
+    );
+
+    expect(stderr).toBe('');
+    expect(model.prompts).toHaveLength(1);
+    expect(systemPrompt(model.prompts[0] ?? [])).toContain(DEFAULT_PLAN_GUIDANCE);
+  });
+
+  it('/plan off 之後不開輪', async () => {
+    const { model, stdout } = await repl(
+      [createEchoPlugin(), createPlanModePlugin()],
+      '/plan off\n/exit\n',
+      1,
+    );
+
+    expect(stdout).toContain(PLAN_ALREADY_INACTIVE_MESSAGE);
+    expect(model.prompts).toHaveLength(0);
   });
 });

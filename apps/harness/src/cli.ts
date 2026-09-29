@@ -1385,9 +1385,16 @@ export async function runRepl(
         if (execution === undefined) {
           // 語法不符或名字不認得——**照原樣送給模型**，跟這行改動之前一模一樣。
           await runTurn(agent, text, printer, sessionLog, titleLimits);
-        } else if (execution.result.text !== undefined) {
-          const write = execution.result.kind === 'error' ? printer.error : printer.log;
-          write(execution.result.text);
+        } else {
+          if (execution.result.text !== undefined) {
+            const write = execution.result.kind === 'error' ? printer.error : printer.log;
+            write(execution.result.text);
+          }
+          // **命令請宿主接著送的話**（`/plan <message>`）：`command/done` 已經寫完，這裡才開這一輪，
+          // 跟人接著打了那一句一樣。REPL 一行一輪，所以逐句 await。
+          for (const message of execution.steers) {
+            await runTurn(agent, message, printer, sessionLog, titleLimits);
+          }
         }
         // **命令也算一次機會**：`/goal resume` 就是重新授權，而重新授權之後該接著跑。
         if (driver !== undefined)

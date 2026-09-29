@@ -28,20 +28,21 @@
  * - **middleware 的順序**（`prepend` 要排在核准閘門之前，別人的閘門才攔不到模式外的呼叫）歸 `fold.ts`
  *   與它的測試。
  *
- * ## 檢得到的那一條：`/plan` 的參數契約
+ * ## 檢得到的那一條：`/plan` 的方向
  *
  * [#120](https://github.com/DemianLi/nexus-agent/issues/120) 之後這個 package 多了一個
- * **完全活在日誌裡**的關係：`/plan` 只收不帶參數與 `off` 兩種，其餘一律是
- * `{ kind: 'error' }`。`command/run` 已經把 `name` 與 `args` 原樣記下來了，配對的
- * `command/done` 記著 `kind`——**判斷需要的東西一顆都不缺**。
+ * **完全活在日誌裡**的關係：`command/run` 已經把 `name` 與 `args` 原樣記下來了，命令自己寫的
+ * `plan/mode` 落在它與配對的 `command/done` 之間——**判斷需要的東西一顆都不缺**。
+ *
+ * **它翻過面。** 以前的契約是「`/plan` 只收不帶參數與 `off`，其餘落定成 `error`」；
+ * [#776](https://github.com/DemianLi/nexus-agent/issues/776) 收下自由訊息（`off` 以外都是進入）之後，
+ * 沒有「不合法的參數」可檢了。留下來的、而且更值得檢的是方向：**`args` 剛好是 `off` 的那一次，
+ * 期間寫下的 `plan/mode` 必須是關；其餘必須是開。** 它擋的缺陷同一個：`/plan off` 安靜地做了相反的事
+ * ——單元測試改一行就跟著綠了，這條在真的跑過的 session 上會紅。
  *
  * **而它只有這個 package 檢得到。** `@nexus/plugin-commands` 的配套入口看的是生命週期
  * 的形狀（id 不重複、done 配得到 run、一次一個），它不知道 `plan` 的文法是什麼；
  * `@nexus/core` 更不知道。文法歸擁有那個命令的人。
- *
- * 它擋的缺陷很具體：`parsePlanCommandArgs` 哪天被改成「不認得就當成進入」，
- * `/plan of` 會安靜地做相反的事——單元測試改一行就跟著綠了，這條在真的跑過的
- * session 上會紅。
  *
  * ## 一個前提要講明
  *
@@ -61,14 +62,15 @@ import { parsePlanCommandArgs, PLAN_COMMAND_NAME } from './command.js';
 export const PLAN_MODE_INVARIANT_PACKAGE = '@nexus/plugin-plan-mode';
 
 /**
- * 兩條：`plan/mode` 的形狀，與 `/plan` 的參數契約（**非法的參數必須落定成 `error`**）。
+ * 兩條：`plan/mode` 的形狀，與 `/plan` 的方向（`off` 期間寫下的 `plan/mode` 必須是關、其餘必須是開）。
  *
  * trace 放在 closure 裡：一份日誌一次安裝，同 `@nexus/plugin-commands` 的那份。
  * 只記「還開著的那一次」——序列性歸 `@nexus/plugin-commands` 檢，這裡不重複檢。
  */
 export const planModeInvariant: InvariantInstaller = (subject, fail) => {
-  /** 還沒落定、而且參數不合法的那一次 `/plan`。 */
-  let openIllegal: { readonly commandId: string; readonly args: string } | undefined;
+  /** 還沒落定的那一次 `/plan`，與它的參數要求的方向。 */
+  let open:
+    { readonly commandId: string; readonly args: string; readonly active: boolean } | undefined;
 
   subject.observe((event) => {
     if (event.type === 'plan/mode') {
@@ -80,6 +82,13 @@ export const planModeInvariant: InvariantInstaller = (subject, fail) => {
           `plan/mode（seq ${String(event.seq)}）帶的 active 是 ${JSON.stringify(active)}` +
             '——只收布林',
         );
+        return;
+      }
+      if (open !== undefined && active !== open.active) {
+        fail(
+          `plan/mode（seq ${String(event.seq)}）在 /${PLAN_COMMAND_NAME} ${JSON.stringify(open.args)} ` +
+            `之內寫成 active: ${String(active)}——這個參數要的是 ${String(open.active)}`,
+        );
       }
       return;
     }
@@ -89,29 +98,20 @@ export const planModeInvariant: InvariantInstaller = (subject, fail) => {
       const args = event.data.args ?? '';
       // 每一筆 `command/run` 都重設：序列的執行器裡上一次一定已經落定了，而沒落定
       // 那件事本身歸 `@nexus/plugin-commands` 報。
-      openIllegal =
-        name === PLAN_COMMAND_NAME && parsePlanCommandArgs(args) === undefined
-          ? { commandId, args }
+      open =
+        name === PLAN_COMMAND_NAME
+          ? { commandId, args, active: parsePlanCommandArgs(args).kind === 'enter' }
           : undefined;
       return;
     }
-    if (event.type !== 'command/done') return;
-    if (openIllegal === undefined || openIllegal.commandId !== event.data.commandId) return;
-    const illegal = openIllegal;
-    openIllegal = undefined;
-    if (event.data.kind === 'error') return;
-    fail(
-      `command/done（seq ${String(event.seq)}）把 /${PLAN_COMMAND_NAME} ` +
-        `${JSON.stringify(illegal.args)} 落定成 ${JSON.stringify(event.data.kind)}` +
-        `——這個參數收不下，只能落定成 error`,
-    );
+    if (event.type === 'command/done' && open?.commandId === event.data.commandId) open = undefined;
   });
 };
 
 /**
  * 把 `@nexus/plugin-plan-mode` 的配套入口掛上去。
  *
- * **掛了會真的裝上檢查**（`plan/mode` 的形狀與 `/plan` 的參數契約），與空的那些不同。違規的去處
+ * **掛了會真的裝上檢查**（`plan/mode` 的形狀與 `/plan` 的方向），與空的那些不同。違規的去處
  * 仍然是進入點的事（CLI 走 `onInvariantViolation`），這個檔案只負責註冊。
  *
  * @returns 掛著它的條目，註冊 `@nexus/plugin-plan-mode` 配套入口的 plugin。

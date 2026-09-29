@@ -24,13 +24,12 @@ import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant'
 import { createEchoPlugin } from '@nexus/plugin-echo';
 import {
   PLAN_ALREADY_ACTIVE_MESSAGE,
-  PLAN_ARGS_ERROR_MESSAGE,
   PLAN_COMMAND_NAME,
   PLAN_ENTERED_MESSAGE,
 } from '@nexus/plugin-plan-mode';
 import { createWireClient } from '@nexus/wire';
 import type { WireClient } from '@nexus/wire';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createCliAgent } from './cli.js';
 import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
@@ -139,14 +138,49 @@ describe('打得到 /plan', () => {
     });
   });
 
-  it('參數不合法是命令自己的錯，不是這條線的錯', async () => {
-    const { client } = await wire();
+  /**
+   * **`/plan <message>` 走 serve 的產品路徑**（[#776](https://github.com/DemianLi/nexus-agent/issues/776)）：
+   * 回的還是「開了」，那句話由 server 自己進送出佇列開一輪，日誌順序是命令那一對收完才有 `turn/start`。
+   */
+  it('/plan 帶話：命令落定之後 server 開那一輪', async () => {
+    const wired = await wire();
+    const { client } = wired;
     await client.openEvents('t');
-    const result = await client.slashRun('t', `/${PLAN_COMMAND_NAME} of`);
-    expect(result).toEqual({
-      kind: 'error',
+
+    expect(await client.slashRun('t', `/${PLAN_COMMAND_NAME} 幫我規劃`)).toEqual({
+      kind: 'success',
       command_id: expect.any(String),
-      text: PLAN_ARGS_ERROR_MESSAGE,
+      text: PLAN_ENTERED_MESSAGE,
+    });
+    await vi.waitFor(() =>
+      expect(wired.log().events.map((event) => event.type)).toContain('turn/start'),
+    );
+    const types = wired.log().events.map((event) => event.type);
+    const at = (type: (typeof types)[number]): number => types.indexOf(type);
+    expect(at('command/run')).toBeLessThan(at('plan/mode'));
+    expect(at('plan/mode')).toBeLessThan(at('command/done'));
+    expect(at('command/done')).toBeLessThan(at('turn/start'));
+    expect(wired.log().events.find((event) => event.type === 'turn/start')?.data).toMatchObject({
+      text: '幫我規劃',
+    });
+  });
+
+  /**
+   * **這條 thread 不收 `@` 引用時，帶引用的 `/plan` 什麼都不改。**（#713）`run.start` 在收件時擋、
+   * 這裡是第三個進 pump 的入口，走同一道驗；命令在動模式之前就失敗，所以不會「模式開了、話沒送」。
+   */
+  it('/plan 帶不能用的引用：命令失敗，模式沒開，沒有那一輪', async () => {
+    const wired = await wire();
+    const { client } = wired;
+    await client.openEvents('t');
+
+    const result = await client.slashRun('t', `/${PLAN_COMMAND_NAME} 看 @[x](nexus-session:abc)`);
+    expect(result.kind).toBe('error');
+    const types = wired.log().events.map((event) => event.type);
+    expect(types).not.toContain('plan/mode');
+    expect(types).not.toContain('turn/start');
+    expect(wired.log().events.find((event) => event.type === 'command/done')?.data).toMatchObject({
+      kind: 'error',
     });
   });
 });

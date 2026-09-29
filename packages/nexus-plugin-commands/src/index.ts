@@ -37,10 +37,17 @@ export interface ParsedCommand {
   readonly rawInput: string;
 }
 
-/** 一次落定的執行：配對 id 加上正規化過的結果。 */
+/** 一次落定的執行：配對 id、正規化過的結果，與命令請宿主接著送的話。 */
 export interface CommandExecution {
   readonly commandId: string;
   readonly result: CommandResult;
+  /**
+   * 命令呼叫 `steer` 收下的話，**依呼叫順序**。`command/done` 寫完之後才交到宿主手上，宿主逐句當成人打的話送進對話。
+   *
+   * **結果是 `error` 時一律是空的**：命令失敗了，它半路說要送的話一起作廢。
+   * **宿主不理這一格的話，那些話就靜靜沒有了**——所以兩個宿主（REPL 與 `serve`）都要讀它。
+   */
+  readonly steers: readonly string[];
 }
 
 /**
@@ -144,6 +151,13 @@ export interface CommandExecutorOptions {
    * 「第二個錯誤有被吞掉並記下來」。
    */
   readonly onWarn?: (message: string) => void;
+  /**
+   * 命令呼叫 `steer(text)` 時，宿主先驗一次這句話收不收。省略即都收。
+   *
+   * **拋出來的例外會從 handler 裡的 `steer` 冒出去**，所以 handler 只要在做任何有副作用的事之前呼叫，
+   * 被拒收的命令什麼都沒改、`command/done` 落定成 `error`（例如 `@` 的會話引用不能用，#713）。
+   */
+  readonly acceptSteer?: (text: string) => void;
 }
 
 /** 一個發派面。**一個 REPL 一個**，配對 id 的計數器活在它裡面。 */
@@ -179,14 +193,22 @@ export function createCommandExecutor(options: CommandExecutorOptions): CommandE
   let seq = 0;
 
   /** 落定：先寫 `command/done`，再把結果交出去。 */
-  function settle(commandId: string, result: CommandResult): CommandExecution {
+  function settle(
+    commandId: string,
+    result: CommandResult,
+    steers: readonly string[],
+  ): CommandExecution {
     sessionLog.append('command/done', {
       commandId,
       kind: result.kind,
       // `text` 沒有的時候要整個不放這個 key——日誌對 `undefined` 是當場拋的。
       ...(result.text === undefined ? {} : { text: result.text }),
     });
-    return Object.freeze({ commandId, result });
+    return Object.freeze({
+      commandId,
+      result,
+      steers: Object.freeze(result.kind === 'success' ? [...steers] : []),
+    });
   }
 
   /**
@@ -226,15 +248,34 @@ export function createCommandExecutor(options: CommandExecutorOptions): CommandE
         source: { kind: 'user' },
       });
 
+      const steers: string[] = [];
+      let open = true;
+      const steer = (text: string): void => {
+        // 命令結束後宿主已經不看這一格了：靜靜收下等於靜靜丟掉。
+        if (!open) throw new Error(`命令 "/${parsed.name}" 已經結束，不能再 steer。`);
+        if (typeof text !== 'string' || text.trim().length === 0) {
+          throw new TypeError(`命令 "/${parsed.name}" 的 steer 要是非空字串。`);
+        }
+        options.acceptSteer?.(text);
+        steers.push(text);
+      };
+
       let result: CommandResult;
       try {
-        const returned = definition.handler({ commandId, rawInput: parsed.rawInput, signal });
+        const returned = definition.handler({
+          commandId,
+          rawInput: parsed.rawInput,
+          signal,
+          steer,
+        });
         result = normalizeResult(parsed.name, await withAbort(Promise.resolve(returned), signal));
       } catch (error: unknown) {
+        open = false;
         settleThrown(commandId, parsed.name, error);
         throw error;
       }
-      return settle(commandId, result);
+      open = false;
+      return settle(commandId, result, steers);
     },
   };
 }

@@ -72,6 +72,25 @@ export interface CommandInvocation {
   readonly rawInput: string;
   /** 發派它的那次請求擁有的取消訊號。 */
   readonly signal: AbortSignal;
+  /**
+   * 請宿主在這個命令**落定之後**，把 `text` 當成人打的一句話送進對話（`/plan <message>` 用它）。
+   *
+   * 對應 dsh 的 `agent.steer()`：dsh 的 handler 直接拿到 agent，閒著的時候 steer 會開一輪
+   * （`packages/core/agent-loop/tests/agent.spec.ts` 的「steer() while idle becomes a woken prompt turn」）。
+   * **我們的命令只跑在兩輪之間**（`serve` 的發派面在跑著、停在核准點時拒收；REPL 一行一輪），
+   * 所以這裡的 steer 永遠是閒著的那一種——也就是「命令結束後開一輪」。命令沒有 agent 把手，
+   * 這一格是宿主替它保管的那一半。
+   *
+   * - **時刻**：宿主等 `command/done` 寫完才動，所以日誌上 `command/run` → `command/done` 的配對
+   *   完整結束之後才有 `turn/start`。`CommandResult` 與 `command/done` 都不因此多任何一格。
+   * - **驗證**：宿主可以在這一次呼叫裡就拒收（例如 `@` 的會話引用不能用），**拋出來的例外會從 `steer` 冒出去**。
+   *   handler 該在做任何有副作用的事**之前**呼叫，這樣被拒收的命令什麼都沒改，`command/done` 落定成 `error`。
+   * - **只在成功時送**：命令落定成 `error`（回的或拋的），已經收下的 steer 一律作廢。
+   * - **不能在命令結束後才叫**：那時候宿主已經不看了，靜靜丟掉比拋錯更糟，所以拋錯。
+   *
+   * @param text - 要送的話，非空字串。
+   */
+  readonly steer: (text: string) => void;
 }
 
 /** 一筆命令註冊。 */
