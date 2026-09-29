@@ -1,3 +1,4 @@
+import { emptyConversation } from '@nexus/wire';
 import type { ConversationState, ToolEntry } from '@nexus/wire';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -96,7 +97,7 @@ describe('工具卡', () => {
 
 describe('對話流裡的工具卡', () => {
   function state(entries: ToolEntry[]): ConversationState {
-    return { status: 'running', entries, pendings: [] } as unknown as ConversationState;
+    return { ...emptyConversation(), status: 'running', entries };
   }
 
   it('執行中的邊框光同時最多一個：給最後一顆還在跑的', () => {

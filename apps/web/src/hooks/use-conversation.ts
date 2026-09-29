@@ -11,6 +11,7 @@ import type {
   ConversationState,
   SlashDescriptor,
   QueueUpdateAction,
+  RunStartMode,
   SlashRunOutcome,
   UplinkResult,
   WireClient,
@@ -150,8 +151,11 @@ export interface Conversation {
    * **一句話送出去不畫任何東西**（#645）：伺服器收下就進送出佇列，開跑那一刻才由 `inbox` 的 `claimed` 畫人的泡泡。
    * 伺服器沒收下（回錯誤或這一趟就斷了）時回 {@link SendRejected}，呼叫端把草稿放回去並說出原因；斜線命令與
    * `/feedback` 各自報自己的結果，一律回 `undefined`。
+   *
+   * `mode` 是 `steer` 時送插話（#710）：跑著的這一輪下一步就送進模型，被領走時由 `inbox` 的 `claimedNextStep` 畫人的
+   * 泡泡。斜線命令不看它。省略就是排隊。
    */
-  send(text: string): Promise<SendRejected | undefined>;
+  send(text: string, mode?: RunStartMode): Promise<SendRejected | undefined>;
   /**
    * 改或刪送出佇列裡的一件（`queue.update`，#637）。**只回有沒有收下**：清單的新樣子走下行的 `inbox`，
    * 不拿回條改本地的東西。
@@ -459,7 +463,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   );
 
   const send = useCallback(
-    async (text: string): Promise<SendRejected | undefined> => {
+    async (text: string, mode?: RunStartMode): Promise<SendRejected | undefined> => {
       const trimmed = text.trim();
       if (trimmed === '') {
         return undefined;
@@ -480,7 +484,11 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       setSlashNotice(undefined);
       let result: UplinkResult;
       try {
-        result = await clientRef.current.runStart(threadId, trimmed);
+        // 排隊不帶 `mode`：它是預設，送出的封包跟插話之前一樣。
+        result =
+          mode === 'steer'
+            ? await clientRef.current.runStart(threadId, trimmed, { mode })
+            : await clientRef.current.runStart(threadId, trimmed);
       } catch (error) {
         return { message: error instanceof Error ? error.message : String(error) };
       }
