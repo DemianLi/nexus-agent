@@ -50,6 +50,10 @@ FULL_RES = [
 ]
 
 
+HARNESS_SHARDS = 2
+WEB_SHARDS = 2
+
+
 def read_changed(path: str = 'changed.txt') -> list[str]:
     return [line.strip() for line in Path(path).read_text(encoding='utf-8').splitlines() if line.strip()]
 
@@ -63,18 +67,33 @@ def changed_plugin_dirs(changed: list[str]) -> list[str]:
 def plan(changed: list[str], event: str, base_ref: str) -> dict[str, str]:
     forced = any(rx.search(p) for p in changed for rx in FULL_RES)
     if not (forced or any(TS_RE.search(p) for p in changed)):
-        return {'ts': 'false', 'full': 'false', 'pkg_filters': '', 'harness_mode': 'none'}
+        return {
+            'ts': 'false',
+            'full': 'false',
+            'pkg_filters': '',
+            'harness_mode': 'none',
+            'harness_shards': '[1]',
+            'harness_shard_total': '1',
+            'web_shards': '[1]',
+            'web_shard_total': '1',
+        }
 
     selective = event == 'pull_request' and base_ref == 'develop' and not forced
     if selective:
         pkg_filters = ' '.join(f'--filter=./{d}' for d in changed_plugin_dirs(changed))
     else:
         pkg_filters = '--filter=./packages/*'
+    # 全跑時 harness 是關鍵路徑（單一 job 約三分鐘），切片平行跑；選擇性時只有幾十個檔，切了只是多付安裝。
+    harness_total = 1 if selective else HARNESS_SHARDS
     return {
         'ts': 'true',
         'full': 'false' if selective else 'true',
         'pkg_filters': pkg_filters,
         'harness_mode': 'selective' if selective else 'full',
+        'harness_shards': json.dumps(list(range(1, harness_total + 1))),
+        'harness_shard_total': str(harness_total),
+        'web_shards': json.dumps(list(range(1, WEB_SHARDS + 1))),
+        'web_shard_total': str(WEB_SHARDS),
     }
 
 
