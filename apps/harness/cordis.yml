@@ -285,8 +285,9 @@
 # **五個數字一模一樣**。上面那一列的 `maxTitleBytes` 是任何來源的標題上限，模型產生的照它正規化。
 #
 # **這一列關得掉**，跟上面那一列相反：`disabled: true` 就是只剩退回標題，同 dsh 的 acp-app 與 sdk-app。
-# 標題走 `live-model` 那一列的連線與模型（dsh 那一對選配的 `provider`／`model` 我們沒有，理由見
-# `src/settings/thread-title-llm.ts` 的檔頭），並帶上那一列的 `thinkingOffBody`。
+# 標題走 `live-model` 那一列的連線；模型預設沿用它的預設模型，選配的 `modelId`（#657）可以改挑那一列 `models` 型錄裡的
+# 另一筆，關推理的寫法跟著那一筆走（dsh 那一對成對的 `provider`／`model` 我們只有 `modelId`，理由見
+# `src/settings/thread-title-llm.ts` 的檔頭）。**不寫就是沿用**，不要寫成預設模型的 id——那樣換了預設模型標題不會跟著換。
 - id: thread-title-llm
   name: '#settings/thread-title-llm'
   config:

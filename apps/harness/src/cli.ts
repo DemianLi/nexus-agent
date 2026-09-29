@@ -46,6 +46,7 @@ import type { LiveModelConfig } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { threadTitleConfigSchema, threadTitlePlugin } from './settings/thread-title.js';
 import type { ThreadTitleConfig } from './settings/thread-title.js';
+import { findModelEntry } from './model-catalog.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
 import type { ThreadTitleLlmConfig } from './settings/thread-title-llm.js';
 import { ensureFallbackTitle } from './session-title.js';
@@ -1020,8 +1021,11 @@ export async function createCliAgent(
 }
 
 /**
- * 這一次組裝的 LLM 標題。路由就是 `live-model` 那一列（一個組裝一條連線），記進 `session/title-llm-request` 與
- * provider 標題的 `model`。
+ * 這一次組裝的 LLM 標題。路由是 `live-model` 那一列的連線（一個組裝一條連線）加上實際走的那顆模型：
+ * `thread-title-llm` 的 `modelId`（#657）挑型錄裡的一筆，沒給就是 `live-model` 的預設模型；記進
+ * `session/title-llm-request` 與 provider 標題的 `model`。
+ *
+ * @throws 標題挑的 `modelId` 不在 `live-model` 的型錄裡：指名 `thread-title-llm` 這一列與那個 id。
  */
 function titleLlmFor(
   liveModel: LiveModelConfig,
@@ -1029,11 +1033,18 @@ function titleLlmFor(
   limits: ThreadTitleConfig,
   credentials: CredentialService | undefined,
 ): AttachSessionTitleLlm {
+  const modelId = config.modelId ?? liveModel.modelId;
+  if (findModelEntry(liveModel.models, modelId) === undefined) {
+    const known = liveModel.models.map((entry) => entry.id).join('、');
+    throw new Error(
+      `thread-title-llm（#settings/thread-title-llm）的 modelId "${modelId}" 不在 live-model 的 models 型錄裡（型錄有：${known}）`,
+    );
+  }
   return createSessionTitleLlm({
-    model: createLiveModel(liveModel, 'session-title', credentials, {
+    model: createLiveModel({ ...liveModel, modelId }, 'session-title', credentials, {
       maxOutputTokens: config.maxOutputTokens,
     }),
-    route: { provider: liveModel.baseUrl, model: liveModel.modelId },
+    route: { provider: liveModel.baseUrl, model: modelId },
     config,
     limits,
   });
