@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
+import type { SessionEvent } from '@nexus/core';
 import type { SessionReferenceListResult } from '@nexus/wire';
 import { parseSessionReferenceText } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -112,6 +113,41 @@ describe('GET /threads/:id/session-references', () => {
       available(await references(second, 'beta', '')).map(({ sessionId }) => sessionId),
     ).not.toContain('beta');
     expect(assemblyWitness.applied).toBe(built);
+  });
+
+  it('產品路徑：@ 了以前的會話，領走時真的讀回來、凍成快照落進提問那條的日誌（出貨組裝、真的落盤）', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-serve-refs-turn-'));
+    const first = await start(root);
+    await driveTurn(first, 'alpha', '先開的那條提到蘋果派');
+    await first.close();
+    running = undefined;
+
+    const second = await start(root);
+    const candidate = available(await references(second, 'beta', '')).find(
+      ({ sessionId }) => sessionId === 'alpha',
+    )!;
+    await driveTurn(second, 'beta', `接著上面那條 ${candidate.mention} 說`);
+    // 收台會把還在寫入視窗裡的事件沖下去；不收的話 `turn/end` 可能還沒落盤。
+    await second.close();
+    running = undefined;
+
+    const store = openJsonlSessionStore({ directory: join(root, projectKey(process.cwd())) });
+    const beta = await (await store.open('beta', 'read')).read();
+    const start0 = beta.find((event) => event.type === 'turn/start')!;
+    // 日誌上的人話是換過的：標題，不是網址。
+    expect((start0.data as { text: string }).text).toBe(`接著上面那條 @${candidate.label} 說`);
+    const snapshots = beta.filter(
+      (event) => event.type === 'user/message' && event.data.source.kind === 'session-reference',
+    );
+    expect(snapshots).toHaveLength(1);
+    const snapshot = snapshots[0] as SessionEvent<'user/message'>;
+    expect(JSON.stringify(snapshot.data.message)).toContain('先開的那條提到蘋果派');
+    expect(snapshot.data.source).toMatchObject({
+      references: [{ sessionId: 'alpha', label: candidate.label }],
+    });
+    // 這一輪正常收尾，不是失敗。
+    expect(beta.some((event) => event.type === 'turn/failed')).toBe(false);
+    expect(beta.some((event) => event.type === 'turn/end')).toBe(true);
   });
 
   it('清單把落盤關掉：不提供，不是空清單', async () => {

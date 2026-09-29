@@ -35,7 +35,7 @@ import { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 import type { WireContextMeasure, WireContextPressure } from './context-pressure.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
 import { INBOX } from './inbox.js';
-import type { WireQueuedInput } from './inbox.js';
+import type { WireQueuedInput, WireSessionReference } from './inbox.js';
 import { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
 import type { WireSessionStats, WireTokenUsage } from './session-totals.js';
 import { TITLE } from './title.js';
@@ -60,6 +60,11 @@ export interface HumanEntry {
    * 歷史重播的人話沒有這一格。
    */
   readonly inboxId?: string;
+  /**
+   * 這一句 `@` 的會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)），照出現先後。`text` 裡對應的那段是
+   * `@<label>`，畫面據它把那一段畫成點得開的引用。沒有引用就不給這一格。
+   */
+  readonly references?: readonly WireSessionReference[];
 }
 
 export interface AiEntry {
@@ -792,6 +797,29 @@ function isQueuedInput(value: unknown): value is WireQueuedInput {
   );
 }
 
+/** 一句話 `@` 的會話長得對不對。沒給（`undefined`）合法，給了就每一條都要是兩個字串。 */
+function isWireReferences(value: unknown): value is readonly WireSessionReference[] | undefined {
+  if (value === undefined) return true;
+  return (
+    Array.isArray(value) &&
+    value.every((reference: unknown) => {
+      const { sessionId, label } = (reference ?? {}) as { sessionId?: unknown; label?: unknown };
+      return typeof sessionId === 'string' && typeof label === 'string';
+    })
+  );
+}
+
+/** 有引用才帶這一格：空陣列與沒給是同一件事，不讓兩種長相並存。 */
+function referencesField(
+  references: readonly WireSessionReference[] | undefined,
+): { readonly references: readonly WireSessionReference[] } | Record<string, never> {
+  return references === undefined || references.length === 0
+    ? {}
+    : {
+        references: references.map(({ sessionId, label }) => ({ sessionId, label })),
+      };
+}
+
 /**
  * `inbox` 的 `payload`：兩條清單**整份換掉**。任何一件不對、`claimed`／`claimedNextStep` 不對，就整顆不收，不收一半——
  * 少一件的清單分不出是開跑了還是被刪了，而且看起來正常。
@@ -825,9 +853,21 @@ function reduceInbox(state: ConversationState, payload: object): ConversationSta
   }
   const humans: HumanEntry[] = [];
   for (const claim of claims) {
-    const { id, text } = (claim ?? {}) as { id?: unknown; text?: unknown };
-    if (typeof id !== 'string' || typeof text !== 'string') return state;
-    humans.push({ kind: 'human', id: `inbox:${id}`, text, inboxId: id });
+    const { id, text, references } = (claim ?? {}) as {
+      id?: unknown;
+      text?: unknown;
+      references?: unknown;
+    };
+    if (typeof id !== 'string' || typeof text !== 'string' || !isWireReferences(references)) {
+      return state;
+    }
+    humans.push({
+      kind: 'human',
+      id: `inbox:${id}`,
+      text,
+      inboxId: id,
+      ...referencesField(references),
+    });
   }
   const queued = (list: readonly WireQueuedInput[]) =>
     list.map(({ id, text }) => ({ id, text, source: { kind: 'user' as const } }));
@@ -905,6 +945,8 @@ interface MessageData {
   /** `text-delta` 帶 `text`，`reasoning-delta` 帶 `reasoning`（`@langchain/core` 的 `ContentBlockDelta`）。 */
   readonly delta?: { readonly type?: string; readonly text?: string; readonly reasoning?: string };
   readonly message?: string;
+  /** 歷史重播的人話帶的 `@` 引用（#713），即時那條走 `inbox` 的 `claimed`。 */
+  readonly references?: unknown;
 }
 
 function reduceMessage(
@@ -929,7 +971,9 @@ function reduceMessage(
       if (data.role === 'human') {
         // **歷史才會送這一種**（`GET /threads/:id/history`，#306）：協定留給「整則重播的人話」的格。
         // `status` 不動——這一句已經說過了，不是剛開跑的那一句（那一句走 `inbox` 的 `claimed`）。
-        const entry: HumanEntry = { kind: 'human', id, text: '' };
+        // 引用長得不對就當沒有：這一則人話還是要畫，只是少了引用的標記。
+        const references = isWireReferences(data.references) ? data.references : undefined;
+        const entry: HumanEntry = { kind: 'human', id, text: '', ...referencesField(references) };
         return { ...state, entries: [...state.entries, entry] };
       }
       const entry: AiEntry = {

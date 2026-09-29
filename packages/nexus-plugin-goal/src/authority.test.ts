@@ -11,7 +11,12 @@ import { describe, expect, it } from 'vitest';
 
 import { SessionLog } from '@nexus/core';
 import { goalId } from '@nexus/core';
-import type { GoalId, SessionEvent, SessionEventMap } from '@nexus/core';
+import type {
+  GoalId,
+  SessionEvent,
+  SessionEventMap,
+  SessionReferenceSourceEntry,
+} from '@nexus/core';
 
 import { completionAuthority, hasDirectHumanTurn, isMatchingGoalRound } from './authority.js';
 import type { GoalView } from './service.js';
@@ -255,11 +260,21 @@ describe('讀的是事件不是日誌', () => {
 });
 
 /**
- * **釘住 `user/message` 的來源聯集剛好是那兩個成員**（#710）。理由同上面那一條：user 來源是授權的另一條路（插話），
+ * **釘住 `user/message` 的來源聯集剛好是那三個成員**（#710、#713）。理由同上面那一條：user 來源是授權的另一條路（插話），
  * 放寬它就是多開一條，而 `hasDirectHumanTurn` 只認 `kind: 'user'`——加一個成員不會讓任何一條現有測試變紅。
+ *
+ * 第三個成員是引用別的會話時凍下來的快照（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）：**內容來自另一條
+ * 會話，不是這條會話的人打的**，所以不是人類授權。下面「快照不是人」那條測試釘的是行為，這裡釘的是形狀。
  */
 type UserMessageSourcePinned =
-  { readonly kind: 'plugin'; readonly plugin: string } | { readonly kind: 'user' };
+  | { readonly kind: 'plugin'; readonly plugin: string }
+  | { readonly kind: 'user' }
+  | {
+      readonly kind: 'session-reference';
+      readonly form: 'recall';
+      readonly version: 1;
+      readonly references: readonly SessionReferenceSourceEntry[];
+    };
 type UserMessageSourceActual = SessionEventMap['user/message']['source'];
 const _sourceWidened: UserMessageSourcePinned = undefined as unknown as UserMessageSourceActual;
 const _sourceNarrowed: UserMessageSourceActual = undefined as unknown as UserMessageSourcePinned;
@@ -291,6 +306,19 @@ describe('輪中插話算直接人類授權（#710）', () => {
 
   it('外掛塞的 user/message 不是人，拿不到（#152 的底線）', () => {
     expect(hasDirectHumanTurn(logOf([GOAL_ROUND, INJECTED]).events)).toBe(false);
+  });
+
+  it('引用別的會話的快照不是人，拿不到（#713）：內容是另一條會話的，不是這條會話的人打的', () => {
+    const SNAPSHOT: readonly [keyof SessionEventMap, unknown] = [
+      'user/message',
+      {
+        message,
+        source: { kind: 'session-reference', form: 'recall', version: 1, references: [] },
+      },
+    ];
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND, SNAPSHOT]).events)).toBe(false);
+    // 反過來：人插的話在前、快照在後，人的那一句仍然算數。
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND, STEER, SNAPSHOT]).events)).toBe(true);
   });
 
   it('插話之後停在核准點、恢復：同一條鏈，恢復那一段照樣拿得到', () => {

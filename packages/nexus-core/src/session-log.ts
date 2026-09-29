@@ -229,9 +229,41 @@ export interface SessionTitleLlmMessage {
   readonly content: string;
 }
 
+/**
+ * 引用別的會話時，快照裡每一條來源留下的事實（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）。
+ * 照 dsh 的 `SessionReferenceSource.references[]`（`packages/context/session-reference/src/types.ts`，`477b4f4`）。
+ */
+export interface SessionReferenceSourceEntry {
+  /** 被引用的會話。 */
+  readonly sessionId: string;
+  /** 使用者看到的標題（mention 上的那一個）。 */
+  readonly label: string;
+  /** 被引用那份日誌的格式版本。 */
+  readonly capturedFormatVersion: number;
+  /** 快照涵蓋到被引用那份日誌的哪一顆事件；日誌是空的就是 `null`。 */
+  readonly capturedThroughSeq: number | null;
+  /** 被引用的會話壓縮過（快照裡有一則摘要）。 */
+  readonly compacted: boolean;
+  readonly originalMessages: number;
+  readonly retainedMessages: number;
+  readonly omittedMessages: number;
+  readonly omittedBytes: number;
+  readonly truncated: boolean;
+  /** 這一條在使用者那句話的引用裡排第幾（去重之後）。 */
+  readonly inputIndex: number;
+}
+
 /** `user/message` 是誰塞的，見 {@link SessionEventMap} 的 `user/message`。 */
 export type UserMessageSource =
-  { readonly kind: 'plugin'; readonly plugin: string } | { readonly kind: 'user' };
+  | { readonly kind: 'plugin'; readonly plugin: string }
+  | { readonly kind: 'user' }
+  | {
+      readonly kind: 'session-reference';
+      /** 從別的會話日誌裡抬出來的素材（dsh 的 `recall` 形式）。 */
+      readonly form: 'recall';
+      readonly version: 1;
+      readonly references: readonly SessionReferenceSourceEntry[];
+    };
 
 /** 每一種事件帶什麼。 */
 export interface SessionEventMap {
@@ -422,10 +454,17 @@ export interface SessionEventMap {
    *   的 `model/start` 之前。goal 的直接人類授權認它（dsh `packages/goal/tool-goal/src/authority.ts:82-83`），所以外掛
    *   與工具不能寫這一種：上面兩個生產者都寫死 `plugin`。
    *
-   * **偏離**：dsh 一輪開頭那句人話也是 `user/message`；我們的在 `turn/start`，而那一格是授權的判別欄，不動它。
-   * 所以一輪開頭的人話不在這裡，只有輪中插的話在。
+   * - **`session-reference`：引用別的會話時附上的快照**（[#713](https://github.com/DemianLi/nexus-agent/issues/713)），照 dsh 的
+   *   `user/message` 帶 `source: {kind: 'session-reference', form: 'recall', version: 1, references}`。緊跟在引用它的那句人話後面
+   *   （一輪開頭的是 `turn/start` 與領走那顆 `inbox/spliced` 之後，插話的是那句 `user` 來源之後），**內容凍在這一顆裡**：續接與重播
+   *   讀的是這一份，不重讀被引用的會話。**它不是人打的字**——goal 的直接人類授權只認 `user`（正向判準），畫面不當人話畫，
+   *   內容搜尋不收（不然別的會話的字會讓這一條被搜到）。唯一的生產者是 pump 的準備那一步（`apps/harness/src/session-reference.ts`）。
    *
-   * ⚠️ 原樣進遙測。
+   * **偏離**：dsh 一輪開頭那句人話也是 `user/message`；我們的在 `turn/start`，而那一格是授權的判別欄，不動它。
+   * 所以一輪開頭的人話不在這裡，只有輪中插的話在。**`turn/start.text` 記的是換過的 `@標題`**，同 dsh 落在 `user/message` 的是換過的內容
+   * （`prepareDirectMessages`）：引用網址不進日誌，網頁要的「哪一段對應哪條會話」由後面那顆快照的 `references` 帶。
+   *
+   * ⚠️ 原樣進遙測；快照是**別的會話的內容**，共享策略按這一份算，不按被引用的那份算。
    */
   'user/message': {
     readonly message: LoggedMessage;

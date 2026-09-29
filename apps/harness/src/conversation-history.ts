@@ -51,6 +51,7 @@ import type {
   ModelUsagePayload,
   TitlePayload,
   TodosPayload,
+  WireSessionReference,
   WireSessionStats,
   WireTokenUsage,
   ThreadHistoryQuery,
@@ -159,6 +160,39 @@ function isSteer(event: SessionEvent): event is SessionEvent<'user/message'> & {
   readonly data: { readonly source: { readonly kind: 'user' } };
 } {
   return event.type === 'user/message' && event.data.source.kind === 'user';
+}
+
+/**
+ * 這一句人話 `@` 的會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）：往後找緊跟著它的那則快照
+ * （`user/message`，`source.kind` 是 `session-reference`）。
+ *
+ * **快照是另一則訊息，不是這一句的一部分**：日誌上人話與快照各自一則，畫面只畫人話、快照不畫，引用的標記掛在人話上。
+ * 找到下一句人話、下一輪的開頭、或模型開始回覆就停——那之後的快照屬於別的話。一輪開頭那一句的快照是模型第一次被叫之前領的，
+ * 所以中間只會隔著送出佇列的領走、標題這類不是對話的事件。
+ */
+function referencesAfter(
+  events: readonly SessionEvent[],
+  from: number,
+): readonly WireSessionReference[] | undefined {
+  for (let at = from + 1; at < events.length; at += 1) {
+    const event = events[at]!;
+    if (event.type === 'user/message') {
+      const { source } = event.data;
+      if (source.kind === 'session-reference') {
+        return source.references.map(({ sessionId, label }) => ({ sessionId, label }));
+      }
+      if (source.kind === 'user') return undefined;
+      continue;
+    }
+    if (
+      event.type === 'turn/start' ||
+      event.type === 'model/start' ||
+      event.type === 'assistant/message'
+    ) {
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -274,10 +308,19 @@ export function todosData(todos: SessionEventMap['todo/write']['todos'] | null):
   };
 }
 
+/**
+ * 被領走的一件。**`text` 是畫面要畫的那份**：`@` 了別的會話的話，引用網址已經換成 `@標題`（[#713](https://github.com/DemianLi/nexus-agent/issues/713)），
+ * 跟寫進日誌、餵給模型的是同一份；排在佇列裡的那件（{@link QueuedInput}）仍是使用者打的原文。
+ */
+export interface ClaimedInput extends QueuedInput {
+  /** 這一句 `@` 的會話，照出現先後。省略即沒有。 */
+  readonly references?: readonly WireSessionReference[];
+}
+
 /** 一次變動是因為領走而送的：開跑的那一件（`turn`），或送進模型的整條插話（`steps`，#710）。 */
 export interface InboxClaim {
-  readonly turn?: QueuedInput;
-  readonly steps?: readonly QueuedInput[];
+  readonly turn?: ClaimedInput;
+  readonly steps?: readonly ClaimedInput[];
 }
 
 /**
@@ -295,7 +338,13 @@ export function inboxData(
 ): { readonly name: typeof INBOX; readonly payload: InboxPayload } {
   const wire = (items: readonly QueuedInput[]) =>
     items.map(({ id, text, source }) => ({ id, text, source: { kind: source.kind } }));
-  const claim = ({ id, text }: QueuedInput) => ({ id, text });
+  const claim = ({ id, text, references }: ClaimedInput) => ({
+    id,
+    text,
+    ...(references === undefined || references.length === 0
+      ? {}
+      : { references: references.map(({ sessionId, label }) => ({ sessionId, label })) }),
+  });
   return {
     name: INBOX,
     payload: {
@@ -483,6 +532,7 @@ function message(
   open = false,
   messageId?: string,
   reasoning = '',
+  references?: readonly WireSessionReference[],
 ): Event[] {
   const ids = role === 'ai' ? { run_id: key } : { id: key };
   return [
@@ -491,6 +541,7 @@ function message(
       role,
       ...ids,
       ...(messageId !== undefined && { id: messageId }),
+      ...(references !== undefined && references.length > 0 && { references }),
     }),
     ...(reasoning === ''
       ? []
@@ -573,7 +624,7 @@ export function historyFrames(
     unsettled.clear();
   };
 
-  for (const event of events) {
+  for (const [index, event] of events.entries()) {
     if (isTodosReset(event)) todos = null;
     else if (event.type === 'todo/write') todos = { time: event.time, list: event.data.todos };
     switch (event.type) {
@@ -589,14 +640,34 @@ export function historyFrames(
         frames.push(lifecycle(event.time, { event: 'running' }));
         turnOpen = true;
         if (event.data.kind === 'message') {
-          frames.push(...message(event.time, 'human', `history-${event.seq}`, event.data.text));
+          frames.push(
+            ...message(
+              event.time,
+              'human',
+              `history-${event.seq}`,
+              event.data.text,
+              false,
+              undefined,
+              '',
+              referencesAfter(events, index),
+            ),
+          );
         }
         break;
       case 'user/message': {
         // 輪中插的話（#710）：即時的畫面由 `inbox` 的 `claimedNextStep` 畫一則人的話，歷史照即時。外掛塞的不畫。
         if (isSteer(event)) {
           frames.push(
-            ...message(event.time, 'human', `history-${event.seq}`, textOf(event.data.message)),
+            ...message(
+              event.time,
+              'human',
+              `history-${event.seq}`,
+              textOf(event.data.message),
+              false,
+              undefined,
+              '',
+              referencesAfter(events, index),
+            ),
           );
         }
         break;

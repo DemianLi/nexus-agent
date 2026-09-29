@@ -74,6 +74,7 @@ import {
   STEER_UNAVAILABLE,
   isSlashMethod,
   isWireChannel,
+  SessionReferenceError,
   sessionReferencesPath,
   successResponse,
 } from '@nexus/wire';
@@ -92,6 +93,7 @@ import type { CommandExecutor } from '@nexus/plugin-commands';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { HistoryQueryError, historyPage } from './conversation-history.js';
+import type { SessionReferenceReader } from './session-reference.js';
 import type {
   DeliverableRefusal,
   DeliverableResult,
@@ -330,6 +332,14 @@ export interface WireHandlerOptions {
     query: string,
     signal: AbortSignal,
   ): Promise<readonly SessionReferenceCandidate[]>;
+  /**
+   * 精確讀一條被 `@` 的會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713) 的準備那一半），選配。實作是
+   * `session-reference-candidates.ts` 的 `SessionReferenceCandidates.read`，交給每條 thread 的 pump。
+   *
+   * **缺席就是這台 server 不收引用**：帶引用的 `run.start`／`queue.update` 回 `invalid_argument`，不悄悄收下再不展開。
+   * 與 {@link listSessionReferences} 同進同出（都來自落盤的會話根），分開兩格是因為手搭的組裝可以只給其中一個。
+   */
+  readonly sessionReferenceReader?: SessionReferenceReader;
   /**
    * 瀏覽器會話的驗證（[#424](https://github.com/DemianLi/nexus-agent/issues/424)）。
    *
@@ -759,6 +769,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           threadTitleLimits,
           (message) => options.warn?.(message),
           threadAgent.stepInbox === true,
+          options.sessionReferenceReader,
         );
         // **緊接著建好就接上全域下行**（#632）：在它收下任何一件之前，狀態與中斷一顆都不漏。
         detachFeed = feed.attach(pump);
@@ -1042,6 +1053,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           errorResponse(command.id, 'invalid_argument', 'run.start 的 input 沒有可用的訊息'),
         );
       }
+      // `@` 的會話要能用才收（#713）：網址壞、引用自己、超過三條、這條 thread 不收引用，都在這裡回錯，那句話不進佇列。
+      const referenceError = referenceRejection(pump, command.id, text);
+      if (referenceError !== undefined) return json(referenceError);
       // 送出模式（#710）：我們加在協定 `RunStartParams` 上的一格，見 `@nexus/wire` 的 `RunStartCommand`。省略就是排隊。
       const mode = (params as { mode?: unknown }).mode;
       if (mode !== undefined && !(RUN_START_MODES as readonly unknown[]).includes(mode)) {
@@ -1219,6 +1233,17 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     return crypto.randomUUID();
   }
 
+  /** 這句話裡的引用收不收（#713）：不收就是一則 `invalid_argument`，帶 {@link SessionReferenceError} 的說法。 */
+  function referenceRejection(pump: ThreadPump, id: number | null, text: string) {
+    try {
+      pump.referencedText(text);
+      return undefined;
+    } catch (error: unknown) {
+      if (!(error instanceof SessionReferenceError)) throw error;
+      return errorResponse(id, 'invalid_argument', `${error.code}: ${error.message}`);
+    }
+  }
+
   /**
    * 改或刪送出佇列裡排著的一件（`queue.update`，[#637](https://github.com/DemianLi/nexus-agent/issues/637)）。
    *
@@ -1245,6 +1270,8 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       if (typeof text !== 'string' || text.trim() === '') {
         return json(errorResponse(id, 'invalid_argument', 'queue.update 的 edit 要有非空白的文字'));
       }
+      const referenceError = referenceRejection(pump, id, text);
+      if (referenceError !== undefined) return json(referenceError);
       action = { kind: 'edit', text };
     } else {
       return json(

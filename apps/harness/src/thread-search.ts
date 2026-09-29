@@ -34,7 +34,7 @@
  * | 我們的事件 | dsh | 收什麼 |
  * | --- | --- | --- |
  * | `turn/start`（人打的字，與目標排的那一輪） | `user/message`（dsh 不按來源過濾） | 那段字 |
- * | `user/message`（外掛塞的） | `user/message` | 文字區塊 |
+ * | `user/message`（外掛塞的；人在輪中插的話；引用別的會話的快照，#713） | `user/message`（同樣不按來源過濾） | 文字區塊 |
  * | `compaction/summary` 的 `summary` | 緊接著的 `user/message {surfaceOp: replace}` | 文字區塊 |
  * | `assistant/message` | `assistant/message` | 文字區塊；要叫的工具的名字與參數（`extraction.ts:70-83`） |
  *

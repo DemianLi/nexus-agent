@@ -22,15 +22,16 @@ function inbox(pending: string[]) {
   const calls = { claim: 0, finish: 0, closed: false };
   const take = () => pending.splice(0).map((text) => new HumanMessage(text));
   const handle: StepInbox = {
+    // 領走與關窗都在呼叫的那一刻同步做完，回的 Promise 只是交付（#713）。
     claim: () => {
       calls.claim += 1;
-      return take();
+      return Promise.resolve(take());
     },
     finish: () => {
       calls.finish += 1;
       const messages = take();
       if (messages.length === 0) calls.closed = true;
-      return messages;
+      return Promise.resolve(messages);
     },
   };
   return { handle, calls };
@@ -51,21 +52,34 @@ function runtime(handle: StepInbox, ns = ROOT_NS, signal?: AbortSignal) {
 }
 
 describe('beforeModel：叫模型之前領走整條插話', () => {
-  it('有就併進 state，沒有就不動', () => {
+  it('有就併進 state，沒有就不動', async () => {
     const { handle } = inbox(['改用 X']);
-    const update = hooks().beforeModel({}, runtime(handle)) as { messages: HumanMessage[] };
+    const update = (await hooks().beforeModel({}, runtime(handle))) as { messages: HumanMessage[] };
     expect(update.messages.map((message) => message.text)).toEqual(['改用 X']);
-    expect(hooks().beforeModel({}, runtime(handle))).toBeUndefined();
+    expect(await hooks().beforeModel({}, runtime(handle))).toBeUndefined();
   });
 
-  it('子代理的圖裡不領：那是給 root 那一輪的', () => {
+  it('子代理的圖裡不領：那是給 root 那一輪的', async () => {
     const { handle, calls } = inbox(['改用 X']);
-    expect(hooks().beforeModel({}, runtime(handle, SUBAGENT_NS))).toBeUndefined();
+    expect(await hooks().beforeModel({}, runtime(handle, SUBAGENT_NS))).toBeUndefined();
     expect(calls.claim).toBe(0);
   });
 
-  it('沒放 handle（CLI、手搭的組裝）什麼都不做', () => {
-    expect(hooks().beforeModel({}, { configurable: { checkpoint_ns: ROOT_NS } })).toBeUndefined();
+  it('沒放 handle（CLI、手搭的組裝）什麼都不做', async () => {
+    expect(
+      await hooks().beforeModel({}, { configurable: { checkpoint_ns: ROOT_NS } }),
+    ).toBeUndefined();
+  });
+});
+
+describe('領走是同步的（#713）', () => {
+  it('掛點被叫的那一刻就已經領走、關窗，不等回傳的 Promise', () => {
+    const { handle, calls } = inbox(['改用 X']);
+    void hooks().beforeModel({}, runtime(handle));
+    expect(calls.claim).toBe(1);
+    const empty = inbox([]);
+    void hooks().afterAgent.hook({}, runtime(empty.handle));
+    expect(empty.calls).toMatchObject({ finish: 1, closed: true });
   });
 });
 
@@ -74,9 +88,9 @@ describe('afterAgent：收尾時還有插話就同一輪再叫一次模型', () 
     expect(hooks().afterAgent.canJumpTo).toEqual(['model']);
   });
 
-  it('有插話：併進 state 並跳回模型（只回 jumpTo 的話路由器看到說完了的 AI 就收尾）', () => {
+  it('有插話：併進 state 並跳回模型（只回 jumpTo 的話路由器看到說完了的 AI 就收尾）', async () => {
     const { handle, calls } = inbox(['那個檔先別動']);
-    const update = hooks().afterAgent.hook({}, runtime(handle)) as {
+    const update = (await hooks().afterAgent.hook({}, runtime(handle))) as {
       messages: HumanMessage[];
       jumpTo: string;
     };
@@ -85,25 +99,25 @@ describe('afterAgent：收尾時還有插話就同一輪再叫一次模型', () 
     expect(calls.closed).toBe(false);
   });
 
-  it('沒有插話：關窗、不跳', () => {
+  it('沒有插話：關窗、不跳', async () => {
     const { handle, calls } = inbox([]);
-    expect(hooks().afterAgent.hook({}, runtime(handle))).toBeUndefined();
+    expect(await hooks().afterAgent.hook({}, runtime(handle))).toBeUndefined();
     expect(calls).toMatchObject({ finish: 1, closed: true });
   });
 
-  it('中止之後不領也不跳：留著的由下一輪開頭領走', () => {
+  it('中止之後不領也不跳：留著的由下一輪開頭領走', async () => {
     const { handle, calls } = inbox(['改用 X']);
     const controller = new AbortController();
     controller.abort();
     expect(
-      hooks().afterAgent.hook({}, runtime(handle, ROOT_NS, controller.signal)),
+      await hooks().afterAgent.hook({}, runtime(handle, ROOT_NS, controller.signal)),
     ).toBeUndefined();
     expect(calls).toMatchObject({ claim: 0, finish: 0 });
   });
 
-  it('子代理的圖收尾時不問', () => {
+  it('子代理的圖收尾時不問', async () => {
     const { handle, calls } = inbox(['改用 X']);
-    expect(hooks().afterAgent.hook({}, runtime(handle, SUBAGENT_NS))).toBeUndefined();
+    expect(await hooks().afterAgent.hook({}, runtime(handle, SUBAGENT_NS))).toBeUndefined();
     expect(calls.finish).toBe(0);
   });
 });

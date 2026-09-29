@@ -397,6 +397,7 @@ export type {
   SessionTitleModelIdentity,
   SessionTitleSource,
   TurnEndReason,
+  SessionReferenceSourceEntry,
   UserMessageSource,
 } from './session-log.js';
 export { currentTurnStart, hasUnansweredInterrupt, SessionLog } from './session-log.js';

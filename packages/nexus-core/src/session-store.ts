@@ -227,8 +227,17 @@ import type { SessionEvent } from './session-log.js';
  *
  * **非升不可**，同 17：19 的折疊不看 `target`，每一顆都套在同一條清單上——`next-step` 的變動會混進 `next-turn`，
  * 或讓折疊拋錯。19 推回模型時也把人話的 `user/message` 當成外掛注入的那一種讀。
+ *
+ * ## 21：引用別的會話的快照
+ *
+ * `user/message` 的 `source` 多一種 `session-reference`（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）：人在句子裡
+ * `@` 了別的會話，準備那一步把那條會話當時看得到的對話凍成一則 user-role 訊息，緊跟在那句人話後面。v20 的檔直接讀：那時候沒有
+ * 引用，一顆都沒有就是當時的樣子。
+ *
+ * **非升不可**，同 13、17：20 讀到一份 21 的日誌時，`source` 不是 `plugin` 也不是 `user`，推回模型時照「外掛塞的」那一種讀、
+ * 畫面（歷史）對它視而不見，goal 的授權判準與內容搜尋各自的判斷也都沒見過這個成員——靜靜略過會左右重建的內容就是一次讀錯。
  */
-export const SESSION_LOG_FORMAT_VERSION = 20;
+export const SESSION_LOG_FORMAT_VERSION = 21;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。

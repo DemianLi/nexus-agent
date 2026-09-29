@@ -471,6 +471,8 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     ...(sessionReferenceCandidates !== undefined && {
       listSessionReferences: (threadId: string, query: string, signal: AbortSignal) =>
         sessionReferenceCandidates.list(threadId, query, signal),
+      // 被 `@` 的會話怎麼讀回來（#713）：同一份索引，pump 領走那句話時用。
+      sessionReferenceReader: sessionReferenceCandidates,
     }),
     // 按內容搜（#631）。沒掛那一列就不給，handler 那時一律回「沒掛」。
     ...(threadSearch !== undefined && {

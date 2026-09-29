@@ -62,13 +62,20 @@ export const STEP_INBOX_MIDDLEWARE_NAME = 'nexusStepInbox';
  * 回傳的訊息要原封不動併進 state：推回模型時是照日誌推的，兩邊要對得上。
  */
 export interface StepInbox {
-  /** 領走整條 `next-step`。空的就回空陣列，日誌不動。 */
-  claim(): readonly HumanMessage[];
+  /**
+   * 領走整條 `next-step`。空的就回空陣列，日誌不動。
+   *
+   * **回 Promise**（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）：插話裡 `@` 了別的會話的話，要先讀那條會話、
+   * 凍成快照才寫進日誌，那一步是非同步的。**領走本身仍然是同步的**——實作在呼叫的那一刻就把整條 `next-step` 從收件匣拿掉，
+   * await 的只有準備與落日誌，所以領走與領走之後到的插話之間的界線沒有變。
+   */
+  claim(): Promise<readonly HumanMessage[]>;
   /**
    * 這一次執行要收尾了：有插話就同 {@link claim} 領走（呼叫端接著再叫一次模型），**沒有就關窗**——之後到的插話
-   * 不再屬於這一輪，改排 `next-turn`。領與關在同一個同步呼叫裡，中間插不進一句話。
+   * 不再屬於這一輪，改排 `next-turn`。**領與關在同一個同步段裡，中間插不進一句話**：實作在呼叫的那一刻同步做完
+   * 領走與關窗的判斷，回傳的 Promise 只等準備與落日誌。
    */
-  finish(): readonly HumanMessage[];
+  finish(): Promise<readonly HumanMessage[]>;
 }
 
 /**
@@ -100,19 +107,19 @@ function rootInbox(runtime: unknown): StepInbox | undefined {
 export function createStepInboxMiddleware(): AgentMiddleware {
   return createMiddleware({
     name: STEP_INBOX_MIDDLEWARE_NAME,
-    beforeModel: (_state: unknown, runtime: unknown) => {
-      const messages = rootInbox(runtime)?.claim() ?? [];
+    beforeModel: async (_state: unknown, runtime: unknown) => {
+      const messages = (await rootInbox(runtime)?.claim()) ?? [];
       return messages.length > 0 ? { messages: [...messages] } : undefined;
     },
     afterAgent: {
       canJumpTo: ['model'],
-      hook: (_state: unknown, runtime: unknown) => {
+      hook: async (_state: unknown, runtime: unknown) => {
         const inbox = rootInbox(runtime);
         if (inbox === undefined) return undefined;
         // 不領：留在 `next-step` 的由下一輪開頭領走，同 dsh 按停止帶 `keepInbox`。窗不必在這裡關：pump 看到
         // 中止訊號就把之後的插話排進 `next-turn`。
         if (turnCancelSignalOf(runtime)?.aborted === true) return undefined;
-        const messages = inbox.finish();
+        const messages = await inbox.finish();
         return messages.length > 0
           ? { messages: [...messages], jumpTo: 'model' as const }
           : undefined;

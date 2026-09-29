@@ -90,11 +90,12 @@ import {
   type TurnEndReason,
 } from '@nexus/core';
 import type { Event, ThreadFeedFrame, WireChannel } from '@nexus/wire';
-import { channelOfMethod, eventId } from '@nexus/wire';
+import { channelOfMethod, eventId, SessionReferenceError } from '@nexus/wire';
 
 import {
   contextMeasureData,
   deliverablesData,
+  type ClaimedInput,
   inboxData,
   type InboxClaim,
   isTodosReset,
@@ -105,6 +106,13 @@ import {
   workspaceChangesData,
 } from './conversation-history.js';
 import { driveGoalRound } from './goal-driver.js';
+import {
+  parseReferencedText,
+  prepareSessionReferences,
+  type NormalizedReference,
+  type ParsedReferencedText,
+  type SessionReferenceReader,
+} from './session-reference.js';
 import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
 import { capToolResultMeta, toolResultText } from './tool-result-text.js';
 import { assertThreadTitleLimits, ensureFallbackTitle } from './session-title.js';
@@ -604,6 +612,28 @@ interface CurrentRun {
    * 之後到的插話排 `next-turn`，見 {@link ThreadPump.#acceptsSteer}。
    */
   closed: boolean;
+  /**
+   * 這一輪開頭那一句 `@` 的會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)），還沒準備成快照的。
+   * 這一輪第一次 `claim` 時領走並清掉（{@link ThreadPump.#takeSteps}）：快照排在那一句人話後面、插話前面。
+   */
+  opening: OpeningReferences | undefined;
+}
+
+/** 一輪開頭那一句人話 `@` 的會話，與快照那則訊息的 id。 */
+interface OpeningReferences {
+  readonly references: readonly NormalizedReference[];
+  readonly messageId: string;
+}
+
+/** 這一次領走的東西：這一輪開頭的快照（有的話），與整條插話。 */
+interface TakenSteps {
+  readonly opening: OpeningReferences | undefined;
+  readonly steps: readonly ClaimedInput[];
+}
+
+/** 快照那則訊息的 id：掛在它所屬那一句人話的 id 後面，日誌、checkpoint、推回模型的是同一則。 */
+function snapshotIdOf(anchorId: string): string {
+  return `${anchorId}:session-reference`;
 }
 
 /** root 那一層的訊息片段（子代理的 namespace 至少兩段，見 `@nexus/wire` 的 `attribute`）。 */
@@ -779,6 +809,8 @@ export class ThreadPump {
   #inbox: InboxState;
   /** 這個 agent 的圖裡掛沒掛插話的載體（#710），見建構子的 `stepInbox`。 */
   readonly #stepInboxMounted: boolean;
+  /** 讀被引用的會話（#713）；省略即這條 thread 不收引用，見 {@link ThreadPump.referencedText}。 */
+  readonly #referenceReader: SessionReferenceReader | undefined;
   /**
    * 按了停止之後，開新一輪的停住（#637 的 Q2）：照 dsh 的 `cancel({keepInbox: true})`，排著的保留但不跑，等下一次
    * 送出才喚醒（`agent-loop/tests/cancel.spec.ts:192-216`，`477b4f4`）。重啟之後接回來的佇列也是這個狀態。
@@ -823,6 +855,8 @@ export class ThreadPump {
    *   **省略即不講**，同 `createWireHandler`。
    * @param stepInbox - `agent` 的圖裡掛沒掛插話的載體（[#710](https://github.com/DemianLi/nexus-agent/issues/710)，
    *   `createNexusAgent` 回的那一格）。**省略即沒掛**：插話退成排隊，不放進一條沒人領的 `next-step`。
+   * @param sessionReferences - 讀被引用的會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）。**省略即這條
+   *   thread 不收引用**：帶引用的話會被 {@link ThreadPump.referencedText} 擋下。
    * @throws `titleLimits` 不是兩個正整數。
    */
   constructor(
@@ -834,9 +868,11 @@ export class ThreadPump {
     titleLimits?: ThreadTitleLimits,
     warn?: (message: string) => void,
     stepInbox = false,
+    sessionReferences?: SessionReferenceReader,
   ) {
     this.#agent = agent;
     this.#stepInboxMounted = stepInbox;
+    this.#referenceReader = sessionReferences;
     this.#threadId = threadId;
     this.#toolTextMaxBytes = (toolText ?? toolTextConfigSchema.parse({})).maxBytes;
     this.#titleLimits = titleLimits ?? threadTitleConfigSchema.parse({});
@@ -1437,32 +1473,140 @@ export class ThreadPump {
   }
 
   /**
-   * 領走整條插話（#710）：落領走那一顆 `inbox/spliced`，再每一句落一顆 `user/message`（`source: {kind: 'user'}`），同 dsh
-   * `claim` 之後 `step()` 逐則寫 `user/message`（`agent.ts:403-405`）。回的訊息要原封不動併進 state：推回模型照日誌推。
+   * 解析並驗證一句人話裡的引用（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）。**同步、不讀任何東西**，
+   * 所以 wire 能在收下那句話的時候呼叫：壞了回 `invalid_argument`，那句話不進佇列。
+   *
+   * 引用要能用才收：這條 thread 沒接讀會話的載體，或圖裡沒掛插話的載體（快照就是靠它進到模型手上的），都拒絕——收下之後
+   * 悄悄不引用，模型看到的是一個沒人解得開的網址。
+   *
+   * @returns 引用換成 `@標題` 之後的文字，與去重後的引用。沒有引用就是原文。
+   * @throws {@link SessionReferenceError} 網址壞、引用自己、超過上限、或這條 thread 不收引用。
+   */
+  referencedText(text: string): ParsedReferencedText {
+    const parsed = parseReferencedText(text, this.#threadId);
+    if (
+      parsed.references.length > 0 &&
+      (this.#referenceReader === undefined || !this.#stepInboxMounted)
+    ) {
+      throw new SessionReferenceError(
+        'session references are not available on this server',
+        'SESSION_REFERENCE_INVALID_CONFIG',
+      );
+    }
+    return parsed;
+  }
+
+  /**
+   * 領走時用的解析：收下的時候驗過了，這裡不該再失敗。**萬一失敗（日誌是舊行程留下的、載體後來沒掛）就退回原文並講一聲**，
+   * 不賠上使用者那一輪——原文裡的網址不會被展開，但人話一個字沒少。
+   */
+  #referencedTextOrRaw(text: string): ParsedReferencedText {
+    try {
+      return this.referencedText(text);
+    } catch (error: unknown) {
+      this.#warn?.(
+        `[引用] thread ${this.#threadId} 的引用沒有展開，照原文送：${error instanceof Error ? error.message : String(error)}`,
+      );
+      return { text, references: [] };
+    }
+  }
+
+  /**
+   * 領走整條插話（#710）與這一輪開頭的快照（#713）：**領走本身是同步的**——這一個同步段裡整條 `next-step` 從收件匣
+   * 拿掉、落領走那一顆 `inbox/spliced`，之後到的插話屬於下一次。準備與落 `user/message` 是非同步的
+   * （{@link ThreadPump.#deliverSteps}）。
    *
    * **中止之後不領**：同 dsh 每一步 `preStep` 之前先 `signal.throwIfAborted()`。留著的由下一輪的第一次模型呼叫領走。
    *
-   * @param current - 領的那一段 run。
-   * @returns 領走的那幾句，照送出的先後。沒有就是空的，日誌不動。
+   * @returns 沒有東西可領就是 `undefined`，日誌不動。
    */
-  #claimSteps(current: CurrentRun): HumanMessage[] {
+  #takeSteps(current: CurrentRun): TakenSteps | undefined {
+    if (current.controller.signal.aborted || this.#current !== current) return undefined;
     const items = this.#inbox['next-step'];
-    if (items.length === 0 || current.controller.signal.aborted || this.#current !== current) {
-      return [];
-    }
-    this.#spliceInbox(
-      { target: 'next-step', start: 0, removedCount: items.length, inserted: [] },
-      { steps: items },
-    );
-    return items.map((item) => {
-      // **id 就是佇列裡那一件的 id**：日誌、checkpoint、推回模型的那一則是同一則，reducer 照 id 對得上。
-      const message = new HumanMessage({ content: item.text, id: item.id });
-      this.#sessions.root.append('user/message', {
-        message: toLoggedMessage(message),
-        source: { kind: 'user' },
-      });
-      return message;
+    const opening = current.opening;
+    if (items.length === 0 && opening === undefined) return undefined;
+    current.opening = undefined;
+    const steps = items.map((item): ClaimedInput => {
+      const parsed = this.#referencedTextOrRaw(item.text);
+      return { ...item, text: parsed.text, references: parsed.references };
     });
+    if (items.length > 0) {
+      this.#spliceInbox(
+        { target: 'next-step', start: 0, removedCount: items.length, inserted: [] },
+        { steps },
+      );
+    }
+    return { opening, steps };
+  }
+
+  /**
+   * 把領走的東西準備好、落日誌，回要併進 state 的訊息，照日誌的先後。同 dsh `claim` 之後 `step()` 逐則寫 `user/message`
+   * （`agent.ts:403-405`）；有引用的那一句，快照緊跟在它後面。回的訊息要原封不動併進 state：推回模型照日誌推。
+   *
+   * **沒有引用時整段同步**，跟 #710 一樣。有引用才 await 準備；**準備失敗就拋**，這一輪失敗，領走的那幾句丟了——同 dsh
+   * （`agent/pre-step` 拋錯，收件匣已經領走）。人按了停止的話，準備被取消、這裡拋出去，由 {@link ThreadPump.#runOnce} 照中止收。
+   */
+  async #deliverSteps(current: CurrentRun, taken: TakenSteps | undefined): Promise<HumanMessage[]> {
+    if (taken === undefined) return [];
+    const jobs = [
+      ...(taken.opening === undefined
+        ? []
+        : [
+            {
+              text: undefined,
+              references: taken.opening.references,
+              snapshotId: taken.opening.messageId,
+            },
+          ]),
+      ...taken.steps.map((step) => ({
+        text: step,
+        references: step.references ?? [],
+        snapshotId: snapshotIdOf(step.id),
+      })),
+    ];
+    const reader = this.#referenceReader;
+    const signal = current.controller.signal;
+    const prepared = jobs.some((job) => job.references.length > 0)
+      ? await Promise.all(
+          jobs.map((job) =>
+            job.references.length === 0
+              ? undefined
+              : prepareSessionReferences({
+                  selfId: this.#threadId,
+                  references: job.references,
+                  // 有引用就一定驗過有讀取端（{@link ThreadPump.referencedText}）；到這裡沒有是程式錯。
+                  reader:
+                    reader ??
+                    (() => {
+                      throw new Error('有引用但這條 thread 沒接讀會話的載體');
+                    })(),
+                  messageId: job.snapshotId,
+                  signal,
+                }),
+          ),
+        )
+      : jobs.map(() => undefined);
+    const messages: HumanMessage[] = [];
+    jobs.forEach((job, index) => {
+      if (job.text !== undefined) {
+        // **id 就是佇列裡那一件的 id**：日誌、checkpoint、推回模型的那一則是同一則，reducer 照 id 對得上。
+        const message = new HumanMessage({ content: job.text.text, id: job.text.id });
+        this.#sessions.root.append('user/message', {
+          message: toLoggedMessage(message),
+          source: { kind: 'user' },
+        });
+        messages.push(message);
+      }
+      const snapshot = prepared[index];
+      if (snapshot !== undefined) {
+        this.#sessions.root.append('user/message', {
+          message: toLoggedMessage(snapshot.message),
+          source: snapshot.source,
+        });
+        messages.push(snapshot.message);
+      }
+    });
+    return messages;
   }
 
   /**
@@ -1540,6 +1684,12 @@ export class ThreadPump {
   async #runOnce(input: PumpInput, claimed?: QueuedInput): Promise<void> {
     // **記在這裡而不是 submit 裡**：submit 只是排隊，真正開跑才是這一輪的起點。
     // 記在排隊時的話，兩件事排在一起時日誌會出現「兩個 start 之後才有第一個 end」。
+    // **引用先換成 `@標題`，日誌與模型看到的是同一份**（#713）：`turn/start.text` 是這一句話的唯一來源（`session-log.ts`
+    // 登記過的偏離），網址留在日誌上的話，重放與搜尋都會撞見一個不是人打的字串。
+    const referenced = input.kind === 'message' ? this.#referencedTextOrRaw(input.text) : undefined;
+    if (referenced !== undefined && input.kind === 'message') {
+      input = { ...input, text: referenced.text };
+    }
     this.#sessions.root.append('turn/start', turnStartOf(input));
     // 領走：落在 `turn/start` 之後、叫模型之前，所以帶 `claimed` 的那顆推送一定比這一輪模型與工具的任何 frame 早。
     // 比它早的只有 `turn/start` 的訂閱者當場合成的 `custom`（清空待辦），同 dsh 的先後。
@@ -1550,7 +1700,13 @@ export class ThreadPump {
     if (claimed !== undefined) {
       this.#spliceInbox(
         { target: 'next-turn', start: 0, removedCount: 1, inserted: [] },
-        { turn: claimed },
+        {
+          turn: {
+            ...claimed,
+            text: referenced?.text ?? claimed.text,
+            ...(referenced === undefined ? {} : { references: referenced.references }),
+          },
+        },
       );
     }
     // **`text` 只讀一次的那個值就是上面寫進日誌的那個。** 兩份分開算的話，一顆日誌上
@@ -1572,14 +1728,22 @@ export class ThreadPump {
       stopped: false,
       maxTokens: false,
       closed: false,
+      opening:
+        referenced === undefined || referenced.references.length === 0
+          ? undefined
+          : {
+              references: referenced.references,
+              messageId: snapshotIdOf(claimed?.id ?? crypto.randomUUID()),
+            },
     };
     // 插話的領取口（#710）：圖裡那顆 middleware 每次叫模型之前 `claim`、收尾時 `finish`，見 `@nexus/core` 的 `step-inbox.ts`。
     const stepInbox: StepInbox = {
-      claim: () => this.#claimSteps(current),
+      claim: () => this.#deliverSteps(current, this.#takeSteps(current)),
       finish: () => {
-        const messages = this.#claimSteps(current);
-        if (messages.length === 0) current.closed = true;
-        return messages;
+        // **領與關窗在同一個同步段**：`#takeSteps` 判定沒有東西可領的那一刻就關，之後到的插話排 `next-turn`。
+        const taken = this.#takeSteps(current);
+        if (taken === undefined) current.closed = true;
+        return this.#deliverSteps(current, taken);
       },
     };
     this.#current = current;

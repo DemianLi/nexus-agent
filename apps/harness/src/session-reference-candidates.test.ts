@@ -386,3 +386,65 @@ describe('標題快取', () => {
     expect(await s.list('me', '')).toEqual([]);
   });
 });
+
+describe('read：精確讀一條被引用的會話（準備那一半用）', () => {
+  it('整份日誌與 header 原樣交回；專案自己的那一格優先，同 id 在兩格時取自己的', async () => {
+    await put(OTHER, 'dup', { events: [said('別格的', 2_000)] });
+    await put(CWD, 'dup', { events: [said('自己格的', 2_000)] });
+    const { header, events } = await service().read('dup');
+    expect(header.id).toBe('dup');
+    expect(header.cwd).toBe(CWD);
+    expect(events.map((event) => (event.data as { text?: string }).text)).toEqual(['自己格的']);
+  });
+
+  it('別的專案的也讀得到；子代理那種含 / 的 id 也行', async () => {
+    await put(OTHER, 'elsewhere', { events: [said('別處', 2_000)] });
+    await put(CWD, 'delegated/tools:abc', { parentSession: 'me' });
+    const s = service();
+    expect((await s.read('elsewhere')).events).toHaveLength(1);
+    expect((await s.read('delegated/tools:abc')).header.parentSession).toBe('me');
+  });
+
+  it('沒有這一份：SessionNotFoundError；CLI 的 run 目錄不算', async () => {
+    const stored = createJsonlSessionStore({ rootDir: root }).create({
+      version: SESSION_LOG_FORMAT_VERSION,
+      id: 'cli',
+      createdAt: 1,
+      cwd: CWD,
+    });
+    await stored.append([{ type: 'model/usage', seq: 0, time: 1, data: {} } as never]);
+    await stored.close();
+    const s = service();
+    await expect(s.read('nobody')).rejects.toMatchObject({ name: 'SessionNotFoundError' });
+    await expect(s.read('cli')).rejects.toMatchObject({ name: 'SessionNotFoundError' });
+  });
+
+  it('壞的日誌不撿回：拋 SessionCorruptionError（撿回來的殘缺版本不能當成那條會話的樣子）', async () => {
+    const directory = await put(CWD, 'torn', { events: [said('好', 2_000), said('二', 3_000)] });
+    const lines = (await readFile(join(directory, 'torn.jsonl'), 'utf8')).split('\n');
+    await writeFile(
+      join(directory, 'torn.jsonl'),
+      [lines[0], '{壞掉', ...lines.slice(1)].join('\n'),
+    );
+    await expect(service().read('torn')).rejects.toMatchObject({ name: 'SessionCorruptionError' });
+  });
+
+  it('唯讀：不改任何位元組；已經中止就不開始讀', async () => {
+    const directory = await put(CWD, 'held', { events: [said('好', 2_000)] });
+    const before = await Promise.all(
+      (await readdir(directory))
+        .sort()
+        .map(async (name) => [name, await readFile(join(directory, name), 'utf8')]),
+    );
+    const controller = new AbortController();
+    await service().read('held');
+    controller.abort(new Error('不要了'));
+    await expect(service().read('held', controller.signal)).rejects.toThrow('不要了');
+    const after = await Promise.all(
+      (await readdir(directory))
+        .sort()
+        .map(async (name) => [name, await readFile(join(directory, name), 'utf8')]),
+    );
+    expect(after).toEqual(before);
+  });
+});
