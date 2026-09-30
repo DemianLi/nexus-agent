@@ -53,6 +53,8 @@ import type { BackgroundAgent } from './background-subagents.js';
 
 /** 模型看到的工具名（dsh 的預設名，`toolName: 'subagent'`）。 */
 export const SUBAGENT_TOOL_NAME = 'subagent';
+/** 列出自己派出的背景子代理（dsh `tool-subagent-control/src/list-agents.ts`，`477b4f4`）。 */
+export const LIST_AGENTS_TOOL_NAME = 'list_agents';
 /** 被換掉的基座委派工具。 */
 const BASE_DELEGATION_TOOL_NAME = 'task';
 
@@ -148,6 +150,8 @@ export class BackgroundDelegation {
         name: 'background-delegation',
         apply: (registry) => {
           registry.middleware.use(this.#middleware(), { prepend: true });
+          // 只在 root：子代理不派子代理，也不該去列別人派的。
+          registry.tools.register(this.#listAgentsTool(), { rootOnly: true });
         },
       },
     };
@@ -167,6 +171,37 @@ export class BackgroundDelegation {
     }) as unknown as StructuredToolInterface;
     this.#tool = { description, instance };
     return instance;
+  }
+
+  /**
+   * `list_agents`：薄薄一層，讀 host 的目錄，不自己另存一份。名字、描述與輸出逐字照 dsh
+   * （`tool-subagent-control/src/list-agents.ts`）。
+   *
+   * **描述裡「做完會通知」「用 send_message 接著談」兩句是 dsh 的原文**，那兩個機制是 #840、#839；
+   * 這個選項在 #841 翻預設之前不進產品，翻預設的前置就是它們都合併。
+   *
+   * 只做 `children`：我們沒有子代理再派子代理，`descendants` 沒有東西可列；診斷列（目錄壞掉）在行程內不會發生。
+   */
+  #listAgentsTool() {
+    return tool(
+      () => {
+        const host = this.#host;
+        if (host === undefined) throw new Error('背景子代理還沒接上會話，列不出來');
+        const entries = host.list();
+        return entries.length === 0
+          ? '(no subagents)'
+          : entries.map((entry) => `${entry.runId} [${entry.status}] — ${entry.label}`).join('\n');
+      },
+      {
+        name: LIST_AGENTS_TOOL_NAME,
+        description:
+          'List subagents you started, with their ids, labels, and status. ' +
+          'running means it is working; inactive means it is not currently working. ' +
+          'You will be notified when a subagent finishes; there is no need to keep checking its status. ' +
+          'Use send_message to continue the conversation.',
+        schema: z.object({}),
+      },
+    );
   }
 
   #middleware() {

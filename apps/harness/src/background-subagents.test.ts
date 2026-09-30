@@ -286,6 +286,26 @@ describe('載體本身（假 agent）', () => {
     expect(() => host.start({ subagent: 'worker', text: '句' })).toThrow('已經關閉');
   });
 
+  it('list：依派出先後列出每一個，跑著的是 running、其餘 inactive；別的 host 的不在裡面', async () => {
+    const hold = gate();
+    const { agent } = fakeAgent(async (text) => (text === '慢' ? hold.opened : undefined));
+    const mine = make((name) => (name === 'other' ? fakeAgent().agent : agent));
+    const theirs = make(() => agent);
+    expect(mine.host.list()).toEqual([]);
+    const slow = mine.host.start({ subagent: 'worker', text: '慢' });
+    const quick = mine.host.start({ subagent: 'other', text: '快' });
+    theirs.host.start({ subagent: 'worker', text: '別人的' });
+    await quick.outcome;
+    expect(mine.host.list()).toEqual([
+      { runId: slow.runId, label: 'worker', status: 'running' },
+      { runId: quick.runId, label: 'other', status: 'inactive' },
+    ]);
+    hold.open();
+    await slow.outcome;
+    expect(mine.host.list().map((row) => row.status)).toEqual(['inactive', 'inactive']);
+    await Promise.all([mine.host.close(), theirs.host.close()]);
+  });
+
   describe('並存上限（#836）', () => {
     it('預設 8：第 9 個被拒絕、指名上限與現況，而且沒有編號、沒有日誌；前 8 個不受影響', async () => {
       const hold = gate();

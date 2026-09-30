@@ -63,6 +63,14 @@ export type BackgroundRoundOutcome =
 /** 每個主對話同時存活的背景子代理上限的預設值（dsh `SubagentRuntime.Config.maxActiveSubagents`，`477b4f4`）。 */
 export const DEFAULT_MAX_ACTIVE_BACKGROUND_SUBAGENTS = 8;
 
+/** {@link BackgroundSubagentHost.list} 的一列。 */
+export interface BackgroundSubagentListing {
+  readonly runId: string;
+  /** 子代理的種類名（規格名）。 */
+  readonly label: string;
+  readonly status: 'running' | 'inactive';
+}
+
 export interface BackgroundSubagentHostOptions {
   /** 背景子代理的日誌開在哪：**root 的那張註冊表**，不另開第二張（第二張會讓 `forCall` 回 `ambiguous`，事件兩邊都沒有）。 */
   readonly sessions: SessionRegistry;
@@ -181,6 +189,21 @@ export class BackgroundSubagentHost {
     while (this.#known.has(runId));
     this.#sessions.open({ kind: 'subagent', runId });
     return { runId, outcome: this.submit({ runId, ...input }) };
+  }
+
+  /**
+   * 目錄：這個主對話派出去的每一個背景子代理，依派出的先後。給 `list_agents`（#837）。
+   *
+   * `running`＝有輪次排著或正在跑（dsh 的 `running` 只看有沒有輪次在做事，不透露是否載入）；
+   * 其餘是 `inactive`。`label` 是子代理的種類名。
+   */
+  list(): readonly BackgroundSubagentListing[] {
+    const active = this.#activeRunIds();
+    return [...this.#known].map(([runId, label]) => ({
+      runId,
+      label,
+      status: active.has(runId) ? 'running' : 'inactive',
+    }));
   }
 
   /** 存活的背景子代理：有輪次排著或正在跑的編號。 */
