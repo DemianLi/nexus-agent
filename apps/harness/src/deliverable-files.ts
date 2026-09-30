@@ -1,8 +1,8 @@
 /**
  * 讀一個**宣告過的**交付檔（[#452](https://github.com/DemianLi/nexus-agent/issues/452) 第二刀）。
  *
- * 兩條路由（預覽、下載）共用的那一半：把 `(seq, index)` 這個座標換成磁碟上的一個檔，或是一個
- * 講得出理由的拒絕。HTTP 那一半在 {@link ./wire-handler.ts}。
+ * 兩支方法（`deliverable.read`、`deliverable.readBytes`）共用的那一半：把 `(seq, index)` 這個座標換成磁碟上的一個檔，或是一個
+ * 講得出理由的拒絕。命令通道那一半在 {@link ./wire-handler.ts}（[#747](https://github.com/DemianLi/nexus-agent/issues/747)）。
  *
  * 照 dsh 的 `workspace-files`（`packages/api/workspace-files/src/index.ts`，`ddefc45`）。
  *
@@ -10,7 +10,7 @@
  *
  * 這個模組不挑錨，也不認得續接線。錨是呼叫端交出來的一個目錄
  * （{@link locateDeliverableFile} 的 `rootDir`），怎麼挑的寫在 `wire-handler.ts` 的
- * `locateRequested`——那是唯一挑得起的地方，因為線的位置（`storedCount`）與日誌 header 記下的
+ * `locateAt`——那是唯一挑得起的地方，因為線的位置（`storedCount`）與日誌 header 記下的
  * 根都只在那裡（[#519](https://github.com/DemianLi/nexus-agent/issues/519)）。
  *
  * **把它留在呼叫端不是成本考量，是正確性。** 從 `threadFor` 拿到的是**這一次組裝**的 backend；
@@ -25,7 +25,8 @@
  * dsh 的檔案本身沒有大小上限（`Config.maxBytes` 的檔頭：「The file itself has no size cap: a caller
  * pages through it」），因為它的 `read` 從 `streamText` 切頁，讀到頁尾之後的第一個字元就停。預覽
  * 照做（[#544](https://github.com/DemianLi/nexus-agent/issues/544)），見 {@link readDeliverablePage}。
- * **`maxFileBytes` 只管下載**，同 dsh 的 `readAll`。
+ * **`maxFileBytes` 只管整檔讀**（`deliverable.readBytes` 不給範圍），同 dsh：整檔讀是不帶範圍的 `readBytes`，上限同樣是 `maxFileBytes`
+ * （dsh `477b4f4` 的 `packages/api/workspace-files/src/index.ts:272-275`；那個版本的讀檔服務已經沒有 readAll 這支方法）。
  *
  * 從前這裡登記過一條偏離：「整檔讀進來再切頁，所以超過 `maxFileBytes` 的文字檔預覽不了」。那條
  * 偏離的理由是實作選擇，不是基礎建設表達不出來，#544 把它收掉了。
@@ -214,7 +215,7 @@ export async function locateDeliverableFile(
 }
 
 /**
- * 讀整份位元組，**吃整檔上限**。只有下載走這裡，同 dsh 的 `readAll`；預覽串流，見
+ * 讀整份位元組，**吃整檔上限**。只有整檔讀（不帶範圍的 `readBytes`）走這裡，同 dsh；預覽串流，見
  * {@link readDeliverablePage}。
  *
  * ## 為什麼不經基座的 `readRaw`
@@ -256,7 +257,7 @@ export async function readDeliverableBytes(
   }
   // **上限綁在讀本身，不是只綁在前面那次 stat 上。** 只看 stat 的話，兩次之間長大的檔就整份
   // 進記憶體了——這台機器是多人共用的。緩衝區開 `min(當時的大小, 上限) + 1`：那個 +1 就是
-  // 「它長大了」的偵測器。dsh 同樣把上限傳進讀裡（`readAll` 的 `maxFileBytes`）。
+  // 「它長大了」的偵測器。dsh 同樣把上限傳進讀裡（不帶範圍的 `readBytes` 的 `maxFileBytes`）。
   let handle: Awaited<ReturnType<typeof open>>;
   try {
     handle = await open(located.target, 'r');
@@ -386,10 +387,10 @@ async function cutPage(
  * 不是給到上限為止——同 dsh 的 `maxLines`（「a request asking for more is refused」）。
  *
  * **`limits.maxLines` 是雙用的**：這裡當「不准超過」的上限，而「呼叫端沒給 `limit` 時用什麼」
- * 是同一個數字，那一半在 `wire-handler.ts` 的 `handleDeliverableFile`。dsh 一樣
+ * 是同一個數字，那一半在 `wire-handler.ts` 的 `handleDeliverableCommand`。dsh 一樣
  * （`workspace-files/src/index.ts:371-373`，兩處讀同一個 `this.config.maxLines`）。**兩處必須
  * 一起吃到設定值**：只接一處的話兩個方向都會壞——設定高於這裡寫死的上限，不帶 `limit` 的請求
- * 全部 400；設定低於那邊寫死的預設，一樣。
+ * 全部被拒；設定低於那邊寫死的預設，一樣。
  *
  * **整檔沒有大小上限**，`limits.maxFileBytes` 不在這條路上（見檔頭）。**頁的上限照 dsh：拒絕，
  * 不截斷**——「a silently cut page reads as the whole page」。

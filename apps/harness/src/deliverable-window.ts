@@ -5,7 +5,7 @@
  * ## 為什麼要有這一條
  *
  * 文字預覽按行切頁，一頁超過 `maxBytes` 是拒絕，不是截斷（dsh 的理由逐字：「a silently cut page
- * reads as the whole page」）。所以一個**單行本身就超過 `maxBytes`** 的檔，按行怎麼切都是 413。
+ * reads as the whole page」）。所以一個**單行本身就超過 `maxBytes`** 的檔，按行怎麼切都是 `too-large`。
  *
  * #544 的原案是讓文字頁在那時候回切短的一段、標明還有下文。那是偏離 dsh 的拒絕，而拒絕我們表達
  * 得出來，不符合偏離的條件。demian 2026-09-23 拍板走另一條：**照 dsh 開它本來就有的位元組窗口**。
@@ -21,15 +21,15 @@
  * - `eof` 是「這個窗口含最後一個位元組」，拿閘門那一次 `stat` 的大小算。`offset` 在檔尾或之後時
  *   `data` 是空的、`eof` 是真的。
  *
- * **不在這裡的**：錨、座標、閘門，全部沿用 `deliverable-files.ts`——這條路由走的是跟預覽、下載
- * 同一個 `locateRequested`。
+ * **不在這裡的**：錨、座標、閘門，全部沿用 `deliverable-files.ts`——這條方法走的是跟預覽、下載
+ * 同一個 `locateAt`。
  *
  * @module
  */
 
 import { open } from 'node:fs/promises';
 
-import type { DeliverableBytes, DeliverableFileBytes } from '@nexus/wire';
+import type { DeliverableBytes } from '@nexus/wire';
 
 import type { DeliverableResult, LocatedDeliverable } from './deliverable-files.js';
 import type { DeliverableFilesConfig } from './settings/deliverable-files.js';
@@ -76,31 +76,13 @@ export function resolveDeliverableWindow(
  *
  * **記憶體以 `length` 為界**，而 `length` 過了驗證就不超過 `maxBytes`：緩衝區開的是請求的長度，不是檔案大小。
  * 一次 `read` 可能回得比要的少（規格沒保證一般檔一次讀滿），所以讀到滿或讀到 0 為止。
+ * 結果的 `data` 是位元組，命令通道（[#747](https://github.com/DemianLi/nexus-agent/issues/747)）用多段表單帶出去。
  *
  * @param located - 已經通過閘門的檔。
  * @param window - 驗過的窗口。
  * @returns 那個窗口，或拒絕。
  */
 export async function readDeliverableWindow(
-  located: LocatedDeliverable,
-  window: DeliverableWindow,
-): Promise<DeliverableResult<DeliverableFileBytes>> {
-  const read = await readDeliverableWindowBytes(located, window);
-  if (read.kind === 'refused') return read;
-  const { data, ...rest } = read.value;
-  return { kind: 'ok', value: { ...rest, data: Buffer.from(data).toString('base64') } };
-}
-
-/**
- * {@link readDeliverableWindow} 的核心，**位元組不轉成 base64**（[#747](https://github.com/DemianLi/nexus-agent/issues/747)）：
- * 命令通道上的 `deliverable.readBytes` 直接帶位元組（多段表單），舊的 `GET` 路由才在外面轉 base64。
- * 兩條路共用這一份，窗口怎麼切、切到哪裡是 `eof` 只有一個答案。
- *
- * @param located - 已經通過閘門的檔。
- * @param window - 驗過的窗口。
- * @returns 那個窗口，或拒絕。
- */
-export async function readDeliverableWindowBytes(
   located: LocatedDeliverable,
   window: DeliverableWindow,
 ): Promise<DeliverableResult<DeliverableBytes>> {
