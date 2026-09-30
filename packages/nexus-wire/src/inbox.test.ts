@@ -293,6 +293,21 @@ describe('inbox：背景子代理的結算通知不是人話（#840）', () => {
     ).toEqual(['人的話']);
   });
 
+  it('子代理寫來的話（agent-message，#849）同樣：排著照收、領走不畫人的泡泡', () => {
+    const relay = {
+      id: 'run-m',
+      text: 'Agent x sent a message: 嗨',
+      source: { kind: 'agent-message' },
+    };
+    const queued = fold(inboxFrame({ items: [first, relay], nextStep: [relay] }));
+    expect(queued.inbox).toEqual([first, relay]);
+    expect(queued.inboxNextStep).toEqual([relay]);
+    expect(fold(inboxFrame({ items: [], claimed: relay })).entries).toEqual([]);
+    expect(fold(inboxFrame({ items: [], nextStep: [], claimedNextStep: [relay] })).entries).toEqual(
+      [],
+    );
+  });
+
   it('認不得的來源整顆不收', () => {
     const before = fold(inboxFrame({ items: [first] }));
     const after = reduceConversation(

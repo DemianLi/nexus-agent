@@ -798,7 +798,7 @@ function isQueuedInput(value: unknown): value is WireQueuedInput {
 }
 
 function isQueuedSourceKind(kind: unknown): kind is WireQueuedInputSource['kind'] {
-  return kind === 'user' || kind === 'subagent-settled';
+  return kind === 'user' || kind === 'subagent-settled' || kind === 'agent-message';
 }
 
 /** 一句話 `@` 的會話長得對不對。沒給（`undefined`）合法，給了就每一條都要是兩個字串。 */
@@ -866,8 +866,9 @@ function reduceInbox(state: ConversationState, payload: object): ConversationSta
     if (typeof id !== 'string' || typeof text !== 'string' || !isWireReferences(references)) {
       return state;
     }
-    // 不是人送的（#840）：執行期的記帳，不畫人的泡泡。認得的來源之外的一律當成人畫——舊的一側沒有這一格。
-    if ((source as { kind?: unknown } | undefined)?.kind === 'subagent-settled') continue;
+    // 不是人送的（#840、#849）：執行期的記帳，不畫人的泡泡。認得的來源之外的一律當成人畫——舊的一側沒有這一格。
+    const sourceKind = (source as { kind?: unknown } | undefined)?.kind;
+    if (sourceKind === 'subagent-settled' || sourceKind === 'agent-message') continue;
     humans.push({
       kind: 'human',
       id: `inbox:${id}`,

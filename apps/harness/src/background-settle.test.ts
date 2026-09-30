@@ -45,7 +45,7 @@ async function until(predicate: () => boolean, ms = 5000): Promise<void> {
   }
 }
 
-async function assemble(options: { readonly stepInbox: boolean }) {
+async function assemble(options: { readonly stepInbox: boolean; readonly workerSends?: boolean }) {
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -61,6 +61,20 @@ async function assemble(options: { readonly stepInbox: boolean }) {
           model: new ScriptedChatModel({
             turns: [
               { content: '', toolCalls: [{ name: 'gate', id: 'bg-call', args: {} }] },
+              ...(options.workerSends === true
+                ? [
+                    {
+                      content: '',
+                      toolCalls: [
+                        {
+                          name: 'send_message',
+                          id: 'bg-send',
+                          args: { agent_id: 'settle-thread', message: '半路發現：入口在 A' },
+                        },
+                      ],
+                    },
+                  ]
+                : []),
               { content: '做完，結論是 X' },
             ],
           }) as never,
@@ -90,6 +104,8 @@ async function assemble(options: { readonly stepInbox: boolean }) {
         },
         { content: '根收尾' },
         { content: '子代理說結論是 X' },
+        { content: '收到' },
+        { content: '也收到' },
       ],
     }),
     checkpointer: new MemorySaver(),
@@ -105,9 +121,9 @@ async function assemble(options: { readonly stepInbox: boolean }) {
       agent: built.agent as unknown as PumpAgent,
       commands: emptyCommandPoint(),
       stepInbox: built.stepInbox,
-      attachSession: (registry: SessionRegistry, onBackgroundSettled) => {
+      attachSession: (registry: SessionRegistry, backgroundPort) => {
         sessions = registry;
-        return built.attachSession(registry, onBackgroundSettled);
+        return built.attachSession(registry, backgroundPort);
       },
       dispose: built.dispose,
     }),
@@ -205,6 +221,34 @@ describe('背景子代理做完，閒著的主對話被叫醒', () => {
       r.release();
       await until(() => r.rootLog().filter((event) => event.type === 'turn/end').length === 2);
       expect(turnKinds(r.rootLog())).toEqual(['message', 'subagent-settled']);
+    } finally {
+      await r.close();
+    }
+  });
+});
+
+describe('背景子代理半路寫話給主對話（#849）', () => {
+  it('閒著的主對話被叫醒多開一輪：turn/start 是 agent-message、前綴照 dsh，不是人話，畫面沒有人的泡泡', async () => {
+    const r = await assemble({ stepInbox: true, workerSends: true });
+    try {
+      await until(() => r.rootLog().filter((event) => event.type === 'turn/end').length === 1);
+      r.release();
+      await until(() => turnKinds(r.rootLog()).includes('agent-message'));
+      await until(() => r.rootLog().filter((event) => event.type === 'turn/end').length >= 2);
+
+      const events = r.rootLog();
+      const start = events
+        .filter((event) => event.type === 'turn/start')
+        .find((event) => event.data.kind === 'agent-message')!.data as {
+        text: string;
+        senderSessionId: string;
+      };
+      expect(start.senderSessionId).toMatch(/^settle-thread\/bg-[0-9a-f]{12}$/);
+      expect(start.text).toBe(`Agent ${start.senderSessionId} sent a message: 半路發現：入口在 A`);
+      expect(hasDirectHumanTurn(events)).toBe(false);
+
+      const humans = r.state().entries.filter((entry) => entry.kind === 'human');
+      expect(humans.map((entry) => entry.text)).toEqual(['幫我查']);
     } finally {
       await r.close();
     }

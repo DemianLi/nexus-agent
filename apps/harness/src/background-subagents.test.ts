@@ -30,8 +30,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
-import { BackgroundSubagentHost } from './background-subagents.js';
-import type { BackgroundAgent, BackgroundSettlement } from './background-subagents.js';
+import { BackgroundSubagentHost, withReturnGuidance } from './background-subagents.js';
+import type {
+  BackgroundAgent,
+  BackgroundAgentMessage,
+  BackgroundSettlement,
+} from './background-subagents.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
@@ -1135,5 +1139,92 @@ describe('結算通知（#840）', () => {
     const host = new BackgroundSubagentHost({ sessions, compile: () => agent });
     expect(await host.start({ subagent: 'worker', text: '查' }).outcome).toEqual({ ok: true });
     await host.close();
+  });
+});
+
+// ───────────────────────────── 往上傳訊（#849） ─────────────────────────────
+
+describe('sendToParent（#849）', () => {
+  function setup(options: { readonly withPort?: boolean } = {}) {
+    const sessions = new SessionRegistry('root-1');
+    const messages: BackgroundAgentMessage[] = [];
+    const agent: BackgroundAgent = {
+      async streamEvents() {
+        return (async function* () {})() as never;
+      },
+    };
+    const host = new BackgroundSubagentHost({
+      sessions,
+      compile: () => agent,
+      ...(options.withPort !== false && { onMessage: (message) => messages.push(message) }),
+    });
+    return { host, messages };
+  }
+
+  it('直接 parent：出口收到寄件人是子代理自己會話 id 的一則，前綴照 dsh', async () => {
+    const { host, messages } = setup();
+    const { runId, outcome } = host.start({ subagent: 'w', text: '幹活' });
+    await outcome;
+    host.sendToParent({ runId, targetId: 'root-1', message: '半路發現' });
+    expect(messages).toEqual([
+      {
+        runId,
+        sessionId: `root-1/${runId}`,
+        text: `Agent root-1/${runId} sent a message: 半路發現`,
+      },
+    ]);
+    await host.close();
+  });
+
+  it('只認直接 parent：兄弟、自己、不存在的編號、空字串都拒絕，出口一則都沒收到', async () => {
+    const { host, messages } = setup();
+    const a = host.start({ subagent: 'w', text: '甲' });
+    const b = host.start({ subagent: 'w', text: '乙' });
+    await Promise.all([a.outcome, b.outcome]);
+    for (const targetId of [b.runId, a.runId, `root-1/${b.runId}`, 'bg-000000000000', '']) {
+      expect(() => host.sendToParent({ runId: a.runId, targetId, message: '喂' })).toThrow(
+        '不是你的直接 parent',
+      );
+    }
+    expect(messages).toEqual([]);
+    await host.close();
+  });
+
+  it('寄件人必須是這個 host 認得的背景子代理', async () => {
+    const { host, messages } = setup();
+    expect(() =>
+      host.sendToParent({ runId: 'bg-000000000000', targetId: 'root-1', message: '喂' }),
+    ).toThrow('不是這個主對話派出去的背景子代理');
+    expect(messages).toEqual([]);
+    await host.close();
+  });
+
+  it('沒有出口：拋，說明主對話收不到，不假裝送到', async () => {
+    const { host } = setup({ withPort: false });
+    const { runId, outcome } = host.start({ subagent: 'w', text: '幹活' });
+    await outcome;
+    expect(() => host.sendToParent({ runId, targetId: 'root-1', message: '喂' })).toThrow(
+      '收不到訊息',
+    );
+    await host.close();
+  });
+
+  it('host 關閉之後：拋', async () => {
+    const { host, messages } = setup();
+    const { runId, outcome } = host.start({ subagent: 'w', text: '幹活' });
+    await outcome;
+    await host.close();
+    expect(() => host.sendToParent({ runId, targetId: 'root-1', message: '喂' })).toThrow('關閉');
+    expect(messages).toEqual([]);
+  });
+
+  it('withReturnGuidance：指引逐字，parent id 帶引號', () => {
+    expect(withReturnGuidance('幹活', 'root-1')).toBe(
+      '幹活\n\nYour parent agent id is "root-1". Before you finish, send your result to that agent with ' +
+        'send_message({ agent_id: "root-1", message: "<self-contained result>" }). The parent shares ' +
+        'your workspace but does not automatically receive your transcript, tool output, or reasoning. Send ' +
+        'earlier messages as well when a finding changes what the parent should do next; sending a message ' +
+        'does not end your turn.',
+    );
   });
 });
