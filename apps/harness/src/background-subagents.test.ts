@@ -83,9 +83,13 @@ describe('載體本身（假 agent）', () => {
     return { agent, seen };
   }
 
-  function make(agentFor: (subagent: string) => BackgroundAgent) {
+  function make(agentFor: (subagent: string) => BackgroundAgent, maxActive?: number) {
     const sessions = new SessionRegistry('root-1');
-    const host = new BackgroundSubagentHost({ sessions, compile: agentFor });
+    const host = new BackgroundSubagentHost({
+      sessions,
+      compile: agentFor,
+      ...(maxActive !== undefined && { maxActive }),
+    });
     return { sessions, host };
   }
 
@@ -280,6 +284,97 @@ describe('載體本身（假 agent）', () => {
     expect(await second.outcome).toEqual({ ok: true });
     await host.close();
     expect(() => host.start({ subagent: 'worker', text: '句' })).toThrow('已經關閉');
+  });
+
+  describe('並存上限（#836）', () => {
+    it('預設 8：第 9 個被拒絕、指名上限與現況，而且沒有編號、沒有日誌；前 8 個不受影響', async () => {
+      const hold = gate();
+      const { agent } = fakeAgent(async () => hold.opened);
+      const { host, sessions } = make(() => agent);
+      const started = Array.from({ length: 8 }, () =>
+        host.start({ subagent: 'worker', text: '句' }),
+      );
+      expect(() => host.start({ subagent: 'worker', text: '句' })).toThrow(
+        '背景子代理已達並存上限 8（現在有 8 個在跑）',
+      );
+      expect(sessions.list()).toHaveLength(9); // root＋8
+      hold.open();
+      for (const one of started) expect(await one.outcome).toEqual({ ok: true });
+      await host.close();
+    });
+
+    it('其中一個結算（跑完且沒有排著的輪次）就讓出名額；跑完之前不讓', async () => {
+      const holds = [gate(), gate()];
+      let n = 0;
+      const { agent } = fakeAgent(async () => holds[n++]?.opened);
+      const { host } = make(() => agent, 2);
+      const first = host.start({ subagent: 'worker', text: 'A' });
+      const second = host.start({ subagent: 'worker', text: 'B' });
+      expect(() => host.start({ subagent: 'worker', text: 'C' })).toThrow('並存上限 2');
+      holds[0]?.open();
+      await first.outcome;
+      const third = host.start({ subagent: 'worker', text: 'C' });
+      expect(third.runId).not.toBe(first.runId);
+      holds[1]?.open();
+      await Promise.all([second.outcome, third.outcome]);
+      await host.close();
+    });
+
+    it('已存活的再收一句話不佔新的一格（排在它後面的輪次），滿了也收得進去', async () => {
+      const hold = gate();
+      const { agent } = fakeAgent(async () => hold.opened);
+      const { host } = make(() => agent, 1);
+      const only = host.start({ subagent: 'worker', text: '第一句' });
+      const followUp = host.submit({ runId: only.runId, subagent: 'worker', text: '第二句' });
+      hold.open();
+      expect(await only.outcome).toEqual({ ok: true });
+      expect(await followUp).toEqual({ ok: true });
+      await host.close();
+    });
+
+    it('已結算的編號再收一句話要重新佔一格：滿了就被拒絕（不拋、不寫 turn/start）', async () => {
+      const hold = gate();
+      const { agent } = fakeAgent(async (text) => (text === '佔位' ? hold.opened : undefined));
+      const { host, sessions } = make(() => agent, 1);
+      const settled = host.start({ subagent: 'worker', text: '先做完' });
+      await settled.outcome;
+      const holder = host.start({ subagent: 'worker', text: '佔位' });
+      const refused = await host.submit({
+        runId: settled.runId,
+        subagent: 'worker',
+        text: '再來',
+      });
+      expect(refused).toMatchObject({ ok: false });
+      expect((refused as { error: string }).error).toContain('並存上限 1');
+      const log = sessions.get({ kind: 'subagent', runId: settled.runId });
+      expect(types(log!)).toEqual(['turn/start', 'turn/end']);
+      hold.open();
+      await holder.outcome;
+      // 名額讓出來之後就收得進去。
+      expect(await host.submit({ runId: settled.runId, subagent: 'worker', text: '再來' })).toEqual(
+        { ok: true },
+      );
+      await host.close();
+    });
+
+    it('每個主對話各算各的：兩個 host（兩個 root）互不占用名額', async () => {
+      const hold = gate();
+      const { agent } = fakeAgent(async () => hold.opened);
+      const a = make(() => agent, 1);
+      const b = make(() => agent, 1);
+      const inA = a.host.start({ subagent: 'worker', text: '句' });
+      const inB = b.host.start({ subagent: 'worker', text: '句' });
+      expect(() => a.host.start({ subagent: 'worker', text: '句' })).toThrow('並存上限 1');
+      hold.open();
+      await Promise.all([inA.outcome, inB.outcome]);
+      await Promise.all([a.host.close(), b.host.close()]);
+    });
+
+    it('上限要是 ≥ 1 的整數', () => {
+      for (const bad of [0, -1, 1.5, Number.NaN]) {
+        expect(() => make(() => fakeAgent().agent, bad)).toThrow('≥ 1 的整數');
+      }
+    });
   });
 
   it('同一個編號不能換子代理；關閉之後不收新的輪，但排著的與進行中的會收完', async () => {

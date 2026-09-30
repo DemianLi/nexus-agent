@@ -78,7 +78,8 @@ interface Options {
   readonly rootTurns: readonly ScriptedTurn[];
   readonly workerTurns: readonly ScriptedTurn[];
   /** `undefined`＝不給選項（今天的樣子）。 */
-  readonly background?: { readonly sandbox?: SandboxModeController } | undefined;
+  readonly background?:
+    { readonly sandbox?: SandboxModeController; readonly maxActive?: number } | undefined;
   readonly plugins?: readonly PluginEntry[];
   readonly backend?: ContainedFilesystemBackend;
   readonly flipTo?: SandboxModeController;
@@ -440,6 +441,60 @@ describe('背景（預設）：當場回編號，背景那一輪自己跑', () =
       await settle();
       expect(unhandled.map(String)).toEqual([]);
     } finally {
+      await run.close();
+    }
+  });
+});
+
+describe('並存上限（#836）', () => {
+  it('超過上限的那一個：模型收到指名上限的錯誤結果，沒有多開日誌；等第一個做完就派得出去', async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const holdPlugin: PluginEntry = {
+      plugin: {
+        name: 'hold-host',
+        apply(registry) {
+          registry.tools.register(
+            tool(async () => (await held, '放行了'), {
+              name: 'hold',
+              description: '等放行。',
+              schema: z.object({}),
+            }),
+          );
+        },
+      },
+    };
+    const two = {
+      content: '',
+      toolCalls: [
+        { name: 'subagent', args: { description: '甲', subagent_type: 'worker' } },
+        { name: 'subagent', args: { description: '乙', subagent_type: 'worker' } },
+      ],
+    };
+    const run = await assemble({
+      rootTurns: [two, { content: '根收尾' }, delegate(undefined, '丙'), { content: '第二輪收尾' }],
+      workerTurns: [call('hold', {}), { content: '甲做完' }, { content: '丙做完' }],
+      background: { maxActive: 1 },
+      plugins: [holdPlugin],
+    });
+    try {
+      const first = await run.say();
+      const texts = toolTexts(first.messages);
+      expect(texts[0]).toMatch(/子代理已在背景啟動，編號：bg-[0-9a-f]{12}/);
+      expect(texts[1]).toContain(TOOL_ERROR_PREFIX);
+      expect(texts[1]).toContain('背景子代理已達並存上限 1（現在有 1 個在跑）');
+      // 只開了一個日誌：被拒絕的沒有編號。
+      expect(run.backgroundLogs()).toHaveLength(1);
+      release();
+      await run.backgroundDone(run.backgroundLogs()[0]!);
+      await until(() => turnTypes(run.backgroundLogs()[0]!).includes('turn/end'));
+      // 名額讓出來了：同一個 thread 再派一個成功。
+      const second = await run.say('再派一個');
+      expect(toolTexts(second.messages).at(-1)).toMatch(/子代理已在背景啟動/);
+    } finally {
+      release();
       await run.close();
     }
   });
