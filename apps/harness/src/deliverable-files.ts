@@ -81,10 +81,23 @@ export type DeliverableRefusal =
 /** 成功，或一個講得出理由的拒絕。 */
 export type DeliverableResult<T> =
   | { readonly kind: 'ok'; readonly value: T }
-  | { readonly kind: 'refused'; readonly reason: DeliverableRefusal; readonly message: string };
+  | {
+      readonly kind: 'refused';
+      readonly reason: DeliverableRefusal;
+      readonly message: string;
+      /**
+       * `too-large` 才有：被超過的那個上限（位元組）。命令通道上 `deliverable/too-large` 帶它，照 dsh（#747）；
+       * 舊的 `GET` 路由只講 `message`，用不到。
+       */
+      readonly maxBytes?: number;
+    };
 
-function refuse<T>(reason: DeliverableRefusal, message: string): DeliverableResult<T> {
-  return { kind: 'refused', reason, message };
+function refuse<T>(
+  reason: DeliverableRefusal,
+  message: string,
+  maxBytes?: number,
+): DeliverableResult<T> {
+  return { kind: 'refused', reason, message, ...(maxBytes !== undefined && { maxBytes }) };
 }
 
 /**
@@ -238,6 +251,7 @@ export async function readDeliverableBytes(
       'too-large',
       `讀不到：${located.stat.path} 有 ${located.stat.bytes} 位元組，超過 ` +
         `${limits.maxFileBytes} 的上限。上限是拒絕，不是截斷。`,
+      limits.maxFileBytes,
     );
   }
   // **上限綁在讀本身，不是只綁在前面那次 stat 上。** 只看 stat 的話，兩次之間長大的檔就整份
@@ -257,6 +271,7 @@ export async function readDeliverableBytes(
       return refuse(
         'too-large',
         `讀不到：${located.stat.path} 讀的時候已經超過 ${limits.maxFileBytes} 的上限。`,
+        limits.maxFileBytes,
       );
     }
     return { kind: 'ok', value: buffer.subarray(0, bytesRead) };
@@ -410,6 +425,7 @@ export async function readDeliverablePage(
         'too-large',
         `讀不到：${located.stat.path} 從第 ${offset} 行起的這一頁超過 ${limits.maxBytes} 的上限。` +
           '上限是拒絕，不是截斷——切短的一頁看起來就是整頁。',
+        limits.maxBytes,
       );
     }
     if (error instanceof NotUtf8) {

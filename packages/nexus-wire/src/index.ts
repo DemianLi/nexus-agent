@@ -69,18 +69,43 @@ export type {
   WireErrorResponse,
 } from './protocol.js';
 export type {
+  BinaryAttachmentRef,
+  DeliverableBytes,
+  DeliverableCommand,
   DeliverableFileBytes,
   DeliverableFilePage,
   DeliverableFileStat,
+  DeliverableMethod,
+  DeliverableReadBytesCommand,
+  DeliverableReadBytesParams,
+  DeliverableReadBytesResult,
+  DeliverableReadCommand,
+  DeliverableReadError,
+  DeliverableReadParams,
+  DeliverableReadResult,
+  DeliverableRefusalCode,
   DeliverablesPresentedPayload,
   WirePresentedFile,
 } from './deliverables.js';
 export {
+  DELIVERABLE_METHODS,
+  DELIVERABLE_READ_BYTES_METHOD,
+  DELIVERABLE_READ_METHOD,
   deliverableBytesPath,
   deliverableDownloadPath,
   deliverableFilePath,
   DELIVERABLES_PRESENTED,
+  decodeBinaryResult,
+  encodeBinaryResult,
+  isBinaryResponse,
+  isDeliverableMethod,
 } from './deliverables.js';
+export type {
+  DeliverableClient,
+  DeliverableClientOptions,
+  DeliverableOutcome,
+} from './deliverable-client.js';
+export { createDeliverableClient } from './deliverable-client.js';
 export type {
   WorkspaceChangedFile,
   WorkspaceChangesPayload,

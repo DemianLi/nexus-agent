@@ -29,7 +29,7 @@
 
 import { open } from 'node:fs/promises';
 
-import type { DeliverableFileBytes } from '@nexus/wire';
+import type { DeliverableBytes, DeliverableFileBytes } from '@nexus/wire';
 
 import type { DeliverableResult, LocatedDeliverable } from './deliverable-files.js';
 import type { DeliverableFilesConfig } from './settings/deliverable-files.js';
@@ -65,6 +65,7 @@ export function resolveDeliverableWindow(
       kind: 'refused',
       reason: 'too-large',
       message: `要的 ${length} 位元組超過 ${limits.maxBytes} 的上限。上限是拒絕，不是截斷。`,
+      maxBytes: limits.maxBytes,
     };
   }
   return { kind: 'ok', value: { offset, length } };
@@ -84,6 +85,25 @@ export async function readDeliverableWindow(
   located: LocatedDeliverable,
   window: DeliverableWindow,
 ): Promise<DeliverableResult<DeliverableFileBytes>> {
+  const read = await readDeliverableWindowBytes(located, window);
+  if (read.kind === 'refused') return read;
+  const { data, ...rest } = read.value;
+  return { kind: 'ok', value: { ...rest, data: Buffer.from(data).toString('base64') } };
+}
+
+/**
+ * {@link readDeliverableWindow} 的核心，**位元組不轉成 base64**（[#747](https://github.com/DemianLi/nexus-agent/issues/747)）：
+ * 命令通道上的 `deliverable.readBytes` 直接帶位元組（多段表單），舊的 `GET` 路由才在外面轉 base64。
+ * 兩條路共用這一份，窗口怎麼切、切到哪裡是 `eof` 只有一個答案。
+ *
+ * @param located - 已經通過閘門的檔。
+ * @param window - 驗過的窗口。
+ * @returns 那個窗口，或拒絕。
+ */
+export async function readDeliverableWindowBytes(
+  located: LocatedDeliverable,
+  window: DeliverableWindow,
+): Promise<DeliverableResult<DeliverableBytes>> {
   const { offset, length } = window;
   let handle: Awaited<ReturnType<typeof open>>;
   try {
@@ -108,7 +128,7 @@ export async function readDeliverableWindow(
       value: {
         ...located.stat,
         offset,
-        data: buffer.subarray(0, filled).toString('base64'),
+        data: buffer.subarray(0, filled),
         eof: offset + filled >= located.stat.bytes,
       },
     };

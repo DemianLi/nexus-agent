@@ -49,6 +49,10 @@ import type {
   WireErrorCode,
   WireChannel,
   FeedbackMethod,
+  DeliverableBytes,
+  DeliverableMethod,
+  DeliverableReadError,
+  DeliverableRefusalCode,
   WireFeedbackCategory,
   WireFeedbackItem,
 } from '@nexus/wire';
@@ -61,10 +65,13 @@ import {
   deliverableBytesPath,
   deliverableDownloadPath,
   deliverableFilePath,
+  DELIVERABLE_READ_METHOD,
+  encodeBinaryResult,
   encodeSseData,
   encodeSseFrame,
   errorResponse,
   fileReferencesPath,
+  isDeliverableMethod,
   isFeedbackMethod,
   isQueueUpdateMethod,
   isRpcMethod,
@@ -105,7 +112,11 @@ import {
   readDeliverableBytes,
   readDeliverablePage,
 } from './deliverable-files.js';
-import { readDeliverableWindow, resolveDeliverableWindow } from './deliverable-window.js';
+import {
+  readDeliverableWindow,
+  readDeliverableWindowBytes,
+  resolveDeliverableWindow,
+} from './deliverable-window.js';
 import { listFileReferences, WorkspaceFileSearch } from './file-references.js';
 import {
   deliverableFilesConfigSchema,
@@ -507,6 +518,46 @@ const DELIVERABLE_STATUS: Readonly<Record<DeliverableRefusal, number>> = {
   // 與「這個檔是二進位、改給下載鈕」，而那是兩個完全不同的修法。
   'not-text': 422,
 };
+
+/**
+ * 一個拒絕的理由對到命令通道上的哪個碼（[#747](https://github.com/DemianLi/nexus-agent/issues/747)）。
+ *
+ * **值域是 wire 的 {@link DeliverableRefusalCode}**：寫一個 wire 沒有的字串當場編不過，而 wire 的碼清單是網頁分畫面的依據。
+ * `bad-request` 不在裡面：參數本身不合格照 dsh 算閘道層的錯，回協定錯誤 `invalid_argument`，見 {@link deliverableFailure}。
+ */
+const DELIVERABLE_REFUSAL_CODE: Readonly<
+  Record<Exclude<DeliverableRefusal, 'bad-request'>, DeliverableRefusalCode>
+> = {
+  'no-anchor': 'deliverable/no-anchor',
+  'not-found': 'deliverable/not-found',
+  'not-regular-file': 'deliverable/not-regular-file',
+  'too-large': 'deliverable/too-large',
+  'not-text': 'deliverable/not-text',
+};
+
+/**
+ * 命令通道上的交付檔拒絕：業務上的拒絕是成功回應裡的 `{ ok: false, error: { code, … } }`（同回饋那幾支），
+ * 參數不合格是協定錯誤 `invalid_argument`（dsh 的 `gateway/bad-request`）。`too-large` 帶上限數字，照 dsh。
+ */
+function deliverableFailure(
+  id: number,
+  refused: {
+    readonly reason: DeliverableRefusal;
+    readonly message: string;
+    readonly maxBytes?: number;
+  },
+): Response {
+  if (refused.reason === 'bad-request') {
+    return json(errorResponse(id, 'invalid_argument', refused.message));
+  }
+  const code = DELIVERABLE_REFUSAL_CODE[refused.reason];
+  const error: DeliverableReadError =
+    code === 'deliverable/too-large'
+      ? // 每個 `too-large` 的產生處都帶上限（頁、窗口、整檔三處由 `deliverable-files.test.ts` 釘住，整檔讀的當下長大那一處用同一個數字）；沒帶是那邊漏了，不是這裡編一個。
+        { code, message: refused.message, maxBytes: refused.maxBytes ?? Number.NaN }
+      : { code, message: refused.message };
+  return json(successResponse(id, { ok: false, error }));
+}
 
 /** 交付那幾條路由的拒絕：協定同 `changes`，裸 status ＋純文字 ＋不快取。 */
 function deliverableRefused(result: {
@@ -1007,6 +1058,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         thread?.pump.cancel();
       }
       return json(successResponse(envelope.id, { accepted: true }));
+    }
+    if (isDeliverableMethod(method)) {
+      return handleDeliverableCommand(threadId, method, envelope.id, body);
     }
     if (isFeedbackMethod(method)) {
       // 評分與評語（#278）：**不經 `threadFor`**，同 `run.cancel`——評的是這條 thread 上已經出現過
@@ -1581,8 +1635,18 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     threadId: string,
     search: URLSearchParams,
   ): Promise<DeliverableResult<LocatedDeliverable>> {
-    const seq = coordinate(search.get('seq'));
-    const index = coordinate(search.get('index'));
+    return locateAt(threadId, coordinate(search.get('seq')), coordinate(search.get('index')));
+  }
+
+  /**
+   * {@link locateRequested} 的核心，座標已經從載體讀出來了：舊的 `GET` 從查詢字串，命令通道（#747）從 `params`。
+   * **只換參數從哪裡讀**，挑錨、找檔、上限這些判定只有這一份。
+   */
+  async function locateAt(
+    threadId: string,
+    seq: number | undefined,
+    index: number | undefined,
+  ): Promise<DeliverableResult<LocatedDeliverable>> {
     if (seq === undefined || index === undefined) {
       return { kind: 'refused', reason: 'bad-request', message: '交付檔的座標不對。' };
     }
@@ -1629,6 +1693,77 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     const declared = locateDeliverable(state.pump.sessionLog.events, seq, index);
     if (declared.kind === 'refused') return declared;
     return locateDeliverableFile(root, declared.value);
+  }
+
+  /**
+   * 命令通道上的交付檔讀取（[#747](https://github.com/DemianLi/nexus-agent/issues/747)）：`deliverable.read` 與
+   * `deliverable.readBytes`，契約與理由見 `@nexus/wire` 的 `DELIVERABLE_READ_METHOD`。
+   *
+   * **不經 `threadFor`**，同 `run.cancel` 與回饋：讀的是這條 thread 已經宣告過的檔，沒開過的 thread 沒有東西可讀，
+   * 不為了回一個 `no-anchor` 建一個 agent。挑錨、找檔、上限全部走 {@link locateAt} 與 `deliverable-files.ts`，
+   * 跟三條舊網址是同一份判定。
+   */
+  async function handleDeliverableCommand(
+    threadId: string,
+    method: DeliverableMethod,
+    id: number,
+    body: unknown,
+  ): Promise<Response> {
+    const params = (body as { params?: unknown }).params;
+    if (typeof params !== 'object' || params === null || Array.isArray(params)) {
+      return json(errorResponse(id, 'invalid_argument', `${method} 缺 params`));
+    }
+    const fields = params as Record<string, unknown>;
+    const count = (value: unknown): number | undefined =>
+      typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+    const seq = count(fields.seq);
+    const index = count(fields.index);
+    if (seq === undefined || index === undefined) {
+      return json(errorResponse(id, 'invalid_argument', '交付檔的座標不對。'));
+    }
+    // 沒給的欄位取預設；**給了卻不是非負整數**是參數不合格，不悄悄當沒給。
+    const optional = (name: string, fallback: number): number | undefined =>
+      fields[name] === undefined ? fallback : count(fields[name]);
+
+    if (method === DELIVERABLE_READ_METHOD) {
+      const offset = optional('offset', 0);
+      // 沒給 `limit` 就是那一列講的上限，理由同 `handleDeliverableFile`。
+      const limit = optional('limit', deliverableLimits.maxLines);
+      if (offset === undefined || limit === undefined) {
+        return json(errorResponse(id, 'invalid_argument', '交付檔的翻頁參數不對。'));
+      }
+      const found = await locateAt(threadId, seq, index);
+      if (found.kind === 'refused') return deliverableFailure(id, found);
+      const page = await readDeliverablePage(found.value, deliverableLimits, offset, limit);
+      if (page.kind === 'refused') return deliverableFailure(id, page);
+      return json(successResponse(id, { ok: true, value: page.value }));
+    }
+
+    // `deliverable.readBytes`：**給 `offset`／`length` 就是窗口，都不給是整檔**（下載）。
+    const windowed = fields.offset !== undefined || fields.length !== undefined;
+    let value: DeliverableBytes;
+    if (windowed) {
+      const offset = optional('offset', 0);
+      const length = optional('length', deliverableLimits.maxBytes);
+      if (offset === undefined || length === undefined) {
+        return json(errorResponse(id, 'invalid_argument', '交付檔的位元組窗口參數不對。'));
+      }
+      // 窗口參數先驗、再找檔，同 `handleDeliverableBytes`。
+      const window = resolveDeliverableWindow(offset, length, deliverableLimits);
+      if (window.kind === 'refused') return deliverableFailure(id, window);
+      const found = await locateAt(threadId, seq, index);
+      if (found.kind === 'refused') return deliverableFailure(id, found);
+      const read = await readDeliverableWindowBytes(found.value, window.value);
+      if (read.kind === 'refused') return deliverableFailure(id, read);
+      value = read.value;
+    } else {
+      const found = await locateAt(threadId, seq, index);
+      if (found.kind === 'refused') return deliverableFailure(id, found);
+      const bytes = await readDeliverableBytes(found.value, deliverableLimits);
+      if (bytes.kind === 'refused') return deliverableFailure(id, bytes);
+      value = { ...found.value.stat, offset: 0, data: bytes.value, eof: true };
+    }
+    return encodeBinaryResult(id, value);
   }
 
   /**
