@@ -522,6 +522,105 @@ describe('list_agents 只給 root（#837）', () => {
   });
 });
 
+describe('interrupt_agent（#838）', () => {
+  it('模型叫它：只停那個子代理當下那一輪——慢工具落定後結果換成 aborted、之後不再叫模型；日誌收成 aborted/parent；父輪不受影響', async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const holdPlugin: PluginEntry = {
+      plugin: {
+        name: 'hold-host',
+        apply(registry) {
+          registry.tools.register(
+            tool(
+              async () => {
+                entered();
+                await held;
+                return '放行了';
+              },
+              { name: 'hold', description: '等放行。', schema: z.object({}) },
+            ),
+          );
+        },
+      },
+    };
+    // root 的第二段要等編號出來才寫得出來，所以腳本是活的陣列。
+    const rootTurns: ScriptedTurn[] = [delegate(undefined), { content: '根收尾' }];
+    const run = await assemble({
+      rootTurns,
+      workerTurns: [call('hold', {}), { content: '不該走到這一步' }],
+      background: {},
+      plugins: [holdPlugin],
+    });
+    try {
+      const first = await run.say();
+      const id = /bg-[0-9a-f]{12}/.exec(toolTexts(first.messages)[0] ?? '')?.[0];
+      expect(id).toBeDefined();
+      await started;
+      rootTurns.push(call('interrupt_agent', { agent_id: id! }), { content: '已請它停' });
+      const second = await run.say('停掉它');
+      expect(toolTexts(second.messages).at(-1)).toBe(`interrupt requested for agent ${id}`);
+
+      // 同步回：此刻工具還沒落定，那一輪還沒收。
+      const [log] = run.backgroundLogs();
+      expect(log!.events.some((event) => event.type === 'turn/end')).toBe(false);
+      release();
+      await run.backgroundDone(log!);
+
+      expect(log!.events.find((event) => event.type === 'turn/end')?.data).toEqual({
+        reason: { kind: 'aborted', cause: { kind: 'parent' } },
+      });
+      const result = log!.events.find((event) => event.type === 'tool/result');
+      expect((result?.data as { isError?: boolean }).isError).toBe(true);
+      expect(JSON.stringify(result?.data)).toContain('tool call aborted');
+      // 中止之後一步都不再開：worker 只叫過一次模型。
+      expect(run.workerModel.prompts).toHaveLength(1);
+      await settle();
+      expect(unhandled).toEqual([]);
+    } finally {
+      release();
+      await run.close();
+    }
+  });
+
+  it('未知的編號：被接受的 no-op，回同一句、什麼都沒發生（不能靠回應試探編號）', async () => {
+    const run = await assemble({
+      rootTurns: [call('interrupt_agent', { agent_id: 'bg-000000000000' }), { content: '好' }],
+      workerTurns: [],
+      background: {},
+    });
+    try {
+      const result = await run.say();
+      expect(toolTexts(result.messages)[0]).toBe('interrupt requested for agent bg-000000000000');
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('只給 root：子代理叫它會被拒絕樁擋下', async () => {
+    const run = await assemble({
+      rootTurns: [delegate(undefined), { content: '根收尾' }],
+      workerTurns: [call('interrupt_agent', { agent_id: 'bg-000000000000' }), { content: '收工' }],
+      background: {},
+    });
+    try {
+      await run.say();
+      await until(() => run.backgroundLogs().length === 1);
+      await run.backgroundDone(run.backgroundLogs()[0]!);
+      const seen = toolTexts(run.workerModel.prompts.at(-1)!).at(-1) ?? '';
+      expect(seen).toContain(TOOL_ERROR_PREFIX);
+      expect(seen).not.toContain('interrupt requested');
+    } finally {
+      await run.close();
+    }
+  });
+});
+
 describe('並存上限（#836）', () => {
   it('超過上限的那一個：模型收到指名上限的錯誤結果，沒有多開日誌；等第一個做完就派得出去', async () => {
     let release: () => void = () => undefined;

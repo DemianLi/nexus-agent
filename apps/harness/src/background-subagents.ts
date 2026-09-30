@@ -38,7 +38,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { HumanMessage } from '@langchain/core/messages';
-import { BACKGROUND_SESSION_CONFIG_KEY } from '@nexus/core';
+import { BACKGROUND_SESSION_CONFIG_KEY, TURN_CANCEL_CONFIG_KEY } from '@nexus/core';
 import type { SessionLog, SessionRegistry } from '@nexus/core';
 
 import { BACKGROUND_RUN_PREFIX } from './background-run-id.js';
@@ -114,6 +114,13 @@ export class BackgroundSubagentHost {
   readonly #known = new Map<string, string>();
   readonly #queue: Job[] = [];
   readonly #busy = new Set<string>();
+  /** 正在跑的那一輪的中止控制器（每輪一個，跑完就丟）。`interrupt` 只舉這一個。 */
+  readonly #running = new Map<string, AbortController>();
+  /**
+   * 被中斷之後暫停的：它排著的輪次不丟、也不開跑，等下一次 `submit` 才恢復（dsh：被中斷的 driver 進入 idle 後，
+   * 一次喚醒發送會恢復被暫停的 FIFO 佇列，`docs/subsystems/subagent.zh.md:152` 附近）。
+   */
+  readonly #paused = new Set<string>();
   readonly #inflight = new Set<Promise<void>>();
   #wake: (() => void) | undefined;
   #closed = false;
@@ -157,6 +164,8 @@ export class BackgroundSubagentHost {
       });
     }
     this.#known.set(input.runId, input.subagent);
+    // 一次新的送話喚醒被中斷後暫停的佇列（排在前面的照舊先跑）。
+    this.#paused.delete(input.runId);
     return new Promise((settle) => {
       this.#queue.push({ ...input, settle });
       this.#wake?.();
@@ -189,6 +198,26 @@ export class BackgroundSubagentHost {
     while (this.#known.has(runId));
     this.#sessions.open({ kind: 'subagent', runId });
     return { runId, outcome: this.submit({ runId, ...input }) };
+  }
+
+  /**
+   * 只停這個背景子代理**當下那一輪**（[#838](https://github.com/DemianLi/nexus-agent/issues/838)，dsh
+   * `SubagentRuntime.interrupt`，`477b4f4`）。同步、不等停穩就回。
+   *
+   * - 舉的是那一輪自己的控制器，經 `TURN_CANCEL_CONFIG_KEY` 走合作式中止（等落定中的工具、不開新的、模型請求切斷）；
+   *   **不是 root 的訊號**，root 按停止照舊不連帶它。
+   * - 它**排著還沒領走的輪次不丟**，但暫停到下一次 `submit`。
+   * - 不存在的編號、沒在跑的（已結算或只排著）：被接受的 no-op，回 `false`（dsh 明寫，不是錯誤）。
+   *
+   * @returns 有舉起一輪的中止就是 `true`。
+   */
+  interrupt(runId: string): boolean {
+    const controller = this.#running.get(runId);
+    if (controller === undefined) return false;
+    if (controller.signal.aborted) return true;
+    this.#paused.add(runId);
+    controller.abort();
+    return true;
   }
 
   /**
@@ -239,8 +268,19 @@ export class BackgroundSubagentHost {
     await this.#loop;
   }
 
+  /** 關閉之後：被中斷而暫停的輪次不會再有人喚醒，當作沒跑成交出去，免得 `close()` 永遠等。 */
+  #dropPaused(): void {
+    for (let index = this.#queue.length - 1; index >= 0; index -= 1) {
+      const job = this.#queue[index]!;
+      if (!this.#paused.has(job.runId)) continue;
+      this.#queue.splice(index, 1);
+      job.settle({ ok: false, error: '這個背景子代理被中斷後沒有再收到訊息，這一輪沒有跑' });
+    }
+  }
+
   async #run(): Promise<void> {
     for (;;) {
+      if (this.#closed) this.#dropPaused();
       const job = this.#takeRunnable();
       if (job !== undefined) {
         // 從**迴圈**的環境拉起，不是從呼叫 `submit` 的環境。
@@ -265,7 +305,9 @@ export class BackgroundSubagentHost {
 
   /** 排隊裡第一個「它的子代理現在沒在跑」的。 */
   #takeRunnable(): Job | undefined {
-    const index = this.#queue.findIndex((job) => !this.#busy.has(job.runId));
+    const index = this.#queue.findIndex(
+      (job) => !this.#busy.has(job.runId) && !this.#paused.has(job.runId),
+    );
     if (index < 0) return undefined;
     return this.#queue.splice(index, 1)[0];
   }
@@ -281,11 +323,18 @@ export class BackgroundSubagentHost {
   async #round(job: Job): Promise<BackgroundRoundOutcome> {
     let outcome: BackgroundRoundOutcome;
     let log: SessionLog | undefined;
+    // 這一輪自己的中止控制器：`interrupt` 只舉它。跑完（不論怎麼結束）就丟。
+    const controller = new AbortController();
+    this.#running.set(job.runId, controller);
     try {
       log = this.#sessions.open({ kind: 'subagent', runId: job.runId });
       log.append('turn/start', { kind: 'message', text: job.text });
-      await this.#enter(log, () => this.#drive(log!, job));
-      log.append('turn/end', {});
+      await this.#enter(log, () => this.#drive(log!, job, controller.signal));
+      // 被父代理中斷的那一輪收成 aborted/parent；沒被中斷就是正常結束。
+      log.append(
+        'turn/end',
+        controller.signal.aborted ? { reason: { kind: 'aborted', cause: { kind: 'parent' } } } : {},
+      );
       outcome = { ok: true };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -299,6 +348,8 @@ export class BackgroundSubagentHost {
         }
       }
       outcome = { ok: false, error: message };
+    } finally {
+      this.#running.delete(job.runId);
     }
     return outcome;
   }
@@ -311,15 +362,18 @@ export class BackgroundSubagentHost {
     }
   }
 
-  async #drive(log: SessionLog, job: Job): Promise<void> {
+  async #drive(log: SessionLog, job: Job, cancel: AbortSignal): Promise<void> {
     const run = await this.#agentFor(job.subagent).streamEvents(
       { messages: [new HumanMessage(job.text)] } as never,
       {
         version: 'v3',
-        // **只給明確的鍵**：不靠隱式繼承，也不帶 root 的中止訊號（見檔頭）。
+        // **只給明確的鍵**：不靠隱式繼承，也不帶 root 的中止訊號（見檔頭）。中止訊號是這一輪自己的
+        // （`interrupt` 舉的那個），走合作式的 `TURN_CANCEL_CONFIG_KEY`，不交給 LangGraph 的 `signal`
+        // （後者會丟下工具，見 `turn-cancel.ts` 檔頭）。
         configurable: {
           thread_id: log.sessionId,
           [BACKGROUND_SESSION_CONFIG_KEY]: job.runId,
+          [TURN_CANCEL_CONFIG_KEY]: cancel,
         },
       },
     );

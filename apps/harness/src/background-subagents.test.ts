@@ -102,8 +102,9 @@ describe('載體本身（假 agent）', () => {
     expect(seen[0]?.configurable).toEqual({
       thread_id: 'root-1/bg-1',
       [BACKGROUND_SESSION_CONFIG_KEY]: 'bg-1',
+      // 這一輪自己的中止訊號（`interrupt` 舉的那個，#838），不是 root 的。
+      [TURN_CANCEL_CONFIG_KEY]: expect.any(AbortSignal),
     });
-    expect(seen[0]?.configurable).not.toHaveProperty(TURN_CANCEL_CONFIG_KEY);
     await host.close();
   });
 
@@ -304,6 +305,127 @@ describe('載體本身（假 agent）', () => {
     await slow.outcome;
     expect(mine.host.list().map((row) => row.status)).toEqual(['inactive', 'inactive']);
     await Promise.all([mine.host.close(), theirs.host.close()]);
+  });
+
+  describe('interrupt（#838）', () => {
+    /** 假 agent：腳本拿到這一輪的中止訊號，可以等它舉起來再收。 */
+    function abortable(script: (text: string, signal: AbortSignal) => Promise<void> | void) {
+      const agent: BackgroundAgent = {
+        async streamEvents(input, config) {
+          const text = String(
+            (input as { messages: { content: unknown }[] }).messages.at(-1)?.content,
+          );
+          const signal = config.configurable?.[TURN_CANCEL_CONFIG_KEY] as AbortSignal;
+          await script(text, signal);
+          return (async function* () {})() as never;
+        },
+      };
+      return agent;
+    }
+    const waitAbort = (signal: AbortSignal) =>
+      new Promise<void>((resolve) => {
+        if (signal.aborted) resolve();
+        else signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+
+    it('每一輪自己的中止訊號進 configurable；只舉那一輪的，收成 aborted/parent，不是 turn/failed', async () => {
+      const entered = gate();
+      const agent = abortable(async (text, signal) => {
+        if (text === '慢') {
+          entered.open();
+          await waitAbort(signal);
+        }
+      });
+      const { host, sessions } = make(() => agent);
+      const slow = host.start({ subagent: 'worker', text: '慢' });
+      const other = host.start({ subagent: 'worker', text: '快' });
+      await entered.opened;
+      expect(host.interrupt(slow.runId)).toBe(true);
+      expect(await slow.outcome).toEqual({ ok: true });
+      expect(await other.outcome).toEqual({ ok: true });
+      const slowLog = sessions.get({ kind: 'subagent', runId: slow.runId })!;
+      expect(slowLog.events.find((event) => event.type === 'turn/end')?.data).toEqual({
+        reason: { kind: 'aborted', cause: { kind: 'parent' } },
+      });
+      // 別的子代理那一輪不受影響。
+      const otherLog = sessions.get({ kind: 'subagent', runId: other.runId })!;
+      expect(otherLog.events.find((event) => event.type === 'turn/end')?.data).toEqual({});
+      await host.close();
+    });
+
+    it('不存在的、已結算的編號：被接受的 no-op（回 false），什麼都沒發生', async () => {
+      const { agent } = fakeAgent();
+      const { host, sessions } = make(() => agent);
+      expect(host.interrupt('bg-nobody')).toBe(false);
+      const done = host.start({ subagent: 'worker', text: '句' });
+      await done.outcome;
+      expect(host.interrupt(done.runId)).toBe(false);
+      const log = sessions.get({ kind: 'subagent', runId: done.runId })!;
+      expect(types(log)).toEqual(['turn/start', 'turn/end']);
+      expect(log.events.find((event) => event.type === 'turn/end')?.data).toEqual({});
+      await host.close();
+    });
+
+    it('排著還沒領走的輪次不丟：中斷之後暫停，下一次 submit 才恢復（排在前面的先跑）', async () => {
+      const entered = gate();
+      const order: string[] = [];
+      const agent = abortable(async (text, signal) => {
+        order.push(text);
+        if (text === 'A1') {
+          entered.open();
+          await waitAbort(signal);
+        }
+      });
+      const { host } = make(() => agent);
+      const first = host.start({ subagent: 'worker', text: 'A1' });
+      const queued = host.submit({ runId: first.runId, subagent: 'worker', text: 'A2' });
+      await entered.opened;
+      host.interrupt(first.runId);
+      await first.outcome;
+      await settle();
+      // 暫停：A2 沒有被丟，也沒有開跑。
+      expect(order).toEqual(['A1']);
+      const resumed = host.submit({ runId: first.runId, subagent: 'worker', text: 'A3' });
+      expect(await queued).toEqual({ ok: true });
+      expect(await resumed).toEqual({ ok: true });
+      expect(order).toEqual(['A1', 'A2', 'A3']);
+      await host.close();
+    });
+
+    it('暫停中就關閉：排著的輪次當作沒跑成交出去，close() 不會永遠等', async () => {
+      const entered = gate();
+      const agent = abortable(async (text, signal) => {
+        if (text === 'A1') {
+          entered.open();
+          await waitAbort(signal);
+        }
+      });
+      const { host, sessions } = make(() => agent);
+      const first = host.start({ subagent: 'worker', text: 'A1' });
+      const queued = host.submit({ runId: first.runId, subagent: 'worker', text: 'A2' });
+      await entered.opened;
+      host.interrupt(first.runId);
+      await first.outcome;
+      await host.close();
+      expect(await queued).toMatchObject({ ok: false });
+      expect(types(sessions.get({ kind: 'subagent', runId: first.runId })!)).toEqual([
+        'turn/start',
+        'turn/end',
+      ]);
+    });
+
+    it('root 按停止（root 的訊號）不連帶：configurable 裡的中止訊號是這一輪自己的，不是別人的', async () => {
+      const signals: AbortSignal[] = [];
+      const agent = abortable((_text, signal) => void signals.push(signal));
+      const { host } = make(() => agent);
+      const root = new AbortController();
+      await als.run({ from: 'root' }, () =>
+        host.submit({ runId: 'bg-1', subagent: 'worker', text: '句' }),
+      );
+      root.abort();
+      expect(signals[0]?.aborted).toBe(false);
+      await host.close();
+    });
   });
 
   describe('並存上限（#836）', () => {
@@ -564,13 +686,16 @@ describe('產品組裝上的背景子代理', () => {
 
       expect(run.looked).toHaveLength(2);
       for (const seen of run.looked) {
-        // root 的中止訊號、插話收件匣都沒有進背景圖。
-        expect(seen[TURN_CANCEL_CONFIG_KEY]).toBeUndefined();
+        // root 的插話收件匣沒有進背景圖；中止訊號是這一輪自己的，每一輪一個（下面比對兩輪不是同一個）。
+        expect(seen[TURN_CANCEL_CONFIG_KEY]).toBeInstanceOf(AbortSignal);
         expect(seen['nexus_step_inbox']).toBeUndefined();
         expect(seen[BACKGROUND_SESSION_CONFIG_KEY]).toBe('bg-1');
         // 最上層的圖，命名空間只有一段。
         expect(String(seen['checkpoint_ns']).includes('|')).toBe(false);
       }
+      expect(run.looked[0]?.[TURN_CANCEL_CONFIG_KEY]).not.toBe(
+        run.looked[1]?.[TURN_CANCEL_CONFIG_KEY],
+      );
       // 第二輪的模型呼叫看得到第一輪的話。
       const backgroundPrompts = run.model.prompts
         .map(humanTexts)

@@ -55,6 +55,8 @@ import type { BackgroundAgent } from './background-subagents.js';
 export const SUBAGENT_TOOL_NAME = 'subagent';
 /** 列出自己派出的背景子代理（dsh `tool-subagent-control/src/list-agents.ts`，`477b4f4`）。 */
 export const LIST_AGENTS_TOOL_NAME = 'list_agents';
+/** 只停一個背景子代理當下那一輪（dsh `tool-subagent-control/src/index.ts`，`477b4f4`）。 */
+export const INTERRUPT_AGENT_TOOL_NAME = 'interrupt_agent';
 /** 被換掉的基座委派工具。 */
 const BASE_DELEGATION_TOOL_NAME = 'task';
 
@@ -152,6 +154,7 @@ export class BackgroundDelegation {
           registry.middleware.use(this.#middleware(), { prepend: true });
           // 只在 root：子代理不派子代理，也不該去列別人派的。
           registry.tools.register(this.#listAgentsTool(), { rootOnly: true });
+          registry.tools.register(this.#interruptAgentTool(), { rootOnly: true });
         },
       },
     };
@@ -200,6 +203,39 @@ export class BackgroundDelegation {
           'You will be notified when a subagent finishes; there is no need to keep checking its status. ' +
           'Use send_message to continue the conversation.',
         schema: z.object({}),
+      },
+    );
+  }
+
+  /**
+   * `interrupt_agent`：只停該背景子代理當下那一輪，**不等它停穩就回**。名字、描述與參數逐字照 dsh
+   * （`tool-subagent-control/src/index.ts`）。
+   *
+   * 不存在的、沒在跑的、別人（別的主對話）的編號都是被接受的 no-op，照樣回同一句（dsh 明寫，也讓模型
+   * 不能藉由回應試探編號）。host 是這個主對話的，別人的編號在這裡本來就不存在。
+   * 描述裡「用 send_message 接著談」是 dsh 原文，對應機制是 #839。
+   */
+  #interruptAgentTool() {
+    return tool(
+      ({ agent_id }: { agent_id: string }) => {
+        const host = this.#host;
+        if (host === undefined) throw new Error('背景子代理還沒接上會話，停不了');
+        host.interrupt(agent_id);
+        return `interrupt requested for agent ${agent_id}`;
+      },
+      {
+        name: INTERRUPT_AGENT_TOOL_NAME,
+        description:
+          'Ask a subagent to stop its current work. This call returns without waiting for it to stop. ' +
+          "You can continue a direct child's conversation later with send_message. " +
+          'Subagents it started will keep running.',
+        schema: z.object({
+          agent_id: z
+            .string()
+            .describe(
+              'The id of an agent created under you: your direct child or a deeper descendant.',
+            ),
+        }),
       },
     );
   }
