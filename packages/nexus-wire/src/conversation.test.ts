@@ -901,12 +901,12 @@ describe('背景子代理的歸屬（#832）', () => {
     expect(attributionOf(otherTool, 'bg-1').kind).toBe('unattributed');
   });
 
-  it('前景：subagent 內部派給 task，靠 task 的 tool-started 歸屬，鑰匙用不到', () => {
+  it('前景：subagent 內部派給 task（同一個 tool_call_id），靠 task 的 tool-started 歸屬，鑰匙用不到', () => {
     const state = reduceAll(emptyConversation(), [
       dispatch('root-1'),
       frame('tools', ['tools:abc'], {
         event: 'tool-started',
-        tool_call_id: 'inner-task',
+        tool_call_id: 'root-1',
         tool_name: 'task',
         input: JSON.stringify({ description: '幹活', subagent_type: 'worker' }),
       }),
@@ -920,7 +920,10 @@ describe('背景子代理的歸屬（#832）', () => {
     expect(attributionOf(state, 'fg-1')).toEqual({
       kind: 'subagent',
       name: 'worker',
-      callId: 'inner-task',
+      callId: 'root-1',
     });
+    // 同一個 id 來第二次是續行：root 那張卡還是 subagent、歸 root，不被內層的 task 改寫。
+    const root = state.entries.find((entry) => entry.id === 'tool-root-1');
+    expect(root).toMatchObject({ kind: 'tool', name: 'subagent', attribution: { kind: 'root' } });
   });
 });

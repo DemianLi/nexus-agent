@@ -1106,8 +1106,9 @@ function subagentTypeOf(input: string | undefined): string | undefined {
  * **而且已經到了的也追溯過去**（#832）。
  *
  * 追溯不是裝飾：背景那一輪從日誌開的卡和派出去的那顆呼叫收尾誰先到，取決於 pump 怎麼排，
- * 先到的卡若永遠停在「未歸屬」，畫面就取決於一個沒人保證的順序。重新整理（歷史重播）走的是另一個順序，
- * 同理。
+ * 先到的卡若永遠停在「未歸屬」，畫面就取決於一個沒人保證的順序。歷史重播的順序另有一套（背景卡
+ * 在重播裡會不會出現見卡 [#737](https://github.com/DemianLi/nexus-agent/issues/737) 的第 7 張），
+ * 但歸屬一樣只由這顆的 meta 決定，與到達順序無關。
  */
 function attributeBackground(state: ConversationState, data: ToolData): ConversationState {
   const entry = state.entries.find((candidate) => candidate.id === `tool-${data.tool_call_id}`);
@@ -1138,7 +1139,7 @@ function reduceTool(
 
   if (data.event === 'tool-started') {
     const name = data.tool_name ?? '(未指名的工具)';
-    const subagent = DELEGATION_TOOL_NAMES.includes(name) ? subagentTypeOf(data.input) : undefined;
+    const subagent = name === 'task' ? subagentTypeOf(data.input) : undefined;
     const key = namespace[0];
     // 這一顆就是歸屬的鑰匙：之後掛在同一個 namespace 底下的東西都是這個 subagent 的。
     const subagents =

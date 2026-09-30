@@ -186,8 +186,9 @@ describe('前景：照今天的路徑歸屬', () => {
       expect(root.name).toBe('subagent');
       expect(root.meta).toBeUndefined();
       const inner = toolEntry(state, 'fg-call');
-      expect(inner.attribution.kind).toBe('subagent');
-      expect(inner.attribution).toMatchObject({ name: 'worker' });
+      // 前景改派時 `task` 收到的是同一個 `tool_call_id`：歸屬的 callId 指回 root 那張 `subagent` 卡。
+      expect(inner.attribution).toEqual({ kind: 'subagent', name: 'worker', callId: 'root-call' });
+      expect(Object.values(state.subagents)).toEqual([{ name: 'worker', callId: 'root-call' }]);
     } finally {
       await r.close();
     }
