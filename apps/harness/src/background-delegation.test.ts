@@ -25,7 +25,10 @@ import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
+import { createMiddleware } from 'langchain';
+
 import { createNexusAgent } from './agent-factory.js';
+import { TASK_DESCRIPTION_REWRITES } from './background-delegation.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import type { SandboxMode } from './contained-backend.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -183,6 +186,89 @@ describe('不給選項：完全不變', () => {
         backgroundSubagents: {},
       }),
     ).rejects.toThrow(/checkpointer/);
+  });
+});
+
+/** 模型看到的 `task`／`subagent` 描述：用一顆 `last` 的 middleware 讀當次請求。 */
+async function describedTool(background: boolean, name: 'task' | 'subagent'): Promise<string> {
+  let seen = '';
+  const spy = createMiddleware({
+    name: 'zzDescriptionSpy',
+    wrapModelCall: (request, handler) => {
+      seen =
+        (request.tools.find((each) => each.name === name) as { description?: string })
+          ?.description ?? '';
+      return handler(request);
+    },
+  });
+  const run = await assemble({
+    rootTurns: [{ content: '好' }],
+    workerTurns: [],
+    ...(background && { background: {} }),
+    plugins: [
+      {
+        plugin: {
+          name: 'spy',
+          apply: (registry) => void registry.middleware.use(spy, { last: true }),
+        },
+      },
+    ],
+  });
+  try {
+    await run.say();
+    return seen;
+  } finally {
+    await run.close();
+  }
+}
+
+describe('模型面的描述', () => {
+  it('上游絆索：基座 task 的描述還帶著我們改寫的那幾句原文——變了就要重讀新描述', async () => {
+    const original = await describedTool(false, 'task');
+    for (const [from] of TASK_DESCRIPTION_REWRITES) expect(original).toContain(from);
+  });
+
+  it('subagent 的描述：沒有一次性的措辭、沒有提到被藏起來的 task，有子代理清單與 run_in_background', async () => {
+    const text = await describedTool(true, 'subagent');
+    expect(text).toContain('worker: 幹活的。');
+    expect(text).toContain('general-purpose');
+    expect(text).toContain('run_in_background');
+    expect(text).not.toMatch(/ephemeral|stateless|single final report/);
+    expect(text).not.toContain('`task`');
+    expect(text).not.toMatch(/\btask tool\b/);
+  });
+});
+
+/**
+ * 上游絆索：我們偏離的理由是 langchain 禁止在 `wrapModelCall` 改已註冊的工具。哪天這一條放行了，這個測試會紅，
+ * 那時可以直接給 `task` 加 `run_in_background`，`subagent` 這一整套偏離就能拆。
+ */
+describe('上游絆索：wrapModelCall 不能改已註冊的工具', () => {
+  it('換掉 task 會拋 “You have modified a tool”', async () => {
+    const swap = createMiddleware({
+      name: 'zzSwapTask',
+      wrapModelCall: (request, handler) =>
+        handler({
+          ...request,
+          tools: request.tools.map((each) =>
+            each.name === 'task'
+              ? tool(() => '', { name: 'task', description: '換掉的', schema: z.object({}) })
+              : each,
+          ),
+        }),
+    });
+    const run = await assemble({
+      rootTurns: [{ content: '好' }],
+      workerTurns: [],
+      plugins: [
+        { plugin: { name: 'swap', apply: (registry) => void registry.middleware.use(swap) } },
+      ],
+    });
+    try {
+      await expect(run.say()).rejects.toThrow(/You have modified a tool/);
+    } finally {
+      await run.close();
+    }
   });
 });
 

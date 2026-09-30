@@ -19,7 +19,13 @@
  * - **模型直接送 `task`**（藏起來的那顆）：**不攔**，基座照樣跑，等同 `run_in_background: false`。它沒被宣告過，
  *   只有壞掉的模型才會送；行為與前景一致，所以不值得為它多一條錯誤路徑（探針實測，#831）。
  *
- * `subagent` 的描述取自當次請求裡 `task` 的描述，所以子代理清單永遠與 fold 定的同步，不另外維護。子代理的疊
+ * **這顆在疊上的位置（量到的）**：`nexusToolFailureContainment` ＞ `nexusTurnCancel`（外層守衛）＞ **這顆** ＞
+ * `nexusApprovalGate` ＞ … ＞ `nexusMaxTokens`；沙箱 plugin 的 `wrapToolCall` 也在這顆裡面。所以前景改派後，
+ * 核准閘門、輸出上限、沙箱快照看到的是 `task`；**圍堵與外層的中止守衛在外面，看到的是 `subagent`**（圍堵的日誌事件名、
+ * 中止後回的「還沒動手」結果都用 `subagent`）。wire 的子代理卡、`thread-pump.ts` 收回時選碼的 `DELEGATION_TOOL`
+ * 也還在比對 `task`——這幾處歸 #832，預設關的今天不會被走到。
+ *
+ * `subagent` 的描述取自當次請求裡 `task` 的描述（改掉跟背景矛盾的兩句，見 {@link TASK_DESCRIPTION_REWRITES}），所以子代理清單永遠與 fold 定的同步，不另外維護。子代理的疊
  * （plugin middleware 也射進去，#327）沒有 `task`，所以在那裡什麼都不做，不需要 rootOnly 樁。
  *
  * ## 沙箱快照
@@ -66,6 +72,19 @@ const subagentSchema = z.object({
     .optional()
     .describe('預設 true：當場回子代理編號，你接著做別的事。要等結果才能往下時傳 false。'),
 });
+
+/**
+ * 基座 `task` 描述裡跟「背景」矛盾的兩句：一次性的生命週期（`ephemeral`）與「每次都是全新的、只回一份最終報告」。
+ * 逐字錨點，**換的是基座 1.13.1 的原文**；原文變了這裡的比對會落空，`background-delegation.test.ts` 的上游絆索會紅，
+ * 那時要重讀新的描述再決定怎麼改。
+ */
+export const TASK_DESCRIPTION_REWRITES: readonly (readonly [from: string, to: string])[] = [
+  ['Launch an ephemeral subagent', 'Launch a subagent'],
+  [
+    'Each invocation is stateless: the agent sees only the prompt you give it and returns a single final report.',
+    'Each new delegation starts fresh: the agent sees only the prompt you give it, and reports its final result when it finishes.',
+  ],
+];
 
 /** 接在 `task` 描述後面的那一段。 */
 const BACKGROUND_DESCRIPTION =
@@ -131,7 +150,11 @@ export class BackgroundDelegation {
   }
 
   #subagentTool(baseDescription: string): StructuredToolInterface {
-    const description = baseDescription + BACKGROUND_DESCRIPTION;
+    const description =
+      TASK_DESCRIPTION_REWRITES.reduce(
+        (text, [from, to]) => text.replace(from, to),
+        baseDescription,
+      ) + BACKGROUND_DESCRIPTION;
     if (this.#tool?.description === description) return this.#tool.instance;
     const instance = tool(async () => '', {
       name: SUBAGENT_TOOL_NAME,
