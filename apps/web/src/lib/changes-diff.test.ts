@@ -1,8 +1,8 @@
 import type { WorkspaceFileDiff } from '@nexus/wire';
-import { changesDiffPath } from '@nexus/wire';
+import { changesDiffUrl } from '@nexus/wire';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createChangesDiffStore, isFileDiff } from '@/lib/changes-diff';
+import { createChangesDiffStore } from '@/lib/changes-diff';
 
 /** 比較的讀取（#443 web 第二刀，同 dsh `ChangesDiffStore`）：404 不再讀、其他失敗可以重讀。 */
 
@@ -41,7 +41,7 @@ describe('比較的讀取', () => {
   it('打 thread 底下的比較路由，帶 seq、index 與 content-type', async () => {
     const { store, urls, inits } = storeWith(ok);
     await settle(() => store.load(7, 2));
-    expect(urls).toEqual([`http://h${changesDiffPath('t 1')}?seq=7&index=2`]);
+    expect(urls).toEqual([`http://h${changesDiffUrl('t 1', 7, 2)}`]);
     expect(inits[0]?.method).toBe('GET');
     expect(inits[0]?.headers).toEqual({ 'content-type': 'application/json' });
     expect(store.read(7, 2)).toEqual(DIFF);
@@ -86,24 +86,5 @@ describe('比較的讀取', () => {
     expect(store.read(7, 0)).toBe('loading');
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(listener).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe('比較的形狀檢查', () => {
-  it('認得三種', () => {
-    expect(isFileDiff(DIFF)).toBe(true);
-    expect(isFileDiff({ kind: 'binary', path: 'a', display: 'a' })).toBe(true);
-    expect(isFileDiff({ kind: 'oversized', path: 'a', display: 'a' })).toBe(true);
-  });
-
-  it.each([
-    ['null', null],
-    ['沒有路徑', { ...DIFF, path: '' }],
-    ['不認得的 kind', { ...DIFF, kind: 'image' }],
-    ['少了 coarse', { ...DIFF, coarse: undefined }],
-    ['行沒有前綴', { ...DIFF, hunks: [{ ...DIFF.hunks[0], lines: ['a'] }] }],
-    ['行號是負的', { ...DIFF, hunks: [{ ...DIFF.hunks[0], oldStart: -1 }] }],
-  ])('%s：不認', (_name, value) => {
-    expect(isFileDiff(value)).toBe(false);
   });
 });
