@@ -931,6 +931,12 @@ export async function createCliAgent(
      * 從 `spill-policy` 那一列解；省略就是不掛。存處是上面的 `toolResultStash`，沒給它就不會外溢。
      */
     readonly spillPolicy?: { readonly maxInlineTokens: number };
+    /**
+     * 背景續行子代理的上限（[#841](https://github.com/DemianLi/nexus-agent/issues/841)）：**給了就是背景續行，省略就是一次性**。
+     * 從 `background-subagents` 那一列解。**只有 serve 傳**：REPL 一行一輪、一次性模式答完就退出，背景子代理做完沒有
+     * 可以叫醒的一輪，結果就送不回來。
+     */
+    readonly backgroundSubagents?: { readonly maxActive: number };
   },
   plugins: readonly PluginEntry[],
   cwd: string = process.cwd(),
@@ -1097,6 +1103,13 @@ export async function createCliAgent(
       optionalEntries: invocation.optionalEntries,
     }),
     ...(invocation.stepInbox === true && { stepInbox: true }),
+    // 沙箱控制器只在有圍堵時給：沒有 `--workspace` 就沒有沙箱參與者，快照與讀回無從做起（同上面的 sandbox-policy 條件）。
+    ...(invocation.backgroundSubagents !== undefined && {
+      backgroundSubagents: {
+        maxActive: invocation.backgroundSubagents.maxActive,
+        ...(workspaceRoot !== undefined && { sandbox: sandboxMode }),
+      },
+    }),
     ...(invocation.toolResultStash !== undefined && {
       toolResultStash: invocation.toolResultStash,
     }),
