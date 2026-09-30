@@ -1,7 +1,7 @@
 import type { DeliverableFilePage } from '@nexus/wire';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createDeliverableFileStore, isFilePage } from '@/lib/deliverable-file';
+import { createDeliverableFileStore, isFileBytes, isFilePage } from '@/lib/deliverable-file';
 import type { DeliverableCall, Reply } from '@/test/deliverable-commands';
 import {
   badRequestReply,
@@ -198,5 +198,30 @@ describe('形狀檢查', () => {
   it('version 的長相不管——契約只有「內容換了就換值」', () => {
     expect(isFilePage({ ...PAGE, version: 'W/"abc-123"' })).toBe(true);
     expect(isFilePage({ ...PAGE, version: '0' })).toBe(true);
+  });
+});
+
+describe('位元組窗口的形狀檢查', () => {
+  const WINDOW = {
+    path: 'a.bin',
+    version: 'v1',
+    bytes: 3,
+    offset: 0,
+    data: new Uint8Array([0, 0xff, 0x0a]),
+    eof: true,
+  };
+
+  it('data 是位元組才算；舊的 base64 字串不算（#747）', () => {
+    expect(isFileBytes(WINDOW)).toBe(true);
+    expect(isFileBytes({ ...WINDOW, data: new Uint8Array() })).toBe(true);
+    expect(isFileBytes({ ...WINDOW, data: 'AP8K' })).toBe(false);
+    expect(isFileBytes({ ...WINDOW, data: [0, 255, 10] })).toBe(false);
+  });
+
+  it('version 空字串、offset 是負的、缺 eof 都不算', () => {
+    expect(isFileBytes({ ...WINDOW, version: '' })).toBe(false);
+    expect(isFileBytes({ ...WINDOW, offset: -1 })).toBe(false);
+    expect(isFileBytes({ ...WINDOW, eof: undefined })).toBe(false);
+    expect(isFileBytes(null)).toBe(false);
   });
 });
