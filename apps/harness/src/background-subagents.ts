@@ -94,6 +94,49 @@ export interface BackgroundSettlement {
 }
 
 /**
+ * 在背景子代理的第一句任務後面接上回報指引（[#849](https://github.com/DemianLi/nexus-agent/issues/849)），逐字照 dsh 的
+ * `withContinuableReturnGuidance`（`subagent/src/continuation-messages.ts`，`477b4f4`）。
+ *
+ * 偏離登記：dsh 把指引當獨立的一個 text block 接在任務 blocks 後面；我們的任務是單一字串，用空行接在後面。
+ * parent id 照 dsh 用 `JSON.stringify` 帶引號。
+ *
+ * @param prompt - 第一輪的人話。
+ * @param parentId - 直接 parent（主對話）的會話 id。
+ */
+export function withReturnGuidance(prompt: string, parentId: string): string {
+  const encoded = JSON.stringify(parentId);
+  return (
+    `${prompt}\n\n` +
+    `Your parent agent id is ${encoded}. Before you finish, send your result to that agent with ` +
+    `send_message({ agent_id: ${encoded}, message: "<self-contained result>" }). The parent shares ` +
+    'your workspace but does not automatically receive your transcript, tool output, or reasoning. Send ' +
+    'earlier messages as well when a finding changes what the parent should do next; sending a message ' +
+    'does not end your turn.'
+  );
+}
+
+/** 背景子代理用 `send_message` 寫給主對話的一則話（[#849](https://github.com/DemianLi/nexus-agent/issues/849)）。 */
+export interface BackgroundAgentMessage {
+  /** 寄件的背景子代理的編號。 */
+  readonly runId: string;
+  /** 它的會話 id（日誌上的寄件人）。 */
+  readonly sessionId: string;
+  /** 送進主對話模型的整段字，含 dsh 的前綴 `Agent <寄件人> sent a message: `。 */
+  readonly text: string;
+}
+
+/**
+ * 背景子代理往主對話這個方向的出口。**兩個都沒給就沒有人被通知**（cli 的 REPL 一行一輪，沒有可以叫醒的一輪）。
+ * serve 傳 pump 的 `notifySettled` 與 `receiveAgentMessage`。
+ */
+export interface BackgroundParentPort {
+  /** 背景子代理結算了（#840）。 */
+  readonly onSettled?: (settlement: BackgroundSettlement) => void;
+  /** 背景子代理寫來一則話（#849）。 */
+  readonly onMessage?: (message: BackgroundAgentMessage) => void;
+}
+
+/**
  * 一行摘要，逐字照 dsh 的 `settlementSummary`。dsh 還有一支 `refusal`（`declined the task`，pre-step 的 hook 拒絕丟掉
  * 已領走的輸入）：我們沒有那條路，所以沒有這一格。
  */
@@ -167,6 +210,11 @@ export interface BackgroundSubagentHostOptions {
    * 它拋錯只講一聲（`warn`），不影響輪次。
    */
   readonly onSettled?: (settlement: BackgroundSettlement) => void;
+  /**
+   * 背景子代理寫話給主對話的出口（#849）。**沒給就寄不出去**：`sendToParent` 拋（dsh：沒有持久的 parent 信箱，
+   * 找不到活著的 parent 就拒絕，不收下做不到的事）。同步呼叫；它拋錯就是這一則沒送到，原樣往上拋給呼叫的工具。
+   */
+  readonly onMessage?: (message: BackgroundAgentMessage) => void;
 }
 
 interface Job {
@@ -188,6 +236,7 @@ export class BackgroundSubagentHost {
   readonly #enter: NonNullable<BackgroundSubagentHostOptions['enter']>;
   readonly #warn: ((message: string) => void) | undefined;
   readonly #onSettled: BackgroundSubagentHostOptions['onSettled'];
+  readonly #onMessage: BackgroundSubagentHostOptions['onMessage'];
   readonly #maxActive: number;
   readonly #graphs = new Map<string, BackgroundAgent>();
   /** 已知的背景子代理：編號 → 子代理名。同一個編號不能換名字。 */
@@ -212,6 +261,7 @@ export class BackgroundSubagentHost {
     this.#enter = options.enter ?? ((_log, run) => run());
     this.#warn = options.warn;
     this.#onSettled = options.onSettled;
+    this.#onMessage = options.onMessage;
     const maxActive = options.maxActive ?? DEFAULT_MAX_ACTIVE_BACKGROUND_SUBAGENTS;
     if (!Number.isInteger(maxActive) || maxActive < 1) {
       throw new Error(`背景子代理的並存上限要是 ≥ 1 的整數，收到 ${String(maxActive)}`);
@@ -293,6 +343,47 @@ export class BackgroundSubagentHost {
       subagent,
       text,
       turn: { kind: 'agent-message', text, senderSessionId: sender },
+    });
+  }
+
+  /** 這個 host 的主對話（root）的會話 id：背景子代理的 parent，回報指引裡告訴它的那個 id。 */
+  get rootSessionId(): string {
+    return this.#sessions.root.sessionId;
+  }
+
+  /**
+   * 背景子代理給自己的直接 parent 寫一則話（[#849](https://github.com/DemianLi/nexus-agent/issues/849)，dsh
+   * `SubagentRuntime.sendMessage` 的 child→parent 那一向，`477b4f4`）。**同步接受或拒絕**。
+   *
+   * - 寄件人必須是這個 host 認得的背景子代理；收件人只能是它的**直接 parent**，也就是這個 host 的 root。
+   *   別的編號（兄弟、自己、不存在的）一律拒絕：dsh「Agent-message authority is exact adjacency」。
+   * - 模型看到的文字加 dsh 的前綴 `Agent <寄件人> sent a message: `，寄件人是**子代理自己的會話 id**。
+   * - 投遞由 `onMessage` 決定（產品接線是 pump 的 `receiveAgentMessage`：閒著叫醒、忙著插話）。
+   *
+   * @throws host 已關閉；寄件人不是這裡的背景子代理；收件人不是它的直接 parent；沒有出口（主對話收不到）。
+   */
+  sendToParent(input: {
+    readonly runId: string;
+    readonly targetId: string;
+    readonly message: string;
+  }): void {
+    if (this.#closed) throw new Error('背景子代理的載體已經關閉');
+    if (!this.#known.has(input.runId)) {
+      throw new Error(`${input.runId} 不是這個主對話派出去的背景子代理，不能往上傳訊`);
+    }
+    if (input.targetId !== this.rootSessionId) {
+      throw new Error(
+        `${input.targetId} 不是你的直接 parent（${this.rootSessionId}）；背景子代理只能傳給它的直接 parent`,
+      );
+    }
+    if (this.#onMessage === undefined) {
+      throw new Error('主對話現在收不到訊息（沒有可以叫醒的一輪）');
+    }
+    const sessionId = this.#sessions.open({ kind: 'subagent', runId: input.runId }).sessionId;
+    this.#onMessage({
+      runId: input.runId,
+      sessionId,
+      text: `Agent ${sessionId} sent a message: ${input.message}`,
     });
   }
 

@@ -44,6 +44,11 @@ export type QueuedInputSource =
       readonly kind: 'subagent-settled';
       readonly summary: string;
       readonly senderSessionId: string;
+    }
+  | {
+      /** 背景子代理用 `send_message` 寫給主對話的話（[#849](https://github.com/DemianLi/nexus-agent/issues/849)）：agent 寫的，不是人說的。 */
+      readonly kind: 'agent-message';
+      readonly senderSessionId: string;
     };
 
 /**

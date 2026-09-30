@@ -41,7 +41,7 @@ import { createCommandExecutor } from '@nexus/plugin-commands';
 import { createAskUserPlugin } from '@nexus/plugin-ask-user';
 import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
-import type { BackgroundSettlement } from './background-subagents.js';
+import type { BackgroundParentPort } from './background-subagents.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import type { LiveModelConfig } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
@@ -947,10 +947,7 @@ export async function createCliAgent(
   commands: CommandRegistrationPoint;
   attachTelemetry: (sessions: SessionRegistry) => (() => Promise<void>) | undefined;
   attachInvariants: (sessions: SessionRegistry) => (() => void) | undefined;
-  attachSession: (
-    sessions: SessionRegistry,
-    onBackgroundSettled?: (settlement: BackgroundSettlement) => void,
-  ) => () => void;
+  attachSession: (sessions: SessionRegistry, backgroundPort?: BackgroundParentPort) => () => void;
   telemetrySharing: SessionTelemetrySharingStatus | undefined;
   /** 評分與評語的規則。serve 那條交給 wire-handler；CLI 那條只用得到 `/feedback`（走命令面）。 */
   feedback: FeedbackService | undefined;

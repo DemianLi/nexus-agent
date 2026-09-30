@@ -30,6 +30,8 @@ import { createMiddleware } from 'langchain';
 
 import { createNexusAgent } from './agent-factory.js';
 import { TASK_DESCRIPTION_REWRITES } from './background-delegation.js';
+import { withReturnGuidance } from './background-subagents.js';
+import type { BackgroundAgentMessage } from './background-subagents.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import type { SandboxMode } from './contained-backend.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -84,6 +86,8 @@ interface Options {
   readonly plugins?: readonly PluginEntry[];
   readonly backend?: ContainedFilesystemBackend;
   readonly flipTo?: SandboxModeController;
+  /** 子代理寫話給主對話的出口（#849）。不給就是沒有出口。 */
+  readonly onMessage?: (message: BackgroundAgentMessage) => void;
 }
 
 async function assemble(options: Options) {
@@ -133,7 +137,9 @@ async function assemble(options: Options) {
     ...(options.background !== undefined && { backgroundSubagents: options.background }),
   });
   const sessions = new SessionRegistry('root-1');
-  const detach = built.attachSession(sessions);
+  const detach = built.attachSession(sessions, {
+    ...(options.onMessage !== undefined && { onMessage: options.onMessage }),
+  });
   return {
     built,
     sessions,
@@ -356,7 +362,7 @@ describe('背景（預設）：當場回編號，背景那一輪自己跑', () =
       expect(log!.events.filter((event) => event.type === 'tool/result')).toHaveLength(1);
       expect(log!.events.find((event) => event.type === 'turn/start')?.data).toEqual({
         kind: 'message',
-        text: '幹活',
+        text: withReturnGuidance('幹活', 'root-1'),
       });
     } finally {
       await run.close();
@@ -647,7 +653,7 @@ describe('send_message（#839）', () => {
 
       const starts = log!.events.filter((event) => event.type === 'turn/start');
       expect(starts.map((event) => event.data)).toEqual([
-        { kind: 'message', text: '幹活' },
+        { kind: 'message', text: withReturnGuidance('幹活', 'root-1') },
         {
           kind: 'agent-message',
           text: 'Agent root-1 sent a message: 再補一份',
@@ -659,7 +665,10 @@ describe('send_message（#839）', () => {
         .at(-1)!
         .filter((message) => message.getType() === 'human')
         .map((message) => message.text);
-      expect(humans).toEqual(['幹活', 'Agent root-1 sent a message: 再補一份']);
+      expect(humans).toEqual([
+        withReturnGuidance('幹活', 'root-1'),
+        'Agent root-1 sent a message: 再補一份',
+      ]);
       expect(hasDirectHumanTurn(log!.events)).toBe(false);
     } finally {
       await run.close();
@@ -689,6 +698,149 @@ describe('send_message（#839）', () => {
       const seen = toolTexts(run.workerModel.prompts.at(-1)!).at(-1) ?? '';
       expect(seen).toContain(TOOL_ERROR_PREFIX);
       expect(seen).not.toContain('delivered');
+    } finally {
+      await run.close();
+    }
+  });
+});
+
+describe('背景子代理往上傳訊（#849）', () => {
+  const RETURN = (id: string) => `message delivered to agent ${id}`;
+
+  it('子代理用 send_message 傳給直接 parent：出口收到寄件人是自己會話 id 的一則，前綴照 dsh；回條不是 parent 的回答', async () => {
+    const received: BackgroundAgentMessage[] = [];
+    const run = await assemble({
+      rootTurns: [delegate(undefined), { content: '根收尾' }],
+      workerTurns: [
+        call('send_message', { agent_id: 'root-1', message: '半路發現：A 壞了' }),
+        { content: '做完' },
+      ],
+      background: {},
+      onMessage: (message) => received.push(message),
+    });
+    try {
+      await run.say();
+      await until(() => run.backgroundLogs().length === 1);
+      const [log] = run.backgroundLogs();
+      await run.backgroundDone(log!);
+      expect(received).toEqual([
+        {
+          runId: log!.sessionId.split('/')[1],
+          sessionId: log!.sessionId,
+          text: `Agent ${log!.sessionId} sent a message: 半路發現：A 壞了`,
+        },
+      ]);
+      expect(toolTexts(run.workerModel.prompts.at(-1)!).at(-1)).toBe(RETURN('root-1'));
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('只能傳給直接 parent：傳給別的編號被拒絕並指名 parent，出口一則都沒收到（兄弟、自己在 host 測試逐個釘）', async () => {
+    const received: BackgroundAgentMessage[] = [];
+    const run = await assemble({
+      rootTurns: [delegate(undefined), delegate(undefined), { content: '根收尾' }],
+      workerTurns: [
+        call('send_message', { agent_id: 'bg-000000000000', message: '喂' }),
+        { content: '收工' },
+        { content: '也收工' },
+      ],
+      background: {},
+      onMessage: (message) => received.push(message),
+    });
+    try {
+      await run.say();
+      await until(() => run.backgroundLogs().length === 2);
+      for (const log of run.backgroundLogs()) await run.backgroundDone(log);
+      const errors = run.workerModel.prompts
+        .flatMap((prompt) => toolTexts(prompt))
+        .filter((text) => text.startsWith(TOOL_ERROR_PREFIX));
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain('不是你的直接 parent');
+      expect(errors[0]).toContain('root-1');
+      expect(received).toEqual([]);
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('沒有出口（cli REPL 那樣）：寄不出去，錯誤結果說明主對話收不到，不假裝送到', async () => {
+    const run = await assemble({
+      rootTurns: [delegate(undefined), { content: '根收尾' }],
+      workerTurns: [
+        call('send_message', { agent_id: 'root-1', message: '喂' }),
+        { content: '收工' },
+      ],
+      background: {},
+    });
+    try {
+      await run.say();
+      await until(() => run.backgroundLogs().length === 1);
+      await run.backgroundDone(run.backgroundLogs()[0]!);
+      const seen = toolTexts(run.workerModel.prompts.at(-1)!).at(-1) ?? '';
+      expect(seen).toContain(TOOL_ERROR_PREFIX);
+      expect(seen).toContain('收不到訊息');
+      expect(seen).not.toContain('delivered');
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('前景一次性子代理叫它：被拒絕，出口沒收到；它的第一句也沒有回報指引', async () => {
+    const received: BackgroundAgentMessage[] = [];
+    const run = await assemble({
+      rootTurns: [delegate(false), { content: '根收尾' }],
+      workerTurns: [
+        call('send_message', { agent_id: 'root-1', message: '喂' }),
+        { content: '收工' },
+      ],
+      background: {},
+      onMessage: (message) => received.push(message),
+    });
+    try {
+      await run.say();
+      const prompts = run.workerModel.prompts;
+      const seen = toolTexts(prompts.at(-1)!).at(-1) ?? '';
+      expect(seen).toContain(TOOL_ERROR_PREFIX);
+      expect(seen).toContain('一次性子代理');
+      expect(received).toEqual([]);
+      const humans = prompts[0]!
+        .filter((message) => message.getType() === 'human')
+        .map((message) => message.text);
+      expect(humans).toEqual(['幹活']);
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('背景派出去的第一句帶回報指引，parent id 是 root 的會話 id；root 傳給它的追加指示不帶', async () => {
+    const rootTurns: ScriptedTurn[] = [delegate(undefined), { content: '根收尾' }];
+    const run = await assemble({
+      rootTurns,
+      workerTurns: [{ content: '第一輪' }, { content: '第二輪' }],
+      background: {},
+    });
+    try {
+      const first = await run.say();
+      const id = /bg-[0-9a-f]{12}/.exec(toolTexts(first.messages)[0] ?? '')?.[0];
+      await until(() => run.backgroundLogs().length === 1);
+      const [log] = run.backgroundLogs();
+      await run.backgroundDone(log!);
+      rootTurns.push(call('send_message', { agent_id: id!, message: '再補一份' }), {
+        content: '已傳',
+      });
+      await run.say('追加');
+      await until(() => log!.events.filter((event) => event.type === 'turn/end').length === 2);
+      const humans = run.workerModel.prompts
+        .at(-1)!
+        .filter((message) => message.getType() === 'human')
+        .map((message) => message.text);
+      expect(humans[0]).toBe(withReturnGuidance('幹活', 'root-1'));
+      expect(humans[0]).toContain('Your parent agent id is "root-1".');
+      expect(humans[0]).toContain(
+        'send_message({ agent_id: "root-1", message: "<self-contained result>" })',
+      );
+      expect(humans[1]).toBe('Agent root-1 sent a message: 再補一份');
     } finally {
       await run.close();
     }

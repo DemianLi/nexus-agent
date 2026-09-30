@@ -259,6 +259,8 @@ function pumpInputOf(item: QueuedInput): PumpInput {
         summary: source.summary,
         senderSessionId: source.senderSessionId,
       };
+    case 'agent-message':
+      return { kind: 'agent-message', text: item.text, senderSessionId: source.senderSessionId };
     default: {
       const unhandled: never = source;
       throw new Error(`送出佇列的來源 ${JSON.stringify(unhandled)} 沒有對應的輸入種類`);
@@ -281,6 +283,8 @@ function userMessageSourceOf(source: QueuedInputSource): UserMessageSource {
         summary: source.summary,
         senderSessionId: source.senderSessionId,
       };
+    case 'agent-message':
+      return { kind: 'agent-message', form: 'relay', senderSessionId: source.senderSessionId };
     default: {
       const unhandled: never = source;
       throw new Error(`送出佇列的來源 ${JSON.stringify(unhandled)} 沒有對應的 user/message 來源`);
@@ -333,6 +337,15 @@ export type PumpInput =
       readonly kind: 'subagent-settled';
       readonly text: string;
       readonly summary: string;
+      readonly senderSessionId: string;
+    }
+  | {
+      /**
+       * 背景子代理用 `send_message` 寫來的話（[#849](https://github.com/DemianLi/nexus-agent/issues/849)）：agent 寫的，
+       * **不是人說的話**。同 `subagent-settled`，只有送出佇列開跑時會走到。`text` 含 dsh 的前綴 `Agent <寄件人> sent a message: `。
+       */
+      readonly kind: 'agent-message';
+      readonly text: string;
       readonly senderSessionId: string;
     };
 
@@ -618,6 +631,8 @@ function turnStartOf(input: PumpInput): SessionEventMap['turn/start'] {
         summary: input.summary,
         senderSessionId: input.senderSessionId,
       };
+    case 'agent-message':
+      return { kind: 'agent-message', text: input.text, senderSessionId: input.senderSessionId };
     case 'goal':
       return {
         kind: 'goal',
@@ -1260,25 +1275,38 @@ export class ThreadPump {
     readonly summary: string;
     readonly senderSessionId: string;
   }): void {
-    const item: QueuedInput = {
-      id: crypto.randomUUID(),
-      text: notice.text,
-      source: {
-        kind: 'subagent-settled',
-        summary: notice.summary,
-        senderSessionId: notice.senderSessionId,
-      },
-    };
+    this.#deliverMachineInput(notice.text, {
+      kind: 'subagent-settled',
+      summary: notice.summary,
+      senderSessionId: notice.senderSessionId,
+    });
+  }
+
+  /**
+   * 背景子代理用 `send_message` 寫給主對話（[#849](https://github.com/DemianLi/nexus-agent/issues/849)）。投遞方式同
+   * {@link ThreadPump.notifySettled}（閒著叫醒開一輪、忙著走插話、已收線不喚醒），來源是 `agent-message`：agent 寫的話，
+   * **不是人說的話**，`hasDirectHumanTurn` 為假。照 dsh 的 `sendToParent`（`subagent/src/continuation.ts`，`477b4f4`）。
+   *
+   * @param message.text - 送進模型的那一串字，含前綴 `Agent <寄件人> sent a message: `。
+   * @param message.senderSessionId - 寄件的背景子代理的會話 id。
+   */
+  receiveAgentMessage(message: { readonly text: string; readonly senderSessionId: string }): void {
+    this.#deliverMachineInput(message.text, {
+      kind: 'agent-message',
+      senderSessionId: message.senderSessionId,
+    });
+  }
+
+  /** 機器（不是人）送來的一件輸入的投遞，三種去處見 {@link ThreadPump.notifySettled}。 */
+  #deliverMachineInput(text: string, source: QueuedInputSource): void {
+    const item: QueuedInput = { id: crypto.randomUUID(), text, source };
     const intoStep = this.#acceptsSteer();
+    const target = intoStep ? 'next-step' : 'next-turn';
     try {
-      this.#spliceInbox({
-        target: intoStep ? 'next-step' : 'next-turn',
-        start: this.#inbox[intoStep ? 'next-step' : 'next-turn'].length,
-        inserted: [item],
-      });
+      this.#spliceInbox({ target, start: this.#inbox[target].length, inserted: [item] });
     } catch (error: unknown) {
       this.#warn?.(
-        `[背景子代理] thread ${this.#threadId} 收不下 ${notice.senderSessionId} 的結算通知：${String(error)}`,
+        `[背景子代理] thread ${this.#threadId} 收不下 ${source.kind} 的輸入：${String(error)}`,
       );
       return;
     }

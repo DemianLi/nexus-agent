@@ -41,15 +41,16 @@ import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { Command } from '@langchain/langgraph';
 import type { StructuredToolInterface } from '@langchain/core/tools';
-import { putToolResultMeta, toolRefusal } from '@nexus/core';
+import { putToolResultMeta, toolCallSessionAddress, toolRefusal } from '@nexus/core';
 import type { PluginEntry, SessionLog, SessionRegistry } from '@nexus/core';
 import type { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import { createMiddleware } from 'langchain';
 import type { BackgroundSubagentMeta } from '@nexus/wire';
 import { z } from 'zod';
 
-import { BackgroundSubagentHost } from './background-subagents.js';
-import type { BackgroundSettlement } from './background-subagents.js';
+import { isBackgroundAddress } from './background-run-id.js';
+import { BackgroundSubagentHost, withReturnGuidance } from './background-subagents.js';
+import type { BackgroundParentPort } from './background-subagents.js';
 import type { BackgroundAgent } from './background-subagents.js';
 
 /** 模型看到的工具名（dsh 的預設名，`toolName: 'subagent'`）。 */
@@ -126,19 +127,21 @@ export class BackgroundDelegation {
    *
    * @param sessions - 這次組裝綁的會話註冊表。
    * @param compile - 按名字編帶存檔點的圖（`AgentHandle.compileSubagent` 包好存檔點）。
-   * @param onSettled - 背景子代理結算時通知主對話（#840）。**沒給就沒有人被通知**：cli 的 REPL 一行一輪，沒有可以叫醒的一輪。
+   * @param port - 背景子代理往主對話這個方向的出口：結算通知（#840）與子代理寫來的話（#849）。**沒給就沒有人被通知、
+   *   子代理也寄不出去**：cli 的 REPL 一行一輪，沒有可以叫醒的一輪。
    * @returns 收掉的函式（等進行中的輪收完）。
    */
   attach(
     sessions: SessionRegistry,
     compile: (subagent: string) => BackgroundAgent,
-    onSettled?: (settlement: BackgroundSettlement) => void,
+    port: BackgroundParentPort = {},
   ): () => Promise<void> {
     const sandbox = this.#options.sandbox;
     const host = new BackgroundSubagentHost({
       sessions,
       compile,
-      ...(onSettled !== undefined && { onSettled }),
+      ...(port.onSettled !== undefined && { onSettled: port.onSettled }),
+      ...(port.onMessage !== undefined && { onMessage: port.onMessage }),
       ...(this.#options.maxActive !== undefined && { maxActive: this.#options.maxActive }),
       ...(sandbox !== undefined && {
         enter: <T>(log: SessionLog, run: () => T): T => sandbox.delegateFromLog(log, run),
@@ -161,7 +164,8 @@ export class BackgroundDelegation {
           // 只在 root：子代理不派子代理，也不該去列別人派的。
           registry.tools.register(this.#listAgentsTool(), { rootOnly: true });
           registry.tools.register(this.#interruptAgentTool(), { rootOnly: true });
-          registry.tools.register(this.#sendMessageTool(), { rootOnly: true });
+          // `send_message` 不是 rootOnly：背景子代理要能往上傳訊（#849）。誰能傳給誰由工具本體按呼叫者身分判。
+          registry.tools.register(this.#sendMessageTool());
         },
       },
     };
@@ -248,19 +252,35 @@ export class BackgroundDelegation {
   }
 
   /**
-   * `send_message`：父代理給自己派出去的背景子代理追加指示，回的是**送達回條，不是子代理的回答**。
+   * `send_message`：回的是**送達回條，不是對方的回答**。兩個方向，由**呼叫者的身分**決定（`toolCallSessionAddress`）：
    *
-   * **描述與參數說明對 dsh 有兩處改寫**（偏離登記）：dsh 是「working agent receives it at its next step」——
-   * 插進當下那一輪；我們的收件匣現在沒有 `next-step` 那一格，正在跑的子代理是排成**下一輪**（插話是卡 7，
-   * 屆時描述換回原文）。參數說明去掉「或你是可繼續子代理時的直接 parent」：子代理往父代理傳訊（dsh 的
-   * 回報指引要子代理這麼做）要等結算通知（#840）有了叫醒 root 的路才做。
+   * - root → 自己派出去的背景子代理（#839）：`host.send`。
+   * - 背景子代理 → 它的直接 parent（#849）：`host.sendToParent`，收件人必須是 root 的會話 id。
+   * - 其他（前景一次性子代理、認不出身分）：拒絕。dsh「只有 resident continuable 的 Activation 能傳給 parent」。
+   *
+   * **描述對 dsh 有一處改寫**（偏離登記）：dsh 是「working agent receives it at its next step」——
+   * 插進當下那一輪；我們的收件匣現在沒有 `next-step` 那一格給子代理，正在跑的子代理是排成**下一輪**
+   * （插話是卡 7，屆時描述換回原文）。傳給 parent 那一向沒有這個差別：主對話有 `next-step`，忙著就插進去。
    */
   #sendMessageTool() {
     return tool(
-      ({ agent_id, message }: { agent_id: string; message: string }) => {
+      ({ agent_id, message }: { agent_id: string; message: string }, config?: unknown): string => {
         const host = this.#host;
         if (host === undefined) throw new Error('背景子代理還沒接上會話，傳不了');
-        void host.send({ runId: agent_id, message });
+        const address = toolCallSessionAddress(config);
+        if (address?.kind === 'root') {
+          void host.send({ runId: agent_id, message });
+        } else if (address !== undefined && isBackgroundAddress(address)) {
+          host.sendToParent({
+            runId: (address as { runId: string }).runId,
+            targetId: agent_id,
+            message,
+          });
+        } else {
+          throw new Error(
+            '只有主對話與可繼續的背景子代理能用 send_message；你是一次性子代理，做完把結果當最後一則回覆交回去就好',
+          );
+        }
         return `message delivered to agent ${agent_id}`;
       },
       {
@@ -271,7 +291,9 @@ export class BackgroundDelegation {
         schema: z.object({
           agent_id: z
             .string()
-            .describe('The id of one of your background subagents (from subagent or list_agents).'),
+            .describe(
+              'The id of one of your background subagents (from subagent or list_agents), or your direct parent when you are a resident continuable child.',
+            ),
           message: z.string().describe('The message to deliver to the agent.'),
         }),
       },
@@ -345,7 +367,12 @@ export class BackgroundDelegation {
         try {
           // **接受那一刻**：同步（沒有 await），包在沙箱的 delegate 裡。
           const sandbox = this.#options.sandbox;
-          const start = () => host.start({ subagent: subagentType, text: description });
+          // 回報指引只接在背景派出去的（#849）：前景的 `task` 是一次性的，寄不出話，也不該被告知要寄。
+          const start = () =>
+            host.start({
+              subagent: subagentType,
+              text: withReturnGuidance(description, host.rootSessionId),
+            });
           const started = sandbox === undefined ? start() : sandbox.delegate(start);
           // 編號告訴折疊器：背景那一輪的卡從日誌開、namespace 是 `[編號, 'tools']`，沒有這一格就永遠認不出是誰的
           // （#832）。寫在這次呼叫自己的槽裡，圍堵收尾時帶進 `tool/result`，即時與重播是同一份。
