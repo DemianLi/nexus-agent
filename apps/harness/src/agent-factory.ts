@@ -74,6 +74,9 @@ import {
 import type { SystemPromptVariables } from '@nexus/plugin-system-prompt';
 import { CompositeBackend, createDeepAgent } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
+import { BackgroundDelegation } from './background-delegation.js';
+import type { BackgroundSubagentsOptions } from './background-delegation.js';
+import type { BackgroundAgent } from './background-subagents.js';
 import { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
 import { TextOnlyStateBackend } from './binary-read.js';
 import { createToolResultStash } from './tool-result-stash.js';
@@ -210,6 +213,14 @@ export interface CreateNexusAgentOptions {
    * 的話，永遠沒有人領。
    */
   readonly stepInbox?: boolean;
+  /**
+   * 背景派出的委派工具 `subagent`（[#831](https://github.com/DemianLi/nexus-agent/issues/831)，地圖
+   * [#737](https://github.com/DemianLi/nexus-agent/issues/737)）。**省略就完全不變**：沒有這顆 middleware，
+   * 模型看到的還是基座的 `task`。給了：`task` 從模型視野拿掉、換成 `subagent`（`run_in_background` 預設 true），
+   * 背景那一輪由 `attachSession` 建的 host 拉起。**需要 {@link checkpointer}**（沒有存檔點就沒有第二輪）。
+   * 偏離登記與細節見 `background-delegation.ts`。
+   */
+  readonly backgroundSubagents?: BackgroundSubagentsOptions;
   /** checkpointer。有 plugin 宣告要核准的工具卻沒給，fold 會報錯。 */
   readonly checkpointer?: AgentCheckpointer;
   /** 長期記憶用的 store。 */
@@ -554,6 +565,15 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
   // **跑在 `loadPlugins` 之前**：它只看 `options.model`，這時候還沒有任何 plugin 開好資源，
   // 所以失敗了不必先 `dispose()`。其餘四種都在下面那個 try 裡，因為它們要等 registry。
   assertHarnessProfileDeclared(options.model, options.expectedHarnessProfile);
+  if (options.backgroundSubagents !== undefined && options.checkpointer == null) {
+    throw new Error(
+      'backgroundSubagents 需要 checkpointer：沒有存檔點，背景子代理的第二輪就看不到第一輪',
+    );
+  }
+  const delegation =
+    options.backgroundSubagents === undefined
+      ? undefined
+      : new BackgroundDelegation(options.backgroundSubagents);
 
   // **放在最前面**：出貨清單的 `system-prompt` 在自己的 `apply` 當下就讀變數（#720）。
   const plugins: readonly PluginEntry[] = [
@@ -567,6 +587,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       'system-prompt-variables',
     ),
     ...options.plugins,
+    ...(delegation === undefined ? [] : [delegation.entry()]),
   ];
   const optional = options.optionalEntries;
   const { registry, dispose, dropped } = await loadPlugins(
@@ -647,6 +668,37 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     // 接上去但還沒收掉的協調器。**組裝點自己記著**，因為呼叫端可能只叫 `dispose()`
     // 就走人——那時 `shutdown` 標記與後端的排空都還沒發生，遙測會少掉最後一段。
     const attached = new Set<TelemetryAttachment>();
+    /** detach 時還在收的背景 host：`dispose` 要等它們，不然後端先關、進行中的輪寫到一半。 */
+    const hostCloses = new Set<Promise<void>>();
+    /**
+     * 把 fold 過的子代理規格編成一張**帶存檔點的圖**，給背景續行用（[#825](https://github.com/DemianLi/nexus-agent/issues/825)，
+     * [#737](https://github.com/DemianLi/nexus-agent/issues/737)）。一次性的委派仍走基座的 `task`；這是另一條路，
+     * 細節與為什麼要另編見 {@link @nexus/core!compileSubagentGraph}。
+     *
+     * **模型的 harness profile 若會動子代理的組成就拋**：拿掉工具、加或拿 middleware 這幾根槓桿基座在 `createSubAgent`
+     * 之外套用，自編的圖不套用，靜靜略過的話背景子代理與一次性子代理就是兩個不同的東西。
+     *
+     * @param name - 子代理名（`general-purpose` 或某個 plugin 註冊的）。
+     * @param checkpointer - 這張圖的存檔點；同一個 `thread_id` 的下一輪看得到上一輪。
+     * @returns 編好的圖。
+     * @throws 沒有這個子代理、規格不合、profile 會動組成。
+     */
+    const compileSubagent = (name: string, checkpointer: NonNullable<AgentCheckpointer>) => {
+      const effects = describeHarnessProfileEffects(options.model);
+      const touched = [
+        ...effects.excludedTools.map((tool) => `拿掉工具 ${tool}`),
+        ...effects.excludedMiddleware.map((each) => `移除 middleware ${each}`),
+        ...effects.extraMiddleware.map((each) => `加 middleware ${each}`),
+      ];
+      if (touched.length > 0) {
+        throw new Error(
+          `這個模型的 harness profile 會動子代理的組成（${touched.join('、')}），背景子代理的自編圖不套用；` +
+            '一次性委派走基座，兩條路會長得不一樣，所以不編。',
+        );
+      }
+      return compileSubagentGraph(params, name, { checkpointer });
+    };
+
     return {
       agent,
       /**
@@ -809,6 +861,12 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       attachSession(sessions: SessionRegistry): () => void {
         const installers = registry.sessions.installers();
         const unbind = registry.sessions.bind(sessions);
+        // 背景派出的 host：**在這裡建**（任何圖的環境之外），detach 時等進行中的輪收完。
+        const closeHost = delegation?.attach(
+          sessions,
+          (subagent) =>
+            compileSubagent(subagent, options.checkpointer!) as unknown as BackgroundAgent,
+        );
         const runners: (() => void)[] = [];
         const unobserve = sessions.observe(({ address, log }) => {
           if (installers.length > 0)
@@ -819,39 +877,18 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
           unbind();
           for (const stop of [...runners].reverse()) stop();
           runners.length = 0;
+          if (closeHost !== undefined) {
+            const closing = closeHost().finally(() => hostCloses.delete(closing));
+            hostCloses.add(closing);
+          }
         };
       },
-      /**
-       * 把 fold 過的子代理規格編成一張**帶存檔點的圖**，給背景續行用（[#825](https://github.com/DemianLi/nexus-agent/issues/825)，
-       * [#737](https://github.com/DemianLi/nexus-agent/issues/737)）。一次性的委派仍走基座的 `task`；這是另一條路，
-       * 細節與為什麼要另編見 {@link @nexus/core!compileSubagentGraph}。
-       *
-       * **模型的 harness profile 若會動子代理的組成就拋**：拿掉工具、加或拿 middleware 這幾根槓桿基座在 `createSubAgent`
-       * 之外套用，自編的圖不套用，靜靜略過的話背景子代理與一次性子代理就是兩個不同的東西。
-       *
-       * @param name - 子代理名（`general-purpose` 或某個 plugin 註冊的）。
-       * @param checkpointer - 這張圖的存檔點；同一個 `thread_id` 的下一輪看得到上一輪。
-       * @returns 編好的圖。
-       * @throws 沒有這個子代理、規格不合、profile 會動組成。
-       */
-      compileSubagent(name: string, checkpointer: NonNullable<AgentCheckpointer>) {
-        const effects = describeHarnessProfileEffects(options.model);
-        const touched = [
-          ...effects.excludedTools.map((tool) => `拿掉工具 ${tool}`),
-          ...effects.excludedMiddleware.map((each) => `移除 middleware ${each}`),
-          ...effects.extraMiddleware.map((each) => `加 middleware ${each}`),
-        ];
-        if (touched.length > 0) {
-          throw new Error(
-            `這個模型的 harness profile 會動子代理的組成（${touched.join('、')}），背景子代理的自編圖不套用；` +
-              '一次性委派走基座，兩條路會長得不一樣，所以不編。',
-          );
-        }
-        return compileSubagentGraph(params, name, { checkpointer });
-      },
+      compileSubagent,
       async dispose() {
         // 遙測先收：後端很可能是某個 plugin 開的，plugin 的 disposer 一跑它就沒了，
         // 那時再送 `shutdown` 標記等於送進一個已經關掉的東西。
+        // 背景 host 比它更早：它們還在往日誌寫，遙測要收得到最後那幾顆。
+        await Promise.all([...hostCloses]);
         for (const attachment of [...attached]) {
           attached.delete(attachment);
           await attachment.dispose();
