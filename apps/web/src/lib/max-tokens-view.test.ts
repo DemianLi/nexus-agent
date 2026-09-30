@@ -52,6 +52,11 @@ describe('子代理撞到輸出上限的 task', () => {
     ).toEqual({ partial: '報告\n寫到一半' });
   });
 
+  it('委派工具兩個名字都認：`subagent` 前景撞上限時，root 那張卡的名字是它', () => {
+    expect(subagentMaxTokensOf(task({ name: 'subagent' }))).toEqual({ partial: '' });
+    expect(subagentMaxTokensOf(task({ name: 'task' }))).toEqual({ partial: '' });
+  });
+
   it('一個字都沒寫：只有那一句，寫到一半的是空的', () => {
     expect(subagentMaxTokensOf(task({}))).toEqual({ partial: '' });
   });

@@ -34,16 +34,21 @@ export const SUBAGENT_MAX_TOKENS_TEXT = '子代理寫到輸出上限，沒寫完
 /** 有寫到一半的內容時，接在 {@link SUBAGENT_MAX_TOKENS_TEXT} 後面的那一句。 */
 export const SUBAGENT_PARTIAL_TEXT = '以下是它寫到一半的內容：';
 
-const TASK_TOOL = 'task';
+/** 委派子代理的兩個工具名：`task` 是基座的；`subagent` 是預設關的委派工具，開了之後它取代 `task` 出現在模型視野裡。 */
+const DELEGATE_TOOLS: readonly string[] = ['task', 'subagent'];
 
 /**
- * 這張卡是不是子代理撞到輸出上限而失敗的 `task`。
+ * 這張卡是不是子代理撞到輸出上限而失敗的 `task`（或 `subagent`）。
  *
  * @param entry - 工具卡的那一格。
  * @returns 是的話帶寫到一半的那段（沒寫出字是空字串）；不是、或措辭認不出來時沒有。
  */
 export function subagentMaxTokensOf(entry: ToolEntry): { readonly partial: string } | undefined {
-  if (entry.name !== TASK_TOOL || entry.status !== 'failed' || entry.error === undefined) {
+  if (
+    !DELEGATE_TOOLS.includes(entry.name) ||
+    entry.status !== 'failed' ||
+    entry.error === undefined
+  ) {
     return undefined;
   }
   const newline = entry.error.indexOf('\n');
