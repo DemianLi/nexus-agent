@@ -1,19 +1,19 @@
 /**
- * 預覽的文字頁回 413 之後，下一次要送多少 `limit`（[#555](https://github.com/DemianLi/nexus-agent/issues/555)）。
+ * 預覽的文字頁回 `deliverable/too-large` 之後，下一次要送多少 `limit`（[#555](https://github.com/DemianLi/nexus-agent/issues/555)）。
  *
- * ## 413 分不出成因
+ * ## `too-large` 分不出成因
  *
- * 路由一頁最多 `maxLines` 行、`maxBytes` 位元組（預設 5000 行、2 MiB），超過就是 413，**拒絕不是截斷**。
- * 每行平均超過約 420 位元組，一頁就會超過 2 MiB——不需要任何一行超長。所以 413 可能是「這一行本身太長」，
- * 也可能是「這一段中長的行太多」。先縮 `limit` 才分得出來：縮到 1 還是 413，就是這一行本身超過上限，
+ * 路由一頁最多 `maxLines` 行、`maxBytes` 位元組（預設 5000 行、2 MiB），超過就是 `too-large`，**拒絕不是截斷**。
+ * 每行平均超過約 420 位元組，一頁就會超過 2 MiB——不需要任何一行超長。所以 `too-large` 可能是「這一行本身太長」，
+ * 也可能是「這一段中長的行太多」。先縮 `limit` 才分得出來：縮到 1 還是 `too-large`，就是這一行本身超過上限，
  * 改走位元組窗口（見 `deliverable-file.ts`）。
  *
- * ## 不知道 `maxLines` 的時候，送什麼都可能 400
+ * ## 不知道 `maxLines` 的時候，送什麼都可能是 `invalid_argument`
  *
- * `maxLines` 是設定條目，web 看不到；送的 `limit` 比它大，路由回 400，畫面就變成「座標不對」
+ * `maxLines` 是設定條目，web 看不到；送的 `limit` 比它大，命令回協定錯誤 `invalid_argument`（web 對成 `'invalid'`），畫面就變成「座標不對」
  * （[#543](https://github.com/DemianLi/nexus-agent/issues/543) 就是因為這樣才不送 `limit`）。安全的只有兩個事實：
  *
- * - **不送 `limit` 永遠不會 400**；讀到一頁沒到檔尾的，那一頁的 `lines` 就是 `maxLines`（{@link PageLimit.cap}）。
+ * - **不送 `limit` 永遠不會 `invalid_argument`**；讀到一頁沒到檔尾的，那一頁的 `lines` 就是 `maxLines`（{@link PageLimit.cap}）。
  * - **送 L 拿到 200，就證明 L ≤ `maxLines`**（{@link PageLimit.good}）。
  *
  * 所以：
@@ -22,12 +22,12 @@
  * 2. `cap` 還不知道時，第一次縮到讀得到之後，**下一頁先試一次不送 `limit`**——成功一次就知道 `cap`。
  * 3. 之後每讀到一頁就把 `limit` 加倍，碰到 `cap` 就恢復不送。**不在「不送」與 L 之間每頁來回切**：路由每一頁
  *    都從檔頭開始數行，多一次請求就多一次整段前綴的掃描。
- * 4. 加倍時回 400，只在「`cap` 還不知道、而這個 L 比證明過的大」時歸因成 L 超過 `maxLines`：同一個座標剛剛才用
+ * 4. 加倍時回 `invalid_argument`，只在「`cap` 還不知道、而這個 L 比證明過的大」時歸因成 L 超過 `maxLines`：同一個座標剛剛才用
  *    較小的 `limit` 讀到過，變的只有 `limit`。這一格在這裡消化掉，**不會變成畫面上的「座標不對」**。其他情況的
- *    400 照舊是 bug。
+ *    `invalid_argument` 照舊是 bug。
  *
  * 規則是在 #555 的 grilling 定的，其中第 2、4 條是實作前發現原規則會送出超過 `maxLines` 的 `limit` 後補的。
- * dsh 的文字預覽沒有這一段：它遇到 413 就停在「单页内容超过上限」。
+ * dsh 的文字預覽沒有這一段：它遇到太大就停在「单页内容超过上限」。
  *
  * @module
  */
@@ -62,8 +62,8 @@ export type PageOutcome =
  *
  * - `'retry'`：同一個 offset 用新的 `limit` 再讀一次。
  * - `'done'`：結果可以發布；新的狀態給後面的頁用。
- * - `'long-line'`：`limit=1` 還是 413，這一行本身超過上限，改走位元組窗口。
- * - `'invalid'`：真的 400，照舊是 bug。
+ * - `'long-line'`：`limit=1` 還是 `too-large`，這一行本身超過上限，改走位元組窗口。
+ * - `'invalid'`：真的參數不合格（協定錯誤 `invalid_argument`），照舊是 bug。
  */
 export type PageStep = {
   readonly next: 'retry' | 'done' | 'long-line' | 'invalid';

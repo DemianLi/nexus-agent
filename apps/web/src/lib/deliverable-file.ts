@@ -2,24 +2,24 @@
  * 交付檔預覽的讀取與快取（[#452](https://github.com/DemianLi/nexus-agent/issues/452) web 第二刀）。
  *
  * 形狀照隔壁 `changes-diff.ts`（store ＋ `useSyncExternalStore`），**但狀態不是它那一組**。
- * 路由把「前端該做什麼」編碼在狀態碼上（`packages/nexus-wire/src/deliverables.ts`），所以這裡
- * **一個碼一個狀態**，不攤平：
+ * 讀取走命令通道的 `deliverable.read`、`deliverable.readBytes`（[#747](https://github.com/DemianLi/nexus-agent/issues/747)，
+ * `@nexus/wire` 的 `createDeliverableClient`），拒絕帶具名的理由碼，這裡**一個理由一個狀態**，不攤平；沒有狀態碼這一層：
  *
- * | 碼 | 狀態 | 可重試 |
+ * | 來源 | 狀態 | 可重試 |
  * | --- | --- | --- |
- * | 400 | `'invalid'` —— 座標或翻頁參數不對，**這是 bug 不是使用者狀態** | 否 |
- * | 404 | `'missing'` —— 錨不住、檔不在、不是一般檔 | 否 |
- * | 413 | 文字頁：先縮 `limit`，縮到 1 還是 413 就改走位元組窗口（見下）。只有窗口本身回 413 才是 `'too-large'` | 否 |
- * | 422 | `'not-text'` —— 不是文字：含 NUL、或不是 UTF-8。**可能讀到一半才出現**（server 串流分頁，只判它讀到的那一頁，#552） | 否 |
- * | 其他／斷線／形狀不對 | `'error'` | 是 |
+ * | 協定錯誤 `invalid_argument`（參數不合格：座標、翻頁、窗口），見 {@link failureOfRejected} | `'invalid'` —— **這是 bug 不是使用者狀態** | 否 |
+ * | `deliverable/no-anchor`、`not-found`、`not-regular-file` | `'missing'` —— 錨不住、檔不在、不是一般檔 | 否 |
+ * | `deliverable/too-large`（帶 `maxBytes`） | 文字頁：先縮 `limit`，縮到 1 還是太大就改走位元組窗口（見下）。只有窗口本身太大才是 `'too-large'` | 否 |
+ * | `deliverable/not-text` | `'not-text'` —— 不是文字：含 NUL、或不是 UTF-8。**可能讀到一半才出現**（server 串流分頁，只判它讀到的那一頁，#552） | 否 |
+ * | 斷線、形狀不對、被載體層擋下（5xx、401）、別的協定碼 | `'error'` | 是 |
  *
  * **只有 `'error'` 給重試。** 隔壁把非 404 的失敗全收進可重試的 `'error'`，那一套搬過來的話
- * 一顆重試鈕會對著一個永遠不會成功的 400 一直打。
+ * 一顆重試鈕會對著一個永遠不會成功的 `'invalid'` 一直打。
  *
  * **`version` 是唯一有比較契約的欄位**：不解析它，只比它——同值即同一份內容。翻頁時用它擋掉
  * 「兩個版本的頁混在同一份畫面上」，那會畫出一份從來不存在的檔。位元組窗口讀到的長行也一樣。
  *
- * ## `limit`：平常不送，收到 413 才送
+ * ## `limit`：平常不送，收到 `too-large` 才送
  *
  * 每頁幾行的上限是 `#settings/deliverable-files` 那一列的 `maxLines`，預設值
  * `DEFAULT_DELIVERABLE_MAX_LINES` 住在 `apps/harness/src/settings/deliverable-files.ts`、沒有從 `@nexus/wire`
@@ -27,16 +27,16 @@
  * 翻頁只需要回應裡的 `lines`。
  *
  * **所以平常不送**（[#543](https://github.com/DemianLi/nexus-agent/issues/543) 考慮過送一個固定的
- * `limit=1000`，收回了：路由對 `limit > maxLines` 回 400，有人把 `maxLines` 設得比它小，每一個預覽都會變成
- * 「座標不對」）。**只有收到 413 才送**（[#555](https://github.com/DemianLi/nexus-agent/issues/555)）：一頁超過
+ * `limit=1000`，收回了：命令對 `limit > maxLines` 回協定錯誤 `invalid_argument`，有人把 `maxLines` 設得比它小，每一個預覽都會變成
+ * 「座標不對」）。**只有收到 `too-large` 才送**（[#555](https://github.com/DemianLi/nexus-agent/issues/555)）：一頁超過
  * 頁的位元組上限時，要縮小 `limit` 才分得出是「中長的行太多」還是「這一行本身太長」，而縮的規則保證不會把
- * 一個超過 `maxLines` 的數變成畫面上的 400。規則在 `page-limit.ts`。
+ * 一個超過 `maxLines` 的數變成畫面上的「座標不對」。規則在 `page-limit.ts`。
  *
  * ## 超過頁上限的一行：位元組窗口
  *
- * `limit=1` 還是 413，代表這一行本身就超過頁的位元組上限，按行切永遠讀不到。那一行改用
- * `deliverableBytesPath`（照 dsh 的 `readBytes`）一個窗口一個窗口讀，web 自己解碼（見 `line-bytes.ts`）；讀到
- * 換行之後，從下一行起改回文字頁。**dsh 的文字預覽沒有這一段**，它停在「单页内容超过上限」；這是照 #544
+ * `limit=1` 還是太大（`deliverable/too-large`），代表這一行本身就超過頁的位元組上限，按行切永遠讀不到。那一行改用
+ * `deliverable.readBytes`（照 dsh 的 `readBytes`）一個窗口一個窗口讀，web 自己解碼（見 `line-bytes.ts`）；讀到
+ * 換行之後，從下一行起改回文字頁。窗口的 `data` 是原生位元組（多段表單，不是 base64）。**dsh 的文字預覽沒有這一段**，它停在「单页内容超过上限」；這是照 #544
  * 「不阻擋大檔案瀏覽，一部分一部分載入」的方向做的。
  *
  * 窗口要的是**位元組**位置，文字頁只給**行**。位置由已讀的每一頁換算：每頁的 UTF-8 位元組數加上它結尾的換行
@@ -47,11 +47,11 @@
  * @module
  */
 
-import type { DeliverableFileBytes, DeliverableFilePage } from '@nexus/wire';
-import { deliverableBytesPath, deliverableFilePath } from '@nexus/wire';
+import type { DeliverableBytes, DeliverableFilePage, DeliverableReadError } from '@nexus/wire';
+import { createDeliverableClient } from '@nexus/wire';
 
 import type { LineDecoder } from '@/lib/line-bytes';
-import { bytesOfBase64, createLineDecoder, startsWithBom, utf8Length } from '@/lib/line-bytes';
+import { createLineDecoder, startsWithBom, utf8Length } from '@/lib/line-bytes';
 import type { PageLimit, PageOutcome } from '@/lib/page-limit';
 import { INITIAL_PAGE_LIMIT, stepPageLimit } from '@/lib/page-limit';
 
@@ -118,7 +118,7 @@ export interface DeliverableFileStore {
 }
 
 /**
- * 形狀檢查，同隔壁 `isFileDiff`：對不上就當成讀壞了。
+ * 形狀檢查，同 wire 的 `isChangesDiff`：對不上就當成讀壞了。
  *
  * **`version` 只檢查「是非空字串」**——它的契約只有「內容換了就換值」，長相不歸我們管。
  */
@@ -137,13 +137,13 @@ export function isFilePage(value: unknown): value is DeliverableFilePage {
 }
 
 /** 位元組窗口的形狀檢查，同 {@link isFilePage}。 */
-export function isFileBytes(value: unknown): value is DeliverableFileBytes {
+export function isFileBytes(value: unknown): value is DeliverableBytes {
   const window = value as Record<string, unknown> | null;
   return (
     typeof window?.path === 'string' &&
     typeof window.version === 'string' &&
     window.version !== '' &&
-    typeof window.data === 'string' &&
+    window.data instanceof Uint8Array &&
     typeof window.eof === 'boolean' &&
     [window.bytes, window.offset].every(
       (field) => Number.isSafeInteger(field) && (field as number) >= 0,
@@ -151,13 +151,28 @@ export function isFileBytes(value: unknown): value is DeliverableFileBytes {
   );
 }
 
-/** 狀態碼 → 狀態。這張表就是契約，改它之前先讀 `deliverables.ts` 的檔頭。 */
-function failureOf(status: number): DeliverableFileFailure {
-  if (status === 400) return 'invalid';
-  if (status === 404) return 'missing';
-  if (status === 413) return 'too-large';
-  if (status === 422) return 'not-text';
-  return 'error';
+/** 理由碼 → 狀態。碼的值域是 wire 的 `DeliverableRefusalCode`，多一個碼這裡的 switch 當場編不過。 */
+function failureOf(error: DeliverableReadError): DeliverableFileFailure {
+  switch (error.code) {
+    case 'deliverable/no-anchor':
+    case 'deliverable/not-found':
+    case 'deliverable/not-regular-file':
+      return 'missing';
+    case 'deliverable/too-large':
+      return 'too-large';
+    case 'deliverable/not-text':
+      return 'not-text';
+  }
+}
+
+/**
+ * 「這條線收不了」：只有協定錯誤 `invalid_argument`（參數不合格：座標、翻頁、窗口）是 `'invalid'`——終局、不重試，
+ * 翻頁狀態機（`page-limit.ts`）也靠它判 `limit` 是不是超過 `maxLines`。其餘（別的協定碼、被載體層擋下的 5xx／401、
+ * 回應看不懂）都是可重試的 `'error'`。分法靠 `createDeliverableClient` 的 `rejected.code`（[#813](https://github.com/DemianLi/nexus-agent/pull/813)），
+ * 不比對句子。
+ */
+function failureOfRejected(rejected: { readonly code?: string }): DeliverableFileFailure {
+  return rejected.code === 'invalid_argument' ? 'invalid' : 'error';
 }
 
 /** 一頁在檔案裡佔幾個位元組（含結尾的換行）。同一頁物件只算一次。 */
@@ -214,7 +229,7 @@ export function createDeliverableFileStore({
     states.set(at, state);
     notify();
   };
-  const base = baseUrl.replace(/\/+$/, '');
+  const client = createDeliverableClient({ baseUrl, fetch: doFetch });
 
   /**
    * 丟掉同一個檔其他 `version` 的格（頁與長行都是）。
@@ -232,18 +247,6 @@ export function createDeliverableFileStore({
     }
   };
 
-  /** GET 一條路由，帶 content-type 閘門（見 `THREADS_PATH`）。`undefined` 的參數不送。 */
-  const get = (path: string, query: Record<string, number | undefined>) => {
-    const params = Object.entries(query)
-      .filter(([, value]) => value !== undefined)
-      .map(([name, value]) => `${name}=${String(value)}`)
-      .join('&');
-    return doFetch(`${base}${path}?${params}`, {
-      method: 'GET',
-      headers: { 'content-type': 'application/json' },
-    });
-  };
-
   /** 讀一頁文字，送 `limit`（`undefined` ＝不送）。 */
   const requestPage = async (
     seq: number,
@@ -252,10 +255,15 @@ export function createDeliverableFileStore({
     limit: number | undefined,
   ): Promise<DeliverableFilePage | DeliverableFileFailure> => {
     try {
-      const response = await get(deliverableFilePath(threadId), { seq, index, offset, limit });
-      if (!response.ok) return failureOf(response.status);
-      const body: unknown = await response.json();
-      return isFilePage(body) ? body : 'error';
+      const outcome = await client.read(threadId, {
+        seq,
+        index,
+        offset,
+        ...(limit === undefined ? {} : { limit }),
+      });
+      if (outcome.kind === 'rejected') return failureOfRejected(outcome);
+      if (!outcome.result.ok) return failureOf(outcome.result.error);
+      return isFilePage(outcome.result.value) ? outcome.result.value : 'error';
     } catch {
       return 'error';
     }
@@ -267,12 +275,18 @@ export function createDeliverableFileStore({
     index: number,
     offset: number,
     length?: number,
-  ): Promise<DeliverableFileBytes | DeliverableFileFailure> => {
+  ): Promise<DeliverableBytes | DeliverableFileFailure> => {
     try {
-      const response = await get(deliverableBytesPath(threadId), { seq, index, offset, length });
-      if (!response.ok) return failureOf(response.status);
-      const body: unknown = await response.json();
-      return isFileBytes(body) ? body : 'error';
+      // **`offset` 一定要送，包括 0**：`readBytes` 只有 `offset` 與 `length` 都不給才是整檔下載，省略 0 會悄悄變成整檔。
+      const outcome = await client.readBytes(threadId, {
+        seq,
+        index,
+        offset,
+        ...(length === undefined ? {} : { length }),
+      });
+      if (outcome.kind === 'rejected') return failureOfRejected(outcome);
+      if (!outcome.result.ok) return failureOf(outcome.result.error);
+      return isFileBytes(outcome.result.value) ? outcome.result.value : 'error';
     } catch {
       return 'error';
     }
@@ -287,7 +301,7 @@ export function createDeliverableFileStore({
     seq: number,
     index: number,
     line: DeliverableLongLine,
-    window: DeliverableFileBytes,
+    window: DeliverableBytes,
     skip: number,
   ) => {
     const at = key(seq, index, line.offset);
@@ -303,7 +317,7 @@ export function createDeliverableFileStore({
       publish(at, { ...line, next: 'error' });
       return;
     }
-    const bytes = bytesOfBase64(window.data).subarray(skip);
+    const bytes = window.data.subarray(skip);
     const chunk = decoder.push(bytes, window.eof);
     if (chunk.kind === 'not-text') {
       decoders.delete(at);
@@ -368,7 +382,7 @@ export function createDeliverableFileStore({
       if (bom === undefined) {
         const head = await requestBytes(seq, index, 0, 3);
         if (typeof head !== 'object') return head;
-        bom = startsWithBom(bytesOfBase64(head.data));
+        bom = startsWithBom(head.data);
         boms.set(file, bom);
       }
       if (bom) position += 3;
@@ -376,7 +390,7 @@ export function createDeliverableFileStore({
     return { start: position, version };
   };
 
-  /** `limit=1` 還是 413：這一行改走位元組窗口。第一個窗口順便核對位置。 */
+  /** `limit=1` 還是 `too-large`：這一行改走位元組窗口。第一個窗口順便核對位置。 */
   const startLine = async (seq: number, index: number, offset: number) => {
     const at = key(seq, index, offset);
     const located = await startOf(seq, index, offset);
@@ -392,7 +406,7 @@ export function createDeliverableFileStore({
       publish(at, window);
       return;
     }
-    if (from !== start && bytesOfBase64(window.data.slice(0, 4))[0] !== 0x0a) {
+    if (from !== start && window.data[0] !== 0x0a) {
       publish(at, 'invalid');
       return;
     }
@@ -410,7 +424,7 @@ export function createDeliverableFileStore({
     accept(seq, index, line, window, start - from);
   };
 
-  /** 讀一頁；413 照 `page-limit.ts` 縮 `limit`，縮到底改走位元組窗口。 */
+  /** 讀一頁；`too-large` 照 `page-limit.ts` 縮 `limit`，縮到底改走位元組窗口。 */
   const readPage = async (seq: number, index: number, offset: number) => {
     const at = key(seq, index, offset);
     const file = fileKey(seq, index);
