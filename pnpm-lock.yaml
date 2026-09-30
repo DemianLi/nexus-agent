@@ -845,9 +845,6 @@ importers:
       '@nexus/core':
         specifier: workspace:*
         version: link:../nexus-core
-      '@nexus/wire':
-        specifier: workspace:*
-        version: link:../nexus-wire
       diff:
         specifier: ^9.0.0
         version: 9.0.0
@@ -880,6 +877,9 @@ importers:
       '@nexus/core':
         specifier: workspace:*
         version: link:../nexus-core
+      '@nexus/plugin-workspace-changes':
+        specifier: workspace:*
+        version: link:../nexus-plugin-workspace-changes
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3
