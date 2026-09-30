@@ -63,9 +63,6 @@ import { z } from 'zod';
 /** 註冊出來的工具名，照 dsh。web 的工具卡照這個名字認（`apps/web/src/lib/present-view.ts`）。 */
 export const PRESENT_TOOL_NAME = 'present';
 
-/** 這個 plugin 宣告的能力名。 */
-export const PRESENT_CAPABILITY = 'present';
-
 /** 一次最多幾個檔。照 dsh `Config.maxFiles` 的預設。 */
 export const DEFAULT_MAX_FILES = 8;
 
@@ -214,7 +211,6 @@ export const presentPlugin: NexusPlugin<PresentConfig> = {
   Config: presentConfigSchema,
   apply(registry: PluginRegistry, config: PresentConfig): void {
     const { maxFiles } = config;
-    registry.capabilities.provide(PRESENT_CAPABILITY);
     // **plugin 在 `apply` 裡看不到 backend**，只有 `useWithBackend` 的工廠拿得到折好的那一顆
     // （#388 開的窄縫）。所以掛一顆沒有鉤子的 middleware，只為了接住它。變數放在 `apply` 裡：
     // 同一個 plugin 物件被好幾次組裝各跑一次 `apply`，每次各一格，不會互相看到。

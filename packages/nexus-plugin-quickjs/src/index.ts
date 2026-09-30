@@ -52,9 +52,6 @@ import { getQuickJS, shouldInterruptAfterDeadline } from 'quickjs-emscripten';
 import type { QuickJSContext, QuickJSHandle } from 'quickjs-emscripten';
 import { z } from 'zod';
 
-/** 這個 plugin 宣告的能力名。要相依它的 plugin 把這個字串放進自己的 `requires`。 */
-export const QUICKJS_CAPABILITY = 'quickjs';
-
 /**
  * 註冊出來的工具名。
  *
@@ -159,7 +156,6 @@ export const quickJsPlugin: NexusPlugin<QuickJsConfig> = {
     const { timeoutMs, memoryLimitBytes, maxStackSizeBytes } = config;
     const quickjs = await getQuickJS();
 
-    registry.capabilities.provide(QUICKJS_CAPABILITY);
     registry.tools.register(
       tool(
         ({ code }) => runInVm(quickjs, code, { timeoutMs, memoryLimitBytes, maxStackSizeBytes }),

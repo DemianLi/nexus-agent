@@ -12,7 +12,6 @@ import { loadPlugins } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
 import {
-  AGENT_INSTRUCTIONS_CAPABILITY,
   AGENT_INSTRUCTIONS_MARKER,
   createAgentInstructionsMiddleware,
   createAgentInstructionsPlugin,
@@ -61,10 +60,9 @@ function baselineMessage(): HumanMessage {
 }
 
 describe('createAgentInstructionsPlugin', () => {
-  it('宣告能力，並且註冊的是「要 backend 才建得出來」的那一種', async () => {
+  it('註冊的是「要 backend 才建得出來」的那一種', async () => {
     const { registry } = await loadPlugins([createAgentInstructionsPlugin()]);
 
-    expect(registry.capabilities.has(AGENT_INSTRUCTIONS_CAPABILITY)).toBe(true);
     const entries = registry.middleware.list();
     expect(entries).toHaveLength(1);
     // **不是 `use()`。** 走 `use()` 的話它拿不到工作區，會變成一顆永遠讀不到檔的 middleware。

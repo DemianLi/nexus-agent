@@ -1,12 +1,6 @@
 import { loadPlugins } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
-import {
-  createEchoPlugin,
-  DEFAULT_ECHO_PREFIX,
-  ECHO_CAPABILITY,
-  echoPlugin,
-  ECHO_TOOL_NAME,
-} from './index.js';
+import { createEchoPlugin, DEFAULT_ECHO_PREFIX, echoPlugin, ECHO_TOOL_NAME } from './index.js';
 
 /**
  * 薄測試，只斷言「`apply` 真的往那兩個註冊點放了東西」。
@@ -17,10 +11,9 @@ import {
  * `pnpm -r run test` 找不到測試檔就是紅燈）。
  */
 describe('createEchoPlugin', () => {
-  it('註冊 echo 工具並宣告 echo 能力', async () => {
+  it('註冊 echo 工具', async () => {
     const { registry } = await loadPlugins([createEchoPlugin()]);
 
-    expect(registry.capabilities.has(ECHO_CAPABILITY)).toBe(true);
     expect(registry.tools.resolve(ECHO_TOOL_NAME)?.value.name).toBe(ECHO_TOOL_NAME);
   });
 

@@ -13,8 +13,8 @@
  *
  * 下面這段講的因此不是「為什麼這個 package 沒有不變量」，是**它的契約實際證在哪裡**：
  *
- * 基座的 memory middleware 是唯讀的，這個套件只提供一個慣例路徑與一個
- * 能力名。真正會壞的兩件事都不在這裡：路徑載不載得起來由 `@nexus/core` 的
+ * 基座的 memory middleware 是唯讀的，這個套件只提供一個慣例路徑。
+ * 真正會壞的兩件事都不在這裡：路徑載不載得起來由 `@nexus/core` 的
  * `assertLoadableMemoryPath` 在組裝期擋（**刻意放在 registry 而不是這個 plugin**，理由見
  * `index.ts` 檔頭第 2 點），記憶留不留得住是 backend 的問題。
  *

@@ -32,7 +32,6 @@ import {
   PLAN_ENTERED_MESSAGE,
   PLAN_HEADING_REQUIRED_MESSAGE,
   PLAN_LEFT_MESSAGE,
-  PLAN_MODE_CAPABILITY,
   PLAN_MODE_MIDDLEWARE_NAME,
   PLAN_NO_REVIEWER_MESSAGE,
   PLAN_NOT_ATTACHED_MESSAGE,
@@ -188,10 +187,9 @@ describe('exit_plan_mode 沒有生效時', () => {
  * ——那裡看的是模型收到的 prompt 與跑完之後的日誌，這裡看的是 registry 的內容與 `/plan`。
  */
 describe('createPlanModePlugin', () => {
-  it('五個註冊點都放了東西，核准閘門一位都沒有', async () => {
+  it('四個註冊點都放了東西，核准閘門一位都沒有', async () => {
     const { registry } = await loadPlugins([createPlanModePlugin()]);
 
-    expect(registry.capabilities.has(PLAN_MODE_CAPABILITY)).toBe(true);
     expect(registry.sessions.installers()).toHaveLength(1);
     expect([...registry.tools.effective().keys()]).toContain(EXIT_PLAN_MODE_TOOL_NAME);
     // `middleware` 可能是 `undefined`——那是 `useWithBackend()` 註冊的那一種（#388）。

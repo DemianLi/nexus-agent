@@ -24,7 +24,6 @@ import {
   DEFAULT_TIMEOUT_MS,
   quickJsConfigSchema,
   quickJsPlugin,
-  QUICKJS_CAPABILITY,
   RUN_JAVASCRIPT_TOOL_NAME,
 } from './index.js';
 import type { QuickJsPluginOptions } from './index.js';
@@ -219,12 +218,6 @@ describe('資源邊界——只有設定的那麼強', () => {
 });
 
 describe('plugin 的接線', () => {
-  it('宣告 quickjs 能力', async () => {
-    const { registry } = await loadPlugins([createQuickJsPlugin()]);
-
-    expect(registry.capabilities.has(QUICKJS_CAPABILITY)).toBe(true);
-  });
-
   // 這條釘住「不接 lifecycle」那個決定（見 index.ts）。接了一個什麼都不做的 disposer
   // 會讓關機清單看起來比實際上熱鬧，而關機清單是診斷「誰沒收乾淨」時看的東西。
   it('沒有登記關機清理——行程內的 VM 沒有活 handle 要收', async () => {
