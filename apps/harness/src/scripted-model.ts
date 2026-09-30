@@ -22,6 +22,11 @@ export interface ScriptedModelState {
 export interface ScriptedToolCall {
   readonly name: string;
   readonly args: Record<string, unknown>;
+  /**
+   * 指定 `tool_call_id`。預設是 `call_<輪>_<序>`——**兩顆假模型（root 與子代理）的編號會撞**，
+   * 而線上的折疊器照 id 認卡，撞了就是同一張卡；要在同一條線上看兩邊的卡時，子代理那邊給一個不撞的。
+   */
+  readonly id?: string;
 }
 
 /**
@@ -154,7 +159,7 @@ export class ScriptedChatModel extends BaseChatModel {
     return new AIMessage({
       content: turn.content,
       tool_calls: turn.toolCalls?.map((call, index) => ({
-        id: `call_${this.shared.turn}_${index}`,
+        id: call.id ?? `call_${this.shared.turn}_${index}`,
         name: call.name,
         args: call.args,
         type: 'tool_call' as const,

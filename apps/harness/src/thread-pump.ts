@@ -90,7 +90,12 @@ import {
   type TurnEndReason,
 } from '@nexus/core';
 import type { Event, ThreadFeedFrame, WireChannel } from '@nexus/wire';
-import { channelOfMethod, eventId, SessionReferenceError } from '@nexus/wire';
+import {
+  channelOfMethod,
+  DELEGATION_TOOL_NAMES,
+  eventId,
+  SessionReferenceError,
+} from '@nexus/wire';
 
 import {
   contextMeasureData,
@@ -114,6 +119,7 @@ import {
   type SessionReferenceReader,
 } from './session-reference.js';
 import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
+import { isBackgroundAddress } from './background-run-id.js';
 import { capToolResultMeta, toolResultText } from './tool-result-text.js';
 import { assertThreadTitleLimits, ensureFallbackTitle } from './session-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
@@ -584,9 +590,10 @@ const ABORTED_BY_USER: TurnEndReason = { kind: 'aborted', cause: { kind: 'user' 
  *
  * **只用在收回時選碼**：停在核准點時懸著的 root 呼叫，一般是那幾顆等核准的（從沒開始 →
  * `ABORTED_BEFORE_DISPATCH`）；而**等核准的是子代理的話**，root 這一層懸著的是 `task` 本身——它早就
- * 開始了，是 `ABORTED`。名字取自 deepagents 的 `task` 工具。
+ * 開始了，是 `ABORTED`。名字取自 deepagents 的 `task` 工具，與背景選項開啟時模型看到的 `subagent`
+ * （#831）——兩個都是「派子代理的那顆」。
  */
-const DELEGATION_TOOL = 'task';
+const DELEGATION_TOOLS: readonly string[] = DELEGATION_TOOL_NAMES;
 
 /**
  * 正在跑的那一輪：它自己的中止控制器，與 pump 在線上看到的、root 那則還沒講完的回覆。
@@ -1313,7 +1320,7 @@ export class ThreadPump {
   async #withdraw(): Promise<void> {
     const log = this.#sessions.root;
     log.append('turn/start', { kind: 'resume' });
-    const started = (name: string) => name === DELEGATION_TOOL;
+    const started = (name: string) => DELEGATION_TOOLS.includes(name);
     let dangling: { readonly id: string; readonly name: string }[];
     try {
       const config: ThreadConfig = { configurable: { thread_id: this.#threadId } };
@@ -2060,7 +2067,7 @@ export class ThreadPump {
       for (const data of this.#totals.apply(event)) this.#presentCustom(data);
     }
     if (event.type === 'tool/call') this.#openCard(entry.address, event.data);
-    else if (event.type === 'tool/result') this.#noteVerdict(event);
+    else if (event.type === 'tool/result') this.#noteVerdict(event, entry.address);
     else if (event.type === 'deliverables/presented' && entry.address.kind === 'root') {
       this.#presentDeliverables(event.data, event.seq);
     } else if (event.type === 'workspace/changes' && entry.address.kind === 'root') {
@@ -2170,8 +2177,12 @@ export class ThreadPump {
    * 今天樹上沒有「本體錯、日誌成功」的生產者（handler 之後改結果的只往錯誤那邊改；剪工具結果的那一層
    * 原樣帶 `status`），所以這一向目前只是對稱，沒有案例。
    */
-  #noteVerdict(event: SessionEvent<'tool/result'>): void {
-    if (this.#current === undefined) return;
+  #noteVerdict(event: SessionEvent<'tool/result'>, address: SessionAddress): void {
+    // **背景子代理的不看 run**：它的串流由 host 自己排空，線上從來沒有基座的 `tool-finished`，卡只能由
+    // 這裡收；而它在 root 閒著的時候照樣跑（#832）。判定也不記進 `#earlyVerdicts`——沒有 frame 會來取，
+    // 記著只是漏（同 id 的下一輪不會有，但表會一直長）。
+    const background = isBackgroundAddress(address);
+    if (this.#current === undefined && !background) return;
     const { callId, isError, message, meta } = event.data;
     // 失敗的不帶由 `applyVerdict` 管（它只在成功那一支放 meta），這裡不再判一次。
     const capped = capToolResultMeta(meta, this.#toolTextMaxBytes);
@@ -2183,6 +2194,10 @@ export class ThreadPump {
       text: toolResultText(message, this.#toolTextMaxBytes),
       ...(capped === undefined ? {} : { meta: capped }),
     };
+    if (background) {
+      this.#closeCard(callId, verdict);
+      return;
+    }
     const forwarded = this.#forwardedFinishes.get(callId);
     if (forwarded === undefined) {
       this.#earlyVerdicts.set(callId, verdict);

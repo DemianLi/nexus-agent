@@ -41,10 +41,11 @@ import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { Command } from '@langchain/langgraph';
 import type { StructuredToolInterface } from '@langchain/core/tools';
-import { toolRefusal } from '@nexus/core';
+import { putToolResultMeta, toolRefusal } from '@nexus/core';
 import type { PluginEntry, SessionLog, SessionRegistry } from '@nexus/core';
 import type { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import { createMiddleware } from 'langchain';
+import type { BackgroundSubagentMeta } from '@nexus/wire';
 import { z } from 'zod';
 
 import { BackgroundSubagentHost } from './background-subagents.js';
@@ -234,6 +235,14 @@ export class BackgroundDelegation {
           const sandbox = this.#options.sandbox;
           const start = () => host.start({ subagent: subagentType, text: description });
           const started = sandbox === undefined ? start() : sandbox.delegate(start);
+          // 編號告訴折疊器：背景那一輪的卡從日誌開、namespace 是 `[編號, 'tools']`，沒有這一格就永遠認不出是誰的
+          // （#832）。寫在這次呼叫自己的槽裡，圍堵收尾時帶進 `tool/result`，即時與重播是同一份。
+          const key: BackgroundSubagentMeta = {
+            kind: 'background-subagent',
+            runId: started.runId,
+            subagentType,
+          };
+          putToolResultMeta(SUBAGENT_TOOL_NAME, key);
           // 第一輪的下場不在這次呼叫裡等：失敗已記在它自己的日誌（`outcome` 永遠不 reject）。
           return new ToolMessage({
             content: `子代理已在背景啟動，編號：${started.runId}（${subagentType}）。`,
