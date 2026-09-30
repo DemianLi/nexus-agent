@@ -46,6 +46,7 @@ describe('serve 的旗標', () => {
       // 印設定預設關——它是一個診斷出口，不是一種跑法（#454）。
       dumpConfig: false,
       dumpConfigSchema: false,
+      dumpDefaultConfig: false,
       help: false,
     });
   });

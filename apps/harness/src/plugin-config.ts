@@ -1018,7 +1018,7 @@ export async function loadDefaultPlugins(
   return loadPluginConfig(defaultSources(options));
 }
 
-/** {@link loadDefaultPlugins} 與 {@link renderDefaultConfigDump} 共用的那幾格。 */
+/** {@link loadDefaultPlugins} 與 {@link renderLayeredConfigDump} 共用的那幾格。 */
 export interface DefaultConfigOptions {
   /** 決定 harness home 落在哪，省略即 `process.env`。 */
   readonly env?: NodeJS.ProcessEnv;
@@ -1048,7 +1048,7 @@ function defaultSources(options: DefaultConfigOptions): PluginConfigSources {
 
 /**
  * 產品路徑上那三層疊完的條目，**還沒 import 任何模組**——`--dump-config-schema`（#741）收集規格表的起點。
- * 疊的層與 {@link renderDefaultConfigDump}、啟動是同一組（共用 `defaultSources`）。
+ * 疊的層與 {@link renderLayeredConfigDump}、啟動是同一組（共用 `defaultSources`）。
  *
  * @param options - 與 {@link loadDefaultPlugins} 同一組。
  * @returns 疊完並驗過形狀的條目清單。
@@ -1065,8 +1065,25 @@ export function composeDefaultEntries(options: DefaultConfigOptions = {}): Confi
  * @returns 一份帶來源註解的 YAML 文件。
  * @throws {PluginConfigError} 任何一層讀不了、形狀不合，或疊完之後有壞掉的列。
  */
-export function renderDefaultConfigDump(options: DefaultConfigOptions = {}): string {
+export function renderLayeredConfigDump(options: DefaultConfigOptions = {}): string {
   return renderConfigDump(defaultSources(options));
+}
+
+/**
+ * 只印出貨那一層的設定（[#740](https://github.com/DemianLi/nexus-agent/issues/740)）——`--dump-default-config`。
+ *
+ * 照 dsh 的 `--dump-default-config`（`apps/cli/src/dump-config.ts:47`）：**真的不讀**home 覆寫檔與 `--patch`，不是讀了再丟。
+ * 它就是設計來救「`cordis.patch.yml` 壞掉」的：壞掉的檔（權限錯、YAML 寫壞）不會被解析，所以 {@link renderLayeredConfigDump}
+ * 印不出來的時候，這一份還印得出來，拿來跟壞掉的那份對照。
+ *
+ * **刻意不經過 `defaultSources`**：那條路一定帶 `userPatch`，也要解析 home 路徑；這裡直接給一份空來源，
+ * 讀的只有 `shippedConfigPath()`。我們沒有 profile 也沒有組合包（#46 Out of scope），dsh 的「出貨」在這裡就是一個檔。
+ *
+ * @returns 一份帶來源註解的 YAML 文件。
+ * @throws {PluginConfigError} 出貨檔讀不了、形狀不合，或有壞掉的列。
+ */
+export function renderShippedConfigDump(): string {
+  return renderConfigDump({});
 }
 
 function isPluginShaped(value: unknown): value is PluginEntry['plugin'] {
