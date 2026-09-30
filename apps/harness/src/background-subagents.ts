@@ -35,6 +35,8 @@
  * @module
  */
 
+import { randomUUID } from 'node:crypto';
+
 import { HumanMessage } from '@langchain/core/messages';
 import { BACKGROUND_SESSION_CONFIG_KEY } from '@nexus/core';
 import type { SessionLog, SessionRegistry } from '@nexus/core';
@@ -131,6 +133,31 @@ export class BackgroundSubagentHost {
       this.#queue.push({ ...input, settle });
       this.#wake?.();
     });
+  }
+
+  /**
+   * 派出一個新的背景子代理（第一句就是它的誕生），**同步**回編號。
+   *
+   * 同步是為了「收件匣接受那一刻」：呼叫端可以把這一步包在沙箱控制器的 `delegate` 裡，日誌在這一行之內開好、
+   * 參與者同步裝上並把 `sandbox/mode {source:'delegation'}` 寫進去，之後每一輪由 `enter` 從那一顆讀回。
+   * 編成圖也在這裡做（快取），所以不認得的子代理、profile 不許的組成當場拋，不是變成背景那一輪的 `turn/failed`。
+   *
+   * @param input.subagent - 子代理名（規格名）。
+   * @param input.text - 第一輪的人話。
+   * @returns 編號（`bg-` 加隨機，不是計數器：root 續接之後不能撞上舊日誌）與第一輪的下場。
+   * @throws host 已關閉；編不出這個子代理的圖。
+   */
+  start(input: { readonly subagent: string; readonly text: string }): {
+    readonly runId: string;
+    readonly outcome: Promise<BackgroundRoundOutcome>;
+  } {
+    if (this.#closed) throw new Error('背景子代理的載體已經關閉');
+    this.#agentFor(input.subagent);
+    let runId: string;
+    do runId = `bg-${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+    while (this.#known.has(runId));
+    this.#sessions.open({ kind: 'subagent', runId });
+    return { runId, outcome: this.submit({ runId, ...input }) };
   }
 
   /** 排隊中與進行中的輪都收完。 */

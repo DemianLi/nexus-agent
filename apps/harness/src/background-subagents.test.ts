@@ -262,6 +262,26 @@ describe('載體本身（假 agent）', () => {
     await host.close();
   });
 
+  it('start：同步回編號並開好日誌（收件匣接受那一刻），編號不重複；編不出圖當場拋、不留日誌', async () => {
+    const { agent } = fakeAgent();
+    const { host, sessions } = make((name) => {
+      if (name === 'missing') throw new Error('沒有 "missing" 這個子代理');
+      return agent;
+    });
+    const first = host.start({ subagent: 'worker', text: '句' });
+    // 同步：回來的當下日誌已經在，不必等迴圈。
+    expect(first.runId).toMatch(/^bg-[0-9a-f]{12}$/);
+    expect(sessions.get({ kind: 'subagent', runId: first.runId })).toBeDefined();
+    const second = host.start({ subagent: 'worker', text: '句' });
+    expect(second.runId).not.toBe(first.runId);
+    expect(() => host.start({ subagent: 'missing', text: '句' })).toThrow('沒有 "missing"');
+    expect(sessions.list()).toHaveLength(3); // root＋兩個
+    expect(await first.outcome).toEqual({ ok: true });
+    expect(await second.outcome).toEqual({ ok: true });
+    await host.close();
+    expect(() => host.start({ subagent: 'worker', text: '句' })).toThrow('已經關閉');
+  });
+
   it('同一個編號不能換子代理；關閉之後不收新的輪，但排著的與進行中的會收完', async () => {
     const hold = gate();
     const { agent } = fakeAgent(async () => hold.opened);
