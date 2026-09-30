@@ -18,7 +18,7 @@
  *
  * 兩次合起來印一段（{@link startupWarning}），只印一次。
  *
- * ## 名單只有 `browser-session`
+ * ## 名單是 `browser-session` 與 `system-prompt`
  *
  * dsh 的七個 id 分三類（`README.zh.md:43`），對到我們：
  *
@@ -29,6 +29,11 @@
  * | web 的啟動與傳輸 | `modules`、`connection` | `connection` 的 cookie 有效期在我們是 `browser-session` 這一列 | **是** |
  *
  * 不是清單上的列的那幾樣（組裝本身、入口自己的程式碼、組裝點自己加的外掛），失敗照舊一律起不來，不經過這裡。
+ *
+ * **`system-prompt` 是我們多的一個**（[#720](https://github.com/DemianLi/nexus-agent/issues/720)，偏離登記）：dsh 的名單沒有它，
+ * 因為 dsh 的嚴格插值在渲染時拋——每一輪都紅，壞掉的設定不可能被忽略。我們的載入器把 `apply` 拋的錯變成「那一列掉了」，
+ * 不列進名單的話，前綴寫了個打錯字的 `{{modle}}` 只換來一行警告，模型靜靜少了身分與 persona 照樣跑——比大聲失敗更糟。
+ * 表達不出來的是「壞了就每輪都紅」（我們在掛載當下算，不在渲染時算），退到最接近的：讓這一列掉了就整個起不來。
  *
  * **它跟「關不掉」的名單（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`）是兩回事**：那一份只管能不能寫
  * `disabled: true`，以 `name` 為鍵；這一份管掉了要不要整個起不來，以 id 為鍵，照 dsh。以 id 為鍵繞不過去：patch
@@ -58,7 +63,10 @@ import type { IgnoredConfig, LoadedPluginConfig, StartupDrop } from './plugin-co
  * 必掛的條目 id，對到出貨清單（`apps/harness/cordis.yml`）上那一列的 `id:`。**寫字面值、不借 plugin 名的常數**：
  * 兩者今天剛好相同，但比對的是條目 id，契約是 id。
  */
-export const REQUIRED_ENTRY_IDS: ReadonlySet<string> = new Set(['browser-session']);
+export const REQUIRED_ENTRY_IDS: ReadonlySet<string> = new Set([
+  'browser-session',
+  'system-prompt',
+]);
 
 /** 帶 `--live` 時也必須在的那一列的 id，理由見檔頭。 */
 const LIVE_MODEL_ENTRY_ID = 'live-model';

@@ -18,7 +18,7 @@ import { AssemblyDropError } from './agent-factory.js';
 import type { AssemblyDrop } from './agent-factory.js';
 import { BROWSER_SESSION_SECRET_FILE } from './browser-session-secret.js';
 import { runCli } from './cli.js';
-import { foldTurn, serveClient } from './fixtures.js';
+import { foldTurn, serveClient, withSystemPromptVariables } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { loadDefaultPlugins } from './plugin-config.js';
 import { runServe } from './serve.js';
@@ -73,8 +73,8 @@ const BAD_BROWSER_SESSION = '- id: browser-session\n  config:\n    maxAgeDays: 0
 const BAD_TODO = "- id: todo\n  config:\n    allowParallelInProgress: '不是布林'\n";
 
 describe('必掛的列掉了：兩個入口都起不來', () => {
-  it('名單上只有 browser-session，而且比的是條目 id', () => {
-    expect([...REQUIRED_ENTRY_IDS]).toEqual(['browser-session']);
+  it('名單上是 browser-session 與 system-prompt，而且比的是條目 id', () => {
+    expect([...REQUIRED_ENTRY_IDS]).toEqual(['browser-session', 'system-prompt']);
   });
 
   /**
@@ -146,7 +146,7 @@ describe('掉了的列算沒掛', () => {
   it('summarization 設定寫壞：跟寫 disabled: true 的那份一樣記成沒掛', async () => {
     const mountedOff = async (patch: string): Promise<readonly string[]> => {
       const { plugins } = await loadDefaultPlugins({ env: homeWith(patch) });
-      const { registry, dispose } = await loadPlugins(plugins);
+      const { registry, dispose } = await loadPlugins(withSystemPromptVariables(plugins));
       await dispose();
       return registry.disabledEntries.names();
     };
@@ -174,7 +174,7 @@ describe('沒有設定格式卻寫了 config：照樣掛，警告講那份設定
     expect(logged).toContain(LINE);
 
     const { plugins } = await loadDefaultPlugins({ env });
-    const { registry, dispose } = await loadPlugins(plugins);
+    const { registry, dispose } = await loadPlugins(withSystemPromptVariables(plugins));
     await dispose();
     expect(registry.disabledEntries.has('observation-policy')).toBe(false);
   });

@@ -115,6 +115,7 @@ export type {
   NexusServices,
   KnownServiceName,
   BackendRegistrationPoint,
+  MiddlewarePlacement,
   MiddlewareRegistrationPoint,
   MiddlewareRegistration,
   PermissionRegistrationPoint,

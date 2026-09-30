@@ -99,6 +99,26 @@
 - id: present
   name: '@nexus/plugin-present'
 
+# 系統提示詞的身分與 persona（#720）。照 dsh 的 `system-prompt`（`packages/core/system-prompt/src/index.ts:407-442`）
+# 三格設定；出貨值對應 dsh 四個入口 profile 覆寫成的那一組（`packages/bundle/web-app/cordis.patch.yml:16-20`），
+# 英文，開頭句不自稱寫程式。順序是身分句 → 前綴 → 其餘（含組裝點傳的那句指引）→ 後綴，**後綴永遠是最後一段**。
+#
+# - `includeHarnessIdentity`：最前面一句 "You are an AI agent powered by nexus-agent."。
+# - `personaPrefix`／`personaSuffix`：`{{model}}`（這一次組裝的模型 id）與 `{{cwd}}` 可以引用。**嚴格插值**：
+#   未知的變數、沒有值的變數、寫壞的 `{{…}}` 都讓啟動失敗，訊息指名是哪一格與哪個變數。
+#   **`{{cwd}}` 是檔案工具的位址空間裡的根（`/`），不是主機路徑**：工具收不下主機路徑（登記在
+#   `@nexus/plugin-system-prompt` 的檔頭）。
+#
+# **patch 是整份取代 `config`**：只寫 `includeHarnessIdentity: false` 的話，前後綴也回到空。所以這一列三格全部寫出來。
+# 這一列掉了（設定寫壞）整個起不來（`startup-audit.ts` 的必掛名單）：靜靜少了身分與 persona，比大聲失敗更糟。
+# 子代理也帶部署 persona（它們的請求走同一顆 middleware）。
+- id: system-prompt
+  name: '@nexus/plugin-system-prompt'
+  config:
+    includeHarnessIdentity: true
+    personaPrefix: 'You are a helpful assistant powered by the {{model}} model.'
+    personaSuffix: 'Your working directory is {{cwd}}.'
+
 # ── core 的設定 ──────────────────────────────────────────────────────────────
 #
 # 這幾列**不裝功能，只講設定**（最後一列 `session-persistence` 例外：它代表落盤本身，#612）。
@@ -493,6 +513,8 @@
   name: '@nexus/plugin-sandbox-policy/invariant'
 - id: skills-invariant
   name: '@nexus/plugin-skills/invariant'
+- id: system-prompt-invariant
+  name: '@nexus/plugin-system-prompt/invariant'
 - id: submit-record-invariant
   name: '@nexus/plugin-submit-record/invariant'
 - id: telemetry-otel-invariant

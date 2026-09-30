@@ -850,6 +850,8 @@ function foldMiddleware(
     // 工具那一側，`tool/call` 由最外層的圍堵記，這裡一定看得到它。見 {@link ./session-checkpoint-policy.ts}。
     ...(sessionCheckpoint === undefined ? [] : [sessionCheckpoint]),
     ...plugins.rest,
+    // 以 `last` 掛的（#720）：在其餘每一顆會往 system prompt 附加文字的內側，所以它附加的是最後一段。
+    ...plugins.last,
     // 輸出校驗在每一個 plugin middleware 的內側：看到的是工具原本的輸出，不是外層改過的版本
     // （dsh 在 `tools/post-execute` 之前驗）。解不開參數的那顆在它更內側，換上的樁回的是錯誤，
     // 這裡照規矩不驗。見 {@link ./output-schema.ts}。
@@ -900,7 +902,11 @@ function pluginMiddleware(
       .map(materialize)
       .filter(isMiddleware),
     rest: entries
-      .filter((entry) => !entry.value.prepend)
+      .filter((entry) => !entry.value.prepend && !entry.value.last)
+      .map(materialize)
+      .filter(isMiddleware),
+    last: entries
+      .filter((entry) => entry.value.last)
       .map(materialize)
       .filter(isMiddleware),
   };
@@ -910,6 +916,8 @@ function pluginMiddleware(
 interface PluginMiddleware {
   prepended: AgentMiddleware[];
   rest: AgentMiddleware[];
+  /** 以 `last` 掛的（#720）：root 排在其餘 plugin 之後，子代理連它自帶的也排在它前面。 */
+  last: AgentMiddleware[];
 }
 
 /**
@@ -923,10 +931,10 @@ interface PluginMiddleware {
  *
  * 只挑這一個名字，不是「撞上基座的一律不給」：其他撞名的今天樹上一顆都沒有，也沒有量過它們的閉包。
  */
-function subagentPluginMiddleware({ prepended, rest }: PluginMiddleware): PluginMiddleware {
+function subagentPluginMiddleware({ prepended, rest, last }: PluginMiddleware): PluginMiddleware {
   const keep = (middleware: AgentMiddleware) =>
     (middleware as { name?: string }).name !== SUMMARIZATION_MIDDLEWARE_NAME;
-  return { prepended: prepended.filter(keep), rest: rest.filter(keep) };
+  return { prepended: prepended.filter(keep), rest: rest.filter(keep), last: last.filter(keep) };
 }
 
 /**
@@ -1325,7 +1333,11 @@ function foldSubAgents(
     /** 委派聲明，見 {@link ./subagent-delegation.ts}。只放進子代理。 */
     delegation: AgentMiddleware;
     /** plugin 註冊的，跟 root 同一批實例，見 {@link pluginMiddleware}。 */
-    plugins: { prepended: readonly AgentMiddleware[]; rest: readonly AgentMiddleware[] };
+    plugins: {
+      prepended: readonly AgentMiddleware[];
+      rest: readonly AgentMiddleware[];
+      last: readonly AgentMiddleware[];
+    };
     observationPolicy: (() => AgentMiddleware) | undefined;
     summarizer: () => AgentMiddleware;
     repeatReminder: AgentMiddleware | undefined;
@@ -1450,6 +1462,8 @@ function foldSubAgents(
         // 同 `tools` 那條「全域 → 自帶」的軸線。
         ...context.plugins.rest,
         ...(spec.middleware ?? []),
+        // 以 `last` 掛的（#720）：連子代理自己帶的也在它外側，所以它附加的仍是最後一段。
+        ...context.plugins.last,
         // 輸出校驗排在 subagent 自帶的那些內側，同 root；共用一份，它無狀態。
         context.outputSchema,
         // 檔案工具的失敗標成錯誤，同 root 的位置；共用一份，它無狀態。subagent 的檔案工具由基座
