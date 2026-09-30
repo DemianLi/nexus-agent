@@ -6,6 +6,7 @@
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./types": "./src/types.ts",
     "./invariant": "./src/invariant.ts",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
@@ -25,7 +26,6 @@
   },
   "dependencies": {
     "@nexus/core": "workspace:*",
-    "@nexus/wire": "workspace:*",
     "diff": "^9.0.0",
     "langchain": "^1.5.10",
     "zod": "^4.3.6"

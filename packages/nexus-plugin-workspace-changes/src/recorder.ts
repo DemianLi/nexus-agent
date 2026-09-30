@@ -32,7 +32,7 @@ import { homedir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 
 import type { SessionLog } from '@nexus/core';
-import type { WorkspaceChangedFile, WorkspaceChangesSummary, WorkspaceFileDiff } from '@nexus/wire';
+import type { WorkspaceChangedFile, WorkspaceChangesSummary, WorkspaceFileDiff } from './types.js';
 
 import { captureFile, mutationPath, sameCapture } from './capture.js';
 import type { Capture } from './capture.js';

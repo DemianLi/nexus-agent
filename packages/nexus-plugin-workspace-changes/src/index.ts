@@ -62,7 +62,7 @@ import type { AgentMiddleware } from 'langchain';
 import { z } from 'zod';
 
 import type { NexusPlugin, PluginEntry, PluginRegistry, SessionLog } from '@nexus/core';
-import type { WorkspaceChangesSummary, WorkspaceFileDiff } from '@nexus/wire';
+import type { WorkspaceChangesSummary, WorkspaceFileDiff } from './types.js';
 
 import { GitRunner, resolveGitExecutable } from './git.js';
 import { TurnRecorder } from './recorder.js';
