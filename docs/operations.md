@@ -568,6 +568,20 @@ server、不綁 port：
 
 輸出的位元組不是約定，不要拿它去做程式化的比對：dsh 對自己那份 dump 也明講了同一件事。
 
+**覆寫檔壞了的時候**（權限被開到別人也寫得動、YAML 寫壞），`--dump-config` 自己也印不出來——它一定會去讀
+`$NEXUS_AGENT_HOME/cordis.patch.yml`，讀不過就拋，訊息指名壞的是哪個檔。這時候用：
+
+```bash
+pnpm --filter @nexus/harness run cli -- --dump-default-config
+```
+
+它**只印出貨那一層**（`apps/harness/cordis.yml`），真的不讀 home 覆寫檔，所以壞掉的檔不會擋它，輸出裡也沒有
+那個檔的路徑。拿它跟壞掉的那份對照，就知道你的覆寫檔本來該改的是哪幾列。`serve` 也收同一個旗標。
+
+三種印法（`--dump-config`、`--dump-config-schema`、`--dump-default-config`）**一次只能用一種**；
+`--dump-default-config` 另外不能配 `--patch`（它不讀任何覆寫檔，靜靜收下會讓人以為看到的是疊過的樣子），
+CLI 上也不能配 `--resume` 或要說的話。`--dump-config` 以前會靜靜收下要說的話再印完就退出，現在同樣拒絕。
+
 ### 寫覆寫檔之前先看欄位規格表
 
 ```bash

@@ -74,7 +74,8 @@ import { runDumpConfigSchema } from './config-schema-dump.js';
 import {
   composeDefaultEntries,
   loadDefaultPlugins,
-  renderDefaultConfigDump,
+  renderLayeredConfigDump,
+  renderShippedConfigDump,
 } from './plugin-config.js';
 import {
   assemblyDropsOf,
@@ -121,6 +122,8 @@ export interface ServeInvocation {
   readonly dumpConfig: boolean;
   /** 見 `cli.ts` 的 `CliInvocation.dumpConfigSchema`。**兩個入口印的是同一份規格表**。 */
   readonly dumpConfigSchema: boolean;
+  /** 見 `cli.ts` 的 `CliInvocation.dumpDefaultConfig`。**兩個入口印的是同一份出貨設定**。 */
+  readonly dumpDefaultConfig: boolean;
   readonly help: boolean;
 }
 
@@ -135,6 +138,10 @@ const USAGE = `用法：
   --dump-config-schema 把疊完的 plugin 設定欄位規格表（JSON Schema 2020-12）印出來就退出（不開 server）
                        標準輸出只有那份 JSON，診斷走標準錯誤；有任何一列轉不完整（或載不起來）退出碼是 1
                        停用的列也收。不能配 --dump-config
+  --dump-default-config
+                       只印出貨那一層的設定就退出（不開 server）：不讀 $NEXUS_AGENT_HOME/cordis.patch.yml，也不收 --patch
+                       覆寫檔壞了連 --dump-config 都印不出來時，用它拿一份對照
+                       不能配 --dump-config、--dump-config-schema 或 --patch
   --workspace <dir>    把檔案落在這個目錄底下（省略即虛擬檔案系統）
   --sandbox <mode>     圍堵強度：read-only｜workspace-write｜danger-full-access
                        預設 workspace-write（可寫根之內放行）；要配 --workspace
@@ -167,6 +174,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
         'goal-driver': { type: 'boolean', default: false },
         'dump-config': { type: 'boolean', default: false },
         'dump-config-schema': { type: 'boolean', default: false },
+        'dump-default-config': { type: 'boolean', default: false },
         help: { type: 'boolean', default: false },
       },
     });
@@ -196,6 +204,24 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     throw new Error(`--dump-config-schema 不能配 --dump-config：一次只印一種。\n\n${USAGE}`);
   }
 
+  // 見 `cli.ts` 的同一段：三種印法互斥，只印出貨那一層時 `--patch` 沒有意思。
+  const dumpDefaultConfig = values['dump-default-config'] === true;
+  if (dumpDefaultConfig) {
+    if (dumpConfig) {
+      throw new Error(`--dump-default-config 不能配 --dump-config：一次只印一種。\n\n${USAGE}`);
+    }
+    if (dumpConfigSchema) {
+      throw new Error(
+        `--dump-default-config 不能配 --dump-config-schema：一次只印一種。\n\n${USAGE}`,
+      );
+    }
+    if (patches !== undefined) {
+      throw new Error(
+        `--dump-default-config 不能配 --patch：它只印出貨那一層，不讀任何覆寫檔。\n\n${USAGE}`,
+      );
+    }
+  }
+
   const port = values.port === undefined ? DEFAULT_PORT : Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`--port 要給 0 到 65535 之間的整數，收到 "${values.port}"。\n\n${USAGE}`);
@@ -211,6 +237,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     goalDriver: values['goal-driver'] === true,
     dumpConfig,
     dumpConfigSchema,
+    dumpDefaultConfig,
     help: values.help === true,
   };
 }
@@ -324,9 +351,14 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     );
     return undefined;
   }
+  // 只印出貨那一層（#740）：同 `cli.ts`，不讀 home 覆寫檔，所以覆寫檔壞了也印得出來。
+  if (invocation.dumpDefaultConfig) {
+    log(renderShippedConfigDump().trimEnd());
+    return undefined;
+  }
   if (invocation.dumpConfig) {
     log(
-      renderDefaultConfigDump({
+      renderLayeredConfigDump({
         env: options.env ?? process.env,
         ...(invocation.patches !== undefined && { patches: invocation.patches }),
       }).trimEnd(),
