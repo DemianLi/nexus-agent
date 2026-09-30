@@ -28,6 +28,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@types/micromatch": "^4.0.10",
     "@types/node": "^24.10.0",
+    "ajv": "8.20.0",
     "eslint": "^9.39.0",
     "tsx": "^4.22.4",
     "typescript": "^5.9.3",

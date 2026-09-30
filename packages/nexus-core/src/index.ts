@@ -24,6 +24,15 @@ export {
   formatOrigin,
 } from './plugin.js';
 
+export type {
+  ConfigSchemaLoss,
+  ConfigSchemaLossKind,
+  ConfigSchemaResult,
+  ConfigSchemaStatus,
+  JsonSchemaDocument,
+} from './config-schema.js';
+export { configToJsonSchema } from './config-schema.js';
+
 export type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
 
 export type {

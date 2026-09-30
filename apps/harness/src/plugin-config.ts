@@ -1047,6 +1047,18 @@ function defaultSources(options: DefaultConfigOptions): PluginConfigSources {
 }
 
 /**
+ * 產品路徑上那三層疊完的條目，**還沒 import 任何模組**——`--dump-config-schema`（#741）收集規格表的起點。
+ * 疊的層與 {@link renderDefaultConfigDump}、啟動是同一組（共用 `defaultSources`）。
+ *
+ * @param options - 與 {@link loadDefaultPlugins} 同一組。
+ * @returns 疊完並驗過形狀的條目清單。
+ * @throws {PluginConfigError} 任何一層讀不了、形狀不合，或疊完之後有壞掉的列。
+ */
+export function composeDefaultEntries(options: DefaultConfigOptions = {}): ConfigEntry[] {
+  return composeEntries(defaultSources(options));
+}
+
+/**
  * 產品路徑上那三層疊完的樣子，印成 YAML。
  *
  * @param options - 與 {@link loadDefaultPlugins} 同一組。

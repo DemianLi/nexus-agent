@@ -337,7 +337,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `thread-title-llm` | `--live` 時由模型依第一句話產生會話標題 | 有（五格，另有選配的 `modelId`） | 關得掉（＝只剩退回標題） |
 | `thread-search` | 按內容搜尋以前的會話（側欄的搜尋框）；**出廠不開** | 有（一格） | 關得掉（＝搜尋一律失敗） |
 | `browser-session` | 瀏覽器 cookie 的絕對有效期 | 有（一格） | **關不掉** |
-| `deliverable-files` | 交付檔的三個上限（一頁位元組／整檔位元組（只管下載）／一頁行數） | 有（三格） | **關不掉** |
+| `deliverable-files` | 交付檔的三個上限（一頁位元組／整檔位元組（只管整檔讀）／一頁行數） | 有（三格） | **關不掉** |
 | `tool-text` | 一段工具結果文字放上線的位元組上限 | 有（一格） | **關不掉** |
 | `live-model` | `--live` 時真實供應商的連線值（端點／預設模型 id／逾時／重試次數），加上模型型錄（每顆的窗口、輸出上限、收不收圖、怎麼關推理） | 有（五格） | **關不掉** |
 | `recursion-limit` | agent 迴圈的 super-step 上限 | 有（一格） | **關不掉** |
@@ -350,7 +350,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 
 - **`session-persistence`、`thread-title`、`thread-title-llm`、`thread-search`、`browser-session`、`deliverable-files`、
   `tool-text`、`live-model` 跑在註冊表存在之前**，所以 `apply` 是空的、值在起動期解一次往下傳。`thread-search`、
-  `browser-session`、`deliverable-files`、`tool-text` 的消費點分別是內容搜尋的索引、瀏覽器會話的建構子、兩條交付路由、
+  `browser-session`、`deliverable-files`、`tool-text` 的消費點分別是內容搜尋的索引、瀏覽器會話的建構子、兩支交付方法（`deliverable.read`／`deliverable.readBytes`）、
   以及工具結果文字那兩條（即時的 `ThreadPump` 與重播的 `historyPage`，都在 `createWireHandler` 的閉包底下），
   **只在 `serve` 上有作用**；**`session-persistence`、`thread-title` 與 `live-model` 兩條路都讀**——`session-persistence` 由
   `cli.ts` 與 `serve.ts` 各自在接落盤時讀；`thread-title` 在 serve 上給冷讀清單、pump 與歷史，在 CLI 上給
@@ -509,9 +509,9 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 `thread-title-llm`、`browser-session` 與 `deliverable-files` 的預設（`5`／`40`／`80`；`5` 詞／`10` 字／4096 位元組／
 64 token／60 秒；`30` 天；2 MiB／32 MiB／5000 行）都照 dsh 的產品組裝；**`session-persistence` 的 `10` 毫秒沒有 dsh 的對應物**——dsh 的落盤後端只收根目錄
 與壓縮兩格，它的批次是呼叫端傳一整批而不是計時器攢批，所以這個旋鈕是我們自己的，形狀抄的是
-同一份清單上 core 那幾列；**`deliverable-files` 的 `maxLines` 是雙用的**——它同時是「不給 `limit` 查詢參數時
+同一份清單上 core 那幾列；**`deliverable-files` 的 `maxLines` 是雙用的**——它同時是「不給 `limit` 時
 每頁幾行」與「給了就不准超過幾行」，所以改那一格會同時動到兩個行為（dsh 同形）。
-**`maxBytes` 也是雙用的**：一頁文字的上限，同時是位元組窗口（`deliverables/bytes`）`length` 的預設與
+**`maxBytes` 也是雙用的**：一頁文字的上限，同時是位元組窗口（`deliverable.readBytes`）`length` 的預設與
 上限（[#544](https://github.com/DemianLi/nexus-agent/issues/544)，dsh 同形）。
 `recursion-limit` 的 `100`
 **沒有 dsh 的對應物**（dsh 不跑 LangGraph），它是對著一次實測跑掉的執行校準出來的，換算成幾輪
@@ -542,6 +542,31 @@ server、不綁 port：
 為什麼沒生效」最快的答案**。
 
 輸出的位元組不是約定，不要拿它去做程式化的比對：dsh 對自己那份 dump 也明講了同一件事。
+
+### 寫覆寫檔之前先看欄位規格表
+
+```bash
+pnpm --filter @nexus/harness run cli -- --dump-config-schema > nexus-config.schema.json
+```
+
+`serve` 也收同一個旗標。它用跟 `--dump-config` 同樣的三層與 `--patch`，印出**一份 JSON Schema 2020-12 文件**
+（[#741](https://github.com/DemianLi/nexus-agent/issues/741)）：根描述疊完之後的條目清單，`$defs.patchList` 描述
+覆寫檔（`cordis.patch.yml`、`--patch`）的格式。編輯器與 agent 拿它就能事先知道某一列收哪些欄位、預設值是多少，
+打錯欄位名不必等到啟動才發現——對認得的 `id` 整份換掉 `config` 時，多寫一個欄位、型別不對都驗不過。
+
+- **標準輸出只有那份 JSON**，診斷走標準錯誤。載入 plugin 模組時它們寫進 `process.stdout.write` 的東西會被轉到標準錯誤；
+  直接寫檔案描述子的攔不到。
+- **每一列都會 import，包括停用的**（停用的正是你可能想重新打開的那一列）；不會套用任何一顆 plugin，也不開 server。
+  停用的列可以省略必填的 `config`，但有寫的值仍然要驗——這比啟動時嚴，啟動時對停用的列完全不驗設定。
+- **轉不出來的限制不會被靜靜丟掉。** `refine`／`superRefine`、`z.custom`、`transform`／`preprocess`／`pipe` 這類
+  回呼式的驗證，JSON Schema 講不出來，那一列標成 `partial`，診斷指名是哪個欄位；**只要有任何一列 `partial`、或有一列載不起來，
+  退出碼就是 1**，即使文件本身照樣可用。退出碼回答的是「這份文件能不能取代原本的驗證」：`partial` 的那幾列，
+  文件比實際的驗證寬，通過它不代表啟動時一定過。出貨的清單目前就有這幾列（`live-model`、`thread-title`、`present`），
+  所以不帶任何 patch 跑一次退出碼也是 1。
+- **沒有 `Config` 的列是 `absent`**：欄位未知，不是禁止設定，不算不完整。
+- **指到檔案的列（`file:`）先過私有檔檢查**：別人寫得動的模組不會被 import，那一列標成 `failed`。
+- 根上的 `x-nexus` 註記帶 `complete`、`entries`（每一列的狀態、`configRef` 與轉不出來的位置）、`diagnostics`、`patchSchema`。
+  輸出是隨版本重新產生的參考，不是穩定的格式。
 
 ## 核准
 
