@@ -20,7 +20,9 @@ import {
   QUEUE_GONE_TEXT,
   QUEUE_PARKED_TEXT,
   queueHeading,
+  isSettledNotice,
   queuePreview,
+  SETTLED_NOTICE_TEXT,
 } from '@/lib/queue-view';
 import { mentionDisplayText } from '@/lib/session-mention';
 import {
@@ -121,11 +123,11 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
     if (!row.hasAttribute('data-leaving')) return;
     const id = row.getAttribute('data-queue-item');
     const index = rows.findIndex((candidate) => candidate.item.id === id);
-    const after = rows.slice(index + 1).find((candidate) => !candidate.leaving);
-    const before = rows
-      .slice(0, Math.max(index, 0))
-      .reverse()
-      .find((candidate) => !candidate.leaving);
+    // 結算通知那一列沒有鈕（#851），焦點交不過去。
+    const takesFocus = (candidate: QueueRow) =>
+      !candidate.leaving && !isSettledNotice(candidate.item);
+    const after = rows.slice(index + 1).find(takesFocus);
+    const before = rows.slice(0, Math.max(index, 0)).reverse().find(takesFocus);
     const neighbour = after ?? before;
     const target =
       neighbour === undefined ? null : rowAction(root.current, neighbour.item.id, 'remove');
@@ -200,6 +202,25 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
 
   const renderRow = (row: QueueRow) => {
     const { item, leaving } = row;
+    // 背景子代理的結算通知（#851）：不是人排的，文字是給模型的英文。只讀：改它會改掉給模型的通知，刪它模型就永遠
+    // 不知道子代理做完了；它在主對話閒下來時自己開跑並離開佇列。
+    if (isSettledNotice(item)) {
+      return (
+        <li
+          key={item.id}
+          data-queue-item={item.id}
+          data-queue-settled=""
+          data-leaving={leaving || undefined}
+          aria-hidden={leaving || undefined}
+          className="animate-in fade-in-0 text-muted-foreground flex min-w-0 items-start gap-2 rounded-[20px] px-3 py-1 text-sm transition-opacity duration-(--duration-quick) motion-reduce:animate-none motion-reduce:transition-none data-[leaving]:opacity-0 motion-reduce:data-[leaving]:hidden"
+        >
+          <ListEnd aria-hidden className="mt-2.5 size-4 shrink-0 lg:mt-2" />
+          <span className="min-h-11 min-w-0 flex-1 truncate py-2.5 lg:min-h-8 lg:py-1.5">
+            {SETTLED_NOTICE_TEXT}
+          </span>
+        </li>
+      );
+    }
     const isEditing = editing?.id === item.id && !leaving;
     // 排著的仍是原文：引用換成 `@標題` 再畫，編輯框才拿原文。
     const shown = mentionDisplayText(item.text);

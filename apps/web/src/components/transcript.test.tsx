@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { Transcript } from '@/components/transcript';
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
+import { SETTLED_NOTICE_TEXT } from '@/lib/queue-view';
 
 /**
  * 推理列與正文空的回覆（[#527](https://github.com/DemianLi/nexus-agent/issues/527)、#565）。只想、只呼叫工具的
@@ -266,5 +267,32 @@ describe('推理列', () => {
       frame('messages', SUB, { event: 'message-finish', reason: 'stop', run_id: 's' }),
     ]);
     expect(screen.getByTestId('reasoning-summary').textContent).toBe('sub thinking');
+  });
+});
+
+describe('排著的背景子代理結算通知（#851）', () => {
+  const inbox = (payload: unknown): Event =>
+    ({
+      type: 'event',
+      event_id: 't:inbox',
+      method: 'custom',
+      params: { namespace: [], timestamp: 0, data: { name: INBOX, payload } },
+    }) as Event;
+
+  it('排在插話那一條時只畫一行小字，不畫成人的泡泡，給模型的英文也不出現', () => {
+    const state = reduceAll(emptyConversation(), [
+      running(),
+      inbox({
+        items: [],
+        nextStep: [
+          { id: 'n', text: 'Background subagent finished.', source: { kind: 'subagent-settled' } },
+        ],
+      }),
+    ]);
+    render(<Transcript state={state} isFresh={() => false} />);
+    expect(screen.getByText(`${SETTLED_NOTICE_TEXT}・下一步送進模型`)).toBeTruthy();
+    expect(document.querySelector('[data-pending-settled]')).not.toBeNull();
+    expect(document.querySelector('[data-pending-steer]')).toBeNull();
+    expect(screen.queryByText(/Background subagent/)).toBeNull();
   });
 });
