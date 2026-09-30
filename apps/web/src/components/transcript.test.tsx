@@ -270,7 +270,7 @@ describe('推理列', () => {
   });
 });
 
-describe('排著的背景子代理結算通知（#851）', () => {
+describe('背景子代理結算通知（#851）', () => {
   const inbox = (payload: unknown): Event =>
     ({
       type: 'event',
@@ -278,21 +278,59 @@ describe('排著的背景子代理結算通知（#851）', () => {
       method: 'custom',
       params: { namespace: [], timestamp: 0, data: { name: INBOX, payload } },
     }) as Event;
+  const settled = {
+    id: 'n',
+    text: 'Background subagent finished.',
+    source: { kind: 'subagent-settled' },
+  };
 
   it('排在插話那一條時只畫一行小字，不畫成人的泡泡，給模型的英文也不出現', () => {
     const state = reduceAll(emptyConversation(), [
       running(),
-      inbox({
-        items: [],
-        nextStep: [
-          { id: 'n', text: 'Background subagent finished.', source: { kind: 'subagent-settled' } },
-        ],
-      }),
+      inbox({ items: [], nextStep: [settled] }),
     ]);
     render(<Transcript state={state} isFresh={() => false} />);
     expect(screen.getByText(`${SETTLED_NOTICE_TEXT}・下一步送進模型`)).toBeTruthy();
     expect(document.querySelector('[data-pending-settled]')).not.toBeNull();
     expect(document.querySelector('[data-pending-steer]')).toBeNull();
     expect(screen.queryByText(/Background subagent/)).toBeNull();
+  });
+
+  it('被領走之後折疊器長出 notice：同一格換成「已完成」，不留人的泡泡，也不畫英文', () => {
+    const pending = reduceAll(emptyConversation(), [
+      running(),
+      inbox({ items: [], nextStep: [settled] }),
+    ]);
+    const { rerender } = render(<Transcript state={pending} isFresh={() => false} />);
+    const slot = screen
+      .getByText(`${SETTLED_NOTICE_TEXT}・下一步送進模型`)
+      .closest('[data-slot="message-scroller-item"]');
+    expect(slot).not.toBeNull();
+
+    const claimed = reduceAll(pending, [
+      inbox({
+        items: [],
+        nextStep: [],
+        claimedNextStep: [{ id: 'n', text: settled.text, source: { kind: 'subagent-settled' } }],
+      }),
+    ]);
+    expect(claimed.entries).toContainEqual(expect.objectContaining({ kind: 'notice' }));
+    rerender(<Transcript state={claimed} isFresh={() => false} />);
+
+    const notice = screen.getByText(SETTLED_NOTICE_TEXT);
+    expect(notice.closest('[data-settled-notice]')).not.toBeNull();
+    expect(document.querySelector('[data-pending-settled]')).toBeNull();
+    expect(notice.closest('[data-slot="message-scroller-item"]')).toBe(slot);
+    expect(screen.queryByText(/Background subagent/)).toBeNull();
+    expect(document.querySelector('[data-pending-steer]')).toBeNull();
+  });
+
+  it('歷史重播長出的 notice（沒有 inboxId）畫成同一個樣子', () => {
+    const state = {
+      ...emptyConversation(),
+      entries: [{ kind: 'notice', id: 'history-7', source: 'subagent-settled' }],
+    } as ReturnType<typeof emptyConversation>;
+    render(<Transcript state={state} isFresh={() => false} />);
+    expect(screen.getByText(SETTLED_NOTICE_TEXT).closest('[data-settled-notice]')).not.toBeNull();
   });
 });
