@@ -578,10 +578,8 @@ describe('第 2 項（續）：全域 deny 規則與大結果外溢在背景圖�
 // ───────────────────────────── 第 3 項 ─────────────────────────────
 
 /**
- * 探針自己的控制器：**在叫醒那一輪把委派時拍下的那一格重新放進 ALS**。
- * `SandboxModeController.delegate()` 只會拍「進去那一刻的 `current`」，表達不出「用先前記下的那一格」——
- * 這是實作時要在 `@nexus/plugin-sandbox-policy` 加的那一個入口，這裡用子類別覆寫 `current` 代替，只為了量
- * 「每一輪重新進 ALS」這個機制能不能穿過 LangGraph。
+ * 對照組：**只換 `current`** 的控制器。正式的入口是 `SandboxModeController.delegateAs`（#827），它重新進控制器自己那份 ALS；
+ * 這裡覆寫 `current` 只為了量「只換 `current`」漏掉什麼（root 的一次性 grant 與委派標記）。
  */
 class PinnedController extends SandboxModeController {
   readonly #pin = new AsyncLocalStorage<SandboxMode>();
@@ -675,20 +673,16 @@ describe('第 3 項：沙箱快照在背景路徑上', () => {
     }
   });
 
-  it('退路：每一輪用記下的那一格重新進 ALS，兩個方向都守得住委派那一格', async () => {
+  it('每一輪用記下的那一格重新進 ALS（#827 的 `delegateAs`），兩個方向都守得住委派那一格', async () => {
     // root 收緊：委派時 workspace-write，叫醒時 root 已是 read-only，記下的那一格讓它照寫。
-    const tighten = await fenced(
-      'workspace-write',
-      TWO_TURNS,
-      new PinnedController('workspace-write'),
-    );
+    const tighten = await fenced('workspace-write', TWO_TURNS);
     try {
-      const pinned = tighten.controller as PinnedController;
-      const first = await pinned.runPinned('workspace-write', () =>
+      const { controller } = tighten;
+      const first = await controller.delegateAs('workspace-write', () =>
         runBackground(tighten.graph, '第一輪'),
       );
-      tighten.controller.switchTo('read-only');
-      const second = await pinned.runPinned('workspace-write', () =>
+      controller.switchTo('read-only');
+      const second = await controller.delegateAs('workspace-write', () =>
         runBackground(tighten.graph, '第二輪'),
       );
       expect(lastTool(first.messages)).toContain('Successfully wrote');
@@ -698,18 +692,14 @@ describe('第 3 項：沙箱快照在背景路徑上', () => {
     }
 
     // root 放寬：委派時 read-only，叫醒時 root 已放寬，記下的那一格仍擋住它。
-    const loosen = await fenced(
-      'read-only',
-      twoTurns('/c.txt', '/d.txt'),
-      new PinnedController('read-only'),
-    );
+    const loosen = await fenced('read-only', twoTurns('/c.txt', '/d.txt'));
     try {
-      const pinned = loosen.controller as PinnedController;
-      const first = await pinned.runPinned('read-only', () =>
+      const { controller } = loosen;
+      const first = await controller.delegateAs('read-only', () =>
         runBackground(loosen.graph, '第一輪'),
       );
-      loosen.controller.switchTo('workspace-write');
-      const second = await pinned.runPinned('read-only', () =>
+      controller.switchTo('workspace-write');
+      const second = await controller.delegateAs('read-only', () =>
         runBackground(loosen.graph, '第二輪'),
       );
       expect(lastTool(first.messages)).toContain(REFUSED);
@@ -718,12 +708,61 @@ describe('第 3 項：沙箱快照在背景路徑上', () => {
       await loosen.built.dispose();
     }
   });
-  it('退路的缺口：只換 `current` 的話，root 那顆待消費的 grant 與委派標記在背景那一輪看得到；`delegate` 則看不到', async () => {
+
+  /**
+   * 產品路徑（#827）：委派那刻子代理的日誌第一次開啟，寫下 `sandbox/mode { source: 'delegation' }`；被叫醒的每一輪從
+   * 那份日誌讀回、重新進。這裡背景圖帶身分鍵（#823），所以它的工具呼叫與日誌歸在自己名下。
+   */
+  for (const [delegated, later, expectation] of [
+    ['workspace-write', 'read-only', 'Successfully wrote'],
+    ['read-only', 'workspace-write', REFUSED],
+  ] as const) {
+    it(`產品路徑：委派在 ${delegated}、之後 root 切到 ${later}，叫醒時從子代理日誌讀回，仍照 ${delegated}`, async () => {
+      const controller = new SandboxModeController(delegated);
+      const backend = new ContainedFilesystemBackend({
+        rootDir: dir,
+        mode: controller.source,
+        grants: controller,
+      });
+      const run = await assembleWithPump(
+        [...twoTurns(`/${delegated}-a.txt`, `/${delegated}-b.txt`)],
+        [
+          createHostServicesPlugin({ sandboxPolicy: { controller, rootDir: dir } }),
+          WORKER,
+          createSandboxPolicyPlugin(),
+        ],
+        { backend },
+      );
+      try {
+        const graph = compileBackground(run.spec('worker'), run.params);
+        const extra = { [BACKGROUND_SESSION_CONFIG_KEY]: 'bg-1' };
+        // 委派那一刻：在 `delegate` 裡開始第一輪，子代理日誌就是在這裡第一次被開的。
+        const first = await controller.delegate(() =>
+          runBackground(graph, '第一輪', 'bg-1', extra),
+        );
+        const log = run.pump.sessions.get({ kind: 'subagent', runId: 'bg-1' });
+        expect(log?.events.filter((event) => event.type === 'sandbox/mode')).toEqual([
+          expect.objectContaining({ data: { mode: delegated, source: 'delegation' } }),
+        ]);
+
+        controller.switchTo(later);
+        const second = await controller.delegateFromLog(log!, () =>
+          runBackground(graph, '第二輪', 'bg-1', extra),
+        );
+        expect(lastTool(first.messages)).toContain(expectation);
+        expect(lastTool(second.messages)).toContain(expectation);
+      } finally {
+        await run.close();
+      }
+    });
+  }
+
+  it('只換 `current` 的話（對照組），root 那顆待消費的 grant 與委派標記在背景那一輪看得到；`delegateAs` 則看不到', async () => {
     const controller = new PinnedController('read-only');
     controller.grant({ mode: 'workspace-write', target: '/a.txt', denied: undefined });
 
     // 重新進 ALS 只蓋住 `current`：一次性 grant 一律不給子代理，這裡卻認領得到；子代理日誌開啟時讀的
-    // `delegatedMode` 也是空的。所以實作要的入口是 `delegate(capturedMode, run)`，重新進控制器自己那份 ALS。
+    // `delegatedMode` 也是空的。這就是 `delegateAs` 要重新進控制器自己那份 ALS 的理由。
     const pinned = controller.runPinned('read-only', () => ({
       grant: controller.peekGrant(),
       delegatedMode: controller.delegatedMode,
@@ -731,7 +770,7 @@ describe('第 3 項：沙箱快照在背景路徑上', () => {
     expect(pinned.grant).toBeDefined();
     expect(pinned.delegatedMode).toBeUndefined();
 
-    const delegated = controller.delegate(() => ({
+    const delegated = controller.delegateAs('read-only', () => ({
       grant: controller.peekGrant(),
       delegatedMode: controller.delegatedMode,
     }));

@@ -44,11 +44,16 @@
  * （`permission-presets/src/index.ts` 的 `pinInitialPermission`），所以產品路徑上每一條都有覆寫可拍。
  * 我們的 {@link SandboxModeController.attach} 就是那一步。
  *
- * **偏離（登記）：快照放在 ALS，不是從子代理自己的日誌折。** dsh 子代理的 fence 從子代理的日誌折出模式；
+ * **偏離（登記）：fence 讀的是 ALS，不是逐 session 從日誌折。** dsh 子代理的 fence 從子代理的日誌折出模式；
  * 我們子代理的檔案工具是基座拿 root 那一份 backend 建的，方法簽名裡沒有呼叫者，表達不出「逐 session
  * 折」。所以本套件的 `index.ts` 用 ALS 包住 `task` 那一次呼叫（{@link SandboxModeController.delegate}），
- * 在裡面讀這顆控制器的一律拿到快照；日誌只是審計面，同 root。子代理的摘要器 offload 也在 `task` 那一次
- * 呼叫裡跑，所以同樣照快照判——基礎建設的寫入不會繞過它（`uploadFiles` 本來就不認領 grant）。
+ * 在裡面讀這顆控制器的一律拿到快照。子代理的摘要器 offload 也在 `task` 那一次呼叫裡跑，所以同樣照快照判
+ * ——基礎建設的寫入不會繞過它（`uploadFiles` 本來就不認領 grant）。
+ *
+ * **背景續行的子代理（[#827](https://github.com/DemianLi/nexus-agent/issues/827)）把偏離縮到只剩 fence 那一格載體**：
+ * 快照的**來源**與 dsh 一致——委派那刻寫進子代理自己的日誌（`sandbox/mode { source: 'delegation' }`），被叫醒的每一輪
+ * 用 {@link SandboxModeController.delegateFromLog} 從那份日誌讀回、重新進 ALS。日誌不只是審計面，是背景路徑上
+ * 快照的記憶。
  *
  * ## 跨重啟
  *
@@ -190,7 +195,47 @@ export class SandboxModeController implements SandboxGrantLedger {
    * @returns `run` 的回傳值，原樣。
    */
   delegate<T>(run: () => T): T {
-    return this.#delegated.run({ mode: this.current }, run);
+    return this.delegateAs(this.current, run);
+  }
+
+  /**
+   * 用**先前記下的那一格**重新進委派快照跑 `run`（[#827](https://github.com/DemianLi/nexus-agent/issues/827)）。
+   *
+   * 背景子代理被叫醒的那一輪不在 `task` 那一次呼叫的 ALS 裡，讀 {@link SandboxModeController.current} 拿到的是 root
+   * **現在**那一格：root 收緊，子代理跟著被擋；root 放寬，委派在 `read-only` 的子代理反而寫得進去（#738 第 3 項，實測）。
+   * 所以每一輪都用委派那刻記下的那一格重新進來。
+   *
+   * **進的是控制器自己這份 ALS，不是只換 `current`**：只換 `current` 的話，root 那顆待消費的一次性 grant 在這一輪
+   * `peekGrant()` 仍看得到（一律不給子代理，照 dsh），子代理日誌開啟讀的 {@link SandboxModeController.delegatedMode}
+   * 也是空的（探針實測）。
+   *
+   * @param mode - 委派那刻記下的那一格。
+   * @param run - 這一輪的本體。
+   * @returns `run` 的回傳值，原樣。
+   */
+  delegateAs<T>(mode: SandboxMode, run: () => T): T {
+    return this.#delegated.run({ mode }, run);
+  }
+
+  /**
+   * 叫醒時用：從**子代理自己的日誌**讀回委派那一格，再 {@link SandboxModeController.delegateAs} 進去跑 `run`。
+   *
+   * 委派那刻子代理日誌第一次開啟時寫下 `sandbox/mode { source: 'delegation' }`（`index.ts` 的 `sessions.join`），
+   * 這裡讀回的就是它。**日誌上沒有就拋**：不知道委派在哪一格，就不能拿 root 現在那格去猜——猜錯的方向是越權。
+   *
+   * @param log - 這個子代理自己的日誌。
+   * @param run - 這一輪的本體。
+   * @returns `run` 的回傳值，原樣。
+   * @throws 日誌上沒有任何 `sandbox/mode`。
+   */
+  delegateFromLog<T>(log: Pick<SessionLog, 'events' | 'sessionId'>, run: () => T): T {
+    const mode = recordedSandboxMode(log.events);
+    if (mode === undefined) {
+      throw new Error(
+        `子代理日誌 ${log.sessionId} 上沒有 sandbox/mode：不知道它是在哪一格委派的，不能拿 root 現在那格去猜`,
+      );
+    }
+    return this.delegateAs(mode, run);
   }
 
   /** 這一次呼叫是不是在某個子代理裡。 */
