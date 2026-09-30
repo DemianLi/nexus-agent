@@ -74,14 +74,17 @@ const MIN_RATIO_SPAN = 500;
 const MAX_SENT_ENTRIES = 20_000;
 
 /**
- * 沒有空白的一段超過這麼長就切開來編。
+ * 沒有空白的一段（以及一整段空白）超過這麼長就切開來編。
  *
  * js-tiktoken 對一個 regex 片段做 BPE 合併是平方級的：4 萬個 `X` 連在一起要編一分多鐘（量過）。切成 128 字元
  * 一塊之後 4 萬個 `X` 是 0.25 秒，而 #586 那四種素材（中文、混合、英文程式碼）的 token 數差不到 0.01%——
  * 一般文字裡這麼長的無空白片段本來就少，中文段落雖然沒有空白，切點多一兩個 token 而已。
+ *
+ * **連續空白同理**（#719 量到）：十八萬字元的空白與換行編了超過四十秒沒有結果，切成 128 字元一塊之後不是問題。外溢層在工具
+ * 呼叫的路徑上量長結果，不能被一則怪輸出卡住。
  */
 const MAX_RUN = 128;
-const LONG_RUN = new RegExp(`\\S{${MAX_RUN + 1},}`, 'g');
+const LONG_RUN = new RegExp(`\\S{${MAX_RUN + 1},}|\\s{${MAX_RUN + 1},}`, 'g');
 
 let encoder: Tiktoken | undefined;
 
@@ -145,6 +148,17 @@ function contentText(content: unknown): string {
     }
   }
   return text;
+}
+
+/**
+ * 一段文字的 E（不錨、不含訊息框架）。給外溢層（#719）量「這一則結果佔多少預算」用，與 {@link estimateRequestTokens}
+ * 是同一把尺——單段文字的入口只有這一個，#715 算圖時也走它。
+ *
+ * @param text - 要估的文字。
+ * @returns o200k 算出來的 token 數。
+ */
+export function estimateTextTokens(text: string): number {
+  return o200k(text);
 }
 
 /** 一則訊息的 E。同一個物件只編一次。 */

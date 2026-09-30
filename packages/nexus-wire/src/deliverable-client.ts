@@ -20,10 +20,27 @@ import type {
   DeliverableReadResult,
 } from './deliverables.js';
 import { commandPath } from './protocol.js';
+import type { WireErrorCode } from './protocol.js';
 
+/**
+ * `rejected` 的來源有兩種，網頁要分得開（重試對前者沒有意義、對後者可能有）：
+ *
+ * - **協定錯誤**：HTTP 200，body 是 `{ type: 'error', error, message }`（例如參數不合格是 `invalid_argument`）。
+ *   帶 `code`；這是終局的，重送同樣的請求永遠是同一個答案。
+ * - **載體層擋下**：非 2xx（401、415、5xx…）。帶 `status`、不帶 `code`；暫時性的（5xx）值得重試。
+ *
+ * 兩個欄位都是選填的純新增，只讀 `message` 的呼叫端不受影響。**呼叫端不要去比對 `message` 的字串**：那是給人看的。
+ */
 export type DeliverableOutcome<T> =
   | { readonly kind: 'ok'; readonly result: T }
-  | { readonly kind: 'rejected'; readonly message: string };
+  | {
+      readonly kind: 'rejected';
+      readonly message: string;
+      /** 協定錯誤的碼；載體層擋下與回應看不懂時沒有。 */
+      readonly code?: WireErrorCode;
+      /** 載體層擋下時的 HTTP 狀態碼；其餘情形沒有。 */
+      readonly status?: number;
+    };
 
 export interface DeliverableClient {
   /** 讀一頁文字（`deliverable.read`）。 */
@@ -72,6 +89,7 @@ export function createDeliverableClient(options: DeliverableClientOptions): Deli
       return {
         kind: 'rejected',
         message: `被載體層擋下：${response.status} ${await response.text()}`,
+        status: response.status,
       };
     }
     let echoedId: unknown;
@@ -88,6 +106,8 @@ export function createDeliverableClient(options: DeliverableClientOptions): Deli
           return {
             kind: 'rejected',
             message: typeof parsed.message === 'string' ? parsed.message : '這條線收不了',
+            // 碼在線上就是一個字串；不是字串（壞封包）就不帶，不去猜。
+            ...(typeof parsed.error === 'string' && { code: parsed.error as WireErrorCode }),
           };
         }
         echoedId = parsed.id;

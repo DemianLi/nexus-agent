@@ -74,6 +74,7 @@ import type { AnyBackendProtocol } from 'deepagents';
 import { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
 import { TextOnlyStateBackend } from './binary-read.js';
 import { createToolResultStash } from './tool-result-stash.js';
+import type { StashRoute } from './tool-result-stash.js';
 import type { ToolResultStashOptions } from './tool-result-stash.js';
 import { assertHarnessProfileDeclared } from './harness-profile.js';
 import type { HarnessProfileEffects } from './harness-profile.js';
@@ -119,6 +120,13 @@ export interface CreateNexusAgentOptions {
    * 沒人清的檔。細節與偏離見 `tool-result-stash.ts` 的檔頭。
    */
   readonly toolResultStash?: ToolResultStashOptions;
+  /**
+   * 工具結果外溢層（[#719](https://github.com/DemianLi/nexus-agent/issues/719)）：一則結果超過 `maxInlineTokens`，
+   * 全文存進 {@link toolResultStash} 的主機目錄，模型只收到頭尾預覽加路徑。**省略就不掛**；**沒有
+   * {@link toolResultStash}（沒有會話鑰匙、沒有存處）也不掛**，那時超過 80,000 字元的結果仍由基座換成預覽——
+   * dsh 的規則是找不到可還原的存處就保留原結果。細節與偏離見 `@nexus/core` 的 `spill-policy.ts`。
+   */
+  readonly spillPolicy?: { readonly maxInlineTokens: number };
   /**
    * **哪幾個條目可以少掛**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)），以條目物件比對
    * （放進 {@link plugins} 的那一顆）。
@@ -409,10 +417,7 @@ export const TOOL_RESULT_STASH_PREFIX = '/large_tool_results';
  * @param stash - 主機暫存的根與會話鑰匙；省略就是記憶體。
  * @returns 同一個 backend，外面包一層只有這一條路由的 `CompositeBackend`。
  */
-function withToolResultStash(
-  backend: AnyBackendProtocol,
-  stash?: ToolResultStashOptions,
-): AnyBackendProtocol {
+function withToolResultStash(backend: AnyBackendProtocol, stash?: StashRoute): AnyBackendProtocol {
   // **路由鍵要有結尾斜線**（[#354](https://github.com/DemianLi/nexus-agent/issues/354)），理由同
   // {@link withConversationHistory}。少了它，照確切路徑 `read_file` 仍讀得到，但在這個目錄底下
   // `ls` 列出 `/large_tool_result// (directory)`、`grep` 回 No matches（實測）。代價同歷史那一格：
@@ -420,8 +425,7 @@ function withToolResultStash(
   // 只是形狀是 `//call_<id>.txt`（`tool-result-stash.test.ts` 的 state 那條記著）。
   // 給了 `stash` 之後，暫存不再放在對話狀態裡，那一格只剩退回記憶體時才會出現。
   return new CompositeBackend(backend, {
-    [`${TOOL_RESULT_STASH_PREFIX}/`]:
-      stash === undefined ? new TextOnlyStateBackend() : createToolResultStash(stash),
+    [`${TOOL_RESULT_STASH_PREFIX}/`]: stash === undefined ? new TextOnlyStateBackend() : stash,
   });
 }
 
@@ -554,11 +558,27 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     // 壞掉的 regex 預設會拖到第一輪對話才炸，那不是組裝失敗該出現的地方。
     if (options.invariants !== undefined) assertInvariantSelection(options.invariants);
 
+    // 暫存的路由目標與外溢層的存檔服務是**同一個實例**：同一個會話目錄、同一套權限，外溢的檔與基座 eviction 的檔
+    // 都落在模型 `read_file` 讀得到的同一條前綴底下（#719）。
+    const stashRoute =
+      options.toolResultStash === undefined
+        ? undefined
+        : createToolResultStash(options.toolResultStash);
     const params = foldRegistry(registry, {
       defaultBackend: withConversationHistory(
         // 墊底的虛擬 FS 讀到二進位檔照 dsh 拒絕（#642），路由那兩格同一種。
-        withToolResultStash(options.backend ?? new TextOnlyStateBackend(), options.toolResultStash),
+        withToolResultStash(options.backend ?? new TextOnlyStateBackend(), stashRoute),
       ),
+      ...(options.spillPolicy !== undefined &&
+        stashRoute !== undefined && {
+          spillPolicy: {
+            maxInlineTokens: options.spillPolicy.maxInlineTokens,
+            store: stashRoute.spillStore(TOOL_RESULT_STASH_PREFIX),
+            ...(options.toolResultStash?.warn !== undefined && {
+              warn: options.toolResultStash.warn,
+            }),
+          },
+        }),
       toolOrder: options.toolOrder,
       baseToolNames: options.baseToolNames ?? BASE_TOOL_NAMES,
       model: options.model,
