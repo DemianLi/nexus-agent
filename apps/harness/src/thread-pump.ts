@@ -151,7 +151,7 @@ interface SubagentProjection {
  *
  * 形狀照 `langchain@1.5.10` 的 `dist/agents/transformers/tool-call.js` 與 `subagent.js`。
  */
-interface RunProjections {
+export interface RunProjections {
   readonly toolCalls?: AsyncIterable<ToolCallProjection>;
   readonly subagents?: AsyncIterable<SubagentProjection>;
 }
@@ -178,7 +178,7 @@ const ignore = (): void => undefined;
  * 不等它：投影在 run 收尾（或失敗）時才關，而那時 pump 早就往下走了。迭代本身在 run 失敗時也會拋，
  * 所以每一條背景迴圈自己也要接住——不然修掉一顆孤兒又生一顆。
  */
-function markProjectionsHandled(projections: RunProjections): void {
+export function markProjectionsHandled(projections: RunProjections): void {
   if (projections.toolCalls !== undefined) markToolCalls(projections.toolCalls);
   if (projections.subagents !== undefined) markSubagents(projections.subagents);
 }
