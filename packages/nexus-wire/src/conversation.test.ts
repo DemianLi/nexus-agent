@@ -798,3 +798,132 @@ describe('撞到輸出上限', () => {
     ]);
   });
 });
+
+describe('背景子代理的歸屬（#832）', () => {
+  const key = { kind: 'background-subagent', runId: 'bg-abc123def456', subagentType: 'worker' };
+  const dispatch = (callId: string) =>
+    frame('tools', [], {
+      event: 'tool-started',
+      tool_call_id: callId,
+      tool_name: 'subagent',
+      input: JSON.stringify({ description: '幹活', subagent_type: 'worker' }),
+    });
+  const settle = (callId: string, meta?: unknown) =>
+    frame('tools', [], {
+      event: 'tool-finished',
+      tool_call_id: callId,
+      message: '子代理已在背景啟動',
+      ...(meta === undefined ? {} : { meta }),
+    });
+  const innerStarted = (callId: string) =>
+    frame('tools', ['bg-abc123def456', 'tools'], {
+      event: 'tool-started',
+      tool_call_id: callId,
+      tool_name: 'look',
+      input: '{}',
+    });
+  const innerFinished = (callId: string) =>
+    frame('tools', ['bg-abc123def456', 'tools'], {
+      event: 'tool-finished',
+      tool_call_id: callId,
+      message: '看過了',
+    });
+
+  const attributionOf = (state: ConversationState, callId: string) => {
+    const entry = state.entries.find((candidate) => candidate.id === `tool-${callId}`);
+    if (entry?.kind !== 'tool') throw new Error(`沒有 ${callId} 這顆工具`);
+    return entry.attribution;
+  };
+
+  it('派出去的呼叫先收尾：背景那一輪之後的卡直接歸給那個子代理', () => {
+    const state = reduceAll(emptyConversation(), [
+      dispatch('root-1'),
+      settle('root-1', key),
+      innerStarted('bg-1'),
+      innerFinished('bg-1'),
+    ]);
+    expect(attributionOf(state, 'bg-1')).toEqual({
+      kind: 'subagent',
+      name: 'worker',
+      callId: 'root-1',
+    });
+    expect(state.subagents['bg-abc123def456']).toEqual({ name: 'worker', callId: 'root-1' });
+  });
+
+  it('背景的卡先到：先是未歸屬，鑰匙一到就追溯過去（不取決於誰先到）', () => {
+    const early = reduceAll(emptyConversation(), [dispatch('root-1'), innerStarted('bg-1')]);
+    expect(attributionOf(early, 'bg-1').kind).toBe('unattributed');
+    const settled = reduceAll(early, [innerFinished('bg-1'), settle('root-1', key)]);
+    expect(attributionOf(settled, 'bg-1')).toEqual({
+      kind: 'subagent',
+      name: 'worker',
+      callId: 'root-1',
+    });
+  });
+
+  it('認得不出來的 meta、失敗的呼叫、不是派子代理的工具：不歸屬', () => {
+    for (const meta of [
+      undefined,
+      { kind: 'background-subagent', runId: '', subagentType: 'worker' },
+      { kind: 'background-subagent', runId: 'bg-abc123def456' },
+      { kind: 'something-else', runId: 'bg-abc123def456', subagentType: 'worker' },
+      'bg-abc123def456',
+    ]) {
+      const state = reduceAll(emptyConversation(), [
+        dispatch('root-1'),
+        settle('root-1', meta),
+        innerStarted('bg-1'),
+      ]);
+      expect(attributionOf(state, 'bg-1').kind).toBe('unattributed');
+    }
+    const failed = reduceAll(emptyConversation(), [
+      dispatch('root-1'),
+      frame('tools', [], {
+        event: 'tool-finished',
+        tool_call_id: 'root-1',
+        failed: true,
+        message: '沒有這個子代理',
+        meta: key,
+      }),
+      innerStarted('bg-1'),
+    ]);
+    expect(attributionOf(failed, 'bg-1').kind).toBe('unattributed');
+    const otherTool = reduceAll(emptyConversation(), [
+      frame('tools', [], {
+        event: 'tool-started',
+        tool_call_id: 'x',
+        tool_name: 'look',
+        input: '{}',
+      }),
+      frame('tools', [], { event: 'tool-finished', tool_call_id: 'x', meta: key }),
+      innerStarted('bg-1'),
+    ]);
+    expect(attributionOf(otherTool, 'bg-1').kind).toBe('unattributed');
+  });
+
+  it('前景：subagent 內部派給 task（同一個 tool_call_id），靠 task 的 tool-started 歸屬，鑰匙用不到', () => {
+    const state = reduceAll(emptyConversation(), [
+      dispatch('root-1'),
+      frame('tools', ['tools:abc'], {
+        event: 'tool-started',
+        tool_call_id: 'root-1',
+        tool_name: 'task',
+        input: JSON.stringify({ description: '幹活', subagent_type: 'worker' }),
+      }),
+      frame('tools', ['tools:abc', 'tools:def'], {
+        event: 'tool-started',
+        tool_call_id: 'fg-1',
+        tool_name: 'look',
+        input: '{}',
+      }),
+    ]);
+    expect(attributionOf(state, 'fg-1')).toEqual({
+      kind: 'subagent',
+      name: 'worker',
+      callId: 'root-1',
+    });
+    // 同一個 id 來第二次是續行：root 那張卡還是 subagent、歸 root，不被內層的 task 改寫。
+    const root = state.entries.find((entry) => entry.id === 'tool-root-1');
+    expect(root).toMatchObject({ kind: 'tool', name: 'subagent', attribution: { kind: 'root' } });
+  });
+});

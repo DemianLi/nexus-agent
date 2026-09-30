@@ -41,6 +41,7 @@ import { HumanMessage } from '@langchain/core/messages';
 import { BACKGROUND_SESSION_CONFIG_KEY } from '@nexus/core';
 import type { SessionLog, SessionRegistry } from '@nexus/core';
 
+import { BACKGROUND_RUN_PREFIX } from './background-run-id.js';
 import { markProjectionsHandled } from './thread-pump.js';
 import type { RunProjections } from './thread-pump.js';
 
@@ -154,7 +155,7 @@ export class BackgroundSubagentHost {
     if (this.#closed) throw new Error('背景子代理的載體已經關閉');
     this.#agentFor(input.subagent);
     let runId: string;
-    do runId = `bg-${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+    do runId = `${BACKGROUND_RUN_PREFIX}${randomUUID().replaceAll('-', '').slice(0, 12)}`;
     while (this.#known.has(runId));
     this.#sessions.open({ kind: 'subagent', runId });
     return { runId, outcome: this.submit({ runId, ...input }) };

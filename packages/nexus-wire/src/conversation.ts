@@ -1051,6 +1051,42 @@ interface ToolData {
   readonly meta?: unknown;
 }
 
+/**
+ * 派子代理的工具名：基座的 `task`，與背景選項開啟時模型看到的 `subagent`
+ * （[#831](https://github.com/DemianLi/nexus-agent/issues/831)）。
+ *
+ * 前景的 `subagent` 內部仍派給 `task`，所以歸屬的鑰匙（`task` 的 `tool-started`）不變；這個集合給認名字的地方
+ * 用——harness 的收回、web 的卡片——免得各自寫死一個。
+ */
+export const DELEGATION_TOOL_NAMES: readonly string[] = ['task', 'subagent'];
+
+/**
+ * 背景子代理的歸屬鑰匙，放在 `subagent` 那顆 `tool-finished` 的 `meta` 裡
+ * （[#832](https://github.com/DemianLi/nexus-agent/issues/832)）。
+ *
+ * 前景的子代理由基座的 `task` 那顆 `tool-started` 帶 `subagent_type`，之後掛在同一個 namespace 底下的
+ * 東西都是它的；背景的沒有那一顆——host 自己丟掉子代理的串流，線上只有從日誌開的卡，namespace 是
+ * `[runId, 'tools']`。**編號只有派出去那一刻的呼叫知道**，所以由那顆呼叫的結果告訴折疊器：`runId` 就是
+ * namespace 的第一段。
+ */
+export interface BackgroundSubagentMeta {
+  readonly kind: 'background-subagent';
+  readonly runId: string;
+  readonly subagentType: string;
+}
+
+/** `meta` 是不是背景子代理的鑰匙；形狀歸產生者，這裡只認得出來就好，認不得的一律當沒有。 */
+export function isBackgroundSubagentMeta(meta: unknown): meta is BackgroundSubagentMeta {
+  if (typeof meta !== 'object' || meta === null) return false;
+  const candidate = meta as Partial<Record<keyof BackgroundSubagentMeta, unknown>>;
+  return (
+    candidate.kind === 'background-subagent' &&
+    typeof candidate.runId === 'string' &&
+    candidate.runId !== '' &&
+    typeof candidate.subagentType === 'string'
+  );
+}
+
 /** `task` 的參數裡才有 subagent 的名字，而它是一段 JSON 字串。 */
 function subagentTypeOf(input: string | undefined): string | undefined {
   if (input === undefined) {
@@ -1063,6 +1099,34 @@ function subagentTypeOf(input: string | undefined): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * 派子代理的那顆呼叫帶著背景鑰匙收尾：從此 `namespace[0] === runId` 的東西是那個子代理的，
+ * **而且已經到了的也追溯過去**（#832）。
+ *
+ * 追溯不是裝飾：背景那一輪從日誌開的卡和派出去的那顆呼叫收尾誰先到，取決於 pump 怎麼排，
+ * 先到的卡若永遠停在「未歸屬」，畫面就取決於一個沒人保證的順序。歷史重播的順序另有一套（背景卡
+ * 在重播裡會不會出現見卡 [#737](https://github.com/DemianLi/nexus-agent/issues/737) 的第 7 張），
+ * 但歸屬一樣只由這顆的 meta 決定，與到達順序無關。
+ */
+function attributeBackground(state: ConversationState, data: ToolData): ConversationState {
+  const entry = state.entries.find((candidate) => candidate.id === `tool-${data.tool_call_id}`);
+  if (entry?.kind !== 'tool' || !DELEGATION_TOOL_NAMES.includes(entry.name)) return state;
+  if (!isBackgroundSubagentMeta(data.meta)) return state;
+  const { runId, subagentType } = data.meta;
+  const found = { name: subagentType, callId: data.tool_call_id };
+  return {
+    ...state,
+    subagents: { ...state.subagents, [runId]: found },
+    entries: state.entries.map((candidate) =>
+      (candidate.kind === 'tool' || candidate.kind === 'ai') &&
+      candidate.attribution.kind === 'unattributed' &&
+      candidate.attribution.namespace[0] === runId
+        ? { ...candidate, attribution: { kind: 'subagent', ...found } }
+        : candidate,
+    ),
+  };
 }
 
 function reduceTool(
@@ -1121,7 +1185,7 @@ function reduceTool(
 
   if (data.event === 'tool-finished') {
     const failed = data.failed === true;
-    return {
+    const settled = {
       ...state,
       entries: replace(state.entries, id, (entry) =>
         entry.kind === 'tool'
@@ -1136,6 +1200,7 @@ function reduceTool(
           : entry,
       ),
     };
+    return failed ? settled : attributeBackground(settled, data);
   }
 
   if (data.event === 'tool-error') {

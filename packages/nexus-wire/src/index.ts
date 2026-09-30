@@ -204,6 +204,7 @@ export type {
   AiEntry,
   AnswerEntry,
   Attribution,
+  BackgroundSubagentMeta,
   ConversationEntry,
   DeliverablesEntry,
   ConversationState,
@@ -220,6 +221,8 @@ export type {
 } from './conversation.js';
 export {
   APPROVAL_PENDING_KIND,
+  DELEGATION_TOOL_NAMES,
+  isBackgroundSubagentMeta,
   QUESTION_PENDING_KIND,
   UNFINISHED_TOOL_TEXT,
   answerResponse,
