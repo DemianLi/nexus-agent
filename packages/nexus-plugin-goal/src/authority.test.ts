@@ -325,6 +325,12 @@ type UserMessageSourcePinned =
       readonly form: 'notice';
       readonly summary: string;
       readonly senderSessionId: string;
+    }
+  | {
+      // 忙著時被插話領走的 agent 訊息（#849）：也不是人，見下面「agent 訊息的插話不算人」那條。
+      readonly kind: 'agent-message';
+      readonly form: 'relay';
+      readonly senderSessionId: string;
     };
 type UserMessageSourceActual = SessionEventMap['user/message']['source'];
 const _sourceWidened: UserMessageSourcePinned = undefined as unknown as UserMessageSourceActual;
@@ -364,6 +370,16 @@ describe('輪中插話算直接人類授權（#710）', () => {
     expect(hasDirectHumanTurn(logOf([GOAL_ROUND, NOTICE]).events)).toBe(false);
     // 人先插過話、後面才來通知：這條鏈裡仍有人。
     expect(hasDirectHumanTurn(logOf([GOAL_ROUND, STEER, NOTICE]).events)).toBe(true);
+  });
+
+  it('agent 訊息的插話不算人（#849）：source 是 agent-message 的 user/message 拿不到', () => {
+    const RELAY: readonly [keyof SessionEventMap, unknown] = [
+      'user/message',
+      { message, source: { kind: 'agent-message', form: 'relay', senderSessionId: 'root/bg-1' } },
+    ];
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND, RELAY]).events)).toBe(false);
+    // 人先插過話、後面才來 agent 的話：這條鏈裡仍有人。
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND, STEER, RELAY]).events)).toBe(true);
   });
 
   it('續行輪次裡人插了話：拿得到', () => {

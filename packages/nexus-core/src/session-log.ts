@@ -274,6 +274,13 @@ export type UserMessageSource =
       readonly summary: string;
       /** 結算的那個背景子代理的會話 id。 */
       readonly senderSessionId: string;
+    }
+  | {
+      readonly kind: 'agent-message';
+      /** 另一個 agent 明確寫給這條會話的話（dsh 的 `relay` 形式）。 */
+      readonly form: 'relay';
+      /** 寄件的會話 id。內容是寄件人自己選的話，所以與 `subagent-settled` 分開，記帳不能被呈現成子代理寫的。 */
+      readonly senderSessionId: string;
     };
 
 /** 每一種事件帶什麼。 */

@@ -262,8 +262,17 @@ import type { SessionEvent } from './session-log.js';
  *
  * 升版照新增詞彙的慣例（同 18、19、22、23）：23 讀到它，授權判別對認不得的 `kind` 停住回假，不會把它當成人；但畫面（歷史）
  * 與送出佇列的 wire 投影沒見過這個成員，所以這一版改了它們。
+ *
+ * ## 25：子代理寫給主對話的話（`agent-message` 進 root 日誌）
+ *
+ * 背景子代理用 `send_message` 寫給主對話（[#849](https://github.com/DemianLi/nexus-agent/issues/849)），root 日誌上出現：
+ * `turn/start` 的 `agent-message`（v23 起就有，那時只出現在子代理日誌）、`user/message` 的
+ * `source: {kind:'agent-message', form:'relay', senderSessionId}`（忙著時被插話領走），以及送出佇列項目的
+ * `source: {kind:'agent-message', senderSessionId}`。v24 的檔直接讀：那時候沒有這條路。
+ *
+ * 升版照新增詞彙的慣例（同 24）：授權判別對認不得的 `kind` 停住回假。
  */
-export const SESSION_LOG_FORMAT_VERSION = 24;
+export const SESSION_LOG_FORMAT_VERSION = 25;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。
