@@ -19,7 +19,6 @@ import { z } from 'zod';
 import {
   createMcpPlugin,
   DEFAULT_TOOL_CALL_TIMEOUT_MS,
-  MCP_CAPABILITY,
   mcpConfigSchema,
   mcpPlugin,
 } from './index.js';
@@ -151,7 +150,6 @@ describe('接上一台真的 MCP server', () => {
         'mcp__fixture__read_env',
         'mcp__fixture__fetch_url',
       ]);
-      expect(registry.capabilities.has(MCP_CAPABILITY)).toBe(true);
     } finally {
       await dispose();
     }
@@ -234,8 +232,6 @@ describe('接上一台真的 MCP server', () => {
         origin: { name: 'mcp' },
         message: expect.stringMatching(/^MCP 伺服器 "missing" 連不上、列不出工具或工具註冊不上/u),
       });
-      // 「有 MCP 工具在」不成立，所以不宣告。
-      expect(registry.capabilities.has(MCP_CAPABILITY)).toBe(false);
       await vi.waitFor(() => expect(childProcessCount()).toBe(0));
     } finally {
       await dispose();

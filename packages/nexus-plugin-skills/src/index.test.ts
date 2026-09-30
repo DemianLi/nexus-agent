@@ -1,11 +1,6 @@
 import { loadPlugins } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
-import {
-  createSkillsPlugin,
-  DEFAULT_SKILLS_SOURCE,
-  SKILLS_CAPABILITY,
-  skillsPlugin,
-} from './index.js';
+import { createSkillsPlugin, DEFAULT_SKILLS_SOURCE, skillsPlugin } from './index.js';
 
 /**
  * 薄測試，只斷言「`apply` 真的往那兩個註冊點放了東西」，加上這個套件自己拒絕的那一種。
@@ -15,10 +10,9 @@ import {
  * 回傳，這裡看的是 registry 的內容。兩件事。
  */
 describe('createSkillsPlugin', () => {
-  it('省略 sources 時註冊慣例路徑並宣告 skills 能力', async () => {
+  it('省略 sources 時註冊慣例路徑', async () => {
     const { registry } = await loadPlugins([createSkillsPlugin()]);
 
-    expect(registry.capabilities.has(SKILLS_CAPABILITY)).toBe(true);
     expect(registry.skills.sources()).toEqual([DEFAULT_SKILLS_SOURCE]);
   });
 

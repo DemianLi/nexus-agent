@@ -29,12 +29,6 @@ import { projectNonText } from './project-content.js';
 
 export { publicToolName, SERVER_NAME_PATTERN } from './names.js';
 
-/**
- * 這個 plugin 宣告的能力名。要相依「有 MCP 工具在」的 plugin 把它放進自己的 `requires`。**連上、工具也註冊好了才宣告**：
- * 連不上而照樣掛上的那一列沒有工具，不宣告（見 {@link mcpPlugin}）。
- */
-export const MCP_CAPABILITY = 'mcp';
-
 /** 一次 `tools/call` 的預設逾時，照 dsh 的 `toolCallTimeoutMs`。 */
 export const DEFAULT_TOOL_CALL_TIMEOUT_MS = 60_000;
 
@@ -184,11 +178,9 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
         `MCP 伺服器 "${serverName}" 連不上、列不出工具或工具註冊不上，這一次沒有它的工具` +
           `（要讓這一列失敗就寫 failOnStartupError: true）：${reason}`,
       );
-      // 不宣告 `MCP_CAPABILITY`：它說的是「有 MCP 工具在」，這台一個都沒有。
       return;
     }
 
-    registry.capabilities.provide(MCP_CAPABILITY);
     registry.lifecycle.onDispose(() => client.close());
   },
 };
