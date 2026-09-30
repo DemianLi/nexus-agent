@@ -45,6 +45,7 @@ import {
   createHostServicesPlugin,
   createInvariantRunner,
   createSessionRunner,
+  compileSubagentGraph,
   foldRegistry,
   formatOrigin,
   isFeedbackEvent,
@@ -78,7 +79,7 @@ import { TextOnlyStateBackend } from './binary-read.js';
 import { createToolResultStash } from './tool-result-stash.js';
 import type { StashRoute } from './tool-result-stash.js';
 import type { ToolResultStashOptions } from './tool-result-stash.js';
-import { assertHarnessProfileDeclared } from './harness-profile.js';
+import { assertHarnessProfileDeclared, describeHarnessProfileEffects } from './harness-profile.js';
 import type { HarnessProfileEffects } from './harness-profile.js';
 import { DEFAULT_RECURSION_LIMIT, RECURSION_LIMIT_SERVICE } from './settings/recursion-limit.js';
 
@@ -819,6 +820,34 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
           for (const stop of [...runners].reverse()) stop();
           runners.length = 0;
         };
+      },
+      /**
+       * 把 fold 過的子代理規格編成一張**帶存檔點的圖**，給背景續行用（[#825](https://github.com/DemianLi/nexus-agent/issues/825)，
+       * [#737](https://github.com/DemianLi/nexus-agent/issues/737)）。一次性的委派仍走基座的 `task`；這是另一條路，
+       * 細節與為什麼要另編見 {@link @nexus/core!compileSubagentGraph}。
+       *
+       * **模型的 harness profile 若會動子代理的組成就拋**：拿掉工具、加或拿 middleware 這幾根槓桿基座在 `createSubAgent`
+       * 之外套用，自編的圖不套用，靜靜略過的話背景子代理與一次性子代理就是兩個不同的東西。
+       *
+       * @param name - 子代理名（`general-purpose` 或某個 plugin 註冊的）。
+       * @param checkpointer - 這張圖的存檔點；同一個 `thread_id` 的下一輪看得到上一輪。
+       * @returns 編好的圖。
+       * @throws 沒有這個子代理、規格不合、profile 會動組成。
+       */
+      compileSubagent(name: string, checkpointer: NonNullable<AgentCheckpointer>) {
+        const effects = describeHarnessProfileEffects(options.model);
+        const touched = [
+          ...effects.excludedTools.map((tool) => `拿掉工具 ${tool}`),
+          ...effects.excludedMiddleware.map((each) => `移除 middleware ${each}`),
+          ...effects.extraMiddleware.map((each) => `加 middleware ${each}`),
+        ];
+        if (touched.length > 0) {
+          throw new Error(
+            `這個模型的 harness profile 會動子代理的組成（${touched.join('、')}），背景子代理的自編圖不套用；` +
+              '一次性委派走基座，兩條路會長得不一樣，所以不編。',
+          );
+        }
+        return compileSubagentGraph(params, name, { checkpointer });
       },
       async dispose() {
         // 遙測先收：後端很可能是某個 plugin 開的，plugin 的 disposer 一跑它就沒了，
