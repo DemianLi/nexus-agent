@@ -17,8 +17,9 @@
  * **怎麼拿到 fold 交給基座的 `SubAgent` 規格**：攔 `createDeepAgent` 收到的參數（`vi.mock` 包一層，原樣轉呼叫），
  * 所以看到的就是產品路徑真的交出去的東西，不是另跑一次 fold 的複本。
  *
- * **背景圖怎麼編**：`compileBackground` 拿同一份規格自己編一張帶存檔點的圖（卡上的乙路）。基座替子代理補的那一疊
- * 預設（檔案系統、摘要、補懸空工具呼叫）在自編路上不會自動有，這裡照基座的樣子補回去（`baseDefaults`）。
+ * **背景圖怎麼編**：`compileBackground` 拿同一份規格自己編一張帶存檔點的圖（卡上的乙路），現在是產品出口
+ * `compileSubagentGraph`（#825）；基座替子代理補的那一疊預設（檔案系統、摘要、補懸空工具呼叫）由它補回。
+ * `baseDefaults`／`mergeByName` 只剩「基座 `task` 那條路長什麼樣」的對照組還在用。
  *
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。腳本的輪數是全域依序吃的，root 與背景搶同一條，
  * 所以需要順序的測試用閘門（`Gates`）讓 root 停在一顆工具裡，等背景的輪吃完再放行。
@@ -35,8 +36,9 @@ import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import type { PluginEntry } from '@nexus/core';
+import type { PluginEntry, SubagentGraphParams } from '@nexus/core';
 import {
+  compileSubagentGraph,
   createHostServicesPlugin,
   SUBAGENT_DELEGATION_CONTEXT,
   toolCallSessionAddress,
@@ -183,12 +185,7 @@ async function assemble(
     plugins: [...plugins],
     backend,
   });
-  const params = captured.params as {
-    subagents: readonly SubAgent[];
-    backend: unknown;
-    model: unknown;
-    permissions?: unknown;
-  };
+  const params = captured.params as unknown as SubagentGraphParams;
   const spec = (name: string): SubAgent => {
     const found = params.subagents.find((candidate) => candidate.name === name);
     if (found === undefined) throw new Error(`沒有 ${name} 這個子代理規格`);
@@ -229,26 +226,26 @@ function mergeByName(
   ];
 }
 
-/** 乙路：拿同一份規格自己編一張帶存檔點的圖。 */
+/**
+ * 乙路：拿同一份規格自己編一張帶存檔點的圖——現在是產品出口 `compileSubagentGraph`（#825）。
+ * `omitPermissions` 是對照組：規格與組裝點都不帶 permissions，全域的 deny 就消失。
+ */
 function compileBackground(
   spec: SubAgent,
-  params: { backend: unknown; model: unknown; permissions?: unknown },
+  params: SubagentGraphParams,
   options: { omitPermissions?: boolean } = {},
 ) {
-  return createAgent({
-    model: params.model as never,
-    systemPrompt: spec.systemPrompt,
-    tools: (spec.tools ?? []) as never,
-    middleware: mergeByName(
-      baseDefaults(
-        params.backend,
-        options.omitPermissions === true ? undefined : (spec.permissions ?? params.permissions),
-      ),
-      (spec.middleware ?? []) as never,
-    ),
-    name: spec.name,
-    checkpointer: new MemorySaver(),
-  });
+  const source: SubagentGraphParams =
+    options.omitPermissions === true
+      ? {
+          ...params,
+          permissions: undefined,
+          subagents: params.subagents.map((each) =>
+            each.name === spec.name ? { ...each, permissions: undefined } : each,
+          ),
+        }
+      : params;
+  return compileSubagentGraph(source, spec.name, { checkpointer: new MemorySaver() });
 }
 
 type BackgroundGraph = ReturnType<typeof compileBackground>;
@@ -419,22 +416,16 @@ describe('第 2 項：換了組裝路之後 fold 注進規格的東西還在不�
     }
   });
 
-  it('自編的圖比規格多出基座那三顆預設：檔案系統、補懸空工具呼叫，摘要器被規格自己那顆換掉', async () => {
-    const { built, params, spec } = await assemble([{ content: '好' }], [WORKER]);
+  it('自編的圖比規格多出基座那三顆預設：規格自己不帶檔案系統，圖上的模型卻拿得到檔案工具', async () => {
+    const { built, model, params, spec } = await assemble([{ content: '好' }], [WORKER]);
     try {
       const own = names((spec('worker').middleware ?? []) as never);
-      const merged = names(
-        mergeByName(baseDefaults(params.backend), (spec('worker').middleware ?? []) as never),
-      );
       expect(own).not.toContain('FilesystemMiddleware');
       expect(own).not.toContain('patchToolCallsMiddleware');
-      expect(merged.slice(0, 3)).toEqual([
-        'FilesystemMiddleware',
-        'SummarizationMiddleware',
-        'patchToolCallsMiddleware',
-      ]);
-      // 同名的只留一顆（fold 的摘要器），不會兩顆並存。
-      expect(merged.filter((name) => name === 'SummarizationMiddleware')).toHaveLength(1);
+      await runBackground(compileBackground(spec('worker'), params), '幹活');
+      expect(model.boundToolNames).toEqual(
+        expect.arrayContaining(['ls', 'read_file', 'write_file']),
+      );
     } finally {
       await built.dispose();
     }

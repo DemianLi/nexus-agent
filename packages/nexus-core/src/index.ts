@@ -483,6 +483,8 @@ export { assertInvariantSelection, createInvariantRunner, InvariantError } from 
 
 export type { SessionInstaller, SessionRunnerOptions, SessionSubject } from './sessions.js';
 export { createSessionRunner } from './sessions.js';
+export { compileSubagentGraph, mergeMiddlewareByName } from './subagent-graph.js';
+export type { SubagentGraph, SubagentGraphOptions, SubagentGraphParams } from './subagent-graph.js';
 export type { SessionAddress } from './session-address.js';
 export {
   BACKGROUND_SESSION_CONFIG_KEY,
