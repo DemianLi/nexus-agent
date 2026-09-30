@@ -309,7 +309,8 @@ describe('路由開的是暫存那一格，不是把 fence 打開', () => {
  *
  * 判準仍是「暗號讀不讀得回來」；**組裝是真的 `createNexusAgent`＋真的檔案系統**，不用會失敗的替身。
  */
-describe('暫存在主機上的私有目錄', () => {
+// 每條都真的組裝一到三個 agent 並寫檔；CI 的分片機器忙的時候「兩個會話」那條量到 5.4 秒，預設的 5 秒不夠。
+describe('暫存在主機上的私有目錄', { timeout: 30_000 }, () => {
   const isRoot = process.getuid?.() === 0;
 
   async function stashRoot(): Promise<string> {
