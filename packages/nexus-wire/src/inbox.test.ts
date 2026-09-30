@@ -13,7 +13,7 @@ import {
   reduceAll,
   reduceConversation,
 } from './conversation.js';
-import { INBOX } from './inbox.js';
+import { INBOX, SETTLE_NOTICE } from './inbox.js';
 import type { Event } from './protocol.js';
 
 let seq = 0;
@@ -267,12 +267,19 @@ describe('inbox：背景子代理的結算通知不是人話（#840）', () => {
     expect(state.inboxNextStep).toEqual([notice]);
   });
 
-  it('領走的通知（claimed／claimedNextStep 帶 source）不畫人的泡泡；沒帶 source 的照舊是人', () => {
+  it('領走的通知（claimed／claimedNextStep 帶 source）不畫人的泡泡，改長一格通知；沒帶 source 的照舊是人', () => {
     const claimedNotice = { id: 'run-n', text: '通知', source: { kind: 'subagent-settled' } };
-    expect(fold(inboxFrame({ items: [], claimed: claimedNotice })).entries).toEqual([]);
+    const notice = {
+      kind: 'notice',
+      id: 'inbox:run-n',
+      source: 'subagent-settled',
+      inboxId: 'run-n',
+    };
+    // 通知不帶文字：給模型的英文不上畫面。
+    expect(fold(inboxFrame({ items: [], claimed: claimedNotice })).entries).toEqual([notice]);
     expect(
       fold(inboxFrame({ items: [], nextStep: [], claimedNextStep: [claimedNotice] })).entries,
-    ).toEqual([]);
+    ).toEqual([notice]);
     const human = fold(inboxFrame({ items: [], claimed: { id: 'run-a', text: '嗨' } }));
     expect(human.entries.map((entry) => entry.kind)).toEqual(['human']);
   });
@@ -288,9 +295,33 @@ describe('inbox：背景子代理的結算通知不是人話（#840）', () => {
         ],
       }),
     );
+    // 順序照領走的先後：人的話在前、通知在後。
     expect(
       state.entries.map((entry) => (entry.kind === 'human' ? entry.text : entry.kind)),
-    ).toEqual(['人的話']);
+    ).toEqual(['人的話', 'notice']);
+  });
+
+  it('同一顆 claimed 再到一次不長第二格通知（靠 inboxId 去重）', () => {
+    const claimedNotice = { id: 'run-n', text: '通知', source: { kind: 'subagent-settled' } };
+    const once = fold(inboxFrame({ items: [], claimed: claimedNotice }));
+    const twice = reduceConversation(once, inboxFrame({ items: [], claimed: claimedNotice }));
+    expect(twice.entries.filter((entry) => entry.kind === 'notice')).toHaveLength(1);
+  });
+
+  it('歷史重播的 SETTLE_NOTICE：長同一種通知，id 就是給的 id；同一個 id 只長一格，壞形狀略過', () => {
+    const frame = (payload: unknown) => ({
+      type: 'event' as const,
+      seq: 0,
+      method: 'custom' as const,
+      params: { namespace: [], timestamp: 0, data: { name: SETTLE_NOTICE, payload } },
+    });
+    const once = reduceConversation(emptyConversation(), frame({ id: 'history-7' }) as never);
+    expect(once.entries).toEqual([{ kind: 'notice', id: 'history-7', source: 'subagent-settled' }]);
+    const again = reduceConversation(once, frame({ id: 'history-7' }) as never);
+    expect(again.entries).toHaveLength(1);
+    for (const bad of [{}, { id: 7 }, { id: '' }]) {
+      expect(reduceConversation(once, frame(bad) as never)).toBe(once);
+    }
   });
 
   it('子代理寫來的話（agent-message，#849）同樣：排著照收、領走不畫人的泡泡', () => {

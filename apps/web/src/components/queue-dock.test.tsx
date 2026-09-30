@@ -14,6 +14,7 @@ import {
   QUEUE_LEAVE_MS,
   QUEUE_PARKED_TEXT,
   QUEUE_SETTLE_MS,
+  SETTLED_NOTICE_TEXT,
 } from '@/lib/queue-view';
 import { axeViolations } from '@/test/axe';
 
@@ -408,6 +409,43 @@ describe('焦點', () => {
     rerender([]);
     expect(onFocusFallback).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(screen.getByRole('textbox', { name: '輸入框' }));
+  });
+});
+
+describe('背景子代理的結算通知（#851）', () => {
+  const notice: WireQueuedInput = {
+    id: 'n',
+    text: 'Background subagent finished. It left no closing message.',
+    source: { kind: 'subagent-settled' },
+  };
+
+  it('畫成中文一句，不照抄給模型的英文，也沒有編輯、刪除、插話', () => {
+    mount([notice]);
+    settle();
+    const dock = screen.getByTestId('queue-dock');
+    expect(within(dock).getByText(SETTLED_NOTICE_TEXT)).toBeTruthy();
+    expect(dock.textContent).not.toContain('Background subagent');
+    expect(within(dock).queryAllByRole('button')).toEqual([]);
+  });
+
+  it('跟人排的並排時：人的那一列照舊有鈕，通知那一列沒有，件數兩件都算', () => {
+    mount([item('a', '第一句'), notice]);
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '2 則排著的訊息' }));
+    const dock = screen.getByTestId('queue-dock');
+    const rows = [...dock.querySelectorAll('[data-queue-item]')];
+    expect(rows.map((row) => row.hasAttribute('data-queue-settled'))).toEqual([false, true]);
+    expect(within(rows[0] as HTMLElement).getAllByRole('button')).toHaveLength(3);
+    expect(within(rows[1] as HTMLElement).queryAllByRole('button')).toEqual([]);
+  });
+
+  it('人的那一列淡出、旁邊只剩通知：焦點交給輸入框，不落到沒有鈕的那一列', () => {
+    const { rerender, onFocusFallback } = mount([item('a', '一'), notice]);
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '2 則排著的訊息' }));
+    screen.getByRole('button', { name: '刪除：一' }).focus();
+    rerender([notice]);
+    expect(onFocusFallback).toHaveBeenCalledTimes(1);
   });
 });
 

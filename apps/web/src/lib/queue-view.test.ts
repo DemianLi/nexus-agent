@@ -1,10 +1,11 @@
-import type { ConversationStatus } from '@nexus/wire';
+import type { ConversationStatus, WireQueuedInput } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import {
   canRunSlash,
   canSendText,
   isQueueParked,
+  isSettledNotice,
   QUEUE_PREVIEW_CHARS,
   queueHeading,
   queuePreview,
@@ -85,5 +86,18 @@ describe('canRunSlash', () => {
 
   it('斷線送不出去', () => {
     expect(canRunSlash(false, 'idle', '/plan', '/feedback')).toBe(false);
+  });
+});
+
+describe('isSettledNotice（#851）', () => {
+  const of = (source: WireQueuedInput['source']): WireQueuedInput => ({
+    id: 'a',
+    text: 't',
+    source,
+  });
+
+  it('只有背景子代理結算的通知算；人排的不算', () => {
+    expect(isSettledNotice(of({ kind: 'subagent-settled' }))).toBe(true);
+    expect(isSettledNotice(of({ kind: 'user' }))).toBe(false);
   });
 });

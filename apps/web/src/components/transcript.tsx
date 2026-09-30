@@ -60,7 +60,7 @@ import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
 import { EXIT_PLAN_MODE } from '@/lib/plan-review';
 import { pairAnswers } from '@/lib/question-view';
 import { reasoningRunning, visibleReasoning } from '@/lib/reasoning-view';
-import { pendingSteers, pendingSteerText } from '@/lib/steer-view';
+import { pendingSteers, pendingSteerText, settledNoticeText } from '@/lib/steer-view';
 
 /**
  * 評分按鈕要的東西（[#278](https://github.com/DemianLi/nexus-agent/issues/278)、
@@ -193,6 +193,12 @@ function Entry({
     return null;
   }
 
+  if (entry.kind === 'notice') {
+    // 折疊器長出來的「這一輪是被什麼叫醒的」（#851）。**這裡先不畫**：只為了讓聯集多一支之後這條 switch 仍編得過
+    // （AGENTS.md「跨套件的型別收緊必須原子落地」的機械適配）；怎麼畫是 dev-ui 的事。
+    return null;
+  }
+
   if (entry.kind === 'tool') {
     // 交出計劃的那一顆畫成計劃卡（#654）。
     if (entry.name === EXIT_PLAN_MODE) return <PlanToolCard entry={entry} beam={beam} />;
@@ -322,6 +328,20 @@ function PendingSteerBubble({ text, caption }: { text: string; caption: string }
   );
 }
 
+/**
+ * 排著的背景子代理結算通知（#851）：**不是人的泡泡**（那是執行期的記帳，文字是給模型的英文），只有一行小字。被領走時
+ * 折疊器不長人的話，這一行就直接消失，模型的回覆接在後面。
+ */
+function PendingSettledNotice({ caption }: { caption: string }) {
+  return (
+    <Message align="start" data-pending-settled="">
+      <MessageContent>
+        <MessageFooter className="px-0">{caption}</MessageFooter>
+      </MessageContent>
+    </Message>
+  );
+}
+
 /** JS 的捲動不看 CSS 的 reduced-motion，要自己讀（§7）。 */
 function scrollBehavior(): ScrollBehavior {
   const reduce =
@@ -387,7 +407,11 @@ export function Transcript({
   for (const steer of pendingSteers(state)) {
     items.push({
       id: steer.key,
-      node: <PendingSteerBubble text={steer.text} caption={pendingSteerText(state.status)} />,
+      node: steer.settled ? (
+        <PendingSettledNotice caption={settledNoticeText(state.status)} />
+      ) : (
+        <PendingSteerBubble text={steer.text} caption={pendingSteerText(state.status)} />
+      ),
     });
   }
   const announced = useFinishedReply(state.entries, isFresh);
