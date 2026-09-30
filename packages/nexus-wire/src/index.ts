@@ -155,6 +155,7 @@ export type {
   InboxPayload,
   WireClaimedInput,
   WireQueuedInput,
+  WireQueuedInputSource,
   WireSessionReference,
 } from './inbox.js';
 export { INBOX } from './inbox.js';

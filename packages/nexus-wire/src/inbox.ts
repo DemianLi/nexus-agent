@@ -43,9 +43,16 @@ export interface WireQueuedInput {
   /** 就是送出時 `run.start` 回的 `run_id`：畫面拿它對上自己送出的那一句。改過之後不變。 */
   readonly id: string;
   readonly text: string;
-  /** 誰送的。這一版只有人；目標續行走佇列是 #638。 */
-  readonly source: { readonly kind: 'user' };
+  /**
+   * 誰送的。人，或背景子代理結算的通知（#840：執行期的記帳，不是人說的話）；目標續行走佇列是 #638。
+   * 只放判別欄，摘要與寄件人留在日誌上。
+   */
+  readonly source: WireQueuedInputSource;
 }
+
+/** {@link WireQueuedInput.source}：只放判別欄。 */
+export type WireQueuedInputSource =
+  { readonly kind: 'user' } | { readonly kind: 'subagent-settled' };
 
 /** 一句話裡 `@` 的一條會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）：`text` 裡對應的那段是 `@<label>`。 */
 export interface WireSessionReference {
@@ -63,6 +70,11 @@ export interface WireClaimedInput {
   readonly text: string;
   /** 這句話 `@` 的會話，照出現先後、去重。沒有引用就不給這一格（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）。 */
   readonly references?: readonly WireSessionReference[];
+  /**
+   * 這一件不是人送的時才帶（#840）：`subagent-settled` 是背景子代理結算的通知。**沒帶就是人**，舊的一側照舊。
+   * 有帶的不畫人的泡泡——那是執行期的記帳，不是使用者說的話；畫成什麼樣是 web 的事（卡 7）。
+   */
+  readonly source?: { readonly kind: 'subagent-settled' };
 }
 
 /** {@link INBOX} 的 `payload`。 */

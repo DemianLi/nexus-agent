@@ -13,6 +13,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
@@ -21,14 +22,16 @@ import {
   BACKGROUND_SESSION_CONFIG_KEY,
   SessionRegistry,
   TURN_CANCEL_CONFIG_KEY,
+  toLoggedMessage,
 } from '@nexus/core';
+import type { SessionLog } from '@nexus/core';
 import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
 import { BackgroundSubagentHost } from './background-subagents.js';
-import type { BackgroundAgent } from './background-subagents.js';
+import type { BackgroundAgent, BackgroundSettlement } from './background-subagents.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
@@ -902,4 +905,235 @@ describe('產品組裝上的背景子代理', () => {
     const log = run.pump.sessions.list().find((s) => s.address.kind === 'subagent')?.log;
     return log?.events.find((event) => event.type === 'turn/end');
   }
+});
+
+// ───────────────────────────── 結算通知（#840） ─────────────────────────────
+
+describe('結算通知（#840）', () => {
+  type Script = (text: string, signal: AbortSignal, log: SessionLog) => Promise<void> | void;
+
+  /** 假 agent：腳本拿得到這一輪的中止訊號與子代理自己的日誌（可以往裡記回覆）。 */
+  function setup(script: Script, options: { readonly throwOnSettled?: boolean } = {}) {
+    const sessions = new SessionRegistry('root-1');
+    const settlements: BackgroundSettlement[] = [];
+    const order: string[] = [];
+    const warnings: string[] = [];
+    const agent: BackgroundAgent = {
+      async streamEvents(input, config) {
+        const text = String(
+          (input as { messages: { content: unknown }[] }).messages.at(-1)?.content,
+        );
+        const runId = config.configurable[BACKGROUND_SESSION_CONFIG_KEY] as string;
+        await script(
+          text,
+          config.configurable[TURN_CANCEL_CONFIG_KEY] as AbortSignal,
+          sessions.get({ kind: 'subagent', runId })!,
+        );
+        return (async function* () {})() as never;
+      },
+    };
+    const host = new BackgroundSubagentHost({
+      sessions,
+      compile: () => agent,
+      warn: (message) => warnings.push(message),
+      onSettled: (settlement) => {
+        order.push(`notified:${settlement.runId}`);
+        settlements.push(settlement);
+        if (options.throwOnSettled === true) throw new Error('主對話收線了');
+      },
+    });
+    return { host, sessions, settlements, order, warnings };
+  }
+
+  const reply = (
+    log: SessionLog,
+    content: string,
+    metadata: Record<string, unknown> = {},
+  ): void => {
+    log.append('assistant/message', {
+      message: toLoggedMessage(new AIMessage({ content, response_metadata: metadata })),
+    });
+  };
+
+  const waitAbort = (signal: AbortSignal) =>
+    new Promise<void>((resolve) => {
+      if (signal.aborted) resolve();
+      else signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+
+  it('做完了：摘要照 dsh 的原文，加上最後一則回覆的文字；拿到 outcome 時通知已經送到', async () => {
+    const { host, settlements, order } = setup((_text, _signal, log) =>
+      reply(log, '查到了：三個檔案'),
+    );
+    const started = host.start({ subagent: 'worker', text: '查' });
+    const outcome = await started.outcome;
+    order.push('outcome');
+    expect(outcome).toEqual({ ok: true });
+    expect(order).toEqual([`notified:${started.runId}`, 'outcome']);
+    expect(settlements).toEqual([
+      {
+        runId: started.runId,
+        sessionId: `root-1/${started.runId}`,
+        summary: `Background subagent ${started.runId} finished and will do no further work unless you send it more.`,
+        text:
+          `Background subagent ${started.runId} finished and will do no further work unless you send it more.` +
+          '\n\nIts closing message:\n查到了：三個檔案',
+      },
+    ]);
+    await host.close();
+  });
+
+  it('只看最後一則回覆：前面的回覆不併進來', async () => {
+    const { host, settlements } = setup((_text, _signal, log) => {
+      reply(log, '我先看一下');
+      reply(log, '結論：沒問題');
+    });
+    await host.start({ subagent: 'worker', text: '查' }).outcome;
+    expect(settlements[0]?.text).toContain('結論：沒問題');
+    expect(settlements[0]?.text).not.toContain('我先看一下');
+    await host.close();
+  });
+
+  it('沒有回覆、或最後一則沒有文字：It left no closing message.（dsh 原文）', async () => {
+    const none = setup(() => undefined);
+    await none.host.start({ subagent: 'worker', text: '查' }).outcome;
+    expect(none.settlements[0]?.text).toMatch(/\n\nIt left no closing message\.$/);
+    const blank = setup((_text, _signal, log) => reply(log, '   '));
+    await blank.host.start({ subagent: 'worker', text: '查' }).outcome;
+    expect(blank.settlements[0]?.text).toMatch(/\n\nIt left no closing message\.$/);
+    await Promise.all([none.host.close(), blank.host.close()]);
+  });
+
+  it('前一段的回覆不算這一段的：這一輪沒有回覆就是沒有收尾訊息', async () => {
+    let round = 0;
+    const { host, settlements } = setup((_text, _signal, log) => {
+      round += 1;
+      if (round === 1) reply(log, '第一段的結論');
+    });
+    const first = host.start({ subagent: 'worker', text: '一' });
+    await first.outcome;
+    await host.submit({ runId: first.runId, subagent: 'worker', text: '二' });
+    expect(settlements).toHaveLength(2);
+    expect(settlements[1]?.text).toMatch(/It left no closing message\.$/);
+    await host.close();
+  });
+
+  it('失敗、被中斷、撞到輸出上限：各自不同的摘要', async () => {
+    const failed = setup(() => {
+      throw new Error('模型掛了');
+    });
+    await failed.host.start({ subagent: 'worker', text: '查' }).outcome;
+    expect(failed.settlements[0]?.summary).toMatch(/ failed before it finished\.$/);
+
+    const entered = gate();
+    const stopped = setup(async (_text, signal) => {
+      entered.open();
+      await waitAbort(signal);
+    });
+    const slow = stopped.host.start({ subagent: 'worker', text: '慢' });
+    await entered.opened;
+    stopped.host.interrupt(slow.runId);
+    await slow.outcome;
+    expect(stopped.settlements[0]?.summary).toMatch(/ was stopped before it finished\.$/);
+
+    const full = setup((_text, _signal, log) =>
+      reply(log, '寫到一半', { finish_reason: 'length' }),
+    );
+    await full.host.start({ subagent: 'worker', text: '長' }).outcome;
+    expect(full.settlements[0]?.summary).toMatch(/ ran out of room before it finished\.$/);
+    expect(full.settlements[0]?.text).toContain('寫到一半');
+    await Promise.all([failed.host.close(), stopped.host.close(), full.host.close()]);
+  });
+
+  it('中止先判，蓋過輸出上限', async () => {
+    const entered = gate();
+    const { host, settlements } = setup(async (_text, signal, log) => {
+      reply(log, '寫到一半', { finish_reason: 'length' });
+      entered.open();
+      await waitAbort(signal);
+    });
+    const started = host.start({ subagent: 'worker', text: '長' });
+    await entered.opened;
+    host.interrupt(started.runId);
+    await started.outcome;
+    expect(settlements[0]?.summary).toMatch(/ was stopped before it finished\.$/);
+    await host.close();
+  });
+
+  it('還有輪次排著就不算結算：排著的做完才通知，一則', async () => {
+    const hold = gate();
+    const { host, settlements } = setup(async (text) => {
+      if (text === 'A1') await hold.opened;
+    });
+    const first = host.start({ subagent: 'worker', text: 'A1' });
+    const second = host.submit({ runId: first.runId, subagent: 'worker', text: 'A2' });
+    await settle();
+    expect(settlements).toHaveLength(0);
+    hold.open();
+    await Promise.all([first.outcome, second]);
+    expect(settlements).toHaveLength(1);
+    await host.close();
+  });
+
+  it('被中斷而暫停、還有排著的：不算結算；恢復跑完才通知', async () => {
+    const entered = gate();
+    const { host, settlements } = setup(async (text, signal) => {
+      if (text === 'A1') {
+        entered.open();
+        await waitAbort(signal);
+      }
+    });
+    const first = host.start({ subagent: 'worker', text: 'A1' });
+    const queued = host.submit({ runId: first.runId, subagent: 'worker', text: 'A2' });
+    await entered.opened;
+    host.interrupt(first.runId);
+    await first.outcome;
+    await settle();
+    expect(settlements).toHaveLength(0);
+    const resumed = host.submit({ runId: first.runId, subagent: 'worker', text: 'A3' });
+    await Promise.all([queued, resumed]);
+    expect(settlements).toHaveLength(1);
+    expect(settlements[0]?.summary).toMatch(/ finished and will do no further work/);
+    await host.close();
+  });
+
+  it('每一段都通知：結算之後再收到一句話，跑完又通知一次', async () => {
+    const { host, settlements } = setup(() => undefined);
+    const first = host.start({ subagent: 'worker', text: '一' });
+    await first.outcome;
+    await host.submit({ runId: first.runId, subagent: 'worker', text: '二' });
+    expect(settlements.map((settlement) => settlement.runId)).toEqual([first.runId, first.runId]);
+    await host.close();
+  });
+
+  it('兩個子代理各自結算各自的通知', async () => {
+    const { host, settlements } = setup(() => undefined);
+    const a = host.start({ subagent: 'worker', text: 'a' });
+    const b = host.start({ subagent: 'worker', text: 'b' });
+    await Promise.all([a.outcome, b.outcome]);
+    expect(settlements.map((settlement) => settlement.runId).sort()).toEqual(
+      [a.runId, b.runId].sort(),
+    );
+    await host.close();
+  });
+
+  it('通知送不出去（onSettled 拋錯）：只講一聲，這一輪的下場不受影響', async () => {
+    const { host, warnings } = setup(() => undefined, { throwOnSettled: true });
+    const started = host.start({ subagent: 'worker', text: '查' });
+    expect(await started.outcome).toEqual({ ok: true });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(started.runId);
+    expect(warnings[0]).toContain('主對話收線了');
+    await host.close();
+  });
+
+  it('沒有人接（沒給 onSettled）：照常跑完，不通知也不報錯', async () => {
+    const sessions = new SessionRegistry('root-1');
+    const agent: BackgroundAgent = {
+      streamEvents: () => Promise.resolve((async function* () {})() as never),
+    };
+    const host = new BackgroundSubagentHost({ sessions, compile: () => agent });
+    expect(await host.start({ subagent: 'worker', text: '查' }).outcome).toEqual({ ok: true });
+    await host.close();
+  });
 });

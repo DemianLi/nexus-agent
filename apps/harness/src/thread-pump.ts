@@ -81,6 +81,7 @@ import {
   type InboxSplice,
   type InboxState,
   type QueuedInput,
+  type QueuedInputSource,
   type SessionAddress,
   type SessionEntry,
   type SessionEvent,
@@ -88,6 +89,7 @@ import {
   type SessionLog,
   type StepInbox,
   type TurnEndReason,
+  type UserMessageSource,
 } from '@nexus/core';
 import type { Event, ThreadFeedFrame, WireChannel } from '@nexus/wire';
 import {
@@ -250,9 +252,38 @@ function pumpInputOf(item: QueuedInput): PumpInput {
   switch (source.kind) {
     case 'user':
       return { kind: 'message', text: item.text };
+    case 'subagent-settled':
+      return {
+        kind: 'subagent-settled',
+        text: item.text,
+        summary: source.summary,
+        senderSessionId: source.senderSessionId,
+      };
     default: {
-      const unhandled: never = source.kind;
-      throw new Error(`送出佇列的來源 "${String(unhandled)}" 沒有對應的輸入種類`);
+      const unhandled: never = source;
+      throw new Error(`送出佇列的來源 ${JSON.stringify(unhandled)} 沒有對應的輸入種類`);
+    }
+  }
+}
+
+/**
+ * 插話被領走時寫進 `user/message` 的來源，由佇列項的 `source` 推出來（[#840](https://github.com/DemianLi/nexus-agent/issues/840)）。
+ * 授權判別看這一格：`user` 才是人，結算通知不是（dsh 的 `SubagentSettledMessageSource`）。窮舉，理由同 {@link pumpInputOf}。
+ */
+function userMessageSourceOf(source: QueuedInputSource): UserMessageSource {
+  switch (source.kind) {
+    case 'user':
+      return { kind: 'user' };
+    case 'subagent-settled':
+      return {
+        kind: 'subagent-settled',
+        form: 'notice',
+        summary: source.summary,
+        senderSessionId: source.senderSessionId,
+      };
+    default: {
+      const unhandled: never = source;
+      throw new Error(`送出佇列的來源 ${JSON.stringify(unhandled)} 沒有對應的 user/message 來源`);
     }
   }
 }
@@ -292,7 +323,18 @@ export type PumpInput =
       readonly interruptId: string;
       readonly response: unknown;
     }
-  | ({ readonly kind: 'goal' } & GoalRoundRequest);
+  | ({ readonly kind: 'goal' } & GoalRoundRequest)
+  | {
+      /**
+       * 背景子代理結算的通知（[#840](https://github.com/DemianLi/nexus-agent/issues/840)）：執行期的記帳，**不是人說的話**。
+       * 只有送出佇列開跑時會走到（{@link pumpInputOf}），它與 `goal` 一樣在圖上是一則 `HumanMessage`，差別全在日誌上
+       * `turn/start` 的 `kind`。
+       */
+      readonly kind: 'subagent-settled';
+      readonly text: string;
+      readonly summary: string;
+      readonly senderSessionId: string;
+    };
 
 interface Subscriber {
   readonly channels: readonly WireChannel[];
@@ -569,6 +611,13 @@ function turnStartOf(input: PumpInput): SessionEventMap['turn/start'] {
       return { kind: 'message', text: input.text };
     case 'resume':
       return { kind: 'resume' };
+    case 'subagent-settled':
+      return {
+        kind: 'subagent-settled',
+        text: input.text,
+        summary: input.summary,
+        senderSessionId: input.senderSessionId,
+      };
     case 'goal':
       return {
         kind: 'goal',
@@ -1190,6 +1239,55 @@ export class ThreadPump {
   }
 
   /**
+   * 背景子代理結算了，通知這條 thread 的主對話（[#840](https://github.com/DemianLi/nexus-agent/issues/840)）。
+   * 照 dsh 的 `notifySettlement`（`subagent/src/continuation-activation.ts`，`477b4f4`）分三種：
+   *
+   * - **主對話閒著**：排進 `next-turn` 的尾巴並叫醒它開一輪。這一輪的 `turn/start` 是 `subagent-settled`，**不是人話、
+   *   也不授予直接人類授權**（{@link pumpInputOf}）。
+   * - **主對話正跑著**：收插話就排進 `next-step`，下一步送進模型、不開新的一輪；不收（沒掛載體、已被中止、正在收尾）
+   *   就退成排隊，同人的插話（{@link ThreadPump.submit}）。
+   * - **這條 thread 已經收了**：**不喚醒**——只落進佇列、不排程，下次接回來時折成停住的佇列（同 dsh 的 `inject`，
+   *   喚醒一個 idle 的 agent 是開一輪，不是排隊等工作）。
+   *
+   * 按了停止之後停住的佇列**不被這個叫醒**：那是「下一次人送出」才放行的（#637 的 Q2），機器的通知不替人放行。
+   *
+   * @param notice.text - 送進模型的那一串字。
+   * @param notice.summary - 一行摘要（記在來源上）。
+   * @param notice.senderSessionId - 結算的背景子代理的會話 id。
+   */
+  notifySettled(notice: {
+    readonly text: string;
+    readonly summary: string;
+    readonly senderSessionId: string;
+  }): void {
+    const item: QueuedInput = {
+      id: crypto.randomUUID(),
+      text: notice.text,
+      source: {
+        kind: 'subagent-settled',
+        summary: notice.summary,
+        senderSessionId: notice.senderSessionId,
+      },
+    };
+    const intoStep = this.#acceptsSteer();
+    try {
+      this.#spliceInbox({
+        target: intoStep ? 'next-step' : 'next-turn',
+        start: this.#inbox[intoStep ? 'next-step' : 'next-turn'].length,
+        inserted: [item],
+      });
+    } catch (error: unknown) {
+      this.#warn?.(
+        `[背景子代理] thread ${this.#threadId} 收不下 ${notice.senderSessionId} 的結算通知：${String(error)}`,
+      );
+      return;
+    }
+    if (intoStep || this.#closed) return;
+    // 沒有人等這一件的結果：排程的 promise 收線時會 reject，接住免得變成沒人接的 rejection。
+    this.#schedule(() => this.#runQueued(item.id), false, { itemId: item.id }).catch(() => {});
+  }
+
+  /**
    * 排一件事到這條 thread 的序列上：一輪 run，或一次收回（{@link ThreadPump.cancel}）。
    *
    * 收回走同一條序列，是因為它也要讀寫 checkpoint、也要寫一輪日誌——跟一輪 run 並行的話，
@@ -1556,6 +1654,8 @@ export class ThreadPump {
     if (items.length === 0 && opening === undefined) return undefined;
     current.opening = undefined;
     const steps = items.map((item): ClaimedInput => {
+      // 不是人送的（結算通知）不解引用：它的字是子代理寫的，裡面長得像會話網址的東西不是使用者的 `@`。
+      if (item.source.kind !== 'user') return { ...item, references: [] };
       const parsed = this.#referencedTextOrRaw(item.text);
       return { ...item, text: parsed.text, references: parsed.references };
     });
@@ -1622,7 +1722,7 @@ export class ThreadPump {
         const message = new HumanMessage({ content: job.text.text, id: job.text.id });
         this.#sessions.root.append('user/message', {
           message: toLoggedMessage(message),
-          source: { kind: 'user' },
+          source: userMessageSourceOf(job.text.source),
         });
         messages.push(message);
       }

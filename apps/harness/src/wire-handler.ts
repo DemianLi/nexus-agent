@@ -96,6 +96,7 @@ import { FEEDBACK_CATEGORIES } from '@nexus/core';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { createCommandExecutor } from '@nexus/plugin-commands';
+import type { BackgroundSettlement } from './background-subagents.js';
 import { HistoryQueryError, historyPage } from './conversation-history.js';
 import type { SessionReferenceReader } from './session-reference.js';
 import type {
@@ -220,9 +221,13 @@ export interface ThreadAgent {
    * 沒有「沒人 join 就 `undefined`」那條短路了。
    *
    * @param sessions - 這個 thread 的會話註冊表。
+   * @param onBackgroundSettled - 背景子代理結算時通知這條 thread 的主對話（#840）。cli 的 REPL 不給。
    * @returns 收掉這次接線的函式。
    */
-  attachSession?(sessions: SessionRegistry): () => void;
+  attachSession?(
+    sessions: SessionRegistry,
+    onBackgroundSettled?: (settlement: BackgroundSettlement) => void,
+  ): () => void;
   /**
    * 把這個 thread 的**每一份**會話日誌接上落盤，選配。
    *
@@ -765,7 +770,14 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         // **接在不變量之後**，同 `cli.ts` 那條的理由：參與者一裝上去就可能記東西，
         // 那些東西該被已經在看的檢查看到。註冊表通知訂閱者的順序就是這三行的順序，
         // 所以 subagent 後來出生的那些日誌也照這個順序被接上。
-        const detachSession = threadAgent.attachSession?.(pump.sessions);
+        // 背景子代理結算了，通知這條 thread 的主對話（#840）：閒著就叫醒它開一輪，見 `ThreadPump.notifySettled`。
+        const detachSession = threadAgent.attachSession?.(pump.sessions, (settlement) =>
+          pump.notifySettled({
+            text: settlement.text,
+            summary: settlement.summary,
+            senderSessionId: settlement.sessionId,
+          }),
+        );
         // **接在最後，理由同 `cli.ts`**：前三個是觀察者，落盤不改變任何人看得到什麼，
         // 所以順序在功能上沒有差別；排最後是為了讓讀的人看到的因果跟實際一致。
         const persistence = threadAgent.attachPersistence?.(pump.sessions);

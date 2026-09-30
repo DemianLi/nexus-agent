@@ -26,11 +26,18 @@
  *
  * 每個子代理**各自串行**（一次一輪，後到的排隊）、彼此並行。
  *
- * ## 這一張還沒做的
+ * ## 結算通知（#840）
  *
- * 沒有生產者（`task` 當場回編號是卡 5），所以這裡只有 host 與測試，不接進 cli／serve。中止一輪與
- * `TurnEndReason` 的 `parent` 成員（卡 6）、輸出上限的載體、結算通知、並存上限都不在這裡。所以 {@link
- * BackgroundSubagentHost.close} 只等進行中的輪收完，不中止它們。
+ * 一個子代理沒有輪次在跑、排著的也空了，就是**結算**：對主對話送一則通知（{@link BackgroundSubagentHostOptions.onSettled}，
+ * 內容見 {@link BackgroundSettlement}），時機在讓出所有權（交出 `outcome`）之前。被 `interrupt` 而暫停、還排著輪次的不算結算。
+ * 怎麼叫醒主對話是 pump 的事（`ThreadPump.notifySettled`）。
+ *
+ * ## 沒做的
+ *
+ * {@link BackgroundSubagentHost.close} 只等進行中的輪收完，不中止它們。撞到輸出上限時，中介層在背景圖上照樣丟工具呼叫
+ * （它在子代理的那一疊裡），並在 `MaxTokensCarrier` 記一筆；一次性的 `task` 由父圖那一側取走，背景位址沒有人取，
+ * 每個撞過上限的背景子代理在載體裡留一筆（同一個編號會蓋掉，數量以派出的子代理為界）。結算摘要的 `max-tokens` 不靠它，
+ * 讀的是子代理自己日誌上回覆的 `finish_reason`。
  *
  * @module
  */
@@ -38,7 +45,12 @@
 import { randomUUID } from 'node:crypto';
 
 import { HumanMessage } from '@langchain/core/messages';
-import { BACKGROUND_SESSION_CONFIG_KEY, TURN_CANCEL_CONFIG_KEY } from '@nexus/core';
+import {
+  BACKGROUND_SESSION_CONFIG_KEY,
+  TURN_CANCEL_CONFIG_KEY,
+  fromLoggedMessage,
+  turnReachedMaxTokens,
+} from '@nexus/core';
 import type { SessionEventMap, SessionLog, SessionRegistry } from '@nexus/core';
 
 import { BACKGROUND_RUN_PREFIX } from './background-run-id.js';
@@ -62,6 +74,64 @@ export type BackgroundRoundOutcome =
 
 /** 每個主對話同時存活的背景子代理上限的預設值（dsh `SubagentRuntime.Config.maxActiveSubagents`，`477b4f4`）。 */
 export const DEFAULT_MAX_ACTIVE_BACKGROUND_SUBAGENTS = 8;
+
+/** 一個背景子代理的一段（epoch）怎麼結束的，決定通知的第一行。 */
+export type BackgroundStopReason = 'completed' | 'aborted' | 'max-tokens' | 'error';
+
+/**
+ * 一個背景子代理結算了（[#840](https://github.com/DemianLi/nexus-agent/issues/840)）：沒有輪次在跑、排著的也空了。
+ * 給主對話的通知，內容照 dsh 的 `createSettlementMessage`（`subagent/src/continuation-messages.ts`，`477b4f4`）。
+ */
+export interface BackgroundSettlement {
+  /** 背景子代理的編號（模型手上的那個）。 */
+  readonly runId: string;
+  /** 它的會話 id（日誌上的寄件人）。 */
+  readonly sessionId: string;
+  /** 一行摘要，說它怎麼收的。 */
+  readonly summary: string;
+  /** 送進主對話模型的整段字：摘要，加上它最後一則回覆的非空文字，沒有就是 `It left no closing message.`。 */
+  readonly text: string;
+}
+
+/**
+ * 一行摘要，逐字照 dsh 的 `settlementSummary`。dsh 還有一支 `refusal`（`declined the task`，pre-step 的 hook 拒絕丟掉
+ * 已領走的輸入）：我們沒有那條路，所以沒有這一格。
+ */
+export function settlementSummary(runId: string, reason: BackgroundStopReason): string {
+  const subject = `Background subagent ${runId}`;
+  switch (reason) {
+    case 'completed':
+      return `${subject} finished and will do no further work unless you send it more.`;
+    case 'aborted':
+      return `${subject} was stopped before it finished.`;
+    case 'max-tokens':
+      return `${subject} ran out of room before it finished.`;
+    case 'error':
+      return `${subject} failed before it finished.`;
+  }
+}
+
+/**
+ * 結算通知的整段字。dsh 是幾個 text 區塊（摘要、`Its closing message:`、子代理的文字區塊）；我們的 `turn/start.text` 與
+ * `HumanMessage` 是一個字串，區塊之間空一行。
+ */
+export function settlementText(summary: string, closing: string): string {
+  return closing === ''
+    ? `${summary}\n\nIt left no closing message.`
+    : `${summary}\n\nIts closing message:\n${closing}`;
+}
+
+/** 這一輪最後一則回覆的非空文字；一則回覆都沒有、或沒有文字就是空字串。只看這一輪（最近一顆 `turn/start` 之後）。 */
+function closingTextOf(log: SessionLog): string {
+  const events = log.events;
+  for (let at = events.length - 1; at >= 0; at -= 1) {
+    const event = events[at]!;
+    if (event.type === 'turn/start') return '';
+    if (event.type !== 'assistant/message') continue;
+    return fromLoggedMessage(event.data.message).text.trim();
+  }
+  return '';
+}
 
 /** {@link BackgroundSubagentHost.list} 的一列。 */
 export interface BackgroundSubagentListing {
@@ -91,6 +161,12 @@ export interface BackgroundSubagentHostOptions {
    * 就是已結算，讓出名額。已結算的再收到一句話（`submit`）要重新佔一格，滿了就被拒絕。
    */
   readonly maxActive?: number;
+  /**
+   * 背景子代理結算時通知主對話（#840）：**同步呼叫、在該子代理讓出所有權之前**（呼叫端等到的 `outcome` 在這之後才 resolve），
+   * 對每一個拿到過編號的子代理無條件送一則（dsh 明寫）。沒給就沒有人被通知（cli 的 REPL 一行一輪，沒有可以叫醒的一輪）。
+   * 它拋錯只講一聲（`warn`），不影響輪次。
+   */
+  readonly onSettled?: (settlement: BackgroundSettlement) => void;
 }
 
 interface Job {
@@ -111,6 +187,7 @@ export class BackgroundSubagentHost {
   readonly #compile: (subagent: string) => BackgroundAgent;
   readonly #enter: NonNullable<BackgroundSubagentHostOptions['enter']>;
   readonly #warn: ((message: string) => void) | undefined;
+  readonly #onSettled: BackgroundSubagentHostOptions['onSettled'];
   readonly #maxActive: number;
   readonly #graphs = new Map<string, BackgroundAgent>();
   /** 已知的背景子代理：編號 → 子代理名。同一個編號不能換名字。 */
@@ -134,6 +211,7 @@ export class BackgroundSubagentHost {
     this.#compile = options.compile;
     this.#enter = options.enter ?? ((_log, run) => run());
     this.#warn = options.warn;
+    this.#onSettled = options.onSettled;
     const maxActive = options.maxActive ?? DEFAULT_MAX_ACTIVE_BACKGROUND_SUBAGENTS;
     if (!Number.isInteger(maxActive) || maxActive < 1) {
       throw new Error(`背景子代理的並存上限要是 ≥ 1 的整數，收到 ${String(maxActive)}`);
@@ -333,10 +411,13 @@ export class BackgroundSubagentHost {
         this.#busy.add(job.runId);
         // **先讓出位子、再交下場**：呼叫端等到 `outcome` 的時候，這個子代理已經不算存活（並存上限、
         // 之後的結算通知都靠這個順序）。
-        const round: Promise<void> = this.#round(job).then((outcome) => {
+        const round: Promise<void> = this.#round(job).then(({ outcome, settlement }) => {
           this.#busy.delete(job.runId);
           this.#inflight.delete(round);
           this.#wake?.();
+          // 結算＝這個子代理沒有輪次排著了（被中斷而暫停的排著就不算）。**在交下場之前通知**，同 dsh 在所有權釋放之前。
+          if (!this.#queue.some((queued) => queued.runId === job.runId))
+            this.#notifySettled(settlement);
           job.settle(outcome);
         });
         this.#inflight.add(round);
@@ -366,8 +447,12 @@ export class BackgroundSubagentHost {
     return compiled;
   }
 
-  async #round(job: Job): Promise<BackgroundRoundOutcome> {
+  async #round(job: Job): Promise<{
+    readonly outcome: BackgroundRoundOutcome;
+    readonly settlement: BackgroundSettlement | undefined;
+  }> {
     let outcome: BackgroundRoundOutcome;
+    let stop: BackgroundStopReason = 'completed';
     let log: SessionLog | undefined;
     // 這一輪自己的中止控制器：`interrupt` 只舉它。跑完（不論怎麼結束）就丟。
     const controller = new AbortController();
@@ -381,8 +466,15 @@ export class BackgroundSubagentHost {
         'turn/end',
         controller.signal.aborted ? { reason: { kind: 'aborted', cause: { kind: 'parent' } } } : {},
       );
+      // 中止先判，蓋過輸出上限，同 dsh（`agent-loop/src/agent.ts:349-355`）。
+      stop = controller.signal.aborted
+        ? 'aborted'
+        : turnReachedMaxTokens(log.events)
+          ? 'max-tokens'
+          : 'completed';
       outcome = { ok: true };
     } catch (error) {
+      stop = 'error';
       const message = error instanceof Error ? error.message : String(error);
       // 拿不到日誌的失敗（註冊表開不出來）沒地方記，只能講一聲。
       if (log === undefined) this.#warnFailure(job, message);
@@ -397,7 +489,35 @@ export class BackgroundSubagentHost {
     } finally {
       this.#running.delete(job.runId);
     }
-    return outcome;
+    let settlement: BackgroundSettlement | undefined;
+    if (log !== undefined) {
+      const summary = settlementSummary(job.runId, stop);
+      settlement = {
+        runId: job.runId,
+        sessionId: log.sessionId,
+        summary,
+        text: settlementText(summary, closingTextOf(log)),
+      };
+    }
+    return { outcome, settlement };
+  }
+
+  /** 通知主對話。沒人接（沒給 `onSettled`）、拿不到日誌所以沒通知可送（`settlement` 缺）都是不通知；送不出去只講一聲。 */
+  #notifySettled(settlement: BackgroundSettlement | undefined): void {
+    if (settlement === undefined || this.#onSettled === undefined) return;
+    try {
+      this.#onSettled(settlement);
+    } catch (error) {
+      this.#warnSettle(settlement.runId, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  #warnSettle(runId: string, message: string): void {
+    try {
+      this.#warn?.(`[背景子代理] ${runId} 的結算通知沒送到主對話：${message}`);
+    } catch {
+      // 講不出來也不影響輪次。
+    }
   }
 
   #warnFailure(job: Job, message: string): void {

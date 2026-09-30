@@ -76,7 +76,7 @@ import { CompositeBackend, createDeepAgent } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { BackgroundDelegation } from './background-delegation.js';
 import type { BackgroundSubagentsOptions } from './background-delegation.js';
-import type { BackgroundAgent } from './background-subagents.js';
+import type { BackgroundAgent, BackgroundSettlement } from './background-subagents.js';
 import { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
 import { TextOnlyStateBackend } from './binary-read.js';
 import { createToolResultStash } from './tool-result-stash.js';
@@ -856,9 +856,14 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * 只換來一行 warn。
        *
        * @param sessions - 這次組裝的會話註冊表。
+       * @param onBackgroundSettled - 背景子代理結算時通知主對話（#840）。**省略即沒有人被通知**（cli 的 REPL 一行一輪）；
+       *   serve 傳 pump 的 `notifySettled`。
        * @returns 收掉這一次接線的函式：退訂、解綁，再倒著收每一份會話的 runner。
        */
-      attachSession(sessions: SessionRegistry): () => void {
+      attachSession(
+        sessions: SessionRegistry,
+        onBackgroundSettled?: (settlement: BackgroundSettlement) => void,
+      ): () => void {
         const installers = registry.sessions.installers();
         const unbind = registry.sessions.bind(sessions);
         // 背景派出的 host：**在這裡建**（任何圖的環境之外），detach 時等進行中的輪收完。
@@ -866,6 +871,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
           sessions,
           (subagent) =>
             compileSubagent(subagent, options.checkpointer!) as unknown as BackgroundAgent,
+          onBackgroundSettled,
         );
         const runners: (() => void)[] = [];
         const unobserve = sessions.observe(({ address, log }) => {
