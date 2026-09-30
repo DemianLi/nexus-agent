@@ -8,13 +8,23 @@ import { createDeliverableFileStore } from '@/lib/deliverable-file';
 import type { DeliverableFileState, DeliverableLongLine } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import { axeViolations } from '@/test/axe';
+import type { DeliverableCall, Reply } from '@/test/deliverable-commands';
+import {
+  badRequestReply,
+  bytesReply,
+  deliverableFetch,
+  offsetOf,
+  pageReply,
+  refuseReply,
+  tooLargeReply,
+} from '@/test/deliverable-commands';
 import { memoryStorage, WithRightSidebar } from '@/test/right-sidebar';
 
 /**
- * 交付檔的預覽（#452 web 第二刀；#543 改成接續瀏覽）：從卡片上的座標開 `Sheet`，一段一段往下接。
+ * 交付檔的預覽（#452 web 第二刀；#543 改成接續瀏覽；#747 起走命令通道）：從卡片上的座標開 `Sheet`，一段一段往下接。
  *
- * **五個狀態碼各釘自己那句話**。只斷言「有顯示東西」的話，413 與 422 互換之後它照樣綠——而那
- * 兩個講的不是同一件事：422 是「這個檔不是文字」，413 是「這一份太大」，成因與下一步都不同。
+ * **每個理由碼各釘自己那句話**。只斷言「有顯示東西」的話，`too-large` 與 `not-text` 互換之後它照樣綠——而那
+ * 兩個講的不是同一件事：`not-text` 是「這個檔不是文字」，`too-large` 是「這一份太大」，成因與下一步都不同。
  * 第三刀之後兩格都有下載鈕（那幾條在 `deliverable-download-button.test.tsx`），這裡只管話術。
  *
  * **接續那幾條用一個手動的 IntersectionObserver 替身**：jsdom 沒有它，而元件在沒有它的環境會直接讀
@@ -86,35 +96,30 @@ function numbered(offset: number, n: number, eof: boolean): DeliverableFilePage 
   return { ...PAGE, offset, text: lines.join('\n'), lines: n, eof };
 }
 
-function mount(respond: (url: string) => Response, files: readonly LocatedFile[] = [FILE]) {
-  const doFetch = vi.fn(async (input: RequestInfo | URL) =>
-    respond(String(input)),
-  ) as unknown as typeof globalThis.fetch;
+function mount(
+  respond: (call: DeliverableCall) => Reply | Promise<Reply>,
+  files: readonly LocatedFile[] = [FILE],
+) {
+  const { fetch: fake, calls } = deliverableFetch(respond);
+  const doFetch = vi.fn(fake) as unknown as typeof globalThis.fetch;
   const store = createDeliverableFileStore({ threadId: 't1', baseUrl: '', fetch: doFetch });
   render(
     <WithRightSidebar sources={{ deliverableFiles: store }}>
       <DeliverablesCard files={files} />
     </WithRightSidebar>,
   );
-  return { doFetch, store };
+  return { doFetch, calls, store };
 }
 
-const json = (body: unknown) =>
-  new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
-
-/** 回應裡的 `offset=` 是多少。 */
-const offsetOf = (url: string) => Number(new URL(url, 'http://x').searchParams.get('offset'));
-
 /**
- * 第 n 次請求的 URL。
+ * 第 n 次呼叫。
  *
- * `mock.calls` 的每一格在型別上都可能是 `undefined`（`noUncheckedIndexedAccess`），所以這裡**斷言一次**
- * 而不是一路 `?.`——沒發生的那次請求要當場紅，不是靜靜變成字串 "undefined" 然後 `toContain` 失敗。
+ * 這裡**斷言一次**而不是一路 `?.`——沒發生的那次請求要當場紅，不是靜靜變成 `undefined` 然後別的斷言失敗。
  */
-function requestedUrl(doFetch: typeof globalThis.fetch, nth: number): string {
-  const call = (doFetch as unknown as ReturnType<typeof vi.fn>).mock.calls[nth];
+function nthCall(calls: readonly DeliverableCall[], nth: number): DeliverableCall {
+  const call = calls[nth];
   expect(call).toBeDefined();
-  return String((call as unknown[])[0]);
+  return call as DeliverableCall;
 }
 
 /** 按下那個檔的預覽鈕。 */
@@ -138,12 +143,13 @@ describe('交付檔預覽', () => {
   });
 
   it('按預覽會用那個檔自己的座標去讀，標題是檔名、副標是完整路徑', async () => {
-    const { doFetch } = mount(() => json(PAGE));
+    const { calls } = mount(() => pageReply(PAGE));
     open();
     expect(await screen.findByText('第一段內容')).toBeTruthy();
-    const url = requestedUrl(doFetch, 0);
-    expect(url).toContain('seq=11');
-    expect(url).toContain('index=0');
+    expect(nthCall(calls, 0)).toMatchObject({
+      method: 'deliverable.read',
+      params: { seq: 11, index: 0 },
+    });
     // **在預覽分頁裡面找**：卡片那一列也印著同一個路徑，整頁找會撞到兩個。分頁的標題是檔名。
     expect(within(screen.getByRole('tabpanel')).getByText('out/report.md')).toBeTruthy();
     expect(screen.getByRole('tab', { name: 'report.md' })).toBeTruthy();
@@ -152,21 +158,25 @@ describe('交付檔預覽', () => {
   it('座標取自那一列，不是列表位置（#452）', async () => {
     // 第二列的座標是 `(22, 0)`——它是第二顆事件宣告的第一個檔。拿 map 的索引頂替就會送 index=1。
     const second: LocatedFile = { path: 'b.md', seq: 22, index: 0 };
-    const { doFetch } = mount(() => json(PAGE), [FILE, second]);
+    const { calls } = mount(() => pageReply(PAGE), [FILE, second]);
     open(second);
     await screen.findByText('第一段內容');
-    const url = requestedUrl(doFetch, 0);
-    expect(url).toContain('seq=22');
-    expect(url).toContain('index=0');
+    expect(nthCall(calls, 0)).toMatchObject({ params: { seq: 22, index: 0 } });
   });
 
-  it.each([
-    [400, '讀不到這個檔：座標不對'],
-    [404, '這個檔已經讀不到了'],
-    [413, '檔案太大，沒辦法在這裡預覽'],
-    [422, '不是文字檔，沒辦法預覽'],
-  ])('%i 畫的是「%s」，而且沒有重試鈕', async (status, said) => {
-    mount(() => new Response('', { status }));
+  it.each<[string, Reply, string]>([
+    ['參數不合格（協定錯誤）', badRequestReply, '讀不到這個檔：座標不對'],
+    ['deliverable/not-found', refuseReply('deliverable/not-found'), '這個檔已經讀不到了'],
+    ['deliverable/no-anchor', refuseReply('deliverable/no-anchor'), '這個檔已經讀不到了'],
+    [
+      'deliverable/not-regular-file',
+      refuseReply('deliverable/not-regular-file'),
+      '這個檔已經讀不到了',
+    ],
+    ['deliverable/too-large', tooLargeReply(), '檔案太大，沒辦法在這裡預覽'],
+    ['deliverable/not-text', refuseReply('deliverable/not-text'), '不是文字檔，沒辦法預覽'],
+  ])('%s 畫的是「%3$s」，而且沒有重試鈕', async (_name, reply, said) => {
+    mount(() => reply);
     open();
     expect(await screen.findByText(said)).toBeTruthy();
     expect(screen.queryByRole('button', { name: '重試' })).toBeNull();
@@ -174,7 +184,8 @@ describe('交付檔預覽', () => {
 
   it('讀壞了才給重試，按了會再打一次', async () => {
     let broken = true;
-    const { doFetch } = mount(() => (broken ? new Response('', { status: 500 }) : json(PAGE)));
+    // 形狀不對（version 是空字串）是可重試的 error；載體層擋下暫時是 invalid（#747），不給重試。
+    const { doFetch } = mount(() => pageReply(broken ? { ...PAGE, version: '' } : PAGE));
     open();
     expect(await screen.findByText('沒辦法讀取這個檔')).toBeTruthy();
     broken = false;
@@ -184,13 +195,13 @@ describe('交付檔預覽', () => {
   });
 
   it('空檔講「這個檔是空的」，不是畫一片空白', async () => {
-    mount(() => json({ ...PAGE, text: '', lines: 0, eof: true }));
+    mount(() => pageReply({ ...PAGE, text: '', lines: 0, eof: true }));
     open();
     expect(await screen.findByText('這個檔是空的')).toBeTruthy();
   });
 
   it('axe：開著的預覽沒有違規', async () => {
-    mount(() => json(PAGE));
+    mount(() => pageReply(PAGE));
     open();
     await screen.findByText('第一段內容');
     expect(await axeViolations(document.body)).toEqual([]);
@@ -199,8 +210,8 @@ describe('交付檔預覽', () => {
 
 describe('接續瀏覽（#543）', () => {
   it('第一段不等捲動就讀；沒捲到接近底之前不讀下一段', async () => {
-    const { doFetch } = mount((url) =>
-      json(offsetOf(url) === 0 ? numbered(0, 3, false) : numbered(3, 2, true)),
+    const { doFetch } = mount((call) =>
+      pageReply(offsetOf(call) === 0 ? numbered(0, 3, false) : numbered(3, 2, true)),
     );
     open();
     expect(await screen.findByText('line-1')).toBeTruthy();
@@ -209,8 +220,8 @@ describe('接續瀏覽（#543）', () => {
   });
 
   it('捲到接近底就接下一段，**前一段還在**，下一段的 offset 是 offset + lines', async () => {
-    const { doFetch } = mount((url) =>
-      json(offsetOf(url) === 0 ? numbered(0, 3, false) : numbered(3, 2, true)),
+    const { calls } = mount((call) =>
+      pageReply(offsetOf(call) === 0 ? numbered(0, 3, false) : numbered(3, 2, true)),
     );
     open();
     await screen.findByText('line-1');
@@ -219,12 +230,12 @@ describe('接續瀏覽（#543）', () => {
     // 接續，不是換頁：舊的做法按下去 line-1 就不見了。
     expect(screen.getByText('line-1')).toBeTruthy();
     // **是 offset + lines，不是 offset + 我們記著的每頁行數**：每頁幾行由路由決定。
-    expect(offsetOf(requestedUrl(doFetch, 1))).toBe(3);
+    expect(offsetOf(nthCall(calls, 1))).toBe(3);
     expect(shownLineNumbers()).toEqual([1, 2, 3, 4, 5]);
   });
 
   it('到檔尾就不再掛觀察器，捲到底也不再讀', async () => {
-    const { doFetch } = mount(() => json(numbered(0, 3, true)));
+    const { doFetch } = mount(() => pageReply(numbered(0, 3, true)));
     open();
     await screen.findByText('line-3');
     nearBottom();
@@ -235,12 +246,12 @@ describe('接續瀏覽（#543）', () => {
 
   it('後面那段讀壞了：前面的照畫、失敗接在最後、給重試，**而且捲到底不會自動重打**', async () => {
     let broken = true;
-    const { doFetch } = mount((url) =>
-      offsetOf(url) === 0
-        ? json(numbered(0, 3, false))
+    const { doFetch, calls } = mount((call) =>
+      offsetOf(call) === 0
+        ? pageReply(numbered(0, 3, false))
         : broken
-          ? new Response('', { status: 500 })
-          : json(numbered(3, 1, true)),
+          ? pageReply({ ...numbered(3, 1, true), version: '' })
+          : pageReply(numbered(3, 1, true)),
     );
     open();
     await screen.findByText('line-3');
@@ -255,21 +266,31 @@ describe('接續瀏覽（#543）', () => {
     broken = false;
     fireEvent.click(screen.getByRole('button', { name: '重試' }));
     expect(await screen.findByText('line-4')).toBeTruthy();
-    expect(offsetOf(requestedUrl(doFetch, 2))).toBe(3);
+    expect(offsetOf(nthCall(calls, 2))).toBe(3);
   });
 
   // 422 也會讀到一半才出現（#552：server 只判它讀到的那一頁），所以跟 413 一樣要有「接下來」的講法。
-  it.each([
-    [413, '接下來這一段太大，沒辦法在這裡預覽', '檔案太大，沒辦法在這裡預覽'],
-    [422, '接下來這一段不是文字，沒辦法預覽', '不是文字檔，沒辦法預覽'],
+  it.each<[string, Reply, string, string]>([
+    [
+      'deliverable/too-large',
+      tooLargeReply(),
+      '接下來這一段太大，沒辦法在這裡預覽',
+      '檔案太大，沒辦法在這裡預覽',
+    ],
+    [
+      'deliverable/not-text',
+      refuseReply('deliverable/not-text'),
+      '接下來這一段不是文字，沒辦法預覽',
+      '不是文字檔，沒辦法預覽',
+    ],
   ])(
-    '後面那段回 %i：話講成「接下來這一段」，不是整個檔；前面讀到的照畫',
-    async (status, midway, whole) => {
-      // 只有第 0 段讀得到；其他每一個請求（含 413 之後改走的位元組窗口）都回同一個碼。
-      mount((url) =>
-        offsetOf(url) === 0 && url.includes('/deliverables/file')
-          ? json(numbered(0, 3, false))
-          : new Response('', { status }),
+    '後面那段回 %s：話講成「接下來這一段」，不是整個檔；前面讀到的照畫',
+    async (_name, refusal, midway, whole) => {
+      // 只有第 0 段讀得到；其他每一個請求（含太大之後改走的位元組窗口）都回同一個拒絕。
+      mount((call) =>
+        call.method === 'deliverable.read' && offsetOf(call) === 0
+          ? pageReply(numbered(0, 3, false))
+          : refusal,
       );
       open();
       await screen.findByText('line-3');
@@ -283,7 +304,7 @@ describe('接續瀏覽（#543）', () => {
   it(`每 ${BLOCK_LINES} 行一塊 content-visibility 邊界，**不是一段一塊**`, async () => {
     // 一段一塊的話，「打開預覽」那一段正好在畫面裡，照付全額 —— 量到 1634ms，等於沒加。
     const n = BLOCK_LINES * 2 + 5;
-    mount(() => json(numbered(0, n, true)));
+    mount(() => pageReply(numbered(0, n, true)));
     open();
     await screen.findByText(`line-${n}`);
     const blocks = [...document.querySelectorAll('[data-preview-block]')];
@@ -299,7 +320,7 @@ describe('接續瀏覽（#543）', () => {
   });
 
   it('行號不在文字裡（畫在 ::before），複製出來的是原文', async () => {
-    mount(() => json(numbered(0, 2, true)));
+    mount(() => pageReply(numbered(0, 2, true)));
     open();
     await screen.findByText('line-2');
     expect(screen.getByTestId('preview-text').textContent).toBe('line-1\nline-2\n');
@@ -308,7 +329,7 @@ describe('接續瀏覽（#543）', () => {
   it('行號欄放得下最大位數再加上右邊距，而且行號不折行', async () => {
     // jsdom 不排版，這裡只釘寬度的算法；行高本身在 headless Chrome 量（見 .docs/large-text-rendering-survey.md）。
     // 以前是「位數 + 1ch」扣掉 pr-3：最大位數的行號放不下，換行時被折成兩行，一行變兩倍高。
-    mount(() => json(numbered(0, 1234, true)));
+    mount(() => pageReply(numbered(0, 1234, true)));
     open();
     await screen.findByText('line-1234');
     expect(screen.getByTestId('preview-text').style.getPropertyValue('--gutter')).toBe('4ch');
@@ -319,7 +340,7 @@ describe('接續瀏覽（#543）', () => {
   });
 
   it('預設自動換行，按一下切成橫向捲動', async () => {
-    mount(() => json(PAGE));
+    mount(() => pageReply(PAGE));
     open();
     await screen.findByText('第一段內容');
     const toggle = screen.getByRole('button', { name: '自動換行' });
@@ -334,7 +355,7 @@ describe('接續瀏覽（#543）', () => {
 describe('長行（#555）', () => {
   it('超過門檻的行切成幾段；文字接起來就是原行，行尾的換行只有一個', async () => {
     const line = 'word '.repeat(2000);
-    mount(() => json({ ...PAGE, text: `short\n${line}`, lines: 2, eof: true }));
+    mount(() => pageReply({ ...PAGE, text: `short\n${line}`, lines: 2, eof: true }));
     open();
     await screen.findByText('short');
     const row = document.querySelector('[data-line="2"]')!;
@@ -349,7 +370,7 @@ describe('長行（#555）', () => {
   it('切換換行時，有長行的塊重掛（丟掉記住的尺寸），一般的塊不動', async () => {
     const short = Array.from({ length: BLOCK_LINES }, (_, i) => `row-${i + 1}`);
     const text = [...short, 'word '.repeat(2000)].join('\n');
-    mount(() => json({ ...PAGE, text, lines: BLOCK_LINES + 1, eof: true }));
+    mount(() => pageReply({ ...PAGE, text, lines: BLOCK_LINES + 1, eof: true }));
     open();
     await screen.findByText('row-1');
     const [plain, long] = [...document.querySelectorAll('[data-preview-block]')];
@@ -361,66 +382,63 @@ describe('長行（#555）', () => {
   });
 
   it('不超過門檻的行不切', async () => {
-    mount(() => json({ ...PAGE, text: 'x'.repeat(4000), lines: 1, eof: true }));
+    mount(() => pageReply({ ...PAGE, text: 'x'.repeat(4000), lines: 1, eof: true }));
     open();
     await vi.waitFor(() => expect(document.querySelector('[data-line="1"]')).not.toBeNull());
     expect(document.querySelector('[data-preview-segment]')).toBeNull();
   });
 
-  /** 第 0 行就是一條超過頁上限的行：文字頁一律 413，位元組窗口每次給 `size` 個位元組。 */
+  /** 第 0 行就是一條超過頁上限的行：文字頁一律太大，位元組窗口每次給 `size` 個位元組。 */
   function mountLongFirstLine(total: number, size: number) {
     const bytes = new TextEncoder().encode('L'.repeat(total));
-    return mount((url) => {
-      const query = new URL(url, 'http://x').searchParams;
-      if (!url.includes('/deliverables/bytes')) return new Response('', { status: 413 });
-      const offset = Number(query.get('offset'));
-      const slice = bytes.subarray(offset, offset + size);
-      return json({
+    return mount((call) => {
+      if (call.method === 'deliverable.read') return tooLargeReply();
+      const offset = call.params.offset ?? 0;
+      return bytesReply({
         path: FILE.path,
         version: 'v1',
         bytes: bytes.length,
         offset,
-        data: btoa(String.fromCharCode(...slice)),
+        data: bytes.slice(offset, offset + size),
         eof: offset + size >= bytes.length,
       });
     });
   }
 
-  const windowsRead = (doFetch: typeof globalThis.fetch) =>
-    (doFetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) =>
-      String(url).includes('/deliverables/bytes'),
-    ).length;
+  const windowsRead = (calls: readonly DeliverableCall[]) =>
+    calls.filter((call) => call.method === 'deliverable.readBytes').length;
 
   it('第 0 行是長行：只讀第一個窗口，**捲到接近底才讀下一個**，不會一口氣讀完', async () => {
-    const { doFetch } = mountLongFirstLine(5000, 1000);
+    const { calls } = mountLongFirstLine(5000, 1000);
     open();
     await vi.waitFor(() => expect(document.querySelector('[data-line="1"]')).not.toBeNull());
     await act(async () => {});
-    expect(windowsRead(doFetch)).toBe(1);
+    expect(windowsRead(calls)).toBe(1);
     nearBottom();
-    await vi.waitFor(() => expect(windowsRead(doFetch)).toBe(2));
-    await act(async () => {});
-    expect(windowsRead(doFetch)).toBe(2);
-    expect(document.querySelector('[data-line="1"]')!.textContent).toBe('L'.repeat(2000));
+    await vi.waitFor(() => expect(windowsRead(calls)).toBe(2));
+    // 多段表單的位元組要過幾個非同步的 tick 才解得出來，所以等的是畫面，不是 `act` 一下。
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-line="1"]')!.textContent).toBe('L'.repeat(2000)),
+    );
+    expect(windowsRead(calls)).toBe(2);
   });
 
   it('讀下一個窗口時講的是「這一行的下一段」', async () => {
     let release: (() => void) | undefined;
-    const bytes = 'L'.repeat(3000);
-    const doFetch = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (!url.includes('/deliverables/bytes')) return new Response('', { status: 413 });
-      const offset = Number(new URL(url, 'http://x').searchParams.get('offset'));
+    const bytes = new TextEncoder().encode('L'.repeat(3000));
+    const { fetch: doFetch } = deliverableFetch(async (call) => {
+      if (call.method === 'deliverable.read') return tooLargeReply();
+      const offset = call.params.offset ?? 0;
       if (offset > 0) await new Promise<void>((resolve) => (release = resolve));
-      return json({
+      return bytesReply({
         path: FILE.path,
         version: 'v1',
         bytes: bytes.length,
         offset,
-        data: btoa(bytes.slice(offset, offset + 1000)),
+        data: bytes.slice(offset, offset + 1000),
         eof: offset + 1000 >= bytes.length,
       });
-    }) as unknown as typeof globalThis.fetch;
+    });
     const store = createDeliverableFileStore({ threadId: 't1', baseUrl: '', fetch: doFetch });
     render(
       <WithRightSidebar sources={{ deliverableFiles: store }}>
