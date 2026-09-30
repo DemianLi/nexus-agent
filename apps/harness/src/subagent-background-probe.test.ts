@@ -40,6 +40,7 @@ import {
   createHostServicesPlugin,
   SUBAGENT_DELEGATION_CONTEXT,
   toolCallSessionAddress,
+  BACKGROUND_SESSION_CONFIG_KEY,
   TURN_CANCEL_CONFIG_KEY,
 } from '@nexus/core';
 import { createAskUserPlugin, DELEGATED_CALLER_MESSAGE } from '@nexus/plugin-ask-user';
@@ -942,7 +943,7 @@ describe('背景那一輪由 root 的工具拉起（第 1、4、5 項的實況�
     }
   });
 
-  it('loop：迴圈在圖的環境之外取件，configurable 乾淨、第二輪看得到第一輪；但位址被認成 root', async () => {
+  it('loop（對照組，沒放身分鍵）：迴圈在圖的環境之外取件，configurable 乾淨、第二輪看得到第一輪；但位址被認成 root', async () => {
     const run = await scenario('loop', TWO_LAUNCHES);
     try {
       expect(await rootTurn(run, '派', 1)).toEqual({ ok: true });
@@ -968,19 +969,85 @@ describe('背景那一輪由 root 的工具拉起（第 1、4、5 項的實況�
     }
   });
 
+  it('loop（帶身分鍵，#823）：位址是背景子代理，背景的工具結果進它自己的日誌，不併進 root', async () => {
+    const run = await scenario('loop', TWO_LAUNCHES, { [BACKGROUND_SESSION_CONFIG_KEY]: 'bg-1' });
+    try {
+      expect(await rootTurn(run, '派', 1)).toEqual({ ok: true });
+      expect(await rootTurn(run, '再送', 2)).toEqual({ ok: true });
+      // 第二輪仍看得到第一輪（身分鍵不影響存檔點）。
+      expect(backgroundPrompts(run).at(-1)).toEqual(['第一輪的話', '第二輪的話']);
+
+      const sessions = run.pump.sessions.list();
+      expect(sessions.map((session) => session.address)).toEqual([
+        { kind: 'root' },
+        { kind: 'subagent', runId: 'bg-1' },
+      ]);
+      const [root, background] = sessions;
+      // 血緣：日誌 id 是 `<root>/<runId>`，編號是穩定的（不是 `tools:…|tools:…` 那種字串）。
+      expect(background?.log.sessionId).toBe(`${root?.log.sessionId}/bg-1`);
+      const results = (entry: typeof root) =>
+        entry?.log.events.filter((event) => event.type === 'tool/result') ?? [];
+      // root 只剩自己的 spawn、send；背景的兩顆 look 在背景自己的日誌。
+      expect(results(root)).toHaveLength(2);
+      expect(results(background)).toHaveLength(2);
+    } finally {
+      await run.close();
+    }
+  });
+
+  /** 一個已經中止的訊號：放進背景圖的 configurable，看中止在背景那一輪怎麼處理。 */
+  const abortedSignal = () => {
+    const controller = new AbortController();
+    controller.abort();
+    return controller.signal;
+  };
+  const ONE_LAUNCH = [
+    say('spawn_bg', '第一輪的話'),
+    { content: '根收尾' },
+    call('look', {}),
+    { content: '背景一號' },
+  ] as const;
+
+  it('loop（帶身分鍵，#823）：中止訊號在背景那一輪不拋——子代理照子代理的方式收尾', async () => {
+    const run = await scenario('loop', ONE_LAUNCH, {
+      [BACKGROUND_SESSION_CONFIG_KEY]: 'bg-1',
+      [TURN_CANCEL_CONFIG_KEY]: abortedSignal(),
+    });
+    try {
+      expect(await rootTurn(run, '派', 1)).toEqual({ ok: true });
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('loop（對照組，沒放身分鍵）：同一個中止訊號被當成 root，那一輪拋 TurnCancelledError', async () => {
+    const run = await scenario('loop', ONE_LAUNCH, { [TURN_CANCEL_CONFIG_KEY]: abortedSignal() });
+    try {
+      const outcome = await rootTurn(run, '派', 1);
+      expect(outcome).toMatchObject({ ok: false });
+      expect((outcome as { error: string }).error).toContain('這一輪被中止了');
+    } finally {
+      await run.close();
+    }
+  });
+
   it('loop：自訂 checkpoint_ns 被最上層的圖無視，位址推不出來；自訂的 configurable 鍵倒是原樣送到工具', async () => {
     const run = await scenario('loop', TWO_LAUNCHES, {
       checkpoint_ns: 'bg-1',
-      nexus_background_session: 'bg-1',
+      [BACKGROUND_SESSION_CONFIG_KEY]: 'bg-1',
     });
     try {
       await rootTurn(run, '派', 1);
       const [seen] = run.bg.seen;
       // 想靠傳 `checkpoint_ns` 給背景圖一個穩定的命名空間：不行，最上層的圖自己重寫它。
       expect(seen?.checkpoint_ns).not.toBe('bg-1');
-      expect(toolCallSessionAddress({ configurable: seen })?.kind).toBe('root');
-      // 顯式的鍵可以：身分要改成讀這種鍵，不能繼續只讀 `checkpoint_ns`（卡上第 5 項）。
-      expect(seen?.nexus_background_session).toBe('bg-1');
+      // 有身分鍵之後，位址是背景子代理，不再是 root（#823）。
+      expect(toolCallSessionAddress({ configurable: seen })).toEqual({
+        kind: 'subagent',
+        runId: 'bg-1',
+      });
+      // 顯式的鍵可以（#823）：身分改成先讀這種鍵，見下一條。
+      expect(seen?.[BACKGROUND_SESSION_CONFIG_KEY]).toBe('bg-1');
     } finally {
       await run.close();
     }
