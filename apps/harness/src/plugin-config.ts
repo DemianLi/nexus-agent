@@ -174,6 +174,12 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
       '送出去的位元組一個都不變，只會讓這份設定讀起來像關掉了什麼。',
   ],
   [
+    '#settings/tool-result-stash',
+    '這一列不裝任何東西，只講過大工具結果暫存的根目錄與保留天數。關掉它不會讓工具結果不再暫存' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，值於是回到 schema 的預設，' +
+      '暫存照樣寫在同一個位置，只會讓這份設定讀起來像關掉了什麼。',
+  ],
+  [
     '#settings/live-model',
     '這一列不裝任何東西，只講真實供應商的五個連線值（端點、模型 id、輸出上限、逾時、重試次數）。' +
       '關掉它不會讓 `--live` 不再有這些值——`startupSetting` 把關掉的那一列當成沒有那一列，' +

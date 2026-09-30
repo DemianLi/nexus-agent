@@ -142,8 +142,9 @@ function lastSegmentOf(anchored: string): string | null {
  * **同型的第二件事沒有被接受，它被修掉了（[#170](https://github.com/DemianLi/nexus-agent/issues/170)）。**
  * 基座還會把超過 80,000 字元的工具結果 `write` 到 `/large_tool_results/`，而**那一條的
  * fail-open 是丟資料**：寫不進去時它把訊息換成一句「存不進去」，模型剛要到手的東西整個沒了
- * （不像歷史那件事，至少摘要還在）。修法是在組裝點把那個前綴路由到獨立的 `StateBackend`
- * （`agent-factory.ts` 的 `withToolResultStash`），所以那次 write 不再經過這道 fence。
+ * （不像歷史那件事，至少摘要還在）。修法是在組裝點把那個前綴路由到獨立的暫存 backend
+ * （`agent-factory.ts` 的 `withToolResultStash`；[#734](https://github.com/DemianLi/nexus-agent/issues/734) 起優先存主機私有目錄，
+ * 存不進去才退回 graph state），所以那次 write 不再經過這道 fence。
  * **上面那句「明著接受」只涵蓋對話歷史，不要擴大解釋。**
  *
  * **`danger-full-access` 比 dsh 的同名 mode 弱，這是一條偏離。** 它放行 symlink 逃逸，但

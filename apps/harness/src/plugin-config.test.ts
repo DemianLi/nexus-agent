@@ -72,6 +72,7 @@ import {
 } from './settings/deliverable-files.js';
 import { DEFAULT_RECURSION_LIMIT } from './settings/recursion-limit.js';
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
+import { DEFAULT_TOOL_RESULT_STASH_RETENTION_DAYS } from './settings/tool-result-stash.js';
 import { liveModelConfigSchema } from './settings/live-model.js';
 import { threadSearchConfigSchema } from './settings/thread-search.js';
 import { threadTitleLlmConfigSchema } from './settings/thread-title-llm.js';
@@ -107,17 +108,17 @@ describe('出貨的 cordis.yml', () => {
     const { plugins: fromYaml, dropped, ignoredConfig } = await loadPluginConfig();
     expect(dropped).toEqual([]);
     expect(ignoredConfig).toEqual([]);
-    // 43 = 7 個功能 ＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
+    // 44 = 7 個功能 ＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
     // 外加 #529 的 `session-persistence`——它是 core 那一段裡唯一消費點在起動期的——與 #599 的
     // `session-checkpoint-policy`）
-    // ＋ **8 個 harness 自己的設定條目**（#529、#538、#545、#650、#631）＋ 20 個配套入口。**數目寫在這裡是為了擋
+    // ＋ **9 個 harness 自己的設定條目**（#529、#538、#545、#650、#631、#734）＋ 20 個配套入口。**數目寫在這裡是為了擋
     // 「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個空 installer
     // 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
     //
     // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
     // `loadPluginConfig`，所以那八列要真的經由 `apps/harness/package.json` 的 `imports`
-    // 解析、import、而且長得像一顆 plugin，才數得到 43。拿掉那個 `imports` 區塊，這裡當場紅。
-    expect(fromYaml).toHaveLength(43);
+    // 解析、import、而且長得像一顆 plugin，才數得到 44。拿掉那個 `imports` 區塊，這裡當場紅。
+    expect(fromYaml).toHaveLength(44);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -202,6 +203,10 @@ describe('出貨的 cordis.yml', () => {
     });
     // **每則工具結果文字的上限**（#538）。出貨那一行的值必須就是 schema 的預設，同上面幾列。
     expect(byId.get('tool-text')).toEqual({ maxBytes: DEFAULT_TOOL_TEXT_MAX_BYTES });
+    // **過大工具結果的暫存**（#734）。`root` 不寫（缺席才是 harness home 底下的預設位置），保留天數寫出來，值必須就是預設。
+    expect(byId.get('tool-result-stash')).toEqual({
+      cleanupPeriodDays: DEFAULT_TOOL_RESULT_STASH_RETENTION_DAYS,
+    });
     // **真實供應商那五格**（#545）。出貨那一列五格全寫出來，值必須就是 schema 的預設，同上面幾列。
     expect(byId.get('live-model')).toEqual(liveModelConfigSchema.parse({}));
 
@@ -228,6 +233,7 @@ describe('出貨的 cordis.yml', () => {
       'browser-session',
       'deliverable-files',
       'tool-text',
+      'tool-result-stash',
       'live-model',
       'recursion-limit',
     ]);
@@ -856,6 +862,7 @@ describe('保護名單', () => {
       '#settings/browser-session',
       '#settings/deliverable-files',
       '#settings/tool-text',
+      '#settings/tool-result-stash',
       '#settings/live-model',
       '#settings/recursion-limit',
     ];
