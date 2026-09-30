@@ -543,6 +543,31 @@ server、不綁 port：
 
 輸出的位元組不是約定，不要拿它去做程式化的比對：dsh 對自己那份 dump 也明講了同一件事。
 
+### 寫覆寫檔之前先看欄位規格表
+
+```bash
+pnpm --filter @nexus/harness run cli -- --dump-config-schema > nexus-config.schema.json
+```
+
+`serve` 也收同一個旗標。它用跟 `--dump-config` 同樣的三層與 `--patch`，印出**一份 JSON Schema 2020-12 文件**
+（[#741](https://github.com/DemianLi/nexus-agent/issues/741)）：根描述疊完之後的條目清單，`$defs.patchList` 描述
+覆寫檔（`cordis.patch.yml`、`--patch`）的格式。編輯器與 agent 拿它就能事先知道某一列收哪些欄位、預設值是多少，
+打錯欄位名不必等到啟動才發現——對認得的 `id` 整份換掉 `config` 時，多寫一個欄位、型別不對都驗不過。
+
+- **標準輸出只有那份 JSON**，診斷走標準錯誤。載入 plugin 模組時它們寫進 `process.stdout.write` 的東西會被轉到標準錯誤；
+  直接寫檔案描述子的攔不到。
+- **每一列都會 import，包括停用的**（停用的正是你可能想重新打開的那一列）；不會套用任何一顆 plugin，也不開 server。
+  停用的列可以省略必填的 `config`，但有寫的值仍然要驗——這比啟動時嚴，啟動時對停用的列完全不驗設定。
+- **轉不出來的限制不會被靜靜丟掉。** `refine`／`superRefine`、`z.custom`、`transform`／`preprocess`／`pipe` 這類
+  回呼式的驗證，JSON Schema 講不出來，那一列標成 `partial`，診斷指名是哪個欄位；**只要有任何一列 `partial`、或有一列載不起來，
+  退出碼就是 1**，即使文件本身照樣可用。退出碼回答的是「這份文件能不能取代原本的驗證」：`partial` 的那幾列，
+  文件比實際的驗證寬，通過它不代表啟動時一定過。出貨的清單目前就有這幾列（`live-model`、`thread-title`、`present`），
+  所以不帶任何 patch 跑一次退出碼也是 1。
+- **沒有 `Config` 的列是 `absent`**：欄位未知，不是禁止設定，不算不完整。
+- **指到檔案的列（`file:`）先過私有檔檢查**：別人寫得動的模組不會被 import，那一列標成 `failed`。
+- 根上的 `x-nexus` 註記帶 `complete`、`entries`（每一列的狀態、`configRef` 與轉不出來的位置）、`diagnostics`、`patchSchema`。
+  輸出是隨版本重新產生的參考，不是穩定的格式。
+
 ## 核准
 
 **`serve` 是三個入口裡唯一會停下來的那個。** CLI 與 eval 收不了核准決定，所以它們把核准關掉

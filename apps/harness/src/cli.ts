@@ -102,7 +102,12 @@ import { createLiveModel, loadLiveLaunchEnv, DEFAULT_LIVE_MODEL_ID } from './liv
 import type { LiveLaunch } from './live-model.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { createFileReferencePlugin } from './file-references.js';
-import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js';
+import { runDumpConfigSchema } from './config-schema-dump.js';
+import {
+  composeDefaultEntries,
+  loadDefaultPlugins,
+  renderDefaultConfigDump,
+} from './plugin-config.js';
 import {
   assemblyDropsOf,
   auditStartupEntries,
@@ -241,6 +246,11 @@ export interface CliInvocation {
    * plugin 都載起來（`renderConfigDump` 是純函式那條路）。
    */
   readonly dumpConfig: boolean;
+  /**
+   * 把疊完的 plugin 設定欄位規格表（JSON Schema）印出來就退出，一個 plugin 都不套用（[#741](https://github.com/DemianLi/nexus-agent/issues/741)）。
+   * 照 dsh 的 `--dump-config-schema`：跟 `--dump-config` 用同樣的幾層與 `--patch`，兩者互斥。
+   */
+  readonly dumpConfigSchema: boolean;
   /** 只印用法就退出。 */
   readonly help: boolean;
 }
@@ -276,6 +286,9 @@ export const USAGE = `用法：cli [選項] [要說的話...]
   --dump-config        把三層疊完的 plugin 設定印出來就退出（一個 plugin 都不載）
                        每一段前面的 # == 註解標明那幾列來自哪個檔、被哪幾層改過
                        不能配 --resume（印設定不跑任何一輪）
+  --dump-config-schema 把疊完的 plugin 設定欄位規格表（JSON Schema 2020-12）印出來就退出
+                       標準輸出只有那份 JSON，診斷走標準錯誤；有任何一列轉不完整（或載不起來）退出碼是 1
+                       停用的列也收。不能配 --dump-config、--resume 或要說的話
   --help               印這段話
 
   REPL 裡輸入 /help 看有哪些命令，/exit 或按 Ctrl-D 結束。`;
@@ -306,6 +319,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
         'max-goal-rounds': { type: 'string' },
         'recursion-limit': { type: 'string' },
         'dump-config': { type: 'boolean', default: false },
+        'dump-config-schema': { type: 'boolean', default: false },
         help: { type: 'boolean', default: false },
       },
       allowPositionals: true,
@@ -363,6 +377,20 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     }
   }
 
+  const dumpConfigSchema = values['dump-config-schema'] === true;
+  if (dumpConfigSchema) {
+    // 同 `--dump-config`：規格表不跑任何一輪，靜靜收下這些旗標的下場是那個人以為自己驗證的是別的東西。
+    if (dumpConfig) {
+      throw new Error(`--dump-config-schema 不能配 --dump-config：一次只印一種。\n\n${USAGE}`);
+    }
+    if (resume !== undefined) {
+      throw new Error(`--dump-config-schema 不能配 --resume：印規格表不跑任何一輪。\n\n${USAGE}`);
+    }
+    if (positionals.join(' ').trim().length > 0) {
+      throw new Error(`--dump-config-schema 不能配要說的話：印規格表不跑任何一輪。\n\n${USAGE}`);
+    }
+  }
+
   const prompt = positionals.join(' ').trim();
   return {
     ...(prompt.length > 0 && { prompt }),
@@ -376,6 +404,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     ...(maxGoalRounds !== undefined && { maxGoalRounds }),
     ...(recursionLimit !== undefined && { recursionLimit }),
     dumpConfig,
+    dumpConfigSchema,
     help: values.help === true,
   };
 }
@@ -1492,6 +1521,21 @@ export async function runCli(options: RunCliOptions): Promise<void> {
 
   if (invocation.help) {
     printer.log(USAGE);
+    return;
+  }
+
+  // 同 `--dump-config` 的位置與理由。標準輸出只放那份 JSON（`printer.log` 是標準輸出），診斷走 `printer.error`；
+  // 不完整時文件印完之後拋 `ConfigSchemaIncompleteError`，由 `main` 設退出碼 1。
+  if (invocation.dumpConfigSchema) {
+    await runDumpConfigSchema(
+      () =>
+        composeDefaultEntries({
+          env: options.env ?? process.env,
+          ...(invocation.patches !== undefined && { patches: invocation.patches }),
+          warn: (message) => printer.error(message),
+        }),
+      { out: (text) => printer.log(text.trimEnd()), err: (text) => printer.error(text.trimEnd()) },
+    );
     return;
   }
 

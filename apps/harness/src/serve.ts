@@ -70,7 +70,12 @@ import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
 import { startWireServer } from './wire-server.js';
 import type { WireServer } from './wire-server.js';
-import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js';
+import { runDumpConfigSchema } from './config-schema-dump.js';
+import {
+  composeDefaultEntries,
+  loadDefaultPlugins,
+  renderDefaultConfigDump,
+} from './plugin-config.js';
 import {
   assemblyDropsOf,
   auditStartupEntries,
@@ -114,6 +119,8 @@ export interface ServeInvocation {
   readonly goalDriver: boolean;
   /** 見 `cli.ts` 的 `CliInvocation.dumpConfig`。**兩個入口印的是同一份設定**。 */
   readonly dumpConfig: boolean;
+  /** 見 `cli.ts` 的 `CliInvocation.dumpConfigSchema`。**兩個入口印的是同一份規格表**。 */
+  readonly dumpConfigSchema: boolean;
   readonly help: boolean;
 }
 
@@ -125,6 +132,9 @@ const USAGE = `用法：
   --patch <file>       把這個 patch 檔疊在出貨的 cordis.yml 上（可以給多次，後面的蓋前面的）
                        另一層是 $NEXUS_AGENT_HOME/cordis.patch.yml，它排在 --patch 之前
   --dump-config        把三層疊完的 plugin 設定印出來就退出（不開 server、不載 plugin）
+  --dump-config-schema 把疊完的 plugin 設定欄位規格表（JSON Schema 2020-12）印出來就退出（不開 server）
+                       標準輸出只有那份 JSON，診斷走標準錯誤；有任何一列轉不完整（或載不起來）退出碼是 1
+                       停用的列也收。不能配 --dump-config
   --workspace <dir>    把檔案落在這個目錄底下（省略即虛擬檔案系統）
   --sandbox <mode>     圍堵強度：read-only｜workspace-write｜danger-full-access
                        預設 workspace-write（可寫根之內放行）；要配 --workspace
@@ -156,6 +166,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
         port: { type: 'string' },
         'goal-driver': { type: 'boolean', default: false },
         'dump-config': { type: 'boolean', default: false },
+        'dump-config-schema': { type: 'boolean', default: false },
         help: { type: 'boolean', default: false },
       },
     });
@@ -180,6 +191,10 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
   const sandbox = parseSandboxMode(values.sandbox, values.workspace, USAGE);
 
   const dumpConfig = values['dump-config'] === true;
+  const dumpConfigSchema = values['dump-config-schema'] === true;
+  if (dumpConfigSchema && dumpConfig) {
+    throw new Error(`--dump-config-schema 不能配 --dump-config：一次只印一種。\n\n${USAGE}`);
+  }
 
   const port = values.port === undefined ? DEFAULT_PORT : Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
@@ -195,6 +210,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     ...(values['session-log'] !== undefined && { sessionLog: values['session-log'] }),
     goalDriver: values['goal-driver'] === true,
     dumpConfig,
+    dumpConfigSchema,
     help: values.help === true,
   };
 }
@@ -289,6 +305,25 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
 
   // **在開 server 之前印完就走**，同 `cli.ts`：印設定不需要綁 port，也不該因為 port 被佔住
   // 就看不到設定。
+  if (invocation.dumpConfigSchema) {
+    // 同 `cli.ts`：標準輸出只放那份 JSON，診斷走標準錯誤；不完整時文件印完之後拋 `ConfigSchemaIncompleteError`。
+    await runDumpConfigSchema(
+      () =>
+        composeDefaultEntries({
+          env: options.env ?? process.env,
+          ...(invocation.patches !== undefined && { patches: invocation.patches }),
+        }),
+      {
+        out: (text) => {
+          log(text.trimEnd());
+        },
+        err: (text) => {
+          process.stderr.write(`${text.trimEnd()}\n`);
+        },
+      },
+    );
+    return undefined;
+  }
   if (invocation.dumpConfig) {
     log(
       renderDefaultConfigDump({

@@ -141,6 +141,9 @@ importers:
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
       eslint:
         specifier: ^9.39.0
         version: 9.39.5(jiti@2.7.0)
