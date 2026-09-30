@@ -42,6 +42,7 @@
  * @module
  */
 
+import { AsyncResource } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 
 import { HumanMessage } from '@langchain/core/messages';
@@ -260,8 +261,13 @@ export class BackgroundSubagentHost {
     this.#compile = options.compile;
     this.#enter = options.enter ?? ((_log, run) => run());
     this.#warn = options.warn;
-    this.#onSettled = options.onSettled;
-    this.#onMessage = options.onMessage;
+    // **出口綁在建構這一刻的非同步環境**：`onMessage` 是從子代理的工具呼叫裡被叫的，而出口會排程主對話的一輪——
+    // 不綁的話那一輪繼承子代理的 LangGraph／日誌路由環境，主對話的回覆就記到子代理的日誌名下（#849 的 live 實跑抓到）。
+    // `onSettled` 本來就從迴圈的環境叫，一起綁只是讓兩個出口的規矩一致。
+    this.#onSettled =
+      options.onSettled === undefined ? undefined : AsyncResource.bind(options.onSettled);
+    this.#onMessage =
+      options.onMessage === undefined ? undefined : AsyncResource.bind(options.onMessage);
     const maxActive = options.maxActive ?? DEFAULT_MAX_ACTIVE_BACKGROUND_SUBAGENTS;
     if (!Number.isInteger(maxActive) || maxActive < 1) {
       throw new Error(`背景子代理的並存上限要是 ≥ 1 的整數，收到 ${String(maxActive)}`);

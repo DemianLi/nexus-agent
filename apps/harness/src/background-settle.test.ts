@@ -148,8 +148,14 @@ async function assemble(options: { readonly stepInbox: boolean; readonly workerS
       ?.list()
       .filter((entry) => entry.address.kind === 'root')
       .map((entry) => entry.log.events)[0] ?? [];
+  const childLogs = (): (readonly SessionEvent[])[] =>
+    sessions
+      ?.list()
+      .filter((entry) => entry.address.kind === 'subagent')
+      .map((entry) => entry.log.events) ?? [];
   await client.runStart('settle-thread', '幫我查');
   return {
+    childLogs,
     release,
     built,
     rootLog,
@@ -249,6 +255,18 @@ describe('背景子代理半路寫話給主對話（#849）', () => {
 
       const humans = r.state().entries.filter((entry) => entry.kind === 'human');
       expect(humans.map((entry) => entry.text)).toEqual(['幫我查']);
+
+      // **被叫醒的那一輪是 root 自己的**：模型的回覆記在 root 的日誌，不是寄件的子代理的。這一輪是在子代理的
+      // 工具呼叫裡被排程的，會繼承它的非同步環境——繼承下來的話，日誌路由會把 root 的回覆記到子代理名下
+      // （live 實跑抓到的：子代理日誌裡出現了給使用者的話）。
+      const said = (events: readonly SessionEvent[]) =>
+        events.flatMap((event) =>
+          event.type === 'assistant/message' ? [JSON.stringify(event.data.message)] : [],
+        );
+      expect(said(r.rootLog()).some((text) => text.includes('子代理說結論是 X'))).toBe(true);
+      for (const log of r.childLogs()) {
+        expect(said(log).some((text) => text.includes('子代理說結論是 X'))).toBe(false);
+      }
     } finally {
       await r.close();
     }

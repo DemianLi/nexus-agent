@@ -1180,6 +1180,33 @@ describe('sendToParent（#849）', () => {
     await host.close();
   });
 
+  it('出口在建構時的非同步環境裡跑，不繼承呼叫端（子代理的工具呼叫）的環境', async () => {
+    const context = new AsyncLocalStorage<string>();
+    const seen: (string | undefined)[] = [];
+    const settledSeen: (string | undefined)[] = [];
+    const sessions = new SessionRegistry('root-1');
+    const agent: BackgroundAgent = {
+      async streamEvents() {
+        return (async function* () {})() as never;
+      },
+    };
+    const host = new BackgroundSubagentHost({
+      sessions,
+      compile: () => agent,
+      onMessage: () => seen.push(context.getStore()),
+      onSettled: () => settledSeen.push(context.getStore()),
+    });
+    const { runId, outcome } = host.start({ subagent: 'w', text: '幹活' });
+    await outcome;
+    context.run('子代理的工具呼叫', () =>
+      host.sendToParent({ runId, targetId: 'root-1', message: '喂' }),
+    );
+    expect(seen).toEqual([undefined]);
+    // 結算通知同一條規矩：從迴圈的環境叫，看不到任何呼叫端的環境。
+    expect(settledSeen.every((store) => store === undefined)).toBe(true);
+    await host.close();
+  });
+
   it('只認直接 parent：兄弟、自己、不存在的編號、空字串都拒絕，出口一則都沒收到', async () => {
     const { host, messages } = setup();
     const a = host.start({ subagent: 'w', text: '甲' });
