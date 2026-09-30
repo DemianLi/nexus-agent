@@ -20,6 +20,7 @@ import {
   createAskUserPlugin,
   DELEGATED_CALLER_MESSAGE,
 } from '@nexus/plugin-ask-user';
+import { hasDirectHumanTurn } from '@nexus/plugin-goal';
 import { createSandboxPolicyPlugin, SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -615,6 +616,79 @@ describe('interrupt_agent（#838）', () => {
       const seen = toolTexts(run.workerModel.prompts.at(-1)!).at(-1) ?? '';
       expect(seen).toContain(TOOL_ERROR_PREFIX);
       expect(seen).not.toContain('interrupt requested');
+    } finally {
+      await run.close();
+    }
+  });
+});
+
+describe('send_message（#839）', () => {
+  it('對做完的子代理追加指示：它開新的一輪、看得到第一輪；日誌是 agent-message；沒有直接人類授權', async () => {
+    const rootTurns: ScriptedTurn[] = [delegate(undefined), { content: '根收尾' }];
+    const run = await assemble({
+      rootTurns,
+      workerTurns: [{ content: '第一輪做完' }, { content: '第二輪做完' }],
+      background: {},
+    });
+    try {
+      const first = await run.say();
+      const id = /bg-[0-9a-f]{12}/.exec(toolTexts(first.messages)[0] ?? '')?.[0];
+      await until(() => run.backgroundLogs().length === 1);
+      const [log] = run.backgroundLogs();
+      await run.backgroundDone(log!);
+
+      rootTurns.push(call('send_message', { agent_id: id!, message: '再補一份' }), {
+        content: '已傳',
+      });
+      const second = await run.say('追加');
+      // 回條，不是子代理的回答。
+      expect(toolTexts(second.messages).at(-1)).toBe(`message delivered to agent ${id}`);
+      await until(() => log!.events.filter((event) => event.type === 'turn/end').length === 2);
+
+      const starts = log!.events.filter((event) => event.type === 'turn/start');
+      expect(starts.map((event) => event.data)).toEqual([
+        { kind: 'message', text: '幹活' },
+        {
+          kind: 'agent-message',
+          text: 'Agent root-1 sent a message: 再補一份',
+          senderSessionId: 'root-1',
+        },
+      ]);
+      // 第二輪的模型看得到第一輪的任務與這則訊息。
+      const humans = run.workerModel.prompts
+        .at(-1)!
+        .filter((message) => message.getType() === 'human')
+        .map((message) => message.text);
+      expect(humans).toEqual(['幹活', 'Agent root-1 sent a message: 再補一份']);
+      expect(hasDirectHumanTurn(log!.events)).toBe(false);
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('編號不對：錯誤結果說明原因，沒有多開日誌；子代理自己叫它被 root-only 的拒絕樁擋下', async () => {
+    const run = await assemble({
+      rootTurns: [
+        call('send_message', { agent_id: 'bg-000000000000', message: '喂' }),
+        delegate(undefined),
+        { content: '根收尾' },
+      ],
+      workerTurns: [
+        call('send_message', { agent_id: 'bg-000000000000', message: '喂' }),
+        { content: '收工' },
+      ],
+      background: {},
+    });
+    try {
+      const result = await run.say();
+      const [refused] = toolTexts(result.messages);
+      expect(refused).toContain(TOOL_ERROR_PREFIX);
+      expect(refused).toContain('沒有編號 bg-000000000000');
+      await until(() => run.backgroundLogs().length === 1);
+      await run.backgroundDone(run.backgroundLogs()[0]!);
+      const seen = toolTexts(run.workerModel.prompts.at(-1)!).at(-1) ?? '';
+      expect(seen).toContain(TOOL_ERROR_PREFIX);
+      expect(seen).not.toContain('delivered');
     } finally {
       await run.close();
     }

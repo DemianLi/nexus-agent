@@ -428,6 +428,109 @@ describe('載體本身（假 agent）', () => {
     });
   });
 
+  describe('send（#839）', () => {
+    it('對閒著的子代理送話：開新的一輪，模型看到 dsh 的前綴，日誌是 agent-message（記寄件人）而不是 message', async () => {
+      const { agent, seen } = fakeAgent();
+      const { host, sessions } = make(() => agent);
+      const first = host.start({ subagent: 'worker', text: '第一句' });
+      await first.outcome;
+      expect(await host.send({ runId: first.runId, message: '再查一下 B' })).toEqual({ ok: true });
+      expect(seen.map((row) => row.text)).toEqual([
+        '第一句',
+        'Agent root-1 sent a message: 再查一下 B',
+      ]);
+      const log = sessions.get({ kind: 'subagent', runId: first.runId })!;
+      expect(
+        log.events.filter((event) => event.type === 'turn/start').map((event) => event.data),
+      ).toEqual([
+        { kind: 'message', text: '第一句' },
+        {
+          kind: 'agent-message',
+          text: 'Agent root-1 sent a message: 再查一下 B',
+          senderSessionId: 'root-1',
+        },
+      ]);
+      expect(types(log)).toEqual(['turn/start', 'turn/end', 'turn/start', 'turn/end']);
+      await host.close();
+    });
+
+    it('對正在跑的子代理送話：排成它的下一輪，不插進當下那一輪', async () => {
+      const hold = gate();
+      const order: string[] = [];
+      const { agent } = fakeAgent(async (text) => {
+        order.push(text);
+        if (text === '第一句') await hold.opened;
+      });
+      const { host } = make(() => agent);
+      const first = host.start({ subagent: 'worker', text: '第一句' });
+      const sent = host.send({ runId: first.runId, message: '補一句' });
+      await settle();
+      expect(order).toEqual(['第一句']);
+      hold.open();
+      expect(await sent).toEqual({ ok: true });
+      expect(order).toEqual(['第一句', 'Agent root-1 sent a message: 補一句']);
+      await host.close();
+    });
+
+    it('沒有這個編號、host 已關閉：同步拋並說明原因，不寫任何日誌', async () => {
+      const { agent } = fakeAgent();
+      const { host, sessions } = make(() => agent);
+      expect(() => host.send({ runId: 'bg-nobody', message: '喂' })).toThrow('沒有編號 bg-nobody');
+      expect(sessions.list()).toHaveLength(1);
+      const first = host.start({ subagent: 'worker', text: '句' });
+      await first.outcome;
+      await host.close();
+      expect(() => host.send({ runId: first.runId, message: '喂' })).toThrow('已經關閉');
+    });
+
+    it('被中斷後暫停的佇列：送話喚醒它，排在前面的輪次先跑（#838 的恢復路徑）', async () => {
+      const entered = gate();
+      const order: string[] = [];
+      const agent: BackgroundAgent = {
+        async streamEvents(input, config) {
+          const text = String(
+            (input as { messages: { content: unknown }[] }).messages.at(-1)?.content,
+          );
+          order.push(text);
+          const signal = config.configurable?.[TURN_CANCEL_CONFIG_KEY] as AbortSignal;
+          if (text === 'A1') {
+            entered.open();
+            await new Promise<void>((resolve) =>
+              signal.addEventListener('abort', () => resolve(), { once: true }),
+            );
+          }
+          return (async function* () {})() as never;
+        },
+      };
+      const { host } = make(() => agent);
+      const first = host.start({ subagent: 'worker', text: 'A1' });
+      const queued = host.submit({ runId: first.runId, subagent: 'worker', text: 'A2' });
+      await entered.opened;
+      host.interrupt(first.runId);
+      await first.outcome;
+      await settle();
+      expect(order).toEqual(['A1']);
+      const woke = host.send({ runId: first.runId, message: '接著做' });
+      expect(await queued).toEqual({ ok: true });
+      expect(await woke).toEqual({ ok: true });
+      expect(order).toEqual(['A1', 'A2', 'Agent root-1 sent a message: 接著做']);
+      await host.close();
+    });
+
+    it('已結算而名額滿了：同步拒絕（同並存上限）', async () => {
+      const hold = gate();
+      const { agent } = fakeAgent(async (text) => (text === '佔位' ? hold.opened : undefined));
+      const { host } = make(() => agent, 1);
+      const settled = host.start({ subagent: 'worker', text: '先做完' });
+      await settled.outcome;
+      const holder = host.start({ subagent: 'worker', text: '佔位' });
+      expect(() => host.send({ runId: settled.runId, message: '再來' })).toThrow('並存上限 1');
+      hold.open();
+      await holder.outcome;
+      await host.close();
+    });
+  });
+
   describe('並存上限（#836）', () => {
     it('預設 8：第 9 個被拒絕、指名上限與現況，而且沒有編號、沒有日誌；前 8 個不受影響', async () => {
       const hold = gate();

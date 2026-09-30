@@ -98,8 +98,8 @@ export interface DraftTurn {
   readonly seq: number;
   /** 這份日誌裡的第幾輪，從 1 起算，給人看的。 */
   readonly ordinal: number;
-  /** `goal` 是續行輪次：`text` 是機器排的，不是人說的話。 */
-  readonly kind: 'message' | 'goal';
+  /** `goal` 是續行輪次、`agent-message` 是父代理傳來的（#839）：`text` 都不是人說的話。 */
+  readonly kind: 'message' | 'goal' | 'agent-message';
   readonly text: string;
   readonly toolCalls: readonly DraftToolCall[];
   /** 這一輪裡最長的那一段同工具同參數；一次受追蹤的呼叫都沒有時是 `null`。 */
@@ -126,7 +126,7 @@ export interface SessionDrafts {
 
 interface OpenTurn {
   readonly seq: number;
-  readonly kind: 'message' | 'goal';
+  readonly kind: 'message' | 'goal' | 'agent-message';
   readonly text: string;
   readonly calls: Map<
     string,
@@ -326,6 +326,9 @@ function draftBlock(session: SessionDrafts, turn: DraftTurn): string[] {
   const lines = [`// [${labels(turn.signals, '＋')}] 第 ${turn.ordinal} 輪（seq ${turn.seq}）`];
   if (turn.kind === 'goal') {
     lines.push('// goal 續行輪次：prompt 是機器排的，不是人說的話。');
+  }
+  if (turn.kind === 'agent-message') {
+    lines.push('// 父代理傳來的訊息：prompt 不是人說的話。');
   }
   if (turn.signals.includes('negative') && rating !== undefined) {
     const category = rating.category === undefined ? '' : `〔${rating.category}〕`;

@@ -22,7 +22,7 @@ import { completionAuthority, hasDirectHumanTurn, isMatchingGoalRound } from './
 import type { GoalView } from './service.js';
 
 /**
- * **釘住 `turn/start` 的酬載聯集剛好是那三個成員。**
+ * **釘住 `turn/start` 的酬載聯集剛好是那四個成員。**
  *
  * 互相指派：多一個成員時上面那行紅（放寬），少一格或改欄位時下面那行紅（收窄）。
  * 釘的是欄位不是介面名——把型別改名不會讓這一條變綠。
@@ -35,6 +35,12 @@ type TurnStart = SessionEventMap['turn/start'];
 type PinnedTurnStart =
   | { readonly kind: 'message'; readonly text: string }
   | { readonly kind: 'resume' }
+  | {
+      // 父代理傳給背景子代理的訊息（#839）。**不帶人類授權**，見下面 fail-closed 那條。
+      readonly kind: 'agent-message';
+      readonly text: string;
+      readonly senderSessionId: string;
+    }
   | {
       readonly kind: 'goal';
       readonly text: string;
@@ -66,6 +72,20 @@ const END: readonly [keyof SessionEventMap, unknown] = ['turn/end', {}];
 describe('往回追鏈', () => {
   it('一則人類訊息就是根', () => {
     expect(hasDirectHumanTurn(logOf([HUMAN]).events)).toBe(true);
+  });
+
+  it('父代理傳來的訊息（agent-message）那一輪背後沒有人：追到它就停住回假（fail closed）', () => {
+    const agentMessage: readonly [keyof SessionEventMap, unknown] = [
+      'turn/start',
+      {
+        kind: 'agent-message',
+        text: 'Agent root-1 sent a message: 動手',
+        senderSessionId: 'root-1',
+      },
+    ];
+    expect(hasDirectHumanTurn(logOf([agentMessage]).events)).toBe(false);
+    // 更早的人話不替它背書：停住，不往上穿。
+    expect(hasDirectHumanTurn(logOf([HUMAN, END, agentMessage]).events)).toBe(false);
   });
 
   it('一顆事件都沒有時是假', () => {

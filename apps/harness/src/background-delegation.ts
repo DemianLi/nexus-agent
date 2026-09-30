@@ -57,6 +57,8 @@ export const SUBAGENT_TOOL_NAME = 'subagent';
 export const LIST_AGENTS_TOOL_NAME = 'list_agents';
 /** 只停一個背景子代理當下那一輪（dsh `tool-subagent-control/src/index.ts`，`477b4f4`）。 */
 export const INTERRUPT_AGENT_TOOL_NAME = 'interrupt_agent';
+/** 對背景子代理追加指示（dsh `tool-subagent-control/src/index.ts`，`477b4f4`）。 */
+export const SEND_MESSAGE_TOOL_NAME = 'send_message';
 /** 被換掉的基座委派工具。 */
 const BASE_DELEGATION_TOOL_NAME = 'task';
 
@@ -155,6 +157,7 @@ export class BackgroundDelegation {
           // 只在 root：子代理不派子代理，也不該去列別人派的。
           registry.tools.register(this.#listAgentsTool(), { rootOnly: true });
           registry.tools.register(this.#interruptAgentTool(), { rootOnly: true });
+          registry.tools.register(this.#sendMessageTool(), { rootOnly: true });
         },
       },
     };
@@ -235,6 +238,37 @@ export class BackgroundDelegation {
             .describe(
               'The id of an agent created under you: your direct child or a deeper descendant.',
             ),
+        }),
+      },
+    );
+  }
+
+  /**
+   * `send_message`：父代理給自己派出去的背景子代理追加指示，回的是**送達回條，不是子代理的回答**。
+   *
+   * **描述與參數說明對 dsh 有兩處改寫**（偏離登記）：dsh 是「working agent receives it at its next step」——
+   * 插進當下那一輪；我們的收件匣現在沒有 `next-step` 那一格，正在跑的子代理是排成**下一輪**（插話是卡 7，
+   * 屆時描述換回原文）。參數說明去掉「或你是可繼續子代理時的直接 parent」：子代理往父代理傳訊（dsh 的
+   * 回報指引要子代理這麼做）要等結算通知（#840）有了叫醒 root 的路才做。
+   */
+  #sendMessageTool() {
+    return tool(
+      ({ agent_id, message }: { agent_id: string; message: string }) => {
+        const host = this.#host;
+        if (host === undefined) throw new Error('背景子代理還沒接上會話，傳不了');
+        void host.send({ runId: agent_id, message });
+        return `message delivered to agent ${agent_id}`;
+      },
+      {
+        name: SEND_MESSAGE_TOOL_NAME,
+        description:
+          'Send a message to an agent. A working agent receives it once its current turn ends; an idle agent starts a new turn with it. ' +
+          "Returns delivery confirmation, not the agent's answer.",
+        schema: z.object({
+          agent_id: z
+            .string()
+            .describe('The id of one of your background subagents (from subagent or list_agents).'),
+          message: z.string().describe('The message to deliver to the agent.'),
         }),
       },
     );
