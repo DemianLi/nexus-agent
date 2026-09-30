@@ -265,7 +265,7 @@
 # **它們內部又分兩層，分界是消費點跑的時刻**：
 #
 # - **起動期**（`thread-title`、`thread-title-llm`、`thread-search`、`browser-session`、`deliverable-files`、`tool-text`、
-#   `tool-result-stash`、`spill-policy`、`live-model`）：消費者是`serve.ts` 的冷讀清單、內容搜尋的索引、`BrowserAuth` 的建構子、`createWireHandler` 閉包裡的
+#   `tool-result-stash`、`spill-policy`、`background-subagents`、`live-model`）：消費者是`serve.ts` 的冷讀清單、內容搜尋的索引、`BrowserAuth` 的建構子、`createWireHandler` 閉包裡的
 #   兩條交付路由，以及交給組裝的那顆 model——全都在**任何 agent 出生之前**就要有值，那一刻註冊表還不存在。`thread-title`
 #   另外還給寫退回標題的 pump 與 CLI（#647），吃的是同一份起動期的值；`thread-title-llm` 跟它一起在建模型的那一刻
 #   讀（#650）。所以這幾列的 `apply` 是空的，值由
@@ -396,6 +396,19 @@
   name: '#settings/spill-policy'
   config:
     maxInlineTokens: 12500
+
+# 委派工具是一次性的還是背景續行的（#841），以及每個主對話同時存活的背景子代理上限。**兩格名字與值域都是 dsh 的**
+# （`backgroundMode` 是 `tool-subagent` 的 Config、`maxActiveSubagents` 預設 8，`packages/subagent/tool-subagent/src/index.ts:111`，
+# `477b4f4`），**出貨值 `continuable` 也是 dsh base bundle 打開的**（`packages/bundle/base/cordis.patch.yml:369-374`）。
+# `continuable`：模型看到 `subagent`，派出去預設在背景跑、當場回編號；做完會叫醒主對話多跑一輪。`one-shot`：模型看到基座的 `task`，
+# 一次性、等結果。**改成 `one-shot`（或把這一列標成 `disabled: true`）就回到一次性。**
+# 上限是**每個主對話各自的**，不是整台主機的：同時在跑的背景子代理到「會話數 × 上限」這個量級。
+# **只有 `serve` 讀這一列**：REPL 一行一輪、一次性模式答完就退出，都沒有可以被叫醒的一輪，背景子代理的結果送不回來。
+- id: background-subagents
+  name: '#settings/background-subagents'
+  config:
+    backgroundMode: continuable
+    maxActiveSubagents: 8
 
 # 真實供應商的連線值與模型型錄（#545／#457／#729），只在 `--live` 時才用。**連線那幾格都是 dsh 的設定欄位**：
 # `@deepseek-ai/dsh-llm-deepseek` 的 `Config` 有 `baseURL`、`streamIdleTimeoutMs`、`retryPolicy`
