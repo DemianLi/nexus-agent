@@ -128,8 +128,8 @@ export class ResumeWorkspaceConflictError extends Error {
  * **第二列放行的理由不是「別的守衛管了」。** `serve.ts` 那條沙箱模式檢查看的是日誌裡有沒有
  * `sandbox/mode`，而 sandbox-policy 那顆 plugin 被一份 patch 關掉時，上一次確實跑在
  * `--workspace` 底下卻一顆都沒寫——那條不會響。真正的理由是**沒給 `--workspace` 就沒有根**，
- * 而交付那兩條讀檔路由在沒有根的時候**每一次讀都拒**：`wire-handler.ts` 的
- * `locateRequested` 在 `state.workspaceRoot === undefined` 時回 `no-anchor`，而
+ * 而交付那兩支讀檔方法在沒有根的時候**每一次讀都拒**：`wire-handler.ts` 的
+ * `locateAt` 在 `state.workspaceRoot === undefined` 時回 `no-anchor`，而
  * `no-anchor` 對到 404。讀不到檔，就沒有讀錯檔這回事。
  *
  * **[#519](https://github.com/DemianLi/nexus-agent/issues/519) 放寬了那條路由，但沒有碰這個理由。**

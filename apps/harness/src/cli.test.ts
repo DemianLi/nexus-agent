@@ -223,7 +223,7 @@ describe('一次性模式', () => {
       // 分界是消費點跑的時刻。
       //
       // **前七列跑在任何 agent 出生之前**（serve 的冷讀清單與內容搜尋、`BrowserAuth` 的建構子、
-      // `createWireHandler` 閉包裡的交付路由與工具文字那兩條、交給組裝的那顆 model），那一刻
+      // `createWireHandler` 閉包裡的交付方法與工具文字那兩條、交給組裝的那顆 model），那一刻
       // 註冊表還不存在，所以 `apply` 是空的，值由 `settings/startup.ts` 的 `startupSetting` 在
       // 起動期解一次。**CLI 這條路讀其中三列**：`thread-title`（寫退回標題，#647）、`thread-title-llm`
       // 與 `live-model`（建 model 用，#650、#545）——其餘四列的消費者都在 serve 那一側，它們出現在
