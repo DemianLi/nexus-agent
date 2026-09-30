@@ -42,6 +42,13 @@ type PinnedTurnStart =
       readonly senderSessionId: string;
     }
   | {
+      // 背景子代理結算的通知（#840）。執行期的記帳，**不帶人類授權**，同上。
+      readonly kind: 'subagent-settled';
+      readonly text: string;
+      readonly summary: string;
+      readonly senderSessionId: string;
+    }
+  | {
       readonly kind: 'goal';
       readonly text: string;
       readonly goalId: GoalId;
@@ -86,6 +93,23 @@ describe('往回追鏈', () => {
     expect(hasDirectHumanTurn(logOf([agentMessage]).events)).toBe(false);
     // 更早的人話不替它背書：停住，不往上穿。
     expect(hasDirectHumanTurn(logOf([HUMAN, END, agentMessage]).events)).toBe(false);
+  });
+
+  it('背景子代理結算的通知（subagent-settled）那一輪背後沒有人：追到它就停住回假（fail closed）', () => {
+    const settled: readonly [keyof SessionEventMap, unknown] = [
+      'turn/start',
+      {
+        kind: 'subagent-settled',
+        text: 'Background subagent bg-1 finished and will do no further work unless you send it more.',
+        summary:
+          'Background subagent bg-1 finished and will do no further work unless you send it more.',
+        senderSessionId: 'bg-1',
+      },
+    ];
+    expect(hasDirectHumanTurn(logOf([settled]).events)).toBe(false);
+    // 更早的人話不替它背書；中間夾一顆 resume 也一樣。
+    expect(hasDirectHumanTurn(logOf([HUMAN, END, settled]).events)).toBe(false);
+    expect(hasDirectHumanTurn(logOf([HUMAN, END, settled, RESUME]).events)).toBe(false);
   });
 
   it('一顆事件都沒有時是假', () => {
@@ -294,6 +318,13 @@ type UserMessageSourcePinned =
       readonly form: 'recall';
       readonly version: 1;
       readonly references: readonly SessionReferenceSourceEntry[];
+    }
+  | {
+      // 忙著時被插話領走的結算通知（#840）：不是人，見下面「結算通知的插話不算人」那條。
+      readonly kind: 'subagent-settled';
+      readonly form: 'notice';
+      readonly summary: string;
+      readonly senderSessionId: string;
     };
 type UserMessageSourceActual = SessionEventMap['user/message']['source'];
 const _sourceWidened: UserMessageSourcePinned = undefined as unknown as UserMessageSourceActual;
@@ -315,6 +346,25 @@ describe('輪中插話算直接人類授權（#710）', () => {
     'user/message',
     { message, source: { kind: 'plugin', plugin: 'repeat-reminder' } },
   ];
+
+  it('結算通知的插話不算人（#840）：source 是 subagent-settled 的 user/message 拿不到', () => {
+    const NOTICE: readonly [keyof SessionEventMap, unknown] = [
+      'user/message',
+      {
+        message,
+        source: {
+          kind: 'subagent-settled',
+          form: 'notice',
+          summary:
+            'Background subagent bg-1 finished and will do no further work unless you send it more.',
+          senderSessionId: 'bg-1',
+        },
+      },
+    ];
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND, NOTICE]).events)).toBe(false);
+    // 人先插過話、後面才來通知：這條鏈裡仍有人。
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND, STEER, NOTICE]).events)).toBe(true);
+  });
 
   it('續行輪次裡人插了話：拿得到', () => {
     expect(hasDirectHumanTurn(logOf([GOAL_ROUND, STEER]).events)).toBe(true);

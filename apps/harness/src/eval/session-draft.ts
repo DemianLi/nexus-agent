@@ -98,8 +98,8 @@ export interface DraftTurn {
   readonly seq: number;
   /** 這份日誌裡的第幾輪，從 1 起算，給人看的。 */
   readonly ordinal: number;
-  /** `goal` 是續行輪次、`agent-message` 是父代理傳來的（#839）：`text` 都不是人說的話。 */
-  readonly kind: 'message' | 'goal' | 'agent-message';
+  /** `goal` 是續行輪次、`agent-message` 是父代理傳來的（#839）、`subagent-settled` 是背景子代理結算的通知（#840）：`text` 都不是人說的話。 */
+  readonly kind: 'message' | 'goal' | 'agent-message' | 'subagent-settled';
   readonly text: string;
   readonly toolCalls: readonly DraftToolCall[];
   /** 這一輪裡最長的那一段同工具同參數；一次受追蹤的呼叫都沒有時是 `null`。 */
@@ -126,7 +126,7 @@ export interface SessionDrafts {
 
 interface OpenTurn {
   readonly seq: number;
-  readonly kind: 'message' | 'goal' | 'agent-message';
+  readonly kind: 'message' | 'goal' | 'agent-message' | 'subagent-settled';
   readonly text: string;
   readonly calls: Map<
     string,
@@ -329,6 +329,9 @@ function draftBlock(session: SessionDrafts, turn: DraftTurn): string[] {
   }
   if (turn.kind === 'agent-message') {
     lines.push('// 父代理傳來的訊息：prompt 不是人說的話。');
+  }
+  if (turn.kind === 'subagent-settled') {
+    lines.push('// 背景子代理結算的通知：prompt 是執行期的記帳，不是人說的話。');
   }
   if (turn.signals.includes('negative') && rating !== undefined) {
     const category = rating.category === undefined ? '' : `〔${rating.category}〕`;

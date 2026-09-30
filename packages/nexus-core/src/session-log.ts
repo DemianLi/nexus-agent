@@ -265,6 +265,15 @@ export type UserMessageSource =
       readonly form: 'recall';
       readonly version: 1;
       readonly references: readonly SessionReferenceSourceEntry[];
+    }
+  | {
+      readonly kind: 'subagent-settled';
+      /** 執行期自己的記帳，不展開就能看（dsh 的 `notice` 形式）。 */
+      readonly form: 'notice';
+      /** 一行摘要，說這個背景子代理怎麼收的。 */
+      readonly summary: string;
+      /** 結算的那個背景子代理的會話 id。 */
+      readonly senderSessionId: string;
     };
 
 /** 每一種事件帶什麼。 */
@@ -300,6 +309,22 @@ export interface SessionEventMap {
          * 寄件的會話 id（父代理）。照 dsh 的 `AgentMessageSource`（`subagent/src/continuation-messages.ts`，`477b4f4`）：
          * **只記寄件人，不授予權限**。這一輪背後沒有人：`hasDirectHumanTurn` 對認不得的 `kind` 停住回假，
          * 所以它拿不到直接人類授權（#152 的底線）。
+         */
+        readonly senderSessionId: string;
+      }
+    | {
+        readonly kind: 'subagent-settled';
+        /**
+         * 送進模型的那一串字：一行摘要，加上子代理最後一則回覆的非空文字（沒有就是 `It left no closing message.`）。
+         * **這一份與圖那一份是同一個值**。
+         */
+        readonly text: string;
+        /** 一行摘要，同 {@link UserMessageSource} 的 `subagent-settled`。 */
+        readonly summary: string;
+        /**
+         * 結算的背景子代理的會話 id。照 dsh 的 `SubagentSettledMessageSource`（`subagent/src/continuation-messages.ts`，`477b4f4`）：
+         * 這是**執行期自己的記帳**，不是人說的話、也不是子代理自己寫的話（所以不併進 `agent-message`）。
+         * 這一輪背後沒有人：`hasDirectHumanTurn` 對認不得的 `kind` 停住回假（#152 的底線）。
          */
         readonly senderSessionId: string;
       }

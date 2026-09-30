@@ -31,13 +31,20 @@
 export type InboxTarget = 'next-turn' | 'next-step';
 
 /**
- * 一件排著的輸入是誰送的。dsh 分人（`{kind:'user'}`）與目標續行（`{kind:'goal', …}`）；**這一版只有人**，
+ * 一件排著的輸入是誰送的。dsh 分人（`{kind:'user'}`）與目標續行（`{kind:'goal', …}`）；**這一版有人與背景子代理的結算通知**，
  * 續行走佇列是 [#638](https://github.com/DemianLi/nexus-agent/issues/638)。開跑時 `turn/start` 的 `kind` 由它決定。
  *
  * 加成員要在 pump 的 `pumpInputOf`（`apps/harness/src/thread-pump.ts`）補一支，不補就編不過。goal 成員要帶 `goalId`、
  * `revision`、`round`，因為 `turn/start` 的 goal 那幾格全部必填。
  */
-export type QueuedInputSource = { readonly kind: 'user' };
+export type QueuedInputSource =
+  | { readonly kind: 'user' }
+  | {
+      /** 背景子代理結算的通知（[#840](https://github.com/DemianLi/nexus-agent/issues/840)）：執行期的記帳，不是人說的話。 */
+      readonly kind: 'subagent-settled';
+      readonly summary: string;
+      readonly senderSessionId: string;
+    };
 
 /**
  * 排著的一件。

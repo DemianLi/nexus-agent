@@ -35,7 +35,7 @@ import { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 import type { WireContextMeasure, WireContextPressure } from './context-pressure.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
 import { INBOX } from './inbox.js';
-import type { WireQueuedInput, WireSessionReference } from './inbox.js';
+import type { WireQueuedInput, WireQueuedInputSource, WireSessionReference } from './inbox.js';
 import { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
 import type { WireSessionStats, WireTokenUsage } from './session-totals.js';
 import { TITLE } from './title.js';
@@ -784,7 +784,7 @@ function reduceSessionStats(state: ConversationState, payload: object): Conversa
   return { ...state, sessionStats: { turns, steps, llmMs, toolMs } };
 }
 
-/** 排著的一件長得對不對：`@nexus/core` 的 `QueuedInput`，這一版 `source` 只有人。 */
+/** 排著的一件長得對不對：`@nexus/core` 的 `QueuedInput`，`source` 是人或背景子代理的結算通知。 */
 function isQueuedInput(value: unknown): value is WireQueuedInput {
   if (typeof value !== 'object' || value === null) return false;
   const { id, text, source } = value as { id?: unknown; text?: unknown; source?: unknown };
@@ -793,8 +793,12 @@ function isQueuedInput(value: unknown): value is WireQueuedInput {
     typeof text === 'string' &&
     typeof source === 'object' &&
     source !== null &&
-    (source as { kind?: unknown }).kind === 'user'
+    isQueuedSourceKind((source as { kind?: unknown }).kind)
   );
+}
+
+function isQueuedSourceKind(kind: unknown): kind is WireQueuedInputSource['kind'] {
+  return kind === 'user' || kind === 'subagent-settled';
 }
 
 /** 一句話 `@` 的會話長得對不對。沒給（`undefined`）合法，給了就每一條都要是兩個字串。 */
@@ -853,14 +857,17 @@ function reduceInbox(state: ConversationState, payload: object): ConversationSta
   }
   const humans: HumanEntry[] = [];
   for (const claim of claims) {
-    const { id, text, references } = (claim ?? {}) as {
+    const { id, text, references, source } = (claim ?? {}) as {
       id?: unknown;
       text?: unknown;
       references?: unknown;
+      source?: unknown;
     };
     if (typeof id !== 'string' || typeof text !== 'string' || !isWireReferences(references)) {
       return state;
     }
+    // 不是人送的（#840）：執行期的記帳，不畫人的泡泡。認得的來源之外的一律當成人畫——舊的一側沒有這一格。
+    if ((source as { kind?: unknown } | undefined)?.kind === 'subagent-settled') continue;
     humans.push({
       kind: 'human',
       id: `inbox:${id}`,
@@ -870,7 +877,7 @@ function reduceInbox(state: ConversationState, payload: object): ConversationSta
     });
   }
   const queued = (list: readonly WireQueuedInput[]) =>
-    list.map(({ id, text }) => ({ id, text, source: { kind: 'user' as const } }));
+    list.map(({ id, text, source }) => ({ id, text, source: { kind: source.kind } }));
   const inbox = queued(items);
   const inboxNextStep = queued(nextStep ?? []);
   const fresh = humans.filter(

@@ -338,9 +338,10 @@ export function inboxData(
 ): { readonly name: typeof INBOX; readonly payload: InboxPayload } {
   const wire = (items: readonly QueuedInput[]) =>
     items.map(({ id, text, source }) => ({ id, text, source: { kind: source.kind } }));
-  const claim = ({ id, text, references }: ClaimedInput) => ({
+  const claim = ({ id, text, references, source }: ClaimedInput) => ({
     id,
     text,
+    ...(source.kind === 'user' ? {} : { source: { kind: source.kind } }),
     ...(references === undefined || references.length === 0
       ? {}
       : { references: references.map(({ sessionId, label }) => ({ sessionId, label })) }),

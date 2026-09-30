@@ -253,8 +253,17 @@ import type { SessionEvent } from './session-log.js';
  *
  * 升版照新增詞彙的慣例（同 18、19、22），不是非升不可：授權判別對認不得的 `kind` 都是停住回假（fail closed），
  * 22 讀到它不會把它當成人。
+ *
+ * ## 24：背景子代理結算通知（`subagent-settled`）
+ *
+ * 背景子代理結算時通知主對話（[#840](https://github.com/DemianLi/nexus-agent/issues/840)），root 日誌上出現三處新詞彙：
+ * `turn/start` 的 `subagent-settled`（閒著時通知開了一輪）、`user/message` 的 `source: {kind:'subagent-settled', form:'notice', …}`
+ * （忙著時被插話領走），以及送出佇列 `inbox/spliced` 項目的 `source: {kind:'subagent-settled', …}`。v23 的檔直接讀：那時候沒有這條路。
+ *
+ * 升版照新增詞彙的慣例（同 18、19、22、23）：23 讀到它，授權判別對認不得的 `kind` 停住回假，不會把它當成人；但畫面（歷史）
+ * 與送出佇列的 wire 投影沒見過這個成員，所以這一版改了它們。
  */
-export const SESSION_LOG_FORMAT_VERSION = 23;
+export const SESSION_LOG_FORMAT_VERSION = 24;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。

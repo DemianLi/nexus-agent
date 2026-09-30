@@ -253,3 +253,52 @@ describe('inbox', () => {
     });
   });
 });
+
+describe('inbox：背景子代理的結算通知不是人話（#840）', () => {
+  const notice = {
+    id: 'run-n',
+    text: 'Background subagent bg-1 finished',
+    source: { kind: 'subagent-settled' },
+  } as const;
+
+  it('排著的通知照收，來源的判別欄留著，畫面能分出它不是人送的', () => {
+    const state = fold(inboxFrame({ items: [first, notice], nextStep: [notice] }));
+    expect(state.inbox).toEqual([first, notice]);
+    expect(state.inboxNextStep).toEqual([notice]);
+  });
+
+  it('領走的通知（claimed／claimedNextStep 帶 source）不畫人的泡泡；沒帶 source 的照舊是人', () => {
+    const claimedNotice = { id: 'run-n', text: '通知', source: { kind: 'subagent-settled' } };
+    expect(fold(inboxFrame({ items: [], claimed: claimedNotice })).entries).toEqual([]);
+    expect(
+      fold(inboxFrame({ items: [], nextStep: [], claimedNextStep: [claimedNotice] })).entries,
+    ).toEqual([]);
+    const human = fold(inboxFrame({ items: [], claimed: { id: 'run-a', text: '嗨' } }));
+    expect(human.entries.map((entry) => entry.kind)).toEqual(['human']);
+  });
+
+  it('同一顆裡人與通知並存：只畫人的', () => {
+    const state = fold(
+      inboxFrame({
+        items: [],
+        nextStep: [],
+        claimedNextStep: [
+          { id: 'run-a', text: '人的話' },
+          { id: 'run-n', text: '通知', source: { kind: 'subagent-settled' } },
+        ],
+      }),
+    );
+    expect(
+      state.entries.map((entry) => (entry.kind === 'human' ? entry.text : entry.kind)),
+    ).toEqual(['人的話']);
+  });
+
+  it('認不得的來源整顆不收', () => {
+    const before = fold(inboxFrame({ items: [first] }));
+    const after = reduceConversation(
+      before,
+      inboxFrame({ items: [{ ...first, source: { kind: 'someone-else' } }] }),
+    );
+    expect(after.inbox).toEqual(before.inbox);
+  });
+});

@@ -49,6 +49,7 @@ import type { BackgroundSubagentMeta } from '@nexus/wire';
 import { z } from 'zod';
 
 import { BackgroundSubagentHost } from './background-subagents.js';
+import type { BackgroundSettlement } from './background-subagents.js';
 import type { BackgroundAgent } from './background-subagents.js';
 
 /** 模型看到的工具名（dsh 的預設名，`toolName: 'subagent'`）。 */
@@ -125,16 +126,19 @@ export class BackgroundDelegation {
    *
    * @param sessions - 這次組裝綁的會話註冊表。
    * @param compile - 按名字編帶存檔點的圖（`AgentHandle.compileSubagent` 包好存檔點）。
+   * @param onSettled - 背景子代理結算時通知主對話（#840）。**沒給就沒有人被通知**：cli 的 REPL 一行一輪，沒有可以叫醒的一輪。
    * @returns 收掉的函式（等進行中的輪收完）。
    */
   attach(
     sessions: SessionRegistry,
     compile: (subagent: string) => BackgroundAgent,
+    onSettled?: (settlement: BackgroundSettlement) => void,
   ): () => Promise<void> {
     const sandbox = this.#options.sandbox;
     const host = new BackgroundSubagentHost({
       sessions,
       compile,
+      ...(onSettled !== undefined && { onSettled }),
       ...(this.#options.maxActive !== undefined && { maxActive: this.#options.maxActive }),
       ...(sandbox !== undefined && {
         enter: <T>(log: SessionLog, run: () => T): T => sandbox.delegateFromLog(log, run),
