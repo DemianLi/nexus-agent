@@ -43,6 +43,18 @@
  *   每次 spawn 一份）。
  * - **同一次 spawn 裡叫幾次工具都是同一個** —— 前綴不變，變的是最後一段。
  *
+ * ## 背景子代理不走這條規則，走顯式的鍵（[#823](https://github.com/DemianLi/nexus-agent/issues/823)）
+ *
+ * 背景子代理是拿同一份規格自己編一張圖、由在任何圖的環境之外的迴圈拉起來的（[#738](https://github.com/DemianLi/nexus-agent/issues/738)），
+ * 它是**最上層的圖**，`checkpoint_ns` 只有一段，去尾之後是空的，上面那條規則會把它認成 root——
+ * 它的工具結果併進 root 的日誌、用量記到 root、`turn-cancel` 對它拋 `TurnCancelledError`。想靠傳
+ * `checkpoint_ns` 給它一個穩定的命名空間也不行，最上層的圖自己重寫它。
+ *
+ * 所以拉起它的一方在 `configurable` 放 {@link BACKGROUND_SESSION_CONFIG_KEY}，值是這個背景子代理的穩定編號；
+ * 自訂的 `configurable` 鍵會原樣送到工具與模型請求（探針實測）。有這個鍵就**不看** `checkpoint_ns`：
+ * 結果是 `{ kind: 'subagent', runId: <編號> }`，不新增身分種類，下游照 `kind` 分流的每一處（`turn-cancel`、
+ * `step-inbox`、`max-tokens`、持久化的 `parentSession`）本來就把它當子代理。
+ *
  * ## 三件要記住的事
  *
  * 1. **格式沒有公開承諾。** `|` 這個分隔符查不到 LangGraph 的契約，只查得到它的行為。
@@ -83,6 +95,14 @@ export type SessionAddress =
  */
 const CHECKPOINT_NS_SEPARATOR = '|';
 
+/**
+ * 背景子代理的身分鍵：`configurable` 裡的這一格是它的穩定編號（見檔頭）。
+ *
+ * **由拉起背景那一輪的一方放，不是 LangGraph 的東西**——所以不需要像 `checkpoint_ns` 那樣防升版改格式，
+ * 但要防「放壞了卻被當成 root」：鍵在、值卻不是非空字串時，{@link toolCallSessionAddress} 回 `undefined`。
+ */
+export const BACKGROUND_SESSION_CONFIG_KEY = 'nexus_background_session';
+
 /** 從一份 `configurable` 裡把命名空間挖出來，形狀不對就當沒有。 */
 function checkpointNamespace(config: unknown): string | undefined {
   if (typeof config !== 'object' || config === null) return undefined;
@@ -93,15 +113,34 @@ function checkpointNamespace(config: unknown): string | undefined {
 }
 
 /**
+ * 挖出背景身分鍵。
+ *
+ * @returns `undefined`＝沒有這個鍵（走 `checkpoint_ns`）；`null`＝鍵在但值不是非空字串；字串＝編號。
+ */
+function backgroundSessionId(config: unknown): string | null | undefined {
+  if (typeof config !== 'object' || config === null) return undefined;
+  const configurable = (config as { configurable?: unknown }).configurable;
+  if (typeof configurable !== 'object' || configurable === null) return undefined;
+  if (!Object.hasOwn(configurable, BACKGROUND_SESSION_CONFIG_KEY)) return undefined;
+  const id = (configurable as Record<string, unknown>)[BACKGROUND_SESSION_CONFIG_KEY];
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+/**
  * 認出一次呼叫的會話身分。**名字說工具，契約說「圖裡的呼叫」**——見檔頭。
  *
  * @param config - 一份帶得出 `configurable.checkpoint_ns` 的東西。工具那條路傳的是
  *   handler 的**第二個參數**（LangChain 的 `ToolRunnableConfig`）——宣告不出第二個參數的
  *   工具永遠拿不到身分，那不是這裡的 bug，是那顆工具沒有要。middleware 那條路傳的是
  *   `{ configurable: request.runtime.configurable }`。
- * @returns 認得出來的身分，或 `undefined`（沒有 `checkpoint_ns`＝這次呼叫不在圖裡）。
+ * @returns 認得出來的身分，或 `undefined`（沒有 `checkpoint_ns`＝這次呼叫不在圖裡；背景身分鍵放壞了）。
  */
 export function toolCallSessionAddress(config: unknown): SessionAddress | undefined {
+  const background = backgroundSessionId(config);
+  // 鍵在就以它為準，壞掉的鍵也是：退回 `checkpoint_ns` 會把壞掉的背景呼叫悄悄認成 root。
+  if (background !== undefined) {
+    return background === null ? undefined : { kind: 'subagent', runId: background };
+  }
   const namespace = checkpointNamespace(config);
   if (namespace === undefined) return undefined;
   const segments = namespace.split(CHECKPOINT_NS_SEPARATOR);

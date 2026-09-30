@@ -485,6 +485,7 @@ export type { SessionInstaller, SessionRunnerOptions, SessionSubject } from './s
 export { createSessionRunner } from './sessions.js';
 export type { SessionAddress } from './session-address.js';
 export {
+  BACKGROUND_SESSION_CONFIG_KEY,
   sessionAddressKey,
   spawnedSubagentRunId,
   toolCallSessionAddress,

@@ -16,7 +16,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { sessionAddressKey, toolCallSessionAddress } from './session-address.js';
+import {
+  BACKGROUND_SESSION_CONFIG_KEY,
+  sessionAddressKey,
+  spawnedSubagentRunId,
+  toolCallSessionAddress,
+} from './session-address.js';
 
 /** 照探針量到的形狀組一份 config。 */
 function configWith(namespace: string): unknown {
@@ -131,5 +136,68 @@ describe('sessionAddressKey', () => {
     expect(sessionAddressKey({ kind: 'subagent', runId: 'root' })).not.toBe(
       sessionAddressKey({ kind: 'root' }),
     );
+  });
+});
+
+describe('背景子代理的顯式身分鍵（#823）', () => {
+  const withKey = (key: unknown, namespace?: string): unknown => ({
+    configurable: {
+      [BACKGROUND_SESSION_CONFIG_KEY]: key,
+      ...(namespace !== undefined && { checkpoint_ns: namespace }),
+    },
+  });
+
+  it('最上層的圖只有一段命名空間：沒有鍵是 root，有鍵是背景子代理', () => {
+    expect(toolCallSessionAddress(configWith('tools:631b83bf'))).toEqual({ kind: 'root' });
+    expect(toolCallSessionAddress(withKey('bg-1', 'tools:631b83bf'))).toEqual({
+      kind: 'subagent',
+      runId: 'bg-1',
+    });
+  });
+
+  it('模型節點的命名空間也一樣（用量那條路傳的是同一種 config）', () => {
+    expect(toolCallSessionAddress(withKey('bg-1', 'model_request:631b83bf'))).toEqual({
+      kind: 'subagent',
+      runId: 'bg-1',
+    });
+  });
+
+  it('鍵優先於 checkpoint_ns：兩段命名空間也以鍵為準', () => {
+    expect(toolCallSessionAddress(withKey('bg-1', 'tools:a21dcf6c|tools:592c983e'))).toEqual({
+      kind: 'subagent',
+      runId: 'bg-1',
+    });
+  });
+
+  it('沒有 checkpoint_ns 也認得（鍵自己就夠）', () => {
+    expect(toolCallSessionAddress(withKey('bg-7'))).toEqual({ kind: 'subagent', runId: 'bg-7' });
+  });
+
+  it('鍵放壞了回 undefined，不退回 checkpoint_ns 認成 root', () => {
+    for (const bad of ['', 0, null, undefined, {}, ['bg-1']]) {
+      expect(toolCallSessionAddress(withKey(bad, 'tools:631b83bf')), String(bad)).toBeUndefined();
+    }
+  });
+
+  it('不從原型鏈上讀鍵', () => {
+    const inherited = Object.create({ [BACKGROUND_SESSION_CONFIG_KEY]: 'bg-1' }) as object;
+    expect(
+      toolCallSessionAddress({
+        configurable: Object.assign(inherited, { checkpoint_ns: 'tools:x' }),
+      }),
+    ).toEqual({ kind: 'root' });
+  });
+
+  it('兩個背景子代理的身分鍵不同；跟 root 也不同', () => {
+    const keys = [
+      toolCallSessionAddress(withKey('bg-1', 'tools:x')),
+      toolCallSessionAddress(withKey('bg-2', 'tools:x')),
+      { kind: 'root' } as const,
+    ].map((address) => sessionAddressKey(address!));
+    expect(new Set(keys).size).toBe(3);
+  });
+
+  it('spawnedSubagentRunId 不受影響：它答的是「這次呼叫派出去的子代理」，不是身分', () => {
+    expect(spawnedSubagentRunId(withKey('bg-1', 'tools:x'))).toBe('tools:x');
   });
 });
