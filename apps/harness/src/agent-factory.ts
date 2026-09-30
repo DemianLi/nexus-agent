@@ -42,6 +42,7 @@
 
 import {
   assertInvariantSelection,
+  createHostServicesPlugin,
   createInvariantRunner,
   createSessionRunner,
   foldRegistry,
@@ -69,6 +70,7 @@ import {
   type SummarizationSettings,
   type ToolResultPruneConfig,
 } from '@nexus/core';
+import type { SystemPromptVariables } from '@nexus/plugin-system-prompt';
 import { CompositeBackend, createDeepAgent } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
@@ -146,6 +148,16 @@ export interface CreateNexusAgentOptions {
    * 不是這裡該替人填的預設值。
    */
   readonly model: AgentModel;
+  /**
+   * 系統提示詞前後綴的 `{{model}}` 與 `{{cwd}}`（[#720](https://github.com/DemianLi/nexus-agent/issues/720)）。
+   *
+   * 出貨清單的 `system-prompt` 那一列硬要這個服務，而**這裡是唯一的提供者**：手搭的呼叫端不必為了一個它們不關心的
+   * 服務各交一份，也就不會有兩個提供者撞在一起。省略時 `model` 取模型物件自己報的型號（`model`／`modelName`，
+   * 都沒有就用 `_llmType()`——每個 `BaseChatModel` 都有），`cwd` 是 `/`：檔案工具的位址空間裡的根，不是主機路徑
+   * （偏離登記見 `@nexus/plugin-system-prompt` 的檔頭）。`--live` 的兩個入口明著傳 `live-model` 那一列的 `modelId`，
+   * 跟建模型讀的是同一份。
+   */
+  readonly systemPromptVariables?: Partial<SystemPromptVariables>;
   /**
    * 宣告「這個模型會讓基座對組裝做哪些事」。**省略即宣告「什麼都不做」**——那是今天所有
    * 呼叫端的實情，也是唯一一種不必寫的宣告。
@@ -525,14 +537,39 @@ function recursionLimitFor(registry: PluginRegistry, options: CreateNexusAgentOp
   return registry.services.get(RECURSION_LIMIT_SERVICE) ?? DEFAULT_RECURSION_LIMIT;
 }
 
+/** 模型物件自己報的型號；沒有的話退到它的種類名，每個 `BaseChatModel` 都有。字串形式的模型（基座的 `provider:model`）原樣用。 */
+function modelLabelOf(model: AgentModel): string {
+  if (typeof model === 'string') return model;
+  // 型別上 `AgentModel` 含 `undefined`（基座的參數是選填），但這個選項是必填的；真的漏了，基座退到它自己的預設。
+  if (model === undefined) return 'default';
+  const named = model as unknown as { model?: unknown; modelName?: unknown };
+  for (const candidate of [named.model, named.modelName]) {
+    if (typeof candidate === 'string' && candidate !== '') return candidate;
+  }
+  return model._llmType();
+}
+
 export async function createNexusAgent(options: CreateNexusAgentOptions) {
   // **跑在 `loadPlugins` 之前**：它只看 `options.model`，這時候還沒有任何 plugin 開好資源，
   // 所以失敗了不必先 `dispose()`。其餘四種都在下面那個 try 裡，因為它們要等 registry。
   assertHarnessProfileDeclared(options.model, options.expectedHarnessProfile);
 
+  // **放在最前面**：出貨清單的 `system-prompt` 在自己的 `apply` 當下就讀變數（#720）。
+  const plugins: readonly PluginEntry[] = [
+    createHostServicesPlugin(
+      {
+        systemPromptVariables: {
+          model: options.systemPromptVariables?.model ?? modelLabelOf(options.model),
+          cwd: options.systemPromptVariables?.cwd ?? '/',
+        },
+      },
+      'system-prompt-variables',
+    ),
+    ...options.plugins,
+  ];
   const optional = options.optionalEntries;
   const { registry, dispose, dropped } = await loadPlugins(
-    options.plugins,
+    plugins,
     undefined,
     optional === undefined
       ? {}
@@ -543,7 +580,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
           afterApply: (loading) => void assertNoBaseToolNameCollision(loading),
         },
   );
-  const assemblyDrops = optional === undefined ? [] : pairWithEntries(options.plugins, dropped);
+  const assemblyDrops = optional === undefined ? [] : pairWithEntries(plugins, dropped);
 
   try {
     const fatal = new Set(

@@ -154,7 +154,7 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是七顆功能 ＋ 八列 core 設定 ＋ 十列 harness 設定 ＋ 二十個配套入口', async () => {
+  it('預設清單是八顆功能 ＋ 八列 core 設定 ＋ 十列 harness 設定 ＋ 二十一個配套入口', async () => {
     // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
     // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
     // 讓計劃模式進來，理由寫在 `apps/harness/cordis.yml` 的註解上（命令沒進預設清單就等於
@@ -191,6 +191,10 @@ describe('一次性模式', () => {
       'todo',
       'feedback',
       'present',
+      // **`system-prompt` 進來的理由是模型該知道自己是誰**（[#720](https://github.com/DemianLi/nexus-agent/issues/720)）：
+      // 出貨值把「命令列助手」那句寫死在程式碼裡的身分，換成部署方寫得動的一列。它不多一顆工具、不多一個命令，
+      // 多的是系統提示詞前後各一段；沒有這一列，模型只剩組裝點那一句指引。
+      'system-prompt',
       // **底下這八顆不是第八到第十五個例外**，它們跟上面七個不同類：不多一顆工具、不多一
       // 個命令、不改 prompt。它們只把 core 那幾顆 middleware 的設定從程式碼搬到部署設定裡
       // （[#456](https://github.com/DemianLi/nexus-agent/issues/456)），middleware 本身
@@ -247,9 +251,9 @@ describe('一次性模式', () => {
       'live-model',
       'recursion-limit',
     ]);
-    // 二十個配套入口裡有 `@nexus/plugin-workspace-changes` 的，**那個功能本身不在這份清單裡**：它要工作區的根，
+    // 二十一個配套入口裡有 `@nexus/plugin-workspace-changes` 的，**那個功能本身不在這份清單裡**：它要工作區的根，
     // 只由 serve 經 `createCliAgent` 掛（#443），同 dsh 只在 web-app bundle 掛。
-    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(20);
+    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(21);
   });
 
   it('**違規印到 stderr 而且帶前綴**——不是靠 runner 預設的 `console.error`', async () => {

@@ -230,6 +230,33 @@ describe('middleware 註冊點', () => {
     ]);
   });
 
+  it('last: true 排在其餘 plugin middleware 之後、輸出校驗之前，不管註冊得多早', async () => {
+    const params = await fold([
+      fakePlugin('a', (r) => void r.middleware.use(fakeMiddleware('a'), { last: true })),
+      fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'))),
+      fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'), { prepend: true })),
+      fakePlugin('d', (r) => void r.middleware.use(fakeMiddleware('d'), { last: true })),
+    ]);
+    expect(middlewareNames(params)).toEqual([
+      CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
+      'c',
+      APPROVAL_GATE_MIDDLEWARE_NAME,
+      SUMMARIZATION_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
+      MODEL_USAGE_MIDDLEWARE_NAME,
+      SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+      'b',
+      // 兩顆 last 之間仍是註冊順序。
+      'a',
+      'd',
+      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
+    ]);
+  });
+
   /**
    * **每個子代理也拿到，同 root 的分區、同一個實例**（[#327](https://github.com/DemianLi/nexus-agent/issues/327)）。
    * 照 dsh：子代理併入父代理同一份組合，同樣的 plugin 物件。

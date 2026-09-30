@@ -23,7 +23,7 @@ import {
   isApprovalPending,
   reduceConversation,
 } from '@nexus/wire';
-import { createRegistry } from '@nexus/core';
+import { createHostServicesPlugin, createRegistry } from '@nexus/core';
 import { StateBackend } from 'deepagents';
 import { z } from 'zod';
 import { BrowserAuth } from './browser-auth.js';
@@ -60,6 +60,24 @@ export function shippedPlugins(): Promise<readonly PluginEntry[]> {
     return plugins;
   });
   return shipped;
+}
+
+/**
+ * 給**直接呼叫 `loadPlugins`** 的測試：出貨清單的 `system-prompt` 那一列硬要 `systemPromptVariables` 這個服務（#720），
+ * 產品路徑上由 `createNexusAgent` 交；直接載清單的測試沒有經過它，自己補一份，放最前面，跟產品路徑同一個位置。
+ * 經 `createNexusAgent` 或 `createCliAgent` 的測試不需要這個——那兩個入口自己交，再交一份會撞名。
+ *
+ * @param plugins - 要載的清單，通常是出貨的那一份。
+ * @returns 前面多一顆提供變數的條目。
+ */
+export function withSystemPromptVariables(plugins: readonly PluginEntry[]): PluginEntry[] {
+  return [
+    createHostServicesPlugin(
+      { systemPromptVariables: { model: 'test-model', cwd: '/' } },
+      'test-system-prompt-variables',
+    ),
+    ...plugins,
+  ];
 }
 
 /**
