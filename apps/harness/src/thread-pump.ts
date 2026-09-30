@@ -236,6 +236,28 @@ export interface PumpAgent {
 }
 
 /**
+ * 送出佇列的一件開跑時用哪一種 {@link PumpInput}，**由它的 `source` 推出來**（[#686](https://github.com/DemianLi/nexus-agent/issues/686)）。
+ *
+ * `turn/start` 的 `kind` 是授權的判別欄，佇列項的 `source` 是另一個判別式；兩者之間的映射寫在這一支，對 `source.kind`
+ * 窮舉。`QueuedInputSource` 加成員時，這裡當場編不過，不會只紅在 wire 的投影——否則新成員的那一輪會被靜靜寫成 `message`，
+ * 讀者把它當成人說的話。
+ *
+ * @param item - 輪到的那一件。
+ * @returns 開這一輪的輸入。
+ */
+function pumpInputOf(item: QueuedInput): PumpInput {
+  const source = item.source;
+  switch (source.kind) {
+    case 'user':
+      return { kind: 'message', text: item.text };
+    default: {
+      const unhandled: never = source.kind;
+      throw new Error(`送出佇列的來源 "${String(unhandled)}" 沒有對應的輸入種類`);
+    }
+  }
+}
+
+/**
  * 送進去的東西：一句話、一組核准決定，或**排程器排的一輪續行**。
  *
  * `goal` 那一種與 `message` 在圖上走同一條路（都是一則 `HumanMessage`），差別全在日誌
@@ -1443,7 +1465,7 @@ export class ThreadPump {
     if (item === undefined || item.id !== id) {
       throw new Error(`送出佇列與排程走散了：輪到 "${id}"，佇列第一件是 "${item?.id ?? '（空）'}"`);
     }
-    await this.#runOnce({ kind: 'message', text: item.text }, item);
+    await this.#runOnce(pumpInputOf(item), item);
   }
 
   /**
