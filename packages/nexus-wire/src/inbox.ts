@@ -38,6 +38,19 @@
 /** `custom` 事件的 `data.name`：送出佇列現在是這一份。 */
 export const INBOX = 'inbox';
 
+/**
+ * `custom` 事件的 `data.name`：**歷史重播用**的「這裡有一則背景子代理結算通知」（[#851](https://github.com/DemianLi/nexus-agent/issues/851)）。
+ * 即時的畫面由 {@link INBOX} 的 `claimed`／`claimedNextStep` 長同一格（`id` 是 `inbox:<件的 id>`）；歷史沒有送出佇列，
+ * 由這一顆長，`id` 是 `history-<seq>`。兩邊長出的是同一種 entry、落在同一個位置（通知叫醒的那一輪的開頭，或輪中插進來的那一刻）。
+ */
+export const SETTLE_NOTICE = 'subagent/settle-notice';
+
+/** {@link SETTLE_NOTICE} 的 `payload`。 */
+export interface SettleNoticePayload {
+  /** 那一格 entry 的 `id`，也是去重的鍵：同一個 `id` 第二次出現就忽略。 */
+  readonly id: string;
+}
+
 /** 排著的一件。結構上是 `@nexus/core` 的 `QueuedInput`，重新宣告的理由同 `SlashDescriptor`。 */
 export interface WireQueuedInput {
   /** 就是送出時 `run.start` 回的 `run_id`：畫面拿它對上自己送出的那一句。改過之後不變。 */

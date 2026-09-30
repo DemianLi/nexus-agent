@@ -93,7 +93,7 @@ describe('背景子代理的結算通知排在插話那一條（#851）', () => 
     ]);
   });
 
-  it('被領走時折疊器不長人的話：那一格直接消失，不留一則人說的話', () => {
+  it('被領走時折疊器不長人的話，改長一格「通知」（同一個 key）：排著的那一行消失，不留一則人說的話', () => {
     const pending = fold(inboxFrame({ items: [], nextStep: [notice] }));
     const claimed = reduceConversation(
       pending,
@@ -105,7 +105,10 @@ describe('背景子代理的結算通知排在插話那一條（#851）', () => 
         ],
       }),
     );
-    expect(claimed.entries).toEqual([]);
+    // 折疊器長出 `notice`（#851）：id 跟排著時那一行的 key 是同一個，畫面可以同一格換成正式的。
+    expect(claimed.entries).toEqual([
+      { kind: 'notice', id: 'inbox:settled-a', source: 'subagent-settled', inboxId: 'settled-a' },
+    ]);
     expect(pendingSteers(claimed)).toEqual([]);
   });
 });

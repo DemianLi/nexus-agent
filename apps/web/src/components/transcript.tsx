@@ -193,6 +193,12 @@ function Entry({
     return null;
   }
 
+  if (entry.kind === 'notice') {
+    // 折疊器長出來的「這一輪是被什麼叫醒的」（#851）。**這裡先不畫**：只為了讓聯集多一支之後這條 switch 仍編得過
+    // （AGENTS.md「跨套件的型別收緊必須原子落地」的機械適配）；怎麼畫是 dev-ui 的事。
+    return null;
+  }
+
   if (entry.kind === 'tool') {
     // 交出計劃的那一顆畫成計劃卡（#654）。
     if (entry.name === EXIT_PLAN_MODE) return <PlanToolCard entry={entry} beam={beam} />;
