@@ -73,6 +73,8 @@ import { CompositeBackend, createDeepAgent } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
 import { TextOnlyStateBackend } from './binary-read.js';
+import { createToolResultStash } from './tool-result-stash.js';
+import type { ToolResultStashOptions } from './tool-result-stash.js';
 import { assertHarnessProfileDeclared } from './harness-profile.js';
 import type { HarnessProfileEffects } from './harness-profile.js';
 import { DEFAULT_RECURSION_LIMIT, RECURSION_LIMIT_SERVICE } from './settings/recursion-limit.js';
@@ -110,6 +112,13 @@ export class AssemblyDropError extends Error {
 export interface CreateNexusAgentOptions {
   /** plugin 清單。順序有意義：middleware 的順序、以及 `except` 的射程都跟著它。 */
   readonly plugins: readonly PluginEntry[];
+  /**
+   * 過大的工具結果暫存到主機上的哪個私有目錄（[#734](https://github.com/DemianLi/nexus-agent/issues/734)）。
+   * 給了，基座的 `/large_tool_results/` 前綴就路由到那個根底下按會話分的目錄，續接之後讀得回；寫不進去退回記憶體。
+   * **省略就是今天的記憶體暫存**：eval、spike 與沒有會話日誌的組裝沒有「續接時回到同一個會話」的身分，落盤只會留下
+   * 沒人清的檔。細節與偏離見 `tool-result-stash.ts` 的檔頭。
+   */
+  readonly toolResultStash?: ToolResultStashOptions;
   /**
    * **哪幾個條目可以少掛**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)），以條目物件比對
    * （放進 {@link plugins} 的那一顆）。
@@ -350,7 +359,7 @@ export type NexusAgentHandle = Awaited<ReturnType<typeof createNexusAgent>>;
 export const TOOL_RESULT_STASH_PREFIX = '/large_tool_results';
 
 /**
- * 把工具結果暫存那一格路由到獨立的 {@link TextOnlyStateBackend}，不讓它落在 agent 的工作區上。
+ * 把工具結果暫存那一格路由到獨立的去處，不讓它落在 agent 的工作區上。
  *
  * ## 它修的是一個會丟資料的缺陷（[#170](https://github.com/DemianLi/nexus-agent/issues/170)）
  *
@@ -381,27 +390,38 @@ export const TOOL_RESULT_STASH_PREFIX = '/large_tool_results';
  * - **`read-only`**：那次 write 不再被 fence 擋掉，缺陷消失。
  * - **`workspace-write`**：暫存不再落在使用者的專案目錄裡。今天它會留下永遠沒人清的
  *   `<root>/large_tool_results/*.txt`；dsh 的 spill 同樣**不寫工作區**，它有自己的私有根。
- * - **預設（`StateBackend`）**：路由到另一個 `StateBackend`，行為等價（實測）。
  * - 而且它不必知道那次 write **為什麼**會失敗——`ENOSPC`、`EACCES`、掛載唯讀，一起蓋掉。
  *
- * **代價講明白：暫存改放在 graph state 裡，所以它進 checkpoint。** 預設組裝本來就是這樣，
- * 但磁碟型的 backend 今天是把那段文字移出 state 的，這一改等於移回來。跑完之後它也不再
- * 留在磁碟上供事後翻查。**與 dsh 的差別也在這裡**：它的 spill 存在宿主上一個私有目錄
- * （0700／`open(…, 'wx', 0o600)`）並有保留期清理，我們換成 state —— 理由是 `read-only`
- * 不該因為這件事開始碰磁碟，而且 state 不需要清理政策。要改成落盤的話，換的就是這裡
- * 這一個路由目標。
+ * ## 去向：主機上的私有目錄（[#734](https://github.com/DemianLi/nexus-agent/issues/734)），退路是記憶體
+ *
+ * 給了 `stash`（產品路徑上兩個入口都給）：路由到主機上按會話分的私有目錄，目錄 0700、檔案 0600，所以 CLI
+ * `--resume` 或 serve 重開之後，預覽指著的路徑還讀得到同一個檔（`conversation-restore.ts` 照同一條規則重算路徑）。
+ * 這一改**推翻了原本「放記憶體」的理由**——「唯讀模式不該碰磁碟、state 不需要清理政策」是偏好，不是基座做不到：
+ * 唯讀指的是使用者的**工作區**，這個私有目錄不在工作區裡（dsh 的 spill 同樣如此）；清理政策改由啟動時的保留期
+ * 清理承擔（`tool-result-stash.ts` 的 `cleanupToolResultStash`）。
+ * **寫不進主機目錄就退回記憶體**（今天的 {@link TextOnlyStateBackend}），所以 #170 的「存不下就丟原文」不會復發。
+ *
+ * 沒給 `stash`（eval、spike、沒有會話日誌的組裝）維持記憶體：它是 graph state 的一部分，會進 checkpoint，
+ * 跑完也不留在磁碟上供事後翻查。偏離 dsh 的三點（固定根、檔名由工具呼叫編號推出、會話鑰匙由呼叫端給）
+ * 登記在 `tool-result-stash.ts` 的檔頭。
  *
  * @param backend - 組裝點的 default backend。
+ * @param stash - 主機暫存的根與會話鑰匙；省略就是記憶體。
  * @returns 同一個 backend，外面包一層只有這一條路由的 `CompositeBackend`。
  */
-function withToolResultStash(backend: AnyBackendProtocol): AnyBackendProtocol {
+function withToolResultStash(
+  backend: AnyBackendProtocol,
+  stash?: ToolResultStashOptions,
+): AnyBackendProtocol {
   // **路由鍵要有結尾斜線**（[#354](https://github.com/DemianLi/nexus-agent/issues/354)），理由同
   // {@link withConversationHistory}。少了它，照確切路徑 `read_file` 仍讀得到，但在這個目錄底下
   // `ls` 列出 `/large_tool_result// (directory)`、`grep` 回 No matches（實測）。代價同歷史那一格：
   // 預設組裝裡 state 的 `files` 是共用的，模型在根目錄看得到 `/call_<id>.txt`——斜線之前也看得到，
   // 只是形狀是 `//call_<id>.txt`（`tool-result-stash.test.ts` 的 state 那條記著）。
+  // 給了 `stash` 之後，暫存不再放在對話狀態裡，那一格只剩退回記憶體時才會出現。
   return new CompositeBackend(backend, {
-    [`${TOOL_RESULT_STASH_PREFIX}/`]: new TextOnlyStateBackend(),
+    [`${TOOL_RESULT_STASH_PREFIX}/`]:
+      stash === undefined ? new TextOnlyStateBackend() : createToolResultStash(stash),
   });
 }
 
@@ -537,7 +557,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     const params = foldRegistry(registry, {
       defaultBackend: withConversationHistory(
         // 墊底的虛擬 FS 讀到二進位檔照 dsh 拒絕（#642），路由那兩格同一種。
-        withToolResultStash(options.backend ?? new TextOnlyStateBackend()),
+        withToolResultStash(options.backend ?? new TextOnlyStateBackend(), options.toolResultStash),
       ),
       toolOrder: options.toolOrder,
       baseToolNames: options.baseToolNames ?? BASE_TOOL_NAMES,

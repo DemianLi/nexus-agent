@@ -21,11 +21,14 @@
  *
  * ## 回不來的
  *
- * 虛擬檔案系統（沒給 `--workspace` 時的檔案）、工具結果暫存（[#170](https://github.com/DemianLi/nexus-agent/issues/170)）、
+ * 虛擬檔案系統（沒給 `--workspace` 時的檔案）、
  * 摘要器的會話歷史檔（[#348](https://github.com/DemianLi/nexus-agent/issues/348)：灌回去的摘要仍寫著
  * 「完整歷史存在某某路徑」，那時讀不到）與停在核准點還沒答的那張卡都在 graph state 裡，而那一軸（`stateSchema`＋checkpointer）是我們偏離 dsh 的產物
  * （[#155](https://github.com/DemianLi/nexus-agent/issues/155)），日誌上沒有它們。沒答的那張卡推回來是一則補上的
  * 錯誤結果（dsh 的 `repair.ts`），見 `conversation-replay.ts`。
+ *
+ * **工具結果暫存回得來**（[#734](https://github.com/DemianLi/nexus-agent/issues/734)）：它存在主機的私有目錄、
+ * 按會話分目錄（`tool-result-stash.ts`），不在 graph state 裡，所以這一條路灌回去的預覽指的路徑讀得到。
  */
 
 import { ToolMessage } from '@langchain/core/messages';
@@ -55,9 +58,8 @@ export interface RestorableAgent {
 // `TOO_LARGE_TOOL_MSG`），基座沒有匯出它們。`conversation-restore.test.ts` 拿真的基座換出來的那則逐字比對，
 // 升級基座時字變了就紅在那裡。
 //
-// 預覽裡指的路徑**續接之後讀不到**：暫存在 graph state 裡（`agent-factory.ts` 的 `withToolResultStash`），
-// 沒有跟著回來。重算的仍然是模型當時看到的字——續接前後模型看到同一則，讀不到那個檔是暫存回不來的後果，
-// 另外披露。
+// 預覽裡指的路徑**續接之後讀得到**（#734）：暫存在主機的私有目錄、按會話分目錄
+// （`tool-result-stash.ts`），續接用同一個 run 目錄當鑰匙，找得到原來那個檔。重算的仍然是模型當時看到的字。
 
 /** 基座的 `toolTokenLimitBeforeEvict` 預設 `2e4`，乘 4 是字元數。組裝點沒改它。 */
 const EVICTION_THRESHOLD_CHARS = 2e4 * 4;
