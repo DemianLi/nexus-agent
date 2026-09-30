@@ -34,7 +34,7 @@
  *
  * ## 沒做的
  *
- * {@link BackgroundSubagentHost.close} 只等進行中的輪收完，不中止它們。撞到輸出上限時，中介層在背景圖上照樣丟工具呼叫
+ * 撞到輸出上限時，中介層在背景圖上照樣丟工具呼叫
  * （它在子代理的那一疊裡），並在 `MaxTokensCarrier` 記一筆；一次性的 `task` 由父圖那一側取走，背景位址沒有人取，
  * 每個撞過上限的背景子代理在載體裡留一筆（同一個編號會蓋掉，數量以派出的子代理為界）。結算摘要的 `max-tokens` 不靠它，
  * 讀的是子代理自己日誌上回覆的 `finish_reason`。
@@ -42,6 +42,7 @@
  * @module
  */
 
+import { AsyncResource } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 
 import { HumanMessage } from '@langchain/core/messages';
@@ -260,8 +261,13 @@ export class BackgroundSubagentHost {
     this.#compile = options.compile;
     this.#enter = options.enter ?? ((_log, run) => run());
     this.#warn = options.warn;
-    this.#onSettled = options.onSettled;
-    this.#onMessage = options.onMessage;
+    // **出口綁在建構這一刻的非同步環境**：`onMessage` 是從子代理的工具呼叫裡被叫的，而出口會排程主對話的一輪——
+    // 不綁的話那一輪繼承子代理的 LangGraph／日誌路由環境，主對話的回覆就記到子代理的日誌名下（#849 的 live 實跑抓到）。
+    // `onSettled` 本來就從迴圈的環境叫，一起綁只是讓兩個出口的規矩一致。
+    this.#onSettled =
+      options.onSettled === undefined ? undefined : AsyncResource.bind(options.onSettled);
+    this.#onMessage =
+      options.onMessage === undefined ? undefined : AsyncResource.bind(options.onMessage);
     const maxActive = options.maxActive ?? DEFAULT_MAX_ACTIVE_BACKGROUND_SUBAGENTS;
     if (!Number.isInteger(maxActive) || maxActive < 1) {
       throw new Error(`背景子代理的並存上限要是 ≥ 1 的整數，收到 ${String(maxActive)}`);
@@ -476,9 +482,20 @@ export class BackgroundSubagentHost {
     }
   }
 
-  /** 不再收新的輪，等排著的與進行中的收完（不中止，見檔頭），然後結束迴圈。 */
+  /**
+   * 不再收新的輪，**中止**進行中的（走合作式中止，同 `interrupt`），排著的不再跑，然後等它們收完、結束迴圈。
+   *
+   * 中止是[#841](https://github.com/DemianLi/nexus-agent/issues/841)補的：背景續行變成 serve 的出廠預設之後，
+   * 關 thread（伺服器停止）不能等一個還在燒模型的子代理自己想完；等它收完的話，一個跑很久的子代理會讓整台 server
+   * 停不下來。被中止的那一輪照常寫 `turn/end`（reason aborted）、照常結算通知（主對話已收線時只落進佇列，不喚醒）。
+   */
   async close(): Promise<void> {
     this.#closed = true;
+    for (const job of this.#queue) this.#paused.add(job.runId);
+    for (const [runId, controller] of this.#running) {
+      this.#paused.add(runId);
+      controller.abort();
+    }
     this.#wake?.();
     await this.#loop;
   }

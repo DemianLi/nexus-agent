@@ -415,6 +415,17 @@ describe('背景（預設）：當場回編號，背景那一輪自己跑', () =
     }
   });
 
+  it('一份組裝只接一個會話：第二次接上直接拒絕，不靜靜蓋掉第一個 host', async () => {
+    const run = await assemble({ rootTurns: [{ content: '好' }], workerTurns: [], background: {} });
+    try {
+      expect(() => run.built.attachSession(new SessionRegistry('root-2'))).toThrow(
+        '一份組裝只接一個',
+      );
+    } finally {
+      await run.close();
+    }
+  });
+
   it('沒有接上會話（attachSession 之前）：回錯誤結果', async () => {
     const run = await assemble({
       rootTurns: [delegate(true), { content: '根收尾' }],

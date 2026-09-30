@@ -136,6 +136,9 @@ export class BackgroundDelegation {
     compile: (subagent: string) => BackgroundAgent,
     port: BackgroundParentPort = {},
   ): () => Promise<void> {
+    // 一份組裝一個會話（serve 一條 thread 一份組裝）：第二次接上會把第一個 host 的位置蓋掉，
+    // 那個 host 的子代理就從工具的視線裡消失，所以直接拒絕，不靜靜蓋掉。
+    if (this.#host !== undefined) throw new Error('背景子代理已經接上一個會話，一份組裝只接一個');
     const sandbox = this.#options.sandbox;
     const host = new BackgroundSubagentHost({
       sessions,

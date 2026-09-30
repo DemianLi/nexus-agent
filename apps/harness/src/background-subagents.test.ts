@@ -30,7 +30,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
-import { BackgroundSubagentHost, withReturnGuidance } from './background-subagents.js';
+import {
+  BackgroundSubagentHost,
+  settlementSummary,
+  withReturnGuidance,
+} from './background-subagents.js';
 import type {
   BackgroundAgent,
   BackgroundAgentMessage,
@@ -1176,6 +1180,33 @@ describe('sendToParent（#849）', () => {
     await host.close();
   });
 
+  it('出口在建構時的非同步環境裡跑，不繼承呼叫端（子代理的工具呼叫）的環境', async () => {
+    const context = new AsyncLocalStorage<string>();
+    const seen: (string | undefined)[] = [];
+    const settledSeen: (string | undefined)[] = [];
+    const sessions = new SessionRegistry('root-1');
+    const agent: BackgroundAgent = {
+      async streamEvents() {
+        return (async function* () {})() as never;
+      },
+    };
+    const host = new BackgroundSubagentHost({
+      sessions,
+      compile: () => agent,
+      onMessage: () => seen.push(context.getStore()),
+      onSettled: () => settledSeen.push(context.getStore()),
+    });
+    const { runId, outcome } = host.start({ subagent: 'w', text: '幹活' });
+    await outcome;
+    context.run('子代理的工具呼叫', () =>
+      host.sendToParent({ runId, targetId: 'root-1', message: '喂' }),
+    );
+    expect(seen).toEqual([undefined]);
+    // 結算通知同一條規矩：從迴圈的環境叫，看不到任何呼叫端的環境。
+    expect(settledSeen.every((store) => store === undefined)).toBe(true);
+    await host.close();
+  });
+
   it('只認直接 parent：兄弟、自己、不存在的編號、空字串都拒絕，出口一則都沒收到', async () => {
     const { host, messages } = setup();
     const a = host.start({ subagent: 'w', text: '甲' });
@@ -1226,5 +1257,73 @@ describe('sendToParent（#849）', () => {
         'earlier messages as well when a finding changes what the parent should do next; sending a message ' +
         'does not end your turn.',
     );
+  });
+});
+
+// ───────────────────────────── 關閉（#841） ─────────────────────────────
+
+describe('close 中止進行中的輪（#841）', () => {
+  function setup() {
+    const sessions = new SessionRegistry('root-1');
+    const started: string[] = [];
+    const aborted: string[] = [];
+    const settled: BackgroundSettlement[] = [];
+    const agent: BackgroundAgent = {
+      async streamEvents(input, config) {
+        const text = String(
+          (input as { messages: { content: unknown }[] }).messages.at(-1)?.content,
+        );
+        const runId = config.configurable[BACKGROUND_SESSION_CONFIG_KEY] as string;
+        const signal = config.configurable[TURN_CANCEL_CONFIG_KEY] as AbortSignal;
+        started.push(text);
+        // 永遠不自己結束，只有被中止才放行。
+        await new Promise<void>((resolve) => {
+          signal.addEventListener(
+            'abort',
+            () => {
+              aborted.push(runId);
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        return (async function* () {})() as never;
+      },
+    };
+    const host = new BackgroundSubagentHost({
+      sessions,
+      compile: () => agent,
+      onSettled: (settlement) => settled.push(settlement),
+    });
+    return { host, started, aborted, settled };
+  }
+
+  it('進行中的輪被中止，close 不會等一個永遠不結束的子代理；結算是 aborted', async () => {
+    const { host, started, aborted, settled } = setup();
+    const { runId, outcome } = host.start({ subagent: 'w', text: '卡住的' });
+    while (started.length === 0) await new Promise((resolve) => setTimeout(resolve, 2));
+    await host.close();
+    expect(aborted).toEqual([runId]);
+    expect(await outcome).toEqual({ ok: true });
+    expect(settled.map((each) => each.summary)).toEqual([settlementSummary(runId, 'aborted')]);
+  });
+
+  it('剛派出去、迴圈還沒撿起來就關閉：這一輪不開跑，交回沒跑成', async () => {
+    const { host, started } = setup();
+    const { outcome } = host.start({ subagent: 'w', text: '還沒開始' });
+    await host.close();
+    expect(started).toEqual([]);
+    expect(await outcome).toMatchObject({ ok: false });
+  });
+
+  it('排在後面的輪不再跑：關閉之後只有已經在跑的那一輪被中止收尾', async () => {
+    const { host, started } = setup();
+    const { runId, outcome } = host.start({ subagent: 'w', text: '第一輪' });
+    while (started.length === 0) await new Promise((resolve) => setTimeout(resolve, 2));
+    const queued = host.send({ runId, message: '第二輪' });
+    await host.close();
+    await outcome;
+    expect(started).toEqual(['第一輪']);
+    expect(await queued).toMatchObject({ ok: false });
   });
 });
