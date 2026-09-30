@@ -118,7 +118,7 @@ export interface DeliverableFileStore {
 }
 
 /**
- * 形狀檢查，同隔壁 `isFileDiff`：對不上就當成讀壞了。
+ * 形狀檢查，同 wire 的 `isChangesDiff`：對不上就當成讀壞了。
  *
  * **`version` 只檢查「是非空字串」**——它的契約只有「內容換了就換值」，長相不歸我們管。
  */

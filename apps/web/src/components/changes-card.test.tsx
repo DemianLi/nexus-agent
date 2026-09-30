@@ -1,11 +1,10 @@
 import type { WorkspaceChangesSummary } from '@nexus/wire';
-import { changesSummaryPath } from '@nexus/wire';
+import { changesSummaryUrl } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ChangesCard, COLLAPSED_ROWS } from '@/components/changes-card';
 import { createChangesStores } from '@/lib/changes-diff';
-import { isChangesSummary } from '@/lib/changes-summary';
 import { axeViolations } from '@/test/axe';
 
 /** 改動卡（#443 web 第一刀）：摘要讀一次、404 不畫、一檔一列、超過三列收起。 */
@@ -52,7 +51,7 @@ describe('改動摘要的讀取', () => {
   it('打 thread 底下的摘要路由，帶 seq 與 content-type（同 wire client）', async () => {
     const { calls } = await renderCard(() => json(SUMMARY));
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toBe(`http://h${changesSummaryPath('t 1')}?seq=7`);
+    expect(calls[0]!.url).toBe(`http://h${changesSummaryUrl('t 1', 7)}`);
     expect(calls[0]!.init?.method).toBe('GET');
     expect(calls[0]!.init?.headers).toEqual({ 'content-type': 'application/json' });
   });
@@ -77,12 +76,6 @@ describe('改動摘要的讀取', () => {
     render(<ChangesCard seq={7} changes={changes} />);
     await act(async () => {});
     expect(calls).toHaveLength(1);
-  });
-
-  it('形狀檢查認得出合法的摘要', () => {
-    expect(isChangesSummary(SUMMARY)).toBe(true);
-    expect(isChangesSummary(null)).toBe(false);
-    expect(isChangesSummary({ ...SUMMARY, total: '2' })).toBe(false);
   });
 });
 
