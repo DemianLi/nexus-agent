@@ -245,8 +245,16 @@ import type { SessionEvent } from './session-log.js';
  *
  * 升版照新增詞彙的慣例（同 11、12、14、16），不是非升不可：21 讀到它只看 `reason.kind`，一樣當成「被打斷」，
  * 沒有任何讀方分 `cause`。
+ *
+ * ## 23：`turn/start` 多一種 `agent-message`
+ *
+ * 父代理用 `send_message` 給背景子代理追加指示（[#839](https://github.com/DemianLi/nexus-agent/issues/839)），子代理那一輪
+ * 以 `{kind:'agent-message', text, senderSessionId}` 開頭。v22 的檔直接讀：那時候沒有這條路，子代理的輪只有 `message`。
+ *
+ * 升版照新增詞彙的慣例（同 18、19、22），不是非升不可：授權判別對認不得的 `kind` 都是停住回假（fail closed），
+ * 22 讀到它不會把它當成人。
  */
-export const SESSION_LOG_FORMAT_VERSION = 22;
+export const SESSION_LOG_FORMAT_VERSION = 23;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。

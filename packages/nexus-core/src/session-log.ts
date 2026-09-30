@@ -290,6 +290,20 @@ export interface SessionEventMap {
     | { readonly kind: 'message'; readonly text: string }
     | { readonly kind: 'resume' }
     | {
+        readonly kind: 'agent-message';
+        /**
+         * 送進模型的那一串字，**含 dsh 的前綴** `Agent <寄件人> sent a message: `。這一份與圖那一份是同一個值。
+         * 前綴是模型分辨「這是父代理說的、不是任務本身」的唯一線索，所以記進日誌的就是它。
+         */
+        readonly text: string;
+        /**
+         * 寄件的會話 id（父代理）。照 dsh 的 `AgentMessageSource`（`subagent/src/continuation-messages.ts`，`477b4f4`）：
+         * **只記寄件人，不授予權限**。這一輪背後沒有人：`hasDirectHumanTurn` 對認不得的 `kind` 停住回假，
+         * 所以它拿不到直接人類授權（#152 的底線）。
+         */
+        readonly senderSessionId: string;
+      }
+    | {
         readonly kind: 'goal';
         /** 送進模型的那一串字。**這一份與圖那一份是同一個值**，見 `thread-pump.ts`。 */
         readonly text: string;

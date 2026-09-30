@@ -39,7 +39,7 @@ import { randomUUID } from 'node:crypto';
 
 import { HumanMessage } from '@langchain/core/messages';
 import { BACKGROUND_SESSION_CONFIG_KEY, TURN_CANCEL_CONFIG_KEY } from '@nexus/core';
-import type { SessionLog, SessionRegistry } from '@nexus/core';
+import type { SessionEventMap, SessionLog, SessionRegistry } from '@nexus/core';
 
 import { BACKGROUND_RUN_PREFIX } from './background-run-id.js';
 import { markProjectionsHandled } from './thread-pump.js';
@@ -96,7 +96,10 @@ export interface BackgroundSubagentHostOptions {
 interface Job {
   readonly runId: string;
   readonly subagent: string;
+  /** 送進模型的那串字。 */
   readonly text: string;
+  /** 這一輪開頭寫進日誌的 `turn/start`；`text` 與它裡面的 `text` 是同一個值。 */
+  readonly turn: SessionEventMap['turn/start'];
   readonly settle: (outcome: BackgroundRoundOutcome) => void;
 }
 
@@ -166,9 +169,52 @@ export class BackgroundSubagentHost {
     this.#known.set(input.runId, input.subagent);
     // 一次新的送話喚醒被中斷後暫停的佇列（排在前面的照舊先跑）。
     this.#paused.delete(input.runId);
+    return this.#enqueue({ ...input, turn: { kind: 'message', text: input.text } });
+  }
+
+  #enqueue(job: Omit<Job, 'settle'>): Promise<BackgroundRoundOutcome> {
     return new Promise((settle) => {
-      this.#queue.push({ ...input, settle });
+      this.#queue.push({ ...job, settle });
       this.#wake?.();
+    });
+  }
+
+  /**
+   * 父代理給一個背景子代理追加指示（[#839](https://github.com/DemianLi/nexus-agent/issues/839)，dsh
+   * `SubagentRuntime.sendMessage`，`477b4f4`）。**同步接受或拒絕**，接受之後那一輪獨立跑。
+   *
+   * - 只有這個主對話派出去的編號（host 就是這個主對話的）；不認得的編號拋，訊息說明原因。
+   * - 模型看到的文字加 dsh 的前綴 `Agent <寄件人> sent a message: `；日誌那一輪的 `turn/start` 是
+   *   `agent-message`（記寄件人，**不授予權限、也不是人話**），不是 `message`。
+   * - 對方閒著：開新的一輪。對方正在跑：**排成它的下一輪**（不插進當下那一輪——那是卡 7）。
+   * - 對方是被中斷後暫停的：這一則喚醒它，排在前面的輪次照舊先跑（#838）。
+   * - 對方已結算而名額滿了：拒絕（同 `submit`，#836）。
+   *
+   * @returns 接受之後那一輪的下場（不會 reject）。
+   * @throws host 已關閉；沒有這個編號；名額滿了。
+   */
+  send(input: {
+    readonly runId: string;
+    readonly message: string;
+  }): Promise<BackgroundRoundOutcome> {
+    if (this.#closed) throw new Error('背景子代理的載體已經關閉');
+    const subagent = this.#known.get(input.runId);
+    if (subagent === undefined) {
+      throw new Error(
+        `沒有編號 ${input.runId} 的背景子代理（用 list_agents 看有哪些；只能傳給自己派出去的）`,
+      );
+    }
+    const full = this.#capacityRefusal(input.runId);
+    if (full !== undefined) throw new Error(full);
+    this.#paused.delete(input.runId);
+    // 寄件人＝這個主對話的 root：host 是它的，而這顆工具只給 root（`rootOnly`），所以不必由呼叫端聲明。
+    const sender = this.#sessions.root.sessionId;
+    const text = `Agent ${sender} sent a message: ${input.message}`;
+    return this.#enqueue({
+      runId: input.runId,
+      subagent,
+      text,
+      turn: { kind: 'agent-message', text, senderSessionId: sender },
     });
   }
 
@@ -328,7 +374,7 @@ export class BackgroundSubagentHost {
     this.#running.set(job.runId, controller);
     try {
       log = this.#sessions.open({ kind: 'subagent', runId: job.runId });
-      log.append('turn/start', { kind: 'message', text: job.text });
+      log.append('turn/start', job.turn);
       await this.#enter(log, () => this.#drive(log!, job, controller.signal));
       // 被父代理中斷的那一輪收成 aborted/parent；沒被中斷就是正常結束。
       log.append(
