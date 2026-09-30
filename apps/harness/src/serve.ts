@@ -85,6 +85,7 @@ import { browserSessionPlugin } from './settings/browser-session.js';
 import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
+import { spillPolicyPlugin } from './settings/spill-policy.js';
 import { resolveToolResultStashRoot, toolResultStashPlugin } from './settings/tool-result-stash.js';
 import { toolTextPlugin } from './settings/tool-text.js';
 import { cleanupToolResultStash } from './tool-result-stash.js';
@@ -391,6 +392,8 @@ async function startServer(
   const stashConfig = startupSetting(plugins, toolResultStashPlugin);
   const stashRoot = resolveToolResultStashRoot(stashConfig, env);
   await cleanupToolResultStash(stashRoot, stashConfig.cleanupPeriodDays, { warn: log });
+  // 外溢層的預算（#719）：server 的性質，解一次；省略就是不掛。
+  const spillPolicy = startupSetting(plugins, spillPolicyPlugin);
   // 真實供應商的五個連線值（#545）。**model 是一條 thread 一顆**（下面每次 `createCliAgent` 各建
   // 一顆），但設定是 server 的性質：解在這裡，設定寫壞的話在 server 起來之前就失敗，而不是等到
   // 第一條 thread；啟動時印的模型名也從這一份來。
@@ -599,6 +602,9 @@ async function startServer(
                 session: `${sessionStore.directory}\0${threadId}`,
                 warn: log,
               },
+              ...(spillPolicy.maxInlineTokens !== undefined && {
+                spillPolicy: { maxInlineTokens: spillPolicy.maxInlineTokens },
+              }),
             }),
           },
           threadPlugins,

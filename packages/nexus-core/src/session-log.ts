@@ -640,7 +640,15 @@ export interface SessionEventMap {
    * **`message` 是選填，兩個理由**：8 以前的檔沒有；以及圍堵在 handler 的回傳裡找不到屬於這次呼叫的
    * ToolMessage 時不放（一個不帶那則訊息的 `Command`——今天沒有生產者）。
    *
-   * ## 記的是工具的輸出，不是模型最後看到的預覽
+   * ## 記的是圍堵看得到的那一則：外溢層開著時是預覽，關著（或存不下）時超過 80,000 字元的仍是全文
+   *
+   * **外溢層（[#719](https://github.com/DemianLi/nexus-agent/issues/719)，`spill-policy.ts`）排在圍堵內層**：一則結果超過
+   * `maxInlineTokens`（出貨 12,500）就在那裡換成頭尾預覽加一句帶路徑的通知，圍堵看到的、記進日誌的就是那一則——
+   * **照 dsh 只記預覽**（dsh `tool-calls.ts:152-156`，日誌記外溢換過之後的那則）。超過保留期（預設 30 天）之後原文沒了，
+   * 日誌與評估掃描、web 工具卡讀到的只剩預覽。這一段先前登記的偏離（「記換之前的全文」）**收窄成下面這一半，沒有刪**：
+   *
+   * 外溢層關掉（把 `maxInlineTokens` 刪掉）、沒有存處（沒有會話鑰匙），或存不下（保留原結果）時，超過 80,000 字元的仍由基座換成
+   * 預覽，而基座排在圍堵**外層**，下面整段原樣成立。
    *
    * 基座的 `FilesystemMiddleware` 排在圍堵**外層**（`createDeepAgent` 把它放在每一顆自訂 middleware
    * 之前），它的 `wrapToolCall` 在文字超過 80,000 字元時把結果搬去 `/large_tool_results/`、換上一段
