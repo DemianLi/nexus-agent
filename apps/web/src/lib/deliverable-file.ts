@@ -19,7 +19,7 @@
  * **`version` 是唯一有比較契約的欄位**：不解析它，只比它——同值即同一份內容。翻頁時用它擋掉
  * 「兩個版本的頁混在同一份畫面上」，那會畫出一份從來不存在的檔。位元組窗口讀到的長行也一樣。
  *
- * ## `limit`：平常不送，收到 413 才送
+ * ## `limit`：平常不送，收到 `too-large` 才送
  *
  * 每頁幾行的上限是 `#settings/deliverable-files` 那一列的 `maxLines`，預設值
  * `DEFAULT_DELIVERABLE_MAX_LINES` 住在 `apps/harness/src/settings/deliverable-files.ts`、沒有從 `@nexus/wire`
@@ -27,10 +27,10 @@
  * 翻頁只需要回應裡的 `lines`。
  *
  * **所以平常不送**（[#543](https://github.com/DemianLi/nexus-agent/issues/543) 考慮過送一個固定的
- * `limit=1000`，收回了：路由對 `limit > maxLines` 回 400，有人把 `maxLines` 設得比它小，每一個預覽都會變成
- * 「座標不對」）。**只有收到 413 才送**（[#555](https://github.com/DemianLi/nexus-agent/issues/555)）：一頁超過
+ * `limit=1000`，收回了：命令對 `limit > maxLines` 回協定錯誤 `invalid_argument`，有人把 `maxLines` 設得比它小，每一個預覽都會變成
+ * 「座標不對」）。**只有收到 `too-large` 才送**（[#555](https://github.com/DemianLi/nexus-agent/issues/555)）：一頁超過
  * 頁的位元組上限時，要縮小 `limit` 才分得出是「中長的行太多」還是「這一行本身太長」，而縮的規則保證不會把
- * 一個超過 `maxLines` 的數變成畫面上的 400。規則在 `page-limit.ts`。
+ * 一個超過 `maxLines` 的數變成畫面上的「座標不對」。規則在 `page-limit.ts`。
  *
  * ## 超過頁上限的一行：位元組窗口
  *
@@ -392,7 +392,7 @@ export function createDeliverableFileStore({
     return { start: position, version };
   };
 
-  /** `limit=1` 還是 413：這一行改走位元組窗口。第一個窗口順便核對位置。 */
+  /** `limit=1` 還是 `too-large`：這一行改走位元組窗口。第一個窗口順便核對位置。 */
   const startLine = async (seq: number, index: number, offset: number) => {
     const at = key(seq, index, offset);
     const located = await startOf(seq, index, offset);
@@ -426,7 +426,7 @@ export function createDeliverableFileStore({
     accept(seq, index, line, window, start - from);
   };
 
-  /** 讀一頁；413 照 `page-limit.ts` 縮 `limit`，縮到底改走位元組窗口。 */
+  /** 讀一頁；`too-large` 照 `page-limit.ts` 縮 `limit`，縮到底改走位元組窗口。 */
   const readPage = async (seq: number, index: number, offset: number) => {
     const at = key(seq, index, offset);
     const file = fileKey(seq, index);
