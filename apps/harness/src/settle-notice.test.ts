@@ -447,3 +447,63 @@ describe('上線與歷史：不畫人的泡泡', () => {
     expect(humans).toHaveLength(1);
   });
 });
+
+describe('通知長成畫面上的一格，即時與歷史一致（#851）', () => {
+  /** 折出來的畫面，只留判別欄：id 兩邊本來就不同（即時 `inbox:<id>`、歷史 `history-<seq>`）。 */
+  const shape = (frames: readonly Event[]) =>
+    reduceAll(emptyConversation(), frames).entries.map((entry) =>
+      entry.kind === 'notice' ? `notice:${entry.source}` : entry.kind,
+    );
+
+  it('叫醒閒著的主對話：人的話、通知，重新整理後同一個順序', async () => {
+    const { agent } = fakeAgent();
+    const run = open(agent);
+    try {
+      await run.pump.submit({ kind: 'message', text: '嗨', id: 'h1' });
+      await run.pump.whenIdle();
+      run.pump.notifySettled(NOTICE);
+      await run.pump.whenIdle();
+      const live = shape(run.frames);
+      expect(live).toEqual(['human', 'notice:subagent-settled']);
+      expect(shape(historyPage(run.pump.sessionLog.events).events)).toEqual(live);
+      // 即時那格的 id 跟排著時那一行是同一個 key（`inbox:<件的 id>`）。
+      const entry = reduceAll(emptyConversation(), run.frames).entries.at(-1);
+      expect(entry).toMatchObject({ kind: 'notice', inboxId: expect.any(String) });
+      expect(entry?.id).toBe(`inbox:${(entry as { inboxId: string }).inboxId}`);
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('輪中插進來的通知：落在那一輪裡插進來的那一刻，歷史同一個順序', async () => {
+    const hold = gate();
+    const { agent, inputs } = fakeAgent([{ holdBeforeClaim: hold.opened }]);
+    const run = open(agent, { stepInbox: true });
+    try {
+      const first = run.pump.submit({ kind: 'message', text: 'A', id: 'a' });
+      await until(() => inputs.length === 1);
+      run.pump.notifySettled(NOTICE);
+      hold.open();
+      await first;
+      await run.pump.whenIdle();
+      const live = shape(run.frames);
+      expect(live).toEqual(['human', 'notice:subagent-settled']);
+      expect(shape(historyPage(run.pump.sessionLog.events).events)).toEqual(live);
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('agent-message（#849）不長通知：那一件的顯示是另一張卡', async () => {
+    const { agent } = fakeAgent();
+    const run = open(agent);
+    try {
+      run.pump.receiveAgentMessage({ text: 'Agent x sent a message: 嗨', senderSessionId: 'x' });
+      await run.pump.whenIdle();
+      expect(shape(run.frames)).toEqual([]);
+      expect(shape(historyPage(run.pump.sessionLog.events).events)).toEqual([]);
+    } finally {
+      await run.close();
+    }
+  });
+});

@@ -13,6 +13,7 @@
  * | --- | --- |
  * | `turn/start`（`message`） | 人打的字（`message-start` `role: "human"`） |
  * | `user/message`（`source.kind: "user"`） | 輪中插的話（#710），同上 |
+ * | `turn/start`（`subagent-settled`）／`user/message`（`source.kind: "subagent-settled"`） | 「這裡有一則背景子代理結算通知」（#851）：`custom` frame，`data` 同即時（{@link settleNoticeData}）；位置就是人話會出現的地方（那一輪的開頭、或輪中插進來的那一刻） |
  * | `turn/start`（任何一種） | `lifecycle running` |
  * | `assistant/message` | 模型的回覆，連同推理（#527）；`interrupted` 的那則不收尾，由那一輪的中止標成「已停止」 |
  * | `tool/call` ／ `tool/result` | 工具卡開、收；那則結果的文字成功失敗都帶（成功是輸出、失敗是紅字，[#439](https://github.com/DemianLi/nexus-agent/issues/439)） |
@@ -66,6 +67,7 @@ import {
   HISTORY_PAGE_MESSAGES,
   INBOX,
   MODEL_USAGE,
+  SETTLE_NOTICE,
   SESSION_STATS,
   TITLE,
   TODOS,
@@ -238,6 +240,20 @@ export function deliverablesData(
     files: presented.files.map((file) => ({ ...file })),
   };
   return { name: DELIVERABLES_PRESENTED, payload };
+}
+
+/**
+ * 「這裡有一則背景子代理結算通知」在線上的 `custom` 事件 `data`（[#851](https://github.com/DemianLi/nexus-agent/issues/851)）。
+ * **只有歷史用**：即時的畫面由送出佇列的 `claimed`／`claimedNextStep` 長同一種 entry（`id` 是 `inbox:<件的 id>`），
+ * 歷史沒有送出佇列，所以另有這一顆，`id` 是 `history-<日誌 seq>`。
+ * @param id - 那一格 entry 的 `id`。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `SettleNoticePayload`。
+ */
+export function settleNoticeData(id: string): {
+  readonly name: typeof SETTLE_NOTICE;
+  readonly payload: { readonly id: string };
+} {
+  return { name: SETTLE_NOTICE, payload: { id } };
 }
 
 /**
@@ -640,6 +656,9 @@ export function historyFrames(
         if (turnOpen || suspended) close(event.time, { event: 'completed' });
         frames.push(lifecycle(event.time, { event: 'running' }));
         turnOpen = true;
+        if (event.data.kind === 'subagent-settled') {
+          frames.push(frame('custom', event.time, settleNoticeData(`history-${event.seq}`)));
+        }
         if (event.data.kind === 'message') {
           frames.push(
             ...message(
@@ -656,6 +675,10 @@ export function historyFrames(
         }
         break;
       case 'user/message': {
+        // 輪中插進來的結算通知（#851）：即時由 `claimedNextStep` 長「通知」，歷史照即時。
+        if (event.data.source.kind === 'subagent-settled') {
+          frames.push(frame('custom', event.time, settleNoticeData(`history-${event.seq}`)));
+        }
         // 輪中插的話（#710）：即時的畫面由 `inbox` 的 `claimedNextStep` 畫一則人的話，歷史照即時。外掛塞的不畫。
         if (isSteer(event)) {
           frames.push(
