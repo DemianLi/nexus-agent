@@ -60,6 +60,9 @@ export interface BackgroundAgent {
 export type BackgroundRoundOutcome =
   { readonly ok: true } | { readonly ok: false; readonly error: string };
 
+/** 每個主對話同時存活的背景子代理上限的預設值（dsh `SubagentRuntime.Config.maxActiveSubagents`，`477b4f4`）。 */
+export const DEFAULT_MAX_ACTIVE_BACKGROUND_SUBAGENTS = 8;
+
 export interface BackgroundSubagentHostOptions {
   /** 背景子代理的日誌開在哪：**root 的那張註冊表**，不另開第二張（第二張會讓 `forCall` 回 `ambiguous`，事件兩邊都沒有）。 */
   readonly sessions: SessionRegistry;
@@ -72,6 +75,14 @@ export interface BackgroundSubagentHostOptions {
   readonly enter?: <T>(log: SessionLog, run: () => T) => T;
   /** 拿不到日誌所以沒地方記的失敗，講一聲。不影響輪次。 */
   readonly warn?: (message: string) => void;
+  /**
+   * 同時存活的背景子代理上限，預設 {@link DEFAULT_MAX_ACTIVE_BACKGROUND_SUBAGENTS}，要求是 ≥ 1 的整數。
+   *
+   * **一個 host 就是一個主對話**（在 root 的註冊表上建），所以這個數就是「每個主對話各自的」，不是整台主機的；
+   * 主對話自己與一次性子代理不經過 host，不算在內。**存活**＝有輪次排著或正在跑；跑完了而且沒有排著的
+   * 就是已結算，讓出名額。已結算的再收到一句話（`submit`）要重新佔一格，滿了就被拒絕。
+   */
+  readonly maxActive?: number;
 }
 
 interface Job {
@@ -89,6 +100,7 @@ export class BackgroundSubagentHost {
   readonly #compile: (subagent: string) => BackgroundAgent;
   readonly #enter: NonNullable<BackgroundSubagentHostOptions['enter']>;
   readonly #warn: ((message: string) => void) | undefined;
+  readonly #maxActive: number;
   readonly #graphs = new Map<string, BackgroundAgent>();
   /** 已知的背景子代理：編號 → 子代理名。同一個編號不能換名字。 */
   readonly #known = new Map<string, string>();
@@ -104,6 +116,11 @@ export class BackgroundSubagentHost {
     this.#compile = options.compile;
     this.#enter = options.enter ?? ((_log, run) => run());
     this.#warn = options.warn;
+    const maxActive = options.maxActive ?? DEFAULT_MAX_ACTIVE_BACKGROUND_SUBAGENTS;
+    if (!Number.isInteger(maxActive) || maxActive < 1) {
+      throw new Error(`背景子代理的並存上限要是 ≥ 1 的整數，收到 ${String(maxActive)}`);
+    }
+    this.#maxActive = maxActive;
     // 迴圈在**這裡**起：它的環境就是建構這一刻的環境。
     this.#loop = this.#run();
   }
@@ -122,6 +139,8 @@ export class BackgroundSubagentHost {
     readonly text: string;
   }): Promise<BackgroundRoundOutcome> {
     if (this.#closed) return Promise.resolve({ ok: false, error: '背景子代理的載體已經關閉' });
+    const full = this.#capacityRefusal(input.runId);
+    if (full !== undefined) return Promise.resolve({ ok: false, error: full });
     const known = this.#known.get(input.runId);
     if (known !== undefined && known !== input.subagent) {
       return Promise.resolve({
@@ -146,19 +165,39 @@ export class BackgroundSubagentHost {
    * @param input.subagent - 子代理名（規格名）。
    * @param input.text - 第一輪的人話。
    * @returns 編號（`bg-` 加隨機，不是計數器：root 續接之後不能撞上舊日誌）與第一輪的下場。
-   * @throws host 已關閉；編不出這個子代理的圖。
+   * @throws host 已關閉；存活的背景子代理已達並存上限；編不出這個子代理的圖。
    */
   start(input: { readonly subagent: string; readonly text: string }): {
     readonly runId: string;
     readonly outcome: Promise<BackgroundRoundOutcome>;
   } {
     if (this.#closed) throw new Error('背景子代理的載體已經關閉');
+    // 先於編圖與開日誌：滿了就一樣東西都不留（沒有編號、沒有日誌）。
+    const full = this.#capacityRefusal(undefined);
+    if (full !== undefined) throw new Error(full);
     this.#agentFor(input.subagent);
     let runId: string;
     do runId = `${BACKGROUND_RUN_PREFIX}${randomUUID().replaceAll('-', '').slice(0, 12)}`;
     while (this.#known.has(runId));
     this.#sessions.open({ kind: 'subagent', runId });
     return { runId, outcome: this.submit({ runId, ...input }) };
+  }
+
+  /** 存活的背景子代理：有輪次排著或正在跑的編號。 */
+  #activeRunIds(): Set<string> {
+    return new Set([...this.#queue.map((job) => job.runId), ...this.#busy]);
+  }
+
+  /**
+   * 再收一個（或讓一個已結算的復活）會不會超過上限；會就回要給模型看的那句話。
+   *
+   * @param runId - 已有編號的（`submit`）；`undefined` 是全新的（`start`）。已存活的再收一句話不佔新的一格。
+   */
+  #capacityRefusal(runId: string | undefined): string | undefined {
+    const active = this.#activeRunIds();
+    if (runId !== undefined && active.has(runId)) return undefined;
+    if (active.size < this.#maxActive) return undefined;
+    return `背景子代理已達並存上限 ${String(this.#maxActive)}（現在有 ${String(active.size)} 個在跑）；等其中一個做完再派。`;
   }
 
   /** 排隊中與進行中的輪都收完。 */
@@ -183,10 +222,13 @@ export class BackgroundSubagentHost {
       if (job !== undefined) {
         // 從**迴圈**的環境拉起，不是從呼叫 `submit` 的環境。
         this.#busy.add(job.runId);
-        const round: Promise<void> = this.#round(job).finally(() => {
+        // **先讓出位子、再交下場**：呼叫端等到 `outcome` 的時候，這個子代理已經不算存活（並存上限、
+        // 之後的結算通知都靠這個順序）。
+        const round: Promise<void> = this.#round(job).then((outcome) => {
           this.#busy.delete(job.runId);
           this.#inflight.delete(round);
           this.#wake?.();
+          job.settle(outcome);
         });
         this.#inflight.add(round);
         continue;
@@ -213,7 +255,7 @@ export class BackgroundSubagentHost {
     return compiled;
   }
 
-  async #round(job: Job): Promise<void> {
+  async #round(job: Job): Promise<BackgroundRoundOutcome> {
     let outcome: BackgroundRoundOutcome;
     let log: SessionLog | undefined;
     try {
@@ -235,7 +277,7 @@ export class BackgroundSubagentHost {
       }
       outcome = { ok: false, error: message };
     }
-    job.settle(outcome);
+    return outcome;
   }
 
   #warnFailure(job: Job, message: string): void {

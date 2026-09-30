@@ -63,6 +63,8 @@ export const BACKGROUND_DELEGATION_MIDDLEWARE_NAME = 'nexusBackgroundDelegation'
 export interface BackgroundSubagentsOptions {
   /** 沙箱控制器（cli／serve 建的那一個）。沒有就不做快照與讀回。 */
   readonly sandbox?: Pick<SandboxModeController, 'delegate' | 'delegateFromLog'>;
+  /** 每個主對話同時存活的背景子代理上限，預設 8（#836），見 `BackgroundSubagentHostOptions.maxActive`。 */
+  readonly maxActive?: number;
 }
 
 const subagentSchema = z.object({
@@ -127,6 +129,7 @@ export class BackgroundDelegation {
     const host = new BackgroundSubagentHost({
       sessions,
       compile,
+      ...(this.#options.maxActive !== undefined && { maxActive: this.#options.maxActive }),
       ...(sandbox !== undefined && {
         enter: <T>(log: SessionLog, run: () => T): T => sandbox.delegateFromLog(log, run),
       }),
