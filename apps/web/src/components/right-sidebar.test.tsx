@@ -17,6 +17,7 @@ import type { LocatedFile } from '@/lib/deliverables-view';
 import { LAYOUT_KEY_PREFIX, WIDTH_KEY, openTab, EMPTY_LAYOUT } from '@/lib/right-sidebar';
 import type { SidebarLayout } from '@/lib/right-sidebar';
 import { axeViolations } from '@/test/axe';
+import { pageReply } from '@/test/deliverable-commands';
 import { memoryStorage } from '@/test/right-sidebar';
 
 /** 預覽捲到底才接下一段；這裡只讀第一段，觀察器什麼都不做。 */
@@ -67,24 +68,24 @@ const diffBody = (seq: number, index: number) =>
 /** 摘要、比較、交付讀檔都走這一個假 fetch；記下每一個請求的路徑與參數。 */
 function wire() {
   const requests: string[] = [];
-  const fetch = vi.fn(async (input: RequestInfo | URL) => {
+  const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://h');
     requests.push(`${url.pathname}?${url.searchParams.toString()}`);
     const seq = Number(url.searchParams.get('seq'));
     if (url.pathname.endsWith('/summary')) return new Response(JSON.stringify(summaryOf(seq)));
-    if (url.pathname.includes('/deliverables/'))
-      return new Response(
-        JSON.stringify({
-          path: REPORT.path,
-          version: 'v1',
-          bytes: 12,
-          offset: 0,
-          text: '報告內容',
-          lines: 1,
-          eof: true,
-        }),
-        { headers: { 'content-type': 'application/json' } },
-      );
+    // 交付檔讀取走命令通道（#747）：POST 到 `/threads/:id/commands/deliverable.read`。
+    if (url.pathname.includes('/commands/deliverable.')) {
+      const { id } = JSON.parse(String(init?.body)) as { id: number };
+      return pageReply({
+        path: REPORT.path,
+        version: 'v1',
+        bytes: 12,
+        offset: 0,
+        text: '報告內容',
+        lines: 1,
+        eof: true,
+      })(id);
+    }
     return new Response(diffBody(seq, Number(url.searchParams.get('index'))));
   }) as unknown as typeof globalThis.fetch;
   const wiring = { threadId: 't', baseUrl: 'http://h', fetch };
@@ -276,7 +277,7 @@ describe('記住版面', () => {
     const diffs = requests.filter((url) => !url.includes('/summary'));
     expect(diffs).toHaveLength(1);
     expect(diffs[0]).toContain('index=1');
-    expect(requests.some((url) => url.includes('/deliverables/'))).toBe(false);
+    expect(requests.some((url) => url.includes('/commands/deliverable.'))).toBe(false);
   });
 
   it('每條會話各一套：換一條就是那條自己的', async () => {

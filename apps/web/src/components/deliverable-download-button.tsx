@@ -9,7 +9,7 @@
  *
  * **失敗走 toast**：卡片那一列沒有地方畫狀態（同 `CopyPathButton` 的處置）。四種結局各講各的，
  * 理由同 {@link DeliverableDownloadFailure} 的檔頭——尤其 `'too-large'` 是**終局**，
- * 跟預覽那個「太大不能預覽、但下載得下來」的 413 不是同一件事。
+ * 跟預覽那個「太大不能預覽、但下載得下來」的 `deliverable/too-large` 不是同一件事。
  */
 
 import { Download } from 'lucide-react';
@@ -33,7 +33,7 @@ function complaint(failure: DeliverableDownloadFailure): { title: string; descri
     case 'missing':
       return { title: '這個檔已經讀不到了', description: '它可能在這一輪之後被移走或刪掉了。' };
     case 'too-large':
-      // **終局**：下載的 413 只有一個成因（整檔超過上限），沒有下一步可以建議。
+      // **終局**：下載的 `too-large` 只有一個成因（整檔超過上限），沒有下一步可以建議。
       return { title: '檔案太大，連下載都超過上限', description: '請直接到工作區取這個檔。' };
     case 'error':
       return { title: '沒辦法下載這個檔', description: '再按一次試試。' };

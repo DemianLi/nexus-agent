@@ -209,6 +209,14 @@ export {
   recordBackendOutcomes,
 } from './fs-tool-errors.js';
 
+export type { SpillPolicyOptions, SpillRef, SpillSaveRequest, SpillStore } from './spill-policy.js';
+export {
+  createSpillPolicyMiddleware,
+  formatSpillNotice,
+  SPILL_POLICY_MIDDLEWARE_NAME,
+  SPILL_RETRIEVAL_HINT,
+} from './spill-policy.js';
+
 export {
   continuationFooter,
   createReadContinuationMiddleware,
@@ -335,6 +343,7 @@ export {
   defaultTokenAnchorBook,
   estimateAnchoredTokens,
   estimateRequestTokens,
+  estimateTextTokens,
   TokenAnchorBook,
 } from './token-estimate.js';
 export type {

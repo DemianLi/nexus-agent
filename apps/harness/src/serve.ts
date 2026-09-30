@@ -85,7 +85,10 @@ import { browserSessionPlugin } from './settings/browser-session.js';
 import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
+import { spillPolicyPlugin } from './settings/spill-policy.js';
+import { resolveToolResultStashRoot, toolResultStashPlugin } from './settings/tool-result-stash.js';
 import { toolTextPlugin } from './settings/tool-text.js';
+import { cleanupToolResultStash } from './tool-result-stash.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
 import { threadSearchPlugin } from './settings/thread-search.js';
@@ -384,6 +387,13 @@ async function startServer(
   // 一段工具結果文字放上線的上限（#538）。**同樣是 server 的性質**：兩個消費點（即時的
   // `ThreadPump`、重播的 `historyPage`）都住在 `createWireHandler` 的閉包底下，一個 server 一次。
   const toolTextLimits = startupSetting(plugins, toolTextPlugin);
+  // 過大工具結果的暫存（#734）：根與保留天數是 server 的性質，解一次；啟動時清一次超過保留期的會話目錄，
+  // 別人改得動的根不清，失敗只記一筆不擋啟動。
+  const stashConfig = startupSetting(plugins, toolResultStashPlugin);
+  const stashRoot = resolveToolResultStashRoot(stashConfig, env);
+  await cleanupToolResultStash(stashRoot, stashConfig.cleanupPeriodDays, { warn: log });
+  // 外溢層的預算（#719）：server 的性質，解一次；省略就是不掛。
+  const spillPolicy = startupSetting(plugins, spillPolicyPlugin);
   // 真實供應商的五個連線值（#545）。**model 是一條 thread 一顆**（下面每次 `createCliAgent` 各建
   // 一顆），但設定是 server 的性質：解在這裡，設定寫壞的話在 server 起來之前就失敗，而不是等到
   // 第一條 thread；啟動時印的模型名也從這一份來。
@@ -584,6 +594,18 @@ async function startServer(
             threadTitle,
             threadTitleLlm,
             optionalEntries,
+            // 會話鑰匙：這台 server 的專案日誌目錄加 thread id——重開之後同一條 thread 回到同一個目錄
+            // （`resumeThread` 用的也是這兩個）。沒有會話日誌就不能續接，暫存維持記憶體。
+            ...(sessionStore !== undefined && {
+              toolResultStash: {
+                rootDir: stashRoot,
+                session: `${sessionStore.directory}\0${threadId}`,
+                warn: log,
+              },
+              ...(spillPolicy.maxInlineTokens !== undefined && {
+                spillPolicy: { maxInlineTokens: spillPolicy.maxInlineTokens },
+              }),
+            }),
           },
           threadPlugins,
           options.cwd,

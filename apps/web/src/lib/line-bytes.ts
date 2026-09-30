@@ -1,9 +1,9 @@
 /**
- * 用位元組窗口讀一條超長的行（[#555](https://github.com/DemianLi/nexus-agent/issues/555)）：位元組位置、base64、
+ * 用位元組窗口讀一條超長的行（[#555](https://github.com/DemianLi/nexus-agent/issues/555)）：位元組位置、
  * 跨窗口的解碼。
  *
  * 文字頁讀不動一行本身就超過頁上限的檔（按行切永遠是 413），所以那一行改走位元組窗口
- * （`deliverableBytesPath`，照 dsh 的 `readBytes`）。窗口**不解碼、不擋二進位**，而「是不是文字」的判準要跟
+ * （`deliverable.readBytes`，照 dsh 的 `readBytes`；窗口的 `data` 是原生位元組，不用先從 base64 解）。窗口**不解碼、不擋二進位**，而「是不是文字」的判準要跟
  * 文字頁同一套——同一個檔不該因為哪一行比較長就換一個判準。所以這裡照路由 `streamUtf8`／`cutPage` 的規則：
  *
  * - **行只按 `\n` 切**，`\r` 留在行裡。
@@ -34,14 +34,6 @@ export function utf8Length(text: string): number {
       i += 1;
     } else bytes += 3;
   }
-  return bytes;
-}
-
-/** base64 → 位元組。 */
-export function bytesOfBase64(data: string): Uint8Array {
-  const binary = atob(data);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return bytes;
 }
 

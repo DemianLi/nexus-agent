@@ -1302,6 +1302,9 @@ describe('命令通道上的交付檔讀取', () => {
       // 參數不合格是「這條線收不了」，不是業務結果。
       const invalid = await client.read(THREAD_ID, { seq: -1, index: 0 });
       expect(invalid.kind).toBe('rejected');
+      // 而且帶著碼：網頁靠它分辨「終局的協定錯誤」與「載體層擋下」，不去比對訊息字串。
+      expect(invalid).toMatchObject({ code: 'invalid_argument' });
+      expect(invalid).not.toHaveProperty('status');
     } finally {
       await outcome.close();
     }

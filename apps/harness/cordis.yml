@@ -242,7 +242,7 @@
 # **它們內部又分兩層，分界是消費點跑的時刻**：
 #
 # - **起動期**（`thread-title`、`thread-title-llm`、`thread-search`、`browser-session`、`deliverable-files`、`tool-text`、
-#   `live-model`）：消費者是`serve.ts` 的冷讀清單、內容搜尋的索引、`BrowserAuth` 的建構子、`createWireHandler` 閉包裡的
+#   `tool-result-stash`、`spill-policy`、`live-model`）：消費者是`serve.ts` 的冷讀清單、內容搜尋的索引、`BrowserAuth` 的建構子、`createWireHandler` 閉包裡的
 #   兩條交付路由，以及交給組裝的那顆 model——全都在**任何 agent 出生之前**就要有值，那一刻註冊表還不存在。`thread-title`
 #   另外還給寫退回標題的 pump 與 CLI（#647），吃的是同一份起動期的值；`thread-title-llm` 跟它一起在建模型的那一刻
 #   讀（#650）。所以這幾列的 `apply` 是空的，值由
@@ -340,7 +340,8 @@
 # dsh 那側它本來就是條目的一格（`spill-policy` 的 `maxInlineBytes: 50000`，
 # `packages/bundle/base/cordis.patch.yml:393-396`，`ddefc45`，**數字一模一樣**），所以這一刀是把一條
 # 既存的偏離收掉。**截在哪一層**那條偏離仍然登記在 `src/tool-result-text.ts` 的檔頭上——dsh 截在
-# 模型面、超標存成 spill 檔、通知裡帶得出檔案位址；我們沒有 spill 能力，只能截在放上線那一刻。
+# 模型面、超標存成 spill 檔、通知裡帶得出檔案位址；我們的外溢層（#719，下面 `spill-policy` 那一列）已經做了同一件事，
+# 所以「沒有 spill 能力」這句前提不再成立——這一列在傳輸上的截斷怎麼收，歸 #736，這裡不動。
 #
 # 欄位名沒照 dsh 的 `maxInlineBytes`：那個名字描述的是 dsh 的二分（inline 還是進 spill 檔），而我們
 # 超過就是截斷，沒有「另一半去哪裡」這回事。
@@ -353,6 +354,25 @@
   name: '#settings/tool-text'
   config:
     maxBytes: 50000
+
+# 過大的工具結果暫存到主機上的哪裡、留多久（#734）。**兩格名字都是 dsh `spill-local` 的**（`root`、`cleanupPeriodDays`，
+# `packages/spill/spill-local/src/index.ts:66-69`，`477b4f4`）。`root` 不寫就是 harness home 底下的 `tool-results`
+# （偏離 dsh 的「每行程一個暫存目錄」：基座的路徑是虛擬的，續接時要讀回同一個檔，所以根要固定，理由與登記見
+# `src/tool-result-stash.ts`）；`cleanupPeriodDays: 0` 表示不清，啟動時清一次，別人改得動的根不清。
+- id: tool-result-stash
+  name: '#settings/tool-result-stash'
+  config:
+    cleanupPeriodDays: 30
+
+# 一則工具結果最多佔多少估算 token（#719）。超過就把全文存進上面那個暫存目錄，模型只收到頭尾預覽加路徑，
+# 用 `read_file` 去讀全文。**欄位名與 12500 都是 dsh 的**（`packages/spill/spill-policy/src/index.ts:34`、
+# `packages/bundle/base/cordis.patch.yml:409`，`477b4f4`）。**省略 `maxInlineTokens`（或把這一列標成 `disabled: true`）
+# 就停用**，照 dsh；停用之後超過 80,000 字元的結果仍由基座換成預覽，那一條關不掉。`read_file` 不外溢。
+# 找不到暫存目錄可寫（沒有會話日誌的組裝、目錄不可寫）時保留原結果，不外溢。
+- id: spill-policy
+  name: '#settings/spill-policy'
+  config:
+    maxInlineTokens: 12500
 
 # 真實供應商的連線值與模型型錄（#545／#457／#729），只在 `--live` 時才用。**連線那幾格都是 dsh 的設定欄位**：
 # `@deepseek-ai/dsh-llm-deepseek` 的 `Config` 有 `baseURL`、`streamIdleTimeoutMs`、`retryPolicy`

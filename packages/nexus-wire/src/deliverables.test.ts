@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { emptyConversation, prependEntries, reduceAll } from './conversation.js';
+import { createDeliverableClient } from './deliverable-client.js';
 import type { ConversationState } from './conversation.js';
 import {
   decodeBinaryResult,
@@ -273,5 +274,55 @@ describe('交付檔讀取的方法與多段表單', () => {
     form.append('bytes-0', new Blob([new Uint8Array([1])]));
     form.append('bytes-0', new Blob([new Uint8Array([2])]));
     await expect(decodeBinaryResult(new Response(form))).rejects.toBeInstanceOf(TypeError);
+  });
+});
+
+describe('createDeliverableClient 的 rejected 兩種來源', () => {
+  const noop = { threadId: 't', params: { seq: 0, index: 0 } } as const;
+
+  function clientAnswering(response: () => Response) {
+    return createDeliverableClient({
+      baseUrl: 'http://x',
+      fetch: () => Promise.resolve(response()),
+    });
+  }
+
+  it('協定錯誤（HTTP 200、body 是 error）：帶碼，不帶 status', async () => {
+    const client = clientAnswering(
+      () =>
+        new Response(
+          JSON.stringify({
+            type: 'error',
+            id: 1,
+            error: 'invalid_argument',
+            message: '參數不合格',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    const outcome = await client.read(noop.threadId, noop.params);
+    expect(outcome).toEqual({ kind: 'rejected', message: '參數不合格', code: 'invalid_argument' });
+  });
+
+  it.each([401, 415, 503])('載體層擋下（HTTP %i）：帶 status，不帶碼', async (status) => {
+    const client = clientAnswering(() => new Response('nope', { status }));
+    const outcome = await client.read(noop.threadId, noop.params);
+    expect(outcome).toEqual({
+      kind: 'rejected',
+      message: `被載體層擋下：${status} nope`,
+      status,
+    });
+  });
+
+  it('error 不是字串（壞封包）：不帶碼', async () => {
+    const client = clientAnswering(
+      () =>
+        new Response(JSON.stringify({ type: 'error', id: 1, error: 7, message: 'x' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    const outcome = await client.read(noop.threadId, noop.params);
+    expect(outcome).toEqual({ kind: 'rejected', message: 'x' });
   });
 });

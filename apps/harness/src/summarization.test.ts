@@ -1784,7 +1784,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
    * 帶著我們的標記，它會被換成基座那句 `read_file` 指路。
    *
    * **它守的只有「eviction 還在」這一半（#170 之後）。** 那條路現在被路由到獨立的
-   * `StateBackend`，所以這一條分不出「基座還在 80,000 那條線上驅逐」與「我們的路由把它
+   * 暫存 backend（#734 起優先存主機私有目錄），所以這一條分不出「基座還在 80,000 那條線上驅逐」與「我們的路由把它
    * 吸收掉了」。**路徑那一半歸 [`tool-result-stash.test.ts`](./tool-result-stash.test.ts)**，
    * 那裡有一條斷言基座指路的路徑落在我們路由的前綴底下。
    */
@@ -1804,6 +1804,42 @@ describe('壓縮前先剪掉過大的工具結果', () => {
     const text = String(toolResults(model.prompts[1]!)[0]!.content);
     expect(text).not.toContain(TOOL_RESULT_PRUNE_MARKER);
     expect(text).toContain('read_file');
+  });
+
+  /**
+   * **翻面（[#719](https://github.com/DemianLi/nexus-agent/issues/719)）：外溢層開著時，剪刀碰到的不再是原文。**
+   * 上面那條絆索守的是「外溢層沒開，上界是基座的 80,000 字元」；這一條守它的反面——同一則 6 萬字元（低於基座那條線）的
+   * 結果，外溢層開著就先被換成預覽加路徑，剪刀（門檻 8,192 字元）之後再剪的是**那份預覽**，而尾巴那句通知
+   * （1,024 字元的尾巴放得下）留下來，全文照路徑讀得回。外溢層沒開的話，同一則會被剪成頭 4,096 加尾 1,024，
+   * **一個能讀回原文的路徑都沒有**——這一條紅代表外溢層被拿掉，或排到剪刀後面了。
+   */
+  it('外溢層開著：低於 8 萬字元但超過預算的結果，剪刀剪過之後通知與路徑還在', async () => {
+    const varied = Array.from({ length: 2_000 }, (_, i) => `line ${i} alpha beta ${i * 7919}`).join(
+      '\n',
+    );
+    const root = await mkdtemp(join(tmpdir(), 'prune-spill-'));
+    const model = bulkTurns();
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [bulkPlugin(varied)],
+      summarization: { trigger: [{ type: 'tokens', value: 5_000 }] },
+      toolResultStash: { rootDir: root, session: 's' },
+      spillPolicy: { maxInlineTokens: 4_000 },
+    });
+    try {
+      await agent.invoke(toAgentInvocation('去拿一坨。'));
+    } finally {
+      await dispose();
+    }
+    expect(varied.length).toBeLessThan(80_000);
+    const text = String(toolResults(model.prompts[1]!)[0]!.content);
+    // 剪刀動過那份預覽（前提：預覽比它的門檻大），通知還在尾巴上。
+    expect(text).toContain(TOOL_RESULT_PRUNE_MARKER);
+    expect(text).toMatch(
+      /Full formatted result stored at: \/large_tool_results\/[0-9a-f]{12}-bulk\.txt\./u,
+    );
+    const [session] = await readdir(root);
+    expect(await readdir(join(root, session!))).toHaveLength(1);
   });
 
   /**

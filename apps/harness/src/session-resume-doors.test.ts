@@ -14,7 +14,8 @@
  *
  * | 狀態 | 住在哪 | 哪扇門帶得回來 |
  * | --- | --- | --- |
- * | 虛擬檔案系統、工具結果暫存 | graph state ／ checkpointer | **門 B** |
+ * | 虛擬檔案系統 | graph state ／ checkpointer | **門 B** |
+ * | 工具結果暫存（#734） | 主機的私有目錄，按會話分目錄 | 不靠門；續接用同一把會話鑰匙找回 |
  * | 對話訊息 | graph state，**從會話日誌推回來** | **門 A** |
  * | goal 的相位與輪次、`turn/*`、沙箱模式、計劃模式 | 會話日誌 | **門 A** |
  *
@@ -145,7 +146,7 @@ const THE_ONLY_SAVER = ['apps/harness/src/cli.ts: const checkpointer = new Memor
 const DOOR_B_GUIDANCE = (paths: readonly string[]): string =>
   '**門 B（落盤 checkpointer）動了。**\n' +
   '這不是把期望值改一改就好的事——會話 resume 在我們這裡是**兩扇門**，' +
-  '而它們載的是不同的東西：checkpointer 帶回虛擬檔案系統、工具結果暫存（以及 graph state 裡的對話）；' +
+  '而它們載的是不同的東西：checkpointer 帶回虛擬檔案系統（以及 graph state 裡的對話）；工具結果暫存已在 [#734](https://github.com/DemianLi/nexus-agent/issues/734) 搬到主機的私有目錄，不靠這扇門；' +
   '會話日誌帶回 goal 的相位與輪次、`turn/*`、沙箱模式、計劃模式，對話也從它推回模型' +
   '（[#306](https://github.com/DemianLi/nexus-agent/issues/306)）。\n' +
   '**門 A 已經開了**（CLI 的 `--resume`、serve 重開），而 ' +
@@ -156,9 +157,8 @@ const DOOR_B_GUIDANCE = (paths: readonly string[]): string =>
   `  1. ${paths[0]} —— 續接時從日誌推回對話、灌進 graph state 的那一步。` +
   '門 B 一開，graph state 會從 checkpointer 回來，再灌一次對話就重複了——兩份來源誰是對話的真相要先決定。\n' +
   `  2. ${paths[1]} 的 ${TOOL_RESULT_STASH_PREFIX} —— ` +
-  '[#155](https://github.com/DemianLi/nexus-agent/issues/155) 記著「軸 2 一旦要做，' +
-  '第一個要處理的是 [#170](https://github.com/DemianLi/nexus-agent/issues/170) ' +
-  '工具結果暫存的保留策略」：checkpointer 落盤之後，暫存檔要不要跟著活下來是一個新問題。\n' +
+  '暫存現在優先存主機的私有目錄（[#734](https://github.com/DemianLi/nexus-agent/issues/734)），只有存不進去才退回 graph state；' +
+  'checkpointer 落盤之後，退回 graph state 的那一份要不要跟著活下來是一個新問題。\n' +
   '全文見 [#203](https://github.com/DemianLi/nexus-agent/issues/203) 與 ' +
   '[#251](https://github.com/DemianLi/nexus-agent/issues/251)。';
 

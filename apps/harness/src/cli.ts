@@ -48,6 +48,10 @@ import { threadTitleConfigSchema, threadTitlePlugin } from './settings/thread-ti
 import type { ThreadTitleConfig } from './settings/thread-title.js';
 import { findModelEntry } from './model-catalog.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
+import { spillPolicyPlugin } from './settings/spill-policy.js';
+import { resolveToolResultStashRoot, toolResultStashPlugin } from './settings/tool-result-stash.js';
+import { cleanupToolResultStash } from './tool-result-stash.js';
+import type { ToolResultStashOptions } from './tool-result-stash.js';
 import type { ThreadTitleLlmConfig } from './settings/thread-title-llm.js';
 import { ensureFallbackTitle } from './session-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
@@ -160,7 +164,8 @@ export interface CliInvocation {
    * 見 `conversation-restore.ts`），不是把 checkpointer 落盤（門 B 照舊不開）。**todo 沒有自己回來的
    * 狀態**：模型那一側沒有人讀 `todo/write` 重建它，模型是從推回來的對話裡那幾次 `todo_write` 記得它的。
    * （web 的清單面板讀它，#575，但那是畫面，不進模型。）
-   * 虛擬檔案系統、工具結果暫存與摘要器的會話歷史檔（#348）回不來——它們只在 graph state 裡。
+   * 虛擬檔案系統與摘要器的會話歷史檔（#348）回不來——它們只在 graph state 裡。工具結果暫存回得來
+   * （#734）：它存在主機的私有目錄，續接用同一個 run 目錄當鑰匙。
    *
    * **不配 `--sandbox`**：模式從日誌來，兩個來源不管誰贏，另一個都是靜靜被丟掉——一個打了
    * `--sandbox read-only` 的人可能落在 `workspace-write` 裡。要換就接起來之後 `/sandbox`，
@@ -258,7 +263,7 @@ export const USAGE = `用法：cli [選項] [要說的話...]
                        要完全不落盤，在 patch 裡把 session-persistence 那一列寫成 disabled: true
   --resume <run 目錄>  接著上一次寫出來的那個 run 目錄跑下去：
                        沙箱模式、目標、計劃模式與對話照日誌回來
-                       （虛擬檔案系統、工具結果暫存與會話歷史檔不回來）
+                       （虛擬檔案系統與會話歷史檔不回來；工具結果暫存存在主機上，讀得回）
                        要在上一次的同一個目錄底下接（日誌記著它屬於哪個目錄）
                        不能配 --sandbox（模式從日誌來）或 --session-log（就寫回那個目錄）
   --goal-driver        一個 active 的目標沒達成時自己再開一輪（預設關）
@@ -830,6 +835,17 @@ export async function createCliAgent(
      * CLI 一行一輪，沒有插話。
      */
     readonly stepInbox?: boolean;
+    /**
+     * 過大的工具結果暫存到主機的哪裡（[#734](https://github.com/DemianLi/nexus-agent/issues/734)），原樣交給
+     * `createNexusAgent`。兩條產品路徑在有會話日誌時傳：根從 `tool-result-stash` 那一列解、會話鑰匙是「續接時會回到
+     * 同一個會話」的既有身分。省略就是記憶體暫存（沒有會話日誌的組裝、手搭的呼叫端）。
+     */
+    readonly toolResultStash?: ToolResultStashOptions;
+    /**
+     * 工具結果外溢層的預算（[#719](https://github.com/DemianLi/nexus-agent/issues/719)），原樣交給 `createNexusAgent`。
+     * 從 `spill-policy` 那一列解；省略就是不掛。存處是上面的 `toolResultStash`，沒給它就不會外溢。
+     */
+    readonly spillPolicy?: { readonly maxInlineTokens: number };
   },
   plugins: readonly PluginEntry[],
   cwd: string = process.cwd(),
@@ -990,6 +1006,10 @@ export async function createCliAgent(
       optionalEntries: invocation.optionalEntries,
     }),
     ...(invocation.stepInbox === true && { stepInbox: true }),
+    ...(invocation.toolResultStash !== undefined && {
+      toolResultStash: invocation.toolResultStash,
+    }),
+    ...(invocation.spillPolicy !== undefined && { spillPolicy: invocation.spillPolicy }),
   });
   // 註冊表跟 agent 同壽命：REPL 是一條連續對話，`seq` 要跨輪連續才有意義。**subagent 的
   // 那些日誌也掛在它上面**，第一次有人要寫的時候才出生（見 `SessionRegistry` 的偏離）。
@@ -1568,6 +1588,14 @@ async function runLaunched(
           warn: sessionLogWarn,
         })
       : openJsonlSessionStore({ directory: resumeDir, warn: sessionLogWarn });
+  // 過大工具結果的暫存（#734）：根與保留天數從清單解一次；**啟動時清一次**超過保留期的會話目錄（別人改得動的根
+  // 不清）。清理失敗只講一聲，不擋啟動。
+  const stashConfig = startupSetting(plugins, toolResultStashPlugin);
+  const stashRoot = resolveToolResultStashRoot(stashConfig, options.env ?? process.env);
+  const stashWarn = (message: string): void => printer.error(message);
+  // 外溢層的預算（#719）：省略就是不掛。
+  const spillPolicy = startupSetting(plugins, spillPolicyPlugin);
+  await cleanupToolResultStash(stashRoot, stashConfig.cleanupPeriodDays, { warn: stashWarn });
   // 關掉時 `--resume` 已經被 `assertPersistenceFlags` 擋下，所以有 `resumeDir` 就一定有 store。
   const resumed =
     resumeDir === undefined || sessionStore === undefined
@@ -1623,6 +1651,17 @@ async function runLaunched(
         threadTitle,
         threadTitleLlm,
         optionalEntries: optionalEntriesOf(loaded, { live: invocation.live }),
+        // 會話鑰匙是這一次的 run 目錄（續接時就是被接回的那個），沒有會話日誌就沒有「回到同一個會話」的身分。
+        ...(sessionStore !== undefined && {
+          toolResultStash: {
+            rootDir: stashRoot,
+            session: sessionStore.directory,
+            warn: stashWarn,
+          },
+          ...(spillPolicy.maxInlineTokens !== undefined && {
+            spillPolicy: { maxInlineTokens: spillPolicy.maxInlineTokens },
+          }),
+        }),
       },
       plugins,
       options.cwd,
@@ -1747,7 +1786,7 @@ async function runLaunched(
             // 推不出來時講原因。回不來的也講——不講的話，一個讀暫存路徑讀到 ENOENT 的模型看起來像壞了。
             `會話日誌：${sessionStore.directory}（續接：沙箱模式、計劃模式與目標照日誌回來；` +
             `${formatConversationRestore(restored)}；` +
-            `${invocation.workspace === undefined ? '虛擬檔案系統、' : ''}工具結果暫存與會話歷史檔沒有回來）`,
+            `${invocation.workspace === undefined ? '虛擬檔案系統與' : ''}會話歷史檔沒有回來）`,
     );
     // 接回來的計劃模式開著——見 `RESUMED_PLAN_MODE_NOTICE`。**只在這次組裝真的掛了 `/plan`
     // 時講**：一份 patch 可以把計劃模式那一列關掉，那時日誌上那顆 `plan/mode` 沒有人讀，

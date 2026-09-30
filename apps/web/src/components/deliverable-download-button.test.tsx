@@ -6,6 +6,14 @@ import { createDeliverableDownloader } from '@/lib/deliverable-download';
 import { createDeliverableFileStore } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import { axeViolations } from '@/test/axe';
+import type { DeliverableCall, Reply } from '@/test/deliverable-commands';
+import {
+  badRequestReply,
+  bytesReply,
+  deliverableFetch,
+  refuseReply,
+  tooLargeReply,
+} from '@/test/deliverable-commands';
 import { memoryStorage, WithRightSidebar } from '@/test/right-sidebar';
 
 const toastSpy = vi.hoisted(() => {
@@ -45,23 +53,32 @@ afterEach(() => {
   toastSpy.error.mockReset();
 });
 
-/** 下載成功的回應。 */
+/** 下載成功的回覆：兩個位元組。 */
 const octets = () =>
-  new Response(new Uint8Array([0x00, 0xff]).buffer as ArrayBuffer, {
-    headers: { 'content-type': 'application/octet-stream' },
+  bytesReply({
+    path: FILE.path,
+    version: 'v1',
+    bytes: 2,
+    offset: 0,
+    data: new Uint8Array([0x00, 0xff]),
+    eof: true,
   });
 
+/** 整檔下載：`readBytes` 不帶 `offset` 與 `length`。預覽讀的窗口一定帶 `offset`。 */
+const isDownload = (call: DeliverableCall) =>
+  call.method === 'deliverable.readBytes' &&
+  call.params.offset === undefined &&
+  call.params.length === undefined;
+
 /**
- * 掛一張卡。`respond` 同時服務預覽與下載兩條路由，用 URL 分辨——真實情況也是同一個 origin 上
- * 的兩條路由。
+ * 掛一張卡。`respond` 同時服務預覽（`deliverable.read`、窗口）與下載（整檔 `deliverable.readBytes`）兩種呼叫，
+ * 用呼叫的內容分辨——真實情況也是同一條命令通道上的兩支方法。
  */
 function mount(
-  respond: (url: string) => Response | Promise<Response>,
+  respond: (call: DeliverableCall) => Reply | Promise<Reply>,
   { withDownload = true }: { withDownload?: boolean } = {},
 ) {
-  const doFetch = vi.fn(async (input: RequestInfo | URL) =>
-    respond(String(input)),
-  ) as unknown as typeof globalThis.fetch;
+  const { fetch: doFetch, calls } = deliverableFetch(respond);
   const wiring = { threadId: 't1', baseUrl: '', fetch: doFetch };
   const download = withDownload ? createDeliverableDownloader(wiring) : undefined;
   render(
@@ -74,13 +91,10 @@ function mount(
       <DeliverablesCard files={[FILE]} download={download} />
     </WithRightSidebar>,
   );
-  return { doFetch };
+  return { calls };
 }
 
-const downloadCalls = (doFetch: unknown) =>
-  (doFetch as ReturnType<typeof vi.fn>).mock.calls.filter((call) =>
-    String(call[0]).includes('/deliverables/download'),
-  );
+const downloadCalls = (calls: readonly DeliverableCall[]) => calls.filter(isDownload);
 
 describe('卡片上的下載鈕', () => {
   it('沒給 downloader 就不畫它——預覽與複製路徑照舊', () => {
@@ -90,40 +104,41 @@ describe('卡片上的下載鈕', () => {
     expect(screen.getByRole('button', { name: `複製路徑：${FILE.path}` })).toBeTruthy();
   });
 
-  it('按了會用那個檔自己的座標打下載路由', async () => {
-    const { doFetch } = mount(() => octets());
+  it('按了會用那個檔自己的座標打整檔的 readBytes', async () => {
+    const { calls } = mount(() => octets());
     fireEvent.click(screen.getByRole('button', { name: `下載：${FILE.path}` }));
-    await waitFor(() => expect(downloadCalls(doFetch)).toHaveLength(1));
-    const url = String(downloadCalls(doFetch)[0]![0]);
-    expect(url).toContain('seq=11');
-    expect(url).toContain('index=0');
+    await waitFor(() => expect(downloadCalls(calls)).toHaveLength(1));
+    expect(downloadCalls(calls)[0]).toEqual({
+      method: 'deliverable.readBytes',
+      params: { seq: 11, index: 0 },
+    });
     // 成功就不該有人被打擾。
     expect(toastSpy.error).not.toHaveBeenCalled();
   });
 
   it('飛行中按第二次不會再發一份——那是兩份整檔', async () => {
-    let release = (_: Response) => {};
-    const inFlight = new Promise<Response>((resolve) => {
+    let release = (_: Reply) => {};
+    const inFlight = new Promise<Reply>((resolve) => {
       release = resolve;
     });
-    const { doFetch } = mount(() => inFlight);
+    const { calls } = mount(() => inFlight);
     const button = screen.getByRole('button', {
       name: `下載：${FILE.path}`,
     }) as HTMLButtonElement;
     fireEvent.click(button);
     await waitFor(() => expect(button.disabled).toBe(true));
     fireEvent.click(button);
-    expect(downloadCalls(doFetch)).toHaveLength(1);
+    expect(downloadCalls(calls)).toHaveLength(1);
     release(octets());
     await waitFor(() => expect(button.disabled).toBe(false));
   });
 
   it('同一拍內連點兩次也只發一份——那時 disabled 還沒生效', async () => {
-    let release = (_: Response) => {};
-    const inFlight = new Promise<Response>((resolve) => {
+    let release = (_: Reply) => {};
+    const inFlight = new Promise<Reply>((resolve) => {
       release = resolve;
     });
-    const { doFetch } = mount(() => inFlight);
+    const { calls } = mount(() => inFlight);
     const button = screen.getByRole('button', {
       name: `下載：${FILE.path}`,
     }) as HTMLButtonElement;
@@ -134,19 +149,20 @@ describe('卡片上的下載鈕', () => {
       button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    await waitFor(() => expect(downloadCalls(doFetch)).toHaveLength(1));
-    expect(downloadCalls(doFetch)).toHaveLength(1);
+    await waitFor(() => expect(downloadCalls(calls)).toHaveLength(1));
+    expect(downloadCalls(calls)).toHaveLength(1);
     release(octets());
     await waitFor(() => expect(button.disabled).toBe(false));
   });
 
-  it.each([
-    [400, '下載不了這個檔'],
-    [404, '這個檔已經讀不到了'],
-    [413, '檔案太大，連下載都超過上限'],
-    [500, '沒辦法下載這個檔'],
-  ])('%i 講的是「%s」', async (status, said) => {
-    mount(() => new Response('', { status }));
+  it.each<[string, Reply, string]>([
+    ['參數不合格（協定錯誤）', badRequestReply, '下載不了這個檔'],
+    ['deliverable/not-found', refuseReply('deliverable/not-found'), '這個檔已經讀不到了'],
+    ['deliverable/too-large', tooLargeReply(), '檔案太大，連下載都超過上限'],
+    // 下載不會收到 `not-text`；真收到就落在可重試的 error，見 `deliverable-download.ts` 檔頭。
+    ['deliverable/not-text', refuseReply('deliverable/not-text'), '沒辦法下載這個檔'],
+  ])('%s 講的是「%3$s」', async (_name, reply, said) => {
+    mount(() => reply);
     fireEvent.click(screen.getByRole('button', { name: `下載：${FILE.path}` }));
     await waitFor(() => expect(toastSpy.error).toHaveBeenCalled());
     expect(toastSpy.error.mock.calls[0]![0]).toBe(said);
@@ -157,8 +173,8 @@ describe('卡片上的下載鈕', () => {
     expect(await axeViolations(document.body)).toEqual([]);
   });
 
-  it('413 跟 500 講的不是同一件事——一個是終局，一個叫你再按一次', async () => {
-    mount(() => new Response('', { status: 413 }));
+  it('too-large 跟 error 講的不是同一件事——一個是終局，一個叫你再按一次', async () => {
+    mount(() => tooLargeReply());
     fireEvent.click(screen.getByRole('button', { name: `下載：${FILE.path}` }));
     await waitFor(() => expect(toastSpy.error).toHaveBeenCalled());
     const [, options] = toastSpy.error.mock.calls[0]!;
@@ -168,46 +184,43 @@ describe('卡片上的下載鈕', () => {
 });
 
 describe('預覽面裡的下載鈕', () => {
-  /** 開預覽，讓預覽那條回指定的狀態碼。 */
-  async function openPreviewWith(status: number, options?: { withDownload?: boolean }) {
-    const mounted = mount(
-      (url) => (url.includes('/deliverables/download') ? octets() : new Response('', { status })),
-      options,
-    );
+  /** 開預覽，讓預覽那條回指定的拒絕；整檔下載照常成功。 */
+  async function openPreviewWith(reply: Reply, options?: { withDownload?: boolean }) {
+    const mounted = mount((call) => (isDownload(call) ? octets() : reply), options);
     fireEvent.click(screen.getByRole('button', { name: `預覽：${FILE.path}` }));
     return mounted;
   }
 
-  it.each([
-    [422, '不是文字檔，沒辦法預覽'],
-    [413, '檔案太大，沒辦法在這裡預覽'],
-  ])('%i 那一格有下載鈕，按了真的去下載', async (status, said) => {
-    const { doFetch } = await openPreviewWith(status);
+  it.each<[string, Reply, string]>([
+    ['deliverable/not-text', refuseReply('deliverable/not-text'), '不是文字檔，沒辦法預覽'],
+    ['deliverable/too-large', tooLargeReply(), '檔案太大，沒辦法在這裡預覽'],
+  ])('%s 那一格有下載鈕，按了真的去下載', async (_name, reply, said) => {
+    const { calls } = await openPreviewWith(reply);
     const sheet = within(await screen.findByRole('tabpanel'));
     expect(sheet.getByText(said)).toBeTruthy();
     fireEvent.click(sheet.getByRole('button', { name: /下載這個檔/ }));
-    await waitFor(() => expect(downloadCalls(doFetch)).toHaveLength(1));
+    await waitFor(() => expect(downloadCalls(calls)).toHaveLength(1));
   });
 
-  it.each([
-    [404, '這個檔已經讀不到了'],
-    [400, '讀不到這個檔：座標不對'],
-  ])('%i 那一格沒有下載鈕——下載也救不了它', async (status, said) => {
-    await openPreviewWith(status);
+  it.each<[string, Reply, string]>([
+    ['deliverable/not-found', refuseReply('deliverable/not-found'), '這個檔已經讀不到了'],
+    ['參數不合格（協定錯誤）', badRequestReply, '讀不到這個檔：座標不對'],
+  ])('%s 那一格沒有下載鈕——下載也救不了它', async (_name, reply, said) => {
+    await openPreviewWith(reply);
     const sheet = within(await screen.findByRole('tabpanel'));
     expect(sheet.getByText(said)).toBeTruthy();
     expect(sheet.queryByRole('button', { name: /下載這個檔/ })).toBeNull();
   });
 
   it('沒給 downloader 時那一格只剩一句話，仍然講得出發生什麼事', async () => {
-    await openPreviewWith(422, { withDownload: false });
+    await openPreviewWith(refuseReply('deliverable/not-text'), { withDownload: false });
     const sheet = within(await screen.findByRole('tabpanel'));
     expect(sheet.getByText('不是文字檔，沒辦法預覽')).toBeTruthy();
     expect(sheet.queryByRole('button', { name: /下載這個檔/ })).toBeNull();
   });
 
   it('axe：帶下載鈕的那一格沒有違規', async () => {
-    await openPreviewWith(422);
+    await openPreviewWith(refuseReply('deliverable/not-text'));
     await screen.findByRole('tabpanel');
     expect(await axeViolations(document.body)).toEqual([]);
   });
