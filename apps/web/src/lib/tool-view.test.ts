@@ -76,6 +76,9 @@ describe('classifyTool', () => {
     ['delete', 'others'],
     ['task', 'others'],
     ['subagent', 'others'],
+    ['list_agents', 'others'],
+    ['interrupt_agent', 'others'],
+    ['send_message', 'others'],
     ['todo_write', 'others'],
   ] as const)('%s → %s', (name, variant) => {
     expect(classifyTool(name)).toBe(variant);
@@ -84,6 +87,15 @@ describe('classifyTool', () => {
   it('`subagent` 跟 `task` 同標題（都是委派子代理）', () => {
     expect(toolTitle('subagent')).toBe('委派子代理');
     expect(toolTitle('subagent')).toBe(toolTitle('task'));
+  });
+
+  it.each([
+    ['list_agents', '列出子代理'],
+    ['interrupt_agent', '停止子代理'],
+    ['send_message', '傳訊給子代理'],
+  ])('背景子代理的管理工具 %s 有自己的標題', (name, title) => {
+    expect(isKnownTool(name)).toBe(true);
+    expect(toolTitle(name)).toBe(title);
   });
 
   it('不認得的工具（例如 MCP 的）走通用卡', () => {
