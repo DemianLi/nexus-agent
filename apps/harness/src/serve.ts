@@ -366,7 +366,7 @@ async function startServer(
   // `settings/startup.ts` 的檔頭。
   const browserSession = startupSetting(plugins, browserSessionPlugin);
   const threadTitle = startupSetting(plugins, threadTitlePlugin);
-  // 交付檔那三個上限（#529）。**它們是 server 的性質，不是一條 thread 的性質**——兩條交付路由
+  // 交付檔那三個上限（#529）。**它們是 server 的性質，不是一條 thread 的性質**——兩支交付方法
   // 住在 `createWireHandler` 的閉包裡，一個 server 一次，所以值在這裡解、往下傳一份。
   const deliverableLimits = startupSetting(plugins, deliverableFilesPlugin);
   // 落盤的批次窗口（#529）。**同樣是 server 的性質**：`sessionStore` 一台伺服器一份，而窗口
@@ -661,13 +661,13 @@ async function startServer(
         ...(feedback !== undefined && { feedback }),
         // 每一輪的改動摘要（#443）：沒給 `--workspace` 就缺席，兩條 `changes` 路由一律 404。
         ...(workspaceChanges !== undefined && { workspaceChanges }),
-        // 交付讀檔路由的錨（#452）：沒給 `--workspace` 就缺席，兩條路由一律 404。
+        // 交付讀檔方法的錨（#452）：沒給 `--workspace` 就缺席，兩支方法一律 no-anchor。
         // **這個值由 `createCliAgent` 算、從這裡原樣轉交**，呼叫端不再寫一次 `resolve(cwd, ...)`。
         ...(workspaceRoot !== undefined && { workspaceRoot }),
         // 續接線**以下**那些交付的錨（#519）：**來自磁碟上那份 header，不是這一次的
         // `--workspace`**。沒續接、或那份 header 沒記那一格（13 以前的日誌都沒有，而且續接
         // 不回填）就整個不給，那時線以下的每一顆照舊 404——判準是那一格在不在，不是
-        // `header.version`，理由見 `wire-handler.ts` 的 `locateRequested`。
+        // `header.version`，理由見 `wire-handler.ts` 的 `locateAt`。
         ...(resumed?.header.workspaceRoot !== undefined && {
           resumedWorkspaceRoot: resumed.header.workspaceRoot,
         }),

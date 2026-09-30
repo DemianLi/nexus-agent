@@ -19,7 +19,7 @@ import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createWireClient, deliverableFilePath } from '@nexus/wire';
+import { createDeliverableClient, createWireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { SESSION_LOG_OFF_DISCLOSURE } from './cli.js';
@@ -68,9 +68,9 @@ async function driveTurn(server: RunningServe, threadId: string): Promise<void> 
 }
 
 /**
- * 打一次交付預覽路由，座標固定在 `seq 0`——**接回來的 thread 上，`seq 0` 一定在續接線以下**。
+ * 打一次命令通道上的交付預覽（`deliverable.read`），座標固定在 `seq 0`——**接回來的 thread 上，`seq 0` 一定在續接線以下**。
  *
- * 回的是那一次拒絕的文字：兩條路都是 404，分得開它們的只有訊息
+ * 回的是那一次拒絕的文字：兩條路都是 `deliverable/no-anchor`，分得開它們的只有訊息
  * （[#519](https://github.com/DemianLi/nexus-agent/issues/519)）。
  *
  * @param server - 正在跑的那台。
@@ -85,12 +85,12 @@ async function deliverableRefusal(server: RunningServe, threadId: string): Promi
     threadId,
   );
   if (page.kind !== 'ok') throw new Error(`歷史拿不到：${page.message}`);
-  const response = await withCookie(`${server.url}${deliverableFilePath(threadId)}?seq=0&index=0`, {
-    method: 'GET',
-    headers: { 'content-type': 'application/json' },
-  });
-  expect(response.status).toBe(404);
-  return response.text();
+  const read = await createDeliverableClient({ baseUrl: server.url, fetch: withCookie }).read(
+    threadId,
+    { seq: 0, index: 0 },
+  );
+  if (read.kind !== 'ok' || read.result.ok) throw new Error('應該被拒');
+  return read.result.error.message;
 }
 
 function readEvents(body: string): readonly SessionEvent[] {

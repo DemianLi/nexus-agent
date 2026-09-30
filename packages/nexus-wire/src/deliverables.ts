@@ -66,10 +66,10 @@ export interface DeliverableFileStat {
 }
 
 /**
- * 預覽路由的結果：從一份文字檔切出來的一頁。
+ * `deliverable.read` 的結果：從一份文字檔切出來的一頁。
  *
  * **頁的上限是拒絕，不是截斷**（dsh `Config.maxBytes` 的理由逐字：「a silently cut page reads as the
- * whole page」）。所以超標時這個結果不會出現，出現的是 413。**檔案本身沒有大小上限**——呼叫端翻頁，
+ * whole page」）。所以超標時這個結果不會出現，出現的是 `too-large` 拒絕。**檔案本身沒有大小上限**——呼叫端翻頁，
  * 同 dsh。
  */
 export interface DeliverableFilePage extends DeliverableFileStat {
@@ -84,95 +84,11 @@ export interface DeliverableFilePage extends DeliverableFileStat {
 }
 
 /**
- * 位元組窗口路由的結果：一個檔從 `offset` 起的一段**原始位元組**
- * （[#544](https://github.com/DemianLi/nexus-agent/issues/544)）。照 dsh 的 `WorkspaceFileBytes`
- * （`packages/api/workspace-files/src/types.ts:72-83`，`ddefc45`），欄位一格不差。
- *
- * **不解碼、不擋二進位**（dsh：「raw bytes, no text decoding and no binary rejection」）。它存在是為了
- * 那種文字頁讀不動的檔——一行本身就超過頁的位元組上限，按行切永遠是 413。**窗口切在哪個位元組
- * 由呼叫端決定**，所以 UTF-8 字元可能被切在兩個窗口之間；接起來解碼（`TextDecoder` 的
- * `stream: true`）是呼叫端的事，這裡不替它對齊。
- *
- * **窗口的上限也是拒絕，不是截斷**：要的 `length` 超過頁的位元組上限就是 413，同 dsh。
- */
-export interface DeliverableFileBytes extends DeliverableFileStat {
-  /** 這個窗口從第幾個位元組起，0 起算，就是請求的那個數。 */
-  readonly offset: number;
-  /** 窗口裡的位元組，base64。`offset` 在檔尾或之後時是空字串。 */
-  readonly data: string;
-  /** 這個窗口含檔案的最後一個位元組。 */
-  readonly eof: boolean;
-}
-
-/**
- * 預覽一個宣告過的交付檔，`GET`，帶 `?seq=&index=`，選配 `?offset=&limit=`。
- *
- * **只收座標，不收路徑**，是 [#452](https://github.com/DemianLi/nexus-agent/issues/452) 的範圍決定（只開放宣告過的檔）——路徑遍歷在形狀上就不可能發生。
- * 座標的意義見 {@link DeliverablesPresentedPayload.seq}。
- *
- * 錯誤協定照隔壁 `changes` 兩條（裸 status ＋純文字 ＋`cache-control: no-store`），而狀態碼**要分得出
- * 前端該做什麼**：400 座標不對；404 這台 server 錨不住這顆座標、或檔不在、或不是一般檔；
- * 413 **這一頁**超過頁的位元組上限（整檔沒有上限，串流分頁，
- * [#544](https://github.com/DemianLi/nexus-agent/issues/544)）；**422 不是文字**——這一頁含 NUL 位元組、
- * 或讀到不是 UTF-8 的位元組，照 dsh（前端改提供下載）。
- *
- * **不是 415**：那個碼這條線上已經在講「請求沒帶 `content-type: application/json`」，壓在一起
- * 前端就分不出「我忘了帶 header」與「這個檔是二進位」。
- *
- * @param threadId - thread id，就是 root 會話的 id。
- * @returns 路徑。
- */
-export function deliverableFilePath(threadId: string): string {
-  return `/threads/${encodeURIComponent(threadId)}/deliverables/file`;
-}
-
-/**
- * 下載一個宣告過的交付檔，`GET`，帶 `?seq=&index=`。回的是**原始位元組**
- * （`application/octet-stream` ＋ `content-disposition: attachment`）。
- *
- * **回原始位元組而不是 base64，是一條偏離。** dsh 的 `readAll` 回 base64 是因為它的載體是 RPC、
- * 帶不動位元組；我們的載體是 HTTP，原始位元組就是同一件事在這個載體上的講法，而 base64 會讓每一份
- * 下載多三分之一。
- *
- * **它跟這條線上每一條 `GET` 一樣要帶 `content-type: application/json`**（理由見 `THREADS_PATH`：
- * 那個 header 是閘門，擋的是不發 preflight 的跨來源 simple request）。**所以下載不能用
- * `<a download>`**——那種連結設不了 header。前端要 `fetch` 成 blob 再存。這是契約的一部分，
- * 不是實作建議：拿掉那道閘門才能用 `<a download>`，而那會把閘門本身挖掉。
- *
- * 上限是 `maxFileBytes`，超標回 413（**拒絕，不截斷**，同 dsh）。
- *
- * @param threadId - thread id，就是 root 會話的 id。
- * @returns 路徑。
- */
-export function deliverableDownloadPath(threadId: string): string {
-  return `/threads/${encodeURIComponent(threadId)}/deliverables/download`;
-}
-
-/**
- * 讀一個宣告過的交付檔的一個**位元組窗口**，`GET`，帶 `?seq=&index=`，選配 `?offset=&length=`
- * （位元組，`offset` 預設 0、`length` 預設且最多是頁的位元組上限）。回的是
- * {@link DeliverableFileBytes}。照 dsh 的 `readBytes`。
- *
- * **回 JSON 帶 base64，同 dsh；不學下載那條回原始位元組。** 下載那條的偏離理由是「base64 讓每一份
- * 下載多三分之一」，而一個窗口最多兩 MiB，那個理由在這裡不成立；窗口還要帶 `version`、`bytes`、
- * `eof` 給呼叫端接續，放在同一份 JSON 裡比拆進 header 直接。
- *
- * 錯誤協定同預覽：400 參數不對（含 `length` 為 0）；404 錨不住、檔不在、不是一般檔；413 `length`
- * 超過上限。**沒有 422**——窗口不解碼。同樣要帶 `content-type: application/json`。
- *
- * @param threadId - thread id，就是 root 會話的 id。
- * @returns 路徑。
- */
-export function deliverableBytesPath(threadId: string): string {
-  return `/threads/${encodeURIComponent(threadId)}/deliverables/bytes`;
-}
-
-/**
  * ## 命令通道上的交付檔讀取（[#747](https://github.com/DemianLi/nexus-agent/issues/747)）
  *
  * 照 dsh：讀工作區檔案走命令通道（`packages/api/workspace-files/src/index.ts:232-275`，`477b4f4`），不另開讀檔用的專用網址。
  * dsh 的設計筆記把「讀檔另開專用網址」列為考慮過並否決的做法（`.agents/notes/implemented/architecture/2026-09-17-workspace-file-binary-transfer.md:20`）。
- * 上面三個路徑函式是同一件事在另一個載體上的講法，第 3 刀（#747 收尾）會連同它們一起拿掉；這一段是新的講法。
+ * 原本的三條專用網址（`GET /threads/:id/deliverables/{file,download,bytes}`）已在 #747 收尾時拿掉。
  *
  * **只換傳送方式。** 用 `(seq, index)` 定位、只讀宣告過的檔，是 #452 的範圍決定，這裡不動。
  *
@@ -274,8 +190,9 @@ export type DeliverableCommand = DeliverableReadCommand | DeliverableReadBytesCo
 /**
  * 讀位元組的結果：照 dsh 的 `WorkspaceFileBytes`（`packages/api/workspace-files/src/types.ts:84-91`），**`data` 是位元組**。
  *
- * 跟上面 {@link DeliverableFileBytes} 並存：那個的 `data` 是 base64 字串，舊的 `GET` 路由還在用，第 3 刀跟路徑函式一起刪。
- * 直接改舊型別，web 的 `apps/web/src/lib/deliverable-file.ts` 當場編不過，第 1 刀就不是純新增了。
+ * 窗口的上限是拒絕，不是截斷：要的 `length` 超過頁的位元組上限就是 `too-large`，同 dsh。**不解碼、不擋二進位**（dsh：「raw bytes,
+ * no text decoding and no binary rejection」）；窗口切在哪個位元組由呼叫端決定，所以 UTF-8 字元可能被切在兩個窗口之間，
+ * 接起來解碼（`TextDecoder` 的 `stream: true`）是呼叫端的事。
  *
  * 整檔讀時 `offset` 是 0、`eof` 是 `true`。
  */
