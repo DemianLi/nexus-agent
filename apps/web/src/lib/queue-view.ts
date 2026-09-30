@@ -1,4 +1,4 @@
-import type { ConversationStatus } from '@nexus/wire';
+import type { ConversationStatus, WireQueuedInput } from '@nexus/wire';
 
 /**
  * 送出佇列在畫面上的幾個判斷（[#645](https://github.com/DemianLi/nexus-agent/issues/645)）。資料是 harness 的投影
@@ -21,6 +21,20 @@ export const QUEUE_PARKED_TEXT = '停止後這些不會自己跑，送出下一�
 
 /** 改、刪沒收下而那一件已經不在隊裡（Q7）。 */
 export const QUEUE_GONE_TEXT = '這一則可能已經開始跑了';
+
+/**
+ * 背景子代理結算通知在畫面上的那一句（#851）。伺服器排進來的文字是給模型的英文，不是人說的話，畫面不照抄：只說
+ * 「有這件事」，細節（哪個子代理、怎麼結束）wire 沒帶，留在日誌。
+ */
+export const SETTLED_NOTICE_TEXT = '背景子代理已完成';
+
+/**
+ * 這一件是不是背景子代理結算的通知，而不是人排的（#851）。**只認這一種來源，其餘照人處理**：舊的一側沒有 `source`
+ * 之外的成員，新增的來源要各自決定怎麼畫，不在這裡預設。
+ */
+export function isSettledNotice(item: Pick<WireQueuedInput, 'source'>): boolean {
+  return item.source.kind === 'subagent-settled';
+}
 
 /** 表頭：件數。 */
 export function queueHeading(count: number): string {
