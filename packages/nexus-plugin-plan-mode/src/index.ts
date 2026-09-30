@@ -197,9 +197,6 @@ import {
 // `/plan` 的詞彙是這個套件的公開介面的一部分（測試與組裝點都讀得到），所以整段轉出去。
 export * from './command.js';
 
-/** 這個 plugin 宣告的能力名。要相依它的 plugin 把這個字串放進自己的 `requires`。 */
-export const PLAN_MODE_CAPABILITY = 'plan-mode';
-
 /** 註冊出來的工具名。組裝點要把它排進 `toolOrder` 時用得到。 */
 export const EXIT_PLAN_MODE_TOOL_NAME = 'exit_plan_mode';
 
@@ -585,9 +582,8 @@ function createExitPlanModeTool(
 /**
  * 建一個計劃模式 plugin。
  *
- * 五個註冊點，各有各的理由：
+ * 四個註冊點，各有各的理由：
  *
- * - **`capabilities`**：讓別人 `requires` 得到。
  * - **`sessions`**：接上 root 那份日誌、折它的 `plan/mode`。**只管 root**，同 goal：模式是
  *   人對這個會話選的，subagent 沒有人可以選。
  * - **`middleware`（`prepend: true`）**：**排在核准閘門之前是必要的，不是偏好。**
@@ -673,7 +669,6 @@ export const planModePlugin: NexusPlugin<PlanModeConfig> = {
     // 軟相依，同 `@nexus/plugin-ask-user`：沒人提供時當作有人在。產品路徑由組裝點明著提供。
     const channel: ApprovalChannel = registry.services.get(CHANNEL_SERVICE) ?? { kind: 'human' };
 
-    registry.capabilities.provide(PLAN_MODE_CAPABILITY);
     registry.middleware.use(createPlanModeMiddleware(guidance, active, settle), { prepend: true });
     registry.tools.register(
       createExitPlanModeTool(

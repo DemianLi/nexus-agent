@@ -14,7 +14,7 @@
  * 下面這段講的因此不是「為什麼這個 package 沒有不變量」，是**它的契約實際證在哪裡**：
  *
  * 跟 `@nexus/plugin-memory` 同一個形狀：掃描與注入都在基座的 skills
- * middleware 裡，這個套件只提供慣例路徑與能力名。`index.ts` 檔頭記的四件實測事實
+ * middleware 裡，這個套件只提供慣例路徑。`index.ts` 檔頭記的四件實測事實
  * （progressive disclosure 是純 prompt、`allowed-tools` 零強制、`module` frontmatter 懸空、
  * 目錄載到就凍住）**全是基座的行為**，這個套件既不擁有也改不動。
  *

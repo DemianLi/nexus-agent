@@ -15,9 +15,6 @@ import { tool } from '@langchain/core/tools';
 import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
 import { z } from 'zod';
 
-/** 這個 plugin 宣告的能力名。要相依它的 plugin 把這個字串放進自己的 `requires`。 */
-export const ECHO_CAPABILITY = 'echo';
-
 /** 註冊出來的工具名。組裝點要把它排進 `toolOrder` 時用得到。 */
 export const ECHO_TOOL_NAME = 'echo';
 
@@ -55,7 +52,6 @@ export const echoPlugin: NexusPlugin<EchoConfig> = {
   name: 'echo',
   Config: echoConfigSchema,
   apply(registry: PluginRegistry, config: EchoConfig): void {
-    registry.capabilities.provide(ECHO_CAPABILITY);
     registry.tools.register(
       tool(({ message }) => `${config.prefix}：${message}`, {
         name: ECHO_TOOL_NAME,

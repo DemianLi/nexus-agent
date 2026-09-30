@@ -3,8 +3,7 @@
  *
  * 跟 `@nexus/plugin-memory` 一樣薄，理由也一樣：基座的 `createSkillsMiddleware` 已經
  * 做完了掃描與注入，`@nexus/core` 的 `skills` 註冊點與 `foldRegistry` 在 Phase 1 就接好
- * 了，所以這裡真正提供的只有一個**慣例路徑**（{@link DEFAULT_SKILLS_SOURCE}）與一個
- * **能力名**（{@link SKILLS_CAPABILITY}）。
+ * 了，所以這裡真正提供的只有一個**慣例路徑**（{@link DEFAULT_SKILLS_SOURCE}）。
  *
  * 動工前查過基座（`deepagents@1.13.1`，`dist/langsmith-*.js` 的 skills middleware）。
  * 四件實測事實決定了這個套件能承諾什麼：
@@ -25,9 +24,6 @@
 
 import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
 import { z } from 'zod';
-
-/** 這個 plugin 宣告的能力名。要相依它的 plugin 把這個字串放進自己的 `requires`。 */
-export const SKILLS_CAPABILITY = 'skills';
 
 /**
  * 省略 `sources` 時用的來源。
@@ -92,7 +88,6 @@ export const skillsPlugin: NexusPlugin<SkillsConfig> = {
   Config: skillsConfigSchema,
   apply(registry: PluginRegistry, config: SkillsConfig): void {
     const { sources } = config;
-    registry.capabilities.provide(SKILLS_CAPABILITY);
     // 路徑格式的檢查在 registry 那一側（`assertLoadableSkillsPath`），不在這裡。
     for (const source of sources) registry.skills.addSource(source);
   },

@@ -13,8 +13,7 @@
  *
  * **它薄，而且薄是對的。** 基座的 `createMemoryMiddleware` 已經做完了載入與注入，
  * `@nexus/core` 的 `memory` 註冊點與 `foldRegistry` 在 Phase 1 就接好了，所以這個套件
- * 真正提供的只有兩件事：一個**慣例路徑**（{@link DEFAULT_MEMORY_SOURCE}），與一個
- * 讓別的 plugin 可以 `requires` 的**能力名**（{@link MEMORY_CAPABILITY}）。
+ * 真正提供的只有一件事：一個**慣例路徑**（{@link DEFAULT_MEMORY_SOURCE}）。
  *
  * 動工前查過基座（`deepagents@1.13.1`）。三件事決定了這個套件能承諾什麼、不能承諾
  * 什麼——都是實測，不是文件上的說法：
@@ -32,9 +31,6 @@
 
 import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
 import { z } from 'zod';
-
-/** 這個 plugin 宣告的能力名。要相依它的 plugin 把這個字串放進自己的 `requires`。 */
-export const MEMORY_CAPABILITY = 'memory';
 
 /**
  * 省略 `sources` 時用的來源。
@@ -92,7 +88,6 @@ export const memoryPlugin: NexusPlugin<MemoryConfig> = {
   Config: memoryConfigSchema,
   apply(registry: PluginRegistry, config: MemoryConfig): void {
     const { sources } = config;
-    registry.capabilities.provide(MEMORY_CAPABILITY);
     // 路徑格式的檢查在 registry 那一側（`assertLoadableMemoryPath`），不在這裡。
     for (const source of sources) registry.memory.addSource(source);
   },

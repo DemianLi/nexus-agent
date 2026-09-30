@@ -103,9 +103,6 @@ import type { InstructionFile } from './render.js';
 
 export { AGENT_INSTRUCTIONS_INTRO, COMPACT_AGENT_INSTRUCTIONS_INTRO } from './render.js';
 
-/** 這個 plugin 宣告的能力名。要相依它的 plugin 把這個字串放進自己的 `requires`。 */
-export const AGENT_INSTRUCTIONS_CAPABILITY = 'agent-instructions';
-
 /** middleware 的名字。撞名是 fold 那側的判準，所以它是公開的。 */
 export const AGENT_INSTRUCTIONS_MIDDLEWARE_NAME = 'AgentInstructionsMiddleware';
 
@@ -280,7 +277,6 @@ export const agentInstructionsPlugin: NexusPlugin<AgentInstructionsConfig> = {
   Config: agentInstructionsConfigSchema,
   apply(registry: PluginRegistry, config: AgentInstructionsConfig): void {
     const { maxBytes } = config;
-    registry.capabilities.provide(AGENT_INSTRUCTIONS_CAPABILITY);
     registry.middleware.useWithBackend((backend) =>
       createAgentInstructionsMiddleware(backend, maxBytes, registry.sessions),
     );
