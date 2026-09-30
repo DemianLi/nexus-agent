@@ -7,11 +7,11 @@
  *
  * | 來源 | 狀態 | 可重試 |
  * | --- | --- | --- |
- * | 協定錯誤（參數不合格：座標、翻頁、窗口），見 {@link failureOfRejected} | `'invalid'` —— **這是 bug 不是使用者狀態** | 否 |
+ * | 協定錯誤 `invalid_argument`（參數不合格：座標、翻頁、窗口），見 {@link failureOfRejected} | `'invalid'` —— **這是 bug 不是使用者狀態** | 否 |
  * | `deliverable/no-anchor`、`not-found`、`not-regular-file` | `'missing'` —— 錨不住、檔不在、不是一般檔 | 否 |
  * | `deliverable/too-large`（帶 `maxBytes`） | 文字頁：先縮 `limit`，縮到 1 還是太大就改走位元組窗口（見下）。只有窗口本身太大才是 `'too-large'` | 否 |
  * | `deliverable/not-text` | `'not-text'` —— 不是文字：含 NUL、或不是 UTF-8。**可能讀到一半才出現**（server 串流分頁，只判它讀到的那一頁，#552） | 否 |
- * | 斷線／形狀不對 | `'error'` | 是 |
+ * | 斷線、形狀不對、被載體層擋下（5xx、401）、別的協定碼 | `'error'` | 是 |
  *
  * **只有 `'error'` 給重試。** 隔壁把非 404 的失敗全收進可重試的 `'error'`，那一套搬過來的話
  * 一顆重試鈕會對著一個永遠不會成功的 `'invalid'` 一直打。
@@ -166,15 +166,13 @@ function failureOf(error: DeliverableReadError): DeliverableFileFailure {
 }
 
 /**
- * 「這條線收不了」：協定錯誤（參數不合格）、被載體層擋下、回應看不懂。
- *
- * **暫時一律當 `'invalid'`（終局、不重試）。** 這三種在 `createDeliverableClient` 的 `rejected` 裡只剩一句話，分不出
- * 是協定錯誤 `invalid_argument`（真的 bug、該終局）還是 5xx（暫時的、該可重試）；不比對句子，因為那是「只剩字串」。
- * 代價：暫時性的載體錯誤也變成終局，而且翻頁狀態機（`page-limit.ts`）拿 `'invalid'` 判 `limit` 是不是超過 `maxLines`，
- * 載體錯誤可能被誤判成那一種。wire 補上 `rejected` 的 `code`／`status` 之後，這裡改成照它分。
+ * 「這條線收不了」：只有協定錯誤 `invalid_argument`（參數不合格：座標、翻頁、窗口）是 `'invalid'`——終局、不重試，
+ * 翻頁狀態機（`page-limit.ts`）也靠它判 `limit` 是不是超過 `maxLines`。其餘（別的協定碼、被載體層擋下的 5xx／401、
+ * 回應看不懂）都是可重試的 `'error'`。分法靠 `createDeliverableClient` 的 `rejected.code`（[#813](https://github.com/DemianLi/nexus-agent/pull/813)），
+ * 不比對句子。
  */
-function failureOfRejected(): DeliverableFileFailure {
-  return 'invalid';
+function failureOfRejected(rejected: { readonly code?: string }): DeliverableFileFailure {
+  return rejected.code === 'invalid_argument' ? 'invalid' : 'error';
 }
 
 /** 一頁在檔案裡佔幾個位元組（含結尾的換行）。同一頁物件只算一次。 */
@@ -263,7 +261,7 @@ export function createDeliverableFileStore({
         offset,
         ...(limit === undefined ? {} : { limit }),
       });
-      if (outcome.kind === 'rejected') return failureOfRejected();
+      if (outcome.kind === 'rejected') return failureOfRejected(outcome);
       if (!outcome.result.ok) return failureOf(outcome.result.error);
       return isFilePage(outcome.result.value) ? outcome.result.value : 'error';
     } catch {
@@ -286,7 +284,7 @@ export function createDeliverableFileStore({
         offset,
         ...(length === undefined ? {} : { length }),
       });
-      if (outcome.kind === 'rejected') return failureOfRejected();
+      if (outcome.kind === 'rejected') return failureOfRejected(outcome);
       if (!outcome.result.ok) return failureOf(outcome.result.error);
       return isFileBytes(outcome.result.value) ? outcome.result.value : 'error';
     } catch {

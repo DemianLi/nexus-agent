@@ -5,6 +5,7 @@ import type {
   DeliverableReadParams,
   DeliverableRefusalCode,
 } from '@nexus/wire';
+import type { WireErrorCode } from '@nexus/wire';
 import { encodeBinaryResult, errorResponse, successResponse } from '@nexus/wire';
 import { Blob as NodeBlob, File as NodeFile } from 'node:buffer';
 import { vi } from 'vitest';
@@ -83,6 +84,12 @@ export const tooLargeReply =
 /** 協定錯誤 `invalid_argument`：參數本身不合格（座標、翻頁、窗口）。HTTP 200，body 是 error 物件。 */
 export const badRequestReply: Reply = (id) =>
   json(errorResponse(id, 'invalid_argument', '參數不合格'));
+
+/** 別的協定錯誤：HTTP 200，body 是 error 物件，碼不是 `invalid_argument`。 */
+export const protocolErrorReply =
+  (code: WireErrorCode): Reply =>
+  (id) =>
+    json(errorResponse(id, code, '這條線收不了'));
 
 /** 載體層擋下（非 2xx），例如 500。 */
 export const carrierReply =

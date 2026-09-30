@@ -8,6 +8,7 @@ import {
   carrierReply,
   deliverableFetch,
   pageReply,
+  protocolErrorReply,
   refuseReply,
   tooLargeReply,
 } from '@/test/deliverable-commands';
@@ -90,9 +91,15 @@ describe('交付檔的讀取', () => {
     expect(await load(store)).toBe('error');
   });
 
-  it('載體層擋下（非 2xx）：暫時當 invalid，wire 補上 code／status 之前分不出成因（#747）', async () => {
-    const { store } = storeWith(() => carrierReply(500));
-    expect(await load(store)).toBe('invalid');
+  it('載體層擋下（5xx、401）與別的協定碼是可重試的 error，只有 invalid_argument 是終局（#813）', async () => {
+    for (const reply of [
+      carrierReply(500),
+      carrierReply(401),
+      protocolErrorReply('queue_item_not_found'),
+    ]) {
+      const { store } = storeWith(() => reply);
+      expect(await load(store)).toBe('error');
+    }
   });
 
   it('只有 error 會再打一次；終局不會', async () => {

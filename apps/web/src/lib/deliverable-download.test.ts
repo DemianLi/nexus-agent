@@ -8,6 +8,7 @@ import {
   bytesReply,
   carrierReply,
   deliverableFetch,
+  protocolErrorReply,
   refuseReply,
   tooLargeReply,
 } from '@/test/deliverable-commands';
@@ -137,9 +138,15 @@ describe('交付檔的下載', () => {
     expect(created).toHaveLength(0);
   });
 
-  it('參數不合格（協定錯誤）是 invalid；載體層擋下暫時也是（#747，wire 補上 code／status 之前分不出成因）', async () => {
+  it('參數不合格（invalid_argument）是 invalid；載體層擋下與別的協定碼是可重試的 error（#813）', async () => {
     expect(await downloaderWith(() => badRequestReply).downloader.download(FILE)).toBe('invalid');
-    expect(await downloaderWith(() => carrierReply(500)).downloader.download(FILE)).toBe('invalid');
+    for (const reply of [
+      carrierReply(500),
+      carrierReply(401),
+      protocolErrorReply('queue_item_not_found'),
+    ]) {
+      expect(await downloaderWith(() => reply).downloader.download(FILE)).toBe('error');
+    }
     expect(created).toHaveLength(0);
   });
 

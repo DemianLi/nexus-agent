@@ -22,10 +22,10 @@
  *
  * | 來源 | 狀態 | 可重試 |
  * | --- | --- | --- |
- * | 協定錯誤（參數不合格）等「這條線收不了」，見 {@link failureOfRejected} | `'invalid'` —— **這是 bug 不是使用者狀態** | 否 |
+ * | 協定錯誤 `invalid_argument`（參數不合格），見 {@link failureOfRejected} | `'invalid'` —— **這是 bug 不是使用者狀態** | 否 |
  * | `deliverable/no-anchor`、`not-found`、`not-regular-file` | `'missing'` —— 錨不住、檔不在、不是一般檔 | 否 |
  * | `deliverable/too-large` | `'too-large'` —— 整檔超過 `maxFileBytes`。**下載的太大是終局** | 否 |
- * | 斷線、形狀不對 | `'error'` | 是 |
+ * | 斷線、形狀不對、被載體層擋下（5xx、401）、別的協定碼 | `'error'` | 是 |
  *
  * **沒有 `'not-text'`。** `deliverable/not-text` 只會從 `deliverable.read` 來（它掃 NUL、要求 UTF-8），
  * `readBytes` 根本不看內容——不是文字的檔正是下載存在的理由。真收到就代表我們對協定的理解錯了，落在 `'error'`
@@ -70,13 +70,9 @@ function failureOf(error: DeliverableReadError): DeliverableDownloadFailure {
   }
 }
 
-/**
- * 「這條線收不了」（協定錯誤、被載體層擋下、回應看不懂）：暫時一律 `'invalid'`，理由與代價同
- * `deliverable-file.ts` 的 `failureOfRejected`——`createDeliverableClient` 的 `rejected` 還分不出成因，wire 補上
- * `code`／`status` 之後這裡改成照它分。
- */
-function failureOfRejected(): DeliverableDownloadFailure {
-  return 'invalid';
+/** 「這條線收不了」：只有協定錯誤 `invalid_argument` 是 `'invalid'`，其餘可重試；理由同 `deliverable-file.ts` 的 `failureOfRejected`。 */
+function failureOfRejected(rejected: { readonly code?: string }): DeliverableDownloadFailure {
+  return rejected.code === 'invalid_argument' ? 'invalid' : 'error';
 }
 
 /**
@@ -117,7 +113,7 @@ export function createDeliverableDownloader({
       try {
         // **不帶 `offset`／`length`**：兩個都不給才是整檔下載，給任何一個就變成窗口。
         const outcome = await client.readBytes(threadId, { seq, index });
-        if (outcome.kind === 'rejected') return failureOfRejected();
+        if (outcome.kind === 'rejected') return failureOfRejected(outcome);
         if (!outcome.result.ok) return failureOf(outcome.result.error);
         // **位元組從頭到尾不碰文字解碼器**：中間只要出現一次文字解碼，二進位就壞了，而且全程
         // 沒有徵兆——`readRaw` 那支基座工具正是這樣壞的（6 位元組進、10 出，`error` 仍是
