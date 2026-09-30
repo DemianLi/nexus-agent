@@ -1807,6 +1807,42 @@ describe('壓縮前先剪掉過大的工具結果', () => {
   });
 
   /**
+   * **翻面（[#719](https://github.com/DemianLi/nexus-agent/issues/719)）：外溢層開著時，剪刀碰到的不再是原文。**
+   * 上面那條絆索守的是「外溢層沒開，上界是基座的 80,000 字元」；這一條守它的反面——同一則 6 萬字元（低於基座那條線）的
+   * 結果，外溢層開著就先被換成預覽加路徑，剪刀（門檻 8,192 字元）之後再剪的是**那份預覽**，而尾巴那句通知
+   * （1,024 字元的尾巴放得下）留下來，全文照路徑讀得回。外溢層沒開的話，同一則會被剪成頭 4,096 加尾 1,024，
+   * **一個能讀回原文的路徑都沒有**——這一條紅代表外溢層被拿掉，或排到剪刀後面了。
+   */
+  it('外溢層開著：低於 8 萬字元但超過預算的結果，剪刀剪過之後通知與路徑還在', async () => {
+    const varied = Array.from({ length: 2_000 }, (_, i) => `line ${i} alpha beta ${i * 7919}`).join(
+      '\n',
+    );
+    const root = await mkdtemp(join(tmpdir(), 'prune-spill-'));
+    const model = bulkTurns();
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [bulkPlugin(varied)],
+      summarization: { trigger: [{ type: 'tokens', value: 5_000 }] },
+      toolResultStash: { rootDir: root, session: 's' },
+      spillPolicy: { maxInlineTokens: 4_000 },
+    });
+    try {
+      await agent.invoke(toAgentInvocation('去拿一坨。'));
+    } finally {
+      await dispose();
+    }
+    expect(varied.length).toBeLessThan(80_000);
+    const text = String(toolResults(model.prompts[1]!)[0]!.content);
+    // 剪刀動過那份預覽（前提：預覽比它的門檻大），通知還在尾巴上。
+    expect(text).toContain(TOOL_RESULT_PRUNE_MARKER);
+    expect(text).toMatch(
+      /Full formatted result stored at: \/large_tool_results\/[0-9a-f]{12}-bulk\.txt\./u,
+    );
+    const [session] = await readdir(root);
+    expect(await readdir(join(root, session!))).toHaveLength(1);
+  });
+
+  /**
    * 剪刀的預算從部署設定的條目來（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
    *
    * **判準必須是行為，不能是「stack 裡有那一顆」。** 剪刀不是獨立的一顆 middleware，它包在

@@ -31,6 +31,10 @@
  * > （[#151](https://github.com/DemianLi/nexus-agent/issues/151)），不是 pruner 的。
  * > 下面那截本來就在預算內。
  *
+ * > **2026-09-30 補（[#719](https://github.com/DemianLi/nexus-agent/issues/719)）**：外溢層（`spill-policy.ts`）開著時，
+ * > 上界從 80,000 字元往下拉到它的 `maxInlineTokens`（出貨 12,500 token，約 5 萬字元）——超過的結果先被換成預覽加路徑，
+ * > 輪不到這把剪刀。外溢層關掉才回到下面說的 80,000 字元。
+
  * 那條 8 萬字元的線因此是我們的**上界**，而它是基座的一個預設值——它變了、或 eviction 被
  * 拿掉了，這把剪刀能碰到的區間就跟著變，**兩邊都不會拋**。所以
  * `apps/harness/src/summarization.test.ts` 有一條測試把它釘住。

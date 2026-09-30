@@ -36,12 +36,11 @@
  * @module
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { chmod, lstat, mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type {
-  AnyBackendProtocol,
   BackendProtocolV2,
   EditResult,
   FileDownloadResponse,
@@ -53,6 +52,8 @@ import type {
   ReadResult,
   WriteResult,
 } from 'deepagents';
+import { SPILL_RETRIEVAL_HINT } from '@nexus/core';
+import type { SpillRef, SpillSaveRequest, SpillStore } from '@nexus/core';
 import { TextOnlyStateBackend } from './binary-read.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { assertPrivateFile } from './plugin-config.js';
@@ -181,6 +182,30 @@ export class StashRoute implements BackendProtocolV2 {
     return this.#host.sessionDir;
   }
 
+  /**
+   * 外溢層（[#719](https://github.com/DemianLi/nexus-agent/issues/719)）的存檔服務：**只寫主機，不退回記憶體**。
+   *
+   * 跟 {@link write} 相反，這裡寫不進去要拋：外溢層把拋錯當成「保留原結果」（dsh `spill-policy` 的 `keeping the inline
+   * content`），8 萬字元以下的結果於是原樣交給模型。退回記憶體的話這裡會回報成功，模型拿到的是預覽加一個只在這個行程
+   * 讀得回的路徑，而原文本來完全放得下。
+   *
+   * 檔名是隨機的（`<十二個十六進位字>-<工具名>.txt`），不會跟基座按工具呼叫編號取的名字撞在一起；定位是虛擬前綴下的路徑，
+   * 讀取走路由，圍欄看不到的主機絕對路徑不會出現在模型面前。
+   *
+   * @param prefix - 這條路由在組裝點掛的前綴（不含結尾斜線）。
+   * @returns 存檔服務。
+   */
+  spillStore(prefix: string): SpillStore {
+    return {
+      saveText: async (request: SpillSaveRequest): Promise<SpillRef> => {
+        const name = `${randomBytes(6).toString('hex')}-${request.toolName.replace(/[^A-Za-z0-9._-]/gu, '_')}.txt`;
+        const result = await this.#host.write(`/${name}`, request.content);
+        if (failed(result)) throw new Error(result.error);
+        return { locator: `${prefix}/${name}`, retrievalHint: SPILL_RETRIEVAL_HINT };
+      },
+    };
+  }
+
   #backendFor(filePath: string): BackendProtocolV2 {
     return this.#inMemory.has(filePath) ? this.#memory : this.#host;
   }
@@ -243,12 +268,12 @@ export class StashRoute implements BackendProtocolV2 {
 }
 
 /**
- * 組裝點用的暫存路由目標。回傳型別是 {@link AnyBackendProtocol}，因為 `CompositeBackend` 的路由表收的是它。
+ * 組裝點用的暫存路由目標；同一個實例也給外溢層當存檔服務（{@link StashRoute.spillStore}）。
  *
  * @param options - 根目錄與會話鑰匙。
  * @returns 一個會話一個的路由目標。
  */
-export function createToolResultStash(options: ToolResultStashOptions): AnyBackendProtocol {
+export function createToolResultStash(options: ToolResultStashOptions): StashRoute {
   return new StashRoute(options);
 }
 

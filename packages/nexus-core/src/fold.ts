@@ -35,6 +35,8 @@ import {
 } from './invalid-tool-args.js';
 import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
 import { createMaxTokensCarrier, createMaxTokensMiddleware } from './max-tokens.js';
+import { createSpillPolicyMiddleware } from './spill-policy.js';
+import type { SpillPolicyOptions } from './spill-policy.js';
 import { createObservationPolicy, OBSERVATION_POLICY_PLUGIN_NAME } from './observation.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
@@ -290,6 +292,14 @@ export interface FoldOptions {
   observationPolicy?: boolean;
 
   /**
+   * 工具結果的外溢層（[#719](https://github.com/DemianLi/nexus-agent/issues/719)）：一則結果超過 `maxInlineTokens`，
+   * 全文存進 `store`，模型只收到預覽加定位。**省略就不掛**——那時超過 80,000 字元的結果仍由基座換成預覽。
+   *
+   * 沒有 closure 狀態，root 與每個子代理共用同一份實例（儲存本身按會話分）。見 {@link ./spill-policy.ts}。
+   */
+  spillPolicy?: SpillPolicyOptions;
+
+  /**
    * 每一次模型呼叫的 token 帳目要不要記進會話日誌。省略即開著，`false` 是明著關掉。
    *
    * **省略時還有第二條關法**：部署設定層把 `@nexus/core/model-usage` 那一列標成
@@ -433,6 +443,12 @@ export function foldRegistry(
   // 讀檔結果最後補上讀到哪（#594）：同上，只在有 backend 時掛、包的是交給基座的那一份，無狀態、
   // 一份走遍 root 與每個 subagent。見 {@link ./read-continuation.ts}。
   const readContinuation = backend === undefined ? undefined : createReadContinuationMiddleware();
+  // 外溢層（#719）：無狀態、一份走遍 root 與每個 subagent，位置緊貼中止（在 plugin 與核准閘門外側），
+  // 圍堵記進日誌的就是它換過的那一則。見 {@link ./spill-policy.ts}。
+  const spill =
+    options.spillPolicy === undefined
+      ? undefined
+      : createSpillPolicyMiddleware(options.spillPolicy);
   // **plugin middleware 在這裡就攤平，只攤一次**：要 backend 的那一種（`useWithBackend`，#388）
   // 建出來的實例得走遍 root 與每個子代理，這裡各算一次的話兩邊拿到的會是兩份。
   const plugins = pluginMiddleware(registry, backend);
@@ -460,6 +476,7 @@ export function foldRegistry(
       readContinuation,
       invalidToolArgs,
       maxTokens,
+      spill,
     }),
     middleware: foldMiddleware(
       options.stepInbox === true ? createStepInboxMiddleware() : undefined,
@@ -479,6 +496,7 @@ export function foldRegistry(
       readContinuation,
       invalidToolArgs,
       maxTokens,
+      spill,
     ),
   };
 
@@ -804,6 +822,7 @@ function foldMiddleware(
   readContinuation: AgentMiddleware | undefined,
   invalidToolArgs: AgentMiddleware,
   maxTokens: AgentMiddleware,
+  spill: AgentMiddleware | undefined,
 ): AgentMiddleware[] {
   return [
     // 插話排最前面：它的 `beforeModel` 先於其餘每一顆（重複提醒在同一步就看得到人插了話、清零），它的
@@ -814,6 +833,9 @@ function foldMiddleware(
     // 緊貼圍堵：在它裡面（換過的結果圍堵才記得到碼），在起訖紀錄器外面（中止之後被擋下的那次
     // 呼叫不算一步）。見 {@link ./turn-cancel.ts}。
     turnCancel,
+    // 外溢層在 plugin 與核准閘門的外側、圍堵的內側：內層每一顆換過的結果它都看得到，而圍堵寫進日誌的是它換過的那一則
+    // （紀錄只記預覽，同 dsh `tool-calls.ts:152-156`）。見 {@link ./spill-policy.ts}。
+    ...(spill === undefined ? [] : [spill]),
     ...plugins.prepended,
     approvalGate,
     ...(observationPolicy === undefined ? [] : [observationPolicy]),
@@ -1315,6 +1337,7 @@ function foldSubAgents(
     readContinuation: AgentMiddleware | undefined;
     invalidToolArgs: AgentMiddleware;
     maxTokens: AgentMiddleware;
+    spill: AgentMiddleware | undefined;
   },
 ): SubAgent[] {
   // 自帶的 tools 先配上來源：它們沒走 registry 那條路，來源只有這裡知道。
@@ -1406,6 +1429,8 @@ function foldSubAgents(
         context.containment,
         // 中止緊貼圍堵，同 root：root 按了停止，訊號經 `configurable` 傳到這裡（#265 的 Q10）。
         context.turnCancel,
+        // 外溢層同 root 的位置；共用一份，它無狀態（#719）。
+        ...(context.spill === undefined ? [] : [context.spill]),
         // plugin 以 `prepend` 掛的，同 root：在中止內側、閘門外側（#327）。
         ...context.plugins.prepended,
         context.approvalGate,

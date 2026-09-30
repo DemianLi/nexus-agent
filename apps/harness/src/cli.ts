@@ -48,6 +48,7 @@ import { threadTitleConfigSchema, threadTitlePlugin } from './settings/thread-ti
 import type { ThreadTitleConfig } from './settings/thread-title.js';
 import { findModelEntry } from './model-catalog.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
+import { spillPolicyPlugin } from './settings/spill-policy.js';
 import { resolveToolResultStashRoot, toolResultStashPlugin } from './settings/tool-result-stash.js';
 import { cleanupToolResultStash } from './tool-result-stash.js';
 import type { ToolResultStashOptions } from './tool-result-stash.js';
@@ -840,6 +841,11 @@ export async function createCliAgent(
      * 同一個會話」的既有身分。省略就是記憶體暫存（沒有會話日誌的組裝、手搭的呼叫端）。
      */
     readonly toolResultStash?: ToolResultStashOptions;
+    /**
+     * 工具結果外溢層的預算（[#719](https://github.com/DemianLi/nexus-agent/issues/719)），原樣交給 `createNexusAgent`。
+     * 從 `spill-policy` 那一列解；省略就是不掛。存處是上面的 `toolResultStash`，沒給它就不會外溢。
+     */
+    readonly spillPolicy?: { readonly maxInlineTokens: number };
   },
   plugins: readonly PluginEntry[],
   cwd: string = process.cwd(),
@@ -1003,6 +1009,7 @@ export async function createCliAgent(
     ...(invocation.toolResultStash !== undefined && {
       toolResultStash: invocation.toolResultStash,
     }),
+    ...(invocation.spillPolicy !== undefined && { spillPolicy: invocation.spillPolicy }),
   });
   // 註冊表跟 agent 同壽命：REPL 是一條連續對話，`seq` 要跨輪連續才有意義。**subagent 的
   // 那些日誌也掛在它上面**，第一次有人要寫的時候才出生（見 `SessionRegistry` 的偏離）。
@@ -1586,6 +1593,8 @@ async function runLaunched(
   const stashConfig = startupSetting(plugins, toolResultStashPlugin);
   const stashRoot = resolveToolResultStashRoot(stashConfig, options.env ?? process.env);
   const stashWarn = (message: string): void => printer.error(message);
+  // 外溢層的預算（#719）：省略就是不掛。
+  const spillPolicy = startupSetting(plugins, spillPolicyPlugin);
   await cleanupToolResultStash(stashRoot, stashConfig.cleanupPeriodDays, { warn: stashWarn });
   // 關掉時 `--resume` 已經被 `assertPersistenceFlags` 擋下，所以有 `resumeDir` 就一定有 store。
   const resumed =
@@ -1649,6 +1658,9 @@ async function runLaunched(
             session: sessionStore.directory,
             warn: stashWarn,
           },
+          ...(spillPolicy.maxInlineTokens !== undefined && {
+            spillPolicy: { maxInlineTokens: spillPolicy.maxInlineTokens },
+          }),
         }),
       },
       plugins,

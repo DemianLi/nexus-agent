@@ -28,6 +28,10 @@
  * spill 檔、內容換成 head/tail 各半的預覽加一行**帶檔案位址**的通知。日誌因此天生就是截過的，
  * 日誌之後到畫面沒有任何內容上限。
  *
+ * ⚠️ **前提已不成立（[#719](https://github.com/DemianLi/nexus-agent/issues/719)）**：我們現在有外溢層（`@nexus/core` 的
+ * `spill-policy.ts`，模型面、超標存主機檔、通知帶路徑），日誌記的也是換過的預覽。以下這一段「沒有 spill、日誌保全文」是
+ * 寫這段當時的事實，**這條偏離怎麼收是 [#736](https://github.com/DemianLi/nexus-agent/issues/736) 的事，這裡不改寫**。
+ *
  * 我們沒有 spill 這個能力，日誌又刻意保著搬移前的全文，所以只能截在**放上線**這一刻：
  *
  * - **數值由清單上 `tool-text` 那一列講**（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）——
