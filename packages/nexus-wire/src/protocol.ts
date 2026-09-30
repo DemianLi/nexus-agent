@@ -23,6 +23,9 @@ import type {
   RunStartParams,
 } from '@langchain/protocol';
 
+import { isDeliverableMethod } from './deliverables.js';
+import type { DeliverableMethod } from './deliverables.js';
+
 export type {
   Channel,
   Command,
@@ -372,7 +375,8 @@ export type RpcMethod =
   | SlashMethod
   | typeof RUN_CANCEL_METHOD
   | typeof QUEUE_UPDATE_METHOD
-  | FeedbackMethod;
+  | FeedbackMethod
+  | DeliverableMethod;
 
 export function isRpcMethod(value: unknown): value is RpcMethod {
   return (
@@ -380,7 +384,8 @@ export function isRpcMethod(value: unknown): value is RpcMethod {
     isSlashMethod(value) ||
     isRunCancelMethod(value) ||
     isQueueUpdateMethod(value) ||
-    isFeedbackMethod(value)
+    isFeedbackMethod(value) ||
+    isDeliverableMethod(value)
   );
 }
 

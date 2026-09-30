@@ -2,9 +2,17 @@ import { describe, expect, it } from 'vitest';
 
 import { emptyConversation, prependEntries, reduceAll } from './conversation.js';
 import type { ConversationState } from './conversation.js';
-import { DELIVERABLES_PRESENTED } from './deliverables.js';
+import {
+  decodeBinaryResult,
+  DELIVERABLE_METHODS,
+  DELIVERABLES_PRESENTED,
+  encodeBinaryResult,
+  isBinaryResponse,
+  isDeliverableMethod,
+} from './deliverables.js';
 import type { DeliverablesPresentedPayload } from './deliverables.js';
 import { INBOX } from './inbox.js';
+import { commandPath, isRpcMethod } from './protocol.js';
 import type { Event } from './protocol.js';
 
 /**
@@ -172,5 +180,98 @@ describe('交付', () => {
     const joined = prependEntries(now, earlier);
     expect(kinds(joined)).toEqual(['tool', 'deliverables', 'ai']);
     expect(joined.entries[1]).toBe(earlier.entries[1]);
+  });
+});
+
+/**
+ * 命令通道上的交付檔讀取（[#747](https://github.com/DemianLi/nexus-agent/issues/747)）的線上形狀。對著真 handler 的在
+ * `@nexus/harness` 的 `deliverable-files.test.ts`；這裡驗編碼與解碼兩端各自的契約與壞回應。
+ */
+describe('交付檔讀取的方法與多段表單', () => {
+  it('兩支方法是命令通道收得下的 method，路徑指名 method', () => {
+    expect([...DELIVERABLE_METHODS]).toEqual(['deliverable.read', 'deliverable.readBytes']);
+    for (const method of DELIVERABLE_METHODS) {
+      expect(isDeliverableMethod(method)).toBe(true);
+      expect(isRpcMethod(method)).toBe(true);
+    }
+    expect(isDeliverableMethod('deliverable.download')).toBe(false);
+    expect(isRpcMethod('deliverable.download')).toBe(false);
+    expect(commandPath('t', 'deliverable.readBytes')).toBe(
+      '/threads/t/commands/deliverable.readBytes',
+    );
+  });
+
+  const value = {
+    path: 'a.bin',
+    version: 'v1',
+    bytes: 6,
+    offset: 0,
+    eof: true,
+    data: new Uint8Array([0, 1, 2, 255, 254, 0x80]),
+  };
+
+  it('編了再解：位元組逐位元組回來，外殼不帶 data', async () => {
+    const response = encodeBinaryResult(7, value);
+    expect(isBinaryResponse(response)).toBe(true);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    const form = await response.clone().formData();
+    const metadata = JSON.parse(form.get('metadata') as string) as {
+      result: { value: Record<string, unknown> };
+    };
+    expect('data' in metadata.result.value).toBe(false);
+
+    const decoded = await decodeBinaryResult(response);
+    expect(decoded.id).toBe(7);
+    expect(decoded.result).toEqual({ ok: true, value });
+  });
+
+  it('JSON 回應不算二進位', () => {
+    expect(isBinaryResponse(Response.json({ ok: true }))).toBe(false);
+    expect(isBinaryResponse(new Response('x'))).toBe(false);
+  });
+
+  const formOf = (metadata: unknown, parts: Record<string, string | Blob> = {}): Response => {
+    const form = new FormData();
+    if (metadata !== undefined) form.set('metadata', JSON.stringify(metadata));
+    for (const [name, part] of Object.entries(parts)) form.set(name, part);
+    return new Response(form);
+  };
+  const envelope = (attachments: unknown, result: unknown = { ok: true, value: {} }) => ({
+    type: 'success',
+    id: 1,
+    result,
+    attachments,
+  });
+  const good = { path: ['value', 'data'], codec: 'bytes', part: 'bytes-0' };
+
+  it('壞回應一律拋 TypeError，不悄悄回半截的東西', async () => {
+    const blob = new Blob([new Uint8Array([1])]);
+    const bad: [string, Response][] = [
+      ['沒有 metadata', formOf(undefined, { 'bytes-0': blob })],
+      ['metadata 不是字串', formOf(undefined, { metadata: blob, 'bytes-0': blob })],
+      ['沒有附件', formOf(envelope([]), {})],
+      ['外殼不是 success', formOf({ ...envelope([good]), type: 'error' }, { 'bytes-0': blob })],
+      ['id 不是數字', formOf({ ...envelope([good]), id: 'x' }, { 'bytes-0': blob })],
+      ['codec 不認得', formOf(envelope([{ ...good, codec: 'base64' }]), { 'bytes-0': blob })],
+      ['path 是空的', formOf(envelope([{ ...good, path: [] }]), { 'bytes-0': blob })],
+      ['指到的段不存在', formOf(envelope([good]), {})],
+      ['指到的段是字串不是位元組', formOf(envelope([good]), { 'bytes-0': 'text' })],
+      [
+        '位置中間不是物件',
+        formOf(envelope([{ ...good, path: ['nope', 'data'] }]), { 'bytes-0': blob }),
+      ],
+      ['多出沒人指到的段', formOf(envelope([good]), { 'bytes-0': blob, stray: blob })],
+    ];
+    for (const [name, response] of bad) {
+      await expect(decodeBinaryResult(response), name).rejects.toBeInstanceOf(TypeError);
+    }
+  });
+
+  it('欄位重複拋 TypeError', async () => {
+    const form = new FormData();
+    form.append('metadata', JSON.stringify(envelope([good])));
+    form.append('bytes-0', new Blob([new Uint8Array([1])]));
+    form.append('bytes-0', new Blob([new Uint8Array([2])]));
+    await expect(decodeBinaryResult(new Response(form))).rejects.toBeInstanceOf(TypeError);
   });
 });

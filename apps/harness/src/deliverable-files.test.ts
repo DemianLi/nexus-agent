@@ -28,9 +28,19 @@ import type { SessionEvent, SessionRegistry } from '@nexus/core';
 import { createHostServicesPlugin } from '@nexus/core';
 import { PRESENT_TOOL_NAME } from '@nexus/plugin-present';
 import { createSandboxPolicyPlugin, SandboxModeController } from '@nexus/plugin-sandbox-policy';
-import type { DeliverableFileBytes, DeliverableFilePage } from '@nexus/wire';
+import type {
+  DeliverableFileBytes,
+  DeliverableFilePage,
+  DeliverableReadBytesResult,
+  DeliverableReadResult,
+  RpcMethod,
+} from '@nexus/wire';
 import {
+  commandPath,
+  createDeliverableClient,
   createWireClient,
+  decodeBinaryResult,
+  isBinaryResponse,
   deliverableBytesPath,
   deliverableDownloadPath,
   deliverableFilePath,
@@ -73,6 +83,10 @@ interface Outcome {
   readonly seq: number;
   readonly root: string;
   get(path: string, init?: RequestInit): Promise<Response>;
+  /** 命令通道上送一個方法（#747）：帶會話 cookie 與 `content-type: application/json`，`init` 可蓋掉。 */
+  post(method: string, params: unknown, init?: RequestInit): Promise<Response>;
+  /** 原樣把一個請求交給 handler：測閘門用，不替它補 cookie 與 header。 */
+  handle(request: Request): Promise<Response>;
   close(): Promise<void>;
 }
 
@@ -187,6 +201,16 @@ async function present(
             ...init,
           }),
         ),
+      post: (method, params, init) =>
+        handler.handle(
+          loopbackRequest(`${BASE_URL}${commandPath(THREAD_ID, method as RpcMethod)}`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ id: 1, method, params }),
+            ...init,
+          }),
+        ),
+      handle: (request) => handler.handle(request),
       close: () => handler.close(),
     };
   } catch (error) {
@@ -989,6 +1013,295 @@ describe('位元組窗口', () => {
     try {
       const noHeader = await outcome.get(bytesPath(`seq=${outcome.seq}&index=0`), { headers: {} });
       expect(noHeader.status).toBe(415);
+    } finally {
+      await outcome.close();
+    }
+  });
+});
+
+/**
+ * **命令通道上的交付檔讀取**（[#747](https://github.com/DemianLi/nexus-agent/issues/747) 第 1 刀）：`deliverable.read` 與
+ * `deliverable.readBytes`，跟三條舊網址並存。證的是這幾件，每一件都有一個「錯了也不會有別的測試紅」的方向：
+ *
+ * 1. **同一組座標，新方法回的內容跟舊網址一致**：一頁文字、位元組窗口、整檔下載各一條。判定只有一份（`locateAt`），
+ *    這裡量的是「參數從哪裡讀、結果怎麼回」沒有把它換掉。
+ * 2. **位元組是多段表單裡的位元組**，逐位元組等於檔案內容，含 NUL 與非 UTF-8；外殼裡沒有 base64。
+ * 3. **業務上的拒絕是回應結果裡的碼，不是狀態碼**；參數不合格是協定錯誤 `invalid_argument`；`too-large` 帶上限數字。
+ * 4. **閘門**：命令通道本來就有瀏覽器會話認證與 `content-type` 閘門，交付方法沒有繞過（401、415 各一條）。
+ */
+describe('命令通道上的交付檔讀取', () => {
+  const small = (maxBytes: number): DeliverableFilesConfig =>
+    deliverableFilesConfigSchema.parse({ maxBytes });
+
+  async function read(outcome: Outcome, params: Record<string, unknown>) {
+    const response = await outcome.post('deliverable.read', {
+      seq: outcome.seq,
+      index: 0,
+      ...params,
+    });
+    expect(response.status).toBe(200);
+    expect(isBinaryResponse(response)).toBe(false);
+    return (await response.json()) as { type: string; id: number; result: DeliverableReadResult };
+  }
+
+  async function readBytes(outcome: Outcome, params: Record<string, unknown>) {
+    const response = await outcome.post('deliverable.readBytes', {
+      seq: outcome.seq,
+      index: 0,
+      ...params,
+    });
+    expect(response.status).toBe(200);
+    return response;
+  }
+
+  /** 讀位元組的結果：成功是多段表單，拒絕是 JSON。 */
+  async function bytesResult(response: Response): Promise<DeliverableReadBytesResult> {
+    if (isBinaryResponse(response)) {
+      return (await decodeBinaryResult(response)).result as unknown as DeliverableReadBytesResult;
+    }
+    return ((await response.json()) as { result: DeliverableReadBytesResult }).result;
+  }
+
+  it('一頁文字：跟 GET 預覽對同一組座標回一樣的內容', async () => {
+    const outcome = await present({ 'a.md': 'one\ntwo\nthree\nfour\n' }, ['a.md']);
+    try {
+      for (const query of ['', '&offset=1&limit=2']) {
+        const viaGet = (await (
+          await outcome.get(filePath(`seq=${outcome.seq}&index=0${query}`))
+        ).json()) as DeliverableFilePage;
+        const params = query === '' ? {} : { offset: 1, limit: 2 };
+        const viaCommand = await read(outcome, params);
+        expect(viaCommand).toMatchObject({ type: 'success', result: { ok: true } });
+        expect(viaCommand.result).toEqual({ ok: true, value: viaGet });
+      }
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('位元組窗口：跟 GET 窗口一樣的位元組，eof 也一樣；連切在字中間的中文都對得上', async () => {
+    const line = `${'x'.repeat(200)}中文\n`;
+    const outcome = await present({ 'min.json': line }, ['min.json'], { limits: small(64) });
+    try {
+      let offset = 0;
+      for (;;) {
+        const viaGet = (await (
+          await outcome.get(bytesPath(`seq=${outcome.seq}&index=0&offset=${offset}`))
+        ).json()) as DeliverableFileBytes;
+        const result = await bytesResult(await readBytes(outcome, { offset }));
+        if (!result.ok) throw new Error('窗口讀不到');
+        const { data, ...rest } = result.value;
+        const { data: base64, ...expected } = viaGet;
+        expect(rest).toEqual(expected);
+        expect([...data]).toEqual([...Buffer.from(base64, 'base64')]);
+        if (result.value.eof) break;
+        offset += data.length;
+      }
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('整檔（不給 offset 與 length）：位元組跟磁碟上一模一樣，含 NUL 與非 UTF-8', async () => {
+    const bytes = new Uint8Array([0, 1, 2, 255, 254, 0x80, 0xc3, 0x28]);
+    const outcome = await present({ 'b.bin': bytes }, ['b.bin']);
+    try {
+      const response = await readBytes(outcome, {});
+      // 成功且帶位元組：多段表單，不是 JSON；位元組是獨立的一段，外殼裡沒有 base64 那一格。
+      expect(isBinaryResponse(response)).toBe(true);
+      const form = await response.clone().formData();
+      expect([...form.keys()].sort()).toEqual(['bytes-0', 'metadata']);
+      const metadata = JSON.parse(form.get('metadata') as string) as Record<string, unknown>;
+      expect(JSON.stringify(metadata)).not.toContain(Buffer.from(bytes).toString('base64'));
+
+      const result = await bytesResult(response);
+      if (!result.ok) throw new Error('整檔讀不到');
+      expect([...result.value.data]).toEqual([...bytes]);
+      expect(result.value).toMatchObject({ path: 'b.bin', bytes: 8, offset: 0, eof: true });
+      // 對照組：舊的下載回一樣的位元組。
+      const download = await outcome.get(downloadPath(`seq=${outcome.seq}&index=0`));
+      expect([...new Uint8Array(await download.arrayBuffer())]).toEqual([...bytes]);
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('五種業務拒絕：都是回應結果裡的碼，狀態碼一律 200', async () => {
+    const symlinked = await present({ 'real.md': 'secret\n' }, ['link.md'], {
+      setup: async (root) => {
+        await symlink(join(root, 'real.md'), join(root, 'link.md'));
+      },
+    });
+    const bare = await present({ 'a.md': 'abc' }, ['a.md'], { workspace: false });
+    const binary = await present({ 'b.bin': new Uint8Array([0, 1, 2]) }, ['b.bin']);
+    const missing = await present({ 'a.md': 'abc' }, ['a.md']);
+    try {
+      const codeOf = async (outcome: Outcome, params: Record<string, unknown>) => {
+        const { result } = await read(outcome, params);
+        if (result.ok) throw new Error('應該被拒');
+        return result.error;
+      };
+      expect((await codeOf(bare, {})).code).toBe('deliverable/no-anchor');
+      expect((await codeOf(missing, { index: 99 })).code).toBe('deliverable/not-found');
+      expect((await codeOf(symlinked, {})).code).toBe('deliverable/not-regular-file');
+      expect((await codeOf(binary, {})).code).toBe('deliverable/not-text');
+      // 對照組：同一個二進位檔，讀位元組不擋。
+      expect((await bytesResult(await readBytes(binary, {}))).ok).toBe(true);
+    } finally {
+      await Promise.all([symlinked, bare, binary, missing].map((outcome) => outcome.close()));
+    }
+  });
+
+  it('too-large：頁、窗口、整檔三處都帶被超過的上限', async () => {
+    const fat = Array.from({ length: 4000 }, () => 'x'.repeat(600)).join('\n');
+    const page = await present({ 'big.md': fat }, ['big.md']);
+    const windowed = await present({ 'a.md': 'abc' }, ['a.md'], { limits: small(8) });
+    const whole = await present({ 'a.md': 'x'.repeat(20) }, ['a.md'], {
+      limits: deliverableFilesConfigSchema.parse({ maxFileBytes: 10 }),
+    });
+    try {
+      const pageResult = (await read(page, {})).result;
+      expect(pageResult).toMatchObject({
+        ok: false,
+        error: { code: 'deliverable/too-large', maxBytes: 2 * 1024 * 1024 },
+      });
+      const windowResult = await bytesResult(await readBytes(windowed, { length: 9 }));
+      expect(windowResult).toMatchObject({
+        ok: false,
+        error: { code: 'deliverable/too-large', maxBytes: 8 },
+      });
+      const wholeResult = await bytesResult(await readBytes(whole, {}));
+      expect(wholeResult).toMatchObject({
+        ok: false,
+        error: { code: 'deliverable/too-large', maxBytes: 10 },
+      });
+      // 對照組：正好等於窗口上限的過。
+      expect((await bytesResult(await readBytes(windowed, { length: 8 }))).ok).toBe(true);
+    } finally {
+      await Promise.all([page, windowed, whole].map((outcome) => outcome.close()));
+    }
+  });
+
+  it('參數本身不合格是協定錯誤 invalid_argument，不是業務碼', async () => {
+    const outcome = await present({ 'a.md': 'abc' }, ['a.md'], { limits: small(8) });
+    try {
+      const cases: [string, unknown][] = [
+        ['deliverable.read', undefined],
+        ['deliverable.read', { index: 0 }],
+        ['deliverable.read', { seq: -1, index: 0 }],
+        ['deliverable.read', { seq: outcome.seq, index: 1.5 }],
+        ['deliverable.read', { seq: outcome.seq, index: 0, offset: -1 }],
+        [
+          'deliverable.read',
+          { seq: outcome.seq, index: 0, limit: DEFAULT_DELIVERABLE_MAX_LINES + 1 },
+        ],
+        ['deliverable.read', { seq: outcome.seq, index: 0, limit: 'abc' }],
+        ['deliverable.readBytes', { seq: outcome.seq, index: 0, length: 0 }],
+        ['deliverable.readBytes', { seq: outcome.seq, index: 0, offset: -1 }],
+        ['deliverable.readBytes', { seq: outcome.seq, index: 0, length: 1.5 }],
+      ];
+      for (const [method, params] of cases) {
+        const response = await outcome.post(method, params);
+        expect(response.status, JSON.stringify(params)).toBe(200);
+        expect(await response.json(), JSON.stringify(params)).toMatchObject({
+          type: 'error',
+          error: 'invalid_argument',
+        });
+      }
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('窗口參數先驗、再找檔：座標沒有檔，length 太大照樣是 too-large', async () => {
+    const outcome = await present({ 'a.md': 'abc' }, ['a.md'], { limits: small(8) });
+    try {
+      const missing = await bytesResult(await readBytes(outcome, { index: 99 }));
+      expect(missing).toMatchObject({ ok: false, error: { code: 'deliverable/not-found' } });
+      const tooLarge = await bytesResult(await readBytes(outcome, { index: 99, length: 9 }));
+      expect(tooLarge).toMatchObject({ ok: false, error: { code: 'deliverable/too-large' } });
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('跟其他命令一樣受閘門管：沒有會話 401、沒帶 application/json 415', async () => {
+    const outcome = await present({ 'a.md': 'abc' }, ['a.md']);
+    try {
+      for (const method of ['deliverable.read', 'deliverable.readBytes']) {
+        const url = `${BASE_URL}${commandPath(THREAD_ID, method as RpcMethod)}`;
+        const body = JSON.stringify({ id: 1, method, params: { seq: outcome.seq, index: 0 } });
+        const anonymous = await outcome.handle(
+          new Request(url, {
+            method: 'POST',
+            headers: { host: 'localhost', 'content-type': 'application/json' },
+            body,
+          }),
+        );
+        expect({ method, status: anonymous.status }).toEqual({ method, status: 401 });
+        const plain = await outcome.post(
+          method,
+          { seq: outcome.seq, index: 0 },
+          {
+            headers: { 'content-type': 'text/plain' },
+          },
+        );
+        expect({ method, status: plain.status }).toEqual({ method, status: 415 });
+      }
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('沒開過的 thread：回 no-anchor，不為了回這句建一個 agent', async () => {
+    const outcome = await present({ 'a.md': 'abc' }, ['a.md']);
+    try {
+      const response = await outcome.handle(
+        loopbackRequest(
+          `${BASE_URL}${commandPath('never-opened', 'deliverable.read' as RpcMethod)}`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              id: 1,
+              method: 'deliverable.read',
+              params: { seq: outcome.seq, index: 0 },
+            }),
+          },
+        ),
+      );
+      expect(((await response.json()) as { result: DeliverableReadResult }).result).toMatchObject({
+        ok: false,
+        error: { code: 'deliverable/no-anchor' },
+      });
+    } finally {
+      await outcome.close();
+    }
+  });
+
+  it('wire 的 client 走一遍：成功、拒絕、位元組都經過同一個編解碼', async () => {
+    const outcome = await present({ 'a.md': 'one\ntwo\n' }, ['a.md']);
+    try {
+      const client = createDeliverableClient({
+        baseUrl: BASE_URL,
+        fetch: async (input, init) => outcome.handle(loopbackRequest(input as string, init)),
+      });
+      const page = await client.read(THREAD_ID, { seq: outcome.seq, index: 0 });
+      expect(page).toMatchObject({
+        kind: 'ok',
+        result: { ok: true, value: { text: 'one\ntwo' } },
+      });
+      const bytes = await client.readBytes(THREAD_ID, { seq: outcome.seq, index: 0 });
+      if (bytes.kind !== 'ok' || !bytes.result.ok) throw new Error('位元組讀不到');
+      expect(new TextDecoder().decode(bytes.result.value.data)).toBe('one\ntwo\n');
+      const refused = await client.read(THREAD_ID, { seq: outcome.seq, index: 99 });
+      expect(refused).toMatchObject({
+        kind: 'ok',
+        result: { ok: false, error: { code: 'deliverable/not-found' } },
+      });
+      // 參數不合格是「這條線收不了」，不是業務結果。
+      const invalid = await client.read(THREAD_ID, { seq: -1, index: 0 });
+      expect(invalid.kind).toBe('rejected');
     } finally {
       await outcome.close();
     }
