@@ -106,7 +106,8 @@ import { runDumpConfigSchema } from './config-schema-dump.js';
 import {
   composeDefaultEntries,
   loadDefaultPlugins,
-  renderDefaultConfigDump,
+  renderLayeredConfigDump,
+  renderShippedConfigDump,
 } from './plugin-config.js';
 import {
   assemblyDropsOf,
@@ -251,6 +252,11 @@ export interface CliInvocation {
    * 照 dsh 的 `--dump-config-schema`：跟 `--dump-config` 用同樣的幾層與 `--patch`，兩者互斥。
    */
   readonly dumpConfigSchema: boolean;
+  /**
+   * 只印出貨那一層的設定就退出，**不讀** home 覆寫檔與 `--patch`（[#740](https://github.com/DemianLi/nexus-agent/issues/740)）。
+   * 照 dsh 的 `--dump-default-config`：它是設計來救「覆寫檔壞掉」的，壞掉的檔根本不會被解析。
+   */
+  readonly dumpDefaultConfig: boolean;
   /** 只印用法就退出。 */
   readonly help: boolean;
 }
@@ -285,7 +291,11 @@ export const USAGE = `用法：cli [選項] [要說的話...]
                        一次性模式撞到時退出碼是 2，其他失敗是 1
   --dump-config        把三層疊完的 plugin 設定印出來就退出（一個 plugin 都不載）
                        每一段前面的 # == 註解標明那幾列來自哪個檔、被哪幾層改過
-                       不能配 --resume（印設定不跑任何一輪）
+                       不能配 --resume 或要說的話（印設定不跑任何一輪）
+  --dump-default-config
+                       只印出貨那一層的設定就退出：不讀 $NEXUS_AGENT_HOME/cordis.patch.yml，也不收 --patch
+                       覆寫檔壞了（權限不對、YAML 寫壞）連 --dump-config 都印不出來時，用它拿一份對照
+                       不能配 --dump-config、--dump-config-schema、--patch、--resume 或要說的話
   --dump-config-schema 把疊完的 plugin 設定欄位規格表（JSON Schema 2020-12）印出來就退出
                        標準輸出只有那份 JSON，診斷走標準錯誤；有任何一列轉不完整（或載不起來）退出碼是 1
                        停用的列也收。不能配 --dump-config、--resume 或要說的話
@@ -320,6 +330,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
         'recursion-limit': { type: 'string' },
         'dump-config': { type: 'boolean', default: false },
         'dump-config-schema': { type: 'boolean', default: false },
+        'dump-default-config': { type: 'boolean', default: false },
         help: { type: 'boolean', default: false },
       },
       allowPositionals: true,
@@ -375,6 +386,10 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     if (resume !== undefined) {
       throw new Error(`--dump-config 不能配 --resume：印設定不跑任何一輪。\n\n${USAGE}`);
     }
+    // 要說的話同理（照 dsh）：印完就退出，那句話永遠不會被說出去。以前這裡靜靜收下（#740 補上）。
+    if (positionals.join(' ').trim().length > 0) {
+      throw new Error(`--dump-config 不能配要說的話：印設定不跑任何一輪。\n\n${USAGE}`);
+    }
   }
 
   const dumpConfigSchema = values['dump-config-schema'] === true;
@@ -388,6 +403,31 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     }
     if (positionals.join(' ').trim().length > 0) {
       throw new Error(`--dump-config-schema 不能配要說的話：印規格表不跑任何一輪。\n\n${USAGE}`);
+    }
+  }
+
+  // **只印出貨那一層**（#740）：照 dsh，三種印法互斥；不讀 home 覆寫檔，所以帶 `--patch` 沒有意思——
+  // 靜靜收下的下場是那個人以為自己看的是疊過他那個 patch 的樣子。
+  const dumpDefaultConfig = values['dump-default-config'] === true;
+  if (dumpDefaultConfig) {
+    if (dumpConfig) {
+      throw new Error(`--dump-default-config 不能配 --dump-config：一次只印一種。\n\n${USAGE}`);
+    }
+    if (dumpConfigSchema) {
+      throw new Error(
+        `--dump-default-config 不能配 --dump-config-schema：一次只印一種。\n\n${USAGE}`,
+      );
+    }
+    if (patches !== undefined) {
+      throw new Error(
+        `--dump-default-config 不能配 --patch：它只印出貨那一層，不讀任何覆寫檔。\n\n${USAGE}`,
+      );
+    }
+    if (resume !== undefined) {
+      throw new Error(`--dump-default-config 不能配 --resume：印設定不跑任何一輪。\n\n${USAGE}`);
+    }
+    if (positionals.join(' ').trim().length > 0) {
+      throw new Error(`--dump-default-config 不能配要說的話：印設定不跑任何一輪。\n\n${USAGE}`);
     }
   }
 
@@ -405,6 +445,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     ...(recursionLimit !== undefined && { recursionLimit }),
     dumpConfig,
     dumpConfigSchema,
+    dumpDefaultConfig,
     help: values.help === true,
   };
 }
@@ -1539,11 +1580,17 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     return;
   }
 
+  // **只印出貨那一層**（#740）：不讀 home 覆寫檔、不解析 home 路徑，所以覆寫檔壞了它照樣印得出來。
+  if (invocation.dumpDefaultConfig) {
+    printer.log(renderShippedConfigDump().trimEnd());
+    return;
+  }
+
   // **在 `--session-log` 那些解析之前**：`--dump-config` 印的是設定，而設定跟日誌落在哪裡
   // 無關——先擋在後面的話，一個指錯地方的 `--session-log` 會讓你連設定都看不到。
   if (invocation.dumpConfig) {
     printer.log(
-      renderDefaultConfigDump({
+      renderLayeredConfigDump({
         env: options.env ?? process.env,
         ...(invocation.patches !== undefined && { patches: invocation.patches }),
         warn: (message) => printer.error(message),
