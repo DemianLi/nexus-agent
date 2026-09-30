@@ -174,6 +174,7 @@ describe('不給選項：完全不變', () => {
       await run.say();
       expect(run.rootModel.boundToolNames).toContain('task');
       expect(run.rootModel.boundToolNames).not.toContain('subagent');
+      expect(run.rootModel.boundToolNames).not.toContain('list_agents');
     } finally {
       await run.close();
     }
@@ -284,6 +285,7 @@ describe('給了選項：模型面', () => {
       await run.say();
       expect(run.rootModel.boundToolNames).toContain('subagent');
       expect(run.rootModel.boundToolNames).not.toContain('task');
+      expect(run.rootModel.boundToolNames).toContain('list_agents');
       const bound = run.rootModel.prompts[0]!;
       const system = bound.find((message) => message.getType() === 'system')!.text;
       expect(system).toContain('同一則訊息裡一起呼叫 `subagent`');
@@ -440,6 +442,80 @@ describe('背景（預設）：當場回編號，背景那一輪自己跑', () =
       expect(turnTypes(log!)).toEqual(['turn/start', 'turn/failed']);
       await settle();
       expect(unhandled.map(String)).toEqual([]);
+    } finally {
+      await run.close();
+    }
+  });
+});
+
+describe('list_agents（#837）', () => {
+  it('沒派過：回 (no subagents)；派了一個還在跑：running；跑完：inactive；一次性的不列', async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const holdPlugin: PluginEntry = {
+      plugin: {
+        name: 'hold-host',
+        apply(registry) {
+          registry.tools.register(
+            tool(async () => (await held, '放行了'), {
+              name: 'hold',
+              description: '等放行。',
+              schema: z.object({}),
+            }),
+          );
+        },
+      },
+    };
+    const run = await assemble({
+      rootTurns: [
+        call('list_agents', {}),
+        delegate(undefined),
+        call('list_agents', {}),
+        // 前景（一次性）的不會出現在目錄。
+        delegate(false),
+        { content: '根收尾' },
+        call('list_agents', {}),
+        { content: '第二輪收尾' },
+      ],
+      workerTurns: [call('hold', {}), { content: '甲做完' }, { content: '一次性做完' }],
+      background: {},
+      plugins: [holdPlugin],
+    });
+    try {
+      const first = await run.say();
+      const texts = toolTexts(first.messages);
+      expect(texts[0]).toBe('(no subagents)');
+      const id = /bg-[0-9a-f]{12}/.exec(texts[1] ?? '')?.[0];
+      expect(id).toBeDefined();
+      expect(texts[2]).toBe(`${id} [running] — worker`);
+      // 一次性那個跑過了，仍然只有一列。
+      release();
+      await until(() => turnTypes(run.backgroundLogs()[0]!).includes('turn/end'));
+      const second = await run.say('再看一次');
+      expect(toolTexts(second.messages).at(-1)).toBe(`${id} [inactive] — worker`);
+    } finally {
+      release();
+      await run.close();
+    }
+  });
+});
+
+describe('list_agents 只給 root（#837）', () => {
+  it('子代理叫它：被 root-only 的拒絕樁擋下，不列任何東西', async () => {
+    const run = await assemble({
+      rootTurns: [delegate(undefined), { content: '根收尾' }],
+      workerTurns: [call('list_agents', {}), { content: '背景收工' }],
+      background: {},
+    });
+    try {
+      await run.say();
+      await until(() => run.backgroundLogs().length === 1);
+      await run.backgroundDone(run.backgroundLogs()[0]!);
+      const seen = toolTexts(run.workerModel.prompts.at(-1)!).at(-1) ?? '';
+      expect(seen).toContain(TOOL_ERROR_PREFIX);
+      expect(seen).not.toContain('no subagents');
     } finally {
       await run.close();
     }
