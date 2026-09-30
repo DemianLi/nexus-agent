@@ -75,9 +75,15 @@ describe('classifyTool', () => {
     ['run_javascript', 'code'],
     ['delete', 'others'],
     ['task', 'others'],
+    ['subagent', 'others'],
     ['todo_write', 'others'],
   ] as const)('%s → %s', (name, variant) => {
     expect(classifyTool(name)).toBe(variant);
+  });
+
+  it('`subagent` 跟 `task` 同標題（都是委派子代理）', () => {
+    expect(toolTitle('subagent')).toBe('委派子代理');
+    expect(toolTitle('subagent')).toBe(toolTitle('task'));
   });
 
   it('不認得的工具（例如 MCP 的）走通用卡', () => {

@@ -38,6 +38,7 @@ export const VARIANT_TITLE: Record<ToolVariant, string> = {
  *
  * - 基座（deepagents 1.13）：`ls`、`read_file`、`write_file`、`edit_file`、`delete`、`glob`、`grep`、`execute`、`task`。
  * - `@nexus/plugin-quickjs`：`run_javascript`。
+ * - 委派子代理的 `subagent`（預設關，開了之後模型視野裡取代 `task`）：標題表有，同 `task`。
  * - 標題表另含 `@nexus/plugin-sandbox-policy` 的 `request_sandbox_escalation`。
  */
 const TOOL_VARIANTS: Readonly<Record<string, ToolVariant>> = {
@@ -60,6 +61,7 @@ const TOOL_TITLES: Readonly<Record<string, string>> = {
   // 刪檔不能復原（基座的工具說明寫明），標題不能是一句「工具」；參數只有 `file_path`，摘要退到第一個字串值就是它（#672）。
   delete: '刪除檔案',
   task: '委派子代理',
+  subagent: '委派子代理',
   todo_write: '更新待辦',
   create_goal: '設定目標',
   get_goal: '查看目標',
