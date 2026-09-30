@@ -889,6 +889,8 @@ function backgroundPlugin(bg: Background): PluginEntry {
   };
 }
 
+// 卡 4（#829）已把 `loop` 這條路落成產品出口 `BackgroundSubagentHost`（`background-subagents.ts`），正面驗收在
+// `background-subagents.test.ts`。這一組留著當對照：`inherit` 的兩個缺陷與「沒放身分鍵就被認成 root」仍是今天的樣子。
 describe('背景那一輪由 root 的工具拉起（第 1、4、5 項的實況）', () => {
   const timers: ReturnType<typeof setInterval>[] = [];
   afterEach(() => {
