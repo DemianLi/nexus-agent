@@ -236,8 +236,17 @@ import type { SessionEvent } from './session-log.js';
  *
  * **非升不可**，同 13、17：20 讀到一份 21 的日誌時，`source` 不是 `plugin` 也不是 `user`，推回模型時照「外掛塞的」那一種讀、
  * 畫面（歷史）對它視而不見，goal 的授權判準與內容搜尋各自的判斷也都沒見過這個成員——靜靜略過會左右重建的內容就是一次讀錯。
+ *
+ * ## 22：`turn/end` 的 `aborted` 多一種原因 `parent`
+ *
+ * 父代理用 `interrupt_agent` 只停一個背景子代理當下那一輪（[#838](https://github.com/DemianLi/nexus-agent/issues/838)），
+ * 該子代理的日誌以 `reason: {kind:'aborted', cause:{kind:'parent'}}` 收尾。v21 的檔直接讀：那時候沒有這條路，
+ * `cause` 只有 `user`。
+ *
+ * 升版照新增詞彙的慣例（同 11、12、14、16），不是非升不可：21 讀到它只看 `reason.kind`，一樣當成「被打斷」，
+ * 沒有任何讀方分 `cause`。
  */
-export const SESSION_LOG_FORMAT_VERSION = 21;
+export const SESSION_LOG_FORMAT_VERSION = 22;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。
