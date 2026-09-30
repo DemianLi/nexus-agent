@@ -26,13 +26,13 @@
 import { loadPlugins } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
-import { shippedPlugins } from './fixtures.js';
+import { shippedPlugins, withSystemPromptVariables } from './fixtures.js';
 
 const shipped = await shippedPlugins();
 
 describe('注入的 backend 等不等於折出來的那一個', () => {
   it('**預設清單裡零個 `backend.mount()`**——所以折前折後是同一個物件', async () => {
-    const { registry } = await loadPlugins(shipped);
+    const { registry } = await loadPlugins(withSystemPromptVariables(shipped));
     expect(registry.backend.mounts()).toEqual([]);
   });
 });

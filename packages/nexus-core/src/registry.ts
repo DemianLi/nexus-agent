@@ -381,20 +381,40 @@ export type MiddlewareRegistration =
       readonly build?: undefined;
       /** 是否插到其他 plugin 的 middleware 之前。 */
       readonly prepend: boolean;
+      /** 是否排到其他 plugin 的 middleware 之後，含子代理自己帶的。 */
+      readonly last: boolean;
     }
   | {
       readonly middleware?: undefined;
       readonly build: (backend: AnyBackendProtocol) => AgentMiddleware;
       /** 是否插到其他 plugin 的 middleware 之前。 */
       readonly prepend: boolean;
+      /** 是否排到其他 plugin 的 middleware 之後，含子代理自己帶的。 */
+      readonly last: boolean;
     };
 
-/** `middleware` 註冊點：清單順序，`prepend` 為唯一例外閥。 */
+/** 一次註冊的位置選項。`prepend` 與 `last` 不能同時給。 */
+export interface MiddlewarePlacement {
+  /** 把它排到其他 plugin 的 middleware 之前。 */
+  readonly prepend?: boolean;
+  /**
+   * 把它排到其他 plugin 的 middleware 之後，**含子代理自己帶的那些**（[#720](https://github.com/DemianLi/nexus-agent/issues/720)）。
+   *
+   * 給「要最後一個往 system prompt 附加文字」的 middleware 用：洋蔥的外層先附加、內層後附加，所以想排在最後一段，
+   * 就要在所有會附加文字的 middleware 的內側。dsh 用名字加序號排提示詞的段落（`deployment:persona-suffix` 永遠最後，
+   * `packages/core/system-prompt/README.md:137`），我們的提示詞是 middleware 一層層接出來的，沒有段落序號，所以退到
+   * 最接近的表達：一個位置旗標。射程一樣只到 plugin 與子代理自帶的 middleware——基座的檔案系統、輸出校驗那些貼著
+   * 工具本體的內建層在它更內側，它們不附加文字。
+   */
+  readonly last?: boolean;
+}
+
+/** `middleware` 註冊點：清單順序，`prepend` 與 `last` 為兩個例外閥。 */
 export interface MiddlewareRegistrationPoint {
   /**
    * 追加一個 middleware。
    * @param middleware - middleware 實例。
-   * @param options - `prepend: true` 把它排到其他 plugin 的 middleware 之前。
+   * @param options - `prepend: true` 把它排到其他 plugin 的 middleware 之前；`last: true` 排到之後。
    *   注意射程只到 plugin 之間——基座的標準 middleware stack 永遠在前面，
    *   `createDeepAgent` 的 `middleware` 參數整組接在它後面。
    *
@@ -406,7 +426,7 @@ export interface MiddlewareRegistrationPoint {
    * 它只到 root，子代理照舊用 fold 逐個建的那份（`fold.ts` 的 `subagentPluginMiddleware`）。
    * @returns 只撤銷這一次註冊的冪等 undo。
    */
-  use(middleware: AgentMiddleware, options?: { prepend?: boolean }): () => void;
+  use(middleware: AgentMiddleware, options?: MiddlewarePlacement): () => void;
   /**
    * 追加一個**要 backend 才建得出來**的 middleware（[#388](https://github.com/DemianLi/nexus-agent/issues/388)）。
    *
@@ -428,7 +448,7 @@ export interface MiddlewareRegistrationPoint {
    */
   useWithBackend(
     build: (backend: AnyBackendProtocol) => AgentMiddleware,
-    options?: { prepend?: boolean },
+    options?: MiddlewarePlacement,
   ): () => void;
   /**
    * 目前註冊的 middleware。
@@ -917,6 +937,21 @@ function duplicateToolError(scope: ScopeKey | undefined) {
   };
 }
 
+/** 把位置選項攤成兩個旗標。兩個都給是矛盾，當場拋——靜靜挑一個的話，另一個的意圖就消失了。 */
+function placementOf(
+  options: MiddlewarePlacement | undefined,
+  where: string,
+): { prepend: boolean; last: boolean } {
+  const prepend = options?.prepend === true;
+  const last = options?.last === true;
+  if (prepend && last) {
+    throw new Error(
+      `${where}：\`prepend\` 與 \`last\` 不能同時給，一顆 middleware 不可能既在最前又在最後。`,
+    );
+  }
+  return { prepend, last };
+}
+
 /**
  * 建一個空的 registry。
  * @returns 尚未進入任何 plugin 的 registry。
@@ -1142,11 +1177,17 @@ export function createRegistry(): InternalPluginRegistry {
   const middlewarePoint: MiddlewareRegistrationPoint = {
     use(middleware, options) {
       const origin = requireOrigin('middleware.use()');
-      return middlewares.append({ middleware, prepend: options?.prepend === true }, origin);
+      return middlewares.append(
+        { middleware, ...placementOf(options, 'middleware.use()') },
+        origin,
+      );
     },
     useWithBackend(build, options) {
       const origin = requireOrigin('middleware.useWithBackend()');
-      return middlewares.append({ build, prepend: options?.prepend === true }, origin);
+      return middlewares.append(
+        { build, ...placementOf(options, 'middleware.useWithBackend()') },
+        origin,
+      );
     },
     list: () => [...middlewares.entries()],
   };

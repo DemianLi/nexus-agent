@@ -297,6 +297,18 @@ describe('其餘六個註冊點', () => {
     expect(registry.middleware.list().map((entry) => entry.value.prepend)).toEqual([false, true]);
   });
 
+  it('middleware 記得 last 旗標；prepend 與 last 同時給當場拋', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.middleware.use(fakeMiddleware('a'), { last: true });
+    registry.middleware.use(fakeMiddleware('b'));
+    expect(() =>
+      registry.middleware.use(fakeMiddleware('c'), { prepend: true, last: true }),
+    ).toThrow(/`prepend` 與 `last` 不能同時給/u);
+    leave();
+    expect(registry.middleware.list().map((entry) => entry.value.last)).toEqual([true, false]);
+  });
+
   it('permissions 是純累加的 deny 清單，同樣的規則兩次也是兩筆', () => {
     const registry = createRegistry();
     const leave = registry.enter(first);

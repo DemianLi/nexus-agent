@@ -74,7 +74,7 @@ import { ContainedFilesystemBackend } from './contained-backend.js';
 
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
-import { shippedPlugins } from './fixtures.js';
+import { shippedPlugins, withSystemPromptVariables } from './fixtures.js';
 
 const shipped = await shippedPlugins();
 
@@ -146,7 +146,7 @@ describe('預設組裝裡的核准 gate', () => {
    * 這個形狀早就存在。
    */
   it('出貨清單裡一位都沒有', async () => {
-    const { registry, dispose } = await loadPlugins([...shipped]);
+    const { registry, dispose } = await loadPlugins(withSystemPromptVariables(shipped));
     try {
       const gates = registry.approvals.listeners().map((entry) => formatOrigin(entry.origin));
       expect(gates, NEW_GATE_GUIDANCE).toEqual(EXPECTED_APPROVAL_GATES);

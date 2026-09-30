@@ -54,6 +54,7 @@
     "@nexus/plugin-quickjs": "workspace:*",
     "@nexus/plugin-sandbox-policy": "workspace:*",
     "@nexus/plugin-skills": "workspace:*",
+    "@nexus/plugin-system-prompt": "workspace:*",
     "@nexus/plugin-submit-record": "workspace:*",
     "@nexus/plugin-telemetry-otel": "workspace:*",
     "@nexus/plugin-present": "workspace:*",

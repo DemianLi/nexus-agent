@@ -668,10 +668,24 @@ const CLI_SCRIPT: readonly ScriptedTurn[] = [
   { content: '假模型只會照腳本說話——要真的對話請用 --live。' },
 ];
 
-const SYSTEM_PROMPT = [
-  '你是 nexus-agent 的命令列助手。',
-  '需要動用工具時就真的呼叫，不要只在文字裡描述你打算做什麼。',
-].join('\n');
+/**
+ * 組裝點傳給基座的那一句指引。**身分、persona 與工作目錄不在這裡**（[#720](https://github.com/DemianLi/nexus-agent/issues/720)）：
+ * 那些是部署方的設定，住在出貨清單的 `system-prompt` 那一列，由 `@nexus/plugin-system-prompt` 排在它前後。
+ * 這一句是指引，不是 persona，所以留在組裝點。
+ */
+const SYSTEM_PROMPT = '需要動用工具時就真的呼叫，不要只在文字裡描述你打算做什麼。';
+
+/**
+ * 假模型在系統提示詞裡叫什麼（`{{model}}` 的值）。`ScriptedChatModel` 沒有型號，而嚴格插值不允許沒有值，
+ * 所以替它定一個名字：夠明白地告訴讀日誌的人這一輪沒有真的模型。
+ */
+export const SCRIPTED_MODEL_NAME = 'scripted';
+
+/**
+ * 系統提示詞前後綴的 `{{cwd}}`：檔案工具的位址空間裡的根，**不是主機上的工作目錄**。
+ * 理由與偏離登記見 `@nexus/plugin-system-prompt` 的檔頭；沒有 `--workspace` 時是基座的虛擬檔案系統，`/` 一樣是它的根。
+ */
+export const PROMPT_WORKING_DIRECTORY = '/';
 
 /** REPL 與一次性模式共用同一條對話——checkpointer 認的是這個 id。 */
 const THREAD_ID = 'cli';
@@ -1028,6 +1042,12 @@ export async function createCliAgent(
     ...(backend !== undefined && { backend }),
     ...(invocation.recursionLimit !== undefined && { recursionLimit: invocation.recursionLimit }),
     systemPrompt: SYSTEM_PROMPT,
+    // **`--live` 時是 `live-model` 那一列的型號**，跟上面 `createCliModel` 讀的是同一份，兩邊不會漂移；
+    // 假模型沒有型號，用 {@link SCRIPTED_MODEL_NAME}。
+    systemPromptVariables: {
+      model: invocation.live ? liveModel.modelId : SCRIPTED_MODEL_NAME,
+      cwd: PROMPT_WORKING_DIRECTORY,
+    },
     checkpointer,
     ...(onInvariantViolation !== undefined && { onInvariantViolation }),
     ...(approvals !== undefined && { approvals }),

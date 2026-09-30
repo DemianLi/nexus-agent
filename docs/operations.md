@@ -264,7 +264,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   外掛掛上去時拋錯，都在那一刻報出來，訊息兩邊同一句。**`disabled: true` 的那一列不驗設定。**
 - **報了之後起不起得來，照必掛與可少掛**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)，照 dsh）。
   設定驗不過、模組載不起來、外掛掛上去時拋錯的那一列掉了：啟動時印一段「警告：N 列沒有掛上」指名它與原因，
-  其餘照樣起來，掉了的列算沒掛（跟寫 `disabled: true` 一樣）。**必掛的只有 `browser-session`**，它掉了整個起不來，訊息連
+  其餘照樣起來，掉了的列算沒掛（跟寫 `disabled: true` 一樣）。**必掛的只有 `browser-session` 與 `system-prompt`**（後者掉了，模型拿到的提示詞就不是部署方寫的那份），它們掉了整個起不來，訊息連
   其他掉了的列一起列——CLI 也一樣，因為兩個入口共用這份清單；帶 `--live` 時 `live-model` 掉了也整個起不來，
   不會退回預設那個對外的端點。啟動程式自己加的那幾顆外掛（沙箱、交付、問答那些，不在清單上）掛上去時拋錯，
   照舊整個起不來。
@@ -517,6 +517,31 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 **沒有 dsh 的對應物**（dsh 不跑 LangGraph），它是對著一次實測跑掉的執行校準出來的，換算成幾輪
 模型呼叫取決於這一次掛了哪些 middleware——預設組裝是 33 輪，再給 `--workspace` 是 32 輪。逐段
 實測見 `apps/harness/src/settings/recursion-limit.ts` 的檔頭。
+
+### 部署方的身分與 persona
+
+系統提示詞最前面那句身分、以及前後各一段，由 `system-prompt` 這一列決定
+（[#720](https://github.com/DemianLi/nexus-agent/issues/720)，照 dsh 的 `systemPrompt` 三格）。出貨值是：
+
+```yaml
+- id: system-prompt
+  config:
+    includeHarnessIdentity: true   # 最前面那句 "You are an AI agent powered by nexus-agent."
+    personaPrefix: 'You are a helpful assistant powered by the {{model}} model.'
+    personaSuffix: 'Your working directory is {{cwd}}.'
+```
+
+送給模型的順序是：**身分句、前綴、（基座與各 plugin 附加的指引）、後綴**。後綴掛成 `last`，
+排在每一顆會往提示詞附加文字的 middleware 內側，所以不論掛了 `--workspace`、skills 或子代理，
+它都是最後一段；子代理也拿到同樣的前後綴。
+
+- **`config` 是整份替換**：想只改後綴，前綴要一起重述，否則前綴回到空字串。
+- **插值是嚴格的**：只認 `{{model}}`（這個 agent 的模型）與 `{{cwd}}`，寫了別的名字就是
+  **啟動失敗**（CLI 與 `serve` 都在進對話、印網址之前報出來，指名是哪一格哪個變數）。不是空字串、也不是原樣保留。
+- **`{{cwd}}` 是 `/`**：agent 看到的檔案系統是虛擬的（掛了 `--workspace` 也是），
+  真實路徑不會告訴模型。
+- 三格都空、身分句也關掉時，這顆 middleware 根本不掛。
+- 這一列是必掛的：`disabled: true` 或設定寫壞，整個起不來。
 
 ### 看這台機器上疊出來的是什麼
 
