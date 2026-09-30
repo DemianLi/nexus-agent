@@ -696,7 +696,13 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
             '一次性委派走基座，兩條路會長得不一樣，所以不編。',
         );
       }
-      return compileSubagentGraph(params, name, { checkpointer });
+      // **背景圖要自己帶上限**（#858 的量測）：它是 `createAgent` 直接編的，沒有 `createDeepAgent` 最後那層
+      // `withConfig`，也沒有一次性子代理從 `task` 那次呼叫繼承來的 root 上限，於是落在 LangGraph 的預設 25——
+      // 連續 8 次工具呼叫就 `GraphRecursionError`。給它跟 root 同一個值（旗標 > 設定列 > 預設），背景子代理每一輪才跟
+      // 一次性的、跟 root 一樣長。
+      return compileSubagentGraph(params, name, { checkpointer }).withConfig({
+        recursionLimit: recursionLimitFor(registry, options),
+      });
     };
 
     return {
