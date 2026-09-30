@@ -172,6 +172,64 @@ describe('委派（#326）', () => {
   });
 });
 
+describe('用記下的那一格重新進委派（#827）', () => {
+  const denial: SandboxDenial = { target: '/w/a.txt', digest: 'a' };
+  const grant: SandboxGrant = { mode: 'workspace-write', target: '/a.txt', denied: denial };
+
+  it('delegateAs 裡讀到記下的那一格，不是 root 現在那格——兩個方向都是', () => {
+    const controller = new SandboxModeController('workspace-write');
+    controller.switchTo('read-only');
+    // root 已收緊，記下的是 workspace-write：照記下的。
+    expect(controller.delegateAs('workspace-write', () => controller.current)).toBe(
+      'workspace-write',
+    );
+    controller.switchTo('workspace-write');
+    // root 已放寬，記下的是 read-only：仍擋住。
+    expect(controller.delegateAs('read-only', () => controller.current)).toBe('read-only');
+  });
+
+  it('跟 delegate 一樣隔離 grant、denial 與委派標記；出來之後 root 的原封不動', () => {
+    const controller = new SandboxModeController('read-only');
+    controller.recordDenial(denial);
+    controller.grant(grant);
+
+    controller.delegateAs('read-only', () => {
+      expect(controller.peekGrant()).toBeUndefined();
+      expect(controller.takeGrant(grant)).toBe(false);
+      expect(controller.lastDenial).toBeUndefined();
+      expect(controller.delegatedMode).toBe('read-only');
+    });
+
+    expect(controller.delegatedMode).toBeUndefined();
+    expect(controller.peekGrant()).toBe(grant);
+    expect(controller.lastDenial).toBe(denial);
+  });
+
+  it('delegate 就是用 current 的 delegateAs', () => {
+    const controller = new SandboxModeController('danger-full-access');
+    expect(controller.delegate(() => controller.delegatedMode)).toBe('danger-full-access');
+  });
+
+  it('delegateFromLog：從子代理自己的日誌讀回委派那一格；取最後一顆', () => {
+    const controller = new SandboxModeController('workspace-write');
+    const log = new SessionLog('root/bg-1');
+    log.append('sandbox/mode', { mode: 'workspace-write', source: 'delegation' });
+    log.append('sandbox/mode', { mode: 'read-only', source: 'delegation' });
+    controller.switchTo('danger-full-access');
+
+    expect(controller.delegateFromLog(log, () => controller.current)).toBe('read-only');
+    expect(controller.current).toBe('danger-full-access');
+  });
+
+  it('日誌上沒有 sandbox/mode 就拋，不拿 root 現在那格去猜', () => {
+    const controller = new SandboxModeController('danger-full-access');
+    const log = new SessionLog('root/bg-2');
+    expect(() => controller.delegateFromLog(log, () => controller.current)).toThrow(
+      /root\/bg-2.*沒有 sandbox\/mode/u,
+    );
+  });
+});
+
 describe('跨重啟：`SessionStore` 長出了讀介面', () => {
   it('成員是 `create`、`resume`、`list`、`open`——再長一個讀介面仍然響在這裡', () => {
     // **這一條原本是絆索**：它釘住「`SessionStore` 只有 `create`」，註解寫著長出讀介面的那天
