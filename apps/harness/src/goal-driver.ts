@@ -109,8 +109,6 @@ export interface GoalRoundRequest {
  * 照樣續行」的重構會通過每一條測試。
  */
 export type GoalDriverIdleReason =
-  /** 這個行程裡一輪都還沒開始——人還沒說話（續接的話，seed 裡那些輪不算）。 */
-  | 'no-turn'
   /** 上一輪還在跑（沒有結尾）。 */
   | 'turn-open'
   /**
@@ -157,13 +155,21 @@ export type GoalDriverDecision =
  *
  * **整個就緒判準都靠一件事成立：`turn/start` 在 `try` 之前 append。**
  * 兩個入口點都是這樣寫的（`thread-pump.ts` 的 `#runOnce`、`cli.ts` 的 `runTurn`，兩處都
- * 有註解說為什麼），所以「一輪跑過但日誌上沒有頭」這個狀態不存在，`no-turn` 只可能是
- * 「這個行程裡一輪都還沒開始」——續接回來的日誌，seed 裡那些輪在 `session/end-seed` 之前，
- * `currentTurnStart` 不往那裡找（[#251](https://github.com/DemianLi/nexus-agent/issues/251)）。哪天有人把 append 挪進 `try` 裡，這裡讀到的就會是一個假的 idle。
+ * 有註解說為什麼），所以「一輪跑過但日誌上沒有頭」這個狀態不存在。哪天有人把 append 挪進 `try` 裡，這裡讀到的就會是一個假的 idle。
+ *
+ * ## 這個行程裡一輪都還沒開始，算收工（[#661](https://github.com/DemianLi/nexus-agent/issues/661)）
+ *
+ * 以前這一格回 `no-turn`、不排。它把「就緒與否」綁在這個行程「跑過一輪」上，結果新開的行程、或續接回來還沒說過話的會話，
+ * 打 `/goal <目標>` 或 `/goal resume` 之後什麼都不會發生，要等人再講一句話。dsh 的 `readyToDrive`
+ * （`packages/goal/goal-round-driver/src/index.ts:103-109`，`477b4f4`）沒有「得先跑過一輪」這個條件，看的是 agent 此刻閒不閒。
+ *
+ * 放行不會讓續接回來的會話自己跑起來：授權從 `disarmed` 開始，只有一次有人下的 `create` 或 `resume` 才 armed
+ * （`service.ts`）；而 `currentTurnStart` 往回找時遇到最後一顆 `session/end-seed` 就停，上一個行程的輪不會被當成現在這一輪
+ * （[#251](https://github.com/DemianLi/nexus-agent/issues/251)）。
  */
 function turnClosed(events: readonly SessionEvent[]): GoalDriverIdleReason | undefined {
   const start = currentTurnStart(events);
-  if (start < 0) return 'no-turn';
+  if (start < 0) return undefined;
   for (let at = start + 1; at < events.length; at += 1) {
     const event = events[at];
     if (event?.type === 'turn/end') {

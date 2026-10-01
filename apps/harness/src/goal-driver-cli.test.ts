@@ -215,6 +215,43 @@ describe('REPL 那條路自己排下一輪', () => {
   });
 
   /**
+   * **新開的 REPL 第一行就打 `/goal`，之後自己開始續行**（[#661](https://github.com/DemianLi/nexus-agent/issues/661)）。
+   * 真的 `runCli`、真的斜線命令、出貨清單：這個行程裡一輪都還沒跑過，以前「命令也算一次機會」在這裡答的是
+   * `no-turn`，畫面回了「目標建好了」就沒下文。
+   */
+  it('REPL 第一行就打 /goal：不說話，第 1 輪續行自己開始', async () => {
+    const { printer, out } = recorder();
+    const input = new PassThrough();
+    input.end(`/${GOAL_COMMAND_NAME} 把 CI 修綠\n/exit\n`);
+    await runCli({
+      argv: ['--goal-driver', '--max-goal-rounds', '1'],
+      input,
+      output: new PassThrough(),
+      printer,
+      env: {},
+    });
+    const said = out.join('\n');
+    expect(said).toContain('目標建好了');
+    expect(said).toContain('[續行] 第 1 輪');
+  });
+
+  it('REPL 沒開 --goal-driver：打 /goal 之後一輪都不排', async () => {
+    const { printer, out } = recorder();
+    const input = new PassThrough();
+    input.end(`/${GOAL_COMMAND_NAME} 把 CI 修綠\n/exit\n`);
+    await runCli({
+      argv: [],
+      input,
+      output: new PassThrough(),
+      printer,
+      env: {},
+    });
+    const said = out.join('\n');
+    expect(said).toContain('目標建好了');
+    expect(said).not.toContain('[續行]');
+  });
+
+  /**
    * **CLI 那條路上，續行輪次的頭也不清零重複工具提醒的計數**（[#662](https://github.com/DemianLi/nexus-agent/issues/662)）。
    * 與 `goal-driver-pump.test.ts` 同一個劇本：這條路自己造那則 `HumanMessage`（`runTurn`），所以要各驗一次。
    */

@@ -999,6 +999,8 @@ export class ThreadPump {
    * 而一條跑到一半忽然開始自己排輪次的 thread 沒有人要得起。
    */
   readonly #driver: GoalDriverPort | undefined;
+  /** 已經排了一次延後的「問排程器」，等它跑。一串 `goal/change` 只問一次。 */
+  #goalDriveScheduled = false;
 
   /**
    * @param agent - 這條 thread 的 agent。
@@ -1678,6 +1680,27 @@ export class ThreadPump {
   }
 
   /**
+   * 目標變了（root 日誌出現 `goal/change`）：排一次延後的「問排程器」（[#661](https://github.com/DemianLi/nexus-agent/issues/661)）。
+   *
+   * `/goal <目標>` 與 `/goal resume` 走 `wire-handler` 的斜線命令，直接叫執行器、不經過 pump，所以以前唯一的觸發點
+   * （一件工作收尾）一次都不會碰到：畫面回了「目標建好了」，然後什麼都不發生，要等人再講一句話。照 dsh：goal 服務每
+   * commit 一次就發 `goal/changed`，排程器訂閱它（`goal-round-driver/src/index.ts:282-293`，`477b4f4`）。
+   *
+   * **為什麼延後而不是當場問**：授權（`armed`）由 goal 服務自己訂這顆日誌事件時才掛上（`service.ts` 的 `#observe`），
+   * 這裡是另一個訂閱者，先到先後不是我們該押的東西；延一個 tick 就一定在它之後。同一串變更（建立後立刻改）也因此只問一次。
+   *
+   * 跑著一輪的時候（模型自己在輪中叫 `create_goal` 之類）不問：那一輪收尾時本來就會問。
+   */
+  #scheduleGoalDrive(): void {
+    if (this.#driver === undefined || this.#closed || this.#goalDriveScheduled) return;
+    this.#goalDriveScheduled = true;
+    setImmediate(() => {
+      this.#goalDriveScheduled = false;
+      this.#driveGoalRound();
+    });
+  }
+
+  /**
    * 送出佇列的一件輪到了：用它**現在**的文字開一輪（改過的就是改過的），`turn/start` 之後領走它。
    *
    * 照 dsh 的 `turn()`：先寫 `turn/start`，`preStep` 才領（`packages/core/agent-loop/src/agent.ts:296-330`，`477b4f4`），
@@ -2331,6 +2354,7 @@ export class ThreadPump {
       const goal = this.#goal.apply(event);
       if (goal !== undefined) this.#presentCustom(goal);
       this.#reportGoalFailure();
+      if (event.type === 'goal/change') this.#scheduleGoalDrive();
     }
     if (event.type === 'tool/call') this.#openCard(entry.address, event.data);
     else if (event.type === 'tool/result') this.#noteVerdict(event, entry.address);

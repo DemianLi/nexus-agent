@@ -229,6 +229,53 @@ describe('serve 的命令面', () => {
 });
 
 /**
+ * **`/goal` 建立或 resume 之後立刻排第一輪續行**（[#661](https://github.com/DemianLi/nexus-agent/issues/661)）：
+ * 整條線——真的 `runServe`、真的斜線命令、真的 pump。斜線命令走 `wire-handler` 的執行器、不經過 pump，所以這一條
+ * 只有在 pump 自己看著 root 日誌上的 `goal/change` 時才過得了；人從頭到尾沒有說過一句話。
+ */
+describe('/goal 之後的續行', () => {
+  /** 等第一輪續行收尾。它沒開始的話下行永遠沒有 root 的 `completed`，所以給一個期限。 */
+  async function untilFirstRound(
+    events: Parameters<typeof foldTurn>[0],
+  ): Promise<ConversationState> {
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('打 /goal 之後 5 秒內一輪續行都沒有開始')), 5000),
+    );
+    return Promise.race([foldTurn(events), timeout]);
+  }
+
+  it('開著 --goal-driver：打 /goal 之後不說話，第 1 輪自己開始', async () => {
+    running = await runServe({
+      argv: ['--port', '0', '--goal-driver'],
+      log: () => undefined,
+      env: {},
+    });
+    const client = await serveClient(running as RunningServe);
+    const events = await client.openEvents('goal-cmd');
+    const created = await client.slashRun('goal-cmd', `/${GOAL_COMMAND_NAME} 把測試修綠`);
+    if (created.kind !== 'success') throw new Error(JSON.stringify(created));
+
+    const state = await untilFirstRound(events);
+    // 假模型回聲：有它的回覆，代表模型真的被叫了一輪。
+    expect(JSON.stringify(state.entries)).toContain('回聲：');
+  }, 15000);
+
+  it('沒開 --goal-driver：打 /goal 之後一輪都不排', async () => {
+    running = await runServe({ argv: ['--port', '0'], log: () => undefined, env: {} });
+    const client = await serveClient(running as RunningServe);
+    const events = await client.openEvents('goal-cmd-off');
+    const created = await client.slashRun('goal-cmd-off', `/${GOAL_COMMAND_NAME} 把測試修綠`);
+    if (created.kind !== 'success') throw new Error(JSON.stringify(created));
+    // 給排程器一個機會：同一個 tick 之後再等一下，下行上不該出現任何 root 的收尾。
+    const outcome = await Promise.race([
+      foldTurn(events).then(() => 'ran' as const),
+      new Promise<'quiet'>((resolve) => setTimeout(() => resolve('quiet'), 300)),
+    ]);
+    expect(outcome).toBe('quiet');
+  });
+});
+
+/**
  * **這一條同時是 [#113](https://github.com/DemianLi/nexus-agent/issues/113) 的對照組。**
  * CLI 與 eval 那兩個入口把核准關掉了（收不了決定，停下來只會作廢一整輪），而
  * `serve` 這條刻意維持開著——瀏覽器那端真的按得下去。兩邊的差別是選的不是漏的，
