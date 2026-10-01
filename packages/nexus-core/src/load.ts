@@ -4,8 +4,11 @@
  * **與 dsh 的偏離**（AGENTS.md 的偏離規則）：dsh 的撤銷靠 Cordis 的
  * `ctx.effect`——每次註冊的 undo 掛在註冊者的 context 上，context 一收掉就整批
  * 回收。deepagents / LangChain JS / LangGraph JS 沒有 context 樹這種東西，表達
- * 不出來，所以退到最接近的實作：**per-plugin 的 undo 堆疊，出錯時逆序排掉**。
- * 射程因此限定為載入期回滾，不承諾執行期熱插拔——deepagents 建構後本來就不可變。
+ * 不出來，所以退到最接近的實作：**registry 內、以註冊者為單位的 undo 堆疊，出錯時逆序排掉**。
+ * 載體跟 dsh 一樣掛在註冊點上——每個回傳 undo 的註冊方法自己經 `effect` 記下撤銷
+ * （見 {@link ./registry.ts | InternalPluginRegistry.rollback}），載入器只在失敗時叫一次
+ * 回滾，不替註冊方法鏡像一份表。射程因此限定為載入期回滾，不承諾執行期熱插拔——
+ * deepagents 建構後本來就不可變。
  */
 
 import { createRegistry } from './registry.js';
@@ -127,15 +130,13 @@ export async function loadPlugins(
       registry.markDisabled(plugin.name);
       continue;
     }
-    const undos: (() => void)[] = [];
-    const tracked = trackUndo(registry, undos);
     const leave = registry.enter(origin);
     try {
       // `config` 是 `resolveEntries` 驗過的那一份（沒有 `Config` 的 plugin 是條目上原樣的那一份）。
-      await plugin.apply(tracked, config);
+      await plugin.apply(registry, config);
       options.afterApply?.(registry, origin);
     } catch (error) {
-      for (const undo of undos.reverse()) undo();
+      registry.rollback(origin);
       // **註冊內容留著、活資源不留。** 先前成功的 plugin 的註冊留在 registry 上是刻意的
       // （錯誤處理與診斷要有東西可看），但它們開的連線與子行程沒有這個理由——載入失敗
       // 的呼叫端拿到的是一個 exception，不是 handle，沒有第二個人知道那些東西還開著。
@@ -165,8 +166,6 @@ export async function loadPlugins(
 /** 掛上了、還可能因 `requires` 連鎖掉的一列。 */
 interface Mounted {
   readonly entry: ResolvedPluginEntry;
-  readonly undos: (() => void)[];
-  readonly disposers: Disposer[];
 }
 
 /** {@link LoadOptions.perEntry} 的那一條路。 */
@@ -192,16 +191,13 @@ async function loadPerEntry(
       drop({ origin, stage: 'config', message: configError.message, cause: configError });
       continue;
     }
-    const undos: (() => void)[] = [];
-    const disposers: Disposer[] = [];
-    const tracked = trackUndo(registry, undos, disposers);
     const leave = registry.enter(origin);
     try {
-      await plugin.apply(tracked, config);
+      await plugin.apply(registry, config);
       options.afterApply?.(registry, origin);
-      mounted.push({ entry: { plugin, origin, disabled, config }, undos, disposers });
+      mounted.push({ entry: { plugin, origin, disabled, config } });
     } catch (error) {
-      for (const undo of undos.reverse()) undo();
+      registry.rollback(origin);
       const reason = error instanceof Error ? error.message : String(error);
       drop({
         origin,
@@ -225,8 +221,13 @@ async function loadPerEntry(
       );
       if (missing.length === 0) continue;
       mounted.splice(mounted.indexOf(item), 1);
-      const cleanup = await runOwn(item.disposers);
-      for (const undo of item.undos.reverse()) undo();
+      // 要先跑它自己登記的清理再撤它的註冊：撤了登記，就找不到是哪幾個了。
+      const own = registry.lifecycle
+        .disposers()
+        .filter((disposer) => disposer.origin === item.entry.origin)
+        .map((disposer) => disposer.value);
+      const cleanup = await runOwn(own);
+      registry.rollback(item.entry.origin);
       const gone = dropped.map((entry) => formatOrigin(entry.origin));
       const hint = gone.length === 0 ? '' : `。這一次掉了的條目：${gone.join('、')}`;
       drop({
@@ -300,105 +301,6 @@ async function disposeAll(registry: InternalPluginRegistry): Promise<void> {
   throw new Error(`關機清理有失敗的：${detail}。其餘的清理都已經跑過了。`, {
     cause: failures[0]?.error,
   });
-}
-
-/**
- * 包一層 registry，把這一輪 `apply` 拿到的每個 undo 都記進堆疊。
- *
- * 只包會產生 undo 的方法——讀取路徑原封轉發，plugin 在自己的 `apply` 裡讀得到
- * 先前 plugin 註冊的東西。**每一個會發 undo 的點一個都不能漏**：漏掉的那個不會有任何
- * 現有測試發現，只會在回滾時默默留下一筆孤兒。`load.test.ts` 有一條「每個點各註冊一樣
- * 東西後 throw」的測試守著這件事。
- *
- * **`invariants` / `commands` / `sessions` 三個是 [#459](https://github.com/DemianLi/nexus-agent/issues/459)
- * 第一刀才補進來的**：它們三個一直會發 undo 卻一直沒被包，而上面那條測試是照這個函式
- * 的內容寫的，所以它也沒發現。那是一個比這張卡更早的洞，順手補掉。
- *
- * `lifecycle` 也在追蹤範圍，但它撤銷的意思不同：撤掉的是**登記**，不是跑那個清理。
- * 回滾期的資源釋放由 plugin 自己的 `try` / `catch` 負責——理由見
- * {@link ../registry.ts} 的 `LifecycleRegistrationPoint`。
- *
- * `telemetry` 兩個方法都要追：`use` 漏了會讓回滾過的 plugin 佔著那個唯一的後端
- * 位子，後面的 plugin 掛不上去卻看不出為什麼；`redact` 漏了會留下一條沒有主人的
- * 脫敏規則，而它是在熱路徑上同步跑的。
- */
-function trackUndo(
-  registry: InternalPluginRegistry,
-  undos: (() => void)[],
-  disposers?: Disposer[],
-): InternalPluginRegistry {
-  const remember = (undo: () => void): (() => void) => {
-    undos.push(undo);
-    return undo;
-  };
-  return {
-    ...registry,
-    tools: {
-      ...registry.tools,
-      register: (tool, options) => remember(registry.tools.register(tool, options)),
-    },
-    subagents: {
-      ...registry.subagents,
-      register: (subagent) => remember(registry.subagents.register(subagent)),
-    },
-    capabilities: {
-      ...registry.capabilities,
-      provide: (name) => remember(registry.capabilities.provide(name)),
-    },
-    services: {
-      ...registry.services,
-      provide: (name: string, value: unknown) => remember(registry.services.provide(name, value)),
-    },
-    backend: {
-      ...registry.backend,
-      mount: (routePrefix, backend) => remember(registry.backend.mount(routePrefix, backend)),
-    },
-    middleware: {
-      ...registry.middleware,
-      use: (middleware, options) => remember(registry.middleware.use(middleware, options)),
-    },
-    permissions: {
-      ...registry.permissions,
-      deny: (paths, options) => remember(registry.permissions.deny(paths, options)),
-    },
-    approvals: {
-      ...registry.approvals,
-      gate: (listener) => remember(registry.approvals.gate(listener)),
-    },
-    skills: {
-      ...registry.skills,
-      addSource: (path) => remember(registry.skills.addSource(path)),
-    },
-    memory: {
-      ...registry.memory,
-      addSource: (path) => remember(registry.memory.addSource(path)),
-    },
-    lifecycle: {
-      ...registry.lifecycle,
-      onDispose: (dispose) => {
-        // 逐列掉模式要記下是誰的清理：因 `requires` 掉的那一列 `apply` 已經跑完，要先跑它自己的清理再撤。
-        disposers?.push(dispose);
-        return remember(registry.lifecycle.onDispose(dispose));
-      },
-    },
-    telemetry: {
-      ...registry.telemetry,
-      redact: (rule) => remember(registry.telemetry.redact(rule)),
-    },
-    invariants: {
-      ...registry.invariants,
-      register: (packageName, installer) =>
-        remember(registry.invariants.register(packageName, installer)),
-    },
-    commands: {
-      ...registry.commands,
-      register: (definition) => remember(registry.commands.register(definition)),
-    },
-    sessions: {
-      ...registry.sessions,
-      join: (installer) => remember(registry.sessions.join(installer)),
-    },
-  };
 }
 
 /**
