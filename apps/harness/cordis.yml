@@ -23,7 +23,12 @@
 # 要事先知道某一列收哪些欄位（寫覆寫檔用），用 `--dump-config-schema`：印出一份 JSON Schema，
 # 用法見 docs/operations.md 的「寫覆寫檔之前先看欄位規格表」。
 #
-# 順序不承載語意，分組是給人看的。
+# 順序不承載語意，分組是給人看的。兩件事今天靠組裝的現況成立、沒有機制擋，各有絆索：
+#
+#   服務相依  清單上的列在 `apply` 當下讀的服務都由組裝點的 host-services 提供（它排在整份清單
+#             前面），沒有一列讀另一列提供的服務。守它的是 `src/shipped-service-reads.test.ts`。
+#   核准閘門  waterfall 的順序就是載入順序，今天只靠清單裡一位 gate 都沒有。守它的是
+#             `src/approval-gate-order.test.ts`。
 
 # ── 功能 ──────────────────────────────────────────────────────────────────────
 #
@@ -271,7 +276,7 @@
 #   讀（#650）。所以這幾列的 `apply` 是空的，值由
 #   `src/settings/startup.ts` 的 `startupSetting` 在起動期解一次、往下傳一份——形狀上仍是
 #   「值從一個地方來」，機制上不是服務，那條退讓登記在 #529 上。
-# - **組裝期**（`recursion-limit`、`agent-loop`）：消費者是 `agent-factory.ts`，跑在 `loadPlugins` 之後，
+# - **組裝期**（`recursion-limit`、`agent-loop`、`tool-fs-search`）：消費者是 `agent-factory.ts`，跑在 `loadPlugins` 之後，
 #   **註冊表就在手上**。所以這一列跟上面 core 那三列完全同形——`apply` 把驗過的值提供成一個
 #   服務，消費點去讀服務。這一層做得到的事，不該跟著上一層退。
 #
@@ -399,6 +404,17 @@
   config:
     maxInlineTokens: 12500
 
+# 搜尋結果的筆數上限（#735）：`grep` 命中超過 `grepMaxMatches`、`glob`／`ls` 超過 `globMaxResults` 時，模型只收到前段
+# 加一句定位，完整結果存進上面那個暫存目錄，用 `read_file` 照定位讀。**id、兩格的名字與 250／100 都是 dsh 的**
+# （`packages/fs/tool-fs-search/src/index.ts:73-100`、`grep.ts:29`、`glob.ts:25`，`477b4f4`）；`ls` 沿用 `globMaxResults`
+# （dsh 沒有這顆工具）。`grep` 只管 `content` 模式。暫存目錄寫不進、或沒有會話日誌時，照樣只留前段，結尾註明沒存到。
+# **把這一列標成 `disabled: true`（或刪掉）就回到基座原樣**：超過 80,000 字元由工具本體自己截掉，原文不留。
+- id: tool-fs-search
+  name: '#settings/tool-fs-search'
+  config:
+    grepMaxMatches: 250
+    globMaxResults: 100
+
 # 委派工具是一次性的還是背景續行的（#841），以及每個主對話同時存活的背景子代理上限。**兩格名字與值域都是 dsh 的**
 # （`backgroundMode` 是 `tool-subagent` 的 Config、`maxActiveSubagents` 預設 8，`packages/subagent/tool-subagent/src/index.ts:111`，
 # `477b4f4`），**出貨值 `continuable` 也是 dsh base bundle 打開的**（`packages/bundle/base/cordis.patch.yml:369-374`）。
@@ -467,6 +483,18 @@
             enable_thinking:
               $var: thinking.enabled
 
+# 沒帶 `--live` 時用哪個模型提供者（#670）。照 dsh `agent-default-model`（`packages/bundle/base/cordis.patch.yml:82-86`）：
+# 選擇是一列，提供者各是一列。**出貨值 `cli-script` 是程式碼裡內建的那份腳本，沒有對應的列**；要換就在 patch 裡
+# `insert` 一列提供者（例如 `#settings/scripted-model`，腳本當 config）、再把這一列的 `provider` 指到它的 `id`，
+# 形狀照 dsh 的 headless e2e（`apps/cli/tests/profiles/headless/tests/source-tool.built.e2e.ts:36-42`）。
+#
+# **帶了 `--live` 時這一列不看**：`--live` 是進 live 的唯一閘門，因為 `.env` 與代理在載入清單之前就依它處理好了。
+# 這一列同 `live-model`，是起動期讀的、只講設定的列，`apply` 是空的；偏離與理由登記在 `src/model-provider.ts` 的檔頭。
+- id: agent-default-model
+  name: '#settings/default-model'
+  config:
+    provider: cli-script
+
 # agent 迴圈的 super-step 上限（#457／#529）。**dsh 對這個值沒有意見**——它不跑 LangGraph，
 # `recursionLimit` 在 `bundle/*` 的 patches 與 `core/agent-loop` 全樹零命中（`ddefc45`）。所以這一列
 # 的形狀抄的是上面 core 那三列，不是抄 dsh 的某一列。
@@ -498,13 +526,13 @@
 
 # ── 配套入口 ──────────────────────────────────────────────────────────────────
 #
-# 二十一個全進，不是只有 `@nexus/core`（#107 拍板）。理由三條：
+# 二十個全進，不是只有 `@nexus/core`（#107 拍板）。理由三條：
 #
 # - **它們不裝功能，只裝觀察。** 一個配套入口不註冊工具、不改 prompt、不碰 backend，所以
 #   「替誰決定該裝什麼」這個顧慮對它們不成立——沒有人的 agent 因為它們而不一樣。
 # - **關得掉。** 條目層有 `disabled`（#104），組裝點有 `invariants` 選擇，所以進來不是
 #   單向門。這是它們進得來的前提，而現在連 `disabled` 都寫得進使用者自己的 patch 檔。
-# - **二十一個全進。** 十三個是空 installer，掛上去一個檢查都不裝，買到的只有包名歸屬；真的
+# - **二十個全進。** 十二個是空 installer，掛上去一個檢查都不裝，買到的只有包名歸屬；真的
 #   在檢查的是八個——`@nexus/core`（turn 配對）、`@nexus/plugin-commands`（命令生命週期
 #   配對，#118）、`@nexus/plugin-plan-mode`（`/plan` 的參數契約，#120）、
 #   `@nexus/plugin-goal`（耐久 goal 串，#126）、`@nexus/plugin-todo`（耐久待辦快照的形狀
@@ -513,7 +541,7 @@
 #   本身不在這份清單裡，只由 serve 掛）、`@nexus/plugin-sandbox-policy`（每一顆 `sandbox/mode`
 #   帶的都是認得的模式，#699）。
 #
-# **代價是每一次執行多二十一個條目、二十一次 `apply`**，換到的是這份清單與
+# **代價是每一次執行多二十個條目、二十次 `apply`**，換到的是這份清單與
 # `registry.invariants.companions()` 對得起來。違規往哪裡印，見 `runCli` 接線的那一行。
 #
 # 這份清單要跟 `packages/*/src/invariant.ts` 對得上：少掛的那幾個會讓「這個 package 沒有

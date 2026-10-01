@@ -23,6 +23,15 @@ import type {
   RunStartParams,
 } from '@langchain/protocol';
 
+// 命令與回饋的詞彙是 core 的型別，這裡只取別名（#683）。**只有 `import type`**，`@nexus/core` 只進
+// `devDependencies`：`verbatimModuleSyntax` 會把這兩行整行擦掉，所以上面「plain node 那條路」與瀏覽器都不會載到 core。
+import type { CommandDescriptor, CommandInputDescriptor } from '@nexus/core/src/commands.ts';
+import type {
+  FeedbackCategory,
+  MessageFeedbackItem,
+  MessageFeedbackRating,
+} from '@nexus/core/src/feedback.ts';
+
 import { isDeliverableMethod } from './deliverables.js';
 import type { DeliverableMethod } from './deliverables.js';
 
@@ -324,30 +333,16 @@ export function isFeedbackMethod(value: unknown): value is FeedbackMethod {
 }
 
 /**
- * 回饋的分類。結構上是 `@nexus/core` 的 `FeedbackCategory`，**重新宣告的理由同
- * {@link SlashDescriptor}**；鏡像斷言在 `@nexus/harness`。
+ * 回饋的分類：**就是 `@nexus/core` 的 `FeedbackCategory`**，別名，不另寫一份（[#683](https://github.com/DemianLi/nexus-agent/issues/683)）。
+ * 理由同 {@link SlashDescriptor}。
  */
-export type WireFeedbackCategory =
-  | 'task-result'
-  | 'instruction-following'
-  | 'product-interaction'
-  | 'service-stability'
-  | 'resource-cost'
-  | 'security-privacy-permission'
-  | 'other';
+export type WireFeedbackCategory = FeedbackCategory;
 
-export type WireFeedbackRating = 'positive' | 'negative';
+/** 對一則回覆的整體判斷：**就是 `@nexus/core` 的 `MessageFeedbackRating`**。 */
+export type WireFeedbackRating = MessageFeedbackRating;
 
-/** 一則回覆目前的評分。結構上是 `@nexus/core` 的 `MessageFeedbackItem`。 */
-export interface WireFeedbackItem {
-  readonly messageId: string;
-  readonly rating: WireFeedbackRating;
-  readonly note?: string;
-  readonly category?: WireFeedbackCategory;
-  readonly version: string;
-  readonly createdAt: number;
-  readonly updatedAt: number;
-}
+/** 一則回覆目前的評分：**就是 `@nexus/core` 的 `MessageFeedbackItem`**。 */
+export type WireFeedbackItem = MessageFeedbackItem;
 
 export interface FeedbackPutCommand {
   readonly id: number;
@@ -450,24 +445,25 @@ export function isRpcMethod(value: unknown): value is RpcMethod {
   );
 }
 
-/** 命令的自由輸入怎麼提示。結構上就是 `@nexus/core` 的 `CommandInputDescriptor`。 */
-export interface SlashInputDescriptor {
-  readonly hint: string;
-}
+/** 命令的自由輸入怎麼提示：**就是 `@nexus/core` 的 `CommandInputDescriptor`**。 */
+export type SlashInputDescriptor = CommandInputDescriptor;
 
 /**
  * 線上的命令視圖，**不帶 handler**。
  *
- * 結構上是 `@nexus/core` 的 `CommandDescriptor`，但這裡**重新宣告而不是 import**：
- * `@nexus/wire` 進得了瀏覽器正是因為它沒有執行期相依，拉 `@nexus/core` 進來會把
- * Node 那半邊一起拖過去。兩份形狀不能各走各的，所以 `@nexus/harness`
- * （唯一同時看得到兩邊的地方）釘了一條編譯期的鏡像斷言。
+ * **就是 `@nexus/core` 的 `CommandDescriptor`**，別名，不另寫一份（[#683](https://github.com/DemianLi/nexus-agent/issues/683)）。
+ * 照 dsh：UI 對領域套件做 type-only 相依拿型別，只有一份（dsh `packages/client/ui-commands/src/client/directory.ts:8`
+ * 從 `dsh-commands/types` 拿 `CommandDescriptor`）。原本手抄一份、在 harness 釘單向可指派，core 多一格選填欄位時
+ * 照樣編得過——兩份本來就不該存在。
+ *
+ * `import type` 進不了瀏覽器的執行期（`verbatimModuleSyntax` 整行擦掉），但會把 core 這兩個檔的型別圖帶進
+ * web 的 `tsc`：`commands.ts` 引 `SessionLog`、`feedback.ts` 引 `session-log.ts`，一路到 langchain 的型別。
+ * dsh 的那條邊指向純型別的 `./types` 子路徑；我們 core 還沒有那樣的檔，所以邊照 dsh、窄度沒照到。
+ *
+ * **型別一樣不等於線上一樣**：`slash.list` 的結果在 client 的 `readDescriptors` 逐格重建，core 多一格欄位時
+ * 型別上有、瀏覽器拿到的沒有，要那一格上線得去那裡補。
  */
-export interface SlashDescriptor {
-  readonly name: string;
-  readonly description: string;
-  readonly input?: SlashInputDescriptor;
-}
+export type SlashDescriptor = CommandDescriptor;
 
 /** 列出這條 thread 上打得出哪些命令。沒有參數——清單是整個 thread 的。 */
 export interface SlashListCommand {
@@ -685,7 +681,7 @@ export type ThreadFeedFrame =
 
 /**
  * 認得這一顆嗎。**client 在這裡丟掉不認得的**，見 {@link THREAD_FEED_PATH}。只驗 client 要讀的欄位，`event` 的
- * 其餘形狀是 server 那側的型別保證的（同一份 `@nexus/wire`）。
+ * 其餘形狀不驗：server 那側（`thread-feed.ts`）照同一份 `@nexus/wire` 的型別建。
  */
 export function isThreadFeedFrame(value: unknown): value is ThreadFeedFrame {
   if (typeof value !== 'object' || value === null) return false;

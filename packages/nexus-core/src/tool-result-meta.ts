@@ -49,6 +49,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { adaptBackendProtocol } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { structuredPatch } from 'diff';
+import { searchSeenOf } from './search-overflow.js';
 
 /** 一段 diff：每個 hunk 一組前後片段，不是 patch。同 dsh 的 `FileDiff`（`core/tools/src/presentation.ts:34-40`）。 */
 export interface FileDiff {
@@ -329,7 +330,9 @@ function withGrepMeta(method: (...args: unknown[]) => unknown) {
       if (group === undefined) byFile.set(match.path, [entry]);
       else group.push(entry);
     }
-    const truncated = result.truncated === true;
+    // 超過筆數上限被截過（#735，`search-overflow.ts`）：交到這裡的是前段，截之前的數掛在旁邊。
+    const seen = searchSeenOf(result);
+    const truncated = result.truncated === true || seen !== undefined;
     const meta: SearchResultMeta = {
       shape: 'matches',
       // **檔案照路徑排序**，跟模型看到的文字同序：基座的 `formatGrepResults` 用 `Object.keys(...).sort()` 排檔名
@@ -340,9 +343,12 @@ function withGrepMeta(method: (...args: unknown[]) => unknown) {
       // **`total` 是截之前的數**，同 dsh 的 `retained.seen`：backend 照 `max_count` 截過才回，所以截了的
       // 那一次再不封頂叫一次來數。不多花掃描：基座的每一顆 backend 都是全掃之後才截前 N 筆
       // （`applyGrepMaxCount`），ripgrep 本身沒帶上限。**模型那一份不動**，第二次的結果只拿來數。
-      total: truncated
-        ? await countAll(method, args, result.matches.length)
-        : result.matches.length,
+      // 只被筆數上限截過的，截之前的數就在手上；backend 自己照 `max_count` 截過的才要再數一次（那一次不再被截，
+      // 筆數上限只處理一次呼叫裡的第一次 backend 呼叫）。
+      total:
+        result.truncated === true
+          ? await countAll(method, args, seen ?? result.matches.length)
+          : (seen ?? result.matches.length),
     };
     putToolResultMeta('grep', meta);
     return result;
@@ -360,12 +366,14 @@ function withGlobMeta(method: (...args: unknown[]) => unknown) {
     const paths = result.files.flatMap((info) =>
       typeof info.path === 'string' ? [info.path] : [],
     );
-    // 同 grep：`total` 是交出來的筆數，走檔被截時 `truncated` 講得出來、數字講不出來。
+    // 同 grep：`total` 是交出來的筆數，走檔被截時 `truncated` 講得出來、數字講不出來。被筆數上限截過的（#735）
+    // 例外：截之前的數掛在旁邊，同 dsh 的 `seen`。
+    const seen = searchSeenOf(result);
     const meta: SearchResultMeta = {
       shape: 'paths',
       paths,
-      truncated: result.truncated === true,
-      total: paths.length,
+      truncated: result.truncated === true || seen !== undefined,
+      total: seen ?? paths.length,
     };
     putToolResultMeta('glob', meta);
     return result;

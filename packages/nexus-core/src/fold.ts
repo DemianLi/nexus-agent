@@ -44,6 +44,8 @@ import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
 import { createMaxTokensCarrier, createMaxTokensMiddleware } from './max-tokens.js';
 import { createSpillPolicyMiddleware } from './spill-policy.js';
 import type { SpillPolicyOptions } from './spill-policy.js';
+import { capSearchResults, createSearchOverflowMiddleware } from './search-overflow.js';
+import type { SearchOverflowOptions } from './search-overflow.js';
 import { createObservationPolicy, OBSERVATION_POLICY_PLUGIN_NAME } from './observation.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
@@ -326,6 +328,15 @@ export interface FoldOptions {
   spillPolicy?: SpillPolicyOptions;
 
   /**
+   * 搜尋結果的筆數上限（[#735](https://github.com/DemianLi/nexus-agent/issues/735)）：`grep` 命中、`glob`／`ls` 路徑
+   * 超過上限時，行內留前段，完整的存進 `store`。**省略就不掛**——基座的三顆照原樣，超過 80,000 字元自己截掉。
+   *
+   * 沒有 backend、或 root／任何子代理有 `permissions` 規則時也不掛（同搜尋卡，見 {@link searchMetaAllowed}）。
+   * 見 {@link ./search-overflow.ts}。
+   */
+  searchOverflow?: SearchOverflowOptions;
+
+  /**
    * 每一次模型呼叫的 token 帳目要不要記進會話日誌。省略即開著，`false` 是明著關掉。
    *
    * **省略時還有第二條關法**：部署設定層把 `@nexus/core/model-usage` 那一列標成
@@ -488,6 +499,16 @@ export function foldRegistry(
   // **plugin middleware 在這裡就攤平，只攤一次**：要 backend 的那一種（`useWithBackend`，#388）
   // 建出來的實例得走遍 root 與每個子代理，這裡各算一次的話兩邊拿到的會是兩份。
   const plugins = pluginMiddleware(registry, backend);
+  // 搜尋結果的筆數上限（#735）：middleware 與 backend 包裝是一對，只在這裡一起組（#698）。沒有 backend、或有
+  // `permissions` 規則（同搜尋卡）就整對不掛。見 {@link ./search-overflow.ts}。
+  const searchOverflow =
+    options.searchOverflow !== undefined &&
+    backend !== undefined &&
+    searchMetaAllowed(registry, permissions)
+      ? options.searchOverflow
+      : undefined;
+  const searchOverflowMiddleware =
+    searchOverflow === undefined ? undefined : createSearchOverflowMiddleware(searchOverflow);
   const subagentPlugins = subagentPluginMiddleware(plugins);
   // 工具過濾（#707）遮的基座工具：過濾對每個子代理一樣，所以名單一樣；基座工具不可能被子代理自己同名註冊（基座拒絕），
   // 不必扣自帶的。
@@ -517,6 +538,9 @@ export function foldRegistry(
     // 外溢層在 plugin 與核准閘門的外側、圍堵的內側：內層每一顆換過的結果它都看得到，而圍堵寫進日誌的是它換過的那一則
     // （紀錄只記預覽，同 dsh `tool-calls.ts:152-156`）。見 {@link ./spill-policy.ts}。
     shared('spill', spill),
+    // 搜尋結果的筆數上限（#735）緊貼外溢層內側：外溢層看到的是它換過的那則（行內前段加定位），同 dsh `tools/post-execute`
+    // 先於外溢；在 plugin 與核准閘門外側。無狀態、一份走遍 root 與每個子代理（槽逐次呼叫開）。見 {@link ./search-overflow.ts}。
+    shared('searchOverflow', searchOverflowMiddleware),
     // plugin 以 `prepend` 掛的：在中止內側、閘門外側（#327）。子代理拿的是同一批實例，去掉撞名摘要器的那一顆。
     {
       name: 'plugins.prepended',
@@ -603,7 +627,10 @@ export function foldRegistry(
   if (backend !== undefined) {
     params.backend = recordBackendOutcomes(
       recordReadExtent(
-        recordToolResultMeta(backend, { search: searchMetaAllowed(registry, permissions) }),
+        // 筆數上限的包裝在搜尋卡那層內側：卡片看到的是截過的前段，跟模型同一份。
+        recordToolResultMeta(searchOverflow === undefined ? backend : capSearchResults(backend), {
+          search: searchMetaAllowed(registry, permissions),
+        }),
       ),
     );
   }
