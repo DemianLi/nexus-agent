@@ -236,6 +236,29 @@ describe('評一則回覆', () => {
     expect(prompt).not.toContain('QX7');
   });
 
+  it('rating 不是 positive／negative：整顆退回 invalid_argument，連原型鏈上的名字也一樣', async () => {
+    const wired = await line([{ content: '答。' }]);
+    const session = await open(wired, 't', '跑。');
+    await until(session, settled(1));
+    const messageId = messageIdOf(aiEntries(session.state, 'root')[0]);
+    for (const rating of ['neutral', 'constructor', 'toString', '__proto__']) {
+      const put = await wired.client.feedbackPut('t', {
+        messageId,
+        rating: rating as never,
+        ifVersion: null,
+      });
+      expect(put).toMatchObject({ kind: 'rejected' });
+    }
+    expect(feedbackEvents(wired.log())).toEqual([]);
+    // 對照：同一則、同一條線，合法的那兩種評得下去。
+    const ok = await wired.client.feedbackPut('t', {
+      messageId,
+      rating: 'positive',
+      ifVersion: null,
+    });
+    expect(ok.kind).toBe('ok');
+  });
+
   it('停在核准點又續接：一輪只有一個收尾，放在續接後那則；停著時照樣評得到', async () => {
     const wired = await line([
       { content: '要動手了。', toolCalls: [{ name: 'danger', args: {} }] },
