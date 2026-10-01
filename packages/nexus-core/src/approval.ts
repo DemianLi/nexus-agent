@@ -22,7 +22,7 @@ import { interrupt, isGraphBubbleUp } from '@langchain/langgraph';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import type { NamedEntry } from './entries.js';
-import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
+import { rawArgumentsOf } from './invalid-tool-args.js';
 import { formatOrigin, type NexusPlugin } from './plugin.js';
 import { toolRefusal } from './tool-events.js';
 
@@ -284,13 +284,11 @@ function denial(exec: ToolExecution, reason: string): ToolMessage {
  *
  * @param listeners - 依註冊順序的 listener。
  * @param channel - 這次組裝有沒有人可以按核准。
- * @param invalidArguments - 解不開的參數的載體；給了，中斷酬載才讀得到原字串。
  * @returns 可以交給 `registry.middleware.use()` 或塞進 subagent 的 middleware。
  */
 export function createApprovalGateMiddleware(
   listeners: readonly NamedEntry<PreToolListener>[],
   channel: ApprovalChannel,
-  invalidArguments?: InvalidArgumentsCarrier,
 ): AgentMiddleware {
   return createMiddleware({
     name: APPROVAL_GATE_MIDDLEWARE_NAME,
@@ -322,7 +320,7 @@ export function createApprovalGateMiddleware(
 
       // `interrupt` 是用拋例外傳播的，**不能包在 try/catch 裡**
       // （`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
-      const raw = exec.callId === undefined ? undefined : invalidArguments?.rawOf(exec.callId);
+      const raw = rawArgumentsOf(request);
       const answer = (await interrupt({
         kind: APPROVAL_INTERRUPT_KIND,
         actionRequests: [{ name: exec.name, args: raw ?? exec.args, description: because }],

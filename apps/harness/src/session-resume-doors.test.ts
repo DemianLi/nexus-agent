@@ -133,16 +133,16 @@ function saverConstructions(): string[] {
  * 把它提成一個區域變數，因為 `ask_user_question` 的 fail-closed 要問「這次組裝有沒有
  * checkpointer」，而寫死 `true` 就會在門真的開的那天靜靜地說謊。**建的仍是同一顆、
  * 仍然只有這一處、仍然是不耐久的那一種**——所以這裡改的是 characterization 的字面，
- * 不是上面那三個目的地的任何一個。
+ * 不是失敗訊息裡那兩個目的地的任何一個。
  */
 const THE_ONLY_SAVER = [
   'apps/harness/src/assembly-root.ts: const checkpointer = new MemorySaver();',
 ];
 
 /**
- * 這條絆索響的時候，讀的人該往哪裡去。**三個目的地，不是「值不對」。**
+ * 這條絆索響的時候，讀的人該往哪裡去。**兩個目的地，不是「值不對」。**
  *
- * 三個路徑常數在下面各自被讀過一次（改名就 ENOENT，不會靜靜地掃不到），所以這段文字裡
+ * 兩個路徑常數在下面各自被讀過一次（改名就 ENOENT，不會靜靜地掃不到），所以這段文字裡
  * 的路徑不會指向一個已經不在的檔案。
  */
 const DOOR_B_GUIDANCE = (paths: readonly string[]): string =>
@@ -155,21 +155,20 @@ const DOOR_B_GUIDANCE = (paths: readonly string[]): string =>
   '[#251](https://github.com/DemianLi/nexus-agent/issues/251) **決定門 B 不開**：兩份耐久來源' +
   '的寫入順序會分岔（checkpoint 寫了日誌沒寫，或反過來），要先有一條對帳規則。' +
   '動它之前先回去看那個決定。\n' +
-  '真的要開的話，這三處要跟著改：\n' +
+  '真的要開的話，這兩處要跟著改：\n' +
   `  1. ${paths[0]} —— 續接時從日誌推回對話、灌進 graph state 的那一步。` +
   '門 B 一開，graph state 會從 checkpointer 回來，再灌一次對話就重複了——兩份來源誰是對話的真相要先決定。\n' +
   `  2. ${paths[1]} 的 ${TOOL_RESULT_STASH_PREFIX} —— ` +
   '暫存現在優先存主機的私有目錄（[#734](https://github.com/DemianLi/nexus-agent/issues/734)），只有存不進去才退回 graph state；' +
   'checkpointer 落盤之後，退回 graph state 的那一份要不要跟著活下來是一個新問題。\n' +
-  `  3. ${paths[2]} 的載體 —— ` +
-  '參數解不開的那一顆，原字串與「這次不執行」的判斷只記在行程內、以 callId 為鍵的載體裡。' +
-  '門 B 一開，停在核准點的中斷會活過行程，在另一個行程續答時載體是空的，歷史裡的參數只剩 `{}`：' +
-  'schema 收得下 `{}` 的工具會真的被執行。這一格要先換成活得過 checkpoint 的記號。\n' +
+  '參數解不開的那一顆（`invalid-tool-args.ts`）不在這份清單上：原字串記在那則 AI 訊息自己的 ' +
+  '`additional_kwargs`，跟著 checkpoint 與日誌走，[#701](https://github.com/DemianLi/nexus-agent/issues/701) ' +
+  '用「核准卡跨組裝續接」量過。\n' +
   '全文見 [#203](https://github.com/DemianLi/nexus-agent/issues/203) 與 ' +
   '[#251](https://github.com/DemianLi/nexus-agent/issues/251)。';
 
 /**
- * 失敗訊息裡那三個目的地，**逐一從磁碟讀過**。
+ * 失敗訊息裡那兩個目的地，**逐一從磁碟讀過**。
  *
  * 讀而不 glob：檔案改名要 `ENOENT`，**不能靜靜地掃不到**（同 #195 的做法）。第二個目的地
  * 另外用了 `TOOL_RESULT_STASH_PREFIX` 這個 import——那一格連名字都不必猜，編譯器會擋。
@@ -177,7 +176,6 @@ const DOOR_B_GUIDANCE = (paths: readonly string[]): string =>
 const DESTINATIONS = [
   'apps/harness/src/conversation-restore.ts',
   'apps/harness/src/agent-factory.ts',
-  'packages/nexus-core/src/invalid-tool-args.ts',
 ] as const;
 
 /** 每個目的地必須還講著那件事。**錨點選的是改寫時不會動的那一句。** */
@@ -188,8 +186,6 @@ const DESTINATION_ANCHORS: readonly (readonly [string, readonly string[]])[] = [
   // 開始」的那一行披露上；#306 讓對話從日誌推回來，那句話沒了，門 B 一開會撞上的是灌回對話的那一步。
   [DESTINATIONS[0], ['不是把 checkpointer 落盤']],
   [DESTINATIONS[1], ['TOOL_RESULT_STASH_PREFIX']],
-  // 錨在載體檔頭的重開條件上：那一句寫的就是「門 B 一開，這一格要換」。
-  [DESTINATIONS[2], ['懸著的中斷能在另一個行程被續答']],
 ];
 
 describe('門 B：落盤 checkpointer', () => {

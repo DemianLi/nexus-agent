@@ -20,7 +20,6 @@ import { tool } from '@langchain/core/tools';
 import { Command, MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI, convertMessagesToCompletionsMessageParams } from '@langchain/openai';
 import {
-  createInvalidArgumentsCarrier,
   INVALID_ARGS,
   INVALID_ARGUMENTS_REFUSAL,
   repairInvalidToolCalls,
@@ -338,7 +337,7 @@ describe('前提與絆索：真的轉換器產出的形狀', () => {
       ).toBe(BROKEN);
 
       const repaired = convertMessagesToCompletionsMessageParams({
-        messages: [repairInvalidToolCalls(message, createInvalidArgumentsCarrier())],
+        messages: [repairInvalidToolCalls(message)],
       });
       expect(
         (repaired[0] as { tool_calls?: WireToolCall[] }).tool_calls?.[0]?.function.arguments,
@@ -511,7 +510,8 @@ describe('要核准的工具', () => {
 });
 
 /**
- * **載體落定就刪鍵**：有的供應商會重用 callId。沒刪的話，下一輪一顆合法的同 id 呼叫會被當成壞的拒掉。
+ * **記號住在那則 AI 訊息上，不是以 callId 為鍵的表**：有的供應商會重用 callId，下一輪一顆合法的同 id
+ * 呼叫在另一則訊息上，不會被當成壞的拒掉。
  */
 describe('落定之後', () => {
   it('同一個 callId 再來一顆合法的呼叫，照常執行', async () => {
@@ -540,6 +540,80 @@ describe('落定之後', () => {
       ]);
     } finally {
       await run.close();
+    }
+  });
+});
+
+/**
+ * **懸著的中斷活過行程**（#701）：兩場組裝共用同一顆 `MemorySaver`，第二場什麼都沒帶過來，只靠
+ * checkpoint 裡那則 AI 訊息。這是門 B（落盤的 checkpointer）打開之後會走到的路。
+ *
+ * 工具的 schema 收得下 `{}`（參數全選填）：記號丟了的話，歷史裡的 `{}` 是一個合法呼叫，本體會真的執行，
+ * 只比碼的話也看不出來——所以斷言本體零次、文字逐字是 `INVALID_ARGUMENTS_REFUSAL`。
+ */
+describe('核准卡跨組裝續接', () => {
+  const optionalPlugin = (bodies: string[]): PluginEntry => ({
+    plugin: {
+      name: 'invalid-args-optional',
+      apply(registry) {
+        registry.tools.register(
+          tool(
+            () => {
+              bodies.push('optional');
+              return '做完了';
+            },
+            {
+              name: 'optional',
+              description: '參數全選填。',
+              schema: z.object({ note: z.string().optional() }),
+            },
+          ),
+        );
+        registry.approvals.gate((exec, next) =>
+          exec.name === 'optional' ? { kind: 'ask', reason: '要核准' } : next(),
+        );
+      },
+    },
+  });
+
+  it('第一場停在壞參數工具的核准卡上，第二場核准：本體零次、拿到 INVALID_ARGS', async () => {
+    const bodies: string[] = [];
+    const upstream = await fakeOpenAi([
+      { toolCall: { id: 'call_bad', name: 'optional', arguments: BROKEN } },
+      { text: '收到。' },
+    ]);
+    const saver = new MemorySaver();
+    const config = { configurable: { thread_id: 'resume-across' } };
+    const assemble = () =>
+      createNexusAgent({
+        model: openAi(upstream.baseURL),
+        checkpointer: saver,
+        plugins: [optionalPlugin(bodies)],
+      });
+    const first = await assemble();
+    const second = await assemble();
+    try {
+      const paused = (await first.agent.invoke(toAgentInvocation('動手'), config)) as {
+        __interrupt__?: { value?: { actionRequests?: { name: string; args: unknown }[] } }[];
+      };
+      expect(paused.__interrupt__?.[0]?.value?.actionRequests).toEqual([
+        expect.objectContaining({ name: 'optional', args: BROKEN }),
+      ]);
+      // 前提：兩場是各自的組裝，沒有共用任何行程內的東西，只有 saver。
+      expect(second).not.toBe(first);
+
+      await second.agent.invoke(
+        new Command({ resume: { decisions: [{ type: 'approve' }] } }) as never,
+        config,
+      );
+      expect(bodies).toEqual([]);
+      const replay = replayOf(upstream.requests[1], 'call_bad');
+      expect(replay.arguments).toBe('{}');
+      expect(textOf(replay.next?.content)).toBe(INVALID_ARGUMENTS_REFUSAL);
+    } finally {
+      await first.dispose();
+      await second.dispose();
+      await upstream.close();
     }
   });
 });
