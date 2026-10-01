@@ -14,6 +14,7 @@
  * | `turn/start`（`message`） | 人打的字（`message-start` `role: "human"`） |
  * | `user/message`（`source.kind: "user"`） | 輪中插的話（#710），同上 |
  * | `turn/start`（`subagent-settled`）／`user/message`（`source.kind: "subagent-settled"`） | 「這裡有一則背景子代理結算通知」（#851）：`custom` frame，`data` 同即時（{@link settleNoticeData}）；位置就是人話會出現的地方（那一輪的開頭、或輪中插進來的那一刻） |
+ * | `turn/start`（`agent-message`）／`user/message`（`source.kind: "agent-message"`） | 「背景子代理寫來一則話」（#863）：`custom` frame，`data` 同 {@link agentMessageNoticeData}，`text` 已拿掉給模型看的英文前綴；位置同上 |
  * | `turn/start`（任何一種） | `lifecycle running` |
  * | `assistant/message` | 模型的回覆，連同推理（#527）；`interrupted` 的那則不收尾，由那一輪的中止標成「已停止」 |
  * | `tool/call` ／ `tool/result` | 工具卡開、收；那則結果的文字成功失敗都帶（成功是輸出、失敗是紅字，[#439](https://github.com/DemianLi/nexus-agent/issues/439)） |
@@ -46,6 +47,7 @@
  */
 
 import type {
+  AgentMessagePayload,
   DeliverablesPresentedPayload,
   Event,
   InboxPayload,
@@ -61,6 +63,7 @@ import type {
   WorkspaceChangesPayload,
 } from '@nexus/wire';
 import {
+  AGENT_MESSAGE,
   CONTEXT_MEASURE,
   DELIVERABLES_PRESENTED,
   HISTORY_PAGE_MAX_BYTES,
@@ -93,6 +96,7 @@ import {
   tokenUsageUnit,
 } from '@nexus/core';
 
+import { agentMessageBody, runIdOfSession } from './background-run-id.js';
 import { threadTitleOf } from './session-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
 import { threadTitleConfigSchema } from './settings/thread-title.js';
@@ -257,6 +261,31 @@ export function settleNoticeData(id: string): {
 }
 
 /**
+ * 「背景子代理寫來一則話」在線上的 `custom` 事件 `data`（[#863](https://github.com/DemianLi/nexus-agent/issues/863)）。
+ * **只有歷史用**，理由與 {@link settleNoticeData} 相同：即時由送出佇列的 `claimed`／`claimedNextStep` 長同一種 entry。
+ *
+ * @param id - 那一格 entry 的 `id`。
+ * @param senderSessionId - 寄件的背景子代理的會話 id。
+ * @param text - 日誌上送進模型的整段字（含前綴）；這裡拿掉前綴。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `AgentMessagePayload`。
+ */
+export function agentMessageNoticeData(
+  id: string,
+  senderSessionId: string,
+  text: string,
+): { readonly name: typeof AGENT_MESSAGE; readonly payload: AgentMessagePayload } {
+  return {
+    name: AGENT_MESSAGE,
+    payload: {
+      id,
+      senderSessionId,
+      runId: runIdOfSession(senderSessionId),
+      text: agentMessageBody(senderSessionId, text),
+    },
+  };
+}
+
+/**
  * 一輪的改動紀錄在線上的 `custom` 事件 `data`（[#443](https://github.com/DemianLi/nexus-agent/issues/443)）。
  * 即時與這裡共用這一個，同 {@link deliverablesData}。**`seq` 是那顆事件在 root 日誌裡的位置**，web 拿它去
  * `changes/summary` 要摘要；從日誌重播出來的那幾顆，摘要多半已經不在了（只活到會話結束），路由回 404。
@@ -352,12 +381,29 @@ export function inboxData(
   inbox: InboxState,
   claimed?: InboxClaim,
 ): { readonly name: typeof INBOX; readonly payload: InboxPayload } {
+  // 子代理寄來的話（#863）：給模型看的英文前綴不上線，畫面拿到的是話本身。
+  const shown = (text: string, source: QueuedInput['source']) =>
+    source.kind === 'agent-message' ? agentMessageBody(source.senderSessionId, text) : text;
   const wire = (items: readonly QueuedInput[]) =>
-    items.map(({ id, text, source }) => ({ id, text, source: { kind: source.kind } }));
+    items.map(({ id, text, source }) => ({
+      id,
+      text: shown(text, source),
+      source: { kind: source.kind },
+    }));
   const claim = ({ id, text, references, source }: ClaimedInput) => ({
     id,
-    text,
-    ...(source.kind === 'user' ? {} : { source: { kind: source.kind } }),
+    text: shown(text, source),
+    ...(source.kind === 'user'
+      ? {}
+      : source.kind === 'agent-message'
+        ? {
+            source: {
+              kind: source.kind,
+              senderSessionId: source.senderSessionId,
+              runId: runIdOfSession(source.senderSessionId),
+            },
+          }
+        : { source: { kind: source.kind } }),
     ...(references === undefined || references.length === 0
       ? {}
       : { references: references.map(({ sessionId, label }) => ({ sessionId, label })) }),
@@ -659,6 +705,20 @@ export function historyFrames(
         if (event.data.kind === 'subagent-settled') {
           frames.push(frame('custom', event.time, settleNoticeData(`history-${event.seq}`)));
         }
+        // 子代理寫來的話叫醒的一輪（#863）：即時由 `claimed` 長「某某說」，歷史照即時。
+        if (event.data.kind === 'agent-message') {
+          frames.push(
+            frame(
+              'custom',
+              event.time,
+              agentMessageNoticeData(
+                `history-${event.seq}`,
+                event.data.senderSessionId,
+                event.data.text,
+              ),
+            ),
+          );
+        }
         if (event.data.kind === 'message') {
           frames.push(
             ...message(
@@ -678,6 +738,20 @@ export function historyFrames(
         // 輪中插進來的結算通知（#851）：即時由 `claimedNextStep` 長「通知」，歷史照即時。
         if (event.data.source.kind === 'subagent-settled') {
           frames.push(frame('custom', event.time, settleNoticeData(`history-${event.seq}`)));
+        }
+        // 輪中插進來的子代理的話（#863）：即時由 `claimedNextStep` 長「某某說」，歷史照即時。
+        if (event.data.source.kind === 'agent-message') {
+          frames.push(
+            frame(
+              'custom',
+              event.time,
+              agentMessageNoticeData(
+                `history-${event.seq}`,
+                event.data.source.senderSessionId,
+                textOf(event.data.message),
+              ),
+            ),
+          );
         }
         // 輪中插的話（#710）：即時的畫面由 `inbox` 的 `claimedNextStep` 畫一則人的話，歷史照即時。外掛塞的不畫。
         if (isSteer(event)) {

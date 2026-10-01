@@ -493,15 +493,104 @@ describe('通知長成畫面上的一格，即時與歷史一致（#851）', () 
       await run.close();
     }
   });
+});
 
-  it('agent-message（#849）不長通知：那一件的顯示是另一張卡', async () => {
+describe('子代理寄來的話長成畫面上的一格，即時與歷史一致（#863）', () => {
+  const SENDER = 'settle-root/bg-7';
+  const WORDS = '三個檔案都看過了，結論在 notes.md';
+  const FULL = `Agent ${SENDER} sent a message: ${WORDS}`;
+
+  /** 折出來的畫面，只留判別欄與內容：id 兩邊本來就不同。 */
+  const shape = (frames: readonly Event[]) =>
+    reduceAll(emptyConversation(), frames).entries.map((entry) =>
+      entry.kind === 'agent-message'
+        ? `agent-message:${entry.runId}:${entry.senderSessionId}:${entry.text}`
+        : entry.kind,
+    );
+
+  it('叫醒閒著的主對話：畫面拿到拿掉英文前綴的話與寄件人編號，重新整理後同一個順序', async () => {
     const { agent } = fakeAgent();
     const run = open(agent);
     try {
-      run.pump.receiveAgentMessage({ text: 'Agent x sent a message: 嗨', senderSessionId: 'x' });
+      await run.pump.submit({ kind: 'message', text: '嗨', id: 'h1' });
       await run.pump.whenIdle();
-      expect(shape(run.frames)).toEqual([]);
-      expect(shape(historyPage(run.pump.sessionLog.events).events)).toEqual([]);
+      run.pump.receiveAgentMessage({ text: FULL, senderSessionId: SENDER });
+      await run.pump.whenIdle();
+      const live = shape(run.frames);
+      expect(live).toEqual(['human', `agent-message:bg-7:${SENDER}:${WORDS}`]);
+      expect(shape(historyPage(run.pump.sessionLog.events).events)).toEqual(live);
+      // 即時那格的 id 跟排著時那一行是同一個 key；不是人的泡泡。
+      const entry = reduceAll(emptyConversation(), run.frames).entries.at(-1);
+      expect(entry).toMatchObject({ kind: 'agent-message', inboxId: expect.any(String) });
+      expect(entry?.id).toBe(`inbox:${(entry as { inboxId: string }).inboxId}`);
+      // 線上的 claimed 帶寄件人；模型收到的整段字仍含前綴（日誌是同一份）。
+      const claim = inboxPushes(run.frames).find((push) => push.claimed?.source !== undefined);
+      expect(claim?.claimed).toMatchObject({
+        text: WORDS,
+        source: { kind: 'agent-message', senderSessionId: SENDER, runId: 'bg-7' },
+      });
+      const start = run.pump.sessionLog.events.findLast((event) => event.type === 'turn/start');
+      expect(start?.data).toMatchObject({ kind: 'agent-message', text: FULL });
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('輪中插進來的話：落在插進來的那一刻，歷史同一個順序', async () => {
+    const hold = gate();
+    const { agent, inputs } = fakeAgent([{ holdBeforeClaim: hold.opened }]);
+    const run = open(agent, { stepInbox: true });
+    try {
+      const first = run.pump.submit({ kind: 'message', text: 'A', id: 'a' });
+      await until(() => inputs.length === 1);
+      run.pump.receiveAgentMessage({ text: FULL, senderSessionId: SENDER });
+      hold.open();
+      await first;
+      await run.pump.whenIdle();
+      const live = shape(run.frames);
+      expect(live).toEqual(['human', `agent-message:bg-7:${SENDER}:${WORDS}`]);
+      expect(shape(historyPage(run.pump.sessionLog.events).events)).toEqual(live);
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('排著的清單裡這一件的字也拿掉前綴，來源只有判別欄', async () => {
+    const hold = gate();
+    const { agent, inputs } = fakeAgent([{ holdBeforeClaim: hold.opened }]);
+    const run = open(agent, { stepInbox: true });
+    try {
+      const first = run.pump.submit({ kind: 'message', text: 'A', id: 'a' });
+      await until(() => inputs.length === 1);
+      run.pump.receiveAgentMessage({ text: FULL, senderSessionId: SENDER });
+      await until(() => inboxPushes(run.frames).some((push) => (push.nextStep ?? []).length > 0));
+      const queued = inboxPushes(run.frames).find((push) => (push.nextStep ?? []).length > 0);
+      expect(queued?.nextStep?.[0]).toMatchObject({
+        text: WORDS,
+        source: { kind: 'agent-message' },
+      });
+      hold.open();
+      await first;
+      await run.pump.whenIdle();
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('不是這個寄件人的前綴就原樣給（不猜）', async () => {
+    const { agent } = fakeAgent();
+    const run = open(agent);
+    try {
+      run.pump.receiveAgentMessage({
+        text: 'Agent other sent a message: 嗨',
+        senderSessionId: SENDER,
+      });
+      await run.pump.whenIdle();
+      const entry = reduceAll(emptyConversation(), run.frames).entries.at(-1);
+      expect(entry).toMatchObject({
+        kind: 'agent-message',
+        text: 'Agent other sent a message: 嗨',
+      });
     } finally {
       await run.close();
     }

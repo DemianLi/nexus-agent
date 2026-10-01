@@ -152,14 +152,16 @@ export type {
 export { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 export type { TodosPayload, WireTodoItem } from './todos.js';
 export type {
+  AgentMessagePayload,
   InboxPayload,
   SettleNoticePayload,
   WireClaimedInput,
+  WireClaimedSource,
   WireQueuedInput,
   WireQueuedInputSource,
   WireSessionReference,
 } from './inbox.js';
-export { INBOX, SETTLE_NOTICE } from './inbox.js';
+export { AGENT_MESSAGE, INBOX, SETTLE_NOTICE } from './inbox.js';
 export type { TitlePayload } from './title.js';
 export { TITLE } from './title.js';
 export { TODOS } from './todos.js';
@@ -207,6 +209,7 @@ export type {
   AnswerEntry,
   Attribution,
   BackgroundSubagentMeta,
+  AgentMessageEntry,
   ConversationEntry,
   DeliverablesEntry,
   ConversationState,
