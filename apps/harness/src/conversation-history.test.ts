@@ -405,7 +405,7 @@ describe('日誌 → 畫面', () => {
     expect(state.entries.map(line)).toEqual(['ai:做完了。']);
   });
 
-  it('壓縮與外掛注入的訊息不畫，同即時', () => {
+  it('外掛注入的訊息不畫；壓縮畫成一格標記，位置在回覆之後（#896）', () => {
     const state = screen(
       log(
         human('跑'),
@@ -430,7 +430,7 @@ describe('日誌 → 畫面', () => {
       ),
     );
 
-    expect(state.entries.map(line)).toEqual(['human:跑', 'ai:好。']);
+    expect(state.entries.map(line)).toEqual(['human:跑', 'ai:好。', 'compaction']);
   });
 });
 

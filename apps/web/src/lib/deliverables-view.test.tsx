@@ -1,5 +1,6 @@
 import type { ConversationState, DeliverablesPresentedPayload, Event } from '@nexus/wire';
 import {
+  COMPACTION,
   DELIVERABLES_PRESENTED,
   emptyConversation,
   INBOX,
@@ -133,6 +134,21 @@ function layout(state: ConversationState): string[] {
         : item.entry.kind,
   );
 }
+
+describe('壓縮的那一格還沒有畫面（#896）', () => {
+  it('折疊器長出來的壓縮格不佔列表的位置，前後的格照常', () => {
+    const state = turn('壓縮。', () => [
+      ...reply('r1', '好了。'),
+      frame('custom', [], {
+        name: COMPACTION,
+        payload: { seq: 9, cutoff: 5, saved: true, summary: '摘要全文' },
+      }),
+    ]);
+    // 前提：折疊器真的長了那一格，不然下面的「沒有」是空談。
+    expect(state.entries.map((entry) => entry.kind)).toEqual(['human', 'ai', 'compaction']);
+    expect(layout(state)).toEqual(['human', 'ai']);
+  });
+});
 
 describe('交付卡片歸到輪尾', () => {
   it('夾在工具卡與最後那段話之間的交付，畫在這一輪最後一格之後', () => {

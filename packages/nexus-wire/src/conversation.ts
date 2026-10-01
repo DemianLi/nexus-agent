@@ -41,6 +41,7 @@ import type {
   WireSessionReference,
   WireSettleReason,
 } from './inbox.js';
+import { COMPACTION } from './compaction.js';
 import { PLAN_MODE } from './plan-mode.js';
 import type { PlanModePayload } from './plan-mode.js';
 import { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
@@ -304,6 +305,27 @@ export interface DeliverablesEntry {
 }
 
 /**
+ * 模型的歷史在這裡換成了一份摘要（[#896](https://github.com/DemianLi/nexus-agent/issues/896)）。來源是 `custom`
+ * frame，`data.name` 為 {@link COMPACTION}，見 `compaction.ts`。
+ *
+ * 獨立的一格、落在它在串流裡的位置，跟 {@link WorkspaceChangesEntry} 同形：不影響 `status`、`pendings`，也不會是
+ * {@link AiEntry.turnTail}；{@link prependEntries} 原樣接上。**不取代**被它蓋掉的那些列，畫面上的對話一則都沒少。
+ */
+export interface CompactionEntry {
+  readonly kind: 'compaction';
+  /** `compaction:<seq>`：確定值，當 React key。同一個 `seq` 第二次出現就忽略。 */
+  readonly id: string;
+  /** 那顆 `compaction/summary` 在 root 日誌裡的 `seq`。 */
+  readonly seq: number;
+  /** 前幾則原始訊息已被換成摘要，見 `compaction.ts`。 */
+  readonly cutoff: number;
+  /** 被壓掉的原文有沒有存成檔。 */
+  readonly saved: boolean;
+  /** 摘要全文，沒有就是沒有。 */
+  readonly summary?: string;
+}
+
+/**
  * 一輪改動了工作區哪些檔的指標（[#443](https://github.com/DemianLi/nexus-agent/issues/443)）。來源是 `custom`
  * frame，`data.name` 為 {@link WORKSPACE_CHANGES}，見 `workspace-changes.ts`。
  *
@@ -329,7 +351,8 @@ export type ConversationEntry =
   | DeliverablesEntry
   | WorkspaceChangesEntry
   | NoticeEntry
-  | AgentMessageEntry;
+  | AgentMessageEntry
+  | CompactionEntry;
 
 /**
  * 型別窄化：這一顆是核准請求嗎。
@@ -726,7 +749,7 @@ function isPresentedFile(value: unknown): value is WirePresentedFile {
 
 /**
  * `custom` frame。**只認 {@link DELIVERABLES_PRESENTED}、{@link WORKSPACE_CHANGES}、{@link MODEL_USAGE}、
- * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link PLAN_MODE}、{@link TOKEN_USAGE}、{@link SESSION_STATS}、{@link INBOX}、{@link TITLE} 與 {@link SUBAGENT_STATUS}**，其他名字、形狀
+ * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link PLAN_MODE}、{@link COMPACTION}、{@link TOKEN_USAGE}、{@link SESSION_STATS}、{@link INBOX}、{@link TITLE} 與 {@link SUBAGENT_STATUS}**，其他名字、形狀
  * 不對的一律略過：這個 channel 上的東西由 pump 從日誌合成，認不得的不猜。
  */
 function reduceCustom(state: ConversationState, data: unknown): ConversationState {
@@ -737,6 +760,7 @@ function reduceCustom(state: ConversationState, data: unknown): ConversationStat
   if (name === CONTEXT_MEASURE) return reduceContextMeasure(state, payload);
   if (name === TODOS) return reduceTodos(state, payload);
   if (name === PLAN_MODE) return reducePlanMode(state, payload);
+  if (name === COMPACTION) return reduceCompaction(state, payload);
   if (name === TOKEN_USAGE) return reduceTokenUsage(state, payload);
   if (name === SESSION_STATS) return reduceSessionStats(state, payload);
   if (name === INBOX) return reduceInbox(state, payload);
@@ -829,6 +853,31 @@ function reduceTitle(state: ConversationState, payload: object): ConversationSta
   const { title } = payload as { title?: unknown };
   if (typeof title !== 'string' || title === '') return state;
   return { ...state, title };
+}
+
+/**
+ * `compaction` 的 `payload`：`seq` 與 `cutoff` 要是非負整數、`saved` 要是布林，同一個 `seq` 只長一格。
+ * `summary` 不是字串就當沒有，不拿它擋整顆。
+ */
+function reduceCompaction(state: ConversationState, payload: object): ConversationState {
+  const { seq, cutoff, saved, summary } = payload as {
+    seq?: unknown;
+    cutoff?: unknown;
+    saved?: unknown;
+    summary?: unknown;
+  };
+  if (!isSeq(seq) || !isSeq(cutoff) || typeof saved !== 'boolean') return state;
+  const id = `compaction:${seq}`;
+  if (state.entries.some((entry) => entry.id === id)) return state;
+  const entry: CompactionEntry = {
+    kind: 'compaction',
+    id,
+    seq,
+    cutoff,
+    saved,
+    ...(typeof summary === 'string' ? { summary } : {}),
+  };
+  return { ...state, entries: [...state.entries, entry] };
 }
 
 /** `plan` 的 `payload`：投影的整個值，整份換掉。`active` 不是布林就整顆不收。 */

@@ -194,6 +194,12 @@ export function Entry({
     return null;
   }
 
+  if (entry.kind === 'compaction') {
+    // 還沒有畫面（#896 的 web 那半）：harness 已經送了這一格，列表不給它位置（`transcriptItems`），所以到不了這裡。
+    // 只是讓型別收窄，後面的分支才讀得到 AI 回覆的欄位。
+    return null;
+  }
+
   if (entry.kind === 'deliverables' || entry.kind === 'workspace-changes') {
     // 不在原位畫：改動與交付收到這一輪尾端（`transcriptItems`，#441、#443）。
     return null;

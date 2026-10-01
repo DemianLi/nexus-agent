@@ -152,6 +152,7 @@ export type {
   WireSummaryThreshold,
 } from './context-pressure.js';
 export { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
+export type { CompactionPayload } from './compaction.js';
 export type { PlanModePayload } from './plan-mode.js';
 export type { TodosPayload, WireTodoItem } from './todos.js';
 export type {
@@ -169,6 +170,7 @@ export { AGENT_MESSAGE, INBOX, SETTLE_NOTICE, SETTLE_REASONS, isSettleReason } f
 export type { TitlePayload } from './title.js';
 export { SUBAGENT_STATUS } from './subagent-status.js';
 export type { SubagentRunStatus, SubagentStatusPayload } from './subagent-status.js';
+export { COMPACTION } from './compaction.js';
 export { PLAN_MODE } from './plan-mode.js';
 export { TITLE } from './title.js';
 export { TODOS } from './todos.js';
@@ -224,6 +226,7 @@ export type {
   Attribution,
   BackgroundSubagentMeta,
   AgentMessageEntry,
+  CompactionEntry,
   ConversationEntry,
   DeliverablesEntry,
   ConversationState,

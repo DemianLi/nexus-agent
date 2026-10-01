@@ -24,6 +24,8 @@
  * | `workspace/changes` | `custom` frame，`data` 同即時（{@link workspaceChangesData}）；它指到的摘要可能已經不在 |
  * | `model/usage` ／ `context/measure` | 用量表（#528）：**一頁各一顆，是到這一頁結尾為止最新的那一筆**，`data` 同即時（{@link modelUsageData}、{@link contextMeasureData}） |
  *
+ * | `compaction/summary` | 壓縮過這件事（#896）：`custom` frame，**逐顆轉**，位置就是日誌上的位置（在觸發它的那次呼叫的回覆之後）；`data` 同即時（{@link compactionData}） |
+ *
  * | `plan/mode` | 計劃模式（#895）：**只在最新一頁送一顆，是到 `throughSeq` 為止目前的值**，日誌上一顆都沒有就不送；`data` 同即時（{@link planModeData}） |
  *
  * | `todo/write` ／ `turn/start` | 待辦清單（#575）：**一頁一顆，是這一頁結尾時的清單**，是 `null` 就不送；`data` 同即時（{@link todosData}） |
@@ -38,9 +40,9 @@
  * 開頭之前的——最後一輪在第一次模型呼叫之前就失敗的話，這一頁自己沒有那兩種事件，而即時的畫面上用量表還在。見
  * {@link historyPage}。
  *
- * 其餘的（壓縮、外掛注入的 `user/message`（`source.kind: "plugin"`）、模型起訖、命令、目標、回饋）即時的畫面也不畫，這裡也不畫。
- * **壓縮不畫是偏離**：dsh 的畫面由那顆 `user/message {surfaceOp: replace}` 把被壓掉的那一段換成摘要；我們沒有
- * surface 那一軸，即時的畫面從來沒換過，歷史跟著即時。
+ * 其餘的（外掛注入的 `user/message`（`source.kind: "plugin"`）、模型起訖、命令、目標、回饋）即時的畫面也不畫，這裡也不畫。
+ * **壓縮畫成一格標記，不取代被蓋掉的列**（#896）：dsh 的畫面由那顆 `user/message {surfaceOp: replace}` 把被壓掉的那一段
+ * 換成摘要；我們沒有 surface 那一軸，標記以外即時的畫面從來沒換過，歷史跟著即時。
  *
  * ## 目標排的輪次不畫那一串字
  *
@@ -50,6 +52,7 @@
 
 import type {
   AgentMessagePayload,
+  CompactionPayload,
   DeliverablesPresentedPayload,
   Event,
   InboxPayload,
@@ -68,6 +71,7 @@ import type {
 } from '@nexus/wire';
 import {
   AGENT_MESSAGE,
+  COMPACTION,
   CONTEXT_MEASURE,
   DELIVERABLES_PRESENTED,
   HISTORY_PAGE_MAX_BYTES,
@@ -106,7 +110,7 @@ import { agentMessageBody, runIdOfSession } from './background-run-id.js';
 import { threadTitleOf } from './session-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
 import { threadTitleConfigSchema } from './settings/thread-title.js';
-import { capToolResultMeta, toolResultText } from './tool-result-text.js';
+import { capToolResultMeta, capToolText, toolResultText } from './tool-result-text.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
 
@@ -449,6 +453,52 @@ export function titleData(title: string): {
   readonly payload: TitlePayload;
 } {
   return { name: TITLE, payload: { title } };
+}
+
+/** 摘要器給模型的那則話裡，包著正文的標記。外框（前面的「You are in the middle…」）是寫給模型看的。 */
+const SUMMARY_OPEN = '<summary>';
+const SUMMARY_CLOSE = '</summary>';
+
+/**
+ * 摘要全文，拿掉面向模型的外框：只取 `<summary>` 到最後一個 `</summary>` 之間。
+ *
+ * **找不到標記就整段原樣給**，不丟東西：外框長什麼樣是基座（deepagents）的事，哪天換了，畫面上多一段英文，總好過
+ * 摘要整段消失。真的基座跑出來的形狀由 `compaction-wire.test.ts` 釘著，換了那條會紅。取最後一個結尾標記，是因為
+ * 摘要正文自己可能也提到 `</summary>`。
+ */
+function summaryBody(text: string): string {
+  const open = text.indexOf(SUMMARY_OPEN);
+  const close = text.lastIndexOf(SUMMARY_CLOSE);
+  if (open < 0 || close < open) return text;
+  return text.slice(open + SUMMARY_OPEN.length, close).trim();
+}
+
+/**
+ * root 壓縮過一次在線上的 `custom` 事件 `data`（[#896](https://github.com/DemianLi/nexus-agent/issues/896)）。即時與這裡
+ * 共用，規則見 `@nexus/wire` 的 `compaction.ts`。
+ *
+ * @param event - 那顆 `compaction/summary` 連同它在日誌裡的 `seq`。
+ * @param maxBytes - 摘要全文的位元組上限，就是工具結果文字那一格（`toolText.maxBytes`），見 {@link capToolText}。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `CompactionPayload`。
+ */
+export function compactionData(
+  event: { readonly seq: number; readonly data: SessionEventMap['compaction/summary'] },
+  maxBytes: number,
+): {
+  readonly name: typeof COMPACTION;
+  readonly payload: CompactionPayload;
+} {
+  const { cutoffIndex, filePath, summary } = event.data;
+  const text = summary === undefined ? '' : summaryBody(textOf(summary));
+  return {
+    name: COMPACTION,
+    payload: {
+      seq: event.seq,
+      cutoff: cutoffIndex,
+      saved: filePath !== null,
+      ...(text === '' ? {} : { summary: capToolText(text, maxBytes) }),
+    },
+  };
 }
 
 /**
@@ -892,6 +942,11 @@ export function historyFrames(
       case 'workspace/changes':
         // 同上：只讀 root 那一份，而記錄器本來就只寫在 root。
         frames.push(frame('custom', event.time, workspaceChangesData(event.seq)));
+        break;
+      case 'compaction/summary':
+        // 壓縮過這件事（#896）：位置就是日誌上的位置，在觸發它的那次呼叫的回覆之後（見 `@nexus/wire` 的 `compaction.ts`）。
+        // 只讀 root 那一份，子代理壓縮是它自己那份日誌的事。
+        frames.push(frame('custom', event.time, compactionData(event, toolTextMaxBytes)));
         break;
       case 'interrupt/raised':
         interrupted = true;
