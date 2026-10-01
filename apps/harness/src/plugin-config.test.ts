@@ -110,17 +110,17 @@ describe('出貨的 cordis.yml', () => {
     const { plugins: fromYaml, dropped, ignoredConfig } = await loadPluginConfig();
     expect(dropped).toEqual([]);
     expect(ignoredConfig).toEqual([]);
-    // 50 = 8 個功能 ＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
+    // 51 = 8 個功能 ＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
     // 外加 #529 的 `session-persistence`——它是 core 那一段裡唯一消費點在起動期的——與 #599 的
     // `session-checkpoint-policy`）
-    // ＋ **14 個 harness 自己的設定條目**（#529、#538、#545、#650、#631、#734、#719、#841、#875、#711、#735）＋ 20 個配套入口。**數目寫在這裡是為了擋
+    // ＋ **15 個 harness 自己的設定條目**（#529、#538、#545、#650、#631、#734、#719、#841、#875、#711、#670、#735）＋ 20 個配套入口。**數目寫在這裡是為了擋
     // 「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個空 installer
     // 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
     //
     // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
     // `loadPluginConfig`，所以那八列要真的經由 `apps/harness/package.json` 的 `imports`
-    // 解析、import、而且長得像一顆 plugin，才數得到 50。拿掉那個 `imports` 區塊，這裡當場紅。
-    expect(fromYaml).toHaveLength(50);
+    // 解析、import、而且長得像一顆 plugin，才數得到 51。拿掉那個 `imports` 區塊，這裡當場紅。
+    expect(fromYaml).toHaveLength(51);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -224,6 +224,8 @@ describe('出貨的 cordis.yml', () => {
     expect(byId.get('subagent-model-selection')).toEqual({ enabled: false, allowedModels: [] });
     // **真實供應商那五格**（#545）。出貨那一列五格全寫出來，值必須就是 schema 的預設，同上面幾列。
     expect(byId.get('live-model')).toEqual(liveModelConfigSchema.parse({}));
+    // **沒帶 `--live` 時的模型提供者**（#670）。出貨值是內建的腳本，沒有對應的列。
+    expect(byId.get('agent-default-model')).toEqual({ provider: 'cli-script' });
 
     // `recursion-limit` 是這八列裡唯一走服務的（消費點在組裝期，註冊表在手上）——
     // 它的 `apply` 不是空的，三態的解析由 `agent-factory.test.ts` 那組釘著。
@@ -259,6 +261,7 @@ describe('出貨的 cordis.yml', () => {
       'background-subagents',
       'subagent-model-selection',
       'live-model',
+      'agent-default-model',
       'recursion-limit',
       'agent-loop',
     ]);
@@ -889,6 +892,7 @@ describe('保護名單', () => {
       '#settings/tool-text',
       '#settings/tool-result-stash',
       '#settings/live-model',
+      '#settings/default-model',
       '#settings/recursion-limit',
       '#settings/agent-loop',
     ];
