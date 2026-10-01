@@ -116,7 +116,11 @@ export const CONTAINMENT_MIDDLEWARE_NAME = 'nexusToolFailureContainment';
  * @returns 給模型看的那一句。
  */
 export function formatToolFailure(toolName: string, error: unknown): string {
-  const detail = error instanceof Error ? error.message : String(error);
+  let root = error;
+  while (MiddlewareError.isInstance(root)) root = root.cause;
+  // 基座包的那層 `ToolInvocationError.message` 自己就帶堆疊與原始參數，所以改讀它包著的原錯誤。
+  if (ToolInvocationError.isInstance(root)) root = root.toolError;
+  const detail = root instanceof Error ? root.message : String(root);
   return `工具 ${toolName} 執行失敗：${detail}`;
 }
 
