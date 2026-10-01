@@ -299,8 +299,19 @@ import type { SessionEvent } from './session-log.js';
  *
  * 升版照新增詞彙的慣例（同 26）：27 的讀者遇到它們會當成認不得的種類略過（各 switch 都有 `default`），兩顆都不進模型、
  * 也不左右任何折疊，所以略過是對的。
+ *
+ * ## 29：`turn/end` 的 `reason` 多一種 `interrupted`（續接補寫的收尾）
+ *
+ * 行程在一輪中間死掉，續接時把那一輪的收尾寫回檔上（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）：
+ * 記過 `tool/call` 沒配到結果的各補一顆「結果不明」的 `tool/result`，最後補 `turn/end {reason:{kind:'interrupted'}}`，
+ * 兩者都在 `session/end-seed` 前面。v28 的檔直接讀：那時候續接只補 end-seed，當掉的那一輪永遠開著，
+ * 模型那一側由 replay 在記憶體裡補同樣的句子——**不是沒有當掉過**。
+ *
+ * 升版照新增詞彙的慣例（同 22、23），不是非升不可：28 讀到 `interrupted` 時，goal 續行只認得 `aborted`、`max-tokens`
+ * 就把它當正常收尾，但那顆 `turn/end` 在 end-seed 之前，而 28 的續行判準從 `currentTurnStart`（不往 end-seed 前找）起算，
+ * 續接回來的授權也從 `disarmed` 起，所以不會因此多排一輪；歷史把它當完成收掉，同 28 在 end-seed 收掉的那一條。
  */
-export const SESSION_LOG_FORMAT_VERSION = 28;
+export const SESSION_LOG_FORMAT_VERSION = 29;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。
