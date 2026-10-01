@@ -486,6 +486,9 @@ describe('什麼推得動 roundsStarted', () => {
     // `model/start`／`model/end`（[#266](https://github.com/DemianLi/nexus-agent/issues/266)）：
     // 不推，同 `model/usage`——一輪叫幾次模型不是輪次。
     //
+    // `llm/retry`／`llm/retry-started`（[#712](https://github.com/DemianLi/nexus-agent/issues/712)）：不推。
+    // 它們落在一次模型呼叫的起訖之間，重試幾次都還是同一次呼叫，理由同 `model/start`。
+    //
     // `feedback/*`（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）：不推——人事後
     // 對某一輪按讚踩、寫回饋，那一輪早就算過了；讓它推，每評一次就吃掉一格 `maxGoalRounds`。
     //
@@ -516,6 +519,8 @@ describe('什麼推得動 roundsStarted', () => {
       'model/usage',
       'model/start',
       'model/end',
+      'llm/retry',
+      'llm/retry-started',
       'assistant/message',
       'user/message',
       'compaction/summary',
