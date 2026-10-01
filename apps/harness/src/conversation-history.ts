@@ -24,6 +24,8 @@
  * | `workspace/changes` | `custom` frame，`data` 同即時（{@link workspaceChangesData}）；它指到的摘要可能已經不在 |
  * | `model/usage` ／ `context/measure` | 用量表（#528）：**一頁各一顆，是到這一頁結尾為止最新的那一筆**，`data` 同即時（{@link modelUsageData}、{@link contextMeasureData}） |
  *
+ * | `plan/mode` | 計劃模式（#895）：**只在最新一頁送一顆，是到 `throughSeq` 為止目前的值**，日誌上一顆都沒有就不送；`data` 同即時（{@link planModeData}） |
+ *
  * | `todo/write` ／ `turn/start` | 待辦清單（#575）：**一頁一顆，是這一頁結尾時的清單**，是 `null` 就不送；`data` 同即時（{@link todosData}） |
  *
  * | `model/usage` ／ 輪、模型、工具的起訖 | token 總帳與會話統計（#574）：**一頁各一顆，是從日誌開頭折到這一頁結尾的值**，還是初值就不送；`data` 同即時（{@link SessionTotals}） |
@@ -36,7 +38,7 @@
  * 開頭之前的——最後一輪在第一次模型呼叫之前就失敗的話，這一頁自己沒有那兩種事件，而即時的畫面上用量表還在。見
  * {@link historyPage}。
  *
- * 其餘的（壓縮、外掛注入的 `user/message`（`source.kind: "plugin"`）、模型起訖、命令、模式、目標、回饋）即時的畫面也不畫，這裡也不畫。
+ * 其餘的（壓縮、外掛注入的 `user/message`（`source.kind: "plugin"`）、模型起訖、命令、目標、回饋）即時的畫面也不畫，這裡也不畫。
  * **壓縮不畫是偏離**：dsh 的畫面由那顆 `user/message {surfaceOp: replace}` 把被壓掉的那一段換成摘要；我們沒有
  * surface 那一軸，即時的畫面從來沒換過，歷史跟著即時。
  *
@@ -52,6 +54,7 @@ import type {
   Event,
   InboxPayload,
   ModelUsagePayload,
+  PlanModePayload,
   SettleNoticePayload,
   TitlePayload,
   TodosPayload,
@@ -71,6 +74,7 @@ import {
   HISTORY_PAGE_MESSAGES,
   INBOX,
   MODEL_USAGE,
+  PLAN_MODE,
   SETTLE_NOTICE,
   SESSION_STATS,
   TITLE,
@@ -445,6 +449,32 @@ export function titleData(title: string): {
   readonly payload: TitlePayload;
 } {
   return { name: TITLE, payload: { title } };
+}
+
+/**
+ * root 的計劃模式在線上的 `custom` 事件 `data`（[#895](https://github.com/DemianLi/nexus-agent/issues/895)）：投影的
+ * 整個值。即時與這裡共用，規則見 `@nexus/wire` 的 `plan-mode.ts`。
+ *
+ * @param active - 日誌上那顆 `plan/mode` 的 `active`。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `PlanModePayload`。
+ */
+export function planModeData(active: boolean): {
+  readonly name: typeof PLAN_MODE;
+  readonly payload: PlanModePayload;
+} {
+  return { name: PLAN_MODE, payload: { active } };
+}
+
+/**
+ * 這一段日誌結尾時的計劃模式：最後一顆 `plan/mode` 的值，一顆都沒有就是 `undefined`（不送，折疊器的初值 `null`
+ * 就是這個意思）。**往回找，不是整段折**：整份值，後寫的蓋掉先寫的。
+ */
+function planModeOf(events: readonly SessionEvent[]): boolean | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.type === 'plan/mode') return event.data.active;
+  }
+  return undefined;
 }
 
 /**
@@ -1065,7 +1095,12 @@ export function historyPage(
   // 標題（#647）：同送出佇列，**只在最新一頁**、是目前的那一個。它不在一輪開頭清空，較舊的頁帶的話會把新的蓋回舊的。
   const title = end === window.length ? threadTitleOf(window, titleLimitsOrDefault) : undefined;
   const titleFrames = title === undefined ? [] : [frame('custom', lastTime, titleData(title))];
-  const tailFrames = [...totalsFrames, ...inboxFrames, ...titleFrames];
+  // 計劃模式（#895）：同標題，**只在最新一頁**、是目前的值。它跨輪也跨頁，不像待辦清單在一輪開頭清空，
+  // 較舊的頁帶的話會把新的蓋回舊的。日誌上一顆都沒有就不送。
+  const planActive = end === window.length ? planModeOf(window) : undefined;
+  const planFrames =
+    planActive === undefined ? [] : [frame('custom', lastTime, planModeData(planActive))];
+  const tailFrames = [...totalsFrames, ...inboxFrames, ...titleFrames, ...planFrames];
   const bytes =
     fitted.bytes +
     (carried.length === 0 ? 0 : weigh(carried, toolTextMaxBytes)) +

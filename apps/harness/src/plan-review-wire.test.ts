@@ -35,7 +35,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
-import { historyFrames } from './conversation-history.js';
+import { historyFrames, historyPage } from './conversation-history.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
@@ -181,6 +181,11 @@ describe('計劃審核在線上', () => {
 
     expect(exitResultText(session)).toBe(PLAN_APPROVED_MESSAGE);
     expect(recordedPlanMode(session.log())).toBe(false);
+    // **計劃模式的指示（#895）跟著關掉**：這一顆 `plan/mode` 是模型那條路寫的，不是 `/plan`；即時與重新整理都是關。
+    expect(session.state.planMode).toEqual({ active: false });
+    expect(
+      historyPage(session.log()).events.reduce(reduceConversation, emptyConversation()).planMode,
+    ).toEqual({ active: false });
 
     // **重新整理之後**：同一份日誌重播出來，計劃卡要的兩樣都在——參數裡的計劃全文、結果文字。
     // resume 讓這顆呼叫的 `tool/call` 記了兩顆，重播要把它們折成同一張卡。
