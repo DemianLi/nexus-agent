@@ -51,7 +51,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
-import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
+import {
+  emptyCommandPoint,
+  humanChannelPlugin,
+  loopbackRequest,
+  TEST_BROWSER_AUTH,
+} from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -111,7 +116,8 @@ async function connect(
     checkpointer: new MemorySaver(),
     ...(backend !== undefined && { backend }),
     // submit-record 從 `fs` 服務拿 fold 折出來的那一個（#694），跟 `write_file` 同一個，不必另外交。
-    plugins: [createAskUserPlugin(), createSubmitRecordPlugin()],
+    // ask-user 要明著有一份答題管道（#669）。
+    plugins: [humanChannelPlugin(), createAskUserPlugin(), createSubmitRecordPlugin()],
   });
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,

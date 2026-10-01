@@ -146,7 +146,7 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是八顆功能 ＋ 八列 core 設定 ＋ 十四列 harness 設定 ＋ 二十一個配套入口', async () => {
+  it('預設清單是十顆功能 ＋ 八列 core 設定 ＋ 十四列 harness 設定 ＋ 二十個配套入口', async () => {
     // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
     // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
     // 讓計劃模式進來，理由寫在 `apps/harness/cordis.yml` 的註解上（命令沒進預設清單就等於
@@ -183,6 +183,11 @@ describe('一次性模式', () => {
       'todo',
       'feedback',
       'present',
+      // **`ask-user` 與 `submit-record` 進來的理由是它們本來就在產品路徑上，只是藏在程式碼裡**
+      // （[#669](https://github.com/DemianLi/nexus-agent/issues/669)）：`--dump-config` 印不出來、patch 關不掉。
+      // 它們各多一顆面向模型的工具（`ask_user_question`、`submit_record`），後者帶一道核准閘門。兩個入口照舊都有。
+      'ask-user',
+      'submit-record',
       // **`system-prompt` 進來的理由是模型該知道自己是誰**（[#720](https://github.com/DemianLi/nexus-agent/issues/720)）：
       // 出貨值把「命令列助手」那句寫死在程式碼裡的身分，換成部署方寫得動的一列。它不多一顆工具、不多一個命令，
       // 多的是系統提示詞前後各一段；沒有這一列，模型只剩組裝點那一句指引。
