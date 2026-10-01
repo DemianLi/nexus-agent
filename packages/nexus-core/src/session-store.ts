@@ -289,8 +289,18 @@ import type { SessionEvent } from './session-log.js';
  * v26 的檔直接讀：沒有這一格，畫面退成中性的說法，不假裝成「已完成」。
  *
  * 升版照新增欄位的慣例（同 21 的 `cause`），不是非升不可：26 讀到它只多一個不認得的欄位，一樣照舊投影。
+ *
+ * ## 28：模型重試（`llm/retry`、`llm/retry-started`）
+ *
+ * 真模型的請求失敗、排定重試時寫 `llm/retry`，等完重打前寫 `llm/retry-started`
+ * （[#712](https://github.com/DemianLi/nexus-agent/issues/712)），落在一次模型呼叫的 `model/start`／`model/end`
+ * 之間。維運者查「這一輪為什麼慢」靠它。v27 的檔直接讀：那時候重試不進日誌，一顆都沒有就是當時的樣子——
+ * **不是沒重試過**。
+ *
+ * 升版照新增詞彙的慣例（同 26）：27 的讀者遇到它們會當成認不得的種類略過（各 switch 都有 `default`），兩顆都不進模型、
+ * 也不左右任何折疊，所以略過是對的。
  */
-export const SESSION_LOG_FORMAT_VERSION = 27;
+export const SESSION_LOG_FORMAT_VERSION = 28;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。

@@ -1,5 +1,7 @@
 import { ContextOverflowError } from '@langchain/core/errors';
 import { ChatOpenAI } from '@langchain/openai';
+import { noteFailedAttempt, noteRequestStart } from '@nexus/core';
+import type { LlmFailure } from '@nexus/core';
 
 import { resolveHarnessHome } from './harness-home.js';
 import { ambientCredentials, createCredentialService } from './credentials.js';
@@ -910,9 +912,11 @@ export function createLiveModel(
         if (hit === undefined) throw new Error(missingKeyMessage());
         return hit.value;
       },
-      fetch: withStreamIdleTimeout(
-        config.timeoutMs,
-        withInbandStreamErrors(withEmptyAssistantContent()),
+      fetch: ((base) => (purpose === undefined ? withRequestStartNotice(base) : base))(
+        withStreamIdleTimeout(
+          config.timeoutMs,
+          withInbandStreamErrors(withEmptyAssistantContent()),
+        ),
       ),
     },
     temperature: 1,
@@ -921,7 +925,12 @@ export function createLiveModel(
     maxTokens: overrides.maxOutputTokens ?? entry.maxTokens,
     timeout: config.timeoutMs,
     maxRetries: config.maxRetries,
-    onFailedAttempt: classifyFailedAttempt,
+    // 對話那一顆（含子代理）把重試記進那一輪的日誌，標題那一顆不記（#712）：它走同一條重試路徑，
+    // 但不是這一輪對話的步，記進去會冒充成對話在重試。
+    onFailedAttempt:
+      purpose === undefined
+        ? classifyAndNoteFailedAttempt(config.maxRetries)
+        : classifyFailedAttempt,
     // 用途專屬的請求內容，見 {@link LiveModelPurpose}。**要在建構時給**：建好之後才設 `modelKwargs` 不會進請求
     // （#650 實測，前兩輪的參數就是這樣沒送出去的）。
     ...((purpose === 'session-title' || overrides.thinkingOff === true) &&
@@ -1004,6 +1013,63 @@ export function classifyFailedAttempt(error: unknown): void {
   if (isDerivedContextOverflow(error)) throw ContextOverflowError.fromError(error as Error);
   if (retryDecision(error) === 'retry') return;
   throw error;
+}
+
+/**
+ * 把一次失敗描述成日誌裡的 {@link LlmFailure}（[#712](https://github.com/DemianLi/nexus-agent/issues/712)）。
+ *
+ * 碼的詞彙取 dsh 預設可重試集的四個（`llm/src/retry-policy.ts:18`）：429 是 `RATE_LIMIT`、其他 HTTP 狀態
+ * 是 `SERVER`、{@link StreamIdleTimeoutError} 與 SDK 的逾時是 `TIMEOUT`，沒有狀態碼的其餘（連線斷、解不開的回應）
+ * 是 `TRANSPORT`。**只對會被重試的失敗有意義**：判放棄的那些走 {@link classifyFailedAttempt} 拋出去，不經過這裡。
+ *
+ * **認碼與名字，不解析訊息**，同 {@link retryDecision}；`message` 只是原話搬運。
+ *
+ * @param error - 這次失敗的錯誤，可能已經被包過好幾層。
+ */
+export function classifyLlmFailure(error: unknown): LlmFailure {
+  const message = error instanceof Error ? error.message : String(error);
+  let status: number | undefined;
+  let timedOut = false;
+  for (const link of causeLinks(error)) {
+    const found = (link as { status?: unknown }).status;
+    if (status === undefined && typeof found === 'number') status = found;
+    const name = (link as { name?: unknown }).name;
+    if (name === 'StreamIdleTimeoutError' || name === 'APIConnectionTimeoutError') timedOut = true;
+  }
+  const code =
+    status === 429
+      ? 'RATE_LIMIT'
+      : status !== undefined
+        ? 'SERVER'
+        : timedOut
+          ? 'TIMEOUT'
+          : 'TRANSPORT';
+  return { message, code, ...(status !== undefined && { status }) };
+}
+
+/**
+ * {@link classifyFailedAttempt}，加上把「排定了重試」回報給當下那次模型呼叫的重試範圍
+ * （`@nexus/core` 的 `noteFailedAttempt`）。**分類先做**：要放棄就在分類那裡拋，不經過回報，所以只有真的會再打的失敗
+ * 才可能被記成重試；最後一次（預算用盡）由回報那一側對上限擋掉，`AsyncCaller` 連它也會叫 `onFailedAttempt`。
+ *
+ * @param maxRetries - 這顆模型的重試上限，跟傳給 `AsyncCaller` 的同一個值。
+ */
+function classifyAndNoteFailedAttempt(maxRetries: number): (error: unknown) => void {
+  return (error) => {
+    classifyFailedAttempt(error);
+    noteFailedAttempt(classifyLlmFailure(error), maxRetries);
+  };
+}
+
+/**
+ * 每次請求**開跑**的當下通知重試範圍（`@nexus/core` 的 `noteRequestStart`）：重試等完、真的要重打的那一刻就是
+ * 下一次請求開跑的那一刻。放最外層，所以閒置逾時與嗅探都在它裡面。範圍外（標題那一顆、沒有日誌的呼叫）是空操作。
+ */
+function withRequestStartNotice(baseFetch: typeof fetch): typeof fetch {
+  return (input, init) => {
+    noteRequestStart();
+    return baseFetch(input, init);
+  };
 }
 
 /** 缺 key 的失敗訊息：指名缺哪一個、去哪裡放。 */
