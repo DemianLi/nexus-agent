@@ -472,6 +472,18 @@
             enable_thinking:
               $var: thinking.enabled
 
+# 沒帶 `--live` 時用哪個模型提供者（#670）。照 dsh `agent-default-model`（`packages/bundle/base/cordis.patch.yml:82-86`）：
+# 選擇是一列，提供者各是一列。**出貨值 `cli-script` 是程式碼裡內建的那份腳本，沒有對應的列**；要換就在 patch 裡
+# `insert` 一列提供者（例如 `#settings/scripted-model`，腳本當 config）、再把這一列的 `provider` 指到它的 `id`，
+# 形狀照 dsh 的 headless e2e（`apps/cli/tests/profiles/headless/tests/source-tool.built.e2e.ts:36-42`）。
+#
+# **帶了 `--live` 時這一列不看**：`--live` 是進 live 的唯一閘門，因為 `.env` 與代理在載入清單之前就依它處理好了。
+# 這一列同 `live-model`，是起動期讀的、只講設定的列，`apply` 是空的；偏離與理由登記在 `src/model-provider.ts` 的檔頭。
+- id: agent-default-model
+  name: '#settings/default-model'
+  config:
+    provider: cli-script
+
 # agent 迴圈的 super-step 上限（#457／#529）。**dsh 對這個值沒有意見**——它不跑 LangGraph，
 # `recursionLimit` 在 `bundle/*` 的 patches 與 `core/agent-loop` 全樹零命中（`ddefc45`）。所以這一列
 # 的形狀抄的是上面 core 那三列，不是抄 dsh 的某一列。
