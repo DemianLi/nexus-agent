@@ -20,6 +20,9 @@
  *   在背景圖上消失，`/secret/b.txt` 寫得進去（#738 第 2 項，實測）。
  * - **摘要器被 fold 打底的那顆同名換掉**，不會兩顆並存。
  * - 大結果外溢（[#719](https://github.com/DemianLi/nexus-agent/issues/719)）是檔案系統那顆帶的，所以補了它就有。
+ * - **插話載體**（[#858](https://github.com/DemianLi/nexus-agent/issues/858)）：`createStepInboxMiddleware('background')`，讓 `send_message`
+ *   給正在跑的子代理在下一步領走。基座的一次性子代理沒有這顆（root 的載體不折進子代理）；它不加工具也不動系統提示，
+ *   所以不影響上面那條漂移絆索。
  *
  * 併法是基座 `mergeMiddlewareStack` 的複本（基座沒匯出）：預設疊裡同名的原地換成規格自己帶的，沒撞名的接在後面。
  * **漂移絆索**在 harness 的測試：同一份規格經 `task` 與經這個出口各跑一次，模型看到的工具名與系統提示要相同。
@@ -45,6 +48,7 @@ import type { AgentMiddleware } from 'langchain';
 
 import type { AgentCheckpointer } from './base-types.js';
 import type { FoldedAgentParams } from './fold.js';
+import { createStepInboxMiddleware } from './step-inbox.js';
 
 /** 編一個子代理要看的 fold 產物：規格清單、模型、backend、全域的 deny 規則。 */
 export type SubagentGraphParams = Pick<
@@ -131,6 +135,8 @@ export function compileSubagentGraph(
     createSummarizationMiddleware({ backend }),
     createPatchToolCallsMiddleware(),
     ...(skills.length > 0 ? [createSkillsMiddleware({ backend, sources: skills })] : []),
+    // 背景版插話載體（#858）：host 經 `configurable` 交 handle 進來才有作用，沒交就什麼都不做。
+    createStepInboxMiddleware('background'),
   ] as unknown as AgentMiddleware[];
 
   return createAgent({

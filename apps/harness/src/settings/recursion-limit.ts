@@ -115,6 +115,11 @@ export const RECURSION_LIMIT_SERVICE = 'recursionLimit';
  * 跑掉的迴圈走不到。2026-09-28 實測：出貨清單上 100 換算成 24 輪，給不給 `--workspace` 都一樣（不掛時兩者都是 32）；
  * 裸組裝的 33 對 24 由 `agent-factory.test.ts` 那條「三格變四格」正面量。CLI 不掛，照舊三格。
  *
+ * **背景子代理的圖也是四格、也帶這個上限**（[#858](https://github.com/DemianLi/nexus-agent/issues/858)）：它是 `createAgent` 直接編的，
+ * 原本沒有這個上限（沒有 `createDeepAgent` 最後那層 `withConfig`，也沒有一次性子代理從 `task` 繼承來的），落在 LangGraph 的預設 25，
+ * 連續 8 次工具呼叫就撞牆（`background-recursion-limit.test.ts`）。`compileSubagent` 現在給它跟 root 同一個值，
+ * 背景子代理一輪的長度才跟一次性的一致。
+ *
  * **這個常數沒有跟著動。** 方向是護欄變嚴不是變鬆，而校準的兩端換算過去都還成立（見
  * 上一段；每輪四格時是 ≈ 114 與 ≈ 16，跑掉的那次照樣攔得住，正常任務照樣很遠）。要拿回原本的預算就自己傳一個大的 `recursionLimit`，或明著關掉提醒器。
  *

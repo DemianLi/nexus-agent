@@ -36,6 +36,13 @@
  * handle。插話是給 root 那一輪的，子代理領走的話 root 的模型永遠看不到，所以兩個掛點在子代理裡什麼都不做。這一顆也
  * 只折進 root 的 middleware 陣列，這條判斷是保險。
  *
+ * ## 背景子代理有自己的一份（[#858](https://github.com/DemianLi/nexus-agent/issues/858)）
+ *
+ * 背景續行的子代理（#737）是最上層的圖，靠顯式的身分鍵認人。`compileSubagentGraph` 替它掛 `createStepInboxMiddleware('background')`，
+ * host（`apps/harness/src/background-subagents.ts`）替每個正在跑的子代理持有一份 handle，經同一把 {@link STEP_INBOX_CONFIG_KEY}
+ * 交進它的 `configurable`。`send_message` 給跑著的子代理就在它的下一步領走，同 dsh 的「a working agent receives it at its next step」。
+ * 一次性子代理的圖裡沒有這顆，所以 `configurable` 被原樣展開也領不到。
+ *
  * ## 中止之後
  *
  * 中止訊號已經觸發時 `afterAgent` 不領也不跳：同 dsh，中止之後送來的插話進 `next-turn`（`agent.ts:154-169`），
@@ -48,7 +55,7 @@ import type { HumanMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 
-import { toolCallSessionAddress } from './session-address.js';
+import { BACKGROUND_SESSION_CONFIG_KEY, toolCallSessionAddress } from './session-address.js';
 import { turnCancelSignalOf } from './turn-cancel.js';
 
 /** 進入點把收件匣的 handle 放在 `configurable` 的這個鍵上。 */
@@ -92,9 +99,25 @@ export function stepInboxOf(config: unknown): StepInbox | undefined {
     : undefined;
 }
 
-/** root 那一層的 handle；子代理、沒放都是 `undefined`。 */
-function rootInbox(runtime: unknown): StepInbox | undefined {
+/** 這顆 middleware 掛在哪一種圖上。 */
+export type StepInboxScope = 'root' | 'background';
+
+/**
+ * 這一次呼叫該讀哪一個 handle。
+ *
+ * - `root`：root 那一層的；子代理（含背景子代理）、沒放都是 `undefined`。
+ * - `background`：**只認帶背景身分鍵的呼叫**（[#858](https://github.com/DemianLi/nexus-agent/issues/858)）。背景圖是最上層的圖，
+ *   身分不靠 `checkpoint_ns`（見 `session-address.ts`），所以這裡直接看那把鍵；沒有鍵（root、測試手搭）就什麼都不做。
+ */
+function inboxOf(scope: StepInboxScope, runtime: unknown): StepInbox | undefined {
   const configurable = (runtime as { configurable?: unknown } | null | undefined)?.configurable;
+  if (scope === 'background') {
+    const tagged =
+      typeof configurable === 'object' &&
+      configurable !== null &&
+      Object.hasOwn(configurable, BACKGROUND_SESSION_CONFIG_KEY);
+    return tagged ? stepInboxOf({ configurable }) : undefined;
+  }
   if (toolCallSessionAddress({ configurable })?.kind === 'subagent') return undefined;
   return stepInboxOf({ configurable });
 }
@@ -102,19 +125,20 @@ function rootInbox(runtime: unknown): StepInbox | undefined {
 /**
  * 建那一顆。**無狀態**：handle 每次從那一次呼叫的 `configurable` 現讀，同 `turn-cancel.ts`。
  *
- * @returns 可以放進 root middleware 陣列的實例。
+ * @param scope - 掛在 root 的圖（預設）還是背景子代理的圖（{@link StepInboxScope}）。
+ * @returns 可以放進 middleware 陣列的實例。
  */
-export function createStepInboxMiddleware(): AgentMiddleware {
+export function createStepInboxMiddleware(scope: StepInboxScope = 'root'): AgentMiddleware {
   return createMiddleware({
     name: STEP_INBOX_MIDDLEWARE_NAME,
     beforeModel: async (_state: unknown, runtime: unknown) => {
-      const messages = (await rootInbox(runtime)?.claim()) ?? [];
+      const messages = (await inboxOf(scope, runtime)?.claim()) ?? [];
       return messages.length > 0 ? { messages: [...messages] } : undefined;
     },
     afterAgent: {
       canJumpTo: ['model'],
       hook: async (_state: unknown, runtime: unknown) => {
-        const inbox = rootInbox(runtime);
+        const inbox = inboxOf(scope, runtime);
         if (inbox === undefined) return undefined;
         // 不領：留在 `next-step` 的由下一輪開頭領走，同 dsh 按停止帶 `keepInbox`。窗不必在這裡關：pump 看到
         // 中止訊號就把之後的插話排進 `next-turn`。

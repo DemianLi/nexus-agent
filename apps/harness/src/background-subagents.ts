@@ -15,8 +15,8 @@
  * ## 每一輪做的事
  *
  * 1. 在這個子代理**自己的日誌**（同一張會話註冊表，`{kind:'subagent', runId}`，#823）寫 `turn/start`。
- * 2. `configurable` **只給明確的鍵**：`thread_id`（日誌 id，`<root>/<runId>`，全域唯一）與
- *    {@link BACKGROUND_SESSION_CONFIG_KEY}。**不帶 root 的中止訊號**——dsh 的 root 停止不連帶停掉已派出去的
+ * 2. `configurable` **只給明確的鍵**：`thread_id`（日誌 id，`<root>/<runId>`，全域唯一）、
+ *    {@link BACKGROUND_SESSION_CONFIG_KEY}，與這一輪的插話收件匣（`STEP_INBOX_CONFIG_KEY`，#858，見下）。**不帶 root 的中止訊號**——dsh 的 root 停止不連帶停掉已派出去的
  *    背景子代理（`docs/subsystems/subagent.zh.md:152`，`477b4f4`），要個別停（卡 6 的 `interrupt_agent`）。
  * 3. 整輪包在注入的 `enter` 裡跑。產品接線時傳 `SandboxModeController.delegateFromLog`（#827）：沙箱那一格從子代理
  *    自己的日誌讀回，不是叫醒那刻 root 的現況。
@@ -25,6 +25,13 @@
  * 5. 收尾寫 `turn/end`；拋錯寫 `turn/failed`，錯誤在這裡收掉，不往外漏。
  *
  * 每個子代理**各自串行**（一次一輪，後到的排隊）、彼此並行。
+ *
+ * ## 插話（#858）
+ *
+ * 一輪正在跑的時候 {@link BackgroundSubagentHost.send} 不另開一輪：話排進這一輪的收件匣，圖裡的 step-inbox middleware
+ * （`createStepInboxMiddleware('background')`，由 `compileSubagentGraph` 掛）在**下一次叫模型之前**領走，落這個子代理自己
+ * 日誌的 `user/message`；模型說完了、圖要收尾時再問最後一次，沒有才關窗。窗關了、這一輪被中止了，就排成下一輪。
+ * 沒領走的（被中止、出錯）退回成排著的輪次，不丟。形狀同 pump 為 root 那一輪交的 `StepInbox`。
  *
  * ## 結算通知（#840）
  *
@@ -47,11 +54,13 @@ import { randomUUID } from 'node:crypto';
 import { HumanMessage } from '@langchain/core/messages';
 import {
   BACKGROUND_SESSION_CONFIG_KEY,
+  STEP_INBOX_CONFIG_KEY,
   TURN_CANCEL_CONFIG_KEY,
   fromLoggedMessage,
+  toLoggedMessage,
   turnReachedMaxTokens,
 } from '@nexus/core';
-import type { SessionEventMap, SessionLog, SessionRegistry } from '@nexus/core';
+import type { SessionEventMap, SessionLog, SessionRegistry, StepInbox } from '@nexus/core';
 
 import { BACKGROUND_RUN_PREFIX } from './background-run-id.js';
 import { markProjectionsHandled } from './thread-pump.js';
@@ -225,6 +234,28 @@ interface Job {
   /** 這一輪開頭寫進日誌的 `turn/start`；`text` 與它裡面的 `text` 是同一個值。 */
   readonly turn: SessionEventMap['turn/start'];
   readonly settle: (outcome: BackgroundRoundOutcome) => void;
+  /** 這一輪的下場（{@link settle} 交出去的那個）：插進跑著的這一輪的話，`send` 回的也是它。 */
+  readonly outcome: Promise<BackgroundRoundOutcome>;
+}
+
+/** 插進跑著的一輪、還沒被下一步領走的一句話（#858）。 */
+interface Steer {
+  /** 成為 `HumanMessage` 的 id：日誌、checkpoint、推回模型的是同一則。 */
+  readonly id: string;
+  /** 送進模型的整段字，含 `Agent <寄件人> sent a message: ` 前綴。 */
+  readonly text: string;
+  readonly senderSessionId: string;
+}
+
+/**
+ * 正在跑的一輪（每個子代理至多一個）。中止控制器之外，多了這一輪的插話收件匣：`steers` 是排著的，
+ * `closed` 是圖收尾時問過最後一次、窗關了（之後到的話改排下一輪）。
+ */
+interface RunningRound {
+  readonly controller: AbortController;
+  readonly outcome: Promise<BackgroundRoundOutcome>;
+  readonly steers: Steer[];
+  closed: boolean;
 }
 
 /**
@@ -243,8 +274,8 @@ export class BackgroundSubagentHost {
   readonly #known = new Map<string, string>();
   readonly #queue: Job[] = [];
   readonly #busy = new Set<string>();
-  /** 正在跑的那一輪的中止控制器（每輪一個，跑完就丟）。`interrupt` 只舉這一個。 */
-  readonly #running = new Map<string, AbortController>();
+  /** 正在跑的那一輪（每輪一個，跑完就丟）：中止控制器（`interrupt` 只舉這一個）與這一輪的插話收件匣（#858）。 */
+  readonly #running = new Map<string, RunningRound>();
   /**
    * 被中斷之後暫停的：它排著的輪次不丟、也不開跑，等下一次 `submit` 才恢復（dsh：被中斷的 driver 進入 idle 後，
    * 一次喚醒發送會恢復被暫停的 FIFO 佇列，`docs/subsystems/subagent.zh.md:152` 附近）。
@@ -305,11 +336,19 @@ export class BackgroundSubagentHost {
     return this.#enqueue({ ...input, turn: { kind: 'message', text: input.text } });
   }
 
-  #enqueue(job: Omit<Job, 'settle'>): Promise<BackgroundRoundOutcome> {
-    return new Promise((settle) => {
-      this.#queue.push({ ...job, settle });
-      this.#wake?.();
+  #newJob(job: Omit<Job, 'settle' | 'outcome'>): Job {
+    let settle!: (outcome: BackgroundRoundOutcome) => void;
+    const outcome = new Promise<BackgroundRoundOutcome>((resolve) => {
+      settle = resolve;
     });
+    return { ...job, settle, outcome };
+  }
+
+  #enqueue(job: Omit<Job, 'settle' | 'outcome'>): Promise<BackgroundRoundOutcome> {
+    const queued = this.#newJob(job);
+    this.#queue.push(queued);
+    this.#wake?.();
+    return queued.outcome;
   }
 
   /**
@@ -319,7 +358,9 @@ export class BackgroundSubagentHost {
    * - 只有這個主對話派出去的編號（host 就是這個主對話的）；不認得的編號拋，訊息說明原因。
    * - 模型看到的文字加 dsh 的前綴 `Agent <寄件人> sent a message: `；日誌那一輪的 `turn/start` 是
    *   `agent-message`（記寄件人，**不授予權限、也不是人話**），不是 `message`。
-   * - 對方閒著：開新的一輪。對方正在跑：**排成它的下一輪**（不插進當下那一輪——那是卡 7）。
+   * - 對方閒著：開新的一輪。對方正在跑：**插進當下那一輪，下一步領走**（[#858](https://github.com/DemianLi/nexus-agent/issues/858)，
+   *   同 dsh 的 “a working agent receives it at its next step”），回的是那一輪的下場。**那一輪被中止了、或圖收尾時窗已經關了**
+   *   就排成它的下一輪（同 pump 的 `#acceptsSteer`）。
    * - 對方是被中斷後暫停的：這一則喚醒它，排在前面的輪次照舊先跑（#838）。
    * - 對方已結算而名額滿了：拒絕（同 `submit`，#836）。
    *
@@ -339,10 +380,15 @@ export class BackgroundSubagentHost {
     }
     const full = this.#capacityRefusal(input.runId);
     if (full !== undefined) throw new Error(full);
-    this.#paused.delete(input.runId);
     // 寄件人＝這個主對話的 root：host 是它的，而這顆工具只給 root（`rootOnly`），所以不必由呼叫端聲明。
     const sender = this.#sessions.root.sessionId;
     const text = `Agent ${sender} sent a message: ${input.message}`;
+    const round = this.#running.get(input.runId);
+    if (round !== undefined && !round.closed && !round.controller.signal.aborted) {
+      round.steers.push({ id: `steer-${randomUUID()}`, text, senderSessionId: sender });
+      return round.outcome;
+    }
+    this.#paused.delete(input.runId);
     return this.#enqueue({
       runId: input.runId,
       subagent,
@@ -432,11 +478,11 @@ export class BackgroundSubagentHost {
    * @returns 有舉起一輪的中止就是 `true`。
    */
   interrupt(runId: string): boolean {
-    const controller = this.#running.get(runId);
-    if (controller === undefined) return false;
-    if (controller.signal.aborted) return true;
+    const round = this.#running.get(runId);
+    if (round === undefined) return false;
+    if (round.controller.signal.aborted) return true;
     this.#paused.add(runId);
-    controller.abort();
+    round.controller.abort();
     return true;
   }
 
@@ -491,9 +537,9 @@ export class BackgroundSubagentHost {
   async close(): Promise<void> {
     this.#closed = true;
     for (const job of this.#queue) this.#paused.add(job.runId);
-    for (const [runId, controller] of this.#running) {
+    for (const [runId, round] of this.#running) {
       this.#paused.add(runId);
-      controller.abort();
+      round.controller.abort();
     }
     this.#wake?.();
     await this.#loop;
@@ -518,9 +564,10 @@ export class BackgroundSubagentHost {
         this.#busy.add(job.runId);
         // **先讓出位子、再交下場**：呼叫端等到 `outcome` 的時候，這個子代理已經不算存活（並存上限、
         // 之後的結算通知都靠這個順序）。
-        const round: Promise<void> = this.#round(job).then(({ outcome, settlement }) => {
+        const round: Promise<void> = this.#round(job).then(({ outcome, settlement, leftover }) => {
           this.#busy.delete(job.runId);
           this.#inflight.delete(round);
+          this.#requeueSteers(job, leftover);
           this.#wake?.();
           // 結算＝這個子代理沒有輪次排著了（被中斷而暫停的排著就不算）。**在交下場之前通知**，同 dsh 在所有權釋放之前。
           if (!this.#queue.some((queued) => queued.runId === job.runId))
@@ -554,20 +601,40 @@ export class BackgroundSubagentHost {
     return compiled;
   }
 
+  /**
+   * 這一輪結束時還沒被領走的插話（被中止、出錯，或窗關之前最後一步沒走到）退回成排著的輪次，排在這個子代理其他排著的
+   * 前面（它們比較早到）。**不丟**：`send_message` 已經回了送達回條，沒領走就是欠著的。被中斷暫停的（`interrupt`、`close` 都會
+   * 把跑著的那一輪的子代理記成暫停）照原規矩不開跑；`close` 的迴圈會把它們當作沒跑成交出去。
+   */
+  #requeueSteers(job: Job, leftover: readonly Steer[]): void {
+    if (leftover.length === 0) return;
+    const jobs = leftover.map((steer) =>
+      this.#newJob({
+        runId: job.runId,
+        subagent: job.subagent,
+        text: steer.text,
+        turn: { kind: 'agent-message', text: steer.text, senderSessionId: steer.senderSessionId },
+      }),
+    );
+    this.#queue.unshift(...jobs);
+  }
+
   async #round(job: Job): Promise<{
     readonly outcome: BackgroundRoundOutcome;
     readonly settlement: BackgroundSettlement | undefined;
+    readonly leftover: readonly Steer[];
   }> {
     let outcome: BackgroundRoundOutcome;
     let stop: BackgroundStopReason = 'completed';
     let log: SessionLog | undefined;
     // 這一輪自己的中止控制器：`interrupt` 只舉它。跑完（不論怎麼結束）就丟。
     const controller = new AbortController();
-    this.#running.set(job.runId, controller);
+    const running: RunningRound = { controller, outcome: job.outcome, steers: [], closed: false };
+    this.#running.set(job.runId, running);
     try {
       log = this.#sessions.open({ kind: 'subagent', runId: job.runId });
       log.append('turn/start', job.turn);
-      await this.#enter(log, () => this.#drive(log!, job, controller.signal));
+      await this.#enter(log, () => this.#drive(log!, job, running));
       // 被父代理中斷的那一輪收成 aborted/parent；沒被中斷就是正常結束。
       log.append(
         'turn/end',
@@ -594,6 +661,7 @@ export class BackgroundSubagentHost {
       }
       outcome = { ok: false, error: message };
     } finally {
+      // 從表裡拿掉，窗就跟著沒了：之後到的話是排下一輪，不是掛在一個已經沒人領的收件匣上。
       this.#running.delete(job.runId);
     }
     let settlement: BackgroundSettlement | undefined;
@@ -606,7 +674,7 @@ export class BackgroundSubagentHost {
         text: settlementText(summary, closingTextOf(log)),
       };
     }
-    return { outcome, settlement };
+    return { outcome, settlement, leftover: running.steers.splice(0) };
   }
 
   /** 通知主對話。沒人接（沒給 `onSettled`）、拿不到日誌所以沒通知可送（`settlement` 缺）都是不通知；送不出去只講一聲。 */
@@ -635,7 +703,35 @@ export class BackgroundSubagentHost {
     }
   }
 
-  async #drive(log: SessionLog, job: Job, cancel: AbortSignal): Promise<void> {
+  /**
+   * 交進圖裡的插話收件匣（#858），形狀同 pump 為 root 那一輪交的：**領走本身是同步的**（呼叫的那一刻整條拿掉），領走時落這個
+   * 子代理**自己日誌**的 `user/message`（來源 `agent-message`，不授予權限、不是人話），回的訊息原封不動併進 state。
+   * 中止之後不領——留著的由 {@link BackgroundSubagentHost.#requeueSteers} 退回成排著的輪次。`finish` 沒有東西可領就關窗。
+   */
+  #stepInboxFor(log: SessionLog, round: RunningRound): StepInbox {
+    const take = (): HumanMessage[] => {
+      if (round.controller.signal.aborted) return [];
+      return round.steers.splice(0).map((steer) => {
+        const message = new HumanMessage({ content: steer.text, id: steer.id });
+        log.append('user/message', {
+          message: toLoggedMessage(message),
+          source: { kind: 'agent-message', form: 'relay', senderSessionId: steer.senderSessionId },
+        });
+        return message;
+      });
+    };
+    return {
+      claim: () => Promise.resolve(take()),
+      finish: () => {
+        const taken = take();
+        if (taken.length === 0) round.closed = true;
+        return Promise.resolve(taken);
+      },
+    };
+  }
+
+  async #drive(log: SessionLog, job: Job, round: RunningRound): Promise<void> {
+    const cancel = round.controller.signal;
     const run = await this.#agentFor(job.subagent).streamEvents(
       { messages: [new HumanMessage(job.text)] } as never,
       {
@@ -647,6 +743,7 @@ export class BackgroundSubagentHost {
           thread_id: log.sessionId,
           [BACKGROUND_SESSION_CONFIG_KEY]: job.runId,
           [TURN_CANCEL_CONFIG_KEY]: cancel,
+          [STEP_INBOX_CONFIG_KEY]: this.#stepInboxFor(log, round),
         },
       },
     );

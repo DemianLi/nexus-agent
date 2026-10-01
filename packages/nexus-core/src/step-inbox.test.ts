@@ -6,8 +6,9 @@
 import { HumanMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
 
+import { BACKGROUND_SESSION_CONFIG_KEY } from './session-address.js';
 import { createStepInboxMiddleware, STEP_INBOX_CONFIG_KEY } from './step-inbox.js';
-import type { StepInbox } from './step-inbox.js';
+import type { StepInbox, StepInboxScope } from './step-inbox.js';
 import { TURN_CANCEL_CONFIG_KEY } from './turn-cancel.js';
 
 interface Hooks {
@@ -15,7 +16,7 @@ interface Hooks {
   afterAgent: { canJumpTo: readonly string[]; hook(state: unknown, runtime: unknown): unknown };
 }
 
-const hooks = () => createStepInboxMiddleware() as unknown as Hooks;
+const hooks = (scope?: StepInboxScope) => createStepInboxMiddleware(scope) as unknown as Hooks;
 
 /** 記下被叫了幾次的 handle；`pending` 是還沒被領走的插話。 */
 function inbox(pending: string[]) {
@@ -119,5 +120,60 @@ describe('afterAgent：收尾時還有插話就同一輪再叫一次模型', () 
     const { handle, calls } = inbox(['改用 X']);
     expect(await hooks().afterAgent.hook({}, runtime(handle, SUBAGENT_NS))).toBeUndefined();
     expect(calls.finish).toBe(0);
+  });
+});
+
+describe('背景版（#858）：背景子代理的圖是最上層的圖，靠身分鍵認人', () => {
+  /** 背景子代理的呼叫：`checkpoint_ns` 只有一段（最上層），身分在顯式的鍵上。 */
+  const background = (handle: StepInbox, signal?: AbortSignal) => ({
+    configurable: {
+      ...runtime(handle, ROOT_NS, signal).configurable,
+      [BACKGROUND_SESSION_CONFIG_KEY]: 'bg-1',
+    },
+  });
+
+  it('帶身分鍵的呼叫：叫模型之前領走、收尾時有插話就跳回模型、沒有就關窗', async () => {
+    const steered = inbox(['先看 b.ts']);
+    const update = (await hooks('background').beforeModel({}, background(steered.handle))) as {
+      messages: HumanMessage[];
+    };
+    expect(update.messages.map((message) => message.text)).toEqual(['先看 b.ts']);
+
+    const more = inbox(['還有 c.ts']);
+    const finishing = (await hooks('background').afterAgent.hook({}, background(more.handle))) as {
+      messages: HumanMessage[];
+      jumpTo: string;
+    };
+    expect(finishing.jumpTo).toBe('model');
+    expect(finishing.messages.map((message) => message.text)).toEqual(['還有 c.ts']);
+
+    const empty = inbox([]);
+    expect(await hooks('background').afterAgent.hook({}, background(empty.handle))).toBeUndefined();
+    expect(empty.calls).toMatchObject({ finish: 1, closed: true });
+  });
+
+  it('沒有身分鍵的呼叫（root、一次性子代理展開了 configurable）不領', async () => {
+    const { handle, calls } = inbox(['改用 X']);
+    expect(await hooks('background').beforeModel({}, runtime(handle))).toBeUndefined();
+    expect(await hooks('background').beforeModel({}, runtime(handle, SUBAGENT_NS))).toBeUndefined();
+    expect(await hooks('background').afterAgent.hook({}, runtime(handle))).toBeUndefined();
+    expect(calls).toMatchObject({ claim: 0, finish: 0 });
+  });
+
+  it('root 版遇到背景身分也不領：兩種圖各領各的', async () => {
+    const { handle, calls } = inbox(['改用 X']);
+    expect(await hooks('root').beforeModel({}, background(handle))).toBeUndefined();
+    expect(await hooks('root').afterAgent.hook({}, background(handle))).toBeUndefined();
+    expect(calls).toMatchObject({ claim: 0, finish: 0 });
+  });
+
+  it('中止之後不領也不跳', async () => {
+    const { handle, calls } = inbox(['改用 X']);
+    const controller = new AbortController();
+    controller.abort();
+    expect(
+      await hooks('background').afterAgent.hook({}, background(handle, controller.signal)),
+    ).toBeUndefined();
+    expect(calls).toMatchObject({ claim: 0, finish: 0 });
   });
 });
