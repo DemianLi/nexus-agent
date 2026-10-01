@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ToolMessage } from '@langchain/core/messages';
 import type { StructuredTool } from '@langchain/core/tools';
+import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import {
   createRegistry,
   loadPlugins,
@@ -152,6 +153,29 @@ function refusalOf(result: unknown): { text: string; code: string | undefined } 
   return { text: String(result.content), code: toolErrorOf(result)?.code };
 }
 
+/**
+ * **模型看到的字**，量在送出去的形狀上（`convertToOpenAITool`，同 `@nexus/core` 的 token 估算）。
+ * 期望值是 dsh `477b4f4` 的原文，**寫成字面字串、不 import 常數**：拿常數比的話常數被改回去也是自己
+ * 跟自己比，不會紅。
+ */
+describe('模型看到的描述', () => {
+  it('工具描述與 files 的說明逐字等於 dsh', () => {
+    const { tool } = mount();
+    const { function: sent } = convertToOpenAITool(tool);
+    expect(sent.description).toBe(
+      'Declare existing files as final deliverables for the user. ' +
+        'Use it when the user needs a separate file, especially Office documents, spreadsheets, and slide decks; ' +
+        'prefer your final response when that suffices. The user opens the current files; their contents are not copied.',
+    );
+    const parameters = sent.parameters as {
+      properties: { files: { description?: string } };
+    };
+    expect(parameters.properties.files.description).toBe(
+      'Usually the 1-2 most important deliverables; at most 4 per call.',
+    );
+  });
+});
+
 describe('成功的那一次', () => {
   it('回 dsh 的 `Presented <path>`，而且結果落定成功之後才寫一筆交付', async () => {
     const root = await workspace();
@@ -286,6 +310,16 @@ describe('拒絕', () => {
     expect(
       textOf(await callThrough(mounted, log, [{ path: 'a' }, { path: 'a' }], rootConfig('ok'))),
     ).toBe('Presented a\nPresented a');
+  });
+
+  it('預設設定下一次交 5 個照樣成功：說明裡的「at most 4」是建議，不是上限', async () => {
+    const root = await workspace();
+    await writeFile(join(root, 'a'), 'a');
+    const mounted = mount({ root });
+    const files = Array.from({ length: 5 }, () => ({ path: 'a' }));
+    expect(
+      textOf(await callThrough(mounted, mounted.sessions.root, files, rootConfig('five'))),
+    ).toBe(Array.from({ length: 5 }, () => 'Presented a').join('\n'));
   });
 
   /**
