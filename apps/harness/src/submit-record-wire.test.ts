@@ -55,7 +55,6 @@ import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixture
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
-import { createHostServicesPlugin } from '@nexus/core';
 
 const BASE_URL = 'http://record.test';
 const CSV_PATH = '/visitors.csv';
@@ -110,13 +109,8 @@ async function connect(
     model: new ScriptedChatModel({ turns: turns as never }),
     checkpointer: new MemorySaver(),
     ...(backend !== undefined && { backend }),
-    // **backend 給同一個物件**，就像 `cli.ts` 那樣。給兩個的失敗方式是兩個工具寫到兩個
-    // 地方，而兩邊都會寫成功——所以這裡同時也在示範正確的接法。
-    plugins: [
-      createHostServicesPlugin({ backend }),
-      createAskUserPlugin(),
-      createSubmitRecordPlugin(),
-    ],
+    // submit-record 從 `fs` 服務拿 fold 折出來的那一個（#694），跟 `write_file` 同一個，不必另外交。
+    plugins: [createAskUserPlugin(), createSubmitRecordPlugin()],
   });
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,

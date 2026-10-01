@@ -33,6 +33,7 @@ import { deriveApprovalChannel } from './approval.js';
 import { createContainmentMiddleware } from './containment.js';
 import { createOutputSchemaMiddleware } from './output-schema.js';
 import { createFsToolErrorsMiddleware, recordBackendOutcomes } from './fs-tool-errors.js';
+import { FS_SERVICE, settleFsService } from './fs-service.js';
 import { createReadContinuationMiddleware, recordReadExtent } from './read-continuation.js';
 import { recordToolResultMeta } from './tool-result-meta.js';
 import {
@@ -458,6 +459,9 @@ export function foldRegistry(
   // **backend 提前折**：策略要的版本 token 得從工具實際讀寫的那一個取，所以它不能等到
   // 下面才算。摘要器刻意拿的是兜底那個，兩者的差別見各自的文件。
   const backend = foldBackend(registry, options.defaultBackend);
+  // **工具拿的也是這一個**（#694）：組裝點提供了 `fs` 那一格的話，在這裡填。填的是折出來的這個，不是兜底那個、
+  // 也不是下面交給基座前再包上記錄層的那一份——後者只給基座的檔案工具記結果用。見 {@link ./fs-service.ts}。
+  settleFsService(registry.services.get(FS_SERVICE), backend);
   const observationPolicy = foldObservationPolicy(registry, options, backend);
   // 檔案工具的失敗標成錯誤（#293）：只在有 backend 時掛——包的是交給基座的那一份，策略手上
   // 那一個是同一個實例，見 {@link ./fs-tool-errors.ts}。無狀態，一份走遍 root 與每個 subagent。
