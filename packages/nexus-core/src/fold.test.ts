@@ -43,6 +43,7 @@ import {
 import { DEFAULT_TOOL_RESULT_PRUNE, toolResultPrunerPlugin } from './tool-result-pruner.js';
 import type { FoldOptions } from './fold.js';
 import { loadPlugins } from './load.js';
+import { createRegistry } from './registry.js';
 import { fakeBackend, fakeMiddleware, fakePlugin, fakeSubAgent, fakeTool } from './fixtures.js';
 import type { PluginEntry } from './plugin.js';
 import { toolErrorOf } from './tool-events.js';
@@ -2119,5 +2120,95 @@ describe('摘要的設定從條目來', () => {
         { plugin: summarizationPlugin, config: { keep: { type: 'fraction', value: 0.5 } } },
       ]),
     ).rejects.toThrow(/keep/);
+  });
+});
+
+/**
+ * 「關掉」是逐條目的（#678，照 dsh：停用只讓那一列不 init，不影響別列）：有被關的同名列、**而且沒有開著的同名列**
+ * 才算關掉。鍵仍是 `NexusPlugin.name`，所以一列被關掉的同名條目不能讓開著的那一列失效。
+ */
+describe('同名的一開一關：開著的那一列不被關掉', () => {
+  const inStack = (stack: readonly unknown[], name: string): boolean =>
+    stack.some((mw) => (mw as { name: string }).name === name);
+
+  /** 三種條目各一條：先讀後改、用量記錄器、耐久檢查點。 */
+  const cases = [
+    { label: '先讀後改', plugin: observationPolicyPlugin, mw: OBSERVATION_POLICY_MIDDLEWARE_NAME },
+    { label: '用量記錄器', plugin: modelUsagePlugin, mw: MODEL_USAGE_MIDDLEWARE_NAME },
+    {
+      label: '耐久檢查點',
+      plugin: sessionCheckpointPlugin,
+      mw: SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+    },
+  ] as const;
+
+  for (const { label, plugin, mw } of cases) {
+    it(`${label}：開著的列加一列被關掉的同名列，root 與每個子代理都還有它`, async () => {
+      const { registry } = await loadPlugins([
+        fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('one'))),
+        { plugin },
+        { plugin, id: 'again', disabled: true },
+      ]);
+      const params = foldRegistry(registry, {
+        summarization: false,
+        repeatReminder: false,
+        defaultBackend: fakeBackend('default'),
+      });
+      expect(inStack(params.middleware, mw)).toBe(true);
+      expect(params.subagents.length).toBeGreaterThan(0);
+      for (const subagent of params.subagents) {
+        expect(inStack(subagent.middleware ?? [], mw), subagent.name).toBe(true);
+      }
+    });
+  }
+
+  it('先關後開，順序不影響：被關的列排在前面也一樣', async () => {
+    const { registry } = await loadPlugins([
+      { plugin: modelUsagePlugin, id: 'off', disabled: true },
+      { plugin: modelUsagePlugin },
+    ]);
+    const params = foldRegistry(registry, { summarization: false, observationPolicy: false });
+    expect(inStack(params.middleware, MODEL_USAGE_MIDDLEWARE_NAME)).toBe(true);
+  });
+
+  it('無關的 plugin 剛好叫 `model-usage` 又被關掉：core 的用量記錄器還在', async () => {
+    const { registry } = await loadPlugins([
+      { plugin: modelUsagePlugin },
+      { plugin: { name: 'model-usage', apply: () => {} }, disabled: true },
+    ]);
+    const params = foldRegistry(registry, { summarization: false, observationPolicy: false });
+    expect(inStack(params.middleware, MODEL_USAGE_MIDDLEWARE_NAME)).toBe(true);
+  });
+
+  it('只有被關的那一列就真的沒有：不因為多了「開著」這一格而變', async () => {
+    const { registry } = await loadPlugins([{ plugin: modelUsagePlugin, disabled: true }]);
+    expect(registry.disabledEntries.has('model-usage')).toBe(true);
+    const params = foldRegistry(registry, { summarization: false, observationPolicy: false });
+    expect(inStack(params.middleware, MODEL_USAGE_MIDDLEWARE_NAME)).toBe(false);
+  });
+
+  it('逐列掉：同名的另一列 `apply` 拋錯掉了，開著的那一列不受影響', async () => {
+    const { registry, dropped } = await loadPlugins(
+      [
+        { plugin: modelUsagePlugin },
+        {
+          plugin: {
+            name: 'model-usage',
+            apply: () => {
+              throw new Error('apply 拋了');
+            },
+          },
+          id: 'boom',
+        },
+      ],
+      createRegistry(),
+      { perEntry: true },
+    );
+    // 掉的那一列照 dsh 算沒掛、被標記了；但開著的那一列在，所以視圖不能說「關掉」。
+    expect(dropped.map(({ origin }) => origin.id)).toEqual(['boom']);
+    expect(registry.disabledEntries.names()).toEqual(['model-usage']);
+    expect(registry.disabledEntries.has('model-usage')).toBe(false);
+    const params = foldRegistry(registry, { summarization: false, observationPolicy: false });
+    expect(inStack(params.middleware, MODEL_USAGE_MIDDLEWARE_NAME)).toBe(true);
   });
 });
