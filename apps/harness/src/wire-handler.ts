@@ -101,6 +101,7 @@ import { FEEDBACK_CATEGORIES } from '@nexus/core';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { createCommandExecutor } from '@nexus/plugin-commands';
+import { isBackgroundRunId } from './background-run-id.js';
 import { BackgroundSubagentError } from './background-subagents.js';
 import type {
   BackgroundParentPort,
@@ -326,6 +327,15 @@ export interface WireHandlerOptions {
    */
   listThreads?(): Promise<StoredThreadList>;
   /**
+   * 讀一個背景子代理自己的落盤日誌（唯讀冷讀，[#871](https://github.com/DemianLi/nexus-agent/issues/871)）：`undefined`＝
+   * 沒有這一份。**實作要自己確認它屬於 `threadId`**（header 的 `parentSession`），不然別條 thread 的編號讀得到。缺席＝沒開落盤，
+   * 路由那時只讀得到載入著的 thread 記憶體裡的日誌。**同 {@link listThreads}，它不准碰 {@link createAgent}。**
+   */
+  readSubagentSession?(
+    threadId: string,
+    runId: string,
+  ): Promise<readonly SessionEvent[] | undefined>;
+  /**
    * 按內容搜以前的 thread（`POST /threads/search`，[#631](https://github.com/DemianLi/nexus-agent/issues/631)），選配。實作是
    * `thread-search.ts` 的 `ThreadSearch.search`，失敗拋 `ThreadSearchError`。
    *
@@ -430,8 +440,25 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+/** 一頁歷史的三個查詢參數（root 的與背景子代理的共用）；不是整數就回現成的 `invalid_argument` 回應。 */
+function historyQueryOf(search: URLSearchParams): ThreadHistoryQuery | Response {
+  const query: ThreadHistoryQuery = {};
+  for (const key of ['maxMessages', 'beforeSeq', 'throughSeq'] as const) {
+    const raw = search.get(key);
+    if (raw === null) continue;
+    const value = Number(raw);
+    if (raw.trim() === '' || !Number.isSafeInteger(value)) {
+      return json(
+        errorResponse(null, 'invalid_argument', `${key} 不是整數：${JSON.stringify(raw)}`),
+      );
+    }
+    (query as Record<string, number>)[key] = value;
+  }
+  return query;
+}
+
 /**
- * `/threads/:id/stream`、`/threads/:id/history`、`/threads/:id/file-references`、`/threads/:id/session-references`、
+ * `/threads/:id/stream`、`/threads/:id/history`、`/threads/:id/subagents/:runId/history`、`/threads/:id/file-references`、`/threads/:id/session-references`、
  * `/threads/:id/changes/{summary,diff}` 或
  * `/threads/:id/commands/:method`，都不是就 undefined。
  */
@@ -440,6 +467,7 @@ function parsePath(
 ):
   | { readonly kind: 'stream'; readonly threadId: string }
   | { readonly kind: 'history'; readonly threadId: string }
+  | { readonly kind: 'subagent-history'; readonly threadId: string; readonly runId: string }
   | { readonly kind: 'file-references'; readonly threadId: string }
   | { readonly kind: 'session-references'; readonly threadId: string }
   | { readonly kind: 'changes-summary'; readonly threadId: string }
@@ -456,6 +484,14 @@ function parsePath(
   }
   if (segments.length === 3 && segments[2] === 'history') {
     return { kind: 'history', threadId };
+  }
+  if (
+    segments.length === 5 &&
+    segments[2] === 'subagents' &&
+    segments[3] !== undefined &&
+    segments[4] === 'history'
+  ) {
+    return { kind: 'subagent-history', threadId, runId: decodeURIComponent(segments[3]) };
   }
   if (segments.length === 3 && pathname === fileReferencesPath(threadId)) {
     return { kind: 'file-references', threadId };
@@ -1447,18 +1483,8 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
    * 落盤的組裝上，同一個行程裡切回去也有歷史。
    */
   async function handleHistory(threadId: string, search: URLSearchParams): Promise<Response> {
-    const query: ThreadHistoryQuery = {};
-    for (const key of ['maxMessages', 'beforeSeq', 'throughSeq'] as const) {
-      const raw = search.get(key);
-      if (raw === null) continue;
-      const value = Number(raw);
-      if (raw.trim() === '' || !Number.isSafeInteger(value)) {
-        return json(
-          errorResponse(null, 'invalid_argument', `${key} 不是整數：${JSON.stringify(raw)}`),
-        );
-      }
-      (query as Record<string, number>)[key] = value;
-    }
+    const query = historyQueryOf(search);
+    if (query instanceof Response) return query;
     const thread = await threadOrError(threadId, null);
     if (thread instanceof Response) return thread;
     let result: ThreadHistoryResult;
@@ -1471,6 +1497,64 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         (bytes) =>
           options.warn?.(
             `[歷史] thread ${threadId} 的一頁超過上限：${String(bytes)} bytes。` +
+              `單獨一輪就超標，不從輪中間切（#479）。`,
+          ),
+        toolTextLimits,
+        threadTitleLimits,
+      );
+    } catch (error: unknown) {
+      if (error instanceof HistoryQueryError) {
+        return json(errorResponse(null, 'invalid_argument', error.message));
+      }
+      throw error;
+    }
+    const response: ThreadHistoryResponse = { type: 'success', result };
+    return json(response);
+  }
+
+  /**
+   * `GET /threads/:id/subagents/:runId/history`（[#871](https://github.com/DemianLi/nexus-agent/issues/871)）：背景子代理
+   * 自己那份對話的一頁歷史，契約見 `subagentHistoryPath`。**對它自己的日誌套同一個 `historyPage`**，所以人說的話、模型回覆、
+   * 工具卡、分頁與位元組上限都跟主對話那條一樣。
+   *
+   * **不經 `threadFor`**：這條 thread 沒載入時（重啟之後）不為了讀歷史建一個 agent，讀落盤的那份（`readSubagentSession`，
+   * 唯讀冷讀）；載入著的就讀記憶體裡的日誌（含還沒落盤的那幾筆）。**找不到一律 `subagent_not_found`**：編號長得不對、不是
+   * 這條 thread 的、日誌不存在或讀不到，不細分。
+   */
+  async function handleSubagentHistory(
+    threadId: string,
+    runId: string,
+    search: URLSearchParams,
+  ): Promise<Response> {
+    const query = historyQueryOf(search);
+    if (query instanceof Response) return query;
+    const notFound = () =>
+      json(errorResponse(null, SUBAGENT_NOT_FOUND, `沒有編號 ${runId} 的背景子代理`));
+    if (!isBackgroundRunId(runId)) return notFound();
+    const existing = threads.get(threadId);
+    const thread = existing === undefined ? undefined : await existing.catch(() => undefined);
+    const live = thread?.pump.sessions.get({ kind: 'subagent', runId });
+    let events: readonly SessionEvent[] | undefined = live?.events;
+    if (events === undefined) {
+      try {
+        events = await options.readSubagentSession?.(threadId, runId);
+      } catch (error: unknown) {
+        // 讀不到（壞檔、版本太新）一樣是找不到，原因講給操作的人聽，不送給呼叫端。
+        options.warn?.(
+          `[歷史] thread ${threadId} 的子代理 ${runId} 讀不出來：${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    if (events === undefined) return notFound();
+    let result: ThreadHistoryResult;
+    try {
+      result = historyPage(
+        events,
+        query,
+        undefined,
+        (bytes) =>
+          options.warn?.(
+            `[歷史] thread ${threadId} 的子代理 ${runId} 的一頁超過上限：${String(bytes)} bytes。` +
               `單獨一輪就超標，不從輪中間切（#479）。`,
           ),
         toolTextLimits,
@@ -1827,6 +1911,11 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
         if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
         return handleHistory(route.threadId, searchParams);
+      }
+      if (route?.kind === 'subagent-history') {
+        if (request.method !== 'GET') return new Response('not found', { status: 404 });
+        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+        return handleSubagentHistory(route.threadId, route.runId, searchParams);
       }
       if (route?.kind === 'file-references') {
         if (request.method !== 'GET') return new Response('not found', { status: 404 });

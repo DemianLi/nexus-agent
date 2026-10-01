@@ -13,7 +13,7 @@ import { SESSION_LOG_FORMAT_VERSION, SessionNotFoundError } from '@nexus/core';
 import type { SessionEvent, SessionStore, StoredSessionHeader } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { openJsonlSessionStore } from './jsonl-session-store.js';
-import { listStoredThreads } from './session-list.js';
+import { listStoredThreads, readStoredSubagentSession } from './session-list.js';
 
 const CWD = '/專案/甲';
 const LIMITS = { maxWords: 5, maxBytes: 40 };
@@ -335,5 +335,38 @@ describe('listStoredThreads', () => {
       ],
       unreadable: 2,
     });
+  });
+});
+
+describe('readStoredSubagentSession', () => {
+  const RUN = 'bg-0123456789ab';
+
+  it('讀得到這條 thread 底下的那一份；header 的 parentSession 不是這條 thread 就當沒有', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'root', { events: [said('主的', 1_100)] });
+    await writeThread(directory, `root/${RUN}`, {
+      base: `root%2f${RUN}`,
+      parentSession: 'root',
+      events: [said('派給你的', 1_200), ended(1_300)],
+    });
+    // 檔案被搬到別條 thread 的名字底下、header 還指著原本的：第二層擋下。
+    await writeThread(directory, `other/${RUN}`, {
+      base: `other%2f${RUN}`,
+      parentSession: 'root',
+      events: [said('搬錯家的', 1_200)],
+    });
+
+    const events = await readStoredSubagentSession(store(directory), 'root', RUN);
+    expect(events?.map((event) => event.type)).toEqual(['turn/start', 'turn/end']);
+    expect(await readStoredSubagentSession(store(directory), 'other', RUN)).toBeUndefined();
+  });
+
+  it('沒有這一份是 undefined；壞檔照拋（由呼叫端決定怎麼講）', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'root', { events: [] });
+    expect(await readStoredSubagentSession(store(directory), 'root', RUN)).toBeUndefined();
+
+    await writeFile(join(directory, `root%2f${RUN}.header.json`), '{壞的');
+    await expect(readStoredSubagentSession(store(directory), 'root', RUN)).rejects.toThrow();
   });
 });

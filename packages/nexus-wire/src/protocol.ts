@@ -733,6 +733,32 @@ export function historyPath(threadId: string): string {
   return `/threads/${encodeURIComponent(threadId)}/history`;
 }
 
+/**
+ * `GET /threads/:id/subagents/:runId/history`——背景子代理**自己那份對話**的一頁歷史
+ * （[#871](https://github.com/DemianLi/nexus-agent/issues/871)）。
+ *
+ * 照 dsh：continuable 子代理是自己一份 session（`SessionHeader.parentSession` 指回 parent），人的 `prompt` 記在它自己的日誌，
+ * 瀏覽器是**跟隨那份 session**，不是把它併進 parent 的歷史（`docs/subsystems/subagent.zh.md`，`477b4f4`）。所以這條路徑
+ * 對子代理自己的日誌套**同一個** `historyPage`：回應形狀、查詢參數（`maxMessages`／`beforeSeq`／`throughSeq`）、頁的切法、
+ * 位元組上限、frame 不帶 `seq` 的規矩全同 {@link historyPath}，folded 起來是一份**獨立的 `ConversationState`**，不要折進
+ * 主對話的。裡面有：
+ *
+ * - 它的第一則「人話」是派它的那段指示（`turn/start` 的 `message`）；之後 `subagent.send` 的人話（輪次開頭的 `message`、
+ *   輪中插的 `user/message` 來源 `user`）也是人話。
+ * - 模型的回覆（含推理）、工具卡。
+ * - 主對話寫給它的話（`agent-message`）長成「某某說」，同主對話那一側（#863）。
+ *
+ * 找不到（編號不是 `bg-` 加十二位十六進位、不是這條 thread 派出去的、日誌讀不到）：`subagent_not_found`，不細分，免得
+ * 呼叫端靠回應試探編號。**授權就是這條 thread 的會話認證**，而且只在這條 thread 的 id 底下找。
+ *
+ * **只有歷史，沒有即時**：這條路徑不跟隨子代理的下一步。想看它現在跑到哪，看
+ * `SUBAGENT_STATUS`（`running` 變 `idle` 就是一輪收了）再抓一次。**GET 也要帶 `content-type: application/json`**，
+ * 理由同 {@link THREADS_PATH}。
+ */
+export function subagentHistoryPath(threadId: string, runId: string): string {
+  return `/threads/${encodeURIComponent(threadId)}/subagents/${encodeURIComponent(runId)}/history`;
+}
+
 /** 一頁歷史的則數上限，同 dsh 的預設（`history.ts:38`）。 */
 export const HISTORY_PAGE_MESSAGES = 50;
 

@@ -160,20 +160,22 @@ const UNWIRED_QUEUE: Pick<WireClient, 'queueUpdate'> = {
 };
 
 /** 對單一背景子代理傳話、單獨停（#865）同一條理由：這一檔的測試不碰它。 */
-const UNWIRED_SUBAGENT: Pick<WireClient, 'subagentSend' | 'subagentInterrupt'> = {
-  subagentSend: async () => ({
-    type: 'error',
-    id: 0,
-    error: 'not_supported',
-    message: '這一檔沒有接背景子代理',
-  }),
-  subagentInterrupt: async () => ({
-    type: 'error',
-    id: 0,
-    error: 'not_supported',
-    message: '這一檔沒有接背景子代理',
-  }),
-};
+const UNWIRED_SUBAGENT: Pick<WireClient, 'subagentSend' | 'subagentInterrupt' | 'subagentHistory'> =
+  {
+    subagentSend: async () => ({
+      type: 'error',
+      id: 0,
+      error: 'not_supported',
+      message: '這一檔沒有接背景子代理',
+    }),
+    subagentInterrupt: async () => ({
+      type: 'error',
+      id: 0,
+      error: 'not_supported',
+      message: '這一檔沒有接背景子代理',
+    }),
+    subagentHistory: async () => ({ kind: 'rejected', message: '這一檔沒有接背景子代理' }),
+  };
 
 /**
  * 「以前的會話」同一條理由：要清單的測試自己換掉這一格。**歷史回一份空的、不是拒絕**：每一條 thread 開起來都會
