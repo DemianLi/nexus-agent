@@ -42,6 +42,7 @@ import { createAskUserPlugin } from '@nexus/plugin-ask-user';
 import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import type { BackgroundParentPort, ModelChoice } from './background-subagents.js';
+import { backgroundSubagentsPlugin } from './settings/background-subagents.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import type { LiveModelConfig } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
@@ -998,6 +999,7 @@ export async function createCliAgent(
   stepInbox: boolean;
 }> {
   const liveModel = invocation.liveModel ?? startupSetting(plugins, liveModelPlugin);
+  const subagentToolFilter = startupSetting(plugins, backgroundSubagentsPlugin).toolFilter;
   const model = createCliModel(invocation.live, liveModel, invocation.credentials);
   // **標題模型是另一顆實例**：輸出上限換成標題那一列的，並表明用途，由 `createLiveModel` 決定要不要關推理
   // （`live-model.ts` 的 `LiveModelPurpose`）。`.env` 已經在入口（`runCli`／`runServe`）載入過了。
@@ -1109,6 +1111,8 @@ export async function createCliAgent(
       optionalEntries: invocation.optionalEntries,
     }),
     ...(invocation.stepInbox === true && { stepInbox: true }),
+    // 子代理的工具過濾（#707）：兩條產品路徑都讀，與背景續行無關，見 `settings/background-subagents.ts` 檔頭。
+    ...(subagentToolFilter !== undefined && { subagentToolFilter }),
     ...(invocation.modelSelectionPolicy !== undefined && {
       modelSelectionPolicy: invocation.modelSelectionPolicy,
     }),

@@ -18,7 +18,7 @@
  *
  * 兩次合起來印一段（{@link startupWarning}），只印一次。
  *
- * ## 名單是 `browser-session` 與 `system-prompt`
+ * ## 名單是 `browser-session`、`system-prompt` 與 `background-subagents`
  *
  * dsh 的七個 id 分三類（`README.zh.md:43`），對到我們：
  *
@@ -34,6 +34,12 @@
  * 因為 dsh 的嚴格插值在渲染時拋——每一輪都紅，壞掉的設定不可能被忽略。我們的載入器把 `apply` 拋的錯變成「那一列掉了」，
  * 不列進名單的話，前綴寫了個打錯字的 `{{modle}}` 只換來一行警告，模型靜靜少了身分與 persona 照樣跑——比大聲失敗更糟。
  * 表達不出來的是「壞了就每輪都紅」（我們在掛載當下算，不在渲染時算），退到最接近的：讓這一列掉了就整個起不來。
+ *
+ * **`background-subagents` 是第三個**（[#707](https://github.com/DemianLi/nexus-agent/issues/707)，偏離登記），理由與 `system-prompt` 同型但方向相反：
+ * 它帶著子代理的 `toolFilter`，那是一道**限制**。這一列設定驗不過就掉，掉了的後果是「沒有過濾」——部署方寫了 `deny: [write_file]`、
+ * 寫錯一個字，換來一行警告和一個什麼都能寫的子代理，是 fail-open。dsh 那側同一格寫壞時整顆委派工具跟著掉（`apply` 拋），
+ * 不會留下一個沒被限制的委派路徑；我們的前景 `task` 是基座的，不跟這一列一起掉，表達不出「一起掉」，退到最接近的：讓這一列掉了就整個起不來。
+ * 代價是 `maxActiveSubagents` 寫壞也起不來（以前是警告加預設值）。
  *
  * **它跟「關不掉」的名單（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`）是兩回事**：那一份只管能不能寫
  * `disabled: true`，以 `name` 為鍵；這一份管掉了要不要整個起不來，以 id 為鍵，照 dsh。以 id 為鍵繞不過去：patch
@@ -66,6 +72,7 @@ import type { IgnoredConfig, LoadedPluginConfig, StartupDrop } from './plugin-co
 export const REQUIRED_ENTRY_IDS: ReadonlySet<string> = new Set([
   'browser-session',
   'system-prompt',
+  'background-subagents',
 ]);
 
 /** 帶 `--live` 時也必須在的那一列的 id，理由見檔頭。 */

@@ -1,0 +1,4 @@
+# `toolFilter` 設了卻 allow、deny 都沒給：載入就拋（#707 的驗收，同 dsh `tool-subagent` 的 apply）。讀它的是 `subagent-tool-filter-setting.test.ts`。
+- id: background-subagents
+  config:
+    toolFilter: {}

@@ -9,6 +9,14 @@
  * 出貨的 `cordis.yml` 那一列寫 `continuable`。`--dump-config` 印得出實際生效的值；把這一列標成 `disabled: true`
  * 或整列拿掉，回到 schema 的預設，也就是今天的一次性。
  *
+ * **`toolFilter`（[#707](https://github.com/DemianLi/nexus-agent/issues/707)）**：也是 `tool-subagent` 的 Config
+ * （`packages/subagent/tool-subagent/src/index.ts:126`），`{ allow?, deny? }` 套在這顆委派工具派出的**每個**子代理上——
+ * 在我們是前景的 `task`、背景的 `subagent` 與 fold 補的 `general-purpose`；root 不受影響。出廠不填（dsh 的六個 bundle
+ * 與四個 preset 都沒填）。只遮繼承來的：全域註冊的工具與基座的檔案工具；子代理自己那一層註冊的不遮。
+ * 設了卻 `allow`、`deny` 都沒給，載入就拋（同 dsh `index.ts:318-319`）；名字認不認得要等組裝期（名字宇宙由 registry 與基座決定），
+ * 寫錯會在第一個會話建立時拋，訊息列出已知名單。**與 `backgroundMode` 無關**：`one-shot` 時照樣套在前景的 `task` 上；
+ * **`runCli` 也讀這一格**（不像 `backgroundMode`），因為它遮的是工具不是背景續行。
+ *
  * 偏離登記：dsh 把兩格分在兩個 plugin（`tool-subagent`、subagent）上，我們併成一列，因為我們的組裝點只有一個
  * （`BackgroundDelegation`）同時消費它們。
  *
@@ -35,6 +43,15 @@ export const DEFAULT_MAX_ACTIVE_SUBAGENTS = 8;
 export const backgroundSubagentsConfigSchema = z.strictObject({
   backgroundMode: z.enum(['one-shot', 'continuable']).default('one-shot'),
   maxActiveSubagents: z.number().int().min(1).default(DEFAULT_MAX_ACTIVE_SUBAGENTS),
+  toolFilter: z
+    .strictObject({
+      allow: z.array(z.string().min(1)).optional(),
+      deny: z.array(z.string().min(1)).optional(),
+    })
+    .refine((filter) => filter.allow !== undefined || filter.deny !== undefined, {
+      message: '`toolFilter` 設了卻沒有 `allow` 也沒有 `deny`：拿掉這一格，或把它填上',
+    })
+    .optional(),
 });
 
 /** 驗過的設定。 */

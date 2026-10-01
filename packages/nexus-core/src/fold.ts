@@ -22,6 +22,12 @@ import type { AnyBackendProtocol, FilesystemPermission, SubAgent } from 'deepage
 import type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
 import { createApprovalGateMiddleware } from './approval.js';
 import { createSubagentDelegationMiddleware } from './subagent-delegation.js';
+import {
+  assertToolFilter,
+  createSubagentToolFilterMiddleware,
+  toolKept,
+} from './subagent-tool-filter.js';
+import type { ToolFilter } from './subagent-tool-filter.js';
 import type { ApprovalChannel } from './approval.js';
 import { deriveApprovalChannel } from './approval.js';
 import { createContainmentMiddleware } from './containment.js';
@@ -203,6 +209,15 @@ export interface FoldOptions {
    * （[#111](https://github.com/DemianLi/nexus-agent/issues/111)）。
    */
   baseToolNames?: readonly string[];
+  /**
+   * 子代理的工具允許／拒絕清單（[#707](https://github.com/DemianLi/nexus-agent/issues/707)），套在**每個**子代理上，
+   * 含 fold 補的 `general-purpose`；root 不受影響。省略時 fold 的產物與沒有這一格時逐字相同。
+   *
+   * 只遮**繼承來的**：全域註冊的工具從子代理的 `tools` 扣掉，基座的檔案工具（{@link FoldOptions.baseToolNames}）
+   * 由一顆只放進子代理的 middleware 從請求拿掉、叫了也不執行。子代理自帶的與它那層註冊的不受影響。
+   * 規則與檢查見 {@link ./subagent-tool-filter.ts}（空 filter、未知名字在組裝期拋）。
+   */
+  subagentToolFilter?: ToolFilter;
   /** 模型。 */
   model?: AgentModel;
   /** checkpointer。`false` 與缺席同義。 */
@@ -389,6 +404,13 @@ export function foldRegistry(
   // 沒有主體可檢，跟著刪（#111 的 (a)①）。
   const known = knownToolNames(registry, options.baseToolNames);
   if (toolOrder !== undefined) validateToolOrder(toolOrder, known);
+  // 工具過濾的宇宙比 `toolOrder` 窄：只收**可遮的繼承來的**，照 dsh 的 `restrictableNames`。
+  if (options.subagentToolFilter !== undefined) {
+    assertToolFilter(
+      options.subagentToolFilter,
+      restrictableToolNames(registry, options.baseToolNames),
+    );
+  }
 
   const permissions = foldPermissions(registry);
   // **解不開的參數的載體，一份組裝一份、交給三個讀者**：圍堵、核准閘門、最內層那顆。
@@ -457,6 +479,8 @@ export function foldRegistry(
     tools: orderTools(globalTools, toolOrder),
     subagents: foldSubAgents(registry, {
       toolOrder,
+      toolFilter: options.subagentToolFilter,
+      baseToolNames: options.baseToolNames ?? [],
       skills: registry.skills.sources(),
       permissions,
       containment,
@@ -581,6 +605,19 @@ function searchMetaAllowed(
     if ((entry.value.permissions ?? []).length > 0) return false;
   }
   return true;
+}
+
+/**
+ * 工具過濾可以指到的名字：**全域註冊的**加上基座工具名。照 dsh 的 `restrictableNames`（只含繼承來的），
+ * 子代理自己那層的名字不收——遮不到的東西列了就是寫錯。
+ */
+function restrictableToolNames(
+  registry: PluginRegistry,
+  baseToolNames: readonly string[] | undefined,
+): Set<string> {
+  const names = new Set(registry.tools.effective().keys());
+  for (const name of baseToolNames ?? []) names.add(name);
+  return names;
 }
 
 function knownToolNames(
@@ -1322,6 +1359,10 @@ function foldSubAgents(
   registry: PluginRegistry,
   context: {
     toolOrder: readonly string[] | undefined;
+    /** 子代理的工具過濾（#707）；`undefined`＝沒有，產物與沒這一格時逐字相同。 */
+    toolFilter: ToolFilter | undefined;
+    /** 基座自己帶的工具名：過濾遮它們時的宇宙（它們不在 registry 裡）。 */
+    baseToolNames: readonly string[];
     /** root 的 skills 來源。只給 fold 補的 `general-purpose`，同基座那份。 */
     skills: readonly string[];
     permissions: readonly FilesystemPermission[];
@@ -1383,6 +1424,9 @@ function foldSubAgents(
     // 跟「這個工具不給 subagent」不是同一件事。
     const merged = new Map<string, NamedEntry<StructuredTool>>();
     for (const [toolName, globalEntry] of registry.tools.effective()) {
+      // 工具過濾（#707）：只遮繼承來的，所以在這裡扣、在下面的自帶與 scoped 之前。root-only 的樁在過濾**之後**才換：
+      // `deny` 列到就整顆消失，`allow` 留下就仍是拒絕樁。
+      if (context.toolFilter !== undefined && !toolKept(context.toolFilter, toolName)) continue;
       merged.set(
         toolName,
         registry.tools.isRootOnly(toolName)
@@ -1401,6 +1445,13 @@ function foldSubAgents(
     for (const [toolName, scoped] of registry.tools.own(name)) merged.set(toolName, scoped);
 
     const permissions = [...context.permissions, ...(spec.permissions ?? [])];
+
+    // 被遮的基座工具：過濾對每個子代理一樣，所以名單一樣；基座工具不可能被子代理自己同名註冊（基座拒絕），不必扣自帶的。
+    const hiddenBaseTools = new Set(
+      context.toolFilter === undefined
+        ? []
+        : context.baseToolNames.filter((each) => !toolKept(context.toolFilter!, each)),
+    );
 
     const next: SubAgent = {
       ...spec,
@@ -1445,6 +1496,10 @@ function foldSubAgents(
         ...(context.spill === undefined ? [] : [context.spill]),
         // plugin 以 `prepend` 掛的，同 root：在中止內側、閘門外側（#327）。
         ...context.plugins.prepended,
+        // 工具過濾（#707）遮基座工具，排在閘門外側：被遮的呼叫碰不到閘門與工具本體。沒設或沒有基座工具被遮就不放。
+        ...(hiddenBaseTools.size === 0
+          ? []
+          : [createSubagentToolFilterMiddleware(hiddenBaseTools)]),
         context.approvalGate,
         // **各建一份，不共用**：觀測紀錄在 closure 裡，共用等於讓 root 讀過的檔
         // 變成這個 subagent 也可以直接改。理由見 {@link foldObservationPolicy}。

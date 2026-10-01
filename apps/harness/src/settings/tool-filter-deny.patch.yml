@@ -1,0 +1,9 @@
+# 子代理的工具過濾（#707 的驗收：設定真的接到組裝點）。**one-shot 與 continuable 兩種都要量得到**，所以只改 `toolFilter` 不碰 `backgroundMode`。
+# 讀它的是 `subagent-tool-filter-setting.test.ts`。
+- id: background-subagents
+  config:
+    backgroundMode: continuable
+    maxActiveSubagents: 8
+    toolFilter:
+      deny:
+        - write_file

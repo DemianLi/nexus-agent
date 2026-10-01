@@ -1,0 +1,6 @@
+# 過濾列了一個不存在的工具名：組裝期拋，訊息列出已知名單（#707 的驗收）。讀它的是 `subagent-tool-filter-setting.test.ts`。
+- id: background-subagents
+  config:
+    toolFilter:
+      deny:
+        - writte_file

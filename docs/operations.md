@@ -253,6 +253,28 @@ export HTTP_PROXY=http://127.0.0.1:7890
 - **一個編號的模型與推理等級從派出到收線不變**：`send_message` 追加指示沿用同一份，不能換。
 - 建不出那顆模型（端點設定、憑證）時，工具結果講原因，主對話那一輪不受影響。
 
+### 子代理的工具允許／拒絕清單（#707）
+
+`background-subagents` 那一列（`cordis.yml`）可以填 `toolFilter: { allow?, deny? }`，**出廠不填**（同 dsh）。填了之後套在每個子代理上
+（前景的 `task`、背景的 `subagent`、fold 補的 `general-purpose`），root 不受影響：
+
+```yaml
+- id: background-subagents
+  config:
+    toolFilter:
+      deny: [write_file, edit_file, delete]
+```
+
+- `deny` 拿掉列到的；`allow` 只留列到的（`allow: []` 是一個都不留，不是沒填）；兩邊都列到同一個名字時 `deny` 贏。
+- **只遮繼承來的**：全域註冊的工具，以及基座的檔案工具（`ls`、`read_file`、`write_file`、`edit_file`、`delete`、`glob`、`grep`、`execute`）。
+  子代理自己那一層註冊或自帶的不遮，所以列它們的名字算寫錯。
+- 被遮的工具不在子代理的請求裡；模型照基座的檔案系統說明硬叫一次，拿到一則說明原因的錯誤結果，工具本體不執行。
+  **已知限制**：基座那段檔案系統說明是固定文字，仍會描述被遮的工具。
+- 掛了 `rootOnly` 的工具：`deny` 列到就整顆消失；`allow` 留下時仍是拒絕樁。
+- 與 `backgroundMode` 無關，REPL 與一次性模式也讀。
+- **寫錯會起不來**：名字不存在、或設了 `toolFilter` 卻沒有 `allow` 也沒有 `deny`，`serve` 與 CLI 都在起動時失敗
+  （`background-subagents` 是必掛的列；這也代表 `maxActiveSubagents` 寫壞同樣起不來，以前只是警告）。
+
 ## plugin 清單
 
 零設定的 CLI 與 serve 掛哪些 plugin，由**出貨的 `apps/harness/cordis.yml`** 決定

@@ -270,6 +270,14 @@ export {
   SUBAGENT_DELEGATION_CONTEXT,
   SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
 } from './subagent-delegation.js';
+export type { ToolFilter } from './subagent-tool-filter.js';
+export {
+  assertToolFilter,
+  createSubagentToolFilterMiddleware,
+  filteredToolRefusal,
+  SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME,
+  toolKept,
+} from './subagent-tool-filter.js';
 export type { StepInbox } from './step-inbox.js';
 export {
   createStepInboxMiddleware,
