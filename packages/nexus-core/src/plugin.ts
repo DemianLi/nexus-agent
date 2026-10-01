@@ -52,8 +52,9 @@ import type { PluginRegistry } from './registry.js';
  */
 export interface NexusPlugin<TConfig = void> {
   /**
-   * 純標籤，唯一用途是錯誤訊息指名。**不唯一**：同一個 plugin 掛載多次是合法的
-   * （`mcp` 接兩台 server 就是兩個條目、同一個 `name`），真撞了會撞在它們註冊的東西
+   * 標籤：錯誤訊息指名用，**也是停用視圖與 core 條目開關的比對鍵**（`registry.disabledEntries`，
+   * #456、#678）——那幾個開關的鍵是字串，所以任何 plugin 取同名都碰得到。**不唯一**：同一個 plugin
+   * 掛載多次是合法的（`mcp` 接兩台 server 就是兩個條目、同一個 `name`），真撞了會撞在它們註冊的東西
    * 那一層，不是在這裡。指認某一次掛載是 {@link PluginEntry.id} 的工作。
    */
   readonly name: string;
