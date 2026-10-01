@@ -70,8 +70,6 @@ export function transcriptItems(entries: readonly ConversationEntry[]): Transcri
   };
   for (const entry of entries) {
     if (entry.kind === 'answer') continue;
-    // 壓縮列（#896）還沒有畫面：harness 已經送了，這裡先不給它位置，畫面做出來時拿掉這一行。
-    if (entry.kind === 'compaction') continue;
     if (entry.kind === 'workspace-changes') {
       changes.push({ kind: 'changes', id: entry.id, seq: entry.seq });
       continue;
