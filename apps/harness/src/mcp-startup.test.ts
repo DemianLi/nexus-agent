@@ -14,7 +14,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createCliAgent, runCli } from './cli.js';
+import { runCli } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { toAgentInvocation } from './messages.js';

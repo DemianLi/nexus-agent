@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createCliAgent } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { shippedPlugins } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import type { ScriptedChatModel } from './scripted-model.js';

@@ -101,6 +101,7 @@ import type {
 } from '@nexus/core';
 import {
   foldInbox,
+  isLogicalTurnStart,
   isMaxTokensFinish,
   loggedMessageId,
   replayConversation,
@@ -108,6 +109,8 @@ import {
   tokenUsageUnit,
 } from '@nexus/core';
 
+// 讀的事件種類（`todo/write`）照 dsh 由擁有者套件宣告；這一行讓編譯單位看得到那個套件補的鍵，不靠測試檔順手 import（#679）。
+import type {} from '@nexus/plugin-todo';
 import { agentMessageBody, runIdOfSession } from './background-run-id.js';
 import { goalData, RootGoal } from './goal-wire.js';
 import { threadTitleOf } from './session-title.js';
@@ -219,7 +222,7 @@ function referencesAfter(
  * （同一個 `callId` 再記一次 `tool/call`），從它切的話同一張卡會一半在這頁、一半在前一頁，接起來畫面上長兩張。
  */
 function isPageStart(event: SessionEvent): boolean {
-  return event.type === 'turn/start' && event.data.kind !== 'resume';
+  return isLogicalTurnStart(event);
 }
 
 /**
@@ -538,7 +541,7 @@ function planModeOf(events: readonly SessionEvent[]): boolean | undefined {
  * @returns 會清空就是 `true`。
  */
 export function isTodosReset(event: SessionEvent): boolean {
-  return event.type === 'turn/start' && event.data.kind !== 'resume';
+  return isLogicalTurnStart(event);
 }
 
 /** 一顆 `custom` frame 的 `data`。 */

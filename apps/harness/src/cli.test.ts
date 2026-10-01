@@ -14,16 +14,8 @@ import type { PluginEntry } from '@nexus/core';
 import { z } from 'zod';
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
 import { FIRST_PLUGIN_NAME, SECOND_PLUGIN_NAME } from './cli-collision.fixture.js';
-import {
-  APPROVAL_DISCLOSURE,
-  CLI_PROBE_FILE,
-  createCliAgent,
-  exitCodeFor,
-  parseCliArgs,
-  runCli,
-  runRepl,
-  runTurn,
-} from './cli.js';
+import { APPROVAL_DISCLOSURE, exitCodeFor, parseCliArgs, runCli, runRepl, runTurn } from './cli.js';
+import { CLI_PROBE_FILE, createCliAgent } from './assembly-root.js';
 import { DISPOSE_FAILURE } from './cli-dispose-failure.fixture.js';
 import { documentedFixture } from './documented-fixture.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -460,8 +452,7 @@ describe('CLI 的核准政策', () => {
       { live: false },
       [createEchoPlugin(), gateWriteFile],
       undefined,
-      undefined,
-      HEADLESS_APPROVALS,
+      { approvals: HEADLESS_APPROVALS },
     );
     const { printer, stdout } = recorder();
     try {

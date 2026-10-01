@@ -19,7 +19,7 @@
  * `resume` 的 `turn/start`、`session/end-seed`，見 `session-scan.ts` 檔頭）恰好就是輪的邊界，所以
  * 「一輪裡的最長串」就是那條鏈在這一輪裡走到的最長。測試拿 `scan` 的逐份最長串對過。
  *
- * 輪＝起頭那顆**不是 `resume`** 的 `turn/start`，`resume` 那一段併回去——同 `@nexus/core` 的
+ * 輪＝起頭那顆開邏輯輪的 `turn/start`（`isLogicalTurnStart`，不是 `resume`），`resume` 那一段併回去——同 `@nexus/core` 的
  * `currentMessageFeedback` 把回覆歸到輪的算法（格式 10 以前點踩直接綁這個輪，
  * [#267](https://github.com/DemianLi/nexus-agent/issues/267)）。
  * `session/end-seed` 收掉當下那一輪：之後、下一顆起頭之前的事件沒有輪可歸，略過。
@@ -40,6 +40,7 @@
  */
 
 import {
+  isLogicalTurnStart,
   repeatCallKey,
   repeatReminderTracks,
   resolveRepeatReminderSettings,
@@ -164,7 +165,7 @@ export function draftSessionLog(
   for (const event of log.events) {
     switch (event.type) {
       case 'turn/start':
-        if (event.data.kind === 'resume') break;
+        if (!isLogicalTurnStart(event)) break;
         current = {
           seq: event.seq,
           kind: event.data.kind,

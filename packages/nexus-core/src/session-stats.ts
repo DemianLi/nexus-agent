@@ -54,6 +54,7 @@
  * @module
  */
 
+import { isLogicalTurnStart } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
 
 /** 整份日誌的數字。每一格在第一個有貢獻的事件之前都是 0。 */
@@ -101,8 +102,7 @@ export const sessionStatsUnit = {
   apply: (state: SessionStatsState, event: SessionEvent): SessionStatsState => {
     switch (event.type) {
       case 'turn/start': {
-        const { kind } = event.data as { kind?: unknown };
-        if (kind === 'resume' || !state.turnCounted) return state;
+        if (!isLogicalTurnStart(event) || !state.turnCounted) return state;
         return { ...state, turnCounted: false };
       }
       case 'model/start':
