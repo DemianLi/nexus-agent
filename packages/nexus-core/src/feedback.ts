@@ -32,6 +32,7 @@
  */
 
 import type { LoggedMessage } from './logged-message.js';
+import { loggedContentBlocks, loggedMessageId } from './logged-message.js';
 import { isLogicalTurnStart } from './session-log.js';
 import type { SessionEvent, SessionLog } from './session-log.js';
 
@@ -214,21 +215,13 @@ export interface FeedbackService {
   record(log: SessionLog, entry: FeedbackRecord): FeedbackRecordResult;
 }
 
-/** 一則訊息的文字：字串照原樣，區塊只取 `text` 那幾塊。 */
+/** 一則訊息的文字：區塊中有無非空的 text。 */
 function hasText(message: LoggedMessage): boolean {
-  const content: unknown = message.data.content;
-  if (typeof content === 'string') return content !== '';
-  if (!Array.isArray(content)) return false;
-  return content.some((block: unknown) => {
+  const blocks = loggedContentBlocks(message.data.content);
+  return blocks.some((block) => {
     const typed = block as { type?: unknown; text?: unknown } | null;
     return typed?.type === 'text' && typeof typed.text === 'string' && typed.text !== '';
   });
-}
-
-/** 一顆 `assistant/message` 記的訊息 id；沒記的是 `undefined`。 */
-export function loggedMessageId(message: LoggedMessage): string | undefined {
-  const id: unknown = message.data.id;
-  return typeof id === 'string' && id !== '' ? id : undefined;
 }
 
 /** 一則被評的回覆目前的評分，連同它所屬的那一輪。 */

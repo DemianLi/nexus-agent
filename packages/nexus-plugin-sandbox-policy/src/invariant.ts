@@ -11,7 +11,7 @@
  * 日誌從磁碟讀回來不經過型別檢查：jsonl store 只驗 `type`／`time`／`seq`，`recordedSandboxMode`
  * 把最後一顆的 `event.data.mode` 原樣交出去。一顆認不得的模式名（手改過、不相容的版本寫的）
  * 會一路流進控制器——fence 只特判 `read-only` 與 `danger-full-access`，其餘走可寫根的判斷，
- * 提示句與升級閘門也都不認得它。這正是 `@nexus/core` 的 `sandbox.ts` 檔頭描述的分岔。
+ * 提示句與升級工具也都不認得它。這正是 `@nexus/core` 的 `sandbox.ts` 檔頭描述的分岔。
  *
  * **讀取邊界不擋，照 dsh。** dsh 讀事件時同樣不驗 mode：投影的 `apply` 原樣收下
  * （`packages/sandbox/sandbox-policy/src/index.ts:138`），fence 同形地落進 workspace-write

@@ -204,6 +204,11 @@ export HTTP_PROXY=http://127.0.0.1:7890
 **一次性模式撞到這條上限時退出碼是 `2`**，其他失敗是 `1`，所以包它的腳本分得出「護欄切掉了」與
 「壞掉了」；REPL 裡撞到只印一行，不退出。
 
+**同一步平行跑的工具呼叫也有上限**：模型一步吐出很多顆工具呼叫時，同時在跑的最多 10 顆（照 dsh），
+其餘照模型給的順序等空位；一次性與背景子代理同一個值。要改就改清單裡 `agent-loop` 那一列的
+`config.maxParallelToolCalls`（至少 2，改了要重啟）。**今天每一顆都可以跟別顆重疊**——dsh 只讓宣告了
+平行安全的工具重疊、其餘一顆一顆跑，那一半還沒做（[#711](https://github.com/DemianLi/nexus-agent/issues/711)）。
+
 **目標不會自己往下走，除非你說可以。** `--goal-driver`（CLI 與 `serve` 共用）打開之後，一個 active
 的目標在每一輪落定時會自己再開一輪，直到它被完成、被擋住，或用完自己的 `max_goal_rounds`（預設 256）。
 預設關。模型從第 `blockedAfterConsecutiveRounds` 輪（預設 3）起可以把自己標成 blocked 而退出迴圈，
@@ -386,7 +391,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `repeatReminder` 時，以那句話為準；而手搭 plugin 清單（沒有這幾列）的組裝拿到的是內建
   預設，不是「什麼都沒掛」。
 
-今天有十六列：
+今天有十七列：
 
 | id | 管什麼 | 有 `config` 嗎 | 關得掉嗎 |
 | --- | --- | --- | --- |
@@ -407,10 +412,11 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `live-model` | `--live` 時真實供應商的連線值（端點／預設模型 id／逾時／重試次數），加上模型型錄（每顆的窗口、輸出上限、收不收圖、怎麼關推理） | 有（五格） | **關不掉** |
 | `agent-default-model` | 沒帶 `--live` 時用哪個模型提供者（出貨值 `cli-script` 是內建的腳本） | 有（一格） | **關不掉** |
 | `recursion-limit` | agent 迴圈的 super-step 上限 | 有（一格） | **關不掉** |
+| `agent-loop` | 模型同一步吐出多顆工具呼叫時，同時在跑的最多幾顆 | 有（一格） | **關不掉** |
 
-**最後九列裡，八列是「不裝功能、只講設定」的那一型；`session-persistence` 例外，它代表落盤本身**
-（[#612](https://github.com/DemianLi/nexus-agent/issues/612)，關掉就不落盤）。**九列的擁有者分兩邊**：`session-persistence` 住在
-`@nexus/core`（值的家在那個套件裡），其餘八列住在 `apps/harness`
+**最後十列裡，九列是「不裝功能、只講設定」的那一型；`session-persistence` 例外，它代表落盤本身**
+（[#612](https://github.com/DemianLi/nexus-agent/issues/612)，關掉就不落盤）。**十列的擁有者分兩邊**：`session-persistence` 住在
+`@nexus/core`（值的家在那個套件裡），其餘九列住在 `apps/harness`
 （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
 **更要緊的分界是消費點跑的時刻**：
 
@@ -429,22 +435,22 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 `insert` 一列提供者（目前有 `#settings/scripted-model`，腳本當 `config.turns`），再把那一列的 `provider` 寫成提供者的 `id`。
 **`--live` 不看這一列**——它是進 live 的唯一閘門，因為 `.env` 與代理在載入清單之前就依它處理好了。指到的 id 找不到、
 被停用、或那一列不是提供者，啟動時當場拋。這是給測試與嵌入方用的接縫，不是換真實供應商的辦法（那是 `live-model`）。
-- **`recursion-limit` 相反，它的消費點在組裝期**（`agent-factory`），跟前七列同一個位置，所以它
+- **`recursion-limit` 與 `agent-loop` 相反，它們的消費點在組裝期**（`agent-factory`），跟前七列同一個位置，所以它們
   跟前七列完全同形（`apply` 提供一顆服務、組裝點去讀）。**CLI 的 `--recursion-limit` 仍然贏過
   這一列**——程式路徑上直接傳的參數贏過這份清單，那條規則對它照樣適用。
 
-**這九列裡關得掉的有三列。** `session-persistence`（[#612](https://github.com/DemianLi/nexus-agent/issues/612)）
+**這十列裡關得掉的有三列。** `session-persistence`（[#612](https://github.com/DemianLi/nexus-agent/issues/612)）
 代表落盤本身，關掉就是不落盤（見上面「會話日誌」一節）；它曾經也關不掉，那時它只講批次窗口、
 關掉只會回到預設，而 #444 讓落盤預設開著之後，「想停掉日誌的人第一個試的就是這一格」。
 `thread-title-llm` 關掉就真的沒有模型產生的標題，只剩從第一句話截出來的退回標題（見下面那一段）。
 `thread-search` 關掉就真的沒有內容搜尋；它跟出廠的 `openAt: never` 差在哪裡見下面那一段。
 
-**其餘六列關不掉**，但理由分兩種。起動期那五列是「關掉沒有意義」：它們**不裝任何東西**，關掉
+**其餘七列關不掉**，但理由分兩種。起動期那五列是「關掉沒有意義」：它們**不裝任何東西**，關掉
 不會讓標題不再被裁切、cookie 不再過期、交付檔不再有上限、工具結果不再被截、
 `--live` 不再有連線設定——那一列
-被當成沒有那一列，值回到 schema 的預設，行為一個位元組都不變。`recursion-limit` 硬一級
-——關掉它確實會讓那顆服務消失，但組裝點接著落回內建的 100，**護欄還在**，讀起來卻像把迴圈上限
-解除了（基座自己那層是一萬）。兩種都只會讓你以為關掉了什麼。寫 `disabled: true` 是啟動失敗，
+被當成沒有那一列，值回到 schema 的預設，行為一個位元組都不變。`recursion-limit` 與 `agent-loop` 硬一級
+——關掉它確實會讓那顆服務消失，但組裝點接著落回內建的 100／10，**護欄還在**，讀起來卻像把上限
+解除了（基座自己那層是一萬／不限）。兩種都只會讓你以為關掉了什麼。寫 `disabled: true` 是啟動失敗，
 **訊息會指名你那一列自己的理由**，不是一段通用的話。
 
 **改 `tool-text` 的 `maxBytes` 會讓一條跨套件的比例失效，而且沒有任何東西會擋你。**
@@ -576,7 +582,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 （給了 `truncateArgs` 就要把它底下兩格都寫出來），而 `trigger` 那兩個數字的來歷寫在
 `DEFAULT_SUMMARIZATION` 的檔頭上——**換模型要重量一次**。
 
-**最後九列的 `config` 同樣是整份替換。** 沒重述的欄位回到 schema 的預設值，不是保留原本那一列
+**最後十列的 `config` 同樣是整份替換。** 沒重述的欄位回到 schema 的預設值，不是保留原本那一列
 寫的值——例如 `thread-title` 只寫 `maxBytes` 的話，`maxWords` 拿到的是預設的 5。`thread-title`、
 `thread-title-llm`、`browser-session` 與 `deliverable-files` 的預設（`5`／`40`／`80`；`5` 詞／`10` 字／4096 位元組／
 64 token／60 秒；`30` 天；2 MiB／32 MiB／5000 行）都照 dsh 的產品組裝；**`session-persistence` 的 `10` 毫秒沒有 dsh 的對應物**——dsh 的落盤後端只收根目錄
@@ -589,6 +595,9 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 **沒有 dsh 的對應物**（dsh 不跑 LangGraph），它是對著一次實測跑掉的執行校準出來的，換算成幾輪
 模型呼叫取決於這一次掛了哪些 middleware——預設組裝是 33 輪，再給 `--workspace` 是 32 輪。逐段
 實測見 `apps/harness/src/settings/recursion-limit.ts` 的檔頭。
+`agent-loop` 的 `10` 照 dsh（`maxParallelToolCalls`），**但最小只收 2，dsh 收 1**：LangGraph 的
+`maxConcurrency: 1` 跑完第一顆就靜靜收掉那一步，其餘工具呼叫沒跑也不報錯，理由與絆索在
+`apps/harness/src/settings/agent-loop.ts` 的檔頭。
 
 ### 部署方的身分與 persona
 

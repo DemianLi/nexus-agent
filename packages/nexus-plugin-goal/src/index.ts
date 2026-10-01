@@ -122,6 +122,7 @@ export {
   GOAL_TOOL_REPLACEMENT_MISPLACED_MESSAGE,
   GOAL_TOOL_UNKNOWN_CALLER_MESSAGE,
   GOAL_UPDATE_TOOL_NAME,
+  GOAL_WRAPUP_MARKER,
   goalToolAmbiguousMessage,
   goalToolValue,
 } from './tools.js';
