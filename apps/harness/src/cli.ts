@@ -1585,6 +1585,15 @@ export async function runRepl(
         // 撞到迴圈上限也落在這裡：印一行、等下一句，**不退出**——所以 `exitCodeFor` 的
         // 退出碼 2 只在一次性路徑上存在。
         printer.error(errorMessage(error));
+        // **跑壞的那一輪要收回續行授權**（#660，同 dsh 收到 `agent/error` 就 disarm）。`driveGoalRounds`
+        // 在輪次拋錯時不會再問一次排程器，不在這裡問的話，人再講一句話、那一輪正常收工，續行就接回來了。
+        // 結果丟掉：這一問只為了收回；日誌最後一輪不是跑壞的就什麼都不做。
+        if (driver !== undefined) {
+          await driveGoalRound(() => sessionLog.events, driver, roundCap).catch(
+            (askError: unknown) =>
+              driver.warn(`跑壞之後收回續行授權失敗：${errorMessage(askError)}`),
+          );
+        }
       }
     }
     // stdin 收在最後一行之後（管線餵進來時就是這樣）——那一刻 readline 已經關了，

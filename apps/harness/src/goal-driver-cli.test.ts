@@ -26,6 +26,7 @@ import {
   formatGoalDriverDisclosure,
   goalDriverPort,
   runCli,
+  runRepl,
   runTurn,
 } from './cli.js';
 import { parseCliArgs } from './cli.js';
@@ -100,6 +101,9 @@ const CREATE_TURNS: readonly ScriptedTurn[] = [
   },
   { content: '建好了。' },
 ];
+
+/** REPL 要的命令註冊點：一個都沒有，每一行都當一句話送給模型。 */
+const NO_COMMANDS = { find: () => undefined, list: () => [] };
 
 function startKinds(log: SessionLog): string[] {
   return log.events
@@ -178,6 +182,39 @@ describe('REPL 那條路自己排下一輪', () => {
     const before = log.length;
     await driveGoalRounds(agent, printer, log, port);
     expect(log.length).toBe(before);
+    await stop();
+  });
+
+  /**
+   * **續行輪次拋錯之後，人再講一句話，續行不會接回來**（#660）。
+   *
+   * 上一條只驗到「拋錯之後緊接著再問一次，不排」——那時停得住，是因為日誌的最後一輪還是 `turn/failed`。
+   * 人再講一句、那一輪正常收工之後，最後一輪就不是了，要靠拋錯那一刻收回的授權擋住。走真的 REPL 迴圈，
+   * 因為收回的那一問在 `runRepl` 的 catch 裡。
+   */
+  it('REPL：續行輪次拋錯、人再說一句，續行不會接回；目標的耐久狀態不動', async () => {
+    const { agent, log, goals, port, stop } = await build([
+      {
+        content: '',
+        toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 5 } }],
+      },
+      { content: '建好了。' },
+      { content: '', error: '供應商過載' },
+      { content: '好的，我等你。' },
+      { content: '不該被讀到。' },
+    ]);
+    const { printer, out } = recorder();
+    const input = new PassThrough();
+    input.end('把 CI 修綠\n等一下，我先看看\n/exit\n');
+    await runRepl(agent, { input, output: new PassThrough() }, printer, log, NO_COMMANDS, port);
+
+    // 續行那一輪跑壞了；人說的那一句正常收工；之後沒有第二個續行輪。
+    expect(out.join('\n')).toContain('供應商過載');
+    expect(startKinds(log)).toEqual(['message', 'goal', 'message']);
+    // 授權收回，耐久的相位與修訂號不動（Q8：目標狀態不動）。
+    const view = goals.serviceFor(log)?.get();
+    expect(view).toMatchObject({ activation: 'disarmed', phase: 'active', roundsStarted: 1 });
+    expect(view?.revision).toBe(1);
     await stop();
   });
 

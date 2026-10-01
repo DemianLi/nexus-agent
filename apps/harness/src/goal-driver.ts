@@ -113,13 +113,21 @@ export type GoalDriverIdleReason =
   | 'no-turn'
   /** 上一輪還在跑（沒有結尾）。 */
   | 'turn-open'
-  /** 上一輪**拋錯**結束。續行不重試，見 [#180](https://github.com/DemianLi/nexus-agent/issues/180) 的 Out of scope。 */
+  /**
+   * 上一輪**拋錯**結束。續行不重試，見 [#180](https://github.com/DemianLi/nexus-agent/issues/180) 的 Out of scope。
+   * 不只這一次不排：{@link driveGoalRound} 還會收回續行授權，同 dsh 收到 `agent/error` 就 `disarm`
+   * （`packages/goal/goal-round-driver/src/index.ts:246-249`，`477b4f4`）。
+   */
   | 'turn-failed'
   /**
-   * 上一輪**被人中止**（`turn/end` 帶 `reason.kind: 'aborted'`）。人按了停止，續行不接著排，等下一次
-   * 有人說話——[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q8，同 dsh 的
-   * `goal-round-driver` 看到 aborted 就不再排（`packages/goal/goal-round-driver/src/index.ts:334-338`）。
+   * 上一輪**被人中止**（`turn/end` 帶 `reason.kind: 'aborted'`）。人按了停止，續行不接著排，也不會在人
+   * 隨便再說一句話之後接回來——[#265](https://github.com/DemianLi/nexus-agent/issues/265) 的 Q8。
+   * {@link driveGoalRound} 收回續行授權，要續行得走一次有人授權的 `resume`；同 dsh 在「被中止的不是自己排的
+   * 那一輪」時直接 `disarm`（`packages/goal/goal-round-driver/src/index.ts:328-337`，`477b4f4`）。
    * 停在核准點時按停止的那一種（收回）也落在這裡：收回寫的是一輪 `resume` 帶 aborted 收尾。
+   *
+   * **偏離一格（Q8 拍板過）**：dsh 在被中止的是自己排的那一輪時，還會在下一個 idle 把目標暫停（改耐久相位）；
+   * 我們只收回行程內的授權，相位與修訂號不動——Q8 寫的是「目標狀態不動」。
    */
   | 'turn-aborted'
   /**
@@ -169,6 +177,13 @@ function turnClosed(events: readonly SessionEvent[]): GoalDriverIdleReason | und
   }
   return 'turn-open';
 }
+
+/** 看到這幾種原因就把續行授權收回來，不只是這一次不排。值是收回失敗時警告裡的說法。 */
+const REVOKING_REASONS: Partial<Record<GoalDriverIdleReason, string>> = {
+  'turn-max-tokens': '撞到輸出上限',
+  'turn-aborted': '被人中止',
+  'turn-failed': '輪次拋錯',
+};
 
 /**
  * 現在該不該再排一輪。**純函式**：讀日誌與一份視圖，不動任何東西。
@@ -244,7 +259,7 @@ export interface GoalDriverPort {
   goal(): GoalView | undefined;
   /** 記一顆 blocker。 */
   block(ref: GoalRef, reason: GoalBlockReason): void;
-  /** 收回續行授權，**不動耐久的相位**。耐久檢查點失敗、上一輪撞到輸出上限時用。 */
+  /** 收回續行授權，**不動耐久的相位**。耐久檢查點失敗、上一輪撞到輸出上限、被中止或拋錯時用。 */
   disarm(): void;
   /** 排隊前的耐久檢查點。沒有落盤時是 no-op。 */
   flush(): Promise<void>;
@@ -289,13 +304,14 @@ export async function driveGoalRound(
 ): Promise<GoalRoundRequest | undefined> {
   const first = decideGoalRound(readEvents(), port.goal(), roundCap);
   if (first.kind === 'idle') {
-    // 撞到輸出上限：照 dsh 只在授權還在時收回（`goal-round-driver/src/index.ts:117-124`）。收回之後再問一次
-    // 就是 `disarmed`，所以這一句冪等。
-    if (first.reason === 'turn-max-tokens' && port.goal()?.activation === 'armed') {
+    // 撞到輸出上限、被人中止、拋錯：照 dsh 只在授權還在時收回（`goal-round-driver/src/index.ts:117-124`、
+    // `:246-249`、`:328-337`）。收回之後再問一次就是 `disarmed`，所以這一句冪等。
+    const revoking = REVOKING_REASONS[first.reason];
+    if (revoking !== undefined && port.goal()?.activation === 'armed') {
       try {
         port.disarm();
       } catch (error: unknown) {
-        port.warn(`撞到輸出上限之後停用續行失敗：${errorText(error)}`);
+        port.warn(`${revoking}之後停用續行失敗：${errorText(error)}`);
       }
     }
     return undefined;
