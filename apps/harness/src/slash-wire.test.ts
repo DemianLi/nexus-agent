@@ -59,7 +59,7 @@ afterEach(async () => {
 /**
  * 起一條完整的線：真的組裝、真的 handler、真的 client，零 port 零憑證。
  *
- * 日誌是從 `attachTelemetry` 那條縫拿的——**那是組裝點唯一看得到 pump 那張註冊表的地方**
+ * 日誌是從 `attachSessions` 那條縫拿的——**那是組裝點唯一看得到 pump 那張註冊表的地方**
  * （`ThreadAgent` 的說明），拿它當觀測點不需要在 handler 上開新的洞。
  */
 async function wire(plugins: readonly PluginEntry[] = shipped): Promise<Wired> {
@@ -74,15 +74,13 @@ async function wire(plugins: readonly PluginEntry[] = shipped): Promise<Wired> {
       agent: built.agent as unknown as PumpAgent,
       commands: built.commands,
       dispose: built.dispose,
-      attachTelemetry: (sessions) => {
+      // **三件事都接，跟 `serve.ts` 一樣。** 計劃模式住在會話日誌上（#251 的第二刀），
+      // 少了參與者 `/plan` 回的是「還沒接上」——那是替身的缺，不是產品的。
+      attachSessions: (sessions, backgroundPort) => {
         // 觀測 root 那一份就夠：這條線問的是「命令有沒有進日誌」，而命令是進入點寫的。
         captured = sessions.root;
-        return undefined;
+        return built.attachSessions(sessions, backgroundPort);
       },
-      attachInvariants: built.attachInvariants,
-      // **參與者要接，跟 `serve.ts` 一樣。** 計劃模式住在會話日誌上（#251 的第二刀），
-      // 少了這一行 `/plan` 回的是「還沒接上」——那是替身的缺，不是產品的。
-      attachSession: built.attachSession,
     }),
   });
   const client = createWireClient({
