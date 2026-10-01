@@ -186,6 +186,12 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
       '五個值於是回到 schema 的預設，連的還是同一個端點、同一顆模型，只會讓這份設定讀起來像關掉了什麼。',
   ],
   [
+    '#settings/default-model',
+    '這一列不裝任何東西，只講沒帶 `--live` 時用哪個模型提供者。關掉它不會讓模型沒有來源' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，`provider` 於是回到內建的 `cli-script`，' +
+      '要用的提供者換不過去，只會讓這份設定讀起來像關掉了什麼。要換提供者是改它的 `provider`。',
+  ],
+  [
     '#settings/recursion-limit',
     '這一列不裝任何東西，只講 agent 迴圈的 super-step 上限。關掉它確實會讓那個服務消失，' +
       '但組裝點接著就落回內建的 100——**護欄還在**，關掉的只是「這台機器上它是多少」這句話。' +

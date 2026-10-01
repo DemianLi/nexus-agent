@@ -410,6 +410,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `deliverable-files` | 交付檔的三個上限（一頁位元組／整檔位元組（只管整檔讀）／一頁行數） | 有（三格） | **關不掉** |
 | `tool-text` | 工具結果的結構化資料（`meta`）與壓縮摘要全文放上線的位元組上限（結果文字本身不截） | 有（一格） | **關不掉** |
 | `live-model` | `--live` 時真實供應商的連線值（端點／預設模型 id／逾時／重試次數），加上模型型錄（每顆的窗口、輸出上限、收不收圖、怎麼關推理） | 有（五格） | **關不掉** |
+| `agent-default-model` | 沒帶 `--live` 時用哪個模型提供者（出貨值 `cli-script` 是內建的腳本） | 有（一格） | **關不掉** |
 | `recursion-limit` | agent 迴圈的 super-step 上限 | 有（一格） | **關不掉** |
 | `agent-loop` | 模型同一步吐出多顆工具呼叫時，同時在跑的最多幾顆 | 有（一格） | **關不掉** |
 
@@ -428,6 +429,12 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   寫退回標題的 `runTurn`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）；`live-model` 各自在起動期
   解一次、交給組裝去建 model（只有 `--live` 用得到）；`thread-title-llm` 跟它一起在建 model 的那一刻讀，
   另建一顆標題用的（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。
+
+**換模型提供者**（[#670](https://github.com/DemianLi/nexus-agent/issues/670)，照 dsh 的 `agent-default-model`）：沒帶 `--live`
+時模型由 `agent-default-model` 那一列的 `provider` 選。出貨值 `cli-script` 是程式碼裡內建的腳本；要換就在 patch 裡
+`insert` 一列提供者（目前有 `#settings/scripted-model`，腳本當 `config.turns`），再把那一列的 `provider` 寫成提供者的 `id`。
+**`--live` 不看這一列**——它是進 live 的唯一閘門，因為 `.env` 與代理在載入清單之前就依它處理好了。指到的 id 找不到、
+被停用、或那一列不是提供者，啟動時當場拋。這是給測試與嵌入方用的接縫，不是換真實供應商的辦法（那是 `live-model`）。
 - **`recursion-limit` 與 `agent-loop` 相反，它們的消費點在組裝期**（`agent-factory`），跟前七列同一個位置，所以它們
   跟前七列完全同形（`apply` 提供一顆服務、組裝點去讀）。**CLI 的 `--recursion-limit` 仍然贏過
   這一列**——程式路徑上直接傳的參數贏過這份清單，那條規則對它照樣適用。
