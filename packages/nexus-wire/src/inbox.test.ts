@@ -13,7 +13,7 @@ import {
   reduceAll,
   reduceConversation,
 } from './conversation.js';
-import { INBOX, SETTLE_NOTICE } from './inbox.js';
+import { AGENT_MESSAGE, INBOX, SETTLE_NOTICE } from './inbox.js';
 import type { Event } from './protocol.js';
 
 let seq = 0;
@@ -324,19 +324,78 @@ describe('inbox：背景子代理的結算通知不是人話（#840）', () => {
     }
   });
 
-  it('子代理寫來的話（agent-message，#849）同樣：排著照收、領走不畫人的泡泡', () => {
-    const relay = {
+  describe('子代理寫來的話（agent-message，#849、#863）', () => {
+    const relay = { id: 'run-m', text: '三個檔案看過了', source: { kind: 'agent-message' } };
+    const claimedRelay = {
       id: 'run-m',
-      text: 'Agent x sent a message: 嗨',
-      source: { kind: 'agent-message' },
+      text: '三個檔案看過了',
+      source: { kind: 'agent-message', senderSessionId: 'root/bg-1', runId: 'bg-1' },
     };
-    const queued = fold(inboxFrame({ items: [first, relay], nextStep: [relay] }));
-    expect(queued.inbox).toEqual([first, relay]);
-    expect(queued.inboxNextStep).toEqual([relay]);
-    expect(fold(inboxFrame({ items: [], claimed: relay })).entries).toEqual([]);
-    expect(fold(inboxFrame({ items: [], nextStep: [], claimedNextStep: [relay] })).entries).toEqual(
-      [],
-    );
+
+    it('排著照收；領走長一格「某某說」，不是人的泡泡', () => {
+      const queued = fold(inboxFrame({ items: [first, relay], nextStep: [relay] }));
+      expect(queued.inbox).toEqual([first, relay]);
+      expect(queued.inboxNextStep).toEqual([relay]);
+      const expected = {
+        kind: 'agent-message',
+        id: 'inbox:run-m',
+        senderSessionId: 'root/bg-1',
+        runId: 'bg-1',
+        text: '三個檔案看過了',
+        inboxId: 'run-m',
+      };
+      expect(fold(inboxFrame({ items: [], claimed: claimedRelay })).entries).toEqual([expected]);
+      expect(
+        fold(inboxFrame({ items: [], nextStep: [], claimedNextStep: [claimedRelay] })).entries,
+      ).toEqual([expected]);
+    });
+
+    it('同一顆 claimed 再到一次不畫第二次', () => {
+      const twice = fold(
+        inboxFrame({ items: [], claimed: claimedRelay }),
+        inboxFrame({ items: [], claimed: claimedRelay }),
+      );
+      expect(twice.entries).toHaveLength(1);
+    });
+
+    it('寄件人缺了整顆不收：不能悄悄畫成人話', () => {
+      const before = fold(inboxFrame({ items: [first] }));
+      for (const source of [
+        { kind: 'agent-message' },
+        { kind: 'agent-message', senderSessionId: 'root/bg-1' },
+        { kind: 'agent-message', runId: 'bg-1' },
+        { kind: 'agent-message', senderSessionId: 7, runId: 'bg-1' },
+      ]) {
+        const after = reduceConversation(
+          before,
+          inboxFrame({ items: [], claimed: { id: 'run-m', text: '嗨', source } }),
+        );
+        expect(after.entries).toEqual(before.entries);
+        expect(after.inbox).toEqual(before.inbox);
+      }
+    });
+
+    it('歷史重播的 AGENT_MESSAGE：長同一種項目，id 就是給的 id；同一個 id 只長一格，壞形狀略過', () => {
+      const payload = {
+        id: 'history-9',
+        senderSessionId: 'root/bg-1',
+        runId: 'bg-1',
+        text: '三個檔案看過了',
+      };
+      const record = (data: unknown) => frame('custom', { name: AGENT_MESSAGE, payload: data });
+      const once = fold(record(payload));
+      expect(once.entries).toEqual([{ kind: 'agent-message', ...payload }]);
+      expect(fold(record(payload), record(payload)).entries).toHaveLength(1);
+      for (const bad of [
+        {},
+        { ...payload, id: '' },
+        { ...payload, runId: undefined },
+        { ...payload, senderSessionId: 3 },
+        { ...payload, text: undefined },
+      ]) {
+        expect(reduceConversation(once, record(bad) as never).entries).toEqual(once.entries);
+      }
+    });
   });
 
   it('認不得的來源整顆不收', () => {

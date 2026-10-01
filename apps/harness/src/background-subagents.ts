@@ -63,7 +63,7 @@ import {
 } from '@nexus/core';
 import type { SessionEventMap, SessionLog, SessionRegistry, StepInbox } from '@nexus/core';
 
-import { BACKGROUND_RUN_PREFIX } from './background-run-id.js';
+import { BACKGROUND_RUN_PREFIX, agentMessageText } from './background-run-id.js';
 import { markProjectionsHandled } from './thread-pump.js';
 import type { RunProjections } from './thread-pump.js';
 
@@ -383,7 +383,7 @@ export class BackgroundSubagentHost {
     if (full !== undefined) throw new Error(full);
     // 寄件人＝這個主對話的 root：host 是它的，而這顆工具只給 root（`rootOnly`），所以不必由呼叫端聲明。
     const sender = this.#sessions.root.sessionId;
-    const text = `Agent ${sender} sent a message: ${input.message}`;
+    const text = agentMessageText(sender, input.message);
     const round = this.#running.get(input.runId);
     if (round !== undefined && !round.closed && !round.controller.signal.aborted) {
       round.steers.push({ id: `steer-${randomUUID()}`, text, senderSessionId: sender });
@@ -435,7 +435,7 @@ export class BackgroundSubagentHost {
     this.#onMessage({
       runId: input.runId,
       sessionId,
-      text: `Agent ${sessionId} sent a message: ${input.message}`,
+      text: agentMessageText(sessionId, input.message),
     });
   }
 
