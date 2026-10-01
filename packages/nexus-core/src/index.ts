@@ -100,7 +100,13 @@ export type {
   SandboxMode,
   SandboxModeSource,
 } from './sandbox.js';
-export { isSandboxMode, SANDBOX_MODES, WORKSPACE_CAPABILITY } from './sandbox.js';
+export {
+  hostPathOf,
+  isSandboxMode,
+  SANDBOX_MODES,
+  virtualPathOf,
+  WORKSPACE_CAPABILITY,
+} from './sandbox.js';
 
 export type { NamedEntry, DuplicateErrorFactory } from './entries.js';
 export { AnonymousEntries, NamedEntries, CapabilitySet } from './entries.js';
