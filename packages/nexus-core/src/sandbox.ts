@@ -135,8 +135,8 @@ export function hostPathOf(root: string, path: string): string {
  * （`references/deepseek-harness/packages/sandbox/sandbox/src/index.ts` 的 `SandboxPolicy`
  * 檔頭逐字寫著「carried PER CALL, not fixed on the provider」，理由是同一瞬間兩個消費者
  * 可以在不同政策底下跑）。釘死在建構子上的話，「換一格」就只能重建整個 backend——而
- * backend 是**兩個消費者共用的那一份**（`cli.ts` 那條註解：建兩個會讓 `submit_record` 與
- * `write_file` 寫到兩個地方，而且兩邊都成功、一條測試都不會紅）。
+ * backend 是**每個檔案工具共用的那一份**（`write_file` 與經 `fs` 服務拿它的 `submit_record`，#694：
+ * 建兩個會讓兩個工具寫到兩個地方，而且兩邊都成功、一條測試都不會紅）。
  *
  * ## 偏離登記
  *

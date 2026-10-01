@@ -105,7 +105,7 @@
 # 搬進清單之後它們跟其他列一樣：看得見、關得掉。dsh 的 ask-user 也只是 preset 裡的一列。
 #
 # 兩顆都沒有資料設定，協作者走服務注入（#459）：`ask_user_question` 讀 host-services 提供的答題管道（**沒有就在呼叫時拒絕**，
-# 不退成「有人在」，照 dsh 的 `NO_PROVIDER`），`submit_record` 讀同一個 backend。host-services 仍由組裝點在最前面掛。
+# 不退成「有人在」，照 dsh 的 `NO_PROVIDER`），`submit_record` 在被叫時讀 `fs` 服務（#694，折出來的 backend）。host-services 仍由組裝點在最前面掛。
 # 我們的 CLI 是有人在的互動入口，dsh 沒有對應物，所以兩個入口照舊都有這兩顆。
 #
 # `submit_record` 帶一道核准閘門（一律停下來讓人看過），所以它在 `approval-gate-order.test.ts` 的射程內。
@@ -566,7 +566,5 @@
   name: '@nexus/plugin-telemetry-otel/invariant'
 - id: todo-invariant
   name: '@nexus/plugin-todo/invariant'
-- id: validation-invariant
-  name: '@nexus/plugin-validation/invariant'
 - id: wire-invariant
   name: '@nexus/wire/invariant'

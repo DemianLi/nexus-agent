@@ -66,10 +66,6 @@ import {
   createTelemetryOtelInvariantPlugin,
   TELEMETRY_OTEL_INVARIANT_PACKAGE,
 } from '@nexus/plugin-telemetry-otel/invariant';
-import {
-  createValidationInvariantPlugin,
-  VALIDATION_INVARIANT_PACKAGE,
-} from '@nexus/plugin-validation/invariant';
 import { createWireInvariantPlugin, WIRE_INVARIANT_PACKAGE } from '@nexus/wire/invariant';
 import {
   createCommandsInvariantPlugin,
@@ -157,7 +153,6 @@ const COMPANIONS: readonly (readonly [() => PluginEntry, string, string])[] = [
     '@nexus/plugin-telemetry-otel',
   ],
   [createTodoInvariantPlugin, TODO_INVARIANT_PACKAGE, '@nexus/plugin-todo'],
-  [createValidationInvariantPlugin, VALIDATION_INVARIANT_PACKAGE, '@nexus/plugin-validation'],
   [
     createWorkspaceChangesInvariantPlugin,
     WORKSPACE_CHANGES_INVARIANT_PACKAGE,
@@ -173,7 +168,7 @@ describe('表格對得上磁碟', () => {
     // 先釘「真的掃到東西」：掃空的話下面那條會變成空陣列對空陣列，而 COMPANIONS 漏人
     // 的時候它也是「兩邊都少」——一個永遠綠的絆索比沒有絆索更糟。確切數目歸
     // `package-invariants.test.ts` 的 `EXPECTED_OWNERS`，這裡只擋掃空與倒退。
-    expect(owners.length).toBeGreaterThanOrEqual(21);
+    expect(owners.length).toBeGreaterThanOrEqual(20);
 
     // 兩邊都排序再比：COMPANIONS 的順序是給人看的，不是被驗的東西。
     expect([...COMPANIONS.map(([, , name]) => name)].sort()).toEqual([...owners].sort());

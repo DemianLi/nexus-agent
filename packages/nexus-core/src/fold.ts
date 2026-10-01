@@ -33,6 +33,7 @@ import { deriveApprovalChannel } from './approval.js';
 import { createContainmentMiddleware } from './containment.js';
 import { createOutputSchemaMiddleware } from './output-schema.js';
 import { createFsToolErrorsMiddleware, recordBackendOutcomes } from './fs-tool-errors.js';
+import { FS_SERVICE, settleFsService } from './fs-service.js';
 import { createReadContinuationMiddleware, recordReadExtent } from './read-continuation.js';
 import { recordToolResultMeta } from './tool-result-meta.js';
 import {
@@ -71,6 +72,7 @@ import {
   SUMMARIZATION_SERVICE,
 } from './summarization.js';
 import type { SummarizationSettings } from './summarization.js';
+import { TokenAnchorBook } from './token-estimate.js';
 import { toolCallIdOf, toolRefusal } from './tool-events.js';
 import {
   resolveToolResultPruneConfig,
@@ -247,6 +249,15 @@ export interface FoldOptions {
    * default backend 又沒關掉摘要時，fold 當場拋；關掉時不需要。
    */
   summarization?: Partial<SummarizationSettings> | false;
+  /**
+   * 錨定估算的帳（[#588](https://github.com/DemianLi/nexus-agent/issues/588)、[#702](https://github.com/DemianLi/nexus-agent/issues/702)）：
+   * 摘要器的預算層用它估「這份請求送出去會是幾個 token」，並在每次呼叫回來時記下供應商報的實數。
+   *
+   * **帳由進入點建、注入**，不是模組全域。要跨 thread 借錨的進入點（`runServe`）建一本傳給每一條 thread 的組裝；
+   * **省略即這次組裝各建一本**——這次組裝裡的 root 與子代理共用它（`foldSummarizer` 只建一次），不同組裝彼此不借。
+   * 只在摘要開著時有作用。
+   */
+  tokenAnchorBook?: TokenAnchorBook;
   /**
    * 摘要器外面那把工具結果剪刀的預算。給物件就逐格淺合併到
    * {@link DEFAULT_TOOL_RESULT_PRUNE} 上，`false` 是明著不要——摘要照跑，只是不先剪。
@@ -458,6 +469,9 @@ export function foldRegistry(
   // **backend 提前折**：策略要的版本 token 得從工具實際讀寫的那一個取，所以它不能等到
   // 下面才算。摘要器刻意拿的是兜底那個，兩者的差別見各自的文件。
   const backend = foldBackend(registry, options.defaultBackend);
+  // **工具拿的也是這一個**（#694）：組裝點提供了 `fs` 那一格的話，在這裡填。填的是折出來的這個，不是兜底那個、
+  // 也不是下面交給基座前再包上記錄層的那一份——後者只給基座的檔案工具記結果用。見 {@link ./fs-service.ts}。
+  settleFsService(registry.services.get(FS_SERVICE), backend);
   const observationPolicy = foldObservationPolicy(registry, options, backend);
   // 檔案工具的失敗標成錯誤（#293）：只在有 backend 時掛——包的是交給基座的那一份，策略手上
   // 那一個是同一個實例，見 {@link ./fs-tool-errors.ts}。無狀態，一份走遍 root 與每個 subagent。
@@ -1186,7 +1200,9 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
         '地方放。給一個 default backend、明著傳 `summarization: false`，或在部署設定裡把' +
         ' `@nexus/core/summarization` 那一列標成 `disabled: true`。',
     );
-  return () => createSummarizer(backend, settings, registry.sessions, pruning);
+  // **一次組裝一本，root 與子代理共用**：放在工廠外面，每呼叫一次工廠才不會各建一本、把借錨切碎。
+  const book = options.tokenAnchorBook ?? new TokenAnchorBook();
+  return () => createSummarizer(backend, settings, book, registry.sessions, pruning);
 }
 
 /**

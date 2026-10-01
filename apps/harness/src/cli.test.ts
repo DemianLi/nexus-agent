@@ -250,9 +250,9 @@ describe('一次性模式', () => {
       'live-model',
       'recursion-limit',
     ]);
-    // 二十一個配套入口裡有 `@nexus/plugin-workspace-changes` 的，**那個功能本身不在這份清單裡**：它要工作區的根，
+    // 二十個配套入口裡有 `@nexus/plugin-workspace-changes` 的，**那個功能本身不在這份清單裡**：它要工作區的根，
     // 只由 serve 經 `createCliAgent` 掛（#443），同 dsh 只在 web-app bundle 掛。
-    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(21);
+    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(20);
   });
 
   it('**違規印到 stderr 而且帶前綴**——不是靠 runner 預設的 `console.error`', async () => {

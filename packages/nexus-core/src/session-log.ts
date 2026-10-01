@@ -162,6 +162,8 @@ export type SessionEventType =
   | 'model/usage'
   | 'model/start'
   | 'model/end'
+  | 'llm/retry'
+  | 'llm/retry-started'
   | 'assistant/message'
   | 'user/message'
   | 'compaction/summary'
@@ -200,6 +202,20 @@ export type SessionEventType =
 export type TurnEndReason =
   | { readonly kind: 'aborted'; readonly cause: { readonly kind: 'user' | 'parent' } }
   | { readonly kind: 'max-tokens' };
+
+/**
+ * 一次模型請求失敗的穩定描述。照 dsh 的 `LlmFailure`（`packages/llm/llm/src/types.ts:45`）：訊息給人看，
+ * `code` 給機器路由，`status` 是供應商回的 HTTP 狀態（有才帶）。
+ *
+ * `code` 的詞彙取 dsh 預設可重試集裡那幾個（`llm/src/retry-policy.ts:18`）：`RATE_LIMIT`、`SERVER`、
+ * `TIMEOUT`、`TRANSPORT`——我們的重試只對這幾類發生。分類歸 adapter（`live-model.ts`），這裡只是形狀。
+ * #434 替 `turn/failed` 定錯誤欄位時用同一個形狀；誰先合誰定。
+ */
+export interface LlmFailure {
+  readonly message: string;
+  readonly code: string;
+  readonly status?: number;
+}
 
 /** 產生標題的那一次模型呼叫走的路由。照 dsh 的 `SessionTitleModelIdentity`。 */
 export interface SessionTitleModelIdentity {
@@ -461,6 +477,34 @@ export interface SessionEventMap {
    * 沒配到 `model/end` 的 `model/start` 只有一種成因：行程在呼叫中途死了。
    */
   'model/end': Record<string, never>;
+  /**
+   * 一次模型請求失敗、而且**排定了重試**（[#712](https://github.com/DemianLi/nexus-agent/issues/712)）。照 dsh 的
+   * `llm/retry`（`packages/llm/llm-retry/src/types.ts:9`）：排定時先寫，再開始等。**只記排定、不記完成**——
+   * 成敗看後面的 `model/end`／`turn/failed`；預算用盡的那一次不排，所以不寫。
+   *
+   * 落在一次模型呼叫的 `model/start`／`model/end` 之間（重試包在那一對之內），一次呼叫的所有重試共用一個
+   * `retryId`。**不進模型**：推模型歷史的一側不讀。
+   *
+   * 欄位比 dsh 少，理由與計數的壽命見 {@link ./llm-retry.ts}：沒有 `delayMs`（接縫看不到退避）、沒有
+   * `turn`／`step`（我們沒有 `step/*`）。
+   */
+  'llm/retry': {
+    readonly retryId: string;
+    /** 第幾次重試，從 1 起算。 */
+    readonly retry: number;
+    readonly maxRetries: number;
+    readonly failure: LlmFailure;
+  };
+  /**
+   * 排定的那次重試等完、**真的要重打**了。與同一個 `retryId` 與 `retry` 的 `llm/retry` 配對；等待中被取消的
+   * 重試沒有這一顆（{@link ./llm-retry.ts} 的「取消之後不再寫」）。`waitedMs` 是**實際**等了多久——dsh 在
+   * `llm/retry` 上帶的是排定的 `delayMs`，這裡的接縫拿不到。
+   */
+  'llm/retry-started': {
+    readonly retryId: string;
+    readonly retry: number;
+    readonly waitedMs: number;
+  };
   /**
    * 一次模型呼叫回來的那一則回覆，**模型看到的原樣**：文字、推理、`tool_calls` 都在 `message` 裡
    * （{@link ./logged-message.ts | LoggedMessage}）。推模型歷史的一側讀的就是它。

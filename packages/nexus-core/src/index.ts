@@ -146,6 +146,8 @@ export type {
 export { createRegistry } from './registry.js';
 export type { HostServices } from './host-services.js';
 export { createHostServicesPlugin } from './host-services.js';
+export type { FsService } from './fs-service.js';
+export { createFsService, FS_SERVICE } from './fs-service.js';
 export { scrubbedParentEnv, SENSITIVE_ENV_PATTERN } from './child-env.js';
 export { installProxyFromEnvironment, proxyEnvironmentForChild } from './http-proxy/index.js';
 
@@ -267,6 +269,7 @@ export {
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 export { createModelCallRecorder, MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
+export { noteFailedAttempt, noteRequestStart, runInRetryScope } from './llm-retry.js';
 export {
   createSubagentDelegationMiddleware,
   SUBAGENT_DELEGATION_CONTEXT,
@@ -361,7 +364,6 @@ export {
 } from './summarization.js';
 export type { EstimatedRequest, TokenEstimate } from './token-estimate.js';
 export {
-  defaultTokenAnchorBook,
   estimateAnchoredTokens,
   estimateRequestTokens,
   estimateTextTokens,
@@ -418,6 +420,7 @@ export {
 } from './feedback.js';
 
 export type {
+  LlmFailure,
   LogicalTurnStartEvent,
   ModelVisibleEventType,
   SessionEvent,

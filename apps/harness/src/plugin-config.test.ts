@@ -117,8 +117,8 @@ describe('出貨的 cordis.yml', () => {
     //
     // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
     // `loadPluginConfig`，所以那八列要真的經由 `apps/harness/package.json` 的 `imports`
-    // 解析、import、而且長得像一顆 plugin，才數得到 51。拿掉那個 `imports` 區塊，這裡當場紅。
-    expect(fromYaml).toHaveLength(51);
+    // 解析、import、而且長得像一顆 plugin，才數得到 50。拿掉那個 `imports` 區塊，這裡當場紅。
+    expect(fromYaml).toHaveLength(50);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -127,8 +127,8 @@ describe('出貨的 cordis.yml', () => {
     expect(ids).not.toContain(undefined);
     expect(ids).toContain('echo');
     expect(ids).toContain('core-invariant');
-    // 二十一個配套入口一個不漏，對帳的另一半在 `invariant-companions.test.ts`。
-    expect(ids.filter((id) => id?.endsWith('-invariant'))).toHaveLength(21);
+    // 二十個配套入口一個不漏，對帳的另一半在 `invariant-companions.test.ts`。
+    expect(ids.filter((id) => id?.endsWith('-invariant'))).toHaveLength(20);
   });
 
   /**

@@ -44,7 +44,7 @@ function fakeBackend(seed: Record<string, string> = {}, checkpoint = false) {
 
 async function toolOf(backend: AnyBackendProtocol): Promise<StructuredTool> {
   const { registry } = await loadPlugins([
-    createHostServicesPlugin({ backend }),
+    createHostServicesPlugin({ fs: { backend: () => backend } }),
     createSubmitRecordPlugin(),
   ]);
   const entry = registry.tools.resolve(SUBMIT_RECORD_TOOL_NAME);
@@ -183,7 +183,7 @@ describe('閘門只認 submit_record', () => {
   it('認得它 → `ask`；別人 → 走到鏈底 `allow`', async () => {
     const { backend } = fakeBackend();
     const { registry } = await loadPlugins([
-      createHostServicesPlugin({ backend }),
+      createHostServicesPlugin({ fs: { backend: () => backend } }),
       createSubmitRecordPlugin(),
     ]);
     const listeners = registry.approvals.listeners();

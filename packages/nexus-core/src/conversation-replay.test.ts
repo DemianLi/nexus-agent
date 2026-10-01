@@ -151,6 +151,29 @@ describe('每一種產訊息的事件', () => {
     });
   });
 
+  it('llm/retry 與 llm/retry-started 不進模型：夾進起訖之間推出來的串逐字相同（#712）', () => {
+    const plain = new SessionLog('replay');
+    chat(plain, '嗨', '你好');
+
+    const retried = new SessionLog('replay');
+    retried.append('turn/start', { kind: 'message', text: '嗨' });
+    retried.append('model/start', {});
+    retried.append('llm/retry', {
+      retryId: 'r1',
+      retry: 1,
+      maxRetries: 2,
+      failure: { message: '壞了', code: 'SERVER', status: 500 },
+    });
+    retried.append('llm/retry-started', { retryId: 'r1', retry: 1, waitedMs: 1200 });
+    retried.append('assistant/message', { message: reply('你好') });
+    retried.append('model/end', {});
+    retried.append('turn/end', {});
+
+    expect(shape(replayConversation(retried.events))).toEqual(
+      shape(replayConversation(plain.events)),
+    );
+  });
+
   it('只記日誌的事件不產訊息', () => {
     const log = new SessionLog('replay');
     log.append('command/run', { commandId: 'k1', name: 'plan', source: { kind: 'user' } });

@@ -17,7 +17,6 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { defaultTokenAnchorBook } from '@nexus/core';
 import { afterAll, beforeEach } from 'vitest';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 
@@ -40,9 +39,7 @@ afterAll(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-// 錨定估算的帳是行程共用的（#588）：不清的話，同一個檔裡後一條的第一次會借到前一條的第一次，量到的數隨執行順序變。
 // home 逐條換，理由見檔頭。
 beforeEach(() => {
-  defaultTokenAnchorBook.clear();
   useHome(mkdtempSync(join(root, 'test-')));
 });

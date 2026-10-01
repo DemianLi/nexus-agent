@@ -9,8 +9,8 @@
  * **這個 package 的契約實際證在哪裡**：CSV 的切與組由 `csv.test.ts` 直接驗；對欄名、
  * 未知欄名要拒絕、`filesUpdate` 那一支要回 `Command` 由 `index.test.ts` 驗；
  * 「閘門只認 `submit_record`」與端到端「核准 → 真的寫出檔案／拒絕 → 檔案不存在」在
- * `apps/harness/src/submit-record-wire.test.ts`；「注入的 backend 與折出來的是同一個」
- * 那條絆索在 `apps/harness/src/submit-record-mounts.test.ts`。
+ * `apps/harness/src/submit-record-wire.test.ts`；「寫進去的就是 `read_file` 讀得到的」
+ * 在 `apps/harness/src/submit-record-mounts.test.ts`。
  *
  * @module
  */
