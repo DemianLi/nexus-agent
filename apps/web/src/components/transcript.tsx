@@ -149,7 +149,8 @@ function Marker({ children, testId }: { children: string; testId: string }) {
   );
 }
 
-function Entry({
+/** 單則項目的畫法。背景子代理自己的對話（`subagent-control.tsx`）也用它，所以兩邊長得一樣。 */
+export function Entry({
   entry,
   feedback,
   beam,
