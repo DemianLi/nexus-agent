@@ -265,7 +265,7 @@
 # **它們內部又分兩層，分界是消費點跑的時刻**：
 #
 # - **起動期**（`thread-title`、`thread-title-llm`、`thread-search`、`browser-session`、`deliverable-files`、`tool-text`、
-#   `tool-result-stash`、`spill-policy`、`background-subagents`、`live-model`）：消費者是`serve.ts` 的冷讀清單、內容搜尋的索引、`BrowserAuth` 的建構子、`createWireHandler` 閉包裡的
+#   `tool-result-stash`、`spill-policy`、`background-subagents`、`subagent-model-selection`、`live-model`）：消費者是`serve.ts` 的冷讀清單、內容搜尋的索引、`BrowserAuth` 的建構子、`createWireHandler` 閉包裡的
 #   兩條交付路由，以及交給組裝的那顆 model——全都在**任何 agent 出生之前**就要有值，那一刻註冊表還不存在。`thread-title`
 #   另外還給寫退回標題的 pump 與 CLI（#647），吃的是同一份起動期的值；`thread-title-llm` 跟它一起在建模型的那一刻
 #   讀（#650）。所以這幾列的 `apply` 是空的，值由
@@ -409,6 +409,16 @@
   config:
     backgroundMode: continuable
     maxActiveSubagents: 8
+
+# 子代理逐次選模型（#875，卡 #709）：模型委派時可以從授權清單挑子代理跑哪一顆。**出廠關著**，同 dsh
+# （`enabled` 預設 `false`、`allowedModels` 預設空，`packages/subagent/tool-subagent/src/model-selection-settings.ts:38-39`，`477b4f4`）。
+# `allowedModels` 是 `live-model` 型錄裡的 id（我們只有一個端點，dsh 的 `{provider, model}` 路由在這裡就是型錄 id）。
+# **新會話建立時取樣一次寫進日誌**，之後只讀日誌那份：打開設定只影響以後新開的會話。只有 `serve` 讀這一列。
+- id: subagent-model-selection
+  name: '#settings/subagent-model-selection'
+  config:
+    enabled: false
+    allowedModels: []
 
 # 真實供應商的連線值與模型型錄（#545／#457／#729），只在 `--live` 時才用。**連線那幾格都是 dsh 的設定欄位**：
 # `@deepseek-ai/dsh-llm-deepseek` 的 `Config` 有 `baseURL`、`streamIdleTimeoutMs`、`retryPolicy`

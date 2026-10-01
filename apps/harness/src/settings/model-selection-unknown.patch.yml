@@ -1,0 +1,7 @@
+# 允許清單裡有型錄沒有的 id：serve 起不來（#875 的驗收）。讀它的是 `serve-model-selection-policy.test.ts`。
+- id: subagent-model-selection
+  config:
+    enabled: true
+    allowedModels:
+      - nvidia/nemotron-3-super-120b-a12b
+      - nowhere/ghost-model

@@ -48,6 +48,7 @@ import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { threadTitleConfigSchema, threadTitlePlugin } from './settings/thread-title.js';
 import type { ThreadTitleConfig } from './settings/thread-title.js';
 import { findModelEntry } from './model-catalog.js';
+import type { ModelSelectionPolicy } from './model-selection-policy.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
 import { spillPolicyPlugin } from './settings/spill-policy.js';
 import { resolveToolResultStashRoot, toolResultStashPlugin } from './settings/tool-result-stash.js';
@@ -937,6 +938,11 @@ export async function createCliAgent(
      * 可以叫醒的一輪，結果就送不回來。
      */
     readonly backgroundSubagents?: { readonly maxActive: number };
+    /**
+     * 這個會話允許子代理挑哪些模型（[#875](https://github.com/DemianLi/nexus-agent/issues/875)），原樣交給 `createNexusAgent`：
+     * 組裝點在 root 日誌還沒有政策事件時把它寫進去。**只有 serve 傳**（新會話從設定取樣、續接讀日誌那一顆）。
+     */
+    readonly modelSelectionPolicy?: ModelSelectionPolicy;
   },
   plugins: readonly PluginEntry[],
   cwd: string = process.cwd(),
@@ -1103,6 +1109,9 @@ export async function createCliAgent(
       optionalEntries: invocation.optionalEntries,
     }),
     ...(invocation.stepInbox === true && { stepInbox: true }),
+    ...(invocation.modelSelectionPolicy !== undefined && {
+      modelSelectionPolicy: invocation.modelSelectionPolicy,
+    }),
     // 沙箱控制器只在有圍堵時給：沒有 `--workspace` 就沒有沙箱參與者，快照與讀回無從做起（同上面的 sandbox-policy 條件）。
     ...(invocation.backgroundSubagents !== undefined && {
       backgroundSubagents: {

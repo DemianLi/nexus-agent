@@ -108,17 +108,17 @@ describe('出貨的 cordis.yml', () => {
     const { plugins: fromYaml, dropped, ignoredConfig } = await loadPluginConfig();
     expect(dropped).toEqual([]);
     expect(ignoredConfig).toEqual([]);
-    // 48 = 8 個功能 ＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
+    // 49 = 8 個功能 ＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
     // 外加 #529 的 `session-persistence`——它是 core 那一段裡唯一消費點在起動期的——與 #599 的
     // `session-checkpoint-policy`）
-    // ＋ **11 個 harness 自己的設定條目**（#529、#538、#545、#650、#631、#734、#719、#841）＋ 21 個配套入口。**數目寫在這裡是為了擋
+    // ＋ **12 個 harness 自己的設定條目**（#529、#538、#545、#650、#631、#734、#719、#841、#875）＋ 21 個配套入口。**數目寫在這裡是為了擋
     // 「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個空 installer
     // 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
     //
     // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
     // `loadPluginConfig`，所以那八列要真的經由 `apps/harness/package.json` 的 `imports`
-    // 解析、import、而且長得像一顆 plugin，才數得到 48。拿掉那個 `imports` 區塊，這裡當場紅。
-    expect(fromYaml).toHaveLength(48);
+    // 解析、import、而且長得像一顆 plugin，才數得到 49。拿掉那個 `imports` 區塊，這裡當場紅。
+    expect(fromYaml).toHaveLength(49);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -216,6 +216,8 @@ describe('出貨的 cordis.yml', () => {
       backgroundMode: 'continuable',
       maxActiveSubagents: 8,
     });
+    // **子代理選模型**（#875）。出廠關著、清單空，同 dsh：打開得是使用者自己寫的決定，不是出貨值替他選。
+    expect(byId.get('subagent-model-selection')).toEqual({ enabled: false, allowedModels: [] });
     // **真實供應商那五格**（#545）。出貨那一列五格全寫出來，值必須就是 schema 的預設，同上面幾列。
     expect(byId.get('live-model')).toEqual(liveModelConfigSchema.parse({}));
 
@@ -246,6 +248,7 @@ describe('出貨的 cordis.yml', () => {
       'tool-result-stash',
       'spill-policy',
       'background-subagents',
+      'subagent-model-selection',
       'live-model',
       'recursion-limit',
     ]);

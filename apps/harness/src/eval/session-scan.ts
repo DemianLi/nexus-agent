@@ -117,6 +117,7 @@ const KNOWN_EVENT_TYPES: Readonly<Record<SessionEventType, true>> = {
   'context/measure': true,
   'sandbox/mode': true,
   'plan/mode': true,
+  'subagent/model-selection-policy': true,
   'tool/call': true,
   'tool/result': true,
   'feedback/message-put': true,

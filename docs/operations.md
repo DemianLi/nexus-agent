@@ -234,6 +234,16 @@ export HTTP_PROXY=http://127.0.0.1:7890
 - **每個背景子代理有自己的會話日誌**，路徑是 `<主對話會話>/<編號>`；關閉一條 thread 時會等它進行中的背景輪收完。
 - 結算通知與子代理寫來的話**都不算使用者的直接授權**：目標（goal）判斷「這一輪背後有沒有人」時不採計它們。
 
+### 子代理選模型的政策（#709 的第一段）
+
+`subagent-model-selection` 那一列（欄位名照 dsh）決定**以後新開的會話**允許子代理挑哪些模型：`enabled`（出廠 `false`）與
+`allowedModels`（`live-model` 型錄裡的 id；我們只有一個端點，所以不像 dsh 是 `{provider, model}`）。開著卻清單空、有重複、
+或有型錄裡沒有的 id，`serve` 起不來。
+
+**政策在新會話建立時取樣一次，寫進 root 日誌的 `subagent/model-selection-policy`，之後只讀日誌那一份**：
+把設定打開只影響以後新開的會話，舊會話（沒有那顆事件）續接仍然沒有；開著時建的會話把設定關掉再續接，政策仍在。
+這一段只落政策本身，模型看得到的欄位（`subagent` 的 `model`、`list_subagent_models`）在後續的卡（#877）。
+
 ## plugin 清單
 
 零設定的 CLI 與 serve 掛哪些 plugin，由**出貨的 `apps/harness/cordis.yml`** 決定

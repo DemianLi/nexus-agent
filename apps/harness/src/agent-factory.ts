@@ -77,6 +77,7 @@ import { CompositeBackend, createDeepAgent } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { BackgroundDelegation } from './background-delegation.js';
 import type { BackgroundSubagentsOptions } from './background-delegation.js';
+import { recordedModelSelectionPolicy } from './model-selection-policy.js';
 import type {
   BackgroundAgent,
   BackgroundParentPort,
@@ -226,6 +227,12 @@ export interface CreateNexusAgentOptions {
    * 偏離登記與細節見 `background-delegation.ts`。
    */
   readonly backgroundSubagents?: BackgroundSubagentsOptions;
+  /**
+   * 這個會話允許子代理挑哪些模型（[#875](https://github.com/DemianLi/nexus-agent/issues/875)，卡 [#709](https://github.com/DemianLi/nexus-agent/issues/709)）。
+   * **省略＝關**。給了：`attachSession` 在 root 日誌還沒有 `subagent/model-selection-policy` 時把它寫進去（有了就不再寫，
+   * 所以續接不會第二次寫）。取樣在呼叫端（serve 的 `createAgent`）——這裡只負責「日誌上有一顆」。
+   */
+  readonly modelSelectionPolicy?: { readonly allowedModels: readonly string[] };
   /** checkpointer。有 plugin 宣告要核准的工具卻沒給，fold 會報錯。 */
   readonly checkpointer?: AgentCheckpointer;
   /** 長期記憶用的 store。 */
@@ -909,6 +916,16 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         );
         const runners: (() => void)[] = [];
         const unobserve = sessions.observe(({ address, log }) => {
+          // 子代理選模型的政策（#875）：只寫 root、只在日誌還沒有時寫一顆。
+          if (
+            options.modelSelectionPolicy !== undefined &&
+            address.kind === 'root' &&
+            recordedModelSelectionPolicy(log.events) === undefined
+          ) {
+            log.append('subagent/model-selection-policy', {
+              allowedModels: [...options.modelSelectionPolicy.allowedModels],
+            });
+          }
           if (installers.length > 0)
             runners.push(createSessionRunner({ address, log, installers }));
         });

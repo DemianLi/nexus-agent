@@ -169,6 +169,7 @@ export type SessionEventType =
   | 'context/measure'
   | 'sandbox/mode'
   | 'plan/mode'
+  | 'subagent/model-selection-policy'
   | 'tool/call'
   | 'tool/result'
   | 'feedback/message-put'
@@ -643,6 +644,25 @@ export interface SessionEventMap {
    * 折疊它的人**不**在 end-seed 歸零。
    */
   'plan/mode': { readonly active: boolean };
+  /**
+   * 這個會話**允許子代理逐次挑哪些模型**（[#875](https://github.com/DemianLi/nexus-agent/issues/875)，卡 [#709](https://github.com/DemianLi/nexus-agent/issues/709)）。
+   * 照 dsh 的同名事件（`packages/subagent/tool-subagent/src/model-selection-state.ts:17`，`477b4f4`）。
+   *
+   * ## 誰寫它
+   *
+   * `apps/harness` 的組裝點（`attachSession`），**只寫 root 那一份、只寫一顆**：政策是**沒有歷史的新會話**在建立時從設定取樣
+   * 一次（`serve.ts`），之後只讀日誌這一份；設定事後再改只影響新會話。日誌已經有這一顆就不再寫——這一點跟 `sandbox/mode`
+   * 每次 attach 都重寫不同。
+   *
+   * ## 它的意義
+   *
+   * **事件存在＝政策開著；沒有這一顆就是關**。所以舊會話（沒有這一顆）把設定打開再續接，仍然沒有政策；開著時建的會話
+   * 把設定關掉再續接，政策仍在。`allowedModels` 是型錄 id 的清單（我們只有一個端點，dsh 的 `{provider, model}` 路由在這裡
+   * 就是型錄 id，見 [#875](https://github.com/DemianLi/nexus-agent/issues/875) 的偏離登記）。
+   *
+   * 子代理的日誌不寫（我們的子代理不巢狀，沒有「子會話繼承父政策」這條路）。
+   */
+  'subagent/model-selection-policy': { readonly allowedModels: readonly string[] };
   /**
    * 模型要叫一次工具，**在它進任何一層之前記**——照 dsh 在核准之前就記
    * （`packages/core/agent-loop/src/tool-calls.ts:168`，`c291e79`），所以被核准閘門擋掉的

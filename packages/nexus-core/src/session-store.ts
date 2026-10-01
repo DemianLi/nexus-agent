@@ -271,8 +271,17 @@ import type { SessionEvent } from './session-log.js';
  * `source: {kind:'agent-message', senderSessionId}`。v24 的檔直接讀：那時候沒有這條路。
  *
  * 升版照新增詞彙的慣例（同 24）：授權判別對認不得的 `kind` 停住回假。
+ *
+ * ## 26：子代理選模型的政策（`subagent/model-selection-policy`）
+ *
+ * root 日誌上出現新事件種類 `subagent/model-selection-policy`（[#875](https://github.com/DemianLi/nexus-agent/issues/875)，
+ * 卡 [#709](https://github.com/DemianLi/nexus-agent/issues/709)）：沒有歷史的新會話在設定打開時寫一顆 `{allowedModels}`，
+ * 事件存在＝政策開著。v25 的檔直接讀：沒有這一顆就是關，跟那時一樣。
+ *
+ * 升版照新增詞彙的慣例：25 的讀者遇到它會當成認不得的種類略過（各 switch 都有 `default`），不會壞，只是不知道政策——
+ * 而 25 的組裝也沒有逐次選模型這個功能，所以略過是對的。
  */
-export const SESSION_LOG_FORMAT_VERSION = 25;
+export const SESSION_LOG_FORMAT_VERSION = 26;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。
