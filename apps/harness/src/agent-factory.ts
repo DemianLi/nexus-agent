@@ -43,6 +43,7 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import {
   assertInvariantSelection,
+  createFsService,
   createHostServicesPlugin,
   createInvariantRunner,
   createSessionRunner,
@@ -613,6 +614,9 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       },
       'system-prompt-variables',
     ),
+    // **工具拿 backend 的那一格**（#694）：這裡先佔位，`foldRegistry` 折完把折出來的那一個填進去，
+    // `present` 與 `submit_record` 被叫時才讀。理由見 `@nexus/core` 的 `fs-service.ts`。
+    createHostServicesPlugin({ fs: createFsService() }, 'fs'),
     ...options.plugins,
     ...(delegation === undefined ? [] : [delegation.entry()]),
   ];

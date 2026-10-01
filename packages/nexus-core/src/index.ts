@@ -146,6 +146,8 @@ export type {
 export { createRegistry } from './registry.js';
 export type { HostServices } from './host-services.js';
 export { createHostServicesPlugin } from './host-services.js';
+export type { FsService } from './fs-service.js';
+export { createFsService, FS_SERVICE } from './fs-service.js';
 export { scrubbedParentEnv, SENSITIVE_ENV_PATTERN } from './child-env.js';
 export { installProxyFromEnvironment, proxyEnvironmentForChild } from './http-proxy/index.js';
 

@@ -699,13 +699,11 @@ export async function createCliAgent(
     ...(approvals?.enabled !== undefined && { approvalsEnabled: approvals.enabled }),
     hasCheckpointer: checkpointer !== undefined,
   });
-  // **backend 也是建一次、兩個消費者共用**，理由與上面的 channel 同一條：`submit_record`
-  // 拿的是這一份，`write_file` 拿的是同一份經 `foldRegistry` 之後的那一個。這裡寫成
-  // 內聯的 `new ContainedFilesystemBackend(...)` 再給 plugin 建第二個的話，兩個工具會
-  // 寫到兩個地方——**而且兩邊都會寫成功**，一條測試都不會紅。
+  // **backend 只交給 `createNexusAgent`**：`submit_record` 與 `present` 從 `fs` 服務拿 `foldRegistry`
+  // 折出來的那一個，就是 `write_file` 實際讀寫的那個（#694）。不要再另外交一份給 plugin——
+  // 這一份是折前的，被路由的前綴上兩個工具會寫到兩個地方，**而且兩邊都會寫成功**。
   //
-  // `undefined` 是「沒給 `--workspace`」，兩個消費者都會退到基座那個 `StateBackend` 預設
-  // （plugin 那側的預設字面照抄基座，見 `@nexus/plugin-submit-record` 的模組註解）。
+  // `undefined` 是「沒給 `--workspace`」，`createNexusAgent` 墊一顆 `TextOnlyStateBackend`。
   //
   // **模式是傳一個來源進去，不是一個字面值**：fence 逐次呼叫問一次，所以 `/sandbox` 換掉
   // 控制器那一格之後，下一次檔案變更就照新那格判（理由見 `SandboxModeSource`）。
@@ -752,7 +750,6 @@ export async function createCliAgent(
       // `apply` 當下就讀，排後面它們會拿不到。載入是一趟到底的，不會回頭等。
       createHostServicesPlugin({
         channel,
-        backend,
         ...(workspaceRoot === undefined
           ? {}
           : { sandboxPolicy: { controller: sandboxMode, rootDir: workspaceRoot } }),
