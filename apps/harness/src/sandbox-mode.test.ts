@@ -184,11 +184,21 @@ describe('組裝起來之後', () => {
       // 所以餵一個 abort 過的進來會讓這條測試記下一件產品路徑上不成立的事。
       const signal = new AbortController().signal;
       const command = first.commands.find(SANDBOX_COMMAND_NAME);
-      await command?.handler({ commandId: 'c1', rawInput: ' read-only', signal, steer: noSteer });
+      await command?.handler({
+        commandId: 'c1',
+        rawInput: ' read-only',
+        signal,
+        sessionLog: first.sessionLog,
+        steer: noSteer,
+      });
 
-      const still = await second.commands
-        .find(SANDBOX_COMMAND_NAME)
-        ?.handler({ commandId: 'c2', rawInput: '', signal, steer: noSteer });
+      const still = await second.commands.find(SANDBOX_COMMAND_NAME)?.handler({
+        commandId: 'c2',
+        rawInput: '',
+        signal,
+        sessionLog: second.sessionLog,
+        steer: noSteer,
+      });
 
       expect(still?.text).toContain('目前的檔案政策：workspace-write');
     } finally {
