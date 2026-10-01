@@ -457,7 +457,7 @@ async function startServer(
   // 時候就講。同一個函式，所以「日誌不能落在 `--workspace` 底下」那條檢查兩個入口共用一份，預設值
   // （harness home 底下的 `sessions`，#444）也是同一份。
   const sessionLogDir = persistenceMounted ? resolveSessionLogDir(invocation, cwd, env) : undefined;
-  // 一段工具結果文字放上線的上限（#538）。**同樣是 server 的性質**：兩個消費點（即時的
+  // 工具結果 meta 與壓縮摘要放上線的上限（#538；結果文字自 #736 起不截）。**同樣是 server 的性質**：兩個消費點（即時的
   // `ThreadPump`、重播的 `historyPage`）都住在 `createWireHandler` 的閉包底下，一個 server 一次。
   const toolTextLimits = startupSetting(plugins, toolTextPlugin);
   // 過大工具結果的暫存（#734）：根與保留天數是 server 的性質，解一次；啟動時清一次超過保留期的會話目錄，
