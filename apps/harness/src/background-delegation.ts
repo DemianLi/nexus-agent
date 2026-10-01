@@ -261,9 +261,8 @@ export class BackgroundDelegation {
    * - 背景子代理 → 它的直接 parent（#849）：`host.sendToParent`，收件人必須是 root 的會話 id。
    * - 其他（前景一次性子代理、認不出身分）：拒絕。dsh「只有 resident continuable 的 Activation 能傳給 parent」。
    *
-   * **描述對 dsh 有一處改寫**（偏離登記）：dsh 是「working agent receives it at its next step」——
-   * 插進當下那一輪；我們的收件匣現在沒有 `next-step` 那一格給子代理，正在跑的子代理是排成**下一輪**
-   * （插話是卡 7，屆時描述換回原文）。傳給 parent 那一向沒有這個差別：主對話有 `next-step`，忙著就插進去。
+   * **描述是 dsh 的原文**（#858 之後）：跑著的子代理在下一步領走（`BackgroundSubagentHost.send` 插進它當下那一輪），閒著的開新的一輪。
+   * 傳給 parent 那一向，主對話有 `next-step`，忙著就插進去。
    */
   #sendMessageTool() {
     return tool(
@@ -289,7 +288,7 @@ export class BackgroundDelegation {
       {
         name: SEND_MESSAGE_TOOL_NAME,
         description:
-          'Send a message to an agent. A working agent receives it once its current turn ends; an idle agent starts a new turn with it. ' +
+          'Send a message to an agent. A working agent receives it at its next step; an idle agent starts a new turn with it. ' +
           "Returns delivery confirmation, not the agent's answer.",
         schema: z.object({
           agent_id: z
