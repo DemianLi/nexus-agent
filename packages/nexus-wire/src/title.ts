@@ -28,3 +28,10 @@ export interface TitlePayload {
   /** 標題，不是空字串。server 只在有標題時送，所以沒有 `null`。 */
   readonly title: string;
 }
+
+// 名字→酬載表（#685）上屬於這個檔的格子，見 `custom-frame.ts`。
+declare module './custom-frame.js' {
+  interface CustomFramePayloads {
+    [TITLE]: TitlePayload;
+  }
+}

@@ -173,3 +173,12 @@ export interface InboxPayload {
    */
   readonly claimedNextStep?: readonly WireClaimedInput[];
 }
+
+// 名字→酬載表（#685）上屬於這個檔的格子，見 `custom-frame.ts`。
+declare module './custom-frame.js' {
+  interface CustomFramePayloads {
+    [INBOX]: InboxPayload;
+    [SETTLE_NOTICE]: SettleNoticePayload;
+    [AGENT_MESSAGE]: AgentMessagePayload;
+  }
+}

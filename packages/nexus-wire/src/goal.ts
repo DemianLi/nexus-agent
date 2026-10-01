@@ -73,3 +73,10 @@ export interface GoalPayload {
   /** 目前的目標；沒有（或清掉了）是 `null`。 */
   readonly goal: WireGoal | null;
 }
+
+// 名字→酬載表（#685）上屬於這個檔的格子，見 `custom-frame.ts`。
+declare module './custom-frame.js' {
+  interface CustomFramePayloads {
+    [GOAL]: GoalPayload;
+  }
+}

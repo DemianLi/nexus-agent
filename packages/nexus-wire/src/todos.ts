@@ -36,3 +36,10 @@ export interface TodosPayload {
   /** 整份清單；一輪剛開始、還沒寫過就是 `null`。 */
   readonly todos: readonly WireTodoItem[] | null;
 }
+
+// 名字→酬載表（#685）上屬於這個檔的格子，見 `custom-frame.ts`。
+declare module './custom-frame.js' {
+  interface CustomFramePayloads {
+    [TODOS]: TodosPayload;
+  }
+}

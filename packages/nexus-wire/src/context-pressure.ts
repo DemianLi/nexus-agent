@@ -67,3 +67,11 @@ export interface WireContextPressure {
   /** 最新一次 root 呼叫摘要器量到的。沒有它就不畫。 */
   readonly measure?: WireContextMeasure;
 }
+
+// 名字→酬載表（#685）上屬於這個檔的格子，見 `custom-frame.ts`。
+declare module './custom-frame.js' {
+  interface CustomFramePayloads {
+    [MODEL_USAGE]: ModelUsagePayload;
+    [CONTEXT_MEASURE]: WireContextMeasure;
+  }
+}
