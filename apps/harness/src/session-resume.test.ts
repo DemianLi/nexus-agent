@@ -284,7 +284,52 @@ describe('尾巴', () => {
     expect(stderr).not.toContain('[不變量]');
     const after = await readLog(logPath);
     expect(after.map((event) => event.seq)).toEqual(after.map((_, index) => index));
-    expect(after[next + 2]).toMatchObject({ type: 'session/end-seed', seq: next + 2 });
+    // 當掉那一輪的收尾補在 end-seed 前面（#721）；命令沒落定那一顆不屬於這張卡，沒有補。
+    expect(after[next + 2]).toMatchObject({
+      type: 'turn/end',
+      seq: next + 2,
+      data: { reason: { kind: 'interrupted' } },
+    });
+    expect(after[next + 3]).toMatchObject({ type: 'session/end-seed', seq: next + 3 });
+  });
+
+  /**
+   * 當掉那一輪的收尾寫回檔上（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）：一次工具呼叫記了
+   * `tool/call`、沒有結果，續接之後檔上依序是原有事件、補的 `tool/result`、`turn/end {interrupted}`、
+   * `session/end-seed`；不變量不報；再接一次不重補。拿掉寫回那一步，這一條會紅。
+   */
+  it('當在工具呼叫中：補結與 turn/end interrupted 寫在 end-seed 前面，再接一次不重補', async () => {
+    const runDir = await firstRun();
+    const logPath = join(runDir, 'cli.jsonl');
+    const before = await readLog(logPath);
+    const next = before.length;
+    const tail = [
+      { type: 'turn/start', data: { kind: 'message', text: '寫個檔' } },
+      { type: 'tool/call', data: { callId: 'dead-1', name: 'write_file', arguments: '{}' } },
+    ].map((event, index) => ({ ...event, seq: next + index, time: 1 }));
+    await appendFile(logPath, `${tail.map((event) => JSON.stringify(event)).join('\n')}\n`);
+
+    const { stderr } = await cli(['--workspace', workspace, '--resume', runDir]);
+    expect(stderr).not.toContain('[不變量]');
+    const once = await readLog(logPath);
+    expect(once.map((event) => event.seq)).toEqual(once.map((_, index) => index));
+    expect(once.slice(next + 2, next + 5).map((event) => event.type)).toEqual([
+      'tool/result',
+      'turn/end',
+      'session/end-seed',
+    ]);
+    expect(once[next + 2]).toMatchObject({
+      data: { callId: 'dead-1', isError: true, error: { code: 'TOOL_OUTCOME_UNKNOWN' } },
+    });
+    expect(once[next + 3]).toMatchObject({ data: { reason: { kind: 'interrupted' } } });
+
+    await cli(['--workspace', workspace, '--resume', runDir]);
+    const twice = await readLog(logPath);
+    expect(
+      twice.filter(
+        (event) => event.type === 'turn/end' && event.data.reason?.kind === 'interrupted',
+      ),
+    ).toHaveLength(1);
   });
 });
 
