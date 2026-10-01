@@ -153,6 +153,7 @@ const RELEASES_FEEDBACK_ONLY_CAPTURE = {
   'context/measure': false,
   'sandbox/mode': false,
   'plan/mode': false,
+  'subagent/model-selection-policy': false,
   'tool/call': false,
   'tool/result': false,
   'feedback/message-put': true,

@@ -92,6 +92,8 @@ import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { backgroundSubagentsPlugin } from './settings/background-subagents.js';
+import { subagentModelSelectionPlugin } from './settings/subagent-model-selection.js';
+import { assertAllowedModelsInCatalog, modelSelectionPolicyFor } from './model-selection-policy.js';
 import { spillPolicyPlugin } from './settings/spill-policy.js';
 import { resolveToolResultStashRoot, toolResultStashPlugin } from './settings/tool-result-stash.js';
 import { toolTextPlugin } from './settings/tool-text.js';
@@ -468,6 +470,10 @@ async function startServer(
   // 一顆），但設定是 server 的性質：解在這裡，設定寫壞的話在 server 起來之前就失敗，而不是等到
   // 第一條 thread；啟動時印的模型名也從這一份來。
   const liveModel = startupSetting(plugins, liveModelPlugin);
+  // 子代理逐次選模型（#875）：server 的性質，解一次、對著型錄驗一次（起不來就在 server 起來之前）。
+  // 每個新會話在 `createAgent` 裡各自取樣，續接的會話讀日誌那一份。
+  const modelSelection = startupSetting(plugins, subagentModelSelectionPlugin);
+  assertAllowedModelsInCatalog(modelSelection, liveModel.models);
   // LLM 標題那一列（#650），理由同上：標題模型一條 thread 一顆，設定是 server 的性質。沒帶 `--live` 也解——
   // 寫壞的設定不因為這一次用不到就放過，同 `live-model` 那一列。
   const threadTitleLlm = startupSetting(plugins, threadTitleLlmPlugin);
@@ -655,6 +661,11 @@ async function startServer(
         }
         const effective =
           resumedSandbox === undefined ? invocation : { ...invocation, sandbox: resumedSandbox };
+        // 子代理選模型的政策（#875）：沒有歷史的新會話從設定取樣一次，有歷史的只讀日誌那一份。
+        const modelSelectionPolicy = modelSelectionPolicyFor({
+          resumedEvents: resumed?.events,
+          setting: modelSelection,
+        });
         // 每一輪改了哪些檔（#443）：只有 serve 開，見 `createCliAgent` 那一格。
         built = await createCliAgent(
           {
@@ -662,6 +673,7 @@ async function startServer(
             workspaceChanges: true,
             // 插話（#710）：只有 serve 有，見 `createCliAgent` 那一格。
             stepInbox: true,
+            ...(modelSelectionPolicy !== undefined && { modelSelectionPolicy }),
             // 背景續行（#841）：只有 serve 有可以叫醒的一輪，見 `createCliAgent` 那一格。
             ...(backgroundSubagents.backgroundMode === 'continuable' && {
               backgroundSubagents: { maxActive: backgroundSubagents.maxActiveSubagents },
