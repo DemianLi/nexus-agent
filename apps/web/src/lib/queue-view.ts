@@ -1,4 +1,5 @@
-import type { ConversationStatus, WireQueuedInput } from '@nexus/wire';
+import { isSettleReason } from '@nexus/wire';
+import type { ConversationStatus, WireQueuedInput, WireSettleReason } from '@nexus/wire';
 
 /**
  * 送出佇列在畫面上的幾個判斷（[#645](https://github.com/DemianLi/nexus-agent/issues/645)）。資料是 harness 的投影
@@ -23,10 +24,28 @@ export const QUEUE_PARKED_TEXT = '停止後這些不會自己跑，送出下一�
 export const QUEUE_GONE_TEXT = '這一則可能已經開始跑了';
 
 /**
- * 背景子代理結算通知在畫面上的那一句（#851）。伺服器排進來的文字是給模型的英文，不是人說的話，畫面不照抄：只說
- * 「有這件事」，細節（哪個子代理、怎麼結束）wire 沒帶，留在日誌。
+ * 背景子代理結算通知在畫面上的那一句（#851、#884）。伺服器排進來的文字是給模型的英文，不是人說的話，畫面不照抄、
+ * 也不去解析它：配字靠線上帶的結算原因（`reason`），哪個子代理留在日誌。四種原因各一句，措辭跟同一件事在別處的說法
+ * 一致：被停止同「（已停止）」、超出上限同 `max-tokens-view.ts` 的「已達輸出上限」。
+ * 鍵用 `satisfies Record<WireSettleReason, …>`：wire 多一種原因，這裡編不過。
  */
-export const SETTLED_NOTICE_TEXT = '背景子代理已完成';
+export const SETTLED_NOTICE_TEXT = {
+  completed: '背景子代理已完成',
+  aborted: '背景子代理已被停止',
+  'max-tokens': '背景子代理已達輸出上限，沒寫完',
+  error: '背景子代理失敗了',
+} as const satisfies Record<WireSettleReason, string>;
+
+/**
+ * 沒有原因時那一句（格式 26 以前的舊日誌，或讀到不認得的值）：只說「結束了」，**不假裝成「已完成」**——舊日誌裡被停止、
+ * 失敗的結算也長這樣，說不出是哪一種。
+ */
+export const SETTLED_NOTICE_UNKNOWN_TEXT = '背景子代理已結束';
+
+/** 結算通知那一句：認得的原因照原因講，沒有或不認得就是中性的那一句。 */
+export function settledNoticeText(reason: unknown): string {
+  return isSettleReason(reason) ? SETTLED_NOTICE_TEXT[reason] : SETTLED_NOTICE_UNKNOWN_TEXT;
+}
 
 /**
  * 背景子代理寄來的話在佇列裡那一句（#861）。排進來的文字是給模型的（帶英文前綴），佇列裡也沒有寄件人，所以不照抄：
@@ -56,7 +75,7 @@ export function isQueuedByAgent(item: Pick<WireQueuedInput, 'source'>): boolean 
 
 /** 不是人排的那一件在佇列列上寫什麼；人排的沒有。 */
 export function queuedAgentText(item: Pick<WireQueuedInput, 'source'>): string | undefined {
-  if (isSettledNotice(item)) return SETTLED_NOTICE_TEXT;
+  if (item.source.kind === 'subagent-settled') return settledNoticeText(item.source.reason);
   if (isAgentMessage(item)) return AGENT_MESSAGE_QUEUED_TEXT;
   return undefined;
 }

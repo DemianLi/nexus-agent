@@ -16,6 +16,7 @@ import {
   QUEUE_SETTLE_MS,
   AGENT_MESSAGE_QUEUED_TEXT,
   SETTLED_NOTICE_TEXT,
+  SETTLED_NOTICE_UNKNOWN_TEXT,
 } from '@/lib/queue-view';
 import { axeViolations } from '@/test/axe';
 
@@ -424,9 +425,24 @@ describe('背景子代理的結算通知（#851）', () => {
     mount([notice]);
     settle();
     const dock = screen.getByTestId('queue-dock');
-    expect(within(dock).getByText(SETTLED_NOTICE_TEXT)).toBeTruthy();
+    // 沒有原因（舊日誌）：中性的一句，不是「已完成」
+    expect(within(dock).getByText(SETTLED_NOTICE_UNKNOWN_TEXT)).toBeTruthy();
+    expect(within(dock).queryByText(SETTLED_NOTICE_TEXT.completed)).toBeNull();
     expect(dock.textContent).not.toContain('Background subagent');
     expect(within(dock).queryAllByRole('button')).toEqual([]);
+  });
+
+  it.each([
+    ['completed', '背景子代理已完成'],
+    ['aborted', '背景子代理已被停止'],
+    ['max-tokens', '背景子代理已達輸出上限，沒寫完'],
+    ['error', '背景子代理失敗了'],
+  ] as const)('帶原因 %s 時依原因畫那一句（#884）', (reason, text) => {
+    mount([{ ...notice, source: { kind: 'subagent-settled', reason } }]);
+    settle();
+    const dock = screen.getByTestId('queue-dock');
+    expect(within(dock).getByText(text)).toBeTruthy();
+    expect(dock.textContent).not.toContain('Background subagent');
   });
 
   it('跟人排的並排時：人的那一列照舊有鈕，通知那一列沒有，件數兩件都算', () => {

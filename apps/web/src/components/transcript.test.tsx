@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { Transcript } from '@/components/transcript';
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
-import { SETTLED_NOTICE_TEXT } from '@/lib/queue-view';
+import { SETTLED_NOTICE_TEXT, SETTLED_NOTICE_UNKNOWN_TEXT } from '@/lib/queue-view';
 
 /**
  * 推理列與正文空的回覆（[#527](https://github.com/DemianLi/nexus-agent/issues/527)、#565）。只想、只呼叫工具的
@@ -291,20 +291,20 @@ describe('背景子代理結算通知（#851）', () => {
       inbox({ items: [], nextStep: [settled] }),
     ]);
     render(<Transcript state={state} isFresh={() => false} />);
-    expect(screen.getByText(`${SETTLED_NOTICE_TEXT}・下一步送進模型`)).toBeTruthy();
+    expect(screen.getByText(`${SETTLED_NOTICE_UNKNOWN_TEXT}・下一步送進模型`)).toBeTruthy();
     expect(document.querySelector('[data-pending-settled]')).not.toBeNull();
     expect(document.querySelector('[data-pending-steer]')).toBeNull();
     expect(screen.queryByText(/Background subagent/)).toBeNull();
   });
 
-  it('被領走之後折疊器長出 notice：同一格換成「已完成」，不留人的泡泡，也不畫英文', () => {
+  it('被領走之後折疊器長出 notice：同一格換成通知那一句，不留人的泡泡，也不畫英文', () => {
     const pending = reduceAll(emptyConversation(), [
       running(),
       inbox({ items: [], nextStep: [settled] }),
     ]);
     const { rerender } = render(<Transcript state={pending} isFresh={() => false} />);
     const slot = screen
-      .getByText(`${SETTLED_NOTICE_TEXT}・下一步送進模型`)
+      .getByText(`${SETTLED_NOTICE_UNKNOWN_TEXT}・下一步送進模型`)
       .closest('[data-slot="message-scroller-item"]');
     expect(slot).not.toBeNull();
 
@@ -318,7 +318,7 @@ describe('背景子代理結算通知（#851）', () => {
     expect(claimed.entries).toContainEqual(expect.objectContaining({ kind: 'notice' }));
     rerender(<Transcript state={claimed} isFresh={() => false} />);
 
-    const notice = screen.getByText(SETTLED_NOTICE_TEXT);
+    const notice = screen.getByText(SETTLED_NOTICE_UNKNOWN_TEXT);
     expect(notice.closest('[data-settled-notice]')).not.toBeNull();
     expect(document.querySelector('[data-pending-settled]')).toBeNull();
     expect(notice.closest('[data-slot="message-scroller-item"]')).toBe(slot);
@@ -332,7 +332,50 @@ describe('背景子代理結算通知（#851）', () => {
       entries: [{ kind: 'notice', id: 'history-7', source: 'subagent-settled' }],
     } as ReturnType<typeof emptyConversation>;
     render(<Transcript state={state} isFresh={() => false} />);
-    expect(screen.getByText(SETTLED_NOTICE_TEXT).closest('[data-settled-notice]')).not.toBeNull();
+    expect(
+      screen.getByText(SETTLED_NOTICE_UNKNOWN_TEXT).closest('[data-settled-notice]'),
+    ).not.toBeNull();
+    expect(screen.queryByText(SETTLED_NOTICE_TEXT.completed)).toBeNull();
+  });
+
+  it.each([
+    ['completed', '背景子代理已完成'],
+    ['aborted', '背景子代理已被停止'],
+    ['max-tokens', '背景子代理已達輸出上限，沒寫完'],
+    ['error', '背景子代理失敗了'],
+  ] as const)('歷史重播帶原因 %s 的 notice：畫成那一句（#884）', (reason, text) => {
+    const state = {
+      ...emptyConversation(),
+      entries: [{ kind: 'notice', id: 'history-7', source: 'subagent-settled', reason }],
+    } as ReturnType<typeof emptyConversation>;
+    render(<Transcript state={state} isFresh={() => false} />);
+    expect(screen.getByText(text).closest('[data-settled-notice]')).not.toBeNull();
+  });
+
+  it('即時：排著時說「被停止」，領走後同一格換成同一句，原因沒有在換格時丟掉（#884）', () => {
+    const stopped = { ...settled, source: { kind: 'subagent-settled', reason: 'aborted' } };
+    const pending = reduceAll(emptyConversation(), [
+      running(),
+      inbox({ items: [], nextStep: [stopped] }),
+    ]);
+    const { rerender } = render(<Transcript state={pending} isFresh={() => false} />);
+    const slot = screen
+      .getByText('背景子代理已被停止・下一步送進模型')
+      .closest('[data-slot="message-scroller-item"]');
+    expect(slot).not.toBeNull();
+
+    const claimed = reduceAll(pending, [
+      inbox({
+        items: [],
+        nextStep: [],
+        claimedNextStep: [{ id: 'n', text: stopped.text, source: stopped.source }],
+      }),
+    ]);
+    rerender(<Transcript state={claimed} isFresh={() => false} />);
+    const notice = screen.getByText('背景子代理已被停止');
+    expect(notice.closest('[data-settled-notice]')).not.toBeNull();
+    expect(notice.closest('[data-slot="message-scroller-item"]')).toBe(slot);
+    expect(screen.queryByText(SETTLED_NOTICE_TEXT.completed)).toBeNull();
   });
 });
 
