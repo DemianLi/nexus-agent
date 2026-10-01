@@ -11,7 +11,11 @@ import { createHostServicesPlugin, loadPlugins, runApprovalGate } from '@nexus/c
 import type { AnyBackendProtocol, FileData, WriteResult } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 
-import { createSubmitRecordPlugin, SUBMIT_RECORD_TOOL_NAME } from './index.js';
+import {
+  createSubmitRecordPlugin,
+  SUBMIT_RECORD_NO_BACKEND_MESSAGE,
+  SUBMIT_RECORD_TOOL_NAME,
+} from './index.js';
 
 /**
  * 一個記在物件裡的假 backend。
@@ -151,6 +155,33 @@ describe('拒絕的那幾條', () => {
       }),
     );
     expect(text).toContain('沒有權限');
+  });
+});
+
+/**
+ * **拿不到 backend 就響亮地拒絕，不退回自建的 `StateBackend`**（[#687](https://github.com/DemianLi/nexus-agent/issues/687)）。
+ *
+ * 以前的退路寫進 state 也照樣回「已經寫進」，而那時 `write_file` 可能正寫在磁碟上——兩邊都成功、一條測試都不紅。
+ * 載體在工具被叫時才讀，所以拒絕的時刻是那一次呼叫，載入照樣成功。
+ */
+describe('拿不到 backend', () => {
+  it.each([
+    ['沒有人提供 `fs` 服務', [] as const],
+    [
+      '`fs` 服務在、裡面沒有 backend',
+      [createHostServicesPlugin({ fs: { backend: () => undefined } })],
+    ],
+  ])('%s：那一次呼叫拒絕，訊息指名 submit-record 與 backend', async (_label, hosts) => {
+    const { registry } = await loadPlugins([...hosts, createSubmitRecordPlugin()]);
+    const entry = registry.tools.resolve(SUBMIT_RECORD_TOOL_NAME);
+    if (entry === undefined) throw new Error('工具沒有註冊上去');
+    const result = await call(entry.value, { file_path: '/v.csv', record: { 姓名: '阿明' } });
+    // 回的是一則錯誤訊息，不是 `Command`：沒有任何 state update 帶著這一列出去。
+    expect((result as { update?: unknown }).update).toBeUndefined();
+    const text = errorTextOf(result);
+    expect(text).toBe(`Error: ${SUBMIT_RECORD_NO_BACKEND_MESSAGE}`);
+    expect(text).toContain('submit-record');
+    expect(text).toContain('backend');
   });
 });
 

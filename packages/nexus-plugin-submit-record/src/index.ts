@@ -28,9 +28,12 @@
  *   （`apps/harness/src/agent-factory.ts` 的 `/conversation_history/`、`/large_tool_results/`）與 plugin
  *   `registry.backend.mount()` 掛的路由都在裡面。以前收的是組裝點交給 host-services 的**折前**那一個，
  *   被路由的兩個前綴上兩邊各寫各的。量它的是 `apps/harness/src/submit-record-mounts.test.ts`。
- * - **拿不到時的預設，字面照抄基座**：`(runtime) => new StateBackend(runtime)`，與
- *   `createFilesystemMiddleware` 的預設**逐字相同**（`deepagents@1.13.1`）。產品組裝一律提供 `fs`、
- *   而且一律有 backend，所以這條只剩手搭的組裝走得到。
+ * - **拿不到就響亮地拒絕，不退回自己建的預設**（[#687](https://github.com/DemianLi/nexus-agent/issues/687)）。
+ *   照 dsh 的寫檔工具：`tool-str-replace-editor` 硬注入 `fs`（`inject = ['tools', 'fs']`，
+ *   `packages/fs/tool-str-replace-editor/src/index.ts:503`，SHA `477b4f4`），缺件時不會悄悄換一個。
+ *   以前退到一顆自建的 `StateBackend`：帶 `--workspace` 卻沒接上時，`write_file` 寫進磁碟、`submit_record`
+ *   寫進 state，而且照樣回「已經寫進」。拒絕的時刻是**那一次呼叫**，不是載入：載體在工具被叫時才讀，
+ *   排錯序對它不存在，剩下的只有「需要卻缺」。訊息見 {@link SUBMIT_RECORD_NO_BACKEND_MESSAGE}。
  *
  * ## 對欄名，不對欄序
  *
@@ -66,8 +69,8 @@ import { tool } from '@langchain/core/tools';
 import { Command } from '@langchain/langgraph';
 import type { NexusPlugin, PluginEntry } from '@nexus/core';
 import { FS_SERVICE, toolRefusal } from '@nexus/core';
-import { StateBackend, resolveBackend } from 'deepagents';
-import type { AnyBackendProtocol, BackendFactory, BackendProtocolV2 } from 'deepagents';
+import { resolveBackend } from 'deepagents';
+import type { AnyBackendProtocol, BackendProtocolV2 } from 'deepagents';
 import { z } from 'zod';
 
 import { formatCsvRow, parseCsvLine } from './csv.js';
@@ -162,6 +165,14 @@ function appendRow(
 }
 
 /**
+ * 拿不到 backend 時模型看到的那一句（前面由 `toolRefusal` 加 `Error: `）。帶 plugin 名與 `backend`，
+ * 同 dsh `tool-bash: the mounted bash executor confines but ctx.sandboxPolicy is missing` 的寫法：
+ * 讀的人一眼看得出是誰、缺什麼。
+ */
+export const SUBMIT_RECORD_NO_BACKEND_MESSAGE =
+  'submit-record: 這次組裝沒有 backend（沒有人提供 `fs` 服務，或裡面沒有值），所以沒有寫。';
+
+/**
  * @param folded - 被叫時讀折出來的那一個 backend；拿不到時回 `undefined`。見模組註解。
  */
 function createSubmitRecordTool(folded: () => AnyBackendProtocol | undefined) {
@@ -175,10 +186,10 @@ function createSubmitRecordTool(folded: () => AnyBackendProtocol | undefined) {
       const failed = (message: string): ToolMessage =>
         toolRefusal(message, { callId, name: SUBMIT_RECORD_TOOL_NAME });
 
-      // **字面照抄 `createFilesystemMiddleware` 的預設**，見模組註解。
-      const resolved: AnyBackendProtocol | BackendFactory =
-        folded() ?? ((runtime) => new StateBackend(runtime));
-      const fs = await resolveBackend(resolved, runtime as never);
+      // **拿不到就拒絕，不退回預設**，見模組註解。
+      const backend = folded();
+      if (backend === undefined) return failed(SUBMIT_RECORD_NO_BACKEND_MESSAGE);
+      const fs = await resolveBackend(backend, runtime as never);
       const current = await readWhole(fs, args.file_path);
       if (current.binary === true) {
         return failed(`"${args.file_path}" 讀出來不是文字——這個工具只寫得了 CSV，所以沒有寫。`);
@@ -246,7 +257,7 @@ function createSubmitRecordTool(folded: () => AnyBackendProtocol | undefined) {
  * 從設定檔 import。它沒有任何資料設定——唯一要的東西是 backend，走 `@nexus/core` 的 `fs` 服務，
  * **在工具被叫時才讀**（#694），所以清單裡排在提供者前面或後面都一樣。
  *
- * **軟相依，不是硬的**（`services.get` 不是 `services.use`）：沒人提供時退到基座那個預設。
+ * 讀服務用 `services.get`：缺件時由工具自己在那一次呼叫拒絕（見模組註解），不在載入時拋。
  */
 export const submitRecordPlugin: NexusPlugin = {
   name: 'submit-record',
