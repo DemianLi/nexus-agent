@@ -790,6 +790,8 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           // 背景子代理寫來的話（#849）：同一條路，來源是 `agent-message`（agent 寫的，不是人說的）。
           onMessage: (message) =>
             pump.receiveAgentMessage({ text: message.text, senderSessionId: message.sessionId }),
+          // 現況變了（#867）：整份送下行，新接上的下行補送最後一份。
+          onStatus: (items) => pump.notifySubagentStatus(items),
         });
         // **接在最後，理由同 `cli.ts`**：前三個是觀察者，落盤不改變任何人看得到什麼，
         // 所以順序在功能上沒有差別；排最後是為了讓讀的人看到的因果跟實際一致。

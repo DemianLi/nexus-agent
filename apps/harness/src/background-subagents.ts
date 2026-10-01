@@ -143,6 +143,14 @@ export interface BackgroundParentPort {
   readonly onSettled?: (settlement: BackgroundSettlement) => void;
   /** 背景子代理寫來一則話（#849）。 */
   readonly onMessage?: (message: BackgroundAgentMessage) => void;
+  /** 背景子代理的現況變了（#867）：整份，不是差量。 */
+  readonly onStatus?: (items: readonly BackgroundSubagentStatus[]) => void;
+}
+
+/** 一個背景子代理此刻的狀態（#867），見 {@link BackgroundSubagentHost.statuses}。 */
+export interface BackgroundSubagentStatus {
+  readonly runId: string;
+  readonly status: 'running' | 'idle';
 }
 
 /**
@@ -224,6 +232,12 @@ export interface BackgroundSubagentHostOptions {
    * 找不到活著的 parent 就拒絕，不收下做不到的事）。同步呼叫；它拋錯就是這一則沒送到，原樣往上拋給呼叫的工具。
    */
   readonly onMessage?: (message: BackgroundAgentMessage) => void;
+  /**
+   * 現況變了的出口（[#867](https://github.com/DemianLi/nexus-agent/issues/867)）：**整份**（每個認得的編號各一項），
+   * 接上的當下先叫一次（可以是空的），之後內容真的變了才叫（連續兩次相同不重送）。從輪次的邊界叫，不是從呼叫端的環境，所以同 `onSettled` 綁在建構那一刻的環境。
+   * 它拋錯只講一聲（`warn`），不影響輪次。
+   */
+  readonly onStatus?: (items: readonly BackgroundSubagentStatus[]) => void;
 }
 
 /** {@link BackgroundSubagentError} 的分類：wire 層照它回不同的錯誤碼，不靠比對訊息。 */
@@ -314,6 +328,9 @@ export class BackgroundSubagentHost {
   readonly #warn: ((message: string) => void) | undefined;
   readonly #onSettled: BackgroundSubagentHostOptions['onSettled'];
   readonly #onMessage: BackgroundSubagentHostOptions['onMessage'];
+  readonly #onStatus: BackgroundSubagentHostOptions['onStatus'];
+  /** 上一次送出去的現況（序列化），沒變就不重送。起頭是 `undefined`：建構完那一刻一定送一份（可以是空的）。 */
+  #lastStatus: string | undefined;
   readonly #maxActive: number;
   readonly #graphs = new Map<string, BackgroundAgent>();
   /** 已知的背景子代理：編號 → 子代理名。同一個編號不能換名字。 */
@@ -344,6 +361,8 @@ export class BackgroundSubagentHost {
       options.onSettled === undefined ? undefined : AsyncResource.bind(options.onSettled);
     this.#onMessage =
       options.onMessage === undefined ? undefined : AsyncResource.bind(options.onMessage);
+    this.#onStatus =
+      options.onStatus === undefined ? undefined : AsyncResource.bind(options.onStatus);
     const maxActive = options.maxActive ?? DEFAULT_MAX_ACTIVE_BACKGROUND_SUBAGENTS;
     if (!Number.isInteger(maxActive) || maxActive < 1) {
       throw new Error(`背景子代理的並存上限要是 ≥ 1 的整數，收到 ${String(maxActive)}`);
@@ -351,6 +370,8 @@ export class BackgroundSubagentHost {
     this.#maxActive = maxActive;
     // 迴圈在**這裡**起：它的環境就是建構這一刻的環境。
     this.#loop = this.#run();
+    // 接上的當下就送一份現況，**即使是空的**：沒收過＝不知道，收過而沒有這個編號＝收線，web 靠這個分開兩者（#867）。
+    this.#publishStatus();
   }
 
   /**
@@ -393,6 +414,7 @@ export class BackgroundSubagentHost {
   #enqueue(job: Omit<Job, 'settle' | 'outcome'>): Promise<BackgroundRoundOutcome> {
     const queued = this.#newJob(job);
     this.#queue.push(queued);
+    this.#publishStatus();
     this.#wake?.();
     return queued.outcome;
   }
@@ -565,7 +587,44 @@ export class BackgroundSubagentHost {
     if (round.controller.signal.aborted) return true;
     this.#paused.add(runId);
     round.controller.abort();
+    this.#publishStatus();
     return true;
+  }
+
+  /**
+   * 每個認得的背景子代理此刻的狀態，依派出的先後（[#867](https://github.com/DemianLi/nexus-agent/issues/867)）。
+   *
+   * `running`＝有一輪正在跑，或排著一輪**且沒被中斷暫停**；其餘是 `idle`。跟 {@link list} 的 `running` 不同：後者照 dsh
+   * 只看有沒有輪次，被中斷後暫停的排著的輪次也算；這裡是給「停止這一輪」鈕與輸入框用的，暫停的不算在跑。
+   */
+  statuses(): readonly BackgroundSubagentStatus[] {
+    return [...this.#known.keys()].map((runId) => ({
+      runId,
+      status:
+        this.#busy.has(runId) ||
+        (!this.#paused.has(runId) && this.#queue.some((job) => job.runId === runId))
+          ? 'running'
+          : 'idle',
+    }));
+  }
+
+  #publishStatus(): void {
+    if (this.#onStatus === undefined) return;
+    const items = this.statuses();
+    const key = JSON.stringify(items);
+    if (key === this.#lastStatus) return;
+    this.#lastStatus = key;
+    try {
+      this.#onStatus(items);
+    } catch (error) {
+      try {
+        this.#warn?.(
+          `[背景子代理] 現況沒送到主對話：${error instanceof Error ? error.message : String(error)}`,
+        );
+      } catch {
+        // 講不出來也不影響輪次。
+      }
+    }
   }
 
   /**
@@ -623,6 +682,7 @@ export class BackgroundSubagentHost {
       this.#paused.add(runId);
       round.controller.abort();
     }
+    this.#publishStatus();
     this.#wake?.();
     await this.#loop;
   }
@@ -644,12 +704,14 @@ export class BackgroundSubagentHost {
       if (job !== undefined) {
         // 從**迴圈**的環境拉起，不是從呼叫 `submit` 的環境。
         this.#busy.add(job.runId);
+        this.#publishStatus();
         // **先讓出位子、再交下場**：呼叫端等到 `outcome` 的時候，這個子代理已經不算存活（並存上限、
         // 之後的結算通知都靠這個順序）。
         const round: Promise<void> = this.#round(job).then(({ outcome, settlement, leftover }) => {
           this.#busy.delete(job.runId);
           this.#inflight.delete(round);
           this.#requeueSteers(job, leftover);
+          this.#publishStatus();
           this.#wake?.();
           // 結算＝這個子代理沒有輪次排著了（被中斷而暫停的排著就不算）。**在交下場之前通知**，同 dsh 在所有權釋放之前。
           if (!this.#queue.some((queued) => queued.runId === job.runId))

@@ -165,6 +165,8 @@ export type {
 } from './inbox.js';
 export { AGENT_MESSAGE, INBOX, SETTLE_NOTICE } from './inbox.js';
 export type { TitlePayload } from './title.js';
+export { SUBAGENT_STATUS } from './subagent-status.js';
+export type { SubagentRunStatus, SubagentStatusPayload } from './subagent-status.js';
 export { TITLE } from './title.js';
 export { TODOS } from './todos.js';
 export type { WireSessionStats, WireTokenUsage } from './session-totals.js';
