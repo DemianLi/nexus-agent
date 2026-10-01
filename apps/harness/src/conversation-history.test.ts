@@ -7,7 +7,12 @@
 
 import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { GoalId, SessionEvent } from '@nexus/core';
-import { SessionLog, TOOL_ABORTED, toLoggedMessage } from '@nexus/core';
+import {
+  SessionLog,
+  TOOL_ABORTED,
+  TOOL_ABORTED_BEFORE_DISPATCH,
+  toLoggedMessage,
+} from '@nexus/core';
 import type { ConversationEntry, ConversationState, ThreadHistoryQuery } from '@nexus/wire';
 import {
   HISTORY_PAGE_MAX_BYTES,
@@ -195,6 +200,10 @@ describe('日誌 → 畫面', () => {
     );
 
     expect(state.entries.map(line)).toEqual(['human:跑', 'tool:echo:failed:FS_SANDBOX_DENIED']);
+    // 碼另外有自己那一格（#667），跟紅字的退路無關。
+    expect(state.entries.find((entry) => entry.kind === 'tool')).toMatchObject({
+      errorCode: 'FS_SANDBOX_DENIED',
+    });
   });
 
   it('舊格式的失敗結果沒有內容：紅字是錯誤碼', () => {
@@ -211,6 +220,63 @@ describe('日誌 → 畫面', () => {
     );
 
     expect(state.entries.map(line)).toEqual(['human:跑', `tool:echo:failed:${TOOL_ABORTED}`]);
+  });
+
+  /**
+   * **碼有自己那一格**（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）：格式 7、8 的收回結果只有碼、
+   * 沒有 `message`。紅字的退路照舊是碼（上面兩條），判斷改讀 `tool-finished` 上的 `code`——同一個值，web 比它
+   * 判「停在提問時被停止」，不比紅字的結尾。
+   */
+  it('舊格式只有碼的收回結果：`tool-finished` 帶碼，紅字仍是碼', () => {
+    const events = log(
+      human('跑'),
+      call('c1'),
+      {
+        type: 'tool/result',
+        data: {
+          callId: 'c1',
+          isError: true,
+          error: { name: 'AbortError', code: TOOL_ABORTED_BEFORE_DISPATCH },
+        },
+      },
+      turnEnd,
+    );
+    const finished = historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES).find(
+      (frame) =>
+        frame.method === 'tools' &&
+        (frame.params.data as { event?: unknown }).event === 'tool-finished',
+    );
+    expect(finished?.params.data).toMatchObject({
+      failed: true,
+      message: 'ABORTED_BEFORE_DISPATCH',
+      code: 'ABORTED_BEFORE_DISPATCH',
+    });
+    const tool = screen(events).entries.find((entry) => entry.kind === 'tool');
+    expect(tool).toMatchObject({ errorCode: 'ABORTED_BEFORE_DISPATCH' });
+  });
+
+  it('成功的結果不帶碼；失敗而日誌沒寫碼的也不帶', () => {
+    const frames = historyFrames(
+      log(
+        human('跑'),
+        reply('', ['c1', 'c2']),
+        call('c1'),
+        result('c1', '好了'),
+        call('c2'),
+        result('c2', '壞了', true),
+        turnEnd,
+      ),
+      DEFAULT_TOOL_TEXT_MAX_BYTES,
+    );
+    const finished = frames
+      .filter(
+        (frame) =>
+          frame.method === 'tools' &&
+          (frame.params.data as { event?: unknown }).event === 'tool-finished',
+      )
+      .map((frame) => frame.params.data as Record<string, unknown>);
+    expect(finished).toHaveLength(2);
+    expect(finished.map((data) => 'code' in data)).toEqual([false, false]);
   });
 
   it('講到一半被停止：那則標成已停止，沒結果的卡收成失敗', () => {

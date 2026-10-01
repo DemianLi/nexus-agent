@@ -317,8 +317,11 @@ describe('送達的先後：判定比基座那顆 `tool-started` 先到', () => 
     return { type: 'event' as const, seq: 0, method, params: { namespace, timestamp: 0, data } };
   }
 
-  /** 假的 agent：先往 root 那份日誌寫一對 `tool/call`／`tool/result`，基座的 frame 要不要跟、何時跟由參數排。 */
-  async function play(base: 'none' | 'late') {
+  /**
+   * 假的 agent：先往 root 那份日誌寫一對 `tool/call`／`tool/result`，基座的 frame 要不要跟、何時跟由參數排。
+   * `early` 是基座那顆 `tool-finished` 先轉發、日誌的判定後到（本體自己標了 error，文字跟日誌同一句）。
+   */
+  async function play(base: 'none' | 'late' | 'early') {
     const record = () => {
       const log = pump.sessionLog;
       log.append('tool/call', { callId: 'c1', name: 'write_file', arguments: '{"a":1}' });
@@ -337,8 +340,8 @@ describe('送達的先後：判定比基座那顆 `tool-started` 先到', () => 
       });
     };
     async function* stream() {
-      record();
-      if (base === 'late') {
+      if (base !== 'early') record();
+      if (base !== 'none') {
         yield frame('tools', ['tools:x'], {
           event: 'tool-started',
           tool_call_id: 'c1',
@@ -348,8 +351,13 @@ describe('送達的先後：判定比基座那顆 `tool-started` 先到', () => 
         yield frame('tools', ['tools:x'], {
           event: 'tool-finished',
           tool_call_id: 'c1',
-          output: OUTPUT,
+          output: base === 'early' ? { status: 'error', content: '被擋下' } : OUTPUT,
         });
+      }
+      if (base === 'early') {
+        // 讓 pump 先把基座那顆轉發出去，判定才落。
+        await until(() => frames.filter((next) => next.method === 'tools').length >= 2);
+        record();
       }
       yield frame('lifecycle', [], { event: 'completed', graph_name: 'root' });
     }
@@ -389,6 +397,47 @@ describe('送達的先後：判定比基座那顆 `tool-started` 先到', () => 
     expect(toolEntries(frames)).toMatchObject([
       { name: 'write_file', status: 'failed', error: '被擋下', text: '被擋下' },
     ]);
+  });
+
+  /**
+   * **日誌的錯誤碼跟著上線**（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）：經 `#noteVerdict` 收的
+   * 失敗結果，frame 帶 `tool/result.error.code`，折疊器放進 `ToolEntry.errorCode`。三種先後各一條。
+   */
+  it.each(['none', 'late', 'early'] as const)('碼跟著判定上線（基座 %s）', async (base) => {
+    const frames = await play(base);
+    const finished = frames.filter(
+      (next) =>
+        next.method === 'tools' &&
+        (next.params.data as { event?: unknown }).event === 'tool-finished',
+    );
+    expect(finished.at(-1)?.params.data).toMatchObject({ failed: true, code: 'FS_SANDBOX_DENIED' });
+    expect(toolEntries(frames)).toMatchObject([
+      { status: 'failed', error: '被擋下', errorCode: 'FS_SANDBOX_DENIED' },
+    ]);
+  });
+
+  /**
+   * **只差碼也要補發**（#667，同 #617 替 meta 補的那一格）：基座那顆已經轉發，`failed` 與文字都跟日誌一樣，
+   * 少的只有碼。不補發的話碼永遠到不了畫面。
+   */
+  it('基座那顆先轉發、只差碼：補一顆帶碼的更正', async () => {
+    const frames = await play('early');
+    const finished = frames
+      .filter(
+        (next) =>
+          next.method === 'tools' &&
+          (next.params.data as { event?: unknown }).event === 'tool-finished',
+      )
+      .map((next) => next.params.data as Record<string, unknown>);
+    // 前提：基座那顆自己就是失敗、文字跟日誌同一句——差別只剩碼。
+    expect(finished).toHaveLength(2);
+    expect(finished[0]).toMatchObject({ failed: true, message: '被擋下' });
+    expect(finished[0]).not.toHaveProperty('code');
+    expect(finished[1]).toMatchObject({
+      failed: true,
+      message: '被擋下',
+      code: 'FS_SANDBOX_DENIED',
+    });
   });
 });
 
