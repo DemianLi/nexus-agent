@@ -373,6 +373,8 @@
 # `HISTORY_PAGE_MAX_BYTES = 4_000_000` 是 `80 × 50000`，那個關係一直由 `apps/harness` 的一條測試釘著；
 # 這一列讓它**只在 schema 的預設值底下成立**。那是 #538 三選一裡明著選的第三條（2026-09-23 拍板），
 # 逐條理由見 `src/settings/tool-text.ts` 的檔頭。
+#
+# **這一格也管壓縮標記的摘要全文**（#896）：同一個上限，改它會同時改兩種文字的截斷點。
 - id: tool-text
   name: '#settings/tool-text'
   config:

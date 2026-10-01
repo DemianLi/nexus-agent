@@ -5,6 +5,12 @@
  * **這一顆不裝功能，只講設定**，`apply` 是空的，同 `thread-title`／`browser-session`／
  * `deliverable-files` 那三列。
  *
+ * ## 這一格不只管工具結果文字
+ *
+ * 壓縮標記的**摘要全文**（[#896](https://github.com/DemianLi/nexus-agent/issues/896)）也套這一格的上限，沒有另開設定：
+ * `compactionData` 在同樣兩個消費點（即時與重播）用同一個 `capToolText`。所以改這一格會**同時**改摘要全文的上限。
+ * 摘要與工具結果同是「一段會被截斷放上線的文字」，這一格現在管的是這一類。
+ *
  * ## 層：起動期解一次，往下傳
  *
  * 消費點有兩個，都跑在請求期：`ThreadPump.#noteVerdict`（即時那條）與 `historyFrames`

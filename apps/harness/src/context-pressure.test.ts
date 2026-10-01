@@ -20,7 +20,13 @@ import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
 import type { PluginEntry, SessionEvent, SessionEventMap } from '@nexus/core';
 import type { Event, WireContextPressure } from '@nexus/wire';
-import { CONTEXT_MEASURE, MODEL_USAGE, emptyConversation, reduceAll } from '@nexus/wire';
+import {
+  COMPACTION,
+  CONTEXT_MEASURE,
+  MODEL_USAGE,
+  emptyConversation,
+  reduceAll,
+} from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
@@ -370,7 +376,7 @@ describe('生摘要的那次模型呼叫不上線（#584）', () => {
       entry.kind === 'ai' ? [entry.text] : [],
     );
 
-  it('摘要那一輪即時與重新整理一樣，摘要本身不在任何一顆 frame 裡', async () => {
+  it('摘要那一輪即時與重新整理一樣，摘要本身只出現在壓縮標記裡，不在任何一則回話或逐段的 frame 裡', async () => {
     const { frames, root, requests } = await converse(TURNS, {
       summarization: summarizeAt([{ type: 'messages', value: 3 }]),
       script: [{ text: '第一輪回話' }, { text: SUMMARY }, { text: '第二輪回話' }],
@@ -388,7 +394,17 @@ describe('生摘要的那次模型呼叫不上線（#584）', () => {
     // 摘要之後那一輪真正的回話照常即時上線。
     expect(aiTexts(frames)).toEqual(['第一輪回話', '第二輪回話']);
     expect(aiTexts(historyPage(root).events)).toEqual(aiTexts(frames));
-    expect(JSON.stringify(frames)).not.toContain(SUMMARY);
+    // **#584 擋的是生摘要那次呼叫的輸出被當成回話串出去**。#896 之後摘要全文會以壓縮標記的酬載上線（那是故意的），
+    // 所以把壓縮標記那一顆拿掉再問「摘要有沒有漏在別處」，而摘要在標記裡出現一次、兩條路相同。
+    const isCompaction = (frame: Event) =>
+      frame.method === 'custom' && (frame.params.data as { name?: string }).name === COMPACTION;
+    expect(JSON.stringify(frames.filter((frame) => !isCompaction(frame)))).not.toContain(SUMMARY);
+    const markers = (list: readonly Event[]) =>
+      reduceAll(emptyConversation(), list).entries.flatMap((entry) =>
+        entry.kind === 'compaction' ? [entry.summary] : [],
+      );
+    expect(markers(frames)).toEqual([SUMMARY]);
+    expect(markers(historyPage(root).events)).toEqual([SUMMARY]);
   }, 30000);
 });
 
