@@ -43,6 +43,7 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import {
   assertInvariantSelection,
+  createFsService,
   createHostServicesPlugin,
   createInvariantRunner,
   createSessionRunner,
@@ -71,6 +72,7 @@ import {
   type SessionTelemetrySharingStatus,
   type RepeatReminderSettings,
   type SummarizationSettings,
+  type TokenAnchorBook,
   type ToolResultPruneConfig,
 } from '@nexus/core';
 import type { SystemPromptVariables } from '@nexus/plugin-system-prompt';
@@ -268,6 +270,11 @@ export interface CreateNexusAgentOptions {
    * 數值的理由見 [`summarization.ts`](../../../packages/nexus-core/src/summarization.ts)。
    */
   readonly summarization?: Partial<SummarizationSettings> | false;
+  /**
+   * 錨定估算的帳，原樣轉給 `FoldOptions.tokenAnchorBook`（[#702](https://github.com/DemianLi/nexus-agent/issues/702)）。
+   * **省略即這次組裝各建一本**：eval 每題一個組裝，題與題之間本來就不該借彼此的第一次；`runServe` 建一本傳給每條 thread。
+   */
+  readonly tokenAnchorBook?: TokenAnchorBook;
   /**
    * 摘要器外面那把工具結果剪刀的預算。給物件就逐格淺合併到 `DEFAULT_TOOL_RESULT_PRUNE`
    * （dsh 的 8192／4096／1024）上，`false` 是摘要照跑、只是不先剪。**省略時由清單上
@@ -624,6 +631,9 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       },
       'system-prompt-variables',
     ),
+    // **工具拿 backend 的那一格**（#694）：這裡先佔位，`foldRegistry` 折完把折出來的那一個填進去，
+    // `present` 與 `submit_record` 被叫時才讀。理由見 `@nexus/core` 的 `fs-service.ts`。
+    createHostServicesPlugin({ fs: createFsService() }, 'fs'),
     ...options.plugins,
     ...(delegation === undefined ? [] : [delegation.entry()]),
   ];
@@ -686,6 +696,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       store: options.store,
       approvals: options.approvals,
       ...(options.summarization !== undefined && { summarization: options.summarization }),
+      ...(options.tokenAnchorBook !== undefined && { tokenAnchorBook: options.tokenAnchorBook }),
       ...(options.toolResultPruning !== undefined && {
         toolResultPruning: options.toolResultPruning,
       }),
