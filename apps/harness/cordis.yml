@@ -403,7 +403,10 @@
 # `continuable`：模型看到 `subagent`，派出去預設在背景跑、當場回編號；做完會叫醒主對話多跑一輪。`one-shot`：模型看到基座的 `task`，
 # 一次性、等結果。**改成 `one-shot`（或把這一列標成 `disabled: true`）就回到一次性。**
 # 上限是**每個主對話各自的**，不是整台主機的：同時在跑的背景子代理到「會話數 × 上限」這個量級。
-# **只有 `serve` 讀這一列**：REPL 一行一輪、一次性模式答完就退出，都沒有可以被叫醒的一輪，背景子代理的結果送不回來。
+# **`backgroundMode`、`maxActiveSubagents` 只有 `serve` 讀**：REPL 一行一輪、一次性模式答完就退出，都沒有可以被叫醒的一輪，背景子代理的結果送不回來。
+# `toolFilter`（#707，**出廠不填**，同 dsh）：`{ allow?, deny? }` 套在**每個**子代理上（前景的 `task`、背景的 `subagent`、`general-purpose`），root 不受影響；
+# `allow` 只留列到的（`allow: []` 是一個都不留）、`deny` 拿掉列到的。只遮繼承來的全域工具與基座檔案工具，子代理自己那層註冊的不遮。
+# 兩個入口都讀，與 `backgroundMode` 無關。名字寫錯、或設了卻沒有 allow／deny，**起不來**（這一列是必掛的，寫壞不能退成「沒有過濾」）。
 - id: background-subagents
   name: '#settings/background-subagents'
   config:

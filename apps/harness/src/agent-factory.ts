@@ -58,6 +58,7 @@ import {
   type AgentCheckpointer,
   type AgentModel,
   type AgentStore,
+  type ToolFilter,
   type ApprovalPolicy,
   type InvariantError,
   type InvariantSelection,
@@ -191,6 +192,12 @@ export interface CreateNexusAgentOptions {
    * 會想覆寫它的只有測試，以及哪天真的開了 async subagent 的組裝。
    */
   readonly baseToolNames?: readonly string[];
+  /**
+   * 子代理的工具允許／拒絕清單（[#707](https://github.com/DemianLi/nexus-agent/issues/707)），套在每個子代理上（含 `general-purpose`、
+   * 前景的 `task` 與背景的 `subagent` 派出的），root 不受影響。省略＝沒有，組裝產物與沒這一格時逐字相同。
+   * 規則與檢查見 `@nexus/core` 的 `subagent-tool-filter`；來源是 `background-subagents` 那一列的 `toolFilter`。
+   */
+  readonly subagentToolFilter?: ToolFilter;
   /**
    * 「先讀後改」策略的開關。省略即開著（照 dsh，那邊是預設載入的插件）——**除非**清單上
    * `@nexus/core/observation-policy` 那一列標了 `disabled: true`，三態見 `@nexus/core` 的
@@ -652,6 +659,9 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         }),
       toolOrder: options.toolOrder,
       baseToolNames: options.baseToolNames ?? BASE_TOOL_NAMES,
+      ...(options.subagentToolFilter !== undefined && {
+        subagentToolFilter: options.subagentToolFilter,
+      }),
       model: options.model,
       checkpointer: options.checkpointer,
       store: options.store,
