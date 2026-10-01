@@ -25,7 +25,7 @@
  * | --- | --- | --- |
  * | 指引 | `plan:policy` 提示詞段落，順序 500，未激活不貢獻文本 | {@link PLAN_MODE_MIDDLEWARE_NAME} 的 `wrapModelCall`，未啟用時原樣穿過 |
  * | 退出工具 | `exit_plan_mode`，兩種狀態都在 schema 裡，模式外執行會失敗 | {@link EXIT_PLAN_MODE_TOOL_NAME}，同樣一律註冊、模式外拒絕 |
- * | 模式狀態 | `plan/mode` 會話事件 ＋ `planProjectionDefinition` 這個帶版本的會話投影 | `plan/mode` 會話事件 ＋ 這個 plugin 在 root 那份日誌上的折疊 |
+ * | 模式狀態 | `plan/mode` 會話事件 ＋ `planProjectionDefinition` 這個帶版本的會話投影 | `plan/mode` 會話事件 ＋ 這個 plugin 在 root 那份日誌上的折疊；送上線給畫面的那一份是 pump 另外合成的 `custom` 事件，只有 `active`，見 `@nexus/wire` 的 `plan-mode.ts`（[#895](https://github.com/DemianLi/nexus-agent/issues/895)） |
  *
  * ## 交出計劃走提問通道——曾經走核准，已照 dsh 改回（[#652](https://github.com/DemianLi/nexus-agent/issues/652)）
  *

@@ -111,6 +111,7 @@ import {
   isTodosReset,
   modelUsageData,
   SessionTotals,
+  planModeData,
   titleData,
   todosData,
   workspaceChangesData,
@@ -2274,6 +2275,9 @@ export class ThreadPump {
     } else if (event.type === 'todo/write' && entry.address.kind === 'root') {
       // 待辦清單（#575）：只收 root 的，同 dsh 的 `todos` 投影；子代理各寫各的那一份，不進面板。
       this.#presentCustom(todosData(event.data.todos));
+    } else if (event.type === 'plan/mode' && entry.address.kind === 'root') {
+      // 計劃模式（#895）：只收 root 的，同 dsh 的 `plan` 投影；`/plan` 與 `exit_plan_mode` 都只寫 root 那一份。
+      this.#presentCustom(planModeData(event.data.active));
     } else if (event.type === 'session/title' && entry.address.kind === 'root') {
       // 標題（#647）：只收 root 的，同 dsh 的 `title` 投影。
       this.#presentCustom(titleData(event.data.title));

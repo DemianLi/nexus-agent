@@ -41,6 +41,8 @@ import type {
   WireSessionReference,
   WireSettleReason,
 } from './inbox.js';
+import { PLAN_MODE } from './plan-mode.js';
+import type { PlanModePayload } from './plan-mode.js';
 import { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
 import type { WireSessionStats, WireTokenUsage } from './session-totals.js';
 import { SUBAGENT_STATUS } from './subagent-status.js';
@@ -469,6 +471,12 @@ export interface ConversationState {
    */
   readonly todos: readonly WireTodoItem[] | null;
   /**
+   * 計劃模式現在開著還是關著（#895）：最後一顆 `plan` frame 的整份值。**日誌上還沒有過 `plan/mode` 就是 `null`**，
+   * 等同關著，不是「還沒收到」——理由與少了 dsh 的 `pending` 見 `plan-mode.ts`。只算 root。它是「現在」的事，所以
+   * {@link prependEntries} 不動它。
+   */
+  readonly planMode: PlanModePayload | null;
+  /**
    * 這條對話累計燒了多少 token（#574）：root 日誌每一次模型呼叫的帳加起來，**整份日誌的**，不是畫面上看得到的那幾輪。
    * 一顆都還沒收到就是 `null`；總量是兩格相加。規則見 `session-totals.ts`。它是「現在」的事，所以
    * {@link prependEntries} 不動它。
@@ -515,6 +523,7 @@ export function emptyConversation(): ConversationState {
     turnStart: 0,
     contextPressure: null,
     todos: null,
+    planMode: null,
     tokenUsage: null,
     sessionStats: null,
     inbox: [],
@@ -717,7 +726,7 @@ function isPresentedFile(value: unknown): value is WirePresentedFile {
 
 /**
  * `custom` frame。**只認 {@link DELIVERABLES_PRESENTED}、{@link WORKSPACE_CHANGES}、{@link MODEL_USAGE}、
- * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link TOKEN_USAGE}、{@link SESSION_STATS}、{@link INBOX}、{@link TITLE} 與 {@link SUBAGENT_STATUS}**，其他名字、形狀
+ * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link PLAN_MODE}、{@link TOKEN_USAGE}、{@link SESSION_STATS}、{@link INBOX}、{@link TITLE} 與 {@link SUBAGENT_STATUS}**，其他名字、形狀
  * 不對的一律略過：這個 channel 上的東西由 pump 從日誌合成，認不得的不猜。
  */
 function reduceCustom(state: ConversationState, data: unknown): ConversationState {
@@ -727,6 +736,7 @@ function reduceCustom(state: ConversationState, data: unknown): ConversationStat
   if (name === MODEL_USAGE) return reduceModelUsage(state, payload);
   if (name === CONTEXT_MEASURE) return reduceContextMeasure(state, payload);
   if (name === TODOS) return reduceTodos(state, payload);
+  if (name === PLAN_MODE) return reducePlanMode(state, payload);
   if (name === TOKEN_USAGE) return reduceTokenUsage(state, payload);
   if (name === SESSION_STATS) return reduceSessionStats(state, payload);
   if (name === INBOX) return reduceInbox(state, payload);
@@ -819,6 +829,13 @@ function reduceTitle(state: ConversationState, payload: object): ConversationSta
   const { title } = payload as { title?: unknown };
   if (typeof title !== 'string' || title === '') return state;
   return { ...state, title };
+}
+
+/** `plan` 的 `payload`：投影的整個值，整份換掉。`active` 不是布林就整顆不收。 */
+function reducePlanMode(state: ConversationState, payload: object): ConversationState {
+  const { active } = payload as { active?: unknown };
+  if (typeof active !== 'boolean') return state;
+  return { ...state, planMode: { active } };
 }
 
 /** 清單裡的一項長得對不對：同 dsh 的 `todosProjectionSchema`。 */
