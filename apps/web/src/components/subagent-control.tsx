@@ -217,11 +217,19 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
   // 子代理自己的對話：打開讀一次；跑著翻成閒著或收線、送出之後各再讀一次（只有歷史，沒有 live）。
   const [tick, setTick] = useState(0);
   const history = useSubagentHistory(control.history, runId, tick);
+  // 回聲只管「還沒寫進日誌」的那幾句：子代理跑完（翻成閒著或收線）時，到那一刻為止送出的都已經領走、寫進日誌了，
+  // 之後讀回來的歷史自己會有。不這樣收的話，對話長到最早的幾句掉出最近 40 則，它們的回聲會永遠留在底下（#861）。
+  const echoCount = control.echoesOf(runId).length;
+  const [settled, setSettled] = useState(() => (canStopSubagent(state) ? 0 : echoCount));
   const previous = useRef(state);
   useEffect(() => {
     const before = previous.current;
     previous.current = state;
-    if (canStopSubagent(before) && !canStopSubagent(state)) setTick((value) => value + 1);
+    if (canStopSubagent(before) && !canStopSubagent(state)) {
+      setTick((value) => value + 1);
+      setSettled(echoCount);
+    }
+    // 只在狀態翻面時看一次；`echoCount` 是翻面那一刻的值。
   }, [state]);
 
   const sendable = canSendToSubagent(state, control.connected);
@@ -230,7 +238,7 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
   const echoes =
     history.conversation === undefined
       ? control.echoesOf(runId)
-      : unmatchedEchoes(control.echoesOf(runId), history.conversation.entries);
+      : unmatchedEchoes(control.echoesOf(runId).slice(settled), history.conversation.entries);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -380,6 +388,8 @@ function Conversation({
   readonly onReload: () => void;
 }) {
   const entries = history.conversation?.entries;
+  // 只有讀到最開頭才知道第一則人話是派出的任務；前面還有更早的，第一則可能只是後來對它說的話。
+  const fromStart = history.conversation?.hasMore === false;
   const scroller = useRef<HTMLDivElement>(null);
   // 新讀回來的接在尾巴：捲到底，看到最新的。
   useLayoutEffect(() => {
@@ -419,7 +429,7 @@ function Conversation({
         <div ref={scroller} className="flex max-h-96 flex-col gap-3 overflow-y-auto">
           {entries.map((entry, index) => (
             <div key={entry.id} className="flex flex-col gap-1">
-              {index === 0 && entry.kind === 'human' && (
+              {fromStart && index === 0 && entry.kind === 'human' && (
                 <p className="text-muted-foreground text-right text-xs">{TASK_CAPTION}</p>
               )}
               {renderEntry(entry)}
