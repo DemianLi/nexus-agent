@@ -51,6 +51,8 @@
  * 2. **子代理那一側退到一份載體**：dsh 的子代理有自己的 `turn/end`，`task` 讀它的原因；我們子代理的
  *    日誌沒有 `turn/end`，基座的 `task` 只交回文字。所以由子代理的模型呼叫記、父圖的 `task` 取，
  *    鍵是兩邊各自算得出來的同一個 `runId`（`session-address.ts` 的 {@link spawnedSubagentRunId}）。
+ *    **背景子代理不記**（[#858](https://github.com/DemianLi/nexus-agent/issues/858)）：它是最上層的圖，沒有父圖的 `task` 來取，記了只是漏；
+ *    它的撞限由日誌上回覆的 `finish_reason` 讀。
  *
  * ## 載體只活在這個行程
  *
@@ -64,7 +66,11 @@ import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import { Command, isCommand } from '@langchain/langgraph';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
-import { spawnedSubagentRunId, toolCallSessionAddress } from './session-address.js';
+import {
+  isBackgroundCall,
+  spawnedSubagentRunId,
+  toolCallSessionAddress,
+} from './session-address.js';
 import { currentTurnStart } from './session-log.js';
 import type { SessionEvent, TurnEndReason } from './session-log.js';
 import { toolRefusal } from './tool-events.js';
@@ -262,10 +268,13 @@ export function createMaxTokensMiddleware(carrier: MaxTokensCarrier): AgentMiddl
       if (!AIMessage.isInstance(response) || !isMaxTokensFinish(response.response_metadata)) {
         return response;
       }
-      const address = toolCallSessionAddress({
-        configurable: (request as RuntimeRequest).runtime?.configurable,
-      });
-      if (address?.kind === 'subagent') carrier.record(address.runId, response.text);
+      const where = { configurable: (request as RuntimeRequest).runtime?.configurable };
+      const address = toolCallSessionAddress(where);
+      // 背景子代理不記：載體是父圖的 `task` 取走的，背景位址沒有人取（#858）。它的撞限由日誌上回覆的
+      // `finish_reason` 讀（結算摘要的 `max-tokens`）。
+      if (address?.kind === 'subagent' && !isBackgroundCall(where)) {
+        carrier.record(address.runId, response.text);
+      }
       return dropToolCalls(response);
     },
     wrapToolCall: async (request, handler) => {
