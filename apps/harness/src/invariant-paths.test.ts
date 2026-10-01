@@ -19,7 +19,8 @@ import type { PluginEntry } from '@nexus/core';
 import { createEchoPlugin } from '@nexus/plugin-echo';
 import { describe, expect, it } from 'vitest';
 
-import { createCliAgent, runTurn } from './cli.js';
+import { runTurn } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -162,7 +163,7 @@ describe('不變量接線：web 那條路', () => {
         agent: built.agent as unknown as PumpAgent,
         commands: built.commands,
         dispose: built.dispose,
-        attachInvariants: built.attachInvariants,
+        attachSessions: built.attachSessions,
       }),
     });
     const fetchImpl: typeof globalThis.fetch = async (input, init) =>

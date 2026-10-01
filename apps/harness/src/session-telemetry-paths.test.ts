@@ -31,7 +31,8 @@ import { createTelemetryOtelPlugin } from '@nexus/plugin-telemetry-otel';
 import { describe, expect, it, vi } from 'vitest';
 
 import { DISABLED_FEEDBACK_WARNING } from './agent-factory.js';
-import { createCliAgent, runTurn } from './cli.js';
+import { runTurn } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -232,6 +233,29 @@ describe('遙測接線：CLI 那條路', () => {
   });
 });
 
+/** 一輪的開頭：人送出的話先進送出佇列（#637），領走之後第一句寫退回標題（#647）。 */
+const TURN_HEAD = ['inbox/spliced', 'turn/start', 'inbox/spliced', 'session/title'];
+/** 出貨腳本的三輪模型呼叫，其中兩輪帶一顆工具呼叫。 */
+const MODEL_AND_TOOL_ROUNDS = [
+  ...[
+    'model/start',
+    'assistant/message',
+    'model/end',
+    'context/measure',
+    'tool/call',
+    'tool/result',
+  ],
+  ...[
+    'model/start',
+    'assistant/message',
+    'model/end',
+    'context/measure',
+    'tool/call',
+    'tool/result',
+  ],
+  ...['model/start', 'assistant/message', 'model/end', 'context/measure'],
+];
+
 describe('遙測接線：web 那條路', () => {
   it('接的是 pump 自己那份日誌——session.id 是 threadId', async () => {
     const sink = collectingSink();
@@ -242,7 +266,7 @@ describe('遙測接線：web 那條路', () => {
         agent: built.agent as unknown as PumpAgent,
         commands: built.commands,
         dispose: built.dispose,
-        attachTelemetry: built.attachTelemetry,
+        attachSessions: built.attachSessions,
       }),
     });
     const fetchImpl: typeof globalThis.fetch = async (input, init) =>
@@ -257,45 +281,17 @@ describe('遙測接線：web 那條路', () => {
     await handler.close();
 
     // **這一條就是 (A) 出局的證據還在成立**：號跟著 thread 走，不是跟著行程走。
-    expect(ledgerOf(sink).map((record) => record.attributes['session.id'])).toEqual([
-      'web-telemetry',
-      'web-telemetry',
-      'web-telemetry',
-      'web-telemetry',
-      'web-telemetry',
-    ]);
+    const ids = ledgerOf(sink).map((record) => record.attributes['session.id']);
+    expect(ids).toHaveLength(TURN_HEAD.length + MODEL_AND_TOOL_ROUNDS.length + 1);
+    expect(new Set(ids)).toEqual(new Set(['web-telemetry']));
     // 人送出的話先進送出佇列（#637）：一輪前面送進來一顆、`turn/start` 之後領走一顆。第一句領走之後寫退回標題（#647）。
+    // 中間是模型與工具那幾輪：**參與者接上了才有**，serve 一律接（#668），所以這條路上的帳本是完整的那一份。
     expect(ledgerOf(sink).map((record) => record.attributes['event.type'])).toEqual([
-      'inbox/spliced',
-      'turn/start',
-      'inbox/spliced',
-      'session/title',
+      ...TURN_HEAD,
+      ...MODEL_AND_TOOL_ROUNDS,
       'turn/end',
     ]);
     expect(sink.shutdowns.count).toBe(1);
-  });
-
-  it('createAgent 沒給 attachTelemetry 時什麼都不會發生', async () => {
-    const sink = collectingSink();
-    const built = await createCliAgent({ live: false }, [...shipped, telemetryPlugin(sink)]);
-    const handler = createWireHandler({
-      auth: TEST_BROWSER_AUTH,
-      createAgent: async () => ({
-        agent: built.agent as unknown as PumpAgent,
-        commands: built.commands,
-        dispose: built.dispose,
-      }),
-    });
-    const fetchImpl: typeof globalThis.fetch = async (input, init) =>
-      handler.handle(loopbackRequest(input as string, init));
-    const client = createWireClient({ baseUrl: BASE_URL, fetch: fetchImpl });
-
-    const events = await client.openEvents('web-none');
-    await client.runStart('web-none', '嗨');
-    await drainUntilRootCompleted(events);
-    await handler.close();
-
-    expect(sink.records).toHaveLength(0);
   });
 });
 
@@ -422,7 +418,7 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
         agent: built.agent as unknown as PumpAgent,
         commands: built.commands,
         dispose: built.dispose,
-        attachTelemetry: built.attachTelemetry,
+        attachSessions: built.attachSessions,
         ...(built.feedback !== undefined && { feedback: built.feedback }),
       }),
     });
@@ -439,10 +435,8 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
     await handler.close();
 
     expect(ledgerOf(sink).map((record) => record.attributes['event.type'])).toEqual([
-      'inbox/spliced',
-      'turn/start',
-      'inbox/spliced',
-      'session/title',
+      ...TURN_HEAD,
+      ...MODEL_AND_TOOL_ROUNDS,
       'turn/end',
       'feedback/record',
     ]);

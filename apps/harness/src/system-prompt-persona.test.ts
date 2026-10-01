@@ -21,7 +21,8 @@ import Ajv2020 from 'ajv/dist/2020.js';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
-import { runCli, createCliAgent, runTurn } from './cli.js';
+import { runCli, runTurn } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { generateConfigSchema } from './config-schema-dump.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { shippedPlugins } from './fixtures.js';

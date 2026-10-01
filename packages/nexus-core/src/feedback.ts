@@ -33,6 +33,7 @@
 
 import type { LoggedMessage } from './logged-message.js';
 import { loggedContentBlocks, loggedMessageId } from './logged-message.js';
+import { isLogicalTurnStart } from './session-log.js';
 import type { SessionEvent, SessionLog } from './session-log.js';
 
 /**
@@ -230,7 +231,7 @@ export interface CurrentMessageFeedback {
    * （例如格式 9 以前根本沒記回覆）原樣是 {@link LegacyTurnFeedbackItem}。
    */
   readonly item: MessageFeedbackItem | LegacyTurnFeedbackItem;
-  /** 它所屬那一輪起頭那顆 `turn/start` 的 `seq`（往回找第一顆不是 `resume` 的）。 */
+  /** 它所屬那一輪起頭那顆 `turn/start` 的 `seq`（往回找第一顆開邏輯輪的，見 {@link isLogicalTurnStart}）。 */
   readonly turn: number;
 }
 
@@ -253,7 +254,7 @@ export function currentMessageFeedback(
   const tailOfTurn = new Map<number, string>();
   let origin: number | undefined;
   for (const event of events) {
-    if (event.type === 'turn/start' && event.data.kind !== 'resume') origin = event.seq;
+    if (isLogicalTurnStart(event)) origin = event.seq;
     if (event.type !== 'assistant/message' || origin === undefined) continue;
     const id = loggedMessageId(event.data.message);
     if (id === undefined) continue;
