@@ -131,10 +131,11 @@ describe('壓力閘門接在有效串上（接線）', () => {
     // `keep` 留在預設的 20 則：這一串只有 10 則，`determineCutoffIndex` 會算出 `<= 0`、
     // 基座直接 `return handler(...)`。這一格要看的是**剪刀動沒動**，不是摘要跑不跑得起來
     // ——真讓它跑起來就得餵一個會回話的模型，那是另一個檔的事。
-    const middleware = createSummarizer({ readFile: async () => null } as never, {
-      ...DEFAULT_SUMMARIZATION,
-      trigger,
-    });
+    const middleware = createSummarizer(
+      { readFile: async () => null } as never,
+      { ...DEFAULT_SUMMARIZATION, trigger },
+      new TokenAnchorBook(),
+    );
     let seen: readonly BaseMessage[] = [];
     await middleware.wrapModelCall?.(
       {
@@ -202,11 +203,11 @@ describe('生摘要的那次呼叫不上線（接線）', () => {
   }
 
   async function modelHandedDown(trigger: readonly SummarizationThreshold[], model: object) {
-    const middleware = createSummarizer({ write: async (path: string) => ({ path }) } as never, {
-      ...DEFAULT_SUMMARIZATION,
-      trigger,
-      keep: { type: 'messages', value: 2 },
-    });
+    const middleware = createSummarizer(
+      { write: async (path: string) => ({ path }) } as never,
+      { ...DEFAULT_SUMMARIZATION, trigger, keep: { type: 'messages', value: 2 } },
+      new TokenAnchorBook(),
+    );
     let handed: unknown;
     await middleware.wrapModelCall?.(
       {
@@ -341,9 +342,9 @@ describe('tokens 門檻（接線）', () => {
         trigger: options.trigger,
         keep: { type: 'messages', value: options.keep ?? 20 },
       },
+      options.book ?? new TokenAnchorBook(),
       undefined,
       options.pruning,
-      options.book ?? new TokenAnchorBook(),
     );
     const sent: { messages: readonly BaseMessage[]; model: unknown }[] = [];
     const result = await middleware.wrapModelCall?.(

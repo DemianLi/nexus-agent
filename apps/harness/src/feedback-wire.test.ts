@@ -35,7 +35,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
-import { createCliAgent } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { TEST_BROWSER_AUTH, approvalAt, loopbackRequest, shippedPlugins } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
@@ -43,6 +43,7 @@ import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
+import { composeAttachSessions } from './session-attach.js';
 
 const shipped = await shippedPlugins();
 
@@ -99,9 +100,9 @@ async function line(turns: readonly ScriptedTurn[]): Promise<Line> {
       commands: built.commands,
       ...(built.feedback !== undefined && { feedback: built.feedback }),
       dispose: built.dispose,
-      attachSession: (sessions) => {
+      attachSessions: (sessions, backgroundPort) => {
         captured = sessions.root;
-        return built.attachSession(sessions);
+        return composeAttachSessions(built)(sessions, backgroundPort);
       },
     }),
   });
@@ -553,9 +554,9 @@ describe('/feedback 與零 plugin 設定', () => {
         commands: built.commands,
         ...(built.feedback !== undefined && { feedback: built.feedback }),
         dispose: built.dispose,
-        attachSession: (sessions) => {
+        attachSessions: (sessions, backgroundPort) => {
           captured = sessions.root;
-          return built.attachSession(sessions);
+          return built.attachSessions(sessions, backgroundPort);
         },
       }),
     });

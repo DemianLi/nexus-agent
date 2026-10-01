@@ -31,7 +31,7 @@ import { Command, MemorySaver } from '@langchain/langgraph';
 import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 
 import { createNexusAgent } from './agent-factory.js';
-import { createCliAgent } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { ContainedFilesystemBackend, GRANT_MISMATCH_NOTE } from './contained-backend.js';
 import type { SandboxMode } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
@@ -41,14 +41,17 @@ import {
   escalationReason,
   MISSING_TARGET_REFUSAL,
   nonWideningRefusal,
+  rejectedRefusal,
   SANDBOX_ESCALATION_HINT,
   SANDBOX_ESCALATION_TOOL_NAME,
   SandboxModeController,
+  unaskedRefusal,
 } from '@nexus/plugin-sandbox-policy';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedToolCall, ScriptedTurn } from './scripted-model.js';
 import { shippedPlugins } from './fixtures.js';
-import { createHostServicesPlugin } from '@nexus/core';
+import { createHostServicesPlugin, deriveApprovalChannel } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
 
 const shipped = await shippedPlugins();
 
@@ -98,6 +101,21 @@ const escalate = (args: ScriptedToolCall['args']): ScriptedTurn => ({
   toolCalls: [{ name: SANDBOX_ESCALATION_TOOL_NAME, args }],
 });
 
+/**
+ * 一顆回 `{ kind: 'allow' }` 而**不呼叫 `next()`** 的閘門，同 `approval-gate-order.test.ts` 那顆。
+ * 寫成 factory：plugin 物件會被載入路徑登記身分，每次組裝各建一份。
+ */
+function permissiveGate(): PluginEntry {
+  return {
+    plugin: {
+      name: 'probe-permissive',
+      apply(registry) {
+        registry.approvals.gate(() => ({ kind: 'allow' }));
+      },
+    },
+  };
+}
+
 const APPROVE = new Command({ resume: { decisions: [{ type: 'approve' }] } }) as never;
 const REJECT = new Command({ resume: { decisions: [{ type: 'reject' }] } }) as never;
 
@@ -122,7 +140,10 @@ describe('升級', () => {
    * @param turns - 腳本。
    * @param options - `plugin: false` 組一個 fence 有 ledger、但沒掛升級的組裝；
    *   `checkpointer: false` 是沒有核准管道；`approvals` 原樣轉給組裝點；`submitRecord` 照
-   *   `cli.ts` 掛上 `submit_record`，拿同一份 backend。
+   *   `cli.ts` 掛上 `submit_record`，拿同一份 backend。`channel: false` 是組裝點沒提供
+   *   核准管道那個服務；省略就照 `assembly-root.ts` 從同一組選項算一次再提供。
+   *   `permissive: true` 在升級之前疊一顆回 `allow`、不呼叫 `next()` 的閘門——照
+   *   `assembly-root.ts` 的順序，出貨清單與 patch 的 plugin 都排在 sandbox-policy 前面。
    */
   async function assemble(
     mode: SandboxMode,
@@ -132,6 +153,8 @@ describe('升級', () => {
       checkpointer?: boolean;
       approvalsEnabled?: boolean;
       submitRecord?: boolean;
+      channel?: false;
+      permissive?: boolean;
     } = {},
   ) {
     const controller = new SandboxModeController(mode);
@@ -147,8 +170,17 @@ describe('升級', () => {
       plugins: [
         createHostServicesPlugin({
           backend,
+          ...(options.channel !== false && {
+            channel: deriveApprovalChannel({
+              ...(options.approvalsEnabled !== undefined && {
+                approvalsEnabled: options.approvalsEnabled,
+              }),
+              hasCheckpointer: options.checkpointer !== false,
+            }),
+          }),
           ...(options.plugin === false ? {} : { sandboxPolicy: { controller, rootDir: root } }),
         }),
+        ...(options.permissive === true ? [permissiveGate()] : []),
         ...(options.plugin === false ? [] : [createSandboxPolicyPlugin()]),
         ...(options.submitRecord === true ? [createSubmitRecordPlugin()] : []),
       ],
@@ -228,9 +260,9 @@ describe('升級', () => {
 
   describe('不加寬的請求不問人', () => {
     it.each([
-      ['read-only', 'read-only'],
       ['danger-full-access', 'workspace-write'],
       ['workspace-write', 'workspace-write'],
+      ['danger-full-access', 'danger-full-access'],
     ] as const)('%s 之下要 %s：當場擋掉，核准卡一張都不掛', async (current, requested) => {
       const { agent, dispose, controller } = await assemble(current, [
         escalate({ file_path: '/a.txt', sandbox_permissions: requested, justification: '要寫檔' }),
@@ -242,6 +274,33 @@ describe('升級', () => {
         });
         expect(pendingCard(result)).toBeUndefined();
         expect(toolTexts(result)).toEqual([`Error: ${nonWideningRefusal(requested, current)}`]);
+        expect(controller.peekGrant()).toBeUndefined();
+      } finally {
+        await dispose();
+      }
+    });
+
+    /**
+     * **enum 外的值走不到本體**（#700）：以前閘門排在 zod 之前，`read-only` 在閘門上拿到不加寬那句；
+     * 問人搬進本體之後，schema 的封閉詞彙先擋，同 dsh 的 schema-pinned。斷言的是結局，不抄基座的措辭。
+     */
+    it('enum 外的值（read-only）在 schema 那一關就被擋：核准卡一張都不掛、grant 沒發', async () => {
+      const { agent, dispose, controller } = await assemble('read-only', [
+        escalate({
+          file_path: '/a.txt',
+          sandbox_permissions: 'read-only',
+          justification: '要寫檔',
+        }),
+        { content: '好。' },
+      ]);
+      try {
+        const result = await agent.invoke(toAgentInvocation('升級。'), {
+          configurable: { thread_id: 'no-widen-schema' },
+        });
+        expect(pendingCard(result)).toBeUndefined();
+        const [refused] = toolTexts(result);
+        expect(refused).toMatch(/^Error: /);
+        expect(refused).toContain('sandbox_permissions');
         expect(controller.peekGrant()).toBeUndefined();
       } finally {
         await dispose();
@@ -275,19 +334,66 @@ describe('升級', () => {
       [
         { file_path: '/a.txt', sandbox_permissions: 'workspace-write', justification: '  ' },
         BLANK_JUSTIFICATION_REFUSAL,
+        'read-only',
       ],
       [
         { file_path: '', sandbox_permissions: 'workspace-write', justification: '要寫檔' },
         MISSING_TARGET_REFUSAL,
+        'read-only',
       ],
-    ])('欄位不齊（%o）也不問人', async (args, refusal) => {
-      const { agent, dispose } = await assemble('read-only', [escalate(args), { content: '好。' }]);
+      // **欄位先判，加寬後判**（照 dsh 的 `validateEscalationArgs` 在 `approveEscalation` 之前）：
+      // 既不加寬、理由又空白的這一筆，拿到的是欄位那句。少了它，兩條判斷對調也全綠。
+      [
+        { file_path: '/a.txt', sandbox_permissions: 'workspace-write', justification: '' },
+        BLANK_JUSTIFICATION_REFUSAL,
+        'workspace-write',
+      ],
+    ] as const)('欄位不齊（%o）也不問人', async (args, refusal, mode) => {
+      const { agent, dispose } = await assemble(mode, [escalate(args), { content: '好。' }]);
       try {
         const result = await agent.invoke(toAgentInvocation('升級。'), {
           configurable: { thread_id: 'malformed' },
         });
         expect(pendingCard(result)).toBeUndefined();
         expect(toolTexts(result)).toEqual([`Error: ${refusal}`]);
+      } finally {
+        await dispose();
+      }
+    });
+  });
+
+  /**
+   * [#700](https://github.com/DemianLi/nexus-agent/issues/700)：**問人放在工具本體裡**，照 dsh 的
+   * `approveEscalation`。以前「有人看過」只靠一顆只認這個名字的閘門，排在它前面的一顆寬鬆閘門
+   * 不呼叫 `next()` 就把它整個短路掉——工具回「核准了」，畫面上一張卡都沒有。
+   */
+  describe('核准在工具本體裡，閘門怎麼排都跳不過', () => {
+    it('寬鬆閘門排在前面：照樣停在升級的核准上，grant 還沒發', async () => {
+      const { agent, dispose, controller } = await assemble(
+        'read-only',
+        [
+          write('/a.txt', '一'),
+          escalate({
+            file_path: '/a.txt',
+            sandbox_permissions: 'danger-full-access',
+            justification: '使用者要這個檔',
+          }),
+          { content: '好。' },
+        ],
+        { permissive: true },
+      );
+      try {
+        const result = await agent.invoke(toAgentInvocation('寫 a.txt。'), {
+          configurable: { thread_id: 'permissive-first' },
+        });
+        // 前提：第一顆真的被 fence 擋下來了——寬鬆閘門放行的是工具，不是 fence。
+        expect(toolTexts(result)[0]).toContain('這個 backend 是唯讀的');
+        expect(toolTexts(result).slice(1)).toEqual([]);
+        expect(pendingCard(result)?.name).toBe(SANDBOX_ESCALATION_TOOL_NAME);
+        expect(pendingCard(result)?.description).toBe(
+          escalationReason('/a.txt', 'danger-full-access', '使用者要這個檔'),
+        );
+        expect(controller.peekGrant()).toBeUndefined();
       } finally {
         await dispose();
       }
@@ -602,13 +708,13 @@ describe('升級', () => {
       }
     });
 
-    it('四條出口的話兩兩不同：不加寬／被拒／關掉了人工核准／沒有 checkpointer', async () => {
+    it('五條出口的話兩兩不同：不加寬／被拒／關掉了人工核准／沒有 checkpointer／沒提供核准管道', async () => {
       const texts: string[] = [];
 
-      const narrow = await assemble('read-only', [
+      const narrow = await assemble('workspace-write', [
         escalate({
           file_path: '/a.txt',
-          sandbox_permissions: 'read-only',
+          sandbox_permissions: 'workspace-write',
           justification: '要寫檔',
         }),
         { content: '好。' },
@@ -659,13 +765,33 @@ describe('升級', () => {
         await noChannel.dispose();
       }
 
-      expect(texts).toHaveLength(4);
-      expect(texts[0]).toBe(`Error: ${nonWideningRefusal('read-only', 'read-only')}`);
+      // **組裝點沒提供核准管道**：fail-closed，不退到「有人在」（#700）。退到「有人在」的話，這裡會
+      // 掛出一張核准卡——下面那兩條斷言就是在擋它。
+      const noService = await assemble('read-only', [request, { content: '好。' }], {
+        channel: false,
+      });
+      try {
+        const result = await noService.agent.invoke(toAgentInvocation('升級。'), {
+          configurable: { thread_id: 'exit-no-service' },
+        });
+        expect(pendingCard(result)).toBeUndefined();
+        expect(noService.controller.peekGrant()).toBeUndefined();
+        texts.push(...toolTexts(result));
+      } finally {
+        await noService.dispose();
+      }
+
+      expect(texts).toHaveLength(5);
+      expect(texts[0]).toBe(`Error: ${nonWideningRefusal('workspace-write', 'workspace-write')}`);
+      expect(texts[1]).toBe(`Error: ${rejectedRefusal('/a.txt', 'workspace-write')}`);
+      expect(texts[2]).toBe(`Error: ${unaskedRefusal('policy-never', 'workspace-write')}`);
+      expect(texts[3]).toBe(`Error: ${unaskedRefusal('no-channel', 'workspace-write')}`);
+      expect(texts[4]).toBe(`Error: ${unaskedRefusal('no-service', 'workspace-write')}`);
+      // 分得出「沒有人被問到」與「有人拒絕了」的那一段，各自在場。
       expect(texts[1]).toContain('拒絕了');
-      // 後兩條是 `@nexus/core` 核准閘門的話，只釘分得出來的那一段，不抄全文。
       expect(texts[2]).toContain('關掉了人工核准');
       expect(texts[3]).toContain('沒有 checkpointer');
-      expect(new Set(texts).size).toBe(4);
+      expect(new Set(texts).size).toBe(5);
     });
   });
 

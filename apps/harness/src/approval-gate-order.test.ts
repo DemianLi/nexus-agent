@@ -13,8 +13,9 @@
  * `registry.ts:248-256` 兩處都寫著）。於是一位排在前面、回 `{ kind: 'allow' }` 而不呼叫
  * `next()` 的 gate，會把排在它後面的每一位整條吃掉。
  *
- * **今天不是缺陷**：出貨清單裡一位 gate 都沒有（下面第一層就是在釘這件事），`cli.ts` 另外掛的
- * submit-record 與沙箱升級那兩位從不回 `allow`。但那是**組裝的巧合**，不是機制擋住的。
+ * **今天不是缺陷**：出貨清單裡一位 gate 都沒有（下面第一層就是在釘這件事），組裝點（`assembly-root.ts`）另外掛的
+ * submit-record 那一位從不回 `allow`。但那是**組裝的巧合**，不是機制擋住的。沙箱升級以前也是一位 gate，
+ * [#700](https://github.com/DemianLi/nexus-agent/issues/700) 照 dsh 把問人搬進工具本體，排在前面的 gate 怎麼放行都跳不過它。
  *
  * ## 結局是「紀錄寫出去了」，不是「核准被跳過」
  *
@@ -64,7 +65,7 @@ import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MemorySaver } from '@langchain/langgraph';
-import { createHostServicesPlugin, formatOrigin, loadPlugins } from '@nexus/core';
+import { formatOrigin, loadPlugins } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { createSubmitRecordPlugin, SUBMIT_RECORD_TOOL_NAME } from '@nexus/plugin-submit-record';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -107,7 +108,7 @@ const shipped = await shippedPlugins();
  * ## 現在是空的
  *
  * [#652](https://github.com/DemianLi/nexus-agent/issues/652) 之後 plan-mode 不再掛閘門，出貨清單裡一位都沒有。
- * submit-record 與沙箱升級的閘門是 `cli.ts` 在清單之外掛的，不在這一層的射程裡（見檔頭「射程」）。
+ * submit-record 的閘門是組裝點（`assembly-root.ts`）在清單之外掛的，不在這一層的射程裡（見檔頭「射程」）。
  * **空清單照樣是身分清單**：有人往出貨清單加一位，這裡就響。
  *
  * 這一格因此比以前更穩：自動編號的 `<name>#<序號>` 本來就不承諾跨清單穩定，而設定檔裡的
@@ -213,13 +214,10 @@ afterEach(async () => {
  * 第二輪根本沒被用到；permissive-first 把工具跑完，第二輪被吃掉），共用一份會讓後跑的那組拿到
  * 一個已經被吃掉輪次的腳本；共用工作區則會讓前一組寫的檔案被後一組量到。
  *
- * **backend 要經 `createHostServicesPlugin` 交給 submit-record**，同 `cli.ts`：沒給的話它退到基座那個
- * 記憶體裡的預設，「寫出去沒」就量不到磁碟上。
+ * **backend 給 `createNexusAgent`**，同 `cli.ts`：submit-record 從 `fs` 服務拿 fold 折出來的那一個
+ * （#694），「寫出去沒」才量得到磁碟上。
  */
-async function measure(
-  plugins: (backend: ContainedFilesystemBackend) => readonly PluginEntry[],
-  threadId: string,
-): Promise<string> {
+async function measure(plugins: () => readonly PluginEntry[], threadId: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'nexus-gate-order-'));
   roots.push(root);
   const backend = new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' });
@@ -227,7 +225,7 @@ async function measure(
     model: submitScript(),
     backend,
     checkpointer: new MemorySaver(),
-    plugins: [...plugins(backend)],
+    plugins: [...plugins()],
   });
   try {
     const result = await agent.invoke(toAgentInvocation('登記一位訪客。'), {
@@ -264,31 +262,20 @@ const ROWS = [
   {
     label: 'control：只有 submit-record',
     threadId: 'gate-order-control',
-    plugins: (backend: ContainedFilesystemBackend) => [
-      createHostServicesPlugin({ backend }),
-      createSubmitRecordPlugin(),
-    ],
+    plugins: () => [createSubmitRecordPlugin()],
     outcome: 'interrupt=true written=false',
   },
   {
     label: 'permissive-first：寬鬆 gate 排在 submit-record 之前',
     threadId: 'gate-order-permissive-first',
-    plugins: (backend: ContainedFilesystemBackend) => [
-      createHostServicesPlugin({ backend }),
-      permissiveGatePlugin(),
-      createSubmitRecordPlugin(),
-    ],
+    plugins: () => [permissiveGatePlugin(), createSubmitRecordPlugin()],
     // **刻意的**：那一列寫出去了，而沒有任何人看過它。見上面那段 JSDoc。
     outcome: 'interrupt=false written=true',
   },
   {
     label: 'submit-first：同一組人，只把順序對調',
     threadId: 'gate-order-submit-first',
-    plugins: (backend: ContainedFilesystemBackend) => [
-      createHostServicesPlugin({ backend }),
-      createSubmitRecordPlugin(),
-      permissiveGatePlugin(),
-    ],
+    plugins: () => [createSubmitRecordPlugin(), permissiveGatePlugin()],
     outcome: 'interrupt=true written=false',
   },
 ] as const;

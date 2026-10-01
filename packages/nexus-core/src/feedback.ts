@@ -32,6 +32,8 @@
  */
 
 import type { LoggedMessage } from './logged-message.js';
+import { loggedContentBlocks, loggedMessageId } from './logged-message.js';
+import { isLogicalTurnStart } from './session-log.js';
 import type { SessionEvent, SessionLog } from './session-log.js';
 
 /**
@@ -213,21 +215,13 @@ export interface FeedbackService {
   record(log: SessionLog, entry: FeedbackRecord): FeedbackRecordResult;
 }
 
-/** 一則訊息的文字：字串照原樣，區塊只取 `text` 那幾塊。 */
+/** 一則訊息的文字：區塊中有無非空的 text。 */
 function hasText(message: LoggedMessage): boolean {
-  const content: unknown = message.data.content;
-  if (typeof content === 'string') return content !== '';
-  if (!Array.isArray(content)) return false;
-  return content.some((block: unknown) => {
+  const blocks = loggedContentBlocks(message.data.content);
+  return blocks.some((block) => {
     const typed = block as { type?: unknown; text?: unknown } | null;
     return typed?.type === 'text' && typeof typed.text === 'string' && typed.text !== '';
   });
-}
-
-/** 一顆 `assistant/message` 記的訊息 id；沒記的是 `undefined`。 */
-export function loggedMessageId(message: LoggedMessage): string | undefined {
-  const id: unknown = message.data.id;
-  return typeof id === 'string' && id !== '' ? id : undefined;
 }
 
 /** 一則被評的回覆目前的評分，連同它所屬的那一輪。 */
@@ -237,7 +231,7 @@ export interface CurrentMessageFeedback {
    * （例如格式 9 以前根本沒記回覆）原樣是 {@link LegacyTurnFeedbackItem}。
    */
   readonly item: MessageFeedbackItem | LegacyTurnFeedbackItem;
-  /** 它所屬那一輪起頭那顆 `turn/start` 的 `seq`（往回找第一顆不是 `resume` 的）。 */
+  /** 它所屬那一輪起頭那顆 `turn/start` 的 `seq`（往回找第一顆開邏輯輪的，見 {@link isLogicalTurnStart}）。 */
   readonly turn: number;
 }
 
@@ -260,7 +254,7 @@ export function currentMessageFeedback(
   const tailOfTurn = new Map<number, string>();
   let origin: number | undefined;
   for (const event of events) {
-    if (event.type === 'turn/start' && event.data.kind !== 'resume') origin = event.seq;
+    if (isLogicalTurnStart(event)) origin = event.seq;
     if (event.type !== 'assistant/message' || origin === undefined) continue;
     const id = loggedMessageId(event.data.message);
     if (id === undefined) continue;

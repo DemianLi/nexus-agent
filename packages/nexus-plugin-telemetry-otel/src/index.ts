@@ -17,28 +17,30 @@
  * `@nexus/plugin-quickjs` 與 `@nexus/plugin-mcp` 的先例：**重的相依歸 plugin 自己，
  * `@nexus/core` 保持輕**。
  *
- * ## 四條偏離（AGENTS.md 的偏離規則）
+ * ## 偏離（AGENTS.md 的偏離規則；原本四條，第三條已撤，編號不重排）
  *
  * **一、預設是 `disabled`，dsh 是 `FEEDBACK_ONLY`。**
  * （[#279](https://github.com/DemianLi/nexus-agent/issues/279) 拍板）往少送那一邊偏，同偏離二；
  * 而且 `feedback-only` 要 `exporter.url`，預設成它的話，什麼都沒給的 `createTelemetryOtelPlugin()`
- * 會從靜靜關閉變成當場拋。
+ * 會從靜靜關閉變成在載入時（`loadPlugins`）拋。
  *
  * **二、Resource 上沒有 `user.id`。** dsh 放 `getOrCreateAnonymousUserId()`
  * （`dsh-anonymous-user-id`，存在 `~/.dsh`）。nexus 沒有那個套件、也沒有 harness home
  * 的概念，**不編一個**——退到不送。偏離的方向是往少送那一邊。
  *
- * **三、Config 驗證：schemastery ＋ cordis loader → 工廠函式當場驗。** dsh 的 `Config`
- * 是 schemastery 的 `z<Config>`，由 cordis 在 plugin 起來之前跑，只驗頂層；值檢查留在
- * constructor 裡好讓錯誤訊息指得出欄位。**我們沒有會跑 Config schema 的 loader**
- * ——`NexusPlugin` 的形狀是 `apply(registry)`，設定從工廠函式的參數進來。退到最接近的：
- * **四條值檢查照抄進工廠函式**，訊息一樣指名欄位。兩個 SDK 選項物件照 dsh 原樣轉交、
- * 不重新宣告——重宣告會靜靜吃掉所有沒被抄到的欄位。
+ * **三、（已撤）Config 驗證的時刻。** 原本登記成「設定從工廠函式的參數進來，值檢查退到工廠
+ * 函式裡」；[#453](https://github.com/DemianLi/nexus-agent/issues/453) 把設定搬進 `Config` 之後
+ * 這條就不成立了，**分層與 dsh 相同、不需要偏離**。dsh 的 `Config` 由 cordis 在 plugin 起來之前
+ * 跑、只驗頂層，值檢查留在 constructor 裡好讓錯誤訊息指得出欄位；我們的 `Config` 由
+ * `loadPlugins` 在任何 `apply` 之前整份驗完（`@nexus/core` 的 `resolveEntries`），值檢查留在
+ * `apply` 建的 {@link OpenTelemetrySessionService} 建構子裡，拋出時 `loadPlugins` 冠上條目 id。
+ * 跟 dsh 剩下的兩處差異各自登記在別處：兩個子物件逐欄宣告成 `strictObject`（見
+ * {@link telemetryExporterConfigSchema}），以及整份清單先驗完才 `apply`（見 `resolveEntries`）。
  *
  * **四、`feedback-only` 只在回饋時送，這件事不住在這裡。** dsh 的後端在自己的建構子裡組一個
  * on-demand 協調器、聽到回饋就補送，`emit` 則把直接送來的記錄丟掉；`DISABLED` 收到回饋時也是
  * 它自己講一聲。我們的協調器從 [#89](https://github.com/DemianLi/nexus-agent/issues/89) 起由組裝點
- * 組（`agent-factory.ts` 的 `attachTelemetry`，理由見下面 `createTelemetryOtelPlugin` 的說明），
+ * 組（`agent-factory.ts` 的 `attachTelemetry`，理由見下面 `telemetryOtelPlugin` 的說明），
  * 所以這兩件跟著協調器住在那裡，讀的是這裡說出去的 `sharing`。這個後端收到的因此只有該送的，
  * `emit` 不必分 mode。
  *
@@ -176,8 +178,9 @@ function fail(message: string): never {
 /**
  * 驗 `exporter.url`。
  *
- * 三條照抄 dsh：必填、必須 parse 得動、必須是 http(s)。**在工廠函式當場拋**，不是等到
- * 第一筆記錄要送的時候——設定錯了要在載入期爆，不是在熱路徑上靜靜地掉資料。
+ * 三條照抄 dsh：必填、必須 parse 得動、必須是 http(s)。**在建構子裡拋**（`apply` 建服務的
+ * 當下，也就是 `loadPlugins` 之內），不是等到第一筆記錄要送的時候——設定錯了要在載入期爆，
+ * 不是在熱路徑上靜靜地掉資料。
  */
 function assertExporterUrl(url: string | undefined): string {
   if (url === undefined || url.length === 0) {
@@ -334,9 +337,11 @@ export class OpenTelemetrySessionService implements SessionTelemetryService {
 /**
  * 建一個把會話遙測送去 OTLP 端點的 plugin。
  *
- * **設定在工廠函式當場驗**（見模組說明的偏離三）：`disabled` 之外，`exporter.url`
- * 必填、必須合法、必須 http(s)；`processor.maxExportBatchSize` 必須是正整數；
- * `shutdownTimeoutMillis` 必須在範圍內。**建構就會拋**，不會拖到跑起來。
+ * **設定分兩層驗，分層照 dsh**（見模組說明已撤的偏離三）：schema 在載入時驗——`loadPlugins`
+ * 在任何 `apply` 之前整份驗完；值檢查在 `apply` 建 {@link OpenTelemetrySessionService} 的
+ * 建構子裡，也就是 `loadPlugins` 當下：`disabled` 之外，`exporter.url` 必填、必須合法、
+ * 必須 http(s)；`processor.maxExportBatchSize` 必須是正整數；`shutdownTimeoutMillis` 必須在
+ * 範圍內。兩層都在載入期拋，不會拖到跑起來；工廠 {@link createTelemetryOtelPlugin} 本身不驗。
  *
  * `apply` 只做一件事——提供 {@link @nexus/core!SESSION_TELEMETRY_SERVICE}。**協調器不在這裡建**：接線需要一份
  * `SessionLog`，而 plugin 看不到它，那是組裝點的事（`agent-factory.ts` 的

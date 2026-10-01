@@ -41,8 +41,9 @@
  * 句子裡不留主機路徑，括號裡也不放。那個字串就是把模型帶偏的東西。
  *
  * **沒選的另一條路**：讓 backend 也收「主機根＋子路徑」，先剝掉前綴再交給基座，這樣就能維持 dsh 的形狀。
- * 沒選它，是因為那等於改圍堵的路徑解析：fence 判準、`workspace-changes` 的路徑正規化
- * （`packages/nexus-plugin-workspace-changes/src/paths.ts`）都假設虛擬路徑。為了一句提示詞
+ * 沒選它，是因為那等於改圍堵的路徑解析：fence 判準、把工具路徑對到磁碟的共用規則（`@nexus/core`
+ * 的 `virtualPathOf`／`hostPathOf`，present、交付讀檔路由、`workspace-changes` 都走它）都假設虛擬路徑。
+ * 改了 backend 就要一起改那一份，`apps/harness/src/virtual-path.test.ts` 會紅著提醒。為了一句提示詞
  * 去動擋寫入的那一層，換錯的代價比說錯一句話大。
  * 給人看的 `/sandbox` 輸出照舊報主機路徑：命令不進模型（`@nexus/core` 的 `commands.ts`），
  * 而人要的正是磁碟上的位址。
@@ -210,7 +211,7 @@ export const sandboxPolicyPlugin: NexusPlugin = {
             );
           },
           // **委派那一刻拍下這一格**（#326）：子代理整個在 `task` 那一次呼叫的 handler 裡跑，所以包住
-          // handler，子代理的 fence、升級閘門、日誌開啟都讀得到快照。**同步拍**，照 dsh 在子代理啟動的
+          // handler，子代理的 fence、升級工具、日誌開啟都讀得到快照。**同步拍**，照 dsh 在子代理啟動的
           // 第一個 await 之前拍（`captureDelegatedPolicyOverrides`）。這顆 middleware 也掛在子代理上（#327），
           // 但子代理手上沒有 `task`（基座的子代理 stack 沒有委派工具），所以這一半只在 root 上作用——拍照本來就是
           // 父代理那側的事。
@@ -263,6 +264,9 @@ export {
   escalationReason,
   MISSING_TARGET_REFUSAL,
   nonWideningRefusal,
+  rejectedRefusal,
   SANDBOX_ESCALATION_HINT,
   SANDBOX_ESCALATION_TOOL_NAME,
+  unaskedRefusal,
 } from './sandbox-escalation.js';
+export type { UnaskedReason } from './sandbox-escalation.js';

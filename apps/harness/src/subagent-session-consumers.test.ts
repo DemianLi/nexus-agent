@@ -311,6 +311,8 @@ describe('goal 的參與者只掛在 root 上', () => {
         commandId: 'cmd-1',
         rawInput: '',
         signal: new AbortController().signal,
+        // 執行器手上的是 root 那一份。
+        sessionLog: sessions.list().find((entry) => entry.address.kind === 'root')!.log,
         steer: () => undefined,
       });
       expect(answer?.text).not.toBe(goalAmbiguousMessage(2));

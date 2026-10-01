@@ -14,16 +14,8 @@ import type { PluginEntry } from '@nexus/core';
 import { z } from 'zod';
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
 import { FIRST_PLUGIN_NAME, SECOND_PLUGIN_NAME } from './cli-collision.fixture.js';
-import {
-  APPROVAL_DISCLOSURE,
-  CLI_PROBE_FILE,
-  createCliAgent,
-  exitCodeFor,
-  parseCliArgs,
-  runCli,
-  runRepl,
-  runTurn,
-} from './cli.js';
+import { APPROVAL_DISCLOSURE, exitCodeFor, parseCliArgs, runCli, runRepl, runTurn } from './cli.js';
+import { CLI_PROBE_FILE, createCliAgent } from './assembly-root.js';
 import { DISPOSE_FAILURE } from './cli-dispose-failure.fixture.js';
 import { documentedFixture } from './documented-fixture.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -252,10 +244,11 @@ describe('一次性模式', () => {
       'subagent-model-selection',
       'live-model',
       'recursion-limit',
+      'agent-loop',
     ]);
-    // 二十一個配套入口裡有 `@nexus/plugin-workspace-changes` 的，**那個功能本身不在這份清單裡**：它要工作區的根，
+    // 二十個配套入口裡有 `@nexus/plugin-workspace-changes` 的，**那個功能本身不在這份清單裡**：它要工作區的根，
     // 只由 serve 經 `createCliAgent` 掛（#443），同 dsh 只在 web-app bundle 掛。
-    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(21);
+    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(20);
   });
 
   it('**違規印到 stderr 而且帶前綴**——不是靠 runner 預設的 `console.error`', async () => {
@@ -459,8 +452,7 @@ describe('CLI 的核准政策', () => {
       { live: false },
       [createEchoPlugin(), gateWriteFile],
       undefined,
-      undefined,
-      HEADLESS_APPROVALS,
+      { approvals: HEADLESS_APPROVALS },
     );
     const { printer, stdout } = recorder();
     try {

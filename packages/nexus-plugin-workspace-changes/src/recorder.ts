@@ -22,7 +22,7 @@
  *    接上當下已經在的事件，一份有 N 輪的 thread 接上就會跑 N 次 `git add --all`。所以重播出來的一輪基準
  *    **延後**（`'deferred'`），只有活的 resume 接回那一輪時（serve 重開之後在核准點接著跑）才補拍——那一刻
  *    的工作樹就是那一輪剩下那一段的起點。
- * 4. **擷取的路徑先從虛擬路徑對到磁碟**（`hostPathOf`），見 `paths.ts`。
+ * 4. **擷取的路徑先從虛擬路徑對到磁碟**（`@nexus/core` 的 `hostPathOf`，跟 present、交付讀檔路由共用一份）。
  *
  * @module
  */
@@ -31,6 +31,7 @@ import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 
+import { hostPathOf } from '@nexus/core';
 import type { SessionLog } from '@nexus/core';
 import type { WorkspaceChangedFile, WorkspaceChangesSummary, WorkspaceFileDiff } from './types.js';
 
@@ -52,7 +53,6 @@ import {
   compareDisplay,
   displayPathOf,
   durablePathOf,
-  hostPathOf,
   isInside,
   isTemporaryPath,
   temporaryRoots,

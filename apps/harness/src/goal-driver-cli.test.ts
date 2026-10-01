@@ -6,8 +6,11 @@
  * 這件事，在每一條路上都要各自成立一次。
  */
 
+import { HumanMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
+import { REPEAT_REMINDER_MARKER } from '@nexus/core';
 import type { SessionLog } from '@nexus/core';
+import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import {
   createGoalPlugin,
   GOAL_COMMAND_NAME,
@@ -20,15 +23,8 @@ import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
-import {
-  createCliAgent,
-  driveGoalRounds,
-  formatGoalDriverDisclosure,
-  goalDriverPort,
-  runCli,
-  runRepl,
-  runTurn,
-} from './cli.js';
+import { driveGoalRounds, runCli, runRepl, runTurn } from './cli.js';
+import { createCliAgent, formatGoalDriverDisclosure, goalDriverPort } from './assembly-root.js';
 import { parseCliArgs } from './cli.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import { ROUND_CAP_BLOCK_CODE } from './goal-driver.js';
@@ -64,7 +60,7 @@ async function build(turns: readonly ScriptedTurn[]): Promise<{
   const state: ScriptedModelState = { turn: 0, boundToolNames: [], lastPrompt: [], prompts: [] };
   const { agent, dispose, attachSession, services } = await createNexusAgent({
     model: new ScriptedChatModel({ turns, shared: state }) as never,
-    plugins: [plugin],
+    plugins: [plugin, createEchoPlugin()],
     checkpointer: new MemorySaver(),
   });
   const sessions = new SessionRegistry('cli-driver');
@@ -253,6 +249,40 @@ describe('REPL 那條路自己排下一輪', () => {
     const said = out.join('\n');
     expect(said).toContain('目標建好了');
     expect(said).not.toContain('[續行]');
+  });
+
+  /**
+   * **CLI 那條路上，續行輪次的頭也不清零重複工具提醒的計數**（[#662](https://github.com/DemianLi/nexus-agent/issues/662)）。
+   * 與 `goal-driver-pump.test.ts` 同一個劇本：這條路自己造那則 `HumanMessage`（`runTurn`），所以要各驗一次。
+   */
+  it('續行輪次的頭不清零：第 2 輪的第 1 次呼叫是總第 3 次，模型拿到提醒', async () => {
+    const echo = { name: ECHO_TOOL_NAME, args: { message: 'x' } };
+    const { agent, log, port, state, stop } = await build([
+      {
+        content: '',
+        toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 2 } }],
+      },
+      { content: '建好了。' },
+      { content: '', toolCalls: [echo] },
+      { content: '', toolCalls: [echo] },
+      { content: '第一輪結束。' },
+      { content: '', toolCalls: [echo] },
+      { content: '第二輪結束。' },
+    ]);
+    const { printer } = recorder();
+    await runTurn(agent, '把 CI 修綠', printer, log);
+    await driveGoalRounds(agent, printer, log, port);
+    expect(startKinds(log)).toEqual(['message', 'goal', 'goal']);
+    const reminders = state.prompts.map(
+      (prompt) =>
+        prompt.filter(
+          (message) =>
+            HumanMessage.isInstance(message) &&
+            message.additional_kwargs[REPEAT_REMINDER_MARKER] != null,
+        ).length,
+    );
+    expect(reminders).toEqual([0, 0, 0, 0, 0, 0, 1]);
+    await stop();
   });
 
   /** 沒有目標就一輪都不排——**而且不吭聲**。 */

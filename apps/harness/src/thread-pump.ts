@@ -61,7 +61,9 @@
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import {
+  APPROVAL_INTERRUPT_KIND,
   foldInbox,
+  humanMessageForTurnStart,
   INTERRUPTED_REPLY_MARKER,
   isTurnCancelled,
   MAX_TOKENS_TURN_END,
@@ -102,6 +104,8 @@ import {
 } from '@nexus/wire';
 import type { SubagentStatusPayload } from '@nexus/wire';
 
+// 讀的事件種類（`todo/write`）照 dsh 由擁有者套件宣告；這一行讓編譯單位看得到那個套件補的鍵，不靠測試檔順手 import（#679）。
+import type {} from '@nexus/plugin-todo';
 import { RootGoal } from './goal-wire.js';
 import {
   compactionData,
@@ -402,10 +406,11 @@ export interface PendingInterrupt {
   /** 這一批要回答幾筆決定——基座逐 index 配對，長度不符當場拋。 */
   readonly actionCount: number;
   /**
-   * 停在核准閘門上的那幾顆工具的名字（酬載的 `actionRequests[].name`）；問答那一種是空的。
+   * 停在核准上的那幾顆工具的名字（酬載的 `actionRequests[].name`）；問答那一種是空的。核准閘門與在本體裡問人的
+   * `request_sandbox_escalation`（[#700](https://github.com/DemianLi/nexus-agent/issues/700)）發的是同一個形狀。
    *
    * 重播靠它分兩種等法（[#317](https://github.com/DemianLi/nexus-agent/issues/317)）：日誌上兩種都只留一顆沒落定的
-   * `tool/call` 與一顆只帶 id 的 `interrupt/raised`，閘門的酬載也沒有 callId——這裡是唯一分得出來的地方。
+   * `tool/call` 與一顆只帶 id 的 `interrupt/raised`，核准的酬載也沒有 callId——這裡是唯一分得出來的地方。
    */
   readonly gatedTools: readonly string[];
   /**
@@ -472,14 +477,46 @@ function asInterruptEntries(data: unknown): readonly InterruptEntry[] {
  * @returns 認得出中斷條目就是 `true`。
  */
 function isSuspensionMessage(message: unknown): boolean {
-  if (typeof message !== 'string') return false;
+  return suspensionEntriesOf(message).length > 0;
+}
+
+/** `tool-error` 的訊息 parse 得出來的中斷條目；不是中斷就是空的。 */
+function suspensionEntriesOf(message: unknown): readonly InterruptEntry[] {
+  if (typeof message !== 'string') return [];
   let parsed: unknown;
   try {
     parsed = JSON.parse(message);
   } catch {
-    return false;
+    return [];
   }
-  return Array.isArray(parsed) && interruptEntriesOf(parsed).length > 0;
+  return interruptEntriesOf(parsed);
+}
+
+/**
+ * 這顆 `tool-error` 是工具**本體**停在核准上嗎（[#700](https://github.com/DemianLi/nexus-agent/issues/700)）——是的話
+ * 整顆不上線。
+ *
+ * 照 dsh，核准的等待不畫在工具卡上：卡維持執行中，面板接管輸入框（#317）。停在核准閘門上的那顆本體沒被呼叫到，
+ * 基座不發 `tool-started` 也不發這顆，所以從來不是問題；`request_sandbox_escalation` 照 dsh 在本體裡問人之後，
+ * 本體被呼叫到了，中斷又是拋出來的，基座就跟問答一樣發一顆 `tool-error`。換成 `tool-suspended` 會畫成
+ * 「等你回答」、重新整理又變回執行中（重播靠 `gatedTools` 認名字）；原樣放行會畫成失敗。所以丟掉。
+ *
+ * **只認明寫 `kind: 'approval'` 的**：判別式缺席在 `@nexus/wire` 那側是「當核准」的向後相容，但這裡丟掉的是一顆
+ * frame，認錯的代價是一張該變「等你回答」的卡停在執行中，所以只收明著說的那一種。
+ *
+ * @param data - 基座給的那顆 `tools` data。
+ * @returns 要丟掉就是 `true`。
+ */
+export function isApprovalSuspension(data: unknown): boolean {
+  const shaped = data as { event?: unknown; message?: unknown } | null;
+  if (shaped === null || typeof shaped !== 'object' || shaped.event !== 'tool-error') return false;
+  const entries = suspensionEntriesOf(shaped.message);
+  return (
+    entries.length > 0 &&
+    entries.every(
+      (entry) => (entry.value as { kind?: unknown } | null)?.kind === APPROVAL_INTERRUPT_KIND,
+    )
+  );
 }
 
 /**
@@ -661,7 +698,7 @@ function actionCountOf(value: unknown): number {
   return Array.isArray(requests) ? requests.length : 0;
 }
 
-/** 這顆中斷停在閘門上的工具名。問答那一種沒有 `actionRequests`，是空的。見 {@link PendingInterrupt.gatedTools}。 */
+/** 這顆中斷停在核准上的工具名。問答那一種沒有 `actionRequests`，是空的。見 {@link PendingInterrupt.gatedTools}。 */
 function gatedToolsOf(value: unknown): string[] {
   const requests = (value as { actionRequests?: unknown } | null)?.actionRequests;
   if (!Array.isArray(requests)) return [];
@@ -1066,7 +1103,7 @@ export class ThreadPump {
     return this.#pending.size > 0;
   }
 
-  /** 停在核准閘門上的工具名，所有掛著的中斷合起來。見 {@link PendingInterrupt.gatedTools}。 */
+  /** 停在核准上的工具名，所有掛著的中斷合起來。見 {@link PendingInterrupt.gatedTools}。 */
   get gatedTools(): ReadonlySet<string> {
     return new Set([...this.#pending.values()].flatMap((pending) => pending.gatedTools));
   }
@@ -1953,7 +1990,7 @@ export class ThreadPump {
         ? // **逐 id 派送，不是裸值。** 鍵是那顆 `XXH3(checkpoint_ns)`，基座只把值送給
           // 那一顆 task；裸值會廣播給每一顆待決的 task（見 `PumpInput` 的 `interruptId`）。
           new Command({ resume: { [input.interruptId]: input.response } })
-        : { messages: [new HumanMessage(input.text)] };
+        : { messages: [humanMessageForTurnStart(turnStartOf(input))] };
 
     // 一輪一個中止控制器，照 dsh（`packages/core/agent-loop/src/agent.ts:149-155`）。
     const current: CurrentRun = {
@@ -2199,6 +2236,8 @@ export class ThreadPump {
     if (raw.method === 'custom' || channelOfMethod(raw.method) === undefined) {
       return;
     }
+    // 本體停在核准上的那顆 `tool-error` 不上線，見 {@link isApprovalSuspension}。
+    if (raw.method === 'tools' && isApprovalSuspension(raw.params.data)) return;
     yield this.#seal({
       method: raw.method,
       params: {

@@ -21,7 +21,12 @@ import {
   DELEGATED_CALLER_MESSAGE,
 } from '@nexus/plugin-ask-user';
 import { hasDirectHumanTurn } from '@nexus/plugin-goal';
-import { createSandboxPolicyPlugin, SandboxModeController } from '@nexus/plugin-sandbox-policy';
+import {
+  createSandboxPolicyPlugin,
+  SANDBOX_ESCALATION_TOOL_NAME,
+  SandboxModeController,
+  unaskedRefusal,
+} from '@nexus/plugin-sandbox-policy';
 import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -1015,6 +1020,70 @@ describe('背景路徑上的 #326：沙箱快照', () => {
       await run.close();
     }
   });
+
+  /**
+   * **子代理的加寬請求不問人，兩條委派入口都量**（#700）。升級的問人搬進工具本體之後，子代理被拒只靠
+   * 委派快照（`controller.delegatedMode`）有值；同步 `task` 那條在 `subagent-sandbox.test.ts`，這裡量
+   * 背景組裝的前景改派（`run_in_background: false`）與背景 start。核准管道給 `human`——快照沒接上的話
+   * 本體就會讀到有人在、真的中斷，root 那一輪停在一張從子代理冒出來的核准卡上。
+   */
+  async function widenFromSubagent(runInBackground: boolean) {
+    const controller = new SandboxModeController('read-only');
+    const run = await assemble({
+      rootTurns: [delegate(runInBackground), { content: '根收尾' }],
+      workerTurns: [
+        call(SANDBOX_ESCALATION_TOOL_NAME, {
+          file_path: '/a.txt',
+          sandbox_permissions: 'workspace-write',
+          justification: '要寫這個檔',
+        }),
+        { content: '子代理收工' },
+      ],
+      background: { sandbox: controller },
+      backend: new ContainedFilesystemBackend({
+        rootDir: dir,
+        mode: controller.source,
+        grants: controller,
+      }),
+      plugins: [
+        createHostServicesPlugin({
+          channel: { kind: 'human' },
+          sandboxPolicy: { controller, rootDir: dir },
+        }),
+        createSandboxPolicyPlugin(),
+      ],
+    });
+    return { controller, run };
+  }
+
+  for (const [label, runInBackground] of [
+    ['前景改派', false],
+    ['背景 start', true],
+  ] as const) {
+    it(`${label}：子代理叫升級、真的加寬——被拒、root 沒有中斷、grant 沒發`, async () => {
+      const { controller, run } = await widenFromSubagent(runInBackground);
+      try {
+        const result = await run.say();
+        if (runInBackground) {
+          await until(() => run.backgroundLogs().length === 1);
+          const [log] = run.backgroundLogs();
+          await run.backgroundDone(log!);
+          expect(turnTypes(log!)).toEqual(['turn/start', 'turn/end']);
+        }
+        await until(() => run.workerModel.prompts.length === 2);
+        const state = (await run.built.agent.getState({
+          configurable: { thread_id: 'thread-1' },
+        })) as { tasks: readonly { interrupts: readonly unknown[] }[] };
+        expect(state.tasks.flatMap((task) => task.interrupts)).toEqual([]);
+        expect('__interrupt__' in result).toBe(false);
+        expect(controller.peekGrant()).toBeUndefined();
+        const refused = toolTexts(run.workerModel.prompts.at(-1)!).at(-1);
+        expect(refused).toBe(`Error: ${unaskedRefusal('policy-never', 'workspace-write')}`);
+      } finally {
+        await run.close();
+      }
+    });
+  }
 
   it('沒掛沙箱 plugin 的組裝：背景那一輪正常結束，不是 turn/failed', async () => {
     const run = await assemble({

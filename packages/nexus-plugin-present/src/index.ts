@@ -2,9 +2,12 @@
  * `@nexus/plugin-present`——模型宣告**這一輪交付了哪些檔案**：一顆 `present` 工具，最終結果成功之後
  * 寫一筆 `deliverables/presented` 進呼叫它的那一份會話日誌。
  *
- * 形狀照 dsh 的 `packages/deliverables/tool-present/`（`ddefc45`）：模型看到的描述、參數、每一句
- * 拒絕與 `Presented <path>` 的結果逐字照抄；每次最多 `maxFiles`（預設 8）個；**只記路徑與說明，
- * 不讀、不複製內容**。dsh 的 standard preset 掛它，所以它在出貨清單裡。
+ * 形狀照 dsh 的 `packages/deliverables/tool-present/`（`477b4f4`）：模型看到的描述、參數說明與
+ * `Presented <path>` 的結果逐字照抄；拒絕的字句也照抄，**但不是每一句都有**——dsh 那句
+ * `present requires an open turn`（沒有進行中的那一輪就拒）我們沒有，要不要補見
+ * [#696](https://github.com/DemianLi/nexus-agent/issues/696) 的留言，還沒定案。每次最多
+ * `maxFiles`（預設 8）個；**只記路徑與說明，不讀、不複製內容**。dsh 的 standard preset 掛它，
+ * 所以它在出貨清單裡。
  *
  * ## 什麼時候寫：配對的 `tool/result` 落定成功之後
  *
@@ -47,6 +50,11 @@
  * 5. **沒有 `turn` 與輸出 schema。** 事件不帶 `turn`，理由見 `@nexus/core` 的 `SessionEventMap`；工具
  *    回一句字串（LangChain 的 `tool()` 形狀），就是 dsh `render` 出來給模型看的那幾行。
  *
+ * 檔案系統照 dsh 從 `fs` 服務拿（dsh 的 `inject` 有 `'fs'`），拿到的是基座檔案工具實際讀寫的那一個
+ * （[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。服務的值是一格 fold 之後才填的把手、
+ * 所以在工具被叫時才讀，偏離登記在 `@nexus/core` 的 `fs-service.ts`，理由同
+ * `@nexus/plugin-agent-instructions` 的偏離 2，不另立一條。
+ *
  * @see [#441](https://github.com/DemianLi/nexus-agent/issues/441)
  * @module
  */
@@ -55,7 +63,13 @@ import { posix } from 'node:path';
 
 import { tool } from '@langchain/core/tools';
 import type { NexusPlugin, PluginEntry, PluginRegistry, PresentedFile } from '@nexus/core';
-import { toolCallIdOf, toolRefusal, WORKSPACE_CAPABILITY } from '@nexus/core';
+import {
+  FS_SERVICE,
+  toolCallIdOf,
+  toolRefusal,
+  virtualPathOf,
+  WORKSPACE_CAPABILITY,
+} from '@nexus/core';
 import { adaptBackendProtocol } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { z } from 'zod';
@@ -67,19 +81,13 @@ export const PRESENT_TOOL_NAME = 'present';
 export const DEFAULT_MAX_FILES = 8;
 
 /**
- * 只為了拿到折出來的 backend 而掛的那顆 middleware 的名字。它沒有任何鉤子（見 `apply`）。
- */
-export const PRESENT_BACKEND_MIDDLEWARE_NAME = 'PresentBackend';
-
-/**
- * 模型看到的描述，**逐字照抄 dsh**（`tool-present/src/index.ts`）。它要求模型在寫完檔、最後回覆之前
- * 叫這顆——「在回覆裡提到路徑不能代替這次呼叫」這句是它存在的理由。
+ * 模型看到的描述，**逐字照抄 dsh**（`tool-present/src/index.ts`）。它告訴模型**使用者需要一份
+ * 獨立的檔案時才叫**（尤其是 Office 文件、試算表、簡報），最後回覆交代得了就不必叫。
  */
 export const PRESENT_TOOL_DESCRIPTION =
-  'Declare existing files accessible through the Session filesystem as final deliverables. ' +
-  'When a file you create or update is an output the user asked to receive, you must call present after writing it and before your final response, including files created through Bash or code execution. ' +
-  'Mentioning its path in your reply does not replace this call. The files must already exist. ' +
-  'The user opens the current source files; their contents are not copied or preserved.';
+  'Declare existing files as final deliverables for the user. ' +
+  'Use it when the user needs a separate file, especially Office documents, spreadsheets, and slide decks; ' +
+  'prefer your final response when that suffices. The user opens the current files; their contents are not copied.';
 
 /** 這次組裝沒有工作區時回的話，照 dsh。 */
 export const PRESENT_NO_WORKSPACE_MESSAGE = 'present requires a workspace';
@@ -161,24 +169,12 @@ export type PresentPluginOptions = z.input<typeof presentConfigSchema>;
 type Inspection = 'file' | 'not-file' | 'missing';
 
 /**
- * 把模型給的路徑換成 backend 命名空間裡的絕對路徑。相對路徑以工作區根為起點（見檔頭偏離 3）。
- * `..` 不在這裡擋：backend 自己的 `resolvePath` 會拒，拒了就是找不到。
- *
- * **匯出是因為讀檔路由要用同一份**（[#452](https://github.com/DemianLi/nexus-agent/issues/452)）。
- * 事件裡存的是模型給的原字串（見下面 `log.append` 那一行），**正規化的結果不落庫**，所以之後
- * 要把那個字串變回一個路徑的人得自己走一次這裡。複製一份的話就是第二個真相——`cli.ts:341`
- * 對同型的情況已經寫過下場：「有一天只有一邊擋」。
- *
- * @param path - 模型給的路徑。
- * @returns 正規化之後、不帶尾斜線的虛擬路徑；工作區根本身是 `/`。
- */
-export function virtualPathOf(path: string): string {
-  const normalized = posix.normalize(path.startsWith('/') ? path : `/${path}`);
-  return normalized.length > 1 && normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
-}
-
-/**
  * 看一個路徑在 backend 上是什麼：列它上一層目錄，找它那一列。**不讀內容**（見檔頭偏離 1）。
+ *
+ * 模型給的路徑先過 `@nexus/core` 的 `virtualPathOf`（相對路徑以工作區根為起點，見檔頭偏離 3）。
+ * **`..` 在那一步就被夾回根了**，不會走到 backend：`a/../b.md` 查的是 `/b.md`，`../x.md` 查的是
+ * `/x.md`。同一個字串交給 `read_file` 會被基座拒，這裡則是查根底下那一個——那個檔在就認，
+ * 不在就是找不到，出不了界。規則跟讀檔路由、workspace-changes 共用那一份，不在這裡另寫。
  * @param backend - 折出來的 backend。
  * @param path - 模型給的路徑。
  * @returns 一般檔案、別的東西，或不在。
@@ -191,7 +187,9 @@ async function inspect(backend: AnyBackendProtocol, path: string): Promise<Inspe
   try {
     listing = await adaptBackendProtocol(backend).ls(posix.dirname(target));
   } catch {
-    // 基座的 `resolvePath` 對 `..`、`~` 是拋的；對模型來說那就是指不到。
+    // `..` 路段已經被夾掉了。基座 `FilesystemBackend` 的 `ls` 自己把 `resolvePath` 的拋（它比的是
+    // `..` 子字串，`x..y/a.md` 的上一層也算）收成空清單，走的是下面的 'missing'；這裡接的是別的
+    // backend 拋出來的。對模型來說都是指不到。
     return 'missing';
   }
   const found = listing.files?.find((file) => virtualPathOf(file.path) === target);
@@ -211,19 +209,11 @@ export const presentPlugin: NexusPlugin<PresentConfig> = {
   Config: presentConfigSchema,
   apply(registry: PluginRegistry, config: PresentConfig): void {
     const { maxFiles } = config;
-    // **plugin 在 `apply` 裡看不到 backend**，只有 `useWithBackend` 的工廠拿得到折好的那一顆
-    // （#388 開的窄縫）。所以掛一顆沒有鉤子的 middleware，只為了接住它。變數放在 `apply` 裡：
-    // 同一個 plugin 物件被好幾次組裝各跑一次 `apply`，每次各一格，不會互相看到。
-    let backend: AnyBackendProtocol | undefined;
     /** 還在等結果的訂閱，依 `callId`。見檔頭「一個 `callId` 只留一個」。 */
     const waiting = new Map<string, () => void>();
     registry.lifecycle.onDispose(() => {
       for (const unsubscribe of waiting.values()) unsubscribe();
       waiting.clear();
-    });
-    registry.middleware.useWithBackend((folded) => {
-      backend = folded;
-      return { name: PRESENT_BACKEND_MIDDLEWARE_NAME };
     });
     registry.tools.register(
       tool(
@@ -246,6 +236,8 @@ export const presentPlugin: NexusPlugin<PresentConfig> = {
           if (requested.length === 0 || requested.length > maxFiles) {
             return refuse(presentCountMessage(maxFiles));
           }
+          // **被叫時才讀**：`fs` 那一格要等 fold 折完才有值，見檔頭最後一段。
+          const backend = registry.services.get(FS_SERVICE)?.backend();
           if (!registry.capabilities.has(WORKSPACE_CAPABILITY) || backend === undefined) {
             return refuse(PRESENT_NO_WORKSPACE_MESSAGE);
           }
@@ -279,19 +271,22 @@ export const presentPlugin: NexusPlugin<PresentConfig> = {
           name: PRESENT_TOOL_NAME,
           description: PRESENT_TOOL_DESCRIPTION,
           schema: z.object({
-            files: z.array(
-              z
-                .object({
-                  path: z
-                    .string()
-                    .describe(
-                      'Path of an existing regular file. Relative paths use the Session working directory.',
-                    ),
-                  description: z.string().optional().describe('Brief description for the user.'),
-                })
-                // 照 dsh 的 `additionalProperties: false`：落庫的要等於模型以為它寫的。
-                .strict(),
-            ),
+            files: z
+              .array(
+                z
+                  .object({
+                    path: z
+                      .string()
+                      .describe(
+                        'Path of an existing regular file. Relative paths use the Session working directory.',
+                      ),
+                    description: z.string().optional().describe('Brief description for the user.'),
+                  })
+                  // 照 dsh 的 `additionalProperties: false`：落庫的要等於模型以為它寫的。
+                  .strict(),
+              )
+              // 照 dsh：4 是建議的每次個數，`maxFiles` 才是真的會拒的上限，兩者不是同一件事。
+              .describe('Usually the 1-2 most important deliverables; at most 4 per call.'),
           }),
         },
       ),

@@ -22,7 +22,8 @@ import type { Event, TitlePayload } from '@nexus/wire';
 import { emptyConversation, reduceAll, TITLE } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createCliAgent, runCli } from './cli.js';
+import { runCli } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { serveClient, shippedPlugins } from './fixtures.js';
 import { DEFAULT_LIVE_MODEL_ENTRY, DEFAULT_LIVE_MODEL_ID, LIVE_API_KEY_ENV } from './live-model.js';
 import { loadDefaultPlugins } from './plugin-config.js';

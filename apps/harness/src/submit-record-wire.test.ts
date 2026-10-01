@@ -55,7 +55,7 @@ import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixture
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
-import { createHostServicesPlugin } from '@nexus/core';
+import { composeAttachSessions } from './session-attach.js';
 
 const BASE_URL = 'http://record.test';
 const CSV_PATH = '/visitors.csv';
@@ -110,13 +110,8 @@ async function connect(
     model: new ScriptedChatModel({ turns: turns as never }),
     checkpointer: new MemorySaver(),
     ...(backend !== undefined && { backend }),
-    // **backend 給同一個物件**，就像 `cli.ts` 那樣。給兩個的失敗方式是兩個工具寫到兩個
-    // 地方，而兩邊都會寫成功——所以這裡同時也在示範正確的接法。
-    plugins: [
-      createHostServicesPlugin({ backend }),
-      createAskUserPlugin(),
-      createSubmitRecordPlugin(),
-    ],
+    // submit-record 從 `fs` 服務拿 fold 折出來的那一個（#694），跟 `write_file` 同一個，不必另外交。
+    plugins: [createAskUserPlugin(), createSubmitRecordPlugin()],
   });
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,
@@ -125,7 +120,7 @@ async function connect(
       commands: emptyCommandPoint(),
       // 接的是 pump 自己那一份註冊表（handler 建完才交過來），同產品路徑 `serve.ts`。工具卡的終態
       // 與結果文字都從日誌來（#296、#439），不接的話卡上只剩基座 frame 說得出的那幾格。
-      attachSession: built.attachSession,
+      attachSessions: composeAttachSessions(built),
       dispose: built.dispose,
     }),
   });

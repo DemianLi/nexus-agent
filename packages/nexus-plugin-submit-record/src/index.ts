@@ -18,26 +18,19 @@
  * 3. **換目標只換這個工具的身體。** `.xlsx`／MCP 那兩條（#231 都在「不在這張卡裡」）換的是
  *    下面 `writeRow` 那幾行，模型面與閘門那一面一個字都不用動。
  *
- * ## backend 由組裝點注入，而且必須是**同一個**
+ * ## backend 是 `write_file` 實際讀寫的**那一個**
  *
- * 這個 plugin 不自己造 backend。理由與 `@nexus/plugin-ask-user` 的 `channel` 完全相同：
- * 分岔的樣子是「`write_file` 寫到 A、`submit_record` 寫到 B」，**而那不會有任何測試紅**——
- * 兩邊各自都寫成功了。所以：
+ * 這個 plugin 不自己造 backend。分岔的樣子是「`write_file` 寫到 A、`submit_record` 寫到 B」，
+ * **而那不會有任何測試紅**——兩邊各自都寫成功了。所以：
  *
- * - **組裝點傳它交給 `createNexusAgent` 的那一個**（`apps/harness/src/cli.ts` 把它 hoist
- *   成一個 const，兩個消費者共用）。
- * - **省略時的預設，字面照抄基座**：`(runtime) => new StateBackend(runtime)`，與
- *   `createFilesystemMiddleware` 的預設**逐字相同**（`deepagents@1.13.1`）。換一種寫法
- *   （例如 `new StateBackend()`）的失敗方式同上：沒有 `--workspace` 的組裝裡兩個工具會
- *   落在不同的地方。
- *
- * **今天這個注入等價於「折出來的那一個」，但那是一件要量的事，不是恆真。** `fold.ts` 交給
- * `createDeepAgent` 的是**折後**的 backend：只要有人 `registry.backend.mount()` 掛了路由，
- * 它就會被包成 `CompositeBackend`，而這裡收到的是**折前**的 default。實測（2026-09-09）
- * 生產程式碼裡 `backend.mount()` **零個呼叫點**（只有 `apps/harness/src/fixtures.ts` 的測試
- * 替身與 `@nexus/core` 的測試），所以兩者今天是同一個物件。**絆索**在
- * `apps/harness/src/submit-record-mounts.test.ts`：哪天有 plugin 開始掛路由，那一條會紅，
- * 而不是等到某一列 CSV 悄悄寫進 route 前綴外面。
+ * - **從 `@nexus/core` 的 `fs` 服務拿，工具被叫時才讀**（[#694](https://github.com/DemianLi/nexus-agent/issues/694)，
+ *   照 dsh 寫檔工具注入的 `fs`）。那一格由 fold 填的是**折後**的 backend：組裝點在 fold 之前包的路由
+ *   （`apps/harness/src/agent-factory.ts` 的 `/conversation_history/`、`/large_tool_results/`）與 plugin
+ *   `registry.backend.mount()` 掛的路由都在裡面。以前收的是組裝點交給 host-services 的**折前**那一個，
+ *   被路由的兩個前綴上兩邊各寫各的。量它的是 `apps/harness/src/submit-record-mounts.test.ts`。
+ * - **拿不到時的預設，字面照抄基座**：`(runtime) => new StateBackend(runtime)`，與
+ *   `createFilesystemMiddleware` 的預設**逐字相同**（`deepagents@1.13.1`）。產品組裝一律提供 `fs`、
+ *   而且一律有 backend，所以這條只剩手搭的組裝走得到。
  *
  * ## 對欄名，不對欄序
  *
@@ -72,7 +65,7 @@ import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { Command } from '@langchain/langgraph';
 import type { NexusPlugin, PluginEntry } from '@nexus/core';
-import { toolRefusal } from '@nexus/core';
+import { FS_SERVICE, toolRefusal } from '@nexus/core';
 import { StateBackend, resolveBackend } from 'deepagents';
 import type { AnyBackendProtocol, BackendFactory, BackendProtocolV2 } from 'deepagents';
 import { z } from 'zod';
@@ -100,21 +93,6 @@ const submitSchema = z.object({
     .record(z.string(), z.string())
     .describe('這一列的欄位，鍵是欄名、值是欄位內容。值一律是字串。'),
 });
-
-/**
- * 「寫出去用的 backend」這個服務的名字。
- *
- * 由**組裝點**提供：要的是它交給 `createNexusAgent` 的**同一個** backend，理由見模組註解。
- * 沒人提供時退到基座那個預設（`StateBackend`，跑在 state 裡不碰磁碟）。
- */
-export const BACKEND_SERVICE = 'backend';
-
-declare module '@nexus/core' {
-  interface NexusServices {
-    /** 這次組裝的預設 backend。見 {@link BACKEND_SERVICE}。 */
-    backend: AnyBackendProtocol;
-  }
-}
 
 /** 這次執行拿到的 runtime。只用得到兩格，所以不整包相依基座的型別。 */
 interface ToolRuntimeLike {
@@ -183,10 +161,10 @@ function appendRow(
   return { text: `${trimmed}\n${row}\n` };
 }
 
-function createSubmitRecordTool(backend: AnyBackendProtocol | undefined) {
-  // **字面照抄 `createFilesystemMiddleware` 的預設**，見模組註解。
-  const resolved: AnyBackendProtocol | BackendFactory =
-    backend ?? ((runtime) => new StateBackend(runtime));
+/**
+ * @param folded - 被叫時讀折出來的那一個 backend；拿不到時回 `undefined`。見模組註解。
+ */
+function createSubmitRecordTool(folded: () => AnyBackendProtocol | undefined) {
   return tool(
     async (
       args: { file_path: string; record: Record<string, string> },
@@ -197,6 +175,9 @@ function createSubmitRecordTool(backend: AnyBackendProtocol | undefined) {
       const failed = (message: string): ToolMessage =>
         toolRefusal(message, { callId, name: SUBMIT_RECORD_TOOL_NAME });
 
+      // **字面照抄 `createFilesystemMiddleware` 的預設**，見模組註解。
+      const resolved: AnyBackendProtocol | BackendFactory =
+        folded() ?? ((runtime) => new StateBackend(runtime));
       const fs = await resolveBackend(resolved, runtime as never);
       const current = await readWhole(fs, args.file_path);
       if (current.binary === true) {
@@ -245,7 +226,7 @@ function createSubmitRecordTool(backend: AnyBackendProtocol | undefined) {
  * **鏈底是 `allow`**——沒人管的工具一律放行。這一刀之前生產程式碼裡只有一個註冊者
  * （plan-mode，只管 `exit_plan_mode`），**這一刀之後是兩個**，而承重的那一半仍然是鏈底：
  * 掛上這個 plugin 之前，`submit_record` 這個名字沒有任何人會攔。（#652 之後 plan-mode 那位拿掉了，
- * 同一格今天是沙箱升級那位，`@nexus/plugin-sandbox-policy` 的 `sandbox-escalation.ts`。）
+ * 沙箱升級那位也在 [#700](https://github.com/DemianLi/nexus-agent/issues/700) 照 dsh 把問人搬進工具本體，所以今天又只剩這一位。）
  *
  * **幾個註冊者不會互相影響**：waterfall 依註冊順序跑，每一位對不是自己那個名字的一律 `next()`，
  * 這位對非 `submit_record` 一律 `next()`。「只認自己那個
@@ -262,16 +243,17 @@ function createSubmitRecordTool(backend: AnyBackendProtocol | undefined) {
  * `submit_record` 的 plugin。
  *
  * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
- * 從設定檔 import。它沒有任何資料設定——唯一要的東西是協作者，走
- * {@link BACKEND_SERVICE} 注入（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
+ * 從設定檔 import。它沒有任何資料設定——唯一要的東西是 backend，走 `@nexus/core` 的 `fs` 服務，
+ * **在工具被叫時才讀**（#694），所以清單裡排在提供者前面或後面都一樣。
  *
- * **軟相依，不是硬的**（`services.get` 不是 `services.use`）：沒人提供時退到基座那個
- * 預設，與這一刀之前 `options.backend` 省略時完全一樣。
+ * **軟相依，不是硬的**（`services.get` 不是 `services.use`）：沒人提供時退到基座那個預設。
  */
 export const submitRecordPlugin: NexusPlugin = {
   name: 'submit-record',
   apply(registry) {
-    registry.tools.register(createSubmitRecordTool(registry.services.get(BACKEND_SERVICE)));
+    registry.tools.register(
+      createSubmitRecordTool(() => registry.services.get(FS_SERVICE)?.backend()),
+    );
     registry.approvals.gate((exec, next) =>
       exec.name === SUBMIT_RECORD_TOOL_NAME
         ? { kind: 'ask', reason: '這一列要寫出去，先讓人看過' }

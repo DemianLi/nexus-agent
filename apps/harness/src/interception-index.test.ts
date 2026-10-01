@@ -315,12 +315,16 @@ function productSources(dir: string): string[] {
 }
 
 /**
- * 第 4 列紀錄差的**承重事實**：`SessionEventType` 那個聯集裡沒有任何 `approval/` 開頭的
- * 事件名——核准在我們的日誌上完全不留痕跡。
+ * 第 4 列紀錄差的**承重事實**：事件種類裡沒有任何 `approval/` 開頭的名字——核准在我們的日誌上
+ * 完全不留痕跡。
  *
  * **這條是翻面寫的**：它今天綠，而那兩顆事件真的落地的那天它會紅，紅的地方正好是要改的
- * 那一欄。掃的是聯集的寫法（`| 'approval/`）而不是整個檔案，所以散文裡提到 dsh 那兩顆
- * 事件名不會誤觸。
+ * 那一欄。掃的是種類的**寫法**（聯集的 `| 'approval/`，或映射／宣告合併裡的 `'approval/…':`
+ * 鍵）而不是整個檔案，所以散文裡提到 dsh 那兩顆事件名不會誤觸。
+ *
+ * **掃的範圍不只 `session-log.ts`**（#679）：照 dsh，擁有者套件可以用 `declare module '@nexus/core'`
+ * 把自己的事件種類補進 `SessionEventMap`（見 {@link declaredEventKeyBlocks}），只掃
+ * `session-log.ts` 的話，別的套件宣告核准事件時這條照樣綠。
  *
  * **它釘不住那一欄的其餘部分**：`interrupt/raised` 帶什麼、`wire-handler.ts` 記不記結果、
  * 生產者在不在圖外，都要自己讀。這是這份索引每一條斷言共同的限制，見檔頭。
@@ -328,8 +332,28 @@ function productSources(dir: string): string[] {
 const RECORD_ANCHOR = {
   cell: 4,
   path: 'packages/nexus-core/src/session-log.ts',
-  absent: "| 'approval/",
+  /** 事件種類的兩種寫法：聯集的一項，與映射／宣告合併的一個鍵。 */
+  absent: [/\|\s*'approval\//u, /^\s*'approval\/[^']*'\s*:/mu],
 } as const;
+
+/**
+ * 一份原文裡每個 `declare module '@nexus/core' { … }` 區塊的內文（花括號配對取到對的那一個）。
+ * 擁有者套件用它補 `SessionEventMap`，所以那裡面的鍵也算事件種類。
+ */
+function declaredEventKeyBlocks(source: string): string[] {
+  const blocks: string[] = [];
+  const opener = /declare\s+module\s+['"]@nexus\/core['"]\s*\{/gu;
+  for (let match = opener.exec(source); match; match = opener.exec(source)) {
+    let depth = 1;
+    let i = match.index + match[0].length;
+    for (; i < source.length && depth > 0; i += 1) {
+      if (source[i] === '{') depth += 1;
+      else if (source[i] === '}') depth -= 1;
+    }
+    blocks.push(source.slice(match.index + match[0].length, i));
+  }
+  return blocks;
+}
 
 describe('攔截時刻索引', () => {
   it(`剛好 ${EXPECTED_ROWS} 列，${EXPECTED_SITES} 個佔用位址`, () => {
@@ -376,11 +400,20 @@ describe('攔截時刻索引', () => {
     const row = INDEX.find((candidate) => candidate.cell === RECORD_ANCHOR.cell);
     // 這一列的紀錄差是量過的，不能退回 `undefined`（那等於宣稱沒有紀錄面的缺口）。
     expect(row?.recordDelta).toBeTypeOf('string');
-    const source = readFileSync(join(REPO_ROOT, RECORD_ANCHOR.path), 'utf8');
-    expect(
-      source,
-      `${RECORD_ANCHOR.path} 的 SessionEventType 多了核准事件，` +
-        `第 ${RECORD_ANCHOR.cell} 列的紀錄差要跟著重寫`,
-    ).not.toContain(RECORD_ANCHOR.absent);
+    const sources = [readFileSync(join(REPO_ROOT, RECORD_ANCHOR.path), 'utf8')];
+    for (const root of PRE_STEP_ROOTS) {
+      for (const file of productSources(join(REPO_ROOT, root))) {
+        sources.push(...declaredEventKeyBlocks(readFileSync(file, 'utf8')));
+      }
+    }
+    for (const source of sources) {
+      for (const pattern of RECORD_ANCHOR.absent) {
+        expect(
+          source,
+          `SessionEventType（${RECORD_ANCHOR.path} 或某個 declare module '@nexus/core' 區塊）` +
+            `多了核准事件，第 ${RECORD_ANCHOR.cell} 列的紀錄差要跟著重寫`,
+        ).not.toMatch(pattern);
+      }
+    }
   });
 });

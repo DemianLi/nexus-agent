@@ -33,6 +33,7 @@ import { deriveApprovalChannel } from './approval.js';
 import { createContainmentMiddleware } from './containment.js';
 import { createOutputSchemaMiddleware } from './output-schema.js';
 import { createFsToolErrorsMiddleware, recordBackendOutcomes } from './fs-tool-errors.js';
+import { FS_SERVICE, settleFsService } from './fs-service.js';
 import { createReadContinuationMiddleware, recordReadExtent } from './read-continuation.js';
 import { recordToolResultMeta } from './tool-result-meta.js';
 import {
@@ -71,6 +72,7 @@ import {
   SUMMARIZATION_SERVICE,
 } from './summarization.js';
 import type { SummarizationSettings } from './summarization.js';
+import { TokenAnchorBook } from './token-estimate.js';
 import { toolCallIdOf, toolRefusal } from './tool-events.js';
 import {
   resolveToolResultPruneConfig,
@@ -247,6 +249,15 @@ export interface FoldOptions {
    * default backend 又沒關掉摘要時，fold 當場拋；關掉時不需要。
    */
   summarization?: Partial<SummarizationSettings> | false;
+  /**
+   * 錨定估算的帳（[#588](https://github.com/DemianLi/nexus-agent/issues/588)、[#702](https://github.com/DemianLi/nexus-agent/issues/702)）：
+   * 摘要器的預算層用它估「這份請求送出去會是幾個 token」，並在每次呼叫回來時記下供應商報的實數。
+   *
+   * **帳由進入點建、注入**，不是模組全域。要跨 thread 借錨的進入點（`runServe`）建一本傳給每一條 thread 的組裝；
+   * **省略即這次組裝各建一本**——這次組裝裡的 root 與子代理共用它（`foldSummarizer` 只建一次），不同組裝彼此不借。
+   * 只在摘要開著時有作用。
+   */
+  tokenAnchorBook?: TokenAnchorBook;
   /**
    * 摘要器外面那把工具結果剪刀的預算。給物件就逐格淺合併到
    * {@link DEFAULT_TOOL_RESULT_PRUNE} 上，`false` 是明著不要——摘要照跑，只是不先剪。
@@ -458,6 +469,9 @@ export function foldRegistry(
   // **backend 提前折**：策略要的版本 token 得從工具實際讀寫的那一個取，所以它不能等到
   // 下面才算。摘要器刻意拿的是兜底那個，兩者的差別見各自的文件。
   const backend = foldBackend(registry, options.defaultBackend);
+  // **工具拿的也是這一個**（#694）：組裝點提供了 `fs` 那一格的話，在這裡填。填的是折出來的這個，不是兜底那個、
+  // 也不是下面交給基座前再包上記錄層的那一份——後者只給基座的檔案工具記結果用。見 {@link ./fs-service.ts}。
+  settleFsService(registry.services.get(FS_SERVICE), backend);
   const observationPolicy = foldObservationPolicy(registry, options, backend);
   // 檔案工具的失敗標成錯誤（#293）：只在有 backend 時掛——包的是交給基座的那一份，策略手上
   // 那一個是同一個實例，見 {@link ./fs-tool-errors.ts}。無狀態，一份走遍 root 與每個 subagent。
@@ -474,6 +488,101 @@ export function foldRegistry(
   // **plugin middleware 在這裡就攤平，只攤一次**：要 backend 的那一種（`useWithBackend`，#388）
   // 建出來的實例得走遍 root 與每個子代理，這裡各算一次的話兩邊拿到的會是兩份。
   const plugins = pluginMiddleware(registry, backend);
+  const subagentPlugins = subagentPluginMiddleware(plugins);
+  // 工具過濾（#707）遮的基座工具：過濾對每個子代理一樣，所以名單一樣；基座工具不可能被子代理自己同名註冊（基座拒絕），
+  // 不必扣自帶的。
+  const hiddenBaseTools = new Set(
+    options.subagentToolFilter === undefined
+      ? []
+      : (options.baseToolNames ?? []).filter(
+          (each) => !toolKept(options.subagentToolFilter!, each),
+        ),
+  );
+
+  // **槽位表：root 與每個子代理的 middleware 疊都從這一張導出**（#664），順序就是兩邊的包裹順序。
+  // 新增一顆 core middleware = 上面建一個實例、這裡加一列。子代理那一欄要寫「不給」得明著寫，漏接在這裡寫不出來。
+  const slots: readonly MiddlewareSlot[] = [
+    // 插話排最前面：它的 `beforeModel` 先於其餘每一顆（重複提醒在同一步就看得到人插了話、清零），它的
+    // `afterAgent` 最後才問（排在它後面的 `afterAgent` 先走完）。它沒有 `wrap*`，不影響洋蔥的層次。
+    // 只折進 root。見 {@link ./step-inbox.ts}。
+    rootOnly(
+      'stepInbox',
+      same(options.stepInbox === true ? createStepInboxMiddleware() : undefined),
+    ),
+    // 圍堵在第 0 格：它要包住下面每一個，包含子代理 `spec.middleware` 自己帶的那些。
+    shared('containment', containment),
+    // 緊貼圍堵：在它裡面（換過的結果圍堵才記得到碼），在起訖紀錄器外面（中止之後被擋下的那次呼叫不算一步）。
+    // root 按了停止，訊號經 `configurable` 傳到子代理（#265 的 Q10）。見 {@link ./turn-cancel.ts}。
+    shared('turnCancel', turnCancel),
+    // 外溢層在 plugin 與核准閘門的外側、圍堵的內側：內層每一顆換過的結果它都看得到，而圍堵寫進日誌的是它換過的那一則
+    // （紀錄只記預覽，同 dsh `tool-calls.ts:152-156`）。見 {@link ./spill-policy.ts}。
+    shared('spill', spill),
+    // plugin 以 `prepend` 掛的：在中止內側、閘門外側（#327）。子代理拿的是同一批實例，去掉撞名摘要器的那一顆。
+    {
+      name: 'plugins.prepended',
+      root: same(plugins.prepended),
+      subagent: same(subagentPlugins.prepended),
+    },
+    // 工具過濾（#707）遮基座工具，排在閘門外側：被遮的呼叫碰不到閘門與工具本體。沒設或沒有基座工具被遮就不放。
+    subagentOnly(
+      'toolFilter',
+      make(() =>
+        hiddenBaseTools.size === 0
+          ? undefined
+          : createSubagentToolFilterMiddleware(hiddenBaseTools),
+      ),
+    ),
+    // 閘門排在子代理自帶的那些之前——同「全域勝」那條軸線：子代理自己掛的 middleware 繞不過它。
+    // 子代理那一欄是另一顆，管道固定 `policy-never`（#324）。
+    { name: 'approvalGate', root: same(approvalGate), subagent: same(subagentApprovalGate) },
+    // **各建一份，不共用**：觀測紀錄在 closure 裡，共用等於讓 root 讀過的檔變成這個 subagent 也可以直接改。
+    // 理由見 {@link foldObservationPolicy}。
+    perAgent('observationPolicy', () => observationPolicy?.()),
+    // **摘要器也各建一份，不共用**：`sessionId` 在 closure 裡，共用會讓 root 與這個 subagent 的歷史 append 進同一個檔。
+    // 理由見 {@link foldSummarizer}。排在子代理自帶的 middleware 之前 ＝ 自帶的同名版本贏得過我們這份（打底不是強制）。
+    perAgent('summarizer', () => summarizer()),
+    // 提醒器與用量記錄器同樣打底、共用一份：它們無狀態，不注的話子代理那幾輪完全沒有——沒有人會紅
+    // （#147）。見 {@link ./model-usage.ts}。
+    shared('repeatReminder', repeatReminder),
+    // 委派聲明排在 `spec.middleware` 外層：子代理自己帶的 middleware 看到的是接好聲明的請求。只給子代理。
+    subagentOnly('delegation', same(subagentDelegation)),
+    // 起訖排在用量外層、plugin middleware 外層：一個自己重試模型的 plugin，重試幾次都只算一步——同 dsh 的
+    // `llm/retry` 在一步之內。摘要器不管排哪都在它外面，見 `model-calls.ts`。
+    shared('modelCalls', modelCalls),
+    shared('modelUsage', modelUsage),
+    // 耐久檢查點排在起訖紀錄器內側：排空時 `model/start` 已經記下，同 dsh「記好的請求前綴」；在其餘 plugin
+    // middleware 外側：一個自己重試模型的 plugin 重試幾次都只排空一次。子代理的模型呼叫排空的是子代理那一份日誌。
+    // 工具那一側，`tool/call` 由最外層的圍堵記，這裡一定看得到它。見 {@link ./session-checkpoint-policy.ts}。
+    shared('sessionCheckpoint', sessionCheckpoint),
+    // 其餘 plugin 的：排在子代理 `spec.middleware` 外層，plugin 打底、自帶的在內側，同 `tools` 那條「全域 → 自帶」的軸線。
+    { name: 'plugins.rest', root: same(plugins.rest), subagent: same(subagentPlugins.rest) },
+    // 子代理自己帶的 middleware：每個子代理不同，所以是「逐個取」而不是共用。
+    subagentOnly(
+      'spec.middleware',
+      make((spec) => spec.middleware ?? []),
+    ),
+    // 以 `last` 掛的（#720）：在其餘每一顆會往 system prompt 附加文字的內側（連子代理自帶的也在它外側），所以它附加的仍是最後一段。
+    { name: 'plugins.last', root: same(plugins.last), subagent: same(subagentPlugins.last) },
+    // 輸出校驗在每一個 plugin middleware 的內側：看到的是工具原本的輸出，不是外層改過的版本（dsh 在
+    // `tools/post-execute` 之前驗）。解不開參數的那顆在它更內側，換上的樁回的是錯誤，這裡照規矩不驗。
+    // 見 {@link ./output-schema.ts}。
+    shared('outputSchema', outputSchema),
+    // 檔案工具的失敗標成錯誤：貼著工具本體（dsh 在工具裡拋），在輸出校驗、先讀後改與圍堵的內側，它們讀到的都是
+    // 改過的狀態。子代理的檔案工具由基座用 root 那一份 `backend` 建，所以記錄的那一層在它們身上一樣在。
+    // 解不開參數的樁不叫 backend，排在它裡面沒有東西可記。見 {@link ./fs-tool-errors.ts}。
+    shared('fsToolErrors', fsToolErrors),
+    // 讀檔結果最後補上讀到哪：同一個時刻、同一個理由貼著工具本體。在失敗記錄的內側，它只補成功的，兩者不相干；
+    // 外面每一顆（含圍堵寫進日誌的那一則）看到的都是補過的。見 {@link ./read-continuation.ts}。
+    shared('readContinuation', readContinuation),
+    // 解不開的參數：`wrapToolCall` 在核准與每個 plugin 的內側（dsh 執行時才驗參數），改寫在其餘 `wrapModelCall`
+    // 的內側（外面看到的都是改寫過的那則）。root 與子代理同一顆（#269 的 Q7）。見 {@link ./invalid-tool-args.ts}。
+    shared('invalidToolArgs', invalidToolArgs),
+    // 撞到輸出上限：清工具呼叫排在修補的內側（被切斷的那顆不會先被修成 `{}` 參數），外面每一顆看到的都是清過的；
+    // 子代理的截斷要記進同一份載體給父圖的 `task` 讀。見 {@link ./max-tokens.ts}。
+    shared('maxTokens', maxTokens),
+    // 最內層：只替模型綁中止訊號，外面每一顆看到的都是原本的模型。見 {@link ./turn-cancel.ts}。
+    shared('turnCancelModelSignal', turnCancelModelSignal),
+  ];
 
   const params: FoldedAgentParams = {
     tools: orderTools(globalTools, toolOrder),
@@ -483,45 +592,9 @@ export function foldRegistry(
       baseToolNames: options.baseToolNames ?? [],
       skills: registry.skills.sources(),
       permissions,
-      containment,
-      turnCancel,
-      turnCancelModelSignal,
-      approvalGate: subagentApprovalGate,
-      delegation: subagentDelegation,
-      plugins: subagentPluginMiddleware(plugins),
-      observationPolicy,
-      summarizer,
-      repeatReminder,
-      modelUsage,
-      modelCalls,
-      sessionCheckpoint,
-      outputSchema,
-      fsToolErrors,
-      readContinuation,
-      invalidToolArgs,
-      maxTokens,
-      spill,
+      slots,
     }),
-    middleware: foldMiddleware(
-      options.stepInbox === true ? createStepInboxMiddleware() : undefined,
-      plugins,
-      containment,
-      turnCancel,
-      turnCancelModelSignal,
-      approvalGate,
-      observationPolicy?.(),
-      summarizer(),
-      repeatReminder,
-      modelUsage,
-      modelCalls,
-      sessionCheckpoint,
-      outputSchema,
-      fsToolErrors,
-      readContinuation,
-      invalidToolArgs,
-      maxTokens,
-      spill,
-    ),
+    middleware: foldMiddleware(slots),
   };
 
   if (permissions.length > 0) params.permissions = permissions;
@@ -792,7 +865,9 @@ function foldApprovalGate(
 }
 
 /**
- * middleware 折成一份清單：圍堵在最前，`prepend` 的接著，核准閘門再接著，其餘依註冊順序。
+ * root 的 middleware 疊：把槽位表（{@link MiddlewareSlot}）展成一份清單——圍堵在最前，`prepend` 的接著，
+ * 核准閘門再接著，其餘依註冊順序。**子代理那一疊從同一張表導出**（{@link foldSubagentMiddleware}），
+ * 下面每一條位置的理由兩邊共用。
  *
  * **與 dsh 的偏離**：dsh 的匿名表只有 `append`，沒有 prepend 這個概念。deepagents
  * 的 middleware 是一份順序有意義的陣列，「插到最前」表達不出來，所以退到最接近的
@@ -841,74 +916,112 @@ function foldApprovalGate(
  * 最內層就對——**但那會反轉 {@link foldSubAgents} 那條「同名時 subagent 自己帶的贏」
  * 的政策**，兩件事要一起想。
  */
-function foldMiddleware(
-  stepInbox: AgentMiddleware | undefined,
-  plugins: PluginMiddleware,
-  containment: AgentMiddleware,
-  turnCancel: AgentMiddleware,
-  turnCancelModelSignal: AgentMiddleware,
-  approvalGate: AgentMiddleware,
-  observationPolicy: AgentMiddleware | undefined,
-  summarizer: AgentMiddleware,
-  repeatReminder: AgentMiddleware | undefined,
-  modelUsage: AgentMiddleware | undefined,
-  modelCalls: AgentMiddleware,
-  sessionCheckpoint: AgentMiddleware | undefined,
-  outputSchema: AgentMiddleware,
-  fsToolErrors: AgentMiddleware | undefined,
-  readContinuation: AgentMiddleware | undefined,
-  invalidToolArgs: AgentMiddleware,
-  maxTokens: AgentMiddleware,
-  spill: AgentMiddleware | undefined,
+function foldMiddleware(slots: readonly MiddlewareSlot[]): AgentMiddleware[] {
+  return slots.flatMap((slot) => takeFrom(slot.root));
+}
+
+/**
+ * 一個子代理的 middleware 疊：同一張表，取每一列的子代理那一欄。
+ *
+ * @param slots - 槽位表。
+ * @param spec - 這個子代理的規格；「子代理自帶」那一列從它取。
+ * @returns 依表的順序展開的 middleware。
+ */
+function foldSubagentMiddleware(
+  slots: readonly MiddlewareSlot[],
+  spec: SubAgent,
 ): AgentMiddleware[] {
-  return [
-    // 插話排最前面：它的 `beforeModel` 先於其餘每一顆（重複提醒在同一步就看得到人插了話、清零），它的
-    // `afterAgent` 最後才問（排在它後面的 `afterAgent` 先走完）。它沒有 `wrap*`，不影響洋蔥的層次。
-    // 見 {@link ./step-inbox.ts}。
-    ...(stepInbox === undefined ? [] : [stepInbox]),
-    containment,
-    // 緊貼圍堵：在它裡面（換過的結果圍堵才記得到碼），在起訖紀錄器外面（中止之後被擋下的那次
-    // 呼叫不算一步）。見 {@link ./turn-cancel.ts}。
-    turnCancel,
-    // 外溢層在 plugin 與核准閘門的外側、圍堵的內側：內層每一顆換過的結果它都看得到，而圍堵寫進日誌的是它換過的那一則
-    // （紀錄只記預覽，同 dsh `tool-calls.ts:152-156`）。見 {@link ./spill-policy.ts}。
-    ...(spill === undefined ? [] : [spill]),
-    ...plugins.prepended,
-    approvalGate,
-    ...(observationPolicy === undefined ? [] : [observationPolicy]),
-    summarizer,
-    ...(repeatReminder === undefined ? [] : [repeatReminder]),
-    // 起訖排在用量外層、plugin middleware 外層：一個自己重試模型的 plugin，重試幾次都只算
-    // 一步——同 dsh 的 `llm/retry` 在一步之內。摘要器不管排哪都在它外面，見 `model-calls.ts`。
-    modelCalls,
-    ...(modelUsage === undefined ? [] : [modelUsage]),
-    // 耐久檢查點排在起訖紀錄器內側：排空時 `model/start` 已經記下，同 dsh「記好的請求前綴」；
-    // 在其餘 plugin middleware 外側：一個自己重試模型的 plugin 重試幾次都只排空一次，同一步只算一次。
-    // 工具那一側，`tool/call` 由最外層的圍堵記，這裡一定看得到它。見 {@link ./session-checkpoint-policy.ts}。
-    ...(sessionCheckpoint === undefined ? [] : [sessionCheckpoint]),
-    ...plugins.rest,
-    // 以 `last` 掛的（#720）：在其餘每一顆會往 system prompt 附加文字的內側，所以它附加的是最後一段。
-    ...plugins.last,
-    // 輸出校驗在每一個 plugin middleware 的內側：看到的是工具原本的輸出，不是外層改過的版本
-    // （dsh 在 `tools/post-execute` 之前驗）。解不開參數的那顆在它更內側，換上的樁回的是錯誤，
-    // 這裡照規矩不驗。見 {@link ./output-schema.ts}。
-    outputSchema,
-    // 檔案工具的失敗標成錯誤：貼著工具本體（dsh 在工具裡拋），在輸出校驗、先讀後改與圍堵的內側，
-    // 它們讀到的都是改過的狀態。解不開參數的樁不叫 backend，排在它裡面沒有東西可記。
-    // 見 {@link ./fs-tool-errors.ts}。
-    ...(fsToolErrors === undefined ? [] : [fsToolErrors]),
-    // 讀檔結果最後補上讀到哪：同一個時刻、同一個理由貼著工具本體。在失敗記錄的內側，它只補成功的，
-    // 兩者不相干；外面每一顆（含圍堵寫進日誌的那一則）看到的都是補過的。見 {@link ./read-continuation.ts}。
-    ...(readContinuation === undefined ? [] : [readContinuation]),
-    // 解不開的參數：`wrapToolCall` 在核准與每個 plugin 的內側（dsh 執行時才驗參數），改寫在其餘
-    // `wrapModelCall` 的內側（外面看到的都是改寫過的那則）。見 {@link ./invalid-tool-args.ts}。
-    invalidToolArgs,
-    // 撞到輸出上限：清工具呼叫排在修補的內側（被切斷的那顆不會先被修成 `{}` 參數），外面每一顆看到的
-    // 都是清過的；`task` 的結果在圍堵與每個 plugin 的內側換。見 {@link ./max-tokens.ts}。
-    maxTokens,
-    // 最內層：只替模型綁中止訊號，外面每一顆看到的都是原本的模型。見 {@link ./turn-cancel.ts}。
-    turnCancelModelSignal,
-  ];
+  return slots.flatMap((slot) => takeFrom(slot.subagent, spec));
+}
+
+/**
+ * 槽位表的一列：一個位置，以及 root 與子代理各自從這個位置拿什麼。
+ *
+ * **這張表取代了兩份手寫的清單**（#664）：以前 root 是 `foldMiddleware` 的 16 個位置參數加一個陣列，子代理是
+ * `foldSubAgents` 的 20 欄 context 加另一個陣列，對齊只靠每一格的「同 root」註解。漏接子代理沒有任何東西會紅：
+ * 漏核准閘門「默默地讓 subagent 失去核准」，漏用量記錄器「沒有人會紅」。現在新增一顆只寫一列，子代理那一疊自動
+ * 跟上；要漏掉就得在那一列明寫 {@link NONE}。
+ *
+ * **偏離（登記）**：dsh 的子代理不另組一份，`applyChildComposition` 第一步就是 `composeFrom(childCtx, parent.ctx)`，
+ * 併入父代理保留的同一版組合，所以「子代理沒併入」在呼叫點寫不出來（dsh
+ * `packages/subagent/subagent/src/child-agent.ts:190-205`、`packages/preset/agent-preset-registry/src/index.ts:268-273`，
+ * `477b4f4`）。**表達不出來的理由**：deepagents 1.13.1 沒有「子代理繼承 root middleware」的通道——
+ * `SubAgentBase.middleware` 的說明是 “Additional middleware to append after default_middleware”
+ * （`dist/agent-D50BBbJT.d.ts`），執行期的 `buildSubagentMiddleware` 只合子代理預設 stack、這個 spec 的 `middleware`、
+ * harness profile 的 `extraMiddleware` 與快取／記憶那幾顆，root 的 `middleware` 參數不在裡面；唯一的例外是基座自己補的
+ * `general-purpose`（`appendNew: false`，只原地換掉同名的預設），而 fold 一律自己補它。同時進 root 與子代理的只有
+ * harness profile 的 `extraMiddleware`，它落在 tail 段、又是以模型為鍵的全域註冊，排不出「圍堵在第 0 格」
+ * 「plugin 在 `spec.middleware` 外層」這些位置。**退到**：fold 內一張有序的槽位表導出兩份陣列，這是在只能逐個注的
+ * 前提下最接近 `composeFrom` 的形狀。
+ */
+interface MiddlewareSlot {
+  /** 這一列的名字，診斷與讀表用；不是 middleware 自己的 `name`。 */
+  readonly name: string;
+  /** root 取什麼。 */
+  readonly root: SlotTake<[]>;
+  /** 每個子代理取什麼；`spec` 是那個子代理的規格。 */
+  readonly subagent: SlotTake<[spec: SubAgent]>;
+}
+
+/** 一列在一個 agent 身上產出的東西：一顆、一批，或什麼都沒有。 */
+type SlotContribution = AgentMiddleware | readonly AgentMiddleware[] | undefined;
+
+/**
+ * 一列在某個 agent 身上怎麼取：
+ *
+ * - `none`：不給。**這是明寫的**，不是漏接。
+ * - `same`：交出一份現成的——同一個實例走遍每個拿它的 agent（無狀態的那些），或是另一顆（核准閘門）。
+ * - `make`：每次展開時現建——逐個 agent 各建一份（有閉包狀態的那些），或從這個 agent 的規格現取。
+ */
+type SlotTake<Args extends unknown[]> =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'same'; readonly value: SlotContribution }
+  | { readonly kind: 'make'; readonly make: (...args: Args) => SlotContribution };
+
+/** 這個 agent 不拿這一列。 */
+const NONE = { kind: 'none' } as const;
+
+function same(value: SlotContribution): {
+  readonly kind: 'same';
+  readonly value: SlotContribution;
+} {
+  return { kind: 'same', value };
+}
+
+function make<Args extends unknown[]>(
+  build: (...args: Args) => SlotContribution,
+): { readonly kind: 'make'; readonly make: (...args: Args) => SlotContribution } {
+  return { kind: 'make', make: build };
+}
+
+/** root 與每個子代理共用同一個實例（或同樣是「沒有」）。 */
+function shared(name: string, value: SlotContribution): MiddlewareSlot {
+  return { name, root: same(value), subagent: same(value) };
+}
+
+/** root 與每個子代理各建一份：它的狀態在閉包裡，共用會讓兩個 agent 串台。 */
+function perAgent(name: string, build: () => SlotContribution): MiddlewareSlot {
+  return { name, root: make(build), subagent: make(build) };
+}
+
+/** 只給 root。 */
+function rootOnly(name: string, root: SlotTake<[]>): MiddlewareSlot {
+  return { name, root, subagent: NONE };
+}
+
+/** 只給子代理。 */
+function subagentOnly(name: string, subagent: SlotTake<[spec: SubAgent]>): MiddlewareSlot {
+  return { name, root: NONE, subagent };
+}
+
+/** 把一列的一欄展開成零到多顆 middleware。 */
+function takeFrom<Args extends unknown[]>(take: SlotTake<Args>, ...args: Args): AgentMiddleware[] {
+  const value =
+    take.kind === 'none' ? undefined : take.kind === 'same' ? take.value : take.make(...args);
+  if (value === undefined) return [];
+  return Array.isArray(value)
+    ? [...(value as readonly AgentMiddleware[])]
+    : [value as AgentMiddleware];
 }
 
 /**
@@ -1087,7 +1200,9 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
         '地方放。給一個 default backend、明著傳 `summarization: false`，或在部署設定裡把' +
         ' `@nexus/core/summarization` 那一列標成 `disabled: true`。',
     );
-  return () => createSummarizer(backend, settings, registry.sessions, pruning);
+  // **一次組裝一本，root 與子代理共用**：放在工廠外面，每呼叫一次工廠才不會各建一本、把借錨切碎。
+  const book = options.tokenAnchorBook ?? new TokenAnchorBook();
+  return () => createSummarizer(backend, settings, book, registry.sessions, pruning);
 }
 
 /**
@@ -1310,19 +1425,23 @@ function generalPurposeSpec(skills: readonly string[]): SubAgent {
  * 明文 full replacement，`tools` 缺席才 fallback 到 defaultTools）。所以同名項一律
  * **全域勝**：subagent 可以多要求，不能少要求。
  *
- * **核准閘門必須逐個 subagent 注進去，不能靠繼承。** deepagents 對
+ * **核准閘門必須從 fold 這一側明著交給每個 subagent，不能靠繼承。** deepagents 對
  * `SubAgentBase.middleware` 的說明是 “Additional middleware to append after
  * default_middleware”（`deepagents@1.13.1`，`dist/agent-D50BBbJT.d.ts:1527`）——
  * subagent 拿的是基座那份預設 stack 加自己宣告的那些，**root 的 middleware 參數
- * 一個都不繼承**——這一段注進去的每一顆都是這個原因。舊機制靠的是 `interruptOn` 這個欄位可以逐個
- * subagent 傳，換成 middleware 之後那條路沒了，不注就是默默地讓 subagent 失去核准。
+ * 一個都不繼承**——這一段交出去的每一顆都是這個原因。舊機制靠的是 `interruptOn` 這個欄位可以逐個
+ * subagent 傳，換成 middleware 之後那條路沒了，不交就是默默地讓 subagent 失去核准。
+ *
+ * **交的方式是從同一張槽位表導出**（{@link MiddlewareSlot}，#664），不是各自手寫一份清單：理由沒變（基座
+ * 沒有繼承的通道），變的是漏接的後果——以前新增一顆只補 root、子代理漏掉沒有任何東西會紅，現在每一列都得為
+ * 子代理那一欄表態，不給也要明寫。偏離的登記與表達不出來的理由寫在 {@link MiddlewareSlot} 上。
  *
  * **注進去的是另一顆，管道固定 `policy-never`**（[#324](https://github.com/DemianLi/nexus-agent/issues/324)）：
  * 照 dsh，子代理不停下來等人，需要核准的操作一律自動拒絕。listener 同一組，所以該問的照樣被判成「要問」，
  * 只是問不到人——不注的話那些工具在子代理裡會**直接執行**，那是更糟的一邊。同一張卡的另外兩面：問答那顆
  * 以 `rootOnly` 換成樁，以及只放進子代理的委派聲明（{@link ./subagent-delegation.ts}）。
  *
- * **圍堵同樣逐個注進去，理由同上一條。** 它以前是 plugin middleware，而那時 plugin
+ * **圍堵同樣明著交給每個 subagent，理由同上一條。** 它以前是 plugin middleware，而那時 plugin
  * middleware 一顆都射不進 subagent——也就是說 subagent 裡任何一個工具拋錯，整場 run 照樣
  * 死。[#159](https://github.com/DemianLi/nexus-agent/issues/159) 把它搬進 fold 打底，
  * 兩個掛點缺一個就是漏掉半棵樹。**排在第 0 格**，理由與 {@link foldMiddleware} 那份同一條：
@@ -1366,31 +1485,8 @@ function foldSubAgents(
     /** root 的 skills 來源。只給 fold 補的 `general-purpose`，同基座那份。 */
     skills: readonly string[];
     permissions: readonly FilesystemPermission[];
-    containment: AgentMiddleware;
-    turnCancel: AgentMiddleware;
-    turnCancelModelSignal: AgentMiddleware;
-    /** 子代理那顆，管道固定 `policy-never`——不是 root 那顆。 */
-    approvalGate: AgentMiddleware;
-    /** 委派聲明，見 {@link ./subagent-delegation.ts}。只放進子代理。 */
-    delegation: AgentMiddleware;
-    /** plugin 註冊的，跟 root 同一批實例，見 {@link pluginMiddleware}。 */
-    plugins: {
-      prepended: readonly AgentMiddleware[];
-      rest: readonly AgentMiddleware[];
-      last: readonly AgentMiddleware[];
-    };
-    observationPolicy: (() => AgentMiddleware) | undefined;
-    summarizer: () => AgentMiddleware;
-    repeatReminder: AgentMiddleware | undefined;
-    modelUsage: AgentMiddleware | undefined;
-    modelCalls: AgentMiddleware;
-    sessionCheckpoint: AgentMiddleware | undefined;
-    outputSchema: AgentMiddleware;
-    fsToolErrors: AgentMiddleware | undefined;
-    readContinuation: AgentMiddleware | undefined;
-    invalidToolArgs: AgentMiddleware;
-    maxTokens: AgentMiddleware;
-    spill: AgentMiddleware | undefined;
+    /** middleware 槽位表：每個子代理的疊從它導出，見 {@link MiddlewareSlot}。 */
+    slots: readonly MiddlewareSlot[];
   },
 ): SubAgent[] {
   // 自帶的 tools 先配上來源：它們沒走 registry 那條路，來源只有這裡知道。
@@ -1446,93 +1542,12 @@ function foldSubAgents(
 
     const permissions = [...context.permissions, ...(spec.permissions ?? [])];
 
-    // 被遮的基座工具：過濾對每個子代理一樣，所以名單一樣；基座工具不可能被子代理自己同名註冊（基座拒絕），不必扣自帶的。
-    const hiddenBaseTools = new Set(
-      context.toolFilter === undefined
-        ? []
-        : context.baseToolNames.filter((each) => !toolKept(context.toolFilter!, each)),
-    );
-
     const next: SubAgent = {
       ...spec,
       tools: orderTools(merged, context.toolOrder),
-      // 閘門排在 subagent 自帶的那些之前——同「全域勝」那條軸線：subagent 自己掛的
-      // middleware 繞不過它。
-      //
-      // **摘要器也排在前面，但那是相反的意思。** 閘門的名字不撞任何東西，位置決定的是
-      // 包裹層次（越前越外層）；摘要器的名字撞上基座內建那個，位置決定的是**同名誰贏**
-      // ——`mergeMiddleware$1` 是一個以 `name` 為鍵的 `Map`，後設的覆蓋前設的。排在
-      // `spec.middleware` 之前 ＝ subagent 自己帶的版本贏得過我們這份。
-      //
-      // 這是「打底」不是「強制」，而那是選的：跟同一個函式裡 `tools` 那條軸線一致
-      // （全域打底 → 自帶的 → 該層註冊的，越後面越近）。摘要門檻是效能與正確性的預設值，
-      // 不是安全邊界；明著在 spec 裡寫了一個同名 middleware 的人是想要它，靜靜被蓋掉
-      // 才是壞的。安全邊界那幾格（`permissions`、閘門）維持全域勝，沒有動。
-      //
-      // 打底本身不可省：`buildSubagentMiddleware` 每個 subagent 各建一份新的
-      // `createSummarizationMiddleware({ backend })`，而 plugin 同名換掉的那一顆刻意不攤過來
-      // （{@link subagentPluginMiddleware}）。留給
-      // plugin 作者自己記得的下場是那個 subagent 靜靜用回基座那組沒人檢查的門檻，
-      // 而長任務的 token 大戶正是 subagent（[#142](https://github.com/DemianLi/nexus-agent/issues/142) 的決定 2）。
-      //
-      // **各建一份，不共用**：摘要器的 `sessionId` 在 closure 裡，共用會讓 root 與這個
-      // subagent 的歷史 append 進同一個檔。理由見 {@link foldSummarizer}。
-      //
-      // **提醒器也打底，理由跟摘要器同一條，但它是共用同一份實例的**：dsh 每個 agent
-      // 分開計數，而我們的鏈是從那個 agent 自己的 `state.messages` 現算的，所以「分開」
-      // 是結構上的，不必逐個建。它是 fold 自己建的、不經過註冊點，不注的話 subagent 就沒有，而長任務裡真的會
-      // 打轉的正是 subagent（[#147](https://github.com/DemianLi/nexus-agent/issues/147)）。
-      //
-      // **用量記錄器同樣打底、同樣共用一份**，理由與提醒器同型：不注的話 subagent 那幾輪
-      // 的 token 完全不進日誌——沒有人會紅，只是那份日誌裡永遠沒有數字；而它無狀態，
-      // 身分每次從執行期的 `configurable` 現算，共用一份不會讓兩個 agent 混在一起。
-      // 理由見 {@link ./model-usage.ts}。
-      middleware: [
-        // 圍堵在第 0 格：它要包住下面每一個，包含 `spec.middleware` 自己帶的那些。
-        context.containment,
-        // 中止緊貼圍堵，同 root：root 按了停止，訊號經 `configurable` 傳到這裡（#265 的 Q10）。
-        context.turnCancel,
-        // 外溢層同 root 的位置；共用一份，它無狀態（#719）。
-        ...(context.spill === undefined ? [] : [context.spill]),
-        // plugin 以 `prepend` 掛的，同 root：在中止內側、閘門外側（#327）。
-        ...context.plugins.prepended,
-        // 工具過濾（#707）遮基座工具，排在閘門外側：被遮的呼叫碰不到閘門與工具本體。沒設或沒有基座工具被遮就不放。
-        ...(hiddenBaseTools.size === 0
-          ? []
-          : [createSubagentToolFilterMiddleware(hiddenBaseTools)]),
-        context.approvalGate,
-        // **各建一份，不共用**：觀測紀錄在 closure 裡，共用等於讓 root 讀過的檔
-        // 變成這個 subagent 也可以直接改。理由見 {@link foldObservationPolicy}。
-        ...(context.observationPolicy === undefined ? [] : [context.observationPolicy()]),
-        context.summarizer(),
-        ...(context.repeatReminder === undefined ? [] : [context.repeatReminder]),
-        // 委派聲明排在 `spec.middleware` 外層：子代理自己帶的 middleware 看到的是接好聲明的請求。
-        context.delegation,
-        // 模型呼叫的起訖同用量記錄器那條理由打底、共用一份，位置同 root。
-        context.modelCalls,
-        ...(context.modelUsage === undefined ? [] : [context.modelUsage]),
-        // 耐久檢查點同 root 的位置、共用一份：子代理的模型呼叫排空的是子代理那一份日誌。
-        ...(context.sessionCheckpoint === undefined ? [] : [context.sessionCheckpoint]),
-        // 其餘 plugin 的，同 root 的位置（#327）。排在 `spec.middleware` 外層：plugin 打底、子代理自帶的在內側，
-        // 同 `tools` 那條「全域 → 自帶」的軸線。
-        ...context.plugins.rest,
-        ...(spec.middleware ?? []),
-        // 以 `last` 掛的（#720）：連子代理自己帶的也在它外側，所以它附加的仍是最後一段。
-        ...context.plugins.last,
-        // 輸出校驗排在 subagent 自帶的那些內側，同 root；共用一份，它無狀態。
-        context.outputSchema,
-        // 檔案工具的失敗標成錯誤，同 root 的位置；共用一份，它無狀態。subagent 的檔案工具由基座
-        // 用 root 那一份 `backend` 建，所以記錄的那一層在它們身上一樣在。
-        ...(context.fsToolErrors === undefined ? [] : [context.fsToolErrors]),
-        // 讀檔結果最後補上讀到哪，同 root 的位置；共用一份，它無狀態。
-        ...(context.readContinuation === undefined ? [] : [context.readContinuation]),
-        // 解不開的參數排在 subagent 自帶的那些內側，同 root（#269 的 Q7：root 與子代理同一顆）。
-        context.invalidToolArgs,
-        // 撞到輸出上限，同 root 的位置；共用一份，子代理的截斷要記進同一份載體給父圖的 `task` 讀。
-        context.maxTokens,
-        // 最內層替模型綁中止訊號，排在 subagent 自帶的那些後面，同 root。
-        context.turnCancelModelSignal,
-      ],
+      // 從同一張槽位表導出（#664）：每一個位置的理由寫在 {@link foldRegistry} 那一列上，那裡也決定了
+      // 哪些共用一份、哪些逐個建、哪些只給子代理。
+      middleware: foldSubagentMiddleware(context.slots, spec),
     };
     // 空的就不要放：基座對 `permissions` 的空陣列與缺席不同義（前者是「整組替換成
     // 沒有規則」）。

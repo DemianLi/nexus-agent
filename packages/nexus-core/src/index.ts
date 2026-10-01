@@ -100,7 +100,13 @@ export type {
   SandboxMode,
   SandboxModeSource,
 } from './sandbox.js';
-export { isSandboxMode, SANDBOX_MODES, WORKSPACE_CAPABILITY } from './sandbox.js';
+export {
+  hostPathOf,
+  isSandboxMode,
+  SANDBOX_MODES,
+  virtualPathOf,
+  WORKSPACE_CAPABILITY,
+} from './sandbox.js';
 
 export type { NamedEntry, DuplicateErrorFactory } from './entries.js';
 export { AnonymousEntries, NamedEntries, CapabilitySet } from './entries.js';
@@ -140,6 +146,8 @@ export type {
 export { createRegistry } from './registry.js';
 export type { HostServices } from './host-services.js';
 export { createHostServicesPlugin } from './host-services.js';
+export type { FsService } from './fs-service.js';
+export { createFsService, FS_SERVICE } from './fs-service.js';
 export { scrubbedParentEnv, SENSITIVE_ENV_PATTERN } from './child-env.js';
 export { installProxyFromEnvironment, proxyEnvironmentForChild } from './http-proxy/index.js';
 
@@ -167,7 +175,7 @@ export {
 } from './output-schema.js';
 
 export type { LoggedMessage } from './logged-message.js';
-export { fromLoggedMessage, toLoggedMessage } from './logged-message.js';
+export { fromLoggedMessage, toLoggedMessage, loggedContentBlocks } from './logged-message.js';
 
 export type {
   ConversationReplay,
@@ -211,13 +219,13 @@ export {
   OBSERVED_WRITE_TOOL,
 } from './observation.js';
 
+// 檔案錯誤與讀到哪各是一對：middleware 開 ALS 槽、backend 的 Proxy 寫入，只掛一半會靜默失效。
+// 兩對都只由 `foldRegistry` 組起來，主入口不公開半邊（#698）；core 以外要用時公開成對的單一入口。
 export {
-  createFsToolErrorsMiddleware,
   FS_SANDBOX_DENIED,
   FS_TOOL_ERRORS_MIDDLEWARE_NAME,
   FS_TOOL_PRIMARY_METHOD,
   noteSandboxDenial,
-  recordBackendOutcomes,
 } from './fs-tool-errors.js';
 
 export type { SpillPolicyOptions, SpillRef, SpillSaveRequest, SpillStore } from './spill-policy.js';
@@ -228,12 +236,7 @@ export {
   SPILL_RETRIEVAL_HINT,
 } from './spill-policy.js';
 
-export {
-  continuationFooter,
-  createReadContinuationMiddleware,
-  READ_CONTINUATION_MIDDLEWARE_NAME,
-  recordReadExtent,
-} from './read-continuation.js';
+export { continuationFooter, READ_CONTINUATION_MIDDLEWARE_NAME } from './read-continuation.js';
 export type {
   DiffResultMeta,
   FileDiff,
@@ -266,6 +269,8 @@ export {
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 export { createModelCallRecorder, MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
+export { noteFailedAttempt, noteRequestStart, runInRetryScope } from './llm-retry.js';
+export { interruptedTurnClosers, resumeClosingInterruptedTurn } from './interrupted-turn.js';
 export {
   createSubagentDelegationMiddleware,
   SUBAGENT_DELEGATION_CONTEXT,
@@ -320,6 +325,15 @@ export {
   SESSION_CHECKPOINT_PLUGIN_NAME,
   sessionCheckpointPlugin,
 } from './session-checkpoint-policy.js';
+export type { MessageSource } from './message-source.js';
+export {
+  humanMessageForTurnStart,
+  isMachineMessage,
+  MESSAGE_SOURCE_KWARG,
+  messageSourceOf,
+  sourceKwargs,
+  turnStartSource,
+} from './message-source.js';
 export type {
   RepeatReminderConfig,
   RepeatReminderMark,
@@ -328,7 +342,6 @@ export type {
 export {
   createRepeatReminder,
   DEFAULT_REPEAT_REMINDER,
-  GOAL_WRAPUP_MARKER,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   REPEAT_REMINDER_PLUGIN_NAME,
@@ -360,7 +373,6 @@ export {
 } from './summarization.js';
 export type { EstimatedRequest, TokenEstimate } from './token-estimate.js';
 export {
-  defaultTokenAnchorBook,
   estimateAnchoredTokens,
   estimateRequestTokens,
   estimateTextTokens,
@@ -412,11 +424,14 @@ export type {
 export {
   currentMessageFeedback,
   FEEDBACK_CATEGORIES,
-  loggedMessageId,
   MESSAGE_FEEDBACK_SERVICE,
 } from './feedback.js';
+export { loggedMessageId } from './logged-message.js';
 
 export type {
+  LlmFailure,
+  LogicalTurnStartEvent,
+  ModelVisibleEventType,
   SessionEvent,
   SessionEventMap,
   SessionEventType,
@@ -430,7 +445,14 @@ export type {
   SessionReferenceSourceEntry,
   UserMessageSource,
 } from './session-log.js';
-export { currentTurnStart, hasUnansweredInterrupt, SessionLog } from './session-log.js';
+export {
+  currentTurnStart,
+  hasUnansweredInterrupt,
+  isLogicalTurnStart,
+  isModelVisibleEvent,
+  MODEL_VISIBLE_EVENT_TYPES,
+  SessionLog,
+} from './session-log.js';
 
 export type {
   SessionTelemetryRecord,

@@ -72,9 +72,13 @@ export type FailureReason =
 /**
  * 基準任務的迴圈上限，比組裝點的預設緊。
  *
- * 換算是 `2 × 模型輪數 + 2`，所以 40 約等於 19 輪模型呼叫。取這個值的理由是實測：
+ * 換算是 `模型輪數 = floor((recursionLimit - 1) / 每輪格數)`。基準任務的組裝（`benchmarkPlugins()`
+ * 經 `createNexusAgent`，提醒器打底）每輪三格，所以 40 是 13 輪模型呼叫（2026-10-02 用
+ * `LoopingChatModel` 走 `runTier` 實測）。取這個值的理由是實測：
  * 正常的執行裡最多的一次是 `oss-20b` 在 `edit-after-read` 上多叫 8 次（共 11 次工具呼叫
  * ≈ 24 個 super-step），而跑掉的那次是 25 次多叫（共 28 次 ≈ 58 個）——40 落在兩者中間。
+ * **這兩個 super-step 數字是每輪兩格算的**；換成每輪三格約 36 與 87（推算，沒有重跑），
+ * 40 仍落在兩者中間。
  */
 export const EVAL_RECURSION_LIMIT = 40;
 
