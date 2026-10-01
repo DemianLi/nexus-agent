@@ -2,9 +2,12 @@
  * `@nexus/plugin-present`——模型宣告**這一輪交付了哪些檔案**：一顆 `present` 工具，最終結果成功之後
  * 寫一筆 `deliverables/presented` 進呼叫它的那一份會話日誌。
  *
- * 形狀照 dsh 的 `packages/deliverables/tool-present/`（`ddefc45`）：模型看到的描述、參數、每一句
- * 拒絕與 `Presented <path>` 的結果逐字照抄；每次最多 `maxFiles`（預設 8）個；**只記路徑與說明，
- * 不讀、不複製內容**。dsh 的 standard preset 掛它，所以它在出貨清單裡。
+ * 形狀照 dsh 的 `packages/deliverables/tool-present/`（`477b4f4`）：模型看到的描述、參數說明與
+ * `Presented <path>` 的結果逐字照抄；拒絕的字句也照抄，**但不是每一句都有**——dsh 那句
+ * `present requires an open turn`（沒有進行中的那一輪就拒）我們沒有，要不要補見
+ * [#696](https://github.com/DemianLi/nexus-agent/issues/696) 的留言，還沒定案。每次最多
+ * `maxFiles`（預設 8）個；**只記路徑與說明，不讀、不複製內容**。dsh 的 standard preset 掛它，
+ * 所以它在出貨清單裡。
  *
  * ## 什麼時候寫：配對的 `tool/result` 落定成功之後
  *
@@ -72,14 +75,13 @@ export const DEFAULT_MAX_FILES = 8;
 export const PRESENT_BACKEND_MIDDLEWARE_NAME = 'PresentBackend';
 
 /**
- * 模型看到的描述，**逐字照抄 dsh**（`tool-present/src/index.ts`）。它要求模型在寫完檔、最後回覆之前
- * 叫這顆——「在回覆裡提到路徑不能代替這次呼叫」這句是它存在的理由。
+ * 模型看到的描述，**逐字照抄 dsh**（`tool-present/src/index.ts`）。它告訴模型**使用者需要一份
+ * 獨立的檔案時才叫**（尤其是 Office 文件、試算表、簡報），最後回覆交代得了就不必叫。
  */
 export const PRESENT_TOOL_DESCRIPTION =
-  'Declare existing files accessible through the Session filesystem as final deliverables. ' +
-  'When a file you create or update is an output the user asked to receive, you must call present after writing it and before your final response, including files created through Bash or code execution. ' +
-  'Mentioning its path in your reply does not replace this call. The files must already exist. ' +
-  'The user opens the current source files; their contents are not copied or preserved.';
+  'Declare existing files as final deliverables for the user. ' +
+  'Use it when the user needs a separate file, especially Office documents, spreadsheets, and slide decks; ' +
+  'prefer your final response when that suffices. The user opens the current files; their contents are not copied.';
 
 /** 這次組裝沒有工作區時回的話，照 dsh。 */
 export const PRESENT_NO_WORKSPACE_MESSAGE = 'present requires a workspace';
@@ -279,19 +281,22 @@ export const presentPlugin: NexusPlugin<PresentConfig> = {
           name: PRESENT_TOOL_NAME,
           description: PRESENT_TOOL_DESCRIPTION,
           schema: z.object({
-            files: z.array(
-              z
-                .object({
-                  path: z
-                    .string()
-                    .describe(
-                      'Path of an existing regular file. Relative paths use the Session working directory.',
-                    ),
-                  description: z.string().optional().describe('Brief description for the user.'),
-                })
-                // 照 dsh 的 `additionalProperties: false`：落庫的要等於模型以為它寫的。
-                .strict(),
-            ),
+            files: z
+              .array(
+                z
+                  .object({
+                    path: z
+                      .string()
+                      .describe(
+                        'Path of an existing regular file. Relative paths use the Session working directory.',
+                      ),
+                    description: z.string().optional().describe('Brief description for the user.'),
+                  })
+                  // 照 dsh 的 `additionalProperties: false`：落庫的要等於模型以為它寫的。
+                  .strict(),
+              )
+              // 照 dsh：4 是建議的每次個數，`maxFiles` 才是真的會拒的上限，兩者不是同一件事。
+              .describe('Usually the 1-2 most important deliverables; at most 4 per call.'),
           }),
         },
       ),

@@ -870,13 +870,20 @@ export interface DisabledEntryView {
    * （[#751](https://github.com/DemianLi/nexus-agent/issues/751)：設定驗不過、`apply` 拋錯、`requires` 缺件）。
    * 掉了的列照 dsh 算沒掛，結局跟 `disabled: true` 一樣；掉了的原因另外從載入結果讀。
    *
+   * **「關掉」是逐條目的**（#678，照 dsh：停用只讓那一列不 init，不影響別列）：有被關的同名列，**而且沒有開著
+   * （`apply` 成功）的同名列**才算。所以同一個模組掛兩列、一開一關，結果是開著；只有被關的那一列才是真的沒有。
+   *
    * **比對的是 {@link ../plugin.ts | NexusPlugin.name} 而不是條目的 id**：id 是使用者的
    * patch 改得動的字串，拿它當行為開關等於讓改名變成關功能。
    *
    * @param pluginName - 那顆 plugin 的 `name`。
    */
   has(pluginName: string): boolean;
-  /** 全部，依清單順序；同一顆掛載多次又都被關掉時會出現重複。 */
+  /**
+   * **這一次沒掛上的每一列**，依清單順序；同一顆掛載多次又都被關掉時會出現重複。
+   *
+   * 診斷用，**不等於 {@link has} 為真的那些名字**：同名還有開著的列時，被關的那一列仍在這裡，但 `has` 是 `false`。
+   */
   names(): readonly string[];
 }
 
@@ -930,6 +937,19 @@ export interface InternalPluginRegistry extends PluginRegistry {
    * @param origin - 要撤誰的；傳給 {@link enter} 的同一個物件。
    */
   rollback(origin: PluginOrigin): void;
+  /**
+   * 記下一個**開著、而且 `apply` 成功了**的條目，跟 {@link markDisabled} 同一層、plugin 碰不到。
+   *
+   * 為什麼要記開著的那一半（#678）：停用視圖的鍵是 `NexusPlugin.name`，而 name 不唯一。只記被關的那一半，
+   * 一列被關掉的同名條目就能讓**開著的那一列**失效。照 dsh 的逐條目語意，「關掉」是「樹上沒有開著的那一列」。
+   *
+   * **只能在 {@link enter} 之內呼叫、`apply` 成功之後才記**：撤銷跟著註冊者的堆疊走（{@link rollback}），
+   * 所以 `apply` 拋錯、或逐列掉模式下因 `requires` 連鎖掉的那一列，這一筆都會一併撤掉——自帶 registry
+   * 的呼叫者不會把已回滾的 plugin 判成還開著（回滾見 #677）。
+   *
+   * @param pluginName - 那顆 plugin 的 `name`。
+   */
+  markEnabled(pluginName: string): void;
   /**
    * 記下清單上明著被關掉的一個條目。
    *
@@ -1344,6 +1364,8 @@ export function createRegistry(): InternalPluginRegistry {
 
   /** 明著被關掉的條目留下的唯一痕跡，見 {@link DisabledEntryView}。 */
   const disabledNames: string[] = [];
+  /** 開著、`apply` 成功了的條目的 `name`，記次數：同名可以掛好幾列，撤銷一列只減一。 */
+  const enabledNames = new Map<string, number>();
 
   return {
     tools,
@@ -1363,8 +1385,22 @@ export function createRegistry(): InternalPluginRegistry {
     sessions: sessionPoint,
     logger: loggerPoint,
     disabledEntries: {
-      has: (pluginName) => disabledNames.includes(pluginName),
+      has: (pluginName) =>
+        disabledNames.includes(pluginName) && (enabledNames.get(pluginName) ?? 0) === 0,
       names: () => [...disabledNames],
+    },
+    markEnabled(pluginName) {
+      effect('markEnabled()', () => {
+        enabledNames.set(pluginName, (enabledNames.get(pluginName) ?? 0) + 1);
+        let active = true;
+        return () => {
+          if (!active) return;
+          active = false;
+          const left = (enabledNames.get(pluginName) ?? 1) - 1;
+          if (left === 0) enabledNames.delete(pluginName);
+          else enabledNames.set(pluginName, left);
+        };
+      });
     },
     markDisabled(pluginName) {
       disabledNames.push(pluginName);
