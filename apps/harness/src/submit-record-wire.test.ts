@@ -55,6 +55,7 @@ import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixture
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+import { composeAttachSessions } from './session-attach.js';
 
 const BASE_URL = 'http://record.test';
 const CSV_PATH = '/visitors.csv';
@@ -119,7 +120,7 @@ async function connect(
       commands: emptyCommandPoint(),
       // 接的是 pump 自己那一份註冊表（handler 建完才交過來），同產品路徑 `serve.ts`。工具卡的終態
       // 與結果文字都從日誌來（#296、#439），不接的話卡上只剩基座 frame 說得出的那幾格。
-      attachSession: built.attachSession,
+      attachSessions: composeAttachSessions(built),
       dispose: built.dispose,
     }),
   });
