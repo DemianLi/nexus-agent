@@ -20,7 +20,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDeliverableClient, createWireClient } from '@nexus/wire';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { SESSION_LOG_OFF_DISCLOSURE } from './cli.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
@@ -549,5 +549,45 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await stop(second);
     // 前提：預設是 workspace-write，所以看得到 read-only 才證明是從日誌回來的。
     expect(JSON.stringify(reported)).toContain('read-only');
+  });
+
+  /**
+   * 日誌裡的模式名認不得（[#699](https://github.com/DemianLi/nexus-agent/issues/699)）：照 dsh 讀回時
+   * 不擋，接得回來；sandbox-policy 的配套入口在重播時報違規。serve 不傳違規去處，走 runner 預設的
+   * `console.error`，進的是伺服器日誌——所以收的是它。
+   */
+  it('最後一顆 `sandbox/mode` 被改成 bogus：接得回來，伺服器日誌報出帶 bogus 的違規', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const workspace = await tmp('nexus-serve-resume-ws-');
+    const first = await start(root, ['--workspace', workspace]);
+    await (await serveClient(first)).slashRun('alpha', '/sandbox read-only');
+    await stop(first);
+
+    // 逐行改，只動最後一顆的 `data.mode`（命令參數裡也有 `read-only`）。
+    const log = join(projectDirOf(root), 'alpha.jsonl');
+    const events = readEvents(await readFile(log, 'utf8'));
+    const last = events.findLastIndex((event) => event.type === 'sandbox/mode');
+    expect(events[last]).toMatchObject({ data: { mode: 'read-only' } });
+    const rewritten = events.map((event, index) =>
+      index === last ? { ...event, data: { mode: 'bogus' } } : event,
+    );
+    await writeFile(log, `${rewritten.map((event) => JSON.stringify(event)).join('\n')}\n`);
+
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const second = await start(root, ['--workspace', workspace]);
+      const reported = await (await serveClient(second)).slashRun('alpha', '/sandbox');
+      await stop(second);
+      // 前提：真的接回來了，那一格是日誌上的 bogus。
+      expect(JSON.stringify(reported)).toContain('bogus');
+      const violations = errors.mock.calls
+        .map((args) => args.map(String).join(' '))
+        .filter((line) => line.includes('"@nexus/plugin-sandbox-policy"'));
+      expect(violations.length).toBeGreaterThanOrEqual(1);
+      expect(violations[0]).toContain(`seq ${String(last)}`);
+      expect(violations[0]).toContain('"bogus"');
+    } finally {
+      errors.mockRestore();
+    }
   });
 });
