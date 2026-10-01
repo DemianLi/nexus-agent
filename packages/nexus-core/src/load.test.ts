@@ -5,7 +5,7 @@
  * `feat/nexus-plugin-contract` 當時只有三個註冊點，回滾那條用 tool ＋ subagent（兩次
  * 具名插入）；middleware 是 symbol-keyed 的匿名追加，撤銷路徑與具名插入不同，那一條
  * 隨 `AnonymousEntries` 落在本 PR 的「九個註冊點的回滾」。那組測試同時是 `load.ts`
- * 的 `trackUndo` 漏包某個註冊點時唯一會紅的地方。
+ * 的註冊點漏記撤銷（沒走 registry 的 `effect`）時唯一會紅的地方。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -304,11 +304,16 @@ describe('requires', () => {
 
 describe('每個註冊點的回滾', () => {
   /**
-   * 每個點各放一樣東西，然後 throw。少包一個 undo 追蹤，這裡就會留下孤兒。
+   * 每個點各放一樣東西，然後 throw。**任何一個註冊方法沒把 undo 記進註冊者的堆疊，這裡就會留下孤兒。**
    *
-   * **`telemetry` 兩個方法都在裡面。** `use` 漏追的下場最陰：回滾過的 plugin 會佔著
-   * 那個唯一的後端位子，後面的 plugin 掛不上去，而錯誤訊息指的是一個已經不存在的註冊者。
-   * `feedback.use` 是同一型的唯一位子，所以也在裡面。
+   * 撤銷由 registry 的註冊點自己記下（`effect`），載入器不鏡像，所以這條測試守的是 registry
+   * 那一側：新增註冊方法時沒走 `effect`，只有「每個方法各註冊一樣再 throw」才抓得到。
+   * **同一個點的第二個方法也要放**（`middleware.useWithBackend` 曾經漏過一次，#677）：
+   * 以點為單位列只會抓到整個點漏掉，抓不到點內少一個方法。
+   *
+   * **唯一位子型的服務也在裡面**（`SESSION_TELEMETRY_SERVICE`、`MESSAGE_FEEDBACK_SERVICE`）：
+   * 漏撤的下場最陰——回滾過的 plugin 會佔著那個唯一位子，後面的 plugin 掛不上去，而錯誤訊息指的是
+   * 一個已經不存在的註冊者。
    */
   const greedy = fakePlugin('greedy', (registry) => {
     registry.tools.register(fakeTool('search'));
@@ -316,6 +321,7 @@ describe('每個註冊點的回滾', () => {
     registry.capabilities.provide('filesystem');
     registry.backend.mount('/memories/', fakeBackend('store'));
     registry.middleware.use(fakeMiddleware('audit'));
+    registry.middleware.useWithBackend(() => fakeMiddleware('needs-backend'));
     registry.permissions.deny(['/.env*']);
     registry.approvals.gate(() => ({ kind: 'allow' }));
     registry.skills.addSource('/skills/user/');
