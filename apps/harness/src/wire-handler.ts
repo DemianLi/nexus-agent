@@ -73,9 +73,14 @@ import {
   isQueueUpdateMethod,
   isRpcMethod,
   isRunCancelMethod,
+  isSubagentMethod,
   QUEUE_ITEM_NOT_FOUND,
   RUN_START_MODES,
   STEER_UNAVAILABLE,
+  SUBAGENT_AT_CAPACITY,
+  SUBAGENT_CLOSED,
+  SUBAGENT_NOT_FOUND,
+  SUBAGENT_SEND_METHOD,
   isSlashMethod,
   isWireChannel,
   SessionReferenceError,
@@ -96,7 +101,12 @@ import { FEEDBACK_CATEGORIES } from '@nexus/core';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { createCommandExecutor } from '@nexus/plugin-commands';
-import type { BackgroundParentPort } from './background-subagents.js';
+import { BackgroundSubagentError } from './background-subagents.js';
+import type {
+  BackgroundParentPort,
+  BackgroundSubagentControl,
+  SessionDetach,
+} from './background-subagents.js';
 import { HistoryQueryError, historyPage } from './conversation-history.js';
 import type { SessionReferenceReader } from './session-reference.js';
 import type {
@@ -222,9 +232,9 @@ export interface ThreadAgent {
    *
    * @param sessions - 這個 thread 的會話註冊表。
    * @param backgroundPort - 背景子代理往這條 thread 的主對話這個方向的出口：結算通知（#840）與寫來的話（#849）。cli 的 REPL 不給。
-   * @returns 收掉這次接線的函式。
+   * @returns 收掉這次接線的函式；上面的 `background` 是對單一背景子代理傳話、單獨停的控制面（#865）。
    */
-  attachSession?(sessions: SessionRegistry, backgroundPort?: BackgroundParentPort): () => void;
+  attachSession?(sessions: SessionRegistry, backgroundPort?: BackgroundParentPort): SessionDetach;
   /**
    * 把這個 thread 的**每一份**會話日誌接上落盤，選配。
    *
@@ -571,6 +581,8 @@ interface ThreadState {
    * `task` 的 `tool/result` 落在 root 日誌上才過期——dsh 那邊父 agent 的索引也是等到那一刻，所以逐格等價。
    */
   readonly fileSearch: WorkspaceFileSearch | undefined;
+  /** 對單一背景子代理傳話、單獨停的控制面（#865）。這份組裝沒有背景派出就沒有。 */
+  readonly background: BackgroundSubagentControl | undefined;
   /**
    * 有沒有一次 `slash.run` 還沒回來。
    *
@@ -818,6 +830,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           workspaceRoot: threadAgent.workspaceRoot,
           resumedWorkspaceRoot: threadAgent.resumedWorkspaceRoot,
           fileSearch,
+          background: detachSession?.background,
           slashInFlight: false,
           dispose: async () => {
             detachFeed?.();
@@ -1005,6 +1018,14 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         thread?.pump.cancel();
       }
       return json(successResponse(envelope.id, { accepted: true }));
+    }
+    if (isSubagentMethod(method)) {
+      // 對單一背景子代理傳話、單獨停（#865）：**不經 `threadFor`**，同 `run.cancel`——host 是這條 thread 的 agent 的，
+      // 沒建過的 thread 沒有任何背景子代理，不為了回「沒有」建一個 agent。重啟後的 thread 同樣沒有：host 的編號表在記憶體裡
+      // （`send_message` 同一個限制）。
+      const existing = threads.get(threadId);
+      const thread = existing === undefined ? undefined : await existing.catch(() => undefined);
+      return handleSubagentCommand(thread?.background, method, envelope.id, body);
     }
     if (isDeliverableMethod(method)) {
       return handleDeliverableCommand(threadId, method, envelope.id, body);
@@ -1251,6 +1272,51 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       if (!(error instanceof SessionReferenceError)) throw error;
       return errorResponse(id, 'invalid_argument', `${error.code}: ${error.message}`);
     }
+  }
+
+  /**
+   * `subagent.send`／`subagent.interrupt`（[#865](https://github.com/DemianLi/nexus-agent/issues/865)）。語意與錯誤碼見
+   * `SUBAGENT_SEND_METHOD`。**授權就是進得到這裡的會話認證**：host 只認得這條 thread 自己派出去的編號，所以「只能對直接
+   * parent 派出去的子代理動手」是結構保證，這裡不另做一道。
+   */
+  function handleSubagentCommand(
+    background: BackgroundSubagentControl | undefined,
+    method: 'subagent.send' | 'subagent.interrupt',
+    id: number,
+    body: unknown,
+  ): Response {
+    const params = (body as { params?: unknown }).params as
+      { run_id?: unknown; text?: unknown } | null | undefined;
+    if (typeof params?.run_id !== 'string' || params.run_id === '') {
+      return json(errorResponse(id, 'invalid_argument', `${method} 缺 run_id`));
+    }
+    const accepted = () => json(successResponse(id, { accepted: true }));
+    if (method !== SUBAGENT_SEND_METHOD) {
+      // 不認得的、沒在跑的、沒有背景派出：被接受的 no-op（dsh 的 `interruptByParent`），不讓呼叫端靠回應試探編號。
+      background?.interrupt(params.run_id);
+      return accepted();
+    }
+    // 同 `queue.update` 的 edit，也同 dsh 的 `hasPromptContent`：只有空白不算一句話。**不展開 `@` 引用**——那是 `run.start`
+    // 的事，傳給子代理的是原文。
+    if (typeof params.text !== 'string' || params.text.trim() === '') {
+      return json(errorResponse(id, 'invalid_argument', `${method} 要有非空白的 text`));
+    }
+    if (background === undefined) {
+      return json(errorResponse(id, SUBAGENT_NOT_FOUND, `沒有編號 ${params.run_id} 的背景子代理`));
+    }
+    try {
+      background.sendFromUser(params.run_id, params.text);
+    } catch (error) {
+      if (!(error instanceof BackgroundSubagentError)) throw error;
+      const code =
+        error.code === 'not-found'
+          ? SUBAGENT_NOT_FOUND
+          : error.code === 'at-capacity'
+            ? SUBAGENT_AT_CAPACITY
+            : SUBAGENT_CLOSED;
+      return json(errorResponse(id, code, error.message));
+    }
+    return accepted();
   }
 
   /**

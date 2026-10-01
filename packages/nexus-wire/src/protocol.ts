@@ -230,8 +230,66 @@ export const QUEUE_ITEM_NOT_FOUND = 'queue_item_not_found';
  */
 export const STEER_UNAVAILABLE = 'steer_unavailable';
 
+/**
+ * 對單一背景子代理傳話、單獨停下（[#865](https://github.com/DemianLi/nexus-agent/issues/865)）。
+ *
+ * 照 dsh 對 continuable 子代理的兩個動作（`477b4f4`）：
+ * - `subagent.send` ＝ 瀏覽器端的 `prompt`：**人**對那個子代理說一句話。模型看到的是原文，**沒有**
+ *   `Agent … sent a message:` 前綴（那是 agent 轉的才有）。對方跑著且這一輪還收插話：下一步領走；閒著、或已被中止／收尾：
+ *   開下一輪；已結算而並存名額滿了：{@link SUBAGENT_AT_CAPACITY}。
+ * - `subagent.interrupt` ＝ `interruptByParent`：只停它**當下那一輪**，不等停穩，**不連帶 root**（root 的 `run.cancel`
+ *   也不連帶它）。被它中斷而排著的輪次不丟，等下一次 `subagent.send` 喚醒。不認得的編號、沒在跑的：**被接受的 no-op**
+ *   （dsh 明寫，也不讓呼叫端靠回應試探編號）。
+ *
+ * **兩個都回 `{ accepted: true }`，不等那一輪跑完**；子代理說了什麼、做了什麼走主串流（`agent-message` 與委派卡）。
+ * 人說的那句話目前**不回播到主串流**：它寫在子代理自己的日誌裡，主對話日誌沒有對應的事件（今天不加）。
+ *
+ * `run_id` 是背景派出時回給模型的編號（`bg-…`），**只認這條 thread 派出去的**：host 屬於這條 thread，別條的編號在這裡
+ * 就是不存在——直接 parent 的鄰接是結構保證，授權就是這條線已有的會話認證。這條 thread 沒開過、或這份組裝沒有背景派出：
+ * 一樣是 {@link SUBAGENT_NOT_FOUND}（`subagent.interrupt` 則是 no-op），不為了回這個錯建一個 agent。
+ *
+ * **都是我們加在自己 wire 上的命令**，理由同 {@link RUN_CANCEL_METHOD}。
+ */
+export const SUBAGENT_SEND_METHOD = 'subagent.send';
+export const SUBAGENT_INTERRUPT_METHOD = 'subagent.interrupt';
+
+export interface SubagentSendCommand {
+  readonly id: number;
+  readonly method: typeof SUBAGENT_SEND_METHOD;
+  readonly params: {
+    readonly run_id: string;
+    /** 不能是空白；長度不另設上限，同 `run.start`。 */
+    readonly text: string;
+  };
+}
+
+export interface SubagentInterruptCommand {
+  readonly id: number;
+  readonly method: typeof SUBAGENT_INTERRUPT_METHOD;
+  readonly params: { readonly run_id: string };
+}
+
+export function isSubagentMethod(
+  value: unknown,
+): value is typeof SUBAGENT_SEND_METHOD | typeof SUBAGENT_INTERRUPT_METHOD {
+  return value === SUBAGENT_SEND_METHOD || value === SUBAGENT_INTERRUPT_METHOD;
+}
+
+/** 沒有這個背景子代理：編號不是這條 thread 派出去的，或這條 thread 沒有背景派出。只有 `subagent.send` 會回。 */
+export const SUBAGENT_NOT_FOUND = 'subagent_not_found';
+/** 對方已結算，而並存的背景子代理已達上限，沒有名額讓它再收一輪。等其中一個做完再送。 */
+export const SUBAGENT_AT_CAPACITY = 'subagent_at_capacity';
+/** 背景子代理的載體已經關閉（這條 thread 正在拆）。 */
+export const SUBAGENT_CLOSED = 'subagent_closed';
+
 /** 這條線上的錯誤碼：協定的那十個，加上我們自己的命令用到的。 */
-export type WireErrorCode = ErrorCode | typeof QUEUE_ITEM_NOT_FOUND | typeof STEER_UNAVAILABLE;
+export type WireErrorCode =
+  | ErrorCode
+  | typeof QUEUE_ITEM_NOT_FOUND
+  | typeof STEER_UNAVAILABLE
+  | typeof SUBAGENT_NOT_FOUND
+  | typeof SUBAGENT_AT_CAPACITY
+  | typeof SUBAGENT_CLOSED;
 
 /** 協定的 `ErrorResponse`，錯誤碼換成 {@link WireErrorCode}。 */
 export type WireErrorResponse = Omit<ErrorResponse, 'error'> & { error: WireErrorCode };
@@ -375,6 +433,8 @@ export type RpcMethod =
   | SlashMethod
   | typeof RUN_CANCEL_METHOD
   | typeof QUEUE_UPDATE_METHOD
+  | typeof SUBAGENT_SEND_METHOD
+  | typeof SUBAGENT_INTERRUPT_METHOD
   | FeedbackMethod
   | DeliverableMethod;
 
@@ -384,6 +444,7 @@ export function isRpcMethod(value: unknown): value is RpcMethod {
     isSlashMethod(value) ||
     isRunCancelMethod(value) ||
     isQueueUpdateMethod(value) ||
+    isSubagentMethod(value) ||
     isFeedbackMethod(value) ||
     isDeliverableMethod(value)
   );

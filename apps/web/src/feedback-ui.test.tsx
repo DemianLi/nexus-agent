@@ -122,6 +122,8 @@ function fakeClient(
     inputRespond: async () => ({ type: 'success', id: 2, result: {} }),
     runCancel: async () => ({ type: 'success', id: 3, result: { accepted: true } }),
     queueUpdate: async () => ({ type: 'success', id: 4, result: { accepted: true } }),
+    subagentSend: async () => ({ type: 'success', id: 5, result: { accepted: true } }),
+    subagentInterrupt: async () => ({ type: 'success', id: 6, result: { accepted: true } }),
     slashList: async () => ({ kind: 'ok', commands: [] }),
     slashRun: async (_threadId, line) => {
       slashed.push(line);
