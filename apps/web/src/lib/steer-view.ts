@@ -1,6 +1,6 @@
 import type { ConversationState, ConversationStatus } from '@nexus/wire';
 
-import { isSettledNotice, SETTLED_NOTICE_TEXT } from '@/lib/queue-view';
+import { queuedAgentText } from '@/lib/queue-view';
 
 /**
  * 還沒被領走的插話在畫面上怎麼畫（[#710](https://github.com/DemianLi/nexus-agent/issues/710)）。資料是 harness 的投影
@@ -30,21 +30,24 @@ export function pendingSteerText(status: ConversationStatus): string {
 }
 
 /**
- * 排著的背景子代理結算通知那一句（#851）：不是人的泡泡，只說「有這件事、什麼時候送進模型」。跑著的時候這一輪下一步
- * 就會領走，停了就等下一輪，跟 {@link pendingSteerText} 同一條線。
+ * 排著的背景子代理結算通知與來信那一句（#851、#861）：不是人的泡泡，只說「有這件事、什麼時候送進模型」。跑著的時候
+ * 這一輪下一步就會領走，停了就等下一輪，跟 {@link pendingSteerText} 同一條線。
  */
-export function settledNoticeText(status: ConversationStatus): string {
+export function pendingAgentText(agentText: string, status: ConversationStatus): string {
   return status === 'running' || status === 'awaiting-input'
-    ? `${SETTLED_NOTICE_TEXT}・下一步送進模型`
-    : `${SETTLED_NOTICE_TEXT}・下一輪送進模型`;
+    ? `${agentText}・下一步送進模型`
+    : `${agentText}・下一輪送進模型`;
 }
 
 export interface PendingSteer {
   /** 同領走後那則人的話的 id。通知被領走時不長人的話，這一格就直接消失。 */
   readonly key: string;
   readonly text: string;
-  /** 背景子代理的結算通知（#851）：不畫成人的泡泡，`text` 是給模型的英文，不給人看。 */
-  readonly settled: boolean;
+  /**
+   * 不是人排的（背景子代理的結算通知、來信，#851、#861）時是那一句（`queuedAgentText`）：不畫成人的泡泡，`text` 是給
+   * 模型的英文，不給人看。人排的沒有。
+   */
+  readonly agentText?: string;
 }
 
 /** 排著的插話，照送出的先後。已經折成人的話的不算（同一顆 frame 裡清單與領走一起換，這裡只是保險）。 */
@@ -56,5 +59,12 @@ export function pendingSteers(state: ConversationState): readonly PendingSteer[]
   );
   return state.inboxNextStep
     .filter((item) => !claimed.has(item.id))
-    .map((item) => ({ key: `inbox:${item.id}`, text: item.text, settled: isSettledNotice(item) }));
+    .map((item) => {
+      const agentText = queuedAgentText(item);
+      return {
+        key: `inbox:${item.id}`,
+        text: item.text,
+        ...(agentText === undefined ? {} : { agentText }),
+      };
+    });
 }
