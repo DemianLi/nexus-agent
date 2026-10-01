@@ -746,7 +746,7 @@ export async function createCliAgent(
     model,
     ...(tokenAnchorBook !== undefined && { tokenAnchorBook }),
     plugins: [
-      // **組裝點的協作者排最前面**（#459）：submit-record 與 sandbox-policy 在自己的
+      // **組裝點的協作者排最前面**（#459）：ask-user、plan-mode、sandbox-policy 在自己的
       // `apply` 當下就讀，排後面它們會拿不到。載入是一趟到底的，不會回頭等。
       createHostServicesPlugin({
         channel,
