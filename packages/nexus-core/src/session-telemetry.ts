@@ -12,7 +12,7 @@
  * @see [#89](https://github.com/DemianLi/nexus-agent/issues/89)
  */
 
-import type { SessionEvent, SessionEventType } from './session-log.js';
+import type { SessionEvent } from './session-log.js';
 
 /**
  * 告警等級，**捕獲當下就映好**，讓收端零設定也能告警。
@@ -129,45 +129,6 @@ export interface SessionTelemetrySink {
 export type SessionTelemetrySharingStatus = 'full' | 'feedback-only' | 'disabled';
 
 /**
- * 每一種事件**准不准 `feedback-only` 把日誌補送出去**。只有人明白送出的回饋准：三顆 `feedback/*`。
- * 照 dsh 的 `isFeedback`（`packages/session/session-telemetry-otel/src/index.ts:58-64`，`c291e79`）。
- *
- * **逐種列舉、不給預設值**：多一種事件而沒在這裡表態就編不過。漏放行與誤放行是相反的兩種病——
- * 漏了，人按了送出卻什麼都沒送；多了，人沒同意就整份送出去。
- */
-const RELEASES_FEEDBACK_ONLY_CAPTURE = {
-  'turn/start': false,
-  'turn/end': false,
-  'turn/failed': false,
-  'interrupt/raised': false,
-  'command/run': false,
-  'command/done': false,
-  'goal/change': false,
-  'todo/write': false,
-  'model/usage': false,
-  'model/start': false,
-  'model/end': false,
-  'assistant/message': false,
-  'user/message': false,
-  'compaction/summary': false,
-  'context/measure': false,
-  'sandbox/mode': false,
-  'plan/mode': false,
-  'subagent/model-selection-policy': false,
-  'tool/call': false,
-  'tool/result': false,
-  'feedback/message-put': true,
-  'feedback/message-delete': true,
-  'feedback/record': true,
-  'deliverables/presented': false,
-  'workspace/changes': false,
-  'inbox/spliced': false,
-  'session/title': false,
-  'session/title-llm-request': false,
-  'session/end-seed': false,
-} as const satisfies Record<SessionEventType, boolean>;
-
-/**
  * 這一顆是不是人送出的回饋——`feedback-only` 靠它決定什麼時候補送。
  *
  * dsh 的另外兩道守衛在我們這裡不需要，理由各一：
@@ -177,11 +138,25 @@ const RELEASES_FEEDBACK_ONLY_CAPTURE = {
  *   用的是不重播的 `log.subscribe`。
  * - **`message-put`／`message-delete` 比 `sessionId`**：我們的事件沒有那一格（`feedback.ts` 的偏離）。
  *
+ * **只有人明白送出的回饋准：三顆 `feedback/*`，其餘一律不准，不認得的種類也不准。**
+ * 照 dsh 的 `isFeedback`（`packages/session/session-telemetry-otel/src/index.ts:58-64`）：
+ * `switch` 加 `default: return false`，core 不逐種列舉每一種事件——逐種列舉會逼每個擁有者
+ * 套件加事件種類時回頭改 core（#679）。代價是多一種回饋事件而沒在這裡補，編譯器不會叫；漏放行
+ * 與誤放行是相反的兩種病（漏了，人按了送出卻什麼都沒送；多了，人沒同意就整份送出去），預設
+ * 選前者：沒表態的種類不外送。
+ *
  * @param event - 剛進日誌的那一顆。
  * @returns 是回饋就 `true`。
  */
 export function isFeedbackEvent(event: SessionEvent): boolean {
-  return RELEASES_FEEDBACK_ONLY_CAPTURE[event.type];
+  switch (event.type) {
+    case 'feedback/message-put':
+    case 'feedback/message-delete':
+    case 'feedback/record':
+      return true;
+    default:
+      return false;
+  }
 }
 
 /**
