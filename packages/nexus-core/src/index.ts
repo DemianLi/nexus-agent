@@ -270,6 +270,7 @@ export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 export { createModelCallRecorder, MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
 export { noteFailedAttempt, noteRequestStart, runInRetryScope } from './llm-retry.js';
+export { interruptedTurnClosers, resumeClosingInterruptedTurn } from './interrupted-turn.js';
 export {
   createSubagentDelegationMiddleware,
   SUBAGENT_DELEGATION_CONTEXT,
@@ -324,6 +325,15 @@ export {
   SESSION_CHECKPOINT_PLUGIN_NAME,
   sessionCheckpointPlugin,
 } from './session-checkpoint-policy.js';
+export type { MessageSource } from './message-source.js';
+export {
+  humanMessageForTurnStart,
+  isMachineMessage,
+  MESSAGE_SOURCE_KWARG,
+  messageSourceOf,
+  sourceKwargs,
+  turnStartSource,
+} from './message-source.js';
 export type {
   RepeatReminderConfig,
   RepeatReminderMark,
@@ -332,7 +342,6 @@ export type {
 export {
   createRepeatReminder,
   DEFAULT_REPEAT_REMINDER,
-  GOAL_WRAPUP_MARKER,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   REPEAT_REMINDER_PLUGIN_NAME,

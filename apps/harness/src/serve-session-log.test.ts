@@ -15,7 +15,7 @@
  * 3. **披露那一行**：一台正在把每一條 thread 的對話寫上磁碟的 server，畫面上要看得出來。
  */
 
-import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -386,6 +386,51 @@ describe('重開 server 之後接得回同一條 thread', () => {
     expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
     expect(count(events, 'session/end-seed')).toBe(1);
     expect(count(events, 'turn/start')).toBe(2);
+  });
+
+  /**
+   * 當掉那一輪的收尾寫回檔上（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）：上一個行程死在
+   * 一輪中間、一次工具呼叫沒結果，續接之後檔上依序是原有事件、補的 `tool/result`、`turn/end {interrupted}`、
+   * `session/end-seed`；再重開一次，不再補。
+   */
+  it('當掉的那一輪：補結與 turn/end interrupted 寫在 end-seed 前面，再重開不重補', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const first = await start(root);
+    await driveTurn(first, 'alpha');
+    await stop(first);
+
+    const log = join(projectDirOf(root), 'alpha.jsonl');
+    const before = readEvents(await readFile(log, 'utf8'));
+    const tail = [
+      { type: 'turn/start', data: { kind: 'message', text: '跑到一半' } },
+      { type: 'tool/call', data: { callId: 'dead-1', name: 'write_file', arguments: '{}' } },
+    ].map((event, index) => ({ ...event, seq: before.length + index, time: 1 }));
+    await appendFile(log, `${tail.map((event) => JSON.stringify(event)).join('\n')}\n`);
+
+    const second = await start(root);
+    await driveTurn(second, 'alpha');
+    await stop(second);
+    const third = await start(root);
+    await driveTurn(third, 'alpha');
+    await stop(third);
+
+    const events = readEvents(await readFile(log, 'utf8'));
+    expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
+    const at = before.length + 2;
+    expect(events.slice(at, at + 3).map((event) => event.type)).toEqual([
+      'tool/result',
+      'turn/end',
+      'session/end-seed',
+    ]);
+    expect(events[at]).toMatchObject({
+      data: { callId: 'dead-1', isError: true, error: { code: 'TOOL_OUTCOME_UNKNOWN' } },
+    });
+    expect(events[at + 1]).toMatchObject({ data: { reason: { kind: 'interrupted' } } });
+    expect(
+      events.filter(
+        (event) => event.type === 'turn/end' && event.data.reason?.kind === 'interrupted',
+      ),
+    ).toHaveLength(1);
   });
 
   it('日誌壞了：這條 thread 起不來，檔案一個位元組都沒動', async () => {

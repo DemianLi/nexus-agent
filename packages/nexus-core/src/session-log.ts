@@ -184,7 +184,7 @@ export type SessionEventType =
   | 'session/end-seed';
 
 /**
- * 一輪為什麼沒有正常結束。兩種：
+ * 一輪為什麼沒有正常結束。三種：
  *
  * - **`aborted`**：被中止。原因兩種：`user`（人按了停止）與 `parent`（父代理用 `interrupt_agent` 只停這個背景
  *   子代理當下那一輪，[#838](https://github.com/DemianLi/nexus-agent/issues/838)，dsh 同名，
@@ -195,13 +195,18 @@ export type SessionEventType =
  *   （`packages/core/session/src/types.ts:213-214`，`477b4f4`）：「at least one step reached its
  *   output-token ceiling」，後面的步正常收也不降級（sticky，`agent-loop/src/agent.ts:332-337`）。
  *   判法見 {@link ./max-tokens.ts}。中止蓋過它（`agent.ts:349-355`）。
+ * - **`interrupted`**：行程在這一輪中間死了，**續接時補寫的收尾**（[#721](https://github.com/DemianLi/nexus-agent/issues/721)，
+ *   {@link ./interrupted-turn.ts}）。照 dsh 的 `interrupted`（`packages/core/session/src/types.ts:215-221`，`477b4f4`）。
+ *   它由續接那一刻的 agent 層寫，不是那一輪自己寫的：行程活著的時候沒有人寫得出它。**讀者把它當「這一輪不是正常
+ *   結束」**；goal 續行不看它（續接回來的授權從 `disarmed` 起，且 `currentTurnStart` 不往 end-seed 之前找）。
  *
- * dsh 另有 `completed`、`blocked`、`error`、`interrupted`、`forked`：正常結束在我們這側是不放
+ * dsh 另有 `completed`、`blocked`、`error`、`forked`：正常結束在我們這側是不放
  * `reason`，拋錯是另一顆 `turn/failed`，其餘沒有生產者。
  */
 export type TurnEndReason =
   | { readonly kind: 'aborted'; readonly cause: { readonly kind: 'user' | 'parent' } }
-  | { readonly kind: 'max-tokens' };
+  | { readonly kind: 'max-tokens' }
+  | { readonly kind: 'interrupted' };
 
 /**
  * 一次模型請求失敗的穩定描述。照 dsh 的 `LlmFailure`（`packages/llm/llm/src/types.ts:45`）：訊息給人看，
