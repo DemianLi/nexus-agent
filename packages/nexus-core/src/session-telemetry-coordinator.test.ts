@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { fakeSink } from './fixtures.js';
 import type { PluginOrigin } from './plugin.js';
 import { SessionLog } from './session-log.js';
+import type { SessionEvent } from './session-log.js';
 import { SessionTelemetryCoordinator } from './session-telemetry-coordinator.js';
 import { isFeedbackEvent } from './session-telemetry.js';
 import type { SessionTelemetryRedactRule } from './session-telemetry.js';
@@ -42,6 +43,12 @@ describe('哪幾顆准 feedback-only 補送', () => {
       'feedback/message-put',
       'feedback/message-delete',
     ]);
+  });
+
+  it('不認得的種類不准（core 不逐種列舉，沒表態的一律不外送；#679）', () => {
+    // 其他套件之後用宣告合併補進來的種類，core 看不到它的名字；用型別斷言造一顆當代表。
+    const unknown = { type: 'plugin-x/custom', seq: 0, payload: {} } as unknown as SessionEvent;
+    expect(isFeedbackEvent(unknown)).toBe(false);
   });
 });
 

@@ -4,9 +4,10 @@
  * 形狀照 dsh 的 `@deepseek-ai/dsh-tool-present`
  * （`references/deepseek-harness/packages/deliverables/tool-present/src/types.ts`，`ddefc45`）。
  *
- * **為什麼詞彙在這裡而工具在 plugin：同 {@link ./todo.ts | todo.ts} 那一條。**
- * {@link ./session-log.ts | SessionEventMap} 是封閉的映射，酬載型別要寫得出來就得住在這裡；
- * 工具、檢查與不變量住在 `@nexus/plugin-present`。
+ * **詞彙今天在這裡而工具在 plugin：同 {@link ./todo.ts | todo.ts} 那一條。**
+ * 酬載型別目前列在 {@link ./session-log.ts | SessionEventMap}；工具、檢查與不變量住在
+ * `@nexus/plugin-present`。照 dsh 該由 plugin 那一側宣告合併，還沒做，見
+ * [#679](https://github.com/DemianLi/nexus-agent/issues/679)。
  *
  * @see [#441](https://github.com/DemianLi/nexus-agent/issues/441)
  * @module
