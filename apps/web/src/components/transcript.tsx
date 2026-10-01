@@ -228,6 +228,9 @@ export function Entry({
     );
   }
 
+  // 到這裡只剩模型的回覆：線上的項目種類以後還會長（例如壓縮格），不認得的不畫，免得往下讀 `entry.text` 炸掉。
+  if (entry.kind !== 'ai') return null;
+
   const reasoning = visibleReasoning(entry);
   // 正文只有空白也算空：模型呼叫工具前常先吐一段 `"\n\n"`，畫出來是一顆空泡泡（#527 驗收時量到）。
   const hasText = entry.text.trim() !== '';
