@@ -3,10 +3,15 @@ import { describe, expect, it } from 'vitest';
 
 import {
   agentMessageCaption,
+  canSendToSubagent,
+  canStopSubagent,
   sendMessageSummary,
   sendMessageTitle,
   subagentLabel,
   subagentNames,
+  subagentPlaceholder,
+  subagentRunState,
+  subagentSendError,
   UNKNOWN_SUBAGENT_LABEL,
 } from './subagent-view';
 
@@ -95,5 +100,45 @@ describe('send_message 的標題與摘要：同一個工具兩個方向', () => 
     }
     expect(sendMessageSummary('{"agent_id":"bg-1","message":"  "}', root, names)).toBeUndefined();
     expect(sendMessageSummary('null', root, names)).toBeUndefined();
+  });
+});
+
+describe('背景子代理的狀態與輸入框（#869）', () => {
+  it('還沒收到快照是 unknown，收過而不在裡面是 closed', () => {
+    expect(subagentRunState(null, 'bg-1')).toBe('unknown');
+    expect(subagentRunState({}, 'bg-1')).toBe('closed');
+    expect(subagentRunState({ 'bg-1': 'running' }, 'bg-1')).toBe('running');
+    expect(subagentRunState({ 'bg-1': 'idle' }, 'bg-1')).toBe('idle');
+    expect(subagentRunState({ 'bg-2': 'idle' }, 'bg-1')).toBe('closed');
+  });
+
+  it('佔位字：跑著與未知一樣，閒著說會喚醒，收線說結束', () => {
+    expect(subagentPlaceholder('running')).toBe(subagentPlaceholder('unknown'));
+    expect(subagentPlaceholder('idle')).toContain('喚醒');
+    expect(subagentPlaceholder('closed')).toContain('結束');
+  });
+
+  it('只有收線或斷線才不能送；停止只在跑著（含未知）可按', () => {
+    expect(canSendToSubagent('running', true)).toBe(true);
+    expect(canSendToSubagent('idle', true)).toBe(true);
+    expect(canSendToSubagent('unknown', true)).toBe(true);
+    expect(canSendToSubagent('closed', true)).toBe(false);
+    expect(canSendToSubagent('running', false)).toBe(false);
+    expect(canStopSubagent('running')).toBe(true);
+    expect(canStopSubagent('unknown')).toBe(true);
+    expect(canStopSubagent('idle')).toBe(false);
+    expect(canStopSubagent('closed')).toBe(false);
+  });
+
+  it('四個錯誤碼各一句，認不得的碼帶伺服器的話', () => {
+    const lines = [
+      'subagent_not_found',
+      'subagent_at_capacity',
+      'subagent_closed',
+      'invalid_argument',
+    ].map((code) => subagentSendError(code, 'x'));
+    expect(new Set(lines).size).toBe(4);
+    expect(lines.join('')).not.toContain('x');
+    expect(subagentSendError('internal_error', '壞了')).toContain('壞了');
   });
 });

@@ -14,6 +14,7 @@ import {
   CONTEXT_MEASURE,
   formatSessionReferenceMention,
   MODEL_USAGE,
+  SUBAGENT_STATUS,
   TITLE,
   TODOS,
 } from '@nexus/wire';
@@ -2852,5 +2853,68 @@ describe('會話標題（#655）', () => {
     await waitFor(() => expect(document.title).toBe('要走的那條 — nexus-agent'));
     unmount();
     expect(document.title).toBe('nexus-agent');
+  });
+});
+
+describe('背景子代理的輸入框接線（#869）', () => {
+  const statusFrame = (items: readonly { runId: string; status: 'running' | 'idle' }[]) =>
+    frame('custom', [], { name: SUBAGENT_STATUS, payload: { items } });
+
+  /** 委派卡先派出、收尾時帶背景子代理的鑰匙（`meta`），再來一份狀態快照。 */
+  const delegated = (items: readonly { runId: string; status: 'running' | 'idle' }[]) => [
+    frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+    frame('tools', [], {
+      event: 'tool-started',
+      tool_call_id: 'call_bg',
+      tool_name: 'subagent',
+      input: '{"subagent_type":"researcher","description":"查三個檔案"}',
+    }),
+    frame('tools', [], {
+      event: 'tool-finished',
+      tool_call_id: 'call_bg',
+      message: '子代理已在背景啟動',
+      meta: { kind: 'background-subagent', runId: 'bg-1', subagentType: 'researcher' },
+    }),
+    frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+    statusFrame(items),
+  ];
+
+  it('狀態字跟著快照走；送出把 thread 與編號帶給 subagentSend，停止走 subagentInterrupt', async () => {
+    seq = 0;
+    const fake = fakeClient(delegated([{ runId: 'bg-1', status: 'running' }]));
+    const send = vi.fn(async (): Promise<UplinkResult> => ({ type: 'success', id: 1, result: {} }));
+    const interrupt = vi.fn(async (): Promise<UplinkResult> => ({
+      type: 'success',
+      id: 2,
+      result: {},
+    }));
+    render(<App client={{ ...fake.client, subagentSend: send, subagentInterrupt: interrupt }} />);
+
+    const card = await screen.findByTestId('tool-entry');
+    await waitFor(() => expect(within(card).getByText('跑著')).toBeTruthy());
+    fireEvent.click(within(card).getAllByRole('button')[0]!);
+
+    fireEvent.change(screen.getByLabelText('對背景子代理說話'), { target: { value: '先看 A' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出給背景子代理' }));
+    await waitFor(() => expect(document.querySelector('[data-subagent-echo]')).not.toBeNull());
+    expect(send).toHaveBeenCalledExactlyOnceWith(fake.opened[0], 'bg-1', '先看 A');
+
+    fireEvent.click(screen.getByRole('button', { name: '停止這一輪' }));
+    expect(interrupt).toHaveBeenCalledExactlyOnceWith(fake.opened[0], 'bg-1');
+
+    // 下一份快照整份取代：翻成閒著，狀態字與輸入框跟著換；停止鈕恢復成不可按。
+    fake.downlink.push(fake.opened[0]!, [statusFrame([{ runId: 'bg-1', status: 'idle' }])]);
+    await waitFor(() => expect(within(card).getByText('閒著')).toBeTruthy());
+    expect((screen.getByLabelText('對背景子代理說話') as HTMLInputElement).placeholder).toContain(
+      '喚醒',
+    );
+    expect((screen.getByRole('button', { name: '停止這一輪' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+
+    // 空快照＝收線。
+    fake.downlink.push(fake.opened[0]!, [statusFrame([])]);
+    await waitFor(() => expect(within(card).getByText('已收線')).toBeTruthy());
+    expect((screen.getByLabelText('對背景子代理說話') as HTMLInputElement).disabled).toBe(true);
   });
 });
