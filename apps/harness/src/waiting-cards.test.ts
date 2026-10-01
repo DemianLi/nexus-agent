@@ -34,6 +34,7 @@ import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { historyFrames } from './conversation-history.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { humanChannelPlugin } from './fixtures.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
@@ -98,6 +99,13 @@ function rootCards(state: ConversationState): string[] {
     .map((entry) => `${entry.name}:${entry.status}`);
 }
 
+/** 呼叫端自己掛了 host-services（它會提供 channel）就照它的；沒有才補一份「有人在答」的。 */
+function withChannel(plugins: readonly PluginEntry[]): PluginEntry[] {
+  return plugins.some((entry) => entry.plugin.name === 'host-services')
+    ? [...plugins]
+    : [humanChannelPlugin(), ...plugins];
+}
+
 /**
  * 真的組裝跑一輪到收尾（停下來等人，或跑完），回傳即時與重播兩個畫面——serve 那條路的形狀，同
  * `tool-card-from-log.test.ts`。
@@ -112,7 +120,7 @@ async function stopForInput(
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns }),
     checkpointer: new MemorySaver(),
-    plugins: [...(typeof plugins === 'function' ? plugins(root) : plugins)],
+    plugins: withChannel(typeof plugins === 'function' ? plugins(root) : plugins),
     backend: backend(root),
   });
   const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'waiting-cards');

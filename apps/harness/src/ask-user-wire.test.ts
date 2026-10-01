@@ -36,7 +36,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import { historyFrames } from './conversation-history.js';
-import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
+import {
+  emptyCommandPoint,
+  humanChannelPlugin,
+  loopbackRequest,
+  TEST_BROWSER_AUTH,
+} from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -73,7 +78,7 @@ async function open(threadId: string): Promise<Session> {
       ],
     }),
     checkpointer: new MemorySaver(),
-    plugins: [createAskUserPlugin()],
+    plugins: [humanChannelPlugin(), createAskUserPlugin()],
   });
   // **日誌要接在 pump 自己那一份註冊表上**：handler 建完 pump 才把它交過來（`wire-handler.ts`），
   // 另外建一份的話圍堵寫的是別人，pump 一顆 `tool/result` 都收不到——工具卡的終態就退回只看基座的

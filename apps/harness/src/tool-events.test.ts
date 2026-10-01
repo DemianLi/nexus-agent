@@ -19,6 +19,7 @@ import { createAskUserPlugin } from '@nexus/plugin-ask-user';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
+import { humanChannelPlugin } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
@@ -142,7 +143,7 @@ async function assemble(turns: readonly ScriptedTurn[], plugins: readonly Plugin
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns }),
     checkpointer: new MemorySaver(),
-    plugins: [...plugins],
+    plugins: [humanChannelPlugin(), ...plugins],
   });
   const sessions = new SessionRegistry(ROOT_ID);
   const detach = built.attachSession(sessions);
