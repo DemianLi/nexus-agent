@@ -167,8 +167,8 @@ type Inspection = 'file' | 'not-file' | 'missing';
  *
  * 模型給的路徑先過 `@nexus/core` 的 `virtualPathOf`（相對路徑以工作區根為起點，見檔頭偏離 3）。
  * **`..` 在那一步就被夾回根了**，不會走到 backend：`a/../b.md` 查的是 `/b.md`，`../x.md` 查的是
- * `/x.md`。同一個字串交給 `read_file` 會被基座拒，這裡則是查根底下那一個——查不到就是找不到，
- * 出不了界。規則跟讀檔路由、workspace-changes 共用那一份，不在這裡另寫。
+ * `/x.md`。同一個字串交給 `read_file` 會被基座拒，這裡則是查根底下那一個——那個檔在就認，
+ * 不在就是找不到，出不了界。規則跟讀檔路由、workspace-changes 共用那一份，不在這裡另寫。
  * @param backend - 折出來的 backend。
  * @param path - 模型給的路徑。
  * @returns 一般檔案、別的東西，或不在。

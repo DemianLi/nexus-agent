@@ -81,8 +81,8 @@ export const WORKSPACE_CAPABILITY = 'workspace';
  *
  * **`..` 夾回根，不拋**：`posix.normalize` 在補了前導 `/` 之後吃掉 `..`，所以結果不可能爬出根。這跟
  * 基座不同：基座對含 `..` 子字串的路徑一律拋（連 `a..b.md` 這種檔名都算），所以同一個字串交給
- * `read_file` 會被拒、交給這裡會落在根底下。讀者拿它查「模型宣告的那個檔」，夾回根只會讓它查不到，
- * 不會讓它出界。**基座「拒 `..`」的那幾處副本**（`contained-backend.ts` 裡照抄 `resolvePath` 的內聯）
+ * `read_file` 會被拒、交給這裡會落在根底下。讀者拿它查「模型宣告的那個檔」，夾回根可能讓它對到根底下
+ * 另一個檔（`a/../b.md` 對到的是 `/b.md`，那個檔在就認），但出不了界。**基座「拒 `..`」的那幾處副本**（`contained-backend.ts` 裡照抄 `resolvePath` 的內聯）
  * **不併進來**：併進來就是把拒改成夾，是行為變更。
  *
  * 跟真 backend 對不對得上，由 `apps/harness/src/virtual-path.test.ts` 用真的
