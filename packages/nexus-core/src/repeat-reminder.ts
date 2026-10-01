@@ -408,11 +408,12 @@ function pendingReminders(
  * `beforeModel` 在 LangGraph 裡會變成迴圈裡的一個節點（`langchain@1.5.10`，
  * `dist/agents/ReactAgent.js:126-134`），所以掛上它之後每一輪是三格而不是兩格。
  * 2026-09-03 用 `LoopingChatModel` 在 `recursionLimit: 8` 上實測：裸組裝 3 輪、加上這個
- * middleware 之後 2 輪，換算從 `2 × 輪數 + 2` 變成 `3 × 輪數 + 2`。
+ * middleware 之後 2 輪。通式是 `模型輪數 = floor((recursionLimit - 1) / 每輪格數)`，每輪格數
+ * 從兩格變三格。
  *
- * **後果是 `DEFAULT_RECURSION_LIMIT`（100）的預算從約 49 輪縮到 32 輪。** 方向是護欄
- * 變嚴不是變鬆，而它擋的那條線（正常基準任務最長 3 次工具呼叫 ≈ 8 個 super-step，
- * 換算後 ≈ 11）離 100 還很遠，所以那個常數沒有動。要拿回原本的預算就自己傳一個大的
+ * **後果是 `DEFAULT_RECURSION_LIMIT`（100）的預算從 49 輪縮到 33 輪。** 方向是護欄
+ * 變嚴不是變鬆，而它擋的那條線（正常基準任務最長 3 次工具呼叫，每輪兩格時 ≈ 8 個 super-step，
+ * 換成每輪三格 ≈ 12）離 100 還很遠，所以那個常數沒有動。要拿回原本的預算就自己傳一個大的
  * `recursionLimit`，或明著傳 `repeatReminder: false`。
  *
  * ## 塞進對話的也記進日誌（[#305](https://github.com/DemianLi/nexus-agent/issues/305)）
