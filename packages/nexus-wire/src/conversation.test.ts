@@ -8,6 +8,7 @@ import {
   cancelResponse,
   emptyConversation,
   isApprovalPending,
+  isBackgroundSubagentMeta,
   reduceAll,
   reduceConversation,
   UNFINISHED_TOOL_TEXT,
@@ -861,12 +862,22 @@ describe('背景子代理的歸屬（#832）', () => {
     });
   });
 
+  it('被選的模型與推理等級（#889）是選填的字串：有或沒有都認得，型別不對就整顆不認', () => {
+    expect(isBackgroundSubagentMeta(key)).toBe(true);
+    expect(isBackgroundSubagentMeta({ ...key, model: 'cheap' })).toBe(true);
+    expect(isBackgroundSubagentMeta({ ...key, model: 'cheap', reasoningEffort: 'off' })).toBe(true);
+    expect(isBackgroundSubagentMeta({ ...key, model: 1 })).toBe(false);
+    expect(isBackgroundSubagentMeta({ ...key, reasoningEffort: null })).toBe(false);
+  });
+
   it('認得不出來的 meta、失敗的呼叫、不是派子代理的工具：不歸屬', () => {
     for (const meta of [
       undefined,
       { kind: 'background-subagent', runId: '', subagentType: 'worker' },
       { kind: 'background-subagent', runId: 'bg-abc123def456' },
       { kind: 'something-else', runId: 'bg-abc123def456', subagentType: 'worker' },
+      { ...key, model: 42 },
+      { ...key, reasoningEffort: { level: 'off' } },
       'bg-abc123def456',
     ]) {
       const state = reduceAll(emptyConversation(), [
