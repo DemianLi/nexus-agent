@@ -262,12 +262,10 @@ function applyGoal(registry: PluginRegistry, config: GoalConfig, seams: GoalSeam
   // **工具政策那一格不在這裡驗**：`createGoalTools` 自己第一行就 `resolveGoalToolPolicy`，
   // 在這裡再叫一次是一道量不出來的重複——拿掉它整套測試照樣綠（實測，突變 7）。兩者的
   // 差別只有「在 `sessions.join` 之前還是之後拋」，而載入失敗本來就會把已登記的撤掉。
-  // 它是陣列不是單一格，因為「剛好一份」是一個**假設**：`attachSession` 是組裝點
-  // 自己呼叫的一步，沒有東西攔得住它被呼叫兩次。多了或少了都由命令當場說出來，
-  // 見 `command.ts` 的 `goalAmbiguousMessage`。
-  const attachedHere: GoalService[] = [];
-  // **工具問的是「這次呼叫的那份日誌」，命令問的是「這次組裝的那一份」**，所以除了
-  // 上面那個陣列還要一張依日誌查的表。兩者同生同滅，在同一個 `join` 裡進出。
+  // **工具問的是「這次呼叫的那份日誌」，命令問的是「執行器交來的那份日誌」**
+  // （`CommandInvocation.sessionLog`，#688），兩者都查這一張依日誌查的表。「這次組裝接了幾份」
+  // 也數它：`attachSession` 是組裝點自己呼叫的一步，沒有東西攔得住它被呼叫兩次，多於一份時
+  // 命令與工具一樣拒絕，見 `command.ts` 的 `goalAmbiguousMessage`。
   const servicesHere = new Map<SessionLog, GoalService>();
   registry.sessions.join((subject) => {
     // **只管 root，subagent 那些一份都不接。**
@@ -285,11 +283,8 @@ function applyGoal(registry: PluginRegistry, config: GoalConfig, seams: GoalSeam
     if (subject.address.kind !== 'root') return;
     const service = new GoalService(subject, serviceOptions);
     servicesHere.set(subject.log, service);
-    attachedHere.push(service);
     return () => {
       servicesHere.delete(subject.log);
-      const at = attachedHere.indexOf(service);
-      if (at >= 0) attachedHere.splice(at, 1);
     };
   });
   // **消費者是組裝點，不是別的 plugin**：`agent-factory` 在 `loadPlugins` 回來之後讀它，
@@ -297,7 +292,8 @@ function applyGoal(registry: PluginRegistry, config: GoalConfig, seams: GoalSeam
   // ——與第一刀那三個「在自己的 `apply` 當下就讀」的正好相反。
   registry.services.provide(GOALS_SERVICE, {
     serviceFor: (log) => servicesHere.get(log),
-    attached: () => [...attachedHere],
+    // `Map` 的插入序就是接線順序。
+    attached: () => [...servicesHere.values()],
   });
   // **三顆工具一律 `rootOnly`。** `fold.ts` 會把每個 subagent 那一份裡的同名項換成
   // 拒絕樁，而**那正是 dsh 對 `tool-goal` 的政策本身**（`authority.ts` 的
@@ -320,7 +316,8 @@ function applyGoal(registry: PluginRegistry, config: GoalConfig, seams: GoalSeam
     name: GOAL_COMMAND_NAME,
     description: GOAL_COMMAND_DESCRIPTION,
     input: { hint: GOAL_COMMAND_HINT },
-    handler: ({ rawInput }) => executeGoalCommand(attachedHere, rawInput),
+    handler: ({ rawInput, sessionLog }) =>
+      executeGoalCommand(servicesHere.get(sessionLog), servicesHere.size, rawInput),
   });
 }
 

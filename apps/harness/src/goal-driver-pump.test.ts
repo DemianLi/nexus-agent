@@ -126,8 +126,8 @@ async function build(options: {
     options.withDriver ? port : undefined,
   );
   late.log = pump.sessionLog;
-  // **伴生接在參與者之前**，同 `wire-handler.ts` 那條線的順序：參與者一裝上去就可能記
-  // 東西，而那些東西該被已經在看的檢查看到。
+  // 先接伴生、再接參與者，同 `composeAttachSessions` 的順序。順序不承重（不變量 runner 接上時會重播日誌，
+  // 參與者裝上去寫的東西不論誰先接都被檢查看到），這裡跟著產品的順序只是為了讓讀的人看到一致的形狀。
   const detachInvariants = attachInvariants(pump.sessions);
   const detachSession = attachSession(pump.sessions);
   return {

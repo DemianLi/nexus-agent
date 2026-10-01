@@ -71,12 +71,10 @@ async function wire(): Promise<Wired> {
       agent: built.agent as unknown as PumpAgent,
       commands: built.commands,
       dispose: built.dispose,
-      attachTelemetry: (sessions) => {
+      attachSessions: (sessions, backgroundPort) => {
         captured = sessions.root;
-        return undefined;
+        return built.attachSessions(sessions, backgroundPort);
       },
-      attachInvariants: built.attachInvariants,
-      attachSession: built.attachSession,
     }),
   });
   const client = createWireClient({

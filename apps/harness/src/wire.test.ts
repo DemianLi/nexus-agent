@@ -14,6 +14,7 @@ import { ThreadPump } from './thread-pump.js';
 import {
   emptyCommandPoint,
   loopbackRequest,
+  noSessions,
   TEST_BROWSER_AUTH,
   testSessionCookie,
 } from './fixtures.js';
@@ -74,6 +75,7 @@ function connect(agent: PumpAgent) {
     auth: TEST_BROWSER_AUTH,
     createAgent: async () => ({
       agent,
+      attachSessions: noSessions,
       commands: emptyCommandPoint(),
       dispose: async () => undefined,
     }),
@@ -470,6 +472,7 @@ describe('失敗與拒絕', () => {
         created += 1;
         return {
           agent: buildAgent(ONE_CALL).agent,
+          attachSessions: noSessions,
           commands: emptyCommandPoint(),
           dispose: async () => undefined,
         };
@@ -538,6 +541,7 @@ describe('失敗與拒絕', () => {
         created += 1;
         return {
           agent: buildAgent(ONE_CALL).agent,
+          attachSessions: noSessions,
           commands: emptyCommandPoint(),
           dispose: async () => undefined,
         };
@@ -623,6 +627,7 @@ describe('一條 thread 一個 agent', () => {
         await Promise.resolve();
         return {
           agent,
+          attachSessions: noSessions,
           commands: emptyCommandPoint(),
           dispose: async () => void (disposed += 1),
         };
@@ -691,6 +696,7 @@ describe('線的兩端與真實組裝點對得上', () => {
         auth: TEST_BROWSER_AUTH,
         createAgent: async () => ({
           agent: assignable,
+          attachSessions: noSessions,
           commands: emptyCommandPoint(),
           dispose: async () => undefined,
         }),
@@ -776,8 +782,8 @@ describe('建不起這條 thread', () => {
           agent,
           commands: emptyCommandPoint(),
           dispose: async () => void (disposed += 1),
-          attachTelemetry: () => {
-            throw new Error('遙測接不上');
+          attachSessions: () => {
+            throw new Error('接線接不上');
           },
         };
       },
