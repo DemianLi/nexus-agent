@@ -117,6 +117,8 @@ const KNOWN_EVENT_TYPES: Readonly<Record<SessionEventType, true>> = {
   'model/usage': true,
   'model/start': true,
   'model/end': true,
+  'llm/retry': true,
+  'llm/retry-started': true,
   'assistant/message': true,
   'user/message': true,
   'compaction/summary': true,
