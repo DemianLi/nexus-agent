@@ -127,6 +127,18 @@ function backgroundSessionId(config: unknown): string | null | undefined {
 }
 
 /**
+ * 這次呼叫是不是背景子代理的（帶了 {@link BACKGROUND_SESSION_CONFIG_KEY}，不論值對不對）。
+ *
+ * 給「背景子代理不走父圖那條路」的消費者問：載體之類是父圖的 `task` 取走的，背景位址沒有人取，記了只是漏
+ * （[#858](https://github.com/DemianLi/nexus-agent/issues/858)）。
+ *
+ * @param config - 同 {@link toolCallSessionAddress}。
+ */
+export function isBackgroundCall(config: unknown): boolean {
+  return backgroundSessionId(config) !== undefined;
+}
+
+/**
  * 認出一次呼叫的會話身分。**名字說工具，契約說「圖裡的呼叫」**——見檔頭。
  *
  * @param config - 一份帶得出 `configurable.checkpoint_ns` 的東西。工具那條路傳的是

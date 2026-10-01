@@ -39,12 +39,11 @@
  * 內容見 {@link BackgroundSettlement}），時機在讓出所有權（交出 `outcome`）之前。被 `interrupt` 而暫停、還排著輪次的不算結算。
  * 怎麼叫醒主對話是 pump 的事（`ThreadPump.notifySettled`）。
  *
- * ## 沒做的
+ * ## 輸出上限
  *
- * 撞到輸出上限時，中介層在背景圖上照樣丟工具呼叫
- * （它在子代理的那一疊裡），並在 `MaxTokensCarrier` 記一筆；一次性的 `task` 由父圖那一側取走，背景位址沒有人取，
- * 每個撞過上限的背景子代理在載體裡留一筆（同一個編號會蓋掉，數量以派出的子代理為界）。結算摘要的 `max-tokens` 不靠它，
- * 讀的是子代理自己日誌上回覆的 `finish_reason`。
+ * 撞到輸出上限時，中介層在背景圖上照樣丟工具呼叫（它在子代理的那一疊裡，同 dsh），但**不在 `MaxTokensCarrier` 記一筆**
+ * （[#858](https://github.com/DemianLi/nexus-agent/issues/858)）：載體是一次性的 `task` 由父圖那一側取走的，背景位址沒有人取。
+ * 結算摘要的 `max-tokens` 不靠它，讀的是子代理自己日誌上回覆的 `finish_reason`。
  *
  * @module
  */

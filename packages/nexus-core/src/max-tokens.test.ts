@@ -7,8 +7,10 @@ import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import { describe, expect, it } from 'vitest';
 import { toLoggedMessage } from './logged-message.js';
+import { BACKGROUND_SESSION_CONFIG_KEY } from './session-address.js';
 import {
   createMaxTokensCarrier,
+  createMaxTokensMiddleware,
   dropToolCalls,
   isMaxTokensFinish,
   SUBAGENT_MAX_TOKENS_REASON,
@@ -181,5 +183,35 @@ describe('載體', () => {
     expect(carrier.take('tools:b')).toBeUndefined();
     expect(carrier.take('tools:a')).toBe('第二段');
     expect(carrier.take('tools:a')).toBeUndefined();
+  });
+});
+
+describe('模型呼叫撞到上限時誰記載體', () => {
+  const cut = () =>
+    new AIMessage({ content: '寫到一半', response_metadata: { finish_reason: 'length' } });
+
+  async function call(configurable: Record<string, unknown>) {
+    const carrier = createMaxTokensCarrier();
+    const middleware = createMaxTokensMiddleware(carrier) as unknown as {
+      wrapModelCall(
+        request: unknown,
+        handler: (request: unknown) => Promise<AIMessage>,
+      ): Promise<AIMessage>;
+    };
+    await middleware.wrapModelCall({ runtime: { configurable } }, () => Promise.resolve(cut()));
+    return carrier;
+  }
+
+  it('一次性子代理（命名空間兩段）記一筆，父圖的 task 取走', async () => {
+    const carrier = await call({ checkpoint_ns: 'tools:9|model_request:1' });
+    expect(carrier.take('tools:9')).toBe('寫到一半');
+  });
+
+  it('背景子代理不記：它是最上層的圖，沒有父圖的 task 來取（#858）', async () => {
+    const carrier = await call({
+      checkpoint_ns: 'model_request:1',
+      [BACKGROUND_SESSION_CONFIG_KEY]: 'bg-1',
+    });
+    expect(carrier.take('bg-1')).toBeUndefined();
   });
 });
