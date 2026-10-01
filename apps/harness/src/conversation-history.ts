@@ -19,7 +19,8 @@
  * | `assistant/message` | 模型的回覆，連同推理（#527）；`interrupted` 的那則不收尾，由那一輪的中止標成「已停止」 |
  * | `tool/call` ／ `tool/result` | 工具卡開、收；那則結果的文字成功失敗都帶（成功是輸出、失敗是紅字，[#439](https://github.com/DemianLi/nexus-agent/issues/439)） |
  * | `turn/end` ／ `turn/failed` | 那一輪收掉（中止、失敗、完成）；沒結果的卡照即時那條規則收成失敗 |
- * | `session/end-seed` | 上一個行程停在一輪中間的話，那一輪在這裡收掉 |
+ * | `turn/end`（`reason.kind: "interrupted"`） | 續接時補寫的收尾（#721）：上一個行程死在這一輪中間，畫面與完成同（`completed`），不論那一輪死前有沒有 `interrupt/raised`；補的 `tool/result`（`TOOL_OUTCOME_UNKNOWN`）的卡仍畫成 `UNFINISHED_TOOL_TEXT`，與補寫之前一字不差 |
+ * | `session/end-seed` | 舊檔（#721 之前）上一個行程停在一輪中間的話，那一輪在這裡收掉；新檔那一輪已由上一列收掉 |
  * | `deliverables/presented` | `custom` frame，`data` 同即時（{@link deliverablesData}） |
  * | `workspace/changes` | `custom` frame，`data` 同即時（{@link workspaceChangesData}）；它指到的摘要可能已經不在 |
  * | `model/usage` ／ `context/measure` | 用量表（#528）：**一頁各一顆，是到這一頁結尾為止最新的那一筆**，`data` 同即時（{@link modelUsageData}、{@link contextMeasureData}） |
@@ -86,6 +87,7 @@ import {
   TITLE,
   TODOS,
   TOKEN_USAGE,
+  UNFINISHED_TOOL_TEXT,
   WORKSPACE_CHANGES,
 } from '@nexus/wire';
 import type {
@@ -107,6 +109,7 @@ import {
   loggedMessageId,
   replayConversation,
   sessionStatsUnit,
+  TOOL_OUTCOME_UNKNOWN,
   tokenUsageUnit,
 } from '@nexus/core';
 
@@ -925,7 +928,13 @@ export function historyFrames(
         // 兩邊各寫一份的話，同一張卡會「即時一個樣、重新整理另一個樣」。
         const text = toolResultText(event.data.message, toolTextMaxBytes);
         // 格式 9 以前沒有 `message`：失敗的那張只剩錯誤碼可講，碼也沒有就交給折疊器說「未指名的錯誤」。
-        const reason = text ?? (event.data.isError ? event.data.error?.code : undefined);
+        // **續接補寫的「結果不明」（#721）畫成同一句「這次呼叫沒有結果」**：補寫之前，當掉那一輪的卡在 end-seed 被
+        // 收成失敗、帶的就是這一句，web 有兩處拿它做完全相等比對（提問卡是否「被停止」、計劃卡的 outcome）。
+        // 補寫改的是日誌，不該順手改畫面——要不要讓畫面講「結果不明」是另一個決定。
+        const reason =
+          event.data.error?.code === TOOL_OUTCOME_UNKNOWN
+            ? UNFINISHED_TOOL_TEXT
+            : (text ?? (event.data.isError ? event.data.error?.code : undefined));
         // meta 同即時那條（`ThreadPump.#noteVerdict`）：失敗的不帶，上限照 `capToolResultMeta`。格式 16 以前沒有這一格。
         const meta = event.data.isError
           ? undefined
@@ -963,6 +972,10 @@ export function historyFrames(
         } else if (event.data.reason?.kind === 'max-tokens') {
           // 撞到輸出上限（#433）：同即時那條，pump 在收尾 frame 上補 `maxTokens`。
           close(event.time, { event: 'completed', maxTokens: true });
+        } else if (event.data.reason?.kind === 'interrupted') {
+          // 續接補寫的收尾（#721）：那一輪死了，不是停在核准點等人——死前就算記過 `interrupt/raised`
+          // 也不能畫成「等人回覆」。畫面與舊檔在 end-seed 收掉的那一條一致。
+          close(event.time, { event: 'completed' });
         } else if (interrupted) {
           turnOpen = false;
           suspended = true;
@@ -974,7 +987,8 @@ export function historyFrames(
         close(event.time, { event: 'failed', error: event.data.message });
         break;
       case 'session/end-seed':
-        // 上一個行程死在一輪中間：那一輪沒有收尾，在這裡收，同 dsh 冷讀時補的合成收尾。
+        // 舊檔（#721 之前）：上一個行程死在一輪中間，那一輪沒有收尾，在這裡收，同 dsh 冷讀時補的合成收尾。
+        // 新檔由續接補寫的 `turn/end {interrupted}` 收，走不到這裡。
         if (turnOpen || suspended) close(event.time, { event: 'completed' });
         break;
       default:
