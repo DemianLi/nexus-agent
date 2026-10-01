@@ -21,6 +21,9 @@ import { OUTPUT_SCHEMA_MIDDLEWARE_NAME } from './output-schema.js';
 import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 import { MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
 import { SUBAGENT_DELEGATION_MIDDLEWARE_NAME } from './subagent-delegation.js';
+import { SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME } from './subagent-tool-filter.js';
+import { SPILL_POLICY_MIDDLEWARE_NAME } from './spill-policy.js';
+import { STEP_INBOX_MIDDLEWARE_NAME } from './step-inbox.js';
 import {
   TURN_CANCEL_MIDDLEWARE_NAME,
   TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
@@ -2210,5 +2213,153 @@ describe('同名的一開一關：開著的那一列不被關掉', () => {
     expect(registry.disabledEntries.has('model-usage')).toBe(false);
     const params = foldRegistry(registry, { summarization: false, observationPolicy: false });
     expect(inStack(params.middleware, MODEL_USAGE_MIDDLEWARE_NAME)).toBe(true);
+  });
+});
+
+/**
+ * **root 與每個子代理的 middleware 疊對齊**（#664 的通用斷言）。
+ *
+ * 新增一顆 core middleware 時，只補 root 那一份、子代理漏掉，上面那十三條全名單**不會紅**：
+ * 子代理那六條比的是 `foldSubAgents` 的實際輸出對手寫的期望值，兩邊都沒動，照樣綠。
+ * 這一條比的是**子代理那疊對 root 那疊**：把子代理專屬的名字拿掉之後，兩疊的名字序列要一樣。
+ *
+ * **三個集合寫死在這裡，不從 fold 匯入。** 從 fold 的表算期望值的話，表上一列寫錯，實作與期望會
+ * 一起錯；寫死在測試裡，「只給 root」「只給子代理」要改就得在這裡明著改。
+ *
+ * **在所有選填槽位都在場的組裝上跑**：這個檔的入口預設把摘要器、觀測策略、提醒器關掉，沒有任何一條
+ * 同時帶齊它們。少一格在場，那一格就沒被這條問到。
+ */
+describe('root 與每個子代理的 middleware 疊對齊', () => {
+  /** 只給 root 的：插話只折進 root 的陣列（`FoldOptions.stepInbox`）。 */
+  const ROOT_ONLY = new Set([STEP_INBOX_MIDDLEWARE_NAME]);
+  /**
+   * 只給子代理的：委派聲明、工具過濾（遮基座工具，每個子代理都一樣），以及子代理自己帶的
+   * `spec.middleware`。
+   */
+  const SUBAGENT_ONLY = new Set([
+    SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
+    SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME,
+    'subagent-own',
+  ]);
+  /** 逐個 agent 各建一份的：狀態在閉包裡，共用會串台。 */
+  const FRESH_PER_AGENT = new Set([
+    OBSERVATION_POLICY_MIDDLEWARE_NAME,
+    SUMMARIZATION_MIDDLEWARE_NAME,
+  ]);
+  /** 同名但是另一顆：子代理的核准閘門管道固定 `policy-never`。 */
+  const OTHER_INSTANCE = new Set([APPROVAL_GATE_MIDDLEWARE_NAME]);
+
+  type Named = { name: string };
+  const nameOf = (middleware: unknown): string => (middleware as Named).name;
+
+  /** 每一個選填槽位都打開、每一種 plugin 位置都有、子代理自帶 middleware 的組裝。 */
+  async function foldEverything() {
+    const own = fakeMiddleware('subagent-own');
+    const params = await fold(
+      [
+        fakePlugin('a', (r) => void r.middleware.use(fakeMiddleware('a'))),
+        fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
+        fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'), { last: true })),
+        fakePlugin('team', (r) => {
+          r.subagents.register({ ...fakeSubAgent('releaser'), middleware: [own] } as SubAgent);
+          r.subagents.register(fakeSubAgent('auditor'));
+        }),
+      ],
+      {
+        observationPolicy: true,
+        summarization: {},
+        repeatReminder: {},
+        defaultBackend: fakeBackend('default'),
+        stepInbox: true,
+        spillPolicy: {
+          maxInlineTokens: 1000,
+          store: { saveText: () => Promise.reject(new Error('這條測試不會存')) },
+        },
+        baseToolNames: gatedTools,
+        subagentToolFilter: { deny: ['write_file'] },
+        checkpointer: true,
+      },
+    );
+    return params;
+  }
+
+  it('前提：這個組裝真的把每一個選填槽位都打開了', async () => {
+    const params = await foldEverything();
+    expect(middlewareNames(params)).toEqual(
+      expect.arrayContaining([
+        STEP_INBOX_MIDDLEWARE_NAME,
+        SPILL_POLICY_MIDDLEWARE_NAME,
+        OBSERVATION_POLICY_MIDDLEWARE_NAME,
+        SUMMARIZATION_MIDDLEWARE_NAME,
+        REPEAT_REMINDER_MIDDLEWARE_NAME,
+        MODEL_USAGE_MIDDLEWARE_NAME,
+        SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+        FS_TOOL_ERRORS_MIDDLEWARE_NAME,
+        READ_CONTINUATION_MIDDLEWARE_NAME,
+        'a',
+        'b',
+        'c',
+      ]),
+    );
+    // 三個子代理：fold 補的 general-purpose 加兩個註冊進來的。
+    expect(params.subagents.map((subagent) => subagent.name)).toEqual([
+      GENERAL_PURPOSE_SUBAGENT.name,
+      'releaser',
+      'auditor',
+    ]);
+  });
+
+  it('子代理那疊去掉子代理專屬的名字，等於 root 那疊去掉只給 root 的名字——每個子代理都一樣', async () => {
+    const params = await foldEverything();
+    const rootNames = (params.middleware as unknown[])
+      .map(nameOf)
+      .filter((name) => !ROOT_ONLY.has(name));
+    for (const subagent of params.subagents) {
+      const subNames = ((subagent.middleware ?? []) as unknown[])
+        .map(nameOf)
+        .filter((name) => !SUBAGENT_ONLY.has(name));
+      expect(subNames, subagent.name).toEqual(rootNames);
+    }
+  });
+
+  it('只給 root 的不在任何子代理裡，只給子代理的每個子代理都有（自帶的只在自帶的那個）', async () => {
+    const params = await foldEverything();
+    for (const subagent of params.subagents) {
+      const names = ((subagent.middleware ?? []) as unknown[]).map(nameOf);
+      for (const only of ROOT_ONLY) expect(names, subagent.name).not.toContain(only);
+      expect(names, subagent.name).toContain(SUBAGENT_DELEGATION_MIDDLEWARE_NAME);
+      expect(names, subagent.name).toContain(SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME);
+      expect(names.includes('subagent-own'), subagent.name).toBe(subagent.name === 'releaser');
+    }
+  });
+
+  it('實例身分：共用的是同一顆，逐個建的與另一顆不是 root 那顆、子代理之間也不共用', async () => {
+    const params = await foldEverything();
+    const rootStack = (params.middleware as unknown[]).filter(
+      (middleware) => !ROOT_ONLY.has(nameOf(middleware)),
+    );
+    const seen = new Map<string, unknown[]>();
+    for (const subagent of params.subagents) {
+      const subStack = ((subagent.middleware ?? []) as unknown[]).filter(
+        (middleware) => !SUBAGENT_ONLY.has(nameOf(middleware)),
+      );
+      subStack.forEach((middleware, index) => {
+        const name = nameOf(middleware);
+        const rootMiddleware = rootStack[index];
+        if (FRESH_PER_AGENT.has(name) || OTHER_INSTANCE.has(name)) {
+          expect(middleware, `${subagent.name} 的 ${name}`).not.toBe(rootMiddleware);
+          seen.set(name, [...(seen.get(name) ?? []), middleware]);
+        } else {
+          expect(middleware, `${subagent.name} 的 ${name}`).toBe(rootMiddleware);
+        }
+      });
+    }
+    // 逐個建的：三個子代理各一份，彼此不同。另一顆（核准閘門）無狀態，一顆走遍每個子代理。
+    for (const name of FRESH_PER_AGENT) {
+      expect(new Set(seen.get(name)).size, name).toBe(params.subagents.length);
+    }
+    for (const name of OTHER_INSTANCE) {
+      expect(new Set(seen.get(name)).size, name).toBe(1);
+    }
   });
 });
