@@ -85,6 +85,8 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 
 **外溢門檻可調、可關**：一則工具結果超過 `spill-policy` 那一列的 `maxInlineTokens`（出貨 12500，估算 token）時，全文存進上面那個暫存目錄，模型只收到頭尾預覽和一句帶路徑的通知（`Full formatted result stored at: …`），要全文就用 `read_file` 照路徑讀；`read_file` 自己的結果不外溢。日誌記的是這份預覽，不是全文，所以全文只在暫存目錄的保留期內讀得回。把 `maxInlineTokens` 刪掉（或把那一列標成 `disabled: true`）就停用；停用之後超過 80,000 字元的結果仍由基座換成預覽，那一條關不掉。暫存目錄寫不進去、或沒有會話日誌時不外溢，原樣交給模型。
 
+**搜尋結果看筆數、不看字數**：`grep` 命中超過 `tool-fs-search` 那一列的 `grepMaxMatches`（出貨 250）、`glob` 或 `ls` 超過 `globMaxResults`（出貨 100）時，模型只收到前段，結尾一句帶路徑的定位（`Full grep result stored at: …`），完整結果存進上面那個暫存目錄，用 `read_file` 照路徑讀。`grep` 只管逐行命中（`content`）那種輸出，`count`／`files_with_matches` 照原樣。暫存目錄寫不進去、或沒有會話日誌時照樣只留前段，結尾改講沒存到，搜尋不算失敗。把那一列標成 `disabled: true` 就回到基座原樣：超過 80,000 字元由工具自己截掉，原文不留。
+
 **接得回來要站在同一個地方**，兩道守衛，兩個入口都擋：
 
 - **同一個目錄。** 一份會話記著它建立當下的工作目錄，接不回別的目錄；**沒記的也拒**，不猜。

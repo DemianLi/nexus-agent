@@ -240,6 +240,7 @@ describe('一次性模式', () => {
       'tool-text',
       'tool-result-stash',
       'spill-policy',
+      'tool-fs-search',
       'background-subagents',
       'subagent-model-selection',
       'live-model',
