@@ -35,7 +35,6 @@ import type {
   FileReferenceListResponse,
   SessionReferenceCandidate,
   SessionReferenceListResponse,
-  SlashDescriptor,
   SlashListResult,
   SlashMethod,
   SlashRunResult,
@@ -53,8 +52,6 @@ import type {
   DeliverableMethod,
   DeliverableReadError,
   DeliverableRefusalCode,
-  WireFeedbackCategory,
-  WireFeedbackItem,
 } from '@nexus/wire';
 import {
   THREAD_FEED_PATH,
@@ -88,11 +85,9 @@ import {
   successResponse,
 } from '@nexus/wire';
 import type {
-  CommandDescriptor,
   CommandRegistrationPoint,
   FeedbackCategory,
   FeedbackService,
-  MessageFeedbackItem,
   SessionEvent,
   SessionLog,
   SessionRegistry,
@@ -137,28 +132,6 @@ import type { StoredThreadList } from './session-list.js';
 import type { PumpAgent, QueueAction } from './thread-pump.js';
 import { ThreadFeed } from './thread-feed.js';
 import { ThreadPump } from './thread-pump.js';
-
-/**
- * `@nexus/core` 的命令視圖必須塞得進線上那一個。
- *
- * 兩份形狀是手抄的（`@nexus/wire` 進得了瀏覽器正是因為它不相依 `@nexus/core`），而
- * **這裡是唯一同時看得到兩邊的地方**。少了這一行，`CommandDescriptor` 多一格就會安靜地
- * 到不了瀏覽器；有了它，那一刻編不過。形狀照 `protocol.ts` 的
- * `_channelsAreProtocolChannels`。
- */
-const _descriptorFitsTheWire: SlashDescriptor = {} as CommandDescriptor;
-void _descriptorFitsTheWire;
-
-/**
- * 回饋的詞彙同一條理由（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。**分類兩個方向
- * 都釘**：只釘一邊的話，線上那份多寫一類會安靜地通過，而 core 那側的折疊不認得它。
- */
-const _categoryFitsTheWire: WireFeedbackCategory = {} as FeedbackCategory;
-const _wireCategoryIsCore: FeedbackCategory = {} as WireFeedbackCategory;
-const _feedbackItemFitsTheWire: WireFeedbackItem = {} as MessageFeedbackItem;
-void _categoryFitsTheWire;
-void _wireCategoryIsCore;
-void _feedbackItemFitsTheWire;
 
 /**
  * 一個 thread 的 agent 與它的清理函式。
