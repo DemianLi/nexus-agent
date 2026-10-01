@@ -9,8 +9,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const seen = vi.hoisted(() => ({ calls: [] as unknown[] }));
 
-vi.mock('./cli.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('./cli.js')>();
+vi.mock('./assembly-root.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('./assembly-root.js')>();
   return {
     ...original,
     createCliAgent: (...args: Parameters<typeof original.createCliAgent>) => {

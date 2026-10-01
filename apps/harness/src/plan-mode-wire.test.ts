@@ -23,7 +23,7 @@ import { createWireClient, emptyConversation, PLAN_MODE, reduceAll } from '@nexu
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
-import { createCliAgent } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { historyPage } from './conversation-history.js';
 import { loopbackRequest, shippedPlugins, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
