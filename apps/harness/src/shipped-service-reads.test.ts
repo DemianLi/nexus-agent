@@ -26,13 +26,13 @@ import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
 import { GOALS_SERVICE } from '@nexus/plugin-goal';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createCliAgent } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { shippedPlugins } from './fixtures.js';
 
 const shipped = await shippedPlugins();
 
 /**
- * 組裝點交協作者的那幾個條目的 plugin 名：`cli.ts` 的 `host-services`，`agent-factory.ts` 的
+ * 組裝點交協作者的那幾個條目的 plugin 名：`assembly-root.ts` 的 `host-services`，`agent-factory.ts` 的
  * `system-prompt-variables` 與 `fs`。改了名字這一條會紅（讀到的服務找不到認得的提供者）——那是安全的方向。
  */
 const HOST_ENTRY_NAMES = new Set(['host-services', 'system-prompt-variables', 'fs']);

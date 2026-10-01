@@ -491,21 +491,22 @@
 
 # ── 配套入口 ──────────────────────────────────────────────────────────────────
 #
-# 二十個全進，不是只有 `@nexus/core`（#107 拍板）。理由三條：
+# 二十一個全進，不是只有 `@nexus/core`（#107 拍板）。理由三條：
 #
 # - **它們不裝功能，只裝觀察。** 一個配套入口不註冊工具、不改 prompt、不碰 backend，所以
 #   「替誰決定該裝什麼」這個顧慮對它們不成立——沒有人的 agent 因為它們而不一樣。
 # - **關得掉。** 條目層有 `disabled`（#104），組裝點有 `invariants` 選擇，所以進來不是
 #   單向門。這是它們進得來的前提，而現在連 `disabled` 都寫得進使用者自己的 patch 檔。
-# - **二十個全進。** 十三個是空 installer，掛上去一個檢查都不裝，買到的只有包名歸屬；真的
-#   在檢查的是七個——`@nexus/core`（turn 配對）、`@nexus/plugin-commands`（命令生命週期
+# - **二十一個全進。** 十三個是空 installer，掛上去一個檢查都不裝，買到的只有包名歸屬；真的
+#   在檢查的是八個——`@nexus/core`（turn 配對）、`@nexus/plugin-commands`（命令生命週期
 #   配對，#118）、`@nexus/plugin-plan-mode`（`/plan` 的參數契約，#120）、
 #   `@nexus/plugin-goal`（耐久 goal 串，#126）、`@nexus/plugin-todo`（耐久待辦快照的形狀
 #   與歸屬，#132）、`@nexus/plugin-present`（每一筆交付對得上一次成功的 `present`，#441）、
 #   `@nexus/plugin-workspace-changes`（每一筆改動紀錄落在跑過工具的一輪裡，#443；那個功能
-#   本身不在這份清單裡，只由 serve 掛）。
+#   本身不在這份清單裡，只由 serve 掛）、`@nexus/plugin-sandbox-policy`（每一顆 `sandbox/mode`
+#   帶的都是認得的模式，#699）。
 #
-# **代價是每一次執行多二十個條目、二十次 `apply`**，換到的是這份清單與
+# **代價是每一次執行多二十一個條目、二十一次 `apply`**，換到的是這份清單與
 # `registry.invariants.companions()` 對得起來。違規往哪裡印，見 `runCli` 接線的那一行。
 #
 # 這份清單要跟 `packages/*/src/invariant.ts` 對得上：少掛的那幾個會讓「這個 package 沒有
