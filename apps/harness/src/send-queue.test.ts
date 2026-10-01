@@ -851,9 +851,9 @@ describe('wire', () => {
         agent,
         commands: emptyCommandPoint(),
         dispose: async () => {},
-        attachSession: (sessions) => {
+        attachSessions: (sessions) => {
           pumpLog = () => sessions.root.events;
-          return () => {};
+          return { detach: async () => {} };
         },
       }),
     });

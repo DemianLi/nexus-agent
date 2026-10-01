@@ -61,6 +61,7 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+import { composeAttachSessions } from './session-attach.js';
 
 const shipped = await shippedPlugins();
 
@@ -154,9 +155,9 @@ async function run(
       dispose: built.dispose,
       workspaceChanges: built.services.use(WORKSPACE_CHANGES_SERVICE),
       attachInvariants: built.attachInvariants,
-      attachSession: (registry) => {
+      attachSessions: (registry, backgroundPort) => {
         sessions = registry;
-        return built.attachSession(registry);
+        return composeAttachSessions(built)(registry, backgroundPort);
       },
     }),
   });
