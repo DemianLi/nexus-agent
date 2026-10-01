@@ -253,6 +253,9 @@ importers:
       '@adobe/leonardo-contrast-colors':
         specifier: 1.1.0
         version: 1.1.0
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../../packages/nexus-core
       '@tailwindcss/vite':
         specifier: ^4.1.16
         version: 4.3.3(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.0))

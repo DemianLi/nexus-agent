@@ -14,10 +14,14 @@
 export const TODO_WRITE = 'todo_write';
 
 /**
- * 一項的狀態。同 wire 的 `WireTodoItem['status']`（`todo-view.test.ts` 在型別層釘住相等）；wire 與 core 的 `TodoStatus`
- * 由 harness 的 `todo-status-wire.test.ts` 釘住（#666）。
+ * 一項的狀態，型別取自領域主人 core（照 dsh：UI 對宣告過的領域套件做 type-only 相依，不自己再寫一份，#666）。
+ * 只走 `src/todo.ts` 這一支純型別的檔，不經 `@nexus/core` 主入口，所以 web 的 `tsc` 不會把 core 的整張型別圖
+ * （langchain、deepagents）拖進來；`import type` 在建置時整行消失，打包結果裡沒有 core。
+ * 與 wire 的 `WireTodoItem['status']` 相等由 `todo-view.test.ts` 在型別層釘住；wire 與 core 兩邊則由 harness 的
+ * `todo-status-wire.test.ts` 釘住。
  */
-export type TodoStatus = 'pending' | 'in_progress' | 'completed';
+import type { TodoStatus } from '@nexus/core/src/todo.ts';
+export type { TodoStatus };
 
 /** 清單裡的一項，照模型給的原樣。 */
 export interface TodoItem {
