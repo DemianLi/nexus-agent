@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { createDeliverableClient, createWireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
-import { SESSION_LOG_OFF_DISCLOSURE } from './cli.js';
+import { SESSION_LOG_OFF_DISCLOSURE } from './assembly-root.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
