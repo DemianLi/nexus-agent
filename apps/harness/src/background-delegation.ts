@@ -51,7 +51,7 @@ import { z } from 'zod';
 import { isBackgroundAddress } from './background-run-id.js';
 import { BackgroundSubagentHost, withReturnGuidance } from './background-subagents.js';
 import type { BackgroundParentPort } from './background-subagents.js';
-import type { BackgroundAgent } from './background-subagents.js';
+import type { BackgroundAgent, BackgroundSubagentControl } from './background-subagents.js';
 
 /** 模型看到的工具名（dsh 的預設名，`toolName: 'subagent'`）。 */
 export const SUBAGENT_TOOL_NAME = 'subagent';
@@ -129,13 +129,13 @@ export class BackgroundDelegation {
    * @param compile - 按名字編帶存檔點的圖（`AgentHandle.compileSubagent` 包好存檔點）。
    * @param port - 背景子代理往主對話這個方向的出口：結算通知（#840）與子代理寫來的話（#849）。**沒給就沒有人被通知、
    *   子代理也寄不出去**：cli 的 REPL 一行一輪，沒有可以叫醒的一輪。
-   * @returns 收掉的函式（等進行中的輪收完）。
+   * @returns 收掉的函式（等進行中的輪收完），上面掛著 `control`：wire 對單一背景子代理傳話、單獨停的控制面（#865）。
    */
   attach(
     sessions: SessionRegistry,
     compile: (subagent: string) => BackgroundAgent,
     port: BackgroundParentPort = {},
-  ): () => Promise<void> {
+  ): (() => Promise<void>) & { readonly control: BackgroundSubagentControl } {
     // 一份組裝一個會話（serve 一條 thread 一份組裝）：第二次接上會把第一個 host 的位置蓋掉，
     // 那個 host 的子代理就從工具的視線裡消失，所以直接拒絕，不靜靜蓋掉。
     if (this.#host !== undefined) throw new Error('背景子代理已經接上一個會話，一份組裝只接一個');
@@ -151,10 +151,11 @@ export class BackgroundDelegation {
       }),
     });
     this.#host = host;
-    return async () => {
+    const close = async (): Promise<void> => {
       if (this.#host === host) this.#host = undefined;
       await host.close();
     };
+    return Object.assign(close, { control: host.control });
   }
 
   /** 組裝用的條目：一顆最外層的 middleware。 */

@@ -95,6 +95,26 @@ describe('瀏覽器端的 client', () => {
     expect(result).toMatchObject({ type: 'success', result: { accepted: true } });
   });
 
+  it('對單一背景子代理傳話與單獨停同一條 RPC family：路徑與封包各講一次 method，run_id 與 text 原樣帶上', async () => {
+    const { calls, client } = stub(() => Response.json(successResponse(1, { accepted: true })));
+    const sent = await client.subagentSend('t 1', 'bg-1', '  改看 b.ts\n');
+    const stopped = await client.subagentInterrupt('t 1', 'bg-1');
+    expect(calls[0]?.url).toBe('http://agent.test/threads/t%201/commands/subagent.send');
+    expect(calls[0]?.body).toEqual({
+      id: 1,
+      method: 'subagent.send',
+      params: { run_id: 'bg-1', text: '  改看 b.ts\n' },
+    });
+    expect(calls[1]?.url).toBe('http://agent.test/threads/t%201/commands/subagent.interrupt');
+    expect(calls[1]?.body).toEqual({
+      id: 2,
+      method: 'subagent.interrupt',
+      params: { run_id: 'bg-1' },
+    });
+    expect(sent).toMatchObject({ type: 'success', result: { accepted: true } });
+    expect(stopped).toMatchObject({ type: 'success', result: { accepted: true } });
+  });
+
   it('下行預設訂全部放行的 channel，回來的是解好的封包', async () => {
     const { calls, client } = stub(() => sseResponse([FRAME]));
     const events = await client.openEvents('t2');

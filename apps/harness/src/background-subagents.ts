@@ -226,6 +226,41 @@ export interface BackgroundSubagentHostOptions {
   readonly onMessage?: (message: BackgroundAgentMessage) => void;
 }
 
+/** {@link BackgroundSubagentError} 的分類：wire 層照它回不同的錯誤碼，不靠比對訊息。 */
+export type BackgroundSubagentErrorCode = 'closed' | 'not-found' | 'at-capacity';
+
+/**
+ * 往背景子代理送話或查它時被拒的原因，帶**型別化的碼**。訊息是給模型／人看的那句話，原樣不變；碼是給程式分流的
+ * （wire 的 `subagent.send` 把它譯成三個錯誤碼，不去比對中文訊息）。
+ */
+export class BackgroundSubagentError extends Error {
+  readonly code: BackgroundSubagentErrorCode;
+
+  constructor(code: BackgroundSubagentErrorCode, message: string) {
+    super(message);
+    this.name = 'BackgroundSubagentError';
+    this.code = code;
+  }
+}
+
+/**
+ * 主對話**以外**的人（wire 上的人）對單一背景子代理的控制面（[#865](https://github.com/DemianLi/nexus-agent/issues/865)）。
+ * 同一個 host 的兩個動作，不另外存狀態。
+ */
+export interface BackgroundSubagentControl {
+  /** {@link BackgroundSubagentHost.sendFromUser}。同步接受或拋 {@link BackgroundSubagentError}，不等那一輪跑完。 */
+  readonly sendFromUser: (runId: string, text: string) => void;
+  /** {@link BackgroundSubagentHost.interrupt}。 */
+  readonly interrupt: (runId: string) => boolean;
+}
+
+/**
+ * `attachSession` 回的收線函式。**上面掛著 `background`**：這份組裝有背景派出（且接上了 host）時，wire 對單一背景子代理
+ * 傳話、單獨停的控制面（[#865](https://github.com/DemianLi/nexus-agent/issues/865)）；沒有就缺席，wire 回
+ * `subagent_not_found`。掛在收線函式上是為了不動 cli 與其他呼叫端的簽名——它們只當作 `() => void` 用。
+ */
+export type SessionDetach = (() => void) & { readonly background?: BackgroundSubagentControl };
+
 interface Job {
   readonly runId: string;
   readonly subagent: string;
@@ -242,9 +277,10 @@ interface Job {
 interface Steer {
   /** 成為 `HumanMessage` 的 id：日誌、checkpoint、推回模型的是同一則。 */
   readonly id: string;
-  /** 送進模型的整段字，含 `Agent <寄件人> sent a message: ` 前綴。 */
+  /** 送進模型的整段字：agent 寫的含 `Agent <寄件人> sent a message: ` 前綴，人說的是原文。 */
   readonly text: string;
-  readonly senderSessionId: string;
+  /** agent 寫的才有（寄件人的會話 id）；**沒有就是人說的**（`sendFromUser`），日誌來源是 `user`、不加前綴。 */
+  readonly senderSessionId?: string;
 }
 
 /**
@@ -256,6 +292,16 @@ interface RunningRound {
   readonly outcome: Promise<BackgroundRoundOutcome>;
   readonly steers: Steer[];
   closed: boolean;
+}
+
+/** 一句話在子代理日誌裡開一輪時的 `turn/start`：人說的是 `message`，agent 寫的是 `agent-message`（記寄件人）。 */
+function turnOf(body: {
+  readonly text: string;
+  readonly senderSessionId?: string;
+}): SessionEventMap['turn/start'] {
+  return body.senderSessionId === undefined
+    ? { kind: 'message', text: body.text }
+    : { kind: 'agent-message', text: body.text, senderSessionId: body.senderSessionId };
 }
 
 /**
@@ -371,30 +417,63 @@ export class BackgroundSubagentHost {
     readonly runId: string;
     readonly message: string;
   }): Promise<BackgroundRoundOutcome> {
-    if (this.#closed) throw new Error('背景子代理的載體已經關閉');
-    const subagent = this.#known.get(input.runId);
-    if (subagent === undefined) {
-      throw new Error(
-        `沒有編號 ${input.runId} 的背景子代理（用 list_agents 看有哪些；只能傳給自己派出去的）`,
-      );
-    }
-    const full = this.#capacityRefusal(input.runId);
-    if (full !== undefined) throw new Error(full);
     // 寄件人＝這個主對話的 root：host 是它的，而這顆工具只給 root（`rootOnly`），所以不必由呼叫端聲明。
     const sender = this.#sessions.root.sessionId;
-    const text = agentMessageText(sender, input.message);
-    const round = this.#running.get(input.runId);
+    return this.#deliver(input.runId, {
+      text: agentMessageText(sender, input.message),
+      senderSessionId: sender,
+    });
+  }
+
+  /**
+   * 人（wire 上的 `subagent.send`）對單一背景子代理說一句話（[#865](https://github.com/DemianLi/nexus-agent/issues/865)，
+   * dsh `prompt` 對 continuable 子代理的那一支，`477b4f4`）。**投遞規矩同 {@link send}**（跑著且窗開著：下一步領走；
+   * 否則排成下一輪；已結算而名額滿了拒絕），差別在**身分**：
+   *
+   * - 模型看到的是**原文**，沒有 `Agent … sent a message: ` 前綴——那是人說的，不是 agent 轉的；
+   * - 日誌那一輪的 `turn/start` 是 `message`、插進跑著的那一輪的 `user/message` 來源是 `user`。
+   *
+   * 授權不在這裡：host 只認得自己 root 派出去的編號（直接 parent 的鄰接是結構保證），誰能呼叫由 wire 那層的會話認證（#424）管。
+   *
+   * @returns 接受之後那一輪的下場（不會 reject）。
+   * @throws {BackgroundSubagentError} host 已關閉；沒有這個編號；名額滿了。
+   */
+  sendFromUser(input: {
+    readonly runId: string;
+    readonly text: string;
+  }): Promise<BackgroundRoundOutcome> {
+    return this.#deliver(input.runId, { text: input.text });
+  }
+
+  /** 控制面（給 wire 用）：兩個動作都不回那一輪的下場，也不 reject。 */
+  get control(): BackgroundSubagentControl {
+    return {
+      sendFromUser: (runId, text) => void this.sendFromUser({ runId, text }),
+      interrupt: (runId) => this.interrupt(runId),
+    };
+  }
+
+  #deliver(
+    runId: string,
+    body: { readonly text: string; readonly senderSessionId?: string },
+  ): Promise<BackgroundRoundOutcome> {
+    if (this.#closed) throw new BackgroundSubagentError('closed', '背景子代理的載體已經關閉');
+    const subagent = this.#known.get(runId);
+    if (subagent === undefined) {
+      throw new BackgroundSubagentError(
+        'not-found',
+        `沒有編號 ${runId} 的背景子代理（用 list_agents 看有哪些；只能傳給自己派出去的）`,
+      );
+    }
+    const full = this.#capacityRefusal(runId);
+    if (full !== undefined) throw new BackgroundSubagentError('at-capacity', full);
+    const round = this.#running.get(runId);
     if (round !== undefined && !round.closed && !round.controller.signal.aborted) {
-      round.steers.push({ id: `steer-${randomUUID()}`, text, senderSessionId: sender });
+      round.steers.push({ id: `steer-${randomUUID()}`, ...body });
       return round.outcome;
     }
-    this.#paused.delete(input.runId);
-    return this.#enqueue({
-      runId: input.runId,
-      subagent,
-      text,
-      turn: { kind: 'agent-message', text, senderSessionId: sender },
-    });
+    this.#paused.delete(runId);
+    return this.#enqueue({ runId, subagent, text: body.text, turn: turnOf(body) });
   }
 
   /** 這個 host 的主對話（root）的會話 id：背景子代理的 parent，回報指引裡告訴它的那個 id。 */
@@ -418,9 +497,12 @@ export class BackgroundSubagentHost {
     readonly targetId: string;
     readonly message: string;
   }): void {
-    if (this.#closed) throw new Error('背景子代理的載體已經關閉');
+    if (this.#closed) throw new BackgroundSubagentError('closed', '背景子代理的載體已經關閉');
     if (!this.#known.has(input.runId)) {
-      throw new Error(`${input.runId} 不是這個主對話派出去的背景子代理，不能往上傳訊`);
+      throw new BackgroundSubagentError(
+        'not-found',
+        `${input.runId} 不是這個主對話派出去的背景子代理，不能往上傳訊`,
+      );
     }
     if (input.targetId !== this.rootSessionId) {
       throw new Error(
@@ -454,10 +536,10 @@ export class BackgroundSubagentHost {
     readonly runId: string;
     readonly outcome: Promise<BackgroundRoundOutcome>;
   } {
-    if (this.#closed) throw new Error('背景子代理的載體已經關閉');
+    if (this.#closed) throw new BackgroundSubagentError('closed', '背景子代理的載體已經關閉');
     // 先於編圖與開日誌：滿了就一樣東西都不留（沒有編號、沒有日誌）。
     const full = this.#capacityRefusal(undefined);
-    if (full !== undefined) throw new Error(full);
+    if (full !== undefined) throw new BackgroundSubagentError('at-capacity', full);
     this.#agentFor(input.subagent);
     let runId: string;
     do runId = `${BACKGROUND_RUN_PREFIX}${randomUUID().replaceAll('-', '').slice(0, 12)}`;
@@ -613,7 +695,7 @@ export class BackgroundSubagentHost {
         runId: job.runId,
         subagent: job.subagent,
         text: steer.text,
-        turn: { kind: 'agent-message', text: steer.text, senderSessionId: steer.senderSessionId },
+        turn: turnOf(steer),
       }),
     );
     this.#queue.unshift(...jobs);
@@ -715,7 +797,10 @@ export class BackgroundSubagentHost {
         const message = new HumanMessage({ content: steer.text, id: steer.id });
         log.append('user/message', {
           message: toLoggedMessage(message),
-          source: { kind: 'agent-message', form: 'relay', senderSessionId: steer.senderSessionId },
+          source:
+            steer.senderSessionId === undefined
+              ? { kind: 'user' }
+              : { kind: 'agent-message', form: 'relay', senderSessionId: steer.senderSessionId },
         });
         return message;
       });

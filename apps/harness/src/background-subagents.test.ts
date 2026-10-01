@@ -34,6 +34,7 @@ import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
 import {
+  BackgroundSubagentError,
   BackgroundSubagentHost,
   settlementSummary,
   withReturnGuidance,
@@ -833,6 +834,117 @@ describe('載體本身（假 agent）', () => {
     ]);
     // 被拒的沒有留下日誌。
     expect(sessions.get({ kind: 'subagent', runId: 'bg-2' })).toBeUndefined();
+  });
+
+  describe('人對單一子代理說話與單獨停（#865）', () => {
+    const inboxOf = (seen: { configurable: Record<string, unknown> }[]): StepInbox =>
+      stepInboxOf({ configurable: seen.at(-1)!.configurable })!;
+    const running = async (seen: readonly unknown[]) => {
+      while (seen.length === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+    };
+    const starts = (log: SessionLog) =>
+      log.events.filter((event) => event.type === 'turn/start').map((event) => event.data);
+
+    it('閒著：開新的一輪，模型看到原文（沒有 Agent … sent a message 前綴），turn/start 是 message', async () => {
+      const { agent, seen } = fakeAgent();
+      const { host, sessions } = make(() => agent);
+      const first = host.start({ subagent: 'worker', text: '開工' });
+      await first.outcome;
+      expect(await host.sendFromUser({ runId: first.runId, text: '改看 b.ts' })).toEqual({
+        ok: true,
+      });
+      expect(seen.map((each) => each.text)).toEqual(['開工', '改看 b.ts']);
+      const log = sessions.get({ kind: 'subagent', runId: first.runId })!;
+      expect(starts(log)).toEqual([
+        { kind: 'message', text: '開工' },
+        { kind: 'message', text: '改看 b.ts' },
+      ]);
+      await host.close();
+    });
+
+    it('跑著：下一步領走原文，落子代理自己的日誌、來源是 user；不另開一輪', async () => {
+      const hold = gate();
+      const claimed: string[] = [];
+      const { agent, seen } = fakeAgent(async () => {
+        await hold.opened;
+        claimed.push(...(await inboxOf(seen).claim()).map((message) => message.text));
+      });
+      const { host, sessions } = make(() => agent);
+      const first = host.start({ subagent: 'worker', text: '開工' });
+      await running(seen);
+      host.control.sendFromUser(first.runId, '先看 b.ts');
+      hold.open();
+      await first.outcome;
+      expect(claimed).toEqual(['先看 b.ts']);
+      const log = sessions.get({ kind: 'subagent', runId: first.runId })!;
+      expect(types(log)).toEqual(['turn/start', 'turn/end']);
+      const logged = log.events.filter((event) => event.type === 'user/message');
+      expect(logged.map((event) => (event.data as { source: unknown }).source)).toEqual([
+        { kind: 'user' },
+      ]);
+      await host.close();
+    });
+
+    it('這一輪被中止而沒領走的人話：退回成下一輪，仍是 message 不是 agent-message', async () => {
+      const hold = gate();
+      const { agent, seen } = fakeAgent(async (text) => {
+        if (text === '開工') await hold.opened;
+      });
+      const { host, sessions } = make(() => agent);
+      const first = host.start({ subagent: 'worker', text: '開工' });
+      await running(seen);
+      host.control.sendFromUser(first.runId, '中止前的話');
+      expect(host.control.interrupt(first.runId)).toBe(true);
+      // 被中斷而暫停：下一次送話喚醒它，排在前面的先跑。
+      const wake = host.sendFromUser({ runId: first.runId, text: '喚醒' });
+      hold.open();
+      await first.outcome;
+      expect(await wake).toEqual({ ok: true });
+      expect(seen.map((each) => each.text)).toEqual(['開工', '中止前的話', '喚醒']);
+      const log = sessions.get({ kind: 'subagent', runId: first.runId })!;
+      expect(starts(log)).toEqual([
+        { kind: 'message', text: '開工' },
+        { kind: 'message', text: '中止前的話' },
+        { kind: 'message', text: '喚醒' },
+      ]);
+      await host.close();
+    });
+
+    it('被拒帶型別化的碼：沒有這個編號、載體已關閉、已結算而名額滿了', async () => {
+      const hold = gate();
+      const { agent } = fakeAgent(async (text) => (text === '佔位' ? hold.opened : undefined));
+      const { host } = make(() => agent, 1);
+      const codeOf = (run: () => unknown): unknown => {
+        try {
+          run();
+        } catch (error) {
+          expect(error).toBeInstanceOf(BackgroundSubagentError);
+          return (error as BackgroundSubagentError).code;
+        }
+        return 'no-throw';
+      };
+      expect(codeOf(() => host.sendFromUser({ runId: 'bg-nope', text: 'x' }))).toBe('not-found');
+      const settled = host.start({ subagent: 'worker', text: '先做完' });
+      await settled.outcome;
+      const holder = host.start({ subagent: 'worker', text: '佔位' });
+      expect(codeOf(() => host.sendFromUser({ runId: settled.runId, text: 'x' }))).toBe(
+        'at-capacity',
+      );
+      hold.open();
+      await holder.outcome;
+      await host.close();
+      expect(codeOf(() => host.sendFromUser({ runId: settled.runId, text: 'x' }))).toBe('closed');
+    });
+
+    it('interrupt：不認得的編號是被接受的 no-op（false）；root 這邊的 sendToParent 錯誤也帶碼', async () => {
+      const { agent } = fakeAgent();
+      const { host } = make(() => agent);
+      expect(host.control.interrupt('bg-nope')).toBe(false);
+      expect(() =>
+        host.sendToParent({ runId: 'bg-nope', targetId: 'root-1', message: 'x' }),
+      ).toThrow(BackgroundSubagentError);
+      await host.close();
+    });
   });
 });
 
