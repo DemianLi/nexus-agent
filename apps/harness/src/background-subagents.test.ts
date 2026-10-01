@@ -21,10 +21,13 @@ import type { PluginEntry } from '@nexus/core';
 import {
   BACKGROUND_SESSION_CONFIG_KEY,
   SessionRegistry,
+  STEP_INBOX_CONFIG_KEY,
   TURN_CANCEL_CONFIG_KEY,
+  fromLoggedMessage,
+  stepInboxOf,
   toLoggedMessage,
 } from '@nexus/core';
-import type { SessionLog } from '@nexus/core';
+import type { SessionLog, StepInbox } from '@nexus/core';
 import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -115,6 +118,8 @@ describe('載體本身（假 agent）', () => {
       [BACKGROUND_SESSION_CONFIG_KEY]: 'bg-1',
       // 這一輪自己的中止訊號（`interrupt` 舉的那個，#838），不是 root 的。
       [TURN_CANCEL_CONFIG_KEY]: expect.any(AbortSignal),
+      // 這一輪自己的插話收件匣（#858），不是 root 的。
+      [STEP_INBOX_CONFIG_KEY]: { claim: expect.any(Function), finish: expect.any(Function) },
     });
     await host.close();
   });
@@ -465,7 +470,7 @@ describe('載體本身（假 agent）', () => {
       await host.close();
     });
 
-    it('對正在跑的子代理送話：排成它的下一輪，不插進當下那一輪', async () => {
+    it('第一輪還排著、迴圈還沒撿起來就送話：排在它後面成為下一輪（跑著的才插話，見下面 #858）', async () => {
       const hold = gate();
       const order: string[] = [];
       const { agent } = fakeAgent(async (text) => {
@@ -633,6 +638,180 @@ describe('載體本身（假 agent）', () => {
     });
   });
 
+  describe('插話：send 給正在跑的子代理，下一步領走（#858）', () => {
+    /** 這一輪交進圖裡的收件匣（假 agent 腳本用它扮演 middleware）。 */
+    const inboxOf = (seen: { configurable: Record<string, unknown> }[]): StepInbox =>
+      stepInboxOf({ configurable: seen.at(-1)!.configurable })!;
+    const userMessages = (log: SessionLog) =>
+      log.events.filter((event) => event.type === 'user/message');
+    /** 迴圈撿起那一輪要一拍：`send` 要在它跑著的時候才插得進去。 */
+    const running = async (seen: readonly unknown[]) => {
+      while (seen.length === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+    };
+
+    it('跑著的一輪：話排進這一輪，領走時落子代理自己的日誌；不另開一輪，send 回的是這一輪的下場', async () => {
+      const hold = gate();
+      const claimed: string[][] = [];
+      const { agent, seen } = fakeAgent(async () => {
+        await hold.opened;
+        claimed.push((await inboxOf(seen).claim()).map((message) => message.text));
+        claimed.push((await inboxOf(seen).finish()).map((message) => message.text));
+      });
+      const { host, sessions } = make(() => agent);
+      const first = host.start({ subagent: 'worker', text: '開工' });
+      await running(seen);
+      const outcome = host.send({ runId: first.runId, message: '先看 b.ts' });
+      hold.open();
+      expect(await outcome).toEqual({ ok: true });
+      await first.outcome;
+
+      const text = 'Agent root-1 sent a message: 先看 b.ts';
+      expect(claimed).toEqual([[text], []]);
+      const log = sessions.get({ kind: 'subagent', runId: first.runId })!;
+      // 只有一輪：插話不是下一輪。
+      expect(types(log)).toEqual(['turn/start', 'turn/end']);
+      const [logged] = userMessages(log);
+      expect(logged?.data).toMatchObject({
+        source: { kind: 'agent-message', form: 'relay', senderSessionId: 'root-1' },
+      });
+      expect(seen).toHaveLength(1);
+      await host.close();
+    });
+
+    it('領走是同步的、整條一次領完，領完就空了（不重領）', async () => {
+      const hold = gate();
+      const { agent, seen } = fakeAgent(async () => hold.opened);
+      const { host } = make(() => agent);
+      const first = host.start({ subagent: 'worker', text: '開工' });
+      await running(seen);
+      void host.send({ runId: first.runId, message: 'A' });
+      void host.send({ runId: first.runId, message: 'B' });
+      const inbox = inboxOf(seen);
+      const claim = inbox.claim();
+      // 呼叫的那一刻已經領走：之後到的不在這一批。
+      void host.send({ runId: first.runId, message: 'C' });
+      expect((await claim).map((message) => message.text)).toEqual([
+        'Agent root-1 sent a message: A',
+        'Agent root-1 sent a message: B',
+      ]);
+      expect((await inbox.claim()).map((message) => message.text)).toEqual([
+        'Agent root-1 sent a message: C',
+      ]);
+      expect(await inbox.claim()).toEqual([]);
+      hold.open();
+      await first.outcome;
+      await host.close();
+    });
+
+    it('窗關了（圖收尾時問過最後一次、沒有東西）：之後的話排成下一輪，不掛在沒人領的收件匣上', async () => {
+      const closedWindow = gate();
+      const hold = gate();
+      const { agent, seen } = fakeAgent(async (text) => {
+        if (text.startsWith('Agent')) return;
+        await inboxOf(seen).finish();
+        closedWindow.open();
+        await hold.opened;
+      });
+      const { host, sessions } = make(() => agent);
+      const first = host.start({ subagent: 'worker', text: '開工' });
+      await closedWindow.opened;
+      const followUp = host.send({ runId: first.runId, message: '收工之後的話' });
+      hold.open();
+      expect(await first.outcome).toEqual({ ok: true });
+      expect(await followUp).toEqual({ ok: true });
+      const log = sessions.get({ kind: 'subagent', runId: first.runId })!;
+      expect(types(log)).toEqual(['turn/start', 'turn/end', 'turn/start', 'turn/end']);
+      expect(seen.map((each) => each.text)).toEqual([
+        '開工',
+        'Agent root-1 sent a message: 收工之後的話',
+      ]);
+      await host.close();
+    });
+
+    it('這一輪被中止了：領走的那一刻不領；之後 send 排成下一輪，前面沒領走的先跑', async () => {
+      const hold = gate();
+      const { agent, seen } = fakeAgent(async (text) => {
+        if (text === '開工') await hold.opened;
+      });
+      const { host, sessions } = make(() => agent);
+      const first = host.start({ subagent: 'worker', text: '開工' });
+      await running(seen);
+      void host.send({ runId: first.runId, message: '中止前的話' });
+      expect(host.interrupt(first.runId)).toBe(true);
+      // 中止之後的 claim / finish 不領，也不落日誌。
+      const inbox = inboxOf(seen);
+      expect(await inbox.claim()).toEqual([]);
+      const after = host.send({ runId: first.runId, message: '中止後的話' });
+      hold.open();
+      await first.outcome;
+      expect(await after).toEqual({ ok: true });
+      const log = sessions.get({ kind: 'subagent', runId: first.runId })!;
+      expect(userMessages(log)).toHaveLength(0);
+      // 沒領走的沒丟：退回成排著的輪次，排在後來的前面，來源記成 agent-message。
+      expect(seen.map((each) => each.text)).toEqual([
+        '開工',
+        'Agent root-1 sent a message: 中止前的話',
+        'Agent root-1 sent a message: 中止後的話',
+      ]);
+      const starts = log.events.filter((event) => event.type === 'turn/start');
+      expect(starts.map((event) => event.data)).toEqual([
+        { kind: 'message', text: '開工' },
+        expect.objectContaining({ kind: 'agent-message', senderSessionId: 'root-1' }),
+        expect.objectContaining({ kind: 'agent-message', senderSessionId: 'root-1' }),
+      ]);
+      await host.close();
+    });
+
+    it('這一輪沒走到領走就結束（例如出錯）：欠著的話退回成排著的輪次', async () => {
+      const { agent, seen } = fakeAgent(async (text) => {
+        if (text === '開工') {
+          void hostRef.send({ runId: runIdRef, message: '欠著的話' });
+          throw new Error('這一輪炸了');
+        }
+      });
+      const { host, sessions } = make(() => agent);
+      const hostRef = host;
+      let runIdRef = '';
+      const first = host.start({ subagent: 'worker', text: '開工' });
+      runIdRef = first.runId;
+      expect(await first.outcome).toMatchObject({ ok: false });
+      await host.idle();
+      expect(seen.map((each) => each.text)).toEqual([
+        '開工',
+        'Agent root-1 sent a message: 欠著的話',
+      ]);
+      const log = sessions.get({ kind: 'subagent', runId: first.runId })!;
+      expect(types(log)).toEqual(['turn/start', 'turn/failed', 'turn/start', 'turn/end']);
+      await host.close();
+    });
+
+    it('host 關閉時欠著的話不再開跑，也不讓 close 卡住', async () => {
+      const hold = gate();
+      const { agent, seen } = fakeAgent(async () => hold.opened);
+      const { host } = make(() => agent);
+      const first = host.start({ subagent: 'worker', text: '開工' });
+      await running(seen);
+      void host.send({ runId: first.runId, message: '來不及領的話' });
+      const closing = host.close();
+      hold.open();
+      await closing;
+      expect(await first.outcome).toEqual({ ok: true });
+      expect(seen.map((each) => each.text)).toEqual(['開工']);
+    });
+
+    it('每一輪一份收件匣：上一輪的不會帶到下一輪，兩個子代理各一份', async () => {
+      const { agent, seen } = fakeAgent();
+      const { host } = make(() => agent);
+      const a = host.start({ subagent: 'worker', text: 'A' });
+      const b = host.start({ subagent: 'worker', text: 'B' });
+      await Promise.all([a.outcome, b.outcome]);
+      await host.submit({ runId: a.runId, subagent: 'worker', text: 'A2' });
+      const handles = seen.map((each) => each.configurable[STEP_INBOX_CONFIG_KEY]);
+      expect(new Set(handles).size).toBe(3);
+      await host.close();
+    });
+  });
+
   it('同一個編號不能換子代理；關閉之後不收新的輪，但排著的與進行中的會收完', async () => {
     const hold = gate();
     const { agent } = fakeAgent(async () => hold.opened);
@@ -688,7 +867,11 @@ describe('產品組裝上的背景子代理', () => {
   }
 
   /** 真組裝：root 有 `spawn_bg`（在工具本體裡呼叫 host，卡 5 的形狀），worker 有幾顆探測用的工具。 */
-  async function assemble(turns: readonly ScriptedTurn[]) {
+  async function assemble(
+    turns: readonly ScriptedTurn[],
+    makeModel: (turns: readonly ScriptedTurn[]) => ScriptedChatModel = (each) =>
+      new ScriptedChatModel({ turns: each }),
+  ) {
     const wiring: Wiring = {
       looked: [],
       startedBg: gate(),
@@ -749,7 +932,7 @@ describe('產品組裝上的背景子代理', () => {
         },
       },
     };
-    const model = new ScriptedChatModel({ turns });
+    const model = makeModel(turns);
     const built = await createNexusAgent({
       model,
       checkpointer: new MemorySaver(),
@@ -800,9 +983,11 @@ describe('產品組裝上的背景子代理', () => {
 
       expect(run.looked).toHaveLength(2);
       for (const seen of run.looked) {
-        // root 的插話收件匣沒有進背景圖；中止訊號是這一輪自己的，每一輪一個（下面比對兩輪不是同一個）。
+        // 中止訊號是這一輪自己的，每一輪一個（下面比對兩輪不是同一個）。
         expect(seen[TURN_CANCEL_CONFIG_KEY]).toBeInstanceOf(AbortSignal);
-        expect(seen['nexus_step_inbox']).toBeUndefined();
+        // 插話收件匣是 host 替這一輪建的（#858），不是 root 的：這個組裝沒掛 root 的載體，
+        // 所以 root 那一輪的 configurable 上沒有，背景這一輪上有。
+        expect(stepInboxOf({ configurable: seen })).toBeDefined();
         expect(seen[BACKGROUND_SESSION_CONFIG_KEY]).toBe('bg-1');
         // 最上層的圖，命名空間只有一段。
         expect(String(seen['checkpoint_ns']).includes('|')).toBe(false);
@@ -861,6 +1046,113 @@ describe('產品組裝上的背景子代理', () => {
       expect(rootEnd?.data).toEqual({ reason: { kind: 'aborted', cause: { kind: 'user' } } });
       await settle();
       expect(unhandled.map(String)).toEqual([]);
+    } finally {
+      await run.close();
+    }
+  });
+
+  /** 第 `holdAt` 次模型呼叫（0 起算，root 與背景合計）開始前停住，給測試在「模型正在回答」的時候送話。 */
+  class HoldingModel extends ScriptedChatModel {
+    readonly reached = gate();
+    readonly release = gate();
+    constructor(
+      turns: readonly ScriptedTurn[],
+      private readonly holdAt: number,
+    ) {
+      super({ turns });
+    }
+    // 同一個實例綁工具：狀態（游標、prompts）本來就共用，這樣 override 的停住對綁過的模型也有效。
+    override bindTools(tools: readonly unknown[]): ScriptedChatModel {
+      super.bindTools(tools);
+      return this;
+    }
+    override async *_streamResponseChunks(
+      ...args: Parameters<ScriptedChatModel['_streamResponseChunks']>
+    ): ReturnType<ScriptedChatModel['_streamResponseChunks']> {
+      if (this.prompts.length === this.holdAt) {
+        this.reached.open();
+        await this.release.opened;
+      }
+      yield* super._streamResponseChunks(...args);
+    }
+  }
+
+  it('send 給跑著的背景子代理（#858）：工具放行後下一次叫模型之前領走，同一輪，落它自己的日誌', async () => {
+    const run = await assemble([
+      call('spawn_bg', { text: '背景的活', hold: true }),
+      call('hold_bg', {}),
+      { content: '背景看到插話了' },
+      { content: '根收尾' },
+    ]);
+    try {
+      const submitted = run.pump.submit({ kind: 'message', text: '派' });
+      await run.startedBg.opened;
+      const sent = run.host!.send({ runId: 'bg-1', message: '改看 b.ts' });
+      run.bgRelease.open();
+      expect(await sent).toEqual({ ok: true });
+      run.rootHold.open();
+      await submitted;
+      await run.pump.whenIdle();
+
+      const steer = `Agent ${run.pump.sessions.root.sessionId} sent a message: 改看 b.ts`;
+      // 背景那一輪放行之後的模型呼叫：看得到工具結果，也看得到插話。
+      const seeing = run.model.prompts.filter((prompt) => toolTexts(prompt).includes('背景放行'));
+      expect(seeing).toHaveLength(1);
+      expect(humanTexts(seeing[0]!)).toEqual(['背景的活', steer]);
+      const background = run.pump.sessions.list().find((s) => s.address.kind === 'subagent')!;
+      // 還是同一輪：插話不是下一輪。
+      expect(types(background.log)).toEqual(['turn/start', 'turn/end']);
+      const order = background.log.events.map((event) => event.type);
+      expect(order.indexOf('user/message')).toBeGreaterThan(order.indexOf('tool/result'));
+      expect(order.indexOf('user/message')).toBeLessThan(order.lastIndexOf('assistant/message'));
+      expect(
+        background.log.events.find((event) => event.type === 'user/message')?.data,
+      ).toMatchObject({
+        source: {
+          kind: 'agent-message',
+          form: 'relay',
+          senderSessionId: run.pump.sessions.root.sessionId,
+        },
+      });
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('模型說完的那一刻才到的話（#858）：收尾時領走，同一次執行再叫一次模型，不另開一輪', async () => {
+    // 呼叫序：0 root 派、1 背景 hold_bg、2 背景說完（停在這裡）、3 背景看到插話後的回答、4 root 收尾。
+    let holding!: HoldingModel;
+    const run = await assemble(
+      [
+        call('spawn_bg', { text: '背景的活', hold: true }),
+        call('hold_bg', {}),
+        { content: '背景說完了' },
+        { content: '背景看完插話了' },
+        { content: '根收尾' },
+      ],
+      (turns) => (holding = new HoldingModel(turns, 2)),
+    );
+    try {
+      const submitted = run.pump.submit({ kind: 'message', text: '派' });
+      await run.startedBg.opened;
+      run.bgRelease.open();
+      await holding.reached.opened;
+      const sent = run.host!.send({ runId: 'bg-1', message: '等等，再看 c.ts' });
+      holding.release.open();
+      expect(await sent).toEqual({ ok: true });
+      run.rootHold.open();
+      await submitted;
+      await run.pump.whenIdle();
+
+      const steer = `Agent ${run.pump.sessions.root.sessionId} sent a message: 等等，再看 c.ts`;
+      const answers = run.model.prompts.filter((prompt) => humanTexts(prompt).includes(steer));
+      expect(answers).toHaveLength(1);
+      const background = run.pump.sessions.list().find((s) => s.address.kind === 'subagent')!;
+      expect(types(background.log)).toEqual(['turn/start', 'turn/end']);
+      const replies = background.log.events
+        .filter((event) => event.type === 'assistant/message')
+        .map((event) => fromLoggedMessage(event.data.message).text);
+      expect(replies).toEqual(['', '背景說完了', '背景看完插話了']);
     } finally {
       await run.close();
     }
@@ -1323,7 +1615,8 @@ describe('close 中止進行中的輪（#841）', () => {
     const queued = host.send({ runId, message: '第二輪' });
     await host.close();
     await outcome;
+    // 第一輪還在跑的時候送的話是插話（#858）：沒領走就被中止收尾，退回成排著的輪次，關閉了所以不開跑。
     expect(started).toEqual(['第一輪']);
-    expect(await queued).toMatchObject({ ok: false });
+    expect(await queued).toEqual({ ok: true });
   });
 });
