@@ -46,6 +46,7 @@ import type { SessionRegistry } from './session-registry.js';
 import type { SessionLog } from './session-log.js';
 import type { SessionTelemetryRedactRule, SessionTelemetryService } from './session-telemetry.js';
 import type { FeedbackService } from './feedback.js';
+import type { FsService } from './fs-service.js';
 import type { RepeatReminderSettings } from './repeat-reminder.js';
 import type { SummarizationSettings } from './summarization.js';
 import type { ToolResultPruneConfig } from './tool-result-pruner.js';
@@ -276,6 +277,11 @@ export interface NexusServices {
    * 組裝點用的；產品路徑由組裝點明著算一次提供出來。
    */
   channel: ApprovalChannel;
+  /**
+   * 工具實際讀寫的那一個 backend（[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。名字見
+   * {@link ./fs-service.ts | FS_SERVICE}。值是一格 fold 之後才填的把手，**被叫時才讀**；理由見那個模組的偏離登記。
+   */
+  fs: FsService;
 }
 
 /** 已經宣告過型別的服務名。空表時是 `never`，那時只有寬的多載可用。 */

@@ -13,40 +13,40 @@ import { fakePlugin } from './fixtures.js';
 describe('createHostServicesPlugin', () => {
   it('把給的每一格都提供出去，名字就是鍵', async () => {
     const channel = { kind: 'human' } as const;
-    const backend = { kind: 'contained' };
-    const { registry } = await loadPlugins([createHostServicesPlugin({ channel, backend })]);
+    const probe = { kind: 'probe' };
+    const { registry } = await loadPlugins([createHostServicesPlugin({ channel, probe })]);
 
     expect(registry.services.get('channel')).toBe(channel);
-    expect(registry.services.get('backend')).toBe(backend);
-    expect(registry.services.names()).toEqual(['channel', 'backend']);
+    expect(registry.services.get('probe')).toBe(probe);
+    expect(registry.services.names()).toEqual(['channel', 'probe']);
   });
 
   /**
    * **`undefined` 是「沒有」，不是「提供一個 undefined」。** 組裝點手上好幾個協作者本來
-   * 就可有可無（沒有 `--workspace` 就沒有 backend），而消費者靠 `get()` 回 `undefined`
+   * 就可有可無（沒有 `--workspace` 就沒有沙箱政策），而消費者靠 `get()` 回 `undefined`
    * 走自己的退路——提供一個 `undefined` 進去的話那條退路照走，但名字被佔住了，真正的
    * 提供者之後掛不上來。
    */
   it('值是 undefined 的那一格不佔名字', async () => {
     const { registry } = await loadPlugins([
-      createHostServicesPlugin({ channel: { kind: 'human' }, backend: undefined }),
+      createHostServicesPlugin({ channel: { kind: 'human' }, probe: undefined }),
     ]);
 
     expect(registry.services.names()).toEqual(['channel']);
-    expect(registry.services.provider('backend')).toBeUndefined();
+    expect(registry.services.provider('probe')).toBeUndefined();
   });
 
   it('plugin 名可以換，一次組裝交兩批不會撞', async () => {
     const { registry, entries } = await loadPlugins([
       createHostServicesPlugin({ channel: { kind: 'human' } }),
-      createHostServicesPlugin({ backend: {} }, 'host-services-late'),
+      createHostServicesPlugin({ probe: {} }, 'host-services-late'),
     ]);
 
     expect(entries.map((entry) => entry.origin.name)).toEqual([
       'host-services',
       'host-services-late',
     ]);
-    expect(registry.services.names()).toEqual(['channel', 'backend']);
+    expect(registry.services.names()).toEqual(['channel', 'probe']);
   });
 
   /**
