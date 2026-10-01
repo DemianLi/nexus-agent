@@ -41,7 +41,7 @@ import { createCommandExecutor } from '@nexus/plugin-commands';
 import { createAskUserPlugin } from '@nexus/plugin-ask-user';
 import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
-import type { BackgroundParentPort } from './background-subagents.js';
+import type { BackgroundParentPort, ModelChoice } from './background-subagents.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import type { LiveModelConfig } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
@@ -1116,10 +1116,25 @@ export async function createCliAgent(
     ...(invocation.backgroundSubagents !== undefined && {
       backgroundSubagents: {
         maxActive: invocation.backgroundSubagents.maxActive,
+        // 這個會話的授權清單（#877）：有政策才給，`subagent` 才多選模型的兩格與 `list_subagent_models`。
+        ...(invocation.modelSelectionPolicy !== undefined && {
+          modelSelection: {
+            allowedModels: invocation.modelSelectionPolicy.allowedModels,
+            rootModelId: liveModel.modelId,
+            catalog: liveModel.models,
+          },
+        }),
         // 背景子代理被指定模型時才用到（#876）：同一個端點、另一個型錄 id。沒連真實供應商就沒有別的模型可建。
         ...(invocation.live && {
-          modelFor: (modelId: string) =>
-            createLiveModel({ ...liveModel, modelId }, undefined, invocation.credentials),
+          modelFor: (choice: ModelChoice) =>
+            createLiveModel(
+              { ...liveModel, modelId: choice.model },
+              undefined,
+              invocation.credentials,
+              {
+                ...(choice.effort === 'off' && { thinkingOff: true }),
+              },
+            ),
         }),
         ...(workspaceRoot !== undefined && { sandbox: sandboxMode }),
       },
