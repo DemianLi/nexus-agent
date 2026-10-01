@@ -58,10 +58,11 @@
  * #306 拍板 2：推不出完整的歷史，就不灌半截進去，模型從空的開始。見 {@link UnreplayableReason}。
  */
 
-import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
+import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 
 import { fromLoggedMessage } from './logged-message.js';
+import { humanMessageForTurnStart } from './message-source.js';
 import { isModelVisibleEvent } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
 import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN, toolFeedback } from './tool-events.js';
@@ -209,7 +210,7 @@ export function replayConversation(
         case 'turn/start': {
           turn = { replied: false, interrupted: false };
           // `resume` 是回覆核准，沒有使用者說的話——送進圖的是 `Command`，不是一則訊息。
-          if (event.data.kind !== 'resume') push(from(new HumanMessage(event.data.text), event));
+          if (event.data.kind !== 'resume') push(from(humanMessageForTurnStart(event.data), event));
           break;
         }
         case 'assistant/message': {
