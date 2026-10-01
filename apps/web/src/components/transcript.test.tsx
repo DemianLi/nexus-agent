@@ -91,7 +91,13 @@ describe('正文空的回覆', () => {
   it('不是模型回覆的新種類項目不畫、也不炸：整格不佔列表的間距', () => {
     // 線上的項目種類以後還會長（壓縮格 #896 之類），web 還不認得的那一格走到收尾分支會讀 `entry.text`。
     // 這裡用一則改了 `kind` 的回覆頂替；真的新種類落地後，由它自己的卡換成真的項目。
-    const folded = reduceAll(emptyConversation(), [asked('問'), running(), start('a'), say('a', '你好'), finish('a')]);
+    const folded = reduceAll(emptyConversation(), [
+      asked('問'),
+      running(),
+      start('a'),
+      say('a', '你好'),
+      finish('a'),
+    ]);
     const entries = folded.entries.map((entry) =>
       entry.kind === 'ai' ? ({ ...entry, kind: 'compaction' } as never) : entry,
     );
