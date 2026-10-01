@@ -173,7 +173,7 @@ export {
 } from './output-schema.js';
 
 export type { LoggedMessage } from './logged-message.js';
-export { fromLoggedMessage, toLoggedMessage } from './logged-message.js';
+export { fromLoggedMessage, toLoggedMessage, loggedContentBlocks } from './logged-message.js';
 
 export type {
   ConversationReplay,
@@ -413,9 +413,9 @@ export type {
 export {
   currentMessageFeedback,
   FEEDBACK_CATEGORIES,
-  loggedMessageId,
   MESSAGE_FEEDBACK_SERVICE,
 } from './feedback.js';
+export { loggedMessageId } from './logged-message.js';
 
 export type {
   ModelVisibleEventType,
