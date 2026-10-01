@@ -13,8 +13,9 @@
  * `registry.ts:248-256` 兩處都寫著）。於是一位排在前面、回 `{ kind: 'allow' }` 而不呼叫
  * `next()` 的 gate，會把排在它後面的每一位整條吃掉。
  *
- * **今天不是缺陷**：出貨清單裡一位 gate 都沒有（下面第一層就是在釘這件事），`cli.ts` 另外掛的
- * submit-record 與沙箱升級那兩位從不回 `allow`。但那是**組裝的巧合**，不是機制擋住的。
+ * **今天不是缺陷**：出貨清單裡一位 gate 都沒有（下面第一層就是在釘這件事），組裝點（`assembly-root.ts`）另外掛的
+ * submit-record 那一位從不回 `allow`。但那是**組裝的巧合**，不是機制擋住的。沙箱升級以前也是一位 gate，
+ * [#700](https://github.com/DemianLi/nexus-agent/issues/700) 照 dsh 把問人搬進工具本體，排在前面的 gate 怎麼放行都跳不過它。
  *
  * ## 結局是「紀錄寫出去了」，不是「核准被跳過」
  *
@@ -107,7 +108,7 @@ const shipped = await shippedPlugins();
  * ## 現在是空的
  *
  * [#652](https://github.com/DemianLi/nexus-agent/issues/652) 之後 plan-mode 不再掛閘門，出貨清單裡一位都沒有。
- * submit-record 與沙箱升級的閘門是 `cli.ts` 在清單之外掛的，不在這一層的射程裡（見檔頭「射程」）。
+ * submit-record 的閘門是組裝點（`assembly-root.ts`）在清單之外掛的，不在這一層的射程裡（見檔頭「射程」）。
  * **空清單照樣是身分清單**：有人往出貨清單加一位，這裡就響。
  *
  * 這一格因此比以前更穩：自動編號的 `<name>#<序號>` 本來就不承諾跨清單穩定，而設定檔裡的
