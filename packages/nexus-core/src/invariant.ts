@@ -125,10 +125,11 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
       }
       case 'session/end-seed': {
         // seed 之前沒收的那一輪屬於上一個行程，見檔頭最後一段。沒配到的呼叫同理：
-        // 上一個行程中斷的那次，resume 之後會以同一個 callId 再記一顆。**這一條的根據是
-        // LangGraph 重放那個沒跑完的 task**——同一個行程裡量過（`apps/harness/src/tool-events.test.ts`
-        // 的中斷那一組），跨重啟靠的是同一個 checkpointer 機制，沒有另外量。哪天重放不再
-        // 經過 `wrapToolCall`，這裡會在使用者的終端機上誤報「前面沒有 tool/call」。
+        // 同一個行程裡被中斷的那次，resume 後 LangGraph 會重放那個沒跑完的 task、以同一個 callId 再記一顆
+        // （`apps/harness/src/tool-events.test.ts` 的中斷那一組量過）。**跨重啟沒有這條路**——續接重建的是日誌推出來的
+        // 對話，不是 checkpointer（`MemorySaver` 住在行程內，讀碼推得，沒另外實測）；新檔上當掉那一輪的
+        // 沒配到的呼叫由續接補寫的 `tool/result` 在 end-seed 之前配掉（#721，{@link ./interrupted-turn.ts}），
+        // 這裡的清除只剩讀舊檔（補寫之前留下的尾巴）時用得到。
         open = false;
         pendingCalls.clear();
         // 上一個行程中途死掉的那次模型呼叫永遠等不到結尾。

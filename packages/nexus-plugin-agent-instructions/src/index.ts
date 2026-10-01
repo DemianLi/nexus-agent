@@ -90,6 +90,7 @@
 import { createHash } from 'node:crypto';
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
+import { sourceKwargs } from '@nexus/core';
 import type { NexusPlugin, PluginEntry, PluginRegistry, SessionLookup } from '@nexus/core';
 import { effectiveMessages, toLoggedMessage } from '@nexus/core';
 import { adaptBackendProtocol } from 'deepagents';
@@ -238,7 +239,12 @@ export function createAgentInstructionsMiddleware(
       if (rendered === undefined) return undefined;
       const message = new HumanMessage({
         content: rendered.text,
-        additional_kwargs: { [AGENT_INSTRUCTIONS_MARKER]: true },
+        // 來源是 `plugin`（#662）：它注入的時機是一輪的開頭，今天緊接在人那句話之後所以沒事；以後哪個時刻
+        // 它被補在一輪中間，重複提醒的鏈不會因它被悄悄清零。
+        additional_kwargs: {
+          [AGENT_INSTRUCTIONS_MARKER]: true,
+          ...sourceKwargs({ kind: 'plugin', plugin: AGENT_INSTRUCTIONS_MIDDLEWARE_NAME }),
+        },
       });
       record(sessions, runtime?.configurable, message);
       return { messages: [message] };

@@ -19,7 +19,8 @@
  * | `assistant/message` | 模型的回覆，連同推理（#527）；`interrupted` 的那則不收尾，由那一輪的中止標成「已停止」 |
  * | `tool/call` ／ `tool/result` | 工具卡開、收；那則結果的文字成功失敗都帶（成功是輸出、失敗是紅字，[#439](https://github.com/DemianLi/nexus-agent/issues/439)） |
  * | `turn/end` ／ `turn/failed` | 那一輪收掉（中止、失敗、完成）；沒結果的卡照即時那條規則收成失敗 |
- * | `session/end-seed` | 上一個行程停在一輪中間的話，那一輪在這裡收掉 |
+ * | `turn/end`（`reason.kind: "interrupted"`） | 續接時補寫的收尾（#721）：上一個行程死在這一輪中間，畫面與完成同（`completed`），不論那一輪死前有沒有 `interrupt/raised`；補的 `tool/result`（`TOOL_OUTCOME_UNKNOWN`）的卡仍畫成 `UNFINISHED_TOOL_TEXT`，與補寫之前一字不差 |
+ * | `session/end-seed` | 舊檔（#721 之前）上一個行程停在一輪中間的話，那一輪在這裡收掉；新檔那一輪已由上一列收掉 |
  * | `deliverables/presented` | `custom` frame，`data` 同即時（{@link deliverablesData}） |
  * | `workspace/changes` | `custom` frame，`data` 同即時（{@link workspaceChangesData}）；它指到的摘要可能已經不在 |
  * | `model/usage` ／ `context/measure` | 用量表（#528）：**一頁各一顆，是到這一頁結尾為止最新的那一筆**，`data` 同即時（{@link modelUsageData}、{@link contextMeasureData}） |
@@ -86,6 +87,7 @@ import {
   TITLE,
   TODOS,
   TOKEN_USAGE,
+  UNFINISHED_TOOL_TEXT,
   WORKSPACE_CHANGES,
 } from '@nexus/wire';
 import type {
@@ -107,6 +109,7 @@ import {
   loggedMessageId,
   replayConversation,
   sessionStatsUnit,
+  TOOL_OUTCOME_UNKNOWN,
   tokenUsageUnit,
 } from '@nexus/core';
 
@@ -730,7 +733,7 @@ function message(
  * 這條 thread 現在還掛著中斷——同一個行程裡切回來。只有 pump 知道，見 `ThreadPump.pendings`。
  */
 export interface AwaitingInput {
-  /** 停在核准閘門上的工具名，所有掛著的中斷合起來。見 {@link historyFrames}。 */
+  /** 停在核准上的工具名（核准中斷酬載的 `actionRequests[].name`），所有掛著的中斷合起來。見 {@link historyFrames}。 */
   readonly gatedTools: ReadonlySet<string>;
 }
 
@@ -739,14 +742,17 @@ export interface AwaitingInput {
  *
  * ## 停下來等人的那一輪：兩種等法畫法不同，同即時
  *
- * 即時那條只把**本體拋了中斷**的那顆畫成「等你回答」（`thread-pump.ts` 的 `classifyToolData`）：問答。子代理照 dsh
- * 不停下來等人（#324），所以 `task` 不會停在這裡。停在核准閘門上的那顆本體沒被呼叫到，卡從日誌 `tool/call` 開，
- * 一直是「執行中」——照 dsh：它的工具卡沒有「等人」那一格，核准的等待由接管輸入框的核准面板表示（#317）。
+ * 即時那條只把**本體拋了問答中斷**的那顆畫成「等你回答」（`thread-pump.ts` 的 `classifyToolData`）。子代理照 dsh
+ * 不停下來等人（#324），所以 `task` 不會停在這裡。停在核准上的那顆一直是「執行中」——照 dsh：它的工具卡沒有
+ * 「等人」那一格，核准的等待由接管輸入框的核准面板表示（#317）。核准有兩種來處，即時那條都不改卡：停在核准閘門上的
+ * 那顆本體沒被呼叫到，卡從日誌 `tool/call` 開；`request_sandbox_escalation` 在本體裡問人
+ * （[#700](https://github.com/DemianLi/nexus-agent/issues/700)），基座發的那顆帶核准中斷的 `tool-error` 由 pump 丟掉
+ * （`thread-pump.ts` 的 `isApprovalSuspension`）。
  *
- * 日誌分不出這兩種：都只留一顆沒落定的 `tool/call` 與一顆只帶 id 的 `interrupt/raised`。分得出來的是 pump 手上
+ * 日誌分不出問答與核准：都只留一顆沒落定的 `tool/call` 與一顆只帶 id 的 `interrupt/raised`。分得出來的是 pump 手上
  * 掛著的酬載，所以由它交進來 {@link AwaitingInput.gatedTools}：名字在裡面的維持執行中，其餘的畫成「等你回答」。
- * **認的是名字不是 callId**（閘門的酬載沒有 callId）：同一輪一顆同名的工具停在閘門、另一顆由本體拋了中斷，
- * 後者會被畫成執行中。今天的產品路徑走不到——本體會拋中斷的只有問答，它不過閘門。
+ * **認的是名字不是 callId**（核准的酬載沒有 callId）：同一輪一顆同名的工具停在核准、另一顆由本體拋了問答中斷，
+ * 後者會被畫成執行中。今天的產品路徑走不到——拋問答中斷的只有 `ask_user_question` 與 `exit_plan_mode`，兩顆都不問核准。
  *
  * @param events - 從一輪的開頭切下來的一段（見 {@link isPageStart}）。
  * @param awaitingInput - 有給就是這一段的最後一輪停下來等人，**而且這條 thread 現在還掛著那幾顆中斷**。那幾張卡
@@ -925,7 +931,13 @@ export function historyFrames(
         // 兩邊各寫一份的話，同一張卡會「即時一個樣、重新整理另一個樣」。
         const text = toolResultText(event.data.message, toolTextMaxBytes);
         // 格式 9 以前沒有 `message`：失敗的那張只剩錯誤碼可講，碼也沒有就交給折疊器說「未指名的錯誤」。
-        const reason = text ?? (event.data.isError ? event.data.error?.code : undefined);
+        // **續接補寫的「結果不明」（#721）畫成同一句「這次呼叫沒有結果」**：補寫之前，當掉那一輪的卡在 end-seed 被
+        // 收成失敗、帶的就是這一句，web 有兩處拿它做完全相等比對（提問卡是否「被停止」、計劃卡的 outcome）。
+        // 補寫改的是日誌，不該順手改畫面——要不要讓畫面講「結果不明」是另一個決定。
+        const reason =
+          event.data.error?.code === TOOL_OUTCOME_UNKNOWN
+            ? UNFINISHED_TOOL_TEXT
+            : (text ?? (event.data.isError ? event.data.error?.code : undefined));
         // meta 同即時那條（`ThreadPump.#noteVerdict`）：失敗的不帶，上限照 `capToolResultMeta`。格式 16 以前沒有這一格。
         const meta = event.data.isError
           ? undefined
@@ -963,6 +975,10 @@ export function historyFrames(
         } else if (event.data.reason?.kind === 'max-tokens') {
           // 撞到輸出上限（#433）：同即時那條，pump 在收尾 frame 上補 `maxTokens`。
           close(event.time, { event: 'completed', maxTokens: true });
+        } else if (event.data.reason?.kind === 'interrupted') {
+          // 續接補寫的收尾（#721）：那一輪死了，不是停在核准點等人——死前就算記過 `interrupt/raised`
+          // 也不能畫成「等人回覆」。畫面與舊檔在 end-seed 收掉的那一條一致。
+          close(event.time, { event: 'completed' });
         } else if (interrupted) {
           turnOpen = false;
           suspended = true;
@@ -974,7 +990,8 @@ export function historyFrames(
         close(event.time, { event: 'failed', error: event.data.message });
         break;
       case 'session/end-seed':
-        // 上一個行程死在一輪中間：那一輪沒有收尾，在這裡收，同 dsh 冷讀時補的合成收尾。
+        // 舊檔（#721 之前）：上一個行程死在一輪中間，那一輪沒有收尾，在這裡收，同 dsh 冷讀時補的合成收尾。
+        // 新檔由續接補寫的 `turn/end {interrupted}` 收，走不到這裡。
         if (turnOpen || suspended) close(event.time, { event: 'completed' });
         break;
       default:
@@ -987,7 +1004,7 @@ export function historyFrames(
       close(last.time, { event: 'completed' });
     } else {
       for (const [callId, name] of unsettled) {
-        // 停在閘門上的那顆不發：`tool-started` 開的卡本來就是執行中，同即時。
+        // 停在核准上的那顆不發：`tool-started` 開的卡本來就是執行中，同即時。
         if (awaitingInput.gatedTools.has(name)) continue;
         frames.push(frame('tools', last.time, { event: 'tool-suspended', tool_call_id: callId }));
       }

@@ -1,0 +1,210 @@
+/**
+ * 續接時補寫當掉那一輪的收尾（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）：算補結的規則、
+ * 寫回的把手、冪等，以及補寫之後模型那一側與不變量都不變。接到 CLI／serve 的整合在 `apps/harness`。
+ */
+
+import { AIMessage, ToolMessage } from '@langchain/core/messages';
+import { describe, expect, it } from 'vitest';
+
+import { replayConversation, TOOL_OUTCOME_UNKNOWN_TEXT } from './conversation-replay.js';
+import { interruptedTurnClosers, resumeClosingInterruptedTurn } from './interrupted-turn.js';
+import { createInvariantRunner } from './invariants.js';
+import type { InvariantError } from './invariants.js';
+import { sessionInvariant, CORE_INVARIANT_PACKAGE } from './invariant.js';
+import { toLoggedMessage } from './logged-message.js';
+import { SessionLog } from './session-log.js';
+import type { SessionEvent } from './session-log.js';
+import type { ResumedStoredSession, SessionStore, StoredSession } from './session-store.js';
+import { TOOL_OUTCOME_UNKNOWN } from './tool-events.js';
+
+const asking = (calls: readonly (readonly [string, string])[]) =>
+  toLoggedMessage(
+    new AIMessage({
+      content: '我來',
+      tool_calls: calls.map(([id, name]) => ({ id, name, args: {}, type: 'tool_call' as const })),
+    }),
+  );
+
+/** 一輪開著：人說話、模型要兩個工具、第一個記了 `tool/call` 並落定、第二個記了 `tool/call` 沒結果。 */
+function crashed(): SessionLog {
+  const log = new SessionLog('crash');
+  log.append('turn/start', { kind: 'message', text: '做事' });
+  log.append('assistant/message', {
+    message: asking([
+      ['a', 'ls'],
+      ['b', 'write_file'],
+    ]),
+  });
+  log.append('tool/call', { callId: 'a', name: 'ls', arguments: '{}' });
+  log.append('tool/result', {
+    callId: 'a',
+    isError: false,
+    message: toLoggedMessage(new ToolMessage({ content: 'x', tool_call_id: 'a', name: 'ls' })),
+  });
+  log.append('tool/call', { callId: 'b', name: 'write_file', arguments: '{}' });
+  return log;
+}
+
+const typesOf = (events: readonly SessionEvent[]) => events.map((event) => event.type);
+
+describe('interruptedTurnClosers', () => {
+  it('開著的輪：記過 tool/call 沒結果的補「結果不明」，最後 turn/end interrupted；seq 接續、time 沿用最後一顆', () => {
+    const log = crashed();
+    const last = log.events.at(-1)!;
+    const closers = interruptedTurnClosers(log.events);
+
+    expect(typesOf(closers)).toEqual(['tool/result', 'turn/end']);
+    expect(closers.map((event) => event.seq)).toEqual([last.seq + 1, last.seq + 2]);
+    expect(closers.every((event) => event.time === last.time)).toBe(true);
+    const [result, end] = closers as [SessionEvent<'tool/result'>, SessionEvent<'turn/end'>];
+    expect(result.data).toMatchObject({
+      callId: 'b',
+      isError: true,
+      error: { name: 'ToolOutcomeUnknownError', code: TOOL_OUTCOME_UNKNOWN },
+    });
+    expect(result.data.message?.data.content).toBe(TOOL_OUTCOME_UNKNOWN_TEXT);
+    expect(end.data).toEqual({ reason: { kind: 'interrupted' } });
+  });
+
+  it('沒有未配到的呼叫：只補 turn/end', () => {
+    const log = new SessionLog('crash');
+    log.append('turn/start', { kind: 'message', text: '講話' });
+    expect(typesOf(interruptedTurnClosers(log.events))).toEqual(['turn/end']);
+  });
+
+  it('只在回覆裡要了、沒記過 tool/call 的呼叫不寫（維持在記憶體裡補，那條偏離不動）', () => {
+    const log = new SessionLog('crash');
+    log.append('turn/start', { kind: 'message', text: '做事' });
+    log.append('assistant/message', { message: asking([['a', 'ls']]) });
+    expect(typesOf(interruptedTurnClosers(log.events))).toEqual(['turn/end']);
+  });
+
+  it('已平衡（輪收了，哪怕結果沒配到）、空日誌：空陣列', () => {
+    const log = crashed();
+    log.append('turn/end', {});
+    expect(interruptedTurnClosers(log.events)).toEqual([]);
+    expect(interruptedTurnClosers([])).toEqual([]);
+  });
+
+  it('turn/failed 也是收工', () => {
+    const log = crashed();
+    log.append('turn/failed', { message: '壞了' });
+    expect(interruptedTurnClosers(log.events)).toEqual([]);
+  });
+
+  it('開著的輪＋end-seed＋新一輪：不補（舊檔的形狀）', () => {
+    const first = crashed();
+    const log = new SessionLog('crash', { seed: first.events });
+    log.append('turn/start', { kind: 'message', text: '再來' });
+    log.append('turn/end', {});
+    expect(interruptedTurnClosers(log.events)).toEqual([]);
+  });
+
+  /**
+   * **這一條釘的是這一版的選擇，不是對的答案**：dsh 的掃描在 end-seed 不重設，會把補結補在 end-seed 之後；
+   * 我們的不變量在 end-seed 重設，補在後面會報「關了一個沒有開著的輪」。卡上交給 demian，見 `interrupted-turn.ts` 檔頭。
+   */
+  it('舊檔尾巴「開著的輪＋end-seed、之後沒有新輪」：這一版不補', () => {
+    const log = new SessionLog('crash', { seed: crashed().events });
+    expect(interruptedTurnClosers(log.events)).toEqual([]);
+  });
+});
+
+describe('補寫之後', () => {
+  it('模型那一側逐字不變：補在日誌裡的結果與記憶體裡補的那句一樣', () => {
+    const log = crashed();
+    const before = replayConversation(log.events);
+    const after = replayConversation([...log.events, ...interruptedTurnClosers(log.events)]);
+    const text = (replay: typeof before) =>
+      replay.kind === 'replayed'
+        ? replay.messages.map((message) => `${message.getType()}:${message.text}`)
+        : replay.reason;
+    expect(text(after)).toEqual(text(before));
+  });
+
+  it('不變量不報違規：補結＋end-seed＋新一輪', () => {
+    const first = crashed();
+    const resumed = new SessionLog('crash', {
+      seed: [...first.events, ...interruptedTurnClosers(first.events)],
+    });
+    const violations: InvariantError[] = [];
+    createInvariantRunner({
+      log: resumed,
+      companions: [
+        {
+          packageName: CORE_INVARIANT_PACKAGE,
+          installer: sessionInvariant,
+          origin: { id: 'core-invariant#0', name: 'core-invariant' },
+        },
+      ],
+      onViolation: (error) => violations.push(error),
+      warn: (message) => {
+        throw new Error(`不該有 warn：${message}`);
+      },
+    });
+    resumed.append('turn/start', { kind: 'message', text: '再來' });
+    resumed.append('turn/end', {});
+    expect(violations).toEqual([]);
+  });
+});
+
+/** 一個記下 append／close 的假存放處。 */
+function fakeStore(events: readonly SessionEvent[], options: { failAppend?: boolean } = {}) {
+  const appended: SessionEvent[][] = [];
+  let closed = 0;
+  const stored: StoredSession = {
+    append: (batch) => {
+      if (options.failAppend === true) return Promise.reject(new Error('寫不進去'));
+      appended.push([...batch]);
+      return Promise.resolve();
+    },
+    flush: () => Promise.resolve(),
+    close: () => {
+      closed += 1;
+      return Promise.resolve();
+    },
+  };
+  const resumed: ResumedStoredSession = {
+    header: { version: 1, id: 'crash', createdAt: 0 },
+    events,
+    stored,
+  };
+  const store = { resume: () => Promise.resolve(resumed) } as unknown as SessionStore;
+  return { store, appended, closed: () => closed };
+}
+
+describe('resumeClosingInterruptedTurn', () => {
+  it('把補結寫進同一個把手，交回的 events 已含補結', async () => {
+    const log = crashed();
+    const fake = fakeStore(log.events);
+    const resumed = await resumeClosingInterruptedTurn(fake.store, 'crash');
+
+    expect(fake.appended).toHaveLength(1);
+    expect(typesOf(fake.appended[0]!)).toEqual(['tool/result', 'turn/end']);
+    expect(resumed.events).toHaveLength(log.events.length + 2);
+    expect(resumed.events.map((event) => event.seq)).toEqual(resumed.events.map((_, at) => at));
+  });
+
+  it('冪等：補過的檔再續接一次，第二次不寫', async () => {
+    const log = crashed();
+    const first = await resumeClosingInterruptedTurn(fakeStore(log.events).store, 'crash');
+    const second = fakeStore(first.events);
+    await resumeClosingInterruptedTurn(second.store, 'crash');
+    expect(second.appended).toHaveLength(0);
+  });
+
+  it('已平衡的檔：不碰把手', async () => {
+    const log = new SessionLog('ok');
+    log.append('turn/start', { kind: 'message', text: 'hi' });
+    log.append('turn/end', {});
+    const fake = fakeStore(log.events);
+    await resumeClosingInterruptedTurn(fake.store, 'ok');
+    expect(fake.appended).toHaveLength(0);
+  });
+
+  it('寫不進去：放掉把手再拋，不留租約', async () => {
+    const fake = fakeStore(crashed().events, { failAppend: true });
+    await expect(resumeClosingInterruptedTurn(fake.store, 'crash')).rejects.toThrow('寫不進去');
+    expect(fake.closed()).toBe(1);
+  });
+});

@@ -18,7 +18,13 @@ import { join } from 'node:path';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry } from '@nexus/core';
+import { createHostServicesPlugin } from '@nexus/core';
 import { ASK_USER_QUESTION_TOOL_NAME, createAskUserPlugin } from '@nexus/plugin-ask-user';
+import {
+  createSandboxPolicyPlugin,
+  SANDBOX_ESCALATION_TOOL_NAME,
+  SandboxModeController,
+} from '@nexus/plugin-sandbox-policy';
 import type { ConversationState, Event } from '@nexus/wire';
 import { emptyConversation, reduceAll, reduceConversation } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
@@ -63,6 +69,9 @@ const WORKER: PluginEntry = {
   },
 };
 
+/** 升級那一條的控制器：`read-only` 起算，要 `workspace-write` 才是加寬。 */
+const escalationController = new SandboxModeController('read-only');
+
 const ASK = {
   name: ASK_USER_QUESTION_TOOL_NAME,
   args: { questions: [{ id: 'day', question: '哪一天？' }] },
@@ -90,17 +99,29 @@ function rootCards(state: ConversationState): string[] {
     .map((entry) => `${entry.name}:${entry.status}`);
 }
 
+/** 呼叫端自己掛了 host-services（它會提供 channel）就照它的；沒有才補一份「有人在答」的。 */
+function withChannel(plugins: readonly PluginEntry[]): PluginEntry[] {
+  return plugins.some((entry) => entry.plugin.name === 'host-services')
+    ? [...plugins]
+    : [humanChannelPlugin(), ...plugins];
+}
+
 /**
  * 真的組裝跑一輪到收尾（停下來等人，或跑完），回傳即時與重播兩個畫面——serve 那條路的形狀，同
  * `tool-card-from-log.test.ts`。
  */
-async function stopForInput(turns: readonly ScriptedTurn[], plugins: readonly PluginEntry[]) {
+async function stopForInput(
+  turns: readonly ScriptedTurn[],
+  plugins: readonly PluginEntry[] | ((root: string) => readonly PluginEntry[]),
+  backend: (root: string) => ContainedFilesystemBackend = (root) =>
+    new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
+) {
   const root = await mkdtemp(join(tmpdir(), 'nexus-waiting-cards-'));
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns }),
     checkpointer: new MemorySaver(),
-    plugins: [humanChannelPlugin(), ...plugins],
-    backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
+    plugins: withChannel(typeof plugins === 'function' ? plugins(root) : plugins),
+    backend: backend(root),
   });
   const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'waiting-cards');
   const detach = built.attachSession(pump.sessions);
@@ -115,15 +136,15 @@ async function stopForInput(turns: readonly ScriptedTurn[], plugins: readonly Pl
   await until(() => frames.some(isRootDone));
   await pump.whenIdle();
 
+  const history = historyFrames(pump.sessionLog.events, DEFAULT_TOOL_TEXT_MAX_BYTES, {
+    gatedTools: pump.gatedTools,
+  });
   return {
     pump,
+    frames,
+    history,
     live: frames.reduce(reduceConversation, emptyConversation()),
-    replay: reduceAll(
-      emptyConversation(),
-      historyFrames(pump.sessionLog.events, DEFAULT_TOOL_TEXT_MAX_BYTES, {
-        gatedTools: pump.gatedTools,
-      }),
-    ),
+    replay: reduceAll(emptyConversation(), history),
     close: async () => {
       line.abort();
       await draining;
@@ -156,6 +177,71 @@ describe('停下來等人的那一輪，即時與重播畫得一樣', () => {
       expect(rootCards(run.live)).toEqual(expected);
       expect(rootCards(run.replay)).toEqual(expected);
       expect(run.replay.status).toBe('running');
+    } finally {
+      await run.close();
+    }
+  }, 20000);
+
+  /**
+   * **升級的核准從 #700 起在工具本體裡問**：本體被呼叫到了，基座發 `tool-started`，中斷又是拋出來的，所以
+   * 基座接著發一顆帶中斷酬載的 `tool-error`——跟問答同一條路。照 dsh，核准的等待不畫在卡上（卡維持執行中，
+   * 面板接管輸入框），所以 pump 不能把它換成 `tool-suspended`；重播靠 `gatedTools` 認得它的名字。
+   */
+  it('升級停在本體的核准上：即時與重播都是「執行中」，兩邊都沒有 `tool-suspended`', async () => {
+    const run = await stopForInput(
+      [
+        {
+          content: '要升級。',
+          toolCalls: [
+            {
+              name: SANDBOX_ESCALATION_TOOL_NAME,
+              args: {
+                file_path: '/a.txt',
+                sandbox_permissions: 'workspace-write',
+                justification: '使用者要這個檔',
+              },
+            },
+          ],
+        },
+        { content: '收工。' },
+      ],
+      (root) => [
+        createHostServicesPlugin({
+          channel: { kind: 'human' },
+          sandboxPolicy: { controller: escalationController, rootDir: root },
+        }),
+        createSandboxPolicyPlugin(),
+      ],
+      (root) =>
+        new ContainedFilesystemBackend({
+          rootDir: root,
+          mode: escalationController.source,
+          grants: escalationController,
+        }),
+    );
+    try {
+      // 前提：真的停在升級的核准上，而且是本體發的那一種（本體被呼叫到了，才有基座的 `tool-error`）。
+      expect(run.pump.pendings).toHaveLength(1);
+      expect([...run.pump.gatedTools]).toEqual([SANDBOX_ESCALATION_TOOL_NAME]);
+      expect(
+        run.frames.some(
+          (frame) =>
+            frame.method === 'tools' &&
+            (frame.params.data as { event?: unknown }).event === 'tool-started',
+        ),
+      ).toBe(true);
+
+      const expected = [`${SANDBOX_ESCALATION_TOOL_NAME}:running`];
+      expect(rootCards(run.live)).toEqual(expected);
+      expect(rootCards(run.replay)).toEqual(expected);
+      const suspended = (frames: readonly Event[]) =>
+        frames.filter(
+          (frame) =>
+            frame.method === 'tools' &&
+            (frame.params.data as { event?: unknown }).event === 'tool-suspended',
+        );
+      expect(suspended(run.frames)).toEqual([]);
+      expect(suspended(run.history)).toEqual([]);
     } finally {
       await run.close();
     }
