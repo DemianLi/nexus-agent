@@ -236,6 +236,15 @@ export {
   SPILL_RETRIEVAL_HINT,
 } from './spill-policy.js';
 
+// 搜尋結果的筆數上限（#735）也是一對（middleware 開槽、backend 包裝截前段），只由 `foldRegistry` 組起來，主入口只公開
+// 設定與名字。
+export type { SearchOverflowOptions, SearchResultLimits } from './search-overflow.js';
+export {
+  GLOB_MAX_RESULTS,
+  GREP_MAX_MATCHES,
+  SEARCH_OVERFLOW_MIDDLEWARE_NAME,
+} from './search-overflow.js';
+
 export { continuationFooter, READ_CONTINUATION_MIDDLEWARE_NAME } from './read-continuation.js';
 export type {
   DiffResultMeta,

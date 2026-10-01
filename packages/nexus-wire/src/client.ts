@@ -563,8 +563,10 @@ export function createWireClient(options: WireClientOptions): WireClient {
   /**
    * 送一個回饋命令，把回應拆成「這條線收不了」與「命令自己的結果」。
    *
-   * 結果**只檢 `ok` 是不是布林**：值的其餘形狀是 server 那側的型別保證的（同一份 `@nexus/wire`），
-   * 這裡要擋的只有「回來的根本不是回饋結果」——那種時候當成收不了，不硬讀。
+   * 結果**只檢 `ok` 是不是布林**，其餘形狀不驗、直接 `as T`。這是**信任，不是保證**：server 那側用
+   * `successResponse` 送（參數是 `Record<string, unknown>`），送出去的值沒有在編譯期綁到這裡的 `T`
+   * （[#683](https://github.com/DemianLi/nexus-agent/issues/683)）。這裡要擋的只有「回來的根本不是回饋結果」——
+   * 那種時候當成收不了，不硬讀。
    */
   async function sendFeedback<T>(
     threadId: string,

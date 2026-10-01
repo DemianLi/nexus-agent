@@ -71,6 +71,7 @@ import {
   type SessionRegistry,
   type SessionTelemetrySharingStatus,
   type RepeatReminderSettings,
+  type SearchOverflowOptions,
   type SummarizationSettings,
   type TokenAnchorBook,
   type ToolResultPruneConfig,
@@ -98,6 +99,7 @@ import {
   DEFAULT_MAX_PARALLEL_TOOL_CALLS,
   MAX_PARALLEL_TOOL_CALLS_SERVICE,
 } from './settings/agent-loop.js';
+import { SEARCH_RESULT_LIMITS_SERVICE } from './settings/tool-fs-search.js';
 
 /** 組裝時掉了的一列（#751）：載入器交出來的原因，加上它是清單上哪一個條目。 */
 export interface AssemblyDrop {
@@ -594,6 +596,28 @@ function maxParallelToolCallsFor(registry: PluginRegistry): number {
   return registry.services.get(MAX_PARALLEL_TOOL_CALLS_SERVICE) ?? DEFAULT_MAX_PARALLEL_TOOL_CALLS;
 }
 
+/**
+ * 搜尋結果的筆數上限（[#735](https://github.com/DemianLi/nexus-agent/issues/735)）：`#settings/tool-fs-search` 那一列
+ * 提供了服務才掛，見那一列的檔頭。完整結果存進工具結果暫存（同外溢層那一份存檔服務）；沒有暫存（eval、spike、沒有會話
+ * 日誌的組裝）時照 dsh 只留前段、註明沒存到。
+ */
+function searchOverflowFor(
+  registry: PluginRegistry,
+  stashRoute: StashRoute | undefined,
+  options: CreateNexusAgentOptions,
+): { readonly searchOverflow?: SearchOverflowOptions } {
+  const limits = registry.services.get(SEARCH_RESULT_LIMITS_SERVICE);
+  if (limits === undefined) return {};
+  const warn = options.toolResultStash?.warn;
+  return {
+    searchOverflow: {
+      limits,
+      ...(stashRoute !== undefined && { store: stashRoute.spillStore(TOOL_RESULT_STASH_PREFIX) }),
+      ...(warn !== undefined && { warn }),
+    },
+  };
+}
+
 /** 模型物件自己報的型號；沒有的話退到它的種類名，每個 `BaseChatModel` 都有。字串形式的模型（基座的 `provider:model`）原樣用。 */
 function modelLabelOf(model: AgentModel): string {
   if (typeof model === 'string') return model;
@@ -686,6 +710,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
             }),
           },
         }),
+      ...searchOverflowFor(registry, stashRoute, options),
       toolOrder: options.toolOrder,
       baseToolNames: options.baseToolNames ?? BASE_TOOL_NAMES,
       ...(options.subagentToolFilter !== undefined && {

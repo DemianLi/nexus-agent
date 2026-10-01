@@ -217,6 +217,18 @@ export interface ToolEntry {
   readonly text?: string;
   readonly error?: string;
   /**
+   * 失敗的**錯誤碼**（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）：判斷「這張卡是怎麼失敗的」讀這一格，
+   * 不讀 {@link ToolEntry.error} 的字。照 dsh，碼跨線、畫面比碼（`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:76`
+   * 把 `data.error` 原樣交給 client，`packages/client/ui-tool/src/client/tool/models/tool-call-model.ts:289` 比
+   * `error?.code`）。
+   *
+   * - 日誌 `tool/result.error.code` 的那個碼，由 harness 放在失敗的 `tool-finished` 上（例如停在核准點或提問時按了
+   *   停止是 `ABORTED_BEFORE_DISPATCH`）；`tool-error` 帶了 `code` 也照抄。
+   * - 一輪關掉時還沒有結果的卡，折疊器自己補 {@link UNFINISHED_TOOL_CODE}，同 dsh 替沒結果的卡合成的 `'interrupted'`。
+   * - 線上沒有碼就是 `undefined`；成功的卡沒有這一格。
+   */
+  readonly errorCode?: string;
+  /**
    * 給專屬卡畫的**結構化結果**（[#617](https://github.com/DemianLi/nexus-agent/issues/617)）：讀檔讀到
    * 哪幾行、搜尋命中什麼、改檔改了哪幾段。照 dsh 的 `tool/result.meta`，**對這一層不透明**——形狀歸
    * 工具，由畫面那一側的卡片模型自己驗，驗不過就走 generic。
@@ -1327,6 +1339,11 @@ interface ToolData {
   readonly failed?: boolean;
   /** `tool-finished` 專用：給專屬卡的結構化結果（#617），見 {@link ToolEntry.meta}。 */
   readonly meta?: unknown;
+  /**
+   * 失敗的錯誤碼（#667），見 {@link ToolEntry.errorCode}。`tool-finished` 由 pump 在失敗那一支放，
+   * `tool-error` 是協定 `ToolErrorData` 本來就有的 `code`。
+   */
+  readonly code?: string;
 }
 
 /**
@@ -1454,7 +1471,14 @@ function reduceTool(
         subagents,
         entries: replace(state.entries, id, (existing) =>
           existing.kind === 'tool'
-            ? { ...existing, status: 'running', error: undefined, text: undefined, meta: undefined }
+            ? {
+                ...existing,
+                status: 'running',
+                error: undefined,
+                errorCode: undefined,
+                text: undefined,
+                meta: undefined,
+              }
             : existing,
         ),
       };
@@ -1476,18 +1500,20 @@ function reduceTool(
     const failed = data.failed === true;
     const settled = {
       ...state,
-      entries: replace(state.entries, id, (entry) =>
-        entry.kind === 'tool'
-          ? {
-              ...entry,
-              status: failed ? 'failed' : 'done',
-              text: data.message,
-              // 同 `text`：照這一顆換掉。pump 的更正幀只差 meta 時也會來（#617）。
-              meta: failed ? undefined : data.meta,
-              ...(failed ? { error: data.message ?? '未指名的錯誤' } : {}),
-            }
-          : entry,
-      ),
+      entries: replace(state.entries, id, (entry) => {
+        if (entry.kind !== 'tool') return entry;
+        // 碼同 `text`：照這一顆換掉（pump 的更正幀只差碼時也會來，#667）。沒有碼就不留這一格。
+        const { errorCode: _previous, ...rest } = entry;
+        return {
+          ...rest,
+          status: failed ? 'failed' : 'done',
+          text: data.message,
+          // 同 `text`：照這一顆換掉。pump 的更正幀只差 meta 時也會來（#617）。
+          meta: failed ? undefined : data.meta,
+          ...(failed ? { error: data.message ?? '未指名的錯誤' } : {}),
+          ...(failed && data.code !== undefined ? { errorCode: data.code } : {}),
+        };
+      }),
     };
     return failed ? settled : attributeBackground(settled, data);
   }
@@ -1497,7 +1523,12 @@ function reduceTool(
       ...state,
       entries: replace(state.entries, id, (entry) =>
         entry.kind === 'tool'
-          ? { ...entry, status: 'failed', error: data.message ?? '未指名的錯誤' }
+          ? {
+              ...entry,
+              status: 'failed',
+              error: data.message ?? '未指名的錯誤',
+              ...(data.code === undefined ? {} : { errorCode: data.code }),
+            }
           : entry,
       ),
     };
@@ -1541,6 +1572,13 @@ function markMaxTokens(
 export const UNFINISHED_TOOL_TEXT = '這一輪已經結束，這次呼叫沒有結果';
 
 /**
+ * 一輪收掉時還沒有結果的那次呼叫，卡上的錯誤碼（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）。
+ * 值照 dsh 替沒結果的卡合成的那個（`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:217`），
+ * 畫面比它判 stopped（`packages/client/ui-tool/src/client/tool/models/tool-call-model.ts:289`）。
+ */
+export const UNFINISHED_TOOL_CODE = 'interrupted';
+
+/**
  * 這一輪關了（停止、失敗、或不是停在等人的收尾），還在執行中或掛著的工具卡收成失敗。
  *
  * 照 dsh：一輪或一步關閉時沒有 `tool/result` 的呼叫，畫成一則 `Interrupted` 的錯誤結果
@@ -1554,7 +1592,7 @@ function settleUnfinishedTools(
 ): readonly ConversationEntry[] {
   return entries.map((entry) =>
     entry.kind === 'tool' && (entry.status === 'running' || entry.status === 'suspended')
-      ? { ...entry, status: 'failed', error: UNFINISHED_TOOL_TEXT }
+      ? { ...entry, status: 'failed', error: UNFINISHED_TOOL_TEXT, errorCode: UNFINISHED_TOOL_CODE }
       : entry,
   );
 }
