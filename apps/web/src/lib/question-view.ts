@@ -17,6 +17,8 @@ import type {
 } from '@nexus/wire';
 import { UNFINISHED_TOOL_TEXT } from '@nexus/wire';
 
+import { startsTurn } from '@/lib/turn-start';
+
 /** 模型看到的工具名（`@nexus/plugin-ask-user` 的 `ASK_USER_QUESTION_TOOL_NAME`）。 */
 export const ASK_USER_QUESTION = 'ask_user_question';
 
@@ -49,9 +51,7 @@ export function isStoppedQuestion(entry: ToolEntry): boolean {
 /** 這一輪是不是停在提問上被停止的：輸入框提示字換成 {@link STOPPED_QUESTION_TEXT}。 */
 export function stoppedOnQuestion(state: ConversationState): boolean {
   if (state.status !== 'stopped') return false;
-  const turn = state.entries.slice(
-    state.entries.findLastIndex((entry) => entry.kind === 'human') + 1,
-  );
+  const turn = state.entries.slice(state.entries.findLastIndex(startsTurn) + 1);
   return turn.some((entry) => entry.kind === 'tool' && isStoppedQuestion(entry));
 }
 
@@ -98,8 +98,8 @@ export function questionsOf(input: string): QuestionItem[] | undefined {
  * 答案接到哪一張提問卡上：工具卡的 id → 那一則答案（規格 §4.3「答完」）。
  *
  * **按題目 id 配**：問答中斷帶的是 `interruptId`，工具卡帶的是呼叫 id，線上沒有欄位把兩個接起來；題目 id 是兩邊都有
- * 的那一格。一則答案配**同一輪**（上一則人話之後）裡**最早**一張還沒配到、題目 id 對得上的 `ask_user_question` 卡：
- * 問的時候輸入框被面板換掉，所以卡與答案之間不會有人話；同一輪兩顆提問並行時中斷先來先答，最早的那張就是它的。
+ * 的那一格。一則答案配**同一輪**（最近一次切輪之後，見 {@link startsTurn}）裡**最早**一張還沒配到、題目 id 對得上的 `ask_user_question` 卡：
+ * 問的時候輸入框被面板換掉，所以卡與答案之間不會有一輪的開頭；同一輪兩顆提問並行時中斷先來先答，最早的那張就是它的。
  * 往回找最近的那張會在這時把兩則配反，跨輪找則會配到重新整理前、答案沒有留下來的舊卡。
  *
  * **答案只有作答的那個分頁記得**（`AnswerEntry`：下行不回聲答案）。重新整理、別的分頁、往回載入的歷史都沒有這一則，
@@ -113,23 +113,21 @@ export function pairAnswers(
     if (entry.kind !== 'answer' || entry.cancelled === true) return;
     const ids = new Set(entry.answers.map((answer) => answer.id));
     const turn = entries.slice(0, index);
-    const card = turn
-      .slice(turn.findLastIndex((other) => other.kind === 'human') + 1)
-      .find((candidate) => {
-        if (
-          candidate.kind !== 'tool' ||
-          candidate.name !== ASK_USER_QUESTION ||
-          paired.has(candidate.id)
-        ) {
-          return false;
-        }
-        const questions = questionsOf(candidate.input);
-        return (
-          questions !== undefined &&
-          questions.length === ids.size &&
-          questions.every((question) => ids.has(question.id))
-        );
-      });
+    const card = turn.slice(turn.findLastIndex(startsTurn) + 1).find((candidate) => {
+      if (
+        candidate.kind !== 'tool' ||
+        candidate.name !== ASK_USER_QUESTION ||
+        paired.has(candidate.id)
+      ) {
+        return false;
+      }
+      const questions = questionsOf(candidate.input);
+      return (
+        questions !== undefined &&
+        questions.length === ids.size &&
+        questions.every((question) => ids.has(question.id))
+      );
+    });
     if (card !== undefined) paired.set(card.id, entry);
   });
   return paired;

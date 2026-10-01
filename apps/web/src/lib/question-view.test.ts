@@ -67,6 +67,12 @@ describe('停在提問時被停止的那張卡', () => {
     expect(stoppedOnQuestion(state('stopped', [tool({}), human]))).toBe(false);
     expect(stoppedOnQuestion(state('failed', [tool({})]))).toBe(false);
   });
+
+  it('通知叫醒的新一輪也是新的一輪：上一輪停在提問上的那張卡不算這一輪（#859）', () => {
+    const notice = { kind: 'notice', id: 'n', source: 'subagent-settled' } as ConversationEntry;
+    expect(stoppedOnQuestion(state('stopped', [tool({}), notice]))).toBe(false);
+    expect(stoppedOnQuestion(state('stopped', [notice, tool({})]))).toBe(true);
+  });
 });
 
 describe('呼叫參數裡的題目', () => {
@@ -158,6 +164,13 @@ describe('答案配到哪一張提問卡', () => {
       text: '再問一次',
     } as ConversationEntry;
     expect(pairs([ask('old', ['a']), human, ask('new', ['a']), answer('ans', ['a'])])).toEqual({
+      new: 'ans',
+    });
+  });
+
+  it('通知叫醒的新一輪同樣不跨輪配答案（#859）', () => {
+    const notice = { kind: 'notice', id: 'n', source: 'subagent-settled' } as ConversationEntry;
+    expect(pairs([ask('old', ['a']), notice, ask('new', ['a']), answer('ans', ['a'])])).toEqual({
       new: 'ans',
     });
   });
