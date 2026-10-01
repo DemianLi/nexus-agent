@@ -412,6 +412,7 @@ export {
 } from './feedback.js';
 
 export type {
+  LogicalTurnStartEvent,
   SessionEvent,
   SessionEventMap,
   SessionEventType,
@@ -425,7 +426,12 @@ export type {
   SessionReferenceSourceEntry,
   UserMessageSource,
 } from './session-log.js';
-export { currentTurnStart, hasUnansweredInterrupt, SessionLog } from './session-log.js';
+export {
+  currentTurnStart,
+  hasUnansweredInterrupt,
+  isLogicalTurnStart,
+  SessionLog,
+} from './session-log.js';
 
 export type {
   SessionTelemetryRecord,
