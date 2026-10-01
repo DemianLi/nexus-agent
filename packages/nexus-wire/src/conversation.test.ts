@@ -11,6 +11,7 @@ import {
   isBackgroundSubagentMeta,
   reduceAll,
   reduceConversation,
+  UNFINISHED_TOOL_CODE,
   UNFINISHED_TOOL_TEXT,
   uniformDecisions,
 } from './conversation.js';
@@ -441,6 +442,11 @@ describe('按了停止（#276）', () => {
   });
 });
 
+/**
+ * 還沒有結果的卡收成失敗時也補碼（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）：照 dsh 合成的
+ * `{ code: 'interrupted' }`（`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:217`），停止、失敗、收尾三條
+ * 路都補——dsh 也不分關閉的原因。所以每一列多比一格碼。
+ */
 describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Interrupted`）', () => {
   const open = (id: string, namespace: string[] = ['tools:a']) =>
     frame('tools', namespace, {
@@ -451,8 +457,12 @@ describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Inter
     });
   const cards = (state: ReturnType<typeof emptyConversation>) =>
     state.entries.flatMap((entry) =>
-      entry.kind === 'tool' ? [[entry.callId, entry.status, entry.error]] : [],
+      entry.kind === 'tool' ? [[entry.callId, entry.status, entry.error, entry.errorCode]] : [],
     );
+
+  it('碼的值照 dsh', () => {
+    expect(UNFINISHED_TOOL_CODE).toBe('interrupted');
+  });
 
   it('停止：執行中與掛著的收成失敗，已經有結果的不動', () => {
     const state = reduceAll(emptyConversation(), [
@@ -471,10 +481,10 @@ describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Inter
       frame('lifecycle', [], { event: 'completed', graph_name: 'root', aborted: true }),
     ]);
     expect(cards(state)).toEqual([
-      ['running', 'failed', UNFINISHED_TOOL_TEXT],
-      ['suspended', 'failed', UNFINISHED_TOOL_TEXT],
-      ['done', 'done', undefined],
-      ['failed', 'failed', '被擋下'],
+      ['running', 'failed', UNFINISHED_TOOL_TEXT, UNFINISHED_TOOL_CODE],
+      ['suspended', 'failed', UNFINISHED_TOOL_TEXT, UNFINISHED_TOOL_CODE],
+      ['done', 'done', undefined, undefined],
+      ['failed', 'failed', '被擋下', undefined],
     ]);
   });
 
@@ -483,7 +493,9 @@ describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Inter
       open('running'),
       frame('lifecycle', [], { event: 'failed', graph_name: 'root', error: '供應商掛了' }),
     ]);
-    expect(cards(state)).toEqual([['running', 'failed', UNFINISHED_TOOL_TEXT]]);
+    expect(cards(state)).toEqual([
+      ['running', 'failed', UNFINISHED_TOOL_TEXT, UNFINISHED_TOOL_CODE],
+    ]);
   });
 
   it('正常收尾也收：dsh 不分關閉的原因，一輪關了還沒結果就是沒有結果', () => {
@@ -492,7 +504,9 @@ describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Inter
       frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
     ]);
     expect(state.status).toBe('idle');
-    expect(cards(state)).toEqual([['running', 'failed', UNFINISHED_TOOL_TEXT]]);
+    expect(cards(state)).toEqual([
+      ['running', 'failed', UNFINISHED_TOOL_TEXT, UNFINISHED_TOOL_CODE],
+    ]);
   });
 
   it('對照：停在核准點那顆 `completed` 不收——那一輪還沒關，卡還在等人', () => {
@@ -508,7 +522,7 @@ describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Inter
       frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
     ]);
     expect(state.status).toBe('awaiting-input');
-    expect(cards(state)).toEqual([['running', 'running', undefined]]);
+    expect(cards(state)).toEqual([['running', 'running', undefined, undefined]]);
   });
 
   it('子代理那一層的收尾不算：只有 root 那顆在講「這一輪」', () => {
@@ -516,7 +530,7 @@ describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Inter
       open('running'),
       frame('lifecycle', ['tools:a'], { event: 'failed', graph_name: 'worker', aborted: true }),
     ]);
-    expect(cards(state)).toEqual([['running', 'running', undefined]]);
+    expect(cards(state)).toEqual([['running', 'running', undefined, undefined]]);
   });
 });
 
@@ -936,5 +950,118 @@ describe('背景子代理的歸屬（#832）', () => {
     // 同一個 id 來第二次是續行：root 那張卡還是 subagent、歸 root，不被內層的 task 改寫。
     const root = state.entries.find((entry) => entry.id === 'tool-root-1');
     expect(root).toMatchObject({ kind: 'tool', name: 'subagent', attribution: { kind: 'root' } });
+  });
+});
+
+/**
+ * **錯誤碼跨線**（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）：frame 有碼時 `ToolEntry.errorCode`
+ * 帶碼，沒碼時是 `undefined`。判斷「這張卡是怎麼失敗的」讀這一格，不讀紅字。
+ */
+describe('工具卡的錯誤碼（#667）', () => {
+  const open = (id: string) =>
+    frame('tools', ['tools:a'], {
+      event: 'tool-started',
+      tool_call_id: id,
+      tool_name: id,
+      input: '{}',
+    });
+  const tool = (state: ConversationState) => {
+    const entry = state.entries.find((candidate) => candidate.kind === 'tool');
+    if (entry?.kind !== 'tool') throw new Error('一張工具卡都沒有');
+    return entry;
+  };
+
+  it('失敗的 `tool-finished` 帶碼：卡上有碼，紅字照舊是文字', () => {
+    const state = reduceAll(emptyConversation(), [
+      open('c1'),
+      frame('tools', ['tools:a'], {
+        event: 'tool-finished',
+        tool_call_id: 'c1',
+        failed: true,
+        message: '這次呼叫在開始之前就被中止了',
+        code: 'ABORTED_BEFORE_DISPATCH',
+      }),
+    ]);
+    expect(tool(state)).toMatchObject({
+      status: 'failed',
+      error: '這次呼叫在開始之前就被中止了',
+      errorCode: 'ABORTED_BEFORE_DISPATCH',
+    });
+  });
+
+  it('沒帶碼就是 `undefined`；成功的就算帶了也不收', () => {
+    const failed = reduceAll(emptyConversation(), [
+      open('c1'),
+      frame('tools', ['tools:a'], {
+        event: 'tool-finished',
+        tool_call_id: 'c1',
+        failed: true,
+        message: '壞了',
+      }),
+    ]);
+    expect(tool(failed).errorCode).toBeUndefined();
+    const done = reduceAll(emptyConversation(), [
+      open('c1'),
+      frame('tools', ['tools:a'], {
+        event: 'tool-finished',
+        tool_call_id: 'c1',
+        message: '好了',
+        code: 'X',
+      }),
+    ]);
+    expect(tool(done)).toMatchObject({ status: 'done' });
+    expect(tool(done).errorCode).toBeUndefined();
+  });
+
+  it('更正幀照這一顆換掉：先沒碼、後帶碼，留下後面那個', () => {
+    const state = reduceAll(emptyConversation(), [
+      open('c1'),
+      frame('tools', ['tools:a'], {
+        event: 'tool-finished',
+        tool_call_id: 'c1',
+        failed: true,
+        message: '被擋下',
+      }),
+      frame('tools', ['tools:a'], {
+        event: 'tool-finished',
+        tool_call_id: 'c1',
+        failed: true,
+        message: '被擋下',
+        code: 'FS_SANDBOX_DENIED',
+      }),
+    ]);
+    expect(tool(state).errorCode).toBe('FS_SANDBOX_DENIED');
+  });
+
+  it('`tool-error` 帶了 `code`（協定 `ToolErrorData` 本來就有）也照抄', () => {
+    const state = reduceAll(emptyConversation(), [
+      open('c1'),
+      frame('tools', ['tools:a'], {
+        event: 'tool-error',
+        tool_call_id: 'c1',
+        message: '炸了',
+        code: 'TOOL_TIMEOUT',
+      }),
+    ]);
+    expect(tool(state)).toMatchObject({
+      status: 'failed',
+      error: '炸了',
+      errorCode: 'TOOL_TIMEOUT',
+    });
+  });
+
+  it('同一次呼叫續行（第二顆 `tool-started`）時碼跟紅字一起清掉', () => {
+    const state = reduceAll(emptyConversation(), [
+      open('c1'),
+      frame('tools', ['tools:a'], {
+        event: 'tool-error',
+        tool_call_id: 'c1',
+        message: '炸了',
+        code: 'TOOL_TIMEOUT',
+      }),
+      open('c1'),
+    ]);
+    expect(tool(state)).toMatchObject({ status: 'running' });
+    expect(tool(state).errorCode).toBeUndefined();
   });
 });
