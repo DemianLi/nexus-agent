@@ -330,7 +330,12 @@ describe('上線與歷史：不畫人的泡泡', () => {
       );
       expect(inserted?.items[0]?.source).toEqual({ kind: 'agent-message' });
       const claim = pushes.find((push) => push.claimed?.source !== undefined);
-      expect(claim?.claimed?.source).toEqual({ kind: 'agent-message' });
+      // 領走那一顆多帶寄件人與編號（#863），畫面據它畫「某某說」；排著的那一顆只有判別欄。
+      expect(claim?.claimed?.source).toEqual({
+        kind: 'agent-message',
+        senderSessionId: MESSAGE.senderSessionId,
+        runId: 'bg-1',
+      });
       const state = reduceAll(emptyConversation(), run.frames);
       expect(state.entries.filter((entry) => entry.kind === 'human').map((e) => e.text)).toEqual([
         '嗨',

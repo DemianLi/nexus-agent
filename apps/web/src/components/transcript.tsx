@@ -200,6 +200,11 @@ function Entry({
     return <SettledNotice caption={SETTLED_NOTICE_TEXT} />;
   }
 
+  if (entry.kind === 'agent-message') {
+    // 背景子代理寫來的話（#863）：折疊器已經長出項目，怎麼畫是 web 的卡（#861）。在那之前不畫，也不能落到下面當成模型的回覆。
+    return null;
+  }
+
   if (entry.kind === 'tool') {
     // 交出計劃的那一顆畫成計劃卡（#654）。
     if (entry.name === EXIT_PLAN_MODE) return <PlanToolCard entry={entry} beam={beam} />;
