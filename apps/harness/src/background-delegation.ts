@@ -482,6 +482,11 @@ export class BackgroundDelegation {
             kind: 'background-subagent',
             runId: started.runId,
             subagentType,
+            // 被指定的模型與推理等級（#889）：畫面據它說這個子代理跑哪一顆；沒指定就不放，跟著主對話。
+            ...(choice !== undefined && {
+              model: choice.model,
+              ...(choice.effort !== undefined && { reasoningEffort: choice.effort }),
+            }),
           };
           putToolResultMeta(SUBAGENT_TOOL_NAME, key);
           // 第一輪的下場不在這次呼叫裡等：失敗已記在它自己的日誌（`outcome` 永遠不 reject）。

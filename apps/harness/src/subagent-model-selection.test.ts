@@ -16,9 +16,16 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry } from '@nexus/core';
 import { SessionRegistry } from '@nexus/core';
+import {
+  DELEGATION_TOOL_NAMES,
+  emptyConversation,
+  isBackgroundSubagentMeta,
+  reduceAll,
+} from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
+import { historyPage } from './conversation-history.js';
 import { LIST_SUBAGENT_MODELS_TOOL_NAME } from './background-delegation.js';
 import type { ModelChoice } from './background-subagents.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -266,6 +273,94 @@ describe('產品路徑：subagent 工具帶 model／reasoning_effort', () => {
       expect(asked).toEqual([{ model: 'strong', effort: 'off' }]);
     } finally {
       await run.close();
+    }
+  });
+
+  /** 派出那顆 `subagent` 呼叫的結果 `meta`：先從 root 日誌讀（落盤的那份），再看歷史重播折出來的畫面是不是同一份。 */
+  const delegationMeta = (
+    run: Awaited<ReturnType<typeof assemble>>,
+  ): { logged: unknown; replayed: unknown } => {
+    const root = run.sessions.list().find((each) => each.address.kind === 'root');
+    const events = root?.log.events ?? [];
+    const result = events.find((event) => event.type === 'tool/result');
+    const replayed = reduceAll(emptyConversation(), historyPage(events).events).entries.find(
+      (entry) => entry.kind === 'tool' && DELEGATION_TOOL_NAMES.includes(entry.name),
+    );
+    return {
+      logged: (result?.data as { meta?: unknown } | undefined)?.meta,
+      replayed: (replayed as { meta?: unknown } | undefined)?.meta,
+    };
+  };
+
+  it('委派卡的 meta 帶被指定的模型與推理等級（#889）：日誌上有，歷史重播折出來是同一份', async () => {
+    const run = await assemble({
+      rootTurns: [delegate({ model: 'cheap', reasoning_effort: 'off' }), { content: '根收尾' }],
+      selection: config(['strong', 'cheap']),
+      modelFor: () => new ScriptedChatModel({ turns: [{ content: '好' }] }),
+    });
+    try {
+      await run.say();
+      const { logged, replayed } = delegationMeta(run);
+      expect(logged).toMatchObject({
+        kind: 'background-subagent',
+        subagentType: 'worker',
+        model: 'cheap',
+        reasoningEffort: 'off',
+      });
+      expect(replayed).toEqual(logged);
+      expect(isBackgroundSubagentMeta(replayed)).toBe(true);
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('只給 reasoning_effort：meta 的 model 是主對話那一顆；只給 model：沒有 reasoningEffort', async () => {
+    const effortOnly = await assemble({
+      rootTurns: [delegate({ reasoning_effort: 'off' }), { content: '根收尾' }],
+      selection: config(['strong', 'cheap']),
+      modelFor: () => new ScriptedChatModel({ turns: [{ content: '好' }] }),
+    });
+    try {
+      await effortOnly.say();
+      expect(delegationMeta(effortOnly).logged).toMatchObject({
+        model: 'strong',
+        reasoningEffort: 'off',
+      });
+    } finally {
+      await effortOnly.close();
+    }
+    const modelOnly = await assemble({
+      rootTurns: [delegate({ model: 'cheap' }), { content: '根收尾' }],
+      selection: config(['strong', 'cheap']),
+      modelFor: () => new ScriptedChatModel({ turns: [{ content: '好' }] }),
+    });
+    try {
+      await modelOnly.say();
+      const { logged } = delegationMeta(modelOnly);
+      expect(logged).toMatchObject({ model: 'cheap' });
+      expect(logged).not.toHaveProperty('reasoningEffort');
+    } finally {
+      await modelOnly.close();
+    }
+  });
+
+  it('什麼都沒指定（有政策與沒政策兩種）：meta 逐欄同今天，沒有 model、reasoningEffort', async () => {
+    for (const selection of [config(['strong', 'cheap']), undefined]) {
+      const run = await assemble({
+        rootTurns: [delegate({}), { content: '根收尾' }],
+        selection,
+        ...(selection !== undefined && {
+          modelFor: () => new ScriptedChatModel({ turns: [{ content: '好' }] }),
+        }),
+      });
+      try {
+        await run.say();
+        const { logged, replayed } = delegationMeta(run);
+        expect(Object.keys(logged as object).sort()).toEqual(['kind', 'runId', 'subagentType']);
+        expect(replayed).toEqual(logged);
+      } finally {
+        await run.close();
+      }
     }
   });
 

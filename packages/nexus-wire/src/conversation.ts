@@ -1230,6 +1230,15 @@ export interface BackgroundSubagentMeta {
   readonly kind: 'background-subagent';
   readonly runId: string;
   readonly subagentType: string;
+  /**
+   * 這個子代理被指定跑哪一顆模型（型錄 id；[#889](https://github.com/DemianLi/nexus-agent/issues/889)，卡 #709 的後續）。
+   * **只有這次派出帶了 `model` 或 `reasoning_effort` 才有**；沒有＝跟著主對話。一個編號從派出到收線不換模型（#876），
+   * 所以這是派出那一刻就定的事實，跟 `runId` 一樣放在結果的 `meta` 裡、隨日誌落盤，重新整理之後還在。
+   * 只給推理等級時，這裡是主對話目前那一顆。
+   */
+  readonly model?: string;
+  /** 被指定的推理等級（型錄條目宣告過的名字，今天是 `off`）；沒指定就沒有這一格。 */
+  readonly reasoningEffort?: string;
 }
 
 /** `meta` 是不是背景子代理的鑰匙；形狀歸產生者，這裡只認得出來就好，認不得的一律當沒有。 */
@@ -1240,7 +1249,9 @@ export function isBackgroundSubagentMeta(meta: unknown): meta is BackgroundSubag
     candidate.kind === 'background-subagent' &&
     typeof candidate.runId === 'string' &&
     candidate.runId !== '' &&
-    typeof candidate.subagentType === 'string'
+    typeof candidate.subagentType === 'string' &&
+    (candidate.model === undefined || typeof candidate.model === 'string') &&
+    (candidate.reasoningEffort === undefined || typeof candidate.reasoningEffort === 'string')
   );
 }
 
