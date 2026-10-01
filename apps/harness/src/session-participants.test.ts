@@ -29,6 +29,7 @@ import { loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+import { composeAttachSessions } from './session-attach.js';
 
 const MODEL = (): ScriptedChatModel => new ScriptedChatModel({ turns: [{ content: '好的。' }] });
 
@@ -106,12 +107,13 @@ describe('組裝點', () => {
 });
 
 describe('CLI 那條', () => {
-  it('`runCli` 真的接了——安裝當下寫的那一筆被已經在看的檢查看到', async () => {
+  it('`runCli` 真的接了——安裝當下寫的那一筆被檢查看到', async () => {
     // 觀測點是 fixture 裡那個一看到 `goal/change` 就吭聲的配套入口，理由見它的檔頭。
     // 這一行印得出來，同時證了四件事：參與者裝上了、它寫得動日誌、它在安裝當下就讀得
     // 回自己寫的東西（`GoalService.create()` append 完會立刻讀自己的折疊——`observe()`
-    // 要是等這一輪裝完才生效，那一行會拋，參與者整個不算，這裡就是空的），以及接線順序
-    // 是「不變量先、參與者後」——反過來的話，安裝期寫的那一筆沒有人在看。
+    // 要是等這一輪裝完才生效，那一行會拋，參與者整個不算，這裡就是空的），以及參與者寫的那一筆
+    // 被檢查看到了。**這一條證的是「有接上」，不是順序**：不變量 runner 接上時會重播日誌，所以
+    // 順序反過來也印得出同一行（`session-attach.ts`）。
     const { printer, stderr } = recorder();
     await runCli({
       argv: ['--patch', 'src/cli-session-participant.patch.yml', '說點什麼'],
@@ -165,7 +167,7 @@ describe('web 那條', () => {
         agent: built.agent as unknown as PumpAgent,
         commands: built.commands,
         dispose: built.dispose,
-        attachSession: built.attachSession,
+        attachSessions: composeAttachSessions(built),
       }),
     });
     close = () => handler.close();

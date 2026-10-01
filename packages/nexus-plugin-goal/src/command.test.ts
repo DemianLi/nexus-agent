@@ -88,6 +88,8 @@ function mount(
         commandId: 'cmd-test-1',
         rawInput,
         signal: new AbortController().signal,
+        // 執行器手上的那一份（#688）：接了日誌就是第一份，一份都沒接時交一份沒人接的。
+        sessionLog: opened[0] ?? new SessionLog('unattached'),
         steer: () => undefined,
       });
       if (result instanceof Promise) throw new TypeError('/goal 是同步的');
@@ -223,6 +225,8 @@ describe('找得到要動的那一份', () => {
         commandId: 'cmd-test-1',
         rawInput,
         signal: new AbortController().signal,
+        // 收掉 `first` 之後執行器手上剩下的是 `second`。
+        sessionLog: second,
         steer: () => undefined,
       }) as CommandResult;
 
@@ -260,6 +264,7 @@ describe('找得到要動的那一份', () => {
             commandId: 'cmd-test-1',
             rawInput: input,
             signal: new AbortController().signal,
+            sessionLog: log,
             steer: () => undefined,
           }) as CommandResult,
       };
@@ -448,12 +453,17 @@ describe('域的拒絕與域的壞掉分得出來', () => {
 
 describe('executeGoalCommand 直接呼叫', () => {
   it('空清單與多份清單的那兩句話由它自己決定', () => {
-    expect(executeGoalCommand([], '')).toEqual({
+    expect(executeGoalCommand(undefined, 0, '')).toEqual({
       kind: 'error',
       text: GOAL_NOT_ATTACHED_MESSAGE,
     });
-    const fake = [{}, {}, {}] as unknown as readonly GoalService[];
-    expect(executeGoalCommand(fake, '')).toEqual({
+    // 那份日誌沒接 goal 域、組裝上別份有接：還是「沒接」，不是動到別人的。
+    expect(executeGoalCommand(undefined, 1, '')).toEqual({
+      kind: 'error',
+      text: GOAL_NOT_ATTACHED_MESSAGE,
+    });
+    const fake = {} as unknown as GoalService;
+    expect(executeGoalCommand(fake, 3, '')).toEqual({
       kind: 'error',
       text: goalAmbiguousMessage(3),
     });
