@@ -964,15 +964,16 @@ describe('載體本身（假 agent）', () => {
       while (seen.length === 0) await new Promise((resolve) => setTimeout(resolve, 1));
     };
 
-    it('派出去是 running，做完是 idle；沒變的不重送；沒有任何背景子代理時一顆都不送', async () => {
+    it('接上的當下先送一份空的；派出去是 running，做完是 idle；沒變的不重送', async () => {
       const hold = gate();
       const { agent } = fakeAgent(async () => hold.opened);
       const { host, seen } = withStatus(agent);
-      expect(seen).toEqual([]);
+      // 空的也送：web 靠它分得出「還在等」與「收線」。
+      expect(seen).toEqual(['']);
       const first = host.start({ subagent: 'worker', text: '開工' });
       hold.open();
       await first.outcome;
-      expect(seen).toEqual([`${first.runId}:running`, `${first.runId}:idle`]);
+      expect(seen).toEqual(['', `${first.runId}:running`, `${first.runId}:idle`]);
       await host.close();
     });
 

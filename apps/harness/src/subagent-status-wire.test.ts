@@ -66,7 +66,7 @@ const delegate = (background: boolean): ScriptedTurn => ({
   ],
 });
 
-async function assemble(options: { readonly background: boolean }) {
+async function assemble(options: { readonly background: boolean; readonly configured?: boolean }) {
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -105,7 +105,7 @@ async function assemble(options: { readonly background: boolean }) {
     checkpointer: new MemorySaver(),
     plugins: [worker],
     backend: new ContainedFilesystemBackend({ rootDir: dir, mode: 'workspace-write' }),
-    backgroundSubagents: {},
+    ...(options.configured !== false && { backgroundSubagents: {} }),
   });
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,
@@ -147,22 +147,26 @@ describe('背景子代理現況', () => {
   it('running → idle → 被 subagent.send 叫醒又 running → idle；折出來的 subagentStatus 跟著走', async () => {
     const rig = await assemble({ background: true });
     const feed = await rig.listen();
+    // 下行一開就先收到一份空的（thread 剛建起來，還沒派任何子代理）：收過空快照才是 `{}`，不是 `null`。
+    await until(() => feed.state().subagentStatus !== null);
+    expect(feed.state().subagentStatus).toEqual({});
     await rig.client.runStart('t1', '委派');
-    await until(() => feed.frames.some(isStatus));
-    const runId = Object.keys(feed.state().subagentStatus)[0]!;
+    await until(() => Object.keys(feed.state().subagentStatus ?? {}).length > 0);
+    const runId = Object.keys(feed.state().subagentStatus ?? {})[0]!;
     expect(runId).toMatch(/^bg-/);
     expect(feed.state().subagentStatus).toEqual({ [runId]: 'running' });
 
     rig.release();
-    await until(() => feed.state().subagentStatus[runId] === 'idle');
+    await until(() => feed.state().subagentStatus?.[runId] === 'idle');
 
     expect(await rig.client.subagentSend('t1', runId, '再做一次')).toMatchObject({
       type: 'success',
     });
-    await until(() => feed.state().subagentStatus[runId] === 'running');
-    await until(() => feed.state().subagentStatus[runId] === 'idle');
+    await until(() => feed.state().subagentStatus?.[runId] === 'running');
+    await until(() => feed.state().subagentStatus?.[runId] === 'idle');
     const sequence = feed.frames.filter(isStatus).map(itemsOf);
     expect(sequence).toEqual([
+      '',
       `${runId}:running`,
       `${runId}:idle`,
       `${runId}:running`,
@@ -175,11 +179,11 @@ describe('背景子代理現況', () => {
     const rig = await assemble({ background: true });
     const first = await rig.listen();
     await rig.client.runStart('t1', '委派');
-    await until(() => first.frames.some(isStatus));
-    const live = first.frames.find(isStatus)!;
-    const runId = Object.keys(first.state().subagentStatus)[0]!;
+    await until(() => Object.keys(first.state().subagentStatus ?? {}).length > 0);
+    const runId = Object.keys(first.state().subagentStatus ?? {})[0]!;
+    const live = first.frames.filter(isStatus).find((frame) => itemsOf(frame) !== '')!;
 
-    // 子代理還卡在 gate 上：此刻才接上的第二條下行，頭一顆就是現況。
+    // 子代理還卡在 gate 上：此刻才接上的第二條下行，**頭一顆**就是現況。
     const late = await rig.listen();
     await until(() => late.frames.some(isStatus));
     const snapshot = late.frames.find(isStatus)!;
@@ -189,7 +193,7 @@ describe('背景子代理現況', () => {
 
     // 做完之後再接上的：補送的是 idle，不是舊的 running。
     rig.release();
-    await until(() => first.state().subagentStatus[runId] === 'idle');
+    await until(() => first.state().subagentStatus?.[runId] === 'idle');
     const later = await rig.listen();
     await until(() => later.frames.some(isStatus));
     expect(later.state().subagentStatus).toEqual({ [runId]: 'idle' });
@@ -198,8 +202,20 @@ describe('背景子代理現況', () => {
     later.close();
   }, 20000);
 
-  it('前景委派、沒有任何背景子代理的 thread：一顆現況都不送', async () => {
+  it('有背景派出的組裝、但沒有任何背景子代理（前景委派／重啟後）：接上就是一份空的，subagentStatus 是 {} 不是 null', async () => {
     const rig = await assemble({ background: false });
+    rig.release();
+    const feed = await rig.listen();
+    // 下行一開就要有：此刻 thread 才建起來，接上的當下送了空快照，新下行補送。
+    await rig.client.runStart('t1', '委派');
+    await until(() => feed.frames.some(isStatus));
+    expect(feed.frames.filter(isStatus).map(itemsOf)).toEqual(['']);
+    expect(feed.state().subagentStatus).toEqual({});
+    feed.close();
+  }, 20000);
+
+  it('沒有背景派出的組裝：一顆都不送，subagentStatus 永遠是 null（不下判斷）', async () => {
+    const rig = await assemble({ background: false, configured: false });
     rig.release();
     const feed = await rig.listen();
     await rig.client.runStart('t1', '委派');
@@ -212,7 +228,7 @@ describe('背景子代理現況', () => {
       ),
     );
     expect(feed.frames.filter(isStatus)).toEqual([]);
-    expect(feed.state().subagentStatus).toEqual({});
+    expect(feed.state().subagentStatus).toBeNull();
     feed.close();
   }, 20000);
 });

@@ -26,8 +26,9 @@ function statusFrame(payload: unknown, name: string = SUBAGENT_STATUS): Event {
 const fold = (...frames: Event[]) => reduceAll(emptyConversation(), frames);
 
 describe('subagentStatus', () => {
-  it('還沒收到過是空的（沒有背景派出的 thread 永遠如此）', () => {
-    expect(emptyConversation().subagentStatus).toEqual({});
+  it('還沒收到過是 null（不下判斷）；收過一份空的才是「全部收線」', () => {
+    expect(emptyConversation().subagentStatus).toBeNull();
+    expect(fold(statusFrame({ items: [] })).subagentStatus).toEqual({});
   });
 
   it('整份取代：後到的沒列出的編號就不在了（＝收線）', () => {
@@ -50,7 +51,8 @@ describe('subagentStatus', () => {
     ).toEqual({});
   });
 
-  it('形狀不對不收：items 不是陣列、名字不對；單項壞掉略過、好的照收', () => {
+  it('形狀不對不收：items 不是陣列、名字不對（沒收過的仍是 null）；單項壞掉略過、好的照收', () => {
+    expect(fold(statusFrame({ items: 'x' })).subagentStatus).toBeNull();
     const good = statusFrame({ items: [{ runId: 'bg-a', status: 'idle' }] });
     expect(fold(good, statusFrame({ items: 'x' })).subagentStatus).toEqual({ 'bg-a': 'idle' });
     expect(fold(good, statusFrame({})).subagentStatus).toEqual({ 'bg-a': 'idle' });
@@ -77,6 +79,6 @@ describe('subagentStatus', () => {
     const now = fold(statusFrame({ items: [{ runId: 'bg-a', status: 'running' }] }));
     const earlier = fold(statusFrame({ items: [{ runId: 'bg-old', status: 'idle' }] }));
     expect(prependEntries(now, earlier).subagentStatus).toEqual({ 'bg-a': 'running' });
-    expect(prependEntries(fold(), earlier).subagentStatus).toEqual({});
+    expect(prependEntries(fold(), earlier).subagentStatus).toBeNull();
   });
 });

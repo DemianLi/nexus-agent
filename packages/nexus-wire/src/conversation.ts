@@ -486,11 +486,11 @@ export interface ConversationState {
    */
   readonly title: string | null;
   /**
-   * 背景子代理現在的狀態（#867）：runId → `running`／`idle`，最後一顆 `subagent/status` frame 的整份。**不在裡面＝收線**
-   * （或根本沒收到過——沒有背景派出的 thread 永遠是空的）。規則見 `subagent-status.ts`。它是「現在」的事，所以
-   * {@link prependEntries} 不動它。
+   * 背景子代理現在的狀態（#867）：runId → `running`／`idle`，最後一顆 `subagent/status` frame 的整份。**還沒收到過就是
+   * `null`**（不知道：歷史先到、快照還沒到的那一小段，或這份組裝根本沒有背景派出）；**收過而不在裡面＝收線**。規則見
+   * `subagent-status.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
    */
-  readonly subagentStatus: Readonly<Record<string, SubagentRunStatus>>;
+  readonly subagentStatus: Readonly<Record<string, SubagentRunStatus>> | null;
 }
 
 const ROOT: Attribution = { kind: 'root' };
@@ -510,7 +510,7 @@ export function emptyConversation(): ConversationState {
     inbox: [],
     inboxNextStep: [],
     title: null,
-    subagentStatus: {},
+    subagentStatus: null,
   };
 }
 

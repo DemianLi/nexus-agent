@@ -234,7 +234,7 @@ export interface BackgroundSubagentHostOptions {
   readonly onMessage?: (message: BackgroundAgentMessage) => void;
   /**
    * 現況變了的出口（[#867](https://github.com/DemianLi/nexus-agent/issues/867)）：**整份**（每個認得的編號各一項），
-   * 內容真的變了才叫（連續兩次相同不重送）。從輪次的邊界叫，不是從呼叫端的環境，所以同 `onSettled` 綁在建構那一刻的環境。
+   * 接上的當下先叫一次（可以是空的），之後內容真的變了才叫（連續兩次相同不重送）。從輪次的邊界叫，不是從呼叫端的環境，所以同 `onSettled` 綁在建構那一刻的環境。
    * 它拋錯只講一聲（`warn`），不影響輪次。
    */
   readonly onStatus?: (items: readonly BackgroundSubagentStatus[]) => void;
@@ -329,8 +329,8 @@ export class BackgroundSubagentHost {
   readonly #onSettled: BackgroundSubagentHostOptions['onSettled'];
   readonly #onMessage: BackgroundSubagentHostOptions['onMessage'];
   readonly #onStatus: BackgroundSubagentHostOptions['onStatus'];
-  /** 上一次送出去的現況（序列化），沒變就不重送。空的起頭＝什麼都沒有時不送。 */
-  #lastStatus = '[]';
+  /** 上一次送出去的現況（序列化），沒變就不重送。起頭是 `undefined`：建構完那一刻一定送一份（可以是空的）。 */
+  #lastStatus: string | undefined;
   readonly #maxActive: number;
   readonly #graphs = new Map<string, BackgroundAgent>();
   /** 已知的背景子代理：編號 → 子代理名。同一個編號不能換名字。 */
@@ -370,6 +370,8 @@ export class BackgroundSubagentHost {
     this.#maxActive = maxActive;
     // 迴圈在**這裡**起：它的環境就是建構這一刻的環境。
     this.#loop = this.#run();
+    // 接上的當下就送一份現況，**即使是空的**：沒收過＝不知道，收過而沒有這個編號＝收線，web 靠這個分開兩者（#867）。
+    this.#publishStatus();
   }
 
   /**
