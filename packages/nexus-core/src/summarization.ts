@@ -72,7 +72,7 @@ import type { AgentMiddleware } from './base-types.js';
 import { toLoggedMessage } from './logged-message.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry, SessionLookup } from './registry.js';
-import { defaultTokenAnchorBook, estimateAnchoredTokens } from './token-estimate.js';
+import { estimateAnchoredTokens } from './token-estimate.js';
 import type { EstimatedRequest, TokenAnchorBook } from './token-estimate.js';
 import { DEFAULT_TOOL_RESULT_PRUNE, withToolResultPruning } from './tool-result-pruner.js';
 import type { ToolResultPruneConfig } from './tool-result-pruner.js';
@@ -302,20 +302,20 @@ function assertThreshold(threshold: SummarizationThreshold, where: string): void
  *
  * @param backend - 歷史寫去哪。
  * @param settings - 補滿的設定，來自 {@link resolveSummarizationSettings}。
+ * @param book - 錨定估算的帳，由進入點建、注入（[#702](https://github.com/DemianLi/nexus-agent/issues/702)）：同一本帳的組裝彼此借錨。
  * @param sessions - 註冊表的 `sessions` 通道，用來問「這次壓縮該記進哪一份日誌」。
  *   **省略即不記**，而那是常態不是異常：`eval/runner.ts` 與絕大多數測試的組裝都沒有
  *   會話註冊表，它們不該為此拿到一個例外。同 {@link ./model-usage.ts} 的 `not-attached`。
  * @param pruning - 包在外面的那把剪刀的預算，來自 `resolveToolResultPruneConfig`；
  *   `false` 就不包（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）。
- * @param book - 錨定估算的帳。省略即行程共用的那本；測試要隔離才傳。
  * @returns 可以直接放進 `middleware` 的 middleware。
  */
 export function createSummarizer(
   backend: AnyBackendProtocol,
   settings: SummarizationSettings,
+  book: TokenAnchorBook,
   sessions?: { forCall(config: unknown): SessionLookup },
   pruning: ToolResultPruneConfig | false = DEFAULT_TOOL_RESULT_PRUNE,
-  book: TokenAnchorBook = defaultTokenAnchorBook,
 ): AgentMiddleware {
   const base = createSummarizationMiddleware({
     backend,
@@ -722,7 +722,7 @@ export function effectiveMessages(
 export function isUnderCompactionPressure(
   request: EstimatedRequest & { readonly state?: unknown },
   trigger: readonly SummarizationThreshold[],
-  book: TokenAnchorBook = defaultTokenAnchorBook,
+  book: TokenAnchorBook,
 ): boolean {
   const messages = effectiveMessages(request.messages ?? [], request.state);
   let tokens: number | undefined;
