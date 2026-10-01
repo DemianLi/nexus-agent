@@ -279,7 +279,8 @@ export HTTP_PROXY=http://127.0.0.1:7890
 
 零設定的 CLI 與 serve 掛哪些 plugin，由**出貨的 `apps/harness/cordis.yml`** 決定
 （[#454](https://github.com/DemianLi/nexus-agent/issues/454)）。那份檔案進版控，是「這個
-agent 由什麼組成」的唯一來源。
+agent 由什麼組成」的來源。例外是組裝點在程式碼裡掛的三顆（host-services，以及有 `--workspace` 才掛的
+sandbox-policy 與 workspace-changes），它們不在清單上，patch 指不到。
 
 要改它不是去編輯那份檔案，而是疊一層自己的 patch。**三層，後面的蓋前面的**：
 
@@ -614,7 +615,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 pnpm --filter @nexus/harness run cli -- --dump-config
 ```
 
-`serve` 也收同一個旗標。它印出**啟動真的會掛的那一份**，而且一個 plugin 都不載、不開
+`serve` 也收同一個旗標。它印出**啟動會掛的那份清單**（不含上面說的那三顆由程式碼掛的），而且一個 plugin 都不載、不開
 server、不綁 port：
 
 ```yaml
