@@ -362,7 +362,6 @@ export {
 } from './summarization.js';
 export type { EstimatedRequest, TokenEstimate } from './token-estimate.js';
 export {
-  defaultTokenAnchorBook,
   estimateAnchoredTokens,
   estimateRequestTokens,
   estimateTextTokens,
