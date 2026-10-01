@@ -62,7 +62,12 @@ import {
   subagentMaxTokensOf,
 } from '@/lib/max-tokens-view';
 import { outputOf, showsInput, toolOutput } from '@/lib/tool-output';
-import { SEND_MESSAGE, sendMessageSummary, sendMessageTitle } from '@/lib/subagent-view';
+import {
+  SEND_MESSAGE,
+  sendMessageSummary,
+  sendMessageTitle,
+  subagentModelText,
+} from '@/lib/subagent-view';
 import { classifyTool, firstLine, toolInputBody, toolSummary, toolTitle } from '@/lib/tool-view';
 
 export const TOOL_STATUS_LABEL = {
@@ -192,6 +197,11 @@ export function ToolCard({
     DELEGATION_TOOL_NAMES.includes(entry.name) && isBackgroundSubagentMeta(entry.meta)
       ? entry.meta.runId
       : undefined;
+  // 這個子代理被指定跑哪一顆模型（#889）：只有模型替它挑了才有，沒有就不畫。
+  const subagentModel =
+    DELEGATION_TOOL_NAMES.includes(entry.name) && isBackgroundSubagentMeta(entry.meta)
+      ? subagentModelText(entry.meta)
+      : undefined;
   const questions = entry.name === ASK_USER_QUESTION ? questionsOf(entry.input) : undefined;
   // 答案優先讀線上那一份（#439）：它不分分頁，重新整理與重播都在。本地那一則是舊日誌（沒有 `text`）的退路。
   const given =
@@ -300,6 +310,11 @@ export function ToolCard({
             <div className="px-2 sm:hidden">
               <AttributionBadge attribution={entry.attribution} />
             </div>
+          )}
+          {subagentModel !== undefined && (
+            <p data-subagent-model="" className="text-muted-foreground px-3 pt-1 text-xs">
+              {subagentModel}
+            </p>
           )}
           {questions !== undefined ? (
             <>

@@ -1024,3 +1024,57 @@ describe('子代理撞到輸出上限的 task（#608）', () => {
     expect(document.body.textContent).not.toContain(SUBAGENT_MAX_TOKENS_TEXT);
   });
 });
+
+describe('背景子代理的委派卡上，模型那一行（#889）', () => {
+  const delegation = (meta: ToolEntry['meta']): ToolEntry =>
+    tool({ name: 'subagent', input: '{}', meta });
+  const BASE = { kind: 'background-subagent', runId: 'bg-1', subagentType: 'researcher' } as const;
+  const open = () => fireEvent.click(screen.getByRole('button', { name: /委派子代理/ }));
+
+  it('派出時被指定了模型與推理等級：展開才看得到，寫「模型：…（推理：…）」', () => {
+    render(
+      <ToolCard
+        entry={delegation({ ...BASE, model: 'google/gemma-4-31b-it', reasoningEffort: 'off' })}
+        beam={false}
+      />,
+    );
+    expect(document.querySelector('[data-subagent-model]')).toBeNull();
+    open();
+    expect(document.querySelector('[data-subagent-model]')?.textContent).toBe(
+      '模型：google/gemma-4-31b-it（推理：關閉）',
+    );
+  });
+
+  it('只指定了模型：不寫推理那一段', () => {
+    render(
+      <ToolCard entry={delegation({ ...BASE, model: 'google/gemma-4-31b-it' })} beam={false} />,
+    );
+    open();
+    expect(document.querySelector('[data-subagent-model]')?.textContent).toBe(
+      '模型：google/gemma-4-31b-it',
+    );
+  });
+
+  it('沒有指定（meta 沒有這兩欄）：沒有這一行', () => {
+    render(<ToolCard entry={delegation(BASE)} beam={false} />);
+    open();
+    expect(document.querySelector('[data-subagent-model]')).toBeNull();
+  });
+
+  it('欄位型別不對：整顆 meta 當沒有，不畫這一行也不壞', () => {
+    render(<ToolCard entry={delegation({ ...BASE, model: 7 })} beam={false} />);
+    open();
+    expect(document.querySelector('[data-subagent-model]')).toBeNull();
+  });
+
+  it('前景的委派（沒有背景那把鑰匙）不畫，就算 meta 帶了 model 也不畫', () => {
+    render(
+      <ToolCard
+        entry={tool({ name: 'task', input: '{}', meta: { kind: 'other', model: 'm' } })}
+        beam={false}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /task/ }));
+    expect(document.querySelector('[data-subagent-model]')).toBeNull();
+  });
+});
