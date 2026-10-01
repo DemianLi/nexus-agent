@@ -18,6 +18,7 @@
  * @module
  */
 
+import { isLogicalTurnStart } from '@nexus/core';
 import type { InvariantInstaller, NexusPlugin, PluginEntry, SessionEvent } from '@nexus/core';
 
 /** 這個配套入口認領的 package 名。 */
@@ -26,14 +27,14 @@ export const WORKSPACE_CHANGES_INVARIANT_PACKAGE = '@nexus/plugin-workspace-chan
 /** 事件落在一輪裡、那一輪跑過工具、資料是空的。trace 放在 closure 裡：一份日誌一次安裝。 */
 export const workspaceChangesInvariant: InvariantInstaller = (subject, fail) => {
   let started = false;
-  /** 從最近一顆不是 resume 的 `turn/start` 起，有沒有過 `tool/result`。 */
+  /** 從最近一顆開邏輯輪的 `turn/start`（`isLogicalTurnStart`）起，有沒有過 `tool/result`。 */
   let toolResultInTurn = false;
 
   subject.observe((event: SessionEvent) => {
     switch (event.type) {
       case 'turn/start':
         started = true;
-        if (event.data.kind !== 'resume') toolResultInTurn = false;
+        if (isLogicalTurnStart(event)) toolResultInTurn = false;
         break;
       case 'tool/result':
         toolResultInTurn = true;
