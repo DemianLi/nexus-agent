@@ -9,6 +9,9 @@
  * - 停止「不認得／沒在跑」是被接受的 no-op，回應看不出停成沒有，**狀態只看 `subagentStatus`**（#870）：按下去鈕變
  *   「停止中…」，狀態翻成閒著或收線就恢復；十秒還沒翻也恢復（停止是冪等的，沒翻代表那一下沒碰到任何一輪）。
  * - 沒有提供者（單獨畫 Transcript 的測試）就不畫這一區。
+ * - **子代理自己的對話**（#861）：面板打開時用 `subagentHistory` 讀一次（只有歷史、沒有 live），折成獨立的對話畫在輸入框上方；
+ *   狀態從跑著翻成閒著／收線時、送出之後各再讀一次，也可以手動重新讀。單則項目怎麼畫由外面給（`renderEntry`），這裡不 import
+ *   對話列表，免得跟工具卡互相引用。
  *
  * 狀態與佔位字等文字判斷在 `lib/subagent-view.ts`。
  *
@@ -20,16 +23,24 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from 'react';
 import type { FormEvent } from 'react';
-import { Send, Square } from 'lucide-react';
-import type { WireClient } from '@nexus/wire';
+import { RotateCw, Send, Square } from 'lucide-react';
+import type { ReactNode } from 'react';
+import type { ConversationEntry, WireClient } from '@nexus/wire';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import {
+  foldSubagentHistory,
+  SUBAGENT_HISTORY_MAX_MESSAGES,
+  unmatchedEchoes,
+} from '@/lib/subagent-conversation';
+import type { SubagentConversation } from '@/lib/subagent-conversation';
 import {
   canSendToSubagent,
   canStopSubagent,
@@ -46,8 +57,16 @@ type SubagentStatus = Readonly<Record<string, 'running' | 'idle'>> | null;
 export type SubagentSendOutcome =
   { readonly ok: true } | { readonly ok: false; readonly message: string };
 
+/** 讀回子代理自己的對話：成功，或一句話講為什麼讀不回來。 */
+export type SubagentHistoryOutcome =
+  | { readonly ok: true; readonly conversation: SubagentConversation }
+  | { readonly ok: false; readonly message: string };
+
 export interface SubagentControl {
   readonly connected: boolean;
+  /** 單則項目怎麼畫（人話、回覆、工具卡）：跟主對話同一套，由外面給。 */
+  readonly renderEntry: (entry: ConversationEntry) => ReactNode;
+  history(runId: string): Promise<SubagentHistoryOutcome>;
   stateOf(runId: string): SubagentRunState;
   /** 這條對話裡人對它說過的話（本地回聲，依序）。 */
   echoesOf(runId: string): readonly string[];
@@ -71,11 +90,13 @@ export function useSubagentControl({
   threadId,
   status,
   connected,
+  renderEntry,
 }: {
   readonly client: WireClient;
   readonly threadId: string;
   readonly status: SubagentStatus;
   readonly connected: boolean;
+  readonly renderEntry: (entry: ConversationEntry) => ReactNode;
 }): SubagentControl {
   const [echoes, setEchoes] = useState<{
     readonly threadId: string;
@@ -116,15 +137,33 @@ export function useSubagentControl({
     [client, threadId],
   );
 
+  const history = useCallback(
+    async (runId: string): Promise<SubagentHistoryOutcome> => {
+      try {
+        const outcome = await client.subagentHistory(threadId, runId, {
+          maxMessages: SUBAGENT_HISTORY_MAX_MESSAGES,
+        });
+        return outcome.kind === 'ok'
+          ? { ok: true, conversation: foldSubagentHistory(outcome.result) }
+          : { ok: false, message: outcome.message };
+      } catch {
+        return { ok: false, message: '連線出了問題' };
+      }
+    },
+    [client, threadId],
+  );
+
   return useMemo(
     () => ({
       connected,
+      renderEntry,
+      history,
       stateOf: (runId) => subagentRunState(status, runId),
       echoesOf: (runId) => current.get(runId) ?? NONE,
       send,
       interrupt,
     }),
-    [connected, status, current, send, interrupt],
+    [connected, renderEntry, history, status, current, send, interrupt],
   );
 }
 
@@ -175,9 +214,23 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
     return () => clearTimeout(timer);
   }, [stopping, state]);
 
+  // 子代理自己的對話：打開讀一次；跑著翻成閒著或收線、送出之後各再讀一次（只有歷史，沒有 live）。
+  const [tick, setTick] = useState(0);
+  const history = useSubagentHistory(control.history, runId, tick);
+  const previous = useRef(state);
+  useEffect(() => {
+    const before = previous.current;
+    previous.current = state;
+    if (canStopSubagent(before) && !canStopSubagent(state)) setTick((value) => value + 1);
+  }, [state]);
+
   const sendable = canSendToSubagent(state, control.connected);
   const placeholder = control.connected ? subagentPlaceholder(state) : '連線中…';
-  const echoes = control.echoesOf(runId);
+  // 歷史已有的人話就不再畫回聲（重複）；還沒有的（送出到寫進日誌之間）留著。
+  const echoes =
+    history.conversation === undefined
+      ? control.echoesOf(runId)
+      : unmatchedEchoes(control.echoesOf(runId), history.conversation.entries);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -188,8 +241,10 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
     void control.send(runId, body).then((outcome) => {
       if (!alive.current) return;
       setSending(false);
-      if (outcome.ok) setText('');
-      else setError(outcome.message);
+      if (outcome.ok) {
+        setText('');
+        setTick((value) => value + 1);
+      } else setError(outcome.message);
     });
   };
 
@@ -208,6 +263,12 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
       className="bg-stage shadow-stage flex flex-col gap-2 rounded-xl p-3"
       data-subagent-panel={runId}
     >
+      <Conversation
+        history={history}
+        closed={state === 'closed'}
+        renderEntry={control.renderEntry}
+        onReload={() => setTick((value) => value + 1)}
+      />
       {echoes.length > 0 && (
         <ul className="flex flex-col gap-1">
           {echoes.map((echo, index) => (
@@ -264,5 +325,113 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
         </p>
       )}
     </div>
+  );
+}
+
+interface HistoryView {
+  /** 最近一次讀成功的；重讀失敗時還留著舊的。 */
+  readonly conversation?: SubagentConversation;
+  readonly loading: boolean;
+  readonly error?: string;
+}
+
+/** 讀子代理的對話；`tick` 一變就重讀。後到的舊回應不覆蓋新的。 */
+function useSubagentHistory(
+  load: SubagentControl['history'],
+  runId: string,
+  tick: number,
+): HistoryView {
+  const [view, setView] = useState<HistoryView>({ loading: true });
+  useEffect(() => {
+    let live = true;
+    setView((previous) => ({ ...previous, loading: true }));
+    void load(runId).then((outcome) => {
+      if (!live) return;
+      setView((previous) =>
+        outcome.ok
+          ? { conversation: outcome.conversation, loading: false }
+          : {
+              ...(previous.conversation === undefined
+                ? {}
+                : { conversation: previous.conversation }),
+              loading: false,
+              error: outcome.message,
+            },
+      );
+    });
+    return () => {
+      live = false;
+    };
+  }, [load, runId, tick]);
+  return view;
+}
+
+const TASK_CAPTION = '派出的任務';
+
+function Conversation({
+  history,
+  closed,
+  renderEntry,
+  onReload,
+}: {
+  readonly history: HistoryView;
+  readonly closed: boolean;
+  readonly renderEntry: SubagentControl['renderEntry'];
+  readonly onReload: () => void;
+}) {
+  const entries = history.conversation?.entries;
+  const scroller = useRef<HTMLDivElement>(null);
+  // 新讀回來的接在尾巴：捲到底，看到最新的。
+  useLayoutEffect(() => {
+    const element = scroller.current;
+    if (element !== null) element.scrollTop = element.scrollHeight;
+  }, [entries]);
+  return (
+    <section
+      aria-label="背景子代理的對話"
+      className="flex flex-col gap-2"
+      data-subagent-conversation
+    >
+      <div className="flex min-h-8 items-center gap-2">
+        <span className="text-muted-foreground text-xs">子代理的對話</span>
+        {history.loading && <span className="text-muted-foreground text-xs">讀取中…</span>}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="ml-auto max-sm:size-11"
+          aria-label="重新讀取子代理的對話"
+          disabled={history.loading}
+          onClick={onReload}
+        >
+          <RotateCw aria-hidden />
+        </Button>
+      </div>
+      {history.error !== undefined && (
+        <p
+          className={closed ? 'text-muted-foreground text-xs' : 'text-destructive text-xs'}
+          data-subagent-history-error
+        >
+          {closed ? '這個子代理的對話讀不到了。' : `子代理的對話讀不回來：${history.error}`}
+        </p>
+      )}
+      {entries !== undefined && entries.length > 0 && (
+        <div ref={scroller} className="flex max-h-96 flex-col gap-3 overflow-y-auto">
+          {entries.map((entry, index) => (
+            <div key={entry.id} className="flex flex-col gap-1">
+              {index === 0 && entry.kind === 'human' && (
+                <p className="text-muted-foreground text-right text-xs">{TASK_CAPTION}</p>
+              )}
+              {renderEntry(entry)}
+            </div>
+          ))}
+        </div>
+      )}
+      {history.conversation?.hasMore === true && (
+        <p className="text-muted-foreground text-xs">
+          只顯示最近 {SUBAGENT_HISTORY_MAX_MESSAGES} 則，更早的沒有載入。
+        </p>
+      )}
+    </section>
   );
 }

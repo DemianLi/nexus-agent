@@ -1,4 +1,11 @@
-import type { ToolEntry, UplinkResult, WireClient } from '@nexus/wire';
+import type {
+  ConversationEntry,
+  Event,
+  ThreadHistoryOutcome,
+  ToolEntry,
+  UplinkResult,
+  WireClient,
+} from '@nexus/wire';
 import { emptyConversation } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -37,15 +44,46 @@ const ok: UplinkResult = { type: 'success', id: 1, result: { accepted: true } };
 const refused = (error: string, message = '被拒'): UplinkResult =>
   ({ type: 'error', id: 1, error, message }) as UplinkResult;
 
+const frame = (method: string, data: unknown): Event =>
+  ({ type: 'event', method, params: { namespace: [], timestamp: 0, data } }) as Event;
+const said = (role: 'human' | 'ai', id: string, text: string): Event[] => [
+  frame('messages', { event: 'message-start', role, id }),
+  frame('messages', {
+    event: 'content-block-delta',
+    index: 0,
+    delta: { type: 'text-delta', text },
+    id,
+  }),
+  frame('messages', { event: 'message-finish', reason: 'stop', id }),
+];
+const historyOf = (events: Event[], hasMore = false): ThreadHistoryOutcome => ({
+  kind: 'ok',
+  result: { events, firstSeq: 0, throughSeq: 9, hasMore, legacy: false },
+});
+const EMPTY_HISTORY = historyOf([]);
+
+/** 外面給的畫法的替身：只標出是哪一種、寫了什麼，驗的是這一區放了哪些項目。 */
+const renderStub = (entry: ConversationEntry) => (
+  <div data-entry={entry.kind}>
+    {entry.kind === 'tool' ? entry.name : (entry as { text: string }).text}
+  </div>
+);
+const entryKinds = () =>
+  [...document.querySelectorAll('[data-subagent-conversation] [data-entry]')].map((node) =>
+    node.getAttribute('data-entry'),
+  );
+
 function fakeClient(over: Partial<WireClient> = {}) {
   const send = vi.fn(async (..._args: [string, string, string]): Promise<UplinkResult> => ok);
   const interrupt = vi.fn(async (..._args: [string, string]): Promise<UplinkResult> => ok);
+  const history = vi.fn(async (): Promise<ThreadHistoryOutcome> => EMPTY_HISTORY);
   const client = {
     subagentSend: send,
+    subagentHistory: history,
     subagentInterrupt: interrupt,
     ...over,
   } as unknown as WireClient;
-  return { client, send, interrupt };
+  return { client, send, interrupt, history };
 }
 
 type Status = Readonly<Record<string, 'running' | 'idle'>> | null;
@@ -61,7 +99,13 @@ function Harness({
   connected?: boolean;
   entry?: ToolEntry;
 }) {
-  const control = useSubagentControl({ client, threadId: 't1', status, connected });
+  const control = useSubagentControl({
+    client,
+    threadId: 't1',
+    status,
+    connected,
+    renderEntry: renderStub,
+  });
   return (
     <SubagentControlContext.Provider value={control}>
       <Transcript state={{ ...emptyConversation(), entries: [entry] }} isFresh={() => false} />
@@ -295,5 +339,220 @@ describe('單獨停止', () => {
     fireEvent.click(stopButton());
     expect((await screen.findByRole('alert')).textContent).toContain('壞了');
     expect(stopButton().textContent).toBe('停止這一輪');
+  });
+});
+
+describe('子代理自己的對話（#861）', () => {
+  const GUIDANCE = '\n\nYour parent agent id is "root". 收尾前回報。';
+  const conversation = () =>
+    historyOf([
+      frame('lifecycle', { event: 'running', graph_name: 'root' }),
+      ...said('human', 'h1', `查三個檔案${GUIDANCE}`),
+      frame('tools', { event: 'tool-started', tool_call_id: 'c1', tool_name: 'look', input: '{}' }),
+      frame('tools', { event: 'tool-finished', tool_call_id: 'c1', message: '看過了' }),
+      ...said('ai', 'a1', '查完了'),
+      ...said('human', 'h2', '先看 A'),
+      frame('lifecycle', { event: 'completed', graph_name: 'root' }),
+    ]);
+
+  it('展開讀一次：帶 thread、編號與頁大小；畫出人話、工具卡、回覆；第一則標「派出的任務」且去掉回報指示', async () => {
+    const { client } = fakeClient({ subagentHistory: vi.fn(async () => conversation()) });
+    render(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
+    expect(document.querySelector('[data-subagent-conversation]')).toBeNull();
+    open();
+    await waitFor(() => expect(entryKinds()).toEqual(['human', 'tool', 'ai', 'human']));
+    expect(client.subagentHistory).toHaveBeenCalledExactlyOnceWith('t1', 'bg-1', {
+      maxMessages: 40,
+    });
+    const section = document.querySelector('[data-subagent-conversation]') as HTMLElement;
+    expect(within(section).getByText('派出的任務')).toBeTruthy();
+    expect(within(section).getByText('查三個檔案')).toBeTruthy();
+    expect(section.textContent).not.toContain('Your parent agent id');
+  });
+
+  it('讀回來之後捲到最底，看到最新的', async () => {
+    // jsdom 沒有排版：scrollHeight 恆為 0、scrollTop 寫了不留。換成記得住的，才量得到有沒有捲。
+    const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
+    const top = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop');
+    const written: number[] = [];
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      // 只動這一區：對話列表自己的捲動邏輯看到非零高度會去呼叫 jsdom 沒有的 scrollTo。
+      get(this: HTMLElement) {
+        return this.closest('[data-subagent-conversation]') === null ? 0 : 500;
+      },
+    });
+    Object.defineProperty(Element.prototype, 'scrollTop', {
+      configurable: true,
+      get: () => 0,
+      set: (value: number) => void written.push(value),
+    });
+    try {
+      const { client } = fakeClient({ subagentHistory: vi.fn(async () => conversation()) });
+      render(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
+      open();
+      await waitFor(() => expect(entryKinds()).toHaveLength(4));
+      expect(written).toContain(500);
+    } finally {
+      if (height === undefined)
+        delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+      else Object.defineProperty(HTMLElement.prototype, 'scrollHeight', height);
+      if (top === undefined) delete (Element.prototype as { scrollTop?: number }).scrollTop;
+      else Object.defineProperty(Element.prototype, 'scrollTop', top);
+    }
+  });
+
+  it('更早的還沒載入時講一句', async () => {
+    const { client } = fakeClient({
+      subagentHistory: vi.fn(async () => historyOf(said('human', 'h1', '任務'), true)),
+    });
+    render(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
+    open();
+    expect((await screen.findByText(/只顯示最近 40 則/)).textContent).toContain('更早的沒有載入');
+  });
+
+  it('讀的時候寫「讀取中…」，讀回來就沒了', async () => {
+    let resolve: (value: ThreadHistoryOutcome) => void = () => undefined;
+    const { client } = fakeClient({
+      subagentHistory: vi.fn(() => new Promise<ThreadHistoryOutcome>((r) => (resolve = r))),
+    });
+    render(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
+    open();
+    expect(screen.getByText('讀取中…')).toBeTruthy();
+    await act(async () => resolve(conversation()));
+    expect(screen.queryByText('讀取中…')).toBeNull();
+  });
+
+  it('讀不回來：講一句與原因，輸入框照常能用；重新讀取成功後那句消失', async () => {
+    const subagentHistory = vi
+      .fn()
+      .mockResolvedValueOnce({ kind: 'rejected', message: '沒有那份日誌' })
+      .mockResolvedValue(conversation());
+    render(<Harness client={fakeClient({ subagentHistory }).client} status={{ 'bg-1': 'idle' }} />);
+    open();
+    const error = await screen.findByText(/子代理的對話讀不回來：沒有那份日誌/);
+    expect(error).toBeTruthy();
+    expect(input().disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: '重新讀取子代理的對話' }));
+    await waitFor(() => expect(entryKinds()).toHaveLength(4));
+    expect(document.querySelector('[data-subagent-history-error]')).toBeNull();
+  });
+
+  it('重讀失敗時保留上一次讀到的，不把畫面清空', async () => {
+    const subagentHistory = vi
+      .fn()
+      .mockResolvedValueOnce(conversation())
+      .mockResolvedValue({ kind: 'rejected', message: '暫時讀不到' });
+    render(<Harness client={fakeClient({ subagentHistory }).client} status={{ 'bg-1': 'idle' }} />);
+    open();
+    await waitFor(() => expect(entryKinds()).toHaveLength(4));
+    fireEvent.click(screen.getByRole('button', { name: '重新讀取子代理的對話' }));
+    await screen.findByText(/暫時讀不到/);
+    expect(entryKinds()).toHaveLength(4);
+  });
+
+  it('已收線而讀不到：講「讀不到了」，不用紅字報錯', async () => {
+    const subagentHistory = vi.fn(async () => ({
+      kind: 'rejected',
+      message: 'subagent_not_found',
+    }));
+    render(<Harness client={fakeClient({ subagentHistory } as never).client} status={{}} />);
+    open();
+    const line = await screen.findByText('這個子代理的對話讀不到了。');
+    expect(line.className).not.toContain('destructive');
+    expect(document.body.textContent).not.toContain('subagent_not_found');
+  });
+
+  it('拋錯（連線出問題）也當讀不回來，不吞掉', async () => {
+    const subagentHistory = vi.fn(async () => {
+      throw new Error('boom');
+    });
+    render(
+      <Harness
+        client={fakeClient({ subagentHistory } as never).client}
+        status={{ 'bg-1': 'idle' }}
+      />,
+    );
+    open();
+    expect(await screen.findByText(/子代理的對話讀不回來：連線出了問題/)).toBeTruthy();
+  });
+
+  it('跑著翻成閒著（或收線）時再讀一次；沒翻就不重讀', async () => {
+    const { client } = fakeClient();
+    const view = render(<Harness client={client} status={{ 'bg-1': 'running' }} />);
+    open();
+    await waitFor(() => expect(client.subagentHistory).toHaveBeenCalledTimes(1));
+    view.rerender(<Harness client={client} status={{ 'bg-1': 'running' }} />);
+    await act(async () => undefined);
+    expect(client.subagentHistory).toHaveBeenCalledTimes(1);
+    view.rerender(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
+    await waitFor(() => expect(client.subagentHistory).toHaveBeenCalledTimes(2));
+    view.rerender(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
+    await act(async () => undefined);
+    expect(client.subagentHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it('送出成功之後再讀一次；送不出去就不重讀', async () => {
+    const refused = vi.fn(async () => ({
+      type: 'error',
+      id: 1,
+      error: 'subagent_closed',
+      message: 'x',
+    }));
+    const { client } = fakeClient({ subagentSend: refused } as never);
+    render(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
+    open();
+    await waitFor(() => expect(client.subagentHistory).toHaveBeenCalledTimes(1));
+    fireEvent.change(input(), { target: { value: '嗨' } });
+    fireEvent.submit(input().closest('form')!);
+    await screen.findByRole('alert');
+    expect(client.subagentHistory).toHaveBeenCalledTimes(1);
+
+    const good = fakeClient();
+    cleanup();
+    render(<Harness client={good.client} status={{ 'bg-1': 'idle' }} />);
+    open();
+    await waitFor(() => expect(good.client.subagentHistory).toHaveBeenCalledTimes(1));
+    fireEvent.change(input(), { target: { value: '嗨' } });
+    fireEvent.submit(input().closest('form')!);
+    await waitFor(() => expect(good.client.subagentHistory).toHaveBeenCalledTimes(2));
+  });
+
+  it('本地回聲：歷史已經有的不再畫（重複），還沒寫進日誌的留著', async () => {
+    const subagentHistory = vi.fn(async () => conversation());
+    const { client } = fakeClient({ subagentHistory });
+    render(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
+    open();
+    await waitFor(() => expect(entryKinds()).toHaveLength(4));
+    // 「先看 A」歷史裡已有；「再看 B」還沒。
+    for (const line of ['先看 A', '再看 B']) {
+      fireEvent.change(input(), { target: { value: line } });
+      fireEvent.submit(input().closest('form')!);
+      await waitFor(() => expect(input().value).toBe(''));
+    }
+    const echoes = () =>
+      [...document.querySelectorAll('[data-subagent-echo]')].map((n) => n.textContent);
+    await waitFor(() => expect(echoes()).toHaveLength(1));
+    expect(echoes()[0]).toContain('再看 B');
+  });
+
+  it('後到的舊回應不覆蓋新的', async () => {
+    const resolvers: ((value: ThreadHistoryOutcome) => void)[] = [];
+    const { client } = fakeClient({
+      subagentHistory: vi.fn(() => new Promise<ThreadHistoryOutcome>((r) => resolvers.push(r))),
+    });
+    render(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
+    open();
+    await waitFor(() => expect(resolvers).toHaveLength(1));
+    // 讀取中重新讀取的鈕是停用的；用送出觸發第二次讀取。
+    fireEvent.change(input(), { target: { value: '嗨' } });
+    fireEvent.submit(input().closest('form')!);
+    await waitFor(() => expect(resolvers).toHaveLength(2));
+    await act(async () => resolvers[1]!(historyOf(said('human', 'h1', '新的'))));
+    await act(async () => resolvers[0]!(historyOf(said('human', 'h1', '舊的'))));
+    expect(document.querySelector('[data-subagent-conversation]')?.textContent).toContain('新的');
+    expect(document.querySelector('[data-subagent-conversation]')?.textContent).not.toContain(
+      '舊的',
+    );
   });
 });
