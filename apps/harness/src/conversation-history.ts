@@ -19,7 +19,8 @@
  * | `assistant/message` | 模型的回覆，連同推理（#527）；`interrupted` 的那則不收尾，由那一輪的中止標成「已停止」 |
  * | `tool/call` ／ `tool/result` | 工具卡開、收；那則結果的文字成功失敗都帶（成功是輸出、失敗是紅字，[#439](https://github.com/DemianLi/nexus-agent/issues/439)） |
  * | `turn/end` ／ `turn/failed` | 那一輪收掉（中止、失敗、完成）；沒結果的卡照即時那條規則收成失敗 |
- * | `session/end-seed` | 上一個行程停在一輪中間的話，那一輪在這裡收掉 |
+ * | `turn/end`（`reason.kind: "interrupted"`） | 續接時補寫的收尾（#721）：上一個行程死在這一輪中間，畫面與完成同（`completed`），不論那一輪死前有沒有 `interrupt/raised` |
+ * | `session/end-seed` | 舊檔（#721 之前）上一個行程停在一輪中間的話，那一輪在這裡收掉；新檔那一輪已由上一列收掉 |
  * | `deliverables/presented` | `custom` frame，`data` 同即時（{@link deliverablesData}） |
  * | `workspace/changes` | `custom` frame，`data` 同即時（{@link workspaceChangesData}）；它指到的摘要可能已經不在 |
  * | `model/usage` ／ `context/measure` | 用量表（#528）：**一頁各一顆，是到這一頁結尾為止最新的那一筆**，`data` 同即時（{@link modelUsageData}、{@link contextMeasureData}） |
@@ -963,6 +964,10 @@ export function historyFrames(
         } else if (event.data.reason?.kind === 'max-tokens') {
           // 撞到輸出上限（#433）：同即時那條，pump 在收尾 frame 上補 `maxTokens`。
           close(event.time, { event: 'completed', maxTokens: true });
+        } else if (event.data.reason?.kind === 'interrupted') {
+          // 續接補寫的收尾（#721）：那一輪死了，不是停在核准點等人——死前就算記過 `interrupt/raised`
+          // 也不能畫成「等人回覆」。畫面與舊檔在 end-seed 收掉的那一條一致。
+          close(event.time, { event: 'completed' });
         } else if (interrupted) {
           turnOpen = false;
           suspended = true;
@@ -974,7 +979,8 @@ export function historyFrames(
         close(event.time, { event: 'failed', error: event.data.message });
         break;
       case 'session/end-seed':
-        // 上一個行程死在一輪中間：那一輪沒有收尾，在這裡收，同 dsh 冷讀時補的合成收尾。
+        // 舊檔（#721 之前）：上一個行程死在一輪中間，那一輪沒有收尾，在這裡收，同 dsh 冷讀時補的合成收尾。
+        // 新檔由續接補寫的 `turn/end {interrupted}` 收，走不到這裡。
         if (turnOpen || suspended) close(event.time, { event: 'completed' });
         break;
       default:

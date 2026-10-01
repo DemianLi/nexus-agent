@@ -50,6 +50,7 @@ import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { listStoredThreads, readStoredSubagentSession } from './session-list.js';
 import {
   attachSessionPersistence,
+  resumeClosingInterruptedTurn,
   sessionPersistencePlugin,
   SessionNotFoundError,
 } from '@nexus/core';
@@ -313,7 +314,8 @@ async function resumeThread(
   threadId: string,
 ): Promise<ResumedStoredSession | undefined> {
   try {
-    return await store.resume(threadId);
+    // 當掉那一輪的收尾在這裡寫回檔上（#721）；交回的 events 已含補結，`storedCount` 跟著算進去。
+    return await resumeClosingInterruptedTurn(store, threadId);
   } catch (error: unknown) {
     if (error instanceof SessionNotFoundError) return undefined;
     throw error;

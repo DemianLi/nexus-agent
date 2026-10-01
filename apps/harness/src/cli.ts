@@ -40,6 +40,7 @@ import {
   MAX_TOKENS_TURN_END,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
+  resumeClosingInterruptedTurn,
   turnReachedMaxTokens,
   type SessionLog,
 } from '@nexus/core';
@@ -918,7 +919,8 @@ async function runLaunched(
   const resumed =
     resumeDir === undefined || sessionStore === undefined
       ? undefined
-      : await sessionStore.resume(THREAD_ID);
+      : // 當掉那一輪的收尾在這裡寫回檔上（#721），下面吃 `resumed.events` 的各處拿到的已含補結。
+        await resumeClosingInterruptedTurn(sessionStore, THREAD_ID);
   // 模式從日誌來；那一次跑沒有 fence（一顆 `sandbox/mode` 都沒有）就照常從預設起算。
   // `--sandbox` 在這條路上已經被 `parseCliArgs` 擋掉，所以這裡不會蓋掉任何人給的值。
   const resumedSandbox = resumed === undefined ? undefined : recordedSandboxMode(resumed.events);
