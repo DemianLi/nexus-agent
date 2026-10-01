@@ -88,6 +88,19 @@ describe('正文空的回覆', () => {
     expect(bubbleIn(reply!)?.textContent).toContain('好了');
   });
 
+  it('不是模型回覆的新種類項目不畫、也不炸：整格不佔列表的間距', () => {
+    // 線上的項目種類以後還會長（壓縮格 #896 之類），web 還不認得的那一格走到收尾分支會讀 `entry.text`。
+    // 這裡用一則改了 `kind` 的回覆頂替；真的新種類落地後，由它自己的卡換成真的項目。
+    const folded = reduceAll(emptyConversation(), [asked('問'), running(), start('a'), say('a', '你好'), finish('a')]);
+    const entries = folded.entries.map((entry) =>
+      entry.kind === 'ai' ? ({ ...entry, kind: 'compaction' } as never) : entry,
+    );
+    render(<Transcript state={{ ...folded, entries }} isFresh={() => false} />);
+    expect(screen.queryByTestId('ai-entry')).toBeNull();
+    expect(screen.queryByText('你好')).toBeNull();
+    expect(screen.getByText('問')).toBeTruthy();
+  });
+
   it('沒推理、講完了的空回覆整則不畫', () => {
     show([running(), start('a'), finish('a'), start('b'), say('b', '好了'), finish('b')]);
     expect(screen.getAllByTestId('ai-entry')).toHaveLength(1);
