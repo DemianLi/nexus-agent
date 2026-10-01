@@ -481,7 +481,7 @@ function summaryBody(text: string): string {
  * 共用，規則見 `@nexus/wire` 的 `compaction.ts`。
  *
  * @param event - 那顆 `compaction/summary` 連同它在日誌裡的 `seq`。
- * @param maxBytes - 摘要全文的位元組上限，就是工具結果文字那一格（`toolText.maxBytes`），見 {@link capToolText}。
+ * @param maxBytes - 摘要全文的位元組上限，就是 `tool-text` 那一列（`toolText.maxBytes`），見 {@link capToolText}。
  * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `CompactionPayload`。
  */
 export function compactionData(
@@ -920,7 +920,7 @@ export function historyFrames(
         unsettled.delete(event.data.callId);
         // **成功也帶文字**（#439）：抽字的規則與即時那條共用（`tool-result-text.ts`），
         // 兩邊各寫一份的話，同一張卡會「即時一個樣、重新整理另一個樣」。
-        const text = toolResultText(event.data.message, toolTextMaxBytes);
+        const text = toolResultText(event.data.message);
         // 格式 9 以前沒有 `message`：失敗的那張只剩錯誤碼可講，碼也沒有就交給折疊器說「未指名的錯誤」。
         const reason = text ?? (event.data.isError ? event.data.error?.code : undefined);
         // meta 同即時那條（`ThreadPump.#noteVerdict`）：失敗的不帶，上限照 `capToolResultMeta`。格式 16 以前沒有這一格。

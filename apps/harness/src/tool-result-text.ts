@@ -10,8 +10,8 @@
  *
  * 我們這邊另一個現成的來源是基座那顆 `tool-finished` 的 `output`，但它**比日誌差**：基座的
  * `FilesystemMiddleware` 排在圍堵外層，超過 80,000 字元的結果在那裡已經被換成預覽
- * （`agent-factory.ts` 的 `TOOL_RESULT_STASH_PREFIX`），而圍堵寫日誌時拿到的還是原文
- * （`@nexus/core` 的 `session-log.ts`）。加上它是序列化過的 LangChain `ToolMessage`，
+ * （`agent-factory.ts` 的 `TOOL_RESULT_STASH_PREFIX`），而圍堵寫日誌時拿到的是基座搬移之前那一份
+ * （`@nexus/core` 的 `session-log.ts`；外溢層開著時是外溢換過的那則，見下面）。加上它是序列化過的 LangChain `ToolMessage`，
  * 拆它等於把基座的形狀搬進前端。所以**兩條路一律從 `tool/result.message` 抽**。
  *
  * ## 為什麼拒絕多塊
@@ -21,36 +21,29 @@
  * dsh 的卡在同樣的輸入下什麼都不顯示。今天工具結果的內容是字串（實測），所以這條規則
  * 現在只是把「將來多了圖片或檔案區塊」那天的行為先定死。
  *
- * ## 上限是換了一層的政策（**登記的偏離**）
+ * ## 文字放上線不截（[#736](https://github.com/DemianLi/nexus-agent/issues/736)）
  *
- * dsh 也有上限，但它截在**模型面**：`spill-policy` 掛在 `tools/post-execute`，base bundle 給
- * `maxInlineBytes: 50000`（`packages/bundle/base/cordis.patch.yml:393-396`），超過就把全文存成
- * spill 檔、內容換成 head/tail 各半的預覽加一行**帶檔案位址**的通知。日誌因此天生就是截過的，
- * 日誌之後到畫面沒有任何內容上限。
+ * 照 dsh：上限在**模型面**，日誌到畫面這一段不再截。dsh 的 `spill-policy` 掛在 `tools/post-execute`，超過預算就把全文
+ * 存成 spill 檔、內容換成頭尾預覽加一行帶路徑的通知（`packages/spill/spill-policy/src/index.ts:133-150`），日誌記的就是
+ * 換過的那則（`packages/core/agent-loop/src/tool-calls.ts:152-156`）；工具卡直接拿 `tool/result` 的內容
+ * （`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:64-74`）。以上對 dsh `c1b47e4`，卡上引的 `477b4f4` 同內容。
  *
- * ⚠️ **前提已不成立（[#719](https://github.com/DemianLi/nexus-agent/issues/719)）**：我們現在有外溢層（`@nexus/core` 的
- * `spill-policy.ts`，模型面、超標存主機檔、通知帶路徑），日誌記的也是換過的預覽。以下這一段「沒有 spill、日誌保全文」是
- * 寫這段當時的事實，**這條偏離怎麼收是 [#736](https://github.com/DemianLi/nexus-agent/issues/736) 的事，這裡不改寫**。
+ * 我們的外溢層（[#719](https://github.com/DemianLi/nexus-agent/issues/719)，`@nexus/core` 的 `spill-policy.ts`）做的是
+ * 同一件事，日誌記的也是換過的那則。所以這裡**原樣交出日誌裡那則**：即時與重播都是預覽加路徑，一字不差，沒有第二層截斷。
+ * 這裡原本截在**放上線**那一刻（頭尾各半、中間一句「沒有送出來」），那是「沒有外溢、日誌保全文」時登記的偏離；
+ * 前提不在了，偏離收掉。
  *
- * 我們沒有 spill 這個能力，日誌又刻意保著搬移前的全文，所以只能截在**放上線**這一刻：
+ * 一張卡的文字因此由**生產者自己的上限**決定，不再由 `tool-text` 那一列決定：
  *
- * - **數值由清單上 `tool-text` 那一列講**（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）——
- *   預設 50000 一樣照 dsh `spill-policy` 的 `maxInlineBytes`，但它現在是 schema 的預設值，不是
- *   寫死在這裡的常數。**「可設定」這件事本身沒有偏離**：dsh 那側它本來就是條目的一格；
- *   **寫死才是偏離**，而 #538 把它收掉了。頭尾各半的形狀照 dsh
- *   （`spill-policy/src/index.ts:96-103`，`Math.ceil`／`Math.floor` 分頭尾）；
- * - 但**通知的位置跟 dsh 不一樣**：dsh 的 `TextRetainer({ kind: 'headTail' })` 在兩段之間
- *   **不插任何東西**，通知接在整段預覽的**尾巴**（`spill-policy/src/index.ts:170` 的
- *   `previewText + '\n\n' + notice`）。把說明插在**中間**的是 dsh 的另一顆 plugin——
- *   `compaction-tool-result-pruner` 的 `PRUNE_MARKER`（`src/config.ts:7`），而那顆的單位是
- *   code point 不是 byte。**我們等於各取一半**：位元組上限與頭尾取自 `spill-policy`，
- *   中間那句說明取自 pruner。查證見 [#539](https://github.com/DemianLi/nexus-agent/pull/539)；
- * - **通知裡也沒有位址**可指（沒有 spill 檔），只能說被截掉了。也**不說全文在哪**：中間那句照 pruner 的
- *   `PRUNE_MARKER` 只講被截掉，而會話日誌自
- *   [#613](https://github.com/DemianLi/nexus-agent/issues/613) 起可以不落盤，「全文在會話日誌裡」那時不成立；
- * - **不學 dsh 的 `read` 例外**：那個例外成立在模型面（`read` 自己已經有上限），我們截在傳輸層，
- *   放行就等於讓一次 2000 行的 `read` 整份上線；
- * - **子代理不另開一條 arm**：dsh 的子呼叫走另一個只縮日誌副本的分支，我們一視同仁。
+ * - **外溢層開著**：一則最多 `maxInlineTokens`（出廠 12500）個估算 token，含通知。
+ * - **`read_file` 不外溢**（同 dsh 只放過 `read`）：受讀檔自己的上限，一頁 2000 行、累計 50 KiB 就停
+ *   （`@nexus/core` 的 `read-continuation.ts`）；單行超過時退到基座格式化後的 80,000 字元。
+ * - **外溢層關掉**（刪掉 `maxInlineTokens`）：日誌回到全文，文字沒有上限——**dsh 關掉時也一樣**。
+ *
+ * 一頁歷史的位元組預算怎麼跟著算，見 `@nexus/wire` 的 `HISTORY_PAGE_MAX_BYTES`。
+ *
+ * `tool-text` 那一列仍然管兩件事：**`meta` 的上限**（見 {@link capToolResultMeta}）與**壓縮摘要全文**
+ * （[#896](https://github.com/DemianLi/nexus-agent/issues/896)，用 {@link capToolText}）。
  *
  * @module
  */
@@ -93,6 +86,9 @@ function tail(text: string, max: number): string {
 /**
  * 套上限：超過就取頭尾各半，中間放一行通知。
  *
+ * **今天只有壓縮摘要全文用它**（[#896](https://github.com/DemianLi/nexus-agent/issues/896)）；工具結果文字自
+ * [#736](https://github.com/DemianLi/nexus-agent/issues/736) 起不再經過這裡，見檔頭。
+ *
  * **上限是傳進來的，不是這個模組的常數**（#538）：值住在清單上 `tool-text` 那一列，由
  * `serve.ts` 在起動期解出來、穿過 `createWireHandler` 傳到這裡。刻意**沒有預設參數**——
  * 一個預設值會讓「呼叫端忘了傳」跟「設定就是這個數」長得一模一樣，而這條路上有兩個呼叫端。
@@ -116,22 +112,18 @@ export function capToolText(text: string, maxBytes: number): string {
 }
 
 /**
- * 一則 `tool/result` 的結果文字。
+ * 一則 `tool/result` 的結果文字，**原樣**：不截，見檔頭（#736）。
  *
  * @param message - 日誌記的那一則（格式 9 以前沒有，所以可以是 `undefined`）。
- * @param maxBytes - 上限，見 {@link capToolText}。
- * @returns 那段文字（已套上限）；沒有訊息、或內容不是剛好一塊文字時 `undefined`。
+ * @returns 那段文字；沒有訊息、或內容不是剛好一塊文字時 `undefined`。
  */
-export function toolResultText(
-  message: LoggedMessage | undefined,
-  maxBytes: number,
-): string | undefined {
+export function toolResultText(message: LoggedMessage | undefined): string | undefined {
   const content: unknown = message?.data.content;
-  if (typeof content === 'string') return capToolText(content, maxBytes);
+  if (typeof content === 'string') return content;
   if (!Array.isArray(content) || content.length !== 1) return undefined;
   const only = content[0] as { type?: unknown; text?: unknown } | null;
   if (only?.type !== 'text' || typeof only.text !== 'string') return undefined;
-  return capToolText(only.text, maxBytes);
+  return only.text;
 }
 
 /** 序列化之後的位元組數。 */
@@ -140,7 +132,7 @@ function metaBytes(meta: unknown): number {
 }
 
 /**
- * 讀檔 meta 的上限是工具文字上限的幾倍（[#630](https://github.com/DemianLi/nexus-agent/issues/630)）。
+ * 讀檔 meta 的上限是 `tool-text` 那一列 `maxBytes` 的幾倍（[#630](https://github.com/DemianLi/nexus-agent/issues/630)）。
  *
  * 是乘數不是另一個寫死的值：部署在 patch 裡改 `tool-text` 的 `maxBytes`，讀檔 meta 的上限跟著變。
  * 歷史分頁的上限照一張卡的最壞值算，改這個數要一起看 `@nexus/wire` 的 `HISTORY_PAGE_MAX_BYTES`
@@ -162,8 +154,8 @@ function isReadMeta(meta: unknown): boolean {
 /**
  * 一格 `tool/result.meta` 放上線之前的上限。即時與重播共用，理由同 {@link toolResultText}。
  *
- * - **搜尋與 diff 的上限等於工具文字的上限**，同一個 `maxBytes`
- *   （[#617](https://github.com/DemianLi/nexus-agent/issues/617) 決定 2）。
+ * - **搜尋與 diff 的上限就是 `tool-text` 那一列的 `maxBytes`**
+ *   （[#617](https://github.com/DemianLi/nexus-agent/issues/617) 決定 2；那時它也是工具文字的上限，#736 之後文字不再截）。
  * - **讀檔是 {@link READ_META_MAX_BYTES_FACTOR} 倍**（[#630](https://github.com/DemianLi/nexus-agent/issues/630)）：
  *   #602 把一頁放大到 dsh 的 2000 行之後，每行 `{"number":N,"text":"…"}` 的外殼約 25 位元組，短行的大檔
  *   文字沒被截、meta 卻超過一倍的上限。兩倍裝得下一整頁 2000 行短行。
@@ -173,7 +165,7 @@ function isReadMeta(meta: unknown): boolean {
  *   一次大改寫的 diff 會讓一頁失控（偏離）。web 照 dsh 退：write 用參數算 diff，其他走 generic。
  *
  * @param meta - 日誌裡那一份。
- * @param maxBytes - 工具文字的上限（位元組）；讀檔 meta 用它的 {@link READ_META_MAX_BYTES_FACTOR} 倍。
+ * @param maxBytes - `tool-text` 那一列的上限（位元組）；讀檔 meta 用它的 {@link READ_META_MAX_BYTES_FACTOR} 倍。
  * @returns 放得下的那一份；放不下就 `undefined`。
  */
 export function capToolResultMeta(meta: unknown, maxBytes: number): unknown {

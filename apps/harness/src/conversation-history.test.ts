@@ -780,7 +780,7 @@ describe('一頁的位元組上限', () => {
    * 防線自己的量測：`fitBytes` 裡那個參數被拿掉的話，這裡會紅。
    */
   it('最後一輪停在核准點時，秤到的不小於真的送出去的', () => {
-    // 170 則滿版文字 ≈ 8.5 MB，撐得破一頁（上限算的是每張卡文字加 meta，#617）。
+    // 170 則各 50000 位元組的文字 ≈ 8.5 MB，撐得破一頁（文字自 #736 起原樣上線）。
     const settled = Array.from({ length: 170 }, (_, i) => `s${i}`);
     const pending = Array.from({ length: 60 }, (_, i) => `p${i}`);
     const body = 'x'.repeat(DEFAULT_TOOL_TEXT_MAX_BYTES);
@@ -804,21 +804,23 @@ describe('一頁的位元組上限', () => {
   });
 
   /**
-   * **幾個常數的關係要有人釘**：`HISTORY_PAGE_MAX_BYTES` 住在 `@nexus/wire`、每則上限與讀檔 meta 的倍數
+   * **幾個常數的關係要有人釘**：`HISTORY_PAGE_MAX_BYTES` 住在 `@nexus/wire`、`meta` 的上限與讀檔 meta 的倍數
    * 住在這個 app，wire 不能往上 import，所以那邊只寫得出字面值。這條在唯一同時相依兩邊的地方把三個值
    * 一起釘死——任何一個動了，這裡會紅，逼人回頭重讀 `protocol.ts` 那段推算。同一個做法見 `@nexus/wire`
    * 的 `conversation.ts:927`。
    *
-   * ## 最壞的一張卡是讀檔（[#630](https://github.com/DemianLi/nexus-agent/issues/630)）
+   * ## 一張卡是文字加 meta，文字的上限在生產者（[#736](https://github.com/DemianLi/nexus-agent/issues/736)）
    *
-   * 文字上限 `maxBytes`，讀檔 meta 的上限是它的 {@link READ_META_MAX_BYTES_FACTOR} 倍，所以一張讀檔卡
-   * 最壞是 `maxBytes × 3`＝150,000，一頁約裝 53 張。搜尋與 diff 的 meta 仍是一倍，那兩種卡最壞 100,000，
-   * 一頁 80 張——8 MB 當初就是照它們挑的（#617）。8 MB 沒跟著改（demian 2026-09-25 拍板）：這個上限
-   * 本來就是軟的，切點只落在輪邊界上。
+   * #736 之前文字也截在 `tool-text` 那一格，一張讀檔卡最壞是 `maxBytes × 3`＝150,000、一頁約 53 張。#736 照 dsh
+   * 拿掉傳輸截斷之後，文字由生產者自己的上限決定：讀檔不外溢，一頁選到的行（含換行）累計 50 KiB 就停、最多
+   * 2000 行，每行再加 7 位元組的行號（`@nexus/core` 的 `read-continuation.ts`，那兩個數沒匯出，這裡寫字面值）。
+   * 所以一張讀檔卡最壞約 165,200（文字 65,200 加 meta 100,000），一頁約裝 48 張。外溢層管的其他工具換成位元組
+   * 沒有固定的數（估算 token，量到的數寫在 `protocol.ts`），不在這條裡。8 MB 沒跟著改（demian 2026-09-25 拍板）：
+   * 這個上限本來就是軟的，切點只落在輪邊界上。
    *
    * ## 它只保證到 schema 的預設值為止（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）
    *
-   * 每則上限變成一列條目的 `config` 之後，**部署在 patch 裡改掉它，這些比例就不再成立，而且沒有
+   * meta 的上限是一列條目的 `config`，**部署在 patch 裡改掉它，這些比例就不再成立，而且沒有
    * 任何東西會紅**——配對的另一半是協定常數，在 #457 的射程外，而且 wire 結構上 import 不到 harness。
    *
    * 那是 #538 三選一裡**明著選的第三條**（2026-09-23 拍板），不是漏掉的。另外兩條分別要把協定常數
@@ -827,15 +829,15 @@ describe('一頁的位元組上限', () => {
    *
    * 所以這一條比的是 `DEFAULT_TOOL_TEXT_MAX_BYTES`，**名字本身就是射程宣告**：它釘的是出廠那一份。
    */
-  it('頁上限裝得下 53 張最壞的讀檔卡、80 張搜尋或 diff 卡——在 schema 的預設上限底下', () => {
+  it('頁上限裝得下約 48 張最壞的讀檔卡——在 schema 的預設上限底下', () => {
     expect({
       page: HISTORY_PAGE_MAX_BYTES,
-      text: DEFAULT_TOOL_TEXT_MAX_BYTES,
+      meta: DEFAULT_TOOL_TEXT_MAX_BYTES,
       readMetaFactor: READ_META_MAX_BYTES_FACTOR,
-    }).toEqual({ page: 8_000_000, text: 50_000, readMetaFactor: 2 });
-    const readCard = DEFAULT_TOOL_TEXT_MAX_BYTES * (1 + READ_META_MAX_BYTES_FACTOR);
-    const otherCard = DEFAULT_TOOL_TEXT_MAX_BYTES * 2;
-    expect(Math.floor(HISTORY_PAGE_MAX_BYTES / readCard)).toBe(53);
-    expect(HISTORY_PAGE_MAX_BYTES).toBe(80 * otherCard);
+    }).toEqual({ page: 8_000_000, meta: 50_000, readMetaFactor: 2 });
+    const readText = 50 * 1024 + 2_000 * 7;
+    const readCard = readText + DEFAULT_TOOL_TEXT_MAX_BYTES * READ_META_MAX_BYTES_FACTOR;
+    expect(readCard).toBe(165_200);
+    expect(Math.floor(HISTORY_PAGE_MAX_BYTES / readCard)).toBe(48);
   });
 });

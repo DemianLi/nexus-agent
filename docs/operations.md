@@ -403,7 +403,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `thread-search` | 按內容搜尋以前的會話（側欄的搜尋框）；**出廠不開** | 有（一格） | 關得掉（＝搜尋一律失敗） |
 | `browser-session` | 瀏覽器 cookie 的絕對有效期 | 有（一格） | **關不掉** |
 | `deliverable-files` | 交付檔的三個上限（一頁位元組／整檔位元組（只管整檔讀）／一頁行數） | 有（三格） | **關不掉** |
-| `tool-text` | 一段工具結果文字放上線的位元組上限 | 有（一格） | **關不掉** |
+| `tool-text` | 工具結果的結構化資料（`meta`）與壓縮摘要全文放上線的位元組上限（結果文字本身不截） | 有（一格） | **關不掉** |
 | `live-model` | `--live` 時真實供應商的連線值（端點／預設模型 id／逾時／重試次數），加上模型型錄（每顆的窗口、輸出上限、收不收圖、怎麼關推理） | 有（五格） | **關不掉** |
 | `recursion-limit` | agent 迴圈的 super-step 上限 | 有（一格） | **關不掉** |
 
@@ -416,7 +416,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 - **`session-persistence`、`thread-title`、`thread-title-llm`、`thread-search`、`browser-session`、`deliverable-files`、
   `tool-text`、`live-model` 跑在註冊表存在之前**，所以 `apply` 是空的、值在起動期解一次往下傳。`thread-search`、
   `browser-session`、`deliverable-files`、`tool-text` 的消費點分別是內容搜尋的索引、瀏覽器會話的建構子、兩支交付方法（`deliverable.read`／`deliverable.readBytes`）、
-  以及工具結果文字那兩條（即時的 `ThreadPump` 與重播的 `historyPage`，都在 `createWireHandler` 的閉包底下），
+  以及工具結果 `meta` 與壓縮摘要那兩條（即時的 `ThreadPump` 與重播的 `historyPage`，都在 `createWireHandler` 的閉包底下），
   **只在 `serve` 上有作用**；**`session-persistence`、`thread-title` 與 `live-model` 兩條路都讀**——`session-persistence` 由
   `cli.ts` 與 `serve.ts` 各自在接落盤時讀；`thread-title` 在 serve 上給冷讀清單、pump 與歷史，在 CLI 上給
   寫退回標題的 `runTurn`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）；`live-model` 各自在起動期
@@ -433,7 +433,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 `thread-search` 關掉就真的沒有內容搜尋；它跟出廠的 `openAt: never` 差在哪裡見下面那一段。
 
 **其餘六列關不掉**，但理由分兩種。起動期那五列是「關掉沒有意義」：它們**不裝任何東西**，關掉
-不會讓標題不再被裁切、cookie 不再過期、交付檔不再有上限、工具結果不再被截、
+不會讓標題不再被裁切、cookie 不再過期、交付檔不再有上限、工具結果的 `meta` 與摘要不再被截、
 `--live` 不再有連線設定——那一列
 被當成沒有那一列，值回到 schema 的預設，行為一個位元組都不變。`recursion-limit` 硬一級
 ——關掉它確實會讓那顆服務消失，但組裝點接著落回內建的 100，**護欄還在**，讀起來卻像把迴圈上限
@@ -442,11 +442,12 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 
 **改 `tool-text` 的 `maxBytes` 會讓一條跨套件的比例失效，而且沒有任何東西會擋你。**
 `@nexus/wire` 的一頁歷史上限是 8 MB，那個數字是照每張工具卡的最壞值算的：一張卡是結果文字加上給專屬卡的
-結構化資料（`meta`），文字的上限是這一格，`meta` 的上限是這一格（搜尋、改檔）或它的兩倍（讀檔，
-[#630](https://github.com/DemianLi/nexus-agent/issues/630)），所以一頁最多裝 80 張滿版搜尋卡、約 53 張滿版
-讀檔卡。那個關係由 `apps/harness` 的一條測試釘著，
+結構化資料（`meta`），`meta` 的上限是這一格（搜尋、改檔）或它的兩倍（讀檔，
+[#630](https://github.com/DemianLi/nexus-agent/issues/630)）。結果文字自
+[#736](https://github.com/DemianLi/nexus-agent/issues/736) 起不歸這一格管：它原樣上線，上限在模型面（`spill-policy`
+那一列與讀檔自己的上限），算法寫在 `HISTORY_PAGE_MAX_BYTES` 的說明上。那個關係由 `apps/harness` 的一條測試釘著，
 但**它只釘得住出廠那一份**：你在 patch 裡把 `maxBytes` 改小，一頁能裝的滿版卡就變多，8 MB 那個上限相對
-變鬆；改大則相反。兩邊都
+變鬆；改大則相反。關掉 `spill-policy` 也會讓卡上的文字沒有上限（同 dsh），8 MB 是軟的，超標時 server 只會講一聲。兩邊都
 不會有任何錯誤訊息。這是明著接受的代價（[#538](https://github.com/DemianLi/nexus-agent/issues/538)
 三選一的第三條）——另外兩條要把協定常數變成設定、或讓 wire 反過來收 harness 注入的值，都在動協定層
 的形狀。**實務上的建議：動這一格時，一頁歷史的大小上限要自己重算一次。**

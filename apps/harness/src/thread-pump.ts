@@ -812,7 +812,7 @@ function danglingToolCalls(values: unknown): { readonly id: string; readonly nam
 export class ThreadPump {
   readonly #agent: PumpAgent;
   readonly #threadId: string;
-  /** 一段工具結果文字放上線的上限，見建構子的 `toolText`（#538）。 */
+  /** `tool-text` 那一列的上限，見建構子的 `toolText`（#538）：管 meta 與壓縮摘要，結果文字自 #736 起不截。 */
   readonly #toolTextMaxBytes: number;
   /** 退回標題的兩個上限（#647），建構時驗過。 */
   readonly #titleLimits: ThreadTitleLimits;
@@ -960,7 +960,8 @@ export class ThreadPump {
    * @param rootSeed - root 日誌的 seed：serve 碰到一條以前寫過的 thread 時，上一個行程留下的
    *   事件（[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A，同 CLI 的
    *   `--resume`）。省略即一份新日誌。
-   * @param toolText - 一段工具結果文字放上線的上限（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）。
+   * @param toolText - `tool-text` 那一列（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）：工具結果 meta 與壓縮摘要
+   *   放上線的上限；結果文字本身自 [#736](https://github.com/DemianLi/nexus-agent/issues/736) 起不截。
    *   值由 `serve.ts` 在起動期從清單解出來、經 `createWireHandler` 傳進來。**省略即 schema 的
    *   預設**——這條路上有二十九個測試呼叫點，全部改成必填買不到任何東西：它們量的不是上限。
    * @param titleLimits - 退回標題的兩個上限（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）。來路與
@@ -2418,8 +2419,8 @@ export class ThreadPump {
       failed: isError,
       // **成功也帶文字**（#439）：dsh 的工具卡文字就是這一則的內容，`isError` 是另一個旗標。
       // 抽字的規則與重播那一條共用（`tool-result-text.ts`），兩邊不共用的話同一張卡會「即時
-      // 一個樣、重新整理另一個樣」。meta 的上限同理。
-      text: toolResultText(message, this.#toolTextMaxBytes),
+      // 一個樣、重新整理另一個樣」。文字原樣不截（#736），meta 的上限同理共用。
+      text: toolResultText(message),
       ...(capped === undefined ? {} : { meta: capped }),
     };
     if (background) {

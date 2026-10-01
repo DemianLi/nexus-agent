@@ -388,7 +388,7 @@ export interface WireHandlerOptions {
    */
   readonly deliverableLimits?: DeliverableFilesConfig;
   /**
-   * 一段工具結果文字放上線的上限（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）。
+   * 工具結果 meta 與壓縮摘要放上線的上限（[#538](https://github.com/DemianLi/nexus-agent/issues/538)；結果文字自 #736 起不截）。
    *
    * **兩個消費點都在這個閉包底下**：即時那條走 `new ThreadPump(...)`，重播那條走
    * `historyPage(...)`。省略即 schema 的預設。
