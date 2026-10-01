@@ -162,6 +162,8 @@ export type SessionEventType =
   | 'model/usage'
   | 'model/start'
   | 'model/end'
+  | 'llm/retry'
+  | 'llm/retry-started'
   | 'assistant/message'
   | 'user/message'
   | 'compaction/summary'
@@ -200,6 +202,20 @@ export type SessionEventType =
 export type TurnEndReason =
   | { readonly kind: 'aborted'; readonly cause: { readonly kind: 'user' | 'parent' } }
   | { readonly kind: 'max-tokens' };
+
+/**
+ * 一次模型請求失敗的穩定描述。照 dsh 的 `LlmFailure`（`packages/llm/llm/src/types.ts:45`）：訊息給人看，
+ * `code` 給機器路由，`status` 是供應商回的 HTTP 狀態（有才帶）。
+ *
+ * `code` 的詞彙取 dsh 預設可重試集裡那幾個（`llm/src/retry-policy.ts:18`）：`RATE_LIMIT`、`SERVER`、
+ * `TIMEOUT`、`TRANSPORT`——我們的重試只對這幾類發生。分類歸 adapter（`live-model.ts`），這裡只是形狀。
+ * #434 替 `turn/failed` 定錯誤欄位時用同一個形狀；誰先合誰定。
+ */
+export interface LlmFailure {
+  readonly message: string;
+  readonly code: string;
+  readonly status?: number;
+}
 
 /** 產生標題的那一次模型呼叫走的路由。照 dsh 的 `SessionTitleModelIdentity`。 */
 export interface SessionTitleModelIdentity {
@@ -461,6 +477,34 @@ export interface SessionEventMap {
    * 沒配到 `model/end` 的 `model/start` 只有一種成因：行程在呼叫中途死了。
    */
   'model/end': Record<string, never>;
+  /**
+   * 一次模型請求失敗、而且**排定了重試**（[#712](https://github.com/DemianLi/nexus-agent/issues/712)）。照 dsh 的
+   * `llm/retry`（`packages/llm/llm-retry/src/types.ts:9`）：排定時先寫，再開始等。**只記排定、不記完成**——
+   * 成敗看後面的 `model/end`／`turn/failed`；預算用盡的那一次不排，所以不寫。
+   *
+   * 落在一次模型呼叫的 `model/start`／`model/end` 之間（重試包在那一對之內），一次呼叫的所有重試共用一個
+   * `retryId`。**不進模型**：推模型歷史的一側不讀。
+   *
+   * 欄位比 dsh 少，理由與計數的壽命見 {@link ./llm-retry.ts}：沒有 `delayMs`（接縫看不到退避）、沒有
+   * `turn`／`step`（我們沒有 `step/*`）。
+   */
+  'llm/retry': {
+    readonly retryId: string;
+    /** 第幾次重試，從 1 起算。 */
+    readonly retry: number;
+    readonly maxRetries: number;
+    readonly failure: LlmFailure;
+  };
+  /**
+   * 排定的那次重試等完、**真的要重打**了。與同一個 `retryId` 與 `retry` 的 `llm/retry` 配對；等待中被取消的
+   * 重試沒有這一顆（{@link ./llm-retry.ts} 的「取消之後不再寫」）。`waitedMs` 是**實際**等了多久——dsh 在
+   * `llm/retry` 上帶的是排定的 `delayMs`，這裡的接縫拿不到。
+   */
+  'llm/retry-started': {
+    readonly retryId: string;
+    readonly retry: number;
+    readonly waitedMs: number;
+  };
   /**
    * 一次模型呼叫回來的那一則回覆，**模型看到的原樣**：文字、推理、`tool_calls` 都在 `message` 裡
    * （{@link ./logged-message.ts | LoggedMessage}）。推模型歷史的一側讀的就是它。
@@ -795,7 +839,7 @@ export interface SessionEventMap {
    *
    * dsh 的 `turn` 出自 `turnBoundary` 投影的 `lastTurn`，我們沒有那個投影，日誌與 wire 上也都沒有輪的
    * 編號（見 `tool/call` 那一條）。這一筆屬於哪一輪照 repo 既有的規則由 `seq` 推：往前找最近一顆不是
-   * resume 的 `turn/start`（`feedback.ts` 與歷史分頁都這樣定輪）。放一個自己數的號進來，就會有兩個
+   * resume 的 `turn/start`（{@link isLogicalTurnStart}，各讀方共用）。放一個自己數的號進來，就會有兩個
    * 可能對不上的輪。
    *
    * web 只收 root 那一份的這一顆，即時與重新整理同一條規則——歷史路由只讀 root（`conversation-history.ts`）。
@@ -818,7 +862,7 @@ export interface SessionEventMap {
    *
    * ## 對 dsh 的偏離：沒有 `turn`
    *
-   * 同 `deliverables/presented`：這一筆屬於哪一輪由 `seq` 推，往前找最近一顆不是 resume 的 `turn/start`
+   * 同 `deliverables/presented`：這一筆屬於哪一輪由 `seq` 推，往前找最近一顆開邏輯輪的 `turn/start`（{@link isLogicalTurnStart}）
    * （[#443](https://github.com/DemianLi/nexus-agent/issues/443) 第二則決議）。**所以它一定落在它那一輪的
    * `turn/start` 之後、下一輪的之前**，記錄器為此在輪內記，見那個套件的 `recorder.ts`。
    *
@@ -1253,6 +1297,30 @@ export function currentTurnStart(events: readonly SessionEvent[]): number {
     if (type === 'turn/start') return at;
   }
   return -1;
+}
+
+/** 開新的邏輯輪的那一種 `turn/start`：`kind` 收窄成不是 `resume`。守衛的假支不會被誤收窄掉整個 `turn/start`。 */
+export type LogicalTurnStartEvent = Omit<SessionEvent<'turn/start'>, 'data'> & {
+  readonly data: Exclude<SessionEventMap['turn/start'], { readonly kind: 'resume' }>;
+};
+
+/**
+ * 這一顆**開不開新的邏輯輪**：是 `turn/start`，而且 `kind` 不是 `resume`（[#682](https://github.com/DemianLi/nexus-agent/issues/682)）。
+ *
+ * 一筆事件屬於哪一輪，規則是「由 `seq` 往前找最近一顆開邏輯輪的 `turn/start`」——`resume` 是回覆核准，
+ * 接著上一輪停在核准點的那幾顆呼叫，不另開一輪。這條規則原本每個讀方各寫一次，**多寫一份的人把
+ * `resume` 當成新輪，不會讓任何測試變紅**（只是畫面上多一輪、評分掛錯輪），所以跟
+ * {@link currentTurnStart} 一樣住在詞彙的擁有者旁邊。
+ *
+ * 逐顆的述詞，不是往回走：讀方都是往前折的迴圈或觀察者。它只回答「這一顆開不開新的邏輯輪」，
+ * `session/end-seed` 留給各讀方自己處理（各份對「end-seed 之後來的 `resume`」的假設不一樣，見 #682）。
+ * 不是 `turn/start` 的事件回 `false`。長期照 dsh 讓 `turn/start` 自己帶輪號的話，這個述詞是要改的那一處。
+ *
+ * @param event - 日誌的一顆事件。
+ * @returns 開新的邏輯輪就是 `true`。
+ */
+export function isLogicalTurnStart(event: SessionEvent): event is LogicalTurnStartEvent {
+  return event.type === 'turn/start' && event.data.kind !== 'resume';
 }
 
 /**

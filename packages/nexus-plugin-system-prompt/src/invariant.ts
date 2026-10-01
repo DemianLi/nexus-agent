@@ -1,7 +1,7 @@
 /**
  * `@nexus/plugin-system-prompt` 的不變量配套入口。
  *
- * No runtime invariant: 理由與 `@nexus/plugin-sandbox-policy` 同型——**這個 package 沒有會跟日誌分岔的狀態**。它只在
+ * No runtime invariant: **這個 package 沒有會跟日誌分岔的狀態**。它只在
  * 掛載當下把設定與變數算成前後兩段，每次模型請求把它們接進 system prompt；不寫任何日誌事件、沒有投影、沒有快照，也就沒有
  * 跨筆關係可以檢。
  *

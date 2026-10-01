@@ -372,22 +372,23 @@ function trackPlanMode(subject: SessionSubject, startActive: boolean): PlanModeS
  *
  * **排著的待關先丟掉再判**（見檔頭「兩值」那節最後一段）。
  *
- * @param sessions - 這次組裝接著的 root 日誌；剛好一份才動得了。
+ * @param session - 執行器交來的那份日誌上的計劃模式；那份日誌沒接計劃模式時是 `undefined`。
+ * @param attachedCount - 這次組裝接著幾份 root 日誌；多於一份時拒絕（middleware 的退路也不猜，見下面 `fallback`）。
  * @param pendingExits - `exit_plan_mode` 同意之後排著、還沒交出去的待關。
  * @param rawInput - 命令名之後的原文。
  * @param steer - 宿主替命令保管的「命令結束後送一句話」（`CommandInvocation.steer`）。
  * @returns 直接印給人看的結果。
  */
 function planCommandResult(
-  sessions: readonly PlanModeSession[],
+  session: PlanModeSession | undefined,
+  attachedCount: number,
   pendingExits: Set<PlanModeSession>,
   rawInput: string,
   steer: (text: string) => void,
 ): CommandResult {
   const request = parsePlanCommandArgs(rawInput);
-  if (sessions.length === 0) return { kind: 'error', text: PLAN_NOT_ATTACHED_MESSAGE };
-  if (sessions.length > 1) return { kind: 'error', text: planAmbiguousMessage(sessions.length) };
-  const session = sessions[0] as PlanModeSession;
+  if (attachedCount > 1) return { kind: 'error', text: planAmbiguousMessage(attachedCount) };
+  if (session === undefined) return { kind: 'error', text: PLAN_NOT_ATTACHED_MESSAGE };
   // **先 steer，再動任何東西**：宿主可以拒收這句話（例如 `@` 的會話引用不能用），拒收會從這裡拋出去，
   // 命令落定成 `error`，待關與模式都還原封不動。dsh 的順序是先 `set` 再 `steer`；這裡的 steer 只是
   // 排進宿主的佇列（`command/done` 之後才開那一輪），對調順序看不出差別，卻讓「失敗的命令什麼都沒改」成立。
@@ -623,9 +624,9 @@ export const planModePlugin: NexusPlugin<PlanModeConfig> = {
     // 的話，同一顆 plugin 被兩次組裝共用時兩邊會串台——`serve.ts` 每個 thread 組裝
     // 一次，串台就是一個 thread 的 `/plan` 開到另一個 thread 的模式上，**而且不會拋**。
     //
-    // 陣列不是單一格，理由同 goal：「剛好一份」是一個假設，`attachSession` 被呼叫兩次時
-    // 由命令當場說出來（`planAmbiguousMessage`）。表是給工具用的——工具問的是「這次呼叫
-    // 的那份日誌」，命令問的是「這次組裝的那一份」。兩者同生同滅。
+    // 命令問的是執行器交來的那份日誌（`CommandInvocation.sessionLog`，#688），查下面那張表；
+    // 陣列留著給 middleware 的退路與「接了幾份」用：「剛好一份」是組裝點的假設，`attachSession`
+    // 被呼叫兩次時由命令當場說出來（`planAmbiguousMessage`），跟 goal 同。兩者同生同滅。
     const attachedHere: PlanModeSession[] = [];
     const sessionsHere = new Map<SessionLog, PlanModeSession>();
     // `exit_plan_mode` 同意之後排著、等下一次模型呼叫交出去的待關（見檔頭）。同 dsh 的 `pendingIntents`。
@@ -687,8 +688,14 @@ export const planModePlugin: NexusPlugin<PlanModeConfig> = {
       name: PLAN_COMMAND_NAME,
       description: PLAN_COMMAND_DESCRIPTION,
       input: { hint: PLAN_COMMAND_HINT },
-      handler: ({ rawInput, steer }) =>
-        planCommandResult(attachedHere, pendingExits, rawInput, steer),
+      handler: ({ rawInput, steer, sessionLog }) =>
+        planCommandResult(
+          sessionsHere.get(sessionLog),
+          attachedHere.length,
+          pendingExits,
+          rawInput,
+          steer,
+        ),
     });
   },
 };

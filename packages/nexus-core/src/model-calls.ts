@@ -39,6 +39,11 @@
  * 摘要，`llmMs` 不會把同一段牆鐘算兩次。`apps/harness/src/context-overflow.test.ts` 釘著
  * 「四次模型節點、五步」。
  *
+ * ## 重試也在這一格記（[#712](https://github.com/DemianLi/nexus-agent/issues/712)）
+ *
+ * 重試發生在 handler 裡面，core 看不到；這一格替每次呼叫開一個重試範圍（{@link ./llm-retry.ts}），
+ * adapter 在裡面回報，落成 `llm/retry`／`llm/retry-started`，位置就在這一對起訖之間。
+ *
  * ## 回覆也在這一格記（[#305](https://github.com/DemianLi/nexus-agent/issues/305)）
  *
  * `handler(request)` 回來的就是那一則完整的 AIMessage，web 與 CLI 兩條路都是——所以
@@ -62,6 +67,7 @@
 import { AIMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import { runInRetryScope } from './llm-retry.js';
 import { toLoggedMessage } from './logged-message.js';
 import type { SessionLog } from './session-log.js';
 import type { SessionLookup } from './registry.js';
@@ -120,7 +126,8 @@ export function createModelCallRecorder(sessions: {
       });
       if (found.kind !== 'ok' || !tryAppend(found.log, 'model/start')) return handler(request);
       try {
-        const response = await handler(request);
+        // 重試範圍包住 handler：adapter 在裡面回報失敗與重開（{@link ./llm-retry.ts}）。
+        const response = await runInRetryScope(found.log, () => handler(request));
         tryRecordReply(found.log, response);
         return response;
       } finally {

@@ -18,7 +18,8 @@ import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 
-import { runCli, resolveSessionLogDir, SESSION_LOG_OFF_DISCLOSURE } from './cli.js';
+import { runCli } from './cli.js';
+import { resolveSessionLogDir, SESSION_LOG_OFF_DISCLOSURE } from './assembly-root.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { createJsonlSessionStore } from './jsonl-session-store.js';
 import { SESSION_LOG_FORMAT_VERSION, SessionAlreadyOwnedError } from '@nexus/core';

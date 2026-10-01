@@ -4,7 +4,7 @@
  *   pnpm --filter @nexus/harness run serve             # 假模型
  *   pnpm --filter @nexus/harness run serve:live        # 換成真實供應商
  *
- * **組裝完全沿用 CLI 的那一份**（`createCliAgent`）：同一份預設 plugin 清單、同一個
+ * **組裝跟 CLI 共用同一份**（`assembly-root.ts` 的 `createCliAgent`）：同一份預設 plugin 清單、同一個
  * `--live` 開關、同一個 `--workspace`。理由是這裡沒有新的組裝決定要做——「web 要跑
  * 哪些 plugin」與「CLI 要跑哪些 plugin」是同一個問題，而它的答案住在同一份清單上：出貨的
  * `cordis.yml`，疊上 `$NEXUS_AGENT_HOME/cordis.patch.yml` 與 `--patch`
@@ -27,6 +27,7 @@ import { parseArgs } from 'node:util';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { THREADS_PATH } from '@nexus/wire';
+import { TokenAnchorBook } from '@nexus/core';
 import type {
   PluginEntry,
   ResumedStoredSession,
@@ -44,7 +45,7 @@ import {
   resolveSessionLogDir,
   resolveWorkspaceRoot,
   SESSION_LOG_OFF_DISCLOSURE,
-} from './cli.js';
+} from './assembly-root.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { listStoredThreads, readStoredSubagentSession } from './session-list.js';
@@ -113,19 +114,19 @@ export interface ServeInvocation {
   readonly live: boolean;
   readonly port: number;
   readonly workspace?: string;
-  /** 見 `cli.ts` 的 `CliInvocation.sandbox`。**兩個入口共用同一個旗標名、同一份驗證、同一個預設**。 */
+  /** 見 `assembly-root.ts` 的 `CliInvocation.sandbox`。**兩個入口共用同一個旗標名、同一份驗證、同一個預設**。 */
   readonly sandbox?: SandboxMode;
-  /** 見 `cli.ts` 的 `CliInvocation.patches`。**兩個入口共用同一個旗標名、同一份驗證、同一份疊加。** */
+  /** 見 `assembly-root.ts` 的 `CliInvocation.patches`。**兩個入口共用同一個旗標名、同一份驗證、同一份疊加。** */
   readonly patches?: readonly string[];
-  /** 見 `cli.ts` 的 `CliInvocation.sessionLog`：換位置用，省略即 harness home 底下的 `sessions`。 */
+  /** 見 `assembly-root.ts` 的 `CliInvocation.sessionLog`：換位置用，省略即 harness home 底下的 `sessions`。 */
   readonly sessionLog?: string;
-  /** 見 `cli.ts` 的 `CliInvocation.goalDriver`。**兩個入口共用同一個旗標名與同一個預設**。 */
+  /** 見 `assembly-root.ts` 的 `CliInvocation.goalDriver`。**兩個入口共用同一個旗標名與同一個預設**。 */
   readonly goalDriver: boolean;
-  /** 見 `cli.ts` 的 `CliInvocation.dumpConfig`。**兩個入口印的是同一份設定**。 */
+  /** 見 `assembly-root.ts` 的 `CliInvocation.dumpConfig`。**兩個入口印的是同一份設定**。 */
   readonly dumpConfig: boolean;
-  /** 見 `cli.ts` 的 `CliInvocation.dumpConfigSchema`。**兩個入口印的是同一份規格表**。 */
+  /** 見 `assembly-root.ts` 的 `CliInvocation.dumpConfigSchema`。**兩個入口印的是同一份規格表**。 */
   readonly dumpConfigSchema: boolean;
-  /** 見 `cli.ts` 的 `CliInvocation.dumpDefaultConfig`。**兩個入口印的是同一份出貨設定**。 */
+  /** 見 `assembly-root.ts` 的 `CliInvocation.dumpDefaultConfig`。**兩個入口印的是同一份出貨設定**。 */
   readonly dumpDefaultConfig: boolean;
   readonly help: boolean;
 }
@@ -484,7 +485,7 @@ async function startServer(
   // **先照每條 thread 那一次組一份，組完就收**（#749）。上面那幾列只驗了自己的設定；其餘每一列的設定、重名、
   // `requires` 缺件、`apply` 裡的值檢查（例如 `tool-result-pruner` 的門檻），不組一次就不會發生，而 serve 的
   // agent 是每條 thread 才組的——不先組這一次，伺服器照樣起來，每個開對話的人才各撞一次，伺服器日誌一行都沒有。
-  // 跟下面 `createAgent` 同一個函式、同一組參數，不帶續接，失敗的處理跟 CLI 那一刻（`cli.ts` 的 `createCliAgent`）
+  // 跟下面 `createAgent` 同一個函式、同一組參數，不帶續接，失敗的處理跟 CLI 那一刻（`assembly-root.ts` 的 `createCliAgent`）
   // 同一套：可少掛的列掉了印警告、照樣起來，其餘原樣拋（見下面「判第二次」那段）。
   //
   // **偏離登記**：dsh 的 `boot()` 把 plugin 樹掛一次、一直用下去，驗證是掛載順帶發生的
@@ -498,6 +499,8 @@ async function startServer(
   // **掉了哪幾列在這裡判第二次**（#751），同 CLI 那一次組裝：清單上可少掛的列 `apply` 失敗、`requires` 缺件、撞名，
   // 只讓它掉；必掛的、組裝點自己加的外掛掉了，換成跟第一次同一種 `StartupError`。兩次合起來印一段到伺服器日誌，
   // 只印這一次，在綁 port 之前。
+  // **錨定估算的帳（#702）**：一台 server 一本，下面每條 thread 的組裝都傳同一本，借錨才跨得過 thread。
+  const tokenAnchorBook = new TokenAnchorBook();
   const trial = await createCliAgent(
     {
       ...invocation,
@@ -698,6 +701,8 @@ async function startServer(
           },
           threadPlugins,
           options.cwd,
+          // 帳是這台 server 的，不是這條 thread 的：第二條 thread 的第一次借第一條的（#702）。
+          { tokenAnchorBook },
         );
       } catch (error) {
         await release().catch(() => {});
@@ -728,9 +733,7 @@ async function startServer(
         agent,
         commands,
         dispose,
-        attachTelemetry,
-        attachInvariants,
-        attachSession,
+        attachSessions,
         feedback,
         workspaceChanges,
         goals,
@@ -767,9 +770,7 @@ async function startServer(
           await dispose();
         },
         ...(resumed !== undefined && { rootSeed: resumed.events }),
-        attachTelemetry,
-        attachInvariants,
-        attachSession,
+        attachSessions,
         // LLM 標題（#650）：沒帶 `--live` 或那一列關掉就缺席，只剩退回標題。
         ...(attachTitle !== undefined && { attachTitle }),
         // **落盤的答案不在 `createCliAgent` 的回傳值裡**，它來自呼叫方式而不是 plugin

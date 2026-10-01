@@ -7,7 +7,12 @@
 
 import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { GoalId, SessionEvent } from '@nexus/core';
-import { TOOL_ABORTED, TOOL_ABORTED_BEFORE_DISPATCH, toLoggedMessage } from '@nexus/core';
+import {
+  SessionLog,
+  TOOL_ABORTED,
+  TOOL_ABORTED_BEFORE_DISPATCH,
+  toLoggedMessage,
+} from '@nexus/core';
 import type { ConversationEntry, ConversationState, ThreadHistoryQuery } from '@nexus/wire';
 import {
   HISTORY_PAGE_MAX_BYTES,
@@ -19,7 +24,12 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import type { AwaitingInput } from './conversation-history.js';
-import { HistoryQueryError, historyFrames, historyPage } from './conversation-history.js';
+import {
+  HistoryQueryError,
+  historyFrames,
+  historyPage,
+  isTodosReset,
+} from './conversation-history.js';
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
 import { READ_META_MAX_BYTES_FACTOR } from './tool-result-text.js';
 
@@ -898,5 +908,15 @@ describe('一頁的位元組上限', () => {
     const otherCard = DEFAULT_TOOL_TEXT_MAX_BYTES * 2;
     expect(Math.floor(HISTORY_PAGE_MAX_BYTES / readCard)).toBe(53);
     expect(HISTORY_PAGE_MAX_BYTES).toBe(80 * otherCard);
+  });
+});
+
+describe('isTodosReset（#682：與頁起點共用「不是 resume 的 turn/start」）', () => {
+  it('message 的 turn/start 清待辦；resume 不清；別種事件不清', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: '嗨' });
+    log.append('turn/start', { kind: 'resume' });
+    log.append('turn/end', {});
+    expect(log.events.map(isTodosReset)).toEqual([true, false, false]);
   });
 });

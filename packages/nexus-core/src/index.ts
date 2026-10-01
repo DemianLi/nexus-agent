@@ -100,7 +100,13 @@ export type {
   SandboxMode,
   SandboxModeSource,
 } from './sandbox.js';
-export { isSandboxMode, SANDBOX_MODES, WORKSPACE_CAPABILITY } from './sandbox.js';
+export {
+  hostPathOf,
+  isSandboxMode,
+  SANDBOX_MODES,
+  virtualPathOf,
+  WORKSPACE_CAPABILITY,
+} from './sandbox.js';
 
 export type { NamedEntry, DuplicateErrorFactory } from './entries.js';
 export { AnonymousEntries, NamedEntries, CapabilitySet } from './entries.js';
@@ -261,6 +267,7 @@ export {
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 export { createModelCallRecorder, MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
+export { noteFailedAttempt, noteRequestStart, runInRetryScope } from './llm-retry.js';
 export {
   createSubagentDelegationMiddleware,
   SUBAGENT_DELEGATION_CONTEXT,
@@ -355,7 +362,6 @@ export {
 } from './summarization.js';
 export type { EstimatedRequest, TokenEstimate } from './token-estimate.js';
 export {
-  defaultTokenAnchorBook,
   estimateAnchoredTokens,
   estimateRequestTokens,
   estimateTextTokens,
@@ -412,6 +418,8 @@ export {
 } from './feedback.js';
 
 export type {
+  LlmFailure,
+  LogicalTurnStartEvent,
   ModelVisibleEventType,
   SessionEvent,
   SessionEventMap,
@@ -429,6 +437,7 @@ export type {
 export {
   currentTurnStart,
   hasUnansweredInterrupt,
+  isLogicalTurnStart,
   isModelVisibleEvent,
   MODEL_VISIBLE_EVENT_TYPES,
   SessionLog,

@@ -41,6 +41,7 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
+import { composeAttachSessions } from './session-attach.js';
 
 const BASE_URL = 'http://ask.test';
 
@@ -83,9 +84,9 @@ async function open(threadId: string): Promise<Session> {
     createAgent: async () => ({
       agent: built.agent as unknown as PumpAgent,
       commands: emptyCommandPoint(),
-      attachSession: (registry: SessionRegistry) => {
+      attachSessions: (registry, backgroundPort) => {
         sessions = registry;
-        return built.attachSession(registry);
+        return composeAttachSessions(built)(registry, backgroundPort);
       },
       dispose: built.dispose,
     }),

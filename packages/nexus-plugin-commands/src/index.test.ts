@@ -41,7 +41,7 @@ function harnessWith(
     onWarn,
     ...extra,
   });
-  return { executor, events, onWarn, signal: new AbortController().signal };
+  return { executor, events, onWarn, sessionLog, signal: new AbortController().signal };
 }
 
 function ok(name: string, handler: CommandDefinition['handler']): CommandDefinition {
@@ -129,6 +129,19 @@ describe('認得的命令：一對事件', () => {
     );
     const execution = await executor.execute('/plan  兩個空白', signal);
     expect(seen).toEqual([{ commandId: execution?.commandId, rawInput: '  兩個空白' }]);
+  });
+
+  it('handler 收到的 sessionLog 就是建執行器時給的那一份（#688）', async () => {
+    const seen: unknown[] = [];
+    const { executor, sessionLog, signal } = harness(
+      ok('plan', (invocation) => {
+        seen.push(invocation.sessionLog);
+        return { kind: 'success' };
+      }),
+    );
+    await executor.execute('/plan', signal);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBe(sessionLog);
   });
 
   it('**沒話說的成功不放 text 這個 key**——放 `undefined` 會讓 append 當場拋', async () => {

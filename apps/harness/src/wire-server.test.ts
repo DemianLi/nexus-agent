@@ -10,6 +10,7 @@ import type { PumpAgent } from './thread-pump.js';
 import {
   emptyCommandPoint,
   fetchWithCookie,
+  noSessions,
   TEST_BROWSER_AUTH,
   testSessionCookie,
 } from './fixtures.js';
@@ -45,6 +46,7 @@ describe('接上真的 socket', () => {
       auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
         agent,
+        attachSessions: noSessions,
         commands: emptyCommandPoint(),
         dispose: async () => undefined,
       }),
@@ -106,6 +108,7 @@ describe('接上真的 socket', () => {
       auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
         agent,
+        attachSessions: noSessions,
         commands: emptyCommandPoint(),
         dispose: async () => undefined,
       }),
