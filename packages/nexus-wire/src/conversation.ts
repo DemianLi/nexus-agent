@@ -34,7 +34,7 @@
 import { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 import type { WireContextMeasure, WireContextPressure } from './context-pressure.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
-import { INBOX, SETTLE_NOTICE } from './inbox.js';
+import { AGENT_MESSAGE, INBOX, SETTLE_NOTICE } from './inbox.js';
 import type { WireQueuedInput, WireQueuedInputSource, WireSessionReference } from './inbox.js';
 import { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
 import type { WireSessionStats, WireTokenUsage } from './session-totals.js';
@@ -81,6 +81,27 @@ export interface NoticeEntry {
   /** 通知的來源。今天只有 `subagent-settled`；`agent-message`（#849）的顯示是另一件，這裡不長。 */
   readonly source: 'subagent-settled';
   /** 即時的那一種是送出佇列的哪一件（`inbox` 的 `claimed.id`），同一顆 `claimed` 再到一次靠它認出來。歷史的沒有。 */
+  readonly inboxId?: string;
+}
+
+/**
+ * 背景子代理用 `send_message` 寫給主對話的話（[#863](https://github.com/DemianLi/nexus-agent/issues/863)）：畫成「某某子代理說：…」，
+ * 不是人的泡泡。方向永遠是子代理→主對話；主對話→子代理是主對話自己那顆 `send_message` 的工具卡。
+ *
+ * 落在**這則話被領走的位置**：主對話閒著時它叫醒的那一輪的開頭，忙著時插進那一輪的那一刻。即時（`inbox` 的
+ * `claimed`／`claimedNextStep`）與歷史重播（{@link AGENT_MESSAGE}）長出同一種東西。不影響 `status`、`pendings`，也不會是 {@link AiEntry.turnTail}。
+ */
+export interface AgentMessageEntry {
+  readonly kind: 'agent-message';
+  /** 即時是 `inbox:<件的 id>`；歷史是 `history-<seq>`。 */
+  readonly id: string;
+  /** 寄件的背景子代理的會話 id。 */
+  readonly senderSessionId: string;
+  /** 它的編號，對得上委派卡（`background-subagent` 的 `runId`）。 */
+  readonly runId: string;
+  /** 它寫的話，**已拿掉給模型看的 `Agent <寄件人> sent a message: ` 前綴**。 */
+  readonly text: string;
+  /** 即時的那一種是送出佇列的哪一件，同一顆 `claimed` 再到一次靠它認出來。歷史的沒有。 */
   readonly inboxId?: string;
 }
 
@@ -293,7 +314,8 @@ export type ConversationEntry =
   | AnswerEntry
   | DeliverablesEntry
   | WorkspaceChangesEntry
-  | NoticeEntry;
+  | NoticeEntry
+  | AgentMessageEntry;
 
 /**
  * 型別窄化：這一顆是核准請求嗎。
@@ -690,6 +712,7 @@ function reduceCustom(state: ConversationState, data: unknown): ConversationStat
   if (name === SESSION_STATS) return reduceSessionStats(state, payload);
   if (name === INBOX) return reduceInbox(state, payload);
   if (name === SETTLE_NOTICE) return reduceSettleNotice(state, payload);
+  if (name === AGENT_MESSAGE) return reduceAgentMessage(state, payload);
   if (name === TITLE) return reduceTitle(state, payload);
   if (name !== DELIVERABLES_PRESENTED) return state;
   const { callId, seq, files } = payload as { callId?: unknown; seq?: unknown; files?: unknown };
@@ -874,7 +897,7 @@ function reduceInbox(state: ConversationState, payload: object): ConversationSta
     if (!Array.isArray(claimedNextStep)) return state;
     claims.push(...claimedNextStep);
   }
-  const humans: (HumanEntry | NoticeEntry)[] = [];
+  const humans: (HumanEntry | NoticeEntry | AgentMessageEntry)[] = [];
   for (const claim of claims) {
     const { id, text, references, source } = (claim ?? {}) as {
       id?: unknown;
@@ -886,13 +909,26 @@ function reduceInbox(state: ConversationState, payload: object): ConversationSta
       return state;
     }
     // 不是人送的（#840、#849）：執行期的記帳，不畫人的泡泡。認得的來源之外的一律當成人畫——舊的一側沒有這一格。
-    // 結算通知（#851）長一格「通知」，位置就是人話會出現的地方；`agent-message` 的顯示是另一件，這裡略過。
+    // 結算通知（#851）長一格「通知」，子代理寄來的話（#863）長一格「某某說」，位置都是人話會出現的地方。
     const sourceKind = (source as { kind?: unknown } | undefined)?.kind;
     if (sourceKind === 'subagent-settled') {
       humans.push({ kind: 'notice', id: `inbox:${id}`, source: 'subagent-settled', inboxId: id });
       continue;
     }
-    if (sourceKind === 'agent-message') continue;
+    if (sourceKind === 'agent-message') {
+      const { senderSessionId, runId } = source as { senderSessionId?: unknown; runId?: unknown };
+      // 寄件人缺了就整顆不收：沒有寄件人的「某某說」畫不出來，又不能悄悄當成人話。
+      if (typeof senderSessionId !== 'string' || typeof runId !== 'string') return state;
+      humans.push({
+        kind: 'agent-message',
+        id: `inbox:${id}`,
+        senderSessionId,
+        runId,
+        text,
+        inboxId: id,
+      });
+      continue;
+    }
     humans.push({
       kind: 'human',
       id: `inbox:${id}`,
@@ -909,7 +945,8 @@ function reduceInbox(state: ConversationState, payload: object): ConversationSta
     (fresh) =>
       !state.entries.some(
         (entry) =>
-          (entry.kind === 'human' || entry.kind === 'notice') && entry.inboxId === fresh.inboxId,
+          (entry.kind === 'human' || entry.kind === 'notice' || entry.kind === 'agent-message') &&
+          entry.inboxId === fresh.inboxId,
       ),
   );
   if (fresh.length === 0) return { ...state, inbox, inboxNextStep };
@@ -922,6 +959,27 @@ function reduceSettleNotice(state: ConversationState, payload: object): Conversa
   if (typeof id !== 'string' || id === '') return state;
   if (state.entries.some((entry) => entry.id === id)) return state;
   const entry: NoticeEntry = { kind: 'notice', id, source: 'subagent-settled' };
+  return { ...state, entries: [...state.entries, entry] };
+}
+
+/** {@link AGENT_MESSAGE} 的 `payload`：三個字串欄位都要在，`id` 非空，同一個 `id` 只長一格。 */
+function reduceAgentMessage(state: ConversationState, payload: object): ConversationState {
+  const { id, senderSessionId, runId, text } = payload as {
+    id?: unknown;
+    senderSessionId?: unknown;
+    runId?: unknown;
+    text?: unknown;
+  };
+  if (typeof id !== 'string' || id === '') return state;
+  if (
+    typeof senderSessionId !== 'string' ||
+    typeof runId !== 'string' ||
+    typeof text !== 'string'
+  ) {
+    return state;
+  }
+  if (state.entries.some((entry) => entry.id === id)) return state;
+  const entry: AgentMessageEntry = { kind: 'agent-message', id, senderSessionId, runId, text };
   return { ...state, entries: [...state.entries, entry] };
 }
 

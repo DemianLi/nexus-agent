@@ -45,6 +45,25 @@ export const INBOX = 'inbox';
  */
 export const SETTLE_NOTICE = 'subagent/settle-notice';
 
+/**
+ * `custom` 事件的 `data.name`：**歷史重播用**的「背景子代理寫來一則話」（[#863](https://github.com/DemianLi/nexus-agent/issues/863)）。
+ * 即時的畫面由 {@link INBOX} 的 `claimed`／`claimedNextStep`（`source.kind === 'agent-message'`）長同一格
+ * （`id` 是 `inbox:<件的 id>`）；歷史沒有送出佇列，由這一顆長，`id` 是 `history-<seq>`。
+ */
+export const AGENT_MESSAGE = 'subagent/agent-message';
+
+/** {@link AGENT_MESSAGE} 的 `payload`。 */
+export interface AgentMessagePayload {
+  /** 那一格 entry 的 `id`，也是去重的鍵。 */
+  readonly id: string;
+  /** 寄件的背景子代理的會話 id。 */
+  readonly senderSessionId: string;
+  /** 它的編號，對得上委派卡（`background-subagent` 的 `runId`）。 */
+  readonly runId: string;
+  /** 它寫的話，**已拿掉給模型看的 `Agent <寄件人> sent a message: ` 前綴**。 */
+  readonly text: string;
+}
+
 /** {@link SETTLE_NOTICE} 的 `payload`。 */
 export interface SettleNoticePayload {
   /** 那一格 entry 的 `id`，也是去重的鍵：同一個 `id` 第二次出現就忽略。 */
@@ -87,10 +106,24 @@ export interface WireClaimedInput {
   readonly references?: readonly WireSessionReference[];
   /**
    * 這一件不是人送的時才帶（#840、#849）：`subagent-settled` 是背景子代理結算的通知，`agent-message` 是背景子代理用 `send_message` 寫來的話。**沒帶就是人**，舊的一側照舊。
-   * 有帶的不畫人的泡泡——那是執行期的記帳，不是使用者說的話；畫成什麼樣是 web 的事（卡 7）。
+   * 有帶的不畫人的泡泡——那是執行期的記帳，不是使用者說的話；`subagent-settled` 長 `NoticeEntry`（#851），`agent-message`
+   * 長 `AgentMessageEntry`（#863），畫成什麼樣是 web 的事。
    */
-  readonly source?: Exclude<WireQueuedInputSource, { readonly kind: 'user' }>;
+  readonly source?: WireClaimedSource;
 }
+
+/**
+ * {@link WireClaimedInput.source}：不是人送的來源。`agent-message` 多帶寄件人（[#863](https://github.com/DemianLi/nexus-agent/issues/863)），
+ * 畫面據它畫「某某子代理說：…」；它的 `text` 已拿掉給模型看的英文前綴。
+ */
+export type WireClaimedSource =
+  | { readonly kind: 'subagent-settled' }
+  | {
+      readonly kind: 'agent-message';
+      readonly senderSessionId: string;
+      /** 寄件的背景子代理的編號。 */
+      readonly runId: string;
+    };
 
 /** {@link INBOX} 的 `payload`。 */
 export interface InboxPayload {
