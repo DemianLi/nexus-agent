@@ -62,9 +62,7 @@ describe('認不得的模式', () => {
     const { log, violations } = watched();
     mode(log, 'workspace-write');
     mode(log, 'bogus');
-    expect(violations).toEqual([
-      expect.stringContaining('"@nexus/plugin-sandbox-policy"'),
-    ]);
+    expect(violations).toEqual([expect.stringContaining('"@nexus/plugin-sandbox-policy"')]);
     expect(violations[0]).toContain('seq 1');
     expect(violations[0]).toContain('"bogus"');
   });
