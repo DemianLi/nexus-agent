@@ -40,6 +40,7 @@ import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import type { ThreadTitleConfig } from './settings/thread-title.js';
 import { findModelEntry } from './model-catalog.js';
+import { resolveDefaultModel } from './model-provider.js';
 import type { ModelSelectionPolicy } from './model-selection-policy.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
 import type { ToolResultStashOptions } from './tool-result-stash.js';
@@ -480,8 +481,12 @@ function createCliModel(
   live: boolean,
   liveModel: LiveModelConfig,
   credentials: CredentialService | undefined,
+  plugins: readonly PluginEntry[],
 ): BaseChatModel {
-  if (!live) return new ScriptedChatModel({ turns: CLI_SCRIPT });
+  // **`--live` 是進 live 的唯一閘門**，不看選擇列（理由見 `model-provider.ts`）；沒帶它才由清單上的
+  // `agent-default-model` 在內建腳本與 patch 插進來的提供者之間選（#670）。
+  if (!live)
+    return resolveDefaultModel(plugins, () => new ScriptedChatModel({ turns: CLI_SCRIPT }));
   return createLiveModel(liveModel, undefined, credentials);
 }
 
@@ -672,7 +677,7 @@ export async function createCliAgent(
 }> {
   const liveModel = invocation.liveModel ?? startupSetting(plugins, liveModelPlugin);
   const subagentToolFilter = startupSetting(plugins, backgroundSubagentsPlugin).toolFilter;
-  const model = createCliModel(invocation.live, liveModel, invocation.credentials);
+  const model = createCliModel(invocation.live, liveModel, invocation.credentials, plugins);
   // **標題模型是另一顆實例**：輸出上限換成標題那一列的，並表明用途，由 `createLiveModel` 決定要不要關推理
   // （`live-model.ts` 的 `LiveModelPurpose`）。`.env` 已經在入口（`runCli`／`runServe`）載入過了。
   const attachTitle =
