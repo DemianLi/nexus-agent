@@ -18,8 +18,16 @@
  * 這裡改用 dsh 自己的字（`SandboxMode`，`packages/sandbox/sandbox-policy/src/index.ts`），
  * 而 `--sandbox` 這個旗標名本來就已經是這個字了。
  *
+ * ## 工具路徑對到工作區磁碟的那條規則也在這裡
+ *
+ * {@link virtualPathOf} 與 {@link hostPathOf}：那道 fence 的位址空間（`virtualMode: true`，`/` 就是
+ * 工作區根）是它跟所有「事後要把模型給的路徑變回一個檔」的讀者之間的合約，讀者分住好幾個套件，
+ * 理由同上一節。見 {@link virtualPathOf} 的說明。
+ *
  * @module
  */
+
+import { join, posix } from 'node:path';
 
 /**
  * 檔案效果政策：這個組裝的檔案工具**改得動哪裡**。
@@ -60,6 +68,46 @@ export function isSandboxMode(raw: string): raw is SandboxMode {
  * 不是工作區根，所以不能照抄。第一個讀方是 `@nexus/plugin-present`（[#441](https://github.com/DemianLi/nexus-agent/issues/441)）。
  */
 export const WORKSPACE_CAPABILITY = 'workspace';
+
+/**
+ * 把模型給檔案工具的路徑換成工作區位址空間裡的絕對路徑：補前導 `/`、正規化、去尾斜線。
+ *
+ * **為什麼有這一份。** 這條規則的主人是基座 `FilesystemBackend` 在 `virtualMode` 下的 `resolvePath`
+ * （`ContainedFilesystemBackend` 把 `virtualMode` 釘成 true，`apps/harness/src/contained-backend.ts`），
+ * 而它是 private，外面問不到。dsh 的 present 是問規則的主人（經 fs 服務的 `resolve`）；我們問不到，
+ * 只能照抄，所以**只抄一份，就是這裡**。事後要把模型給的原字串變回一個檔的人都走這裡：present 的
+ * 存在檢查、交付讀檔路由（`apps/harness/src/deliverable-files.ts`）、workspace-changes 的擷取
+ * （經 {@link hostPathOf}）。事件裡存的是原字串，正規化的結果不落庫，各寫一次的下場是有一天只有一邊對。
+ *
+ * **`..` 夾回根，不拋**：`posix.normalize` 在補了前導 `/` 之後吃掉 `..`，所以結果不可能爬出根。這跟
+ * 基座不同：基座對含 `..` 子字串的路徑一律拋（連 `a..b.md` 這種檔名都算），所以同一個字串交給
+ * `read_file` 會被拒、交給這裡會落在根底下。讀者拿它查「模型宣告的那個檔」，夾回根只會讓它查不到，
+ * 不會讓它出界。**基座「拒 `..`」的那幾處副本**（`contained-backend.ts` 裡照抄 `resolvePath` 的內聯）
+ * **不併進來**：併進來就是把拒改成夾，是行為變更。
+ *
+ * 跟真 backend 對不對得上，由 `apps/harness/src/virtual-path.test.ts` 用真的
+ * `ContainedFilesystemBackend` 寫檔來釘（core 不能相依 harness，所以絆索放不到這一檔旁邊）。
+ *
+ * @param path - 模型給的路徑，相對路徑以工作區根為起點。
+ * @returns 正規化之後、不帶尾斜線的虛擬路徑；工作區根本身是 `/`。
+ */
+export function virtualPathOf(path: string): string {
+  const normalized = posix.normalize(path.startsWith('/') ? path : `/${path}`);
+  return normalized.length > 1 && normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
+}
+
+/**
+ * 模型給檔案工具的路徑，對到工作區根底下的主機路徑。規則見 {@link virtualPathOf}：`/a.md` 與 `a.md`
+ * 都是根底下的 `a.md`，`..` 夾回根之內。**主機絕對路徑不會被認出來**：`/<根>/a.md` 是根底下的
+ * 一條子路徑，跟 backend 一樣（sandbox-policy 檔頭「沒選的另一條路」講的就是這件事）。
+ *
+ * @param root - 工作區根的主機路徑。
+ * @param path - 模型給的路徑。
+ * @returns 磁碟上的路徑；`path` 是根本身時就是 `root`。
+ */
+export function hostPathOf(root: string, path: string): string {
+  return join(root, ...virtualPathOf(path).split('/'));
+}
 
 /**
  * ## 升級協定為什麼也在這裡
