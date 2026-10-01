@@ -65,10 +65,22 @@
  * ## 載體只活在這個行程
  *
  * 模型節點不會因為 resume 重跑，所以改寫只發生一次；停在核准點再續接時，拒不拒只能靠載體裡上次
- * 留下的那一筆。行程重啟就沒了，而那時歷史裡的參數已經是 `{}`，跟一個合法的空參數呼叫分不出來，
- * 工具會真的被執行。**今天走不到**：兩條產品路徑的 checkpointer 都是 `MemorySaver`
- * （`apps/harness/src/cli.ts` 的 `createCliAgent`，serve 每條 thread 也走它），行程一死 thread 跟著死。
- * 哪天有會落盤的 checkpointer，這一格要換成活得過 checkpoint 的記號。
+ * 留下的那一筆。載體查不到時 `wrapToolCall` 照常放行，而那時歷史裡的參數已經是 `{}`，跟一個合法的
+ * 空參數呼叫分不出來：**schema 收得下 `{}` 的工具（參數全選填）會真的被執行**；有必填欄位的會在
+ * schema 驗證失敗，由圍堵的 `classifyThrownToolError` 給同一個 `INVALID_ARGS`，文字卻不是
+ * {@link INVALID_ARGUMENTS_REFUSAL}。
+ *
+ * **今天走不到，理由是中斷活不過行程，不是 thread 活不過行程。** CLI 的 `--resume` 與 serve 重開
+ * 都會從會話日誌把對話推回 graph state（`apps/harness/src/conversation-restore.ts`，
+ * [#306](https://github.com/DemianLi/nexus-agent/issues/306)），thread 活得下來。活不過的是停在核准點
+ * 的那個中斷：它住在 checkpointer 裡，而全樹唯一那顆 checkpointer 是 `MemorySaver`
+ * （`apps/harness/src/cli.ts` 的 `createCliAgent`，serve 每條 thread 也走它）。續接時沒有中斷可以答，
+ * 日誌裡那顆沒有結果的呼叫由 replay closer 照 dsh 的 `repair.ts` 補一則錯誤結果
+ * （`packages/nexus-core/src/conversation-replay.ts`），不會再派發到這裡。
+ *
+ * 重開條件：哪天懸著的中斷能在另一個行程被續答，這一格要換成活得過 checkpoint 的記號。
+ * 今天唯一會走到這一步的是門 B（換成落盤的 checkpointer），它的絆索在
+ * `apps/harness/src/session-resume-doors.test.ts`，失敗訊息會把人送到這裡。
  */
 
 import { AIMessage } from '@langchain/core/messages';
