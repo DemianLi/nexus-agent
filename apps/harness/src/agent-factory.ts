@@ -895,16 +895,16 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         // 背景派出的 host：**在這裡建**（任何圖的環境之外），detach 時等進行中的輪收完。
         const closeHost = delegation?.attach(
           sessions,
-          (subagent, modelId) => {
+          (subagent, choice) => {
             let model: BaseChatModel | undefined;
-            if (modelId !== undefined) {
+            if (choice !== undefined) {
               const modelFor = options.backgroundSubagents?.modelFor;
               if (modelFor === undefined) {
                 throw new Error(
-                  `這份組裝建不出別的模型，背景子代理 "${subagent}" 不能指定 "${modelId}"`,
+                  `這份組裝建不出別的模型，背景子代理 "${subagent}" 不能指定 "${choice.model}"`,
                 );
               }
-              model = modelFor(modelId);
+              model = modelFor(choice);
             }
             return compileSubagent(
               subagent,

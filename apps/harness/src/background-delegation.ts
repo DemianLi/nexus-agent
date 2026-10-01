@@ -51,13 +51,17 @@ import { z } from 'zod';
 
 import { isBackgroundAddress } from './background-run-id.js';
 import { BackgroundSubagentHost, withReturnGuidance } from './background-subagents.js';
-import type { BackgroundParentPort } from './background-subagents.js';
+import type { BackgroundParentPort, ModelChoice } from './background-subagents.js';
+import { describeSubagentModels, resolveModelSelection } from './subagent-model-selection.js';
+import type { ModelSelectionConfig } from './subagent-model-selection.js';
 import type { BackgroundAgent, BackgroundSubagentControl } from './background-subagents.js';
 
 /** 模型看到的工具名（dsh 的預設名，`toolName: 'subagent'`）。 */
 export const SUBAGENT_TOOL_NAME = 'subagent';
 /** 列出自己派出的背景子代理（dsh `tool-subagent-control/src/list-agents.ts`，`477b4f4`）。 */
 export const LIST_AGENTS_TOOL_NAME = 'list_agents';
+/** 列出授權清單裡的模型（#877；dsh `tool-subagent/src/list-models.ts`，`477b4f4`）。 */
+export const LIST_SUBAGENT_MODELS_TOOL_NAME = 'list_subagent_models';
 /** 只停一個背景子代理當下那一輪（dsh `tool-subagent-control/src/index.ts`，`477b4f4`）。 */
 export const INTERRUPT_AGENT_TOOL_NAME = 'interrupt_agent';
 /** 對背景子代理追加指示（dsh `tool-subagent-control/src/index.ts`，`477b4f4`）。 */
@@ -75,11 +79,18 @@ export interface BackgroundSubagentsOptions {
   /** 每個主對話同時存活的背景子代理上限，預設 8（#836），見 `BackgroundSubagentHostOptions.maxActive`。 */
   readonly maxActive?: number;
   /**
-   * 按型錄 id 建一顆模型實例（[#876](https://github.com/DemianLi/nexus-agent/issues/876)）：背景子代理被指定了模型時，
-   * 組裝點用它建出那一張圖要用的模型。**每個 `(子代理, 模型)` 只被叫一次**（host 快取編好的圖），實例不共用。
+   * 依選擇建一顆模型實例（[#876](https://github.com/DemianLi/nexus-agent/issues/876)、
+   * [#877](https://github.com/DemianLi/nexus-agent/issues/877)）：背景子代理被指定了模型（與推理等級）時，組裝點用它建出那一張圖
+   * 要用的模型。**每個 `(子代理, 模型, 推理等級)` 只被叫一次**（host 快取編好的圖），實例不共用。
    * 省略＝這份組裝建不出別的模型（沒連真實供應商的組裝），指定模型的圖當場編不出來。
    */
-  readonly modelFor?: (modelId: string) => BaseChatModel;
+  readonly modelFor?: (choice: ModelChoice) => BaseChatModel;
+  /**
+   * 這個會話允許模型逐次替子代理挑模型（#877）：**給了，`subagent` 才多 `model`／`reasoning_effort` 兩格並註冊
+   * `list_subagent_models`；省略，這兩樣都不存在、帶了這兩格的呼叫會被拒絕**。授權清單是日誌上記著的政策（#875），
+   * 由 serve 在 `createAgent` 時取樣／讀回後傳進來；工具面在整個會話內不變（dsh：定義靜態，catalog 變動不改 prompt 前綴）。
+   */
+  readonly modelSelection?: ModelSelectionConfig;
 }
 
 const subagentSchema = z.object({
@@ -90,6 +101,27 @@ const subagentSchema = z.object({
     .optional()
     .describe('預設 true：當場回子代理編號，你接著做別的事。要等結果才能往下時傳 false。'),
 });
+
+/** 開了選模型的 `subagent`：多兩個選填欄位（#877；欄位名照 dsh，沒有 `provider`）。 */
+const selectingSubagentSchema = subagentSchema.extend({
+  model: z
+    .string()
+    .optional()
+    .describe(
+      '子代理用哪一顆模型（型錄 id）。省略＝沿用你現在用的這顆。先用 list_subagent_models 看可選的。',
+    ),
+  reasoning_effort: z
+    .string()
+    .optional()
+    .describe(
+      '子代理在這顆模型上的推理等級。省略＝這顆模型的預設；換了模型卻沒給，也用新模型的預設。',
+    ),
+});
+
+/** 接在描述後面、講怎麼選模型的那一段（#877；照 dsh `choiceDescription` 的意思）。 */
+const SELECTION_DESCRIPTION =
+  '\n\n選模型是選填的：省略 `model` 與 `reasoning_effort` 就沿用你現在的模型。要指定時，先用 `list_subagent_models` ' +
+  '看可選的模型與它的推理等級；換了模型卻沒給推理等級，就用新模型的預設。選模型只在背景委派（`run_in_background` 為 true）時可用。';
 
 /**
  * 基座 `task` 描述裡跟「背景」矛盾的兩句：一次性的生命週期（`ephemeral`）與「每次都是全新的、只回一份最終報告」。
@@ -140,7 +172,7 @@ export class BackgroundDelegation {
    */
   attach(
     sessions: SessionRegistry,
-    compile: (subagent: string, model?: string) => BackgroundAgent,
+    compile: (subagent: string, choice?: ModelChoice) => BackgroundAgent,
     port: BackgroundParentPort = {},
   ): (() => Promise<void>) & { readonly control: BackgroundSubagentControl } {
     // 一份組裝一個會話（serve 一條 thread 一份組裝）：第二次接上會把第一個 host 的位置蓋掉，
@@ -176,6 +208,10 @@ export class BackgroundDelegation {
           // 只在 root：子代理不派子代理，也不該去列別人派的。
           registry.tools.register(this.#listAgentsTool(), { rootOnly: true });
           registry.tools.register(this.#interruptAgentTool(), { rootOnly: true });
+          // 只有這個會話有授權清單才註冊（#877；dsh：`list_subagent_models` 只在政策存在時註冊）。
+          if (this.#options.modelSelection !== undefined) {
+            registry.tools.register(this.#listSubagentModelsTool(), { rootOnly: true });
+          }
           // `send_message` 不是 rootOnly：背景子代理要能往上傳訊（#849）。誰能傳給誰由工具本體按呼叫者身分判。
           registry.tools.register(this.#sendMessageTool());
         },
@@ -190,10 +226,11 @@ export class BackgroundDelegation {
         baseDescription,
       ) + BACKGROUND_DESCRIPTION;
     if (this.#tool?.description === description) return this.#tool.instance;
+    const selecting = this.#options.modelSelection !== undefined;
     const instance = tool(async () => '', {
       name: SUBAGENT_TOOL_NAME,
-      description,
-      schema: subagentSchema,
+      description: selecting ? description + SELECTION_DESCRIPTION : description,
+      schema: selecting ? selectingSubagentSchema : subagentSchema,
     }) as unknown as StructuredToolInterface;
     this.#tool = { description, instance };
     return instance;
@@ -228,6 +265,27 @@ export class BackgroundDelegation {
         schema: z.object({}),
       },
     );
+  }
+
+  /**
+   * `list_subagent_models`（#877）：授權清單裡有哪些模型、某一顆有哪些推理等級。**schema 固定、不列舉模型**（dsh：
+   * 把會變動的清單放進每次請求的前綴會讓快取失效）。授權在前，不在清單裡的 id 一律拒絕，見 `describeSubagentModels`。
+   */
+  #listSubagentModelsTool() {
+    const selection = this.#options.modelSelection!;
+    return tool(({ model }: { model?: string }) => describeSubagentModels(selection, { model }), {
+      name: LIST_SUBAGENT_MODELS_TOOL_NAME,
+      description:
+        'List the models a subagent may use, without changing your own. Call with no arguments to list the authorized ' +
+        'models, or with `model` to see the reasoning efforts of that exact model. Use the returned ids with the ' +
+        '`model` and `reasoning_effort` fields of the subagent tool.',
+      schema: z.object({
+        model: z
+          .string()
+          .optional()
+          .describe('Exact model id to inspect. Omit to list the authorized models.'),
+      }),
+    });
   }
 
   /**
@@ -333,7 +391,20 @@ export class BackgroundDelegation {
       wrapToolCall: async (request, handler) => {
         if (request.toolCall.name !== SUBAGENT_TOOL_NAME) return handler(request);
         const callId = request.toolCall.id ?? '';
-        const parsed = subagentSchema.safeParse(request.toolCall.args);
+        const selection = this.#options.modelSelection;
+        // 沒開選模型卻帶了這兩格：拒絕，不靜靜忽略（zod 預設會丟掉多餘欄位，模型會以為選了）。dsh：關著的實例不但不顯示、還拒絕。
+        if (selection === undefined) {
+          const raw = request.toolCall.args as Record<string, unknown> | undefined;
+          if (raw !== undefined && ('model' in raw || 'reasoning_effort' in raw)) {
+            return toolRefusal('這個會話沒有開子代理選模型，不能指定 model 或 reasoning_effort', {
+              callId,
+              name: SUBAGENT_TOOL_NAME,
+            });
+          }
+        }
+        const parsed = (
+          selection === undefined ? subagentSchema : selectingSubagentSchema
+        ).safeParse(request.toolCall.args);
         if (!parsed.success) {
           return toolRefusal(`subagent 的參數不合：${parsed.error.message}`, {
             callId,
@@ -345,6 +416,25 @@ export class BackgroundDelegation {
           subagent_type: subagentType,
           run_in_background: background,
         } = parsed.data;
+        const requested = parsed.data as { model?: string; reasoning_effort?: string };
+        const asksForModel =
+          requested.model !== undefined || requested.reasoning_effort !== undefined;
+
+        // 前景走基座的 `task`，它的圖與模型在組裝期寫死，帶不進去（#877 的偏離登記）：拒絕，不靜靜用 root 的。
+        if (background === false && asksForModel) {
+          return toolRefusal(
+            '只有背景委派能指定 model 或 reasoning_effort；前景（run_in_background 為 false）用你現在的模型',
+            { callId, name: SUBAGENT_TOOL_NAME },
+          );
+        }
+        let choice: ModelChoice | undefined;
+        if (selection !== undefined) {
+          const resolved = resolveModelSelection(selection, requested);
+          if (!resolved.ok) {
+            return toolRefusal(resolved.error, { callId, name: SUBAGENT_TOOL_NAME });
+          }
+          choice = resolved.choice;
+        }
 
         if (background === false) {
           const base = this.#baseTask;
@@ -383,6 +473,7 @@ export class BackgroundDelegation {
             host.start({
               subagent: subagentType,
               text: withReturnGuidance(description, host.rootSessionId),
+              ...(choice !== undefined && { choice }),
             });
           const started = sandbox === undefined ? start() : sandbox.delegate(start);
           // 編號告訴折疊器：背景那一輪的卡從日誌開、namespace 是 `[編號, 'tools']`，沒有這一格就永遠認不出是誰的

@@ -205,10 +205,11 @@ export interface BackgroundSubagentHostOptions {
   /** 背景子代理的日誌開在哪：**root 的那張註冊表**，不另開第二張（第二張會讓 `forCall` 回 `ambiguous`，事件兩邊都沒有）。 */
   readonly sessions: SessionRegistry;
   /**
-   * 按子代理名編圖（帶存檔點，見 `AgentHandle.compileSubagent`）。**每個 `(名字, 模型)` 只編一次**。`model` 是型錄 id
-   * （[#876](https://github.com/DemianLi/nexus-agent/issues/876)）：省略就是沿用 root 的；給了就用那一顆建出的實例。
+   * 按子代理名編圖（帶存檔點，見 `AgentHandle.compileSubagent`）。**每個 `(名字, 模型, 推理等級)` 只編一次**。`choice` 是
+   * 型錄 id 加選填的推理等級（[#876](https://github.com/DemianLi/nexus-agent/issues/876)、
+   * [#877](https://github.com/DemianLi/nexus-agent/issues/877)）：省略就是沿用 root 的；給了就用依它建出的實例。
    */
-  readonly compile: (subagent: string, model?: string) => BackgroundAgent;
+  readonly compile: (subagent: string, choice?: ModelChoice) => BackgroundAgent;
   /**
    * 這一輪整個包進去跑。預設原樣跑。產品接線傳 `(log, run) => controller.delegateFromLog(log, run)`。
    * 它拋錯（例如日誌上沒有記委派那一格）就是這一輪失敗，走 `turn/failed`。
@@ -281,8 +282,8 @@ export type SessionDetach = (() => void) & { readonly background?: BackgroundSub
 interface Job {
   readonly runId: string;
   readonly subagent: string;
-  /** 這個背景子代理用哪一顆模型（型錄 id）；省略＝沿用 root 的。一個編號從派出到收線都是同一顆。 */
-  readonly model?: string;
+  /** 這個背景子代理用哪一顆模型與推理等級；省略＝沿用 root 的。一個編號從派出到收線都是同一份。 */
+  readonly choice?: ModelChoice;
   /** 送進模型的那串字。 */
   readonly text: string;
   /** 這一輪開頭寫進日誌的 `turn/start`；`text` 與它裡面的 `text` 是同一個值。 */
@@ -323,9 +324,29 @@ function turnOf(body: {
     : { kind: 'agent-message', text: body.text, senderSessionId: body.senderSessionId };
 }
 
-/** 錯誤訊息裡怎麼稱呼一顆模型（#876）：沒指定就是沿用 root 的。 */
-function describeModel(model: string | undefined): string {
-  return model === undefined ? '沿用主對話的' : `"${model}"`;
+/**
+ * 一個背景子代理被指定的模型（[#876](https://github.com/DemianLi/nexus-agent/issues/876)、
+ * [#877](https://github.com/DemianLi/nexus-agent/issues/877)）：型錄 id，加選填的推理等級。dsh 的 continuable descriptor 也是
+ * 把解析後的 provider、model、effort 一起記下來；我們沒有 provider 這一層。
+ */
+export interface ModelChoice {
+  /** 型錄 id。 */
+  readonly model: string;
+  /** 推理等級（型錄條目宣告過的名字）；省略＝這顆模型的預設。 */
+  readonly effort?: string;
+}
+
+/** 兩份選擇是不是同一份：圖快取鍵與「不能換」都比它。 */
+function choiceKey(choice: ModelChoice | undefined): string {
+  return choice === undefined ? '' : `${choice.model}\0${choice.effort ?? ''}`;
+}
+
+/** 錯誤訊息裡怎麼稱呼一份選擇：沒指定就是沿用 root 的。 */
+function describeChoice(choice: ModelChoice | undefined): string {
+  if (choice === undefined) return '沿用主對話的';
+  return choice.effort === undefined
+    ? `"${choice.model}"`
+    : `"${choice.model}"（推理 ${choice.effort}）`;
 }
 
 /**
@@ -333,7 +354,7 @@ function describeModel(model: string | undefined): string {
  */
 export class BackgroundSubagentHost {
   readonly #sessions: SessionRegistry;
-  readonly #compile: (subagent: string, model?: string) => BackgroundAgent;
+  readonly #compile: (subagent: string, choice?: ModelChoice) => BackgroundAgent;
   readonly #enter: NonNullable<BackgroundSubagentHostOptions['enter']>;
   readonly #warn: ((message: string) => void) | undefined;
   readonly #onSettled: BackgroundSubagentHostOptions['onSettled'];
@@ -345,8 +366,8 @@ export class BackgroundSubagentHost {
   readonly #graphs = new Map<string, BackgroundAgent>();
   /** 已知的背景子代理：編號 → 子代理名。同一個編號不能換名字。 */
   readonly #known = new Map<string, string>();
-  /** 編號 → 它被指定的模型（#876）；沒指定的不在裡面。同一個編號不能換模型，之後每一輪都沿用。 */
-  readonly #models = new Map<string, string>();
+  /** 編號 → 它被指定的模型與推理等級（#876、#877）；沒指定的不在裡面。同一個編號不能換，之後每一輪都沿用。 */
+  readonly #choices = new Map<string, ModelChoice>();
   readonly #queue: Job[] = [];
   readonly #busy = new Set<string>();
   /** 正在跑的那一輪（每輪一個，跑完就丟）：中止控制器（`interrupt` 只舉這一個）與這一輪的插話收件匣（#858）。 */
@@ -398,7 +419,7 @@ export class BackgroundSubagentHost {
     readonly runId: string;
     readonly subagent: string;
     readonly text: string;
-    readonly model?: string;
+    readonly choice?: ModelChoice;
   }): Promise<BackgroundRoundOutcome> {
     if (this.#closed) return Promise.resolve({ ok: false, error: '背景子代理的載體已經關閉' });
     const full = this.#capacityRefusal(input.runId);
@@ -410,20 +431,23 @@ export class BackgroundSubagentHost {
         error: `背景子代理 ${input.runId} 是 "${known}"，不能當成 "${input.subagent}"`,
       });
     }
-    if (known !== undefined && this.#models.get(input.runId) !== input.model) {
+    if (
+      known !== undefined &&
+      choiceKey(this.#choices.get(input.runId)) !== choiceKey(input.choice)
+    ) {
       return Promise.resolve({
         ok: false,
-        error: `背景子代理 ${input.runId} 的模型是 ${describeModel(this.#models.get(input.runId))}，不能換成 ${describeModel(input.model)}`,
+        error: `背景子代理 ${input.runId} 的模型是 ${describeChoice(this.#choices.get(input.runId))}，不能換成 ${describeChoice(input.choice)}`,
       });
     }
     this.#known.set(input.runId, input.subagent);
-    if (input.model !== undefined) this.#models.set(input.runId, input.model);
+    if (input.choice !== undefined) this.#choices.set(input.runId, input.choice);
     // 一次新的送話喚醒被中斷後暫停的佇列（排在前面的照舊先跑）。
     this.#paused.delete(input.runId);
     return this.#enqueue({
       runId: input.runId,
       subagent: input.subagent,
-      ...(input.model !== undefined && { model: input.model }),
+      ...(input.choice !== undefined && { choice: input.choice }),
       text: input.text,
       turn: { kind: 'message', text: input.text },
     });
@@ -521,11 +545,11 @@ export class BackgroundSubagentHost {
       return round.outcome;
     }
     this.#paused.delete(runId);
-    const model = this.#models.get(runId);
+    const choice = this.#choices.get(runId);
     return this.#enqueue({
       runId,
       subagent,
-      ...(model !== undefined && { model }),
+      ...(choice !== undefined && { choice }),
       text: body.text,
       turn: turnOf(body),
     });
@@ -584,11 +608,15 @@ export class BackgroundSubagentHost {
    *
    * @param input.subagent - 子代理名（規格名）。
    * @param input.text - 第一輪的人話。
-   * @param input.model - 這個子代理用哪一顆模型（型錄 id），省略＝沿用 root 的；之後每一輪都是它（#876）。
+   * @param input.choice - 這個子代理用哪一顆模型與推理等級，省略＝沿用 root 的；之後每一輪都是它（#876、#877）。
    * @returns 編號（`bg-` 加隨機，不是計數器：root 續接之後不能撞上舊日誌）與第一輪的下場。
    * @throws host 已關閉；存活的背景子代理已達並存上限；編不出這個子代理的圖。
    */
-  start(input: { readonly subagent: string; readonly text: string; readonly model?: string }): {
+  start(input: {
+    readonly subagent: string;
+    readonly text: string;
+    readonly choice?: ModelChoice;
+  }): {
     readonly runId: string;
     readonly outcome: Promise<BackgroundRoundOutcome>;
   } {
@@ -596,7 +624,7 @@ export class BackgroundSubagentHost {
     // 先於編圖與開日誌：滿了就一樣東西都不留（沒有編號、沒有日誌）。
     const full = this.#capacityRefusal(undefined);
     if (full !== undefined) throw new BackgroundSubagentError('at-capacity', full);
-    this.#agentFor(input.subagent, input.model);
+    this.#agentFor(input.subagent, input.choice);
     let runId: string;
     do runId = `${BACKGROUND_RUN_PREFIX}${randomUUID().replaceAll('-', '').slice(0, 12)}`;
     while (this.#known.has(runId));
@@ -771,12 +799,12 @@ export class BackgroundSubagentHost {
     return this.#queue.splice(index, 1)[0];
   }
 
-  #agentFor(subagent: string, model?: string): BackgroundAgent {
-    // 鍵含模型：同名的子代理、不同的模型是兩張圖，互不污染（#876）。
-    const key = model === undefined ? subagent : `${subagent}\0${model}`;
+  #agentFor(subagent: string, choice?: ModelChoice): BackgroundAgent {
+    // 鍵含模型與推理等級：同名的子代理、不同的選擇是兩張圖，互不污染（#876、#877）。
+    const key = choice === undefined ? subagent : `${subagent}\0${choiceKey(choice)}`;
     const cached = this.#graphs.get(key);
     if (cached !== undefined) return cached;
-    const compiled = this.#compile(subagent, model);
+    const compiled = this.#compile(subagent, choice);
     this.#graphs.set(key, compiled);
     return compiled;
   }
@@ -792,7 +820,7 @@ export class BackgroundSubagentHost {
       this.#newJob({
         runId: job.runId,
         subagent: job.subagent,
-        ...(job.model !== undefined && { model: job.model }),
+        ...(job.choice !== undefined && { choice: job.choice }),
         text: steer.text,
         turn: turnOf(steer),
       }),
@@ -916,7 +944,7 @@ export class BackgroundSubagentHost {
 
   async #drive(log: SessionLog, job: Job, round: RunningRound): Promise<void> {
     const cancel = round.controller.signal;
-    const run = await this.#agentFor(job.subagent, job.model).streamEvents(
+    const run = await this.#agentFor(job.subagent, job.choice).streamEvents(
       { messages: [new HumanMessage(job.text)] } as never,
       {
         version: 'v3',

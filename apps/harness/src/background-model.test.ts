@@ -21,7 +21,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import { BackgroundSubagentHost } from './background-subagents.js';
-import type { BackgroundAgent } from './background-subagents.js';
+import type { BackgroundAgent, ModelChoice } from './background-subagents.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { ScriptedChatModel } from './scripted-model.js';
 
@@ -35,15 +35,15 @@ function gate() {
 describe('host 逐次帶模型（假 agent）', () => {
   /** 每次 `compile` 記一筆 `(名字, 模型)`，回一個記下自己是誰、收到什麼話的假 agent。 */
   function rig() {
-    const compiled: { subagent: string; model: string | undefined }[] = [];
+    const compiled: { subagent: string; choice: ModelChoice | undefined }[] = [];
     const handled: { agent: string; text: string }[] = [];
     let hold: Promise<void> | undefined;
     const sessions = new SessionRegistry('root-1');
     const host = new BackgroundSubagentHost({
       sessions,
-      compile: (subagent, model) => {
-        compiled.push({ subagent, model });
-        const label = `${subagent}/${model ?? '-'}#${String(compiled.length)}`;
+      compile: (subagent, choice) => {
+        compiled.push({ subagent, choice });
+        const label = `${subagent}/${choice?.model ?? '-'}${choice?.effort === undefined ? '' : `@${choice.effort}`}#${String(compiled.length)}`;
         const agent: BackgroundAgent = {
           async streamEvents(input) {
             const text = String(
@@ -72,16 +72,16 @@ describe('host 逐次帶模型（假 agent）', () => {
     const first = host.start({ subagent: 'worker', text: '一' });
     const second = host.start({ subagent: 'worker', text: '二' });
     await Promise.all([first.outcome, second.outcome]);
-    expect(compiled).toEqual([{ subagent: 'worker', model: undefined }]);
+    expect(compiled).toEqual([{ subagent: 'worker', choice: undefined }]);
     await host.close();
   });
 
   it('指定模型：編圖時帶著它；之後對同一個編號的每一輪（send）沿用同一張圖，不重編', async () => {
     const { host, compiled, handled } = rig();
-    const started = host.start({ subagent: 'worker', text: '第一句', model: 'cheap' });
+    const started = host.start({ subagent: 'worker', text: '第一句', choice: { model: 'cheap' } });
     expect(await started.outcome).toEqual({ ok: true });
     expect(await host.send({ runId: started.runId, message: '第二句' })).toEqual({ ok: true });
-    expect(compiled).toEqual([{ subagent: 'worker', model: 'cheap' }]);
+    expect(compiled).toEqual([{ subagent: 'worker', choice: { model: 'cheap' } }]);
     expect(handled.map((each) => each.agent)).toEqual(['worker/cheap#1', 'worker/cheap#1']);
     await host.close();
   });
@@ -89,14 +89,14 @@ describe('host 逐次帶模型（假 agent）', () => {
   it('同名子代理、不同模型是兩張圖，各編一次、互不污染；相同模型的第二個編號重用那張圖', async () => {
     const { host, compiled, handled } = rig();
     const plain = host.start({ subagent: 'worker', text: 'a' });
-    const cheap = host.start({ subagent: 'worker', text: 'b', model: 'cheap' });
-    const strong = host.start({ subagent: 'worker', text: 'c', model: 'strong' });
-    const cheapAgain = host.start({ subagent: 'worker', text: 'd', model: 'cheap' });
+    const cheap = host.start({ subagent: 'worker', text: 'b', choice: { model: 'cheap' } });
+    const strong = host.start({ subagent: 'worker', text: 'c', choice: { model: 'strong' } });
+    const cheapAgain = host.start({ subagent: 'worker', text: 'd', choice: { model: 'cheap' } });
     await Promise.all([plain, cheap, strong, cheapAgain].map((each) => each.outcome));
     expect(compiled).toEqual([
-      { subagent: 'worker', model: undefined },
-      { subagent: 'worker', model: 'cheap' },
-      { subagent: 'worker', model: 'strong' },
+      { subagent: 'worker', choice: undefined },
+      { subagent: 'worker', choice: { model: 'cheap' } },
+      { subagent: 'worker', choice: { model: 'strong' } },
     ]);
     const by = (text: string) => handled.find((each) => each.text === text)?.agent;
     expect(by('a')).toBe('worker/-#1');
@@ -106,29 +106,69 @@ describe('host 逐次帶模型（假 agent）', () => {
     await host.close();
   });
 
-  it('一個編號不能換模型：換成別顆、換成沒指定、沒指定換成有指定，都拒絕', async () => {
+  it('同一顆模型、不同推理等級是兩張圖（快取鍵含推理等級）；相同的重用', async () => {
+    const { host, compiled, handled } = rig();
+    const plain = host.start({ subagent: 'worker', text: 'a', choice: { model: 'cheap' } });
+    const off = host.start({
+      subagent: 'worker',
+      text: 'b',
+      choice: { model: 'cheap', effort: 'off' },
+    });
+    const offAgain = host.start({
+      subagent: 'worker',
+      text: 'c',
+      choice: { model: 'cheap', effort: 'off' },
+    });
+    await Promise.all([plain, off, offAgain].map((each) => each.outcome));
+    expect(compiled).toEqual([
+      { subagent: 'worker', choice: { model: 'cheap' } },
+      { subagent: 'worker', choice: { model: 'cheap', effort: 'off' } },
+    ]);
+    const by = (text: string) => handled.find((each) => each.text === text)?.agent;
+    expect(by('a')).toBe('worker/cheap#1');
+    expect(by('b')).toBe('worker/cheap@off#2');
+    expect(by('c')).toBe('worker/cheap@off#2');
+    await host.close();
+  });
+
+  it('一個編號不能換模型或推理等級：換成別顆、換成沒指定、沒指定換成有指定、加上或換掉推理等級，都拒絕', async () => {
     const { host } = rig();
-    const withModel = host.start({ subagent: 'worker', text: '一', model: 'cheap' });
+    const withModel = host.start({ subagent: 'worker', text: '一', choice: { model: 'cheap' } });
     await withModel.outcome;
     const plain = host.start({ subagent: 'worker', text: '一' });
     await plain.outcome;
 
-    for (const [runId, model] of [
-      [withModel.runId, 'strong'],
+    const withEffort = host.start({
+      subagent: 'worker',
+      text: '一',
+      choice: { model: 'cheap', effort: 'off' },
+    });
+    await withEffort.outcome;
+
+    for (const [runId, choice] of [
+      [withModel.runId, { model: 'strong' }],
       [withModel.runId, undefined],
-      [plain.runId, 'cheap'],
+      [withModel.runId, { model: 'cheap', effort: 'off' }],
+      [withEffort.runId, { model: 'cheap' }],
+      [withEffort.runId, { model: 'cheap', effort: 'low' }],
+      [plain.runId, { model: 'cheap' }],
     ] as const) {
       const outcome = await host.submit({
         runId,
         subagent: 'worker',
         text: '換',
-        ...(model !== undefined && { model }),
+        ...(choice !== undefined && { choice }),
       });
       expect(outcome).toMatchObject({ ok: false, error: expect.stringContaining('不能換成') });
     }
     // 沒換的（同一顆）照收。
     expect(
-      await host.submit({ runId: withModel.runId, subagent: 'worker', text: '同', model: 'cheap' }),
+      await host.submit({
+        runId: withModel.runId,
+        subagent: 'worker',
+        text: '同',
+        choice: { model: 'cheap' },
+      }),
     ).toEqual({ ok: true });
     await host.close();
   });
@@ -137,7 +177,7 @@ describe('host 逐次帶模型（假 agent）', () => {
     const { host, compiled, handled, holdRounds } = rig();
     const release = gate();
     holdRounds(release.opened);
-    const started = host.start({ subagent: 'worker', text: '第一句', model: 'cheap' });
+    const started = host.start({ subagent: 'worker', text: '第一句', choice: { model: 'cheap' } });
     // 第一輪卡在假 agent 裡；此時插一句話（排進這一輪的插話收件匣），再中斷這一輪。
     while (handled.length === 0) await new Promise((resolve) => setTimeout(resolve, 2));
     host.sendFromUser({ runId: started.runId, text: '插話' });
@@ -148,7 +188,7 @@ describe('host 逐次帶模型（假 agent）', () => {
     host.sendFromUser({ runId: started.runId, text: '新的' });
     await host.idle();
     expect(handled.map((each) => each.text)).toEqual(['第一句', '插話', '新的']);
-    expect(compiled).toEqual([{ subagent: 'worker', model: 'cheap' }]);
+    expect(compiled).toEqual([{ subagent: 'worker', choice: { model: 'cheap' } }]);
     expect(new Set(handled.map((each) => each.agent))).toEqual(new Set(['worker/cheap#1']));
     await host.close();
   });
@@ -190,15 +230,19 @@ describe('指定的模型真的接到圖上（真圖＋假端點）', () => {
     const models: Record<string, ScriptedChatModel> = { cheap };
     const host = new BackgroundSubagentHost({
       sessions,
-      compile: (name, modelId) =>
+      compile: (name, choice) =>
         built.compileSubagent(
           name,
           new MemorySaver(),
-          modelId === undefined ? undefined : models[modelId],
+          choice === undefined ? undefined : models[choice.model],
         ) as unknown as BackgroundAgent,
     });
     try {
-      const started = host.start({ subagent: 'worker', text: '第一句', model: 'cheap' });
+      const started = host.start({
+        subagent: 'worker',
+        text: '第一句',
+        choice: { model: 'cheap' },
+      });
       expect(await started.outcome).toEqual({ ok: true });
       expect(await host.send({ runId: started.runId, message: '第二句' })).toEqual({ ok: true });
       expect(cheap.prompts).toHaveLength(2);

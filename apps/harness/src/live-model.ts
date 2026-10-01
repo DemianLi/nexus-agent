@@ -880,7 +880,14 @@ export function createLiveModel(
   config: LiveModelConfig,
   purpose?: LiveModelPurpose,
   credentials: CredentialService = ambientCredentials(),
-  overrides: { readonly maxOutputTokens?: number } = {},
+  overrides: {
+    readonly maxOutputTokens?: number;
+    /**
+     * 關掉這顆的推理（[#877](https://github.com/DemianLi/nexus-agent/issues/877)，背景子代理被指定 `off` 那一級）：疊上型錄條目的
+     * `thinkingOffBody`，同標題那一顆的做法。條目沒宣告 `off` 或沒有 chat template 參數時什麼都不加。
+     */
+    readonly thinkingOff?: boolean;
+  } = {},
 ): ChatOpenAI {
   // 型錄沒有這個 id 就拋，訊息指名 id：設定的 schema 已經擋過一次，這裡是手搭設定的呼叫端（測試、eval）的最後一道。
   const entry = requireModelEntry(config.models, config.modelId);
@@ -917,7 +924,7 @@ export function createLiveModel(
     onFailedAttempt: classifyFailedAttempt,
     // 用途專屬的請求內容，見 {@link LiveModelPurpose}。**要在建構時給**：建好之後才設 `modelKwargs` 不會進請求
     // （#650 實測，前兩輪的參數就是這樣沒送出去的）。
-    ...(purpose === 'session-title' &&
+    ...((purpose === 'session-title' || overrides.thinkingOff === true) &&
       Object.keys(thinkingOffBody(entry)).length > 0 && {
         modelKwargs: thinkingOffBody(entry),
       }),
