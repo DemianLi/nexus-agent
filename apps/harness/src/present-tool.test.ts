@@ -10,7 +10,10 @@
  * 4. 沒有工作區（沒掛 sandbox-policy）時，工具在、叫了被拒。
  * 5. 圖自己發的 `custom` frame 不上線：那一格只放 pump 從日誌合成的東西。
  *
- * **零憑證、零外部連線**：模型是 `ScriptedChatModel`，工作區是暫存目錄，測試不碰真的 `~/.nexus-agent`。
+ * **走產品組裝**（#670）：agent 是 `createCliAgent` 組的（出貨清單、組裝點建的 backend 與沙箱控制器），模型換成清單上的腳本提供者，
+ * 測試自己的 plugin（子代理來源、寫 `custom` channel 的工具）從 `plugins` 帶進去。以前這裡自己抄一份組裝，兩邊同不同形沒有東西守。
+ *
+ * **零憑證、零外部連線**：模型是腳本，工作區是暫存目錄，測試不碰真的 `~/.nexus-agent`。
  */
 
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -18,9 +21,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { tool } from '@langchain/core/tools';
-import { MemorySaver } from '@langchain/langgraph';
 import type { InvariantError, PluginEntry, SessionEvent, SessionRegistry } from '@nexus/core';
-import { createHostServicesPlugin } from '@nexus/core';
 import { PRESENT_NO_WORKSPACE_MESSAGE, PRESENT_TOOL_NAME } from '@nexus/plugin-present';
 import type { DeliverablesPresentedPayload, Event } from '@nexus/wire';
 import {
@@ -39,17 +40,16 @@ import {
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { createNexusAgent } from './agent-factory.js';
-
-import { ContainedFilesystemBackend } from './contained-backend.js';
-import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
-import { createSandboxPolicyPlugin } from '@nexus/plugin-sandbox-policy';
-import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
-import { ScriptedChatModel } from './scripted-model.js';
+import { createCliAgent } from './assembly-root.js';
+import {
+  TEST_BROWSER_AUTH,
+  loopbackRequest,
+  shippedPlugins,
+  withScriptedModel,
+} from './fixtures.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
-import { composeAttachSessions } from './session-attach.js';
 
 const shipped = await shippedPlugins();
 
@@ -120,29 +120,15 @@ async function run(
     await writeFile(join(root, name), content);
   }
   const workspace = options.workspace ?? true;
-  const sandboxMode = new SandboxModeController('workspace-write');
   const violations: string[] = [];
-  const built = await createNexusAgent({
-    model: new ScriptedChatModel({ turns }),
-    checkpointer: new MemorySaver(),
-    plugins: [
-      ...(workspace
-        ? [createHostServicesPlugin({ sandboxPolicy: { controller: sandboxMode, rootDir: root } })]
-        : []),
-      ...shipped,
-      WORKER,
-      ...(options.extra ?? []),
-      ...(workspace ? [createSandboxPolicyPlugin()] : []),
-    ],
-    ...(workspace && {
-      backend: new ContainedFilesystemBackend({
-        rootDir: root,
-        mode: sandboxMode.source,
-        grants: sandboxMode,
-      }),
-    }),
-    onInvariantViolation: (error: InvariantError) => void violations.push(error.message),
-  });
+  // **產品組裝**（#670）：出貨清單、組裝點建的 backend 與沙箱控制器、答題管道都是 `createCliAgent` 給的，這裡只換模型、
+  // 帶進測試自己的 plugin。`workspace` 為否就是沒給 `--workspace`——產品組裝在那種情況下不建 backend、不掛 sandbox-policy。
+  const built = await createCliAgent(
+    { live: false, ...(workspace && { workspace: root }) },
+    withScriptedModel([...shipped, WORKER, ...(options.extra ?? [])], turns),
+    root,
+    { onInvariantViolation: (error: InvariantError) => void violations.push(error.message) },
+  );
   let sessions: SessionRegistry | undefined;
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,
@@ -150,10 +136,9 @@ async function run(
       agent: built.agent as unknown as PumpAgent,
       commands: built.commands,
       dispose: built.dispose,
-      attachInvariants: built.attachInvariants,
       attachSessions: (registry, backgroundPort) => {
         sessions = registry;
-        return composeAttachSessions(built)(registry, backgroundPort);
+        return built.attachSessions(registry, backgroundPort);
       },
     }),
   });

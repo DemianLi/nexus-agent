@@ -11,7 +11,10 @@
  * 每一條都配對照：同一個模式、同一顆工具的另一種失敗**不帶碼**（否則「凡失敗都掛碼」也全綠），
  * 寫得進去時是成功。
  *
- * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
+ * **走產品組裝**（#670）：`createCliAgent` ＋ 出貨清單，`--sandbox` 給模式，模型換成清單上的腳本提供者。以前這裡自己
+ * `createNexusAgent` 只掛 submit-record；現在 submit-record 是出貨清單上的一列，backend 是組裝點建的那一個。
+ *
+ * **零憑證、零外部連線**：模型是腳本。
  */
 
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -19,17 +22,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { Command, MemorySaver } from '@langchain/langgraph';
-import { SessionRegistry } from '@nexus/core';
+import { Command } from '@langchain/langgraph';
 import type { SandboxMode, SessionEvent } from '@nexus/core';
-import { createSubmitRecordPlugin, SUBMIT_RECORD_TOOL_NAME } from '@nexus/plugin-submit-record';
+import { SUBMIT_RECORD_TOOL_NAME } from '@nexus/plugin-submit-record';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createNexusAgent } from './agent-factory.js';
-import { ContainedFilesystemBackend } from './contained-backend.js';
+import { createCliAgent } from './assembly-root.js';
+import { shippedPlugins, withScriptedModel } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
-import { ScriptedChatModel } from './scripted-model.js';
 
+const shipped = await shippedPlugins();
 const CSV_PATH = '/visitors.csv';
 const RECORD = { 姓名: '阿明', 日期: '週二' };
 
@@ -55,45 +57,40 @@ describe('submit_record 被 fence 擋下', () => {
 
   /**
    * 在某一格模式下叫一次 `submit_record`、核准它，回 root 那份日誌的 `tool/result` 與模型拿到的
-   * 那則工具訊息。backend 給 `createNexusAgent`，同 `cli.ts`；submit-record 從 `fs` 服務拿折出來的那一個。
+   * 那則工具訊息。backend 與模式都是產品組裝建的（`--workspace`、`--sandbox`）。
    */
   async function submitAndApprove(
     mode: SandboxMode,
   ): Promise<{ results: unknown[]; message: ToolMessage | undefined }> {
-    const backend = new ContainedFilesystemBackend({ rootDir: root, mode });
-    const { agent, attachSession, dispose } = await createNexusAgent({
-      model: new ScriptedChatModel({
-        turns: [
-          {
-            content: '',
-            toolCalls: [
-              { name: SUBMIT_RECORD_TOOL_NAME, args: { file_path: CSV_PATH, record: RECORD } },
-            ],
-          },
-          { content: '收工。' },
+    const turns = [
+      {
+        content: '',
+        toolCalls: [
+          { name: SUBMIT_RECORD_TOOL_NAME, args: { file_path: CSV_PATH, record: RECORD } },
         ],
-      }),
-      backend,
-      checkpointer: new MemorySaver(),
-      plugins: [createSubmitRecordPlugin()],
-    });
-    const sessions = new SessionRegistry('submit-record-sandbox');
-    const detach = attachSession(sessions);
+      },
+      { content: '收工。' },
+    ];
+    const built = await createCliAgent(
+      { live: false, workspace: root, sandbox: mode },
+      withScriptedModel(shipped, turns),
+      root,
+    );
+    const detach = built.attachSession(built.sessions);
     const config = { configurable: { thread_id: 'submit-record-sandbox' } };
     let state: { messages: BaseMessage[] };
     try {
-      await agent.invoke(toAgentInvocation('登記一位訪客。'), config);
-      state = (await agent.invoke(
+      await built.agent.invoke(toAgentInvocation('登記一位訪客。'), config);
+      state = (await built.agent.invoke(
         new Command({ resume: { decisions: [{ type: 'approve' }] } }) as never,
         config,
       )) as { messages: BaseMessage[] };
     } finally {
       detach();
-      await dispose();
+      await built.dispose();
     }
-    const rootLog = sessions.list().find((entry) => entry.address.kind === 'root');
     return {
-      results: resultsOf(rootLog?.log.events ?? []),
+      results: resultsOf(built.sessionLog.events),
       message: state.messages.find(
         (message): message is ToolMessage =>
           ToolMessage.isInstance(message) && message.name === SUBMIT_RECORD_TOOL_NAME,
