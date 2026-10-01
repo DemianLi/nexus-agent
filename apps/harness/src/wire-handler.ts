@@ -48,6 +48,7 @@ import type {
   WireErrorCode,
   WireChannel,
   FeedbackMethod,
+  WireFeedbackRating,
   DeliverableBytes,
   DeliverableMethod,
   DeliverableReadError,
@@ -578,7 +579,12 @@ interface ThreadState {
   dispose(): Promise<void>;
 }
 
-const RATINGS: readonly string[] = ['positive', 'negative'];
+/** 這張表以型別窮舉 `WireFeedbackRating`：聯集多一種評價，這裡不補就編不過，不會悄悄被擋在門外。 */
+const RATINGS: Readonly<Record<WireFeedbackRating, true>> = { positive: true, negative: true };
+
+function isRating(value: unknown): value is WireFeedbackRating {
+  return typeof value === 'string' && Object.hasOwn(RATINGS, value);
+}
 
 function isCategory(value: unknown): value is FeedbackCategory {
   return typeof value === 'string' && (FEEDBACK_CATEGORIES as readonly string[]).includes(value);
@@ -658,8 +664,7 @@ function feedbackResponse(
   }
 
   if (
-    typeof p.rating !== 'string' ||
-    !RATINGS.includes(p.rating) ||
+    !isRating(p.rating) ||
     !optional(p.note, isString) ||
     !optional(p.category, isCategory) ||
     !(p.ifVersion === null || typeof p.ifVersion === 'string')
@@ -673,7 +678,7 @@ function feedbackResponse(
   if (thread === undefined || service === undefined) return successResponse(id, notFound);
   const result = service.put(thread.pump.sessionLog, {
     messageId,
-    rating: p.rating as 'positive' | 'negative',
+    rating: p.rating,
     ...(typeof p.note === 'string' && { note: p.note }),
     ...(isCategory(p.category) && { category: p.category }),
     ifVersion: p.ifVersion,
