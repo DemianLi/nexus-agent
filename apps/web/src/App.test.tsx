@@ -2856,6 +2856,20 @@ describe('會話標題（#655）', () => {
   });
 });
 
+/** 子代理歷史的 frame：不帶 seq，同 server 那側。 */
+const historyFrame = (method: string, data: unknown): Event =>
+  ({ type: 'event', method, params: { namespace: [], timestamp: 0, data } }) as Event;
+const historySaid = (role: 'human' | 'ai', id: string, text: string): Event[] => [
+  historyFrame('messages', { event: 'message-start', role, id }),
+  historyFrame('messages', {
+    event: 'content-block-delta',
+    index: 0,
+    delta: { type: 'text-delta', text },
+    id,
+  }),
+  historyFrame('messages', { event: 'message-finish', reason: 'stop', id }),
+];
+
 describe('背景子代理的輸入框接線（#869）', () => {
   const statusFrame = (items: readonly { runId: string; status: 'running' | 'idle' }[]) =>
     frame('custom', [], { name: SUBAGENT_STATUS, payload: { items } });
@@ -2916,5 +2930,44 @@ describe('背景子代理的輸入框接線（#869）', () => {
     fake.downlink.push(fake.opened[0]!, [statusFrame([])]);
     await waitFor(() => expect(within(card).getByText('已收線')).toBeTruthy());
     expect((screen.getByLabelText('對背景子代理說話') as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it('展開時讀子代理自己的對話並用主對話同一套畫法畫出來（#861）', async () => {
+    seq = 0;
+    const fake = fakeClient(delegated([{ runId: 'bg-1', status: 'idle' }]));
+    const subagentHistory = vi.fn(async () => ({
+      kind: 'ok' as const,
+      result: {
+        events: [
+          historyFrame('lifecycle', { event: 'running', graph_name: 'root' }),
+          ...historySaid(
+            'human',
+            'h1',
+            '查三個檔案\n\nYour parent agent id is "root". 收尾前回報。',
+          ),
+          ...historySaid('ai', 'a1', '三個檔案都看過了'),
+          historyFrame('lifecycle', { event: 'completed', graph_name: 'root' }),
+        ],
+        firstSeq: 0,
+        throughSeq: 5,
+        hasMore: false,
+        legacy: false,
+      },
+    }));
+    render(<App client={{ ...fake.client, subagentHistory }} />);
+
+    const card = await screen.findByTestId('tool-entry');
+    await waitFor(() => expect(within(card).getByText('閒著')).toBeTruthy());
+    expect(subagentHistory).not.toHaveBeenCalled();
+    fireEvent.click(within(card).getAllByRole('button')[0]!);
+
+    const section = await screen.findByLabelText('背景子代理的對話');
+    await waitFor(() => expect(within(section).getByText('三個檔案都看過了')).toBeTruthy());
+    expect(within(section).getByText('查三個檔案')).toBeTruthy();
+    expect(within(section).getByText('派出的任務')).toBeTruthy();
+    expect(section.textContent).not.toContain('Your parent agent id');
+    expect(subagentHistory).toHaveBeenCalledExactlyOnceWith(fake.opened[0], 'bg-1', {
+      maxMessages: 40,
+    });
   });
 });
