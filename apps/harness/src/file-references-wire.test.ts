@@ -16,7 +16,8 @@ import type { Event, WireClient } from '@nexus/wire';
 import { createWireClient, fileReferencesPath } from '@nexus/wire';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { CLI_PROBE_FILE, createCliAgent, runTurn } from './cli.js';
+import { runTurn } from './cli.js';
+import { CLI_PROBE_FILE, createCliAgent } from './assembly-root.js';
 import { FILE_REFERENCE_PROMPT } from './file-references.js';
 import { exchangeServeToken, fetchWithCookie, serveClient, shippedPlugins } from './fixtures.js';
 import { runServe } from './serve.js';

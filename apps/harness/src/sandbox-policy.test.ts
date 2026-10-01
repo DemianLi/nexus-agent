@@ -18,7 +18,8 @@ import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createCliAgent, parseCliArgs, runTurn } from './cli.js';
+import { parseCliArgs, runTurn } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import type { SandboxMode } from './contained-backend.js';
 import { parseServeArgs } from './serve.js';

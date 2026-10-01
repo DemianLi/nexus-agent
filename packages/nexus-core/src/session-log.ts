@@ -839,7 +839,7 @@ export interface SessionEventMap {
    *
    * dsh 的 `turn` 出自 `turnBoundary` 投影的 `lastTurn`，我們沒有那個投影，日誌與 wire 上也都沒有輪的
    * 編號（見 `tool/call` 那一條）。這一筆屬於哪一輪照 repo 既有的規則由 `seq` 推：往前找最近一顆不是
-   * resume 的 `turn/start`（`feedback.ts` 與歷史分頁都這樣定輪）。放一個自己數的號進來，就會有兩個
+   * resume 的 `turn/start`（{@link isLogicalTurnStart}，各讀方共用）。放一個自己數的號進來，就會有兩個
    * 可能對不上的輪。
    *
    * web 只收 root 那一份的這一顆，即時與重新整理同一條規則——歷史路由只讀 root（`conversation-history.ts`）。
@@ -862,7 +862,7 @@ export interface SessionEventMap {
    *
    * ## 對 dsh 的偏離：沒有 `turn`
    *
-   * 同 `deliverables/presented`：這一筆屬於哪一輪由 `seq` 推，往前找最近一顆不是 resume 的 `turn/start`
+   * 同 `deliverables/presented`：這一筆屬於哪一輪由 `seq` 推，往前找最近一顆開邏輯輪的 `turn/start`（{@link isLogicalTurnStart}）
    * （[#443](https://github.com/DemianLi/nexus-agent/issues/443) 第二則決議）。**所以它一定落在它那一輪的
    * `turn/start` 之後、下一輪的之前**，記錄器為此在輪內記，見那個套件的 `recorder.ts`。
    *
@@ -1297,6 +1297,30 @@ export function currentTurnStart(events: readonly SessionEvent[]): number {
     if (type === 'turn/start') return at;
   }
   return -1;
+}
+
+/** 開新的邏輯輪的那一種 `turn/start`：`kind` 收窄成不是 `resume`。守衛的假支不會被誤收窄掉整個 `turn/start`。 */
+export type LogicalTurnStartEvent = Omit<SessionEvent<'turn/start'>, 'data'> & {
+  readonly data: Exclude<SessionEventMap['turn/start'], { readonly kind: 'resume' }>;
+};
+
+/**
+ * 這一顆**開不開新的邏輯輪**：是 `turn/start`，而且 `kind` 不是 `resume`（[#682](https://github.com/DemianLi/nexus-agent/issues/682)）。
+ *
+ * 一筆事件屬於哪一輪，規則是「由 `seq` 往前找最近一顆開邏輯輪的 `turn/start`」——`resume` 是回覆核准，
+ * 接著上一輪停在核准點的那幾顆呼叫，不另開一輪。這條規則原本每個讀方各寫一次，**多寫一份的人把
+ * `resume` 當成新輪，不會讓任何測試變紅**（只是畫面上多一輪、評分掛錯輪），所以跟
+ * {@link currentTurnStart} 一樣住在詞彙的擁有者旁邊。
+ *
+ * 逐顆的述詞，不是往回走：讀方都是往前折的迴圈或觀察者。它只回答「這一顆開不開新的邏輯輪」，
+ * `session/end-seed` 留給各讀方自己處理（各份對「end-seed 之後來的 `resume`」的假設不一樣，見 #682）。
+ * 不是 `turn/start` 的事件回 `false`。長期照 dsh 讓 `turn/start` 自己帶輪號的話，這個述詞是要改的那一處。
+ *
+ * @param event - 日誌的一顆事件。
+ * @returns 開新的邏輯輪就是 `true`。
+ */
+export function isLogicalTurnStart(event: SessionEvent): event is LogicalTurnStartEvent {
+  return event.type === 'turn/start' && event.data.kind !== 'resume';
 }
 
 /**

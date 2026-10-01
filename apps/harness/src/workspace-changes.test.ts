@@ -52,7 +52,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
-import { createCliAgent } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
 import { createSandboxPolicyPlugin } from '@nexus/plugin-sandbox-policy';
@@ -61,6 +61,7 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+import { composeAttachSessions } from './session-attach.js';
 
 const shipped = await shippedPlugins();
 
@@ -154,9 +155,9 @@ async function run(
       dispose: built.dispose,
       workspaceChanges: built.services.use(WORKSPACE_CHANGES_SERVICE),
       attachInvariants: built.attachInvariants,
-      attachSession: (registry) => {
+      attachSessions: (registry, backgroundPort) => {
         sessions = registry;
-        return built.attachSession(registry);
+        return composeAttachSessions(built)(registry, backgroundPort);
       },
     }),
   });

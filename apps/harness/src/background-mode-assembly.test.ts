@@ -7,7 +7,7 @@
 import { HumanMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
 
-import { createCliAgent } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { shippedPlugins } from './fixtures.js';
 import type { ScriptedChatModel } from './scripted-model.js';
 

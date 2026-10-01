@@ -31,7 +31,7 @@ import { Command, MemorySaver } from '@langchain/langgraph';
 import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 
 import { createNexusAgent } from './agent-factory.js';
-import { createCliAgent } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { ContainedFilesystemBackend, GRANT_MISMATCH_NOTE } from './contained-backend.js';
 import type { SandboxMode } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
