@@ -7,7 +7,7 @@
  * 圖是 [#190](https://github.com/DemianLi/nexus-agent/issues/190)，這一份是它第 1 格
  * （`agent/session-start`）掉出來的 [#201](https://github.com/DemianLi/nexus-agent/issues/201)
  * 再掉出來的 [#203](https://github.com/DemianLi/nexus-agent/issues/203)。
- * **這一份不建 resume**——門 A 的實作在 `@nexus/core` 與 `cli.ts`，行為驗在
+ * **這一份不建 resume**——門 A 的實作在 `@nexus/core` 與 `assembly-root.ts`，行為驗在
  * `session-resume.test.ts`；這裡只守形狀，與守著門 B。
  *
  * ## 兩扇門，各自只帶得回半個會話
@@ -36,7 +36,7 @@
  *
  * ## 這條絆索釘得到什麼、釘不到什麼
  *
- * 下面第一層掃的是**整棵樹上「誰 `new` 了一顆 checkpointer」**，不是「`cli.ts` 那一行還在
+ * 下面第一層掃的是**整棵樹上「誰 `new` 了一顆 checkpointer」**，不是「`assembly-root.ts` 那一行還在
  * 不在」。今天的答案是恰好一處，而那一處在 `createCliAgent` 裡——**`serve.ts` 走的是同一個
  * 組裝點**（它呼叫 `createCliAgent`，不自己 `createNexusAgent`），所以釘一處就把 CLI 與 web
  * 兩條產品路徑都蓋住了。
@@ -135,7 +135,9 @@ function saverConstructions(): string[] {
  * 仍然只有這一處、仍然是不耐久的那一種**——所以這裡改的是 characterization 的字面，
  * 不是上面那三個目的地的任何一個。
  */
-const THE_ONLY_SAVER = ['apps/harness/src/cli.ts: const checkpointer = new MemorySaver();'];
+const THE_ONLY_SAVER = [
+  'apps/harness/src/assembly-root.ts: const checkpointer = new MemorySaver();',
+];
 
 /**
  * 這條絆索響的時候，讀的人該往哪裡去。**三個目的地，不是「值不對」。**

@@ -25,7 +25,8 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BROWSER_SESSION_SECRET_FILE } from './browser-session-secret.js';
-import { createCliAgent, parseCliArgs, runCli } from './cli.js';
+import { parseCliArgs, runCli } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { CREDENTIALS_FILE } from './credentials.js';
 import { serveClient, foldTurn } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
