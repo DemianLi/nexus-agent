@@ -916,6 +916,21 @@ export interface InternalPluginRegistry extends PluginRegistry {
    */
   enter(origin: PluginOrigin): () => void;
   /**
+   * 逆序撤掉某一位註冊者經註冊點拿到的每一個 undo，跑過就清空（冪等）。
+   *
+   * **撤銷由註冊點自己記下**，載入器不替它們鏡像（#677）：每個回傳 undo 的註冊方法都走
+   * 內部的 `effect`，undo 在那裡推進該註冊者的堆疊，所以新增註冊方法不必回頭改
+   * {@link ./load.ts | loadPlugins}。這是 dsh `ctx.effect` 的對應物——撤銷歸屬掛在註冊者
+   * 身上，只是載體由「context 一收掉就回收」換成「註冊者自己的堆疊、出錯時逆序排掉」
+   * （基座沒有 context 樹，載入器偏離登記見 `load.ts` 檔頭）。
+   *
+   * 以 `origin` 的**身分**為鍵，不看 {@link enter} 之後有沒有放掉游標：逐列掉模式下，
+   * 因 `requires` 連鎖掉的那一列 `apply` 早已跑完，仍要撤它的註冊。
+   *
+   * @param origin - 要撤誰的；傳給 {@link enter} 的同一個物件。
+   */
+  rollback(origin: PluginOrigin): void;
+  /**
    * 記下清單上明著被關掉的一個條目。
    *
    * **只有 {@link ./load.ts | loadPlugins} 叫得到它**，因為只有它看得見 `disabled`；
@@ -1010,11 +1025,37 @@ export function createRegistry(): InternalPluginRegistry {
   );
 
   let current: PluginOrigin | undefined;
+  /** 現在這位註冊者的 undo 堆疊；跟 `current` 同進同出。 */
+  let currentUndos: (() => void)[] | undefined;
+  /** 以註冊者的身分為鍵：`enter` 放掉游標之後，{@link InternalPluginRegistry.rollback} 仍找得到。 */
+  const undoStacks = new Map<PluginOrigin, (() => void)[]>();
   function requireOrigin(what: string): PluginOrigin {
     if (current === undefined) {
       throw new Error(`${what}只能在 plugin 的 apply 裡呼叫——registry 之外沒有註冊者可以指名。`);
     }
     return current;
+  }
+
+  /**
+   * **每個回傳 undo 的註冊方法都經這裡**（dsh `ctx.effect` 的對應物）：取註冊者、跑一次
+   * mutation、把它回傳的 undo 推進註冊者的堆疊，再原樣交回。
+   *
+   * 少了這一步的方法不會有任何現有測試發現，只會在回滾時默默留下一筆孤兒；集中在這一個函式裡，
+   * 新增註冊方法就沒有第二個地方要記得改。**mutation 先跑、成功了才推堆疊**：驗證拋錯的註冊
+   * 什麼都沒留下，也就沒有 undo 可推。
+   *
+   * 不經這裡的有兩個：`logger.warn` 不回傳 undo；`sessions.bind` 是組裝點的一步，在
+   * `enter` 之外呼叫（見 {@link SessionRegistrationPoint.bind}），不屬於任何 plugin 的註冊。
+   *
+   * @param what - 方法名，註冊者不在時拋的訊息用。
+   * @param mutate - 做一次註冊並回傳它的 undo；拿到註冊者的 origin。
+   * @returns 同一個 undo。
+   */
+  function effect(what: string, mutate: (origin: PluginOrigin) => () => void): () => void {
+    const origin = requireOrigin(what);
+    const undo = mutate(origin);
+    currentUndos!.push(undo);
+    return undo;
   }
 
   function layerFor(scope: ScopeKey | undefined): Layer {
@@ -1036,36 +1077,37 @@ export function createRegistry(): InternalPluginRegistry {
 
   const tools: ToolRegistrationPoint = {
     register(tool, options) {
-      const origin = requireOrigin('tools.register()');
-      const scope = options?.scope;
-      // 物件形式也是 root-only：三處判斷都讀這一格，不各自比 `=== true`。
-      const rootOnly = options?.rootOnly === true || typeof options?.rootOnly === 'object';
-      if (rootOnly && scope !== undefined) {
-        throw new Error(
-          `${formatOrigin(origin)} 把 "${tool.name}" 註冊到 subagent "${scope}" 的同時要求 rootOnly。` +
-            `這兩個是矛盾的：rootOnly 的意思就是 subagent 不給用，往 subagent 層掛它沒有意義。` +
-            `要嘛拿掉 scope，要嘛拿掉 rootOnly。`,
-        );
-      }
-      const layer = layerFor(scope);
-      const undo = layer.tools.insert(tool.name, tool, origin);
-      if (rootOnly) {
-        rootOnlyTools.set(
-          tool,
-          typeof options?.rootOnly === 'object' ? options.rootOnly : undefined,
-        );
-      }
-      if (options?.outputSchema !== undefined) outputSchemas.set(tool, options.outputSchema);
-      return () => {
-        undo();
-        rootOnlyTools.delete(tool);
-        outputSchemas.delete(tool);
-        // 空層不留下來：層是註冊行為的產物，`scopes()` 是 fold 的輸入，回滾過的
-        // plugin 不該讓 fold 看到一個它其實沒碰過的 subagent 名。
-        if (scope !== undefined && layer.tools.size === 0 && scopedLayers.get(scope) === layer) {
-          scopedLayers.delete(scope);
+      return effect('tools.register()', (origin) => {
+        const scope = options?.scope;
+        // 物件形式也是 root-only：三處判斷都讀這一格，不各自比 `=== true`。
+        const rootOnly = options?.rootOnly === true || typeof options?.rootOnly === 'object';
+        if (rootOnly && scope !== undefined) {
+          throw new Error(
+            `${formatOrigin(origin)} 把 "${tool.name}" 註冊到 subagent "${scope}" 的同時要求 rootOnly。` +
+              `這兩個是矛盾的：rootOnly 的意思就是 subagent 不給用，往 subagent 層掛它沒有意義。` +
+              `要嘛拿掉 scope，要嘛拿掉 rootOnly。`,
+          );
         }
-      };
+        const layer = layerFor(scope);
+        const undo = layer.tools.insert(tool.name, tool, origin);
+        if (rootOnly) {
+          rootOnlyTools.set(
+            tool,
+            typeof options?.rootOnly === 'object' ? options.rootOnly : undefined,
+          );
+        }
+        if (options?.outputSchema !== undefined) outputSchemas.set(tool, options.outputSchema);
+        return () => {
+          undo();
+          rootOnlyTools.delete(tool);
+          outputSchemas.delete(tool);
+          // 空層不留下來：層是註冊行為的產物，`scopes()` 是 fold 的輸入，回滾過的
+          // plugin 不該讓 fold 看到一個它其實沒碰過的 subagent 名。
+          if (scope !== undefined && layer.tools.size === 0 && scopedLayers.get(scope) === layer) {
+            scopedLayers.delete(scope);
+          }
+        };
+      });
     },
     resolve(name, scope) {
       if (scope !== undefined) {
@@ -1105,29 +1147,23 @@ export function createRegistry(): InternalPluginRegistry {
   };
 
   const subagentPoint: SubAgentRegistrationPoint = {
-    register(subagent) {
-      const origin = requireOrigin('subagents.register()');
-      return subagents.insert(subagent.name, subagent, origin);
-    },
+    register: (subagent) =>
+      effect('subagents.register()', (origin) => subagents.insert(subagent.name, subagent, origin)),
     get: (name) => subagents.get(name),
     entries: () => subagents.entries(),
   };
 
   const capabilityPoint: CapabilityRegistrationPoint = {
-    provide(name) {
-      const origin = requireOrigin('capabilities.provide()');
-      return capabilities.provide(name, origin);
-    },
+    provide: (name) =>
+      effect('capabilities.provide()', (origin) => capabilities.provide(name, origin)),
     has: (name) => capabilities.has(name),
     providers: (name) => capabilities.providers(name),
     names: () => capabilities.names(),
   };
 
   const servicePoint: ServiceRegistrationPoint = {
-    provide(name: string, value: unknown) {
-      const origin = requireOrigin('services.provide()');
-      return serviceEntries.insert(name, value, origin);
-    },
+    provide: (name: string, value: unknown) =>
+      effect('services.provide()', (origin) => serviceEntries.insert(name, value, origin)),
     use(name: string) {
       const entry = serviceEntries.get(name);
       if (entry === undefined) throw missingServiceError(name);
@@ -1161,89 +1197,82 @@ export function createRegistry(): InternalPluginRegistry {
 
   const backendPoint: BackendRegistrationPoint = {
     mount(routePrefix, backend) {
-      const origin = requireOrigin('backend.mount()');
-      if (!routePrefix.startsWith('/') || !routePrefix.endsWith('/')) {
-        throw new Error(
-          `${formatOrigin(origin)} 掛的 routePrefix "${routePrefix}" 不合法：` +
-            `必須以 "/" 開頭且以 "/" 結尾（例如 "/memories/"）。` +
-            `基座的 CompositeBackend 直接對前綴做字串切割，少了尾斜線會切錯路徑。`,
-        );
-      }
-      return backends.insert(routePrefix, backend, origin);
+      return effect('backend.mount()', (origin) => {
+        if (!routePrefix.startsWith('/') || !routePrefix.endsWith('/')) {
+          throw new Error(
+            `${formatOrigin(origin)} 掛的 routePrefix "${routePrefix}" 不合法：` +
+              `必須以 "/" 開頭且以 "/" 結尾（例如 "/memories/"）。` +
+              `基座的 CompositeBackend 直接對前綴做字串切割，少了尾斜線會切錯路徑。`,
+          );
+        }
+        return backends.insert(routePrefix, backend, origin);
+      });
     },
     mounts: () => [...backends.entries()],
   };
 
   const middlewarePoint: MiddlewareRegistrationPoint = {
-    use(middleware, options) {
-      const origin = requireOrigin('middleware.use()');
-      return middlewares.append(
-        { middleware, ...placementOf(options, 'middleware.use()') },
-        origin,
-      );
-    },
-    useWithBackend(build, options) {
-      const origin = requireOrigin('middleware.useWithBackend()');
-      return middlewares.append(
-        { build, ...placementOf(options, 'middleware.useWithBackend()') },
-        origin,
-      );
-    },
+    use: (middleware, options) =>
+      effect('middleware.use()', (origin) =>
+        middlewares.append({ middleware, ...placementOf(options, 'middleware.use()') }, origin),
+      ),
+    useWithBackend: (build, options) =>
+      effect('middleware.useWithBackend()', (origin) =>
+        middlewares.append(
+          { build, ...placementOf(options, 'middleware.useWithBackend()') },
+          origin,
+        ),
+      ),
     list: () => [...middlewares.entries()],
   };
 
   const permissionPoint: PermissionRegistrationPoint = {
-    deny(paths, options) {
-      const origin = requireOrigin('permissions.deny()');
-      return denyRules.append({ paths: [...paths], except: [...(options?.except ?? [])] }, origin);
-    },
+    deny: (paths, options) =>
+      effect('permissions.deny()', (origin) =>
+        denyRules.append({ paths: [...paths], except: [...(options?.except ?? [])] }, origin),
+      ),
     rules: () => [...denyRules.entries()],
   };
 
   const approvalPoint: ApprovalRegistrationPoint = {
-    gate(listener) {
-      const origin = requireOrigin('approvals.gate()');
-      return approvalListeners.append(listener, origin);
-    },
+    gate: (listener) =>
+      effect('approvals.gate()', (origin) => approvalListeners.append(listener, origin)),
     listeners: () => [...approvalListeners.entries()],
   };
 
   const skillPoint: SkillSourceRegistrationPoint = {
-    addSource(path) {
-      const origin = requireOrigin('skills.addSource()');
-      // key 用正規化後的，value 留原文——`/skills/` 與 `/skills` 是同一個目錄，
-      // 但交給基座的要是 plugin 真正寫下的那一串。
-      const normalized = assertLoadableSkillsPath(path, origin);
-      return skillSources.insert(normalized, path, origin);
-    },
+    addSource: (path) =>
+      effect('skills.addSource()', (origin) => {
+        // key 用正規化後的，value 留原文——`/skills/` 與 `/skills` 是同一個目錄，
+        // 但交給基座的要是 plugin 真正寫下的那一串。
+        const normalized = assertLoadableSkillsPath(path, origin);
+        return skillSources.insert(normalized, path, origin);
+      }),
     sources: () => [...skillSources.entries()].map(([, entry]) => entry.value),
   };
 
   const memoryPoint: MemorySourceRegistrationPoint = {
-    addSource(path) {
-      const origin = requireOrigin('memory.addSource()');
-      assertLoadableMemoryPath(path, origin);
-      return memorySources.append(path, origin);
-    },
+    addSource: (path) =>
+      effect('memory.addSource()', (origin) => {
+        assertLoadableMemoryPath(path, origin);
+        return memorySources.append(path, origin);
+      }),
     sources: () => [...memorySources.entries()].map((entry) => entry.value),
   };
 
   const telemetryPoint: TelemetryRegistrationPoint = {
-    redact(rule) {
-      const origin = requireOrigin('telemetry.redact()');
-      return redactRules.append(rule, origin);
-    },
+    redact: (rule) => effect('telemetry.redact()', (origin) => redactRules.append(rule, origin)),
     rules: () => [...redactRules.entries()],
   };
 
   const invariantPoint: InvariantRegistrationPoint = {
-    register(packageName, installer) {
-      const origin = requireOrigin('invariants.register()');
-      if (packageName.length === 0 || packageName.trim() !== packageName) {
-        throw new Error(`${formatOrigin(origin)} 註冊的不變量包名不能是空的、也不能帶前後空白。`);
-      }
-      return companions.insert(packageName, installer, origin);
-    },
+    register: (packageName, installer) =>
+      effect('invariants.register()', (origin) => {
+        if (packageName.length === 0 || packageName.trim() !== packageName) {
+          throw new Error(`${formatOrigin(origin)} 註冊的不變量包名不能是空的、也不能帶前後空白。`);
+        }
+        return companions.insert(packageName, installer, origin);
+      }),
     companions: () =>
       [...companions.entries()].map(([packageName, entry]) => ({
         packageName,
@@ -1253,11 +1282,11 @@ export function createRegistry(): InternalPluginRegistry {
   };
 
   const commandPoint: CommandRegistrationPoint = {
-    register(definition) {
-      const origin = requireOrigin('commands.register()');
-      const normalized = normalizeCommandDefinition(definition);
-      return commandEntries.insert(normalized.definition.name, normalized, origin);
-    },
+    register: (definition) =>
+      effect('commands.register()', (origin) => {
+        const normalized = normalizeCommandDefinition(definition);
+        return commandEntries.insert(normalized.definition.name, normalized, origin);
+      }),
     list: () =>
       Object.freeze(
         [...commandEntries.entries()]
@@ -1271,10 +1300,8 @@ export function createRegistry(): InternalPluginRegistry {
   // 插入序，而且**允許多於一張**——理由見 `SessionRegistrationPoint.bind`。
   const boundSessions = new Set<SessionRegistry>();
   const sessionPoint: SessionRegistrationPoint = {
-    join(installer) {
-      const origin = requireOrigin('sessions.join()');
-      return sessionInstallers.append(installer, origin);
-    },
+    join: (installer) =>
+      effect('sessions.join()', (origin) => sessionInstallers.append(installer, origin)),
     installers: () => [...sessionInstallers.entries()],
     forCall(config) {
       if (boundSessions.size === 0) return { kind: 'not-attached' };
@@ -1301,10 +1328,8 @@ export function createRegistry(): InternalPluginRegistry {
   };
 
   const lifecyclePoint: LifecycleRegistrationPoint = {
-    onDispose(dispose) {
-      const origin = requireOrigin('lifecycle.onDispose()');
-      return disposers.append(dispose, origin);
-    },
+    onDispose: (dispose) =>
+      effect('lifecycle.onDispose()', (origin) => disposers.append(dispose, origin)),
     disposers: () => [...disposers.entries()],
     takeDisposers: () => disposers.drain(),
   };
@@ -1351,9 +1376,22 @@ export function createRegistry(): InternalPluginRegistry {
         );
       }
       current = origin;
+      let stack = undoStacks.get(origin);
+      if (stack === undefined) {
+        stack = [];
+        undoStacks.set(origin, stack);
+      }
+      currentUndos = stack;
       return () => {
         current = undefined;
+        currentUndos = undefined;
       };
+    },
+    rollback(origin) {
+      const stack = undoStacks.get(origin);
+      if (stack === undefined) return;
+      undoStacks.delete(origin);
+      for (const undo of stack.reverse()) undo();
     },
   };
 }

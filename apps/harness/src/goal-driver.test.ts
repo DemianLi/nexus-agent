@@ -278,10 +278,11 @@ describe('排不出來的每一種，理由各自有名字', () => {
 });
 
 /**
- * **撞到輸出上限不只這一次不排，還收回授權**（#433），同 dsh 的 `goal-round-driver` 看到 max-tokens 就
- * `disarm`。對照組是同一份日誌、授權已經不在：不再收一次。
+ * **撞到輸出上限、被人中止、拋錯：不只這一次不排，還收回授權**（#433、#660），同 dsh 的
+ * `goal-round-driver` 看到 max-tokens 與 aborted 就 `disarm`、收到 `agent/error` 也是。對照組是同一份日誌、
+ * 授權已經不在：不再收一次。
  */
-describe('上一輪撞到輸出上限', () => {
+describe('上一輪撞到輸出上限、被中止或拋錯', () => {
   const CUT = [HUMAN, ['turn/end', { reason: { kind: 'max-tokens' } }]] as const;
 
   function portOf(goal: GoalView): GoalDriverPort & { readonly disarmed: number[] } {
@@ -308,10 +309,34 @@ describe('上一輪撞到輸出上限', () => {
     expect(port.disarmed).toHaveLength(0);
   });
 
-  it('被人中止的那一輪不收回——擋住的是 max-tokens 這一種', async () => {
+  it('被人中止的那一輪也收回——人再說一句話不會把續行接回來（#660）', async () => {
     const port = portOf(view());
     const aborted = [HUMAN, ['turn/end', { reason: { kind: 'aborted', cause: { kind: 'user' } } }]];
     expect(await driveGoalRound(() => logOf(aborted as never).events, port)).toBeUndefined();
+    expect(port.disarmed).toHaveLength(1);
+  });
+
+  it('拋錯的那一輪也收回', async () => {
+    const port = portOf(view());
+    const failed = [HUMAN, ['turn/failed', { message: '供應商掛了' }]];
+    expect(await driveGoalRound(() => logOf(failed as never).events, port)).toBeUndefined();
+    expect(port.disarmed).toHaveLength(1);
+  });
+
+  it('中止或拋錯時授權已經不在：不再收一次', async () => {
+    for (const tail of [
+      ['turn/end', { reason: { kind: 'aborted', cause: { kind: 'user' } } }],
+      ['turn/failed', { message: '供應商掛了' }],
+    ]) {
+      const port = portOf(view({ activation: 'disarmed' }));
+      await driveGoalRound(() => logOf([HUMAN, tail] as never).events, port);
+      expect(port.disarmed).toHaveLength(0);
+    }
+  });
+
+  it('對照：人說完話、這一輪正常收工，照排而且不收回', async () => {
+    const port = portOf(view());
+    expect((await driveGoalRound(() => logOf(SETTLED).events, port))?.round).toBe(1);
     expect(port.disarmed).toHaveLength(0);
   });
 });
