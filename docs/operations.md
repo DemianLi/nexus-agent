@@ -395,7 +395,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `summarization` | 壓力達標時把舊訊息摘要成一則，歷史 offload 到 backend | 有（四格） | 關得掉 |
 | `observation-policy` | 先讀後改：沒讀過的檔不准改 | **沒有** | 關得掉 |
 | `model-usage` | 每一次模型呼叫的 token 帳目記進會話日誌 | **沒有** | 關得掉 |
-| `session-checkpoint-policy` | 模型請求與頂層工具動手之前，先把會話日誌排空到磁碟 | **沒有** | 關得掉 |
+| `session-checkpoint-policy` | 模型請求與工具動手之前（root 與子代理都是），先把會話日誌排空到磁碟 | **沒有** | 關得掉 |
 | `approval-gate` | 核准閘門 | **沒有** | **關不掉** |
 | `session-persistence` | 會話日誌落盤本身，以及它的批次窗口（毫秒） | 有（一格） | 關得掉（＝不落盤） |
 | `thread-title` | 會話標題的三個上限（退回標題的詞數與位元組，以及任何來源的標題的位元組） | 有（三格） | **關不掉** |

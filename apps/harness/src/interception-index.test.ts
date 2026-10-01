@@ -236,7 +236,7 @@ const INDEX: readonly InterceptionRow[] = [
       'packages/nexus-core/src/output-schema.ts',
       // 檔案工具的失敗標成錯誤（#293）：dsh 在工具本體裡拋，我們貼著本體換狀態。
       'packages/nexus-core/src/fs-tool-errors.ts',
-      // 耐久檢查點（#599）：dsh 的 `session-checkpoint-policy` 本來就掛在這一格，頂層呼叫動手之前排空。
+      // 耐久檢查點（#599）：dsh 的 `session-checkpoint-policy` 本來就掛在這一格，呼叫動手之前排空（root 與子代理）。
       'packages/nexus-core/src/session-checkpoint-policy.ts',
       // 讀檔結果最後補上讀到哪（#594）：dsh 在 `read` 本體裡寫，我們貼著本體補。
       'packages/nexus-core/src/read-continuation.ts',
