@@ -31,7 +31,8 @@ import { createTelemetryOtelPlugin } from '@nexus/plugin-telemetry-otel';
 import { describe, expect, it, vi } from 'vitest';
 
 import { DISABLED_FEEDBACK_WARNING } from './agent-factory.js';
-import { createCliAgent, runTurn } from './cli.js';
+import { runTurn } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';

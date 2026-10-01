@@ -288,7 +288,7 @@ export interface CreateNexusAgentOptions {
    * 偏離登記見 [`repeat-reminder.ts`](../../../packages/nexus-core/src/repeat-reminder.ts)。
    *
    * **開著會吃掉迴圈預算**：它掛在 `beforeModel` 上，那在圖裡是一個節點，每一輪多一個
-   * super-step，於是 `recursionLimit` 的換算從 `2 × 輪數 + 2` 變成 `3 × 輪數 + 2`（{@link stepInbox}
+   * super-step，於是每輪格數從兩格變三格，換算見 {@link recursionLimit}（{@link stepInbox}
    * 再多一格）。見 {@link DEFAULT_RECURSION_LIMIT}。
    */
   readonly repeatReminder?: Partial<RepeatReminderSettings> | false;
@@ -303,7 +303,9 @@ export interface CreateNexusAgentOptions {
    * 永遠贏**。
    *
    * **一定要設，因為基座的預設等於沒有上限**——見 {@link DEFAULT_RECURSION_LIMIT}。
-   * 換算是 `recursionLimit = 2 × 模型輪數 + 2`（模型一輪、工具一輪各算一個 super-step）。
+   * 換算是 `模型輪數 = floor((recursionLimit - 1) / 每輪格數)`：裸組裝每輪兩格（模型、工具各一），
+   * 提醒器與 {@link stepInbox} 各再加一格，100 因此是 49／33／24 輪；每次 invoke 只走一次的
+   * `beforeAgent` 節點另從分子扣一格（出貨清單的工作區指令那顆，CLI 因此是 32 輪）。
    */
   readonly recursionLimit?: number;
   /**

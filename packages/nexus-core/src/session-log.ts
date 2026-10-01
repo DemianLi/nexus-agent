@@ -28,8 +28,7 @@
  *
  * 照 dsh，模型歷史由日誌推出來（`packages/core/session/src/index.ts` 的 `deriveMessages()`），推的
  * 那一側是 [#306](https://github.com/DemianLi/nexus-agent/issues/306)。所以**模型看得到的每一則
- * 訊息都要有一顆事件帶著它**：人打的字在 `turn/start`，模型回覆在 `assistant/message`，工具結果在
- * `tool/result`，外掛塞進對話的在 `user/message`，壓縮的摘要在 `compaction/summary`。**三個例外
+ * 訊息都要有一顆事件帶著它**：哪幾種事件產訊息是型別 {@link ModelVisibleEventType}，不在這裡手列。**三個例外
  * 都是基座寫的、推得回來的**：`patchToolCallsMiddleware` 替沒配到結果的呼叫補的結果（推的一側照 dsh
  * 的 `repair.ts` 自己補），過大的工具結果被搬去檔案之後換上的預覽（見 `tool/result`），過長的一則
  * 人話被標上的 `lc_evicted_to`（基座在模型那一格照記號重算，推回來的那則沒有記號就不重算——那是
@@ -796,7 +795,7 @@ export interface SessionEventMap {
    *
    * dsh 的 `turn` 出自 `turnBoundary` 投影的 `lastTurn`，我們沒有那個投影，日誌與 wire 上也都沒有輪的
    * 編號（見 `tool/call` 那一條）。這一筆屬於哪一輪照 repo 既有的規則由 `seq` 推：往前找最近一顆不是
-   * resume 的 `turn/start`（`feedback.ts` 與歷史分頁都這樣定輪）。放一個自己數的號進來，就會有兩個
+   * resume 的 `turn/start`（{@link isLogicalTurnStart}，各讀方共用）。放一個自己數的號進來，就會有兩個
    * 可能對不上的輪。
    *
    * web 只收 root 那一份的這一顆，即時與重新整理同一條規則——歷史路由只讀 root（`conversation-history.ts`）。
@@ -819,7 +818,7 @@ export interface SessionEventMap {
    *
    * ## 對 dsh 的偏離：沒有 `turn`
    *
-   * 同 `deliverables/presented`：這一筆屬於哪一輪由 `seq` 推，往前找最近一顆不是 resume 的 `turn/start`
+   * 同 `deliverables/presented`：這一筆屬於哪一輪由 `seq` 推，往前找最近一顆開邏輯輪的 `turn/start`（{@link isLogicalTurnStart}）
    * （[#443](https://github.com/DemianLi/nexus-agent/issues/443) 第二則決議）。**所以它一定落在它那一輪的
    * `turn/start` 之後、下一輪的之前**，記錄器為此在輪內記，見那個套件的 `recorder.ts`。
    *
@@ -905,6 +904,55 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = T exte
       readonly data: SessionEventMap[T];
     }
   : never;
+
+/**
+ * **產生模型訊息的那幾種事件**——續接時 {@link ./conversation-replay.ts | replayConversation} 從日誌推回
+ * 模型歷史，靠的就是這一份子聯集（[#681](https://github.com/DemianLi/nexus-agent/issues/681)）。
+ *
+ * 人打的字在 `turn/start`（`kind` 不是 `resume` 才有），模型回覆在 `assistant/message`，工具結果在
+ * `tool/result`，外掛塞進對話的在 `user/message`，壓縮的摘要在 `compaction/summary`。**其餘每一種都
+ * 不進模型**，各種類自己的說明（見 {@link SessionEventType}）照舊講它為什麼不進。
+ *
+ * 照 dsh 的 `SurfaceEventType`（`packages/core/session/src/types.ts:439-444`，`477b4f4`），**但不照它的
+ * 名字**：dsh 的成員要帶 `surfaceOp`，我們沒有那一軸（不做它是縮小範圍，不是表達不出來），叫
+ * `SurfaceEventType` 會讓人以為有。**封閉**，同 dsh：其他套件日後補進來的種類只會走到守衛的另一支。
+ *
+ * 加一種會進模型的事件要同時動三處，缺一處都編不過：這個聯集、{@link MODEL_VISIBLE_EVENT_TYPES}
+ * 那張表、replay 守衛之內的 `switch`（它的 `default` 是 `satisfies never`）。
+ *
+ * `image/offload`（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）在 dsh 不是產訊息的那一類，
+ * 而是進模型的**效果**要另寫解譯器的事件（`known-event-types.ts:84-87`）。它落地時寫明走哪一支：
+ * 讀碼推得，續接時推回歷史要重現那次省略，不然重啟後模型又看到原本那張圖。
+ */
+export type ModelVisibleEventType =
+  'turn/start' | 'assistant/message' | 'tool/result' | 'user/message' | 'compaction/summary';
+
+/**
+ * {@link ModelVisibleEventType} 的執行期那一份。**逐種列出、型別綁死**（借 dsh `MESSAGE_ROLE_BY_TYPE:
+ * Record<SurfaceEventType, …>` 的形狀）：聯集多一種或少一種，這張表都編不過。
+ */
+const MODEL_VISIBLE_EVENT_TABLE = {
+  'turn/start': true,
+  'assistant/message': true,
+  'tool/result': true,
+  'user/message': true,
+  'compaction/summary': true,
+} as const satisfies Record<ModelVisibleEventType, true>;
+
+/** 會進模型的事件種類，`MODEL_VISIBLE_EVENT_TABLE` 的鍵。 */
+export const MODEL_VISIBLE_EVENT_TYPES: readonly ModelVisibleEventType[] = Object.keys(
+  MODEL_VISIBLE_EVENT_TABLE,
+) as ModelVisibleEventType[];
+
+/**
+ * 這一筆會不會進模型。**把整個詞彙收窄成子聯集**（同 dsh 的 `isSurfaceEvent`），窮舉只做在收窄之後。
+ * 整個詞彙照舊不窮舉：不認得的種類（含別的套件補進來的）回 `false`。
+ */
+export function isModelVisibleEvent(
+  event: SessionEvent,
+): event is SessionEvent<ModelVisibleEventType> {
+  return Object.hasOwn(MODEL_VISIBLE_EVENT_TABLE, event.type);
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null) return false;
@@ -1205,6 +1253,30 @@ export function currentTurnStart(events: readonly SessionEvent[]): number {
     if (type === 'turn/start') return at;
   }
   return -1;
+}
+
+/** 開新的邏輯輪的那一種 `turn/start`：`kind` 收窄成不是 `resume`。守衛的假支不會被誤收窄掉整個 `turn/start`。 */
+export type LogicalTurnStartEvent = Omit<SessionEvent<'turn/start'>, 'data'> & {
+  readonly data: Exclude<SessionEventMap['turn/start'], { readonly kind: 'resume' }>;
+};
+
+/**
+ * 這一顆**開不開新的邏輯輪**：是 `turn/start`，而且 `kind` 不是 `resume`（[#682](https://github.com/DemianLi/nexus-agent/issues/682)）。
+ *
+ * 一筆事件屬於哪一輪，規則是「由 `seq` 往前找最近一顆開邏輯輪的 `turn/start`」——`resume` 是回覆核准，
+ * 接著上一輪停在核准點的那幾顆呼叫，不另開一輪。這條規則原本每個讀方各寫一次，**多寫一份的人把
+ * `resume` 當成新輪，不會讓任何測試變紅**（只是畫面上多一輪、評分掛錯輪），所以跟
+ * {@link currentTurnStart} 一樣住在詞彙的擁有者旁邊。
+ *
+ * 逐顆的述詞，不是往回走：讀方都是往前折的迴圈或觀察者。它只回答「這一顆開不開新的邏輯輪」，
+ * `session/end-seed` 留給各讀方自己處理（各份對「end-seed 之後來的 `resume`」的假設不一樣，見 #682）。
+ * 不是 `turn/start` 的事件回 `false`。長期照 dsh 讓 `turn/start` 自己帶輪號的話，這個述詞是要改的那一處。
+ *
+ * @param event - 日誌的一顆事件。
+ * @returns 開新的邏輯輪就是 `true`。
+ */
+export function isLogicalTurnStart(event: SessionEvent): event is LogicalTurnStartEvent {
+  return event.type === 'turn/start' && event.data.kind !== 'resume';
 }
 
 /**

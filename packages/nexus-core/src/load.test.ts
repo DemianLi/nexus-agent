@@ -658,6 +658,23 @@ describe('loadPlugins 的逐列掉模式', () => {
     expect(bClosed).toBe(1);
   });
 
+  it('因 requires 連鎖掉的那一列，「開著」的痕跡一併撤掉：它算沒掛（#678）', async () => {
+    // `apply` 跑完、已經記過一次「開著」，之後才發現缺件。痕跡不撤的話，停用視圖會把它當成還開著。
+    const { registry, dropped } = await loadPlugins(
+      [
+        fakePlugin('needy', () => undefined, ['nobody-provides']),
+        fakePlugin('fine', (registry) => void registry.tools.register(fakeTool('fine_tool'))),
+      ],
+      undefined,
+      { perEntry: true },
+    );
+    expect(dropped.map(({ origin, stage }) => [origin.name, stage])).toEqual([
+      ['needy', 'requires'],
+    ]);
+    expect(registry.disabledEntries.has('needy')).toBe(true);
+    expect(registry.disabledEntries.has('fine')).toBe(false);
+  });
+
   it('afterApply 拋錯算那一列 apply 失敗，只撤它自己；預設模式下照舊整個拋', async () => {
     const plugins = [
       fakePlugin('ok', (registry) => void registry.tools.register(fakeTool('ok_tool'))),

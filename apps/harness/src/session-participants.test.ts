@@ -23,7 +23,8 @@ import { createWireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
-import { createCliAgent, runCli } from './cli.js';
+import { runCli } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';

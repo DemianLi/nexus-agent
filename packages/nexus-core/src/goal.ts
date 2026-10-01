@@ -5,14 +5,14 @@
  * （`references/deepseek-harness/packages/goal/goal/src/types.ts` 與 `domain.ts`，對讀
  * 日期 2026-09-01，版本 `0a53fb55bea101816fa226bb964ae2bed71c343b`）。
  *
- * **為什麼詞彙在這裡而域在 plugin：同 `commands.ts` 那一條。** 命令的詞彙
- * （{@link ./commands.ts | CommandDefinition}）住在 `@nexus/core`，執行那一半住在
- * `@nexus/plugin-commands`；goal 一樣——{@link ./session-log.ts | SessionEventMap} 是
- * 一個**封閉**的映射，`goal/change` 的酬載型別要寫得出來就得住在這裡，而折疊、服務、
- * 錯誤與活的視圖住在 `@nexus/plugin-goal`。dsh 那邊靠宣告合併（`declare module
- * '@deepseek-ai/dsh-session/types'`）把事件種類從 goal 套件那側加進來，**我們沒有那個
- * 機制**，理由與代價見 `session-log.ts` 檔頭與
- * [#101](https://github.com/DemianLi/nexus-agent/issues/101)。
+ * **詞彙今天在這裡而域在 plugin：** 命令的詞彙（{@link ./commands.ts | CommandDefinition}）
+ * 住在 `@nexus/core`，執行那一半住在 `@nexus/plugin-commands`；goal 一樣——`goal/change`
+ * 的酬載型別目前列在 {@link ./session-log.ts | SessionEventMap}，折疊、服務、錯誤與活的
+ * 視圖住在 `@nexus/plugin-goal`。dsh 的做法是由擁有者套件用宣告合併（`declare module
+ * '@deepseek-ai/dsh-session/types'`）補事件種類；**我們的 `SessionEventMap` 已經是
+ * interface，做得到，只是還沒做**，照 dsh 該由 goal 這一側宣告，見
+ * [#679](https://github.com/DemianLi/nexus-agent/issues/679)。`GoalId` 例外會留在 core：
+ * `turn/start` 的 `kind: 'goal'` 拿它當授權判別。
  *
  * **這裡只有耐久的那一半。** `GoalView` 帶的 `activation`（armed／disarmed）刻意不持久，
  * 它是 process 內的東西，所以它跟服務一起住在 plugin 那側——寫進這個檔案就等於暗示

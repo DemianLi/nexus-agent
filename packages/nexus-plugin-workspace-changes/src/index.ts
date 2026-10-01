@@ -61,6 +61,7 @@ import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 import { z } from 'zod';
 
+import { isLogicalTurnStart } from '@nexus/core';
 import type { NexusPlugin, PluginEntry, PluginRegistry, SessionLog } from '@nexus/core';
 import type { WorkspaceChangesSummary, WorkspaceFileDiff } from './types.js';
 
@@ -264,8 +265,8 @@ function applyWorkspaceChanges(
       const live = event.seq >= joinedAt;
       switch (event.type) {
         case 'turn/start':
-          if (event.data.kind === 'resume') recorder.resume(live);
-          else recorder.start(live);
+          if (isLogicalTurnStart(event)) recorder.start(live);
+          else recorder.resume(live);
           break;
         case 'interrupt/raised':
           recorder.pause();
