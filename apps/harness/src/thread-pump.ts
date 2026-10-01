@@ -102,6 +102,8 @@ import {
 } from '@nexus/wire';
 import type { SubagentStatusPayload } from '@nexus/wire';
 
+// 讀的事件種類（`todo/write`）照 dsh 由擁有者套件宣告；這一行讓編譯單位看得到那個套件補的鍵，不靠測試檔順手 import（#679）。
+import type {} from '@nexus/plugin-todo';
 import { RootGoal } from './goal-wire.js';
 import {
   compactionData,
