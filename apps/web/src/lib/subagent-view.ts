@@ -1,5 +1,5 @@
 import { DELEGATION_TOOL_NAMES, isBackgroundSubagentMeta } from '@nexus/wire';
-import type { Attribution, ConversationEntry } from '@nexus/wire';
+import type { Attribution, BackgroundSubagentMeta, ConversationEntry } from '@nexus/wire';
 
 import { firstLine } from '@/lib/tool-view';
 
@@ -25,6 +25,33 @@ export function subagentNames(entries: readonly ConversationEntry[]): ReadonlyMa
     if (isBackgroundSubagentMeta(entry.meta)) names.set(entry.meta.runId, entry.meta.subagentType);
   }
   return names;
+}
+
+/**
+ * 推理等級的名字在畫面上怎麼說。harness 那邊是型錄條目宣告過的名字，今天只有 `off`；不認得的（型錄以後多出來的）
+ * 照原樣畫，不猜它的意思。
+ */
+export const SUBAGENT_REASONING_LABEL: Readonly<Record<string, string>> = { off: '關閉' };
+
+/**
+ * 委派卡展開時那一行「這個子代理跑哪一顆模型」（[#889](https://github.com/DemianLi/nexus-agent/issues/889)）。
+ * 資料是派出那一刻就定的事實，放在委派卡結果的 `meta`、隨日誌落盤，所以重新整理後還在。
+ *
+ * - 兩欄都沒有（模型沒替它挑）：沒有這一行，**不寫「跟著主對話」**——那是推論，不是 wire 說的。
+ * - 只給推理等級時 harness 會把 `model` 填成主對話當時那一顆，所以正常不會只剩一欄；只剩推理等級（資料不完整）
+ *   就只說推理，不編模型名。
+ * - 空字串當沒有。
+ */
+export function subagentModelText(
+  meta: Pick<BackgroundSubagentMeta, 'model' | 'reasoningEffort'>,
+): string | undefined {
+  const model = meta.model === undefined || meta.model === '' ? undefined : meta.model;
+  const effort =
+    meta.reasoningEffort === undefined || meta.reasoningEffort === ''
+      ? undefined
+      : (SUBAGENT_REASONING_LABEL[meta.reasoningEffort] ?? meta.reasoningEffort);
+  if (model === undefined) return effort === undefined ? undefined : `推理：${effort}`;
+  return effort === undefined ? `模型：${model}` : `模型：${model}（推理：${effort}）`;
 }
 
 /** 這個編號叫什麼；對不到就是 {@link UNKNOWN_SUBAGENT_LABEL}。 */

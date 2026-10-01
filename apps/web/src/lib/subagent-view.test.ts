@@ -8,6 +8,7 @@ import {
   sendMessageSummary,
   sendMessageTitle,
   subagentLabel,
+  subagentModelText,
   subagentNames,
   subagentPlaceholder,
   subagentRunState,
@@ -140,5 +141,35 @@ describe('背景子代理的狀態與輸入框（#869）', () => {
     expect(new Set(lines).size).toBe(4);
     expect(lines.join('')).not.toContain('x');
     expect(subagentSendError('internal_error', '壞了')).toContain('壞了');
+  });
+});
+
+describe('委派卡上的模型那一行（#889）', () => {
+  it('兩欄都有：模型加推理；今天只有 off，說「關閉」', () => {
+    expect(
+      subagentModelText({ model: 'nvidia/nemotron-3-super-120b-a12b', reasoningEffort: 'off' }),
+    ).toBe('模型：nvidia/nemotron-3-super-120b-a12b（推理：關閉）');
+  });
+
+  it('只有模型：不加推理那一段', () => {
+    expect(subagentModelText({ model: 'google/gemma-4-31b-it' })).toBe(
+      '模型：google/gemma-4-31b-it',
+    );
+  });
+
+  it('不認得的推理等級照原樣畫，不猜它的意思', () => {
+    expect(subagentModelText({ model: 'm', reasoningEffort: 'high' })).toBe(
+      '模型：m（推理：high）',
+    );
+  });
+
+  it('兩欄都沒有（模型沒替它挑）：沒有這一行，不寫「跟著主對話」', () => {
+    expect(subagentModelText({})).toBeUndefined();
+  });
+
+  it('只剩推理等級（資料不完整）：只說推理，不編模型名；空字串當沒有', () => {
+    expect(subagentModelText({ reasoningEffort: 'off' })).toBe('推理：關閉');
+    expect(subagentModelText({ model: '', reasoningEffort: '' })).toBeUndefined();
+    expect(subagentModelText({ model: '', reasoningEffort: 'off' })).toBe('推理：關閉');
   });
 });
