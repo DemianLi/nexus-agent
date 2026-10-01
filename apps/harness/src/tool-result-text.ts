@@ -56,6 +56,7 @@
  */
 
 import type { LoggedMessage, SearchResultMeta } from '@nexus/core';
+import { loggedContentBlocks } from '@nexus/core';
 
 /** 中間被截掉那一段的說明。長度只隨位數變，所以預留時用上界算。 */
 function notice(dropped: number): string {
@@ -126,10 +127,10 @@ export function toolResultText(
   message: LoggedMessage | undefined,
   maxBytes: number,
 ): string | undefined {
-  const content: unknown = message?.data.content;
-  if (typeof content === 'string') return capToolText(content, maxBytes);
-  if (!Array.isArray(content) || content.length !== 1) return undefined;
-  const only = content[0] as { type?: unknown; text?: unknown } | null;
+  if (!message) return undefined;
+  const blocks = loggedContentBlocks(message.data.content);
+  if (blocks.length !== 1) return undefined;
+  const only = blocks[0] as { type?: unknown; text?: unknown } | null;
   if (only?.type !== 'text' || typeof only.text !== 'string') return undefined;
   return capToolText(only.text, maxBytes);
 }
