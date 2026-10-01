@@ -82,7 +82,7 @@ import type { HumanMessage } from '@langchain/core/messages';
 import { isGraphBubbleUp } from '@langchain/langgraph';
 import { createMiddleware, MiddlewareError, ToolInvocationError } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
-import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
+import { rawArgumentsOf } from './invalid-tool-args.js';
 import { toLoggedMessage } from './logged-message.js';
 import type { SessionLookup } from './registry.js';
 import {
@@ -366,14 +366,9 @@ function recordToolCall(
  *
  * @param sessions - 註冊表的 `sessions` 通道。**省略就不記**——單元測試與相容用的 re-export
  *   走這條；產品組裝由 `fold.ts` 傳進來。
- * @param invalidArguments - 解不開的參數的載體（`invalid-tool-args.ts`）。給了就讓那幾顆的
- *   `tool/call.arguments` 記原字串，並在落定時刪鍵——這一層是最外層，看得到每一條出口。
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */
-export function createContainmentMiddleware(
-  sessions?: ToolEventSessions,
-  invalidArguments?: InvalidArgumentsCarrier,
-): AgentMiddleware {
+export function createContainmentMiddleware(sessions?: ToolEventSessions): AgentMiddleware {
   return createMiddleware({
     name: CONTAINMENT_MIDDLEWARE_NAME,
     wrapToolCall: async (request, handler) => {
@@ -381,14 +376,9 @@ export function createContainmentMiddleware(
       // 「這次呼叫在圍堵眼裡花了多久」，內層 middleware 的開銷也算在裡面。那正是要回報
       // 的東西：模型等的就是這一段。
       const startedAt = Date.now();
-      const callId = request.toolCall.id;
-      const raw = callId === undefined ? undefined : invalidArguments?.rawOf(callId);
+      // 解不開的那幾顆讓 `tool/call.arguments` 記原字串（記號在那則 AI 訊息上，`invalid-tool-args.ts`）。
+      const raw = rawArgumentsOf(request);
       const settle = recordToolCall(sessions, request as RecordableRequest, raw);
-      // **落定才刪鍵，中斷不刪**：續接時同一個 callId 會再進來一次，那時核准與拒絕都還要讀得到。
-      // 沒接會話（`settle` 是 `undefined`）照樣刪：記不記日誌與載體的壽命是兩件事。
-      const forget = (): void => {
-        if (callId !== undefined) invalidArguments?.forget(callId);
-      };
       try {
         // 槽在這一層開：產生者（backend 那層的 Proxy、讀檔的 middleware）都在內層，
         // 寫進來的東西由這裡交給 `tool/result`。見 `tool-result-meta.ts`。
@@ -410,7 +400,6 @@ export function createContainmentMiddleware(
             meta,
           );
         }
-        forget();
         return result;
       } catch (error) {
         // 中斷、`Command` 這類控制流是用拋例外走的，接住它們等於把功能吃掉。
@@ -431,7 +420,6 @@ export function createContainmentMiddleware(
           message,
           [],
         );
-        forget();
         return message;
       }
     },

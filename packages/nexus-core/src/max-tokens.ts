@@ -162,7 +162,7 @@ export function dropToolCalls(message: AIMessage): AIMessage {
  * 已經寫出的文字。
  *
  * **一份組裝一份，root 與每個子代理共用**：寫的在子代理那一層、讀的在父圖那一層，得看到同一份。
- * 鍵一次 spawn 一個，不會撞。理由同 {@link ./invalid-tool-args.ts} 的載體。
+ * 鍵一次 spawn 一個，不會撞。
  */
 export interface MaxTokensCarrier {
   /** 記下這個子代理撞到上限，以及那一則寫出的文字。同一次 spawn 撞第二次時蓋掉。 */

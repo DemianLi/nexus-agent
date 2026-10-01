@@ -36,11 +36,7 @@ import { createFsToolErrorsMiddleware, recordBackendOutcomes } from './fs-tool-e
 import { FS_SERVICE, settleFsService } from './fs-service.js';
 import { createReadContinuationMiddleware, recordReadExtent } from './read-continuation.js';
 import { recordToolResultMeta } from './tool-result-meta.js';
-import {
-  createInvalidArgumentsCarrier,
-  createInvalidToolArgsMiddleware,
-} from './invalid-tool-args.js';
-import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
+import { createInvalidToolArgsMiddleware } from './invalid-tool-args.js';
 import { createMaxTokensCarrier, createMaxTokensMiddleware } from './max-tokens.js';
 import { createSpillPolicyMiddleware } from './spill-policy.js';
 import type { SpillPolicyOptions } from './spill-policy.js';
@@ -435,10 +431,9 @@ export function foldRegistry(
   }
 
   const permissions = foldPermissions(registry);
-  // **解不開的參數的載體，一份組裝一份、交給三個讀者**：圍堵、核准閘門、最內層那顆。
-  // 為什麼共用而不逐個建，見 {@link ./invalid-tool-args.ts}。
-  const invalidArguments = createInvalidArgumentsCarrier();
-  const invalidToolArgs = createInvalidToolArgsMiddleware(invalidArguments);
+  // 解不開的參數的原字串記在那則 AI 訊息上，三個讀者（圍堵、核准閘門、最內層那顆）各自從
+  // `request.state` 讀，沒有要共用的東西。見 {@link ./invalid-tool-args.ts}。
+  const invalidToolArgs = createInvalidToolArgsMiddleware();
   // **撞到輸出上限（#433）也是一份載體、一顆實例走遍 root 與每個子代理**：子代理的模型呼叫記、
   // 父圖的 `task` 取，得看到同一份。見 {@link ./max-tokens.ts}。
   const maxTokens = createMaxTokensMiddleware(createMaxTokensCarrier());
@@ -447,12 +442,12 @@ export function foldRegistry(
   const outputSchema = createOutputSchemaMiddleware((tool) => registry.tools.outputSchemaOf(tool));
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./containment.ts}。
   // 它也是工具事件的生產者（#264），所以要拿得到 `sessions` 那個通道。
-  const containment = createContainmentMiddleware(registry.sessions, invalidArguments);
+  const containment = createContainmentMiddleware(registry.sessions);
   // **中止這一輪的兩顆，也是一份實例走遍 root 與每個子代理**：訊號每次從那一次呼叫的
   // `configurable` 現讀。位置一外一內，理由見 {@link ./turn-cancel.ts}。
   const turnCancel = createTurnCancelGuard();
   const turnCancelModelSignal = createTurnCancelModelSignal();
-  const approvalGate = foldApprovalGate(registry, options, invalidArguments);
+  const approvalGate = foldApprovalGate(registry, options);
   // **子代理另建一顆，管道固定 `policy-never`**（#324）：照 dsh 委派時把子代理的核准政策釘成 `never`
   // （`packages/subagent/subagent/src/child-agent.ts:220-247`），不管 root 的管道是什麼。組裝時就分開，
   // 不在執行期查身分——分得開就沒有「查不到是誰」那幾種情況。listener 同一組：判斷「要不要問」不因
@@ -461,11 +456,9 @@ export function foldRegistry(
   // **偏離（登記）**：dsh 另把 `approval/policy: never`（`source: 'delegation'`）寫進子代理的日誌；
   // 我們不記。root 的核准政策今天也不進日誌（見 {@link ./approval.ts} 的 `createApprovalGateMiddleware`），
   // 這是跟 root 現況一致，不是新開的缺口。
-  const subagentApprovalGate = createApprovalGateMiddleware(
-    registry.approvals.listeners(),
-    { kind: 'policy-never' },
-    invalidArguments,
-  );
+  const subagentApprovalGate = createApprovalGateMiddleware(registry.approvals.listeners(), {
+    kind: 'policy-never',
+  });
   const subagentDelegation = createSubagentDelegationMiddleware();
   const summarizer = foldSummarizer(registry, options);
   const repeatReminder = foldRepeatReminder(registry, options);
@@ -877,18 +870,14 @@ function foldPermissions(registry: PluginRegistry): FilesystemPermission[] {
  *
  * `enabled` 與 checkpointer 這兩格答的是不同的問題，映射見 {@link ApprovalChannel}。
  */
-function foldApprovalGate(
-  registry: PluginRegistry,
-  options: FoldOptions,
-  invalidArguments: InvalidArgumentsCarrier,
-): AgentMiddleware {
+function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): AgentMiddleware {
   const channel: ApprovalChannel = deriveApprovalChannel({
     ...(options.approvals?.enabled !== undefined && {
       approvalsEnabled: options.approvals.enabled,
     }),
     hasCheckpointer: options.checkpointer !== undefined && options.checkpointer !== false,
   });
-  return createApprovalGateMiddleware(registry.approvals.listeners(), channel, invalidArguments);
+  return createApprovalGateMiddleware(registry.approvals.listeners(), channel);
 }
 
 /**

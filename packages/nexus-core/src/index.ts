@@ -266,12 +266,12 @@ export {
   turnReachedMaxTokens,
 } from './max-tokens.js';
 
-export type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
 export {
-  createInvalidArgumentsCarrier,
   createInvalidToolArgsMiddleware,
+  INVALID_ARGUMENTS_KEY,
   INVALID_ARGUMENTS_REFUSAL,
   INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+  rawArgumentsOf,
   repairInvalidToolCalls,
 } from './invalid-tool-args.js';
 

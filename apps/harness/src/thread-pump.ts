@@ -560,7 +560,7 @@ export function classifyToolData(data: unknown): unknown {
  * `tool-started` 來了換掉 `input`——這是 #269 登記的偏離：工具卡的參數由 pump 換，因為開卡的
  * `tool-started` 是基座產的，我們能做的是轉發時改它。
  *
- * **不讀 core 的載體**：那一份在工具落定時就刪鍵，而這一層讀到 frame 的時刻可能晚於落定。
+ * **不讀 core 記在 AI 訊息上的記號**（`invalid-tool-args.ts`）：這一層看的是串流 frame，不是 graph state。
  * 同一條串流上的先後則是保證的：模型那一段收尾之後，工具節點才開始。
  *
  * @param data - `messages` 那一顆的 `data`。
