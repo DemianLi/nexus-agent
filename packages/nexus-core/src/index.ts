@@ -412,6 +412,7 @@ export {
 } from './feedback.js';
 
 export type {
+  ModelVisibleEventType,
   SessionEvent,
   SessionEventMap,
   SessionEventType,
@@ -425,7 +426,13 @@ export type {
   SessionReferenceSourceEntry,
   UserMessageSource,
 } from './session-log.js';
-export { currentTurnStart, hasUnansweredInterrupt, SessionLog } from './session-log.js';
+export {
+  currentTurnStart,
+  hasUnansweredInterrupt,
+  isModelVisibleEvent,
+  MODEL_VISIBLE_EVENT_TYPES,
+  SessionLog,
+} from './session-log.js';
 
 export type {
   SessionTelemetryRecord,
