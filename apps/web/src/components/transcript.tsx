@@ -60,8 +60,9 @@ import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
 import { EXIT_PLAN_MODE } from '@/lib/plan-review';
 import { SETTLED_NOTICE_TEXT } from '@/lib/queue-view';
 import { pairAnswers } from '@/lib/question-view';
+import { agentMessageCaption, subagentLabel, subagentNames as namesOf } from '@/lib/subagent-view';
 import { reasoningRunning, visibleReasoning } from '@/lib/reasoning-view';
-import { pendingSteers, pendingSteerText, settledNoticeText } from '@/lib/steer-view';
+import { pendingAgentText, pendingSteers, pendingSteerText } from '@/lib/steer-view';
 
 /**
  * 評分按鈕要的東西（[#278](https://github.com/DemianLi/nexus-agent/issues/278)、
@@ -153,6 +154,7 @@ function Entry({
   feedback,
   beam,
   answer,
+  subagentNames,
 }: {
   entry: ConversationEntry;
   feedback?: TranscriptFeedback;
@@ -160,6 +162,8 @@ function Entry({
   beam: boolean;
   /** 配到這張提問卡的答案。 */
   answer?: AnswerEntry;
+  /** 背景子代理的編號 → 名字（`lib/subagent-view.ts`）。 */
+  subagentNames: ReadonlyMap<string, string>;
 }) {
   if (entry.kind === 'human') {
     return (
@@ -201,14 +205,26 @@ function Entry({
   }
 
   if (entry.kind === 'agent-message') {
-    // 背景子代理寫來的話（#863）：折疊器已經長出項目，怎麼畫是 web 的卡（#861）。在那之前不畫，也不能落到下面當成模型的回覆。
-    return null;
+    // 背景子代理寫來的話（#863、#861）：不是人的泡泡，也不是模型的回覆。寄件人從委派卡對回名字。
+    return (
+      <AgentMessageCard
+        caption={agentMessageCaption(subagentLabel(subagentNames, entry.runId))}
+        text={entry.text}
+      />
+    );
   }
 
   if (entry.kind === 'tool') {
     // 交出計劃的那一顆畫成計劃卡（#654）。
     if (entry.name === EXIT_PLAN_MODE) return <PlanToolCard entry={entry} beam={beam} />;
-    return <ToolCard entry={entry} beam={beam} {...(answer === undefined ? {} : { answer })} />;
+    return (
+      <ToolCard
+        entry={entry}
+        beam={beam}
+        subagentNames={subagentNames}
+        {...(answer === undefined ? {} : { answer })}
+      />
+    );
   }
 
   const reasoning = visibleReasoning(entry);
@@ -352,6 +368,21 @@ function SettledNotice({ caption, pending }: { caption: string; pending?: boolea
   );
 }
 
+/**
+ * 背景子代理寄來的話（#861）：一則引言式的小卡，上面一行「某某 說」，下面是它寫的話。**不是人的泡泡**（靠左、
+ * 用 chip 底色，不是靠右的 secondary），也不是模型的回覆；文字是子代理寫的，原樣照畫，不解析。
+ */
+function AgentMessageCard({ caption, text }: { caption: string; text: string }) {
+  return (
+    <Message align="start" data-agent-message="">
+      <MessageContent>
+        <p className="text-muted-foreground px-1 pb-1 text-xs">{caption}</p>
+        <div className="bg-chip text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap">{text}</div>
+      </MessageContent>
+    </Message>
+  );
+}
+
 /** JS 的捲動不看 CSS 的 reduced-motion，要自己讀（§7）。 */
 function scrollBehavior(): ScrollBehavior {
   const reduce =
@@ -387,6 +418,7 @@ export function Transcript({
     (entry) => entry.kind === 'tool' && entry.status === 'running',
   )?.id;
   const answers = useMemo(() => pairAnswers(state.entries), [state.entries]);
+  const names = useMemo(() => namesOf(state.entries), [state.entries]);
   const items = transcriptItems(state.entries).flatMap((item) => {
     if (item.kind === 'changes') {
       return changes === undefined
@@ -407,6 +439,7 @@ export function Transcript({
         <Entry
           entry={entry}
           beam={entry.id === beamId}
+          subagentNames={names}
           {...(feedback === undefined ? {} : { feedback })}
           {...(answer === undefined ? {} : { answer })}
         />
@@ -417,11 +450,12 @@ export function Transcript({
   for (const steer of pendingSteers(state)) {
     items.push({
       id: steer.key,
-      node: steer.settled ? (
-        <SettledNotice pending caption={settledNoticeText(state.status)} />
-      ) : (
-        <PendingSteerBubble text={steer.text} caption={pendingSteerText(state.status)} />
-      ),
+      node:
+        steer.agentText !== undefined ? (
+          <SettledNotice pending caption={pendingAgentText(steer.agentText, state.status)} />
+        ) : (
+          <PendingSteerBubble text={steer.text} caption={pendingSteerText(state.status)} />
+        ),
     });
   }
   const announced = useFinishedReply(state.entries, isFresh);

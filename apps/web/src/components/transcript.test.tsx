@@ -1,5 +1,6 @@
 import type { Event } from '@nexus/wire';
 import { emptyConversation, INBOX, reduceAll } from '@nexus/wire';
+import type { ToolEntry } from '@nexus/wire';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -332,5 +333,72 @@ describe('背景子代理結算通知（#851）', () => {
     } as ReturnType<typeof emptyConversation>;
     render(<Transcript state={state} isFresh={() => false} />);
     expect(screen.getByText(SETTLED_NOTICE_TEXT).closest('[data-settled-notice]')).not.toBeNull();
+  });
+});
+
+describe('背景子代理寄來的話與 send_message 卡（#861）', () => {
+  const delegation: ToolEntry = {
+    kind: 'tool',
+    id: 'tool-d',
+    callId: 'call-d',
+    name: 'subagent',
+    input: '{}',
+    status: 'done',
+    attribution: { kind: 'root' },
+    meta: { kind: 'background-subagent', runId: 'bg-1', subagentType: 'researcher' },
+  };
+  const claimedRelay = (runId: string): Event =>
+    ({
+      type: 'event',
+      event_id: 't:relay',
+      method: 'custom',
+      params: {
+        namespace: [],
+        timestamp: 0,
+        data: {
+          name: INBOX,
+          payload: {
+            items: [],
+            claimed: {
+              id: 'm',
+              text: '三個檔案看過了',
+              source: { kind: 'agent-message', senderSessionId: `root/${runId}`, runId },
+            },
+          },
+        },
+      },
+    }) as Event;
+
+  it('折疊器長出的來信畫成「某某 說」加上它寫的話：不是人的泡泡，名字從委派卡對回來', () => {
+    const folded = reduceAll(emptyConversation(), [claimedRelay('bg-1')]);
+    const state = { ...folded, entries: [delegation, ...folded.entries] };
+    render(<Transcript state={state} isFresh={() => false} />);
+    const card = document.querySelector('[data-agent-message]');
+    expect(card).not.toBeNull();
+    expect(within(card as HTMLElement).getByText('researcher 說')).toBeTruthy();
+    expect(within(card as HTMLElement).getByText('三個檔案看過了')).toBeTruthy();
+    expect(document.querySelector('[data-pending-steer]')).toBeNull();
+  });
+
+  it('重新整理後委派卡不在了：說背景子代理，不猜名字', () => {
+    const state = reduceAll(emptyConversation(), [claimedRelay('bg-1')]);
+    render(<Transcript state={state} isFresh={() => false} />);
+    const card = document.querySelector('[data-agent-message]') as HTMLElement;
+    expect(within(card).getByText('背景子代理 說')).toBeTruthy();
+  });
+
+  it('send_message 卡：標題與摘要說傳給誰，名字從委派卡對回來', () => {
+    const send: ToolEntry = {
+      ...delegation,
+      id: 'tool-s',
+      callId: 'call-s',
+      name: 'send_message',
+      input: '{"agent_id":"bg-1","message":"先看 A"}',
+      meta: undefined,
+    };
+    const state = { ...emptyConversation(), entries: [delegation, send] };
+    render(<Transcript state={state} isFresh={() => false} />);
+    const trigger = screen.getByRole('button', { name: /傳訊給子代理/ });
+    expect(trigger.textContent).toContain('傳給 researcher：先看 A');
   });
 });

@@ -60,6 +60,7 @@ import {
   subagentMaxTokensOf,
 } from '@/lib/max-tokens-view';
 import { outputOf, showsInput, toolOutput } from '@/lib/tool-output';
+import { SEND_MESSAGE, sendMessageSummary, sendMessageTitle } from '@/lib/subagent-view';
 import { classifyTool, firstLine, toolInputBody, toolSummary, toolTitle } from '@/lib/tool-view';
 
 export const TOOL_STATUS_LABEL = {
@@ -161,11 +162,14 @@ export function ToolCard({
   entry,
   beam,
   answer,
+  subagentNames,
 }: {
   entry: ToolEntry;
   beam: boolean;
   /** 配到這張提問卡的那一則答案（`pairAnswers`）；別的工具、或配不到時沒有。 */
   answer?: AnswerEntry;
+  /** 背景子代理的編號 → 名字（`lib/subagent-view.ts`），`send_message` 那張卡用它說出傳給誰；沒給就說不出名字。 */
+  subagentNames?: ReadonlyMap<string, string>;
 }) {
   const stopped = isStoppedQuestion(entry);
   const [open, setOpen] = useState(stopped);
@@ -177,6 +181,10 @@ export function ToolCard({
   }
   const variant = classifyTool(entry.name);
   const body = toolInputBody(entry.name, entry.input);
+  const sendLine =
+    entry.name === SEND_MESSAGE
+      ? sendMessageSummary(entry.input, entry.attribution, subagentNames ?? new Map())
+      : undefined;
   const questions = entry.name === ASK_USER_QUESTION ? questionsOf(entry.input) : undefined;
   // 答案優先讀線上那一份（#439）：它不分分頁，重新整理與重播都在。本地那一則是舊日誌（沒有 `text`）的退路。
   const given =
@@ -225,7 +233,11 @@ export function ToolCard({
             <StatusIcon status={entry.status} />
           )}
         </span>
-        <span className="text-ui shrink-0 font-medium">{toolTitle(entry.name)}</span>
+        <span className="text-ui shrink-0 font-medium">
+          {entry.name === SEND_MESSAGE
+            ? sendMessageTitle(entry.attribution)
+            : toolTitle(entry.name)}
+        </span>
         {/* 手機寬度讓給摘要：標題已經講了是哪一類，工具名是給熟的人對照的；不讓的話改檔卡的路徑只剩「/…」（#625 實機）。 */}
         <code className="text-muted-foreground hidden shrink-0 font-mono text-xs sm:inline">
           {entry.name}
@@ -248,7 +260,7 @@ export function ToolCard({
                     ? presentSummary(presented)
                     : todoLine !== undefined
                       ? todoLine.text
-                      : toolSummary(entry.name, entry.input)}
+                      : (sendLine ?? toolSummary(entry.name, entry.input))}
           </span>
           {todoLine !== undefined &&
             todoLine.extra > 0 &&

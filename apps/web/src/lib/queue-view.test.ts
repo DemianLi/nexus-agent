@@ -4,11 +4,16 @@ import { describe, expect, it } from 'vitest';
 import {
   canRunSlash,
   canSendText,
+  AGENT_MESSAGE_QUEUED_TEXT,
+  isAgentMessage,
   isQueueParked,
+  isQueuedByAgent,
   isSettledNotice,
+  queuedAgentText,
   QUEUE_PREVIEW_CHARS,
   queueHeading,
   queuePreview,
+  SETTLED_NOTICE_TEXT,
 } from '@/lib/queue-view';
 
 const STATUSES: readonly ConversationStatus[] = [
@@ -99,5 +104,27 @@ describe('isSettledNotice（#851）', () => {
   it('只有背景子代理結算的通知算；人排的不算', () => {
     expect(isSettledNotice(of({ kind: 'subagent-settled' }))).toBe(true);
     expect(isSettledNotice(of({ kind: 'user' }))).toBe(false);
+  });
+});
+
+describe('不是人排的那一類（#861）', () => {
+  const of = (source: WireQueuedInput['source']): WireQueuedInput => ({
+    id: 'a',
+    text: 't',
+    source,
+  });
+
+  it('結算通知與來信各自認得，合起來是「不是人排的」；人排的都不是', () => {
+    expect(isAgentMessage(of({ kind: 'agent-message' }))).toBe(true);
+    expect(isAgentMessage(of({ kind: 'subagent-settled' }))).toBe(false);
+    expect(isQueuedByAgent(of({ kind: 'agent-message' }))).toBe(true);
+    expect(isQueuedByAgent(of({ kind: 'subagent-settled' }))).toBe(true);
+    expect(isQueuedByAgent(of({ kind: 'user' }))).toBe(false);
+  });
+
+  it('佇列列上各寫各的一句，人排的沒有', () => {
+    expect(queuedAgentText(of({ kind: 'subagent-settled' }))).toBe(SETTLED_NOTICE_TEXT);
+    expect(queuedAgentText(of({ kind: 'agent-message' }))).toBe(AGENT_MESSAGE_QUEUED_TEXT);
+    expect(queuedAgentText(of({ kind: 'user' }))).toBeUndefined();
   });
 });
