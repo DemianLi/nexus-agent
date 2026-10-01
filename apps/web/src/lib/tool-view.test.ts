@@ -79,6 +79,7 @@ describe('classifyTool', () => {
     ['list_agents', 'others'],
     ['interrupt_agent', 'others'],
     ['send_message', 'others'],
+    ['list_subagent_models', 'others'],
     ['todo_write', 'others'],
   ] as const)('%s → %s', (name, variant) => {
     expect(classifyTool(name)).toBe(variant);
@@ -93,6 +94,7 @@ describe('classifyTool', () => {
     ['list_agents', '列出子代理'],
     ['interrupt_agent', '停止子代理'],
     ['send_message', '傳訊給子代理'],
+    ['list_subagent_models', '列出可選的子代理模型'],
   ])('背景子代理的管理工具 %s 有自己的標題', (name, title) => {
     expect(isKnownTool(name)).toBe(true);
     expect(toolTitle(name)).toBe(title);
