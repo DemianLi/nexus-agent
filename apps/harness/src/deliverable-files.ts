@@ -47,10 +47,10 @@
 
 import { createReadStream } from 'node:fs';
 import { lstat, open, realpath, stat } from 'node:fs/promises';
-import { basename, dirname, join, resolve, sep } from 'node:path';
+import { basename, dirname, resolve, sep } from 'node:path';
 
+import { hostPathOf, virtualPathOf } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
-import { virtualPathOf } from '@nexus/plugin-present';
 import type { DeliverableFilePage, DeliverableFileStat } from '@nexus/wire';
 
 import type { DeliverableFilesConfig } from './settings/deliverable-files.js';
@@ -146,8 +146,8 @@ export interface LocatedDeliverable {
  * 順序照 dsh 的 `locateFile`／`inspect`：**先擋路徑本身，再讓任何東西跟著它走**。
  *
  * - `virtualPathOf` 把模型給的原字串正規化成一條虛擬絕對路徑（`..` 在這一步被 `posix.normalize`
- *   吃掉，所以它不可能往上逃）。**這一份是從 `@nexus/plugin-present` 匯入的**，不是複製的：
- *   事件裡存的是原字串，正規化的結果不落庫，兩邊各寫一次的下場是有一天只有一邊擋。
+ *   吃掉，所以它不可能往上逃），接根那一步是 `hostPathOf`。**兩支都是 `@nexus/core` 的共用那一份**，
+ *   不是複製的：事件裡存的是原字串，正規化的結果不落庫，各寫一次的下場是有一天只有一邊擋。
  * - **父目錄先 `realpath`**，然後要求它落在工作區根的 realpath 之內。這一步擋的是中途某一層
  *   目錄是符號連結、指到工作區外的情況——`virtualMode` 的圍堵是 lexical 的（基座 `resolvePath`
  *   的檔頭自己寫著），lexical 擋不到它。
@@ -164,7 +164,7 @@ export async function locateDeliverableFile(
 ): Promise<DeliverableResult<LocatedDeliverable>> {
   const virtual = virtualPathOf(declaredPath);
   if (virtual === '/') return refuse('not-regular-file', `讀不到：${declaredPath} 是工作區根。`);
-  const lexical = join(rootDir, virtual);
+  const lexical = hostPathOf(rootDir, virtual);
   let root: string;
   let parent: string;
   try {
