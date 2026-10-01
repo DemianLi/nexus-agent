@@ -47,7 +47,7 @@ import {
 } from './cli.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
-import { listStoredThreads } from './session-list.js';
+import { listStoredThreads, readStoredSubagentSession } from './session-list.js';
 import {
   attachSessionPersistence,
   sessionPersistencePlugin,
@@ -589,6 +589,9 @@ async function startServer(
       ? {}
       : {
           listThreads: () => listStoredThreads(sessionStore, { cwd, title: threadTitle }),
+          // 背景子代理自己的落盤日誌（#871）：唯讀冷讀，規則見 `readStoredSubagentSession`。
+          readSubagentSession: (threadId: string, runId: string) =>
+            readStoredSubagentSession(sessionStore, threadId, runId),
         }),
     // `@` 引用別的會話的候選（#713）：冷讀整個會話根，跨專案。落盤關掉就不給，路由那時回 `available: false`。
     ...(sessionReferenceCandidates !== undefined && {

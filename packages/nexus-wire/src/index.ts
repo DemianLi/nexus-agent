@@ -176,6 +176,7 @@ export {
   HISTORY_PAGE_MAX_BYTES,
   HISTORY_PAGE_MESSAGES,
   historyPath,
+  subagentHistoryPath,
   isFeedbackMethod,
   isQueueUpdateMethod,
   isSubagentMethod,

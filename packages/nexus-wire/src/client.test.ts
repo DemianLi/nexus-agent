@@ -115,6 +115,28 @@ describe('瀏覽器端的 client', () => {
     expect(stopped).toMatchObject({ type: 'success', result: { accepted: true } });
   });
 
+  it('背景子代理的歷史走自己的路徑與同一套查詢；回來的一頁同 threadHistory，找不到是 rejected', async () => {
+    const urls: string[] = [];
+    const page = { events: [], firstSeq: 0, throughSeq: 0, hasMore: false, legacy: false };
+    const client = createWireClient({
+      baseUrl: 'http://agent.test/',
+      fetch: async (input) => {
+        urls.push(String(input));
+        return String(input).includes('bg-gone')
+          ? Response.json(errorResponse(null, 'subagent_not_found', '沒有這個子代理'))
+          : Response.json({ type: 'success', result: page });
+      },
+    });
+    const ok = await client.subagentHistory('t 1', 'bg-0123456789ab', { maxMessages: 5 });
+    const missing = await client.subagentHistory('t 1', 'bg-gone');
+    expect(urls[0]).toBe(
+      'http://agent.test/threads/t%201/subagents/bg-0123456789ab/history?maxMessages=5',
+    );
+    expect(urls[1]).toBe('http://agent.test/threads/t%201/subagents/bg-gone/history');
+    expect(ok).toEqual({ kind: 'ok', result: page });
+    expect(missing).toEqual({ kind: 'rejected', message: '沒有這個子代理' });
+  });
+
   it('下行預設訂全部放行的 channel，回來的是解好的封包', async () => {
     const { calls, client } = stub(() => sseResponse([FRAME]));
     const events = await client.openEvents('t2');
