@@ -575,13 +575,20 @@ function failureTextOf(output: unknown): string | undefined {
 }
 
 /**
- * 日誌對一次呼叫的判定（#296）：失敗與否、模型看到的那一句，與給畫面的 `meta`（#617，已照上限截過；
- * 失敗的不帶）。
+ * 日誌對一次呼叫的判定（#296）：失敗與否、模型看到的那一句、給畫面的 `meta`（#617，已照上限截過；
+ * 失敗的不帶），與失敗的錯誤碼（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）。
  */
 interface ToolVerdict {
   readonly failed: boolean;
   readonly text: string | undefined;
   readonly meta?: unknown;
+  /**
+   * 日誌 `tool/result.error.code` 的那個碼，原樣（例如 `ABORTED_BEFORE_DISPATCH`、`FS_SANDBOX_DENIED`）。
+   * 照 dsh 碼跨線（`packages/core/agent-loop/src/tool-calls.ts:285` 把 `error` 放進 `tool/result`，
+   * `packages/client/ui-chat/src/client/conversation-nodes/tool.ts:76` 原樣交給 client 的工具節點），畫面比碼不比字。
+   * 只在失敗那一支上線，見 {@link applyVerdict}。
+   */
+  readonly code?: string;
 }
 
 /** 已經轉發出去、還在等日誌判定的那顆 `tool-finished`。更正時原樣帶回它的 namespace 與 data。 */
@@ -614,6 +621,9 @@ function applyVerdict(
     ...rest,
     failed: true,
     message: verdict.text ?? (typeof bodyText === 'string' ? bodyText : '未指名的錯誤'),
+    // 欄位名照協定 `ToolErrorData` 的 `code`。`tool-finished` 的 data 在協定裡是 `Extensible`，
+    // 上面的 `failed`、`message`、`meta` 本來就是協定外的，多這一格同理（#667）。
+    ...(verdict.code === undefined ? {} : { code: verdict.code }),
   };
 }
 
@@ -1561,10 +1571,12 @@ export class ThreadPump {
     }
     // 那幾張卡照上面寫的 `tool/result` 收（#297）。**不走日誌的訂閱者**：它只認有 run 的時候，
     // 見 `#noteVerdict`。文字就是寫進對話的那一句，模型看到的也是它。
+    // 碼跟寫進日誌的那個一樣（#667）：畫面比碼判「停在提問時被停止」，不比紅字的結尾。
     for (const call of dangling) {
       this.#closeCard(call.id, {
         failed: true,
         text: started(call.name) ? TOOL_ABORTED_TEXT : TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
+        code: started(call.name) ? TOOL_ABORTED : TOOL_ABORTED_BEFORE_DISPATCH,
       });
     }
     // 看得到那張核准卡的每一條下行都要知道「不必再問了、這一輪停了」。這一顆是合成的：
@@ -2413,7 +2425,7 @@ export class ThreadPump {
     // 記著只是漏（同 id 的下一輪不會有，但表會一直長）。
     const background = isBackgroundAddress(address);
     if (this.#current === undefined && !background) return;
-    const { callId, isError, message, meta } = event.data;
+    const { callId, isError, message, meta, error } = event.data;
     // 失敗的不帶由 `applyVerdict` 管（它只在成功那一支放 meta），這裡不再判一次。
     const capped = capToolResultMeta(meta, this.#toolTextMaxBytes);
     const verdict: ToolVerdict = {
@@ -2423,6 +2435,8 @@ export class ThreadPump {
       // 一個樣、重新整理另一個樣」。meta 的上限同理。
       text: toolResultText(message, this.#toolTextMaxBytes),
       ...(capped === undefined ? {} : { meta: capped }),
+      // 碼原樣交出（#667）；成功的不上線由 `applyVerdict` 管。
+      ...(error?.code === undefined ? {} : { code: error.code }),
     };
     if (background) {
       this.#closeCard(callId, verdict);
@@ -2439,10 +2453,12 @@ export class ThreadPump {
     this.#forwardedFinishes.delete(callId);
     const settled = applyVerdict(forwarded.data, verdict);
     // **meta 也要比**（#617）：基座那顆從來不帶 meta，只差這一格的時候不補發，卡就永遠拿不到它。
+    // **碼同理**（#667）：基座那顆從來不帶碼，`failed` 與文字都對得上、只差碼時不補發，碼就到不了畫面。
     if (
       settled.failed === forwarded.data.failed &&
       settled.message === forwarded.data.message &&
-      settled.meta === forwarded.data.meta
+      settled.meta === forwarded.data.meta &&
+      settled.code === forwarded.data.code
     ) {
       return;
     }

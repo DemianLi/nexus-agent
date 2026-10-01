@@ -936,6 +936,11 @@ export function historyFrames(
             failed: event.data.isError,
             ...(reason !== undefined ? { message: reason } : {}),
             ...(meta !== undefined ? { meta } : {}),
+            // 碼同即時那條（`ThreadPump` 的 `applyVerdict`，#667）：只有失敗的帶。上面紅字的退路照舊，
+            // 判斷改讀這一格。
+            ...(event.data.isError && event.data.error?.code !== undefined
+              ? { code: event.data.error.code }
+              : {}),
           }),
         );
         break;
