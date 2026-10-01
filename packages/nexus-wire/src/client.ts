@@ -41,6 +41,8 @@ import type {
   QueueUpdateCommand,
   RpcMethod,
   RunCancelCommand,
+  SubagentInterruptCommand,
+  SubagentSendCommand,
   RunStartCommand,
   RunStartMode,
   SlashCommand,
@@ -62,6 +64,8 @@ import type {
 import {
   QUEUE_UPDATE_METHOD,
   RUN_CANCEL_METHOD,
+  SUBAGENT_INTERRUPT_METHOD,
+  SUBAGENT_SEND_METHOD,
   THREAD_FEED_PATH,
   THREAD_SEARCH_PATH,
   THREADS_PATH,
@@ -193,6 +197,13 @@ export interface WireClient {
     threadId: string,
     params: { readonly item_id: string; readonly action: QueueUpdateAction | QueueSteerAction },
   ): Promise<UplinkResult>;
+  /**
+   * 人對單一背景子代理說一句話（`subagent.send`，[#865](https://github.com/DemianLi/nexus-agent/issues/865)）。
+   * 語意與錯誤碼見 `SUBAGENT_SEND_METHOD`。受理就回（成功是 `{ accepted: true }`），不等那一輪跑完。
+   */
+  subagentSend(threadId: string, runId: string, text: string): Promise<UplinkResult>;
+  /** 只停單一背景子代理當下那一輪（`subagent.interrupt`）。不認得的編號是被接受的 no-op。 */
+  subagentInterrupt(threadId: string, runId: string): Promise<UplinkResult>;
   /** 評一則回覆（`feedback.put`，[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。 */
   feedbackPut(
     threadId: string,
@@ -500,6 +511,8 @@ export function createWireClient(options: WireClientOptions): WireClient {
       | SlashCommand
       | RunCancelCommand
       | QueueUpdateCommand
+      | SubagentSendCommand
+      | SubagentInterruptCommand
       | FeedbackCommand,
   ): Promise<UplinkResult> {
     // 路徑與封包各講一次 method，server 端不合就拒——照 dsh 的端點慣例
@@ -605,6 +618,22 @@ export function createWireClient(options: WireClientOptions): WireClient {
         id: nextCommandId++,
         method: QUEUE_UPDATE_METHOD,
         params,
+      });
+    },
+
+    async subagentSend(threadId, runId, text) {
+      return sendCommand(threadId, SUBAGENT_SEND_METHOD, {
+        id: nextCommandId++,
+        method: SUBAGENT_SEND_METHOD,
+        params: { run_id: runId, text },
+      });
+    },
+
+    async subagentInterrupt(threadId, runId) {
+      return sendCommand(threadId, SUBAGENT_INTERRUPT_METHOD, {
+        id: nextCommandId++,
+        method: SUBAGENT_INTERRUPT_METHOD,
+        params: { run_id: runId },
       });
     },
 
