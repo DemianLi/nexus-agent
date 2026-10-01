@@ -80,9 +80,8 @@
 
 import { MemorySaver } from '@langchain/langgraph';
 import type { BaseMessage } from '@langchain/core/messages';
-import { GOAL_WRAPUP_MARKER } from '@nexus/core';
 import type { SessionLog } from '@nexus/core';
-import { createGoalPlugin, GOALS_SERVICE } from '@nexus/plugin-goal';
+import { createGoalPlugin, GOAL_WRAPUP_MARKER, GOALS_SERVICE } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
 import { describe, expect, it } from 'vitest';
 

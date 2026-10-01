@@ -461,6 +461,51 @@ describe('日誌 → 畫面', () => {
     expect(state.status).toBe('idle');
   });
 
+  /**
+   * 續接補寫的收尾（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）：補的 `tool/result` 帶那句「結果不明」、
+   * `turn/end {interrupted}` 把那一輪收成完成——畫面與舊檔在 end-seed 收掉的那一條一致，不停在執行中。
+   */
+  it('補寫的收尾：工具卡仍是「沒有結果」那一句、那一輪收掉，畫面不停在執行中', () => {
+    const state = screen(
+      log(
+        human('跑'),
+        call('c1'),
+        {
+          ...result('c1', 'The tool call was interrupted ... outcome is unknown.', true),
+          data: {
+            ...result('c1', 'x', true).data,
+            error: { name: 'ToolOutcomeUnknownError', code: 'TOOL_OUTCOME_UNKNOWN' },
+          },
+        } as Draft,
+        { type: 'turn/end', data: { reason: { kind: 'interrupted' } } },
+        { type: 'session/end-seed', data: {} },
+      ),
+    );
+
+    // 畫面講的還是補寫之前的那一句（web 拿它比對「被停止」），不是補結的英文。
+    expect(state.entries.map(line)).toEqual([
+      'human:跑',
+      `tool:echo:failed:${UNFINISHED_TOOL_TEXT}`,
+    ]);
+    expect(state.status).toBe('idle');
+  });
+
+  /** 死前記過 `interrupt/raised` 也一樣：那一輪死了，不是停在核准點等人（否則畫面會掛一張等人回覆的卡）。 */
+  it('補寫的收尾：死前記過 interrupt/raised 也收成完成，不畫成等人回覆', () => {
+    const state = screen(
+      log(
+        human('跑'),
+        call('c1'),
+        { type: 'interrupt/raised', data: { interruptId: 'i1' } },
+        { type: 'turn/end', data: { reason: { kind: 'interrupted' } } },
+      ),
+      // 這條 thread 此刻掛著中斷時，被當成「停在核准點」的輪會畫成忙著等人；補寫的收尾不該。
+      gated('echo'),
+    );
+
+    expect(state.status).toBe('idle');
+  });
+
   it('目標排的輪次不畫那一串指示，同即時', () => {
     const state = screen(
       log(
