@@ -206,7 +206,7 @@
 - id: model-usage
   name: '@nexus/core/model-usage'
 
-# 一輪之中的耐久檢查點（#599）：模型請求之前、頂層工具動手之前，先把那次呼叫所屬的會話日誌
+# 一輪之中的耐久檢查點（#599）：模型請求之前、工具動手之前（root 與子代理都是），先把那次呼叫所屬的會話日誌
 # 排空到耐久。照 dsh base 的 `session-checkpoint-policy`（`packages/bundle/base/cordis.patch.yml:412`，
 # `477b4f4`）。**這一列同樣沒有 `config:`**，理由同上兩列。
 #

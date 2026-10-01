@@ -1,5 +1,5 @@
 /**
- * 一輪之中的**耐久檢查點**：模型請求之前、頂層工具動手之前，先把這次呼叫所屬的那一份
+ * 一輪之中的**耐久檢查點**：模型請求之前、工具動手之前，先把這次呼叫所屬的那一份
  * 會話日誌排空到耐久（[#599](https://github.com/DemianLi/nexus-agent/issues/599)）。
  *
  * ## 照 dsh
@@ -9,8 +9,9 @@
  * 所以都有；只有自成一棵的 `sdk-minimal` 沒有。三個點：
  *
  * 1. **`llm/stream`**：模型請求建起來之前，把記好的請求前綴排空。root 與子代理都是。
- * 2. **`tools/execute`**：只管頂層（`exec.parent === undefined`）的呼叫，排空之後若這一輪已經
- *    中止，就回「還沒動手就被中止」，不叫工具本體。
+ * 2. **`tools/execute`**：`exec.parent === undefined` 的呼叫都排空（root 與子代理的工具呼叫），之後若這一輪已經
+ *    中止，就回「還沒動手就被中止」，不叫工具本體。`exec.parent` 是 PTC 的內層分派才設的傳輸 token，
+ *    子代理的迴圈直發的呼叫不帶它（dsh `agent-loop/src/tool-calls.ts:68-80`），所以子代理的工具也排空。
  * 3. **`agent/pre-step`**：每一步之前，把上一步的回覆與工具結果排空。
  *
  * 排空被拒時**下游不動手**（fail-closed）：模型不被叫、工具本體不跑。錯誤照常往外拋——模型那一側
@@ -34,10 +35,7 @@
  * 2. **摘要那次呼叫之前不排空。** dsh 的摘要走 `llm/stream`，所以也會先排空；我們的摘要器在
  *    自己的 `wrapModelCall` 裡直接 `request.model.invoke`（{@link ./summarization.ts}），不經過
  *    這一顆。緊接著的那次主呼叫仍會先排空，摘要寫下的事件在那時一起落地。
- * 3. **「頂層」由日誌位址判斷**：子代理裡的工具呼叫位址是 `subagent`，同
- *    `@nexus/plugin-workspace-changes` 認 root 的做法。`task` 這顆工具本身是 root 的呼叫，所以
- *    派子代理之前會排空。
- * 4. **載體是 `@nexus/core` 的子路徑**，不是獨立套件；建構與排位由 fold 決定，這個條目只負責
+ * 3. **載體是 `@nexus/core` 的子路徑**，不是獨立套件；建構與排位由 fold 決定，這個條目只負責
  *    「在場、可以被 disabled」，同 {@link ./model-usage.ts | modelUsagePlugin}。
  *
  * ## 副作用：工具卡多半收到兩顆 `tool-finished`
@@ -51,7 +49,7 @@
  *
  * ## 代價
  *
- * 每次模型呼叫與每次頂層工具呼叫多一次排空，而我們的排空帶一次 `datasync`
+ * 每次模型呼叫與每次工具呼叫（root 與子代理）多一次排空，而我們的排空帶一次 `datasync`
  * （{@link ./session-persistence.ts | SessionPersistenceCoordinator.flush}）。dsh 那側每一批
  * append 都 fsync，量級相同。沒接持久化時（手搭的組裝、多數測試）排空者一位都沒有，
  * 立刻 resolve。
@@ -110,7 +108,10 @@ export function createSessionCheckpointMiddleware(sessions: CheckpointSessions):
     },
     wrapToolCall: async (request, handler) => {
       const found = sessions.forCall(callConfigOf(request));
-      if (found.kind !== 'ok' || found.address.kind !== 'root') return handler(request);
+      // 不分 root 與子代理（[#722](https://github.com/DemianLi/nexus-agent/issues/722)）：dsh 只跳過帶 `exec.parent` 的
+      // PTC 內層分派，子代理的工具照排空。子代理那一份日誌落盤，工具動手前不排空的話，外部副作用發生了、
+      // 日誌上卻沒有那次呼叫。
+      if (found.kind !== 'ok') return handler(request);
       await sessions.flush(found.log);
       // 排空要時間，那段時間裡使用者可能按了停止：dsh 在這裡再問一次，中止了就不叫工具本體。
       // 外層的 guard 只在動手前與動手後問，擋不到這一段。

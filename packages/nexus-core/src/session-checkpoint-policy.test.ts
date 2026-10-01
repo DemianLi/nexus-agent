@@ -155,7 +155,7 @@ describe('模型請求之前', () => {
   });
 });
 
-describe('頂層工具動手之前', () => {
+describe('工具動手之前', () => {
   it('root 的工具呼叫：handler 被叫的那一刻，之前記的已經在後端', async () => {
     const { sessions, handles, hooks } = await assemble();
     sessions.root.append('turn/start', { kind: 'message', text: 'p' });
@@ -168,16 +168,52 @@ describe('頂層工具動手之前', () => {
     expect((result as ToolMessage).content).toBe('寫好了');
   });
 
-  it('子代理裡的工具呼叫不排空——同 dsh 只管 `exec.parent === undefined`', async () => {
+  it('子代理裡的工具呼叫排空的是子代理那一份，不是 root（#722）：dsh 只跳過帶 `exec.parent` 的 PTC 內層分派', async () => {
     const { sessions, handles, hooks } = await assemble();
+    sessions.root.append('turn/start', { kind: 'message', text: 'p' });
     const child = sessions.open({ kind: 'subagent', runId: 'tools:t1' });
-    child.append('todo/write', { todos: [] });
-    let written: number | undefined;
+    child.append('tool/call', { callId: 'c1', name: 'write_file', arguments: '{}' });
+    let seen: { root: number; child: string[] } | undefined;
     await hooks.wrapToolCall(toolRequest(SUBAGENT_TOOL_NS), async () => {
-      written = handles.get('root-1/tools:t1')!.written.length;
+      seen = {
+        root: handles.get('root-1')!.written.length,
+        child: handles.get('root-1/tools:t1')!.written.map((event) => event.type),
+      };
       return success();
     });
-    expect(written).toBe(0);
+    expect(seen).toEqual({ root: 0, child: ['tool/call'] });
+  });
+
+  it('子代理的工具：排空的那段時間裡被中止，工具本體不跑；排空被拒也不跑（fail-closed）', async () => {
+    const aborted = await assemble();
+    const controller = new AbortController();
+    aborted.sessions.open({ kind: 'subagent', runId: 'tools:t1' });
+    aborted.sessions.onFlush(() => {
+      controller.abort();
+      return Promise.resolve();
+    });
+    let called = 0;
+    const result = await aborted.hooks.wrapToolCall(
+      toolRequest(SUBAGENT_TOOL_NS, controller.signal),
+      async () => {
+        called += 1;
+        return success();
+      },
+    );
+    expect((result as ToolMessage).content).toBe(TOOL_ABORTED_BEFORE_DISPATCH_TEXT);
+
+    const refused = await assemble();
+    refused.sessions
+      .open({ kind: 'subagent', runId: 'tools:t1' })
+      .append('tool/call', { callId: 'c1', name: 'write_file', arguments: '{}' });
+    refused.handles.get('root-1/tools:t1')!.fail = new Error('磁碟滿了');
+    await expect(
+      refused.hooks.wrapToolCall(toolRequest(SUBAGENT_TOOL_NS), async () => {
+        called += 1;
+        return success();
+      }),
+    ).rejects.toThrow('磁碟滿了');
+    expect(called).toBe(0);
   });
 
   it('排空的那段時間裡被中止：工具本體不跑，回「還沒動手就被中止」', async () => {
