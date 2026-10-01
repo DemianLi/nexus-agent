@@ -73,6 +73,7 @@ import {
   SUMMARIZATION_SERVICE,
 } from './summarization.js';
 import type { SummarizationSettings } from './summarization.js';
+import { TokenAnchorBook } from './token-estimate.js';
 import { toolCallIdOf, toolRefusal } from './tool-events.js';
 import {
   resolveToolResultPruneConfig,
@@ -249,6 +250,15 @@ export interface FoldOptions {
    * default backend 又沒關掉摘要時，fold 當場拋；關掉時不需要。
    */
   summarization?: Partial<SummarizationSettings> | false;
+  /**
+   * 錨定估算的帳（[#588](https://github.com/DemianLi/nexus-agent/issues/588)、[#702](https://github.com/DemianLi/nexus-agent/issues/702)）：
+   * 摘要器的預算層用它估「這份請求送出去會是幾個 token」，並在每次呼叫回來時記下供應商報的實數。
+   *
+   * **帳由進入點建、注入**，不是模組全域。要跨 thread 借錨的進入點（`runServe`）建一本傳給每一條 thread 的組裝；
+   * **省略即這次組裝各建一本**——這次組裝裡的 root 與子代理共用它（`foldSummarizer` 只建一次），不同組裝彼此不借。
+   * 只在摘要開著時有作用。
+   */
+  tokenAnchorBook?: TokenAnchorBook;
   /**
    * 摘要器外面那把工具結果剪刀的預算。給物件就逐格淺合併到
    * {@link DEFAULT_TOOL_RESULT_PRUNE} 上，`false` 是明著不要——摘要照跑，只是不先剪。
@@ -1213,7 +1223,9 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
         '地方放。給一個 default backend、明著傳 `summarization: false`，或在部署設定裡把' +
         ' `@nexus/core/summarization` 那一列標成 `disabled: true`。',
     );
-  return () => createSummarizer(backend, settings, registry.sessions, pruning);
+  // **一次組裝一本，root 與子代理共用**：放在工廠外面，每呼叫一次工廠才不會各建一本、把借錨切碎。
+  const book = options.tokenAnchorBook ?? new TokenAnchorBook();
+  return () => createSummarizer(backend, settings, book, registry.sessions, pruning);
 }
 
 /**
