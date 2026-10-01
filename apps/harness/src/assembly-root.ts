@@ -51,6 +51,7 @@ import {
   SessionRegistry,
   deriveApprovalChannel,
   type SessionLog,
+  type TokenAnchorBook,
 } from '@nexus/core';
 import {
   HARNESS_HOME_DIR_NAME,
@@ -504,6 +505,12 @@ export interface CreateCliAgentSession {
    * `ThreadAgent.rootSeed` 交給 pump。
    */
   readonly rootSeed?: readonly SessionEvent[];
+  /**
+   * 錨定估算的帳（[#702](https://github.com/DemianLi/nexus-agent/issues/702)），原樣轉給 `createNexusAgent`。
+   * **要跨 thread 借錨的入口傳**：serve 在起動期建一本、每條 thread 傳同一本，所以第二條 thread 的第一次借得到第一條的。
+   * CLI 一個行程一個組裝，省略即這個組裝自己一本，行為相同。
+   */
+  readonly tokenAnchorBook?: TokenAnchorBook;
 }
 
 /**
@@ -604,7 +611,7 @@ export async function createCliAgent(
   },
   plugins: readonly PluginEntry[],
   cwd: string = process.cwd(),
-  { onInvariantViolation, approvals, rootSeed }: CreateCliAgentSession = {},
+  { onInvariantViolation, approvals, rootSeed, tokenAnchorBook }: CreateCliAgentSession = {},
 ): Promise<{
   agent: NexusAgent;
   dispose: () => Promise<void>;
@@ -737,6 +744,7 @@ export async function createCliAgent(
     stepInbox,
   } = await createNexusAgent({
     model,
+    ...(tokenAnchorBook !== undefined && { tokenAnchorBook }),
     plugins: [
       // **組裝點的協作者排最前面**（#459）：ask-user、plan-mode、sandbox-policy 在自己的
       // `apply` 當下就讀，排後面它們會拿不到。載入是一趟到底的，不會回頭等。

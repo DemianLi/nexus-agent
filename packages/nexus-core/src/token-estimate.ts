@@ -53,6 +53,12 @@
  * 2. **內容比例**：dsh 的增量不乘任何東西。nemotron 的 tokenizer 在內容上比 o200k 多約 16%，大的增量一來就超過
  *    10%。dsh 沒有這一格；比例從這條 thread 自己的兩次實數學，學不到就借行程裡最近學到的。
  *
+ * 3. **載體與跨 thread 借錨**：dsh 的量測是 ctx 上的服務，狀態逐 session 存（`WeakMap<Session, …>`），沒有跨 session
+ *    學的東西。我們多了「借別條 thread 的第一次」與 c̄（上面兩格的理由），所以帳要跨 thread 共用。共用的是**一個進入點
+ *    建的 {@link TokenAnchorBook} 實例**（`runServe` 一本給所有 thread），由組裝點一路注入到摘要器——對應 dsh 的 ctx
+ *    注入，而不是模組全域（[#702](https://github.com/DemianLi/nexus-agent/issues/702)）。理由同 #588：目標是每一次 ≤10%，
+ *    第一次沒有錨就只能借。
+ *
  * 另外 dsh 只在「用量 ≥ 那次的估算」時才採用錨（保守的那一邊），我們一律採用：目標是雙向 10%，不是只防少估。
  *
  * @module
@@ -296,23 +302,15 @@ export interface TokenEstimate {
  * 錨定估算要的那本帳：每一則 AI 訊息是從多大（E）的請求生出來的、每一組「模型＋工具」的第一次，與每個模型最近
  * 一次學到的內容比例。
  *
- * **一個行程一本**（{@link defaultTokenAnchorBook}）：serve 一條 thread 建一個 agent，借錨要跨 thread 才借得到。
+ * **一本帳由進入點建、注入到每個要用它的組裝**（[#702](https://github.com/DemianLi/nexus-agent/issues/702)），
+ * 不是模組全域：serve 一條 thread 建一個 agent，借錨要跨 thread 才借得到，所以 `runServe` 建一本傳給所有 thread；
+ * CLI 一個行程一個組裝，省略即各建一本。測試與 eval 每題各 `new` 一本就彼此隔離，不必伸手清全域。
  * 鍵是 AI 訊息的 id，跨 agent 共用不會撞。
  */
 export class TokenAnchorBook {
   readonly #sent = new Map<string, number>();
   readonly #firstCalls = new Map<string, { readonly tokens: number; readonly estimated: number }>();
   readonly #ratios = new Map<string, number>();
-
-  /**
-   * 整本清空。**給測試用**：同一個測試檔裡的組裝共用行程那一本，不清的話後一條會借到前一條的第一次與比例，數字
-   * 隨執行順序變。
-   */
-  clear(): void {
-    this.#sent.clear();
-    this.#firstCalls.clear();
-    this.#ratios.clear();
-  }
 
   /** 這個模型最近一次學到的內容比例（c̄）。還沒學到就是 `undefined`。 */
   learnedRatio(model: string | undefined): number | undefined {
@@ -392,19 +390,16 @@ export class TokenAnchorBook {
   }
 }
 
-/** 行程共用的那本。測試要隔離就自己 `new` 一本傳進去。 */
-export const defaultTokenAnchorBook = new TokenAnchorBook();
-
 /**
  * 錨定估算。
  *
  * @param request - 要估的請求。錨從它的 `messages` 裡找。
- * @param book - 帳。
+ * @param book - 帳。由進入點注入，見 {@link TokenAnchorBook}。
  * @returns 估算值與它的來源。
  */
 export function estimateAnchoredTokens(
   request: EstimatedRequest,
-  book: TokenAnchorBook = defaultTokenAnchorBook,
+  book: TokenAnchorBook,
 ): TokenEstimate & { readonly estimated: number } {
   const messages = request.messages ?? [];
   const estimated = estimateRequestTokens(request);

@@ -555,7 +555,5 @@
   name: '@nexus/plugin-telemetry-otel/invariant'
 - id: todo-invariant
   name: '@nexus/plugin-todo/invariant'
-- id: validation-invariant
-  name: '@nexus/plugin-validation/invariant'
 - id: wire-invariant
   name: '@nexus/wire/invariant'
