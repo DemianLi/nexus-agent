@@ -268,6 +268,7 @@ export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 export { createModelCallRecorder, MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
 export { noteFailedAttempt, noteRequestStart, runInRetryScope } from './llm-retry.js';
+export { interruptedTurnClosers, resumeClosingInterruptedTurn } from './interrupted-turn.js';
 export {
   createSubagentDelegationMiddleware,
   SUBAGENT_DELEGATION_CONTEXT,

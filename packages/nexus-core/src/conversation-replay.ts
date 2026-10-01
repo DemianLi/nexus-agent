@@ -136,7 +136,7 @@ function requestedCalls(message: BaseMessage): PendingBatch['calls'] {
  * 沒配到結果的那次，照 dsh `repair.ts` 補一則錯誤結果。**不帶 `Error: `**：那兩句是 dsh 的作者寫好的
  * 回饋，走第二條政策（`tool-events.ts` 的 `toolRefusal`）。
  */
-function closer(
+export function closer(
   call: { readonly id: string; readonly name: string },
   started: boolean,
 ): ToolMessage {
