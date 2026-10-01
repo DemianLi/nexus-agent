@@ -946,6 +946,109 @@ describe('載體本身（假 agent）', () => {
       await host.close();
     });
   });
+
+  describe('現況：running／idle 的整份通知（#867）', () => {
+    function withStatus(agent: BackgroundAgent, warn?: (message: string) => void) {
+      const sessions = new SessionRegistry('root-1');
+      const seen: string[] = [];
+      const host = new BackgroundSubagentHost({
+        sessions,
+        compile: () => agent,
+        onStatus: (items) =>
+          seen.push(items.map((item) => `${item.runId}:${item.status}`).join(',')),
+        ...(warn !== undefined && { warn }),
+      });
+      return { host, seen };
+    }
+    const running = async (seen: readonly unknown[]) => {
+      while (seen.length === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+    };
+
+    it('接上的當下先送一份空的；派出去是 running，做完是 idle；沒變的不重送', async () => {
+      const hold = gate();
+      const { agent } = fakeAgent(async () => hold.opened);
+      const { host, seen } = withStatus(agent);
+      // 空的也送：web 靠它分得出「還在等」與「收線」。
+      expect(seen).toEqual(['']);
+      const first = host.start({ subagent: 'worker', text: '開工' });
+      hold.open();
+      await first.outcome;
+      expect(seen).toEqual(['', `${first.runId}:running`, `${first.runId}:idle`]);
+      await host.close();
+    });
+
+    it('每個認得的編號各一項，整份送；另一個跑著時這個結算只翻自己那一項', async () => {
+      const holds = [gate(), gate()];
+      let n = 0;
+      const { agent } = fakeAgent(async () => holds[n++]?.opened);
+      const { host, seen } = withStatus(agent);
+      const a = host.start({ subagent: 'worker', text: 'A' });
+      const b = host.start({ subagent: 'worker', text: 'B' });
+      holds[0]?.open();
+      await a.outcome;
+      expect(seen.at(-1)).toBe(`${a.runId}:idle,${b.runId}:running`);
+      holds[1]?.open();
+      await b.outcome;
+      expect(seen.at(-1)).toBe(`${a.runId}:idle,${b.runId}:idle`);
+      await host.close();
+    });
+
+    it('已結算的再被 sendFromUser 叫醒：受理當下就轉 running（不等那一輪開跑），結束再回 idle', async () => {
+      const { agent } = fakeAgent();
+      const { host, seen } = withStatus(agent);
+      const first = host.start({ subagent: 'worker', text: '開工' });
+      await first.outcome;
+      const before = seen.length;
+      const wake = host.sendFromUser({ runId: first.runId, text: '再來' });
+      // 同步：受理之後立刻看得到，輪次還沒被迴圈撿起。
+      expect(seen.slice(before)[0]).toBe(`${first.runId}:running`);
+      await wake;
+      expect(seen.at(-1)).toBe(`${first.runId}:idle`);
+      await host.close();
+    });
+
+    it('被中斷：那一輪收完回 idle；排著沒被領走的不算在跑（暫停）', async () => {
+      const hold = gate();
+      const { agent, seen: ran } = fakeAgent(async (text) => {
+        if (text === '開工') await hold.opened;
+      });
+      const { host, seen } = withStatus(agent);
+      const first = host.start({ subagent: 'worker', text: '開工' });
+      await running(ran);
+      // 排一輪在後面，再中斷：那一輪還在收的時候是 running，收完因為暫停所以是 idle，排著的不開跑。
+      void host.sendFromUser({ runId: first.runId, text: '之後的話' });
+      host.interrupt(first.runId);
+      expect(host.statuses()).toEqual([{ runId: first.runId, status: 'running' }]);
+      hold.open();
+      await first.outcome;
+      expect(host.statuses()).toEqual([{ runId: first.runId, status: 'idle' }]);
+      expect(seen.at(-1)).toBe(`${first.runId}:idle`);
+      // 下一次送話喚醒它。
+      const wake = host.sendFromUser({ runId: first.runId, text: '喚醒' });
+      expect(host.statuses()).toEqual([{ runId: first.runId, status: 'running' }]);
+      await wake;
+      await host.close();
+    });
+
+    it('出口拋錯只講一聲，不影響輪次', async () => {
+      const { agent } = fakeAgent();
+      const sessions = new SessionRegistry('root-1');
+      const warned: string[] = [];
+      const host = new BackgroundSubagentHost({
+        sessions,
+        compile: () => agent,
+        onStatus: () => {
+          throw new Error('下行壞了');
+        },
+        warn: (message) => warned.push(message),
+      });
+      const first = host.start({ subagent: 'worker', text: '開工' });
+      expect(await first.outcome).toEqual({ ok: true });
+      expect(warned.length).toBeGreaterThan(0);
+      expect(warned[0]).toContain('下行壞了');
+      await host.close();
+    });
+  });
 });
 
 // ───────────────────────────── 真組裝 ─────────────────────────────
