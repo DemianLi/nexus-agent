@@ -64,7 +64,7 @@ import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MemorySaver } from '@langchain/langgraph';
-import { createHostServicesPlugin, formatOrigin, loadPlugins } from '@nexus/core';
+import { formatOrigin, loadPlugins } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { createSubmitRecordPlugin, SUBMIT_RECORD_TOOL_NAME } from '@nexus/plugin-submit-record';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -213,13 +213,10 @@ afterEach(async () => {
  * 第二輪根本沒被用到；permissive-first 把工具跑完，第二輪被吃掉），共用一份會讓後跑的那組拿到
  * 一個已經被吃掉輪次的腳本；共用工作區則會讓前一組寫的檔案被後一組量到。
  *
- * **backend 要經 `createHostServicesPlugin` 交給 submit-record**，同 `cli.ts`：沒給的話它退到基座那個
- * 記憶體裡的預設，「寫出去沒」就量不到磁碟上。
+ * **backend 給 `createNexusAgent`**，同 `cli.ts`：submit-record 從 `fs` 服務拿 fold 折出來的那一個
+ * （#694），「寫出去沒」才量得到磁碟上。
  */
-async function measure(
-  plugins: (backend: ContainedFilesystemBackend) => readonly PluginEntry[],
-  threadId: string,
-): Promise<string> {
+async function measure(plugins: () => readonly PluginEntry[], threadId: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'nexus-gate-order-'));
   roots.push(root);
   const backend = new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' });
@@ -227,7 +224,7 @@ async function measure(
     model: submitScript(),
     backend,
     checkpointer: new MemorySaver(),
-    plugins: [...plugins(backend)],
+    plugins: [...plugins()],
   });
   try {
     const result = await agent.invoke(toAgentInvocation('登記一位訪客。'), {
@@ -264,31 +261,20 @@ const ROWS = [
   {
     label: 'control：只有 submit-record',
     threadId: 'gate-order-control',
-    plugins: (backend: ContainedFilesystemBackend) => [
-      createHostServicesPlugin({ backend }),
-      createSubmitRecordPlugin(),
-    ],
+    plugins: () => [createSubmitRecordPlugin()],
     outcome: 'interrupt=true written=false',
   },
   {
     label: 'permissive-first：寬鬆 gate 排在 submit-record 之前',
     threadId: 'gate-order-permissive-first',
-    plugins: (backend: ContainedFilesystemBackend) => [
-      createHostServicesPlugin({ backend }),
-      permissiveGatePlugin(),
-      createSubmitRecordPlugin(),
-    ],
+    plugins: () => [permissiveGatePlugin(), createSubmitRecordPlugin()],
     // **刻意的**：那一列寫出去了，而沒有任何人看過它。見上面那段 JSDoc。
     outcome: 'interrupt=false written=true',
   },
   {
     label: 'submit-first：同一組人，只把順序對調',
     threadId: 'gate-order-submit-first',
-    plugins: (backend: ContainedFilesystemBackend) => [
-      createHostServicesPlugin({ backend }),
-      createSubmitRecordPlugin(),
-      permissiveGatePlugin(),
-    ],
+    plugins: () => [createSubmitRecordPlugin(), permissiveGatePlugin()],
     outcome: 'interrupt=true written=false',
   },
 ] as const;
