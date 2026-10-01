@@ -355,6 +355,28 @@ describe('子代理自己的對話（#861）', () => {
       frame('lifecycle', { event: 'completed', graph_name: 'root' }),
     ]);
 
+  it('只顯示最近一頁（前面還有更早的）時，第一則人話不一定是任務：不標「派出的任務」，並說還有更早的', async () => {
+    const { client } = fakeClient({
+      subagentHistory: vi.fn(async () =>
+        historyOf(
+          [
+            frame('lifecycle', { event: 'running', graph_name: 'root' }),
+            ...said('human', 'h9', '先看 A'),
+            ...said('ai', 'a9', '看過了'),
+            frame('lifecycle', { event: 'completed', graph_name: 'root' }),
+          ],
+          true,
+        ),
+      ),
+    });
+    render(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
+    open();
+    await waitFor(() => expect(entryKinds()).toEqual(['human', 'ai']));
+    const section = document.querySelector('[data-subagent-conversation]') as HTMLElement;
+    expect(within(section).queryByText('派出的任務')).toBeNull();
+    expect(within(section).getByText(/更早的沒有載入/)).toBeTruthy();
+  });
+
   it('展開讀一次：帶 thread、編號與頁大小；畫出人話、工具卡、回覆；第一則標「派出的任務」且去掉回報指示', async () => {
     const { client } = fakeClient({ subagentHistory: vi.fn(async () => conversation()) });
     render(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
@@ -534,6 +556,33 @@ describe('子代理自己的對話（#861）', () => {
       [...document.querySelectorAll('[data-subagent-echo]')].map((n) => n.textContent);
     await waitFor(() => expect(echoes()).toHaveLength(1));
     expect(echoes()[0]).toContain('再看 B');
+  });
+
+  it('子代理跑完之後，到那一刻為止送出的回聲收掉：歷史只讀最近一頁、人話掉出頁外也不會留下重複的泡泡', async () => {
+    const outOfWindow = historyOf(
+      [
+        frame('lifecycle', { event: 'running', graph_name: 'root' }),
+        ...said('human', 'h9', '很後面的一句'),
+        ...said('ai', 'a9', '好'),
+        frame('lifecycle', { event: 'completed', graph_name: 'root' }),
+      ],
+      true,
+    );
+    const { client } = fakeClient({ subagentHistory: vi.fn(async () => outOfWindow) });
+    const view = render(<Harness client={client} status={{ 'bg-1': 'running' }} />);
+    open();
+    fireEvent.change(input(), { target: { value: '很早的一句' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出給背景子代理' }));
+    await waitFor(() => expect(document.querySelector('[data-subagent-echo]')).not.toBeNull());
+    // 還在跑：領走之前，回聲要留著。
+    // 跑完：它已經在日誌裡，只是這一頁沒涵蓋到。
+    view.rerender(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
+    await waitFor(() => expect(document.querySelector('[data-subagent-echo]')).toBeNull());
+    // 之後再送的還是會留著，直到下一次跑完。
+    fireEvent.change(input(), { target: { value: '新的一句' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出給背景子代理' }));
+    await waitFor(() => expect(document.querySelector('[data-subagent-echo]')).not.toBeNull());
+    expect(document.querySelector('[data-subagent-echo]')?.textContent).toContain('新的一句');
   });
 
   it('後到的舊回應不覆蓋新的', async () => {
