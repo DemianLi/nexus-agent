@@ -62,6 +62,7 @@ import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import {
   foldInbox,
+  humanMessageForTurnStart,
   INTERRUPTED_REPLY_MARKER,
   isTurnCancelled,
   MAX_TOKENS_TURN_END,
@@ -1932,7 +1933,7 @@ export class ThreadPump {
         ? // **逐 id 派送，不是裸值。** 鍵是那顆 `XXH3(checkpoint_ns)`，基座只把值送給
           // 那一顆 task；裸值會廣播給每一顆待決的 task（見 `PumpInput` 的 `interruptId`）。
           new Command({ resume: { [input.interruptId]: input.response } })
-        : { messages: [new HumanMessage(input.text)] };
+        : { messages: [humanMessageForTurnStart(turnStartOf(input))] };
 
     // 一輪一個中止控制器，照 dsh（`packages/core/agent-loop/src/agent.ts:149-155`）。
     const current: CurrentRun = {
