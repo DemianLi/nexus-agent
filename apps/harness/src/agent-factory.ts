@@ -94,6 +94,10 @@ import type { ToolResultStashOptions } from './tool-result-stash.js';
 import { assertHarnessProfileDeclared, describeHarnessProfileEffects } from './harness-profile.js';
 import type { HarnessProfileEffects } from './harness-profile.js';
 import { DEFAULT_RECURSION_LIMIT, RECURSION_LIMIT_SERVICE } from './settings/recursion-limit.js';
+import {
+  DEFAULT_MAX_PARALLEL_TOOL_CALLS,
+  MAX_PARALLEL_TOOL_CALLS_SERVICE,
+} from './settings/agent-loop.js';
 
 /** 組裝時掉了的一列（#751）：載入器交出來的原因，加上它是清單上哪一個條目。 */
 export interface AssemblyDrop {
@@ -577,6 +581,19 @@ function recursionLimitFor(registry: PluginRegistry, options: CreateNexusAgentOp
   return registry.services.get(RECURSION_LIMIT_SERVICE) ?? DEFAULT_RECURSION_LIMIT;
 }
 
+/**
+ * 每步同時在跑的工具呼叫上限（[#711](https://github.com/DemianLi/nexus-agent/issues/711)）：`#settings/agent-loop` 那一列
+ * 提供的值，沒有那一列就是 {@link DEFAULT_MAX_PARALLEL_TOOL_CALLS}。兩態，理由同 {@link recursionLimitFor} 少一態那段：
+ * 這一列關不掉，就算關得掉答案也一樣是內建值。沒有旗標，所以也沒有第一態。帶進 LangGraph 的 `maxConcurrency`，見
+ * `settings/agent-loop.ts` 的檔頭。
+ *
+ * @param registry - 已經跑完 `loadPlugins()` 的 registry。
+ * @returns 同一步最多幾顆工具呼叫同時在跑。
+ */
+function maxParallelToolCallsFor(registry: PluginRegistry): number {
+  return registry.services.get(MAX_PARALLEL_TOOL_CALLS_SERVICE) ?? DEFAULT_MAX_PARALLEL_TOOL_CALLS;
+}
+
 /** 模型物件自己報的型號；沒有的話退到它的種類名，每個 `BaseChatModel` 都有。字串形式的模型（基座的 `provider:model`）原樣用。 */
 function modelLabelOf(model: AgentModel): string {
   if (typeof model === 'string') return model;
@@ -698,7 +715,12 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     const agent = createDeepAgent({
       ...params,
       ...(options.systemPrompt !== undefined && { systemPrompt: options.systemPrompt }),
-    }).withConfig({ recursionLimit: recursionLimitFor(registry, options) });
+    }).withConfig({
+      recursionLimit: recursionLimitFor(registry, options),
+      // 每步的工具呼叫各是一個 pregel task，`maxConcurrency` 就是同時起跑的上限（#711）；一次性 `task` 子代理經執行脈絡
+      // 繼承同一個值（實測）。
+      maxConcurrency: maxParallelToolCallsFor(registry),
+    });
 
     // 接上去但還沒收掉的協調器。**組裝點自己記著**，因為呼叫端可能只叫 `dispose()`
     // 就走人——那時 `shutdown` 標記與後端的排空都還沒發生，遙測會少掉最後一段。
@@ -744,6 +766,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         ...(model !== undefined && { model }),
       }).withConfig({
         recursionLimit: recursionLimitFor(registry, options),
+        // 平行工具呼叫上限同理（#711）：背景圖不在 root 那次 invoke 的執行脈絡裡，繼承不到，要自己帶。
+        maxConcurrency: maxParallelToolCallsFor(registry),
       });
     };
 
