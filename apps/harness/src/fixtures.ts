@@ -28,6 +28,8 @@ import { StateBackend } from 'deepagents';
 import { z } from 'zod';
 import { BrowserAuth } from './browser-auth.js';
 import { loadPluginConfig } from './plugin-config.js';
+import type { ScriptedTurn } from './scripted-model.js';
+import { scriptedModelPlugin } from './settings/scripted-model.js';
 import type { AttachSessions } from './session-attach.js';
 
 /**
@@ -61,6 +63,35 @@ export function shippedPlugins(): Promise<readonly PluginEntry[]> {
     return plugins;
   });
   return shipped;
+}
+
+/**
+ * 在出貨清單上**換一顆腳本模型**：插一列腳本提供者（`#settings/scripted-model`，腳本當 config）、把
+ * `agent-default-model` 指過去——同 dsh 的 headless e2e（`source-tool.built.e2e.ts:36-42`）與
+ * `serve-scripted-provider.test.ts` 那份 patch 的形狀，只是這裡直接改條目、不經檔案。
+ *
+ * **給「要在產品組裝（`createCliAgent`）上跑一條自訂工具回合」的測試**（[#670](https://github.com/DemianLi/nexus-agent/issues/670)）：
+ * 組裝是真的，只換模型。要讀模型實例（`boundToolNames`、`prompts`）就用 `createCliAgent` 回傳的 `model`。
+ * 腳本是資料（`ScriptedTurn` 的 `content`／`toolCalls`／`usage`／`error`）；要共用 `shared` 狀態的案例留在手搭的組裝上。
+ *
+ * @param plugins - 底下那份清單，通常是 {@link shippedPlugins}。
+ * @param turns - 腳本。
+ * @returns 換好模型的清單，原清單不動。
+ * @throws {Error} 清單上找不到選擇列——出貨清單改了名，這裡要跟著改，不要靜靜退回內建腳本。
+ */
+export function withScriptedModel(
+  plugins: readonly PluginEntry[],
+  turns: readonly ScriptedTurn[],
+): PluginEntry[] {
+  const providerId = 'test-script';
+  let selected = false;
+  const rows = plugins.map((entry) => {
+    if (entry.id !== 'agent-default-model') return entry;
+    selected = true;
+    return { ...entry, config: { provider: providerId } };
+  });
+  if (!selected) throw new Error('清單上沒有 agent-default-model 那一列，換不了模型');
+  return [...rows, { id: providerId, plugin: scriptedModelPlugin, config: { turns } }];
 }
 
 /**
