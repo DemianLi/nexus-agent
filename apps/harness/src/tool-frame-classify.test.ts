@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { classifyToolData } from './thread-pump.js';
+import { classifyToolData, isApprovalSuspension } from './thread-pump.js';
 
 /** 一顆掛著的中斷在線上長的樣子，逐字照實測抄的。 */
 const SUSPENSION = JSON.stringify([
@@ -86,5 +86,32 @@ describe('收尾了不等於成功了', () => {
     const raw = { event: 'tool-started', tool_call_id: 'call_1_0', tool_name: 'take_note' };
 
     expect(classifyToolData(raw)).toBe(raw);
+  });
+});
+
+/**
+ * 本體停在**核准**上的那顆整顆不上線（[#700](https://github.com/DemianLi/nexus-agent/issues/700)）。同樣兩個相反的病：
+ * 漏丟（核准卡被畫成「等你回答」）與誤丟（問答或真的錯誤被吞掉，卡停在執行中）。
+ */
+describe('本體停在核准上的那顆不上線', () => {
+  const entries = (value: unknown) => JSON.stringify([{ id: 'i1', value }]);
+
+  it('明寫 `kind: approval` 的中斷：丟', () => {
+    expect(
+      isApprovalSuspension({
+        event: 'tool-error',
+        tool_call_id: 'c',
+        message: entries({ kind: 'approval', actionRequests: [{ name: 'x', args: {} }] }),
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    ['問答的中斷', { event: 'tool-error', message: SUSPENSION }],
+    ['判別式缺席的中斷', { event: 'tool-error', message: entries({ actionRequests: [] }) }],
+    ['真的錯誤', { event: 'tool-error', message: '工具自己炸了' }],
+    ['不是 `tool-error`', { event: 'tool-finished', message: entries({ kind: 'approval' }) }],
+  ])('%s：不丟', (_label, data) => {
+    expect(isApprovalSuspension(data)).toBe(false);
   });
 });
