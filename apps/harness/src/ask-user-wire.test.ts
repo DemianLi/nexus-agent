@@ -32,7 +32,7 @@ import {
   isQuestionPending,
   reduceConversation,
 } from '@nexus/wire';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import { historyFrames } from './conversation-history.js';
@@ -347,6 +347,54 @@ describe('掛著與收尾各自說對了什麼', () => {
     if (tool === undefined || tool.kind !== 'tool') throw new Error('一則工具紀錄都沒有');
     expect(tool.status).toBe('done');
     expect(tool.error).toBeUndefined();
+    await session.close();
+  });
+});
+
+/**
+ * **停在提問時按停止：線上帶的碼就是畫面要比的那個值**（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）。
+ *
+ * 畫面判「這張提問卡是停在提問時被停止的」照 dsh 比碼不比字（dsh 的 UI 那側是手寫字面值，
+ * `packages/client/ui-tool/src/client/tool/toolviews/ask-question-row.tsx:160`）。所以這一條**用字面值斷言**：pump
+ * 對提問改送別的碼（例如換成「已開始的中止」）時，這裡會紅，而不是讓畫面靜靜比不到。工具是真的
+ * `ask_user_question`，不是等核准的工具。
+ */
+describe('停在提問時按停止：碼跨線（#667）', () => {
+  const STOPPED_ON_QUESTION = 'ABORTED_BEFORE_DISPATCH';
+
+  it('即時與重新整理那顆 `tool-finished` 都帶同一個碼，卡上的 `errorCode` 也是它', async () => {
+    const session = await open('a-stop');
+    await until(session, (s) => s.state.status === 'awaiting-input');
+    // 停在提問的那一輪先在日誌上收完（中斷那一輪照樣寫 `turn/end`），這時按停止走的才是收回那條路。
+    await vi.waitFor(() => {
+      expect(session.log().some((event) => event.type === 'turn/end')).toBe(true);
+    });
+    await session.client.runCancel('a-stop');
+    await until(session, (s) => s.state.status === 'stopped');
+
+    const finishedOf = (frames: readonly Event[]) =>
+      frames
+        .filter(
+          (frame) =>
+            frame.method === 'tools' &&
+            (frame.params.data as { event?: unknown }).event === 'tool-finished',
+        )
+        .map((frame) => frame.params.data as Record<string, unknown>);
+
+    const live = finishedOf(session.frames);
+    expect(live.at(-1)).toMatchObject({ failed: true, code: STOPPED_ON_QUESTION });
+    expect(lastToolEntry(session)).toMatchObject({
+      name: ASK_USER_QUESTION_TOOL_NAME,
+      status: 'failed',
+      errorCode: STOPPED_ON_QUESTION,
+    });
+
+    const history = historyFrames(session.log(), DEFAULT_TOOL_TEXT_MAX_BYTES);
+    expect(finishedOf(history).at(-1)).toMatchObject({ failed: true, code: STOPPED_ON_QUESTION });
+    const replayed = history
+      .reduce(reduceConversation, emptyConversation())
+      .entries.filter((entry) => entry.kind === 'tool');
+    expect(replayed.at(-1)).toMatchObject({ status: 'failed', errorCode: STOPPED_ON_QUESTION });
     await session.close();
   });
 });
