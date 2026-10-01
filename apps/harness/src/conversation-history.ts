@@ -28,6 +28,8 @@
  *
  * | `plan/mode` | 計劃模式（#895）：**只在最新一頁送一顆，是到 `throughSeq` 為止目前的值**，日誌上一顆都沒有就不送；`data` 同即時（{@link planModeData}） |
  *
+ * | `goal/change` ／ `turn/start{kind:'goal'}` | 目標（#897）：**只在最新一頁送一顆，是到 `throughSeq` 為止目前的值**，一顆 `goal/change` 都沒有就不送，清掉了送 `{ goal: null }`；折壞了就不送；`data` 同即時（{@link goalData}） |
+ *
  * | `todo/write` ／ `turn/start` | 待辦清單（#575）：**一頁一顆，是這一頁結尾時的清單**，是 `null` 就不送；`data` 同即時（{@link todosData}） |
  *
  * | `model/usage` ／ 輪、模型、工具的起訖 | token 總帳與會話統計（#574）：**一頁各一顆，是從日誌開頭折到這一頁結尾的值**，還是初值就不送；`data` 同即時（{@link SessionTotals}） |
@@ -107,6 +109,7 @@ import {
 } from '@nexus/core';
 
 import { agentMessageBody, runIdOfSession } from './background-run-id.js';
+import { goalData, RootGoal } from './goal-wire.js';
 import { threadTitleOf } from './session-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
 import { threadTitleConfigSchema } from './settings/thread-title.js';
@@ -1155,7 +1158,21 @@ export function historyPage(
   const planActive = end === window.length ? planModeOf(window) : undefined;
   const planFrames =
     planActive === undefined ? [] : [frame('custom', lastTime, planModeData(planActive))];
-  const tailFrames = [...totalsFrames, ...inboxFrames, ...titleFrames, ...planFrames];
+  // 目標（#897）：同標題與計劃模式，**只在最新一頁**、是目前的值。清掉了送 `{ goal: null }`，一顆 `goal/change` 都沒有就
+  // 不送；折壞了（接不上的變更）也不送——寫壞的日誌不該讓畫面畫出編出來的目標。
+  const goal = new RootGoal();
+  if (end === window.length) goal.seed(window);
+  const goalFrames =
+    end === window.length && goal.touched && !goal.broken
+      ? [frame('custom', lastTime, goalData(goal.value))]
+      : [];
+  const tailFrames = [
+    ...totalsFrames,
+    ...inboxFrames,
+    ...titleFrames,
+    ...planFrames,
+    ...goalFrames,
+  ];
   const bytes =
     fitted.bytes +
     (carried.length === 0 ? 0 : weigh(carried, toolTextMaxBytes)) +

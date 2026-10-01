@@ -42,6 +42,8 @@ import type {
   WireSettleReason,
 } from './inbox.js';
 import { COMPACTION } from './compaction.js';
+import { GOAL, GOAL_PHASES } from './goal.js';
+import type { WireGoal, WireGoalPhase } from './goal.js';
 import { PLAN_MODE } from './plan-mode.js';
 import type { PlanModePayload } from './plan-mode.js';
 import { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
@@ -500,6 +502,12 @@ export interface ConversationState {
    */
   readonly planMode: PlanModePayload | null;
   /**
+   * 會話目前的目標與階段（#897）：最後一顆 `goal` frame 的整份值。**沒有目標（從沒建立、或清掉了、或還沒收到）就是
+   * `null`**，不分這幾種——理由與少了 dsh 的 activation 見 `goal.ts`。只算 root。它是「現在」的事，所以
+   * {@link prependEntries} 不動它。
+   */
+  readonly goal: WireGoal | null;
+  /**
    * 這條對話累計燒了多少 token（#574）：root 日誌每一次模型呼叫的帳加起來，**整份日誌的**，不是畫面上看得到的那幾輪。
    * 一顆都還沒收到就是 `null`；總量是兩格相加。規則見 `session-totals.ts`。它是「現在」的事，所以
    * {@link prependEntries} 不動它。
@@ -547,6 +555,7 @@ export function emptyConversation(): ConversationState {
     contextPressure: null,
     todos: null,
     planMode: null,
+    goal: null,
     tokenUsage: null,
     sessionStats: null,
     inbox: [],
@@ -749,7 +758,7 @@ function isPresentedFile(value: unknown): value is WirePresentedFile {
 
 /**
  * `custom` frame。**只認 {@link DELIVERABLES_PRESENTED}、{@link WORKSPACE_CHANGES}、{@link MODEL_USAGE}、
- * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link PLAN_MODE}、{@link COMPACTION}、{@link TOKEN_USAGE}、{@link SESSION_STATS}、{@link INBOX}、{@link TITLE} 與 {@link SUBAGENT_STATUS}**，其他名字、形狀
+ * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link PLAN_MODE}、{@link COMPACTION}、{@link GOAL}、{@link TOKEN_USAGE}、{@link SESSION_STATS}、{@link INBOX}、{@link TITLE} 與 {@link SUBAGENT_STATUS}**，其他名字、形狀
  * 不對的一律略過：這個 channel 上的東西由 pump 從日誌合成，認不得的不猜。
  */
 function reduceCustom(state: ConversationState, data: unknown): ConversationState {
@@ -761,6 +770,7 @@ function reduceCustom(state: ConversationState, data: unknown): ConversationStat
   if (name === TODOS) return reduceTodos(state, payload);
   if (name === PLAN_MODE) return reducePlanMode(state, payload);
   if (name === COMPACTION) return reduceCompaction(state, payload);
+  if (name === GOAL) return reduceGoal(state, payload);
   if (name === TOKEN_USAGE) return reduceTokenUsage(state, payload);
   if (name === SESSION_STATS) return reduceSessionStats(state, payload);
   if (name === INBOX) return reduceInbox(state, payload);
@@ -878,6 +888,51 @@ function reduceCompaction(state: ConversationState, payload: object): Conversati
     ...(typeof summary === 'string' ? { summary } : {}),
   };
   return { ...state, entries: [...state.entries, entry] };
+}
+
+const PHASES: ReadonlySet<unknown> = new Set(GOAL_PHASES);
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+}
+
+/** 一個目標長得對不對：每一格都驗，`blockedReason` 剛好在 `blocked` 時有。回傳乾淨的一份，多出來的欄位不收。 */
+function toWireGoal(value: unknown): WireGoal | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const v = value as Record<string, unknown>;
+  const { id, revision, objective, phase, blockedReason, maxGoalRounds } = v;
+  const { roundsStarted, createdAt, updatedAt } = v;
+  if (typeof id !== 'string' || id === '' || typeof objective !== 'string') return undefined;
+  if (!isPositiveSafeInteger(revision) || !isPositiveSafeInteger(maxGoalRounds)) return undefined;
+  if (!PHASES.has(phase)) return undefined;
+  if (!isSeq(roundsStarted) || !isSeq(createdAt) || !isSeq(updatedAt)) return undefined;
+  let reason: { code: string; message: string } | undefined;
+  if (phase === 'blocked') {
+    const r = blockedReason as { code?: unknown; message?: unknown } | null | undefined;
+    if (typeof r?.code !== 'string' || typeof r.message !== 'string') return undefined;
+    reason = { code: r.code, message: r.message };
+  } else if (blockedReason !== undefined) {
+    return undefined;
+  }
+  return {
+    id,
+    revision,
+    objective,
+    phase: phase as WireGoalPhase,
+    ...(reason === undefined ? {} : { blockedReason: reason }),
+    maxGoalRounds,
+    roundsStarted,
+    createdAt,
+    updatedAt,
+  };
+}
+
+/** `goal` 的 `payload`：投影的整個值，整份換掉。`null` 是沒有目標；任何一格不對就整顆不收，留著前一份。 */
+function reduceGoal(state: ConversationState, payload: object): ConversationState {
+  const { goal } = payload as { goal?: unknown };
+  if (goal === null) return { ...state, goal: null };
+  const next = toWireGoal(goal);
+  return next === undefined ? state : { ...state, goal: next };
 }
 
 /** `plan` 的 `payload`：投影的整個值，整份換掉。`active` 不是布林就整顆不收。 */
