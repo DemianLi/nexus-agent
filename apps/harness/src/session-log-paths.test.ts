@@ -18,7 +18,8 @@ import { createDeepAgent, StateBackend } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { createCliAgent, runTurn } from './cli.js';
+import { runTurn } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
