@@ -35,6 +35,7 @@ import type {
   PluginEntry,
   PluginWarning,
   SessionEvent,
+  SessionEventMap,
   SessionTelemetrySharingStatus,
 } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
@@ -64,6 +65,7 @@ import {
   attachSessionPersistence,
   createHostServicesPlugin,
   sessionPersistencePlugin,
+  humanMessageForTurnStart,
   MAX_TOKENS_TURN_END,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
@@ -1300,8 +1302,7 @@ export async function runTurn(
   // **一個 `text`，兩個消費者。** 分開算的話，一顆日誌上逐字正確的 `turn/start` 可以配
   // 上餵給模型的任意字串，而不變量伴生只看得到日誌那一份——它結構上驗不到那種偏差。
   const text = typeof input === 'string' ? input : input.text;
-  sessionLog.append(
-    'turn/start',
+  const turnStart: SessionEventMap['turn/start'] =
     typeof input === 'string'
       ? { kind: 'message', text }
       : {
@@ -1310,8 +1311,8 @@ export async function runTurn(
           goalId: input.goalId,
           revision: input.revision,
           round: input.round,
-        },
-  );
+        };
+  sessionLog.append('turn/start', turnStart);
   try {
     // 退回標題（#647），同 web 的 pump：人打的字那一種才寫，還沒有標題才寫，寫不進去只講一聲、這一輪照跑。CLI 的日誌
     // 今天沒有讀標題的人（serve 的列表讀不到 run 目錄），寫它是照 dsh：退回標題在 `base` bundle 裡，每一種組裝都有。
@@ -1322,10 +1323,14 @@ export async function runTurn(
         printer.error(`[標題] 退回標題寫不進去：${String(error)}`);
       }
     }
-    for await (const [mode, payload] of await agent.stream(toAgentInvocation(text), {
-      streamMode: ['updates', 'values'],
-      configurable: { thread_id: THREAD_ID },
-    })) {
+    for await (const [mode, payload] of await agent.stream(
+      // 人打的字是素的字串；續行輪次的頭帶 `goal` 來源（#662），重複提醒才知道它不是人講話。
+      toAgentInvocation(typeof input === 'string' ? text : humanMessageForTurnStart(turnStart)),
+      {
+        streamMode: ['updates', 'values'],
+        configurable: { thread_id: THREAD_ID },
+      },
+    )) {
       if (mode === 'values') {
         files = (payload as { files?: Record<string, unknown> }).files ?? {};
         continue;

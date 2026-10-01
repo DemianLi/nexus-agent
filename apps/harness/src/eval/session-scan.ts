@@ -21,8 +21,10 @@
  *
  * 提醒器從 `state.messages` 推鏈；日誌上沒有訊息，只有事件。逐條對：
  *
- * - **人講話清零 → `turn/start` 的 `message` 與 `goal` 清零。** 續行輪次的頭在提醒器那側也是一則
- *   素的 `HumanMessage`，它清零（`repeat-reminder.ts` 的 `GOAL_WRAPUP_MARKER` 那段說這是對的）。
+ * - **人講話清零 → 只有 `turn/start` 的 `message` 清零**（#662）。續行輪次的頭在提醒器那側帶 `goal` 來源、
+ *   結算通知帶 `subagent-settled`、背景子代理的訊息帶 `agent-message`，都不是人講話，不清零。判準直接問
+ *   `turnStartSource`（圖上那則訊息的來源就是它造的），兩邊不會各自漂。輪中插的話（`user/message` 的 `user` 來源）
+ *   是人講話，清零。
  * - **`resume` 不清零。** 回覆核准沒有新的人話，會話統計也把它併回前一輪。
  * - **`session/end-seed` 之後，鏈斷在下一顆頭上。** 行程重開之後，第一顆推得動鏈的 `tool/call` 前面一定有
  *   一顆 `message` 或 `goal` 的 `turn/start`：`resume` 要回答一顆掛著的中斷，而中斷只活在 pump 的記憶體裡
@@ -71,6 +73,7 @@ import {
   resolveRepeatReminderSettings,
   SESSION_LOG_FORMAT_VERSION,
   SessionCorruptionError,
+  turnStartSource,
 } from '@nexus/core';
 import type {
   LegacyTurnFeedbackItem,
@@ -272,7 +275,14 @@ export function scanSessionLog(
   for (const event of known) {
     switch (event.type) {
       case 'turn/start':
-        if (event.data.kind !== 'resume') chain = undefined;
+        // `resume` 沒有訊息；機器造的頭（續行、結算、子代理的話）帶來源，不清零。
+        if (event.data.kind !== 'resume' && turnStartSource(event.data) === undefined) {
+          chain = undefined;
+        }
+        break;
+      case 'user/message':
+        // 輪中插的話：圖上是一則沒有來源的 `HumanMessage`，清零。外掛與引用快照不是人講話。
+        if (event.data.source.kind === 'user') chain = undefined;
         break;
       case 'session/end-seed':
         chain = undefined;

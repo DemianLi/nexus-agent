@@ -72,6 +72,7 @@ import { createMiddleware } from 'langchain';
 import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
 import { toLoggedMessage } from './logged-message.js';
+import { isMachineMessage } from './message-source.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry, SessionLookup } from './registry.js';
 
@@ -87,28 +88,6 @@ export const REPEAT_REMINDER_MIDDLEWARE_NAME = 'nexusRepeatToolReminder';
  * （`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:2471` 的 `lc_evicted_to`）。
  */
 export const REPEAT_REMINDER_MARKER = 'nexus_repeat_reminder';
-
-/**
- * goal 收尾指示在 `additional_kwargs` 上的記號。
- *
- * ## 為什麼一個 goal 的記號住在這個檔案裡
- *
- * **這個記號的全部作用是讓底下那條鏈走訪跳過它。** 造它的人在
- * `@nexus/plugin-goal`，讀它的人只有這裡——記號跟著讀的人住，同一條紀律讓
- * {@link REPEAT_REMINDER_MARKER} 也住在這裡。`@nexus/core` 反向依賴插件是不可能的，
- * 所以詞彙落在這一側是唯一走得通的擺法。
- *
- * ## 它擋的是什麼
- *
- * 收尾指示是一則 `HumanMessage`，而「真的使用者訊息清零計數」會把它當成人插了話。
- * 那正好發生在**模型剛被告知不要再叫工具**的時候：它若無視收尾指示繼續打轉，門檻 3
- * 的提醒會晚兩次才到——方向跟收尾指示本身相反。
- *
- * **一輪的頭不標記。** 續行輪次的 `turn/start` 也是一則素的 `HumanMessage`
- * （`apps/harness` 的 `thread-pump.ts`），它清零是**對的**：新的物理輪次是真的新脈絡。
- * 差別在「一輪的頭」與「一輪內部的注入」，不在哪個套件造的。
- */
-export const GOAL_WRAPUP_MARKER = 'nexus_goal_wrapup';
 
 /** 一則提醒訊息在記號底下帶的東西，對應 dsh 的 `source.summary`（`<tool> × <count>`）。 */
 export interface RepeatReminderMark {
@@ -308,22 +287,27 @@ function isReminder(message: BaseMessage | undefined): boolean {
 /**
  * 一則 `HumanMessage` 是不是**插進去的**，而不是人講的話。
  *
+ * ## 判準：生產者宣告來源，這裡只認「人」
+ *
+ * 我們自己那則提醒（{@link REPEAT_REMINDER_MARKER}），或帶了 `source` 而且 kind 不是 `user` 的訊息
+ * （{@link isMachineMessage}）。**沒有白名單**：續行輪次的頭（`goal`）、結算通知、外掛注入的基線、
+ * 以後新增的生產者，各自在造訊息時宣告自己的來源，這裡不必改（#662，照 dsh
+ * `repeat-tool-reminder/src/index.ts:236-238`，`477b4f4`）。沒有來源的 `HumanMessage` 是人講的話——
+ * 見 `message-source.ts` 為什麼缺席的預設方向是「人」。
+ *
  * ## 為什麼這不是 {@link isReminder} 加寬一格
  *
  * 這兩個述詞問的是相反的問題，而下面有兩個呼叫點各要一個答案：
  *
- * - **重入護欄**問「這一輪的提醒貼過了嗎」，只有我們自己那則提醒算數。收尾指示注入
- *   之後正好落在最後一則 AI 訊息之後，把護欄的述詞加寬，那一輪的提醒就整個不發了。
- * - **鏈走訪**問「這是人插了話嗎」，兩種合成訊息都不算。
- *
- * 合成來源加進來時要加在這裡，不是加在 {@link isReminder}。
+ * - **重入護欄**問「這一輪的提醒貼過了嗎」，只有我們自己那則提醒算數。別的機器訊息（例如 goal 收尾指示）
+ *   注入之後正好落在最後一則 AI 訊息之後，把護欄的述詞加寬，那一輪的提醒就整個不發了。
+ * - **鏈走訪**問「這是人插了話嗎」，所有機器訊息都不算。
  *
  * @param message - 要判的那一則。
  * @returns 是我們插的就 `true`；不是 `HumanMessage` 也算 `false`。
  */
 function isSynthetic(message: BaseMessage | undefined): boolean {
-  if (isReminder(message)) return true;
-  return HumanMessage.isInstance(message) && message.additional_kwargs[GOAL_WRAPUP_MARKER] != null;
+  return isReminder(message) || isMachineMessage(message);
 }
 
 /** 一條鏈：上一次受追蹤呼叫的身分鍵，與它已經連續了幾次。 */
@@ -372,8 +356,8 @@ function pendingReminders(
 
   for (let i = 0; i <= lastAi; i += 1) {
     const message = messages[i];
-    // 真的使用者訊息會清零：人插了話就換了脈絡，跨過它的重複不是打轉。**插進去的那些
-    // 不算**——我們自己那則提醒，以及 goal 的收尾指示，見 {@link isSynthetic}。
+    // 真的使用者訊息會清零：人插了話就換了脈絡，跨過它的重複不是打轉。**機器造的那些
+    // 不算**——我們自己那則提醒、續行輪次的頭、各種注入，見 {@link isSynthetic}。
     if (HumanMessage.isInstance(message) && !isSynthetic(message)) {
       chain = undefined;
       continue;

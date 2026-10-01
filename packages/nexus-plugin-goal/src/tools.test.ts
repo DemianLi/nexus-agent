@@ -18,7 +18,6 @@ import { Command } from '@langchain/langgraph';
 import {
   createRegistry,
   createSessionRunner,
-  GOAL_WRAPUP_MARKER,
   goalId,
   loadPlugins,
   SessionRegistry,
@@ -27,7 +26,7 @@ import {
 } from '@nexus/core';
 import type { NamedEntry, SessionLog } from '@nexus/core';
 
-import { createGoalPlugin, goalConfigSchema } from './index.js';
+import { createGoalPlugin, goalConfigSchema, GOAL_WRAPUP_MARKER } from './index.js';
 import type { GoalPluginOptions } from './index.js';
 import { hasDirectHumanTurn } from './authority.js';
 import { renderWrapupContext } from './wrapup.js';
