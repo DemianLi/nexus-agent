@@ -3,6 +3,7 @@ import {
   DELIVERABLES_PRESENTED,
   emptyConversation,
   INBOX,
+  SETTLE_NOTICE,
   reduceAll,
   WORKSPACE_CHANGES,
 } from '@nexus/wire';
@@ -107,6 +108,21 @@ function turn(text: string, events: () => Event[], from = emptyConversation()): 
   return reduceAll(from, [claim, start, ...body, completed()]);
 }
 
+/** 閒著時被背景子代理的結算通知叫醒開的一輪：領走的是通知，不是人的話。 */
+function woken(from: ConversationState, events: () => Event[]): ConversationState {
+  claims += 1;
+  const claim = frame('custom', [], {
+    name: INBOX,
+    payload: {
+      items: [],
+      claimed: { id: `n-${claims}`, text: 'notice', source: { kind: 'subagent-settled' } },
+    },
+  });
+  const start = running();
+  const body = events();
+  return reduceAll(from, [claim, start, ...body, completed()]);
+}
+
 /** 每一格的種類；交付卡寫成 `卡:路徑,路徑`，改動卡寫成 `改:seq`。 */
 function layout(state: ConversationState): string[] {
   return transcriptItems(state.entries).map((item) =>
@@ -172,6 +188,69 @@ describe('交付卡片歸到輪尾', () => {
     ]);
     const second = turn('再來。', () => reply('r2', '嗯。'), first);
     expect(layout(second)).toEqual(['human', 'tool', '卡:a.md', 'human', 'ai']);
+  });
+
+  it('通知叫醒的那一輪自己收卡：交付卡與改動卡不併進上一輪（#859）', () => {
+    const first = turn('先做。', () => [
+      ...present('c1', ['a.md']),
+      delivered({ callId: 'c1', files: [{ path: 'a.md' }] }),
+      ...reply('r1', '好了。'),
+    ]);
+    const second = woken(first, () => [
+      ...present('c2', ['b.md']),
+      delivered({ callId: 'c2', files: [{ path: 'b.md' }] }),
+      frame('custom', [], { name: WORKSPACE_CHANGES, payload: { seq: 77 } }),
+      ...reply('r2', '收到通知，補好了。'),
+    ]);
+    expect(layout(second)).toEqual([
+      'human',
+      'tool',
+      'ai',
+      '卡:a.md',
+      'notice',
+      'tool',
+      'ai',
+      '改:77',
+      '卡:b.md',
+    ]);
+  });
+
+  it('歷史重播長出的通知切在同一個位置，重新整理前後切出來的輪一樣（#859）', () => {
+    const history = reduceAll(emptyConversation(), [
+      frame('custom', [], { name: SETTLE_NOTICE, payload: { id: 'history-7' } }),
+      running(),
+      ...present('c1', ['a.md']),
+      delivered({ callId: 'c1', files: [{ path: 'a.md' }] }),
+      ...reply('r1', '好了。'),
+      completed(),
+    ]);
+    expect(layout(history)).toEqual(['notice', 'tool', 'ai', '卡:a.md']);
+  });
+
+  it('子代理寄來的話也是一輪的開頭（#859）', () => {
+    claims += 1;
+    const first = turn('先做。', () => [
+      ...present('c1', ['a.md']),
+      delivered({ callId: 'c1', files: [{ path: 'a.md' }] }),
+      ...reply('r1', '好了。'),
+    ]);
+    const second = reduceAll(first, [
+      frame('custom', [], {
+        name: INBOX,
+        payload: {
+          items: [],
+          claimed: {
+            id: `m-${claims}`,
+            text: '子代理說的話',
+            source: { kind: 'agent-message', senderSessionId: 'bg-1', runId: 'run-1' },
+          },
+        },
+      }),
+      running(),
+      ...reply('r2', '嗯。'),
+      completed(),
+    ]);
+    expect(layout(second)).toEqual(['human', 'tool', 'ai', '卡:a.md', 'agent-message', 'ai']);
   });
 
   it('失敗的 present 沒有交付事件，就沒有卡', () => {
