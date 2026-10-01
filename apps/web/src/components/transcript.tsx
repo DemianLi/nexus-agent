@@ -58,7 +58,7 @@ import { transcriptItems } from '@/lib/deliverables-view';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
 import { EXIT_PLAN_MODE } from '@/lib/plan-review';
-import { SETTLED_NOTICE_TEXT } from '@/lib/queue-view';
+import { settledNoticeText } from '@/lib/queue-view';
 import { pairAnswers } from '@/lib/question-view';
 import { agentMessageCaption, subagentLabel, subagentNames as namesOf } from '@/lib/subagent-view';
 import { reasoningRunning, visibleReasoning } from '@/lib/reasoning-view';
@@ -202,7 +202,7 @@ export function Entry({
   if (entry.kind === 'notice') {
     // 折疊器長出來的「這一輪是被什麼叫醒的」（#851）：背景子代理結算的通知，不是人的話。id 跟排著時那一行同一個
     // （`inbox:<件 id>`），同一格換成正式的；歷史重播長出來的（`history-<seq>`）畫成同一個樣子。
-    return <SettledNotice caption={SETTLED_NOTICE_TEXT} />;
+    return <SettledNotice caption={settledNoticeText(entry.reason)} />;
   }
 
   if (entry.kind === 'agent-message') {
@@ -353,7 +353,7 @@ function PendingSteerBubble({ text, caption }: { text: string; caption: string }
 
 /**
  * 背景子代理結算通知那一行（#851）：**不是人的泡泡**（那是執行期的記帳，文字是給模型的英文），只有一行小字。
- * 排著的時候（`pending`）說什麼時候送進模型；被領走後折疊器長出 `notice`，同一格換成「已完成」，模型的回覆接在後面。
+ * 排著的時候（`pending`）說什麼時候送進模型；被領走後折疊器長出 `notice`，同一格換成依原因（`reason`，#884）配的那一句，模型的回覆接在後面。
  */
 function SettledNotice({ caption, pending }: { caption: string; pending?: boolean }) {
   return (

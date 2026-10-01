@@ -1,3 +1,4 @@
+import { SETTLE_REASONS } from '@nexus/wire';
 import type { ConversationStatus, WireQueuedInput } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
@@ -10,10 +11,12 @@ import {
   isQueuedByAgent,
   isSettledNotice,
   queuedAgentText,
+  settledNoticeText,
   QUEUE_PREVIEW_CHARS,
   queueHeading,
   queuePreview,
   SETTLED_NOTICE_TEXT,
+  SETTLED_NOTICE_UNKNOWN_TEXT,
 } from '@/lib/queue-view';
 
 const STATUSES: readonly ConversationStatus[] = [
@@ -123,8 +126,34 @@ describe('不是人排的那一類（#861）', () => {
   });
 
   it('佇列列上各寫各的一句，人排的沒有', () => {
-    expect(queuedAgentText(of({ kind: 'subagent-settled' }))).toBe(SETTLED_NOTICE_TEXT);
+    // 沒有 reason＝舊日誌：中性的一句，不是「已完成」
+    expect(queuedAgentText(of({ kind: 'subagent-settled' }))).toBe(SETTLED_NOTICE_UNKNOWN_TEXT);
+    expect(queuedAgentText(of({ kind: 'subagent-settled', reason: 'aborted' }))).toBe(
+      SETTLED_NOTICE_TEXT.aborted,
+    );
     expect(queuedAgentText(of({ kind: 'agent-message' }))).toBe(AGENT_MESSAGE_QUEUED_TEXT);
     expect(queuedAgentText(of({ kind: 'user' }))).toBeUndefined();
+  });
+});
+
+describe('settledNoticeText（#884）', () => {
+  it('四種原因各一句，措辭釘死：不是都寫「已完成」', () => {
+    expect(settledNoticeText('completed')).toBe('背景子代理已完成');
+    expect(settledNoticeText('aborted')).toBe('背景子代理已被停止');
+    expect(settledNoticeText('max-tokens')).toBe('背景子代理已達輸出上限，沒寫完');
+    expect(settledNoticeText('error')).toBe('背景子代理失敗了');
+  });
+
+  it('wire 認得的每一種原因都有自己的一句，而且四句互不相同、都不是中性那句', () => {
+    const texts = SETTLE_REASONS.map((reason) => settledNoticeText(reason));
+    expect(new Set(texts).size).toBe(SETTLE_REASONS.length);
+    expect(texts).not.toContain(SETTLED_NOTICE_UNKNOWN_TEXT);
+  });
+
+  it('沒有原因（格式 26 以前的舊日誌）與不認得的值：中性的「已結束」，不假裝成「已完成」', () => {
+    expect(settledNoticeText(undefined)).toBe('背景子代理已結束');
+    expect(settledNoticeText('exploded')).toBe('背景子代理已結束');
+    expect(settledNoticeText(7)).toBe('背景子代理已結束');
+    expect(SETTLED_NOTICE_UNKNOWN_TEXT).not.toBe(SETTLED_NOTICE_TEXT.completed);
   });
 });

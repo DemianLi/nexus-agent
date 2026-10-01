@@ -2,7 +2,11 @@ import { emptyConversation, INBOX, reduceConversation } from '@nexus/wire';
 import type { ConversationState, Event, WireQueuedInput } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
-import { AGENT_MESSAGE_QUEUED_TEXT, SETTLED_NOTICE_TEXT } from '@/lib/queue-view';
+import {
+  AGENT_MESSAGE_QUEUED_TEXT,
+  SETTLED_NOTICE_TEXT,
+  SETTLED_NOTICE_UNKNOWN_TEXT,
+} from '@/lib/queue-view';
 
 import {
   PARKED_STEER_TEXT,
@@ -89,7 +93,7 @@ describe('背景子代理的結算通知排在插話那一條（#851）', () => 
     const state = fold(inboxFrame({ items: [], nextStep: [first, notice] }));
     expect(pendingSteers(state).map(({ key, agentText }) => ({ key, agentText }))).toEqual([
       { key: 'inbox:run-a' },
-      { key: 'inbox:settled-a', agentText: SETTLED_NOTICE_TEXT },
+      { key: 'inbox:settled-a', agentText: SETTLED_NOTICE_UNKNOWN_TEXT },
     ]);
   });
 
@@ -113,6 +117,37 @@ describe('背景子代理的結算通知排在插話那一條（#851）', () => 
   });
 });
 
+describe('結算通知帶原因時（#884）', () => {
+  it('排著那一行與領走後長出的 notice 帶同一個原因：同一格換內容，字不變', () => {
+    const withReason: WireQueuedInput = {
+      id: 'settled-b',
+      text: 'Background subagent was stopped.',
+      source: { kind: 'subagent-settled', reason: 'aborted' },
+    };
+    const pending = fold(inboxFrame({ items: [], nextStep: [withReason] }));
+    expect(pendingSteers(pending)).toEqual([
+      { key: 'inbox:settled-b', text: withReason.text, agentText: '背景子代理已被停止' },
+    ]);
+    const claimed = reduceConversation(
+      pending,
+      inboxFrame({
+        items: [],
+        nextStep: [],
+        claimedNextStep: [{ id: withReason.id, text: withReason.text, source: withReason.source }],
+      }),
+    );
+    expect(claimed.entries).toEqual([
+      {
+        kind: 'notice',
+        id: 'inbox:settled-b',
+        source: 'subagent-settled',
+        reason: 'aborted',
+        inboxId: 'settled-b',
+      },
+    ]);
+  });
+});
+
 describe('背景子代理的來信排在插話那一條（#861）', () => {
   const relay: WireQueuedInput = {
     id: 'relay-a',
@@ -130,15 +165,15 @@ describe('背景子代理的來信排在插話那一條（#861）', () => {
 
 describe('pendingAgentText（#851、#861）', () => {
   it('這一輪還在是下一步、停了是下一輪，跟插話同一條線', () => {
-    expect(pendingAgentText(SETTLED_NOTICE_TEXT, 'running')).toBe(
-      `${SETTLED_NOTICE_TEXT}・下一步送進模型`,
+    expect(pendingAgentText(SETTLED_NOTICE_TEXT.completed, 'running')).toBe(
+      `${SETTLED_NOTICE_TEXT.completed}・下一步送進模型`,
     );
     expect(pendingAgentText(AGENT_MESSAGE_QUEUED_TEXT, 'awaiting-input')).toBe(
       `${AGENT_MESSAGE_QUEUED_TEXT}・下一步送進模型`,
     );
     for (const status of ['idle', 'stopped', 'failed'] as const) {
-      expect(pendingAgentText(SETTLED_NOTICE_TEXT, status)).toBe(
-        `${SETTLED_NOTICE_TEXT}・下一輪送進模型`,
+      expect(pendingAgentText(SETTLED_NOTICE_TEXT.completed, status)).toBe(
+        `${SETTLED_NOTICE_TEXT.completed}・下一輪送進模型`,
       );
     }
   });
