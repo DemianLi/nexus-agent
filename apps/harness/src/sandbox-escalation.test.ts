@@ -1,5 +1,14 @@
 /**
- * 升級那一刀的驗收：[#238](https://github.com/DemianLi/nexus-agent/issues/238) 第 2 項的四條，
+ * **手搭組裝（#670）**：這一檔大半的案例走產品組裝（`assembleProduct`：`createCliAgent` ＋ 出貨清單 ＋ 清單上的腳本提供者），
+ * 留在手搭那一份（`assemble`）的有四類，產品組裝組不出來：
+ *
+ * 1. `checkpointer: false`——`createCliAgent` 一律給 `MemorySaver`。
+ * 2. `plugin: false`（fence 有 ledger、但沒掛沙箱 plugin）——有 `--workspace` 時產品一定掛沙箱 plugin。
+ * 3. `channel: false`（組裝點沒提供答題管道那個服務）——產品組裝一定算一份交出去。
+ * 4. 要讀控制器內部（`peekGrant()`／`current`／`lastDenial`）或直接對 backend 驗 fence 的案例——產品的控制器建在
+ *    組裝點裡，測試拿不到。
+ *
+ * 升級的驗收：[#238](https://github.com/DemianLi/nexus-agent/issues/238) 第 2 項的四條，
  * 外加卡上釘在最前面的那個前提。
  *
  * ## 前提先釘死
@@ -28,8 +37,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Command, MemorySaver } from '@langchain/langgraph';
 
-import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
-
 import { createNexusAgent } from './agent-factory.js';
 import { createCliAgent } from './assembly-root.js';
 import { ContainedFilesystemBackend, GRANT_MISMATCH_NOTE } from './contained-backend.js';
@@ -49,7 +56,7 @@ import {
 } from '@nexus/plugin-sandbox-policy';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedToolCall, ScriptedTurn } from './scripted-model.js';
-import { shippedPlugins } from './fixtures.js';
+import { shippedPlugins, withScriptedModel } from './fixtures.js';
 import { createHostServicesPlugin, deriveApprovalChannel } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 
@@ -139,8 +146,7 @@ describe('升級', () => {
    * @param mode - 起始那一格。
    * @param turns - 腳本。
    * @param options - `plugin: false` 組一個 fence 有 ledger、但沒掛升級的組裝；
-   *   `checkpointer: false` 是沒有核准管道；`approvals` 原樣轉給組裝點；`submitRecord` 照
-   *   `cli.ts` 掛上 `submit_record`，拿同一份 backend。`channel: false` 是組裝點沒提供
+   *   `checkpointer: false` 是沒有核准管道；`approvals` 原樣轉給組裝點。`channel: false` 是組裝點沒提供
    *   核准管道那個服務；省略就照 `assembly-root.ts` 從同一組選項算一次再提供。
    *   `permissive: true` 在升級之前疊一顆回 `allow`、不呼叫 `next()` 的閘門——照
    *   `assembly-root.ts` 的順序，出貨清單與 patch 的 plugin 都排在 sandbox-policy 前面。
@@ -152,7 +158,6 @@ describe('升級', () => {
       plugin?: boolean;
       checkpointer?: boolean;
       approvalsEnabled?: boolean;
-      submitRecord?: boolean;
       channel?: false;
       permissive?: boolean;
     } = {},
@@ -182,7 +187,6 @@ describe('升級', () => {
         }),
         ...(options.permissive === true ? [permissiveGate()] : []),
         ...(options.plugin === false ? [] : [createSandboxPolicyPlugin()]),
-        ...(options.submitRecord === true ? [createSubmitRecordPlugin()] : []),
       ],
       ...(options.checkpointer !== false && { checkpointer: new MemorySaver() }),
       ...(options.approvalsEnabled !== undefined && {
@@ -190,6 +194,20 @@ describe('升級', () => {
       }),
     });
     return { agent, dispose, controller };
+  }
+
+  /**
+   * **產品組裝**（#670）：`createCliAgent` ＋ 出貨清單，`--workspace`、`--sandbox` 給模式，模型換成清單上的腳本提供者。
+   * 給**只經過 agent、不碰控制器內部**的案例：產品的控制器建在組裝點裡，測試拿不到，要讀 `peekGrant()`／`current`／
+   * `lastDenial` 的案例留在上面手搭的那一份（見檔頭）。
+   */
+  async function assembleProduct(mode: SandboxMode, turns: readonly ScriptedTurn[]) {
+    const built = await createCliAgent(
+      { live: false, workspace: root, sandbox: mode },
+      withScriptedModel(shipped, turns),
+      root,
+    );
+    return { agent: built.agent, dispose: built.dispose };
   }
 
   async function exists(path: string): Promise<boolean> {
@@ -203,7 +221,7 @@ describe('升級', () => {
 
   describe('前提：升級只在 fence 真的擋下來時走得到', () => {
     it('read-only 之下 write_file 真的被擋，而且拒絕後面接著升級指引', async () => {
-      const { agent, dispose } = await assemble('read-only', [
+      const { agent, dispose } = await assembleProduct('read-only', [
         write('/a.txt', '一'),
         { content: '停。' },
       ]);
@@ -240,7 +258,7 @@ describe('升級', () => {
     });
 
     it('反例：workspace-write 之下根內寫入直接放行，升級這條路根本走不到', async () => {
-      const { agent, dispose } = await assemble('workspace-write', [
+      const { agent, dispose } = await assembleProduct('workspace-write', [
         write('/a.txt', '一'),
         { content: '好了。' },
       ]);
@@ -349,7 +367,7 @@ describe('升級', () => {
         'workspace-write',
       ],
     ] as const)('欄位不齊（%o）也不問人', async (args, refusal, mode) => {
-      const { agent, dispose } = await assemble(mode, [escalate(args), { content: '好。' }]);
+      const { agent, dispose } = await assembleProduct(mode, [escalate(args), { content: '好。' }]);
       try {
         const result = await agent.invoke(toAgentInvocation('升級。'), {
           configurable: { thread_id: 'malformed' },
@@ -439,7 +457,7 @@ describe('升級', () => {
     });
 
     it('grant 只蓋指名的那個檔：別的檔照樣被擋，而且沒把 grant 吃掉', async () => {
-      const { agent, dispose } = await assemble('read-only', [
+      const { agent, dispose } = await assembleProduct('read-only', [
         write('/a.txt', '一'),
         escalate({
           file_path: '/a.txt',
@@ -469,7 +487,7 @@ describe('升級', () => {
 
     it('workspace-write：經 symlink 寫到根外 → 升到 danger-full-access 一次；寫法不同也對得上', async () => {
       await symlink(outside, join(root, 'out'));
-      const { agent, dispose } = await assemble('workspace-write', [
+      const { agent, dispose } = await assembleProduct('workspace-write', [
         write('/out/x.txt', '一'),
         // 故意不帶前置斜線：比對的是 canonical 位置，不是字串。
         escalate({
@@ -543,7 +561,7 @@ describe('升級', () => {
           },
         ],
       });
-      const { agent, dispose } = await assemble('read-only', [
+      const { agent, dispose } = await assembleProduct('read-only', [
         // 先讀：`edit_file` 有「沒讀過不准改」的護欄，不讀的話擋下它的是那一條、不是 fence。
         { content: '', toolCalls: [{ name: 'read_file', args: { file_path: '/a.txt' } }] },
         edit('新的'),
@@ -636,7 +654,7 @@ describe('升級', () => {
           },
         ],
       });
-      const { agent, dispose } = await assemble(
+      const { agent, dispose } = await assembleProduct(
         'read-only',
         [
           submit('遠見科技'),
@@ -649,7 +667,6 @@ describe('升級', () => {
           submit('遠見科技'),
           { content: '完成。' },
         ],
-        { submitRecord: true },
       );
       const config = { configurable: { thread_id: 'content-submit' } };
       try {
