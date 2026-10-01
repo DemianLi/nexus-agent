@@ -24,6 +24,7 @@ import {
   fetchWithCookie,
   foldTurn,
   loopbackRequest,
+  noSessions,
   serveClient,
   TEST_BROWSER_AUTH,
 } from './fixtures.js';
@@ -317,6 +318,7 @@ describe('running 標記', () => {
         created += 1;
         return {
           agent,
+          attachSessions: noSessions,
           commands: { find: () => undefined, list: () => [] },
           dispose: async () => undefined,
         };

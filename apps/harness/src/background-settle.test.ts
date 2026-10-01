@@ -26,6 +26,7 @@ import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixture
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+import { composeAttachSessions } from './session-attach.js';
 
 const BASE_URL = 'http://settle.test';
 
@@ -121,9 +122,9 @@ async function assemble(options: { readonly stepInbox: boolean; readonly workerS
       agent: built.agent as unknown as PumpAgent,
       commands: emptyCommandPoint(),
       stepInbox: built.stepInbox,
-      attachSession: (registry: SessionRegistry, backgroundPort) => {
+      attachSessions: (registry, backgroundPort) => {
         sessions = registry;
-        return built.attachSession(registry, backgroundPort);
+        return composeAttachSessions(built)(registry, backgroundPort);
       },
       dispose: built.dispose,
     }),

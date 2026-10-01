@@ -19,6 +19,7 @@ import {
   approvalToolNames,
   emptyCommandPoint,
   loopbackRequest,
+  noSessions,
   TEST_BROWSER_AUTH,
 } from './fixtures.js';
 import { createWireHandler } from './wire-handler.js';
@@ -78,6 +79,7 @@ function connect(agent: PumpAgent) {
     auth: TEST_BROWSER_AUTH,
     createAgent: async () => ({
       agent,
+      attachSessions: noSessions,
       commands: emptyCommandPoint(),
       dispose: async () => undefined,
     }),

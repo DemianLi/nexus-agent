@@ -31,12 +31,13 @@ import { createNexusAgent } from './agent-factory.js';
 import { BackgroundSubagentError } from './background-subagents.js';
 import type { BackgroundSubagentControl } from './background-subagents.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
-import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
+import { emptyCommandPoint, loopbackRequest, noSessions, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
+import { composeAttachSessions } from './session-attach.js';
 
 async function until(predicate: () => boolean, ms = 5000): Promise<void> {
   const start = Date.now();
@@ -78,8 +79,10 @@ describe('替身控制面：wire 這一層', () => {
       agent: {} as PumpAgent,
       commands: emptyCommandPoint(),
       dispose: async () => {},
-      attachSession: () =>
-        control === undefined ? () => {} : Object.assign(() => {}, { background: control }),
+      attachSessions: () => ({
+        detach: async () => {},
+        ...(control !== undefined && { background: control }),
+      }),
     }));
   }
 
@@ -178,6 +181,7 @@ describe('替身控制面：wire 這一層', () => {
       built += 1;
       return {
         agent: {} as PumpAgent,
+        attachSessions: noSessions,
         commands: emptyCommandPoint(),
         dispose: async () => {},
       };
@@ -276,9 +280,9 @@ describe('真組裝：從 wire 對背景子代理傳話、單獨停', () => {
       agent: built.agent as unknown as PumpAgent,
       commands: emptyCommandPoint(),
       dispose: () => built.dispose(),
-      attachSession: (registry, port) => {
+      attachSessions: (registry, backgroundPort) => {
         sessions = registry;
-        return built.attachSession(registry, port);
+        return composeAttachSessions(built)(registry, backgroundPort);
       },
     }));
     await client.runStart('t1', '委派');

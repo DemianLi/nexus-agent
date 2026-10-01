@@ -64,6 +64,7 @@ import type { RunningServe } from './serve.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+import { composeAttachSessions } from './session-attach.js';
 
 const shipped = await shippedPlugins();
 
@@ -150,9 +151,9 @@ async function present(
       agent: built.agent as unknown as PumpAgent,
       commands: built.commands,
       dispose: built.dispose,
-      attachSession: (registry) => {
+      attachSessions: (registry, backgroundPort) => {
         sessions = registry;
-        return built.attachSession(registry);
+        return composeAttachSessions(built)(registry, backgroundPort);
       },
       ...(workspace && { workspaceRoot: root }),
       ...(options.seed !== undefined && { rootSeed: options.seed }),
