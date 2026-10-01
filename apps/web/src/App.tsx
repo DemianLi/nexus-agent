@@ -20,6 +20,7 @@ import {
   RightSidebarToggle,
 } from '@/components/right-sidebar';
 import { SessionReferenceContext } from '@/components/session-reference';
+import { SubagentControlContext, useSubagentControl } from '@/components/subagent-control';
 import { SessionUsage } from '@/components/session-usage';
 import { StatusLine } from '@/components/status-line';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -239,6 +240,12 @@ function ConversationView({
     [client, threadId],
   );
   // 人的泡泡裡的會話引用（#713 Q3）：清單上有的（同專案的主會話）點了切過去，其餘只顯示。
+  const subagentControl = useSubagentControl({
+    client,
+    threadId,
+    status: conversation.state.subagentStatus,
+    connected: conversation.connected,
+  });
   const sessionLinks = useMemo(() => {
     const listed =
       directory.listing.kind === 'ok'
@@ -425,27 +432,29 @@ function ConversationView({
           </div>
         ) : (
           <SessionReferenceContext.Provider value={sessionLinks}>
-            <Transcript
-              state={conversation.state}
-              isFresh={isFresh}
-              changes={changes}
-              deliverableDownload={deliverableDownload}
-              feedback={{
-                ratings: conversation.ratings,
-                busy: !conversation.connected,
-                loadFailed: conversation.ratingsLoadFailed,
-                onSeed: conversation.seedRatings,
-                onRate: (messageId, rating) => void conversation.rate(messageId, rating),
-              }}
-              {...(conversation.history === undefined
-                ? {}
-                : {
-                    earlier: {
-                      ...conversation.history,
-                      onLoad: () => void conversation.loadEarlier(),
-                    },
-                  })}
-            />
+            <SubagentControlContext.Provider value={subagentControl}>
+              <Transcript
+                state={conversation.state}
+                isFresh={isFresh}
+                changes={changes}
+                deliverableDownload={deliverableDownload}
+                feedback={{
+                  ratings: conversation.ratings,
+                  busy: !conversation.connected,
+                  loadFailed: conversation.ratingsLoadFailed,
+                  onSeed: conversation.seedRatings,
+                  onRate: (messageId, rating) => void conversation.rate(messageId, rating),
+                }}
+                {...(conversation.history === undefined
+                  ? {}
+                  : {
+                      earlier: {
+                        ...conversation.history,
+                        onLoad: () => void conversation.loadEarlier(),
+                      },
+                    })}
+              />
+            </SubagentControlContext.Provider>
           </SessionReferenceContext.Provider>
         )}
 

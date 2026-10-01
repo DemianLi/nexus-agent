@@ -27,6 +27,7 @@
  *   命中或路徑清單，取代結果文字；`meta` 缺席或形狀不對就照舊畫結果文字。判法在 `lib/tool-result-card.ts`。
  */
 
+import { DELEGATION_TOOL_NAMES, isBackgroundSubagentMeta } from '@nexus/wire';
 import type { AnswerEntry, Attribution, QuestionItem, ToolEntry } from '@nexus/wire';
 import { Check, ChevronDown, Hand, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
@@ -34,6 +35,7 @@ import { useMemo, useState } from 'react';
 import { AgentOrb } from '@/components/agent-orb';
 import { Counts } from '@/components/change-counts';
 import { CodeBlock } from '@/components/markdown/code-block';
+import { SubagentPanel, SubagentStateLabel } from '@/components/subagent-control';
 import { TodoList } from '@/components/todo-list';
 import { ToolDiff, ToolOutputBlock, ToolRead, ToolSearch } from '@/components/tool-result';
 import { Badge } from '@/components/ui/badge';
@@ -185,6 +187,11 @@ export function ToolCard({
     entry.name === SEND_MESSAGE
       ? sendMessageSummary(entry.input, entry.attribution, subagentNames ?? new Map())
       : undefined;
+  // 背景派出的委派卡：標頭多一個狀態字，展開後多一區對它說話與單獨停止（#869）。
+  const backgroundRunId =
+    DELEGATION_TOOL_NAMES.includes(entry.name) && isBackgroundSubagentMeta(entry.meta)
+      ? entry.meta.runId
+      : undefined;
   const questions = entry.name === ASK_USER_QUESTION ? questionsOf(entry.input) : undefined;
   // 答案優先讀線上那一份（#439）：它不分分頁，重新整理與重播都在。本地那一則是舊日誌（沒有 `text`）的退路。
   const given =
@@ -274,6 +281,7 @@ export function ToolCard({
             <Counts added={diffView.totals.added} deleted={diffView.totals.removed} />
           )}
         </span>
+        {backgroundRunId !== undefined && <SubagentStateLabel runId={backgroundRunId} />}
         <span className="hidden sm:inline-flex">
           <AttributionBadge attribution={entry.attribution} />
         </span>
@@ -352,6 +360,7 @@ export function ToolCard({
               </pre>
             )
           )}
+          {backgroundRunId !== undefined && <SubagentPanel runId={backgroundRunId} />}
         </div>
       </CollapsibleContent>
     </Collapsible>

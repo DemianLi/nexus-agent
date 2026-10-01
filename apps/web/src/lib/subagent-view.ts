@@ -73,3 +73,71 @@ export function sendMessageSummary(
   const to = attribution.kind === 'subagent' ? '主對話' : subagentLabel(names, agentId);
   return `傳給 ${to}：${firstLine(message.trim())}`;
 }
+
+/**
+ * 背景子代理「現在」的狀態，從折疊器的 `subagentStatus`（#870）與委派卡的 `runId` 算出來。
+ *
+ * - `null`（還沒收到快照）：分不出來，`unknown`。有背景派出的組裝一接上就會送快照，所以這只是短暫的。
+ * - 在快照裡：`running`／`idle`。**`idle` 含兩種**：已結算還能被叫醒的，和被單獨停止而暫停的，分不出來；對人來說都是
+ *   「現在沒在跑，再對它說話會讓它再跑一輪」。
+ * - 收過快照而不在裡面：`closed`（收線）。委派卡來自 root 日誌，重新整理後還在，所以歷史裡有、這裡沒有的編號一律是收線。
+ */
+export type SubagentRunState = 'running' | 'idle' | 'closed' | 'unknown';
+
+export function subagentRunState(
+  status: Readonly<Record<string, 'running' | 'idle'>> | null,
+  runId: string,
+): SubagentRunState {
+  if (status === null) return 'unknown';
+  return status[runId] ?? 'closed';
+}
+
+/** 委派卡標頭上那個小狀態字；還不知道就不畫。 */
+export const SUBAGENT_STATE_LABEL = {
+  running: '跑著',
+  idle: '閒著',
+  closed: '已收線',
+  unknown: undefined,
+} as const satisfies Record<SubagentRunState, string | undefined>;
+
+/**
+ * 輸入框的佔位字（#869 Q2）。**還不知道（`unknown`）當跑著**，避免一接上就閃一下停用。
+ * 連線斷了是另一件事，由呼叫端先擋（連線中…）。
+ */
+export function subagentPlaceholder(state: SubagentRunState): string {
+  switch (state) {
+    case 'idle':
+      return '對它說話（會喚醒它）';
+    case 'closed':
+      return '這個子代理已結束';
+    case 'running':
+    case 'unknown':
+      return '對它說話（下一步送進去）';
+  }
+}
+
+/** 收線了就沒有人可以說話；其餘都送得出去（連線另外看）。 */
+export function canSendToSubagent(state: SubagentRunState, connected: boolean): boolean {
+  return connected && state !== 'closed';
+}
+
+/** 單獨停止只在它跑著時有意思；`unknown` 當跑著。 */
+export function canStopSubagent(state: SubagentRunState): boolean {
+  return state === 'running' || state === 'unknown';
+}
+
+/** `subagent.send` 被拒時講給人聽的一句（#869 Q1）。不認得的碼退回伺服器的 `message`。 */
+export function subagentSendError(code: string, message: string): string {
+  switch (code) {
+    case 'subagent_not_found':
+      return '找不到這個子代理，它可能已經結束。';
+    case 'subagent_at_capacity':
+      return '同時運作的子代理已滿，請等其中一個做完再試。';
+    case 'subagent_closed':
+      return '這條對話正在關閉，沒辦法再送話。';
+    case 'invalid_argument':
+      return '內容不能是空白。';
+    default:
+      return `沒送出去：${message}`;
+  }
+}
