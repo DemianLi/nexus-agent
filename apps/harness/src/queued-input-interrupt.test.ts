@@ -36,6 +36,7 @@ import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent, PumpInput } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
+import { composeAttachSessions } from './session-attach.js';
 
 /** 工具跑到哪裡了——「跑沒跑」的答案在這裡，不在回傳的措辭上。 */
 interface Probe {
@@ -502,9 +503,9 @@ describe('wire：跑著時收下的一句，等 input.respond 那一輪收掉才
         agent: built.agent as unknown as PumpAgent,
         commands: emptyCommandPoint(),
         dispose: built.dispose,
-        attachSession: (sessions) => {
+        attachSessions: (sessions, backgroundPort) => {
           log = sessions.root;
-          return built.attachSession(sessions);
+          return composeAttachSessions(built)(sessions, backgroundPort);
         },
       }),
     });

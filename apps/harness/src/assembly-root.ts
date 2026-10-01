@@ -31,6 +31,8 @@ import { createAskUserPlugin } from '@nexus/plugin-ask-user';
 import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import type { BackgroundParentPort, ModelChoice } from './background-subagents.js';
+import { composeAttachSessions } from './session-attach.js';
+import type { AttachSessions } from './session-attach.js';
 import { backgroundSubagentsPlugin } from './settings/background-subagents.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import type { LiveModelConfig } from './settings/live-model.js';
@@ -611,6 +613,16 @@ export async function createCliAgent(
   sessions: SessionRegistry;
   sessionLog: SessionLog;
   commands: CommandRegistrationPoint;
+  /**
+   * 把這條 thread 的**每一份**會話日誌接上遙測、不變量配套入口與 `sessions` 通道的參與者，一個口三件事
+   * （[#668](https://github.com/DemianLi/nexus-agent/issues/668)）。見 {@link SessionsAttachment}。
+   */
+  attachSessions: AttachSessions;
+  /**
+   * 三個口各自的原件，**只給要量單一消費者的測試**（例如「沒有配套入口時不接線」「出貨清單接得上」）。
+   * 兩個入口與手搭 `ThreadAgent` 一律走 {@link attachSessions}：`ThreadAgent` 上沒有這三個，
+   * 所以 serve 不可能再少轉交其中一個。
+   */
   attachTelemetry: (sessions: SessionRegistry) => (() => Promise<void>) | undefined;
   attachInvariants: (sessions: SessionRegistry) => (() => void) | undefined;
   attachSession: (sessions: SessionRegistry, backgroundPort?: BackgroundParentPort) => () => void;
@@ -641,7 +653,7 @@ export async function createCliAgent(
    * 沒帶 `--live` 不掛是承重的：假模型的腳本是一格一格吃的，多出來的標題呼叫會吃掉主回覆的那一格。它也不另給
    * 一顆假模型——沒有人要讀一個假的標題。
    *
-   * 接線同其他三個 attach，交給呼叫端：CLI 接它那一份，serve 在 wire-handler 建 pump 的那一刻接。
+   * 接線同 {@link attachSessions}，交給呼叫端：CLI 接它那一份，serve 在 wire-handler 建 pump 的那一刻接。
    */
   attachTitle: AttachSessionTitleLlm | undefined;
   /** 這一次組裝掉了的可少掛條目（#751）；沒給 `optionalEntries` 時一律是空的。 */
@@ -805,9 +817,15 @@ export async function createCliAgent(
   // 那些日誌也掛在它上面**，第一次有人要寫的時候才出生（見 `SessionRegistry` 的偏離）。
   const sessions = new SessionRegistry(THREAD_ID, rootSeed === undefined ? {} : { rootSeed });
   const sessionLog = sessions.root;
-  // **這裡不接線。** 這個工廠兩條路都在用，而 serve 那條不用這份 `sessionLog`——它一個
-  // thread 一份，接線點在 {@link ./wire-handler.ts} 建 pump 的那一刻。在這裡接等於幫
-  // serve 接上一份永遠不會有事件的日誌，只送得出一筆 `shutdown`。接線交給呼叫端。
+  // **這裡不替呼叫端接。** 這個工廠兩條路都在用，而 serve 那條不用這份 `sessionLog`——它一個
+  // thread 一份，註冊表是 pump 建的。在這裡接等於幫 serve 接上一份永遠不會有事件的日誌，只送得出一筆
+  // `shutdown`。但**接什麼、接的順序、怎麼收**定成 {@link AttachSessions} 一個口，呼叫端只剩「對哪一份
+  // 註冊表接」這一個決定，不再各寫一份三行接線。
+  const attachSessions = composeAttachSessions({
+    attachTelemetry,
+    attachInvariants,
+    attachSession,
+  });
   return {
     agent,
     dispose,
@@ -815,6 +833,7 @@ export async function createCliAgent(
     sessions,
     sessionLog,
     commands,
+    attachSessions,
     attachTelemetry,
     attachInvariants,
     attachSession,
