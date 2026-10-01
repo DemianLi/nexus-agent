@@ -43,3 +43,10 @@ export interface PlanModePayload {
   /** 計劃模式現在開著嗎。 */
   readonly active: boolean;
 }
+
+// 名字→酬載表（#685）上屬於這個檔的格子，見 `custom-frame.ts`。
+declare module './custom-frame.js' {
+  interface CustomFramePayloads {
+    [PLAN_MODE]: PlanModePayload;
+  }
+}

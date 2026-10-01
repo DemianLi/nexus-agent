@@ -58,8 +58,8 @@ export type {
  * `input` 這一格是我們自己合成的：基座把中斷發在 `updates` 上（`node: "__interrupt__"`），
  * 不發協定裡的 `input.requested`。合成的位置在 `@nexus/harness` 的 pump。
  *
- * `custom` 這一格也是：上面只走 pump 從**日誌**合成的 domain 事件（今天只有
- * {@link DELIVERABLES_PRESENTED}），**圖自己發的 `custom` frame（`config.writer`）一律不上線**
+ * `custom` 這一格也是：上面只走 pump 從**日誌**合成的 domain 事件（有哪些名字、各帶什麼酬載，看 `custom-frame.ts`
+ * 那張名字→酬載表，[#685](https://github.com/DemianLi/nexus-agent/issues/685)），**圖自己發的 `custom` frame（`config.writer`）一律不上線**
  * ——pump 在翻譯時丟掉它們。所以放行這一格不等於放行任何工具或 plugin 往瀏覽器寫東西。
  */
 export const WIRE_CHANNELS = ['messages', 'tools', 'lifecycle', 'input', 'custom'] as const;

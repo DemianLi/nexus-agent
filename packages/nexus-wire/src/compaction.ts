@@ -49,3 +49,10 @@ export interface CompactionPayload {
   /** 摘要全文，已拿掉外框、套過位元組上限。日誌上沒有（舊格式）或拿不出文字就不放。 */
   readonly summary?: string;
 }
+
+// 名字→酬載表（#685）上屬於這個檔的格子，見 `custom-frame.ts`。
+declare module './custom-frame.js' {
+  interface CustomFramePayloads {
+    [COMPACTION]: CompactionPayload;
+  }
+}

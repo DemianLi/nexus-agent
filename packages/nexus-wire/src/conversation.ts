@@ -33,6 +33,7 @@
 
 import { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 import type { WireContextMeasure, WireContextPressure } from './context-pressure.js';
+import type { CustomFrameName } from './custom-frame.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
 import { AGENT_MESSAGE, INBOX, SETTLE_NOTICE, isSettleReason } from './inbox.js';
 import type {
@@ -769,28 +770,22 @@ function isPresentedFile(value: unknown): value is WirePresentedFile {
 }
 
 /**
- * `custom` frame。**只認 {@link DELIVERABLES_PRESENTED}、{@link WORKSPACE_CHANGES}、{@link MODEL_USAGE}、
- * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link PLAN_MODE}、{@link COMPACTION}、{@link GOAL}、{@link TOKEN_USAGE}、{@link SESSION_STATS}、{@link INBOX}、{@link TITLE} 與 {@link SUBAGENT_STATUS}**，其他名字、形狀
- * 不對的一律略過：這個 channel 上的東西由 pump 從日誌合成，認不得的不猜。
+ * `custom` frame：照 `data.name` 分派給那一格的折疊。**認得的名字就是 `custom-frame.ts` 那張名字→酬載表上的鍵**
+ * （[#685](https://github.com/DemianLi/nexus-agent/issues/685)），這裡不另列一份。
+ *
+ * {@link CUSTOM_REDUCERS} 的型別對表上的鍵**窮舉**：表上多一格而這裡沒補分支，當場編不過。執行期遇到表上沒有的名字、
+ * 或酬載不是物件，一律原樣回 state：這個 channel 上的東西由 pump 從日誌合成，認不得的不猜。各格的酬載形狀由各自的
+ * `reduceX` 驗，不在這一層。
  */
 function reduceCustom(state: ConversationState, data: unknown): ConversationState {
   const { name, payload } = (data ?? {}) as { name?: unknown; payload?: unknown };
   if (typeof payload !== 'object' || payload === null) return state;
-  if (name === WORKSPACE_CHANGES) return reduceWorkspaceChanges(state, payload);
-  if (name === MODEL_USAGE) return reduceModelUsage(state, payload);
-  if (name === CONTEXT_MEASURE) return reduceContextMeasure(state, payload);
-  if (name === TODOS) return reduceTodos(state, payload);
-  if (name === PLAN_MODE) return reducePlanMode(state, payload);
-  if (name === COMPACTION) return reduceCompaction(state, payload);
-  if (name === GOAL) return reduceGoal(state, payload);
-  if (name === TOKEN_USAGE) return reduceTokenUsage(state, payload);
-  if (name === SESSION_STATS) return reduceSessionStats(state, payload);
-  if (name === INBOX) return reduceInbox(state, payload);
-  if (name === SETTLE_NOTICE) return reduceSettleNotice(state, payload);
-  if (name === AGENT_MESSAGE) return reduceAgentMessage(state, payload);
-  if (name === TITLE) return reduceTitle(state, payload);
-  if (name === SUBAGENT_STATUS) return reduceSubagentStatus(state, payload);
-  if (name !== DELIVERABLES_PRESENTED) return state;
+  if (typeof name !== 'string' || !Object.hasOwn(CUSTOM_REDUCERS, name)) return state;
+  return CUSTOM_REDUCERS[name as CustomFrameName](state, payload);
+}
+
+/** 一交付的那一格：`deliverables` 條目，同一個 `callId` 只長一次。 */
+function reduceDeliverablesPresented(state: ConversationState, payload: object): ConversationState {
   const { callId, seq, files } = payload as { callId?: unknown; seq?: unknown; files?: unknown };
   if (
     typeof callId !== 'string' ||
@@ -805,6 +800,30 @@ function reduceCustom(state: ConversationState, data: unknown): ConversationStat
   const entry: DeliverablesEntry = { kind: 'deliverables', id, callId, seq, files };
   return { ...state, entries: [...state.entries, entry] };
 }
+
+/**
+ * 名字→那一格的折疊。**型別對 {@link CustomFrameName} 窮舉**（見 {@link reduceCustom}）。酬載收成 `object`：執行期的形狀
+ * 驗證是各個 `reduceX` 的事，表上的型別只約束生產端。
+ */
+const CUSTOM_REDUCERS: {
+  readonly [K in CustomFrameName]: (state: ConversationState, payload: object) => ConversationState;
+} = {
+  [DELIVERABLES_PRESENTED]: reduceDeliverablesPresented,
+  [WORKSPACE_CHANGES]: reduceWorkspaceChanges,
+  [MODEL_USAGE]: reduceModelUsage,
+  [CONTEXT_MEASURE]: reduceContextMeasure,
+  [TODOS]: reduceTodos,
+  [PLAN_MODE]: reducePlanMode,
+  [COMPACTION]: reduceCompaction,
+  [GOAL]: reduceGoal,
+  [TOKEN_USAGE]: reduceTokenUsage,
+  [SESSION_STATS]: reduceSessionStats,
+  [INBOX]: reduceInbox,
+  [SETTLE_NOTICE]: reduceSettleNotice,
+  [AGENT_MESSAGE]: reduceAgentMessage,
+  [TITLE]: reduceTitle,
+  [SUBAGENT_STATUS]: reduceSubagentStatus,
+};
 
 /**
  * 日誌位置的形狀：非負安全整數。
