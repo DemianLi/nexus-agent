@@ -24,20 +24,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createHostServicesPlugin } from '@nexus/core';
-
-import { createNexusAgent } from './agent-factory.js';
 import { createCliAgent } from './assembly-root.js';
-import { ContainedFilesystemBackend } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
-import {
-  createSandboxPolicyPlugin,
-  executeSandboxCommand,
-  SANDBOX_COMMAND_NAME,
-  SandboxModeController,
-} from '@nexus/plugin-sandbox-policy';
-import { ScriptedChatModel } from './scripted-model.js';
-import { shippedPlugins } from './fixtures.js';
+import { SANDBOX_COMMAND_NAME } from '@nexus/plugin-sandbox-policy';
+import type { ScriptedChatModel } from './scripted-model.js';
+import { shippedPlugins, withScriptedModel } from './fixtures.js';
 
 const shipped = await shippedPlugins();
 
@@ -63,11 +54,6 @@ function systemPrompt(model: ScriptedChatModel): string {
     .join('\n');
 }
 
-/** 跑一次 `/sandbox <引數>`，回它給人看的那句話。 */
-function sandbox(controller: SandboxModeController, root: string, argument: string): string {
-  return executeSandboxCommand(controller, root, argument).text;
-}
-
 describe('一次切換搬得動兩個消費者', () => {
   let root: string;
 
@@ -80,48 +66,54 @@ describe('一次切換搬得動兩個消費者', () => {
   });
 
   it('`/sandbox read-only` 之後 `write_file` 被擋，而且下一輪的提示句也換成 read-only', async () => {
-    const controller = new SandboxModeController('workspace-write');
-    const model = new ScriptedChatModel({
-      turns: [
-        {
-          content: '',
-          toolCalls: [{ name: 'write_file', args: { file_path: '/a.txt', content: '一' } }],
-        },
-        { content: '寫好了。' },
-        {
-          content: '',
-          toolCalls: [{ name: 'write_file', args: { file_path: '/b.txt', content: '二' } }],
-        },
-        { content: '寫不進去。' },
-      ],
-    });
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      // **fence 與 plugin 拿的是同一顆控制器**，這正是 `cli.ts` 的接法。
-      backend: new ContainedFilesystemBackend({ rootDir: root, mode: controller.source }),
-      plugins: [
-        createHostServicesPlugin({ sandboxPolicy: { controller, rootDir: root } }),
-        createSandboxPolicyPlugin(),
-      ],
-    });
+    // **產品組裝**（#670）：控制器、backend、沙箱 plugin 都是 `createCliAgent` 建的，切換走產品掛上去的 `/sandbox` 命令，
+    // 不再自己握一顆控制器——「兩個消費者讀的是同一顆」要在產品組裝上成立才算數。
+    const turns = [
+      {
+        content: '',
+        toolCalls: [{ name: 'write_file', args: { file_path: '/a.txt', content: '一' } }],
+      },
+      { content: '寫好了。' },
+      {
+        content: '',
+        toolCalls: [{ name: 'write_file', args: { file_path: '/b.txt', content: '二' } }],
+      },
+      { content: '寫不進去。' },
+    ];
+    const built = await createCliAgent(
+      { live: false, workspace: root },
+      withScriptedModel(shipped, turns),
+      root,
+    );
+    const model = built.model as ScriptedChatModel;
+    const detach = built.attachSession(built.sessions);
+    const config = { configurable: { thread_id: 'sandbox-switch' } };
 
     try {
-      const before = await agent.invoke(toAgentInvocation('寫一個檔。'));
+      const before = await built.agent.invoke(toAgentInvocation('寫一個檔。'), config);
       const wrote = before.messages.find((message) => message.getType() === 'tool');
       // **反例先跑**：切之前這一模一樣的呼叫是過的。少了它，一個永遠擋的實作也全綠。
       expect(wrote?.text).not.toContain('唯讀');
       expect(systemPrompt(model)).toContain('目前的檔案政策：workspace-write');
 
-      expect(sandbox(controller, root, ' read-only')).toContain('workspace-write 換成 read-only');
+      const switched = await built.commands.find(SANDBOX_COMMAND_NAME)?.handler({
+        commandId: 'switch',
+        rawInput: ' read-only',
+        signal: new AbortController().signal,
+        sessionLog: built.sessionLog,
+        steer: noSteer,
+      });
+      expect(switched?.text).toContain('workspace-write 換成 read-only');
 
-      const after = await agent.invoke(toAgentInvocation('再寫一個檔。'));
-      const denied = after.messages.find((message) => message.getType() === 'tool');
+      const after = await built.agent.invoke(toAgentInvocation('再寫一個檔。'), config);
+      const denied = after.messages.filter((message) => message.getType() === 'tool').at(-1);
       expect(denied?.text).toContain('這個 backend 是唯讀的');
       // 同一次切換，另一個消費者。
       expect(systemPrompt(model)).toContain('目前的檔案政策：read-only');
       expect(systemPrompt(model)).not.toContain('目前的檔案政策：workspace-write');
     } finally {
-      await dispose();
+      detach();
+      await built.dispose();
     }
   });
 });

@@ -26,21 +26,24 @@
  * **問答**而不是核准卡——那就是「別的工具走到鏈底 `allow`」的現場證據。最後那一組還多
  * 一個：基座自己的 `read_file` 在同一次組裝裡跑完，**一張卡都沒出現**。單元測試那側
  * （`@nexus/plugin-submit-record`）另有一條直接對 `runApprovalGate` 的否定面。
+ *
+ * ## 走產品組裝（#670）
+ *
+ * 以前這裡自己 `createNexusAgent` ＋ `createWireHandler` 手抄一份組裝。現在是真的 `runServe`，模型換成清單上的腳本
+ * 提供者（`startScriptedServe`）——出貨清單掛的 ask-user 與 submit-record、組裝點算的答題管道與 backend 全是真的。
  */
 
 import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { MemorySaver } from '@langchain/langgraph';
-import { createAskUserPlugin, ASK_USER_QUESTION_TOOL_NAME } from '@nexus/plugin-ask-user';
-import { createSubmitRecordPlugin, SUBMIT_RECORD_TOOL_NAME } from '@nexus/plugin-submit-record';
+import { ASK_USER_QUESTION_TOOL_NAME } from '@nexus/plugin-ask-user';
+import { SUBMIT_RECORD_TOOL_NAME } from '@nexus/plugin-submit-record';
 import type { ConversationState, Event, WireClient } from '@nexus/wire';
 import {
   answerResponse,
   appendAnswers,
   appendDecision,
-  createWireClient,
   emptyConversation,
   isApprovalPending,
   isQuestionPending,
@@ -49,20 +52,10 @@ import {
 } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
-import {
-  emptyCommandPoint,
-  humanChannelPlugin,
-  loopbackRequest,
-  TEST_BROWSER_AUTH,
-} from './fixtures.js';
-import { ScriptedChatModel } from './scripted-model.js';
-import type { PumpAgent } from './thread-pump.js';
-import { createWireHandler } from './wire-handler.js';
-import { composeAttachSessions } from './session-attach.js';
-
-const BASE_URL = 'http://record.test';
+import { serveClient } from './fixtures.js';
+import type { ScriptedTurn } from './scripted-model.js';
+import { startScriptedServe } from './scripted-serve.js';
 const CSV_PATH = '/visitors.csv';
 const QUESTIONS = [
   { id: 'name', question: '訪客姓名？', header: '姓名' },
@@ -87,7 +80,7 @@ interface Session {
 }
 
 /** 前兩輪對兩種 backend 都一樣：先問，再送出。 */
-const ASK_THEN_SUBMIT = [
+const ASK_THEN_SUBMIT: readonly ScriptedTurn[] = [
   {
     content: '缺兩格，我先問。',
     toolCalls: [{ name: ASK_USER_QUESTION_TOOL_NAME, args: { questions: QUESTIONS } }],
@@ -102,38 +95,18 @@ const ASK_THEN_SUBMIT = [
  * 接一條真的線。
  *
  * @param threadId - thread。
- * @param backend - 組裝點給的 backend。**`undefined` 就是沒給 `--workspace`**（基座的
- *   `StateBackend`），那條是 `serve` 的預設。
+ * @param workspace - `--workspace`。**`undefined` 就是沒給**（基座的 `StateBackend`），那條是 `serve` 的預設。
  * @param turns - 腳本模型這一次的輪。
  */
 async function connect(
   threadId: string,
-  backend: ContainedFilesystemBackend | undefined,
-  turns: readonly { content: string; toolCalls?: { name: string; args: unknown }[] }[],
+  workspace: string | undefined,
+  turns: readonly ScriptedTurn[],
 ): Promise<Omit<Session, 'root'>> {
-  const built = await createNexusAgent({
-    model: new ScriptedChatModel({ turns: turns as never }),
-    checkpointer: new MemorySaver(),
-    ...(backend !== undefined && { backend }),
-    // submit-record 從 `fs` 服務拿 fold 折出來的那一個（#694），跟 `write_file` 同一個，不必另外交。
-    // ask-user 要明著有一份答題管道（#669）。
-    plugins: [humanChannelPlugin(), createAskUserPlugin(), createSubmitRecordPlugin()],
+  const serve = await startScriptedServe(turns, {
+    ...(workspace !== undefined && { workspace }),
   });
-  const handler = createWireHandler({
-    auth: TEST_BROWSER_AUTH,
-    createAgent: async () => ({
-      agent: built.agent as unknown as PumpAgent,
-      commands: emptyCommandPoint(),
-      // 接的是 pump 自己那一份註冊表（handler 建完才交過來），同產品路徑 `serve.ts`。工具卡的終態
-      // 與結果文字都從日誌來（#296、#439），不接的話卡上只剩基座 frame 說得出的那幾格。
-      attachSessions: composeAttachSessions(built),
-      dispose: built.dispose,
-    }),
-  });
-  const client = createWireClient({
-    baseUrl: BASE_URL,
-    fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
-  });
+  const client = await serveClient(serve.running);
   const events = await client.openEvents(threadId);
   await client.runStart(threadId, '幫我登記一位訪客');
   return {
@@ -141,7 +114,10 @@ async function connect(
     events,
     threadId,
     state: emptyConversation(),
-    close: () => handler.close(),
+    close: async () => {
+      await events.return?.(undefined);
+      await serve.close();
+    },
   };
 }
 
@@ -149,8 +125,7 @@ async function connect(
 async function open(threadId: string): Promise<Session> {
   const root = mkdtempSync(join(tmpdir(), 'nexus-record-'));
   workspaces.push(root);
-  const backend = new ContainedFilesystemBackend({ rootDir: root });
-  const session = await connect(threadId, backend, [...ASK_THEN_SUBMIT, { content: '收工。' }]);
+  const session = await connect(threadId, root, [...ASK_THEN_SUBMIT, { content: '收工。' }]);
   return { ...session, root };
 }
 

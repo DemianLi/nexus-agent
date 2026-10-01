@@ -21,8 +21,10 @@
  * 半得先讓那條組裝路徑有一個拿得到 registry 的觀察點，那是另一件事——這裡守的是「預設清單
  * 開始掛路由」，那是今天真的會發生的那一種。
  *
- * **走產品組裝**（`createCliAgent`）。它的假模型腳本是固定的（`assembly-root.ts` 的 `CLI_SCRIPT`），所以這裡包一層
- * `createNexusAgent`、只換掉模型，其餘原樣轉呼叫（同 `subagent-tool-filter-setting.test.ts` 的攔法）。
+ * **走產品組裝**（`createCliAgent`），模型換成清單上的腳本提供者（`withScriptedModel`，#670）。腳本先叫 `write_file` 建表頭、
+ * 再叫 `submit_record` 追加一列、最後 `read_file`：**兩顆寫入工具共用同一個 backend**（`write_file` 走基座、`submit_record` 走 `fs` 服務），
+ * 兩邊寫的是同一份檔，`read_file` 才讀得到追加的那一列。突變：把 `agent-factory.ts` 提供給 `fs` 服務的值換成另一個 backend，
+ * 追加的那一列寫到別處，這裡讀不到而紅。
  *
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`，工作區是暫存目錄。
  */
@@ -34,30 +36,12 @@ import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import { SUBMIT_RECORD_TOOL_NAME } from '@nexus/plugin-submit-record';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { CONVERSATION_HISTORY_PREFIX, TOOL_RESULT_STASH_PREFIX } from './agent-factory.js';
-import { shippedPlugins } from './fixtures.js';
+import { createCliAgent } from './assembly-root.js';
+import { shippedPlugins, withScriptedModel } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
-import { ScriptedChatModel } from './scripted-model.js';
-import type { ScriptedTurn } from './scripted-model.js';
-
-/** 這一次組裝要用的腳本。`createNexusAgent` 被叫的時候讀。 */
-const script = vi.hoisted(() => ({ turns: [] as ScriptedTurn[] }));
-
-vi.mock('./agent-factory.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('./agent-factory.js')>();
-  return {
-    ...original,
-    createNexusAgent: (options: Parameters<typeof original.createNexusAgent>[0]) =>
-      original.createNexusAgent({
-        ...options,
-        model: new ScriptedChatModel({ turns: script.turns }),
-      }),
-  };
-});
-
-const { createCliAgent } = await import('./assembly-root.js');
 
 const shipped = await shippedPlugins();
 
@@ -88,14 +72,18 @@ function textOf(message: ToolMessage | undefined): string {
 }
 
 /**
- * 在產品組裝上叫一次 `submit_record` 寫 `path`、核准它，下一輪再用 `read_file`（與可選的 `present`）
+ * 在產品組裝上先 `write_file` 建 `path` 的表頭、再叫一次 `submit_record` 追加一列、核准它，下一輪再用 `read_file`（與可選的 `present`）
  * 讀同一條路徑。回模型拿到的工具訊息。
  */
 async function submitThenRead(
   path: string,
   { workspace, present }: { workspace: boolean; present: boolean },
 ): Promise<Map<string, ToolMessage>> {
-  script.turns = [
+  const turns = [
+    {
+      content: '',
+      toolCalls: [{ name: 'write_file', args: { file_path: path, content: '姓名\n' } }],
+    },
     {
       content: '',
       toolCalls: [
@@ -113,7 +101,7 @@ async function submitThenRead(
   ];
   const built = await createCliAgent(
     { live: false, ...(workspace && { workspace: root }) },
-    shipped,
+    withScriptedModel(shipped, turns),
     root,
   );
   const detach = built.attachSession(built.sessions);
