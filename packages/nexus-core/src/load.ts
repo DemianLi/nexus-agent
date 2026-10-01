@@ -135,6 +135,8 @@ export async function loadPlugins(
       // `config` 是 `resolveEntries` 驗過的那一份（沒有 `Config` 的 plugin 是條目上原樣的那一份）。
       await plugin.apply(registry, config);
       options.afterApply?.(registry, origin);
+      // **`apply` 成功之後才記開著**：拋錯時這一列不能留下「開著」的痕跡（#678）。
+      registry.markEnabled(plugin.name);
     } catch (error) {
       registry.rollback(origin);
       // **註冊內容留著、活資源不留。** 先前成功的 plugin 的註冊留在 registry 上是刻意的
@@ -195,6 +197,8 @@ async function loadPerEntry(
     try {
       await plugin.apply(registry, config);
       options.afterApply?.(registry, origin);
+      // 同預設模式：成功之後才記。因 `requires` 連鎖掉的那一列由 `rollback` 一併撤掉這一筆（#678）。
+      registry.markEnabled(plugin.name);
       mounted.push({ entry: { plugin, origin, disabled, config } });
     } catch (error) {
       registry.rollback(origin);
