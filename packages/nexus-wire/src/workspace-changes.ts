@@ -161,3 +161,10 @@ export function isChangesDiff(value: unknown): value is WorkspaceFileDiff {
     diff.hunks.every(isHunk)
   );
 }
+
+// 名字→酬載表（#685）上屬於這個檔的格子，見 `custom-frame.ts`。
+declare module './custom-frame.js' {
+  interface CustomFramePayloads {
+    [WORKSPACE_CHANGES]: WorkspaceChangesPayload;
+  }
+}

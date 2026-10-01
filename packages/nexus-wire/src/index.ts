@@ -98,6 +98,7 @@ export {
   isBinaryResponse,
   isDeliverableMethod,
 } from './deliverables.js';
+export type { CustomFrameData, CustomFrameName, CustomFramePayloads } from './custom-frame.js';
 export type {
   DeliverableClient,
   DeliverableClientOptions,

@@ -62,3 +62,11 @@ export interface WireSessionStats {
   /** 工具呼叫的牆鐘總和，ms。核准的等待不算。 */
   readonly toolMs: number;
 }
+
+// 名字→酬載表（#685）上屬於這個檔的格子，見 `custom-frame.ts`。
+declare module './custom-frame.js' {
+  interface CustomFramePayloads {
+    [TOKEN_USAGE]: WireTokenUsage;
+    [SESSION_STATS]: WireSessionStats;
+  }
+}

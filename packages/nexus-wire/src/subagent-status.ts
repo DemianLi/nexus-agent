@@ -36,3 +36,10 @@ export interface SubagentStatusPayload {
     readonly status: SubagentRunStatus;
   }[];
 }
+
+// 名字→酬載表（#685）上屬於這個檔的格子，見 `custom-frame.ts`。
+declare module './custom-frame.js' {
+  interface CustomFramePayloads {
+    [SUBAGENT_STATUS]: SubagentStatusPayload;
+  }
+}
