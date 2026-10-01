@@ -74,6 +74,7 @@ import { DEFAULT_RECURSION_LIMIT } from './settings/recursion-limit.js';
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
 import { DEFAULT_TOOL_RESULT_STASH_RETENTION_DAYS } from './settings/tool-result-stash.js';
 import { liveModelConfigSchema } from './settings/live-model.js';
+import { DEFAULT_MAX_PARALLEL_TOOL_CALLS } from './settings/agent-loop.js';
 import { threadSearchConfigSchema } from './settings/thread-search.js';
 import { threadTitleLlmConfigSchema } from './settings/thread-title-llm.js';
 import {
@@ -108,17 +109,17 @@ describe('出貨的 cordis.yml', () => {
     const { plugins: fromYaml, dropped, ignoredConfig } = await loadPluginConfig();
     expect(dropped).toEqual([]);
     expect(ignoredConfig).toEqual([]);
-    // 49 = 8 個功能 ＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
+    // 50 = 8 個功能 ＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
     // 外加 #529 的 `session-persistence`——它是 core 那一段裡唯一消費點在起動期的——與 #599 的
     // `session-checkpoint-policy`）
-    // ＋ **12 個 harness 自己的設定條目**（#529、#538、#545、#650、#631、#734、#719、#841、#875）＋ 21 個配套入口。**數目寫在這裡是為了擋
+    // ＋ **13 個 harness 自己的設定條目**（#529、#538、#545、#650、#631、#734、#719、#841、#875、#711）＋ 21 個配套入口。**數目寫在這裡是為了擋
     // 「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個空 installer
     // 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
     //
     // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
     // `loadPluginConfig`，所以那八列要真的經由 `apps/harness/package.json` 的 `imports`
-    // 解析、import、而且長得像一顆 plugin，才數得到 49。拿掉那個 `imports` 區塊，這裡當場紅。
-    expect(fromYaml).toHaveLength(49);
+    // 解析、import、而且長得像一顆 plugin，才數得到 50。拿掉那個 `imports` 區塊，這裡當場紅。
+    expect(fromYaml).toHaveLength(50);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -224,6 +225,10 @@ describe('出貨的 cordis.yml', () => {
     // `recursion-limit` 是這八列裡唯一走服務的（消費點在組裝期，註冊表在手上）——
     // 它的 `apply` 不是空的，三態的解析由 `agent-factory.test.ts` 那組釘著。
     expect(byId.get('recursion-limit')).toEqual({ limit: DEFAULT_RECURSION_LIMIT });
+    // **每步平行工具呼叫上限**（#711）同形：走服務、出貨值就是 dsh 的 10。
+    expect(byId.get('agent-loop')).toEqual({
+      maxParallelToolCalls: DEFAULT_MAX_PARALLEL_TOOL_CALLS,
+    });
 
     // **落盤窗口住在 `@nexus/core`，不是 `#settings/…`**（#529）：值的家在那個套件裡，而
     // `@nexus/core/*` 本來就解得到，所以這一列沒有載體偏離。它排在 core 那一段是因為擁有者
@@ -251,6 +256,7 @@ describe('出貨的 cordis.yml', () => {
       'subagent-model-selection',
       'live-model',
       'recursion-limit',
+      'agent-loop',
     ]);
   });
 
@@ -880,6 +886,7 @@ describe('保護名單', () => {
       '#settings/tool-result-stash',
       '#settings/live-model',
       '#settings/recursion-limit',
+      '#settings/agent-loop',
     ];
     for (const name of expected) {
       expect(PROTECTED_ENTRY_NAMES.has(name), name).toBe(true);

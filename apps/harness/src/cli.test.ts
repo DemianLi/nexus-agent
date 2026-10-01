@@ -244,6 +244,7 @@ describe('一次性模式', () => {
       'subagent-model-selection',
       'live-model',
       'recursion-limit',
+      'agent-loop',
     ]);
     // 二十一個配套入口裡有 `@nexus/plugin-workspace-changes` 的，**那個功能本身不在這份清單裡**：它要工作區的根，
     // 只由 serve 經 `createCliAgent` 掛（#443），同 dsh 只在 web-app bundle 掛。
