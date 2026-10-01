@@ -16,7 +16,8 @@ import type { PluginEntry, SessionEvent } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 
 import { createNexusAgent } from './agent-factory.js';
-import { createCliAgent, runRepl } from './cli.js';
+import { runRepl } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { shippedPlugins } from './fixtures.js';
@@ -310,7 +311,7 @@ describe('預設組裝', () => {
       { live: false },
       shipped,
       undefined,
-      (error) => violations.push(error.message),
+      { onInvariantViolation: (error) => violations.push(error.message) },
     );
     try {
       const detach = attachInvariants(sessions);

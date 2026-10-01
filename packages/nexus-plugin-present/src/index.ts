@@ -58,7 +58,7 @@ import { posix } from 'node:path';
 
 import { tool } from '@langchain/core/tools';
 import type { NexusPlugin, PluginEntry, PluginRegistry, PresentedFile } from '@nexus/core';
-import { toolCallIdOf, toolRefusal, WORKSPACE_CAPABILITY } from '@nexus/core';
+import { toolCallIdOf, toolRefusal, virtualPathOf, WORKSPACE_CAPABILITY } from '@nexus/core';
 import { adaptBackendProtocol } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { z } from 'zod';
@@ -163,24 +163,12 @@ export type PresentPluginOptions = z.input<typeof presentConfigSchema>;
 type Inspection = 'file' | 'not-file' | 'missing';
 
 /**
- * 把模型給的路徑換成 backend 命名空間裡的絕對路徑。相對路徑以工作區根為起點（見檔頭偏離 3）。
- * `..` 不在這裡擋：backend 自己的 `resolvePath` 會拒，拒了就是找不到。
- *
- * **匯出是因為讀檔路由要用同一份**（[#452](https://github.com/DemianLi/nexus-agent/issues/452)）。
- * 事件裡存的是模型給的原字串（見下面 `log.append` 那一行），**正規化的結果不落庫**，所以之後
- * 要把那個字串變回一個路徑的人得自己走一次這裡。複製一份的話就是第二個真相——`cli.ts:341`
- * 對同型的情況已經寫過下場：「有一天只有一邊擋」。
- *
- * @param path - 模型給的路徑。
- * @returns 正規化之後、不帶尾斜線的虛擬路徑；工作區根本身是 `/`。
- */
-export function virtualPathOf(path: string): string {
-  const normalized = posix.normalize(path.startsWith('/') ? path : `/${path}`);
-  return normalized.length > 1 && normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
-}
-
-/**
  * 看一個路徑在 backend 上是什麼：列它上一層目錄，找它那一列。**不讀內容**（見檔頭偏離 1）。
+ *
+ * 模型給的路徑先過 `@nexus/core` 的 `virtualPathOf`（相對路徑以工作區根為起點，見檔頭偏離 3）。
+ * **`..` 在那一步就被夾回根了**，不會走到 backend：`a/../b.md` 查的是 `/b.md`，`../x.md` 查的是
+ * `/x.md`。同一個字串交給 `read_file` 會被基座拒，這裡則是查根底下那一個——那個檔在就認，
+ * 不在就是找不到，出不了界。規則跟讀檔路由、workspace-changes 共用那一份，不在這裡另寫。
  * @param backend - 折出來的 backend。
  * @param path - 模型給的路徑。
  * @returns 一般檔案、別的東西，或不在。
@@ -193,7 +181,9 @@ async function inspect(backend: AnyBackendProtocol, path: string): Promise<Inspe
   try {
     listing = await adaptBackendProtocol(backend).ls(posix.dirname(target));
   } catch {
-    // 基座的 `resolvePath` 對 `..`、`~` 是拋的；對模型來說那就是指不到。
+    // `..` 路段已經被夾掉了。基座 `FilesystemBackend` 的 `ls` 自己把 `resolvePath` 的拋（它比的是
+    // `..` 子字串，`x..y/a.md` 的上一層也算）收成空清單，走的是下面的 'missing'；這裡接的是別的
+    // backend 拋出來的。對模型來說都是指不到。
     return 'missing';
   }
   const found = listing.files?.find((file) => virtualPathOf(file.path) === target);

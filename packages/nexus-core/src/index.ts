@@ -100,7 +100,13 @@ export type {
   SandboxMode,
   SandboxModeSource,
 } from './sandbox.js';
-export { isSandboxMode, SANDBOX_MODES, WORKSPACE_CAPABILITY } from './sandbox.js';
+export {
+  hostPathOf,
+  isSandboxMode,
+  SANDBOX_MODES,
+  virtualPathOf,
+  WORKSPACE_CAPABILITY,
+} from './sandbox.js';
 
 export type { NamedEntry, DuplicateErrorFactory } from './entries.js';
 export { AnonymousEntries, NamedEntries, CapabilitySet } from './entries.js';
@@ -412,6 +418,8 @@ export {
 } from './feedback.js';
 
 export type {
+  LogicalTurnStartEvent,
+  ModelVisibleEventType,
   SessionEvent,
   SessionEventMap,
   SessionEventType,
@@ -425,7 +433,14 @@ export type {
   SessionReferenceSourceEntry,
   UserMessageSource,
 } from './session-log.js';
-export { currentTurnStart, hasUnansweredInterrupt, SessionLog } from './session-log.js';
+export {
+  currentTurnStart,
+  hasUnansweredInterrupt,
+  isLogicalTurnStart,
+  isModelVisibleEvent,
+  MODEL_VISIBLE_EVENT_TYPES,
+  SessionLog,
+} from './session-log.js';
 
 export type {
   SessionTelemetryRecord,
