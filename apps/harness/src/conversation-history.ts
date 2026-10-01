@@ -105,6 +105,7 @@ import {
   foldInbox,
   isLogicalTurnStart,
   isMaxTokensFinish,
+  loggedContentBlocks,
   loggedMessageId,
   replayConversation,
   sessionStatsUnit,
@@ -133,12 +134,11 @@ const LEGACY_REASONS: ReadonlySet<UnreplayableReason> = new Set([
 /** 參數不合規時拋的錯。wire 那側據它回 `invalid_argument`，不是 `unknown_error`。 */
 export class HistoryQueryError extends Error {}
 
-/** 一則訊息的文字：字串照原樣，區塊只取 `text` 那幾塊（推理另走 {@link reasoningOf}）。 */
+/** 一則訊息的文字：區塊中的 text 接起來（推理另走 {@link reasoningOf}）。 */
 function textOf(message: LoggedMessage | undefined): string {
-  const content: unknown = message?.data.content;
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
+  if (!message) return '';
+  const blocks = loggedContentBlocks(message.data.content);
+  return blocks
     .map((block: unknown) => {
       const typed = block as { type?: unknown; text?: unknown } | null;
       return typed?.type === 'text' && typeof typed.text === 'string' ? typed.text : '';
@@ -147,7 +147,7 @@ function textOf(message: LoggedMessage | undefined): string {
 }
 
 /**
- * 一則訊息的推理（[#527](https://github.com/DemianLi/nexus-agent/issues/527)）：content 陣列裡 `reasoning`
+ * 一則訊息的推理（[#527](https://github.com/DemianLi/nexus-agent/issues/527)）：content 區塊裡 `reasoning`
  * 那幾塊，照順序接起來。
  *
  * **只讀 content 區塊，不讀 `additional_kwargs.reasoning_content`**：即時那條看得到的是串流翻出來的
@@ -157,9 +157,9 @@ function textOf(message: LoggedMessage | undefined): string {
  * `additional_kwargs` 那一格翻成區塊（實測），所以兩條路本來就分得開。
  */
 function reasoningOf(message: LoggedMessage | undefined): string {
-  const content: unknown = message?.data.content;
-  if (!Array.isArray(content)) return '';
-  return content
+  if (!message) return '';
+  const blocks = loggedContentBlocks(message.data.content);
+  return blocks
     .map((block: unknown) => {
       const typed = block as { type?: unknown; reasoning?: unknown } | null;
       return typed?.type === 'reasoning' && typeof typed.reasoning === 'string'

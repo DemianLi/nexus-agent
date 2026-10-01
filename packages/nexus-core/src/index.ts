@@ -146,6 +146,8 @@ export type {
 export { createRegistry } from './registry.js';
 export type { HostServices } from './host-services.js';
 export { createHostServicesPlugin } from './host-services.js';
+export type { FsService } from './fs-service.js';
+export { createFsService, FS_SERVICE } from './fs-service.js';
 export { scrubbedParentEnv, SENSITIVE_ENV_PATTERN } from './child-env.js';
 export { installProxyFromEnvironment, proxyEnvironmentForChild } from './http-proxy/index.js';
 
@@ -173,7 +175,7 @@ export {
 } from './output-schema.js';
 
 export type { LoggedMessage } from './logged-message.js';
-export { fromLoggedMessage, toLoggedMessage } from './logged-message.js';
+export { fromLoggedMessage, toLoggedMessage, loggedContentBlocks } from './logged-message.js';
 
 export type {
   ConversationReplay,
@@ -363,7 +365,6 @@ export {
 } from './summarization.js';
 export type { EstimatedRequest, TokenEstimate } from './token-estimate.js';
 export {
-  defaultTokenAnchorBook,
   estimateAnchoredTokens,
   estimateRequestTokens,
   estimateTextTokens,
@@ -415,9 +416,9 @@ export type {
 export {
   currentMessageFeedback,
   FEEDBACK_CATEGORIES,
-  loggedMessageId,
   MESSAGE_FEEDBACK_SERVICE,
 } from './feedback.js';
+export { loggedMessageId } from './logged-message.js';
 
 export type {
   LlmFailure,

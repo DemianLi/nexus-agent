@@ -27,6 +27,7 @@ import { parseArgs } from 'node:util';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { THREADS_PATH } from '@nexus/wire';
+import { TokenAnchorBook } from '@nexus/core';
 import type {
   PluginEntry,
   ResumedStoredSession,
@@ -500,6 +501,8 @@ async function startServer(
   // **掉了哪幾列在這裡判第二次**（#751），同 CLI 那一次組裝：清單上可少掛的列 `apply` 失敗、`requires` 缺件、撞名，
   // 只讓它掉；必掛的、組裝點自己加的外掛掉了，換成跟第一次同一種 `StartupError`。兩次合起來印一段到伺服器日誌，
   // 只印這一次，在綁 port 之前。
+  // **錨定估算的帳（#702）**：一台 server 一本，下面每條 thread 的組裝都傳同一本，借錨才跨得過 thread。
+  const tokenAnchorBook = new TokenAnchorBook();
   const trial = await createCliAgent(
     {
       ...invocation,
@@ -700,6 +703,8 @@ async function startServer(
           },
           threadPlugins,
           options.cwd,
+          // 帳是這台 server 的，不是這條 thread 的：第二條 thread 的第一次借第一條的（#702）。
+          { tokenAnchorBook },
         );
       } catch (error) {
         await release().catch(() => {});

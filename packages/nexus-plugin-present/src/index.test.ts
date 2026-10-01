@@ -17,6 +17,7 @@ import type { StructuredTool } from '@langchain/core/tools';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import {
   createRegistry,
+  FS_SERVICE,
   loadPlugins,
   SessionRegistry,
   toolErrorOf,
@@ -29,7 +30,6 @@ import {
   createPresentPlugin,
   DEFAULT_MAX_FILES,
   presentConfigSchema,
-  PRESENT_BACKEND_MIDDLEWARE_NAME,
   PRESENT_EMPTY_PATH_MESSAGE,
   PRESENT_NO_SESSION_MESSAGE,
   PRESENT_NO_WORKSPACE_MESSAGE,
@@ -60,11 +60,23 @@ interface Mounted {
 }
 
 /**
- * 掛一次。`root` 給了就把 backend 交給 `useWithBackend` 的工廠（fold 做的那一步），`workspace` 決定
- * 有沒有人宣告工作區（組裝點的 sandbox-policy 做的那一步）。
+ * 掛一次。`root` 給了就經 `fs` 服務交出 backend（組裝點提供、fold 填值的那一格），`workspace` 決定
+ * 有沒有人宣告工作區（組裝點的 sandbox-policy 做的那一步）。`fs` 是 `'empty'` 時服務在、但裡面沒有
+ * backend（fold 過、這次組裝一個 backend 都沒有）。
  */
-function mount(options: { root?: string; workspace?: boolean; maxFiles?: number } = {}): Mounted {
+function mount(
+  options: { root?: string; workspace?: boolean; maxFiles?: number; fs?: 'empty' } = {},
+): Mounted {
   const registry = createRegistry();
+  const backend =
+    options.root === undefined
+      ? undefined
+      : new FilesystemBackend({ rootDir: options.root, virtualMode: true });
+  if (backend !== undefined || options.fs === 'empty') {
+    const leave = registry.enter({ id: 'host-services#0', name: 'host-services' });
+    registry.services.provide(FS_SERVICE, { backend: () => backend });
+    leave();
+  }
   const plugin = createPresentPlugin(
     options.maxFiles === undefined ? {} : { maxFiles: options.maxFiles },
   );
@@ -75,17 +87,6 @@ function mount(options: { root?: string; workspace?: boolean; maxFiles?: number 
     const leave = registry.enter({ id: 'sandbox-policy#0', name: 'sandbox-policy' });
     registry.capabilities.provide(WORKSPACE_CAPABILITY);
     leave();
-  }
-  const backend =
-    options.root === undefined
-      ? undefined
-      : new FilesystemBackend({ rootDir: options.root, virtualMode: true });
-  if (backend !== undefined) {
-    const built = registry.middleware
-      .list()
-      .map((entry) => entry.value.build?.(backend))
-      .filter((middleware) => middleware !== undefined);
-    expect(built).toEqual([{ name: PRESENT_BACKEND_MIDDLEWARE_NAME }]);
   }
   const entry = registry.tools.resolve(PRESENT_TOOL_NAME);
   if (entry === undefined) throw new Error('工具沒註冊上');
@@ -339,12 +340,24 @@ describe('拒絕', () => {
     expect(refusal.text).toBe(`Error: ${PRESENT_NO_WORKSPACE_MESSAGE}`);
   });
 
-  it('backend 從沒交進來也拒絕成沒有工作區', async () => {
-    const mounted = mount();
+  it.each([
+    ['沒有人提供 `fs` 服務', {}],
+    ['`fs` 服務在、裡面沒有 backend', { fs: 'empty' as const }],
+  ])('backend 從沒交進來也拒絕成沒有工作區：%s', async (_label, options) => {
+    const mounted = mount(options);
     const refusal = refusalOf(
       await callThrough(mounted, mounted.sessions.root, [{ path: 'a' }], rootConfig('c'), 'error'),
     );
     expect(refusal.text).toBe(`Error: ${PRESENT_NO_WORKSPACE_MESSAGE}`);
+  });
+
+  /**
+   * **不借 middleware 拿 backend**（#694）：以前掛一顆沒有鉤子的空殼 middleware，只為了接住 fold 交給
+   * `useWithBackend` 工廠的那一個，每個 agent 的 stack 裡都多一顆空殼。dsh 的 present 是注入 `fs` 的工具。
+   */
+  it('present 不註冊任何 middleware', () => {
+    const { registry } = mount({ fs: 'empty' });
+    expect(registry.middleware.list()).toEqual([]);
   });
 
   it('拿不到呼叫者那一份日誌、或沒有 callId，就拒絕', async () => {
