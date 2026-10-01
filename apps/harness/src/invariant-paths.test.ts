@@ -146,7 +146,7 @@ describe('預設清單', () => {
     } finally {
       await dispose();
     }
-    expect(shipped.filter((entry) => entry.plugin.name.endsWith('-invariant'))).toHaveLength(21);
+    expect(shipped.filter((entry) => entry.plugin.name.endsWith('-invariant'))).toHaveLength(20);
   });
 });
 
