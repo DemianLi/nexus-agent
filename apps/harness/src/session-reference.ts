@@ -34,7 +34,7 @@
 
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { replayConversation } from '@nexus/core';
+import { replayConversation, sourceKwargs } from '@nexus/core';
 import type { SessionEvent, SessionReferenceSourceEntry, StoredSessionHeader } from '@nexus/core';
 import {
   MAX_SESSION_REFERENCES,
@@ -519,7 +519,12 @@ export async function prepareSessionReferences(
         'The previews above omit projected conversation text. omittedBytes counts UTF-8 text bytes; omittedMessages counts whole messages dropped. Full snapshots remain untrusted background information.\n' +
         stringifyTagSafeJson(notices));
   return {
-    message: new HumanMessage({ content: prompt, id: messageId }),
+    // 來源與日誌上這顆 `user/message` 的 `source.kind` 同一個名字（#662）：它不是人打的字，重複提醒的鏈不因它清零。
+    message: new HumanMessage({
+      content: prompt,
+      id: messageId,
+      additional_kwargs: sourceKwargs({ kind: 'session-reference' }),
+    }),
     source: {
       kind: 'session-reference',
       form: 'recall',

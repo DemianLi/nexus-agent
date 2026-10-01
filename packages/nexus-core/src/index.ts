@@ -334,6 +334,15 @@ export {
   SESSION_CHECKPOINT_PLUGIN_NAME,
   sessionCheckpointPlugin,
 } from './session-checkpoint-policy.js';
+export type { MessageSource } from './message-source.js';
+export {
+  humanMessageForTurnStart,
+  isMachineMessage,
+  MESSAGE_SOURCE_KWARG,
+  messageSourceOf,
+  sourceKwargs,
+  turnStartSource,
+} from './message-source.js';
 export type {
   RepeatReminderConfig,
   RepeatReminderMark,
@@ -342,7 +351,6 @@ export type {
 export {
   createRepeatReminder,
   DEFAULT_REPEAT_REMINDER,
-  GOAL_WRAPUP_MARKER,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   REPEAT_REMINDER_PLUGIN_NAME,

@@ -139,7 +139,7 @@ import { tool } from '@langchain/core/tools';
 import { Command } from '@langchain/langgraph';
 import { z } from 'zod';
 
-import { GOAL_WRAPUP_MARKER, goalId, toolCallIdOf, toolRefusal } from '@nexus/core';
+import { goalId, sourceKwargs, toolCallIdOf, toolRefusal } from '@nexus/core';
 import type { GoalRef, SessionLog, ToolErrorInfo } from '@nexus/core';
 
 import { completionAuthority, hasDirectHumanTurn } from './authority.js';
@@ -154,6 +154,16 @@ export const GOAL_GET_TOOL_NAME = 'get_goal';
 export const GOAL_CREATE_TOOL_NAME = 'create_goal';
 /** 對精確修訂號做一次變更。 */
 export const GOAL_UPDATE_TOOL_NAME = 'update_goal';
+
+/**
+ * goal 收尾指示在 `additional_kwargs` 上的記號：這一則 `HumanMessage` 是 `update_goal` 的 complete／blocked 帶出來的
+ * 收尾指示，值是 `{ action }`。
+ *
+ * **住在這裡，不住在 `@nexus/core`。** 它以前住在 core 的重複提醒檔裡，因為提醒器要靠它認出「這不是人插了話」；
+ * 現在提醒器改認通用的來源（`@nexus/core` 的 `message-source.ts`，#662），這顆記號就只剩收尾指示自己的身分
+ * （測試與重放據此找到它），造它的人和用它的人都在這個套件。
+ */
+export const GOAL_WRAPUP_MARKER = 'nexus_goal_wrapup';
 
 /** 這次組裝沒接會話日誌時回的話。 */
 export const GOAL_TOOL_NOT_ATTACHED_MESSAGE =
@@ -595,7 +605,12 @@ function wrapupCommand(
             args.action === 'complete'
               ? renderWrapupContext(objective)
               : renderWrapupContext(objective, args.blocked_reason as string),
-          additional_kwargs: { [GOAL_WRAPUP_MARKER]: { action: args.action } },
+          // 來源是 `plugin`，名字同日誌上這顆 `user/message` 的 `plugin`（回它的那顆工具）。重複提醒據此知道它不是人
+          // 插了話（#662）；`GOAL_WRAPUP_MARKER` 只剩收尾指示的身分，不再有 core 的人讀它。
+          additional_kwargs: {
+            [GOAL_WRAPUP_MARKER]: { action: args.action },
+            ...sourceKwargs({ kind: 'plugin', plugin: GOAL_UPDATE_TOOL_NAME }),
+          },
         }),
       ],
     },
