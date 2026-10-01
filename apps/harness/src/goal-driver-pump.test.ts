@@ -328,6 +328,83 @@ describe('掛了旗標', () => {
   });
 
   /**
+   * **續行輪次拋錯或被人按停之後，人再講一句話，續行不會接回來**（#660，違反 #265 Q8 的字面）。
+   *
+   * 兩條各自走到 `ThreadPump` 的收尾：跑壞的那一輪也會問排程器，看到日誌上的 `turn/failed` 或
+   * `turn/end` 帶 aborted 就收回授權；人接著講的那一句正常收工，那時最後一輪已經不是跑壞的了，
+   * 只剩授權在擋。
+   */
+  it('續行輪次拋錯、人再說一句，續行不會接回', async () => {
+    const { pump, port, state, stop } = await build({
+      turns: [
+        {
+          content: '',
+          toolCalls: [
+            { name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 5 } },
+          ],
+        },
+        { content: '建好了。' },
+        { content: '', error: '供應商過載' },
+        { content: '好的，我等你。' },
+        { content: '不該被讀到。' },
+      ],
+      threadId: 'driver-failed',
+      withDriver: true,
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal']);
+    expect(port.goal()).toMatchObject({
+      activation: 'disarmed',
+      phase: 'active',
+      roundsStarted: 1,
+    });
+
+    await pump.submit({ kind: 'message', text: '等一下，我先看看' });
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal', 'message']);
+    expect(state.prompts).toHaveLength(4);
+    expect(port.goal()).toMatchObject({ activation: 'disarmed', phase: 'active', revision: 1 });
+    await stop();
+  });
+
+  it('續行輪次被人按停、人再說一句，續行不會接回', async () => {
+    const { pump, port, stop } = await build({
+      turns: [
+        ...CREATE_TURNS.map((turn, index) =>
+          index === 0
+            ? {
+                ...turn,
+                toolCalls: [
+                  { name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 5 } },
+                ],
+              }
+            : turn,
+        ),
+        { content: '', toolCalls: [{ name: 'take_note', args: { text: '先記一下' } }] },
+        { content: '好的，我等你。' },
+        { content: '不該被讀到。' },
+      ],
+      threadId: 'driver-aborted',
+      withDriver: true,
+      gated: true,
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    // 續行那一輪停在核准點；按停止就是收回，寫成一輪帶 aborted 的收尾。
+    for (let tries = 0; tries < 50 && !pump.awaitingInput; tries += 1) await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal']);
+    expect(pump.cancel()).toBe('withdrawn');
+    await settle(pump);
+    expect(port.goal()).toMatchObject({ activation: 'disarmed', phase: 'active' });
+
+    await pump.submit({ kind: 'message', text: '等一下，我先看看' });
+    await settle(pump);
+    // 收回寫的是一輪 `resume`（帶 aborted 收尾），之後只有人說的那一句，沒有第二個續行輪。
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal', 'resume', 'message']);
+    await stop();
+  });
+
+  /**
    * **續行輪次的頭不清零重複工具提醒的計數**（[#662](https://github.com/DemianLi/nexus-agent/issues/662)）。
    *
    * 兩個續行輪裡模型各把同一個呼叫重複兩次（共四次，中間隔著一個續行輪的頭）：第三次起計數一路累積，所以
@@ -369,7 +446,6 @@ describe('掛了旗標', () => {
     // 最後一次模型呼叫（第 2 輪的收尾）之前的 prompt 有一則提醒，之前的每一次都沒有。
     expect(state.prompts).toHaveLength(7);
     expect(reminders).toEqual([0, 0, 0, 0, 0, 0, 1]);
-    // 對照：人講的話照樣清零——見 `repeat-reminder.test.ts` 的「誰算人講話」。
     await stop();
   });
 

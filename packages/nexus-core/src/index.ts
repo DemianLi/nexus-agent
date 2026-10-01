@@ -211,13 +211,13 @@ export {
   OBSERVED_WRITE_TOOL,
 } from './observation.js';
 
+// 檔案錯誤與讀到哪各是一對：middleware 開 ALS 槽、backend 的 Proxy 寫入，只掛一半會靜默失效。
+// 兩對都只由 `foldRegistry` 組起來，主入口不公開半邊（#698）；core 以外要用時公開成對的單一入口。
 export {
-  createFsToolErrorsMiddleware,
   FS_SANDBOX_DENIED,
   FS_TOOL_ERRORS_MIDDLEWARE_NAME,
   FS_TOOL_PRIMARY_METHOD,
   noteSandboxDenial,
-  recordBackendOutcomes,
 } from './fs-tool-errors.js';
 
 export type { SpillPolicyOptions, SpillRef, SpillSaveRequest, SpillStore } from './spill-policy.js';
@@ -228,12 +228,7 @@ export {
   SPILL_RETRIEVAL_HINT,
 } from './spill-policy.js';
 
-export {
-  continuationFooter,
-  createReadContinuationMiddleware,
-  READ_CONTINUATION_MIDDLEWARE_NAME,
-  recordReadExtent,
-} from './read-continuation.js';
+export { continuationFooter, READ_CONTINUATION_MIDDLEWARE_NAME } from './read-continuation.js';
 export type {
   DiffResultMeta,
   FileDiff,
