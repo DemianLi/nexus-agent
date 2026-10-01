@@ -2,14 +2,14 @@ import { emptyConversation, INBOX, reduceConversation } from '@nexus/wire';
 import type { ConversationState, Event, WireQueuedInput } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
-import { SETTLED_NOTICE_TEXT } from '@/lib/queue-view';
+import { AGENT_MESSAGE_QUEUED_TEXT, SETTLED_NOTICE_TEXT } from '@/lib/queue-view';
 
 import {
   PARKED_STEER_TEXT,
   PENDING_STEER_TEXT,
   pendingSteers,
   pendingSteerText,
-  settledNoticeText,
+  pendingAgentText,
 } from './steer-view';
 
 let seq = 0;
@@ -33,7 +33,7 @@ const second: WireQueuedInput = { id: 'run-b', text: '那個檔先別動', sourc
 describe('pendingSteers（#710）', () => {
   it('照送出的先後列出排著的插話；排隊的那條不算', () => {
     const state = fold(inboxFrame({ items: [second], nextStep: [first] }));
-    expect(pendingSteers(state)).toEqual([{ key: 'inbox:run-a', text: '改用 X', settled: false }]);
+    expect(pendingSteers(state)).toEqual([{ key: 'inbox:run-a', text: '改用 X' }]);
   });
 
   it('鍵就是領走之後那則人的話的 id：換成正式的是同一格', () => {
@@ -87,9 +87,9 @@ describe('背景子代理的結算通知排在插話那一條（#851）', () => 
 
   it('列進來但標成通知：畫面不能把給模型的英文畫成人的泡泡', () => {
     const state = fold(inboxFrame({ items: [], nextStep: [first, notice] }));
-    expect(pendingSteers(state).map(({ key, settled }) => ({ key, settled }))).toEqual([
-      { key: 'inbox:run-a', settled: false },
-      { key: 'inbox:settled-a', settled: true },
+    expect(pendingSteers(state).map(({ key, agentText }) => ({ key, agentText }))).toEqual([
+      { key: 'inbox:run-a' },
+      { key: 'inbox:settled-a', agentText: SETTLED_NOTICE_TEXT },
     ]);
   });
 
@@ -113,12 +113,33 @@ describe('背景子代理的結算通知排在插話那一條（#851）', () => 
   });
 });
 
-describe('settledNoticeText（#851）', () => {
-  it('說背景子代理已完成，這一輪還在是下一步、停了是下一輪，跟插話同一條線', () => {
-    expect(settledNoticeText('running')).toBe(`${SETTLED_NOTICE_TEXT}・下一步送進模型`);
-    expect(settledNoticeText('awaiting-input')).toBe(`${SETTLED_NOTICE_TEXT}・下一步送進模型`);
+describe('背景子代理的來信排在插話那一條（#861）', () => {
+  const relay: WireQueuedInput = {
+    id: 'relay-a',
+    text: 'Agent root/bg-1 sent a message: 三個檔案看過了',
+    source: { kind: 'agent-message' },
+  };
+
+  it('標成來信：畫面不能把給模型的英文（帶前綴）畫成人的泡泡', () => {
+    const state = fold(inboxFrame({ items: [], nextStep: [relay] }));
+    expect(pendingSteers(state)).toEqual([
+      { key: 'inbox:relay-a', text: relay.text, agentText: AGENT_MESSAGE_QUEUED_TEXT },
+    ]);
+  });
+});
+
+describe('pendingAgentText（#851、#861）', () => {
+  it('這一輪還在是下一步、停了是下一輪，跟插話同一條線', () => {
+    expect(pendingAgentText(SETTLED_NOTICE_TEXT, 'running')).toBe(
+      `${SETTLED_NOTICE_TEXT}・下一步送進模型`,
+    );
+    expect(pendingAgentText(AGENT_MESSAGE_QUEUED_TEXT, 'awaiting-input')).toBe(
+      `${AGENT_MESSAGE_QUEUED_TEXT}・下一步送進模型`,
+    );
     for (const status of ['idle', 'stopped', 'failed'] as const) {
-      expect(settledNoticeText(status)).toBe(`${SETTLED_NOTICE_TEXT}・下一輪送進模型`);
+      expect(pendingAgentText(SETTLED_NOTICE_TEXT, status)).toBe(
+        `${SETTLED_NOTICE_TEXT}・下一輪送進模型`,
+      );
     }
   });
 });

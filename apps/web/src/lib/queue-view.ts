@@ -29,11 +29,36 @@ export const QUEUE_GONE_TEXT = '這一則可能已經開始跑了';
 export const SETTLED_NOTICE_TEXT = '背景子代理已完成';
 
 /**
- * 這一件是不是背景子代理結算的通知，而不是人排的（#851）。**只認這一種來源，其餘照人處理**：舊的一側沒有 `source`
- * 之外的成員，新增的來源要各自決定怎麼畫，不在這裡預設。
+ * 背景子代理寄來的話在佇列裡那一句（#861）。排進來的文字是給模型的（帶英文前綴），佇列裡也沒有寄件人，所以不照抄：
+ * 只說「有一則來信」；寄件人與內容等它被領走、折疊器長出 `AgentMessageEntry` 才畫在對話裡。
+ */
+export const AGENT_MESSAGE_QUEUED_TEXT = '背景子代理來信';
+
+/**
+ * 這一件是不是背景子代理結算的通知，而不是人排的（#851）。
  */
 export function isSettledNotice(item: Pick<WireQueuedInput, 'source'>): boolean {
   return item.source.kind === 'subagent-settled';
+}
+
+/** 這一件是不是背景子代理寫來的話（#861）。 */
+export function isAgentMessage(item: Pick<WireQueuedInput, 'source'>): boolean {
+  return item.source.kind === 'agent-message';
+}
+
+/**
+ * 不是人排的那一類：背景子代理結算的通知、背景子代理寫來的話。**只認這兩種，其餘照人處理**：新增的來源要各自決定
+ * 怎麼畫，不在這裡預設。
+ */
+export function isQueuedByAgent(item: Pick<WireQueuedInput, 'source'>): boolean {
+  return isSettledNotice(item) || isAgentMessage(item);
+}
+
+/** 不是人排的那一件在佇列列上寫什麼；人排的沒有。 */
+export function queuedAgentText(item: Pick<WireQueuedInput, 'source'>): string | undefined {
+  if (isSettledNotice(item)) return SETTLED_NOTICE_TEXT;
+  if (isAgentMessage(item)) return AGENT_MESSAGE_QUEUED_TEXT;
+  return undefined;
 }
 
 /** 表頭：件數。 */
