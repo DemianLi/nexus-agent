@@ -738,7 +738,7 @@ function message(
  * 這條 thread 現在還掛著中斷——同一個行程裡切回來。只有 pump 知道，見 `ThreadPump.pendings`。
  */
 export interface AwaitingInput {
-  /** 停在核准閘門上的工具名，所有掛著的中斷合起來。見 {@link historyFrames}。 */
+  /** 停在核准上的工具名（核准中斷酬載的 `actionRequests[].name`），所有掛著的中斷合起來。見 {@link historyFrames}。 */
   readonly gatedTools: ReadonlySet<string>;
 }
 
@@ -747,14 +747,17 @@ export interface AwaitingInput {
  *
  * ## 停下來等人的那一輪：兩種等法畫法不同，同即時
  *
- * 即時那條只把**本體拋了中斷**的那顆畫成「等你回答」（`thread-pump.ts` 的 `classifyToolData`）：問答。子代理照 dsh
- * 不停下來等人（#324），所以 `task` 不會停在這裡。停在核准閘門上的那顆本體沒被呼叫到，卡從日誌 `tool/call` 開，
- * 一直是「執行中」——照 dsh：它的工具卡沒有「等人」那一格，核准的等待由接管輸入框的核准面板表示（#317）。
+ * 即時那條只把**本體拋了問答中斷**的那顆畫成「等你回答」（`thread-pump.ts` 的 `classifyToolData`）。子代理照 dsh
+ * 不停下來等人（#324），所以 `task` 不會停在這裡。停在核准上的那顆一直是「執行中」——照 dsh：它的工具卡沒有
+ * 「等人」那一格，核准的等待由接管輸入框的核准面板表示（#317）。核准有兩種來處，即時那條都不改卡：停在核准閘門上的
+ * 那顆本體沒被呼叫到，卡從日誌 `tool/call` 開；`request_sandbox_escalation` 在本體裡問人
+ * （[#700](https://github.com/DemianLi/nexus-agent/issues/700)），基座發的那顆帶核准中斷的 `tool-error` 由 pump 丟掉
+ * （`thread-pump.ts` 的 `isApprovalSuspension`）。
  *
- * 日誌分不出這兩種：都只留一顆沒落定的 `tool/call` 與一顆只帶 id 的 `interrupt/raised`。分得出來的是 pump 手上
+ * 日誌分不出問答與核准：都只留一顆沒落定的 `tool/call` 與一顆只帶 id 的 `interrupt/raised`。分得出來的是 pump 手上
  * 掛著的酬載，所以由它交進來 {@link AwaitingInput.gatedTools}：名字在裡面的維持執行中，其餘的畫成「等你回答」。
- * **認的是名字不是 callId**（閘門的酬載沒有 callId）：同一輪一顆同名的工具停在閘門、另一顆由本體拋了中斷，
- * 後者會被畫成執行中。今天的產品路徑走不到——本體會拋中斷的只有問答，它不過閘門。
+ * **認的是名字不是 callId**（核准的酬載沒有 callId）：同一輪一顆同名的工具停在核准、另一顆由本體拋了問答中斷，
+ * 後者會被畫成執行中。今天的產品路徑走不到——拋問答中斷的只有 `ask_user_question` 與 `exit_plan_mode`，兩顆都不問核准。
  *
  * @param events - 從一輪的開頭切下來的一段（見 {@link isPageStart}）。
  * @param awaitingInput - 有給就是這一段的最後一輪停下來等人，**而且這條 thread 現在還掛著那幾顆中斷**。那幾張卡
@@ -999,7 +1002,7 @@ export function historyFrames(
       close(last.time, { event: 'completed' });
     } else {
       for (const [callId, name] of unsettled) {
-        // 停在閘門上的那顆不發：`tool-started` 開的卡本來就是執行中，同即時。
+        // 停在核准上的那顆不發：`tool-started` 開的卡本來就是執行中，同即時。
         if (awaitingInput.gatedTools.has(name)) continue;
         frames.push(frame('tools', last.time, { event: 'tool-suspended', tool_call_id: callId }));
       }
