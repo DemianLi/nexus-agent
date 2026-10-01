@@ -13,7 +13,11 @@
  * 6. 組裝點只在 serve、有 `--workspace` 時掛。
  * 7. 工作區是 git repo 時，檔案工具以外的改動也在摘要裡（[#461](https://github.com/DemianLi/nexus-agent/issues/461)）。
  *
- * **零憑證、零外部連線**：模型是 `ScriptedChatModel`，工作區與暫存根都是暫存目錄，測試不碰真的 `~/.nexus-agent`。
+ * **走產品組裝**（#670）：agent 是 `createCliAgent`（`workspaceChanges: true`、`--workspace`、`--sandbox`）組的，改動紀錄那顆 plugin、
+ * backend、沙箱控制器都是組裝點建的，模型換成清單上的腳本提供者。暫存根產品組裝不給（預設 `os.tmpdir()`），
+ * 所以這裡把 `TMPDIR` 指到測試自己的目錄，量「暫存目錄是 0700、收掉時刪掉」。
+ *
+ * **零憑證、零外部連線**：模型是腳本，工作區與暫存根都是暫存目錄，測試不碰真的 `~/.nexus-agent`。
  */
 
 import { execFileSync } from 'node:child_process';
@@ -31,10 +35,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { tool } from '@langchain/core/tools';
-import { MemorySaver } from '@langchain/langgraph';
 import type { InvariantError, PluginEntry, SandboxMode, SessionRegistry } from '@nexus/core';
-import { createHostServicesPlugin } from '@nexus/core';
-import { createWorkspaceChanges, WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
 import type { Event } from '@nexus/wire';
 import {
   changesDiffPath,
@@ -48,20 +49,15 @@ import {
   reduceAll,
   WORKSPACE_CHANGES,
 } from '@nexus/wire';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
-import { createNexusAgent } from './agent-factory.js';
 import { createCliAgent } from './assembly-root.js';
-import { ContainedFilesystemBackend } from './contained-backend.js';
-import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
-import { createSandboxPolicyPlugin } from '@nexus/plugin-sandbox-policy';
-import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
+import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins, withScriptedModel } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
-import { composeAttachSessions } from './session-attach.js';
 
 const shipped = await shippedPlugins();
 
@@ -70,6 +66,7 @@ const THREAD_ID = 'changes';
 
 const roots: string[] = [];
 afterEach(async () => {
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 
@@ -124,28 +121,22 @@ async function run(
   const tempRoot = await directory('nexus-changes-temp-');
   for (const [name, content] of Object.entries(files)) await writeFile(join(root, name), content);
   await options.setup?.(root);
-  const sandboxMode = new SandboxModeController(options.mode ?? 'workspace-write');
-  const model = new ScriptedChatModel({ turns });
+  // 產品組裝的暫存根是 `os.tmpdir()`（`createWorkspaceChanges({ root })` 沒給 `tempRoot`），指到這一份的 `TMPDIR`
+  // 才量得到它的內容；`afterEach` 還原。
+  vi.stubEnv('TMPDIR', tempRoot);
   const violations: string[] = [];
-  const changes = createWorkspaceChanges({ root, tempRoot });
-  const built = await createNexusAgent({
-    model,
-    checkpointer: new MemorySaver(),
-    plugins: [
-      createHostServicesPlugin({ sandboxPolicy: { controller: sandboxMode, rootDir: root } }),
-      ...shipped,
-      WORKER,
-      createSandboxPolicyPlugin(),
-      ...(options.plugins ?? []),
-      changes,
-    ],
-    backend: new ContainedFilesystemBackend({
-      rootDir: root,
-      mode: sandboxMode.source,
-      grants: sandboxMode,
-    }),
-    onInvariantViolation: (error: InvariantError) => void violations.push(error.message),
-  });
+  const built = await createCliAgent(
+    {
+      live: false,
+      workspace: root,
+      sandbox: options.mode ?? 'workspace-write',
+      workspaceChanges: true,
+    },
+    withScriptedModel([...shipped, WORKER, ...(options.plugins ?? [])], turns),
+    root,
+    { onInvariantViolation: (error: InvariantError) => void violations.push(error.message) },
+  );
+  const model = built.model as ScriptedChatModel;
   let sessions: SessionRegistry | undefined;
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,
@@ -153,11 +144,10 @@ async function run(
       agent: built.agent as unknown as PumpAgent,
       commands: built.commands,
       dispose: built.dispose,
-      workspaceChanges: built.services.use(WORKSPACE_CHANGES_SERVICE),
-      attachInvariants: built.attachInvariants,
+      workspaceChanges: built.workspaceChanges,
       attachSessions: (registry, backgroundPort) => {
         sessions = registry;
-        return composeAttachSessions(built)(registry, backgroundPort);
+        return built.attachSessions(registry, backgroundPort);
       },
     }),
   });
