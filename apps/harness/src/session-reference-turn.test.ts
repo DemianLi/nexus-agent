@@ -39,6 +39,7 @@ import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent, PumpInput } from './thread-pump.js';
 import type { SessionReferenceReader } from './session-reference.js';
 import { createWireHandler } from './wire-handler.js';
+import { composeAttachSessions } from './session-attach.js';
 
 async function until(predicate: () => boolean, ms = 5000): Promise<void> {
   const start = Date.now();
@@ -524,9 +525,9 @@ describe('wire：收下那句話的時候就驗，壞的不進佇列', () => {
         stepInbox: true,
         commands: emptyCommandPoint(),
         dispose: async () => {},
-        attachSession: (sessions) => {
+        attachSessions: (sessions, backgroundPort) => {
           logOf = () => sessions.root.events;
-          return built.attachSession(sessions);
+          return composeAttachSessions(built)(sessions, backgroundPort);
         },
       }),
     });

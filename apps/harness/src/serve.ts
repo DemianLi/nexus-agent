@@ -733,9 +733,7 @@ async function startServer(
         agent,
         commands,
         dispose,
-        attachTelemetry,
-        attachInvariants,
-        attachSession,
+        attachSessions,
         feedback,
         workspaceChanges,
         goals,
@@ -772,9 +770,7 @@ async function startServer(
           await dispose();
         },
         ...(resumed !== undefined && { rootSeed: resumed.events }),
-        attachTelemetry,
-        attachInvariants,
-        attachSession,
+        attachSessions,
         // LLM 標題（#650）：沒帶 `--live` 或那一列關掉就缺席，只剩退回標題。
         ...(attachTitle !== undefined && { attachTitle }),
         // **落盤的答案不在 `createCliAgent` 的回傳值裡**，它來自呼叫方式而不是 plugin
