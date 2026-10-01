@@ -169,7 +169,7 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
   ],
   [
     '#settings/tool-text',
-    '這一列不裝任何東西，只講一段工具結果文字放上線的位元組上限。關掉它不會讓工具結果不再被截' +
+    '這一列不裝任何東西，只講工具結果 meta 與壓縮摘要放上線的位元組上限。關掉它不會讓它們不再被截' +
       '——`startupSetting` 把關掉的那一列當成沒有那一列，上限於是回到 schema 的預設，' +
       '送出去的位元組一個都不變，只會讓這份設定讀起來像關掉了什麼。',
   ],
