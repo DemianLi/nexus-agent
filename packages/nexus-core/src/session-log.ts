@@ -28,8 +28,7 @@
  *
  * 照 dsh，模型歷史由日誌推出來（`packages/core/session/src/index.ts` 的 `deriveMessages()`），推的
  * 那一側是 [#306](https://github.com/DemianLi/nexus-agent/issues/306)。所以**模型看得到的每一則
- * 訊息都要有一顆事件帶著它**：人打的字在 `turn/start`，模型回覆在 `assistant/message`，工具結果在
- * `tool/result`，外掛塞進對話的在 `user/message`，壓縮的摘要在 `compaction/summary`。**三個例外
+ * 訊息都要有一顆事件帶著它**：哪幾種事件產訊息是型別 {@link ModelVisibleEventType}，不在這裡手列。**三個例外
  * 都是基座寫的、推得回來的**：`patchToolCallsMiddleware` 替沒配到結果的呼叫補的結果（推的一側照 dsh
  * 的 `repair.ts` 自己補），過大的工具結果被搬去檔案之後換上的預覽（見 `tool/result`），過長的一則
  * 人話被標上的 `lc_evicted_to`（基座在模型那一格照記號重算，推回來的那則沒有記號就不重算——那是
@@ -905,6 +904,55 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = T exte
       readonly data: SessionEventMap[T];
     }
   : never;
+
+/**
+ * **產生模型訊息的那幾種事件**——續接時 {@link ./conversation-replay.ts | replayConversation} 從日誌推回
+ * 模型歷史，靠的就是這一份子聯集（[#681](https://github.com/DemianLi/nexus-agent/issues/681)）。
+ *
+ * 人打的字在 `turn/start`（`kind` 不是 `resume` 才有），模型回覆在 `assistant/message`，工具結果在
+ * `tool/result`，外掛塞進對話的在 `user/message`，壓縮的摘要在 `compaction/summary`。**其餘每一種都
+ * 不進模型**，各種類自己的說明（見 {@link SessionEventType}）照舊講它為什麼不進。
+ *
+ * 照 dsh 的 `SurfaceEventType`（`packages/core/session/src/types.ts:439-444`，`477b4f4`），**但不照它的
+ * 名字**：dsh 的成員要帶 `surfaceOp`，我們沒有那一軸（不做它是縮小範圍，不是表達不出來），叫
+ * `SurfaceEventType` 會讓人以為有。**封閉**，同 dsh：其他套件日後補進來的種類只會走到守衛的另一支。
+ *
+ * 加一種會進模型的事件要同時動三處，缺一處都編不過：這個聯集、{@link MODEL_VISIBLE_EVENT_TYPES}
+ * 那張表、replay 守衛之內的 `switch`（它的 `default` 是 `satisfies never`）。
+ *
+ * `image/offload`（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）在 dsh 不是產訊息的那一類，
+ * 而是進模型的**效果**要另寫解譯器的事件（`known-event-types.ts:84-87`）。它落地時寫明走哪一支：
+ * 讀碼推得，續接時推回歷史要重現那次省略，不然重啟後模型又看到原本那張圖。
+ */
+export type ModelVisibleEventType =
+  'turn/start' | 'assistant/message' | 'tool/result' | 'user/message' | 'compaction/summary';
+
+/**
+ * {@link ModelVisibleEventType} 的執行期那一份。**逐種列出、型別綁死**（借 dsh `MESSAGE_ROLE_BY_TYPE:
+ * Record<SurfaceEventType, …>` 的形狀）：聯集多一種或少一種，這張表都編不過。
+ */
+const MODEL_VISIBLE_EVENT_TABLE = {
+  'turn/start': true,
+  'assistant/message': true,
+  'tool/result': true,
+  'user/message': true,
+  'compaction/summary': true,
+} as const satisfies Record<ModelVisibleEventType, true>;
+
+/** 會進模型的事件種類，`MODEL_VISIBLE_EVENT_TABLE` 的鍵。 */
+export const MODEL_VISIBLE_EVENT_TYPES: readonly ModelVisibleEventType[] = Object.keys(
+  MODEL_VISIBLE_EVENT_TABLE,
+) as ModelVisibleEventType[];
+
+/**
+ * 這一筆會不會進模型。**把整個詞彙收窄成子聯集**（同 dsh 的 `isSurfaceEvent`），窮舉只做在收窄之後。
+ * 整個詞彙照舊不窮舉：不認得的種類（含別的套件補進來的）回 `false`。
+ */
+export function isModelVisibleEvent(
+  event: SessionEvent,
+): event is SessionEvent<ModelVisibleEventType> {
+  return Object.hasOwn(MODEL_VISIBLE_EVENT_TABLE, event.type);
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null) return false;

@@ -6,12 +6,11 @@
  * 2026-09-01，版本 `0a53fb55bea101816fa226bb964ae2bed71c343b`）。
  *
  * **為什麼詞彙在這裡而工具在 plugin：同 {@link ./goal.ts | goal.ts} 那一條。**
- * {@link ./session-log.ts | SessionEventMap} 是一個**封閉**的映射，`todo/write` 的酬載
- * 型別要寫得出來就得住在這裡；工具、驗證與不變量住在 `@nexus/plugin-todo`。dsh 那邊靠
- * 宣告合併（`declare module '@deepseek-ai/dsh-session/types'`）把事件種類從 todo 套件
- * 那側加進來——**我們的 `SessionEventType` 是手寫的封閉 union，合併進不去**。這是形狀
- * 差異不是偏離，代價與理由見 `session-log.ts` 檔頭與
- * [#101](https://github.com/DemianLi/nexus-agent/issues/101)。
+ * `todo/write` 的酬載型別今天住在這裡，是因為 {@link ./session-log.ts | SessionEventMap}
+ * 目前把它列在 core 裡；工具、驗證與不變量住在 `@nexus/plugin-todo`。dsh 的做法是由擁有者
+ * 套件用宣告合併（`declare module '@deepseek-ai/dsh-session/types'`）把事件種類與酬載補進
+ * 去，**我們的 `SessionEventMap` 已經是 interface，這件事做得到，只是還沒做**——照 dsh
+ * 這個詞彙該由 todo 這一側宣告，見 [#679](https://github.com/DemianLi/nexus-agent/issues/679)。
  *
  * @see [#132](https://github.com/DemianLi/nexus-agent/issues/132)
  * @module

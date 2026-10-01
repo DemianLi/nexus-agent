@@ -18,7 +18,8 @@ import {
 import type { ConversationReplay } from './conversation-replay.js';
 import type { GoalId } from './goal.js';
 import { toLoggedMessage } from './logged-message.js';
-import { SessionLog } from './session-log.js';
+import { isModelVisibleEvent, MODEL_VISIBLE_EVENT_TYPES, SessionLog } from './session-log.js';
+import type { SessionEvent } from './session-log.js';
 import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN, toolErrorOf } from './tool-events.js';
 import { INTERRUPTED_REPLY_MARKER } from './turn-cancel.js';
 
@@ -158,8 +159,53 @@ describe('每一種產訊息的事件', () => {
     chat(log, '嗨', '你好');
     log.append('todo/write', { todos: [] });
     log.append('model/usage', { inputTokens: 1, outputTokens: 1, totalTokens: 2 });
+    // 兩種標題事件（#647、#650）只進日誌：加進去之後推出來的串不變（#681）。
+    log.append('session/title', {
+      title: '打招呼',
+      messageSeqs: [0],
+      source: { kind: 'fallback' },
+    });
+    log.append('session/title-llm-request', {
+      titleProvider: 'p',
+      messageSeqs: [0],
+      route: { provider: 'p', model: 'm' },
+      system: 's',
+      messages: [{ role: 'user', content: '嗨' }],
+      maxTokens: 32,
+    });
 
     expect(shape(replayConversation(log.events))).toEqual(['human:嗨', 'ai:你好']);
+  });
+});
+
+describe('哪幾種事件進模型（#681）', () => {
+  it('恰好五種：turn/start、assistant/message、tool/result、user/message、compaction/summary', () => {
+    expect([...MODEL_VISIBLE_EVENT_TYPES].sort()).toEqual([
+      'assistant/message',
+      'compaction/summary',
+      'tool/result',
+      'turn/start',
+      'user/message',
+    ]);
+  });
+
+  it('守衛對只記日誌的種類為假，對進模型的為真', () => {
+    const log = new SessionLog('replay');
+    // `model/usage` 留在 core、不會被搬走（#679 第 4 步），拿它當「不進模型」的代表。
+    log.append('model/usage', { inputTokens: 1, outputTokens: 1, totalTokens: 2 });
+    log.append('turn/start', { kind: 'message', text: '嗨' });
+    expect(log.events.map((event) => isModelVisibleEvent(event))).toEqual([false, true]);
+  });
+
+  it('不認得的種類（別的套件補進來的）不進模型，也不炸', () => {
+    const unknown = {
+      type: 'plugin-x/custom',
+      seq: 0,
+      time: 0,
+      data: {},
+    } as unknown as SessionEvent;
+    expect(isModelVisibleEvent(unknown)).toBe(false);
+    expect(shape(replayConversation([unknown]))).toEqual([]);
   });
 });
 

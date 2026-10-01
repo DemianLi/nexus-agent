@@ -413,6 +413,7 @@ export {
 
 export type {
   LogicalTurnStartEvent,
+  ModelVisibleEventType,
   SessionEvent,
   SessionEventMap,
   SessionEventType,
@@ -430,6 +431,8 @@ export {
   currentTurnStart,
   hasUnansweredInterrupt,
   isLogicalTurnStart,
+  isModelVisibleEvent,
+  MODEL_VISIBLE_EVENT_TYPES,
   SessionLog,
 } from './session-log.js';
 
