@@ -8,9 +8,16 @@
  * 一種機制，不是兩種。
  *
  * **放在清單最前面。** 載入是一趟到底的（見 `ServiceRegistrationPoint` 的偏離登記），
- * 而消費者讀取服務的時刻不一樣——`@nexus/plugin-submit-record` 與 harness 的
- * `sandbox-policy` 在自己的 `apply` 當下就讀，`@nexus/plugin-ask-user` 到工具被叫的時候
- * 才讀。排最前面三種都對；排在後面前兩種會拿不到。
+ * 而消費者讀取服務的時刻不一樣：
+ *
+ * - **在自己的 `apply` 當下讀**：`@nexus/plugin-sandbox-policy`（`use`）、`@nexus/plugin-system-prompt`
+ *   （`use`）、`@nexus/plugin-ask-user` 與 `@nexus/plugin-plan-mode`（`get` 加預設）。排在後面的話
+ *   `use` 當場拋、`get` 靜靜拿到預設。
+ * - **在工具被叫時才讀**：`@nexus/plugin-present` 與 `@nexus/plugin-submit-record` 讀的 `fs`
+ *   （[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。順序對它們不承重。
+ *
+ * 排最前面兩種都對。出貨清單上的列在 `apply` 當下讀的服務都由這裡提供，守它的是
+ * `apps/harness/src/shipped-service-reads.test.ts`。
  *
  * @module
  */
