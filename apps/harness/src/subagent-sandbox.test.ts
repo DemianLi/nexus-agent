@@ -1,4 +1,10 @@
 /**
+ * **手搭組裝（#670）**：這一檔有 `fence: true` 的案例留在手搭那一份（`assemble`），產品組裝組不出來：它們用 `flipPlugin`
+ * 在子代理跑到一半時對**測試握著的那顆控制器**呼叫 `switchTo`，或讀 `peekGrant()`／`current`；產品的控制器建在
+ * 組裝點裡，測試拿不到，`/sandbox` 又只能在兩輪之間下、抓不到「子代理還在跑」那一刻。**沒給 `--workspace`
+ * 的案例**（沒有 backend、沒有沙箱 plugin）不碰控制器，走產品組裝（`assembleUnfenced`：`createCliAgent` ＋ 出貨清單 ＋
+ * 清單上的腳本提供者）。
+ *
  * 子代理照委派那一刻的沙箱模式判，而且碰不到 root 的 grant 與 denial——[#326](https://github.com/DemianLi/nexus-agent/issues/326)
  * 的驗收。
  *
@@ -26,6 +32,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
+import { createCliAgent } from './assembly-root.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import type { SandboxMode } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
@@ -36,10 +43,13 @@ import {
 } from '@nexus/plugin-sandbox-policy';
 import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import { createSandboxPolicyPlugin, sandboxPolicySentence } from '@nexus/plugin-sandbox-policy';
+import { shippedPlugins, withScriptedModel } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedToolCall, ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
+
+const shipped = await shippedPlugins();
 
 const WORKER: PluginEntry = {
   plugin: {
@@ -152,51 +162,54 @@ describe('子代理的沙箱模式', () => {
   });
 
   /**
-   * 照 `assembly-root.ts` 的接法組起來。`fence: false` 是沒給 `--workspace` 的組裝：沒有 backend、沒有沙箱 plugin。
-   * 核准管道照產品路徑提供（有 checkpointer，所以是有人在）：升級從 #700 起在工具本體裡讀它，讀不到就 fail-closed。
+   * 照 `assembly-root.ts` 的接法組起來（有 `--workspace` 的那一種）。核准管道照產品路徑提供（有 checkpointer，所以是有人在）：
+   * 升級從 #700 起在工具本體裡讀它，讀不到就 fail-closed。
    */
-  async function assemble(
-    mode: SandboxMode,
-    turns: readonly ScriptedTurn[],
-    options: { fence?: boolean } = {},
-  ) {
+  async function assemble(mode: SandboxMode, turns: readonly ScriptedTurn[]) {
     const controller = new SandboxModeController(mode);
     const model = new ScriptedChatModel({ turns });
-    const fence = options.fence !== false;
     const built = await createNexusAgent({
       model,
       checkpointer: new MemorySaver(),
       plugins: [
-        ...(fence
-          ? [
-              createHostServicesPlugin({
-                channel: { kind: 'human' },
-                sandboxPolicy: { controller, rootDir: root },
-              }),
-            ]
-          : []),
+        createHostServicesPlugin({
+          channel: { kind: 'human' },
+          sandboxPolicy: { controller, rootDir: root },
+        }),
         WORKER,
         flipPlugin(controller),
-        ...(fence ? [createSandboxPolicyPlugin()] : []),
+        createSandboxPolicyPlugin(),
       ],
-      ...(fence && {
-        backend: new ContainedFilesystemBackend({
-          rootDir: root,
-          mode: controller.source,
-          grants: controller,
-        }),
+      backend: new ContainedFilesystemBackend({
+        rootDir: root,
+        mode: controller.source,
+        grants: controller,
       }),
     });
     return { ...built, controller, model };
   }
 
+  /**
+   * **產品組裝，沒給 `--workspace`**（#670）：沒有 backend、沒有沙箱 plugin，產品組裝正是這樣，所以不必手搭。
+   * 腳本裡不能有 `flip`——這一種組裝沒有控制器可切。
+   */
+  async function assembleUnfenced(turns: readonly ScriptedTurn[]) {
+    const built = await createCliAgent(
+      { live: false },
+      withScriptedModel([...shipped, WORKER], turns),
+      root,
+    );
+    return { ...built, model: built.model as ScriptedChatModel };
+  }
+
   /** 真的 pump 跑一輪到收尾——看得到每一份會話日誌，serve 那條路的形狀。 */
-  async function runWithLogs(
-    mode: SandboxMode,
-    turns: readonly ScriptedTurn[],
-    options: { fence?: boolean } = {},
-  ) {
-    const built = await assemble(mode, turns, options);
+  async function drive<
+    B extends {
+      agent: unknown;
+      attachSession: (sessions: ThreadPump['sessions']) => () => void;
+      dispose: () => Promise<void>;
+    },
+  >(built: B) {
     const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'subagent-sandbox');
     const detach = built.attachSession(pump.sessions);
     const frames: Event[] = [];
@@ -229,6 +242,11 @@ describe('子代理的沙箱模式', () => {
       },
     };
   }
+
+  const runWithLogs = async (mode: SandboxMode, turns: readonly ScriptedTurn[]) =>
+    drive(await assemble(mode, turns));
+  const runUnfenced = async (turns: readonly ScriptedTurn[]) =>
+    drive(await assembleUnfenced(turns));
 
   /**
    * **子代理的模型請求也帶沙箱政策句，講的是委派那一格**（[#327](https://github.com/DemianLi/nexus-agent/issues/327)）。
@@ -263,11 +281,11 @@ describe('子代理的沙箱模式', () => {
   });
 
   it('沒掛沙箱 plugin 的組裝（沒給 `--workspace`），子代理請求裡沒有政策句', async () => {
-    const run = await runWithLogs(
-      'read-only',
-      [delegate, { content: '子代理收工。' }, { content: '根收工。' }],
-      { fence: false },
-    );
+    const run = await runUnfenced([
+      delegate,
+      { content: '子代理收工。' },
+      { content: '根收工。' },
+    ]);
     try {
       const subagentPrompts = run.model.prompts.filter(isSubagentPrompt);
       expect(subagentPrompts).toHaveLength(1);
@@ -334,11 +352,11 @@ describe('子代理的沙箱模式', () => {
   }, 20000);
 
   it('沒給 --workspace 的組裝：子代理的日誌一顆 `sandbox/mode` 都沒有', async () => {
-    const run = await runWithLogs(
-      'workspace-write',
-      [delegate, { content: '子代理收工。' }, { content: '根收工。' }],
-      { fence: false },
-    );
+    const run = await runUnfenced([
+      delegate,
+      { content: '子代理收工。' },
+      { content: '根收工。' },
+    ]);
     try {
       // 前提：子代理的日誌真的開了。
       expect(run.sandboxEvents('subagent')).toHaveLength(1);
