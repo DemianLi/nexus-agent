@@ -39,6 +39,7 @@ import { ScriptedChatModel } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+import { composeAttachSessions } from './session-attach.js';
 
 const BASE_URL = 'http://pending-replay.test';
 const ALL: readonly WireChannel[] = ['messages', 'tools', 'lifecycle', 'input'];
@@ -292,7 +293,7 @@ async function wire() {
       agent: built.agent as unknown as PumpAgent,
       commands: emptyCommandPoint(),
       // 沒接的話日誌裡沒有模型與工具的事件，歷史折出來只剩使用者那句——重新整理量不到真的那一頁。
-      attachSession: built.attachSession,
+      attachSessions: composeAttachSessions(built),
       dispose: built.dispose,
     }),
   });

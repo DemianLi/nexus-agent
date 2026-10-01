@@ -1013,15 +1013,8 @@ async function runLaunched(
         ? undefined
         : await restoreConversation(built.agent, THREAD_ID, resumed.events);
     // REPL 是一條連續對話，一份日誌就是整個 session，所以接線點在這裡而不是每輪。
-    // 回傳的 detach 不留：`dispose()` 會把還接著的協調器一起收掉。
-    built.attachTelemetry(built.sessions);
-    // 不變量的 runner 只是一個訂閱，沒有要排空的東西，所以 detach 也不留——行程走了它就沒了。
-    built.attachInvariants(built.sessions);
-    // **接在不變量之後**：參與者拿得到的是可寫的日誌，所以它一裝上去就可能記東西，
-    // 而那些東西該被已經在看的檢查看到。順序反過來的話，安裝期寫的第一批事件會漏檢。
-    // 同一條順序對 subagent 那些後來才出生的日誌也成立——註冊表通知訂閱者的順序就是
-    // 這三行接上去的順序。
-    built.attachSession(built.sessions);
+    // 回傳的把手不留：`dispose()` 會把還接著的協調器一起收掉，不變量的 runner 只是一個訂閱，行程走了它就沒了。
+    built.attachSessions(built.sessions);
   } catch (error) {
     await resumed?.stored.close().catch(() => {});
     throw error;

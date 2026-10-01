@@ -28,6 +28,7 @@ import { StateBackend } from 'deepagents';
 import { z } from 'zod';
 import { BrowserAuth } from './browser-auth.js';
 import { loadPluginConfig } from './plugin-config.js';
+import type { AttachSessions } from './session-attach.js';
 
 /**
  * 出貨那份清單，載一次就快取。
@@ -89,6 +90,13 @@ export function withSystemPromptVariables(plugins: readonly PluginEntry[]): Plug
  *
  * @returns 一個空的註冊點，只露出這條線用得到的兩支。
  */
+/**
+ * 「這條 thread 什麼都不接」：手搭 `ThreadAgent` 的測試用，它的 agent 是腳本或替身，與會話消費者無關。
+ * **要量遙測、不變量或參與者的測試不該用它**，用 `createCliAgent` 回傳的 `attachSessions`
+ * （[#668](https://github.com/DemianLi/nexus-agent/issues/668)：`ThreadAgent` 上這一格必填，漏接不再是靜默的）。
+ */
+export const noSessions: AttachSessions = () => ({ detach: async () => {} });
+
 export function emptyCommandPoint(): Pick<CommandRegistrationPoint, 'find' | 'list'> {
   return createRegistry().commands;
 }

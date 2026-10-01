@@ -346,12 +346,37 @@ describe('/feedback', () => {
           commandId: 'c1',
           rawInput: '   ',
           signal: new AbortController().signal,
+          sessionLog: new SessionLog('feedback-root'),
           steer: () => undefined,
         }),
       ).toEqual({
         kind: 'error',
         text: FEEDBACK_USAGE,
       });
+    } finally {
+      run.unbind();
+      await run.dispose();
+    }
+  });
+
+  it('記在執行器交來的那份日誌上；plugin 不是 sessions 參與者（#688）', async () => {
+    const run = await assemble();
+    try {
+      // 只掛 feedback 的組裝上沒有任何 sessions 參與者：命令不必自己追日誌。
+      expect(run.detachers).toEqual([]);
+      const log = new SessionLog('feedback-root');
+      const result = await run.registry.commands.find('feedback')!.handler({
+        commandId: 'c1',
+        rawInput: '回答錯了',
+        signal: new AbortController().signal,
+        sessionLog: log,
+        steer: () => undefined,
+      });
+      expect(result).toEqual({
+        kind: 'success',
+        text: '已記下對這個會話的回饋（feedback-root）。',
+      });
+      expect(log.events.filter((event) => event.type === 'feedback/record')).toHaveLength(1);
     } finally {
       run.unbind();
       await run.dispose();

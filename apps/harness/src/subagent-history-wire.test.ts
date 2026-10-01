@@ -27,6 +27,7 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler, WireHandlerOptions } from './wire-handler.js';
+import { composeAttachSessions } from './session-attach.js';
 
 let dir: string;
 const opened: WireHandler[] = [];
@@ -116,7 +117,7 @@ async function assemble(extra: Partial<WireHandlerOptions> = {}) {
         agent: built.agent as unknown as PumpAgent,
         commands: emptyCommandPoint(),
         dispose: () => built.dispose(),
-        attachSession: (registry, port) => built.attachSession(registry, port),
+        attachSessions: composeAttachSessions(built),
       };
     },
     ...extra,

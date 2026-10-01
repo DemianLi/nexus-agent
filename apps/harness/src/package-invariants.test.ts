@@ -42,7 +42,6 @@ const EXPECTED_OWNERS = [
   '@nexus/plugin-system-prompt',
   '@nexus/plugin-telemetry-otel',
   '@nexus/plugin-todo',
-  '@nexus/plugin-validation',
   '@nexus/plugin-workspace-changes',
   '@nexus/wire',
 ];

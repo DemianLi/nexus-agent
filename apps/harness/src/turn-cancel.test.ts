@@ -25,7 +25,7 @@ import { createWireClient } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
-import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
+import { emptyCommandPoint, loopbackRequest, noSessions, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
@@ -354,6 +354,7 @@ describe('線上', () => {
         created += 1;
         return {
           agent: built.agent as unknown as PumpAgent,
+          attachSessions: noSessions,
           commands: emptyCommandPoint(),
           dispose: () => built.dispose(),
         };

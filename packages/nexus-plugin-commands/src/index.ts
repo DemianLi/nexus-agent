@@ -266,6 +266,7 @@ export function createCommandExecutor(options: CommandExecutorOptions): CommandE
           commandId,
           rawInput: parsed.rawInput,
           signal,
+          sessionLog,
           steer,
         });
         result = normalizeResult(parsed.name, await withAbort(Promise.resolve(returned), signal));

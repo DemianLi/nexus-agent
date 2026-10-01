@@ -30,6 +30,7 @@ import { historyPage } from './conversation-history.js';
 import {
   emptyCommandPoint,
   loopbackRequest,
+  noSessions,
   shippedPlugins,
   TEST_BROWSER_AUTH,
 } from './fixtures.js';
@@ -223,10 +224,10 @@ describe('寫不進去只講一聲，那一輪照跑（同 dsh `onUserMessage` �
         agent: built.agent as unknown as PumpAgent,
         commands: emptyCommandPoint(),
         dispose: async () => built.dispose(),
-        attachSession: (sessions) => {
+        attachSessions: (sessions) => {
           rootLog = sessions.root;
           breakTitleWrites(sessions.root);
-          return () => {};
+          return { detach: async () => {} };
         },
       }),
     });
@@ -359,6 +360,7 @@ describe('上限從組裝一路傳到用的那一刻', () => {
         ...(limits !== undefined && { threadTitleLimits: limits }),
         createAgent: async () => ({
           agent: idle,
+          attachSessions: noSessions,
           commands: emptyCommandPoint(),
           dispose: async () => undefined,
           rootSeed: old.events,

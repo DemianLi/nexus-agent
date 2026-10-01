@@ -44,6 +44,7 @@ import {
   approvalToolNames,
   emptyCommandPoint,
   loopbackRequest,
+  noSessions,
   TEST_BROWSER_AUTH,
 } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -124,6 +125,7 @@ async function open(threadId: string, tools: readonly string[]): Promise<Session
     auth: TEST_BROWSER_AUTH,
     createAgent: async () => ({
       agent: built.agent as unknown as PumpAgent,
+      attachSessions: noSessions,
       commands: emptyCommandPoint(),
       dispose: built.dispose,
     }),
