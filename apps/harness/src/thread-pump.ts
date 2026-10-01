@@ -102,6 +102,7 @@ import {
 } from '@nexus/wire';
 import type { SubagentStatusPayload } from '@nexus/wire';
 
+import { RootGoal } from './goal-wire.js';
 import {
   contextMeasureData,
   deliverablesData,
@@ -900,6 +901,11 @@ export class ThreadPump {
    */
   readonly #totals = new SessionTotals();
   /**
+   * root 日誌的目標（[#897](https://github.com/DemianLi/nexus-agent/issues/897)）：從日誌開頭折起，輪數靠 `turn/start{kind:'goal'}`
+   * 推進，所以不像標題或計劃模式一顆事件就算得出值。跟 {@link ThreadPump.#totals} 同樣是 pump 記著的投影狀態。
+   */
+  readonly #goal = new RootGoal();
+  /**
    * 排著、還沒開跑的事。**一個 thread 一次只跑一件**；後到的排隊，不平行跑。
    *
    * 挑下一件的規則在 {@link ThreadPump.#nextIndex}：答覆先跑；還有中斷掛著、又沒有答覆排著的時候，
@@ -996,6 +1002,10 @@ export class ThreadPump {
         // 總帳只剩這個行程叫的那幾次。**跟訂閱在同一個同步段裡**，中間沒有空檔讓一顆事件兩邊都沒算到或兩邊都算到。
         this.#totals.seed(entry.log.events);
         this.#totals.flush();
+        // 目標同理：那一段的值由歷史的最後一頁送，即時只送之後的變化。
+        this.#goal.seed(entry.log.events);
+        this.#goal.flush();
+        this.#reportGoalFailure();
       }
       unsubscribes.push(entry.log.subscribe((event) => this.#noteLogEvent(entry, event)));
     });
@@ -2251,6 +2261,19 @@ export class ThreadPump {
   }
 
   /**
+   * 目標的折疊折壞了（接不上的變更、不屬於目前目標的續行輪次）：講一行 warn，**只講一次**。投影從此停在最後一個好的
+   * 值（`goal-wire.ts`）；日誌那一側的違規由 goal 的配套入口報，這裡報的是「畫面上的目標不再更新」。
+   */
+  #reportGoalFailure(): void {
+    const failure = this.#goal.takeFailure();
+    if (failure !== undefined) {
+      this.#warn?.(
+        `[目標] thread ${this.#threadId} 的目標折不下去，畫面上的目標停在最後一個好的值：${failure}`,
+      );
+    }
+  }
+
+  /**
    * 日誌的訂閱者（#296、#297）。
    *
    * **這裡跑在寫日誌那一層的呼叫堆疊上**（圍堵的 `wrapToolCall`），而且在發佈期間——不能 `append`
@@ -2260,6 +2283,9 @@ export class ThreadPump {
     // 會話累計（#574）：只收 root 的，同 dsh 的 `tokenUsage`／`sessionStats`；子代理是另一份日誌。值變了才送。
     if (entry.address.kind === 'root') {
       for (const data of this.#totals.apply(event)) this.#presentCustom(data);
+      const goal = this.#goal.apply(event);
+      if (goal !== undefined) this.#presentCustom(goal);
+      this.#reportGoalFailure();
     }
     if (event.type === 'tool/call') this.#openCard(entry.address, event.data);
     else if (event.type === 'tool/result') this.#noteVerdict(event, entry.address);
