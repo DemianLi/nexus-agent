@@ -88,6 +88,7 @@ async function build(options: {
   readonly portOverrides?: Partial<GoalDriverPort>;
 }): Promise<{
   pump: ThreadPump;
+  goals: GoalServices;
   port: ReturnType<typeof portFor>;
   state: ScriptedModelState;
   violations: string[];
@@ -109,11 +110,8 @@ async function build(options: {
   });
   // 同 `wire-handler.ts`：port 要日誌，而日誌由 pump 建，而 pump 的建構參數是 port。
   const late: { log?: SessionLog } = {};
-  const port = portFor(
-    services.use(GOALS_SERVICE),
-    () => late.log as SessionLog,
-    options.portOverrides ?? {},
-  );
+  const goals = services.use(GOALS_SERVICE);
+  const port = portFor(goals, () => late.log as SessionLog, options.portOverrides ?? {});
   const pump = new ThreadPump(
     agent as unknown as PumpAgent,
     options.threadId,
@@ -126,6 +124,7 @@ async function build(options: {
   const detachSession = attachSession(pump.sessions);
   return {
     pump,
+    goals,
     port,
     state,
     violations,
@@ -395,6 +394,90 @@ describe('掛了旗標', () => {
     await settle(pump);
     // 收回寫的是一輪 `resume`（帶 aborted 收尾），之後只有人說的那一句，沒有第二個續行輪。
     expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal', 'resume', 'message']);
+    await stop();
+  });
+
+  /**
+   * **`/goal` 建立或 resume 之後立刻排第 1 輪，不必等人再講一句話**（[#661](https://github.com/DemianLi/nexus-agent/issues/661)）。
+   *
+   * 斜線命令走 `wire-handler` 的執行器、不經過 pump，所以這裡直接呼叫命令背後的那個服務（`/goal` 就是它）：
+   * 一輪人話都沒有，pump 靠 root 日誌上的 `goal/change` 知道目標變了。以前這條只有「一件工作收尾」一個觸發點，
+   * 這一條會停在 `['…']` 空的那裡。
+   */
+  it('建立目標之後不送任何話，第 1 輪續行自己開始', async () => {
+    const { pump, goals, state, stop } = await build({
+      turns: [QUIET],
+      threadId: 'driver-command-create',
+      withDriver: true,
+    });
+    goals.serviceFor(pump.sessionLog)?.create({ objective: '把 CI 修綠', maxGoalRounds: 1 });
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['goal']);
+    expect(state.prompts).toHaveLength(1);
+    await stop();
+  });
+
+  it('建立後立刻暫停：一輪都不排；resume 之後第 1 輪自己開始', async () => {
+    const { pump, goals, port, stop } = await build({
+      turns: [QUIET],
+      threadId: 'driver-command-resume',
+      withDriver: true,
+    });
+    const service = goals.serviceFor(pump.sessionLog);
+    const ref = () => {
+      const view = port.goal();
+      if (view === undefined) throw new Error('目標不在');
+      return { id: view.id, revision: view.revision };
+    };
+    // 同一個 tick 裡建立又暫停：延後的那一問看到的已經是暫停，不排。
+    service?.create({ objective: '把 CI 修綠', maxGoalRounds: 1 });
+    service?.pause(ref());
+    await settle(pump);
+    // 對照：暫停不是排輪的理由，也沒有授權。
+    expect(startKinds(pump.sessionLog)).toEqual([]);
+
+    service?.resume(ref());
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['goal']);
+    await stop();
+  });
+
+  /**
+   * **兩次目標變更挨在一起、`flush()` 又慢，也只排一輪。** 兩個「問排程器」可能同時在 `flush()` 的 await 裡，各自
+   * 看到「該排第 1 輪」；擋住第二次的是排出去之後的那道 `this.running` 檢查。
+   *
+   * ⚠️ 這一條**沒有一個專門的守衛可以突變**（拿掉 `#driveGoalRound` 上多加的「同時只一個在問」旗標，它照綠），
+   * 它釘的是結果：連續兩顆 `goal/change` 不會排出兩輪。
+   */
+  it('目標連改兩次、flush 很慢：只排一輪', async () => {
+    const { pump, goals, port, stop } = await build({
+      turns: [QUIET, QUIET],
+      threadId: 'driver-command-burst',
+      withDriver: true,
+      portOverrides: { flush: () => new Promise((resolve) => setTimeout(resolve, 30)) },
+    });
+    const service = goals.serviceFor(pump.sessionLog);
+    service?.create({ objective: '把 CI 修綠', maxGoalRounds: 1 });
+    // 等第一個問在 flush 裡，再改一次目標（又一顆 `goal/change`）。
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const view = port.goal();
+    if (view === undefined) throw new Error('目標不在');
+    service?.edit({ id: view.id, revision: view.revision }, { objective: '把 CI 修得更綠' });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['goal']);
+    await stop();
+  });
+
+  it('沒掛旗標：建立目標也不自己排', async () => {
+    const { pump, goals, stop } = await build({
+      turns: [QUIET],
+      threadId: 'driver-command-no-flag',
+      withDriver: false,
+    });
+    goals.serviceFor(pump.sessionLog)?.create({ objective: '把 CI 修綠', maxGoalRounds: 1 });
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual([]);
     await stop();
   });
 

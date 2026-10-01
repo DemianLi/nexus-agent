@@ -192,8 +192,39 @@ describe('到頂之後記的那顆 blocker', () => {
 });
 
 describe('排不出來的每一種，理由各自有名字', () => {
-  it('一輪都還沒開始', () => {
-    expect(decideGoalRound([], view())).toEqual({ kind: 'idle', reason: 'no-turn' });
+  /**
+   * **一輪都還沒開始不是排不出的理由**（[#661](https://github.com/DemianLi/nexus-agent/issues/661)）：新開的行程第一件事就打
+   * `/goal <目標>`，之後該排第 1 輪。擋住自行復活的是授權，不是「跑過沒有」。
+   */
+  it('一輪都還沒開始：已授權就排', () => {
+    const decision = decideGoalRound([], view());
+    expect(decision.kind === 'run' && decision.round.round).toBe(1);
+  });
+
+  it('一輪都還沒開始，但沒有授權：不排——續接回來的會話不會自己動起來', () => {
+    expect(decideGoalRound([], view({ activation: 'disarmed' }))).toEqual({
+      kind: 'idle',
+      reason: 'disarmed',
+    });
+  });
+
+  /**
+   * **續接回來：上一個行程的輪不算這一個行程的**（[#251](https://github.com/DemianLi/nexus-agent/issues/251)）。
+   * seed 裡那一輪是拋錯結束的；越過 `session/end-seed` 去看它的話，這裡會誤判成 `turn-failed` 而收回授權，
+   * 把剛下的 `/goal resume` 吃掉。
+   */
+  it('續接回來還沒說過話：seed 裡那些輪不算，已授權就排', () => {
+    const seeded = [
+      HUMAN,
+      ['turn/failed', { message: '上個行程掛了' }],
+      ['session/end-seed', {}],
+    ] as const;
+    const decision = decideGoalRound(logOf(seeded).events, view());
+    expect(decision.kind === 'run' && decision.round.round).toBe(1);
+    expect(decideGoalRound(logOf(seeded).events, view({ activation: 'disarmed' }))).toEqual({
+      kind: 'idle',
+      reason: 'disarmed',
+    });
   });
 
   /**
