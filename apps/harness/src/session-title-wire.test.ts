@@ -24,7 +24,8 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
-import { createCliAgent, runCli, runTurn } from './cli.js';
+import { runCli, runTurn } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { historyPage } from './conversation-history.js';
 import {
   emptyCommandPoint,

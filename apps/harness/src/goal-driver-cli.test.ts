@@ -20,15 +20,8 @@ import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
-import {
-  createCliAgent,
-  driveGoalRounds,
-  formatGoalDriverDisclosure,
-  goalDriverPort,
-  runCli,
-  runRepl,
-  runTurn,
-} from './cli.js';
+import { driveGoalRounds, runCli, runRepl, runTurn } from './cli.js';
+import { createCliAgent, formatGoalDriverDisclosure, goalDriverPort } from './assembly-root.js';
 import { parseCliArgs } from './cli.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import { ROUND_CAP_BLOCK_CODE } from './goal-driver.js';
