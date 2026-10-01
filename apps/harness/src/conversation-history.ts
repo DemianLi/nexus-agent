@@ -55,6 +55,7 @@
 import type {
   AgentMessagePayload,
   CompactionPayload,
+  CustomFrameData,
   DeliverablesPresentedPayload,
   Event,
   InboxPayload,
@@ -231,6 +232,14 @@ function isPageStart(event: SessionEvent): boolean {
  */
 function frame(method: string, time: number, data: Record<string, unknown>): Event {
   return { type: 'event', method, params: { namespace: [], timestamp: time, data } } as Event;
+}
+
+/**
+ * 一顆 `custom` frame。**歷史這一側的 `custom` frame 一律從這裡長**：`data` 只收 `@nexus/wire` 那張名字→酬載表上的
+ * 一格（[#685](https://github.com/DemianLi/nexus-agent/issues/685)），名字不在表上、或酬載形狀不對，當場編不過。
+ */
+function customFrame(time: number, data: CustomFrameData): Event {
+  return frame('custom', time, data);
 }
 
 /**
@@ -544,9 +553,6 @@ export function isTodosReset(event: SessionEvent): boolean {
   return isLogicalTurnStart(event);
 }
 
-/** 一顆 `custom` frame 的 `data`。 */
-type CustomData = { readonly name: string; readonly payload: unknown };
-
 /**
  * 會話累計的兩個投影（[#574](https://github.com/DemianLi/nexus-agent/issues/574)）：token 總帳與會話統計，從 root
  * 日誌的開頭折起。規則見 `@nexus/wire` 的 `session-totals.ts`，折疊本身在 `@nexus/core`。
@@ -566,7 +572,7 @@ export class SessionTotals {
    *
    * @param event - root 日誌的下一顆。
    */
-  apply(event: SessionEvent): CustomData[] {
+  apply(event: SessionEvent): CustomFrameData[] {
     this.seed([event]);
     return this.flush();
   }
@@ -585,8 +591,8 @@ export class SessionTotals {
   }
 
   /** 跟上一次交出去的不一樣的那幾個值，交出去之後記下來。 */
-  flush(): CustomData[] {
-    const out: CustomData[] = [];
+  flush(): CustomFrameData[] {
+    const out: CustomFrameData[] = [];
     const usage = tokenUsageUnit.view(this.#usage);
     if (
       usage.inputTokens !== this.#sentUsage.inputTokens ||
@@ -666,8 +672,7 @@ function latestPressureEvents(events: readonly SessionEvent[]): PressureEvent[] 
 }
 
 function pressureFrame(event: PressureEvent): Event {
-  return frame(
-    'custom',
+  return customFrame(
     event.time,
     event.type === 'model/usage' ? modelUsageData(event.data) : contextMeasureData(event.data),
   );
@@ -804,18 +809,13 @@ export function historyFrames(
         turnOpen = true;
         if (event.data.kind === 'subagent-settled') {
           frames.push(
-            frame(
-              'custom',
-              event.time,
-              settleNoticeData(`history-${event.seq}`, event.data.reason),
-            ),
+            customFrame(event.time, settleNoticeData(`history-${event.seq}`, event.data.reason)),
           );
         }
         // 子代理寫來的話叫醒的一輪（#863）：即時由 `claimed` 長「某某說」，歷史照即時。
         if (event.data.kind === 'agent-message') {
           frames.push(
-            frame(
-              'custom',
+            customFrame(
               event.time,
               agentMessageNoticeData(
                 `history-${event.seq}`,
@@ -844,8 +844,7 @@ export function historyFrames(
         // 輪中插進來的結算通知（#851）：即時由 `claimedNextStep` 長「通知」，歷史照即時。
         if (event.data.source.kind === 'subagent-settled') {
           frames.push(
-            frame(
-              'custom',
+            customFrame(
               event.time,
               settleNoticeData(`history-${event.seq}`, event.data.source.reason),
             ),
@@ -854,8 +853,7 @@ export function historyFrames(
         // 輪中插進來的子代理的話（#863）：即時由 `claimedNextStep` 長「某某說」，歷史照即時。
         if (event.data.source.kind === 'agent-message') {
           frames.push(
-            frame(
-              'custom',
+            customFrame(
               event.time,
               agentMessageNoticeData(
                 `history-${event.seq}`,
@@ -943,16 +941,16 @@ export function historyFrames(
       }
       case 'deliverables/presented':
         // 這裡讀的本來就只有 root 那一份，子代理的交付不在裡面——同即時那條規則。
-        frames.push(frame('custom', event.time, deliverablesData(event.data, event.seq)));
+        frames.push(customFrame(event.time, deliverablesData(event.data, event.seq)));
         break;
       case 'workspace/changes':
         // 同上：只讀 root 那一份，而記錄器本來就只寫在 root。
-        frames.push(frame('custom', event.time, workspaceChangesData(event.seq)));
+        frames.push(customFrame(event.time, workspaceChangesData(event.seq)));
         break;
       case 'compaction/summary':
         // 壓縮過這件事（#896）：位置就是日誌上的位置，在觸發它的那次呼叫的回覆之後（見 `@nexus/wire` 的 `compaction.ts`）。
         // 只讀 root 那一份，子代理壓縮是它自己那份日誌的事。
-        frames.push(frame('custom', event.time, compactionData(event, toolTextMaxBytes)));
+        frames.push(customFrame(event.time, compactionData(event, toolTextMaxBytes)));
         break;
       case 'interrupt/raised':
         interrupted = true;
@@ -996,7 +994,7 @@ export function historyFrames(
   }
   // 用量表：這一段裡各自最新的那一顆，放在最後——web 只留最新那一筆，放哪裡都一樣，放最後讀起來就是「到結尾為止」。
   frames.push(...latestPressureEvents(events).map(pressureFrame));
-  if (todos !== null) frames.push(frame('custom', todos.time, todosData(todos.list)));
+  if (todos !== null) frames.push(customFrame(todos.time, todosData(todos.list)));
   return frames;
 }
 
@@ -1145,29 +1143,29 @@ export function historyPage(
   const totals = new SessionTotals();
   totals.seed(window.slice(0, end));
   const lastTime = window[end - 1]?.time ?? 0;
-  const totalsFrames = totals.flush().map((data) => frame('custom', lastTime, data));
+  const totalsFrames = totals.flush().map((data) => customFrame(lastTime, data));
   // 送出佇列（#637）：**只在最新一頁**，而且是到 `throughSeq` 為止**目前的**清單，不是這一頁結尾的——佇列不會在一輪
   // 開頭清空，前幾頁插進來、還沒領走的只看本頁會漏掉。較舊的頁不帶：畫面往上捲時才抓它們，那時即時的推送早就換過
   // 清單，帶的話會把新的蓋回舊的。空的也送（即時清空時推的就是空的），一顆變動都沒有就不送。
   const inboxFrames =
     end === window.length && window.some((event) => event.type === 'inbox/spliced')
-      ? [frame('custom', lastTime, inboxData(foldInbox(window)))]
+      ? [customFrame(lastTime, inboxData(foldInbox(window)))]
       : [];
   // 標題（#647）：同送出佇列，**只在最新一頁**、是目前的那一個。它不在一輪開頭清空，較舊的頁帶的話會把新的蓋回舊的。
   const title = end === window.length ? threadTitleOf(window, titleLimitsOrDefault) : undefined;
-  const titleFrames = title === undefined ? [] : [frame('custom', lastTime, titleData(title))];
+  const titleFrames = title === undefined ? [] : [customFrame(lastTime, titleData(title))];
   // 計劃模式（#895）：同標題，**只在最新一頁**、是目前的值。它跨輪也跨頁，不像待辦清單在一輪開頭清空，
   // 較舊的頁帶的話會把新的蓋回舊的。日誌上一顆都沒有就不送。
   const planActive = end === window.length ? planModeOf(window) : undefined;
   const planFrames =
-    planActive === undefined ? [] : [frame('custom', lastTime, planModeData(planActive))];
+    planActive === undefined ? [] : [customFrame(lastTime, planModeData(planActive))];
   // 目標（#897）：同標題與計劃模式，**只在最新一頁**、是目前的值。清掉了送 `{ goal: null }`，一顆 `goal/change` 都沒有就
   // 不送；折壞了（接不上的變更）也不送——寫壞的日誌不該讓畫面畫出編出來的目標。
   const goal = new RootGoal();
   if (end === window.length) goal.seed(window);
   const goalFrames =
     end === window.length && goal.touched && !goal.broken
-      ? [frame('custom', lastTime, goalData(goal.value))]
+      ? [customFrame(lastTime, goalData(goal.value))]
       : [];
   const tailFrames = [
     ...totalsFrames,

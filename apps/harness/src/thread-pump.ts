@@ -100,7 +100,7 @@ import {
   SessionReferenceError,
   SUBAGENT_STATUS,
 } from '@nexus/wire';
-import type { SubagentStatusPayload } from '@nexus/wire';
+import type { CustomFrameData, SubagentStatusPayload } from '@nexus/wire';
 
 // 讀的事件種類（`todo/write`）照 dsh 由擁有者套件宣告；這一行讓編譯單位看得到那個套件補的鍵，不靠測試檔順手 import（#679）。
 import type {} from '@nexus/plugin-todo';
@@ -1327,15 +1327,7 @@ export class ThreadPump {
    */
   notifySubagentStatus(items: SubagentStatusPayload['items']): void {
     if (this.#closed) return;
-    const frame = this.#seal({
-      type: 'event',
-      method: 'custom',
-      params: {
-        namespace: [],
-        timestamp: Date.now(),
-        data: { name: SUBAGENT_STATUS, payload: { items } satisfies SubagentStatusPayload },
-      },
-    } as Event);
+    const frame = this.#customFrame({ name: SUBAGENT_STATUS, payload: { items } });
     this.#subagentStatusFrame = frame;
     this.#broadcast(frame);
   }
@@ -2335,14 +2327,20 @@ export class ThreadPump {
    * [#443](https://github.com/DemianLi/nexus-agent/issues/443)）也走這裡，`data` 與歷史那一側共用
    * {@link workspaceChangesData}。
    */
-  #presentCustom(data: { readonly name: string; readonly payload: unknown }): void {
-    this.#broadcast(
-      this.#seal({
-        type: 'event',
-        method: 'custom',
-        params: { namespace: [], timestamp: Date.now(), data },
-      } as Event),
-    );
+  #presentCustom(data: CustomFrameData): void {
+    this.#broadcast(this.#customFrame(data));
+  }
+
+  /**
+   * 封一顆 `custom` frame。**即時這一側的 `custom` frame 一律從這裡長**：`data` 只收 `@nexus/wire` 那張名字→酬載表上的
+   * 一格（[#685](https://github.com/DemianLi/nexus-agent/issues/685)），名字不在表上、或酬載形狀不對，當場編不過。
+   */
+  #customFrame(data: CustomFrameData): Event {
+    return this.#seal({
+      type: 'event',
+      method: 'custom',
+      params: { namespace: [], timestamp: Date.now(), data },
+    } as Event);
   }
 
   /**

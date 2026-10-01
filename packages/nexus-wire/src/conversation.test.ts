@@ -938,3 +938,17 @@ describe('背景子代理的歸屬（#832）', () => {
     expect(root).toMatchObject({ kind: 'tool', name: 'subagent', attribution: { kind: 'root' } });
   });
 });
+
+describe('`custom` frame 的分派（#685）', () => {
+  // 分派查的是名字→折疊那張表。**只認表自己的鍵**：`Object.prototype` 上的名字（`toString`、`constructor`
+  // ⋯⋯）也是字串，用 `in` 或直接索引查的話會拿到原型上的函式、把它當折疊叫下去，state 被換成別的東西。
+  it.each(['toString', 'constructor', 'hasOwnProperty', '__proto__', 'valueOf'])(
+    '原型上的名字 %s 也略過，state 原封不動',
+    (name) => {
+      const before = emptyConversation();
+      const after = reduceConversation(before, frame('custom', [], { name, payload: {} }));
+      expect(after.entries).toBe(before.entries);
+      expect(after).toEqual({ ...before, lastSeq: after.lastSeq });
+    },
+  );
+});

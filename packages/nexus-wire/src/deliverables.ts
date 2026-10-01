@@ -317,3 +317,10 @@ export async function decodeBinaryResult(
   if (fields.size > 0) throw new TypeError('交付檔的二進位回應：多出沒人指到的段');
   return { id: envelope.id, result };
 }
+
+// 名字→酬載表（#685）上屬於這個檔的格子，見 `custom-frame.ts`。
+declare module './custom-frame.js' {
+  interface CustomFramePayloads {
+    [DELIVERABLES_PRESENTED]: DeliverablesPresentedPayload;
+  }
+}
