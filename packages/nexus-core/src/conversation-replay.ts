@@ -6,9 +6,12 @@
  *
  * dsh 的模型歷史由日誌推出來：`Session.deriveMessages()` 逐顆走 surface 上的節點，交給
  * `deriveEventMessage` 投影（`packages/core/session/src/index.ts:832`、`surface.ts:92`，`c291e79`）。
- * **我們沒有 surface 那一軸**（每顆事件上的 `surfaceOp`），所以「哪幾種事件產訊息」照
- * {@link ./session-log.ts} 檔頭那張表判：人打的字在 `turn/start`，模型回覆在 `assistant/message`，
- * 工具結果在 `tool/result`，外掛塞進對話的在 `user/message`，壓縮的摘要在 `compaction/summary`。
+ * **我們沒有 surface 那一軸**（每顆事件上的 `surfaceOp`），所以「哪幾種事件產訊息」是型別
+ * {@link ./session-log.ts | ModelVisibleEventType}（人打的字在 `turn/start`，模型回覆在
+ * `assistant/message`，工具結果在 `tool/result`，外掛塞進對話的在 `user/message`，壓縮的摘要在
+ * `compaction/summary`），迴圈先用守衛 `isModelVisibleEvent` 分兩支：子聯集那一支逐種窮舉
+ * （`default` 是 `satisfies never`，同 dsh session-reference 的投影），其餘那一支只做記帳、
+ * `default` 照舊不管（同 dsh 的 `deriveEventMessage`，因為詞彙可以被別的套件擴充）。
  *
  * ## 推出來的串要跟 graph state 一則對一則
  *
@@ -59,6 +62,7 @@ import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 
 import { fromLoggedMessage } from './logged-message.js';
+import { isModelVisibleEvent } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
 import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN, toolFeedback } from './tool-events.js';
 
@@ -199,101 +203,111 @@ export function replayConversation(
   };
 
   for (const event of events) {
-    switch (event.type) {
-      case 'turn/start': {
-        turn = { replied: false, interrupted: false };
-        // `resume` 是回覆核准，沒有使用者說的話——送進圖的是 `Command`，不是一則訊息。
-        if (event.data.kind !== 'resume') push(from(new HumanMessage(event.data.text), event));
-        break;
-      }
-      case 'model/start': {
-        modelRan ??= event.seq;
-        break;
-      }
-      case 'assistant/message': {
-        replied = true;
-        if (turn !== undefined) turn.replied = true;
-        const message = from(fromLoggedMessage(event.data.message), event);
-        const calls = requestedCalls(message);
-        push(message);
-        if (calls.length > 0) batch = { calls, results: new Map(), started: new Set() };
-        break;
-      }
-      case 'tool/call': {
-        modelRan ??= event.seq;
-        if (batch?.calls.some((call) => call.id === event.data.callId) === true) {
-          batch.started.add(event.data.callId);
+    // 先照型別分兩支（#681，照 dsh）：會進模型的那五種窮舉，其餘只做記帳。
+    if (isModelVisibleEvent(event)) {
+      switch (event.type) {
+        case 'turn/start': {
+          turn = { replied: false, interrupted: false };
+          // `resume` 是回覆核准，沒有使用者說的話——送進圖的是 `Command`，不是一則訊息。
+          if (event.data.kind !== 'resume') push(from(new HumanMessage(event.data.text), event));
+          break;
         }
-        break;
-      }
-      case 'tool/result': {
-        if (event.data.message === undefined) {
-          return { kind: 'unreplayable', reason: 'result-missing', seq: event.seq };
-        }
-        const message = from(asSeen(fromLoggedMessage(event.data.message)), event);
-        if (batch?.calls.some((call) => call.id === event.data.callId) === true) {
-          batch.results.set(event.data.callId, [message]);
-        } else {
+        case 'assistant/message': {
+          replied = true;
+          if (turn !== undefined) turn.replied = true;
+          const message = from(fromLoggedMessage(event.data.message), event);
+          const calls = requestedCalls(message);
           push(message);
+          if (calls.length > 0) batch = { calls, results: new Map(), started: new Set() };
+          break;
         }
-        break;
-      }
-      case 'user/message': {
-        const message = from(fromLoggedMessage(event.data.message), event);
-        const { source } = event.data;
-        // 緊跟在一顆結果後面、而且是那顆工具注入的：跟著那顆結果走。其餘的（repeat-reminder 的提醒、人插的話）
-        // 在那一批之後。人插的話（#710）不屬於任何一顆工具，連比對都不比。
-        const owner = previous?.type === 'tool/result' ? previous.data.callId : undefined;
-        const call = batch?.calls.find((candidate) => candidate.id === owner);
-        const results = call === undefined ? undefined : batch?.results.get(call.id);
-        if (source.kind === 'plugin' && call?.name === source.plugin && results !== undefined) {
-          results.push(message);
-        } else {
-          push(message);
+        case 'tool/result': {
+          if (event.data.message === undefined) {
+            return { kind: 'unreplayable', reason: 'result-missing', seq: event.seq };
+          }
+          const message = from(asSeen(fromLoggedMessage(event.data.message)), event);
+          if (batch?.calls.some((call) => call.id === event.data.callId) === true) {
+            batch.results.set(event.data.callId, [message]);
+          } else {
+            push(message);
+          }
+          break;
         }
-        break;
-      }
-      case 'compaction/summary': {
-        const { summary: logged, cutoffIndex, messagesBefore } = event.data;
-        if (logged === undefined) {
-          return { kind: 'unreplayable', reason: 'summary-missing', seq: event.seq };
+        case 'user/message': {
+          const message = from(fromLoggedMessage(event.data.message), event);
+          const { source } = event.data;
+          // 緊跟在一顆結果後面、而且是那顆工具注入的：跟著那顆結果走。其餘的（repeat-reminder 的提醒、人插的話）
+          // 在那一批之後。人插的話（#710）不屬於任何一顆工具，連比對都不比。
+          const owner = previous?.type === 'tool/result' ? previous.data.callId : undefined;
+          const call = batch?.calls.find((candidate) => candidate.id === owner);
+          const results = call === undefined ? undefined : batch?.results.get(call.id);
+          if (source.kind === 'plugin' && call?.name === source.plugin && results !== undefined) {
+            results.push(message);
+          } else {
+            push(message);
+          }
+          break;
         }
-        if (raw.length + pendingCount() !== messagesBefore + 1 || cutoffIndex > messagesBefore) {
-          return { kind: 'unreplayable', reason: 'compaction-misaligned', seq: event.seq };
+        case 'compaction/summary': {
+          const { summary: logged, cutoffIndex, messagesBefore } = event.data;
+          if (logged === undefined) {
+            return { kind: 'unreplayable', reason: 'summary-missing', seq: event.seq };
+          }
+          if (raw.length + pendingCount() !== messagesBefore + 1 || cutoffIndex > messagesBefore) {
+            return { kind: 'unreplayable', reason: 'compaction-misaligned', seq: event.seq };
+          }
+          summary = { message: from(fromLoggedMessage(logged), event), cutoff: cutoffIndex };
+          break;
         }
-        summary = { message: from(fromLoggedMessage(logged), event), cutoff: cutoffIndex };
-        break;
+        default:
+          // 子聯集多一種而這裡沒有 case，這一行編不過。
+          event satisfies never;
       }
-      case 'interrupt/raised': {
-        if (turn !== undefined) turn.interrupted = true;
-        break;
-      }
-      case 'turn/end': {
-        // 停在核准點的那一輪可以沒有回覆：答掉一顆之後，同一批沒被答到的會在叫模型之前再度中斷。
-        // 被中止的那一輪同理（停在核准點時按停止，由 pump 收回）。
-        if (
-          turn !== undefined &&
-          event.data.reason === undefined &&
-          !turn.replied &&
-          !turn.interrupted
-        ) {
-          return { kind: 'unreplayable', reason: 'reply-missing', seq: event.seq };
+    } else {
+      switch (event.type) {
+        case 'model/start': {
+          modelRan ??= event.seq;
+          break;
         }
-        turn = undefined;
-        break;
+        case 'tool/call': {
+          modelRan ??= event.seq;
+          if (batch?.calls.some((call) => call.id === event.data.callId) === true) {
+            batch.started.add(event.data.callId);
+          }
+          break;
+        }
+        case 'interrupt/raised': {
+          if (turn !== undefined) turn.interrupted = true;
+          break;
+        }
+        case 'turn/end': {
+          // 停在核准點的那一輪可以沒有回覆：答掉一顆之後，同一批沒被答到的會在叫模型之前再度中斷。
+          // 被中止的那一輪同理（停在核准點時按停止，由 pump 收回）。
+          if (
+            turn !== undefined &&
+            event.data.reason === undefined &&
+            !turn.replied &&
+            !turn.interrupted
+          ) {
+            return { kind: 'unreplayable', reason: 'reply-missing', seq: event.seq };
+          }
+          turn = undefined;
+          break;
+        }
+        case 'turn/failed': {
+          turn = undefined;
+          break;
+        }
+        case 'session/end-seed': {
+          settle();
+          turn = undefined;
+          break;
+        }
+        default:
+          // 只記日誌、不進模型的那些：哪幾種見 {@link ModelVisibleEventType} 以外的每一種。
+          // 整個詞彙不逐種列舉（別的套件補進來的種類也走這裡）。
+          break;
       }
-      case 'turn/failed': {
-        turn = undefined;
-        break;
-      }
-      case 'session/end-seed': {
-        settle();
-        turn = undefined;
-        break;
-      }
-      default:
-        // 只記日誌、不進模型的那些（命令、目標、todo、模式、用量、評分）。
-        break;
     }
     previous = event;
   }

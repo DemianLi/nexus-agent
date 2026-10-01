@@ -1,41 +1,58 @@
 /**
- * `@nexus/plugin-sandbox-policy` 的不變量配套入口。
+ * `@nexus/plugin-sandbox-policy` 的不變量配套入口：**日誌上每一顆 `sandbox/mode` 帶的都是認得的模式**。
  *
- * No runtime invariant: 理由與 `@nexus/plugin-feedback` 同型——**這個 package 沒有第二份
- * 會跟日誌分岔的狀態**。模式只有一格，住在 `SandboxModeController.current`；fence 與提示句
- * 都經 `source()` 跟那一顆讀（見 `sandbox-mode.ts` 的 class 註解），而每一次真的變了都當場
- * 追加一顆 `sandbox/mode`。沒有投影、沒有快照，也就沒有跨筆關係可以檢。
+ * 照 dsh 的 sandbox-policy 配套入口（`packages/sandbox/sandbox-policy/src/invariant.ts:17-21`，
+ * `477b4f4`）：逐筆看 `sandbox/mode`，`mode` 不在 `SANDBOX_MODES` 就報。只有詞彙這一條，沒有
+ * 跨筆關係——模式只有一格，住在 `SandboxModeController.current`，每一次真的變了都當場追加一顆
+ * 整份值的 `sandbox/mode`，沒有投影、沒有快照可以跟日誌分岔。
  *
- * **這個 package 的契約實際證在哪裡**：`/sandbox` 的四種結局、接線當下釘起始值、淨變化為零
- * 不追加、收掉接線之後不再寫、委派的邊界，都由本套件的 `sandbox-mode.test.ts` 直接驗；
- * 走得起一個 agent 的那些（一次切換搬得動兩個消費者、升級的每一條出口）在
- * `@nexus/harness` 的 `sandbox-mode.test.ts` 與 `sandbox-escalation.test.ts`。
+ * ## 為什麼這一條值得檢
  *
- * ## 一個**沒有**被這裡涵蓋的缺口，明著記下來
+ * 日誌從磁碟讀回來不經過型別檢查：jsonl store 只驗 `type`／`time`／`seq`，`recordedSandboxMode`
+ * 把最後一顆的 `event.data.mode` 原樣交出去。一顆認不得的模式名（手改過、不相容的版本寫的）
+ * 會一路流進控制器——fence 只特判 `read-only` 與 `danger-full-access`，其餘走可寫根的判斷，
+ * 提示句與升級閘門也都不認得它。這正是 `@nexus/core` 的 `sandbox.ts` 檔頭描述的分岔。
  *
- * `recordedSandboxMode` 讀回一份日誌時**不驗詞彙**，直接把 `event.data.mode` 交出去
- * （它信的是 `SessionEventMap` 的型別）。從磁碟讀回來的日誌不經過型別檢查，所以一顆
- * 認不得的模式名會一路流進控制器——那正是 `@nexus/core` 的 `sandbox.ts` 檔頭描述的分岔。
+ * **讀取邊界不擋，照 dsh。** dsh 讀事件時同樣不驗 mode：投影的 `apply` 原樣收下
+ * （`packages/sandbox/sandbox-policy/src/index.ts:138`），fence 同形地落進 workspace-write
+ * （`packages/fs/fs-sandbox/src/index.ts:125-126`）。它對未知模式的回應就是這顆配套入口報違規。
+ * runner 安裝時先重播已有的事件，所以續接讀回來的那一份也涵蓋在內（同 `@nexus/plugin-plan-mode`
+ * 的配套入口檢 `plan/mode` 的形狀）。
  *
- * **那不是跨筆關係，是讀取邊界上的輸入驗證**，家在 `recordedSandboxMode` 自己（配
- * `isSandboxMode`），不在這裡。這張卡是抽套件的重構，補一條會報新違規的檢查等於改行為，
- * 所以只記不做。
+ * **其餘契約證在哪裡**：`/sandbox` 的四種結局、接線當下釘起始值、淨變化為零不追加、收掉接線
+ * 之後不再寫、委派的邊界，都由本套件的 `sandbox-mode.test.ts` 直接驗；走得起一個 agent 的那些
+ * （一次切換搬得動兩個消費者、升級的每一條出口）在 `@nexus/harness` 的 `sandbox-mode.test.ts`
+ * 與 `sandbox-escalation.test.ts`。
  *
  * @module
  */
 
 import type { InvariantInstaller, NexusPlugin, PluginEntry } from '@nexus/core';
+import { SANDBOX_MODES } from '@nexus/core';
 
 /** 這個配套入口認領的 package 名。 */
 export const SANDBOX_POLICY_INVARIANT_PACKAGE = '@nexus/plugin-sandbox-policy';
 
-/** 空 installer。沒有參數是刻意的——`noUnusedParameters` 開著。 */
-const install: InvariantInstaller = () => {};
+/** 一條：`sandbox/mode` 帶的 `mode` 必須是 `SANDBOX_MODES` 裡的一個。 */
+export const sandboxPolicyInvariant: InvariantInstaller = (subject, fail) => {
+  subject.observe((event) => {
+    if (event.type !== 'sandbox/mode') return;
+    // 型別說它是 `SandboxMode`，但從磁碟讀回來的純物件也會進這裡（續接的 seed），
+    // 那一條路上型別什麼都沒保證。
+    const { mode } = event.data as { mode?: unknown };
+    if ((SANDBOX_MODES as readonly unknown[]).includes(mode)) return;
+    fail(
+      `sandbox/mode（seq ${String(event.seq)}）帶的 mode 是 ${String(JSON.stringify(mode))}` +
+        `——只收 ${SANDBOX_MODES.join('／')}`,
+    );
+  });
+};
 
 /**
  * 把 `@nexus/plugin-sandbox-policy` 的配套入口掛上去。
  *
- * 掛了它**不會裝上任何檢查**，唯一的作用是保留包名歸屬。
+ * **掛了會真的裝上檢查**（`sandbox/mode` 的詞彙），與空的那些不同。違規的去處仍然是進入點的事
+ * （CLI 走 `onInvariantViolation`，serve 走 runner 預設的 `console.error`），這個檔案只負責註冊。
  *
  * @returns 掛著它的條目，註冊 `@nexus/plugin-sandbox-policy` 配套入口的 plugin。
  */
@@ -50,7 +67,7 @@ export function createSandboxPolicyInvariantPlugin(): PluginEntry {
 export const sandboxPolicyInvariantPlugin: NexusPlugin = {
   name: 'sandbox-policy-invariant',
   apply(registry) {
-    registry.invariants.register(SANDBOX_POLICY_INVARIANT_PACKAGE, install);
+    registry.invariants.register(SANDBOX_POLICY_INVARIANT_PACKAGE, sandboxPolicyInvariant);
   },
 };
 

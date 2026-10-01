@@ -25,6 +25,7 @@ import { ThreadFeed } from './thread-feed.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpActivity, PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+import { composeAttachSessions } from './session-attach.js';
 
 const BASE_URL = 'http://thread-feed.test';
 
@@ -285,7 +286,7 @@ async function wire(gatedThreads: readonly string[]) {
       return {
         agent: built.agent as unknown as PumpAgent,
         commands: emptyCommandPoint(),
-        attachSession: built.attachSession,
+        attachSessions: composeAttachSessions(built),
         dispose: built.dispose,
       };
     },

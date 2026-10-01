@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { currentTurnStart, hasUnansweredInterrupt, SessionLog } from './session-log.js';
+import { goalId } from './goal.js';
+import {
+  currentTurnStart,
+  hasUnansweredInterrupt,
+  isLogicalTurnStart,
+  SessionLog,
+} from './session-log.js';
 
 describe('SessionLog', () => {
   it('seq 從 0 開始、逐筆遞增，出自日誌長度', () => {
@@ -353,5 +359,22 @@ describe('當前這一段停在 `session/end-seed`', () => {
     expect(hasUnansweredInterrupt(resumed.events)).toBe(false);
     // 反例：不經 seed 的話，那一顆中斷就在當前這一段裡。
     expect(hasUnansweredInterrupt(resumed.events.slice(0, -1))).toBe(true);
+  });
+});
+
+describe('isLogicalTurnStart（#682）', () => {
+  it('message、goal 的 turn/start 開新的邏輯輪；resume 不開；不是 turn/start 的不開', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: '嗨' });
+    log.append('turn/start', {
+      kind: 'goal',
+      text: '續',
+      goalId: goalId('g-1'),
+      revision: 1,
+      round: 1,
+    });
+    log.append('turn/start', { kind: 'resume' });
+    log.append('turn/end', {});
+    expect(log.events.map(isLogicalTurnStart)).toEqual([true, true, false, false]);
   });
 });

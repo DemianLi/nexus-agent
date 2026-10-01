@@ -21,7 +21,8 @@ import { PassThrough } from 'node:stream';
 import type { ChatOpenAI } from '@langchain/openai';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createCliAgent, runCli } from '../cli.js';
+import { runCli } from '../cli.js';
+import { createCliAgent } from '../assembly-root.js';
 import { foldTurn, serveClient } from '../fixtures.js';
 import {
   DEFAULT_LIVE_BASE_URL,
