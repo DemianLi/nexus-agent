@@ -104,17 +104,20 @@ const shipped = await shippedPlugins();
  * `<name>#<序號>`。**[#454](https://github.com/DemianLi/nexus-agent/issues/454) 之後清單從
  * `apps/harness/cordis.yml` 來，每一列都寫著看得懂的 id**，所以後來是 `plan-mode (plan-mode)`。
  *
- * ## 現在是空的
+ * ## 現在只有 submit-record
  *
  * [#652](https://github.com/DemianLi/nexus-agent/issues/652) 之後 plan-mode 不再掛閘門，出貨清單裡一位都沒有。
- * submit-record 與沙箱升級的閘門是 `cli.ts` 在清單之外掛的，不在這一層的射程裡（見檔頭「射程」）。
- * **空清單照樣是身分清單**：有人往出貨清單加一位，這裡就響。
+ * [#669](https://github.com/DemianLi/nexus-agent/issues/669) 把 `submit-record` 從 `cli.ts` 的程式碼搬進出貨清單，
+ * 它的閘門因此進了這一層的射程。**照下面 `NEW_GATE_GUIDANCE` 的出路 (c) 收下它**：先確認它對別的工具會呼叫 `next()`
+ * （`packages/nexus-plugin-submit-record/src/index.ts` 的 gate 只對 `submit_record` 回 `ask`，其餘一律 `next()`），
+ * 所以不會把排在它後面的人整條吃掉。沙箱升級的閘門仍是 `cli.ts` 在清單之外掛的，不在這一層的射程裡（見檔頭「射程」）。
+ * 有人再往出貨清單加一位，這裡就響。
  *
  * 這一格因此比以前更穩：自動編號的 `<name>#<序號>` 本來就不承諾跨清單穩定，而設定檔裡的
  * id 是人指定的，**它會變的唯一情形是有人真的去改那一行**——那本來就是該響的事。id 是
  * 外部 patch 指得著這一列的唯一辦法，改它會靜靜弄壞別人的 patch。
  */
-const EXPECTED_APPROVAL_GATES: readonly string[] = [];
+const EXPECTED_APPROVAL_GATES: readonly string[] = ['submit-record (submit-record)'];
 
 /**
  * 這條絆索響的時候，讀的人該往哪裡去。

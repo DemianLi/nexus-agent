@@ -28,6 +28,7 @@ import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { historyFrames } from './conversation-history.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { humanChannelPlugin } from './fixtures.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
@@ -98,7 +99,7 @@ async function stopForInput(turns: readonly ScriptedTurn[], plugins: readonly Pl
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns }),
     checkpointer: new MemorySaver(),
-    plugins: [...plugins],
+    plugins: [humanChannelPlugin(), ...plugins],
     backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
   });
   const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'waiting-cards');

@@ -114,7 +114,7 @@ async function connect(
     // **backend 給同一個物件**，就像 `cli.ts` 那樣。給兩個的失敗方式是兩個工具寫到兩個
     // 地方，而兩邊都會寫成功——所以這裡同時也在示範正確的接法。
     plugins: [
-      createHostServicesPlugin({ backend }),
+      createHostServicesPlugin({ backend, channel: { kind: 'human' } }),
       createAskUserPlugin(),
       createSubmitRecordPlugin(),
     ],

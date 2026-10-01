@@ -13,9 +13,9 @@
  * `write_file` 走路由、`submit_record` 走 default，兩個工具寫到兩個地方——**而且兩邊都會
  * 寫成功**。沒有這一條的話，第一個發現的人是看著檔案的那個人。
  *
- * **它守不到的那一半，明講**：數的是出貨清單，而 `createSubmitRecordPlugin` 自己
- * **不在那份清單裡**（它掛在 `createCliAgent` 裡，因為要拿到這一次呼叫的 backend）。所以
- * 哪天有 plugin 同樣只掛在 `createCliAgent` 裡、而且掛了路由，這一條會保持綠。要守到那一
+ * **它守不到的那一半，明講**：數的是出貨清單。`submit_record` 在 #669 之後也在清單裡
+ * （`id: submit-record`，backend 走服務注入），但哪天有 plugin 只掛在 `createCliAgent` 裡
+ * （沙箱圍堵那一類）、而且掛了路由，這一條會保持綠。要守到那一
  * 半得先讓那條組裝路徑有一個拿得到 registry 的觀察點，那是另一件事——這裡守的是「預設清單
  * 開始掛路由」，那是今天真的會發生的那一種。
  *

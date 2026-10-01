@@ -27,8 +27,6 @@ import type {
   SessionEvent,
   SessionTelemetrySharingStatus,
 } from '@nexus/core';
-import { createAskUserPlugin } from '@nexus/plugin-ask-user';
-import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import type { BackgroundParentPort, ModelChoice } from './background-subagents.js';
 import { composeAttachSessions } from './session-attach.js';
@@ -750,8 +748,6 @@ export async function createCliAgent(
           : { sandboxPolicy: { controller: sandboxMode, rootDir: workspaceRoot } }),
       }),
       ...plugins,
-      createAskUserPlugin(),
-      createSubmitRecordPlugin(),
       // **有圍堵才講**。沒有 `--workspace` 的組裝一格圍堵都沒有，那時候講「目前的檔案
       // 政策是 workspace-write」是對模型說謊——它會以為根外被擋著，而整道 fence 不在
       // 路徑上。理由與 dsh 的 `ctx.fs.sandboxMode === undefined` 就不貢獻同一條。
