@@ -101,13 +101,17 @@ import type {
 } from '@nexus/core';
 import {
   foldInbox,
+  isLogicalTurnStart,
   isMaxTokensFinish,
+  loggedContentBlocks,
   loggedMessageId,
   replayConversation,
   sessionStatsUnit,
   tokenUsageUnit,
 } from '@nexus/core';
 
+// 讀的事件種類（`todo/write`）照 dsh 由擁有者套件宣告；這一行讓編譯單位看得到那個套件補的鍵，不靠測試檔順手 import（#679）。
+import type {} from '@nexus/plugin-todo';
 import { agentMessageBody, runIdOfSession } from './background-run-id.js';
 import { goalData, RootGoal } from './goal-wire.js';
 import { threadTitleOf } from './session-title.js';
@@ -127,12 +131,11 @@ const LEGACY_REASONS: ReadonlySet<UnreplayableReason> = new Set([
 /** 參數不合規時拋的錯。wire 那側據它回 `invalid_argument`，不是 `unknown_error`。 */
 export class HistoryQueryError extends Error {}
 
-/** 一則訊息的文字：字串照原樣，區塊只取 `text` 那幾塊（推理另走 {@link reasoningOf}）。 */
+/** 一則訊息的文字：區塊中的 text 接起來（推理另走 {@link reasoningOf}）。 */
 function textOf(message: LoggedMessage | undefined): string {
-  const content: unknown = message?.data.content;
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
+  if (!message) return '';
+  const blocks = loggedContentBlocks(message.data.content);
+  return blocks
     .map((block: unknown) => {
       const typed = block as { type?: unknown; text?: unknown } | null;
       return typed?.type === 'text' && typeof typed.text === 'string' ? typed.text : '';
@@ -141,7 +144,7 @@ function textOf(message: LoggedMessage | undefined): string {
 }
 
 /**
- * 一則訊息的推理（[#527](https://github.com/DemianLi/nexus-agent/issues/527)）：content 陣列裡 `reasoning`
+ * 一則訊息的推理（[#527](https://github.com/DemianLi/nexus-agent/issues/527)）：content 區塊裡 `reasoning`
  * 那幾塊，照順序接起來。
  *
  * **只讀 content 區塊，不讀 `additional_kwargs.reasoning_content`**：即時那條看得到的是串流翻出來的
@@ -151,9 +154,9 @@ function textOf(message: LoggedMessage | undefined): string {
  * `additional_kwargs` 那一格翻成區塊（實測），所以兩條路本來就分得開。
  */
 function reasoningOf(message: LoggedMessage | undefined): string {
-  const content: unknown = message?.data.content;
-  if (!Array.isArray(content)) return '';
-  return content
+  if (!message) return '';
+  const blocks = loggedContentBlocks(message.data.content);
+  return blocks
     .map((block: unknown) => {
       const typed = block as { type?: unknown; reasoning?: unknown } | null;
       return typed?.type === 'reasoning' && typeof typed.reasoning === 'string'
@@ -219,7 +222,7 @@ function referencesAfter(
  * （同一個 `callId` 再記一次 `tool/call`），從它切的話同一張卡會一半在這頁、一半在前一頁，接起來畫面上長兩張。
  */
 function isPageStart(event: SessionEvent): boolean {
-  return event.type === 'turn/start' && event.data.kind !== 'resume';
+  return isLogicalTurnStart(event);
 }
 
 /**
@@ -538,7 +541,7 @@ function planModeOf(events: readonly SessionEvent[]): boolean | undefined {
  * @returns 會清空就是 `true`。
  */
 export function isTodosReset(event: SessionEvent): boolean {
-  return event.type === 'turn/start' && event.data.kind !== 'resume';
+  return isLogicalTurnStart(event);
 }
 
 /** 一顆 `custom` frame 的 `data`。 */

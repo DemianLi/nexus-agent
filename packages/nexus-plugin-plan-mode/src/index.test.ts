@@ -48,6 +48,12 @@ vi.mock('@langchain/langgraph', async (importOriginal) => ({
   interrupt: vi.fn(),
 }));
 
+/**
+ * 每個註冊表接上的第一份 root 日誌。命令的 `sessionLog` 由執行器交給 handler（#688），
+ * 這裡用它當「執行器手上那一份」；一份都沒接的註冊表交一份沒人接的。
+ */
+const firstLogOf = new WeakMap<object, SessionLog>();
+
 /** 直接跑 `/plan` 的 handler。REPL 那一層歸 `apps/harness` 的測試。 */
 async function runPlan(
   commands: Pick<CommandRegistrationPoint, 'find'>,
@@ -60,6 +66,7 @@ async function runPlan(
     commandId: 'cmd-test',
     rawInput,
     signal: new AbortController().signal,
+    sessionLog: firstLogOf.get(commands) ?? new SessionLog('unattached'),
     steer,
   });
 }
@@ -71,6 +78,7 @@ async function runPlan(
  * 折疊拋出來的實作在這裡會是綠的。
  */
 function attach(registry: PluginRegistry, log: SessionLog): () => void {
+  if (!firstLogOf.has(registry.commands)) firstLogOf.set(registry.commands, log);
   return createSessionRunner({
     address: { kind: 'root' },
     log,

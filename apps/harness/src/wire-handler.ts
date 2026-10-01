@@ -103,11 +103,8 @@ import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { isBackgroundRunId } from './background-run-id.js';
 import { BackgroundSubagentError } from './background-subagents.js';
-import type {
-  BackgroundParentPort,
-  BackgroundSubagentControl,
-  SessionDetach,
-} from './background-subagents.js';
+import type { BackgroundSubagentControl } from './background-subagents.js';
+import type { AttachSessions } from './session-attach.js';
 import { HistoryQueryError, historyPage } from './conversation-history.js';
 import type { SessionReferenceReader } from './session-reference.js';
 import type {
@@ -200,42 +197,19 @@ export interface ThreadAgent {
   readonly workspaceChanges?: WorkspaceChanges;
   dispose(): Promise<void>;
   /**
-   * 把這個 thread 的**每一份**會話日誌接上遙測，選配。
+   * 把這個 thread 的**每一份**會話日誌接上遙測、不變量配套入口與參與者，**必填**（[#668](https://github.com/DemianLi/nexus-agent/issues/668)）。
    *
-   * **接線點必須在這裡**，因為註冊表是 pump 建的（一個 thread 一張），而知道有沒有掛
-   * 後端的是組裝點。兩邊只在這一行碰得到面。沒掛後端時 `createNexusAgent` 回
-   * `undefined`，這裡什麼都不會發生。
+   * 三件事是一個口，答案都來自 `createCliAgent`（掛了什麼 plugin 決定有沒有遙測後端、有沒有配套入口、有沒有參與者），
+   * 而且**一律要接**：以前這是三個選配口，`serve.ts` 少轉交任何一個都不報錯、也沒有測試會紅，後果卻是 web 上
+   * 每條 thread 的不變量檢查整個消失、或遙測一筆都不送，CLI 照常所以本機看不出來。接線點仍在這裡（pump 建好的那一刻），
+   * 因為註冊表是 pump 建的、知道有沒有掛後端的是組裝點，兩邊只在這個口碰得到面。
    *
-   * @param sessions - 這個 thread 的會話註冊表。
-   * @returns 收掉這次接線的函式，或沒掛後端時的 `undefined`。
+   * **參與者那一份同時是模型工具那條線。** 綁上註冊表之後，plugin 註冊的工具才問得出「我這次呼叫該寫進哪一份日誌」
+   * （`registry.sessions.forCall`）。漏了它，`@nexus/core` 的測試照樣全綠，而 web 那端每一個 thread 的域狀態都不存在。
+   *
+   * 見 {@link AttachSessions}。
    */
-  attachTelemetry?(sessions: SessionRegistry): (() => Promise<void>) | undefined;
-  /**
-   * 把這個 thread 的日誌接上不變量配套入口。同 `attachTelemetry` 的理由住在組裝點：
-   * 只有那裡同時看得到 registry 與日誌。沒有人註冊配套入口時回 `undefined`。
-   *
-   * @param sessions - 這個 thread 的會話註冊表。
-   * @returns 收掉這次接線的函式，或沒有配套入口時的 `undefined`。
-   */
-  attachInvariants?(sessions: SessionRegistry): (() => void) | undefined;
-  /**
-   * 把這個 thread 的日誌接上 `sessions` 通道的參與者，選配。
-   *
-   * 同上面兩條的理由住在組裝點，但**方向相反**：交出去的日誌寫得動，參與者記得下
-   * `goal/change` 這種權威 domain 事件。沒有人註冊參與者時回 `undefined`。
-   *
-   * **這條路不能漏。** 漏了的話 `@nexus/core` 的測試照樣全綠，而 web 那端每一個 thread
-   * 的域狀態都不存在——那是一種只在瀏覽器上看得到的缺席。
-   *
-   * **它同時是模型工具那條線。** 綁上註冊表之後，plugin 註冊的工具才問得出「我這次呼叫
-   * 該寫進哪一份日誌」（`registry.sessions.forCall`）。所以它現在**一定**回一個 detach，
-   * 沒有「沒人 join 就 `undefined`」那條短路了。
-   *
-   * @param sessions - 這個 thread 的會話註冊表。
-   * @param backgroundPort - 背景子代理往這條 thread 的主對話這個方向的出口：結算通知（#840）與寫來的話（#849）。cli 的 REPL 不給。
-   * @returns 收掉這次接線的函式；上面的 `background` 是對單一背景子代理傳話、單獨停的控制面（#865）。
-   */
-  attachSession?(sessions: SessionRegistry, backgroundPort?: BackgroundParentPort): SessionDetach;
+  attachSessions: AttachSessions;
   /**
    * 把這個 thread 的**每一份**會話日誌接上落盤，選配。
    *
@@ -252,7 +226,7 @@ export interface ThreadAgent {
    * thread 一個檔（檔名的單射性見 `jsonl-session-store.ts` 的 `safeBaseName`——
    * `threadId` 是呼叫端給的字串），重開之後同一條 thread 找得回自己那一份。
    *
-   * 前三個是觀察者，這一個是出口，所以排在最後——同 `cli.ts` 的接線順序。
+   * 前面那個 `attachSessions` 接的三件事是觀察者，這一個是出口，所以排在最後——同 `cli.ts` 的接線順序。
    *
    * @param sessions - 這個 thread 的會話註冊表。
    * @returns 收掉這次接線的方法（`dispose` 會排空並關檔），或沒開落盤時的 `undefined`。
@@ -810,13 +784,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         // **緊接著建好就接上全域下行**（#632）：在它收下任何一件之前，狀態與中斷一顆都不漏。
         detachFeed = feed.attach(pump);
         late.log = pump.sessionLog;
-        const detachTelemetry = threadAgent.attachTelemetry?.(pump.sessions);
-        const detachInvariants = threadAgent.attachInvariants?.(pump.sessions);
-        // **接在不變量之後**，同 `cli.ts` 那條的理由：參與者一裝上去就可能記東西，
-        // 那些東西該被已經在看的檢查看到。註冊表通知訂閱者的順序就是這三行的順序，
-        // 所以 subagent 後來出生的那些日誌也照這個順序被接上。
+        // 遙測、不變量、參與者一個口接完（#668）；順序與「參與者寫的會被檢查看到」的保證見 `AttachSessions`。
         // 背景子代理結算了，通知這條 thread 的主對話（#840）：閒著就叫醒它開一輪，見 `ThreadPump.notifySettled`。
-        const detachSession = threadAgent.attachSession?.(pump.sessions, {
+        const attachment = threadAgent.attachSessions(pump.sessions, {
           onSettled: (settlement) =>
             pump.notifySettled({
               text: settlement.text,
@@ -830,7 +800,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           // 現況變了（#867）：整份送下行，新接上的下行補送最後一份。
           onStatus: (items) => pump.notifySubagentStatus(items),
         });
-        // **接在最後，理由同 `cli.ts`**：前三個是觀察者，落盤不改變任何人看得到什麼，
+        // **接在最後，理由同 `cli.ts`**：上面那個口接的三件事是觀察者，落盤不改變任何人看得到什麼，
         // 所以順序在功能上沒有差別；排最後是為了讓讀的人看到的因果跟實際一致。
         const persistence = threadAgent.attachPersistence?.(pump.sessions);
         // **沒開落盤時 `flush` 就整個缺席**，而不是一個假裝成功的 no-op：`late.flush?.()`
@@ -869,7 +839,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           workspaceRoot: threadAgent.workspaceRoot,
           resumedWorkspaceRoot: threadAgent.resumedWorkspaceRoot,
           fileSearch,
-          background: detachSession?.background,
+          background: attachment.background,
           slashInFlight: false,
           dispose: async () => {
             detachFeed?.();
@@ -880,14 +850,8 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
             // 所以排在寫得動日誌的那幾個之間哪裡都不改變誰看到什麼。
             unsubscribeFileSearch?.();
             fileSearch?.dispose();
-            // **參與者先收，比不變量還早**：它是唯一寫得動日誌的那一個，先讓它停手，
-            // 檢查才還在看著它最後那幾筆。反過來收的話，關機途中寫進去的東西沒人檢。
-            detachSession?.();
-            // 不變量再退訂：它只是一個訂閱，退掉不會有東西要排空，而留著它跑在關機途中的
-            // 事件上只會多噪音。
-            detachInvariants?.();
-            // 遙測先收，理由同 `agent-factory.ts`：後端可能是某個 plugin 開的。
-            await detachTelemetry?.();
+            // 參與者、不變量、遙測三個一起收，順序（參與者先、遙測最後）住在 `createCliAgent` 的 `attachSessions`。
+            await attachment.detach();
             // **落盤收在 agent 之前，但這一行的依據跟上面三條不一樣，別讀成驗過的因果。**
             // 「有這一行」是量出來的（拿掉它，`serve` 那組落盤斷言會紅）；「排在
             // `threadAgent.dispose()` 之前」是預防，今天的組裝分不出兩種順序——同

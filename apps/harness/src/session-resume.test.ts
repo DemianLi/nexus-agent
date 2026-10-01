@@ -288,6 +288,36 @@ describe('尾巴', () => {
   });
 });
 
+/**
+ * 日誌裡的模式名認不得（[#699](https://github.com/DemianLi/nexus-agent/issues/699)）。
+ *
+ * 讀回時照 dsh 不擋——jsonl store 不看酬載，`recordedSandboxMode` 原樣交出去——所以接得回來；
+ * 對它的回應是 sandbox-policy 的配套入口在重播時報違規，CLI 印成 `[不變量]` 走 stderr。
+ */
+describe('認不得的沙箱模式', () => {
+  it('最後一顆 `sandbox/mode` 被改成 bogus：接得回來，stderr 報出帶 bogus 的違規', async () => {
+    const runDir = await firstRun();
+    const logPath = join(runDir, 'cli.jsonl');
+    // 逐行改，只動最後一顆 `sandbox/mode` 的 `data.mode`：`/sandbox read-only` 的 `command/run`
+    // 參數裡也有 `read-only`，前面還有一顆起始值，整份字串取代會一起改到。
+    const events = await readLog(logPath);
+    const last = events.findLastIndex((event) => event.type === 'sandbox/mode');
+    expect(events[last]).toMatchObject({ data: { mode: 'read-only' } });
+    const rewritten = events.map((event, index) =>
+      index === last ? { ...event, data: { mode: 'bogus' } } : event,
+    );
+    await writeFile(logPath, `${rewritten.map((event) => JSON.stringify(event)).join('\n')}\n`);
+
+    const { stdout, stderr } = await cli(['--workspace', workspace, '--resume', runDir]);
+
+    // 前提：真的是從日誌接回來的那一格，不是預設。
+    expect(stdout).toContain('起始 mode: bogus');
+    expect(stderr).toContain('[不變量] invariant violated by "@nexus/plugin-sandbox-policy"');
+    expect(stderr).toContain(`seq ${String(last)}`);
+    expect(stderr).toContain('"bogus"');
+  });
+});
+
 describe('讀不了的時候在什麼都還沒起來之前就講', () => {
   it('中段一行壞了是壞檔', async () => {
     const runDir = await firstRun();
