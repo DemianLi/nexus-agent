@@ -237,7 +237,7 @@ function createSubmitRecordTool(folded: () => AnyBackendProtocol | undefined) {
  * **鏈底是 `allow`**——沒人管的工具一律放行。這一刀之前生產程式碼裡只有一個註冊者
  * （plan-mode，只管 `exit_plan_mode`），**這一刀之後是兩個**，而承重的那一半仍然是鏈底：
  * 掛上這個 plugin 之前，`submit_record` 這個名字沒有任何人會攔。（#652 之後 plan-mode 那位拿掉了，
- * 同一格今天是沙箱升級那位，`@nexus/plugin-sandbox-policy` 的 `sandbox-escalation.ts`。）
+ * 沙箱升級那位也在 [#700](https://github.com/DemianLi/nexus-agent/issues/700) 照 dsh 把問人搬進工具本體，所以今天又只剩這一位。）
  *
  * **幾個註冊者不會互相影響**：waterfall 依註冊順序跑，每一位對不是自己那個名字的一律 `next()`，
  * 這位對非 `submit_record` 一律 `next()`。「只認自己那個

@@ -29,7 +29,11 @@ import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import type { SandboxMode } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
-import { nonWideningRefusal, SANDBOX_ESCALATION_TOOL_NAME } from '@nexus/plugin-sandbox-policy';
+import {
+  nonWideningRefusal,
+  SANDBOX_ESCALATION_TOOL_NAME,
+  unaskedRefusal,
+} from '@nexus/plugin-sandbox-policy';
 import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import { createSandboxPolicyPlugin, sandboxPolicySentence } from '@nexus/plugin-sandbox-policy';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -147,7 +151,10 @@ describe('子代理的沙箱模式', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  /** 照 `cli.ts` 的接法組起來。`fence: false` 是沒給 `--workspace` 的組裝：沒有 backend、沒有沙箱 plugin。 */
+  /**
+   * 照 `assembly-root.ts` 的接法組起來。`fence: false` 是沒給 `--workspace` 的組裝：沒有 backend、沒有沙箱 plugin。
+   * 核准管道照產品路徑提供（有 checkpointer，所以是有人在）：升級從 #700 起在工具本體裡讀它，讀不到就 fail-closed。
+   */
   async function assemble(
     mode: SandboxMode,
     turns: readonly ScriptedTurn[],
@@ -161,7 +168,12 @@ describe('子代理的沙箱模式', () => {
       checkpointer: new MemorySaver(),
       plugins: [
         ...(fence
-          ? [createHostServicesPlugin({ sandboxPolicy: { controller, rootDir: root } })]
+          ? [
+              createHostServicesPlugin({
+                channel: { kind: 'human' },
+                sandboxPolicy: { controller, rootDir: root },
+              }),
+            ]
           : []),
         WORKER,
         flipPlugin(controller),
@@ -207,6 +219,7 @@ describe('子代理的沙箱模式', () => {
       );
     return {
       ...built,
+      pump,
       sandboxEvents,
       close: async () => {
         line.abort();
@@ -349,6 +362,30 @@ describe('子代理的沙箱模式', () => {
         `Error: ${nonWideningRefusal('danger-full-access', 'danger-full-access')}`,
       );
       expect(refused).not.toContain('沒有人被問到');
+    } finally {
+      await run.close();
+    }
+  }, 20000);
+
+  /**
+   * **子代理的加寬請求不問人**（#700）。問人搬進工具本體之後，本體讀的核准管道是 root 那一份（有人在），
+   * 所以子代理那一格要由本體自己認出來：委派快照有值就當成 `policy-never`（#324）。斷言**沒有中斷**，
+   * 不只比文字——控制器在委派裡的 `grant` 本來就不做事，只比文字的話拿掉那一格照樣綠，人卻被問到了。
+   */
+  it('子代理叫升級、真的加寬：被拒、沒有中斷、grant 沒發，拒絕說的是沒有人被問到', async () => {
+    const run = await runWithLogs('read-only', [
+      delegate,
+      escalate('/a.txt', 'workspace-write'),
+      { content: '子代理收工。' },
+      { content: '根收工。' },
+    ]);
+    try {
+      expect(run.pump.awaitingInput).toBe(false);
+      expect(run.pump.pendings).toHaveLength(0);
+      expect(run.controller.peekGrant()).toBeUndefined();
+      const [refused] = subagentToolTexts(run.model);
+      expect(refused).toBe(`Error: ${unaskedRefusal('policy-never', 'workspace-write')}`);
+      expect(refused).toContain('沒有人被問到');
     } finally {
       await run.close();
     }
