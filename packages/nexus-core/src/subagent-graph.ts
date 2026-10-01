@@ -63,6 +63,11 @@ export type SubagentGraph = ReturnType<typeof createAgent>;
 export interface SubagentGraphOptions {
   /** 存檔點。**沒有它就沒有「第二輪看得到第一輪」**——這個出口存在的理由。 */
   readonly checkpointer: NonNullable<AgentCheckpointer>;
+  /**
+   * 這張圖改用的模型（[#876](https://github.com/DemianLi/nexus-agent/issues/876)），**勝過規格自己帶的與組裝點的**。
+   * 省略＝同今天（規格的，沒有就用組裝點的）。呼叫端每張圖各給各的實例：重試與逾時的包裝是每個實例一份，共用會讓兩張圖悄悄混在一起。
+   */
+  readonly model?: SubAgent['model'];
 }
 
 /**
@@ -89,7 +94,7 @@ export function mergeMiddlewareByName(
  *
  * @param params - fold 交出的參數（用到規格清單、模型、backend、全域 deny 規則）。
  * @param name - 子代理名。
- * @param options - 存檔點。
+ * @param options - 存檔點，以及選填的模型覆寫。
  * @returns 一張圖；用 `configurable.thread_id` 分輪，同一個 thread id 的下一輪看得到上一輪。
  * @throws 沒有這個子代理；規格是編好的 `runnable`、帶 `interruptOn`／`responseFormat`；缺工具、模型或 backend。
  */
@@ -114,7 +119,7 @@ export function compileSubagentGraph(
       );
     }
   }
-  const model = declarative.model ?? params.model;
+  const model = options.model ?? declarative.model ?? params.model;
   if (model === undefined) throw new Error(`子代理 "${name}" 沒有模型：規格與組裝點都沒給`);
   const tools = declarative.tools;
   if (tools === undefined) {

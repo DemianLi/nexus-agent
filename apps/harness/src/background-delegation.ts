@@ -37,6 +37,7 @@
  * @module
  */
 
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { Command } from '@langchain/langgraph';
@@ -73,6 +74,12 @@ export interface BackgroundSubagentsOptions {
   readonly sandbox?: Pick<SandboxModeController, 'delegate' | 'delegateFromLog'>;
   /** 每個主對話同時存活的背景子代理上限，預設 8（#836），見 `BackgroundSubagentHostOptions.maxActive`。 */
   readonly maxActive?: number;
+  /**
+   * 按型錄 id 建一顆模型實例（[#876](https://github.com/DemianLi/nexus-agent/issues/876)）：背景子代理被指定了模型時，
+   * 組裝點用它建出那一張圖要用的模型。**每個 `(子代理, 模型)` 只被叫一次**（host 快取編好的圖），實例不共用。
+   * 省略＝這份組裝建不出別的模型（沒連真實供應商的組裝），指定模型的圖當場編不出來。
+   */
+  readonly modelFor?: (modelId: string) => BaseChatModel;
 }
 
 const subagentSchema = z.object({
@@ -133,7 +140,7 @@ export class BackgroundDelegation {
    */
   attach(
     sessions: SessionRegistry,
-    compile: (subagent: string) => BackgroundAgent,
+    compile: (subagent: string, model?: string) => BackgroundAgent,
     port: BackgroundParentPort = {},
   ): (() => Promise<void>) & { readonly control: BackgroundSubagentControl } {
     // 一份組裝一個會話（serve 一條 thread 一份組裝）：第二次接上會把第一個 host 的位置蓋掉，
