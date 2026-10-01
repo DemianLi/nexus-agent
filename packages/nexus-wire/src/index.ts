@@ -162,8 +162,9 @@ export type {
   WireQueuedInput,
   WireQueuedInputSource,
   WireSessionReference,
+  WireSettleReason,
 } from './inbox.js';
-export { AGENT_MESSAGE, INBOX, SETTLE_NOTICE } from './inbox.js';
+export { AGENT_MESSAGE, INBOX, SETTLE_NOTICE, SETTLE_REASONS, isSettleReason } from './inbox.js';
 export type { TitlePayload } from './title.js';
 export { SUBAGENT_STATUS } from './subagent-status.js';
 export type { SubagentRunStatus, SubagentStatusPayload } from './subagent-status.js';

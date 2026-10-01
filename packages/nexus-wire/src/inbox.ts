@@ -64,10 +64,26 @@ export interface AgentMessagePayload {
   readonly text: string;
 }
 
+/**
+ * 一個背景子代理怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）：結算通知的原因，四種。
+ * 畫面據它配字，**不解析給模型看的英文句**。與 `@nexus/core` 的 `SubagentSettleReason` 同一組（harness 有測試釘住兩邊一致）。
+ */
+export const SETTLE_REASONS = ['completed', 'aborted', 'max-tokens', 'error'] as const;
+
+/** {@link SETTLE_REASONS} 的一員。 */
+export type WireSettleReason = (typeof SETTLE_REASONS)[number];
+
+/** 讀到的值是不是認得的結算原因。不認得（舊的一側、壞資料）一律當作沒有，畫面退成中性的說法。 */
+export function isSettleReason(value: unknown): value is WireSettleReason {
+  return SETTLE_REASONS.some((reason) => reason === value);
+}
+
 /** {@link SETTLE_NOTICE} 的 `payload`。 */
 export interface SettleNoticePayload {
   /** 那一格 entry 的 `id`，也是去重的鍵：同一個 `id` 第二次出現就忽略。 */
   readonly id: string;
+  /** 怎麼收的（#884）。選填：格式 26 以前的日誌沒有，畫面退成中性的說法。 */
+  readonly reason?: WireSettleReason;
 }
 
 /** 排著的一件。結構上是 `@nexus/core` 的 `QueuedInput`，重新宣告的理由同 `SlashDescriptor`。 */
@@ -77,15 +93,19 @@ export interface WireQueuedInput {
   readonly text: string;
   /**
    * 誰送的。人，或背景子代理結算的通知（#840：執行期的記帳，不是人說的話）；目標續行走佇列是 #638。
-   * 只放判別欄，摘要與寄件人留在日誌上。
+   * 只放判別欄與結算通知的原因，摘要與寄件人留在日誌上。
    */
   readonly source: WireQueuedInputSource;
 }
 
-/** {@link WireQueuedInput.source}：只放判別欄。 */
+/** {@link WireQueuedInput.source}：判別欄，加結算通知的原因（#884）；摘要與寄件人留在日誌上。 */
 export type WireQueuedInputSource =
   | { readonly kind: 'user' }
-  | { readonly kind: 'subagent-settled' }
+  | {
+      readonly kind: 'subagent-settled';
+      /** 怎麼收的（#884）：排隊中那一行與開跑之後的通知畫同一句。選填，舊日誌沒有。 */
+      readonly reason?: WireSettleReason;
+    }
   | { readonly kind: 'agent-message' };
 
 /** 一句話裡 `@` 的一條會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）：`text` 裡對應的那段是 `@<label>`。 */
@@ -117,7 +137,11 @@ export interface WireClaimedInput {
  * 畫面據它畫「某某子代理說：…」；它的 `text` 已拿掉給模型看的英文前綴。
  */
 export type WireClaimedSource =
-  | { readonly kind: 'subagent-settled' }
+  | {
+      readonly kind: 'subagent-settled';
+      /** 怎麼收的（#884），同 {@link WireQueuedInputSource}。選填，舊日誌沒有。 */
+      readonly reason?: WireSettleReason;
+    }
   | {
       readonly kind: 'agent-message';
       readonly senderSessionId: string;

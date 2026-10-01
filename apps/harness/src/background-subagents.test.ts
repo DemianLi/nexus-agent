@@ -1490,6 +1490,7 @@ describe('結算通知（#840）', () => {
         runId: started.runId,
         sessionId: `root-1/${started.runId}`,
         summary: `Background subagent ${started.runId} finished and will do no further work unless you send it more.`,
+        reason: 'completed',
         text:
           `Background subagent ${started.runId} finished and will do no further work unless you send it more.` +
           '\n\nIts closing message:\n查到了：三個檔案',
@@ -1539,6 +1540,7 @@ describe('結算通知（#840）', () => {
     });
     await failed.host.start({ subagent: 'worker', text: '查' }).outcome;
     expect(failed.settlements[0]?.summary).toMatch(/ failed before it finished\.$/);
+    expect(failed.settlements[0]?.reason).toBe('error');
 
     const entered = gate();
     const stopped = setup(async (_text, signal) => {
@@ -1550,12 +1552,14 @@ describe('結算通知（#840）', () => {
     stopped.host.interrupt(slow.runId);
     await slow.outcome;
     expect(stopped.settlements[0]?.summary).toMatch(/ was stopped before it finished\.$/);
+    expect(stopped.settlements[0]?.reason).toBe('aborted');
 
     const full = setup((_text, _signal, log) =>
       reply(log, '寫到一半', { finish_reason: 'length' }),
     );
     await full.host.start({ subagent: 'worker', text: '長' }).outcome;
     expect(full.settlements[0]?.summary).toMatch(/ ran out of room before it finished\.$/);
+    expect(full.settlements[0]?.reason).toBe('max-tokens');
     expect(full.settlements[0]?.text).toContain('寫到一半');
     await Promise.all([failed.host.close(), stopped.host.close(), full.host.close()]);
   });
@@ -1572,6 +1576,7 @@ describe('結算通知（#840）', () => {
     host.interrupt(started.runId);
     await started.outcome;
     expect(settlements[0]?.summary).toMatch(/ was stopped before it finished\.$/);
+    expect(settlements[0]?.reason).toBe('aborted');
     await host.close();
   });
 

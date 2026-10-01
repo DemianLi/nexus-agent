@@ -52,6 +52,7 @@ import type {
   Event,
   InboxPayload,
   ModelUsagePayload,
+  SettleNoticePayload,
   TitlePayload,
   TodosPayload,
   WireSessionReference,
@@ -84,6 +85,7 @@ import type {
   SessionEvent,
   SessionEventMap,
   SessionStatsState,
+  SubagentSettleReason,
   TokenUsageTotals,
   UnreplayableReason,
 } from '@nexus/core';
@@ -251,13 +253,17 @@ export function deliverablesData(
  * **只有歷史用**：即時的畫面由送出佇列的 `claimed`／`claimedNextStep` 長同一種 entry（`id` 是 `inbox:<件的 id>`），
  * 歷史沒有送出佇列，所以另有這一顆，`id` 是 `history-<日誌 seq>`。
  * @param id - 那一格 entry 的 `id`。
+ * @param reason - 怎麼收的（日誌上 `source`／`turn/start` 記的，#884）；舊日誌沒有就不給。
  * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `SettleNoticePayload`。
  */
-export function settleNoticeData(id: string): {
+export function settleNoticeData(
+  id: string,
+  reason?: SubagentSettleReason,
+): {
   readonly name: typeof SETTLE_NOTICE;
-  readonly payload: { readonly id: string };
+  readonly payload: SettleNoticePayload;
 } {
-  return { name: SETTLE_NOTICE, payload: { id } };
+  return { name: SETTLE_NOTICE, payload: { id, ...(reason === undefined ? {} : { reason }) } };
 }
 
 /**
@@ -388,7 +394,10 @@ export function inboxData(
     items.map(({ id, text, source }) => ({
       id,
       text: shown(text, source),
-      source: { kind: source.kind },
+      source:
+        source.kind === 'subagent-settled' && source.reason !== undefined
+          ? { kind: source.kind, reason: source.reason }
+          : { kind: source.kind },
     }));
   const claim = ({ id, text, references, source }: ClaimedInput) => ({
     id,
@@ -403,7 +412,12 @@ export function inboxData(
               runId: runIdOfSession(source.senderSessionId),
             },
           }
-        : { source: { kind: source.kind } }),
+        : {
+            source: {
+              kind: source.kind,
+              ...(source.reason === undefined ? {} : { reason: source.reason }),
+            },
+          }),
     ...(references === undefined || references.length === 0
       ? {}
       : { references: references.map(({ sessionId, label }) => ({ sessionId, label })) }),
@@ -703,7 +717,13 @@ export function historyFrames(
         frames.push(lifecycle(event.time, { event: 'running' }));
         turnOpen = true;
         if (event.data.kind === 'subagent-settled') {
-          frames.push(frame('custom', event.time, settleNoticeData(`history-${event.seq}`)));
+          frames.push(
+            frame(
+              'custom',
+              event.time,
+              settleNoticeData(`history-${event.seq}`, event.data.reason),
+            ),
+          );
         }
         // 子代理寫來的話叫醒的一輪（#863）：即時由 `claimed` 長「某某說」，歷史照即時。
         if (event.data.kind === 'agent-message') {
@@ -737,7 +757,13 @@ export function historyFrames(
       case 'user/message': {
         // 輪中插進來的結算通知（#851）：即時由 `claimedNextStep` 長「通知」，歷史照即時。
         if (event.data.source.kind === 'subagent-settled') {
-          frames.push(frame('custom', event.time, settleNoticeData(`history-${event.seq}`)));
+          frames.push(
+            frame(
+              'custom',
+              event.time,
+              settleNoticeData(`history-${event.seq}`, event.data.source.reason),
+            ),
+          );
         }
         // 輪中插進來的子代理的話（#863）：即時由 `claimedNextStep` 長「某某說」，歷史照即時。
         if (event.data.source.kind === 'agent-message') {

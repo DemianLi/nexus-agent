@@ -280,8 +280,17 @@ import type { SessionEvent } from './session-log.js';
  *
  * 升版照新增詞彙的慣例：25 的讀者遇到它會當成認不得的種類略過（各 switch 都有 `default`），不會壞，只是不知道政策——
  * 而 25 的組裝也沒有逐次選模型這個功能，所以略過是對的。
+ *
+ * ## 27：結算通知多一格 `reason`
+ *
+ * 背景子代理結算通知的來源多一個選填欄 `reason`（`completed`／`aborted`／`max-tokens`／`error`，
+ * [#884](https://github.com/DemianLi/nexus-agent/issues/884)）：`turn/start` 與 `user/message` 的 `subagent-settled`，
+ * 以及送出佇列項目的 `source`。畫面據它分得出「完成、被停止、失敗、超出上限」，不去解析給模型看的英文 `summary`。
+ * v26 的檔直接讀：沒有這一格，畫面退成中性的說法，不假裝成「已完成」。
+ *
+ * 升版照新增欄位的慣例（同 21 的 `cause`），不是非升不可：26 讀到它只多一個不認得的欄位，一樣照舊投影。
  */
-export const SESSION_LOG_FORMAT_VERSION = 26;
+export const SESSION_LOG_FORMAT_VERSION = 27;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。

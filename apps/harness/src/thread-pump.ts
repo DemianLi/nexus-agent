@@ -88,6 +88,7 @@ import {
   type SessionEventMap,
   type SessionLog,
   type StepInbox,
+  type SubagentSettleReason,
   type TurnEndReason,
   type UserMessageSource,
 } from '@nexus/core';
@@ -259,6 +260,7 @@ function pumpInputOf(item: QueuedInput): PumpInput {
         kind: 'subagent-settled',
         text: item.text,
         summary: source.summary,
+        ...(source.reason === undefined ? {} : { reason: source.reason }),
         senderSessionId: source.senderSessionId,
       };
     case 'agent-message':
@@ -283,6 +285,7 @@ function userMessageSourceOf(source: QueuedInputSource): UserMessageSource {
         kind: 'subagent-settled',
         form: 'notice',
         summary: source.summary,
+        ...(source.reason === undefined ? {} : { reason: source.reason }),
         senderSessionId: source.senderSessionId,
       };
     case 'agent-message':
@@ -339,6 +342,8 @@ export type PumpInput =
       readonly kind: 'subagent-settled';
       readonly text: string;
       readonly summary: string;
+      /** 怎麼收的（#884）。選填：從舊日誌折出來的排著的一件沒有。 */
+      readonly reason?: SubagentSettleReason;
       readonly senderSessionId: string;
     }
   | {
@@ -631,6 +636,7 @@ function turnStartOf(input: PumpInput): SessionEventMap['turn/start'] {
         kind: 'subagent-settled',
         text: input.text,
         summary: input.summary,
+        ...(input.reason === undefined ? {} : { reason: input.reason }),
         senderSessionId: input.senderSessionId,
       };
     case 'agent-message':
@@ -1282,16 +1288,19 @@ export class ThreadPump {
    *
    * @param notice.text - 送進模型的那一串字。
    * @param notice.summary - 一行摘要（記在來源上）。
+   * @param notice.reason - 怎麼收的（記在來源上，#884）；畫面據它分「完成、被停止、失敗、超出上限」。
    * @param notice.senderSessionId - 結算的背景子代理的會話 id。
    */
   notifySettled(notice: {
     readonly text: string;
     readonly summary: string;
+    readonly reason: SubagentSettleReason;
     readonly senderSessionId: string;
   }): void {
     this.#deliverMachineInput(notice.text, {
       kind: 'subagent-settled',
       summary: notice.summary,
+      reason: notice.reason,
       senderSessionId: notice.senderSessionId,
     });
   }
