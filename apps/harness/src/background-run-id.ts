@@ -12,6 +12,14 @@ import type { SessionAddress } from '@nexus/core';
 /** 編號的前綴：`bg-` 加隨機，不是計數器（root 續接之後不能撞上舊日誌）。 */
 export const BACKGROUND_RUN_PREFIX = 'bg-';
 
+/** 背景子代理編號的完整樣子：前綴加十二位十六進位（`BackgroundSubagentHost.start` 產的）。 */
+const BACKGROUND_RUN_ID = /^bg-[0-9a-f]{12}$/;
+
+/** 這串字像不像一個背景子代理的編號。**只認自己產的樣子**：當路徑的一段用之前先過這一關。 */
+export function isBackgroundRunId(value: string): boolean {
+  return BACKGROUND_RUN_ID.test(value);
+}
+
 /** 這個地址是不是背景子代理的：它的串流由 host 自己排空，線上不會有基座的 frame，卡只能由日誌開、日誌收。 */
 export function isBackgroundAddress(address: SessionAddress): boolean {
   return address.kind === 'subagent' && address.runId.startsWith(BACKGROUND_RUN_PREFIX);

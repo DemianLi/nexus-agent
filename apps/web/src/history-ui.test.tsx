@@ -171,6 +171,7 @@ function fakeClient(
     queueUpdate: async () => ({ type: 'success', id: 4, result: { accepted: true } }),
     subagentSend: async () => ({ type: 'success', id: 5, result: { accepted: true } }),
     subagentInterrupt: async () => ({ type: 'success', id: 6, result: { accepted: true } }),
+    subagentHistory: async () => ({ kind: 'rejected', message: '這一檔沒有接背景子代理' }),
     slashList: async () => ({ kind: 'ok', commands: [] }),
     slashRun: async () => ({ kind: 'unknown' }),
     feedbackPut: rejected,

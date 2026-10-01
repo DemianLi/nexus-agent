@@ -72,6 +72,7 @@ import {
   WIRE_CHANNELS,
   commandPath,
   historyPath,
+  subagentHistoryPath,
   isThreadFeedFrame,
   streamPath,
 } from './protocol.js';
@@ -262,6 +263,16 @@ export interface WireClient {
    * 兩邊都沒有。這條 thread 會為它建起來（同開下行），跟列表的冷讀不同。
    */
   threadHistory(threadId: string, query?: ThreadHistoryQuery): Promise<ThreadHistoryOutcome>;
+  /**
+   * 背景子代理自己那份對話的一頁歷史（[#871](https://github.com/DemianLi/nexus-agent/issues/871)）。契約見
+   * `subagentHistoryPath`：形狀、查詢同 {@link threadHistory}，折成**獨立的**對話，不折進主對話的。找不到是 `rejected`
+   * （訊息說明原因；錯誤碼 `subagent_not_found` 這一版不往上帶，同 {@link threadHistory}）。
+   */
+  subagentHistory(
+    threadId: string,
+    runId: string,
+    query?: ThreadHistoryQuery,
+  ): Promise<ThreadHistoryOutcome>;
   /**
    * `@` 後面那一段的候選（[#651](https://github.com/DemianLi/nexus-agent/issues/651)）。契約見 `fileReferencesPath`。
    *
@@ -502,6 +513,31 @@ export function createWireClient(options: WireClientOptions): WireClient {
     });
   }
 
+  /** 一頁歷史（root 的或背景子代理的）：同一條 GET、同一套查詢與驗證。 */
+  async function fetchHistory(
+    path: string,
+    query: ThreadHistoryQuery,
+  ): Promise<ThreadHistoryOutcome> {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) params.set(key, String(value));
+    }
+    const encoded = params.toString();
+    const search = encoded === '' ? '' : `?${encoded}`;
+    const response = await doFetch(`${base}${path}${search}`, {
+      method: 'GET',
+      // 同 `listThreads`，見 `THREADS_PATH`。
+      headers: { 'content-type': 'application/json' },
+    });
+    if (!response.ok) {
+      throw new Error(`歷史被載體層擋下：${response.status} ${await response.text()}`);
+    }
+    const body = (await response.json()) as ThreadHistoryResponse;
+    return body.type === 'error'
+      ? { kind: 'rejected', message: body.message }
+      : { kind: 'ok', result: readHistory(body.result) };
+  }
+
   async function sendCommand(
     threadId: string,
     method: RpcMethod,
@@ -717,24 +753,11 @@ export function createWireClient(options: WireClientOptions): WireClient {
     },
 
     async threadHistory(threadId, query = {}) {
-      const params = new URLSearchParams();
-      for (const [key, value] of Object.entries(query)) {
-        if (value !== undefined) params.set(key, String(value));
-      }
-      const encoded = params.toString();
-      const search = encoded === '' ? '' : `?${encoded}`;
-      const response = await doFetch(`${base}${historyPath(threadId)}${search}`, {
-        method: 'GET',
-        // 同 `listThreads`，見 `THREADS_PATH`。
-        headers: { 'content-type': 'application/json' },
-      });
-      if (!response.ok) {
-        throw new Error(`歷史被載體層擋下：${response.status} ${await response.text()}`);
-      }
-      const body = (await response.json()) as ThreadHistoryResponse;
-      return body.type === 'error'
-        ? { kind: 'rejected', message: body.message }
-        : { kind: 'ok', result: readHistory(body.result) };
+      return fetchHistory(historyPath(threadId), query);
+    },
+
+    async subagentHistory(threadId, runId, query = {}) {
+      return fetchHistory(subagentHistoryPath(threadId, runId), query);
     },
 
     async fileReferences(threadId, query, signal) {

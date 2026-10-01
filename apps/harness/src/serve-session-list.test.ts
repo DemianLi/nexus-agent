@@ -10,12 +10,13 @@
  * 3. **列出來的切得過去**，而且接回來的是那一份日誌，不是新開。
  */
 
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { THREADS_PATH, createWireClient } from '@nexus/wire';
 import type { ThreadListOutcome } from '@nexus/wire';
+import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -146,6 +147,46 @@ describe('GET /threads', () => {
     );
     expect(events.filter((event) => event.type === 'turn/start')).toHaveLength(2);
     expect(events.filter((event) => event.type === 'session/end-seed')).toHaveLength(1);
+  });
+
+  it('重開之後讀得到背景子代理落盤的那份對話（#871）：不建 agent；別條 thread 的、header 對不上的讀不到', async () => {
+    const root = await tmp();
+    const first = await start(root);
+    await driveTurn(first, 'alpha', '主對話');
+    await stop(first);
+
+    // 子代理的日誌是 `<thread>/<runId>`，header 指回 root；手寫一份（真的由背景子代理產出的在 subagent-history-wire.test.ts 量過）。
+    const directory = join(root, projectKey(process.cwd()));
+    const runId = 'bg-0123456789ab';
+    const header = (id: string, parentSession: string) =>
+      JSON.stringify({ version: SESSION_LOG_FORMAT_VERSION, id, createdAt: 1, parentSession });
+    const turn = (type: string, seq: number, data: unknown) =>
+      `${JSON.stringify({ type, seq, time: seq + 1, data })}\n`;
+    await writeFile(
+      join(directory, `alpha%2f${runId}.header.json`),
+      header(`alpha/${runId}`, 'alpha'),
+    );
+    await writeFile(
+      join(directory, `alpha%2f${runId}.jsonl`),
+      turn('turn/start', 0, { kind: 'message', text: '派給子代理的話' }) + turn('turn/end', 1, {}),
+    );
+    // header 指向別條 thread：即使檔名在 alpha 底下也不讀。
+    await writeFile(
+      join(directory, `alpha%2fbg-aaaaaaaaaaaa.header.json`),
+      header('alpha/bg-aaaaaaaaaaaa', 'beta'),
+    );
+    await writeFile(join(directory, `alpha%2fbg-aaaaaaaaaaaa.jsonl`), turn('turn/end', 0, {}));
+
+    const second = await start(root);
+    const client = await serveClient(second);
+    const found = await client.subagentHistory('alpha', runId);
+    expect(found.kind === 'ok' && found.result.events.length).toBeGreaterThan(0);
+    expect(JSON.stringify(found)).toContain('派給子代理的話');
+    expect(await client.subagentHistory('alpha', 'bg-aaaaaaaaaaaa')).toMatchObject({
+      kind: 'rejected',
+    });
+    expect(await client.subagentHistory('beta', runId)).toMatchObject({ kind: 'rejected' });
+    expect(agentsBuilt()).toBe(0);
   });
 
   it('別的把手握著那一份：照樣列得出來，也沒有建 agent', async () => {
