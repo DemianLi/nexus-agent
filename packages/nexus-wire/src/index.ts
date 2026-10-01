@@ -249,6 +249,7 @@ export {
   DELEGATION_TOOL_NAMES,
   isBackgroundSubagentMeta,
   QUESTION_PENDING_KIND,
+  UNFINISHED_TOOL_CODE,
   UNFINISHED_TOOL_TEXT,
   answerResponse,
   appendAnswers,
