@@ -10,22 +10,22 @@
  * 到 transcript 裡影響下一次推理，命令的結果只印給人看。dsh 兩者分屬不同子系統，
  * 我們照做。
  *
- * **`agent` 與 `attachments` 這兩格我們沒有。** dsh 的 `CommandInvocation` 帶
- * `agent`（它的註冊表跨 agent，要靠它決定作用在誰身上）與 `attachments`（圖片附件經
- * attachment store 收下之後交給 handler）。attachment store 還不存在，**那一格是缺，
- * 不是省略**。
+ * **`attachments` 這一格我們沒有。** dsh 的 `CommandInvocation` 帶 `attachments`（圖片附件經
+ * attachment store 收下之後交給 handler）。attachment store 還不存在，**那一格是缺，不是省略**。
  *
- * **`agent` 這一格的理由在 [#126](https://github.com/DemianLi/nexus-agent/issues/126)
- * 之後換過一次，結論沒換。** 原本寫的是「我們一次 `createNexusAgent` 一個 registry，
- * 『作用在誰身上』沒有指涉對象」——`/goal` 是第一個真的需要一個作用對象的命令
- * （它變更的是會話日誌上的耐久狀態），所以那個指涉對象現在存在了，只是它不是 agent
- * **而是會話日誌**。而 handler 找得到它，靠的不是這裡多一格：`load.ts` 一次組裝呼叫
- * 一次 `apply`，接線那一層一份 registry 接一份日誌，所以逐次 `apply` 的閉包就把兩者
- * 對上了。**「一份 registry 只接一份日誌」是這條推論的前提**，而它是可證偽的——
- * `@nexus/plugin-goal` 的命令在接了不只一份時當場回一句錯誤，那條線有測試釘著。
+ * **dsh 的 `agent`（「收到命令的那個 agent」）在我們這裡對應 {@link CommandInvocation.sessionLog}**
+ * （[#688](https://github.com/DemianLi/nexus-agent/issues/688)）。這一格的理由換過兩次：原本寫的是
+ * 「我們一次 `createNexusAgent` 一個 registry，『作用在誰身上』沒有指涉對象」；
+ * [#126](https://github.com/DemianLi/nexus-agent/issues/126) 之後指涉對象存在了——`/goal`
+ * 變更的是會話日誌上的耐久狀態，所以它不是 agent **而是會話日誌**，當時以為 handler 靠 `apply`
+ * 的閉包找得到它（前提是「一份 registry 只接一份日誌」）。**那是形狀偏好，不是表達不出來**：執行器
+ * 本來就持有那份日誌（`command/run` 寫的就是它），而前提在 #137 之後只剩靠每個 plugin 自己過濾 root
+ * 才成立。所以照 dsh 讓執行器把它交給 handler，每個需要日誌的命令不必再各自追一遍。
  *
  * @see [#118](https://github.com/DemianLi/nexus-agent/issues/118)
  */
+
+import type { SessionLog } from './session-log.js';
 
 /** 命令名的形狀。**正則照抄 dsh**——小寫開頭，其後小寫、數字、底線、連字號。 */
 export const COMMAND_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/u;
@@ -72,6 +72,12 @@ export interface CommandInvocation {
   readonly rawInput: string;
   /** 發派它的那次請求擁有的取消訊號。 */
   readonly signal: AbortSignal;
+  /**
+   * 這個命令作用的會話日誌——**就是執行器寫 `command/run`／`command/done` 的那一份**，兩個入口
+   * （`runRepl`、wire handler）交給執行器的都是 root 那一份。對應 dsh 的 `CommandInvocation.agent`
+   * （「收到命令的那個 agent」）。
+   */
+  readonly sessionLog: SessionLog;
   /**
    * 請宿主在這個命令**落定之後**，把 `text` 當成人打的一句話送進對話（`/plan <message>` 用它）。
    *
