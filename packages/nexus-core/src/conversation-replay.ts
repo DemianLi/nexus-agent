@@ -43,15 +43,15 @@
  * 沒記過的說還沒開始、要就重試。字逐字照抄。一批結果在下一則訊息進來時還沒到齊也照這樣補——state 在
  * 那個位置也會有一則（基座補的），一則對一則照樣成立。
  *
- * **偏離：補在記憶體裡，不寫進日誌。** dsh 續接時把補的事件寫回日誌（`packages/core/agent-loop/src/index.ts:892`），
- * 冷讀時才只在記憶體裡補（`packages/session-query/session-query/src/cold-read.ts`）。我們兩處都只在記憶體裡：
+ * **續接時記過 `tool/call` 的那種寫回日誌，沒記過的維持在記憶體裡補**（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）。
+ * dsh 續接時把補的事件寫回日誌（`packages/core/agent-loop/src/index.ts:855-856`，`477b4f4`），冷讀時才只在記憶體裡補
+ * （`packages/session-query/session-query/src/cold-read.ts`）。我們的寫回在 {@link ./interrupted-turn.ts}：當掉那一輪沒配到結果
+ * 的 `tool/call` 補一顆結果不明的 `tool/result`，最後補 `turn/end {interrupted}`；寫回之後這裡讀到的是日誌上那一顆，
+ * 句子同一句。**偏離只剩一條**：沒記過 `tool/call` 的那種，一顆 `tool/result` 在我們的配對不變量上是違規
+ * （`invariant.ts`），所以還是只補在記憶體裡。停在核准點的那一輪在我們的日誌上是**收掉的**（`interrupt/raised` 之後有
+ * `turn/end`），本來就不是「開著的最後一輪」，不在寫回的射程。
  *
- * - 停在核准點的那一輪在我們的日誌上是**收掉的**（`interrupt/raised` 之後有 `turn/end`），dsh「關掉開著的
- *   最後一輪」在這裡找不到那一輪。要寫就得替它另開一輪，而 `turn/start.kind` 是授權的判別欄：合成一顆
- *   等於憑空多出一個「人回覆了」。
- * - 沒記過 `tool/call` 的那種，一顆 `tool/result` 在我們的配對不變量上是違規（`invariant.ts`）。
- *
- * 推出來的是確定的，同一份日誌推幾次都一樣，所以不寫回去也不會漂。
+ * 推出來的是確定的，同一份日誌推幾次都一樣，所以留在記憶體裡的那一種也不會漂。
  *
  * ## 推不出來就整串不灌
  *
